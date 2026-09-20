@@ -19,6 +19,7 @@ use crate::fleet::{self, Completion, Stage, Timeout};
 use crate::headless::ROW_MODEL;
 use crate::rules::manifest::Manifest;
 use crate::rules::str_row;
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::time::Duration;
 
@@ -35,6 +36,9 @@ pub struct Pool {
     labels: Vec<String>,
     /// rules 行 `runner.model` の値。
     model: String,
+    /// host の面が宣言した群の候補の口座（[`crate::rules::grouped_accounts`]・便用の除外に重なる・設計
+    /// account-lifecycle.md §17 の約束 4）。群を 1 つも宣言しない置き場では空＝除外は今までどおり。
+    grouped: BTreeSet<String>,
 }
 
 impl Pool {
@@ -46,7 +50,17 @@ impl Pool {
         if labels.is_empty() {
             return Ok(None);
         }
-        Ok(Some(Self { args: usage_args(args)?, labels, model: runner_model_of(manifest)?.to_owned() }))
+        Ok(Some(Self {
+            args: usage_args(args)?,
+            labels,
+            model: runner_model_of(manifest)?.to_owned(),
+            grouped: grouped_accounts(state_dir)?,
+        }))
+    }
+
+    /// 便の repo を足して便用の選定の入力にする（選定も待ちの観測も**同じ束**を組む・C3.4）。
+    fn run_select<'a>(&'a self, repo: &'a Path) -> fleet::RunSelect<'a> {
+        fleet::RunSelect { repo, labels: &self.labels, model: Some(&self.model), grouped: &self.grouped }
     }
 }
 
@@ -75,6 +89,12 @@ pub(super) fn ride_out_rate_limit(
         Ok(found) => found,
         Err(reason) => return refused(reason),
     };
+    // 群の宣言も置き場から 1 回だけ読む（除外は**次の選定から**効き、走行中の便は止めない・設計
+    // account-lifecycle.md §17 の約束 4）。
+    let grouped = match grouped_accounts(&state_dir) {
+        Ok(found) => found,
+        Err(reason) => return refused(reason),
+    };
     let mut outcome = Outcome::ok(Vec::new());
     loop {
         // 置き場を読めない周は rc 2（読めなさを「上限ではない」に読み替えて gate へ流さない）。
@@ -99,7 +119,7 @@ pub(super) fn ride_out_rate_limit(
         // 行が無い / 不発効 / 文字列でない / 閉じた表に無い周は typed に断り、claude を呼ばず再開もしない。
         // 宣言が 0 の置き場でも組む（候補なしを名乗って口座待ちで止まる＝初回の起動の「継承」とは違う）。
         let pool = match runner_model_of(manifest).and_then(|model| {
-            Ok(Pool { args: usage_args(args)?, labels: labels.clone(), model: model.to_owned() })
+            Ok(Pool { args: usage_args(args)?, labels: labels.clone(), model: model.to_owned(), grouped: grouped.clone() })
         }) {
             Ok(found) => found,
             Err(reason) => return refused(reason),
@@ -124,13 +144,18 @@ fn declared_labels(manifest: &Manifest, state_dir: &Path) -> Result<Vec<String>,
         .iter()
         .map(|account| account.label().to_owned())
         .collect();
-    crate::rules::declared_labels(&tracked, state_dir).map_err(|errors| {
-        errors
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<String>>()
-            .join(" / ")
-    })
+    crate::rules::declared_labels(&tracked, state_dir).map_err(joined_errors)
+}
+
+/// 置き場の host の面が宣言した群の候補の口座（[`crate::rules::grouped_accounts`]・便用の除外・設計
+/// account-lifecycle.md §17 の約束 4）。tracked の面は群を持てないので `manifest` を読まない。
+fn grouped_accounts(state_dir: &Path) -> Result<BTreeSet<String>, String> {
+    crate::rules::grouped_accounts(state_dir).map_err(joined_errors)
+}
+
+/// 宣言の欠陥の全件を typed な 1 行にまとめる（宣言の読み手 2 本が同じ形で断る）。
+fn joined_errors(errors: Vec<crate::rules::RuleError>) -> String {
+    errors.iter().map(ToString::to_string).collect::<Vec<String>>().join(" / ")
 }
 
 /// rules 行 `runner.model` の値（runner / lens が `--model` で毎回明示する model・設計 pipeline.md §6）。読み手は
@@ -259,7 +284,7 @@ pub(super) fn select_lens_account(
     let state = current(state_dir).map_err(|errors| {
         errors.iter().map(StoreError::to_string).collect::<Vec<String>>().join(" / ")
     })?;
-    let found = fleet::select_for_run(&state, repo, &pool.labels, Some(&pool.model), &fleet::cli::now_utc());
+    let found = fleet::select_for_run(&state, &pool.run_select(repo), &fleet::cli::now_utc());
     Ok(match found {
         Selection::Chosen(label) => LensAccount::Chosen(label),
         Selection::None(none) => LensAccount::None(none.reason.as_str().to_owned()),
@@ -289,7 +314,7 @@ fn choose_or_wait(
         }
         // 便用の選定は便が使う model の窓だけを数え、除外は便の repo を anchor に持つ席の口座だけ（待ちの観測
         // `AccountFree` も同じ model と repo を運ぶ・C3.4）。
-        let found = match fleet::select_for_run(&state, repo, &pool.labels, Some(&pool.model), &fleet::cli::now_utc()) {
+        let found = match fleet::select_for_run(&state, &pool.run_select(repo), &fleet::cli::now_utc()) {
             Selection::Chosen(label) => return Ok(Some(label)),
             Selection::None(found) => found,
         };
@@ -317,6 +342,7 @@ fn choose_or_wait(
                 expected,
                 labels: pool.labels.clone(),
                 model: Some(pool.model.clone()),
+                grouped: pool.grouped.clone(),
             },
             deadline,
         );

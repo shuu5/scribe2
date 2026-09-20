@@ -10,8 +10,12 @@
 //!
 //! **host の面**（`<state_dir>/host.toml`・設計 account-lifecycle.md §2・ADR-0026 §2.1）も同じ reader で読む:
 //! 持てる表は `[[account]]` / `[[plugin]]` / `[[launch-arg]]` / `[[vessel]]`（器自身の checkout・最大 1 行・
-//! 設計 consumer-sync.md §4）の 4 種だけで、`[[rule]]` は置けない（規則の行は tracked の面だけ・C1）。無い周は
+//! 設計 consumer-sync.md §4）/ `[[account-group]]`（席の口座を持つ project の群・設計 account-lifecycle.md §17・
+//! ADR-0049）の 5 種だけで、`[[rule]]` は置けない（規則の行は tracked の面だけ・C1）。無い周は
 //! 0 宣言（縮退）・在るが読めない周は欠陥の全件（FailClosed）。
+//!
+//! `[[account-group]]` は**host の面にだけ**置ける最初の表である（`[[rule]]` が tracked の面にだけ置けるのと
+//! 対称・設計 account-lifecycle.md §17 の約束 2）。
 //!
 //! **契約表の面**（設計 doc の区間・導出の `.toml`・設計 contract-source.md §2・ADR-0023 §2.1）も同じ reader で読む:
 //! 持てる表は `[[contract]]` 1 種だけで（key 集合は `pipe::table::FIELDS`）、rules manifest と host の面は
@@ -19,6 +23,7 @@
 
 use super::{Rule, RuleError, RuleKind, RuleRow, RuleValue, ValueShape, HOST_MANIFEST};
 use crate::pipe::table::{Need, FIELDS};
+use std::collections::BTreeSet;
 use std::path::Path;
 
 /// build 時に binary へ埋め込む manifest の本文。
@@ -48,6 +53,12 @@ const LAUNCH_ARG_KEYS: &[&str] = &["value"];
 /// `[[vessel]]` 行が持てる key の全体（必須も同じ 1 つ）。値は器自身の checkout の dir（host 固有・host の面にだけ・
 /// **最大 1 行**・設計 consumer-sync.md §4）。
 const VESSEL_KEYS: &[&str] = &["repo"];
+
+/// `[[account-group]]` 1 行が持てる key の全体（**必須もこれと同じ 3 つ**・設計 account-lifecycle.md §17 の約束 1）。
+///
+/// `name` は host で一意な群の名、`anchors` は群に属する置き場（席の登録 row の anchor）の列、`accounts` は
+/// 候補の口座 label の列で**宣言順が候補の順**である。どちらの列も空は受けない（空の列は [`list`] が断る）。
+const GROUP_KEYS: &[&str] = &["name", "anchors", "accounts"];
 
 /// 行に必ず要る key。
 ///
@@ -107,6 +118,9 @@ enum Section {
     Contract,
     /// 器自身の checkout の宣言（repo だけ・最大 1 行・doctor の `head=` と `vessel update` が読む）。
     Vessel,
+    /// 席の口座を持つ project の群 1 つの宣言（名・置き場の列・候補の口座 label の列・**host の面にだけ**・
+    /// 設計 account-lifecycle.md §17・ADR-0049）。
+    AccountGroup,
 }
 
 /// [`Section`] の全 variant（宣言順）。
@@ -117,6 +131,7 @@ const SECTIONS: &[Section] = &[
     Section::LaunchArg,
     Section::Contract,
     Section::Vessel,
+    Section::AccountGroup,
 ];
 
 impl Section {
@@ -129,6 +144,7 @@ impl Section {
             Self::LaunchArg => "[[launch-arg]]",
             Self::Contract => "[[contract]]",
             Self::Vessel => "[[vessel]]",
+            Self::AccountGroup => "[[account-group]]",
         }
     }
 
@@ -146,6 +162,7 @@ impl Section {
             Self::LaunchArg => LAUNCH_ARG_KEYS.to_vec(),
             Self::Contract => FIELDS.iter().map(|field| field.name).collect(),
             Self::Vessel => VESSEL_KEYS.to_vec(),
+            Self::AccountGroup => GROUP_KEYS.to_vec(),
         }
     }
 
@@ -158,6 +175,7 @@ impl Section {
             Self::LaunchArg => LAUNCH_ARG_KEYS.to_vec(),
             Self::Contract => FIELDS.iter().filter(|field| field.need == Need::Required).map(|field| field.name).collect(),
             Self::Vessel => VESSEL_KEYS.to_vec(),
+            Self::AccountGroup => GROUP_KEYS.to_vec(),
         }
     }
 }
@@ -256,6 +274,39 @@ impl VesselRepo {
     }
 }
 
+/// `[[account-group]]` 1 行が宣言する群（席の口座を持つ project の群・設計 account-lifecycle.md §17・ADR-0049）。
+///
+/// **宣言値だけを持つ**（群の「今の口座」は第 3 段の記録で、この型も reader も書かない）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountGroup {
+    name: String,
+    anchors: Vec<String>,
+    accounts: Vec<String>,
+    line: u64,
+}
+
+impl AccountGroup {
+    /// 群の名（host で一意）。
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// 群に属する置き場（席の登録 row の anchor）の列を**宣言順**で。
+    pub fn anchors(&self) -> &[String] {
+        &self.anchors
+    }
+
+    /// 候補の口座 label の列を**宣言順**（= 候補の順）で。
+    pub fn accounts(&self) -> &[String] {
+        &self.accounts
+    }
+
+    /// manifest の中でこの行が始まる物理行番号。
+    pub fn line(&self) -> u64 {
+        self.line
+    }
+}
+
 /// 読み込み済みの manifest。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Manifest {
@@ -265,6 +316,7 @@ pub struct Manifest {
     launch_args: Vec<LaunchArg>,
     contracts: Vec<TableRow>,
     vessel: Option<VesselRepo>,
+    groups: Vec<AccountGroup>,
 }
 
 /// `[[contract]]` 1 行の値（key 集合は検査済み・値の形の検査は欄の形を持つ `pipe::table` が行う）。
@@ -351,11 +403,26 @@ impl HostManifest {
             Self::Unreadable(errors) => return Err(errors),
             Self::Present(face) => face,
         };
-        let errors = crossed(&face, |label| tracked.iter().any(|found| found == label));
+        let mut errors = crossed(&face, |label| tracked.iter().any(|found| found == label));
+        errors.extend(unknown_candidates(&face, |label| {
+            tracked.iter().any(|found| found == label) || face.accounts.iter().any(|found| found.label == label)
+        }));
         if !errors.is_empty() {
             return Err(errors);
         }
         Ok(tracked.iter().cloned().chain(face.accounts.into_iter().map(|account| account.label)).collect())
+    }
+
+    /// 宣言のどれかの群が候補に挙げている口座 label（便用の選定の除外・設計 account-lifecycle.md §17 の約束 4）。
+    ///
+    /// 面が**無い**周は空（0 群・縮退）、**読めない**周は欠陥の全件（FailClosed＝群の宣言を読めないまま便へ
+    /// 口座を渡さない）。宣言値だけを読み、記録は 1 件も書かない。
+    pub fn grouped_accounts(self) -> Result<BTreeSet<String>, Vec<RuleError>> {
+        match self {
+            Self::Absent => Ok(BTreeSet::new()),
+            Self::Unreadable(errors) => Err(errors),
+            Self::Present(face) => Ok(face.grouped_accounts()),
+        }
     }
 }
 
@@ -406,12 +473,17 @@ impl Manifest {
         if let (Some(_), Some(host)) = (&self.vessel, &face.vessel) {
             errors.push(on_host(RuleError::new(host.line, format!("{} が面をまたいで重複する（最大 1 行）", Section::Vessel.header()))));
         }
+        // 群の候補は**合わせた**口座の表（tracked + host）に在ること（設計 account-lifecycle.md §17 の約束 3）。
+        errors.extend(unknown_candidates(&face, |label| {
+            self.accounts.iter().any(|found| found.label == label) || face.accounts.iter().any(|found| found.label == label)
+        }));
         if !errors.is_empty() {
             return Err(errors);
         }
         self.accounts.extend(face.accounts);
         self.plugins.extend(face.plugins);
         self.launch_args.extend(face.launch_args);
+        self.groups.extend(face.groups);
         self.vessel = self.vessel.take().or(face.vessel);
         Ok(self)
     }
@@ -461,6 +533,17 @@ impl Manifest {
     pub fn vessel(&self) -> Option<&VesselRepo> {
         self.vessel.as_ref()
     }
+
+    /// 宣言した群を**宣言順**で返す（host の面・群を宣言しない host は空・設計 account-lifecycle.md §17）。
+    pub fn groups(&self) -> &[AccountGroup] {
+        &self.groups
+    }
+
+    /// 宣言のどれかの群が候補に挙げている口座 label の集合（**便用の選定の除外**・設計 account-lifecycle.md §17 の
+    /// 約束 4）。群を 1 つも宣言しない面は空＝除外は 1 件も増えない。
+    pub fn grouped_accounts(&self) -> BTreeSet<String> {
+        self.groups.iter().flat_map(|group| group.accounts.iter().cloned()).collect()
+    }
 }
 
 /// 本文を面の規則で読み、組めた宣言と欠陥の全件を返す（`parse` と host の面の共通の本体）。
@@ -488,6 +571,13 @@ fn collect(text: &str, face: Face) -> (Manifest, Vec<RuleError>) {
                 raw.line,
                 format!("{} は host の面に置けない（規則の行は tracked の manifest だけ）", Section::Rule.header()),
             )),
+            (Section::AccountGroup, Face::Host) => found.groups.extend(build_group(raw, &mut errors)),
+            // **host の面にだけ在る表**（`[[rule]]` の対称形・設計 account-lifecycle.md §17 の約束 2）。行の中身は
+            // 検査しない（置けない表の欠陥を重ねて報告しない＝1 表 1 件）。
+            (Section::AccountGroup, Face::Tracked) => errors.push(RuleError::new(
+                raw.line,
+                format!("{} は tracked の manifest に置けない（群の宣言は host の面だけ）", Section::AccountGroup.header()),
+            )),
             (Section::Account, _) => found.accounts.extend(
                 build_single(raw, "label", &mut errors).map(|(label, line)| AccountLabel { label, line }),
             ),
@@ -510,6 +600,7 @@ fn collect(text: &str, face: Face) -> (Manifest, Vec<RuleError>) {
     }
     check_duplicate_ids(&found.rows, &mut errors);
     check_duplicate_labels(&found.accounts, &mut errors);
+    check_duplicate_groups(&found.groups, &mut errors);
     (found, errors)
 }
 
@@ -790,6 +881,38 @@ fn build_single(raw: &RawRow, key: &str, errors: &mut Vec<RuleError>) -> Option<
     Some((value, raw.line))
 }
 
+/// `[[account-group]]` 1 行を組む（設計 account-lifecycle.md §17 の約束 1）。欠けや未知 key は全件 `errors` へ積み、
+/// [`build_single`] と同じ形で打ち切る（読めなかった値は scan が 1 件報告済み——**空の列もそこで 1 件になる**）。
+///
+/// 名が空なら拒む（`[[account]]` の label と同じ理由: 群が 1 件在ることと、その群を名指せることは別である）。
+/// 群をまたぐ検査（名の重複・置き場の重複）は [`check_duplicate_groups`]、候補の label が宣言された口座に在るかの
+/// 検査は面を合わせる側（[`unknown_candidates`]）が持つ。
+fn build_group(raw: &RawRow, errors: &mut Vec<RuleError>) -> Option<AccountGroup> {
+    let before = errors.len();
+    check_keys(raw, errors);
+    if raw
+        .fields
+        .iter()
+        .any(|(_, value, _)| matches!(value, RawValue::Broken))
+    {
+        return None;
+    }
+    let name = text_field(raw, "name", errors);
+    let anchors = list_field(raw, "anchors", errors);
+    let accounts = list_field(raw, "accounts", errors);
+    let (Some(name), Some(anchors), Some(accounts)) = (name, anchors, accounts) else {
+        return None;
+    };
+    if errors.len() > before {
+        return None;
+    }
+    if name.is_empty() {
+        errors.push(RuleError::new(raw.line, "name が空である".to_owned()));
+        return None;
+    }
+    Some(AccountGroup { name, anchors, accounts, line: raw.line })
+}
+
 /// `[[contract]]` 1 行を組む。欠けや未知 key は全件 `errors` へ積み、[`build_row`] と同じ形で打ち切る
 /// （読めなかった値は scan が 1 件報告済み）。値の形（文字列か配列か）の検査は欄の形を持つ `pipe::table` が行う。
 fn build_table(raw: &RawRow, errors: &mut Vec<RuleError>) -> Option<TableRow> {
@@ -824,6 +947,48 @@ fn check_duplicate_labels(accounts: &[AccountLabel], errors: &mut Vec<RuleError>
             ));
         }
     }
+}
+
+/// 群の名の重複と、2 つの群に在る置き場を集める（設計 account-lifecycle.md §17 の約束 3）。
+///
+/// 名の重複を拒むのは行 id / label と同じ理由（同じ名の群が 2 つ在ると doctor の行も除外の出所も引けない）。
+/// 置き場の重複を拒むのは、1 つの置き場の席が 2 つの群に属すと「その席の口座を持つ単位」が決まらないためである。
+fn check_duplicate_groups(groups: &[AccountGroup], errors: &mut Vec<RuleError>) {
+    for (index, group) in groups.iter().enumerate() {
+        if groups.iter().take(index).any(|found| found.name == group.name) {
+            errors.push(RuleError::new(group.line, format!("群の名 {} が重複する", group.name)));
+        }
+        for (at, anchor) in group.anchors.iter().enumerate() {
+            // 前の群に在る／同じ群の前の要素に在る、のどちらも「2 度目」である（同じ置き場を 2 度書いた行も、
+            // その置き場の席がどの宣言に従うかを決められない点で同じ欠陥である）。
+            let seen = groups.iter().take(index).any(|found| found.anchors.contains(anchor))
+                || group.anchors.iter().take(at).any(|found| found == anchor);
+            if seen {
+                errors.push(RuleError::new(group.line, format!("置き場 {anchor} が 2 つの群に在る")));
+            }
+        }
+    }
+}
+
+/// 群の候補のうち、合わせた面の口座の表（`known` が真を返す label）に無いものを 1 件ずつ拒む
+/// （設計 account-lifecycle.md §17 の約束 3・**面を合わせてからの検査**なので、面の中の欠陥で止まった周は届かない）。
+fn unknown_candidates(face: &Manifest, known: impl Fn(&str) -> bool) -> Vec<RuleError> {
+    face.groups
+        .iter()
+        .flat_map(|group| {
+            group
+                .accounts
+                .iter()
+                .filter(|label| !known(label))
+                .map(|label| {
+                    on_host(RuleError::new(
+                        group.line,
+                        format!("群 {} の候補 {label} が宣言された口座に無い", group.name),
+                    ))
+                })
+                .collect::<Vec<RuleError>>()
+        })
+        .collect()
 }
 
 /// 未知 key・重複 key・必須 key の欠落を集める。
@@ -863,6 +1028,22 @@ fn text_field(raw: &RawRow, key: &str, errors: &mut Vec<RuleError>) -> Option<St
             errors.push(RuleError::new(
                 *line,
                 format!("{key} は文字列でなければならない（実 {other:?}）"),
+            ));
+            None
+        }
+    }
+}
+
+/// 文字列の配列の field を取り出す。型違いは error にする（**空の配列は [`list`] が scan の時点で断る**ので、
+/// ここへ届く列は 1 要素以上である）。
+fn list_field(raw: &RawRow, key: &str, errors: &mut Vec<RuleError>) -> Option<Vec<String>> {
+    let (_, value, line) = raw.fields.iter().find(|(found, _, _)| found == key)?;
+    match value {
+        RawValue::List(items) => Some(items.clone()),
+        other => {
+            errors.push(RuleError::new(
+                *line,
+                format!("{key} は文字列の配列でなければならない（実 {other:?}）"),
             ));
             None
         }

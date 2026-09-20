@@ -86,8 +86,9 @@ fn place(args: &[String]) -> Result<StateDir, Vec<String>> {
 /// 1 回撃ち（その行は stderr 側へ）、log を replay して純関数へ渡す。**候補なしも rc 0**（断りではない・
 /// FailOpen）。計測が撃てない周は `fleet usage` の rc のまま返し、選ばない。
 ///
-/// 除外集合（設計 §14 (3)）: `--purpose run` は `--exclude` の集合 ∪ 席の登録 row の口座（`--anchor DIR` が在れば
-/// その anchor の row だけ・無い周は置き場の全 row＝保守側）。`--purpose session` は `--exclude` だけ（row を読まない）。
+/// 除外集合（設計 §14 (3)・account-lifecycle.md §17 の約束 4 / 5）: `--purpose run` は `--exclude` の集合 ∪ 席の登録
+/// row の口座（`--anchor DIR` が在ればその anchor の row だけ・無い周は置き場の全 row＝保守側）∪ host の面が宣言した
+/// 群の候補の口座（host 全体・`--anchor` で絞らない）。`--purpose session` は `--exclude` だけ（row も群も読まない）。
 fn select_account(args: &[String], dir: &Path) -> Outcome {
     let SelectFlags { purpose, model, mut exclude, anchor } = match select_flags(args) {
         Ok(found) => found,
@@ -107,9 +108,13 @@ fn select_account(args: &[String], dir: &Path) -> Outcome {
     };
     // 候補は有効な口座の集合だけ（退役中の口座を候補に入れない・account-lifecycle.md §3）。
     let labels = super::effective_accounts(&manifest, &state);
-    // 便用は席の口座を外す（`select_for_run` と同じ読み手・`--anchor` の有無で絞りが変わる・§14）。
+    // 便用は席の口座を外す（`select_for_run` と同じ読み手・`--anchor` の有無で絞りが変わる・§14）。加えて host の面が
+    // 宣言した群の候補の口座を host 全体で外す（`select_for_run` と**同じ除外**・設計 account-lifecycle.md §17 の
+    // 約束 4 / 5＝便用の候補を作る口が 2 つ在るので、片方だけでは `fleet select` の口から群の口座が漏れる）。
+    // session 用は群を読まない（約束 6・席を起こす口座の選び方は不変）。
     if purpose == select::Purpose::Run {
         exclude.extend(state.registered_accounts(anchor.map(Path::new)));
+        exclude.extend(manifest.grouped_accounts());
     }
     let now = now_utc();
     // 走行中の便数は便用の 2 つ目の鍵（`select_for_run` と同じ導出・ADR-0027 §2.3）。

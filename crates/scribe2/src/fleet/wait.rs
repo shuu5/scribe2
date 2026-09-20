@@ -3,8 +3,8 @@
 //! 待つ対象は [`Completion`] のデータだけで、満たされたと判じる読み手はこの file の内側が持つ
 //! （`s2-07l.260` で挙動不変に分割・外の呼び手の path は `fleet` の再 export で保つ）。
 
-use super::{cli, replay, select, select_for_run, store, Stage};
-use std::collections::BTreeMap;
+use super::{cli, replay, select, select_for_run, store, RunSelect, Stage};
+use std::collections::{BTreeMap, BTreeSet};
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::process::Command;
@@ -65,6 +65,9 @@ pub enum Completion {
         labels: Vec<String>,
         /// 便が使う model（rules 行 `runner.model` の値・字面のまま運び [`select_for_run`] へ渡す・`s2-07l.297`）。
         model: Option<String>,
+        /// host の面が宣言した群の候補の口座（宣言値・便用の除外に重なる・設計 account-lifecycle.md §17 の約束 4）。
+        /// 観測と選定が**同じ除外**を組むために運ぶ（C3.4）。
+        grouped: BTreeSet<String>,
     },
     /// **CI の判定が出ること**（`pipe land` の終端・設計 contract-source.md §5）: forge の CLI を子 process で
     /// 撃ち、着地した commit の run が**終端の判定**（success / failure）に達する。まだ走っている周・
@@ -106,8 +109,8 @@ impl Completion {
             }
             Self::LandTurn { .. } => self.round(None).met,
             Self::CiResult { repo, sha, cmd } => ci_now(repo, sha, cmd).is_some(),
-            Self::AccountFree { state_dir, repo, run, expected, labels, model, .. } => {
-                account_free(state_dir, run, *expected, &RunSelect { repo, labels, model: model.as_deref() })
+            Self::AccountFree { state_dir, repo, run, expected, labels, model, grouped, .. } => {
+                account_free(state_dir, run, *expected, &RunSelect { repo, labels, model: model.as_deref(), grouped })
             }
         }
     }
@@ -267,24 +270,13 @@ fn observe(mark: Option<Mark>, state_dir: &Path, run: &str) -> Glance {
     Glance { mark, met }
 }
 
-/// [`Completion::AccountFree`] が運ぶ便用の選定の入力のうち、[`select_for_run`] へ**そのまま**渡すもの
-/// （置き場と時刻以外・待ちの観測と選定が同じ入力で除外する・C3.4）。
-struct RunSelect<'a> {
-    /// 便の repo（除外はこの repo を anchor に持つ席の口座だけ・設計 account-autonomy.md §14）。
-    repo: &'a Path,
-    /// 宣言の label 列。
-    labels: &'a [String],
-    /// 便が使う model（字面のまま）。
-    model: Option<&'a str>,
-}
-
 /// [`Completion::AccountFree`] の 1 周分の観測。
 ///
 /// 置き場を replay し、便がまだ `expected` の段なら最新の実測行で便用の規則（[`select_for_run`]・除外は便の
 /// `repo` を anchor に持つ席の口座だけ）を再評価して `Chosen` の周だけ満たされる。便が `expected` の段でなくなった周
 /// （stop で終端した・別の process が起こし直した）は**満たされた側**＝待ち続ける理由が無い。置き場を読めない周は
 /// 満たされない（読めなさで起こし直さない・期限で Timeout に倒れて計測から撃ち直す）。
-fn account_free(state_dir: &Path, run: &str, expected: Stage, select: &RunSelect<'_>) -> bool {
+fn account_free(state_dir: &Path, run: &str, expected: Stage, pool: &RunSelect<'_>) -> bool {
     let Ok(events) = store::read_all(state_dir) else {
         return false;
     };
@@ -292,10 +284,7 @@ fn account_free(state_dir: &Path, run: &str, expected: Stage, select: &RunSelect
     if state.runs.get(run).map(|found| found.stage) != Some(expected) {
         return true;
     }
-    matches!(
-        select_for_run(&state, select.repo, select.labels, select.model, &cli::now_utc()),
-        select::Selection::Chosen(_)
-    )
+    matches!(select_for_run(&state, pool, &cli::now_utc()), select::Selection::Chosen(_))
 }
 
 /// `YYYY-MM-DDTHH:MM:SSZ` を UNIX 秒にする（[`cli::format_utc`] の逆・**それ以外の形は `None`**）。
@@ -393,7 +382,7 @@ fn pgid_of(stat_text: &str) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     // flip-check: moved s2-07l.260
-    use super::{cli::format_utc, epoch_of, mark_of, pgid_of, reuse, store, wait, Completion, Glance, Mark, Timeout};
+    use super::{cli::format_utc, epoch_of, mark_of, pgid_of, reuse, store, wait, BTreeSet, Completion, Glance, Mark, Timeout};
     use crate::fleet::{EventKind, Stage};
     use crate::pipe::fixture::{append_all, event, gated_run, scratch};
     use crate::pipe::verdict_path;
@@ -589,6 +578,7 @@ mod tests {
             expected: Stage::RateLimited,
             labels: Vec::new(),
             model: Some("opus".to_owned()),
+            grouped: BTreeSet::new(),
         };
         assert_eq!(found.pid(), 0);
     }
@@ -631,6 +621,7 @@ mod tests {
                 expected: Stage::RateLimited,
                 labels: Vec::new(),
                 model: None,
+                grouped: BTreeSet::new(),
             },
             Completion::CiResult {
                 repo: std::path::PathBuf::from("repo"),

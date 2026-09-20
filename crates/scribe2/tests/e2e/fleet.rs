@@ -4046,3 +4046,161 @@ fn fleet_select_anchor_pipe_run_passes_the_repo() {
     super::pipe::clean(&[&repo]);
     drop_fixture(&fx);
 }
+
+// ─── 便用の選定は群の候補の口座を host 全体で外す（account-lifecycle.md §17 の約束 4 / 5 / 6・接頭辞 `host_group_`） ───
+
+/// `fx` の置き場に群を宣言した host の面を置く（口座の表は持たない＝候補は tracked の面〔`--rules`〕の label を指す）。
+/// `groups` は (名, 置き場の列, 候補の口座の列) の宣言順。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn put_groups(fx: &UsageFixture, groups: &[(&str, &[&str], &[&str])]) {
+    let quoted = |items: &[&str]| items.iter().map(|item| format!("\"{item}\"")).collect::<Vec<String>>().join(", ");
+    let body = groups.iter().fold("schema = 1\n".to_owned(), |body, (name, anchors, accounts)| {
+        format!(
+            "{body}\n[[account-group]]\nname = \"{name}\"\nanchors = [{}]\naccounts = [{}]\n",
+            quoted(anchors),
+            quoted(accounts)
+        )
+    });
+    fs::write(fx.state.join(vessel::rules::HOST_MANIFEST), body).expect("host の面を書ける");
+}
+
+/// (a) 便用の候補から**宣言のどの群の候補の label も**外れる: a1 / a2 を 2 つの群が分けて持つと、残る a3 は 100 で
+/// 当たっている＝候補なし（rc 0・`all-limited`）。除外は置き場（anchor）で絞らない——群の置き場と関係の無い
+/// `--anchor` を付けても同じ答えになる（host 全体で外す）。base は群を読まないので `chosen=a1` → RED。
+#[test]
+fn host_group_run_selection_drops_every_group_candidate() {
+    let (fx, curl) = select_fixture(SELECT_THREE, true, Some("85"));
+    put_groups(&fx, &[("alpha", &["/repo/a"], &["a1"]), ("beta", &["/repo/b"], &["a2"])]);
+    for extra in [&["--purpose", "run"][..], &["--purpose", "run", "--anchor", "/repo/elsewhere"]] {
+        let out = run_select(&fx, &curl, extra);
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{extra:?}: 候補なしは断りではない: {out:?}");
+        assert_eq!(
+            out_lines(&out),
+            vec![format!("select purpose=run none=all-limited earliest_reset={SELECT_FIVE_RESET}")],
+            "{extra:?}: 群の候補は host 全体で外れる"
+        );
+    }
+    drop_fixture(&fx);
+}
+
+/// (b) 群に属さない口座は便用の候補に残る（a1 だけを持つ群 → a2 が選ばれる）。席の登録 row の除外はそのまま重なる:
+/// a2 を口座に持つ席の row を便の anchor に置くと、a1（群）も a2（席）も外れて候補なしになる。
+#[test]
+fn host_group_ungrouped_account_stays_in_the_run_candidates() {
+    let (fx, curl) = select_fixture(SELECT_THREE, true, Some("85"));
+    put_groups(&fx, &[("alpha", &["/repo/a"], &["a1"])]);
+    let out = run_select(&fx, &curl, &["--purpose", "run"]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
+    assert_eq!(out_lines(&out), vec!["select purpose=run chosen=a2".to_owned()], "群の a1 だけ外れ、a2 は候補");
+    register_anchored_account(&fx.state, "/repo/x", "a2");
+    let out = run_select(&fx, &curl, &["--purpose", "run", "--anchor", "/repo/x"]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
+    assert_eq!(
+        out_lines(&out),
+        vec![format!("select purpose=run none=all-limited earliest_reset={SELECT_FIVE_RESET}")],
+        "席の登録 row の除外の**上に**群の除外が重なる"
+    );
+    drop_fixture(&fx);
+}
+
+/// (c) 群を 1 つも宣言しない host は便用の候補が今までどおり（host の面が無い周・`schema = 1` だけの周・群 0 の
+/// `[[plugin]]` だけの周のどれも `chosen=a1`）。同じ置き場で面を書き換えながら撃つので、除外が**次の選定から**
+/// 効く（選定のたびに宣言を読み直す＝前の周の宣言を覚えない）ことも同時に測る。
+#[test]
+fn host_group_zero_groups_keeps_the_run_candidates() {
+    let (fx, curl) = select_fixture(SELECT_THREE, true, Some("85"));
+    let host = fx.state.join(vessel::rules::HOST_MANIFEST);
+    // 群を宣言した周は a1 が外れ、外した宣言を消せば**次の選定で**また候補に戻る。
+    put_groups(&fx, &[("alpha", &["/repo/a"], &["a1"])]);
+    let out = run_select(&fx, &curl, &["--purpose", "run"]);
+    assert_eq!(out_lines(&out), vec!["select purpose=run chosen=a2".to_owned()], "宣言の在る周: {out:?}");
+    for body in [None, Some("schema = 1\n"), Some("schema = 1\n\n[[plugin]]\ndir = \"/opt/p\"\n")] {
+        match body {
+            Some(text) => fs::write(&host, text).expect("host の面を書ける"),
+            None => {
+                fs::remove_file(&host).ok();
+            }
+        }
+        let out = run_select(&fx, &curl, &["--purpose", "run"]);
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{body:?}: {out:?}");
+        assert_eq!(out_lines(&out), vec!["select purpose=run chosen=a1".to_owned()], "{body:?}: 除外 0 件");
+    }
+    drop_fixture(&fx);
+}
+
+/// (d) session 用の候補には群の口座が残る（群が a1 を持っていても `--purpose session` は `chosen=a1`）＝席を起こす
+/// 口座の選び方は 1 行も変えない。便用の**並べ順**も変わらない（群が a3 だけを持つ周は従来どおり `chosen=a1`）。
+#[test]
+fn host_group_session_selection_keeps_the_group_accounts() {
+    let (fx, curl) = select_fixture(SELECT_THREE, true, Some("85"));
+    put_groups(&fx, &[("alpha", &["/repo/a"], &["a1"])]);
+    let out = run_select(&fx, &curl, &["--purpose", "session"]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
+    assert_eq!(out_lines(&out), vec!["select purpose=session chosen=a1".to_owned()], "session 用は群を読まない");
+    put_groups(&fx, &[("alpha", &["/repo/a"], &["a3"])]);
+    let out = run_select(&fx, &curl, &["--purpose", "run"]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
+    assert_eq!(out_lines(&out), vec!["select purpose=run chosen=a1".to_owned()], "外れるのが候補外の口座なら並びは不変");
+    // 群の「今の口座」の記録は 1 件も書かれない（event log の kind は計測と便の行だけ）。
+    let kinds: Vec<EventKind> =
+        store::read_all(&fx.state).expect("event log を読める").into_iter().map(|event| event.kind).collect();
+    assert!(
+        kinds.iter().all(|kind| matches!(kind, EventKind::AllowanceMeasured | EventKind::AllowanceUnmeasured)),
+        "群の記録は書かない: {kinds:?}"
+    );
+    drop_fixture(&fx);
+}
+
+/// (e) 便用の候補を作る**もう 1 つの口**（`select_for_run`・`pipe spawn` が通る経路）にも同じ除外が効く: 余裕の在る
+/// 口座 a1 / a2 の置き場で群が a1 を持つと、席の登録 row が 1 件も無くても起動は a2 を選ぶ（`Spawned` の detail が
+/// `account:a2`）。base は `select_for_run` が群を読まないので `account:a1` → RED。
+#[test]
+fn host_group_run_selection_applies_to_the_spawn_mouth() {
+    use std::os::unix::fs::PermissionsExt;
+    let (fx, curl) = select_fixture(&[("a1", 30, 10), ("a2", 20, 10)], true, Some("85"));
+    let (repo, state) = super::pipe::repo_with_state_in(&fx.state);
+    put_groups(&fx, &[("alpha", &["/repo/a"], &["a1"])]);
+    let mut rules = fs::read_to_string(&fx.rules).expect("rules fixture を読める");
+    for (id, kind, value) in [
+        ("runner.model", "RunnerModel", "\"opus\""),
+        ("fleet.lock_retry_ms", "LockRetryMs", "5000"),
+        ("fleet.lock_stale_ms", "LockStaleMs", "30000"),
+    ] {
+        rules.push_str(&format!(
+            "\n[[rule]]\nid = \"{id}\"\nkind = \"{kind}\"\nvalue = {value}\nenabled = true\nruling = \"r\"\nruled_at = \"d\"\n"
+        ));
+    }
+    let rules_path = fx.spy.join("rules-group.toml");
+    fs::write(&rules_path, rules).expect("pipe の manifest を書ける");
+    let runner = fx.spy.join("runner-group.sh");
+    fs::write(&runner, "#!/bin/sh\ncat >/dev/null\nexit 0\n").expect("stub runner を書ける");
+    let mut perm = fs::metadata(&runner).expect("stub の権限を読める").permissions();
+    perm.set_mode(0o755);
+    fs::set_permissions(&runner, perm).expect("stub を実行可能にできる");
+    let contract = super::pipe::write_contract(&repo, &[], &[]);
+    let id = super::pipe::intake_bead(&repo, &state, &contract, "s2-group");
+    let out = super::pipe::run_pipe(&[
+        "spawn", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--runner", &format!("sh {}", runner.display()),
+        "--rules", &rules_path.display().to_string(), "--curl", &curl.display().to_string(),
+    ]);
+    let stdout = super::pipe::stdout_of(&out);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stdout.contains("next=wait"), "候補が在るので待たない: {stdout} / {stderr}");
+    let spawned: Vec<String> = store::read_all(&state)
+        .expect("event log を読める")
+        .into_iter()
+        .filter(|event| event.run == id && event.stage == Some(Stage::Spawned))
+        .filter_map(|event| event.detail)
+        .collect();
+    assert_eq!(spawned.len(), 1, "runner を 1 回起こした: {spawned:?} / {stdout} / {stderr}");
+    assert!(
+        spawned.first().is_some_and(|detail| detail.ends_with(",account:a2")),
+        "群の a1 は起動の選定からも外れる: {spawned:?}"
+    );
+    super::pipe::clean(&[&repo]);
+    drop_fixture(&fx);
+}

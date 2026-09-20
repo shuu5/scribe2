@@ -44,6 +44,15 @@ pub fn declared_labels(tracked: &[String], state_dir: &Path) -> Result<Vec<Strin
     HostManifest::read(&host_manifest_path(state_dir)).labels_over(tracked)
 }
 
+/// `<state_dir>/host.toml` が宣言するどの群の候補にも挙がる口座 label（**便用の選定の除外**・設計
+/// account-lifecycle.md §17 の約束 4）。
+///
+/// tracked の面は群を持てない（置いた周は未知の表として断る）ので、読むのは host の面だけである。面が無い周は
+/// 空（0 群・除外を増やさない）、読めない周は欠陥の全件。宣言値だけを読み、記録は 1 件も書かない。
+pub fn grouped_accounts(state_dir: &Path) -> Result<std::collections::BTreeSet<String>, Vec<RuleError>> {
+    HostManifest::read(&host_manifest_path(state_dir)).grouped_accounts()
+}
+
 /// 発効した行を 1 つ引く。無い / 不発効の周は理由つきで `Err`（行の無さを既定に倒さない・C1）。
 fn enabled_row<'a>(manifest: &'a Manifest, id: &str) -> Result<&'a RuleRow, String> {
     let row = manifest.get(id).ok_or(format!("{id} が無い"))?;

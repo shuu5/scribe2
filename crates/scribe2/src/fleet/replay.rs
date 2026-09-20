@@ -120,30 +120,40 @@ pub fn effective_accounts(manifest: &Manifest, state: &State) -> Vec<String> {
     state.without_retired(manifest.accounts().iter().map(|account| account.label()))
 }
 
+/// 便用の選定の入力のうち**置き場と時刻以外**（[`select_for_run`] の引数の束・待ちの観測
+/// （[`Completion::AccountFree`]）と選定が同じ入力で除外するための 1 つの型・C3.4）。
+pub struct RunSelect<'a> {
+    /// 便の repo（`pipe run --repo` の値）。席の登録 row の除外はこの repo を anchor に持つ row だけ（設計
+    /// account-autonomy.md §14＝置き場を共有する他 repo の席の口座は候補に残る）。
+    pub repo: &'a Path,
+    /// 宣言した口座 label の列（tracked + host の面）。
+    pub labels: &'a [String],
+    /// 便が使う model（rules 行 `runner.model` の値・字面のまま）。`None` は全 model 窓の最大（保守側）。
+    pub model: Option<&'a str>,
+    /// host の面が宣言した**どの群の候補の口座も**（設計 account-lifecycle.md §17 の約束 4・host 全体で外す・
+    /// 宣言値だけを読む）。群を 1 つも宣言しない host では空＝除外は今までどおり。
+    pub grouped: &'a BTreeSet<String>,
+}
+
 /// 便用の規則で口座を 1 つ選ぶ（設計 account-autonomy.md §3 / §4）。**便の再開と待ちの観測が同じ
 /// 1 本を呼ぶ**（[`Completion::AccountFree`] の `is_met` と `pipe resume` の選定が別の入力を組まない）。
 ///
 /// `model` は rules 行 `runner.model` の値（runner / lens が `--model` で毎回明示する model・設計 §3・`s2-07l.297`）
 /// ＝便が消費するのはその model のモデル別窓だけなので、他の model の窓が 100 でも候補から外さない。字面のまま
-/// 渡し、型にするのは `select` の中（別名 × 表示名の照合）。`None` は全 model 窓の最大（保守側）。除外は**便の repo
-/// （`repo`・`pipe run --repo` の値）を anchor に持つ**登録 row の口座だけ（[`State::registered_accounts`]・設計 §14＝
-/// 置き場を共有する他 repo の席の口座は候補）。走行中の便数は state から導く（[`State::inflight_by_account`]・呼び手は
-/// 渡さない）。閾値は便用の規則が持たないので**窓の全量**（[`select::LIMIT_PCT`]）を置く＝session 用の分岐に届かない
-/// 値であって、R-C9-1 の値ではない。
-pub fn select_for_run(
-    state: &State,
-    repo: &Path,
-    labels: &[String],
-    model: Option<&str>,
-    now: &str,
-) -> select::Selection {
-    let labels = state.without_retired(labels.iter().map(String::as_str));
+/// 渡し、型にするのは `select` の中（別名 × 表示名の照合）。除外は [`RunSelect::repo`] を anchor に持つ登録 row の
+/// 口座（[`State::registered_accounts`]・設計 §14）に [`RunSelect::grouped`] を重ねたもの。走行中の便数は state から
+/// 導く（[`State::inflight_by_account`]・呼び手は渡さない）。閾値は便用の規則が持たないので**窓の全量**
+/// （[`select::LIMIT_PCT`]）を置く＝session 用の分岐に届かない値であって、R-C9-1 の値ではない。
+pub fn select_for_run(state: &State, pool: &RunSelect<'_>, now: &str) -> select::Selection {
+    let labels = state.without_retired(pool.labels.iter().map(String::as_str));
+    let mut exclude = state.registered_accounts(Some(pool.repo));
+    exclude.extend(pool.grouped.iter().cloned());
     select::select(&select::Input {
         labels: &labels,
         allowance: &state.allowance,
         purpose: select::Purpose::Run,
-        model,
-        exclude: &state.registered_accounts(Some(repo)),
+        model: pool.model,
+        exclude: &exclude,
         inflight: &state.inflight_by_account(),
         threshold_pct: select::LIMIT_PCT,
         now,

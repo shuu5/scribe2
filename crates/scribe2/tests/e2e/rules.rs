@@ -832,6 +832,171 @@ fn rules_host_embedded_manifest_declares_no_account_and_keeps_usage_timeout() {
     assert_eq!(timeout.ruled_at, "2026-09-12", "裁定日");
 }
 
+// ─── 席の口座を持つ単位は project の群（host の面の `[[account-group]]`・account-lifecycle.md §17・接頭辞 `host_group_`） ───
+
+/// 群 2 つを持つ host の面（口座 g1 / g2 / g3 は見出し行 3 / 6 / 9・群の見出し行は 12 と 17）。
+const HOST_GROUPS: &str = r#"schema = 1
+
+[[account]]
+label = "g1"
+
+[[account]]
+label = "g2"
+
+[[account]]
+label = "g3"
+
+[[account-group]]
+name = "alpha"
+anchors = ["/repo/a", "/repo/b"]
+accounts = ["g2", "g1"]
+
+[[account-group]]
+name = "beta"
+anchors = ["/repo/c"]
+accounts = ["g3"]
+"#;
+
+/// `HOST_GROUPS` の本文の口座の表だけ（群の行を差し替える土台・見出し行は同じ 3 / 6 / 9 で、次の表は 12 行目から）。
+const GROUP_HEAD: &str = "schema = 1\n\n[[account]]\nlabel = \"g1\"\n\n[[account]]\nlabel = \"g2\"\n\n[[account]]\nlabel = \"g3\"\n";
+
+/// `body` を host の面に置いて `rules validate --state-dir` を撃つ（rc と行を返す）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn group_validate(dir: &std::path::Path, body: &str) -> Outcome {
+    std::fs::write(dir.join(vessel::rules::HOST_MANIFEST), body).expect("host の面を書ける");
+    rules_dispatch(&["validate", "--state-dir", &dir.display().to_string()])
+}
+
+/// (1) host の面の `[[account-group]]` を**既存の読み手 1 本**が読む: 3 key が宣言順で取れ、群も宣言順・行番号は
+/// host の面の行。`rules validate --state-dir` は rc 0（口座の数は従来どおり数える＝群は口座の表を増やさない）。
+/// 便用の除外の集合（`grouped_accounts`）は全群の候補の和。tracked の面（埋め込み）は群を 1 つも持たない。
+/// base は `[[account-group]]` を未知の section として拒む（RED）。
+#[test]
+fn host_group_table_is_read_from_the_host_face_with_three_keys() {
+    let dir = host_state_dir(Some(HOST_GROUPS)).expect("tmp の state dir を作れる");
+    let outcome = rules_dispatch(&["validate", "--state-dir", &dir.display().to_string()]);
+    assert_eq!(outcome.rc, RC_OK, "{outcome:?}");
+    assert_eq!(
+        outcome.out,
+        vec![format!("{} accounts=3 plugins=0 launch-args=0 host=present", embedded_validate_line())],
+        "群は口座 / plugin / 起動引数の数を動かさない"
+    );
+    let manifest = Manifest::embedded()
+        .and_then(|tracked| vessel::rules::with_state_dir(tracked, Some(dir.as_path())))
+        .expect("host の面を合わせられる");
+    let groups: Vec<(&str, Vec<&str>, Vec<&str>, u64)> = manifest
+        .groups()
+        .iter()
+        .map(|group| {
+            let anchors: Vec<&str> = group.anchors().iter().map(String::as_str).collect();
+            let accounts: Vec<&str> = group.accounts().iter().map(String::as_str).collect();
+            (group.name(), anchors, accounts, group.line())
+        })
+        .collect();
+    assert_eq!(
+        groups,
+        [
+            ("alpha", vec!["/repo/a", "/repo/b"], vec!["g2", "g1"], 12),
+            ("beta", vec!["/repo/c"], vec!["g3"], 17),
+        ],
+        "群も置き場も候補も宣言順（候補の順は label の昇順ではない）"
+    );
+    let grouped: Vec<String> = manifest.grouped_accounts().into_iter().collect();
+    assert_eq!(grouped, ["g1", "g2", "g3"], "便用の除外は全群の候補の和");
+    assert!(Manifest::embedded().expect("埋め込み").groups().is_empty(), "tracked の面は群を持たない");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// (2) host の面が無い周は 0 群で続く（縮退・rc 0・`host=absent`）。除外も 0 件＝便用の候補は今までどおり。
+#[test]
+fn host_group_absent_host_face_declares_zero_groups() {
+    let dir = host_state_dir(None).expect("tmp の state dir を作れる");
+    let outcome = rules_dispatch(&["validate", "--state-dir", &dir.display().to_string()]);
+    assert_eq!(outcome.rc, RC_OK, "{outcome:?}");
+    assert_eq!(
+        outcome.out,
+        vec![format!("{} accounts=0 plugins=0 launch-args=0 host=absent", embedded_validate_line())]
+    );
+    let manifest = Manifest::embedded()
+        .and_then(|tracked| vessel::rules::with_state_dir(tracked, Some(dir.as_path())))
+        .expect("面が無くても続く");
+    assert!(manifest.groups().is_empty(), "0 群: {:?}", manifest.groups());
+    assert!(manifest.grouped_accounts().is_empty(), "除外 0 件");
+    assert_eq!(
+        vessel::rules::grouped_accounts(dir.as_path()),
+        Ok(std::collections::BTreeSet::new()),
+        "置き場から直に読む口も 0 件（便の口はこちらを読む）"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// (3) tracked の面に群の表が在る周は**未知の表**として行番号付きで断る（`[[rule]]` を host の面で断るのと対称）。
+/// 行の中身は検査しない（1 表 1 件）＝未知 key も必須 key の欠けも重ねない。
+#[test]
+fn host_group_table_on_the_tracked_face_is_refused_as_unknown() {
+    let dir = host_state_dir(None).expect("tmp の state dir を作れる");
+    let tracked = dir.join("tracked.toml");
+    // `GOOD` は 17 行なので、空行を挟んで足した表の見出しは 19 行目。key は 3 つとも書かない（1 表 1 件の確認）。
+    std::fs::write(&tracked, format!("{GOOD}\n[[account-group]]\n")).expect("tracked の fixture を書ける");
+    let outcome = rules_dispatch(&["validate", "--rules", &tracked.display().to_string(), "--state-dir", &dir.display().to_string()]);
+    assert_eq!(outcome.rc, RC_REFUSED, "{outcome:?}");
+    assert!(outcome.out.is_empty(), "stdout へは書かない: {outcome:?}");
+    assert_eq!(
+        outcome.err,
+        vec!["rules: [[account-group]] は tracked の manifest に置けない（群の宣言は host の面だけ） line=19".to_owned()],
+        "1 表 1 件・行番号付き・host の面の接頭辞は付かない"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// (4) 宣言の欠陥 6 種を行番号付きで**全件**断る（`host.toml:` の接頭辞・stdout 0 行）: 同じ名が 2 行・同じ置き場が
+/// 2 つの群・宣言に無い候補・置き場の列が空・候補の列が空・未知の key。最後に、面の中の欠陥で止まった周は**合わせの
+/// 検査へ進まない**（同じ本文が未知の候補も持つのに、出るのは面の中の 1 件だけ）。
+#[test]
+fn host_group_defects_are_refused_with_line_numbers_and_the_face_prefix() {
+    let dir = host_state_dir(None).expect("tmp の state dir を作れる");
+    let group = |name: &str, anchors: &str, accounts: &str| {
+        format!("\n[[account-group]]\nname = \"{name}\"\nanchors = {anchors}\naccounts = {accounts}\n")
+    };
+    let alpha = group("alpha", "[\"/repo/a\"]", "[\"g1\"]");
+    for (body, want) in [
+        // 2 つ目の群の見出し（17 行目）で名の重複。
+        (format!("{GROUP_HEAD}{alpha}{}", group("alpha", "[\"/repo/b\"]", "[\"g2\"]")), vec![(17, "群の名 alpha が重複する")]),
+        // 同じ置き場が 2 つの群に在る（2 つ目の群の見出し）。
+        (format!("{GROUP_HEAD}{alpha}{}", group("beta", "[\"/repo/a\"]", "[\"g2\"]")), vec![(17, "置き場 /repo/a が 2 つの群に在る")]),
+        // 宣言に無い候補（合わせの検査・群の見出し行）。
+        (format!("{GROUP_HEAD}{}", group("alpha", "[\"/repo/a\"]", "[\"nope\"]")), vec![(12, "群 alpha の候補 nope が宣言された口座に無い")]),
+        // 置き場の列が空（14 行目 = anchors の行）。
+        (format!("{GROUP_HEAD}{}", group("alpha", "[]", "[\"g1\"]")), vec![(14, "anchors の 配列が空である")]),
+        // 候補の列が空（15 行目 = accounts の行）。
+        (format!("{GROUP_HEAD}{}", group("alpha", "[\"/repo/a\"]", "[]")), vec![(15, "accounts の 配列が空である")]),
+        // 未知の key（16 行目）。
+        (format!("{GROUP_HEAD}{alpha}model = \"opus\"\n"), vec![(16, "未知の key model")]),
+    ] {
+        let outcome = group_validate(dir.as_path(), &body);
+        assert_eq!(outcome.rc, RC_REFUSED, "{body}: {outcome:?}");
+        assert!(outcome.out.is_empty(), "{body}: stdout へは書かない");
+        assert_eq!(outcome.err.len(), want.len(), "{body}: 全件・同じ欠陥を 2 行にしない: {:?}", outcome.err);
+        for ((line, reason), got) in want.iter().zip(&outcome.err) {
+            assert!(got.starts_with("rules: host.toml: "), "{body}: 面を名指す接頭辞: {got}");
+            assert!(got.contains(reason) && got.ends_with(&format!(" line={line}")), "{body}: {reason} line={line}: {got}");
+        }
+    }
+    // 面の中の欠陥（名の重複）と合わせの欠陥（未知の候補 nope）を同時に持つ本文は、面の中の 1 件だけを出す。
+    let both = format!("{GROUP_HEAD}{alpha}{}", group("alpha", "[\"/repo/b\"]", "[\"nope\"]"));
+    let outcome = group_validate(dir.as_path(), &both);
+    assert_eq!(outcome.rc, RC_REFUSED, "{outcome:?}");
+    assert_eq!(
+        outcome.err,
+        vec!["rules: host.toml: 群の名 alpha が重複する line=17".to_owned()],
+        "面の中で止まった周は合わせの検査へ進まない"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// 起こし直しの回数の行（`pipe.follow_retries`・裁定 id `user 2026-09-12T03:25Z`・
 /// 設計 pipeline-conflict.md §5）。**値は manifest が持ち、ADR も設計 doc も写さない**（C1 / C5）。
 /// 行が欠けた manifest は `RuleError` で拒まれる（kind の字面は `ALL` を通してしか解けない）。

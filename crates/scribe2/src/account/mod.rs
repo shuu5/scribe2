@@ -17,7 +17,7 @@ use crate::fleet::{
     WindowKind, SCHEMA,
 };
 use crate::headless::{ACCOUNT_ENV, DEFAULT_CLAUDE};
-use crate::rules::manifest::{HostManifest, Manifest};
+use crate::rules::manifest::{AccountGroup, HostManifest, Manifest};
 use crate::seat::{self, cycle, InputGate, REASON_TMUX_FAILED};
 use std::collections::BTreeSet;
 use std::fs::{self, OpenOptions};
@@ -300,6 +300,42 @@ pub fn render_host_manifest(word: &str) -> String {
     format!("host-manifest={word}")
 }
 
+/// 群の行の「1 つも無い」を表す語（席の登録 row がどの置き場にも無い周・`0` や空に潰さない）。
+const GROUP_NONE: &str = "none";
+
+/// 置き場の event log を読めない周の群の行の席の口座（`none` に潰さない・C11）。
+const GROUP_UNREADABLE: &str = "unreadable";
+
+/// doctor の群の 1 行（設計 account-lifecycle.md §17 の約束 7・**読むだけで判定しない**）。
+///
+/// 出すのは宣言値 3 つ（名・候補の label の列・置き場の数）と導出値 1 つ（その群の置き場を anchor に持つ席の登録 row の
+/// 口座 label・重複は畳み辞書順・1 つも無ければ [`GROUP_NONE`]）。`state` が `None`（log を読めない）周は
+/// [`GROUP_UNREADABLE`]。群の「今の口座」は第 3 段の記録で、この行は 1 件も書かない・読まない。
+fn render_group(group: &AccountGroup, state: Option<&State>) -> String {
+    let seats = match state {
+        None => GROUP_UNREADABLE.to_owned(),
+        Some(found) => {
+            let labels: BTreeSet<&str> = found
+                .registrations
+                .values()
+                .filter(|latest| group.anchors().contains(&latest.registration.anchor))
+                .map(|latest| latest.registration.account.as_str())
+                .collect();
+            if labels.is_empty() {
+                GROUP_NONE.to_owned()
+            } else {
+                labels.into_iter().collect::<Vec<&str>>().join(",")
+            }
+        }
+    };
+    format!(
+        "group={} accounts={} anchors={} seat-accounts={seats}",
+        group.name(),
+        group.accounts().join(","),
+        group.anchors().len()
+    )
+}
+
 /// event log の replay（読めない周は `None`）。
 fn read_state(state_dir: &Path) -> Option<State> {
     store::read_all(state_dir).ok().map(|events| replay(&events))
@@ -323,7 +359,8 @@ fn rows(state_dir: &Path, manifest: &Manifest, state: Option<&State>) -> Vec<(St
 
 /// doctor の口座の項目（C3.2 の「口座」と「退役」の面・account-autonomy.md §5）: 先頭に host の面の 1 行、続けて宣言
 /// （`rules` = `--rules FILE` か埋め込みの tracked の面 + `<state_dir>/host.toml`・env を読まない）の `[[account]]` の label の
-/// 辞書順に 1 行（[`rows`]）。判定しない（rc を変えず行を出すだけ）。宣言を読めない周は 1 行 `accounts: manifest=unreadable`
+/// 辞書順に 1 行（[`rows`]）、最後に `[[account-group]]` の**宣言順**に 1 行（[`render_group`]・account-lifecycle.md §17）。
+/// 判定しない（rc を変えず行を出すだけ）。宣言を読めない周は 1 行 `accounts: manifest=unreadable`
 /// （0 行に潰さない・C11）。host の面が壊れている周も報告は止めない。
 pub fn doctor_lines(state_dir: &Path, rules: Option<&str>) -> Vec<String> {
     let host = HostManifest::read(&crate::rules::host_manifest_path(state_dir));
@@ -336,7 +373,11 @@ pub fn doctor_lines(state_dir: &Path, rules: Option<&str>) -> Vec<String> {
         lines.push(MANIFEST_UNREADABLE.to_owned());
         return lines;
     };
-    lines.extend(rows(state_dir, &manifest, read_state(state_dir).as_ref()).into_iter().map(|(_, line)| line));
+    let state = read_state(state_dir);
+    lines.extend(rows(state_dir, &manifest, state.as_ref()).into_iter().map(|(_, line)| line));
+    // 群の行は口座の行の後ろに**宣言順**で（設計 account-lifecycle.md §17 の約束 7）。群を 1 つも宣言しない host は
+    // 0 本＝既存の外形は 1 行も動かない（約束 8）。
+    lines.extend(manifest.groups().iter().map(|group| render_group(group, state.as_ref())));
     lines
 }
 

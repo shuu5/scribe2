@@ -216,6 +216,115 @@ fn doctor_accounts_writes_nothing_into_the_account_dirs() {
     fs::remove_dir_all(&place.dir).ok();
 }
 
+// ─── doctor の群の行（account-lifecycle.md §17 の約束 7 / 8・ADR-0049・接頭辞 `host_group_`） ───
+
+/// 置き場の host の面に群を宣言する（口座の表は持たない＝候補は `--rules` の tracked の面の label を指す）。
+/// `groups` は (名, 置き場の列, 候補の口座の列) の宣言順。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn put_groups(place: &RolePlace, groups: &[(&str, &[&str], &[&str])]) {
+    let quoted = |items: &[&str]| items.iter().map(|item| format!("\"{item}\"")).collect::<Vec<String>>().join(", ");
+    let body = groups.iter().fold("schema = 1\n".to_owned(), |body, (name, anchors, accounts)| {
+        format!(
+            "{body}\n[[account-group]]\nname = \"{name}\"\nanchors = [{}]\naccounts = [{}]\n",
+            quoted(anchors),
+            quoted(accounts)
+        )
+    });
+    fs::create_dir_all(&place.state).expect("置き場を作れる");
+    fs::write(place.state.join(vessel::rules::HOST_MANIFEST), body).expect("host の面を書ける");
+}
+
+/// 行の列のうち `group=<name> ` で始まる 1 行（無ければ空）。
+fn group_line(lines: &[String], name: &str) -> String {
+    let head = format!("group={name} ");
+    lines.iter().find(|line| line.starts_with(&head)).cloned().unwrap_or_default()
+}
+
+/// (a) 宣言された群 1 つにつき 1 行が**宣言順**（label の昇順ではない）で、口座の行の後ろ・導入先の行の前に並ぶ。
+/// 項目は名・候補の label の列（宣言順）・置き場の数・その群の置き場の席の登録 row の口座 label（`role_doctor_place`
+/// の row は anchor `/repo` = `acct-1`）。base は群の行を 1 本も出さない（RED）。
+#[test]
+fn host_group_doctor_prints_one_line_per_group_in_declaration_order() {
+    let place = role_doctor_place();
+    put_groups(&place, &[("zeta", &["/repo", "/repo/b"], &["acct-1", "spare"]), ("alpha", &["/repo/c"], &["spare"])]);
+    let lines = doctor_rows(&place, &account_rules(&["acct-1", "spare"]));
+    let names: Vec<&str> =
+        lines.iter().filter_map(|line| line.strip_prefix("group=")).filter_map(|rest| rest.split(' ').next()).collect();
+    assert_eq!(names, ["zeta", "alpha"], "宣言順（辞書順ではない）: {lines:?}");
+    assert_eq!(
+        group_line(&lines, "zeta"),
+        "group=zeta accounts=acct-1,spare anchors=2 seat-accounts=acct-1",
+        "候補は宣言順・置き場は数・席の口座は登録 row から: {lines:?}"
+    );
+    let last_account = lines.iter().rposition(|line| line.starts_with("account="));
+    let first_group = lines.iter().position(|line| line.starts_with("group="));
+    assert_eq!(first_group, last_account.map(|at| at + 1), "群の行は口座の行の後ろ: {lines:?}");
+    assert_eq!(lines.last().map(String::as_str), Some(CONSUMER_REPO), "導入先の行は群の行の後ろ: {lines:?}");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (b) その群の置き場に席の登録 row が 1 つも無い周は無しの語（`none`）で、`0` や空に潰さない。置き場の一致は登録が
+/// 書いた値そのもの（`/repo` の末尾 `/` 違いはどの row とも一致しない）。
+#[test]
+fn host_group_doctor_line_says_none_without_seat_rows() {
+    let place = role_doctor_place();
+    put_groups(&place, &[("alpha", &["/repo/elsewhere"], &["acct-1"]), ("beta", &["/repo/"], &["acct-1"])]);
+    let lines = doctor_rows(&place, &account_rules(&["acct-1"]));
+    assert_eq!(group_line(&lines, "alpha"), "group=alpha accounts=acct-1 anchors=1 seat-accounts=none", "{lines:?}");
+    assert_eq!(group_line(&lines, "beta"), "group=beta accounts=acct-1 anchors=1 seat-accounts=none", "正規化しない: {lines:?}");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (c) 置き場を 2 つ持つ群は両方の登録 row の口座を畳んで（重複は 1 つ・辞書順で）載せる。event log を読めない周は
+/// `unreadable`（`none` に潰さない・C11）。行は判定しない（rc 0 のまま）。
+#[test]
+fn host_group_doctor_line_lists_the_seat_accounts_of_the_group_anchors() {
+    let place = role_doctor_place();
+    role_register_extra(&place, "grpb:grpb", "/repo/b");
+    put_groups(&place, &[("alpha", &["/repo", "/repo/b"], &["acct-1"])]);
+    let rules = account_rules(&["acct-1"]);
+    assert_eq!(
+        group_line(&doctor_rows(&place, &rules), "alpha"),
+        "group=alpha accounts=acct-1 anchors=2 seat-accounts=acct-1",
+        "2 つの row は同じ口座＝畳んで 1 つ"
+    );
+    fs::write(vessel::fleet::store::events_path(&place.state), "not an event\n").expect("log を壊せる");
+    assert_eq!(
+        group_line(&doctor_rows(&place, &rules), "alpha"),
+        "group=alpha accounts=acct-1 anchors=2 seat-accounts=unreadable",
+        "読めなさを none に潰さない"
+    );
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (d) 群を 1 つも宣言しない host は群の行が 0 本で、doctor の既存の外形は 1 行も動かない（host の面が無い周も、
+/// 群を持たない `[[account]]` だけの host の面が在る周も、行の列が群なしの周と一致する）。
+#[test]
+fn host_group_doctor_prints_no_line_without_groups() {
+    let place = role_doctor_place();
+    let rules = account_rules(&["acct-1"]);
+    let bare = doctor_rows(&place, &rules);
+    assert!(!bare.iter().any(|line| line.starts_with("group=")), "群の行 0 本: {bare:?}");
+    fs::write(place.state.join(vessel::rules::HOST_MANIFEST), "schema = 1\n\n[[account]]\nlabel = \"hosted\"\n")
+        .expect("host の面を書ける");
+    let hosted = doctor_rows(&place, &rules);
+    assert!(!hosted.iter().any(|line| line.starts_with("group=")), "群を持たない面でも 0 本: {hosted:?}");
+    // 比べるのは群の行の入る隙間（口座の行と host の面の 3 値の行を除いた外形）。
+    let shape = |lines: &[String]| -> Vec<String> {
+        lines
+            .iter()
+            .filter(|line| !line.starts_with("account=") && !line.starts_with("host-manifest="))
+            .cloned()
+            .collect()
+    };
+    assert_eq!(shape(&hosted), shape(&bare), "口座の行と host の面の行の外は 1 行も動かない");
+    assert!(bare.contains(&HOST_ABSENT.to_owned()), "面の無い周の 1 行は従来どおり: {bare:?}");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
 // ─────────────────── 口座の退避と立て直し（account-autonomy.md §5・`s2-07l.211`・接頭辞 `seat_account_`） ───────────────────
 
 // ─────────────────── hook 集合の食い違いの後の終了の手と立て直し（consumer-sync.md §6・AC32・`s2-07l.304`・接頭辞 `seat_tick_hook_drift_`） ───────────────────
