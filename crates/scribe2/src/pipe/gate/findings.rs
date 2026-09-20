@@ -59,6 +59,29 @@ impl Findings {
     }
 }
 
+/// 集計を読めなかった理由の **2 値**（設計 gate-cost.md §29・`s2-07l.495`）。
+///
+/// 「形が読めない」（欠け・重複・表に無い名・件数や母集団の数が数でない）と「読めたが規則で断った」
+/// （母集団 0＝lens は読んでいない）は、同じ INCONCLUSIVE でも**撃ち直す側とそうでない側に割れる**
+/// ——後者は lens が形どおりに答えた上での主張なので、同じ問いを 2 度出しても向きが変わらない。
+/// 理由の字面はどちらも 1 行で、割る前と 1 字も変えない。
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum Unread {
+    /// 形が読めない（撃ち直す側）。
+    Malformed(String),
+    /// 読めたが規則で断った（母集団 0・撃ち直さない側）。
+    Refused(String),
+}
+
+impl Unread {
+    /// 理由の字面（どちらの側でも 1 行）。
+    pub(super) fn reason(&self) -> &str {
+        match self {
+            Self::Malformed(reason) | Self::Refused(reason) => reason,
+        }
+    }
+}
+
 /// lens が読んだ母集団（file 数と行数）。
 ///
 /// **0 は「見ていない」**であって「穴が無い」ではない（C10）。0 を持つ [`Population`] は作らない
@@ -72,13 +95,15 @@ pub(super) struct Population {
 }
 
 impl Population {
-    /// `files:<n>,lines:<n>` を読む。どちらかが欠け / 数でない / 0 の周は理由 1 行の `Err`
-    /// （呼び手が INCONCLUSIVE へ倒す・C11.2）。
-    fn parse(text: &str) -> Result<Self, String> {
-        let files = number_of(text, "files")?;
-        let lines = number_of(text, "lines")?;
+    /// `files:<n>,lines:<n>` を読む。どちらかが欠け / 数でない周は [`Unread::Malformed`]・0 の周は
+    /// [`Unread::Refused`]（呼び手が INCONCLUSIVE へ倒す・C11.2・撃ち直すのは前者だけ・設計 §29）。
+    fn parse(text: &str) -> Result<Self, Unread> {
+        let files = number_of(text, "files").map_err(Unread::Malformed)?;
+        let lines = number_of(text, "lines").map_err(Unread::Malformed)?;
         if files == 0 || lines == 0 {
-            return Err(format!("population が 0（files:{files},lines:{lines}）＝lens は読んでいない"));
+            return Err(Unread::Refused(format!(
+                "population が 0（files:{files},lines:{lines}）＝lens は読んでいない"
+            )));
         }
         Ok(Self { files, lines })
     }
@@ -98,17 +123,24 @@ impl Tally {
     ///
     /// **8 category を全部**（0 も）要る＝欠け・重複・表に無い名・母集団の不備は `Err` で、
     /// 呼び手（`super::lens::parse_lens`）が INCONCLUSIVE へ倒す（測り直せる側・FR14）。
-    pub(super) fn parse(findings: &str, population: &str) -> Result<Self, String> {
-        let pairs = findings.split(',').map(count_pair).collect::<Result<Vec<_>, String>>()?;
+    /// `Err` は 2 値（[`Unread`]）——母集団 0 だけが「読めたが規則で断った」側で、残りは「形が読めない」側。
+    pub(super) fn parse(findings: &str, population: &str) -> Result<Self, Unread> {
+        let pairs = findings
+            .split(',')
+            .map(count_pair)
+            .collect::<Result<Vec<_>, String>>()
+            .map_err(Unread::Malformed)?;
         if let Some((name, _)) = pairs.iter().find(|(name, _)| !known(name)) {
-            return Err(format!("findings の category {name} は表に無い"));
+            return Err(Unread::Malformed(format!("findings の category {name} は表に無い")));
         }
         let mut counts = Vec::with_capacity(Findings::ALL.len());
         for found in Findings::ALL {
             let mut hits = pairs.iter().filter(|(name, _)| name == &found.as_str());
-            let (_, count) = hits.next().ok_or_else(|| format!("findings に {} が無い", found.as_str()))?;
+            let (_, count) = hits
+                .next()
+                .ok_or_else(|| Unread::Malformed(format!("findings に {} が無い", found.as_str())))?;
             if hits.next().is_some() {
-                return Err(format!("findings の {} が 2 度出た", found.as_str()));
+                return Err(Unread::Malformed(format!("findings の {} が 2 度出た", found.as_str())));
             }
             counts.push(*count);
         }
@@ -155,7 +187,7 @@ fn number_of(text: &str, name: &str) -> Result<u64, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Findings, Tally};
+    use super::{Findings, Tally, Unread};
 
     /// 8 category の字面（宣言順）。
     const NAMES: [&str; 8] = [
@@ -194,6 +226,9 @@ mod tests {
     }
 
     /// 欠け・重複・表に無い名・母集団の不備は**読めない**（呼び手が INCONCLUSIVE へ倒す・C10）。
+    ///
+    /// 読めなさは 2 値に割れる（設計 gate-cost.md §29）: **母集団 0 だけ**が「読めたが規則で断った」
+    /// （[`Unread::Refused`]・撃ち直さない側）で、残りは全部「形が読めない」（[`Unread::Malformed`]）。
     #[test]
     fn pipe_gate_findings_tally_refuses_incomplete_categories_and_zero_population() {
         let all = "contract-fit:0,teeth-nonvacuous:0,constitution:0,delete:0,stdlib:0,native:0,yagni:0,shrink:0";
@@ -201,20 +236,26 @@ mod tests {
         let unknown = format!("{all},typo:1");
         let not_a_number = all.replace("shrink:0", "shrink:x");
         let cases = [
-            (short, READ, "shrink"),
-            ("contract-fit:0,contract-fit:0", READ, "2 度"),
-            (unknown.as_str(), READ, "表に無い"),
-            ("contract-fit", READ, "<category>:<件数> でない"),
-            (not_a_number.as_str(), READ, "数でない"),
-            (all, "files:0,lines:42", "population が 0"),
-            (all, "files:7,lines:0", "population が 0"),
-            (all, "lines:42", "population に files が無い"),
-            (all, "files:7", "population に lines が無い"),
+            (short, READ, "shrink", true),
+            ("contract-fit:0,contract-fit:0", READ, "2 度", true),
+            (unknown.as_str(), READ, "表に無い", true),
+            ("contract-fit", READ, "<category>:<件数> でない", true),
+            (not_a_number.as_str(), READ, "数でない", true),
+            (all, "files:0,lines:42", "population が 0", false),
+            (all, "files:7,lines:0", "population が 0", false),
+            (all, "lines:42", "population に files が無い", true),
+            (all, "files:7", "population に lines が無い", true),
+            (all, "files:~7,lines:42", "population の files が数でない（~7）", true),
         ];
-        for (findings, population, reason) in cases {
+        for (findings, population, reason, malformed) in cases {
             let read = Tally::parse(findings, population);
             let err = read.expect_err(&format!("読めてはならない: {findings} / {population}"));
-            assert!(err.contains(reason), "理由に {reason} が要る: {err}");
+            assert!(err.reason().contains(reason), "理由に {reason} が要る: {err:?}");
+            assert_eq!(
+                matches!(err, Unread::Malformed(_)),
+                malformed,
+                "形が読めない側は母集団 0 以外の全部: {findings} / {population} → {err:?}"
+            );
         }
         assert!(Tally::parse(all, READ).is_ok(), "対: 8 つ揃い母集団が 0 でなければ読める");
     }

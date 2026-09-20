@@ -2,7 +2,7 @@
 //! 穴埋め・起動・stdout の JSON 1 行の読み・`verdict.json` の書き・[`super`] から純移動・
 //! `s2-07l.286`）。判定の順と終端は親（[`super::gate`]）が持つ。
 
-use super::findings::Tally;
+use super::findings::{Tally, Unread};
 use super::{Verdict, JSON_HEAD};
 use crate::fleet::json_lite::{self, Value};
 use crate::pipe::confine::{self, Confinement, Reason, Released};
@@ -41,11 +41,22 @@ pub(super) struct Judged {
     pub(super) evidence: String,
     /// findings の集計（読めた周だけ）。
     pub(super) tally: Option<Tally>,
+    /// lens の**出力は在るが形が読めなかった**か（設計 gate-cost.md §29・`s2-07l.495`）。
+    ///
+    /// 立てるのは [`parse_lens`] の `Err` の分岐だけ——JSON でない・`verdict` が 3 値でない・key が
+    /// 無い・集計の [`Unread::Malformed`]。「読めたが規則で断った」（母集団 0）と、箱の中の死・rc 非 0・
+    /// 起動の失敗は伏せたまま（撃ち直しで向きが変わらない）。親（`decide`）はこの印の周だけ 1 回撃ち直す。
+    pub(super) reread: bool,
 }
 
-/// 判定に届かなかった周の戻り（集計は無い）。
+/// 判定に届かなかった周の戻り（集計は無い・撃ち直しの印は伏せた側）。
 pub(super) fn unjudged(evidence: String) -> Judged {
-    Judged { verdict: Verdict::Inconclusive, evidence, tally: None }
+    Judged { verdict: Verdict::Inconclusive, evidence, tally: None, reread: false }
+}
+
+/// 出力の形が読めなかった周の戻り（[`unjudged`] に撃ち直しの印を立てた形・[`parse_lens`] 専用）。
+fn unreadable(evidence: String) -> Judged {
+    Judged { reread: true, ..unjudged(evidence) }
 }
 
 /// `--lens` の cmd の `{contract}` / `{worktree}` を run の path へ置く。
@@ -151,10 +162,13 @@ pub(crate) fn last_json_object(text: &str) -> Result<Vec<(String, Value)>, Strin
 /// 欠けた周・表に無い category・母集団 0 の周は、3 値が何であれ INCONCLUSIVE へ倒す——件数の
 /// 無い verdict は「見て 0 件だった」と「見ていない」を弁別できず、後段がそれを裏書きする
 /// （C10・fail-closed C11.2・既存の INCONCLUSIVE 経路なので便は測り直せる）。
+///
+/// 読めなさは **2 値**に割る（設計 gate-cost.md §29）: 形が読めない周は [`unreadable`]（撃ち直しの印）、
+/// 読めたが規則で断った周（母集団 0・[`Unread::Refused`]）は [`unjudged`]（印なし）。理由の字面は同じ。
 fn parse_lens(text: &str) -> Judged {
     let pairs = match last_json_object(text) {
         Ok(parsed) => parsed,
-        Err(reason) => return unjudged(format!("lens の{reason}")),
+        Err(reason) => return unreadable(format!("lens の{reason}")),
     };
     let get = |key: &str| {
         pairs
@@ -164,21 +178,25 @@ fn parse_lens(text: &str) -> Judged {
     };
     let evidence = get("evidence").unwrap_or_default().to_owned();
     let Some(verdict) = get("verdict").and_then(Verdict::parse) else {
-        return unjudged("lens の verdict が 3 値でない".to_owned());
+        return unreadable("lens の verdict が 3 値でない".to_owned());
     };
     // **欠けた key を名指す**（どちらが無いのかで直す先が違う）。lens 自身の evidence（cap 超過
     // 等）も併せて残す——2 key を持たない出力の理由はここでしか残らない。
     let missing = |key: &str| format!("lens の verdict に {key} が無い（evidence: {evidence}）");
     let read = match (get("findings"), get("population")) {
-        (None, _) => Err(missing("findings")),
-        (_, None) => Err(missing("population")),
-        (Some(counted), Some(population)) => {
-            Tally::parse(counted, population).map_err(|reason| format!("lens の{reason}"))
-        }
+        (None, _) => return unreadable(missing("findings")),
+        (_, None) => return unreadable(missing("population")),
+        (Some(counted), Some(population)) => Tally::parse(counted, population),
     };
     match read {
-        Err(reason) => unjudged(reason),
-        Ok(tally) => Judged { verdict, evidence, tally: Some(tally) },
+        Ok(tally) => Judged { verdict, evidence, tally: Some(tally), reread: false },
+        Err(unread) => {
+            let evidence = format!("lens の{}", unread.reason());
+            match unread {
+                Unread::Malformed(_) => unreadable(evidence),
+                Unread::Refused(_) => unjudged(evidence),
+            }
+        }
     }
 }
 

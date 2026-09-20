@@ -3700,3 +3700,164 @@ fn pipe_gate_lens_account_none_is_inconclusive_without_calling_lens() {
     assert!(show_line(&repo, &state, &id).contains("stage=Gated"), "便は Gated のまま（測り直せる側）");
     clean(&[&repo, &state]);
 }
+
+// ── lens の出力の形が読めなかった周の撃ち直し（設計 gate-cost.md §29・`s2-07l.495`）──────
+
+/// stderr に写る撃ち直しの行の頭（1 回目の理由が `reason=` の後に続く）。
+const REREAD_LINE: &str = "pipe: lens-reread=1 reason=";
+
+/// 撃たれた回数を数え、**1 回目と 2 回目で別の出力**を返す偽 lens（§29 の歯の fixture・歯の中で書く）。
+///
+/// 回数は [`lens_calls`] の置き場に積む。`after` は出力の後に走る行（`exit 7` 等・空なら rc 0 で終わる）。
+/// 3 回目以降も `second` を返す＝「3 回目は無い」は回数で測る。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn counting_lens(state: &Path, first: &str, second: &str, after: &str) -> String {
+    let spy = lens_spy(state);
+    fs::create_dir_all(&spy).expect("偽 lens の置き場を作れる");
+    let calls = spy.join("calls").display().to_string();
+    let body = format!(
+        "#!/bin/sh\ncat >/dev/null\nprintf 'call\\n' >> '{calls}'\nif [ \"$(wc -l < '{calls}')\" -eq 1 ]; then\n  printf '%s\\n' '{first}'\nelse\n  printf '%s\\n' '{second}'\nfi\n{after}\n"
+    );
+    let path = state.join("counting-lens.sh");
+    fs::write(&path, body).expect("偽 lens を書ける");
+    format!("sh {}", path.display())
+}
+
+/// 母集団の行数が数でない（実測 2026-09-20 の `~330` の形）本文。
+fn unreadable_population(lines: &str) -> String {
+    findings_body(&format!(",\"findings\":\"{ZERO_FINDINGS}\",\"population\":\"files:1,lines:{lines}\""))
+}
+
+/// stderr の撃ち直しの行（無ければ `None`）。
+fn reread_line(out: &Output) -> Option<String> {
+    stderr_of(out).lines().find(|line| line.starts_with(REREAD_LINE)).map(str::to_owned)
+}
+
+/// (a) 1 回目が数でない母集団・2 回目が正しい出力の lens は **PASS** で終わり、撃たれた回数が 2・stderr に
+/// 撃ち直しの 1 行（1 回目の理由つき）が在る。
+///
+/// base は 1 回目の戻りをそのまま判定にする＝INCONCLUSIVE で回数 1 → RED。
+#[test]
+fn pipe_gate_lens_reread_unreadable_then_readable_passes_with_two_calls() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &path);
+    let lens = counting_lens(&state, &unreadable_population("~330"), &lens_verdict("PASS"), "");
+    let out = gate_once(&repo, &state, &id, Some(&lens));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "2 回目の出力で PASS: {} / {}", stdout_of(&out), stderr_of(&out));
+    assert_eq!(lens_calls(&state), 2, "撃ち直しは 1 回（合計 2 回）");
+    let pairs = verdict_pairs(&state, &id);
+    assert_eq!(value_of(&pairs, "verdict"), "PASS", "{pairs:?}");
+    assert_eq!(value_of(&pairs, "evidence"), "fake", "理由は 2 回目の lens のもの: {pairs:?}");
+    assert_eq!(value_of(&pairs, "population"), FAKE_POPULATION, "集計も 2 回目のもの: {pairs:?}");
+    let line = reread_line(&out).unwrap_or_default();
+    assert!(
+        line.contains("population の lines が数でない（~330）"),
+        "撃ち直しの行が 1 回目の理由を運ぶ: {}",
+        stderr_of(&out)
+    );
+    assert_eq!(stderr_of(&out).matches(REREAD_LINE).count(), 1, "撃ち直しの行は 1 本: {}", stderr_of(&out));
+    // record の field も verdict.json の schema も足さない（撃ち直した事実は stderr の行だけ）。
+    let keys: Vec<&str> = pairs.iter().map(|(key, _)| key.as_str()).collect();
+    assert!(!keys.iter().any(|key| key.contains("reread")), "verdict.json に field を足さない: {keys:?}");
+    assert_eq!(gated_details(&state, &id), vec!["verdict:PASS".to_owned()], "Gated の detail も不変");
+    clean(&[&repo, &state]);
+}
+
+/// (b) 2 回とも数でない周は INCONCLUSIVE で回数が 2（**3 回目は無い**）・理由は 2 回目のもの（1 回目は stderr の行）。
+#[test]
+fn pipe_gate_lens_reread_twice_unreadable_is_inconclusive_with_second_reason() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &path);
+    let lens = counting_lens(&state, &unreadable_population("~330"), &unreadable_population("~331"), "");
+    let out = gate_once(&repo, &state, &id, Some(&lens));
+    assert_eq!(out.status.code(), Some(i32::from(RC_INCONCLUSIVE)), "2 回目も読めなければ rc 3: {}", stdout_of(&out));
+    assert_eq!(lens_calls(&state), 2, "3 回目は撃たない");
+    let pairs = verdict_pairs(&state, &id);
+    assert_eq!(value_of(&pairs, "verdict"), "INCONCLUSIVE", "{pairs:?}");
+    let evidence = value_of(&pairs, "evidence");
+    assert!(evidence.contains("population の lines が数でない（~331）"), "理由は 2 回目のもの: {evidence}");
+    assert!(!evidence.contains("~330"), "1 回目の理由は判定に載らない: {evidence}");
+    assert_eq!(value_of(&pairs, "population"), "", "測れていない周は field を書かない");
+    let line = reread_line(&out).unwrap_or_default();
+    assert!(line.contains("（~330）"), "1 回目の理由は stderr の行に残る: {}", stderr_of(&out));
+    assert_eq!(stderr_of(&out).matches(REREAD_LINE).count(), 1, "撃ち直しの行は 1 本: {}", stderr_of(&out));
+    clean(&[&repo, &state]);
+}
+
+/// (c) **母集団が 0 の出力は撃ち直さない**（回数 1・INCONCLUSIVE・理由の字面は今までどおり）＝「読めたが規則で
+/// 断った」側の pin。2 回目には正しい出力を用意してあるので、撃ち直せば PASS に化ける形——化けないことを測る。
+#[test]
+fn pipe_gate_lens_reread_does_not_rerun_zero_population() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &path);
+    let zero = findings_body(&format!(",\"findings\":\"{ZERO_FINDINGS}\",\"population\":\"files:0,lines:42\""));
+    let lens = counting_lens(&state, &zero, &lens_verdict("PASS"), "");
+    let out = gate_once(&repo, &state, &id, Some(&lens));
+    assert_eq!(out.status.code(), Some(i32::from(RC_INCONCLUSIVE)), "母集団 0 は rc 3 のまま: {}", stdout_of(&out));
+    assert_eq!(lens_calls(&state), 1, "読めたが規則で断った周は撃ち直さない");
+    let pairs = verdict_pairs(&state, &id);
+    assert_eq!(value_of(&pairs, "verdict"), "INCONCLUSIVE", "{pairs:?}");
+    assert_eq!(
+        value_of(&pairs, "evidence"),
+        "lens のpopulation が 0（files:0,lines:42）＝lens は読んでいない",
+        "理由の字面は 1 字も変わらない: {pairs:?}"
+    );
+    assert_eq!(reread_line(&out), None, "撃ち直しの行は出ない: {}", stderr_of(&out));
+    clean(&[&repo, &state]);
+}
+
+/// (d) rc が非 0 で終わる lens と起動できない lens は撃ち直さない（stderr に撃ち直しの行が無い）。
+///
+/// rc 非 0 の側は 1 回目の出力が読めない形にしてある＝出力の形だけ見れば撃ち直す側だが、rc が先に読まれて
+/// 撃ち直さない（箱の中の死と同じ列・撃ち直しで向きが変わらない）。
+#[test]
+fn pipe_gate_lens_reread_does_not_rerun_nonzero_rc_or_unlaunchable() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &path);
+    let lens = counting_lens(&state, &unreadable_population("~330"), &lens_verdict("PASS"), "exit 7");
+    let out = gate_once(&repo, &state, &id, Some(&lens));
+    assert_eq!(out.status.code(), Some(i32::from(RC_INCONCLUSIVE)), "rc 非 0 は rc 3: {}", stdout_of(&out));
+    assert_eq!(lens_calls(&state), 1, "rc 非 0 は撃ち直さない");
+    let pairs = verdict_pairs(&state, &id);
+    assert_eq!(value_of(&pairs, "evidence"), "lens が rc 7 で終わった", "理由は rc のまま: {pairs:?}");
+    assert_eq!(reread_line(&out), None, "撃ち直しの行は出ない: {}", stderr_of(&out));
+
+    // 起動できない lens（script が無い）: 1 度も起きず（回数は前の 1 のまま）、撃ち直しもしない。
+    // 起動の失敗は shell の rc≠0（値は shell により違う）として読まれる＝rc 非 0 と同じ列。
+    let absent = format!("sh {}", state.join("absent-lens.sh").display());
+    let out = gate_once(&repo, &state, &id, Some(&absent));
+    assert_eq!(out.status.code(), Some(i32::from(RC_INCONCLUSIVE)), "起動できない周は rc 3: {}", stdout_of(&out));
+    assert_eq!(lens_calls(&state), 1, "起動できない lens は 1 度も数えられない（前の 1 のまま）");
+    let pairs = verdict_pairs(&state, &id);
+    assert!(value_of(&pairs, "evidence").starts_with("lens が rc "), "理由は起動の失敗（rc≠0）: {pairs:?}");
+    assert_eq!(reread_line(&out), None, "撃ち直しの行は出ない: {}", stderr_of(&out));
+    clean(&[&repo, &state]);
+}
+
+/// (e) lens が **自分で** `INCONCLUSIVE` を答えた周（集計は正しい）は撃ち直さない（回数 1）。
+///
+/// 3 値のうち INCONCLUSIVE だけが「読めなかった」と混ざりうる——形どおりの INCONCLUSIVE は判定であって
+/// 読めなさではない。2 回目は PASS を用意してあるので、撃ち直せば通ってしまう形。
+#[test]
+fn pipe_gate_lens_reread_does_not_rerun_a_well_formed_inconclusive() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &path);
+    let lens = counting_lens(&state, &lens_verdict("INCONCLUSIVE"), &lens_verdict("PASS"), "");
+    let out = gate_once(&repo, &state, &id, Some(&lens));
+    assert_eq!(out.status.code(), Some(i32::from(RC_INCONCLUSIVE)), "lens の INCONCLUSIVE は rc 3: {}", stdout_of(&out));
+    assert_eq!(lens_calls(&state), 1, "形どおりの答えは撃ち直さない");
+    let pairs = verdict_pairs(&state, &id);
+    assert_eq!(value_of(&pairs, "verdict"), "INCONCLUSIVE", "{pairs:?}");
+    assert_eq!(value_of(&pairs, "evidence"), "fake", "理由は lens の evidence: {pairs:?}");
+    assert_eq!(value_of(&pairs, "population"), FAKE_POPULATION, "集計は読めている（判定に届いた周）: {pairs:?}");
+    assert_eq!(reread_line(&out), None, "撃ち直しの行は出ない: {}", stderr_of(&out));
+    clean(&[&repo, &state]);
+}

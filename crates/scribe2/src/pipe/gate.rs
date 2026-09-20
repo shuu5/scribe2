@@ -4,7 +4,8 @@
 //! **判定は wildcard 無しの順序で決める**: 測れなかった（段①が読めない・箱の中の死）
 //! → INCONCLUSIVE ／ verify に rc≠0 → FAIL ／ 検出線の rc 2（赤が 0 の周だけ・設計
 //! gate-cost.md §28）→ INCONCLUSIVE ／ lens に渡す本文の byte が cap 超
-//! → INCONCLUSIVE（lens を呼ばない）／ lens 側の不備 → INCONCLUSIVE ／ それ以外は
+//! → INCONCLUSIVE（lens を呼ばない）／ lens 側の不備 → INCONCLUSIVE（出力の**形が読めなかった**
+//! 周だけ同じ gate の中で 1 回撃ち直し、2 回目の戻りで読む・設計 gate-cost.md §29）／ それ以外は
 //! lens の verdict。lens に渡す本文は閉じた型 [`LensInput`]（diff か、純移動の要約・
 //! [`super::move_proof`]・`s2-07l.266`）で、判定は純関数・file の読みだけをここが担う。
 //!
@@ -385,7 +386,7 @@ fn decide(
     if measured.red > 0 {
         // 赤い周は lens を呼ばない＝findings は測っていない（`tally` は `None`・C10）。
         let evidence = format!("verify の {} 行が rc≠0", measured.red);
-        let judged = Judged { verdict: Verdict::Fail, evidence, tally: None };
+        let judged = Judged { verdict: Verdict::Fail, evidence, tally: None, reread: false };
         return Ok(Decided { judged, scope: None, account: None });
     }
     // **検出線の rc 2（測れなかった）は、赤が 0 の周だけ INCONCLUSIVE**（`s2-07l.331`・設計 §5.3 の③・
@@ -438,15 +439,49 @@ fn decide(
         Ok(found) => found,
         Err(reason) => return inconclusive(reason),
     };
-    let unit = confine::unit_name(entry.run, LENS_STAGE, 1);
+    let (judged, scope) = ask_lens_rereading(entry.run, &line, worktree, body, notes);
+    Ok(Decided { judged, scope, account })
+}
+
+/// lens を 1 回撃ち、**出力は在るが形が読めなかった**周（[`Judged::reread`]）だけ同じ行・同じ本文・
+/// 同じ箱の形で **1 回だけ**撃ち直して 2 回目の戻りを採る（設計 gate-cost.md §29・`s2-07l.495`・
+/// 検出線の撃ち直し §21 と同じ 1 回）。
+///
+/// 撃ち直すのは「形が読めない」側だけ——「読めたが規則で断った」（母集団 0）と箱の中の死・rc 非 0・
+/// 起動の失敗は撃ち直さない（どれも撃ち直しで向きが変わらない・印は [`lens::parse_lens`] だけが立てる）。
+/// 1 回目の理由は `notes` の 1 行（stderr）に残し**判定は変えない**（record の field も `verdict.json`
+/// の schema も足さない・C10 = 撃ち直した事実を 0 に潰さない）。2 回目も読めなければ理由は 2 回目のもの。
+fn ask_lens_rereading(
+    run: &str,
+    line: &str,
+    worktree: &Path,
+    body: &[u8],
+    notes: &mut Vec<String>,
+) -> (Judged, Option<Released>) {
+    let first = ask_lens_attempt(run, line, worktree, body, 1);
+    if !first.0.reread {
+        return first;
+    }
+    notes.push(format!("pipe: lens-reread=1 reason={}", first.0.evidence));
+    ask_lens_attempt(run, line, worktree, body, 2)
+}
+
+/// lens を `attempt` 番の箱（unit 名の試行の番号の欄・設計 §4.2）で 1 回撃つ。
+fn ask_lens_attempt(
+    run: &str,
+    line: &str,
+    worktree: &Path,
+    body: &[u8],
+    attempt: usize,
+) -> (Judged, Option<Released>) {
+    let unit = confine::unit_name(run, LENS_STAGE, attempt);
     let wrap = confine::Wrap {
         unit: &unit,
         // lens は `{jobs}` を持たない起動なので host の箱である（設計 gate-cost.md §4.2）。
         limit: confine::Limit::HostReserve,
         caps: confine::Caps::embedded(),
     };
-    let (judged, scope) = ask_lens(&line, worktree, body, &wrap);
-    Ok(Decided { judged, scope, account })
+    ask_lens(line, worktree, body, &wrap)
 }
 
 /// 器が選んだ口座を lens の起動行の末尾に足す（設計 account-autonomy.md §15 (1)(2)(4)・FR36）。
