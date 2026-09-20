@@ -1,7 +1,8 @@
-//! `fleet` subcommand の面（設計 §5）。
+//! `fleet` subcommand の面（設計 §5 / §11）。
 //!
-//! **env も HOME も読まない**（憲法 C2.2・ADR-0004 §2.4）。置き場は `--state-dir` で
-//! 必ず外から受け取り、既定を持たない。出力は行を組んで返すだけで、stdout / stderr
+//! **env も HOME も読まない**（憲法 C2.2・ADR-0004 §2.4）。置き場は `--state-dir` が勝ち、無ければ
+//! `seat` と**同じ 1 関数**（[`crate::seat::state_dir_of`]）で git 設定から解く（第 2 の解決を持たない・
+//! 解けない周は typed に断り store を作らない）。出力は行を組んで返すだけで、stdout / stderr
 //! へは bin 側の `emit` / `emit_err` が書く。
 
 use super::select;
@@ -9,9 +10,10 @@ use super::store::{self, LockPolicy, StoreError};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
 use crate::rules::manifest::Manifest;
 use crate::rules::{RuleError, RuleValue};
+use crate::seat::StateDir;
 use super::{json_lite, replay, Event, EventKind, Stage, State, SCHEMA};
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// 口座選定の rules 行（session 用の閾値・設計 account-autonomy.md §3）。
@@ -19,23 +21,65 @@ const ROW_SELECTION: &str = "R-C9-1";
 
 /// `fleet` の使い方。
 pub fn usage() -> String {
-    "usage: fleet <record|show|export|usage|select [--anchor DIR]> --state-dir D [flags]".to_owned()
+    "usage: fleet <record|show|export|usage|select [--anchor DIR]> [--state-dir D] [flags]".to_owned()
 }
 
-/// `fleet` に続く引数を捌く。
-pub fn dispatch(args: &[String]) -> Outcome {
-    let dir = match required(args, "--state-dir") {
-        Ok(found) => PathBuf::from(found),
-        Err(_) => return Outcome::failed(RC_REFUSED, vec![usage()]),
-    };
-    match args.first().map(String::as_str) {
-        Some("record") => record(args, &dir),
-        Some("show") => show(args, &dir),
-        Some("export") => export(&dir),
-        Some("usage") => super::usage::run(args, &dir),
-        Some("select") => select_account(args, &dir),
-        _ => Outcome::failed(RC_REFUSED, vec![usage()]),
+/// `fleet` の verb（閉じた列）。置き場を解くのは既知の verb の周だけ（verb の無い周・未知の verb の周は
+/// 従来どおり使い方の 1 行・設計 §11 (1)）。
+#[derive(Clone, Copy)]
+enum Verb {
+    /// event を 1 件追記する。
+    Record,
+    /// 便 1 件の現在地。
+    Show,
+    /// 跨版 面 2 の export。
+    Export,
+    /// 口座残量の計測 / 表示。
+    Usage,
+    /// 口座を 1 つ選ぶ。
+    Select,
+}
+
+impl Verb {
+    /// 字面から引く。未知なら `None`。
+    fn parse(text: &str) -> Option<Self> {
+        match text {
+            "record" => Some(Self::Record),
+            "show" => Some(Self::Show),
+            "export" => Some(Self::Export),
+            "usage" => Some(Self::Usage),
+            "select" => Some(Self::Select),
+            _ => None,
+        }
     }
+}
+
+/// `fleet` に続く引数を捌く。全 verb が同じ入口（[`place`]）で置き場を解く。
+pub fn dispatch(args: &[String]) -> Outcome {
+    let Some(verb) = args.first().and_then(|text| Verb::parse(text)) else {
+        return Outcome::failed(RC_REFUSED, vec![usage()]);
+    };
+    let state = match place(args) {
+        Ok(found) => found,
+        Err(lines) => return Outcome::failed(RC_REFUSED, lines),
+    };
+    let dir = state.path.as_path();
+    match verb {
+        Verb::Record => record(args, dir),
+        Verb::Show => show(args, dir),
+        Verb::Export => export(dir),
+        Verb::Usage => super::usage::run_in(args, &state),
+        Verb::Select => select_account(args, dir),
+    }
+}
+
+/// 置き場を解く（`--state-dir` > git 設定・`seat` と同じ 1 関数・出所付き）。値欠けの flag は黙って落とさず断る
+/// （NFR4）。解けない周は `fleet: refused reason=state-dir` の 1 行 + 使い方（store を作らない・rc 1 は呼び手）。
+fn place(args: &[String]) -> Result<StateDir, Vec<String>> {
+    let flag = optional(args, "--state-dir").map_err(|reason| vec![format!("fleet: {reason}"), usage()])?;
+    crate::seat::state_dir_of(flag).ok_or_else(|| {
+        vec![format!("fleet: refused reason={}", crate::seat::cycle::REASON_STATE_DIR), usage()]
+    })
 }
 
 /// 口座を 1 つ選ぶ（設計 account-autonomy.md §3）。引数と rules 行を先に読み、選定の直前に FR33 の計測を

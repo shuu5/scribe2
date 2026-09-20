@@ -8,6 +8,9 @@
 //! 止めない・選ばない（ADR-0017 §2.4）: 口座の読みの失敗は行として記録して続行する
 //! （[`UnmeasuredReason::POLARITY`] = FailOpen）。command を止めるのは引数・manifest・store の
 //! 誤りだけである（[`UsageError::POLARITY`] = FailClosed）。**env も HOME も読まない**（C2.2）。
+//!
+//! 出力は 2 形（設計 §11）: 1 行形（`usage: account=…`・機械の読み手の面・字面は不変）と `--table` の表
+//! （人の読む面・[`table`] の pure 関数 1 本が組む・置き場の出所は見出し行にだけ載る）。
 
 use super::cli::{host, now_utc, optional};
 use super::json_tree::{self, Tree};
@@ -22,6 +25,7 @@ use crate::pipe::confine;
 use crate::polarity::{OnFailure, Polarity, Timing};
 use crate::rules::manifest::Manifest;
 use crate::rules::RuleValue;
+use crate::seat::StateDir;
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
@@ -147,7 +151,7 @@ impl std::fmt::Display for UsageError {
     }
 }
 
-/// `fleet usage` の入口。`--show` が在れば read-only の表示だけを行う。
+/// `fleet usage` の入口。`--show` が在れば read-only の表示だけを行う。**1 行形**（機械の読み手の面・字面は不変）。
 pub fn run(args: &[String], dir: &Path) -> Outcome {
     let result = if args.iter().any(|arg| arg == "--show") {
         show(args, dir)
@@ -155,6 +159,166 @@ pub fn run(args: &[String], dir: &Path) -> Outcome {
         measure(args, dir)
     };
     result.unwrap_or_else(|error| Outcome::failed(error.rc(), vec![error.to_string()]))
+}
+
+/// `fleet` の dispatch からの入口（設計 §11 (2)）: `--table` は**出力の形**の指定で、計測か表示か（`--show`）とは
+/// 直交する（`--show --table` = read-only の表・`--table` だけ = 計測してから表）。`--table` の無い周は [`run`] の
+/// 1 行形そのまま。置き場の出所（[`StateDir`]）は表の見出し行にだけ載る。
+pub fn run_in(args: &[String], place: &StateDir) -> Outcome {
+    if !args.iter().any(|arg| arg == "--table") {
+        return run(args, &place.path);
+    }
+    let read_only = args.iter().any(|arg| arg == "--show");
+    tabled(args, place, read_only).unwrap_or_else(|error| Outcome::failed(error.rc(), vec![error.to_string()]))
+}
+
+/// 表を出す。`read_only` でなければ先に計測（[`measure`]・event の追記と stderr の行はそのまま）し、その後の replay の
+/// `allowance` から組む（1 行形と同じ出所・stdout は表に置き換わる）。
+fn tabled(args: &[String], place: &StateDir, read_only: bool) -> Result<Outcome, UsageError> {
+    let dir = place.path.as_path();
+    let mut outcome = if read_only { Outcome::ok(Vec::new()) } else { measure(args, dir)? };
+    let (_, labels) = accounts(args, dir)?;
+    let events = store::read_all(dir).map_err(|errors| UsageError::Store(joined(&errors)))?;
+    let state = replay(&events);
+    let rows: Vec<TableRow> = labels.iter().map(|label| table_row(label, &state)).collect();
+    outcome.out = table(place, &rows);
+    Ok(outcome)
+}
+
+/// 表の値の無い欄（未計測の口座・登録の無い口座・model 窓なし）。
+const CELL_NONE: &str = "-";
+
+/// 表の列の区切り。
+const CELL_GAP: &str = "  ";
+
+/// 表の見出し（2 行目・列の順は固定）。
+const TABLE_HEAD: [&str; 6] = ["account", "5h", "7d", "model", "seat", "resets"];
+
+/// 表の 1 口座分（[`table`] の入力・値は字面で持つ）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableRow {
+    /// 口座の label。
+    pub account: String,
+    /// 5 時間窓（`13%` / `unmeasured:<reason>` / `-`）。
+    pub five_hour: String,
+    /// 7 日窓（同上）。
+    pub seven_day: String,
+    /// model 窓（`Fable:75%` を `,` で並べる・無ければ `-`）。
+    pub model: String,
+    /// 登録 row が持つ口座ならその役割の名・無ければ `-`。
+    pub seat: String,
+    /// 5 時間窓の reset 時刻（無ければ `-`）。
+    pub resets: String,
+}
+
+impl TableRow {
+    /// 列の順の値。
+    fn cells(&self) -> [&str; 6] {
+        [&self.account, &self.five_hour, &self.seven_day, &self.model, &self.seat, &self.resets]
+    }
+}
+
+/// 人が読む表（pure・設計 §11 (2)）: 1 行目 = [`StateDir::suffix`] の字面から先頭の空白を落としたもの（出所が先・path が
+/// 行末＝第 2 の書式を書かない）、2 行目 = 見出し、以下は口座ごとに 1 行。列幅は見出しと値の最大幅（文字数）で揃える
+/// （数を code に書かない）。末尾の列は詰めない（行末に空白を残さない）。
+pub fn table(place: &StateDir, rows: &[TableRow]) -> Vec<String> {
+    let mut widths: Vec<usize> = TABLE_HEAD.iter().map(|head| head.chars().count()).collect();
+    for row in rows {
+        for (width, cell) in widths.iter_mut().zip(row.cells()) {
+            *width = (*width).max(cell.chars().count());
+        }
+    }
+    let mut lines = vec![place.suffix().trim_start().to_owned()];
+    lines.push(aligned(&TABLE_HEAD, &widths));
+    lines.extend(rows.iter().map(|row| aligned(&row.cells(), &widths)));
+    lines
+}
+
+/// 列を幅に揃えて並べる（最後の列は詰めない）。
+fn aligned(cells: &[&str], widths: &[usize]) -> String {
+    let last = cells.len().saturating_sub(1);
+    cells
+        .iter()
+        .zip(widths)
+        .enumerate()
+        .map(|(at, (cell, width))| {
+            if at == last {
+                (*cell).to_owned()
+            } else {
+                let pad = width.saturating_sub(cell.chars().count());
+                format!("{cell}{}", " ".repeat(pad))
+            }
+        })
+        .collect::<Vec<String>>()
+        .join(CELL_GAP)
+}
+
+/// 口座 1 つの表の行を replay から組む。窓の値は [`latest_rows`]（1 行形と同じ最新の回）・seat 列は登録 row
+/// （`State::registrations`・鍵 = 役割 × anchor・同じ口座を持つ row の役割名を重複なく `,` で並べる）。
+/// 口座単位の Unmeasured は 5h / 7d の両欄に `unmeasured:<reason>`。
+fn table_row(label: &str, state: &super::State) -> TableRow {
+    let rows = latest_rows(label, &state.allowance).unwrap_or_default();
+    let account_level = rows.iter().find_map(|row| match row {
+        Allowance::Unmeasured(found) if found.window.is_none() => Some(found.reason),
+        Allowance::Measured(_) | Allowance::Unmeasured(_) => None,
+    });
+    let window_cell = |window: WindowKind| match account_level {
+        Some(reason) => format!("unmeasured:{}", reason.as_str()),
+        None => rows
+            .iter()
+            .find(|row| row.key().window == Some(window))
+            .map_or_else(|| CELL_NONE.to_owned(), pct_cell),
+    };
+    let models: Vec<String> = rows
+        .iter()
+        .filter(|row| row.key().window == Some(WindowKind::SevenDayModel))
+        .map(model_cell)
+        .collect();
+    let resets = rows
+        .iter()
+        .find_map(|row| match row {
+            Allowance::Measured(found) if found.window == WindowKind::FiveHour => {
+                Some(found.resets_at.clone().unwrap_or_else(|| RESETS_NONE.to_owned()))
+            }
+            Allowance::Measured(_) | Allowance::Unmeasured(_) => None,
+        })
+        .unwrap_or_else(|| CELL_NONE.to_owned());
+    let mut roles: Vec<&'static str> = state
+        .registrations
+        .values()
+        .filter(|latest| latest.registration.account == label)
+        .map(|latest| latest.registration.role.as_str())
+        .collect();
+    roles.sort_unstable();
+    roles.dedup();
+    TableRow {
+        account: label.to_owned(),
+        five_hour: window_cell(WindowKind::FiveHour),
+        seven_day: window_cell(WindowKind::SevenDay),
+        model: if models.is_empty() { CELL_NONE.to_owned() } else { models.join(",") },
+        seat: if roles.is_empty() { CELL_NONE.to_owned() } else { roles.join(",") },
+        resets,
+    }
+}
+
+/// 窓の欄（`13%` / `unmeasured:<reason>`）。
+fn pct_cell(row: &Allowance) -> String {
+    match row {
+        Allowance::Measured(found) => format!("{}%", found.used_pct),
+        Allowance::Unmeasured(found) => format!("unmeasured:{}", found.reason.as_str()),
+    }
+}
+
+/// model 窓の欄（`Fable:75%` / `Fable:unmeasured:<reason>`・名の無い要素は `unmeasured:<reason>`）。
+fn model_cell(row: &Allowance) -> String {
+    let name = match row {
+        Allowance::Measured(found) => found.model.as_deref(),
+        Allowance::Unmeasured(found) => found.model.as_deref(),
+    };
+    match name {
+        Some(name) => format!("{name}:{}", pct_cell(row)),
+        None => pct_cell(row),
+    }
 }
 
 /// event の `endpoint` に書く短い識別子。[`URL`] の末尾 2 段を `-` で繋いで導く（`oauth-usage`）。
@@ -229,18 +393,23 @@ fn show(args: &[String], dir: &Path) -> Result<Outcome, UsageError> {
 
 /// 口座 1 つの最新の回（`ts` が最大の行の集まり）を 1 行にする。行が無ければ `None`。
 fn latest_line(label: &str, allowance: &BTreeMap<AllowanceKey, AllowanceLatest>) -> Option<String> {
+    latest_rows(label, allowance).map(|rows| render(label, &rows))
+}
+
+/// 口座 1 つの最新の回（`ts` が最大の行の集まり）。行が無ければ `None`（1 行形と表の同じ出所）。
+fn latest_rows(label: &str, allowance: &BTreeMap<AllowanceKey, AllowanceLatest>) -> Option<Vec<Allowance>> {
     let mine: Vec<&AllowanceLatest> = allowance
         .iter()
         .filter(|(key, _)| key.account == label)
         .map(|(_, latest)| latest)
         .collect();
     let newest = mine.iter().map(|latest| latest.ts.as_str()).max()?;
-    let rows: Vec<Allowance> = mine
-        .iter()
-        .filter(|latest| latest.ts == newest)
-        .map(|latest| latest.allowance.clone())
-        .collect();
-    Some(render(label, &rows))
+    Some(
+        mine.iter()
+            .filter(|latest| latest.ts == newest)
+            .map(|latest| latest.allowance.clone())
+            .collect(),
+    )
 }
 
 /// 宣言を読む: tracked の面（`rules` = `--rules PATH` か埋め込み）に host の面（`<dir>/host.toml`）を合わせる
@@ -740,14 +909,20 @@ fn part(row: &Allowance) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        body_of, client_args, config_of, endpoint, grace_of, group_target, normalize_resets, render,
-        token_of, windows_of, UsageError, ROW_GRACE,
+        body_of, client_args, config_of, endpoint, grace_of, group_target, normalize_resets, render, table,
+        table_row, token_of, windows_of, TableRow, UsageError, ROW_GRACE,
     };
     use crate::cli_outcome::{RC_BROKEN, RC_REFUSED};
     use crate::fleet::json_tree::parse;
-    use crate::fleet::{Allowance, UnmeasuredReason, WindowKind};
+    use crate::fleet::{
+        Allowance, AllowanceLatest, Measured, Registration, RegistrationLatest, State, Unmeasured, UnmeasuredReason,
+        WindowKind,
+    };
     use crate::polarity::OnFailure;
     use crate::rules::manifest::Manifest;
+    use crate::seat::role::Role;
+    use crate::seat::{Provenance, StateDir};
+    use std::path::PathBuf;
 
     /// 未来の epoch ms（2100-01-01）。
     const FUTURE_MS: u64 = 4_102_444_800_000;
@@ -966,5 +1141,147 @@ mod tests {
         let embedded = crate::seat::int_rule(ROW_GRACE).unwrap_or(0);
         assert!(embedded > 0, "埋め込みの行は正の猶予を持つ");
         assert_eq!(grace_of(&absent), embedded, "行の無い manifest は埋め込みの値");
+    }
+
+    /// 表の歯の置き場（出所 = git 設定・path は `/s`）。
+    fn table_place() -> StateDir {
+        StateDir { path: PathBuf::from("/s"), source: Provenance::GitConfig }
+    }
+
+    /// 行を `ts` で積む（鍵は口座 × 窓 × model・後から積んだ行が勝つ）。
+    fn put(state: &mut State, ts: &str, row: Allowance) {
+        state.allowance.insert(row.key(), AllowanceLatest { ts: ts.to_owned(), allowance: row });
+    }
+
+    /// 実測の行。
+    fn measured(account: &str, window: WindowKind, model: Option<&str>, used_pct: u64, resets_at: Option<&str>) -> Allowance {
+        Allowance::Measured(Measured {
+            account: account.to_owned(),
+            window,
+            model: model.map(str::to_owned),
+            endpoint: endpoint(),
+            used_pct,
+            resets_at: resets_at.map(str::to_owned),
+        })
+    }
+
+    /// 測れなかった行（[`super::unmeasured`] と同じ形・model 無し）。
+    fn failed(account: &str, window: Option<WindowKind>, reason: UnmeasuredReason) -> Allowance {
+        Allowance::Unmeasured(Unmeasured {
+            account: account.to_owned(),
+            window,
+            model: None,
+            endpoint: endpoint(),
+            reason,
+        })
+    }
+
+    /// 登録 row を 1 件積む（口座 = `account`・anchor が鍵）。
+    fn put_registration(state: &mut State, anchor: &str, account: &str) {
+        let registration = Registration {
+            role: Role::Orchestrator,
+            anchor: anchor.to_owned(),
+            target: "s:w".to_owned(),
+            sid: None,
+            account: account.to_owned(),
+            launch: String::new(),
+            model: None,
+        };
+        let seq = state.registrations.len();
+        state.registrations.insert((Role::Orchestrator, anchor.to_owned()), RegistrationLatest { seq, registration });
+    }
+
+    /// 列の始まり（見出し行の各列名の byte offset）。
+    fn column_starts(head: &str) -> Vec<usize> {
+        ["account", "5h", "7d", "model", "seat", "resets"].iter().filter_map(|name| head.find(name)).collect()
+    }
+
+    /// 約束 4（pure・Unmeasured 混在）: 窓の Unmeasured は `unmeasured:<reason>`・口座単位の Unmeasured は 5h / 7d の両欄・
+    /// model 窓は `名:%` を `,` で並べ、無ければ `-`・reset 無しの 5h は `none`・測っていない口座は全欄 `-`・seat 列は
+    /// 登録 row の口座だけ役割名（2 row でも 1 語）。値は 1 行形と同じ「最新の回」（古い ts の行は表に出ない）。
+    #[test]
+    fn fleet_usage_table_rows_name_unmeasured_windows_and_seat_roles() {
+        let mut state = State::default();
+        let week = Some("2026-09-27T00:00:00Z");
+        put(&mut state, "t2", measured("a1", WindowKind::FiveHour, None, 13, Some("2026-09-21T05:00:00Z")));
+        put(&mut state, "t2", measured("a1", WindowKind::SevenDay, None, 41, week));
+        put(&mut state, "t2", measured("a1", WindowKind::SevenDayModel, Some("Fable"), 38, week));
+        put(&mut state, "t2", measured("a1", WindowKind::SevenDayModel, Some("Opus"), 7, week));
+        put(&mut state, "t2", failed("a2", Some(WindowKind::FiveHour), UnmeasuredReason::Timeout));
+        put(&mut state, "t2", measured("a2", WindowKind::SevenDay, None, 0, None));
+        put(&mut state, "t1", measured("a2", WindowKind::SevenDayModel, Some("Fable"), 99, week));
+        put(&mut state, "t2", failed("a3", None, UnmeasuredReason::NoCredentials));
+        put_registration(&mut state, "/repo-1", "a1");
+        put_registration(&mut state, "/repo-2", "a1");
+        put_registration(&mut state, "/repo-3", "a3");
+        let rows: Vec<TableRow> = ["a1", "a2", "a3", "a4"].iter().map(|label| table_row(label, &state)).collect();
+        let want = |account: &str, five: &str, seven: &str, model: &str, seat: &str, resets: &str| TableRow {
+            account: account.to_owned(),
+            five_hour: five.to_owned(),
+            seven_day: seven.to_owned(),
+            model: model.to_owned(),
+            seat: seat.to_owned(),
+            resets: resets.to_owned(),
+        };
+        assert_eq!(
+            rows,
+            vec![
+                want("a1", "13%", "41%", "Fable:38%,Opus:7%", "orchestrator", "2026-09-21T05:00:00Z"),
+                want("a2", "unmeasured:timeout", "0%", "-", "-", "-"),
+                want("a3", "unmeasured:no_credentials", "unmeasured:no_credentials", "-", "orchestrator", "-"),
+                want("a4", "-", "-", "-", "-", "-"),
+            ]
+        );
+        put(&mut state, "t3", measured("a2", WindowKind::FiveHour, None, 0, None));
+        let idle = table_row("a2", &state);
+        assert_eq!((idle.five_hour.as_str(), idle.resets.as_str()), ("0%", "none"), "reset 無しの 5h は none・古い回の 7d は出ない");
+        assert_eq!(idle.seven_day, "-", "最新の回に無い窓は -");
+    }
+
+    /// 約束 4（pure・列幅・口座 0 件）: 1 行目は `StateDir::suffix` から先頭の空白を落とした字面（出所が先・path が行末）、
+    /// 2 行目は見出し。列幅は見出しと値の最大幅で揃い（長い label / 長い欄が列を押し広げる）、末尾の列は詰めない。
+    /// 口座 0 件は見出し 2 行だけで、列幅は見出しの幅。
+    #[test]
+    fn fleet_usage_table_aligns_columns_by_the_widest_value_and_prints_headers_alone_for_no_accounts() {
+        let place = table_place();
+        let empty = table(&place, &[]);
+        assert_eq!(empty, vec!["source=git-config state_dir=/s".to_owned(), "account  5h  7d  model  seat  resets".to_owned()]);
+        assert_eq!(format!(" {}", empty.first().map(String::as_str).unwrap_or_default()), place.suffix(), "1 行目は suffix そのもの");
+
+        let rows = [
+            TableRow {
+                account: "a-much-longer-label".to_owned(),
+                five_hour: "unmeasured:shape_mismatch".to_owned(),
+                seven_day: "0%".to_owned(),
+                model: "-".to_owned(),
+                seat: "-".to_owned(),
+                resets: "none".to_owned(),
+            },
+            TableRow {
+                account: "b".to_owned(),
+                five_hour: "5%".to_owned(),
+                seven_day: "100%".to_owned(),
+                model: "Fable:38%".to_owned(),
+                seat: "orchestrator".to_owned(),
+                resets: "2026-09-21T05:00:00Z".to_owned(),
+            },
+        ];
+        let lines = table(&place, &rows);
+        assert_eq!(lines.len(), 4, "{lines:?}");
+        let head = lines.get(1).map(String::as_str).unwrap_or_default();
+        let starts = column_starts(head);
+        assert_eq!(starts.len(), 6, "見出しの 6 列: {head:?}");
+        for line in lines.iter().skip(1) {
+            assert!(!line.ends_with(' '), "行末に空白を残さない: {line:?}");
+            let cells: Vec<&str> = line.split_whitespace().collect();
+            assert_eq!(cells.len(), 6, "{line:?}");
+            for (cell, start) in cells.iter().zip(&starts) {
+                assert!(line.get(*start..).is_some_and(|tail| tail.starts_with(cell)), "列 {cell:?} が {start} から始まる: {line:?}");
+            }
+        }
+        let first = starts.get(1).copied().unwrap_or(0);
+        assert_eq!(first, "a-much-longer-label".len() + 2, "account 列の幅は最長の label");
+        let seven = starts.get(2).copied().unwrap_or(0);
+        assert_eq!(seven - first, "unmeasured:shape_mismatch".len() + 2, "5h 列の幅は最長の欄");
     }
 }

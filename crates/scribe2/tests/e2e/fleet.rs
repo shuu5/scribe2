@@ -110,8 +110,10 @@ fn outcome_rc_covers_zero_one_two() {
     write_raw(&dir, &["こわれ"]);
     let now_broken = vessel::fleet::cli::dispatch(&args(&["export", "--state-dir", &path]));
     assert_eq!(now_broken.rc, RC_BROKEN, "読めない store は rc 2");
-    let refused = vessel::fleet::cli::dispatch(&args(&["show", "--run", "r1"]));
-    assert_eq!(refused.rc, RC_REFUSED, "--state-dir 欠けは rc 1");
+    // in-process の dispatch は cwd（この repo）から置き場を解けるので、断りは verb 固有の引数の不足で測る
+    // （置き場の断りは tmp の cwd で撃つ `fleet_usage_statedir_` の歯）。
+    let refused = vessel::fleet::cli::dispatch(&args(&["show", "--state-dir", &path]));
+    assert_eq!(refused.rc, RC_REFUSED, "--run 欠けは rc 1");
     assert!(refused.out.is_empty(), "rc 1 でも stdout は 0 byte");
     fs::remove_dir_all(&dir).ok();
 }
@@ -299,15 +301,6 @@ fn fleet_export_is_read_only() {
     );
     assert!(!store::lock_path(&dir).exists(), "lock を残さない");
     fs::remove_dir_all(&dir).ok();
-}
-
-#[test]
-fn fleet_state_dir_flag_is_required() {
-    let out = run_fleet(&["show", "--run", "r1"]);
-    assert_eq!(out.status.code(), Some(1), "rc 1");
-    assert!(out.stdout.is_empty(), "stdout は 0 byte");
-    let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains("--state-dir"), "使い方を stderr へ: {err}");
 }
 
 #[test]
@@ -2124,13 +2117,167 @@ fn fleet_usage_show_is_read_only_and_prints_the_latest() {
     drop_fixture(&fx);
 }
 
-/// (9) `--state-dir` 無しは rc 1。
+// ─────────────── 置き場の既定と人が読む表（fleet-usage.md §11・接頭辞 `fleet_usage_statedir_` / `fleet_usage_table_`） ───────────────
+
+/// cwd を指定して `fleet` を binary で 1 回撃つ（置き場を git 設定から解く経路を測る・`seat.rs` の `run_seat_in` と同じ型）。
+/// **cwd は tmp**（repo の cwd で撃つと本物の置き場を解く）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn run_fleet_in(cwd: &Path, args: &[&str]) -> Output {
+    Command::new(bin())
+        .arg("fleet")
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .expect("binary を起動できる")
+}
+
+/// git 設定 `<NAME>.stateDir` に `state` を持つ tmp の git repo（commit なし・`rev-parse --show-toplevel` は init だけで解ける）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn repo_with_state_dir(state: &Path) -> PathBuf {
+    let repo = state_dir();
+    let key = format!("{}.stateDir", vessel::name::NAME);
+    for args in [vec!["init", "-q"], vec!["config", &key, &state.display().to_string()]] {
+        let out = Command::new("git").arg("-C").arg(&repo).args(&args).output().expect("git を起動できる");
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    }
+    repo
+}
+
+/// 5 verb の flag 無しの引数（`rules` / `curl` は fixture の path）。verb 固有の必須の引数は揃える（置き場の断りだけを測る）。
+fn verbs_without_flag<'a>(rules: &'a str, curl: &'a str) -> [Vec<&'a str>; 5] {
+    [
+        vec!["record", "--kind", "RunCreated", "--run", "r1", "--bead", "s2-x"],
+        vec!["show", "--run", "r1"],
+        vec!["export"],
+        vec!["usage", "--rules", rules, "--curl", curl],
+        vec!["select", "--purpose", "session", "--rules", rules, "--curl", curl],
+    ]
+}
+
+/// 約束 1: flag 無しの `fleet usage` は cwd の repo の git 設定から置き場を解いて計測し、store がその dir に出来る。
+/// flag が在る周は flag の dir に出来る（git 設定の dir には増えない）。base は `--state-dir` 必須で使い方の rc 1（RED・機能不在）。
 #[test]
-fn fleet_usage_requires_state_dir() {
-    let out = run_fleet(&["usage"]);
-    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{out:?}");
-    assert!(out.stdout.is_empty(), "stdout は 0 byte");
-    assert!(String::from_utf8_lossy(&out.stderr).contains("usage"), "使い方を stderr へ");
+fn fleet_usage_statedir_git_config_is_used_without_the_flag_and_the_flag_wins() {
+    let fx = usage_fixture(&["a1"]);
+    put_credential(&fx, "a1", &live_credential(TOKEN_A1));
+    let curl = fake_curl(&fx, &LIVE_BODY, "200", 0);
+    let repo = repo_with_state_dir(&fx.state);
+    let rules = fx.rules.display().to_string();
+    let client = curl.display().to_string();
+    assert!(!store::events_path(&fx.state).exists(), "撃つ前は store が無い");
+    let out = run_fleet_in(&repo, &["usage", "--rules", &rules, "--curl", &client]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
+    assert_eq!(out_lines(&out), vec![live_line("a1")], "1 行形の字面は不変（出所を足さない）");
+    assert!(store::events_path(&fx.state).exists(), "store は git 設定の dir に出来る");
+    assert_eq!(allowances(&fx).len(), 3, "3 窓の event");
+
+    let other = state_dir();
+    let flag = other.display().to_string();
+    let out = run_fleet_in(&repo, &["usage", "--rules", &rules, "--curl", &client, "--state-dir", &flag]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
+    assert_eq!(out_lines(&out), vec!["usage: account=a1 unmeasured reason=no_credentials".to_owned()], "flag の dir に credential は無い");
+    assert!(store::events_path(&other).exists(), "flag が在れば flag の dir");
+    assert_eq!(allowances(&fx).len(), 3, "git 設定の dir には増えない");
+    fs::remove_dir_all(&repo).ok();
+    fs::remove_dir_all(&other).ok();
+    drop_fixture(&fx);
+}
+
+/// 約束 2: 5 verb（record / show / export / usage / select）が同じ入口を通る＝git 設定の repo で flag 無しに撃くと、どれも
+/// 置き場の断りを出さず rc 0 で終わる。
+#[test]
+fn fleet_usage_statedir_five_verbs_share_the_entry_without_the_flag() {
+    let fx = usage_fixture(&["a1"]);
+    fs::write(&fx.rules, select_rules(&["a1"], true, Some("50"))).expect("rules fixture を書ける");
+    put_credential(&fx, "a1", &live_credential(TOKEN_A1));
+    let curl = fake_curl(&fx, &LIVE_BODY, "200", 0);
+    let repo = repo_with_state_dir(&fx.state);
+    let rules = fx.rules.display().to_string();
+    let client = curl.display().to_string();
+    for args in verbs_without_flag(&rules, &client) {
+        let out = run_fleet_in(&repo, &args);
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{args:?}: stderr={err}");
+        assert!(!err.contains("reason=state-dir"), "{args:?}: 置き場の断りを出さない: {err}");
+        assert!(!err.contains("usage: fleet"), "{args:?}: 使い方を出さない: {err}");
+    }
+    fs::remove_dir_all(&repo).ok();
+    drop_fixture(&fx);
+}
+
+/// 約束 3: git の無い tmp の cwd では 5 verb とも同じ 1 行（`fleet: refused reason=state-dir`）+ 使い方で rc 1・stdout 0 byte・
+/// store を作らない（cwd に何も出来ない）。
+#[test]
+fn fleet_usage_statedir_unresolved_cwd_refuses_every_verb_with_one_line_and_no_store() {
+    let fx = usage_fixture(&["a1"]);
+    fs::write(&fx.rules, select_rules(&["a1"], true, Some("50"))).expect("rules fixture を書ける");
+    let curl = fake_curl(&fx, &LIVE_BODY, "200", 0);
+    let cwd = state_dir();
+    let rules = fx.rules.display().to_string();
+    let client = curl.display().to_string();
+    for args in verbs_without_flag(&rules, &client) {
+        let out = run_fleet_in(&cwd, &args);
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{args:?}: stderr={err}");
+        assert!(out.stdout.is_empty(), "{args:?}: stdout は 0 byte");
+        let lines: Vec<&str> = err.lines().collect();
+        assert_eq!(lines.first().copied(), Some("fleet: refused reason=state-dir"), "{args:?}: 同じ 1 行");
+        assert!(lines.get(1).is_some_and(|line| line.starts_with("usage: fleet ")), "{args:?}: 使い方: {err}");
+        assert_eq!(lines.len(), 2, "{args:?}: 断りと使い方だけ: {err}");
+    }
+    let entries = fs::read_dir(&cwd).map(Iterator::count).unwrap_or(usize::MAX);
+    assert_eq!(entries, 0, "cwd に store を作らない");
+    assert!(!store::events_path(&fx.state).exists(), "fixture の置き場にも書かない");
+    assert!(!fx.spy.join("args").exists(), "client を起こさない");
+    fs::remove_dir_all(&cwd).ok();
+    drop_fixture(&fx);
+}
+
+/// 表の列の値（空白区切り）。
+fn cells_of(line: &str) -> Vec<&str> {
+    line.split_whitespace().collect()
+}
+
+/// 約束 4: `--show --table` は見出し 2 行（出所 + path・列名）と口座ごとの行を出し、seat 列が登録 row の役割名（登録の無い
+/// 口座は `-`）を映す。read-only（event が増えない）。`--table` だけの周は計測してから同じ表（event が増える）。
+/// base は `--table` が無視され 1 行形が出る（RED・機能不在）。
+#[test]
+fn fleet_usage_table_show_prints_two_headers_and_seat_roles_from_registration_rows() {
+    let fx = usage_fixture(&["a1", "a2"]);
+    put_credential(&fx, "a1", &live_credential(TOKEN_A1));
+    put_credential(&fx, "a2", &live_credential(TOKEN_A2));
+    let curl = fake_curl(&fx, &LIVE_BODY, "200", 0);
+    let measured = run_usage(&fx, &curl, &[]);
+    assert_eq!(measured.status.code(), Some(i32::from(RC_OK)), "{measured:?}");
+    register_account(&fx.state, "a1");
+    let (five, _) = &*LIVE_RESETS;
+
+    let shown = run_usage(&fx, &curl, &["--show", "--table"]);
+    assert_eq!(shown.status.code(), Some(i32::from(RC_OK)), "{shown:?}");
+    let lines = out_lines(&shown);
+    let line = |at: usize| lines.get(at).map(String::as_str).unwrap_or_default();
+    assert_eq!(lines.len(), 4, "見出し 2 行 + 口座 2 行: {lines:?}");
+    assert_eq!(line(0), format!("source=flag state_dir={}", fx.state.display()), "1 行目は出所が先・path が行末");
+    assert_eq!(cells_of(line(1)), ["account", "5h", "7d", "model", "seat", "resets"]);
+    assert_eq!(cells_of(line(2)), ["a1", "13%", "41%", "Fable:38%", "orchestrator", five], "登録 row の役割名");
+    assert_eq!(cells_of(line(3)), ["a2", "13%", "41%", "Fable:38%", "-", five], "登録の無い口座は -");
+    let seat_at = line(1).find("seat").unwrap_or(usize::MAX);
+    assert!(line(2).get(seat_at..).is_some_and(|tail| tail.starts_with("orchestrator")), "列が揃う: {lines:?}");
+    assert!(line(3).get(seat_at..).is_some_and(|tail| tail.starts_with('-')), "列が揃う: {lines:?}");
+    assert_eq!(allowances(&fx).len(), 6, "--show --table は行を足さない");
+    assert!(!lines.iter().any(|line| line.starts_with("usage: account=")), "表の周に 1 行形は出ない");
+
+    let counted = run_usage(&fx, &curl, &["--table"]);
+    assert_eq!(counted.status.code(), Some(i32::from(RC_OK)), "{counted:?}");
+    assert_eq!(out_lines(&counted), lines, "計測してから同じ表");
+    assert_eq!(allowances(&fx).len(), 12, "--table だけの周は計測する");
+    drop_fixture(&fx);
 }
 
 /// 期限の過ぎた、読める credential の本文。
