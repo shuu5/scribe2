@@ -208,7 +208,8 @@ xtask 側の drift 歯（最小形）: `crates/xtask/src/limits.rs` の `#[cfg(t
   4. 歯の総数は 30 のまま（親 25 本 + 子 5 本）で、親に残る `rules_parity_` 4 本と `nextest_tmux_group_` 4 本は緑のまま。
   5. 札 `// flip-check: moved <行 l の bead>` を親の末尾（`s2-07l.370` の既存の札の隣）と `+` の file の module doc の直後に対で置く。`s2-07l.257` と `s2-07l.370` の既存の札は持ち越す（純移動の機械証明は [pipeline.md](./pipeline.md) §5.3）。
   6. 割った後の正規化行数は親が **約 1007**（余地 **約 493**）・`+` の file が **約 235**＝余地 493 は size M（300）の便を受けられる。
-- 触らない: `crates/xtask/src/check.rs` の本体・`crates/xtask/src/enum_slices.rs`・§10 が作った 2 つの子・xtask の他 file・歯の中身。
+- write-set の書き方（planner が `pipe preflight` で 3 通り実測・2026-09-20）: 受付は歯の区間を「`tests/` 配下は全体・`crates/<c>/src/` の file は**行頭の `#[cfg(test)]` から末尾**（無ければ空）」で切るので、`crates/xtask/src/check_tests.rs` は行頭の `#[cfg(test)]` を持たない（`#[path]` で取り込まれる test 専用 file）＝受付からは歯の file に見えない。そこから 3 つが決まる。(1) 親に縮む面の `-` を付けると歯の置き場の候補から外れて `teeth-place-unresolved` で断られるので、**親は素の path で書く**（size S の見積 100 は余地 271 に収まるので `cap-headroom` にも当たらない）。**`-` は削除の宣言ではなく縮む面の宣言**だが、本行では受付の導出が先に効くので使わない。(2) `tests` 欄で `crates/xtask/src/check_tests.rs` を名指しても `tests-not-a-teeth-file` で断られるので、`tests` 欄は置かない。(3) write-set に行頭の `#[cfg(test)]` を持つ `.rs` が 1 本も無いと、新しい接頭辞の filter の置き場が解けず断られる。ゆえに write-set は `crates/xtask/src/check.rs`（歯の木の `#[cfg(test)]` の門と `#[path = "check_tests.rs"]` の宣言を持つ・余地 1307）を持つ。**本行は `crates/xtask/src/check.rs` を 1 字も変えない**（第 3 の子の `#[path]` 宣言は §10 の 2 つと同じく `crates/xtask/src/check_tests.rs` の末尾に置く＝module path が `check::tests::<子>` に揃う）。
+- 触らない: `crates/xtask/src/check.rs`（write-set に持つが 1 字も変えない・上の (3)）・`crates/xtask/src/enum_slices.rs`・§10 が作った 2 つの子・xtask の他 file・歯の中身。
 - 却下: `check_fails_` の 6 本を移す（filter が `crates/xtask/src/check_nonrust_tests.rs` と flipcheck の歯 2 file にも当たり、検証行が write-set を 3 file 広げる）／親の共有 helper を子へ複製する（純移動でなくなり機械証明が残差を出す）／余地 271 のまま据え置く（次の M が受付で止まる）。
 
 <!-- contracts:begin -->
@@ -334,8 +335,8 @@ id = "l"
 title = "xtask の check_tests.rs（1229 行・余地 271）から enum_slices の歯 5 本と専用 fixture を子 module へ割る — 純移動・#[path] で歯の fn 名は不変・札 moved"
 req = ["FR17"]
 section = "15"
-write-set = ["-crates/xtask/src/check_tests.rs", "+crates/xtask/src/check_enum_slices_tests.rs"]
+write-set = ["crates/xtask/src/check.rs", "crates/xtask/src/check_tests.rs", "+crates/xtask/src/check_enum_slices_tests.rs"]
 verify = ["cargo nextest run -p xtask --no-tests=fail enum_slices_", "cargo nextest run -p xtask --no-tests=fail rules_parity_ nextest_tmux_group_"]
 size = "S"
-done = "(1) write_enum_slice と enum_slices_ の歯 5 本が + の file に名・本文・assert・順序のまま在り (2) 宣言が §10 の 2 つと同じ #[path] の形で親の末尾に 1 つ増え enum_slices_ の filter が base と同じ 5 本に当たり (3) 共有 helper は親に残って子が use super:: で読み（可視性を pub(super) に上げる以外は触らず複製もしない） (4) 歯の総数が 30 のまま（親 25 + 子 5）で親に残る rules_parity_ 4 本と nextest_tmux_group_ 4 本が緑のまま (5) 札 flip-check: moved が親の末尾と + の file の module doc の直後に対で在り s2-07l.257 と s2-07l.370 の札が持ち越され (6) file-lines で check_tests.rs の余地が base の 271 から 300 以上へ増える"
+done = "(1) write_enum_slice と enum_slices_ の歯 5 本が + の file に名・本文・assert・順序のまま在り (2) 宣言が §10 の 2 つと同じ #[path] の形で親の末尾に 1 つ増え enum_slices_ の filter が base と同じ 5 本に当たり (3) 共有 helper は親に残って子が use super:: で読み（可視性を pub(super) に上げる以外は触らず複製もしない） (4) 歯の総数が 30 のまま（親 25 + 子 5）で親に残る rules_parity_ 4 本と nextest_tmux_group_ 4 本が緑のまま (5) 札 flip-check: moved が親の末尾と + の file の module doc の直後に対で在り s2-07l.257 と s2-07l.370 の札が持ち越され (6) crates/xtask/src/check.rs が 1 字も変わらず (7) file-lines で check_tests.rs の余地が base の 271 から 300 以上へ増える"
 <!-- contracts:end -->
