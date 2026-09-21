@@ -1005,3 +1005,18 @@ terms:
     aliases: [per-core multiplier]
     definition: 遮断器の閾値を組み立てる Int の rules 行 2 本 (host.runnable_per_core / host.blocked_per_core・ADR-0050・proposed)。 閾値は倍率 × 実測の core 数で、 絶対値を tracked の manifest に焼かないので core 数の違う host でも同じ意味を持つ。
     relationships: [rules 行, 裁定 id, 器の健康の遮断器, 走行可能な process, 待ちの process]
+  - canonical: 契約の歯の穴
+    domain: consumer
+    aliases: [contract-teeth hole]
+    definition: 宣言 file の検出線の行に置く 4 つ目の穴 {teeth} (ADR-0052・proposed)。 器が契約の verify 行から導いた歯の名の列で埋め、 道具は受けた語をそのまま filter に使う。 語が無い周は空を表す閉じた 1 語で埋める。
+    relationships: [検出線, 実効 jobs, 検出の母集団, filter の式]
+  - canonical: 検出の母集団
+    domain: consumer
+    aliases: [detection population]
+    definition: mutant ごとに走らせる歯の集合 (ADR-0052・proposed)。 package の lib の歯と bin の歯と、 契約が名指した歯。 この集合が捕まえない mutant が変異の生存として記録される (C12.4・R-C12-1)。
+    relationships: [検出線, 契約の歯の穴, 歯]
+  - canonical: filter の式
+    domain: consumer
+    aliases: [filter expression]
+    definition: nextest が持つ test の選び方 (ADR-0052・proposed)。 歯の種類 (lib / bin / 統合) と名の正規表現を和で組め、 道具はこれで「単体の歯は全部・e2e の歯は名指した分だけ」を 1 行に表す。
+    relationships: [検出の母集団, 契約の歯の穴]
