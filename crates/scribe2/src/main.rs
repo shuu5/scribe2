@@ -55,25 +55,30 @@ fn render_doctor() -> Vec<String> {
 /// つき・1 row 1 行）と実在の target の突合 1 行（C3.2・seat-roles.md §9 (e)）の後ろに、host の面の 1 行と口座の
 /// 前提の行（`account ls` と同じ 1 関数・`retired=` つき・[`vessel::account::doctor_lines`]・account-lifecycle.md §3）、
 /// さらに導入先の行（1 導入先 1 行・[`vessel::account::consumers::doctor_lines`]・consumer-sync.md §4・FR61）を
-/// 足す。値欠け・空文字・重複・未知の引数は使い方の誤り（`Err`）。
+/// 足す。`--repo R` 付きは末尾に台帳の形の 1 行（[`vessel::ledger::form::doctor_line`]・ledger-form.md §3 の 4・
+/// `--state-dir` 無しでも `--rules` と並べて撃てる）。値欠け・空文字・重複・未知の引数は使い方の誤り（`Err`）。
 fn render_doctor_with(rest: &[String]) -> Result<Vec<String>, ()> {
-    let (mut lines, mut state_dir, mut socket, mut rules) = (render_doctor(), None, None, None);
+    let (mut lines, mut state_dir, mut socket, mut rules, mut repo) = (render_doctor(), None, None, None, None);
     for pair in rest.chunks(2) {
         match (pair.first().map(String::as_str), pair.get(1).filter(|v| !v.trim().is_empty() && !v.starts_with("--"))) {
             (Some("--state-dir"), Some(found)) if state_dir.is_none() => state_dir = Some(found),
             (Some("--tmux-socket"), Some(found)) if socket.is_none() => socket = Some(found.as_str()),
             (Some("--rules"), Some(found)) if rules.is_none() => rules = Some(found.as_str()),
+            (Some("--repo"), Some(found)) if repo.is_none() => repo = Some(found.as_str()),
             _ => return Err(()),
         }
     }
-    match (state_dir, socket, rules) {
-        (Some(dir), _, _) => {
+    match (state_dir, socket, rules, repo) {
+        (Some(dir), _, _, _) => {
             lines.extend(vessel::seat::role::doctor_lines(Path::new(dir), socket, rules));
             lines.extend(vessel::account::doctor_lines(Path::new(dir), rules));
             lines.extend(vessel::account::consumers::doctor_lines(Path::new(dir), rules));
         }
-        (None, None, None) => {}
-        (None, _, _) => return Err(()),
+        (None, None, None, _) | (None, None, Some(_), Some(_)) => {}
+        (None, _, _, _) => return Err(()),
+    }
+    if let Some(found) = repo {
+        lines.push(vessel::ledger::form::doctor_line(Path::new(found), rules));
     }
     Ok(lines)
 }
@@ -257,6 +262,37 @@ mod tests {
         };
         let head = Head::Sha("fedcba9876543210fedcba9876543210fedcba98".to_owned());
         lines.push(render_consumer("/repo/a", &consumer, &head, &drift_of(&consumer, &head, None)));
+        lines.push(render_usage());
+        lines.push(render_version());
+        let masked = lines
+            .join("\n")
+            .replace(env!("CARGO_PKG_VERSION"), "[version]")
+            .replace(&format!("({})", env!("SCRIBE2_BUILD_COMMIT")), "([commit])");
+        insta::assert_snapshot!(masked);
+    }
+
+    /// doctor の台帳の形の 1 行（ledger-form.md §6 行 a (e)）の外形: doctor の 2 行 → 測れた周の 1 行（5 つの欠陥が
+    /// 全部 1 件以上・0 件の欄も同じ行）→ 測れない周の 1 行 → usage → version。台帳は `bd list --json` の形の fixture を
+    /// 席の reader（`issues_of`）で読み、契約表と tracked は [`vessel::ledger::form::Docs`] を直に組む。
+    #[test]
+    fn ledger_form_doctor_external_form() {
+        use vessel::ledger::form::{judge, render, render_unreadable, Docs, Row};
+        let json = r####"[
+            {"id":"s2-m.1","status":"open","issue_type":"task","labels":["intake:memo"],"description":"## memo\n### 観測\n### 候補\n### 昇格条件\n"},
+            {"id":"s2-m.2","status":"open","issue_type":"task","labels":["intake:memo"],"description":"## memo\n### 出所\n### 観測\n### 候補\n### 昇格条件\n"},
+            {"id":"s2-b.1","status":"open","issue_type":"task","labels":["intake:memo"],"acceptance_criteria":"design = docs/design/toy.md#a","description":"## memo\n### 出所\n### 観測\n### 候補\n### 昇格条件\n"},
+            {"id":"s2-n.1","status":"open","issue_type":"task"},
+            {"id":"s2-e.1","status":"open","issue_type":"epic"},
+            {"id":"s2-c.1","status":"open","issue_type":"task","acceptance_criteria":"design = docs/design/toy.md#a","description":"s2-m.1 から"},
+            {"id":"s2-c.2","status":"closed","issue_type":"task","acceptance_criteria":"design = docs/design/toy.md#b","dependencies":[{"issue_id":"s2-c.2","depends_on_id":"s2-m.2","type":"discovered-from"}]}
+        ]"####;
+        let issues = vessel::seat::ledger::issues_of(json).unwrap_or_default();
+        assert_eq!(issues.len(), 7, "fixture を読める");
+        let row = |id: &str| Row { doc: "docs/design/toy.md".to_owned(), id: id.to_owned(), plus: vec![format!("src/{id}.rs")] };
+        let docs = Docs { rows: vec![row("a"), row("b")], ..Docs::default() };
+        let mut lines = render_doctor();
+        lines.push(render(&judge(&issues, &docs)));
+        lines.push(render_unreadable("ledger-unreadable"));
         lines.push(render_usage());
         lines.push(render_version());
         let masked = lines

@@ -77,6 +77,12 @@ pub struct Issue {
     pub acceptance: String,
     /// 依存の列（`dependencies[]`・2 key の揃う要素だけ・依存が閉じたかの判定が読む）。
     pub deps: Vec<Dep>,
+    /// 型の字面（`issue_type`・無ければ空・台帳の形の lint が epic と裁定を 4 象限の母集団から外す）。
+    pub kind: String,
+    /// 本文（`description`・無ければ空・memo の 4 節と memo の名指しを台帳の形の lint が読む）。
+    pub description: String,
+    /// notes（無ければ空・本文と同じ読み手）。
+    pub notes: String,
 }
 
 /// 依存の 1 件（`dependencies[]` の `depends_on_id` と `type` だけを読む・**要素は status を持たない**ので
@@ -109,6 +115,9 @@ pub fn issues_of(text: &str) -> Option<Vec<Issue>> {
                 labels: array_of("labels").iter().filter_map(Tree::as_str).map(str::to_owned).collect(),
                 acceptance: text_of("acceptance_criteria").unwrap_or_default(),
                 deps: array_of("dependencies").iter().filter_map(dep_of).collect(),
+                kind: text_of("issue_type").unwrap_or_default(),
+                description: text_of("description").unwrap_or_default(),
+                notes: text_of("notes").unwrap_or_default(),
             })
         })
         .collect()

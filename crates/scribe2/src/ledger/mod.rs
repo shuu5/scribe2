@@ -5,6 +5,11 @@
 //! （[`crate::seat::ledger`]）に在るものをそのまま使い、2 本目の reader を作らない（C2）。
 //!
 //! client の binary の名は既定の const（PATH 解決は子 process の起動側・**env も HOME も読まない**・C2.2）。
+//!
+//! 台帳の形の lint（doctor の項目 1 行・設計 docs/design/ledger-form.md §3 の 4）は子 module [`form`] に置く
+//! （読むだけ・書きの口は増えない）。
+
+pub mod form;
 
 use crate::polarity::{OnFailure, Polarity, Timing};
 use std::process::Command;
