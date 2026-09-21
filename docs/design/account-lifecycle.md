@@ -180,7 +180,7 @@ user-scope MCP 設定の同期・別口座への `--resume` の混線 fence・pr
 
 やさしく言うと: 口座を移すときに「会話ごと起動し直す」口が無く、手書きの script で resume していた。短い形に `-c` / `-r <id>` を足して `seat <口座> -c` の 1 行で済ませる。役割の flag は今も省略できる（0 個は orchestrator）。
 
-- 出所: user 直命 2026-09-21（逐語は台帳 `s2-07l.491` の notes）。口座の移動（black3 の 7 日窓が逼迫）で 4 席を手書きの script（置き場の `seat/orchestrator.launch` に `--resume <id>` を足して exec する 1 本）で起動し直した。短い形（§14）は登録 row を書き直して起動行を注入するが、会話を引き継ぐ flag が無い＝script は row を書き換えず、SessionStart が row と実口座の食い違いを出し続ける。
+- 出所: user 直命 2026-09-21（逐語は台帳 `s2-07l.491` の notes）。口座の移動（席の口座の 7 日窓が逼迫）で 4 席を手書きの script（置き場の `seat/orchestrator.launch` に `--resume <id>` を足して exec する 1 本）で起動し直した。短い形（§14）は登録 row を書き直して起動行を注入するが、会話を引き継ぐ flag が無い＝script は row を書き換えず、SessionStart が row と実口座の食い違いを出し続ける。
 - 現物（verified・main）: 短い形の parser は `crates/scribe2/src/seat/cli.rs` の `short_of`（役割の flag は 0 個で既定の `Role::Orchestrator`・`short_role_of`）。起動行は `crates/scribe2/src/seat/cycle/launch.rs` の `derive_launch` が組み、`prepare` が登録 row（`launch` = 導出した行・穴を埋める前・旗無し）を書き、`boot` が穴を口座 dir で埋めて pane へ注入する。**呼び手の pane が target そのものの周**（同じ窓）は前面と入力欄の判定を飛ばす＝「席の窓で Claude を抜けて同じ shell から撃つ」流れは既に通る。会話の置き場は claude の `projects/<cwd>/<id>.jsonl` で、口座 dir の `projects` が host で共有されていれば別口座からも `--continue` / `--resume` で引ける（本 host は共有・器は確かめない）。
 - 形（短い形だけ・長い形 `seat launch` は触らない）:
   1. **flag 2 つ**: `-c`（別名 `--continue`）は直前の会話を、`-r <id>`（別名 `--resume <id>`）は名指した会話を引き継ぐ。どちらも**注入する起動行の末尾**に claude の同名の flag（`--continue` / `--resume <id>`）を足すだけ。**登録 row の `launch` と置き場の `.launch` は旗無しのまま**（row は雛形・会話の id は 1 回きりの値・§14 の「row の `launch` = 導出した行」を変えない）。
