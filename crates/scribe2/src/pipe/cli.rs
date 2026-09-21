@@ -60,6 +60,88 @@ use run::{run_all, start};
 use std::path::PathBuf;
 use step::{answer_run, approve_run, gate_run, land_run, retire_run};
 
+/// `pipe` の subcommand（閉じた語・宣言順は [`subcommand`] の腕の順・設計 contract-source.md §17 の形 (vii)）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PipeCommand {
+    /// `pipe intake`。
+    Intake,
+    /// `pipe preflight`。
+    Preflight,
+    /// `pipe spawn`。
+    Spawn,
+    /// `pipe approve`。
+    Approve,
+    /// `pipe answer`。
+    Answer,
+    /// `pipe gate`。
+    Gate,
+    /// `pipe land`。
+    Land,
+    /// `pipe retire`。
+    Retire,
+    /// `pipe run`。
+    Run,
+    /// `pipe show`。
+    Show,
+    /// `pipe resume`。
+    Resume,
+    /// `pipe stop`。
+    Stop,
+    /// `pipe dispatch`。
+    Dispatch,
+    /// `pipe land-window`。
+    LandWindow,
+    /// `pipe report`。
+    Report,
+}
+
+/// [`PipeCommand`] の全部（宣言順）。
+pub const PIPE_COMMANDS: &[PipeCommand] = &[
+    PipeCommand::Intake,
+    PipeCommand::Preflight,
+    PipeCommand::Spawn,
+    PipeCommand::Approve,
+    PipeCommand::Answer,
+    PipeCommand::Gate,
+    PipeCommand::Land,
+    PipeCommand::Retire,
+    PipeCommand::Run,
+    PipeCommand::Show,
+    PipeCommand::Resume,
+    PipeCommand::Stop,
+    PipeCommand::Dispatch,
+    PipeCommand::LandWindow,
+    PipeCommand::Report,
+];
+
+impl PipeCommand {
+    /// 引数の字面。
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Intake => "intake",
+            Self::Preflight => "preflight",
+            Self::Spawn => "spawn",
+            Self::Approve => "approve",
+            Self::Answer => "answer",
+            Self::Gate => "gate",
+            Self::Land => "land",
+            Self::Retire => "retire",
+            Self::Run => "run",
+            Self::Show => "show",
+            Self::Resume => "resume",
+            Self::Stop => "stop",
+            Self::Dispatch => "dispatch",
+            Self::LandWindow => "land-window",
+            Self::Report => "report",
+        }
+    }
+
+    /// 字面から読む（既知の subcommand でなければ `None`）。
+    pub fn parse(token: &str) -> Option<Self> {
+        PIPE_COMMANDS.iter().copied().find(|command| command.as_str() == token)
+    }
+}
+
 /// `pipe` の使い方。
 pub fn usage() -> String {
     format!(
@@ -110,7 +192,7 @@ pub fn dispatch(args: &[String]) -> Outcome {
         Ok(found) => found,
         Err(err) => return broken(err.to_string()),
     };
-    let verb = args.first().map(String::as_str);
+    let verb = args.first().and_then(|found| PipeCommand::parse(found));
     // **自分が段を進めた便**は subcommand しか知らない（run は便を作り、resume は入口の段を読む）ので、
     // 判定の材料を typed に受け取る（stdout の字面から run id を読み戻さない・C3.3）。
     let mut driven: Option<Driven> = None;
@@ -209,13 +291,13 @@ pub(super) struct Driven {
 ///
 /// 終端を作ったかを見分けずに撃つ——終端が無かった周は交差も受付も動いておらず、列は同じ答えを返す
 /// （起こせる便が増えないだけ）。見分ける述語を足すと、終端の検出と列の判定を 2 か所が別々に決めることになる。
-const TERMINALS: [&str; 5] = ["run", "resume", "land", "stop", "retire"];
+const TERMINALS: [PipeCommand; 5] = [PipeCommand::Run, PipeCommand::Resume, PipeCommand::Land, PipeCommand::Stop, PipeCommand::Retire];
 
 /// **関門を開ける subcommand**（設計 dispatcher.md §13「契機に回答と承認の記帳の直後を足す」）。
 ///
 /// 記帳が成った周（rc 0）だけ 1 周を撃つ——断られた周（段違い・空の逐語・無い run）は何も書いておらず、
 /// 関門は動いていない。便が live で無くなりうる [`TERMINALS`] とは別の列で、終端を作らない。
-const GATES: [&str; 2] = ["answer", "approve"];
+const GATES: [PipeCommand; 2] = [PipeCommand::Answer, PipeCommand::Approve];
 
 /// 列の 1 周の材料を引数から解く（解けない面が 1 つでも在れば `None`＝1 周を撃たない）。
 ///
@@ -296,29 +378,29 @@ fn subcommand(
     args: &[String],
     manifest: &Manifest,
     policy: LockPolicy,
-    verb: Option<&str>,
+    verb: Option<PipeCommand>,
     driven: &mut Option<Driven>,
 ) -> Outcome {
     match verb {
-        Some("intake") => intake(args, manifest, policy),
-        Some("preflight") => preflight(args, manifest),
-        Some("spawn") => start(args, policy),
-        Some("approve") => by_run(args, |id| approve_run(args, id, policy)),
-        Some("answer") => by_run(args, |id| answer_run(args, id, policy)),
-        Some("gate") => by_run(args, |id| gate_run(args, id, manifest, policy)),
-        Some("land") => by_run(args, |id| land_run(args, id, manifest, policy)),
-        Some("retire") => by_run(args, |id| retire_run(args, id, policy)),
-        Some("run") => run_all(args, manifest, policy, driven),
-        Some("show") => show(args),
-        Some("resume") => resume(args, manifest, policy, driven),
-        Some("stop") => stop(args, manifest, policy),
-        Some("dispatch") => queued(args, manifest, policy),
-        Some("land-window") => land_window(args),
-        Some("report") => match state_dir_of(args) {
+        Some(PipeCommand::Intake) => intake(args, manifest, policy),
+        Some(PipeCommand::Preflight) => preflight(args, manifest),
+        Some(PipeCommand::Spawn) => start(args, policy),
+        Some(PipeCommand::Approve) => by_run(args, |id| approve_run(args, id, policy)),
+        Some(PipeCommand::Answer) => by_run(args, |id| answer_run(args, id, policy)),
+        Some(PipeCommand::Gate) => by_run(args, |id| gate_run(args, id, manifest, policy)),
+        Some(PipeCommand::Land) => by_run(args, |id| land_run(args, id, manifest, policy)),
+        Some(PipeCommand::Retire) => by_run(args, |id| retire_run(args, id, policy)),
+        Some(PipeCommand::Run) => run_all(args, manifest, policy, driven),
+        Some(PipeCommand::Show) => show(args),
+        Some(PipeCommand::Resume) => resume(args, manifest, policy, driven),
+        Some(PipeCommand::Stop) => stop(args, manifest, policy),
+        Some(PipeCommand::Dispatch) => queued(args, manifest, policy),
+        Some(PipeCommand::LandWindow) => land_window(args),
+        Some(PipeCommand::Report) => match state_dir_of(args) {
             Err(reason) => refused(reason),
             Ok(state_dir) => super::report::report(&state_dir),
         },
-        _ => Outcome::failed(RC_REFUSED, vec![usage()]),
+        None => Outcome::failed(RC_REFUSED, vec![usage()]),
     }
 }
 

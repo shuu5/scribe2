@@ -3,7 +3,7 @@
 //! 型の閉包（[`super::closure`]）・外形 pin（[`super::surface_closure`]）と同じ **pure** な字面走査で、契約表の行の
 //! 欄（`touches` / `verify` / `surfaces` / `creates` / `tests` / `also`）から write-set を**導出値**として作る
 //! [`derive_write_set`] = 閉包 ∪ 歯の置き場（verify の nextest 行の scope〔[`Scope`]・§28〕の中で base の `#[test]` の
-//! fn 名が filter 語を含む file）∪ 外形 pin ∪ 新規 file ∪ Rust の外の file。手書きの write-set は [`check_drift`] で
+//! fn 名が filter 語を含む file）∪ 外形 pin ∪ 新規 file とその親の宣言 file（§17 の形 (vi)・[`parents`]）∪ Rust の外の file。手書きの write-set は [`check_drift`] で
 //! 導出値との集合一致だけを認める（接頭辞 `+` は剥がして比べる）。行の数え方 [`weighted_lines`] も上限の余地の式として
 //! ここに置く。
 //!
@@ -18,7 +18,8 @@ use super::super::table::PromiseRow;
 use super::names::closed_type;
 use super::{closure, is_ident, is_ident_char, snapshot_name, surface_closure, test_region};
 use super::{texts_of, ClosureError, Source};
-use super::{CRATES_DIR, LIB_FLAG, NEXTEST_HEAD, PACKAGE_FLAGS, RS, SRC_DIR, TESTS_DIR, TEST_ATTR, TEST_FLAG, UNREAD_TARGET_FLAGS};
+use super::{CRATES_DIR, CRATE_ROOT_STEMS, LIB_FLAG, MOD_STEM, NEXTEST_HEAD, PACKAGE_FLAGS, RS, SRC_DIR, TESTS_DIR, TEST_ATTR};
+use super::{TEST_FLAG, UNREAD_TARGET_FLAGS};
 use std::collections::BTreeSet;
 
 /// 生成する nextest 行の旗（歯が 0 本の行を緑にしない＝契約表の既存の行と同じ形）。
@@ -78,14 +79,16 @@ pub struct Base<'a> {
 }
 
 /// write-set の導出値（§3・pure）: (i) `touches` の閉包 ∪ (ii) 歯の置き場 ∪ (iii) `surfaces` の外形 pin ∪ (iv) `creates`
-/// （`+` を付けた新規 file）∪ (v) `also` ∪ (vi) `files`（約束の行の既存の `.rs`・§34）。各項は宣言順に 1 関数で、
-/// 解けない項目は typed に `Err`（最初の 1 件・fail-closed）。読めない file は従来どおり [`ClosureError::Unreadable`]。
+/// （`+` を付けた新規 file）とその親の宣言 file（§17 の形 (vi)・[`parents`]）∪ (v) `also` ∪ (vi) `files`（約束の行の
+/// 既存の `.rs`・§34）。各項は宣言順に 1 関数で、解けない項目は typed に `Err`（最初の 1 件・fail-closed）。読めない
+/// file は従来どおり [`ClosureError::Unreadable`]。
 pub fn derive_write_set(fields: &Fields<'_>, base: &Base<'_>) -> Result<BTreeSet<String>, ClosureError> {
     let texts = texts_of(base.sources)?;
     let mut found = closure(fields.touches, base.sources)?;
     found.extend(teeth_places(fields, base, &texts)?);
     found.extend(surface_closure(fields.surfaces, base.sources, base.snapshots)?);
     found.extend(created(fields.creates, base.tracked)?);
+    found.extend(parents(fields.creates, base.tracked));
     found.extend(also_files(fields.also, base.tracked)?);
     found.extend(listed_files(fields.files, base.tracked)?);
     Ok(found)
@@ -303,6 +306,31 @@ fn created(items: &[String], tracked: &[String]) -> Result<BTreeSet<String>, Clo
             fresh.then(|| format!("{NEW_FILE}{item}")).ok_or_else(|| ClosureError::ItemUnresolved { item: item.clone() })
         })
         .collect()
+}
+
+/// `creates` の親の宣言 file（§17 の形 (vi)・path だけで組む下界・字面は読まない）: 各 `.rs` の項目の dir から候補
+/// (vi-1) `<dir>/mod.rs`・(vi-2) `<dir>.rs`・(vi-3) dir が crate の src の根（`crates/<c>/src`）なら同じ dir の `lib.rs`
+/// と `main.rs` を組み、base の tracked に在るものを**全部**返す（(vi-3) の 2 つは並び立ち、どちらが `pub mod` を受けるかは
+/// 導出で決まらない）。候補がどれも tracked に無い周（dir ごと新設）・`.rs` でない項目・dir を持たない項目は何も足さない。
+fn parents(creates: &[String], tracked: &[String]) -> BTreeSet<String> {
+    creates
+        .iter()
+        .filter(|item| item.ends_with(RS))
+        .filter_map(|item| item.rsplit_once('/').map(|(dir, _)| dir))
+        .flat_map(parent_candidates)
+        .filter(|candidate| tracked.contains(candidate))
+        .collect()
+}
+
+/// dir `dir` の module を宣言しうる file の候補（[`parents`] の 3 形）。
+fn parent_candidates(dir: &str) -> Vec<String> {
+    let mut found = vec![format!("{dir}/{MOD_STEM}{RS}"), format!("{dir}{RS}")];
+    let crate_dir = dir.strip_prefix(CRATES_DIR).and_then(|rest| rest.split_once('/'));
+    let src_root = crate_dir.is_some_and(|(krate, rest)| !krate.is_empty() && rest == SRC_DIR);
+    if src_root {
+        found.extend(CRATE_ROOT_STEMS.iter().map(|stem| format!("{dir}/{stem}{RS}")));
+    }
+    found
 }
 
 /// 約束の行から組んだ導出の入力（設計 §33 項 3・§34・[`Fields`] の 7 欄を所有する形）と、歯ごとの置き場。

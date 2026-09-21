@@ -15,13 +15,42 @@ pub fn usage() -> String {
     "usage: seat <register --state-dir S --target T --role R --account L --launch FILE [--anchor DIR]|launch --state-dir S --role R --target S:W [--account L] [--anchor DIR] [--model M] [--restore CMD]|<label> [--orchestrator] [-c|-r ID] [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]".to_owned()
 }
 
+/// `seat` の既知の verb（閉じた語・宣言順・設計 contract-source.md §17 の形 (vii)）。短い形の第 1 token（口座 label）は
+/// 閉じた集合を持たないので語にしない＝[`SeatCommand::parse`] が `None` を返した token は [`dispatch`] の label の腕へ落ちる。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SeatCommand {
+    /// `seat register`。
+    Register,
+    /// `seat launch`。
+    Launch,
+}
+
+/// [`SeatCommand`] の全部（宣言順・件数は既知の verb の本数で dispatch の腕の本数ではない）。
+pub const SEAT_COMMANDS: &[SeatCommand] = &[SeatCommand::Register, SeatCommand::Launch];
+
+impl SeatCommand {
+    /// 引数の字面。
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Register => "register",
+            Self::Launch => "launch",
+        }
+    }
+
+    /// 字面から読む（既知の verb でなければ `None`）。
+    pub fn parse(token: &str) -> Option<Self> {
+        SEAT_COMMANDS.iter().copied().find(|command| command.as_str() == token)
+    }
+}
+
 /// `seat` に続く引数を捌く。
 pub fn dispatch(args: &[String]) -> Outcome {
-    match args.first().map(String::as_str) {
-        Some("register") => register_of(args),
-        Some("launch") => launch_of(args),
+    let first = args.first().map(String::as_str);
+    match (first.and_then(SeatCommand::parse), first) {
+        (Some(SeatCommand::Register), _) => register_of(args),
+        (Some(SeatCommand::Launch), _) => launch_of(args),
         // 既知の verb でなく `--` で始まらない第 1 token は口座 label（短い形・account-lifecycle.md §14）。
-        Some(label) if !label.starts_with("--") && !label.trim().is_empty() => short_of(label, args.get(1..).unwrap_or_default()),
+        (None, Some(label)) if !label.starts_with("--") && !label.trim().is_empty() => short_of(label, args.get(1..).unwrap_or_default()),
         _ => refused_usage(),
     }
 }

@@ -297,6 +297,26 @@ fn seat_usage_external_form() {
     insta::assert_snapshot!(form);
 }
 
+/// `seat` の既知の verb の閉じた enum（設計 contract-source.md §17 の形 (vii)）: const slice の件数（既知の verb の本数・
+/// dispatch の腕の本数ではない）と宣言順が型と一致し、`as_str` と `parse` が往復し、各語は usage に載る。未知の token
+/// （口座 label・空・flag・variant 名）は `parse` が `None`＝dispatch の label の腕へ落ちる側。
+#[test]
+fn seat_command_all_known_verbs_round_trip_and_unknown_tokens_are_none() {
+    use vessel::seat::cli::{SeatCommand, SEAT_COMMANDS};
+    assert_eq!(vessel::seat::cli::SEAT_COMMANDS.len(), 2, "記録時点の既知の verb: {SEAT_COMMANDS:?}");
+    assert!(vessel::order::is_declaration_order(SEAT_COMMANDS, |command| command as usize), "宣言順: {SEAT_COMMANDS:?}");
+    let words: Vec<&str> = SEAT_COMMANDS.iter().map(|command| command.as_str()).collect();
+    assert_eq!(words, ["register", "launch"], "字面の閉じた列（宣言順）");
+    let usage = vessel::seat::cli::usage();
+    for command in SEAT_COMMANDS {
+        assert_eq!(SeatCommand::parse(command.as_str()), Some(*command), "as_str ↔ parse の往復: {command:?}");
+        assert!(usage.contains(&format!("{} --", command.as_str())), "{} は usage に載る: {usage}", command.as_str());
+    }
+    for unknown in ["work", "", "--state-dir", "Register", "registers"] {
+        assert_eq!(SeatCommand::parse(unknown), None, "未知の token {unknown:?} は None（label の腕へ落ちる）");
+    }
+}
+
 /// `doctor --state-dir` の登録 row の行（`model` と `paths` の欄つき・seat-roles.md §24）・突合の項目（tmux を撃てない
 /// 周の形）・その直後の host の面の行・末尾の導入先の行（登録 row の anchor・記録なし・consumer-sync.md §4）を
 /// snapshot に固定する（C12.5）。

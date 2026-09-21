@@ -2291,6 +2291,91 @@ fn contract_derive_fn_keeps_type_closure_unchanged() {
     clean(&[&repo, &state]);
 }
 
+// ───── creates の親 mod と subcommand の閉じた enum（設計 docs/design/contract-source.md §17・行 q・`s2-07l.337`・接頭辞 `contract_derive_creates_parent_` / `contract_derive_subcommand_enum_`） ─────
+
+/// toy repo（[`derive_repo_with`] に `files` を足す）に `extra` の欄だけの行 `id` を置いて intake を 1 回撃ち、写しの
+/// 契約の write-set（導出値）を返す（repo と置き場は畳む）。
+fn derived_write_set(id: &str, extra: (&str, &str), files: &[(&str, &str)]) -> Vec<String> {
+    let row = derive_row(id, &[extra]);
+    let (repo, state) = derive_repo_with(&table_doc(&table_region(&[row])), files);
+    let out = intake_raw(&repo, &state, &pointed_contract(&repo, &format!("{id}.toml"), id), &format!("s2-{id}"));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "導出値で通る: {}", stderr_of(&out));
+    let found = copied_write_set(&state, &run_id_of(&out));
+    clean(&[&repo, &state]);
+    found
+}
+
+/// `creates` だけの行の導出値（[`derived_write_set`]）。
+fn creates_write_set(id: &str, creates: &[&str], files: &[(&str, &str)]) -> Vec<String> {
+    let quoted: Vec<String> = creates.iter().map(|item| format!("\"{item}\"")).collect();
+    derived_write_set(id, ("creates", format!("[{}]", quoted.join(", ")).as_str()), files)
+}
+
+/// (vi-1) / (vi-2): 新設 file の dir の module を dir の中の `mod.rs` で宣言する周はその `mod.rs`、dir の隣の `<dir>.rs`
+/// で宣言する周はその `<dir>.rs` が導出値に入る（base は `creates` の新規 file だけ → RED）。
+#[test]
+fn contract_derive_creates_parent_mod_rs_and_sibling_rs_are_added() {
+    let files = [("crates/toy/src/pipe/mod.rs", "pub mod old;\n"), ("crates/toy/src/pipe/old.rs", "\n")];
+    let found = creates_write_set("a", &["crates/toy/src/pipe/new.rs"], &files);
+    assert_eq!(found, ["+crates/toy/src/pipe/new.rs", "crates/toy/src/pipe/mod.rs"], "(vi-1) dir の中の mod.rs");
+    let files = [("crates/toy/src/seat.rs", "pub mod old;\n"), ("crates/toy/src/seat/old.rs", "\n")];
+    let found = creates_write_set("b", &["crates/toy/src/seat/new.rs"], &files);
+    assert_eq!(found, ["+crates/toy/src/seat/new.rs", "crates/toy/src/seat.rs"], "(vi-2) dir の隣の <dir>.rs");
+}
+
+/// (vi-3): `crates/<c>/src` の直下に新設する周は、同じ dir の `lib.rs` と `main.rs` のうち tracked な方が全部入る
+/// （両方 tracked の crate は 2 面・`main.rs` だけの crate は 1 面・別の crate の根は入らない）。(vi-1) / (vi-2) だけの
+/// 実装では `crates/<c>/src/mod.rs` も `crates/<c>/src.rs` も無いので導出値が新規 file だけになって落ちる。
+#[test]
+fn contract_derive_creates_parent_crate_root_takes_every_tracked_root() {
+    let files = [
+        ("crates/toy/src/lib.rs", "pub mod tint;\n"),
+        ("crates/toy/src/main.rs", "fn main() {}\n"),
+        ("crates/tool/src/main.rs", "fn main() {}\n"),
+    ];
+    let found = creates_write_set("a", &["crates/toy/src/fresh.rs"], &files);
+    assert_eq!(found, ["+crates/toy/src/fresh.rs", "crates/toy/src/lib.rs", "crates/toy/src/main.rs"], "両方 tracked の crate は 2 面");
+    let found = creates_write_set("b", &["crates/tool/src/fresh.rs"], &files);
+    assert_eq!(found, ["+crates/tool/src/fresh.rs", "crates/tool/src/main.rs"], "main.rs だけの crate は 1 面");
+}
+
+/// 否定の枝: 親の候補がどれも base に無い周（dir ごと新設・同じ crate の根は入らない）・`.rs` でない項目・dir を持たない
+/// 項目は 1 面も足さない（導出値は `creates` の新規 file だけ）。
+#[test]
+fn contract_derive_creates_parent_adds_nothing_without_a_tracked_candidate() {
+    let files = [
+        ("crates/toy/src/lib.rs", "pub mod pipe;\n"),
+        ("crates/toy/src/pipe/mod.rs", "\n"),
+        ("mod.rs", "\n"),
+        ("lib.rs", "\n"),
+    ];
+    let found = creates_write_set("a", &["crates/toy/src/brand/new.rs"], &files);
+    assert_eq!(found, ["+crates/toy/src/brand/new.rs"], "dir ごと新設する周は親を足さない");
+    let found = creates_write_set("b", &["crates/toy/src/pipe/notes.md"], &files);
+    assert_eq!(found, ["+crates/toy/src/pipe/notes.md"], ".rs でない項目は親を持たない");
+    let found = creates_write_set("c", &["fresh.rs"], &files);
+    assert_eq!(found, ["+fresh.rs"], "dir を持たない項目は親を持たない");
+}
+
+/// 現物の 2 つの cli module と、それぞれの件数 pin の歯の file（base の字面そのもの・`include_str!`）。
+const SUBCOMMAND_FILES: &[(&str, &str)] = &[
+    ("crates/scribe2/src/seat/cli.rs", include_str!("../../../src/seat/cli.rs")),
+    ("crates/scribe2/src/pipe/cli.rs", include_str!("../../../src/pipe/cli.rs")),
+    ("crates/scribe2/tests/e2e/seat.rs", include_str!("../seat.rs")),
+    ("crates/scribe2/tests/e2e/pipe.rs", include_str!("../pipe.rs")),
+];
+
+/// (vii): `touches` に cli の閉じた enum を宣言した行の導出値は cli.rs（宣言・const slice・match の arm）と自分の件数 pin
+/// の歯の file だけで、もう一方の cli の歯の file は入らない（const slice の名を分けた効き目＝同名なら互いを拾って落ちる）。
+/// base の字面には型も const slice も無いので、この導出値にならない（RED）。
+#[test]
+fn contract_derive_subcommand_enum_closure_is_its_cli_and_its_own_count_pin() {
+    let seat = derived_write_set("a", ("touches", "[\"crate::seat::cli::SeatCommand\"]"), SUBCOMMAND_FILES);
+    assert_eq!(seat, ["crates/scribe2/src/seat/cli.rs", "crates/scribe2/tests/e2e/seat.rs"], "seat の cli と seat の歯だけ");
+    let pipe = derived_write_set("b", ("touches", "[\"crate::pipe::cli::PipeCommand\"]"), SUBCOMMAND_FILES);
+    assert_eq!(pipe, ["crates/scribe2/src/pipe/cli.rs", "crates/scribe2/tests/e2e/pipe.rs"], "pipe の cli と pipe の歯だけ");
+}
+
 // ───── 閉包の同名衝突（設計 docs/design/contract-source.md §3「閉包の同名衝突」・行 j・`s2-07l.347`・接頭辞 `contract_closure_ext_same_name_`） ─────
 
 /// 同名の struct `Marker` を持つ module の本文（`Marker {` の構築点・`Marker::HEAD` の arm・`const ALL: &[Marker]` の

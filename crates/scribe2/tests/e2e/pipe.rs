@@ -564,6 +564,30 @@ fn pipe_external_form() {
     insta::assert_snapshot!(form);
 }
 
+/// `pipe` の subcommand の閉じた enum（設計 contract-source.md §17 の形 (vii)）: const slice の件数と宣言順が型と一致し、
+/// `as_str` と `parse` が往復し、各語は usage に載る。未知の token（空・flag・variant 名・`_` 綴り）は `parse` が `None`
+/// ＝dispatch は usage で断る側。
+#[test]
+fn pipe_command_all_subcommands_round_trip_and_unknown_tokens_are_none() {
+    use vessel::pipe::cli::{PipeCommand, PIPE_COMMANDS};
+    assert_eq!(vessel::pipe::cli::PIPE_COMMANDS.len(), 15, "記録時点の subcommand: {PIPE_COMMANDS:?}");
+    assert!(is_declaration_order(PIPE_COMMANDS, |command| command as usize), "宣言順: {PIPE_COMMANDS:?}");
+    let words: Vec<&str> = PIPE_COMMANDS.iter().map(|command| command.as_str()).collect();
+    let want = [
+        "intake", "preflight", "spawn", "approve", "answer", "gate", "land", "retire", "run", "show", "resume", "stop", "dispatch",
+        "land-window", "report",
+    ];
+    assert_eq!(words, want, "字面の閉じた列（宣言順）");
+    let usage = vessel::pipe::cli::usage();
+    for command in PIPE_COMMANDS {
+        assert_eq!(PipeCommand::parse(command.as_str()), Some(*command), "as_str ↔ parse の往復: {command:?}");
+        assert!(usage.contains(command.as_str()), "{} は usage に載る: {usage}", command.as_str());
+    }
+    for unknown in ["nope", "", "--state-dir", "Intake", "land_window", "contracts"] {
+        assert_eq!(PipeCommand::parse(unknown), None, "未知の token {unknown:?} は None");
+    }
+}
+
 /// (e) 契約の verify 行に禁じる語列（rules 行 `runner.denied_commands`・ADR-0025 §2.3・`s2-07l.168`）が当たれば intake は
 /// rc 1 で断り、何本目の行かと行 id・語列を名指す（event を書かない・run dir も作らない）。判定は hook の command
 /// guard と同じ 1 関数＝順序不問（`git branch -D x` も `git branch x -D` も当たる）。先頭語が宣言の allowlist に在る
