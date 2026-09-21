@@ -690,6 +690,26 @@ write-set = ["crates/scribe2/src/pipe/review.rs", "crates/scribe2/src/headless/l
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail contract_promise_review_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail headless_lens_promise_"]
 size = "S"
 done = "(1) Promised の行の lens の雛形に約束の行の写し（n / text / fixture / expect の 4 欄・n の順）が載り、約束の行を持たない行の雛形は 1 字も変わらない（外形 snapshot） (2) Promised の行の review.json の kind が 3 値の外なら verdict が INCONCLUSIVE に倒れ、3 値の中ならそのまま (3) Promised の行の焼き直しの門は契約 file の sha が変わった周だけ通し、at の path 照合を撃たない (4) 約束の行を持たない行の審査と門と既存の pipe_review_ / headless_lens_ の歯が 1 字も変わらず緑"
+
+[[contract]]
+id = "ai"
+title = "約束の行の files の + 無しの .rs を write-set にそのまま写し（Fields の 7 つ目・derive_write_set の (vi)）、symbols の crate:: で始まる型の path 形を受付が module の型の宣言で解く（閉じた型の読み手と同じ 1 本）"
+req = ["FR47", "FR48", "FR39"]
+section = "34"
+write-set = ["crates/scribe2/src/pipe/closure/derive.rs", "crates/scribe2/src/pipe/closure/names.rs", "crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/tests/e2e/pipe/intake.rs"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail contract_promise_files_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_intake_promise_files_"]
+size = "S"
+done = "(1) files の + 無しの .rs（base に実在）が導出の write-set にそのまま載り、base に無い .rs は ItemUnresolved で断られる (2) symbols の crate::<module>::<Type> は module の enum / struct の宣言で解けて touches に写り、+ 付きは宣言が在れば断られ、末尾 2 節の型::項目の形は従来どおり (3) 既存の contract_promise_ / pipe_intake_promise_ / pipe_intake_repeat_ の歯と外形 snapshot が 1 字も変わらず緑"
+
+[[contract]]
+id = "aj"
+title = "焼き直しの門の teeth-outside-write-set の物差しは at のうち path の形に解ける項目だけを測り、path でない項目（歯の接頭辞・§ の番号）は測れないとして断りの理由から外す"
+req = ["FR49", "NFR4"]
+section = "35"
+write-set = ["crates/scribe2/src/pipe/review.rs", "crates/scribe2/tests/e2e/pipe/intake.rs"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail pipe_review_unaddressed_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_intake_repeat_teeth_outside_write_set_"]
+size = "S"
+done = "(1) at に path でない項目（歯の接頭辞・§ の番号）が混ざった teeth-outside-write-set の後、path の項目を write-set に足した契約が受付を通る (2) path の項目が write-set に無い契約は従来どおり finding-unaddressed で断られ、理由に測った項目と測れなかった項目の数を出す (3) 既存の pipe_intake_repeat_ / pipe_review_unaddressed_ の歯が 1 字も変わらず緑"
 <!-- contracts:end -->
 
 
@@ -721,3 +741,19 @@ done = "(1) Promised の行の lens の雛形に約束の行の写し（n / text
 - **歯**（in-file は `contract_promise_` 接頭辞・e2e は `pipe_intake_promise_` / `headless_lens_promise_` 接頭辞）: (a) 約束の行の parse: 9 欄の宣言順と必須 / 任意・`of` が行に無い・`n` の重複と欠番・空の必須欄が `TableError` の値で名指され、`contracts schema` の生成物に 9 欄が載る（母集団 = 欄の総数を同時に pin）／(b) 導出: `symbols` の閉じた型が `touches` に・`+` の file が `creates` に・`.rs` でない file が `also` に・`_external_form` の歯と名付き snapshot の歯が `surfaces` に写り、write-set が §3 の関数の値と一致する（fixture は同 module の `source(` の型・3 本の名付き snapshot の型を 1 つ含む）／(c) 生成（`contract.rs`・接頭辞 `contract_promise_render_`）: `teeth` が（crate・scope）ごとに 1 本の nextest 行になり完全名が全部載る・`done` が `n` の順で `expect` を並べる／(d) 受付の断り: Promised の行が `write-set` か `done` を持つ・`symbols` の `+` 無しの名が base に無い・`+` 付きの名が base に在る の 3 形が `Refuse` の値で断られ run dir が 0（母集団 = `REFUSALS` の長さを同時に pin）・`verify` を持つ Promised の行は生成値と集合一致なら通り不一致は §3 と同じ drift で断られる／(e) 審査（in-file は `review.rs`・接頭辞 `contract_promise_review_`・e2e は `headless_lens_promise_`）: Promised の行の lens の雛形に約束の 4 欄が載り（外形 snapshot＝**新設の名付き snapshot** `lens_promise_prompt_external_form`・file は行 ah の write-set の `+` の `.snap`・既存の `e2e__headless__lens_contract_prompt_external_form.snap` は約束の行を持たない行の雛形を写すので 1 字も変わらない）、verdict の kind が 3 値の外なら INCONCLUSIVE に倒れる（fail-closed）／(f) 必須の緩み（`table.rs` / `table/parse.rs`・接頭辞 `contract_promise_need_`）: `done` と `verify` を持たない行は約束の行が 1 つでも在れば parse を通り、約束の行が無ければ `TableError` の必須 key の欠けで名指される・`FIELDS` の `Need::Required` が 5・`Conditional` が 2（母集団 = 欄の総数を同時に pin）・`contracts schema` の生成物に `conditional` が 2 欄で載る（xtask の contracts-schema と drift しない）。
 - **限界（残す側）**: `symbols` の解決は §3 と同じ字面走査の下界（別名・generic・glob 越しは見ない）。`fixture` と `expect` の質は欄では測れない（lens の 2 欄が残る理由）。約束の行を持たない旧い行は今の落ち方のまま（移行は行ごと）。
 - **却下案**: 案 B = 散文の § を残し閉包の計算だけ足す（Derived が既にそれで、151 行が使っていない＝入力の手書きが残る限り同じ理由で落ちる）／約束を bead の field に置く（契約の正本は設計 doc の行〔FR47・ADR-0023〕・台帳は写し）／回答が write-set を広げる（§7 の決定と C10 に反する・sha が実装の途中で変わる）／`[[contract.promise]]` の dotted header（parser の subset を広げる・top-level の array で同じ形が書ける）／負の枝の真偽欄（嘘を測れない欄は持たない・C10）／done を設計 doc に書き戻す生成（C10 の逆流・生成物は契約 file にだけ）。
+
+## 34. 約束の行の files の既存 .rs は write-set にそのまま写り、symbols の crate:: の型の path 形は module の型の宣言で解ける（契約表の行 ai・§33 の導出の 2 つ目の穴）
+
+- 何が起きているか（orchestrator の実測 2026-09-21・母集団 = Promised の行 3 本〔dispatcher.md 行 n / o / p〕の便 4 本・4 本とも同じ落ち方・verified）: 約束の行の `files` に `+` 無しの `.rs`（`crates/scribe2/src/fleet/mod.rs` / `crates/scribe2/src/pipe/dispatch.rs`）を書いても、導出（§33 項 3）はそれを**どの欄にも写さない**（`+` は `creates`・`.rs` でない項目は `also`・残りは捨てる）ので、write-set は歯の置き場と `+` の file だけになり、lens が「src の file が閉包の外」で FAIL する（kind `other`・4/4）。src を write-set に入れる経路は `touches` の閉包だけだが、その入力の `symbols` は受付（§33 項 5・`check_symbols`）が名指しの読み手（§26 の 3 形・型の path 形は**末尾 2 節**を型と項目に読む）で解くので、`crate::fleet::Mark` は「`fleet::Mark`」の字面が base に無ければ解けない＝**閉じた型の読み手（`closure()` が読む `crate::<module>::<Type>`・§33 項 3 の `touches`）と受付の読み手が同じ字面を違う形に読む**。`+Mark::Launched` の形は受付を通るが `touches` に写らない（`crate` で始まらない）。結果、Promised の行は「src を触る」と書く手段を持たない。
+- 形（2 か所・どちらも既存の関数の入口を広げる・新しい module は無い）: (1) **`files` の写し**: `Fields`（`crates/scribe2/src/pipe/closure/derive.rs`）に 7 つ目の欄 `files`（base に実在する `.rs`・`+` 無し）を足し、`derive_write_set` の (vi) として **そのまま** write-set に載せる（tracked に無ければ `ItemUnresolved`・`.rs` でなければ従来どおり `also`）。§33 項 3 の「導出の 1 本は増やさない」は本行で改める（理由は上の実測・約束の行の `files` は「触る file の列」で、`+` の有無で write-set に載るか否かが変わるのは欄の定義に反する）。`Fields` を組む場所は `crates/scribe2/src/pipe/cli/intake.rs`（Declared の行・`files` は空）と `derive.rs`（Promised の行と in-file の歯）の 2 file だけ。(2) **`crate::` の型の path 形**: 受付の `check_symbols` が使う名指しの読み手（`crates/scribe2/src/pipe/closure/names.rs` の `resolved` → `form_of`）に、先頭の節が `crate` で末尾の節が大文字で始まる path 形を **閉じた型の形**として読む分岐を足し、`closure()` と同じ判定（module の file に `enum <Type>` / `struct <Type>` の宣言・`declares_type` と `in_module`）で解く。`+crate::…::<Type>` は宣言が**無い**ことを要求（`creates` と同じ極性）。末尾 2 節の `型::項目` の形（`Mark::Hold`）と fn 形は従来どおり。
+- 触らない: `touches` の閉包の計算（`closure()` の 5 形）・`creates` / `also` / `tests` / `surfaces` の導出・§26 の impl 経路・契約 file の key・lens の雛形・約束の行の 9 欄と parser。
+- 歯（in-file は `contract_promise_files_` 接頭辞・`derive.rs` の tests・e2e は `pipe_intake_promise_files_` 接頭辞・`tests/e2e/pipe/intake.rs`・既存の `promise_base()` と toy repo の型）: (a) `files` の `+` 無しの `.rs` が write-set に載る（base は載らない → RED）／(b) base に無い `.rs` は `ItemUnresolved`（base は黙って捨てる → RED）／(c) `symbols` の `crate::paint::Hue` を持つ約束の行が受付を通り write-set に `paint.rs` の閉包が載る（base は `PromiseSymbolUnresolved` → RED）／(d) `+crate::paint::Hue`（宣言が在る）は断られ、`+crate::paint::Fresh`（無い）は通る／(e) `Hue::Red` と `fn(` の形は 1 字も変わらず解ける（既存の歯の緑で受ける）。
+- 却下: `files` の `.rs` を `also` に流す（`also` は Rust の外の file と決めた欄・`AlsoNamesRust` の断りを消すことになる）／`tests` に流す（`teeth_file` が歯の区間を要求し src が落ちる）／受付の読み手を `touches` の読み手に置き換える（末尾 2 節の形が解けなくなる・§26 を壊す）／doc 側で `use crate::fleet::Mark` の字面を書かせる（設計 doc が code の字面に合わせる逆流・C10）。
+
+## 35. 焼き直しの門の teeth-outside-write-set の物差しは path の形の項目だけを測る（契約表の行 aj・§23 の物差しの下界・memo `s2-07l.527`）
+
+- 何が起きているか（orchestrator の実測 2026-09-21・便 `s2-07l.513` の 3 周目・verified）: lens が `at` に path でない項目（歯の接頭辞 `headless_lens_promise_`・`§33`）を混ぜて `teeth-outside-write-set` を出すと、物差し（`crates/scribe2/src/pipe/review.rs` の `teeth_unaddressed`）は `at` の全項目を write-set の path として測るので、path でない項目は**どんな契約でも covered にならず**、docs で write-set と § を直しても受付が `finding-unaddressed` で永遠に断る。§23 の「測れない型と `at` の空な周は物差しが空を返す」は kind と空だけを見ていて、**項目単位の測れなさ**を持たない。
+- 形: `teeth_unaddressed` は `at` の各項目を **path の形に解けるか**で 2 つに分け（解ける = tracked の file・末尾 `/` の dir・`+` 付きの新規 file の 3 形＝§3 の write-set の項目の形と同じ読み）、解ける項目だけを write-set と照合し、解けない項目は測らない（理由の文に「測った n 件・測れない m 件」を出す・母集団を同時に出す C10）。解ける項目が 0 の周は空を返す＝通す（`at` が空の周と同じ扱い）。`Rework` に tracked を足す（既に持つ・引数は増やさない）。
+- 触らない: `literal_unaddressed` / `section_unaddressed`（識別子と § はそれぞれの物差しが読む）・同型 N 回の門（`SameKindRepeated`）・lens の雛形（`at` の形を閉じるのは行 ah 以後の別の行）・`FindingKind` の 7 語。
+- 歯（in-file は `pipe_review_unaddressed_` 接頭辞・`review.rs` の tests・e2e は `pipe_intake_repeat_teeth_outside_write_set_` 接頭辞・`tests/e2e/pipe/intake.rs`・既存の `failed_runs` / `Again` / `assert_refused` の型）: (a) `at = ["src/other.rs", "some_prefix_", "§3"]` の後、`src/other.rs` を write-set に足した契約が通る（base は断る → RED）／(b) `src/other.rs` を足さない契約は従来どおり断られ、理由に `src/other.rs` だけが名指され測れない 2 件が数で出る／(c) in-file: 物差しが path の項目だけを返す（母集団 3・path 1）。
+- 却下: lens の雛形だけを直す（過去の便の `at` は書き換わらない・.513 が止まったまま）／`at` の path でない項目を「対応済み」と読む（測れないを「測った」に読み替える・C10）／`FindingUnaddressed` を `SameKindRepeated` の後ろに回す（材料が変われば通るが、path の項目が未対応でも通る＝門が緩む）。
