@@ -686,10 +686,10 @@ title = "Promised の行の審査 — lens の雛形に約束の 4 欄を渡し�
 req = ["FR49"]
 section = "33"
 depends = ["ag"]
-write-set = ["crates/scribe2/src/pipe/review.rs", "crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/src/headless/lens.rs", "crates/scribe2/src/headless/lens-contract.txt", "crates/scribe2/tests/e2e/headless.rs", "crates/scribe2/tests/e2e/snapshots/e2e__headless__lens_contract_prompt_external_form.snap", "+crates/scribe2/tests/e2e/snapshots/e2e__headless__lens_promise_prompt_external_form.snap"]
-verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail contract_promise_review_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail headless_lens_promise_"]
+write-set = ["crates/scribe2/src/pipe/review.rs", "crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/src/headless/lens.rs", "crates/scribe2/src/headless/lens-contract.txt", "crates/scribe2/tests/e2e/headless.rs", "crates/scribe2/tests/e2e/pipe/intake.rs", "crates/scribe2/tests/e2e/snapshots/e2e__headless__lens_contract_prompt_external_form.snap", "+crates/scribe2/tests/e2e/snapshots/e2e__headless__lens_promise_prompt_external_form.snap"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail contract_promise_review_ pipe_review_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail headless_lens_ pipe_intake_repeat_"]
 size = "S"
-done = "(1) Promised の行の lens の雛形に約束の行の写し（n / text / fixture / expect の 4 欄・n の順）が載り、約束の行を持たない行の雛形は 1 字も変わらない（外形 snapshot） (2) Promised の行の review.json の kind が 3 値の外なら verdict が INCONCLUSIVE に倒れ、3 値の中ならそのまま (3) Promised の行の焼き直しの門は契約 file の sha が変わった周だけ通し、at の path 照合を撃たない (4) 約束の行を持たない行の審査と門と既存の pipe_review_ / headless_lens_ の歯が 1 字も変わらず緑"
+done = "(1) Promised の行の lens の雛形に約束の行の写し（n / text / fixture / expect の 4 欄・n の順）が載り、約束の行を持たない行の雛形は 1 字も変わらない（外形 snapshot） (2) Promised の行の review.json の kind が 3 値の外なら verdict が INCONCLUSIVE に倒れ、3 値の中ならそのまま (3) Promised の行の焼き直しの門は契約 file の sha が変わった周だけ通し、at の path 照合を撃たない (4) 約束の行を持たない行の審査と門が不変＝既存の headless_lens_ の歯と外形 snapshot・review.rs の pipe_review_ の歯・焼き直しの門の pipe_intake_repeat_ の歯が 1 字も変わらず緑（verify の 2 行がそのまま走らせる）"
 
 [[contract]]
 id = "ai"
