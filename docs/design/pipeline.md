@@ -628,6 +628,20 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 - 触らない: `CiRun` の 3 値・`pipe.ci_wait_s`・宣言の `ci-cmd` の形・終端の 3 段（push → CI → close）の順。
 - 却下: workflow 名で絞る（repo 固有の値を code に持つ・N3）／cron を別 sha で走らせる運用（散文の規則・N2）／`ci-cmd` に穴を足して宣言側で絞る（宣言が無い consumer に効かない）。
 
+## 47. 着地列の窓が止めた便・終えた便を追随中に数えない（契約表の行 ao・§19 約束 2 (b) の条件を閉じる）
+
+やさしく言うと: 「今 merge していいか」を器に聞く口（§19）が、何日も前に止めた便を「まだ追随中」と数えて永久に「待て」と答える。止めた便・終えた便は追随中ではない。
+
+- 出所（orchestrator の実測 2026-09-22・verified・main 5951736）: docs の PR の merge の前置に `pipe land-window` を撃ったところ `land-window=busy queue=- following=<便 2 本> unpushed=-`。名指された 2 本はどちらも最新の event が `RunStopped`（2026-09-18 と 2026-09-21 に止めた便・bead は close 済み）で、着地の列にも worktree にも居ない。窓は閉じたまま開かず、撃つ側は §19 が消したはずの散文の窓判断（「Gated と push の間の便が無いか」を event log を目で読む）へ戻った（N2）。
+- 現物（verified・`crates/scribe2/src/pipe/queue.rs`）: 追随中の便を導く関数は **`RunStage` の event だけ**を便ごとに最後の 1 本まで畳み、段が `Implemented` ∧ detail が `rebase:` で始まる便を返す。`RunStopped` / `RunDone` は kind が `RunStage` でないので読まれず、`Implemented rebase:` の後に止めた・終えた便が追随中のまま残る。一方 (a) の列は `queue_from` → `replay` → `may_queue` で **終端（`Landed` / `Failed` / `Stopped`）の便を外す**＝(a) と (b) の面が非対称。根は §19 約束 2 (b) の文言（「最新の `RunStage` が `Implemented` で detail が `rebase:` の便」）が終端の条件を欠いたまま code に写されたこと＝設計の穴で、実装の逸脱ではない。
+- 形:
+  1. 追随中の便の条件を **3 つ全部**にする: 最新の `RunStage` が `Implemented` ∧ その detail が `rebase:` で始まる ∧ **replay した段が終端でない**（`may_queue` と同じ 3 語 `Landed` / `Failed` / `Stopped`）。窓の判定（`window_now`）は既に replay を 1 回持っている（(a) の材料）ので、(b) はその同じ 1 回の読みの段を重ねる＝log を 2 度読まない。
+  2. 本節の 1 が §19 約束 2 (b) の条件を supersede する（§19 の文言は行 m の着地時の写しとして残す・書き換えない）。(a)(c) の判定・行の字面（`land-window=clear` / `busy queue= following= unpushed=`）・rc・`--wait-s` の再評価は不変。
+  3. 追随中の便が「止めた・終えた」だけで外れるのであって、`Implemented rebase:` のまま runner が死んだ便（終端の記帳が無い）は従来どおり数える（死んだ便を列から外す物差しは `s2-07l.388` の行の領分・本節は触らない）。
+- 歯（in-file・`queue.rs` の `mod tests`・接頭辞 `pipe_window_following_`・既存の `event` fixture〔`RunStage` の段と ts だけ〕の隣に kind と detail を取る 1 つを足し、pure な関数へ event の列を渡す）: (a) `Implemented` detail `rebase:a..b` の後に `RunStopped`（段 `Stopped`）→ 追随中に数えない（base は数える → RED）。(b) 同じ便が `RunDone` `Landed` で終えた → 数えない（base は数える → RED）。(c) `Implemented rebase:` のまま終端が無い → 数える（不変・(a)(b) が「追随中を全部外す」変異でないことを測る）。(d) `Implemented` の detail が `rebase:` で始まらない → 数えない（不変）。
+- 触らない: `may_queue` / `first_gated_at` / `turn_in` / `train_in`・`FOLLOWING` の字面・`MainRead` の 4 値・`Completion::LandWindow` の判定経路・e2e の `pipe_land_window_` の歯 3 本（1 字も変わらない）。
+- 却下: 撃つ側が古い便に `RunStage` を足して窓を開ける運用（散文の作法・N2・記帳の門〔§39〕が `RunStopped` の後の `RunStage` を断る）／追随中を時間で切る（「N 時間前の `Implemented` は追随中でない」＝閾値が恣意・終端の記帳が在るのに読まない）／`RunStopped` を別の読みで拾う（log を 2 度読む・replay が既に段を持つ）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -1061,5 +1075,15 @@ teeth = ["pipe_declaration_default_ci_cmd_carries_the_event_field"]
 place = "crates/scribe2/src/pipe/declaration.rs"
 fixture = "in-file の歯（既存の DEFAULT_CI_CMD が {sha} の穴を持つ歯の隣）"
 expect = "DEFAULT_CI_CMD の --json の欄の列に event が在り、{sha} の穴は 1 つのまま"
+
+[[contract]]
+id = "ao"
+title = "着地列の窓が止めた便・終えた便を追随中に数えない — 追随中の条件に「replay した段が終端でない（Landed / Failed / Stopped でない）」を重ね、窓の (a)(c)・行の字面・rc は不変（§19 約束 2 (b) を閉じる）"
+req = ["FR30", "FR50"]
+section = "47"
+write-set = ["crates/scribe2/src/pipe/queue.rs"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail pipe_window_following_"]
+size = "S"
+done = "(1) Implemented rebase: の後に RunStopped で止めた便と RunDone Landed で終えた便が追随中に数えられず、窓が (a)(c) だけで開く (2) Implemented rebase: のまま終端の記帳が無い便は従来どおり追随中に数える (3) Implemented の detail が rebase: で始まらない便は従来どおり数えない (4) 窓の判定は replay を 1 回だけ読む（(a) の材料の段を (b) が重ねる） (5) e2e の pipe_land_window_ の歯 3 本と queue.rs の既存の in-file の歯が 1 字も変わらず緑"
 
 <!-- contracts:end -->
