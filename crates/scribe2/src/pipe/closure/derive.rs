@@ -19,7 +19,7 @@ use super::names::closed_type;
 use super::{closure, is_ident, is_ident_char, snapshot_name, surface_closure, test_region};
 use super::{texts_of, ClosureError, Source};
 use super::{CRATES_DIR, CRATE_ROOT_STEMS, LIB_FLAG, MOD_STEM, NEXTEST_HEAD, PACKAGE_FLAGS, RS, SRC_DIR, TESTS_DIR, TEST_ATTR};
-use super::{TEST_FLAG, UNREAD_TARGET_FLAGS};
+use super::{TEST_FLAG, UNREAD_ARG_TARGET_FLAGS, UNREAD_BARE_TARGET_FLAGS};
 use std::collections::BTreeSet;
 
 /// 生成する nextest 行の旗（歯が 0 本の行を緑にしない＝契約表の既存の行と同じ形）。
@@ -185,7 +185,8 @@ pub(crate) fn teeth_words(verify: &[String]) -> Vec<&str> {
 /// nextest 行の scope（§28・閉じた 3 値・宣言順 = 旗なし / `--lib` / `--test <name>`）＝その行が走らせる target。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Scope<'l> {
-    /// 旗なし＝その crate の全 file。読めない旗（[`UNREAD_TARGET_FLAGS`]）と旗が 2 つ以上の行もここへ倒す（fail-closed）。
+    /// 旗なし＝その crate の全 file。読めない旗（[`UNREAD_ARG_TARGET_FLAGS`] / [`UNREAD_BARE_TARGET_FLAGS`]）と旗が 2 つ以上の
+    /// 行もここへ倒す（fail-closed）。
     Crate,
     /// `--lib`＝`crates/<crate>/src/` 配下。
     Lib,
@@ -195,7 +196,8 @@ enum Scope<'l> {
 
 /// nextest の行から (crate, filter 語, scope) を読む。書き出しが `cargo nextest run` でない行・filter 語（`-` で
 /// 始まらない末尾の語）の無い行は `None`。crate は `-p` / `--package` の次の語・無ければ core の crate。scope の旗
-/// （`--lib` / `--test <name>`）が丁度 1 つで読めない旗が無い行だけ狭く読み、他は [`Scope::Crate`]。
+/// （`--lib` / `--test <name>`）が丁度 1 つで読めない旗が無い行だけ狭く読み、他は [`Scope::Crate`]。引数を取る旗
+/// （`--test` と [`UNREAD_ARG_TARGET_FLAGS`]）は次の 1 語を消費し（filter 語に数えない）、行末なら `None`。
 fn nextest_filter<'l>(line: &'l str, core_crate: &'l str) -> Option<(&'l str, &'l str, Scope<'l>)> {
     let mut words = line.split_whitespace();
     for head in NEXTEST_HEAD {
@@ -211,7 +213,11 @@ fn nextest_filter<'l>(line: &'l str, core_crate: &'l str) -> Option<(&'l str, &'
             scopes.push(Scope::Lib);
         } else if word == TEST_FLAG {
             scopes.push(Scope::Test(words.next()?));
-        } else if UNREAD_TARGET_FLAGS.contains(&word) {
+        } else if UNREAD_ARG_TARGET_FLAGS.contains(&word) {
+            // 引数を取る読めない旗は次の 1 語を消費する（filter 語に数えない・行末なら読めないと断る＝`--test` と同じ極性）。
+            words.next()?;
+            scopes.push(Scope::Crate);
+        } else if UNREAD_BARE_TARGET_FLAGS.contains(&word) {
             // 読めない旗は「広い側の旗」として数える＝単独でも scope の旗と並んでも Crate へ倒れる。
             scopes.push(Scope::Crate);
         } else if !word.starts_with('-') {
@@ -1009,5 +1015,38 @@ mod tests {
     fn contract_closure_width_zero_and_wide_width_count_newlines() {
         assert_eq!(weighted_lines("abcdefghijklmnopqrstuvwxy\nab\n", 0), 2, "幅 0");
         assert_eq!(weighted_lines("abcdefghijklmnopqrstuvwxy\nab\n", 120), 2, "幅 120");
+    }
+
+    // flip-check: s2-07l.538
+
+    /// 行 ak (a)(b)(d)(e): 引数を取る旗（`--bin` / `--bench` / `--example` / `-E`）は次の 1 語を消費して filter 語に数えず、
+    /// 取らない旗は従来どおり。scope はどちらも `Crate`（scope の旗と並んでも広い側）。
+    #[test]
+    fn contract_derive_target_flag_consumes_its_argument_and_falls_to_crate() {
+        for (line, filter) in [
+            ("cargo nextest run -p x --bin x foo_", "foo_"),
+            ("cargo nextest run -p x --bin x --test face foo_", "foo_"),
+            ("cargo nextest run -p x --bins foo_", "foo_"),
+            ("cargo nextest run -p x -E expr bar_", "bar_"),
+            ("cargo nextest run -p x foo_ --bin x", "foo_"),
+            ("cargo nextest run -p x foo_ --bench b", "foo_"),
+            ("cargo nextest run -p x foo_ --example e", "foo_"),
+            ("cargo nextest run -p x --lib foo_ -E expr", "foo_"),
+        ] {
+            assert_eq!(nextest_filter(line, "core"), Some(("x", filter, super::Scope::Crate)), "{line}");
+        }
+    }
+
+    /// 行 ak (c): 引数を取る旗が行末（次の語が無い）なら読めないと断る（`None`）。引数を取らない旗の後ろの filter 語は残る。
+    #[test]
+    fn contract_derive_target_flag_at_line_end_is_unreadable() {
+        for line in ["cargo nextest run -p x --bin", "cargo nextest run -p x foo_ --bin", "cargo nextest run -p x foo_ -E"] {
+            assert_eq!(nextest_filter(line, "core"), None, "{line}");
+        }
+        assert_eq!(
+            nextest_filter("cargo nextest run -p x foo_ --all-targets", "core"),
+            Some(("x", "foo_", super::Scope::Crate)),
+            "取らない旗は語を消費しない"
+        );
     }
 }

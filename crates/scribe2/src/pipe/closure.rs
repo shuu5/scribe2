@@ -70,8 +70,12 @@ const LIB_FLAG: &str = "--lib";
 /// nextest の行で統合 test の target を選ぶ scope の旗（§28・次の語が target の名・置き場は `tests/<name>.rs` とその配下）。
 const TEST_FLAG: &str = "--test";
 
-/// nextest の行で target を選ぶが scope に読まない旗（§28・在れば旗なしと同じ広い側＝crate 全体へ倒す・fail-closed）。
-const UNREAD_TARGET_FLAGS: &[&str] = &["--bin", "--bins", "--bench", "--benches", "--example", "--examples", "--tests", "--all-targets", "-E"];
+/// nextest の行で target を選ぶが scope に読まない旗のうち引数を取る旗（§28・次の 1 語が旗の引数で filter 語に数えない・
+/// 在れば旗なしと同じ広い側＝crate 全体へ倒す・fail-closed）。取らない旗は [`UNREAD_BARE_TARGET_FLAGS`]。
+const UNREAD_ARG_TARGET_FLAGS: &[&str] = &["--bin", "--bench", "--example", "-E"];
+
+/// nextest の行で target を選ぶが scope に読まない旗のうち引数を取らない旗（§28・crate 全体へ倒す・fail-closed）。
+const UNREAD_BARE_TARGET_FLAGS: &[&str] = &["--bins", "--benches", "--examples", "--tests", "--all-targets"];
 
 /// 歯の印（この行の直下の `fn` が歯・helper の fn は数えない）。
 const TEST_ATTR: &str = "#[test]";
