@@ -29,6 +29,9 @@ pub(super) use args::{broken, flag, int_row, present, refused, state_dir_of};
 // 可視性を上げるだけで本文は不変——2 本目の判定を作らないための再輸出である。
 pub(in crate::pipe) use intake::{crossings, generated, judge, Denial, Material, Materials};
 pub(super) use run::turn_of;
+// 着地列の窓の判定（`fleet::wait` の `Completion::LandWindow` の観測と `pipe land-window` の 1 行が同じ 1 本を読む・
+// 設計 pipeline.md §19）。列の module は `pipe` の外へ見えないので、窓の口だけをここから見せる。
+pub(crate) use super::queue::window_now;
 pub(super) use state::{live, resolve, stage_of};
 use args::{list_row, manifest_of, need, repo_flag, repo_of, REPO_FLAG};
 use resume::{resume, review_then_launch};
@@ -60,8 +63,34 @@ use step::{answer_run, approve_run, gate_run, land_run, retire_run};
 /// `pipe` の使い方。
 pub fn usage() -> String {
     format!(
-        "usage: {NAME} pipe <intake|preflight|spawn|approve|answer|gate|land|retire|run|show|resume|stop|report|dispatch> [--state-dir D] [--repo R（cwd は読まない＝--state-dir の無い周と便の写し面の無い周は要る）] [--rules PATH] [stop: --all|--run ID] [dispatch: (1 周)|ls|first|hold|release BEAD] [run|resume: --drive] [land: --terminal-only] [--runner CMD] [flags]"
+        "usage: {NAME} pipe <intake|preflight|spawn|approve|answer|gate|land|retire|run|show|resume|stop|report|dispatch> [--state-dir D] [--repo R（cwd は読まない＝--state-dir の無い周と便の写し面の無い周は要る）] [--rules PATH] [stop: --all|--run ID] [dispatch: (1 周)|ls|first|hold|release BEAD] [run|resume: --drive] [land: --terminal-only] [--runner CMD] [flags]\nusage: {NAME} pipe land-window [--state-dir D] --repo R [{WINDOW_WAIT_FLAG} N]（pipeline 外の merge の前置: 開けば rc 0 の clear・待ちが切れれば rc 1 の busy）"
     )
+}
+
+/// `pipe land-window` の待ちの上限（秒・無ければ 0＝1 周だけ観測する）。
+const WINDOW_WAIT_FLAG: &str = "--wait-s";
+
+/// `pipe land-window`: 着地列の窓（設計 pipeline.md §19）を唯一の wait で待ち、読み直した窓の 1 行を返す
+/// （開いていれば rc 0 の `clear`・閉じていれば rc 1 の `busy`）。**merge は撃たない**（撃つ側がこの口を前置する）。
+fn land_window(args: &[String]) -> Outcome {
+    let (state_dir, repo) = match (state_dir_of(args), repo_of(args)) {
+        (Ok(state_dir), Ok(repo)) => (state_dir, repo),
+        (Err(reason), _) | (_, Err(reason)) => return refused(reason),
+    };
+    let wait_s = match flag(args, WINDOW_WAIT_FLAG).map(|found| found.map(str::parse::<u64>)) {
+        Ok(None) => 0,
+        Ok(Some(Ok(secs))) => secs,
+        Ok(Some(Err(_))) => return refused(format!("{WINDOW_WAIT_FLAG} が秒の整数でない")),
+        Err(reason) => return refused(reason),
+    };
+    let completion = crate::fleet::Completion::LandWindow { state_dir: state_dir.clone(), repo: repo.clone() };
+    // 待ちの成否でなく**読み直した窓**で答える（解けた直後に閉じた周を clear と言わない・`queue::after_wake` と同じ再評価）。
+    let _ = crate::fleet::wait(completion, std::time::Duration::from_secs(wait_s));
+    let window = window_now(&state_dir, &repo);
+    match window.is_open() {
+        true => Outcome::ok_line(window.line()),
+        false => Outcome { out: vec![window.line()], err: Vec::new(), rc: RC_REFUSED },
+    }
 }
 
 /// **作らない口**の字面（設計 contract-source.md §4「人の関与 0」・AC22・C16）。審査の段を人が飛ばす flag は
@@ -284,6 +313,7 @@ fn subcommand(
         Some("resume") => resume(args, manifest, policy, driven),
         Some("stop") => stop(args, manifest, policy),
         Some("dispatch") => queued(args, manifest, policy),
+        Some("land-window") => land_window(args),
         Some("report") => match state_dir_of(args) {
             Err(reason) => refused(reason),
             Ok(state_dir) => super::report::report(&state_dir),

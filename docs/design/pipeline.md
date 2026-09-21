@@ -328,6 +328,7 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
   5. 新しい subcommand の口 `pipe land-window` を足す。窓が開いていれば rc 0 で `clear` の 1 行、待ちが切れれば rc 1 で列の便を名指した `busy` の 1 行を返す。pipeline の外で merge を撃つ側はこの口を前置して撃てる＝散文の窓判断が器の rc に変わる。
   6. `busy` の行は列の便の名指しの隣に `unpushed=<local main の sha|unreadable|->` を持つ（(c) で閉じた周は sha・読めない周は `unreadable`・(a)(b) だけで閉じた周は `-`）＝どの条件で閉じたかが 1 行で読める（C10）。
   7. verb が 1 つ増えるので usage に 1 行増え、`pipe_external_form` の snapshot がその 1 行だけ動く。
+- 着地の形: variant は `Completion::LandWindow { state_dir, repo }`（`CiResult` と `HostCalm` の間に宣言＝census の「宣言順の末尾に HostCalm」は不変）。判定は `crates/scribe2/src/pipe/queue.rs` の `window_now` の 1 本（列の便は `turn_in` と同じ面〔終端でない ∧ `Gated` を通った ∧ worktree が実在〕で、判定を読めない便も数える＝PASS でないと測れていない便を外さない・C10）で、`queue` は `pipe` の外へ見えないので `crates/scribe2/src/pipe/cli.rs` が `window_now` だけを再輸出し、`is_met(` と `pipe land-window` が同じ 1 本を読む。口の待ちの上限は `--wait-s N`（無ければ 0＝1 周だけ観測）で、待ちの後に窓を読み直した 1 行で答える（`after_wake` と同じ再評価）。行は `land-window=clear[ remote=none]` か `land-window=busy queue=<便,…|-|unreadable> following=<便,…|-|unreadable> unpushed=<sha|unreadable|->[ remote=none]`（local main を読めない周は origin を読まないので `remote=` を載せない）。
 - 触らない: `gh pr merge` 自体（器は merge を撃たない）・列の順序と鍵・`LandTurn` の判定・`turn_in` の本体。
 - 却下: docs-only PR も器が `gh` を撃って merge する（外部 binary を撃つ面が増える）／運用のまま据え置く（規則が散文のまま・N2）。
 

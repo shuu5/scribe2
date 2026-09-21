@@ -3978,3 +3978,66 @@ fn pipe_terminal_land_ci_failure_wins_over_a_still_running_workflow() {
     assert!(!tools.bd_log.exists(), "測れない周も台帳は閉じない");
     clean(&[&repo, &state]);
 }
+
+/// `pipe land-window` を 1 回撃つ（上限は既定の 0 秒＝1 周だけ観測する）。
+fn land_window_once(repo: &Path, state: &Path) -> Output {
+    run_pipe(&["land-window", "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string()])
+}
+
+/// 着地列の窓（設計 pipeline.md §19）: 列が空で origin の無い周は rc 0 の `clear remote=none`・origin が local main を
+/// 含む周は rc 0 の `clear`。窓の口は merge も fetch も撃たない（main と origin の ref は動かない）。
+#[test]
+fn pipe_land_window_clear_when_the_queue_is_empty_and_main_is_pushed() {
+    let (repo, state) = repo_with_state();
+    let out = land_window_once(&repo, &state);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "開いた窓は rc 0: {}", stderr_of(&out));
+    assert_eq!(stdout_of(&out).trim(), "land-window=clear remote=none", "origin の無い周");
+    let main = git(&repo, &["rev-parse", "refs/heads/main"]);
+    git(&repo, &["update-ref", "refs/remotes/origin/main", &main]);
+    let out = land_window_once(&repo, &state);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "push 済みも rc 0: {}", stderr_of(&out));
+    assert_eq!(stdout_of(&out).trim(), "land-window=clear", "origin が local main を含む周");
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), main, "main は動かない");
+    assert_eq!(git(&repo, &["rev-parse", "refs/remotes/origin/main"]), main, "origin の ref は動かない");
+    clean(&[&repo, &state]);
+}
+
+/// 列に PASS の便が居る周は rc 1 の `busy` で列の便を名指す（`unpushed=-`＝(a) で閉じた）。上限を渡しても前の便が
+/// 居るまま待ちが切れれば rc 1。
+#[test]
+fn pipe_land_window_busy_names_the_queued_runs() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let (id_a, id_b) = two_gated_runs(&repo, &state, &marker);
+    let out = land_window_once(&repo, &state);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "閉じた窓は rc 1: {}", stderr_of(&out));
+    assert_eq!(
+        stdout_of(&out).trim(),
+        format!("land-window=busy queue={id_a},{id_b} following=- unpushed=- remote=none"),
+        "列の便を名指す"
+    );
+    let waited = run_pipe(&[
+        "land-window", "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(), "--wait-s", "1",
+    ]);
+    assert_eq!(waited.status.code(), Some(i32::from(RC_REFUSED)), "待ちが切れても rc 1: {}", stderr_of(&waited));
+    clean(&[&repo, &state]);
+}
+
+/// local main に未 push の commit が在る周は rc 1 の `busy` で `unpushed=<local main の sha>`（(c) で閉じた）・local main を
+/// 読めない周は `unpushed=unreadable`。
+#[test]
+fn pipe_land_window_busy_names_the_unpushed_main() {
+    let (repo, state) = repo_with_state();
+    let pushed = git(&repo, &["rev-parse", "refs/heads/main"]);
+    git(&repo, &["update-ref", "refs/remotes/origin/main", &pushed]);
+    git(&repo, &["commit", "-q", "--allow-empty", "-m", "squash"]);
+    let local = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let out = land_window_once(&repo, &state);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "未 push は rc 1: {}", stderr_of(&out));
+    assert_eq!(stdout_of(&out).trim(), format!("land-window=busy queue=- following=- unpushed={local}"));
+    git(&repo, &["branch", "-q", "-m", "main", "trunk"]);
+    let out = land_window_once(&repo, &state);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "local main を読めない周も rc 1: {}", stderr_of(&out));
+    assert_eq!(stdout_of(&out).trim(), "land-window=busy queue=- following=- unpushed=unreadable");
+    clean(&[&repo, &state]);
+}

@@ -86,6 +86,15 @@ pub enum Completion {
         /// 判定を読む 1 行（宣言 `ci-cmd` か既定・`{sha}` の穴を持つ）。
         cmd: String,
     },
+    /// **着地の列の窓が開くこと**（pipeline 外の merge の待ち口・`pipe land-window`・設計 pipeline.md §19）: 列の PASS の便が
+    /// 0 本 ∧ 追随中の便が 0 本 ∧ local main が origin main の祖先（origin の無い周は数えない）。local main を読めない周・
+    /// 置き場を読めない周は満たされない（fail-closed・deadline まで待つ）。判定は [`crate::pipe::cli::window_now`] の 1 本。
+    LandWindow {
+        /// event log の置き場（列と追随中の便は replay から導く）。
+        state_dir: std::path::PathBuf,
+        /// local main と origin main を読む repo（読むだけで fetch しない）。
+        repo: std::path::PathBuf,
+    },
     /// **host が撃つ側へ戻ること**（器の健康の遮断器・[`crate::pipe::health`]・設計 gate-cost.md §32）: 走行可能と
     /// 待ちの数がどちらも「倍率 × 実測の core 数」以下になるか、測れなくなる（測れない周は待たずに撃つ側）。
     HostCalm {
@@ -98,7 +107,7 @@ pub enum Completion {
 
 impl Completion {
     /// 見張る pid。**pid を見張らない variant（[`Self::SlotFree`] / [`Self::LandTurn`] /
-    /// [`Self::AccountFree`] / [`Self::CiResult`] / [`Self::HostCalm`]）は 0**——pid 0 は `/proc/0` を持たない（user の
+    /// [`Self::AccountFree`] / [`Self::CiResult`] / [`Self::LandWindow`] / [`Self::HostCalm`]）は 0**——pid 0 は `/proc/0` を持たない（user の
     /// process に振られない）ので、生きている pid と取り違えない。[`Self::GroupGone`] は group id（= group leader の pid）を返す。
     pub fn pid(&self) -> u32 {
         match *self {
@@ -107,6 +116,7 @@ impl Completion {
             | Self::LandTurn { .. }
             | Self::AccountFree { .. }
             | Self::CiResult { .. }
+            | Self::LandWindow { .. }
             | Self::HostCalm { .. } => 0,
         }
     }
@@ -126,6 +136,7 @@ impl Completion {
             }
             Self::LandTurn { .. } => self.round(None).met,
             Self::CiResult { repo, sha, cmd } => ci_now(repo, sha, cmd).is_some(),
+            Self::LandWindow { state_dir, repo } => crate::pipe::cli::window_now(state_dir, repo).is_open(),
             Self::HostCalm { runnable_per_core, blocked_per_core } => crate::pipe::health::calm_now(
                 crate::pipe::health::PerCore { runnable: *runnable_per_core, blocked: *blocked_per_core },
             ),
@@ -404,6 +415,7 @@ mod tests {
     // flip-check: moved s2-07l.260
     use super::{cli::format_utc, epoch_of, mark_of, pgid_of, reuse, store, wait, BTreeSet, Completion, Glance, Mark, Timeout};
     use crate::fleet::{EventKind, Stage};
+    use crate::pipe::cli::window_now;
     use crate::pipe::fixture::{append_all, event, gated_run, scratch};
     use crate::pipe::verdict_path;
     use std::cell::Cell;
@@ -649,6 +661,7 @@ mod tests {
                 sha: "0".repeat(40),
                 cmd: "true {sha}".to_owned(),
             },
+            Completion::LandWindow { state_dir: std::path::PathBuf::from("state"), repo: std::path::PathBuf::from("repo") },
             Completion::HostCalm { runnable_per_core: 4, blocked_per_core: 1 },
         ];
         let names: Vec<&str> = all
@@ -661,12 +674,13 @@ mod tests {
                 Completion::LandTurn { .. } => "LandTurn",
                 Completion::AccountFree { .. } => "AccountFree",
                 Completion::CiResult { .. } => "CiResult",
+                Completion::LandWindow { .. } => "LandWindow",
                 Completion::HostCalm { .. } => "HostCalm",
             })
             .collect();
         assert_eq!(
             names,
-            ["RunnerExited", "SeatGone", "SlotFree", "GroupGone", "LandTurn", "AccountFree", "CiResult", "HostCalm"],
+            ["RunnerExited", "SeatGone", "SlotFree", "GroupGone", "LandTurn", "AccountFree", "CiResult", "LandWindow", "HostCalm"],
             "宣言順の末尾に HostCalm"
         );
     }
@@ -696,6 +710,126 @@ mod tests {
         ];
         assert!(unwatched.iter().all(|found| found.pid() == 0), "見張らない側に並ぶ: {unwatched:?}");
         assert_ne!(Completion::RunnerExited(7).pid(), 0, "対: pid を見張る側は 0 でない");
+    }
+
+    /// 窓の歯の git を 1 回撃つ（identity は repo の外から渡す＝host の global を読まない）。
+    fn window_git(repo: &Path, args: &[&str]) -> bool {
+        let mut full = vec!["-c", "user.name=t", "-c", "user.email=t@example.invalid"];
+        full.extend_from_slice(args);
+        crate::pipe::git_ok(repo, &full)
+    }
+
+    /// 窓の歯の repo（`branch` に空の commit 1 本・origin の ref は呼び手が付ける）。作れたかを返す。
+    fn window_repo(repo: &Path, branch: &str) -> bool {
+        std::fs::create_dir_all(repo).is_ok()
+            && window_git(repo, &["init", "-q", "-b", branch])
+            && window_git(repo, &["commit", "-q", "--allow-empty", "-m", "seed"])
+    }
+
+    /// 窓の待ち（`wait` の上限 0＝1 周だけ観測する）。
+    fn land_window(state: &Path, repo: &Path) -> Completion {
+        Completion::LandWindow { state_dir: state.to_path_buf(), repo: repo.to_path_buf() }
+    }
+
+    /// (a) 列に PASS の便が居る周は閉じ、`queue=` がその便を名指す。前の便が FAIL に外れた周は開く（`wait` も同じ判定）。
+    #[test]
+    fn fleet_wait_land_window_queue_closes_while_a_pass_run_waits() {
+        let root = scratch("window-queue");
+        let (state, repo) = (root.join("state"), root.join("repo"));
+        assert!(window_repo(&repo, "main"), "repo を作れる");
+        gated_run(&state, &repo, "a-front", "PASS");
+        let busy = window_now(&state, &repo);
+        assert!(!busy.is_open(), "PASS の便が居る");
+        assert_eq!(busy.line(), "land-window=busy queue=a-front following=- unpushed=- remote=none");
+        assert_eq!(wait(land_window(&state, &repo), Duration::ZERO), Err(Timeout), "閉じた窓は上限で Timeout");
+        gated_run(&state, &repo, "a-front", "FAIL");
+        assert_eq!(window_now(&state, &repo).line(), "land-window=clear remote=none", "負例の対: FAIL は列に居ない");
+        assert_eq!(wait(land_window(&state, &repo), Duration::ZERO), Ok(()), "開いた窓は 1 周目で満たされる");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// (b) 最新の `RunStage` が `Implemented` で detail が `rebase:` の便は追随中で閉じる。`rebase:` でない `Implemented`
+    /// は数えない・後に `Landed` が来れば開く。
+    #[test]
+    fn fleet_wait_land_window_following_closes_while_a_run_rebases() {
+        let root = scratch("window-following");
+        let (state, repo) = (root.join("state"), root.join("repo"));
+        assert!(window_repo(&repo, "main"), "repo を作れる");
+        append_all(
+            &state,
+            &[
+                event("f", EventKind::RunStage, Some(Stage::Implemented), None, Some("rebase:aaa..bbb")),
+                event("g", EventKind::RunStage, Some(Stage::Implemented), None, Some("implemented")),
+            ],
+        );
+        let busy = window_now(&state, &repo);
+        assert!(!busy.is_open(), "追随中の便が居る");
+        assert_eq!(busy.line(), "land-window=busy queue=- following=f unpushed=- remote=none");
+        append_all(&state, &[event("f", EventKind::RunStage, Some(Stage::Landed), None, None)]);
+        assert_eq!(window_now(&state, &repo).line(), "land-window=clear remote=none", "Landed の後は追随中でない");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// (c) local main が origin main の祖先でない（未 push の squash が在る）周は閉じ、`unpushed=` が local main の sha。
+    /// origin が追いつけば開く。
+    #[test]
+    fn fleet_wait_land_window_unpushed_closes_until_origin_has_main() {
+        let root = scratch("window-unpushed");
+        let (state, repo) = (root.join("state"), root.join("repo"));
+        assert!(window_repo(&repo, "main"), "repo を作れる");
+        assert!(window_git(&repo, &["update-ref", "refs/remotes/origin/main", "refs/heads/main"]), "origin を付けられる");
+        assert_eq!(window_now(&state, &repo).line(), "land-window=clear", "push 済み");
+        assert!(window_git(&repo, &["commit", "-q", "--allow-empty", "-m", "squash"]), "未 push の squash を積める");
+        let local = crate::pipe::git_line(&repo, &["rev-parse", "refs/heads/main"]).unwrap_or_default();
+        let busy = window_now(&state, &repo);
+        assert!(!busy.is_open(), "未 push の squash が在る");
+        assert_eq!(busy.line(), format!("land-window=busy queue=- following=- unpushed={local}"));
+        assert_eq!(wait(land_window(&state, &repo), Duration::ZERO), Err(Timeout), "wait も閉じた側");
+        assert!(window_git(&repo, &["update-ref", "refs/remotes/origin/main", &local]), "origin が追いつく");
+        assert!(window_now(&state, &repo).is_open(), "負例の対: 祖先なら開く");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 読めない周は閉じる: local main が無い周は **origin が在っても** `unpushed=unreadable`（origin を読まない＝`remote=` を
+    /// 載せない）・repo でない dir も同じ・置き場の log を読めない周は `queue=unreadable`。
+    #[test]
+    fn fleet_wait_land_window_unreadable_main_closes_even_with_origin() {
+        let root = scratch("window-unreadable");
+        let (state, repo) = (root.join("state"), root.join("repo"));
+        assert!(window_repo(&repo, "trunk"), "main の無い repo を作れる");
+        assert!(window_git(&repo, &["update-ref", "refs/remotes/origin/main", "HEAD"]), "origin は在る");
+        let busy = window_now(&state, &repo);
+        assert!(!busy.is_open(), "local main を読めない");
+        assert_eq!(busy.line(), "land-window=busy queue=- following=- unpushed=unreadable");
+        assert_eq!(window_now(&state, &root.join("absent")).line(), busy.line(), "repo でない dir も同じ");
+        let (broken, good) = (root.join("broken"), root.join("good"));
+        assert!(window_repo(&good, "main"), "main の在る repo を作れる");
+        let _ = std::fs::create_dir_all(store::events_path(&broken));
+        assert_eq!(
+            window_now(&broken, &good).line(),
+            "land-window=busy queue=unreadable following=unreadable unpushed=- remote=none",
+            "log を読めない周は列を 0 本に読み替えない"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// origin の無い周は (c) を数えず（local main に何本積んでも開く）、行に `remote=none` を載せる。(a)(b) は数える。
+    #[test]
+    fn fleet_wait_land_window_remote_none_counts_only_the_queue() {
+        let root = scratch("window-remote-none");
+        let (state, repo) = (root.join("state"), root.join("repo"));
+        assert!(window_repo(&repo, "main"), "repo を作れる");
+        assert!(window_git(&repo, &["commit", "-q", "--allow-empty", "-m", "local"]), "local に積める");
+        let clear = window_now(&state, &repo);
+        assert!(clear.is_open(), "origin が無い周は (c) を数えない");
+        assert_eq!(clear.line(), "land-window=clear remote=none");
+        gated_run(&state, &repo, "a-front", "PASS");
+        assert_eq!(
+            window_now(&state, &repo).line(),
+            "land-window=busy queue=a-front following=- unpushed=- remote=none",
+            "(a) は数える"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// 倍率が十分大きい遮断器の待ちは 1 周目で満たされる（`wait` が上限を待たずに返る＝唯一の待機実装を通る）。

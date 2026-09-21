@@ -4,10 +4,10 @@
 //! `pub use` が元の path のまま外へ見せる。
 
 use super::gate::Verdict;
-use super::land::{verdict_of, Land};
-use super::worktree_path;
+use super::land::{verdict_of, Land, MAIN_REF};
+use super::{git_line, git_ok, worktree_path};
 use crate::fleet::store;
-use crate::fleet::{replay, Completion, Event, Stage, Timeout};
+use crate::fleet::{replay, Completion, Event, EventKind, Stage, Timeout};
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -101,9 +101,13 @@ fn first_gated_at(events: &[Event]) -> BTreeMap<&str, &str> {
 /// 列に入りうる便（[`may_queue`]）だけ読み、worktree の実在は便の写し面の repo から導く——repo を
 /// 読めない便が在る周も `None` へ倒す。
 fn queue_of(state_dir: &Path) -> Option<Vec<Queued>> {
-    let events = store::read_all(state_dir).ok()?;
-    let gated_at = first_gated_at(&events);
-    let state = replay(&events);
+    queue_from(state_dir, &store::read_all(state_dir).ok()?)
+}
+
+/// [`queue_of`] の本体（読んだ log を受ける・窓の判定〔[`window_now`]〕が同じ 1 回の読みから追随中の便も導く）。
+fn queue_from(state_dir: &Path, events: &[Event]) -> Option<Vec<Queued>> {
+    let gated_at = first_gated_at(events);
+    let state = replay(events);
     let mut queue = Vec::new();
     for (id, run) in &state.runs {
         let first = gated_at.get(id.as_str()).map(|ts| (*ts).to_owned());
@@ -121,6 +125,115 @@ fn queue_of(state_dir: &Path) -> Option<Vec<Queued>> {
         });
     }
     Some(queue)
+}
+
+/// 追随の記帳の detail の頭（`RunStage` `Implemented` の `rebase:<old>..<new>`・§18 の追随が書く）。
+const FOLLOWING: &str = "rebase:";
+
+/// origin の main（**読むだけで fetch しない**・撃つ側が fetch する・設計 pipeline.md §19 約束 4）。
+const ORIGIN_MAIN_REF: &str = "refs/remotes/origin/main";
+
+/// 窓の (c) の読み（local main と origin main・設計 pipeline.md §19 約束 3・**閉じた 4 値**）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum MainRead {
+    /// local の `refs/heads/main` を読めない（origin の有無に依らず閉じる・fail-closed）。
+    Unreadable,
+    /// origin の main が無い（(c) を数えない・行に `remote=none` を載せる）。
+    NoRemote,
+    /// local main が origin main の祖先でない＝未 push の squash が在る（値は local main の sha）。
+    Unpushed(String),
+    /// local main が origin main の祖先である。
+    Pushed,
+}
+
+/// 着地列の窓（pipeline 外の merge の待ち口・設計 pipeline.md §19・[`Completion::LandWindow`] の観測もこの 1 本）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Window {
+    /// (a) 列の PASS の便と (b) 追随中の便（**store を読めない周は `None`**＝閉じる側）。
+    runs: Option<(Vec<String>, Vec<String>)>,
+    /// (c) の読み。
+    main: MainRead,
+}
+
+impl Window {
+    /// 窓が開いているか: (a)(b) が 0 本 ∧ (c) が数えない周か祖先の周。
+    pub(crate) fn is_open(&self) -> bool {
+        let quiet = self.runs.as_ref().is_some_and(|(queued, following)| queued.is_empty() && following.is_empty());
+        quiet && matches!(self.main, MainRead::NoRemote | MainRead::Pushed)
+    }
+
+    /// stdout の 1 行（`land-window=clear` か、列の便と `unpushed=<sha|unreadable|->` を名指す `land-window=busy`）。
+    pub(crate) fn line(&self) -> String {
+        let remote = match self.main {
+            MainRead::NoRemote => " remote=none",
+            _ => "",
+        };
+        if self.is_open() {
+            return format!("land-window=clear{remote}");
+        }
+        let names = |found: Option<&Vec<String>>| match found {
+            None => "unreadable".to_owned(),
+            Some(runs) if runs.is_empty() => "-".to_owned(),
+            Some(runs) => runs.join(","),
+        };
+        let unpushed = match &self.main {
+            MainRead::Unpushed(sha) => sha.as_str(),
+            MainRead::Unreadable => "unreadable",
+            MainRead::NoRemote | MainRead::Pushed => "-",
+        };
+        format!(
+            "land-window=busy queue={} following={} unpushed={unpushed}{remote}",
+            names(self.runs.as_ref().map(|(queued, _)| queued)),
+            names(self.runs.as_ref().map(|(_, following)| following)),
+        )
+    }
+}
+
+/// いまの窓（設計 pipeline.md §19 約束 2・3）。列と追随中の便は log の 1 回の読みから導き、git は
+/// **local main を先に**読む（読めない周は origin を読まずに閉じる）。列の便は [`turn_in`] と同じ面（終端でない ∧
+/// `Gated` を通った ∧ worktree が実在）で、判定を読めない便も数える（PASS でないと測れていない便を外さない・C10）。
+pub(crate) fn window_now(state_dir: &Path, repo: &Path) -> Window {
+    let runs = store::read_all(state_dir).ok().and_then(|events| {
+        let queued = queue_from(state_dir, &events)?
+            .into_iter()
+            .filter(|found| {
+                may_queue(found.stage, found.gated_at.is_some())
+                    && found.worktree
+                    && !matches!(found.verdict, Some(Verdict::Fail | Verdict::Inconclusive))
+            })
+            .map(|found| found.run)
+            .collect();
+        Some((queued, following_of(&events)))
+    });
+    Window { runs, main: main_read(repo) }
+}
+
+/// 追随中の便（**pure**）: 最新の `RunStage` が `Implemented` で detail が [`FOLLOWING`] で始まる便（run id の辞書順）。
+fn following_of(events: &[Event]) -> Vec<String> {
+    let mut last: BTreeMap<&str, &Event> = BTreeMap::new();
+    for event in events.iter().filter(|event| event.kind == EventKind::RunStage) {
+        last.insert(event.run.as_str(), event);
+    }
+    last.into_iter()
+        .filter(|(_, event)| {
+            event.stage == Some(Stage::Implemented) && event.detail.as_deref().is_some_and(|detail| detail.starts_with(FOLLOWING))
+        })
+        .map(|(run, _)| run.to_owned())
+        .collect()
+}
+
+/// (c) の読み（git は既存の 2 口 [`git_line`] / [`git_ok`] だけ・fetch しない）。
+fn main_read(repo: &Path) -> MainRead {
+    let Some(local) = git_line(repo, &["rev-parse", "--verify", "--quiet", MAIN_REF]) else {
+        return MainRead::Unreadable;
+    };
+    let Some(origin) = git_line(repo, &["rev-parse", "--verify", "--quiet", ORIGIN_MAIN_REF]) else {
+        return MainRead::NoRemote;
+    };
+    match git_ok(repo, &["merge-base", "--is-ancestor", &local, &origin]) {
+        true => MainRead::Pushed,
+        false => MainRead::Unpushed(local),
+    }
 }
 
 /// land の record と stdout の `order=`（設計 gate-cost.md §6・**閉じた 4 値**）。
