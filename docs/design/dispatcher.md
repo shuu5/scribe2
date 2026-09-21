@@ -227,7 +227,7 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
   3. **本文は 1 行**: `scribe2 pipe: <bead> <run> <段>=<verdict か kind か detail の 1 語> — 次の 1 手は pipe dispatch ls`（(a)）／`scribe2 pipe: idle ready=<候補の本数> launched=0 reason=<先頭の候補の理由>`（(b)）。対話面の作法（次の 1 手が先頭・dialogue-surface.md §2）に合わせて 1 行に閉じ、逐語も path も載せない（PUBLIC 面ではない state dir だが、pane は人が見る）。
   4. **送達は既存の 1 関数**: `deliver_within` を `pipe.stop_grace_ms` と同じ桁の窓で 1 回撃ち、結果を運転手の stdout に `notify=<delivered|refused:<理由>|unconfirmed|no-seat>` の 1 行で残す（C10）。送達の失敗で便の rc は変えない（通知は副作用・便の終端は既に記帳済み）。
   5. **閉じた型の variant を新設の module に書かない**: 行 p の `+` の src は `Stage` / `EventKind` の variant を `match` の腕や `Type::Variant` の字面で名指さない——名指すと他 doc の行の `touches` の閉包（contract-source.md 行 c の `crate::fleet::Stage`）に新設 file が入り、その行の write-set が不完全になって `contracts check` と gate が落ちる（2026-09-21 の便 1 本で実測・finding 1）。終端の 1 語は最後の `RunStage` / `RunDone` の event の `stage` の `as_str` と `detail` の頭の語を**字面で写す**（既存の読み手 `last_stage_detail` の型・段ごとの分岐は持たない）。`Stage` の `as_str` は variant の名そのもの（`Stopped` / `Failed` / `Questioned`・`fleet/mod.rs`）なので、約束 1 の expect の `Stopped` はその字面と一致する。
-  6. **歯の置き場の pin を同じ便で上げる**: `crates/scribe2/tests/e2e/pipe.rs` の `pipe_hermetic_sites_stay_one` は `pipe/` 配下の tracked の file 数と binary を起こす字面の site 数を pin する（9 file・1 site）。新設の歯の file で file 数は 10 になり、site は増やさない（歯は `run_pipe` / `pipe_cmd` の口で起こす）＝pin の file 数を 10 に上げる（`tests/e2e/pipe.rs` は約束 1 の files に在る）。
+  6. **新設の歯の file は `pipe/` の外に置き、宣言 file の diff は `mod` の 1 行だけにする**（flip-check の同梱の条件・2026-09-21 の便 5 周目の gate FAIL で実測）: flip-check は test file を **1 file ずつ単独で** base へ写して撃ち、宣言 file（`mod x;` の 1 行を持つ側）は差分が `mod` 行だけのときに限って本体の file と同梱する（`crates/xtask/src/flipcheck.rs` の `declaration_only` / `plan_of`・歯の外の行だけが動いた file も同梱される）。新設の歯の file を `pipe/` 配下に置くと、`crates/scribe2/tests/e2e/pipe.rs` の `pipe_hermetic_sites_stay_one`（`pipe/` 配下の tracked の file 数 9 と site 数 1 を pin する歯）を同じ file で 9 → 10 に上げざるを得ず、宣言 file が「歯の中の行が動いた file」になって同梱されない＝本体の file は base に宣言が無いまま単独で写され、compile 対象に入らず全 PASS＝`green-on-base file=<本体>` で gate が落ちる（実測: overlay の 1741 本に `pipe_notify_` の歯は 0 本・flip-check の comment の「本体だけを置くと偽 GREEN」の型）。ゆえに歯の file は行 p の約束 1 の `place` の file（`crates/scribe2/tests/e2e/` 直下・`pipe/` の外）に置き、宣言は `crates/scribe2/tests/e2e/main.rs` に `mod` 1 行を足すだけ（同 file の他の行は触らない）。pin は **9 file・1 site のまま**（`pipe/` の外は母集団に入らない）。歯は `crate::pipe` の `pub(super)` の口（`run_pipe` / `pipe_cmd`・`pub(super)` は親＝crate root の全 module から見える）で起こし、`pipe/` 配下の helper（登録 row を書く口等）を使うなら `tests/e2e/pipe.rs` の**歯の外の行**（`mod` の可視性・helper の可視性）だけを動かす（歯の外の行だけなら flip-check が同梱する・歯の中の行を 1 行でも動かすと同梱されない）。
 - 触らない: event の kind（通知は記帳しない・pane の行と stdout の 1 行だけ）・`deliver_within` の中身・登録 row の形・`Landed` / PASS の便（送らない）・席の見張り（Monitor）は席の手順のまま（本行の着地後に止めてよい条件は memo .507 の昇格条件）。
 - 却下: 席の SessionStart / rebrief に終端の一覧を載せる（席の turn が無いと読めない＝同じ穴）／event を足して席が poll する（poll は席の寿命に縛られる・今の見張りと同じ）／全終端を送る（Landed が多く pane が流れる・落ちた便だけが席の手番）。
 
@@ -244,7 +244,10 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
   4. 札 `// flip-check: moved <行 q の bead>` を親の歯の区間の先頭と `+` の file の先頭に対で置く（純移動の機械証明は pipeline.md §5.3）。
   5. 割った後の行数は親が **約 1065**（余地 **約 435**）・`+` の file が **約 370**＝行 o の見積 100 を満たし、size M（300）も受けられる。
   6. `crates/scribe2/tests/e2e/pipe/dispatch.rs` の diff は **0 行**（write-set に在るのは受付が verify の filter の当たる歯の file を要求するためだけ・pipeline.md §43 の `polarity.rs` と同じ型）。
-- 触らない: (1)(2)(3)(5) の群の本体・`WaitReason` / `Turn` / `Candidate` の欄・in-file の歯の名と assert・e2e の歯・`pipe/mod.rs`（`pipe_dispatch_driver_` の歯はそこに在り verify の filter に入れない）。
+- verify の filter が当たる歯の母集団（orchestrator の実測・main 6c0bbc8・verified）:
+  - **lib（verify 1 行目・接頭辞 7 個）**: 親の in-file の歯は **14 本**で、名は次のとおり（宣言順）——pipe_dispatch_drive_advance_is_forward_same_or_backward / pipe_dispatch_drive_hands_off_only_on_forward_and_names_the_reason / pipe_dispatch_drive_is_added_to_every_run_the_queue_starts / pipe_dispatch_drive_ranks_every_stage_from_the_declared_order / pipe_dispatch_drive_tokens_are_the_closed_five / pipe_dispatch_launched_marks_are_cleared_by_run_created_or_release / pipe_dispatch_marks_keep_the_last_one_and_release_removes_it / pipe_dispatch_order_puts_first_before_priority_then_the_issue_number / pipe_dispatch_order_reads_the_issue_number_as_digits_not_text / pipe_dispatch_release_requeues_failed_stopped_and_gated_but_not_landed_or_reviewed / pipe_dispatch_release_requeues_only_when_the_mark_follows_the_last_record_of_the_run / pipe_dispatch_section_key_applies_to_reviewed_only / pipe_dispatch_waiting_gate_admits_only_forward_drivers_and_every_non_driver / pipe_dispatch_wait_reasons_render_the_name_and_the_value。接頭辞ごとの本数は drive 5・launched 1・marks 1・order 2・release 2・section 1・wait 2（wait は末尾の `_` を付けない＝waiting_gate と wait_reasons の 2 本を 1 個で受ける）＝合計 14 で、lib 全体で 7 個の接頭辞に当たる歯も **14 本・全部この file**（母集団は lib の `#[test]` 全数・当たりの file 数 1）。lib で名に pipe_dispatch_ を含む歯は他に 1 本（`crates/scribe2/src/pipe/mod.rs` の pipe_dispatch_driver_hold_is_an_atomic_lock_that_reclaims_only_dead_owners）だけ在り、接頭辞 driver_ は 7 個に無いので当たらない。
+  - **e2e（verify 2 行目・filter pipe_dispatch_）**: 名に pipe_dispatch_ を含む e2e の歯は **51 本・全部 `crates/scribe2/tests/e2e/pipe/dispatch.rs`**（同 file の `#[test]` は 70 本・当たりの file 数 1＝write-set の中）。write-set の外の e2e file（`crates/scribe2/tests/e2e/pipe/stop.rs` 等）に在る driver_ の名は helper で、pipe_dispatch_ を名に含まないので filter に当たらない。
+- 触らない: (1)(2)(3)(5) の群の本体・`WaitReason` / `Turn` / `Candidate` の欄・in-file の歯の名と assert・e2e の歯・**`crates/scribe2/src/pipe/mod.rs`**（src の側の file・e2e に pipe/mod.rs は無い。pipe_dispatch_driver_ の歯はそこに在り、verify の filter はどちらの行も当たらない＝上の母集団のとおり）。
 - 却下: (1) の型の群を移す（`WaitReason` は行 o が variant を足す＝行 o の write-set が 2 file に割れて交差が増える）／(5) の表示の群を移す（80 行で余地が 100 に届かない）／行 o を S より小さく書く（size は S が最小）／割らずに据え置く（行 o が受付で止まったまま）。
 
 <!-- contracts:begin -->
@@ -445,10 +448,10 @@ size = "S"
 of = "p"
 n = 1
 text = "運転手の終端の周で最後の段が Reviewed / Gated の FAIL・INCONCLUSIVE、Failed、Questioned、Stopped のとき、fleet の replay の State.registrations から (Role::Orchestrator, anchor = repo) の最新 row の target へ 1 行を deliver_within で送り、stdout に notify=<delivered|refused:<理由>|unconfirmed|no-seat> を残す（row が無い周は送らず no-seat・便の rc は変えない）"
-files = ["crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/cli.rs", "+crates/scribe2/src/pipe/notify.rs", "crates/scribe2/tests/e2e/pipe.rs", "+crates/scribe2/tests/e2e/pipe/notify.rs"]
+files = ["crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/cli.rs", "+crates/scribe2/src/pipe/notify.rs", "crates/scribe2/tests/e2e/main.rs", "crates/scribe2/tests/e2e/pipe.rs", "+crates/scribe2/tests/e2e/notify.rs"]
 symbols = ["seat::inject::Request"]
 teeth = ["pipe_notify_terminal_failure_reaches_the_registered_seat_pane", "pipe_notify_without_a_registered_seat_reports_no_seat"]
-place = "+crates/scribe2/tests/e2e/pipe/notify.rs"
+place = "+crates/scribe2/tests/e2e/notify.rs"
 fixture = "偽の tmux（send-keys の引数を file に記録する script）を PATH に置き、SeatRegistered の row（role orchestrator・anchor = toy repo・target = 任意の pane 名）を state dir に積んだ上で、live な run に pipe stop --run を撃つ（Stopped は終端の 1 つ）。負の枝は row を積まない"
 expect = "記録に send-keys が 1 回だけ在り payload が bead と run と Stopped を含む 1 行で stdout に notify=delivered、row 無しの周は send-keys 0 回で notify=no-seat"
 
@@ -456,9 +459,9 @@ expect = "記録に send-keys が 1 回だけ在り payload が bead と run と
 of = "p"
 n = 2
 text = "同じ周の列の結果が起こした便 0 ∧ 候補 1 本以上のとき、同じ宛先へ idle の 1 行（ready=<本数> launched=0 reason=<先頭の候補の理由>）を送る（Landed と PASS の終端でも列が idle ならこの 1 行だけ送る）"
-files = ["crates/scribe2/src/pipe/cli.rs", "+crates/scribe2/src/pipe/notify.rs", "+crates/scribe2/tests/e2e/pipe/notify.rs"]
+files = ["crates/scribe2/src/pipe/cli.rs", "+crates/scribe2/src/pipe/notify.rs", "+crates/scribe2/tests/e2e/notify.rs"]
 teeth = ["pipe_notify_idle_round_reports_ready_count_and_top_reason"]
-place = "+crates/scribe2/tests/e2e/pipe/notify.rs"
+place = "+crates/scribe2/tests/e2e/notify.rs"
 fixture = "偽の台帳の ready の bead 1 本を hold にした state dir（起こす 0 ∧ 候補 1）と登録 row と偽の tmux を置き、pipe stop --run の終端を撃つ。負の枝は候補 0 の台帳"
 expect = "idle の 1 行に ready=1 launched=0 reason=hold が在り、候補 0 の周は idle の行を送らない（send-keys は終端の 1 行だけ）"
 
