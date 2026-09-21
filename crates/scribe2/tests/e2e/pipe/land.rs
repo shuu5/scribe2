@@ -1044,18 +1044,22 @@ fn pipe_land_main_measured_is_absent_for_pr_cmd() {
 }
 
 /// land を背景で撃つ（列で待つ歯の材料・stdout / stderr は `wait_with_output` で読む）。
+///
+/// 起動は [`pipe_cmd`]（口 (i)）で組む——道具箱の PATH は撃つ argv の置き場から来る。
+// flip-check: retroactive s2-07l.504
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
 fn land_in_background(repo: &Path, state: &Path, id: &str, rules: &str, lens: &str) -> Child {
-    bin_cmd()
-        .args(["pipe", "land", "--run", id, "--repo", &repo.display().to_string()])
-        .args(["--state-dir", &state.display().to_string(), "--rules", rules, "--lens", lens])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("binary を起動できる")
+    pipe_cmd(&[
+        "land", "--run", id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--rules", rules, "--lens", lens,
+    ])
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .spawn()
+    .expect("binary を起動できる")
 }
 
 /// 同じ base から 3 便を PASS の gate まで通す（Gated の ts 順 a < b < c・3 本目 = `src/c.rs`＝
@@ -2301,14 +2305,15 @@ fn pipe_retire_failed_any_detail_still_refuses_live_runs_and_gated_pass() {
 fn spawned_run(repo: &Path, state: &Path) -> String {
     let design = write_contract(repo, &[], &[]);
     let id = intake(repo, state, &design);
-    let mut spawner = bin_cmd()
-        .args(["pipe", "spawn", "--run", &id, "--repo", &repo.display().to_string()])
-        .args(["--state-dir", &state.display().to_string(), "--runner", "sleep 300"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("binary を起動できる");
+    let mut spawner = pipe_cmd(&[
+        "spawn", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--runner", "sleep 300",
+    ])
+    .stdin(Stdio::null())
+    .stdout(Stdio::null())
+    .stderr(Stdio::null())
+    .spawn()
+    .expect("binary を起動できる");
     let begun = Instant::now();
     while kind_count(state, &id, EventKind::SeatSpawned) < 1 {
         assert!(spawner.try_wait().ok().flatten().is_none(), "spawn が席を立てる前に終わった");

@@ -1222,43 +1222,16 @@ const SCOPE_RECORDS: &str = "scope-args";
 /// 偽 `systemd-run`（と偽 `systemctl`）を置く dir 名。
 const SYSTEMD_BIN: &str = "systemd-bin";
 
-/// PATH の先頭に置く偽 `systemd-run`（返すのは PATH の値）。
+/// PATH の先頭に置く偽 `systemd-run`（返すのは PATH の値・**明示の口**なので本行は口を変えない）。
 ///
-/// argv を写してから `--` の後ろを exec する＝**包みの中身は実際に撃たれる**。
-///
-/// 記録は **`<unit>.args` の 1 起動 1 file** である。1 file へ追記する形は、probe の記録や
-/// 別の行の記録まで同じ母集団に入り、`contains` の assert が**撃っていない起動の引数**で
-/// 充足する（run 1 の実測: `limit_of` を常に `PerJob` にする変異で 21/21 が緑だった）。
-///
-/// **同じ名の 2 本目は実 systemd と同じ字面で断る**（`s2-07l.234`・.208 run 3 の stderr 逐語）——
-/// 記録を上書きする形だと、同じ process が同名を 2 度撃つ周が歯に見えない。
-#[expect(
-    clippy::expect_used,
-    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
-)]
+/// 本体は `crate::write_systemd_run_stub` の 1 つの生成関数から出る（設計 gate-cost.md §30 約束 3）——
+/// argv を写してから `--` の後ろを exec し、記録は **`<unit>.args` の 1 起動 1 file**、同じ名の 2 本目は
+/// 実 systemd と同じ字面で断る。記録の dir 名（[`SCOPE_RECORDS`]）と [`scope_record`] の読みは不変で、
+/// 既存の歯の母集団は動かない。
+// flip-check: retroactive s2-07l.504
 fn systemd_stub(state: &Path) -> String {
-    use std::os::unix::fs::PermissionsExt;
     let bin_dir = state.join(SYSTEMD_BIN);
-    let records = state.join(SCOPE_RECORDS);
-    fs::create_dir_all(&bin_dir).expect("stub の dir を作れる");
-    fs::create_dir_all(&records).expect("記録の dir を作れる");
-    let shim = bin_dir.join("systemd-run");
-    let script = format!(
-        "#!/bin/sh\n\
-         __unit=no-unit\n\
-         for __a in \"$@\"; do case \"$__a\" in --unit=*) __unit=${{__a#--unit=}};; esac; done\n\
-         if [ -e '{0}'/\"$__unit\".args ]; then\n\
-         printf 'Failed to start transient scope unit: Unit %s.scope was already loaded or has a fragment file.\\n' \"$__unit\" >&2\n\
-         exit 1\n\
-         fi\n\
-         printf '%s\\n' \"$@\" > '{0}'/\"$__unit\".args\n\
-         while [ $# -gt 0 ] && [ \"$1\" != \"--\" ]; do shift; done\n\
-         shift\n\
-         exec \"$@\"\n",
-        records.display()
-    );
-    fs::write(&shim, script).expect("stub を書ける");
-    fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).expect("stub に実行権を付ける");
+    crate::write_systemd_run_stub(&bin_dir, &state.join(SCOPE_RECORDS));
     format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap_or_default())
 }
 

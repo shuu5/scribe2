@@ -154,16 +154,16 @@ fn pipe_repo_relative_path_lands_in_the_same_worktree_as_absolute() {
     assert!(show_line(&repo, &state, &abs_id).contains("stage=Landed"), "絶対の周は Landed");
     let parent = repo.parent().map(Path::to_path_buf).unwrap_or_default();
     let leaf = repo.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
-    // cwd が主題なので `bin_cmd` の固定した cwd に自分の `current_dir` を後置する（後の指定が勝つ）。
-    let relative = bin_cmd()
-        .current_dir(&parent)
-        .args([
-            "pipe", "run", "--design", &path, "--bead", "s2-rel",
-            "--repo", &leaf, "--state-dir", &state.display().to_string(),
-            "--rules", &rules, "--runner", TOY_COMMIT, "--lens", &lens,
-        ])
-        .output()
-        .expect("binary を起動できる");
+    // cwd が主題なので `pipe_cmd`（口 (i)）の固定した cwd に自分の `current_dir` を後置する（後の指定が勝つ）。
+    // flip-check: retroactive s2-07l.504
+    let relative = pipe_cmd(&[
+        "run", "--design", &path, "--bead", "s2-rel",
+        "--repo", &leaf, "--state-dir", &state.display().to_string(),
+        "--rules", &rules, "--runner", TOY_COMMIT, "--lens", &lens,
+    ])
+    .current_dir(&parent)
+    .output()
+    .expect("binary を起動できる");
     assert_eq!(relative.status.code(), Some(i32::from(RC_OK)), "相対: {} / {}", stdout_of(&relative), stderr_of(&relative));
     let rel_id = run_id_of(&relative);
     assert!(!rel_id.is_empty(), "run id を出す: {}", stdout_of(&relative));

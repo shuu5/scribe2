@@ -228,17 +228,40 @@ pub(super) fn repo_with_state_configured(state: &Path, config: &[(&str, &str)]) 
     (repo, state.to_path_buf())
 }
 
+/// 撃つ argv の `--state-dir` の値（持たない周は `None`）。
+fn state_dir_of(args: &[&str]) -> Option<PathBuf> {
+    args.windows(2)
+        .find(|pair| pair.first() == Some(&"--state-dir"))
+        .and_then(|pair| pair.get(1))
+        .map(PathBuf::from)
+}
+
+/// `pipe` の起動を組む（**歯が実 binary を撃つ口 (i)**・設計 gate-cost.md §30 約束 2）。
+///
+/// 撃つ argv が `--state-dir` を持つ周は、その置き場の下に道具箱（`crate::toolbox_path`）を置き、
+/// PATH の先頭に積んで撃つ。持たない周は usage の断りか「置き場が紐づいていない」の断りで段に
+/// 届かない（run dir も event も作らない＝scope を 1 本も作れない）ので、host の PATH のまま撃つ。
+///
+/// 起動を返すのは、`Command` を自分で組む直起動の呼び手（背景で起こす便・pane の env を足す周）も
+/// **同じ口を通す**ためである——PATH の組み立てを呼び手ごとに書き直すと、後から書かれた呼出が
+/// 実 `systemd-run` へ戻る。
+// flip-check: retroactive s2-07l.504
+pub(super) fn pipe_cmd(args: &[&str]) -> Command {
+    let mut cmd = bin_cmd();
+    cmd.arg("pipe").args(args);
+    if let Some(state) = state_dir_of(args) {
+        cmd.env("PATH", crate::toolbox_path(&state));
+    }
+    cmd
+}
+
 /// `pipe` を binary で 1 回撃つ。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
 pub(super) fn run_pipe(args: &[&str]) -> Output {
-    bin_cmd()
-        .arg("pipe")
-        .args(args)
-        .output()
-        .expect("binary を起動できる")
+    pipe_cmd(args).output().expect("binary を起動できる")
 }
 
 /// 正しく書けた契約表の行の欄。差し替えたい欄だけ上書きして使う（`owner` / `disposition` / `design` は
@@ -1232,4 +1255,81 @@ fn pipe_hermetic_sites_stay_one() {
         "母集団: file {} 本（base 9）・site {sites}（base {BASE_SITES}）・残るのは bin_cmd の 1 箇所: {tracked:?}",
         tracked.len()
     );
+}
+
+// ───── e2e の歯の道具箱（設計 gate-cost.md §30・行 v・`s2-07l.504`・接頭辞 `e2e_toolbox_`） ─────
+
+/// (a) 約束 1 と 2(i): [`run_pipe`] で toy repo の gate を 1 本撃つと、**道具箱の記録 dir** に共通 verify の
+/// scope の記録が在り、その引数に `--scope` と `MemoryMax=` が在る。
+///
+/// 母集団は記録 dir の全件（`crate::toolbox_record` が「ちょうど 1 件」を要求する）——件数を確かめずに
+/// `contains` すると、probe や別の段の起動の引数で assert が充足する。
+#[test]
+fn e2e_toolbox_run_pipe_confines_the_common_verify_line() {
+    let (repo, state) = repo_with_state();
+    let design = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &design);
+    let marker = state.join("lens-ran");
+    let out = gate_once(&repo, &state, &id, Some(&fake_lens(&marker, &lens_verdict("PASS"))));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "gate は rc 0: {}", stderr_of(&out));
+    let names = crate::toolbox_record_names(&state);
+    let record = crate::toolbox_record(&state, "-common-");
+    assert!(record.lines().any(|line| line == "--scope"), "scope の包みである（母集団 {names:?}）: {record}");
+    assert!(
+        record.lines().any(|line| line.starts_with("MemoryMax=")),
+        "箱の大きさを渡している（母集団 {names:?}）: {record}"
+    );
+    assert_eq!(row_value(&verify_rows(&state, &id), 2, "confined"), "true", "共通 verify は包めた周で撃たれた");
+    clean(&[&repo, &state]);
+}
+
+/// (b) 約束 2(iii): 直起動の 6 か所と同じ形（[`pipe_cmd`] で組んで**子として背景で起こす**便）で撃った周も、
+/// 同じ記録 dir に runner の scope の記録が残る。
+///
+/// 口を `Command` で自分で組む呼び手が PATH を組み直す形だと、この記録が 0 件になる。
+#[test]
+fn e2e_toolbox_background_child_uses_the_same_toolbox() {
+    let (repo, state) = repo_with_state();
+    let design = write_contract(&repo, &[], &[]);
+    let id = intake(&repo, &state, &design);
+    let child = pipe_cmd(&[
+        "spawn", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--runner", TOY_COMMIT,
+    ])
+    .stdin(Stdio::null())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .spawn()
+    .expect("背景で起こせる");
+    let out = child.wait_with_output().expect("背景の便の出力を読める");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "spawn は rc 0: {}", stderr_of(&out));
+    let names = crate::toolbox_record_names(&state);
+    let record = crate::toolbox_record(&state, "-runner-");
+    assert!(record.lines().any(|line| line == "--scope"), "runner も包めた（母集団 {names:?}）: {record}");
+    clean(&[&repo, &state]);
+}
+
+/// (d) 約束 5 の否定の枝: [`lean_path`] の PATH（`systemd-run` の**無い** host）で同じ gate を撃つ周は、
+/// 道具箱の記録が **1 件も増えず**、record は `confined=false` / `reason=no-systemd-run` のままである。
+///
+/// 母集団は撃つ前の記録の名の列（`implemented` が既に何件か作っている）で、**差**で測る。
+#[test]
+fn e2e_toolbox_lean_path_adds_no_record_and_stays_unconfined() {
+    let (repo, state) = repo_with_state();
+    let design = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &design);
+    let before = crate::toolbox_record_names(&state);
+    assert!(!before.is_empty(), "母集団: 道具箱は既に記録を作っている");
+    let marker = state.join("lens-ran");
+    let out = run_pipe_with_path(&lean_path(&state), &[
+        "gate", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(),
+        "--lens", &fake_lens(&marker, &lens_verdict("PASS")),
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "包めない host でも便は流れる: {}", stderr_of(&out));
+    assert_eq!(crate::toolbox_record_names(&state), before, "明示の口は道具箱を通らない（記録は増えない）");
+    let rows = verify_rows(&state, &id);
+    assert_eq!(row_value(&rows, 2, "confined"), "false", "包めていない");
+    assert_eq!(row_value(&rows, 2, "reason"), "no-systemd-run", "理由は閉じた enum の名");
+    clean(&[&repo, &state]);
 }

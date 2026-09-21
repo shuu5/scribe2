@@ -389,39 +389,40 @@ fn pipe_stop_group_legacy_seat_falls_back_to_the_single_pid() {
 
 // ───── stop 起因の終端を oom-kill に誤分類しない（`s2-07l.340`・設計 pipeline.md §23・接頭辞 `pipe_spawn_terminal_reason_`） ─────
 
-/// 偽 `systemd-run` の argv を 1 起動 1 行で写す file 名。
-const CONFINED_CALLS: &str = "systemd-run-calls";
+/// 偽 `systemd-run` の argv を写す記録 dir 名（**1 起動 1 file**）。
+const CONFINED_RECORDS: &str = "confined-scope-args";
 
-/// **包める周に固定する** PATH: 偽 `systemd-run`（argv を写し `--` の後ろを exec する・`tests/e2e/pipe/gate.rs` の
-/// 同型）を [`group_path`] の前に積む。
+/// **包める周に固定する** PATH: 偽 `systemd-run`（本体は `crate::write_systemd_run_stub` の 1 つの生成関数
+/// から出る・設計 gate-cost.md §30 約束 3）を [`group_path`] の前に積む。
 ///
 /// [`group_path`] だけだと包めない host になり、「oom-kill が 0 件」が**包めないことで空虚に充足する**。
 /// 包みの終端行は実 scope の中でしか出ない（偽の包みの中では `/proc/self/cgroup` が一致しない）＝kernel の証拠が
 /// 無い周を作る。
-#[expect(
-    clippy::expect_used,
-    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
-)]
+// flip-check: retroactive s2-07l.504
 fn confined_path(state: &Path) -> String {
-    use std::os::unix::fs::PermissionsExt;
     let bin_dir = state.join("confined-bin");
-    fs::create_dir_all(&bin_dir).expect("stub の dir を作れる");
-    let shim = bin_dir.join("systemd-run");
-    let script = format!(
-        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nwhile [ $# -gt 0 ] && [ \"$1\" != \"--\" ]; do shift; done\nshift\nexec \"$@\"\n",
-        state.join(CONFINED_CALLS).display()
-    );
-    fs::write(&shim, script).expect("stub を書ける");
-    fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).expect("stub に実行権を付ける");
+    crate::write_systemd_run_stub(&bin_dir, &state.join(CONFINED_RECORDS));
     format!("{}:{}", bin_dir.display(), group_path(state))
+}
+
+/// 記録 dir の中で、名に `needle` を含み本文が `--scope` を持つ記録が 1 件以上在るか。
+///
+/// 母集団は記録 dir の全件である（1 file への追記を `contains` で読む形は、撃っていない起動の引数で
+/// 充足する）。dir が無い周＝1 起動も通っていない周は偽である。
+fn confined_scope_seen(state: &Path, needle: &str) -> bool {
+    let dir = state.join(CONFINED_RECORDS);
+    fs::read_dir(&dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|entry| entry.file_name().to_string_lossy().contains(needle))
+        .filter_map(|entry| fs::read_to_string(entry.path()).ok())
+        .any(|body| body.lines().any(|line| line == "--scope"))
 }
 
 /// runner の起動が偽 `systemd-run` を通った（包めた）か。
 fn runner_was_confined(state: &Path) -> bool {
-    fs::read_to_string(state.join(CONFINED_CALLS))
-        .unwrap_or_default()
-        .lines()
-        .any(|line| line.contains("--scope") && line.contains("-runner-"))
+    confined_scope_seen(state, "-runner-")
 }
 
 /// `fleet record` を 1 回撃つ（rc 0 を assert・stop.rs の既存の 4 か所と同じ形）。
@@ -542,10 +543,7 @@ fn pipe_spawn_terminal_reason_mark_keeps_the_conflict_readable() {
 
 /// 審査の lens の起動が偽 `systemd-run` を通った（包めた）か（[`runner_was_confined`] の審査の側）。
 fn lens_was_confined(state: &Path) -> bool {
-    fs::read_to_string(state.join(CONFINED_CALLS))
-        .unwrap_or_default()
-        .lines()
-        .any(|line| line.contains("--scope") && line.contains("-review-"))
+    confined_scope_seen(state, "-review-")
 }
 
 /// 歯 (2) の 5 形のうち「scope の中で死んだ」: **包める周**（[`confined_path`]）で審査の lens が自分を signal で殺すと、

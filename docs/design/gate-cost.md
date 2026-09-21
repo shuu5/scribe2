@@ -426,6 +426,14 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
   - **歯の同時本数を絞って実物のまま使う**（nextest の test-group）: host 全体の同時 gate 本数は器が知らない（行 b は tmux の歯を絞る別の面）。1 本の gate の中で絞っても 6 本同時の周は同じ積になる。scope の rate を歯から**消す**ほうが強い。
   - **全部を包めない host にする**（PATH から systemd-run を外す＝`lean_path(` に揃える）: 包めた周の経路（箱の引数・包みの終端行・終端の片付け）が歯から丸ごと消え、CI でも開発 host でも包みの経路が測られなくなる。
 
+### 30.1 errata（現物との差・`s2-07l.504.1`・規範は上の §30 のまま）
+
+- **道具箱の置き場の leaf 名**: 偽 binary は `<置き場>/toolbox-bin`・argv の記録は `<置き場>/toolbox-scope-args` である。明示の口（`systemd_stub(`）の `systemd-bin` / `scope-args` と**名を分ける**——同じ名に重ねると、明示の口で撃つ歯の母集団（`scope_record(` の「ちょうど 1 件」）に既定の口の起動まで混ざり、既存の assert が動く。
+- **(ii) の置き場は plugin の root ではない**: runner の口は root の配下の dir を 1 つずつ `--plugin-dir` へ渡す（設計 pipeline.md §6）ので、root に道具箱を置くと dir 2 本が plugin に化け、「配下の dir を名前順に渡す」歯と「配下 0 の root は rc 2」の歯が両方落ちる。ゆえに (ii) は **dir を引数で受ける**形にし、runner の呼出は呼び手が既に持つ worktree を、lens の呼出は契約の置き場を渡す。約束 2(ii) の「呼び手が既に持つ fixture の dir」はこの 2 つである。
+- **(iii) の 6 か所が通る形**: 起動を返す口を 2 つ置いた——`pipe_cmd(`（口 (i)・撃つ argv の `--state-dir` の値から）と `bin_cmd_with_toolbox(`（口 (ii)・引数の dir から）。背景で起こす便・pane の env を足す周・cwd を後置する周は、この起動に `Stdio` や `env` を足して使う。
+- **偽 `systemctl` の `kill` の字面**: 実 systemctl の `Failed to kill unit %s: Unit %s not loaded.` を argv の 4 語目（`<unit>.scope`）で埋める。読み手が見るのは `not loaded` の字面だけ（`Released::Gone`・§4.4）である。
+- **歯の本数の実測**: `cargo nextest run -p scribe2 --test e2e` は 986 本 → **990 本**（増えたのは `e2e_toolbox_` の (a)〜(d) の 4 本だけ・既存の歯の総数と assert は不変）。
+
 ## 31. 受付に CPU の次元を足す — 枠を memory の 2 項と core の 1 項の min にし、job ごとの thread は器が決めて穴で行へ渡す（契約表の行 w・`s2-07l.504`）
 
 やさしく言うと: いままで「空いている memory」だけを見て変異検査を何本走らせるか決めていた。core の数も見て、host 全体で同時に走る test の thread が core を超えるところで止める。混んでいて 1 本に落としたときは、その 1 本が core を全部使わないよう thread も 1 にする。

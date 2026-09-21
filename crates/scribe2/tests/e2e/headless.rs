@@ -76,17 +76,29 @@ const INHERITED_AGENT_VIEW: &str = "inherited-from-parent";
 /// `--pane` でこの席の打刻へ書く（他 process の打刻の混入・設計 seat-roles.md §4）。
 const PARENT_PANE: &str = "%99";
 
+/// binary の起動を組む（**歯が実 binary を撃つ口 (ii)**・設計 gate-cost.md §30 約束 2）。
+///
+/// 道具箱（偽 `systemd-run` と偽 `systemctl`）は**呼び手が既に持つ fixture の dir** `place` の下に置き、
+/// PATH の先頭に積む。`place` に plugin の root を渡さない——root の配下の dir は `--plugin-dir` として
+/// 1 つずつ claude へ渡るので、道具箱の dir が plugin に化ける（設計 §30.1 の errata）。
+// flip-check: retroactive s2-07l.504
+fn bin_cmd_with_toolbox(place: &Path) -> Command {
+    let mut cmd = Command::new(bin());
+    cmd.env("PATH", crate::toolbox_path(place))
+        .env("CLAUDE_CODE_DISABLE_AGENT_VIEW", INHERITED_AGENT_VIEW)
+        .env("TMUX_PANE", PARENT_PANE);
+    cmd
+}
+
 /// binary を 1 回撃つ。stdin には `input` を流す（親の agent view の env は [`INHERITED_AGENT_VIEW`]・
-/// 親の pane は [`PARENT_PANE`]）。
+/// 親の pane は [`PARENT_PANE`]・道具箱の置き場は `place`）。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn run_bin(args: &[&str], input: &[u8]) -> Output {
-    let mut child = Command::new(bin())
+fn run_bin(place: &Path, args: &[&str], input: &[u8]) -> Output {
+    let mut child = bin_cmd_with_toolbox(place)
         .args(args)
-        .env("CLAUDE_CODE_DISABLE_AGENT_VIEW", INHERITED_AGENT_VIEW)
-        .env("TMUX_PANE", PARENT_PANE)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -250,6 +262,7 @@ fn run_lens(contract: &Path, cap: u64, mode: &str, claude: &Path, diff: &[u8]) -
     let dir = contract.parent().unwrap_or(Path::new("."));
     let rules = rules_with_cap(dir, cap);
     run_bin(
+        dir,
         &[
             "lens",
             "--contract", &contract.display().to_string(),
@@ -320,10 +333,12 @@ fn run_runner(call: &RunnerCall<'_>, input: &[u8]) -> Output {
 }
 
 /// runner を 1 回撃つ（plugin root を名指す形・root の中身は呼び手が作る）。
+///
+/// 道具箱の置き場は **worktree**（plugin root ではない・設計 gate-cost.md §30.1）。
 fn run_runner_in(call: &RunnerCall<'_>, root: &Path, input: &[u8]) -> Output {
     let args = runner_args(call, root);
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    run_bin(&refs, input)
+    run_bin(call.worktree, &refs, input)
 }
 
 /// runner を `--rules` の manifest つきで 1 回撃つ（plugin root = [`RunnerCall::dir`]・model の行の歯）。
@@ -332,7 +347,7 @@ fn run_runner_with_rules(call: &RunnerCall<'_>, rules: &Path, input: &[u8]) -> O
     let mut args = runner_args(call, call.dir);
     args.extend(["--rules".to_owned(), rules.display().to_string()]);
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    run_bin(&refs, input)
+    run_bin(call.worktree, &refs, input)
 }
 
 /// runner の argv（plugin root を名指す形）。
@@ -552,9 +567,9 @@ fn lens_args(contract: &Path, worktree: &Path, extra: &[&str], claude: &Path) ->
 }
 
 /// [`run_bin`] を `Vec<String>` の引数で撃つ。
-fn run_bin_owned(args: &[String], input: &[u8]) -> Output {
+fn run_bin_owned(place: &Path, args: &[String], input: &[u8]) -> Output {
     let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
-    run_bin(&borrowed, input)
+    run_bin(place, &borrowed, input)
 }
 
 /// cap は **rules 行 `gate.token_cap` からだけ**読む（`s2-07l.272`・憲法 C1・FR17）。`--cap` を渡さず
@@ -568,7 +583,7 @@ fn headless_lens_reads_cap_from_rules_row() {
     let diff = vec![b'z'; 11];
     // cap 10 byte・diff 11 byte → 超過。claude を呼ばず INCONCLUSIVE。
     let small = rules_with_cap(&dir, 10);
-    let out = run_bin_owned(&lens_args(&contract, &dir, &["--rules", &small.display().to_string()], &claude), &diff);
+    let out = run_bin_owned(&dir, &lens_args(&contract, &dir, &["--rules", &small.display().to_string()], &claude), &diff);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
     assert_eq!(
         stdout_of(&out).trim(),
@@ -578,7 +593,7 @@ fn headless_lens_reads_cap_from_rules_row() {
     assert!(!dir.join("called").exists(), "cap を超えたので claude を 1 度も起動しない");
     // **同じ diff・manifest の値だけ 100 byte へ** → 内側。claude が 1 回呼ばれる＝値は manifest から来ている。
     let wide = rules_with_cap(&dir, 100);
-    let out = run_bin_owned(&lens_args(&contract, &dir, &["--rules", &wide.display().to_string()], &claude), &diff);
+    let out = run_bin_owned(&dir, &lens_args(&contract, &dir, &["--rules", &wide.display().to_string()], &claude), &diff);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
     assert!(dir.join("called").exists(), "manifest の cap の内側なので claude を呼ぶ");
     assert_eq!(
@@ -591,7 +606,7 @@ fn headless_lens_reads_cap_from_rules_row() {
     // **`--rules` が無い周は埋め込みの manifest**（`pipe::cli` と同じ規約）。埋め込みの cap は 11 byte より
     // 大きいので claude を呼ぶ＝「`--rules` 無しは cap 0」へ倒す変異を落とす。
     fs::remove_file(dir.join("called")).expect("前の周の印を消せる");
-    let out = run_bin_owned(&lens_args(&contract, &dir, &[], &claude), &diff);
+    let out = run_bin_owned(&dir, &lens_args(&contract, &dir, &[], &claude), &diff);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
     assert!(dir.join("called").exists(), "埋め込みの cap の内側なので claude を呼ぶ");
     clean(&[&dir]);
@@ -606,6 +621,7 @@ fn headless_lens_refuses_cap_flag() {
     let contract = contract_in(&dir);
     let rules = rules_with_cap(&dir, 4096);
     let out = run_bin_owned(
+        &dir,
         &lens_args(&contract, &dir, &["--rules", &rules.display().to_string(), "--cap", "1"], &claude),
         b"--- a\n+++ b\n",
     );
@@ -650,6 +666,7 @@ fn headless_lens_refuses_unreadable_cap_row() {
         (&missing, "rules を読めない"),
     ] {
         let out = run_bin_owned(
+            &dir,
             &lens_args(&contract, &dir, &["--rules", &rules.display().to_string()], &claude),
             b"--- a\n+++ b\n",
         );
@@ -722,13 +739,13 @@ fn headless_lens_passes_model_from_rules_row() {
     let contract = contract_in(&dir);
     for (value, want) in [("opus", "opus"), ("haiku", "haiku"), ("Sonnet", "sonnet")] {
         let rules = rules_with_rows(&dir, &format!("rules-model-{value}.toml"), &[cap_row(4096), model_row(value), effort_row(RUNNER_EFFORT)]);
-        let out = run_bin_owned(&lens_args(&contract, &dir, &["--rules", &rules.display().to_string()], &claude), b"--- a\n+++ b\n");
+        let out = run_bin_owned(&dir, &lens_args(&contract, &dir, &["--rules", &rules.display().to_string()], &claude), b"--- a\n+++ b\n");
         assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{value}: {}", stderr_of(&out));
         assert_eq!(stdout_of(&out).trim(), r#"{"verdict":"PASS","evidence":"model の歯"}"#, "{value}: 判定は claude の行");
         assert_eq!(model_arg(&dir), Some(want.to_owned()), "{value}: 行の値を CLI の別名で渡す: {}", slurp(&dir.join("args")));
         fs::remove_file(dir.join("args")).expect("前の周の写しを消せる");
     }
-    let out = run_bin_owned(&lens_args(&contract, &dir, &[], &claude), b"--- a\n+++ b\n");
+    let out = run_bin_owned(&dir, &lens_args(&contract, &dir, &[], &claude), b"--- a\n+++ b\n");
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
     assert_eq!(model_arg(&dir), Some(RUNNER_MODEL.to_owned()), "埋め込みの行: {}", slurp(&dir.join("args")));
     clean(&[&dir]);
@@ -775,7 +792,7 @@ fn headless_runner_refuses_when_model_row_is_missing() {
     let mut args = runner_args(&call, &dir);
     args.push("--rules".to_owned());
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    let out = run_bin(&refs, b"goal = \"x\"\n");
+    let out = run_bin(&worktree, &refs, b"goal = \"x\"\n");
     assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "値欠け: {}", stderr_of(&out));
     assert!(stderr_of(&out).contains("--rules に値が無い"), "{}", stderr_of(&out));
     assert!(stderr_of(&out).contains("[--rules PATH]"), "usage は --rules を載せる: {}", stderr_of(&out));
@@ -798,7 +815,7 @@ fn headless_lens_refuses_when_model_row_is_missing() {
         (&unknown, "runner.model の値 Opus 5 は未知の model"),
         (&both_missing, "gate.token_cap が無い"),
     ] {
-        let out = run_bin_owned(&lens_args(&contract, &dir, &["--rules", &rules.display().to_string()], &claude), b"--- a\n+++ b\n");
+        let out = run_bin_owned(&dir, &lens_args(&contract, &dir, &["--rules", &rules.display().to_string()], &claude), b"--- a\n+++ b\n");
         assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "{want}: rc 2 / {}", stderr_of(&out));
         assert!(!dir.join("called").exists(), "{want}: claude を 1 度も起動しない");
         let err = stderr_of(&out);
@@ -850,13 +867,13 @@ fn headless_lens_passes_effort_from_rules_row() {
     let contract = contract_in(&dir);
     for value in ["high", "medium", "xhigh"] {
         let rules = rules_with_rows(&dir, &format!("rules-effort-{value}.toml"), &[cap_row(4096), model_row(RUNNER_MODEL), effort_row(value)]);
-        let out = run_bin_owned(&lens_args(&contract, &dir, &["--rules", &rules.display().to_string()], &claude), b"--- a\n+++ b\n");
+        let out = run_bin_owned(&dir, &lens_args(&contract, &dir, &["--rules", &rules.display().to_string()], &claude), b"--- a\n+++ b\n");
         assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{value}: {}", stderr_of(&out));
         assert_eq!(stdout_of(&out).trim(), r#"{"verdict":"PASS","evidence":"effort の歯"}"#, "{value}: 判定は claude の行");
         assert_eq!(effort_arg(&dir), Some(value.to_owned()), "{value}: 行の値を渡す: {}", slurp(&dir.join("args")));
         fs::remove_file(dir.join("args")).expect("前の周の写しを消せる");
     }
-    let out = run_bin_owned(&lens_args(&contract, &dir, &[], &claude), b"--- a\n+++ b\n");
+    let out = run_bin_owned(&dir, &lens_args(&contract, &dir, &[], &claude), b"--- a\n+++ b\n");
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
     assert_eq!(effort_arg(&dir), Some(RUNNER_EFFORT.to_owned()), "埋め込みの行: {}", slurp(&dir.join("args")));
     clean(&[&dir]);
@@ -938,7 +955,7 @@ fn headless_effort_row_refuses_unknown_value() {
     let contract = contract_in(&dir);
     let lens_claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"呼ばれてはならない\"}\n", false, 0);
     let rules = rules_with_rows(&dir, "lens-bad-effort.toml", &[cap_row(4096), model_row(RUNNER_MODEL), effort_row("max")]);
-    let out = run_bin_owned(&lens_args(&contract, &dir, &["--rules", &rules.display().to_string()], &lens_claude), b"--- a\n+++ b\n");
+    let out = run_bin_owned(&dir, &lens_args(&contract, &dir, &["--rules", &rules.display().to_string()], &lens_claude), b"--- a\n+++ b\n");
     assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "lens: rc 2 / {}", stderr_of(&out));
     assert!(!dir.join("called").exists(), "lens: claude を 1 度も起動しない");
     assert!(stderr_of(&out).contains("lens: runner.effort の値 max は未知の effort"), "lens: {}", stderr_of(&out));
@@ -961,6 +978,7 @@ fn headless_lens_extracts_last_json_line() {
     let contract = contract_in(&dir);
     let rules = rules_with_cap(&dir, 4096);
     let out = run_bin(
+        &dir,
         &[
             "lens", "--contract", &contract.display().to_string(),
             "--worktree", &dir.display().to_string(),
@@ -1456,6 +1474,7 @@ fn headless_lens_runs_claude_in_the_given_worktree() {
     let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"ok\"}\n", false, 0);
     let rules = rules_with_cap(&dir, 4096);
     let out = run_bin(
+        &dir,
         &[
             "lens",
             "--contract", &contract.display().to_string(),
@@ -1481,6 +1500,7 @@ fn headless_lens_refuses_without_worktree() {
     let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"呼ばれてはならない\"}\n", false, 0);
     let rules = rules_with_cap(&dir, 4096);
     let out = run_bin(
+        &dir,
         &[
             "lens",
             "--contract", &contract.display().to_string(),
@@ -1505,6 +1525,7 @@ fn headless_lens_refuses_without_contract() {
     let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"呼ばれてはならない\"}\n", false, 0);
     let rules = rules_with_cap(&dir, 4096);
     let out = run_bin(
+        &dir,
         &[
             "lens", "--rules", &rules.display().to_string(), "--permission-mode", "plan",
             "--claude", &claude.display().to_string(),
@@ -1629,6 +1650,7 @@ fn headless_runner_requires_vessel_flag() {
     let vessel = write_vessel_copy(&dir, r#"["cargo", "git"]"#);
     fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
     let out = run_bin(
+        &worktree,
         &[
             "runner",
             "--worktree",
@@ -2436,7 +2458,9 @@ fn headless_runner_does_not_drop_the_prompt_into_the_cwd_for_a_relative_vessel()
     let _ = write_vessel_copy(&dir, r#"["cargo", "git"]"#);
     fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
     plugin_leaf(&dir);
-    let mut child = Command::new(bin())
+    // 起動は [`bin_cmd_with_toolbox`]（口 (ii)）で組む——道具箱は worktree の下（plugin root ではない）。
+    // flip-check: retroactive s2-07l.504
+    let mut child = bin_cmd_with_toolbox(&worktree)
         .args(["runner", "--worktree"])
         .arg(&worktree)
         .arg("--write-set")
@@ -3014,26 +3038,28 @@ const RESULT_RECORD: &str = r#"{"type":"result","subtype":"success","is_error":f
 /// lens の fake が終端に出す verdict。
 const PEAK_VERDICT: &str = r#"{"verdict":"PASS","evidence":"peak の歯"}"#;
 
-/// 偽 `systemd-run`（argv の `--` の後ろをそのまま exec・probe の `sh -c exit 0` も通す）と偽 `systemctl`
-/// （`show` は `show`・`kill` は `kill` の答え・argv は [`PEAK_CALLS`] へ写す）を `dir/shim-bin` に置き、
-/// それを先頭にした PATH を返す。`e2e/pipe/gate.rs` の shim は流用しない（module の可視性を触らない）。
+/// 偽 `systemd-run` の argv を写す記録 dir 名（**1 起動 1 file**）。
+const PEAK_SCOPE_RECORDS: &str = "shim-scope-args";
+
+/// 偽 `systemd-run`（本体は `crate::write_systemd_run_stub` の 1 つの生成関数から出る・設計 gate-cost.md
+/// §30 約束 3）と偽 `systemctl`（`show` は `show`・`kill` は `kill` の答え・argv は [`PEAK_CALLS`] へ写す）を
+/// `dir/shim-bin` に置き、それを先頭にした PATH を返す。
+///
+/// **偽 `systemctl` の答えが歯ごとに変わる形はこの口のまま**である（本行が揃えるのは `systemd-run` の側だけ）。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
 fn peak_shims(dir: &Path, show: &str, kill: &str) -> String {
     let bin_dir = dir.join("shim-bin");
-    fs::create_dir_all(&bin_dir).expect("shim の dir を作れる");
-    let systemd_run = "#!/bin/sh\nwhile [ $# -gt 0 ] && [ \"$1\" != \"--\" ]; do shift; done\nshift\nexec \"$@\"\n";
+    crate::write_systemd_run_stub(&bin_dir, &dir.join(PEAK_SCOPE_RECORDS));
     let systemctl = format!(
         "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\ncase \"$2\" in\nshow) {show};;\nkill) {kill};;\nesac\nexit 1\n",
         dir.join(PEAK_CALLS).display()
     );
-    for (name, script) in [("systemd-run", systemd_run.to_owned()), ("systemctl", systemctl)] {
-        let shim = bin_dir.join(name);
-        fs::write(&shim, script).expect("shim を書ける");
-        fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).expect("shim に実行権を付ける");
-    }
+    let shim = bin_dir.join("systemctl");
+    fs::write(&shim, systemctl).expect("shim を書ける");
+    fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).expect("shim に実行権を付ける");
     format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap_or_default())
 }
 
@@ -3275,6 +3301,31 @@ fn headless_claude_peak_lens_drains_stdout_while_polling() {
     clean(&[&dir, &root]);
 }
 
+// ───── e2e の歯の道具箱（設計 gate-cost.md §30・行 v・`s2-07l.504`・接頭辞 `e2e_toolbox_`） ─────
+
+/// (c) 約束 2(ii): [`run_bin`] で lens を 1 回撃つと、呼び手の fixture の dir の下の道具箱の記録 dir に
+/// **claude の scope の記録**が残り、その引数に `--scope` と `MemoryMax=` が在る。
+///
+/// 母集団は記録 dir の全件（`crate::toolbox_record` が「ちょうど 1 件」を要求する）。lens が claude を
+/// 呼んだことは `called` の印で先に測る（呼んでいない周の「記録が無い」で空虚に充足しない）。
+#[test]
+fn e2e_toolbox_run_bin_confines_the_lens_claude() {
+    let dir = tmp();
+    let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"道具箱の歯\"}\n", false, 0);
+    let contract = contract_in(&dir);
+    let out = run_lens(&contract, 4096, "plan", &claude, b"--- a\n+++ b\n");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "判定は返る: {}", stderr_of(&out));
+    assert!(dir.join("called").exists(), "母集団: lens は claude を呼んだ");
+    let names = crate::toolbox_record_names(&dir);
+    let record = crate::toolbox_record(&dir, "-claude-");
+    assert!(record.lines().any(|line| line == "--scope"), "claude も包めた（母集団 {names:?}）: {record}");
+    assert!(
+        record.lines().any(|line| line.starts_with("MemoryMax=")),
+        "箱の大きさを渡している（母集団 {names:?}）: {record}"
+    );
+    clean(&[&dir]);
+}
+
 // ───── 同名の flag が 2 つ在る argv は claude を起こさずに断る（`s2-07l.411`・設計 account-autonomy.md §16・
 // 接頭辞 `headless_flag_duplicate_`） ─────
 //
@@ -3306,7 +3357,7 @@ fn headless_flag_duplicate_account_dir_refuses_runner_before_claude() {
     let mut args = runner_args(&call, &dir);
     args.push("--account-dir".to_owned());
     args.push(second.display().to_string());
-    let out = run_bin_owned(&args, DUPLICATE_CONTRACT.as_bytes());
+    let out = run_bin_owned(&worktree, &args, DUPLICATE_CONTRACT.as_bytes());
     assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "同名 2 つは rc 1: {}", stderr_of(&out));
     assert!(!dir.join("called").exists(), "claude を 1 度も起動しない");
     let err = stderr_of(&out);
@@ -3329,7 +3380,7 @@ fn headless_flag_duplicate_account_dir_refuses_lens_before_claude() {
     let one = first.display().to_string();
     let two = second.display().to_string();
     let args = lens_args(&contract, &dir, &["--account-dir", &one, "--account-dir", &two], &claude);
-    let out = run_bin_owned(&args, b"--- a\n+++ b\n");
+    let out = run_bin_owned(&dir, &args, b"--- a\n+++ b\n");
     assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "同名 2 つは rc 1: {}", stderr_of(&out));
     assert!(!dir.join("called").exists(), "claude を 1 度も起動しない");
     let err = stderr_of(&out);
@@ -3359,7 +3410,7 @@ fn headless_flag_duplicate_worktree_refuses_runner_and_lens_before_claude() {
     let mut args = runner_args(&call, &dir);
     args.push("--worktree".to_owned());
     args.push(other.display().to_string());
-    let out = run_bin_owned(&args, DUPLICATE_CONTRACT.as_bytes());
+    let out = run_bin_owned(&worktree, &args, DUPLICATE_CONTRACT.as_bytes());
     assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "runner も rc 1: {}", stderr_of(&out));
     assert!(!dir.join("called").exists(), "runner は claude を 1 度も起動しない");
     let err = stderr_of(&out);
@@ -3372,7 +3423,7 @@ fn headless_flag_duplicate_worktree_refuses_runner_and_lens_before_claude() {
     let lens_claude = fake_claude(&lens_dir, "{\"verdict\":\"PASS\",\"evidence\":\"呼ばれてはならない\"}\n", false, 0);
     let second = other.display().to_string();
     let args = lens_args(&contract, &worktree, &["--worktree", &second], &lens_claude);
-    let out = run_bin_owned(&args, b"--- a\n+++ b\n");
+    let out = run_bin_owned(&lens_dir, &args, b"--- a\n+++ b\n");
     assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "lens も rc 1: {}", stderr_of(&out));
     assert!(!lens_dir.join("called").exists(), "lens も claude を 1 度も起動しない");
     let err = stderr_of(&out);

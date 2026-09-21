@@ -46,6 +46,123 @@ pub fn make_tmp_dir() -> Option<PathBuf> {
     None
 }
 
+// ─────────── e2e の歯の道具箱（設計 docs/design/gate-cost.md §30・行 v・`s2-07l.504`） ───────────
+//
+// 歯が toy repo で実 binary を撃つときの PATH の組み立ては**この 1 関数**（[`toolbox_path`]）に寄る。
+// 偽 `systemd-run` と偽 `systemctl` を置いた dir を先頭に積むので、歯の起こす toy の process は
+// 実 systemd の scope を 1 本も作らない——scope は slice 直下の平面にしか作れず、実物を撃つと
+// gate の箱（§4）から構造的に外れたまま user の systemd を詰まらせる（`s2-07l.504` の実測）。
+// 偽にすると toy の process は歯の process の子のまま走る＝gate の箱の中に留まる。
+
+// flip-check: retroactive s2-07l.504
+
+/// 道具箱の偽 binary を置く dir の leaf 名（呼び手の fixture の dir の直下）。
+pub const TOOLBOX_BIN: &str = "toolbox-bin";
+
+/// 道具箱の偽 `systemd-run` が argv を写す記録 dir の leaf 名（**1 起動 1 file**）。
+///
+/// `tests/e2e/pipe/gate.rs` の `SCOPE_RECORDS`（明示の口の記録）とは**別の名**である——同じ置き場に
+/// 重ねると、既存の歯の母集団（`scope_record(` の「ちょうど 1 件」）に道具箱の起動まで混ざる。
+pub const TOOLBOX_RECORDS: &str = "toolbox-scope-args";
+
+/// 道具箱の記録 dir（[`toolbox_path`] が作る・読み手は dir を走査する）。
+pub fn toolbox_records(dir: &Path) -> PathBuf {
+    dir.join(TOOLBOX_RECORDS)
+}
+
+/// 偽 `systemd-run` を `bin_dir` に 1 本書く（**偽の本体の唯一の生成元**・設計 §30 約束 3）。
+///
+/// argv を `<unit>.args` の**1 起動 1 file**で `records` へ写してから `--` の後ろを exec する
+/// ＝包みの中身は実際に撃たれる。1 file へ追記する形にしないのは、probe の記録や別の行の記録まで
+/// 同じ母集団に入り、`contains` の assert が**撃っていない起動の引数**で充足するからである。
+///
+/// **同じ名の 2 本目は実 systemd と同じ字面で断る**（`s2-07l.234`）——記録を上書きする形だと、
+/// 同じ process が同名を 2 度撃つ周が歯に見えない。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+pub fn write_systemd_run_stub(bin_dir: &Path, records: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    fs::create_dir_all(bin_dir).expect("stub の dir を作れる");
+    fs::create_dir_all(records).expect("記録の dir を作れる");
+    let shim = bin_dir.join("systemd-run");
+    let script = format!(
+        "#!/bin/sh\n\
+         __unit=no-unit\n\
+         for __a in \"$@\"; do case \"$__a\" in --unit=*) __unit=${{__a#--unit=}};; esac; done\n\
+         if [ -e '{0}'/\"$__unit\".args ]; then\n\
+         printf 'Failed to start transient scope unit: Unit %s.scope was already loaded or has a fragment file.\\n' \"$__unit\" >&2\n\
+         exit 1\n\
+         fi\n\
+         printf '%s\\n' \"$@\" > '{0}'/\"$__unit\".args\n\
+         while [ $# -gt 0 ] && [ \"$1\" != \"--\" ]; do shift; done\n\
+         shift\n\
+         exec \"$@\"\n",
+        records.display()
+    );
+    fs::write(&shim, script).expect("stub を書ける");
+    fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).expect("stub に実行権を付ける");
+}
+
+/// 道具箱の偽 `systemctl` を `bin_dir` に 1 本書く（設計 §30 約束 4）。
+///
+/// `kill` は「もう無い」の字面（→ `Released::Gone`＝record に `scope=` を書かない）・`show` は空
+/// （→ peak は読まない）を返す。偽が作らなかった unit に実 host が返す答えと同じなので、record の
+/// field は増えも減りもしない。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn write_systemctl_stub(bin_dir: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let shim = bin_dir.join("systemctl");
+    let script = "#!/bin/sh\n\
+                  case \"$2\" in\n\
+                  show) exit 0;;\n\
+                  kill) printf 'Failed to kill unit %s: Unit %s not loaded.\\n' \"$4\" \"$4\" >&2; exit 1;;\n\
+                  esac\n\
+                  exit 1\n";
+    fs::write(&shim, script).expect("stub を書ける");
+    fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).expect("stub に実行権を付ける");
+}
+
+/// 道具箱の記録 dir の entry 名（昇順・dir が無ければ空＝1 件も作っていない）。
+pub fn toolbox_record_names(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(toolbox_records(dir))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+/// `needle` を名に含む道具箱の記録の**ちょうど 1 件**の本文（1 行 1 引数）。
+///
+/// 0 件も 2 件以上も落とすのは、母集団を確かめずに `contains` すると**別の起動の引数**で assert が
+/// 充足するからである（fixture 衝突・`tests/e2e/pipe/gate.rs` の `scope_record(` と同じ形）。
+pub fn toolbox_record(dir: &Path, needle: &str) -> String {
+    let names = toolbox_record_names(dir);
+    let hits: Vec<&String> = names.iter().filter(|name| name.contains(needle)).collect();
+    assert_eq!(hits.len(), 1, "{needle} の記録はちょうど 1 件（母集団 {names:?}）");
+    hits.first()
+        .and_then(|name| fs::read_to_string(toolbox_records(dir).join(name)).ok())
+        .unwrap_or_default()
+}
+
+/// 歯が toy repo で実 binary を撃つときの PATH（設計 §30 約束 1・**3 つの口が全部ここを通る**）。
+///
+/// 道具箱（偽 `systemd-run` と偽 `systemctl`）を `dir` の直下に置き、その dir を**先頭に積んだ**
+/// PATH の値を返す。host の PATH は後ろに残る（git / sh / cargo の解決は不変）。
+pub fn toolbox_path(dir: &Path) -> String {
+    let bin_dir = dir.join(TOOLBOX_BIN);
+    write_systemd_run_stub(&bin_dir, &toolbox_records(dir));
+    write_systemctl_stub(&bin_dir);
+    format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap_or_default())
+}
+
 // ─────────────────── doctor の導入先の行（consumer-sync.md §4・AC31・`s2-07l.303`） ───────────────────
 
 /// 導入先の歯の置き場（tmp の root・state dir・vessel repo とその HEAD・plugin root とその hooks.json の digest）。

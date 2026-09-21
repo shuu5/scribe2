@@ -146,14 +146,14 @@ fn pipe_spawn_substitutes_placeholders_and_adds_no_env() {
 const ADMIN_PANE: &str = "%99";
 
 /// 親の env に `TMUX_PANE` を置いて `pipe` を 1 回撃つ（管理席の shell から撃つ形）。
+///
+/// 起動は [`pipe_cmd`]（口 (i)）で組む——道具箱の PATH は撃つ argv の置き場から来る。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
 fn run_pipe_in_pane(args: &[&str]) -> Output {
-    bin_cmd()
-        .arg("pipe")
-        .args(args)
+    pipe_cmd(args)
         .env("TMUX_PANE", ADMIN_PANE)
         .output()
         .expect("binary を起動できる")
@@ -2172,32 +2172,23 @@ fn pipe_spawn_account_base_with_account_suffix_lands() {
 // ───── 箱の中の死の理由は kernel の証拠で分ける（`s2-07l.340`・設計 pipeline.md §23・接頭辞 `pipe_spawn_terminal_reason_` /
 // `pipe_spawn_reason_vocabulary_`） ─────
 
-/// 偽 `systemd-run` の argv を 1 起動 1 行で写す file 名。
-const TERMINAL_SCOPE_CALLS: &str = "terminal-systemd-run-calls";
+/// 偽 `systemd-run` の argv を写す記録 dir 名（**1 起動 1 file**）。
+const TERMINAL_SCOPE_RECORDS: &str = "terminal-scope-args";
 
-/// **包める周に固定する** PATH（偽 `systemd-run` が argv を写し `--` の後ろを exec する・`gate.rs` の同型）。
-/// 偽の包みの中では `/proc/self/cgroup` が unit の scope と一致しないので、包みの終端行は出ない＝kernel の証拠は
-/// runner が自分で書いた行だけになる。
-#[expect(
-    clippy::expect_used,
-    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
-)]
+/// **包める周に固定する** PATH（偽 `systemd-run` の本体は `crate::write_systemd_run_stub` の 1 つの生成関数
+/// から出る・設計 gate-cost.md §30 約束 3）。偽の包みの中では `/proc/self/cgroup` が unit の scope と一致しない
+/// ので、包みの終端行は出ない＝kernel の証拠は runner が自分で書いた行だけになる。
+// flip-check: retroactive s2-07l.504
 fn terminal_confined_path(state: &Path) -> String {
-    use std::os::unix::fs::PermissionsExt;
     let bin_dir = state.join("terminal-systemd-bin");
-    fs::create_dir_all(&bin_dir).expect("stub の dir を作れる");
-    let shim = bin_dir.join("systemd-run");
-    let script = format!(
-        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nwhile [ $# -gt 0 ] && [ \"$1\" != \"--\" ]; do shift; done\nshift\nexec \"$@\"\n",
-        state.join(TERMINAL_SCOPE_CALLS).display()
-    );
-    fs::write(&shim, script).expect("stub を書ける");
-    fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).expect("stub に実行権を付ける");
+    crate::write_systemd_run_stub(&bin_dir, &state.join(TERMINAL_SCOPE_RECORDS));
     format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap_or_default())
 }
 
 /// 包める PATH で `runner` の便を 1 本 spawn し、（便 id・spawn の出力）を返す。前提として runner が包めた周で
 /// 起きたことを assert する（包めない周の「oom-kill 0 件」で空虚に充足しない）。
+///
+/// 前提の読みは**記録 dir の走査**で、母集団（全件の名）を assert の本文に出す。
 fn spawn_confined(repo: &Path, state: &Path, runner: &str) -> (String, Output) {
     let design = write_contract(repo, &[], &[]);
     let id = intake(repo, state, &design);
@@ -2206,11 +2197,14 @@ fn spawn_confined(repo: &Path, state: &Path, runner: &str) -> (String, Output) {
         &["spawn", "--run", &id, "--repo", &repo.display().to_string(),
           "--state-dir", &state.display().to_string(), "--runner", runner],
     );
-    let calls = fs::read_to_string(state.join(TERMINAL_SCOPE_CALLS)).unwrap_or_default();
-    assert!(
-        calls.lines().any(|line| line.contains("--scope") && line.contains("-runner-")),
-        "前提: runner は包めた周で起きた: {calls:?}"
-    );
+    let records = state.join(TERMINAL_SCOPE_RECORDS);
+    let names = dir_names(&records);
+    let confined = names
+        .iter()
+        .filter(|name| name.contains("-runner-"))
+        .filter_map(|name| fs::read_to_string(records.join(name)).ok())
+        .any(|body| body.lines().any(|line| line == "--scope"));
+    assert!(confined, "前提: runner は包めた周で起きた（母集団 {names:?}）");
     (id, out)
 }
 

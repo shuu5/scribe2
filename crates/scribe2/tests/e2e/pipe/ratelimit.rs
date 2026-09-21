@@ -588,16 +588,17 @@ fn pipe_ratelimit_resume_stop_breaks_the_wait() {
     put_account(&state, "a1", &[windows(100, 10)]);
     put_account(&state, "a2", &[windows(100, 10)]);
     let curl = fake_usage_curl(&state);
-    let mut child = bin_cmd()
-        .args([
-            "pipe", "resume", "--run", &id, "--repo", &repo.display().to_string(),
-            "--state-dir", &state.display().to_string(), "--runner", &runner,
-            "--rules", &rules, "--curl", &curl,
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("resume を背景で起こせる");
+    // 起動は `pipe_cmd`（口 (i)・設計 gate-cost.md §30）で組む——道具箱の PATH は argv の置き場から来る。
+    // flip-check: retroactive s2-07l.504
+    let mut child = pipe_cmd(&[
+        "resume", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--runner", &runner,
+        "--rules", &rules, "--curl", &curl,
+    ])
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .spawn()
+    .expect("resume を背景で起こせる");
     // 計測が終わる（口座 2 つの行が置き場に載る）まで待ってから止める。stop は待ちの前に着いても後に着いても
     // 便を Stopped で断る（以下の assert はどちらの順序でも成り立つ）。
     let deadline = Instant::now() + Duration::from_secs(20);
