@@ -85,12 +85,16 @@ pub(super) fn record_verify(entry: &Gate<'_>, worktree: &Path, base: &str) -> Re
         contract: entry.contract,
         common: frozen.common_verify(),
         detection,
+        host: entry.limits.breaker(),
     };
     let steps = run_checks_admitted(&checks, Some(&admit));
     keep_detection(entry, worktree, &steps)?;
     let path = verify_log_path(entry.state_dir, entry.run);
     let tail_path = path.with_file_name(STDERR_LOG_FILE);
     let mut red = 0;
+    // 遮断器が閉じて撃たなかった最初の行の `n`（設計 gate-cost.md §32 約束 5・検出線の rc 2 と同じ形）。
+    // skip record を挟む周も record の `n` と一致させるため、record 列の側で数える。
+    let mut busy = None;
     // 段①が読めなかった周（rc -1）は**赤に数えない**——record は残す（現物を消さない）が、
     // 判定は「測れなかった」側へ倒す（`s2-07l.65`）。箱ごと OOM で殺された行も同じ極性で
     // ある（rc に依らず「測れなかった」・設計 gate-cost.md §4.2）。
@@ -105,14 +109,19 @@ pub(super) fn record_verify(entry: &Gate<'_>, worktree: &Path, base: &str) -> Re
         .map(|index| index as u64 + 1);
     for record in records_of(&steps, skipped) {
         if let Some(step) = record.step {
-            if step.rc != 0 && !is_unreadable(step) && box_kill(step).is_none() && !detection_unmeasured(step) {
-                red += 1;
+            if step.is_closed() {
+                // 撃っていない行は赤でも診断の対象でもない（record だけ残す）。
+                busy = busy.or(Some(record.n));
+            } else {
+                if step.rc != 0 && !is_unreadable(step) && box_kill(step).is_none() && !detection_unmeasured(step) {
+                    red += 1;
+                }
+                append_diagnosis(&tail_path, entry.policy, record.n, step)?;
             }
-            append_diagnosis(&tail_path, entry.policy, record.n, step)?;
         }
         append_line(&path, &record.body, entry.policy).map_err(|err| err.to_string())?;
     }
-    Ok(Counted { red, unreadable, killed, detection_unmeasured: unmeasured })
+    Ok(Counted { red, unreadable, killed, detection_unmeasured: unmeasured, busy })
 }
 
 /// 周ごとの検出線の写しの置き場（run dir 直下・この下に**周の番号の dir** が並ぶ・設計 gate-cost.md §15 (1)）。
@@ -479,6 +488,10 @@ pub fn step_record(number: u64, step: &Step) -> String {
     if let Some(secs) = step.secs {
         fields.push(("secs", Value::Num(secs)));
     }
+    // 器の健康の遮断器の印（設計 gate-cost.md §32 約束 5 / 7・任意 field＝schema は 1 のまま）。空いていた周は欠く。
+    if let Some(mark) = step.host {
+        fields.push(("host", Value::Str(mark.as_str().to_owned())));
+    }
     json_lite::write_object(&fields)
 }
 
@@ -492,6 +505,8 @@ pub(super) struct Counted {
     pub(super) killed: Option<Reason>,
     /// 検出線が rc 2（測れなかった）で終えた行の `n`（最初の 1 行・在れば）。
     pub(super) detection_unmeasured: Option<u64>,
+    /// 器の健康の遮断器が閉じて撃たなかった行の `n`（最初の 1 行・在れば・設計 gate-cost.md §32 約束 5）。
+    pub(super) busy: Option<u64>,
 }
 
 /// 検出線（`Check::Detection`）の **rc 2 = 測れなかった**か（`s2-07l.331`・設計 pipeline.md §5.3）。

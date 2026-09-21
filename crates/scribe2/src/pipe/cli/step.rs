@@ -39,6 +39,12 @@ const ROW_RESERVE_MEMORY: &str = "host.reserve_memory_mb";
 /// 受付で枠が空くのを待つ上限（秒）を持つ rules 行。
 const ROW_SLOT_WAIT: &str = "gate.slot_wait_s";
 
+/// 器の健康の遮断器の走行可能の core あたりの倍率を持つ rules 行（設計 gate-cost.md §32）。
+const ROW_RUNNABLE_PER_CORE: &str = "host.runnable_per_core";
+
+/// 器の健康の遮断器の待ちの core あたりの倍率を持つ rules 行。
+const ROW_BLOCKED_PER_CORE: &str = "host.blocked_per_core";
+
 /// 追随が衝突した便を起こし直す回数の上限を持つ rules 行。
 const ROW_RETRIES: &str = "pipe.follow_retries";
 
@@ -170,10 +176,10 @@ pub(super) fn answer_run(args: &[String], id: &str, policy: LockPolicy) -> Outco
     })
 }
 
-/// 規則から gate の線（判定の 2 行と受付の 4 行）を読む。**数値を .rs へ焼かない**（憲法 C1 / C5）。
+/// 規則から gate の線（判定の 2 行・受付の 4 行・遮断器の倍率 2 行）を読む。**数値を .rs へ焼かない**（憲法 C1 / C5）。
 ///
-/// 受付の 4 行も `--rules` の manifest から読む（埋め込みから直に読まない）——待ちの上限を
-/// 振る歯が fixture の値を gate へ届ける口はここだけである。
+/// 受付の 4 行と遮断器の 2 行も `--rules` の manifest から読む（埋め込みから直に読まない）——待ちの上限と
+/// 倍率を振る歯が fixture の値を gate へ届ける口はここだけである。
 fn limits_of(manifest: &Manifest) -> Result<Limits, String> {
     Ok(Limits {
         lens_count: int_row(manifest, ROW_LENS)?,
@@ -182,6 +188,8 @@ fn limits_of(manifest: &Manifest) -> Result<Limits, String> {
         job_memory_mb: int_row(manifest, ROW_JOB_MEMORY)?,
         reserve_memory_mb: int_row(manifest, ROW_RESERVE_MEMORY)?,
         slot_wait_s: int_row(manifest, ROW_SLOT_WAIT)?,
+        runnable_per_core: int_row(manifest, ROW_RUNNABLE_PER_CORE)?,
+        blocked_per_core: int_row(manifest, ROW_BLOCKED_PER_CORE)?,
     })
 }
 

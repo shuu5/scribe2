@@ -657,7 +657,8 @@ pub(super) const CI_WAIT_S: u64 = 1;
 pub(super) const LAND_WAIT_S: u64 = 1;
 
 /// tmp manifest の受付の 3 値（rules 行 `gate.job_memory_mb` / `host.reserve_memory_mb` /
-/// `gate.slot_wait_s` の fixture 値）。
+/// `gate.slot_wait_s` の fixture 値）と、同じ待ちの上限を使う器の健康の遮断器の倍率 2 値
+/// （rules 行 `host.runnable_per_core` / `host.blocked_per_core`・設計 gate-cost.md §32）。
 #[derive(Debug, Clone, Copy)]
 pub(super) struct SlotFixture {
     /// job 1 つが要る memory（MiB）。
@@ -666,15 +667,26 @@ pub(super) struct SlotFixture {
     reserve_mb: u64,
     /// 待ちの上限（秒）。
     wait_s: u64,
+    /// 遮断器の走行可能の倍率。
+    runnable_per_core: u64,
+    /// 遮断器の待ちの倍率。
+    blocked_per_core: u64,
 }
 
+/// 遮断器の倍率の既定の fixture 値（**十分大きく取る**＝並列の歯で混んだ host でも遮断器が閉じない・遮断器の歯
+/// だけが [`SlotFixture`] で振る）。
+pub(super) const HEALTH_PER_CORE_OPEN: u64 = 1_000_000;
+
 /// 既定の受付 fixture: 容量の 2 行は埋め込みの値を写し（封じ込めの箱と同じ値で測る）、待ちの
-/// 上限だけを [`SLOT_WAIT_S`] に縮める（枠の空かない host で歯が 900 秒待たない）。
+/// 上限だけを [`SLOT_WAIT_S`] に縮める（枠の空かない host で歯が 900 秒待たない）。遮断器の倍率は
+/// [`HEALTH_PER_CORE_OPEN`]。
 pub(super) fn default_slots() -> SlotFixture {
     SlotFixture {
         job_mb: embedded_int("gate.job_memory_mb"),
         reserve_mb: embedded_int("host.reserve_memory_mb"),
         wait_s: SLOT_WAIT_S,
+        runnable_per_core: HEALTH_PER_CORE_OPEN,
+        blocked_per_core: HEALTH_PER_CORE_OPEN,
     }
 }
 
@@ -737,13 +749,14 @@ pub(super) fn write_rules_capped(dir: &Path, name: &str, fixture: RulesFixture) 
                    [[rule]]\nid = \"runner.denied_commands\"\nkind = \"RunnerDeniedCommands\"\n\
                    value = [\"cargo mutants\", \"git push --force\", \"git push -f\", \"git branch -D\"]\n\
                    enabled = true\nruling = \"t\"\nruled_at = \"d\"\n";
-    // 受付の 4 行: 並列度の上限は埋め込みの値を写し、残る 3 行は [`SlotFixture`] の値。
+    // 受付の 4 行: 並列度の上限は埋め込みの値を写し、残る 3 行は [`SlotFixture`] の値。遮断器の倍率 2 行も
+    // [`SlotFixture`] の値（行の無い manifest では gate / land が線を読めず rc 2 で止まる）。
     // 着地の順番の上限は [`LAND_WAIT_S`]（前の便が列に残る歯で 90 分待たない）。
     // 上限の余地の 6 行（設計 contract-source.md §3）: 上限の 2 行は [`CapFixture`]・size の 3 行と行の数え方の幅は
     // 埋め込みの値。同型の審査 FAIL の停止の回数（`review.same_kind_stop`・contract-source.md §23）も埋め込みの値
     // ＝行の無い manifest では受付が rc 2 で断る（`pipe_intake_repeat_` の歯だけが行を落として測る）。
     let body = format!(
-        "schema = 1\n\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{ceiling}",
+        "schema = 1\n\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{ceiling}",
         row("gate.lens_count", "GateLensCount", lens_count),
         row("gate.token_cap", "GateTokenCap", cap),
         row("fleet.lock_retry_ms", "LockRetryMs", 5000),
@@ -753,6 +766,8 @@ pub(super) fn write_rules_capped(dir: &Path, name: &str, fixture: RulesFixture) 
         row("gate.job_memory_mb", "GateJobMemoryMb", slots.job_mb),
         row("host.reserve_memory_mb", "HostReserveMemoryMb", slots.reserve_mb),
         row("gate.slot_wait_s", "GateSlotWaitS", slots.wait_s),
+        row("host.runnable_per_core", "HostRunnablePerCore", slots.runnable_per_core),
+        row("host.blocked_per_core", "HostBlockedPerCore", slots.blocked_per_core),
         row("pipe.land_wait_s", "PipeLandWaitS", LAND_WAIT_S),
         row("pipe.ci_wait_s", "PipeCiWaitS", CI_WAIT_S),
         row("R-C4-1", "CoreLines", caps.core_lines),

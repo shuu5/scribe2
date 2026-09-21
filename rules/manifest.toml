@@ -340,6 +340,25 @@ enabled = true
 ruling = "user 2026-09-12T12:08Z"
 ruled_at = "2026-09-12"
 
+# 器の健康の遮断器（設計 gate-cost.md §32・契約表の行 x）。閾値は core あたりの倍率 × 実測の core 数で、
+# 超えた周は行を撃つ前に空くまで待つ（上限は gate.slot_wait_s・超えた周は撃たずに INCONCLUSIVE）。
+
+[[rule]]
+id = "host.runnable_per_core"
+kind = "HostRunnablePerCore"
+value = 4
+enabled = true
+ruling = "user 2026-09-20T15:23Z"
+ruled_at = "2026-09-20"
+
+[[rule]]
+id = "host.blocked_per_core"
+kind = "HostBlockedPerCore"
+value = 1
+enabled = true
+ruling = "user 2026-09-20T15:23Z"
+ruled_at = "2026-09-20"
+
 # tmux を立てる歯（e2e の isolated seat）の同時本数（設計 gate-cost.md §3.1・契約表の行 b）。値の写しは nextest の
 # test-group `tmux` の max-threads（.config/nextest.toml）で、xtask check が写しの一致と配線を突合する（C10.3）。
 

@@ -1247,6 +1247,36 @@ fn rules_embedded_manifest_declares_the_gate_cost_rows() {
     }
 }
 
+/// 器の健康の遮断器の倍率 2 行（設計 gate-cost.md §32 約束 2・契約表の行 x）: 埋め込みの manifest が
+/// `host.runnable_per_core` = 4・`host.blocked_per_core` = 1 を**裁定 id `user 2026-09-20T15:23Z`・裁定日 2026-09-20** つきで
+/// 持ち、kind は Int の `HostRunnablePerCore` / `HostBlockedPerCore`。kind の包含で**行と variant を対で足させる**——片方だけの
+/// manifest は parse できず（未知の kind）、片方だけの enum は親 test の `covers_all_kinds` が落とす（行 o と同型）。
+#[test]
+fn rules_embedded_manifest_declares_host_health_per_core_rows_with_the_ruling() {
+    let manifest = Manifest::embedded().unwrap_or_else(|errors| panic!("埋め込み manifest が拒まれた: {errors:?}"));
+    let rows: [(&str, RuleKind, u64); 2] = [
+        ("host.runnable_per_core", RuleKind::HostRunnablePerCore, 4),
+        ("host.blocked_per_core", RuleKind::HostBlockedPerCore, 1),
+    ];
+    for (id, kind, value) in rows {
+        let row = manifest.get(id).unwrap_or_else(|| panic!("{id} の行が在る"));
+        assert_eq!(row.value, RuleValue::Int(value), "{id} の値（user 裁定の倍率）");
+        assert_eq!(row.kind, kind, "{id} の kind");
+        assert_eq!(row.kind.shape(), ValueShape::Int, "{id} の値の形は Int（倍率）");
+        assert!(row.enabled, "{id} は既定で効く");
+        assert_eq!(row.ruling, "user 2026-09-20T15:23Z", "{id} の裁定 id");
+        assert_eq!(row.ruled_at, "2026-09-20", "{id} の裁定日");
+        assert_eq!(RuleKind::parse(kind.as_str()), Some(kind), "{id} の kind を字面から引ける");
+        assert!(ALL.contains(&kind), "{id} の kind は ALL に在る");
+    }
+    let shared = manifest.rows().iter().filter(|row| row.ruling == "user 2026-09-20T15:23Z").count();
+    assert_eq!(shared, 2, "同じ裁定で決めた 2 行だけが裁定 id を持つ（他の行と相乗りしない）");
+    let errors = rejected(&one_row_raw("HostRunnablePerCores", "4")).expect("未知の kind の fixture が受理された");
+    assert!(errors.join("\n").contains("未知である"), "綴り違いの kind は読めない: {errors:?}");
+    let errors = rejected(&one_row(RuleKind::HostBlockedPerCore, "\"one\"")).expect("文字列の値の fixture が受理された");
+    assert!(errors.join("\n").contains("形と合わない"), "形は Int だけ: {errors:?}");
+}
+
 #[test]
 fn rules_embedded_manifest_is_valid_and_covers_all_kinds() {
     let manifest = match Manifest::embedded() {
@@ -1259,7 +1289,7 @@ fn rules_embedded_manifest_is_valid_and_covers_all_kinds() {
     // **tracked な `rules/manifest.toml` の全行が受理される**（`parse` は 1 件でも違反が
     // 在れば `Err` を返すので、ここに届いた時点で全行が必須 key を持つ）。母集団を額面に
     // 出すのは、行が黙って落ちた周を「全部読めた」と読み違えないためである。
-    assert_eq!(manifest.rows().len(), 49, "埋め込み manifest の行数（母集団・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.478` で -1〔役割の行 2 本が 1 本〕・`.479.1` で -7〔席の自律の行〕・`.479.2` で -3〔作業記憶の行 1 本と棚卸しの行 2 本〕・`.382` で +1〔終端の CI の上限〕・`.433` で +2〔役割の既定の model と effort〕・`.407` で +1〔選定の前計測の鮮度〕・`.396` で +1〔同型の審査 FAIL の停止の回数〕）");
+    assert_eq!(manifest.rows().len(), 51, "埋め込み manifest の行数（母集団・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.478` で -1〔役割の行 2 本が 1 本〕・`.479.1` で -7〔席の自律の行〕・`.479.2` で -3〔作業記憶の行 1 本と棚卸しの行 2 本〕・`.382` で +1〔終端の CI の上限〕・`.433` で +2〔役割の既定の model と effort〕・`.407` で +1〔選定の前計測の鮮度〕・`.396` で +1〔同型の審査 FAIL の停止の回数〕・`.504` の行 x で +2〔器の健康の遮断器の倍率〕）");
     for kind in ALL {
         let covered = manifest.rows().iter().any(|row| row.kind == *kind);
         assert!(covered, "{} の行が manifest に無い", kind.as_str());
@@ -1432,7 +1462,7 @@ fn rules_embedded_manifest_declares_one_capability_row_per_role() {
     assert!(ALL.contains(&RuleKind::RoleCapabilities), "ALL に在る（末尾は `.396` の ReviewSameKindStop）");
     assert_eq!(RuleKind::parse("RoleCapabilities"), Some(RuleKind::RoleCapabilities), "kind を字面から引ける");
     let kinds = ALL.len();
-    assert_eq!(kinds, 49, "kind の母集団（`.201` で +1・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.479.2` で -3・`.382` で +1〔終端の CI の上限〕・`.433` で +2〔役割の既定の 2 種〕・`.407` で +1〔選定の前計測の鮮度〕・`.396` で +1〔同型の審査 FAIL の停止の回数〕）");
+    assert_eq!(kinds, 51, "kind の母集団（`.201` で +1・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.479.2` で -3・`.382` で +1〔終端の CI の上限〕・`.433` で +2〔役割の既定の 2 種〕・`.407` で +1〔選定の前計測の鮮度〕・`.396` で +1〔同型の審査 FAIL の停止の回数〕・`.504` の行 x で +2〔器の健康の遮断器の倍率〕）");
 }
 
 /// 禁じる語列の行（`runner.denied_commands`・`RuleKind::RunnerDeniedCommands`・裁定 id `user 2026-09-14`・ADR-0025 §2.1・

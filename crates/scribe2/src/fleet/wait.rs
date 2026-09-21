@@ -86,16 +86,28 @@ pub enum Completion {
         /// 判定を読む 1 行（宣言 `ci-cmd` か既定・`{sha}` の穴を持つ）。
         cmd: String,
     },
+    /// **host が撃つ側へ戻ること**（器の健康の遮断器・[`crate::pipe::health`]・設計 gate-cost.md §32）: 走行可能と
+    /// 待ちの数がどちらも「倍率 × 実測の core 数」以下になるか、測れなくなる（測れない周は待たずに撃つ側）。
+    HostCalm {
+        /// 走行可能の倍率（rules 行 `host.runnable_per_core`）。
+        runnable_per_core: u64,
+        /// 待ちの倍率（rules 行 `host.blocked_per_core`）。
+        blocked_per_core: u64,
+    },
 }
 
 impl Completion {
     /// 見張る pid。**pid を見張らない variant（[`Self::SlotFree`] / [`Self::LandTurn`] /
-    /// [`Self::AccountFree`] / [`Self::CiResult`]）は 0**——pid 0 は `/proc/0` を持たない（user の process に振られない）ので、
-    /// 生きている pid と取り違えない。[`Self::GroupGone`] は group id（= group leader の pid）を返す。
+    /// [`Self::AccountFree`] / [`Self::CiResult`] / [`Self::HostCalm`]）は 0**——pid 0 は `/proc/0` を持たない（user の
+    /// process に振られない）ので、生きている pid と取り違えない。[`Self::GroupGone`] は group id（= group leader の pid）を返す。
     pub fn pid(&self) -> u32 {
         match *self {
             Self::RunnerExited(pid) | Self::SeatGone(pid) | Self::GroupGone(pid) => pid,
-            Self::SlotFree { .. } | Self::LandTurn { .. } | Self::AccountFree { .. } | Self::CiResult { .. } => 0,
+            Self::SlotFree { .. }
+            | Self::LandTurn { .. }
+            | Self::AccountFree { .. }
+            | Self::CiResult { .. }
+            | Self::HostCalm { .. } => 0,
         }
     }
 
@@ -114,6 +126,9 @@ impl Completion {
             }
             Self::LandTurn { .. } => self.round(None).met,
             Self::CiResult { repo, sha, cmd } => ci_now(repo, sha, cmd).is_some(),
+            Self::HostCalm { runnable_per_core, blocked_per_core } => crate::pipe::health::calm_now(
+                crate::pipe::health::PerCore { runnable: *runnable_per_core, blocked: *blocked_per_core },
+            ),
             Self::AccountFree { state_dir, repo, run, expected, labels, model, grouped, .. } => {
                 account_free(state_dir, run, *expected, &RunSelect { repo, labels, model: model.as_deref(), grouped })
             }
@@ -634,6 +649,7 @@ mod tests {
                 sha: "0".repeat(40),
                 cmd: "true {sha}".to_owned(),
             },
+            Completion::HostCalm { runnable_per_core: 4, blocked_per_core: 1 },
         ];
         let names: Vec<&str> = all
             .iter()
@@ -645,12 +661,49 @@ mod tests {
                 Completion::LandTurn { .. } => "LandTurn",
                 Completion::AccountFree { .. } => "AccountFree",
                 Completion::CiResult { .. } => "CiResult",
+                Completion::HostCalm { .. } => "HostCalm",
             })
             .collect();
         assert_eq!(
             names,
-            ["RunnerExited", "SeatGone", "SlotFree", "GroupGone", "LandTurn", "AccountFree", "CiResult"],
-            "宣言順の末尾に CiResult"
+            ["RunnerExited", "SeatGone", "SlotFree", "GroupGone", "LandTurn", "AccountFree", "CiResult", "HostCalm"],
+            "宣言順の末尾に HostCalm"
         );
+    }
+
+    /// 遮断器の待ち（`HostCalm`・設計 gate-cost.md §32 約束 3）は **pid を見張らない側**で `pid()` が 0 を返し、閾値の
+    /// 倍率 2 つを運ぶ。既存の見張らない 4 つ（`SlotFree` / `LandTurn` / `AccountFree` / `CiResult`）と同じ側に並ぶ。
+    #[test]
+    fn fleet_wait_health_variant_watches_no_pid_and_carries_both_multipliers() {
+        let calm = Completion::HostCalm { runnable_per_core: 4, blocked_per_core: 1 };
+        assert_eq!(calm.pid(), 0, "pid を見張らない（0）");
+        let Completion::HostCalm { runnable_per_core, blocked_per_core } = calm else {
+            panic!("HostCalm を組んだ");
+        };
+        assert_eq!((runnable_per_core, blocked_per_core), (4, 1), "倍率 2 つを運ぶ");
+        let unwatched = [
+            Completion::SlotFree {
+                slots_dir: std::path::PathBuf::from("slots"),
+                want: 1,
+                job_mb: 1,
+                reserve_mb: 1,
+                cap: 1,
+                cores: 1,
+            },
+            Completion::LandTurn { state_dir: std::path::PathBuf::from("state"), run: "r".to_owned() },
+            Completion::CiResult { repo: std::path::PathBuf::from("repo"), sha: "0".repeat(40), cmd: "true".to_owned() },
+            Completion::HostCalm { runnable_per_core: 0, blocked_per_core: 0 },
+        ];
+        assert!(unwatched.iter().all(|found| found.pid() == 0), "見張らない側に並ぶ: {unwatched:?}");
+        assert_ne!(Completion::RunnerExited(7).pid(), 0, "対: pid を見張る側は 0 でない");
+    }
+
+    /// 倍率が十分大きい遮断器の待ちは 1 周目で満たされる（`wait` が上限を待たずに返る＝唯一の待機実装を通る）。
+    #[test]
+    fn fleet_wait_health_variant_is_met_on_a_calm_host() {
+        let calm = Completion::HostCalm { runnable_per_core: u64::MAX / 4096, blocked_per_core: u64::MAX / 4096 };
+        assert_eq!(wait(calm, Duration::from_secs(5)), Ok(()), "倍率を十分大きく取れば待たない");
+        let busy = Completion::HostCalm { runnable_per_core: 0, blocked_per_core: 0 };
+        assert_eq!(wait(busy, Duration::from_millis(60)), Err(Timeout), "倍率 0 は走行可能 1（自分）で混み、上限で Timeout");
     }
 }

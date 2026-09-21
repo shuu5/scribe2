@@ -1957,7 +1957,7 @@ fn pipe_slots_wait_ends_early_when_the_blocking_ticket_goes() {
     let path = systemd_stub(&state);
     let marker = state.join("lens-ran");
     let lens = fake_lens(&marker, &lens_verdict("PASS"));
-    let slots = SlotFixture { job_mb: 1, reserve_mb: 0, wait_s: SLOT_WAIT_LONG_S };
+    let slots = SlotFixture { job_mb: 1, reserve_mb: 0, wait_s: SLOT_WAIT_LONG_S, ..default_slots() };
     let rules = write_rules_full(&state, "rules-slot-long.toml", (1, 1_000_000), FOLLOW_RETRIES, slots);
     let design = write_contract(&repo, &[], &[]);
     let id = intake(&repo, &state, &design);
@@ -4215,5 +4215,90 @@ fn pipe_gate_notice_diff_round_names_the_reason() {
     );
     assert!(stderr_log_body(&state, &red).contains("## "), "赤い行の見出しと同居する: {}", stderr_log_body(&state, &red));
     assert_verify_log_is_all_records(&state, &red);
+    clean(&[&repo, &state]);
+}
+
+// ---- 器の健康の遮断器（設計 gate-cost.md §32・契約表の行 x・接頭辞 `pipe_gate_health_`）------------------------
+//
+// `--rules` の fixture で倍率を振る: 倍率 0（＝走行可能 1 でも「混んでいる」）と `gate.slot_wait_s = 1` の便は
+// verify の行を 1 本も撃たずに INCONCLUSIVE、倍率を十分大きく取った便は従来どおり全段を撃つ。呼出回数は
+// `verify-count.sh` の印（[`detection_calls`]）で数える。
+
+/// 遮断器の歯の便を Implemented まで通す（共通 verify と契約 verify は印を 1 行ずつ足す stub）。
+fn health_run() -> (PathBuf, PathBuf, String) {
+    let (repo, state) = repo_with_state();
+    commit_vessel(&repo, VESSEL_ALLOWED, r#"["sh verify-count.sh common"]"#);
+    let design = write_contract(&repo, &["verify"], &[r#"verify = ["sh verify-count.sh contract"]"#]);
+    let id = implemented(&repo, &state, &design);
+    assert!(detection_calls(&repo).is_empty(), "fixture: gate の前は印が無い");
+    (repo, state, id)
+}
+
+/// 倍率 `per_core`（走行可能と待ちの両方）の rules fixture で gate を 1 回撃つ（待ちの上限は [`SLOT_WAIT_S`]）。
+fn health_gate(repo: &Path, state: &Path, id: &str, per_core: u64) -> Output {
+    let slots = SlotFixture { runnable_per_core: per_core, blocked_per_core: per_core, ..default_slots() };
+    let rules = write_rules_full(state, &format!("rules-health-{per_core}.toml"), (1, 1_000_000), FOLLOW_RETRIES, slots);
+    gate_with_rules(repo, state, id, &rules, &fake_lens(&state.join("lens-ran"), &lens_verdict("PASS")))
+}
+
+/// (a) 倍率 0 の便は verify の行が 1 本も撃たれず（印が空）verdict が INCONCLUSIVE で、撃たなかった行の record に
+/// 閉じた印 `host=busy` が載る（write-set 照合は process を持たないので印を持たない）。lens は起こさない。
+#[test]
+fn pipe_gate_health_busy_host_fires_no_line_and_is_inconclusive() {
+    let (repo, state, id) = health_run();
+    let out = health_gate(&repo, &state, &id, 0);
+    assert_eq!(
+        out.status.code(),
+        Some(i32::from(RC_INCONCLUSIVE)),
+        "待ちの上限を超えた周は rc 3: {} / {}",
+        stdout_of(&out),
+        stderr_of(&out)
+    );
+    assert!(stdout_of(&out).contains("verdict=INCONCLUSIVE"), "{}", stdout_of(&out));
+    assert!(detection_calls(&repo).is_empty(), "verify の行は 1 本も撃たれない: {:?}", detection_calls(&repo));
+    let rows = verify_rows(&state, &id);
+    assert_eq!(kinds(&rows), ["write-set", "common", "contract"], "record は段ごとに残る: {rows:?}");
+    assert_eq!(row_value(&rows, 1, "host"), "", "write-set 照合は印を持たない: {rows:?}");
+    assert_eq!(row_value(&rows, 2, "host"), "busy", "撃たなかった行に閉じた印: {rows:?}");
+    assert_eq!(row_value(&rows, 3, "host"), "busy", "以後の行も待たずに閉じる: {rows:?}");
+    assert_eq!(row_value(&rows, 2, "secs"), "", "撃っていない行は秒を持たない: {rows:?}");
+    let pairs = verdict_pairs(&state, &id);
+    assert_eq!(value_of(&pairs, "verdict"), "INCONCLUSIVE");
+    assert_eq!(value_of(&pairs, "verify_red"), "0", "撃っていない行は赤に数えない");
+    assert!(value_of(&pairs, "evidence").contains("n=2"), "理由は最初に閉じた行を名指す: {pairs:?}");
+    assert!(!state.join("lens-ran").exists(), "測れなかった周は lens を起こさない");
+    clean(&[&repo, &state]);
+}
+
+/// (b) 倍率を十分大きく取った便は従来どおり全段を撃って PASS で終わり、record に印が載らない。
+#[test]
+fn pipe_gate_health_calm_host_fires_every_line_and_passes_without_mark() {
+    let (repo, state, id) = health_run();
+    let out = health_gate(&repo, &state, &id, HEALTH_PER_CORE_OPEN);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "空いた host は PASS: {} / {}", stdout_of(&out), stderr_of(&out));
+    assert_eq!(detection_calls(&repo), ["common".to_owned(), "contract".to_owned()], "全段を 1 回ずつ撃つ");
+    let log = fs::read_to_string(state.join("pipe").join(&id).join("verify.jsonl")).unwrap_or_default();
+    assert!(!log.contains("\"host\""), "空いていた周は印を欠く: {log}");
+    assert!(state.join("lens-ran").exists(), "測れた周は lens を起こす");
+    clean(&[&repo, &state]);
+}
+
+/// (c) (a) の便は `Gated` に留まり（`Failed` へ終端しない）、同じ便を空いた host で撃ち直すと PASS に着く。
+#[test]
+fn pipe_gate_health_busy_run_stays_gated_and_can_be_regated() {
+    let (repo, state, id) = health_run();
+    let busy = health_gate(&repo, &state, &id, 0);
+    assert_eq!(busy.status.code(), Some(i32::from(RC_INCONCLUSIVE)), "1 周目は INCONCLUSIVE: {}", stderr_of(&busy));
+    assert_eq!(gated_details(&state, &id), ["verdict:INCONCLUSIVE".to_owned()], "Gated に留まる");
+    let failed = events(&state).into_iter().filter(|event| event.run == id && event.stage == Some(Stage::Failed)).count();
+    assert_eq!(failed, 0, "FAIL で終端しない（Failed の event が無い）");
+    let calm = health_gate(&repo, &state, &id, HEALTH_PER_CORE_OPEN);
+    assert_eq!(calm.status.code(), Some(i32::from(RC_OK)), "撃ち直せて PASS: {} / {}", stdout_of(&calm), stderr_of(&calm));
+    assert_eq!(detection_calls(&repo), ["common".to_owned(), "contract".to_owned()], "撃ち直しの周で初めて撃つ");
+    assert_eq!(
+        gated_details(&state, &id),
+        ["verdict:INCONCLUSIVE".to_owned(), "verdict:PASS".to_owned()],
+        "測り直しの履歴"
+    );
     clean(&[&repo, &state]);
 }

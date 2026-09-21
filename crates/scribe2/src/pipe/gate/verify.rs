@@ -8,6 +8,7 @@ use crate::pipe::confine::{self, Confinement, Reason, Released, Usage};
 use crate::pipe::contract::Contract;
 use crate::pipe::declaration::{BASE_HOLE, JOBS_HOLE, THREADS_HOLE};
 use crate::pipe::git_bytes;
+use crate::pipe::health;
 use crate::pipe::refuse;
 use crate::seat::RuleRead;
 use std::path::Path;
@@ -92,6 +93,19 @@ pub struct Step {
     /// 1 回目を運ぶ**（1 回目の `Step` は列に積まない・撃ち直した事実を record に残す・C10）。
     /// 「撃ち直した」はこの欄の有無に畳む（別の bool を持たない）。撃ち直さない行と 1 回目は `None`。
     pub retried_from: Option<(i32, String)>,
+    /// 器の健康の遮断器の印（record の `host=`・設計 gate-cost.md §32 約束 5 / 7）。
+    ///
+    /// [`health::Mark::Closed`] は**撃たなかった行**（待ちの上限を超えた・rc は撃てなかった -1 で赤に数えない）、
+    /// [`health::Mark::Unmeasured`] は測れないまま撃った行。空いていた周と撃つ process を持たない段は `None`＝
+    /// field を欠く（0 や空を書かない・C10）。
+    pub host: Option<health::Mark>,
+}
+
+impl Step {
+    /// 遮断器が閉じて**撃たなかった**行か（判定は gate の `decide` が赤より先に読む・設計 gate-cost.md §32 約束 6）。
+    pub fn is_closed(&self) -> bool {
+        self.host == Some(health::Mark::Closed)
+    }
 }
 
 /// 撃つ process を持たない段（write-set 照合）の封じ込め欄。
@@ -115,6 +129,31 @@ fn unwrapped(cmd: String, rc: i32, stderr: String) -> Step {
         scope: None,
         line: None,
         retried_from: None,
+        host: None,
+    }
+}
+
+/// 遮断器が閉じて**撃たなかった**行の結果（設計 gate-cost.md §32 約束 5）。
+///
+/// process を起こさないので秒も封じ込めの欄も持たない（[`unwrapped`] と同じ理由）。cmd は置換前の行（受付を
+/// 通っていない＝実効 jobs を持たない）、rc は撃てなかった周の -1 で、赤には数えない（印が先に効く）。
+fn closed(entry: &Fire<'_>) -> Step {
+    Step {
+        stage: entry.stage,
+        cmd: entry.raw.to_owned(),
+        rc: -1,
+        stderr: String::new(),
+        confined: false,
+        reason: None,
+        peak_mb: None,
+        secs: None,
+        jobs: UNADMITTED_JOBS,
+        slot: None,
+        slot_why: None,
+        scope: None,
+        line: None,
+        retried_from: None,
+        host: Some(health::Mark::Closed),
     }
 }
 
@@ -140,6 +179,8 @@ pub struct Checks<'a> {
     pub common: &'a [String],
     /// **便の写しの**検出線。land の main 実測は木が gate と同じ周に空を渡す（ADR-0021 §2.4）。
     pub detection: &'a [String],
+    /// 器の健康の遮断器（倍率 2 本と待ちの上限・gate と land の主実測が同じ欄を埋める・設計 gate-cost.md §32 約束 9）。
+    pub host: health::Breaker,
 }
 
 /// 全段を**順序どおり**に撃つ。
@@ -158,10 +199,13 @@ pub fn run_checks(checks: &Checks<'_>) -> Vec<Step> {
 /// **検出線の行だけ**、rc 2（測れなかった・[`detection_unmeasured`]）で終えた周は同じ材料で
 /// もう 1 回撃つ（[`refire`]・設計 gate-cost.md §21）。gate も land もここを通るので撃ち直しの
 /// 挙動も 1 本である（land の木が同じ周は検出線を撃たないので撃ち直しも起きない）。
+///
+/// **行を撃つ前に器の健康の遮断器を通す**（[`health::pass`]・設計 gate-cost.md §32）。待ちの上限を超えた行は
+/// 撃たずに閉じた印の [`Step`] を積み、**以後の行も待たずに閉じる**（上限を行の本数だけ重ねない）。
 pub fn run_checks_admitted(checks: &Checks<'_>, admit: Option<&Admit<'_>>) -> Vec<Step> {
     // 封じ込めの 3 線は 1 便で 1 度だけ読む（行ごとに manifest を開き直さない）。
     let caps = confine::Caps::embedded();
-    let mut steps = Vec::new();
+    let mut steps: Vec<Step> = Vec::new();
     for check in CHECKS {
         let (lines, holes): (&[String], bool) = match *check {
             Check::WriteSet => {
@@ -175,8 +219,18 @@ pub fn run_checks_admitted(checks: &Checks<'_>, admit: Option<&Admit<'_>>) -> Ve
         for line in lines {
             let n = steps.len().saturating_add(1);
             let entry = Fire { checks, raw: line.as_str(), holes, stage: *check, n };
+            let passage = if steps.iter().any(Step::is_closed) {
+                health::Passage::Closed
+            } else {
+                health::pass(checks.host)
+            };
+            let health::Passage::Fire(mark) = passage else {
+                steps.push(closed(&entry));
+                continue;
+            };
             let first = fire(&entry, caps, admit);
-            let step = if detection_unmeasured(&first) { refire(first, &entry, caps, admit) } else { first };
+            let mut step = if detection_unmeasured(&first) { refire(first, &entry, caps, admit) } else { first };
+            step.host = mark;
             steps.push(step);
         }
     }
@@ -276,6 +330,7 @@ fn fire(entry: &Fire<'_>, caps: Result<confine::Caps, RuleRead>, admit: Option<&
         scope: fired.scope,
         line: fired.stdout_tail,
         retried_from: None,
+        host: None,
     }
 }
 

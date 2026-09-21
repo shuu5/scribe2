@@ -77,6 +77,8 @@ pub(super) fn verify_main(entry: &Land<'_>, new: &str) -> MainCheck {
         contract: entry.contract,
         common: frozen.common_verify(),
         detection: if skipped.is_some() { &[] } else { frozen.detection_verify() },
+        // gate と同じ遮断器を同じ `Limits` から通す（設計 gate-cost.md §32 約束 9）。
+        host: entry.limits.breaker(),
     });
     // 成果は `new` に載っているので、この tmp だけは remove してよい（設計 §5.4）。
     // `--force` は verify が tmp に生んだ中間物ごと畳むためで、履歴・データは触らない。
@@ -95,6 +97,14 @@ pub(super) fn verify_main(entry: &Land<'_>, new: &str) -> MainCheck {
             "main で verify の段を読めない（cmd={} stderr={}）",
             step.cmd,
             step.stderr.lines().next().unwrap_or_default()
+        ));
+    }
+    // 遮断器が閉じて撃たなかった行が在る周も**赤の集計より先**に「測れなかった」へ倒す（gate と同じ極性・
+    // 設計 gate-cost.md §32 約束 6 / 9）——撃っていない行の rc -1 を赤に数えない。
+    if let Some(step) = steps.iter().find(|step| step.is_closed()) {
+        return MainCheck::Unmeasurable(format!(
+            "host が混んだまま待ちの上限を超えた（cmd={} 以後の verify の行を撃っていない）",
+            step.cmd
         ));
     }
     let red = steps.iter().filter(|step| step.rc != 0).count();

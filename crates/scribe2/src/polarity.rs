@@ -64,7 +64,7 @@ pub struct Polarity {
 }
 
 /// 行為を止めうる判定を返す境界の全数。**宣言順は行為の流れ**（hook → 席の登録 → 権能の執行 → 契約表 → intake → 審査 → spawn〔予算・承認〕→
-/// runner → gate → land〔main 実測・anchor 同期・worktree の clean・追随の起こし直し〕→ store → 注入 → cycle → 退避 → 消費）で、順序に意味は無いが C2 の形（[`ALL`] と判別子順 pin）に合わせる。
+/// runner → gate〔器の健康の遮断器・機械検証・純移動・lens〕→ land〔main 実測・anchor 同期・worktree の clean・追随の起こし直し〕→ store → 注入 → cycle → 退避 → 消費）で、順序に意味は無いが C2 の形（[`ALL`] と判別子順 pin）に合わせる。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Guard {
     /// `pre-tool-use` の write-set guard（[`crate::hook::guard`]）。
@@ -95,6 +95,9 @@ pub enum Guard {
     RunnerStop,
     /// runner の包みが最終行の質問 record で便を `Questioned` へ倒す判定（[`crate::headless::runner::Ending`]・FailOpen）。
     RunnerQuestion,
+    /// 器の健康の遮断器＝host が混んだまま待ちの上限を超えた周に verify の行を撃たない（[`crate::pipe::health::Health`]・
+    /// 測れない周は撃つ側へ倒す FailOpen・設計 gate-cost.md §32）。
+    GateHealth,
     /// gate の機械検証の段（[`crate::pipe::gate::Check`]）。
     GateCheck,
     /// gate の純移動の機械証明＝lens へ diff でなく要約を渡す判定（[`crate::pipe::move_proof::LensInput`]・FailOpen）。
@@ -136,6 +139,7 @@ pub const ALL: &[Guard] = &[
     Guard::Approval,
     Guard::RunnerStop,
     Guard::RunnerQuestion,
+    Guard::GateHealth,
     Guard::GateCheck,
     Guard::MoveProof,
     Guard::GateLens,
@@ -189,6 +193,7 @@ impl Guard {
             Self::Approval => crate::pipe::approve::POLARITY,
             Self::RunnerStop => crate::headless::runner::POLARITY,
             Self::RunnerQuestion => crate::headless::runner::QUESTION_POLARITY,
+            Self::GateHealth => crate::pipe::health::POLARITY,
             Self::GateCheck => crate::pipe::gate::POLARITY,
             Self::MoveProof => crate::pipe::move_proof::POLARITY,
             Self::GateLens => crate::pipe::gate::LENS_POLARITY,
@@ -219,6 +224,7 @@ impl Guard {
             Self::Approval => "pipe::approve::Approval",
             Self::RunnerStop => "headless::runner::Decision",
             Self::RunnerQuestion => "headless::runner::Ending",
+            Self::GateHealth => "pipe::health::Health",
             Self::GateCheck => "pipe::gate::Check",
             Self::MoveProof => "pipe::move_proof::LensInput",
             Self::GateLens => "pipe::gate::Verdict",
@@ -249,6 +255,7 @@ impl Guard {
             Self::Approval => "approval-gate",
             Self::RunnerStop => "runner-stop",
             Self::RunnerQuestion => "runner-question",
+            Self::GateHealth => "gate-health",
             Self::GateCheck => "gate-check",
             Self::MoveProof => "gate-move-proof",
             Self::GateLens => "gate-lens",

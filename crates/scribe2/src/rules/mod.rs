@@ -194,6 +194,12 @@ pub enum RuleKind {
     GateTmuxTestThreads,
     /// 便の scope に付ける CPU の重み（席は既定の重み）。
     GateCpuWeight,
+    /// 器の健康の遮断器の**走行可能の core あたりの倍率**（設計 gate-cost.md §32）。閾値 = 値 × 実測の core 数で、
+    /// `/proc/loadavg` の 4 番目の欄の分子がこれを超えた周は行を撃つ前に空くまで待つ。
+    HostRunnablePerCore,
+    /// 器の健康の遮断器の**待ちの core あたりの倍率**（設計 gate-cost.md §32）。閾値 = 値 × 実測の core 数で、
+    /// `/proc/stat` の `procs_blocked` がこれを超えた周は行を撃つ前に空くまで待つ。
+    HostBlockedPerCore,
     /// land が着地待ちの列で自分の番を待つ上限（秒）。超えたら待たずに進む（縮退・止めない）。
     PipeLandWaitS,
     /// land の終端が CI の判定を待つ上限（秒・設計 contract-source.md §5）。超えた周は **close しない**
@@ -269,6 +275,8 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::GateSlotWaitS,
     RuleKind::GateTmuxTestThreads,
     RuleKind::GateCpuWeight,
+    RuleKind::HostRunnablePerCore,
+    RuleKind::HostBlockedPerCore,
     RuleKind::PipeLandWaitS,
     RuleKind::PipeCiWaitS,
     RuleKind::LedgerTimeoutS,
@@ -324,6 +332,8 @@ impl RuleKind {
             Self::GateSlotWaitS => "GateSlotWaitS",
             Self::GateTmuxTestThreads => "GateTmuxTestThreads",
             Self::GateCpuWeight => "GateCpuWeight",
+            Self::HostRunnablePerCore => "HostRunnablePerCore",
+            Self::HostBlockedPerCore => "HostBlockedPerCore",
             Self::PipeLandWaitS => "PipeLandWaitS",
             Self::PipeCiWaitS => "PipeCiWaitS",
             Self::LedgerTimeoutS => "LedgerTimeoutS",
@@ -370,6 +380,8 @@ impl RuleKind {
             | Self::GateSlotWaitS
             | Self::GateTmuxTestThreads
             | Self::GateCpuWeight
+            | Self::HostRunnablePerCore
+            | Self::HostBlockedPerCore
             | Self::PipeLandWaitS
             | Self::PipeCiWaitS
             | Self::LedgerTimeoutS
