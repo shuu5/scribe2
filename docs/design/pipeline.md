@@ -613,6 +613,19 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 - 触らない: 判定の群（`judge_run` / `judge_one` / `Counts` / `ok_line` / `BaseNotGreen` / `base_not_green`）・overlay の群・札と面の群（行 c の面）・`run` と `judge` の外形・歯の 6 file の中身（そのうち `crates/xtask/src/flipcheck_tests.rs` は write-set に持つが 1 byte も変えない・上の 2 つ目の bullet）。
 - 却下: 判定の群を移す（84 行で M の余地に届かない）／札と面の群を移す（行 c が同じ群を触る）／歯の file を割る（歯の総数は変わらず親の余地が空かない）。
 
+## 46. 着地の CI 照合が event=schedule の run を数えない（契約表の行 an・`s2-07l.523`・約束の行の形）
+
+やさしく言うと: 着地の最後に「CI は緑か」を聞くとき、同じ commit で cron（定期実行）の workflow も走っていると、それが終わるまで「測れない」になって bead が閉じない。定期実行の run は数えない。
+
+- 出所: memo `s2-07l.523`（便 `s2-07l.522` の終端が `RunDone Landed detail=terminal:ci:unmeasurable`・2026-09-21T10:12Z・同じ sha で cron の `mutants` workflow が走っていた）。
+- 現物（verified・main）: CI の判定を読む 1 行の既定は `crates/scribe2/src/pipe/declaration.rs` の `DEFAULT_CI_CMD`（`gh run list --commit {sha} --json status,conclusion`・宣言 `ci-cmd` が無い周に使う）。読み手は `crates/scribe2/src/fleet/wait.rs` の `ci_now(`（JSON の配列を読み、**落ちた run を先に見て** `Failure`、全部 `completed` で `Success`、それ以外は `None`＝測れない）。run の `event`（`push` / `pull_request` / `schedule` …）は読まない。本 repo の workflow は `ci`（push / pull_request）と `mutants`（`schedule`・週 1 の cron）の 2 本で、cron が同じ sha で走る周は完了まで `None` が続き `pipe.ci_wait_s` を使い切って `ci:unmeasurable` に倒れる（bead は閉じず、close は手番になる）。
+- 形（読み手で外す・宣言の穴は増やさない）:
+  1. 既定の 1 行に `event` を足す（`--json status,conclusion,event`）。宣言 `ci-cmd` の穴は `{sha}` の 1 つのまま。
+  2. `ci_now(` は `event` が `schedule` の run を**母集団から外してから**従来の判定を行う（落ちた run 優先 → 全部 `completed` で success → それ以外は測れない）。外した後に run が 0 本なら測れない（`None`）。`event` の欄が無い run（宣言の `ci-cmd` が `event` を返さない周）は外さない＝従来と同じ。
+  3. workflow の**名では絞らない**（`ci` / `mutants` は repo 固有の値・N3）。外すのは forge が返す `event` の語 1 つ（`schedule`）だけで、その語は `ci_now(` の隣の `const` 1 つが持つ。
+- 触らない: `CiRun` の 3 値・`pipe.ci_wait_s`・宣言の `ci-cmd` の形・終端の 3 段（push → CI → close）の順。
+- 却下: workflow 名で絞る（repo 固有の値を code に持つ・N3）／cron を別 sha で走らせる運用（散文の規則・N2）／`ci-cmd` に穴を足して宣言側で絞る（宣言が無い consumer に効かない）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -1011,4 +1024,31 @@ write-set = ["-crates/xtask/src/flipcheck.rs", "+crates/xtask/src/flipcheck/next
 verify = ["cargo nextest run -p xtask --no-tests=fail flip_check_parses_failed_tests_", "cargo nextest run -p xtask --no-tests=fail flip_check_child_nextest_disables_color no_fail_fast_is_in_flipcheck_nextest_args"]
 size = "S"
 done = "(1) nextest を撃って出力を読む群 7 item（trimmed / relay / nextest / nextest_with / nextest_args / strip_csi / failed_tests）が + の file に名・本文・順序のまま在り、struct FailedTest と impl FailedTest は親に残って 1 字も変わらず、子は use super::FailedTest; の 1 行でそれを引き (2) 親に増えた行が mod 宣言 1 行・failed_tests / nextest / nextest_with / relay / trimmed の 5 名を列挙した素の use 1 行・nextest_args 1 名の #[cfg(test)] 付きの use 1 行（src の本体の全 item の後・既存の #[cfg(test)] #[path] mod tests の 3 行の直上）の計 3 行だけで（pub は付けない）、judge_each / base_is_green / retry_named / run_on_base を含む親の本体が 1 字も変わらず、cfg(test) の無い build で unused_imports が 0 件（cargo clippy --workspace --all-targets -- -D warnings が緑） (3) 歯の 6 file と crates/xtask/src/flipcheck/git.rs が 1 行も変わらず（5 file は use super::* ・crates/xtask/src/flipcheck_tests.rs の use super::{…} と git.rs の use super::{trimmed, …} は親の 2 つの use が解く）、そのうち write-set に在る crates/xtask/src/flipcheck_tests.rs の diff が 0 行（この file が write-set に在るのは検証行 2 本が撃つ既存の歯 4 本の現住所だからで、便は 1 byte も変えない） (4) 子側で pub(super) にする item が名指しの 6 つ（relay / nextest / nextest_with / nextest_args / failed_tests / trimmed・全部 fn の頭の行）で、strip_csi と struct FailedTest の field と filterset の可視性は 1 語も変わらず、pub(crate) と pub use は 1 つも増えず、親側の可視性も変わらず (5) 札 flip-check: moved が親の歯の区間の先頭（#[cfg(test)] 付きの use の直後・#[path] の 3 行の直前）と + の file の先頭に対で在り (6) file-lines で flipcheck.rs の余地が base の 216 から 300 以上へ増える"
+[[contract]]
+id = "an"
+title = "着地の CI 照合が event=schedule の run を母集団から外す — 既定の 1 行に event を足し、ci_now は schedule の run を除いてから落ちた run 優先・全 completed で success・残り 0 本は測れないと判定する（約束の行の形）"
+req = ["FR50", "FR12"]
+section = "46"
+size = "S"
+
+[[promise]]
+of = "an"
+n = 1
+text = "ci_now は run の event が schedule のものを母集団から外し、残りで従来の判定（落ちた run を先に見て Failure・全部 completed で Success・それ以外は None）を行い、外した後に run が 0 本なら None を返す。event の欄が無い run は外さない"
+files = ["crates/scribe2/src/fleet/wait.rs", "crates/scribe2/tests/e2e/pipe/land.rs"]
+teeth = ["pipe_terminal_land_ci_ignores_scheduled_runs", "pipe_terminal_land_ci_only_scheduled_runs_is_unmeasurable"]
+place = "crates/scribe2/tests/e2e/pipe/land.rs"
+fixture = "偽 CI（既存の fake_terminal_json）が [{completed, success, event=push}, {in_progress, null, event=schedule}] を返す宣言で Gated PASS の便を land する（上限は fixture の manifest の pipe.ci_wait_s）。負の枝は [{completed, success, event=schedule}] だけを返す偽 CI"
+expect = "正の枝は終端の detail が terminal:ci:success → close まで進み bead が閉じる（base は schedule の run を待って ci:unmeasurable）。負の枝は terminal:ci:unmeasurable で bead が閉じない（base は success に倒れる）"
+
+[[promise]]
+of = "an"
+n = 2
+text = "既定の CI の 1 行（DEFAULT_CI_CMD）が JSON の欄に event を含む（宣言 ci-cmd が無い consumer でも schedule の run を弁別できる）"
+files = ["crates/scribe2/src/pipe/declaration.rs"]
+teeth = ["pipe_declaration_default_ci_cmd_carries_the_event_field"]
+place = "crates/scribe2/src/pipe/declaration.rs"
+fixture = "in-file の歯（既存の DEFAULT_CI_CMD が {sha} の穴を持つ歯の隣）"
+expect = "DEFAULT_CI_CMD の --json の欄の列に event が在り、{sha} の穴は 1 つのまま"
+
 <!-- contracts:end -->
