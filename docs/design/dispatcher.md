@@ -250,6 +250,20 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
 - 触らない: (1)(2)(3)(5) の群の本体・`WaitReason` / `Turn` / `Candidate` の欄・in-file の歯の名と assert・e2e の歯・**`crates/scribe2/src/pipe/mod.rs`**（src の側の file・e2e に pipe/mod.rs は無い。pipe_dispatch_driver_ の歯はそこに在り、verify の filter はどちらの行も当たらない＝上の母集団のとおり）。
 - 却下: (1) の型の群を移す（`WaitReason` は行 o が variant を足す＝行 o の write-set が 2 file に割れて交差が増える）／(5) の表示の群を移す（80 行で余地が 100 に届かない）／行 o を S より小さく書く（size は S が最小）／割らずに据え置く（行 o が受付で止まったまま）／`Ledger` と `Marks` も子へ移して field に `pub(super)` を付ける（純移動の機械証明が body の行の可視性を剥かないので items-differ＝残差 0 が外れる・約束 1 と 2 が両立しない・便 4 本目の Question）。
 
+## 21. 通知の送達を消費で閉じる — notify は置き場を渡して自席の記録と打刻を測り、Queued の周は自席の残りに Enter を 1 回だけ再送する（契約表の行 r）
+
+やさしく言うと: 通知の本文が入力欄に入ったまま Enter だけ落ちると、席は次の通知が来るまで気づかない。送った側が「本当に turn に入ったか」を席の打刻で見て、入っていなければ Enter をもう 1 回だけ押す。
+
+- 何が起きているか（orchestrator の実測 2026-09-21 15:54Z・verified）: `Reviewed` FAIL の通知（§19 の 1 行）が席の入力欄に本文だけ残り、Enter が落ちていた（user が入力欄で発見）。現物（main）: `crates/scribe2/src/pipe/notify.rs` の `send` は `Request` の `state_dir` を `None` で `deliver_within` に渡す。その結果 (a) 自席の注入の記録（`record`・`tick.jsonl`）が書かれず、次の通知の入力欄の門（`guard_input`）は残った本文を人の打ちかけ（`Foreign`）と読んで `refused:busy` で止まる＝最初の 1 本が残ると以後の通知が全部届かない、(b) 消費の証拠（`Watch` の seat）が無く `Settled` は常に `Unmeasured`＝本文が pane に現れただけで `notify=delivered` と出す（入力欄に居るのと turn に入ったのを弁別しない）。`send` は `send-keys -l <本文>` と `send-keys Enter` を間を置かず連続で撃つ（TUI が連続入力を貼り付けと読む周に Enter が改行に畳まれる・inferred）。自席の残りへ Enter を送り直す修復（`pass_input` の `OwnQueued`）は**次の**注入の入口にしか無い。
+- 形（送達の読みは 1 本のまま・人の打ちかけと merge しない極性は不変）:
+  1. **notify は解決済みの置き場を渡す**: `Queue` の `state_dir`（運転手の `--state-dir`・`crates/scribe2/src/pipe/cli.rs` の `notices` が持つ）を `StateDir`（`source` は `Provenance::Flag`）にして `Request` の `state_dir` に載せる。記録（`record`）と証拠（`Watch`）は既存の関数がそのまま動く。
+  2. **Queued の周の再送は同じ呼び出しの中で 1 回だけ**: `deliver_within` は `settle` が `Queued` で窓を閉じた周に pane を取り直し、入力欄の残りが**この周の本文**（`own_queued` に `Request` の `payload` を渡す・記録の先頭ではなく送った字面そのもの）なら `send_enter` で Enter を 1 回だけ再送して同じ窓でもう 1 度 `settle` する。2 度目も `Queued` なら `Queued` のまま返す（3 回目は無い）。残りが本文でない周（`Foreign` / `UnknownInput`）は 1 key も送らない（不変）。
+  3. **本文と Enter の間に settle の 1 歩**（`SETTLE_STEP`）を置く（`send` の 2 つの `send-keys` の間・新しい rules 行も定数も足さない）。
+  4. **stdout は消費を写す**: `notify=delivered consumed=<true|false|unknown[:理由]>`（`Settled` の `as_str` と `reason` の既存の字面・tick の `consumed=` と同じ語彙・C10）。`refused:<理由>` / `unconfirmed` / `no-seat` の字面は不変。
+- 歯（`pipe_notify_queued_` / `pipe_notify_delivery_` / `pipe_notify_foreign_` の接頭辞・`crates/scribe2/tests/e2e/notify.rs`・`pipe/` の外＝§19 形 6）: 偽の `tmux` を状態付きにする——`send-keys -l` は入力欄の file へ書き、`send-keys Enter` は「落とす回数」の file が 0 でなければ 1 減らして何もせず、0 なら入力欄を pane の本文へ移して席の打刻 file（`seat/<席>/state.jsonl`）に `UserPromptSubmit` の 1 行を足す、`capture-pane` は本文の後に prompt 行 + 入力欄を返す。(a) 落とす回数 1: 記録に Enter が 2 回・stdout に `consumed=true`。(b) 落とす回数 0: Enter 1 回・`consumed=true`。(c) 落とす回数 2: Enter 2 回（3 回目は無い）・`consumed=false`。(d) 入力欄に他人の文を先に置く: `send-keys` 0 回・`refused:busy`（不変）。
+- 触らない: `guard_input` の 3 値と `Foreign` の極性・`pass_input`（次の注入の入口の修復）・`SETTLE_STEP` / `SETTLE_TRIES` の値・記録の schema と `tick.jsonl` の置き場・§19 の契機と本文と宛先・event（通知は記帳しない）。
+- 却下: Claude Code の session 間 message（口座 dir の `sessions/<pid>.json` が指す socket）で送る（公開 docs に無い内部 protocol・版で変わる・他人の帳簿に書く型＝[consumer-sync.md](./consumer-sync.md) §11 の `installed_plugins.json` と同じ却下）／notify が自分で pane を読んで再送する（送達の読みが 2 本になる・C3.4）／Enter を常に 2 回送る（消費済みの周に空の submit が 1 回入る）／席の hook が通知を poll する（席の turn が無いと読めない＝§19 の却下と同じ穴）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -474,4 +488,14 @@ write-set = ["-crates/scribe2/src/pipe/dispatch.rs", "+crates/scribe2/src/pipe/d
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail pipe_dispatch_drive_ pipe_dispatch_launched_ pipe_dispatch_marks_ pipe_dispatch_order_ pipe_dispatch_release_ pipe_dispatch_section_ pipe_dispatch_wait", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_dispatch_", "cargo nextest run -p xtask --no-tests=fail env_reads_passes_on_core_with_a_nonempty_population"]
 size = "S"
 done = "(1) 16 item（Ledger と Marks を除く）が名・本文・順序を変えずに子へ移り、Ledger と Marks は親に残って field の可視性が不変、flip-check の moved の機械証明が残差 0 (2) 親に増えるのは mod 1 行と use 2 文だけで turn / fire / revivals の本体は不変、#[cfg(test)] の use は歯の区間の直前（親の #[cfg(test)] + mod tests の直前）に在り、file の最初の行頭 #[cfg(test)] は src の本体の全 item より後＝xtask の env_reads_passes_on_core_with_a_nonempty_population が緑（母集団 6・base と同じ） (3) in-file の歯 14 本と e2e の pipe_dispatch_ の歯が 1 字も変わらず緑 (4) 親の行数が約 1090 で余地が 400 以上 (5) tests/e2e/pipe/dispatch.rs と crates/xtask/src/env_reads.rs の diff が 0 行"
+
+[[contract]]
+id = "r"
+title = "通知の送達を消費で閉じる — notify は置き場を渡して自席の記録と打刻を測り、settle が Queued の周は入力欄の残りがこの周の本文なら Enter を 1 回だけ再送して同じ窓で settle し直し、stdout に notify=delivered consumed=<true|false|unknown[:理由]> を出す"
+req = ["FR30", "FR68"]
+section = "21"
+write-set = ["crates/scribe2/src/pipe/notify.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/seat/inject.rs", "crates/scribe2/tests/e2e/notify.rs"]
+verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_notify_queued_ pipe_notify_delivery_ pipe_notify_foreign_"]
+size = "S"
+done = "(1) notify の Request が運転手の置き場を StateDir（Provenance::Flag）で持ち、送達後に tick.jsonl へ自席の記録が 1 行増える (2) settle が Queued で窓を閉じた周に入力欄の残りがこの周の本文なら Enter を 1 回だけ再送して settle し直し、2 度目も Queued ならそのまま返す（Enter は最大 2 回・text の再送は 0 回・Foreign / UnknownInput の周は 0 key） (3) 本文と Enter の間に SETTLE_STEP の 1 歩が在る (4) stdout が notify=delivered consumed=<true|false|unknown[:理由]> で、refused: / unconfirmed / no-seat の字面は不変 (5) 偽 tmux の落とす回数 1 で Enter 2 回・consumed=true、0 で Enter 1 回・consumed=true、2 で Enter 2 回・consumed=false、他人の文が先に在れば send-keys 0 回・refused:busy"
 <!-- contracts:end -->
