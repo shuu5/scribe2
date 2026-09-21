@@ -18,16 +18,17 @@ use super::super::contract::Contract;
 use super::super::gate::Verdict;
 use super::super::queue::Order;
 use super::super::{emit, git_bytes, git_line, git_ok, size, verdict_path, Emit};
-use super::verify::measure_main;
+use super::verify::{main_red, main_unmeasured, measure_main, verify_train_main};
 use super::{
-    broken, refused, retire_worktree, verdicts_path, AnchorSync, Land, Landing, Terminal, MAIN_REF, RUN_TRAILER,
+    broken, refused, retire_worktree, verdicts_path, AnchorSync, Land, Landing, MainCheck, Terminal, MAIN_REF,
+    RUN_TRAILER,
 };
-use crate::cli_outcome::Outcome;
+use crate::cli_outcome::{Outcome, RC_OK};
 use crate::fleet::json_lite::{self, Value};
 use crate::fleet::store::{self, append_line};
 use crate::fleet::{ci_now, cli::now_utc, CiRun, Completion, EventKind, Stage, SCHEMA};
 use crate::name::NAME;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// squash commit の件名に載せる要旨の長さ（**char 単位**・byte でない・`s2-07l.130`）。
 ///
@@ -333,6 +334,78 @@ pub(super) fn finish(entry: &Land<'_>, worktree: &Path, landing: &Landing, ancho
         err,
         rc: terminal.rc(),
     }
+}
+
+/// 候補の木に積んだ便 1 本（[`land_train`] の材料・設計 pipeline.md §40・行 ah）。
+pub(in crate::pipe) struct Car<'a> {
+    /// 便の land の材料（後続は先頭の材料から契約・bead・承認だけを差し替えた形）。
+    pub(in crate::pipe) entry: Land<'a>,
+    /// 便の worktree（着地の後に退避する）。
+    pub(in crate::pipe) worktree: PathBuf,
+    /// 候補の木で自分を積んだ段の tree（squash の材料＝worktree の tree の代わり）。
+    pub(in crate::pipe) tree: String,
+    /// 面 5 と stdout の `order=`（先頭は自分の番・後続は [`Order::Train`]）。
+    pub(in crate::pipe) order: Order,
+}
+
+/// 候補の木の緑を受けて列を着地させる（設計 pipeline.md §40・行 ah）。
+///
+/// 段の tree ごとに `commit-tree`（親 = 直前の着地 commit・message は便ごとの [`squash_message`]）で連ね、main を
+/// **CAS で N 本ぶん**進める（old = 候補の木を切った main）。進められなかった周は `Err`＝main は 1 byte も動いて
+/// いない（呼び手は列を解く）。進めた後は従来と同じ順（anchor を揃える → 主実測 [`verify_main`] を**先端の木で
+/// 1 回**）で、緑なら便ごとに [`finish`]（面 5 の 1 行・`Landed`・worktree の退避・終端）、赤 / 測れない周は列の便
+/// すべてに `main-red` / `main-unmeasured`（main は進んだまま・巻き戻さない・どの便が赤かは帰属しない）。
+///
+/// **記帳は後続 → 先頭の順**である: 後ろの便の番待ち（`await_turn`）は先頭が列を空けた瞬間に起きて段を読むので、
+/// 先頭を先に終端させると、自分の `Landed` が書かれる前に起きた後続が追随へ進む窓が開く。stdout は列の順に並べる。
+pub(in crate::pipe) fn land_train(cars: &[Car<'_>], old: &str) -> Result<Outcome, String> {
+    let head = cars.first().ok_or_else(|| "候補の木に便が無い".to_owned())?;
+    let repo = head.entry.repo;
+    // anchor の見立ては ref を進める前に読む（[`super::attempt`] と同じ順）。
+    let plan = super::anchor_plan(repo);
+    let mut parent = old.to_owned();
+    let mut shas = Vec::new();
+    for car in cars {
+        let message = squash_message(car.entry.bead, &car.entry.contract.goal, car.entry.run, car.entry.contract);
+        let new = git_line(repo, &["commit-tree", &car.tree, "-p", &parent, "-m", &message])
+            .ok_or_else(|| format!("run {} の段の commit を作れない", car.entry.run))?;
+        shas.push(new.clone());
+        parent = new;
+    }
+    if !git_ok(repo, &["update-ref", MAIN_REF, &parent, old]) {
+        return Err(format!("{MAIN_REF} を付け替えられない（CAS が外れた）"));
+    }
+    let anchor = super::sync_anchor(repo, &plan, old, &parent);
+    // 主実測の write-set 照合は `old..先端` を列の write-set の和で測る（契約 verify は先頭の分・従来どおり）。
+    let mut joined = head.entry.contract.clone();
+    for item in cars.iter().skip(1).flat_map(|car| &car.entry.contract.write_set) {
+        if !joined.write_set.contains(item) {
+            joined.write_set.push(item.clone());
+        }
+    }
+    let check = verify_train_main(&Land { contract: &joined, ..head.entry }, &parent, old);
+    let mut outcomes: Vec<Option<Outcome>> = cars.iter().map(|_| None).collect();
+    let followers_first = (1..cars.len()).chain(std::iter::once(0));
+    for index in followers_first {
+        let (Some(car), Some(sha)) = (cars.get(index), shas.get(index)) else {
+            continue;
+        };
+        let outcome = match &check {
+            MainCheck::Green => finish(&car.entry, &car.worktree, &Landing::Fresh(sha.clone()), &anchor, car.order),
+            MainCheck::Red(reason) => main_red(&car.entry, reason, &anchor),
+            MainCheck::Unmeasurable(reason) => main_unmeasured(&car.entry, reason, &anchor),
+        };
+        if let Some(slot) = outcomes.get_mut(index) {
+            *slot = Some(outcome);
+        }
+    }
+    let mut merged = Outcome { out: Vec::new(), err: Vec::new(), rc: RC_OK };
+    for outcome in outcomes.into_iter().flatten() {
+        merged.out.extend(outcome.out);
+        merged.err.extend(outcome.err);
+        merged.rc = merged.rc.max(outcome.rc);
+    }
+    Ok(merged)
 }
 
 /// 面 5 の 1 行を `verdicts.jsonl` へ append する（跨版 契約・key 列は固定）。

@@ -537,6 +537,13 @@ fn two_gated_runs(repo: &Path, state: &Path, marker: &Path) -> (String, String) 
     (id_a, id_b)
 }
 
+/// 列を積まない land（tmp manifest に `land.train_max` の行が無い＝先頭だけ・設計 §40）。1 本目だけを載せて 2 本目の
+/// 追随を測る歯の入口——埋め込み manifest の上限で撃つと、2 本目も同じ周に候補の木で載る。
+fn land_solo(repo: &Path, state: &Path, id: &str) -> Output {
+    let rules = write_rules(state, "rules-solo.toml", 1, 1_000_000);
+    land_extra(repo, state, id, &["--rules", &rules.display().to_string()])
+}
+
 /// 追随した便の event 列が **Implemented(rebase:) → Gated(PASS) → Landed** の順で replay できるか。
 #[expect(
     clippy::expect_used,
@@ -566,7 +573,7 @@ fn pipe_land_rebase_follows_landed_sibling_and_lands() {
     let (id_a, id_b) = two_gated_runs(&repo, &state, &marker);
     let base = git(&repo, &["rev-parse", "refs/heads/main"]);
     // 1 本目が land して main が動く（2 本目の base は置き去り）。
-    let first = land_once(&repo, &state, &id_a);
+    let first = land_solo(&repo, &state, &id_a);
     assert_eq!(first.status.code(), Some(i32::from(RC_OK)), "1 本目の land: {}", stderr_of(&first));
     let moved = git(&repo, &["rev-parse", "refs/heads/main"]);
     assert_ne!(moved, base, "main が動いている");
@@ -654,7 +661,7 @@ fn pipe_land_rebase_empty_does_not_treat_unreadable_count_as_zero() {
     let (repo, state) = repo_with_state();
     let marker = state.join("lens-ran");
     let (id_a, id_b) = two_gated_runs(&repo, &state, &marker);
-    let first = land_once(&repo, &state, &id_a);
+    let first = land_solo(&repo, &state, &id_a);
     assert_eq!(first.status.code(), Some(i32::from(RC_OK)), "1 本目の land: {}", stderr_of(&first));
     let landed = git(&repo, &["rev-parse", "refs/heads/main"]);
     let lens = fake_lens(&marker, &lens_verdict("PASS"));
@@ -675,7 +682,7 @@ fn pipe_land_rebase_empty_does_not_fire_for_distinct_changes() {
     let (repo, state) = repo_with_state();
     let marker = state.join("lens-ran");
     let (id_a, id_b) = two_gated_runs(&repo, &state, &marker);
-    let first = land_once(&repo, &state, &id_a);
+    let first = land_solo(&repo, &state, &id_a);
     assert_eq!(first.status.code(), Some(i32::from(RC_OK)), "1 本目の land: {}", stderr_of(&first));
     let lens = fake_lens(&marker, &lens_verdict("PASS"));
     let out = run_pipe(&[
@@ -4279,5 +4286,283 @@ fn pipe_follow_stale_rows_no_runner_records_and_resume_continues() {
     );
     assert!(stdout_of(&resumed).contains(&format!("run={id} rebase={base}..{moved}")), "base が進む: {}", stdout_of(&resumed));
     assert!(!marker.exists(), "再 gate は撃たれない");
+    clean(&[&repo, &state]);
+}
+
+// ───── 着地の列（merge train・設計 pipeline.md §40・契約表の行 ah・接頭辞 `pipe_train_`） ─────
+
+/// [`write_rules_land_wait`]（待ちの上限 30 秒）に `land.train_max` の行を足した tmp manifest（`None` = 行を置かない）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn write_rules_train(dir: &Path, name: &str, train_max: Option<u64>) -> String {
+    let path = write_rules_land_wait(dir, name, Some(30));
+    if let Some(value) = train_max {
+        let text = fs::read_to_string(&path).expect("tmp manifest を読める");
+        let block = format!(
+            "\n[[rule]]\nid = \"land.train_max\"\nkind = \"LandTrainMax\"\nvalue = {value}\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n"
+        );
+        fs::write(&path, format!("{text}{block}")).expect("tmp manifest を書ける");
+    }
+    path
+}
+
+/// 候補の木（`<worktrees>/train/<run>`）の中でだけ赤い契約 verify（gate の便の worktree と主実測の `verify` では緑）。
+const TRAIN_RED: &str = "sh verify-train-red.sh";
+
+/// 主実測の tmp（`<worktrees>/verify/<run>`）の中でだけ赤い契約 verify（gate と候補の木では緑）。
+const MAIN_RED: &str = "sh verify-main-red.sh";
+
+/// 契約 verify の既定（どこでも緑）。
+const ALL_GREEN: &str = "sh verify-ok.sh";
+
+/// 同じ base から 3 便を PASS の gate まで通す（行は **1 回の commit** で置く＝3 便の base は main の先端と同じ）。
+/// write-set は `crates/toy/a.rs` / `src/b.rs` / `src/c.rs` で交わらず、Gated の ts と bead は a < b < c（列の順）。
+/// `verify` は便ごとの契約 verify の 1 行（[`TRAIN_RED`] / [`MAIN_RED`] で赤い場所を選ぶ）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn train_runs(repo: &Path, state: &Path, marker: &Path, verify: [&str; 3]) -> [String; 3] {
+    for (name, face) in [("verify-train-red.sh", "*/train/*"), ("verify-main-red.sh", "*/verify/*")] {
+        let body = format!("case \"$(git rev-parse --show-toplevel)\" in {face}) exit 1;; esac\nexit 0\n");
+        fs::write(repo.join(name), body).expect("verify script を書ける");
+    }
+    let files = ["crates/toy/a.rs", "src/b.rs", "src/c.rs"];
+    let rows: Vec<Vec<String>> = ["a", "b", "c"]
+        .iter()
+        .zip(files)
+        .zip(verify)
+        .map(|((row, file), line)| {
+            row_fields(row, &["write-set", "verify"], &[&format!("write-set = [\"{file}\"]"), &format!("verify = [\"{line}\"]")])
+        })
+        .collect();
+    commit_rows(repo, &rows);
+    let mut ids = Vec::new();
+    for ((row, bead), file) in ["a", "b", "c"].iter().zip(["s2-2e5", "s2-3ax", "s2-4cz"]).zip(files) {
+        let id = intake_bead(repo, state, &format!("{DESIGN_FILE}#{row}"), bead);
+        let runner = format!("mkdir -p crates/toy && echo {row} > {file} && git add -A && git commit -q -m runner");
+        let spawned = spawn_with(repo, state, &id, &runner);
+        assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "{row} の spawn: {}", stderr_of(&spawned));
+        let gated = gate_once(repo, state, &id, Some(&fake_lens(marker, &lens_verdict("PASS"))));
+        assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "{row} の gate: {}", stderr_of(&gated));
+        ids.push(id);
+    }
+    ids.try_into().expect("3 便")
+}
+
+/// 便の `Landed` の detail の `sha:`（無ければ空）。
+fn landed_sha_of(state: &Path, id: &str) -> String {
+    landed_detail(state, id)
+        .split_whitespace()
+        .find_map(|word| word.strip_prefix("sha:"))
+        .map(str::to_owned)
+        .unwrap_or_default()
+}
+
+/// 面 5（`verdicts.jsonl`）の行数。
+fn verdict_lines(state: &Path) -> usize {
+    fs::read_to_string(land::verdicts_path(state)).map(|text| text.lines().filter(|line| !line.trim().is_empty()).count()).unwrap_or(0)
+}
+
+/// 便の `RunDone stage=Landed` の件数（着地そのものの行だけ・終端の `terminal:` は数えない）。
+fn landed_count(state: &Path, id: &str) -> usize {
+    trail(state, id)
+        .into_iter()
+        .filter(|(kind, stage, detail)| {
+            *kind == EventKind::RunDone
+                && *stage == Some(Stage::Landed)
+                && detail.as_deref().is_some_and(|found| found.starts_with("sha:"))
+        })
+        .count()
+}
+
+/// 列の 3 本が列の順に載った形: 親の連鎖（base → a → b → c）・main の先端は c・仕事が載る・`Landed` は便ごとに 1 件・
+/// 段は Landed・追随は 0 回・面 5 は 3 行で先頭は自分の番（`first`）・後続は `train`。返すのは main の先端。
+fn assert_train_chain(repo: &Path, state: &Path, base: &str, ids: [&String; 3]) -> String {
+    let [id_a, id_b, id_c] = ids;
+    let (sha_a, sha_b, sha_c) = (landed_sha_of(state, id_a), landed_sha_of(state, id_b), landed_sha_of(state, id_c));
+    assert_eq!(git(repo, &["rev-parse", &format!("{sha_a}^")]), base, "a は base の上");
+    assert_eq!(git(repo, &["rev-parse", &format!("{sha_b}^")]), sha_a, "b は a の上");
+    assert_eq!(git(repo, &["rev-parse", &format!("{sha_c}^")]), sha_b, "c は b の上");
+    let main = git(repo, &["rev-parse", "refs/heads/main"]);
+    assert_eq!(main, sha_c, "main の先端は c");
+    assert_eq!(git(repo, &["show", &format!("{main}:src/c.rs")]), "c", "c の仕事が main に載る");
+    assert_eq!(git(repo, &["show", &format!("{main}:crates/toy/a.rs")]), "a", "a の仕事も載る");
+    for id in ids {
+        assert_eq!(landed_count(state, id), 1, "Landed は便ごとに 1 件: {:?}", trail(state, id));
+        assert!(show_line(repo, state, id).contains("stage=Landed"), "段は Landed: {id}");
+        assert_eq!(follow_count(state, id), 0, "追随は 0 回: {:?}", stages(state, id));
+    }
+    assert_eq!(verdict_lines(state), 3, "面 5 は 3 行");
+    let orders: Vec<String> = ids.iter().map(|id| exported_order(state, id)).collect();
+    assert_eq!(orders, vec!["first", "train", "train"], "先頭は自分の番・後続は train");
+    main
+}
+
+/// 候補の木の record: 先頭の `verify.jsonl` に共通 verify が `train=3` で 1 組、後続に足されたのは契約 verify だけで
+/// `train=` を持たない（`before` は land の前の record 数）。
+fn assert_train_records(state: &Path, ids: [&String; 3], before: &[usize]) {
+    let head_rows = verify_rows(state, ids[0]);
+    let trained: Vec<String> = head_rows.iter().filter(|row| value_of(row, "train") == "3").map(|row| value_of(row, "kind")).collect();
+    assert_eq!(trained, vec!["common".to_owned()], "先頭に共通 verify が train=3 で 1 組: {head_rows:?}");
+    for (id, seen) in ids.iter().zip(before).skip(1) {
+        let rows = verify_rows(state, id);
+        let added: Vec<String> = rows.iter().skip(*seen).map(|row| value_of(row, "kind")).collect();
+        assert_eq!(added, vec!["contract".to_owned()], "後続に足されたのは契約 verify だけ: {rows:?}");
+        assert!(rows.iter().all(|row| value_of(row, "train").is_empty()), "後続は train= を持たない: {rows:?}");
+    }
+}
+
+/// (a) 上限 3 で先頭を land すると 3 本が**列の順に**着地する: 親の連鎖（base → a → b → c）・main の先端は c・`Landed`
+/// 3 件・面 5 は 3 行で後続 2 本が `order=train`・後続の追随は 0 回。先頭の `verify.jsonl` に共通 verify が `train=3` で
+/// 1 組、後続の `verify.jsonl` に足された record は契約 verify だけ（検出線は写しに無い）。着地済みの便の land は
+/// rc 0 で main も event も動かさない。base（`train=` の無い経路）は a だけが載り b / c は Gated のまま＝RED。
+#[test]
+fn pipe_train_three_runs_land_in_queue_order_with_one_candidate_check() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let [id_a, id_b, id_c] = train_runs(&repo, &state, &marker, [ALL_GREEN, ALL_GREEN, ALL_GREEN]);
+    let base = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let before: Vec<usize> = [&id_a, &id_b, &id_c].iter().map(|id| verify_rows(&state, id).len()).collect();
+    let rules = write_rules_train(&state, "rules-train.toml", Some(3));
+    let out = land_extra(&repo, &state, &id_a, &["--rules", &rules]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "列の land は rc 0: {} / {}", stdout_of(&out), stderr_of(&out));
+    assert!(stdout_of(&out).contains(&format!("run={id_a} train=3")), "stdout に train=3: {}", stdout_of(&out));
+    let main = assert_train_chain(&repo, &state, &base, [&id_a, &id_b, &id_c]);
+    assert_train_records(&state, [&id_a, &id_b, &id_c], &before);
+    let events = event_count(&state);
+    let again = land_extra(&repo, &state, &id_b, &["--rules", &rules]);
+    assert_eq!(again.status.code(), Some(i32::from(RC_OK)), "着地済みの便の land は rc 0: {}", stderr_of(&again));
+    assert!(stdout_of(&again).contains("already-landed"), "already-landed を名乗る: {}", stdout_of(&again));
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), main, "main は不変");
+    assert_eq!(event_count(&state), events, "event は増えない");
+    clean(&[&repo, &state]);
+}
+
+/// (a) 番待ちで待っている 2 本目の land（子 process・`pipe.land_wait_s` の窓）と並行に先頭が列で着地すると、2 本目は
+/// 起きた後に rc 0 の `already-landed` で終端し event を 1 件も足さない（追随へ進まない）。
+#[test]
+fn pipe_train_waiting_second_run_wakes_already_landed() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let [id_a, id_b, _id_c] = train_runs(&repo, &state, &marker, [ALL_GREEN, ALL_GREEN, ALL_GREEN]);
+    let rules = write_rules_train(&state, "rules-train.toml", Some(3));
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let mut waiting = land_in_background(&repo, &state, &id_b, &rules, &lens);
+    std::thread::sleep(Duration::from_secs(2));
+    assert!(waiting.try_wait().expect("子の状態を読める").is_none(), "2 本目は列の前が空くまで待っている");
+    let first = land_extra(&repo, &state, &id_a, &["--rules", &rules]);
+    assert_eq!(first.status.code(), Some(i32::from(RC_OK)), "先頭の land: {} / {}", stdout_of(&first), stderr_of(&first));
+    assert!(stdout_of(&first).contains("train=3"), "列で着地した: {}", stdout_of(&first));
+    let events = event_count(&state);
+    let main = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let out = waiting.wait_with_output().expect("待っていた land が終わる");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "起きた 2 本目は rc 0: {} / {}", stdout_of(&out), stderr_of(&out));
+    assert!(stdout_of(&out).contains("already-landed"), "already-landed で終端: {}", stdout_of(&out));
+    assert_eq!(event_count(&state), events, "event は増えない");
+    assert_eq!(follow_count(&state, &id_b), 0, "追随しない: {:?}", stages(&state, &id_b));
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), main, "main は動かない");
+    clean(&[&repo, &state]);
+}
+
+/// (b) 3 本目の契約 verify が候補の木で赤なら列を解き、先頭だけが既存の経路で着地する。後続 2 本は Gated PASS の
+/// まま列に残り、stdout に `dissolved`。
+#[test]
+fn pipe_train_red_contract_dissolves_and_only_the_front_lands() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let [id_a, id_b, id_c] = train_runs(&repo, &state, &marker, [ALL_GREEN, ALL_GREEN, TRAIN_RED]);
+    let base = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let rules = write_rules_train(&state, "rules-train.toml", Some(3));
+    let out = land_extra(&repo, &state, &id_a, &["--rules", &rules]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "先頭は着地する: {} / {}", stdout_of(&out), stderr_of(&out));
+    assert!(stdout_of(&out).contains(&format!("run={id_a} train=3 dissolved")), "列を解いた: {}", stdout_of(&out));
+    let main = git(&repo, &["rev-parse", "refs/heads/main"]);
+    assert_eq!(landed_sha_of(&state, &id_a), main, "先頭だけが載る");
+    assert_eq!(git(&repo, &["rev-list", "--count", &format!("{base}..{main}")]), "1", "main は 1 本だけ進む");
+    for id in [&id_b, &id_c] {
+        assert!(show_line(&repo, &state, id).contains("stage=Gated"), "後続は Gated のまま: {id}");
+        assert_eq!(value_of(&verdict_pairs(&state, id), "verdict"), "PASS", "後続の判定は PASS のまま: {id}");
+        assert!(worktree_of(&repo, id).is_dir(), "後続の worktree は列に残る: {id}");
+        assert_eq!(landed_count(&state, id), 0, "後続は着地しない: {id}");
+    }
+    assert_eq!(verdict_lines(&state), 1, "面 5 は先頭の 1 行");
+    clean(&[&repo, &state]);
+}
+
+/// (c) 2 本目が先頭と衝突する周（gate の後に 2 本目の branch が先頭と同じ file を足した形）は 2 本目を候補から外して
+/// 1 本目と 3 本目が着地する。2 本目の worktree は clean で HEAD も動かず、event は 1 件も増えない。
+#[test]
+fn pipe_train_conflicting_second_is_left_out_and_the_rest_lands() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let [id_a, id_b, id_c] = train_runs(&repo, &state, &marker, [ALL_GREEN, ALL_GREEN, ALL_GREEN]);
+    let second = worktree_of(&repo, &id_b);
+    fs::create_dir_all(second.join("crates").join("toy")).expect("衝突の dir を作れる");
+    fs::write(second.join("crates").join("toy").join("a.rs"), "conflict\n").expect("衝突の file を書ける");
+    git(&second, &["add", "-A"]);
+    git(&second, &["commit", "-q", "-m", "conflict"]);
+    let head_before = git(&second, &["rev-parse", "HEAD"]);
+    let trail_before = trail(&state, &id_b).len();
+    let rules = write_rules_train(&state, "rules-train.toml", Some(3));
+    let out = land_extra(&repo, &state, &id_a, &["--rules", &rules]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "列の land は rc 0: {} / {}", stdout_of(&out), stderr_of(&out));
+    assert!(stdout_of(&out).contains(&format!("run={id_a} train=2")), "積んだのは 2 本: {}", stdout_of(&out));
+    let (sha_a, sha_c) = (landed_sha_of(&state, &id_a), landed_sha_of(&state, &id_c));
+    assert_eq!(git(&repo, &["rev-parse", &format!("{sha_c}^")]), sha_a, "c は a の上に詰めて載る");
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), sha_c, "main の先端は c");
+    assert!(show_line(&repo, &state, &id_b).contains("stage=Gated"), "2 本目は Gated のまま");
+    assert_eq!(trail(&state, &id_b).len(), trail_before, "2 本目の event は増えない");
+    assert_eq!(git(&second, &["rev-parse", "HEAD"]), head_before, "2 本目の HEAD は動かない");
+    assert!(git(&second, &["status", "--porcelain"]).is_empty(), "2 本目の worktree は clean");
+    assert_eq!(exported_order(&state, &id_c), "train", "3 本目は train");
+    clean(&[&repo, &state]);
+}
+
+/// (d) 上限 1 と行の不在は先頭だけが着地し（`train=` を出さない）、後続は自分の land で従来どおり追随 1 回。
+#[test]
+fn pipe_train_limit_one_and_absent_row_land_only_the_front() {
+    for (name, limit) in [("limit-1", Some(1)), ("absent", None)] {
+        let (repo, state) = repo_with_state();
+        let marker = state.join("lens-ran");
+        let [id_a, id_b, _id_c] = train_runs(&repo, &state, &marker, [ALL_GREEN, ALL_GREEN, ALL_GREEN]);
+        let rules = write_rules_train(&state, "rules-train.toml", limit);
+        let first = land_extra(&repo, &state, &id_a, &["--rules", &rules]);
+        assert_eq!(first.status.code(), Some(i32::from(RC_OK)), "{name}: 先頭の land: {}", stderr_of(&first));
+        assert!(!stdout_of(&first).contains("train="), "{name}: 列を積まない: {}", stdout_of(&first));
+        assert!(show_line(&repo, &state, &id_b).contains("stage=Gated"), "{name}: 2 本目は Gated のまま");
+        let lens = fake_lens(&marker, &lens_verdict("PASS"));
+        let second = land_extra(&repo, &state, &id_b, &["--rules", &rules, "--lens", &lens]);
+        assert_eq!(second.status.code(), Some(i32::from(RC_OK)), "{name}: 2 本目の land: {}", stderr_of(&second));
+        assert_eq!(follow_count(&state, &id_b), 1, "{name}: 追随は 1 回: {:?}", stages(&state, &id_b));
+        assert!(show_line(&repo, &state, &id_b).contains("stage=Landed"), "{name}: 2 本目は Landed");
+        clean(&[&repo, &state]);
+    }
+}
+
+/// (g) 先端の木の主実測が赤の周は列の便すべてが `Failed detail=main-red` で `Landed` 0 件・main は 3 本ぶん進んだまま
+/// （巻き戻さない・既存の極性・どの便が赤かは帰属しない）。
+#[test]
+fn pipe_train_red_main_fails_every_run_and_keeps_main_advanced() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let [id_a, id_b, id_c] = train_runs(&repo, &state, &marker, [MAIN_RED, ALL_GREEN, ALL_GREEN]);
+    let base = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let rules = write_rules_train(&state, "rules-train.toml", Some(3));
+    let out = land_extra(&repo, &state, &id_a, &["--rules", &rules]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "main が赤い周は rc 1: {} / {}", stdout_of(&out), stderr_of(&out));
+    let main = git(&repo, &["rev-parse", "refs/heads/main"]);
+    assert_eq!(git(&repo, &["rev-list", "--count", &format!("{base}..{main}")]), "3", "main は 3 本ぶん進んだまま");
+    for id in [&id_a, &id_b, &id_c] {
+        assert_eq!(
+            stages(&state, id).last().cloned(),
+            Some((Some(Stage::Failed), Some("main-red".to_owned()))),
+            "列の便はすべて main-red: {id}"
+        );
+        assert_eq!(landed_count(&state, id), 0, "Landed は 0 件: {id}");
+    }
+    assert_eq!(verdict_lines(&state), 0, "面 5 へ書かない");
     clean(&[&repo, &state]);
 }

@@ -77,6 +77,32 @@ pub(crate) fn turn_now(state_dir: &Path, run: &str) -> Turn {
     turn_in(queue_of(state_dir).as_deref(), run)
 }
 
+/// 列の**自分の後ろ**に並ぶ便を鍵の順に `max − 1` 本まで選ぶ（**pure**・設計 pipeline.md §40・行 ah）。
+///
+/// 数えるのは [`turn_in`] と同じ面（`Gated` を 1 度でも通った ∧ worktree が実在 ∧ 最新の verdict が PASS）で、段は
+/// **`Gated` だけ**——終端の便は列に居らず、追随して `Implemented` へ戻り撃ち直している便は自分の land が worktree を
+/// 動かしている最中なので候補の木に積まない。鍵は最初の `Gated` の ts（同時刻は run id の辞書順）で、自分の鍵より
+/// 大きい便だけを取る。自分が列に居ない・鍵が無い周と `max` が 1 以下の周は空（先頭だけ＝従来の経路）。
+pub fn train_in(queue: &[Queued], me: &str, max: u64) -> Vec<String> {
+    let Some(mine) = queue.iter().find(|found| found.run == me).and_then(|found| found.gated_at.as_deref()) else {
+        return Vec::new();
+    };
+    let mut behind: Vec<(&str, &str)> = queue
+        .iter()
+        .filter(|found| found.stage == Stage::Gated && found.worktree && found.verdict == Some(Verdict::Pass))
+        .filter_map(|found| found.gated_at.as_deref().map(|ts| (ts, found.run.as_str())))
+        .filter(|key| *key > (mine, me))
+        .collect();
+    behind.sort_unstable();
+    let room = usize::try_from(max.saturating_sub(1)).unwrap_or(usize::MAX);
+    behind.into_iter().take(room).map(|(_, run)| run.to_owned()).collect()
+}
+
+/// いまの列の自分の後ろ（[`train_in`] を置き場の replay に当てる）。**列を導けない周は空**（積まない＝従来の経路）。
+pub(super) fn train_now(state_dir: &Path, run: &str, max: u64) -> Vec<String> {
+    queue_of(state_dir).map(|queue| train_in(&queue, run, max)).unwrap_or_default()
+}
+
 /// 列に入りうる段か（**終端でない ∧ `Gated` を 1 度でも通った**）。verdict と worktree の条件は呼び手が
 /// 重ねる（読めない判定を列から黙って外さないため・[`turn_in`]）。
 fn may_queue(stage: Stage, gated: bool) -> bool {
@@ -236,7 +262,7 @@ fn main_read(repo: &Path) -> MainRead {
     }
 }
 
-/// land の record と stdout の `order=`（設計 gate-cost.md §6・**閉じた 4 値**）。
+/// land の record と stdout の `order=`（設計 gate-cost.md §6・**閉じた 5 値**・`Train` は pipeline.md §40）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Order {
     /// 待ち無し。
@@ -247,6 +273,8 @@ pub(super) enum Order {
     Degraded,
     /// 列を導けなかった（読めないを「列なし」に読み替えず、その事実を残して進む）。
     Unmeasured,
+    /// 列の先頭が候補の木に積んで一緒に着地させた後続の便（設計 pipeline.md §40・自分では待っていない）。
+    Train,
 }
 
 impl Order {
@@ -257,7 +285,13 @@ impl Order {
             Self::Waited(secs) => format!("waited:{secs}"),
             Self::Degraded => "degraded".to_owned(),
             Self::Unmeasured => "unmeasured".to_owned(),
+            Self::Train => "train".to_owned(),
         }
+    }
+
+    /// 列の先頭として番を得た周か（`First` / `Waited`・候補の木を積んでよい周・設計 pipeline.md §40）。
+    pub(super) fn is_front(self) -> bool {
+        matches!(self, Self::First | Self::Waited(_))
     }
 }
 
@@ -314,7 +348,7 @@ pub(super) fn await_turn(entry: &Land<'_>) -> Order {
 #[cfg(test)]
 mod tests {
     // flip-check: moved s2-07l.253
-    use super::{after_wake, await_turn, first_gated_at, turn_in, Next, Order, Queued, Turn};
+    use super::{after_wake, await_turn, first_gated_at, train_in, turn_in, Next, Order, Queued, Turn};
     use crate::fleet::store::LockPolicy;
     use crate::fleet::{wait, Completion, Event, EventKind, Stage};
     use crate::pipe::contract::Contract;
@@ -349,7 +383,7 @@ mod tests {
             runnable_per_core: 0,
             blocked_per_core: 0,
         };
-        Land { run: "b-me", bead: "s2-mutant", repo, state_dir: state, contract, pr_cmd: None, lens: &LensSource::Absent, limits, runner: None, retries: 0, land_wait_s: wait_s, ci_wait_s: 0, bd: crate::ledger::DEFAULT_BD, approved: false, policy }
+        Land { run: "b-me", bead: "s2-mutant", repo, state_dir: state, contract, pr_cmd: None, lens: &LensSource::Absent, limits, runner: None, retries: 0, land_wait_s: wait_s, ci_wait_s: 0, bd: crate::ledger::DEFAULT_BD, approved: false, policy, train_max: 1 }
     }
 
     // flip-check: retroactive s2-07l.222
@@ -553,6 +587,68 @@ mod tests {
         assert_eq!(Order::Waited(7).as_value(), "waited:7");
         assert_eq!(Order::Degraded.as_value(), "degraded");
         assert_eq!(Order::Unmeasured.as_value(), "unmeasured");
+    }
+
+    /// 列の後ろは**鍵の順**（最初の `Gated` の ts・同時刻は run id）で、与えた並びに依らない。自分より前の便は数えない。
+    #[test]
+    fn pipe_train_picks_the_runs_behind_in_key_order() {
+        let queue = [
+            queued("late", Stage::Gated, Some(Verdict::Pass), LATE, true),
+            queued("mid-b", Stage::Gated, Some(Verdict::Pass), MID, true),
+            queued("ahead", Stage::Gated, Some(Verdict::Pass), EARLY, true),
+            queued("mid-a", Stage::Gated, Some(Verdict::Pass), MID, true),
+            queued("me", Stage::Gated, Some(Verdict::Pass), EARLY, true),
+        ];
+        assert_eq!(train_in(&queue, "me", 10), vec!["mid-a", "mid-b", "late"], "鍵の順・同時刻は id 順・前の `ahead` は外す");
+        assert_eq!(train_in(&queue, "mid-a", 10), vec!["mid-b", "late"], "同時刻の自分より id の大きい便から");
+    }
+
+    /// PASS でない便・worktree の無い便・終端の便・撃ち直し中（`Implemented`）の便・`Gated` を通っていない便は積まない。
+    /// 負例の対: 同じ列に `Gated(PASS)` の便を 1 本足すとその 1 本だけが積まれる（上の空が空虚でない）。
+    #[test]
+    fn pipe_train_leaves_out_non_pass_absent_worktree_and_terminal_runs() {
+        let mut queue = vec![
+            queued("me", Stage::Gated, Some(Verdict::Pass), EARLY, true),
+            queued("fail", Stage::Gated, Some(Verdict::Fail), LATE, true),
+            queued("inconclusive", Stage::Gated, Some(Verdict::Inconclusive), LATE, true),
+            queued("unreadable", Stage::Gated, None, LATE, true),
+            queued("retired", Stage::Gated, Some(Verdict::Pass), LATE, false),
+            queued("landed", Stage::Landed, Some(Verdict::Pass), LATE, true),
+            queued("failed", Stage::Failed, Some(Verdict::Pass), LATE, true),
+            queued("stopped", Stage::Stopped, Some(Verdict::Pass), LATE, true),
+            queued("regating", Stage::Implemented, Some(Verdict::Pass), LATE, true),
+            queued("ungated", Stage::Implemented, None, "", true),
+        ];
+        assert!(train_in(&queue, "me", 10).is_empty(), "積める便が無い");
+        queue.push(queued("pass", Stage::Gated, Some(Verdict::Pass), LATE, true));
+        assert_eq!(train_in(&queue, "me", 10), vec!["pass"], "Gated(PASS) ∧ worktree 在りの 1 本だけ");
+    }
+
+    /// 上限は**先頭を含む本数**で切る（`max − 1` 本の後続）。1 以下と 0 は後続 0 本、自分が列に居ない・鍵が無い周も空。
+    #[test]
+    fn pipe_train_cuts_at_the_limit_including_the_front() {
+        let queue = [
+            queued("me", Stage::Gated, Some(Verdict::Pass), EARLY, true),
+            queued("b", Stage::Gated, Some(Verdict::Pass), MID, true),
+            queued("c", Stage::Gated, Some(Verdict::Pass), MID, true),
+            queued("d", Stage::Gated, Some(Verdict::Pass), LATE, true),
+        ];
+        assert_eq!(train_in(&queue, "me", 3), vec!["b", "c"], "上限 3 = 自分 + 2 本");
+        assert_eq!(train_in(&queue, "me", 4), vec!["b", "c", "d"], "上限 4 = 自分 + 3 本");
+        assert!(train_in(&queue, "me", 1).is_empty(), "上限 1 は先頭だけ");
+        assert!(train_in(&queue, "me", 0).is_empty(), "上限 0 も先頭だけ");
+        assert!(train_in(&queue, "absent", 4).is_empty(), "列に居ない");
+        let no_key = [queued("me", Stage::Gated, Some(Verdict::Pass), "", true), queued("b", Stage::Gated, Some(Verdict::Pass), MID, true)];
+        assert!(train_in(&no_key, "me", 4).is_empty(), "自分の鍵が無い");
+    }
+
+    /// `order=` の `train` は列の先頭に積まれた後続の値で、先頭として番を得た周は `First` / `Waited` だけ。
+    #[test]
+    fn pipe_train_order_value_and_front() {
+        assert_eq!(Order::Train.as_value(), "train");
+        let fronts: Vec<bool> =
+            [Order::First, Order::Waited(3), Order::Degraded, Order::Unmeasured, Order::Train].iter().map(|order| order.is_front()).collect();
+        assert_eq!(fronts, vec![true, true, false, false, false], "縮退・導けない・積まれた周は先頭でない");
     }
 
     /// `Completion::LandTurn` は pid を見張らず（0）、列を導けない周は**満たされた側**（待たずに進む）。

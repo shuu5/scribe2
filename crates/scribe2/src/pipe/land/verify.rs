@@ -43,6 +43,18 @@ fn check_path(repo: &Path, id: &str) -> PathBuf {
 /// `verify-main.jsonl` の skip record 1 本（[`Skipped::main`]・木を必ず持つ）に残し、**書けない周は緑を名乗らない**
 /// （撃たずに緑と読める形を残さない・C10）。木が違う周・`tree` の無い周・比べられない周は従来どおり全段へ倒す。
 pub(super) fn verify_main(entry: &Land<'_>, new: &str) -> MainCheck {
+    verify_main_from(entry, new, None)
+}
+
+/// 着地の列の主実測（設計 pipeline.md §40）: [`verify_main`] と同じ 1 本を、`{base}` と write-set 照合の base を
+/// **候補の木を切った main**（`old`）に据えて撃つ。便の記録の base からの差分は列の他の便と main の動きを含むので、
+/// 照合は呼び手が列の write-set を合わせた契約（`entry.contract`）で行う。record は先頭の便の `verify-main.jsonl`。
+pub(super) fn verify_train_main(entry: &Land<'_>, new: &str, old: &str) -> MainCheck {
+    verify_main_from(entry, new, Some(old))
+}
+
+/// [`verify_main`] の本体（`base` が `Some` の周だけ材料の base を差し替える）。
+fn verify_main_from(entry: &Land<'_>, new: &str, base: Option<&str>) -> MainCheck {
     let skipped = main_detection(entry, new);
     if let Some((DetectionSkip::SameTree, tree)) = &skipped {
         return match record_main(entry, &[], Some(Skipped::main(tree))) {
@@ -65,7 +77,7 @@ pub(super) fn verify_main(entry: &Land<'_>, new: &str) -> MainCheck {
     // 材料が揃わない周は**赤を名乗らない**——読めなかったを落ちたに化けさせない。
     let materials = materials(entry);
     let (base, frozen) = match materials {
-        Ok(found) => found,
+        Ok((recorded, frozen)) => (base.map_or(recorded, str::to_owned), frozen),
         Err(reason) => {
             let _ = git_ok(entry.repo, &["worktree", "remove", "--force", &path]);
             return MainCheck::Unmeasurable(reason);

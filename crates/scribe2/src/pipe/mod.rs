@@ -35,6 +35,7 @@ mod stop;
 mod ratelimit;
 mod queue;
 mod retire;
+mod train;
 
 use crate::polarity::{OnFailure, Polarity, Timing};
 use crate::fleet::store::{self, LockPolicy, StoreError};

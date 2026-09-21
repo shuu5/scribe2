@@ -27,6 +27,9 @@ const ROW_RETRIES: &str = "pipe.follow_retries";
 /// land が着地待ちの列で自分の番を待つ上限（秒）を持つ rules 行（設計 gate-cost.md §6）。
 const ROW_LAND_WAIT: &str = "pipe.land_wait_s";
 
+/// 着地の列を候補の木 1 つに積む本数の上限（先頭を含む）を持つ rules 行（設計 pipeline.md §40・ADR-0039）。
+const ROW_TRAIN_MAX: &str = "land.train_max";
+
 /// 終端が CI の判定を待つ上限を宣言する rules 行の id（**値は code に焼かない**・憲法 C5）。
 const ROW_CI_WAIT: &str = "pipe.ci_wait_s";
 
@@ -76,6 +79,7 @@ fn terminal_only(args: &[String], id: &str, manifest: &Manifest, policy: LockPol
         bd,
         approved: resolved.approved,
         policy,
+        train_max: 1,
     };
     let terminal = super::land::terminal(&entry, &sha);
     Outcome {
@@ -261,7 +265,9 @@ pub(super) fn land_run(args: &[String], id: &str, manifest: &Manifest, policy: L
     if super::present(args, TERMINAL_ONLY) {
         return terminal_only(args, id, manifest, policy);
     }
-    let resolved = match resolve(args, id, &[Stage::Gated], &Extra::Nothing) {
+    // `Landed` も通す（設計 pipeline.md §40）: 列の先頭が候補の木に積んで着地させた便の land は、段を読んで何もせず
+    // rc 0 で終わる（判定は land の番待ちの直後の 1 点）。`--pr-cmd` の形は列を見ないので従来どおり段違いで断る。
+    let resolved = match resolve(args, id, &[Stage::Gated, Stage::Landed], &Extra::Nothing) {
         Ok(found) => found,
         Err(outcome) => return outcome,
     };
@@ -270,6 +276,7 @@ pub(super) fn land_run(args: &[String], id: &str, manifest: &Manifest, policy: L
         Err(reason) => return broken(reason),
     };
     let pr_cmd = match flag(args, "--pr-cmd") {
+        Ok(Some(_)) if resolved.stage == Stage::Landed => return refused(format!("run {id} の段は Landed である")),
         Ok(found) => found,
         Err(reason) => return refused(reason),
     };
@@ -322,6 +329,8 @@ pub(super) fn land_run(args: &[String], id: &str, manifest: &Manifest, policy: L
         bd,
         approved: resolved.approved,
         policy,
+        // 着地の列を積む上限（設計 pipeline.md §40）。**行が無い・読めない周は 1**＝先頭だけ（従来の経路・止めない）。
+        train_max: int_row(manifest, ROW_TRAIN_MAX).unwrap_or(1),
     })
 }
 

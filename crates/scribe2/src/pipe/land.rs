@@ -76,7 +76,7 @@ use verify::{main_red, main_unmeasured, verify_main};
 mod finish;
 
 use finish::{finish, open_pr, squash};
-pub(in crate::pipe) use finish::{landed_sha, terminal};
+pub(in crate::pipe) use finish::{land_train, landed_sha, terminal, Car};
 
 pub(crate) use super::queue::turn_now;
 pub use super::queue::{turn_in, Queued, Turn};
@@ -214,6 +214,9 @@ pub struct Land<'a> {
     pub approved: bool,
     /// lock の待ち方。
     pub policy: LockPolicy,
+    /// 着地の列を候補の木 1 つに積む本数の上限（先頭を含む・rules 行 `land.train_max`・行が無い / 読めない周は 1
+    /// ＝先頭だけ・設計 §40）。land 自身は数値を見ず [`super::train`] へ渡す。
+    pub train_max: u64,
 }
 
 /// main が動いた便の追随の結果（設計 §5.4・§29）。
@@ -312,9 +315,21 @@ pub fn land(entry: &Land<'_>) -> Outcome {
     // **着地の順番**（設計 gate-cost.md §6）: 前提検査の直後・追随の前に列を見て待つ。`--pr-cmd` の形は
     // 上で返っている＝main を動かさないので列を見ない（stale base を見ないのと同じ理由）。
     let order = await_turn(entry);
+    // **番待ちから戻った直後の 1 点で段を読む**（設計 §40）: 列の先頭が自分を候補の木に積んで着地させた便は
+    // 何もせず rc 0（§29 の冪等の終端を段で先に読む・worktree の実在を要さない・待たない周も同じ点を通る）。
+    if let Some(settled) = settled_in_train(entry, order) {
+        return settled;
+    }
     // 追随・撃ち直し・stale の判定行は周を跨いで**捨てない**（起きたことは event に残り lens も消費している＝
     // stdout だけが空だと読み手が「何もしなかった」と誤読する）。
     let mut lines = Vec::new();
+    // **列の先頭の周は後ろの便を候補の木に積む**（設計 §40・[`super::train`]）。解いた周は判定行を残して先頭 1 本の
+    // 既存の経路（追随 → 撃ち直し）へそのまま入る。
+    match super::train::train(entry, &worktree, order) {
+        super::train::Train::Landed(outcome) => return outcome,
+        super::train::Train::Dissolved(line) => lines.push(line),
+        super::train::Train::Solo => {}
+    }
     loop {
         let (old, now) = match attempt(entry, &worktree, order, &mut lines) {
             Attempt::Settled(outcome) => return with_lines(lines, outcome),
@@ -330,6 +345,21 @@ pub fn land(entry: &Land<'_>) -> Outcome {
             return with_lines(lines, stopped);
         }
         lines.push(format!("run={} stale={old}..{now}", entry.run));
+    }
+}
+
+/// 番待ちの間に列の先頭が自分を着地させた / 終端させた便（設計 §40）。`Landed` は rc 0 で `already-landed`、
+/// 主実測が赤で列ごと `Failed` になった便は rc 1（追随へ進まない）。段を読めない周と他の段は `None`（従来どおり）。
+fn settled_in_train(entry: &Land<'_>, order: Order) -> Option<Outcome> {
+    let state = super::current(entry.state_dir).ok()?;
+    match state.runs.get(entry.run)?.stage {
+        Stage::Landed => Some(Outcome::ok_line(format!(
+            "run={} {ALREADY_LANDED}=1 order={}",
+            entry.run,
+            order.as_value()
+        ))),
+        Stage::Failed => Some(refused(format!("run {} は番待ちの間に終端した（段 Failed）", entry.run))),
+        _ => None,
     }
 }
 

@@ -380,6 +380,17 @@ enabled = true
 ruling = "user 2026-09-13T02:50Z"
 ruled_at = "2026-09-13"
 
+# 着地の列（merge train・設計 pipeline.md §40・ADR-0039）。先頭を含めて最大この本数を候補の木 1 つに積み、
+# 検査を 1 回撃って列の順に着地する。赤なら列を解いて先頭だけが従来の経路へ進む。値 1 と行の不在は先頭だけ。
+
+[[rule]]
+id = "land.train_max"
+kind = "LandTrainMax"
+value = 4
+enabled = true
+ruling = "user 2026-09-17T03:28Z"
+ruled_at = "2026-09-17"
+
 # land の終端の CI の照合（設計 contract-source.md §5）。push の後、この上限まで forge の判定を待つ。
 # 超えた周は unmeasurable で止め、**台帳を close しない**（FailClosed・やり直しは pipe land --terminal-only）。
 

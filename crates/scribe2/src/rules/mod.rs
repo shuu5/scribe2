@@ -234,6 +234,9 @@ pub enum RuleKind {
     /// 便を新しい順に読み、同じ理由の型（`FindingKind`）の FAIL が PASS で途切れるまでこの本数続き、契約 file と
     /// 節の本文がともに不変の周を `same-kind-repeated` で断る。
     ReviewSameKindStop,
+    /// 着地の列を候補の木 1 つに積む本数の上限（本・先頭を含む・設計 pipeline.md §40・ADR-0039）。値 1 と
+    /// 行の不在は先頭だけ（列を積まない＝従来の経路）。
+    LandTrainMax,
 }
 
 /// [`RuleKind`] の全 variant。parity test の母集団である。
@@ -289,6 +292,7 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::RoleModel,
     RuleKind::RoleEffort,
     RuleKind::ReviewSameKindStop,
+    RuleKind::LandTrainMax,
 ];
 
 impl RuleKind {
@@ -346,6 +350,7 @@ impl RuleKind {
             Self::RoleModel => "RoleModel",
             Self::RoleEffort => "RoleEffort",
             Self::ReviewSameKindStop => "ReviewSameKindStop",
+            Self::LandTrainMax => "LandTrainMax",
         }
     }
 
@@ -389,6 +394,7 @@ impl RuleKind {
             | Self::PipeSizeMLines
             | Self::PipeSizeLLines
             | Self::ReviewSameKindStop
+            | Self::LandTrainMax
             | Self::AccountSelection => ValueShape::Int,
             Self::DialogueSurface
             | Self::RunnerModel
