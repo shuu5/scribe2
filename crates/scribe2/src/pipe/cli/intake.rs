@@ -10,6 +10,13 @@
 //! （導出値を作り、行に `write-set` が在れば集合一致を要り、無ければ導出値を契約の写しの write-set に書く）。
 //! pointer でない `design`（(b) の前の契約 file）は従来どおり導出しない。**撃つのは受付だけ**（CI は撃たない）。
 //!
+//! **Promised の行**（契約表の行 ag・contract-source.md §33）: 行が約束の行（`[[promise]]`）を 1 つでも持てば
+//! [`WriteSet::Promised`]。器は約束の行から write-set（[`closure::derive_promised`]＝§3 の導出の 1 本）と契約 file の
+//! `verify` / `done`（[`crate::pipe::contract::promised_verify`] / [`crate::pipe::contract::promised_done`]）を生成し、
+//! 行の値の代わりに写しへ載せる（設計 doc には書き戻さない）。行が導く欄を手で書いた周は `promised-field-written`・
+//! `symbols` の名が base と合わない周は `promise-symbol-unresolved`・行の `verify` が生成値と集合で違う周は
+//! `write-set-drift`（§3 と同じ照合）で断る。
+//!
 //! **judge と create**（契約表の行 u・contract-source.md §21・C2「判定関数は 1 本」）: 受付の判定は [`judge`]（run を作らない・
 //! 断りを判定関数 1 本につき高々 1 件で**全部**集める）と [`create`]（run dir・写し・event）の 2 段で、`intake` = judge →
 //! create（列の先頭の 1 件で断る＝従来の外形）・`pipe preflight`（[`super::preflight`]）= judge だけ。各判定関数
@@ -56,19 +63,21 @@ const ROW_SIZE_M: &str = "pipe.size_m_lines";
 /// 契約の `size` = L の見積を持つ rules 行。
 const ROW_SIZE_L: &str = "pipe.size_l_lines";
 
-/// 契約の write-set の出所（設計 contract-source.md §3・C10「導出値と宣言値を型で分ける」）。**閉じた 2 値**で、
-/// 契約表の行の欄の有無だけで決まる（散文の免除を持たない）。
+/// 契約の write-set の出所（設計 contract-source.md §3 / §33・C10「導出値と宣言値を型で分ける」）。**閉じた 3 値**で、
+/// 契約表の行の欄と約束の行の有無だけで決まる（散文の免除を持たない）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WriteSet {
     /// 器が導出した（`creates` / `tests` / `also` のどれかを持つ行と、新欄も `write-set` も無い行）。
     Derived,
     /// 行が手で列挙した（新欄を持たず `write-set` を持つ行・(h) の前の形）。
     Declared,
+    /// 器が約束の行（`[[promise]]`）から導出した（約束の行を 1 つでも持つ行・§33）。
+    Promised,
 }
 
 /// [`WriteSet`] の全 variant（宣言順・`enum-slices` が集合完全性を測る・読むのは pin の歯だけ）。
 #[cfg_attr(not(test), expect(dead_code, reason = "宣言順 pin の歯だけが読む（`REFUSALS` と同じ形）"))]
-pub(crate) const WRITE_SETS: &[WriteSet] = &[WriteSet::Derived, WriteSet::Declared];
+pub(crate) const WRITE_SETS: &[WriteSet] = &[WriteSet::Derived, WriteSet::Declared, WriteSet::Promised];
 
 impl WriteSet {
     /// 判定行の token の値。
@@ -76,6 +85,7 @@ impl WriteSet {
         match self {
             Self::Derived => "derived",
             Self::Declared => "declared",
+            Self::Promised => "promised",
         }
     }
 }
@@ -329,7 +339,18 @@ pub(in crate::pipe) fn generated(
     // 行が `write-set` を持たない周（Derived の行・§3「write-set の導出」）は**導出値**を写しに書く。
     // 契約 file は write-set を 1 本以上要るので、空のまま書くと器が自分の生成物を読めない。
     // 導出は行と base だけで決まるので、後段の [`settle_write_set`] と同じ 1 実装をここで撃つ（C2）。
-    let write_set = if row.write_set.is_empty() { derived_write_set(&row, materials)? } else { row.write_set.clone() };
+    // Promised の行（§33）は約束の行からの生成値（write-set / verify / done）を行の値の代わりに渡す。
+    let (row, write_set) = match promised(&pointer.path, &text, &row, materials)? {
+        Some(found) => (generated_row(&row, &found), found.write_set),
+        None if row.write_set.is_empty() => {
+            let derived = derived_write_set(&row, materials)?;
+            (row, derived)
+        }
+        None => {
+            let written = row.write_set.clone();
+            (row, written)
+        }
+    };
     let body = crate::pipe::contract::render(&row, &design, &write_set);
     let contract = Contract::parse(&body).map_err(|errors| {
         denied(DENIAL_GENERATED, unloadable(errors))
@@ -346,6 +367,82 @@ fn derived_write_set(row: &ContractRow, materials: &Materials) -> Result<Vec<Str
     let derived =
         closure::derive_write_set(&fields, &materials.base()).map_err(|error| refuse(&refuse_of(error, row), &[]))?;
     Ok(derived.into_iter().collect())
+}
+
+/// Promised の行（設計 contract-source.md §33）の生成値（契約 file に行の値の代わりに載せる）。
+struct Generated {
+    /// 約束の行から導いた write-set（§3 の導出の 1 本の値・辞書順）。
+    write_set: Vec<String>,
+    /// 歯を（crate・scope）で束ねた nextest 行。
+    verify: Vec<String>,
+    /// `n` の順の「(n) expect」の 1 文。
+    done: String,
+}
+
+/// 行が約束の行を持てば（Promised）生成値を組む（持たない行は `Ok(None)`＝Declared / Derived の判定は不変）。
+///
+/// 断る順: 器が導く欄を行が書いた（`promised-field-written`・書かれた欄を全部名指す）→ `symbols` の名が base と合わない
+/// （`promise-symbol-unresolved`）→ 導出の欄が解けない（§3 と同じ理由）→ 行の `verify` が生成値と集合で違う（§3 と同じ
+/// `write-set-drift`）。約束の行は `text`（base の設計 doc の本文）を同じ parse で読み直して引く。
+fn promised(path: &str, text: &str, row: &ContractRow, materials: &Materials) -> Result<Option<Generated>, Denial> {
+    let (_, promises) = table::read_table(path, text).unwrap_or_default();
+    let own = table::promises_of(&promises, &row.id);
+    if own.is_empty() {
+        return Ok(None);
+    }
+    let fields = written_fields(row);
+    if !fields.is_empty() {
+        return Err(refuse(&Refuse::PromisedFieldWritten { row: row.id.clone(), fields }, &[]));
+    }
+    check_symbols(&own, materials).map_err(|error| refuse(&error, &[]))?;
+    let (derived, inputs) =
+        closure::derive_promised(&own, &materials.base()).map_err(|error| refuse(&refuse_of(error, row), &[]))?;
+    let verify = crate::pipe::contract::promised_verify(&inputs.teeth);
+    if !row.verify.is_empty() {
+        let wanted: BTreeSet<String> = verify.iter().cloned().collect();
+        closure::check_drift(&row.verify, &wanted).map_err(|error| refuse(&refuse_of(error, row), &[]))?;
+    }
+    let done = crate::pipe::contract::promised_done(&own);
+    Ok(Some(Generated { write_set: derived.into_iter().collect(), verify, done }))
+}
+
+/// Promised の行が書いてはならない欄のうち書かれたもの（欄の宣言順＝`FIELDS` の順）。
+fn written_fields(row: &ContractRow) -> Vec<String> {
+    let lists = [
+        ("touches", &row.touches),
+        ("surfaces", &row.surfaces),
+        ("write-set", &row.write_set),
+        ("creates", &row.creates),
+        ("tests", &row.tests),
+        ("also", &row.also),
+    ];
+    let mut found: Vec<String> =
+        lists.iter().filter(|(_, items)| !items.is_empty()).map(|(name, _)| (*name).to_owned()).collect();
+    if !row.done.is_empty() {
+        found.push("done".to_owned());
+    }
+    found
+}
+
+/// 約束の行の `symbols` の実在（§33 項 5・[`closure::symbols_in_base`] の同じ読み手）: `+` 無しの名は base に解け、`+` 付き
+/// の名は base に**無い**こと（`creates` の `MustBeAbsent` と同じ極性）。名指しの形でない字面は測れない（下界）。
+fn check_symbols(own: &[&table::PromiseRow], materials: &Materials) -> Result<(), Refuse> {
+    for promise in own {
+        let names: Vec<&str> = promise.symbols.iter().map(|name| name.strip_prefix(NEW_FILE).unwrap_or(name)).collect();
+        let found = closure::symbols_in_base(&names, &materials.tracked, &materials.sources)
+            .map_err(|error| Refuse::ContractTable(TableError::Unreadable { line: promise.line, reason: error.reason() }))?;
+        for (name, in_base) in promise.symbols.iter().zip(found) {
+            if in_base == Some(name.starts_with(NEW_FILE)) {
+                return Err(Refuse::PromiseSymbolUnresolved { of: promise.of.clone(), n: promise.n, name: name.clone() });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// 生成値を行の値の代わりに持つ行（`verify` / `done` を差し替える・他の欄は行のまま）。
+fn generated_row(row: &ContractRow, generated: &Generated) -> ContractRow {
+    ContractRow { verify: generated.verify.clone(), done: generated.done.clone(), ..row.clone() }
 }
 
 /// 行 1 つに (a) の表の検査を撃つ（`contracts check` と**同じ 1 実装**・C2）。ctx（allowlist / 禁じる語 /
@@ -557,7 +654,7 @@ fn create(
 /// 形の行は必ず [`ClosureError::TeethPlaceUnresolved`] で filter 語を返し、nextest 形でない行は空で通る（2 本目の
 /// 読み手を作らない）。本文で 0 本の filter 語は 0 本の事実として載せる（断るかは `settle_write_set` の側）。
 fn row_facts(repo: &Path, contract: &Contract, materials: &Materials, judged: &mut Judged) {
-    let Ok(Some(row)) = pointed_row(repo, contract) else {
+    let Ok(Some(Pointed { row, .. })) = pointed_row(repo, contract, materials) else {
         return;
     };
     judged.design = Some((contract.design.clone(), row.section.clone()));
@@ -591,10 +688,19 @@ struct Settled {
     files: usize,
 }
 
+/// 設計 pointer の行（Promised の行は `verify` / `done` を生成値に差し替えた形）と、Promised の行の導出した write-set。
+struct Pointed {
+    /// 行（Promised の行は [`generated_row`] の形＝写しと同じ値）。
+    row: ContractRow,
+    /// Promised の行の write-set（他の行は `None`）。
+    promised: Option<Vec<String>>,
+}
+
 /// 契約の `design` が設計 pointer（`<doc>#<id>`）なら base の契約表の行を引く（[`settle_write_set`] と [`row_facts`] が
 /// 同じ 1 本で読む）。pointer でない `design`（(b) の前の契約 file）は `Ok(None)`。pointer が解けない（doc を読めない・
-/// 区間が無い・行が無い）周は契約表の欠陥として断る（FR54・fail-closed）。
-fn pointed_row(repo: &Path, contract: &Contract) -> Result<Option<ContractRow>, Denial> {
+/// 区間が無い・行が無い）周は契約表の欠陥として断る（FR54・fail-closed）。Promised の行は [`promised`] の同じ 1 本で
+/// 生成値を組む（[`generated`] と同じ断り）。
+fn pointed_row(repo: &Path, contract: &Contract, materials: &Materials) -> Result<Option<Pointed>, Denial> {
     let Ok(pointer) = table::parse_pointer(&contract.design) else {
         return Ok(None);
     };
@@ -605,7 +711,10 @@ fn pointed_row(repo: &Path, contract: &Contract) -> Result<Option<ContractRow>, 
         let first = errors.into_iter().next().unwrap_or(TableError::RowMissing { line: 0, id: pointer.id.clone() });
         refuse(&Refuse::ContractTable(first), &rest)
     })?;
-    Ok(Some(row))
+    Ok(Some(match promised(&pointer.path, &text, &row, materials)? {
+        Some(found) => Pointed { row: generated_row(&row, &found), promised: Some(found.write_set) },
+        None => Pointed { row, promised: None },
+    }))
 }
 
 /// 行の欄を導出の材料に写す（`settle_write_set` と `row_facts` が同じ形で組む）。
@@ -634,9 +743,13 @@ fn base_of<'a>(sources: &'a [Source], snapshots: &'a [Source], tracked: &'a [Str
 ///   行に `write-set` が在れば集合一致でなければ `write-set-drift`・無ければ導出値が
 ///   write-set になる。
 fn settle_write_set(repo: &Path, contract: &Contract, materials: &Materials) -> Result<Option<Settled>, Denial> {
-    let Some(row) = pointed_row(repo, contract)? else {
+    let Some(Pointed { row, promised }) = pointed_row(repo, contract, materials)? else {
         return Ok(None);
     };
+    // Promised の行（§33）は約束の行から導いた値が write-set（行は write-set を持てない＝drift も撃たない）。
+    if let Some(files) = promised {
+        return Ok(Some(Settled { kind: WriteSet::Promised, files: files.len(), replaced: Some(files) }));
+    }
     let declared = row.creates.is_empty() && row.tests.is_empty() && row.also.is_empty() && !row.write_set.is_empty();
     let fields = fields_of(&row);
     let base = materials.base();
@@ -709,7 +822,7 @@ fn exclude_repeats(material: &Material<'_>, measured: &Contract, judged: &mut Ju
     let Some(state_dir) = state_dir else {
         return;
     };
-    let today = match today_of(repo, measured) {
+    let today = match today_of(repo, measured, materials) {
         Ok(Some(found)) => found,
         Ok(None) => return,
         Err(denial) => return judged.denials.push(denial),
@@ -727,8 +840,8 @@ fn exclude_repeats(material: &Material<'_>, measured: &Contract, judged: &mut Ju
 }
 
 /// 今回の材料を組む（行の無い pointer は `Ok(None)`・行の解けない周は [`pointed_row`] の断り）。
-fn today_of(repo: &Path, measured: &Contract) -> Result<Option<Today>, Denial> {
-    let Some(row) = pointed_row(repo, measured)? else {
+fn today_of(repo: &Path, measured: &Contract, materials: &Materials) -> Result<Option<Today>, Denial> {
+    let Some(Pointed { row, .. }) = pointed_row(repo, measured, materials)? else {
         return Ok(None);
     };
     let contract = crate::pipe::contract::render(&row, &measured.design, &measured.write_set);
@@ -1088,13 +1201,14 @@ mod tests {
         std::fs::remove_dir_all(&state).ok();
     }
 
-    /// 弁別は閉じた 2 値で、const slice は宣言順・`as_str` は判定行の token（`derived` / `declared`）。
+    /// 弁別は閉じた 3 値で、const slice は宣言順・`as_str` は判定行の token（`derived` / `declared` / `promised`・§33 の
+    /// Promised は宣言順の末尾）。
     #[test]
     fn contract_derive_write_set_kinds_are_pinned_in_declaration_order() {
-        assert_eq!(WRITE_SETS, [WriteSet::Derived, WriteSet::Declared], "母集団 2 値");
+        assert_eq!(WRITE_SETS, [WriteSet::Derived, WriteSet::Declared, WriteSet::Promised], "母集団 3 値");
         assert!(is_declaration_order(WRITE_SETS, |kind| kind as usize), "宣言順");
         let names: Vec<&str> = WRITE_SETS.iter().map(|kind| kind.as_str()).collect();
-        assert_eq!(names, ["derived", "declared"], "判定行の token");
+        assert_eq!(names, ["derived", "declared", "promised"], "判定行の token");
     }
 
     /// 写しの差し替えは `write-set` の行だけ（他の行は逐語・key の前後の空白も同じ key と読む・新規 file の `+` は

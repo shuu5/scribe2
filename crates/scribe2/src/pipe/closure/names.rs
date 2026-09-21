@@ -32,23 +32,37 @@ pub fn unresolved_names(
 ) -> Result<Vec<(String, String)>, ClosureError> {
     let bodies = texts_of(sources)?;
     // base に無くてよい項目（`+` の新規 file と `~` の着地で消える file）を接頭辞を剥がして path 形の解に足す。
-    let off_base: Vec<&str> = write_set.iter().filter_map(|item| item.strip_prefix(['+', '~'])).collect();
+    let off_base = write_set.iter().filter_map(|item| item.strip_prefix(['+', '~']));
+    let paths: Vec<&str> = tracked.iter().map(String::as_str).chain(off_base).collect();
     let touched: Vec<&str> = touches.iter().filter_map(|raw| raw.rsplit("::").next()).collect();
     let mut found = Vec::new();
     for (at, text) in texts {
         for name in backticked(text) {
-            let resolved = match form_of(name, &touched) {
-                Form::Path => tracked.iter().map(String::as_str).chain(off_base.iter().copied()).any(|path| path_matches(path, name)),
-                Form::Type { ty, item } => resolves_type(&bodies, &ty, &item),
-                Form::Fn(ident) => bodies.iter().any(|(_, body)| declares_fn(body, &ident)),
-                Form::Prose => true,
-            };
-            if !resolved {
+            if resolved(name, &touched, &paths, &bodies) == Some(false) {
                 found.push((name.to_owned(), at.clone()));
             }
         }
     }
     Ok(found)
+}
+
+/// 約束の行の `symbols` の各名が base に在るか（設計 §33 項 5・[`unresolved_names`] と**同じ読み手**・名は backtick の
+/// 中身と同じ字面で渡す）。3 形のどれでもない字面は `None`（名指しでない＝測れない・下界）。
+pub fn symbols_in_base(names: &[&str], tracked: &[String], sources: &[Source]) -> Result<Vec<Option<bool>>, ClosureError> {
+    let bodies = texts_of(sources)?;
+    let paths: Vec<&str> = tracked.iter().map(String::as_str).collect();
+    Ok(names.iter().map(|name| resolved(name, &[], &paths, &bodies)).collect())
+}
+
+/// 名指し 1 つが base に解けるか（path 形は `paths` の path・型の path 形は [`resolves_type`]・fn 形は宣言）。名指しの
+/// 形でない字面（`touched` の型の variant を含む）は `None`。
+fn resolved(name: &str, touched: &[&str], paths: &[&str], bodies: &[(&str, &str)]) -> Option<bool> {
+    match form_of(name, touched) {
+        Form::Path => Some(paths.iter().any(|path| path_matches(path, name))),
+        Form::Type { ty, item } => Some(resolves_type(bodies, &ty, &item)),
+        Form::Fn(ident) => Some(bodies.iter().any(|(_, body)| declares_fn(body, &ident))),
+        Form::Prose => None,
+    }
 }
 
 /// backtick の中身の形。

@@ -1978,7 +1978,8 @@ fn contract_schema_lists_creates_tests_also_and_write_set_is_optional() {
     for name in ["write-set", "creates", "tests", "also"] {
         assert_eq!(field(name), (name.to_owned(), "optional".to_owned(), "list".to_owned()), "{name} は任意の list");
     }
-    assert_eq!(field("verify").1, "required", "verify は必須のまま");
+    // §33（行 ag）以後、verify は約束の行を持たない行でだけ必須（条件付き）。
+    assert_eq!(field("verify").1, "conditional", "verify は条件付き");
     let doc = table_doc(&table_region(&[derive_row("a", &[("creates", "[\"src/new.rs\"]")])]));
     let repo = table_repo(&doc, &[]);
     let checked = contracts_check(&repo);
@@ -3406,6 +3407,153 @@ fn pipe_intake_depends_preflight_follows_the_same_judgement() {
     assert_eq!(tail_line(&out), "preflight: refused n=1", "{text}");
     assert_eq!(run_dirs(&state), Vec::<String>::new(), "run dir を作らない");
     clean(&[&missing, &state]);
+}
+
+// ───── 約束の行（設計 docs/design/contract-source.md §33・行 ag・`s2-07l.512`・接頭辞 `pipe_intake_promise_`） ─────
+
+/// Promised の形の行（[`table_row`] から `write-set` / `verify` / `done` を落とす・`over` が持つ欄だけ載せる）。
+fn promised_row(id: &str, over: &[(&str, &str)]) -> String {
+    let keeps = |line: &str| over.iter().any(|(name, _)| line.starts_with(&format!("{name} =")));
+    table_row(id, over)
+        .lines()
+        .filter(|line| keeps(line) || !["write-set =", "verify =", "done ="].iter().any(|head| line.starts_with(head)))
+        .map(|line| format!("{line}\n"))
+        .collect()
+}
+
+/// 約束の行 1 つ（`(of, n)` と欄の値は TOML の字面で渡す・`symbols` と `place` は空なら書かない）。
+fn promise_toml((of, n): (&str, u64), symbols: &str, files: &str, teeth: &str, expect: &str) -> String {
+    let mut lines = vec![
+        "[[promise]]".to_owned(),
+        format!("of = \"{of}\""),
+        format!("n = {n}"),
+        format!("text = \"約束 {n}\""),
+        format!("files = {files}"),
+    ];
+    if !symbols.is_empty() {
+        lines.push(format!("symbols = {symbols}"));
+    }
+    lines.extend([format!("teeth = {teeth}"), "fixture = \"toy の repo\"".to_owned(), format!("expect = \"{expect}\"")]);
+    format!("{}\n", lines.join("\n"))
+}
+
+/// 行 `id` の約束の行 2 つ（n = 2 を先に書く）: 1 = 閉じた型 `crate::tint::Tint` と新設 file・非 `.rs` の file と tests の歯
+/// `derive_ok`、2 = src の区間の歯 `derive_in_src`。
+fn two_promises(id: &str) -> String {
+    let second = promise_toml((id, 2), "", "[\"crates/toy/src/other.rs\"]", "[\"derive_in_src\"]", "src の歯が緑");
+    let first = promise_toml(
+        (id, 1),
+        "[\"crate::tint::Tint\", \"+fresh_helper(\"]",
+        "[\"crates/toy/src/tint.rs\", \"+crates/toy/src/new.rs\", \"rules/manifest.toml\"]",
+        "[\"derive_ok\"]",
+        "tests の歯が緑",
+    );
+    format!("{second}\n{first}")
+}
+
+/// [`two_promises`] の生成値の verify（歯の置き場の（crate・scope）ごとに 1 行・n の順）。
+const PROMISED_VERIFY: [&str; 2] =
+    ["cargo nextest run -p toy --test e2e --no-tests=fail derive_ok", "cargo nextest run -p toy --lib --no-tests=fail derive_in_src"];
+
+/// 便の写しの契約 file の本文。
+fn copied_contract(state: &Path, id: &str) -> String {
+    fs::read_to_string(state.join("pipe").join(id).join("contract.toml")).unwrap_or_default()
+}
+
+/// (1)(2)(5) `write-set` / `verify` / `done` を持たない行は約束の行を持てば parse を通り（`contracts check` の findings 0）、
+/// 受付は判定行 `write-set=promised files=6` で通る。写しの write-set は約束の行から導いた値（閉包 ∪ 歯の置き場 ∪ creates ∪
+/// also）・verify は（crate・scope）で束ねた nextest 行・done は n の順の「(n) expect」で、設計 doc は 1 byte も変わらない。
+/// base は `done` の無い行を parse の必須 key で断る（RED）。
+#[test]
+fn pipe_intake_promise_row_generates_write_set_verify_and_done() {
+    let doc = table_doc(&table_region(&[format!("{}\n{}", promised_row("a", &[]), two_promises("a"))]));
+    let (repo, state) = derive_repo(&doc);
+    let checked = bin_cmd()
+        .args(["contracts", "check", "--repo", &repo.display().to_string(), "--rules", &ceiling_rules(&state)])
+        .output()
+        .expect("binary を起動できる");
+    assert_eq!(stdout_of(&checked).trim_end(), "contracts check: docs=1 rows=1 findings=0", "{}", stderr_of(&checked));
+    let out = intake_raw(&repo, &state, "docs/design/toy.md#a", "s2-a");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "約束の行から生成して通る: {}", stderr_of(&out));
+    let tokens = intake_tokens(&out);
+    assert!(tokens.contains(&"write-set=promised".to_owned()) && tokens.contains(&"files=6".to_owned()), "判定行: {tokens:?}");
+    let id = run_id_of(&out);
+    let want = [
+        "+crates/toy/src/new.rs",
+        "crates/toy/src/other.rs",
+        "crates/toy/src/show.rs",
+        "crates/toy/src/tint.rs",
+        "crates/toy/tests/e2e.rs",
+        "rules/manifest.toml",
+    ];
+    assert_eq!(copied_write_set(&state, &id), want, "写しの write-set は約束の行からの導出値");
+    let copied = vessel::pipe::contract::Contract::parse(&copied_contract(&state, &id)).map_err(|errors| format!("{errors:?}"));
+    let (verify, done) = copied.map(|found| (found.verify, found.done)).unwrap_or_default();
+    assert_eq!(verify, PROMISED_VERIFY, "verify は束ねた nextest 行");
+    assert_eq!(done, "(1) tests の歯が緑 (2) src の歯が緑", "done は n の順");
+    assert_eq!(fs::read_to_string(repo.join("docs/design/toy.md")).unwrap_or_default(), doc, "設計 doc に書き戻さない");
+    stop_run_ok(&state, &id);
+    clean(&[&repo, &state]);
+}
+
+/// (3) Promised の行が導く欄を書く（`write-set` / `done`・両方書けば両方を名指す）・`symbols` の `+` 無しの名が base に無い・
+/// `+` 付きの名が base に在る の 4 行は、それぞれ rc 1 で断られ run dir も event も 0。
+#[test]
+fn pipe_intake_promise_refuses_written_fields_and_symbols_off_base() {
+    let teeth = "[\"derive_ok\"]";
+    let files = "[\"rules/manifest.toml\"]";
+    let rows = [
+        format!("{}\n{}", promised_row("w", &[("write-set", "[\"crates/toy/tests/e2e.rs\"]")]), promise_toml(("w", 1), "", files, teeth, "e")),
+        format!(
+            "{}\n{}",
+            promised_row("d", &[("done", "\"手書きの done\""), ("touches", "[\"crate::tint::Tint\"]")]),
+            promise_toml(("d", 1), "", files, teeth, "e")
+        ),
+        format!("{}\n{}", promised_row("s", &[]), promise_toml(("s", 1), "[\"crate::tint::Nope\"]", files, teeth, "e")),
+        format!("{}\n{}", promised_row("p", &[]), promise_toml(("p", 1), "[\"+crate::tint::Tint\"]", files, teeth, "e")),
+    ];
+    let (repo, state) = derive_repo(&table_doc(&table_region(&rows)));
+    for (id, want) in [
+        ("w", "行 w は約束の行を持つ（Promised）ので write-set を書けない"),
+        ("d", "行 d は約束の行を持つ（Promised）ので touches, done を書けない"),
+        ("s", "約束 s の n 1 の symbols の crate::tint::Nope が base に無い"),
+        ("p", "約束 p の n 1 の symbols の +crate::tint::Tint は base に既に在る"),
+    ] {
+        let out = intake_raw(&repo, &state, &format!("docs/design/toy.md#{id}"), &format!("s2-{id}"));
+        let err = stderr_of(&out);
+        assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "行 {id} は rc 1: {err}");
+        assert!(err.contains(want), "行 {id} の理由: {err}");
+        assert_eq!(run_dirs(&state), Vec::<String>::new(), "行 {id} は run dir 0");
+        assert_eq!(event_count(&state), 0, "行 {id} は event 0");
+    }
+    clean(&[&repo, &state]);
+}
+
+/// (4) `verify` を持つ Promised の行: 生成値と集合で一致すれば（順は問わない）通り写しは生成値のまま、不一致は §3 と同じ
+/// drift の断り（`write-set が導出値と一致しない`・不足と余分を名指す）で run dir 0。
+#[test]
+fn pipe_intake_promise_verify_matches_as_a_set_or_is_refused_as_drift() {
+    let [tests_line, lib_line] = PROMISED_VERIFY;
+    let same = format!("[\"{lib_line}\", \"{tests_line}\"]");
+    let other = format!("[\"{tests_line}\", \"cargo nextest run -p toy --lib --no-tests=fail derive_\"]");
+    let rows = [
+        format!("{}\n{}", promised_row("v", &[("verify", &same)]), two_promises("v")),
+        format!("{}\n{}", promised_row("x", &[("verify", &other)]), two_promises("x")),
+    ];
+    let (repo, state) = derive_repo(&table_doc(&table_region(&rows)));
+    let drifted = intake_raw(&repo, &state, "docs/design/toy.md#x", "s2-x");
+    let err = stderr_of(&drifted);
+    assert_eq!(drifted.status.code(), Some(i32::from(RC_REFUSED)), "不一致は rc 1: {err}");
+    assert!(err.contains("write-set が導出値と一致しない"), "§3 と同じ drift: {err}");
+    assert!(err.contains(&format!("missing: {lib_line}")) && err.contains("extra: cargo nextest run -p toy --lib --no-tests=fail derive_）"), "{err}");
+    assert_eq!(run_dirs(&state), Vec::<String>::new(), "run dir 0");
+    let out = intake_raw(&repo, &state, "docs/design/toy.md#v", "s2-v");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "集合で一致すれば通る: {}", stderr_of(&out));
+    assert!(intake_tokens(&out).contains(&"write-set=promised".to_owned()), "{}", stdout_of(&out));
+    let copied = copied_contract(&state, &run_id_of(&out));
+    let verify = vessel::pipe::contract::Contract::parse(&copied).map(|found| found.verify).unwrap_or_default();
+    assert_eq!(verify, PROMISED_VERIFY, "写しは生成値（n の順）");
+    clean(&[&repo, &state]);
 }
 
 // ───── `--repo` / `--state-dir` の cwd fallback を落とす（`s2-07l.310`・設計 pipeline.md §15・接頭辞 `pipe_repo_required_`） ─────

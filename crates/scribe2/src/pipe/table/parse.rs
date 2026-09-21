@@ -6,7 +6,7 @@
 //! （[`super::TableError`] / `Finding` / `Context`）は親 module `table.rs`・表の検査は兄弟 `table/check.rs` に
 //! 置いたまま。呼び手（`pipe/cli/intake.rs`・`pipe/review.rs`・歯）の `use` は親の再 export を通る。
 
-use super::{unreadable, ContractRow, Need, PromiseRow, TableError, BEGIN, END, PROMISE, PROMISE_FIELDS};
+use super::{unreadable, ContractRow, Need, PromiseRow, TableError, BEGIN, END, FIELDS, PROMISE, PROMISE_FIELDS};
 use crate::rules::manifest::{contract_rows, list, scalar, Scalar, TableRow, TableValue};
 use std::path::Path;
 
@@ -94,12 +94,38 @@ pub fn read_table(path: &str, text: &str) -> Result<(Vec<ContractRow>, Vec<Promi
     })?;
     let mut errors = Vec::new();
     let rows: Vec<ContractRow> = raws.iter().filter_map(|raw| typed(raw, offset, &mut errors)).collect();
+    errors.extend(conditional_missing(&raws, offset, &raw_promises));
     errors.extend(late);
     if errors.is_empty() {
         Ok((rows, promises))
     } else {
         Err(errors)
     }
+}
+
+/// 条件付きの欄（[`Need::Conditional`]・`done` / `verify`）の欠け: 約束の行を 1 つも持たない行（`of` がその行の id を
+/// 名指す約束の行が無い）に欄が無ければ、rules manifest の必須 key と同じ字面で行の見出しに名指す（設計 §33 の
+/// 「必須の緩み」）。約束の行は [`split_promises`] が抜いた生の行の `of` で数える（型付けに落ちた約束の行も親を持つ）。
+fn conditional_missing(raws: &[TableRow], offset: u64, promises: &[RawPromise]) -> Vec<TableError> {
+    let parents: Vec<&str> = promises
+        .iter()
+        .filter_map(|raw| match raw.value("of") {
+            Some((TableValue::One(Scalar::Str(of)), _)) => Some(of.as_str()),
+            _ => None,
+        })
+        .collect();
+    let mut found = Vec::new();
+    for raw in raws {
+        let promised = match raw.value("id") {
+            Some((TableValue::One(Scalar::Str(id)), _)) => parents.contains(&id.as_str()),
+            _ => false,
+        };
+        let missing = FIELDS.iter().filter(|field| field.need == Need::Conditional && raw.value(field.name).is_none());
+        if !promised {
+            found.extend(missing.map(|field| unreadable(shift(offset, raw.line()), &format!("必須 key {} が無い", field.name))));
+        }
+    }
+    found
 }
 
 /// 親の行 id `id` の約束の行（doc 順）。
@@ -431,6 +457,40 @@ mod tests {
             errors.iter().any(|error| error.line() == line && error.reason().contains("未知の key color")),
             "未知の key を名指す: {errors:?}"
         );
+    }
+
+    // flip-check: s2-07l.512
+
+    /// §33 (f): `done` と `verify` を持たない行は、約束の行が 1 つでも在れば parse を通り（2 欄は空）、約束の行が無ければ
+    /// 行の見出しの行番号で「必須 key done が無い」「必須 key verify が無い」の 2 件を名指される（他の行の約束の行では
+    /// 緩まない）。`read_rows` も同じ判定（1 実装）。
+    #[test]
+    fn contract_promise_need_relaxes_done_and_verify_only_for_a_row_with_promises() {
+        let bare = |id: &str| {
+            full_row(&[("id", &format!("\"{id}\""))])
+                .lines()
+                .filter(|line| !line.starts_with("done =") && !line.starts_with("verify ="))
+                .map(|line| format!("{line}\n"))
+                .collect::<String>()
+                .replace("schema = 1\n\n", "")
+        };
+        let promised = format!("# t\n\n{BEGIN}\nschema = 1\n\n{}{}{END}\n", bare("a"), full_promise("a", 1, &[]));
+        let (rows, promises) = read_table("docs/design/t.md", &promised).unwrap_or_else(|errors| panic!("通る: {errors:?}"));
+        let row = rows.first().unwrap_or_else(|| panic!("行 a"));
+        assert!(row.done.is_empty() && row.verify.is_empty(), "約束の行を持つ行の 2 欄は空: {row:?}");
+        assert_eq!(promises_of(&promises, "a").len(), 1, "約束の行 1");
+        assert_eq!(read_rows("docs/design/t.md", &promised).map(|found| found.len()), Ok(1), "read_rows も通す");
+        let orphan = format!("# t\n\n{BEGIN}\nschema = 1\n\n{}{}{}{END}\n", bare("b"), bare("a"), full_promise("a", 1, &[]));
+        let line = orphan.lines().position(|found| found == "id = \"b\"").map_or(0, |index| index as u64);
+        let errors = read_table("docs/design/t.md", &orphan).expect_err("約束の行を持たない行は断る");
+        let named: Vec<(u64, String)> = errors.iter().map(|error| (error.line(), error.reason())).collect();
+        assert_eq!(
+            named,
+            [(line, "必須 key verify が無い".to_owned()), (line, "必須 key done が無い".to_owned())],
+            "行 b の見出しで 2 欄を名指す（行 a は緩む）"
+        );
+        assert!(errors.iter().all(|error| matches!(error, TableError::Unreadable { .. })), "TableError の必須 key の欠け");
+        assert_eq!(read_rows("docs/design/t.md", &orphan).err(), Some(errors), "read_rows も同じ欠陥で断る");
     }
 
     /// `.md` は区間を行走査で抜き（0 = 表なし・2 つ以上・閉じない・end だけは断る）、`.toml` は全文、他の拡張子は

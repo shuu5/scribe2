@@ -348,10 +348,35 @@ pub fn render(row: &crate::pipe::table::ContractRow, design: &str, write_set: &[
     out
 }
 
+/// Promised の行（設計 contract-source.md §33 項 4）の契約 file の `verify`: 歯を置き場の（crate・scope）で束ね、束ごとに
+/// nextest 行 1 本（filter は歯の**完全名**を空白で並べる・束の順は歯の初出の順＝`n` の順）。行の形は §28 の scope を
+/// 置き場の path から読む [`crate::pipe::closure::nextest_line`] の 1 本。`teeth` は (完全名, 置き場の file)。
+pub fn promised_verify(teeth: &[(String, String)]) -> Vec<String> {
+    let mut bundles: Vec<(String, &str, Vec<&str>)> = Vec::new();
+    for (name, file) in teeth {
+        let head = crate::pipe::closure::nextest_line(file, &[]);
+        match bundles.iter_mut().find(|(found, _, _)| *found == head) {
+            Some((_, _, names)) if names.contains(&name.as_str()) => {}
+            Some((_, _, names)) => names.push(name),
+            None => bundles.push((head, file, vec![name])),
+        }
+    }
+    bundles.into_iter().map(|(_, file, names)| crate::pipe::closure::nextest_line(file, &names)).collect()
+}
+
+/// Promised の行の契約 file の `done`: 約束の行を `n` の順に「(n) `expect`」で並べ、空白で繋いだ 1 文（§33 項 4・設計
+/// doc には書き戻さない）。
+pub fn promised_done(promises: &[&crate::pipe::table::PromiseRow]) -> String {
+    let mut ordered = promises.to_vec();
+    ordered.sort_by_key(|promise| promise.n);
+    let parts: Vec<String> = ordered.iter().map(|promise| format!("({}) {}", promise.n, promise.expect)).collect();
+    parts.join(" ")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{render, Contract, GENERATED_DISPOSITION, GENERATED_OWNER};
-    use crate::pipe::table::ContractRow;
+    use super::{promised_done, promised_verify, render, Contract, GENERATED_DISPOSITION, GENERATED_OWNER};
+    use crate::pipe::table::{ContractRow, PromiseRow};
 
     /// 生成の材料になる行（欄は最小・値は行の parser が通す形）。
     fn row() -> ContractRow {
@@ -411,6 +436,69 @@ mod tests {
             Err(errors) => panic!("生成した本文を読めない: {errors:?}\n{body}"),
         };
         assert_eq!(found.goal, row.title, "字面は行のまま");
+    }
+
+    // flip-check: s2-07l.512
+
+    /// 約束の行 1 つ（`n` と `expect` だけを振る・他の欄は固定）。
+    fn promise(n: u64, expect: &str) -> PromiseRow {
+        PromiseRow {
+            line: n,
+            of: "b".to_owned(),
+            n,
+            text: format!("約束 {n}"),
+            files: vec!["docs/a.md".to_owned()],
+            symbols: Vec::new(),
+            teeth: vec![format!("t_{n}")],
+            place: String::new(),
+            fixture: "fixture".to_owned(),
+            expect: expect.to_owned(),
+        }
+    }
+
+    /// §33 (c): 歯は置き場の（crate・scope）ごとに 1 本の nextest 行に束ねられ（`src/` = `--lib`・`tests/<name>` =
+    /// `--test <name>`・crate の他の file と crate の外は scope 旗なし）、完全名が全部・初出の順に載る（同じ名は 1 回）。
+    /// 母集団 = 歯 6 本（重複 1）→ 行 4 本。
+    #[test]
+    fn contract_promise_render_bundles_teeth_by_crate_and_scope_with_full_names() {
+        let teeth: Vec<(String, String)> = [
+            ("a_one", "crates/c/src/x.rs"),
+            ("pipe::intake::pipe_intake_promise_b", "crates/c/tests/e2e/pipe/intake.rs"),
+            ("a_two", "crates/c/src/sub/y.rs"),
+            ("c_three", "crates/d/tests/e2e.rs"),
+            ("a_one", "crates/c/src/x.rs"),
+            ("bench_four", "crates/c/benches/z.rs"),
+        ]
+        .iter()
+        .map(|(name, file)| ((*name).to_owned(), (*file).to_owned()))
+        .collect();
+        assert_eq!(
+            promised_verify(&teeth),
+            [
+                "cargo nextest run -p c --lib --no-tests=fail a_one a_two",
+                "cargo nextest run -p c --test e2e --no-tests=fail pipe::intake::pipe_intake_promise_b",
+                "cargo nextest run -p d --test e2e --no-tests=fail c_three",
+                "cargo nextest run -p c --no-tests=fail bench_four",
+            ],
+            "（crate・scope）ごとに 1 行"
+        );
+        assert!(promised_verify(&[]).is_empty(), "歯 0 本は行 0 本");
+    }
+
+    /// §33 (c): `done` は約束の行を `n` の順に「(n) expect」で空白で繋いだ 1 文（書かれた順ではない）で、生成値を行の値の
+    /// 代わりに `render` へ渡した本文は器自身が読め（`Contract::parse`）、`verify` / `done` が生成値のまま載る。
+    #[test]
+    fn contract_promise_render_orders_done_by_n_and_the_body_round_trips() {
+        let (second, first) = (promise(2, "rc 1 で断る"), promise(1, "rc 0 で通る"));
+        let done = promised_done(&[&second, &first]);
+        assert_eq!(done, "(1) rc 0 で通る (2) rc 1 で断る", "n の順");
+        let verify = promised_verify(&[("t_1".to_owned(), "crates/c/src/x.rs".to_owned())]);
+        let mut row = row();
+        row.done = done.clone();
+        row.verify = verify.clone();
+        let body = render(&row, "docs/design/toy.md#b", &["crates/c/src/x.rs".to_owned()]);
+        let found = Contract::parse(&body).unwrap_or_else(|errors| panic!("生成した本文を読めない: {errors:?}\n{body}"));
+        assert_eq!((found.done, found.verify), (done, verify), "生成値が契約 file に載る");
     }
 
     /// 必須 key の欠落は**全件**返す（1 件目で止めない）。生成の不備がここで 1 回で見える。

@@ -53,7 +53,7 @@ shape = "list"
 
 [[field]]
 name = "verify"
-need = "required"
+need = "conditional"
 shape = "list"
 
 [[field]]
@@ -63,7 +63,7 @@ shape = "text"
 
 [[field]]
 name = "done"
-need = "required"
+need = "conditional"
 shape = "text"
 
 [[field]]

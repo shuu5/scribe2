@@ -66,14 +66,20 @@ pub enum Need {
     Required,
     /// 書かなくてよい（無ければ空）。
     Optional,
+    /// 約束の行（`[[promise]]`）を持たない行では必須・持つ行では任意（設計 §33 の「必須の緩み」）。約束の行を持つ
+    /// 行（Promised）の `done` / `verify` は器が約束の行から生成するので、書かない形が正しい。rules manifest の必須
+    /// key の検査は [`Need::Required`] だけを数え、この値の欠けは区間の parse（`table/parse.rs`）が約束の行を `of` で
+    /// 数えてから名指す。
+    Conditional,
 }
 
 impl Need {
-    /// 生成物に出す語。
+    /// 生成物に出す語（variant の名を小文字にした 1 語＝xtask の contracts-schema の導出と同じ形）。
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Required => "required",
             Self::Optional => "optional",
+            Self::Conditional => "conditional",
         }
     }
 }
@@ -124,9 +130,9 @@ pub const FIELDS: &[Field] = &[
     Field { name: "creates", need: Need::Optional, shape: Shape::List },
     Field { name: "tests", need: Need::Optional, shape: Shape::List },
     Field { name: "also", need: Need::Optional, shape: Shape::List },
-    Field { name: "verify", need: Need::Required, shape: Shape::List },
+    Field { name: "verify", need: Need::Conditional, shape: Shape::List },
     Field { name: "size", need: Need::Required, shape: Shape::Text },
-    Field { name: "done", need: Need::Required, shape: Shape::Text },
+    Field { name: "done", need: Need::Conditional, shape: Shape::Text },
     Field { name: "depends", need: Need::Optional, shape: Shape::List },
     Field { name: "classes", need: Need::Optional, shape: Shape::List },
     Field { name: "opens", need: Need::Optional, shape: Shape::List },
@@ -572,7 +578,7 @@ mod tests {
         text
     }
 
-    /// 欄の列は宣言順に 16（必須 7・任意 9）で、`contracts schema` はその順に描く。欄の形は reader が強制する
+    /// 欄の列は宣言順に 16（必須 5・条件付き 2・任意 9）で、`contracts schema` はその順に描く。欄の形は reader が強制する
     /// （文字列の欄に配列・配列の欄に文字列を書くと、その欄を名指して断る）。`write-set` は任意（契約 (h)・§3
     /// 「write-set の導出」: 無い行は受付が導出値を写す）。約束の行の欄は別の列 9（必須 7・任意 2）で、生成物は
     /// 契約の行の欄の後に別の表・別の key で描く（`[[field]]` の母集団は 16 のまま）。
@@ -584,7 +590,7 @@ mod tests {
             "size", "done", "depends", "classes", "opens",
         ];
         assert_eq!(names, want, "欄の宣言順");
-        assert_eq!(FIELDS.iter().filter(|field| field.need == Need::Required).count(), 7, "必須 7・任意 9");
+        assert_eq!(FIELDS.iter().filter(|field| field.need == Need::Required).count(), 5, "必須 5・条件付き 2・任意 9");
         let optional = |name: &str| FIELDS.iter().any(|field| field.name == name && field.need == Need::Optional);
         assert!(["write-set", "creates", "tests", "also"].iter().all(|name| optional(name)), "導出の 4 欄は任意");
         let rendered = render_schema();
@@ -600,6 +606,28 @@ mod tests {
             assert!(named, "{} の形を名指す: {errors:?}", field.name);
         }
         promise_fields_are_pinned(&rendered);
+    }
+
+    // flip-check: s2-07l.512
+
+    /// §33 (f) の母集団: `FIELDS` の `need` は必須 5・条件付き 2（`verify` と `done`・宣言順）・任意 9 の和 16 で、生成物の
+    /// `need` の列は `FIELDS` と同じ順に `conditional` を 2 欄（`verify` / `done`）で載せる（xtask の contracts-schema は
+    /// variant の名を小文字にした語で照合する＝同じ語）。
+    #[test]
+    fn contract_promise_need_conditional_is_two_fields_in_the_schema() {
+        let count = |need: Need| FIELDS.iter().filter(|field| field.need == need).count();
+        assert_eq!((count(Need::Required), count(Need::Conditional), count(Need::Optional)), (5, 2, 9), "必須 5・条件付き 2・任意 9");
+        assert_eq!(FIELDS.len(), 16, "母集団 16");
+        let conditional: Vec<&str> =
+            FIELDS.iter().filter(|field| field.need == Need::Conditional).map(|field| field.name).collect();
+        assert_eq!(conditional, ["verify", "done"], "条件付きは verify と done");
+        let rendered = render_schema();
+        let needs: Vec<&str> =
+            rendered.iter().filter_map(|line| line.strip_prefix("need = \"")?.strip_suffix('"')).collect();
+        let want: Vec<&str> = FIELDS.iter().map(|field| field.need.as_str()).collect();
+        assert_eq!(needs, want, "生成物の need の列は FIELDS の順");
+        assert_eq!(needs.iter().filter(|need| **need == "conditional").count(), 2, "conditional は 2 欄");
+        assert_eq!(Need::Conditional.as_str(), format!("{:?}", Need::Conditional).to_lowercase(), "variant 名の小文字");
     }
 
     /// 欄の形に合わない値の字面（文字列と数の欄に配列・配列の欄に文字列）。

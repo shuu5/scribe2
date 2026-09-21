@@ -42,15 +42,20 @@
 //! 型でなく fn の名指しで、閉包はその module の段（[`in_module`]）で `fn <識別子>` を宣言する file（[`declares_fn`]・
 //! 下界・呼び手は数えない）。宣言する file が 0 の周は [`ClosureError::FnUndeclared`]（空集合に潰さない・C10）。型形の
 //! 4 形の判定は不変。
+//!
+//! **約束の行の導出**（§33・行 ag）[`derive_promised`] は契約表の行の約束の行（`[[promise]]`）から [`Fields`] の 6 欄を
+//! 組み（`symbols` の閉じた型 → `touches`・`+` の file → `creates`・`.rs` でない file → `also`・`place` → `tests`・外形の
+//! 歯 → `surfaces`・歯 1 本 1 行の nextest 行 → `verify`）、同じ [`derive_write_set`] を撃つ（導出の 1 本は増やさない）。
+//! `symbols` の名の実在は [`symbols_in_base`]（[`unresolved_names`] と同じ読み手）。
 
 use std::collections::BTreeSet;
 
 mod derive;
 mod names;
 
-pub use derive::{check_drift, derive_write_set, weighted_lines, Base, Fields};
-pub use names::unresolved_names;
-pub(crate) use derive::{declared_teeth, teeth_places, teeth_words};
+pub use derive::{check_drift, derive_promised, derive_write_set, promised_inputs, weighted_lines, Base, Fields, Promised};
+pub use names::{symbols_in_base, unresolved_names};
+pub(crate) use derive::{declared_teeth, nextest_line, teeth_places, teeth_words};
 use names::{declares_fn, holds_word};
 
 /// nextest の行の書き出し（この後ろの語から crate と filter 語を読む）。

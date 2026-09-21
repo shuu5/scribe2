@@ -14,9 +14,20 @@
 //! 型の閉包の字面走査（4 形と [`super::sees`]）は親 module `closure.rs` に置いたまま（1 関数の判定で結ばれる）。
 
 use super::super::refuse::{covered, normalize, NEW_FILE};
-use super::{closure, is_ident, is_ident_char, surface_closure, test_region, texts_of, ClosureError, Source};
+use super::super::table::PromiseRow;
+use super::{closure, declares_type, in_module, is_ident, is_ident_char, snapshot_name, surface_closure, test_region};
+use super::{texts_of, touched, ClosureError, Source};
 use super::{CRATES_DIR, LIB_FLAG, NEXTEST_HEAD, PACKAGE_FLAGS, RS, SRC_DIR, TESTS_DIR, TEST_ATTR, TEST_FLAG, UNREAD_TARGET_FLAGS};
 use std::collections::BTreeSet;
+
+/// 生成する nextest 行の旗（歯が 0 本の行を緑にしない＝契約表の既存の行と同じ形）。
+const NO_TESTS_FLAG: &str = "--no-tests=fail";
+
+/// 名付き snapshot の口（`assert_snapshot!(` の直後が文字列 literal と `,` の形＝第 1 引数が snapshot の名）。
+const SNAPSHOT_CALL: &str = "snapshot!(";
+
+/// 外形 snapshot を持つ歯の名の末尾（§16 の外形 pin と同じ読み＝snapshot の名は歯の fn 名）。
+const EXTERNAL_FORM: &str = "_external_form";
 
 /// 行の数え方（設計 rules-manifest.md §4・`R-C4.line-width`・上限の余地が base の行数を数える式）: 各行を
 /// `max(1, ceil(文字数 ÷ width))` と数えた合計。
@@ -290,6 +301,183 @@ fn created(items: &[String], tracked: &[String]) -> Result<BTreeSet<String>, Clo
         .collect()
 }
 
+/// 約束の行から組んだ導出の入力（設計 §33 項 3・[`Fields`] の 6 欄を所有する形）と、歯ごとの置き場。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Promised {
+    /// `symbols` のうち base で閉じた型（enum / struct の宣言が module に在る `crate::module::Type`）に解ける名。
+    pub touches: Vec<String>,
+    /// `_external_form` の歯の snapshot の名と、歯の本文の名付き snapshot の名（base に snapshot が在るものだけ）。
+    pub surfaces: Vec<String>,
+    /// 歯 1 本 1 行の nextest 行（導出 (ii) の入力＝filter 語は fn 名・契約 file の `verify` は束ねた別の行）。
+    pub verify: Vec<String>,
+    /// `files` の `+` の項目（`+` を剥がす）。
+    pub creates: Vec<String>,
+    /// `place`（`+` を剥がす）。
+    pub tests: Vec<String>,
+    /// `files` の `+` 無しで `.rs` でない項目。
+    pub also: Vec<String>,
+    /// 歯の (完全名, 置き場の file)（`n` の順・約束の行の中は書かれた順）。
+    pub teeth: Vec<(String, String)>,
+}
+
+impl Promised {
+    /// [`derive_write_set`] に渡す形。
+    pub fn fields(&self) -> Fields<'_> {
+        Fields {
+            touches: &self.touches,
+            surfaces: &self.surfaces,
+            verify: &self.verify,
+            creates: &self.creates,
+            tests: &self.tests,
+            also: &self.also,
+        }
+    }
+}
+
+/// Promised の行の write-set（§33 項 3・pure）: 約束の行から [`Promised`] を組み（[`promised_inputs`]）、§3 の
+/// [`derive_write_set`] を**そのまま**撃った値（導出の 1 本は増やさない）。入力も返す（生成の `verify` が歯の置き場を読む）。
+pub fn derive_promised(promises: &[&PromiseRow], base: &Base<'_>) -> Result<(BTreeSet<String>, Promised), ClosureError> {
+    let inputs = promised_inputs(promises, base)?;
+    let found = derive_write_set(&inputs.fields(), base)?;
+    Ok((found, inputs))
+}
+
+/// 約束の行（`n` の順に並べ直す）から導出の入力を組む。歯の置き場は `place`（在れば）か base で `#[test]` の直下の fn 名が
+/// 歯の名の末尾の段と等しい file で、どちらも無ければ [`ClosureError::TeethPlaceUnresolved`]（filter は歯の完全名）。
+pub fn promised_inputs(promises: &[&PromiseRow], base: &Base<'_>) -> Result<Promised, ClosureError> {
+    let texts = texts_of(base.sources)?;
+    let mut ordered = promises.to_vec();
+    ordered.sort_by_key(|promise| promise.n);
+    let mut out = Promised::default();
+    for promise in ordered {
+        let symbols = promise.symbols.iter().filter(|symbol| !symbol.starts_with(NEW_FILE) && closed_type(symbol, &texts));
+        symbols.for_each(|symbol| push_new(&mut out.touches, symbol));
+        for file in &promise.files {
+            match file.strip_prefix(NEW_FILE) {
+                Some(fresh) => push_new(&mut out.creates, fresh),
+                None if !file.ends_with(RS) => push_new(&mut out.also, file),
+                None => {}
+            }
+        }
+        let place = promise.place.strip_prefix(NEW_FILE).unwrap_or(&promise.place);
+        if !place.is_empty() {
+            push_new(&mut out.tests, place);
+        }
+        for tooth in &promise.teeth {
+            let file = tooth_file(tooth, place, &texts)?;
+            let name = fn_of(tooth);
+            push_new(&mut out.verify, &nextest_line(&file, &[name]));
+            for surface in tooth_surfaces(name, &file, &texts, base.snapshots) {
+                push_new(&mut out.surfaces, &surface);
+            }
+            out.teeth.push((tooth.clone(), file));
+        }
+    }
+    Ok(out)
+}
+
+/// 列に無ければ足す（宣言順を保つ集合）。
+fn push_new(list: &mut Vec<String>, item: &str) {
+    if !list.iter().any(|found| found == item) {
+        list.push(item.to_owned());
+    }
+}
+
+/// `symbol` が base で閉じた型か（`crate::module::Type` の型形で、module の file が `enum` / `struct` を宣言する＝
+/// [`closure`] が読む型）。fn 形・`crate::` の無い字面・宣言の無い名は閉じた型でない。
+fn closed_type(symbol: &str, texts: &[(&str, &str)]) -> bool {
+    touched(symbol).is_some_and(|found| {
+        !found.fn_form && texts.iter().any(|(path, text)| declares_type(text, found.name) && in_module(path, found.module))
+    })
+}
+
+/// 歯の完全名の末尾の段（fn 名）。
+fn fn_of(tooth: &str) -> &str {
+    tooth.rsplit("::").next().unwrap_or(tooth)
+}
+
+/// 歯の置き場: `place` が在ればそれ・無ければ base の歯の区間で `#[test]` の直下の fn 名が歯の fn 名と等しい最初の file。
+fn tooth_file(tooth: &str, place: &str, texts: &[(&str, &str)]) -> Result<String, ClosureError> {
+    if !place.is_empty() {
+        return Ok(place.to_owned());
+    }
+    let name = fn_of(tooth);
+    texts
+        .iter()
+        .find(|(path, text)| test_fns(test_region(path, text)).contains(&name))
+        .map(|(path, _)| (*path).to_owned())
+        .ok_or_else(|| ClosureError::TeethPlaceUnresolved { filter: tooth.to_owned() })
+}
+
+/// 歯の外形の名: fn 名が `_external_form` で終わればその名・置き場の本文の歯の fn の中の名付き snapshot の名。どちらも
+/// base に snapshot が在る名だけ（無い名は [`surface_closure`] が解けない＝新設の snapshot は置き場の側が持つ）。
+fn tooth_surfaces(name: &str, file: &str, texts: &[(&str, &str)], snapshots: &[Source]) -> Vec<String> {
+    let mut found: Vec<&str> = Vec::new();
+    if name.ends_with(EXTERNAL_FORM) {
+        found.push(name);
+    }
+    if let Some((_, text)) = texts.iter().find(|(path, _)| *path == file) {
+        found.extend(named_snapshots(fn_body(test_region(file, text), name)));
+    }
+    let known = |candidate: &&str| snapshots.iter().any(|snap| snapshot_name(&snap.path) == Some(*candidate));
+    found.into_iter().filter(known).map(str::to_owned).collect()
+}
+
+/// 歯の区間の中の `fn name(` から次の `#[test]` の行（無ければ末尾）まで（無ければ空）。
+fn fn_body<'t>(region: &'t str, name: &str) -> &'t str {
+    let head = format!("fn {name}(");
+    let Some(at) = region.find(&head) else {
+        return "";
+    };
+    let rest = region.get(at..).unwrap_or_default();
+    let end = rest.find(&format!("\n{TEST_ATTR}")).or_else(|| rest.find(&format!("    {TEST_ATTR}"))).unwrap_or(rest.len());
+    rest.get(..end).unwrap_or(rest)
+}
+
+/// 本文の名付き snapshot の名（`snapshot!(` の直後が `"名"` と `,` の形・値だけの literal は名でない）。
+fn named_snapshots(body: &str) -> Vec<&str> {
+    body.match_indices(SNAPSHOT_CALL)
+        .filter_map(|(at, _)| {
+            let rest = body.get(at.saturating_add(SNAPSHOT_CALL.len())..)?.trim_start().strip_prefix('"')?;
+            let (name, tail) = rest.split_once('"')?;
+            tail.trim_start().starts_with(',').then_some(name)
+        })
+        .collect()
+}
+
+/// 置き場の file の歯を `filters` で撃つ nextest 行（§28 の scope を file の path から読む・[`in_scope`] の逆）:
+/// `crates/<c>/src/` は `-p <c> --lib`・`crates/<c>/tests/<name>[.rs|/…]` は `-p <c> --test <name>`・crate の他の file は
+/// `-p <c>`・`crates/` の外は旗なし（core の crate）。末尾に `--no-tests=fail` と filter 語を空白で並べる。
+pub(crate) fn nextest_line(file: &str, filters: &[&str]) -> String {
+    let (krate, scope) = target_of(file);
+    let mut words: Vec<String> = NEXTEST_HEAD.iter().map(|word| (*word).to_owned()).collect();
+    if let (Some(krate), Some(flag)) = (krate, PACKAGE_FLAGS.first()) {
+        words.extend([(*flag).to_owned(), krate.to_owned()]);
+    }
+    match scope {
+        Scope::Crate => {}
+        Scope::Lib => words.push(LIB_FLAG.to_owned()),
+        Scope::Test(name) => words.extend([TEST_FLAG.to_owned(), name.to_owned()]),
+    }
+    words.push(NO_TESTS_FLAG.to_owned());
+    words.extend(filters.iter().map(|filter| (*filter).to_owned()));
+    words.join(" ")
+}
+
+/// file の path の (crate, scope)（§28 の 3 値・`crates/` の外は crate 無しの [`Scope::Crate`]）。
+fn target_of(file: &str) -> (Option<&str>, Scope<'_>) {
+    let Some((krate, rest)) = file.strip_prefix(CRATES_DIR).and_then(|rest| rest.split_once('/')) else {
+        return (None, Scope::Crate);
+    };
+    let mut segments = rest.split('/');
+    let scope = match (segments.next(), segments.next()) {
+        (Some(SRC_DIR), _) => Scope::Lib,
+        (Some(TESTS_DIR), Some(next)) => Scope::Test(next.strip_suffix(RS).unwrap_or(next)),
+        _ => Scope::Crate,
+    };
+    (Some(krate), scope)
+}
+
 /// (v) `also`: base に実在する非 `.rs` の file。`.rs` は [`ClosureError::AlsoNamesRust`]・base に無ければ
 /// [`ClosureError::ItemUnresolved`]。
 fn also_files(items: &[String], tracked: &[String]) -> Result<BTreeSet<String>, ClosureError> {
@@ -313,6 +501,7 @@ mod tests {
 
     use super::super::tests::{set, source, PAINT};
     use super::{check_drift, check_teeth_cover, declared_teeth, derive_write_set, weighted_lines, Base, ClosureError, Fields, Source};
+    use super::{derive_promised, in_crate, in_scope, nextest_filter, nextest_line, PromiseRow};
     use std::collections::BTreeSet;
 
     /// 文字列の列。
@@ -587,6 +776,128 @@ mod tests {
         sources.push(source("crates/toy/tests/e2e/nested.rs", "#[test]\nfn derive_nested() {}\n"));
         let got = derive(&[("verify", &["cargo nextest run -p toy --test e2e --no-tests=fail in_src"])], &sources, &tracked);
         assert_eq!(got, Err(ClosureError::TeethPlaceUnresolved { filter: "in_src".to_owned() }), "scope の外の歯では解かない");
+    }
+
+    // flip-check: s2-07l.512
+
+    /// 約束の行 1 つ（`of` = `ag`・`text` / `fixture` / `expect` は固定）。
+    fn promise(n: u64, symbols: &[&str], files: &[&str], teeth: &[&str], place: &str) -> PromiseRow {
+        PromiseRow {
+            line: n,
+            of: "ag".to_owned(),
+            n,
+            text: format!("約束 {n}"),
+            files: strings(files),
+            symbols: strings(symbols),
+            teeth: strings(teeth),
+            place: place.to_owned(),
+            fixture: "fixture".to_owned(),
+            expect: "expect".to_owned(),
+        }
+    }
+
+    /// 約束の行の導出の fixture: crate `toy` の型（`crate::paint::Hue`）と arm・src の区間の歯・tests の歯 3 本（外形の歯
+    /// `toy_external_form`・名付き snapshot の歯 `lens_case`〔`assert_snapshot!("<名>", 値)` の形〕・値だけの literal の歯
+    /// `doctor_case`）と 2 本の snapshot・非 `.rs` の面。
+    fn promise_base() -> (Vec<Source>, Vec<Source>, Vec<String>) {
+        let e2e = "#[test]\nfn derive_ok() {}\n\n#[test]\nfn toy_external_form() {\n    insta::assert_snapshot!(form);\n}\n\n#[test]\nfn lens_case() {\n    insta::assert_snapshot!(\"lens_prompt_external_form\", prompt);\n}\n\n#[test]\nfn doctor_case() {\n    insta::assert_snapshot!(\"doctor: ok\");\n}\n";
+        let sources = vec![
+            source("crates/toy/src/paint.rs", PAINT),
+            source("crates/toy/src/show.rs", "use crate::paint::Hue;\n\npub fn name(hue: Hue) -> u8 {\n    match hue {\n        Hue::Red => 1,\n        _ => 0,\n    }\n}\n"),
+            source("crates/toy/src/other.rs", "pub fn plain() {}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn derive_in_src() {}\n}\n"),
+            source("crates/toy/tests/e2e.rs", e2e),
+        ];
+        let snapshots = vec![
+            source("crates/toy/tests/e2e/snapshots/e2e__toy_external_form.snap", "---\nsource: e2e\n---\nform\n"),
+            source("crates/toy/tests/e2e/snapshots/e2e__lens_prompt_external_form.snap", "---\nsource: e2e\n---\nprompt\n"),
+        ];
+        let mut tracked: Vec<String> = sources.iter().chain(&snapshots).map(|found| found.path.clone()).collect();
+        tracked.extend(strings(&["rules/manifest.toml", "docs/design/toy.md"]));
+        (sources, snapshots, tracked)
+    }
+
+    /// §33 (b): 約束の行 3 つ（書いた順は n = 3, 1, 2）から `symbols` の閉じた型だけが `touches` に（`+` の名と `crate::` の無い
+    /// 字面は載らない）・`+` の file が `creates` に・`.rs` でない file が `also` に・`place` が `tests` に・`_external_form` の
+    /// 歯と名付き snapshot の歯の名が `surfaces` に（値だけの literal は名でない）写り、歯は n の順に置き場と組になる。
+    /// write-set は §3 の [`derive_write_set`] を同じ入力で撃った値と一致する（導出の 1 本は増えない）。
+    #[test]
+    fn contract_promise_derive_maps_promises_to_the_six_fields_and_the_same_write_set() {
+        let (sources, snapshots, tracked) = promise_base();
+        let base = Base { sources: &sources, snapshots: &snapshots, tracked: &tracked, core_crate: "toy" };
+        let first = promise(
+            1,
+            &["crate::paint::Hue", "+crate::paint::Fresh", "Hue::Red"],
+            &["crates/toy/src/paint.rs", "+crates/toy/src/new.rs", "rules/manifest.toml"],
+            &["derive_ok", "toy_external_form"],
+            "",
+        );
+        let second = promise(2, &[], &["crates/toy/src/other.rs"], &["derive_in_src", "lens_case", "doctor_case"], "");
+        let third = promise(3, &[], &["+crates/toy/tests/fresh.rs"], &["fresh::fresh_case"], "+crates/toy/tests/fresh.rs");
+        let (found, inputs) = derive_promised(&[&third, &first, &second], &base).unwrap_or_else(|error| panic!("{error:?}"));
+        assert_eq!(inputs.touches, strings(&["crate::paint::Hue"]), "閉じた型だけ");
+        assert_eq!(inputs.creates, strings(&["crates/toy/src/new.rs", "crates/toy/tests/fresh.rs"]), "+ の file");
+        assert_eq!(inputs.also, strings(&["rules/manifest.toml"]), ".rs でない file");
+        assert_eq!(inputs.tests, strings(&["crates/toy/tests/fresh.rs"]), "place");
+        assert_eq!(inputs.surfaces, strings(&["toy_external_form", "lens_prompt_external_form"]), "外形の歯と名付き snapshot");
+        let (e2e, other, fresh) = ("crates/toy/tests/e2e.rs", "crates/toy/src/other.rs", "crates/toy/tests/fresh.rs");
+        let teeth: Vec<(&str, &str)> = inputs.teeth.iter().map(|(name, file)| (name.as_str(), file.as_str())).collect();
+        let want_teeth = [
+            ("derive_ok", e2e),
+            ("toy_external_form", e2e),
+            ("derive_in_src", other),
+            ("lens_case", e2e),
+            ("doctor_case", e2e),
+            ("fresh::fresh_case", fresh),
+        ];
+        assert_eq!(teeth, want_teeth, "歯は n の順に置き場と組");
+        assert_eq!(found, derive_write_set(&inputs.fields(), &base).unwrap_or_default(), "§3 の関数の値と一致");
+        let want = set(&[
+            "+crates/toy/src/new.rs",
+            "+crates/toy/tests/fresh.rs",
+            "crates/toy/src/other.rs",
+            "crates/toy/src/paint.rs",
+            "crates/toy/src/show.rs",
+            "crates/toy/tests/e2e.rs",
+            "crates/toy/tests/e2e/snapshots/e2e__lens_prompt_external_form.snap",
+            "crates/toy/tests/e2e/snapshots/e2e__toy_external_form.snap",
+            "rules/manifest.toml",
+        ]);
+        assert_eq!(found, want, "閉包 ∪ 歯の置き場 ∪ 外形 pin ∪ creates ∪ also");
+    }
+
+    /// §33 (b) の負の枝: base に無い歯で `place` の無い約束の行は `TeethPlaceUnresolved`（filter は歯の完全名）で、同じ歯に
+    /// `place` を足せば置き場になる。`place` の在る他の約束の行があっても、`place` の無い約束の行の歯は緩まない。
+    #[test]
+    fn contract_promise_derive_refuses_a_tooth_without_base_or_place() {
+        let (sources, snapshots, tracked) = promise_base();
+        let base = Base { sources: &sources, snapshots: &snapshots, tracked: &tracked, core_crate: "toy" };
+        let placed = promise(1, &[], &[], &["fresh_case"], "crates/toy/tests/e2e.rs");
+        let bare = promise(2, &[], &[], &["pipe::nope_case"], "");
+        assert_eq!(
+            derive_promised(&[&placed, &bare], &base).map(|(found, _)| found),
+            Err(ClosureError::TeethPlaceUnresolved { filter: "pipe::nope_case".to_owned() }),
+            "place も base の歯も無い"
+        );
+        let found = derive_promised(&[&placed], &base).map(|(found, _)| found);
+        assert_eq!(found, Ok(set(&["crates/toy/tests/e2e.rs"])), "place が置き場");
+    }
+
+    /// 生成する nextest 行の scope は置き場の path の（crate・scope）で、同じ行を §28 の読み手（[`super::nextest_filter`]）で
+    /// 読み戻すと、置き場の file は行の crate と scope の中に在る（`src/` = `--lib`・`tests/<name>` = `--test <name>`・他は旗なし）。
+    #[test]
+    fn contract_promise_derive_nextest_line_reads_back_into_the_same_scope() {
+        for (file, want) in [
+            ("crates/toy/src/a/b.rs", "cargo nextest run -p toy --lib --no-tests=fail x"),
+            ("crates/toy/tests/e2e.rs", "cargo nextest run -p toy --test e2e --no-tests=fail x"),
+            ("crates/toy/tests/e2e/pipe/intake.rs", "cargo nextest run -p toy --test e2e --no-tests=fail x"),
+            ("crates/toy/benches/z.rs", "cargo nextest run -p toy --no-tests=fail x"),
+        ] {
+            let line = nextest_line(file, &["x"]);
+            assert_eq!(line, want, "{file}");
+            let (krate, filter, scope) = nextest_filter(&line, "core").unwrap_or_else(|| panic!("読み戻せる: {line}"));
+            assert!(in_crate(file, krate) && in_scope(file, krate, scope) && filter == "x", "{file} は行の scope の中");
+        }
+        assert_eq!(nextest_line("src/lib.rs", &["x", "y"]), "cargo nextest run --no-tests=fail x y", "crates/ の外は core の crate");
     }
 
     /// 幅 10 の fixture と期待値。**xtask の `workspace` の歯と同じ字面・同じ値**（2 crate の式の一致を守る）。

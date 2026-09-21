@@ -60,6 +60,8 @@ pub(crate) const REFUSALS: &[&str] = &[
     "hand-written-contract",
     "same-kind-repeated",
     "finding-unaddressed",
+    "promised-field-written",
+    "promise-symbol-unresolved",
 ];
 
 /// 契約 file が読めた後の、契約単位の拒否理由。**新しい理由は variant を 1 つ足す**（憲法 C2）。
@@ -189,6 +191,24 @@ pub(crate) enum Refuse {
         /// 対応の無かった `at` の項目（辞書順）。
         at: Vec<String>,
     },
+    /// 約束の行を持つ行（Promised・設計 contract-source.md §33）が、約束の行から器が導く欄（`write-set` / `touches` /
+    /// `surfaces` / `tests` / `also` / `creates` / `done`）を手で書いた（受付だけが撃つ）。**書かれた欄を全部**持つ。
+    PromisedFieldWritten {
+        /// 行 id。
+        row: String,
+        /// 書かれていた欄の名（欄の宣言順）。
+        fields: Vec<String>,
+    },
+    /// 約束の行の `symbols` の名が base と合わない（§33 項 5・受付だけが撃つ）: `+` 無しの名が base に解けない、か
+    /// `+` 付きの名（新設の宣言）が base に既に在る。名は書かれた字面のまま（`+` の有無が極性を名乗る）。
+    PromiseSymbolUnresolved {
+        /// 親の行 id。
+        of: String,
+        /// 約束の行の番号。
+        n: u64,
+        /// 名の字面。
+        name: String,
+    },
 }
 
 impl Refuse {
@@ -214,6 +234,8 @@ impl Refuse {
             Self::HandWrittenContract { .. } => "hand-written-contract",
             Self::SameKindRepeated { .. } => "same-kind-repeated",
             Self::FindingUnaddressed { .. } => "finding-unaddressed",
+            Self::PromisedFieldWritten { .. } => "promised-field-written",
+            Self::PromiseSymbolUnresolved { .. } => "promise-symbol-unresolved",
         }
     }
 
@@ -273,6 +295,14 @@ impl Refuse {
             Self::FindingUnaddressed { kind, ref at } => {
                 format!("直前の便の審査の指摘（{}）に対応する差分が無い（{}）", kind.as_str(), at.join(", "))
             }
+            Self::PromisedFieldWritten { ref row, ref fields } => format!(
+                "行 {row} は約束の行を持つ（Promised）ので {} を書けない（write-set / touches / surfaces / tests / also / creates / done は約束の行から導く）",
+                fields.join(", ")
+            ),
+            Self::PromiseSymbolUnresolved { ref of, n, ref name } => match name.strip_prefix(NEW_FILE) {
+                Some(fresh) => format!("約束 {of} の n {n} の symbols の {name} は base に既に在る（+ は base に無い新設の名・{fresh} は + を外す）"),
+                None => format!("約束 {of} の n {n} の symbols の {name} が base に無い（新設の名なら + を前置する）"),
+            },
         }
     }
 
@@ -296,7 +326,9 @@ impl Refuse {
             | Self::TeethOutsideWriteSet { .. }
             | Self::HandWrittenContract { .. }
             | Self::SameKindRepeated { .. }
-            | Self::FindingUnaddressed { .. } => RC_REFUSED,
+            | Self::FindingUnaddressed { .. }
+            | Self::PromisedFieldWritten { .. }
+            | Self::PromiseSymbolUnresolved { .. } => RC_REFUSED,
             Self::WriteSetUnreadable { .. } => RC_BROKEN,
             Self::ContractTable(ref found) => found.rc(),
         }
@@ -449,23 +481,25 @@ mod tests {
                 stop: 2,
             },
             Refuse::FindingUnaddressed { kind: FindingKind::TeethOutsideWriteSet, at: vec!["src/a.rs".to_owned()] },
+            Refuse::PromisedFieldWritten { row: "ag".to_owned(), fields: vec!["write-set".to_owned(), "done".to_owned()] },
+            Refuse::PromiseSymbolUnresolved { of: "ag".to_owned(), n: 2, name: "+Refuse::Fresh".to_owned() },
         ]
     }
 
-    /// 受付の 2 門（設計 contract-source.md §23・`s2-07l.396`）: 宣言順の末尾 2 つ・rc 1 で、同型の停止は型と本数と
-    /// 行の値と便 id の列（新しい順）を、焼き直しは型と対応の無かった項目を名乗る。
+    /// 受付の 2 門（設計 contract-source.md §23・`s2-07l.396`）: 宣言順の 18〜19 番目（約束の行の 2 理由の手前）・rc 1 で、
+    /// 同型の停止は型と本数と行の値と便 id の列（新しい順）を、焼き直しは型と対応の無かった項目を名乗る。
     #[test]
     fn refuse_repeat_reasons_are_last_and_name_kind_runs_and_value() {
         let found = samples();
-        let tail: Vec<&str> = found.iter().rev().take(2).map(Refuse::as_str).collect();
-        assert_eq!(tail, ["finding-unaddressed", "same-kind-repeated"], "宣言順の末尾 2 つ");
-        let repeated = found.iter().rev().nth(1).map(Refuse::reason).unwrap_or_default();
+        let pair: Vec<&str> = found.iter().skip(17).take(2).map(Refuse::as_str).collect();
+        assert_eq!(pair, ["same-kind-repeated", "finding-unaddressed"], "宣言順の 18〜19 番目");
+        let repeated = found.get(17).map(Refuse::reason).unwrap_or_default();
         for want in ["literal-mismatch", " 2 便", "review.same_kind_stop の 2", "b-2, b-1"] {
             assert!(repeated.contains(want), "{want}: {repeated}");
         }
-        let unaddressed = found.last().map(Refuse::reason).unwrap_or_default();
+        let unaddressed = found.get(18).map(Refuse::reason).unwrap_or_default();
         assert!(unaddressed.contains("teeth-outside-write-set") && unaddressed.contains("src/a.rs"), "{unaddressed}");
-        assert!(found.iter().rev().take(2).all(|refuse| refuse.rc() == RC_REFUSED && !refuse.reason().contains('\n')), "rc 1・1 行");
+        assert!(found.iter().skip(17).take(2).all(|refuse| refuse.rc() == RC_REFUSED && !refuse.reason().contains('\n')), "rc 1・1 行");
     }
 
     /// write-set の導出の 6 理由（契約 (h)・設計 contract-source.md §3「write-set の導出」・§18 の fn 形・§20 の Declared
@@ -555,6 +589,17 @@ mod tests {
         // 末尾 2 つ（本便が足した理由）は交差と読めなさである。
         assert_eq!(names.get(2).copied(), Some("write-set-overlap"), "{names:?}");
         assert_eq!(names.get(3).copied(), Some("write-set-unreadable"), "{names:?}");
+        // 約束の行の 2 理由（設計 contract-source.md §33・`s2-07l.512`）が末尾に並び、母集団は 21 値。
+        assert_eq!(REFUSALS.len(), 21, "母集団 21 値");
+        assert_eq!(names.iter().rev().take(2).copied().collect::<Vec<&str>>(), ["promise-symbol-unresolved", "promised-field-written"]);
+        let found = samples();
+        let written = found.get(19).map(Refuse::reason).unwrap_or_default();
+        assert!(written.contains("行 ag") && written.contains("write-set, done"), "行 id と欄を全部名乗る: {written}");
+        let fresh = found.get(20).map(Refuse::reason).unwrap_or_default();
+        assert!(fresh.contains("約束 ag の n 2") && fresh.contains("+Refuse::Fresh は base に既に在る"), "{fresh}");
+        let bare = Refuse::PromiseSymbolUnresolved { of: "ag".to_owned(), n: 1, name: "Nope".to_owned() }.reason();
+        assert!(bare.contains("Nope が base に無い"), "+ 無しは不在を名乗る: {bare}");
+        assert!(found.iter().skip(19).all(|refuse| refuse.rc() == RC_REFUSED && !refuse.reason().contains('\n')), "rc 1・1 行");
     }
 
     /// **rc は variant が持つ**: 読めない周だけ rc 2 で、残りは rc 1。理由は run / path を名乗る。
