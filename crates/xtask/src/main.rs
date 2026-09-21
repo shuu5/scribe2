@@ -166,7 +166,7 @@ mod tests {
         let line = counts.line(&scope_of(PROBE_SCOPE));
         assert_eq!(
             line,
-            "mutants-diff: total=18 caught=12 missed=2 unviable=3 timeout=1 scope=probe-pkg-7f3",
+            "mutants-diff: total=18 caught=12 missed=2 unviable=3 timeout=1 scope=probe-pkg-7f3 teeth=-",
             "1 行の形は固定"
         );
         // ★**不成立は撃墜と別**（rc 101 を撃墜に数えないのと同じ極性）。1 行に別々に出る。
@@ -181,7 +181,7 @@ mod tests {
     /// `mutantsdiff.rs` の `mutants_diff_fail_fast_` の歯が pin する）ので 1 つの値で足りる。
     const PROBE_TIMEOUT_S: u64 = 37;
 
-    /// [`crate::mutantsdiff::measure_args`] を 5 つの値で呼ぶ（timeout は [`PROBE_TIMEOUT_S`]）。
+    /// [`crate::mutantsdiff::measure_args`] を 5 つの値で呼ぶ（timeout は [`PROBE_TIMEOUT_S`]・`--teeth` 無し）。
     fn measure_args(
         diff: &Path,
         out: &Path,
@@ -189,7 +189,7 @@ mod tests {
         jobs: u64,
         threads: u64,
     ) -> (Vec<String>, crate::mutantsdiff::Scope) {
-        crate::mutantsdiff::measure_args(diff, out, scope, Pace { jobs, threads, timeout_s: PROBE_TIMEOUT_S })
+        crate::mutantsdiff::measure_args(diff, out, scope, Pace { jobs, threads, timeout_s: PROBE_TIMEOUT_S }, None)
     }
 
     /// 名前から [`crate::mutantsdiff::Scope`] を得る唯一の道＝`-p` へ渡す引数を組むこと。
@@ -209,17 +209,17 @@ mod tests {
         let first = parse_outcomes(MISSED_TWO).expect("fixture は読める").line(&scope_of(PROBE_SCOPE));
         let second = parse_outcomes(MISSED_TWO).expect("fixture は読める").line(&scope_of(other));
         assert!(
-            first.ends_with(&format!(" scope={PROBE_SCOPE}")),
-            "渡した名前を末尾の scope= に出す: {first}"
+            first.ends_with(&format!(" scope={PROBE_SCOPE} teeth=-")),
+            "渡した名前を scope= に出す（その後ろは teeth= だけ・§34）: {first}"
         );
-        assert!(second.ends_with(&format!(" scope={other}")), "別の名前も同じ形で出す: {second}");
+        assert!(second.ends_with(&format!(" scope={other} teeth=-")), "別の名前も同じ形で出す: {second}");
         assert_ne!(first, second, "scope だけが違う 2 行は違う行になる");
-        // 既存 5 token の名前・順序は据え置き（scope はその後ろ）。
+        // 既存 5 token の名前・順序は据え置き（scope はその後ろ・teeth は末尾）。
         let tags: Vec<&str> = first.split(' ').skip(1).filter_map(|t| t.split_once('=').map(|(k, _)| k)).collect();
-        assert_eq!(tags, ["total", "caught", "missed", "unviable", "timeout", "scope"], "{first}");
+        assert_eq!(tags, ["total", "caught", "missed", "unviable", "timeout", "scope", "teeth"], "{first}");
         // 「測る対象が無い」周の行も範囲を名乗る（unmeasured の経路は行を出さないので対象外）。
         let none = without_outcomes(true).expect("rc 0 なら測る対象が無いだけ").line(&scope_of(other));
-        assert!(none.ends_with(&format!(" scope={other}")), "{none}");
+        assert!(none.ends_with(&format!(" scope={other} teeth=-")), "{none}");
         // `-p` の直後に来るのは渡した名前そのもの（literal でも core の NAME でもない）。
         // `--in-diff` と `-o` も対のまま在る（落とすと測った結果を読まずに total=0 へ化ける）。
         for scope in [PROBE_SCOPE, other] {
@@ -273,8 +273,17 @@ mod tests {
     /// 2 つ目で cargo test から test binary へ・mutant の test は fail-fast＝`--no-fail-fast` は
     /// 無い・行 y）。`--jobs` の値・`-p` / `--in-diff` / `-o` の対と順序はそのまま（`--jobs` を
     /// `t` で上書きする誤配線との弁別）。
+    ///
+    /// `--teeth` を受けた周（設計 gate-cost.md §34・行 z）は nextest が引数を逐語で受けるので、末尾は
+    /// `--test-threads <t>` の 2 語で、その前は filter の式（2 つ目の `--` は無い）。**2 形を対で**見る。
     #[test]
     fn mutants_diff_threads_flag_tail_is_two_dashes_then_the_received_value() {
+        let teeth = ["probe_tooth_".to_owned()];
+        let pace = Pace { jobs: 4, threads: 6, timeout_s: PROBE_TIMEOUT_S };
+        let (named, _) =
+            crate::mutantsdiff::measure_args(Path::new("probe.diff"), Path::new("probe-out"), PROBE_SCOPE, pace, Some(&teeth));
+        assert_eq!(&named[named.len() - 3..], ["kind(lib) | kind(bin) | test(/^(probe_tooth_)/)", "--test-threads", "6"], "--teeth 在りは式の後ろに末尾 2 語: {named:?}");
+        assert_eq!(named.iter().filter(|a| *a == "--").count(), 1, "--teeth 在りの -- は 1 つ: {named:?}");
         let (args, bound) = measure_args(Path::new("probe.diff"), Path::new("probe-out"), PROBE_SCOPE, 4, 6);
         assert_eq!(&args[args.len() - 4..], ["--", "--", "--test-threads", "6"], "末尾 4 語: {args:?}");
         assert_eq!(args.iter().filter(|a| *a == "--").count(), 2, "-- は 2 つ: {args:?}");
@@ -343,7 +352,7 @@ mod tests {
         let counts = parse_outcomes(MISSED_NONE).expect("fixture は読める");
         assert_eq!(
             counts.line(&scope_of(PROBE_SCOPE)),
-            "mutants-diff: total=23 caught=23 missed=0 unviable=0 timeout=0 scope=probe-pkg-7f3",
+            "mutants-diff: total=23 caught=23 missed=0 unviable=0 timeout=0 scope=probe-pkg-7f3 teeth=-",
             "入れ子の同名 key を 1 つも拾わない"
         );
     }
@@ -484,7 +493,7 @@ mod tests {
         let counts = without_outcomes(true).expect("道具が rc 0 なら測る対象が無いだけ");
         assert_eq!(
             counts.line(&scope_of(PROBE_SCOPE)),
-            "mutants-diff: total=0 caught=0 missed=0 unviable=0 timeout=0 scope=probe-pkg-7f3",
+            "mutants-diff: total=0 caught=0 missed=0 unviable=0 timeout=0 scope=probe-pkg-7f3 teeth=-",
             "母集団を額面に出す（0 件の緑と読み違えないため）"
         );
         // **門でも通る**——測る対象が無い周を赤にすると、docs-only 便が恒久 FAIL になる。

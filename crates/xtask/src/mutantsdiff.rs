@@ -41,10 +41,20 @@ impl Counts {
     /// literal ではなく [`Scope`]（[`measure_args`] だけが作る）で受ける＝`-p` へ渡した名前と
     /// 別の値を行に書く形は compile できない。将来 diff が触った package を並べて測る形（案 (b)）
     /// になっても同じ引数で表せる。
+    ///
+    /// 末尾の `teeth=<-|n>`（設計 gate-cost.md §34 約束 3・行 z）は mutant の test に掛けた filter の
+    /// 語の数（`--teeth` 無し = `-`・空 = `0`）。これも [`Scope`] から読む＝`-E` に渡した語と別の数を
+    /// 行に書く形は組めない。
     pub fn line(&self, scope: &Scope) -> String {
         format!(
-            "mutants-diff: total={} caught={} missed={} unviable={} timeout={} scope={}",
-            self.total, self.caught, self.missed, self.unviable, self.timeout, scope.name()
+            "mutants-diff: total={} caught={} missed={} unviable={} timeout={} scope={} teeth={}",
+            self.total,
+            self.caught,
+            self.missed,
+            self.unviable,
+            self.timeout,
+            scope.name(),
+            scope.teeth()
         )
     }
 }
@@ -60,13 +70,20 @@ mod scope {
     /// 測った範囲＝`cargo mutants -p` へ**実際に渡した**名前。作れるのは [`measure_args`] だけ
     /// （field は private・`Default` も持たない）ので、行の `scope=` と実際に測った package が
     /// 別々の読みで食い違う形は型で組めない（lens-82 MEDIUM-1）。
+    ///
+    /// 2 つ目の field は mutant の test に掛けた filter の語の数（`None` = `--teeth` 無し・§34）。
     #[derive(Debug, PartialEq, Eq)]
-    pub struct Scope(String);
+    pub struct Scope(String, Option<usize>);
 
     impl Scope {
         /// 行に写す名前。
         pub fn name(&self) -> &str {
             &self.0
+        }
+
+        /// 行に写す `teeth=` の値（無し = `-`・空 = `0`・語の数）。
+        pub fn teeth(&self) -> String {
+            self.1.map_or_else(|| "-".to_owned(), |count| count.to_string())
         }
     }
 
@@ -106,7 +123,18 @@ mod scope {
     /// `t` の導出（cores と `gate.mutants_jobs` から）は器の受付が持つ（§31・行 w）——道具が
     /// `cores / jobs` で導くと、受け付けた枠が上限より小さい周に job あたりの値段が上がり、gate 2 本で
     /// core の 2 倍の thread を作る。
-    pub fn measure_args(diff: &Path, out: &Path, scope: &str, pace: Pace) -> (Vec<String>, Scope) {
+    ///
+    /// **`teeth` が `Some` の周は mutant の test を nextest で走らせる**（設計 gate-cost.md §34 約束 1・
+    /// 行 z）: `--timeout <T>` の後ろに `--test-tool nextest`、1 つ目の `--` の後ろは
+    /// `-E <式> --test-threads <t>` だけ（nextest は引数を逐語で受けるので 2 つ目の `--` は無い）。
+    /// 式は [`super::nextest_expr`]。`None` の周は上の §33 の形を 1 語も変えない。
+    pub fn measure_args(
+        diff: &Path,
+        out: &Path,
+        scope: &str,
+        pace: Pace,
+        teeth: Option<&[String]>,
+    ) -> (Vec<String>, Scope) {
         let mut args: Vec<String> = ["mutants", "--in-diff"].iter().map(|s| (*s).to_owned()).collect();
         args.push(diff.display().to_string());
         args.push("-p".to_owned());
@@ -117,9 +145,16 @@ mod scope {
         args.push(pace.jobs.to_string());
         args.extend(["--baseline", "skip", "--timeout"].iter().map(|s| (*s).to_owned()));
         args.push(pace.timeout_s.to_string());
-        args.extend(["--", "--", "--test-threads"].iter().map(|s| (*s).to_owned()));
+        match teeth {
+            Some(words) => {
+                args.extend(["--test-tool", "nextest", "--", "-E"].iter().map(|s| (*s).to_owned()));
+                args.push(super::nextest_expr(words));
+                args.push("--test-threads".to_owned());
+            }
+            None => args.extend(["--", "--", "--test-threads"].iter().map(|s| (*s).to_owned())),
+        }
         args.push(pace.threads.to_string());
-        (args, Scope(scope.to_owned()))
+        (args, Scope(scope.to_owned(), teeth.map(<[String]>::len)))
     }
 }
 
@@ -370,7 +405,43 @@ fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
 }
 
 /// 使い方（rc 2 の 1 行）。
-const USAGE: &str = "usage: cargo xtask mutants-diff --base <ref> [--jobs <n>] [--threads <t>]";
+const USAGE: &str = "usage: cargo xtask mutants-diff --base <ref> [--jobs <n>] [--threads <t>] [--teeth <語,…|->]";
+
+/// `--teeth` の字面が読めない周の理由（閉じた 1 つ・設計 gate-cost.md §34 約束 1）。
+pub const TEETH_MALFORMED: &str =
+    "mutants-diff: --teeth の語は , 区切りの [A-Za-z0-9_]+ か - だけ（測れていない・rc 2）";
+
+/// `--teeth <語列>` を読む（設計 gate-cost.md §34 約束 1・行 z）。
+///
+/// flag が無い周は `Ok(None)`（§33 の形のまま撃つ）、`-` は `Ok(Some(空))`、それ以外は `,` で割った
+/// 語が全部 `[A-Za-z0-9_]+` の周だけ `Ok(Some(語))`。値の無い flag・空の語・それ以外の字を含む語は
+/// [`TEETH_MALFORMED`] の `Err`＝**測らずに rc 2**（語を黙って落とすと filter が広がる／狭まる側へ
+/// 静かに倒れる・fail-closed）。
+pub fn teeth_of(args: &[String]) -> Result<Option<Vec<String>>, String> {
+    if !args.iter().any(|arg| arg == "--teeth") {
+        return Ok(None);
+    }
+    let value = flag(args, "--teeth").ok_or_else(|| TEETH_MALFORMED.to_owned())?;
+    if value == "-" {
+        return Ok(Some(Vec::new()));
+    }
+    let words: Vec<String> = value.split(',').map(str::to_owned).collect();
+    let well_formed = |word: &String| !word.is_empty() && word.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_');
+    if words.iter().all(well_formed) {
+        return Ok(Some(words));
+    }
+    Err(TEETH_MALFORMED.to_owned())
+}
+
+/// mutant の test に掛ける nextest の filter の式: `kind(lib) | kind(bin)`、語が在れば
+/// `| test(/^(語1|語2)/)` を足す（e2e の歯は契約が名指した語で始まる分だけ・§34 約束 1）。
+pub fn nextest_expr(words: &[String]) -> String {
+    let base = "kind(lib) | kind(bin)";
+    if words.is_empty() {
+        return base.to_owned();
+    }
+    format!("{base} | test(/^({})/)", words.join("|"))
+}
 
 /// `--jobs` / `--threads` を渡されなかった周の並列度と thread 数（設計 gate-cost.md §2「止めない、縮退する」）。
 ///
@@ -408,6 +479,11 @@ pub fn run(args: &[String]) -> ExitCode {
     let Some(base) = flag(args, "--base") else {
         return unmeasured(USAGE);
     };
+    // **語の形が悪い周は何も撃たない**（rc 2・設計 gate-cost.md §34 約束 1）。
+    let teeth = match teeth_of(args) {
+        Ok(found) => found,
+        Err(reason) => return unmeasured(&reason),
+    };
     let Ok(root) = std::env::current_dir() else {
         return unmeasured("mutants-diff: cwd を解決できない");
     };
@@ -419,17 +495,12 @@ pub fn run(args: &[String]) -> ExitCode {
         return unmeasured(&format!("mutants-diff: 作業 dir を作れない: {err}"));
     }
     let diff_path = work.join("in.diff");
-    if let Err(reason) = write_diff(&root, base, &diff_path) {
-        return unmeasured(&format!("mutants-diff: {reason}"));
-    }
     // **前便の測定結果を今便の 1 行として出さない**（lens 2026-09-11 H2・実測で再現した）。
     // cargo-mutants は変異 0 の周に出力 dir へ触らないので、掃除しないと前の周の
     // `total=18 missed=6` がそのまま今の周の測定を名乗る。
     let out = work.join("out");
-    if let Err(err) = std::fs::remove_dir_all(&out) {
-        if err.kind() != std::io::ErrorKind::NotFound {
-            return unmeasured(&format!("mutants-diff: 前回の出力を掃除できない: {err}"));
-        }
+    if let Err(reason) = write_diff(&root, base, &diff_path).and_then(|()| clear_previous_out(&out)) {
+        return unmeasured(&format!("mutants-diff: {reason}"));
     }
     // **package 名は NAME から解決する**（字面を持たない＝憲法 C2.2・`xtask check` の name-literal）。
     let layout = match crate::check::Layout::discover(&root) {
@@ -446,7 +517,7 @@ pub fn run(args: &[String]) -> ExitCode {
     // **測る範囲は 1 つの束縛**: `-p` へ渡した名前を [`Scope`] として受け取り、行はそれでしか組めない。
     // 並列度も thread 数も**受けた値をそのまま**渡す（cores はここで読まない・設計 gate-cost.md §31 約束 7）。
     let pace = Pace { jobs: jobs_of(args), threads, timeout_s };
-    let (args, scope) = measure_args(&diff_path, &out, &layout.name, pace);
+    let (args, scope) = measure_args(&diff_path, &out, &layout.name, pace, teeth.as_deref());
     let status = Command::new("cargo")
         .args(args)
         .current_dir(&root)
@@ -482,6 +553,14 @@ pub fn run(args: &[String]) -> ExitCode {
         return unmeasured("mutants-diff: R-C12-1 の enabled を読めない（極性が決まらない・測れていない・rc 2）");
     };
     verdict(&counts, deny)
+}
+
+/// 前便の出力 dir を消す（無い周は何もしない・それ以外の失敗は理由を返す）。
+fn clear_previous_out(out: &Path) -> Result<(), String> {
+    match std::fs::remove_dir_all(out) {
+        Err(err) if err.kind() != std::io::ErrorKind::NotFound => Err(format!("前回の出力を掃除できない: {err}")),
+        _ => Ok(()),
+    }
 }
 
 /// 自前の `baseline.log`（作業 dir・[`own_baseline`] が書く）の末尾。無い・読めない周はその
@@ -570,8 +649,8 @@ fn write_diff(root: &Path, base: &str, path: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        baseline_args, baseline_build_args, baseline_judged, measure_args, mutant_timeout_s, Pace,
-        BASELINE_TAIL_HEADING,
+        baseline_args, baseline_build_args, baseline_judged, measure_args, mutant_timeout_s, teeth_of, Counts,
+        Pace, BASELINE_TAIL_HEADING, TEETH_MALFORMED,
     };
     use std::path::Path;
 
@@ -601,7 +680,7 @@ mod tests {
     fn mutants_diff_fail_fast_mutants_skip_the_baseline_and_do_not_pass_no_fail_fast() {
         for (jobs, threads, timeout_s) in [(3_u64, 4_u64, 21_u64), (1, 1, 310)] {
             let pace = Pace { jobs, threads, timeout_s };
-            let (args, _) = measure_args(Path::new("probe.diff"), Path::new("probe-out"), "probe-pkg-3f", pace);
+            let (args, _) = measure_args(Path::new("probe.diff"), Path::new("probe-out"), "probe-pkg-3f", pace, None);
             assert!(!args.iter().any(|a| a == "--no-fail-fast"), "mutant に --no-fail-fast は無い: {args:?}");
             let jobs_at = args.iter().position(|a| a == "--jobs").expect("--jobs が在る");
             let skip_at = args.iter().position(|a| a == "--baseline").expect("--baseline が在る");
@@ -623,7 +702,7 @@ mod tests {
     fn mutants_diff_fail_fast_timeout_sits_after_baseline_skip_before_dashes() {
         for timeout_s in [20_u64, 21, 310] {
             let pace = Pace { jobs: 2, threads: 3, timeout_s };
-            let (args, _) = measure_args(Path::new("d"), Path::new("o"), "p", pace);
+            let (args, _) = measure_args(Path::new("d"), Path::new("o"), "p", pace, None);
             let skip_at = args.iter().position(|a| a == "--baseline").expect("--baseline が在る");
             let dashes = args.iter().position(|a| a == "--").expect("-- が在る");
             assert_eq!(
@@ -652,5 +731,103 @@ mod tests {
         assert!(red.contains("test probe_tooth_4c1 ... FAILED"), "自前の log の末尾が載る: {red}");
         assert!(red.ends_with("test result: FAILED. 2 passed; 1 failed"), "末尾で終わる: {red}");
         assert_eq!(baseline_judged(true, log), Ok(()), "rc 0 は cargo-mutants へ進む");
+    }
+
+    /// 空白区切りの 1 行を引数の列へ（`--teeth` の値に空白を入れる周は手で組む）。
+    fn argv(line: &str) -> Vec<String> {
+        line.split(' ').map(str::to_owned).collect()
+    }
+
+    /// 行 z の歯が使う 1 組の値（jobs / threads / timeout は別々の値＝取り違えが字面に出る）。
+    const TEETH_PACE: Pace = Pace { jobs: 3, threads: 5, timeout_s: 41 };
+
+    /// §34 (a) `--teeth a,b`: `--test-tool nextest` が `--timeout <T>` の直後に在り、1 つ目の `--` の後ろは
+    /// `-E` `kind(lib) | kind(bin) | test(/^(a|b)/)` `--test-threads <t>` **だけ**（2 つ目の `--` は無い）。
+    #[test]
+    fn mutants_diff_teeth_named_words_run_under_nextest_filter() {
+        let words = teeth_of(&argv("--base main --teeth probe_a_,probe_b_"))
+            .expect("語の形は正しい")
+            .expect("--teeth が在る");
+        assert_eq!(words, ["probe_a_", "probe_b_"], "語は宣言順");
+        let (args, scope) = measure_args(Path::new("d"), Path::new("o"), "p", TEETH_PACE, Some(&words));
+        let timeout_at = args.iter().position(|a| a == "--timeout").expect("--timeout が在る");
+        let dashes = args.iter().position(|a| a == "--").expect("-- が在る");
+        assert_eq!(
+            &args[timeout_at..dashes],
+            ["--timeout", "41", "--test-tool", "nextest"],
+            "--test-tool nextest は --timeout <T> の直後・-- の前: {args:?}"
+        );
+        assert_eq!(
+            &args[dashes..],
+            ["--", "-E", "kind(lib) | kind(bin) | test(/^(probe_a_|probe_b_)/)", "--test-threads", "5"],
+            "-- の後ろはこれだけ: {args:?}"
+        );
+        assert_eq!(args.iter().filter(|a| *a == "--").count(), 1, "2 つ目の -- は無い: {args:?}");
+        assert_eq!(scope.teeth(), "2", "語の数");
+        // `--teeth` より前の cargo-mutants の引数は §33 の形と同じ列。
+        let (plain, _) = measure_args(Path::new("d"), Path::new("o"), "p", TEETH_PACE, None);
+        assert_eq!(&args[..timeout_at + 2], &plain[..timeout_at + 2], "--timeout <T> までは不変");
+    }
+
+    /// §34 (b) `--teeth -` は空＝式は `kind(lib) | kind(bin)` だけ（`test(…)` を足さない）。
+    #[test]
+    fn mutants_diff_teeth_dash_is_empty_and_runs_lib_and_bin_only() {
+        let words = teeth_of(&argv("--base main --teeth -")).expect("- は正しい").expect("--teeth が在る");
+        assert!(words.is_empty(), "- は空: {words:?}");
+        let (args, scope) = measure_args(Path::new("d"), Path::new("o"), "p", TEETH_PACE, Some(&words));
+        let dashes = args.iter().position(|a| a == "--").expect("-- が在る");
+        assert_eq!(&args[dashes..], ["--", "-E", "kind(lib) | kind(bin)", "--test-threads", "5"], "{args:?}");
+        assert!(args.iter().any(|a| a == "nextest"), "空でも nextest で走る: {args:?}");
+        assert_eq!(scope.teeth(), "0", "空 = 0");
+    }
+
+    /// §34 (c) `--teeth` 無しは §33 の形と 1 語も違わない（`mutants_diff_fail_fast_` の pin と同じ列）。
+    #[test]
+    fn mutants_diff_teeth_absent_keeps_the_section_33_shape() {
+        assert_eq!(teeth_of(&argv("--base main --jobs 3 --threads 5")), Ok(None), "無しは None");
+        let (args, scope) = measure_args(Path::new("d"), Path::new("o"), "p", TEETH_PACE, None);
+        assert_eq!(
+            args,
+            [
+                "mutants", "--in-diff", "d", "-p", "p", "--no-shuffle", "--copy-vcs", "true", "-o", "o", "--jobs", "3",
+                "--baseline", "skip", "--timeout", "41", "--", "--", "--test-threads", "5"
+            ],
+            "{args:?}"
+        );
+        assert!(!args.iter().any(|a| a == "--test-tool" || a == "-E"), "nextest を名指さない: {args:?}");
+        assert_eq!(scope.teeth(), "-", "無し = -");
+    }
+
+    /// §34 (d) 語に `[A-Za-z0-9_]` 以外（空白・`.`・`/`）・空の語・値の無い flag は閉じた理由 1 つの `Err`。
+    #[test]
+    fn mutants_diff_teeth_malformed_words_are_unmeasured() {
+        let spaced = vec!["--base".to_owned(), "main".to_owned(), "--teeth".to_owned(), "a_,b c".to_owned()];
+        for args in [
+            spaced,
+            argv("--base main --teeth a_,b.c"),
+            argv("--base main --teeth a_/b"),
+            argv("--base main --teeth a_,,b_"),
+            argv("--base main --teeth"),
+            argv("--base main --teeth --jobs 2"),
+        ] {
+            assert_eq!(teeth_of(&args), Err(TEETH_MALFORMED.to_owned()), "{args:?}");
+        }
+        assert_eq!(teeth_of(&argv("--base main --teeth Ab_9")), Ok(Some(vec!["Ab_9".to_owned()])), "英数字と _ は通る");
+    }
+
+    /// §34 (e) 記録の行の末尾が `teeth=-` / `teeth=0` / `teeth=2` の 3 形（5 数と `scope=` は不変）。
+    #[test]
+    fn mutants_diff_teeth_record_line_carries_three_forms() {
+        let counts = Counts { total: 9, caught: 5, missed: 2, unviable: 1, timeout: 1 };
+        let two = ["x_".to_owned(), "y_".to_owned()];
+        let empty: [String; 0] = [];
+        for (teeth, tail) in [(None, "-"), (Some(&empty[..]), "0"), (Some(&two[..]), "2")] {
+            let (_, scope) = measure_args(Path::new("d"), Path::new("o"), "probe-pkg-2e", TEETH_PACE, teeth);
+            assert_eq!(
+                counts.line(&scope),
+                format!("mutants-diff: total=9 caught=5 missed=2 unviable=1 timeout=1 scope=probe-pkg-2e teeth={tail}"),
+                "teeth={tail}"
+            );
+        }
     }
 }
