@@ -3640,6 +3640,57 @@ fn pipe_intake_promise_files_crate_type_path_resolves_by_module_declaration() {
     clean(&[&repo, &state]);
 }
 
+// ───── 約束の行の審査と焼き直しの門（設計 contract-source.md §33・行 ah・`s2-07l.513`・接頭辞 `pipe_intake_promise_`） ─────
+
+/// 約束の行 1 つの Promised の行 `t` だけを持つ設計 doc（`expect` の字面で契約 file の `done` が変わる）。
+fn rework_promise_doc(expect: &str) -> String {
+    let row = format!("{}\n{}", promised_row("t", &[]), promise_toml(("t", 1), "", "[\"rules/manifest.toml\"]", "[\"derive_ok\"]", expect));
+    table_doc(&table_region(&[row]))
+}
+
+/// (e′) teeth-outside-write-set の `at` に write-set の外の path（`crates/toy/src/outside.rs`）を持つ審査の後でも、Promised の
+/// 行の受付は `at` の path 照合を撃たない: 契約 file が同じ 2 便目は通り（base は `finding-unaddressed` で断る → RED）、
+/// 同じ 3 便目は `same-kind-repeated`（N = 2 回目）でだけ断られ、契約 file（約束の行の `expect` → `done`）を変えた便は
+/// 通る。審査は 3 語の外の kind を INCONCLUSIVE に倒し（kind は lens の値のまま）、材料に約束の行の写しを置く。
+#[test]
+fn pipe_intake_promise_rework_gate_reads_only_the_contract_sha() {
+    let (repo, state) = derive_repo(&rework_promise_doc("最初の expect"));
+    let design = "docs/design/toy.md#t";
+    let outside = (Some("teeth-outside-write-set"), Some("crates/toy/src/outside.rs"));
+    let first = failed_runs(&repo, &state, "s2-pro", design, &[outside]);
+    let first_id = first.first().cloned().unwrap_or_default();
+    assert!(!copied_write_set(&state, &first_id).contains(&"crates/toy/src/outside.rs".to_owned()), "at の path は write-set の外");
+    let pairs = review_pairs(&state, &first_id);
+    assert_eq!((value_of(&pairs, "verdict").as_str(), value_of(&pairs, "kind").as_str()), ("INCONCLUSIVE", "teeth-outside-write-set"), "3 語の外は INCONCLUSIVE");
+    let promises = fs::read_to_string(review_dir(&state, &first_id).join("promises.txt")).unwrap_or_default();
+    assert_eq!(promises, "- n: 1\n  text: 約束 1\n  fixture: toy の repo\n  expect: 最初の expect\n", "約束の行の写し");
+    let second = failed_runs(&repo, &state, "s2-pro", design, &[outside]);
+    assert_eq!(second.len(), 1, "契約 file が同じ 2 便目は at の path 照合で断られない");
+    let again = Again { repo: &repo, state: &state, bead: "s2-pro", design };
+    let err = assert_refused(&again, "same-kind-repeated", &["teeth-outside-write-set", " 2 便"]);
+    assert!(!err.contains("finding-unaddressed") && !err.contains("crates/toy/src/outside.rs"), "at の path を名指さない: {err}");
+    fs::write(repo.join("docs/design/toy.md"), rework_promise_doc("書き直した expect")).expect("設計 doc を書ける");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "promise-rewritten"]);
+    let before = run_dirs(&state).len();
+    let out = repeat_intake(&repo, &state, "s2-pro", design, &lens_finding("FAIL", outside.0, outside.1));
+    let id = accepted(&out, &state, before);
+    assert!(copied_contract(&state, &id).contains("(1) 書き直した expect"), "契約 file が変わった便は通る");
+    clean(&[&repo, &state]);
+}
+
+/// (e) 約束の行を持たない行の審査は材料に約束の行の写しを置かず、3 語の外の kind の FAIL も FAIL のまま（不変の対）。
+#[test]
+fn pipe_intake_promise_plain_row_review_keeps_fail_and_places_no_promises() {
+    let (repo, state) = repo_with_state();
+    let design = write_contract(&repo, &[], &[]);
+    let ids = failed_runs(&repo, &state, "s2-pln", &design, &[(Some("teeth-outside-write-set"), Some("src/lib.rs"))]);
+    let id = ids.first().cloned().unwrap_or_default();
+    assert_eq!(value_of(&review_pairs(&state, &id), "verdict"), "FAIL", "約束の行を持たない行は倒さない");
+    assert!(!review_dir(&state, &id).join("promises.txt").exists(), "写しを置かない");
+    clean(&[&repo, &state]);
+}
+
 // ───── `--repo` / `--state-dir` の cwd fallback を落とす（`s2-07l.310`・設計 pipeline.md §15・接頭辞 `pipe_repo_required_`） ─────
 
 /// repo の git が記録する worktree の本数（main の木を含む）。

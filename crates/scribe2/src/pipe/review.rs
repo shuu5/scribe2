@@ -27,6 +27,12 @@
 //! 判定を [`judgement_of`] で読み（`kind` の無い古い便は `unparsed`）、焼き直しの門は直前の便の指摘に「対応する差分」が
 //! 在るかを **kind ごとに 1 関数**（[`unaddressed`]・[`FindingKind`] の網羅 match）で測る。門そのものは受付
 //! （`cli/intake.rs`）に在り、ここは判定の読み手と kind ごとの物差しだけを持つ。
+//!
+//! **Promised の行の審査**（設計 contract-source.md §33 行 ah）: 行が約束の行を持つかは設計 doc の契約表を受付と同じ
+//! 読み手（`read_table` → `promises_of`）で読んで知る（契約 file の 9 欄は不変・印を書かない）。約束の行の写し
+//! （`n` / `text` / `fixture` / `expect` の 4 欄・`n` の順）を材料の [`PROMISES_FILE`] に置き（持たない行は置かない＝
+//! lens の雛形は 1 字も変わらない）、lens の `kind` が 3 語（[`FindingKind::promised`]）の外の FAIL は INCONCLUSIVE に倒す
+//! （残りの 3 語は器が受付で測り終えている・fail-closed・`FindingKind` の 7 語は不変）。
 
 use super::closure::{unresolved_names, ClosureError, Source};
 use super::contract::Contract;
@@ -53,6 +59,9 @@ pub const DESIGN_FILE: &str = "design.txt";
 
 /// `{requirements}` の穴の本文（契約の写しの隣・lens が読む）。
 pub const REQUIREMENTS_FILE: &str = "requirements.txt";
+
+/// `{promises}` の穴の本文（Promised の行だけ契約の写しの隣に置く・lens が読む）。
+pub const PROMISES_FILE: &str = "promises.txt";
 
 /// lens の scope の unit 名に載せる段の名。
 const REVIEW_STAGE: &str = "review";
@@ -151,6 +160,16 @@ pub const FINDING_KINDS: &[FindingKind] = &[
 ];
 
 impl FindingKind {
+    /// Promised の行（§33 行 ah）で lens が書いてよい理由の型か（`vacuous-assert` / `goal-done-contradiction` / `other` の
+    /// 3 語・網羅 match）。`teeth-outside-write-set` / `literal-mismatch` / `section-material-missing` は器が受付で測り終えて
+    /// いるので、この 3 語の外の FAIL は INCONCLUSIVE に倒す（[`narrow`]）。器が倒す `unparsed` も外。
+    pub fn promised(self) -> bool {
+        match self {
+            Self::VacuousAssert | Self::GoalDoneContradiction | Self::Other => true,
+            Self::TeethOutsideWriteSet | Self::LiteralMismatch | Self::SectionMaterialMissing | Self::Unparsed => false,
+        }
+    }
+
     /// `review.json` の `kind`・event の `kind:<k>`・report の `by_kind=` に書く字面。
     pub fn as_str(self) -> &'static str {
         match self {
@@ -368,6 +387,8 @@ struct Material {
     design: String,
     /// `req` の各 id の要件本文（読めない周は明示の 1 行）。
     requirements: String,
+    /// 約束の行の写し（[`promises_text`]・Promised でない行は空）。
+    promises: String,
 }
 
 /// 審査の判定 1 件（verdict と根拠と、PASS でない周の理由の型と場所）。
@@ -398,6 +419,7 @@ pub fn review(entry: &Review<'_>) -> Outcome {
         Err(reason) => return broken(reason),
     };
     let (finding, scope) = decide(entry, &contract);
+    let finding = narrow(finding, !material.promises.is_empty());
     let verdict = finding.verdict;
     match settle(entry, &finding, scope) {
         Err(reason) => broken(reason),
@@ -414,6 +436,51 @@ fn materials(entry: &Review<'_>) -> Material {
     Material {
         design: design_text(entry.repo, &entry.contract.design),
         requirements: requirements_text(entry.repo, entry.requirements, &entry.contract.req),
+        promises: promises_text(entry.repo, &entry.contract.design),
+    }
+}
+
+/// 契約の `design` が設計 pointer なら、設計 doc の契約表からその行の約束の行を読み写しに組む（受付と同じ読み手
+/// `read_table` → `promises_of`）。pointer でない・読めない・約束の行を持たない周は空（読めなさは [`design_text`] が
+/// `{design}` の本文に明示する）。
+fn promises_text(repo: &Path, design: &str) -> String {
+    let Ok(pointer) = table::parse_pointer(design) else {
+        return String::new();
+    };
+    let Ok(text) = table::read(repo, &pointer.path) else {
+        return String::new();
+    };
+    let (_, promises) = table::read_table(&pointer.path, &text).unwrap_or_default();
+    render_promises(&table::promises_of(&promises, &pointer.id))
+}
+
+/// 約束の行の写し: `n` の順に 1 行ずつ `n` / `text` / `fixture` / `expect` の 4 欄（約束の行が無ければ空）。
+fn render_promises(promises: &[&table::PromiseRow]) -> String {
+    let mut sorted = promises.to_vec();
+    sorted.sort_by_key(|promise| promise.n);
+    sorted
+        .iter()
+        .map(|promise| {
+            format!(
+                "- n: {}\n  text: {}\n  fixture: {}\n  expect: {}",
+                promise.n, promise.text, promise.fixture, promise.expect
+            )
+        })
+        .collect::<Vec<String>>()
+        .join("\n")
+}
+
+/// Promised の行の kind の絞り（§33 行 ah (iii)）: 約束の行を持つ行の FAIL で `kind` が 3 語（[`FindingKind::promised`]）の外なら
+/// INCONCLUSIVE に倒す（`kind` は lens の値のまま・理由を evidence の頭に足す）。PASS・INCONCLUSIVE・約束の行を持たない
+/// 行は不変。
+fn narrow(finding: Finding, promised: bool) -> Finding {
+    match finding.kind {
+        Some(kind) if promised && finding.verdict == Verdict::Fail && !kind.promised() => Finding {
+            verdict: Verdict::Inconclusive,
+            evidence: format!("Promised の行の kind {} は 3 語の外（{}）", kind.as_str(), finding.evidence),
+            ..finding
+        },
+        _ => finding,
     }
 }
 
@@ -711,6 +778,12 @@ fn keep(entry: &Review<'_>, material: &Material) -> Result<PathBuf, String> {
         let path = dir.join(name);
         std::fs::write(&path, material_file(body)).map_err(|err| format!("{} を書けない: {err}", path.display()))?;
     }
+    // 約束の行の写しは Promised の行だけ置く（無い file ＝ lens の雛形は 1 字も変わらない）。
+    if !material.promises.is_empty() {
+        let path = dir.join(PROMISES_FILE);
+        std::fs::write(&path, material_file(&material.promises))
+            .map_err(|err| format!("{} を書けない: {err}", path.display()))?;
+    }
     Ok(contract)
 }
 
@@ -864,14 +937,15 @@ fn broken(reason: String) -> Outcome {
 #[cfg(test)]
 mod tests {
     use super::{
-        detail_of, judgement_of, lens_cmd, parse_lens, read_detail, requirement_md, requirement_row, requirement_yaml,
-        requirements_text, section_text, split_at, strip_tags, unaddressed, verdict_of, write_review, Finding,
-        FindingKind, Found, Judgement, ReviewCheck, Rework, FINDING_KINDS,
+        detail_of, judgement_of, lens_cmd, narrow, parse_lens, read_detail, render_promises, requirement_md,
+        requirement_row, requirement_yaml, requirements_text, section_text, split_at, strip_tags, unaddressed, verdict_of,
+        write_review, Finding, FindingKind, Found, Judgement, ReviewCheck, Rework, FINDING_KINDS,
     };
     use crate::pipe::closure::Source;
     use crate::pipe::gate::Verdict;
     use crate::pipe::lens_record::LensSource;
     use crate::pipe::run_dir;
+    use crate::pipe::table::PromiseRow;
     use std::path::{Path, PathBuf};
 
     /// 歯ごとの空の tmp dir。
@@ -1241,6 +1315,67 @@ mod tests {
             Ok(at(&["+tests/new.rs", "Cargo.toml", "docs/"])),
             "tracked の file・+ 付きの新規 file・末尾 / の dir は path（測れない項目が無ければ数を足さない）"
         );
+    }
+
+    /// 約束の 1 行（`n` と 4 欄の字面を `n` から作る・`files` / `teeth` は写しに載らない面）。
+    fn promise(n: u64) -> PromiseRow {
+        PromiseRow {
+            line: n,
+            of: "ah".to_owned(),
+            n,
+            text: format!("約束 {n}"),
+            files: vec![format!("src/f{n}.rs")],
+            symbols: Vec::new(),
+            teeth: vec![format!("tooth_{n}")],
+            place: String::new(),
+            fixture: format!("fixture {n}"),
+            expect: format!("expect {n}"),
+        }
+    }
+
+    /// (e) 約束の行の写しは `n` の順（doc 順が 2 → 1 でも）に 4 欄（n / text / fixture / expect）だけを載せ、`files` と
+    /// `teeth` は載せない。約束の行が無ければ空（＝材料の file を置かず雛形は 1 字も変わらない）。
+    #[test]
+    fn contract_promise_review_renders_four_fields_in_n_order() {
+        let (one, two) = (promise(1), promise(2));
+        let rendered = render_promises(&[&two, &one]);
+        assert_eq!(
+            rendered,
+            "- n: 1\n  text: 約束 1\n  fixture: fixture 1\n  expect: expect 1\n- n: 2\n  text: 約束 2\n  fixture: fixture 2\n  expect: expect 2"
+        );
+        assert!(!rendered.contains("src/f1.rs") && !rendered.contains("tooth_1"), "4 欄の外は載せない: {rendered}");
+        assert_eq!(render_promises(&[]), "", "約束の行が無ければ空");
+    }
+
+    /// (e) Promised の行の FAIL は kind が 3 語（母集団 3・宣言順）の中ならそのまま、外（残りの 3 語と `unparsed`）なら
+    /// INCONCLUSIVE に倒れ kind は lens の値のまま。PASS・INCONCLUSIVE と約束の行を持たない行の判定は 7 語とも不変。
+    #[test]
+    fn contract_promise_review_kind_outside_three_falls_to_inconclusive() {
+        let inside: Vec<FindingKind> = FINDING_KINDS.iter().copied().filter(|kind| kind.promised()).collect();
+        assert_eq!(
+            inside,
+            [FindingKind::GoalDoneContradiction, FindingKind::VacuousAssert, FindingKind::Other],
+            "母集団 3 語（宣言順）"
+        );
+        let fail = |kind: FindingKind| Finding { verdict: Verdict::Fail, evidence: "e".to_owned(), kind: Some(kind), at: Some("x".to_owned()) };
+        let mut fallen = 0;
+        for kind in FINDING_KINDS {
+            let found = narrow(fail(*kind), true);
+            if kind.promised() {
+                assert_eq!(found, fail(*kind), "{} は 3 語の中＝そのまま", kind.as_str());
+            } else {
+                fallen += 1;
+                assert_eq!(found.verdict, Verdict::Inconclusive, "{} は 3 語の外", kind.as_str());
+                assert_eq!((found.kind, found.at.as_deref()), (Some(*kind), Some("x")), "kind と at は lens の値のまま");
+                assert!(found.evidence.contains(kind.as_str()) && found.evidence.ends_with("（e）"),"{}", found.evidence);
+            }
+            assert_eq!(narrow(fail(*kind), false), fail(*kind), "{} は約束の行を持たない行で不変", kind.as_str());
+            let unsure = Finding { verdict: Verdict::Inconclusive, ..fail(*kind) };
+            assert_eq!(narrow(unsure.clone(), true), unsure, "INCONCLUSIVE は不変");
+        }
+        assert_eq!(fallen, 4, "3 語の外は 7 語のうち 4 語");
+        let passed = Finding { verdict: Verdict::Pass, evidence: "e".to_owned(), kind: None, at: None };
+        assert_eq!(narrow(passed.clone(), true), passed, "PASS は不変");
     }
 
     /// 書けない周は本 file が生まれず書きかけも残さない（親 dir が無い）。

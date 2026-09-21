@@ -40,6 +40,10 @@
 //! 同じ「隣の file」の形＝`lens.cmd` の穴も flag も不変で 1 つの `--lens` が 2 つの段に効く）。片方だけ在る周は
 //! 材料が壊れているので claude を呼ばず rc 2。cap は契約 + 節 + 要件の byte で照合する（NFR1・超えたら
 //! INCONCLUSIVE）。
+//!
+//! **Promised の行（設計 contract-source.md §33 行 ah）は約束の行の写しも隣の file で受ける**。契約の審査の周に
+//! [`PROMISES_FILE`] が在れば `{promises}` の穴に見出しと kind の 3 語の限りと写しを埋め、無ければ穴は空文字＝約束の行を
+//! 持たない行の雛形は 1 字も変わらない。在るのに読めない周は材料の欠けと同じく claude を呼ばず rc 2。cap の照合にも足す。
 
 use super::runner::scope_line;
 use super::{build, feed, fill, flag, need, read_stdin_bytes, rules_of, runner_effort, runner_model, Call, Effort, DEFAULT_CLAUDE};
@@ -48,7 +52,7 @@ use crate::fleet::select::Model;
 use crate::pipe::confine;
 use crate::pipe::contract::Contract;
 use crate::pipe::move_proof::RULINGS_FILE;
-use crate::pipe::review::{DESIGN_FILE, REQUIREMENTS_FILE};
+use crate::pipe::review::{DESIGN_FILE, FINDING_KINDS, PROMISES_FILE, REQUIREMENTS_FILE};
 use crate::rules::int_row;
 use std::io::{ErrorKind, Read};
 use std::path::Path;
@@ -215,15 +219,48 @@ fn prompt_of(contract: &Path, stated: &str, rulings: &str, cap: u64) -> Result<S
             ))
         }
         Some((design, requirements)) => {
-            if over(stated.len().saturating_add(design.len()).saturating_add(requirements.len())) {
+            let promises = promises_of(contract)
+                .map(|found| promise_block(&found))
+                .map_err(|reason| Outcome::failed_line(RC_BROKEN, format!("lens: 約束の行を読めない: {reason}")))?;
+            let bytes = stated.len().saturating_add(design.len()).saturating_add(requirements.len());
+            if over(bytes.saturating_add(promises.len())) {
                 return Err(Outcome::ok_line(inconclusive("contract material exceeds cap")));
             }
             Ok(fill(
                 CONTRACT_TEMPLATE,
-                &[("{contract}", stated), ("{design}", &design), ("{requirements}", &requirements)],
+                &[
+                    ("{contract}", stated),
+                    ("{design}", &design),
+                    ("{requirements}", &requirements),
+                    ("{promises}", &promises),
+                ],
             ))
         }
     }
+}
+
+/// 契約の写しの隣の [`PROMISES_FILE`]（Promised の行だけ `pipe::review` が置く）。無ければ空・在るのに読めない周は `Err`。
+fn promises_of(contract: &Path) -> Result<String, String> {
+    let path = contract.with_file_name(PROMISES_FILE);
+    match std::fs::read_to_string(&path) {
+        Ok(found) => Ok(found),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(String::new()),
+        Err(err) => Err(format!("{}: {err}", path.display())),
+    }
+}
+
+/// `{promises}` の穴の本文: 写しが空なら空文字（雛形は 1 字も変わらない）・在れば見出しと kind の 3 語の限りと写し。
+fn promise_block(rows: &str) -> String {
+    let rows = rows.trim_end();
+    if rows.is_empty() {
+        return String::new();
+    }
+    let words: Vec<String> =
+        FINDING_KINDS.iter().filter(|kind| kind.promised()).map(|kind| format!("`{}`", kind.as_str())).collect();
+    format!(
+        "\n## 約束の行（Promised・n の順）\nこの行は約束の行を持つ。write-set・verify・done は器が約束の行から生成し、歯の置き場・契約の字面・設計の材料は器が受付で測り終えている。各約束の行の fixture と expect がその text を測れているかを読む。FAIL と INCONCLUSIVE の周の `kind` は次の 3 語のちょうど 1 つに限る（他の語の FAIL は INCONCLUSIVE に倒される）: {}。\n\n{rows}",
+        words.join(" / ")
+    )
 }
 
 /// 契約の写しの隣の [`DESIGN_FILE`] / [`REQUIREMENTS_FILE`]（契約の審査の材料・`pipe::review` が置く）。

@@ -807,6 +807,8 @@ struct Today {
     write_set: Vec<String>,
     /// 設計 pointer の行。
     row: ContractRow,
+    /// 行が約束の行を持つ（[`WriteSet::Promised`]・§33 行 ah: 焼き直しの門は契約 file の字面だけを見る）。
+    promised: bool,
 }
 
 /// 受付の 2 門（§23・[`exclude_same_kind`] と [`exclude_unaddressed`]）を撃ち、各門の断りを列に積む。
@@ -842,12 +844,12 @@ fn exclude_repeats(material: &Material<'_>, measured: &Contract, judged: &mut Ju
 
 /// 今回の材料を組む（行の無い pointer は `Ok(None)`・行の解けない周は [`pointed_row`] の断り）。
 fn today_of(repo: &Path, measured: &Contract, materials: &Materials) -> Result<Option<Today>, Denial> {
-    let Some(Pointed { row, .. }) = pointed_row(repo, measured, materials)? else {
+    let Some(Pointed { row, promised }) = pointed_row(repo, measured, materials)? else {
         return Ok(None);
     };
     let contract = crate::pipe::contract::render(&row, &measured.design, &measured.write_set);
     let design = review::design_material(repo, &measured.design);
-    Ok(Some(Today { contract, design, write_set: measured.write_set.clone(), row }))
+    Ok(Some(Today { contract, design, write_set: measured.write_set.clone(), row, promised: promised.is_some() }))
 }
 
 /// 置き場の replay から同じ bead の便を **id の新しい順**に読む（run id は `<bead>-<UTC の秒>`＝id の降順が時系列の
@@ -921,7 +923,13 @@ fn exclude_same_kind(state_dir: &Path, past: &[Past], stop: u64, today: &Today) 
 /// 焼き直しの門（§23 (3)）: 直前の便（新しい順の先頭）の verdict が PASS でない周、その指摘（`kind` と `at`）に対応する
 /// 差分が今回の材料に在るかを kind ごとの物差し（[`review::unaddressed`]）で測り、対応の無い項目が 1 つでも在れば
 /// [`Refuse::FindingUnaddressed`]（項目は辞書順）。測れない型と `at` の空な周は物差しが空を返す＝通す。
+///
+/// Promised の行（§33 行 ah (iv)）は `at` の物差しを撃たずに通す: 契約 file は約束の行からの生成値で、焼き直しは
+/// 契約 file の字面が変わったかだけで測る（不変の N 回目は [`exclude_same_kind`] が断る）。
 fn exclude_unaddressed(state_dir: &Path, past: &[Past], today: &Today, materials: &Materials) -> Result<(), Denial> {
+    if today.promised {
+        return Ok(());
+    }
     let Some(head) = past.first() else {
         return Ok(());
     };

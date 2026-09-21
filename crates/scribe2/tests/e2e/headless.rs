@@ -1295,6 +1295,68 @@ fn headless_lens_contract_prompt_external_form() {
     insta::assert_snapshot!("lens_contract_prompt_external_form", prompt);
 }
 
+// ───── Promised の行の審査の雛形（`s2-07l.513`・設計 contract-source.md §33 行 ah・接頭辞 `headless_lens_promise_`） ─────
+
+/// 約束の行の写し（`pipe::review` が `promises.txt` に置く形・★契約・材料・雛形のどれにも現れない字面）。
+const PROMISE_ROWS: &str = "- n: 1\n  text: 約束の本文 PROMISE-TEXT-MARK\n  fixture: 歯の fixture PROMISE-FIXTURE-MARK\n  expect: 歯の観測 PROMISE-EXPECT-MARK\n- n: 2\n  text: 二つ目の約束\n  fixture: 二つ目の fixture\n  expect: 二つ目の観測";
+
+/// 契約の審査の lens を約束の行の写し付きで 1 回撃ち、claude の stdin に渡った prompt を返す。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn lens_promise_prompt_of_fixed_fixture() -> String {
+    let dir = tmp();
+    let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"fake\"}\n", false, 0);
+    let contract = contract_in(&dir);
+    material_in(&dir, Some(CONTRACT_DESIGN), Some(CONTRACT_REQUIREMENTS));
+    fs::write(dir.join("promises.txt"), format!("{PROMISE_ROWS}\n")).expect("写しを書ける");
+    let out = run_lens(&contract, 4096, "plan", &claude, CONTRACT_STDIN);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    let prompt = slurp(&dir.join("stdin"));
+    clean(&[&dir]);
+    prompt
+}
+
+/// 契約の隣に約束の行の写しが在る周は、要件の節の後に約束の行の見出しが 1 回載り、その下に 4 欄の写しが逐語で
+/// （n の順のまま）載り、kind の限りが 3 語を名指す。穴 `{promises}` は残らない。写しの無い周の prompt は見出しを持たない（対）。
+#[test]
+fn headless_lens_promise_prompt_places_rows_after_requirements_and_names_three_kinds() {
+    let prompt = lens_promise_prompt_of_fixed_fixture();
+    let (requirements, promises) = (prompt.find("## 契約が満たす要件"), prompt.find("## 約束の行"));
+    assert!(requirements.is_some() && promises > requirements, "約束の行は要件の節の後: {prompt}");
+    assert_eq!(prompt.matches("## 約束の行").count(), 1, "見出しはちょうど 1 回: {prompt}");
+    assert!(prompt.find(PROMISE_ROWS) > promises, "写しは逐語で見出しの下: {prompt}");
+    let limit = "次の 3 語のちょうど 1 つに限る（他の語の FAIL は INCONCLUSIVE に倒される）: `goal-done-contradiction` / `vacuous-assert` / `other`。";
+    assert_eq!(prompt.matches(limit).count(), 1, "kind の限りは 3 語: {prompt}");
+    assert!(!prompt.contains("{promises}"), "穴は埋まる: {prompt}");
+    let plain = lens_contract_prompt_of_fixed_fixture();
+    assert!(!plain.contains("## 約束の行") && !plain.contains("{promises}"), "写しの無い周は見出しも穴も無い: {plain}");
+    assert!(prompt.starts_with(plain.trim_end()), "写しの無い周の prompt は写しの在る周の頭と同じ字面");
+}
+
+/// 写しが在るのに読めない周（dir が置かれている）は claude を呼ばず rc 2（約束の行を落として審査しない）。
+#[test]
+fn headless_lens_promise_unreadable_rows_are_refused_without_calling_claude() {
+    let dir = tmp();
+    let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"fake\"}\n", false, 0);
+    let contract = contract_in(&dir);
+    material_in(&dir, Some(CONTRACT_DESIGN), Some(CONTRACT_REQUIREMENTS));
+    fs::create_dir_all(dir.join("promises.txt")).expect("dir を作れる");
+    let out = run_lens(&contract, 4096, "plan", &claude, CONTRACT_STDIN);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "読めない写しは rc 2: {}", stderr_of(&out));
+    assert!(stderr_of(&out).contains("promises.txt"), "file を名指す: {}", stderr_of(&out));
+    assert!(!dir.join("called").exists(), "claude を起動しない");
+    clean(&[&dir]);
+}
+
+/// Promised の行の契約の審査の prompt の外形（契約と材料と約束の行の写しの fixture を固定・C12.5）。
+#[test]
+fn headless_lens_promise_prompt_external_form() {
+    let prompt = lens_promise_prompt_of_fixed_fixture();
+    insta::assert_snapshot!("lens_promise_prompt_external_form", prompt);
+}
+
 /// 材料が片方だけ在る周は壊れた材料として claude を呼ばず rc 2（無い方を名指す）。2 つとも無ければ従来の diff の
 /// 審査（stdin が載る・対）。
 #[test]
