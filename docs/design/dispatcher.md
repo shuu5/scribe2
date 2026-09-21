@@ -226,6 +226,8 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
   2. **宛先**: fleet の replay の `State.registrations` から `(Role::Orchestrator, anchor = 便の repo)` の最新 row の `target`（tmux の pane）。row が無い周は送らず、理由 `no-seat`。
   3. **本文は 1 行**: `scribe2 pipe: <bead> <run> <段>=<verdict か kind か detail の 1 語> — 次の 1 手は pipe dispatch ls`（(a)）／`scribe2 pipe: idle ready=<候補の本数> launched=0 reason=<先頭の候補の理由>`（(b)）。対話面の作法（次の 1 手が先頭・dialogue-surface.md §2）に合わせて 1 行に閉じ、逐語も path も載せない（PUBLIC 面ではない state dir だが、pane は人が見る）。
   4. **送達は既存の 1 関数**: `deliver_within` を `pipe.stop_grace_ms` と同じ桁の窓で 1 回撃ち、結果を運転手の stdout に `notify=<delivered|refused:<理由>|unconfirmed|no-seat>` の 1 行で残す（C10）。送達の失敗で便の rc は変えない（通知は副作用・便の終端は既に記帳済み）。
+  5. **閉じた型の variant を新設の module に書かない**: 行 p の `+` の src は `Stage` / `EventKind` の variant を `match` の腕や `Type::Variant` の字面で名指さない——名指すと他 doc の行の `touches` の閉包（contract-source.md 行 c の `crate::fleet::Stage`）に新設 file が入り、その行の write-set が不完全になって `contracts check` と gate が落ちる（2026-09-21 の便 1 本で実測・finding 1）。終端の 1 語は最後の `RunStage` / `RunDone` の event の `stage` の `as_str` と `detail` の頭の語を**字面で写す**（既存の読み手 `last_stage_detail` の型・段ごとの分岐は持たない）。
+  6. **歯の置き場の pin を同じ便で上げる**: `crates/scribe2/tests/e2e/pipe.rs` の `pipe_hermetic_sites_stay_one` は `pipe/` 配下の tracked の file 数と binary を起こす字面の site 数を pin する（9 file・1 site）。新設の歯の file で file 数は 10 になり、site は増やさない（歯は `run_pipe` / `pipe_cmd` の口で起こす）＝pin の file 数を 10 に上げる（`tests/e2e/pipe.rs` は約束 1 の files に在る）。
 - 触らない: event の kind（通知は記帳しない・pane の行と stdout の 1 行だけ）・`deliver_within` の中身・登録 row の形・`Landed` / PASS の便（送らない）・席の見張り（Monitor）は席の手順のまま（本行の着地後に止めてよい条件は memo .507 の昇格条件）。
 - 却下: 席の SessionStart / rebrief に終端の一覧を載せる（席の turn が無いと読めない＝同じ穴）／event を足して席が poll する（poll は席の寿命に縛られる・今の見張りと同じ）／全終端を送る（Landed が多く pane が流れる・落ちた便だけが席の手番）。
 
