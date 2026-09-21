@@ -658,7 +658,7 @@ id = "h"
 title = "歯の fixture の一時 dir を Drop で必ず片付ける — 作り手が包みを返し、panic した歯も dir を残さない（scope の reset は行 p・疑似 seat は着地済み）"
 req = ["NFR3"]
 section = "17"
-write-set = ["crates/scribe2/tests/e2e/main.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/rules.rs", "crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/hook.rs", "crates/scribe2/tests/e2e/headless.rs", "crates/scribe2/tests/e2e/polarity.rs", "docs/design/gate-cost.md"]
+write-set = ["crates/scribe2/tests/e2e/main.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/rules.rs", "crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/hook.rs", "crates/scribe2/tests/e2e/headless.rs", "crates/scribe2/tests/e2e/polarity.rs", "crates/scribe2/tests/e2e/ledger_form.rs", "crates/scribe2/tests/e2e/ledger_memo.rs", "docs/design/gate-cost.md"]
 verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail e2e_fixture_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail seat_isolated_session_is_torn_down_when_guard_drops"]
 size = "S"
 done = "一時 dir の作り手が Drop で再帰削除する包みを返し、panic した歯も dir を残さず（現物の形では残る）、path を取り出して guard を降ろした周だけ dir が残り、作り手の path の一意性と各歯の assert は不変で、疑似 seat の畳みの既着の歯は緑のまま"
