@@ -359,7 +359,7 @@ of = "n"
 n = 1
 text = "起こす前に bead 名義の DispatchMark（mark = Launched・detail = 起こす subcommand の 1 語）を既存の mark の口で書き、書けない周は起こさない"
 files = ["crates/scribe2/src/fleet/mod.rs", "crates/scribe2/src/pipe/dispatch.rs"]
-symbols = ["+Mark::Launched", "marks_of("]
+symbols = ["crate::fleet::Mark", "+Mark::Launched", "marks_of("]
 teeth = ["pipe_dispatch_launched_mark_is_written_before_the_child_is_spawned"]
 place = "crates/scribe2/tests/e2e/pipe/dispatch.rs"
 fixture = "偽の台帳に ready の bead 1 本と toy repo を置いて pipe dispatch の 1 周を撃つ。負の枝は event log を読み取り専用にして印が書けない周"
@@ -370,7 +370,7 @@ of = "n"
 n = 2
 text = "最新の Launched より後に RunCreated も Release の印も無い bead は起こさず、dispatch ls の理由が launched:<ts> になる（WaitReason に 1 値 Launched）"
 files = ["crates/scribe2/src/pipe/dispatch.rs"]
-symbols = ["+WaitReason::Launched"]
+symbols = ["crate::pipe::dispatch::WaitReason", "+WaitReason::Launched"]
 teeth = ["pipe_dispatch_launched_bead_is_not_relaunched_until_run_created_or_release"]
 place = "crates/scribe2/tests/e2e/pipe/dispatch.rs"
 fixture = "偽の台帳の ready の bead に DispatchMark launched だけを積んだ event log で 2 周目を撃つ。対照は Launched の後に RunCreated を積んだ log と、Launched の後に Release を積んだ log の 2 つ"
@@ -399,7 +399,7 @@ of = "o"
 n = 1
 text = "列の 1 周は起こす前に health::now を読み、act が Wait の周は 1 本も起こさず WaitReason::HostBusy（ls の理由 host-busy）、Unmeasured は act のとおり起こす。per_core は gate と同じ 2 行を同じ 1 関数で読む（breaker を health.rs 側へ寄せる）"
 files = ["crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/health.rs", "crates/scribe2/src/pipe/gate.rs"]
-symbols = ["+WaitReason::HostBusy", "pipe::health::Breaker"]
+symbols = ["crate::pipe::dispatch::WaitReason", "+WaitReason::HostBusy", "crate::pipe::health::Breaker"]
 teeth = ["pipe_dispatch_host_busy_round_launches_nothing"]
 place = "crates/scribe2/tests/e2e/pipe/dispatch.rs"
 fixture = "rules fixture の host.runnable_per_core を 0（閾値 0 = 常に Busy）にした周と既定の値の周の対で、偽の台帳に ready の bead 1 本を置いて 1 周を撃つ"
@@ -410,7 +410,7 @@ of = "o"
 n = 2
 text = "live の Stage::Intake の枝を運転手の札で読む: Live なら true・Dead / Absent なら false・Unreadable なら None（他の段の枝は不変・新しい probe は足さない）"
 files = ["crates/scribe2/src/pipe/cli/state.rs"]
-symbols = ["live(", "Ticket::Live"]
+symbols = ["live(", "crate::pipe::Ticket"]
 teeth = ["pipe_dispatch_intake_run_without_a_live_driver_is_not_live"]
 place = "crates/scribe2/tests/e2e/pipe/dispatch.rs"
 fixture = "RunCreated stage=Intake だけを持つ run を state dir に置き、札の 4 形（無い・死んだ pid・生きた pid〔歯の自分〕・読めない）で対照。同じ write-set の別 bead を候補にする"
