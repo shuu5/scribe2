@@ -190,6 +190,45 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
 - 却下案: `release` の印で `Reviewed` も戻す（印は器の側の理由で落ちた便を戻す口で、中身が変わっていない便を審査へ送り直す＝FR49 の「中身が変わるまで」を印で破る）／鍵に要件文も入れる（SRS の 1 字の改訂で、その要件を指す契約が一斉に列へ戻る）／審査の判定を § の sha に紐づけて記録する（新しい on-disk の面を足す＝超過した旧案（§2「審査の時点」）と同じ型・C17.2）／設計 doc を直す便で契約 file の字も必ず動かす運用にする（手書きの規範文を増やす・C1 / N2）。
 - 歯（`pipe_dispatch_section_key_` 接頭辞・置き場は列の歯の file）: (a) 審査 INCONCLUSIVE で終端した `Reviewed` の便の契約が、§ の本文を直した後の 1 周で列に戻る（`dispatch ls` の理由が値なしの欄になる）／(b) § も契約 file も変わっていない周は列外のまま（無限に起こし直さない）／(c) 審査 FAIL で終端した便も § を直せば戻る／(d) § の写しを持たない便と、写しが在るのに読めない便は契約 file だけの鍵で今までどおり列外（母集団 = 写しの 3 値: 在って読める / 在るが読めない / 無い）／(e) `Landed` の便は § を直しても戻らない（母集団 = 終端の段の種類）／(f) § の本文を 1 文字だけ変えた周も戻る（列が突き合わせる本文が審査の材料と同じ 1 本から出ている pin）／(g) `release` の印の既存の規則は変わらない（既存の歯が測る側・行の verify がその接頭辞も撃つ）。
 
+## 17. 起こした便が受付に届かない周は同じ bead を起こし直さない（契約表の行 n・`s2-07l.509`・約束の行の形）
+
+やさしく言うと: 列は「起こした」ことを覚えていないので、受付で落ちた便を毎周起こし直し、落ち続けると台帳を詰まらせて自分で自分を止められなくなる。起こした事実を記録に残し、受付に届くまで同じ bead を起こさない。
+
+- 出所: memo `s2-07l.509`（隣の repo の便で 73 本常駐・hold で収束・2026-09-21）。user 裁定 2026-09-21（分解表 G4 を推奨どおり・逐語は台帳 `s2-07l.505` の notes）。
+- 現物（verified・main）: `crates/scribe2/src/pipe/dispatch.rs` の `start` → `spawn_self` は子を `pipe intake …` で起こして `spawn` の成否だけを返し、stdout / stderr は `Stdio::null()`。列（`turn` / `fire`）は「起こした便が `RunCreated` に届いたか」を見ない。起こした事実は event に無い（`RunCreated` は intake が書く）。intake が台帳 timeout（環境）で落ちた周は run dir も event も無く、次の周が同じ bead をまた起こす。
+- 形（印の 1 値と候補の条件 1 つ・新しい file も rules 行も足さない）:
+  1. **起こす前に印を書く**: `fleet/mod.rs` の `Mark` に 4 値目 **`Launched`** を足し、`start` の直前に既存の `mark(` の口で bead 名義の `DispatchMark`（mark = Launched・detail = 起こした argv の subcommand 1 語）を書く。書けない周は起こさない（fail-closed・記帳できない起動を数えない）。`Mark` の網羅 match は `fleet/mod.rs` の `as_str` / `parse` と `dispatch.rs` の `marks_of` の 3 か所（`marks_of` は `Launched` を hold と同じ側に畳まず、独立の値として最新の 1 つを持つ）。
+  2. **候補の条件**: その bead の最新の `Launched` より後に、その bead の `RunCreated` も `Release` の印も無い周は起こさない（`WaitReason` に 1 値 **`Launched`**・`dispatch ls` の理由は `launched:<ts>`）。`RunCreated` が来れば従来の live / 終端の判定に戻る。intake が受付で断った便（run dir 0）は `Release` の印まで起きない＝落ち続ける便が台帳を詰まらせる正帰還が閉じる。`hold` / `first` の印の意味は不変。
+  3. **子の stderr を残す**: `spawn_self` の stderr を `<state_dir>/pipe/launch.log` に append する（stdout は null のまま・file は書けなければ起こさない側に倒さず null に落とす＝起動を記録の失敗で止めない）。読み手は席（C10・死因が観測できなかった .509 の穴）。
+- 触らない: `hold` / `release` / `first` の印の意味・§2 の列外の鍵・受付の判定（intake は変えない）・`Turn` の形（`launches` は印を書けた分だけ）・event の schema（`DispatchMark` の欄は既存のまま・`mark` の値が 1 つ増えるだけ）。
+- 却下: 時間の冷却（rules 行 `pipe.launch_cooldown_s` を足す・値の裁定が要り、台帳 timeout の周は何秒待っても同じ理由で落ちる）／N 周で自動 hold（周の間隔が契機依存で N の意味が定まらない・`Launched` 1 回で止める方が読みやすい）／state dir の印 file（記帳と別の状態・C3）。
+
+## 18. 列が起こす前に器の健康の遮断器を通し、受付で止まったまま運転手の居ない便を live に数えない（契約表の行 o・`s2-07l.509`・約束の行の形）
+
+やさしく言うと: 台帳や host が詰まっている周に新しい便を起こしても落ちるだけなので、gate と同じ遮断器を列にも通す。受付の途中で死んだ便の亡骸が「走行中」と数えられて次の便を塞ぐので、札の無い受付中の便は走行中と読まない。
+
+- 出所: memo `s2-07l.509`（候補 1 の後半 = 健康の遮断器と Intake で止まった run の畳み）。user 裁定 2026-09-21（G4）。
+- 現物（verified・main）: 遮断器は `crates/scribe2/src/pipe/health.rs`（`now(per_core)` → `Health` の 3 値・`act` が `Action` と `Mark` を返す）で、呼び手は gate の `crates/scribe2/src/pipe/gate/verify.rs`（`health::pass(checks.host)`・`Breaker` は `gate.rs` の `breaker()` が manifest の 2 行から組む）だけ。列は通していない。live の判定は `crates/scribe2/src/pipe/cli/state.rs` の `live(state_dir, id, stage)` で、`Stage::Intake` は無条件に `Some(true)`＝受付の途中で運転手が死んだ便（`RunCreated` の後に event が無く、札も無い）が永遠に live のままで、同じ write-set の便を `overlap:<亡骸>` で塞ぐ（隣の repo で実測・席から stop が撃てない置き場では持ち主の手が要った）。
+- 形:
+  1. **列の遮断器**: `turn` / `fire` が候補を起こす前に `health::now(per_core)` を 1 回読み、`act` の `Action::Wait` の周は 1 本も起こさない（`WaitReason` に 1 値 **`HostBusy`**・`dispatch ls` の理由は `host-busy`）。`Unmeasured` は `act` のとおり起こす側（gate と同じ 1 実装・C2）。`per_core` は gate と同じ 2 行（`host.runnable_per_core` / `host.blocked_per_core`）を同じ読み手で読む（`breaker()` を `health.rs` 側へ寄せて gate と列が同じ 1 関数を呼ぶ・値は不変）。
+  2. **受付で止まった便は live でない**: `live` の `Stage::Intake` の枝を「札（`<state_dir>/pipe/<run>/driver`・`pipe/mod.rs` の `Ticket` の 4 値）が `Live` なら `Some(true)`・`Dead` / `Absent` なら `Some(false)`・`Unreadable` なら `None`」にする。他の段の枝は不変。読み手は既存の `Ticket`（`fleet/store.rs` の `Owner` を写す）で、新しい probe は足さない。
+- 触らない: 遮断器の閾値と 3 値・gate の呼び方・`Ticket` の 4 値・`Intake` 以外の段の live・overlap の式（live の集合が変わるだけ）。
+- 却下: 列だけの別の閾値（rules 行が増える・gate と違う判断になる）／Intake の便を時間で畳む（時間の裁定が要る・札で読める）／dispatcher が亡骸の run を `RunStopped` で終端にする（列が記帳する面を増やす・stop の口は席にある）。
+
+## 19. 便の終端と「起こす便 0 ∧ 候補あり」を登録 row の席の pane へ 1 行で知らせる（契約表の行 p・`s2-07l.507`・約束の行の形）
+
+やさしく言うと: 便が落ちても席に誰も知らせないので、席は user に聞かれるまで気づかなかった（6 時間）。運転手が自分の終端で席の pane に 1 行送る。
+
+- 出所: memo `s2-07l.507`（user 指摘 2026-09-21・6 時間の放置）。user 裁定 2026-09-21（分解表 G2 を候補 1 で）。
+- 現物（verified・main）: 運転手の終端の 1 周は `crates/scribe2/src/pipe/cli.rs` の `TERMINALS`（run / resume / land / stop / retire）の後に `queue::fire` を撃つ（`driving` の周だけ stdout に 1 行）。席の pane への送達は `crates/scribe2/src/seat/inject.rs` の `deliver_within(Request, window)`（`Request` は target / socket / payload / state_dir・結果は `Delivery` の 3 値）が既に在り、登録 row は `crates/scribe2/src/fleet/replay.rs` の `State.registrations`（`(Role, anchor)` → 最新の `Registration`・`target` を持つ）から読める。列から席へ知らせる口は無い。
+- 形（送るのは運転手・1 行・送れない周は理由を残す）:
+  1. **契機は 2 つ**: (a) 運転手の終端の周で、自分の便の最後の段が `Reviewed` の FAIL / INCONCLUSIVE・`Gated` の FAIL / INCONCLUSIVE・`Failed`・`Questioned`・`Stopped` のとき。(b) 同じ周の列の結果が「起こした便 0 ∧ 候補 1 本以上」のとき（席が dispatch の周を撃つ契機）。`Landed` と PASS は送らない（静かな正常）。
+  2. **宛先**: fleet の replay の `State.registrations` から `(Role::Orchestrator, anchor = 便の repo)` の最新 row の `target`（tmux の pane）。row が無い周は送らず、理由 `no-seat`。
+  3. **本文は 1 行**: `scribe2 pipe: <bead> <run> <段>=<verdict か kind か detail の 1 語> — 次の 1 手は pipe dispatch ls`（(a)）／`scribe2 pipe: idle ready=<候補の本数> launched=0 reason=<先頭の候補の理由>`（(b)）。対話面の作法（次の 1 手が先頭・dialogue-surface.md §2）に合わせて 1 行に閉じ、逐語も path も載せない（PUBLIC 面ではない state dir だが、pane は人が見る）。
+  4. **送達は既存の 1 関数**: `deliver_within` を `pipe.stop_grace_ms` と同じ桁の窓で 1 回撃ち、結果を運転手の stdout に `notify=<delivered|refused:<理由>|unconfirmed|no-seat>` の 1 行で残す（C10）。送達の失敗で便の rc は変えない（通知は副作用・便の終端は既に記帳済み）。
+- 触らない: event の kind（通知は記帳しない・pane の行と stdout の 1 行だけ）・`deliver_within` の中身・登録 row の形・`Landed` / PASS の便（送らない）・席の見張り（Monitor）は席の手順のまま（本行の着地後に止めてよい条件は memo .507 の昇格条件）。
+- 却下: 席の SessionStart / rebrief に終端の一覧を載せる（席の turn が無いと読めない＝同じ穴）／event を足して席が poll する（poll は席の寿命に縛られる・今の見張りと同じ）／全終端を送る（Landed が多く pane が流れる・落ちた便だけが席の手番）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -307,4 +346,101 @@ write-set = ["crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/rev
 verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_dispatch_section_key_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_dispatch_release_requeues_"]
 size = "M"
 done = "偽の台帳と run dir の fixture で、審査 INCONCLUSIVE で終端した Reviewed の便の契約が § の本文を直した後の 1 周で列に戻って dispatch ls の理由が値なしの欄になり、§ も契約 file も変わっていない周は列外のままで、審査 FAIL で終端した便も § を直せば戻り、§ の写しを持たない便と写しが在るのに読めない便は契約 file だけの鍵で今までどおり列外になり（母集団 = 写しの 3 値）、Landed の便は § を直しても戻らず（母集団 = 終端の段の種類）、§ の本文を 1 文字だけ変えた周も戻り、Reviewed 以外の段の鍵と dispatch ls の理由の字面と event kind は変わらず、release の印の既存の規則を測る歯（pipe_dispatch_release_requeues_）は測っている約束を変えずに緑のまま"
+
+[[contract]]
+id = "n"
+title = "起こした便が受付に届かない周は同じ bead を起こし直さない — Mark に Launched を足して起こす前に印を書き、最新の Launched の後に RunCreated も Release も無い bead は候補にせず、子の stderr を state dir の launch.log に残す（約束の行の形）"
+req = ["FR68", "NFR4"]
+section = "17"
+size = "S"
+
+[[promise]]
+of = "n"
+n = 1
+text = "起こす前に bead 名義の DispatchMark（mark = Launched・detail = 起こす subcommand の 1 語）を既存の mark の口で書き、書けない周は起こさない"
+files = ["crates/scribe2/src/fleet/mod.rs", "crates/scribe2/src/pipe/dispatch.rs"]
+symbols = ["fleet::Mark", "pipe::dispatch::marks_of"]
+teeth = ["pipe_dispatch_launched_mark_is_written_before_the_child_is_spawned"]
+place = "crates/scribe2/tests/e2e/pipe/dispatch.rs"
+fixture = "偽の台帳に ready の bead 1 本と toy repo を置いて pipe dispatch の 1 周を撃つ。負の枝は event log を読み取り専用にして印が書けない周"
+expect = "event log に bead 名義の DispatchMark mark=launched が RunCreated より前の行として在り、印が書けない周は子が起きず dispatch=started:0 で理由が unmeasured の側に出る"
+
+[[promise]]
+of = "n"
+n = 2
+text = "最新の Launched より後に RunCreated も Release の印も無い bead は起こさず、dispatch ls の理由が launched:<ts> になる（WaitReason に 1 値 Launched）"
+files = ["crates/scribe2/src/pipe/dispatch.rs"]
+symbols = ["pipe::dispatch::WaitReason"]
+teeth = ["pipe_dispatch_launched_bead_is_not_relaunched_until_run_created_or_release"]
+place = "crates/scribe2/tests/e2e/pipe/dispatch.rs"
+fixture = "偽の台帳の ready の bead に DispatchMark launched だけを積んだ event log で 2 周目を撃つ。対照は Launched の後に RunCreated を積んだ log と、Launched の後に Release を積んだ log の 2 つ"
+expect = "印だけの周は起こさず ls の理由が launched:<ts>、RunCreated の後は理由が live の側（overlap）に変わり、Release の後の周は起こす（started:1）"
+
+[[promise]]
+of = "n"
+n = 3
+text = "spawn_self の stderr を <state_dir>/pipe/launch.log に append し、file を開けない周は null に落として起動を止めない"
+files = ["crates/scribe2/src/pipe/dispatch.rs"]
+teeth = ["pipe_dispatch_launch_log_keeps_the_child_stderr"]
+place = "crates/scribe2/tests/e2e/pipe/dispatch.rs"
+fixture = "偽の bd が 1 回目の呼び出しだけ答えて 2 回目以後は rc 1 で断る（親の周は台帳を読めて起こし、子の intake は台帳で断って stderr に 1 行書く）。負の枝は launch.log の path を dir にして開けなくする"
+expect = "launch.log に子の断りの 1 行が append され、開けない周も子は起きて dispatch=started:1（起動を記録の失敗で止めない）"
+
+[[contract]]
+id = "o"
+title = "列が起こす前に器の健康の遮断器を通し（gate と同じ 1 関数・Wait の周は host-busy で 1 本も起こさない）、受付で止まったまま運転手の札が無いか死んでいる便を live に数えない（約束の行の形）"
+req = ["FR68", "FR39", "NFR4"]
+section = "18"
+size = "S"
+depends = ["n"]
+
+[[promise]]
+of = "o"
+n = 1
+text = "列の 1 周は起こす前に health::now を読み、act が Wait の周は 1 本も起こさず WaitReason::HostBusy（ls の理由 host-busy）、Unmeasured は act のとおり起こす。per_core は gate と同じ 2 行を同じ 1 関数で読む（breaker を health.rs 側へ寄せる）"
+files = ["crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/health.rs", "crates/scribe2/src/pipe/gate.rs"]
+symbols = ["pipe::dispatch::WaitReason", "pipe::health::Breaker"]
+teeth = ["pipe_dispatch_host_busy_round_launches_nothing"]
+place = "crates/scribe2/tests/e2e/pipe/dispatch.rs"
+fixture = "rules fixture の host.runnable_per_core を 0（閾値 0 = 常に Busy）にした周と既定の値の周の対で、偽の台帳に ready の bead 1 本を置いて 1 周を撃つ"
+expect = "0 の周は dispatch=started:0 で全候補の ls の理由が host-busy、既定の周は started:1"
+
+[[promise]]
+of = "o"
+n = 2
+text = "live の Stage::Intake の枝を運転手の札で読む: Live なら true・Dead / Absent なら false・Unreadable なら None（他の段の枝は不変・新しい probe は足さない）"
+files = ["crates/scribe2/src/pipe/cli/state.rs"]
+symbols = ["pipe::cli::state::live", "pipe::Ticket"]
+teeth = ["pipe_dispatch_intake_run_without_a_live_driver_is_not_live"]
+place = "crates/scribe2/tests/e2e/pipe/dispatch.rs"
+fixture = "RunCreated stage=Intake だけを持つ run を state dir に置き、札の 4 形（無い・死んだ pid・生きた pid〔歯の自分〕・読めない）で対照。同じ write-set の別 bead を候補にする"
+expect = "無い・死んだ周は overlap にならず候補が起きて started:1、生きた周は理由 overlap:<run>、読めない周は起こさず理由が unmeasured の側"
+
+[[contract]]
+id = "p"
+title = "運転手の終端と「起こす便 0 ∧ 候補あり」を登録 row（Role::Orchestrator・anchor = repo）の席の pane へ 1 行で知らせる — 送達は seat::inject::deliver_within の 1 関数・結果は stdout の notify= の 1 行・Landed と PASS は送らない（約束の行の形）"
+req = ["FR30", "FR68"]
+section = "19"
+size = "S"
+
+[[promise]]
+of = "p"
+n = 1
+text = "運転手の終端の周で最後の段が Reviewed / Gated の FAIL・INCONCLUSIVE、Failed、Questioned、Stopped のとき、fleet の replay の State.registrations から (Role::Orchestrator, anchor = repo) の最新 row の target へ 1 行を deliver_within で送り、stdout に notify=<delivered|refused:<理由>|unconfirmed|no-seat> を残す（row が無い周は送らず no-seat・便の rc は変えない）"
+files = ["crates/scribe2/src/pipe/cli.rs", "+crates/scribe2/src/pipe/notify.rs", "crates/scribe2/tests/e2e/pipe.rs"]
+symbols = ["seat::inject::Request", "fleet::replay::State"]
+teeth = ["pipe_notify_terminal_failure_reaches_the_registered_seat_pane", "pipe_notify_without_a_registered_seat_reports_no_seat"]
+place = "+crates/scribe2/tests/e2e/pipe/notify.rs"
+fixture = "偽の tmux（send-keys の引数を file に記録する script）を PATH に置き、SeatRegistered の row（role orchestrator・anchor = toy repo・target = 任意の pane 名）を state dir に積んだ上で、live な run に pipe stop --run を撃つ（Stopped は終端の 1 つ）。負の枝は row を積まない"
+expect = "記録に send-keys が 1 回だけ在り payload が bead と run と Stopped を含む 1 行で stdout に notify=delivered、row 無しの周は send-keys 0 回で notify=no-seat"
+
+[[promise]]
+of = "p"
+n = 2
+text = "同じ周の列の結果が起こした便 0 ∧ 候補 1 本以上のとき、同じ宛先へ idle の 1 行（ready=<本数> launched=0 reason=<先頭の候補の理由>）を送る（Landed と PASS の終端でも列が idle ならこの 1 行だけ送る）"
+files = ["crates/scribe2/src/pipe/cli.rs", "+crates/scribe2/src/pipe/notify.rs"]
+teeth = ["pipe_notify_idle_round_reports_ready_count_and_top_reason"]
+place = "+crates/scribe2/tests/e2e/pipe/notify.rs"
+fixture = "偽の台帳の ready の bead 1 本を hold にした state dir（起こす 0 ∧ 候補 1）と登録 row と偽の tmux を置き、pipe stop --run の終端を撃つ。負の枝は候補 0 の台帳"
+expect = "idle の 1 行に ready=1 launched=0 reason=hold が在り、候補 0 の周は idle の行を送らない（send-keys は終端の 1 行だけ）"
 <!-- contracts:end -->
