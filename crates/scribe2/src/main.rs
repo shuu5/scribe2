@@ -1,5 +1,5 @@
 //! CLI の骨格。`name` / `--version` / `doctor` / `account` / `rules` / `fleet` / `vessel` / `hook` / `pipe` /
-//! `runner` / `lens` / `seat` / `polarity` / `contracts` の 14 subcommand を持つ。
+//! `runner` / `lens` / `seat` / `polarity` / `contracts` の 14 subcommand と、memo の plan の口 `ledger` を持つ。
 //!
 //! subcommand の結果は [`Outcome`] ただ 1 型で、rc はその `rc` をそのまま返す。
 //!
@@ -116,6 +116,9 @@ fn run(args: &[String]) -> Outcome {
         Some("polarity") => Outcome::ok(vessel::polarity::render()),
         // 契約表の検査と欄の生成物（設計 contract-source.md §2）。env を読まない。
         Some("contracts") => vessel::pipe::cli::contracts(rest),
+        // memo の plan（設計 ledger-form.md §3 の 8）。台帳を読まず書かず、plan を stdout に出すだけ。使い方は
+        // `ledger` 自身の 1 枚が持つ（上の 1 行の usage は外形 snapshot が pin しているので動かさない）。
+        Some("ledger") => vessel::ledger::dispatch(rest),
         // headless の 2 つは stdin を**自分で**読む（runner は契約 text・lens は diff の
         // byte で、cap の判定に byte 数が要る＝ここで String へ均すと大きさが変わる）。
         Some("runner") => vessel::headless::runner::dispatch(rest),

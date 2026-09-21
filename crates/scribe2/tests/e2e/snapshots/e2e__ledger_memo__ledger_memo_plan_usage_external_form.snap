@@ -1,0 +1,32 @@
+---
+source: crates/scribe2/tests/e2e/ledger_memo.rs
+expression: "forms.join(\"\\n\")"
+---
+$ ledger
+rc=1
+stdout=
+stderr=usage: ledger memo <--run ID --state-dir S|--from user> --parent EPIC [--relates ID]...
+$ ledger search
+rc=1
+stdout=
+stderr=usage: ledger memo <--run ID --state-dir S|--from user> --parent EPIC [--relates ID]...
+$ ledger memo --parent s2-epic
+rc=1
+stdout=
+stderr=usage: ledger memo <--run ID --state-dir S|--from user> --parent EPIC [--relates ID]...
+$ ledger memo --run r --state-dir s
+rc=1
+stdout=
+stderr=usage: ledger memo <--run ID --state-dir S|--from user> --parent EPIC [--relates ID]...
+$ ledger memo --from user --run r --parent s2-epic
+rc=1
+stdout=
+stderr=usage: ledger memo <--run ID --state-dir S|--from user> --parent EPIC [--relates ID]...
+$ ledger memo --from bot --parent s2-epic
+rc=1
+stdout=
+stderr=usage: ledger memo <--run ID --state-dir S|--from user> --parent EPIC [--relates ID]...
+$ ledger memo --from user --parent s2 epic
+rc=1
+stdout=
+stderr=usage: ledger memo <--run ID --state-dir S|--from user> --parent EPIC [--relates ID]...

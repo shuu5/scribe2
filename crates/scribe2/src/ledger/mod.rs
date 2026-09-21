@@ -7,12 +7,23 @@
 //! client の binary の名は既定の const（PATH 解決は子 process の起動側・**env も HOME も読まない**・C2.2）。
 //!
 //! 台帳の形の lint（doctor の項目 1 行・設計 docs/design/ledger-form.md §3 の 4）は子 module [`form`] に置く
-//! （読むだけ・書きの口は増えない）。
+//! （読むだけ・書きの口は増えない）。memo の入口（plan を標準出力に出す read-only の口・§3 の 8）は子 module
+//! [`memo`] に置く（台帳を読まず書かない・起票は席の手番）。
 
 pub mod form;
+pub mod memo;
 
+use crate::cli_outcome::{Outcome, RC_REFUSED};
 use crate::polarity::{OnFailure, Polarity, Timing};
 use std::process::Command;
+
+/// `ledger` に続く引数を捌く（verb は `memo` の 1 つ）。
+pub fn dispatch(args: &[String]) -> Outcome {
+    match args.first().map(String::as_str) {
+        Some("memo") => memo::dispatch(args.get(1..).unwrap_or_default()),
+        _ => Outcome::failed(RC_REFUSED, vec![memo::usage()]),
+    }
+}
 
 /// 台帳 client の既定（読みの側と**同じ 1 つ**を借りる＝名の宣言は 1 か所）。
 pub use crate::seat::ledger::DEFAULT_BD;
