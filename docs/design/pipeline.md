@@ -621,7 +621,7 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 - 現物（verified・main）: CI の判定を読む 1 行の既定は `crates/scribe2/src/pipe/declaration.rs` の `DEFAULT_CI_CMD`（`gh run list --commit {sha} --json status,conclusion`・宣言 `ci-cmd` が無い周に使う）。読み手は `crates/scribe2/src/fleet/wait.rs` の `ci_now(`（JSON の配列を読み、**落ちた run を先に見て** `Failure`、全部 `completed` で `Success`、それ以外は `None`＝測れない）。run の `event`（`push` / `pull_request` / `schedule` …）は読まない。本 repo の workflow は `ci`（push / pull_request）と `mutants`（`schedule`・週 1 の cron）の 2 本で、cron が同じ sha で走る周は完了まで `None` が続き `pipe.ci_wait_s` を使い切って `ci:unmeasurable` に倒れる（bead は閉じず、close は手番になる）。
 - 形（読み手で外す・宣言の穴は増やさない）:
   1. 既定の 1 行に `event` を足す（`--json status,conclusion,event`）。宣言 `ci-cmd` の穴は `{sha}` の 1 つのまま。
-  2. `ci_now(` は `event` が `schedule` の run を**母集団から外してから**従来の判定を行う（落ちた run 優先 → 全部 `completed` で success → それ以外は測れない）。外した後に run が 0 本なら測れない（`None`）。`event` の欄が無い run（宣言の `ci-cmd` が `event` を返さない周）は外さない＝従来と同じ。
+  2. `ci_now(` は `event` が `schedule` の run を**母集団から外してから**従来の判定を行う（落ちた run 優先 → 全部 `completed` で success → それ以外は測れない）。外した後に run が 0 本なら測れない（`None`）。`event` の欄が無い run（宣言の `ci-cmd` が `event` を返さない周）は外さない＝従来と同じ。絞る処理は `ci_now(` の隣の関数 1 つ（JSON の木の列を受けて schedule でない run の列を返す pure な形）に置き、in-file の歯が欄の不在と `schedule` の値を別々に測る（約束 3・2026-09-21 の便 1 本目の審査 FAIL「欄の不在の規則が契約に無い」の再現）。
   3. workflow の**名では絞らない**（`ci` / `mutants` は repo 固有の値・N3）。外すのは forge が返す `event` の語 1 つ（`schedule`）だけで、その語は `ci_now(` の隣の `const` 1 つが持つ。
 - 触らない: `CiRun` の 3 値・`pipe.ci_wait_s`・宣言の `ci-cmd` の形・終端の 3 段（push → CI → close）の順。
 - 却下: workflow 名で絞る（repo 固有の値を code に持つ・N3）／cron を別 sha で走らせる運用（散文の規則・N2）／`ci-cmd` に穴を足して宣言側で絞る（宣言が無い consumer に効かない）。
@@ -1040,6 +1040,16 @@ teeth = ["pipe_terminal_land_ci_ignores_scheduled_runs", "pipe_terminal_land_ci_
 place = "crates/scribe2/tests/e2e/pipe/land.rs"
 fixture = "偽 CI（既存の fake_terminal_json）が [{completed, success, event=push}, {in_progress, null, event=schedule}] を返す宣言で Gated PASS の便を land する（上限は fixture の manifest の pipe.ci_wait_s）。負の枝は [{completed, success, event=schedule}] だけを返す偽 CI"
 expect = "正の枝は終端の detail が terminal:ci:success → close まで進み bead が閉じる（base は schedule の run を待って ci:unmeasurable）。負の枝は terminal:ci:unmeasurable で bead が閉じない（base は success に倒れる）"
+
+[[promise]]
+of = "an"
+n = 3
+text = "母集団を絞る関数は event の欄が無い run を外さない（宣言 ci-cmd が event を返さない consumer は従来どおりの判定）＝外すのは event の値が schedule の run だけで、欄の不在は schedule と読まない"
+files = ["crates/scribe2/src/fleet/wait.rs"]
+teeth = ["fleet_wait_ci_runs_without_event_are_kept_and_scheduled_are_dropped"]
+place = "crates/scribe2/src/fleet/wait.rs"
+fixture = "in-file の歯: 偽の JSON の木 3 本（event の欄が無い completed/success・event=push の completed/success・event=schedule の in_progress）を、ci_now が母集団を絞るのに使う関数（base に無い）へ渡す"
+expect = "残るのは event 無しと event=push の 2 本で schedule の 1 本だけが外れる（関数が base に無い＝道具不在の RED）"
 
 [[promise]]
 of = "an"
