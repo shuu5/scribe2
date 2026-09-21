@@ -771,6 +771,131 @@ fn hook_command_guard_matches_sequence_regardless_of_flag_order() {
     clean(&[&repo, &state]);
 }
 
+// ─────────────── 起票の門（`s2-07l.517`・設計 ledger-form.md §3 の 9 / §6 行 d・接頭辞 `hook_memo_guard_`） ───────────────
+//
+// `bd` / `bdw` の create を読み、memo の create に 4 節の本文を、契約の create に label `intake:memo` の不在を要求する。
+// 席の弁別はしない（`--pane` 無しでも同じ判定）ので、偽 tmux は要らない。
+
+/// memo の 4 節が揃った本文。
+const MEMO_BODY: &str = "## memo\n### 出所\n- run: r\n### 観測\n- x\n### 候補\n### 昇格条件\n";
+
+/// 記録のうち起票の門の行（`what` が `ledger-deny` で始まる）。
+fn ledger_records(state: &Path) -> Vec<String> {
+    inject_lines(state).into_iter().filter(|line| what_of(line).starts_with("ledger-deny")).collect()
+}
+
+/// 起票の門の deny の外形（rc 2・stdout 0 byte・stderr 1 行・理由の 1 語）と記録 1 行（`what = ledger-deny <理由>`）を
+/// 確かめ、stderr を返す。
+fn assert_ledger_deny(state: &Path, repo: &Path, command: &str, reason: &str) -> String {
+    let before = ledger_records(state).len();
+    let out = run_hook("pre-tool-use", &bash_payload(repo, command));
+    let text = stderr_text(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "{command}: deny は rc 2: {text}");
+    assert!(out.stdout.is_empty(), "{command}: deny でも stdout は 0 byte");
+    assert_eq!(stderr_lines(&out), 1, "{command}: stderr は 1 行: {text}");
+    assert!(text.starts_with(&format!("{NAME}: deny bd create ")), "{command}: 器が名乗る: {text}");
+    assert!(text.contains(&format!("reason={reason}（")), "{command}: 閉じた理由 {reason}: {text}");
+    let lines = ledger_records(state);
+    assert_eq!(lines.len(), before + 1, "{command}: 記録は 1 行増える: {lines:?}");
+    assert_eq!(what_of(&lines.last().cloned().unwrap_or_default()), format!("ledger-deny {reason}"), "{command}");
+    text
+}
+
+/// 通る周（0 byte・rc 0・記録も増えない）。
+fn assert_ledger_pass(state: &Path, repo: &Path, command: &str) {
+    let before = inject_lines(state).len();
+    let out = run_hook("pre-tool-use", &bash_payload(repo, command));
+    assert_silent(&out, command);
+    assert_eq!(inject_lines(state).len(), before, "{command}: 通す周は記録を残さない");
+}
+
+/// (a) `[memo]` の title か `intake:memo` の label を持つ create は、body-file の本文に 4 節が全部在れば通り、1 つでも
+/// 欠ければ閉じた理由 1 つ（宣言順で最初の欠け）で止まる。相対 path は payload の `cwd` から解き、`scripts/bdw` も
+/// 連結の後ろの segment も読む。
+#[test]
+fn hook_memo_guard_requires_every_memo_section_in_the_body_file() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    fs::write(repo.join("memo.md"), MEMO_BODY).expect("本文を書ける");
+    let full = state.join("full.md");
+    fs::write(&full, MEMO_BODY).expect("本文を書ける");
+    let full = full.display().to_string();
+    for command in [
+        "bd create \"[memo] 観測の件\" --type=task --body-file memo.md".to_owned(),
+        format!("scripts/bdw create --title=x --labels=doc:toy,intake:memo --body-file {full}"),
+        format!("cd . && bdw create --title \"[memo] y\" -l intake:memo --body-file={full}"),
+    ] {
+        assert_ledger_pass(&state, &repo, &command);
+    }
+    for (drop, reason) in [("### 出所\n", "no-source"), ("### 観測\n", "no-observation"), ("### 候補\n", "no-candidate"), ("### 昇格条件\n", "no-promotion")] {
+        let body = state.join(format!("{reason}.md"));
+        fs::write(&body, MEMO_BODY.replace(drop, "")).expect("本文を書ける");
+        let body = body.display().to_string();
+        let text = assert_ledger_deny(&state, &repo, &format!("bd create \"[memo] x\" --body-file {body}"), reason);
+        assert!(text.contains(drop.trim_end()), "欠けた見出しを名指す: {text}");
+        assert_ledger_deny(&state, &repo, &format!("bdw create --title=x --labels intake:memo --body-file {body}"), reason);
+    }
+    // 2 つ欠けても理由は 1 つ（宣言順で最初の欠け）。
+    let two = state.join("two.md");
+    fs::write(&two, "### 出所\n### 昇格条件\n").expect("本文を書ける");
+    let text = assert_ledger_deny(&state, &repo, &format!("bd create '[memo] x' --body-file {}", two.display()), "no-observation");
+    assert_eq!(text.matches("reason=").count(), 1, "理由は 1 つ: {text}");
+    clean(&[&repo, &state]);
+}
+
+/// (b) acceptance に設計 pointer 行を持つ create は label `intake:memo` を持てば止まり（本文が揃っていても）、label が
+/// 無ければ通る（契約の create）。
+#[test]
+fn hook_memo_guard_denies_memo_label_on_a_contract_create() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    fs::write(repo.join("memo.md"), MEMO_BODY).expect("本文を書ける");
+    let text = assert_ledger_deny(
+        &state,
+        &repo,
+        "bd create --title=c --acceptance \"design = docs/design/toy.md#a\" --labels intake:memo --body-file memo.md",
+        "memo-on-contract",
+    );
+    assert!(text.contains("intake:memo"), "label を名指す: {text}");
+    assert_ledger_deny(&state, &repo, "bdw create c --labels=intake:memo --acceptance=\"x\ndesign = docs/design/toy.md#a\"", "memo-on-contract");
+    assert_ledger_pass(&state, &repo, "bd create --title=c --acceptance \"design = docs/design/toy.md#a\" --labels doc:toy");
+    clean(&[&repo, &state]);
+}
+
+/// (c) memo の create で body-file が無い・開けない（無い file・dir・展開されない変数）周は止まる（fail-closed）。
+#[test]
+fn hook_memo_guard_fails_closed_without_a_readable_body_file() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    assert_ledger_deny(&state, &repo, "bd create \"[memo] x\" --description \"### 出所\"", "no-body-file");
+    assert_ledger_deny(&state, &repo, "bdw create --title=x --labels intake:memo", "no-body-file");
+    let dir = state.join("body-dir");
+    fs::create_dir_all(&dir).expect("dir を作れる");
+    for path in [state.join("nope.md").display().to_string(), dir.display().to_string(), "$BODY".to_owned()] {
+        assert_ledger_deny(&state, &repo, &format!("bd create '[memo] x' --body-file {path}"), "body-unreadable");
+    }
+    clean(&[&repo, &state]);
+}
+
+/// (d) memo でも契約でもない create（epic・裁定）と create 以外の bd の command は 1 byte も書かず通る（記録も増えない）。
+/// title の `[memo]` が create 以外の subcommand に在っても判定に載らない。
+#[test]
+fn hook_memo_guard_passes_non_memo_creates_and_other_bd_commands() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    for command in [
+        "bd create \"program\" --type epic",
+        "bdw create --title=\"裁定 x\" --type=decision --body-file nope.md",
+        "bd update s2-1 --title \"[memo] x\" --add-label intake:memo",
+        "bd list --label intake:memo --json",
+        "scripts/bdw update s2-1 --append-notes \"### 出所\"",
+        "echo bd create \"[memo] x\"",
+    ] {
+        assert_ledger_pass(&state, &repo, command);
+    }
+    clean(&[&repo, &state]);
+}
+
 #[test]
 fn hook_is_silent_for_unknown_event_and_outside_repo() {
     let repo = git_repo();

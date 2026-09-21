@@ -13,6 +13,7 @@
 
 pub mod command;
 pub mod guard;
+pub mod ledger_guard;
 pub mod permission;
 pub mod precompact;
 pub mod role_guard;
@@ -30,6 +31,7 @@ use crate::seat::recent;
 use crate::seat::state::Event;
 use command::CommandDecision;
 use guard::Decision;
+use ledger_guard::LedgerDecision;
 use permission::PermissionDecision;
 use role_guard::{Operation, RoleDecision, Seat};
 use std::path::{Path, PathBuf};
@@ -621,7 +623,8 @@ fn brief_refused(reason: &str) -> String {
 /// 門の順は [`crate::polarity::Guard`] の宣言順（hook の門はその先頭に並ぶ・**deny 文は先の門が先**＝
 /// 2 つの門が同時に落ちる周に、直す側がどちらを直せばよいか読めなくならないため）。write-set guard と
 /// seat guard は cwd の git dir が要る（cwd が repo の外なら測れない＝従来どおり通す側）が、command guard と
-/// role guard は anchor から解くので cwd に依らず評価する。
+/// role guard は anchor から解くので cwd に依らず評価する。起票の門（[`ledger_guard`]）は command guard の直後で、
+/// body-file の相対 path を payload の `cwd` から解く。
 fn pre_tool_use(hooked: &Hooked, payload: &str, started: Instant) -> Outcome {
     let (root, cwd) = (hooked.root, hooked.cwd);
     let tool = field(payload, KEY_TOOL).unwrap_or_default();
@@ -636,6 +639,9 @@ fn pre_tool_use(hooked: &Hooked, payload: &str, started: Instant) -> Outcome {
         let decided = command::decide(command.as_deref().unwrap_or_default(), hooked.rules.map(Path::new));
         if let CommandDecision::Deny { what, line } = decided {
             return denied(hooked, &format!("command-deny {what}"), line, started);
+        }
+        if let LedgerDecision::Deny { what, line } = ledger_guard::decide(command.as_deref().unwrap_or_default(), cwd) {
+            return denied(hooked, &format!("ledger-deny {what}"), line, started);
         }
     }
     let op = Operation { tool: &tool, command: command.as_deref(), path: path.as_deref(), root: Some(root), cwd };
