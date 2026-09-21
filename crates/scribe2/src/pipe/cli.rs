@@ -246,9 +246,14 @@ fn notices(queue: &Queue<'_>, run: Option<&str>, turn: &queue::Turn) -> Vec<Stri
         }
     }
     payloads.extend(notify::idle_line(turn));
+    // 送達の記録と消費の証拠は運転手の置き場で測る（設計 dispatcher.md §21 形 1・解決は flag の 1 回だけ）。
+    let place = crate::seat::StateDir {
+        path: std::path::absolute(&queue.state_dir).unwrap_or_else(|_| queue.state_dir.clone()),
+        source: crate::seat::Provenance::Flag,
+    };
     payloads
         .iter()
-        .map(|payload| notify::send(&state, &queue.repo, queue.manifest, payload))
+        .map(|payload| notify::send(&state, &place, &queue.repo, queue.manifest, payload))
         .collect()
 }
 

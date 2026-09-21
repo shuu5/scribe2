@@ -32,31 +32,140 @@ fn calls_of(state: &Path) -> PathBuf {
     state.join("tmux-calls")
 }
 
-/// 偽の `tmux` を道具箱の dir に置く。`capture-pane` は偽の pane の本文の後に空の prompt 行を返し、`send-keys -l` は
-/// payload を偽の pane へ足す（送達の目印が現れる）。どの起動も引数を記録 file へ 1 行で足す。
+/// 偽の `tmux` を道具箱の dir に置く（Enter を 1 回も落とさない席）。
+fn fake_tmux(state: &Path) {
+    seat_tmux(state, 0, "");
+}
+
+/// 登録 row の席の置き場（`<state>/seat/<潰した target>/`）。
+fn seat_of(state: &Path) -> PathBuf {
+    state.join("seat").join(TARGET.replace(':', "_"))
+}
+
+/// 状態付きの偽の `tmux` を道具箱の dir に置く（設計 dispatcher.md §21 の歯の形）。`send-keys -l` は payload を入力欄の
+/// file へ書き、`send-keys Enter` は「落とす回数」が 0 でなければ 1 減らして何もせず、0 なら入力欄を pane の本文へ移して
+/// 席の打刻 file に `UserPromptSubmit` の 1 行を足す。`capture-pane` は本文の後に prompt 行 + 入力欄を返す。どの起動も
+/// 引数を記録 file へ 1 行で足し、`send-keys` は時刻（ns）を別の file へ足す。打刻 file は空で先に置く（hook の載った席）。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn fake_tmux(state: &Path) {
+fn seat_tmux(state: &Path, drops: u32, typed: &str) {
     let bin = state.join(TOOLBOX_BIN);
     fs::create_dir_all(&bin).expect("道具箱の dir を作れる");
     let pane = state.join("tmux-pane");
     fs::write(&pane, "").expect("偽の pane を作れる");
+    let input = state.join("tmux-input");
+    fs::write(&input, typed).expect("偽の入力欄を作れる");
+    let drop_file = state.join("tmux-drops");
+    fs::write(&drop_file, drops.to_string()).expect("落とす回数を書ける");
+    let seat = seat_of(state);
+    fs::create_dir_all(&seat).expect("席の置き場を作れる");
+    let stamps = seat.join("state.jsonl");
+    fs::write(&stamps, "").expect("打刻 file を作れる");
     let script = format!(
         "#!/bin/sh\n\
          printf '%s\\n' \"$*\" >> '{calls}'\n\
          case \"$1\" in\n\
-         capture-pane) cat '{pane}'; printf '\\342\\235\\257 \\n';;\n\
-         send-keys) if [ \"$4\" = \"-l\" ]; then printf '%s\\n' \"$5\" >> '{pane}'; fi;;\n\
+         capture-pane) cat '{pane}'; printf '\\342\\235\\257 '; cat '{input}'; printf '\\n';;\n\
+         send-keys) date +%s%N >> '{times}'\n\
+         if [ \"$4\" = \"-l\" ]; then printf '%s' \"$5\" >> '{input}'\n\
+         elif [ \"$4\" = \"Enter\" ]; then\n\
+         n=$(cat '{drops}')\n\
+         if [ \"$n\" -gt 0 ]; then echo $((n - 1)) > '{drops}'\n\
+         else cat '{input}' >> '{pane}'; printf '\\n' >> '{pane}'; : > '{input}'\n\
+         printf '{{\"schema\":1,\"state\":\"busy\",\"event\":\"UserPromptSubmit\",\"ts\":%s,\"sid\":\"\"}}\\n' \"$(date +%s)\" >> '{stamps}'\n\
+         fi\n\
+         fi;;\n\
          esac\n\
          exit 0\n",
         calls = calls_of(state).display(),
-        pane = pane.display()
+        times = times_of(state).display(),
+        pane = pane.display(),
+        input = input.display(),
+        drops = drop_file.display(),
+        stamps = stamps.display()
     );
     let path = bin.join("tmux");
     fs::write(&path, script).expect("偽の tmux を書ける");
     fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("偽の tmux に実行権を付ける");
+}
+
+/// 偽の `tmux` の `send-keys` の時刻の file（1 起動 1 行・ns）。
+fn times_of(state: &Path) -> PathBuf {
+    state.join("tmux-times")
+}
+
+/// 偽の `tmux` が受けた Enter だけの送り（`send-keys -t <target> Enter` の行）の本数。
+fn enters(state: &Path) -> usize {
+    let enter = format!("send-keys -t {TARGET} Enter");
+    fs::read_to_string(calls_of(state)).unwrap_or_default().lines().filter(|line| *line == enter).count()
+}
+
+/// 偽の `tmux` が受けた `send-keys` の全数（text も Enter も）。
+fn keys(state: &Path) -> usize {
+    fs::read_to_string(calls_of(state)).unwrap_or_default().lines().filter(|line| line.starts_with("send-keys ")).count()
+}
+
+/// stdout の `notify=` の行の列。
+fn notify_lines(out: &Output) -> Vec<String> {
+    stdout_of(out).lines().filter(|line| line.starts_with("notify=")).map(str::to_owned).collect()
+}
+
+/// 状態付きの偽の席（落とす回数 `drops`・入力欄の先の字面 `typed`）に登録 row と live な便を置いて `pipe stop --run` の
+/// 終端を撃つ（道具を渡さない周＝終端の 1 行だけを送る）。返すのは stdout と、Enter の本数と send-keys の全数と、
+/// 送達の記録（`tick.jsonl`）の行と、text と Enter の間の ns（text の後に Enter が無ければ `None`）。
+fn seat_round(drops: u32, typed: &str) -> Round {
+    let (repo, state) = repo_with_state();
+    seat_tmux(&state, drops, typed);
+    register(&state, &repo);
+    live_run(&state);
+    let out = stop(&repo, &state);
+    let times: Vec<u128> = fs::read_to_string(times_of(&state))
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| line.trim().parse().ok())
+        .collect();
+    let gap = match times.as_slice() {
+        [text, enter, ..] => enter.checked_sub(*text),
+        _ => None,
+    };
+    let round = Round {
+        notify: notify_lines(&out),
+        told: told(&out),
+        rc: out.status.code(),
+        enters: enters(&state),
+        keys: keys(&state),
+        texts: sends(&state).len(),
+        ticks: fs::read_to_string(seat_of(&state).join("tick.jsonl"))
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_owned)
+            .collect(),
+        gap,
+    };
+    clean(&[&repo, &state]);
+    round
+}
+
+/// [`seat_round`] の測り。
+struct Round {
+    /// stdout の `notify=` の行。
+    notify: Vec<String>,
+    /// 落ちた周に写す 1 行。
+    told: String,
+    /// rc。
+    rc: Option<i32>,
+    /// Enter だけの送りの本数。
+    enters: usize,
+    /// send-keys の全数。
+    keys: usize,
+    /// text の送り（`-l`）の本数。
+    texts: usize,
+    /// 送達の記録の行。
+    ticks: Vec<String>,
+    /// text と Enter の間（ns）。
+    gap: Option<u128>,
 }
 
 /// 偽の `tmux` が受けた payload の送り（`send-keys -t <target> -l <payload>` の行）の列。
@@ -132,7 +241,11 @@ fn pipe_notify_terminal_failure_reaches_the_registered_seat_pane() {
         assert!(payload.contains(word), "payload に {word}: {payload}");
     }
     assert!(!payload.contains('\n'), "payload は 1 行");
-    assert!(stdout_of(&out).lines().any(|line| line == "notify=delivered"), "stdout に notify=delivered: {}", told(&out));
+    assert!(
+        stdout_of(&out).lines().any(|line| line.starts_with("notify=delivered consumed=")),
+        "stdout に notify=delivered: {}",
+        told(&out)
+    );
     clean(&[&repo, &state]);
 }
 
@@ -232,7 +345,7 @@ fn pipe_notify_idle_round_reports_ready_count_and_top_reason() {
     assert!(line.contains(&format!("-t {TARGET} -l ")), "宛先は登録 row の target: {line}");
     assert_eq!(sent.len(), 2, "終端の 1 行と idle の 1 行: {sent:?}");
     assert_eq!(
-        stdout_of(&out).lines().filter(|found| *found == "notify=delivered").count(),
+        stdout_of(&out).lines().filter(|found| found.starts_with("notify=delivered consumed=")).count(),
         2,
         "送った 2 行の結果: {}",
         told(&out)
@@ -243,4 +356,57 @@ fn pipe_notify_idle_round_reports_ready_count_and_top_reason() {
     assert_eq!(sent.len(), 1, "候補 0 の周は終端の 1 行だけ: {sent:?}");
     assert!(sent.iter().all(|line| !line.contains(" idle ")), "idle の行を送らない: {sent:?}");
     assert!(sent.iter().all(|line| line.contains("Stopped")), "送ったのは終端の行: {sent:?}");
+}
+
+/// settle の 1 歩（`SETTLE_STEP` = 200 ms）を ns で。本文と Enter の間はこれ以上空く（§21 形 3）。
+const STEP_NS: u128 = 200_000_000;
+
+/// (§21 (b)) Enter を落とさない席: Enter は 1 回・text は 1 回・stdout は `notify=delivered consumed=true`。送達の記録が
+/// 運転手の置き場の `tick.jsonl` に自席の 1 行で増え（置き場を渡した＝形 1）、本文と Enter の間に settle の 1 歩が在る（形 3）。
+#[test]
+fn pipe_notify_delivery_consumed_on_the_first_enter_records_and_steps() {
+    let round = seat_round(0, "");
+    assert_eq!(round.rc, Some(i32::from(RC_OK)), "stop は rc 0: {}", round.told);
+    assert_eq!(round.notify, vec!["notify=delivered consumed=true".to_owned()], "{}", round.told);
+    assert_eq!(round.enters, 1, "Enter は 1 回: {}", round.told);
+    assert_eq!(round.texts, 1, "text は 1 回: {}", round.told);
+    assert_eq!(round.ticks.len(), 1, "送達の記録が 1 行増える: {:?}", round.ticks);
+    let tick = round.ticks.first().cloned().unwrap_or_default();
+    for word in ["\"who\":\"seat-inject\"", BEAD, RUN] {
+        assert!(tick.contains(word), "記録に {word}: {tick}");
+    }
+    let gap = round.gap.unwrap_or_default();
+    assert!(gap >= STEP_NS, "本文と Enter の間に 1 歩（{STEP_NS} ns 以上）: {gap} ns");
+}
+
+/// (§21 (a)) Enter を 1 回落とす席: 窓が Queued で閉じた周に入力欄の残りがこの周の本文なので Enter を 1 回だけ再送し、
+/// 2 度目の settle で消費が測れて `consumed=true`。text の再送は 0 回（text 1・Enter 2）。
+#[test]
+fn pipe_notify_queued_once_resends_enter_and_is_consumed() {
+    let round = seat_round(1, "");
+    assert_eq!(round.rc, Some(i32::from(RC_OK)), "stop は rc 0: {}", round.told);
+    assert_eq!(round.notify, vec!["notify=delivered consumed=true".to_owned()], "{}", round.told);
+    assert_eq!(round.enters, 2, "Enter は 2 回: {}", round.told);
+    assert_eq!(round.texts, 1, "text は再送しない: {}", round.told);
+    assert_eq!(round.ticks.len(), 1, "送達の記録は 1 行: {:?}", round.ticks);
+}
+
+/// (§21 (c)) Enter を 2 回落とす席: 再送は 1 回だけ（3 回目は無い）で、2 度目も Queued のまま `consumed=false` を返す。
+#[test]
+fn pipe_notify_queued_twice_stops_after_one_resend() {
+    let round = seat_round(2, "");
+    assert_eq!(round.rc, Some(i32::from(RC_OK)), "stop は rc 0: {}", round.told);
+    assert_eq!(round.notify, vec!["notify=delivered consumed=false".to_owned()], "{}", round.told);
+    assert_eq!(round.enters, 2, "Enter は最大 2 回: {}", round.told);
+    assert_eq!(round.texts, 1, "text は再送しない: {}", round.told);
+}
+
+/// (§21 (d)) 入力欄に他人の文が先に在る席: 1 key も送らず `notify=refused:busy`（不変）・送達の記録も書かない。
+#[test]
+fn pipe_notify_foreign_input_sends_no_key_and_is_refused_busy() {
+    let round = seat_round(0, "人の打ちかけ");
+    assert_eq!(round.rc, Some(i32::from(RC_OK)), "stop は rc 0: {}", round.told);
+    assert_eq!(round.notify, vec!["notify=refused:busy".to_owned()], "{}", round.told);
+    assert_eq!(round.keys, 0, "send-keys は 0 回: {}", round.told);
+    assert_eq!(round.ticks.len(), 0, "送っていない周は記録しない: {:?}", round.ticks);
 }

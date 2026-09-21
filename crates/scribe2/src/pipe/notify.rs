@@ -1,7 +1,8 @@
 //! 便の終端と「起こす便 0 ∧ 候補あり」を登録 row の席の pane へ 1 行で知らせる（設計 dispatcher.md §19・契約表の行 p）。
 //!
 //! 送るのは運転手（終端の周の `pipe` の process）で、送達は既存の 1 関数（[`deliver_within`]）を 1 回撃つだけ。
-//! 結果は stdout の `notify=<delivered|refused:<理由>|unconfirmed|no-seat>` の 1 行に残す（C10）。送達の失敗で便の
+//! 結果は stdout の `notify=<delivered consumed=<true|false|unknown[:理由]>|refused:<理由>|unconfirmed|no-seat>` の
+//! 1 行に残す（C10・消費の添えは §21）。送達の失敗で便の
 //! rc は変えない（通知は副作用・便の終端は既に記帳済み）。event は足さない（pane の行と stdout の 1 行だけ）。
 //!
 //! **閉じた型の variant をここで名指さない**（§19 形 5）: 段の 1 語は呼び手が `as_str` の字面で渡し、どの段を送るかの
@@ -15,6 +16,7 @@ use crate::rules::manifest::Manifest;
 use crate::seat::inject::Request;
 use crate::seat::inject::{deliver_within, Delivery};
 use crate::seat::role::{registration_of_key, Role};
+use crate::seat::StateDir;
 use std::path::Path;
 use std::time::Duration;
 
@@ -76,7 +78,11 @@ pub(super) fn head_word(detail: Option<&str>) -> &str {
 ///
 /// row が無い周は送らず `notify=no-seat`。窓の rules 行を読めない周も送らず `notify=refused:no-rule`
 /// （既定の窓を焼かない・C1）。
-pub(super) fn send(state: &State, repo: &Path, manifest: &Manifest, payload: &str) -> String {
+///
+/// `place` は運転手の置き場（`--state-dir`・[`Provenance::Flag`](crate::seat::Provenance::Flag)）で、送達の記録
+/// （`tick.jsonl`）と消費の証拠（席の打刻）はここを読む（設計 dispatcher.md §21 形 1）。届いた周は消費を
+/// `consumed=<true|false|unknown[:理由]>` で添える（`Settled` の既存の字面・tick の `consumed=` と同じ語彙・C10）。
+pub(super) fn send(state: &State, place: &StateDir, repo: &Path, manifest: &Manifest, payload: &str) -> String {
     let anchor = repo.to_string_lossy();
     let Some(row) = registration_of_key(state, Role::Orchestrator, &anchor) else {
         return format!("{NOTIFY}{NO_SEAT}");
@@ -84,9 +90,12 @@ pub(super) fn send(state: &State, repo: &Path, manifest: &Manifest, payload: &st
     let Ok(ms) = int_row(manifest, ROW_WINDOW) else {
         return format!("{NOTIFY}refused:{NO_RULE}");
     };
-    let request = Request { target: &row.target, socket: None, payload, state_dir: None };
+    let request = Request { target: &row.target, socket: None, payload, state_dir: Some(place) };
     match deliver_within(&request, Duration::from_millis(ms)) {
-        Delivery::Delivered(..) => format!("{NOTIFY}delivered"),
+        Delivery::Delivered(_, settled) => match settled.reason() {
+            Some(why) => format!("{NOTIFY}delivered consumed={}:{why}", settled.as_str()),
+            None => format!("{NOTIFY}delivered consumed={}", settled.as_str()),
+        },
         Delivery::Refused(reason) => format!("{NOTIFY}refused:{reason}"),
         Delivery::Unconfirmed(_) => format!("{NOTIFY}unconfirmed"),
     }

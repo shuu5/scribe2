@@ -148,6 +148,9 @@ pub enum Delivery {
 /// 窓では復元が正しく届く周ほど `Queued` に落ちる（bd `s2-07l.97`）。cycle は作り直しの確認と同じ
 /// 上限を渡す。**窓はここで決めない**（`s2-07l.151`）: cycle 側の rules 行
 /// （`seat.cycle_settle_s`）が持つ値がそのまま引数で来る＝この面は規則を読まない。
+///
+/// `Queued` で窓を閉じた周は、入力欄の残りがこの周の本文なら Enter を 1 回だけ再送して同じ窓でもう 1 度
+/// settle する（[`nudge_own`]・設計 dispatcher.md §21）。Enter はこの呼び出しで最大 2 回・text の再送は 0 回。
 pub fn deliver_within(request: &Request, window: Duration) -> Delivery {
     let started = Instant::now();
     let Some(pane) = capture(request.socket, request.target) else {
@@ -177,7 +180,14 @@ pub fn deliver_within(request: &Request, window: Duration) -> Delivery {
     if !send(request) {
         return Delivery::Unconfirmed(REASON_TMUX_FAILED);
     }
-    match settle(request, &marker, before, tries_within(window), &watch) {
+    let tries = tries_within(window);
+    // **Queued の周は同じ呼び出しの中で Enter を 1 回だけ再送する**（設計 dispatcher.md §21 形 2）: 入力欄の残りが
+    // この周の本文なら Enter だけを送って同じ窓でもう 1 度 settle し、2 度目も Queued ならそのまま返す（3 回目は無い）。
+    let settled = settle(request, &marker, before, tries, &watch).and_then(|found| match found {
+        Settled::Queued if nudge_own(request) => settle(request, &marker, before, tries, &watch),
+        other => Ok(other),
+    });
+    match settled {
         Ok(settled) => {
             let bytes = request.payload.len() as u64;
             record(request, bytes, started);
@@ -394,13 +404,27 @@ fn folded(text: &str) -> String {
     text.chars().filter(|ch| !ch.is_ascii_whitespace()).collect()
 }
 
-/// payload を literal で送り、Enter を送る。
+/// payload を literal で送り、[`SETTLE_STEP`] の 1 歩を置いて Enter を送る（設計 dispatcher.md §21 形 3）。
+///
+/// 間を置かずに撃つと、TUI が連続入力を貼り付けと読む周に Enter が改行に畳まれ、本文が入力欄に残る。
 fn send(request: &Request) -> bool {
     let target = request.target;
-    tmux_ok(
-        request.socket,
-        &["send-keys", "-t", target, "-l", request.payload],
-    ) && tmux_ok(request.socket, &["send-keys", "-t", target, "Enter"])
+    if !tmux_ok(request.socket, &["send-keys", "-t", target, "-l", request.payload]) {
+        return false;
+    }
+    sleep(SETTLE_STEP);
+    tmux_ok(request.socket, &["send-keys", "-t", target, "Enter"])
+}
+
+/// Queued で窓を閉じた周の再送の門（設計 dispatcher.md §21 形 2）: pane を取り直し、入力欄の残りが**この周の本文**
+/// （記録の先頭ではなく送った字面そのもの・[`own_queued`]）なら Enter を 1 回だけ送って `true`。残りが空・人の打ちかけ・
+/// prompt 行を特定できない周と、pane を取れない周は 1 key も送らず `false`（text は再送しない）。
+fn nudge_own(request: &Request) -> bool {
+    let Some(pane) = capture(request.socket, request.target) else {
+        return false;
+    };
+    matches!(guard_input(&pane, Some(request.payload)), Ok(InputPass::OwnQueued))
+        && send_enter(request.socket, request.target)
 }
 
 /// 送達の目印 = payload の**最初の非空行**。無ければ `None`（呼び側は 1 key も送らず断る）。
