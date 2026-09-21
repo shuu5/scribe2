@@ -1020,3 +1020,13 @@ terms:
     aliases: [filter expression]
     definition: nextest が持つ test の選び方 (ADR-0052・proposed)。 歯の種類 (lib / bin / 統合) と名の正規表現を和で組め、 道具はこれで「単体の歯は全部・e2e の歯は名指した分だけ」を 1 行に表す。
     relationships: [検出の母集団, 契約の歯の穴]
+  - canonical: 判断の置き場
+    domain: consumer
+    aliases: [decision placement]
+    definition: 便が受付から着地まで通る判断 1 つずつについて、 計算できるなら code、 意味の判断なら lens (LLM)、 裁定なら人、 と決めた割り当て (ADR-0053・proposed)。 分解表が 19 本の判断に付けた。
+    relationships: [lens, 裁定 id, 約束の行, shadow 計測]
+  - canonical: shadow 計測
+    domain: consumer
+    aliases: [shadow measurement]
+    definition: 判定 API や規則を pipeline の判断に挿さずに、 同じ入力で答えを出して記録だけ残し、 後から機械で取った正解と突き合わせて一致率と較正を測ること (ADR-0053・proposed)。 Jev の再検討はこの測り方で N ≥ 30 を集めてから行う。
+    relationships: [判断の置き場, 検出線, 検出の母集団]
