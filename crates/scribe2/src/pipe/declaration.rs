@@ -58,8 +58,9 @@ const REMOTE_KEY: &str = "remote";
 /// **CI の判定を読む 1 行**の key（任意・設計 contract-source.md §5）。書かない宣言は [`DEFAULT_CI_CMD`] を撃つ。
 const CI_CMD_KEY: &str = "ci-cmd";
 
-/// CI の判定を読む行の既定（forge の CLI・`{sha}` に着地した sha が入る）。
-pub const DEFAULT_CI_CMD: &str = "gh run list --commit {sha} --json status,conclusion";
+/// CI の判定を読む行の既定（forge の CLI・`{sha}` に着地した sha が入る）。`event` は読み手が
+/// `schedule` の run を母集団から外すための欄（設計 pipeline.md §46）。
+pub const DEFAULT_CI_CMD: &str = "gh run list --commit {sha} --json status,conclusion,event";
 
 /// CI の行が必ず持つ穴（**着地した commit を名指さない行は撃てない**・別の commit の判定を読むことになる）。
 pub const CI_SHA_HOLE: &str = "{sha}";
@@ -1043,6 +1044,21 @@ mod tests {
         }
         // 既定の 1 行も同じ条件を満たす（器が埋める既定が自分の規則を破らない）。
         assert!(DEFAULT_CI_CMD.contains(CI_SHA_HOLE), "既定の行も穴を持つ: {DEFAULT_CI_CMD}");
+    }
+
+    /// (§46) 既定の 1 行は `--json` の欄の列に `event` を持ち、`{sha}` の穴は 1 つのまま。
+    #[test]
+    fn pipe_declaration_default_ci_cmd_carries_the_event_field() {
+        let words: Vec<&str> = DEFAULT_CI_CMD.split_whitespace().collect();
+        let fields = words
+            .iter()
+            .position(|word| *word == "--json")
+            .and_then(|at| words.get(at + 1))
+            .expect("既定の行は --json の欄の列を持つ");
+        let fields: Vec<&str> = fields.split(',').collect();
+        assert!(fields.contains(&"event"), "欄の列に event が在る: {fields:?}");
+        assert!(fields.contains(&"status") && fields.contains(&"conclusion"), "従来の欄は残る: {fields:?}");
+        assert_eq!(DEFAULT_CI_CMD.matches(CI_SHA_HOLE).count(), 1, "穴は 1 つのまま: {DEFAULT_CI_CMD}");
     }
 
     /// schema は 1 だけ。**整数でない schema も断る**（型の取り違えを黙って通さない）。

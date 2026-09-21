@@ -3979,6 +3979,58 @@ fn pipe_terminal_land_ci_failure_wins_over_a_still_running_workflow() {
     clean(&[&repo, &state]);
 }
 
+/// (pipeline.md §46) 同じ sha で cron の run（`event=schedule`）が走っていても、**それを待たずに**
+/// push の run の success で終端が close まで進む。
+///
+/// cron の run を数える実装は、走っている schedule の run の完了を上限いっぱい待って `ci:unmeasurable` に倒れる。
+#[test]
+fn pipe_terminal_land_ci_ignores_scheduled_runs() {
+    let (repo, state) = repo_with_state();
+    let json = "[{\"status\":\"completed\",\"conclusion\":\"success\",\"event\":\"push\"},{\"status\":\"in_progress\",\"conclusion\":null,\"event\":\"schedule\"}]";
+    let tools = fake_terminal_json(&repo, &state, json);
+    let design = write_contract(&repo, &[], &[]);
+    let id = gated_pass(&repo, &state, &design, &state.join("lens-ran"));
+    let bd = state.join("fake-bd.sh").display().to_string();
+    // **上限は fixture の manifest から渡す**（埋め込みの 900 s を待たない）。
+    let rules = ceiling_rules(&state);
+    let out = land_extra(&repo, &state, &id, &["--bd", &bd, "--rules", &rules]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "close まで通った land は rc 0: {}", stderr_of(&out));
+    let details = landed_details(&state, &id);
+    assert_eq!(
+        details.iter().skip(1).cloned().collect::<Vec<String>>(),
+        vec!["terminal:push:fake".to_owned(), "terminal:ci:success".to_owned(), "terminal:close:ok".to_owned()],
+        "schedule の run を待たない（母集団 {} 件）: {details:?}",
+        details.len()
+    );
+    assert!(tools.bd_log.exists(), "bead が閉じられた");
+    clean(&[&repo, &state]);
+}
+
+/// (pipeline.md §46) run が cron（`event=schedule`）だけの周は、外した後に 0 本＝**測れない**。
+///
+/// 外した後の空を success に倒すと、着地した commit の CI を 1 本も見ずに bead を閉じる（C10 の反転）。
+#[test]
+fn pipe_terminal_land_ci_only_scheduled_runs_is_unmeasurable() {
+    let (repo, state) = repo_with_state();
+    let json = "[{\"status\":\"completed\",\"conclusion\":\"success\",\"event\":\"schedule\"}]";
+    let tools = fake_terminal_json(&repo, &state, json);
+    let design = write_contract(&repo, &[], &[]);
+    let id = gated_pass(&repo, &state, &design, &state.join("lens-ran"));
+    let bd = state.join("fake-bd.sh").display().to_string();
+    let rules = ceiling_rules(&state);
+    let out = land_extra(&repo, &state, &id, &["--bd", &bd, "--rules", &rules]);
+    assert_eq!(out.status.code(), Some(1), "close しなかった周は rc 1: {}", stderr_of(&out));
+    let details = landed_details(&state, &id);
+    assert_eq!(
+        details.iter().skip(1).cloned().collect::<Vec<String>>(),
+        vec!["terminal:push:fake".to_owned(), "terminal:ci:unmeasurable".to_owned()],
+        "schedule の run だけでは測れない（母集団 {} 件）: {details:?}",
+        details.len()
+    );
+    assert!(!tools.bd_log.exists(), "測れない周は台帳を閉じない");
+    clean(&[&repo, &state]);
+}
+
 /// `pipe land-window` を 1 回撃つ（上限は既定の 0 秒＝1 周だけ観測する）。
 fn land_window_once(repo: &Path, state: &Path) -> Output {
     run_pipe(&["land-window", "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string()])

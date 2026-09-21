@@ -188,6 +188,22 @@ const CI_COMPLETED: &str = "completed";
 /// 成功した run の `conclusion` の字面。
 const CI_SUCCESS: &str = "success";
 
+/// run を起こした契機の key（既定の行が `--json …,event` で読む・字面は forge のもの）。
+const CI_EVENT: &str = "event";
+
+/// 母集団から外す `event` の字面（cron の run・着地した commit の判定ではない・設計 pipeline.md §46）。
+const CI_SCHEDULED: &str = "schedule";
+
+/// 判定の母集団（`event` が [`CI_SCHEDULED`] の run を外した列）。
+///
+/// **`event` の欄が無い run は外さない**（宣言の `ci-cmd` が `event` を返さない周＝従来と同じ判定）。
+/// workflow の名では絞らない（名は repo 固有の値）。
+fn counted_runs(runs: &[crate::fleet::json_tree::Tree]) -> Vec<&crate::fleet::json_tree::Tree> {
+    runs.iter()
+        .filter(|run| run.get(CI_EVENT).and_then(crate::fleet::json_tree::Tree::as_str) != Some(CI_SCHEDULED))
+        .collect()
+}
+
 /// CI の判定を**1 回だけ**読む（子 process 1 回・設計 contract-source.md §5）。
 ///
 /// 返すのは 3 形である: `Some(Failure)`（**完了した run に success でないものが 1 本以上在る**・他の run が
@@ -206,7 +222,8 @@ pub fn ci_now(repo: &Path, sha: &str, cmd: &str) -> Option<CiRun> {
         return None;
     }
     let tree = crate::fleet::json_tree::parse(&String::from_utf8_lossy(&out.stdout)).ok()?;
-    let runs = tree.as_array()?;
+    // cron の run を**先に**外す（外した後に 0 本なら測れない）。
+    let runs = counted_runs(tree.as_array()?);
     if runs.is_empty() {
         return None;
     }
@@ -220,12 +237,12 @@ pub fn ci_now(repo: &Path, sha: &str, cmd: &str) -> Option<CiRun> {
     // **落ちた run を先に見る**。実 CI では複数の workflow が並ぶので、1 本が落ちた後も別の 1 本が
     // 走っていることが常態である。未完了を先に見ると、**測って落ちた事実**が上限いっぱい待った末の
     // 「測れていない」に化ける（C10 の反転）。落ちたと分かった時点で待つ理由は無い。
-    if runs.iter().any(failed) {
+    if runs.iter().copied().any(failed) {
         return Some(CiRun::Failure);
     }
     // 落ちた run が 1 本も無い周は、**全部が完了している**ときだけ success と言える
     // （走っている run を成功に数えない）。
-    if runs.iter().any(|run| status_of(run).as_deref() != Some(CI_COMPLETED)) {
+    if runs.iter().copied().any(|run| status_of(run).as_deref() != Some(CI_COMPLETED)) {
         return None;
     }
     Some(CiRun::Success)
@@ -413,7 +430,10 @@ fn pgid_of(stat_text: &str) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     // flip-check: moved s2-07l.260
-    use super::{cli::format_utc, epoch_of, mark_of, pgid_of, reuse, store, wait, BTreeSet, Completion, Glance, Mark, Timeout};
+    use super::{
+        cli::format_utc, counted_runs, epoch_of, mark_of, pgid_of, reuse, store, wait, BTreeSet, Completion, Glance, Mark,
+        Timeout,
+    };
     use crate::fleet::{EventKind, Stage};
     use crate::pipe::cli::window_now;
     use crate::pipe::fixture::{append_all, event, gated_run, scratch};
@@ -450,6 +470,30 @@ mod tests {
     /// 後ろの便 `b-me` の待ち。
     fn land_turn(state: &Path) -> Completion {
         Completion::LandTurn { state_dir: state.to_path_buf(), run: "b-me".to_owned() }
+    }
+
+    /// (§46 約束 3) `event` の欄が無い run と `event=push` の run は残り、`event=schedule` の run だけが外れる。
+    #[test]
+    fn fleet_wait_ci_runs_without_event_are_kept_and_scheduled_are_dropped() {
+        let text = concat!(
+            "[{\"status\":\"completed\",\"conclusion\":\"success\"},",
+            "{\"status\":\"in_progress\",\"conclusion\":null,\"event\":\"schedule\"},",
+            "{\"status\":\"completed\",\"conclusion\":\"failure\",\"event\":\"push\"}]"
+        );
+        let tree = crate::fleet::json_tree::parse(text).expect("fixture の JSON を読める");
+        let runs = tree.as_array().expect("配列");
+        let kept = counted_runs(runs);
+        assert_eq!(kept.len(), 2, "残るのは 2 本（母集団 {} 本）: {kept:?}", runs.len());
+        assert!(kept.first().is_some_and(|run| run.get("event").is_none()), "欄の無い run は外さない: {kept:?}");
+        assert_eq!(
+            kept.get(1).and_then(|run| run.get("event")).and_then(crate::fleet::json_tree::Tree::as_str),
+            Some("push"),
+            "push の run は残る: {kept:?}"
+        );
+        assert!(
+            kept.iter().all(|run| run.get("event").and_then(crate::fleet::json_tree::Tree::as_str) != Some("schedule")),
+            "schedule の run だけが外れる: {kept:?}"
+        );
     }
 
     /// (a) 前回の観測と今の印が両方在って等しい周だけ前回の `met` を返す。
