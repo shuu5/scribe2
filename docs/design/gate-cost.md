@@ -547,6 +547,29 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
   - **timeout を rules 行の固定値にする**: host の thread 数で baseline の秒が変わるので固定値は host の形を焼く。道具の式（baseline × 5・床 20）をそのまま自前で持てば値の線は増えない。
 - **後続**（§11）: lib の歯で落ちない mutant は今も e2e を全部回す（thread 8 で約 40 秒・thread 1 で約 5 分）。契約の verify 行の歯だけを e2e で回す形（宣言 file の穴 `{teeth}`）は別の行。列の 2 番目が枠を待ち切れず 1 job・1 thread に縮退する面（`gate.slot_wait_s` = 900 が gate 1 本の長さより短い）は値の裁定で、本節の外。
 
+## 34. 検出線は契約が名指した歯と単体の歯だけを mutant に当てる — 穴 `{teeth}` と nextest の filter（契約表の行 z / aa・[ADR-0052](../../design-intent/decisions/ADR-0052-detection-line-runs-only-contract-teeth-and-unit-teeth.html)・`s2-07l.519`）
+
+やさしく言うと: 変異を 1 つ当てるたびに package の test を全部回していたのを、「この契約が名指した test」と「単体の test」だけにする。どの test を名指したかは器が契約から読んで、検証の行の 4 つ目の差し込み口で道具へ渡す。変異を当てない最初の 1 回（baseline）は今までどおり全部回す。
+
+- **何が起きているか**（verified 2026-09-21・run `s2-07l.516-20260921T071110Z` の detection/2/outcomes.json）: §33 の形（.518）で走った初回。67 mutants（撃墜 52・生存 7・compile 不能 7）で mutant 1 つの test phase の中央値 **43.7 秒**（撃墜も生存も同じ）、合計 714 秒（旧形 755 秒）。この契約の歯は e2e の binary にしか無く（`ledger_memo_plan_`）、e2e の binary は package の e2e の歯を全部走らせるので、fail-fast は lib の歯で落ちる契約（.511 の型）にしか効かない。枠を待ち切れず 1 thread に縮退した周は同じ走行が直列になり 1 mutant 約 6 分（.511 / .517・5〜8 時間の見込みで席が止めた）。rules 行 `R-C12-1` は enabled = false（週次記録）で、検出線は gate を落とす線ではなく lens の材料と記録である。
+- **現物**（verified・main 998afca）: 宣言の検出線が置ける穴は `crates/scribe2/src/pipe/declaration.rs` の `BASE_HOLES`（`{base}` `{jobs}` `{threads}` の閉じた 3 つ・intake の `unfit` と gate の置換が同じ列を見る）。置換は `crates/scribe2/src/pipe/gate/verify.rs` の `fill_holes(line, base, jobs, threads)`、撃つ材料は同 file の `Checks<'a>`（`worktree` / `base` / `contract` / `common` / `detection`）で、gate（`crates/scribe2/src/pipe/gate.rs`）と land の主実測（`crates/scribe2/src/pipe/land/verify.rs`）が組む。契約の verify 行から filter の語を取る関数は `crates/scribe2/src/pipe/closure/derive.rs` の `nextest_filter`（行 → crate と filter と scope の 3 つ組・`teeth_places` と preflight の `teeth=` 行が使う）。道具は `crates/xtask/src/mutantsdiff.rs` の `measure_args`（§33 の形: `--baseline skip --timeout <T> -- -- --test-threads <t>`）と `baseline_args`。`.vessel.toml` の検出線は `cargo xtask mutants-diff --base {base} --jobs {jobs} --threads {threads}` の 1 行。cargo-mutants v27 は `--test-tool nextest` を持ち、1 つ目の `--` の後ろを nextest の引数として逐語で渡す。nextest は filter の式（`kind(lib)` / `kind(bin)` / `test(/正規表現/)` の和）を持つ。
+- **前提**: ADR-0052（穴の閉じた集合は ADR-0021 §2.1 / ADR-0050 の決定・R-C12-1 の記録の母集団に触れる）。値の裁定は要らない（rules 行は増えない）。
+- **約束**:
+  1. **道具は `--teeth <語列>` を受ける**（行 z）: 語列は `,` 区切り・語は `[A-Za-z0-9_]+` だけ（それ以外を含む周は測らず rc 2「測れていない」・fail-closed）・`-` は空。受けた周の mutant の test は nextest で走らせる: `cargo mutants … --baseline skip --timeout <T> --test-tool nextest -- -E <式> --test-threads <t>`（2 つ目の `--` は無い）。式は `kind(lib) | kind(bin)`、語が在れば `| test(/^(語1|語2|…)/)` を足す（e2e の歯は契約が名指した語で始まる分だけ）。**`--teeth` 無しの周は §33 の形を 1 字も変えない**（行 aa が land するまで gate は無しで撃つ・CI で道具だけ撃つ周の既定）。
+  2. **baseline は不変**（§33 約束 1 / 4）: 道具の外で package の歯を全数・`--no-fail-fast`・timeout の導出も同じ。mutant の test が nextest でも baseline は cargo test のまま（母集団の違いは記録が運ぶ）。
+  3. **記録の 1 行に `teeth=` を足す**: `mutants-diff: total=… scope=<pkg> teeth=<-|n>`（`--teeth` 無し = `-`・空 = `0`・語が在れば語の数）。読み手（gate の record・lens の材料）は検出の母集団が狭まった事実をここから読む（C10）。5 数の読みと `R-C12-1` の極性は不変。
+  4. **穴は閉じた 4 つ**（行 aa）: `BASE_HOLES` の末尾に `{teeth}` を足し（intake の `unfit` と gate の置換が同じ列）、`.vessel.toml` の検出線を `cargo xtask mutants-diff --base {base} --jobs {jobs} --threads {threads} --teeth {teeth}` にする。契約の verify 行には従来どおり穴を置けない。
+  5. **語の導出は器の 1 か所**: gate と land の主実測が `Checks` の契約の verify 行から `nextest_filter` で filter を取り、`,` で結んで `{teeth}` に置く（語が 0 の周は `-`）。preflight の `teeth=` 行と同じ関数を通す（導出の正本を増やさない・C10・ADR-0050 の thread と同じ形）。語を環境変数で渡さない（C2.2）。
+  6. **着地は道具の入れ替えを伴う**: 行 aa が land した後、PATH の器を入れ替えるまで古い intake は新しい宣言の行（4 つ目の穴）を断る（`admission:declaration`）。入れ替えは席の手番（起動コマンドは repo に入れない）。
+- **歯**:
+  - 行 z（in-file・`crates/xtask/src/mutantsdiff.rs`・接頭辞 `mutants_diff_teeth_`）: (a) `--teeth a,b` で引数に `--test-tool nextest` が在り、1 つ目の `--` の後ろが `-E` `kind(lib) | kind(bin) | test(/^(a|b)/)` `--test-threads <t>` **だけ**で、2 つ目の `--` が無い／(b) `--teeth -` で式が `kind(lib) | kind(bin)`／(c) `--teeth` 無しの引数が §33 の形と 1 語も違わない（既存の歯 `mutants_diff_fail_fast_` の pin と同じ列）／(d) 語に空白・`.`・`/` を含む周は pure 関数が `Err`（閉じた理由 1 つ）／(e) 記録の行の `teeth=` が `-` / `0` / `2` の 3 形で出る（既存の行の 5 数と `scope=` は不変）。行 m の歯 `mutants_diff_threads_flag_tail_is_two_dashes_then_the_received_value`（`crates/xtask/src/main.rs`）は `--teeth` の有無で末尾が 2 形（無し = §33 の 4 語・在り = `--test-threads <t>` の 2 語）になることを対で pin する（名は残す）。
+  - 行 aa（in-file・`crates/scribe2/src/pipe/declaration.rs`・接頭辞 `declaration_teeth_hole_`）: (a) `BASE_HOLES` が 4 つで末尾が `{teeth}`／(b) 検出線の行の `{teeth}` は `unfit` を通り、契約の verify 行の `{teeth}` は断られる（既存の `{jobs}` と同じ対）。
+  - 行 aa（in-file・`crates/scribe2/src/pipe/gate/verify.rs`・接頭辞 `gate_fill_teeth_`）: (a) verify 行 2 本（`--lib … foo_` / `--test e2e … bar_`）から `foo_,bar_` が置かれる／(b) filter を持たない行は飛ばされる／(c) 0 本で `-`／(d) 語の順は verify 行の宣言順。
+  - 行 aa（e2e・`crates/scribe2/tests/e2e/pipe/gate.rs`・接頭辞 `pipe_gate_teeth_`・toy repo の宣言に `{teeth}` を持つ検出線を置く）: 撃たれた行の record に契約の verify 行の語が `,` で結ばれて載り、`{teeth}` の字面が残らない。
+- **触らない**: baseline の形（§33）・`--jobs` / `--threads` の受け方（§22 / §31）・受付と封じ込め（§3 / §4）・木が同じ主実測の省略（§5）・`R-C12-1` の極性と値・`parse_outcomes` と `Counts` の 5 数・契約の verify の実走（FR8）・rules 行。
+- **却下**（ADR-0052 §3 と同じ）: 検出線を gate の外へ出す（lens の材料が消える・裁定）／契約の歯だけにして lib と bin を回さない（共有 code の生存が実態より増える）／道具が契約を自分で読む（導出の正本が 2 つ・C2.2）／cargo test の位置引数の filter（全 binary に同じ filter が掛かる）／並列度の上限を上げる（core で頭打ち・縮退に効かない）。
+- **後続**（§11）: 行 aa の着地後に .516 型の契約（e2e の歯）で検出線の秒を実測し、ADR-0052 CSQ-P1 の「数分」を確かめる。生存の週次記録の母集団が変わった日を記録の側に残す（R-C12-1 の裁定材料は実測 2 周分）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -800,5 +823,26 @@ write-set = ["crates/xtask/src/mutantsdiff.rs", "crates/xtask/src/main.rs", "doc
 verify = ["cargo nextest run -p xtask --no-tests=fail mutants_diff_fail_fast_", "cargo nextest run -p xtask --no-tests=fail no_fail_fast_", "cargo nextest run -p xtask --no-tests=fail mutants_diff_threads_flag_"]
 size = "S"
 done = "mutants-diff が cargo-mutants の前に同じ木で cargo test -p <scope> --no-run（build）と cargo test -p <scope> --no-fail-fast -- --test-threads <t>（test・壁時計の秒を測る）を 1 回ずつ撃って test の出力を作業 dir の baseline.log へ写し、rc ≠ 0 の周は cargo-mutants を起こさず従来と同じ rc 2 で終えて理由行の後ろに自前の baseline.log の末尾を添え、rc 0 の周は test の壁時計をミリ秒の整数で測り T = max(20, ceil(5 × ms / 1000)) を整数演算の pure 関数で導いて baseline.log の末尾に timeout=<T> の 1 行を足し cargo mutants --in-diff … -p <scope> --no-shuffle --copy-vcs true -o <out> --jobs <j> --baseline skip --timeout <T> -- -- --test-threads <t> を撃ち（--no-fail-fast は無い・build の timeout は渡さない）、outcomes.json の 5 数の読みと R-C12-1 の極性と record の 1 行の字面と --jobs / --test-threads の受け方は 1 字も変わらず、baseline の引数と mutant の引数と timeout の式（3000 ms で 20・4020 ms で 21・62000 ms で 310 の 3 点＝床・切り上げ・倍率）と baseline の rc の判定（rc ≠ 0 で Err の字面に自前の log の末尾が載り、rc 0 で Ok の対）が in-file の pure 関数の歯で pin されて行 j の歯は baseline の引数を pin する形で名を保つ"
+
+[[contract]]
+id = "z"
+title = "xtask mutants-diff が --teeth <語列> を受け、受けた周の mutant の test を nextest の filter（kind(lib) | kind(bin) | test(/^(語…)/)）で回して記録の 1 行に teeth=<-|n> を足す（--teeth 無しの周は §33 の形を 1 字も変えない・語の形が悪い周は rc 2）"
+req = ["NFR6", "FR46"]
+section = "34"
+write-set = ["crates/xtask/src/mutantsdiff.rs", "crates/xtask/src/main.rs", "docs/design/gate-cost.md"]
+verify = ["cargo nextest run -p xtask --no-tests=fail mutants_diff_teeth_", "cargo nextest run -p xtask --no-tests=fail mutants_diff_threads_flag_", "cargo nextest run -p xtask --no-tests=fail mutants_diff_fail_fast_"]
+size = "S"
+done = "mutants-diff が --teeth <語列>（, 区切り・語は英数字と _ だけ・- は空）を受け、受けた周は cargo mutants --in-diff … --jobs <j> --baseline skip --timeout <T> --test-tool nextest -- -E <式> --test-threads <t> を撃ち（式は kind(lib) | kind(bin) に語が在れば | test(/^(語1|語2)/) を足し、2 つ目の -- は無い）、--teeth 無しの周は §33 の引数と 1 語も違わず、語に英数字と _ 以外を含む周は pure 関数の Err で rc 2 の測れていないに倒れ、記録の 1 行が末尾に teeth=<-|n>（無し = -・空 = 0・語の数）を運んで 5 数と scope= と R-C12-1 の極性と baseline の形と timeout の導出は 1 字も変わらず、引数の 3 形（語あり・空・無し）と Err と teeth= の 3 形が in-file の pure 関数の歯で pin されて行 m の歯は --teeth の有無で末尾の 2 形を対で pin する形で名を保つ"
+
+[[contract]]
+id = "aa"
+title = "宣言の検出線の穴に {teeth} を足し（閉じた 4 つ・末尾）、gate と land の主実測が契約の verify 行から nextest_filter で語を取って , で結んで置き（0 本は -）、.vessel.toml の検出線に --teeth {teeth} を足す（契約の verify 行には置けない・着地は PATH の器の入れ替えを伴う）"
+req = ["NFR6", "FR46", "NFR4"]
+section = "34"
+write-set = [".vessel.toml", "crates/scribe2/src/pipe/declaration.rs", "crates/scribe2/src/pipe/gate/verify.rs", "crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/land/verify.rs", "crates/scribe2/src/pipe/closure/derive.rs", "crates/scribe2/src/pipe/closure.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "docs/design/gate-cost.md"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail declaration_teeth_hole_", "cargo nextest run -p scribe2 --lib --no-tests=fail gate_fill_teeth_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_gate_teeth_"]
+size = "M"
+depends = ["z"]
+done = "BASE_HOLES が {base} {jobs} {threads} {teeth} の閉じた 4 つ（末尾が {teeth}）になって intake の unfit は検出線の {teeth} を通し契約の verify 行の {teeth} を断り、gate と land の主実測が Checks の契約の verify 行から nextest_filter で filter の語を取り宣言順に , で結んで {teeth} に置き（filter を持たない行は飛ばし・0 本は -）、.vessel.toml の検出線が cargo xtask mutants-diff --base {base} --jobs {jobs} --threads {threads} --teeth {teeth} の 1 行になり、toy repo の e2e で撃たれた行の record に契約の語が , で結ばれて載って {teeth} の字面が残らず、語を環境変数で渡さず、穴の 4 つと unfit の対と置換の 4 形（2 本・飛ばし・0 本・宣言順）が in-file の歯で pin される"
 
 <!-- contracts:end -->
