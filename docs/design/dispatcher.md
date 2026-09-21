@@ -427,7 +427,7 @@ size = "S"
 of = "p"
 n = 1
 text = "運転手の終端の周で最後の段が Reviewed / Gated の FAIL・INCONCLUSIVE、Failed、Questioned、Stopped のとき、fleet の replay の State.registrations から (Role::Orchestrator, anchor = repo) の最新 row の target へ 1 行を deliver_within で送り、stdout に notify=<delivered|refused:<理由>|unconfirmed|no-seat> を残す（row が無い周は送らず no-seat・便の rc は変えない）"
-files = ["crates/scribe2/src/pipe/cli.rs", "+crates/scribe2/src/pipe/notify.rs", "crates/scribe2/tests/e2e/pipe.rs"]
+files = ["crates/scribe2/src/pipe/cli.rs", "+crates/scribe2/src/pipe/notify.rs", "crates/scribe2/tests/e2e/pipe.rs", "+crates/scribe2/tests/e2e/pipe/notify.rs"]
 symbols = ["seat::inject::Request"]
 teeth = ["pipe_notify_terminal_failure_reaches_the_registered_seat_pane", "pipe_notify_without_a_registered_seat_reports_no_seat"]
 place = "+crates/scribe2/tests/e2e/pipe/notify.rs"
@@ -438,7 +438,7 @@ expect = "記録に send-keys が 1 回だけ在り payload が bead と run と
 of = "p"
 n = 2
 text = "同じ周の列の結果が起こした便 0 ∧ 候補 1 本以上のとき、同じ宛先へ idle の 1 行（ready=<本数> launched=0 reason=<先頭の候補の理由>）を送る（Landed と PASS の終端でも列が idle ならこの 1 行だけ送る）"
-files = ["crates/scribe2/src/pipe/cli.rs", "+crates/scribe2/src/pipe/notify.rs"]
+files = ["crates/scribe2/src/pipe/cli.rs", "+crates/scribe2/src/pipe/notify.rs", "+crates/scribe2/tests/e2e/pipe/notify.rs"]
 teeth = ["pipe_notify_idle_round_reports_ready_count_and_top_reason"]
 place = "+crates/scribe2/tests/e2e/pipe/notify.rs"
 fixture = "偽の台帳の ready の bead 1 本を hold にした state dir（起こす 0 ∧ 候補 1）と登録 row と偽の tmux を置き、pipe stop --run の終端を撃つ。負の枝は候補 0 の台帳"
