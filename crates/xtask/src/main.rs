@@ -14,6 +14,7 @@ mod enum_slices;
 mod env_reads;
 mod flipcheck;
 mod genmanifest;
+mod ledger_plan;
 mod limits;
 mod mutantsdiff;
 mod non_rust_exec;
@@ -33,7 +34,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 /// 使い方の 1 行。
-const USAGE: &str = "usage: cargo xtask <check|gen-manifest|gen-claude-md> [ROOT] | cargo xtask <flip-check|mutants-diff|rules-diff|deps-delta> --base <ref>";
+const USAGE: &str = "usage: cargo xtask <check|gen-manifest|gen-claude-md> [ROOT] | cargo xtask <flip-check|mutants-diff|rules-diff|deps-delta> --base <ref> | cargo xtask ledger-plan --epic <epic id> [ROOT]";
 
 /// stdout 出力層。stdout へ書くのはこの関数だけである。
 #[expect(
@@ -97,6 +98,8 @@ fn main() -> ExitCode {
         Some("check") => run_check(root_arg),
         Some("gen-manifest") => run_gen_manifest(root_arg),
         Some("gen-claude-md") => run_gen_claude_md(root_arg),
+        // 契約表の未着地の行から bd create --graph の plan を出す（設計 ledger-form.md §3 の 5・台帳は読まない）。
+        Some("ledger-plan") => ledger_plan::run(tail),
         // flip-check だけは rc 2（引数不正）を持つので `Err` → rc 1 経路へ流さない。
         Some("flip-check") => return flipcheck::run(tail),
         // mutants-diff も rc 2（測れなかった）を持つので `Err` → rc 1 経路へ流さない。
@@ -433,6 +436,14 @@ mod tests {
     fn deps_delta_entry_point_refuses_without_base() {
         assert_eq!(crate::deps_delta::run(&[]), ExitCode::from(2), "--base 無しは rc 2");
         assert!(crate::USAGE.contains("deps-delta"), "usage が subcommand を名指す");
+    }
+
+    /// `ledger-plan`（設計 ledger-form.md §3 の 5・行 b）の配線の歯。本体と判定の歯は `ledger_plan.rs` に
+    /// 在るが、入口の 1 本は base に在るこの file へ置く（新規 module の歯だけに頼らない）。
+    #[test]
+    fn ledger_plan_entry_point_refuses_without_epic() {
+        assert!(crate::ledger_plan::run(&[]).is_err(), "--epic 無しは Err（rc 1・plan を出さない）");
+        assert!(crate::USAGE.contains("ledger-plan"), "usage が subcommand を名指す");
     }
 
     #[test]
