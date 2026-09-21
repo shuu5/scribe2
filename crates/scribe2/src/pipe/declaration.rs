@@ -158,13 +158,17 @@ pub const JOBS_HOLE: &str = "{jobs}";
 /// test 走行へ渡すだけである（cores からの導出を道具に持たせない＝導出の正本は器の 1 か所）。
 pub const THREADS_HOLE: &str = "{threads}";
 
-/// **宣言の共通 verify に置ける穴の閉じた集合**（3 つちょうど）。
+/// **契約の verify 行が名指した歯の filter 語を置く穴**（設計 gate-cost.md §34 約束 4 / 5・ADR-0052）。語は器が
+/// 契約の verify 行から導き `,` で結んで置く（0 本は `-`）。道具は契約を読まない（導出の正本は器の 1 か所・C2.2）。
+pub const TEETH_HOLE: &str = "{teeth}";
+
+/// **宣言の共通 verify に置ける穴の閉じた集合**（4 つちょうど・末尾が [`TEETH_HOLE`]）。
 ///
 /// ADR-0010 §2.1 は穴を `{base}` 1 つと定めたが、ADR-0021 §2.1 がそれを部分 supersede して
 /// 集合にした。集合をここ 1 本に閉じるのは、[`unfit`] の判定と gate の置換が**同じ列**を
 /// 見るためである——片方だけに穴を足すと、intake を通った行が gate で置換されないまま
 /// 撃たれる（`{jobs}` という語をそのまま `--jobs` へ渡す）。
-pub const BASE_HOLES: &[&str] = &[BASE_HOLE, JOBS_HOLE, THREADS_HOLE];
+pub const BASE_HOLES: &[&str] = &[BASE_HOLE, JOBS_HOLE, THREADS_HOLE, TEETH_HOLE];
 
 /// 行が置ける穴。**穴の可否だけが宣言の共通 verify と契約の verify の違い**である。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -784,7 +788,7 @@ mod tests {
 
     use super::{
         unfit, Basis, Ceiling, Declared, Effective, Holes, Sourced, Unfit, BASE_HOLES, BASE_HOLE, CEILING_ROW, DECL_FILE,
-        DEFAULT_CI_CMD, DENIED_ROW, CI_SHA_HOLE, JOBS_HOLE, THREADS_HOLE,
+        DEFAULT_CI_CMD, DENIED_ROW, CI_SHA_HOLE, JOBS_HOLE, TEETH_HOLE, THREADS_HOLE,
     };
     use crate::order::is_declaration_order;
 
@@ -811,7 +815,7 @@ mod tests {
     fn declaration_accepts_only_the_closed_set_of_holes_in_common_verify() {
         let (allowed, denied) = (strings(&["cargo"]), denied());
         let basis = Basis { allowed: &allowed, denied: &denied };
-        assert_eq!(BASE_HOLES, [BASE_HOLE, JOBS_HOLE, THREADS_HOLE], "集合は 3 つちょうど");
+        assert_eq!(BASE_HOLES, [BASE_HOLE, JOBS_HOLE, THREADS_HOLE, TEETH_HOLE], "集合は 4 つちょうど");
         for hole in BASE_HOLES {
             let line = format!("cargo xtask mutants-diff --base {hole}");
             assert_eq!(unfit(&line, &basis, Holes::Base), None, "{hole} は共通 verify に置ける");
@@ -838,8 +842,8 @@ mod tests {
         );
     }
 
-    /// 宣言の置ける穴の閉じた集合は **3 つちょうど**で、3 つ目（`{threads}`）を持つ検出線の行は intake を通り、
-    /// 集合の外の穴は従来どおり不適合に落ちる（設計 gate-cost.md §31 約束 6）。
+    /// 宣言の置ける穴の 3 つ目は `{threads}` で、それを持つ検出線の行は intake を通り、
+    /// 集合の外の穴は従来どおり不適合に落ちる（設計 gate-cost.md §31 約束 6・4 つ目の `{teeth}` は §34）。
     ///
     /// 3 つ目を足したことと集合を広げすぎていないことを同じ歯で pin する（集合を 2 つに戻す変異は 1 本目で、
     /// 穴を全部通す変異は綴り違いの列で落ちる）。
@@ -847,8 +851,8 @@ mod tests {
     fn declaration_threads_hole_is_the_third_and_last_hole() {
         let (allowed, denied) = (strings(&["cargo"]), denied());
         let basis = Basis { allowed: &allowed, denied: &denied };
-        assert_eq!(BASE_HOLES.len(), 3, "穴は 3 つちょうど: {BASE_HOLES:?}");
-        assert_eq!(BASE_HOLES.last().copied(), Some(THREADS_HOLE), "3 つ目が {THREADS_HOLE}");
+        assert_eq!(BASE_HOLES.len(), 4, "穴は 4 つちょうど: {BASE_HOLES:?}");
+        assert_eq!(BASE_HOLES.get(2).copied(), Some(THREADS_HOLE), "3 つ目が {THREADS_HOLE}");
         assert_eq!(THREADS_HOLE, "{threads}", "穴の字面は固定（宣言 file に書く語）");
         // scribe2 自身の検出線の形（3 つの穴を同じ行に置ける）。
         let line = "cargo xtask mutants-diff --base {base} --jobs {jobs} --threads {threads}";
@@ -863,7 +867,7 @@ mod tests {
             Some(Unfit::Hole(THREADS_HOLE.to_owned())),
             "{THREADS_HOLE} も契約の verify には置けない"
         );
-        // 集合の外は綴り違いでも断る（3 つ目を足しても 4 つ目は無い）。
+        // 集合の外は綴り違いでも断る。
         for outside in ["{thread}", "{threadz}", "{test-threads}", "{THREADS}", "{cores}", "{price}"] {
             let line = format!("cargo xtask mutants-diff --threads {outside}");
             assert_eq!(
@@ -871,6 +875,44 @@ mod tests {
                 Some(Unfit::Hole(outside.to_owned())),
                 "{outside} は置けない穴である"
             );
+        }
+    }
+
+    /// (a) 穴の閉じた集合は **4 つちょうど**で末尾が `{teeth}`（設計 gate-cost.md §34 約束 4・ADR-0052）。
+    #[test]
+    fn declaration_teeth_hole_is_the_fourth_and_last_hole() {
+        assert_eq!(BASE_HOLES.len(), 4, "穴は 4 つちょうど: {BASE_HOLES:?}");
+        assert_eq!(BASE_HOLES.last().copied(), Some(TEETH_HOLE), "末尾が {TEETH_HOLE}");
+        assert_eq!(TEETH_HOLE, "{teeth}", "穴の字面は固定（宣言 file に書く語）");
+        assert_eq!(BASE_HOLES, ["{base}", "{jobs}", "{threads}", "{teeth}"], "4 つの字面と順");
+    }
+
+    /// (b) 検出線の行の `{teeth}` は `unfit` を通り、契約の verify 行の `{teeth}` は断られる（既存の `{jobs}` と同じ対）。
+    /// 集合の外の綴り違いは宣言の側でも断る（4 つ目を足しても 5 つ目は無い）。
+    #[test]
+    fn declaration_teeth_hole_passes_detection_line_and_is_refused_in_contract_verify() {
+        let (allowed, denied) = (strings(&["cargo"]), denied());
+        let basis = Basis { allowed: &allowed, denied: &denied };
+        let line = "cargo xtask mutants-diff --base {base} --jobs {jobs} --threads {threads} --teeth {teeth}";
+        assert_eq!(unfit(line, &basis, Holes::Base), None, "4 つの穴の検出線は intake を通る");
+        assert_eq!(
+            unfit("cargo xtask mutants-diff --teeth {teeth}", &basis, Holes::Base),
+            None,
+            "{TEETH_HOLE} だけの行も宣言には置ける"
+        );
+        assert_eq!(
+            unfit("cargo xtask mutants-diff --teeth {teeth}", &basis, Holes::None),
+            Some(Unfit::Hole(TEETH_HOLE.to_owned())),
+            "{TEETH_HOLE} は契約の verify には置けない"
+        );
+        assert_eq!(
+            unfit("cargo xtask mutants-diff --jobs {jobs}", &basis, Holes::None),
+            Some(Unfit::Hole(JOBS_HOLE.to_owned())),
+            "{JOBS_HOLE} と同じ対"
+        );
+        for outside in ["{tooth}", "{teethz}", "{TEETH}", "{filter}", "{words}"] {
+            let line = format!("cargo xtask mutants-diff --teeth {outside}");
+            assert_eq!(unfit(&line, &basis, Holes::Base), Some(Unfit::Hole(outside.to_owned())), "{outside} は置けない穴である");
         }
     }
 

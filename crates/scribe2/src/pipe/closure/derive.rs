@@ -157,6 +157,13 @@ pub(crate) fn teeth_places(fields: &Fields<'_>, base: &Base<'_>, texts: &[(&str,
     Ok(found)
 }
 
+/// verify 行の列の filter 語（宣言順・filter を持たない行と nextest でない行は飛ばす）。gate と land の主実測が検出線の
+/// `{teeth}` に置く語の正本で、置き場の導出（[`teeth_places`]・preflight の `teeth=` 行）と同じ [`nextest_filter`] を通す
+/// （設計 gate-cost.md §34 約束 5・導出の正本を増やさない）。crate の名は語に効かないので core の crate を問わない。
+pub(crate) fn teeth_words(verify: &[String]) -> Vec<&str> {
+    verify.iter().filter_map(|line| nextest_filter(line, "").map(|(_, filter, _)| filter)).collect()
+}
+
 /// nextest 行の scope（§28・閉じた 3 値・宣言順 = 旗なし / `--lib` / `--test <name>`）＝その行が走らせる target。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Scope<'l> {

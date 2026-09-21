@@ -4302,3 +4302,78 @@ fn pipe_gate_health_busy_run_stays_gated_and_can_be_regated() {
     );
     clean(&[&repo, &state]);
 }
+
+// ── 検出線の穴 `{teeth}`（設計 gate-cost.md §34 約束 4 / 5・行 aa） ────────────────────────────
+
+/// 検出線の stub（受けた語を stdout の 1 行に出す＝撃たれた側が置換後の値を record の `line=` へ運ぶ）。
+const TEETH_STUB: &str = "verify-teeth.sh";
+
+/// `{teeth}` を持つ検出線の宣言（4 つ目の穴だけを持つ stub の行）。
+const TEETH_DETECTION: &str = r#"["sh verify-teeth.sh {teeth}"]"#;
+
+/// `{teeth}` を持つ検出線の宣言と、nextest の歯の置き場（`crates/toy/src/lib.rs` の `foo_` と `crates/toy/tests/e2e.rs`
+/// の `bar_`）を置いた toy repo で、契約の verify 行を `verify` にした便を gate まで通す（rc は測らない）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn teeth_gate(verify: &str) -> (PathBuf, PathBuf, String, Output) {
+    let (repo, state) = repo_with_state();
+    fs::write(repo.join(TEETH_STUB), "printf 'teeth=%s\\n' \"$1\"\nexit 0\n").expect("stub を書ける");
+    for (path, body) in [
+        ("crates/toy/src/lib.rs", "#[cfg(test)]\nmod tests {\n    #[test]\n    fn foo_one() {}\n}\n"),
+        ("crates/toy/tests/e2e.rs", "#[test]\nfn bar_one() {}\n"),
+    ] {
+        let file = repo.join(path);
+        fs::create_dir_all(file.parent().expect("親 dir が在る")).expect("dir を作れる");
+        fs::write(&file, body).expect("歯の置き場を書ける");
+    }
+    write_vessel(&repo, r#"["git", "sh", "cargo"]"#, r#"["sh verify-ok.sh"]"#);
+    let path = repo.join(".vessel.toml");
+    let body = fs::read_to_string(&path).expect("宣言を読める");
+    fs::write(&path, format!("{body}detection-verify = {TEETH_DETECTION}\n")).expect("宣言を書ける");
+    git(&repo, &["add", "-f", ".vessel.toml", TEETH_STUB, "crates"]);
+    git(&repo, &["commit", "-q", "-m", "vessel-teeth"]);
+    let design = write_contract(
+        &repo,
+        &["verify", "write-set"],
+        &[
+            r#"write-set = ["src/lib.rs", "crates/toy/src/lib.rs", "crates/toy/tests/e2e.rs"]"#,
+            &format!("verify = {verify}"),
+        ],
+    );
+    let id = implemented(&repo, &state, &design);
+    let marker = state.join("lens-ran");
+    let out = gate_once(&repo, &state, &id, Some(&fake_lens(&marker, &lens_verdict("PASS"))));
+    (repo, state, id, out)
+}
+
+/// 撃たれた検出線の record に契約の verify 行の filter 語が宣言順に `,` で結ばれて載り（cmd と撃たれた側の stdout の
+/// 両方）、filter を持たない行は飛ばされ、`{teeth}` の字面は record のどこにも残らない（語は環境変数でなく行の引数で
+/// 渡る＝stub は `$1` しか読まない）。
+#[test]
+fn pipe_gate_teeth_detection_record_carries_the_contract_words_joined_by_comma() {
+    let (repo, state, id, _out) = teeth_gate(
+        r#"["cargo nextest run -p toy --lib --no-tests=fail foo_", "sh verify-ok.sh", "cargo nextest run -p toy --test e2e --no-tests=fail bar_"]"#,
+    );
+    let rows = verify_rows(&state, &id);
+    assert_eq!(kinds(&rows).get(2).map(String::as_str), Some("detection"), "③ が検出線: {rows:?}");
+    assert_eq!(row_value(&rows, 3, "cmd"), "sh verify-teeth.sh foo_,bar_", "語が宣言順に , で結ばれる: {rows:?}");
+    assert_eq!(row_value(&rows, 3, "rc"), "0", "stub は完走した");
+    assert_eq!(row_value(&rows, 3, "line"), "teeth=foo_,bar_", "撃たれた側が受けた値: {rows:?}");
+    let log = verify_log(&state, &id);
+    assert!(!log.contains("{teeth}"), "穴の字面が残らない: {log}");
+    clean(&[&repo, &state]);
+}
+
+/// 契約の verify 行が filter 語を 1 つも持たない便は `-` が置かれる（空文字で引数を欠かせない・`{teeth}` は残らない）。
+#[test]
+fn pipe_gate_teeth_zero_words_fill_a_dash() {
+    let (repo, state, id, out) = teeth_gate(r#"["sh verify-ok.sh"]"#);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "PASS: {}", stderr_of(&out));
+    let rows = verify_rows(&state, &id);
+    assert_eq!(row_value(&rows, 3, "cmd"), "sh verify-teeth.sh -", "0 本は -: {rows:?}");
+    assert_eq!(row_value(&rows, 3, "line"), "teeth=-", "撃たれた側が受けた値: {rows:?}");
+    assert!(!verify_log(&state, &id).contains("{teeth}"), "穴の字面が残らない");
+    clean(&[&repo, &state]);
+}

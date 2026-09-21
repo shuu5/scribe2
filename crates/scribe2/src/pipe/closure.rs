@@ -50,7 +50,7 @@ mod names;
 
 pub use derive::{check_drift, derive_write_set, weighted_lines, Base, Fields};
 pub use names::unresolved_names;
-pub(crate) use derive::{declared_teeth, teeth_places};
+pub(crate) use derive::{declared_teeth, teeth_places, teeth_words};
 use names::{declares_fn, holds_word};
 
 /// nextest の行の書き出し（この後ろの語から crate と filter 語を読む）。

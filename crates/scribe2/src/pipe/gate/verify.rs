@@ -4,9 +4,10 @@
 use super::record::{detection_unmeasured, STDERR_TAIL_LINES, USAGE_HEAD};
 use super::{UNADMITTED_JOBS, WRITE_SET_CMD};
 use crate::pipe::admission::{self, Grant};
+use crate::pipe::closure;
 use crate::pipe::confine::{self, Confinement, Reason, Released, Usage};
 use crate::pipe::contract::Contract;
-use crate::pipe::declaration::{BASE_HOLE, JOBS_HOLE, THREADS_HOLE};
+use crate::pipe::declaration::{BASE_HOLE, JOBS_HOLE, TEETH_HOLE, THREADS_HOLE};
 use crate::pipe::git_bytes;
 use crate::pipe::health;
 use crate::pipe::refuse;
@@ -255,15 +256,31 @@ fn refire(
 }
 
 /// 共通 verify の行の穴を実値へ置く（**契約の行には置換しない**）。置換する穴の列は
-/// [`crate::pipe::declaration::BASE_HOLES`] と同じ 3 つである（intake の判定と同じ列・設計 §3.3 errata）。
+/// [`crate::pipe::declaration::BASE_HOLES`] と同じ 4 つである（intake の判定と同じ列・設計 §3.3 errata・§34 約束 4）。
 ///
-/// **1 走査で埋めない**のは、穴の値が sha と数字だけで、互いの字面を含まないためである
-/// （`{worktree}` のように外から来る path を埋める面とは条件が違う）。
-fn fill_holes(line: &str, base: &str, jobs: u64, threads: u64) -> String {
+/// **1 走査で埋めない**のは、穴の値が sha と数字と filter 語（`[A-Za-z0-9_]` と `,` / `-`）だけで、互いの字面を
+/// 含まないためである（`{worktree}` のように外から来る path を埋める面とは条件が違う）。
+fn fill_holes(line: &str, base: &str, jobs: u64, threads: u64, teeth: &str) -> String {
     line.replace(BASE_HOLE, base)
         .replace(JOBS_HOLE, &jobs.to_string())
         .replace(THREADS_HOLE, &threads.to_string())
+        .replace(TEETH_HOLE, teeth)
 }
+
+/// `{teeth}` の実値: 契約の verify 行の filter 語を宣言順に `,` で結ぶ（filter を持たない行は飛ばし・0 本は
+/// [`NO_TEETH`]・設計 gate-cost.md §34 約束 5）。語の導出は置き場の導出と同じ関数（[`closure::teeth_words`]）で、
+/// 環境変数では渡さない（C2.2）。gate も land の主実測も [`Checks::contract`] から同じここを通る。
+fn teeth_of(verify: &[String]) -> String {
+    let words = closure::teeth_words(verify);
+    if words.is_empty() {
+        NO_TEETH.to_owned()
+    } else {
+        words.join(",")
+    }
+}
+
+/// 契約の verify 行が filter 語を 1 つも持たない周の `{teeth}`（道具の `--teeth -` = 空）。
+const NO_TEETH: &str = "-";
 
 /// 1 行を撃つ材料。
 struct Fire<'a> {
@@ -297,7 +314,7 @@ fn fire(entry: &Fire<'_>, caps: Result<confine::Caps, RuleRead>, admit: Option<&
         .as_ref()
         .map_or((UNADMITTED_JOBS, UNADMITTED_THREADS), |held| (held.jobs, held.threads));
     let cmd = if entry.holes {
-        fill_holes(entry.raw, entry.checks.base, jobs, threads)
+        fill_holes(entry.raw, entry.checks.base, jobs, threads, &teeth_of(&entry.checks.contract.verify))
     } else {
         entry.raw.to_owned()
     };
@@ -536,7 +553,7 @@ pub(super) fn byte_count(bytes: &[u8]) -> u64 {
 pub(crate) mod tests {
     // flip-check: moved s2-07l.286
     use super::super::record::USAGE_HEAD;
-    use super::{last_line, listed, run_line_captured, unwrapped, WRITE_SET_CMD};
+    use super::{fill_holes, last_line, listed, run_line_captured, teeth_of, unwrapped, NO_TEETH, TEETH_HOLE, WRITE_SET_CMD};
     use crate::pipe::confine::{read_usage, Limit, Reason, Wrap};
     use crate::seat::RuleRead;
     use std::path::{Path, PathBuf};
@@ -626,6 +643,58 @@ pub(crate) mod tests {
         let matched = unwrapped(WRITE_SET_CMD.to_owned(), 0, String::new());
         assert_eq!(matched.secs, None, "撃つ process を持たない段は秒を持たない（0 と書かない）");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 検出線の形（4 つの穴・`.vessel.toml` と同じ字面）。
+    const DETECTION: &str = "cargo xtask mutants-diff --base {base} --jobs {jobs} --threads {threads} --teeth {teeth}";
+
+    /// 契約の verify 行の列から `{teeth}` を埋めた検出線（base `abc`・jobs 2・threads 3）。
+    fn filled(verify: &[&str]) -> String {
+        let owned: Vec<String> = verify.iter().map(|line| (*line).to_owned()).collect();
+        fill_holes(DETECTION, "abc", 2, 3, &teeth_of(&owned))
+    }
+
+    /// (a) verify 行 2 本（`--lib … foo_` / `--test e2e … bar_`）から `foo_,bar_` が置かれ、`{teeth}` の字面は残らない
+    /// （設計 gate-cost.md §34 約束 5）。他の 3 つの穴も同じ 1 本で埋まる。
+    #[test]
+    fn gate_fill_teeth_two_lines_join_their_words_with_a_comma() {
+        let line = filled(&[
+            "cargo nextest run -p scribe2 --lib --no-tests=fail foo_",
+            "cargo nextest run -p scribe2 --test e2e --no-tests=fail bar_",
+        ]);
+        assert_eq!(line, "cargo xtask mutants-diff --base abc --jobs 2 --threads 3 --teeth foo_,bar_");
+        assert!(!line.contains(TEETH_HOLE), "穴の字面が残らない: {line}");
+    }
+
+    /// (b) filter を持たない行（nextest でない行・filter 語の無い nextest 行）は飛ばされる（`-` や空の語を置かない）。
+    #[test]
+    fn gate_fill_teeth_lines_without_a_filter_are_skipped() {
+        let line = filled(&[
+            "cargo xtask check-facts",
+            "cargo nextest run -p scribe2 --lib --no-tests=fail foo_",
+            "cargo nextest run -p scribe2 --lib",
+            "git diff --quiet",
+        ]);
+        assert_eq!(line, "cargo xtask mutants-diff --base abc --jobs 2 --threads 3 --teeth foo_");
+    }
+
+    /// (c) 語が 0 本の周は `-`（道具の `--teeth -` = 空・空文字を置いて引数を欠かせない）。verify の列が空の周も同じ。
+    #[test]
+    fn gate_fill_teeth_zero_words_is_a_dash() {
+        assert_eq!(teeth_of(&[]), NO_TEETH);
+        assert_eq!(NO_TEETH, "-");
+        let line = filled(&["cargo xtask check-facts", "cargo build"]);
+        assert_eq!(line, "cargo xtask mutants-diff --base abc --jobs 2 --threads 3 --teeth -");
+    }
+
+    /// (d) 語の順は verify 行の宣言順（辞書順に並べ替えない・重ねて入れ替えると順も入れ替わる）。
+    #[test]
+    fn gate_fill_teeth_words_keep_the_declaration_order() {
+        let (zeta, alpha, mid) =
+            ("cargo nextest run -p scribe2 --lib zeta_", "cargo nextest run -p scribe2 --lib alpha_", "cargo nextest run -p scribe2 --lib mid_");
+        let (forward, backward) = ([zeta, alpha, mid], [mid, alpha, zeta]);
+        assert!(filled(&forward).ends_with("--teeth zeta_,alpha_,mid_"), "宣言順: {}", filled(&forward));
+        assert!(filled(&backward).ends_with("--teeth mid_,alpha_,zeta_"), "入れ替えた順: {}", filled(&backward));
     }
 
     /// 歯ごとの空の tmp dir（in-file の歯の置き場・env を読まないのは器の本体の規律〔C2.2〕）。
