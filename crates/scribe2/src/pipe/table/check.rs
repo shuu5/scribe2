@@ -11,7 +11,7 @@
 use super::super::closure::{closure, surface_closure, unresolved_names, ClosureError, Source};
 use super::super::declaration::{self, read_write_set, Basis, Ceiling, NewFilePolicy};
 use super::super::refuse::{covered, Refuse};
-use super::{read_rows, unreadable, Context, ContractRow, Finding, TableError, BEGIN, DESIGN_DIR, END};
+use super::{read_table, unreadable, Context, ContractRow, Finding, PromiseRow, TableError, BEGIN, DESIGN_DIR, END};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK};
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -47,6 +47,45 @@ pub fn check_table(doc: &str, rows: &[ContractRow], ids: &[&str], ctx: &Context<
         }
     }
     found.extend(cycle_findings(rows));
+    found.sort_by_key(|finding| finding.line);
+    found
+}
+
+/// 約束の行の検査（設計 §33・**全件・行番号の順**）: `of` が `ids`（同じ doc の全行の id）に無い約束の行と、親の行
+/// ごとの `n` の重複（2 本目の約束の行）と欠番（1 から数えた欠けの始まりの番号・親の行の最初の約束の行）。欄の形と
+/// 空の必須欄は parse の段（`read_table`）が名指し済み。
+pub fn check_promises(promises: &[PromiseRow], ids: &[&str]) -> Vec<Finding> {
+    let mut found: Vec<Finding> = promises
+        .iter()
+        .filter(|promise| !ids.contains(&promise.of.as_str()))
+        .map(|promise| Finding::table(TableError::PromiseOrphan { line: promise.line, of: promise.of.clone() }))
+        .collect();
+    for (index, promise) in promises.iter().enumerate() {
+        if promises.iter().take(index).any(|seen| seen.of == promise.of && seen.n == promise.n) {
+            let (of, n) = (promise.of.clone(), promise.n);
+            found.push(Finding::table(TableError::PromiseNumber { line: promise.line, of, n, duplicate: true }));
+        }
+    }
+    let mut parents: Vec<&str> = Vec::new();
+    for promise in promises {
+        if !parents.contains(&promise.of.as_str()) {
+            parents.push(&promise.of);
+        }
+    }
+    for parent in parents {
+        let own: Vec<&PromiseRow> = promises.iter().filter(|promise| promise.of == parent).collect();
+        let first = own.first().map_or(0, |promise| promise.line);
+        let numbers: BTreeSet<u64> = own.iter().map(|promise| promise.n).collect();
+        let mut last = 0_u64;
+        for n in numbers {
+            let next = last.saturating_add(1);
+            if n > next {
+                let of = parent.to_owned();
+                found.push(Finding::table(TableError::PromiseNumber { line: first, of, n: next, duplicate: false }));
+            }
+            last = n;
+        }
+    }
     found.sort_by_key(|finding| finding.line);
     found
 }
@@ -351,8 +390,21 @@ fn judge_doc(repo: &Path, doc: &str, ctx: &Context<'_>) -> (usize, Vec<Finding>)
         Ok(found) => found,
         Err(reason) => return (0, vec![Finding::table(unreadable(0, &reason))]),
     };
-    match read_rows(doc, &text) {
-        Ok(rows) => (rows.len(), check_table(&text, &rows, &ids_of(&rows), ctx)),
+    judge_text(doc, &text, ctx)
+}
+
+/// 読めた doc 1 本の本文の行数と findings（契約の行の検査と約束の行の検査を行番号の順に合わせる）。
+fn judge_text(doc: &str, text: &str, ctx: &Context<'_>) -> (usize, Vec<Finding>) {
+    match read_table(doc, text) {
+        Ok((rows, promises)) => {
+            let ids = ids_of(&rows);
+            let mut found = check_table(text, &rows, &ids, ctx);
+            if !promises.is_empty() {
+                found.extend(check_promises(&promises, &ids));
+                found.sort_by_key(|finding| finding.line);
+            }
+            (rows.len(), found)
+        }
         Err(errors) => (0, errors.into_iter().map(Finding::table).collect()),
     }
 }
@@ -387,8 +439,10 @@ pub(crate) fn read_all(repo: &Path, tracked: &[String], ext: &str) -> Vec<Source
 mod tests {
     // flip-check: moved s2-07l.374
 
-    use super::{check_table, ids_of, read_rows, requirement_ids, Context, ContractRow, BEGIN, END};
-    use crate::cli_outcome::RC_BROKEN;
+    use super::super::read_rows;
+    use super::super::tests::full_promise;
+    use super::{check_table, ids_of, judge_text, requirement_ids, Context, ContractRow, BEGIN, END};
+    use crate::cli_outcome::{RC_BROKEN, RC_REFUSED};
     use crate::pipe::closure::Source;
     use crate::pipe::refuse::Refuse;
     use std::collections::BTreeSet;
@@ -605,6 +659,51 @@ mod tests {
         assert!(rendered.contains("runner.denied_commands") && rendered.contains("git push --force"), "行 id と語列: {rendered}");
         let open = Context { denied: &[], ..closed };
         assert!(check_table(DOC, &[forced], &["a"], &open).is_empty(), "語列の無い文脈では通る（判定の出所は行の値）");
+    }
+
+    /// 約束の行の 3 形（親の行の無い `of`・`n` の欠番・`n` の重複）は `contracts check` の doc 1 本の判定で
+    /// `contract-table:promise-orphan` / `contract-table:promise-number` の 1 行ずつに行番号付きで名指され rc 1。
+    /// 欠陥の無い約束の行は 0 件で、行の数（`rows=`）に約束の行を数えない。
+    #[test]
+    fn contract_promise_parse_check_names_orphans_gaps_and_duplicates_one_line_each() {
+        let requirements = Ok(["FR1".to_owned()].into_iter().collect::<BTreeSet<String>>());
+        let (allowed, sources) = (["git".to_owned()], sources());
+        let tracked = ["src/kind.rs".to_owned(), "src/use.rs".to_owned()];
+        let ctx = Context {
+            allowed: &allowed,
+            denied: &[],
+            requirements: &requirements,
+            sources: &sources,
+            tracked: &tracked,
+            snapshots: &[],
+        };
+        let contract = "schema = 1\n\n[[contract]]\nid = \"a\"\ntitle = \"t\"\nreq = [\"FR1\"]\nsection = \"1\"\nwrite-set = [\"src/kind.rs\"]\nverify = [\"git status\"]\nsize = \"S\"\ndone = \"d\"\n";
+        let doc = |promises: &[String]| format!("# t\n\n## 1. 本文の在る節\n\n本文。\n\n{BEGIN}\n{contract}{}{END}\n", promises.concat());
+        let clean = doc(&[full_promise("a", 1, &[]), full_promise("a", 2, &[])]);
+        let (rows, found) = judge_text("docs/design/t.md", &clean, &ctx);
+        assert_eq!((rows, found.len()), (1, 0), "欠陥の無い約束の行は 0 件・行の数は契約の行だけ: {found:?}");
+        let broken = doc(&[
+            full_promise("zz", 1, &[]),
+            full_promise("a", 1, &[]),
+            full_promise("a", 1, &[]),
+            full_promise("a", 3, &[]),
+        ]);
+        let at: Vec<usize> =
+            broken.lines().enumerate().filter(|(_, line)| *line == "[[promise]]").map(|(index, _)| index + 1).collect();
+        let (_, found) = judge_text("docs/design/t.md", &broken, &ctx);
+        let rendered: Vec<String> = found.iter().map(|finding| finding.render("docs/design/t.md")).collect();
+        let line = |index: usize| at.get(index).copied().unwrap_or_default();
+        let want = vec![
+            format!("contracts: docs/design/t.md:{} contract-table:promise-orphan: [[promise]] の of zz が同じ doc の行 id に無い", line(0)),
+            format!("contracts: docs/design/t.md:{} contract-table:promise-number: 行 a の約束の n 2 が欠ける（n は 1 から連番）", line(1)),
+            format!("contracts: docs/design/t.md:{} contract-table:promise-number: 行 a の約束の n 1 が重複する", line(2)),
+        ];
+        assert_eq!(rendered, want, "3 形を 1 行ずつ行番号の順に名指す");
+        assert!(found.iter().all(|finding| finding.rc() == RC_REFUSED), "前提違反の rc 1: {rendered:?}");
+        let empty = doc(&[full_promise("a", 1, &[("text", "\"\"")])]);
+        let (rows, found) = judge_text("docs/design/t.md", &empty, &ctx);
+        let labels: Vec<String> = found.iter().map(|finding| finding.refuse.label()).collect();
+        assert_eq!((rows, labels), (0, vec!["contract-table:unreadable".to_owned()]), "空の必須欄は既存の欄検査で名指す");
     }
 
     /// 要件面を読めない周・閉包の入力を読めない周は、黙って通さず行ごとに `unreadable`（rc 2）で名指す。

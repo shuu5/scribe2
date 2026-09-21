@@ -80,3 +80,50 @@ shape = "list"
 name = "opens"
 need = "optional"
 shape = "list"
+
+# 約束の行 [[promise]] の欄（正本は同じ file の PROMISE_FIELDS）
+
+[[promise-field]]
+promise-name = "of"
+promise-need = "required"
+promise-shape = "text"
+
+[[promise-field]]
+promise-name = "n"
+promise-need = "required"
+promise-shape = "number"
+
+[[promise-field]]
+promise-name = "text"
+promise-need = "required"
+promise-shape = "text"
+
+[[promise-field]]
+promise-name = "files"
+promise-need = "required"
+promise-shape = "list"
+
+[[promise-field]]
+promise-name = "symbols"
+promise-need = "optional"
+promise-shape = "list"
+
+[[promise-field]]
+promise-name = "teeth"
+promise-need = "required"
+promise-shape = "list"
+
+[[promise-field]]
+promise-name = "place"
+promise-need = "optional"
+promise-shape = "text"
+
+[[promise-field]]
+promise-name = "fixture"
+promise-need = "required"
+promise-shape = "text"
+
+[[promise-field]]
+promise-name = "expect"
+promise-need = "required"
+promise-shape = "text"

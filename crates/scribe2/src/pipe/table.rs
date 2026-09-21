@@ -18,6 +18,11 @@
 //! 1 と 3 の群は子 module（`table/parse.rs` = 区間の抜き出しと TOML の型付け・`table/check.rs` = 表の検査と要件面と
 //! CLI の駆動）に置き、本 file は 2 と findings の語彙（[`TableError`] / [`Finding`] / [`Context`]）を持つ。呼び手の
 //! `use` は下の再 export を通る（`s2-07l.374`・設計 §15）。
+//!
+//! 約束の行 `[[promise]]`（設計 §33・行 af）は契約の行の子行で、欄の正本は [`PROMISE_FIELDS`]（9 欄）・型は
+//! [`PromiseRow`]。区間の中の約束の行は parse の段で契約の行と分けて読み（rules manifest の面は `[[contract]]` だけを
+//! 受けるので、約束の行の区間は契約の本文から抜いて値の層〔`scalar` / `list`〕だけを共有する）、`of` の親の行の実在と
+//! `n` の連番は表の検査の段が [`TableError::PromiseOrphan`] / [`TableError::PromiseNumber`] で名指す。
 
 use super::closure::{ClosureError, Source};
 use super::refuse::Refuse;
@@ -29,8 +34,10 @@ use std::collections::BTreeSet;
 mod check;
 mod parse;
 
-pub use check::{check_table, requirement_ids};
-pub use parse::{contract_id, find_row, form_of, parse_pointer, read_rows, Form, Pointer, PointerError};
+pub use check::{check_promises, check_table, requirement_ids};
+pub use parse::{
+    contract_id, find_row, form_of, parse_pointer, promises_of, read_rows, read_table, Form, Pointer, PointerError,
+};
 pub(crate) use check::{check_repo, read, read_all, tracked_files};
 
 /// 区間の始まりの行（CLAUDE.md の憲法区間と同じ marker 形・行全体が marker の行だけを数える）。
@@ -38,6 +45,9 @@ pub const BEGIN: &str = "<!-- contracts:begin -->";
 
 /// 区間の終わりの行。
 pub const END: &str = "<!-- contracts:end -->";
+
+/// 約束の行の見出し（契約の行の子行・top-level の array of tables・設計 §33）。
+pub const PROMISE: &str = "[[promise]]";
 
 /// 契約表を置く設計 doc の dir（repo 相対・直下の `*.md` が `contracts check` の母集団）。
 pub const DESIGN_DIR: &str = "docs/design/";
@@ -68,13 +78,15 @@ impl Need {
     }
 }
 
-/// 欄の値の形（TOML subset の値のうち契約表が使う 2 つ）。
+/// 欄の値の形（TOML subset の値のうち契約表が使う 3 つ）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shape {
     /// 空でない文字列。
     Text,
     /// 文字列の配列。
     List,
+    /// 1 以上の整数（約束の行の `n`）。
+    Number,
 }
 
 impl Shape {
@@ -83,6 +95,7 @@ impl Shape {
         match self {
             Self::Text => "text",
             Self::List => "list",
+            Self::Number => "number",
         }
     }
 }
@@ -118,6 +131,45 @@ pub const FIELDS: &[Field] = &[
     Field { name: "classes", need: Need::Optional, shape: Shape::List },
     Field { name: "opens", need: Need::Optional, shape: Shape::List },
 ];
+
+/// 約束の行 `[[promise]]` の欄の全体（**正本**・宣言順が `contracts schema` の描く順・設計 §33 の 9 欄）。`place` は
+/// base に無い歯の名の周だけ要る（受付の側の判定）ので、表の形としては任意。
+pub const PROMISE_FIELDS: &[Field] = &[
+    Field { name: "of", need: Need::Required, shape: Shape::Text },
+    Field { name: "n", need: Need::Required, shape: Shape::Number },
+    Field { name: "text", need: Need::Required, shape: Shape::Text },
+    Field { name: "files", need: Need::Required, shape: Shape::List },
+    Field { name: "symbols", need: Need::Optional, shape: Shape::List },
+    Field { name: "teeth", need: Need::Required, shape: Shape::List },
+    Field { name: "place", need: Need::Optional, shape: Shape::Text },
+    Field { name: "fixture", need: Need::Required, shape: Shape::Text },
+    Field { name: "expect", need: Need::Required, shape: Shape::Text },
+];
+
+/// 約束の行 1 つ（欄は [`PROMISE_FIELDS`]・任意の欄の「無い」は空）。親の行は `of` の行 id で引く（[`promises_of`]）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromiseRow {
+    /// 行の見出し（`[[promise]]`）の doc 上の行番号。
+    pub line: u64,
+    /// 親の行 id（同じ doc の `[[contract]]` の `id`）。
+    pub of: String,
+    /// 親の行の中の番号（1 から連番）。
+    pub n: u64,
+    /// 約束の 1 文。
+    pub text: String,
+    /// 触る file の列（`+` `-` `~` の接頭辞は write-set の項目と同じ）。
+    pub files: Vec<String>,
+    /// 名指す識別子の列（base に無い新設は `+` を前置）。
+    pub symbols: Vec<String>,
+    /// 歯の完全名の列。
+    pub teeth: Vec<String>,
+    /// 歯の置き場の file（空 = base の歯の名で解く）。
+    pub place: String,
+    /// 歯の fixture の形の 1 文。
+    pub fixture: String,
+    /// 歯が観測する結果の 1 文。
+    pub expect: String,
+}
 
 /// 契約表の 1 行（欄は [`FIELDS`]・任意の列の「無い」は空）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -236,6 +288,25 @@ pub enum TableError {
         /// 書かれていた名。
         name: String,
     },
+    /// 約束の行の `of` が同じ doc の行 id に無い（約束の行の見出しの行）。
+    PromiseOrphan {
+        /// 行番号。
+        line: u64,
+        /// 書かれていた親の行 id。
+        of: String,
+    },
+    /// 約束の行の `n` が親の行の中で重複するか欠ける（1 から連番でない）。重複は 2 本目の約束の行・欠番は親の行の
+    /// 最初の約束の行に置く。
+    PromiseNumber {
+        /// 行番号。
+        line: u64,
+        /// 親の行 id。
+        of: String,
+        /// 重複した番号か、欠けた番号。
+        n: u64,
+        /// 重複（真）か欠番（偽）か。
+        duplicate: bool,
+    },
 }
 
 impl TableError {
@@ -252,7 +323,9 @@ impl TableError {
             | Self::VerifyForm { line, .. }
             | Self::DependsUnresolved { line, .. }
             | Self::DependsCycle { line, .. }
-            | Self::SurfaceUnknown { line, .. } => line,
+            | Self::SurfaceUnknown { line, .. }
+            | Self::PromiseOrphan { line, .. }
+            | Self::PromiseNumber { line, .. } => line,
         }
     }
 
@@ -270,6 +343,8 @@ impl TableError {
             Self::DependsUnresolved { .. } => "depends-unresolved",
             Self::DependsCycle { .. } => "depends-cycle",
             Self::SurfaceUnknown { .. } => "surface-unknown",
+            Self::PromiseOrphan { .. } => "promise-orphan",
+            Self::PromiseNumber { .. } => "promise-number",
         }
     }
 
@@ -294,6 +369,11 @@ impl TableError {
                 format!("depends が輪を成す（{}{back}）", cycle.join(" → "))
             }
             Self::SurfaceUnknown { ref name, .. } => ClosureError::SurfaceUnknown { name: name.clone() }.reason(),
+            Self::PromiseOrphan { ref of, .. } => format!("{PROMISE} の of {of} が同じ doc の行 id に無い"),
+            Self::PromiseNumber { ref of, n, duplicate: true, .. } => format!("行 {of} の約束の n {n} が重複する"),
+            Self::PromiseNumber { ref of, n, duplicate: false, .. } => {
+                format!("行 {of} の約束の n {n} が欠ける（n は 1 から連番）")
+            }
         }
     }
 
@@ -369,6 +449,18 @@ pub fn render_schema() -> Vec<String> {
             format!("shape = \"{}\"", field.shape.as_str()),
         ]);
     }
+    // 約束の行の欄は別の表・別の key で描く（`[[field]]` の `name` / `need` / `shape` は契約の行の欄だけ＝xtask の
+    // contracts-schema と FIELDS の照合の母集団を変えない）。
+    lines.extend([String::new(), format!("# 約束の行 {PROMISE} の欄（正本は同じ file の PROMISE_FIELDS）")]);
+    for field in PROMISE_FIELDS {
+        lines.extend([
+            String::new(),
+            "[[promise-field]]".to_owned(),
+            format!("promise-name = \"{}\"", field.name),
+            format!("promise-need = \"{}\"", field.need.as_str()),
+            format!("promise-shape = \"{}\"", field.shape.as_str()),
+        ]);
+    }
     lines
 }
 
@@ -376,7 +468,7 @@ pub fn render_schema() -> Vec<String> {
 mod tests {
     // flip-check: moved s2-07l.374
 
-    use super::{read_rows, render_schema, Need, Shape, TableError, FIELDS};
+    use super::{read_rows, read_table, render_schema, Need, Shape, TableError, FIELDS, PROMISE_FIELDS};
     use crate::cli_outcome::{RC_BROKEN, RC_REFUSED};
 
     /// [`TableError`] の全 variant の名（宣言順）。payload 付きの enum は `as` で判別子へ写せないので、名前の slice
@@ -393,6 +485,8 @@ mod tests {
         "depends-unresolved",
         "depends-cycle",
         "surface-unknown",
+        "promise-orphan",
+        "promise-number",
     ];
 
     /// 宣言順に 1 つずつ組んだ全 variant（行番号は 1 から順）。
@@ -410,6 +504,8 @@ mod tests {
             TableError::DependsUnresolved { line: 9, id: text("z") },
             TableError::DependsCycle { line: 10, cycle: vec![text("a"), text("b")] },
             TableError::SurfaceUnknown { line: 11, name: text("nope_external_form") },
+            TableError::PromiseOrphan { line: 12, of: text("zz") },
+            TableError::PromiseNumber { line: 13, of: text("a"), n: 2, duplicate: false },
         ]
     }
 
@@ -419,6 +515,7 @@ mod tests {
         let found = samples();
         let names: Vec<&str> = found.iter().map(TableError::as_str).collect();
         assert_eq!(names, TABLE_ERRORS, "名前の slice は宣言順（母集団 {} 値）", TABLE_ERRORS.len());
+        assert_eq!(TABLE_ERRORS.len(), 13, "母集団は 13 値");
         for (index, error) in found.iter().enumerate() {
             assert_eq!(error.line(), index as u64 + 1, "{} は行番号を持つ", error.as_str());
             assert!(!error.reason().is_empty() && !error.reason().contains('\n'), "{} の理由は 1 行", error.as_str());
@@ -427,8 +524,14 @@ mod tests {
         }
         let cycle = found.get(9).map(TableError::reason).unwrap_or_default();
         assert!(cycle.contains("a → b → a"), "輪は id を順に名乗り最初へ戻る: {cycle}");
-        let surface = found.last().map(TableError::reason).unwrap_or_default();
+        let surface = found.get(10).map(TableError::reason).unwrap_or_default();
         assert!(surface.contains("nope_external_form"), "未知の外形の名を名乗る: {surface}");
+        let orphan = found.get(11).map(TableError::reason).unwrap_or_default();
+        assert!(orphan.contains("of zz"), "親の無い of を名乗る: {orphan}");
+        let gap = found.get(12).map(TableError::reason).unwrap_or_default();
+        assert!(gap.contains("行 a の約束の n 2 が欠ける"), "欠番は親の行 id と番号を名乗る: {gap}");
+        let twice = TableError::PromiseNumber { line: 1, of: "a".to_owned(), n: 1, duplicate: true }.reason();
+        assert!(twice.contains("行 a の約束の n 1 が重複する"), "重複は欠番と別の字面: {twice}");
     }
 
     /// 全欄を持つ `.toml` の 1 行（`over` の欄だけ値を差し替える）。
@@ -441,6 +544,7 @@ mod tests {
                 Shape::Text if field.name == "section" => "\"1\"".to_owned(),
                 Shape::Text => "\"v\"".to_owned(),
                 Shape::List => "[\"v\"]".to_owned(),
+                Shape::Number => "1".to_owned(),
             };
             let value = over.iter().find(|(name, _)| *name == field.name).map_or(default, |(_, found)| (*found).to_owned());
             text.push_str(&format!("{} = {value}\n", field.name));
@@ -448,9 +552,30 @@ mod tests {
         text
     }
 
+    /// 全欄を持つ約束の行 1 つ（`of` = `of`・`n` = `n`・`over` の欄だけ値を差し替え、値が空の字面の欄は書かない）。
+    /// 子 module の歯も同じ fixture を読む。
+    pub(super) fn full_promise(of: &str, n: u64, over: &[(&str, &str)]) -> String {
+        let mut text = "\n[[promise]]\n".to_owned();
+        for field in PROMISE_FIELDS {
+            let default = match (field.name, field.shape) {
+                ("of", _) => format!("\"{of}\""),
+                ("n", _) => n.to_string(),
+                (_, Shape::Text) => format!("\"{} の値\"", field.name),
+                (_, Shape::List) => format!("[\"{} の値\"]", field.name),
+                (_, Shape::Number) => "1".to_owned(),
+            };
+            let value = over.iter().find(|(name, _)| *name == field.name).map_or(default, |(_, found)| (*found).to_owned());
+            if !value.is_empty() {
+                text.push_str(&format!("{} = {value}\n", field.name));
+            }
+        }
+        text
+    }
+
     /// 欄の列は宣言順に 16（必須 7・任意 9）で、`contracts schema` はその順に描く。欄の形は reader が強制する
     /// （文字列の欄に配列・配列の欄に文字列を書くと、その欄を名指して断る）。`write-set` は任意（契約 (h)・§3
-    /// 「write-set の導出」: 無い行は受付が導出値を写す）。
+    /// 「write-set の導出」: 無い行は受付が導出値を写す）。約束の行の欄は別の列 9（必須 7・任意 2）で、生成物は
+    /// 契約の行の欄の後に別の表・別の key で描く（`[[field]]` の母集団は 16 のまま）。
     #[test]
     fn table_fields_pin_the_schema_columns_and_the_reader_enforces_their_shapes() {
         let names: Vec<&str> = FIELDS.iter().map(|field| field.name).collect();
@@ -466,16 +591,54 @@ mod tests {
         let listed: Vec<&str> =
             rendered.iter().filter_map(|line| line.strip_prefix("name = \"")?.strip_suffix('"')).collect();
         assert_eq!(listed, names, "生成物は欄の宣言順");
+        assert_eq!(FIELDS.len(), 16, "契約の行の欄は 16");
         assert_eq!(rendered.get(1).map(String::as_str), Some("schema = 1"), "生成物も schema = 1 を持つ");
         assert_eq!(read_rows("t.toml", &full_row(&[])).map(|rows| rows.len()), Ok(1), "全欄の行は読める");
         for field in FIELDS {
-            let wrong = match field.shape {
-                Shape::Text => "[\"x\"]",
-                Shape::List => "\"x\"",
-            };
-            let errors = read_rows("t.toml", &full_row(&[(field.name, wrong)])).expect_err("形の違う欄は断る");
+            let errors = read_rows("t.toml", &full_row(&[(field.name, wrong(field.shape))])).expect_err("形の違う欄は断る");
             let named = errors.iter().any(|error| error.reason().starts_with(&format!("{} は", field.name)));
             assert!(named, "{} の形を名指す: {errors:?}", field.name);
+        }
+        promise_fields_are_pinned(&rendered);
+    }
+
+    /// 欄の形に合わない値の字面（文字列と数の欄に配列・配列の欄に文字列）。
+    fn wrong(shape: Shape) -> &'static str {
+        match shape {
+            Shape::Text | Shape::Number => "[\"x\"]",
+            Shape::List => "\"x\"",
+        }
+    }
+
+    /// 約束の行の欄は宣言順に 9（必須 7・任意 2）で、生成物は契約の行の欄の後に `[[promise-field]]` の表で描く。
+    /// 欄の形は reader が強制する（契約の行と同じ字面で欄を名指す）。
+    fn promise_fields_are_pinned(rendered: &[String]) {
+        let promised: Vec<&str> = PROMISE_FIELDS.iter().map(|field| field.name).collect();
+        let want = ["of", "n", "text", "files", "symbols", "teeth", "place", "fixture", "expect"];
+        assert_eq!(promised, want, "約束の行の欄の宣言順（9）");
+        assert_eq!(PROMISE_FIELDS.iter().filter(|field| field.need == Need::Required).count(), 7, "必須 7・任意 2");
+        let promise_optional: Vec<&str> =
+            PROMISE_FIELDS.iter().filter(|field| field.need == Need::Optional).map(|field| field.name).collect();
+        assert_eq!(promise_optional, ["symbols", "place"], "任意は symbols と place");
+        let columns: Vec<String> = rendered
+            .iter()
+            .filter_map(|line| line.strip_prefix("promise-name = \"")?.strip_suffix('"'))
+            .map(str::to_owned)
+            .collect();
+        assert_eq!(columns, want, "生成物に約束の行の 9 欄が宣言順で載る");
+        let shapes: Vec<&str> =
+            rendered.iter().filter_map(|line| line.strip_prefix("promise-shape = \"")?.strip_suffix('"')).collect();
+        assert_eq!(shapes.get(1), Some(&"number"), "n は数の形");
+        let last_field = rendered.iter().rposition(|line| line == "[[field]]");
+        let first_promise = rendered.iter().position(|line| line == "[[promise-field]]");
+        assert!(last_field < first_promise, "約束の行の欄は契約の行の欄の後");
+        let base = full_row(&[("id", "\"a\"")]);
+        assert_eq!(read_table("t.toml", &format!("{base}{}", full_promise("a", 1, &[]))).map(|(_, found)| found.len()), Ok(1));
+        for field in PROMISE_FIELDS {
+            let errors = read_table("t.toml", &format!("{base}{}", full_promise("a", 1, &[(field.name, wrong(field.shape))])))
+                .expect_err("形の違う約束の欄は断る");
+            let named = errors.iter().any(|error| error.reason().starts_with(&format!("{} は", field.name)));
+            assert!(named, "約束の行の {} の形を名指す: {errors:?}", field.name);
         }
     }
 }
