@@ -30,8 +30,8 @@
 | 無い | 無い | 違反（形の無い bead・epic と裁定の bead は除く） |
 
    memo → 契約 の遷移は「acceptance に pointer 行を書き、label を外し、出所の memo へ `discovered-from` を張る」の 3 書きで、席の手番（bdw）。器は写さない（台帳の書きは close の 1 種のまま・C15）。
-4. **台帳 lint の項目を 4 つ足す**（行 e の 3 欠陥の後ろ・同じ 1 行に件数と母集団と id）: (iv) memo の 4 節のどれかが無い bead／(v) 4 象限の違反 2 形の bead／(vi) 契約で、pointer の先の § が memo の id を名指すのに `discovered-from` の edge が無い bead／(viii) `discovered-from` で辿れる契約が全部 closed なのに open な memo（下の 10 の取りこぼし）。読めない周は行 e と同じく件数 0 に倒さず測れていない形で出す（C10 / NFR4）。
-5. **台帳は契約表から生成する**: xtask の口が全設計 doc の契約表を読み、**未着地の行**（write-set の `+` の file が tracked に無い行・§33 の `symbols` の `+` も同じ読み）ごとに bead の plan（title = 行の title・acceptance = pointer 行・parent = 口の引数 1 つで渡す epic id〔本 repo は program の epic 1 本・doc ごとの対応表は持たない〕・edge = 行の `depends` → `blocks`・§ が名指す memo → `discovered-from`・label = doc 名の `doc:` と size の `size:`）を `bd create --graph` の JSON で標準出力に出す。**apply は席の手番**（bdw で撃つ・器は台帳を書かない）。台帳側の drift は lint の (vii): 未着地の行で pointer を持つ open の bead が無い行の件数と母集団。id は bd の採番なので、行 ↔ bead の対応は acceptance の pointer 行で引く（新しい key を作らない）。
+4. **台帳 lint の項目を 5 つ足す**（行 e の 3 欠陥の後ろ・同じ 1 行に件数と母集団と id・doctor が唯一の口〔FR51〕）: (iv) memo の 4 節のどれかが無い bead／(v) 4 象限の違反 2 形の bead／(vi) 契約で、pointer の先の § の本文か bead の本文（description と notes）が memo の id を名指すのに `discovered-from` の edge が無い bead（§ は行 e の pointer の読み手が既に開く doc の本文・memo の id は label `intake:memo` の bead の id と字面で照合）／(vii) 契約表の未着地の行（下の 5 の弁別）のうち pointer を持つ open の bead が無い行（台帳と契約表の drift）／(viii) `discovered-from` で辿れる契約が全部 closed なのに open な memo（下の 10 の取りこぼし）。読めない周は行 e と同じく件数 0 に倒さず測れていない形で出す（C10 / NFR4）。
+5. **台帳は契約表から生成する**: xtask の口が全設計 doc の契約表を読み、**未着地の行**（write-set の `+` の file が tracked に無い行・§33 の `symbols` の `+` も同じ読み）ごとに bead の plan（title = 行の title・acceptance = pointer 行・parent = 口の引数 1 つで渡す epic id〔本 repo は program の epic 1 本・doc ごとの対応表は持たない〕・edge = 行の `depends` → `blocks`・§ が名指す memo → `discovered-from`・label = doc 名の `doc:` と size の `size:`）を `bd create --graph` の JSON で標準出力に出す。**apply は席の手番**（bdw で撃つ・器は台帳を書かない）。xtask は台帳を読まない（CI は台帳に届かない・plan は行だけから出す）。台帳側の drift は doctor の lint の (vii)（上の 4）が測る。id は bd の採番なので、行 ↔ bead の対応は acceptance の pointer 行で引く（新しい key を作らない）。
 6. **棚上げは `--defer`**（label や notes の「棚上げ」の語を規則にしない）。`bd ready` が隠すので列の観測（dispatcher.md §6）と整合する。
 7. **見積は `--estimate`（分）**を size から写す（S / M / L の分の値は便の実測の中央値で、値の正本は rules 行〔後続・C5〕）。Jev の較正の材料（見積と実測の差）はここから取る。
 8. **memo の入口は器の口 1 つ**（これから起きる memo の形を起票の時点で決める・回り続ける周のため）: 器の read-only の口が memo の plan（bd の create の引数と本文の 4 節）を標準出力に出し、席が bdw で撃つ。出所は 2 つの形だけ: (a) **便の終端から**（`--run <id>`）— 便の終端の event（gate / 審査の FAIL・INCONCLUSIVE・Failed・Questioned）を読み、`### 出所` に run id と段と kind を、`### 観測` に verdict の evidence と at を器が写す（人が写さない・C10）。`### 候補` と `### 昇格条件` は空の見出しで出し、席が埋める。(b) **user の要望から**（`--from user`）— `### 出所` に「user 逐語は本 bead の notes」の 1 行と日付を置き、席が逐語を notes に写す。label `intake:memo`・parent の epic（引数）・関連 bead（引数の列 → `relates-to`）も plan に載る。器は台帳へ書かない（ADR-0045 §2）。
@@ -48,11 +48,11 @@ memo か契約かを「label が在るか」と「受入条件に設計の 1 行
 
 ## 6. 歯
 
-- 行 a（`ledger_form_` 接頭辞・判定は行 a の write-set の `+` の file に純関数で・doctor の行は既存の口に 1 行）: (a) 4 節の欠けを**件数を違えて**持つ fixture（出所なし 1・観測なし 2・候補なし 0・昇格条件なし 3）で件数と母集団と id が出る／(b) 4 象限の違反 2 形が別々に数えられ、epic と裁定の bead が母集団から外れる／(c) `discovered-from` の無い契約が § の memo の名指しから数えられる／(d) 読めない周は測れていない形の行（件数 0 でない）／(e) 外形 snapshot（新しい doctor の 1 行）。
+- 行 a（`ledger_form_` 接頭辞・判定は行 a の write-set の `+` の file に純関数で・doctor の行は既存の口に 1 行）: (a) 4 節の欠けを**件数を違えて**持つ fixture（出所なし 1・観測なし 2・候補なし 0・昇格条件なし 3）で件数と母集団と id が出る／(b) 4 象限の違反 2 形が別々に数えられ、epic と裁定の bead が母集団から外れる／(c) `discovered-from` の無い契約が § の本文の名指しと bead の本文の名指しの両方から数えられ、どちらにも名指しの無い契約は数えられない／(d) 読めない周は測れていない形の行（件数 0 でない）／(e) 外形 snapshot（新しい doctor の 1 行）／(f) drift (vii): 未着地の行 2 本のうち pointer を持つ open の bead が 1 本だけの fixture で 1 と母集団 2 が出る（契約表は toy repo の doc・台帳は偽の client）。
 - 行 c（`ledger_memo_plan_` 接頭辞・置き場は行 c の write-set の `+` の歯の file）: (a) 便の終端の run dir（verdict.json / review.json / 問いの record）から `### 出所` と `### 観測` が写り、`### 候補` と `### 昇格条件` が空の見出しで出る（終端でない run は断る）／(b) `--from user` の plan が出所の 1 行と日付を持ち観測が空／(c) label と parent と `relates-to` の引数が plan に載る／(d) 出力は標準出力だけで台帳に 1 件も書かない（偽の bd が呼ばれない）／(e) usage の外形 snapshot。
 - 行 d（`hook_memo_guard_` 接頭辞・置き場は既存の hook の歯の file）: (a) `[memo]` の title か `intake:memo` の label を持つ create で body-file の 4 節が揃えば通り、1 つでも欠ければ閉じた理由で止まる／(b) acceptance に pointer 行を持つ create が `intake:memo` を持てば止まる／(c) body-file が無い・開けない周は止まる／(d) memo でも契約でもない create（epic・裁定）は従来どおり通る／(e) 極性一覧の snapshot に guard が 1 つ増え、guard の総数を pin する歯が新しい母集団で緑。
 - 着地の終端の memo の close（行 e の後続・[contract-source.md](./contract-source.md) §5 の終端に 1 段足す・本 doc の行にはまだ入れない）: 行 e が land した後に contract-source.md の行として起こす（write-set が行 e の `+` の file を含むため・§8）。
-- 行 b（`ledger_plan_` 接頭辞・xtask）: (a) 未着地の行だけが plan に載り着地済みの行は載らない（`+` の file が tracked に在る行 = 着地済み）／(b) `depends` が `blocks` に・§ の memo の名指しが `discovered-from` に写る／(c) title と acceptance の pointer 行と label が行から写る／(d) epic id は口の引数 1 つで、無い周は plan を出さず rc 1（fail-closed・既定に倒さない）／(e) drift (vii) の件数と母集団（bd の JSON を偽の client で与える）。
+- 行 b（`ledger_plan_` 接頭辞・xtask）: (a) 未着地の行だけが plan に載り着地済みの行は載らない（`+` の file が tracked に在る行 = 着地済み）／(b) `depends` が `blocks` に・§ の memo の名指しが `discovered-from` に写る／(c) title と acceptance の pointer 行と label が行から写る／(d) epic id は口の引数 1 つで、無い周は plan を出さず rc 1（fail-closed・既定に倒さない）／(e) 台帳を 1 度も読まない（PATH の先頭に置いた偽の bd が呼ばれない）。
 
 ## 7. 却下案
 
@@ -71,23 +71,23 @@ schema = 1
 
 [[contract]]
 id = "a"
-title = "台帳 lint の項目 4 つ — memo の 4 節の欠け・field の 4 象限の違反 2 形・§ が名指す memo への discovered-from の無い契約・辿れる契約が全部 closed の open な memo を、件数と母集団と id で doctor の 1 行に出す"
+title = "台帳 lint の項目 5 つ — memo の 4 節の欠け・field の 4 象限の違反 2 形・§ か本文が名指す memo への discovered-from の無い契約・契約表の未着地の行と台帳の drift・辿れる契約が全部 closed の open な memo を、件数と母集団と id で doctor の 1 行に出す"
 req = ["FR51"]
 section = "3"
 write-set = ["+crates/scribe2/src/ledger/form.rs", "crates/scribe2/src/ledger/mod.rs", "crates/scribe2/src/seat/ledger.rs", "crates/scribe2/src/main.rs", "crates/scribe2/src/snapshots/scribe2__tests__doctor_external_form.snap", "+crates/scribe2/src/snapshots/scribe2__tests__ledger_form_doctor_external_form.snap", "+crates/scribe2/tests/e2e/ledger_form.rs", "crates/scribe2/tests/e2e/main.rs"]
 verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail ledger_form_", "cargo nextest run -p scribe2 --bin scribe2 --no-tests=fail ledger_form_"]
 size = "M"
-done = "(1) doctor の項目に台帳の形の 1 行が増え、偽の台帳 client の出力で memo の 4 節の欠け（出所なし 1・観測なし 2・候補なし 0・昇格条件なし 3）と 4 象限の違反 2 形と discovered-from の無い契約と辿れる契約が全部 closed の open な memo の件数が母集団と同じ行に出て、欠陥の bead の id が種類ごとに名指される (2) epic と裁定の bead は 4 象限の母集団から外れる (3) 欠陥 0 の周も 0 と母集団が出て行が消えない (4) client が起動できない・rc ≠ 0・出力が壊れた周は件数 0 に倒れず測れていない形の行が出る (5) 判定は Issue の label と acceptance と description と dependencies だけを読む純関数で、台帳の書きの口は増えない"
+done = "(1) doctor の項目に台帳の形の 1 行が増え、偽の台帳 client の出力で memo の 4 節の欠け（出所なし 1・観測なし 2・候補なし 0・昇格条件なし 3）と 4 象限の違反 2 形と § か本文が名指す memo への discovered-from の無い契約と契約表の未着地の行のうち pointer を持つ open の bead が無い行（drift・行の id で名指す）と辿れる契約が全部 closed の open な memo の件数が母集団と同じ行に出て、欠陥の bead の id が種類ごとに名指される (2) epic と裁定の bead は 4 象限の母集団から外れる (3) 欠陥 0 の周も 0 と母集団が出て行が消えない (4) client が起動できない・rc ≠ 0・出力が壊れた周は件数 0 に倒れず測れていない形の行が出る (5) 判定は Issue の label と acceptance と description と notes と dependencies と、pointer の先の § の本文（行 e の読み手が開く doc）と契約表の行だけを読む純関数で、台帳の書きの口は増えない"
 
 [[contract]]
 id = "b"
-title = "xtask の口 — 全設計 doc の契約表の未着地の行から bd create --graph の plan JSON を出し、drift（pointer を持つ open の bead が無い未着地の行）を件数と母集団で名指す"
-req = ["FR47", "FR51"]
+title = "xtask の口 — 全設計 doc の契約表の未着地の行から bd create --graph の plan JSON を出す（台帳は読まない・drift は doctor の lint の側）"
+req = ["FR47"]
 section = "3"
 write-set = ["+crates/xtask/src/ledger_plan.rs", "crates/xtask/src/main.rs"]
 verify = ["cargo nextest run -p xtask --no-tests=fail ledger_plan_"]
 size = "M"
-done = "(1) 未着地の行（write-set か symbols の + の file が tracked に無い行）だけが plan に載り、着地済みの行は載らない (2) plan の 1 件は title・acceptance の pointer 行・引数の epic id の parent・doc 名と size の label を行から写し、depends が blocks の edge に、§ が名指す memo の id が discovered-from の edge に写る (3) epic id の引数が無い周は plan を出さず rc 1 (4) 偽の台帳 JSON を与えると drift の件数と母集団が出て、0 件の周も母集団が出る (5) 出力は標準出力の JSON 1 つで、台帳には 1 件も書かない"
+done = "(1) 未着地の行（write-set か symbols の + の file が tracked に無い行）だけが plan に載り、着地済みの行は載らない (2) plan の 1 件は title・acceptance の pointer 行・引数の epic id の parent・doc 名と size の label を行から写し、depends が blocks の edge に、§ が名指す memo の id が discovered-from の edge に写る (3) epic id の引数が無い周は plan を出さず rc 1 (4) 台帳を 1 度も読まず書かない（PATH の先頭の偽の bd が 1 回も呼ばれない） (5) 出力は標準出力の JSON 1 つ"
 
 [[contract]]
 id = "c"
