@@ -370,6 +370,7 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
   3. `turn_in` は、列の便のうち `turn:taken` を持つ便が在れば、**最新の** `turn:taken` の ts（同時刻は run id の辞書順）の 1 本だけを先頭とする（自分なら `First`・他なら `After`）。`turn:taken` を持つ便が 1 本も無ければ従来どおり鍵の順。
   4. 列を離れた便（終端・worktree 無し・verdict が PASS でない）の `turn:taken` は数えない＝戻ってきた便は番を持たない側から数え直す。
   5. `Queued` に導出の field を 1 つ足す＝その便の最新の `turn:taken` の ts（無ければ `None`）。`turn_in` が pure である性質と `Turn` の閉じた 3 値は不変。
+- 実装の読み（行 p の着地時）: (4) の「戻ってきた便」は log から導く——`turn:taken` の後に `verdict:` が PASS でない `Gated` の記帳が在る便は field が `None`（撃ち直しの `verdict:PASS` と `stale:` は消さない）。`turn_in` は列の面（終端でない ∧ worktree 在り ∧ verdict が PASS）に居る便の field だけを数える。番待ちの間に列の先頭が自分を着地 / 終端させた便（§40）は段が終端なので記さない（`Gated` の記帳で終端の段を上書きしない）。番を取った後に断る周（stale base・汚れた木・`rebase-empty`）の「event を書かない」歯は `turn:taken` の 1 行を除いて数える。
 - 触らない: 鍵（`gated_at`＝最初の `Gated` の ts）の定義・stale base の判定・`await_turn` の待ち（唯一の wait）・`Turn` の variant の数。
 - 却下: 撃ち直しの後に番を読み直す（払う側が入れ替わるだけで 1 周の損失は消えない）／受容する（dispatcher で便が増えると追い抜きの頻度が上がる）。
 

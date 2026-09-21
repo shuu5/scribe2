@@ -5,7 +5,7 @@
 
 use super::gate::Verdict;
 use super::land::{verdict_of, Land, MAIN_REF};
-use super::{git_line, git_ok, worktree_path};
+use super::{emit, git_line, git_ok, worktree_path, Emit};
 use crate::fleet::store;
 use crate::fleet::{replay, Completion, Event, EventKind, Run, Stage, State, Timeout};
 use std::collections::BTreeMap;
@@ -28,7 +28,16 @@ pub struct Queued {
     pub gated_at: Option<String>,
     /// 便の worktree が実在するか（retire 済み・move 済みは偽）。
     pub worktree: bool,
+    /// **最新の** [`TURN_TAKEN`] の ts（番を取った周・設計 pipeline.md §22）。番を取った後に PASS でない判定の記帳が
+    /// 在る便（列を一度離れた便）と 1 度も番を取っていない便は `None`＝戻ってきた便は番を持たない側から数え直す。
+    pub taken_at: Option<String>,
 }
+
+/// 着地の番を取った周の記帳の detail（`RunStage stage=Gated`・設計 pipeline.md §22・新しい `EventKind` を足さない）。
+pub const TURN_TAKEN: &str = "turn:taken";
+
+/// gate の判定の記帳の detail の頭（`RunStage stage=Gated detail=verdict:<…>`・gate が書く形）。
+const VERDICT: &str = "verdict:";
 
 /// 自分の land の番（**閉じた 3 値**・設計 gate-cost.md §6）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,6 +57,10 @@ pub enum Turn {
 /// 撃ち直しが FAIL なら verdict で外れる）。順序は**最初の** `Gated` の ts（同時刻は run id の辞書順）
 /// ＝全順序ゆえ待ちは循環しない。列に入りうる便で verdict を読めない便が 1 本でも在る周は列を導けない
 /// ——PASS かを測れない便を列から外すと、読めないを「列なし」に読み替えることになる。
+///
+/// **番を取った便が列に居れば鍵の順より先に立つ**（設計 pipeline.md §22）: 列の便（自分を含む）のうち
+/// `taken_at` を持つ便が在れば、最新の `taken_at`（同時刻は run id の辞書順）の 1 本だけが先頭＝撃ち直しの間に
+/// 鍵の早い便が戻ってきても、番を取った便を追い抜かない。番を取った便が 1 本も無ければ鍵の順。
 pub fn turn_in(queue: Option<&[Queued]>, me: &str) -> Turn {
     let Some(entries) = queue else {
         return Turn::Unmeasurable;
@@ -60,16 +73,33 @@ pub fn turn_in(queue: Option<&[Queued]>, me: &str) -> Turn {
         return Turn::Unmeasurable;
     };
     let mut ahead: Option<(&str, &str)> = None;
-    for entry in entries.iter().filter(|found| found.run != me && may_queue(found.stage, found.gated_at.is_some()) && found.worktree) {
+    let mut taken: Option<(&str, &str)> = None;
+    for entry in entries.iter().filter(|found| may_queue(found.stage, found.gated_at.is_some()) && found.worktree) {
         let (Some(verdict), Some(ts)) = (entry.verdict, entry.gated_at.as_deref()) else {
+            if entry.run == me {
+                continue;
+            }
             return Turn::Unmeasurable;
         };
+        if verdict != Verdict::Pass {
+            continue;
+        }
+        if let Some(at) = entry.taken_at.as_deref() {
+            let latest = |(ts, run): (&str, &str)| at > ts || (at == ts && entry.run.as_str() < run);
+            if taken.is_none_or(latest) {
+                taken = Some((at, entry.run.as_str()));
+            }
+        }
         let key = (ts, entry.run.as_str());
-        if verdict == Verdict::Pass && key < (mine, me) && ahead.is_none_or(|found| key < found) {
+        if entry.run != me && key < (mine, me) && ahead.is_none_or(|found| key < found) {
             ahead = Some(key);
         }
     }
-    ahead.map_or(Turn::First, |(_, run)| Turn::After(run.to_owned()))
+    match taken {
+        Some((_, run)) if run == me => Turn::First,
+        Some((_, run)) => Turn::After(run.to_owned()),
+        None => ahead.map_or(Turn::First, |(_, run)| Turn::After(run.to_owned())),
+    }
 }
 
 /// いまの番（[`Completion::LandTurn`] の観測もこの 1 本を通る）。
@@ -120,6 +150,25 @@ fn first_gated_at(events: &[Event]) -> BTreeMap<&str, &str> {
     first
 }
 
+/// 便ごとの**最新の** [`TURN_TAKEN`] の ts（**pure**・設計 pipeline.md §22 約束 4・5）。番を取った後に `verdict:` が PASS で
+/// ない `Gated` の記帳（列を離れた周）が在れば消す＝戻ってきた便は番を持たない。撃ち直しの `verdict:PASS` と
+/// `stale:` は列に残る周なので消さない。
+fn taken_at(events: &[Event]) -> BTreeMap<&str, &str> {
+    let mut taken: BTreeMap<&str, &str> = BTreeMap::new();
+    for event in events.iter().filter(|event| event.kind == EventKind::RunStage && event.stage == Some(Stage::Gated)) {
+        match event.detail.as_deref() {
+            Some(TURN_TAKEN) => {
+                taken.insert(event.run.as_str(), event.ts.as_str());
+            }
+            Some(detail) if detail.strip_prefix(VERDICT).is_some_and(|verdict| verdict != Verdict::Pass.as_str()) => {
+                taken.remove(event.run.as_str());
+            }
+            _ => {}
+        }
+    }
+    taken
+}
+
 /// 同じ置き場の便を replay して列の材料を組む。**store を読めない周は `None`**（空の列に読み替えない）。
 ///
 /// 段は replay（[`replay`]）、判定は [`verdict_of`] の 1 本、`Gated` の ts は追記だけの log の原本から
@@ -139,6 +188,7 @@ fn queue_from(state_dir: &Path, events: &[Event]) -> Option<Vec<Queued>> {
 /// 追随中の便も導く＝log を 2 度読まない・設計 pipeline.md §47）。
 fn queue_with(state_dir: &Path, events: &[Event], state: &State) -> Option<Vec<Queued>> {
     let gated_at = first_gated_at(events);
+    let taken = taken_at(events);
     let mut queue = Vec::new();
     for (id, run) in &state.runs {
         let first = gated_at.get(id.as_str()).map(|ts| (*ts).to_owned());
@@ -153,6 +203,7 @@ fn queue_with(state_dir: &Path, events: &[Event], state: &State) -> Option<Vec<Q
             verdict: open.then(|| verdict_of(state_dir, id)).flatten(),
             gated_at: first,
             worktree,
+            taken_at: taken.get(id.as_str()).map(|ts| (*ts).to_owned()),
         });
     }
     Some(queue)
@@ -332,7 +383,36 @@ fn after_wake(turn: &Turn, waited_s: u64) -> Next {
 /// 上限を超えた周・列を導けない周は**待たずに進む**（断らない・止めない＝受付の縮退と同じ極性:
 /// 詰まって止まるより stale 1 回の費用を払う側に倒す）。待ちは deny の関門ではないので rc を変えない。
 /// 待ちが解けた周は [`after_wake`] で番を読み直し、`After` なら**残りの上限で** wait へ再投入する。
+///
+/// 番を取った周（[`Order::is_front`]）は `RunStage stage=Gated detail=turn:taken` を 1 行記す（設計 pipeline.md §22）。
+/// 縮退と列を導けなかった周は番を取っていないので書かない。番待ちの間に列の先頭が自分を着地 / 終端させた便（設計 §40・
+/// 段が終端）も列に居ないので書かない（`Gated` の記帳が終端の段を上書きしないため）。記帳できない周も順番は変えない
+/// （待ちは deny の関門でない）。
 pub(super) fn await_turn(entry: &Land<'_>) -> Order {
+    let order = wait_turn(entry);
+    let queued = super::current(entry.state_dir)
+        .ok()
+        .and_then(|state| state.runs.get(entry.run).map(|run| may_queue(run.stage, true)));
+    if order.is_front() && queued == Some(true) {
+        let _ = emit(
+            entry.state_dir,
+            &Emit {
+                kind: EventKind::RunStage,
+                run: entry.run,
+                bead: entry.bead,
+                stage: Some(Stage::Gated),
+                seat: None,
+                pid: None,
+                detail: Some(TURN_TAKEN.to_owned()),
+            },
+            entry.policy,
+        );
+    }
+    order
+}
+
+/// [`await_turn`] の待ちの本体（記帳しない）。
+fn wait_turn(entry: &Land<'_>) -> Order {
     match turn_now(entry.state_dir, entry.run) {
         Turn::First => return Order::First,
         Turn::Unmeasurable => return Order::Unmeasured,
@@ -453,7 +533,93 @@ mod tests {
             verdict,
             gated_at: (!ts.is_empty()).then(|| ts.to_owned()),
             worktree,
+            taken_at: None,
         }
+    }
+
+    /// 番を `taken` の ts で取った列の fixture 1 本（段は `Gated`・worktree 在り）。
+    fn taking(run: &str, verdict: Option<Verdict>, ts: &str, taken: &str) -> Queued {
+        Queued { taken_at: Some(taken.to_owned()), ..queued(run, Stage::Gated, verdict, ts, true) }
+    }
+
+    /// (3) 番を取った便が列に居れば最新の 1 本だけが先頭（鍵の順に依らない）: 鍵の早い便も番を取った便を待ち、番を
+    /// 取った便の中では最新の ts が勝つ。
+    #[test]
+    fn pipe_order_taken_latest_run_is_the_front() {
+        let queue = [
+            queued("early", Stage::Gated, Some(Verdict::Pass), EARLY, true),
+            taking("mid", Some(Verdict::Pass), MID, MID),
+            taking("late", Some(Verdict::Pass), LATE, LATE),
+        ];
+        assert_eq!(turn_in(Some(&queue), "late"), Turn::First, "最新の番を取った便は待たない");
+        assert_eq!(turn_in(Some(&queue), "early"), Turn::After("late".to_owned()), "鍵の早い便も番を取った便を待つ");
+        assert_eq!(turn_in(Some(&queue), "mid"), Turn::After("late".to_owned()), "古い番は最新の番に負ける");
+    }
+
+    /// (3) 同時刻の番は run id の辞書順（最小の id が先頭）＝2 本が互いを先頭と読まない。
+    #[test]
+    fn pipe_order_taken_latest_same_ts_breaks_by_run_id() {
+        let queue = [taking("b", Some(Verdict::Pass), EARLY, LATE), taking("a", Some(Verdict::Pass), MID, LATE)];
+        assert_eq!(turn_in(Some(&queue), "a"), Turn::First);
+        assert_eq!(turn_in(Some(&queue), "b"), Turn::After("a".to_owned()));
+    }
+
+    /// (3) 番を取った便が列に 1 本も無ければ鍵の順に戻る（上の歯と同じ列から番だけを外す）。
+    #[test]
+    fn pipe_order_taken_falls_back_to_key_order() {
+        let queue = [
+            queued("early", Stage::Gated, Some(Verdict::Pass), EARLY, true),
+            queued("mid", Stage::Gated, Some(Verdict::Pass), MID, true),
+            queued("late", Stage::Gated, Some(Verdict::Pass), LATE, true),
+        ];
+        assert_eq!(turn_in(Some(&queue), "early"), Turn::First);
+        assert_eq!(turn_in(Some(&queue), "late"), Turn::After("early".to_owned()));
+    }
+
+    /// (4) 列を離れた便（終端・worktree 無し・PASS でない）の番は数えない＝鍵の順に戻る。負例の対: 同じ列に PASS で
+    /// 列に居る番の便を 1 本足すと、その便が先頭になる（上の鍵の順が空虚でない）。
+    #[test]
+    fn pipe_order_taken_leaver_is_not_counted() {
+        let leavers = [
+            Queued { stage: Stage::Landed, ..taking("landed", Some(Verdict::Pass), EARLY, LATE) },
+            Queued { stage: Stage::Stopped, ..taking("stopped", Some(Verdict::Pass), EARLY, LATE) },
+            Queued { worktree: false, ..taking("retired", Some(Verdict::Pass), EARLY, LATE) },
+            taking("inconclusive", Some(Verdict::Inconclusive), EARLY, LATE),
+            taking("fail", Some(Verdict::Fail), EARLY, LATE),
+            queued("early", Stage::Gated, Some(Verdict::Pass), EARLY, true),
+            queued("me", Stage::Gated, Some(Verdict::Pass), MID, true),
+        ];
+        assert_eq!(turn_in(Some(&leavers), "me"), Turn::After("early".to_owned()), "離れた便の番は数えず鍵の順");
+        assert_eq!(turn_in(Some(&leavers), "early"), Turn::First);
+        let mut with_taker = leavers.to_vec();
+        with_taker.push(taking("taker", Some(Verdict::Pass), LATE, MID));
+        assert_eq!(turn_in(Some(&with_taker), "early"), Turn::After("taker".to_owned()), "列に居る番の便は数える");
+    }
+
+    /// (4) INCONCLUSIVE で離れて戻った便（鍵が早い）は、離れている間に番を取って撃ち直している便を追い抜かない:
+    /// 離れた周の `verdict:INCONCLUSIVE` が自分の古い番を消し、戻った `verdict:PASS` は番を返さない。
+    #[test]
+    fn pipe_order_taken_leaver_does_not_overtake_the_regating_run() {
+        let taken = |run: &str, ts: &str| event_with(run, EventKind::RunStage, Stage::Gated, ts, Some("turn:taken"));
+        let verdict = |run: &str, ts: &str, value: &str| event_with(run, EventKind::RunStage, Stage::Gated, ts, Some(value));
+        let events = [
+            verdict("front", EARLY, "verdict:PASS"),
+            verdict("regating", EARLY, "verdict:PASS"),
+            taken("front", EARLY),
+            verdict("front", MID, "verdict:INCONCLUSIVE"),
+            taken("regating", MID),
+            following("regating", MID),
+            verdict("front", LATE, "verdict:PASS"),
+        ];
+        let found = super::taken_at(&events);
+        assert_eq!(found.get("front"), None, "離れた周が番を消す");
+        assert_eq!(found.get("regating").copied(), Some(MID), "撃ち直し中の便の番は残る");
+        let queue = [
+            queued("front", Stage::Gated, Some(Verdict::Pass), EARLY, true),
+            Queued { taken_at: Some(MID.to_owned()), ..queued("regating", Stage::Implemented, Some(Verdict::Pass), MID, true) },
+        ];
+        assert_eq!(turn_in(Some(&queue), "front"), Turn::After("regating".to_owned()), "戻った便は追い抜かない");
+        assert_eq!(turn_in(Some(&queue), "regating"), Turn::First, "撃ち直し中の便が先頭のまま");
     }
 
     /// 自分が最古の `Gated(PASS)` なら `First`・後から `Gated` になった便は `After(自分)`。

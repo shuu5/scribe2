@@ -310,7 +310,7 @@ fn pipe_land_rebase_refuses_dirty_worktree_without_rebase() {
     let moved = git(&repo, &["rev-parse", "refs/heads/main"]);
     // gate の後に木が汚れた（未 commit の仕事が在る）。
     fs::write(worktree.join("dirty.txt"), "x\n").expect("汚せる");
-    let before = event_count(&state);
+    let before = count_but_turn(&state);
     fs::remove_file(&marker).expect("lens の marker を消せる");
     let lens = fake_lens(&marker, &lens_verdict("PASS"));
     let out = run_pipe(&[
@@ -319,7 +319,7 @@ fn pipe_land_rebase_refuses_dirty_worktree_without_rebase() {
     ]);
     assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "汚れた木は rc 1: {}", stderr_of(&out));
     assert!(stderr_of(&out).contains("clean でない"), "理由: {}", stderr_of(&out));
-    assert_eq!(event_count(&state), before, "何も書かない");
+    assert_eq!(count_but_turn(&state), before, "番の記帳のほかは何も書かない");
     assert!(!marker.exists(), "gate を撃ち直さない（lens は走らない）");
     assert_eq!(git(&worktree, &["rev-parse", "HEAD"]), head_before, "rebase を撃たない（HEAD 不変）");
     assert!(worktree.join("dirty.txt").exists(), "未 commit の仕事は残る");
@@ -633,7 +633,7 @@ fn pipe_land_rebase_empty_fails_closed_without_regate() {
     let marker = state.join("lens-ran");
     let (id_b, landed) = gated_run_whose_change_is_already_on_main(&repo, &state, &marker);
     fs::remove_file(&marker).expect("lens の marker を消せる");
-    let before = event_count(&state);
+    let before = count_but_turn(&state);
     let lens = fake_lens(&marker, &lens_verdict("PASS"));
     let out = run_pipe(&[
         "land", "--run", &id_b, "--repo", &repo.display().to_string(),
@@ -645,7 +645,7 @@ fn pipe_land_rebase_empty_fails_closed_without_regate() {
     assert!(stderr.contains(&id_b) && stderr.contains("base=") && stderr.contains("main="), "run / base / main を名乗る: {stderr}");
     assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), landed, "main は 1 本目の sha のまま");
     assert!(!marker.exists(), "gate を撃ち直さない（lens は走らない）");
-    assert_eq!(event_count(&state), before + 1, "残す event は Failed の 1 本だけ");
+    assert_eq!(count_but_turn(&state), before + 1, "番の記帳のほかに残す event は Failed の 1 本だけ");
     let log = fs::read_to_string(state.join("fleet").join("events.jsonl")).expect("event log");
     let last = log.lines().last().unwrap_or_default();
     assert!(last.contains("\"stage\":\"Failed\"") && last.contains("rebase-empty"), "末尾: {last}");
@@ -912,9 +912,12 @@ fn follow_count(state: &Path, id: &str) -> usize {
         .count()
 }
 
-/// 便の `Gated` の記帳の件数（gate 1 周 = 1 件）。
+/// 便の gate の周の件数（`Gated detail=verdict:<…>` だけを数える＝番の記帳 `turn:taken` は gate の周でない・設計 §22）。
 fn gate_count(state: &Path, id: &str) -> usize {
-    stages(state, id).into_iter().filter(|(stage, _)| *stage == Some(Stage::Gated)).count()
+    stages(state, id)
+        .into_iter()
+        .filter(|(stage, detail)| *stage == Some(Stage::Gated) && detail.as_deref().is_some_and(|found| found.starts_with("verdict:")))
+        .count()
 }
 
 /// land の stdout の `landed=` の値（squash commit の sha・無ければ空）。
@@ -1265,6 +1268,92 @@ fn pipe_order_unreadable_front_verdict_is_unmeasured_and_lands() {
     clean(&[&repo, &state]);
 }
 
+/// 番を取った記帳（設計 pipeline.md §22）の detail。
+const TURN_TAKEN: &str = "turn:taken";
+
+/// 便の番を取った記帳の `(kind, stage)` の列（detail が [`TURN_TAKEN`] の event 全部・kind を問わない）。
+fn turn_taken_rows(state: &Path, id: &str) -> Vec<(EventKind, Option<Stage>)> {
+    trail(state, id)
+        .into_iter()
+        .filter(|(_, _, detail)| detail.as_deref() == Some(TURN_TAKEN))
+        .map(|(kind, stage, _)| (kind, stage))
+        .collect()
+}
+
+/// 置き場の event のうち番の記帳（[`TURN_TAKEN`]）でない件数（番を取った後に断る周の「何も書かない」を測る）。
+fn count_but_turn(state: &Path) -> usize {
+    events(state).into_iter().filter(|event| event.detail.as_deref() != Some(TURN_TAKEN)).count()
+}
+
+/// (1) 待たずに番を取った周（`order=first`）は `RunStage stage=Gated detail=turn:taken` がちょうど 1 行増える
+/// （既存の kind と段の組・新しい `EventKind` は無い）。
+#[test]
+fn pipe_land_turn_taken_first_records_one_gated_row() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let (id_a, _id_b) = two_gated_runs(&repo, &state, &marker);
+    let rules = write_rules_land_wait(&state, "rules-order.toml", Some(30));
+    assert!(turn_taken_rows(&state, &id_a).is_empty(), "land の前は番の記帳が無い");
+    let out = land_extra(&repo, &state, &id_a, &["--rules", &rules]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land: {}", stderr_of(&out));
+    assert_eq!(order_token(&out), "first", "stdout の land 行: {}", stdout_of(&out));
+    assert_eq!(turn_taken_rows(&state, &id_a), vec![(EventKind::RunStage, Some(Stage::Gated))], "番の記帳は 1 行");
+    clean(&[&repo, &state]);
+}
+
+/// (1) 待って番を取った周（`order=waited:<n>`）も 1 行だけ（待ちの途中で読み直した回数に依らない）。先に着地した
+/// 前の便も自分の 1 行だけを持つ。
+#[test]
+fn pipe_land_turn_taken_after_waiting_records_one_gated_row() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let (id_a, id_b) = two_gated_runs(&repo, &state, &marker);
+    let rules = write_rules_land_wait(&state, "rules-order.toml", Some(30));
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let mut waiting = land_in_background(&repo, &state, &id_b, &rules, &lens);
+    std::thread::sleep(Duration::from_secs(2));
+    assert!(waiting.try_wait().expect("子の状態を読める").is_none(), "後の便は待っている");
+    assert!(turn_taken_rows(&state, &id_b).is_empty(), "待っている間は番を取っていない");
+    let first = land_extra(&repo, &state, &id_a, &["--rules", &rules]);
+    assert_eq!(first.status.code(), Some(i32::from(RC_OK)), "前の便の land: {}", stderr_of(&first));
+    let out = waiting.wait_with_output().expect("待っていた land が終わる");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "待っていた便も land する: {}", stderr_of(&out));
+    assert!(order_token(&out).starts_with("waited:"), "待って番を取った: {}", stdout_of(&out));
+    let row = vec![(EventKind::RunStage, Some(Stage::Gated))];
+    assert_eq!(turn_taken_rows(&state, &id_b), row, "待った便の番の記帳は 1 行");
+    assert_eq!(turn_taken_rows(&state, &id_a), row, "前の便の番の記帳も 1 行");
+    clean(&[&repo, &state]);
+}
+
+/// (2) 上限で縮退した周（`order=degraded`）は番を取っていない＝1 行も書かない。
+#[test]
+fn pipe_land_turn_not_taken_when_degraded() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let (_id_a, id_b) = two_gated_runs(&repo, &state, &marker);
+    let rules = write_rules_land_wait(&state, "rules-order.toml", Some(LAND_WAIT_S));
+    let out = land_extra(&repo, &state, &id_b, &["--rules", &rules]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "上限で進んで land する: {}", stderr_of(&out));
+    assert_eq!(order_token(&out), "degraded", "stdout の land 行: {}", stdout_of(&out));
+    assert!(turn_taken_rows(&state, &id_b).is_empty(), "縮退の周は番を記さない: {:?}", stages(&state, &id_b));
+    clean(&[&repo, &state]);
+}
+
+/// (2) 列を導けなかった周（`order=unmeasured`）も 1 行も書かない。
+#[test]
+fn pipe_land_turn_not_taken_when_unmeasured() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let (id_a, id_b) = two_gated_runs(&repo, &state, &marker);
+    let rules = write_rules_land_wait(&state, "rules-order.toml", Some(30));
+    fs::write(state.join("pipe").join(&id_a).join("verdict.json"), "{broken\n").expect("判定を壊せる");
+    let out = land_extra(&repo, &state, &id_b, &["--rules", &rules]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "読めない周も進む: {}", stderr_of(&out));
+    assert_eq!(order_token(&out), "unmeasured", "stdout の land 行: {}", stdout_of(&out));
+    assert!(turn_taken_rows(&state, &id_b).is_empty(), "測れなかった周は番を記さない: {:?}", stages(&state, &id_b));
+    clean(&[&repo, &state]);
+}
+
 /// `pipe.land_wait_s` の行が無い manifest は land を 1 byte も動かさない（rc 2・event 0 増・main 不変）。
 #[test]
 fn pipe_order_missing_land_wait_row_moves_nothing() {
@@ -1398,7 +1487,7 @@ fn pipe_land_rebase_refuses_when_base_is_not_ancestor_of_main() {
     let tree = git(&repo, &["rev-parse", "refs/heads/main^{tree}"]);
     let root = git(&repo, &["commit-tree", &tree, "-m", "diverged"]);
     git(&repo, &["update-ref", "refs/heads/main", &root]);
-    let before = event_count(&state);
+    let before = count_but_turn(&state);
     let lens = fake_lens(&marker, &lens_verdict("PASS"));
     let out = run_pipe(&[
         "land", "--run", &id, "--repo", &repo.display().to_string(),
@@ -1407,7 +1496,7 @@ fn pipe_land_rebase_refuses_when_base_is_not_ancestor_of_main() {
     assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "祖先でない base は rc 1");
     assert!(stderr_of(&out).contains("stale base"), "理由: {}", stderr_of(&out));
     assert!(stderr_of(&out).contains("祖先でない"), "理由の弁別: {}", stderr_of(&out));
-    assert_eq!(event_count(&state), before, "何も書かない");
+    assert_eq!(count_but_turn(&state), before, "番の記帳のほかは何も書かない");
     assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), root, "main は動かない");
     assert_eq!(git(&worktree, &["rev-parse", "HEAD"]), head_before, "worktree も動かない（rebase を撃たない）");
     assert!(show_line(&repo, &state, &id).contains("stage=Gated"), "段は Gated のまま");
@@ -1597,12 +1686,12 @@ fn pipe_land_onto_unrelated_history_is_still_stale_base() {
     let root = git(&repo, &["commit-tree", &tree, "-m", "unrelated"]);
     git(&repo, &["update-ref", "refs/heads/main", &root]);
     assert_eq!(git(&repo, &["rev-list", "--count", &root]), "1", "main は親を持たない commit（merge-base は無い）");
-    let before = event_count(&state);
+    let before = count_but_turn(&state);
     let lens = fake_lens(&marker, &lens_verdict("PASS"));
     let out = land_extra(&repo, &state, &id, &["--lens", &lens]);
     assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "merge-base の無い main は rc 1: {}", stderr_of(&out));
     assert!(stderr_of(&out).contains("stale base"), "断りの字面は従来どおり: {}", stderr_of(&out));
-    assert_eq!(event_count(&state), before, "何も書かない（event 0 増）");
+    assert_eq!(count_but_turn(&state), before, "番の記帳のほかは何も書かない（event 0 増）");
     assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), root, "main は動かない");
     assert_eq!(git(&worktree, &["rev-parse", "HEAD"]), head_before, "worktree も動かない（rebase を撃たない）");
     assert!(show_line(&repo, &state, &id).contains("stage=Gated"), "段は Gated のまま");
