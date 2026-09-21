@@ -231,6 +231,22 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
 - 触らない: event の kind（通知は記帳しない・pane の行と stdout の 1 行だけ）・`deliver_within` の中身・登録 row の形・`Landed` / PASS の便（送らない）・席の見張り（Monitor）は席の手順のまま（本行の着地後に止めてよい条件は memo .507 の昇格条件）。
 - 却下: 席の SessionStart / rebrief に終端の一覧を載せる（席の turn が無いと読めない＝同じ穴）／event を足して席が poll する（poll は席の寿命に縛られる・今の見張りと同じ）／全終端を送る（Landed が多く pane が流れる・落ちた便だけが席の手番）。
 
+## 20. pipe/dispatch.rs の「台帳から候補を組む」群を子 module へ割る（契約表の行 q・純移動・行 o の前）
+
+- 出所（orchestrator の実測 2026-09-21・verified）: `crates/scribe2/src/pipe/dispatch.rs` は 1412 行で、受付の上限 R-C4-2（1500）の余地が **88 行**＝行 o（`s2-07l.525`・size S・見積 100）を受付が `cap-headroom` で断る（`pipe preflight` で refused を実測）。行 n（`s2-07l.524`）の着地で 96 行増えた直後の姿。
+- 現物（planner の census・main 47d3c52・行番号は同 commit）: 責務は 5 群——(1) 理由と候補の型（`WaitReason` / `Candidate` / `Unmeasured` / `Handoff` / `Advance`）、(2) 起こす面（`start` / `launched` / `spawn_self` / `launch_log`）、(3) 周の本体（`turn` / `fire` / `revivals` / `order`）、(4) **台帳から候補を組む群**、(5) 表示（`line` / `render` / `usage` / `mark`）。(4) は閉じている＝外の呼び手が 0 で、親の (3) からだけ入る。item は **18 個・351 行**: `Ledger`（519〜536）と、`is_input` / `entry_of` / `settle` / `Room` / `blocker` / `launch_of` / `tools` / `is_blocking` / `pointer_of` / `settled` / `section_keyed` / `section_moved` / `requeues` / `released_after` / `sizes_of` / `Marks` / `marks_of`（700〜1032・宣言順）。
+- 決定的な制約（実測）: 極性一覧（`crates/scribe2/src/polarity.rs`）は `pipe::dispatch::` の型名を 1 つも pin しない（grep 0 件）。親は `crate::seat::ledger` を `ledger` の名で `use` しているので、**子 module の名は `candidates`**（`crates/scribe2/src/pipe/dispatch/candidates.rs`・`ledger` は衝突する）。
+- 名前解決の形（§43 / §45 と同じ型・可視性は名前解決をしない）: 親の本体が裸で呼ぶ 8 名（`Ledger` / `is_input` / `entry_of` / `settle` / `tools` / `settled` / `requeues` / `marks_of`）は親に `use candidates::{…}` 1 文で戻し、in-file の歯だけが呼ぶ 3 名（`launch_of` / `released_after` / `section_keyed`）は `#[cfg(test)]` を付けた `use` 1 文で戻す（歯の区間の `use super::*` はこの 2 文の名を親の scope から拾う＝歯の本文は 1 字も変えない）。子は必要な名を `use super::{…}` で引く（子孫は親の private item を見る・親の `use` 群を 1 行ずつ写してよい）。上げるのは**子側**の可視性だけ（親が呼ぶ 11 名を `pub(super)`・残る 7 名は private のまま）。親側の可視性と `fire` / `turn` の本体は 1 字も変えない。
+- 約束（この行が作るもの・番号は done と 1:1）:
+  1. 上の 18 item（351 行）を行 q の write-set の `+` の file へ名・本文・順序を変えずにそのまま移す。
+  2. 親に増えるのは `mod candidates;` 1 行と `use` 2 文（本体用 8 名・`#[cfg(test)]` の 3 名）だけ。`turn` / `fire` / `revivals` の本体は 1 字も変わらない。
+  3. in-file の歯 14 本は 1 本も動かさない（親の `mod tests` に残る・`use super::*` のまま）。
+  4. 札 `// flip-check: moved <行 q の bead>` を親の歯の区間の先頭と `+` の file の先頭に対で置く（純移動の機械証明は pipeline.md §5.3）。
+  5. 割った後の行数は親が **約 1065**（余地 **約 435**）・`+` の file が **約 370**＝行 o の見積 100 を満たし、size M（300）も受けられる。
+  6. `crates/scribe2/tests/e2e/pipe/dispatch.rs` の diff は **0 行**（write-set に在るのは受付が verify の filter の当たる歯の file を要求するためだけ・pipeline.md §43 の `polarity.rs` と同じ型）。
+- 触らない: (1)(2)(3)(5) の群の本体・`WaitReason` / `Turn` / `Candidate` の欄・in-file の歯の名と assert・e2e の歯・`pipe/mod.rs`（`pipe_dispatch_driver_` の歯はそこに在り verify の filter に入れない）。
+- 却下: (1) の型の群を移す（`WaitReason` は行 o が variant を足す＝行 o の write-set が 2 file に割れて交差が増える）／(5) の表示の群を移す（80 行で余地が 100 に届かない）／行 o を S より小さく書く（size は S が最小）／割らずに据え置く（行 o が受付で止まったまま）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -394,7 +410,7 @@ title = "列が起こす前に器の健康の遮断器を通し（gate と同じ
 req = ["FR68", "FR39", "NFR4"]
 section = "18"
 size = "S"
-depends = ["n"]
+depends = ["n", "q"]
 
 [[promise]]
 of = "o"
@@ -445,4 +461,14 @@ teeth = ["pipe_notify_idle_round_reports_ready_count_and_top_reason"]
 place = "+crates/scribe2/tests/e2e/pipe/notify.rs"
 fixture = "偽の台帳の ready の bead 1 本を hold にした state dir（起こす 0 ∧ 候補 1）と登録 row と偽の tmux を置き、pipe stop --run の終端を撃つ。負の枝は候補 0 の台帳"
 expect = "idle の 1 行に ready=1 launched=0 reason=hold が在り、候補 0 の周は idle の行を送らない（send-keys は終端の 1 行だけ）"
+
+[[contract]]
+id = "q"
+title = "pipe/dispatch.rs の「台帳から候補を組む」群（18 item・351 行）を子 module candidates へ割る — 純移動・親に増えるのは mod 1 行と use 2 文・in-file の歯 14 本は動かさない・e2e の歯の file は 1 byte も変えない"
+req = ["FR68", "NFR4"]
+section = "20"
+write-set = ["-crates/scribe2/src/pipe/dispatch.rs", "+crates/scribe2/src/pipe/dispatch/candidates.rs", "crates/scribe2/tests/e2e/pipe/dispatch.rs"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail pipe_dispatch_drive_ pipe_dispatch_launched_ pipe_dispatch_marks_ pipe_dispatch_order_ pipe_dispatch_release_ pipe_dispatch_section_ pipe_dispatch_wait", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_dispatch_"]
+size = "S"
+done = "(1) 18 item が名・本文・順序を変えずに子へ移り、flip-check の moved の機械証明が残差 0 (2) 親に増えるのは mod 1 行と use 2 文だけで turn / fire / revivals の本体は不変 (3) in-file の歯 14 本と e2e の pipe_dispatch_ の歯が 1 字も変わらず緑 (4) 親の行数が約 1065 で余地が 400 以上 (5) tests/e2e/pipe/dispatch.rs の diff が 0 行"
 <!-- contracts:end -->
