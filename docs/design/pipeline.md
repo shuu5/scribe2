@@ -995,7 +995,7 @@ id = "ai"
 title = "検出線は便の diff の patch-id を record に残し、追随の撃ち直しと候補の木の段で patch-id 不変なら前周の record を carried 付きで写して撃たない"
 req = ["FR34", "FR46"]
 section = "40"
-write-set = ["crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/gate/record.rs", "crates/scribe2/src/pipe/land.rs", "+crates/scribe2/src/pipe/train.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "crates/scribe2/tests/e2e/pipe/land.rs", "docs/design/pipeline.md"]
+write-set = ["crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/gate/record.rs", "crates/scribe2/src/pipe/land.rs", "crates/scribe2/src/pipe/train.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "crates/scribe2/tests/e2e/pipe/land.rs", "docs/design/pipeline.md"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_detection_carry_"]
 size = "S"
 done = "(1) gate が検出線を撃つ周の record に patch_id が在り git patch-id --stable の値と一致する (2) main が crates/ で動いた追随で便の diff が不変なら検出線を撃たず、前周の record を carried=<n> を付けて写す（Detection の閉じた値に持ち越しが 1 つ増え、写した値は record の field で実測と区別が付く） (3) 便の diff の中身が変わる周・前周の record が無い周・record が patch_id を持たない周・読めない周は撃つ（fail-closed）"
