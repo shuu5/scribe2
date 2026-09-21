@@ -176,6 +176,23 @@ user-scope MCP 設定の同期・別口座への `--resume` の混線 fence・pr
 - 依存: 無し（本 § は宣言と読みと除外と点検だけで、契機も記録も持たない）。
 - 後続: 第 2 段 = 閾値越えの通知（契機は別の設計 doc の拍・閾値の rules 行 3 本は裁定 id 付きで足す）／第 3 段 = 群の今の口座の記録と自動の移動（host の根・lock・承認 event・機械の復帰）／[seat-roles.md](./seat-roles.md) §15〜§18 の置き換えの後始末。
 
+## 18. 席の起動の短い形が会話を運ぶ — `-c` で直前の会話を、`-r <id>` で名指した会話を引き継いで起動し直す（契約表の行 g・§14 の続き）
+
+やさしく言うと: 口座を移すときに「会話ごと起動し直す」口が無く、手書きの script で resume していた。短い形に `-c` / `-r <id>` を足して `seat <口座> -c` の 1 行で済ませる。役割の flag は今も省略できる（0 個は orchestrator）。
+
+- 出所: user 直命 2026-09-21（逐語は台帳 `s2-07l.491` の notes）。口座の移動（席の口座の 7 日窓が逼迫）で 4 席を手書きの script（置き場の `seat/orchestrator.launch` に `--resume <id>` を足して exec する 1 本）で起動し直した。短い形（§14）は登録 row を書き直して起動行を注入するが、会話を引き継ぐ flag が無い＝script は row を書き換えず、SessionStart が row と実口座の食い違いを出し続ける。
+- 現物（verified・main）: 短い形の parser は `crates/scribe2/src/seat/cli.rs` の `short_of`（役割の flag は 0 個で既定の `Role::Orchestrator`・`short_role_of`）。起動行は `crates/scribe2/src/seat/cycle/launch.rs` の `derive_launch` が組み、`prepare` が登録 row（`launch` = 導出した行・穴を埋める前・旗無し）を書き、`boot` が穴を口座 dir で埋めて pane へ注入する。**呼び手の pane が target そのものの周**（同じ窓）は前面と入力欄の判定を飛ばす＝「席の窓で Claude を抜けて同じ shell から撃つ」流れは既に通る。会話の置き場は claude の `projects/<cwd>/<id>.jsonl` で、口座 dir の `projects` が host で共有されていれば別口座からも `--continue` / `--resume` で引ける（本 host は共有・器は確かめない）。
+- 形（短い形だけ・長い形 `seat launch` は触らない）:
+  1. **flag 2 つ**: `-c`（別名 `--continue`）は直前の会話を、`-r <id>`（別名 `--resume <id>`）は名指した会話を引き継ぐ。どちらも**注入する起動行の末尾**に claude の同名の flag（`--continue` / `--resume <id>`）を足すだけ。**登録 row の `launch` と置き場の `.launch` は旗無しのまま**（row は雛形・会話の id は 1 回きりの値・§14 の「row の `launch` = 導出した行」を変えない）。
+  2. **使い方の誤り**（rc 1・key を 1 つも送らず row も書かない・§14 と同じ極性）: `-c` と `-r` の両方／`-r` に値が無い・空／同じ flag の重複。
+  3. **`-c` の先は器が確かめない**: 直前の会話は claude が口座 dir の `projects/<cwd>` から選ぶ。別口座へ移る周に `projects` が共有されていなければ別の会話（か新規）が開く＝人が SessionStart の brief で会話の id を見る（§16 の照合の 1 行と同じ面・器に会話の一覧を読ませない）。
+  4. **役割の flag は今のまま省略可**（0 個 = orchestrator・`Role` の variant は 1 つ）。役割が増えても既定は変えない（増えた役割は flag で名指す）。
+  5. `--restore CMD` との併用は可（起動後に 1 回送る手順は不変）。同じ窓の周の `--restore` の断り（§14 の約束 8）も不変。
+- 触らない: `derive_launch` の雛形・登録 row の schema・`seat launch`（長い形）・`account shell`・`.launch` file の中身・置き場の解き方。
+- 歯（`seat_launch_short_` 接頭辞・`crates/scribe2/tests/e2e/seat/launch.rs`・偽 tmux と偽 claude で撃つ既存の型・新設の歯は `.config/nextest.toml` の tmux の群に名を足す）: `-c` の周は inject.jsonl の注入行の末尾が `--continue` で row の `launch` に `--continue` が無い／`-r <id>` の周は注入行の末尾が `--resume <id>` で row の `launch` に無い／`-c -r x`・値の無い `-r`・`-c -c` は使い方 rc 1 で key 0・row 0。外形 snapshot（`seat_usage_external_form`・`crates/scribe2/tests/e2e/seat.rs`）は usage の 1 行に `[-c|-r ID]` が増える。
+- 却下: `.launch` file に旗ごと書く（雛形に 1 回きりの値が混ざり、次の起動で古い会話へ戻る）／`-c` を既定にする（会話の無い口座で claude が新規を開くだけだが、人が「引き継いだつもり」になる・明示の flag が安全側）／器が会話の一覧を読んで id を選ぶ（claude の内部形式に依存・N3 の匂い・`-c` は claude 自身が選ぶ）／長い形にも足す（人が打つのは短い形だけ・§14 の却下と同じ）。
+- 後続: 第 3 段（自動の移動・§17 の後続）は本行の `-c` を機械が撃つ形で組める（席の restart = `seat <次の口座> -c` の 1 行）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -238,4 +255,14 @@ write-set = ["crates/scribe2/src/rules/manifest.rs", "crates/scribe2/src/rules/m
 verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail host_group_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail rules_host_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail fleet_select_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail doctor_accounts_"]
 size = "M"
 done = "(1) host の面に群の表が 1 つ増え、名・置き場の列・候補の口座 label の列の 3 key を既存の読み手 1 本が読み、file の無い host は 0 群で続き、読めない host は typed に止まる (2) tracked の面に群の表が在る周は未知の表として行番号付きで断る (3) 同じ名が 2 行・同じ置き場が 2 つの群・宣言に無い label・置き場の列が空・候補の列が空・未知の key の 6 種を行番号付きで全件断り、面の中で止まった周は合わせの検査へ進まない (4) 便用の選定の候補から宣言のどの群の候補 label も外れ、便の置き場の席の登録 row の除外はそのまま残り、除外は次の選定から効いて走行中の便は止まらない (5) 同じ除外が便用の候補を作る 2 つの口の両方で効く (6) session 用の選定の候補には群の口座が残り、便用の並べ順は変わらず、群の今の口座の記録は 1 件も書かれない (7) doctor が宣言された群 1 つにつき 1 行を宣言順で出し、名・候補の label の列・置き場の数・その群の置き場の席の登録 row の口座 label の列（無ければ無しの語）を載せて判定しない (8) 群を 1 つも宣言しない host は群の行が 0 本で便用の候補も今のままで、doctor の既存の外形 snapshot が 1 行も動かない"
+
+[[contract]]
+id = "g"
+title = "席の起動の短い形が会話を運ぶ — seat <label> [-c|-r ID] で注入する起動行の末尾に --continue / --resume ID を足す（登録 row と .launch は旗無しのまま・両方や値無しは使い方 rc 1・役割の flag は省略可のまま）"
+req = ["FR59", "FR40"]
+section = "18"
+write-set = ["crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/seat/cycle/launch.rs", "crates/scribe2/tests/e2e/seat/launch.rs", "crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_usage_external_form.snap", ".config/nextest.toml"]
+verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail seat_launch_short_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail seat_usage_external_form"]
+size = "S"
+done = "(1) seat <label> -c（--continue）で inject.jsonl の注入行の末尾が --continue になり、登録 row の launch と置き場の .launch に --continue が無い (2) seat <label> -r ID（--resume ID）で注入行の末尾が --resume ID になり row の launch に無い (3) -c と -r の両方・値の無い -r・同じ flag の重複は使い方 rc 1 で key 0・row 0 (4) 役割の flag 0 個は今までどおり orchestrator で通り、既存の seat_launch_short_ の歯 4 本は 1 字も変わらず緑 (5) usage の 1 行に [-c|-r ID] が増えて外形 snapshot が更新され、tests/e2e/seat.rs の diff は 0 行"
 <!-- contracts:end -->
