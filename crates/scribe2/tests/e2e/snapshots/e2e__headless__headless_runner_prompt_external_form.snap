@@ -13,7 +13,7 @@ expression: prompt
 - 契約の末尾に「## 回答」節が在れば、それは前の質問への回答である。読んで、その前提で進む（同じ質問を繰り返さない）。
 
 ## 追随
-- 契約の末尾に「## 追随」節が在れば、main がその節の名指す sha へ進んでいる。`git rebase <sha>` を実行し、衝突を解いて `git rebase --continue` で終える。
+- 契約の末尾に「## 追随」節が在れば、main がその節の名指す sha へ進んでいる。節は main と便の base の 2 つの sha を名指す。`git rebase --onto <main> <base>` を実行し（base から先の便の commit だけを main の上へ運ぶ・素の `git rebase <main>` は撃たない）、衝突を解いて `git rebase --continue` で終える。
 - 解いてよいのは write-set の中の file だけである。write-set の外の衝突は解かない。
 - 解けなければ `git rebase --abort` で木を戻し（**commit を作らず clean のまま**）、質問 record で止まる。
 - 追随の commit は便の commit に含める（追随だけで turn を終えてよい）。

@@ -24,6 +24,9 @@
 //! main は 1 byte も動かさない・force 系は使わない）、段を `Implemented` へ戻して gate を
 //! **同じ関数で**撃ち直し、PASS なら新しい base で CAS する。衝突は木を戻して**実装役を
 //! 起こし直す**（[`super::follow`]・便は終端にしない・終端するのは上限に達した周だけ）。
+//! base が main の祖先でなくても merge-base が在れば同じ経路で追随する（`s2-07l.449`・設計 §38）:
+//! rebase は `--onto <main> <base>` の 1 形で、便が base の上に積んだ commit だけを運ぶ。merge-base の
+//! 無い周だけ `stale base` で断る。
 //!
 //! **撃ち直しの間に main がさらに動いた周は同じ land の中で追随し直す**（`s2-07l.335`・設計 §5.4 (vi) /
 //! §18・FR30）。`RunStage stage=Gated detail=stale:<old>..<now>` を衝突と同じ記帳の口で記し、回数は衝突と
@@ -541,11 +544,14 @@ fn with_lines(mut lines: Vec<String>, mut outcome: Outcome) -> Outcome {
     outcome
 }
 
-/// 便の base が main の祖先なら worktree の branch を main へ rebase し、gate を**同じ関数で**
-/// 撃ち直す（設計 §5.4・`s2-07l.119`）。**main は 1 byte も動かさない**——rebase が効くのは
+/// 便の base が main の祖先か merge-base を持つなら worktree の branch を main へ rebase し、gate を**同じ関数で**
+/// 撃ち直す（設計 §5.4・`s2-07l.119`・§38・`s2-07l.449`）。**main は 1 byte も動かさない**——rebase が効くのは
 /// worktree の branch だけで、force 系は使わない（N1）。
 ///
-/// - 祖先でない（main が巻き戻った / 分岐した）周は追随の形が無いので rc 1 で何もしない。
+/// - 祖先検査は閉じた 3 値（[`follow::Ancestry`]・起こし直しの「追随」節と同じ 1 本）。祖先でないが merge-base の
+///   在る周（main が巻き戻った / 分岐した）は便が base の上に積んだ commit だけを `--onto` で main の上へ運び
+///   （[`rebase_onto`]・消えた commit は運ばない）、以後は従来の追随と同じ経路（衝突・記帳・再 gate）に合流する。
+/// - merge-base が無い・読めない周だけ追随の形が無いので `stale base` の rc 1 で何もしない（字面不変・fail-closed）。
 /// - worktree が clean でない周も rc 1 で何もしない（汚れた木では rebase を走らせない）。
 /// - 衝突は `git rebase --abort` で木を戻し `Failed detail=rebase-conflict`（終端・fail-closed）。
 /// - rebase で commit が 0 本になった周（同一変更の便が先に land）は gate を撃ち直さず
@@ -562,7 +568,7 @@ fn with_lines(mut lines: Vec<String>, mut outcome: Outcome) -> Outcome {
 ///   便の消した path を名指す write-set の項目の未解決なら [`follow::on_stale_rows`] へ委ねる（`Implemented
 ///   detail=rebase-stale-rows:`・runner を起こし直す・設計 §34）。他の findings と撃てない周は従来どおり。
 fn follow_main(entry: &Land<'_>, worktree: &Path, base: &str, main: &str) -> Follow {
-    if !git_ok(entry.repo, &["merge-base", "--is-ancestor", base, main]) {
+    if !follow::Ancestry::judge(entry.repo, base, main).can_follow() {
         return Follow::Stopped(refused(format!(
             "stale base（base={base} main={main}・base は main の祖先でない）"
         )));
@@ -685,6 +691,9 @@ fn carry_gated_pass(entry: &Land<'_>, reason: DetectionSkip) -> Option<String> {
 
 /// worktree の branch を main へ rebase する（追随の (iii)・(iii′)）。**main は動かさない**。
 ///
+/// - 撃つのは `git rebase --onto <main> <base>` の 1 形（設計 §38）: 便が記録した base の上に積んだ commit だけを
+///   main の上へ運ぶ。base が main の祖先の周は `git rebase <main>` と同じ結果で、祖先でないが merge-base の在る周は
+///   merge-base から base までの消えた commit を運ばない（経路を 2 本にしない）。
 /// - 衝突は [`super::follow::on_conflict`] へ委ねる（設計 pipeline-conflict.md §3）。器は木を戻し、
 ///   衝突を `Implemented detail=rebase-conflict:<base>..<main>` で記帳して**実装役を起こし直す**
 ///   ——便を終端にするのは上限に達した周だけである。どの形でも land はここで止まり、続きは
@@ -697,7 +706,7 @@ fn carry_gated_pass(entry: &Land<'_>, reason: DetectionSkip) -> Option<String> {
 ///   従来どおり撃ち直しの precheck へ流す（fail-closed の向きを変えない・`s2-07l.125`）。
 /// - commit が残った周は、撃ち直しの前に契約表の行が便の消した path を名指すかを見る（[`stale_rows_stop`]・設計 §34）。
 fn rebase_onto(entry: &Land<'_>, worktree: &Path, base: &str, main: &str) -> Result<Rebased, Outcome> {
-    if !git_ok(worktree, &["rebase", main]) {
+    if !git_ok(worktree, &["rebase", "--onto", main, base]) {
         return Err(follow::on_conflict(&Conflict {
             turn: turn_of(entry),
             base,

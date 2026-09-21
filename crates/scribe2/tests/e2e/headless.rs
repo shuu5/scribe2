@@ -2765,6 +2765,10 @@ fn runner_prompt_carries_follow_section_rule_and_keeps_section_order() {
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
     let prompt = slurp(&dir.join("stdin"));
     assert!(prompt.contains("## 追随」節"), "追随節の読み方を運ぶ: {prompt}");
+    // 追随の指示は `--onto` の 2 sha の形（設計 pipeline.md §38・`s2-07l.449`）: 便の base から先の commit だけを
+    // main の上へ運ぶ（素の `git rebase <sha>` の形は消えた commit を運ぶので雛形から落とす）。
+    assert!(prompt.contains("`git rebase --onto <main> <base>`"), "--onto の 2 sha の形で追随を命じる: {prompt}");
+    assert!(!prompt.contains("`git rebase <sha>`"), "素の rebase の形は命じない: {prompt}");
     assert!(prompt.contains("git rebase --continue"), "解き終え方を命じる: {prompt}");
     assert!(prompt.contains("git rebase --abort"), "解けない周の戻し方を命じる: {prompt}");
     assert!(prompt.contains("- main が deadbeef へ進んだ"), "stdin の節がそのまま載る: {prompt}");

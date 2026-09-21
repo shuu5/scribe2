@@ -1414,6 +1414,249 @@ fn pipe_land_rebase_refuses_when_base_is_not_ancestor_of_main() {
     clean(&[&repo, &state]);
 }
 
+// ───── 追随の形が無い便（base が main の祖先でない）を merge-base からの rebase --onto で追随する（設計 pipeline.md §38・`s2-07l.449`・接頭辞 `pipe_land_onto_`） ─────
+
+/// main を 1 commit 進める（path と本文）。返すのは動いた後の main の sha。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn commit_main_file(repo: &Path, path: &str, body: &str) -> String {
+    let file = repo.join(path);
+    if let Some(parent) = file.parent() {
+        fs::create_dir_all(parent).expect("commit の dir を作れる");
+    }
+    fs::write(&file, body).expect("別便の変更を書ける");
+    git(repo, &["add", "-A"]);
+    git(repo, &["commit", "-q", "-m", path]);
+    git(repo, &["rev-parse", "refs/heads/main"])
+}
+
+/// main を `onto` の commit へ巻き戻してから別の commit で進める（`.449` の 2 面目の型: 便の base が消えた commit の上に
+/// 居て main の祖先でなくなり、merge-base は `onto`）。anchor の checkout ごと戻す（便の worktree は別 branch なので
+/// 触らない）。返すのは動いた後の main の sha。
+fn rewrite_main_from(repo: &Path, onto: &str, path: &str, body: &str) -> String {
+    git(repo, &["reset", "-q", "--hard", onto]);
+    commit_main_file(repo, path, body)
+}
+
+/// 便の base が main の祖先でなく merge-base が `fork` であることを現物で確かめる（fixture が狙いの形か）。
+fn assert_diverged(repo: &Path, base: &str, main: &str, fork: &str) {
+    assert_eq!(git(repo, &["merge-base", base, main]), fork, "merge-base は巻き戻した先");
+    assert_eq!(git(repo, &["rev-list", "--count", &format!("{main}..{base}")]), "1", "base は main の祖先でない（消えた commit 1 本の上）");
+}
+
+/// 追随が**必ず衝突し**かつ base が main の祖先でない便を 1 本作る（[`conflicting_run`] の型で、便の base は seed の上の
+/// 1 commit〔面の外〕・gate PASS の後に main を seed へ巻き戻して便が触った行の隣へ進める）。返すのは 便の id・便の base・
+/// 動いた main の sha。
+fn diverged_conflicting_run(repo: &Path, state: &Path, marker: &Path, runner: &str) -> (String, String, String) {
+    let seed = git(repo, &["rev-parse", "refs/heads/main"]);
+    let base = commit_main_file(repo, "notes/pre.txt", "pre\n");
+    let path = write_contract(repo, &[], &[]);
+    let id = intake(repo, state, &path);
+    let spawned = spawn_with(repo, state, &id, runner);
+    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "turn 1 の spawn: {}", stderr_of(&spawned));
+    let lens = fake_lens(marker, &lens_verdict("PASS"));
+    let gated = gate_once(repo, state, &id, Some(&lens));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "PASS の gate: {}", stderr_of(&gated));
+    git(repo, &["reset", "-q", "--hard", &seed]);
+    let moved = move_main_into_conflict(repo);
+    assert_diverged(repo, &base, &moved, &seed);
+    (id, base, moved)
+}
+
+/// 起こし直しの stdin の「追随」節が main と便の base の 2 sha を名指し、`--onto` の形で命じる（1 行目は不変・素の
+/// `git rebase <main>` の形は無い）。
+fn assert_follow_section_names_both(stdin: &str, main: &str, base: &str) {
+    assert!(stdin.contains("## 追随"), "起こし直しの turn に節が付く: {stdin}");
+    assert!(stdin.contains(&format!("- main が {main} へ進んだ")), "1 行目は不変（main の sha）: {stdin}");
+    assert!(stdin.contains(&format!("- 便の base は {base}")), "便の base の sha も名指す: {stdin}");
+    assert!(stdin.contains(&format!("`git rebase --onto {main} {base}`")), "指示は --onto の 2 sha の形: {stdin}");
+    assert!(!stdin.contains(&format!("`git rebase {main}`")), "素の rebase の形は命じない: {stdin}");
+}
+
+/// (a) base が main の祖先でなく merge-base が在る便の land は `rebase --onto` で追随して `Landed`（設計 §38 (2)）:
+/// squash の tree は便の commit **だけ**を運び（消えた commit の file は無い・新しい main の file は在る）、記帳は従来の
+/// `rebase:<base>..<main>`、面の内で動いた main なので再 gate（偽 lens）も従来どおり撃つ。base（rc 1 `stale base`・段は
+/// Gated・event 0 増）では RED。
+#[test]
+fn pipe_land_onto_follows_diverged_main_and_lands() {
+    let (repo, state) = repo_with_state();
+    let seed = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let path = write_contract(&repo, &[], &[]);
+    // 便の base = seed の上の 1 commit（面の内）。この commit は後で main から消える。
+    let base = commit_main_file(&repo, "crates/pre.txt", "pre\n");
+    let marker = state.join("lens-ran");
+    let id = gated_pass(&repo, &state, &path, &marker);
+    let moved = rewrite_main_from(&repo, &seed, "crates/other.txt", "other\n");
+    assert_diverged(&repo, &base, &moved, &seed);
+    // `--lens` 無しの land の再 gate は審査の写し（`lens.toml`・§26）の lens を起こす＝その marker で「走ったか」を測る。
+    fs::remove_file(state.join(REVIEW_MARKER)).expect("審査の marker を消せる");
+    let out = land_once(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "--onto で追随した land は rc 0: {}", stderr_of(&out));
+    let new = git(&repo, &["rev-parse", "refs/heads/main"]);
+    assert_eq!(git(&repo, &["rev-parse", &format!("{new}^")]), moved, "squash の親は新しい main");
+    let stdout = stdout_of(&out);
+    assert!(stdout.contains(&format!("run={id} rebase={base}..{moved}")), "追随の行は従来の形（範囲の 2 sha）: {stdout}");
+    assert!(stdout.contains(&format!("landed={new}")), "landed=: {stdout}");
+    let files = git(&repo, &["ls-tree", "-r", "--name-only", &new]);
+    assert!(!files.contains("crates/pre.txt"), "消えた commit の file は運ばない: {files}");
+    assert!(files.contains("crates/other.txt"), "新しい main の file は在る: {files}");
+    assert_eq!(git(&repo, &["show", &format!("{new}:src/lib.rs")]), "// seed\nx", "便の変更だけが載る");
+    assert!(
+        stages(&state, &id).iter().any(|(stage, detail)| *stage == Some(Stage::Implemented)
+            && detail.as_deref() == Some(format!("rebase:{base}..{moved}").as_str())),
+        "記帳は従来の `rebase:<base>..<main>`: {:?}",
+        stages(&state, &id)
+    );
+    assert!(state.join(REVIEW_MARKER).exists(), "面の内で動いた main の追随は再 gate を撃つ（写しの lens が走る）");
+    assert!(stdout.contains("verdict=PASS") && !stdout.contains("regate=skipped"), "撃ち直しの判定行: {stdout}");
+    assert!(show_line(&repo, &state, &id).contains("stage=Landed"), "段は Landed");
+    clean(&[&repo, &state]);
+}
+
+/// (b) 同じ形で衝突する周は既存の `rebase-conflict:` の記帳と起こし直しの経路（字面不変）へ合流し、起こし直しの stdin の
+/// 「追随」節は main と base の **2 sha** を持つ。`--onto <main> <base>` で rebase を通す stub の runner は消えた commit を
+/// 運ばずに base を進め（`rebase:<base>..<main>`）、続きの gate → land で `Landed`。
+#[test]
+fn pipe_land_onto_conflict_restarts_the_runner_with_two_shas_and_lands() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let runner = stub_runner(&state, RESOLVE_ONTO);
+    let (id, base, moved) = diverged_conflicting_run(&repo, &state, &marker, &runner);
+    let out = land_extra(&repo, &state, &id, &["--runner", &runner]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_INCONCLUSIVE)), "起こし直した周は rc 3: {}", stderr_of(&out));
+    assert!(stdout_of(&out).contains(&format!("run={id} next=gate")), "次に撃つ段: {}", stdout_of(&out));
+    assert_eq!(conflict_count(&state, &id), 1, "衝突の記帳は 1 件（字面不変）: {:?}", stages(&state, &id));
+    assert!(
+        stages(&state, &id).iter().any(|(stage, detail)| *stage == Some(Stage::Implemented)
+            && detail.as_deref() == Some(format!("rebase-conflict:{base}..{moved}").as_str())),
+        "衝突の detail は base と main を名乗る: {:?}",
+        stages(&state, &id)
+    );
+    assert_follow_section_names_both(&stub_stdin(&state, 2), &moved, &base);
+    assert!(
+        stdout_of(&out).contains(&format!("run={id} rebase={base}..{moved}")),
+        "runner が --onto で解いた木の base を器が main へ進める: {}",
+        stdout_of(&out)
+    );
+    assert!(!mid_rebase(&repo, &id), "木は rebase の途中でない");
+    fs::remove_file(&marker).ok();
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let gated = gate_once(&repo, &state, &id, Some(&lens));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "新しい base の gate は PASS: {}", stderr_of(&gated));
+    let landed = land_extra(&repo, &state, &id, &["--runner", &runner]);
+    assert_eq!(landed.status.code(), Some(i32::from(RC_OK)), "land: {}", stderr_of(&landed));
+    let new = git(&repo, &["rev-parse", "refs/heads/main"]);
+    assert_eq!(git(&repo, &["rev-parse", &format!("{new}^")]), moved, "squash の親は新しい main");
+    assert_eq!(git(&repo, &["show", &format!("{new}:src/lib.rs")]), "// seed\ny\nx", "新しい main の行と便の行が両方載る");
+    let files = git(&repo, &["ls-tree", "-r", "--name-only", &new]);
+    assert!(!files.contains("notes/pre.txt"), "消えた commit の file は運ばない: {files}");
+    assert_eq!(stub_calls(&state), 2, "起こし直しは 1 回だけ");
+    assert!(show_line(&repo, &state, &id).contains("stage=Landed"), "段は Landed");
+    clean(&[&repo, &state]);
+}
+
+/// (b′) `--runner` の無い周は既存の rc 1（衝突の記帳だけ残り `resume --runner` で続く・木は衝突前へ戻る・main は動かない）。
+#[test]
+fn pipe_land_onto_conflict_without_runner_records_and_stops() {
+    let (repo, state) = repo_with_state();
+    let seed = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let path = write_contract(&repo, &[], &[]);
+    let base = commit_main_file(&repo, "notes/pre.txt", "pre\n");
+    let marker = state.join("lens-ran");
+    let id = gated_pass(&repo, &state, &path, &marker);
+    let worktree = worktree_of(&repo, &id);
+    let head_before = git(&worktree, &["rev-parse", "HEAD"]);
+    git(&repo, &["reset", "-q", "--hard", &seed]);
+    let moved = move_main_into_conflict(&repo);
+    assert_diverged(&repo, &base, &moved, &seed);
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let out = land_extra(&repo, &state, &id, &["--lens", &lens]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "起こし直せない周は rc 1: {}", stderr_of(&out));
+    assert!(stderr_of(&out).contains("--runner が要る"), "理由: {}", stderr_of(&out));
+    assert_eq!(conflict_count(&state, &id), 1, "衝突の記帳は 1 件: {:?}", stages(&state, &id));
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), moved, "main は 1 byte も動かない");
+    assert_eq!(git(&worktree, &["rev-parse", "HEAD"]), head_before, "木は衝突前へ戻る");
+    assert!(git(&worktree, &["status", "--porcelain"]).is_empty(), "衝突の残骸が無い");
+    assert!(show_line(&repo, &state, &id).contains("stage=Implemented"), "段は Implemented（起こし直せる側）");
+    clean(&[&repo, &state]);
+}
+
+/// (c) merge-base の無い main（親を持たない commit＝無関係な歴史）は従来どおり `stale base` の rc 1・event 0 増・rebase も
+/// 撃たない（極性不変・fail-closed＝無関係な歴史へ便の commit を運ばない）。
+#[test]
+fn pipe_land_onto_unrelated_history_is_still_stale_base() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let marker = state.join("lens-ran");
+    let id = gated_pass(&repo, &state, &path, &marker);
+    let worktree = worktree_of(&repo, &id);
+    let head_before = git(&worktree, &["rev-parse", "HEAD"]);
+    let tree = git(&repo, &["rev-parse", "refs/heads/main^{tree}"]);
+    let root = git(&repo, &["commit-tree", &tree, "-m", "unrelated"]);
+    git(&repo, &["update-ref", "refs/heads/main", &root]);
+    assert_eq!(git(&repo, &["rev-list", "--count", &root]), "1", "main は親を持たない commit（merge-base は無い）");
+    let before = event_count(&state);
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let out = land_extra(&repo, &state, &id, &["--lens", &lens]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "merge-base の無い main は rc 1: {}", stderr_of(&out));
+    assert!(stderr_of(&out).contains("stale base"), "断りの字面は従来どおり: {}", stderr_of(&out));
+    assert_eq!(event_count(&state), before, "何も書かない（event 0 増）");
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), root, "main は動かない");
+    assert_eq!(git(&worktree, &["rev-parse", "HEAD"]), head_before, "worktree も動かない（rebase を撃たない）");
+    assert!(show_line(&repo, &state, &id).contains("stage=Gated"), "段は Gated のまま");
+    clean(&[&repo, &state]);
+}
+
+/// (d) `--onto` の追随の後の `base_of_run` は main を返し（記帳の新しい側＝merge-base ではない）、再 gate の要否は §30 の判定の
+/// まま——main との差分が検出線の面の外（`notes/` だけ）なら再 gate を省いて前周の PASS を引き継ぐ（lens は走らない・
+/// `regate=skipped`）。
+#[test]
+fn pipe_land_onto_records_main_as_the_new_base_and_skips_regate_outside_scope() {
+    use vessel::pipe::{base_of_run, Base};
+    let (repo, state) = repo_with_state();
+    let seed = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let path = write_contract(&repo, &[], &[]);
+    let base = commit_main_file(&repo, "notes/pre.txt", "pre\n");
+    let marker = state.join("lens-ran");
+    let id = gated_pass(&repo, &state, &path, &marker);
+    let moved = rewrite_main_from(&repo, &seed, "notes/other.txt", "other\n");
+    assert_diverged(&repo, &base, &moved, &seed);
+    // gate の flag の lens と審査の写しの lens の marker を両方外す（どちらも起きない＝再 gate そのものが無い）。
+    fs::remove_file(&marker).expect("lens の marker を消せる");
+    fs::remove_file(state.join(REVIEW_MARKER)).expect("審査の marker を消せる");
+    let out = land_once(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "面の外の追随は再 gate 無しで land: {}", stderr_of(&out));
+    let stdout = stdout_of(&out);
+    assert!(stdout.contains(&format!("run={id} rebase={base}..{moved}")), "追随の行: {stdout}");
+    assert!(stdout.contains("regate=skipped"), "再 gate を省いて引き継いだ: {stdout}");
+    assert!(!marker.exists() && !state.join(REVIEW_MARKER).exists(), "lens は走らない");
+    assert_eq!(base_of_run(&state, &id), Base::Known(moved.clone()), "新しい base は main（merge-base {seed} ではない）");
+    let new = git(&repo, &["rev-parse", "refs/heads/main"]);
+    assert_eq!(git(&repo, &["rev-parse", &format!("{new}^")]), moved, "squash の親は新しい main");
+    let files = git(&repo, &["ls-tree", "-r", "--name-only", &new]);
+    assert!(!files.contains("notes/pre.txt") && files.contains("notes/other.txt"), "便の commit だけを運ぶ: {files}");
+    assert!(show_line(&repo, &state, &id).contains("stage=Landed"), "段は Landed");
+    clean(&[&repo, &state]);
+}
+
+/// (e) 祖先である周（従来の追随）の起こし直しの「追随」節も同じ 2 sha の形で `--onto <main> <base>` を命じる（経路を 2 本に
+/// しない）。既存の追随の歯（`$SHA` で素の rebase を撃つ stub）の期待は変えない＝節の 1 行目は不変。
+#[test]
+fn pipe_land_onto_ancestor_follow_section_names_both_shas() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let runner = stub_runner(&state, KEEP_CONFLICT);
+    let (id, base, moved) = conflicting_run(&repo, &state, &marker, &runner);
+    // fixture の形の確認: base は main の祖先（`git` helper は rc 0 を要求する）。
+    git(&repo, &["merge-base", "--is-ancestor", &base, &moved]);
+    let out = land_extra(&repo, &state, &id, &["--runner", &runner]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_INCONCLUSIVE)), "{}", stderr_of(&out));
+    assert_follow_section_names_both(&stub_stdin(&state, 2), &moved, &base);
+    clean(&[&repo, &state]);
+}
+
 #[test]
 fn pipe_land_reruns_verify_on_main_and_fails_loud() {
     let (repo, state) = repo_with_state();
@@ -2806,7 +3049,8 @@ fn pipe_land_anchor_before_verify_records_clean_anchor_during_main_check() {
 /// turn 1 は契約の実装（`src/lib.rs` の末尾へ `x` を足して commit）で、turn 2 以降は `second` の
 /// 本文＝**追随の解き方をここで振る**。どの turn も呼出回数と stdin を置き場へ写すので、
 /// 「起こされたか」「何を渡されたか」を rc でなく効果で測れる。`$SHA` には stdin の「追随」節が
-/// 名指す main の sha が入る（節が無い周は空＝rebase が落ちて歯が赤くなる＝空虚にならない）。
+/// 名指す main の sha、`$BASE` には同じ節が名指す便の base の sha が入る（節が無い周は空＝rebase が
+/// 落ちて歯が赤くなる＝空虚にならない）。
 fn stub_runner(state: &Path, second: &str) -> String {
     stub_runner_turns(state, IMPLEMENT, second)
 }
@@ -2825,7 +3069,8 @@ fn stub_runner_turns(state: &Path, first: &str, second: &str) -> String {
         "#!/bin/sh\nD='{}'\nprintf 'call\\n' >> \"$D/calls\"\nN=$(wc -l < \"$D/calls\" | tr -d ' ')\n\
          printf '%s\\n' \"$@\" > \"$D/argv-$N\"\n\
          cat > \"$D/stdin-$N\"\nif [ \"$N\" = 1 ]; then\n{first}\nfi\n\
-         SHA=$(sed -n 's/^- main が \\(.*\\) へ進んだ$/\\1/p' \"$D/stdin-$N\" | head -1)\n{second}\n",
+         SHA=$(sed -n 's/^- main が \\(.*\\) へ進んだ$/\\1/p' \"$D/stdin-$N\" | head -1)\n\
+         BASE=$(sed -n 's/^- 便の base は \\(.*\\)$/\\1/p' \"$D/stdin-$N\" | head -1)\n{second}\n",
         dir.display()
     );
     fs::write(&path, body).expect("stub を書ける");
@@ -2834,6 +3079,10 @@ fn stub_runner_turns(state: &Path, first: &str, second: &str) -> String {
 
 /// turn 2 の本文: 衝突を write-set の中で解いて `git rebase --continue` で終える。
 const RESOLVE: &str = "if git rebase \"$SHA\"; then exit 0; fi\nprintf '// seed\\ny\\nx\\n' > src/lib.rs\ngit add src/lib.rs\nGIT_EDITOR=true git rebase --continue";
+
+/// turn 2 の本文: 節の名指す 2 sha で `git rebase --onto <main> <base>` を撃ち（雛形の指示どおり・設計 §38）、衝突を
+/// write-set の中で解いて `git rebase --continue` で終える。`$BASE` が空なら `--onto` が落ちて歯が赤くなる（空虚にならない）。
+const RESOLVE_ONTO: &str = "if git rebase --onto \"$SHA\" \"$BASE\"; then exit 0; fi\nprintf '// seed\\ny\\nx\\n' > src/lib.rs\ngit add src/lib.rs\nGIT_EDITOR=true git rebase --continue";
 
 /// turn 2 の本文: 解かずに木を戻して終わる（次の land でも同じ衝突が起きる）。
 const KEEP_CONFLICT: &str = "git rebase \"$SHA\" || git rebase --abort\nexit 0";

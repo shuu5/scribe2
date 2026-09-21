@@ -68,10 +68,10 @@ pub struct Launch<'a> {
     /// **回答済みの質問**（`Questioned` からの再 spawn だけが持つ・設計 pipeline-question.md §5）。
     /// 在る周は同じ run の worktree と base を使い、runner の stdin に「回答」節を付ける。
     pub answered: Option<Question>,
-    /// **追随の相手**（main の sha・便の base が main の真の祖先である周だけ・設計
-    /// pipeline-conflict.md §3）。在る周は同じ run の worktree と base を使い、runner の
-    /// stdin に「追随」節を付ける。値の出所は [`super::follow::section`] ただ 1 本である（便の消した path を名指す
-    /// 契約表の行の一覧〔設計 pipeline.md §34〕も同じ値が運ぶ）。
+    /// **追随の相手**（main と便の base の 2 sha・便の base が main と違い追随の形が在る〔祖先か merge-base が在る〕
+    /// 周だけ・設計 pipeline-conflict.md §3・pipeline.md §38）。在る周は同じ run の worktree と base を使い、runner の
+    /// stdin に「追随」節（`git rebase --onto <main> <base>` の指示）を付ける。値の出所は [`super::follow::section`]
+    /// ただ 1 本である（便の消した path を名指す契約表の行の一覧〔設計 pipeline.md §34〕も同じ値が運ぶ）。
     pub follow: Option<Section>,
     /// **途中再開**（上限で止まった `RateLimited` からの再 spawn と、runner が死んだ `Spawned` からの再 spawn
     /// だけが持つ・設計 account-autonomy.md §4）。在る周は同じ run の worktree と base を使い、runner の stdin に
@@ -429,8 +429,10 @@ fn prompt(launch: &Launch<'_>) -> String {
             item_list(&resumed.uncommitted)
         ));
     }
-    if let Some(Section { main, stale }) = &launch.follow {
-        body.push_str(&format!("\n## 追随\n- main が {main} へ進んだ\n- `git rebase {main}` を実行し、衝突を解いて `git rebase --continue` で終える\n"));
+    if let Some(Section { main, base, stale }) = &launch.follow {
+        body.push_str(&format!(
+            "\n## 追随\n- main が {main} へ進んだ\n- 便の base は {base}\n- `git rebase --onto {main} {base}` を実行し（base から先の便の commit だけを main の上へ運ぶ）、衝突を解いて `git rebase --continue` で終える\n"
+        ));
         if !stale.is_empty() {
             let rows: Vec<String> = stale.iter().map(|row| format!("{}#{}: {}", row.doc, row.id, row.item)).collect();
             body.push_str(&format!(

@@ -18,6 +18,12 @@
 //! detail=rebase-stale-rows:<base>..<main>` を記帳し、写しの write-set に行の設計 doc を追記して runner を起こす。回数は
 //! 衝突と同じ上限（[`is_conflict`] が両方の接頭辞を数える）で、上限で `Failed detail=rebase-stale-rows`。
 //!
+//! **追随の形が無い便（base が main の祖先でない）も merge-base が在れば追随する**（設計 pipeline.md §38・`s2-07l.449`）。
+//! 祖先検査は閉じた 3 値 [`Ancestry`]（祖先／祖先でないが merge-base が在る／merge-base が無い）で、land の追随
+//! （`follow_main`）と起こし直しの stdin の「追随」節（[`section`]）が**同じ 1 本**を読む。2 つ目の周は
+//! `git rebase --onto <main> <base>` で便が base の上に積んだ commit だけを main の上へ運び、以後は従来の追随の経路
+//! （衝突の起こし直し・`rebase:` の記帳・再 gate）に合流する。merge-base の無い周だけ `stale base` で断る。
+//!
 //! **runner を起こす経路はこの module の [`spawn_turn`] ただ 1 本**である（起動そのものは
 //! [`super::spawn::spawn`]＝C6 の 1 口）。起こし直しと通常の起動で turn の後始末（[`settle`]）が
 //! 分かれると、追随の base 記帳が片方の経路から静かに抜ける——`resume` で起こし直した turn が
@@ -277,11 +283,54 @@ pub struct StaleRow {
     pub item: String,
 }
 
+/// 便の base と main の関係（**閉じた 3 値**・宣言順・設計 pipeline.md §38・`s2-07l.449`）。
+///
+/// 読み手は 2 つ——land の追随（`follow_main`）と起こし直しの stdin の「追随」節（[`section`]）——で、**判定は
+/// [`Ancestry::judge`] の 1 本**である（片方だけが祖先検査を持つと、`--onto` の周の起こし直しに追随の指示が
+/// 渡らない穴が残る）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Ancestry {
+    /// base が main の祖先（従来の追随の形）。`git rebase --onto <main> <base>` の結果は `git rebase <main>` と同じ。
+    Ancestor,
+    /// 祖先でないが merge-base が 1 つ在る（main が巻き戻った / 分岐した・base は消えた commit の上に居る）。
+    /// 便が base の上に積んだ commit **だけ**を `--onto` で main の上へ運ぶ（merge-base から base までの消えた
+    /// commit は運ばない）。値は merge-base の sha（記帳には使わない・新しい base は main）。
+    Diverged(String),
+    /// merge-base が無い・読めない（無関係な歴史）。追随の形が無い＝`stale base` で断る（fail-closed）。
+    Unrelated,
+}
+
+impl Ancestry {
+    /// `git merge-base --is-ancestor` と `git merge-base` の 2 本で読む（祖先なら後者は撃たない）。
+    pub fn judge(repo: &Path, base: &str, main: &str) -> Self {
+        if git_ok(repo, &["merge-base", "--is-ancestor", base, main]) {
+            return Self::Ancestor;
+        }
+        match git_line(repo, &["merge-base", base, main]) {
+            Some(found) => Self::Diverged(found),
+            None => Self::Unrelated,
+        }
+    }
+
+    /// 追随の形が在るか（`Ancestor` / `Diverged`）。**bool はここ 1 本で enum から導く**（読めない周は偽）。
+    pub fn can_follow(&self) -> bool {
+        match self {
+            Self::Ancestor | Self::Diverged(_) => true,
+            Self::Unrelated => false,
+        }
+    }
+}
+
 /// runner の stdin の「追随」節の材料（出所は [`section`] の 1 本・[`super::spawn`] が描く）。
+///
+/// 追随の相手は **main と便の base の 2 sha**（設計 pipeline.md §38）。runner への指示は祖先の周も `--onto` の周も
+/// 同じ `git rebase --onto <main> <base>` の形（経路を 2 本にしない・runner が消えた commit を運ばない）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Section {
     /// 追随の相手（main の sha）。
     pub main: String,
+    /// 便の記録済み base（`--onto` の upstream＝この sha から先の commit だけを main の上へ運ぶ）。
+    pub base: String,
     /// 便の消した path を名指す行（`rebase-stale-rows:` で起こし直した周だけ・他は空）。
     pub stale: Vec<StaleRow>,
 }
@@ -609,11 +658,12 @@ pub(crate) fn spawn_turn(entry: &Turn<'_>, account: Account<'_>) -> Outcome {
     outcome
 }
 
-/// 便が追随すべき相手（main の sha）。追随の要らない周は `None`。
+/// 便が追随すべき相手（main の sha と便の base）。追随の要らない周は `None`。
 ///
-/// **「便の base が main の真の祖先である」の 1 条件**で決める。決めるのは runner の
-/// stdin の「追随」節（[`super::spawn`]）**だけ**である——turn の後始末（[`settle`]）は
-/// この値を見ない（節を渡さなかった turn で runner が自ら rebase した周も同じ 1 本で測る）。
+/// **「便の base が main と違い、追随の形が在る」**（[`Ancestry::can_follow`]＝祖先か merge-base が在る・land の
+/// `follow_main` と同じ 1 本の判定）で決める。決めるのは runner の stdin の「追随」節（[`super::spawn`]）
+/// **だけ**である——turn の後始末（[`settle`]）はこの値を見ない（節を渡さなかった turn で runner が自ら
+/// rebase した周も同じ 1 本で測る）。merge-base の無い周は節を渡さない（land も `stale base` で断る側）。
 ///
 /// 最後の `RunStage` の detail が `rebase-stale-rows:` の周（設計 pipeline.md §34）だけ、便の木で [`stale_rows_in`] を測り直して
 /// 行の一覧を節に載せる（replay と木の導出値・別の状態 file を持たない・測れない周は一覧が空）。
@@ -621,14 +671,14 @@ pub(crate) fn section(state_dir: &Path, repo: &Path, run: &str) -> Option<Sectio
     // base が無い周も読めない周も**節を渡さない**側へ倒す（追随は base が分かった周だけ書ける）。
     let base = base_of_run(state_dir, run).known()?;
     let main = git_line(repo, &["rev-parse", MAIN_REF])?;
-    if main == base || !git_ok(repo, &["merge-base", "--is-ancestor", &base, &main]) {
+    if main == base || !Ancestry::judge(repo, &base, &main).can_follow() {
         return None;
     }
     let stale = match last_stage_detail(state_dir, run).is_some_and(|detail| is_stale_rows(&detail)) {
         true => stale_rows_in(state_dir, run, &worktree_path(repo, run), &main).unwrap_or_default(),
         false => Vec::new(),
     };
-    Some(Section { main, stale })
+    Some(Section { main, base, stale })
 }
 
 /// 便の最後の `RunStage` の detail（無い・読めない周は `None`）。
@@ -784,16 +834,25 @@ fn mid_rebase(worktree: &Path) -> bool {
 }
 
 /// 記録済みの base と、turn の後に実測した merge-base（**進んでいる周だけ** `Some`）。
+///
+/// 進んだと読むのは 2 つの形（[`Ancestry`] の同じ 1 本で弁別する）: 記録済みの base が実測の merge-base の祖先
+/// （従来の追随）と、祖先でないが merge-base が在り、実測の merge-base が記録済みの base の手前**ではない**周
+/// （`--onto` で運ばれた木・設計 pipeline.md §38＝実測の merge-base が記録済みの base の祖先なら、木は
+/// まだ運ばれておらず base を手前へ戻す形なので進んでいない・却下案「merge-base を新しい base として記帳する」）。
 fn advanced(entry: &Turn<'_>) -> Option<(String, String)> {
     // base が無い周も読めない周も**進んでいないと読む**側へ倒す（追随の記帳を増やさない）。
     let old = base_of_run(entry.state_dir, entry.run).known()?;
     let head = git_line(&worktree_path(entry.repo, entry.run), &["rev-parse", "HEAD"])?;
     let main = git_line(entry.repo, &["rev-parse", MAIN_REF])?;
     let merged = git_line(entry.repo, &["merge-base", &head, &main])?;
-    if merged == old || !git_ok(entry.repo, &["merge-base", "--is-ancestor", &old, &merged]) {
+    if merged == old {
         return None;
     }
-    Some((old, merged))
+    match Ancestry::judge(entry.repo, &old, &merged) {
+        Ancestry::Ancestor => Some((old, merged)),
+        Ancestry::Diverged(fork) if fork != merged => Some((old, merged)),
+        Ancestry::Diverged(_) | Ancestry::Unrelated => None,
+    }
 }
 
 /// 終端の 1 件を記帳して断る（**終端形は [`FollowCheck`] の variant ごとに固定**・設計 §5）。
@@ -835,8 +894,8 @@ fn broken(reason: String) -> Outcome {
 #[cfg(test)]
 mod tests {
     use super::{
-        is_conflict, is_stale, removed_paths, retried, spawn_turn, stale_rows, widen_write_set, FollowCheck, Located, Runner,
-        StaleRow, Turn, DIRTY, EXHAUSTED, STALE, STALE_ROWS,
+        is_conflict, is_stale, removed_paths, retried, spawn_turn, stale_rows, widen_write_set, Ancestry, FollowCheck, Located,
+        Runner, StaleRow, Turn, DIRTY, EXHAUSTED, STALE, STALE_ROWS,
     };
     use crate::cli_outcome::{RC_OK, RC_REFUSED};
     use crate::fleet::store::{self, LockPolicy};
@@ -925,6 +984,33 @@ mod tests {
         let trail = stages(&state, "dirty");
         assert!(trail.contains(&(Some(Stage::Implemented), None)), "spawn は Implemented で終わった: {trail:?}");
         assert_eq!(trail.last(), Some(&(Some(Stage::Failed), Some(DIRTY.to_owned()))), "後始末の終端: {trail:?}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 祖先検査は閉じた 3 値（設計 pipeline.md §38）: 祖先／祖先でないが merge-base が在る（値は merge-base）／merge-base が
+    /// 無い（親を持たない commit・読めない sha）。追随の形が在るのは前 2 者だけで、`Unrelated` は偽（fail-closed）。
+    #[test]
+    fn pipe_land_onto_ancestry_is_a_closed_three_value() {
+        let (root, repo, _state) = repo_with_state("ancestry");
+        let seed = super::git_line(&repo, &["rev-parse", "HEAD"]).unwrap_or_default();
+        git(&repo, &["commit", "-q", "--allow-empty", "-m", "base"]);
+        let base = super::git_line(&repo, &["rev-parse", "HEAD"]).unwrap_or_default();
+        git(&repo, &["commit", "-q", "--allow-empty", "-m", "ahead"]);
+        let ahead = super::git_line(&repo, &["rev-parse", "HEAD"]).unwrap_or_default();
+        assert_eq!(Ancestry::judge(&repo, &base, &ahead), Ancestry::Ancestor, "base は ahead の祖先");
+        assert_eq!(Ancestry::judge(&repo, &base, &base), Ancestry::Ancestor, "同じ sha は祖先（要否は呼び手が先に見る）");
+        // seed から分岐した commit: base は祖先でなく merge-base は seed。
+        git(&repo, &["checkout", "-q", "-b", "side", &seed]);
+        git(&repo, &["commit", "-q", "--allow-empty", "-m", "side"]);
+        let side = super::git_line(&repo, &["rev-parse", "HEAD"]).unwrap_or_default();
+        assert_eq!(Ancestry::judge(&repo, &base, &side), Ancestry::Diverged(seed.clone()), "分岐は merge-base を持つ");
+        assert_eq!(Ancestry::judge(&repo, &ahead, &seed), Ancestry::Diverged(seed.clone()), "巻き戻りの merge-base は main 自身");
+        // 親を持たない commit: merge-base が無い。読めない sha も同じ側。
+        let tree = super::git_line(&repo, &["rev-parse", "HEAD^{tree}"]).unwrap_or_default();
+        let orphan = super::git_line(&repo, &["commit-tree", &tree, "-m", "orphan"]).unwrap_or_default();
+        assert_eq!(Ancestry::judge(&repo, &base, &orphan), Ancestry::Unrelated, "無関係な歴史");
+        assert_eq!(Ancestry::judge(&repo, &base, "0000000000000000000000000000000000000000"), Ancestry::Unrelated, "読めない sha");
+        assert!(Ancestry::Ancestor.can_follow() && Ancestry::Diverged(seed).can_follow() && !Ancestry::Unrelated.can_follow());
         let _ = std::fs::remove_dir_all(&root);
     }
 
