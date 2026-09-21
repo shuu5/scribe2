@@ -49,7 +49,7 @@ impl Counts {
     }
 }
 
-pub use scope::{measure_args, Scope};
+pub use scope::{measure_args, Pace, Scope};
 
 /// [`Scope`] を作れる場所を **この module の内側だけ**にする。親（[`run`] を含む）からは field が
 /// 見えないので、`-p` へ渡した名前と別の値で行を組む形は compile できない（lens-82 再確認の残余:
@@ -70,6 +70,19 @@ mod scope {
         }
     }
 
+    /// cargo-mutants へ渡す数 3 つ（並列度・thread 数・mutant の test の timeout 秒）。引数を
+    /// 束ねるのは clippy の `too-many-arguments-threshold`（5）の内に収めるためで、意味は 3 つの
+    /// 独立な値のまま（どれも歯が別々に pin する）。
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct Pace {
+        /// `--jobs`（器の受付が決めた値・§3.3）。
+        pub jobs: u64,
+        /// `--test-threads`（器の受付が決めた値・§31 約束 7）。
+        pub threads: u64,
+        /// `--timeout`（自前の baseline の壁時計から導いた秒・§33 約束 4）。
+        pub timeout_s: u64,
+    }
+
     /// `cargo` へ渡す引数（`cargo` の直後から）と、その `-p` に載せた [`Scope`]。
     ///
     /// `--in-diff <diff>` / `-p <scope>` / `-o <out>` / `--jobs <n>` はそれぞれ隣り合う対で、
@@ -80,9 +93,11 @@ mod scope {
     /// 受付で導いた実効値を宣言 file の `{jobs}` / `{threads}` 経由で受け取り、cargo-mutants の
     /// `--jobs` と test binary の `--test-threads` へそのまま渡すだけである。
     ///
-    /// 1 つ目の `--` の後ろ `--no-fail-fast` は cargo-mutants が baseline と各変異の `cargo test` へ
-    /// そのまま渡す引数（設計 gate-cost.md §19・憲法 C10）。既定の fail-fast では baseline の
-    /// 歯 1 本の flaky で残りが未実行のまま「baseline 失敗」へ倒れ、落ちた歯の全数を名指せない。
+    /// **mutant の test は fail-fast**（設計 gate-cost.md §33・行 y）: `--baseline skip` で
+    /// cargo-mutants の baseline を撃たず（全数の baseline は [`super::baseline_args`] が道具の外で
+    /// 1 回撃つ）、`--timeout <T>` にその壁時計から導いた秒を渡す（skip した周に固定 300 秒へ
+    /// 倒れさせない）。1 つ目の `--` の後ろに `--no-fail-fast` は置かない＝撃墜は最初に落ちた
+    /// binary で決まる。
     ///
     /// 2 つ目の `--` の後ろ `--test-threads <t>` は cargo test が test binary へ渡す引数
     /// （設計 gate-cost.md §22・行 m）。cargo-mutants は 1 つ目の `--` より後ろを 2 つ目の `--`
@@ -91,7 +106,7 @@ mod scope {
     /// `t` の導出（cores と `gate.mutants_jobs` から）は器の受付が持つ（§31・行 w）——道具が
     /// `cores / jobs` で導くと、受け付けた枠が上限より小さい周に job あたりの値段が上がり、gate 2 本で
     /// core の 2 倍の thread を作る。
-    pub fn measure_args(diff: &Path, out: &Path, scope: &str, jobs: u64, threads: u64) -> (Vec<String>, Scope) {
+    pub fn measure_args(diff: &Path, out: &Path, scope: &str, pace: Pace) -> (Vec<String>, Scope) {
         let mut args: Vec<String> = ["mutants", "--in-diff"].iter().map(|s| (*s).to_owned()).collect();
         args.push(diff.display().to_string());
         args.push("-p".to_owned());
@@ -99,9 +114,11 @@ mod scope {
         args.extend(["--no-shuffle", "--copy-vcs", "true", "-o"].iter().map(|s| (*s).to_owned()));
         args.push(out.display().to_string());
         args.push("--jobs".to_owned());
-        args.push(jobs.to_string());
-        args.extend(["--", "--no-fail-fast", "--", "--test-threads"].iter().map(|s| (*s).to_owned()));
-        args.push(threads.to_string());
+        args.push(pace.jobs.to_string());
+        args.extend(["--baseline", "skip", "--timeout"].iter().map(|s| (*s).to_owned()));
+        args.push(pace.timeout_s.to_string());
+        args.extend(["--", "--", "--test-threads"].iter().map(|s| (*s).to_owned()));
+        args.push(pace.threads.to_string());
         (args, Scope(scope.to_owned()))
     }
 }
@@ -245,6 +262,53 @@ pub fn diagnosed(outcome: Result<Counts, String>, tail: impl FnOnce() -> String)
     outcome.map_err(|reason| format!("{reason}\n{BASELINE_TAIL_HEADING}\n{}", tail()))
 }
 
+/// baseline の build（`cargo` の直後から）。秒は測らない（設計 gate-cost.md §33 約束 1 (i)）。
+pub fn baseline_build_args(scope: &str) -> Vec<String> {
+    ["test", "-p", scope, "--no-run"].iter().map(|s| (*s).to_owned()).collect()
+}
+
+/// baseline の test（`cargo` の直後から・設計 gate-cost.md §33 約束 1 (ii)）。**全数**を走らせる
+/// ＝`--no-fail-fast` は 1 つ目の `--` の前（cargo test 自身の flag）に置く。§19 の理由（flaky
+/// 1 本で落ちた歯の全数を名指せない）は baseline にだけ当たるので、ここにだけ残す。
+pub fn baseline_args(scope: &str, threads: u64) -> Vec<String> {
+    let mut args: Vec<String> = ["test", "-p", scope, "--no-fail-fast", "--", "--test-threads"]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+    args.push(threads.to_string());
+    args
+}
+
+/// mutant の test の timeout の床（秒・cargo-mutants v27 の既定と同じ値・rules 行ではない）。
+const TIMEOUT_FLOOR_S: u64 = 20;
+
+/// baseline の test の壁時計に掛ける倍率（cargo-mutants v27 の既定と同じ値）。
+const TIMEOUT_MULTIPLIER: u64 = 5;
+
+/// baseline の test の壁時計（ミリ秒の整数）から mutant の test の timeout 秒を導く:
+/// `T = max(20, ceil(5 × ms / 1000))`（設計 gate-cost.md §33 約束 4）。**整数演算**で導く
+/// ——float の丸めで 309 / 310 が揺れる形を作らない。
+pub fn mutant_timeout_s(baseline_ms: u64) -> u64 {
+    baseline_ms
+        .saturating_mul(TIMEOUT_MULTIPLIER)
+        .div_ceil(1000)
+        .max(TIMEOUT_FLOOR_S)
+}
+
+/// 自前の baseline の判定（設計 gate-cost.md §33 約束 2）。rc ≠ 0 の周は cargo-mutants を起こさず
+/// 「測れなかった」（rc 2）へ倒し、理由行の後ろに**自前の** `baseline.log` の末尾を添える
+/// （[`diagnosed`] と同じ形・読む file の出所だけが変わる）。rc 0 の周は `Ok`＝cargo-mutants へ進む。
+pub fn baseline_judged(succeeded: bool, log: &str) -> Result<(), String> {
+    if succeeded {
+        return Ok(());
+    }
+    diagnosed(
+        Err("baseline の cargo test が非 0 で終えた（測れていない）".to_owned()),
+        || baseline_tail(log, BASELINE_TAIL_LINES),
+    )
+    .map(|_| ())
+}
+
 /// `"key": <整数>` の形を 1 つ読む。数でなければ `None`（文字列や object は数えない）。
 fn top_level_number(rest: &str) -> Option<(&str, u64)> {
     let after_quote = rest.strip_prefix('"')?;
@@ -372,9 +436,17 @@ pub fn run(args: &[String]) -> ExitCode {
         Ok(found) => found,
         Err(reason) => return unmeasured(&format!("mutants-diff: {reason}")),
     };
+    // **baseline は道具の外で 1 回、全数**（設計 gate-cost.md §33）。赤なら cargo-mutants を起こさない。
+    let log_path = work.join("baseline.log");
+    let threads = threads_of(args);
+    let timeout_s = match own_baseline(&root, &layout.name, threads, &log_path) {
+        Ok(found) => found,
+        Err(reason) => return unmeasured(&format!("mutants-diff: {reason}")),
+    };
     // **測る範囲は 1 つの束縛**: `-p` へ渡した名前を [`Scope`] として受け取り、行はそれでしか組めない。
     // 並列度も thread 数も**受けた値をそのまま**渡す（cores はここで読まない・設計 gate-cost.md §31 約束 7）。
-    let (args, scope) = measure_args(&diff_path, &out, &layout.name, jobs_of(args), threads_of(args));
+    let pace = Pace { jobs: jobs_of(args), threads, timeout_s };
+    let (args, scope) = measure_args(&diff_path, &out, &layout.name, pace);
     let status = Command::new("cargo")
         .args(args)
         .current_dir(&root)
@@ -395,9 +467,9 @@ pub fn run(args: &[String]) -> ExitCode {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => without_outcomes(status.success()),
         Err(err) => Err(format!("outcomes.json を読めない: {err}（測れていない）")),
     };
-    // **rc 2 の周だけ** cargo-mutants が書いた `baseline.log` の末尾を理由行の後ろに写す
-    // （`Stdio::null()` で起こしているので、出力は file 経由でしか読めない）。
-    let counts = match diagnosed(counts, || baseline_log_tail(&out)) {
+    // **rc 2 の周だけ**自前の `baseline.log` の末尾を理由行の後ろに写す（cargo-mutants は
+    // `--baseline skip` で baseline を書かない・設計 gate-cost.md §33 約束 2）。
+    let counts = match diagnosed(counts, || baseline_log_tail(&log_path)) {
         Ok(found) => found,
         Err(reason) => return unmeasured(&format!("mutants-diff: {reason}")),
     };
@@ -412,17 +484,61 @@ pub fn run(args: &[String]) -> ExitCode {
     verdict(&counts, deny)
 }
 
-/// `out/mutants.out/log/baseline.log`（cargo-mutants が書く）の末尾。無い・読めない周はその
+/// 自前の `baseline.log`（作業 dir・[`own_baseline`] が書く）の末尾。無い・読めない周はその
 /// 理由を 1 行で（診断が無いことも診断として残す）。
-fn baseline_log_tail(out: &Path) -> String {
-    let log = out.join("mutants.out").join("log").join("baseline.log");
-    match std::fs::read_to_string(&log) {
+fn baseline_log_tail(log: &Path) -> String {
+    match std::fs::read_to_string(log) {
         Ok(text) => baseline_tail(&text, BASELINE_TAIL_LINES),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            "baseline.log が無い（cargo-mutants が baseline に届いていない）".to_owned()
+            "baseline.log が無い（baseline に届いていない）".to_owned()
         }
         Err(err) => format!("baseline.log を読めない: {err}"),
     }
+}
+
+/// 自前の baseline（設計 gate-cost.md §33 約束 1 / 2 / 4）: build → test を 1 回ずつ撃ち、test の
+/// stdout / stderr を `log` へ写す。赤なら [`baseline_judged`] の `Err`（末尾つき）、緑なら test の
+/// 壁時計（ms）から導いた timeout 秒を返し、`log` の末尾に `timeout=<T>` の 1 行を足す。
+fn own_baseline(root: &Path, scope: &str, threads: u64, log: &Path) -> Result<u64, String> {
+    let fire = |args: Vec<String>| {
+        Command::new("cargo")
+            .args(args)
+            .current_dir(root)
+            .stdin(Stdio::null())
+            .output()
+            .map_err(|err| format!("baseline の cargo test を起動できない: {err}（測れていない）"))
+    };
+    let build = fire(baseline_build_args(scope))?;
+    if !build.status.success() {
+        let text = log_text(&build);
+        write_log(log, &text)?;
+        return baseline_judged(false, &text).map(|()| 0);
+    }
+    let started = std::time::Instant::now();
+    let test = fire(baseline_args(scope, threads))?;
+    let ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let mut text = log_text(&test);
+    let judged = baseline_judged(test.status.success(), &text);
+    let timeout_s = mutant_timeout_s(ms);
+    if judged.is_ok() {
+        text.push_str(&format!("timeout={timeout_s}\n"));
+    }
+    write_log(log, &text)?;
+    judged.map(|()| timeout_s)
+}
+
+/// 1 手の stdout と stderr を 1 本の log の字面へ（stdout が先）。
+fn log_text(output: &std::process::Output) -> String {
+    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&output.stderr));
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text
+}
+
+fn write_log(log: &Path, text: &str) -> Result<(), String> {
+    std::fs::write(log, text).map_err(|err| format!("baseline.log を書けない: {err}（測れていない）"))
 }
 
 /// cargo-mutants が居るか（`--version` が rc 0 を返すか）。
@@ -453,42 +569,88 @@ fn write_diff(root: &Path, base: &str, path: &Path) -> Result<(), String> {
 /// 他の `mutants_*` の歯は `main.rs` の test 区間に在り、そちらは触らない。
 #[cfg(test)]
 mod tests {
-    use super::measure_args;
+    use super::{
+        baseline_args, baseline_build_args, baseline_judged, measure_args, mutant_timeout_s, Pace,
+        BASELINE_TAIL_HEADING,
+    };
     use std::path::Path;
 
-    /// cargo-mutants が baseline と各変異の `cargo test` へ渡す引数の 1 つ目の `--` の直後が
-    /// `--no-fail-fast`（憲法 C10: 歯 1 本の flaky で残りを未実行のまま終えず、落ちた歯の全数を
-    /// 名指す）。`-p <scope>` / `--jobs N` / `--in-diff` / `-o` の対は不変。`--` は 2 つで、
-    /// 2 つ目の直後が `--test-threads`（§22・行 m: cargo test から test binary へ渡る側）。
+    /// **baseline の** `cargo test` は全数（憲法 C10・§19 の理由は baseline にだけ当たる・§33）:
+    /// `test -p <scope> --no-fail-fast -- --test-threads <t>` を**この順**で組み、`--no-fail-fast` は
+    /// 1 つ目の `--` の前（cargo test 自身の flag）。`--` は 1 つで、その直後が `--test-threads`。
+    /// build の手は `test -p <scope> --no-run`（--no-fail-fast も thread も持たない）。
     #[test]
     fn no_fail_fast_is_passed_to_cargo_test_by_mutants() {
-        for (scope, jobs) in [("probe-pkg-3f", 3_u64), ("other-pkg-7a", 1)] {
-            let (args, bound) = measure_args(Path::new("probe.diff"), Path::new("probe-out"), scope, jobs, 4);
-            let dashes_at: Vec<usize> = args.iter().enumerate().filter(|(_, a)| *a == "--").map(|(i, _)| i).collect();
-            assert_eq!(dashes_at.len(), 2, "-- は 2 つ: {args:?}");
+        for (scope, threads) in [("probe-pkg-3f", 3_u64), ("other-pkg-7a", 1)] {
+            let args = baseline_args(scope, threads);
+            let threads = threads.to_string();
             assert_eq!(
-                args.get(dashes_at[0] + 1).map(String::as_str),
-                Some("--no-fail-fast"),
-                "1 つ目の -- の直後は --no-fail-fast: {args:?}"
+                args,
+                ["test", "-p", scope, "--no-fail-fast", "--", "--test-threads", threads.as_str()],
+                "baseline の引数はこの順: {args:?}"
             );
-            assert_eq!(
-                args.get(dashes_at[1] + 1).map(String::as_str),
-                Some("--test-threads"),
-                "2 つ目の -- の直後は --test-threads: {args:?}"
-            );
-            let value_after = |flag: &str| args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).map(String::as_str);
-            assert_eq!(value_after("-p"), Some(scope), "{args:?}");
-            assert_eq!(value_after("--jobs"), Some(jobs.to_string().as_str()), "{args:?}");
-            assert_eq!(value_after("--in-diff"), Some("probe.diff"), "{args:?}");
-            assert_eq!(value_after("-o"), Some("probe-out"), "{args:?}");
-            assert_eq!(bound.name(), scope, "-p へ渡した名前が Scope");
-            // 1 つ目の `--` の前に cargo-mutants 自身の引数が全部在る（`--` の後ろへ漏れた引数は
-            // cargo test へ渡って意味を失う）。
-            let dashes = dashes_at[0];
-            for flag in ["--in-diff", "-p", "--no-shuffle", "--copy-vcs", "-o", "--jobs"] {
-                let at = args.iter().position(|a| a == flag).expect("cargo-mutants の引数が在る");
-                assert!(at < dashes, "{flag} は -- の前: {args:?}");
-            }
+            assert_eq!(args.iter().filter(|a| *a == "--").count(), 1, "-- は 1 つ: {args:?}");
+            let build = baseline_build_args(scope);
+            assert_eq!(build, ["test", "-p", scope, "--no-run"], "build の手: {build:?}");
         }
+    }
+
+    /// (a) mutant の test は fail-fast: `measure_args` の `--` の後ろに `--no-fail-fast` が無く、
+    /// `--baseline skip` が `--jobs <j>` の後ろ・1 つ目の `--` の前に在る。
+    #[test]
+    fn mutants_diff_fail_fast_mutants_skip_the_baseline_and_do_not_pass_no_fail_fast() {
+        for (jobs, threads, timeout_s) in [(3_u64, 4_u64, 21_u64), (1, 1, 310)] {
+            let pace = Pace { jobs, threads, timeout_s };
+            let (args, _) = measure_args(Path::new("probe.diff"), Path::new("probe-out"), "probe-pkg-3f", pace);
+            assert!(!args.iter().any(|a| a == "--no-fail-fast"), "mutant に --no-fail-fast は無い: {args:?}");
+            let jobs_at = args.iter().position(|a| a == "--jobs").expect("--jobs が在る");
+            let skip_at = args.iter().position(|a| a == "--baseline").expect("--baseline が在る");
+            let dashes = args.iter().position(|a| a == "--").expect("-- が在る");
+            assert_eq!(args.get(jobs_at + 1).map(String::as_str), Some(jobs.to_string().as_str()), "{args:?}");
+            assert_eq!(skip_at, jobs_at + 2, "--baseline は --jobs <j> の直後: {args:?}");
+            assert_eq!(args.get(skip_at + 1).map(String::as_str), Some("skip"), "{args:?}");
+            assert!(skip_at < dashes, "--baseline skip は -- の前: {args:?}");
+            assert_eq!(
+                &args[dashes..],
+                ["--", "--", "--test-threads", threads.to_string().as_str()],
+                "-- の後ろは -- --test-threads <t> だけ: {args:?}"
+            );
+        }
+    }
+
+    /// (d) の後半: `--timeout <T>` が `--baseline skip` の直後・1 つ目の `--` の前に `T` の字面で載る。
+    #[test]
+    fn mutants_diff_fail_fast_timeout_sits_after_baseline_skip_before_dashes() {
+        for timeout_s in [20_u64, 21, 310] {
+            let pace = Pace { jobs: 2, threads: 3, timeout_s };
+            let (args, _) = measure_args(Path::new("d"), Path::new("o"), "p", pace);
+            let skip_at = args.iter().position(|a| a == "--baseline").expect("--baseline が在る");
+            let dashes = args.iter().position(|a| a == "--").expect("-- が在る");
+            assert_eq!(
+                &args[skip_at..dashes],
+                ["--baseline", "skip", "--timeout", timeout_s.to_string().as_str()],
+                "{args:?}"
+            );
+            assert_eq!(args.iter().filter(|a| *a == "--timeout").count(), 1, "{args:?}");
+        }
+    }
+
+    /// (d) timeout の式 `max(20, ceil(5 × ms / 1000))`: 床・切り上げ・倍率が別々に落ちる 3 点。
+    #[test]
+    fn mutants_diff_fail_fast_timeout_is_max_20_ceil_5x_seconds() {
+        assert_eq!(mutant_timeout_s(3000), 20, "床: 5 × 3 = 15 は 20 に上がる");
+        assert_eq!(mutant_timeout_s(4020), 21, "切り上げ: 5 × 4.02 = 20.1 は 21（floor / round は 20）");
+        assert_eq!(mutant_timeout_s(62000), 310, "倍率 5: 5 × 62 = 310");
+    }
+
+    /// (c) baseline の rc の判定の対: rc ≠ 0 は `Err`（字面に自前の log の末尾が載る）、rc 0 は `Ok`。
+    #[test]
+    fn mutants_diff_fail_fast_baseline_rc_decides_whether_mutants_run() {
+        let log = "running 3 tests\ntest probe_tooth_4c1 ... FAILED\ntest result: FAILED. 2 passed; 1 failed\n";
+        let red = baseline_judged(false, log).expect_err("rc ≠ 0 は測れていない");
+        assert!(red.contains(BASELINE_TAIL_HEADING), "見出しが載る: {red}");
+        assert!(red.contains("test probe_tooth_4c1 ... FAILED"), "自前の log の末尾が載る: {red}");
+        assert!(red.ends_with("test result: FAILED. 2 passed; 1 failed"), "末尾で終わる: {red}");
+        assert_eq!(baseline_judged(true, log), Ok(()), "rc 0 は cargo-mutants へ進む");
     }
 }

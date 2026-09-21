@@ -130,8 +130,8 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use crate::mutantsdiff::{
-        baseline_tail, deny_line_enabled, diagnosed, measure_args, measured, parse_outcomes, verdict,
-        without_outcomes, Counts, BASELINE_TAIL_LINES,
+        baseline_tail, deny_line_enabled, diagnosed, measured, parse_outcomes, verdict, without_outcomes,
+        Counts, Pace, BASELINE_TAIL_LINES,
     };
     use std::path::Path;
     use std::process::ExitCode;
@@ -176,6 +176,21 @@ mod tests {
     /// 行を組む側に置く**実在しない** package 名（`s2-07l.82`）。実在の名を置くと、値が固定
     /// 文字列に化けても歯が通る（fixture の字面と入力の衝突）。
     const PROBE_SCOPE: &str = "probe-pkg-7f3";
+
+    /// mutant の test の timeout 秒（行 y・§33）。どの歯も値そのものは測らない（式は
+    /// `mutantsdiff.rs` の `mutants_diff_fail_fast_` の歯が pin する）ので 1 つの値で足りる。
+    const PROBE_TIMEOUT_S: u64 = 37;
+
+    /// [`crate::mutantsdiff::measure_args`] を 5 つの値で呼ぶ（timeout は [`PROBE_TIMEOUT_S`]）。
+    fn measure_args(
+        diff: &Path,
+        out: &Path,
+        scope: &str,
+        jobs: u64,
+        threads: u64,
+    ) -> (Vec<String>, crate::mutantsdiff::Scope) {
+        crate::mutantsdiff::measure_args(diff, out, scope, Pace { jobs, threads, timeout_s: PROBE_TIMEOUT_S })
+    }
 
     /// 名前から [`crate::mutantsdiff::Scope`] を得る唯一の道＝`-p` へ渡す引数を組むこと。
     fn scope_of(name: &str) -> crate::mutantsdiff::Scope {
@@ -254,17 +269,14 @@ mod tests {
     /// load 57 / 16 core）。末尾に `-- --test-threads <t>` を足し、`t` は**器の受付が決めた値**
     /// （`--threads`・設計 gate-cost.md §31 約束 7・行 w）をそのまま渡す。
     ///
-    /// 末尾 5 語は `-- --no-fail-fast -- --test-threads <t>`（1 つ目の `--` で cargo-mutants から
-    /// cargo test へ、2 つ目で cargo test から test binary へ）。`--jobs` の値・`-p` / `--in-diff` /
-    /// `-o` の対と順序はそのまま（`--jobs` を `t` で上書きする誤配線との弁別）。
+    /// 末尾 4 語は `-- -- --test-threads <t>`（1 つ目の `--` で cargo-mutants から cargo test へ、
+    /// 2 つ目で cargo test から test binary へ・mutant の test は fail-fast＝`--no-fail-fast` は
+    /// 無い・行 y）。`--jobs` の値・`-p` / `--in-diff` / `-o` の対と順序はそのまま（`--jobs` を
+    /// `t` で上書きする誤配線との弁別）。
     #[test]
     fn mutants_diff_threads_flag_tail_is_two_dashes_then_the_received_value() {
         let (args, bound) = measure_args(Path::new("probe.diff"), Path::new("probe-out"), PROBE_SCOPE, 4, 6);
-        assert_eq!(
-            &args[args.len() - 5..],
-            ["--", "--no-fail-fast", "--", "--test-threads", "6"],
-            "末尾 5 語: {args:?}"
-        );
+        assert_eq!(&args[args.len() - 4..], ["--", "--", "--test-threads", "6"], "末尾 4 語: {args:?}");
         assert_eq!(args.iter().filter(|a| *a == "--").count(), 2, "-- は 2 つ: {args:?}");
         let value_after = |flag: &str| args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).map(String::as_str);
         assert_eq!(value_after("--jobs"), Some("4"), "--jobs は器から来た値のまま: {args:?}");
