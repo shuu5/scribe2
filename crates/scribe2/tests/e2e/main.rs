@@ -9,6 +9,7 @@ mod headless;
 mod hook;
 mod ledger_form;
 mod ledger_memo;
+mod notify;
 mod pipe;
 mod polarity;
 mod prop;

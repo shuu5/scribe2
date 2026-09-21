@@ -24,6 +24,7 @@ pub mod health;
 pub mod land;
 pub mod lens_record;
 pub mod move_proof;
+mod notify;
 pub mod refuse;
 pub mod report;
 pub mod review;

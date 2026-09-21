@@ -41,6 +41,8 @@ use super::dispatch as queue;
 use super::declaration::{Ceiling, CEILING_ROW, DENIED_ROW};
 use super::gate;
 use super::land;
+use super::notify;
+use super::review::ReviewCheck;
 use super::stop::stop;
 use super::{head_of, repo_of_run, repo_path};
 use crate::cli_outcome::{Outcome, RC_OK, RC_REFUSED};
@@ -97,11 +99,18 @@ pub fn dispatch(args: &[String]) -> Outcome {
     // **回答・承認の記帳が成った周も同じ 1 周を撃つ**（設計 dispatcher.md §13）: 関門が開いた便を次の契機まで
     // 待たせない。stdout には 1 行も足さない（`driving` は無い）・道具を渡さない呼び方は列が `no-runner` で
     // 止まる＝記帳だけで終わる。
-    let contact = verb.is_some_and(|found| TERMINALS.contains(&found))
-        || (verb.is_some_and(|found| GATES.contains(&found)) && outcome.rc == RC_OK);
+    let terminal = verb.is_some_and(|found| TERMINALS.contains(&found));
+    let contact = terminal || (verb.is_some_and(|found| GATES.contains(&found)) && outcome.rc == RC_OK);
     if contact {
         if let Some(queue) = queue_of(args, &manifest, driving.as_ref(), drove.as_deref()) {
             let turn = queue::fire(&queue.borrow());
+            // **終端の周だけ席の pane へ知らせる**（設計 dispatcher.md §19）: 落ちた便の 1 行と、列が idle の 1 行。
+            // 送れたかは stdout の `notify=` の行で残し、rc は変えない（通知は副作用）。列の行より前に置く
+            // （自走の周の最後の行は列の 1 行のまま）。
+            if terminal {
+                let run = drove.as_deref().or_else(|| flag(args, "--run").ok().flatten());
+                outcome.out.extend(notices(&queue, run, &turn));
+            }
             // 自走を頼んだ周は、渡したか・渡さなかった理由を 1 行で残す（C10・黙って止まらない）。
             if driving.is_some() {
                 outcome.out.push(queue::line(&turn));
@@ -109,6 +118,51 @@ pub fn dispatch(args: &[String]) -> Outcome {
         }
     }
     outcome
+}
+
+/// 終端の周に席の pane へ送る行を送り、`notify=` の行の列を返す（送る行が無い周は空・設計 dispatcher.md §19）。
+///
+/// 置き場を読めない周は宛先も段も測れないので 1 行も送らない（`no-seat` に読み替えない・C10）。
+fn notices(queue: &Queue<'_>, run: Option<&str>, turn: &queue::Turn) -> Vec<String> {
+    let Ok(state) = super::current(&queue.state_dir) else {
+        return Vec::new();
+    };
+    let mut payloads = Vec::new();
+    if let Some(found) = run.and_then(|id| state.runs.get(id)) {
+        if let Some(word) = alarm_word(&queue.state_dir, &found.id, found.stage, found.detail.as_deref()) {
+            let line = notify::Terminal { bead: &found.bead, run: &found.id, stage: found.stage.as_str(), word };
+            payloads.push(notify::terminal_line(&line));
+        }
+    }
+    payloads.extend(notify::idle_line(turn));
+    payloads
+        .iter()
+        .map(|payload| notify::send(&state, &queue.repo, queue.manifest, payload))
+        .collect()
+}
+
+/// 席へ知らせる終端か（`Some` なら段に添える 1 語・設計 dispatcher.md §19 形 1 (a)）。
+///
+/// 送るのは `Reviewed` / `Gated` の PASS でない周（verdict の字面）・`Failed`・`Questioned`・`Stopped`（detail の頭の
+/// 1 語）。`Landed` と PASS は送らない（静かな正常）。**段の網羅 match で書く**（段が増えたら compile で気付く）。
+fn alarm_word<'a>(state_dir: &std::path::Path, id: &str, stage: Stage, detail: Option<&'a str>) -> Option<&'a str> {
+    match stage {
+        Stage::Failed | Stage::Questioned | Stage::Stopped => Some(notify::head_word(detail)),
+        Stage::Gated => match land::verdict_of(state_dir, id) {
+            Some(gate::Verdict::Pass) => None,
+            found => Some(found.map_or("読めない", gate::Verdict::as_str)),
+        },
+        Stage::Reviewed => match ReviewCheck::judge(state_dir, id) {
+            ReviewCheck::Passed => None,
+            found => Some(found.as_str()),
+        },
+        Stage::Landed
+        | Stage::Intake
+        | Stage::Blocked
+        | Stage::Spawned
+        | Stage::RateLimited
+        | Stage::Implemented => None,
+    }
 }
 
 /// **自分が駆動した便**（`pipe run` / `pipe resume` が名乗る・設計 §5「渡す周と渡さない周」）。
