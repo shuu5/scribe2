@@ -571,6 +571,15 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
 - **後続**（§11）: 行 aa の着地後に .516 型の契約（e2e の歯）で検出線の秒を実測し、ADR-0052 CSQ-P1 の「数分」を確かめる。生存の週次記録の母集団が変わった日を記録の側に残す（R-C12-1 の裁定材料は実測 2 周分）。
 - **実測**（行 aa 着地後の 2 周・4 job × 8 thread・枠は granted）: .517 型（e2e の歯・`--teeth` 4 語）は検出線 157 秒 / 66 mutants（mutant 1 つ 2.6〜3.7 秒）・verify 合計 232 秒。.511 型（lib の歯・`--teeth` 4 語）は検出線 161 秒 / 78 mutants（caught 58・missed 2・unviable 18）・verify 合計 228 秒。同じ 2 契約の旧形（§33 前・縮退 1 job × 1 thread）は 5〜8 時間の見込みで止めた。CSQ-P1 の「数分」は実測で確かめた。検出の母集団が変わった日 = 行 aa の着地日（記録の `teeth=` が `-` から語数に変わる周が境）。
 
+## 35. gate.slot_wait_s を 5400 に — 受付の待ちの上限を着地の列の上限と同じ値にする（契約表の行 ab・`s2-07l.519`）
+
+- **出所**: user 裁定 2026-09-21T09:41Z（A2 の閾値変更・逐語は台帳 `s2-07l.519` の notes）。席の推奨（900 → 5400）を user が「それでよい」と裁定した。旧値 900 の裁定は user 2026-09-12T12:08Z（`s2-07l.153`）。
+- **観測**（§34 の実測と同じ 2 周）: 検出線が 4 分の桁になった後も、枠（`gate.mutants_jobs` = 4）が塞がった周は 900 秒で縮退（1 job × 1 thread）に倒れ、縮退した 1 本が枠 1 つを数時間握る（.511 / .517 の旧形は 5〜8 時間見込みで止めた）。待ちの上限が gate 1 本の長さ × 枠の本数より短いと、混む周は必ず縮退に倒れる。着地の列の上限（`pipe.land_wait_s` = 5400）は同じ「便が進む前に待つ上限」で、その値まで待てば枠は gate 1 本の長さの桁で空く。
+- **形**（値の変更だけ・rules 行の形は不変）: `rules/manifest.toml` の行 `gate.slot_wait_s` の `value` を 900 → 5400、`ruling` を裁定の id、`ruled_at` を裁定日にする。`kind` / `enabled` / 他の 5 行は不変。歯の pin（`crates/scribe2/tests/e2e/rules.rs` の `rules_embedded_manifest_declares_the_gate_cost_rows`・6 行の表）の該当行を新しい値と裁定 id と裁定日にする。§3 の表と rules-manifest.md は値を持たないので不変。
+- **触らない**: 縮退の枝（§31 `degraded`・jobs 1 × threads 1）・受付の待ちの形（§22 / §31・poll の間隔）・`pipe.land_wait_s`・外形 snapshot（`rules_external_form`・値を持たない）・`R-C12-1`。
+- **歯**（既存の e2e の歯 1 本の値の変更・新しい歯は無い）: `rules_embedded_manifest_declares_the_gate_cost_rows` の表の `gate.slot_wait_s` の行が (5400, 新しい裁定 id, 新しい裁定日) になり、base の manifest（900）に対して RED・HEAD で GREEN。値の両側の歯は tests 全体で走査して他に無い（`900` の字面は manifest の `pipe.ci_wait_s` にも在るが別の行・不変）。
+- **却下**: 縮退を無くす（枠が空かない周に進めなくなる・fail-open か永久待ちの二択）／値を gate 1 本の実測から計算する（裁定値は宣言・C10・A2 の閾値は user が決める）／`pipe.land_wait_s` と 1 本の行に統合する（意味が違う 2 本・rules 行の削除は別の裁定）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -845,5 +854,15 @@ verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail declaration_teeth_
 size = "M"
 depends = ["z"]
 done = "BASE_HOLES が {base} {jobs} {threads} {teeth} の閉じた 4 つ（末尾が {teeth}）になって intake の unfit は検出線の {teeth} を通し契約の verify 行の {teeth} を断り、gate と land の主実測が Checks の契約の verify 行から nextest_filter で filter の語を取り宣言順に , で結んで {teeth} に置き（filter を持たない行は飛ばし・0 本は -）、.vessel.toml の検出線が cargo xtask mutants-diff --base {base} --jobs {jobs} --threads {threads} --teeth {teeth} の 1 行になり、toy repo の e2e で撃たれた行の record に契約の語が , で結ばれて載って {teeth} の字面が残らず、語を環境変数で渡さず、穴の 4 つと unfit の対と置換の 4 形（2 本・飛ばし・0 本・宣言順）が in-file の歯で pin される"
+
+[[contract]]
+id = "ab"
+title = "rules 行 gate.slot_wait_s の value を 900 → 5400 にし、ruling / ruled_at を user 2026-09-21T09:41Z の裁定に更新する（歯の pin の該当行だけ変える・新しい歯は無い）"
+req = ["NFR6", "FR46"]
+section = "35"
+write-set = ["rules/manifest.toml", "crates/scribe2/tests/e2e/rules.rs", "docs/design/gate-cost.md"]
+verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail rules_embedded_manifest_declares_the_gate_cost_rows"]
+size = "S"
+done = "rules 行 gate.slot_wait_s の value が 5400・ruling が user 2026-09-21T09:41Z・ruled_at が 2026-09-21 になり、歯の pin の表の該当行が同じ 3 値で緑・他の 5 行と外形 snapshot は不変"
 
 <!-- contracts:end -->
