@@ -1225,12 +1225,13 @@ fn rules_embedded_manifest_declares_the_gate_cost_rows() {
         }
     };
     // (id, kind, 値, 裁定 id, 裁定日)。値は **user 2026-09-12 の裁定**（台帳 s2-07l.153 notes 逐語）と
-    // `gate.tmux_test_threads` の **user 2026-09-15T21:09Z の裁定**（planner の推奨 1 への承認・`s2-07l.360`）。
+    // `gate.tmux_test_threads` の **user 2026-09-15T21:09Z の裁定**（planner の推奨 1 への承認・`s2-07l.360`）と
+    // `gate.slot_wait_s` の **user 2026-09-21T09:41Z の裁定**（900 → 5400・受付の待ちの上限を着地の列の上限と同じ値に）。
     let rows: [(&str, RuleKind, u64, &str, &str); 6] = [
         ("gate.mutants_jobs", RuleKind::GateMutantsJobs, 4, "user 2026-09-12T11:42Z", "2026-09-12"),
         ("gate.job_memory_mb", RuleKind::GateJobMemoryMb, 3072, "user 2026-09-12T12:08Z", "2026-09-12"),
         ("host.reserve_memory_mb", RuleKind::HostReserveMemoryMb, 8192, "user 2026-09-12T12:08Z", "2026-09-12"),
-        ("gate.slot_wait_s", RuleKind::GateSlotWaitS, 900, "user 2026-09-12T12:08Z", "2026-09-12"),
+        ("gate.slot_wait_s", RuleKind::GateSlotWaitS, 5400, "user 2026-09-21T09:41Z", "2026-09-21"),
         ("gate.tmux_test_threads", RuleKind::GateTmuxTestThreads, 1, "user 2026-09-15T21:09Z", "2026-09-15"),
         ("gate.cpu_weight", RuleKind::GateCpuWeight, 50, "user 2026-09-12T12:08Z", "2026-09-12"),
     ];

@@ -327,10 +327,10 @@ ruled_at = "2026-09-12"
 [[rule]]
 id = "gate.slot_wait_s"
 kind = "GateSlotWaitS"
-value = 900
+value = 5400
 enabled = true
-ruling = "user 2026-09-12T12:08Z"
-ruled_at = "2026-09-12"
+ruling = "user 2026-09-21T09:41Z"
+ruled_at = "2026-09-21"
 
 [[rule]]
 id = "gate.cpu_weight"
