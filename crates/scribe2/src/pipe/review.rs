@@ -268,28 +268,51 @@ pub struct Rework<'a> {
 
 /// 直前の便の指摘（`kind` と `at`）のうち、今回の材料に「対応する差分」の**無い**項目（辞書順・重複なし）。
 ///
-/// **kind ごとに 1 関数**（閉じた型の網羅 match・§23 (3)）: teeth-outside-write-set → `at` の各 path が今回の write-set
-/// に在る／literal-mismatch → `at` の各識別子が今回の契約 file と節の本文に無い、または base に解ける（`NameUnresolved`
+/// **kind ごとに 1 関数**（閉じた型の網羅 match・§23 (3)）: teeth-outside-write-set → `at` の path の形の各項目が今回の
+/// write-set に在る（path でない項目は測れない・§35 [`teeth_unaddressed`]）／literal-mismatch → `at` の各識別子が今回の契約 file と節の本文に無い、または base に解ける（`NameUnresolved`
 /// の名指しの読み手と同じ 1 本 [`unresolved_names`]）／section-material-missing → 節の本文が直前の便の `design.txt` と
 /// 異なる。goal-done-contradiction / vacuous-assert / other / unparsed は**測れない＝空**（判断を要する型は planner に
 /// 残す・C10）。読めない `.rs` が在る周は `Err`（黙って通さない）。
 pub fn unaddressed(kind: FindingKind, at: &[String], rework: &Rework<'_>) -> Result<Vec<String>, ClosureError> {
-    let mut found = match kind {
-        FindingKind::TeethOutsideWriteSet => teeth_unaddressed(at, rework.write_set),
+    let found = match kind {
+        FindingKind::TeethOutsideWriteSet => return Ok(teeth_unaddressed(at, rework)),
         FindingKind::LiteralMismatch => literal_unaddressed(at, rework)?,
         FindingKind::SectionMaterialMissing => section_unaddressed(at, rework),
         FindingKind::GoalDoneContradiction | FindingKind::VacuousAssert | FindingKind::Other | FindingKind::Unparsed => {
             Vec::new()
         }
     };
-    found.sort();
-    found.dedup();
-    Ok(found)
+    Ok(sorted(found))
 }
 
-/// teeth-outside-write-set: `at` の path のうち今回の write-set に無いもの（dir 項目は配下を含む）。
-fn teeth_unaddressed(at: &[String], write_set: &[String]) -> Vec<String> {
-    at.iter().filter(|path| !covered(write_set, path)).cloned().collect()
+/// 辞書順・重複なしに畳む。
+fn sorted(mut found: Vec<String>) -> Vec<String> {
+    found.sort();
+    found.dedup();
+    found
+}
+
+/// teeth-outside-write-set: `at` のうち path の形の項目（[`path_shaped`]）で今回の write-set に無いもの（dir 項目は配下を
+/// 含む・辞書順）。path でない項目（歯の接頭辞・§ の番号）は**測れない**＝照合しない（§35・どんな契約でも covered に
+/// ならない項目で永遠に断らない）。未対応が在り、かつ測れない項目も在る周は、列の末尾に母集団の 1 項目
+/// 「測った n 件・測れない m 件」（どちらも重複なしの件数）を足す（理由の文に測らなかった分を出す・C10）。path の項目が
+/// 0 か全部対応済みの周は空＝通す。
+fn teeth_unaddressed(at: &[String], rework: &Rework<'_>) -> Vec<String> {
+    let (paths, others): (Vec<String>, Vec<String>) = at.iter().cloned().partition(|item| path_shaped(item, rework.tracked));
+    let (paths, others) = (sorted(paths), sorted(others));
+    let mut found: Vec<String> = paths.iter().filter(|path| !covered(rework.write_set, path)).cloned().collect();
+    if !found.is_empty() && !others.is_empty() {
+        found.push(format!("測った {} 件・測れない {} 件", paths.len(), others.len()));
+    }
+    found
+}
+
+/// `at` の項目が path の形に解けるか: base の tracked file か、空白を持たず（`+` を剥がした後に）`/` を含む字面
+/// （`src/a.rs`・末尾 `/` の dir・`+` 付きの新規 file・§3 の write-set の項目の形）。歯の接頭辞・§ の番号・型の path
+/// （`::`）は解けない。
+fn path_shaped(item: &str, tracked: &[String]) -> bool {
+    tracked.iter().any(|file| file == item)
+        || (!item.contains(char::is_whitespace) && item.strip_prefix('+').unwrap_or(item).contains('/'))
 }
 
 /// literal-mismatch: `at` の識別子のうち、今回の契約 file か節の本文に**まだ在り**、かつ base に解けないもの。
@@ -1180,6 +1203,44 @@ mod tests {
         let unreadable = Rework { sources: &broken, ..rework };
         assert!(unaddressed(FindingKind::LiteralMismatch, &at(&["Nope::Thing"]), &unreadable).is_err(), "読めない .rs は Err");
         assert_eq!(unaddressed(FindingKind::TeethOutsideWriteSet, &at(&["tests/a.rs"]), &unreadable), Ok(at(&["tests/a.rs"])), "path の物差しは .rs を読まない");
+    }
+
+    /// teeth-outside-write-set の物差しは path の形の項目だけを測る（§35）: 母集団 3（path 1・歯の接頭辞・§ の番号）で、
+    /// path が write-set に無ければ path だけを名指し末尾に「測った 1 件・測れない 2 件」、在れば空＝通す。path の項目が
+    /// 0 の周も空。tracked の file は `/` を持たなくても path、`+` 付きの新規 file と末尾 `/` の dir も path。
+    #[test]
+    fn pipe_review_unaddressed_teeth_measures_only_path_shaped_items() {
+        let at = |items: &[&str]| items.iter().map(|item| (*item).to_owned()).collect::<Vec<String>>();
+        let mixed = at(&["headless_lens_promise_", "src/other.rs", "§33"]);
+        let tracked = at(&["src/lib.rs", "src/other.rs", "Cargo.toml"]);
+        let narrow = at(&["src/lib.rs"]);
+        let rework = Rework {
+            write_set: &narrow,
+            contract: "",
+            design: "",
+            previous_design: "",
+            touches: &[],
+            tracked: &tracked,
+            sources: &[],
+        };
+        assert_eq!(
+            unaddressed(FindingKind::TeethOutsideWriteSet, &mixed, &rework),
+            Ok(at(&["src/other.rs", "測った 1 件・測れない 2 件"])),
+            "path の項目だけを名指し、測れない 2 件は数で出す"
+        );
+        let widened = at(&["src/lib.rs", "src/other.rs"]);
+        let passed = Rework { write_set: &widened, ..rework };
+        assert_eq!(unaddressed(FindingKind::TeethOutsideWriteSet, &mixed, &passed), Ok(Vec::new()), "path を足せば通す");
+        assert_eq!(
+            unaddressed(FindingKind::TeethOutsideWriteSet, &at(&["headless_lens_promise_", "§33", "Refuse::Other"]), &rework),
+            Ok(Vec::new()),
+            "path の項目が 0 なら測れない＝通す"
+        );
+        assert_eq!(
+            unaddressed(FindingKind::TeethOutsideWriteSet, &at(&["Cargo.toml", "+tests/new.rs", "docs/"]), &rework),
+            Ok(at(&["+tests/new.rs", "Cargo.toml", "docs/"])),
+            "tracked の file・+ 付きの新規 file・末尾 / の dir は path（測れない項目が無ければ数を足さない）"
+        );
     }
 
     /// 書けない周は本 file が生まれず書きかけも残さない（親 dir が無い）。

@@ -2915,6 +2915,26 @@ fn pipe_intake_repeat_teeth_outside_write_set_at_path_needs_the_path_in_the_writ
     clean(&[&repo, &state]);
 }
 
+/// (5') §35: `at` に path でない項目（歯の接頭辞・§ の番号）が混ざった teeth-outside-write-set の後、path の項目
+/// （src/other.rs）を write-set に足さない契約は src/other.rs だけを名指して断られ理由に測れない 2 件が数で出る。
+/// src/other.rs を足した契約は通る（path でない項目は測れない＝永遠に断らない）。
+#[test]
+fn pipe_intake_repeat_teeth_outside_write_set_mixed_at_measures_only_the_path() {
+    let (repo, state) = repo_with_state();
+    let design = write_set_contract(&repo, "first", &["src/lib.rs"]);
+    let at = "headless_lens_promise_, src/other.rs, §33";
+    failed_runs(&repo, &state, "s2-mxd", &design, &[(Some("teeth-outside-write-set"), Some(at))]);
+    let again = Again { repo: &repo, state: &state, bead: "s2-mxd", design: &design };
+    let err = assert_refused(&again, "finding-unaddressed", &["teeth-outside-write-set", "src/other.rs", "測った 1 件・測れない 2 件"]);
+    assert!(!err.contains("headless_lens_promise_") && !err.contains("§33"), "測れない項目は名指さない: {err}");
+    let widened = write_set_contract(&repo, "second", &["src/lib.rs", "src/other.rs"]);
+    let before = run_dirs(&state).len();
+    let out = repeat_intake(&repo, &state, "s2-mxd", &widened, &lens_verdict("PASS"));
+    accepted(&out, &state, before);
+    assert!(!stderr_of(&out).contains("対応する差分"), "{}", stderr_of(&out));
+    clean(&[&repo, &state]);
+}
+
 /// (6) literal-mismatch の指摘 `at=<識別子>` の後、識別子（`Nope::Thing`）を `done` に書いたままで base に無い契約は
 /// 断られ、識別子を消した契約も、base に `Nope::Thing` を足した後の同じ契約も通る（解けるかは名指しの読み手と同じ 1 本）。
 #[test]
