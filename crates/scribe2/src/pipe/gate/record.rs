@@ -11,7 +11,7 @@ use crate::pipe::admission;
 use crate::pipe::confine::Reason;
 use crate::pipe::declaration::Effective;
 use crate::pipe::move_proof::LensInput;
-use crate::pipe::{run_dir, verify_log_path, vessel_path};
+use crate::pipe::{contract_path, run_dir, verify_log_path, vessel_path};
 use std::path::Path;
 
 /// 赤い verify 行の stderr を残す診断 file の名（`verify.jsonl` と同じ dir）。
@@ -75,16 +75,16 @@ pub(super) fn record_verify(entry: &Gate<'_>, worktree: &Path, base: &str) -> Re
             policy: entry.policy,
         },
     };
-    let (detection, skipped): (&[String], Option<Skipped<'_>>) = match entry.detection {
-        Detection::Run => (frozen.detection_verify(), None),
-        Detection::Skip(reason) => (&[], Some(Skipped::detection(reason, None))),
+    let (detection, skipped): (Vec<String>, Option<Skipped<'_>>) = match entry.detection {
+        Detection::Run => (aimed_lines(entry, frozen.detection_verify())?, None),
+        Detection::Skip(reason) => (Vec::new(), Some(Skipped::detection(reason, None))),
     };
     let checks = Checks {
         worktree,
         base,
         contract: entry.contract,
         common: frozen.common_verify(),
-        detection,
+        detection: &detection,
         host: entry.limits.breaker(),
     };
     let steps = run_checks_admitted(&checks, Some(&admit));
@@ -122,6 +122,38 @@ pub(super) fn record_verify(entry: &Gate<'_>, worktree: &Path, base: &str) -> Re
         append_line(&path, &record.body, entry.policy).map_err(|err| err.to_string())?;
     }
     Ok(Counted { red, unreadable, killed, detection_unmeasured: unmeasured, busy })
+}
+
+/// 検出線の的を渡す旗（`cargo xtask mutants-diff` の `--targets <file>`・設計 gate-cost.md §16 (2)）。
+const TARGETS_FLAG: &str = "--targets";
+
+/// 的の列を 1 行 1 本で置く file の名（run dir 直下・gate の周ごとに書き直す＝値は契約の写しの 1 つ）。
+const TARGETS_FILE: &str = "targets";
+
+/// 契約が的（[`crate::pipe::contract::TARGETS`]）を持つ便の検出線（設計 gate-cost.md §16 (3)）。
+///
+/// 的の在る便は、的の列を run dir の [`TARGETS_FILE`] へ書き、写しの検出線の各行の末尾に
+/// `--targets <その path>` を足す（的を絞った口で撃つ）。**的の無い便は写しの行を 1 字も変えない**＝diff の
+/// 追加行を母集団にする従来の経路のまま。行の穴（`{jobs}` 等）は残すので、受付と箱の選び方は変わらない。
+/// 契約の写しを読めない周は理由を返す（的を空と読んで従来の経路へ黙って倒さない・C10）。
+fn aimed_lines(entry: &Gate<'_>, lines: &[String]) -> Result<Vec<String>, String> {
+    let targets = crate::pipe::contract::targets_of(&contract_path(entry.state_dir, entry.run))?;
+    if targets.is_empty() {
+        return Ok(lines.to_vec());
+    }
+    let path = run_dir(entry.state_dir, entry.run).join(TARGETS_FILE);
+    write_copy(&path, &format!("{}\n", targets.join("\n")))?;
+    let arg = shell_word(&path.display().to_string());
+    Ok(lines.iter().map(|line| format!("{line} {TARGETS_FLAG} {arg}")).collect())
+}
+
+/// shell の 1 語（安全な字だけの字面はそのまま・他は単引用符で包む）。
+fn shell_word(text: &str) -> String {
+    let plain = |found: char| found.is_ascii_alphanumeric() || "_./-+=:,@%".contains(found);
+    if !text.is_empty() && text.chars().all(plain) {
+        return text.to_owned();
+    }
+    format!("'{}'", text.replace('\'', "'\\''"))
 }
 
 /// 周ごとの検出線の写しの置き場（run dir 直下・この下に**周の番号の dir** が並ぶ・設計 gate-cost.md §15 (1)）。

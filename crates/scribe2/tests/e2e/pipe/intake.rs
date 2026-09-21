@@ -3337,6 +3337,69 @@ fn pipe_intake_design_reads_the_row_from_head_not_the_worktree() {
     clean(&[&repo, &state]);
 }
 
+// ───── 検出線の的の欄（設計 docs/design/gate-cost.md §16 (1)・行 g・`s2-07l.341`・接頭辞 `pipe_intake_targets_`） ─────
+
+/// 的 2 本（桁つきの一覧の形と桁なしの形）を持つ行の欄。
+const TARGETS_FIELD: &str = r#"targets = ["src/lib.rs:1:replace seed -> bool with true", "src/lib.rs:1:5: replace seed with ()"]"#;
+
+/// (a) 的の欄を持つ行は受付を通り、生成された契約 file に的が逐語で写る（写しは器自身が読める）。欄を持たない行は
+/// 従来どおり通り、写しは `targets` を持たない（(1) の否定の枝）。
+#[test]
+fn pipe_intake_targets_row_copies_its_targets_and_a_row_without_them_still_passes() {
+    let (repo, state) = repo_with_state();
+    let plain = intake_raw(&repo, &state, &write_contract(&repo, &[], &[]), "s2-plain");
+    assert_eq!(plain.status.code(), Some(i32::from(RC_OK)), "欄の無い行は通る: {}", stderr_of(&plain));
+    let plain_id = run_id_of(&plain);
+    let copied = fs::read_to_string(state.join("pipe").join(&plain_id).join("contract.toml")).unwrap_or_default();
+    assert!(!copied.contains("targets"), "欄の無い行の写しは的を持たない: {copied}");
+    stop_run_ok(&state, &plain_id);
+    let design = write_contract(&repo, &[], &[TARGETS_FIELD]);
+    let aimed = intake_raw(&repo, &state, &design, "s2-aimed");
+    assert_eq!(aimed.status.code(), Some(i32::from(RC_OK)), "的の欄を持つ行は通る: {}", stderr_of(&aimed));
+    let id = run_id_of(&aimed);
+    let path = state.join("pipe").join(&id).join("contract.toml");
+    let copied = fs::read_to_string(&path).unwrap_or_default();
+    assert!(copied.lines().any(|line| line == TARGETS_FIELD), "的が逐語で写る: {copied}");
+    let read = vessel::pipe::contract::targets_of(&path).unwrap_or_default();
+    assert_eq!(read, ["src/lib.rs:1:replace seed -> bool with true", "src/lib.rs:1:5: replace seed with ()"], "写しから読み戻せる");
+    stop_run_ok(&state, &id);
+    clean(&[&repo, &state]);
+}
+
+/// (a) 的の値が形に合わない行（行 0・file が `.rs` でない・名が空）は受付で typed に断られ（rc 1・的の字面と外れた
+/// 部分を名指す）、run dir も event も増えない。`contracts check` も同じ読みで `contract-table:target-form` を欄の行に
+/// 名指す（受付と CI が同じ 1 本）。
+#[test]
+fn pipe_intake_targets_malformed_values_are_refused_as_target_form() {
+    let (repo, state) = repo_with_state();
+    for (value, bead, part) in [
+        ("src/lib.rs:0:replace seed with ()", "s2-t0", "1 以上の十進"),
+        ("src/lib.txt:1:x", "s2-t1", ".rs"),
+        ("src/lib.rs:1:", "s2-t2", "変異の名が空"),
+    ] {
+        let design = write_contract(&repo, &[], &[&format!("targets = [\"{value}\"]")]);
+        let (dirs, events) = (run_dirs(&state), event_count(&state));
+        let out = intake_raw(&repo, &state, &design, bead);
+        let text = format!("{}{}", stdout_of(&out), stderr_of(&out));
+        assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{value} は rc 1 で断る: {text}");
+        assert!(text.contains(&format!("targets \"{value}\" が <file>:<行>:<変異の名> の形でない")), "的の字面: {text}");
+        assert!(text.contains(part), "外れた部分を名指す（{part}）: {text}");
+        assert_eq!(run_dirs(&state), dirs, "run dir は増えない");
+        assert_eq!(event_count(&state), events, "event も増えない");
+    }
+    clean(&[&repo, &state]);
+    let doc = table_doc(&table_region(&[table_row("a", &[("targets", "[\"src/tint.rs:0:x\"]")]), table_row("b", &[])]));
+    let checked = table_repo(&doc, &[]);
+    let out = contracts_check(&checked);
+    let found = findings_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{}", stdout_of(&out));
+    assert!(
+        found.len() == 1 && found.iter().all(|line| line.contains("contract-table:target-form: targets \"src/tint.rs:0:x\"")),
+        "形の外れた的 1 本だけを名指す: {found:?}"
+    );
+    clean(&[&checked]);
+}
+
 // ───── 受付の depends の解決（設計 docs/design/contract-source.md §30・行 ad・`s2-07l.496`・接頭辞 `pipe_intake_depends_`） ─────
 
 /// depends の toy の verify 行（`derive_` の歯 2 file が導出値＝行は write-set を持たず、受付は導出で通る）。

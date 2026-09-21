@@ -136,6 +136,7 @@ pub const FIELDS: &[Field] = &[
     Field { name: "depends", need: Need::Optional, shape: Shape::List },
     Field { name: "classes", need: Need::Optional, shape: Shape::List },
     Field { name: "opens", need: Need::Optional, shape: Shape::List },
+    Field { name: "targets", need: Need::Optional, shape: Shape::List },
 ];
 
 /// 約束の行 `[[promise]]` の欄の全体（**正本**・宣言順が `contracts schema` の描く順・設計 §33 の 9 欄）。`place` は
@@ -214,6 +215,8 @@ pub struct ContractRow {
     pub classes: Vec<String>,
     /// 契約が開く path 種別の名。
     pub opens: Vec<String>,
+    /// 検出線の的（`<file>:<行>:<変異の名>` の列・空 = diff の追加行を母集団にする従来の経路・設計 gate-cost.md §16）。
+    pub targets: Vec<String>,
 }
 
 /// 契約表そのものの欠陥（**各 variant が行番号を持つ**・0 は file 全体）。新しい理由は variant を 1 つ足す（C2）。
@@ -313,6 +316,15 @@ pub enum TableError {
         /// 重複（真）か欠番（偽）か。
         duplicate: bool,
     },
+    /// `targets` の値が的の形（`<file>:<行>:<変異の名>`）でない（設計 gate-cost.md §16）。
+    TargetForm {
+        /// 行番号。
+        line: u64,
+        /// 的の字面。
+        target: String,
+        /// 形に合わない理由（契約 file の読みと同じ判定の 1 本が返す字面）。
+        reason: String,
+    },
 }
 
 impl TableError {
@@ -331,7 +343,8 @@ impl TableError {
             | Self::DependsCycle { line, .. }
             | Self::SurfaceUnknown { line, .. }
             | Self::PromiseOrphan { line, .. }
-            | Self::PromiseNumber { line, .. } => line,
+            | Self::PromiseNumber { line, .. }
+            | Self::TargetForm { line, .. } => line,
         }
     }
 
@@ -351,6 +364,7 @@ impl TableError {
             Self::SurfaceUnknown { .. } => "surface-unknown",
             Self::PromiseOrphan { .. } => "promise-orphan",
             Self::PromiseNumber { .. } => "promise-number",
+            Self::TargetForm { .. } => "target-form",
         }
     }
 
@@ -379,6 +393,9 @@ impl TableError {
             Self::PromiseNumber { ref of, n, duplicate: true, .. } => format!("行 {of} の約束の n {n} が重複する"),
             Self::PromiseNumber { ref of, n, duplicate: false, .. } => {
                 format!("行 {of} の約束の n {n} が欠ける（n は 1 から連番）")
+            }
+            Self::TargetForm { ref target, ref reason, .. } => {
+                format!("targets {target:?} が <file>:<行>:<変異の名> の形でない: {reason}")
             }
         }
     }
@@ -493,6 +510,7 @@ mod tests {
         "surface-unknown",
         "promise-orphan",
         "promise-number",
+        "target-form",
     ];
 
     /// 宣言順に 1 つずつ組んだ全 variant（行番号は 1 から順）。
@@ -512,6 +530,7 @@ mod tests {
             TableError::SurfaceUnknown { line: 11, name: text("nope_external_form") },
             TableError::PromiseOrphan { line: 12, of: text("zz") },
             TableError::PromiseNumber { line: 13, of: text("a"), n: 2, duplicate: false },
+            TableError::TargetForm { line: 14, target: text("src/a.rs"), reason: text("r") },
         ]
     }
 
@@ -521,7 +540,7 @@ mod tests {
         let found = samples();
         let names: Vec<&str> = found.iter().map(TableError::as_str).collect();
         assert_eq!(names, TABLE_ERRORS, "名前の slice は宣言順（母集団 {} 値）", TABLE_ERRORS.len());
-        assert_eq!(TABLE_ERRORS.len(), 13, "母集団は 13 値");
+        assert_eq!(TABLE_ERRORS.len(), 14, "母集団は 14 値");
         for (index, error) in found.iter().enumerate() {
             assert_eq!(error.line(), index as u64 + 1, "{} は行番号を持つ", error.as_str());
             assert!(!error.reason().is_empty() && !error.reason().contains('\n'), "{} の理由は 1 行", error.as_str());
@@ -538,6 +557,8 @@ mod tests {
         assert!(gap.contains("行 a の約束の n 2 が欠ける"), "欠番は親の行 id と番号を名乗る: {gap}");
         let twice = TableError::PromiseNumber { line: 1, of: "a".to_owned(), n: 1, duplicate: true }.reason();
         assert!(twice.contains("行 a の約束の n 1 が重複する"), "重複は欠番と別の字面: {twice}");
+        let target = found.get(13).map(TableError::reason).unwrap_or_default();
+        assert!(target.contains("\"src/a.rs\"") && target.ends_with(": r"), "的の字面と理由を名乗る: {target}");
     }
 
     /// 全欄を持つ `.toml` の 1 行（`over` の欄だけ値を差し替える）。
@@ -548,6 +569,7 @@ mod tests {
         for field in FIELDS {
             let default = match field.shape {
                 Shape::Text if field.name == "section" => "\"1\"".to_owned(),
+                Shape::List if field.name == "targets" => "[\"src/v.rs:1:v\"]".to_owned(),
                 Shape::Text => "\"v\"".to_owned(),
                 Shape::List => "[\"v\"]".to_owned(),
                 Shape::Number => "1".to_owned(),
@@ -578,26 +600,27 @@ mod tests {
         text
     }
 
-    /// 欄の列は宣言順に 16（必須 5・条件付き 2・任意 9）で、`contracts schema` はその順に描く。欄の形は reader が強制する
-    /// （文字列の欄に配列・配列の欄に文字列を書くと、その欄を名指して断る）。`write-set` は任意（契約 (h)・§3
-    /// 「write-set の導出」: 無い行は受付が導出値を写す）。約束の行の欄は別の列 9（必須 7・任意 2）で、生成物は
-    /// 契約の行の欄の後に別の表・別の key で描く（`[[field]]` の母集団は 16 のまま）。
+    /// 欄の列は宣言順に 17（必須 5・条件付き 2・任意 10・`targets` は設計 gate-cost.md §16）で、`contracts schema` はその順に
+    /// 描く。欄の形は reader が強制する（文字列の欄に配列・配列の欄に文字列を書くと、その欄を名指して断る）。`write-set` は
+    /// 任意（契約 (h)・§3「write-set の導出」: 無い行は受付が導出値を写す）。約束の行の欄は別の列 9（必須 7・任意 2）で、
+    /// 生成物は契約の行の欄の後に別の表・別の key で描く（`[[field]]` の母集団は 17 のまま）。
     #[test]
     fn table_fields_pin_the_schema_columns_and_the_reader_enforces_their_shapes() {
         let names: Vec<&str> = FIELDS.iter().map(|field| field.name).collect();
         let want = [
             "id", "title", "req", "section", "touches", "surfaces", "write-set", "creates", "tests", "also", "verify",
-            "size", "done", "depends", "classes", "opens",
+            "size", "done", "depends", "classes", "opens", "targets",
         ];
         assert_eq!(names, want, "欄の宣言順");
-        assert_eq!(FIELDS.iter().filter(|field| field.need == Need::Required).count(), 5, "必須 5・条件付き 2・任意 9");
+        assert_eq!(FIELDS.iter().filter(|field| field.need == Need::Required).count(), 5, "必須 5・条件付き 2・任意 10");
         let optional = |name: &str| FIELDS.iter().any(|field| field.name == name && field.need == Need::Optional);
         assert!(["write-set", "creates", "tests", "also"].iter().all(|name| optional(name)), "導出の 4 欄は任意");
+        assert!(optional("targets"), "的の欄は任意（無い行は従来の経路）");
         let rendered = render_schema();
         let listed: Vec<&str> =
             rendered.iter().filter_map(|line| line.strip_prefix("name = \"")?.strip_suffix('"')).collect();
         assert_eq!(listed, names, "生成物は欄の宣言順");
-        assert_eq!(FIELDS.len(), 16, "契約の行の欄は 16");
+        assert_eq!(FIELDS.len(), 17, "契約の行の欄は 17");
         assert_eq!(rendered.get(1).map(String::as_str), Some("schema = 1"), "生成物も schema = 1 を持つ");
         assert_eq!(read_rows("t.toml", &full_row(&[])).map(|rows| rows.len()), Ok(1), "全欄の行は読める");
         for field in FIELDS {
@@ -605,19 +628,25 @@ mod tests {
             let named = errors.iter().any(|error| error.reason().starts_with(&format!("{} は", field.name)));
             assert!(named, "{} の形を名指す: {errors:?}", field.name);
         }
+        let aimed = read_rows("t.toml", &full_row(&[("targets", "[\"src/v.rs:1:v\", \"src/v.rs:0:v\"]")]));
+        let errors = aimed.expect_err("的の形でない値は断る");
+        assert!(
+            matches!(errors.as_slice(), [found @ TableError::TargetForm { .. }] if found.rc() == RC_REFUSED),
+            "形の外れた 1 本だけを target-form（rc 1）で名指す: {errors:?}"
+        );
         promise_fields_are_pinned(&rendered);
     }
 
     // flip-check: s2-07l.512
 
-    /// §33 (f) の母集団: `FIELDS` の `need` は必須 5・条件付き 2（`verify` と `done`・宣言順）・任意 9 の和 16 で、生成物の
+    /// §33 (f) の母集団: `FIELDS` の `need` は必須 5・条件付き 2（`verify` と `done`・宣言順）・任意 10 の和 17 で、生成物の
     /// `need` の列は `FIELDS` と同じ順に `conditional` を 2 欄（`verify` / `done`）で載せる（xtask の contracts-schema は
     /// variant の名を小文字にした語で照合する＝同じ語）。
     #[test]
     fn contract_promise_need_conditional_is_two_fields_in_the_schema() {
         let count = |need: Need| FIELDS.iter().filter(|field| field.need == need).count();
-        assert_eq!((count(Need::Required), count(Need::Conditional), count(Need::Optional)), (5, 2, 9), "必須 5・条件付き 2・任意 9");
-        assert_eq!(FIELDS.len(), 16, "母集団 16");
+        assert_eq!((count(Need::Required), count(Need::Conditional), count(Need::Optional)), (5, 2, 10), "必須 5・条件付き 2・任意 10");
+        assert_eq!(FIELDS.len(), 17, "母集団 17");
         let conditional: Vec<&str> =
             FIELDS.iter().filter(|field| field.need == Need::Conditional).map(|field| field.name).collect();
         assert_eq!(conditional, ["verify", "done"], "条件付きは verify と done");

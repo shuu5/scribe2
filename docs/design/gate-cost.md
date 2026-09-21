@@ -270,6 +270,14 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
 - **依存**: `crates/scribe2/src/pipe/gate.rs` / `crates/scribe2/src/pipe/gate/record.rs` で契約表の行 e・f と交差するため、それらの後に流す。
 - **却下案**: 歯が名指す関数の本体全体を母集団に加える案は、宣言した的を測定するという型に合わないため不採用。noop を分類に入れる案は、outcomes だけでは missed と区別する規則が無く（挙動差は変異前後の実 binary の A/B でしか測れない）偽の outcomes に札を貼るだけの空虚な歯になるため不採用。admin の手作業を続ける案は散文の手順になり、便が増えると追いつかないため不採用。
 
+### 16.1 errata（現物との差・s2-07l.341・規範は上の §16 のまま）
+
+- **欄の名と値の形**: 欄は targets（任意の list・FIELDS の末尾）で、値 1 つが的 1 本の字面 file:行:変異の名 である。file は空白を持たない .rs・行は 1 以上の十進・名は空でない。行の後ろに桁を 1 つ挟んだ形（cargo-mutants の一覧の行 file:行:桁: 名）もそのまま受け、桁は照合に使わない。形の判定は core の契約 file の読みに 1 本だけ置き、行の欄の読み手（受付と CI の contracts check が通る同じ読み）がそれで測って、外れた値を contract-table の target-form（rc 1）で名指す。
+- **契約 file の側**: 生成の写しは的の在る行だけが targets の key を持つ。読み込み済みの契約の struct には field を足さない（struct literal の site が write-set の外に在る）——gate は run dir の契約の写しから的の列を読み直す（読めない写しは gate の記録の失敗＝的を空と読んで従来の経路へ黙って倒さない）。
+- **gate から口への渡し方**: 的の在る便は、gate が的の列を run dir 直下の file（1 行 1 本）に書き、便の写しの検出線の各行の末尾に --targets と その file の path を足して撃つ。的の無い便は写しの行を 1 字も変えない。行の穴は残るので受付と箱の選び方は変わらない。
+- **口の側（mutants-diff の旗 --targets）**: diff を絞る旗の対を落とし、的の file ごとの file 旗と的ごとの名の regex（字面を逃がした式）で cargo-mutants を絞る（歯だけの便の的は diff に無い base の行である）。分類は outcomes.json の 5 つの数（従来と同じ読み・読めない周は rc 2）と、同じ出力 dir の 4 つの一覧（caught / missed / unviable / timeout の txt）で、的は file・行・名の 3 つが一致した一覧の kind に落ち、どれにも当たらなければ absent。数が 1 以上の kind の一覧が無い周は測れていない（rc 2）。outcomes.json が無く道具が rc 0 の周は変異 0 本＝的は全部 absent の測定である。
+- **判定行**: mutants-diff: total=<的の本数> caught= missed= unviable= timeout= absent= scope= teeth= population=targets。rc の極性は従来と同じ R-C12-1 の 1 本（absent は赤にしない）。
+
 ## 17. 歯の fixture の一時 dir を終端で必ず片付ける（契約表の行 h・`s2-07l.343`）
 
 - **出所・現物**: admin の実測（2026-09-15）で、e2e の fixture の一時 dir が多数残っていた。掃除そのもの（消す操作）は user の承認（A1）を要するため本便の外だが、残る原因は歯の側にある。現物（verified・main f678bd0）: 一時 dir の作り手は **`crates/scribe2/tests/e2e/main.rs` の `pub fn make_tmp_dir() -> Option<PathBuf>`**（`std` だけの helper・`tempfile` は A3 ゆえ足さない）で、素の path を返すだけで guard を返さない。直に呼ぶ歯の file は main.rs を含めて **8 file**（母集団 = `crates/scribe2/tests/e2e` の `.rs` 21 file・2026-09-20 実測）で、各 file の呼出は**その file の局所 helper の中の 1 か所ずつ**（main.rs だけ 2 か所）＝戻り値の型を変えるとその helper の戻り値の型が伝播する。削除は歯の中で成功した経路だけが呼ぶため **panic した歯は dir を残す**。main.rs の 2 つ目の呼出は path を正規化して別の値にする＝包みをそこで落とすと dir が残るので、正規化の後も包みが生きる形にする。

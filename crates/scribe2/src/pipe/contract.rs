@@ -25,8 +25,12 @@ const REQUIRED: &[&str] = &[
 ];
 
 /// 任意の key。`touches` は契約 (b) の生成物が行から写す欄（型の閉包の宣言・受付は読まないが
-/// 写しに残す＝run dir の写しだけで行の宣言が読める）。
-const OPTIONAL: &[&str] = &["classes", "opens", "touches"];
+/// 写しに残す＝run dir の写しだけで行の宣言が読める）。[`TARGETS`] は検出線の的（gate が [`targets_of`] で読む）。
+const OPTIONAL: &[&str] = &["classes", "opens", "touches", TARGETS];
+
+/// 契約が名指す生存行（変異の的）の key（設計 gate-cost.md §16・行 g）。値は `<file>:<行>:<変異の名>` の列で、
+/// 形は [`target_unfit`] の 1 本が決める。[`Contract`] の field にはしない（読むのは gate の検出線だけ・[`targets_of`]）。
+pub const TARGETS: &str = "targets";
 
 /// 3 クラスの自己申告が取れる値（FR15）。
 pub const CLASSES: &[&str] = &["delete", "publish", "consume"];
@@ -256,6 +260,12 @@ fn build(found: &[(String, Raw, u64)], errors: &mut Vec<ContractError>) -> Optio
     let classes = names_of(found, "classes", CLASSES, errors);
     let kinds: Vec<&str> = PATH_KINDS.iter().map(|kind| kind.as_str()).collect();
     let opens = names_of(found, OPENS, &kinds, errors);
+    let at = found.iter().find(|(seen, _, _)| seen == TARGETS).map_or(0, |(_, _, line)| *line);
+    for target in list_of(found, TARGETS, 0, errors) {
+        if let Some(reason) = target_unfit(&target) {
+            errors.push(ContractError::new(at, format!("{TARGETS} の値 {target} が的の形でない: {reason}")));
+        }
+    }
     Some(Contract {
         goal: text_of(found, "goal", errors),
         done: text_of(found, "done", errors),
@@ -302,6 +312,47 @@ impl Contract {
     }
 }
 
+/// 的 1 本の字面が形に合わない理由（合えば `None`・設計 gate-cost.md §16）。形は `<file>:<行>:<変異の名>` で、
+/// file は空白と `:` を持たない `.rs`・行は 1 以上の十進・名は空でない。行の後ろに `<桁>:` の桁を 1 つ挟んでよい
+/// （cargo-mutants の一覧の行 `file:行:桁: 名` をそのまま貼れる・桁は照合に使わない）。表の検査（受付と CI）と
+/// 契約 file の読みが同じこの 1 本を通る（C2）。
+pub fn target_unfit(target: &str) -> Option<String> {
+    if target.chars().any(char::is_control) {
+        return Some("制御文字を含む".to_owned());
+    }
+    let Some((file, rest)) = target.split_once(':') else {
+        return Some("<file>:<行>:<変異の名> の形でない（: が無い）".to_owned());
+    };
+    if file.is_empty() || file.chars().any(char::is_whitespace) || !file.ends_with(".rs") {
+        return Some(format!("file {file:?} が空白を持たない .rs の path でない"));
+    }
+    let Some((line, name)) = rest.split_once(':') else {
+        return Some("<file>:<行>:<変異の名> の形でない（行の後ろの : が無い）".to_owned());
+    };
+    let number = line.parse::<u64>().ok().filter(|n| *n >= 1);
+    if !line.chars().all(|found| found.is_ascii_digit()) || number.is_none() {
+        return Some(format!("行 {line:?} が 1 以上の十進でない"));
+    }
+    let name = match name.split_once(':') {
+        Some((column, after)) if !column.is_empty() && column.chars().all(|found| found.is_ascii_digit()) => after,
+        _ => name,
+    };
+    name.trim().is_empty().then(|| "変異の名が空".to_owned())
+}
+
+/// 契約 file の的の列（key が無ければ空・設計 gate-cost.md §16）。本文は [`Contract::parse`] と同じ読みを通す
+/// （読めない file は理由を返す＝的を空に倒して従来の経路へ黙って戻さない・C10）。
+pub fn targets_of(path: &Path) -> Result<Vec<String>, String> {
+    let text = std::fs::read_to_string(path).map_err(|err| format!("{} を読めない: {err}", path.display()))?;
+    Contract::parse(&text).map_err(|errors| {
+        let lines: Vec<String> = errors.iter().map(ToString::to_string).collect();
+        format!("{} を読めない: {}", path.display(), lines.join(" / "))
+    })?;
+    let mut errors = Vec::new();
+    let (found, _) = scan(&text, &mut errors);
+    Ok(list_of(&found, TARGETS, 0, &mut errors))
+}
+
 /// 生成の写しの `owner`（**導出値**・宣言値ではない・C10）。契約の正本は設計 doc の行で、行は owner を持たない
 /// ＝器が固定の 1 語を書く（値の形は [`REQUIRED`] の text のまま）。
 pub const GENERATED_OWNER: &str = "generated";
@@ -345,6 +396,9 @@ pub fn render(row: &crate::pipe::table::ContractRow, design: &str, write_set: &[
     if !row.opens.is_empty() {
         out.push_str(&format!("{OPENS} = {}\n", list(&row.opens)));
     }
+    if !row.targets.is_empty() {
+        out.push_str(&format!("{TARGETS} = {}\n", list(&row.targets)));
+    }
     out
 }
 
@@ -375,7 +429,9 @@ pub fn promised_done(promises: &[&crate::pipe::table::PromiseRow]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{promised_done, promised_verify, render, Contract, GENERATED_DISPOSITION, GENERATED_OWNER};
+    use super::{
+        promised_done, promised_verify, render, target_unfit, Contract, GENERATED_DISPOSITION, GENERATED_OWNER,
+    };
     use crate::pipe::table::{ContractRow, PromiseRow};
 
     /// 生成の材料になる行（欄は最小・値は行の parser が通す形）。
@@ -398,6 +454,7 @@ mod tests {
             depends: Vec::new(),
             classes: Vec::new(),
             opens: Vec::new(),
+            targets: Vec::new(),
         }
     }
 
@@ -422,6 +479,29 @@ mod tests {
         assert_eq!(found.design, "docs/design/contract-source.md#b", "pointer の逐語");
         assert_eq!(found.touches, row.touches, "行の touches を写す");
         assert!(found.classes.is_empty() && found.opens.is_empty(), "空の任意 key は書かない");
+        assert!(!body.contains("targets ="), "的の無い行は targets を書かない: {body}");
+    }
+
+    /// 的の形（設計 gate-cost.md §16）: `<file>:<行>:<変異の名>`（桁 1 つを挟んでよい）は通り、file・行・名のどれかが
+    /// 形を外れた字面は理由を返す。
+    #[test]
+    fn contract_target_form_takes_file_line_name_and_names_the_broken_part() {
+        for good in ["src/a.rs:3:replace f -> bool with true", "src/a.rs:3:9: replace f with ()"] {
+            assert_eq!(target_unfit(good), None, "{good}");
+        }
+        for (bad, want) in [
+            ("src/a.rs", ": が無い"),
+            ("src/a.txt:3:x", ".rs"),
+            ("src/a b.rs:3:x", ".rs"),
+            ("src/a.rs:3", "行の後ろ"),
+            ("src/a.rs:0:x", "1 以上"),
+            ("src/a.rs:x:y", "1 以上"),
+            ("src/a.rs:3:  ", "名が空"),
+            ("src/a.rs:3:9:", "名が空"),
+        ] {
+            let reason = target_unfit(bad).unwrap_or_default();
+            assert!(reason.contains(want), "{bad} は {want} を名乗る: {reason}");
+        }
     }
 
     /// 行の値が `"` を含んでも**同じ字面で読み戻る**（行と写しは同じ scalar の読みを通る＝escape を持たない

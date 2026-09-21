@@ -4377,3 +4377,95 @@ fn pipe_gate_teeth_zero_words_fill_a_dash() {
     assert!(!verify_log(&state, &id).contains("{teeth}"), "穴の字面が残らない");
     clean(&[&repo, &state]);
 }
+
+// ---- 契約が名指した的を撃つ（設計 gate-cost.md §16 (3)・行 g・`s2-07l.341`・接頭辞 `pipe_gate_targets_`）----
+//
+// 契約が `targets` を持つ便は、gate が的の列を run dir の file に置き、検出線の行の末尾に `--targets <file>` を足して
+// 撃つ（的を絞った口）。持たない便は写しの行を 1 字も変えない（diff の追加行を母集団にする従来の経路）。
+// 検出線は deny ではないので、どちらの周も verdict は検出線の中身で動かない。
+
+/// 偽の検出線の名（宣言の `detection-verify` に置く stub）。
+const AIM_STUB: &str = "verify-aim.sh";
+
+/// 偽の検出線: `--targets <file>` を受けた周は file の的の本数を母集団にし、**全部を生存**として 5 値の行を出す
+/// （生存が在っても verdict が動かないことを測る）。受けない周は diff の追加行を母集団にした従来の形の行を出す。
+const AIM_STUB_BODY: &str = r#"if [ "$1" = "--targets" ]; then
+  n="$(grep -c . "$2")"
+  printf 'mutants-diff: total=%s caught=0 missed=%s unviable=0 timeout=0 absent=0 scope=x teeth=- population=targets\n' "$n" "$n"
+else
+  printf 'mutants-diff: total=7 caught=6 missed=1 unviable=0 timeout=0 scope=x teeth=-\n'
+fi
+exit 0
+"#;
+
+/// 的 3 本（桁つきの一覧の形を 1 本含む）。
+const AIM_TARGETS: [&str; 3] =
+    ["src/lib.rs:1:replace seed -> bool with true", "src/lib.rs:1:5: replace seed with ()", "src/other.rs:9:replace x with 0"];
+
+/// 偽の検出線を宣言した便を Implemented まで進め、PASS の lens で 1 回 gate する（`targets` は行に足す欄・空 = 欄なし）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn aim_gate(targets: &[&str]) -> (PathBuf, PathBuf, String, Output) {
+    let (repo, state) = repo_with_state();
+    fs::write(repo.join(AIM_STUB), AIM_STUB_BODY).expect("stub を書ける");
+    write_vessel(&repo, VESSEL_ALLOWED, r#"["sh verify-ok.sh"]"#);
+    let path = repo.join(".vessel.toml");
+    let body = fs::read_to_string(&path).expect("宣言を読める");
+    fs::write(&path, format!("{body}detection-verify = [\"sh {AIM_STUB}\"]\n")).expect("宣言を書ける");
+    git(&repo, &["add", "-f", AIM_STUB, ".vessel.toml"]);
+    git(&repo, &["commit", "-q", "-m", "vessel-aim"]);
+    let quoted: Vec<String> = targets.iter().map(|target| format!("\"{target}\"")).collect();
+    let field = format!("targets = [{}]", quoted.join(", "));
+    let mut add = vec![r#"verify = ["sh verify-ok.sh"]"#];
+    if !targets.is_empty() {
+        add.push(&field);
+    }
+    let design = write_contract(&repo, &["verify"], &add);
+    let id = implemented(&repo, &state, &design);
+    let out = gate_once(&repo, &state, &id, Some(&fake_lens(&state.join("lens-ran"), &lens_verdict("PASS"))));
+    (repo, state, id, out)
+}
+
+/// (c) 欄を持つ便は的を絞った口で撃つ: 検出線の record の cmd は写しの行の末尾に `--targets <run dir の file>` を持ち、
+/// file は的を 1 行 1 本・逐語で持ち、撃たれた側の母集団 = 的の本数（3）。的が全部生存でも verdict は PASS のまま。
+#[test]
+fn pipe_gate_targets_row_fires_the_aimed_line_with_the_targets_as_its_population() {
+    let (repo, state, id, out) = aim_gate(&AIM_TARGETS);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "検出線は deny ではない＝PASS: {}", stderr_of(&out));
+    assert!(stdout_of(&out).contains("verdict=PASS"), "{}", stdout_of(&out));
+    let rows = verify_rows(&state, &id);
+    assert_eq!(kinds(&rows), ["write-set", "common", "detection", "contract"], "母集団 4 record: {rows:?}");
+    let file = run_dir(&state, &id).join("targets");
+    assert_eq!(
+        row_value(&rows, 3, "cmd"),
+        format!("sh {AIM_STUB} --targets {}", file.display()),
+        "写しの行の末尾に的の file: {rows:?}"
+    );
+    let listed = fs::read_to_string(&file).unwrap_or_default();
+    assert_eq!(listed, format!("{}\n", AIM_TARGETS.join("\n")), "的は 1 行 1 本・逐語");
+    let line = row_value(&rows, 3, "line");
+    assert_eq!(token_of(&line, "total="), "3", "母集団 = 的の本数: {line}");
+    assert_eq!(token_of(&line, "missed="), "3", "的は全部生存: {line}");
+    assert_eq!(token_of(&line, "population="), "targets", "{line}");
+    assert_eq!(value_of(&verdict_pairs(&state, &id), "verify_red"), "0", "生存は赤に数えない");
+    clean(&[&repo, &state]);
+}
+
+/// (c) 欄を持たない便は従来の経路のまま: 検出線の cmd は写しの行と 1 字も違わず（`--targets` を持たない）、run dir に
+/// 的の file を置かず、母集団は diff の追加行の側（stub の従来の行）。生存 1 でも verdict は PASS のまま。
+#[test]
+fn pipe_gate_targets_row_without_targets_keeps_the_diff_population() {
+    let (repo, state, id, out) = aim_gate(&[]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "PASS: {}", stderr_of(&out));
+    assert!(stdout_of(&out).contains("verdict=PASS"), "{}", stdout_of(&out));
+    let rows = verify_rows(&state, &id);
+    assert_eq!(row_value(&rows, 3, "cmd"), format!("sh {AIM_STUB}"), "写しの行のまま: {rows:?}");
+    assert!(!run_dir(&state, &id).join("targets").exists(), "的の file を置かない");
+    let line = row_value(&rows, 3, "line");
+    assert_eq!(token_of(&line, "total="), "7", "diff の追加行の母集団: {line}");
+    assert!(!line.contains("population="), "従来の形の行: {line}");
+    assert_eq!(value_of(&verdict_pairs(&state, &id), "verify_red"), "0", "赤は 0");
+    clean(&[&repo, &state]);
+}

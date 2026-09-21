@@ -482,6 +482,7 @@ mod tests {
             depends: Vec::new(),
             classes: Vec::new(),
             opens: Vec::new(),
+            targets: Vec::new(),
         }
     }
 

@@ -158,6 +158,244 @@ mod scope {
     }
 }
 
+/// 契約が名指した的 1 本（file・行・変異の名・設計 gate-cost.md §16）。字面は `<file>:<行>:<変異の名>` で、行の後ろに
+/// `<桁>:` を 1 つ挟んでよい（cargo-mutants の一覧の行をそのまま貼れる・桁は照合に使わない）。形の規則は core の
+/// 契約表の読み（`pipe/contract.rs` の `target_unfit`）と同じである。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Target {
+    /// repo 相対の `.rs`。
+    pub file: String,
+    /// 1 始まりの行。
+    pub line: u64,
+    /// 変異の名（cargo-mutants の一覧の `: ` の後ろ・前後の空白は落とす）。
+    pub name: String,
+}
+
+impl Target {
+    /// 字面から読む（形に合わなければ理由）。
+    pub fn parse(text: &str) -> Result<Self, String> {
+        let broken = |why: &str| Err(format!("的 {text:?} が <file>:<行>:<変異の名> の形でない: {why}"));
+        if text.chars().any(char::is_control) {
+            return broken("制御文字");
+        }
+        let Some((file, rest)) = text.split_once(':') else {
+            return broken(": が無い");
+        };
+        if file.is_empty() || file.chars().any(char::is_whitespace) || !file.ends_with(".rs") {
+            return broken("file が空白を持たない .rs でない");
+        }
+        let Some((line, name)) = rest.split_once(':') else {
+            return broken("行の後ろの : が無い");
+        };
+        let number = line.parse::<u64>().ok().filter(|n| *n >= 1);
+        let Some(line) = number.filter(|_| line.chars().all(|found| found.is_ascii_digit())) else {
+            return broken("行が 1 以上の十進でない");
+        };
+        let name = match name.split_once(':') {
+            Some((column, after)) if !column.is_empty() && column.chars().all(|found| found.is_ascii_digit()) => after,
+            _ => name,
+        };
+        let name = name.trim();
+        if name.is_empty() {
+            return broken("変異の名が空");
+        }
+        Ok(Self { file: file.to_owned(), line, name: name.to_owned() })
+    }
+}
+
+/// 的 1 本の分類（**閉じた enum**・設計 gate-cost.md §16 (2)）。4 つは cargo-mutants の outcomes の kind（[`Counts`] が
+/// 読む 4 つの数と同じ語）、[`Absent`](Self::Absent) は的が outcomes のどの一覧にも当たらない（file・行・名が現物と
+/// ずれた）。noop は outcomes の上で missed と区別できないので持たない。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+    /// 歯が落とした。
+    Caught,
+    /// 生き残った。
+    Missed,
+    /// compile できず成立しなかった。
+    Unviable,
+    /// 時間切れ。
+    Timeout,
+    /// outcomes に当たらない（的が現物とずれた）。
+    Absent,
+}
+
+/// [`Outcome`] の全 variant（宣言順＝判定行の token の順）。
+pub const OUTCOMES: &[Outcome] = &[Outcome::Caught, Outcome::Missed, Outcome::Unviable, Outcome::Timeout, Outcome::Absent];
+
+impl Outcome {
+    /// 判定行の token の名。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Caught => "caught",
+            Self::Missed => "missed",
+            Self::Unviable => "unviable",
+            Self::Timeout => "timeout",
+            Self::Absent => "absent",
+        }
+    }
+
+    /// cargo-mutants が出力 dir に書く一覧の file の名（1 行 1 変異）。absent は一覧を持たない。
+    pub fn list_file(self) -> Option<&'static str> {
+        match self {
+            Self::Caught => Some("caught.txt"),
+            Self::Missed => Some("missed.txt"),
+            Self::Unviable => Some("unviable.txt"),
+            Self::Timeout => Some("timeout.txt"),
+            Self::Absent => None,
+        }
+    }
+
+    /// outcomes.json の同じ kind の数（absent は outcomes に無い）。
+    fn counted(self, counts: &Counts) -> u64 {
+        match self {
+            Self::Caught => counts.caught,
+            Self::Missed => counts.missed,
+            Self::Unviable => counts.unviable,
+            Self::Timeout => counts.timeout,
+            Self::Absent => 0,
+        }
+    }
+}
+
+/// 的を絞った周の分類（的ごとに [`Outcome`] 1 つ・宣言順）。**5 値の和 = 的の本数**である。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Aimed(pub Vec<Outcome>);
+
+impl Aimed {
+    /// `kind` に分類された的の本数。
+    pub fn count(&self, kind: Outcome) -> u64 {
+        u64::try_from(self.0.iter().filter(|found| **found == kind).count()).unwrap_or(u64::MAX)
+    }
+
+    /// stdout へ出す 1 行: `total=<的の本数>` と 5 値を宣言順に並べ、`scope=` / `teeth=` は従来の行と同じ・末尾の
+    /// `population=targets` が「diff の追加行でなく的を母集団にした」ことを名乗る。
+    pub fn line(&self, scope: &Scope) -> String {
+        let kinds: Vec<String> = OUTCOMES.iter().map(|kind| format!("{}={}", kind.as_str(), self.count(*kind))).collect();
+        format!(
+            "mutants-diff: total={} {} scope={} teeth={} population=targets",
+            self.0.len(),
+            kinds.join(" "),
+            scope.name(),
+            scope.teeth()
+        )
+    }
+}
+
+/// 的を絞った周の分類を出力から組む（**pure**・設計 gate-cost.md §16 (2)）。
+///
+/// `outcomes` は `outcomes.json` の本文（不在は `None`）、`lists` は [`OUTCOMES`] の先頭 4 つの一覧の本文（不在は
+/// `None`）。outcomes は従来の周と同じ読み（[`parse_outcomes`] → [`measured`]・不在は [`without_outcomes`]）を通し、
+/// 読めない周は `Err`＝**5 値に化けない**（C10）。数が 1 以上の kind の一覧が無い周も `Err`（一覧の不在を 0 と読まない）。
+/// 的は一覧の行（`file:行[:桁]: 名`）と file・行・名の 3 つが一致した kind に落ち、どれにも当たらなければ absent。
+pub fn aimed_of(
+    targets: &[Target],
+    outcomes: Option<&str>,
+    lists: [Option<&str>; 4],
+    tool_succeeded: bool,
+) -> Result<Aimed, String> {
+    let counts = match outcomes {
+        Some(json) => parse_outcomes(json).and_then(|counts| measured(counts, tool_succeeded))?,
+        None => without_outcomes(tool_succeeded)?,
+    };
+    let mut listed: Vec<(Outcome, Vec<Target>)> = Vec::new();
+    for (kind, list) in OUTCOMES.iter().zip(lists) {
+        match list {
+            Some(text) => listed.push((*kind, text.lines().filter_map(|line| Target::parse(line).ok()).collect())),
+            None if kind.counted(&counts) > 0 => {
+                return Err(format!(
+                    "{} が無いのに outcomes.json の {} が {}（測れていない）",
+                    kind.list_file().unwrap_or_default(),
+                    kind.as_str(),
+                    kind.counted(&counts)
+                ));
+            }
+            None => {}
+        }
+    }
+    let classify = |target: &Target| {
+        listed
+            .iter()
+            .find(|(_, found)| found.contains(target))
+            .map_or(Outcome::Absent, |(kind, _)| *kind)
+    };
+    Ok(Aimed(targets.iter().map(classify).collect()))
+}
+
+/// `--targets <file>` を読む（設計 gate-cost.md §16 (2)）。flag が無い周は `Ok(None)`（diff の追加行を母集団にする
+/// 従来の形）。値の無い flag・読めない file・形の外れた行・的 0 本は `Err`＝**測らずに rc 2**（的を黙って落とすと
+/// 母集団が静かに狭まる・fail-closed）。空行は数えない。
+pub fn targets_of(args: &[String]) -> Result<Option<Vec<Target>>, String> {
+    if !args.iter().any(|arg| arg == "--targets") {
+        return Ok(None);
+    }
+    let path = flag(args, "--targets").ok_or_else(|| "mutants-diff: --targets に file が無い（測れていない・rc 2）".to_owned())?;
+    let text = std::fs::read_to_string(path).map_err(|err| format!("mutants-diff: 的の file {path} を読めない: {err}"))?;
+    let targets = targets_in(&text)?;
+    Ok(Some(targets))
+}
+
+/// 的の file の本文を読む（1 行 1 本・空行は飛ばす・1 本でも形が外れたら `Err`・0 本も `Err`）。
+pub fn targets_in(text: &str) -> Result<Vec<Target>, String> {
+    let targets = text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(Target::parse)
+        .collect::<Result<Vec<Target>, String>>()
+        .map_err(|reason| format!("mutants-diff: {reason}（測れていない・rc 2）"))?;
+    if targets.is_empty() {
+        return Err("mutants-diff: 的の file に的が 1 本も無い（測れていない・rc 2）".to_owned());
+    }
+    Ok(targets)
+}
+
+/// 的を絞った周の cargo-mutants の引数（[`measure_args`] の列から組み直す・設計 gate-cost.md §16 (2)）。
+///
+/// `--in-diff <diff>` の対を落とし（歯だけの便の的は diff に無い base の行である）、1 つ目の `--` の直前に
+/// 的の file ごとの `--file <file>`（初出の順・重複なし）と、的ごとの `--re <名の regex>`（名の字面を逃がした式）を
+/// 置く。それ以外の語（`-p` / `-o` / `--jobs` / `--baseline skip` / `--timeout` / test の側）は 1 語も変えない。
+pub fn aimed_args(args: Vec<String>, targets: &[Target]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut skip = false;
+    for arg in args {
+        if skip {
+            skip = false;
+            continue;
+        }
+        if arg == "--in-diff" {
+            skip = true;
+            continue;
+        }
+        out.push(arg);
+    }
+    let mut aimed: Vec<String> = Vec::new();
+    let mut files: Vec<&str> = Vec::new();
+    for target in targets {
+        if !files.contains(&target.file.as_str()) {
+            files.push(&target.file);
+            aimed.extend(["--file".to_owned(), target.file.clone()]);
+        }
+    }
+    for target in targets {
+        aimed.extend(["--re".to_owned(), regex_literal(&target.name)]);
+    }
+    let at = out.iter().position(|arg| arg == "--").unwrap_or(out.len());
+    out.splice(at..at, aimed);
+    out
+}
+
+/// 字面をそのまま当てる regex（meta 文字を `\` で逃がす）。
+fn regex_literal(text: &str) -> String {
+    let mut out = String::new();
+    for ch in text.chars() {
+        if "\\.+*?()|[]{}^$#&-~".contains(ch) {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out
+}
+
 /// 数えた結果に対する rc。**極性は manifest の `R-C12-1` 行が決める**。
 pub fn verdict(counts: &Counts, deny: bool) -> ExitCode {
     if deny && counts.missed > 0 {
@@ -293,7 +531,8 @@ const BASELINE_TAIL_HEADING: &str = "mutants-diff: baseline.log の末尾:";
 /// 退避 worktree の `baseline.log` を手で開くまで読めなかった。**測れた周（`Ok`）には何も
 /// 足さない**——緑の行に診断を残すと、緑と赤の stderr が同じ形になる。`tail` は `Err` の周に
 /// だけ呼ぶ（file を読むのは理由が立った後）。
-pub fn diagnosed(outcome: Result<Counts, String>, tail: impl FnOnce() -> String) -> Result<Counts, String> {
+/// 的を絞った周（[`Aimed`]・設計 gate-cost.md §16）も同じ 1 本を通す（型だけが変わる）。
+pub fn diagnosed<T>(outcome: Result<T, String>, tail: impl FnOnce() -> String) -> Result<T, String> {
     outcome.map_err(|reason| format!("{reason}\n{BASELINE_TAIL_HEADING}\n{}", tail()))
 }
 
@@ -341,7 +580,6 @@ pub fn baseline_judged(succeeded: bool, log: &str) -> Result<(), String> {
         Err("baseline の cargo test が非 0 で終えた（測れていない）".to_owned()),
         || baseline_tail(log, BASELINE_TAIL_LINES),
     )
-    .map(|_| ())
 }
 
 /// `"key": <整数>` の形を 1 つ読む。数でなければ `None`（文字列や object は数えない）。
@@ -405,7 +643,7 @@ fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
 }
 
 /// 使い方（rc 2 の 1 行）。
-const USAGE: &str = "usage: cargo xtask mutants-diff --base <ref> [--jobs <n>] [--threads <t>] [--teeth <語,…|->]";
+const USAGE: &str = "usage: cargo xtask mutants-diff --base <ref> [--jobs <n>] [--threads <t>] [--teeth <語,…|->] [--targets <file>]";
 
 /// `--teeth` の字面が読めない周の理由（閉じた 1 つ・設計 gate-cost.md §34 約束 1）。
 pub const TEETH_MALFORMED: &str =
@@ -479,8 +717,8 @@ pub fn run(args: &[String]) -> ExitCode {
     let Some(base) = flag(args, "--base") else {
         return unmeasured(USAGE);
     };
-    // **語の形が悪い周は何も撃たない**（rc 2・設計 gate-cost.md §34 約束 1）。
-    let teeth = match teeth_of(args) {
+    // **語の形が悪い周・的が読めない周は何も撃たない**（rc 2・設計 gate-cost.md §34 約束 1・§16）。
+    let (teeth, targets) = match teeth_of(args).and_then(|teeth| Ok((teeth, targets_of(args)?))) {
         Ok(found) => found,
         Err(reason) => return unmeasured(&reason),
     };
@@ -518,6 +756,7 @@ pub fn run(args: &[String]) -> ExitCode {
     // 並列度も thread 数も**受けた値をそのまま**渡す（cores はここで読まない・設計 gate-cost.md §31 約束 7）。
     let pace = Pace { jobs: jobs_of(args), threads, timeout_s };
     let (args, scope) = measure_args(&diff_path, &out, &layout.name, pace, teeth.as_deref());
+    let args = if let Some(found) = &targets { aimed_args(args, found) } else { args };
     let status = Command::new("cargo")
         .args(args)
         .current_dir(&root)
@@ -530,6 +769,9 @@ pub fn run(args: &[String]) -> ExitCode {
         return unmeasured("mutants-diff: cargo mutants を起動できない（測れていない・rc 2）");
     };
     let outcomes = out.join("mutants.out").join("outcomes.json");
+    if let Some(found) = &targets {
+        return aimed_run(&root, &out.join("mutants.out"), found, status.success(), (&scope, &log_path));
+    }
     let counts = match std::fs::read_to_string(&outcomes) {
         // 読めた周も **道具の rc を見る**（[`measured`]・baseline 失敗を緑にしない）。
         Ok(json) => parse_outcomes(&json).and_then(|counts| measured(counts, status.success())),
@@ -546,13 +788,53 @@ pub fn run(args: &[String]) -> ExitCode {
     };
     // **`-p` に渡した名前そのもの**を行に持ち回る（[`Scope`] は literal から作れない）。
     crate::emit(&counts.line(&scope));
+    judged(&root, &counts)
+}
+
+/// 数えた結果の rc を manifest の `R-C12-1` で決める（diff の周も的の周も同じ 1 本）。
+fn judged(root: &Path, counts: &Counts) -> ExitCode {
     let manifest = std::fs::read_to_string(root.join("rules").join("manifest.toml")).unwrap_or_default();
     // **極性が読めない周は判定しない**（rc 2）。`R-C12-1` が在るのに `enabled` を読めない
     // まま `verdict` を呼ぶと、壊れた行が「門にしない」の緑と 1 bit も違わなくなる。
     let Some(deny) = deny_line_enabled(&manifest) else {
         return unmeasured("mutants-diff: R-C12-1 の enabled を読めない（極性が決まらない・測れていない・rc 2）");
     };
-    verdict(&counts, deny)
+    verdict(counts, deny)
+}
+
+/// 的を絞った周の後段（設計 gate-cost.md §16 (2)）: 出力 dir の `outcomes.json` と 4 つの一覧を読んで的ごとに分類し
+/// （[`aimed_of`]）、判定行 [`Aimed::line`] を出す。読めない周は従来の周と同じく `baseline.log` の末尾を添えて rc 2
+/// （[`diagnosed`]）。rc の極性は従来と同じ `R-C12-1` の 1 本（生存 1 本以上 ∧ deny の周だけ rc 1・absent は赤にしない）。
+fn aimed_run(root: &Path, dir: &Path, targets: &[Target], succeeded: bool, (scope, log): (&Scope, &Path)) -> ExitCode {
+    let read = |name: &str| match std::fs::read_to_string(dir.join(name)) {
+        Ok(text) => Ok(Some(text)),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(format!("{name} を読めない: {err}（測れていない）")),
+    };
+    let classified = (|| {
+        let outcomes = read("outcomes.json")?;
+        let mut lists: [Option<String>; 4] = Default::default();
+        for (slot, kind) in lists.iter_mut().zip(OUTCOMES) {
+            *slot = match kind.list_file() {
+                Some(name) => read(name)?,
+                None => None,
+            };
+        }
+        aimed_of(targets, outcomes.as_deref(), lists.each_ref().map(Option::as_deref), succeeded)
+    })();
+    let aimed = match diagnosed(classified, || baseline_log_tail(log)) {
+        Ok(found) => found,
+        Err(reason) => return unmeasured(&format!("mutants-diff: {reason}")),
+    };
+    crate::emit(&aimed.line(scope));
+    let counts = Counts {
+        total: u64::try_from(aimed.0.len()).unwrap_or(u64::MAX),
+        caught: aimed.count(Outcome::Caught),
+        missed: aimed.count(Outcome::Missed),
+        unviable: aimed.count(Outcome::Unviable),
+        timeout: aimed.count(Outcome::Timeout),
+    };
+    judged(root, &counts)
 }
 
 /// 前便の出力 dir を消す（無い周は何もしない・それ以外の失敗は理由を返す）。
@@ -649,8 +931,9 @@ fn write_diff(root: &Path, base: &str, path: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        baseline_args, baseline_build_args, baseline_judged, measure_args, mutant_timeout_s, teeth_of, Counts,
-        Pace, BASELINE_TAIL_HEADING, TEETH_MALFORMED,
+        aimed_args, aimed_of, baseline_args, baseline_build_args, baseline_judged, measure_args, mutant_timeout_s,
+        targets_in, targets_of, teeth_of, Counts, Outcome, Pace, Target, BASELINE_TAIL_HEADING, OUTCOMES,
+        TEETH_MALFORMED,
     };
     use std::path::Path;
 
@@ -829,5 +1112,126 @@ mod tests {
                 "teeth={tail}"
             );
         }
+    }
+
+    // ---- 契約が名指した的を撃つ口（設計 gate-cost.md §16 (2)・行 g・接頭辞 `mutants_targets_`）----
+
+    /// 的の file の本文（1 行 1 本）を読んだ列。
+    fn aimed_targets(text: &str) -> Vec<Target> {
+        targets_in(text).expect("的の形は正しい")
+    }
+
+    /// 的の 4 kind 分の数を持つ outcomes.json（入れ子の `outcomes[]` は分類に使わない）。
+    fn outcomes_json(caught: u64, missed: u64, unviable: u64, timeout: u64) -> String {
+        let total = caught + missed + unviable + timeout;
+        format!(
+            "{{\"outcomes\": [], \"total_mutants\": {total}, \"caught\": {caught}, \"missed\": {missed}, \
+             \"unviable\": {unviable}, \"timeout\": {timeout}, \"success\": 0}}"
+        )
+    }
+
+    /// (b) 的 3 本の fixture: 一覧に当たる 2 本が caught / missed・行のずれた 1 本だけが absent に落ち、5 値の和 = 的の本数。
+    /// 同じ名の別の行（missed の一覧の 11 行目）はずれた的（12 行目）を拾わない。
+    #[test]
+    fn mutants_targets_three_targets_fall_into_five_values_summing_to_the_population() {
+        let targets = aimed_targets(
+            "src/probe.rs:7:replace probe_a -> bool with true\n\nsrc/probe.rs:11: replace probe_b with ()\nsrc/probe.rs:12:replace probe_b with ()\n",
+        );
+        assert_eq!(targets.len(), 3, "空行は数えない");
+        let caught = "src/probe.rs:7:5: replace probe_a -> bool with true\nsrc/other.rs:1:1: replace other with ()\n";
+        let missed = "src/probe.rs:11:9: replace probe_b with ()\n";
+        let aimed = aimed_of(&targets, Some(&outcomes_json(2, 1, 0, 0)), [Some(caught), Some(missed), Some(""), Some("")], false)
+            .expect("生存の在る非 0 は測定");
+        assert_eq!(aimed.0, [Outcome::Caught, Outcome::Missed, Outcome::Absent], "的ごとの分類（宣言順）");
+        let values: Vec<u64> = OUTCOMES.iter().map(|kind| aimed.count(*kind)).collect();
+        assert_eq!(values, [1, 1, 0, 0, 1], "caught / missed / unviable / timeout / absent");
+        assert_eq!(values.iter().sum::<u64>(), 3, "5 値の和 = 的の本数");
+        let (_, scope) = measure_args(Path::new("d"), Path::new("o"), "probe-pkg-5c", TEETH_PACE, None);
+        assert_eq!(
+            aimed.line(&scope),
+            "mutants-diff: total=3 caught=1 missed=1 unviable=0 timeout=0 absent=1 scope=probe-pkg-5c teeth=- population=targets"
+        );
+    }
+
+    /// (b) 4 kind が全部出る fixture と、file・名のずれ（absent）: unviable / timeout も一覧から分類され、file 違い・
+    /// 名違いの的は absent。一覧の不在は数が 0 の kind に限って不在のまま受ける。
+    #[test]
+    fn mutants_targets_every_kind_is_read_from_its_list_and_only_drift_is_absent() {
+        let targets = aimed_targets(
+            "src/k.rs:1:replace a with 0\nsrc/k.rs:2:replace b with 1\nsrc/k.rs:3:replace c with 2\nsrc/k.rs:4:replace d with 3\n\
+             src/other.rs:1:replace a with 0\nsrc/k.rs:2:replace b with 9\n",
+        );
+        let lists = [
+            Some("src/k.rs:1:3: replace a with 0\n"),
+            Some("src/k.rs:2:3: replace b with 1\n"),
+            Some("src/k.rs:3:3: replace c with 2\n"),
+            Some("src/k.rs:4:3: replace d with 3\n"),
+        ];
+        let aimed = aimed_of(&targets, Some(&outcomes_json(1, 1, 1, 1)), lists, false).expect("測定");
+        assert_eq!(
+            aimed.0,
+            [Outcome::Caught, Outcome::Missed, Outcome::Unviable, Outcome::Timeout, Outcome::Absent, Outcome::Absent],
+            "4 kind + file・名のずれは absent"
+        );
+        let clean = aimed_of(&targets[..1], Some(&outcomes_json(1, 0, 0, 0)), [Some(lists[0].unwrap_or_default()), None, None, None], true)
+            .expect("数 0 の kind の一覧の不在は測定のまま");
+        assert_eq!(clean.0, [Outcome::Caught]);
+    }
+
+    /// (b) outcomes を読めない周は 5 値に化けず `Err`（測れていない側）: 壊れた outcomes.json・outcomes 不在で道具が
+    /// 非 0・生存も時間切れも無い非 0（baseline の疑い）・数が 1 以上なのに一覧が無い。不在で道具が rc 0 の周
+    /// （変異 0 本＝的がどれも現物に無い）だけは全部 absent の測定。
+    #[test]
+    fn mutants_targets_unreadable_outcomes_do_not_turn_into_five_values() {
+        let targets = aimed_targets("src/k.rs:1:replace a with 0\nsrc/k.rs:2:replace b with 1\n");
+        let empty = [Some(""), Some(""), Some(""), Some("")];
+        assert!(aimed_of(&targets, Some("{\"total_mutants\": 2"), empty, true).is_err(), "壊れた outcomes.json");
+        assert!(aimed_of(&targets, None, [None; 4], false).is_err(), "outcomes 不在の非 0");
+        assert!(aimed_of(&targets, Some(&outcomes_json(2, 0, 0, 0)), empty, false).is_err(), "説明できない非 0");
+        let listless = aimed_of(&targets, Some(&outcomes_json(0, 1, 0, 0)), [Some(""), None, Some(""), Some("")], false);
+        let reason = listless.expect_err("数の在る kind の一覧の不在は測れていない");
+        assert!(reason.contains("missed.txt"), "無い一覧を名指す: {reason}");
+        let nothing = aimed_of(&targets, None, [None; 4], true).expect("変異 0 本の rc 0 は測定");
+        assert_eq!(nothing.count(Outcome::Absent), 2, "的は全部 absent");
+    }
+
+    /// (b) 的の file の形: 形の外れた行・0 本は `Err`（測らずに rc 2）で、桁つきの一覧の行も的として読める。
+    #[test]
+    fn mutants_targets_malformed_or_empty_target_files_are_unmeasured() {
+        for bad in ["src/k.rs\n", "src/k.txt:1:x\n", "src/k.rs:0:x\n", "src/k.rs:1:\n", "src/k.rs:x:y\n", "\n\n"] {
+            assert!(targets_in(bad).is_err(), "{bad:?}");
+        }
+        let found = aimed_targets("src/k.rs:4:17: replace k -> u8 with 0\n");
+        assert_eq!(
+            found,
+            [Target { file: "src/k.rs".to_owned(), line: 4, name: "replace k -> u8 with 0".to_owned() }],
+            "桁は照合に使わない"
+        );
+        assert_eq!(targets_of(&argv("--base main --teeth -")), Ok(None), "--targets 無しは従来の形");
+        assert!(targets_of(&argv("--base main --targets")).is_err(), "値の無い flag");
+        assert!(targets_of(&argv("--base main --targets /nonexistent/probe-targets-9f")).is_err(), "読めない file");
+    }
+
+    /// (b) 的を絞った口の引数: `--in-diff <diff>` の対を落とし、1 つ目の `--` の直前に file ごとの `--file` と的ごとの
+    /// `--re`（名の meta 文字を逃がした式）を置く。他の語は 1 語も変えない。
+    #[test]
+    fn mutants_targets_args_drop_in_diff_and_name_each_target() {
+        let targets = aimed_targets("src/k.rs:1:replace a -> Vec<u8> with vec![]\nsrc/k.rs:2:replace b with ()\nsrc/j.rs:3:replace c.d with 1\n");
+        let (plain, _) = measure_args(Path::new("d"), Path::new("o"), "p", TEETH_PACE, None);
+        let args = aimed_args(plain.clone(), &targets);
+        assert!(!args.iter().any(|a| a == "--in-diff" || a == "d"), "--in-diff の対は無い: {args:?}");
+        let dashes = args.iter().position(|a| a == "--").expect("-- が在る");
+        let from = args.iter().position(|a| a == "--file").expect("--file が在る");
+        assert_eq!(
+            &args[from..dashes],
+            [
+                "--file", "src/k.rs", "--file", "src/j.rs", "--re", r"replace a \-> Vec<u8> with vec!\[\]", "--re",
+                r"replace b with \(\)", "--re", r"replace c\.d with 1"
+            ],
+            "{args:?}"
+        );
+        let kept: Vec<&String> = plain.iter().take(1).chain(plain.iter().skip(3)).collect();
+        let rest: Vec<&String> = args[..from].iter().chain(&args[dashes..]).collect();
+        assert_eq!(rest, kept, "他の語は不変: {args:?}");
     }
 }

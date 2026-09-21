@@ -7,6 +7,7 @@
 //! 置いたまま。呼び手（`pipe/cli/intake.rs`・`pipe/review.rs`・歯）の `use` は親の再 export を通る。
 
 use super::{unreadable, ContractRow, Need, PromiseRow, TableError, BEGIN, END, FIELDS, PROMISE, PROMISE_FIELDS};
+use crate::pipe::contract::target_unfit;
 use crate::rules::manifest::{contract_rows, list, scalar, Scalar, TableRow, TableValue};
 use std::path::Path;
 
@@ -256,8 +257,22 @@ fn typed(raw: &TableRow, offset: u64, errors: &mut Vec<TableError>) -> Option<Co
         depends: list_of(raw, "depends", offset, errors),
         classes: list_of(raw, "classes", offset, errors),
         opens: list_of(raw, "opens", offset, errors),
+        targets: targets_of(raw, offset, errors),
     };
     (errors.len() == before).then_some(row)
+}
+
+/// 的の欄（`targets`・設計 gate-cost.md §16）: 配列の形は [`list_of`] と同じに読み、各値の形は契約 file の読みと同じ
+/// 1 本（[`target_unfit`]）で測って、外れた値を [`TableError::TargetForm`] で欄の行番号に積む（rc 1 の断り）。
+fn targets_of(raw: &TableRow, offset: u64, errors: &mut Vec<TableError>) -> Vec<String> {
+    let targets = list_of(raw, "targets", offset, errors);
+    let line = raw.value("targets").map_or(0, |(_, found)| shift(offset, found));
+    for target in &targets {
+        if let Some(reason) = target_unfit(target) {
+            errors.push(TableError::TargetForm { line, target: target.clone(), reason });
+        }
+    }
+    targets
 }
 
 /// 文字列の欄（無ければ空・形が違えば積む）。
