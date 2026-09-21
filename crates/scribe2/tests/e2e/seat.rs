@@ -19,7 +19,7 @@ mod launch;
 mod register;
 mod rules;
 
-use crate::make_tmp_dir;
+use crate::{make_tmp_dir, TmpDir};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -39,7 +39,7 @@ fn bin() -> &'static str {
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn tmp() -> PathBuf {
+fn tmp() -> TmpDir {
     make_tmp_dir().expect("tmp dir を作れる")
 }
 
@@ -74,7 +74,7 @@ fn assert_gone_mouth(state: &str, gone: &str, extra: &[&str]) {
 }
 
 /// 消えた口の歯が使う空の置き場（log も row も無い dir・後始末は呼び側）。
-fn gone_mouth_place() -> (PathBuf, String) {
+fn gone_mouth_place() -> (TmpDir, String) {
     let dir = tmp();
     let state = dir.join("state");
     fs::create_dir_all(&state).ok();
@@ -507,7 +507,7 @@ const ACCT_LAUNCH: &str = "cld {account_dir}";
 /// 口座の歯の置き場（tmp・置き場・退避物の dir・独立 socket）。
 struct AcctPlace {
     /// tmp の根。
-    dir: PathBuf,
+    dir: TmpDir,
     /// `--state-dir`。
     state: PathBuf,
     /// `--wm-dir`（空で在る＝走査が 0 件と確かめられる）。
@@ -632,7 +632,7 @@ fn acct_wait_pane(place: &AcctPlace, target: &str, ready: impl Fn(&str) -> bool)
 /// 登録の置き場の fixture（state dir・雛形 file・tmux socket）。
 pub(super) struct RolePlace {
     /// tmp dir の root。
-    pub(super) dir: PathBuf,
+    pub(super) dir: TmpDir,
     /// event log の置き場。
     pub(super) state: PathBuf,
     /// 起動の雛形の file。

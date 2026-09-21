@@ -3,7 +3,7 @@
 //! toy repo（契約表を持つ設計 doc 1 本・tracked の集合は index）に対して実 binary の `doctor --repo` を撃ち、
 //! 台帳は PATH の先頭に置いた偽の client（引数を記録して fixture の JSON を返す shim）が答える。
 
-use super::make_tmp_dir;
+use super::{make_tmp_dir, TmpDir};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -23,7 +23,7 @@ const FULL: &str = "## memo\n### 出所\nrun\n### 観測\n1/2\n### 候補\nな�
 
 /// 歯の置き場（toy repo・偽の client の dir・argv の記録）。
 struct Place {
-    dir: PathBuf,
+    dir: TmpDir,
     repo: PathBuf,
     bin: PathBuf,
     record: PathBuf,
@@ -36,7 +36,7 @@ fn git(repo: &Path, args: &[&str]) -> bool {
 
 /// toy repo を作る（設計 doc と `seed` を index に載せる・`src/new_*.rs` は無い）。
 fn place() -> Option<Place> {
-    let dir = make_tmp_dir()?.canonicalize().ok()?;
+    let dir = make_tmp_dir()?.canonical()?;
     let repo = dir.join("repo");
     fs::create_dir_all(repo.join("docs/design")).ok()?;
     fs::write(repo.join("docs/design/toy.md"), DOC).ok()?;

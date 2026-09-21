@@ -54,13 +54,16 @@ pub(super) fn bin_cmd() -> Command {
 }
 
 /// tmp dir を 1 つ作り、symlink を解いた path を返す。
+///
+/// 包みは歯の thread へ預ける（[`crate::TmpDir::held`]・歯の終わりで消える）——呼び手は `tmp().join(..)` の一時値の形も
+/// 持つので、包みを返すと文の終わりで dir が消える。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
 pub(super) fn tmp() -> PathBuf {
     let dir = make_tmp_dir().expect("tmp dir を作れる");
-    dir.canonicalize().expect("tmp dir の実体 path を解ける")
+    dir.canonical().expect("tmp dir の実体 path を解ける").held()
 }
 
 /// git を 1 回撃ち、rc 0 を要求して stdout を返す。

@@ -31,8 +31,9 @@ static SEQ: AtomicU32 = AtomicU32::new(0);
 /// repo の外に一意な tmp dir を作る。
 ///
 /// `tempfile` は直接依存の追加（憲法 A3）に当たるので足さない。xtask の
-/// `make_tmp_dir` と同形の std だけの helper である。
-pub fn make_tmp_dir() -> Option<PathBuf> {
+/// `make_tmp_dir` と同形の std だけの helper である。返すのは [`TmpDir`]（drop で dir を再帰削除する包み・
+/// 設計 docs/design/gate-cost.md §17・行 h・`s2-07l.343`）で、panic した歯も dir を残さない。
+pub fn make_tmp_dir() -> Option<TmpDir> {
     let base = std::env::temp_dir();
     for _ in 0..8 {
         let nanos = SystemTime::now()
@@ -42,10 +43,144 @@ pub fn make_tmp_dir() -> Option<PathBuf> {
         let seq = SEQ.fetch_add(1, Ordering::Relaxed);
         let dir = base.join(format!("e2e-{}-{nanos}-{seq}", std::process::id()));
         if std::fs::create_dir(&dir).is_ok() {
-            return Some(dir);
+            return Some(TmpDir { path: Some(dir) });
         }
     }
     None
+}
+
+/// 歯の fixture の一時 dir の包み（`Drop` で再帰削除・panic の unwind の途中でも消える）。
+///
+/// path として読める（`Deref` で `Path` を貸す）ので、path を繋ぐだけの呼び手は素の `PathBuf` と同じに書ける。
+/// 落ちた歯の dir を調べたい周は [`TmpDir::keep`] で path を取り出して guard を降ろす（env は読まない・C2.2）。
+#[derive(Debug)]
+pub struct TmpDir {
+    /// 消す dir（`None` = guard を降ろした後・`keep` の中だけが `None` にする）。
+    path: Option<PathBuf>,
+}
+
+impl TmpDir {
+    /// 包みの path（`Deref` の実体・`PathBuf::as_path` と同じ名＝呼び手の字面を変えない）。
+    pub fn as_path(&self) -> &Path {
+        self.path.as_deref().unwrap_or(Path::new(""))
+    }
+
+    /// symlink を解いた path の包みに替える（同じ dir を指す＝消す対象は変わらない・解けなければ `None` で dir は消える）。
+    pub fn canonical(mut self) -> Option<Self> {
+        let real = self.as_path().canonicalize().ok()?;
+        self.path = Some(real);
+        Some(self)
+    }
+
+    /// path を取り出して guard を降ろす（降ろした周は drop しても dir が残る）。
+    pub fn keep(mut self) -> PathBuf {
+        self.path.take().unwrap_or_default()
+    }
+
+    /// path を取り出し、guard は**いま走っている歯の thread** に預ける（thread の終端＝歯の終わりで drop・panic でも消える）。
+    ///
+    /// 素の `PathBuf` を返す局所 helper（write-set の外の呼び手が `tmp().join(..)` の形で一時値を捨てる）が使う口である。
+    /// 呼び手の文の終わりで包みが落ちると dir が消えてしまうので、寿命を歯 1 本の thread へ延ばす。
+    pub fn held(self) -> PathBuf {
+        let path = self.as_path().to_path_buf();
+        HELD.with(|held| held.borrow_mut().push(self));
+        path
+    }
+}
+
+thread_local! {
+    /// [`TmpDir::held`] が預かった包み（thread の終端で drop される＝libtest は歯 1 本を 1 thread で走らせる）。
+    static HELD: std::cell::RefCell<Vec<TmpDir>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+impl Drop for TmpDir {
+    fn drop(&mut self) {
+        if let Some(path) = self.path.take() {
+            fs::remove_dir_all(path).ok();
+        }
+    }
+}
+
+impl std::ops::Deref for TmpDir {
+    type Target = Path;
+    fn deref(&self) -> &Path {
+        self.as_path()
+    }
+}
+
+impl AsRef<Path> for TmpDir {
+    fn as_ref(&self) -> &Path {
+        self.as_path()
+    }
+}
+
+impl AsRef<std::ffi::OsStr> for TmpDir {
+    fn as_ref(&self) -> &std::ffi::OsStr {
+        self.as_path().as_os_str()
+    }
+}
+
+// ─────────── 一時 dir の包みの歯（設計 docs/design/gate-cost.md §17・行 h・`s2-07l.343`） ───────────
+
+/// (a) 包みを drop した後に dir が無い（中に file と sub dir を置いた周も再帰で消える）。
+#[test]
+fn e2e_fixture_tmp_dir_is_removed_on_drop() {
+    let dir = make_tmp_dir().unwrap_or_else(|| panic!("tmp dir を作れる"));
+    let path = dir.to_path_buf();
+    fs::create_dir_all(dir.join("sub")).unwrap_or_else(|e| panic!("sub dir を作れる: {e}"));
+    fs::write(dir.join("sub").join("file"), "x\n").unwrap_or_else(|e| panic!("file を置ける: {e}"));
+    assert!(path.join("sub").join("file").is_file(), "前提: drop の前は在る");
+    drop(dir);
+    assert!(!path.exists(), "drop の後に dir が無い: {}", path.display());
+}
+
+/// (b) panic した歯でも dir が消える（unwind を捕まえる口の中で作って落とし、外で不在を測る）。預けた包みも
+/// thread の終端（panic で落ちた thread を含む）で消える。
+#[test]
+fn e2e_fixture_tmp_dir_is_removed_when_the_tooth_panics() {
+    let made = std::sync::Mutex::new(PathBuf::new());
+    let caught = std::panic::catch_unwind(|| {
+        let dir = make_tmp_dir().unwrap_or_else(|| panic!("tmp dir を作れる"));
+        fs::write(dir.join("file"), "x\n").ok();
+        if let Ok(mut slot) = made.lock() {
+            *slot = dir.to_path_buf();
+        }
+        panic!("歯が落ちる");
+    });
+    assert!(caught.is_err(), "前提: 中で panic した");
+    let path = made.lock().map(|slot| slot.clone()).unwrap_or_default();
+    assert!(!path.as_os_str().is_empty(), "前提: dir を作った");
+    assert!(!path.exists(), "panic の後に dir が無い: {}", path.display());
+    let held = std::thread::spawn(|| {
+        let dir = make_tmp_dir().unwrap_or_else(|| panic!("tmp dir を作れる")).held();
+        std::panic::panic_any(dir);
+    })
+    .join();
+    let path = held.err().and_then(|payload| payload.downcast::<PathBuf>().ok()).map(|path| *path);
+    let path = path.unwrap_or_else(|| panic!("前提: 預けた thread が path を運んで panic した"));
+    assert!(!path.exists(), "預けた包みも panic した thread の終端で消える: {}", path.display());
+}
+
+/// (c) guard を降ろした周は drop の後も dir が在る（降ろす口が無ければ空虚になる pin）。
+#[test]
+fn e2e_fixture_tmp_dir_survives_when_kept() {
+    let dir = make_tmp_dir().unwrap_or_else(|| panic!("tmp dir を作れる"));
+    let path = dir.keep();
+    assert!(path.is_dir(), "降ろした周は dir が在る: {}", path.display());
+    fs::remove_dir_all(&path).ok();
+    let canonical = make_tmp_dir().and_then(TmpDir::canonical).unwrap_or_else(|| panic!("正規化できる"));
+    let path = canonical.to_path_buf();
+    drop(canonical);
+    assert!(!path.exists(), "正規化の後も包みが生きて消える: {}", path.display());
+}
+
+/// (d) 作り手が 2 回続けて別の path を返す（既存の一意性が壊れていない）。
+#[test]
+fn e2e_fixture_tmp_dir_paths_are_unique() {
+    let first = make_tmp_dir().unwrap_or_else(|| panic!("1 つ目を作れる"));
+    let second = make_tmp_dir().unwrap_or_else(|| panic!("2 つ目を作れる"));
+    assert_ne!(first.as_path(), second.as_path(), "2 回続けて別の path");
+    assert!(first.is_dir() && second.is_dir(), "どちらも在る");
 }
 
 // ─────────── e2e の歯の道具箱（設計 docs/design/gate-cost.md §30・行 v・`s2-07l.504`） ───────────
@@ -169,7 +304,7 @@ pub fn toolbox_path(dir: &Path) -> String {
 
 /// 導入先の歯の置き場（tmp の root・state dir・vessel repo とその HEAD・plugin root とその hooks.json の digest）。
 struct ConsumerPlace {
-    dir: PathBuf,
+    dir: TmpDir,
     state: PathBuf,
     vessel: PathBuf,
     head: String,
@@ -204,7 +339,7 @@ fn hooks_at(dir: &Path, body: &str) -> Option<String> {
 
 /// 置き場を 1 つ作る（vessel repo は `[[vessel]]` を書く周だけ読まれる・plugin root は記録の `root=` に使う）。
 fn consumer_place() -> Option<ConsumerPlace> {
-    let dir = make_tmp_dir()?.canonicalize().ok()?;
+    let dir = make_tmp_dir()?.canonical()?;
     let state = dir.join("state");
     fs::create_dir_all(&state).ok()?;
     let vessel = dir.join("vessel");

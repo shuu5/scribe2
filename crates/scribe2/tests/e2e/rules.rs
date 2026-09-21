@@ -2,7 +2,7 @@
 //!
 //! fixture は文字列 literal で持つ（file を置くと歯が repo の状態に依存する）。
 
-use crate::make_tmp_dir;
+use crate::{make_tmp_dir, TmpDir};
 use std::process::Command;
 use vessel::cli_outcome::{Outcome, RC_OK, RC_REFUSED};
 use vessel::fleet::select::{Model, MODELS};
@@ -599,7 +599,7 @@ ruled_at = "d"
 "#;
 
 /// tmp の state dir を作り、`host` が在れば `host.toml` として置く。
-fn host_state_dir(host: Option<&str>) -> Option<std::path::PathBuf> {
+fn host_state_dir(host: Option<&str>) -> Option<TmpDir> {
     let dir = make_tmp_dir()?;
     if let Some(text) = host {
         std::fs::write(dir.join(vessel::rules::HOST_MANIFEST), text).ok()?;
@@ -755,7 +755,7 @@ fn rules_host_vessel_row_is_read_and_duplicates_are_refused() {
 // flip-check: retroactive s2-07l.250
 
 /// `S/host.toml` の位置に dir を置いた state dir（権限に依らず読めない＝「無い」に潰れたら縮退の側へ倒れる）。
-fn host_dir_state() -> Option<std::path::PathBuf> {
+fn host_dir_state() -> Option<TmpDir> {
     let dir = make_tmp_dir()?;
     std::fs::create_dir_all(dir.join(vessel::rules::HOST_MANIFEST)).ok()?;
     Some(dir)

@@ -3,7 +3,7 @@
 //! 置き場は tmp の state dir（event log は固定 ts で積み、run dir に `verdict.json` / `review.json` を置く）で、実 binary の
 //! `ledger memo` を撃つ。PATH の先頭には argv を記録する偽の `bd` を置き、**1 回も呼ばれない**ことを毎回測る。
 
-use super::make_tmp_dir;
+use super::{make_tmp_dir, TmpDir};
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
@@ -11,7 +11,7 @@ use vessel::fleet::{Event, EventKind, Stage};
 
 /// 歯の置き場（state dir・偽の client の dir・argv の記録）。
 struct Place {
-    dir: PathBuf,
+    dir: TmpDir,
     state: PathBuf,
     bin: PathBuf,
     record: PathBuf,

@@ -278,7 +278,8 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
   1. **包む型**: 一時 dir を包む型を歯の側（main.rs）に新設し、`Drop` で dir を再帰削除する（panic でも unwind の途中で消える・`std` だけ・依存を足さない）。作り手はこの型を返す形へ変える。
   2. **呼び手の変更は最小**: 包む型は path として読める形（`Deref` で `Path` を貸す）にし、path を繋ぐだけの呼び手は 1 字も変えない。path を struct の欄へ持つ呼び手だけが欄の型を変える。
   3. **残す口は引数で**: 落ちた歯の dir を調べたい周のために、包む型から **path を取り出して guard を降ろす** 1 つの口を置く（env を読まない・C2.2）。降ろした周は消えない。
-- **歯**（`e2e_fixture_` 接頭辞・置き場は `crates/scribe2/tests/e2e/main.rs`）: (a) 包む型を drop した後に dir が**無い**（中に file を置いた周も再帰で消える）／(b) **panic した歯**でも dir が消える（std の unwind を捕まえる口の中で作って落とし、外で不在を測る＝(1) の否定の枝・現物の形では残る）／(c) guard を降ろした周は drop の後も dir が**在る**（(3) の枝・降ろす口が無ければ空虚になる pin）／(d) 作り手が 2 回続けて別の path を返す（既存の一意性が壊れていない）。
+  4. **素の path を返し続ける helper は guard を歯の thread へ預ける**（実装時の追記・`s2-07l.343`）: `tests/e2e/pipe.rs` の `tmp()` は write-set の外の `pipe/` 配下の歯が `tmp().join(..)` の一時値の形でも呼ぶ＝包みを返すと文の終わりで dir が消える。ゆえに戻り値は `PathBuf` のまま、包みを thread local の列へ預けて path だけを返す口（`held`）を置く。libtest は歯 1 本を 1 thread で走らせるので、列は歯の終わり（panic で落ちた thread を含む）で drop される。正規化は包みを保ったまま path を差し替える口（`canonical`）で行う。struct の欄に置く呼び手のうち tmux の guard と同居するもの（`hook.rs` の `PluginPlace`）は guard を先頭の欄に移す（欄は宣言順に drop＝席を畳んでから socket の dir を消す）。
+- **歯**（`e2e_fixture_` 接頭辞・置き場は `crates/scribe2/tests/e2e/main.rs`）: (a) 包む型を drop した後に dir が**無い**（中に file を置いた周も再帰で消える）／(b) **panic した歯**でも dir が消える（std の unwind を捕まえる口の中で作って落とし、外で不在を測る＝(1) の否定の枝・現物の形では残る・(4) の預けた包みも panic した thread の join の後に不在）／(c) guard を降ろした周は drop の後も dir が**在る**（(3) の枝・降ろす口が無ければ空虚になる pin）／(d) 作り手が 2 回続けて別の path を返す（既存の一意性が壊れていない）。
 - **触らない**: 封じ込めの形（scope の unit 名・上限）と `crates/scribe2/src/pipe/confine.rs`（§25 の領分）・疑似 seat の畳み方（着地済み）・各歯の assert の中身。既存に残っている dir・scope・process の掃除自体（A1 の後に別途行う）。
 - **却下案**: 依存 crate を足して一時 dir を管理する案は、依存の追加が承認事項（A3）になり標準ライブラリの `Drop` で足りるため不採用。歯の終端で個別に手で消す既存のやり方を続ける案は、失敗した歯が残す問題を解かないため不採用。作り手の戻り値を変えず別の guard 型を「使いたい歯だけ」が使う案は、既に残している 18 か所が変わらず問題が残るため不採用。
 

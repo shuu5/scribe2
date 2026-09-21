@@ -3,7 +3,7 @@
 //! claude は **fake の実行 file**（`--claude` の seam）で、引数・cwd・口座 env を file へ
 //! 写し、決めた body を stdout へ出す。**CI で実 claude は呼ばない**。
 
-use crate::make_tmp_dir;
+use crate::{make_tmp_dir, TmpDir};
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
@@ -23,9 +23,9 @@ fn bin() -> &'static str {
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn tmp() -> PathBuf {
+fn tmp() -> TmpDir {
     let dir = make_tmp_dir().expect("tmp dir を作れる");
-    dir.canonicalize().expect("tmp dir の実体 path を解ける")
+    dir.canonical().expect("tmp dir の実体 path を解ける")
 }
 
 /// fake claude を 1 本作る。

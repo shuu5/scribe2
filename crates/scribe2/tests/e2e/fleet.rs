@@ -2,7 +2,7 @@
 //!
 //! 置き場は毎回 tmp dir を `--state-dir` で指す（env も HOME も読まない形の裏返し）。
 
-use crate::make_tmp_dir;
+use crate::{make_tmp_dir, TmpDir};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::mem::discriminant;
@@ -35,7 +35,7 @@ fn bin() -> &'static str {
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn state_dir() -> PathBuf {
+fn state_dir() -> TmpDir {
     make_tmp_dir().expect("tmp dir を作れる")
 }
 
@@ -234,7 +234,7 @@ fn fleet_append_serializes_concurrent_writers() {
     let policy = LockPolicy::embedded().expect("rules 行を引ける");
     std::thread::scope(|scope| {
         for thread in 0..8_u32 {
-            let dir = dir.clone();
+            let dir = dir.to_path_buf();
             scope.spawn(move || {
                 for seq in 0..50_u32 {
                     let run = format!("r{thread}-{seq}");
@@ -1683,9 +1683,9 @@ fn live_line(label: &str) -> String {
 /// `fleet usage` の歯の置き場。
 struct UsageFixture {
     /// `--state-dir`。
-    state: PathBuf,
+    state: TmpDir,
     /// 偽 curl の置き場と、偽 curl が残す写し（`args` / `stdin`）。
-    spy: PathBuf,
+    spy: TmpDir,
     /// `--rules` の fixture。
     rules: PathBuf,
 }
@@ -2139,7 +2139,7 @@ fn run_fleet_in(cwd: &Path, args: &[&str]) -> Output {
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn repo_with_state_dir(state: &Path) -> PathBuf {
+fn repo_with_state_dir(state: &Path) -> TmpDir {
     let repo = state_dir();
     let key = format!("{}.stateDir", vessel::name::NAME);
     for args in [vec!["init", "-q"], vec!["config", &key, &state.display().to_string()]] {
@@ -2668,7 +2668,7 @@ fn account_cmd_retire_refuses_an_account_in_use() {
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn restore_place() -> (PathBuf, String, PathBuf) {
+fn restore_place() -> (TmpDir, String, PathBuf) {
     let dir = state_dir();
     let path = dir.display().to_string();
     put_host_labels(&dir, &["a1", "a3"]);

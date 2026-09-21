@@ -4,7 +4,7 @@
 //! 紐づけてから hook を撃つ。commit には identity が要るので **repo local** の
 //! `user.name` / `user.email` を与える（global 設定は 1 byte も触らない）。
 
-use crate::make_tmp_dir;
+use crate::{make_tmp_dir, TmpDir};
 use crate::seat::{socket_of, start_seat, tmux, IsolatedSeat};
 use std::fs;
 use std::io::Write;
@@ -34,9 +34,9 @@ fn bin() -> &'static str {
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn tmp() -> PathBuf {
+fn tmp() -> TmpDir {
     let dir = make_tmp_dir().expect("tmp dir を作れる");
-    dir.canonicalize().expect("tmp dir の実体 path を解ける")
+    dir.canonical().expect("tmp dir の実体 path を解ける")
 }
 
 /// git を 1 回撃ち、rc 0 を要求して stdout を返す。
@@ -63,7 +63,7 @@ fn git(dir: &Path, args: &[&str]) -> String {
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn git_repo() -> PathBuf {
+fn git_repo() -> TmpDir {
     let dir = tmp();
     git(&dir, &["init", "-q"]);
     git(&dir, &["config", "user.name", "e2e"]);
@@ -140,7 +140,7 @@ fn tool_payload(cwd: &Path, tool: &str, file: &str) -> String {
 }
 
 /// repo を器へ紐づけ、置き場の path を返す。
-fn linked(repo: &Path) -> PathBuf {
+fn linked(repo: &Path) -> TmpDir {
     let state = tmp();
     let out = run_vessel(&[
         "init",
@@ -1502,13 +1502,15 @@ fn seat_state_hooks_json_carries_stamp_entries() {
 // ─────────────────── 読み込み元の記録（consumer-sync.md §3・`s2-07l.303`・接頭辞 `hook_plugin_record_`） ───────────────────
 
 /// 独立 socket の席を 1 つ立てた置き場（repo・state dir・socket の dir・pane id）。
+///
+/// `guard` は先頭の欄（欄は宣言順に drop される＝席を畳んでから socket の dir を消す）。
 struct PluginPlace {
-    repo: PathBuf,
-    state: PathBuf,
-    sock_dir: PathBuf,
+    guard: IsolatedSeat,
+    repo: TmpDir,
+    state: TmpDir,
+    sock_dir: TmpDir,
     socket: String,
     pane: String,
-    guard: IsolatedSeat,
 }
 
 /// 席を 1 つ立てる（`name` は session = window の名）。
@@ -1528,7 +1530,7 @@ fn plugin_place(name: &str) -> PluginPlace {
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn plugin_root(body: Option<&str>) -> PathBuf {
+fn plugin_root(body: Option<&str>) -> TmpDir {
     let root = tmp();
     if let Some(text) = body {
         fs::create_dir_all(root.join("hooks")).expect("hooks dir を作れる");
@@ -1749,11 +1751,11 @@ fn seat_attrib_hook_every_hooks_json_entry_passes_the_pane() {
 /// 役割の歯の置き場: 器に紐づけた repo・独立 socket・登録の雛形・fixture の rules manifest。
 struct RolePlace {
     /// 器に紐づけた repo。
-    repo: PathBuf,
+    repo: TmpDir,
     /// 置き場（`vessel init --state-dir`）。
-    state: PathBuf,
+    state: TmpDir,
     /// 独立 socket と fixture を置く dir。
-    sock_dir: PathBuf,
+    sock_dir: TmpDir,
     /// 独立 socket の path。
     socket: String,
     /// 登録の雛形の path。
