@@ -27,7 +27,8 @@ pub(super) fn stop(args: &[String], manifest: &Manifest, policy: LockPolicy) -> 
 }
 
 /// `pipe stop --run <id>`。終端でない便 1 本に `RunStopped` を書く（席が Live なら先に group 宛てに
-/// 止める・**止め切れなかった周は `RunStopped` を書かず rc 1**＝run は live のまま）。
+/// 止める・**止め切れなかった周は `RunStopped` を書かず rc 1**＝run は live のまま）。席の後に、札が生きた運転手を
+/// 指す周はその process group も止める（設計 pipeline.md §39・順序は 席 → 運転手 → `RunStopped`）。
 ///
 /// **終端の便には event を増やさず rc 1**（書込は冪等・rc は冪等でない）。2 回撃った 2 件目が
 /// この経路に落ちる＝events.jsonl は 1 件しか増えない。判定を読めない `Gated` は rc 2 で断る
@@ -78,20 +79,82 @@ fn stop_run(args: &[String], manifest: &Manifest, policy: LockPolicy, id: &str) 
             continue;
         }
         stopped = stopped.saturating_add(1);
-        if let Err(err) = record_seat_stop(&state_dir, &state, (seat, id, *pid), policy) {
+        if let Err(err) = record_seat_stop(&state_dir, &state, (seat, id, *pid), None, policy) {
             return broken(err);
         }
     }
-    let line = format!("stop: run={id} seats={} stopped={stopped}", live_seats.len());
+    let mut line = format!("stop: run={id} seats={} stopped={stopped}", live_seats.len());
     // **席を 1 つでも止め切れなかった周は `RunStopped` を書かない**（FailClosed・C9 / C6.2）。
     // 書くと run は終端として排他の母集団から外れるのに、その runner は走り続ける。
     if stopped != live_seats.len() {
         return unstoppable(line, live_seats.len().saturating_sub(stopped));
     }
+    // **席の後・`RunStopped` の前に運転手を止める**（設計 pipeline.md §39 (2)(3)）。
+    match settle_driver(&state_dir, &state, id, grace, policy) {
+        Ok(false) => {}
+        Ok(true) => line.push_str(" driver=stopped"),
+        Err((rc, reason)) => return Outcome { out: vec![line], err: vec![reason], rc },
+    }
     if let Err(err) = record_run_stopped(&state_dir, &state, id, policy) {
         return broken(err);
     }
     Outcome::ok_line(line)
+}
+
+/// 運転手を止めて記録する（`Ok(true)` = 止めて `seat=driver` を記帳した・`Ok(false)` = 止める相手が居ない）。
+///
+/// 止め切れない周は rc 1、記帳できない周は rc 2 の `Err`（どちらも呼び手は `RunStopped` を書かない）。
+fn settle_driver(
+    state_dir: &Path,
+    state: &State,
+    id: &str,
+    grace: u64,
+    policy: LockPolicy,
+) -> Result<bool, (u8, String)> {
+    match stop_driver(state_dir, id, grace) {
+        DriverStop::Absent => Ok(false),
+        DriverStop::Stopped(pid) => {
+            let seat = (DRIVER_SEAT, id, Some(u64::from(pid)));
+            record_seat_stop(state_dir, state, seat, Some(STOPPED_BY_STOP), policy).map_err(|err| (RC_BROKEN, err))?;
+            Ok(true)
+        }
+        DriverStop::Unstoppable(pid) => Err((RC_REFUSED, format!("pipe: 運転手 {pid} を止められない（run は終端にしない）"))),
+    }
+}
+
+/// 運転手を止めた記録の席 id（`SeatStopped seat=driver`・設計 pipeline.md §39 (2)）。
+const DRIVER_SEAT: &str = "driver";
+
+/// 運転手を止めた記録の detail。
+const STOPPED_BY_STOP: &str = "stopped-by-stop";
+
+/// 運転手の止め方の結果（3 値）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DriverStop {
+    /// 止める相手が居ない（札が無い・読めない・死んでいる・札の pid が自分自身）。
+    Absent,
+    /// 札の pid（の group）を止めた。
+    Stopped(u32),
+    /// 猶予の後の KILL でも止め切れなかった。
+    Unstoppable(u32),
+}
+
+/// 札が生きた運転手を指す周だけ、その process group を**席と同じ 1 関数**（[`terminate`]）で止める。
+///
+/// 札の pid が**自分自身**（`pipe run` の中から stop を撃つ形）の周は止めない。札が無い・読めない・死んでいる
+/// 周も止めない（測れないを「止めた」に読み替えない）。
+fn stop_driver(state_dir: &Path, id: &str, grace: u64) -> DriverStop {
+    let Some(pid) = super::live_driver(state_dir, id) else {
+        return DriverStop::Absent;
+    };
+    if pid == std::process::id() {
+        return DriverStop::Absent;
+    }
+    if terminate(u64::from(pid), grace) {
+        DriverStop::Stopped(pid)
+    } else {
+        DriverStop::Unstoppable(pid)
+    }
 }
 
 /// 止め切れなかった周の形（rc 1・run は終端にしない）。
@@ -151,7 +214,7 @@ fn stop_all_with(
             continue;
         }
         stopped += 1;
-        if let Err(err) = record_seat_stop(&state_dir, &state, (id, run, *pid), policy) {
+        if let Err(err) = record_seat_stop(&state_dir, &state, (id, run, *pid), None, policy) {
             return broken(err);
         }
         if !stopped_runs.contains(&run.as_str()) {
@@ -246,10 +309,13 @@ fn signal(target: &str, name: &str) -> bool {
 }
 
 /// 席に「止めた」を記帳する。**止められた席にだけ書く**（偽の全クリアを作らない）。
+///
+/// 運転手を止めた記録（`seat=driver`・detail `stopped-by-stop`）も同じ形で書く（設計 pipeline.md §39 (2)）。
 fn record_seat_stop(
     state_dir: &Path,
     state: &State,
     seat: (&str, &str, Option<u64>),
+    detail: Option<&str>,
     policy: LockPolicy,
 ) -> Result<(), String> {
     let (id, run, pid) = seat;
@@ -262,7 +328,7 @@ fn record_seat_stop(
             stage: None,
             seat: Some(id.to_owned()),
             pid,
-            detail: None,
+            detail: detail.map(str::to_owned),
         },
         policy,
     )

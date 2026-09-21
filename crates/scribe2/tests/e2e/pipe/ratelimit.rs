@@ -607,12 +607,22 @@ fn pipe_ratelimit_resume_stop_breaks_the_wait() {
     }
     assert_eq!(curl_calls(&state), 2, "計測が撃たれた");
     assert!(child.try_wait().expect("状態を読める").is_none(), "止める前は process が生きている（reset は 2099 年）");
-    stop_run_ok(&state, &id);
+    // resume は札を握る運転手である＝stop がその process を止める（設計 pipeline.md §39 (2)）。resume は test の子なので、
+    // stop は別 thread で撃ち、この thread が止められた子を回収する（回収しないと zombie が残り stop は止め切れない）。
+    let dir = state.display().to_string();
+    let target = id.clone();
+    let stopper = std::thread::spawn(move || run_pipe(&["stop", "--run", &target, "--state-dir", &dir]));
     let finished = child.wait_with_output().expect("resume の終了を待てる");
+    let stopped = stopper.join().expect("stop の thread を待てる");
     let stdout = String::from_utf8_lossy(&finished.stdout);
     let stderr = String::from_utf8_lossy(&finished.stderr);
-    assert_eq!(finished.status.code(), Some(i32::from(RC_REFUSED)), "止められた便は段違いで断る: {stdout} / {stderr}");
-    assert!(stderr.contains("段は Stopped である"), "{stderr}");
+    assert_eq!(stopped.status.code(), Some(i32::from(RC_OK)), "stop --run: {}", stderr_of(&stopped));
+    assert_eq!(finished.status.code(), None, "止められた終了（自力の終了 code を持たない）: {stdout} / {stderr}");
+    let driver_rows = events(&state)
+        .into_iter()
+        .filter(|found| found.run == id && found.kind == EventKind::SeatStopped && found.seat.as_deref() == Some("driver"))
+        .count();
+    assert_eq!(driver_rows, 1, "seat=driver の記録が 1 行");
     assert_eq!(stub_calls(&state), 1, "止めた後に起こさない");
     assert!(show_line(&repo, &state, &id).contains("stage=Stopped"), "便は Stopped で終端");
     assert_eq!(kind_count(&state, &id, EventKind::RunStopped), 1, "RunStopped が 1 件");

@@ -3368,9 +3368,11 @@ fn pipe_follow_counts_the_retries_from_the_event_log() {
     clean(&[&repo, &state]);
 }
 
-/// 回数を**読めない**周は起こし直さず `Failed detail=follow-unmeasured` + rc 2 で終端する
-/// （上限到達の rc 1 と分ける・NFR4）。読めなさは、rebase の呼出しに合わせて event log へ
-/// 壊れた行を混ぜる偽 git で作る。
+/// 回数を**読めない**周は起こし直さず rc 2 で止まる（上限到達の rc 1 と分ける・NFR4）。読めなさは、rebase の
+/// 呼出しに合わせて event log へ壊れた行を混ぜる偽 git で作る。
+///
+/// 段を進める記帳は記帳の門（設計 pipeline.md §39・行 ag）を通り、門は読めない log に書かない（fail-closed）ので、
+/// `Failed detail=follow-unmeasured` は書かれず、最後の行は壊れた行のままである。
 #[test]
 fn pipe_follow_unreadable_retry_count_fails_closed_with_rc_two() {
     let (repo, state) = repo_with_state();
@@ -3393,11 +3395,7 @@ fn pipe_follow_unreadable_retry_count_fails_closed_with_rc_two() {
     assert_eq!(stub_calls(&state), 1, "起こし直さない");
     let log = fs::read_to_string(&events).expect("event log");
     let last = log.lines().rfind(|line| !line.is_empty()).unwrap_or_default();
-    assert!(
-        last.contains("\"stage\":\"Failed\"") && last.contains("follow-unmeasured"),
-        "終端の理由は上限到達と分ける: {last}"
-    );
-    assert!(!last.contains("\"detail\":\"rebase-conflict\""), "上限到達を名乗らない: {last}");
+    assert_eq!(last, "not-json", "読めない log に段を書かない（Failed も上限到達も書かれない）: {log}");
     assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), moved, "main は動かない");
     clean(&[&repo, &state]);
 }

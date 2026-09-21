@@ -11,7 +11,7 @@
 //! と**共有する 1 本**で、ここに置く（lock の実装が 1 本であるのと同じ理由・憲法 C6.3）。
 
 use crate::polarity::{OnFailure, Polarity, Timing};
-use super::Event;
+use super::{Event, Stage};
 use crate::rules::manifest::Manifest;
 use crate::rules::RuleValue;
 use std::fs::{self, OpenOptions};
@@ -65,6 +65,9 @@ pub enum StoreError {
     ReclaimToken(String),
     /// rules 行が引けない。
     Rules(String),
+    /// 条件付き追記（[`append_if`]）の述語が偽だった: 便（値）は `pipe stop --run` で `Stopped` に落ちている
+    /// （設計 pipeline.md §39）。書かずに断る。
+    Stopped(String),
 }
 
 impl std::fmt::Display for StoreError {
@@ -75,8 +78,19 @@ impl std::fmt::Display for StoreError {
             Self::Lock(reason) => write!(f, "fleet: lock を取れない（{reason}）"),
             Self::ReclaimToken(path) => write!(f, "fleet: 回収の token {path} が残っている（人が外す）"),
             Self::Rules(reason) => write!(f, "fleet: rules 行を引けない（{reason}）"),
+            Self::Stopped(run) => write!(f, "fleet: run {run} は Stopped である（後の段を記帳しない）"),
         }
     }
+}
+
+/// 条件付き追記（[`append_if`]）の述語（**閉じた enum**・自由な closure は受けない・設計 pipeline.md §39）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Condition<'a> {
+    /// 便 `run` が `Stopped` でない（その便の段を持つ最後の event の段が `Stopped` でない＝replay の段と同じ読み）。
+    NotStopped {
+        /// 便 id。
+        run: &'a str,
+    },
 }
 
 /// 黙って済ませない出来事。
@@ -150,7 +164,7 @@ pub fn lock_owner(body: &str, probe: impl Fn(u32) -> Probe) -> Owner {
 }
 
 /// 本文を 10 進 1 行（末尾の改行 1 つは許す）の pid として読む。それ以外は `None`。
-fn owner_pid(body: &str) -> Option<u32> {
+pub(crate) fn owner_pid(body: &str) -> Option<u32> {
     let line = body.strip_suffix('\n').unwrap_or(body);
     if line.is_empty() || !line.bytes().all(|byte| byte.is_ascii_digit()) {
         return None;
@@ -284,19 +298,59 @@ pub fn append(dir: &Path, event: &Event, policy: LockPolicy) -> Result<Vec<Warni
     append_line(&events_path(dir), &event.to_line(), policy)
 }
 
+/// 述語が真の周だけ 1 件を追記する（設計 pipeline.md §39 の記帳の門）。
+///
+/// 述語は **lock の中で** event log を読み直して評価する（lock の外で読んだ値との race を塞ぐ）。偽の周は
+/// 1 byte も書かず [`StoreError::Stopped`] で断る。log を読めない周は書く側へ倒さない（`Malformed` / `Io` の
+/// 断りのまま・fail-closed）。
+pub fn append_if(dir: &Path, event: &Event, policy: LockPolicy, condition: Condition<'_>) -> Result<Vec<Warning>, StoreError> {
+    let path = events_path(dir);
+    append_line_when(&path, &event.to_line(), policy, || holds(&path, condition))
+}
+
+/// 述語を log の現物で評価する（呼ぶのは lock を握った [`append_line_when`] の中だけ）。
+fn holds(path: &Path, condition: Condition<'_>) -> Result<(), StoreError> {
+    let events = read_events(path).map_err(|errors| {
+        errors
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| StoreError::Io("event log を読めない".to_owned()))
+    })?;
+    match condition {
+        Condition::NotStopped { run } => {
+            let last = events.iter().rev().filter(|event| event.run == run).find_map(|event| event.stage);
+            if last == Some(Stage::Stopped) {
+                Err(StoreError::Stopped(run.to_owned()))
+            } else {
+                Ok(())
+            }
+        }
+    }
+}
+
 /// 任意の追記 file へ 1 行を lock 付きで書く。
 ///
 /// **lock の実装はこの 1 本だけである**（憲法 C6.3）。event log も hook の注入計測も
 /// ここを通り、第 2 の writer を作らない。lock file は `<path>.lock` で、event log に
 /// ついては [`lock_path`] が指す従来の path と同一である（挙動不変）。
 pub fn append_line(path: &Path, line: &str, policy: LockPolicy) -> Result<Vec<Warning>, StoreError> {
+    append_line_when(path, line, policy, || Ok(()))
+}
+
+/// [`append_line`] の本体: lock を取り、`check` が `Ok` の周だけ 1 行書き、lock を外す（**判定は lock の中**）。
+fn append_line_when(
+    path: &Path,
+    line: &str,
+    policy: LockPolicy,
+    check: impl FnOnce() -> Result<(), StoreError>,
+) -> Result<Vec<Warning>, StoreError> {
     let parent = path
         .parent()
         .ok_or_else(|| StoreError::Io("追記先の親 dir が無い".to_owned()))?;
     fs::create_dir_all(parent).map_err(|err| StoreError::Io(format!("dir を作れない: {err}")))?;
     let lock = lock_of(path);
     let warnings = acquire(&lock, policy)?;
-    let outcome = write_line(path, line);
+    let outcome = check().and_then(|()| write_line(path, line));
     let released = fs::remove_file(&lock);
     outcome?;
     released.map_err(|err| StoreError::Io(format!("lock を外せない: {err}")))?;
@@ -430,11 +484,15 @@ fn is_stale(lock: &Path, stale_ms: u64) -> bool {
 
 /// 全 event を読む。**malformed は 1 件も飛ばさず全件返す**。file 不在は空。
 pub fn read_all(dir: &Path) -> Result<Vec<Event>, Vec<StoreError>> {
-    let events = events_path(dir);
+    read_events(&events_path(dir))
+}
+
+/// [`read_all`] の本体（path を受ける・条件付き追記が lock の中で同じ読み手を使う）。
+fn read_events(events: &Path) -> Result<Vec<Event>, Vec<StoreError>> {
     if !events.exists() {
         return Ok(Vec::new());
     }
-    let text = match fs::read_to_string(&events) {
+    let text = match fs::read_to_string(events) {
         Ok(found) => found,
         Err(err) => return Err(vec![StoreError::Io(format!("event log を読めない: {err}"))]),
     };
@@ -556,6 +614,40 @@ mod tests {
             other => panic!("token が残る周は typed に落ちる: {other:?}"),
         }
         assert!(reclaim_token(&lock).exists(), "残った token は黙って外さない");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// (f) 条件付き追記は **lock の中で**述語を評価する（設計 pipeline.md §39・行 ag）: 偽の周（便が `Stopped`）は
+    /// `Stopped` で断って file を 1 byte も変えず、他の便と `Stopped` の前の同じ便は書ける。生きている所有者の lock を
+    /// 握られている周は述語に届く前に `Lock` で断る（lock の外で評価する実装は `Stopped` を返す）。log を読めない周は
+    /// 書かずに `Malformed` で断る（fail-closed）。
+    #[test]
+    fn pipe_stop_driver_append_if_judges_inside_the_lock() {
+        use super::{append, append_if, events_path, lock_path, Condition};
+        use crate::fleet::{EventKind, Stage};
+        use crate::pipe::fixture::event;
+        let dir = scratch("append-if");
+        let policy = LockPolicy { retry_ms: 30, stale_ms: 600_000 };
+        let gated = event("me", EventKind::RunStage, Some(Stage::Gated), None, None);
+        let not_stopped = Condition::NotStopped { run: "me" };
+        append_if(&dir, &gated, policy, not_stopped).expect("Stopped の前は書ける");
+        append(&dir, &event("me", EventKind::RunStopped, Some(Stage::Stopped), None, None), policy).expect("RunStopped を書ける");
+        let before = std::fs::read(events_path(&dir)).expect("log を読める");
+        assert_eq!(append_if(&dir, &gated, policy, not_stopped), Err(StoreError::Stopped("me".to_owned())));
+        assert_eq!(std::fs::read(events_path(&dir)).expect("log を読める"), before, "断った周は 1 byte も変えない");
+        assert!(!lock_path(&dir).exists(), "断った周も lock を外す");
+        let other = event("other", EventKind::RunStage, Some(Stage::Gated), None, None);
+        append_if(&dir, &other, policy, Condition::NotStopped { run: "other" }).expect("他の便は書ける");
+        // 生きている所有者（自分）の lock: 述語に届く前に lock で断る。
+        std::fs::write(lock_path(&dir), format!("{}\n", std::process::id())).expect("lock を書ける");
+        let held = std::fs::read(events_path(&dir)).expect("log を読める");
+        assert!(matches!(append_if(&dir, &gated, policy, not_stopped), Err(StoreError::Lock(_))), "判定は lock の中");
+        assert_eq!(std::fs::read(events_path(&dir)).expect("log を読める"), held);
+        std::fs::remove_file(lock_path(&dir)).expect("lock を外せる");
+        // 読めない log: 書かずに断る（書く側へ倒さない）。
+        std::fs::write(events_path(&dir), "こわれ\n").expect("壊れた行を書ける");
+        assert!(matches!(append_if(&dir, &other, policy, Condition::NotStopped { run: "other" }), Err(StoreError::Malformed { .. })));
+        assert_eq!(std::fs::read_to_string(events_path(&dir)).unwrap_or_default(), "こわれ\n", "読めない周は書かない");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

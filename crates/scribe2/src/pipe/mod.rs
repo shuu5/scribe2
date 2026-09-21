@@ -148,14 +148,33 @@ pub enum Ticket {
 
 /// 便の driver の札を 4 値で読む（生死の判定は lock の所有者と**同じ 1 本**・C6.3・第 2 の probe を作らない）。
 pub fn driver_ticket(state_dir: &Path, id: &str) -> Ticket {
+    read_ticket(state_dir, id).0
+}
+
+/// 札が**生きている** driver を指す周だけ、その pid（設計 pipeline.md §39・`pipe stop --run` が止める相手）。
+///
+/// 札が無い・読めない・所有者が死んでいる周は `None`（測れないを「止める相手が居る」に読み替えない）。判定は
+/// [`driver_ticket`] と同じ 1 本の読み手である。
+pub fn live_driver(state_dir: &Path, id: &str) -> Option<u32> {
+    match read_ticket(state_dir, id) {
+        (Ticket::Live, pid) => pid,
+        (Ticket::Absent | Ticket::Dead | Ticket::Unreadable, _) => None,
+    }
+}
+
+/// 札を読んで 4 値と本文の pid を返す（[`driver_ticket`] と [`live_driver`] の読み手 1 本）。
+fn read_ticket(state_dir: &Path, id: &str) -> (Ticket, Option<u32>) {
     match std::fs::read_to_string(driver_path(state_dir, id)) {
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ticket::Absent,
-        Err(_) => Ticket::Unreadable,
-        Ok(body) => match store::lock_owner(&body, store::started_ms) {
-            store::Owner::Dead => Ticket::Dead,
-            store::Owner::Live => Ticket::Live,
-            store::Owner::Unreadable => Ticket::Unreadable,
-        },
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => (Ticket::Absent, None),
+        Err(_) => (Ticket::Unreadable, None),
+        Ok(body) => {
+            let ticket = match store::lock_owner(&body, store::started_ms) {
+                store::Owner::Dead => Ticket::Dead,
+                store::Owner::Live => Ticket::Live,
+                store::Owner::Unreadable => Ticket::Unreadable,
+            };
+            (ticket, store::owner_pid(&body))
+        }
     }
 }
 
@@ -623,6 +642,11 @@ pub struct Emit<'a> {
 }
 
 /// event を 1 件追記する。**追記の口は fleet の 1 本だけを通る**（C6.3）。
+///
+/// **段を進める記帳（`RunStage` / `RunDone` / `SeatSpawned`）は記帳の門を通す**（設計 pipeline.md §39）: その便が
+/// `pipe stop --run` で `Stopped` に落ちていれば、lock の中で断って書かず [`StoreError::Stopped`] を返す＝止めた便の
+/// 運転手が次の段を書けない。`RunStopped` / `SeatStopped` と、段を `Stopped` のまま残す記帳（`retire` の
+/// `detail=retired`）は門を通さない（停止の記帳を停止が塞がない・終端を動かさない記帳は塞がない）。
 pub fn emit(state_dir: &Path, entry: &Emit<'_>, policy: LockPolicy) -> Result<(), StoreError> {
     let event = Event {
         schema: SCHEMA,
@@ -642,7 +666,13 @@ pub fn emit(state_dir: &Path, entry: &Emit<'_>, policy: LockPolicy) -> Result<()
         mark: None,
         account: None,
     };
-    store::append(state_dir, &event, policy).map(|_| ())
+    let advances = matches!(entry.kind, EventKind::RunStage | EventKind::RunDone | EventKind::SeatSpawned)
+        && entry.stage != Some(Stage::Stopped);
+    if advances {
+        store::append_if(state_dir, &event, policy, store::Condition::NotStopped { run: entry.run }).map(|_| ())
+    } else {
+        store::append(state_dir, &event, policy).map(|_| ())
+    }
 }
 
 /// 列の介入の印を 1 件追記する（[`EventKind::DispatchMark`]・設計 dispatcher.md §4）。
@@ -830,6 +860,56 @@ mod tests {
         dead.wait().expect("true を待てる");
         put_ticket(&root, "r3", gone);
         assert!(Driver::hold(&root, "r3", policy).is_some(), "死んだ所有者の札は回収して取れる");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// `emit` の 1 件（段と kind だけを呼び手が選ぶ）。
+    fn emit_one(root: &Path, kind: EventKind, stage: Option<Stage>) -> Result<(), crate::fleet::store::StoreError> {
+        let policy = LockPolicy { retry_ms: 1_000, stale_ms: 600_000 };
+        let entry = super::Emit { kind, run: "me", bead: "b", stage, seat: Some("s".to_owned()), pid: None, detail: None };
+        super::emit(root, &entry, policy)
+    }
+
+    /// (a) 記帳の門（設計 pipeline.md §39・行 ag）: `RunStopped` の後の `RunStage stage=Gated` / `RunDone` / `SeatSpawned`
+    /// は `Stopped` で断られ event log の byte 数が変わらない。`RunStopped` / `SeatStopped` と、段を `Stopped` のまま
+    /// 残す `RunStage`（retire の形）は書ける。`RunStopped` の前は書ける（門は止めた便だけに効く）。
+    #[test]
+    fn pipe_stop_driver_emit_refuses_stages_after_run_stopped() {
+        use crate::fleet::store::{events_path, StoreError};
+        let root = scratch("emit-gate");
+        assert_eq!(emit_one(&root, EventKind::RunStage, Some(Stage::Implemented)), Ok(()), "止める前は書ける");
+        assert_eq!(emit_one(&root, EventKind::RunStopped, Some(Stage::Stopped)), Ok(()));
+        let size = || std::fs::metadata(events_path(&root)).map(|meta| meta.len()).unwrap_or(0);
+        let before = size();
+        for (kind, stage) in [
+            (EventKind::RunStage, Some(Stage::Gated)),
+            (EventKind::RunDone, Some(Stage::Landed)),
+            (EventKind::SeatSpawned, None),
+        ] {
+            assert_eq!(emit_one(&root, kind, stage), Err(StoreError::Stopped("me".to_owned())), "{kind:?} は断る");
+            assert_eq!(size(), before, "{kind:?}: byte 数は不変");
+        }
+        assert_eq!(emit_one(&root, EventKind::SeatStopped, None), Ok(()), "SeatStopped は書ける");
+        assert_eq!(emit_one(&root, EventKind::RunStopped, Some(Stage::Stopped)), Ok(()), "RunStopped は書ける");
+        assert_eq!(emit_one(&root, EventKind::RunStage, Some(Stage::Stopped)), Ok(()), "終端を動かさない記帳は書ける");
+        assert_eq!(emit_one(&root, EventKind::RunStage, Some(Stage::Gated)), Err(StoreError::Stopped("me".to_owned())));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// `live_driver` は札が生きている周だけ pid を返す（無い・死んだ・読めない札は `None`）。
+    #[test]
+    fn pipe_stop_driver_live_driver_names_only_a_live_owner() {
+        let root = scratch("live-driver");
+        assert_eq!(super::live_driver(&root, "none"), None, "札が無い");
+        put_ticket(&root, "me", std::process::id());
+        assert_eq!(super::live_driver(&root, "me"), Some(std::process::id()), "生きた所有者");
+        let mut dead = std::process::Command::new("true").spawn().expect("true を起こせる");
+        let gone = dead.id();
+        dead.wait().expect("true を待てる");
+        put_ticket(&root, "dead", gone);
+        assert_eq!(super::live_driver(&root, "dead"), None, "死んだ所有者");
+        std::fs::write(driver_path(&root, "me"), "not-a-pid\n").expect("札を書ける");
+        assert_eq!(super::live_driver(&root, "me"), None, "読めない札");
         let _ = std::fs::remove_dir_all(&root);
     }
 

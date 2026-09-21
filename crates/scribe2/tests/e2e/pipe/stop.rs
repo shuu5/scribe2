@@ -539,6 +539,199 @@ fn pipe_spawn_terminal_reason_mark_keeps_the_conflict_readable() {
     clean(&[&repo, &state]);
 }
 
+// ───── stop --run が段を問わず便を終端にする（`s2-07l.437`・設計 pipeline.md §39・接頭辞 `pipe_stop_driver_`） ─────
+//
+// 偽の運転手は `setsid` で立てた process group（leader の pid を札に書く）。**自分が立てた group 以外へ実 signal を
+// 送らない**（片付けの [`reap_group`] は leader が自分の group を持つ周だけ撃つ）。
+
+/// 偽の運転手を孫として立て、leader の pid を返す（test の子のままだと止めた後に zombie が残る）。
+///
+/// `body` は `setsid` の後ろに置く command（`sleep 300` など）。leader が自分の group を持つことを前提として
+/// assert する（崩れていれば group 宛ての停止を測れない）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn driver_group(body: &str) -> u32 {
+    let spawned = Command::new("sh")
+        .arg("-c")
+        .arg(format!("setsid {body} </dev/null >/dev/null 2>&1 & echo $!"))
+        .output()
+        .expect("偽の運転手を起こせる");
+    let pid: u32 = String::from_utf8_lossy(&spawned.stdout).trim().parse().expect("pid を読める");
+    let begun = std::time::Instant::now();
+    while proc_pgid(pid) != Some(pid) && begun.elapsed() < std::time::Duration::from_secs(10) {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(proc_pgid(pid), Some(pid), "前提: 偽の運転手は自分の group の leader");
+    pid
+}
+
+/// 自分が立てた偽の運転手の group を片付ける（leader が自分の group を持つ周だけ・pid ≤ 1 は撃たない）。
+fn reap_group(pid: u32) {
+    if pid > 1 && proc_pgid(pid) == Some(pid) {
+        Command::new("kill").args(["-KILL", "--", &format!("-{pid}")]).output().ok();
+    }
+}
+
+/// 札（`<state>/pipe/<run>/driver`・pid の 10 進 1 行）を置く。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn put_driver_ticket(state: &Path, run: &str, pid: u32) -> PathBuf {
+    let dir = state.join("pipe").join(run);
+    fs::create_dir_all(&dir).expect("run dir を作れる");
+    let ticket = dir.join("driver");
+    fs::write(&ticket, format!("{pid}\n")).expect("札を書ける");
+    ticket
+}
+
+/// 走行中の便（`Implemented`・席なし）を置く。
+fn live_run(state: &Path, run: &str) {
+    record_event(state, &["--kind", "RunStage", "--run", run, "--bead", "b", "--stage", "Implemented", "--detail", "x"]);
+}
+
+/// 便の `seat=driver` の記録（`SeatStopped`）の (pid, detail) の列。
+fn driver_records(state: &Path, run: &str) -> Vec<(Option<u64>, Option<String>)> {
+    events(state)
+        .into_iter()
+        .filter(|found| found.run == run && found.kind == EventKind::SeatStopped && found.seat.as_deref() == Some("driver"))
+        .map(|found| (found.pid, found.detail))
+        .collect()
+}
+
+/// (a′) 記帳の門の race: verify を `sleep` にした gate を子 process で走らせ、走行中に `pipe stop --run` を撃つと、
+/// gate は `Gated` の記帳で断られ rc 2・event log の最後は `RunStopped` のまま（札の無い gate は止められず門だけが
+/// 効く形）。base は `Gated` を上書きで書く。
+#[test]
+fn pipe_stop_driver_gate_is_refused_after_the_stop() {
+    let (repo, state) = repo_with_state();
+    fs::write(
+        repo.join("verify-slow.sh"),
+        "touch \"$(git rev-parse --git-common-dir)/slow-began\"\nsleep 3\nexit 0\n",
+    )
+    .expect("遅い verify を書ける");
+    let design = write_contract(&repo, &["verify"], &[r#"verify = ["sh verify-slow.sh"]"#]);
+    let id = implemented(&repo, &state, &design);
+    let lens = fake_lens(&state.join("lens-ran"), &lens_verdict("PASS"));
+    let mut gate = pipe_cmd(&[
+        "gate", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--lens", &lens,
+    ])
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .spawn()
+    .expect("gate を背景で起こせる");
+    let began = repo.join(".git").join("slow-began");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while !began.exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let running = began.exists() && gate.try_wait().ok().flatten().is_none();
+    let stopped = run_pipe(&["stop", "--run", &id, "--state-dir", &state.display().to_string()]);
+    let finished = gate.wait_with_output().expect("gate の終了を待てる");
+    assert!(running, "前提: stop は gate の verify の走行中に撃たれた");
+    assert_eq!(stopped.status.code(), Some(i32::from(RC_OK)), "stop --run: {}", stderr_of(&stopped));
+    assert_eq!(
+        finished.status.code(),
+        Some(i32::from(RC_BROKEN)),
+        "gate は Gated の記帳で断られる: {}",
+        String::from_utf8_lossy(&finished.stderr)
+    );
+    assert_eq!(stage_count(&state, &id, Stage::Gated), 0, "Gated は書かれない: {:?}", trail(&state, &id));
+    let last = events(&state).last().map(|found| (found.run.clone(), found.kind));
+    assert_eq!(last, Some((id.clone(), EventKind::RunStopped)), "log の最後は RunStopped のまま");
+    assert!(show_line(&repo, &state, &id).contains("stage=Stopped"), "便は Stopped で終端");
+    clean(&[&repo, &state]);
+}
+
+/// (b) `pipe stop --run` は札の pid の **group** を止め、`seat=driver` の記録（detail `stopped-by-stop`）を 1 行残してから
+/// `RunStopped` を書く（順序は 記録 → `RunStopped`）。base は運転手を生きたまま残し記録 0。
+#[test]
+fn pipe_stop_driver_run_stops_the_ticket_group() {
+    let (repo, state) = repo_with_state();
+    live_run(&state, "r1");
+    let driver = driver_group("sleep 300");
+    put_driver_ticket(&state, "r1", driver);
+    let out = run_pipe(&["stop", "--run", "r1", "--state-dir", &state.display().to_string()]);
+    let survived = proc_alive(driver);
+    reap_group(driver);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "運転手ごと止まる: {}", stderr_of(&out));
+    assert!(!survived, "運転手 {driver} は消えている");
+    assert_eq!(
+        driver_records(&state, "r1"),
+        vec![(Some(u64::from(driver)), Some("stopped-by-stop".to_owned()))],
+        "seat=driver の記録が 1 行"
+    );
+    let kinds: Vec<EventKind> = trail(&state, "r1").into_iter().map(|(kind, _, _)| kind).collect();
+    assert_eq!(kinds, vec![EventKind::RunStage, EventKind::SeatStopped, EventKind::RunStopped], "記録の後に RunStopped");
+    clean(&[&repo, &state]);
+}
+
+/// (c) 札の pid が stop を撃つ process **自身**（`pipe run` の中から stop を撃つ形）の周は止めずに `RunStopped` を書く。
+/// fixture は `sh` が `$$` を札に書いてから同じ shell で `exec` して stop を撃つ（札の pid == stop の pid）。自分を止める
+/// 実装では stop が signal で死に、rc を持たない。
+#[test]
+fn pipe_stop_driver_self_ticket_is_not_stopped() {
+    let (repo, state) = repo_with_state();
+    live_run(&state, "r2");
+    let ticket = put_driver_ticket(&state, "r2", 1);
+    let out = Command::new("sh")
+        .current_dir(std::env::temp_dir())
+        .args([
+            "-c",
+            "printf '%s\\n' \"$$\" > \"$1\"; exec \"$2\" pipe stop --run r2 --state-dir \"$3\"",
+            "sh",
+        ])
+        .arg(&ticket)
+        .arg(bin())
+        .arg(&state)
+        .output()
+        .expect("stop を撃てる");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "自分自身は止めない: {}", stderr_of(&out));
+    assert!(driver_records(&state, "r2").is_empty(), "seat=driver の記録は書かない");
+    assert_eq!(kind_count(&state, "r2", EventKind::RunStopped), 1, "RunStopped を 1 件書く");
+    clean(&[&repo, &state]);
+}
+
+/// (d) 札が無い・死んでいる周は席の停止と `RunStopped` だけ（従来と同じ event 列・記録 0）。
+#[test]
+fn pipe_stop_driver_absent_or_dead_ticket_keeps_the_old_events() {
+    let (repo, state) = repo_with_state();
+    let mut gone = Command::new("true").spawn().expect("true を起こせる");
+    let dead = gone.id();
+    gone.wait().expect("true を待てる");
+    live_run(&state, "none");
+    live_run(&state, "dead");
+    put_driver_ticket(&state, "dead", dead);
+    for run in ["none", "dead"] {
+        let out = run_pipe(&["stop", "--run", run, "--state-dir", &state.display().to_string()]);
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{run}: {}", stderr_of(&out));
+        assert_eq!(stdout_of(&out).trim(), format!("stop: run={run} seats=0 stopped=0"), "{run}: 行は従来どおり");
+        let kinds: Vec<EventKind> = trail(&state, run).into_iter().map(|(kind, _, _)| kind).collect();
+        assert_eq!(kinds, vec![EventKind::RunStage, EventKind::RunStopped], "{run}: 従来と同じ event 列");
+    }
+    clean(&[&repo, &state]);
+}
+
+/// (e) TERM を無視する偽の運転手（`trap '' TERM` の sh）は猶予の後の KILL で止まり rc 0（席の既存の歯と同型）。
+#[test]
+fn pipe_stop_driver_term_ignoring_driver_is_killed_after_the_grace() {
+    let (repo, state) = repo_with_state();
+    live_run(&state, "r3");
+    let driver = driver_group("sh -c \"trap '' TERM; sleep 300; :\"");
+    put_driver_ticket(&state, "r3", driver);
+    let out = run_pipe(&["stop", "--run", "r3", "--state-dir", &state.display().to_string()]);
+    let survived = proc_alive(driver);
+    reap_group(driver);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "KILL で止まる: {}", stderr_of(&out));
+    assert!(!survived, "運転手 {driver} は消えている");
+    assert_eq!(driver_records(&state, "r3").len(), 1, "seat=driver の記録が 1 行");
+    assert_eq!(kind_count(&state, "r3", EventKind::RunStopped), 1, "RunStopped を 1 件書く");
+    clean(&[&repo, &state]);
+}
+
 // ───── 審査の理由の閉じた型・器が作る INCONCLUSIVE の「scope の中で死んだ」形（`s2-07l.395`・設計 contract-source.md §22） ─────
 
 /// 審査の lens の起動が偽 `systemd-run` を通った（包めた）か（[`runner_was_confined`] の審査の側）。
