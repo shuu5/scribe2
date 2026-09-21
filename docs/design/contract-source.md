@@ -676,7 +676,7 @@ req = ["FR48", "FR47", "FR39"]
 section = "33"
 depends = ["af"]
 write-set = ["crates/scribe2/src/pipe/closure.rs", "crates/scribe2/src/pipe/closure/derive.rs", "crates/scribe2/src/pipe/closure/names.rs", "crates/scribe2/src/pipe/contract.rs", "crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/src/pipe/refuse.rs", "crates/scribe2/tests/e2e/pipe/intake.rs"]
-verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail contract_promise_derive_", "cargo nextest run -p scribe2 --lib --no-tests=fail contract_promise_render_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_intake_promise_"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail contract_promise_derive_", "cargo nextest run -p scribe2 --lib --no-tests=fail contract_promise_render_", "cargo nextest run -p scribe2 --lib --no-tests=fail refuse_names_are_pinned_in_declaration_order", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_intake_promise_"]
 size = "M"
 done = "(1) 約束の行を 1 つでも持つ行は WriteSet の 3 値目 Promised に弁別され、symbols の閉じた型が touches に・+ の file が creates に・.rs でない file が also に・place が tests に・_external_form の歯と名付き snapshot の歯が surfaces に写り、write-set が §3 の derive_write_set の値と一致して契約 file と runner の allowlist に載る (2) verify は teeth を（crate・scope）で束ねた nextest 行（filter は完全名を空白で並べる）・done は n の順の (n) expect の 1 文として契約 file に生成され、設計 doc には書き戻らない (3) Promised の行が write-set / touches / surfaces / tests / also / creates / done のどれかを持つ・symbols の + 無しの名が base に無い・+ 付きの名が base に在る の 3 形は Refuse の値（新しい 2 値）で断られ run dir が 0・REFUSALS の長さを pin する歯が新しい母集団で緑 (4) verify を持つ Promised の行は生成値と集合一致なら受付を通り、不一致は §3 と同じ drift の断り"
 
