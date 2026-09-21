@@ -15,8 +15,9 @@
 
 use super::super::refuse::{covered, normalize, NEW_FILE};
 use super::super::table::PromiseRow;
-use super::{closure, declares_type, in_module, is_ident, is_ident_char, snapshot_name, surface_closure, test_region};
-use super::{texts_of, touched, ClosureError, Source};
+use super::names::closed_type;
+use super::{closure, is_ident, is_ident_char, snapshot_name, surface_closure, test_region};
+use super::{texts_of, ClosureError, Source};
 use super::{CRATES_DIR, LIB_FLAG, NEXTEST_HEAD, PACKAGE_FLAGS, RS, SRC_DIR, TESTS_DIR, TEST_ATTR, TEST_FLAG, UNREAD_TARGET_FLAGS};
 use std::collections::BTreeSet;
 
@@ -59,6 +60,8 @@ pub struct Fields<'a> {
     pub tests: &'a [String],
     /// Rust の外で触る file（base に実在する非 `.rs`）。
     pub also: &'a [String],
+    /// 約束の行の `files` の `+` 無しの `.rs`（base に実在・§34）。Declared / Derived の行は空。
+    pub files: &'a [String],
 }
 
 /// base の tree の事実（I/O は呼び手が済ませて渡す）。
@@ -75,8 +78,8 @@ pub struct Base<'a> {
 }
 
 /// write-set の導出値（§3・pure）: (i) `touches` の閉包 ∪ (ii) 歯の置き場 ∪ (iii) `surfaces` の外形 pin ∪ (iv) `creates`
-/// （`+` を付けた新規 file）∪ (v) `also`。各項は宣言順に 1 関数で、解けない項目は typed に `Err`（最初の 1 件・
-/// fail-closed）。読めない file は従来どおり [`ClosureError::Unreadable`]。
+/// （`+` を付けた新規 file）∪ (v) `also` ∪ (vi) `files`（約束の行の既存の `.rs`・§34）。各項は宣言順に 1 関数で、
+/// 解けない項目は typed に `Err`（最初の 1 件・fail-closed）。読めない file は従来どおり [`ClosureError::Unreadable`]。
 pub fn derive_write_set(fields: &Fields<'_>, base: &Base<'_>) -> Result<BTreeSet<String>, ClosureError> {
     let texts = texts_of(base.sources)?;
     let mut found = closure(fields.touches, base.sources)?;
@@ -84,6 +87,7 @@ pub fn derive_write_set(fields: &Fields<'_>, base: &Base<'_>) -> Result<BTreeSet
     found.extend(surface_closure(fields.surfaces, base.sources, base.snapshots)?);
     found.extend(created(fields.creates, base.tracked)?);
     found.extend(also_files(fields.also, base.tracked)?);
+    found.extend(listed_files(fields.files, base.tracked)?);
     Ok(found)
 }
 
@@ -301,7 +305,7 @@ fn created(items: &[String], tracked: &[String]) -> Result<BTreeSet<String>, Clo
         .collect()
 }
 
-/// 約束の行から組んだ導出の入力（設計 §33 項 3・[`Fields`] の 6 欄を所有する形）と、歯ごとの置き場。
+/// 約束の行から組んだ導出の入力（設計 §33 項 3・§34・[`Fields`] の 7 欄を所有する形）と、歯ごとの置き場。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Promised {
     /// `symbols` のうち base で閉じた型（enum / struct の宣言が module に在る `crate::module::Type`）に解ける名。
@@ -316,6 +320,8 @@ pub struct Promised {
     pub tests: Vec<String>,
     /// `files` の `+` 無しで `.rs` でない項目。
     pub also: Vec<String>,
+    /// `files` の `+` 無しの `.rs`（§34・write-set にそのまま載る）。
+    pub files: Vec<String>,
     /// 歯の (完全名, 置き場の file)（`n` の順・約束の行の中は書かれた順）。
     pub teeth: Vec<(String, String)>,
 }
@@ -330,6 +336,7 @@ impl Promised {
             creates: &self.creates,
             tests: &self.tests,
             also: &self.also,
+            files: &self.files,
         }
     }
 }
@@ -356,7 +363,7 @@ pub fn promised_inputs(promises: &[&PromiseRow], base: &Base<'_>) -> Result<Prom
             match file.strip_prefix(NEW_FILE) {
                 Some(fresh) => push_new(&mut out.creates, fresh),
                 None if !file.ends_with(RS) => push_new(&mut out.also, file),
-                None => {}
+                None => push_new(&mut out.files, file),
             }
         }
         let place = promise.place.strip_prefix(NEW_FILE).unwrap_or(&promise.place);
@@ -381,14 +388,6 @@ fn push_new(list: &mut Vec<String>, item: &str) {
     if !list.iter().any(|found| found == item) {
         list.push(item.to_owned());
     }
-}
-
-/// `symbol` が base で閉じた型か（`crate::module::Type` の型形で、module の file が `enum` / `struct` を宣言する＝
-/// [`closure`] が読む型）。fn 形・`crate::` の無い字面・宣言の無い名は閉じた型でない。
-fn closed_type(symbol: &str, texts: &[(&str, &str)]) -> bool {
-    touched(symbol).is_some_and(|found| {
-        !found.fn_form && texts.iter().any(|(path, text)| declares_type(text, found.name) && in_module(path, found.module))
-    })
 }
 
 /// 歯の完全名の末尾の段（fn 名）。
@@ -495,6 +494,18 @@ fn also_files(items: &[String], tracked: &[String]) -> Result<BTreeSet<String>, 
         .collect()
 }
 
+/// (vi) `files`（§34）: 約束の行の `files` の `+` 無しの `.rs` を**そのまま**載せる。base に無ければ
+/// [`ClosureError::ItemUnresolved`]（黙って捨てない）。
+fn listed_files(items: &[String], tracked: &[String]) -> Result<BTreeSet<String>, ClosureError> {
+    items
+        .iter()
+        .map(|item| match tracked.iter().any(|found| found == item) {
+            true => Ok(item.clone()),
+            false => Err(ClosureError::ItemUnresolved { item: item.clone() }),
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     // flip-check: moved s2-07l.363
@@ -531,7 +542,7 @@ mod tests {
     fn derive(over: &[(&str, &[&str])], sources: &[Source], tracked: &[String]) -> Result<BTreeSet<String>, ClosureError> {
         let of = |key: &str| strings(over.iter().find(|(name, _)| *name == key).map_or(&[][..], |(_, items)| *items));
         let (touches, surfaces, verify) = (of("touches"), of("surfaces"), of("verify"));
-        let (creates, tests, also) = (of("creates"), of("tests"), of("also"));
+        let (creates, tests, also, files) = (of("creates"), of("tests"), of("also"), of("files"));
         let fields = Fields {
             touches: &touches,
             surfaces: &surfaces,
@@ -539,6 +550,7 @@ mod tests {
             creates: &creates,
             tests: &tests,
             also: &also,
+            files: &files,
         };
         derive_write_set(&fields, &Base { sources, snapshots: &[], tracked, core_crate: "toy" })
     }
@@ -698,7 +710,7 @@ mod tests {
         let base = Base { sources: &sources, snapshots: &[], tracked: &tracked, core_crate: "toy" };
         let gate = |lines: &[&str], written: &[&str]| {
             let verify = strings(lines);
-            let fields = Fields { touches: &[], surfaces: &[], verify: &verify, creates: &[], tests: &[], also: &[] };
+            let fields = Fields { touches: &[], surfaces: &[], verify: &verify, creates: &[], tests: &[], also: &[], files: &[] };
             declared_teeth(&fields, &base, &strings(written))
         };
         let derive_line = "cargo nextest run -p toy --no-tests=fail derive_";
@@ -740,7 +752,7 @@ mod tests {
         assert_eq!(teeth("cargo nextest run -p toy --test helper other_"), Ok(set(&["crates/toy/tests/helper.rs"])), "--test helper");
         let base = Base { sources: &sources, snapshots: &[], tracked: &tracked, core_crate: "toy" };
         let verify = strings(&[e2e_line]);
-        let fields = Fields { touches: &[], surfaces: &[], verify: &verify, creates: &[], tests: &[], also: &[] };
+        let fields = Fields { touches: &[], surfaces: &[], verify: &verify, creates: &[], tests: &[], also: &[], files: &[] };
         let written: Vec<String> = target.into_iter().collect();
         assert_eq!(declared_teeth(&fields, &base, &written), Ok(()), "(e) 門は src の歯の file を要求しない");
     }
@@ -898,6 +910,49 @@ mod tests {
             assert!(in_crate(file, krate) && in_scope(file, krate, scope) && filter == "x", "{file} は行の scope の中");
         }
         assert_eq!(nextest_line("src/lib.rs", &["x", "y"]), "cargo nextest run --no-tests=fail x y", "crates/ の外は core の crate");
+    }
+
+    // flip-check: s2-07l.528
+
+    /// §34 (a): `files` の `+` 無しの `.rs`（base に実在・閉包にも歯の置き場にも無い `show.rs`）は `files` の欄に写り、
+    /// write-set にそのまま載る（base は黙って捨てる → RED）。`.rs` でない file は従来どおり `also` で `files` に混ざらない。
+    #[test]
+    fn contract_promise_files_existing_rs_lands_in_the_write_set_as_is() {
+        let (sources, snapshots, tracked) = promise_base();
+        let base = Base { sources: &sources, snapshots: &snapshots, tracked: &tracked, core_crate: "toy" };
+        let one = promise(1, &[], &["crates/toy/src/show.rs", "rules/manifest.toml"], &["derive_ok"], "");
+        let (found, inputs) = derive_promised(&[&one], &base).unwrap_or_else(|error| panic!("{error:?}"));
+        assert_eq!(inputs.files, strings(&["crates/toy/src/show.rs"]), "+ 無しの .rs だけ");
+        assert_eq!(inputs.also, strings(&["rules/manifest.toml"]), ".rs でない file は also のまま");
+        let want = set(&["crates/toy/src/show.rs", "crates/toy/tests/e2e.rs", "rules/manifest.toml"]);
+        assert_eq!(found, want, "歯の置き場 ∪ also ∪ files");
+        assert_eq!(found, derive_write_set(&inputs.fields(), &base).unwrap_or_default(), "§3 の関数の値と一致");
+    }
+
+    /// §34 (b): base に無い `.rs` を `+` 無しで書いた約束の行は `ItemUnresolved`（base は黙って捨てて通す → RED）。§3 の
+    /// 関数に `files` を直に渡しても同じ理由で断る。
+    #[test]
+    fn contract_promise_files_missing_rs_is_item_unresolved() {
+        let (sources, snapshots, tracked) = promise_base();
+        let base = Base { sources: &sources, snapshots: &snapshots, tracked: &tracked, core_crate: "toy" };
+        let one = promise(1, &[], &["crates/toy/src/none.rs"], &["derive_ok"], "");
+        let want = ClosureError::ItemUnresolved { item: "crates/toy/src/none.rs".to_owned() };
+        assert_eq!(derive_promised(&[&one], &base).map(|(found, _)| found), Err(want.clone()), "base に無い .rs");
+        let (sources, tracked) = derive_base();
+        assert_eq!(derive(&[("files", &["crates/toy/src/none.rs"])], &sources, &tracked), Err(want), "§3 の関数も同じ");
+    }
+
+    /// §34 (c)(d): `crate::paint::Hue` は `paint::Hue` の字面を持たない base（宣言 file だけ）でも module の宣言で解ける
+    /// （base は末尾 2 節の字面を探して解けない → RED）。宣言の無い `crate::paint::Fresh` と別 module の `crate::show::Hue`
+    /// は解けない。末尾 2 節の `Hue::Red` の形と fn 形は従来どおり解ける。
+    #[test]
+    fn contract_promise_files_crate_type_path_resolves_by_module_declaration() {
+        let sources = vec![source("crates/toy/src/paint.rs", PAINT), source("crates/toy/src/show.rs", "pub fn name() -> u8 {\n    0\n}\n")];
+        let literal = sources.iter().any(|found| found.body.as_deref().unwrap_or_default().contains("paint::Hue"));
+        assert!(!literal, "fixture は paint::Hue の字面を持たない");
+        let names = ["crate::paint::Hue", "crate::paint::Fresh", "crate::show::Hue", "Hue::Red", "name("];
+        let found = super::super::symbols_in_base(&names, &[], &sources);
+        assert_eq!(found, Ok(vec![Some(true), Some(false), Some(false), Some(true), Some(true)]), "{names:?}");
     }
 
     /// 幅 10 の fixture と期待値。**xtask の `workspace` の歯と同じ字面・同じ値**（2 crate の式の一致を守る）。

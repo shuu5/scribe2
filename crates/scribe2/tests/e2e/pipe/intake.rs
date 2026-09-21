@@ -3556,6 +3556,70 @@ fn pipe_intake_promise_verify_matches_as_a_set_or_is_refused_as_drift() {
     clean(&[&repo, &state]);
 }
 
+// ───── 約束の行の files の既存 .rs と crate:: の型の path 形（設計 contract-source.md §34・行 ai・`s2-07l.528`・接頭辞 `pipe_intake_promise_files_`） ─────
+
+/// 1 つの約束の行だけを持つ Promised の行 `id`（歯は tests の `derive_ok`）。
+fn one_promise_row(id: &str, symbols: &str, files: &str) -> String {
+    format!("{}\n{}", promised_row(id, &[]), promise_toml((id, 1), symbols, files, "[\"derive_ok\"]", "e"))
+}
+
+/// (a)(b) `files` の `+` 無しの `.rs`（base に実在する `show.rs`・閉包にも歯の置き場にも無い）は写しの write-set にそのまま
+/// 載り（判定行 `files=2`・base は捨てて `files=1` → RED）、base に無い `.rs` は `write-set-item-unresolved` で rc 1・run dir 0
+/// （base は黙って捨てて通す → RED）。
+#[test]
+fn pipe_intake_promise_files_existing_rs_lands_and_missing_rs_is_refused() {
+    let rows = [one_promise_row("f", "", "[\"crates/toy/src/show.rs\"]"), one_promise_row("m", "", "[\"crates/toy/src/none.rs\"]")];
+    let (repo, state) = derive_repo(&table_doc(&table_region(&rows)));
+    let missing = intake_raw(&repo, &state, "docs/design/toy.md#m", "s2-m");
+    let err = stderr_of(&missing);
+    assert_eq!(missing.status.code(), Some(i32::from(RC_REFUSED)), "base に無い .rs は rc 1: {err}");
+    assert!(err.contains("write-set の crates/toy/src/none.rs は base に解けない"), "項目を名指す: {err}");
+    assert_eq!(run_dirs(&state), Vec::<String>::new(), "run dir 0");
+    assert_eq!(event_count(&state), 0, "event 0");
+    let out = intake_raw(&repo, &state, "docs/design/toy.md#f", "s2-f");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "既存の .rs は通る: {}", stderr_of(&out));
+    let tokens = intake_tokens(&out);
+    assert!(tokens.contains(&"write-set=promised".to_owned()) && tokens.contains(&"files=2".to_owned()), "判定行: {tokens:?}");
+    let id = run_id_of(&out);
+    assert_eq!(copied_write_set(&state, &id), ["crates/toy/src/show.rs", "crates/toy/tests/e2e.rs"], "files の .rs がそのまま載る");
+    stop_run_ok(&state, &id);
+    clean(&[&repo, &state]);
+}
+
+/// `paint::Hue` の字面を持たない toy の閉じた型（宣言 file だけ・const slice の宣言で閉包に入る）。
+const BARE_PAINT: &[(&str, &str)] =
+    &[("crates/toy/src/paint.rs", "pub enum Hue {\n    Red,\n    Blue,\n}\n\npub const HUES: &[Hue] = &[Hue::Red, Hue::Blue];\n")];
+
+/// (c)(d) `symbols` の `crate::paint::Hue`（toy に `paint::Hue` の字面は無い・module の宣言だけ）は受付を通り写しの write-set に
+/// paint.rs の閉包が載る（base は末尾 2 節の字面を探して `promise-symbol-unresolved` → RED）。`+crate::paint::Hue`（宣言が在る）
+/// は断られ（base は通す → RED）、`+crate::paint::Fresh`（宣言が無い）は通る。
+#[test]
+fn pipe_intake_promise_files_crate_type_path_resolves_by_module_declaration() {
+    let manifest = "[\"rules/manifest.toml\"]";
+    let rows = [
+        one_promise_row("h", "[\"crate::paint::Hue\"]", manifest),
+        one_promise_row("n", "[\"+crate::paint::Hue\"]", manifest),
+        one_promise_row("g", "[\"+crate::paint::Fresh\"]", manifest),
+    ];
+    let (repo, state) = derive_repo_with(&table_doc(&table_region(&rows)), BARE_PAINT);
+    let refused = intake_raw(&repo, &state, "docs/design/toy.md#n", "s2-n");
+    let err = stderr_of(&refused);
+    assert_eq!(refused.status.code(), Some(i32::from(RC_REFUSED)), "宣言の在る + は rc 1: {err}");
+    assert!(err.contains("約束 n の n 1 の symbols の +crate::paint::Hue は base に既に在る"), "{err}");
+    assert_eq!(run_dirs(&state), Vec::<String>::new(), "run dir 0");
+    for (id, want) in [
+        ("h", vec!["crates/toy/src/paint.rs", "crates/toy/tests/e2e.rs", "rules/manifest.toml"]),
+        ("g", vec!["crates/toy/tests/e2e.rs", "rules/manifest.toml"]),
+    ] {
+        let out = intake_raw(&repo, &state, &format!("docs/design/toy.md#{id}"), &format!("s2-{id}"));
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "行 {id} は通る: {}", stderr_of(&out));
+        let run = run_id_of(&out);
+        assert_eq!(copied_write_set(&state, &run), want, "行 {id} の写しの write-set");
+        stop_run_ok(&state, &run);
+    }
+    clean(&[&repo, &state]);
+}
+
 // ───── `--repo` / `--state-dir` の cwd fallback を落とす（`s2-07l.310`・設計 pipeline.md §15・接頭辞 `pipe_repo_required_`） ─────
 
 /// repo の git が記録する worktree の本数（main の木を含む）。

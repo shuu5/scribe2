@@ -7,9 +7,9 @@
 //!
 //! 親の私有 item（[`super::texts_of`] / [`super::heads`] / [`super::is_ident`] / [`super::is_ident_char`] と const 群）は
 //! 子孫として `super::` でそのまま引く（可視性を上げない）。逆向きに、親の 4 形の判定が使う [`holds_word`] /
-//! [`declares_fn`] と、`closure::derive` が引く [`backticked`] は `pub(super)`（＝`pipe::closure` の中だけ）に留める。
+//! [`declares_fn`] と、`closure::derive` が引く [`backticked`] / [`closed_type`] は `pub(super)`（＝`pipe::closure` の中だけ）に留める。
 
-use super::{heads, is_ident, is_ident_char, texts_of, ClosureError, Source};
+use super::{declares_type, heads, in_module, is_ident, is_ident_char, texts_of, touched, ClosureError, Source};
 use super::{IMPL_HEAD, PATH_CHARS, RS};
 
 /// 名指しの実在（§3）: `texts` の各 (在り処, 本文) の backtick の中身のうち **path 形 / 型の path 形 / fn 形**だけを
@@ -55,14 +55,25 @@ pub fn symbols_in_base(names: &[&str], tracked: &[String], sources: &[Source]) -
 }
 
 /// 名指し 1 つが base に解けるか（path 形は `paths` の path・型の path 形は [`resolves_type`]・fn 形は宣言）。名指しの
-/// 形でない字面（`touched` の型の variant を含む）は `None`。
+/// 形でない字面（`touched` の型の variant を含む）は `None`。`crate::<module>::<Type>` の形（§34）は閉じた型の読み手
+/// [`closed_type`]（`closure()` の `touches` と同じ 1 本）でも解き、従来の末尾 2 節の読みとの OR をとる（解けていた名を
+/// 解けなくしない）。
 fn resolved(name: &str, touched: &[&str], paths: &[&str], bodies: &[(&str, &str)]) -> Option<bool> {
     match form_of(name, touched) {
         Form::Path => Some(paths.iter().any(|path| path_matches(path, name))),
-        Form::Type { ty, item } => Some(resolves_type(bodies, &ty, &item)),
+        Form::Type { ty, item } => Some(closed_type(name, bodies) || resolves_type(bodies, &ty, &item)),
         Form::Fn(ident) => Some(bodies.iter().any(|(_, body)| declares_fn(body, &ident))),
         Form::Prose => None,
     }
+}
+
+/// `symbol` が base で閉じた型か（`crate::module::Type` の型形で、module の file が `enum` / `struct` を宣言する＝
+/// [`super::closure`] が読む型）。fn 形・`crate::` の無い字面・宣言の無い名は閉じた型でない。約束の行の導出
+/// （`touches`・`closure::derive`）と受付の名指し（[`resolved`]）が同じ 1 本で読む（§34）。
+pub(super) fn closed_type(symbol: &str, texts: &[(&str, &str)]) -> bool {
+    touched(symbol).is_some_and(|found| {
+        !found.fn_form && texts.iter().any(|(path, text)| declares_type(text, found.name) && in_module(path, found.module))
+    })
 }
 
 /// backtick の中身の形。

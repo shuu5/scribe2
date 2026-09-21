@@ -726,6 +726,7 @@ fn fields_of(row: &ContractRow) -> closure::Fields<'_> {
         creates: &row.creates,
         tests: &row.tests,
         also: &row.also,
+        files: &[],
     }
 }
 
