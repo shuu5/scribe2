@@ -707,7 +707,7 @@ title = "焼き直しの門の teeth-outside-write-set の物差しは at のう
 req = ["FR49", "NFR4"]
 section = "35"
 write-set = ["crates/scribe2/src/pipe/review.rs", "crates/scribe2/tests/e2e/pipe/intake.rs"]
-verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail pipe_review_unaddressed_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_intake_repeat_teeth_outside_write_set_"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail pipe_review_unaddressed_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_intake_repeat_"]
 size = "S"
 done = "(1) at に path でない項目（歯の接頭辞・§ の番号）が混ざった teeth-outside-write-set の後、path の項目を write-set に足した契約が受付を通る (2) path の項目が write-set に無い契約は従来どおり finding-unaddressed で断られ、理由に測った項目と測れなかった項目の数を出す (3) 既存の pipe_intake_repeat_ / pipe_review_unaddressed_ の歯が 1 字も変わらず緑"
 <!-- contracts:end -->
@@ -755,5 +755,5 @@ done = "(1) at に path でない項目（歯の接頭辞・§ の番号）が�
 - 何が起きているか（orchestrator の実測 2026-09-21・便 `s2-07l.513` の 3 周目・verified）: lens が `at` に path でない項目（歯の接頭辞 `headless_lens_promise_`・`§33`）を混ぜて `teeth-outside-write-set` を出すと、物差し（`crates/scribe2/src/pipe/review.rs` の `teeth_unaddressed`）は `at` の全項目を write-set の path として測るので、path でない項目は**どんな契約でも covered にならず**、docs で write-set と § を直しても受付が `finding-unaddressed` で永遠に断る。§23 の「測れない型と `at` の空な周は物差しが空を返す」は kind と空だけを見ていて、**項目単位の測れなさ**を持たない。
 - 形: `teeth_unaddressed` は `at` の各項目を **path の形に解けるか**で 2 つに分け（解ける = tracked の file・末尾 `/` の dir・`+` 付きの新規 file の 3 形＝§3 の write-set の項目の形と同じ読み）、解ける項目だけを write-set と照合し、解けない項目は測らない（理由の文に「測った n 件・測れない m 件」を出す・母集団を同時に出す C10）。解ける項目が 0 の周は空を返す＝通す（`at` が空の周と同じ扱い）。`Rework` に tracked を足す（既に持つ・引数は増やさない）。
 - 触らない: `literal_unaddressed` / `section_unaddressed`（識別子と § はそれぞれの物差しが読む）・同型 N 回の門（`SameKindRepeated`）・lens の雛形（`at` の形を閉じるのは行 ah 以後の別の行）・`FindingKind` の 7 語。
-- 歯（in-file は `pipe_review_unaddressed_` 接頭辞・`review.rs` の tests・e2e は `pipe_intake_repeat_teeth_outside_write_set_` 接頭辞・`tests/e2e/pipe/intake.rs`・既存の `failed_runs` / `Again` / `assert_refused` の型）: (a) at が toy の src/other.rs と歯の接頭辞と § の番号の 3 項目の後、src/other.rs を write-set に足した契約が通る（base は断る → RED）／(b) src/other.rs を足さない契約は従来どおり断られ、理由に src/other.rs だけが名指され測れない 2 件が数で出る／(c) in-file: 物差しが path の項目だけを返す（母集団 3・path 1）。
+- 歯（in-file は `pipe_review_unaddressed_` 接頭辞・`review.rs` の tests・e2e は新設の歯が `pipe_intake_repeat_teeth_outside_write_set_` 接頭辞で、verify の行は既存の `pipe_intake_repeat_` の歯 9 本ごと撃つ〔done (3) の不変を同じ行で測る〕・`tests/e2e/pipe/intake.rs`・既存の `failed_runs` / `Again` / `assert_refused` の型）: (a) at が toy の src/other.rs と歯の接頭辞と § の番号の 3 項目の後、src/other.rs を write-set に足した契約が通る（base は断る → RED）／(b) src/other.rs を足さない契約は従来どおり断られ、理由に src/other.rs だけが名指され測れない 2 件が数で出る／(c) in-file: 物差しが path の項目だけを返す（母集団 3・path 1）。
 - 却下: lens の雛形だけを直す（過去の便の `at` は書き換わらない・.513 が止まったまま）／`at` の path でない項目を「対応済み」と読む（測れないを「測った」に読み替える・C10）／`FindingUnaddressed` を `SameKindRepeated` の後ろに回す（材料が変われば通るが、path の項目が未対応でも通る＝門が緩む）。
