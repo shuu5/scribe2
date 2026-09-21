@@ -587,6 +587,63 @@ fn pipe_dispatch_release_requeues_not_a_review_failed_run() {
     clean(&[&repo, &state]);
 }
 
+/// 行 a の便を審査の判定 `judgement`（`review.json` の本文）で `Reviewed` の終端に着ける。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn judged_run(repo: &Path, state: &Path, bead: &str, judgement: &str) -> String {
+    let id = intake_bead(repo, state, &format!("{DESIGN_FILE}#a"), bead);
+    fs::write(state.join("pipe").join(&id).join(REVIEW_FILE), format!("{judgement}\n")).expect("審査の判定を書ける");
+    id
+}
+
+/// 審査を測れなかった判定（lens の出力に判定の行が無い周）。
+const UNPARSED: &str = "{\"verdict\":\"INCONCLUSIVE\",\"kind\":\"unparsed\"}";
+
+/// (§22 (b)) 審査を測れなかった便（`Reviewed` の INCONCLUSIVE `kind:unparsed`）は `release` で**同じ sha のまま**
+/// 列に戻り（`reason=-`・`ready=1`）、起こし直した便が同じ sha でまた unparsed に着けば再び列外（印 1 回で 1 回）。
+/// base は `Reviewed` を判定の中身を見ずに戻さない（`settled:…/Reviewed` のまま＝RED）。
+#[test]
+fn pipe_dispatch_release_unparsed_requeues_an_unmeasured_review_once_at_the_same_sha() {
+    let (repo, state) = repo_with_state();
+    two_rows(&repo);
+    let bead = "s2-toy.1";
+    let first = judged_run(&repo, &state, bead, UNPARSED);
+    let (settled, released) = reasons_around_release(&repo, &state, bead, "Reviewed");
+    assert_eq!(released, "-", "測れなかった審査は release で同じ sha のまま列に戻る");
+    let bd = fake_bd(&state, &[issue(bead, 2, "a")]);
+    let back = ls(&repo, &state, &bd);
+    assert_eq!(count_of(&back), format!("{COUNT} total=1 ready=1"), "戻った契約は起こせる（{}）", told(&back));
+    // **起こし直した便が同じ sha でまた unparsed に着く**（秒を跨いで同じ bead の 2 本目・同じ契約 file）。
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    let second = judged_run(&repo, &state, bead, UNPARSED);
+    assert_ne!(second, first, "起こし直した便は新しい run id");
+    let again = ls(&repo, &state, &bd);
+    assert_eq!(reason_of(&again, bead), settled, "同じ sha でまた unparsed＝再び列外（印は 1 回しか効かない）（{}）", told(&again));
+    assert_eq!(count_of(&again), format!("{COUNT} total=1 ready=0"), "2 度目は起こさない");
+    clean(&[&repo, &state]);
+}
+
+/// (§22 (c)) 審査役が材料を読んで出した INCONCLUSIVE（`kind:section-material-missing`）と、kind が unparsed でも
+/// FAIL の便は `release` の後も理由が変わらない（(b) が「INCONCLUSIVE を全部戻す」「unparsed を全部戻す」変異で
+/// ないことを測る・FR49）。
+#[test]
+fn pipe_dispatch_release_unparsed_keeps_other_review_judgements_out() {
+    for judgement in [
+        "{\"verdict\":\"INCONCLUSIVE\",\"kind\":\"section-material-missing\"}",
+        "{\"verdict\":\"FAIL\",\"kind\":\"unparsed\"}",
+    ] {
+        let (repo, state) = repo_with_state();
+        two_rows(&repo);
+        let bead = "s2-toy.1";
+        judged_run(&repo, &state, bead, judgement);
+        let (settled, released) = reasons_around_release(&repo, &state, bead, "Reviewed");
+        assert_eq!(released, settled, "{judgement} は release の後も列外のまま（理由も変わらない）");
+        clean(&[&repo, &state]);
+    }
+}
+
 /// (§12 戻す段) `Stopped` の便（人が止めた）は `release` で列に戻る。
 #[test]
 fn pipe_dispatch_release_requeues_a_stopped_run() {

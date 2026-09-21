@@ -811,18 +811,18 @@ pub fn mark(state_dir: &Path, bead: &str, mark: Mark, policy: store::LockPolicy)
     }
 }
 
-// 歯（`mod tests`）だけが引く 4 名（`requeues` は親の doc の link からも引かれるが、link は use に数えられない）。
+// 歯（`mod tests`）だけが引く 5 名（`requeues` は親の doc の link からも引かれるが、link は use に数えられない）。
 // 歯の区間の直前に置く（file の最初の行頭 `#[cfg(test)]` を src の本体より後に保つ・設計 §20）。
 #[cfg(test)]
-use candidates::{launch_of, released_after, requeues, section_keyed};
+use candidates::{launch_of, released_after, requeues, review_unmeasured, section_keyed};
 
 #[cfg(test)]
 mod tests {
     // flip-check: moved s2-07l.531
     use super::{
         admits_gated, advance, digits_of, handoff, launch_of, marks_of, order, rank, released_after, requeues,
-        revive_of, section_keyed, tools, Advance, Candidate, Handoff, Input, Pointer, WaitReason, DRIVE, HANDOFFS,
-        WAIT_REASONS,
+        review_unmeasured, revive_of, section_keyed, tools, Advance, Candidate, Handoff, Input, Pointer, WaitReason,
+        DRIVE, HANDOFFS, WAIT_REASONS,
     };
     use crate::fleet::{Event, EventKind, Mark, Stage, SCHEMA, STAGES};
     use crate::rules::manifest::Manifest;
@@ -933,6 +933,33 @@ mod tests {
         ];
         assert!(!released_after(&relaunched, again, "s2-a"), "起こし直した便の終端の後には release が無い");
         assert!(!released_after(&[], run, "s2-a"), "記帳の無い便は「後」を測れない（効かない側）");
+    }
+
+    /// 判定で引く戻しが真になるのは **`INCONCLUSIVE` ∧ `Unparsed` の対だけ**で、`FAIL`（kind を問わず）・
+    /// `INCONCLUSIVE` で kind が他の 6 語・`PASS` は偽（設計 §22・母集団 = [`crate::pipe::review::FINDING_KINDS`] の 7 語 × 3 値）。
+    #[test]
+    fn pipe_dispatch_release_unparsed_is_the_only_judgement_that_requeues() {
+        use crate::pipe::gate::Verdict;
+        use crate::pipe::review::{FindingKind, Judgement, FINDING_KINDS};
+        assert_eq!(FINDING_KINDS.len(), 7, "前提: 理由の型は 7 語");
+        let mut back = Vec::new();
+        for verdict in [Verdict::Pass, Verdict::Fail, Verdict::Inconclusive] {
+            for kind in FINDING_KINDS {
+                if review_unmeasured(&Judgement { verdict, kind: Some(*kind), at: Vec::new() }) {
+                    back.push((verdict, *kind));
+                }
+            }
+            assert!(!review_unmeasured(&Judgement { verdict, kind: None, at: Vec::new() }), "kind の無い判定は戻さない");
+        }
+        assert_eq!(
+            back,
+            vec![(Verdict::Inconclusive, FindingKind::Unparsed)],
+            "母集団 {} 対のうち戻すのは測れなかった 1 対だけ",
+            FINDING_KINDS.len() * 3
+        );
+        let unparsed = |verdict| Judgement { verdict, kind: Some(FindingKind::Unparsed), at: Vec::new() };
+        assert!(!review_unmeasured(&unparsed(Verdict::Fail)), "FAIL は kind を問わず戻さない（FR49）");
+        assert!(review_unmeasured(&unparsed(Verdict::Inconclusive)), "INCONCLUSIVE ∧ unparsed は戻す");
     }
 
 

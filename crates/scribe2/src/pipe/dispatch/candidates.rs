@@ -14,6 +14,7 @@
 use super::super::admission::{self, Sizes};
 use super::super::cli::{crossings, generated, int_row, judge, live, Material, Materials};
 use super::super::contract::Contract;
+use super::super::gate::Verdict;
 use super::super::refuse::overlaps;
 use super::super::review;
 use super::super::table::{self, Pointer};
@@ -248,6 +249,13 @@ pub(super) fn settled(input: &Input<'_>, bead: &str, body: &str, design: &str, e
     if requeues(stage) && released_after(events, id, bead) {
         return None;
     }
+    // **判定で引く戻し**（設計 §22）: 審査を測れなかった `Reviewed` の便だけは印で戻す（段で引く戻しの次・§ の鍵の前）。
+    if stage == Stage::Reviewed
+        && released_after(events, id, bead)
+        && review::judgement_of(input.state_dir, id).is_some_and(|found| review_unmeasured(&found))
+    {
+        return None;
+    }
     if section_keyed(stage) && section_moved(input, id, design) {
         return None;
     }
@@ -303,6 +311,16 @@ pub(super) fn requeues(stage: Stage) -> bool {
         | Stage::RateLimited
         | Stage::Implemented => false,
     }
+}
+
+/// 審査の判定が「測れなかった」か（**pure**・`release` で列へ戻す判定・設計 §22）。
+///
+/// 真は `INCONCLUSIVE` ∧ [`review::FindingKind::Unparsed`] の対だけ——lens の出力に判定の行が無かった周で、
+/// 契約に穴が在るのではない。`FAIL`（kind を問わず・FR49 の判定）と、`INCONCLUSIVE` で kind が他の 6 語
+/// （審査役が材料を読んで出した理由＝契約か § を直す経路）と `PASS` は偽。`review.json` が無い / 読めない周は
+/// 呼び手が `None` のまま偽に倒す（fail-closed）。
+pub(super) fn review_unmeasured(judgement: &review::Judgement) -> bool {
+    judgement.verdict == Verdict::Inconclusive && judgement.kind == Some(review::FindingKind::Unparsed)
 }
 
 /// 便の最後の記帳より**後**に、同じ bead への `release` が在るか（**pure**・材料は event log の並びだけ）。
