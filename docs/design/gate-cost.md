@@ -522,6 +522,27 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
 - **land の主実測**: 閉じた行が 1 本でも在る周は赤の集計より先に `MainCheck::Unmeasurable` へ倒す（gate の約束 6 と同じ極性・撃っていない行の -1 を赤に数えない）。
 - **歯の fixture**: e2e の rules fixture（`crates/scribe2/tests/e2e/pipe.rs` の `SlotFixture`）は倍率の既定を十分大きな値に置く＝並列の歯で混んだ host でも既存の歯の遮断器は閉じない。倍率を振るのは接頭辞 `pipe_gate_health_` の歯だけである。
 
+## 33. 変異検査は baseline だけ全数走らせ、mutant の test は最初に落ちた binary で打ち切る（契約表の行 y）
+
+やさしく言うと: 変異を 1 つ当てるたびに歯を全部回している。単体の歯が 3 秒で「落ちた」と言っているのに、そのあと 5 分かけて e2e の歯まで回してから「落ちた」と数えていた。落ちたら即やめる。全部回すのは、変異を当てない最初の 1 回（baseline）だけでよい。
+
+- **何が起きているか**（verified 2026-09-21・run `s2-07l.511-20260921T035301Z` の `outcomes.json` と mutant の log）: mutant 1 つの費用は build 約 2 秒 + test **320〜410 秒**。test の内訳は lib の歯（`finished in 2.98s`・`395 passed; 7 failed` で既に落ちている）→ bin の歯（0.01 秒）→ e2e の歯（残り全部）。cargo test は落ちた binary が在っても `--no-fail-fast`（§19・行 j）で次の binary へ進むので、**撃墜が 3 秒で決まった後の 5 分半は判定に寄与しない**。baseline の test は 309 秒。同じ日の実測: 58 mutants × 約 6 分（1 job・1 thread）、105 mutants で 1,751 秒（3 job・8 thread）。撃墜した 10 本は全部 lib の歯で落ちている。
+- **§19 の理由は baseline にしか当たらない**: 行 j が `--no-fail-fast` を足したのは「flaky な歯 1 本で残りが未実行のまま baseline 失敗に倒れ、落ちた歯の全数を名指せない」ため（C10）。mutant の test は「1 本でも落ちれば撃墜」の 2 値で、落ちた歯の全数を読む読み手が居ない（`outcomes.json` は phase の rc しか持たない）。cargo-mutants は baseline と mutant に同じ cargo test の引数しか渡せない（`--` の後ろは逐語で両方へ行く）ので、道具の中で分けるには baseline を道具の外で撃つしかない。
+- **現物**（verified・main a32b146）: `crates/xtask/src/mutantsdiff.rs` の `measure_args` が `cargo mutants … --jobs <j> -- --no-fail-fast -- --test-threads <t>` を組み、`run` が `Command::new("cargo")` で 1 回撃ち、rc 2 の周は cargo-mutants が書いた `mutants.out/baseline.log` の末尾を理由行に添える（`baseline_log_tail` / `diagnosed`・§21）。in-file の歯 `no_fail_fast_is_passed_to_cargo_test_by_mutants`（行 j の verify `no_fail_fast_`）が `measure_args` の末尾を pin する。cargo-mutants v27 は `--baseline skip`（baseline を撃たない）を持つ。
+- **約束**:
+  1. **baseline は道具の外で 1 回、全数**: `mutants-diff` が cargo-mutants の前に `cargo test -p <scope> --no-fail-fast -- --test-threads <t>` を 1 回撃つ（cargo-mutants の baseline と同じ木・同じ package・同じ thread）。引数は pure 関数 1 本（`baseline_args(scope, threads)`）が組み、in-file の歯が pin する。stdout / stderr は `target/mutants-diff/baseline.log` へ写す（cargo-mutants が書いていた file の代わり・置き場は同じ作業 dir）。
+  2. **baseline が赤なら測らない**: rc ≠ 0 の周は cargo-mutants を起こさず、従来と同じ rc 2（測れていない）で終え、理由行の後ろに自前の `baseline.log` の末尾を添える（§21 の撃ち直しと `diagnosed` の形は不変・読む file の出所が変わるだけ）。
+  3. **mutant の test は fail-fast**: `measure_args` から `--no-fail-fast` を落とし、`--baseline skip` を足す。1 つ目の `--` の後ろは `-- --test-threads <t>` だけになる。cargo test の binary の順（lib → bin → integration の名前順）は道具の既定のままで、in-file の歯が先に判定する。
+  4. **数と判定は不変**: `outcomes.json` の 5 数の読み・`R-C12-1` の極性・record の 1 行（`mutants-diff: total=… scope=…`）の字面・`--jobs` / `--test-threads` の受け方（§22 / §31）は 1 字も変えない。
+- **歯**（in-file・`crates/xtask/src/mutantsdiff.rs`・接頭辞 `mutants_diff_fail_fast_`）: (a) `measure_args` の 1 つ目の `--` の後ろに `--no-fail-fast` が**無く**、`--baseline` `skip` が**在る**（位置も pin する: `--jobs <j>` の後ろ・`--` の前）／(b) `baseline_args` が `test -p <scope> --no-fail-fast -- --test-threads <t>` を**この順**で組む（`--no-fail-fast` は 1 つ目の `--` の前）／(c) baseline の rc ≠ 0 を受けた判定（pure・`Err` の字面に自前の log の末尾が載る）と rc 0 を受けた判定（`Ok`・cargo-mutants へ進む）の 2 形を対で。行 j の歯 `no_fail_fast_is_passed_to_cargo_test_by_mutants` は **baseline の引数**を pin する形に書き直す（名は残す・行 j の verify `no_fail_fast_` が空にならない）。
+- **触らない**: §19 の (i)（gate の共通 verify と CI と done 区間の nextest 行の `--no-fail-fast`）・§21（rc 2 の撃ち直し）・§22（thread）・§31（受付）・`R-C12-1`・`parse_outcomes` と `Counts`・record の外形・`--jobs` を持つ行の封じ込め（§4）・rules 行。値の線は増えない（flag の入れ替え）。
+- **却下**:
+  - **baseline も fail-fast にする**（`--no-fail-fast` を全部落とす）: §19 の理由がそのまま戻る（flaky 1 本で落ちた歯の全数を名指せない）。
+  - **`--test-tool nextest` に替える**: nextest の fail-fast は歯 1 本の粒度で残りを cancel するが、歯ごとに process を起こすので e2e が残る mutant で費用が増え、baseline の失敗の形（§21 の `baseline.log`）と timeout の導出も変わる。1 flag の入れ替えで足りる面に道具の入れ替えを持ち込まない。
+  - **mutant の e2e を契約の verify の歯だけに絞る**: 宣言 file の行に穴が 1 つ増え（`{teeth}`）、器の render と intake の閉じた集合が動く（binary の入れ替えを伴う）。効くのは lib の歯で落ちなかった mutant だけで、本節の後に別の行で起こす（§11）。
+  - **gate の壁時計に rules 行の予算を足す**: 値の線と裁定が 1 つ増える。撃墜が秒で決まれば予算が要る周は残らない（要るなら実測してから）。
+- **後続**（§11）: lib の歯で落ちない mutant は今も e2e を全部回す（thread 8 で約 40 秒・thread 1 で約 5 分）。契約の verify 行の歯だけを e2e で回す形（宣言 file の穴 `{teeth}`）は別の行。列の 2 番目が枠を待ち切れず 1 job・1 thread に縮退する面（`gate.slot_wait_s` = 900 が gate 1 本の長さより短い）は値の裁定で、本節の外。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -765,5 +786,15 @@ verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail health_judge_", "c
 size = "M"
 depends = ["w"]
 done = "host の健康を字面から判じる pure 関数 1 本が空いている / 混んでいる / 測れないの 3 値を返して走行可能を 4 番目の欄の分子から読み（分母に釣られず）待ちを procs_blocked の行から読み、閾値 = 倍率 × 実測の core 数でちょうどの値は混んでいるでなく、片方だけ超えた 2 形はどちらも混んでいるで、空・数でない・行が無いの 3 形はどれも測れないになり、行を撃つ前の待ちが完了 enum の variant 1 つ（pid を見張らない側で pid() が 0・in-file の歯で測る）で唯一の待機実装を通り、gate.slot_wait_s を超えた周は verify の行が 1 本も撃たれず record に閉じた印が任意 field で載って判定が箱の中で死んだの直後にその印を読み赤が 1 行在っても INCONCLUSIVE になって便が Gated に留まり（FAIL で終端しない）、印が無い周の判定順は 1 字も変わらず、どちらかの面を読めない周と数でない周は 3 値から行動と字面を出す pure 関数で撃つ側に落ちて record の字面が測れない（空でも 0 でもなく・混んでいるだけが待つ側）になり、倍率の rules 行 2 本（host.runnable_per_core = 4 / host.blocked_per_core = 1）が裁定 id user 2026-09-20T15:23Z と裁定日 2026-09-20 つきで増えて RuleKind の variant HostRunnablePerCore / HostBlockedPerCore と対になり外形の rows= と kinds= が 2 つずつ増え、極性一覧に in-loop / fail-open の guard が 1 つ gate の機械検証の段の直前に増えて外形の集計行の 4 数が動き、land の主実測も同じ 1 本を通る"
+
+[[contract]]
+id = "y"
+title = "変異検査は baseline だけ道具の外で全数走らせ（--no-fail-fast・自前の baseline.log）、mutant の cargo test は fail-fast にして最初に落ちた binary で打ち切る（--baseline skip・撃墜 1 本の費用を 6 分から秒へ）"
+req = ["NFR6", "FR46"]
+section = "33"
+write-set = ["crates/xtask/src/mutantsdiff.rs", "docs/design/gate-cost.md"]
+verify = ["cargo nextest run -p xtask --no-tests=fail mutants_diff_fail_fast_", "cargo nextest run -p xtask --no-tests=fail no_fail_fast_"]
+size = "S"
+done = "mutants-diff が cargo-mutants の前に cargo test -p <scope> --no-fail-fast -- --test-threads <t> を 1 回撃って出力を作業 dir の baseline.log へ写し、rc ≠ 0 の周は cargo-mutants を起こさず従来と同じ rc 2 で終えて理由行の後ろに自前の baseline.log の末尾を添え、rc 0 の周は cargo mutants --in-diff … -p <scope> --no-shuffle --copy-vcs true -o <out> --jobs <j> --baseline skip -- -- --test-threads <t> を撃ち（--no-fail-fast は無い）、outcomes.json の 5 数の読みと R-C12-1 の極性と record の 1 行の字面と --jobs / --test-threads の受け方は 1 字も変わらず、baseline の引数と mutant の引数の両方が in-file の pure 関数の歯で pin されて行 j の歯は baseline の引数を pin する形で名を保つ"
 
 <!-- contracts:end -->
