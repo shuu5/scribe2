@@ -44,6 +44,7 @@ pub use verify::{is_unreadable, run_checks, Check, Checks, Step, CHECKS};
 use crate::polarity::{OnFailure, Polarity, Timing};
 use super::confine::{self, Reason, Released};
 use super::contract::Contract;
+use super::cli::int_row;
 use super::health;
 use super::lens_record::LensSource;
 use super::move_proof::{self, LensInput, NotPure};
@@ -55,6 +56,7 @@ use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
 use crate::fleet::json_lite::{self, Value};
 use crate::fleet::store::LockPolicy;
 use crate::fleet::{cli::now_utc, EventKind, Stage, SCHEMA};
+use crate::rules::manifest::Manifest;
 use findings::Tally;
 use lens::{ask_lens, lens_input, substitute, unjudged, write_verdict, Judged, LENS_STAGE};
 use record::{record_notice, record_verify};
@@ -158,7 +160,49 @@ pub struct Limits {
     pub blocked_per_core: u64,
 }
 
+/// gate が要る lens の本数を持つ rules 行。
+const ROW_LENS: &str = "gate.lens_count";
+
+/// gate の diff 上限（byte）を持つ rules 行。
+const ROW_CAP: &str = "gate.token_cap";
+
+/// 変異検査の並列度の上限を持つ rules 行（受付の宣言値）。
+const ROW_MUTANTS_JOBS: &str = "gate.mutants_jobs";
+
+/// job 1 つが要る memory（MiB）を持つ rules 行（受付の分母）。
+const ROW_JOB_MEMORY: &str = "gate.job_memory_mb";
+
+/// 席と host のために残す memory（MiB）を持つ rules 行（受付の差引）。
+const ROW_RESERVE_MEMORY: &str = "host.reserve_memory_mb";
+
+/// 受付で枠が空くのを待つ上限（秒）を持つ rules 行。
+const ROW_SLOT_WAIT: &str = "gate.slot_wait_s";
+
+/// 器の健康の遮断器の走行可能の core あたりの倍率を持つ rules 行（設計 gate-cost.md §32）。
+const ROW_RUNNABLE_PER_CORE: &str = "host.runnable_per_core";
+
+/// 器の健康の遮断器の待ちの core あたりの倍率を持つ rules 行。
+const ROW_BLOCKED_PER_CORE: &str = "host.blocked_per_core";
+
 impl Limits {
+    /// 規則から gate の線（判定の 2 行・受付の 4 行・遮断器の倍率 2 行）を読む。**数値を .rs へ焼かない**（憲法 C1 / C5）。
+    ///
+    /// 受付の 4 行と遮断器の 2 行も `--rules` の manifest から読む（埋め込みから直に読まない）——待ちの上限と
+    /// 倍率を振る歯が fixture の値を gate へ届ける口はここだけである。`pipe/cli/step.rs` から純移動した読み手 1 本で、
+    /// 列の遮断器（`pipe::dispatch`・設計 dispatcher.md §18）も同じ 1 本で倍率を読む。
+    pub(crate) fn of(manifest: &Manifest) -> Result<Limits, String> {
+        Ok(Limits {
+            lens_count: int_row(manifest, ROW_LENS)?,
+            token_cap: int_row(manifest, ROW_CAP)?,
+            mutants_jobs: int_row(manifest, ROW_MUTANTS_JOBS)?,
+            job_memory_mb: int_row(manifest, ROW_JOB_MEMORY)?,
+            reserve_memory_mb: int_row(manifest, ROW_RESERVE_MEMORY)?,
+            slot_wait_s: int_row(manifest, ROW_SLOT_WAIT)?,
+            runnable_per_core: int_row(manifest, ROW_RUNNABLE_PER_CORE)?,
+            blocked_per_core: int_row(manifest, ROW_BLOCKED_PER_CORE)?,
+        })
+    }
+
     /// 器の健康の遮断器の材料（gate と land の主実測の 2 つの [`Checks`] が同じ欄をここから埋める・§32 約束 9）。
     pub fn breaker(&self) -> health::Breaker {
         health::Breaker {

@@ -21,30 +21,6 @@ use crate::pipe::run_dir;
 use crate::rules::manifest::Manifest;
 use std::path::Path;
 
-/// gate が要る lens の本数を持つ rules 行。
-const ROW_LENS: &str = "gate.lens_count";
-
-/// gate の diff 上限（byte）を持つ rules 行。
-const ROW_CAP: &str = "gate.token_cap";
-
-/// 変異検査の並列度の上限を持つ rules 行（受付の宣言値）。
-const ROW_MUTANTS_JOBS: &str = "gate.mutants_jobs";
-
-/// job 1 つが要る memory（MiB）を持つ rules 行（受付の分母）。
-const ROW_JOB_MEMORY: &str = "gate.job_memory_mb";
-
-/// 席と host のために残す memory（MiB）を持つ rules 行（受付の差引）。
-const ROW_RESERVE_MEMORY: &str = "host.reserve_memory_mb";
-
-/// 受付で枠が空くのを待つ上限（秒）を持つ rules 行。
-const ROW_SLOT_WAIT: &str = "gate.slot_wait_s";
-
-/// 器の健康の遮断器の走行可能の core あたりの倍率を持つ rules 行（設計 gate-cost.md §32）。
-const ROW_RUNNABLE_PER_CORE: &str = "host.runnable_per_core";
-
-/// 器の健康の遮断器の待ちの core あたりの倍率を持つ rules 行。
-const ROW_BLOCKED_PER_CORE: &str = "host.blocked_per_core";
-
 /// 追随が衝突した便を起こし直す回数の上限を持つ rules 行。
 const ROW_RETRIES: &str = "pipe.follow_retries";
 
@@ -80,7 +56,7 @@ fn terminal_only(args: &[String], id: &str, manifest: &Manifest, policy: LockPol
         Ok(found) => found,
         Err(outcome) => return outcome,
     };
-    let limits = match limits_of(manifest) {
+    let limits = match Limits::of(manifest) {
         Ok(found) => found,
         Err(reason) => return broken(reason),
     };
@@ -176,23 +152,6 @@ pub(super) fn answer_run(args: &[String], id: &str, policy: LockPolicy) -> Outco
     })
 }
 
-/// 規則から gate の線（判定の 2 行・受付の 4 行・遮断器の倍率 2 行）を読む。**数値を .rs へ焼かない**（憲法 C1 / C5）。
-///
-/// 受付の 4 行と遮断器の 2 行も `--rules` の manifest から読む（埋め込みから直に読まない）——待ちの上限と
-/// 倍率を振る歯が fixture の値を gate へ届ける口はここだけである。
-fn limits_of(manifest: &Manifest) -> Result<Limits, String> {
-    Ok(Limits {
-        lens_count: int_row(manifest, ROW_LENS)?,
-        token_cap: int_row(manifest, ROW_CAP)?,
-        mutants_jobs: int_row(manifest, ROW_MUTANTS_JOBS)?,
-        job_memory_mb: int_row(manifest, ROW_JOB_MEMORY)?,
-        reserve_memory_mb: int_row(manifest, ROW_RESERVE_MEMORY)?,
-        slot_wait_s: int_row(manifest, ROW_SLOT_WAIT)?,
-        runnable_per_core: int_row(manifest, ROW_RUNNABLE_PER_CORE)?,
-        blocked_per_core: int_row(manifest, ROW_BLOCKED_PER_CORE)?,
-    })
-}
-
 /// 契約の審査の段（`pipe intake` の直後・`resume` の `Intake`・前提 stage = `Intake`・FR49・設計
 /// contract-source.md §4）。
 ///
@@ -255,7 +214,7 @@ pub(super) fn gate_run(args: &[String], id: &str, manifest: &Manifest, policy: L
         Ok(found) => found,
         Err(outcome) => return outcome,
     };
-    let limits = match limits_of(manifest) {
+    let limits = match Limits::of(manifest) {
         Ok(found) => found,
         Err(reason) => return broken(reason),
     };
@@ -306,7 +265,7 @@ pub(super) fn land_run(args: &[String], id: &str, manifest: &Manifest, policy: L
         Ok(found) => found,
         Err(outcome) => return outcome,
     };
-    let limits = match limits_of(manifest) {
+    let limits = match Limits::of(manifest) {
         Ok(found) => found,
         Err(reason) => return broken(reason),
     };

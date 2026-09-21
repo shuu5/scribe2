@@ -13,7 +13,7 @@ use crate::pipe::contract::Contract;
 use crate::pipe::gate::Verdict;
 use crate::pipe::land::verdict_of;
 use crate::pipe::review::ReviewCheck;
-use crate::pipe::{contract_path, current};
+use crate::pipe::{contract_path, current, driver_ticket, Ticket};
 use std::path::Path;
 
 /// 便が live（終端でない）か。**段の網羅 match で書く**（段が増えたら compile で気付く）。
@@ -23,13 +23,21 @@ use std::path::Path;
 /// 終端」）。`RateLimited` は終端でない（口座の窓の都合で止まっただけ・ADR-0020 §2.1）。`Gated` / `Reviewed` の
 /// 判定を読めない周は `None`＝**測れなかった**で、呼び手が断る側へ倒す（読めない判定を「終端でない」にも
 /// 「終端」にも読み替えない）。
+///
+/// `Intake` は運転手の札（[`Ticket`] の 4 値）で読む（設計 dispatcher.md §18・契約表の行 o）: 札の所有者が生きている
+/// 周だけ live で、札が無い・所有者が死んでいる周は受付の途中で運転手を失った亡骸＝live に数えない（同じ write-set の
+/// 便を塞ぎ続けない）。札が在るのに読めない周は `None`（測れないを「居ない」にも「居る」にも読み替えない）。
 pub(in crate::pipe) fn live(state_dir: &Path, id: &str, stage: Stage) -> Option<bool> {
     match stage {
         Stage::Landed | Stage::Failed | Stage::Stopped => Some(false),
         Stage::Gated => verdict_of(state_dir, id).map(|found| found != Verdict::Fail),
         Stage::Reviewed => ReviewCheck::judge(state_dir, id).live(),
-        Stage::Intake
-        | Stage::Blocked
+        Stage::Intake => match driver_ticket(state_dir, id) {
+            Ticket::Live => Some(true),
+            Ticket::Dead | Ticket::Absent => Some(false),
+            Ticket::Unreadable => None,
+        },
+        Stage::Blocked
         | Stage::Spawned
         | Stage::Questioned
         | Stage::RateLimited

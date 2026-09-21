@@ -7,7 +7,8 @@
 use super::{
     ceiling_rules, clean, commit_rows, design_doc_rows, fake_lens, gate_once, git, implemented, intake_bead,
     kind_count, lens_verdict, question_runner, questioned, repo_with_state, review_lens_pass, row_fields, run_pipe,
-    shim_path, stderr_of, run_id_of, stdout_of, write_contract, write_design, DESIGN_FILE, IMPLEMENT, RC_BLOCKED,
+    shim_path, stderr_of, run_id_of, stdout_of, write_contract, write_design, DESIGN_FILE, HEALTH_PER_CORE_OPEN,
+    IMPLEMENT, RC_BLOCKED,
 };
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -2171,4 +2172,109 @@ fn pipe_dispatch_launch_log_keeps_the_child_stderr() {
     assert_eq!(stdout_of(&blind).trim_end(), "dispatch=started:1,resumed:0,waiting:0", "開けない周も起こす（{}）", told(&blind));
     assert_eq!(created(&state, &["s2-toy.2"], 1), 1, "起こした便の RunCreated が 1 件");
     clean(&[&repo, &state]);
+}
+
+/// 列の写しの遮断器の走行可能の行（倍率 `value`・[`dispatch_rules`] の書き方と同じ字面）。
+fn runnable_row(value: u64) -> String {
+    format!("id = \"host.runnable_per_core\"\nkind = \"HostRunnablePerCore\"\nvalue = {value}\n")
+}
+
+/// 規則の写しを選んで列を 1 周撃つ（`runner` が `None` なら観測の `dispatch ls`・`Some` なら起こす周）。
+fn ruled_turn(repo: &Path, state: &Path, bd: &str, rules: &str, runner: Option<&str>) -> Output {
+    let lens = review_lens_pass(state);
+    let (state, repo) = (state.display().to_string(), repo.display().to_string());
+    let mut args: Vec<&str> = vec!["dispatch"];
+    if runner.is_none() {
+        args.push("ls");
+    }
+    args.extend(["--state-dir", state.as_str(), "--repo", repo.as_str(), "--rules", rules, "--bd", bd]);
+    if let Some(runner) = runner {
+        args.extend(["--lens", lens.as_str(), "--runner", runner]);
+    }
+    run_pipe(&args)
+}
+
+/// (§18 列の遮断器) 走行可能の倍率を 0（閾値 0 = 走行可能 1 でも混んでいる＝常に `Busy`）にした周は、ready の
+/// bead が 1 本在っても `started:0` で `dispatch ls` の理由が `host-busy`、既定の倍率の周は同じ台帳で `started:1`
+/// （正負の対・gate と同じ 1 関数の遮断器）。base は列が遮断器を通さず、0 の周も起こす（RED）。
+#[test]
+fn pipe_dispatch_host_busy_round_launches_nothing() {
+    let (repo, state) = repo_with_state();
+    two_rows(&repo);
+    let bd = fake_bd(&state, &[issue("s2-toy.2", 2, "b")]);
+    let open = fs::read_to_string(dispatch_rules(&state)).unwrap_or_else(|err| panic!("列の写しを読める: {err}"));
+    let open_row = runnable_row(HEALTH_PER_CORE_OPEN);
+    assert!(open.contains(&open_row), "前提: 既定の写しは遮断器が開く倍率の行を 1 つ持つ");
+    let busy = state.join("rules-busy.toml");
+    fs::write(&busy, open.replace(&open_row, &runnable_row(0))).unwrap_or_else(|err| panic!("写しを書ける: {err}"));
+    let busy = busy.display().to_string();
+    let listed = ruled_turn(&repo, &state, &bd, &busy, None);
+    assert_eq!(reason_of(&listed, "s2-toy.2"), "host-busy", "混んだ周の理由（{}）", told(&listed));
+    assert_eq!(count_of(&listed), format!("{COUNT} total=1 ready=0"), "列には載るが起こさない（{}）", told(&listed));
+    let held = ruled_turn(&repo, &state, &bd, &busy, Some("true"));
+    assert_eq!(
+        stdout_of(&held).trim_end(),
+        "dispatch=started:0,resumed:0,waiting:1",
+        "混んだ周は 1 本も起こさない（{}）",
+        told(&held)
+    );
+    assert_eq!(created(&state, &["s2-toy.2"], 0), 0, "子は 1 本も起きない");
+    // 対: 既定の倍率の周は同じ置き場・同じ台帳で起こす（遮断器の外の理由で止まっていない証拠）。
+    let out = launch_turn(&repo, &state, &bd, "true");
+    assert_eq!(stdout_of(&out).trim_end(), "dispatch=started:1,resumed:0,waiting:0", "既定の周は起こす（{}）", told(&out));
+    assert_eq!(created(&state, &["s2-toy.2"], 1), 1, "起こした便の RunCreated が 1 件");
+    clean(&[&repo, &state]);
+}
+
+/// 行 a を持つ便を 1 本置き、記帳を `RunCreated`（stage=`Intake`）の 1 行だけに剥がして run id を返す
+/// （受付の途中で運転手を失った亡骸の形・run dir の契約の写しは残る）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn intake_corpse(repo: &Path, state: &Path) -> String {
+    let id = intake_bead(repo, state, &format!("{DESIGN_FILE}#a"), "s2-corpse");
+    let log = state.join("fleet").join("events.jsonl");
+    let text = fs::read_to_string(&log).expect("event log を読める");
+    let mine = format!("\"run\":\"{id}\"");
+    let kept: Vec<&str> =
+        text.lines().filter(|line| !line.contains(&mine) || line.contains("\"kind\":\"RunCreated\"")).collect();
+    fs::write(&log, format!("{}\n", kept.join("\n"))).expect("event log を書ける");
+    id
+}
+
+/// (§18 受付で止まった便) `RunCreated stage=Intake` だけを持つ便（行 a）と同じ write-set の別 bead を候補にし、
+/// 運転手の札の 4 形で対照する: **無い・所有者が死んでいる**周は亡骸を live に数えず候補が起きて `started:1`、
+/// **所有者が生きている**（歯の自分の pid）周は理由 `overlap:<run>`、**在るのに読めない**周は起こさず理由が
+/// 測れない側（`admission:write-set-unreadable`）。base は `Intake` を無条件に live と読む（無い・死んだ周が RED）。
+#[test]
+fn pipe_dispatch_intake_run_without_a_live_driver_is_not_live() {
+    for form in ["absent", "dead", "live", "unreadable"] {
+        let (repo, state) = repo_with_state();
+        two_rows(&repo);
+        let corpse = intake_corpse(&repo, &state);
+        let stages = fs::read_to_string(state.join("fleet").join("events.jsonl")).unwrap_or_default();
+        let records = stages.lines().filter(|line| line.contains(&format!("\"run\":\"{corpse}\""))).count();
+        assert_eq!(records, 1, "{form}: 前提: 亡骸の記帳は RunCreated の 1 行だけ");
+        assert!(!state.join("pipe").join(&corpse).join("driver").exists(), "{form}: 前提: 札は無い");
+        match form {
+            "dead" => put_dead_ticket(&state, &corpse),
+            "live" => put_ticket_body(&state, &corpse, &format!("{}\n", std::process::id())),
+            "unreadable" => put_ticket_body(&state, &corpse, "not-a-pid\n"),
+            _ => {}
+        }
+        let bd = fake_bd(&state, &[issue("s2-toy.1", 2, "a")]);
+        let listed = ls(&repo, &state, &bd);
+        let (reason, line) = match form {
+            "absent" | "dead" => ("-".to_owned(), "dispatch=started:1,resumed:0,waiting:0"),
+            "live" => (format!("overlap:{corpse}/1"), "dispatch=started:0,resumed:0,waiting:1"),
+            _ => ("admission:write-set-unreadable".to_owned(), "dispatch=started:0,resumed:0,waiting:1"),
+        };
+        assert_eq!(reason_of(&listed, "s2-toy.1"), reason, "{form}: ls の理由（{}）", told(&listed));
+        let out = launch_turn(&repo, &state, &bd, "true");
+        assert_eq!(stdout_of(&out).trim_end(), line, "{form}: 1 周（{}）", told(&out));
+        let want = usize::from(line.contains("started:1"));
+        assert_eq!(created(&state, &["s2-toy.1"], want), want, "{form}: 候補の RunCreated の件数");
+        clean(&[&repo, &state]);
+    }
 }

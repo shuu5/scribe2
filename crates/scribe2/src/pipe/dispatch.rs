@@ -12,7 +12,8 @@
 
 use super::cli::{live, stage_of, Denial, Materials};
 use super::contract::Contract;
-use super::gate::Verdict;
+use super::gate::{Limits, Verdict};
+use super::health;
 use super::land::verdict_of;
 use super::table::Pointer;
 use super::{current, Ticket};
@@ -69,7 +70,7 @@ const LAUNCH_LOG: [&str; 2] = ["pipe", "launch.log"];
 
 /// [`WaitReason`] の全 variant の名（宣言順・`enum-slices` が集合完全性を測る）。
 pub const WAIT_REASONS: &[&str] =
-    &["dependency", "overlap", "admission", "hold", "launched", "settled", "no-design-pointer"];
+    &["dependency", "overlap", "admission", "host-busy", "hold", "launched", "settled", "no-design-pointer"];
 
 /// 列に載ったのに起こさない理由（**閉じた型**・設計 §3 の表）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -91,6 +92,9 @@ pub enum WaitReason {
         /// 受付が断った名（[`crate::pipe::refuse::Refuse::as_str`] か [`SLOT`] / [`SPAWN`] / [`MARK`]・すべて `'static`）。
         reason: &'static str,
     },
+    /// 器の健康の遮断器が「待つ」を返した周（gate と同じ 1 関数 [`health::act`] が [`health::Action::Wait`]・
+    /// 設計 §18）。混んだ host に便を起こしても落ちるだけなので、その周は 1 本も起こさない。
+    HostBusy,
     /// 介入 `hold` が付いている。
     Hold {
         /// 印を付けた event の ts。
@@ -128,6 +132,7 @@ impl WaitReason {
             Self::Dependency { .. } => "dependency",
             Self::Overlap { .. } => "overlap",
             Self::Admission { .. } => "admission",
+            Self::HostBusy => "host-busy",
             Self::Hold { .. } => "hold",
             Self::Launched { .. } => "launched",
             Self::Settled { .. } => "settled",
@@ -144,7 +149,7 @@ impl WaitReason {
             Self::Admission { reason } => format!("{name}:{reason}"),
             Self::Hold { ref since } | Self::Launched { ref since } => format!("{name}:{since}"),
             Self::Settled { ref sha, stage } => format!("{name}:{sha}/{}", stage.as_str()),
-            Self::NoDesignPointer => name.to_owned(),
+            Self::HostBusy | Self::NoDesignPointer => name.to_owned(),
         }
     }
 }
@@ -513,7 +518,32 @@ pub fn turn(input: &Input<'_>) -> Turn {
         candidates.push(candidate);
     }
     // **順序は [`order`] の 1 本だけが決める**（生産経路も歯も同じ関数を通る・C2）。
-    settle(input, order(candidates), &ready, ledger.materials.as_ref().ok())
+    let mut turn = settle(input, order(candidates), &ready, ledger.materials.as_ref().ok());
+    if !turn.launches.is_empty() && host_busy(input.manifest) {
+        hold_for_host(&mut turn);
+    }
+    turn
+}
+
+/// 器の健康の遮断器が「待つ」を返すか（**gate と同じ 1 関数**・設計 §18・C2）。
+///
+/// 倍率は gate と同じ 2 行を同じ読み手（[`Limits::of`]）で読み、host は [`health::now`] の 1 回で読む。行を読めない
+/// 周と host を測れない周は [`health::act`] のとおり起こす側（`Unmeasured` は撃つ・gate と同じ極性）である。
+fn host_busy(manifest: &Manifest) -> bool {
+    let Ok(limits) = Limits::of(manifest) else {
+        return false;
+    };
+    health::act(health::now(limits.breaker().per_core)).0 == health::Action::Wait
+}
+
+/// 起こせる候補を全部 [`WaitReason::HostBusy`] で待たせる（**その周は 1 本も起こさない**・理由の無い件だけ）。
+fn hold_for_host(turn: &mut Turn) {
+    turn.launches.clear();
+    for candidate in &mut turn.candidates {
+        if candidate.reason.is_none() {
+            candidate.reason = Some(WaitReason::HostBusy);
+        }
+    }
 }
 
 /// 1 周ぶん固定な台帳側の材料（候補ごとに読み直さない）。
@@ -1070,6 +1100,7 @@ mod tests {
             WaitReason::Dependency { on: vec!["s2-x".to_owned(), "s2-y".to_owned()] },
             WaitReason::Overlap { with: "r1".to_owned(), files: 2 },
             WaitReason::Admission { reason: "cap-headroom" },
+            WaitReason::HostBusy,
             WaitReason::Hold { since: "t1".to_owned() },
             WaitReason::Launched { since: "t2".to_owned() },
             WaitReason::Settled { sha: "abc".to_owned(), stage: Stage::Landed },
@@ -1084,6 +1115,7 @@ mod tests {
                 "dependency:s2-x,s2-y",
                 "overlap:r1/2",
                 "admission:cap-headroom",
+                "host-busy",
                 "hold:t1",
                 "launched:t2",
                 "settled:abc/Landed",
