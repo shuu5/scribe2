@@ -192,7 +192,8 @@ pub enum Shape {
 /// [`Shape`] の全 variant（宣言順・`enum-slices` が集合完全性を測る）。
 pub const SHAPES: &[Shape] = &[Shape::Run, Shape::Allowance, Shape::Registration, Shape::Account, Shape::Mark];
 
-/// 列の介入の印（設計 dispatcher.md §4）。**閉じた 3 値**で、[`EventKind::DispatchMark`] の行だけが持つ。
+/// 列の介入の印（設計 dispatcher.md §4）と、列が起こした事実の印（§17）。**閉じた 4 値**で、
+/// [`EventKind::DispatchMark`] の行だけが持つ。
 ///
 /// 印は一時の順序であって契約の性質ではないので、台帳の priority を書き換えない（台帳が持つのは task と
 /// 裁定だけ・憲法 C15・設計 dispatcher.md §10）。
@@ -204,10 +205,13 @@ pub enum Mark {
     Hold,
     /// 印を外して既定の順に戻す。
     Release,
+    /// 列がこの bead の便を起こした（子を起こす**前**に書く・設計 dispatcher.md §17）。その後に
+    /// `RunCreated` も `release` も無い bead は起こし直さない。
+    Launched,
 }
 
 /// [`Mark`] の全 variant（宣言順・`enum-slices` が集合完全性を測る）。
-pub const MARKS: &[Mark] = &[Mark::First, Mark::Hold, Mark::Release];
+pub const MARKS: &[Mark] = &[Mark::First, Mark::Hold, Mark::Release, Mark::Launched];
 
 impl Mark {
     /// JSON の `mark` と `dispatch ls` に書く字面。
@@ -216,6 +220,7 @@ impl Mark {
             Self::First => "first",
             Self::Hold => "hold",
             Self::Release => "release",
+            Self::Launched => "launched",
         }
     }
 

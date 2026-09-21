@@ -1991,3 +1991,184 @@ fn pipe_dispatch_gated_pass_flagless_driver_leaves_its_own_run_for_the_next_turn
     assert_eq!(stage_reached(&state, &id, "Landed"), 1, "自走で着地まで（段の並び: {}）", stages_of(&state, &id));
     clean(&[&repo, &state]);
 }
+
+/// 起こした事実の印の行の字面（`DispatchMark` の kind と `launched` の値・器の字面を借りない）。
+const LAUNCHED_MARK: [&str; 2] = ["\"kind\":\"DispatchMark\"", "\"mark\":\"launched\""];
+
+/// 列の 1 周を撃つ（起こす側・審査は偽 PASS の lens・実装役は呼び手が選ぶ）。
+fn launch_turn(repo: &Path, state: &Path, bd: &str, runner: &str) -> Output {
+    run_pipe(&[
+        "dispatch",
+        "--state-dir", &state.display().to_string(),
+        "--repo", &repo.display().to_string(),
+        "--rules", &dispatch_rules(state),
+        "--bd", bd,
+        "--lens", &review_lens_pass(state),
+        "--runner", runner,
+    ])
+}
+
+/// event log の行のうち `needles` を全部含む最初の行の位置（log を読めない周と該当 0 行は `None`）。
+fn line_at(state: &Path, needles: &[&str]) -> Option<usize> {
+    fs::read_to_string(state.join("fleet").join("events.jsonl"))
+        .ok()?
+        .lines()
+        .position(|line| needles.iter().all(|needle| line.contains(needle)))
+}
+
+/// `bead` の `RunCreated` が `ms` の間に現れるか（**現れないことを測る側**・待たずに数えると遅れた子を見落とす）。
+fn run_created_within(state: &Path, bead: &str, ms: u64) -> Option<usize> {
+    let needles = ["\"kind\":\"RunCreated\"", &format!("\"bead\":\"{bead}\"")];
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(ms);
+    while line_at(state, &needles).is_none() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    line_at(state, &needles)
+}
+
+/// 起こした事実の印だけを event log へ直に 1 行書く（子を起こさずに「印だけの周」を作る）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn put_launched(state: &Path, bead: &str, ts: &str) {
+    let fleet = state.join("fleet");
+    fs::create_dir_all(&fleet).expect("fleet の dir を作れる");
+    let line = format!(
+        "{{\"schema\":1,\"ts\":\"{ts}\",\"kind\":\"DispatchMark\",\"bead\":\"{bead}\",\"mark\":\"launched\",\
+         \"host\":\"h\",\"actor\":\"machine\",\"detail\":\"run\"}}\n"
+    );
+    let mut log = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(fleet.join("events.jsonl"))
+        .expect("event log を開ける");
+    std::io::Write::write_all(&mut log, line.as_bytes()).expect("印の行を書ける");
+}
+
+/// (§17 起こす前の印) 列が起こした便は、子の `RunCreated` より**前の行**に bead 名義の `DispatchMark mark=launched`
+/// （detail = subcommand の 1 語）を持つ。印を書けない周（event log の lock が外せない）は子を起こさず
+/// `started:0`、event log を読めず印を測れない周は `dispatch ls` の理由が `admission:mark`（測れない側）になる。
+#[test]
+fn pipe_dispatch_launched_mark_is_written_before_the_child_is_spawned() {
+    let (repo, state) = repo_with_state();
+    two_rows(&repo);
+    let bd = fake_bd(&state, &[issue("s2-toy.2", 2, "b")]);
+    let out = launch_turn(&repo, &state, &bd, "true");
+    assert_eq!(stdout_of(&out).trim_end(), "dispatch=started:1,resumed:0,waiting:0", "1 本起こす（{}）", told(&out));
+    assert_eq!(created(&state, &["s2-toy.2"], 1), 1, "起こした便の RunCreated が 1 件");
+    let bead = "\"bead\":\"s2-toy.2\"";
+    let mark = line_at(&state, &[LAUNCHED_MARK[0], LAUNCHED_MARK[1], bead, "\"detail\":\"run\""]);
+    let run = line_at(&state, &["\"kind\":\"RunCreated\"", bead]);
+    assert!(mark.is_some(), "起こした bead の launched の印が在る（mark={mark:?} run={run:?}）");
+    assert!(mark < run, "印は RunCreated より前の行（mark={mark:?} run={run:?}）");
+    clean(&[&repo, &state]);
+
+    // **印を書けない周は起こさない**: event log の lock を dir にして外せなくする（読みは lock を取らない）。
+    let (repo, state) = repo_with_state();
+    two_rows(&repo);
+    let bd = fake_bd(&state, &[issue("s2-toy.2", 2, "b")]);
+    let lock = state.join("fleet").join("events.jsonl.lock");
+    fs::create_dir_all(&lock).expect("lock の位置に dir を置ける");
+    let refused = launch_turn(&repo, &state, &bd, "true");
+    assert_eq!(
+        stdout_of(&refused).trim_end(),
+        "dispatch=started:0,resumed:0,waiting:1",
+        "印を書けない便は起こさない（{}）",
+        told(&refused)
+    );
+    // lock を外してから待つ: 子が起きていれば lock の待ちを抜けて RunCreated を書く（子が起きない側の測り）。
+    fs::remove_dir(&lock).expect("lock の dir を外せる");
+    assert_eq!(run_created_within(&state, "s2-toy.2", 5000), None, "子は起きていない");
+    assert_eq!(line_at(&state, &LAUNCHED_MARK), None, "印は書かれていない");
+    clean(&[&repo, &state]);
+
+    // **印を測れない周**: event log を dir にして読めなくする（読めないを「印が無い」に読み替えない）。
+    let (repo, state) = repo_with_state();
+    two_rows(&repo);
+    let bd = fake_bd(&state, &[issue("s2-toy.2", 2, "b")]);
+    fs::create_dir_all(state.join("fleet").join("events.jsonl")).expect("event log の位置に dir を置ける");
+    let listed = ls(&repo, &state, &bd);
+    assert_eq!(reason_of(&listed, "s2-toy.2"), "admission:mark", "測れない側の理由（{}）", told(&listed));
+    assert_eq!(count_of(&listed), format!("{COUNT} total=1 ready=0"), "列には載るが起こさない");
+    let unmeasured = launch_turn(&repo, &state, &bd, "true");
+    assert_eq!(
+        stdout_of(&unmeasured).trim_end(),
+        "dispatch=started:0,resumed:0,waiting:1",
+        "測れない周は起こさない（{}）",
+        told(&unmeasured)
+    );
+    clean(&[&repo, &state]);
+}
+
+/// (§17 候補の条件) 最新の `launched` の後に `RunCreated` も `release` も無い bead は起こさず理由が `launched:<ts>`、
+/// `RunCreated` が来れば従来の判定（live な自分の便との交差＝`overlap`）に戻り、`release` の後の周は起こす。
+#[test]
+fn pipe_dispatch_launched_bead_is_not_relaunched_until_run_created_or_release() {
+    let (repo, state) = repo_with_state();
+    two_rows(&repo);
+    let ts = "2026-09-21T00:00:00Z";
+    put_launched(&state, "s2-toy.1", ts);
+    put_launched(&state, "s2-toy.2", ts);
+    let bd = fake_bd(&state, &[issue("s2-toy.1", 2, "a"), issue("s2-toy.2", 2, "b")]);
+    let marked = ls(&repo, &state, &bd);
+    assert_eq!(reason_of(&marked, "s2-toy.1"), format!("launched:{ts}"), "印だけの周（{}）", told(&marked));
+    assert_eq!(reason_of(&marked, "s2-toy.2"), format!("launched:{ts}"), "印だけの周（{}）", told(&marked));
+    assert_eq!(count_of(&marked), format!("{COUNT} total=2 ready=0"), "母集団 2 件・起こせる 0 本");
+    let idle = launch_turn(&repo, &state, &bd, "true");
+    assert_eq!(stdout_of(&idle).trim_end(), "dispatch=started:0,resumed:0,waiting:2", "起こし直さない（{}）", told(&idle));
+    assert_eq!(created(&state, &["s2-toy.1", "s2-toy.2"], 0), 0, "子は 1 本も起きない");
+    // 受付に届いた（RunCreated）bead は従来の判定へ戻る＝live な自分の便と交差する。
+    let live = intake_bead(&repo, &state, &format!("{DESIGN_FILE}#a"), "s2-toy.1");
+    let arrived = ls(&repo, &state, &bd);
+    assert_eq!(reason_of(&arrived, "s2-toy.1"), format!("overlap:{live}/1"), "live の側（{}）", told(&arrived));
+    assert_eq!(reason_of(&arrived, "s2-toy.2"), format!("launched:{ts}"), "別の bead の印は外れない");
+    // `release` の後の周は起こす（印 1 つで起き直る）。
+    release(&state, "s2-toy.2");
+    let released = ls(&repo, &state, &bd);
+    assert_eq!(reason_of(&released, "s2-toy.2"), "-", "release で印が外れる（{}）", told(&released));
+    let again = launch_turn(&repo, &state, &bd, "true");
+    assert_eq!(stdout_of(&again).trim_end(), "dispatch=started:1,resumed:0,waiting:1", "release の後は起こす（{}）", told(&again));
+    assert_eq!(created(&state, &["s2-toy.2"], 1), 1, "起こした便の RunCreated が 1 件");
+    clean(&[&repo, &state]);
+}
+
+/// (§17 子の stderr) 列が起こした子の stderr は `<state_dir>/pipe/launch.log` に **append** される（前の行を消さない）。
+/// file を開けない周も子は起きる（`started:1`・起動を記録の失敗で止めない）。
+#[test]
+fn pipe_dispatch_launch_log_keeps_the_child_stderr() {
+    let (repo, state) = repo_with_state();
+    two_rows(&repo);
+    let bd = fake_bd(&state, &[issue("s2-toy.2", 2, "b")]);
+    let log = state.join("pipe").join("launch.log");
+    fs::create_dir_all(state.join("pipe")).expect("pipe の dir を作れる");
+    fs::write(&log, "earlier-line\n").expect("前の行を置ける");
+    let probe = "launch-log-probe";
+    let out = launch_turn(&repo, &state, &bd, &format!("echo {probe} >&2; exit 2"));
+    assert_eq!(stdout_of(&out).trim_end(), "dispatch=started:1,resumed:0,waiting:0", "1 本起こす（{}）", told(&out));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let text = || fs::read_to_string(&log).unwrap_or_default();
+    while !text().contains(probe) && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let kept = text();
+    assert!(kept.lines().any(|line| line == probe), "実装役の stderr が子を経て残る: {kept}");
+    // 子（`pipe run`）自身の断りの 1 行（出力層の `pipe: ` の行）も残る＝子の stderr の全体が行き先である。
+    while !text().lines().any(|line| line.starts_with("pipe: ")) && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let kept = text();
+    assert!(kept.lines().any(|line| line.starts_with("pipe: ")), "子の断りの 1 行が残る: {kept}");
+    assert!(kept.starts_with("earlier-line\n"), "append（前の行を消さない）: {kept}");
+    clean(&[&repo, &state]);
+
+    // **開けない周も起こす**: launch.log の位置を dir にして開けなくする。
+    let (repo, state) = repo_with_state();
+    two_rows(&repo);
+    let bd = fake_bd(&state, &[issue("s2-toy.2", 2, "b")]);
+    fs::create_dir_all(state.join("pipe").join("launch.log")).expect("launch.log の位置に dir を置ける");
+    let blind = launch_turn(&repo, &state, &bd, "true");
+    assert_eq!(stdout_of(&blind).trim_end(), "dispatch=started:1,resumed:0,waiting:0", "開けない周も起こす（{}）", told(&blind));
+    assert_eq!(created(&state, &["s2-toy.2"], 1), 1, "起こした便の RunCreated が 1 件");
+    clean(&[&repo, &state]);
+}

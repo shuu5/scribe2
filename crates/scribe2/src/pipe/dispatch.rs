@@ -21,7 +21,7 @@ use super::table::{self, Pointer};
 use super::{contract_path, current, git_bytes, Ticket};
 use crate::cli_outcome::Outcome;
 use crate::fleet::store;
-use crate::fleet::{Event, EventKind, Mark, Stage, State, STAGES};
+use crate::fleet::{Event, EventKind, Mark, Stage, State, SCHEMA, STAGES};
 use crate::name::NAME;
 use crate::rules::manifest::Manifest;
 use crate::seat::host_slots_dir;
@@ -58,9 +58,17 @@ const SLOT: &str = "slot";
 /// 子 process を起こせなかった周の理由の字面。
 const SPAWN: &str = "spawn";
 
+/// 起こした事実の印（[`Mark::Launched`]）を書けない・event log を読めず印を測れない周の理由の字面
+/// （設計 §17・記帳できない起動を数えない＝測れない側）。
+const MARK: &str = "mark";
+
+/// 子の stderr を append する診断 file の置き場（`<state_dir>/pipe/launch.log`・設計 §17・機械は読まない）。
+const LAUNCH_LOG: [&str; 2] = ["pipe", "launch.log"];
+
 
 /// [`WaitReason`] の全 variant の名（宣言順・`enum-slices` が集合完全性を測る）。
-pub const WAIT_REASONS: &[&str] = &["dependency", "overlap", "admission", "hold", "settled", "no-design-pointer"];
+pub const WAIT_REASONS: &[&str] =
+    &["dependency", "overlap", "admission", "hold", "launched", "settled", "no-design-pointer"];
 
 /// 列に載ったのに起こさない理由（**閉じた型**・設計 §3 の表）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,12 +87,18 @@ pub enum WaitReason {
     },
     /// 受付（余地・host の memory）を通らない。
     Admission {
-        /// 受付が断った名（[`crate::pipe::refuse::Refuse::as_str`] か [`SLOT`]・どちらも `'static`）。
+        /// 受付が断った名（[`crate::pipe::refuse::Refuse::as_str`] か [`SLOT`] / [`SPAWN`] / [`MARK`]・すべて `'static`）。
         reason: &'static str,
     },
     /// 介入 `hold` が付いている。
     Hold {
         /// 印を付けた event の ts。
+        since: String,
+    },
+    /// 列が起こした便がまだ受付に届いていない（最新の `launched` の後に同じ bead の `RunCreated` も
+    /// `release` も無い・設計 §17）。受付で落ちた便を毎周起こし直さない。
+    Launched {
+        /// 最新の `launched` の印の ts。
         since: String,
     },
     /// 同じ契約 file の sha で**終端に着いた**便が在る（`Landed` / `Failed` / `Stopped`、審査や gate の
@@ -114,6 +128,7 @@ impl WaitReason {
             Self::Overlap { .. } => "overlap",
             Self::Admission { .. } => "admission",
             Self::Hold { .. } => "hold",
+            Self::Launched { .. } => "launched",
             Self::Settled { .. } => "settled",
             Self::NoDesignPointer => "no-design-pointer",
         }
@@ -126,7 +141,7 @@ impl WaitReason {
             Self::Dependency { ref on } => format!("{name}:{}", on.join(",")),
             Self::Overlap { ref with, files } => format!("{name}:{with}/{files}"),
             Self::Admission { reason } => format!("{name}:{reason}"),
-            Self::Hold { ref since } => format!("{name}:{since}"),
+            Self::Hold { ref since } | Self::Launched { ref since } => format!("{name}:{since}"),
             Self::Settled { ref sha, stage } => format!("{name}:{sha}/{}", stage.as_str()),
             Self::NoDesignPointer => name.to_owned(),
         }
@@ -311,24 +326,76 @@ pub fn admits_gated(driver: Option<Advance>) -> bool {
 /// spawn → gate → land の driver である）。新しい process group の leader にするのは [`super::spawn`] と
 /// 同じ理由で、終端の process が畳まれても起こした便が道連れにならないためである。
 ///
-/// 起こせなかった周は `false` を返して**その便を起こさなかった事実だけ**を残す（終端の rc は呼び手が
-/// 変えない・次の契機で拾う・§5）。判定は turn の 1 回だが、`pipe run` 側の受付は外さない（二重に守る・
-/// planner 裁定 2026-09-19 の条件 (2)）。
-fn start(launch: &Launch) -> bool {
-    spawn_self(&launch.argv)
+/// 起こせなかった周は理由の名（[`MARK`] か [`SPAWN`]）を返して**その便を起こさなかった事実だけ**を残す
+/// （終端の rc は呼び手が変えない・次の契機で拾う・§5）。判定は turn の 1 回だが、`pipe run` 側の受付は
+/// 外さない（二重に守る・planner 裁定 2026-09-19 の条件 (2)）。
+///
+/// **起こす前に印を書く**（設計 §17）: bead 名義の [`Mark::Launched`] を記帳してから子を起こす＝印は子の
+/// `RunCreated` より前の行に並ぶ。書けない周は起こさない（fail-closed・記帳できない起動を数えない）。
+fn start(input: &Input<'_>, launch: &Launch) -> Result<(), &'static str> {
+    if !launched(input, launch) {
+        return Err(MARK);
+    }
+    if !spawn_self(input.state_dir, &launch.argv) {
+        return Err(SPAWN);
+    }
+    Ok(())
+}
+
+/// 起こした事実の印を 1 件記帳する（`DispatchMark` mark = `launched`・detail = 起こした argv の subcommand 1 語）。
+///
+/// 追記は fleet の 1 本（[`store::append`]・C6.3）で、lock の待ち方は列と同じ manifest から読む。読めない周も
+/// 書けない周と同じ `false`（記帳できない起動を数えない）。
+fn launched(input: &Input<'_>, launch: &Launch) -> bool {
+    let Ok(policy) = store::LockPolicy::from_rules(input.manifest) else {
+        return false;
+    };
+    let event = Event {
+        schema: SCHEMA,
+        ts: crate::fleet::cli::now_utc(),
+        kind: EventKind::DispatchMark,
+        run: String::new(),
+        bead: launch.bead.clone(),
+        host: crate::fleet::cli::host(),
+        actor: EventKind::DispatchMark.default_actor().to_owned(),
+        stage: None,
+        seat: None,
+        pid: None,
+        detail: launch.argv.first().cloned(),
+        allowance: None,
+        registration: None,
+        mark: Some(Mark::Launched),
+        account: None,
+    };
+    store::append(input.state_dir, &event, policy).is_ok()
 }
 
 /// 自分自身を `pipe <argv>` で起こす（**起こす側と起こし直す側の 1 実装**・C2）。
-fn spawn_self(argv: &[String]) -> bool {
+///
+/// 子の stderr は `<state_dir>/pipe/launch.log` に append する（設計 §17・受付で落ちた子の死因を席が読める
+/// 場所に残す・C10）。file を開けない周は stderr を捨てて**起こす**（起動を記録の失敗で止めない）。
+fn spawn_self(state_dir: &Path, argv: &[String]) -> bool {
     Command::new(myself())
         .arg(PIPE)
         .args(argv)
         .process_group(0)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(launch_log(state_dir))
         .spawn()
         .is_ok()
+}
+
+/// 子の stderr の行き先（`launch.log` を append で開く・開けない周は [`Stdio::null`]）。
+fn launch_log(state_dir: &Path) -> Stdio {
+    let path = LAUNCH_LOG.iter().fold(state_dir.to_path_buf(), |dir, part| dir.join(part));
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    match std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        Ok(file) => Stdio::from(file),
+        Err(_) => Stdio::null(),
+    }
 }
 
 /// 自分の binary（`argv[0]`）。PATH で呼ばれた周は同じ名で子も PATH から解ける。
@@ -422,9 +489,15 @@ pub fn turn(input: &Input<'_>) -> Turn {
         return unmeasured(Unmeasured::Ledger);
     };
     // 1 周ぶん固定な材料は**ここで 1 回だけ**解く（候補ごとに rules 行と台帳を読み直さない）。
-    let events = read_events(input.state_dir);
+    // event log を読めない周は起こした事実の印を測れない＝`launched` を `None` に持ち、起こせる候補を
+    // [`MARK`] で待たせる（読めないを「印が無い」に読み替えない・fail-closed・設計 §17）。
+    let read = store::read_all(input.state_dir);
+    let unreadable = read.is_err();
+    let events = read.unwrap_or_default();
+    let marks = marks_of(&events);
     let ledger = Ledger {
-        marks: marks_of(&events),
+        marks: marks.order,
+        launched: (!unreadable).then_some(marks.launched),
         events,
         closed: issues.iter().filter(|issue| issue.status == CLOSED).map(|issue| issue.id.as_str()).collect(),
         materials: Materials::of(input.repo, input.manifest),
@@ -444,8 +517,10 @@ pub fn turn(input: &Input<'_>) -> Turn {
 
 /// 1 周ぶん固定な台帳側の材料（候補ごとに読み直さない）。
 struct Ledger<'a> {
-    /// bead ごとの最後の印。
+    /// bead ごとの最後の介入の印（`first` / `hold`）。
     marks: BTreeMap<String, (Mark, String)>,
+    /// 起こしたのにまだ受付に届いていない bead と最新の `launched` の ts（event log を読めない周は `None`＝測れない）。
+    launched: Option<BTreeMap<String, String>>,
     /// 置き場の event の並び（`release` が終端の便の最後の記帳より後かを位置で引く・設計 §12）。
     events: Vec<Event>,
     /// 閉じた bead の id（依存が閉じたかを同じ一覧の中で引く）。
@@ -493,13 +568,17 @@ pub fn fire(input: &Input<'_>) -> Turn {
             turn.revives.sort_by(|left, right| left.run.cmp(&right.run));
         }
     }
-    turn.revives.retain(resume);
-    let failed: Vec<String> =
-        turn.launches.iter().filter(|launch| !start(launch)).map(|launch| launch.bead.clone()).collect();
-    turn.launches.retain(|launch| !failed.contains(&launch.bead));
+    turn.revives.retain(|revive| resume(input, revive));
+    // **`launches` は印を書けて起こせた分だけ**（設計 §17）: 印を書けない便は [`MARK`]、起こせない便は [`SPAWN`]。
+    let failed: BTreeMap<String, &'static str> = turn
+        .launches
+        .iter()
+        .filter_map(|launch| start(input, launch).err().map(|reason| (launch.bead.clone(), reason)))
+        .collect();
+    turn.launches.retain(|launch| !failed.contains_key(&launch.bead));
     for candidate in &mut turn.candidates {
-        if failed.contains(&candidate.bead) {
-            candidate.reason = Some(WaitReason::Admission { reason: SPAWN });
+        if let Some(&reason) = failed.get(&candidate.bead) {
+            candidate.reason = Some(WaitReason::Admission { reason });
         }
     }
     turn
@@ -589,8 +668,8 @@ fn revive_of(input: &Input<'_>, run: &str) -> Revive {
 }
 
 /// 起こし直す（子 process・[`start`] と同じ形で待たない）。
-fn resume(revive: &Revive) -> bool {
-    spawn_self(&revive.argv)
+fn resume(input: &Input<'_>, revive: &Revive) -> bool {
+    spawn_self(input.state_dir, &revive.argv)
 }
 
 /// 列の順序を決める 1 関数（**pure**・設計 §2「順序」）: (1) 介入 `first` (2) 台帳の `priority`（P0 → P4）
@@ -644,6 +723,12 @@ fn entry_of(input: &Input<'_>, issue: &Issue, ledger: &Ledger<'_>) -> (Candidate
     }
     if let Some((Mark::Hold, since)) = marked {
         return wait(WaitReason::Hold { since: since.clone() });
+    }
+    // **起こした便が受付に届くまで同じ bead を起こさない**（設計 §17）。印を測れない周は起こさない側に倒す。
+    match ledger.launched.as_ref().map(|found| found.get(&issue.id)) {
+        None => return wait(WaitReason::Admission { reason: MARK }),
+        Some(Some(since)) => return wait(WaitReason::Launched { since: since.clone() }),
+        Some(None) => {}
     }
     let Some(pointer) = pointer_of(&issue.acceptance) else {
         return wait(WaitReason::NoDesignPointer);
@@ -907,24 +992,37 @@ fn sizes_of(manifest: &Manifest) -> Sizes {
     Sizes { job_mb: row(ROW_JOB_MB), reserve_mb: row(ROW_RESERVE_MB) }
 }
 
-/// 置き場の event を全部読む（読めない周は空＝印が無い周と同じ扱い・印は「起こさない」側の材料だけ）。
-fn read_events(state_dir: &Path) -> Vec<Event> {
-    store::read_all(state_dir).unwrap_or_default()
+/// 印の畳み込みの結果（[`marks_of`]）。
+struct Marks {
+    /// bead ごとの**最後の**介入の印（`first` / `hold`・`release` が外す・設計 §4）。
+    order: BTreeMap<String, (Mark, String)>,
+    /// bead ごとの最新の `launched` の ts（その後に同じ bead の `RunCreated` も `release` も無いものだけ・設計 §17）。
+    /// 介入の印とは**独立の値**で持つ（`hold` と同じ側に畳まない）。
+    launched: BTreeMap<String, String>,
 }
 
-/// bead ごとの**最後の**印（`release` は印を外す・**pure**・設計 §4）。
-fn marks_of(events: &[Event]) -> BTreeMap<String, (Mark, String)> {
-    let mut found: BTreeMap<String, (Mark, String)> = BTreeMap::new();
-    for event in events.iter().filter(|event| event.kind == EventKind::DispatchMark) {
-        let Some(mark) = event.mark else {
+/// bead ごとの印を畳む（`release` は介入の印も起こした事実の印も外す・`RunCreated` は起こした事実の印を外す・
+/// **pure**・設計 §4・§17）。
+fn marks_of(events: &[Event]) -> Marks {
+    let mut found = Marks { order: BTreeMap::new(), launched: BTreeMap::new() };
+    for event in events {
+        if event.kind == EventKind::RunCreated {
+            found.launched.remove(&event.bead);
+            continue;
+        }
+        let (EventKind::DispatchMark, Some(mark)) = (event.kind, event.mark) else {
             continue;
         };
         match mark {
             Mark::Release => {
-                found.remove(&event.bead);
+                found.order.remove(&event.bead);
+                found.launched.remove(&event.bead);
             }
             Mark::First | Mark::Hold => {
-                found.insert(event.bead.clone(), (mark, event.ts.clone()));
+                found.order.insert(event.bead.clone(), (mark, event.ts.clone()));
+            }
+            Mark::Launched => {
+                found.launched.insert(event.bead.clone(), event.ts.clone());
             }
         }
     }
@@ -1250,11 +1348,36 @@ mod tests {
             marked("t3", "s2-a", Mark::Hold),
             marked("t4", "s2-b", Mark::Release),
         ];
-        let found = marks_of(&events);
+        let found = marks_of(&events).order;
         assert_eq!(found.get("s2-a").map(|(mark, _)| *mark), Some(Mark::Hold), "後の印が勝つ");
         assert_eq!(found.get("s2-a").map(|(_, ts)| ts.clone()), Some("t3".to_owned()), "ts は勝った印の行");
         assert_eq!(found.get("s2-b"), None, "release は印を外す");
         assert_eq!(found.len(), 1, "母集団 {} 行のうち残る印は 1 つ", events.len());
+    }
+
+    /// 起こした事実の印（`launched`）は介入の印と**独立の値**で最新の 1 つを持ち、同じ bead の `RunCreated` と
+    /// `release` が外す（別の bead の `RunCreated` は外さない・pure・設計 §17）。
+    #[test]
+    fn pipe_dispatch_launched_marks_are_cleared_by_run_created_or_release() {
+        let mut created = staged("t4", "s2-b-1", "s2-b", Stage::Intake);
+        created.kind = EventKind::RunCreated;
+        let events = vec![
+            marked("t1", "s2-a", Mark::Hold),
+            marked("t2", "s2-a", Mark::Launched),
+            marked("t3", "s2-b", Mark::Launched),
+            created,
+            marked("t5", "s2-c", Mark::Launched),
+            marked("t6", "s2-c", Mark::Release),
+            marked("t7", "s2-d", Mark::Launched),
+            marked("t8", "s2-d", Mark::Launched),
+        ];
+        let found = marks_of(&events);
+        assert_eq!(found.order.get("s2-a").map(|(mark, _)| *mark), Some(Mark::Hold), "launched は hold を上書きしない");
+        assert_eq!(found.launched.get("s2-a").map(String::as_str), Some("t2"), "受付に届いていない bead");
+        assert_eq!(found.launched.get("s2-b"), None, "RunCreated が外す");
+        assert_eq!(found.launched.get("s2-c"), None, "release が外す");
+        assert_eq!(found.launched.get("s2-d").map(String::as_str), Some("t8"), "最新の 1 つ");
+        assert_eq!(found.launched.len(), 2, "母集団 4 bead のうち残るのは 2 つ");
     }
 
     /// 理由の名は [`WAIT_REASONS`] と 1 対 1 で、値を持つ variant は値も描く（`dispatch ls` の `reason=`）。
@@ -1265,6 +1388,7 @@ mod tests {
             WaitReason::Overlap { with: "r1".to_owned(), files: 2 },
             WaitReason::Admission { reason: "cap-headroom" },
             WaitReason::Hold { since: "t1".to_owned() },
+            WaitReason::Launched { since: "t2".to_owned() },
             WaitReason::Settled { sha: "abc".to_owned(), stage: Stage::Landed },
             WaitReason::NoDesignPointer,
         ];
@@ -1278,10 +1402,11 @@ mod tests {
                 "overlap:r1/2",
                 "admission:cap-headroom",
                 "hold:t1",
+                "launched:t2",
                 "settled:abc/Landed",
                 "no-design-pointer",
             ],
-            "値を持つ 5 件は値も描く"
+            "値を持つ 6 件は値も描く"
         );
     }
 }
