@@ -658,6 +658,38 @@ write-set = ["crates/scribe2/src/pipe/review.rs", "docs/design/contract-source.m
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail pipe_review_yaml_shall_", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_review_requirements_text_reads_yaml_text_and_md_headings_by_extension"]
 size = "S"
 done = "約束 1 = text: を持つ mapping の本文は今までどおり text: の値で、既存の yaml と md の歯が 1 字も変わらず緑。約束 2 = text: が無く shall: が在る mapping の本文が shall: の値になり、shall: の block の続きも空白で畳まれた 1 本になる。約束 3 = その周に同じ mapping の when: が在れば本文が when: の値 + 空白 + em dash + 空白 + shall: の値の 1 本になり、区切りの字面を逐語で測る歯が when: の値の脱落で落ちる。約束 4 と 5 = text: と shall: を両方持つ mapping は text: の値だけになり shall: と when: の値が 1 字も混ざらず、when: だけ / plain: だけ / title: だけの mapping と裸の列はどれも本文なしの 3 値の 1 つに倒れ、id が要件面に無い周は不在の 1 つに倒れ、呼び手が出す「本文が無い」と「要件面に無い」の行の字面は 1 字も変わらない。約束 6 = .vessel.toml にも rules 行にも欄の宣言は 1 つも増えず、html と md の読み手と拡張子の 1 match と関数 pointer の型と 3 値の型と呼び手の行の組み立ては不変"
+
+[[contract]]
+id = "af"
+title = "約束の行 [[promise]] の parse と schema — 9 欄の宣言順と必須 / 任意・親の行の無い of と n の重複 / 欠番・空の必須欄を TableError の値で名指し、contracts schema の生成物に 9 欄が載る"
+req = ["FR47", "FR55"]
+section = "33"
+write-set = ["crates/scribe2/src/pipe/table.rs", "crates/scribe2/src/pipe/table/parse.rs", "crates/scribe2/src/pipe/table/check.rs", "contracts/schema.toml"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail contract_promise_parse_"]
+size = "S"
+done = "(1) 契約表の区間の [[promise]] が 9 欄（of / n / text / files / symbols / teeth / place / fixture / expect・宣言順）で parse され、行の型が親の行 id で引ける (2) of が同じ doc の行に無い・n が重複か欠番・必須欄が空 の 3 形が TableError の値（新しい 2 値 + 既存の欄検査）で contracts check の 1 行に名指され rc 1 (3) contracts schema の生成物に 9 欄が載り cargo xtask check の drift が 0 (4) TableError の名の slice と FIELDS の件数を pin する既存の歯が新しい母集団で緑 (5) 約束の行を持たない既存の 161 行の parse と検査が 1 字も変わらず緑"
+
+[[contract]]
+id = "ag"
+title = "Promised の行 — 約束の行から touches / creates / also / tests / surfaces を組んで write-set を導き、verify と done を生成し、手書きの write-set / done と base に解けない symbols を受付が断る"
+req = ["FR48", "FR47", "FR39"]
+section = "33"
+depends = ["af"]
+write-set = ["crates/scribe2/src/pipe/closure.rs", "crates/scribe2/src/pipe/closure/derive.rs", "crates/scribe2/src/pipe/closure/names.rs", "crates/scribe2/src/pipe/contract.rs", "crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/src/pipe/refuse.rs", "crates/scribe2/tests/e2e/pipe/intake.rs"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail contract_promise_derive_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_intake_promise_"]
+size = "M"
+done = "(1) 約束の行を 1 つでも持つ行は WriteSet の 3 値目 Promised に弁別され、symbols の閉じた型が touches に・+ の file が creates に・.rs でない file が also に・place が tests に・_external_form の歯と名付き snapshot の歯が surfaces に写り、write-set が §3 の derive_write_set の値と一致して契約 file と runner の allowlist に載る (2) verify は teeth を（crate・scope）で束ねた nextest 行（filter は完全名を空白で並べる）・done は n の順の (n) expect の 1 文として契約 file に生成され、設計 doc には書き戻らない (3) Promised の行が write-set / touches / surfaces / tests / also / creates / done のどれかを持つ・symbols の + 無しの名が base に無い・+ 付きの名が base に在る の 3 形は Refuse の値（新しい 2 値）で断られ run dir が 0・REFUSALS の長さを pin する歯が新しい母集団で緑 (4) verify を持つ Promised の行は生成値と集合一致なら受付を通り、不一致は §3 と同じ drift の断り (5) Declared / Derived の行の受付と既存の pipe_intake_ の歯が 1 字も変わらず緑"
+
+[[contract]]
+id = "ah"
+title = "Promised の行の審査 — lens の雛形に約束の 4 欄を渡し、verdict の kind を VacuousAssert / GoalDoneContradiction / Other の 3 値に限り、焼き直しの門は契約 file の sha だけを見る"
+req = ["FR49"]
+section = "33"
+depends = ["ag"]
+write-set = ["crates/scribe2/src/pipe/review.rs", "crates/scribe2/src/headless/lens.rs", "crates/scribe2/src/headless/lens-contract.txt", "crates/scribe2/tests/e2e/headless.rs", "crates/scribe2/tests/e2e/snapshots/e2e__headless__lens_contract_prompt_external_form.snap"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail pipe_review_promise_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail headless_lens_promise_"]
+size = "S"
+done = "(1) Promised の行の lens の雛形に約束の行の写し（n / text / fixture / expect の 4 欄・n の順）が載り、約束の行を持たない行の雛形は 1 字も変わらない（外形 snapshot） (2) Promised の行の review.json の kind が 3 値の外なら verdict が INCONCLUSIVE に倒れ、3 値の中ならそのまま (3) Promised の行の焼き直しの門は契約 file の sha が変わった周だけ通し、at の path 照合を撃たない (4) 約束の行を持たない行の審査と門と既存の pipe_review_ / headless_lens_ の歯が 1 字も変わらず緑"
 <!-- contracts:end -->
 
 
@@ -669,3 +701,23 @@ done = "約束 1 = text: を持つ mapping の本文は今までどおり text: 
 - 歯（`closure_scope_` 接頭辞・`crates/scribe2/src/pipe/closure/derive.rs` の歯の区間・fixture は同 module の `source(` の型）: (a) `--test e2e` の行が `tests/e2e/` の歯の file だけを置き場に返し、同じ filter 語に当たる src の in-file の歯の file を返さない（base では返す → RED）／(b) `--lib` の行が `src/` の歯の file だけを返す／(c) 旗なしの行・読めない旗を持つ行・旗が 2 つ在る行は crate 全体を返す（広い側のまま）／(d) scope が返す file が 0 本で `tests` 欄も無い行は従来どおり `TeethPlaceUnresolved`（字面不変）。
 - 限界（残す側）: scope は**その行が走らせる target**までしか写さず、target の中の module の木は読まない（`--lib` は `src/main.rs` と `src/bin/` の歯も数える＝真の lib target より広い側。現物の契約表 220 行のうちこの差に当たる行は 0 本・実測）。`--test <name>` の `<name>` は `tests/<name>.rs` と `tests/<name>/` の字面で解き、`Cargo.toml` の `[[test]]` の `path` は読まない（本 repo は宣言を持たない）。断りの字面は不変ゆえ、scope の外に歯が在って 0 本になった行の理由は「base に無い」と読める（下界・`tests` 欄で置き場を宣言する側に倒す）。
 - 却下案: 純移動の契約に別の verify の形（filter ごとの nextest list の本数が base = head）を持たせる（`s2-07l.351` だけを救い、`s2-07l.447` / `s2-07l.340` の型〔純移動でない便の scope 誤読〕が残る。本数で数える門は歯の本文の改変を通す＝flip-check の `removed_only` が名前の集合を捨てた教訓と同型）／scope を読めない行を断る（今日通っている 183 本の旗なしの行を全部断る）／crate の target を `cargo metadata` で解く（外部の口と実行時の依存を足す・字面走査の下界のままにする）。
+
+## 33. 約束の行 — 契約表の行が `[[promise]]` の子行から touches / surfaces / tests / verify / done を導き、手書きの write-set を持たない（契約表の行 af / ag / ah・`s2-07l.510`）
+
+- **出所**: user の裁定 2026-09-21（逐語は台帳 `s2-07l.510` の notes）。「memo と契約の形は閉じ切る話で、LLM に任せ切らず形をシステミックに作る。beads の機能と合わせて先に設計する」。案 A（約束を行に落とす）を A のデメリット 5 つの提示の後に user が是認した。決定は [ADR-0051](../../design-intent/decisions/ADR-0051-contract-rows-carry-promise-rows-and-ledger-state-is-two-fields.html) §4（台帳の側は [ledger-form.md](./ledger-form.md)）。
+- **何が起きているか（母集団・2026-09-21 実測・run dir の残る全便）**: 契約の審査の FAIL / INCONCLUSIVE は 104 件で、内訳は write-set の閉包 51・名指しの不在 17・done と約束の 1:1 の崩れ 11・verify の filter 11・歯の空虚 5・snapshot 1・その他 8。実装席の問い 19 件のうち about:write-set が 16。9/17 以後は設計 doc の PR 157 本に対し着地 63 bead（1 bead の着地に平均 2 便）。落ちる理由の約 87% が**計算できる性質**で、lens（LLM）の判断が要るのは歯の空虚と goal の矛盾の 1 割強しか無い。
+- **現物（verified・main f95d113）**: 契約表の行の欄は 16（`FIELDS`・必須 7 / 任意 9）で、tracked 161 行のうち `surfaces` / `creates` / `classes` / `opens` を使う行は **0**、write-set は Declared 151 / Derived 10。§3 の導出（`derive_write_set` = `touches` の閉包 ∪ 歯の置き場 ∪ `surfaces` の外形 pin ∪ `creates` ∪ `also`）は land 済みだが、導出の入力（`touches` / `surfaces` / `tests` / `also`）を設計者が手で埋める形なので、設計者は結局 write-set と同じ閉包を別の欄で手書きしている＝151 行が Declared のまま残り、閉包の穴は審査の lens と実装席の問いで見つかる。約束 ↔ done ↔ 歯 ↔ verify の 1:1 は散文の規則（§20 の型の各 doc に「約束 ↔ done ↔ 歯 ↔ verify」の段落が在る）で、器は測らない。insta の snapshot の名は歯の fn 名から導ける形が 15 本中 12 本、名付き（fn 名と一致しない）が 3 本。
+- **やさしく言うと**: 今は「何を約束するか」を散文で書き、その散文から人が write-set と検証の行と done を写している。写し間違いが落ちる理由の 9 割を占める。約束を 1 行 1 約束の表にして、write-set と検証の行と done を器がその表から作れば、写し間違いという工程が無くなる。lens は「約束の意味が合っているか」と「歯が空虚でないか」だけを見る。
+- **形（欄と行だけ・散文の免除を持たない）**:
+  1. **約束の行 `[[promise]]`** を契約表の区間に足す（top-level の array of tables・`[[contract]]` と同じ parser の形で、dotted header は使わない）。欄は **9**（宣言順）: `of`（親の行 id・必須）/ `n`（1 から連番・必須）/ `text`（約束の 1 文・必須）/ `files`（触る file の列・`+` `-` `~` の接頭辞は §3 / §24 のまま・必須）/ `symbols`（名指す識別子の列・backtick の 3 形〔path / 型の path / fn〕と同じ字面・base に無い新設は `+` を前置・任意）/ `teeth`（歯の**完全名**の列・必須）/ `place`（`teeth` の置き場の file・base に無い名の周だけ必須）/ `fixture`（歯の fixture の形の 1 文・必須）/ `expect`（歯が観測する結果の 1 文・必須）。真偽の欄は持たない（負の枝の有無は `fixture` の文で lens が読む・欄で名乗らせても嘘を測れない）。
+  2. **親の行の弁別**: 約束の行を 1 つでも持つ行は **Promised**（`WriteSet` の 3 値目・宣言順の末尾）。Promised の行は `write-set` / `touches` / `surfaces` / `tests` / `also` / `creates` / `done` を持ってはならず（持てば `Refuse` の新しい 1 値で断る・行の id と欄の名を名指す）、`verify` は持ってもよい（持てば生成値と集合一致・§3 の drift と同じ照合）。Declared / Derived の行は不変（旧い形として残す・移すのは各行の手番）。
+  3. **導出**（Promised の行・`derive_write_set` の入力を約束の行から組む 1 関数・pure）: `touches` ← `symbols` のうち base で閉じた型（`closure()` の 5 形が読む enum / struct / const slice）に解ける名・`creates` ← `files` の `+` の項目・`also` ← `files` の `.rs` でない項目・`tests` ← `place`・`surfaces` ← `teeth` のうち名が `_external_form` で終わる歯の snapshot の名（§16 の外形 pin と同じ読み）に加え、`place` か base の歯の本文で名付きの snapshot（第 1 引数が文字列 literal の形）を持つ歯の名。write-set = 生成した入力で `derive_write_set` を撃った値（**導出の 1 本は増やさない**・§3 の関数に約束の行から組んだ `Fields` を渡す）。
+  4. **生成**（契約 file の `render(` の入力・pure）: `verify` ← `teeth` を（crate・scope）で束ね、束ごとに nextest 行 1 本（filter は完全名を空白で並べる・scope は `place` / base の置き場から §28 の 3 値で決める）／`done` ← `n` の順に「(n) `expect`」を空白で繋いだ 1 文。生成値は契約 file にだけ載る（設計 doc に書き戻さない・C10 の逆流なし）。
+  5. **名指しの実在**: `symbols` の `+` 無しの名は `unresolved_names` と同じ読み手で base に解け、解けなければ受付が断る（`Refuse` の新しい 1 値・`of` と `n` と名を名指す）。`+` 付きは base に**無い**ことを要求（`creates` の `MustBeAbsent` と同じ極性）。着地後の CI は `+` の名が tracked に在れば land 済みと読む（`MayBeLanded`・§3 の `+path` と同じ 2 面）。
+  6. **必須の欄の空**は受付と CI の `contracts check` が同じ語彙で断る（`TableError` の新しい 2 値: 親の行が無い `of`・`n` の重複か欠番）。空の必須欄は `TableError` の既存の欄検査の型に乗せる。
+- **審査の分担（行 ah）**: Promised の行では `FindingKind` のうち `TeethOutsideWriteSet` / `LiteralMismatch` / `SectionMaterialMissing` は器が受付で測り終えているので、lens の雛形（`lens-contract.txt`）に約束の行の写し（`{promises}` の穴・`n` / `text` / `fixture` / `expect` の 4 欄）を渡し、verdict の kind を `VacuousAssert` / `GoalDoneContradiction` / `Other` の 3 値に限る（Promised でない行は従来の 7 値のまま）。§23 の焼き直しの門は Promised の行では「契約 file の sha が変わったか」だけを見る（`at` の path 照合は器が測った項目に対しては起きない）。
+- **触らない**: 契約 file の key（pipeline.md §3 の 9 欄・runner が読む形は不変）・§7（回答は write-set を広げない。約束の行が閉包を先に拾うので about:write-set の問いは下界の外だけになる）・Declared / Derived の行とその門・`derive_write_set` と `check_drift` の照合・rules 行・極性一覧（guard は増えない）・lens の verdict の 3 値。
+- **移行**: 着地済みの行は履歴で触らない。未着地の行（列に在る 11 本と以後の新規）を Promised へ移すのは各行の docs PR の手番で、移した周に scope の重複を測る（`teeth` の完全名が base の歯と同名なら「変更する既存の歯」・無ければ新しい歯）。台帳 lint（§6・行 e）に「open な契約のうち Promised でない行の件数と母集団」を 1 項目足すのは後続（§12）。
+- **歯**（in-file は `contract_promise_` 接頭辞・e2e は `pipe_intake_promise_` / `headless_lens_promise_` 接頭辞）: (a) 約束の行の parse: 9 欄の宣言順と必須 / 任意・`of` が行に無い・`n` の重複と欠番・空の必須欄が `TableError` の値で名指され、`contracts schema` の生成物に 9 欄が載る（母集団 = 欄の総数を同時に pin）／(b) 導出: `symbols` の閉じた型が `touches` に・`+` の file が `creates` に・`.rs` でない file が `also` に・`_external_form` の歯と名付き snapshot の歯が `surfaces` に写り、write-set が §3 の関数の値と一致する（fixture は同 module の `source(` の型・3 本の名付き snapshot の型を 1 つ含む）／(c) 生成: `teeth` が（crate・scope）ごとに 1 本の nextest 行になり完全名が全部載る・`done` が `n` の順で `expect` を並べる／(d) 受付の断り: Promised の行が `write-set` か `done` を持つ・`symbols` の `+` 無しの名が base に無い・`+` 付きの名が base に在る の 3 形が `Refuse` の値で断られ run dir が 0（母集団 = `REFUSALS` の長さを同時に pin）・`verify` を持つ Promised の行は生成値と集合一致なら通り不一致は §3 と同じ drift で断られる／(e) 審査: Promised の行の lens の雛形に約束の 4 欄が載り（外形 snapshot）、verdict の kind が 3 値の外なら INCONCLUSIVE に倒れる（fail-closed）。
+- **限界（残す側）**: `symbols` の解決は §3 と同じ字面走査の下界（別名・generic・glob 越しは見ない）。`fixture` と `expect` の質は欄では測れない（lens の 2 欄が残る理由）。約束の行を持たない旧い行は今の落ち方のまま（移行は行ごと）。
+- **却下案**: 案 B = 散文の § を残し閉包の計算だけ足す（Derived が既にそれで、151 行が使っていない＝入力の手書きが残る限り同じ理由で落ちる）／約束を bead の field に置く（契約の正本は設計 doc の行〔FR47・ADR-0023〕・台帳は写し）／回答が write-set を広げる（§7 の決定と C10 に反する・sha が実装の途中で変わる）／`[[contract.promise]]` の dotted header（parser の subset を広げる・top-level の array で同じ形が書ける）／負の枝の真偽欄（嘘を測れない欄は持たない・C10）／done を設計 doc に書き戻す生成（C10 の逆流・生成物は契約 file にだけ）。

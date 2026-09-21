@@ -669,6 +669,30 @@ terms:
     domain: consumer
     definition: 契約の行が宣言した閉じた型を、 網羅 match・literal 構築・件数 pin で持つ source file の集合 (SRS FR48)。 write-set に足りなければ intake が契約を断る。 字面の走査で求めるため下界であり、 限界は歯が固定する (ADR-0023 §2.3)。
     relationships: [write-set, 契約表, 便, in-loop guard]
+  - canonical: 約束の行
+    domain: consumer
+    definition: 契約表の行の子行。 親の行 id・番号・約束の文・触る file・名指す識別子・歯の完全名・置き場・fixture の形・観測する結果の閉じた 9 欄を持ち、 器はここから write-set と verify と done を導く (ADR-0051 §4)。 欄の集合の正本は core の型 (ADR-0013 §2.1)。
+    relationships: [契約表, 契約, write-set の閉包, 歯, Promised の行]
+  - canonical: Promised の行
+    domain: consumer
+    definition: 約束の行を 1 つでも持つ契約表の行。 手書きの write-set と done を持てず、 導出の入力も約束の行から組まれる (ADR-0051 §4)。 手書きの行と導出の行に並ぶ 3 つ目の弁別で、 着地済みの行は移さない。
+    relationships: [約束の行, 契約表, write-set の閉包]
+  - canonical: 4 象限
+    domain: consumer
+    definition: 台帳の bead の label intake:memo の有無と受入条件の設計 pointer の有無の組み合わせ (ADR-0051 §4)。 label だけが memo、 pointer だけが契約、 両方在る形と両方無い形 (epic と裁定の bead を除く) は違反で、 台帳 lint が名指す (SRS FR51)。
+    relationships: [台帳, 契約, 設計 pointer, memo の 4 節]
+  - canonical: memo の 4 節
+    domain: consumer
+    definition: memo の本文が必ず持つ 4 つの見出し — 出所 (run id・PR・裁定 id・user 逐語の在り処)・観測 (実測の事実)・候補 (0 個以上・却下も書く)・昇格条件 (要件 id か 要 ADR か 要 裁定)。 欠けは台帳 lint が数える (ADR-0051 §4・SRS FR51)。
+    relationships: [台帳, 4 象限]
+  - canonical: 台帳の plan
+    domain: consumer
+    definition: 全設計 doc の契約表の未着地の行から xtask が出す bd の graph の JSON (ADR-0051 §4)。 title・受入条件の pointer 行・親の epic・label・depends の edge・出所の memo への edge を行から写す。 撃つのは席の手番で、 器は台帳へ書かない (ADR-0045 §2)。
+    relationships: [台帳, 契約表, 設計 pointer]
+  - canonical: 写しの工程
+    domain: consumer
+    definition: 設計者 (AI) が節の散文の約束を読み、 write-set と verify と done を手で欄に写す工程。 契約の審査で落ちた理由の 87 % の出所で、 ADR-0051 が器の導出に置き換える対象。
+    relationships: [約束の行, 契約表, 契約の審査]
   - canonical: 契約の審査
     domain: consumer
     definition: intake の直後に、 契約とそれが実装する設計と要件を lens が読んで判定する段 (SRS FR49)。 実装後の gate の lens (SRS FR9) とは別の段で、 判定が合格でない便は runner を起こさない (ADR-0019 §2.1 の終端の定義に足す・ADR-0023 §2.7)。
