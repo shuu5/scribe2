@@ -129,6 +129,24 @@
 - 歯: 検証行 1 = `account_cmd_retired_account_leaves_select_and_usage`（base = 時限で赤・head = 緑＝flip の RED は「環境（壁時計）」で機能不在ではない）／検証行 2 = `fleet_usage_measures_two_accounts_into_lines_and_events`（`want_for` の tuple 3 つと `live_line` の期待を static から組み直した歯が緑のまま）／検証行 3 = `fleet_usage_client_failures_name_their_reason`（`shape_mismatch` の case の期待・同上）。filter は歯の名の全体で書く: 裸の接頭辞 `fleet_usage_` は `src/fleet/usage.rs` の unit の歯 8 本と `tests/e2e/rules.rs` の歯 1 本の名にも含まれ、受付の導出（歯の置き場 = fn 名が filter 語を含む file）が write-set を 3 面に広げて審査が落ちる（run 003510Z の実測）。新しい歯は足さない。
 - 却下: 日付だけ先へずらす（同じ穴が再発）／選定の `now` を歯から注入できる口を器に足す（src を触る便になり main-red の回復が遅れる・C2.2 の env 縫い目にもなりうる＝別 bead）／固定日付を 2099 にする（時限のまま）。
 
+## 13. fleet/usage.rs の「credential と HTTP fetch と JSON の読み」の群を子 module へ割る（契約表の行 c・純移動・[contract-source.md](./contract-source.md) §37 と [pipeline.md](./pipeline.md) §45 の型）
+
+やさしく言うと: 口座の残量を測る file が上限（1500 行）まで残り 52 行しか無く、この file を触る便が S でも受付で断られる。責務が閉じている「credential を読み、API を叩き、JSON を読む」群を、名前も本文も変えずに子の file へ移して余地を作る。
+
+- 出所（orchestrator の実測 2026-09-22・`pipe dispatch ls` と `pipe preflight`）: `crates/scribe2/src/fleet/usage.rs` は幅 120 で正規化した行数が **1448**（上限 R-C4-2 = 1500・余地 **52**）で、[account-autonomy.md](./account-autonomy.md) 行 o（`s2-07l.359`・S）・[gate-cost.md](./gate-cost.md) 行 r（`s2-07l.462`・M）・[fleet-event-log.md](./fleet-event-log.md) 行 b（`s2-07l.535`・M）の 3 本が `cap-headroom` で受付を通らない（S の見積 100 > 52）。
+- 現物（orchestrator が grep と正規化行数で実測・main 4dec9b8）: 責務は 7 群（const と型 37–188・入口 190–229・表 231–366・計測と鮮度 367–600・子 process 593–719・**credential と HTTP fetch と JSON の読み 721–979**・1 行形 981–1047）で、in-file の歯は 1049 行から（`#[cfg(test)]` の次の非空行が `mod tests {`＝札は `mod tests {` の直後に置ける）。**読みの群は閉じている**: item は 17 個（`credential_path` / `read_credential` / `now_ms` / `token_of` / `epoch_ms` / `client_args` / `config_of` / `fetch` / `body_of` / `windows_of` / `model_rows` / `value_key` / `window_row` / `reading` / `whole_pct` / `unmeasured` / `normalize_resets`・721–979 行・正規化 **260** 行）で、**全部が裸の private `fn`**（struct / enum / impl / 属性付きの item が 0 個＝field 由来の `items-differ` が原理的に起きない）、本文に `super::` / `crate::` の字面が 0 件。親の本体から裸で呼ばれるのは 7 名（`credential_path` 1 site・`read_credential` 2・`now_ms` 3・`token_of` 2・`fetch` 1・`windows_of` 1・`unmeasured` 1・全部 `read_account`〔602–623 行〕と `cutoff_of`〔436–441 行〕の中）、他 module からの参照は **0 site**（`crates/` 全数の `usage::` は `run` / `run_in` / `run_with` / `declared` / `fresh_of` / `Freshness` / `UsageError` / `POLARITY` だけ）。歯の `use super::{…}`（1051–1054 行・15 名）が名指す群の名は 4 つ（`body_of` / `client_args` / `config_of` / `normalize_resets`）。群が親から引くのは const 5 つ（`URL` / `BETA` / `RC_CLIENT_TIMEOUT` / `SCOPED_KIND` / `CREDENTIAL_FILE`）と `endpoint` の 1 fn、親の `use` 束縛 7 つ（`Allowance` / `Measured` / `Unmeasured` / `UnmeasuredReason` / `WindowKind` / `Tree` / `json_tree`・全部 `crate::fleet` の pub 面）で、field を歯が構築する型は群に無い。
+- 名前解決の形（§45 と同じ・可視性は名前解決をしない）: 親に `use` を置く。解く名は 11（本体の 7 + 歯の 4）で、**歯だけが読む 4 名**を素の `use` に入れると通常 build で `unused_imports` → `-D warnings` で rc 101 になるので、`use` は**本体用（7 名・素）と歯用（4 名・`#[cfg(test)]` 付き）の 2 文**に割る（属性は別の行）。群の中だけで呼ばれる 6 名（`epoch_ms` / `model_rows` / `value_key` / `window_row` / `reading` / `whole_pct`）は可視性を 1 語も変えない。`dead_code` は起きない（4 名とも群内で `fetch` / `reading` が呼ぶ）。**親で孤立する import は削る**（compile が `unused_imports` で名指す分だけ・実測の見込みは `Tree` / `SystemTime` / `UNIX_EPOCH` / `io::Write` の 4 つで、`PathBuf` は doc の字面が親に残るので実測して決める・`use` 行の増減は `residual_allowed` の `use` の頭 / span で許される）。
+- 約束（この行が作るもの・番号は done と 1:1）:
+  1. 上の 17 item（721–979 行・正規化 260 行）を、行 c の write-set の `+` の file へ名・本文・順序・doc comment を変えずにそのまま移す（doc comment は item の一部＝1 字も書き換えない）。子の頭は module doc と、親の const / fn を引く `use super::{…}` 1 行と、`crate::fleet` の型と std（`io::Write` / `path::{Path, PathBuf}` / `process::{Command, Stdio}` / `time::{SystemTime, UNIX_EPOCH}`）の `use` だけ。子の module 名と親の `enum Read`（144 行）は別の識別子、子の中の fn `fetch` と module 名は名前空間が別（§45 の `nextest` と同型）。
+  2. 親に増えるのは **4 行だけ**——`mod` 宣言 1 行（module doc〔1–13 行〕と最初の `use`〔15 行〕の間）、本体用の素の `use` 1 行（7 名・`pub` は付けない・`mod` 宣言の直後）、歯用の `#[cfg(test)]` だけの 1 行と `use` 1 行（4 名・**既存の行頭 `#[cfg(test)]`〔1049 行〕の直上**）。4 行とも 120 桁に収まる。孤立した `use` を削る行はこの数に含めない（残差の許容形）。
+  3. 歯は 1 本も足さず 1 本も変えない: in-file の `mod tests` の本文と `use super::{…}` は 1 byte も変えない（その `use` は親の歯用の `use` が解く）。e2e（`crates/scribe2/tests/e2e/fleet.rs`）は binary 越しで名を引かず、write-set の外。
+  4. 上げるのは**子側**の可視性だけで、語は `pub(super)` の 1 種類。上げる集合は名指しで **11**（本体の 7 名 + 歯の 4 名・全部 fn の頭の行）。親側の可視性は変えない。
+  5. 純移動の札 `// flip-check: moved <行 c の bead>` を親の `mod tests {` の直後と子の module doc の直後に 1 行ずつ置く（説明 1 行 + 札 1 行の 2 行・[pipeline.md](./pipeline.md) §7 の `moved` の逃がし・入口の RED は札が担う）。
+  6. 検証行が名指す歯は**既存の 4 本**（`fleet_usage_windows_of_maps_windows_and_isolates_the_broken_element` / `fleet_usage_token_of_names_each_credential_failure` / `fleet_usage_client_args_carry_timeout_and_never_the_token` / `fleet_usage_resets_accepts_z_and_utc_offset_and_rejects_the_rest`・全部 in-file・新設 0 本）で、着地後も名・本数・本文が不変。**接頭辞では書かない**（`fleet_usage_` は表の歯と `fleet_usage_error_polarity_` と `tests/e2e/rules.rs` の歯にも当たり、受付の導出が write-set を広げる・§12 の実測）。
+- 見積: 親 約 1188 行（余地 約 312＝size M を受けられる）・子 約 270 行。xtask の門の副作用 2 つを先に書く（[core-boundary.md](./core-boundary.md) の検出線）: (i) src / test の切れ目が最初の行頭 `#[cfg(test)]` に動くので `core-lines` が 2 行減るだけ（`std::env::` は群に 0 件＝`env_reads` は動かない）。(ii) `Command::new` の holder が `fetch` の移動で **1 増える**（site 34 / holder 20 → 34 / 21・親は `signal_group` の 1 site を残す）。違反は立たない（`core-spawn` の上限は検出線で ok は常に真）が件数は動く。`fetch` を親に残す回避は親 1214（余地 286）で M に届かないので採らない。
+- 触らない: 移す群の外の 6 群（const と型・入口・表・計測と鮮度・子 process・1 行形）・`TableRow` の pub field・`Refresh` / `Freshness` / `UsageError` の公開面・e2e の歯・`fleet/mod.rs` の型。
+- 却下: 表の群（231–366）を出す（親 1312 / 余地 188 で S 止まり・`table_row` の `state: &super::State` が親の `use` に無い `State` を指し、子へ移すと束縛を足す残差が要る）／計測と鮮度の群を出す（`run` / `declared` / `fresh_of` の公開面と入口が絡む）／`#[cfg(test)] use …;` を 1 行に畳む（`residual-line`・[pipeline.md](./pipeline.md) §45 の便 4 本目の再現）／検証行を接頭辞 `fleet_usage_` で書く（§12 の write-set 拡張の再現）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -150,5 +168,15 @@ tests = ["crates/scribe2/tests/e2e/fleet.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail account_cmd_retired_account_leaves_select_and_usage", "cargo nextest run -p scribe2 --no-tests=fail fleet_usage_measures_two_accounts_into_lines_and_events", "cargo nextest run -p scribe2 --no-tests=fail fleet_usage_client_failures_name_their_reason"]
 size = "S"
 done = "fleet.rs の fixture の resets_at が今より未来の値で組まれ、固定日付の literal が fixture と期待の両方から消え、fleet:: の歯が全部緑で main の nextest --workspace が緑に戻る"
+
+[[contract]]
+id = "c"
+title = "fleet/usage.rs の「credential と HTTP fetch と JSON の読み」の群（17 fn・721–979 行・正規化 260 行）を子 module へ割る — 純移動（名・本文・順序・doc comment 不変・歯 0 本・親に mod 1 行と use 2 文の 4 行・子側の pub(super) 11 名・札 2 か所）"
+req = ["FR33"]
+section = "13"
+write-set = ["crates/scribe2/src/fleet/usage.rs", "+crates/scribe2/src/fleet/usage/read.rs"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail fleet_usage_windows_of_maps_windows_and_isolates_the_broken_element", "cargo nextest run -p scribe2 --lib --no-tests=fail fleet_usage_token_of_names_each_credential_failure", "cargo nextest run -p scribe2 --lib --no-tests=fail fleet_usage_client_args_carry_timeout_and_never_the_token", "cargo nextest run -p scribe2 --lib --no-tests=fail fleet_usage_resets_accepts_z_and_utc_offset_and_rejects_the_rest"]
+size = "S"
+done = "(1) 17 fn が名・本文・順序・doc comment を変えずに + の file へ移る（move_proof が pure と判じる・items-differ / residual-line 0 件） (2) 親に増えるのは mod 宣言 1 行・素の use 1 行（本体の 7 名）・#[cfg(test)] だけの 1 行と use 1 行（歯の 4 名・既存の行頭 #[cfg(test)] の直上）の 4 行だけで、孤立した use は削る (3) in-file の歯の本文と use super::{…} が 1 byte も変わらず、e2e は触らない (4) 子側の pub(super) は名指しの 11 名だけで、群内の 6 名と親側の可視性は不変 (5) 札 moved が親の mod tests { の直後と子の module doc の直後に 1 行ずつ (6) 名指しの既存 4 本が名・本数・本文不変で緑・clippy -D warnings が通常 build と test build の両方で rc 0"
 
 <!-- contracts:end -->
