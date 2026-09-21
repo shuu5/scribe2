@@ -7,6 +7,7 @@
 mod fleet;
 mod headless;
 mod hook;
+mod ledger;
 mod ledger_form;
 mod ledger_memo;
 mod notify;

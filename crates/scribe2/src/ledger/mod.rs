@@ -8,9 +8,11 @@
 //!
 //! 台帳の形の lint（doctor の項目 1 行・設計 docs/design/ledger-form.md §3 の 4）は子 module [`form`] に置く
 //! （読むだけ・書きの口は増えない）。memo の入口（plan を標準出力に出す read-only の口・§3 の 8）は子 module
-//! [`memo`] に置く（台帳を読まず書かない・起票は席の手番）。
+//! [`memo`] に置く（台帳を読まず書かない・起票は席の手番）。台帳 lint（doctor の項目 1 行・設計
+//! contract-source.md §6・契約表の行 e）は子 module [`lint`] に置く（読むだけ・極性は増えない）。
 
 pub mod form;
+pub mod lint;
 pub mod memo;
 
 use crate::cli_outcome::{Outcome, RC_REFUSED};

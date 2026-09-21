@@ -55,8 +55,9 @@ fn render_doctor() -> Vec<String> {
 /// つき・1 row 1 行）と実在の target の突合 1 行（C3.2・seat-roles.md §9 (e)）の後ろに、host の面の 1 行と口座の
 /// 前提の行（`account ls` と同じ 1 関数・`retired=` つき・[`vessel::account::doctor_lines`]・account-lifecycle.md §3）、
 /// さらに導入先の行（1 導入先 1 行・[`vessel::account::consumers::doctor_lines`]・consumer-sync.md §4・FR61）を
-/// 足す。`--repo R` 付きは末尾に台帳の形の 1 行（[`vessel::ledger::form::doctor_line`]・ledger-form.md §3 の 4・
-/// `--state-dir` 無しでも `--rules` と並べて撃てる）。値欠け・空文字・重複・未知の引数は使い方の誤り（`Err`）。
+/// 足す。`--repo R` 付きは末尾に台帳 lint の 1 行と台帳の形の 1 行（[`vessel::ledger::lint::doctor_lines`]・
+/// contract-source.md §6 / ledger-form.md §3 の 4・台帳は 1 回だけ読む・`--state-dir` 無しでも `--rules` と並べて
+/// 撃てる）。値欠け・空文字・重複・未知の引数は使い方の誤り（`Err`）。
 fn render_doctor_with(rest: &[String]) -> Result<Vec<String>, ()> {
     let (mut lines, mut state_dir, mut socket, mut rules, mut repo) = (render_doctor(), None, None, None, None);
     for pair in rest.chunks(2) {
@@ -78,7 +79,7 @@ fn render_doctor_with(rest: &[String]) -> Result<Vec<String>, ()> {
         (None, _, _, _) => return Err(()),
     }
     if let Some(found) = repo {
-        lines.push(vessel::ledger::form::doctor_line(Path::new(found), rules));
+        lines.extend(vessel::ledger::lint::doctor_lines(Path::new(found), rules));
     }
     Ok(lines)
 }
@@ -295,6 +296,40 @@ mod tests {
         let docs = Docs { rows: vec![row("a"), row("b")], ..Docs::default() };
         let mut lines = render_doctor();
         lines.push(render(&judge(&issues, &docs)));
+        lines.push(render_unreadable("ledger-unreadable"));
+        lines.push(render_usage());
+        lines.push(render_version());
+        let masked = lines
+            .join("\n")
+            .replace(env!("CARGO_PKG_VERSION"), "[version]")
+            .replace(&format!("({})", env!("SCRIBE2_BUILD_COMMIT")), "([commit])");
+        insta::assert_snapshot!(masked);
+    }
+
+    /// doctor の台帳 lint の 1 行（contract-source.md §6 行 e）の外形: doctor の 2 行 → 測れた周の 1 行（3 つの欠陥の
+    /// 件数を違え・id を欠陥ごとに名指す）→ 欠陥 0 の周の 1 行 → 測れない周の 1 行 → usage → version。台帳は
+    /// `bd list --json` の形の fixture を席の reader（`issues_of`）で読み、解けた pointer の集合は直に組む。
+    #[test]
+    fn ledger_lint_doctor_external_form() {
+        use std::collections::BTreeSet;
+        use vessel::ledger::lint::{judge, render, render_unreadable};
+        let json = r####"[
+            {"id":"s2-u.1","status":"open","acceptance_criteria":"design = docs/design/toy.md#z"},
+            {"id":"s2-b.1","status":"open","acceptance_criteria":"design = docs/design/toy.md#a\n本文"},
+            {"id":"s2-b.2","status":"open","acceptance_criteria":"design = docs/design/toy.md#a\n本文"},
+            {"id":"s2-r.1","status":"open","acceptance_criteria":"design = docs/design/toy.md#a"},
+            {"id":"s2-m.1","status":"open","labels":["intake:memo"],"description":"## memo\n本文"},
+            {"id":"s2-m.2","status":"open","labels":["intake:memo"],"description":"## memo\n本文"},
+            {"id":"s2-m.3","status":"open","labels":["intake:memo"],"description":"## memo\n本文"},
+            {"id":"s2-m.4","status":"open","labels":["intake:memo"],"description":"## memo\ndesign = docs/design/toy.md#a"},
+            {"id":"s2-c.1","status":"closed","acceptance_criteria":"design = docs/design/toy.md#z"}
+        ]"####;
+        let issues = vessel::seat::ledger::issues_of(json).unwrap_or_default();
+        assert_eq!(issues.len(), 9, "fixture を読める");
+        let resolved: BTreeSet<String> = ["docs/design/toy.md#a".to_owned()].into();
+        let mut lines = render_doctor();
+        lines.push(render(&judge(&issues, &resolved)));
+        lines.push(render(&judge(issues.get(3..4).unwrap_or_default(), &resolved)));
         lines.push(render_unreadable("ledger-unreadable"));
         lines.push(render_usage());
         lines.push(render_version());

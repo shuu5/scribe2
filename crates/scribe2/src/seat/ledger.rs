@@ -12,8 +12,9 @@ use crate::fleet::json_tree::{self, Tree};
 use crate::polarity::{OnFailure, Polarity, Timing};
 use crate::rules::manifest::Manifest;
 use crate::rules::RuleValue;
+use std::cell::RefCell;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -152,12 +153,54 @@ pub fn read_ledger(bd: &str, cwd: &Path, timeout: Duration) -> Result<Vec<Issue>
     issues_of(&text).ok_or(LedgerError::Unreadable)
 }
 
+/// 1 回の読みを共用する区間の中で読んだ出力（client の名・cwd・結果）。区間の外では `None`。
+type Shared = Vec<(String, PathBuf, Result<String, LedgerError>)>;
+
+thread_local! {
+    /// [`one_read`] の区間（同じ thread の中だけ・区間を出たら捨てる＝長く生きる読み手に古い値を返さない）。
+    static SHARED: RefCell<Option<Shared>> = const { RefCell::new(None) };
+}
+
+/// `body` の間、同じ client と cwd の読みを **1 回の出力**に固定する（doctor の台帳の 2 行が同じ 1 回を分けて
+/// 読む・設計 contract-source.md §6）。区間の中の 2 度目以降の [`read_text`] は子 process を起こさず 1 度目の結果
+/// （読めない周の理由も含む）を返す。入れ子の区間は外側の区間をそのまま使う。
+pub fn one_read<T>(body: impl FnOnce() -> T) -> T {
+    let outer = SHARED.with(|shared| shared.borrow().is_some());
+    if outer {
+        return body();
+    }
+    SHARED.with(|shared| *shared.borrow_mut() = Some(Vec::new()));
+    let found = body();
+    SHARED.with(|shared| *shared.borrow_mut() = None);
+    found
+}
+
 /// 台帳を子 process で読み、stdout の本文（JSON の text）を返す（待ち上限を超えたら殺して `Timeout`・stderr は
 /// 捨てる）。件数の 1 行（[`counts_of`]）と復帰の DATA（`seat::recent`）が**この 1 回の出力**を分けて読む。
+/// [`one_read`] の区間の中では同じ client と cwd の 2 度目を読まない。
 ///
 /// `cwd` は子 process の作業 dir で、**呼び手が名指す**（器は process の cwd を推さない・設計 dispatcher.md §14）。
 /// cwd に出来ない周（無い・dir でない・読めない）は `spawn` が落ちて `Unreadable`＝既存の断りがそのまま受ける。
 pub fn read_text(bd: &str, cwd: &Path, timeout: Duration) -> Result<String, LedgerError> {
+    let hit = SHARED.with(|shared| {
+        shared.borrow().as_ref().and_then(|reads| {
+            reads.iter().find(|(name, dir, _)| name == bd && dir == cwd).map(|(_, _, found)| found.clone())
+        })
+    });
+    if let Some(found) = hit {
+        return found;
+    }
+    let found = spawn_read(bd, cwd, timeout);
+    SHARED.with(|shared| {
+        if let Some(reads) = shared.borrow_mut().as_mut() {
+            reads.push((bd.to_owned(), cwd.to_path_buf(), found.clone()));
+        }
+    });
+    found
+}
+
+/// 子 process を 1 回起こして読む（[`read_text`] の本体）。
+fn spawn_read(bd: &str, cwd: &Path, timeout: Duration) -> Result<String, LedgerError> {
     let mut child = Command::new(bd)
         .args(BD_ARGS)
         .current_dir(cwd)

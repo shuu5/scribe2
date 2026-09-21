@@ -1,0 +1,11 @@
+---
+source: crates/scribe2/src/main.rs
+expression: masked
+---
+scribe2
+scribe2 [version] ([commit])
+ledger: open=8 contracts=4 unresolved=1 bodied=2 memos=4 unpointed=3 unresolved:s2-u.1 bodied:s2-b.1,s2-b.2 unpointed:s2-m.1,s2-m.2,s2-m.3
+ledger: open=1 contracts=1 unresolved=0 bodied=0 memos=0 unpointed=0
+ledger: unreadable reason=ledger-unreadable
+usage: scribe2 <name|--version|doctor|account|rules|fleet|vessel|hook|pipe|runner|lens|seat|polarity|contracts>
+scribe2 [version] ([commit])
