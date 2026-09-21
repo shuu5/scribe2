@@ -49,8 +49,8 @@ terms:
     relationships: [beads, bd, 台帳 adapter]
   - canonical: dolt push
     domain: consumer
-    definition: beads の共有 DB (dolt) を remote へ同期する操作。 admin lane だけが行う。
-    relationships: [beads, admin lane]
+    definition: beads の共有 DB (dolt) を remote へ同期する操作。 orchestrator の席が session の終端で 1 回行う (管理席と admin lane は ADR-0045 で廃止)。
+    relationships: [beads, orchestrator, admin lane]
   - canonical: git
     domain: consumer
     definition: core 依存。 成果の保存と統合の基盤。 v2 からは glue の 1 つとして adapter 経由で叩く。
@@ -155,7 +155,7 @@ terms:
     domain: consumer
     definition: 1 つの Claude Code session が占める作業単位。 役割の値は core が持つ閉じた enum (runner と lens は席ではない・ADR-0022 §2.1)。 状態は SeatState で運ぶ (C3.3)。
     forbidden: [シート]
-    relationships: [fleet, 口座, lease, 管理席, planner]
+    relationships: [fleet, 口座, lease, orchestrator, dispatcher]
   - canonical: 口座
     domain: consumer
     definition: Claude の利用枠 (subscription account)。 使い方の規範は C9、 状態は fleet の DB に host 列付きで持つ。
@@ -262,7 +262,7 @@ terms:
     relationships: [3 クラス, 承認 event, 便]
   - canonical: 開発 session
     domain: consumer
-    definition: 設計・契約・実装・review を行う AI の session (Claude Code)。 登録された席 (役割 planner / 管理席・ADR-0022 §2.1) で動くときだけ権能を持ち、 対話面はそのうち planner の席 (R-C7-1)。 作業記憶の退避と復元の作法を守る (SRS FR23)。
+    definition: 設計・契約・review を行う AI の session (Claude Code)。 登録された席 (役割は orchestrator の 1 つ・ADR-0022 §2.1・ADR-0045) で動くときだけ権能を持ち、 対話面はその席 (R-C7-1)。 実装は runner が便で行い、 席は実装しない (ADR-0045 §2)。
     relationships: [対話面, 契約, 設計 doc, runner, lens]
   - canonical: 契約
     domain: consumer
@@ -491,8 +491,8 @@ terms:
     relationships: [管理 tick, 開発 session]
   - canonical: 配送構造
     domain: consumer
-    definition: runner の質問に誰が答え、 誰が land するかの席の配置 (便を起こすのは席でなく dispatcher・SRS FR68・ADR-0034)。 既定は anchor ごとに planner 1 席 + 管理席 1 席 (SRS FR30 / FR40・ADR-0016 §2.1)。
-    relationships: [planner, 管理席, 便]
+    definition: runner の質問に誰が答え、 誰が land するかの席の配置 (便を起こすのは席でなく dispatcher・SRS FR68・ADR-0034)。 既定は anchor ごとに orchestrator 1 席で、 質問には orchestrator が答え、 着地と merge は dispatcher が持つ (ADR-0045・前の既定「planner 1 席 + 管理席 1 席」は ADR-0016 §2.1・SRS FR30 / FR40)。
+    relationships: [orchestrator, dispatcher, 便]
   - canonical: Blocked
     domain: consumer
     definition: 便の段の 1 つ。 3 クラスを名乗る契約が spawn の手前で承認 event を待っている状態 (SRS FR15 / FR16)。
@@ -507,8 +507,8 @@ terms:
     relationships: [質問 record, 回答 event, 便]
   - canonical: 回答 event
     domain: consumer
-    definition: 契約の所有者 (planner) が質問に答えて fleet に記帳する event (QuestionAnswered・逐語付き・actor は machine)。 user の言葉は承認 event にだけ載る (SRS FR32・ADR-0016 §2.3)。
-    relationships: [質問 record, Questioned, 承認 event, planner]
+    definition: 契約の所有者 (orchestrator の席) が質問に答えて fleet に記帳する event (QuestionAnswered・逐語付き・actor は machine)。 user の言葉は承認 event にだけ載る (SRS FR32・ADR-0016 §2.3・ADR-0045)。
+    relationships: [質問 record, Questioned, 承認 event, orchestrator]
   - canonical: 上限 record
     domain: consumer
     definition: claude が口座の使用上限を伝える専用種別の record (rate_limit_event)。 status と使用率を構造化 field で持ち、 器の上限判定はこの record だけを入力にする (ADR-0012 §2.1)。
@@ -727,7 +727,7 @@ terms:
     relationships: [event log, 出所 pointer, 作業記憶, 対話面, 直命, 決定記録]
   - canonical: 直命
     domain: consumer
-    definition: user が対話面 (planner の席) で言った発言のうち、 席の行動を拘束するもの。 器が直命の表に 1 件ずつ typed に持ち、 逐語は書き換えない (SRS FR65)。 続くかどうかの判定は器でなく user が行う。
+    definition: user が対話面 (orchestrator の席) で言った発言のうち、 席の行動を拘束するもの。 器が直命の表に 1 件ずつ typed に持ち、 逐語は書き換えない (SRS FR65)。 続くかどうかの判定は器でなく user が行う。
     relationships: [直命の表, 対話面, 承認 event]
   - canonical: 決定記録
     domain: consumer
@@ -736,7 +736,7 @@ terms:
     relationships: [直命の表, 出所 pointer, 憲法]
   - canonical: 対話面の作法
     domain: consumer
-    definition: planner の席が user に向けて出す文の形の規則 (信頼度を上位に置く 1 体系・ADR-0032 §2.2)。 則の本文も数も設計 doc dialogue-surface.md が正本で、 planner の雛形が pointer 付きの行で指し、 生成された指示文が運ぶ (SRS FR67)。
+    definition: orchestrator の席が user に向けて出す文の形の規則 (信頼度を上位に置く 1 体系・ADR-0032 §2.2)。 則の本文も数も設計 doc dialogue-surface.md が正本で、 orchestrator の雛形が pointer 付きの行で指し、 生成された指示文が運ぶ (SRS FR67・ADR-0045)。
     relationships: [対話面, 役割, 作業記憶, 席の指示文]
     flagged_ambiguities: ["作法: 作業記憶の作法 (FR23・器が守る機械の作法の列) と対話面の作法 (FR67・文の形) は別義"]
   - canonical: 自動圧縮
