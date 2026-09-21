@@ -12,6 +12,8 @@
 
 // 純粋な移動（`flipcheck.rs` の git / tar の群を `flipcheck/git.rs` へ・歯は足していない・s2-07l.372）。
 // flip-check: moved s2-07l.372
+// 純粋な移動（`flipcheck.rs` の nextest を撃って出力を読む群を `flipcheck/nextest.rs` へ・歯は足していない・s2-07l.500）。
+// flip-check: moved s2-07l.500
 
 use super::{
     base_not_green, failed_tests, is_test_file, judge, judge_into, nextest_args, parse_base,
