@@ -710,6 +710,16 @@ write-set = ["crates/scribe2/src/pipe/review.rs", "crates/scribe2/tests/e2e/pipe
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail pipe_review_unaddressed_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_intake_repeat_"]
 size = "S"
 done = "(1) at に path でない項目（歯の接頭辞・§ の番号）が混ざった teeth-outside-write-set の後、path の項目を write-set に足した契約が受付を通る (2) path の項目が write-set に無い契約は従来どおり finding-unaddressed で断られ、理由に測った項目と測れなかった項目の数を出す (3) 既存の pipe_intake_repeat_ / pipe_review_unaddressed_ の歯が 1 字も変わらず緑"
+
+[[contract]]
+id = "ak"
+title = "nextest 行の読み手が引数を取る target の旗（--bin / --bench / --example / -E）の次の語を消費して filter 語に数えない — UNREAD_TARGET_FLAGS を引数を取る旗と取らない旗の閉じた 2 slice に分け、scope の倒し方（Crate・fail-closed）と filter 語の規則は不変"
+req = ["FR48", "FR55"]
+section = "36"
+write-set = ["crates/scribe2/src/pipe/closure.rs", "crates/scribe2/src/pipe/closure/derive.rs"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail contract_derive_target_flag_"]
+size = "S"
+done = "(1) 引数を取る旗（--bin / --bench / --example / -E）の次の 1 語が filter 語にならず消費され、取らない旗（--bins / --benches / --examples / --tests / --all-targets）は従来どおり (2) 引数を取る旗が行末なら nextest_filter が None (3) scope は両方とも Crate のまま・-p / --lib / --test の読みと filter 語の規則（最後の非旗の語）は不変 (4) -p x --bin x foo_ が filter foo_・-p x --bin x --test face foo_ が filter foo_ と Crate・-p x --bin が None・-p x --bins foo_ が filter foo_・-p x -E expr bar_ が filter bar_ (5) 既存の contract_derive_ の歯が 1 字も変わらず緑"
 <!-- contracts:end -->
 
 
@@ -757,3 +767,13 @@ done = "(1) at に path でない項目（歯の接頭辞・§ の番号）が�
 - 触らない: `literal_unaddressed` / `section_unaddressed`（識別子と § はそれぞれの物差しが読む）・同型 N 回の門（`SameKindRepeated`）・lens の雛形（`at` の形を閉じるのは行 ah 以後の別の行）・`FindingKind` の 7 語。
 - 歯（in-file は `pipe_review_unaddressed_` 接頭辞・`review.rs` の tests・e2e は新設の歯が `pipe_intake_repeat_teeth_outside_write_set_` 接頭辞で、verify の行は既存の `pipe_intake_repeat_` の歯 9 本ごと撃つ〔done (3) の不変を同じ行で測る〕・`tests/e2e/pipe/intake.rs`・既存の `failed_runs` / `Again` / `assert_refused` の型）: (a) at が toy の src/other.rs と歯の接頭辞と § の番号の 3 項目の後、src/other.rs を write-set に足した契約が通る（base は断る → RED）／(b) src/other.rs を足さない契約は従来どおり断られ、理由に src/other.rs だけが名指され測れない 2 件が数で出る／(c) in-file: 物差しが path の項目だけを返す（母集団 3・path 1）。
 - 却下: lens の雛形だけを直す（過去の便の `at` は書き換わらない・.513 が止まったまま）／`at` の path でない項目を「対応済み」と読む（測れないを「測った」に読み替える・C10）／`FindingUnaddressed` を `SameKindRepeated` の後ろに回す（材料が変われば通るが、path の項目が未対応でも通る＝門が緩む）。
+
+## 36. nextest 行の読み手が引数を取る target の旗（`--bin` / `--bench` / `--example` / `-E`）の次の語を filter 語に数えない（契約表の行 ak）
+
+やさしく言うと: verify に `--bin folio` と書くと、器は「folio」という名の歯を探し、fn 名に folio を含む無関係な歯の file が write-set の外だと断る。旗の後ろの語は target の名であって filter ではない。
+
+- 何が起きているか（consumer の報告 2026-09-22・別 repo の便 87・orchestrator が code で再現・verified・main f133ac3）: verify の行 `cargo nextest run -p <crate> --bin <crate> --test <t1> --test <t2> …` を `pipe preflight` が `teeth-outside-write-set` で断った（fn 名に crate 名を含む歯の file 3 本を名指し）。現物: `crates/scribe2/src/pipe/closure/derive.rs` の `nextest_filter` は `--test` の次の語を `words.next()` で消費するが、`UNREAD_TARGET_FLAGS`（`crates/scribe2/src/pipe/closure.rs`）の旗は scope を `Crate` へ倒すだけで次の語を消費せず、続く `else if !word.starts_with('-')` が旗の引数を filter 語に読む（`--test` との非対称）。filter 語は最後の非旗の語が勝つので、本 doc の行 e の verify（`--bin scribe2 --no-tests=fail ledger_lint_`）は filter 語が旗の後ろに在って偶然通っていた。consumer は verify から `--bin` を外す回避を契約に書いた（散文の作法＝N2・器の側で直す）。
+- 形: (1) `UNREAD_TARGET_FLAGS` を **引数を取る旗**（`--bin` / `--bench` / `--example` / `-E`・次の 1 語を消費する）と **取らない旗**（`--bins` / `--benches` / `--examples` / `--tests` / `--all-targets`）の閉じた 2 slice に分ける（宣言順・`closure.rs` の const・旗の表は増やさない）。scope の倒し方（どちらも `Crate`・fail-closed）は不変。(2) 引数を取る旗が行末に在る（次の語が無い）周は `?` で `None`＝行を読めないと断る（`--test` と同じ極性・黙って通さない）。(3) filter 語の規則（最後の非旗の語・fn 名の substring）と `-p` / `--lib` / `--test` の読みは不変。
+- 歯（in-file・`crates/scribe2/src/pipe/closure/derive.rs` の `mod tests`・接頭辞 `contract_derive_target_flag_`・`nextest_filter` の pure な歯）: (a) `-p x --bin x foo_` → filter `foo_`・scope `Crate`。(b) `-p x --bin x --test face foo_` → filter `foo_`・scope `Crate`（scope の旗と読めない旗の並び＝従来どおり広い側）。(c) `-p x --bin`（引数なし）→ `None`。(d) `-p x --bins foo_` → filter `foo_`（取らない旗は従来どおり）。(e) `-p x -E expr bar_` → filter `bar_`（式 1 語を消費）。
+- 触らない: scope の 3 値と置き場の導出（§28）・`PACKAGE_FLAGS` / `LIB_FLAG` / `TEST_FLAG`・Declared の門（§20）が同じ 1 関数を通ること・filter 語の意味・`teeth-outside-write-set` の断りの字面と極性。
+- 却下: consumer が `--bin` を verify から外す運用のまま（散文の作法・N2・他の consumer が同じ穴を踏む）／旗の引数を filter 語にも読む（名と filter の 2 義・偽陽性の根そのもの）／nextest の全旗の表を持つ（旗が増えるたびに表が育つ・「引数を取るか」の 2 slice で足りる）／`-E` の式を scope に読む（式の解釈は器の外・従来どおり広い側）。
