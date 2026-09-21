@@ -7,7 +7,7 @@ use super::gate::Verdict;
 use super::land::{verdict_of, Land, MAIN_REF};
 use super::{git_line, git_ok, worktree_path};
 use crate::fleet::store;
-use crate::fleet::{replay, Completion, Event, EventKind, Stage, Timeout};
+use crate::fleet::{replay, Completion, Event, EventKind, Run, Stage, State, Timeout};
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -130,10 +130,15 @@ fn queue_of(state_dir: &Path) -> Option<Vec<Queued>> {
     queue_from(state_dir, &store::read_all(state_dir).ok()?)
 }
 
-/// [`queue_of`] の本体（読んだ log を受ける・窓の判定〔[`window_now`]〕が同じ 1 回の読みから追随中の便も導く）。
+/// [`queue_of`] の本体（読んだ log を受けて replay する）。
 fn queue_from(state_dir: &Path, events: &[Event]) -> Option<Vec<Queued>> {
+    queue_with(state_dir, events, &replay(events))
+}
+
+/// [`queue_from`] の本体（replay 済みの現在地を受ける・窓の判定〔[`window_now`]〕が同じ 1 回の replay から
+/// 追随中の便も導く＝log を 2 度読まない・設計 pipeline.md §47）。
+fn queue_with(state_dir: &Path, events: &[Event], state: &State) -> Option<Vec<Queued>> {
     let gated_at = first_gated_at(events);
-    let state = replay(events);
     let mut queue = Vec::new();
     for (id, run) in &state.runs {
         let first = gated_at.get(id.as_str()).map(|ts| (*ts).to_owned());
@@ -220,7 +225,8 @@ impl Window {
 /// `Gated` を通った ∧ worktree が実在）で、判定を読めない便も数える（PASS でないと測れていない便を外さない・C10）。
 pub(crate) fn window_now(state_dir: &Path, repo: &Path) -> Window {
     let runs = store::read_all(state_dir).ok().and_then(|events| {
-        let queued = queue_from(state_dir, &events)?
+        let state = replay(&events);
+        let queued = queue_with(state_dir, &events, &state)?
             .into_iter()
             .filter(|found| {
                 may_queue(found.stage, found.gated_at.is_some())
@@ -229,20 +235,25 @@ pub(crate) fn window_now(state_dir: &Path, repo: &Path) -> Window {
             })
             .map(|found| found.run)
             .collect();
-        Some((queued, following_of(&events)))
+        Some((queued, following_of(&events, &state.runs)))
     });
     Window { runs, main: main_read(repo) }
 }
 
-/// 追随中の便（**pure**）: 最新の `RunStage` が `Implemented` で detail が [`FOLLOWING`] で始まる便（run id の辞書順）。
-fn following_of(events: &[Event]) -> Vec<String> {
+/// 追随中の便（**pure**・設計 pipeline.md §47 が §19 約束 2 (b) を supersede）: 最新の `RunStage` が `Implemented`
+/// ∧ detail が [`FOLLOWING`] で始まる ∧ **replay した段が終端でない**（[`may_queue`] と同じ 3 語 `Landed` / `Failed` /
+/// `Stopped`）便（run id の辞書順）。`RunStopped` / `RunDone` は kind が `RunStage` でないので最後の `RunStage` は
+/// `Implemented rebase:` のまま残る＝終端は同じ 1 回の replay の段（`runs`）で読む（log を 2 度読まない）。終端の
+/// 記帳が無い便（runner が死んだ便）は従来どおり数える。
+fn following_of(events: &[Event], runs: &BTreeMap<String, Run>) -> Vec<String> {
     let mut last: BTreeMap<&str, &Event> = BTreeMap::new();
     for event in events.iter().filter(|event| event.kind == EventKind::RunStage) {
         last.insert(event.run.as_str(), event);
     }
     last.into_iter()
-        .filter(|(_, event)| {
-            event.stage == Some(Stage::Implemented) && event.detail.as_deref().is_some_and(|detail| detail.starts_with(FOLLOWING))
+        .filter(|(run, event)| {
+            let terminal = runs.get(*run).is_some_and(|found| matches!(found.stage, Stage::Landed | Stage::Failed | Stage::Stopped));
+            event.stage == Some(Stage::Implemented) && event.detail.as_deref().is_some_and(|detail| detail.starts_with(FOLLOWING)) && !terminal
         })
         .map(|(run, _)| run.to_owned())
         .collect()
@@ -348,9 +359,9 @@ pub(super) fn await_turn(entry: &Land<'_>) -> Order {
 #[cfg(test)]
 mod tests {
     // flip-check: moved s2-07l.253
-    use super::{after_wake, await_turn, first_gated_at, train_in, turn_in, Next, Order, Queued, Turn};
+    use super::{after_wake, await_turn, first_gated_at, following_of, train_in, turn_in, Next, Order, Queued, Turn};
     use crate::fleet::store::LockPolicy;
-    use crate::fleet::{wait, Completion, Event, EventKind, Stage};
+    use crate::fleet::{replay, wait, Completion, Event, EventKind, Stage};
     use crate::pipe::contract::Contract;
     use crate::pipe::fixture::{contract, gated_run, scratch};
     use crate::pipe::gate::{Limits, Verdict};
@@ -509,10 +520,15 @@ mod tests {
 
     /// log の 1 行の fixture（`RunStage` の段と ts だけを持つ）。
     fn event(run: &str, stage: Stage, ts: &str) -> Event {
+        event_with(run, EventKind::RunStage, stage, ts, None)
+    }
+
+    /// log の 1 行の fixture（kind と detail も取る・`RunStopped` / `RunDone` の終端の記帳を並べるため）。
+    fn event_with(run: &str, kind: EventKind, stage: Stage, ts: &str, detail: Option<&str>) -> Event {
         Event {
             schema: 1,
             ts: ts.to_owned(),
-            kind: EventKind::RunStage,
+            kind,
             run: run.to_owned(),
             bead: "b".to_owned(),
             host: "h".to_owned(),
@@ -520,12 +536,64 @@ mod tests {
             stage: Some(stage),
             seat: None,
             pid: None,
-            detail: None,
+            detail: detail.map(str::to_owned),
             allowance: None,
             registration: None,
             mark: None,
             account: None,
         }
+    }
+
+    /// `Implemented rebase:a..b` の記帳（追随の撃ち直し・§18）。
+    fn following(run: &str, ts: &str) -> Event {
+        event_with(run, EventKind::RunStage, Stage::Implemented, ts, Some("rebase:a..b"))
+    }
+
+    /// 追随中の便を event の列から導く（本番と同じく replay の段を重ねる）。
+    fn following_in(events: &[Event]) -> Vec<String> {
+        following_of(events, &replay(events).runs)
+    }
+
+    /// (a) `Implemented rebase:` の後に `RunStopped`（段 `Stopped`）で止めた便は追随中に数えない（設計 pipeline.md §47・
+    /// 止めた便が窓を永久に閉じていた 2026-09-22 の実測）。
+    #[test]
+    fn pipe_window_following_leaves_out_a_stopped_run() {
+        let events = [following("stopped", EARLY), event_with("stopped", EventKind::RunStopped, Stage::Stopped, MID, Some("stop"))];
+        assert!(following_in(&events).is_empty(), "止めた便は追随中でない");
+    }
+
+    /// (b) `Implemented rebase:` の後に `RunDone` `Landed` で終えた便は追随中に数えない。
+    #[test]
+    fn pipe_window_following_leaves_out_a_landed_run() {
+        let events = [following("landed", EARLY), event_with("landed", EventKind::RunDone, Stage::Landed, MID, Some("landed"))];
+        assert!(following_in(&events).is_empty(), "終えた便は追随中でない");
+    }
+
+    /// (c) `Implemented rebase:` のまま終端の記帳が無い便は従来どおり数える（(a)(b) が「追随中を全部外す」変異でない
+    /// ことの対）。止めた便・終えた便と同じ列に並べても、その 1 本だけが残る。
+    #[test]
+    fn pipe_window_following_keeps_a_run_without_a_terminal_record() {
+        let events = [
+            following("stopped", EARLY),
+            event_with("stopped", EventKind::RunStopped, Stage::Stopped, MID, Some("stop")),
+            following("landed", EARLY),
+            event_with("landed", EventKind::RunDone, Stage::Landed, MID, Some("landed")),
+            following("alive", LATE),
+        ];
+        assert_eq!(following_in(&events), vec!["alive"], "終端の無い追随中の便だけ");
+    }
+
+    /// (d) 最新の `RunStage` が `Implemented` でも detail が `rebase:` で始まらない便・detail の無い便・`Gated` へ
+    /// 進んだ便は数えない（不変）。
+    #[test]
+    fn pipe_window_following_leaves_out_runs_whose_detail_is_not_a_rebase() {
+        let events = [
+            event_with("plain", EventKind::RunStage, Stage::Implemented, EARLY, Some("done")),
+            event("bare", Stage::Implemented, EARLY),
+            following("gated", EARLY),
+            event("gated", Stage::Gated, MID),
+        ];
+        assert!(following_in(&events).is_empty(), "rebase: で始まらない便は追随中でない");
     }
 
     /// 列の鍵は**最初の** `Gated` の ts（撃ち直しで `Gated` が増えても動かない）。`Gated` を通っていない便は鍵を持たない。
