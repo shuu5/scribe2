@@ -359,7 +359,7 @@ of = "n"
 n = 1
 text = "起こす前に bead 名義の DispatchMark（mark = Launched・detail = 起こす subcommand の 1 語）を既存の mark の口で書き、書けない周は起こさない"
 files = ["crates/scribe2/src/fleet/mod.rs", "crates/scribe2/src/pipe/dispatch.rs"]
-symbols = ["fleet::Mark", "pipe::dispatch::marks_of"]
+symbols = ["+Mark::Launched", "marks_of("]
 teeth = ["pipe_dispatch_launched_mark_is_written_before_the_child_is_spawned"]
 place = "crates/scribe2/tests/e2e/pipe/dispatch.rs"
 fixture = "偽の台帳に ready の bead 1 本と toy repo を置いて pipe dispatch の 1 周を撃つ。負の枝は event log を読み取り専用にして印が書けない周"
@@ -370,7 +370,7 @@ of = "n"
 n = 2
 text = "最新の Launched より後に RunCreated も Release の印も無い bead は起こさず、dispatch ls の理由が launched:<ts> になる（WaitReason に 1 値 Launched）"
 files = ["crates/scribe2/src/pipe/dispatch.rs"]
-symbols = ["pipe::dispatch::WaitReason"]
+symbols = ["+WaitReason::Launched"]
 teeth = ["pipe_dispatch_launched_bead_is_not_relaunched_until_run_created_or_release"]
 place = "crates/scribe2/tests/e2e/pipe/dispatch.rs"
 fixture = "偽の台帳の ready の bead に DispatchMark launched だけを積んだ event log で 2 周目を撃つ。対照は Launched の後に RunCreated を積んだ log と、Launched の後に Release を積んだ log の 2 つ"
@@ -399,7 +399,7 @@ of = "o"
 n = 1
 text = "列の 1 周は起こす前に health::now を読み、act が Wait の周は 1 本も起こさず WaitReason::HostBusy（ls の理由 host-busy）、Unmeasured は act のとおり起こす。per_core は gate と同じ 2 行を同じ 1 関数で読む（breaker を health.rs 側へ寄せる）"
 files = ["crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/health.rs", "crates/scribe2/src/pipe/gate.rs"]
-symbols = ["pipe::dispatch::WaitReason", "pipe::health::Breaker"]
+symbols = ["+WaitReason::HostBusy", "pipe::health::Breaker"]
 teeth = ["pipe_dispatch_host_busy_round_launches_nothing"]
 place = "crates/scribe2/tests/e2e/pipe/dispatch.rs"
 fixture = "rules fixture の host.runnable_per_core を 0（閾値 0 = 常に Busy）にした周と既定の値の周の対で、偽の台帳に ready の bead 1 本を置いて 1 周を撃つ"
@@ -410,7 +410,7 @@ of = "o"
 n = 2
 text = "live の Stage::Intake の枝を運転手の札で読む: Live なら true・Dead / Absent なら false・Unreadable なら None（他の段の枝は不変・新しい probe は足さない）"
 files = ["crates/scribe2/src/pipe/cli/state.rs"]
-symbols = ["pipe::cli::state::live", "pipe::Ticket"]
+symbols = ["live(", "Ticket::Live"]
 teeth = ["pipe_dispatch_intake_run_without_a_live_driver_is_not_live"]
 place = "crates/scribe2/tests/e2e/pipe/dispatch.rs"
 fixture = "RunCreated stage=Intake だけを持つ run を state dir に置き、札の 4 形（無い・死んだ pid・生きた pid〔歯の自分〕・読めない）で対照。同じ write-set の別 bead を候補にする"
@@ -428,7 +428,7 @@ of = "p"
 n = 1
 text = "運転手の終端の周で最後の段が Reviewed / Gated の FAIL・INCONCLUSIVE、Failed、Questioned、Stopped のとき、fleet の replay の State.registrations から (Role::Orchestrator, anchor = repo) の最新 row の target へ 1 行を deliver_within で送り、stdout に notify=<delivered|refused:<理由>|unconfirmed|no-seat> を残す（row が無い周は送らず no-seat・便の rc は変えない）"
 files = ["crates/scribe2/src/pipe/cli.rs", "+crates/scribe2/src/pipe/notify.rs", "crates/scribe2/tests/e2e/pipe.rs"]
-symbols = ["seat::inject::Request", "fleet::replay::State"]
+symbols = ["seat::inject::Request"]
 teeth = ["pipe_notify_terminal_failure_reaches_the_registered_seat_pane", "pipe_notify_without_a_registered_seat_reports_no_seat"]
 place = "+crates/scribe2/tests/e2e/pipe/notify.rs"
 fixture = "偽の tmux（send-keys の引数を file に記録する script）を PATH に置き、SeatRegistered の row（role orchestrator・anchor = toy repo・target = 任意の pane 名）を state dir に積んだ上で、live な run に pipe stop --run を撃つ（Stopped は終端の 1 つ）。負の枝は row を積まない"
