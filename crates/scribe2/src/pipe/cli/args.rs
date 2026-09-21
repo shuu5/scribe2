@@ -80,8 +80,7 @@ pub(super) fn list_row(manifest: &Manifest, id: &str) -> Result<Vec<String>, Str
 
 /// 置き場。`--state-dir` が上書きし、無ければ repo に紐づいた git 設定から読む。
 ///
-/// repo の解き方は [`repo_of`] ただ 1 本（`--repo` → cwd の root）。ここで cwd だけを
-/// 見ると、`--repo` を渡した周に**別の repo の置き場**を読んでしまう。
+/// repo の解き方は [`repo_of`] ただ 1 本（`--repo`・無ければ断る＝cwd を読まない）。
 pub(in crate::pipe) fn state_dir_of(args: &[String]) -> Result<PathBuf, String> {
     if let Some(found) = flag(args, "--state-dir")? {
         return Ok(PathBuf::from(found));
@@ -99,7 +98,7 @@ pub(in crate::pipe) const REPO_FLAG: &str = "--repo";
 /// 値は `std::path::absolute` で**絶対にしてから**返す（標準 library・symlink も存在も見ない＝席の打刻の
 /// 絶対化と同じ関数）。相対のまま使うと便の worktree の場所も相対になり、cwd を worktree に移した子から
 /// 解けない（2026-09-19 の実測）。絶対にできない入力は空文字だけで、断る variant を足すより直す 1 行が
-/// 小さい（C17.4）——その空文字は理由の 1 行で断る（NFR4）。無い周は `None`（cwd へ落とすかは呼び手が決める）。
+/// 小さい（C17.4）——その空文字は理由の 1 行で断る（NFR4）。無い周は `None`（断るか別の面から解くかは呼び手が決める）。
 pub(in crate::pipe) fn repo_flag(args: &[String]) -> Result<Option<PathBuf>, String> {
     let Some(found) = flag(args, REPO_FLAG)? else {
         return Ok(None);
@@ -109,13 +108,12 @@ pub(in crate::pipe) fn repo_flag(args: &[String]) -> Result<Option<PathBuf>, Str
         .map_err(|err| format!("{REPO_FLAG} {found} を絶対 path にできない: {err}"))
 }
 
-/// 対象 repo。`--repo` が無ければ cwd の repo root。
+/// 対象 repo。`--repo` が無ければ flag 不在の断り（`need` と同じ字面）で、**cwd を読まない**（設計 pipeline.md §15）。
+///
+/// cwd から解くと、cargo-mutants の一時コピーのように `.git` が本物の gitdir を指す木の中で、呼び手の指さない
+/// repo に worktree と branch が切られる（2026-09-15 の実測）。
 pub(super) fn repo_of(args: &[String]) -> Result<PathBuf, String> {
-    if let Some(found) = repo_flag(args)? {
-        return Ok(found);
-    }
-    let cwd = std::env::current_dir().map_err(|err| format!("cwd を解決できない: {err}"))?;
-    vessel::repo_root(&cwd).ok_or("repo の root を解決できない".to_owned())
+    repo_flag(args)?.ok_or(format!("{REPO_FLAG} が要る"))
 }
 
 /// 前提違反・使い方の誤り（rc 1 + stderr 1 行・何もしない）。

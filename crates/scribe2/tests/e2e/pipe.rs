@@ -1214,12 +1214,13 @@ pub(super) fn run_pipe_with_path(path: &str, args: &[&str]) -> Output {
 
 // ───── 歯の cwd を repo の外に固定する（`s2-07l.381`・設計 pipeline.md §28・接頭辞 `pipe_hermetic_`） ─────
 
-/// `--state-dir` も `--repo` も無い `pipe show` の断り: [`bin_cmd`] の cwd が git repo でない周だけ、cwd の fallback
-/// は「repo の root を解決できない」で rc 1 になる（cwd を継ぐ木では anchor の置き場を読んで別の断りになる）。
+/// `--state-dir` も `--repo` も無い `pipe show` の断り: 器は cwd を読まず「`--repo` が要る」で rc 1 になる（設計
+/// pipeline.md §15・`s2-07l.310` で cwd の fallback を落とした）。cwd を読む変異は [`bin_cmd`] の cwd（git repo
+/// でない）で「repo の root を解決できない」になり、この字面から外れる。
 fn assert_show_refused_without_repo(out: &Output, helper: &str) {
     let err = stderr_of(out);
-    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{helper}: cwd の fallback は rc 1 で断る: {err}");
-    assert!(err.contains("repo の root を解決できない"), "{helper}: cwd は git repo でない: {err}");
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{helper}: flag 不在は rc 1 で断る: {err}");
+    assert!(err.contains("--repo が要る"), "{helper}: cwd を読まず flag 不在で断る: {err}");
 }
 
 /// (2) 親の helper `run_pipe` は cwd を repo の外に固定して起こす。

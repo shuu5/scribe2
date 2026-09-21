@@ -1021,7 +1021,8 @@ fn remember_repo(state_dir: &Path, id: &str, repo: &Path) -> Result<(), String> 
         .map_err(|err| format!("{} を書けない: {err}", path.display()))
 }
 
-/// 便の repo。`--repo` が上書きし（読み手は [`repo_flag`] の 1 本・絶対 path）、無ければ写し面 → cwd の順で解く。
+/// 便の repo。`--repo` が上書きし（読み手は [`repo_flag`] の 1 本・絶対 path）、無ければ写し面から解く。写し面も
+/// 無い周は [`repo_of`] の flag 不在の断り（cwd を読まない・設計 pipeline.md §15）。
 pub(super) fn run_repo(args: &[String], state_dir: &Path, id: &str) -> Result<PathBuf, String> {
     if let Some(found) = repo_flag(args)? {
         return Ok(found);

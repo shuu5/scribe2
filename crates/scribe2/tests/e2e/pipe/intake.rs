@@ -3407,3 +3407,112 @@ fn pipe_intake_depends_preflight_follows_the_same_judgement() {
     assert_eq!(run_dirs(&state), Vec::<String>::new(), "run dir を作らない");
     clean(&[&missing, &state]);
 }
+
+// ───── `--repo` / `--state-dir` の cwd fallback を落とす（`s2-07l.310`・設計 pipeline.md §15・接頭辞 `pipe_repo_required_`） ─────
+
+/// repo の git が記録する worktree の本数（main の木を含む）。
+fn worktree_count(repo: &Path) -> usize {
+    git(repo, &["worktree", "list", "--porcelain"])
+        .lines()
+        .filter(|line| line.starts_with("worktree "))
+        .count()
+}
+
+/// `pipe` を **cwd を toy repo（`vessel init` 済み＝置き場も紐づいた木）にして**撃つ。cwd が主題なので
+/// [`pipe_cmd`] の固定した cwd に自分の `current_dir` を後置する（後の指定が勝つ）。道具箱は argv が
+/// `--state-dir` を持たない周も同じ置き場の下のものを積む（救われる周の runner を実 `systemd-run` へ戻さない）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn run_pipe_in_repo(repo: &Path, state: &Path, args: &[&str]) -> Output {
+    pipe_cmd(args)
+        .env("PATH", crate::toolbox_path(state))
+        .current_dir(repo)
+        .output()
+        .expect("binary を起動できる")
+}
+
+/// 断りの形: rc 1・stderr は flag 不在の 1 行だけ・worktree の本数と event の件数の**対**が撃つ前と同じ。
+fn assert_refused_without_repo(out: &Output, before: (usize, usize), repo: &Path, state: &Path, label: &str) {
+    let err = stderr_of(out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{label}: rc 1: {err}");
+    assert_eq!(err.lines().collect::<Vec<&str>>(), vec!["pipe: --repo が要る"], "{label}: flag 不在の断り 1 行: {err}");
+    assert_eq!(
+        (worktree_count(repo), event_count(state)),
+        before,
+        "{label}: (worktree, event) は 1 つも増えない（cwd の repo に落ちない）"
+    );
+}
+
+/// (1) 写し面を消した便に `--repo` 無しで spawn すると、cwd（その便の repo そのもの）を読まず flag 不在の 1 行で
+/// rc 1——worktree も event も増えない。対: 同じ便・同じ cwd に `--repo` を渡した周は起きる（worktree が 1 つ増える）
+/// ＝断りの理由は flag の不在だけ。
+#[test]
+fn pipe_repo_required_spawn_refuses_a_run_without_its_repo_copy() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = intake(&repo, &state, &path);
+    fs::remove_file(vessel::pipe::repo_path(&state, &id)).ok();
+    assert!(!vessel::pipe::repo_path(&state, &id).exists(), "写し面を消した");
+    let (state_arg, repo_arg) = (state.display().to_string(), repo.display().to_string());
+    let before = (worktree_count(&repo), event_count(&state));
+    let out = run_pipe_in_repo(&repo, &state, &["spawn", "--run", &id, "--state-dir", &state_arg, "--runner", TOY_COMMIT]);
+    assert_refused_without_repo(&out, before, &repo, &state, "spawn");
+    let out = run_pipe_in_repo(
+        &repo,
+        &state,
+        &["spawn", "--run", &id, "--repo", &repo_arg, "--state-dir", &state_arg, "--runner", TOY_COMMIT],
+    );
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "--repo の在る周は起きる: {}", stderr_of(&out));
+    assert_eq!(worktree_count(&repo), before.0 + 1, "--repo の在る周は worktree が 1 つ増える");
+    clean(&[&repo, &state]);
+}
+
+/// (2) 写し面の無い便の repo 解決は spawn 以外の段（gate）でも同じ断り——lens を起こさず、worktree も event も
+/// 増えない。対: `--repo` を渡した周は判定まで進み event が増える。
+#[test]
+fn pipe_repo_required_run_repo_refuses_gate_without_its_repo_copy() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &path);
+    fs::remove_file(vessel::pipe::repo_path(&state, &id)).ok();
+    assert!(!vessel::pipe::repo_path(&state, &id).exists(), "写し面を消した");
+    let rules = write_rules(&state, "gate.toml", 1, 150_000).display().to_string();
+    let marker = state.join("gate-lens-ran");
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let (state_arg, repo_arg) = (state.display().to_string(), repo.display().to_string());
+    let before = (worktree_count(&repo), event_count(&state));
+    let out = run_pipe_in_repo(
+        &repo,
+        &state,
+        &["gate", "--run", &id, "--state-dir", &state_arg, "--rules", &rules, "--lens", &lens],
+    );
+    assert_refused_without_repo(&out, before, &repo, &state, "gate");
+    assert!(!marker.exists(), "断った周は lens を起こさない");
+    run_pipe_in_repo(
+        &repo,
+        &state,
+        &["gate", "--run", &id, "--repo", &repo_arg, "--state-dir", &state_arg, "--rules", &rules, "--lens", &lens],
+    );
+    assert!(event_count(&state) > before.1, "--repo の在る周は判定まで進み event が増える");
+    clean(&[&repo, &state]);
+}
+
+/// (3) `--state-dir` も `--repo` も無い周の置き場の解決は、cwd（置き場の紐づいた repo）を読まず同じ断り——写し面は
+/// 在っても置き場に届かない。対: `--repo` だけ在る周はその repo の git 設定から置き場を解いて起きる（救われる）。
+#[test]
+fn pipe_repo_required_state_dir_refuses_without_either_flag() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = intake(&repo, &state, &path);
+    let repo_arg = repo.display().to_string();
+    let before = (worktree_count(&repo), event_count(&state));
+    let out = run_pipe_in_repo(&repo, &state, &["spawn", "--run", &id, "--runner", TOY_COMMIT]);
+    assert_refused_without_repo(&out, before, &repo, &state, "spawn（flag 無し）");
+    let out = run_pipe_in_repo(&repo, &state, &["spawn", "--run", &id, "--repo", &repo_arg, "--runner", TOY_COMMIT]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "--repo だけ在る周は救われる: {}", stderr_of(&out));
+    assert_eq!(worktree_count(&repo), before.0 + 1, "救われた周は worktree が 1 つ増える");
+    assert!(event_count(&state) > before.1, "救われた周は紐づいた置き場に event を書く");
+    clean(&[&repo, &state]);
+}
