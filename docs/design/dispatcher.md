@@ -264,6 +264,21 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
 - 触らない: `guard_input` の 3 値と `Foreign` の極性・`pass_input`（次の注入の入口の修復）・`SETTLE_STEP` / `SETTLE_TRIES` の値・記録の schema と `tick.jsonl` の置き場・§19 の契機と本文と宛先・event（通知は記帳しない）。
 - 却下: Claude Code の session 間 message（口座 dir の `sessions/<pid>.json` が指す socket）で送る（公開 docs に無い内部 protocol・版で変わる・他人の帳簿に書く型＝[consumer-sync.md](./consumer-sync.md) §11 の `installed_plugins.json` と同じ却下）／notify が自分で pane を読んで再送する（送達の読みが 2 本になる・C3.4）／Enter を常に 2 回送る（消費済みの周に空の submit が 1 回入る）／席の hook が通知を poll する（席の turn が無いと読めない＝§19 の却下と同じ穴）。
 
+## 22. 審査を測れなかった便（`Reviewed` の INCONCLUSIVE `kind:unparsed`）を `release` で列へ戻す（契約表の行 s）
+
+やさしく言うと: 審査役の答えが 1 行も返らなかった便（lens の出力に判定の行が無い）は「契約に穴がある」のではなく「測れなかった」。今はこの便も審査 FAIL と同じく契約の字か § を変えるまで列に戻らず、席が `release` を打っても効かない。測れなかった周だけは印で戻せるようにする。
+
+- 出所（orchestrator の実測 2026-09-21T17:24Z・verified）: 便 `s2-07l.388` の審査が `verdict:INCONCLUSIVE kind:unparsed`（`review.json` の evidence = lens の出力に json の行が無い）で終端。契約も § も正しいので変える理由が無く、`pipe dispatch release` を打っても `dispatch ls` の理由は `settled:<sha>/Reviewed` のまま（§12 の「戻さない段」に `Reviewed` が丸ごと入っている）。同じ周に測れた便 `s2-07l.502` の `INCONCLUSIVE kind:section-material-missing` は § を直す正規の経路（§16 の鍵）で戻った＝2 つは別物である。
+- 現物（verified・main 8af3516）: 列外の判定は `crates/scribe2/src/pipe/dispatch/candidates.rs` の `settled`（直前の同じ契約の便が終端 → `requeues(stage) && released_after(…)` → `section_keyed(stage) && section_moved(…)` の順）。`requeues` は段の型の網羅 match 1 本で `Failed` / `Stopped` / `Gated` だけを戻し、`Reviewed` は判定の中身を見ずに戻さない。in-file の歯 `pipe_dispatch_section_key_applies_to_reviewed_only` が「§ の鍵と `release` の印は同じ段を持たない」を全段で測る（この歯は 1 字も変えない）。判定の読み手は `crates/scribe2/src/pipe/review.rs` の `judgement_of`（`review.json` → `Judgement { verdict, kind, at }`・PASS でない周の `kind` は必ず `Some`・語でない周は `Unparsed`）で、`unparsed` は [FR49](../../design-intent/spec/srs.html#FR49) が「PASS でない便は FAIL として終端」と定める判定の語ではなく、lens の欠けを契約の型に化けさせないための語（C10）。
+- 形:
+  1. `settled` に **判定で引く 2 つ目の戻し**を足す: 段が `Reviewed` ∧ `judgement_of` が `Some` ∧ verdict が `INCONCLUSIVE` ∧ kind が `Unparsed` の便は、`released_after` が真の周に列外にしない。段で引く `requeues` は**変えない**（`Reviewed` は従来どおり false・段の census の歯は不変）。判定で引く述語は `candidates.rs` の pure な関数 1 つ（`Judgement` を受けて bool）に置き、`settled` はそれを `requeues` の次に読む（順: 段の戻し → 判定の戻し → § の鍵）。
+  2. 戻すのは **INCONCLUSIVE ∧ unparsed の対だけ**: `FAIL`（kind を問わず・FR49 の判定）・`INCONCLUSIVE` で kind が他の 6 語（審査役が材料を読んで出した理由）・`review.json` が無い / 読めない（`None`・fail-closed で列外のまま）は戻さない。
+  3. 印 1 回で起き直るのは 1 回（§12）: 起こし直した便がまた `unparsed` で終端すれば再び列外になる。§16 の § の鍵は不変（§ を直す経路と印の経路の両方が効く）。
+  4. `dispatch ls` の理由の字面（`settled:<sha>/Reviewed`）と `release` の記帳は不変。
+- 歯（接頭辞 `pipe_dispatch_release_unparsed_`・in-file は `crates/scribe2/src/pipe/dispatch.rs` の `mod tests`（`candidates` の歯の隣）・e2e は `crates/scribe2/tests/e2e/pipe/dispatch.rs` の §12 の `release` の歯の隣・既存の `reasons_around_release` と `review.json` を書く fixture の型）: (a) in-file: 判定で引く述語が `INCONCLUSIVE` + `Unparsed` で真、`FAIL` + `Unparsed` / `INCONCLUSIVE` + 他の 6 語 / `PASS` で偽（母集団 = `FINDING_KINDS` の 7 語 × 3 値）。(b) e2e: `review.json` を `{"verdict":"INCONCLUSIVE","kind":"unparsed"}` にした便が `release` の後に理由 `-` へ戻り（base は `settled:…/Reviewed` のまま → RED）、同じ sha でまた同じ終端に着けば列外に戻る。(c) e2e: `{"verdict":"INCONCLUSIVE","kind":"section-material-missing"}` の便は `release` の後も理由が変わらない（不変・(b) が「INCONCLUSIVE を全部戻す」変異でないことを測る）。
+- 触らない: `requeues` / `section_keyed` の網羅 match と in-file の census の歯 3 本・`released_after`・`judgement_of` と `FindingKind` の 7 語・審査の判定と `review.json` の形・`dispatch ls` の理由の字面。
+- 却下: `requeues` の match に `Reviewed => true` を足す（審査 FAIL まで戻る・FR49 / FR68 に反する・census の歯が落ちる）／lens が `unparsed` の周に器が自分で撃ち直す（見分けを誤った周に §2 の無限再起動へ戻る・§12 の「器が自分で戻すことはしない」と同じ却下）／`unparsed` を `Failed` の段へ倒す（審査の段で終端した事実を消す・C10）／§ に空の 1 字を足して鍵を動かす運用（散文の作法・N2・doc の history を汚す）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -498,4 +513,14 @@ write-set = ["crates/scribe2/src/pipe/notify.rs", "crates/scribe2/src/pipe/cli.r
 verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_notify_queued_ pipe_notify_delivery_ pipe_notify_foreign_"]
 size = "S"
 done = "(1) notify の Request が運転手の置き場を StateDir（Provenance::Flag）で持ち、送達後に tick.jsonl へ自席の記録が 1 行増える (2) settle が Queued で窓を閉じた周に入力欄の残りがこの周の本文なら Enter を 1 回だけ再送して settle し直し、2 度目も Queued ならそのまま返す（Enter は最大 2 回・text の再送は 0 回・Foreign / UnknownInput の周は 0 key） (3) 本文と Enter の間に SETTLE_STEP の 1 歩が在る (4) stdout が notify=delivered consumed=<true|false|unknown[:理由]> で、refused: / unconfirmed / no-seat の字面は不変 (5) 偽 tmux の落とす回数 1 で Enter 2 回・consumed=true、0 で Enter 1 回・consumed=true、2 で Enter 2 回・consumed=false、他人の文が先に在れば send-keys 0 回・refused:busy"
+
+[[contract]]
+id = "s"
+title = "審査を測れなかった便（Reviewed の INCONCLUSIVE kind:unparsed）を release で列へ戻す — settled に判定で引く戻しを 1 つ足し（INCONCLUSIVE ∧ unparsed の対だけ・印 1 回で 1 回）、段で引く requeues と § の鍵は不変"
+req = ["FR49", "FR68"]
+section = "22"
+write-set = ["crates/scribe2/src/pipe/dispatch/candidates.rs", "crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/tests/e2e/pipe/dispatch.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_dispatch_release_unparsed_"]
+size = "S"
+done = "(1) review.json が INCONCLUSIVE ∧ kind unparsed の Reviewed の便は、その便の最後の記帳より後の release で列外を外れ、dispatch ls の理由が - になる (2) FAIL（kind を問わず）・INCONCLUSIVE で kind が他の 6 語・review.json が無い / 読めない便は release の後も settled:<sha>/Reviewed のまま (3) 起こし直した便が同じ sha でまた unparsed に着けば再び列外（印 1 回で 1 回） (4) requeues / section_keyed の網羅 match と in-file の census の歯 3 本・released_after・judgement_of が 1 字も変わらず緑 (5) 判定で引く述語は pure な関数 1 つで、in-file の歯が FINDING_KINDS の 7 語 × 3 値の母集団で測る"
 <!-- contracts:end -->
