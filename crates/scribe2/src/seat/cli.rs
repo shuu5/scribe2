@@ -12,7 +12,7 @@ use std::path::Path;
 
 /// `seat` の使い方。
 pub fn usage() -> String {
-    "usage: seat <register --state-dir S --target T --role R --account L --launch FILE [--anchor DIR]|launch --state-dir S --role R --target S:W [--account L] [--anchor DIR] [--model M] [--restore CMD]|<label> [--orchestrator] [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]".to_owned()
+    "usage: seat <register --state-dir S --target T --role R --account L --launch FILE [--anchor DIR]|launch --state-dir S --role R --target S:W [--account L] [--anchor DIR] [--model M] [--restore CMD]|<label> [--orchestrator] [-c|-r ID] [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]".to_owned()
 }
 
 /// `seat` に続く引数を捌く。
@@ -135,6 +135,8 @@ struct LaunchFlags<'a> {
     model: Option<&'a str>,
     restore: Option<&'a str>,
     socket: Option<&'a str>,
+    /// 注入する起動行の末尾に足す会話の引き継ぎ（短い形の `-c` / `-r ID` だけ・[`short_carry_of`]・長い形は空）。
+    carry: &'a [&'a str],
 }
 
 /// 長い形の引数: 解く前の置き場と anchor の flag（[`launch_place`] が解く）と起動の入力。
@@ -180,6 +182,7 @@ fn launch_flags(args: &[String]) -> Option<LaunchArgs<'_>> {
             model: model?,
             restore: restore?,
             socket: socket?,
+            carry: &[],
         },
     })
 }
@@ -200,13 +203,13 @@ fn launch_of(args: &[String]) -> Outcome {
 /// [`cycle::Launched`] の variant ではない）。
 const REASON_DEFAULTS_UNRESOLVED: &str = "defaults-unresolved";
 
-/// 短い形 `seat <label> [--orchestrator] [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]`
+/// 短い形 `seat <label> [--orchestrator] [-c|-r ID] [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]`
 /// （設計 account-lifecycle.md §14・seat-roles.md §26・SRS FR59 / FR40）: 役割の flag は**多くとも 1 つ**（0 個は既定の
 /// orchestrator・2 つは使い方の誤り・[`short_role_of`]）・置き場と anchor は長い形と同じ解き方・target と model は明示の
 /// flag が無ければ同じ鍵（役割 × anchor）の登録 row の値、target は更に呼び手の pane の session（[`short_defaults`]）。
 /// 解けた周は長い形と同じ [`LaunchFlags`]（口座 = label）を組んで同じ [`launch_with`] を通る。
 fn short_of(label: &str, args: &[String]) -> Outcome {
-    let Some(role) = short_role_of(args) else {
+    let (Some(role), Some(carry)) = (short_role_of(args), short_carry_of(args)) else {
         return refused_usage();
     };
     // 値欠け・空文字は使い方の誤り（他の flag と同じ極性・SRS NFR4）。
@@ -226,8 +229,31 @@ fn short_of(label: &str, args: &[String]) -> Outcome {
         Ok(found) => found,
         Err(refused) => return refused,
     };
-    let flags = LaunchFlags { target: &target, role, account: Some(label), model: Some(&model), restore, socket };
+    let flags = LaunchFlags { target: &target, role, account: Some(label), model: Some(&model), restore, socket, carry: &carry };
     launch_with(&flags, &place)
+}
+
+/// 短い形の会話の引き継ぎ（設計 account-lifecycle.md §18）: `-c`（別名 `--continue`）は `["--continue"]`・`-r ID`（別名
+/// `--resume ID`）は `["--resume", ID]`・どちらも無ければ空。**多くとも 1 つ**の周だけ `Some`: 両方・同じ flag の重複・値の無い
+/// `-r`・会話 id の形（[`conversation_id`]）でない値は `None`＝使い方の誤り（注入する行は pane の shell が読むので、値を
+/// 引用で包むのでなく字の集合を絞る）。
+fn short_carry_of(args: &[String]) -> Option<Vec<&str>> {
+    let at: Vec<usize> = args.iter().enumerate().filter(|(_, arg)| matches!(arg.as_str(), "-c" | "--continue" | "-r" | "--resume")).map(|(at, _)| at).collect();
+    match at.as_slice() {
+        [] => Some(Vec::new()),
+        [at] => match args.get(*at).map(String::as_str) {
+            Some("-c" | "--continue") => Some(vec!["--continue"]),
+            _ => args.get(at.saturating_add(1)).map(String::as_str).filter(|id| conversation_id(id)).map(|id| vec!["--resume", id]),
+        },
+        _ => None,
+    }
+}
+
+/// 会話 id の形（claude の session id・UUID の `8-4-4-4-12`・16 進小文字と `-` だけ・36 字）。
+fn conversation_id(text: &str) -> bool {
+    let groups: Vec<&str> = text.split('-').collect();
+    groups.iter().map(|group| group.len()).eq([8, 4, 4, 4, 12])
+        && groups.iter().all(|group| group.bytes().all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')))
 }
 
 /// 短い形の役割の flag（`--orchestrator`＝[`role::Role`] の字面に `--` を前置した形）。**多くとも 1 つ**の周だけ `Some`:
@@ -346,6 +372,7 @@ fn launch_with(flags: &LaunchFlags, place: &LaunchPlace) -> Outcome {
         manifest: &manifest,
         rules: &rules,
         threshold_pct,
+        carry: flags.carry,
     });
     let line = cycle::render_launched(flags.target, &result, state);
     match result {

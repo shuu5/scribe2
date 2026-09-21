@@ -476,6 +476,106 @@ fn seat_launch_short_form_requires_exactly_one_role_flag() {
     fs::remove_dir_all(&place.dir).ok();
 }
 
+/// 会話の引き継ぎの語 `tail` を偽 claude の argv の末尾（env の 2 行の前）に足した形。
+fn launch_carried_argv(place: &AcctPlace, label: &str, tail: &[&str]) -> String {
+    launch_defaults_argv(place, label).replacen("\nenv:CLAUDE_CONFIG_DIR=", &format!("\n{}\nenv:CLAUDE_CONFIG_DIR=", tail.join("\n")), 1)
+}
+
+/// 置き場の下の `*.launch` file（手書きの起動 script の置き場）の中身を全部繋いだ字面（無ければ空）。
+fn launch_files_text(dir: &Path) -> String {
+    let mut text = String::new();
+    for entry in fs::read_dir(dir).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            text.push_str(&launch_files_text(&path));
+        } else if path.extension().is_some_and(|ext| ext == "launch") {
+            text.push_str(&fs::read_to_string(&path).unwrap_or_default());
+        }
+    }
+    text
+}
+
+/// 会話の引き継ぎの 1 周の 4 面（§18 の約束 1）: 送った行の末尾が `tail`・偽 claude の argv の末尾も `tail`・登録 row の `launch` は
+/// 旗無しの導出行・置き場の `.launch` に旗は無い。
+fn launch_assert_carried(place: &AcctPlace, name: &str, tail: &[&str], case: &str) {
+    let sent = acct_sent(&place.state, &format!("{name}_{name}"));
+    assert_eq!(sent.len(), 1, "{case}: 起動行の 1 行: {sent:?}");
+    assert!(sent.first().is_some_and(|line| line.ends_with(&format!(" claude {} --plugin-dir {} --plugin-dir {} --plugin-dir {} {} {} {}", LAUNCH_DEFAULT_FLAGS.join(" "), launch_anchor(place), LAUNCH_PLUGINS[0], LAUNCH_PLUGINS[1], LAUNCH_ARGS[0], LAUNCH_ARGS[1], tail.join(" ")))), "{case}: 注入行の末尾: {sent:?}");
+    assert_eq!(fs::read_to_string(place.dir.join("launched")).unwrap_or_default(), launch_carried_argv(place, "l2", tail), "{case}: argv の末尾");
+    let rows = acct_rows(&place.state);
+    assert_eq!(rows.iter().map(|row| row.launch.as_str()).collect::<Vec<_>>(), [launch_derived(place).as_str()], "{case}: row の launch は旗無し: {rows:?}");
+    assert!(rows.iter().all(|row| !row.launch.contains("--continue") && !row.launch.contains("--resume")), "{case}: {rows:?}");
+    let files = launch_files_text(&place.state);
+    assert!(!files.contains("--continue") && !files.contains("--resume"), "{case}: .launch は旗無し: {files}");
+    assert_eq!(launch_inject_rows(place).len(), 1, "{case}: inject.jsonl に kind=launch 1 行");
+}
+
+/// §18 の約束 1 / 4: `seat <label> -c`（別名 `--continue`）は注入する起動行の**末尾**に `--continue` を足し、登録 row の `launch`
+/// と置き場の `.launch` は旗無しのまま。役割の flag は 0 個（既定の orchestrator）のまま通る。base は `-c` を黙って捨てる（RED）。
+#[test]
+fn seat_launch_short_form_continues_the_last_conversation_at_the_tail() {
+    for (case, flag) in [("short", "-c"), ("long", "--continue")] {
+        let place = launch_place();
+        let name = "launchcontinue";
+        let target = format!("{name}:{name}");
+        let path = launch_shims(&place, &target);
+        let guard = launch_session(&place, name, &path);
+        assert!(guard.ready(), "{case}: 独立 socket に shell の session を立てられる");
+
+        let out = launch_run_short(&place, &path, "l2", &[flag, "--target", &target, "--model", "Fable"]);
+
+        assert_eq!(rc_of(&out), i32::from(RC_OK), "{case}: stdout={} stderr={}", stdout_of(&out), stderr_of(&out));
+        assert_eq!(acct_rows(&place.state).first().map(|row| row.role), Some(vessel::seat::role::Role::Orchestrator), "{case}: 既定の役割");
+        launch_assert_carried(&place, name, &["--continue"], case);
+        drop(guard);
+        fs::remove_dir_all(&place.dir).ok();
+    }
+}
+
+/// §18 の約束 1 / 2: `seat <label> -r ID`（別名 `--resume ID`）は注入行の末尾に `--resume ID` を足し row の `launch` には載せない。
+/// 使い方の誤り（rc 1・stderr は usage・0 key・row 0）: `-c -r ID`・値の無い `-r`・`-c -c`・`-r -r`・会話 id の形でない値
+/// （空白を含む・`$(` を含む・`-` 始まり・大文字・短い）。base は `-r` を黙って捨てて起こす（RED）。
+#[test]
+fn seat_launch_short_form_resumes_a_named_conversation_and_refuses_malformed_ids() {
+    let id = "0f3c9a2e-1b4d-4e8f-9a6b-7c2d5e8f1a3b";
+    let place = launch_place();
+    let name = "launchresume";
+    let target = format!("{name}:{name}");
+    let path = launch_shims(&place, &target);
+    let guard = launch_session(&place, name, &path);
+    assert!(guard.ready(), "独立 socket に shell の session を立てられる");
+    for (case, extra) in [
+        ("both", &["-c", "-r", id][..]),
+        ("both-long", &["--resume", id, "--continue"][..]),
+        ("no-value", &["-r"][..]),
+        ("flag-as-value", &["-r", "--target", &target][..]),
+        ("twice-c", &["-c", "-c"][..]),
+        ("twice-r", &["-r", id, "-r", id][..]),
+        ("space", &["-r", "0f3c9a2e 1b4d-4e8f-9a6b-7c2d5e8f1a3b"][..]),
+        ("subshell", &["-r", "$(touch pwned)"][..]),
+        ("dash", &["-r", "-f3c9a2e-1b4d-4e8f-9a6b-7c2d5e8f1a3b"][..]),
+        ("upper", &["-r", "0F3C9A2E-1B4D-4E8F-9A6B-7C2D5E8F1A3B"][..]),
+        ("short", &["-r", "0f3c9a2e"][..]),
+    ] {
+        let mut args = extra.to_vec();
+        args.extend_from_slice(&["--target", &target, "--model", "Fable"]);
+
+        let out = launch_run_short(&place, &path, "l2", &args);
+
+        assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "{case}: stdout={} stderr={}", stdout_of(&out), stderr_of(&out));
+        assert!(stdout_of(&out).is_empty(), "{case}: stdout は空");
+        assert!(stderr_of(&out).starts_with("usage: seat "), "{case}: 使い方で断る: {}", stderr_of(&out));
+        launch_assert_not_sent(&place, 0, case);
+    }
+
+    let out = launch_run_short(&place, &path, "l2", &["-r", id, "--target", &target, "--model", "Fable"]);
+
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={} stderr={}", stdout_of(&out), stderr_of(&out));
+    launch_assert_carried(&place, name, &["--resume", id], "resume");
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
 // ─────────────────── 席の入口の 1 語（seat-roles.md §26・`s2-07l.488`・接頭辞 `seat_entry_`） ───────────────────
 
 /// target の pane の前面 process が `want` になるのを待つ（上限 [`PROMPT_WAIT`]・`#{pane_current_command}` は typed な

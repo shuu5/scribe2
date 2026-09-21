@@ -116,6 +116,15 @@ pub fn with_defaults(line: &str, defaults: Option<RoleDefaults>) -> String {
     with_flags(line, &[(MODEL_FLAG, defaults.model.alias()), (EFFORT_FLAG, defaults.effort.alias())])
 }
 
+/// 送る起動行 `line` の**末尾**に語の列 `tail` を足す（pure・設計 account-lifecycle.md §18・会話の引き継ぎ）。空の列は行をそのまま。
+/// 語の字の集合は呼び手（短い形の口）が絞る＝ここは引用も解釈もしない。
+fn with_tail(line: &str, tail: &[&str]) -> String {
+    if tail.is_empty() {
+        return line.to_owned();
+    }
+    format!("{line} {}", tail.join(" "))
+}
+
 /// 起動行の `--model` と `--effort` は旗ごとに高々 1 つ: 雛形の literal と器の 1 つが重なる周は後勝ちにせず、旗ごとに違う理由
 /// （[`REASON_MODEL_DUPLICATED`] / [`REASON_EFFORT_DUPLICATED`]・宣言は行の 1 か所）で断る。
 pub fn single_model(line: &str) -> Result<(), &'static str> {
@@ -178,6 +187,9 @@ pub struct Launch<'a> {
     pub rules: &'a Manifest,
     /// R-C9-1 の値（session 用の閾値）。
     pub threshold_pct: u64,
+    /// 注入する起動行の**末尾**に足す会話の引き継ぎの語（短い形の `-c` = `--continue`・`-r ID` = `--resume ID`・空は足さない・
+    /// 設計 account-lifecycle.md §18）。登録 row の `launch`（雛形）には載せない（会話の id は 1 回きりの値）。
+    pub carry: &'a [&'a str],
 }
 
 /// 席の起動 1 回の結果。**「送っていない」と「送ったが確かめられない」を分ける**（[`super::Relaunched`] と同じ）。
@@ -217,7 +229,7 @@ pub fn launch(request: &Launch) -> Launched {
     let same = crate::seat::target_of_caller(request.socket).as_deref() == Some(request.target);
     let carried = with_defaults(&derived, Some(defaults));
     let line = match launch_line(request.state_dir, &carried, &label, &anchor).and_then(|line| prepare(request, (&label, defaults.model), derived, same).map(|()| line)) {
-        Ok(found) => found,
+        Ok(found) => with_tail(&found, request.carry),
         Err(reason) => return Launched::Refused(reason),
     };
     if same {
