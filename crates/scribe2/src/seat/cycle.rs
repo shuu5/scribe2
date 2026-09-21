@@ -25,8 +25,8 @@ mod launch;
 mod relaunch;
 
 pub use launch::{
-    derive_launch, fill_launch, launch, render_launched, single_model, with_agent_view_off, with_model, Holes, Launch,
-    Launched, HOLES,
+    derive_launch, fill_launch, launch, render_launched, single_model, with_agent_view_off, with_defaults, with_flags, Holes,
+    Launch, Launched, HOLES,
 };
 
 use super::{state, tmux_ok};
@@ -57,6 +57,8 @@ pub(super) const ACCOUNTS_DIR: &str = "accounts";
 pub const HOLE: &str = "{account_dir}";
 /// claude CLI の model の flag（起動行が row の `model` を運ぶ語・値は [`crate::fleet::select::Model::alias`]）。
 pub(super) const MODEL_FLAG: &str = "--model";
+/// claude CLI の effort の flag（起動行が役割の既定の effort を運ぶ語・値は [`crate::headless::Effort::alias`]・設計 seat-roles.md §20）。
+pub(super) const EFFORT_FLAG: &str = "--effort";
 
 /// 他の cycle が走っている。
 pub const REASON_LOCK_HELD: &str = "lock-held";
@@ -124,6 +126,11 @@ pub const REASON_ANCHOR: &str = "anchor-unresolvable";
 pub const REASON_MODEL_UNKNOWN: &str = "launch-model-unknown";
 /// 起動行に `--model` が 2 つ載る（雛形の literal と器の 1 つ・後勝ちにせず断る・立て直しは `relaunch-` を前置く）。
 pub const REASON_MODEL_DUPLICATED: &str = "launch-model-duplicated";
+/// 起動行に `--effort` が 2 つ載る（雛形の literal と器の 1 つ・`--model` の二重とは別の理由・後勝ちにせず断る・設計 seat-roles.md §20 の約束 2）。
+pub const REASON_EFFORT_DUPLICATED: &str = "launch-effort-duplicated";
+/// `seat launch` の `--model` が役割の既定の行（`seat.model.<役割名>`）と食い違う（`--model` は照合であって宣言ではない・
+/// row も key も書かない・設計 seat-roles.md §20 の約束 3）。
+pub const REASON_MODEL_MISMATCH: &str = "launch-model-mismatch";
 /// 確認の刻み（上限, 周期）を**渡された manifest** から読む（`s2-07l.151`）。不発効・別の形・
 /// 不在は `None`＝呼び側は [`REASON_NO_RULE`] で断る（fail-closed・値を code に焼かない・憲法 C5）。
 ///

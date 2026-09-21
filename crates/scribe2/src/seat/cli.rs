@@ -244,10 +244,10 @@ fn short_role_of(args: &[String]) -> Option<role::Role> {
 ///
 /// `target` は row でも解けなければ**呼び手の pane の session**（[`super::session_of_caller`]・`-t` を付けない 1 問い）と
 /// **役割の字面**を `:` で繋いだ形にする（`seat <label>` の 1 語で打った窓の session に、役割の名の窓を開ける）。
-/// 問いが撃てない周・session の名が空の周は解けないまま——`--model` の要求も本便では外さない（役割ごとの既定の model を
-/// rules 行から導くのは §20 の別便）。足りない名は宣言順（`--target` → `--model`）で `missing=` に載せて
-/// `defaults-unresolved` で断る（1 key も送らず row も書かない）。log を読めない周は `log-unreadable`（「row が無い」と
-/// 混ぜない・fail-closed）。
+/// 問いが撃てない周・session の名が空の周は解けないまま。`model` は明示も row も無ければ**役割の既定の行**から導く
+/// （[`role::defaults`]・設計 seat-roles.md §20 の約束 4）＝`--model` が欠けるのは行を読めない周だけ。足りない名は宣言順
+/// （`--target` → `--model`）で `missing=` に載せて `defaults-unresolved` で断る（1 key も送らず row も書かない）。log を読めない
+/// 周は `log-unreadable`（「row が無い」と混ぜない・fail-closed）。
 fn short_defaults(place: &LaunchPlace, role: role::Role, target: Option<&str>, model: Option<&str>, socket: Option<&str>) -> Result<(String, String), Outcome> {
     let row = match (target, model) {
         (Some(_), Some(_)) => None,
@@ -262,7 +262,10 @@ fn short_defaults(place: &LaunchPlace, role: role::Role, target: Option<&str>, m
         .map(str::to_owned)
         .or_else(|| row.as_ref().map(|found| found.target.clone()))
         .or_else(|| super::session_of_caller(socket).map(|session| format!("{session}:{}", role.as_str())));
-    let model = model.map(str::to_owned).or_else(|| row.as_ref().and_then(|found| found.model.clone()));
+    let model = model
+        .map(str::to_owned)
+        .or_else(|| row.as_ref().and_then(|found| found.model.clone()))
+        .or_else(|| role::defaults(role).ok().map(|found| found.model.display().to_owned()));
     match (target, model) {
         (Some(target), Some(model)) => Ok((target, model)),
         (target, model) => {
@@ -324,6 +327,11 @@ fn launch_with(flags: &LaunchFlags, place: &LaunchPlace) -> Outcome {
         Ok(found) => found,
         Err(read) => return refused(read.no_rule()),
     };
+    // 役割の既定の行（model と effort）は埋め込み manifest から引く＝起動の口に `--rules` は作らない（設計 seat-roles.md §20 の約束 7）。
+    let rules = match super::embedded_manifest() {
+        Ok(found) => found,
+        Err(read) => return refused(read.no_rule()),
+    };
     let result = cycle::launch(&cycle::Launch {
         target: flags.target,
         socket: flags.socket,
@@ -336,6 +344,7 @@ fn launch_with(flags: &LaunchFlags, place: &LaunchPlace) -> Outcome {
         account: flags.account,
         model: flags.model,
         manifest: &manifest,
+        rules: &rules,
         threshold_pct,
     });
     let line = cycle::render_launched(flags.target, &result, state);

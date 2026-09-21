@@ -181,7 +181,13 @@ pub enum RegisterRefusal {
     Input,
     /// event log へ書けない（理由の本文）。
     Store(String),
+    /// `--model` が役割の既定の行と食い違う（[`REASON_MODEL_MISMATCH`]）・行を読めない（`no-rule:<variant>`）＝
+    /// 行から導いた値を row に書けない（設計 seat-roles.md §20 の約束 5・受付の極性は fail-closed のまま）。
+    Model(&'static str),
 }
+
+/// `seat register --model` が役割の既定の行と食い違う（[`RegisterRefusal::Model`] の字面の 1 つ）。
+pub const REASON_MODEL_MISMATCH: &str = "model-mismatch";
 
 impl RegisterRefusal {
     /// 行に出す字面（store の断りは理由の本文を添える）。
@@ -190,6 +196,7 @@ impl RegisterRefusal {
             Self::NoStamp => "no-stamp".to_owned(),
             Self::Input => "input-unreadable".to_owned(),
             Self::Store(text) => format!("store detail={text}"),
+            Self::Model(text) => (*text).to_owned(),
         };
         format!("seat register: refused reason={reason} target={target}")
     }
@@ -197,13 +204,26 @@ impl RegisterRefusal {
 
 /// `seat register` の口の登録（設計 seat-roles.md §2）: `draft` の `role` / `target` / `account` / `model` を使い、`sid` は
 /// 打刻から（`Some`・無ければ [`RegisterRefusal::NoStamp`]＝この口にだけ掛かる条件）・`launch` は file の本文・`anchor` は
-/// [`anchor_of`] で埋めて [`register`] へ渡す。**打刻を先に測る**（断る周は event を書かない）。
+/// [`anchor_of`] で埋め、`model` は役割の既定の行から導いた値（[`derived_model`]）で [`register`] へ渡す。**打刻を先に測る**
+/// （断る周は event を書かない）。
 pub fn register_stamped(state_dir: &Path, draft: Registration, launch: &Path, anchor: Option<&Path>) -> Result<Registration, RegisterRefusal> {
     let sid = stamped_sid(state_dir, &draft.target).ok_or(RegisterRefusal::NoStamp)?;
     let (Ok(launch), Some(root)) = (std::fs::read_to_string(launch), anchor_of(anchor)) else {
         return Err(RegisterRefusal::Input);
     };
-    register(state_dir, Registration { sid: Some(sid), launch, anchor: root.display().to_string(), ..draft })
+    let model = derived_model(defaults(draft.role), draft.model.as_deref())?;
+    register(state_dir, Registration { sid: Some(sid), launch, anchor: root.display().to_string(), model: Some(model), ..draft })
+}
+
+/// 登録 row に書く `model`（pure・設計 seat-roles.md §20 の約束 5 / 6）: 役割の既定の行の model の**表示名**（実測の行と同じ語彙）。
+/// 宣言 `declared`（`--model`）は照合で、行と食い違う・表に無い周は [`REASON_MODEL_MISMATCH`]、行を読めない周は
+/// `no-rule:<variant>` を [`RegisterRefusal::Model`] で返す（既定へ倒さない）。
+fn derived_model(read: Result<RoleDefaults, RuleRead>, declared: Option<&str>) -> Result<String, RegisterRefusal> {
+    let row = read.map_err(|failed| RegisterRefusal::Model(failed.no_rule()))?.model;
+    match declared {
+        Some(text) if Model::parse(text) != Some(row) => Err(RegisterRefusal::Model(REASON_MODEL_MISMATCH)),
+        _ => Ok(row.display().to_owned()),
+    }
 }
 
 /// target の打刻の最終行の `sid`（hooks を積んだ session の証拠）。打刻が無い・読めない・`sid` が空なら `None`。
@@ -272,25 +292,38 @@ pub fn role_of_target(state: &State, target: &str) -> Option<Role> {
 
 /// 登録 row の一覧（pure・鍵の順・1 row 1 行）。`model` の無い row は `-`（契約 (e)・doctor の欄）。末尾の欄
 /// `paths=` は anchor の path の種別の宣言の state（`paths_of(anchor)`・`default` / `declared:<書かれた key の数>` /
-/// `invalid:<理由>`・設計 seat-roles.md §24）＝row は anchor ごとなので anchor ごとの state を 1 行で名乗る。
-pub fn render_rows(state: &State, paths_of: impl Fn(&str) -> PathKinds) -> Vec<String> {
+/// `invalid:<理由>`・設計 seat-roles.md §24）＝row は anchor ごとなので anchor ごとの state を 1 行で名乗る。`model=` の直後の欄
+/// `default=` は役割の既定の行（`default_of(role)`・[`render_default`]）＝宣言と row の突合を doctor の 1 面にだけ出す（§20 の約束 8）。
+pub fn render_rows(state: &State, paths_of: impl Fn(&str) -> PathKinds, default_of: impl Fn(Role) -> Result<RoleDefaults, RuleRead>) -> Vec<String> {
     let row = |found: &Registration| {
         let model = found.model.as_deref().unwrap_or("-");
         format!(
-            "seat: role={} anchor={} target={} account={} model={model} paths={}",
+            "seat: role={} anchor={} target={} account={} model={model} default={} paths={}",
             found.role.as_str(),
             found.anchor,
             found.target,
             found.account,
+            render_default(default_of(found.role)),
             paths_of(&found.anchor).render()
         )
     };
     state.registrations.values().map(|latest| row(&latest.registration)).collect()
 }
 
-/// doctor の登録 row の一覧（[`render_rows`] に anchor の HEAD の宣言の読み手を渡した形・row ごとに git を 1 回撃つ）。
-pub fn doctor_rows(state: &State) -> Vec<String> {
-    render_rows(state, |anchor| PathKinds::read_at_head(Path::new(anchor)))
+/// `default=` の欄の 1 語（pure）: 読める周は `<model の表示名>/<effort>`（row の `model` と同じ語彙）・読めない周は既定の語を
+/// 出さず理由の字面 `no-rule:<variant>`（判定しない＝rc を変えない）。
+pub fn render_default(read: Result<RoleDefaults, RuleRead>) -> String {
+    read.map_or_else(|failed| failed.no_rule().to_owned(), |found| format!("{}/{}", found.model.display(), found.effort.alias()))
+}
+
+/// doctor の登録 row の一覧（[`render_rows`] に anchor の HEAD の宣言の読み手と、`rules` の manifest の既定の読み手を渡した形・
+/// row ごとに git を 1 回撃つ）。
+pub fn doctor_rows(state: &State, rules: &Result<Manifest, RuleRead>) -> Vec<String> {
+    render_rows(
+        state,
+        |anchor| PathKinds::read_at_head(Path::new(anchor)),
+        |role| rules.as_ref().map_err(|failed| *failed).and_then(|manifest| defaults_of(manifest, role)),
+    )
 }
 
 /// 登録 row と実在の target の突合の 1 行（pure・`seats: registered=N live=K missing=M`）。
@@ -305,12 +338,14 @@ pub fn render_reconcile(state: Option<&State>, live: Option<&[String]>) -> Strin
 }
 
 /// doctor の項目（event log を読み、tmux の `list-panes` を 1 回撃つ・C3.2）: 登録 row の一覧（1 row 1 行・
-/// `model` と `paths` の欄つき・log を読めない周は 0 行）の後に突合の 1 行。
-pub fn doctor_lines(state_dir: &Path, socket: Option<&str>) -> Vec<String> {
+/// `model` と `default` と `paths` の欄つき・log を読めない周は 0 行）の後に突合の 1 行。`rules` は `--rules` の値（口座の行と
+/// 同じ形・無ければ埋め込み）で、役割の既定の行を引く manifest（読めない周は `default=` の欄が理由を名乗る・rc は変えない）。
+pub fn doctor_lines(state_dir: &Path, socket: Option<&str>, rules: Option<&str>) -> Vec<String> {
     let state = store::read_all(state_dir).ok().map(|events| replay(&events));
     let panes = super::tmux_stdout(socket, &["list-panes", "-a", "-F", "#{session_name}:#{window_name}"]);
     let live: Option<Vec<String>> = panes.map(|out| out.lines().map(str::to_owned).collect());
-    let mut lines = state.as_ref().map(doctor_rows).unwrap_or_default();
+    let manifest = super::manifest_read(rules.map_or_else(Manifest::embedded, |path| Manifest::load(Path::new(path))));
+    let mut lines = state.as_ref().map(|found| doctor_rows(found, &manifest)).unwrap_or_default();
     lines.push(render_reconcile(state.as_ref(), live.as_deref()));
     lines
 }

@@ -68,7 +68,7 @@ fn render_doctor_with(rest: &[String]) -> Result<Vec<String>, ()> {
     }
     match (state_dir, socket, rules) {
         (Some(dir), _, _) => {
-            lines.extend(vessel::seat::role::doctor_lines(Path::new(dir), socket));
+            lines.extend(vessel::seat::role::doctor_lines(Path::new(dir), socket, rules));
             lines.extend(vessel::account::doctor_lines(Path::new(dir), rules));
             lines.extend(vessel::account::consumers::doctor_lines(Path::new(dir), rules));
         }

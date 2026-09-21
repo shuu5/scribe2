@@ -22,6 +22,20 @@ fn launch_derived(place: &AcctPlace) -> String {
     )
 }
 
+/// 役割の既定の対（埋め込みの行 `seat.model.orchestrator` / `seat.effort.orchestrator`）が起動行で `claude` の直後に運ぶ 4 語
+/// （設計 seat-roles.md §20 の約束 1・`--model` → `--effort` の順）。
+const LAUNCH_DEFAULT_FLAGS: [&str; 4] = ["--model", "fable", "--effort", "high"];
+
+/// 期待する偽 claude の記録に既定の 4 語を前置した形（argv の先頭が `claude` の直後の語）。
+fn launch_defaults_argv(place: &AcctPlace, label: &str) -> String {
+    format!("{}\n{}", LAUNCH_DEFAULT_FLAGS.join("\n"), launch_expected_argv(place, label))
+}
+
+/// 期待する送る行（穴を埋める前）: 導出行の `claude` の直後に既定の 4 語（雛形 [`launch_derived`] は旗無しのまま）。
+fn launch_carried(place: &AcctPlace) -> String {
+    launch_derived(place).replacen(" claude ", &format!(" claude {} ", LAUNCH_DEFAULT_FLAGS.join(" ")), 1)
+}
+
 /// 包みの tmux が写した argv のうち `verb` で始まる呼出しの数（`-S <socket>` の後ろを見る）。
 fn launch_tmux_calls(place: &AcctPlace, verb: &str) -> usize {
     fs::read_to_string(place.dir.join(LAUNCH_TMUX_ARGS))
@@ -73,7 +87,7 @@ fn seat_launch_creates_the_window_and_injects_the_derived_line_once() {
         "`new-window -t <session> -n <window>` の形（session は exact の名 + 次の空き index）: {}",
         fs::read_to_string(place.dir.join(LAUNCH_TMUX_ARGS)).unwrap_or_default()
     );
-    assert_eq!(fs::read_to_string(place.dir.join("launched")).unwrap_or_default(), launch_expected_argv(&place, "l2"), "導出した行が 1 回だけ届く");
+    assert_eq!(fs::read_to_string(place.dir.join("launched")).unwrap_or_default(), launch_defaults_argv(&place, "l2"), "導出した行が既定の旗つきで 1 回だけ届く");
     launch_assert_registered_before_send(&place, &target, "l2");
     let stamps = fs::read_to_string(state_file(&seat_dir_of(&place.state, &format!("{name}_seat")))).unwrap_or_default();
     assert!(stamps.contains("\"event\":\"SessionStart\""), "席が立った打刻: {stamps}");
@@ -82,8 +96,8 @@ fn seat_launch_creates_the_window_and_injects_the_derived_line_once() {
     fs::remove_dir_all(&place.dir).ok();
 }
 
-/// (b) 登録 row は**送る前**に 1 件（偽 claude が起動時に写した event log に既に在る・`sid` 無し・`launch` = 導出した行・
-/// account = `label`・鍵 = planner × anchor）・`inject.jsonl` に `kind=launch`（`who=seat-launch`）が 1 行。
+/// (b) 登録 row は**送る前**に 1 件（偽 claude が起動時に写した event log に既に在る・`sid` 無し・`launch` = 導出した行〔旗無し〕・
+/// account = `label`・`model` = 行から導いた表示名・鍵 = planner × anchor）・`inject.jsonl` に `kind=launch`（`who=seat-launch`）が 1 行。
 fn launch_assert_registered_before_send(place: &AcctPlace, target: &str, label: &str) {
     let rows = acct_rows(&place.state);
     let want = vessel::fleet::Registration {
@@ -93,7 +107,7 @@ fn launch_assert_registered_before_send(place: &AcctPlace, target: &str, label: 
         sid: None,
         account: label.to_owned(),
         launch: launch_derived(place),
-        model: None,
+        model: Some("Fable".to_owned()),
     };
     assert_eq!(rows, vec![want], "SeatRegistered 1 件・sid 無し・launch は導出した行（穴を埋める前）");
     let seen_text = fs::read_to_string(place.dir.join(LAUNCH_EVENTS_SEEN)).unwrap_or_default();
@@ -127,7 +141,7 @@ fn seat_launch_without_account_selects_excluding_other_seats_accounts() {
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={}", stderr_of(&out));
     assert!(line.starts_with(&format!("seat launch: launched target={name}_{name} account=l2 ")), "l1 は別席の口座＝除外: {line}");
     assert_eq!(launch_tmux_calls(&place, "new-window"), 0, "既存 window には作らない");
-    assert_eq!(fs::read_to_string(place.dir.join("launched")).unwrap_or_default(), launch_expected_argv(&place, "l2"));
+    assert_eq!(fs::read_to_string(place.dir.join("launched")).unwrap_or_default(), launch_defaults_argv(&place, "l2"));
     let rows = acct_rows(&place.state);
     assert_eq!(rows.len(), 2, "別席の row + 自席の row: {rows:?}");
     assert_eq!(rows.last().map(|row| (row.account.as_str(), row.sid.clone())), Some(("l2", None)));
@@ -237,21 +251,20 @@ fn seat_launch_injects_cd_to_the_row_anchor_before_the_line() {
     let sent = acct_sent(&place.state, &format!("{name}_{name}"));
     assert_eq!(
         sent,
-        vec![format!("cd '{anchor}' && {}", launch_derived(&place).replace("{account_dir}", &l2_dir))],
+        vec![format!("cd '{anchor}' && {}", launch_carried(&place).replace("{account_dir}", &l2_dir))],
         "起動行は row の anchor への cd → agent view の env → claude の順の 1 行"
     );
     assert_eq!(cwd_of(), anchor, "起こした席の cwd は row の anchor（pane の cwd ではない）");
-    assert_eq!(fs::read_to_string(place.dir.join("launched")).unwrap_or_default(), launch_expected_argv(&place, "l2"), "argv に cd は載らない");
+    assert_eq!(fs::read_to_string(place.dir.join("launched")).unwrap_or_default(), launch_defaults_argv(&place, "l2"), "argv に cd は載らない");
     launch_assert_registered_before_send(&place, &target, "l2");
     drop(guard);
     fs::remove_dir_all(&place.dir).ok();
 }
 
-/// (f) 起動行は `--model` を typed に運ぶ（`s2-07l.313`・C2.2 / C10・SRS FR59 / FR36）: `--model Fable`（表示名）で起こすと偽
-/// claude の argv は `--model fable`（別名）で**始まり**（`claude` の直後・anchor の `--plugin-dir` より前）、送った行に
-/// `--model` の語は 1 つ・登録 row は `model=Fable` を持ち **`launch`（雛形）に `--model` の語は無い**（model 無しの導出行のまま）。
-/// 表に無い `--model nope` は `launch-model-unknown` で row も key も書かない。base は `--model` を運ばず黙って settings の
-/// model で立てる（RED）。
+/// (f) 起動行は model を typed に運ぶ（`s2-07l.313`・C2.2 / C10・SRS FR59 / FR36）: 行と一致する `--model Fable`（表示名）で
+/// 起こすと偽 claude の argv は `--model fable --effort high`（別名・既定の対）で**始まり**（`claude` の直後・anchor の
+/// `--plugin-dir` より前）、送った行に `--model` の語は 1 つ・登録 row は `model=Fable` を持ち **`launch`（雛形）に旗の語は無い**
+/// （旗無しの導出行のまま）。表に無い `--model nope` は `launch-model-unknown` で row も key も書かない（設計 seat-roles.md §20）。
 #[test]
 fn seat_launch_carries_the_model_alias_in_the_launch_line() {
     let place = launch_place();
@@ -272,23 +285,24 @@ fn seat_launch_carries_the_model_alias_in_the_launch_line() {
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={}", stderr_of(&out));
     assert_eq!(
         fs::read_to_string(place.dir.join("launched")).unwrap_or_default(),
-        format!("--model\nfable\n{}", launch_expected_argv(&place, "l2")),
-        "別名の `--model fable` が `claude` の直後に 1 回だけ届く"
+        launch_defaults_argv(&place, "l2"),
+        "別名の `--model fable --effort high` が `claude` の直後に 1 回だけ届く"
     );
     let sent = acct_sent(&place.state, &format!("{name}_{name}"));
     assert_eq!(sent.len(), 1, "起動行の 1 行: {sent:?}");
-    assert!(sent.first().is_some_and(|what| what.contains(" claude --model fable --plugin-dir ") && launch_model_words(what) == 1), "{sent:?}");
+    assert!(sent.first().is_some_and(|what| what.contains(" claude --model fable --effort high --plugin-dir ") && launch_model_words(what) == 1), "{sent:?}");
     let rows = acct_rows(&place.state);
     assert_eq!(rows.len(), 1, "{rows:?}");
     assert_eq!(rows.first().map(|row| row.model.as_deref()), Some(Some("Fable")), "row の model は表示名のまま: {rows:?}");
-    assert_eq!(rows.first().map(|row| row.launch.as_str()), Some(launch_derived(&place).as_str()), "雛形は model 無しの導出行: {rows:?}");
+    assert_eq!(rows.first().map(|row| row.launch.as_str()), Some(launch_derived(&place).as_str()), "雛形は旗無しの導出行: {rows:?}");
     drop(guard);
     fs::remove_dir_all(&place.dir).ok();
 }
 
 /// (d) 雛形に literal の `--model` が在る（host の面の `[[launch-arg]]` に `--model` / `opus`＝暫定の再登録の形）周に `--model Fable`
-/// で起こすと、器の 1 つと二重になるので後勝ちにせず `launch-model-duplicated` で断る（row も key も書かない）。`--model` 無しなら
-/// literal の 1 つだけが載って起こせる（二重**だけ**を断る）。
+/// で起こすと、器の 1 つと二重になるので後勝ちにせず `launch-model-duplicated` で断る（row も key も書かない）。器は `--model` 無しの
+/// 周も行の model を運ぶので（設計 seat-roles.md §20 の約束 1）、literal を持つ雛形は `--model` 無しでも同じ理由で断られる
+/// （literal だけが載って行を黙って上書きする形は無い）。
 #[test]
 fn seat_launch_refuses_a_duplicated_model_in_the_template() {
     let place = launch_place();
@@ -308,10 +322,10 @@ fn seat_launch_refuses_a_duplicated_model_in_the_template() {
     assert_eq!(tick_token(&line, "reason").as_deref(), Some("launch-model-duplicated"), "{line}");
     launch_assert_not_sent(&place, 0, "model-duplicated");
 
-    let single = launch_run(&place, &path, &target, &["--account", "l2"]);
-    assert_eq!(rc_of(&single), i32::from(RC_OK), "stdout={} stderr={}", stdout_of(&single), stderr_of(&single));
-    let argv = fs::read_to_string(place.dir.join("launched")).unwrap_or_default();
-    assert_eq!(argv, launch_expected_argv(&place, "l2").replacen("\nenv:", "\n--model\nopus\nenv:", 1), "literal の 1 つだけが載る: {argv}");
+    let bare = launch_run(&place, &path, &target, &["--account", "l2"]);
+    assert_eq!(rc_of(&bare), i32::from(RC_REFUSED), "stdout={}", stdout_of(&bare));
+    assert_eq!(tick_token(&stderr_of(&bare), "reason").as_deref(), Some("launch-model-duplicated"), "{}", stderr_of(&bare));
+    launch_assert_not_sent(&place, 0, "model-duplicated-bare");
     drop(guard);
     fs::remove_dir_all(&place.dir).ok();
 }
@@ -378,10 +392,10 @@ fn seat_launch_short_form_reuses_the_registered_row_target_and_model() {
     assert_eq!(rows.len(), 2, "同じ鍵の row が 2 件: {rows:?}");
     assert_eq!(rows.first(), rows.get(1), "短い形の row は長い形の row と同じ（target / model / account）: {rows:?}");
     assert_eq!(rows.get(1).map(|row| (row.target.as_str(), row.model.as_deref(), row.account.as_str())), Some((target.as_str(), Some("Fable"), "l2")));
-    let argv = launch_expected_argv(&place, "l2");
+    let argv = launch_defaults_argv(&place, "l2");
     assert_eq!(
         fs::read_to_string(place.dir.join("launched")).unwrap_or_default(),
-        format!("--model\nfable\n{argv}--model\nfable\n{argv}"),
+        format!("{argv}{argv}"),
         "偽 claude の argv は 2 回とも同じ（row の model を運ぶ）"
     );
     drop(guard);
@@ -389,9 +403,10 @@ fn seat_launch_short_form_reuses_the_registered_row_target_and_model() {
 }
 
 /// (b) row が無く flag も無い周は `defaults-unresolved` で typed に断る: rc 1・stderr の行はちょうど
-/// `seat launch: refused reason=defaults-unresolved missing=--target,--model`（`target=` を持たない）・0 key・row 0・`inject.jsonl` に
-/// launch 行なし。2 周目: `model` を持たない row を長い形（`--model` 無し）で作った place で短い形を `--model` 無しで撃つ →
-/// 同じ形で `missing=--model`・0 key（席を終えた後なので送れる状態だが送らない）・row の本数は撃つ前と同じ。
+/// `seat launch: refused reason=defaults-unresolved missing=--target`（`target=` を持たない）・0 key・row 0・`inject.jsonl` に
+/// launch 行なし。`missing=` に `--model` は載らない（model は役割の既定の行から導く＝欠けるのは行を読めない周だけ・設計
+/// seat-roles.md §20 の約束 4）。2 周目: 長い形（`--model` 無し）で作った row は行から導いた `model=Fable` を持ち、その place で
+/// 短い形を `--model` 無しで撃つと断られず、row の target と行の model で起きる。
 #[test]
 fn seat_launch_short_form_refuses_typed_without_a_row() {
     let place = launch_place();
@@ -403,23 +418,23 @@ fn seat_launch_short_form_refuses_typed_without_a_row() {
 
     let out = launch_run_short(&place, &path, "l2", &["--orchestrator"]);
 
-    launch_assert_refused_line(&out, "seat launch: refused reason=defaults-unresolved missing=--target,--model", "no-row");
+    launch_assert_refused_line(&out, "seat launch: refused reason=defaults-unresolved missing=--target", "no-row");
     assert!(!stderr_of(&out).contains("target="), "解けない target を行に置かない: {}", stderr_of(&out));
+    assert!(!stderr_of(&out).contains("--model"), "model は行から導く: {}", stderr_of(&out));
     launch_assert_not_sent(&place, 0, "no-row");
 
     let long = launch_run(&place, &path, &target, &["--account", "l2"]);
     assert_eq!(rc_of(&long), i32::from(RC_OK), "長い形（model 無し）: stdout={} stderr={}", stdout_of(&long), stderr_of(&long));
     assert!(launch_quit_seat(&place, &target), "席を終えて前面を shell に戻せる: {}", capture(&place.socket, &target));
-    let sent_before = launch_tmux_calls(&place, "send-keys");
-    let rows_before = acct_rows(&place.state).len();
-    assert_eq!(rows_before, 1, "model を持たない row が 1 件");
+    let rows = acct_rows(&place.state);
+    assert_eq!(rows.first().and_then(|row| row.model.as_deref()), Some("Fable"), "長い形の row は行から導いた model を持つ: {rows:?}");
 
     let again = launch_run_short(&place, &path, "l2", &["--orchestrator"]);
 
-    launch_assert_refused_line(&again, "seat launch: refused reason=defaults-unresolved missing=--model", "no-model");
-    assert_eq!(launch_tmux_calls(&place, "send-keys"), sent_before, "no-model: 1 key も送らない");
-    assert_eq!(acct_rows(&place.state).len(), rows_before, "no-model: row を書かない");
-    assert_eq!(launch_inject_rows(&place).len(), 1, "no-model: launch の記録は長い形の 1 行のまま");
+    assert_eq!(rc_of(&again), i32::from(RC_OK), "短い形: stdout={} stderr={}", stdout_of(&again), stderr_of(&again));
+    assert_eq!(launch_inject_rows(&place).len(), 2, "長い形と短い形の launch の記録");
+    let argv = launch_defaults_argv(&place, "l2");
+    assert_eq!(fs::read_to_string(place.dir.join("launched")).unwrap_or_default(), format!("{argv}{argv}"), "2 回とも行の model を運ぶ");
     drop(guard);
     fs::remove_dir_all(&place.dir).ok();
 }
@@ -451,7 +466,7 @@ fn seat_launch_short_form_requires_exactly_one_role_flag() {
     assert!(stdout_of(&zero).starts_with(&format!("seat launch: launched target={name}_{name} account=l2 ")), "zero: {}", stdout_of(&zero));
     assert_eq!(
         fs::read_to_string(place.dir.join("launched")).unwrap_or_default(),
-        format!("--model\nfable\n{}", launch_expected_argv(&place, "l2")),
+        launch_defaults_argv(&place, "l2"),
         "zero: 既定の役割で導出した行が届く"
     );
     let rows = acct_rows(&place.state);
@@ -507,19 +522,18 @@ fn seat_entry_short_form_defaults_the_role_to_orchestrator() {
     let rows = acct_rows(&place.state);
     assert_eq!(rows.len(), 2, "同じ鍵の row が 2 件: {rows:?}");
     assert_eq!(rows.first(), rows.get(1), "1 語の row は長い形の row と同じ（役割 / target / model / 口座）: {rows:?}");
-    let argv = format!("--model\nfable\n{}", launch_expected_argv(&place, "l2"));
+    let argv = launch_defaults_argv(&place, "l2");
     assert_eq!(fs::read_to_string(place.dir.join("launched")).unwrap_or_default(), format!("{argv}{argv}"), "偽 claude の argv は 2 回とも同じ");
     drop(guard);
     fs::remove_dir_all(&place.dir).ok();
 }
 
 /// 約束 3 / 4（§26）: 登録 row も `--target` も無い周は、**`-t` を付けない** `display-message` の 1 問いで測った session の
-/// 名と役割の字面を `:` で繋いだ target で席が立つ。4 周を同じ place で測る: (1) 問いが撃てない（偽 tmux が rc 1）→
+/// 名と役割の字面を `:` で繋いだ target で席が立つ。3 周を同じ place で測る: (1) 問いが撃てない（偽 tmux が rc 1）→
 /// `missing=--target` (2) session の名が空（空の答え）→ 同じ断り（空を target に化けさせない） (3) 名は返るが row も
-/// `--model` も無い → `missing=--model`（本便は model の要求を外さない） (4) `--model` を添えると
-/// `<session>:orchestrator` の窓が 1 つ作られて席が立ち、row の target もその字面。**環境変数は 1 つも読まない**
-/// （器の `env::` の許し列は 3 つのままで、この経路は tmux への問いだけ）。base は 4 周とも `missing=--target,--model`
-/// で断る（RED）。
+/// `--model` も無い → model は役割の既定の行から導かれ（設計 seat-roles.md §20 の約束 4）、`<session>:orchestrator` の窓が
+/// 1 つ作られて席が立ち、row の target もその字面。**環境変数は 1 つも読まない**（器の `env::` の許し列は 3 つのままで、
+/// この経路は tmux への問いだけ）。
 #[test]
 fn seat_entry_target_defaults_to_the_caller_session_and_role() {
     let place = launch_place();
@@ -539,11 +553,8 @@ fn seat_entry_target_defaults_to_the_caller_session_and_role() {
     launch_assert_not_sent(&place, 0, "empty-session");
 
     launch_caller_session(&place, name);
-    let no_model = launch_run_short(&place, &path, "l2", &[]);
-    launch_assert_refused_line(&no_model, "seat launch: refused reason=defaults-unresolved missing=--model", "no-model");
-    launch_assert_not_sent(&place, 0, "no-model");
 
-    let out = launch_run_short(&place, &path, "l2", &["--model", "Fable"]);
+    let out = launch_run_short(&place, &path, "l2", &[]);
 
     let line = stdout_of(&out);
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={} pane={}", stderr_of(&out), capture(&place.socket, &target));
@@ -554,7 +565,7 @@ fn seat_entry_target_defaults_to_the_caller_session_and_role() {
     assert_eq!(rows.first().map(|row| row.target.as_str()), Some(target.as_str()), "row の target は <測った session>:<役割>: {rows:?}");
     assert_eq!(
         fs::read_to_string(place.dir.join("launched")).unwrap_or_default(),
-        format!("--model\nfable\n{}", launch_expected_argv(&place, "l2")),
+        launch_defaults_argv(&place, "l2"),
         "導出した行が 1 回だけ届く"
     );
     drop(guard);
@@ -678,7 +689,7 @@ fn seat_entry_same_window_replaces_the_process_with_the_launch_line() {
     assert_eq!(launch_tmux_calls(&place, "send-keys"), 0, "1 key も送らない");
     assert_eq!(
         fs::read_to_string(place.dir.join("launched")).unwrap_or_default(),
-        format!("--model\nfable\n{}", launch_expected_argv(&place, "l2")),
+        launch_defaults_argv(&place, "l2"),
         "偽 claude の argv と env は長い形の起動と同じ"
     );
     let rows = acct_rows(&place.state);
@@ -724,7 +735,7 @@ fn seat_entry_relabels_the_registered_row_for_another_account() {
     );
     assert_eq!(
         fs::read_to_string(place.dir.join("launched")).unwrap_or_default(),
-        format!("--model\nfable\n{}--model\nfable\n{}", launch_expected_argv(&place, "l2"), launch_expected_argv(&place, "l1")),
+        format!("{}{}", launch_defaults_argv(&place, "l2"), launch_defaults_argv(&place, "l1")),
         "起動行の口座の dir が新しい label を指す"
     );
     drop(guard);
@@ -748,8 +759,128 @@ fn seat_launch_short_form_keeps_known_verbs() {
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={}", stderr_of(&out));
     assert_eq!(line, format!("seat launch: launched target={name}_seat account=l2{}\n", provenance(&place.state, "flag")));
     assert_eq!(launch_tmux_calls(&place, "new-window"), 1, "window を 1 回作る");
-    assert_eq!(fs::read_to_string(place.dir.join("launched")).unwrap_or_default(), launch_expected_argv(&place, "l2"), "導出した行が 1 回だけ届く");
+    assert_eq!(fs::read_to_string(place.dir.join("launched")).unwrap_or_default(), launch_defaults_argv(&place, "l2"), "導出した行が 1 回だけ届く");
     launch_assert_registered_before_send(&place, &target, "l2");
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+// ─────────────────── 席の既定の model と effort（設計 seat-roles.md §20・`s2-07l.433`・接頭辞 `seat_defaults_`） ───────────────────
+
+/// 約束 1: `--model` 無しの起動行は `claude` の語の直後に `--model fable` → `--effort high`（役割の既定の行の値・この順）を
+/// **1 つずつ**運ぶ（送った行の語の並びと偽 claude の argv の先頭の 4 語で測る）。雛形（登録 row の `launch`）には旗の語が
+/// 1 つも残らず、導出行と 1 語も違わない。
+#[test]
+fn seat_defaults_launch_line_carries_model_then_effort_after_claude() {
+    let place = launch_place();
+    let name = "defaultsline";
+    let target = format!("{name}:{name}");
+    let path = launch_shims(&place, &target);
+    let guard = launch_session(&place, name, &path);
+    assert!(guard.ready(), "独立 socket に shell の session を立てられる");
+
+    let out = launch_run(&place, &path, &target, &["--account", "l2"]);
+
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={} stderr={}", stdout_of(&out), stderr_of(&out));
+    let argv = fs::read_to_string(place.dir.join("launched")).unwrap_or_default();
+    assert_eq!(argv.lines().take(4).collect::<Vec<_>>(), LAUNCH_DEFAULT_FLAGS, "claude の直後の 4 語: {argv}");
+    assert_eq!(argv, launch_defaults_argv(&place, "l2"), "{argv}");
+    let sent = acct_sent(&place.state, &format!("{name}_{name}"));
+    let line = sent.first().cloned().unwrap_or_default();
+    let words: Vec<&str> = line.split(' ').collect();
+    let after: Vec<&str> = words.iter().skip_while(|word| **word != "claude").skip(1).take(4).copied().collect();
+    assert_eq!(after, LAUNCH_DEFAULT_FLAGS, "送った行も同じ位置・同じ順: {line}");
+    for flag in ["--model", "--effort"] {
+        assert_eq!(words.iter().filter(|word| **word == flag).count(), 1, "{flag} は 1 つ: {line}");
+    }
+    let rows = acct_rows(&place.state);
+    let template = rows.first().map(|row| row.launch.clone()).unwrap_or_default();
+    assert_eq!(template, launch_derived(&place), "雛形は 1 語も書き換わらない: {rows:?}");
+    assert!(!template.contains("--model") && !template.contains("--effort"), "雛形に旗は残らない: {template}");
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// 約束 2: 雛形に literal の `--effort` が在る（host の面の `[[launch-arg]]` に `--effort` / `low`）周は、器の 1 つと二重になるので
+/// 後勝ちにせず `launch-effort-duplicated`（`--model` の二重の `launch-model-duplicated` とは違う閉じた理由）で断る・row も key も
+/// 書かない。
+#[test]
+fn seat_defaults_launch_refuses_a_duplicated_effort_with_its_own_reason() {
+    let place = launch_place();
+    let name = "defaultsdup";
+    let target = format!("{name}:{name}");
+    let host = place.state.join(vessel::rules::HOST_MANIFEST);
+    let literal = format!("{}\n[[launch-arg]]\nvalue = \"--effort\"\n\n[[launch-arg]]\nvalue = \"low\"\n", fs::read_to_string(&host).unwrap_or_default());
+    fs::write(&host, literal).ok();
+    let path = launch_shims(&place, &target);
+    let guard = launch_session(&place, name, &path);
+    assert!(guard.ready(), "独立 socket に shell の session を立てられる");
+
+    let out = launch_run(&place, &path, &target, &["--account", "l2"]);
+
+    let line = stderr_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "stdout={}", stdout_of(&out));
+    assert_eq!(tick_token(&line, "reason").as_deref(), Some("launch-effort-duplicated"), "{line}");
+    assert_ne!(tick_token(&line, "reason").as_deref(), Some("launch-model-duplicated"), "{line}");
+    launch_assert_not_sent(&place, 0, "effort-duplicated");
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// 約束 3: `--model` は照合であって宣言ではない。行（`fable`）と食い違う `--model Opus` は `launch-model-mismatch` で断り、1 key も
+/// 送らず登録 row も書かない。一致する `--model fable`（別名）は通り、row の model は行の表示名。使い方の 1 枚に `--effort` の
+/// flag は無い（席の effort の宣言は行の 1 か所）。
+#[test]
+fn seat_defaults_launch_model_is_a_check_against_the_row() {
+    let place = launch_place();
+    let name = "defaultscheck";
+    let target = format!("{name}:{name}");
+    let path = launch_shims(&place, &target);
+    let guard = launch_session(&place, name, &path);
+    assert!(guard.ready(), "独立 socket に shell の session を立てられる");
+
+    let other = launch_run(&place, &path, &target, &["--account", "l2", "--model", "Opus"]);
+
+    assert_eq!(rc_of(&other), i32::from(RC_REFUSED), "stdout={}", stdout_of(&other));
+    assert_eq!(tick_token(&stderr_of(&other), "reason").as_deref(), Some("launch-model-mismatch"), "{}", stderr_of(&other));
+    launch_assert_not_sent(&place, 0, "model-mismatch");
+
+    let same = launch_run(&place, &path, &target, &["--account", "l2", "--model", "fable"]);
+
+    assert_eq!(rc_of(&same), i32::from(RC_OK), "stdout={} stderr={}", stdout_of(&same), stderr_of(&same));
+    assert_eq!(fs::read_to_string(place.dir.join("launched")).unwrap_or_default(), launch_defaults_argv(&place, "l2"));
+    let rows = acct_rows(&place.state);
+    assert_eq!(rows.iter().map(|row| row.model.as_deref()).collect::<Vec<_>>(), [Some("Fable")], "{rows:?}");
+    assert!(!stderr_of(&run_seat(&[])).contains("--effort"), "使い方に --effort の flag は無い");
+    drop(guard);
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// 約束 4: 登録 row も `--model` も無い置き場（呼び手の session だけが測れる）で `seat <label>` の 1 語が起動まで通り、起動行は
+/// 行の model と effort を運び、row の model は行から導いた表示名（`missing=` に `--model` が載るのは行を読めない周だけ）。
+#[test]
+fn seat_defaults_short_form_derives_the_model_without_a_row() {
+    let place = launch_place();
+    let name = "defaultsshort";
+    let target = format!("{name}:orchestrator");
+    let path = launch_shims(&place, &target);
+    let guard = launch_session(&place, name, &path);
+    assert!(guard.ready(), "独立 socket に shell の session を立てられる");
+    launch_caller_session(&place, name);
+    assert!(acct_rows(&place.state).is_empty(), "前提: 登録 row は無い");
+
+    let out = launch_run_short(&place, &path, "l2", &[]);
+
+    let line = stdout_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={} pane={}", stderr_of(&out), capture(&place.socket, &target));
+    assert_eq!(line, format!("seat launch: launched target={name}_orchestrator account=l2{}\n", provenance(&place.state, "flag")));
+    assert_eq!(fs::read_to_string(place.dir.join("launched")).unwrap_or_default(), launch_defaults_argv(&place, "l2"), "行の既定を運ぶ");
+    let rows = acct_rows(&place.state);
+    assert_eq!(
+        rows.iter().map(|row| (row.target.as_str(), row.model.as_deref())).collect::<Vec<_>>(),
+        [(target.as_str(), Some("Fable"))],
+        "{rows:?}"
+    );
     drop(guard);
     fs::remove_dir_all(&place.dir).ok();
 }

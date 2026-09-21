@@ -1,12 +1,13 @@
 //! 席の**起動**（`seat launch`・[`launch`]・設計 account-lifecycle.md §4・ADR-0026 §2.3・SRS FR59）と、起動行の純関数
-//! （[`derive_launch`] / [`fill_launch`] / [`with_agent_view_off`] / [`with_anchor_cd`] / [`with_model`]・雛形 file を持たない）。
+//! （[`derive_launch`] / [`fill_launch`] / [`with_agent_view_off`] / [`with_anchor_cd`] / [`with_flags`] / [`with_defaults`]・雛形 file を持たない）。
 //! [`super`] から純移動（`s2-07l.319`）。起動の注入は立て直しと**同じ 1 本**（[`super::relaunch::boot`]）を通る。
 
 use super::relaunch::{boot, choose, input_gate, launch_line, Boot, Booted};
 use super::{
-    HOLE, MODEL_FLAG, NEXT_AFTER_NOT_SHELL, REASON_ACCOUNT_UNKNOWN, REASON_LOG_UNREADABLE, REASON_MODEL_DUPLICATED,
-    REASON_MODEL_UNKNOWN, REASON_NOT_SHELL, REASON_NO_ACCOUNT, REASON_REGISTER, REASON_REPLACE, REASON_RESTORE,
-    REASON_RESTORE_SAME_WINDOW, REASON_SESSION_MISSING, REASON_WINDOW, WHEN_LAUNCH, WHO_LAUNCH,
+    EFFORT_FLAG, HOLE, MODEL_FLAG, NEXT_AFTER_NOT_SHELL, REASON_ACCOUNT_UNKNOWN, REASON_EFFORT_DUPLICATED,
+    REASON_LOG_UNREADABLE, REASON_MODEL_DUPLICATED, REASON_MODEL_MISMATCH, REASON_MODEL_UNKNOWN, REASON_NOT_SHELL,
+    REASON_NO_ACCOUNT, REASON_REGISTER, REASON_REPLACE, REASON_RESTORE, REASON_RESTORE_SAME_WINDOW,
+    REASON_SESSION_MISSING, REASON_WINDOW, WHEN_LAUNCH, WHO_LAUNCH,
 };
 use crate::fleet::select::{Model, NoCandidate, Selection};
 use crate::fleet::store;
@@ -14,8 +15,8 @@ use crate::fleet::{replay, Registration};
 use crate::headless::{ACCOUNT_ENV, AGENT_VIEW_ENV, AGENT_VIEW_OFF, DEFAULT_CLAUDE};
 use crate::hook::{seat_name, InjectionRecord, SCHEMA};
 use crate::rules::manifest::{LaunchArg, Manifest, PluginDir};
-use crate::seat::role::Role;
-use crate::seat::{inject, role, sanitize_target, state, tmux_ok, StateDir};
+use crate::seat::role::{Role, RoleDefaults};
+use crate::seat::{inject, role, sanitize_target, state, tmux_ok, RuleRead, StateDir};
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::thread::sleep;
@@ -84,28 +85,55 @@ pub(super) fn model_of(text: Option<&str>) -> Result<Option<Model>, ()> {
     text.map_or(Ok(None), |found| Model::parse(found).map(Some).ok_or(()))
 }
 
-/// 起動行 `line` に model を運ばせる（pure・C10「row の宣言値を起動へ効かせる」・settings の層に依らない C2.2）: `claude` の語の直後に `--model <別名>` を挟む（`claude` の語が無い雛形は末尾）。`None` は行をそのまま（雛形は書き換えない）。
-pub fn with_model(line: &str, model: Option<Model>) -> String {
-    let Some(model) = model else { return line.to_owned() };
+/// 席の既定（model と effort の対）を**渡された manifest** の行から導き、宣言の model（`--model`）を照合する（**pure**・設計
+/// seat-roles.md §20 の約束 3 / 7）: 行を読めない周は [`crate::seat::RuleRead`] の字面（`no-rule:<variant>`）で断り
+/// （口座の設定 file の既定で黙って起こさない・C10）、`declared` が行の model と食い違う周は [`REASON_MODEL_MISMATCH`]
+/// （`--model` は照合であって宣言ではない）。埋め込み manifest を渡すのは `seat launch` の口の 1 か所だけ。
+pub(super) fn seat_defaults(rules: &Manifest, role: Role, declared: Option<Model>) -> Result<RoleDefaults, &'static str> {
+    let defaults = role::defaults_of(rules, role).map_err(RuleRead::no_rule)?;
+    match declared {
+        Some(model) if model != defaults.model => Err(REASON_MODEL_MISMATCH),
+        _ => Ok(defaults),
+    }
+}
+
+/// 起動行 `line` に旗と値の対の列 `flags` を運ばせる（pure・C10「宣言値を起動へ効かせる」・settings の層に依らない C2.2）:
+/// `claude` の語の直後に `flags` の宣言順のまま挟む（`claude` の語が無い雛形は末尾）。空の列は行をそのまま（雛形は書き換えない）。
+pub fn with_flags(line: &str, flags: &[(&str, &str)]) -> String {
+    if flags.is_empty() {
+        return line.to_owned();
+    }
     let mut words: Vec<&str> = line.split(' ').collect();
     let at = words.iter().position(|word| *word == DEFAULT_CLAUDE).map_or(words.len(), |at| at + 1);
-    words.splice(at..at, [MODEL_FLAG, model.alias()]);
+    words.splice(at..at, flags.iter().flat_map(|(flag, value)| [*flag, *value]));
     words.join(" ")
 }
 
-/// 起動行の `--model` は高々 1 つ: 雛形の literal と器の 1 つが重なる周は後勝ちにせず [`REASON_MODEL_DUPLICATED`]（宣言は row の 1 か所）。
+/// 起動行 `line` に役割の既定を運ばせる（[`with_flags`] の 1 本・設計 seat-roles.md §20 の約束 1）: `--model <別名>` → `--effort <値>`
+/// の順（この関数の列の宣言順）で 1 つずつ。`None` は行をそのまま（登録 row の雛形は `None`）。
+pub fn with_defaults(line: &str, defaults: Option<RoleDefaults>) -> String {
+    let Some(defaults) = defaults else { return line.to_owned() };
+    with_flags(line, &[(MODEL_FLAG, defaults.model.alias()), (EFFORT_FLAG, defaults.effort.alias())])
+}
+
+/// 起動行の `--model` と `--effort` は旗ごとに高々 1 つ: 雛形の literal と器の 1 つが重なる周は後勝ちにせず、旗ごとに違う理由
+/// （[`REASON_MODEL_DUPLICATED`] / [`REASON_EFFORT_DUPLICATED`]・宣言は行の 1 か所）で断る。
 pub fn single_model(line: &str) -> Result<(), &'static str> {
-    (line.split(' ').filter(|word| *word == MODEL_FLAG).count() <= 1).then_some(()).ok_or(REASON_MODEL_DUPLICATED)
+    let count = |flag: &str| line.split(' ').filter(|word| *word == flag).count();
+    [(MODEL_FLAG, REASON_MODEL_DUPLICATED), (EFFORT_FLAG, REASON_EFFORT_DUPLICATED)]
+        .into_iter()
+        .find(|(flag, _)| count(flag) > 1)
+        .map_or(Ok(()), |(_, reason)| Err(reason))
 }
 
 /// 起動行の導出（**pure**・設計 account-lifecycle.md §4・ADR-0026 §2.3）:
-/// `CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR={account_dir} claude [--model <別名>] --plugin-dir <anchor> [--plugin-dir <dir>…] [<value>…]`。
+/// `CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR={account_dir} claude [--model <別名> --effort <値>] --plugin-dir <anchor> [--plugin-dir <dir>…] [<value>…]`。
 ///
 /// 穴は [`HOLE`] の 1 つだけ（[`fill_launch`] / [`Holes`] は不変）。`claude` は語（shell の PATH が解く・器は claude の
-/// 場所を持たない）。`model` が在れば `claude` の直後に運ぶ（[`with_model`]・登録 row の雛形は `None`＝model 無し）。器自身の plugin は
+/// 場所を持たない）。`defaults` が在れば `claude` の直後に運ぶ（[`with_defaults`]・登録 row の雛形は `None`＝旗無し）。器自身の plugin は
 /// anchor（main checkout・`plugin.json` を持つ）を積み、host 固有の plugin dir と起動引数は host の面の宣言（`[[plugin]]` /
 /// `[[launch-arg]]`・宣言順）から写す（C10.2）。雛形 file は読まない・書かない。値の中の空白は解釈しない（shell が読む字面のまま）。
-pub fn derive_launch(anchor: &Path, plugins: &[PluginDir], args: &[LaunchArg], model: Option<Model>) -> String {
+pub fn derive_launch(anchor: &Path, plugins: &[PluginDir], args: &[LaunchArg], defaults: Option<RoleDefaults>) -> String {
     let mut words = vec![
         format!("{AGENT_VIEW_ENV}={AGENT_VIEW_OFF}"),
         format!("{ACCOUNT_ENV}={HOLE}"),
@@ -118,7 +146,7 @@ pub fn derive_launch(anchor: &Path, plugins: &[PluginDir], args: &[LaunchArg], m
         words.push(plugin.dir().to_owned());
     }
     words.extend(args.iter().map(|arg| arg.value().to_owned()));
-    with_model(&words.join(" "), model)
+    with_defaults(&words.join(" "), defaults)
 }
 
 /// 席の起動 1 回の入力（[`launch`]・`seat launch`・account-lifecycle.md §4）。
@@ -141,10 +169,13 @@ pub struct Launch<'a> {
     pub anchor: &'a Path,
     /// 明示の口座（`--account`・無ければ session 用の選定）。
     pub account: Option<&'a str>,
-    /// 席の model（`--model`・登録 row と選定の両方に渡す）。
+    /// 宣言の model（`--model`・役割の既定の行との照合と選定に渡す・登録 row には行から導いた値を書く）。
     pub model: Option<&'a str>,
     /// 開いた manifest（tracked + host の面・`[[account]]` / `[[plugin]]` / `[[launch-arg]]` の出所）。
     pub manifest: &'a Manifest,
+    /// 役割の既定の行（`seat.model.<役割名>` / `seat.effort.<役割名>`）を引く manifest（`seat launch` の口は埋め込みを渡す・
+    /// [`seat_defaults`]）。
+    pub rules: &'a Manifest,
     /// R-C9-1 の値（session 用の閾値）。
     pub threshold_pct: u64,
 }
@@ -161,16 +192,21 @@ pub enum Launched {
     Failed(&'static str),
 }
 
-/// 席を起こす（設計 account-lifecycle.md §4 / seat-roles.md §26・ADR-0026 §2.3・SRS FR59 / FR40 / FR36）: `--model` を型にし（表に無い値は
-/// `launch-model-unknown`）→ 口座を決め（`--account` か session 用の選定 [`choose`]）→ 起動行（導出した行に model を運ばせ穴を埋め row の
-/// anchor への `cd` を前置・二重は `launch-model-duplicated`・row の雛形は model 無し＝宣言は row の `model` の 1 か所）→ **呼び手の pane が
+/// 席を起こす（設計 account-lifecycle.md §4 / seat-roles.md §26 / §20・ADR-0026 §2.3・SRS FR59 / FR40 / FR36）: `--model` を型にし（表に無い値は
+/// `launch-model-unknown`）→ 役割の既定の行から model と effort を導き `--model` を照合する（[`seat_defaults`]・行を読めない周は
+/// `no-rule:<variant>`・食い違いは `launch-model-mismatch`）→ 口座を決め（`--account` か session 用の選定 [`choose`]）→ 起動行（導出した行に
+/// 既定の 2 つの旗を運ばせ穴を埋め row の anchor への `cd` を前置・二重は旗ごとの理由・row の雛形は旗無し＝宣言は行の 1 か所）→ **呼び手の pane が
 /// target の pane そのものか**を `-t` の無い 1 問いで測り（[`crate::seat::target_of_caller`]）→ 前提の断りを**全部**済ませて登録 row を書く
 /// （[`prepare`]）→ 一致する周は key を 1 つも送らず自分の process を起動行へ置き換え（[`replace_with`]）、一致しない周は立て直しと同じ
 /// 1 本（[`boot`]）で shell へ注入して `--restore` が在れば復元を送る → `inject.jsonl` に `kind=launch` を 1 行。lock も cycle-stamp も
 /// 取らない（起動は user の手番）。
 pub fn launch(request: &Launch) -> Launched {
     let started_at = Instant::now();
-    let Ok(model) = model_of(request.model) else { return Launched::Refused(REASON_MODEL_UNKNOWN) };
+    let Ok(declared) = model_of(request.model) else { return Launched::Refused(REASON_MODEL_UNKNOWN) };
+    let defaults = match seat_defaults(request.rules, request.role, declared) {
+        Ok(found) => found,
+        Err(reason) => return Launched::Refused(reason),
+    };
     let label = match pick_account(request) {
         Ok(label) => label,
         Err(refused) => return refused,
@@ -179,7 +215,8 @@ pub fn launch(request: &Launch) -> Launched {
     let anchor = request.anchor.display().to_string();
     // 呼び手の窓そのものへ起こす周（約束 7）: 前面の判定も入力欄の門も掛けず、送らずに置き換える。
     let same = crate::seat::target_of_caller(request.socket).as_deref() == Some(request.target);
-    let line = match launch_line(request.state_dir, &with_model(&derived, model), &label, &anchor).and_then(|line| prepare(request, &label, derived, same).map(|()| line)) {
+    let carried = with_defaults(&derived, Some(defaults));
+    let line = match launch_line(request.state_dir, &carried, &label, &anchor).and_then(|line| prepare(request, (&label, defaults.model), derived, same).map(|()| line)) {
         Ok(found) => found,
         Err(reason) => return Launched::Refused(reason),
     };
@@ -237,13 +274,14 @@ fn pick_account(request: &Launch) -> Result<String, Launched> {
 /// 起動行を送る前の手（順序固定・設計 seat-roles.md §26 の約束 5 / 6 / 8）: session の実在（無ければ `session-missing`）→
 /// **前提の断りを全部**（同じ窓の周は `--restore` を `restore-in-the-same-window`・違う窓で窓が既に在る周だけ前面が shell か
 /// 〔`not-a-shell`〕と入力欄の門〔[`input_gate`]・`pane-missing` / `input-busy` / `input-unknown`〕）→ 登録 row を書く
-/// （`sid` 無し・`launch` = 導出した行 `derived`〔穴を埋める前・model 無し〕）→ 窓がまだ無い周だけ作る（[`create_window`]）。
+/// （`sid` 無し・`launch` = 導出した行 `derived`〔穴を埋める前・旗無し〕・`model` = 行から導いた値の表示名＝実測の行と同じ語彙）→
+/// 窓がまだ無い周だけ作る（[`create_window`]）。
 ///
 /// **断りの 5 つは全部 row の前**で、row の後に残るのは `window-unwritable` だけである（`s2-07l.488` の実測＝断った周に
 /// 点検の口が `registered=1 live=1` と出る形を塞ぐ）。判定の並びは従来のまま（session の有無 → 窓の前面 → 入力欄）で、
 /// **窓がまだ無い周と同じ窓の周は前面と入力欄の判定を 2 つとも飛ばす**——前者は作る前の窓に pane が無く、後者は前面が
 /// 起動の口自身で門が必ず閉じて見える（key を 1 つも送らないので門が守る「打ちかけの入力」も無い）。
-fn prepare(request: &Launch, label: &str, derived: String, same: bool) -> Result<(), &'static str> {
+fn prepare(request: &Launch, (label, model): (&str, Model), derived: String, same: bool) -> Result<(), &'static str> {
     let Some((session, window)) = request.target.split_once(':') else {
         return Err(REASON_SESSION_MISSING);
     };
@@ -268,7 +306,7 @@ fn prepare(request: &Launch, label: &str, derived: String, same: bool) -> Result
         sid: None,
         account: label.to_owned(),
         launch: derived,
-        model: request.model.map(str::to_owned),
+        model: Some(model.display().to_owned()),
     };
     role::register(&request.state_dir.path, row).map_err(|_| REASON_REGISTER)?;
     if exists {
@@ -361,9 +399,11 @@ pub fn render_launched(target: &str, result: &Launched, state: &StateDir) -> Str
 #[cfg(test)]
 mod tests {
     use super::{
-        before_deadline, derive_launch, fill_launch, model_of, single_model, with_agent_view_off, with_anchor_cd, with_model,
-        Holes, Model, HOLE, HOLES, REASON_MODEL_DUPLICATED,
+        before_deadline, derive_launch, fill_launch, model_of, seat_defaults, single_model, with_agent_view_off, with_anchor_cd,
+        with_defaults, with_flags, Holes, Model, Role, RoleDefaults, RuleRead, HOLE, HOLES, REASON_EFFORT_DUPLICATED,
+        REASON_MODEL_DUPLICATED, REASON_MODEL_MISMATCH,
     };
+    use crate::headless::Effort;
     use crate::order::is_declaration_order;
     use crate::rules::manifest::Manifest;
     use std::path::Path;
@@ -408,12 +448,78 @@ mod tests {
         assert_eq!(with_agent_view_off(&line), line, "前置は既に在る（二重にしない）");
         let bare = derive_launch(Path::new("/repo/main"), &[], &[], None);
         assert_eq!(bare, "CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR={account_dir} claude --plugin-dir /repo/main");
-        // model（C10）: `claude` の直後に別名で 1 つ・None は従来の行と同一・雛形へ挟むのも同じ位置（`claude` の語が無い雛形は末尾）・2 つの行だけを断る。
-        let fable = derive_launch(Path::new("/repo/main"), &[], &[], Some(Model::Fable));
-        assert_eq!(fable, "CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR={account_dir} claude --model fable --plugin-dir /repo/main");
-        assert_eq!(with_model("sh l.sh {account_dir}", Some(Model::Opus)), "sh l.sh {account_dir} --model opus", "`claude` の語が無い雛形は末尾");
-        assert_eq!((single_model(&fable), single_model(&with_model(&fable, Some(Model::Opus)))), (Ok(()), Err(REASON_MODEL_DUPLICATED)));
+        // 既定の対（C10・§20 の約束 1）: `claude` の直後に `--model <別名>` → `--effort <値>` の順で 1 つずつ・None は従来の行と同一・
+        // 雛形へ挟むのも同じ位置（`claude` の語が無い雛形は末尾）・旗ごとに 2 つの行だけを旗ごとの理由で断る（約束 2）。
+        let pair = RoleDefaults { model: Model::Fable, effort: Effort::High };
+        let fable = derive_launch(Path::new("/repo/main"), &[], &[], Some(pair));
+        assert_eq!(
+            fable,
+            "CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR={account_dir} claude --model fable --effort high --plugin-dir /repo/main"
+        );
+        assert_eq!(with_defaults(&bare, Some(pair)), fable, "導出の後に運んでも同じ行");
+        assert_eq!(
+            with_defaults("sh l.sh {account_dir}", Some(RoleDefaults { model: Model::Opus, effort: Effort::Xhigh })),
+            "sh l.sh {account_dir} --model opus --effort xhigh",
+            "`claude` の語が無い雛形は末尾"
+        );
+        assert_eq!(with_flags(&bare, &[]), bare, "空の列は行をそのまま");
+        let twice_model = with_flags(&fable, &[("--model", "opus")]);
+        let twice_effort = with_flags(&fable, &[("--effort", "low")]);
+        assert_eq!(
+            (single_model(&fable), single_model(&twice_model), single_model(&twice_effort)),
+            (Ok(()), Err(REASON_MODEL_DUPLICATED), Err(REASON_EFFORT_DUPLICATED))
+        );
+        assert_ne!(REASON_MODEL_DUPLICATED, REASON_EFFORT_DUPLICATED, "旗ごとに違う理由");
         assert_eq!((model_of(None), model_of(Some("Fable")), model_of(Some("opus")), model_of(Some("nope"))), (Ok(None), Ok(Some(Model::Fable)), Ok(Some(Model::Opus)), Err(())));
+    }
+
+    /// `[[rule]]` 2 行（役割の既定の対）の manifest。kind / 値 / 発効は引数で崩せる（`None` は行を置かない）。
+    fn rules_with(model: Option<(&str, &str, bool)>, effort: Option<(&str, &str, bool)>) -> Manifest {
+        let role = Role::Orchestrator;
+        let row = |id: String, (kind, value, enabled): (&str, &str, bool)| {
+            format!("[[rule]]\nid = \"{id}\"\nkind = \"{kind}\"\nvalue = {value}\nenabled = {enabled}\nruling = \"r\"\nruled_at = \"d\"\n\n")
+        };
+        let text = format!(
+            "schema = 1\n\n{}{}",
+            model.map(|found| row(role.model_row(), found)).unwrap_or_default(),
+            effort.map(|found| row(role.effort_row(), found)).unwrap_or_default()
+        );
+        match Manifest::parse(&text) {
+            Ok(found) => found,
+            Err(errors) => panic!("fixture の manifest を読める: {errors:?}"),
+        }
+    }
+
+    /// 約束 7（§20・fail-closed・C10）: 行なし・不発効・表に無い の 3 形の manifest を pure 側に渡すと既定を導かず（＝起動行を
+    /// 組む入力が無い）、断りの理由は [`RuleRead`] の字面で 3 形ごとに違う。読める manifest は対を返し、`--model` は照合になる
+    /// （一致は通り・食い違いは `launch-model-mismatch`・無しは行の値）。埋め込み manifest は常に読めるので e2e では測れない。
+    #[test]
+    fn seat_defaults_unreadable_rows_refuse_with_the_rule_read_reason() {
+        let role = Role::Orchestrator;
+        let good = rules_with(Some(("RoleModel", "\"fable\"", true)), Some(("RoleEffort", "\"high\"", true)));
+        let cases = [
+            (rules_with(None, Some(("RoleEffort", "\"high\"", true))), RuleRead::Missing, "行なし"),
+            (rules_with(Some(("RoleModel", "\"fable\"", false)), Some(("RoleEffort", "\"high\"", true))), RuleRead::Disabled, "不発効"),
+            (rules_with(Some(("RoleModel", "\"fable\"", true)), Some(("DialogueSurface", "\"orchestrator\"", true))), RuleRead::NotInTable, "表に無い"),
+        ];
+        let mut reasons = Vec::new();
+        for (rules, read, what) in &cases {
+            let refused = seat_defaults(rules, role, None);
+            assert_eq!(refused, Err(read.no_rule()), "{what}");
+            assert!(refused.is_err_and(|reason| reason.starts_with("no-rule:") && reason.ends_with(read.as_str())), "{what}");
+            reasons.push(read.no_rule());
+        }
+        reasons.dedup();
+        assert_eq!(reasons.len(), cases.len(), "3 形ごとに違う理由: {reasons:?}");
+        let pair = RoleDefaults { model: Model::Fable, effort: Effort::High };
+        assert_eq!(seat_defaults(&good, role, None), Ok(pair), "無しは行の値");
+        assert_eq!(seat_defaults(&good, role, Some(Model::Fable)), Ok(pair), "一致は通る");
+        assert_eq!(seat_defaults(&good, role, Some(Model::Opus)), Err(REASON_MODEL_MISMATCH), "食い違いは断る");
+        assert_eq!(
+            seat_defaults(&good, role, None).map(|found| derive_launch(Path::new("/r"), &[], &[], Some(found))).as_deref(),
+            Ok("CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR={account_dir} claude --model fable --effort high --plugin-dir /r"),
+            "読める周だけ起動行を組む"
+        );
     }
 
     /// 起動行の先頭に agent view を切る env を 1 つだけ前置する: 行の中身は変えず、既に前置済みの行は二重にせず、空の行は
