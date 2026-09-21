@@ -8,7 +8,7 @@
 
 use super::approve::{block, Approval, Approve, RC_BLOCKED};
 use super::confine;
-use super::follow::{Halt, Resumption};
+use super::follow::{Halt, Resumption, Section};
 use super::gate::last_json_object;
 use super::refuse;
 use super::{
@@ -70,8 +70,9 @@ pub struct Launch<'a> {
     pub answered: Option<Question>,
     /// **追随の相手**（main の sha・便の base が main の真の祖先である周だけ・設計
     /// pipeline-conflict.md §3）。在る周は同じ run の worktree と base を使い、runner の
-    /// stdin に「追随」節を付ける。値の出所は [`super::follow::section`] ただ 1 本である。
-    pub follow: Option<String>,
+    /// stdin に「追随」節を付ける。値の出所は [`super::follow::section`] ただ 1 本である（便の消した path を名指す
+    /// 契約表の行の一覧〔設計 pipeline.md §34〕も同じ値が運ぶ）。
+    pub follow: Option<Section>,
     /// **途中再開**（上限で止まった `RateLimited` からの再 spawn と、runner が死んだ `Spawned` からの再 spawn
     /// だけが持つ・設計 account-autonomy.md §4）。在る周は同じ run の worktree と base を使い、runner の stdin に
     /// 「途中再開」節を付ける。値の出所は [`super::follow::resumption`] ただ 1 本で、止まった理由（[`Halt`]）も
@@ -428,8 +429,15 @@ fn prompt(launch: &Launch<'_>) -> String {
             item_list(&resumed.uncommitted)
         ));
     }
-    if let Some(main) = &launch.follow {
+    if let Some(Section { main, stale }) = &launch.follow {
         body.push_str(&format!("\n## 追随\n- main が {main} へ進んだ\n- `git rebase {main}` を実行し、衝突を解いて `git rebase --continue` で終える\n"));
+        if !stale.is_empty() {
+            let rows: Vec<String> = stale.iter().map(|row| format!("{}#{}: {}", row.doc, row.id, row.item)).collect();
+            body.push_str(&format!(
+                "- 追随で入った契約表の行が、この便の消した path を write-set に名指している（行を直す・その設計 doc は写しの write-set に追記済み）: {}\n",
+                item_list(&rows)
+            ));
+        }
     }
     body
 }

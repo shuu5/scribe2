@@ -69,8 +69,8 @@ pub(super) fn resume(
     *driven = Some(super::Driven { run: id.clone(), entry: Some(entry) });
     match entry {
         // `Implemented` の先は 2 つに分かれる（設計 pipeline-conflict.md §3・ADR-0019 §2.6）。
-        // 追随が衝突して段が戻った便（最後の `RunStage` の detail が `rebase-conflict:` で
-        // 始まり、runner が起きていない）は**起こし直しの続き**で、`--runner` を要る。
+        // 追随が衝突して段が戻った便（最後の `RunStage` の detail が `rebase-conflict:` か
+        // `rebase-stale-rows:` で始まり、runner が起きていない）は**起こし直しの続き**で、`--runner` を要る。
         // それ以外の `Implemented` は従来どおり gate。
         Stage::Implemented => match follow_pending(&state_dir, &id) {
             false => gate_run(args, &id, manifest, policy),
@@ -214,7 +214,8 @@ pub(super) fn review_then_launch(
 
 /// `Implemented` の便が**起こし直しの続き**か（設計 pipeline-conflict.md §3 の `resume`）。
 ///
-/// 条件は 2 つ——最後の `RunStage` の detail が `rebase-conflict:` で始まり、かつ runner が
+/// 条件は 2 つ——最後の `RunStage` の detail が `rebase-conflict:` か `rebase-stale-rows:`（追随で入った契約表の
+/// 行の起こし直し・設計 pipeline.md §34・判定は [`follow::is_conflict`] の 1 本）で始まり、かつ runner が
 /// 起きていない（走っている runner の隣にもう 1 つ起こさない）。どちらかを読めない周は
 /// `false`＝従来どおり gate へ流す（読めなさで runner を起こさない・fail-closed）。
 fn follow_pending(state_dir: &Path, id: &str) -> bool {

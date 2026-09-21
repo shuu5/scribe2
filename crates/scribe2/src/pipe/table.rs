@@ -38,7 +38,7 @@ pub use check::{check_promises, check_table, requirement_ids};
 pub use parse::{
     contract_id, find_row, form_of, parse_pointer, promises_of, read_rows, read_table, Form, Pointer, PointerError,
 };
-pub(crate) use check::{check_repo, read, read_all, tracked_files};
+pub(crate) use check::{check_repo, read, read_all, repo_findings, tracked_files, Located};
 
 /// 区間の始まりの行（CLAUDE.md の憲法区間と同じ marker 形・行全体が marker の行だけを数える）。
 pub const BEGIN: &str = "<!-- contracts:begin -->";
@@ -438,6 +438,15 @@ impl Finding {
     /// rc（読めない周は 2・残りは 1）。
     pub fn rc(&self) -> u8 {
         self.refuse.rc()
+    }
+
+    /// write-set の項目の未解決（`write-set-item-unresolved`）ならその項目の字面、他の理由は `None`（設計 pipeline.md
+    /// §34・追随で入った行が便の消した path を名指すかを呼び手が読む口・検査と `contracts check` の字面は変えない）。
+    pub fn unresolved_item(&self) -> Option<&str> {
+        match self.refuse {
+            Refuse::WriteSetItemUnresolved { ref item } => Some(item),
+            _ => None,
+        }
     }
 }
 

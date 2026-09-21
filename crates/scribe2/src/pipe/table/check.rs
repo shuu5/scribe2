@@ -4,7 +4,8 @@
 //! 表の全行を [`check_table`] が**全件・行番号付き**で検査し（id の一意・`req` の要件面での実在・`section` の節の
 //! 実在・verify の形・`depends` の解決と輪・`touches` の閉包と `surfaces` の外形 pin ⊆ `write-set`・write-set の
 //! 項目の実在・名指しの実在）、要件面の id は [`requirement_ids`] が拡張子ごとの読み手で取る。`contracts check` の
-//! 駆動（tracked file の一覧・doc の読み・判定行）は [`check_repo`]。findings の語彙（[`super::TableError`] /
+//! 駆動（tracked file の一覧・doc の読み・判定行）は [`check_repo`]、同じ検査の findings を doc・行 id・未解決の項目で
+//! 呼び手へ返す口は [`repo_findings`]（追随の後に便の木へ撃つ・設計 pipeline.md §34）。findings の語彙（[`super::TableError`] /
 //! [`super::Finding`] / [`super::Context`]）は親 module `table.rs`・置き場の抜き出しと parse は兄弟 `table/parse.rs`
 //! に置いたまま。呼び手（`pipe/cli.rs`・`pipe/cli/intake.rs`・歯）の `use` は親の再 export を通る。
 
@@ -349,13 +350,62 @@ fn is_requirement(text: &str) -> bool {
 /// rc = 違反 0 → 0 / 違反 ≥ 1 → 1 / 読めない周 → 2（読めない doc・区間・要件面・閉包の入力も 1 件として名指し、
 /// 判定行も出す）。tracked file の一覧か宣言を読めない周は判定できないので、理由だけを stderr へ出して rc 2。
 pub(crate) fn check_repo(repo: &Path, ceiling: &Ceiling<'_>) -> Outcome {
+    let judged = match judge_repo(repo, ceiling) {
+        Ok(found) => found,
+        Err(stopped) => return stopped,
+    };
+    let rc = judged.found.iter().map(|(_, finding)| finding.rc()).fold(RC_OK, u8::max);
+    let mut out: Vec<String> = judged.found.iter().map(|(doc, finding)| finding.render(doc)).collect();
+    out.push(format!("contracts check: docs={} rows={} findings={}", judged.docs, judged.rows, judged.found.len()));
+    Outcome { out, err: Vec::new(), rc }
+}
+
+/// 契約表の検査の 1 件を doc と行 id 付きで持つ（[`repo_findings`] の戻り・設計 pipeline.md §34）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Located {
+    /// 行を持つ設計 doc（repo 相対）。
+    pub doc: String,
+    /// 行 id（行番号に当たる契約の行が無い 1 件〔doc 全体・約束の行〕は `None`）。
+    pub id: Option<String>,
+    /// write-set の項目の未解決ならその項目の字面（[`Finding::unresolved_item`]・他の理由は `None`）。
+    pub unresolved: Option<String>,
+}
+
+/// [`check_repo`] と**同じ入力・同じ検査**の findings を、呼び手が読める形（doc・行 id・未解決の項目）で返す
+/// （設計 pipeline.md §34・追随の後に便の木へ撃つ口）。tracked file の一覧か宣言を読めない周は `None`
+/// （読めないを「findings 0」に読み替えない・NFR4）。
+pub(crate) fn repo_findings(repo: &Path, ceiling: &Ceiling<'_>) -> Option<Vec<Located>> {
+    let judged = judge_repo(repo, ceiling).ok()?;
+    let mut located = Vec::new();
+    for (doc, finding) in judged.found {
+        let rows = read(repo, &doc).ok().and_then(|text| read_table(&doc, &text).ok()).map(|(rows, _)| rows);
+        let id = rows.and_then(|rows| rows.into_iter().find(|row| row.line == finding.line).map(|row| row.id));
+        let unresolved = finding.unresolved_item().map(str::to_owned);
+        located.push(Located { doc, id, unresolved });
+    }
+    Some(located)
+}
+
+/// repo の全 doc を検査した結果（doc の数・行の数・doc 順の findings）。
+struct Judged {
+    /// 検査した doc の数。
+    docs: usize,
+    /// 検査した行の数。
+    rows: usize,
+    /// (doc, 1 件)（doc 順・doc の中は行番号の順）。
+    found: Vec<(String, Finding)>,
+}
+
+/// tracked な `docs/design/*.md` の区間を全行検査する（[`check_repo`] と [`repo_findings`] の共通の 1 本）。判定できない
+/// 周（tracked file の一覧か宣言を読めない）は理由の Outcome（rc 2）。
+fn judge_repo(repo: &Path, ceiling: &Ceiling<'_>) -> Result<Judged, Outcome> {
     let Some(tracked) = tracked_files(repo) else {
         let reason = format!("contracts: {} の tracked file を読めない（git repo でない）", repo.display());
-        return Outcome::failed_line(RC_BROKEN, reason);
+        return Err(Outcome::failed_line(RC_BROKEN, reason));
     };
     let facts = match declaration::table_facts(repo, ceiling) {
         Ok(found) => found,
-        Err(errors) => return Outcome::failed(RC_BROKEN, errors.iter().map(ToString::to_string).collect()),
+        Err(errors) => return Err(Outcome::failed(RC_BROKEN, errors.iter().map(ToString::to_string).collect())),
     };
     let sources = read_all(repo, &tracked, ".rs");
     let snapshots = read_all(repo, &tracked, ".snap");
@@ -372,16 +422,13 @@ pub(crate) fn check_repo(repo: &Path, ceiling: &Ceiling<'_>) -> Outcome {
         .iter()
         .filter(|path| path.strip_prefix(DESIGN_DIR).is_some_and(|rest| !rest.contains('/') && rest.ends_with(".md")))
         .collect();
-    let (mut out, mut rows, mut findings, mut rc) = (Vec::new(), 0_usize, 0_usize, RC_OK);
+    let (mut rows, mut found) = (0_usize, Vec::new());
     for doc in &docs {
-        let (count, found) = judge_doc(repo, doc, &ctx);
+        let (count, judged) = judge_doc(repo, doc, &ctx);
         rows = rows.saturating_add(count);
-        findings = findings.saturating_add(found.len());
-        rc = found.iter().map(Finding::rc).fold(rc, u8::max);
-        out.extend(found.iter().map(|finding| finding.render(doc)));
+        found.extend(judged.into_iter().map(|finding| ((*doc).clone(), finding)));
     }
-    out.push(format!("contracts check: docs={} rows={rows} findings={findings}", docs.len()));
-    Outcome { out, err: Vec::new(), rc }
+    Ok(Judged { docs: docs.len(), rows, found })
 }
 
 /// doc 1 本の行数と findings（読めない doc・区間は 1 件ずつ名指す）。

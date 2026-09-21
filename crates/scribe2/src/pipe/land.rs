@@ -528,6 +528,9 @@ fn with_lines(mut lines: Vec<String>, mut outcome: Outcome) -> Outcome {
 /// - main が動いた差分が [`DETECTION_SCOPE`] に 1 つも触れない周（[`follow_detection`]・rebase の**前**に
 ///   読む）は**撃ち直しを丸ごと省き**、前周の Gated PASS を新しい base へ引き継ぐ（[`carry_gated_pass`]・
 ///   設計 §33 (i)）。面に触れる周と diff を読めない周は従来どおり全段を撃ち直す。
+/// - rebase の直後（上の省略と再 gate の**前**・[`rebase_onto`] の中）に契約表の検査を便の木へ撃ち、findings のすべてが
+///   便の消した path を名指す write-set の項目の未解決なら [`follow::on_stale_rows`] へ委ねる（`Implemented
+///   detail=rebase-stale-rows:`・runner を起こし直す・設計 §34）。他の findings と撃てない周は従来どおり。
 fn follow_main(entry: &Land<'_>, worktree: &Path, base: &str, main: &str) -> Follow {
     if !git_ok(entry.repo, &["merge-base", "--is-ancestor", base, main]) {
         return Follow::Stopped(refused(format!(
@@ -662,6 +665,7 @@ fn carry_gated_pass(entry: &Land<'_>, reason: DetectionSkip) -> Option<String> {
 /// - **同一変更の便**: trailer が無い周は便の変更が別の便で main に在る（先に land した便と同じ patch）ので
 ///   gate を撃ち直さず（lens を起動しない）`rebase-empty` で終端する。commit 数を読めない周は 0 に読み替えず、
 ///   従来どおり撃ち直しの precheck へ流す（fail-closed の向きを変えない・`s2-07l.125`）。
+/// - commit が残った周は、撃ち直しの前に契約表の行が便の消した path を名指すかを見る（[`stale_rows_stop`]・設計 §34）。
 fn rebase_onto(entry: &Land<'_>, worktree: &Path, base: &str, main: &str) -> Result<Rebased, Outcome> {
     if !git_ok(worktree, &["rebase", main]) {
         return Err(follow::on_conflict(&Conflict {
@@ -672,7 +676,7 @@ fn rebase_onto(entry: &Land<'_>, worktree: &Path, base: &str, main: &str) -> Res
         }));
     }
     if commits_after_rebase(worktree, main) != Some(0) {
-        return Ok(Rebased::Pending);
+        return stale_rows_stop(entry, worktree, base, main).map_or(Ok(Rebased::Pending), Err);
     }
     if let Some(found) = landed_squash_of(entry.repo, main, entry.run) {
         return Ok(Rebased::AlreadyLanded(found));
@@ -685,6 +689,21 @@ fn rebase_onto(entry: &Land<'_>, worktree: &Path, base: &str, main: &str) -> Res
             entry.run
         ),
     ))
+}
+
+/// **追随で入った契約表の行が便の消した path を名指す周は runner を起こし直す**（設計 §34）: rebase が通った直後・§33 の
+/// 省略と再 gate の前に便の木へ契約表の検査を撃ち、findings のすべてが便の消した path を名指す write-set の項目の未解決
+/// なら [`follow::on_stale_rows`] の Outcome（記帳・写しの追記・起こし直し）で止まる。該当しない findings・検査を撃てない
+/// 周は `None`（従来どおり・[`follow::stale_rows`]）。
+fn stale_rows_stop(entry: &Land<'_>, worktree: &Path, base: &str, main: &str) -> Option<Outcome> {
+    let rows = follow::stale_rows_in(entry.state_dir, entry.run, worktree, main)?;
+    let entry = Conflict {
+        turn: turn_of(entry),
+        base,
+        main,
+        limit: entry.retries,
+    };
+    Some(follow::on_stale_rows(&entry, &rows))
 }
 
 /// main の祖先に**この便の trailer**（`run: <run id>`・[`squash_message`] が本文の末尾に置く 1 行）を持つ

@@ -13,6 +13,11 @@
 //! （[`on_stale`]）で 1 件記し、同じ land の中で追随し直す（runner は要らない）。回数は
 //! `rebase-conflict:` と `stale:` の行を合算し（[`retried`]）、上限で `Failed detail=rebase-conflict`。
 //!
+//! **追随で入った契約表の行が便の消した path を名指す周も同じ経路で起こし直す**（設計 pipeline.md §34・`s2-07l.400`）。
+//! land は rebase の直後に [`stale_rows_in`] を撃ち、該当の周は [`on_stale_rows`] が `RunStage stage=Implemented
+//! detail=rebase-stale-rows:<base>..<main>` を記帳し、写しの write-set に行の設計 doc を追記して runner を起こす。回数は
+//! 衝突と同じ上限（[`is_conflict`] が両方の接頭辞を数える）で、上限で `Failed detail=rebase-stale-rows`。
+//!
 //! **runner を起こす経路はこの module の [`spawn_turn`] ただ 1 本**である（起動そのものは
 //! [`super::spawn::spawn`]＝C6 の 1 口）。起こし直しと通常の起動で turn の後始末（[`settle`]）が
 //! 分かれると、追随の base 記帳が片方の経路から静かに抜ける——`resume` で起こし直した turn が
@@ -20,15 +25,22 @@
 //! write-set の外と誤る。
 
 use super::contract::Contract;
+use super::declaration::{is_under, Ceiling, Effective, CEILING_ROW, DENIED_ROW};
 use super::gate::RC_INCONCLUSIVE;
 use super::land::MAIN_REF;
 use super::ratelimit::{choose_account, Pool};
+use super::refuse::SHRINK_FILE;
 use super::spawn::{spawn, Account, Launch};
-use super::{base_of_run, emit, git_line, git_ok, question_of_run, worktree_path, Emit, Precheck};
+use super::table::{repo_findings, Located};
+use super::{
+    base_of_run, contract_path, emit, git_line, git_ok, question_of_run, vessel_path, worktree_path, Emit, Precheck,
+};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
 use crate::fleet::store::{self, LockPolicy};
 use crate::fleet::{EventKind, Stage};
 use crate::polarity::{OnFailure, Polarity, Timing};
+use crate::rules::manifest::Manifest;
+use crate::rules::RuleValue;
 use std::path::Path;
 
 /// この境界の極性（[`FollowCheck`]）: 起こし直す**前**に回数を測って止め（in-loop）、
@@ -52,6 +64,13 @@ pub(crate) const EXHAUSTED: &str = "rebase-conflict";
 /// **同じ 1 つの上限**（`pipe.follow_retries`）に合算し（[`retried`]）、上限で `Failed detail=rebase-conflict`
 /// （新しい終端の理由を増やさない）。判定は [`is_stale`] ただ 1 本が持つ。
 pub(crate) const STALE: &str = "stale";
+
+/// 追随で入った契約表の行が便の消した path を名指す周の語（設計 pipeline.md §34・`s2-07l.400`）。
+///
+/// 記帳は `RunStage stage=Implemented detail=rebase-stale-rows:<base>..<main>`（衝突と同じ形・終端にしない）、上限に
+/// 達した周の終端は `Failed detail=rebase-stale-rows`。回数は衝突と**同じ 1 つの上限**（`pipe.follow_retries`）で、
+/// 判定は [`is_conflict`] の 1 本が両方の接頭辞を数える（resume の弁別も同じ 1 本）。
+pub(crate) const STALE_ROWS: &str = "rebase-stale-rows";
 
 /// 回数を読めなかった周の終端の理由（**上限到達とは分ける**・rc 2）。
 const UNMEASURED: &str = "follow-unmeasured";
@@ -93,14 +112,19 @@ impl FollowCheck {
     }
 }
 
-/// 衝突を記帳した `detail` か（接頭辞 `rebase-conflict:`）。
+/// runner の起こし直しを記帳した `detail` か（接頭辞 `rebase-conflict:` か `rebase-stale-rows:`・設計 §34）。
 ///
 /// **読み手はこの 1 本だけ**である——回数の導出（[`retried`]）と `resume` の弁別
-/// （`pipe::cli`）が同じ判定を見る。
+/// （`pipe::cli`）が同じ判定を見る。終端の理由（語だけ・`:` 無し）は数えない。
 pub(crate) fn is_conflict(detail: &str) -> bool {
-    detail
-        .strip_prefix(EXHAUSTED)
-        .is_some_and(|rest| rest.starts_with(':'))
+    [EXHAUSTED, STALE_ROWS]
+        .iter()
+        .any(|word| detail.strip_prefix(word).is_some_and(|rest| rest.starts_with(':')))
+}
+
+/// 契約表の行の起こし直しを記帳した `detail` か（接頭辞 `rebase-stale-rows:`・「追随」節に行の一覧を載せる周の判定）。
+fn is_stale_rows(detail: &str) -> bool {
+    detail.strip_prefix(STALE_ROWS).is_some_and(|rest| rest.starts_with(':'))
 }
 
 /// 撃ち直しの間に main が動いたことを記帳した `detail` か（接頭辞 `stale:`・設計 §18）。
@@ -200,7 +224,7 @@ pub(crate) fn on_conflict(entry: &Conflict<'_>) -> Outcome {
                 entry.turn.run, entry.base, entry.main, entry.limit
             ),
         ),
-        FollowCheck::Retry => retry(entry),
+        FollowCheck::Retry => retry(entry, "衝突"),
     }
 }
 
@@ -242,8 +266,203 @@ pub(crate) fn on_stale(entry: &Conflict<'_>) -> Result<(), Outcome> {
     }
 }
 
-/// 起こし直した回数 = 同じ run の `rebase-conflict:` と `stale:` の `RunStage` の行数の**合算** − 1
-/// （**いま記帳した分を除く**・設計 §18＝衝突の起こし直しと stale の追随し直しは 1 つの上限を分け合う）。
+/// 追随で入った契約表の行が便の消した path を名指す 1 行（設計 pipeline.md §34）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StaleRow {
+    /// 行を持つ設計 doc（repo 相対・`docs/design/<doc>.md`）。
+    pub doc: String,
+    /// 行 id。
+    pub id: String,
+    /// 未解決の write-set の項目（契約が書いた字面）。
+    pub item: String,
+}
+
+/// runner の stdin の「追随」節の材料（出所は [`section`] の 1 本・[`super::spawn`] が描く）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Section {
+    /// 追随の相手（main の sha）。
+    pub main: String,
+    /// 便の消した path を名指す行（`rebase-stale-rows:` で起こし直した周だけ・他は空）。
+    pub stale: Vec<StaleRow>,
+}
+
+/// 追随の rebase の直後に契約表の行が便の消した path を名指すかの判定（**pure**・設計 pipeline.md §34 (2) / (4)）。
+///
+/// `Some` になるのは、検査を撃てて（`found` が `Some`）findings が 1 件以上在り、**そのすべて**が行 id を持つ write-set の
+/// 項目の未解決で、名指された path が便の消した・改名した path（`deleted`）に含まれる周だけ。それ以外の findings が 1 件
+/// でも在る周・検査を撃てない周は `None`＝従来どおり再 gate（読めないを「行なし」に読み替えない・NFR4）。
+pub(crate) fn stale_rows(found: Option<&[Located]>, deleted: &[String]) -> Option<Vec<StaleRow>> {
+    let found = found.filter(|found| !found.is_empty())?;
+    found
+        .iter()
+        .map(|located| {
+            let item = located.unresolved.as_deref()?;
+            let id = located.id.as_deref()?;
+            names_deleted(item, deleted).then(|| StaleRow { doc: located.doc.clone(), id: id.to_owned(), item: item.to_owned() })
+        })
+        .collect()
+}
+
+/// write-set の項目が便の消した path を名指すか（縮む面の `-` は落として読む・末尾 `/` の dir は配下の 1 本で足りる）。
+fn names_deleted(item: &str, deleted: &[String]) -> bool {
+    let path = item.strip_prefix(SHRINK_FILE).unwrap_or(item);
+    match path.strip_suffix('/') {
+        Some(dir) => deleted.iter().any(|gone| is_under(gone, dir)),
+        None => deleted.iter().any(|gone| gone == path),
+    }
+}
+
+/// 便の木（rebase 済み）で [`stale_rows`] を測る: 契約表の検査（`contracts check` と同じ 1 本）と、便自身の diff
+/// （`git diff --name-status -M <main> HEAD`）の D / R の旧 path。どれかを読めない周は `None`。
+///
+/// 上限の command は**便の写しの有効値**（run dir の `vessel.toml`・受付が上限と突き合わせて凍結した allowlist）で、
+/// 禁じる語列は埋め込みの manifest の行（land は `--rules` の manifest を持たない・受付の上限を写しから借りる）。
+/// 追随で宣言の allowlist が広がった周は上限の外として読めない側（`None`＝従来どおり再 gate）へ倒れる。
+pub(crate) fn stale_rows_in(state_dir: &Path, run: &str, worktree: &Path, main: &str) -> Option<Vec<StaleRow>> {
+    let deleted = removed_paths(&super::git_bytes(worktree, &["diff", "--name-status", "-z", "-M", main, "HEAD"])?);
+    let frozen = Effective::load(&vessel_path(state_dir, run)).ok()?;
+    let denied = list_row(&Manifest::embedded().ok()?, DENIED_ROW)?;
+    let ceiling = Ceiling { row: CEILING_ROW, commands: frozen.allowed(), denied: &denied };
+    let found = repo_findings(worktree, &ceiling);
+    stale_rows(found.as_deref(), &deleted)
+}
+
+/// rules 行の文字列の列（無い・不発効・型違いは `None`）。
+fn list_row(manifest: &Manifest, id: &str) -> Option<Vec<String>> {
+    let row = manifest.get(id).filter(|row| row.enabled)?;
+    match row.value {
+        RuleValue::List(ref found) => Some(found.clone()),
+        _ => None,
+    }
+}
+
+/// `git diff --name-status -z` の出力から消えた path（`D` の path と `R` の旧 path）を取る（**pure**）。
+fn removed_paths(bytes: &[u8]) -> Vec<String> {
+    let text = String::from_utf8_lossy(bytes);
+    let mut fields = text.split('\0').filter(|field| !field.is_empty());
+    let mut found = Vec::new();
+    while let Some(status) = fields.next() {
+        let Some(path) = fields.next() else {
+            break;
+        };
+        match status.chars().next() {
+            Some('D') => found.push(path.to_owned()),
+            Some('R') => {
+                found.push(path.to_owned());
+                fields.next();
+            }
+            Some('C') => {
+                fields.next();
+            }
+            _ => {}
+        }
+    }
+    found
+}
+
+/// 追随で入った契約表の行が便の消した path を名指す周（設計 pipeline.md §34 (2) / (3)）。**返り値は必ず land を止める**
+/// ——起こし直した turn の後は `gate` から撃ち直す（衝突 [`on_conflict`] と同じ経路・木は rebase 済みのまま）。
+///
+/// 1. `RunStage stage=Implemented detail=rebase-stale-rows:<base>..<main>` を 1 件記帳する（終端にしない）。
+/// 2. 回数を衝突と**同じ 1 つの上限**で判定する。上限に達した周は `Failed detail=rebase-stale-rows` + rc 1、読めない周は
+///    `Failed detail=follow-unmeasured` + rc 2。
+/// 3. 上限の内は写しの write-set に行を持つ設計 doc を**末尾へ追記**し（既存の項目は動かさない・追記した項目は stderr の
+///    1 行に写す）、runner をもう 1 turn 起こす（`--runner` の無い周は記帳と追記を残して rc 1＝resume で続く）。
+pub(crate) fn on_stale_rows(entry: &Conflict<'_>, rows: &[StaleRow]) -> Outcome {
+    let recorded = record(
+        &entry.turn,
+        Stage::Implemented,
+        format!("{STALE_ROWS}:{}..{}", entry.base, entry.main),
+    );
+    if let Err(reason) = recorded {
+        return broken(reason);
+    }
+    let named: Vec<String> = rows.iter().map(|row| format!("{}#{} {}", row.doc, row.id, row.item)).collect();
+    match FollowCheck::judge(retried(entry.turn.state_dir, entry.turn.run), entry.limit) {
+        FollowCheck::Unreadable => terminate(
+            entry,
+            UNMEASURED,
+            RC_BROKEN,
+            format!("run {} の起こし直しの回数を読めない", entry.turn.run),
+        ),
+        FollowCheck::Exhausted => terminate(
+            entry,
+            STALE_ROWS,
+            RC_REFUSED,
+            format!(
+                "run {} の追随で入った契約表の行が便の消した path を名指す（{}・base={} main={}・起こし直しの上限 {} に達した）",
+                entry.turn.run,
+                named.join(" / "),
+                entry.base,
+                entry.main,
+                entry.limit
+            ),
+        ),
+        FollowCheck::Retry => {
+            let appended = match widen_write_set(&contract_path(entry.turn.state_dir, entry.turn.run), rows) {
+                Ok(found) => found,
+                Err(reason) => return broken(reason),
+            };
+            let note = format!(
+                "pipe: run {} の追随で入った契約表の行が便の消した path を名指す（{}）・写しの write-set に追記: {}",
+                entry.turn.run,
+                named.join(" / "),
+                if appended.is_empty() { "なし".to_owned() } else { appended.join(", ") }
+            );
+            let mut outcome = retry(entry, "契約表の行");
+            outcome.err.insert(0, note);
+            outcome
+        }
+    }
+}
+
+/// 写しの `write-set` の行の末尾へ行を持つ設計 doc を足す（**追記だけ**・既存の項目は順序も字面も不変・既に在る doc は
+/// 足さない）。足した項目の列を返す。写しを読めない・`write-set` の行が無い・書けない周は理由。
+fn widen_write_set(path: &Path, rows: &[StaleRow]) -> Result<Vec<String>, String> {
+    let text = std::fs::read_to_string(path).map_err(|err| format!("{} を読めない: {err}", path.display()))?;
+    let mut appended: Vec<String> = Vec::new();
+    let mut seen = false;
+    let mut out = String::new();
+    for line in text.split_inclusive('\n') {
+        let body = line.trim_end_matches('\n');
+        let key = body.trim().split_once('=').map(|(key, _)| key.trim());
+        if key != Some("write-set") || seen {
+            out.push_str(line);
+            continue;
+        }
+        seen = true;
+        let Some(open) = body.trim_end().strip_suffix(']') else {
+            return Err(format!("{} の write-set の行を読めない", path.display()));
+        };
+        let mut widened = open.to_owned();
+        for row in rows {
+            let quoted = format!("\"{}\"", row.doc);
+            if body.contains(&quoted) || appended.contains(&row.doc) {
+                continue;
+            }
+            if !widened.trim_end().ends_with('[') {
+                widened.push_str(", ");
+            }
+            widened.push_str(&quoted);
+            appended.push(row.doc.clone());
+        }
+        widened.push(']');
+        out.push_str(&widened);
+        if line.ends_with('\n') {
+            out.push('\n');
+        }
+    }
+    if !seen {
+        return Err(format!("{} に write-set の行が無い", path.display()));
+    }
+    if !appended.is_empty() {
+        std::fs::write(path, out).map_err(|err| format!("{} を書けない: {err}", path.display()))?;
+    }
+    Ok(appended)
+}
+
+/// 起こし直した回数 = 同じ run の `rebase-conflict:` / `rebase-stale-rows:` と `stale:` の `RunStage` の行数の**合算** − 1
+/// （**いま記帳した分を除く**・設計 §18 / §34＝衝突と契約表の行の起こし直しと stale の追随し直しは 1 つの上限を分け合う）。
 ///
 /// **replay の導出値**で、別の状態 file を持たない（C3・設計 §9 の却下案）。store を
 /// 読めない周は `None`＝「0 回起こした」に読み替えない（fail-closed）。
@@ -264,7 +483,8 @@ fn retried(state_dir: &Path, run: &str) -> Option<u64> {
 ///
 /// 口座は初回の起動と同じ選定（[`spawn_selected`]・設計 account-autonomy.md §4「初回の起動も同じ選定を通す」の
 /// 列挙 = 衝突の起こし直し）で選ぶ。待ちの間に便が居るはずの段は、いま記帳した `Implemented`。
-fn retry(entry: &Conflict<'_>) -> Outcome {
+/// `cause` は stderr の 1 行が名乗る起こし直しの理由（`衝突` / `契約表の行`）。
+fn retry(entry: &Conflict<'_>, cause: &str) -> Outcome {
     let mut outcome = spawn_selected(&entry.turn, Stage::Implemented);
     if outcome.rc != RC_OK {
         return outcome;
@@ -285,7 +505,7 @@ fn retry(entry: &Conflict<'_>) -> Outcome {
     }
     outcome.out.push(format!("run={} next=gate", entry.turn.run));
     outcome.err.push(format!(
-        "pipe: run {} の衝突を runner が解いた（次は gate）",
+        "pipe: run {} の{cause}を runner が解いた（次は gate）",
         entry.turn.run
     ));
     outcome.rc = RC_INCONCLUSIVE;
@@ -394,14 +614,31 @@ pub(crate) fn spawn_turn(entry: &Turn<'_>, account: Account<'_>) -> Outcome {
 /// **「便の base が main の真の祖先である」の 1 条件**で決める。決めるのは runner の
 /// stdin の「追随」節（[`super::spawn`]）**だけ**である——turn の後始末（[`settle`]）は
 /// この値を見ない（節を渡さなかった turn で runner が自ら rebase した周も同じ 1 本で測る）。
-pub(crate) fn section(state_dir: &Path, repo: &Path, run: &str) -> Option<String> {
+///
+/// 最後の `RunStage` の detail が `rebase-stale-rows:` の周（設計 pipeline.md §34）だけ、便の木で [`stale_rows_in`] を測り直して
+/// 行の一覧を節に載せる（replay と木の導出値・別の状態 file を持たない・測れない周は一覧が空）。
+pub(crate) fn section(state_dir: &Path, repo: &Path, run: &str) -> Option<Section> {
     // base が無い周も読めない周も**節を渡さない**側へ倒す（追随は base が分かった周だけ書ける）。
     let base = base_of_run(state_dir, run).known()?;
     let main = git_line(repo, &["rev-parse", MAIN_REF])?;
-    if main == base {
+    if main == base || !git_ok(repo, &["merge-base", "--is-ancestor", &base, &main]) {
         return None;
     }
-    git_ok(repo, &["merge-base", "--is-ancestor", &base, &main]).then_some(main)
+    let stale = match last_stage_detail(state_dir, run).is_some_and(|detail| is_stale_rows(&detail)) {
+        true => stale_rows_in(state_dir, run, &worktree_path(repo, run), &main).unwrap_or_default(),
+        false => Vec::new(),
+    };
+    Some(Section { main, stale })
+}
+
+/// 便の最後の `RunStage` の detail（無い・読めない周は `None`）。
+fn last_stage_detail(state_dir: &Path, run: &str) -> Option<String> {
+    let events = store::read_all(state_dir).ok()?;
+    events
+        .into_iter()
+        .rev()
+        .find(|event| event.run == run && event.kind == EventKind::RunStage)
+        .and_then(|event| event.detail)
 }
 
 /// runner が死んだ便に `pipe resume` が記帳する `SeatStopped` の理由（設計 account-autonomy.md §4「runner が
@@ -597,7 +834,10 @@ fn broken(reason: String) -> Outcome {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_conflict, is_stale, retried, spawn_turn, FollowCheck, Runner, Turn, DIRTY, EXHAUSTED, STALE};
+    use super::{
+        is_conflict, is_stale, removed_paths, retried, spawn_turn, stale_rows, widen_write_set, FollowCheck, Located, Runner,
+        StaleRow, Turn, DIRTY, EXHAUSTED, STALE, STALE_ROWS,
+    };
     use crate::cli_outcome::{RC_OK, RC_REFUSED};
     use crate::fleet::store::{self, LockPolicy};
     use crate::fleet::{EventKind, Stage};
@@ -768,5 +1008,85 @@ mod tests {
         assert_eq!(retried(&state, "other"), Some(0), "別の便は自分の 1 件だけ（−1 で 0）");
         assert_eq!(retried(&state, "absent"), Some(0), "行の無い便は 0（読めないではない）");
         let _ = std::fs::remove_dir_all(&state);
+    }
+
+    /// 1 件の findings（doc・行 id・未解決の項目）。
+    fn located(id: Option<&str>, unresolved: Option<&str>) -> Located {
+        Located { doc: "docs/design/other.md".to_owned(), id: id.map(str::to_owned), unresolved: unresolved.map(str::to_owned) }
+    }
+
+    /// 契約表の行の起こし直しは衝突と**同じ判定の 1 本**（[`is_conflict`]）に載り、回数も 1 つの上限に合算する（設計 §34）。
+    /// 終端の理由（語だけ）は記帳ではない。
+    #[test]
+    fn pipe_follow_stale_rows_restarts_count_under_the_conflict_predicate() {
+        assert!(is_conflict(&format!("{STALE_ROWS}:a..b")), "契約表の行の記帳は起こし直しの続き");
+        assert!(!is_conflict(STALE_ROWS), "終端の理由は記帳ではない");
+        assert!(!is_conflict("rebase-stale-rowsx:a..b"), "接頭辞は `:` まで見る");
+        assert!(!is_stale(&format!("{STALE_ROWS}:a..b")), "stale（main が動いた周）とは別");
+        let state = scratch("follow-stale-rows-count");
+        append_all(
+            &state,
+            &[
+                event("me", EventKind::RunStage, Some(Stage::Implemented), None, Some("rebase-conflict:a..b")),
+                event("me", EventKind::RunStage, Some(Stage::Implemented), None, Some("rebase-stale-rows:b..c")),
+                event("me", EventKind::RunStage, Some(Stage::Failed), None, Some(STALE_ROWS)),
+            ],
+        );
+        assert_eq!(retried(&state, "me"), Some(1), "衝突 1 + 契約表の行 1 − 1 = 1 回");
+        let _ = std::fs::remove_dir_all(&state);
+    }
+
+    /// 起こし直すのは findings の**すべて**が行 id を持つ未解決の項目で、便の消した path を名指す周だけ（設計 §34 (2) / (4)）。
+    /// 便と無関係の path・他の理由の findings が 1 件でも在る周・findings 0・検査を撃てない周（`None`）は起こし直さない。
+    #[test]
+    fn pipe_follow_stale_rows_unrelated_findings_and_unreadable_check_do_not_restart() {
+        let deleted = vec!["src/gone.rs".to_owned(), "src/old/a.rs".to_owned()];
+        let stale = located(Some("z"), Some("src/gone.rs"));
+        let want = StaleRow { doc: "docs/design/other.md".to_owned(), id: "z".to_owned(), item: "src/gone.rs".to_owned() };
+        assert_eq!(stale_rows(Some(std::slice::from_ref(&stale)), &deleted), Some(vec![want]), "便の消した path を名指す行");
+        let shrink = located(Some("y"), Some("-src/gone.rs"));
+        let dir = located(Some("x"), Some("src/old/"));
+        assert_eq!(stale_rows(Some(&[shrink, dir]), &deleted).map(|rows| rows.len()), Some(2), "`-` と dir の項目も読む");
+        let unrelated = located(Some("w"), Some("src/never.rs"));
+        assert_eq!(stale_rows(Some(std::slice::from_ref(&unrelated)), &deleted), None, "便と無関係の path");
+        assert_eq!(stale_rows(Some(&[stale.clone(), unrelated]), &deleted), None, "1 件でも無関係なら従来どおり");
+        let other_reason = located(Some("v"), None);
+        assert_eq!(stale_rows(Some(&[stale.clone(), other_reason]), &deleted), None, "他の理由の findings が在る");
+        let whole_doc = located(None, Some("src/gone.rs"));
+        assert_eq!(stale_rows(Some(&[whole_doc]), &deleted), None, "行 id の無い 1 件");
+        assert_eq!(stale_rows(Some(&[]), &deleted), None, "findings 0 は従来どおり");
+        assert_eq!(stale_rows(None, &deleted), None, "検査を撃てない周は「行なし」に読み替えず従来どおり");
+        assert_eq!(stale_rows(Some(&[stale]), &[]), None, "便が何も消していない");
+    }
+
+    /// 便の消した path は `D` の path と `R` の旧 path（`C` の元・`M` / `A` は数えない）。
+    #[test]
+    fn pipe_follow_stale_rows_restarts_read_removed_paths_from_name_status() {
+        let bytes = b"M\0src/lib.rs\0D\0src/gone.rs\0R100\0src/old.rs\0src/new.rs\0C75\0src/a.rs\0src/b.rs\0A\0src/c.rs\0";
+        assert_eq!(removed_paths(bytes), vec!["src/gone.rs".to_owned(), "src/old.rs".to_owned()]);
+        assert_eq!(removed_paths(b""), Vec::<String>::new());
+    }
+
+    /// 写しの write-set への追記は**末尾に**足すだけ（既存の項目と他の行は逐語・同じ doc を 2 度足さない・空の列にも足せる）。
+    #[test]
+    fn pipe_follow_stale_rows_restarts_widen_appends_only_at_the_end() {
+        let root = scratch("follow-widen");
+        let _ = std::fs::create_dir_all(&root);
+        let path = root.join("contract.toml");
+        let row = |doc: &str| StaleRow { doc: doc.to_owned(), id: "z".to_owned(), item: "src/gone.rs".to_owned() };
+        let _ = std::fs::write(&path, "goal = \"g\"\nwrite-set = [\"src/lib.rs\", \"~src/gone.rs\"]\nverify = [\"v\"]\n");
+        let rows = [row("docs/design/other.md"), row("docs/design/other.md")];
+        assert_eq!(widen_write_set(&path, &rows), Ok(vec!["docs/design/other.md".to_owned()]), "同じ doc は 1 回");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap_or_default(),
+            "goal = \"g\"\nwrite-set = [\"src/lib.rs\", \"~src/gone.rs\", \"docs/design/other.md\"]\nverify = [\"v\"]\n"
+        );
+        assert_eq!(widen_write_set(&path, &rows), Ok(Vec::new()), "既に在る doc は足さない");
+        let _ = std::fs::write(&path, "write-set = []\n");
+        assert_eq!(widen_write_set(&path, &[row("docs/design/a.md")]), Ok(vec!["docs/design/a.md".to_owned()]));
+        assert_eq!(std::fs::read_to_string(&path).unwrap_or_default(), "write-set = [\"docs/design/a.md\"]\n");
+        let _ = std::fs::write(&path, "goal = \"g\"\n");
+        assert!(widen_write_set(&path, &[row("docs/design/a.md")]).is_err(), "write-set の行が無い写しは断る");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

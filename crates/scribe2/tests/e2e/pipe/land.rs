@@ -8,7 +8,7 @@
 use super::*;
 use vessel::pipe::land;
 use vessel::pipe::review::REVIEW_FILE;
-use vessel::pipe::run_dir;
+use vessel::pipe::{contract_path, run_dir};
 
 /// 審査が run dir に残す lens の cmd の写し（設計 pipeline.md §26・名は字面で持つ＝写しの名の変化も歯が測る）。
 fn lens_record_of(state: &Path, id: &str) -> PathBuf {
@@ -4091,5 +4091,193 @@ fn pipe_land_window_busy_names_the_unpushed_main() {
     let out = land_window_once(&repo, &state);
     assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "local main を読めない周も rc 1: {}", stderr_of(&out));
     assert_eq!(stdout_of(&out).trim(), "land-window=busy queue=- following=- unpushed=unreadable");
+    clean(&[&repo, &state]);
+}
+
+// ───── 追随で入った契約表の行が便の消した path を名指す周（設計 pipeline.md §34・`s2-07l.400`・接頭辞 `pipe_follow_stale_rows_`） ─────
+
+/// main が docs の commit で足す行の置き場（便の契約の doc `toy.md` とは別＝追記した項目がどの doc かを弁別できる）。
+const STALE_DOC: &str = "docs/design/other.md";
+
+/// 便の turn 1 の本文: 契約の実装に加えて `src/gone.rs` を消す（便自身の diff の `D`）。
+const IMPLEMENT_AND_DELETE: &str = "git rm -q src/gone.rs\nprintf 'x\\n' >> src/lib.rs\ngit add -A\ngit commit -q -m runner\nexit 0";
+
+/// turn 2 の本文: 名指された行を write-set の中（追記された設計 doc）で直して commit する。
+const FIX_ROW: &str = "sed -i 's#\"src/gone.rs\"#\"src/lib.rs\"#' docs/design/other.md\ngit add -A\ngit commit -q -m fix-row\nexit 0";
+
+/// `src/gone.rs` を消す便を PASS の gate まで通し、main を「`named` を write-set に持つ行 z」を [`STALE_DOC`] に足す
+/// docs だけの commit で進める。便の行 a は消す file を `~`（着地で消える）で名指す＝便自身の行は解ける。
+/// 返すのは 便の id・便の base・動いた main・偽 runner の cmd（turn 2 以降は `second`）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn stale_rows_run(repo: &Path, state: &Path, marker: &Path, second: &str, named: &str) -> (String, String, String, String) {
+    fs::write(repo.join("src").join("gone.rs"), "// gone\n").expect("消す file を書ける");
+    let own = row_fields("a", &["write-set"], &[r#"write-set = ["src/lib.rs", "~src/gone.rs"]"#]);
+    write_design(repo, &design_doc(&own));
+    git(repo, &["add", "-A"]);
+    git(repo, &["commit", "-q", "-m", "base-with-gone"]);
+    let base = git(repo, &["rev-parse", "refs/heads/main"]);
+    let runner = stub_runner_turns(state, IMPLEMENT_AND_DELETE, second);
+    let id = intake(repo, state, &design_pointer());
+    let spawned = spawn_with(repo, state, &id, &runner);
+    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "turn 1 の spawn: {}", stderr_of(&spawned));
+    let lens = fake_lens(marker, &lens_verdict("PASS"));
+    let gated = gate_once(repo, state, &id, Some(&lens));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "PASS の gate: {}", stderr_of(&gated));
+    let other = row_fields("z", &["write-set"], &[&format!("write-set = [\"{named}\"]")]);
+    fs::write(repo.join(STALE_DOC), design_doc_rows(&[other])).expect("別の設計 doc を書ける");
+    git(repo, &["add", "-A"]);
+    git(repo, &["commit", "-q", "-m", "docs-row"]);
+    let moved = git(repo, &["rev-parse", "refs/heads/main"]);
+    fs::remove_file(marker).expect("1 度目の gate の marker を外せる");
+    (id, base, moved, runner)
+}
+
+/// 契約表の行の起こし直しの記帳（`Implemented detail=rebase-stale-rows:<range>`）の件数。
+fn stale_rows_count(state: &Path, id: &str) -> usize {
+    stages(state, id)
+        .into_iter()
+        .filter(|(stage, detail)| {
+            *stage == Some(Stage::Implemented)
+                && detail.as_deref().is_some_and(|found| found.starts_with("rebase-stale-rows:"))
+        })
+        .count()
+}
+
+/// 契約表の行の起こし直しの記帳は 1 件で `<range>` を名乗り、便は終端しない（`Failed` 0 件）。
+fn assert_stale_rows_record(state: &Path, id: &str, range: &str) {
+    let trail = stages(state, id);
+    assert!(
+        trail.contains(&(Some(Stage::Implemented), Some(format!("rebase-stale-rows:{range}")))),
+        "記帳は base と main を名乗る: {trail:?}"
+    );
+    assert_eq!(stale_rows_count(state, id), 1, "記帳は 1 件: {trail:?}");
+    assert!(!trail.iter().any(|(stage, _)| *stage == Some(Stage::Failed)), "終端しない: {trail:?}");
+}
+
+/// 写し（run dir の `contract.toml`）の `write-set` の行（無ければ空）。
+fn write_set_line(state: &Path, id: &str) -> String {
+    fs::read_to_string(contract_path(state, id))
+        .unwrap_or_default()
+        .lines()
+        .find(|line| line.starts_with("write-set"))
+        .map(str::to_owned)
+        .unwrap_or_default()
+}
+
+/// (a) 便が消した path を名指す行が追随で入った周は `Implemented detail=rebase-stale-rows:<base>..<main>` を記帳して
+/// runner を 1 回起こし直し、写しの write-set の**末尾に 1 項目**だけ行の設計 doc を足す（既存の項目は字面も順序も不変）。
+/// 再 gate は撃たない（偽 lens の marker 0）。起こし直しの stdin の「追随」節は行を `<doc>#<id>: <項目>` で名指す。
+/// base（従来どおり docs だけの追随＝Gated PASS を引き継いで着地・runner は 1 回）では記帳も起こし直しも無い＝RED。
+#[test]
+fn pipe_follow_stale_rows_restarts_the_runner_and_appends_the_design_doc() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let (id, base, moved, runner) = stale_rows_run(&repo, &state, &marker, FIX_ROW, "src/gone.rs");
+    let before = write_set_line(&state, &id);
+    assert!(before.ends_with(']') && !before.contains(STALE_DOC), "fixture: 写しの write-set の行: {before}");
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let out = land_extra(&repo, &state, &id, &["--runner", &runner, "--lens", &lens]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_INCONCLUSIVE)), "起こし直した周は rc 3: {} / {}", stdout_of(&out), stderr_of(&out));
+    let stdout = stdout_of(&out);
+    assert!(stdout.contains(&format!("run={id} next=gate")), "次に撃つ段: {stdout}");
+    assert!(!stdout.contains("landed="), "land しない: {stdout}");
+    assert_eq!(stub_calls(&state), 2, "runner を 1 回起こし直した");
+    assert!(!marker.exists(), "再 gate は撃たれない（偽 lens の写し 0）");
+    assert_stale_rows_record(&state, &id, &format!("{base}..{moved}"));
+    let widened = format!("{}, \"{STALE_DOC}\"]", before.strip_suffix(']').unwrap_or_default());
+    assert_eq!(write_set_line(&state, &id), widened, "末尾へ 1 項目だけ追記（既存の項目は不変）");
+    assert!(stderr_of(&out).contains(STALE_DOC), "追記した項目を stderr に写す: {}", stderr_of(&out));
+    let second = stub_stdin(&state, 2);
+    assert!(second.contains("## 追随"), "起こし直しの turn に節が付く: {second}");
+    assert!(second.contains(&format!("{STALE_DOC}#z: src/gone.rs")), "節は行と未解決の項目を名指す: {second}");
+    assert!(stdout.contains(&format!("run={id} rebase={base}..{moved}")), "turn の後に base が進む: {stdout}");
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), moved, "main は動かない");
+    assert!(show_line(&repo, &state, &id).contains("stage=Implemented"), "段は Implemented（次は gate）");
+    clean(&[&repo, &state]);
+}
+
+/// (b) 行が便と無関係の path（便が消していない・base にも無い）を名指す周は起こし直さず、従来どおりの追随（docs だけ＝
+/// Gated PASS を引き継ぐ）で着地する。記帳 0・runner は turn 1 の 1 回だけ・写しの write-set は不変。
+#[test]
+fn pipe_follow_stale_rows_unrelated_path_goes_on_as_before() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let (id, base, moved, runner) = stale_rows_run(&repo, &state, &marker, FIX_ROW, "src/never.rs");
+    let before = write_set_line(&state, &id);
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let out = land_extra(&repo, &state, &id, &["--runner", &runner, "--lens", &lens]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "従来どおり着地: {} / {}", stdout_of(&out), stderr_of(&out));
+    let stdout = stdout_of(&out);
+    assert!(stdout.contains(&format!("rebase={base}..{moved}")), "追随は済む: {stdout}");
+    assert!(stdout.contains("landed="), "着地する: {stdout}");
+    assert_eq!(stub_calls(&state), 1, "起こし直さない");
+    assert_eq!(stale_rows_count(&state, &id), 0, "記帳しない: {:?}", stages(&state, &id));
+    assert_eq!(write_set_line(&state, &id), before, "写しの write-set は不変");
+    assert!(show_line(&repo, &state, &id).contains("stage=Landed"), "段は Landed");
+    clean(&[&repo, &state]);
+}
+
+/// (c) 回数は衝突と**同じ 1 つの上限**（`pipe.follow_retries`＝fixture で 1）: 衝突の記帳を 1 件持つ便は、最初の
+/// 契約表の行の周で上限に達して `Failed detail=rebase-stale-rows` + rc 1 で終端する（runner は起こさない・main は不動）。
+#[test]
+fn pipe_follow_stale_rows_exhausted_fails_typed_under_the_conflict_limit() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let (id, base, moved, runner) = stale_rows_run(&repo, &state, &marker, FIX_ROW, "src/gone.rs");
+    record_conflict(&state, &id, &format!("{base}..{moved}"));
+    let rules = write_rules_with_retries(&state, "rules-stale-rows-1.toml", 1, 1_000_000, 1);
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let gated = gate_with_rules(&repo, &state, &id, &rules, &lens);
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "撃ち直しの gate: {}", stderr_of(&gated));
+    fs::remove_file(&marker).ok();
+    let out = land_extra(&repo, &state, &id, &["--runner", &runner, "--lens", &lens, "--rules", &rules.display().to_string()]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "上限に達した周は rc 1: {} / {}", stdout_of(&out), stderr_of(&out));
+    assert!(stderr_of(&out).contains("上限"), "理由は上限を名乗る: {}", stderr_of(&out));
+    let trail = stages(&state, &id);
+    assert_eq!(
+        trail.last().cloned(),
+        Some((Some(Stage::Failed), Some("rebase-stale-rows".to_owned()))),
+        "終端の理由: {trail:?}"
+    );
+    assert_eq!(stale_rows_count(&state, &id), 1, "記帳は 1 件: {trail:?}");
+    assert_eq!(conflict_count(&state, &id), 1, "衝突の記帳は手で積んだ 1 件のまま: {trail:?}");
+    assert_eq!(stub_calls(&state), 1, "runner を起こさない");
+    assert!(!marker.exists(), "再 gate は撃たれない");
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), moved, "main は動かない");
+    assert!(show_line(&repo, &state, &id).contains("stage=Failed"), "段は Failed");
+    clean(&[&repo, &state]);
+}
+
+/// (d) `--runner` の無い land は記帳（と写しの追記）を残して rc 1 で止まり（`--runner が要る`・段は `Implemented`）、
+/// `pipe resume --runner` が同じ起こし直しを続ける（衝突と同じ弁別の 1 本）。resume の turn も行の一覧を受ける。
+#[test]
+fn pipe_follow_stale_rows_no_runner_records_and_resume_continues() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let (id, base, moved, runner) = stale_rows_run(&repo, &state, &marker, FIX_ROW, "src/gone.rs");
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let out = land_extra(&repo, &state, &id, &["--lens", &lens]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "起こし直せない land は rc 1: {} / {}", stdout_of(&out), stderr_of(&out));
+    assert!(stderr_of(&out).contains("--runner が要る"), "理由: {}", stderr_of(&out));
+    assert_eq!(stale_rows_count(&state, &id), 1, "記帳は残る: {:?}", stages(&state, &id));
+    assert_eq!(stub_calls(&state), 1, "起こし直していない");
+    assert!(write_set_line(&state, &id).ends_with(&format!(", \"{STALE_DOC}\"]")), "追記は残る: {}", write_set_line(&state, &id));
+    assert!(show_line(&repo, &state, &id).contains("stage=Implemented"), "段は Implemented（続けられる側）");
+    let resumed = run_pipe(&[
+        "resume", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--runner", &runner,
+    ]);
+    assert_eq!(resumed.status.code(), Some(i32::from(RC_OK)), "resume の起こし直し: {} / {}", stdout_of(&resumed), stderr_of(&resumed));
+    assert_eq!(stub_calls(&state), 2, "resume が runner を起こした");
+    assert!(
+        stub_stdin(&state, 2).contains(&format!("{STALE_DOC}#z: src/gone.rs")),
+        "resume の turn も行を名指す: {}",
+        stub_stdin(&state, 2)
+    );
+    assert!(stdout_of(&resumed).contains(&format!("run={id} rebase={base}..{moved}")), "base が進む: {}", stdout_of(&resumed));
+    assert!(!marker.exists(), "再 gate は撃たれない");
     clean(&[&repo, &state]);
 }
