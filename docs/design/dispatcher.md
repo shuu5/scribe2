@@ -197,8 +197,8 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
 - 出所: memo `s2-07l.509`（隣の repo の便で 73 本常駐・hold で収束・2026-09-21）。user 裁定 2026-09-21（分解表 G4 を推奨どおり・逐語は台帳 `s2-07l.505` の notes）。
 - 現物（verified・main）: `crates/scribe2/src/pipe/dispatch.rs` の `start` → `spawn_self` は子を `pipe intake …` で起こして `spawn` の成否だけを返し、stdout / stderr は `Stdio::null()`。列（`turn` / `fire`）は「起こした便が `RunCreated` に届いたか」を見ない。起こした事実は event に無い（`RunCreated` は intake が書く）。intake が台帳 timeout（環境）で落ちた周は run dir も event も無く、次の周が同じ bead をまた起こす。
 - 形（印の 1 値と候補の条件 1 つ・新しい file も rules 行も足さない）:
-  1. **起こす前に印を書く**: `fleet/mod.rs` の `Mark` に 4 値目 **`Launched`** を足し、`start` の直前に既存の `mark(` の口で bead 名義の `DispatchMark`（mark = Launched・detail = 起こした argv の subcommand 1 語）を書く。書けない周は起こさない（fail-closed・記帳できない起動を数えない）。`Mark` の網羅 match は `fleet/mod.rs` の `as_str` / `parse` と `dispatch.rs` の `marks_of` の 3 か所（`marks_of` は `Launched` を hold と同じ側に畳まず、独立の値として最新の 1 つを持つ）。
-  2. **候補の条件**: その bead の最新の `Launched` より後に、その bead の `RunCreated` も `Release` の印も無い周は起こさない（`WaitReason` に 1 値 **`Launched`**・`dispatch ls` の理由は `launched:<ts>`）。`RunCreated` が来れば従来の live / 終端の判定に戻る。intake が受付で断った便（run dir 0）は `Release` の印まで起きない＝落ち続ける便が台帳を詰まらせる正帰還が閉じる。`hold` / `first` の印の意味は不変。
+  1. **起こす前に印を書く**: `fleet/mod.rs` の `Mark` に 4 値目 **`Launched`** を足し、`start` の直前に既存の `mark(` の口で bead 名義の `DispatchMark`（mark = Launched・detail = 起こした argv の subcommand 1 語）を書く。書けない周は起こさない（fail-closed・記帳できない起動を数えない）。書けない周の理由は既存の `WaitReason::Admission` に閉じた語を 1 つ足して出す（`SLOT` / `SPAWN` と同じ `'static` の語・新語 `MARK` = `mark`・`dispatch ls` は `admission:mark`＝測れない側）。`Mark` の網羅 match は `fleet/mod.rs` の `as_str` / `parse` と `dispatch.rs` の `marks_of` の 3 か所で、宣言順の slice `MARKS`（`enum-slices` の母集団・`parse` が読む）にも 4 値目を足す（`marks_of` は `Launched` を hold と同じ側に畳まず、独立の値として最新の 1 つを持つ）。`fleet/wait.rs` の private な `struct Mark`（file の印・別の型）は同名なだけで本行は触らない（閉包が名で拾うので write-set に載るが diff は 0 行）。
+  2. **候補の条件**: その bead の最新の `Launched` より後に、その bead の `RunCreated` も `Release` の印も無い周は起こさない（`WaitReason` に 1 値 **`Launched`**・`dispatch ls` の理由は `launched:<ts>`。`WaitReason` は `dispatch.rs` の 1 file に閉じ、網羅 match は同 file の `as_str` と `render` の 2 か所・宣言順の slice `WAIT_REASONS` に `launched` を足す・他 module に match は無い）。`RunCreated` が来れば従来の live / 終端の判定に戻る。intake が受付で断った便（run dir 0）は `Release` の印まで起きない＝落ち続ける便が台帳を詰まらせる正帰還が閉じる。`hold` / `first` の印の意味は不変。
   3. **子の stderr を残す**: `spawn_self` の stderr を `<state_dir>/pipe/launch.log` に append する（stdout は null のまま・file は書けなければ起こさない側に倒さず null に落とす＝起動を記録の失敗で止めない）。読み手は席（C10・死因が観測できなかった .509 の穴）。
 - 触らない: `hold` / `release` / `first` の印の意味・§2 の列外の鍵・受付の判定（intake は変えない）・`Turn` の形（`launches` は印を書けた分だけ）・event の schema（`DispatchMark` の欄は既存のまま・`mark` の値が 1 つ増えるだけ）。
 - 却下: 時間の冷却（rules 行 `pipe.launch_cooldown_s` を足す・値の裁定が要り、台帳 timeout の周は何秒待っても同じ理由で落ちる）／N 周で自動 hold（周の間隔が契機依存で N の意味が定まらない・`Launched` 1 回で止める方が読みやすい）／state dir の印 file（記帳と別の状態・C3）。
@@ -363,7 +363,7 @@ symbols = ["crate::fleet::Mark", "+Mark::Launched", "marks_of("]
 teeth = ["pipe_dispatch_launched_mark_is_written_before_the_child_is_spawned"]
 place = "crates/scribe2/tests/e2e/pipe/dispatch.rs"
 fixture = "偽の台帳に ready の bead 1 本と toy repo を置いて pipe dispatch の 1 周を撃つ。負の枝は event log を読み取り専用にして印が書けない周"
-expect = "event log に bead 名義の DispatchMark mark=launched が RunCreated より前の行として在り、印が書けない周は子が起きず dispatch=started:0 で理由が unmeasured の側に出る"
+expect = "event log に bead 名義の DispatchMark mark=launched が RunCreated より前の行として在り、印が書けない周は子が起きず dispatch=started:0 で ls の理由が admission:mark（測れない側）に出る"
 
 [[promise]]
 of = "n"
@@ -427,7 +427,7 @@ size = "S"
 of = "p"
 n = 1
 text = "運転手の終端の周で最後の段が Reviewed / Gated の FAIL・INCONCLUSIVE、Failed、Questioned、Stopped のとき、fleet の replay の State.registrations から (Role::Orchestrator, anchor = repo) の最新 row の target へ 1 行を deliver_within で送り、stdout に notify=<delivered|refused:<理由>|unconfirmed|no-seat> を残す（row が無い周は送らず no-seat・便の rc は変えない）"
-files = ["crates/scribe2/src/pipe/cli.rs", "+crates/scribe2/src/pipe/notify.rs", "crates/scribe2/tests/e2e/pipe.rs", "+crates/scribe2/tests/e2e/pipe/notify.rs"]
+files = ["crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/cli.rs", "+crates/scribe2/src/pipe/notify.rs", "crates/scribe2/tests/e2e/pipe.rs", "+crates/scribe2/tests/e2e/pipe/notify.rs"]
 symbols = ["seat::inject::Request"]
 teeth = ["pipe_notify_terminal_failure_reaches_the_registered_seat_pane", "pipe_notify_without_a_registered_seat_reports_no_seat"]
 place = "+crates/scribe2/tests/e2e/pipe/notify.rs"
