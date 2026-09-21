@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="generator" content="folio ADR-pack assembler (folio-bwc / instance#2) — deterministic structure, prose slots unfilled">
-<title>検出線は契約が名指した歯と package の単体の歯だけを mutant に当て、 歯の名は宣言 file の 4 つ目の穴 {teeth} で器が渡す (ADR-0021 §2.1 と ADR-0050 の穴の閉じた 3 つを部分 supersede・R-C12-1 の記録の母集団を「契約の歯 + 単体の歯」に狭める)</title>
+<title>pipeline の判断は「計算できる判断は code・意味の判断は lens・裁定は人」の 3 分類に置き、 Jev は挿さず (再検討は記録が揃った後の shadow 計測で)、 検出線の 2 段化は足さない (分解表の 5 論点の裁定)</title>
 <style>
 /* ===========================================================================
    folio human-layer design system — core.css (S3 / folio-8oc プロトタイプ)
@@ -455,17 +455,14 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
     "schema": "https://schema.org/",
     "folio": "https://folio.dev/spec/v1/"
   },
-  "@id": "./ADR-0052-detection-line-runs-only-contract-teeth-and-unit-teeth.html",
+  "@id": "./ADR-0053-decisions-sit-in-code-lens-or-human-and-jev-is-not-inserted.html",
   "@type": "schema:TechArticle",
-  "dc:isReferencedBy": [
-    { "@id": "./ADR-0053-decisions-sit-in-code-lens-or-human-and-jev-is-not-inserted.html" }
-  ],
   "dc:isPartOf": [
     {
       "@id": "./README.html"
     }
   ],
-  "dc:title": "検出線は契約が名指した歯と package の単体の歯だけを mutant に当て、 歯の名は宣言 file の 4 つ目の穴 {teeth} で器が渡す (ADR-0021 §2.1 と ADR-0050 の穴の閉じた 3 つを部分 supersede・R-C12-1 の記録の母集団を「契約の歯 + 単体の歯」に狭める)",
+  "dc:title": "pipeline の判断は「計算できる判断は code・意味の判断は lens・裁定は人」の 3 分類に置き、 Jev は挿さず (再検討は記録が揃った後の shadow 計測で)、 検出線の 2 段化は足さない (分解表の 5 論点の裁定)",
   "folio:version": "0.1.0",
   "folio:stakeholders": [
     "Developer",
@@ -473,12 +470,6 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
     "External Reviewer"
   ],
   "dc:references": [
-    {
-      "@id": "../spec/constitution.html#c1"
-    },
-    {
-      "@id": "../spec/constitution.html#c2"
-    },
     {
       "@id": "../spec/constitution.html#c10"
     },
@@ -489,31 +480,28 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
       "@id": "../spec/constitution.html#c17"
     },
     {
-      "@id": "../spec/srs.html#FR8"
+      "@id": "../spec/constitution.html#a3"
     },
     {
-      "@id": "../spec/srs.html#FR9"
+      "@id": "../spec/srs.html#FR30"
     },
     {
       "@id": "../spec/srs.html#FR46"
     },
     {
+      "@id": "../spec/srs.html#FR49"
+    },
+    {
       "@id": "../spec/srs.html#NFR4"
     },
     {
-      "@id": "../spec/srs.html#NFR6"
+      "@id": "./ADR-0051-contract-rows-carry-promise-rows-and-ledger-state-is-two-fields.html"
     },
     {
-      "@id": "./ADR-0009-vessel-grants-runner-permissions-and-mutation-proof.html"
+      "@id": "./ADR-0052-detection-line-runs-only-contract-teeth-and-unit-teeth.html"
     },
     {
-      "@id": "./ADR-0010-vessel-declaration-holds-allowlist-and-common-verify.html"
-    },
-    {
-      "@id": "./ADR-0021-gate-cost-is-measured-and-confined.html"
-    },
-    {
-      "@id": "./ADR-0050-cores-and-scope-creation-are-hard-resources.html"
+      "@id": "../research/RESEARCH-jev.html"
     }
   ]
 }
@@ -525,186 +513,172 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 <nav class="breadcrumb" aria-label="パンくず"><ol>
   <li><a href="../index.html">design-intent</a></li>
   <li><a href="./README.html">decisions</a></li>
-  <li aria-current="page">ADR-0052</li>
+  <li aria-current="page">ADR-0053</li>
 </ol></nav>
 <!-- /folio:chrome-top -->
 <div class="page" data-component="requirement-type-color-tokens">
 <header data-component="doc-cover-band">
-<p class="cover-eyebrow"><span class="doc-type">設計判断記録 (ADR)</span> <span>scribe2 — 検出線の費用</span></p>
-<h1>検出線は契約が名指した歯と package の単体の歯だけを mutant に当て、 歯の名は宣言 file の 4 つ目の穴 {teeth} で器が渡す (ADR-0021 §2.1 と ADR-0050 の穴の閉じた 3 つを部分 supersede・R-C12-1 の記録の母集団を「契約の歯 + 単体の歯」に狭める)</h1>
-<p class="cover-sub">変異検査は mutant 1 つごとに package の歯を全部回す。 e2e の歯しか持たない契約では、 撃墜が決まった後も e2e の binary を最後まで回すので mutant 1 つが 44 秒、 枠を待ち切れず 1 thread に縮退した周は 6 分になり、 gate 1 本が 12 分から 8 時間に及んだ。 本 ADR は mutant に当てる歯を「契約が名指した歯と package の単体の歯」に閉じ、 歯の名を器が宣言 file の穴で道具へ渡す。</p>
-<div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">変異検査は、code をわざと少し壊した版（mutant）を 1 つずつ作り、test がそれを見つけられるかを確かめる仕組みです。いまは mutant を 1 つ作るたびに package の test を全部回していました。e2e の test しか持たない契約では、最初の 3 秒で答えが出ているのに e2e の test 全体を 44 秒かけて回し、混んで同時実行数が 1 に落ちた回は 6 分かかり、検査 1 本が 8 時間に及ぶこともありました。そこで、mutant ごとに回す test を「その契約が名指した test」と「package の単体の test」だけに閉じます。契約が名指した test の名前は器が契約から導き、宣言 file の 4 つ目の差し込み口で道具へ渡します。検査は gate の中に残るので、審査役はこれまでどおり生き残った mutant を材料にできます。代わりに、契約が名指していない e2e の test だけが見つけられる壊し方は「生き残り」として数えられるようになるので、その事実を記録の欄に残します。</p></div></div>
-<div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">proposed</span></span><span class="m"><span class="k">選択肢</span><span class="v">6件 (OPT1–OPT6)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 4 / トレードオフ 3</span></span><span class="m"><span class="k">版</span><span class="v">v0.1.0 / 2026-09-21</span></span></div>
-<div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>NFR6・FR46・FR8・FR9・NFR4</b></div>
+<p class="cover-eyebrow"><span class="doc-type">設計判断記録 (ADR)</span> <span>scribe2 — 判断の置き場</span></p>
+<h1>pipeline の判断は「計算できる判断は code・意味の判断は lens・裁定は人」の 3 分類に置き、 Jev は挿さず (再検討は記録が揃った後の shadow 計測で)、 検出線の 2 段化は足さない (分解表の 5 論点の裁定)</h1>
+<p class="cover-sub">便が受付から着地まで通る判断を 19 本に割り、 誰が決めるべきかを code / lens (LLM) / 人 の 3 つに仕分けた。 審査で落ちた 104 便の 87% は計算できる性質で、 約束の行の生成 (ADR-0051) で code へ移る。 較正された確率を返す判定 API (Jev) は、 5 つの候補のうち実測した 4 つのどれにも今は挿す理由が無く、 残る 1 つは正解を機械で取れるが未計測である。 本 ADR はその置き場と、 再検討の条件と、 検出線を 1 段のまま保つことを決める。</p>
+<div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">便が受付から着地まで通る間に、 器は 19 の判断をします。 その 1 つ 1 つを「計算で決まるもの」「文章の意味を読まないと決まらないもの」「人が決めるべきもの」に分けました。 審査で落ちた便 104 本を数えると、 87% は計算で決まる性質で落ちていて、 それは約束の行から write-set と検証と done を機械で作る仕組み (ADR-0051) で消えます。 文章の意味を読む判断は歯の空虚さ・目標の矛盾・その他の 3 値に閉じ、 そこは今までどおり審査役 (lens) が担います。 較正された確率を返す判定 API (Jev) は、 5 つの候補のうち 4 つを実測し (残る 1 つは正解を機械で取れますが未計測です)、 今は挿す理由が無いと決めました。 再検討は、 便ごとの時間と token の記録と、 審査役の答えの種別 (3 値) が着地して指摘 1 件ごとの記録が取れる形になった後に、 横で答えを出して正解と突き合わせる測り方 (shadow 計測) で 30 件以上集めてから行います。 変異検査も、 契約の歯と単体の歯だけの 1 段のままにします。</p></div></div>
+<div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">proposed</span></span><span class="m"><span class="k">選択肢</span><span class="v">5件 (OPT1–OPT5)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 3 / トレードオフ 3</span></span><span class="m"><span class="k">版</span><span class="v">v0.1.0 / 2026-09-21</span></span></div>
+<div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>FR49・FR46・NFR4・FR30</b></div>
 <div data-component="approval-block">
-<div class="sign"><span class="role">裁定 (user)</span><span class="who">user</span><span class="when">2026-09-21 (対話面・「5〜7 時間は許容できない」と、 2 案のうち A (契約の歯だけを mutant に当てる) を採る裁定・要旨は本文 CTX5・逐語は台帳 s2-07l.519 の notes)</span><span class="stamp self">裁定済</span></div>
-<div class="sign"><span class="role">設計 (orchestrator)</span><span class="who">orchestrator</span><span class="when">2026-09-21 起票 (mutant ごとの phase の秒・縮退の出所・R-C12-1 の現在値・穴の閉じた集合と置換の現物・道具の filter の口を実測。 拘束する constitution の版 0.5.0)。 発効は穴と道具の filter が land した版</span><span class="stamp self">作成</span></div>
+<div class="sign"><span class="role">裁定 (user)</span><span class="who">user</span><span class="when">2026-09-21 (対話面・分解表の 5 論点を推奨どおり進める裁定・要旨は本文 CTX4・逐語は台帳 s2-07l.505 の notes)</span><span class="stamp self">裁定済</span></div>
+<div class="sign"><span class="role">設計 (orchestrator)</span><span class="who">orchestrator</span><span class="when">2026-09-21 起票 (直近 7 日の便の記録・審査落ち 104 便の内訳・検出線の実測 2 周・RESEARCH-jev の 3 問 87 件と追補を突き合わせて分解表を作成。 拘束する constitution の版 0.5.0)</span><span class="stamp self">作成</span></div>
 </div>
-<div class="reader-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 想定読者: scribe2 の開発 session と user — 変異検査の道具の内部は不要 (専門語はやさしい言葉を併記)</div>
+<div class="reader-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 想定読者: scribe2 の開発 session と user — 判定 API の内部は不要 (専門語はやさしい言葉を併記)</div>
 </header>
 <!-- folio:chrome-toc -->
 <!-- /folio:chrome-toc -->
-<section data-component="chapter-deck-band" class="tint-info"><span class="num">01</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v6m0 0L9 5m3 3l3-3"/><circle cx="12" cy="14" r="6"/></svg> 背景 / なぜこの判断が要るか</span><h2>いま何が問題か (確定方式を決める力学)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-01">なぜこの判断が要るのかを、実測と現物から説明します。mutant 1 つの費用の 9 割超は答えが出た後の test の走行で、混んで 1 に絞られた回は 20 倍かかりました。変異の生き残りを止める規則の行はいま記録だけの状態で、検査は審査役の材料と記録のために走っています。契約から test の名前を導く口は器に既に在り、道具には test を選ぶ式の口が在ります。</p></section>
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">01</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v6m0 0L9 5m3 3l3-3"/><circle cx="12" cy="14" r="6"/></svg> 背景 / なぜこの判断が要るか</span><h2>いま何が問題か (確定方式を決める力学)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-01">なぜこの判断が要るのかを、 実測と現物から説明します。 審査で落ちた 104 便の 87% は計算で決まる性質でした。 判定 API を 5 つの候補のうち 4 つに当てた実測では、 正規表現や字面の規則で足りるものと、 比べる基準線が無いものと、 分離できないものと、 母集団が小さすぎるものしかなく、 残る 1 つは未計測です。 変異検査は 1 段に閉じて gate 1 本が 4 分の桁になり、 lens の指摘 1 件ごとの記録と便ごとの費用の記録はまだ在りません。</p></section>
 <div class="chapbody">
 <div data-component="adr-context-list">
-<div data-component="adr-context-row"><span class="cxid">CTX1</span><div class="cxbody"><p class="cxh">実測 — mutant 1 つの費用の 9 割超は、 判定に寄与しない歯の走行</p><p class="cxd">2026-09-21 の便 (台帳 s2-07l.516 の再 gate・67 mutants・4 job × 8 thread) の outcomes は、 撃墜 52・生存 7・compile 不能 7 で、 mutant 1 つの test phase の中央値は 43.7 秒だった。 その契約の歯は e2e の binary にしか無く、 e2e の binary は package の e2e の歯を全部 (数百本) 走らせる。 別の便 (台帳 s2-07l.511・58 mutants) では単体の歯が 3 秒で落ちているのに e2e を最後まで回して 320〜410 秒を払っていた。 mutant の cargo test を fail-fast にする直し (台帳 s2-07l.518・同日着地) は単体の歯で落ちる契約にしか効かず、 s2-07l.516 の再 gate は 755 秒から 714 秒にしか縮まなかった。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX2</span><div class="cxbody"><p class="cxh">実測 — 枠を待ち切れず縮退した周は同じ mutant が 20 倍かかる</p><p class="cxd">受付の枠を gate.slot_wait_s (900 秒) の間に取れなかった周は 1 job かつ 1 thread に縮退する (ADR-0050 の形)。 1 thread では e2e の binary が直列になり mutant 1 つが約 6 分で、 同日の 2 便 (台帳 s2-07l.511 / s2-07l.517) は 58 と 83 の mutants に 5〜8 時間の見込みとなり、 席が止めた。 gate 1 本の長さ (20〜30 分) が待ちの上限より長いので、 列の 2 本目は必ず縮退する。 上限の値は別の裁定 (本 ADR の外) だが、 mutant 1 つの費用が下がればどちらの周も短くなる。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX3</span><div class="cxbody"><p class="cxh">現物 — 検出線の記録の極性と、 穴の閉じた集合</p><p class="cxd">変異の生存を止める rules 行 R-C12-1 は enabled = false で、 値は「週次記録 (deny 化の裁定材料は実測 2 周分)」である。 検出線は gate を落とす線ではなく、 審査役 (lens) が歯の空虚さを判じる材料と記録のために走っている。 宣言 file の検出線が置ける穴は {base} と {jobs} と {threads} の閉じた 3 つ (ADR-0021 §2.1・ADR-0050) で、 intake の判定と gate の置換が同じ 1 列を見る。 契約の verify 行から歯の名 (filter の語) を導く口は器の受付に既に在り、 preflight は「teeth=&lt;filter&gt;:&lt;本数&gt;@&lt;file&gt;」として出す。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX4</span><div class="cxbody"><p class="cxh">現物 — 道具の filter の口</p><p class="cxd">cargo-mutants は mutant ごとの test の道具を cargo test か nextest から選べ、 1 つ目の -- の後ろの引数を道具へ逐語で渡す。 cargo test の位置引数の filter は package の全 binary に同じ filter が掛かるので「単体の歯は全部・e2e の歯は名指した分だけ」を 1 行で表せない。 nextest は filter の式<span class="term" data-component="plain-language-term-inline" data-term="filter の式">どの test を走らせるかを 1 行で選ぶ書き方</span> (歯の種類と名の正規表現の和) を持ち、 同じ 1 行で「lib の歯 ∪ bin の歯 ∪ 名が語で始まる歯」を選べる。 thread は nextest の引数で渡す。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX5</span><div class="cxbody"><p class="cxh">user の裁定と憲法の向き</p><p class="cxd">user の裁定 (要旨・逐語は台帳 s2-07l.519 の notes) は「5〜7 時間は許容できない」と、 2 案 (A = 契約の歯だけを mutant に当てる・B = 検出線を gate の外へ出す) のうち A である。 憲法は、 検出線が変異の生存を記録し deny への昇格は user の裁定でだけ行うこと (C12.4)、 宣言値と測定値と実効値を型で分け測定なしに実効へ上げないこと (C10)、 環境変数で子 process へ値を渡さないこと (C2.2)、 足す前に消すものを名指すこと (C17) を求める。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX1</span><div class="cxbody"><p class="cxh">実測 — 審査で落ちる理由の 87% は計算できる性質</p><p class="cxd">run dir の残る全便 (2026-09-21 実測) で審査 (lens) が FAIL か INCONCLUSIVE に倒れた 104 便の内訳は、 write-set の閉包 51・名指しの不在 17・done と約束の 1:1 の崩れ 11・verify の filter 11・snapshot の名 1・歯の空虚 5・その他 8 (goal の矛盾を含む) である。 前の 5 つ (91 便・87%) は契約の行から機械で導ける性質で、 lens の意味の判断が要るのは歯の空虚 5 とその他 8 の 13 便 (13%) だけだった。 直近 7 日は run 302 本で bead 123 本・着地 46 bead、 bead あたりの便は 1 本 39・2 本 35・3 本以上 49 で、 起こし直しの大半がこの 87% から来る。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX2</span><div class="cxbody"><p class="cxh">実測 — 判定 API (Jev) を 5 つの候補に当てた結果</p><p class="cxd">RESEARCH-jev (2026-09-18・追補 09-19・正解つき 87 件を日英 3 回ずつの 261 回・§3.1 の shadow 156 回・呼出の総計 444 回・総費用約 $0.10) を分解表の判断に当て直した。 (a) 契約の形 (pointer だけか本文か・q1) は正規表現 1 本で 30/30 と同点。 (c) gate の指摘の種別と重さの仕分け (q2) は Jev が 22/27 で、 比較の基準線は無い (現物に finding 単位の記録が無い)。 (d) 便の結末を着地 / 差し戻し / 人へ上げるの 3 値で決める問い (q3) は Jev が 26/30 で lens の判定語の規則 (28/30) を下回り、 契約側を直すべき 2 件のうち 1 件は 3/3 で当てた (確率 0.76〜0.85) が母集団が小さい。 (e) CI が赤いとき flaky か回帰かは Jev で分離しない (閾値 0.5 で flaky 1/9・0.3 で 6/9 と誤検出 17/29)。 (b) 歯の空虚性は正解 (検出線の生存行) を機械で取れるが未計測。 性質としては段 1〜3 の 261 回で確率 0.9 以上が 422/422 的中・p50 527 ms・失敗 0/444・1 回約 $0.00005 で、 docs は CJK が同等でないこと・多段推論に弱いこと・state 内の文が判定を動かすこと・「code で計算できることを聞くな」を自ら明記する。 研究は当てない問いを 2 つ (CI の flaky / 回帰・runner の問いの宛先) と、 挿す周は state を機械が作った field に限ることを記す。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX3</span><div class="cxbody"><p class="cxh">現物 — 検出線と lens の現在値</p><p class="cxd">検出線 (変異検査) は ADR-0052 で契約が名指した歯と package の単体の歯に閉じ、 着地後の実測 2 周は 157 秒 / 66 mutants と 161 秒 / 78 mutants (gate 1 本 4 分の桁)。 生存を止める rules 行 R-C12-1 は enabled = false で、 生存は週次記録と審査役の材料である。 lens は審査 (契約の適合・歯の非空虚性) と gate の diff review の 2 か所で走り、 便ごとの時間と token はまだ記録に無い (契約 s2-07l.462・未着地)。 lens の verdict は finding 単位の record を持たず、 約束の行の審査 (contract-source.md §33 行 ah) が verdict の kind を 3 値 (歯の空虚・goal の矛盾・その他) に限る形は未着地である (行 ah が着地しても kind は verdict 1 つに 1 語で、 finding 単位の記録はまだ無い)。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX4</span><div class="cxbody"><p class="cxh">user の裁定 — 分解表の 5 論点を推奨どおり</p><p class="cxd">席は 19 本の判断を code / Jev / lens / 人 に仕分けた分解表と grill の 5 論点 (G1 検出線の 2 段化・G2 終端の通知・G3 Jev の置き場・G4 dispatcher の正帰還・G5 重複の契約) を推奨つきで提示し、 user は 5 論点を推奨どおり進める裁定をした (逐語は台帳 s2-07l.505 の notes)。 本 ADR が記録するのは G1 と G3 (判断の置き場<span class="term" data-component="plain-language-term-inline" data-term="判断の置き場">誰が決めるかの割り当て</span>そのもの) で、 G2 と G4 は設計 doc dispatcher.md §17〜§19 の契約の行に、 G5 は台帳の close に写した。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX5</span><div class="cxbody"><p class="cxh">憲法の向き</p><p class="cxd">憲法は、 宣言値と測定値と実効値を型で分け測定なしに実効へ上げないこと (C10)、 変異の生存の記録と deny への昇格は user の裁定でだけ行うこと (C12.4)、 足す前に「要るか・既に在るか・標準か既存の依存で足りるか」の段を通ること (C17)、 依存 OSS や外部 service の増減は先に裁定 id を取ること (A3) を求める。 判定 API を挿すのは依存の増加 (A3) であり、 その材料は記録から取った数字でなければならない (C10)。</p></div></div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-brand"><span class="num">02</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v18"/><path d="M5 7l-3 6h6z"/><path d="M19 7l-3 6h6z"/><path d="M3 21h18"/></svg> 判断を縛る力 / 評価の軸</span><h2>選択肢を測るものさし (安全・速さ)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-02">この判断を評価する 4 本のものさしです。mutant 1 つの費用を答えを変えうる走行だけにすること、検査を gate の中に残して審査役が生き残りを見られること、test の名前の出所を器の 1 か所にして道具は受け取るだけにすること、そして検査の範囲が狭まった事実を黙らずに記録に残すことです。</p></section>
+<section data-component="chapter-deck-band" class="tint-brand"><span class="num">02</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v18"/><path d="M5 7l-3 6h6z"/><path d="M19 7l-3 6h6z"/><path d="M3 21h18"/></svg> 判断を縛る力 / 評価の軸</span><h2>選択肢を測るものさし (安全・速さ)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-02">この判断を評価する 4 本のものさしです。 計算できる判断を model に聞かないこと、 依存を足す前に正解と費用を機械で取れる記録を揃えること、 gate 1 本を数分の桁に保つこと、 そして「保留」のまま置いた研究を数字で決定に変えることです。</p></section>
 <div class="chapbody">
 <table data-component="adr-driver-table"><tbody>
-<tr data-component="adr-driver-row"><td class="drid">DR1</td><td>mutant 1 つの費用を、 判定に寄与する歯の走行だけにする <span class="drg">CTX1 (9 割超が寄与しない走行)・CTX2 (縮退の周で 20 倍)・裁定 (CTX5)</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR2</td><td>検出線を gate の中に残し、 審査役が生存 mutant を材料にできる形を保つ <span class="drg">CTX3 (記録の極性・lens の材料)・憲法 C12.4・裁定 (B の却下)</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR3</td><td>歯の名の導出の正本を器の 1 か所にし、 道具は受けた値をそのまま使う <span class="drg">CTX3 (受付が既に導く)・憲法 C2.2 / C10・ADR-0050 の thread と同じ形</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR4</td><td>検出の母集団<span class="term" data-component="plain-language-term-inline" data-term="検出の母集団">変異を捕まえる役を負う test の集合</span>が狭まった事実を記録に残す (黙って狭めない) <span class="drg">憲法 C10・C12.4 (記録は裁定の材料)</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR1</td><td>判断の置き場は「計算できるか」で決め、 計算できる判断を model (lens も Jev も) に聞かない <span class="drg">CTX1 (87% が計算できる)・CTX2 (docs が自ら「code で計算できることを聞くな」)・憲法 C17</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR2</td><td>依存を足す前に、 正解と費用を機械で取れる記録を先に揃える <span class="drg">CTX2 (q2 に基準線が無い)・CTX3 (時間・token・finding 単位の record が未着地)・憲法 C10 / A3</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR3</td><td>gate 1 本を数分の桁に保つ (検出線の費用を再び数十分に戻さない) <span class="drg">CTX3 (実測 2 周)・ADR-0052・裁定 (CTX4 の G1)</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR4</td><td>決めない研究 (RESEARCH-jev) の「保留」を、 数字を根拠に決定へ変える <span class="drg">CTX2・研究の再検討条件・憲法 C10</span></td></tr>
 </tbody></table>
 </div>
-<section data-component="chapter-deck-band" class="tint-violet"><span class="num">03</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5"/></svg> 検討した選択肢 / 3 つの確定方式</span><h2>それぞれの利点と欠点を並べる</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-03">候補を 6 つ並べます。差し込み口を足して単体の test と契約の test だけを回す案、検査を gate の外へ出す案、契約の test だけにして単体の test も外す案、道具が契約を自分で読む案、道具を変えず位置引数で絞る案、そして何も変えず同時本数を増やす案です。</p></section>
+<section data-component="chapter-deck-band" class="tint-violet"><span class="num">03</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5"/></svg> 検討した選択肢 / 3 つの確定方式</span><h2>それぞれの利点と欠点を並べる</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-03">候補を 5 つ並べます。 判断を 3 分類に置いて判定 API は挿さない案、 判定 API を gate の指摘の重さの仕分けに挿す案、 人へ上げるべきかの判断に挿す案、 変異検査を 2 段にする案、 そして審査役をまるごと判定 API に置き換える案です。</p></section>
 <div class="chapbody">
 <div class="opt-grid">
 <div data-component="adr-option-card" class="chosen">
-<div class="opt-head"><span class="opt-id">OPT1</span><span class="opt-name">宣言 file の検出線に穴 {teeth} を足し、 mutant の test を「単体の歯 ∪ bin の歯 ∪ 契約が名指した歯」の filter で回す</span><span class="opt-verdict chosen">採用</span></div>
-<p class="opt-sum">器が契約の verify 行から導いた歯の名の列を穴 {teeth} で検出線の行へ渡す。 道具は mutant ごとの test を nextest の filter で「lib の歯 ∪ bin の歯 ∪ 名がその語で始まる歯」に閉じる。 baseline は従来どおり道具の外で全数 (fail-fast にしない)。 記録の 1 行に語の数を足す。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT1">宣言 file の検査の行に 4 つ目の差し込み口を足し、器が契約から導いた test の名前をそこへ入れる案です。道具は mutant ごとに、package の単体の test と bin の test は全部、e2e の test は名指された分だけを回します。変異を当てない最初の 1 回は従来どおり全部回して、時間切れの目安もそこから取ります。記録には名指した名前の数を足して、検査の範囲が狭まったことを残します。</span>
+<div class="opt-head"><span class="opt-id">OPT1</span><span class="opt-name">判断を 3 分類に置き、 Jev は挿さず、 検出線は 1 段のまま</span><span class="opt-verdict chosen">採用</span></div>
+<p class="opt-sum">計算できる判断 (write-set の閉包・名指しの実在・done と verify の生成・枠・列・着地) は code に置き、 意味の判断 (歯の空虚・goal の矛盾・その他の 3 値) だけを lens に残し、 裁定 (消す・出す・使う・閾値・依存) は人に置く。 Jev は 5 候補のどれにも今は挿さない。 便ごとの時間と token の記録と、 verdict の kind の 3 値 (行 ah) が着地して finding 単位の記録が取れる形になった後に、 歯の空虚性と escalate の 2 候補を shadow で N ≥ 30 測り、 その数字で別の ADR を書く。 検出線は契約の歯と単体の歯の 1 段のままとし、 生存分に全 suite を当てる 2 段目は足さない。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT1">判断を「計算で決まる」「意味を読む」「人が決める」の 3 つに分け、 計算で決まるものは全部 code に置く案です。 審査役に残るのは歯の空虚さ・目標の矛盾・その他の 3 値で、 判定 API は今は挿しません。 便ごとの時間と token の記録と、 審査役の答えの種別が着地して指摘 1 件ごとの記録が取れる形になったら、 横で答えを出して正解と突き合わせる測り方で 30 件以上集め、 その数字で改めて決めます。 変異検査は契約の歯と単体の歯だけの 1 段のままです。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>e2e の歯しか持たない契約で mutant 1 つが 44 秒から数秒になる (e2e は名指した数本だけ)</li>
-<li>検出線が gate の中に残り、 審査役は生存 mutant を材料にできる</li>
-<li>歯の名の導出は受付の既存の 1 本を使い回し、 道具は値を持たない (thread と同じ形)</li>
-<li>縮退した周 (1 thread) でも e2e の直列の費用がほぼ消える</li>
+<li>審査落ちの 87% が約束の行の生成 (ADR-0051) で消え、 lens の判断は 13% 分に絞られる</li>
+<li>依存は 0 のまま (A3 の裁定を今は要さない)・gate は 4 分の桁を保つ</li>
+<li>再検討の条件が記録の着地 (契約 2 本) という機械で確かめられる形で決まる</li>
+<li>研究の「保留」が「挿さない (条件つき)」の決定になり、 席が同じ検討を繰り返さない</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>検出の母集団が狭まる — 契約が名指さない e2e の歯だけが捕まえる mutant は生存に数えられ、 生存の数は増えうる</li>
-<li>穴が 1 つ増えるので intake の閉じた集合と gate の置換と宣言 file の行が動き、 着地は道具 (PATH の binary) の入れ替えを伴う</li>
-<li>mutant の test の道具が cargo test から nextest に変わり、 baseline (cargo test) と test の道具が違う</li>
+<li>lens が残す 13% 分の判断の質は測れないままである (finding 単位の record が無い)</li>
+<li>escalate の判断は runner の問い → 席の turn 待ちのままで、 席が居ない時間は詰まる (通知の口は dispatcher.md §19 の別の契約)</li>
+<li>契約が名指さない e2e の歯だけが捕まえる mutant は生存として記録に残るだけ (ADR-0052 CSQ-N1 のまま)</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT2</span><span class="opt-name">検出線を gate の外へ出し、 着地した木に後追いで 1 回当てる</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">gate は共通 verify と契約の歯だけで通し、 変異検査は着地の後に走らせて記録だけ残す。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT2">変異検査を gate から外し、変更を本線に載せた後にまとめて 1 回だけ行う案です。gate はいちばん短くなりますが、審査役が審査の時点で生き残りを見られなくなり、中身のない test を機械で拾う力が弱くなります。載せた後に生き残りが出たときの戻し方も要ります。user の裁定はこの案を採りませんでした。</span>
+<div class="opt-head"><span class="opt-id">OPT2</span><span class="opt-name">Jev を gate FAIL の重さの仕分け (severity) に今挿す</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">gate の lens の findings を Jev に渡し、 重さ (止める / 記録だけ) を確率つきで仕分ける。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT2">gate の審査役が出した指摘の種別と重さを判定 API に仕分けさせる案です。 実測は 27 件中 22 件の一致で、 比べる基準線がありません (指摘 1 件ごとの記録が現物に無いので、 規則との優劣も確率が当てになるかも運用で確かめられません)。 重さの段も研究側が仮に決めたもので器の記録の語ではなく、 依存が 1 つ増えるのに消える判断が無いので採りません。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>gate の壁時計が最も短くなる (検出線の秒が 0)</li>
-<li>穴も道具の filter も要らない</li>
+<li>仕分けが確率つきの型で返り、 閾値を rules 行に置ける</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>審査役が審査の時点で生存 mutant を見られず、 歯の空虚さを機械で拾う面が弱くなる</li>
-<li>着地の後に生存が出た周の戻し方が要る (main を常に緑に保つ形と噛み合わない・ADR-0050 OPT2 と同じ却下理由)</li>
-<li>user の裁定が A を採った</li>
+<li>実測 (q2) は 22/27 で、 比較の基準線が無い (現物に finding 単位の記録が無く、 規則との優劣も較正も運用で確かめられない)</li>
+<li>重さの段 (0 形式の逸脱 / 1 検査の穴 / 2 挙動の欠陥) は研究の spike が定義したもので、 器の record の語ではない</li>
+<li>依存が 1 つ増える (A3) のに、 それで消える判断が無い</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT3</span><span class="opt-name">mutant の test を契約が名指した歯だけにする (単体の歯も回さない)</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">filter を契約の verify 行の歯だけにし、 package の lib と bin の歯は回さない。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT3">mutant ごとに回す test を、契約が名指した test だけにして、単体の test も回さない案です。いちばん速いのですが、既にある単体の test が見つけられる壊し方まで全部「生き残り」に数えられてしまい、記録が実態より悪く見えます。単体の test は 3 秒で回るので、外して得る時間もほとんどありません。</span>
+<div class="opt-head"><span class="opt-id">OPT3</span><span class="opt-name">Jev を「人へ上げるべきか」(escalate) に今挿す</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">runner の問いを Jev に渡し、 席へ上げるか契約を直すかを確率で決める。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT3">実装役の問いを「人へ上げるべきか」判定 API に決めさせる案です。 便の結末を 3 値で決める問いでは審査役の判定語を字面で読む規則の方が当たり (28/30 対 26/30)、 契約側を直すべき 1 件は 3 回とも当てましたが正解つきの母集団は 2 件しか無く、 問いの大半 (19 件中 16 件) は write-set の問いで約束の行の仕組みが消す側です。 残る問いの形が着地後にしか分からないので、 今は採りません。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>最も速い (歯の数が最小)</li>
-<li>契約の歯の空虚さだけを測る形が最も純粋</li>
+<li>実測で 1 件を 3/3 で当てた (確率 0.76〜0.85)</li>
+<li>席の turn 待ちが減る可能性がある</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>既存の単体の歯が捕まえる mutant (共有 code の変更) が全部生存に数えられ、 記録の生存が実態より大きく出る</li>
-<li>単体の歯は 3 秒で回るので、 外して得る秒がほぼ無い</li>
+<li>便の結末の 3 値 (q3) は Jev 26/30 で lens の判定語の規則 28/30 を下回った (規則で足りる)</li>
+<li>正解つきの母集団が 2 件で、 問いの 19 件中 16 件は write-set の問い＝ADR-0051 の行 ag で消える側。 残る母集団の形が着地後にしか分からない</li>
+<li>問いの本文 (state) が判定を動かす API に、 runner の自由文を渡す形になる (docs が明記する注入の弱点)</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT4</span><span class="opt-name">道具が契約の verify 行を自分で読んで歯の名を導く</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">xtask が run dir や契約 file を環境変数か既定の path で見つけ、 verify 行から filter を組む。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT4">道具（xtask）が自分で契約の file を探して、test の名前を組み立てる案です。差し込み口は増えませんが、名前を導く仕組みが器と道具の 2 か所になり、道具が契約の置き場を知るには環境変数か暗黙の path が要ります。契約の無い場面で道具だけを撃つときの既定も別に決めなければなりません。</span>
+<div class="opt-head"><span class="opt-id">OPT4</span><span class="opt-name">検出線を 2 段にする (契約の歯を先に・生存分だけ全 suite)</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">ADR-0052 の 1 段目で生き残った mutant にだけ package の全 suite (e2e 込み) を当て、 生存を実態に近づける。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT4">変異検査を 2 段にして、 1 段目で生き残った mutant にだけ package の test を全部当てる案です。 生存の数は実態に近づきますが、 生存 1 本ごとに数十秒から数分が戻って gate 1 本が再び数十分になりえます。 生存は今は記録と審査役の材料であって gate を落とす線ではないので、 近づけた値の使い道もまだ無く、 裁定も足さない側でした。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>宣言 file の穴が増えない</li>
+<li>契約が名指さない e2e の歯が捕まえる mutant を生存に数えなくなる (記録の生存が減る)</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>導出の正本が器と道具の 2 か所になる (thread の導出を器の 1 か所に寄せた ADR-0050 の向きに反する)</li>
-<li>道具が run dir の置き場を知るには環境変数か暗黙の path が要る (C2.2 の裏口)</li>
-<li>CI で道具を単独で撃つ周 (契約の無い周) の既定が別に要る</li>
+<li>生存 1 本あたり全 suite 1 回 (e2e 込みで数十秒〜数分) が戻り、 gate 1 本が再び数十分になりうる (DR3 に反する)</li>
+<li>生存は記録と審査役の材料であって gate を落とす線ではない (R-C12-1 無効・C12.4)＝実態に近づける値の使い道が今は無い</li>
+<li>裁定 (G1) は足さない側</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT5</span><span class="opt-name">cargo test の位置引数の filter で歯を絞る</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">道具を変えず、 cargo test に歯の名の列を位置引数で渡す。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT5">道具を変えずに、cargo test に test の名前を並べて渡す案です。ただしその絞り方は package の全部の test の入れ物に同じように掛かるので、単体の test まで名前で絞られてしまい、結局「単体は全部・e2e は名指した分だけ」を表せません。</span>
+<div class="opt-head"><span class="opt-id">OPT5</span><span class="opt-name">lens (LLM) の判断を全面的に Jev に置き換える</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">審査と gate の review を Jev の型のある判定に置き換え、 LLM を pipeline から外す。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT5">審査役 (LLM) をまるごと判定 API に置き換える案です。 速くて安くて揺れませんが、 残る判断は文章の意味を読む判断で、 判定 API の説明書自身が多段の推論と日本語を弱点に挙げています。 契約も設計も日本語で書かれていて、 日英差は 30 件の実測では見えていない (根拠にも反証にもならない) ので採りません。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>道具の入れ替えが無い</li>
+<li>判定が速く (p50 約 0.5 秒)・安く (1 回約 $0.00005)・揺れない</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>位置引数の filter は package の全 binary に同じ filter が掛かるので、 単体の歯まで名指した語で絞られる (OPT3 と同じ母集団になる)</li>
-<li>「lib は全部・e2e は名指した分だけ」を 1 行で表せない</li>
-</ul></div></div>
-</div>
-<div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT6</span><span class="opt-name">何も変えず並列度の上限を上げる</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">gate.mutants_jobs を上げ、 mutant ごとの費用はそのままに同時本数で稼ぐ。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT6">何も変えず、同時に走らせる本数の上限を上げて時間を稼ぐ案です。同時本数は core の数で頭打ちになるうえ、1 つの mutant にかかる 44 秒そのものは短くなりません。混んで 1 に絞られた回には何も効かず、e2e の test が増えるほど費用も増え続けます。</span>
-<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>設計も道具も動かない</li>
-</ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>並列度は core 数で頭打ちで (ADR-0050 の受付)、 e2e の binary の 44 秒は 1 本ずつには効かない</li>
-<li>縮退した周 (1 job・1 thread) には何も効かない</li>
-<li>費用が e2e の歯の本数に比例したまま増え続ける</li>
+<li>残る判断 (歯の空虚・goal の矛盾) は文章の意味の判断で、 Jev の docs 自身が多段推論と CJK を弱点に挙げる</li>
+<li>契約も設計 doc も日本語で、 日英差の実測は N=30 では見えていない</li>
+<li>正解を後から取れるのは歯の空虚だけで、 goal の矛盾は較正の正解が無い</li>
+<li>日英差の実測は N = 30 では見えておらず、 置き換えの根拠にも反証にもならない</li>
 </ul></div></div>
 </div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの方式を選ぶか</span><h2>選んだ方式と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、それが要件書のどの要件を支えるかを示します。宣言 file の差し込み口は 4 つになり、器が契約から導いた test の名前をそこへ入れます。道具は mutant ごとに単体の test と bin の test と名指された test だけを回し、変異を当てない最初の 1 回（baseline）は従来どおり全部回します。記録には名指した名前の数を足します。</p></section>
+<section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの方式を選ぶか</span><h2>選んだ方式と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、 それが要件書のどの要件を支えるかを示します。 計算できる判断は code、 意味の判断は lens、 裁定は人に置きます。 判定 API は挿さず、 再検討の条件を記録の着地と shadow 計測の件数で決めます。 変異検査は 1 段のままです。</p></section>
 <div class="chapbody">
 <div data-component="adr-decision-panel" id="decision">
 <p class="dec-kick">採用 — OPT1</p>
-<p class="dec-state">宣言 file の検出線が置ける穴 SHALL {base} と {jobs} と {threads} と {teeth} の閉じた 4 つとし (ADR-0021 §2.1 と ADR-0050 の閉じた 3 つを置き換える)、 契約の verify 行には従来どおり穴を置かない。 {teeth} の値 SHALL 器が契約の verify 行から導いた歯の名の列 (filter の語) とし、 導出 SHALL 受付が preflight で既に使う同じ 1 本を通す (正本は器の 1 か所)。 語が 1 つも無い周 SHALL 空を表す閉じた 1 語で埋める。 道具 (xtask の mutants-diff) SHALL 受けた語をそのまま使い、 mutant ごとの test を nextest で走らせ、 走らせる歯を「package の lib の歯 ∪ bin の歯 ∪ 名が受けた語のどれかで始まる歯」に閉じる (e2e の歯は契約が名指した分だけ)。 空の周 SHALL lib の歯 ∪ bin の歯だけとする。 thread SHALL nextest の引数で渡す (値は従来どおり穴 {threads} から)。 baseline SHALL 従来どおり道具の外で 1 回、 package の歯を全数、 fail-fast にせず走らせ、 timeout の導出も変えない。 記録の 1 行 SHALL 語の数を運ぶ欄を末尾に足し、 検出の母集団が狭まった事実を残す (C10)。 R-C12-1 が記録する変異の生存 SHALL 「契約が名指した歯と package の単体の歯が捕まえない mutant」と読む (C12.4 の記録の母集団の読み替え・deny への昇格の手続きは不変)。 器 SHALL NOT 検出線を gate の外へ出さない。 器 SHALL NOT 歯の名を環境変数で道具へ渡さない (C2.2)。 器 SHALL NOT 本 ADR で新しい rules 行を足さない。</p>
-<span class="dec-plain" data-prose-slot="plain" data-slot-id="decision-plain">宣言 file の検査の行に置ける差し込み口を、便の base・並列の本数・同時実行数・契約の test の名前の 4 つにします。契約の行にはこれまでどおり差し込み口を置きません。test の名前は器が契約の検証の行から導き、その導き方は受付が事前確認で既に使っている 1 本を使い回します。名前が 1 つも無いときは「無い」を表す決まった 1 語を入れます。道具は受け取った名前をそのまま使い、mutant ごとの test を nextest で走らせて、単体の test と bin の test は全部、それ以外は名前がその語で始まる test だけを回します。名前が無いときは単体と bin だけです。同時実行数は nextest の引数で渡します。変異を当てない最初の 1 回は従来どおり道具の外で全部回し、途中で止めず、時間切れの目安もそこから導きます。記録の 1 行には名前の数を足して、検査の範囲が狭まった事実を残します。規則の行が記録する「変異の生き残り」は、契約が名指した test と単体の test が見つけられなかった mutant、と読み替えます。検査を gate の外へは出さず、名前を環境変数で渡さず、新しい規則の行も足しません。</span>
-<span class="dec-why" data-prose-slot="rationale" data-slot-id="decision-rationale">mutant 1 つの費用の 9 割超は、答えが出た後や答えに届かない test の走行でした。答えを変えうるのは、その契約が名指した test と、壊した場所の周りにある単体の test です。ですから回す test をその 2 つに閉じれば、検査の意味を保ったまま費用だけが消えます。検査を gate の外へ出さないのは、審査役が生き残りを材料にする面を残すためで、user の裁定もそちらを採りました。名前を器が導いて差し込み口で渡すのは、同時実行数を渡すときと同じ形で、導き方の正本を 1 か所に保ち、道具に裏口を作らないためです。範囲が狭まったことを記録に残すのは、生き残りの数が裁定の材料だからで、黙って狭めると材料の意味が変わってしまいます。</span>
+<p class="dec-state">pipeline の判断の置き場 SHALL 分解表の 3 分類とし、 計算できる判断 (write-set の閉包・名指しの実在・done と verify の生成・受付の枠・列の順序・着地の列) SHALL code に置き、 意味の判断 (歯の空虚・goal の矛盾・その他) SHALL lens に置き、 裁定 (消す・出す・使う・閾値・依存) SHALL 人に置く。 lens の verdict の語彙 SHALL 約束の行の審査 (ADR-0051・contract-source.md §33 行 ah) の 3 値に限る。 器 SHALL NOT 判定 API (Jev) を pipeline の判断に挿さない (依存は 0 のまま・A3 の裁定を本 ADR は求めない)。 Jev の再検討 SHALL 便ごとの時間と token の記録 (gate-cost.md 行 r) と verdict の kind の 3 値 (行 ah) が着地して finding 単位の記録が機械で取れる形になった後に、 歯の空虚性と「人へ上げるべきか」の 2 候補を正解つきで N ≥ 30 の shadow 計測<span class="term" data-component="plain-language-term-inline" data-term="shadow 計測">本番には効かせず横で測る</span>で測り、 その数字を根拠に別の ADR で決める。 研究が当てないと決めた 2 つの問い (CI の flaky / 回帰・runner の問いの宛先) SHALL NOT 候補に戻さず、 挿す周の state SHALL 機械が作った field に限る。 検出線 SHALL ADR-0052 の 1 段 (契約が名指した歯と package の単体の歯) のままとし、 器 SHALL NOT 生存分に全 suite を当てる 2 段目を足さない (再考は生存が裁定の材料になった時・R-C12-1 の週次記録 2 周分)。 分解表の他の 3 論点 (終端の通知・dispatcher の正帰還・重複の契約) SHALL 設計 doc dispatcher.md §17〜§19 の契約の行と台帳の close で持ち、 本 ADR は再掲しない。</p>
+<span class="dec-plain" data-prose-slot="plain" data-slot-id="decision-plain">便の判断は 3 つに分けて置きます。 write-set の閉包や名指しの実在、 検証と done の生成、 受付の枠、 列の順序、 着地の列のような計算で決まる判断は code に置きます。 歯の空虚さや目標の矛盾のような意味の判断は審査役 (lens) に置き、 審査役の答えの語彙は約束の行の審査で決めた 3 値に限ります。 消す・出す・使う・閾値・依存の裁定は人に置きます。 判定 API (Jev) は pipeline の判断に挿しません (依存は 0 のまま)。 再検討するのは、 便ごとの時間と token の記録と、 審査役の答えの種別 (3 値) が着地して指摘 1 件ごとの記録が機械で取れる形になった後に、 歯の空虚さと「人へ上げるべきか」の 2 候補を正解つきで 30 件以上、 横で答えを出して突き合わせてからで、 その数字で別の記録として決めます。 研究が当てないと決めた 2 つの問い (CI の flaky か回帰か・実装役の問いの宛先) は候補に戻さず、 挿すときも判定 API に渡す材料は機械が作った欄に限ります。 変異検査は契約の歯と単体の歯だけの 1 段のままにし、 生き残った mutant に全部の test を当てる 2 段目は足しません。 通知の口や dispatcher の直しや重複の契約は設計 doc と台帳の側で持ち、 ここには書きません。</span>
+<span class="dec-why" data-prose-slot="rationale" data-slot-id="decision-rationale">落ちた便の 87% が計算で決まる性質だったのですから、 まず計算できる判断を code に置くのが順序です。 model に聞くのは意味の判断だけにすれば、 審査役の仕事は 13% 分に絞られます。 判定 API を挿さないのは、 実測で挿す理由が 1 つも出なかったからです。 規則で足りるもの、 比べる基準線が無いもの、 分離しないもの、 母集団が小さすぎるもの、 未計測のものしか無く、 依存を 1 つ増やす裁定を求める数字がありません。 再検討の条件を記録の着地と件数で決めたのは、 次に検討するときに同じ議論を繰り返さず、 数字だけで判断できるようにするためです。 変異検査を 1 段のままにするのは、 gate 1 本を数分の桁に保つためで、 生存は今は記録と材料であって落とす線ではないからです。</span>
 <div class="justify-box"><p class="jh">この判断が正当化する要件 (cross-doc 照会 → SRS-SCRIBE2-MVP)</p>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#NFR6" data-justifies-req="NFR6" data-justifies-role="claim">NFR6</a><span class="justify-role">claim</span><span class="justify-note">変異検査の並列度と thread は従来どおり並列の枠から来る。 本 ADR は mutant 1 つの中で回す歯の集合を閉じるだけで、 枠と箱は変えない。</span></div>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR46" data-justifies-req="FR46" data-justifies-role="claim">FR46</a><span class="justify-role">claim</span><span class="justify-note">縮退した周 (1 job・1 thread) でも e2e の直列の費用がほぼ消えるので、 縮退が便を数時間止める形が無くなる。 縮退の判定と記録は変えない。</span></div>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR8" data-justifies-req="FR8" data-justifies-role="rationale">FR8</a><span class="justify-role">rationale</span><span class="justify-note">契約の verify 行は従来どおり全行を実走して赤を数える。 本 ADR が絞るのは検出線の mutant の test だけで、 契約の verify の実走には掛からない。</span></div>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR9" data-justifies-req="FR9" data-justifies-role="rationale">FR9</a><span class="justify-role">rationale</span><span class="justify-note">検出線が測れなかった周の INCONCLUSIVE の極性は不変。 記録の欄が 1 つ増えるが、 読めない周の扱いは変えない。</span></div>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#NFR4" data-justifies-req="NFR4" data-justifies-role="claim">NFR4</a><span class="justify-role">claim</span><span class="justify-note">語が無い周を黙って全数へ倒さず、 空を表す閉じた 1 語で埋めて記録に残す。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR49" data-justifies-req="FR49" data-justifies-role="claim">FR49</a><span class="justify-role">claim</span><span class="justify-note">契約の審査で lens が判断するのは意味の判断だけになり、 計算できる性質は受付の code が先に断る (ADR-0051 の行 ag)。 審査の段そのものは変えない。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR46" data-justifies-req="FR46" data-justifies-role="rationale">FR46</a><span class="justify-role">rationale</span><span class="justify-note">並列度 1 に落ちた周も便を断らず流すには gate 1 本が数分の桁で済むことが要る。 検出線を 1 段のまま保ち 2 段目を足さないのは、 縮退した周に gate が数十分へ戻って便が詰まらないための決定である。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#NFR4" data-justifies-req="NFR4" data-justifies-role="rationale">NFR4</a><span class="justify-role">rationale</span><span class="justify-note">判定 API を挿さない周も、 挿す周も、 判断は fail-closed のまま。 shadow 計測は判定に効かせず記録だけ取る。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR30" data-justifies-req="FR30" data-justifies-role="rationale">FR30</a><span class="justify-role">rationale</span><span class="justify-note">判断の置き場は配送構造の一部で、 席 (人) の手番は裁定と escalate の回答に絞る。 通知の口は別の契約の行。</span></div>
 <p class="justify-tgt">照会先: SRS-SCRIBE2-MVP — SRS: 設計 → 契約 → 実装 → 検証 → land を、 人の手を借りずに 1 本通す器（MVP）</p>
 </div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-warn"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> 結果 / 良い面とトレードオフ</span><h2>この判断で何が良くなり、 何を引き受けるか</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">この判断で良くなることと、代わりに引き受けることです。e2e の test しか持たない契約で mutant 1 つが 44 秒から数秒になり、混んで 1 に絞られた回でも数時間止まらなくなります。代わりに検査の範囲が狭まって生き残りが増えうること、差し込み口が増えて道具の入れ替えを伴うこと、mutant の test の道具が baseline と違うことを引き受けます。</p></section>
+<section data-component="chapter-deck-band" class="tint-warn"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> 結果 / 良い面とトレードオフ</span><h2>この判断で何が良くなり、 何を引き受けるか</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">この判断で良くなることと、 代わりに引き受けることです。 審査落ちの 9 割近くが機械の側へ移り、 依存は増えず、 gate は 4 分の桁を保ちます。 代わりに、 lens に残る判断の質は記録が揃うまで測れず、 人へ上げる判断は席の手番待ちのままで、 契約が名指さない歯だけが捕まえる mutant は記録に生存として残り続けます。</p></section>
 <div class="chapbody">
 <div data-component="scope-summary-panel"><div class="scol in"><h3>✓ 良い結果</h3><ul>
-<li data-component="adr-consequence-pos"><span class="b">●</span>e2e の歯しか持たない契約で mutant 1 つが 44 秒から数秒になり、 gate 1 本の検出線が 12 分から数分になる (見込み・着地後に実測する)</li>
-<li data-component="adr-consequence-pos"><span class="b">●</span>縮退した周 (1 thread) でも e2e の直列の 6 分が消え、 縮退が便を数時間止めなくなる</li>
-<li data-component="adr-consequence-pos"><span class="b">●</span>検出線が gate の中に残り、 審査役は生存 mutant を材料にできる</li>
-<li data-component="adr-consequence-pos"><span class="b">●</span>歯の名の導出は受付の既存の 1 本で、 道具は値を持たない (thread と同じ形)</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>審査落ちの 87% (104 便中 91 便の型) が約束の行の生成で code へ移り、 lens の判断は歯の空虚・goal の矛盾・その他の 3 値に閉じる</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>依存は 0 のままで、 gate 1 本は 4 分の桁を保つ</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>Jev の再検討の条件が「契約 2 本の着地 + finding 単位の記録 + N ≥ 30 の shadow」という機械で確かめられる形になり、 席が同じ検討を繰り返さない</li>
 </ul></div><div class="scol out"><h3>⚖ トレードオフ・代償</h3><ul>
-<li data-component="adr-consequence-neg"><span class="b">●</span>検出の母集団が狭まり、 契約が名指さない e2e の歯だけが捕まえる mutant は生存に数えられる (週次記録の生存は増えうる・記録の欄がその事実を運ぶ)</li>
-<li data-component="adr-consequence-neg"><span class="b">●</span>穴が 1 つ増え、 intake の閉じた集合・gate の置換・宣言 file の行・記録の外形が動き、 着地は道具 (PATH の binary) の入れ替えを伴う</li>
-<li data-component="adr-consequence-neg"><span class="b">●</span>mutant の test の道具が nextest になり、 baseline (cargo test・全数) と道具が違う (timeout は baseline から導くので緩めに出る)</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>lens が残す判断の質 (歯の空虚と goal の矛盾) は finding 単位の record が着地するまで測れない</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>escalate は runner の問い → 席の turn 待ちのままで、 席が居ない時間の詰まりは通知の口 (dispatcher.md §19) が着地するまで残る</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>契約が名指さない e2e の歯だけが捕まえる mutant は生存として記録に残り続ける (2 段目を足さないため・ADR-0052 CSQ-N1)</li>
 </ul></div></div>
 </div>
-<section data-component="chapter-deck-band" class="tint-info"><span class="num">06</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> 改訂関係と原則 / この判断の位置づけ</span><h2>版の系譜と、 行き着く原則 (照会終端)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-06">この記録が版の系譜のどこに在るかと、判断が最後に行き着く原則です。差し込み口を 2 つと決めた記録と、それを 3 つに読み替えた記録の、その部分だけを 4 つに読み替えます。受付や箱や着地の順序は変えません。</p></section>
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">06</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> 改訂関係と原則 / この判断の位置づけ</span><h2>版の系譜と、 行き着く原則 (照会終端)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-06">この記録が版の系譜のどこに在るかと、 判断が最後に行き着く原則です。 約束の行 (ADR-0051) と 1 段の検出線 (ADR-0052) はそのままで、 その上に判断の置き場を決めます。 研究記録の「保留」は「挿さない (条件つき)」と読み替えます。</p></section>
 <div class="chapbody">
 <div data-component="adr-supersession">
 <p class="ss-row"><span class="ss-k">改訂状態</span>current</p>
-<p class="ss-row"><span class="ss-k">置き換える ADR</span>ADR-0021, ADR-0050</p>
+<p class="ss-row"><span class="ss-k">置き換える ADR</span>なし (新規)</p>
 <p class="ss-row"><span class="ss-k">置き換えられた</span>なし (現行)</p>
-<p class="ss-row">ADR-0021 §2.1 の「宣言 file の共通 verify が置ける穴は {base} と {jobs} の閉じた集合」と、 それを「閉じた 3 つ ({base} と {jobs} と thread の穴)」に読み替えた ADR-0050 の決定は「閉じた 4 つ ({base} と {jobs} と {threads} と {teeth})」と読む (SHALL be read as)。 ADR-0010 §2.1 / §2.3 (2) への読み替えも同じ基準を 4 つ目の穴に掛ける。 ADR-0021 §2.1 の「道具は値を持たない」は歯の名にも掛かる。 ADR-0009 §2.3 の「変異の生存を検出線で記録する」は不変で、 記録の母集団だけが本 ADR の決定のとおり狭まる。 ADR-0021 の他の文 (受付・封じ込め・木が同じ主実測の省略・着地の順序)・ADR-0050 の他の文 (硬い資源の 3 つ・受付の core の項・遮断器・縮退の jobs 1 かつ thread 1) は不変である。 gate.slot_wait_s の値は本 ADR の外 (別の裁定)。</p>
+<p class="ss-row">ADR-0051 (約束の行) と ADR-0052 (検出線の 1 段) は不変で、 本 ADR はその上に判断の置き場を決める。 RESEARCH-jev の記録時点の推奨「保留」は本 ADR で「挿さない (再検討の条件つき)」と読む (SHALL be read as)。 研究の §5 の再検討条件 (finding 単位の record・escalate に確率が要る時) は本 ADR の再検討条件に含まれる。</p>
 </div>
 <div data-component="adr-principle">
-<p class="prin-id">照会終端 — PRIN-MEASURE-ONLY-WHAT-DECIDES</p>
-<p class="prin-text">検査に払う時間は、 判定を変えうる走行にだけ払う。 判定が決まった後の走行と、 判定に届かない走行は、 費用であって検査ではない。</p>
-<p class="prin-note">本 ADR が mutant に当てる歯を契約の歯と単体の歯に閉じたのはこの原則に行き着く (これ以上は遡らない照会終端)。</p>
+<p class="prin-id">照会終端 — PRIN-COMPUTE-BEFORE-ASKING</p>
+<p class="prin-text">計算できる判断を model に聞かない。 model に聞くのは意味の判断だけで、 その前に正解と費用を機械で取れる記録を残す。</p>
+<p class="prin-note">本 ADR が判断を 3 分類に置き、 判定 API を挿す前に記録の着地を条件にしたのはこの原則に行き着く (これ以上は遡らない照会終端)。</p>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-brand"><span class="num">07</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg> 用語集 / この文書で使う専門語</span><h2>本文に出てくる専門語のやさしい説明</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-07">本文に出てくる専門語を、やさしい言葉で説明します。</p></section>
+<section data-component="chapter-deck-band" class="tint-brand"><span class="num">07</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg> 用語集 / この文書で使う専門語</span><h2>本文に出てくる専門語のやさしい説明</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-07">本文に出てくる専門語を、 やさしい言葉で説明します。</p></section>
 <div class="chapbody">
 <div data-component="glossary-term-table">
-<div class="grow"><div class="gword">契約の歯の穴<span class="en">contract-teeth hole</span></div><div class="gdef">宣言 file の検出線の行に置く 4 つ目の穴 {teeth}。 器が契約の verify 行から導いた歯の名の列で埋め、 道具は受けた語をそのまま filter に使う。 語が無い周は空を表す閉じた 1 語で埋める。</div></div>
-<div class="grow"><div class="gword">検出の母集団<span class="en">detection population</span></div><div class="gdef">mutant ごとに走らせる歯の集合。 本 ADR の時点で package の lib の歯と bin の歯と、 契約が名指した歯。 この集合が捕まえない mutant が生存として記録される。</div></div>
-<div class="grow"><div class="gword">filter の式<span class="en">filter expression</span></div><div class="gdef">nextest が持つ test の選び方。 歯の種類 (lib / bin / 統合) と名の正規表現を和で組める。 道具はこれで「単体の歯は全部・e2e の歯は名指した分だけ」を 1 行に表す。</div></div>
+<div class="grow"><div class="gword">判断の置き場<span class="en">decision placement</span></div><div class="gdef">便が受付から着地まで通る判断 1 つずつについて、 計算できるなら code、 意味の判断なら lens (LLM)、 裁定なら人、 と決めた割り当て。 分解表 (memo s2-07l.505 議題 1) が 19 本の判断に付けた。</div></div>
+<div class="grow"><div class="gword">shadow 計測<span class="en">shadow measurement</span></div><div class="gdef">判定 API や規則を pipeline の判断に挿さずに、 同じ入力で答えを出して記録だけ残し、 後から機械で取った正解と突き合わせて一致率と較正を測ること。 本 ADR の再検討はこの測り方で N ≥ 30 を集めてから行う。</div></div>
 </div>
 </div>
 </div>
 <footer class="foot" data-component="fidelity-sync-meta"><div class="ft-grid">
 <div class="ft-plain">このページは、大もとの機械データ (正本) から自動で組み立てられています。構造は機械が自動で検査し、内容が元データに忠実かは独立のレビューで確かめます。</div>
-<div data-audience="machine">機械SSoT: <b>ADR-0052.adr.yaml</b> &middot; 生成: <b>2026-09-21 08:25</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
+<div data-audience="machine">機械SSoT: <b>ADR-0053.adr.yaml</b> &middot; 生成: <b>2026-09-21 11:01</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
 <div class="tags" data-audience="machine"><span>folio design system</span><span>ADR-pack</span><span>folio engine B1 (instance#2)</span><span>cross-doc 照会</span></div>
 </div></footer>
 <!-- folio:chrome-bottom -->
 <nav class="prevnext" aria-label="前後の文書">
-  <a class="prevnext__prev" href="ADR-0051-contract-rows-carry-promise-rows-and-ledger-state-is-two-fields.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">契約表の行は約束の行から write-set と verify と done を導き、 台帳の memo と契約の状態は label と受入条件の 2 つの field で閉じる (新規の行は手書きの write-set と散文の対応表を持たず、 台帳の bead は契約表から生成した plan を席が撃つ・ADR-0023 §2.1 の「契約の正本は行 1 本」は不変)</span></a>
-  <a class="prevnext__next" href="ADR-0053-decisions-sit-in-code-lens-or-human-and-jev-is-not-inserted.html"><span class="prevnext__dir">次 &rarr;</span><span class="prevnext__title">pipeline の判断は「計算できる判断は code・意味の判断は lens・裁定は人」の 3 分類に置き、 Jev は挿さず (再検討は記録が揃った後の shadow 計測で)、 検出線の 2 段化は足さない (分解表の 5 論点の裁定)</span></a>
+  <a class="prevnext__prev" href="ADR-0052-detection-line-runs-only-contract-teeth-and-unit-teeth.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">検出線は契約が名指した歯と package の単体の歯だけを mutant に当て、 歯の名は宣言 file の 4 つ目の穴 {teeth} で器が渡す (ADR-0021 §2.1 と ADR-0050 の穴の閉じた 3 つを部分 supersede・R-C12-1 の記録の母集団を「契約の歯 + 単体の歯」に狭める)</span></a>
 </nav>
 <script>
 (function () {
