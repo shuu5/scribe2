@@ -665,9 +665,9 @@ title = "約束の行 [[promise]] の parse と schema — 9 欄の宣言順と�
 req = ["FR47", "FR55"]
 section = "33"
 write-set = ["crates/scribe2/src/pipe/table.rs", "crates/scribe2/src/pipe/table/parse.rs", "crates/scribe2/src/pipe/table/check.rs", "contracts/schema.toml"]
-verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail contract_promise_parse_", "cargo nextest run -p scribe2 --lib --no-tests=fail table_error_names_are_pinned_in_declaration_order_and_carry_their_line", "cargo nextest run -p scribe2 --lib --no-tests=fail table_fields_pin_the_schema_columns_and_the_reader_enforces_their_shapes", "cargo nextest run -p scribe2 --lib --no-tests=fail table_check_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail contract_closure_ext_real_table_has_zero_findings"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail contract_promise_parse_", "cargo nextest run -p scribe2 --lib --no-tests=fail table_error_names_are_pinned_in_declaration_order_and_carry_their_line", "cargo nextest run -p scribe2 --lib --no-tests=fail table_fields_pin_the_schema_columns_and_the_reader_enforces_their_shapes", "cargo nextest run -p scribe2 --lib --no-tests=fail table_check_"]
 size = "S"
-done = "(1) 契約表の区間の [[promise]] が 9 欄（of / n / text / files / symbols / teeth / place / fixture / expect・宣言順）で parse され、行の型が親の行 id で引ける (2) of が同じ doc の行に無い・n が重複か欠番・必須欄が空 の 3 形が TableError の値（新しい 2 値 + 既存の欄検査）で contracts check の 1 行に名指され rc 1 (3) contracts schema の生成物に 9 欄が載り、共通 verify の cargo xtask check（contracts-schema の drift）が 0 (4) TableError の名の slice と FIELDS の件数を pin する既存の歯 2 本（verify の完全名）が新しい母集団（TableError 13・欄 16 + 約束の 9）で緑 (5) 約束の行を持たない既存の 161 行の parse と検査（table_check_ の歯と実表の findings=0 の歯）が 1 字も変わらず緑"
+done = "(1) 契約表の区間の [[promise]] が 9 欄（of / n / text / files / symbols / teeth / place / fixture / expect・宣言順）で parse され、行の型が親の行 id で引ける (2) of が同じ doc の行に無い・n が重複か欠番・必須欄が空 の 3 形が TableError の値（新しい 2 値 + 既存の欄検査）で contracts check の 1 行に名指され rc 1 (3) contracts schema の生成物に 9 欄が載り、共通 verify の cargo xtask check（contracts-schema の drift）が 0 (4) TableError の名の slice と FIELDS の件数を pin する既存の歯 2 本（verify の完全名）が新しい母集団（TableError 13・欄 16 + 約束の 9）で緑 (5) 約束の行を持たない既存の 161 行の parse と検査（table_check_ の歯・実表の findings=0 は CI の contracts check が測る〔FR55〕）が 1 字も変わらず緑"
 
 [[contract]]
 id = "ag"
