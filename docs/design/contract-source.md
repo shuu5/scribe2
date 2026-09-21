@@ -720,6 +720,16 @@ write-set = ["crates/scribe2/src/pipe/closure.rs", "crates/scribe2/src/pipe/clos
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail contract_derive_target_flag_"]
 size = "S"
 done = "(1) 引数を取る旗（--bin / --bench / --example / -E）の次の 1 語が filter 語にならず消費され、取らない旗（--bins / --benches / --examples / --tests / --all-targets）は従来どおり (2) 引数を取る旗が行末なら nextest_filter が None (3) scope は両方とも Crate のまま・-p / --lib / --test の読みと filter 語の規則（最後の非旗の語）は不変 (4) -p x --bin x foo_ が filter foo_・-p x --bin x --test face foo_ が filter foo_ と Crate・-p x --bin が None・-p x --bins foo_ が filter foo_・-p x -E expr bar_ が filter bar_ (5) 既存の contract_derive_ の歯が 1 字も変わらず緑"
+
+[[contract]]
+id = "al"
+title = "pipe/review.rs の「要件本文の読み手」の群（13 item・561–768 行・正規化 209 行）を子 module へ割る — 純移動（名・本文・順序・doc comment 不変・歯 0 本・親に mod 1 行と use 2 文の 4 行・子側の pub(super) 6 名・札 2 か所）"
+req = ["FR49", "FR30"]
+section = "37"
+write-set = ["crates/scribe2/src/pipe/review.rs", "+crates/scribe2/src/pipe/review/requirements.rs"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail pipe_review_requirements_text_", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_review_yaml_shall_"]
+size = "S"
+done = "(1) 13 item が名・本文・順序・doc comment を変えずに + の file へ移る（move_proof が pure と判じる・items-differ / residual-line 0 件） (2) 親に増えるのは mod 宣言 1 行・素の use 1 行（requirements_text）・#[cfg(test)] だけの 1 行と use 1 行（残り 5 名・既存の行頭 #[cfg(test)] の直上）の 4 行だけ (3) in-file の歯の本文と use super::{…} が 1 byte も変わらず、e2e は触らない (4) 子側の pub(super) は名指しの 6 名だけで、群内の 7 名と親側の可視性は不変 (5) 札 moved が親の mod tests { の直後と子の module doc の直後に 1 行ずつ (6) 既存の 8 本（pipe_review_requirements_text_ 2 本・pipe_review_yaml_shall_ 6 本）が名・本数・本文不変で緑・clippy -D warnings が通常 build と test build の両方で rc 0"
 <!-- contracts:end -->
 
 
@@ -777,3 +787,21 @@ done = "(1) 引数を取る旗（--bin / --bench / --example / -E）の次の 1 
 - 歯（in-file・`crates/scribe2/src/pipe/closure/derive.rs` の `mod tests`・接頭辞 `contract_derive_target_flag_`・`nextest_filter` の pure な歯）: (a) `-p x --bin x foo_` → filter `foo_`・scope `Crate`。(b) `-p x --bin x --test face foo_` → filter `foo_`・scope `Crate`（scope の旗と読めない旗の並び＝従来どおり広い側）。(c) `-p x --bin`（引数なし）→ `None`。(d) `-p x --bins foo_` → filter `foo_`（取らない旗は従来どおり）。(e) `-p x -E expr bar_` → filter `bar_`（式 1 語を消費）。
 - 触らない: scope の 3 値と置き場の導出（§28）・`PACKAGE_FLAGS` / `LIB_FLAG` / `TEST_FLAG`・Declared の門（§20）が同じ 1 関数を通ること・filter 語の意味・`teeth-outside-write-set` の断りの字面と極性。
 - 却下: consumer が `--bin` を verify から外す運用のまま（散文の作法・N2・他の consumer が同じ穴を踏む）／旗の引数を filter 語にも読む（名と filter の 2 義・偽陽性の根そのもの）／nextest の全旗の表を持つ（旗が増えるたびに表が育つ・「引数を取るか」の 2 slice で足りる）／`-E` の式を scope に読む（式の解釈は器の外・従来どおり広い側）。
+
+## 37. pipe/review.rs の「要件本文の読み手」の群を子 module へ割る（契約表の行 al・純移動・§15 と [pipeline.md](./pipeline.md) §45 の型）
+
+やさしく言うと: 審査役に渡す材料を作る file が上限（1500 行）まで残り 89 行しか無く、この file を触る便が S でも受付で断られる。責務が閉じている「要件面（yaml / md / html）から要件の本文を読む」群を、名前も本文も変えずに子の file へ移して余地を作る。
+
+- 出所（orchestrator の実測 2026-09-22・`pipe dispatch ls` と `pipe preflight`）: `crates/scribe2/src/pipe/review.rs` は幅 120 で正規化した行数が **1411**（上限 R-C4-2 = 1500・余地 **89**）で、行 r（[gate-cost.md](./gate-cost.md)・`s2-07l.462`・size M）と行 c（同・`s2-07l.230`・size S）が `cap-headroom` で受付を通らない（S の見積 100 > 89）。
+- 現物（orchestrator が grep と正規化行数で実測・main ca9bb75）: 責務は 6 群（定数 51–77・判定の語彙と読み手 79–267・焼き直しの門 269–362・材料の組み立て 364–559・**要件本文の読み手 561–768**・lens の駆動と決着 770–935）で、in-file の歯は 937 行から（`#[cfg(test)]` の次の非空行が `mod tests {`＝札は `mod tests {` の直後に置ける・[pipeline.md](./pipeline.md) §45 の `#[path]` 形の罠には当たらない）。**要件本文の読み手の群は閉じている**: item は 13 個（`Found` / `requirements_text` / `requirement_row` / `requirement_md` / `md_heading` / `requirement_yaml` / `BODY_KEYS` / `BODY_JOIN` / `yaml_entry` / `unquote` / `Member` / `yaml_member` / `strip_tags`・561–768 行・正規化 **209** 行）で、親の本体から裸で呼ばれるのは **`requirements_text` の 1 site だけ**（438 行・`materials`）、他 module（`crates/scribe2/src/**`・`crates/scribe2/tests/**`）からの参照は **0 site**（`review::` の 31 site を全数確認・`table/check.rs` の 2 件は doc comment の字面）、群が親から引くのは `table::read`（1 site・579 行）と `std::path::Path` だけで、親の const・型・`Contract` は 1 つも引かない。群に struct は無く（`Found` / `Member` は enum）、field を歯が構築する型も無い＝§45 の「親に残す型」の判断は要らない。歯の `use super::{…}`（939–943 行）が名指す群の名は 6 つ（`requirement_md` / `requirement_row` / `requirement_yaml` / `requirements_text` / `strip_tags` / `Found`）。
+- 名前解決の形（§45 と同じ・可視性は名前解決をしない）: 親に `use` を置く。解く名は 6 つで、うち**親の本体に site が在るのは `requirements_text` の 1 つだけ**、残り 5 つ（`requirement_row` / `requirement_md` / `requirement_yaml` / `strip_tags` / `Found`）は歯だけが読む。5 つを素の `use` に入れると通常 build で `unused_imports` → `-D warnings` で rc 101 になるので、`use` は**本体用（1 名・素）と歯用（5 名・`#[cfg(test)]` 付き）の 2 文**に割る（属性は別の行・`residual_allowed` が許す残差は `#[cfg(test)]` だけの 1 行）。群の中だけで呼ばれる 7 名（`md_heading` / `BODY_KEYS` / `BODY_JOIN` / `yaml_entry` / `unquote` / `Member` / `yaml_member`）は可視性を 1 語も変えない。
+- 約束（この行が作るもの・番号は done と 1:1）:
+  1. 上の 13 item（561–768 行・正規化 209 行）を、行 al の write-set の `+` の file へ名・本文・順序・doc comment を変えずにそのまま移す（doc comment は item の一部＝1 字も書き換えない・`[`table::requirement_ids`]` の link は子の `use super::table;` で解ける）。子の頭は module doc と `use super::table;` / `use std::path::Path;` の 2 行だけ。
+  2. 親に増えるのは **4 行だけ**——`mod` 宣言 1 行（file 頭の `use` 群〔37–49 行〕の直前・親に既存の `mod` 宣言は無い）、本体用の素の `use` 1 行（`requirements_text`・`pub` は付けない・`use` 群の隣）、歯用の `#[cfg(test)]` だけの 1 行と `use` 1 行（5 名・**既存の行頭 `#[cfg(test)]`〔937 行〕の直上**＝file 頭に置くと xtask の src / test の切れ目が最初の行頭 `#[cfg(test)]` へ動き、本体が丸ごと歯の区間に落ちる）。4 行とも 120 桁に収まる。
+  3. 歯は 1 本も足さず 1 本も変えない: in-file の `mod tests` の本文と `use super::{…}` は 1 byte も変えない（その `use` は親の `use` 2 文が解く）。e2e（`crates/scribe2/tests/e2e/pipe/intake.rs` の `pipe_review_reads_requirements_` 4 本）は binary 越しで名を引かず、write-set の外。
+  4. 上げるのは**子側**の可視性だけで、語は `pub(super)` の 1 種類。上げる集合は名指しで **6 つ**（`requirements_text` / `requirement_row` / `requirement_md` / `requirement_yaml` / `strip_tags` / `Found`・全部 item の頭の行）。enum の variant は enum の可視性を継ぐので variant の行は触らない。親側の可視性は変えない。
+  5. 純移動の札 `// flip-check: moved <行 al の bead>` を親の `mod tests {` の直後（[dispatcher.md](./dispatcher.md) §20 の着地形）と子の module doc の直後に 1 行ずつ置く（説明 1 行 + 札 1 行の 2 行・[pipeline.md](./pipeline.md) §7 の `moved` の逃がし・入口の RED は札が担う）。
+  6. 検証行が名指す歯は**既存の 8 本**（接頭辞 `pipe_review_requirements_text_` の 2 本と `pipe_review_yaml_shall_` の 6 本・全部 in-file・新設 0 本）で、着地後も名・本数・本文が不変。
+- 見積: 親 約 1202 行（余地 約 298＝size M を受けられる）・子 約 215 行。`review.rs` を write-set に持つ未着地の行は 2 本（[gate-cost.md](./gate-cost.md) 行 c と行 r）で、どちらも lens の駆動と決着の群（`decide` / `settle`）を触る＝移す群と交差しない。
+- 触らない: 移す群の外の 5 群（定数・判定の語彙・焼き直しの門・材料の組み立て・lens の駆動）・`pub(in crate::pipe)` の `design_material`（`strip_visibility` が剥がさない語＝群 4 を出す周の罠・本行は触らない）・e2e の歯・`table.rs` / `table/check.rs`。
+- 却下: 焼き直しの門の群（269–362）を出す（97 行しか減らず余地 186 で M に届かない・`cli/intake.rs` が `Rework` / `unaddressed` を 2 site 使うので親に `pub use` が要る・子が `FindingKind` と `closure::{…}` を引いて結合が重い）／判定の語彙の群を出す（8 module と e2e が `review::` で引く公開面）／材料の組み立ての群を出す（`design_material` の `pub(in crate::pipe)` が `items-differ` に化ける）／lens の駆動の群を出す（未着地の行 c / r が触る面と交差）／`#[cfg(test)] use …;` を 1 行に畳む（`residual-line`・[pipeline.md](./pipeline.md) §45 の便 4 本目の再現）。
