@@ -569,6 +569,7 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
 - **触らない**: baseline の形（§33）・`--jobs` / `--threads` の受け方（§22 / §31）・受付と封じ込め（§3 / §4）・木が同じ主実測の省略（§5）・`R-C12-1` の極性と値・`parse_outcomes` と `Counts` の 5 数・契約の verify の実走（FR8）・rules 行。
 - **却下**（ADR-0052 §3 と同じ）: 検出線を gate の外へ出す（lens の材料が消える・裁定）／契約の歯だけにして lib と bin を回さない（共有 code の生存が実態より増える）／道具が契約を自分で読む（導出の正本が 2 つ・C2.2）／cargo test の位置引数の filter（全 binary に同じ filter が掛かる）／並列度の上限を上げる（core で頭打ち・縮退に効かない）。
 - **後続**（§11）: 行 aa の着地後に .516 型の契約（e2e の歯）で検出線の秒を実測し、ADR-0052 CSQ-P1 の「数分」を確かめる。生存の週次記録の母集団が変わった日を記録の側に残す（R-C12-1 の裁定材料は実測 2 周分）。
+- **実測**（行 aa 着地後の 2 周・4 job × 8 thread・枠は granted）: .517 型（e2e の歯・`--teeth` 4 語）は検出線 157 秒 / 66 mutants（mutant 1 つ 2.6〜3.7 秒）・verify 合計 232 秒。.511 型（lib の歯・`--teeth` 4 語）は検出線 161 秒 / 78 mutants（caught 58・missed 2・unviable 18）・verify 合計 228 秒。同じ 2 契約の旧形（§33 前・縮退 1 job × 1 thread）は 5〜8 時間の見込みで止めた。CSQ-P1 の「数分」は実測で確かめた。検出の母集団が変わった日 = 行 aa の着地日（記録の `teeth=` が `-` から語数に変わる周が境）。
 
 <!-- contracts:begin -->
 schema = 1
