@@ -148,6 +148,26 @@
 - 触らない: 移す群の外の 6 群（const と型・入口・表・計測と鮮度・子 process・1 行形）・`TableRow` の pub field・`Refresh` / `Freshness` / `UsageError` の公開面・e2e の歯・`fleet/mod.rs` の型。
 - 却下: 表の群（231–366）を出す（親 1312 / 余地 188 で S 止まり・`table_row` の `state: &super::State` が親の `use` に無い `State` を指し、子へ移すと束縛を足す残差が要る）／計測と鮮度の群を出す（`run` / `declared` / `fresh_of` の公開面と入口が絡む）／`#[cfg(test)] use …;` を 1 行に畳む（`residual-line`・[pipeline.md](./pipeline.md) §45 の便 4 本目の再現）／検証行を接頭辞 `fleet_usage_` で書く（§12 の write-set 拡張の再現）。
 
+## 14. fleet/usage.rs の「表」の群を子 module へ割る（契約表の行 d・純移動・§13 と同じ型・2 便目）
+
+やさしく言うと: §13 で 260 行を出しても、その後の着地で親は上限まで残り 294 行に戻り、size M の便（見積 300）がまた受付で断られる。この file は設計 9 本・12 行が write-set に持つ hub なので、責務が閉じている「人の読む表を描く」群をもう 1 つ子へ移して余地を 400 行台にする。
+
+- 出所（orchestrator の実測 2026-09-22・`pipe preflight`）: `crates/scribe2/src/fleet/usage.rs` は幅 120 で正規化した行数が **1206**（余地 **294**）で、[gate-cost.md](./gate-cost.md) 行 r（`s2-07l.462`・M）が `cap-headroom` で受付を通らない（M の見積 300 > 294）。
+- 現物（orchestrator と census の実測・main a654561）: src 区間は 1–804・in-file の歯は 805 行（列 0 の最初の `#[cfg(test)]`＝§13 が置いた歯用の `use` の属性行・807 `mod tests {`・809 に §13 の札）から。src の群は 9 つ（use 頭 15–36・const 38–81・型 83–189・入口 191–245・**表 246–381**・endpoint 383–388・計測 390–516・表示と読み 518–616・refresh 618–735・event と render 737–803）。**表の群は閉じている**: item は 10 個（`CELL_NONE` / `CELL_GAP` / `TABLE_HEAD` / `pub struct TableRow`〔field 6 つ全部 `pub`〕/ `impl TableRow { fn cells }` / `pub fn table` / `aligned` / `table_row` / `pct_cell` / `model_cell`・246–381 行・正規化 **136** 行）。親の本体から裸で呼ばれるのは `tabled`（236–245 行）の 3 名（`TableRow` / `table_row` / `table`）だけ、他 module からの参照は **0 site**（`crates/` 全数の `fleet::usage::` は `UsageError` / `run` / `run_fresh` / `run_in` / `declared` だけ・`pipe/table/parse.rs` と `rules/manifest.rs` の `TableRow` と `seat/role.rs` の `table_row` は同名の別物）。歯の `use super::{…}`（811–813 行）が名指す群の名は同じ 3 名。群が親から引くのは private の `latest_rows` と `RESETS_NONE`、`crate::fleet` の `Allowance` / `WindowKind`、`crate::seat::StateDir`。field を歯が構築する型は群に無い（`TableRow` の field は既に `pub`＝可視性を触らない）。
+- 名前解決の形（§13 と同じ）: 親に素の `use` を 1 行置いて 3 名を解く（`use table::{table, table_row, TableRow};`・3 名とも本体に site が在るので `#[cfg(test)]` 付きの `use` は要らない）。上げるのは `table_row` の可視性 1 語（`pub(super)`）だけで、`table` と `TableRow` は `pub` のまま逐語で運び、残り 7 名は子に閉じる。**`super::State` の束縛**: `table_row` の signature は `state: &super::State` の逐語で、子では `super` が `usage` に解けるので、親の `use super::{…}`（20–23 行・`crate::fleet` の名）に `State` を 1 語足す（use の span の中＝残差の許容形・子の `super::State` がこの束縛を使うので `unused_imports` は出ない）。親で孤立する import は **0**（`Allowance` / `WindowKind` / `StateDir` / `RESETS_NONE` は親に site が残る）。module 名 `table` と `pub fn table` は名前空間が別（§13 の `read` と `enum Read` と同型）。親の module doc 13 行目の intra-doc link `` [`table`] `` は先が private になるので素の字面にしてよい（`//!` は残差の許容形・rustdoc の門は CI に無い）。
+- 約束（この行が作るもの・番号は done と 1:1）:
+  1. 上の 10 item（246–381 行・正規化 136 行）を、行 d の write-set の `+` の file へ名・本文・順序・doc comment を変えずにそのまま移す。子の頭は module doc と札と `use super::{latest_rows, RESETS_NONE};` / `use crate::fleet::{Allowance, WindowKind};` / `use crate::seat::StateDir;` の 3 行だけ。
+  2. 親に増えるのは **2 行だけ**——`mod table;` 1 行（15 行 `mod read;` の次）と素の `use table::{table, table_row, TableRow};` 1 行（16 行 `use read::{…};` の次）。親の `use super::{…}` に `State` を 1 語足す差と、孤立した use の削除（見込み 0）はこの数に含めない（残差の許容形）。`#[cfg(test)]` 付きの `use` は足さない。
+  3. 歯は 1 本も足さず 1 本も変えない: in-file の `mod tests` の本文と `use super::{…}`（811–813 行）は 1 byte も変えない（3 名は親の素の `use` が解く）。e2e（`crates/scribe2/tests/e2e/fleet.rs`）は binary 越しで名を引かず、write-set の外。
+  4. 上げるのは**子側**の `table_row` の 1 名だけ（語は `pub(super)`）。`table` / `TableRow` の `pub` と field の可視性、親側の可視性は変えない。
+  5. 純移動の札 `// flip-check: moved <行 d の bead>` を親の `mod tests {` の直後（§13 の札 809 行の**次の行に足す**＝既存の札は置き換えない・base に無い札だけが効き、持ち越した札は §5.3 の対で残差から外れる・`closure.rs` / `land.rs` に札 2〜3 本の前例）と子の module doc の直後に 1 行ずつ置く。子は歯の区間を持たないので数に入るのは親の札だけ。
+  6. 検証行が名指す歯は**既存の 3 本**（in-file の `fleet_usage_table_rows_name_unmeasured_windows_and_seat_roles` / `fleet_usage_table_aligns_columns_by_the_widest_value_and_prints_headers_alone_for_no_accounts`・e2e の `fleet_usage_table_show_prints_two_headers_and_seat_roles_from_registration_rows`・新設 0 本・repo 内で名は一意）で、着地後も名・本数・本文が不変。接頭辞では書かない（`fleet_usage_table` は他の歯にも当たる）。
+- write-set の面（§13 と同じ逐語）: 親 `usage.rs` は **縮む面**（`-`・素の path で書くと受付が自分の見積で `cap-headroom` に倒れる）、子は **新規 file**（`+`）。diff の面は「親から 10 item が消え、子に同じ 10 item が現れる」の 2 file だけで、`-` は削除の宣言ではない。
+- 見積: 親 1206 → 約 1072（余地 約 428＝size M を受けられる）・子 約 149 行。xtask の門の副作用は無い（実測）: `Command::new` の site は `signal_group`（728 行）で群の外＝`core-spawn` の件数も holder も不変、`std::env::` は 0 件、src / test の切れ目は 805 → 約 671 へ平行移動するだけ、子に列 0 の `#[cfg(test)]` は置かない。
+- 行 r（[gate-cost.md](./gate-cost.md) §26・`s2-07l.462`）との交差: 行 r が触る `Call` の構築（653 行・`refresh` の中）と `Event {` の literal（743 行・`event_of` の中）はどちらも群の外なので、行 r の write-set は `usage.rs` のままでよく、本行の着地で余地だけが増える。
+- 触らない: 移す群の外の 8 群・`TableRow` の `pub` field・`Refresh` / `Freshness` / `UsageError` の公開面・e2e の歯・`fleet/mod.rs` の型・§13 が置いた子 `read.rs` と札。
+- 却下: refresh の群（641–735・95 行）を出す（120 行に届かず、`Call` と `Command::new` を抱えて行 r と core-spawn の holder が動く）／event と render（737–803・67 行）を出す（小さく `Event {` を抱える）／計測の群（390–516）を出す（`measure` が入口 `tabled` の本体で閉包が広い）／§13 の札を置き換える（持ち越しの対が崩れ、§13 の便が何を免除したか辿れなくなる）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -179,5 +199,15 @@ write-set = ["-crates/scribe2/src/fleet/usage.rs", "+crates/scribe2/src/fleet/us
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail fleet_usage_windows_of_maps_windows_and_isolates_the_broken_element", "cargo nextest run -p scribe2 --lib --no-tests=fail fleet_usage_token_of_names_each_credential_failure", "cargo nextest run -p scribe2 --lib --no-tests=fail fleet_usage_client_args_carry_timeout_and_never_the_token", "cargo nextest run -p scribe2 --lib --no-tests=fail fleet_usage_resets_accepts_z_and_utc_offset_and_rejects_the_rest"]
 size = "S"
 done = "(1) 17 fn が名・本文・順序・doc comment を変えずに + の file へ移る（move_proof が pure と判じる・items-differ / residual-line 0 件） (2) 親に増えるのは mod 宣言 1 行・素の use 1 行（本体の 7 名）・#[cfg(test)] だけの 1 行と use 1 行（歯の 4 名・既存の行頭 #[cfg(test)] の直上）の 4 行だけで、孤立した use は削る (3) in-file の歯の本文と use super::{…} が 1 byte も変わらず、e2e は触らない (4) 子側の pub(super) は名指しの 11 名だけで、群内の 6 名と親側の可視性は不変 (5) 札 moved が親の mod tests { の直後と子の module doc の直後に 1 行ずつ (6) 名指しの既存 4 本が名・本数・本文不変で緑・clippy -D warnings が通常 build と test build の両方で rc 0"
+
+[[contract]]
+id = "d"
+title = "fleet/usage.rs の「表」の群（10 item・246–381 行・正規化 136 行）を子 module へ割る — 純移動 2 便目（名・本文・順序・doc comment 不変・歯 0 本・親に mod 1 行と素の use 1 行・子側の pub(super) は table_row の 1 名・親の use super に State を 1 語・札 2 か所）"
+req = ["FR33"]
+section = "14"
+write-set = ["-crates/scribe2/src/fleet/usage.rs", "+crates/scribe2/src/fleet/usage/table.rs"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail fleet_usage_table_rows_name_unmeasured_windows_and_seat_roles", "cargo nextest run -p scribe2 --lib --no-tests=fail fleet_usage_table_aligns_columns_by_the_widest_value_and_prints_headers_alone_for_no_accounts", "cargo nextest run -p scribe2 --test e2e --no-tests=fail fleet_usage_table_show_prints_two_headers_and_seat_roles_from_registration_rows"]
+size = "S"
+done = "(1) 10 item が名・本文・順序・doc comment を変えずに + の file へ移る（move_proof が pure と判じる・items-differ / residual-line 0 件） (2) 親に増えるのは mod 宣言 1 行と素の use 1 行（3 名）の 2 行だけで、親の use super::{…} に State を 1 語足し、#[cfg(test)] 付きの use は足さない (3) in-file の歯の本文と use super::{…} が 1 byte も変わらず、e2e は触らない (4) 子側の pub(super) は table_row の 1 名だけで、table / TableRow の pub と field の可視性と親側の可視性は不変 (5) 札 moved が親の mod tests { の直後（§13 の札の次の行・置き換えない）と子の module doc の直後に 1 行ずつ (6) 名指しの既存 3 本が名・本数・本文不変で緑・clippy -D warnings が通常 build と test build の両方で rc 0"
 
 <!-- contracts:end -->
