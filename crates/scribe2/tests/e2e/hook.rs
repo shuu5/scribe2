@@ -1032,7 +1032,7 @@ fn vessel_external_form() {
     insta::assert_snapshot!(form);
 }
 
-/// (8) `vessel` の口: 既知の 3 verb に**未知の flag** を足すと rc 2・理由の 1 行が flag を名指し usage を添え・marker も git の
+/// (8) `vessel` の口: 既知の 4 verb（`update` は consumer-sync.md §5 が足した）に**未知の flag** を足すと rc 2・理由の 1 行が flag を名指し usage を添え・marker も git の
 /// local 設定も 1 byte も書かない。`--help` は usage を stdout へ出して rc 0（設計 pipeline.md §14 約束 3 / 4 / 8）。base の
 /// `init` は未知の flag を読み飛ばして marker を書く＝RED。
 #[test]
@@ -1043,7 +1043,7 @@ fn vessel_args_unknown_flag_is_refused_with_rc_2_on_every_verb() {
     let config = repo.join(".git").join("config");
     let before = fs::read(&config).unwrap_or_default();
     let usage = vessel::hook::vessel::usage();
-    for verb in [&["init", "--state-dir", dir.as_str()][..], &["show"], &["check"]] {
+    for verb in [&["init", "--state-dir", dir.as_str()][..], &["show"], &["check"], &["update", "--state-dir", dir.as_str()]] {
         for (extra, rc, out_want, err_want) in [
             (&["--bogus", "x"][..], RC_BROKEN, String::new(), format!("vessel: 未知の引数 --bogus\n{usage}\n")),
             (&["--help"][..], RC_OK, format!("{usage}\n"), String::new()),
@@ -1061,6 +1061,160 @@ fn vessel_args_unknown_flag_is_refused_with_rc_2_on_every_verb() {
     }
     fs::remove_dir_all(&repo).ok();
     fs::remove_dir_all(&state).ok();
+}
+
+// ---- `vessel update`（設計 consumer-sync.md §5・接頭辞 `vessel_update_`）----
+// 偽 `git` と偽 `cargo` を PATH の先頭に置き、撃たれた argv を 1 行ずつ写す。repo は偽 git が読まないので空 dir で足りる。
+
+/// 偽 git が `rev-parse HEAD` に返す 40 桁（先頭 12 桁が記録の sha）。
+const UPDATE_HEAD: &str = "0123456789abcdef0123456789abcdef01234567";
+/// 偽 cargo が報告する binary の path。
+const UPDATE_BIN: &str = "/opt/e2e-bin/scribe2";
+
+/// update の置き場（state dir・`[[vessel]] repo` が指す dir・偽 git / cargo の dir）。
+struct UpdatePlace {
+    state: TmpDir,
+    repo: TmpDir,
+    bin: TmpDir,
+}
+
+impl UpdatePlace {
+    /// argv の写しの path。
+    fn log(&self) -> PathBuf {
+        self.bin.join("argv.log")
+    }
+
+    /// 写った argv の行（repo の path は `[repo]` に置き換える・撃たれなければ空）。
+    fn argv(&self) -> Vec<String> {
+        let repo = self.repo.display().to_string();
+        fs::read_to_string(self.log()).unwrap_or_default().lines().map(|line| line.replace(&repo, "[repo]")).collect()
+    }
+
+    /// state dir の `InstallRecorded` の行（log が無ければ 0 件）。
+    fn installs(&self) -> Vec<vessel::fleet::Event> {
+        let events = vessel::fleet::store::read_all(&self.state).unwrap_or_default();
+        events.into_iter().filter(|event| event.kind == vessel::fleet::EventKind::InstallRecorded).collect()
+    }
+}
+
+/// 置き場を 1 つ作る: `declared` なら host の面に `[[vessel]] repo` を 1 行書き、偽 git（`status` は `status_out` を出す・
+/// `merge` は `merge_rc` で終わる）と偽 cargo（`cargo_rc` で終わる・成功の周は install 先の行を stderr に出す）を置く。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn update_place(declared: bool, status_out: &str, merge_rc: u8, cargo_rc: u8) -> UpdatePlace {
+    use std::os::unix::fs::PermissionsExt;
+    let place = UpdatePlace { state: tmp(), repo: tmp(), bin: tmp() };
+    if declared {
+        let host = format!("schema = 1\n\n[[vessel]]\nrepo = \"{}\"\n", place.repo.display());
+        fs::write(place.state.join("host.toml"), host).expect("host の面を書ける");
+    }
+    let log = place.log().display().to_string();
+    let git = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"git $*\" >> '{log}'\ncase \"$3\" in\n  status) printf '{status_out}' ;;\n  merge) exit {merge_rc} ;;\n  rev-parse) echo {UPDATE_HEAD} ;;\nesac\nexit 0\n"
+    );
+    let cargo = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"cargo $*\" >> '{log}'\necho '  Installing {NAME} v0.1.0 (/src/crates/{NAME})' >&2\n[ {cargo_rc} -eq 0 ] || exit {cargo_rc}\necho '  Installing {UPDATE_BIN}' >&2\necho '   Installed package' >&2\n"
+    );
+    for (name, body) in [("git", git), ("cargo", cargo)] {
+        let stub = place.bin.join(name);
+        fs::write(&stub, body).expect("偽 binary を書ける");
+        fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).expect("偽 binary に実行権を付ける");
+    }
+    place
+}
+
+/// 偽 git / cargo の PATH で `vessel update --state-dir <state>` を撃つ。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn run_update(place: &UpdatePlace) -> Output {
+    let path = format!("{}:{}", place.bin.display(), std::env::var("PATH").unwrap_or_default());
+    Command::new(bin())
+        .args(["vessel", "update", "--state-dir"])
+        .arg(place.state.as_path())
+        .env("PATH", path)
+        .output()
+        .expect("binary を起動できる")
+}
+
+/// 順序固定の 4 段の argv（`status` → `fetch` → `merge --ff-only` → `cargo install`・sha は install の後に読む）。
+fn update_argv() -> Vec<String> {
+    vec![
+        "git -C [repo] status --porcelain".to_owned(),
+        "git -C [repo] fetch origin".to_owned(),
+        "git -C [repo] merge --ff-only origin/main".to_owned(),
+        format!("cargo install --path [repo]/crates/{NAME} --locked --color never"),
+        "git -C [repo] rev-parse HEAD".to_owned(),
+    ]
+}
+
+/// (1) 成功の周: argv が status → fetch → merge --ff-only → cargo install の順に写り、`InstallRecorded` が 1 件（sha12・
+/// host・path）積まれ、stdout が 1 行（sha12 と path）である。base は `update` の verb を知らず rc 1 で 0 件（RED）。
+#[test]
+fn vessel_update_runs_ff_then_install_in_order_and_records_one_install() {
+    let place = update_place(true, "", 0, 0);
+    let out = run_update(&place);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "成功の rc: {}", stderr_text(&out));
+    assert_eq!(place.argv(), update_argv(), "順序固定の argv");
+    let sha = UPDATE_HEAD.get(..12).unwrap_or_default();
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        format!("vessel: installed sha={sha} path={UPDATE_BIN}\n"),
+        "stdout は 1 行"
+    );
+    let installs = place.installs();
+    assert_eq!(installs.len(), 1, "InstallRecorded は 1 件: {installs:?}");
+    let row = installs.first().expect("1 件在る");
+    assert_eq!(row.host, vessel::fleet::cli::host(), "host 列は実 host");
+    assert_eq!(
+        row.install(),
+        Some(vessel::fleet::Install { sha: sha.to_owned(), path: UPDATE_BIN.to_owned() }),
+        "本体は sha12 と path"
+    );
+    assert!(row.run.is_empty() && row.bead.is_empty(), "便に紐づかない");
+}
+
+/// (2) 断り 4 形（否定の枝・1 形 1 本の表）: 宣言なし / dirty / not-fast-forward / install の失敗の各周で、**その段より後の
+/// argv が 1 本も写らず** event は 0 件で、断りの語が stderr に出て stdout は空である。
+#[test]
+fn vessel_update_refusals_stop_before_the_next_stage_and_record_nothing() {
+    let argv = update_argv();
+    let upto = |n: usize| argv.get(..n).unwrap_or_default().to_vec();
+    let cases = [
+        ("宣言なし", update_place(false, "", 0, 0), "vessel: vessel-repo-undeclared", upto(0)),
+        ("dirty", update_place(true, " M src/lib.rs\\n", 0, 0), "vessel: dirty", upto(1)),
+        ("ff できない", update_place(true, "", 128, 0), "vessel: not-fast-forward", upto(3)),
+        ("install の失敗", update_place(true, "", 0, 101), "vessel: install-failed rc=101", upto(4)),
+    ];
+    for (label, place, word, want) in cases {
+        let out = run_update(&place);
+        assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{label}: rc");
+        assert_eq!(place.argv(), want, "{label}: その段より後の argv は撃たない");
+        assert!(place.installs().is_empty(), "{label}: event は 0 件");
+        assert!(!vessel::fleet::store::events_path(&place.state).exists(), "{label}: log を作らない");
+        assert_eq!(stderr_text(&out).lines().next(), Some(word), "{label}: 断りの語");
+        assert!(out.stdout.is_empty(), "{label}: stdout は空");
+    }
+}
+
+/// 口の閉包: `update` は `--state-dir` を要り、positional を取らない（git も cargo も撃たない）。
+#[test]
+fn vessel_update_needs_state_dir_and_takes_no_root() {
+    let place = update_place(true, "", 0, 0);
+    let path = format!("{}:{}", place.bin.display(), std::env::var("PATH").unwrap_or_default());
+    let state = place.state.display().to_string();
+    for (args, want) in [
+        (vec!["vessel", "update"], "vessel: --state-dir に値が無い"),
+        (vec!["vessel", "update", "--state-dir", state.as_str(), "ROOT"], "vessel: 未知の引数 ROOT"),
+    ] {
+        let out = Command::new(bin()).args(&args).env("PATH", &path).output().expect("binary を起動できる");
+        assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "{args:?}: 使い方の誤りは rc 2");
+        assert_eq!(stderr_text(&out).lines().next(), Some(want), "{args:?}");
+    }
+    assert!(place.argv().is_empty(), "git も cargo も撃たない");
 }
 
 /// transcript を名指す payload（`transcript_path` は payload の top-level）。

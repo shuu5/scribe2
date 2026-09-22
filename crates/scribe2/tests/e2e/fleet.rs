@@ -631,6 +631,10 @@ fn fleet_external_form() {
     let recorded = run_fleet(&[
         "record", "--kind", "RunCreated", "--run", "r1", "--bead", "s2-x", "--state-dir", &path,
     ]);
+    // install の kind は手で書けない（consumer-sync.md §5・書き手は `vessel update` だけ）。
+    let install = run_fleet(&[
+        "record", "--kind", "InstallRecorded", "--run", "r1", "--bead", "s2-x", "--state-dir", &path,
+    ]);
     let fx = usage_fixture(&["a1"]);
     put_credential(&fx, "a1", &expired_credential("tok-old"));
     let curl = fake_curl(&fx, &LIVE_BODY, "200", 0);
@@ -645,11 +649,12 @@ fn fleet_external_form() {
     let listed = run_account(&["ls", "--state-dir", &acct_path]);
     let retired = run_account(&["retire", "a1", "--state-dir", &acct_path]);
     let form = format!(
-        "{}{}{}{}{}{}{}{}{}{}",
+        "{}{}{}{}{}{}{}{}{}{}{}",
         String::from_utf8_lossy(&usage.stderr),
         String::from_utf8_lossy(&missing.stderr),
         String::from_utf8_lossy(&empty.stdout),
         String::from_utf8_lossy(&recorded.stdout),
+        String::from_utf8_lossy(&install.stderr),
         String::from_utf8_lossy(&refreshed.stdout),
         String::from_utf8_lossy(&account_usage.stderr),
         String::from_utf8_lossy(&prepared.stdout),
@@ -701,7 +706,8 @@ fn fleet_stages_place_rate_limited_after_questioned() {
     assert_eq!(Stage::parse("RateLimited"), Some(Stage::RateLimited), "as_str ↔ parse の往復");
 }
 
-/// `KINDS` の並びが**宣言順**と一致する（ADR-0013 §2.2）。
+/// `KINDS` の並びが**宣言順**と一致し、母集団は 17 種で末尾が `InstallRecorded`（`vessel update` が足した・設計
+/// consumer-sync.md §5 (4)）。variant を足して列に足し忘れた周・件数だけ合って末尾が違う周はここで赤になる。
 #[test]
 fn fleet_kinds_follow_declaration_order() {
     assert!(
@@ -709,6 +715,12 @@ fn fleet_kinds_follow_declaration_order() {
         "KINDS の並びが宣言順と乖離している（母集団 {} 種）",
         KINDS.len()
     );
+    assert_eq!(KINDS.len(), 17, "母集団（列の印までの 16 + install 1）");
+    assert_eq!(KINDS.last(), Some(&EventKind::InstallRecorded), "install は宣言順の末尾");
+    assert_eq!(EventKind::InstallRecorded.as_str(), "InstallRecorded");
+    assert_eq!(EventKind::parse("InstallRecorded"), Some(EventKind::InstallRecorded), "as_str ↔ parse の往復");
+    assert_eq!(EventKind::InstallRecorded.default_actor(), "machine", "install は機械由来");
+    assert!(!EventKind::InstallRecorded.is_allowance(), "口座残量の kind ではない");
 }
 
 /// 質問の段と 2 つの event は schema 1 のまま書けて読める（ADR-0004 §2.5・既存行の読みは
@@ -1373,13 +1385,13 @@ fn fleet_allowance_windows_round_trip_on_snake_case() {
     assert_eq!(WindowKind::parse("FiveHour"), None, "variant 名は字面でない");
 }
 
-/// (6e) `KINDS` は 16 variant で並びは宣言順のまま（口座の退役・戻しの後ろに列の印 1 を末尾に足した・
-/// account-lifecycle.md §3・dispatcher.md §4）。base は 15 で落ちる（RED）。
+/// (6e) `KINDS` の 13〜16 番目は登録 → 退役 → 戻し → 列の印の順（口座の退役・戻しの後ろに列の印 1 を足した・
+/// account-lifecycle.md §3・dispatcher.md §4）。母集団の件数と末尾は [`fleet_kinds_follow_declaration_order`] が pin する。
 #[test]
 fn account_cmd_kinds_are_fifteen_with_retire_and_restore_last() {
-    assert_eq!(KINDS.len(), 16, "母集団（既存 10 + 口座残量 2 + 席の登録 1 + 口座の退役・戻し 2 + 列の印 1）");
+    assert_eq!(KINDS.len(), 17, "母集団（既存 10 + 口座残量 2 + 席の登録 1 + 口座の退役・戻し 2 + 列の印 1 + install 1）");
     assert_eq!(
-        KINDS.get(12..),
+        KINDS.get(12..16),
         Some(
             &[
                 EventKind::SeatRegistered,
@@ -1388,7 +1400,7 @@ fn account_cmd_kinds_are_fifteen_with_retire_and_restore_last() {
                 EventKind::DispatchMark,
             ][..]
         ),
-        "登録 → 退役 → 戻し → 列の印が末尾の順"
+        "登録 → 退役 → 戻し → 列の印の順"
     );
     for kind in [EventKind::SeatRegistered, EventKind::AccountRetired, EventKind::AccountRestored] {
         assert!(!kind.is_allowance(), "{} は口座残量の kind ではない", kind.as_str());
@@ -1574,6 +1586,55 @@ fn fleet_seat_role_registration_rows_do_not_touch_runs_and_record_refuses_the_ki
     assert!(String::from_utf8_lossy(&out.stderr).contains("record では書けない"));
     assert!(!store::events_path(&dir).exists(), "行を残さない");
     fs::remove_dir_all(&dir).ok();
+}
+
+/// install の行（`detail` = `sha=<sha12> path=<path>`・`run` / `bead` を持たない）。
+fn install_event(detail: &str) -> Event {
+    Event { run: String::new(), bead: String::new(), detail: Some(detail.to_owned()), ..event(EventKind::InstallRecorded, "", ALLOWANCE_TS) }
+}
+
+/// (3・consumer-sync.md §5) `fleet record` は `InstallRecorded` を手で渡されると断り、行を残さない（書き手は install の成功の
+/// 後の `vessel update` だけ＝「撃った」と「入った」を融合しない）。base は kind を知らず「未知である」で断る（語が違う＝RED）。
+#[test]
+fn vessel_update_fleet_record_refuses_the_install_kind() {
+    let dir = state_dir();
+    let path = dir.display().to_string();
+    let out = run_fleet(&[
+        "record", "--kind", "InstallRecorded", "--run", "r1", "--bead", "b1", "--detail", "sha=0123456789ab path=/x",
+        "--state-dir", &path,
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "書き側で断る: {out:?}");
+    assert!(out.stdout.is_empty(), "stdout へは書かない");
+    assert_eq!(
+        String::from_utf8_lossy(&out.stderr).trim(),
+        "fleet: kind InstallRecorded は record では書けない",
+        "断りの行"
+    );
+    assert!(!store::events_path(&dir).exists(), "行を残さない");
+}
+
+/// install の行は書いて読むと同じ event に戻り、便も席も作らず、`detail` の形が外れた行・`run` を持つ行は malformed で読む。
+#[test]
+fn vessel_update_install_row_round_trips_and_refuses_foreign_shapes() {
+    let row = install_event("sha=0123456789ab path=/opt/bin/scribe2");
+    let line = row.to_line();
+    assert!(!line.contains("\"run\":") && !line.contains("\"bead\":"), "run / bead を書かない: {line}");
+    assert_eq!(Event::from_line(&line), Ok(row.clone()), "{line}");
+    assert_eq!(
+        row.install(),
+        Some(vessel::fleet::Install { sha: "0123456789ab".to_owned(), path: "/opt/bin/scribe2".to_owned() }),
+        "本体は sha12 と path"
+    );
+    let state = replay(std::slice::from_ref(&row));
+    assert_eq!((state.runs.len(), state.seats.len()), (0, 0), "幽霊の便も席も作らない");
+    for detail in ["sha=0123456789 path=/x", "sha=0123456789AB path=/x", "sha=0123456789ab path=", "path=/x"] {
+        let bad = install_event(detail).to_line();
+        assert!(Event::from_line(&bad).is_err(), "detail の形が外れた行は malformed: {bad}");
+    }
+    let with_run = line.replacen("\"kind\":\"InstallRecorded\",", "\"kind\":\"InstallRecorded\",\"run\":\"r1\",", 1);
+    assert_ne!(with_run, line, "fixture の置換が効いている");
+    assert!(Event::from_line(&with_run).is_err(), "run を持つ install の行は malformed: {with_run}");
+    assert_eq!(event(EventKind::RunCreated, "r1", ALLOWANCE_TS).install(), None, "他の kind は本体を持たない");
 }
 
 /// allowance の行が在っても `export`（跨版 面 2）は 1 byte も変わらない（歯 (a)(8)）。

@@ -5,7 +5,7 @@
 
 use super::json_lite::{self, Value};
 use super::{
-    parse_actor, Allowance, EventKind, Mark, Measured, Registration, Shape, Stage, Unmeasured, UnmeasuredReason,
+    parse_actor, Allowance, EventKind, Install, Mark, Measured, Registration, Shape, Stage, Unmeasured, UnmeasuredReason,
     WindowKind, SCHEMA,
 };
 use crate::seat::role::Role;
@@ -103,7 +103,7 @@ impl Event {
                 pairs.push(("bead", Value::Str(self.bead.clone())));
                 pairs.extend(self.mark.iter().map(|mark| ("mark", Value::Str(mark.as_str().to_owned()))));
             }
-            Shape::Allowance | Shape::Registration | Shape::Account => {}
+            Shape::Allowance | Shape::Registration | Shape::Account | Shape::Install => {}
         }
         pairs.extend(self.account.iter().map(|label| ("account", Value::Str(label.clone()))));
         pairs.extend(self.allowance.iter().flat_map(Allowance::pairs));
@@ -214,6 +214,7 @@ impl Body {
             EventKind::AccountRetired | EventKind::AccountRestored => Self::account(pairs),
             EventKind::DispatchMark => Self::mark(pairs),
             EventKind::SeatSpawned => Self::spawned(pairs),
+            EventKind::InstallRecorded => Self::install(pairs),
             EventKind::RunCreated
             | EventKind::RunStage
             | EventKind::RunDone
@@ -300,6 +301,27 @@ impl Body {
             account: optional_text(field(pairs, "account"), "account")?,
             ..Self::default()
         })
+    }
+
+    /// install の行の本体: `detail` が [`Install`] の 1 行であることだけを見る（値は `detail` のまま持つ）。`run` /
+    /// `bead`・`stage` / `seat` / `pid`（`seat` が在ると replay が幽霊の席を作る）・口座残量・登録・列の印の key は
+    /// **持たない**（在れば malformed・`fleet record` は書き側で断る）。
+    fn install(pairs: &[(String, Value)]) -> Result<Self, String> {
+        let foreign = ["run", "bead", "stage", "seat", "pid"];
+        forbid(pairs, foreign.iter().chain(ALLOWANCE_KEYS).chain(REGISTRATION_KEYS).chain(MARK_KEYS))?;
+        let detail = text_of(field(pairs, "detail"), "detail")?;
+        Install::parse(&detail).ok_or(format!("detail {detail:?} は sha=<sha12> path=<path> でない"))?;
+        Ok(Self::default())
+    }
+}
+
+impl Event {
+    /// install の行の本体（[`EventKind::InstallRecorded`] でだけ `Some`）。
+    pub fn install(&self) -> Option<Install> {
+        match self.kind.shape() {
+            Shape::Install => self.detail.as_deref().and_then(Install::parse),
+            Shape::Run | Shape::Allowance | Shape::Registration | Shape::Account | Shape::Mark => None,
+        }
     }
 }
 

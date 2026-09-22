@@ -64,6 +64,9 @@ pub enum EventKind {
     /// 列の介入の印（`first` / `hold` / `release`・設計 dispatcher.md §4・[`Shape::Mark`]）。**便に紐づかない**
     /// ——印は bead に付き、`bead` と typed な [`Mark`] が本体である（台帳の priority は書き換えない・C15）。
     DispatchMark,
+    /// 器の checkout を ff して build + install した（`vessel update`・設計 consumer-sync.md §5 (4)・[`Shape::Install`]）。
+    /// **便に紐づかない**——本体は [`Install`]（`detail` の 1 行）で、host は行の `host` 列が持つ。
+    InstallRecorded,
 }
 
 /// [`EventKind`] の全 variant。
@@ -84,6 +87,7 @@ pub const KINDS: &[EventKind] = &[
     EventKind::AccountRetired,
     EventKind::AccountRestored,
     EventKind::DispatchMark,
+    EventKind::InstallRecorded,
 ];
 
 impl EventKind {
@@ -106,6 +110,7 @@ impl EventKind {
             Self::AccountRetired => "AccountRetired",
             Self::AccountRestored => "AccountRestored",
             Self::DispatchMark => "DispatchMark",
+            Self::InstallRecorded => "InstallRecorded",
         }
     }
 
@@ -132,7 +137,8 @@ impl EventKind {
             | Self::SeatRegistered
             | Self::AccountRetired
             | Self::AccountRestored
-            | Self::DispatchMark => ACTOR_MACHINE,
+            | Self::DispatchMark
+            | Self::InstallRecorded => ACTOR_MACHINE,
         }
     }
 
@@ -159,6 +165,7 @@ impl EventKind {
             Self::SeatRegistered => Shape::Registration,
             Self::AccountRetired | Self::AccountRestored => Shape::Account,
             Self::DispatchMark => Shape::Mark,
+            Self::InstallRecorded => Shape::Install,
         }
     }
 
@@ -187,10 +194,38 @@ pub enum Shape {
     Account,
     /// `bead` + 列の印（便に紐づかない・設計 dispatcher.md §4）。
     Mark,
+    /// install の 1 回（`detail` が [`Install`] の 1 行・`run` / `bead` を持たない・設計 consumer-sync.md §5 (4)）。
+    Install,
 }
 
 /// [`Shape`] の全 variant（宣言順・`enum-slices` が集合完全性を測る）。
-pub const SHAPES: &[Shape] = &[Shape::Run, Shape::Allowance, Shape::Registration, Shape::Account, Shape::Mark];
+pub const SHAPES: &[Shape] = &[Shape::Run, Shape::Allowance, Shape::Registration, Shape::Account, Shape::Mark, Shape::Install];
+
+/// `vessel update` が install した 1 回（[`EventKind::InstallRecorded`] の本体・設計 consumer-sync.md §5 (4)）。
+///
+/// 行には `detail` の 1 行（`sha=<sha12> path=<path>`＝口の stdout と同じ字面）として載り、host は行の `host` 列が持つ。
+/// 書き側（[`Self::render`]）と読み側（[`Self::parse`]）は同じ形を使い、形の外れた行は malformed で読む（黙って落とさない）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Install {
+    /// install した HEAD の 12 桁（小文字の 16 進＝`--version` の `(<sha12>)` と同じ形・設計 consumer-sync.md §2）。
+    pub sha: String,
+    /// cargo が報告した binary の path。
+    pub path: String,
+}
+
+impl Install {
+    /// `detail` と stdout に書く 1 行。
+    pub fn render(&self) -> String {
+        format!("sha={} path={}", self.sha, self.path)
+    }
+
+    /// [`Self::render`] の字面から読む。sha が 12 桁の 16 進でない・path が空なら `None`。
+    pub fn parse(text: &str) -> Option<Self> {
+        let (sha, path) = text.strip_prefix("sha=")?.split_once(" path=")?;
+        let hex = sha.len() == 12 && sha.chars().all(|ch| matches!(ch, '0'..='9' | 'a'..='f'));
+        (hex && !path.is_empty()).then(|| Self { sha: sha.to_owned(), path: path.to_owned() })
+    }
+}
 
 /// 列の介入の印（設計 dispatcher.md §4）と、列が起こした事実の印（§17）。**閉じた 4 値**で、
 /// [`EventKind::DispatchMark`] の行だけが持つ。

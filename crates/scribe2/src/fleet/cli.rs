@@ -335,8 +335,11 @@ fn build_event(args: &[String]) -> Result<Event, String> {
     // 口座の行をここで許すと便に紐づかない行に便 id が付き、必須 field も揃わない
     // （書き手は `fleet usage` の 1 本だけである・設計 fleet-usage.md §5）。
     // 席の登録の行も同じ（書き手は打刻の条件付きの `seat register` だけ）。口座の退役・戻しの行も同じ
-    // （書き手は mv と対の `account retire` / `restore` だけ・dir を動かさずに状態だけを書く口を作らない）。
-    if kind.is_allowance() || matches!(kind, EventKind::SeatRegistered | EventKind::AccountRetired | EventKind::AccountRestored) {
+    // （書き手は mv と対の `account retire` / `restore` だけ・dir を動かさずに状態だけを書く口を作らない）。install の行も
+    // 同じ（書き手は install の成功の後の `vessel update` だけ・「撃った」と「入った」を融合しない・consumer-sync.md §5）。
+    if kind.is_allowance()
+        || matches!(kind, EventKind::SeatRegistered | EventKind::AccountRetired | EventKind::AccountRestored | EventKind::InstallRecorded)
+    {
         return Err(format!("kind {kind_text} は record では書けない"));
     }
     let stage = match optional(args, "--stage")? {

@@ -158,23 +158,33 @@ pub fn state_dir(root: &Path) -> Option<PathBuf> {
 
 /// `vessel` の使い方。
 pub fn usage() -> String {
-    format!("usage: {NAME} vessel <init --state-dir D [--version N]|show|check> [ROOT]")
+    format!(
+        "usage: {NAME} vessel <init --state-dir D [--version N]|show|check> [ROOT]\n       {NAME} vessel update --state-dir S [--remote R] [--branch B]"
+    )
 }
 
 /// `vessel init` が受ける flag（設計 pipeline.md §14 約束 5・`ROOT` は positional）。
 const ALLOWED_INIT: &[cli_args::Allowed] = &[Allowed::value("--state-dir"), Allowed::value("--version")];
 /// `vessel show` / `vessel check`（flag を受けない）。
 const ALLOWED_BARE: &[cli_args::Allowed] = &[];
+/// `vessel update`（設計 consumer-sync.md §5・`ROOT` を取らない＝repo は `[[vessel]] repo` が名指す）。
+const ALLOWED_UPDATE: &[cli_args::Allowed] =
+    &[Allowed::value("--state-dir"), Allowed::value("--remote"), Allowed::value("--branch")];
 
 /// `vessel` に続く引数を捌く。既知の verb は root を解く前に閉包の検査を 1 回撃つ（未知の flag と `--help` を断る）。
 pub fn dispatch(args: &[String]) -> Outcome {
     let allowed = match args.first().map(String::as_str) {
         Some("init") => Some(ALLOWED_INIT),
         Some("show" | "check") => Some(ALLOWED_BARE),
+        Some("update") => Some(ALLOWED_UPDATE),
         _ => None,
     };
-    if let Some(Err(error)) = allowed.map(|found| crate::cli_args::parse(args.get(1..).unwrap_or_default(), found)) {
+    let rest = args.get(1..).unwrap_or_default();
+    if let Some(Err(error)) = allowed.map(|found| crate::cli_args::parse(rest, found)) {
         return crate::cli_args::refusal("vessel", &error, usage());
+    }
+    if args.first().is_some_and(|verb| verb == "update") {
+        return update_cmd(rest);
     }
     let root = match root_of(args) {
         Ok(found) => found,
@@ -299,4 +309,171 @@ fn check(root: &Path) -> Outcome {
             Outcome::failed(RC_BROKEN, vec![format!("vessel: {other} が名乗っている")])
         }
     }
+}
+
+/// `vessel update` の既定の remote（設計 consumer-sync.md §5 (2)）。
+pub const DEFAULT_REMOTE: &str = "origin";
+/// `vessel update` の既定の branch（設計 consumer-sync.md §5 (2)）。
+pub const DEFAULT_BRANCH: &str = "main";
+
+/// `vessel update` の断り（設計 consumer-sync.md §8・closed・宣言順は順序固定の段の順）。
+///
+/// **どの断りでも `InstallRecorded` は 0 件**（成功した周だけ 1 件・C10）。rc は [`Self::rc`]。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UpdateError {
+    /// host の面に `[[vessel]] repo` が無い（宣言を読めない周は読めない理由つき）。
+    Undeclared(Vec<String>),
+    /// `status --porcelain` が非空か、clean と確かめられない（作業ツリーを動かさない・N1）。
+    Dirty,
+    /// `fetch` が落ちた（rc つき・`None` = 起動できない / signal）。
+    FetchFailed(Option<i32>),
+    /// `merge --ff-only` が落ちた（rebase も reset もしない＝人の手番）。
+    NotFastForward,
+    /// `cargo install` が落ちた（rc つき・旧 binary が残る）。
+    InstallFailed(Option<i32>),
+    /// install は済んだが event を積めない（sha / path が読めない・store が書けない・理由つき）。
+    RecordFailed(String),
+}
+
+impl UpdateError {
+    /// 断りの 1 語。
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Undeclared(_) => "vessel-repo-undeclared",
+            Self::Dirty => "dirty",
+            Self::FetchFailed(_) => "fetch-failed",
+            Self::NotFastForward => "not-fast-forward",
+            Self::InstallFailed(_) => "install-failed",
+            Self::RecordFailed(_) => "record-failed",
+        }
+    }
+
+    /// rc（入力の拒否は既存の拒否と同じ 1・install が済んだ後の記録の失敗だけ 2・設計 §5）。
+    pub fn rc(&self) -> u8 {
+        match self {
+            Self::RecordFailed(_) => RC_BROKEN,
+            Self::Undeclared(_) | Self::Dirty | Self::FetchFailed(_) | Self::NotFastForward | Self::InstallFailed(_) => {
+                RC_REFUSED
+            }
+        }
+    }
+
+    /// stderr の行（`vessel: <語>[ rc=<n>|（理由）]` の 1 行と、宣言を読めない周の理由の行）。
+    fn lines(&self) -> Vec<String> {
+        let rc_of = |rc: &Option<i32>| rc.map_or_else(|| "-".to_owned(), |found| found.to_string());
+        match self {
+            Self::Undeclared(reasons) => {
+                std::iter::once(format!("vessel: {}", self.as_str())).chain(reasons.iter().cloned()).collect()
+            }
+            Self::Dirty | Self::NotFastForward => vec![format!("vessel: {}", self.as_str())],
+            Self::FetchFailed(rc) | Self::InstallFailed(rc) => vec![format!("vessel: {} rc={}", self.as_str(), rc_of(rc))],
+            Self::RecordFailed(reason) => vec![format!("vessel: {}（{reason}）", self.as_str())],
+        }
+    }
+}
+
+/// `vessel update --state-dir S [--remote R] [--branch B]` の口（引数の閉包は [`dispatch`] が済ませた）。
+fn update_cmd(rest: &[String]) -> Outcome {
+    let refused = |error: cli_args::ArgsError| cli_args::refusal("vessel", &error, usage());
+    let parsed = match cli_args::parse(rest, ALLOWED_UPDATE) {
+        Ok(found) => found,
+        Err(error) => return refused(error),
+    };
+    if let Some(extra) = parsed.positionals().first() {
+        return refused(cli_args::ArgsError::Unknown((*extra).to_owned()));
+    }
+    let state_dir = match parsed.need("--state-dir") {
+        Ok(found) => PathBuf::from(found),
+        Err(error) => return refused(error),
+    };
+    let remote = parsed.value("--remote").unwrap_or(DEFAULT_REMOTE);
+    let branch = parsed.value("--branch").unwrap_or(DEFAULT_BRANCH);
+    match update(&state_dir, remote, branch) {
+        Ok(install) => Outcome::ok_line(format!("vessel: installed {}", install.render())),
+        Err(error) => Outcome::failed(error.rc(), error.lines()),
+    }
+}
+
+/// ff → build → install を順序固定で 1 回行い、成功した周だけ `InstallRecorded` を 1 件積む（設計 consumer-sync.md §5）。
+///
+/// (1) `status --porcelain` → (2) `fetch <remote>` → `merge --ff-only <remote>/<branch>` → (3) `cargo install --path
+/// <repo>/crates/<NAME> --locked` → (4) event。**どの段で断っても後の段は撃たない**（作業ツリーを変えない・旧 binary が
+/// 残る・event 0）。sha は (3) の後に HEAD から読む（(3) は checkout を動かさない＝install した HEAD）。
+pub fn update(state_dir: &Path, remote: &str, branch: &str) -> Result<crate::fleet::Install, UpdateError> {
+    let manifest = crate::rules::read(None, Some(state_dir))
+        .map_err(|errors| UpdateError::Undeclared(errors.iter().map(ToString::to_string).collect()))?;
+    let repo = manifest.vessel().map(|found| PathBuf::from(found.repo())).ok_or(UpdateError::Undeclared(Vec::new()))?;
+    let status = git_output(&repo, &["status", "--porcelain"]).ok_or(UpdateError::Dirty)?;
+    if !status.status.success() || !status.stdout.is_empty() {
+        return Err(UpdateError::Dirty);
+    }
+    let fetched = git_output(&repo, &["fetch", remote]);
+    if !fetched.as_ref().is_some_and(|out| out.status.success()) {
+        return Err(UpdateError::FetchFailed(fetched.and_then(|out| out.status.code())));
+    }
+    if !git_ok(&repo, &["merge", "--ff-only", &format!("{remote}/{branch}")]) {
+        return Err(UpdateError::NotFastForward);
+    }
+    let installed = Command::new("cargo")
+        .arg("install")
+        .arg("--path")
+        .arg(repo.join("crates").join(NAME))
+        .args(["--locked", "--color", "never"])
+        .current_dir(&repo)
+        .output();
+    let installed = match installed {
+        Ok(found) if found.status.success() => found,
+        Ok(found) => return Err(UpdateError::InstallFailed(found.status.code())),
+        Err(_) => return Err(UpdateError::InstallFailed(None)),
+    };
+    let head = git_line(&repo, &["rev-parse", "HEAD"])
+        .ok_or_else(|| UpdateError::RecordFailed("HEAD の sha を読めない".to_owned()))?;
+    let path = installed_path(&installed.stderr)
+        .or_else(|| installed_path(&installed.stdout))
+        .ok_or_else(|| UpdateError::RecordFailed("cargo が binary の path を報告しない".to_owned()))?;
+    let install = crate::fleet::Install::parse(&format!("sha={} path={path}", head.get(..12).unwrap_or_default()))
+        .ok_or_else(|| UpdateError::RecordFailed(format!("HEAD {head:?} が sha の形でない")))?;
+    record_install(state_dir, &install).map_err(UpdateError::RecordFailed)?;
+    Ok(install)
+}
+
+/// git を 1 回撃って出力を得る（起動できなければ `None`）。
+fn git_output(dir: &Path, args: &[&str]) -> Option<std::process::Output> {
+    Command::new("git").arg("-C").arg(dir).args(args).output().ok()
+}
+
+/// cargo install の出力から binary の path を引く（`Installing <abs>` か `Replacing <abs>` の最後の行・色は切ってある）。
+///
+/// 冒頭の `Installing <crate> v<版> (<path>)` は絶対 path で始まらないので拾わない。
+fn installed_path(output: &[u8]) -> Option<String> {
+    String::from_utf8_lossy(output).lines().rev().find_map(|line| {
+        let line = line.trim();
+        let rest = line.strip_prefix("Installing ").or_else(|| line.strip_prefix("Replacing "))?;
+        rest.starts_with('/').then(|| rest.trim().to_owned())
+    })
+}
+
+/// `InstallRecorded` を 1 件積む（`run` / `bead` を持たない・actor は machine・schema 1・本体は `detail` の 1 行）。
+fn record_install(state_dir: &Path, install: &crate::fleet::Install) -> Result<(), String> {
+    use crate::fleet::{cli as fleet_cli, store, Event, EventKind, SCHEMA};
+    let kind = EventKind::InstallRecorded;
+    let event = Event {
+        schema: SCHEMA,
+        ts: fleet_cli::now_utc(),
+        kind,
+        run: String::new(),
+        bead: String::new(),
+        host: fleet_cli::host(),
+        actor: kind.default_actor().to_owned(),
+        stage: None,
+        seat: None,
+        pid: None,
+        detail: Some(install.render()),
+        allowance: None,
+        registration: None,
+        mark: None,
+        account: None,
+    };
+    let policy = store::LockPolicy::embedded().map_err(|err| err.to_string())?;
+    store::append(state_dir, &event, policy).map(|_| ()).map_err(|err| err.to_string())
 }
