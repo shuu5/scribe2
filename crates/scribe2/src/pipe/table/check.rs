@@ -11,7 +11,7 @@
 
 use super::super::closure::{closure, surface_closure, unresolved_names, ClosureError, Source};
 use super::super::declaration::{self, read_write_set, Basis, Ceiling, NewFilePolicy};
-use super::super::refuse::{covered, Refuse};
+use super::super::refuse::{covered, Refuse, NEW_FILE};
 use super::{read_table, unreadable, Context, ContractRow, Finding, PromiseRow, TableError, BEGIN, DESIGN_DIR, END};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK};
 use std::collections::BTreeSet;
@@ -118,14 +118,19 @@ fn section_lines(text: &str, number: &str) -> Vec<(u64, String)> {
 
 /// 名指しの実在（§3）: `title` / `done` と `section` の本文の backtick の中身のうち解けないものを全件（在り処付き）。
 /// 閉包の入力を読めない周は `unreadable`（黙って通さない）。新規 file は write-set の `+` 項目と `creates` の欄
-/// （導出の形・`+` 無しで書く）の両方から解く。
+/// （導出の形・`+` 無しで書く）の両方から解き、他の行が宣言済みの新規 file（[`Context::declared`]・§39）も解に
+/// 足す。宣言の母集団を読めない周も `unreadable` の 1 件（縮めた母集団で通さない）。
 fn name_findings(doc: &str, row: &ContractRow, ctx: &Context<'_>) -> Vec<Finding> {
+    let declared = match *ctx.declared {
+        Err(ref reason) => return vec![Finding::table(unreadable(row.line, reason))],
+        Ok(ref found) => found,
+    };
     let mut texts = vec![("title".to_owned(), row.title.clone()), ("done".to_owned(), row.done.clone())];
     texts.extend(
         section_lines(doc, &row.section).into_iter().map(|(at, line)| (format!("section {} line {at}", row.section), line)),
     );
     let mut new_files = row.write_set.clone();
-    new_files.extend(row.creates.iter().map(|item| format!("{}{item}", super::super::refuse::NEW_FILE)));
+    new_files.extend(row.creates.iter().chain(declared).map(|item| format!("{NEW_FILE}{item}")));
     match unresolved_names(&texts, &row.touches, &new_files, ctx.tracked, ctx.sources) {
         Err(error) => vec![Finding::table(unreadable(row.line, &error.reason()))],
         Ok(names) => names
@@ -410,6 +415,7 @@ fn judge_repo(repo: &Path, ceiling: &Ceiling<'_>) -> Result<Judged, Outcome> {
     let sources = read_all(repo, &tracked, ".rs");
     let snapshots = read_all(repo, &tracked, ".snap");
     let requirements = read(repo, &facts.requirements).and_then(|text| requirement_ids(&facts.requirements, &text));
+    let declared = declared_files(repo, &tracked);
     let ctx = Context {
         allowed: &facts.allowed,
         denied: &facts.denied,
@@ -417,11 +423,9 @@ fn judge_repo(repo: &Path, ceiling: &Ceiling<'_>) -> Result<Judged, Outcome> {
         sources: &sources,
         tracked: &tracked,
         snapshots: &snapshots,
+        declared: &declared,
     };
-    let docs: Vec<&String> = tracked
-        .iter()
-        .filter(|path| path.strip_prefix(DESIGN_DIR).is_some_and(|rest| !rest.contains('/') && rest.ends_with(".md")))
-        .collect();
+    let docs = design_docs(&tracked);
     let (mut rows, mut found) = (0_usize, Vec::new());
     for doc in &docs {
         let (count, judged) = judge_doc(repo, doc, &ctx);
@@ -429,6 +433,34 @@ fn judge_repo(repo: &Path, ceiling: &Ceiling<'_>) -> Result<Judged, Outcome> {
         found.extend(judged.into_iter().map(|finding| ((*doc).clone(), finding)));
     }
     Ok(Judged { docs: docs.len(), rows, found })
+}
+
+/// tracked な設計 doc（`docs/design/` 直下の `.md`・tracked の順）。
+fn design_docs(tracked: &[String]) -> Vec<&String> {
+    tracked
+        .iter()
+        .filter(|path| path.strip_prefix(DESIGN_DIR).is_some_and(|rest| !rest.contains('/') && rest.ends_with(".md")))
+        .collect()
+}
+
+/// 宣言済みの新規 file の母集団（設計 §39・行 an）: tracked な設計 doc の区間の全行から write-set の `+` 項目と
+/// `creates` の欄を集める（印は剥がす・辞書順・重複は畳む）。path は repo で一意ゆえ doc の境は引かない。
+/// `contracts check`（[`check_repo`]）と受付の材料（`pipe/cli/intake.rs` の `Materials`）が同じこの 1 本を呼ぶ。
+/// 区間を読めない doc が 1 本でも在れば理由を返す（読めなさを「宣言 0 本」に読み替えない・NFR4）。
+pub(crate) fn declared_files(repo: &Path, tracked: &[String]) -> Result<Vec<String>, String> {
+    let mut found = BTreeSet::new();
+    for doc in design_docs(tracked) {
+        let text = read(repo, doc)?;
+        let (rows, _) = read_table(doc, &text).map_err(|errors| {
+            let first = errors.first().map(TableError::reason).unwrap_or_default();
+            format!("{doc} の区間を読めない（宣言済みの新規 file の母集団）: {first}")
+        })?;
+        for row in rows {
+            found.extend(row.write_set.iter().filter_map(|item| item.strip_prefix(NEW_FILE)).map(str::to_owned));
+            found.extend(row.creates);
+        }
+    }
+    Ok(found.into_iter().collect())
 }
 
 /// doc 1 本の行数と findings（読めない doc・区間は 1 件ずつ名指す）。
@@ -560,6 +592,7 @@ mod tests {
             sources: &sources,
             tracked: &tracked,
             snapshots: &[],
+            declared: &Ok(Vec::new()),
         };
         let mut rows: Vec<ContractRow> = ["a", "a", "c", "d", "e", "f", "g", "h", "i"]
             .iter()
@@ -610,6 +643,7 @@ mod tests {
             sources: &sources,
             tracked: &tracked,
             snapshots: &[],
+            declared: &Ok(Vec::new()),
         };
         let mut dependent = row(20, "b");
         dependent.depends = vec!["a".to_owned()];
@@ -639,6 +673,7 @@ mod tests {
                 sources,
                 tracked: &tracked,
                 snapshots: &[],
+                declared: &Ok(Vec::new()),
             };
             let mut touched = row(10, "a");
             touched.touches = vec!["crate::kind::Kind".to_owned()];
@@ -663,6 +698,7 @@ mod tests {
             sources: &sources,
             tracked: &tracked,
             snapshots: &[],
+            declared: &Ok(Vec::new()),
         };
         let text = format!("# t\n\n{BEGIN}\nschema = 1\n\n[[contract]]\nid = \"a\"\ntitle = \"t\"\nreq = [\"FR1\"]\nsection = \"1\"\ntouches = [\"crate::kind::Kind\"]\ncreates = [\"src/new.rs\"]\ntests = [\"tests/t.rs\"]\nalso = [\"docs/d.md\"]\nverify = [\"git status\"]\nsize = \"S\"\ndone = \"`src/new.rs` が通る\"\n{END}\n");
         let rows = read_rows("docs/design/t.md", &text).unwrap_or_else(|errors| panic!("write-set の無い行は読める: {errors:?}"));
@@ -698,6 +734,7 @@ mod tests {
             sources: &sources,
             tracked: &tracked,
             snapshots: &[],
+            declared: &Ok(Vec::new()),
         };
         let found = check_table(DOC, &[forced.clone()], &["a"], &closed);
         let labels: Vec<String> = found.iter().map(|finding| finding.refuse.label()).collect();
@@ -724,6 +761,7 @@ mod tests {
             sources: &sources,
             tracked: &tracked,
             snapshots: &[],
+            declared: &Ok(Vec::new()),
         };
         let contract = "schema = 1\n\n[[contract]]\nid = \"a\"\ntitle = \"t\"\nreq = [\"FR1\"]\nsection = \"1\"\nwrite-set = [\"src/kind.rs\"]\nverify = [\"git status\"]\nsize = \"S\"\ndone = \"d\"\n";
         let doc = |promises: &[String]| format!("# t\n\n## 1. 本文の在る節\n\n本文。\n\n{BEGIN}\n{contract}{}{END}\n", promises.concat());
@@ -769,6 +807,7 @@ mod tests {
             sources: &sources,
             tracked: &tracked,
             snapshots: &[],
+            declared: &Ok(Vec::new()),
         };
         let mut touched = row(10, "a");
         touched.touches = vec!["crate::kind::Kind".to_owned()];

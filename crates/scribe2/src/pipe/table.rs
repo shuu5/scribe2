@@ -38,7 +38,7 @@ pub use check::{check_promises, check_table, requirement_ids};
 pub use parse::{
     contract_id, find_row, form_of, parse_pointer, promises_of, read_rows, read_table, Form, Pointer, PointerError,
 };
-pub(crate) use check::{check_repo, read, read_all, repo_findings, tracked_files, Located};
+pub(crate) use check::{check_repo, declared_files, read, read_all, repo_findings, tracked_files, Located};
 
 /// 区間の始まりの行（CLAUDE.md の憲法区間と同じ marker 形・行全体が marker の行だけを数える）。
 pub const BEGIN: &str = "<!-- contracts:begin -->";
@@ -464,6 +464,9 @@ pub struct Context<'a> {
     pub tracked: &'a [String],
     /// 外形 snapshot（tracked の `.snap`・`surfaces` の外形 pin に使う）。
     pub snapshots: &'a [Source],
+    /// 宣言済みの新規 file（repo の全 doc の行の write-set の `+` 項目と `creates`・印は剥がす・名指しの解に足す）。
+    /// 区間を読めない doc が在る周は理由（母集団を縮めて通さない・設計 contract-source.md §39）。
+    pub declared: &'a Result<Vec<String>, String>,
 }
 
 /// `<NAME> contracts schema` の全出力（tracked な生成物 `contracts/schema.toml` の本文・1 行ずつ）。

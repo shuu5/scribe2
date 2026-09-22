@@ -569,7 +569,7 @@ fn contract_closure_ext_width_packed_line_does_not_widen_the_headroom() {
 
 /// (4) 名指しの実在: `title` / `done` / 節の本文の backtick の中身のうち path 形・型の path 形・fn 形が base に解けない
 /// ものを `name-unresolved` で全件・在り処付き（行番号は行の見出し）。`touches` の型の variant・write-set の `+`
-/// 宣言の新規 file・一致しない字面は名指さない。
+/// 宣言の新規 file（別の行の宣言も含む・§39）・一致しない字面は名指さない。
 #[test]
 fn contract_closure_ext_unresolved_names_are_named_with_their_place() {
     let body = "本文。`crate::tint::Tint` と `show(` は在る。`Nope::Thing` と `src/nope.rs` は無い。`Tint::Warm => 1` は字面。";
@@ -601,7 +601,7 @@ fn contract_closure_ext_unresolved_names_are_named_with_their_place() {
     assert!(named_b.is_empty(), "touches の型の variant と + 宣言の新規 file は名指さない: {row_b:?}");
     assert_eq!(row_b.len(), 2, "行 b も節の本文の 2 件は持つ（Nope::Thing / src/nope.rs）: {text}");
     let row_c = findings_for(&found, &doc, "c", "name-unresolved");
-    assert!(row_c.iter().any(|line| line.contains("名指し src/new.rs が base に無い（done）")), "write-set に無い同名は解けない: {text}");
+    assert!(!row_c.iter().any(|line| line.contains("src/new.rs")), "別の行が + で宣言した新規 file は解ける（§39）: {text}");
     assert!(!text.contains("Tint::Warm"), "一致しない字面（arm の断片）は名指さない: {text}");
     clean(&[&repo]);
 }
@@ -646,6 +646,123 @@ fn contract_names_impl_method_is_not_named_by_contracts_check() {
     }
     assert_eq!(text.lines().last(), Some("contracts check: docs=1 rows=1 findings=2"), "判定行: {text}");
     clean(&[&repo]);
+}
+
+// ─────── 宣言済みの新規 file（設計 docs/design/contract-source.md §39・行 an・`s2-07l.475`・接頭辞 `contract_names_declared_`） ───────
+
+/// 宣言の側の doc（`docs/design/other.md`）: 行 `x` が write-set の `+` で `fresh` を、行 `y` が `creates` で `made` を
+/// 宣言する（どちらも base に無い）。
+fn declaring_doc(fresh: &str, made: &str) -> String {
+    let plus = format!("[\"src/tint.rs\", \"+{fresh}\"]");
+    let creates = format!("[\"{made}\"]");
+    table_doc(&table_region(&[
+        table_row("x", &[("write-set", &plus)]),
+        table_row("y", &[("write-set", "[\"src/tint.rs\"]"), ("creates", &creates)]),
+    ]))
+}
+
+/// (a) doc A（other.md）の行が宣言した新規 file を doc B（toy.md）の行の done が backtick で名指すと findings 0・rc 0
+/// （base は行 1 本の write-set だけを解に読むので `name-unresolved` が 2 件 → RED）。`+` の項目と `creates` の欄の両方。
+#[test]
+fn contract_names_declared_in_another_doc_resolve() {
+    let doc = table_doc(&table_region(&[table_row("b", &[("done", "\"`src/fresh.rs` と `src/made.rs` が通る\"")])]));
+    let repo = table_repo(&doc, &[("docs/design/other.md", &declaring_doc("src/fresh.rs", "src/made.rs"))]);
+    let out = contracts_check(&repo);
+    let text = stdout_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "別の doc の宣言で解ける: {text}{}", stderr_of(&out));
+    assert!(!text.contains("name-unresolved"), "名指さない: {text}");
+    assert_eq!(text.lines().last(), Some("contracts check: docs=2 rows=3 findings=0"), "判定行: {text}");
+    clean(&[&repo]);
+}
+
+/// (b) どの行も宣言していない名は従来どおり `name-unresolved` の 1 件・rc 1（母集団は宣言の印の在る項目だけ＝印の
+/// 無い write-set の項目〔`src/tint.rs`〕や他の名まで無条件に広がらない）。
+#[test]
+fn contract_names_declared_undeclared_name_is_still_named_once() {
+    let doc = table_doc(&table_region(&[table_row("b", &[("done", "\"`src/fresh.rs` と `src/ghost.rs`\"")])]));
+    let repo = table_repo(&doc, &[("docs/design/other.md", &declaring_doc("src/fresh.rs", "src/made.rs"))]);
+    let out = contracts_check(&repo);
+    let (text, found) = (stdout_of(&out), findings_of(&out));
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "宣言の無い名は断る: {text}{}", stderr_of(&out));
+    let row_b = findings_for(&found, &doc, "b", "name-unresolved");
+    assert_eq!(row_b.len(), 1, "宣言の無い 1 語だけ: {text}");
+    assert!(row_b.iter().all(|line| line.contains("名指し src/ghost.rs が base に無い（done）")), "{row_b:?}");
+    assert_eq!(text.lines().last(), Some("contracts check: docs=2 rows=3 findings=1"), "判定行: {text}");
+    clean(&[&repo]);
+}
+
+/// (c) 同じ doc の別の行の宣言でも解ける（`+` の項目と `creates` の欄）。
+#[test]
+fn contract_names_declared_in_another_row_of_the_same_doc_resolve() {
+    let region = table_region(&[
+        table_row("x", &[("write-set", "[\"src/tint.rs\", \"+src/fresh.rs\"]")]),
+        table_row("y", &[("write-set", "[\"src/tint.rs\"]"), ("creates", "[\"src/made.rs\"]")]),
+        table_row("b", &[("done", "\"`src/fresh.rs` と `src/made.rs` が通る\"")]),
+    ]);
+    let repo = table_repo(&table_doc(&region), &[]);
+    let out = contracts_check(&repo);
+    let text = stdout_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "同じ doc の別の行の宣言で解ける: {text}{}", stderr_of(&out));
+    assert_eq!(text.lines().last(), Some("contracts check: docs=1 rows=3 findings=0"), "判定行: {text}");
+    clean(&[&repo]);
+}
+
+/// (d) 受付でも同じ母集団: doc B の行を pointer に受付を撃つと run dir と event が作られる（base は `name-unresolved`
+/// で断る → RED）。対: 宣言の無い名を名指す行は従来どおり断られ、run dir も event も作らない。
+#[test]
+fn contract_names_declared_in_another_doc_pass_intake() {
+    let row = |done: &str| {
+        let done = format!("\"{done}\"");
+        table_doc(&table_region(&[table_row("b", &[("write-set", "[\"crates/toy/src/tint.rs\"]"), ("done", &done)])]))
+    };
+    let other = ("docs/design/other.md", declaring_doc("crates/toy/src/fresh.rs", "crates/toy/src/made.rs"));
+    let (repo, state) = derive_repo_with(&row("`crates/toy/src/fresh.rs` が通る"), &[(other.0, &other.1)]);
+    let out = intake_raw(&repo, &state, "docs/design/toy.md#b", "s2-declared");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "別の doc の宣言で受付を通る: {}", stderr_of(&out));
+    let id = run_id_of(&out);
+    assert!(state.join("pipe").join(&id).join("contract.toml").is_file(), "run dir を作る");
+    assert!(event_count(&state) >= 1, "event を書く");
+    stop_run_ok(&state, &id);
+    clean(&[&repo, &state]);
+    let (repo, state) = derive_repo_with(&row("`crates/toy/src/ghost.rs` が通る"), &[(other.0, &other.1)]);
+    let out = intake_raw(&repo, &state, "docs/design/toy.md#b", "s2-ghost");
+    let err = stderr_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "宣言の無い名は受付で断る: {err}");
+    assert!(err.contains("名指し crates/toy/src/ghost.rs が base に無い（done）"), "従来の字面: {err}");
+    assert_eq!(event_count(&state), 0, "断った周は event を書かない");
+    assert!(!state.join("pipe").exists(), "run dir も作らない");
+    clean(&[&repo, &state]);
+}
+
+/// (4) 区間を読めない doc が在る周は宣言の母集団を縮めたまま通さない: 読めない doc の従来の 1 件（行番号 0）に加え、
+/// 名指しを測る行にも `contract-table:unreadable` が出て rc 2・その行に `name-unresolved` は出ない。
+#[test]
+fn contract_names_declared_unreadable_doc_fails_closed() {
+    let doc = table_doc(&table_region(&[table_row("b", &[("done", "\"`src/fresh.rs` が通る\"")])]));
+    let repo = table_repo(&doc, &[("docs/design/other.md", &declaring_doc("src/fresh.rs", "src/made.rs"))]);
+    fs::write(repo.join("docs/design/bad.md"), [0xff, 0xfe, b'\n']).expect("非 UTF-8 の doc を書ける");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "bad"]);
+    let out = contracts_check(&repo);
+    let (text, found) = (stdout_of(&out), findings_of(&out));
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "読めない doc は rc 2: {text}");
+    assert!(text.contains("contracts: docs/design/bad.md:0 contract-table:unreadable"), "読めない doc を名指す: {text}");
+    let row_b = findings_for(&found, &doc, "b", "contract-table:unreadable");
+    assert_eq!(row_b.len(), 1, "名指しを測る行に読めなさの 1 件: {text}");
+    assert!(row_b.iter().all(|line| line.contains("docs/design/bad.md")), "読めない doc を名乗る: {row_b:?}");
+    assert!(findings_for(&found, &doc, "b", "name-unresolved").is_empty(), "縮めた母集団で名指さない: {text}");
+    clean(&[&repo]);
+}
+
+/// (e) 現物の契約表（本 repo の `docs/design/*.md`）は宣言済みの母集団を足しても findings 0・rc 0。
+#[test]
+fn contract_names_declared_real_table_has_zero_findings() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().and_then(Path::parent).expect("repo の root を解ける");
+    let out = contracts_check(root);
+    let text = stdout_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "現物の契約表は違反 0: {text}{}", stderr_of(&out));
+    let last = text.lines().last().unwrap_or_default();
+    assert!(last.starts_with("contracts check: docs=") && last.ends_with(" findings=0"), "判定行: {last}");
 }
 
 // ─────── land 済みの `+`（設計 docs/design/contract-source.md §3・契約 (i)・`s2-07l.346`・接頭辞 `contract_table_landed_plus_`） ───────

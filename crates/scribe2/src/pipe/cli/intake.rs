@@ -225,6 +225,8 @@ pub(in crate::pipe) struct Materials {
     facts: declaration::TableFacts,
     /// 要件面の id の集合（読めない周は理由・表の検査がそのまま断る）。
     requirements: Result<BTreeSet<String>, String>,
+    /// repo の全 doc が宣言済みの新規 file（`contracts check` と同じ 1 本 [`table::declared_files`]・読めない周は理由）。
+    declared: Result<Vec<String>, String>,
 }
 
 impl Materials {
@@ -244,7 +246,8 @@ impl Materials {
         let snapshots = table::read_all(repo, &tracked, ".snap");
         let requirements =
             table::read(repo, &facts.requirements).and_then(|found| table::requirement_ids(&facts.requirements, &found));
-        Ok(Self { tracked, sources, snapshots, facts, requirements })
+        let declared = table::declared_files(repo, &tracked);
+        Ok(Self { tracked, sources, snapshots, facts, requirements, declared })
     }
 
     /// rules 行の上限から材料を読む（列の入口・上限の読みと base の走査を 1 本にまとめた口）。
@@ -272,6 +275,7 @@ impl Materials {
             sources: &self.sources,
             tracked: &self.tracked,
             snapshots: &self.snapshots,
+            declared: &self.declared,
         }
     }
 }
@@ -1314,6 +1318,7 @@ mod tests {
             snapshots: Vec::new(),
             facts: TableFacts { allowed: Vec::new(), denied: Vec::new(), requirements: String::new() },
             requirements: Ok(BTreeSet::new()),
+            declared: Ok(Vec::new()),
         };
         (contract, materials)
     }
