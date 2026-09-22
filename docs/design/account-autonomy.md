@@ -263,7 +263,7 @@ req = ["FR37", "FR14"]
 section = "17"
 touches = ["crate::pipe::follow::Halt"]
 write-set = ["crates/scribe2/src/headless/mod.rs", "crates/scribe2/src/headless/runner.rs", "crates/scribe2/src/headless/runner.txt", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/follow.rs", "crates/scribe2/src/pipe/cli/resume.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs", "crates/scribe2/tests/e2e/headless.rs", "crates/scribe2/tests/e2e/snapshots/e2e__headless__headless_runner_prompt_external_form.snap"]
-verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_unreachable_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail headless_runner_prompt_external_form"]
+verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_unreachable_", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_unreachable_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail headless_runner_prompt_external_form"]
 size = "M"
 done = "到達不能の本文で終わった runner の便が Spawned のまま SeatStopped detail=runner-unreachable を 1 件持ち Failed が 0 で commit が残り、pipe resume が生死の計測を飛ばして runner を 1 回起こし直して Spawned detail に resume:unreachable を記帳し、runner の雛形の「途中再開」節に理由の 1 行が増えてその差分が雛形の外形 snapshot に写り、集合に無い is_error の本文は従来どおり Failed detail=runner-rc で終わり、is_error=false の本文に語が在っても弁別せず（pure）、新しい rc は既存の rc と衝突しない"
 

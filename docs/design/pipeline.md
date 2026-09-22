@@ -956,7 +956,7 @@ section = "35"
 write-set = ["crates/scribe2/src/pipe/gate/record.rs", "crates/scribe2/src/pipe/gate/verify.rs", "crates/scribe2/src/pipe/land.rs", "crates/scribe2/tests/e2e/pipe/land.rs", "crates/scribe2/tests/e2e/pipe/gate.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_verify_failed_"]
 size = "S"
-done = "nextest 形の stderr から failed= が最初の落ちた歯を指し、落ちた歯ごとの区間が上限行数で record に残り、FAIL 行の無い stderr は従来どおり末尾だけ、gate と主実測が同じ関数を通り、MainCheck の 3 値と末尾行数の定数は不変"
+done = "nextest 形の stderr から failed= が最初の落ちた歯を指し、落ちた歯ごとの区間が上限行数で record に残り、FAIL 行の無い stderr は従来どおり末尾だけ、gate と主実測が同じ関数を通り、主実測は verify-main.jsonl と同じ dir に同じ stem の verify-main.stderr.log を残し（main-red の便の e2e が file の有無を測る）、MainCheck の 3 値と末尾行数の定数は不変"
 
 [[contract]]
 id = "ad"
