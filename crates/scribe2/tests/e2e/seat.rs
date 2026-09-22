@@ -17,6 +17,7 @@
 mod account;
 mod launch;
 mod register;
+mod ruling;
 mod rules;
 
 use crate::{make_tmp_dir, TmpDir};
@@ -297,7 +298,7 @@ fn seat_usage_external_form() {
     insta::assert_snapshot!(form);
 }
 
-/// (8) `seat` の口: 既知の 2 verb（register / launch）に**未知の flag** を足すと rc 2・理由の 1 行が flag を名指し usage を添え・
+/// (8) `seat` の口: 既知の 3 verb（register / launch / ruling）に**未知の flag** を足すと rc 2・理由の 1 行が flag を名指し usage を添え・
 /// 置き場に 1 file も作らない（row も event も書かず tmux も撃たない）。`--help` は usage を stdout へ出して rc 0
 /// （設計 pipeline.md §14 約束 3 / 4 / 8）。
 #[test]
@@ -308,9 +309,10 @@ fn seat_args_unknown_flag_is_refused_with_rc_2_on_every_verb() {
     let path = state.display().to_string();
     let launch = fixture(&dir, "launch.txt", "claude\n");
     let socket = dir.join("no-such-sock").display().to_string();
-    let verbs: [Vec<&str>; 2] = [
+    let verbs: [Vec<&str>; 3] = [
         vec!["register", "--state-dir", &path, "--target", "s:w", "--role", "orchestrator", "--account", "a1", "--launch", &launch],
         vec!["launch", "--state-dir", &path, "--role", "orchestrator", "--target", "s:w", "--account", "a1", "--tmux-socket", &socket],
+        vec!["ruling", "add", "--state-dir", &path, "--target", "s:w", "--words", "w"],
     ];
     for verb in verbs {
         let mut args = verb.clone();
@@ -337,14 +339,14 @@ fn seat_args_unknown_flag_is_refused_with_rc_2_on_every_verb() {
 #[test]
 fn seat_command_all_known_verbs_round_trip_and_unknown_tokens_are_none() {
     use vessel::seat::cli::{SeatCommand, SEAT_COMMANDS};
-    assert_eq!(vessel::seat::cli::SEAT_COMMANDS.len(), 2, "記録時点の既知の verb: {SEAT_COMMANDS:?}");
+    assert_eq!(vessel::seat::cli::SEAT_COMMANDS.len(), 3, "記録時点の既知の verb: {SEAT_COMMANDS:?}");
     assert!(vessel::order::is_declaration_order(SEAT_COMMANDS, |command| command as usize), "宣言順: {SEAT_COMMANDS:?}");
     let words: Vec<&str> = SEAT_COMMANDS.iter().map(|command| command.as_str()).collect();
-    assert_eq!(words, ["register", "launch"], "字面の閉じた列（宣言順）");
+    assert_eq!(words, ["register", "launch", "ruling"], "字面の閉じた列（宣言順）");
     let usage = vessel::seat::cli::usage();
     for command in SEAT_COMMANDS {
         assert_eq!(SeatCommand::parse(command.as_str()), Some(*command), "as_str ↔ parse の往復: {command:?}");
-        assert!(usage.contains(&format!("{} --", command.as_str())), "{} は usage に載る: {usage}", command.as_str());
+        assert!(usage.contains(&format!("|{} ", command.as_str())) || usage.contains(&format!("<{} ", command.as_str())), "{} は usage に載る: {usage}", command.as_str());
     }
     for unknown in ["work", "", "--state-dir", "Register", "registers"] {
         assert_eq!(SeatCommand::parse(unknown), None, "未知の token {unknown:?} は None（label の腕へ落ちる）");
@@ -630,6 +632,7 @@ fn acct_measured(state: &Path, label: &str, pct: u64, ts: &str) {
             mark: None,
             account: None,
             cost: None,
+            rule: None,
         };
         vessel::fleet::store::append(state, &event, policy).expect("実測行を積める");
     }

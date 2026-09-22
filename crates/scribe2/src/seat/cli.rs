@@ -13,7 +13,7 @@ use std::path::Path;
 
 /// `seat` の使い方。
 pub fn usage() -> String {
-    "usage: seat <register --state-dir S --target T --role R --account L --launch FILE [--anchor DIR]|launch --state-dir S --role R --target S:W [--account L] [--anchor DIR] [--model M] [--restore CMD]|<label> [--orchestrator] [-c|-r ID] [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]".to_owned()
+    "usage: seat <register --state-dir S --target T --role R --account L --launch FILE [--anchor DIR]|launch --state-dir S --role R --target S:W [--account L] [--anchor DIR] [--model M] [--restore CMD]|ruling add --state-dir S --target T --words W [--bead B] [--rule ID]|ruling ls --state-dir S|<label> [--orchestrator] [-c|-r ID] [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]".to_owned()
 }
 
 /// `seat` の既知の verb（閉じた語・宣言順・設計 contract-source.md §17 の形 (vii)）。短い形の第 1 token（口座 label）は
@@ -24,10 +24,12 @@ pub enum SeatCommand {
     Register,
     /// `seat launch`。
     Launch,
+    /// `seat ruling add` / `seat ruling ls`（run 無しの裁定・設計 fleet-event-log.md §9）。
+    Ruling,
 }
 
 /// [`SeatCommand`] の全部（宣言順・件数は既知の verb の本数で dispatch の腕の本数ではない）。
-pub const SEAT_COMMANDS: &[SeatCommand] = &[SeatCommand::Register, SeatCommand::Launch];
+pub const SEAT_COMMANDS: &[SeatCommand] = &[SeatCommand::Register, SeatCommand::Launch, SeatCommand::Ruling];
 
 impl SeatCommand {
     /// 引数の字面。
@@ -35,6 +37,7 @@ impl SeatCommand {
         match self {
             Self::Register => "register",
             Self::Launch => "launch",
+            Self::Ruling => "ruling",
         }
     }
 
@@ -74,12 +77,21 @@ const ALLOWED_LAUNCH: &[cli_args::Allowed] = &[
     value("--tmux-socket"),
     value("--capture-file"),
 ];
+/// `seat ruling`（`add` / `ls` の 2 語は positional・`ls` は `--state-dir` だけを読む）。
+const ALLOWED_RULING: &[cli_args::Allowed] = &[
+    value("--state-dir"),
+    value("--target"),
+    value("--words"),
+    value("--bead"),
+    value("--rule"),
+];
 
 /// [`SeatCommand`] が受ける flag の集合（[`dispatch`] が verb を選んだ直後に [`crate::cli_args::parse`] へ渡す）。
 const fn allowed_of(command: SeatCommand) -> &'static [Allowed] {
     match command {
         SeatCommand::Register => ALLOWED_REGISTER,
         SeatCommand::Launch => ALLOWED_LAUNCH,
+        SeatCommand::Ruling => ALLOWED_RULING,
     }
 }
 
@@ -95,6 +107,7 @@ pub fn dispatch(args: &[String]) -> Outcome {
     match (verb, first) {
         (Some(SeatCommand::Register), _) => register_of(args),
         (Some(SeatCommand::Launch), _) => launch_of(args),
+        (Some(SeatCommand::Ruling), _) => ruling_of(args.get(1..).unwrap_or_default()),
         // 既知の verb でなく `--` で始まらない第 1 token は口座 label（短い形・account-lifecycle.md §14）。label は閉じた語を
         // 持たない＝[`SeatCommand`] の subcommand ではないので閉包の検査の外（消えた口の名もこの腕で従来どおり断る）。
         (None, Some(label)) if !label.starts_with("--") && !label.trim().is_empty() => short_of(label, args.get(1..).unwrap_or_default()),
@@ -195,6 +208,42 @@ fn register_of(args: &[String]) -> Outcome {
         }
         Err(err @ role::RegisterRefusal::Store(_)) => refused(RC_BROKEN, err),
         Err(err) => refused(RC_REFUSED, err),
+    }
+}
+
+/// `seat ruling add|ls`（設計 fleet-event-log.md §9 (2)）。`rest` は `ruling` の後ろ。`--state-dir` は必須（空文字は使い方の誤り）。
+/// `add` の `--words` は**空文字を使い方の誤りにしない**——空の逐語は typed な断り（`reason=empty-words`・rc 1・書かない）で名乗る。
+fn ruling_of(rest: &[String]) -> Outcome {
+    let (Some(verb), Ok(state_dir)) = (rest.first().map(String::as_str), required_nonempty(rest, "--state-dir")) else {
+        return refused_usage();
+    };
+    match verb {
+        "add" => ruling_add(rest, Path::new(state_dir)),
+        "ls" => match super::ruling::ls(Path::new(state_dir)) {
+            Ok(lines) => Outcome::ok(lines),
+            Err(errors) => Outcome::failed(RC_BROKEN, errors.iter().map(ToString::to_string).collect()),
+        },
+        _ => refused_usage(),
+    }
+}
+
+/// `seat ruling add`: 対話面の席の逐語を `RulingReceived` 1 件として書き、ts（裁定 id）を stdout の 1 行で返す。
+fn ruling_add(rest: &[String], state_dir: &Path) -> Outcome {
+    let (Ok(target), Ok(Some(words)), Ok(bead), Ok(rule)) =
+        (required_nonempty(rest, "--target"), optional(rest, "--words"), nonempty(rest, "--bead"), nonempty(rest, "--rule"))
+    else {
+        return refused_usage();
+    };
+    let draft = super::ruling::Draft { target, words, bead, rule };
+    match super::ruling::add(state_dir, &draft) {
+        Ok(event) => Outcome::ok_line(format!(
+            "seat ruling: recorded ts={} target={target} bead={} rule={}",
+            event.ts,
+            bead.unwrap_or("-"),
+            rule.unwrap_or("-")
+        )),
+        Err(err @ super::ruling::RulingRefusal::Store(_)) => Outcome::failed_line(RC_BROKEN, err.render(target)),
+        Err(err) => Outcome::failed_line(RC_REFUSED, err.render(target)),
     }
 }
 

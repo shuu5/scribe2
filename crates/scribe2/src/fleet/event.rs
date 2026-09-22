@@ -17,8 +17,11 @@ use crate::seat::role::Role;
 const KNOWN_KEYS: &[&str] = &[
     "schema", "ts", "kind", "run", "bead", "host", "actor", "stage", "seat", "pid", "detail",
     "account", "window", "model", "endpoint", "used_pct", "resets_at", "reason", "role", "anchor", "target", "sid", "launch",
-    "mark", "source", "usage", "turns", "wall_ms",
+    "mark", "source", "usage", "turns", "wall_ms", "rule",
 ];
+
+/// run 無しの裁定の kind（[`Shape::Ruling`]）だけが持てる key（他の kind の行に在れば malformed・設計 §9）。
+const RULING_KEYS: &[&str] = &["rule"];
 
 /// 口座残量の kind だけが持てる key（設計 fleet-usage.md §4）。
 ///
@@ -84,6 +87,8 @@ pub struct Event {
     pub account: Option<String>,
     /// 消費の本体（[`EventKind::RunCost`] でだけ `Some`＝必須・他の kind に在れば malformed・設計 gate-cost.md §26 形 (2)）。
     pub cost: Option<Cost>,
+    /// 裁定が指す rules 行の id（[`EventKind::RulingReceived`] でだけ任意に `Some`・他の kind に在れば malformed・設計 §9）。
+    pub rule: Option<String>,
 }
 
 impl Event {
@@ -107,6 +112,11 @@ impl Event {
             Shape::Mark => {
                 pairs.push(("bead", Value::Str(self.bead.clone())));
                 pairs.extend(self.mark.iter().map(|mark| ("mark", Value::Str(mark.as_str().to_owned()))));
+            }
+            // 裁定の `bead` は任意（空なら key ごと書かない＝`null` を出さない）。
+            Shape::Ruling => {
+                pairs.extend(Some(&self.bead).filter(|bead| !bead.is_empty()).map(|bead| ("bead", Value::Str(bead.clone()))));
+                pairs.extend(self.rule.iter().map(|rule| ("rule", Value::Str(rule.clone()))));
             }
             Shape::Allowance | Shape::Registration | Shape::Account | Shape::Install => {}
         }
@@ -184,6 +194,7 @@ impl Event {
             mark: body.mark,
             account: body.account,
             cost: body.cost,
+            rule: body.rule,
         })
     }
 }
@@ -205,6 +216,8 @@ struct Body {
     account: Option<String>,
     /// 消費の本体。
     cost: Option<Cost>,
+    /// 裁定が指す rules 行の id。
+    rule: Option<String>,
 }
 
 impl Body {
@@ -215,6 +228,9 @@ impl Body {
     fn read(pairs: &[(String, Value)], kind: EventKind) -> Result<Self, String> {
         if kind.shape() != Shape::Cost {
             forbid(pairs, COST_KEYS)?;
+        }
+        if kind.shape() != Shape::Ruling {
+            forbid(pairs, RULING_KEYS)?;
         }
         match kind {
             EventKind::AllowanceMeasured => {
@@ -229,6 +245,7 @@ impl Body {
             EventKind::SeatSpawned => Self::spawned(pairs),
             EventKind::InstallRecorded => Self::install(pairs),
             EventKind::RunCost => Self::cost(pairs),
+            EventKind::RulingReceived => Self::ruling(pairs),
             EventKind::RunCreated
             | EventKind::RunStage
             | EventKind::RunDone
@@ -342,6 +359,20 @@ impl Body {
             ..Self::default()
         })
     }
+
+    /// run 無しの裁定の行の本体（設計 §9）: `detail`（user の逐語）が**必須**・`bead` と `rule` は任意（在って文字列でなければ
+    /// malformed）。`run` / `stage` / `seat` / `pid`（`seat` が在ると replay が幽霊の席を作る）・口座残量・登録・列の印の key は
+    /// **持たない**（在れば malformed）。
+    fn ruling(pairs: &[(String, Value)]) -> Result<Self, String> {
+        let foreign = ["run", "stage", "seat", "pid"];
+        forbid(pairs, foreign.iter().chain(ALLOWANCE_KEYS).chain(REGISTRATION_KEYS).chain(MARK_KEYS))?;
+        text_of(field(pairs, "detail"), "detail")?;
+        Ok(Self {
+            bead: optional_text(field(pairs, "bead"), "bead")?.unwrap_or_default(),
+            rule: optional_text(field(pairs, "rule"), "rule")?,
+            ..Self::default()
+        })
+    }
 }
 
 impl Event {
@@ -349,7 +380,7 @@ impl Event {
     pub fn install(&self) -> Option<Install> {
         match self.kind.shape() {
             Shape::Install => self.detail.as_deref().and_then(Install::parse),
-            Shape::Run | Shape::Allowance | Shape::Registration | Shape::Account | Shape::Mark | Shape::Cost => None,
+            Shape::Run | Shape::Allowance | Shape::Registration | Shape::Account | Shape::Mark | Shape::Cost | Shape::Ruling => None,
         }
     }
 }

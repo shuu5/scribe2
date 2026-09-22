@@ -39,24 +39,35 @@ pub struct Counted {
     pub landed: usize,
     /// 人由来の event の数。
     pub human_events: usize,
-    /// 人由来のうち承認でないものの数（**到達点はここが 0**）。
+    /// 人由来のうち承認でないものの数（**到達点はここが 0**・承認は [`is_approval`] の 2 kind）。
     pub human_events_other_than_approval: usize,
     /// 審査で PASS にならなかった `Reviewed` の event の数（`by_kind` の母集団・`runs` と同じ範囲で日付では絞らない）。
     pub review_fail: usize,
     /// `review_fail` の理由の型ごとの内訳（[`FINDING_KINDS`] の宣言順・合計は `review_fail`）。
     pub by_kind: [usize; FINDING_KINDS.len()],
+    /// run 無しの裁定（[`EventKind::RulingReceived`]）の数（設計 fleet-event-log.md §9 (3)・kind で数える）。
+    pub rulings: usize,
+}
+
+/// 人の手として許す「承認」の kind か（設計 fleet-event-log.md §9 (3)・FR22）: 便の承認と run 無しの裁定の 2 つ。
+pub fn is_approval(kind: EventKind) -> bool {
+    kind == EventKind::ApprovalReceived || kind == EventKind::RulingReceived
 }
 
 impl Counted {
     /// stdout の 1 行（設計 §5.8 の字面 + §22 の `review_fail=` / `by_kind=`・既存の token は不変）。
+    ///
+    /// `rulings=<n>`（fleet-event-log.md §9 (3)）は `human_events_other_than_approval=` の直後に**裁定が 1 件以上在る周だけ**
+    /// 出す——裁定の無い置き場の到達点の行は従来の字面のまま（読み手が行を逐語で突き合わせる面を動かさない）。
     pub fn line(self) -> String {
         let by_kind: Vec<String> = FINDING_KINDS
             .iter()
             .zip(self.by_kind)
             .map(|(kind, count)| format!("{}:{count}", kind.as_str()))
             .collect();
+        let rulings = if self.rulings > 0 { format!(" rulings={}", self.rulings) } else { String::new() };
         format!(
-            "runs={} landed={} human_events={} human_events_other_than_approval={} review_fail={} by_kind={}",
+            "runs={} landed={} human_events={} human_events_other_than_approval={}{rulings} review_fail={} by_kind={}",
             self.runs,
             self.landed,
             self.human_events,
@@ -67,10 +78,11 @@ impl Counted {
     }
 }
 
-/// event 列から 6 つを数える。
+/// event 列から数える。
 ///
 /// 承認だけを人の手として許す判定は **kind で行う**（actor の字面ではない）——`actor` は
-/// 「誰が起こしたか」、`kind` は「何が起きたか」で、到達点が言う例外は後者だからである。
+/// 「誰が起こしたか」、`kind` は「何が起きたか」で、到達点が言う例外は後者だからである。承認の kind は
+/// [`is_approval`] の 2 つ（run 無しの裁定も承認 event・ADR-0037）。
 pub fn count(events: &[Event]) -> Counted {
     let state = replay(events);
     let human: Vec<&Event> = events
@@ -93,10 +105,11 @@ pub fn count(events: &[Event]) -> Counted {
         human_events: human.len(),
         human_events_other_than_approval: human
             .iter()
-            .filter(|event| event.kind != EventKind::ApprovalReceived)
+            .filter(|event| !is_approval(event.kind))
             .count(),
         review_fail: by_kind.iter().sum(),
         by_kind,
+        rulings: events.iter().filter(|event| event.kind == EventKind::RulingReceived).count(),
     }
 }
 

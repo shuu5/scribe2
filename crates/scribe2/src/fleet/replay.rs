@@ -224,7 +224,8 @@ fn apply_account(state: &mut State, event: &Event) {
         | EventKind::SeatRegistered
         | EventKind::DispatchMark
         | EventKind::InstallRecorded
-        | EventKind::RunCost => {}
+        | EventKind::RunCost
+        | EventKind::RulingReceived => {}
     }
 }
 
@@ -306,6 +307,7 @@ fn apply_seat(state: &mut State, event: &Event) {
         | EventKind::AccountRestored
         | EventKind::DispatchMark
         | EventKind::InstallRecorded
-        | EventKind::RunCost => {}
+        | EventKind::RunCost
+        | EventKind::RulingReceived => {}
     }
 }

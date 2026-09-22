@@ -18,6 +18,7 @@ pub mod inject;
 pub mod ledger;
 pub mod recent;
 pub mod role;
+pub mod ruling;
 pub mod session_account;
 pub mod state;
 

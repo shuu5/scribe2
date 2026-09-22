@@ -338,6 +338,7 @@ fn build_event(args: &[String]) -> Result<Event, String> {
     // （書き手は mv と対の `account retire` / `restore` だけ・dir を動かさずに状態だけを書く口を作らない）。install の行も
     // 同じ（書き手は install の成功の後の `vessel update` だけ・「撃った」と「入った」を融合しない・consumer-sync.md §5）。
     // 消費の行も同じ（書き手は claude の result record を読んだ pipe の 3 か所だけ・6 値をこの口は持たない・gate-cost.md §26）。
+    // run 無しの裁定の行も同じ（書き手は対話面の席を確かめる `seat ruling add` だけ・この口は `run` を要る・§9）。
     if kind.is_allowance()
         || matches!(
             kind,
@@ -346,6 +347,7 @@ fn build_event(args: &[String]) -> Result<Event, String> {
                 | EventKind::AccountRestored
                 | EventKind::InstallRecorded
                 | EventKind::RunCost
+                | EventKind::RulingReceived
         )
     {
         return Err(format!("kind {kind_text} は record では書けない"));
@@ -386,6 +388,7 @@ fn build_event(args: &[String]) -> Result<Event, String> {
         mark: None,
         account,
         cost: None,
+        rule: None,
     })
 }
 

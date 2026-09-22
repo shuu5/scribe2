@@ -170,6 +170,7 @@ mod fleet {
                 mark: None,
                 account: None,
                 cost: None,
+                rule: None,
             })
     }
 
@@ -221,6 +222,7 @@ mod fleet {
                 mark: None,
                 account: None,
                 cost: None,
+                rule: None,
             })
     }
 
@@ -270,6 +272,37 @@ mod fleet {
                 mark: None,
                 account: None,
                 cost: None,
+                rule: None,
+            })
+    }
+
+    /// run 無しの裁定の行 1 本（設計 fleet-event-log.md §9・`bead` / `rule` は在る / 無いの両方・逐語は任意の字面）。
+    fn any_ruling_event() -> impl Strategy<Value = FleetEvent> {
+        (
+            "[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z",
+            ident(),
+            prop::option::of(ident()),
+            prop::option::of(json_text()),
+            json_text(),
+        )
+            .prop_map(|(ts, host, bead, rule, words)| FleetEvent {
+                schema: FLEET_SCHEMA,
+                ts,
+                kind: EventKind::RulingReceived,
+                run: String::new(),
+                bead: bead.unwrap_or_default(),
+                host,
+                actor: ACTOR_HUMAN.to_owned(),
+                stage: None,
+                seat: None,
+                pid: None,
+                detail: Some(words),
+                allowance: None,
+                registration: None,
+                mark: None,
+                account: None,
+                cost: None,
+                rule,
             })
     }
 
@@ -288,6 +321,16 @@ mod fleet {
             prop_assert_eq!(line.contains("\"model\":"), has_model, "{}", line);
             let has_sid = event.registration.as_ref().is_some_and(|row| row.sid.is_some());
             prop_assert_eq!(line.contains("\"sid\":"), has_sid, "{}", line);
+            prop_assert_eq!(FleetEvent::from_line(&line), Ok(event), "{}", line);
+        }
+
+        /// 任意の逐語 / bead（在る・無い）/ rule（在る・無い）で、run 無しの裁定の行は書いて読むと同じ event に戻り、
+        /// `run` を持たず、`rule` の key は `Some` の行にだけ現れる（設計 fleet-event-log.md §9）。
+        #[test]
+        fn prop_fleet_ruling_event_round_trips_through_line(event in any_ruling_event()) {
+            let line = event.to_line();
+            prop_assert!(!line.contains("\"run\":"), "{}", line);
+            prop_assert_eq!(line.contains("\"rule\":"), event.rule.is_some(), "{}", line);
             prop_assert_eq!(FleetEvent::from_line(&line), Ok(event), "{}", line);
         }
 

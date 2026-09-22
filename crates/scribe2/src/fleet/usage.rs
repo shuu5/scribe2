@@ -624,6 +624,7 @@ fn event_of(ts: &str, host: &str, row: &Allowance) -> Event {
         mark: None,
         account: None,
         cost: None,
+        rule: None,
     }
 }
 

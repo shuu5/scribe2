@@ -58,6 +58,7 @@ fn event(kind: EventKind, run: &str, ts: &str) -> Event {
         mark: None,
         account: None,
         cost: None,
+        rule: None,
     }
 }
 
@@ -707,9 +708,9 @@ fn fleet_stages_place_rate_limited_after_questioned() {
     assert_eq!(Stage::parse("RateLimited"), Some(Stage::RateLimited), "as_str ↔ parse の往復");
 }
 
-/// `KINDS` の並びが**宣言順**と一致し、母集団は 18 種で末尾の 2 つが `InstallRecorded`（`vessel update` が足した・設計
-/// consumer-sync.md §5 (4)）→ `RunCost`（消費の 1 件・gate-cost.md §26 形 (2)）。variant を足して列に足し忘れた周・
-/// 件数だけ合って末尾が違う周はここで赤になる。
+/// `KINDS` の並びが**宣言順**と一致し、母集団は 19 種で末尾の 3 つが `InstallRecorded`（`vessel update` が足した・設計
+/// consumer-sync.md §5 (4)）→ `RunCost`（消費の 1 件・gate-cost.md §26 形 (2)）→ `RulingReceived`（run 無しの裁定・
+/// fleet-event-log.md §9）。variant を足して列に足し忘れた周・件数だけ合って末尾が違う周はここで赤になる。
 #[test]
 fn fleet_kinds_follow_declaration_order() {
     assert!(
@@ -717,8 +718,12 @@ fn fleet_kinds_follow_declaration_order() {
         "KINDS の並びが宣言順と乖離している（母集団 {} 種）",
         KINDS.len()
     );
-    assert_eq!(KINDS.len(), 18, "母集団（列の印までの 16 + install 1 + 消費 1）");
-    assert_eq!(KINDS.get(16..), Some(&[EventKind::InstallRecorded, EventKind::RunCost][..]), "install → 消費が宣言順の末尾");
+    assert_eq!(KINDS.len(), 19, "母集団（列の印までの 16 + install 1 + 消費 1 + 裁定 1）");
+    assert_eq!(
+        KINDS.get(16..),
+        Some(&[EventKind::InstallRecorded, EventKind::RunCost, EventKind::RulingReceived][..]),
+        "install → 消費 → 裁定が宣言順の末尾"
+    );
     assert_eq!(EventKind::InstallRecorded.as_str(), "InstallRecorded");
     assert_eq!(EventKind::parse("InstallRecorded"), Some(EventKind::InstallRecorded), "as_str ↔ parse の往復");
     assert_eq!(EventKind::InstallRecorded.default_actor(), "machine", "install は機械由来");
@@ -751,6 +756,7 @@ fn pipe_question_kinds_round_trip_on_schema_1() {
             mark: None,
             account: None,
             cost: None,
+            rule: None,
         };
         let line = event.to_line();
         assert!(line.contains("\"schema\":1"), "{line}");
@@ -759,6 +765,69 @@ fn pipe_question_kinds_round_trip_on_schema_1() {
     }
     let old = r#"{"schema":1,"ts":"2026-09-01T00:00:00Z","kind":"RunCreated","run":"r","bead":"b","host":"h","actor":"machine","stage":"Intake"}"#;
     assert!(Event::from_line(old).is_ok(), "既存の行はそのまま読める");
+}
+
+/// run 無しの裁定の event（`bead` 無し・`rule` 無し・逐語 1 つ）。
+fn ruling_event(ts: &str) -> Event {
+    Event { run: String::new(), bead: String::new(), detail: Some("推奨で進めて".to_owned()), ..event(EventKind::RulingReceived, "", ts) }
+}
+
+/// run 無しの裁定（`RulingReceived`・設計 fleet-event-log.md §9 (1)）: 既定の actor は human・schema 1 のまま `run` を持たずに
+/// 書けて読め（`bead` / `rule` は在る周だけ key が現れる）、replay は便も席も作らない。`run` / `seat` / `stage` を持つ行・逐語
+/// （detail）の無い行・他の kind に `rule` が在る行は malformed。既存の承認と質問の kind は形も actor も不変。
+#[test]
+fn fleet_ruling_event_is_human_without_a_run_and_malformed_rows_are_refused() {
+    assert_eq!(EventKind::RulingReceived.default_actor(), "human", "裁定は人由来");
+    assert_eq!(EventKind::parse("RulingReceived"), Some(EventKind::RulingReceived), "as_str ↔ parse の往復");
+    let bare = ruling_event("2026-09-22T01:02:03Z");
+    let line = bare.to_line();
+    assert_eq!(
+        line,
+        r#"{"schema":1,"ts":"2026-09-22T01:02:03Z","kind":"RulingReceived","host":"h","actor":"human","detail":"推奨で進めて"}"#,
+        "run / bead / rule の key を書かない"
+    );
+    assert_eq!(Event::from_line(&line), Ok(bare.clone()));
+    let full = Event { bead: "s2-x.1".to_owned(), rule: Some("R-C9-1".to_owned()), ..bare.clone() };
+    let full_line = full.to_line();
+    assert!(full_line.contains(r#""bead":"s2-x.1","rule":"R-C9-1""#) && !full_line.contains("\"run\":"), "{full_line}");
+    assert_eq!(Event::from_line(&full_line), Ok(full.clone()));
+    let state = replay(&[bare, full]);
+    assert!(state.runs.is_empty() && state.seats.is_empty(), "便も席も作らない: {state:?}");
+
+    let head = r#"{"schema":1,"ts":"2026-09-22T01:02:03Z","kind":"RulingReceived","host":"h","actor":"human""#;
+    for extra in [r#","run":"r1","detail":"w""#, r#","seat":"s1","detail":"w""#, r#","stage":"Intake","detail":"w""#, "", r#","rule":1,"detail":"w""#] {
+        let malformed = format!("{head}{extra}}}");
+        assert!(Event::from_line(&malformed).is_err(), "malformed: {malformed}");
+    }
+    let foreign = r#"{"schema":1,"ts":"2026-09-22T01:02:03Z","kind":"RunStage","run":"r","bead":"b","host":"h","actor":"machine","rule":"R-C9-1"}"#;
+    assert!(Event::from_line(foreign).is_err(), "他の kind は rule を持たない");
+    // 既存の承認と質問の kind は不変（actor と形）。
+    assert_eq!(EventKind::ApprovalReceived.default_actor(), "human");
+    for kind in [EventKind::ApprovalRequested, EventKind::QuestionRaised, EventKind::QuestionAnswered] {
+        assert_eq!(kind.default_actor(), "machine", "{}", kind.as_str());
+    }
+    let approval = r#"{"schema":1,"ts":"2026-09-22T00:00:00Z","kind":"ApprovalReceived","run":"r","bead":"b","host":"h","actor":"human","detail":"w"}"#;
+    assert_eq!(Event::from_line(approval).map(|found| found.to_line()).as_deref(), Ok(approval), "承認の行は同じ字面で往復する");
+}
+
+/// `fleet record` は裁定の kind を断る（書き手は対話面の席を確かめる `seat ruling add` だけ・§9 (2)）: rc 1・stdout 0 byte・log を
+/// 作らない。`--run` / `--bead` / `--actor human` / `--detail` を揃えても断る。
+#[test]
+fn fleet_ruling_record_refuses_the_ruling_kind() {
+    let dir = state_dir();
+    let path = dir.display().to_string();
+    let out = run_fleet(&[
+        "record", "--state-dir", &path, "--kind", "RulingReceived", "--run", "r1", "--bead", "b", "--actor", "human", "--detail", "推奨で",
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{out:?}");
+    assert!(out.stdout.is_empty(), "stdout 0 byte");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("kind RulingReceived は record では書けない"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!store::events_path(&dir).exists(), "log を作らない");
+    fs::remove_dir_all(&dir).ok();
 }
 
 /// 消費の event の fixture（出所 3 値のどれか・6 値は互いに違う数）。
@@ -1018,6 +1087,7 @@ fn allowance_event(ts: &str, allowance: Allowance) -> Event {
         mark: None,
         account: None,
         cost: None,
+        rule: None,
     }
 }
 
@@ -1435,8 +1505,8 @@ fn fleet_allowance_windows_round_trip_on_snake_case() {
 fn account_cmd_kinds_are_fifteen_with_retire_and_restore_last() {
     assert_eq!(
         KINDS.len(),
-        18,
-        "母集団（既存 10 + 口座残量 2 + 席の登録 1 + 口座の退役・戻し 2 + 列の印 1 + install 1 + 消費 1）"
+        19,
+        "母集団（既存 10 + 口座残量 2 + 席の登録 1 + 口座の退役・戻し 2 + 列の印 1 + install 1 + 消費 1 + 裁定 1）"
     );
     assert_eq!(
         KINDS.get(12..16),
@@ -1503,6 +1573,7 @@ fn registration_event_with_model(target: &str, model: Option<&str>) -> Event {
         }),
         account: None,
         cost: None,
+        rule: None,
     }
 }
 

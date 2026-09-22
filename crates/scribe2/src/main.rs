@@ -51,7 +51,8 @@ fn render_doctor() -> Vec<String> {
     vec![render_name(), render_version()]
 }
 
-/// `doctor` の出力行。`--state-dir S [--tmux-socket PATH] [--rules FILE]` 付きは登録 row の一覧（`model` の欄
+/// `doctor` の出力行。`--state-dir S [--tmux-socket PATH] [--rules FILE]` 付きは先頭に run 無しの裁定の突合の 1 行（数えるものが
+/// 在る周だけ・[`vessel::seat::ruling::doctor_lines`]・fleet-event-log.md §9 (4)）、続けて登録 row の一覧（`model` の欄
 /// つき・1 row 1 行）と実在の target の突合 1 行（C3.2・seat-roles.md §9 (e)）の後ろに、host の面の 1 行と口座の
 /// 前提の行（`account ls` と同じ 1 関数・`retired=` つき・[`vessel::account::doctor_lines`]・account-lifecycle.md §3）、
 /// さらに導入先の行（1 導入先 1 行・[`vessel::account::consumers::doctor_lines`]・consumer-sync.md §4・FR61）を
@@ -71,6 +72,7 @@ fn render_doctor_with(rest: &[String]) -> Result<Vec<String>, ()> {
     }
     match (state_dir, socket, rules, repo) {
         (Some(dir), _, _, _) => {
+            lines.extend(vessel::seat::ruling::doctor_lines(Path::new(dir), rules));
             lines.extend(vessel::seat::role::doctor_lines(Path::new(dir), socket, rules));
             lines.extend(vessel::account::doctor_lines(Path::new(dir), rules));
             lines.extend(vessel::account::consumers::doctor_lines(Path::new(dir), rules));

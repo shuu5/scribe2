@@ -71,6 +71,10 @@ pub enum EventKind {
     /// [`Cost`]（出所と 6 値）で、`run` / `bead` を持つが**段を動かさない**（replay は便を作らない・C6.3 の store は
     /// この log 1 つ）。
     RunCost,
+    /// run 無しの user 裁定を受け取った（設計 fleet-event-log.md §9・ADR-0037・[`Shape::Ruling`]）。actor は `human`・`detail` =
+    /// user の逐語・`bead` と `rule`（rules 行の id）は任意・**便に紐づかない**（replay は便を作らない）。書き手は
+    /// `seat ruling add` だけ（`fleet record` は断る）。
+    RulingReceived,
 }
 
 /// [`EventKind`] の全 variant。
@@ -93,6 +97,7 @@ pub const KINDS: &[EventKind] = &[
     EventKind::DispatchMark,
     EventKind::InstallRecorded,
     EventKind::RunCost,
+    EventKind::RulingReceived,
 ];
 
 impl EventKind {
@@ -117,6 +122,7 @@ impl EventKind {
             Self::DispatchMark => "DispatchMark",
             Self::InstallRecorded => "InstallRecorded",
             Self::RunCost => "RunCost",
+            Self::RulingReceived => "RulingReceived",
         }
     }
 
@@ -125,10 +131,10 @@ impl EventKind {
         KINDS.iter().copied().find(|kind| kind.as_str() == text)
     }
 
-    /// 既定の actor。人由来は承認の受理だけである（FR22 の計測面）。
+    /// 既定の actor。人由来は承認の受理と run 無しの裁定の 2 つである（FR22 の計測面・設計 fleet-event-log.md §9）。
     pub fn default_actor(self) -> &'static str {
         match self {
-            Self::ApprovalReceived => ACTOR_HUMAN,
+            Self::ApprovalReceived | Self::RulingReceived => ACTOR_HUMAN,
             Self::RunCreated
             | Self::RunStage
             | Self::RunDone
@@ -174,6 +180,7 @@ impl EventKind {
             Self::DispatchMark => Shape::Mark,
             Self::InstallRecorded => Shape::Install,
             Self::RunCost => Shape::Cost,
+            Self::RulingReceived => Shape::Ruling,
         }
     }
 
@@ -206,6 +213,9 @@ pub enum Shape {
     Install,
     /// `run` + `bead` + 消費の本体 [`Cost`]（便に紐づくが段を持たない＝replay は便を作らない・設計 gate-cost.md §26 形 (2)）。
     Cost,
+    /// run 無しの裁定（`detail` = 逐語が必須・`bead` と `rule` は任意・`run` / `stage` / `seat` / `pid` を持たない・設計
+    /// fleet-event-log.md §9）。
+    Ruling,
 }
 
 /// [`Shape`] の全 variant（宣言順・`enum-slices` が集合完全性を測る）。
@@ -217,6 +227,7 @@ pub const SHAPES: &[Shape] = &[
     Shape::Mark,
     Shape::Install,
     Shape::Cost,
+    Shape::Ruling,
 ];
 
 /// 消費の 1 件の出所（**閉じた 3 値**・設計 gate-cost.md §26 形 (2)）。

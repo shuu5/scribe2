@@ -486,6 +486,7 @@ pub(super) fn register_seat_account(state: &Path, anchor: &Path, account: &str) 
         }),
         account: None,
         cost: None,
+        rule: None,
     };
     let policy = vessel::fleet::store::LockPolicy::embedded().expect("埋め込みの lock 行を読める");
     vessel::fleet::store::append(state, &event, policy).expect("登録 row を積める");
@@ -872,6 +873,7 @@ fn put_round(state: &Path, ts: &str, label: &str) {
             registration: None,
             account: None,
             cost: None,
+            rule: None,
         };
         vessel::fleet::store::append(state, &event, policy).expect("実測の行を積める");
     }
