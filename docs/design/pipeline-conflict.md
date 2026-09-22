@@ -87,6 +87,19 @@ land の追随（pipeline.md §5.4・`follow_main`）で `git rebase <main>` が
 - 排他で断られた契約の待ち行列（tick か管理席の運用・別途）。
 - 放置された非終端 run の自動掃除（`stop --run` は管理席の操作・自動化は別途）。
 
+## 11. 便の commit を数えるとき main に在る commit を除く（契約表の行 b・`s2-07l.546`）
+
+- 出所（隣の repo の run・2026-09-22・orchestrator が event log と reflog で再現・verified）: 再開の turn が追随の節を受け、runner が WIP を commit → rebase → 1 つ戻す、を行った結果 worktree の HEAD が新しい main に一致した。質問で止まった判定は Failed の detail runner-rc:76,commits:1 に倒れ、数えられた 1 本は**main の commit** だった（同じ木で main を除いて数えると 0）。便は捨てられ、turn 1 周と口座の枠を焼いた。
+- 何が起きているか（現物・main 4f70b12・verified）: 数え手は `spawn.rs` の `commit_count` 1 本で、git の rev-list を `<from>..HEAD` の範囲で数えるだけ。呼び手は 2 つ——`settle` は base 基準（完了の判定）、`settle_question` は turn 開始時の tip 基準（doc コメントが「tip 基準・ADR-0019 §2.6」と自認）。**どちらの基準も、範囲に入った main の commit を外す語を持たない**。tip 基準は「この turn で増えたか」を正しく測るが、turn の中の rebase が main の commit を HEAD に載せた周は、その commit が範囲に入る。
+- 形:
+  1. 数え手に**除外の相手を 1 つ足す**: rev-list の範囲を `<from>..HEAD` から `<from>..HEAD ^<main>` にする。数え手は 1 本のまま（2 本目の読み手を作らない）。
+  2. **左の境（from）は呼び手ごとに今のまま**: 完了の判定は base、質問の判定は turn 開始時の tip。§3 手順 6 の tip 基準は 1 字も変えない——tip を base に戻すと、base から commit を持つ便が追随を解けずに質問へ倒れた周が必ず実装の失敗に化ける（§7 の歯がその極性を持つ）。
+  3. main は追随の相手を読むのと**同じ 1 本**（repo の main の参照を rev-parse で読む・`follow.rs` の節が使う定数）で、**turn の終わりに読む**。turn の途中で main が進み runner がその新しい main へ rebase した周も、取り込んだ commit が除外に入る。
+  4. **main を読めない周は従来の基準へ落とす**（除外なしで数える・読めなさで判定を変えない）。
+- 触らない: 質問 record の読み方と rc 76 の意味・`Failed` の detail の字面（runner-rc:<rc>,commits:<n>）・段の遷移・追随の節の本文・起こし直しの回数の判定・`base_of_run` の読み。
+- 却下: 完了の判定も tip 基準へ寄せる（起こし直しの turn で 0 commit の便が前の turn の実装を持っていても失敗に化ける）／質問の判定を base 基準へ戻す（§3 手順 6 が塞いだ穴が開く）／rebase の直後に tip を撃ち直して記録する（turn の途中の状態を置き場に増やす・C3 の向き）／main の commit を patch-id で弁別する（同じ答えを高い道具で出す）。
+- 歯（接頭辞 `pipe_follow_main_`・`crates/scribe2/tests/e2e/pipe/land.rs` の既存の `pipe_follow_` の歯の隣。`crates/` 全体で 0 件＝衝突なし）: (a) 追随の節を受けた偽 runner が rebase で main の commit を HEAD に載せ、自分の commit は作らずに質問 record で止まる → 段が `Questioned`（**base で RED**: いまは Failed の runner-rc:76,commits:1）。(b) 同じ木で偽 runner が自分の commit を 1 本作ってから質問 record を出す → 従来どおり Failed の runner-rc:76,commits:1（負例・除外が質問を無条件に通さない）。(c) 追随で main を取り込んだだけで rc 0 で終わった turn は Failed の runner-rc:0,commits:0（完了の判定も同じ除外を受ける）。(d) 既存の `pipe_follow_question_after_abort_stops_at_questioned` と `pipe_follow_commit_before_question_is_a_failure` が本文不変で緑。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -99,4 +112,13 @@ write-set = ["crates/scribe2/src/pipe/cli/step.rs", "crates/scribe2/tests/e2e/pi
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_retire_stopped_"]
 size = "S"
 done = "Stopped の便が retire で畳めて段は Stopped のまま残り、未 commit の仕事を持つ worktree は既存の clean 検査が断る"
+[[contract]]
+id = "b"
+title = "便の commit の数え手が main に在る commit を除く — rev-list の範囲に除外の相手を 1 つ足し、左の境（完了は base・質問は turn 開始時の tip）と断りの字面は不変・main を読めない周は除外なしの従来の数え方へ落とす"
+req = ["FR31", "FR34"]
+section = "11"
+write-set = ["crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/tests/e2e/pipe/land.rs"]
+verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_follow_main_"]
+size = "S"
+done = "(1) 数え手が 1 本のまま除外の相手を受け、完了の判定は base から・質問の判定は turn 開始時の tip からを保ったまま main に在る commit を数えない (2) 追随の rebase で main の commit を HEAD に載せ自分の commit を作らずに質問 record で止まった turn が Questioned に着く (3) 自分の commit を 1 本作ってから質問 record を出した turn は従来どおり Failed で detail の字面が runner-rc:76,commits:1 のまま (4) main を読めない周は除外なしの従来の数え方に落ちる (5) 質問 record の読みと rc 76 の意味と段の遷移と追随の節が 1 字も変わらず、既存の pipe_follow_ と pipe_question_ の歯が緑"
 <!-- contracts:end -->

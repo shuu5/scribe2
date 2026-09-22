@@ -595,6 +595,58 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
 - **歯**（既存の e2e の歯 1 本の値の変更・新しい歯は無い）: `rules_embedded_manifest_declares_the_gate_cost_rows` の表の `gate.slot_wait_s` の行が (5400, 新しい裁定 id, 新しい裁定日) になり、base の manifest（900）に対して RED・HEAD で GREEN。値の両側の歯は tests 全体で走査して他に無い（`900` の字面は manifest の `pipe.ci_wait_s` にも在るが別の行・不変）。
 - **却下**: 縮退を無くす（枠が空かない周に進めなくなる・fail-open か永久待ちの二択）／値を gate 1 本の実測から計算する（裁定値は宣言・C10・A2 の閾値は user が決める）／`pipe.land_wait_s` と 1 本の行に統合する（意味が違う 2 本・rules 行の削除は別の裁定）。
 
+## 36. 道具箱の偽 binary を、走っている process の本体を書き換えずに入れ替える — 同じ dir に書いて rename で差し替える（契約表の行 ac・`s2-07l.530`）
+
+- **出所**（`s2-07l.530`・orchestrator の実測 2026-09-21）: 同じ歯（`pipe_terminal_dispatch_manual_turn_starts_the_runs_it_can`）で main の CI が 2 回赤い。どちらも道具箱の偽 systemd-run を書く行の expect で、io の error は ExecutableFileBusy。便の差分と無関係で rerun は緑＝着地の終端を止める fixture の race である。
+- **何が起きているか**（本行の base・main 4f70b12・verified）:
+  - 道具箱を組む 1 関数（`crates/scribe2/tests/e2e/main.rs` の `toolbox_path`）は、呼ばれるたびに偽 systemd-run（`write_systemd_run_stub`）と偽 systemctl（`write_systemctl_stub`）を**同じ置き場の同じ名へ書き直す**。書き方は std の fs の write で、既に在る file を**その場で切り詰める**＝走っている process が握っている本体（inode）に触る。
+  - その口は 1 便 1 回ではない。`crates/scribe2/tests/e2e/pipe.rs` の `pipe_cmd` が --state-dir を持つ起動の**たびに**道具箱を組み直す＝同じ歯の中で binary を 2 度撃つ周は、1 度目が起こした子 process が偽 systemd-run を exec している最中に 2 度目が同じ本体へ書く。落ちた歯はまさにその形（`turn` を 4 度撃ち、1 度目が 2 便を背景で起こす）である。
+  - 偽 systemd-run の生成は **1 関数に寄っている**（§30 約束 3）ので、明示の 4 つの口（gate / stop / spawn / headless・呼出 4 か所）も同じ書き方を共有する＝直すのはその 1 関数の中だけで足りる。
+  - 実行権つきの偽 binary を書く口は歯の全体で **20 か所**在るが、**同じ path へ 2 度目を書きうるのは道具箱の 2 本だけ**である（残る 18 か所は呼出 1〜2 か所の helper が fixture の組み立てで 1 度だけ書く）。本行が替えるのは 2 本の書き方で、20 か所の字面ではない。
+- **形**（番号は done と歯に 1:1 で対応する）:
+  1. **入れ替えは rename で**: 実行権つきの偽 binary を置く手が、目的の名と**同じ dir の中**に一時の名で本文を書き、実行権を付け、std の fs の rename で目的の名へ入れ替える。走っている process が握っている本体には 1 byte も書かない。同じ dir に書くのは、別の file system を跨ぐ rename が落ちるからである。実行権は入れ替えの**前**に付ける（付ける前に見える窓を作らない）。
+  2. **道具箱の 2 本が両方そこを通る**: 偽 systemd-run と偽 systemctl の生成がどちらもその手を通る。明示の 4 つの口は呼び先が同じ 1 関数なので、**呼出の字面は 1 か所も動かない**。
+  3. **残骸を残さない**: 入れ替えの後、道具箱の bin dir に在る entry は置いた偽 binary の名だけである（一時の名は rename で消える）。一時の名は目的の名から導いて同じ dir に作る。
+- **触らない**: 偽 systemd-run の script の本文（--unit= の読み・同じ名の 2 本目を断る性質・argv を 1 起動 1 file で写す形・-- の後ろの exec）・偽 systemctl の答え 2 つ・記録 dir の名と読み手・PATH の組み方と 3 つの口（§30 約束 1 / 2）・明示の 4 つの口とその記録 dir・包めない host を作る口・既存の歯の総数と既存の assert。器の src は 1 行も触らない。
+- **却下**:
+  - **道具箱を歯ごと（起動ごと）の別 dir に切る**（memo の案 1）: 記録 dir も口ごとに割れ、`scope_record` と `toolbox_record` の「ちょうど 1 件」の母集団が起動ごとに変わる＝既存の assert の意味が動く。落ちているのは書き方で置き場ではない。
+  - **道具箱を 1 便 1 回に絞る**: 置き場の中身が消える周に 2 度目の起動が道具箱**無し**で走り、実 systemd-run へ静かに戻る。§30 の「後から書かれる呼出も自動で通る」を壊す。
+  - **ExecutableFileBusy を握り潰して撃ち直す**: 落ちる窓は残したまま歯を鈍くするだけで、何回で足りるかを契約が答えられない。原因は書き方 1 つで消える。
+  - **落ちる周そのものを歯で再現する**（exec 中に書き直して ExecutableFileBusy を測る）: 窓は execve の中の一瞬で base でも**通ってしまう周がある**＝base で RED と書けない空虚な歯になる。本行は「走っている本体を触らない」という**観測できる性質**（歯 (a)(b)）で測る。
+  - **書く前に目的の名を消す**: 入れ替えの間、道具箱に偽 binary が**無い**窓ができ、その窓の起動が実 systemd-run を解く。rename は窓を作らない。
+- **歯**（接頭辞 `e2e_shim_atomic_`・置き場は行 ac の write-set の pipe の歯の file）:
+  (a) 形 1 の核: 同じ bin dir へ、記録 dir だけ替えて偽 systemd-run を 2 度置く。1 度目の本体に hard link を張っておくと、2 度目の後もその link の本文は**1 度目の記録 dir を名指したまま**で、2 度目の記録 dir の字面を**持たない**（在ると不在の両方を測る）。その場で切り詰める書き方では link の本文が 2 度目の字面に変わる。
+  (b) 形 1 の別面: 同じ置き場に道具箱を 2 度組むと、偽 systemd-run と偽 systemctl の inode 番号が**2 本とも**変わる（母集団 = bin dir の entry 名の全件を同じ assert に出す）。
+  (c) 形 3: 2 度組んだ後の bin dir の entry は偽 systemd-run と偽 systemctl の**ちょうど 2 件**（一時の名の残骸 0・母集団は entry 名の全件）。
+  (d) 形 1 の権限の窓: 2 度目の後の偽 systemd-run を PATH を通さず直に 1 回撃つと rc 0 で終わり、記録が 1 件増える＝実行権は入れ替えの前に付いている。
+  既存の歯が測る側（本行は足さない）: 道具箱を通した便が共通 verify の行を包むこと（行の 2 本目の verify が完全名で撃つ）。
+- **flip-check**（歯だけの便）: 器の src を 1 行も触らないので、retroactive の札（[contract-source.md](./contract-source.md) §31・`s2-07l.530` を名指す）を、本便で test 区間が動いた file の**行頭**に置く（効く 4 条件 = test 区間内 / 行頭 / bead id 必須 / base から持ち越した札は効かない）。札は HEAD から読まれるので **commit してから** flip-check を撃つ。接頭辞 `e2e_shim_atomic_` は base に 0 本なので、行の 1 本目の verify は base で「該当 0 本」＝RED、HEAD で緑になる。
+
+## 37. 歯の道具箱に台帳 client の見張りを既定で置く — 歯から実台帳へ届く経路を塞ぎ、撃ちにいった周を記録の件数で数える（契約表の行 ad・`s2-07l.484`）
+
+- **出所**（`s2-07l.484`・memo 2026-09-19 + 本 § の再実測 2026-09-22）: 歯の helper が --rules を渡す口は少なく、器が台帳 client を既定名で解く経路が残る、という memo。
+- **何が起きているか**（本行の base・main 4f70b12・verified）:
+  - 器が台帳 client を子 process で起こす口は src の **5 か所**である（読み 4・書き 1）。列の 1 周（`dispatch.rs` の `turn`）・着地の終端の close（`land/finish.rs`）・doctor の台帳 lint と台帳の形（`ledger/` の 2 本）・hook の 1 本。client の名は --bd か既定値で、既定値は **PATH から解く 1 語**である。
+  - **既定値に倒れた周の行き先は host で割れる**: 開発 host は実 client を PATH に持ち CI は持たない＝同じ木で子 process が起きるか否かが host に依る。§30 が偽 systemd-run で畳んだのと同じ割れが台帳の側に残っている。
+  - **いま実台帳へ届いている歯は 0 本である**（本 § の再実測）。終端の close は「押す先を宣言した repo」の後ろに在り（`finish.rs` の早期 return）、宣言する fixture を使う歯 9 本は**全部 --bd を渡す**。列の 1 周で --bd を渡さない 3 か所は --repo を渡さず reason=args で返る。ゆえに本行は**時間の短縮を約束しない**——約束するのは届く経路を塞ぐことと、届きにいった回数を**測れるようにする**ことである（memo の費用の主張はその記録で初めて真偽が決まる）。
+  - 台帳 client を明示する口（--bd に偽 client の絶対 path を渡す口）は **43 か所**で、PATH を通らないので本行と交わらない。
+- **形**（番号は done と歯に 1:1 で対応する）:
+  1. **道具箱に見張りを 1 本置く**: 道具箱を組む 1 関数（§30 約束 1）が、偽 systemd-run と偽 systemctl に並べて**台帳 client の既定名の偽物**を置く。呼ばれた argv を 1 起動 1 file で記録 dir へ写してから、**台帳を解けない host と同じ形で断る**（rc は非 0・標準出力は空）。
+  2. **答えが host に依らなくなる**: 道具箱を通す起動は、実 client を持つ host でも持たない host でも同じ 1 つの答えになる。--bd を渡す既存の 43 か所は絶対 path なので 1 つも通らず、既存の assert は動かない。
+  3. **撃ちにいった周が数で残る**: 見張りの記録 dir の件数が「器が台帳 client を起こした回数」である。0 件は「起こしていない」、1 件以上はその argv が読める（母集団は件数と対で出す）。
+- **触らない**: 器の src（台帳 client の解き方・--bd の受け方・rules 行 `seat.ledger_timeout_s` の読み・列の 1 周の分岐の順と unmeasured の理由・終端の 3 段と close の引数と cwd の固定〔[pipeline.md](./pipeline.md) §48〕）・道具箱の既存の 2 本とその記録 dir・PATH の組み方と 3 つの口・明示の 4 つの口・--bd を渡す 43 か所・既存の歯の総数と既存の assert。
+- **却下**:
+  - **memo の案（run / resume の helper に toy の --rules を渡す）**: 実測で壊れる。列の 1 周は `seat.ledger_timeout_s` の行が**無い**と台帳に届く前に reason=no-rule へ倒れる（`turn` の最初の分岐）ので、列の歯の写しはその行を**わざわざ足している**（`dispatch.rs` の `dispatch_rules`）。行を落とした写しを helper の全部に渡すと、列の歯が「台帳を読んだ」を 1 本も測らなくなる。鍵の行を抜く形は歯を空虚にする。
+  - **--bd を全部の起動に渡す**: 起動の呼出は `run_pipe` だけで 210 か所在り、字面が全部動く割に**後から書かれる呼出**を守らない（§30 の同じ却下）。既定に置けば新しい呼出も自動で通る。
+  - **器の側に「toy なら台帳を撃たない」分岐を作る**: 契約と宣言の外に既定を作る（C5 / C1）。器が見るのは --bd と rules 行だけ、という面を崩す。
+  - **実 client を PATH から外す**: 台帳を読む経路が歯から丸ごと消え、読みの引数も断りの型も測られなくなる（§30 の「全部を包めない host にする」と同型）。
+  - **見張りを rc 0 で「空の台帳」として答えさせる**: 列の 1 周が「0 件の台帳を読めた」に倒れ、unmeasured reason=ledger の枝が測られなくなる。断る側なら実 client を持たない host のいまの答えと同じである。
+- **歯**（接頭辞 `e2e_ledger_tripwire_`・置き場は行 ad の write-set の pipe の歯の file と列の歯の file）:
+  (a) **非空虚の枝**（先に書く）: 列の 1 周を --repo と --runner と台帳の待ち上限の行を持つ写しつきで、--bd を**渡さず**撃つと、見張りの記録が**ちょうど 1 件**在り、その本文が読みの引数（--readonly と一覧の語）を持つ。これが無いと (b) は「経路が無いから 0 件」で空虚に通る。
+  (b) **既定の枝**: helper 経由で 1 便を intake → spawn → gate → land まで通した後、見張りの記録が **0 件**である。同じ便で道具箱の systemd-run の記録が**1 件以上**在ることを対で測る（便が道具箱を通っていない周に 0 件が空虚に通らない）。
+  (c) **明示の口と食い合わない**: --bd に fixture の偽 client の絶対 path を渡した周は、見張りの記録が 0 件のまま、偽 client 側の log に呼出が残る。
+- **flip-check**（歯だけの便）: 器の src を 1 行も触らないので、retroactive の札（[contract-source.md](./contract-source.md) §31・`s2-07l.484` を名指す）を、本便で test 区間が動いた file の**行頭**に置く（効く 4 条件は §36 と同じ）。接頭辞 `e2e_ledger_tripwire_` は base に 0 本なので、行の 1 本目の verify は base で「該当 0 本」＝RED である。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -880,4 +932,23 @@ verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail rules_embedde
 size = "S"
 done = "rules 行 gate.slot_wait_s の value が 5400・ruling が user 2026-09-21T09:41Z・ruled_at が 2026-09-21 になり、歯の pin の表の該当行が同じ 3 値で緑・他の 5 行と外形 snapshot は不変"
 
+[[contract]]
+id = "ac"
+title = "歯の道具箱の偽 binary を、同じ dir に一時の名で書いて実行権を付けてから rename で入れ替える — 走っている process が握っている本体を切り詰めず、明示の 4 つの口は呼出の字面を 1 か所も変えずに直る（器の src は 1 行も触らない歯だけの便・retroactive）"
+req = ["NFR6", "FR46"]
+section = "36"
+write-set = ["crates/scribe2/tests/e2e/main.rs", "crates/scribe2/tests/e2e/pipe.rs", "docs/design/gate-cost.md"]
+verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail e2e_shim_atomic_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail e2e_toolbox_run_pipe_confines_the_common_verify_line"]
+size = "S"
+done = "(1) 道具箱の偽 systemd-run と偽 systemctl の入れ替えが、目的の名と同じ dir の一時の名へ本文を書いて実行権を付けてから rename する 1 つの手を通り、同じ bin dir へ記録 dir だけ替えて 2 度置いた周に 1 度目の本体へ張った hard link の本文が 1 度目の記録 dir を名指したまま 2 度目の字面を持たず、2 度目の後の偽 systemd-run を直に撃つと rc 0 で記録が 1 件増える (2) 2 度組んだ後の偽 systemd-run と偽 systemctl の inode 番号が 2 本とも変わり、明示の 4 つの口の呼出の字面は 1 か所も動かない (3) 2 度組んだ後の bin dir の entry がその 2 件ちょうど（一時の名の残骸 0）で、偽の script の本文と同じ名の 2 本目を断る性質と記録 dir の名と読み手と PATH の組み方と 3 つの口は 1 字も変わらず、既存の歯の総数と既存の assert も不変"
+
+[[contract]]
+id = "ad"
+title = "歯の道具箱に台帳 client の既定名の見張りを 1 本置き、argv を 1 起動 1 file で記録してから台帳を解けない host と同じ形で断る — PATH に倒れた起動が実 client へ届かず、届きにいった回数が記録の件数で読める（器の src は 1 行も触らない歯だけの便・retroactive）"
+req = ["FR50", "NFR6"]
+section = "37"
+write-set = ["crates/scribe2/tests/e2e/main.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/pipe/dispatch.rs", "docs/design/gate-cost.md"]
+verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail e2e_ledger_tripwire_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_terminal_dispatch_manual_turn_starts_the_runs_it_can"]
+size = "S"
+done = "(1) 歯の道具箱が偽 systemd-run と偽 systemctl に並べて台帳 client の既定名の偽物を置き、呼ばれた argv を 1 起動 1 file で記録 dir へ写してから標準出力を空にして非 0 の rc で断る (2) --repo と --runner と台帳の待ち上限の行を持つ写しつきで --bd を渡さずに撃った列の 1 周が見張りの記録をちょうど 1 件残してその本文が読みの引数を持ち、--bd に偽 client の絶対 path を渡した周は見張りの記録が 0 件のまま偽 client 側に呼出が残り、既存の assert は動かない (3) helper 経由で 1 便を intake から land まで通した周は見張りの記録が 0 件で同じ便の道具箱の systemd-run の記録が 1 件以上在り、器の src と PATH の組み方と 3 つの口と明示の 4 つの口と --bd を渡す既存の起動と既存の歯の総数は 1 字も変わらない"
 <!-- contracts:end -->

@@ -66,6 +66,24 @@ memo か契約かを「label が在るか」と「受入条件に設計の 1 行
 - 着地の終端が memo を close する段（節 3 の 10）は、行 e（台帳 lint）の land 後に contract-source.md の行として起こす（`discovered-from` を辿る読み手は行 e の 1 件の型に dependencies が要る）。
 - 便の終端から memo の plan を出す口（節 3 の 8 (a)）と、終端を席へ知らせる経路（`s2-07l.507`）は同じ event を読む。通知の経路の設計は .507 の側で、本 doc の口はその経路が呼ぶ read-only の 1 口。
 
+## 9. plan JSON を bd の graph schema へ合わせ、pointer 行の追い書きと除外の口を持つ（契約表の行 e・`s2-07l.536`）
+
+- 出所: memo `s2-07l.536`（orchestrator の実測 2026-09-21・追記 2026-09-22）。棚卸し 2026-09-22 に使い捨ての台帳で再現した（repo の台帳は触っていない）。
+- 何が起きているか（bd 1.1.0・main 4f70b12・verified）: `crates/xtask/src/ledger_plan.rs` の `render` が出す node の key は key / title / type / acceptance / parent / labels、edge は from / to / type。bd は acceptance と parent と from と to を**知らない field として黙って落とし**（warning 1 行ずつ）、「edge 0: must specify from_key or from_id」で 1 件も作らない（rc ≠ 0・台帳は無傷）。実測で通る field は node が key / title / type / description / labels / priority / parent_key / parent_id / metadata / assignee の 10、edge が from_key / from_id / to_key / to_id / type の 5。**acceptance は graph schema に無い**＝plan だけでは §3 の 3 の「契約 = acceptance の pointer 行」を満たす bead を作れず、作れば 4 象限の違反（両方無い）に落ちる。成功した graph の create は「plan の key -> bead id」の対応を標準出力に出す（実測）。edge の type は知らない値でも通る（もう 1 つの fail-open 面）。
+- 何が起きているか 2（追記の観測・verified）: `landed` は宣言した印つきの file が tracked に在るかだけを見るので、**指す bead が closed でも file が tracked に無い行**を未着地に数える。`consumer-sync.md` の行 f が宣言する新規 file は repo の履歴に 1 度も現れず（追加された path の全数 352 に無い）、指す bead `s2-07l.325` は closed なので、行 f は今も plan に載る（`s2-07l.534` の重複起票の型）。doctor の `drift`（`crates/scribe2/src/ledger/form.rs`）も「未着地 ∧ **open** の bead が指さない」で数えるので同じ偽陽性を持つ。
+- 形（done と 1:1）:
+  1. node の key を key / title / type / description / labels / parent_id に、edge の key を from_key と to_key（plan の中の行）/ to_id（台帳の既存 bead）と type に直す。出す key の集合は閉じた const 2 本で持つ。
+  2. graph schema が運べない pointer 行は、plan JSON の**次の行から**「plan の key」と pointer 行を TAB で並べた対応表として同じ標準出力に出す（stdout の口は `emit` の 1 関数のまま・呼び出しも 1 回）。席は graph の create が出す「key -> id」と突き合わせ、acceptance の update を撃つ（apply が席の手番なのは §3 の 5 のまま）。
+  3. 行を plan から外す口 --skip（契約 id の list・既定は空・知らない id は rc 1 で断る）を足し、usage の 1 行に写す。席は doctor の 1 行から closed の bead が指す行の id を渡す。**xtask は台帳を読まない**不変（§3 の 5・行 b の歯 (e)）は保つ。
+  4. bd の版を持つ行も const も増やさない: 知らない field は warning と rc ≠ 0 で落ちるので、schema が動けば apply が黙らずに失敗する（C5 の裁定を要らなくする）。§3 の 5 の「acceptance = pointer 行」の字面を、対応表で追い書きする形に写す。
+- 触らない: `landed` の印つきの項目の読み（`symbols` の path 形を含む）／`build` の行の選び方と edge の向き／`tracked_files` の git ls-files 1 本（子 process を増やさない）／`emit`／doctor の `drift` の式（同じ偽陽性を持つが台帳を読む側の話＝後続）／bd の呼び出し（器は 1 度も起こさない）。
+- 却下: plan を捨てて 1 node 1 回の create の引数列に描く（memo の候補 2。plan の中の行どうしの blocks が席の id 置換になり、§1 が数えた「edge の張り忘れ」を手番へ戻す）／pointer 行を description に入れて §3 の 3 の識別を description 読みに変える（着地済みの状態機械と行 a の歯を動かす）／metadata に pointer 行を隠す（acceptance を読む判定に届かない）／xtask から台帳を読んで closed を弁別する（行 b の歯 (e) が禁じる不変）。
+- 後続: doctor の 1 行に「closed の bead が指す未着地の行」を足して `drift` から外し、形の 3 の値をその行から機械で取れるようにする（scribe2 側＝別の行）。
+- 歯（行 e が持つ・置き場は `ledger_plan.rs` の in-file の歯・接頭辞 `ledger_plan_` は既存なので**名の全体**で書く）:
+  - `ledger_plan_renders_the_bd_graph_schema_field_names`: 出力 1 行目の node が parent_id を持ち parent と acceptance を持たず、edge が from_key と to_key と to_id を持ち from と to を持たない（base は逆＝RED）。
+  - `ledger_plan_emits_the_pointer_line_table_after_the_plan`: 出力の 2 行目以降が node と同じ本数で、各行が plan の key と「design = <doc>#<行 id>」を TAB で持つ（base は 1 行だけ＝RED）。
+  - `ledger_plan_skips_the_rows_named_by_the_skip_argument`: 名指した行が plan から消え、残りの行と edge が不変で、plan に無い id を渡した周は rc 1（base は知らない引数で rc 1＝RED）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -108,4 +126,13 @@ write-set = ["+crates/scribe2/src/hook/ledger_guard.rs", "crates/scribe2/src/hoo
 verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail hook_memo_guard_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail polarity_external_form", "cargo nextest run -p scribe2 --test e2e --no-tests=fail polarity_summary_counts_match_lines", "cargo nextest run -p scribe2 --test e2e --no-tests=fail polarity_all_is_in_declaration_order"]
 size = "M"
 done = "(1) [memo] の title か intake:memo の label を持つ bd / bdw の create は body-file の本文に memo の 4 節の見出しが全部在れば通り、1 つでも欠ければ閉じた理由 1 つで deny される (2) acceptance に設計 pointer 行を持つ create が intake:memo を持てば deny される (3) body-file が無い・開けない周は deny に倒れる (4) memo でも契約でもない create（epic・裁定）と create 以外の bd の command は 1 字も変わらず通る (5) 極性一覧の外形 snapshot に guard が 1 つ増え、guard の総数を pin する歯が新しい母集団で緑"
+[[contract]]
+id = "e"
+title = "ledger-plan の plan JSON の node と edge の key を bd 1.1.0 の graph schema に合わせ、schema が運べない pointer 行を plan の後ろの対応表に出し、行を外す --skip の口を足す"
+req = ["FR47"]
+section = "9"
+write-set = ["crates/xtask/src/ledger_plan.rs", "crates/xtask/src/main.rs", "docs/design/ledger-form.md"]
+verify = ["cargo nextest run -p xtask --no-tests=fail ledger_plan_renders_the_bd_graph_schema_field_names", "cargo nextest run -p xtask --no-tests=fail ledger_plan_emits_the_pointer_line_table_after_the_plan", "cargo nextest run -p xtask --no-tests=fail ledger_plan_skips_the_rows_named_by_the_skip_argument"]
+size = "M"
+done = "(1) plan の node が key・title・type・description・labels・parent_id だけを持ち、edge が from_key と to_key か to_id と type だけを持ち、acceptance と parent と from と to の字面が出力に 1 つも無い (2) 出力の 2 行目以降が node と同じ本数の対応表で、各行が plan の key と design = <doc>#<行 id> を TAB で持ち、stdout へ書く呼び出しは 1 回のまま (3) --skip が名指した契約 id の行だけが plan から消え、残りの行と edge が不変で、plan に無い id を渡すと rc 1 で断り、usage の 1 行が --skip を写す (4) rules/manifest.toml の行数が base と同じで bd の版を持つ行も const も増えず、台帳を 1 度も読まない（PATH の先頭の偽の bd が 1 回も呼ばれない）歯が緑のまま、§3 の 5 の字面が対応表の形を写す"
 <!-- contracts:end -->
