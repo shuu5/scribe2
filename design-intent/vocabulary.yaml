@@ -1030,3 +1030,13 @@ terms:
     aliases: [shadow measurement]
     definition: 判定 API や規則を pipeline の判断に挿さずに、 同じ入力で答えを出して記録だけ残し、 後から機械で取った正解と突き合わせて一致率と較正を測ること (ADR-0053・proposed)。 Jev の再検討はこの測り方で N ≥ 30 を集めてから行う。
     relationships: [判断の置き場, 検出線, 検出の母集団]
+  - canonical: 測らない名乗り
+    domain: consumer
+    aliases: [declared unmeasured]
+    definition: 対象 repo の宣言 file が任意の項目で「入口の flip は測らない」と名乗ること (ADR-0054)。 受付と契約表の検査は、 この名乗りが在る宣言だけを入口の行の欠けで断らず、 判定行に測らなかったことを残す
+    relationships: [vessel 宣言, flip check, 宣言の任意 key]
+  - canonical: 宣言の任意 key
+    domain: consumer
+    aliases: [optional declaration key]
+    definition: 対象 repo の宣言 file の key のうち、 無ければ現行の値で動き、 在れば器がその値を読む key (ADR-0047 の path の種別 3 本・ADR-0054 の entrance-flip)。 未知の key は読みの誤りとして断る
+    relationships: [vessel 宣言, 測らない名乗り]
