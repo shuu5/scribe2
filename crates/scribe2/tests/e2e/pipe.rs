@@ -1280,17 +1280,22 @@ fn pipe_hermetic_land_once_with_git_shim_refuses_show_without_repo_or_state_dir(
     clean(&[&state]);
 }
 
-/// (3) 置き場の pin: tracked の 9 file（この file と `pipe/` 配下）で binary を起こす字面 2 形の出現の合計は
-/// **1**（[`bin_cmd`] の中の 1 箇所）。母集団は読んだ file 数 9 と base の 41 site（設計 §28 の census）で、
-/// 同時に出す。字面は `concat!` で割って持つ（この歯の本文が自分の母集団に数えられないため）。
+/// (3) 置き場の pin: tracked の file（この file と `pipe/` 配下）で binary を起こす字面 2 形の出現の合計は
+/// **1**（[`bin_cmd`] の中の 1 箇所）。file 数は定数でなく、この file の列 0 の `mod` 宣言の数 + 1 と等しい
+/// （宣言の無い file も file の無い宣言も赤・分割のたびに定数を触らない・設計 §28 形 2 の改訂・行 aq）。
+/// 母集団は読んだ file 数・宣言の数・base の 41 site（設計 §28 の census）で、同時に出す。字面は `concat!` で
+/// 割って持つ（この歯の本文が自分の母集団に数えられないため）。
 #[test]
 fn pipe_hermetic_sites_stay_one() {
+// flip-check: retroactive s2-07l.547
     const BASE_SITES: usize = 41;
     let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let tracked: Vec<String> = git(&crate_dir, &["ls-files", "--", "tests/e2e/pipe.rs", "tests/e2e/pipe"])
         .lines()
         .map(str::to_owned)
         .collect();
+    let parent = fs::read_to_string(crate_dir.join("tests/e2e/pipe.rs")).expect("親の file を読める");
+    let declared = parent.lines().filter(|line| line.starts_with("mod ") && line.ends_with(';')).count();
     let needles = [concat!("Command::new(", "bin())"), concat!("Command::new(", "super::bin())")];
     let sites: usize = tracked
         .iter()
@@ -1299,8 +1304,9 @@ fn pipe_hermetic_sites_stay_one() {
         .sum();
     assert_eq!(
         (tracked.len(), sites),
-        (9, 1),
-        "母集団: file {} 本（base 9）・site {sites}（base {BASE_SITES}）・残るのは bin_cmd の 1 箇所: {tracked:?}",
+        (declared + 1, 1),
+        "母集団: file {} 本・宣言 {declared} 本（base 9 = 8 + 1）・site {sites}（base {BASE_SITES}）・残るのは bin_cmd の \
+         1 箇所: {tracked:?}",
         tracked.len()
     );
 }
