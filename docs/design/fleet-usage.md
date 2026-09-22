@@ -116,14 +116,14 @@
   4. `--table` が見出し 2 行 + 口座ごとの行を出し、seat 列が登録 row の役割名（登録の無い口座は `-`）を映し、Unmeasured の窓と列幅が値から決まる。
   5. **1 行形の字面と event の形は不変**（`--table` を付けない周の出力と、口座 × 窓ごとの event の並び）。
   6. usage の外形は `--state-dir` が任意になった 1 行だけが変わり、他の行は不変。
-- 歯（`fleet_usage_statedir_` / `fleet_usage_table_` 接頭辞・`crates/scribe2/tests/e2e/fleet.rs` と `fleet/usage.rs` の in-file）: 約束 1〜3 = tmp repo の git 設定から解いた周は flag 無しで計測し store がその dir に出来る（flag が在る周は flag の dir に出来る）／同じ tmp repo で 5 verb を flag 無しで撃つと置き場の断りが 1 つも出ない／git の無い tmp cwd では 5 verb とも同じ 1 行で断り store を作らない（**cwd は tmp**＝repo の cwd で撃つと本物の置き場を解く）。約束 4 = `--show --table` が見出し 2 行 + 口座行を出し seat 列が登録 row の役割を映す（登録の無い口座は `-`）／pure な表の歯（Unmeasured 混在・列幅・口座 0 件）。既存の flag 必須の歯 `fleet_state_dir_flag_is_required`（`--state-dir` 無し = rc 1）は約束 1〜3 の歯に置き換える。
+- 歯（`fleet_usage_statedir_` / `fleet_usage_table_` 接頭辞・`crates/scribe2-boundary/tests/e2e/fleet.rs` と `fleet/usage.rs` の in-file）: 約束 1〜3 = tmp repo の git 設定から解いた周は flag 無しで計測し store がその dir に出来る（flag が在る周は flag の dir に出来る）／同じ tmp repo で 5 verb を flag 無しで撃つと置き場の断りが 1 つも出ない／git の無い tmp cwd では 5 verb とも同じ 1 行で断り store を作らない（**cwd は tmp**＝repo の cwd で撃つと本物の置き場を解く）。約束 4 = `--show --table` が見出し 2 行 + 口座行を出し seat 列が登録 row の役割を映す（登録の無い口座は `-`）／pure な表の歯（Unmeasured 混在・列幅・口座 0 件）。既存の flag 必須の歯 `fleet_state_dir_flag_is_required`（`--state-dir` 無し = rc 1）は約束 1〜3 の歯に置き換える。
 - 検証行（4 本・歯の file はどれも行 a の write-set の中）: 約束 1〜3 = `fleet_usage_statedir_`／約束 4 = `fleet_usage_table_`（どちらも base で 0 本＝RED の理由は機能不在）／約束 5 = 既存の `fleet_usage_measures_two_accounts_into_lines_and_events`（1 行形と event の形を測る歯・緑のまま）／約束 6 = 既存の `fleet_external_form`（外形 snapshot・`--state-dir` の 1 語だけが変わる）。filter は歯の名の全体か十分に長い接頭辞で書く（裸の `fleet_usage_` は `fleet/usage.rs` の unit の歯と `tests/e2e/rules.rs` の歯にも当たり、受付の導出が write-set の外へ広がる・§12 の実測）。
 - 触らない: 1 行形の字面・event の形・`select` の判定・state_dir_of の中身と seat 側の src（読むだけ・上の (a)〜(c)）・`State` に新しい method を足すこと（登録 row は `fleet/usage.rs` の中で読む・既存の `State::registered_accounts` は label の集合で役割を持たないので表の読み手にはしない）・`--curl` / `--claude` の経路・極性一覧（Guard を足さない・§6）。
 - 却下: 1 行形に `source=` を足す（tick と選定の歯が字面を読む・機械面を動かす）／`--table` を既定にする（機械の読み手が表を parse する）／fleet に第 2 の解決関数を書く（seat と食い違う）／表の 1 行目に独自の書式を作る（`StateDir::suffix` と 2 本立てになり path を行末に置く規約が割れる）／表の列幅を定数で持つ（数を code に焼く）。
 
 ## 12. fleet の e2e fixture の reset を壁時計から組む — 固定日付の時限を撤去する（契約表の行 b・`s2-07l.468`）
 
-- 何が起きているか（planner の実測 2026-09-18・main 12e64cc・verified）: `crates/scribe2/tests/e2e/fleet.rs` の fixture `LIVE_BODY`（偽 curl が返す応答の本文）は `seven_day` / `limits[]` の `resets_at` を固定の `2026-09-18T00:00:00` で持つ。選定（`fleet select`・`fleet/select.rs` の `not_stale` = `resets_at >= now`）は壁時計の now と比べるので、その時刻を跨いだ瞬間から窓が「測れていない」に倒れて候補なしになり、`account_cmd_retired_account_leaves_select_and_usage` が赤（workspace 1621 本中この 1 本・nextest 単体でも同じ）。main の CI と gate の nextest・検出線の baseline がすべて赤＝便が 1 本も通らない（憲法 C12.6）。
+- 何が起きているか（planner の実測 2026-09-18・main 12e64cc・verified）: `crates/scribe2-boundary/tests/e2e/fleet.rs` の fixture `LIVE_BODY`（偽 curl が返す応答の本文）は `seven_day` / `limits[]` の `resets_at` を固定の `2026-09-18T00:00:00` で持つ。選定（`fleet select`・`fleet/select.rs` の `not_stale` = `resets_at >= now`）は壁時計の now と比べるので、その時刻を跨いだ瞬間から窓が「測れていない」に倒れて候補なしになり、`account_cmd_retired_account_leaves_select_and_usage` が赤（workspace 1621 本中この 1 本・nextest 単体でも同じ）。main の CI と gate の nextest・検出線の baseline がすべて赤＝便が 1 本も通らない（憲法 C12.6）。
 - 形（行 b・S・test だけの差分）: reset 2 つを **process で 1 回**壁時計から組む（`LazyLock` の static 1 つ・five_hour = 翌日 05:00Z・seven_day = 7 日後 00:00Z・字面は器の pub な `format_utc`（`fleet/cli.rs`）と同じ `YYYY-MM-DDThh:mm:ssZ`）。`LIVE_BODY` はその値から組む `LazyLock` の static に替える（本文の形 = `+00:00` 形・小数付きの形・`Z` 形の混在は不変・値は末尾の `Z` を外して差す）。期待の側（`live_line`・`fleet_usage_` の歯の期待 tuple 3 つ・`shape_mismatch` の case の期待 1 本）も同じ static から組み、固定日付の literal を fixture と期待の両方から消す。呼び手は `&LIVE_BODY`（`fake_curl` の引数）。flip-check は test だけの差分で base が緑（base に新しい fixture を当てれば通る）なので、行頭の札 `// flip-check: retroactive s2-07l.468` を test 区間に 1 行置く（判定行 `retroactive=1`・notes に変異 proof）。
 - 触らない: 選定の規則（`resets_at >= now`・過去の窓を stale と読むのは C10 の意図どおり）・器の src・`fleet_json_tree_reads_the_usage_shape` の fixture（構文の歯・壁時計と比べない）・ts を注入する歯（`ALLOWANCE_TS` / `RESETS_AT` の定数・now を渡す経路は時限ではない）・snapshot。
 - 歯: 検証行 1 = `account_cmd_retired_account_leaves_select_and_usage`（base = 時限で赤・head = 緑＝flip の RED は「環境（壁時計）」で機能不在ではない）／検証行 2 = `fleet_usage_measures_two_accounts_into_lines_and_events`（`want_for` の tuple 3 つと `live_line` の期待を static から組み直した歯が緑のまま）／検証行 3 = `fleet_usage_client_failures_name_their_reason`（`shape_mismatch` の case の期待・同上）。filter は歯の名の全体で書く: 裸の接頭辞 `fleet_usage_` は `src/fleet/usage.rs` の unit の歯 8 本と `tests/e2e/rules.rs` の歯 1 本の名にも含まれ、受付の導出（歯の置き場 = fn 名が filter 語を含む file）が write-set を 3 面に広げて審査が落ちる（run 003510Z の実測）。新しい歯は足さない。
@@ -139,7 +139,7 @@
 - 約束（この行が作るもの・番号は done と 1:1）:
   1. 上の 17 item（721–979 行・正規化 260 行）を、行 c の write-set の `+` の file へ名・本文・順序・doc comment を変えずにそのまま移す（doc comment は item の一部＝1 字も書き換えない）。子の頭は module doc と、親の const / fn を引く `use super::{…}` 1 行と、`crate::fleet` の型と std（`io::Write` / `path::{Path, PathBuf}` / `process::{Command, Stdio}` / `time::{SystemTime, UNIX_EPOCH}`）の `use` だけ。子の module 名と親の `enum Read`（144 行）は別の識別子、子の中の fn `fetch` と module 名は名前空間が別（§45 の `nextest` と同型）。
   2. 親に増えるのは **4 行だけ**——`mod` 宣言 1 行（module doc〔1–13 行〕と最初の `use`〔15 行〕の間）、本体用の素の `use` 1 行（7 名・`pub` は付けない・`mod` 宣言の直後）、歯用の `#[cfg(test)]` だけの 1 行と `use` 1 行（4 名・**既存の行頭 `#[cfg(test)]`〔1049 行〕の直上**）。4 行とも 120 桁に収まる。孤立した `use` を削る行はこの数に含めない（残差の許容形）。
-  3. 歯は 1 本も足さず 1 本も変えない: in-file の `mod tests` の本文と `use super::{…}` は 1 byte も変えない（その `use` は親の歯用の `use` が解く）。e2e（`crates/scribe2/tests/e2e/fleet.rs`）は binary 越しで名を引かず、write-set の外。
+  3. 歯は 1 本も足さず 1 本も変えない: in-file の `mod tests` の本文と `use super::{…}` は 1 byte も変えない（その `use` は親の歯用の `use` が解く）。e2e（`crates/scribe2-boundary/tests/e2e/fleet.rs`）は binary 越しで名を引かず、write-set の外。
   4. 上げるのは**子側**の可視性だけで、語は `pub(super)` の 1 種類。上げる集合は名指しで **11**（本体の 7 名 + 歯の 4 名・全部 fn の頭の行）。親側の可視性は変えない。
   5. 純移動の札 `// flip-check: moved <行 c の bead>` を親の `mod tests {` の直後と子の module doc の直後に 1 行ずつ置く（説明 1 行 + 札 1 行の 2 行・[pipeline.md](./pipeline.md) §7 の `moved` の逃がし・入口の RED は札が担う）。
   6. 検証行が名指す歯は**既存の 4 本**（`fleet_usage_windows_of_maps_windows_and_isolates_the_broken_element` / `fleet_usage_token_of_names_each_credential_failure` / `fleet_usage_client_args_carry_timeout_and_never_the_token` / `fleet_usage_resets_accepts_z_and_utc_offset_and_rejects_the_rest`・全部 in-file・新設 0 本）で、着地後も名・本数・本文が不変。**接頭辞では書かない**（`fleet_usage_` は表の歯と `fleet_usage_error_polarity_` と `tests/e2e/rules.rs` の歯にも当たり、受付の導出が write-set を広げる・§12 の実測）。
@@ -158,7 +158,7 @@
 - 約束（この行が作るもの・番号は done と 1:1）:
   1. 上の 10 item（246–381 行・正規化 136 行）を、行 d の write-set の `+` の file へ名・本文・順序・doc comment を変えずにそのまま移す。子の頭は module doc と札と `use super::{latest_rows, RESETS_NONE};` / `use crate::fleet::{Allowance, WindowKind};` / `use crate::seat::StateDir;` の 3 行だけ。
   2. 親に増えるのは **2 行だけ**——`mod table;` 1 行（15 行 `mod read;` の次）と素の `use table::{table, table_row, TableRow};` 1 行（16 行 `use read::{…};` の次）。親の `use super::{…}` に `State` を 1 語足す差と、孤立した use の削除（見込み 0）はこの数に含めない（残差の許容形）。`#[cfg(test)]` 付きの `use` は足さない。
-  3. 歯は 1 本も足さず 1 本も変えない: in-file の `mod tests` の本文と `use super::{…}`（811–813 行）は 1 byte も変えない（3 名は親の素の `use` が解く）。e2e（`crates/scribe2/tests/e2e/fleet.rs`）は binary 越しで名を引かず、write-set の外。
+  3. 歯は 1 本も足さず 1 本も変えない: in-file の `mod tests` の本文と `use super::{…}`（811–813 行）は 1 byte も変えない（3 名は親の素の `use` が解く）。e2e（`crates/scribe2-boundary/tests/e2e/fleet.rs`）は binary 越しで名を引かず、write-set の外。
   4. 上げるのは**子側**の `table_row` の 1 名だけ（語は `pub(super)`）。`table` / `TableRow` の `pub` と field の可視性、親側の可視性は変えない。
   5. 純移動の札 `// flip-check: moved <行 d の bead>` を親の `mod tests {` の直後（§13 の札 809 行の**次の行に足す**＝既存の札は置き換えない・base に無い札だけが効き、持ち越した札は §5.3 の対で残差から外れる・`closure.rs` / `land.rs` に札 2〜3 本の前例）と子の module doc の直後に 1 行ずつ置く。子は歯の区間を持たないので数に入るのは親の札だけ。
   6. 検証行が名指す歯は**既存の in-file 2 本**（`fleet_usage_table_rows_name_unmeasured_windows_and_seat_roles` / `fleet_usage_table_aligns_columns_by_the_widest_value_and_prints_headers_alone_for_no_accounts`・新設 0 本・repo 内で名は一意）で、着地後も名・本数・本文が不変。e2e の `fleet_usage_table_show_prints_two_headers_and_seat_roles_from_registration_rows`（`tests/e2e/fleet.rs`）は binary 越しに同じ表を測るが、file が write-set の外なので検証行には書かない（受付が `teeth-outside-write-set` で断る・2026-09-22 の実測）。接頭辞では書かない（`fleet_usage_table` は他の歯にも当たる）。
@@ -176,7 +176,7 @@ id = "a"
 title = "fleet の置き場を seat と同じ 1 関数で解き、fleet usage --table が人の読む表を出す — 1 行形と event は不変"
 req = ["FR33", "FR57"]
 section = "11"
-write-set = ["crates/scribe2/src/fleet/cli.rs", "crates/scribe2/src/fleet/usage.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/snapshots/e2e__fleet__fleet_external_form.snap"]
+write-set = ["crates/scribe2/src/fleet/cli.rs", "crates/scribe2/src/fleet/usage.rs", "crates/scribe2-boundary/tests/e2e/fleet.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__fleet__fleet_external_form.snap"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail fleet_usage_statedir_", "cargo nextest run -p scribe2 --no-tests=fail fleet_usage_table_", "cargo nextest run -p scribe2 --no-tests=fail fleet_usage_measures_two_accounts_into_lines_and_events", "cargo nextest run -p scribe2 --no-tests=fail fleet_external_form"]
 size = "S"
 done = "(1) flag 無しの fleet が git 設定の置き場を seat と同じ 1 関数で解き、(2) record / show / export / usage / select の 5 verb が同じ入口を通って flag 無しでも置き場の断りを出さず、(3) git の無い cwd では 5 verb とも同じ 1 行で断って store を作らず、(4) fleet usage --show --table が見出し 2 行と口座行を出して seat 列が登録 row の役割名（無い口座は -）を映し、(5) 1 行形の字面と event の形は不変で、(6) usage の外形は --state-dir が任意になった 1 行だけが変わる"
@@ -185,7 +185,7 @@ id = "b"
 title = "fleet の e2e fixture の reset を壁時計から組む — 固定日付 2026-09-18T00:00Z の時限を撤去し、選定の歯が常に未来の窓を見る（test だけの差分・札 retroactive）"
 req = ["FR33", "AC11"]
 section = "12"
-tests = ["crates/scribe2/tests/e2e/fleet.rs"]
+tests = ["crates/scribe2-boundary/tests/e2e/fleet.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail account_cmd_retired_account_leaves_select_and_usage", "cargo nextest run -p scribe2 --no-tests=fail fleet_usage_measures_two_accounts_into_lines_and_events", "cargo nextest run -p scribe2 --no-tests=fail fleet_usage_client_failures_name_their_reason"]
 size = "S"
 done = "fleet.rs の fixture の resets_at が今より未来の値で組まれ、固定日付の literal が fixture と期待の両方から消え、fleet:: の歯が全部緑で main の nextest --workspace が緑に戻る"

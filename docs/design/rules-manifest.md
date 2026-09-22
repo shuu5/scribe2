@@ -195,7 +195,7 @@ xtask 側の drift 歯（最小形）: `crates/xtask/src/limits.rs` の `#[cfg(t
 - 何が起きているか（実測 2026-09-20）: `rules/manifest.toml` の行 `gate.token_cap`（kind `GateTokenCap`・Int）の値が 400000 のままである。これは行 h（`s2-07l.375`）が 169 KB の diff 1 本（`s2-07l.209`）を審査に通すために入れた一時の上げで、行の `ruling` の字面が自分で戻しの便を名指している。`s2-07l.209` は着地して閉じている＝上げの理由は消えた。上げと戻しは同じ承認（user 2026-09-15T23:31Z・逐語は台帳 `s2-07l.375`）が対で持つ。戻す先の 150000 は SRS NFR1 の目標値で、上げ前の値と同じである。
 - 約束（この 3 つだけ）:
   1. `rules/manifest.toml` の行 `gate.token_cap` の `value` を 150000 に・`ruling` を戻しの字面（同じ承認の時刻で始まり、戻しであることと `s2-07l.376` を名指す）に・`ruled_at` を戻した日付に書き換える。行の id・kind・`enabled` は不変で、行は増やさない（C5）。
-  2. 値を pin している既存の歯 2 本を 150000 に直す。実測: `crates/scribe2/tests/e2e/rules.rs` の `rules_cli_rules_flag_overrides_embedded`（`rules get gate.token_cap` の出力が埋め込みの値である）と `rules_row_readers_return_the_value_or_one_of_three_reasons`（整数の行の読み手が埋め込みの値を返す）の 2 か所だけが 400000 を持つ（repo 全体で値 400000 を持つ file は、この歯の file・manifest・本 doc の 3 つ＝write-set と同じ）。外形 snapshot はこの行の値を写していない。
+  2. 値を pin している既存の歯 2 本を 150000 に直す。実測: `crates/scribe2-boundary/tests/e2e/rules.rs` の `rules_cli_rules_flag_overrides_embedded`（`rules get gate.token_cap` の出力が埋め込みの値である）と `rules_row_readers_return_the_value_or_one_of_three_reasons`（整数の行の読み手が埋め込みの値を返す）の 2 か所だけが 400000 を持つ（repo 全体で値 400000 を持つ file は、この歯の file・manifest・本 doc の 3 つ＝write-set と同じ）。外形 snapshot はこの行の値を写していない。
   3. 戻しの行を名指す歯を 1 本足す（名は `rules_token_cap_revert_` で始める）: 埋め込み manifest の `gate.token_cap` が値 150000・kind `GateTokenCap`・発効・`ruling` が承認の時刻で始まり `s2-07l.376` を含む、を assert する。base は値 400000 と上げの字面なので RED（**機能不在**でなく値の不一致の RED）。
 - §4.1 の表の `gate.token_cap` の行の値と裁定の字面を、約束 1 と同じ内容に写す（本 doc が write-set に在る理由はこれだけ）。
 - 触らない: `src` の全部（上限を読む側 `pipe/gate.rs` は行の値を読むだけで、値を code に持たない）・他の行・行 h の契約表の行（着地済みの履歴）。
@@ -300,7 +300,7 @@ title = "enum-slices を順序一致に強め、極性の宣言 site と Guard �
 req = ["FR17"]
 section = "3"
 touches = ["crate::polarity::Guard"]
-write-set = ["crates/xtask/src/enum_slices.rs", "crates/xtask/src/polarity.rs", "crates/xtask/src/check.rs", "crates/xtask/src/check_tests.rs", "crates/scribe2/src/polarity.rs", "crates/scribe2/src/fleet/mod.rs", "crates/scribe2/src/fleet/json_tree.rs", "crates/scribe2/tests/e2e/polarity.rs", "crates/scribe2/tests/e2e/snapshots/e2e__polarity__polarity_external_form.snap", "docs/design/polarity.md", "docs/design/rules-manifest.md"]
+write-set = ["crates/xtask/src/enum_slices.rs", "crates/xtask/src/polarity.rs", "crates/xtask/src/check.rs", "crates/xtask/src/check_tests.rs", "crates/scribe2/src/polarity.rs", "crates/scribe2/src/fleet/mod.rs", "crates/scribe2/src/fleet/json_tree.rs", "crates/scribe2-boundary/tests/e2e/polarity.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__polarity__polarity_external_form.snap", "docs/design/polarity.md", "docs/design/rules-manifest.md"]
 verify = ["cargo nextest run -p xtask --no-tests=fail enum_slices_order_", "cargo nextest run -p xtask --no-tests=fail polarity_sites_"]
 size = "S"
 done = "順序違いの slice が添字付きで落ち、Guard に無い極性 site と site の無い Guard が両方向で名指され、免除は closed slice 1 本"
@@ -331,7 +331,7 @@ id = "h"
 title = "gate.token_cap を 150000 → 400000 に一時的に上げる — 純移動でない 169 KB の diff（.209）を lens に通す・裁定 id 付き・戻しは行 i"
 req = ["FR9"]
 section = "4"
-write-set = ["rules/manifest.toml", "crates/scribe2/tests/e2e/rules.rs", "docs/design/rules-manifest.md"]
+write-set = ["rules/manifest.toml", "crates/scribe2-boundary/tests/e2e/rules.rs", "docs/design/rules-manifest.md"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail rules_"]
 size = "S"
 done = "manifest の行の値と裁定 id が新しく、埋め込み値の pin が 400000 で緑、§4.1 の表が同じ値と裁定を写し、src は不変"
@@ -341,7 +341,7 @@ id = "i"
 title = "gate.token_cap を 400000 → 150000 に戻す — .209 Landed 後・行 h の対・裁定 id は行 h と同じ承認"
 req = ["FR9"]
 section = "14"
-write-set = ["rules/manifest.toml", "crates/scribe2/tests/e2e/rules.rs", "docs/design/rules-manifest.md"]
+write-set = ["rules/manifest.toml", "crates/scribe2-boundary/tests/e2e/rules.rs", "docs/design/rules-manifest.md"]
 verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail rules_cli_rules_flag_overrides_embedded", "cargo nextest run -p scribe2 --test e2e --no-tests=fail rules_row_readers_return_the_value_or_one_of_three_reasons", "cargo nextest run -p scribe2 --test e2e --no-tests=fail rules_token_cap_revert_"]
 size = "S"
 done = "§14 の約束 1〜3 のとおり: 埋め込み manifest の gate.token_cap が値 150000 と戻しの裁定の字面（s2-07l.376 を名指す）を持ち、値を pin する既存の歯 2 本と戻しの行を名指す歯 1 本が緑で、§4.1 の表が同じ値と裁定を写し、src は不変"
@@ -361,7 +361,7 @@ id = "k"
 title = "session 用の閾値の行 R-C9-1 の値を 95 に上げる — 値と裁定 id と ruled_at だけを書き換え、値を pin する歯と rules の外形 snapshot を直す（特例・裁定 user 2026-09-17T07:30Z・窓別は s2-07l.434）"
 req = ["FR36", "FR38"]
 section = "13"
-write-set = ["rules/manifest.toml", "crates/scribe2/tests/e2e/rules.rs", "crates/scribe2/tests/e2e/snapshots/e2e__rules__rules_external_form.snap", "crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/seat/account.rs", "crates/scribe2/tests/e2e/fleet.rs", ".config/nextest.toml"]
+write-set = ["rules/manifest.toml", "crates/scribe2-boundary/tests/e2e/rules.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__rules__rules_external_form.snap", "crates/scribe2-boundary/tests/e2e/seat.rs", "crates/scribe2-boundary/tests/e2e/seat/account.rs", "crates/scribe2-boundary/tests/e2e/fleet.rs", ".config/nextest.toml"]
 verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail rules_embedded_manifest_declares_account_selection_threshold", "cargo nextest run -p scribe2 --test e2e --no-tests=fail rules_external_form", "cargo nextest run -p scribe2 --test e2e --no-tests=fail seat_account_relaunch_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail seat_account_tick_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail seat_threshold_95_"]
 size = "M"
 done = "埋め込み manifest の R-C9-1 が値 95 と裁定 id user 2026-09-17T07:30Z を持ち、rules get R-C9-1 の外形が 95 を出し、読み手と選定の code は不変"

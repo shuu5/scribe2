@@ -92,7 +92,7 @@ id = "a"
 title = "台帳 lint の項目 5 つ — memo の 4 節の欠け・field の 4 象限の違反 2 形・§ か本文が名指す memo への discovered-from の無い契約・契約表の未着地の行と台帳の drift・辿れる契約が全部 closed の open な memo を、件数と母集団と id で doctor の 1 行に出す"
 req = ["FR51"]
 section = "3"
-write-set = ["+crates/scribe2/src/ledger/form.rs", "crates/scribe2/src/ledger/mod.rs", "crates/scribe2/src/seat/ledger.rs", "crates/scribe2/src/main.rs", "crates/scribe2/src/snapshots/scribe2__tests__doctor_external_form.snap", "+crates/scribe2/src/snapshots/scribe2__tests__ledger_form_doctor_external_form.snap", "+crates/scribe2/tests/e2e/ledger_form.rs", "crates/scribe2/tests/e2e/main.rs"]
+write-set = ["+crates/scribe2/src/ledger/form.rs", "crates/scribe2/src/ledger/mod.rs", "crates/scribe2/src/seat/ledger.rs", "crates/scribe2-boundary/src/main.rs", "crates/scribe2-boundary/src/snapshots/scribe2__tests__doctor_external_form.snap", "+crates/scribe2-boundary/src/snapshots/scribe2__tests__ledger_form_doctor_external_form.snap", "+crates/scribe2-boundary/tests/e2e/ledger_form.rs", "crates/scribe2-boundary/tests/e2e/main.rs"]
 verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail ledger_form_", "cargo nextest run -p scribe2 --bin scribe2 --no-tests=fail ledger_form_"]
 size = "M"
 done = "(1) doctor の項目に台帳の形の 1 行が増え、偽の台帳 client の出力で memo の 4 節の欠け（出所なし 1・観測なし 2・候補なし 0・昇格条件なし 3）と 4 象限の違反 2 形と § か本文が名指す memo への discovered-from の無い契約と契約表の未着地の行のうち pointer を持つ open の bead が無い行（drift・行の id で名指す）と辿れる契約が全部 closed の open な memo の件数が母集団と同じ行に出て、欠陥の bead の id が種類ごとに名指される (2) epic と裁定の bead は 4 象限の母集団から外れる (3) 欠陥 0 の周も 0 と母集団が出て行が消えない (4) client が起動できない・rc ≠ 0・出力が壊れた周は件数 0 に倒れず測れていない形の行が出る (5) 判定は Issue の label と acceptance と description と notes と dependencies と、pointer の先の § の本文（行 e の読み手が開く doc）と契約表の行と tracked な file の集合（(vii) の未着地の行の弁別・§3 の 5 と同じ読み）だけを読む純関数で、台帳の書きの口は増えない"
@@ -112,7 +112,7 @@ id = "c"
 title = "memo の入口 — 器の read-only の口が便の終端（--run）か user の要望（--from user）から memo の plan（bd の create の引数と 4 節の本文）を標準出力に出し、席が bdw で撃つ"
 req = ["FR51", "FR31"]
 section = "3"
-write-set = ["+crates/scribe2/src/ledger/memo.rs", "crates/scribe2/src/ledger/mod.rs", "crates/scribe2/src/main.rs", "+crates/scribe2/tests/e2e/ledger_memo.rs", "crates/scribe2/tests/e2e/main.rs", "+crates/scribe2/tests/e2e/snapshots/e2e__ledger_memo__ledger_memo_plan_usage_external_form.snap"]
+write-set = ["+crates/scribe2/src/ledger/memo.rs", "crates/scribe2/src/ledger/mod.rs", "crates/scribe2-boundary/src/main.rs", "+crates/scribe2-boundary/tests/e2e/ledger_memo.rs", "crates/scribe2-boundary/tests/e2e/main.rs", "+crates/scribe2-boundary/tests/e2e/snapshots/e2e__ledger_memo__ledger_memo_plan_usage_external_form.snap"]
 verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail ledger_memo_plan_"]
 size = "M"
 done = "(1) 終端の run（Gated / Reviewed の FAIL・INCONCLUSIVE・Failed・Questioned）の run dir と event log から、### 出所 に run id と段と kind が、### 観測 に終端の種類ごとの原本（Gated = verdict.json の evidence と at・Reviewed = review.json の evidence と at・Questioned = 質問の逐語と about・Failed = Failed の detail と ts）が写った plan が出て、原本の無い終端は閉じた理由で断られ、### 候補 と ### 昇格条件 は空の見出しで出る (2) 終端でない run と run dir の無い id は閉じた理由で断られ rc 1 (3) --from user の plan は ### 出所 に逐語の在り処の 1 行と日付を持ち ### 観測 が空 (4) label intake:memo・引数の parent・引数の関連 bead への relates-to が plan に載る (5) 出力は標準出力だけで、偽の bd を PATH に置いても 1 回も呼ばれない (6) usage の 1 枚の外形 snapshot"
@@ -122,7 +122,7 @@ id = "d"
 title = "起票の門 — PreToolUse の hook が memo の create に 4 節の本文を要求し、契約の create に intake:memo が無いことを要求する guard（in-loop・fail-closed・極性一覧に 1 つ増える）"
 req = ["FR20", "FR51"]
 section = "3"
-write-set = ["+crates/scribe2/src/hook/ledger_guard.rs", "crates/scribe2/src/hook/mod.rs", "crates/scribe2/src/polarity.rs", "crates/scribe2/tests/e2e/hook.rs", "crates/scribe2/tests/e2e/polarity.rs", "crates/scribe2/tests/e2e/snapshots/e2e__polarity__polarity_external_form.snap"]
+write-set = ["+crates/scribe2/src/hook/ledger_guard.rs", "crates/scribe2/src/hook/mod.rs", "crates/scribe2/src/polarity.rs", "crates/scribe2-boundary/tests/e2e/hook.rs", "crates/scribe2-boundary/tests/e2e/polarity.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__polarity__polarity_external_form.snap"]
 verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail hook_memo_guard_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail polarity_external_form", "cargo nextest run -p scribe2 --test e2e --no-tests=fail polarity_summary_counts_match_lines", "cargo nextest run -p scribe2 --test e2e --no-tests=fail polarity_all_is_in_declaration_order"]
 size = "M"
 done = "(1) [memo] の title か intake:memo の label を持つ bd / bdw の create は body-file の本文に memo の 4 節の見出しが全部在れば通り、1 つでも欠ければ閉じた理由 1 つで deny される (2) acceptance に設計 pointer 行を持つ create が intake:memo を持てば deny される (3) body-file が無い・開けない周は deny に倒れる (4) memo でも契約でもない create（epic・裁定）と create 以外の bd の command は 1 字も変わらず通る (5) 極性一覧の外形 snapshot に guard が 1 つ増え、guard の総数を pin する歯が新しい母集団で緑"

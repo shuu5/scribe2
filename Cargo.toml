@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/scribe2", "crates/xtask"]
+members = ["crates/scribe2", "crates/scribe2-boundary", "crates/xtask"]
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

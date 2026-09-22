@@ -96,7 +96,7 @@ xtask 側: `crates/xtask/src/genmanifest.rs` の `#[cfg(test)]` に、render の
 - **何が起きているか（現物・main f25084c・verified）**: memo の前提の前半は**偽**だった。`plugin/hooks/hooks.json` の 16 行の matcher は Bash を含み、Bash の門は 3 つ在る（`crates/scribe2/src/hook/command.rs` の語列の照合・`crates/scribe2/src/hook/role_guard.rs`・`crates/scribe2/src/hook/ledger_guard.rs`）。残るのは**起票の門が読む範囲**である: `crates/scribe2/src/hook/ledger_guard.rs` の 26 行の client の列は `bd` と `bdw` の 2 つ（path の末尾で照合）、29 行の subcommand の定数は `create` **1 つだけ**で、判定に載るのは memo の 4 節の見出しと契約の label の 2 つ（同 file 151 行の判定の純関数）。35 行の「値を取る flag」の列には `--notes` が**在る**が、それは値を title の候補に数えないための読み飛ばしで、断る経路は無い。`remember` / `recall` / `memories` と `--parent` の欠落は、同 file の 180 行の `create` の一致で判定に**載らずに通る**。
 - **形**:
   1. **rules 行を 1 本足す**（裁定 id を持つ側）。id は `ledger.denied_writes`・値は断る形の**閉じた 4 語**（`notes-replace` / `memory-subcommand` / `create-without-parent` / `bd-outside-bdw`）・`enabled = true`・`ruling = "user 2026-09-22T08:44Z"`・`ruled_at = "2026-09-22"`。値は「どの形を断るか」の札で、判定そのものは code が持つ（語列の照合で書けるのは 4 形のうち 2 形だけで、残りの 2 形は**欠落**と**先頭語の弁別**という否定の条件ゆえ、`runner.denied_commands` の語列では表せない）。
-  2. **rules の kind を 1 つ足す**（`crates/scribe2/src/rules/mod.rs` の 112 行の閉じた列挙に変種 1 つ・253 行の全数の列にも同じ 1 つ）。閉じた列挙ゆえ、足し忘れは `crates/scribe2/tests/e2e/rules.rs` の 466 行の歯（全数の列を回して 1 行 fixture を受理させる）が母集団ごと測る。
+  2. **rules の kind を 1 つ足す**（`crates/scribe2/src/rules/mod.rs` の 112 行の閉じた列挙に変種 1 つ・253 行の全数の列にも同じ 1 つ）。閉じた列挙ゆえ、足し忘れは `crates/scribe2-boundary/tests/e2e/rules.rs` の 466 行の歯（全数の列を回して 1 行 fixture を受理させる）が母集団ごと測る。
   3. **起票の門の判定を 4 形へ広げる**（`crates/scribe2/src/hook/ledger_guard.rs`）。29 行の subcommand の定数 1 つを、判定に載る subcommand の**閉じた列**へ替え、理由の列挙（同 file 52 行）に 4 つの変種を足す。各形の判定:
      - `notes-replace` = client が `bd` か `bdw` の segment の語に `--notes` が在る（`--notes=<値>` の連結形も、flag の側を切り出して**語全体で**照合する＝`--append-notes` には当たらない）。
      - `memory-subcommand` = subcommand が `remember` / `recall` / `memories` のどれか。
@@ -112,7 +112,7 @@ xtask 側: `crates/xtask/src/genmanifest.rs` の `#[cfg(test)]` に、render の
   - 形ごとに rules 行を 4 本持つ — 1 つの裁定が 4 行に散り、`enabled` が 4 つに割れて「3 形だけ有効」という測っていない状態が作れる。
   - epic の create に例外を設ける — 席ごとの例外行と同じ形で門が緩む（C14）。epic は親を持たないので `create-without-parent` に当たるが、断り文が次の一手を返し、どうしても通す周は rules 行の値から語を 1 つ外す（＝裁定 id が付く）。
   - 台帳の道具の側（script）で止める — 器の外の道具に規律を預ける形で、道具を経ない呼び出しがそのまま残る（memo の出所がまさにこの形）。
-- **歯（接頭辞 `hook_ledger_write_`・行の契約が持つ）**: `crates/` 全体で `hook_ledger_write_` を名に持つ fn は 0 件（実測）。in-file（`crates/scribe2/src/hook/ledger_guard.rs` の 287 行の `mod tests`）で判定の純関数を 4 形 × 当たる例 / 当たらない例で測り、e2e（`crates/scribe2/tests/e2e/hook.rs`・既存の起票の門の歯の隣・`hook_memo_guard_` の 3 本と同じ helper）で rc 2・stderr 1 行・stdout 0 byte・記録の 1 行までを測る。**空虚さの柵**: 当たらない例を形ごとに持つ（`--append-notes` は通る・`bdw` の書き込みは通る・`--parent` を持つ create は通る・読みの subcommand は通る）。rules の行が無い fixture と壊れた fixture で deny（fail-closed）に倒れることを別の歯で測る。
+- **歯（接頭辞 `hook_ledger_write_`・行の契約が持つ）**: `crates/` 全体で `hook_ledger_write_` を名に持つ fn は 0 件（実測）。in-file（`crates/scribe2/src/hook/ledger_guard.rs` の 287 行の `mod tests`）で判定の純関数を 4 形 × 当たる例 / 当たらない例で測り、e2e（`crates/scribe2-boundary/tests/e2e/hook.rs`・既存の起票の門の歯の隣・`hook_memo_guard_` の 3 本と同じ helper）で rc 2・stderr 1 行・stdout 0 byte・記録の 1 行までを測る。**空虚さの柵**: 当たらない例を形ごとに持つ（`--append-notes` は通る・`bdw` の書き込みは通る・`--parent` を持つ create は通る・読みの subcommand は通る）。rules の行が無い fixture と壊れた fixture で deny（fail-closed）に倒れることを別の歯で測る。
 
 <!-- contracts:begin -->
 schema = 1
@@ -123,7 +123,7 @@ title = "台帳 write の 4 形（--notes の置換・記憶の subcommand・親
 req = ["FR20", "FR51"]
 section = "10"
 touches = ["crate::rules::RuleKind", "crate::hook::ledger_guard::Refusal"]
-write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/src/hook/ledger_guard.rs", "crates/scribe2/src/hook/mod.rs", "crates/scribe2/tests/e2e/rules.rs", "crates/scribe2/tests/e2e/snapshots/e2e__rules__rules_external_form.snap", "crates/scribe2/tests/e2e/hook.rs", "docs/design/vessel-hook.md"]
+write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/src/hook/ledger_guard.rs", "crates/scribe2/src/hook/mod.rs", "crates/scribe2-boundary/tests/e2e/rules.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__rules__rules_external_form.snap", "crates/scribe2-boundary/tests/e2e/hook.rs", "docs/design/vessel-hook.md"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail hook_ledger_write_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail rules_kind_parity_every_kind_has_sample", "cargo nextest run -p scribe2 --test e2e --no-tests=fail rules_external_form"]
 size = "M"
 done = "(1) 起票の門が 4 形を断る: bd と bdw のどちらでも --notes と --notes=<値> の両形が notes-replace で、remember / recall / memories が memory-subcommand で、--parent を持たない create が create-without-parent で、先頭語の末尾が bd の書き込みの subcommand が bd-outside-bdw で、それぞれ rc 2・stderr 1 行・stdout 0 byte・記録 1 行（what が ledger-deny + 理由の 1 語）になる (2) 当たらない例が形ごとに通る: --append-notes・bdw の書き込み・--parent を持つ create・読みの subcommand が rc 0 で 1 byte も書かない (3) rules 行 ledger.denied_writes が kind・値の 4 語・enabled・裁定 id user 2026-09-22T08:44Z の 4 面で引け、外形 snapshot の rows= と kinds= を持つ 2 行がどちらも 55 から 56 になる (4) 足した kind が全数の列に在って 1 行 fixture が受理される〔rules_kind_parity_every_kind_has_sample〕 (5) rules が読めない周と行が無い周は deny（fail-closed） (6) 既存の 3 つの理由（memo の 4 節・契約の label・本文が読めない）の字面と rc・判定の順序・極性一覧の行数が 1 字も変わらず、hook_memo_guard_ の 3 本が緑"

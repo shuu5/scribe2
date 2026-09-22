@@ -166,6 +166,7 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
+    // flip-check: moved s2-07l.198.2
     use super::{render_doctor, render_name, render_usage, render_version, NAME};
     use std::ffi::OsStr;
     use std::path::PathBuf;
@@ -191,20 +192,22 @@ mod tests {
         after_open.split_once('"').map(|(value, _)| value.to_owned())
     }
 
-    /// NAME・package name・plugin.json の name・出力層へ渡る文字列の 4 者が一致する。plugin.json は生成 dir（`PLUGIN_DIR`）の
+    /// NAME・bin name・plugin.json の name・出力層へ渡る文字列の 4 者が一致し、package name は `<NAME>-boundary`（境界
+    /// crate の名は NAME から導く・設計 core-boundary.md §3・C2.2）。plugin.json は生成 dir（`PLUGIN_DIR`）の
     /// 下から読む（root 直下の旧 path は読まない・設計 consumer-sync.md §17 形 5）。
     #[test]
     fn name_is_single_source() {
-        let manifest_name = env!("CARGO_PKG_NAME");
+        let manifest_name = env!("CARGO_BIN_NAME");
+        assert_eq!(env!("CARGO_PKG_NAME"), format!("{NAME}-boundary"), "[package] name は NAME から導く");
         let plugin_path = workspace_root().join(PLUGIN_DIR).join(".claude-plugin").join("plugin.json");
         let plugin_src = std::fs::read_to_string(&plugin_path)
             .unwrap_or_else(|err| panic!("{} を読めない: {err}", plugin_path.display()));
         let plugin_name = json_string_field(&plugin_src, "name")
             .unwrap_or_else(|| panic!("plugin.json に name が無い"));
 
-        assert_eq!(NAME, manifest_name, "name.rs の NAME と [package] name");
-        assert_eq!(render_name(), manifest_name, "出力層へ渡る文字列と [package] name");
-        assert_eq!(plugin_name, manifest_name, "plugin.json の name と [package] name");
+        assert_eq!(NAME, manifest_name, "name.rs の NAME と [[bin]] name");
+        assert_eq!(render_name(), manifest_name, "出力層へ渡る文字列と [[bin]] name");
+        assert_eq!(plugin_name, manifest_name, "plugin.json の name と [[bin]] name");
     }
 
     /// 括弧の中身が build 元 commit の 3 形（`<sha12>` / `<sha12>+dirty` / `unknown`）のどれかか（手書きの分岐 3 本・regex を足さない）。

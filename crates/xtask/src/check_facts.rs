@@ -11,7 +11,7 @@ use crate::limits::{Limits, ALLOWED_DEPS, REQUIRED_LINTS};
 use crate::toml_lite::{entries_in, key_value, lint_level, quoted, sections};
 use crate::workspace::read_dir_sorted;
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 /// plugin manifest と core crate の突き合わせ（manifest-name / manifest-version）。manifest は core の `PLUGIN_DIR` の
 /// 生成 dir の下から読む（root 直下の旧 path は読まない・設計 consumer-sync.md §17 形 1）。
@@ -169,7 +169,7 @@ pub(crate) fn measure_deps_empty(layout: &Layout) -> Measured {
     let mut violations = Vec::new();
     for path in &manifests {
         match read_text(path) {
-            Ok(text) => violations.extend(declared_deps(&text, path)),
+            Ok(text) => violations.extend(declared_deps(&text, path, &layout.member_dirs)),
             Err(reason) => violations.push(format!("deps-empty: {reason}")),
         }
     }
@@ -184,7 +184,10 @@ pub(crate) fn measure_deps_empty(layout: &Layout) -> Measured {
 /// section 名の完全一致では足りない。`[dependencies.<name>]` の入れ子形、
 /// `[build-dependencies]`、`[target.'cfg(unix)'.dependencies]`、
 /// `[workspace.dependencies]` のいずれも直接依存を 1 本増やすからである。
-fn declared_deps(manifest: &str, path: &Path) -> Vec<String> {
+///
+/// 例外は workspace の member を `path =` だけで指す `[dependencies]` の 1 本（[`is_member_path_dep`]・境界 crate →
+/// core・設計 core-boundary.md §3）。外の crate を足さない（A3 非該当）。
+fn declared_deps(manifest: &str, path: &Path, members: &[PathBuf]) -> Vec<String> {
     let mut found = Vec::new();
     for (header, pairs) in sections(manifest) {
         let Some((section, nested)) = dep_section(header) else {
@@ -197,12 +200,51 @@ fn declared_deps(manifest: &str, path: &Path) -> Vec<String> {
             }
             None => {
                 for (key, value) in pairs {
+                    if header == "dependencies" && is_member_path_dep(value, path, members) {
+                        continue;
+                    }
                     found.extend(dep_violation(path, header, section, key, renames_package(value)));
                 }
             }
         }
     }
     found
+}
+
+/// dep の値が `{ path = "<相対>" }`（key は `path` の 1 つだけ）で、その先が workspace の member の dir か。
+///
+/// 相対 path は manifest の dir から字面で解く（`..` は 1 段上る・file system は読まない）。改名・version・git・
+/// 他の key を併せ持つ形は外の crate を運びうるので当たらない（allowlist の判定へ落ちる）。
+fn is_member_path_dep(value: &str, manifest: &Path, members: &[PathBuf]) -> bool {
+    let Some(inner) = value.trim().strip_prefix('{').and_then(|rest| rest.strip_suffix('}')) else {
+        return false;
+    };
+    let Some(("path", target)) = inner.split_once('=').map(|(key, target)| (key.trim(), target)) else {
+        return false;
+    };
+    let Some(rel) = quoted(target).filter(|_| !target.contains(',')) else {
+        return false;
+    };
+    let Some(base) = manifest.parent() else {
+        return false;
+    };
+    let target = lexical(&base.join(rel));
+    members.iter().any(|member| lexical(member) == target)
+}
+
+/// path を字面で正規化する（`.` を落とし `..` で 1 段上る・symlink は解かない）。
+fn lexical(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for part in path.components() {
+        match part {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 /// 直接依存 1 本を測り、allowlist の外なら違反行を返す。
@@ -373,8 +415,7 @@ pub(crate) fn measure_nextest_tmux_group(layout: &Layout, limits: &Limits) -> Me
         Ok(text) => text,
         Err(reason) => return failed(TMUX_TAG, &reason),
     };
-    let e2e = layout.core_dir.join("tests").join("e2e");
-    let files = match e2e_files(&e2e) {
+    let files = match e2e_files(&layout.e2e_dir()) {
         Ok(files) => files,
         Err(reason) => return failed(TMUX_TAG, &reason),
     };
@@ -460,7 +501,7 @@ fn is_ident(ch: char) -> bool {
     ch.is_alphanumeric() || ch == '_'
 }
 
-/// `crates/<core>/tests/e2e/` 配下の `.rs`（`(module の接頭辞, 本文)`・path 順）。接頭辞は path から `e2e/` と `.rs` を
+/// e2e の木（[`Layout::e2e_dir`]＝境界 crate が在れば `crates/<NAME>-boundary/tests/e2e/`・無ければ `crates/<core>/tests/e2e/`）配下の `.rs`（`(module の接頭辞, 本文)`・path 順）。接頭辞は path から `e2e/` と `.rs` を
 /// 落とし `::` で繋いだ形（`seat/cycle.rs` → `seat::cycle`・`main.rs` → 空・`main.rs` の宣言順は使わない）。
 fn e2e_files(root: &Path) -> Result<Vec<(String, String)>, String> {
     let mut out = Vec::new();
@@ -782,8 +823,28 @@ pub(crate) fn e2e_fixture() -> Vec<(&'static str, &'static str)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{clippy_drift, contracts_fixture, dep_budget, schema_drift};
+    use super::{clippy_drift, contracts_fixture, declared_deps, dep_budget, schema_drift};
     use crate::limits::{Limits, ALLOWED_DEPS};
+    use std::path::PathBuf;
+
+    /// workspace の member を `path =` だけで指す `[dependencies]`（境界 crate → core）は deps-empty に当たらず、member の
+    /// 外を指す path・改名・version を併せ持つ形・`[dev-dependencies]`・registry の dep は当たる。
+    #[test]
+    fn deps_empty_exempts_only_a_bare_path_dep_to_a_member() {
+        let root = PathBuf::from("/w");
+        let members = [root.join("crates/demo"), root.join("crates/demo-boundary"), root.join("crates/xtask")];
+        let manifest = root.join("crates/demo-boundary/Cargo.toml");
+        let found = |text: &str| declared_deps(text, &manifest, &members);
+        assert_eq!(found("[dependencies]\ndemo = { path = \"../demo\" }\n"), Vec::<String>::new(), "member への path");
+        assert_eq!(found("[dependencies]\ndemo = { path = \"./../demo/\" }\n"), Vec::<String>::new(), "字面の正規化");
+        assert_eq!(found("[dependencies]\ndemo = { path = \"../other\" }\n").len(), 1, "member の外");
+        assert_eq!(found("[dependencies]\ndemo = { path = \"../../demo\" }\n").len(), 1, "root の外");
+        assert_eq!(found("[dependencies]\ndemo = { path = \"../demo\", package = \"x\" }\n").len(), 1, "改名");
+        assert_eq!(found("[dependencies]\ndemo = { package = \"x\", path = \"../demo\" }\n").len(), 1, "改名が先");
+        assert_eq!(found("[dependencies]\ndemo = { path = \"../demo\", version = \"1\" }\n").len(), 1, "他の key");
+        assert_eq!(found("[dev-dependencies]\ndemo = { path = \"../demo\" }\n").len(), 1, "dev-dependencies は外");
+        assert_eq!(found("[dependencies]\ndemo = \"1\"\n").len(), 1, "registry の dep");
+    }
 
     /// 現物の manifest から読んだ [`Limits`]。
     fn real_limits() -> Limits {

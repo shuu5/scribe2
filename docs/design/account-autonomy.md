@@ -95,7 +95,7 @@ C1 / C5（R-C9-1 は行・裁定 id）・C2（`Purpose` / `Selection` / `Stage` 
 
 ## 12. usage refresh の歯の起動待ち（壁時計 5 秒）を負荷下でも足りる値へ（契約表の行 i・`s2-07l.385`）
 
-- 何が起きているか: admin の実測 2026-09-16 01:5x〜02:05Z（母集団 = 本日 gate に到達して verify.stderr.log を持つ便 5・うち 3 = `.354` run 2 / `.247` run 1 / `.360` run 4）。歯 `fleet_usage_refresh_timeout_stops_the_child_and_its_grandchild`（`crates/scribe2/tests/e2e/fleet.rs`）が、7〜8 便が同時に gate / build を回す負荷の下で「child: 子が起動に達しない（pid file が 5s で書かれない・停止経路の失敗ではない）」で落ち、gate の n=3（workspace の歯）と n=7（検出線の baseline）の両方で便を Gated INCONCLUSIVE に倒す。anchor で単体なら 8.4 秒で PASS。
+- 何が起きているか: admin の実測 2026-09-16 01:5x〜02:05Z（母集団 = 本日 gate に到達して verify.stderr.log を持つ便 5・うち 3 = `.354` run 2 / `.247` run 1 / `.360` run 4）。歯 `fleet_usage_refresh_timeout_stops_the_child_and_its_grandchild`（`crates/scribe2-boundary/tests/e2e/fleet.rs`）が、7〜8 便が同時に gate / build を回す負荷の下で「child: 子が起動に達しない（pid file が 5s で書かれない・停止経路の失敗ではない）」で落ち、gate の n=3（workspace の歯）と n=7（検出線の baseline）の両方で便を Gated INCONCLUSIVE に倒す。anchor で単体なら 8.4 秒で PASS。
 - 現物（verified・main 07310fe）: `const PID_FILE_WAIT: Duration = Duration::from_secs(5)`（fleet.rs:2765）を偽 claude の pid file 待ちと `spy_line` の poll 上限が共有する。歯は「起動に達しない」と「停止経路の失敗」を字面で弁別しており、落ちているのは fixture の起動待ちで器の停止経路ではない。
 - 形: `PID_FILE_WAIT` を 60 秒にする。緑の周は pid file が書かれた時点で抜けるので費用は変わらず、赤の周だけ待ちが延びる。待ちの意味・panic の字面・停止経路の期待値（`REFRESH_TIMEOUT_S` / `STOP_MARGIN_S` / grace の算術）は不変。本体不変の歯だけの便＝base で RED を作れないので `// flip-check: retroactive` の札で通す（pipeline.md §5.3）。
 - 触らない: 器の src・他の歯・並列度（並列の上限は write-set の重複と直列依存だけ・user 直命 2026-09-16）。
@@ -109,8 +109,8 @@ C1 / C5（R-C9-1 は行・裁定 id）・C2（`Purpose` / `Selection` / `Stage` 
 - 触らない: 純関数 `select`（`fleet/select.rs`）と `Input`（構築点 6 か所・`prop.rs` を含む）・replay の `State`・event の形・`UnmeasuredReason` の variant・`fleet usage` / `--show` の外形・R-C9-1。
 - 現物の所在（verified 2026-09-20・main f678bd0・(2) が触る 1 本）: 選定の前計測を撃つのは `crates/scribe2/src/fleet/cli.rs` の private な `select_account(`（引数は起動行と置き場・`super::usage::run(` を**条件なしで 1 回撃ち**、rc が 0 でなければそこで返し、その後に replay して純関数 `select(` を呼ぶ）。鮮度の cache も 429 の後の back-off もこの経路に無い。
 - 歯（2 群・行の verify がそれぞれを撃つ）:
-  1. **選定**（`fleet_select_fresh_` 接頭辞・`crates/scribe2/tests/e2e/fleet.rs`）: 偽 client の呼出回数を写しで数え、新しい実測を持つ口座は選定で測り直されない（呼出 0）／古い実測の口座は測り直される（呼出 1）／429 を返す偽 client + 古い実測（reset 前・`fresh_s` より古い）の口座 → 測り直され、Unmeasured が追記されず（event の本数不変）選定がその口座を候補に残し、**stderr に kept の 1 行**（`usage: account=<label> kept reason=<reason>` の形で label と理由の語を運ぶ・形 (3) の外形）が出て **stdout の 1 行形は 1 字も変わらない**（timeout の周も同じ形で reason の語だけが違う）／429 + 最新の回が Unmeasured の口座 → 追記され候補から外れ、**kept の 1 行は出ない**（否定の枝）／`fleet usage` は鮮度に関わらず全口座を測る（`Always`）／行の無い manifest は既存の行の読み手の極性のまま断る（読み手を増やさない＝断りの字面と rc は既存のまま・測り直しにも kept にも入らない）。stdout の 1 行形が不変であることは**既存の歯**が受け、行の verify が完全名 `fleet_external_form`（`crates/scribe2/tests/e2e/fleet.rs`・外形 snapshot `e2e__fleet__fleet_external_form.snap`）で撃つ。
-  2. **rules 行**（`rules_embedded_manifest_declares_usage_fresh_` 接頭辞・`crates/scribe2/tests/e2e/rules.rs`）= 埋め込みの manifest が `fleet.usage_fresh_s` の行を値・裁定 id・裁定日つきで持ち、kind の包含で**行と variant を対で足させる**（`fleet.usage_timeout_s` と同型）。**外形**は既存の歯が受け、行の verify が完全名 `rules_external_form`（同 file・外形 snapshot `e2e__rules__rules_external_form.snap` の `rows=` / `kinds=` が 1 つ増える）で撃つ。
+  1. **選定**（`fleet_select_fresh_` 接頭辞・`crates/scribe2-boundary/tests/e2e/fleet.rs`）: 偽 client の呼出回数を写しで数え、新しい実測を持つ口座は選定で測り直されない（呼出 0）／古い実測の口座は測り直される（呼出 1）／429 を返す偽 client + 古い実測（reset 前・`fresh_s` より古い）の口座 → 測り直され、Unmeasured が追記されず（event の本数不変）選定がその口座を候補に残し、**stderr に kept の 1 行**（`usage: account=<label> kept reason=<reason>` の形で label と理由の語を運ぶ・形 (3) の外形）が出て **stdout の 1 行形は 1 字も変わらない**（timeout の周も同じ形で reason の語だけが違う）／429 + 最新の回が Unmeasured の口座 → 追記され候補から外れ、**kept の 1 行は出ない**（否定の枝）／`fleet usage` は鮮度に関わらず全口座を測る（`Always`）／行の無い manifest は既存の行の読み手の極性のまま断る（読み手を増やさない＝断りの字面と rc は既存のまま・測り直しにも kept にも入らない）。stdout の 1 行形が不変であることは**既存の歯**が受け、行の verify が完全名 `fleet_external_form`（`crates/scribe2-boundary/tests/e2e/fleet.rs`・外形 snapshot `e2e__fleet__fleet_external_form.snap`）で撃つ。
+  2. **rules 行**（`rules_embedded_manifest_declares_usage_fresh_` 接頭辞・`crates/scribe2-boundary/tests/e2e/rules.rs`）= 埋め込みの manifest が `fleet.usage_fresh_s` の行を値・裁定 id・裁定日つきで持ち、kind の包含で**行と variant を対で足させる**（`fleet.usage_timeout_s` と同型）。**外形**は既存の歯が受け、行の verify が完全名 `rules_external_form`（同 file・外形 snapshot `e2e__rules__rules_external_form.snap` の `rows=` / `kinds=` が 1 つ増える）で撃つ。
 - 却下: 選定ごとに 1 口座だけ測る（候補の比較が古い値と新しい値の混在になる）／壁時計の sleep で間引く（壁時計依存・費用が増える）／replay で「最新の Measured」を別に持ち `select` に渡す（`Input` の構築点 6 か所と `prop.rs` を動かす・鮮度の規則が純関数に入り値の線が 2 か所になる）／429 の口座を admin が `--account` で名指しする（器の選定 FR36 の迂回・N2）。
 
 ## 14. 便用の除外は便の repo（anchor）の席だけ — 置き場を共有する他 vessel の席の口座は候補（契約表の行 k）
@@ -181,7 +181,7 @@ C1 / C5（R-C9-1 は行・裁定 id）・C2（`Purpose` / `Selection` / `Stage` 
 - 見積: 親 約 386 行（余地 約 1110＝行 g の M と後続の余地）・子 約 860 行（上限 1500 の内）。
 - 歯: 既存の 30 本（fleet::select::tests 配下・名に select_ を含む 29 本 + `model_parse_accepts_alias_and_display_exactly` 1 本）が全部緑で期待を変えない。verify は module path の filter（nextest の positional filter は module path を含む名に当たる）で 30 本を撃ち、base = head の本数を実装役が `cargo nextest list` で写す。名だけの filter select_ は 管理 tick の口座の軸〔削除済み〕 の歯 1 本（名に select_ を含む）にも当たるので使わない。
 - 後続: 行 g（`s2-07l.434`）の write-set には歯の file が要る（行 g は歯を in-file に足す＝歯の file が write-set に無いと実装役の diff が write-set の外に出る）ので、本便が同じ PR で [seat-autonomy.md](./seat-autonomy.md) の行 g の write-set に歯の file を 1 項目足す（§15 の「in-file」の語は歯の file を指すと読む＝本文は変えない）。行 g の焼き直しは本便の Landed 後（planner）。
-- 却下: 行 g を S に落とす（見積が S の 100 を超える＝size の字面だけ変える嘘）／行 g を 3 便に割る（§15 の形 2 / 3 の書き直しと審査 3 周・select.rs の余地は増えない＝次の M で再発）／src の群を子へ割る（src 382 行の全部を出しても余地は 624・歯の module が残る限り 858 行が居座る）／歯を `crates/scribe2/tests/e2e/` へ移す（私有 item を撃つ歯は e2e からは撃てない・`--lib` の scope が変わる）。
+- 却下: 行 g を S に落とす（見積が S の 100 を超える＝size の字面だけ変える嘘）／行 g を 3 便に割る（§15 の形 2 / 3 の書き直しと審査 3 周・select.rs の余地は増えない＝次の M で再発）／src の群を子へ割る（src 382 行の全部を出しても余地は 624・歯の module が残る限り 858 行が居座る）／歯を `crates/scribe2-boundary/tests/e2e/` へ移す（私有 item を撃つ歯は e2e からは撃てない・`--lib` の scope が変わる）。
 
 <!-- contracts:begin -->
 schema = 1
@@ -191,7 +191,7 @@ id = "g"
 title = "runner が死んだ便の起こし直し — pipe resume が Spawned の便の runner の生死を唯一の wait で測り、死んでいれば同じ worktree で起こし直す（途中再開の節に未 commit の一覧）"
 req = ["FR37", "FR14"]
 section = "4"
-write-set = ["crates/scribe2/src/pipe/cli/resume.rs", "crates/scribe2/src/pipe/ratelimit.rs", "crates/scribe2/src/pipe/follow.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/headless/runner.txt", "crates/scribe2/tests/e2e/pipe/spawn.rs", "crates/scribe2/tests/e2e/snapshots/e2e__headless__headless_runner_prompt_external_form.snap"]
+write-set = ["crates/scribe2/src/pipe/cli/resume.rs", "crates/scribe2/src/pipe/ratelimit.rs", "crates/scribe2/src/pipe/follow.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/headless/runner.txt", "crates/scribe2-boundary/tests/e2e/pipe/spawn.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__headless__headless_runner_prompt_external_form.snap"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_resume_kill_"]
 size = "M"
 done = "Spawned で runner が死んだ便に resume を撃つと同じ worktree で runner が起き直り途中再開の節に未 commit の file 名が載り、生きている runner の便は typed に断られて runner が 2 本にならない"
@@ -201,7 +201,7 @@ id = "h"
 title = "初回 spawn の口座を器が選ぶ — pipe run / resume の初回の起動も計測 → 便用の選定 → spawn_turn の 1 本を通り、口座の宣言が無い周だけ親の環境を継承する"
 req = ["FR36", "FR4"]
 section = "4"
-write-set = ["crates/scribe2/src/pipe/cli/run.rs", "crates/scribe2/src/pipe/ratelimit.rs", "crates/scribe2/src/pipe/follow.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/land.rs", "crates/scribe2/src/pipe/cli/step.rs", "crates/scribe2/src/fleet/wait.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs", "crates/scribe2/tests/e2e/pipe/ratelimit.rs", "crates/scribe2/tests/e2e/pipe/stop.rs", "crates/scribe2/tests/e2e/pipe/land.rs"]
+write-set = ["crates/scribe2/src/pipe/cli/run.rs", "crates/scribe2/src/pipe/ratelimit.rs", "crates/scribe2/src/pipe/follow.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/land.rs", "crates/scribe2/src/pipe/cli/step.rs", "crates/scribe2/src/fleet/wait.rs", "crates/scribe2-boundary/tests/e2e/pipe/spawn.rs", "crates/scribe2-boundary/tests/e2e/pipe/ratelimit.rs", "crates/scribe2-boundary/tests/e2e/pipe/stop.rs", "crates/scribe2-boundary/tests/e2e/pipe/land.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_spawn_account_"]
 size = "M"
 done = "初回の起動が器の選んだ口座の credential dir で起き Spawned の detail に label が載り、口座の宣言が無い toy だけが親の環境を継承する"
@@ -211,7 +211,7 @@ id = "i"
 title = "e2e/fleet.rs の PID_FILE_WAIT を 5 s → 60 s（負荷下で usage refresh の歯が「子が起動に達しない」で gate を落とす・歯だけの便・retroactive）"
 req = ["FR36"]
 section = "12"
-write-set = ["crates/scribe2/tests/e2e/fleet.rs"]
+write-set = ["crates/scribe2-boundary/tests/e2e/fleet.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail fleet_usage_refresh_timeout_stops_the_child_and_its_grandchild"]
 size = "S"
 done = "PID_FILE_WAIT が 60 秒で、歯の名・panic の字面・停止経路の期待値が不変"
@@ -221,7 +221,7 @@ id = "j"
 title = "選定の前計測の鮮度 — rules 行 fleet.usage_fresh_s の内側の実測を測り直さず、計測自身の 429 / timeout では直前の新しい実測を保つ（fleet usage の口は不変）"
 req = ["FR36", "FR33"]
 section = "13"
-write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/tests/e2e/rules.rs", "docs/design/rules-manifest.md", "crates/scribe2/src/fleet/select.rs", "crates/scribe2/src/fleet/usage.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/snapshots/e2e__rules__rules_external_form.snap"]
+write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2-boundary/tests/e2e/rules.rs", "docs/design/rules-manifest.md", "crates/scribe2/src/fleet/select.rs", "crates/scribe2/src/fleet/usage.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2-boundary/tests/e2e/fleet.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__rules__rules_external_form.snap"]
 verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail fleet_select_fresh_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail fleet_external_form", "cargo nextest run -p scribe2 --test e2e --no-tests=fail rules_embedded_manifest_declares_usage_fresh_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail rules_external_form"]
 size = "S"
 done = "形 (1) = rules 行 fleet.usage_fresh_s が値 300 と裁定 id user 2026-09-16T11:14Z と裁定日 2026-09-16 つきで 1 本増えて RuleKind の variant と対になり rules の外形の rows= と kinds= が 1 つ増える。形 (2) = 最新の回が全部実測でその ts が now − fresh_s より新しい口座は選定の前計測で測り直されず（偽 client の呼出 0・子 process も event も増えない）、古い口座と最新の回が Unmeasured の口座と行の無い口座だけが測られる（呼出 1）。形 (3) = 測り直した口座が 429 / timeout を返し最新の回が実測である周は Unmeasured を追記せず（event の本数不変）その実測を最新のまま使って選定の候補に残し、stderr に kept の 1 行（usage: account=<label> kept reason=<reason> の形で label と理由の語を運ぶ）が出て stdout の 1 行形は 1 字も変わらず、最新の回が Unmeasured の口座は従来どおり追記されて候補から外れ kept の 1 行も出ない。形 (4) = fleet usage の口は鮮度に関わらず全口座を測り（Always）計測の実装は 1 本のまま。行の無い manifest は既存の行の読み手の極性のまま断る（断りの字面と rc は不変・測り直しにも kept にも入らない）。純関数 select と Input の構築点と replay の State と event の形と UnmeasuredReason の variant と fleet の外形 snapshot は不変"
@@ -231,7 +231,7 @@ id = "k"
 title = "便用の除外は便の repo（anchor）の席の登録 row の口座だけ — 置き場を共有する他 vessel の席の口座を候補に入れる（fleet select --anchor・pipe は Turn.repo を渡す）"
 req = ["FR36", "FR40"]
 section = "14"
-write-set = ["crates/scribe2/src/fleet/replay.rs", "crates/scribe2/src/fleet/wait.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/src/pipe/ratelimit.rs", "crates/scribe2/src/pipe/follow.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/pipe/ratelimit.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs", "crates/scribe2/tests/e2e/pipe/land.rs", "crates/scribe2/tests/e2e/snapshots/e2e__fleet__fleet_external_form.snap"]
+write-set = ["crates/scribe2/src/fleet/replay.rs", "crates/scribe2/src/fleet/wait.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/src/pipe/ratelimit.rs", "crates/scribe2/src/pipe/follow.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2-boundary/tests/e2e/fleet.rs", "crates/scribe2-boundary/tests/e2e/pipe/ratelimit.rs", "crates/scribe2-boundary/tests/e2e/pipe/spawn.rs", "crates/scribe2-boundary/tests/e2e/pipe/land.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__fleet__fleet_external_form.snap"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail fleet_select_anchor_"]
 size = "S"
 done = "他 repo の席の口座を持つ置き場で本 repo の便の選定がその口座を chosen に出し、--anchor 無しの fleet select は従来どおり全 row を外す"
@@ -241,7 +241,7 @@ id = "l"
 title = "lens の口座も器が選ぶ — pipe gate が lens を起こす直前に便用の選定を通し、with_account の 1 関数で起動行に足し、Gated の detail に account:<label> を記帳する（候補なしは INCONCLUSIVE）"
 req = ["FR36", "FR33"]
 section = "15"
-write-set = ["crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/gate/lens.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/ratelimit.rs", "crates/scribe2/src/pipe/cli/step.rs", "crates/scribe2/src/pipe/land.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs", "crates/scribe2/tests/e2e/pipe/ratelimit.rs"]
+write-set = ["crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/gate/lens.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/ratelimit.rs", "crates/scribe2/src/pipe/cli/step.rs", "crates/scribe2/src/pipe/land.rs", "crates/scribe2-boundary/tests/e2e/pipe/gate.rs", "crates/scribe2-boundary/tests/e2e/pipe.rs", "crates/scribe2-boundary/tests/e2e/pipe/spawn.rs", "crates/scribe2-boundary/tests/e2e/pipe/ratelimit.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_gate_lens_account_"]
 size = "S"
 done = "宣言口座のある置き場で gate の lens 起動行の末尾に選んだ口座の --account-dir が在り Gated の detail に account:<label> が出て、宣言 0 は従来どおり、候補なしは lens を呼ばず INCONCLUSIVE"
@@ -251,7 +251,7 @@ id = "m"
 title = "同じ flag の二重を断る — headless の flag（headless/mod.rs）が同名 2 回以上を typed に断り、with_account は起動行に既に --account-dir が在れば足さずに spawn を断る（記帳の口座と実行の口座の一致を歯で pin）"
 req = ["NFR4", "FR36"]
 section = "16"
-write-set = ["crates/scribe2/src/headless/mod.rs", "crates/scribe2/src/headless/runner.rs", "crates/scribe2/src/headless/lens.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/polarity.rs", "crates/scribe2/tests/e2e/snapshots/e2e__polarity__polarity_external_form.snap", "crates/scribe2/tests/e2e/polarity.rs", "crates/scribe2/tests/e2e/headless.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs"]
+write-set = ["crates/scribe2/src/headless/mod.rs", "crates/scribe2/src/headless/runner.rs", "crates/scribe2/src/headless/lens.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/polarity.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__polarity__polarity_external_form.snap", "crates/scribe2-boundary/tests/e2e/polarity.rs", "crates/scribe2-boundary/tests/e2e/headless.rs", "crates/scribe2-boundary/tests/e2e/pipe/spawn.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail headless_flag_duplicate_"]
 size = "S"
 done = "runner / lens の argv に同じ flag が 2 つ在ると claude を呼ばずに断り、with_account は既に --account-dir を持つ起動行を足さずに断って Spawned を記録しない"
@@ -262,7 +262,7 @@ title = "API に届かず止まった runner を Failed に倒さない — 到�
 req = ["FR37", "FR14"]
 section = "17"
 touches = ["crate::pipe::follow::Halt"]
-write-set = ["crates/scribe2/src/headless/mod.rs", "crates/scribe2/src/headless/runner.rs", "crates/scribe2/src/headless/runner.txt", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/follow.rs", "crates/scribe2/src/pipe/cli/resume.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs", "crates/scribe2/tests/e2e/headless.rs", "crates/scribe2/tests/e2e/snapshots/e2e__headless__headless_runner_prompt_external_form.snap"]
+write-set = ["crates/scribe2/src/headless/mod.rs", "crates/scribe2/src/headless/runner.rs", "crates/scribe2/src/headless/runner.txt", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/follow.rs", "crates/scribe2/src/pipe/cli/resume.rs", "crates/scribe2-boundary/tests/e2e/pipe/spawn.rs", "crates/scribe2-boundary/tests/e2e/headless.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__headless__headless_runner_prompt_external_form.snap"]
 verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_unreachable_", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_unreachable_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail headless_runner_prompt_external_form"]
 size = "M"
 done = "到達不能の本文で終わった runner の便が Spawned のまま SeatStopped detail=runner-unreachable を 1 件持ち Failed が 0 で commit が残り、pipe resume が生死の計測を飛ばして runner を 1 回起こし直して Spawned detail に resume:unreachable を記帳し、runner の雛形の「途中再開」節に理由の 1 行が増えてその差分が雛形の外形 snapshot に写り、集合に無い is_error の本文は従来どおり Failed detail=runner-rc で終わり、is_error=false の本文に語が在っても弁別せず（pure）、新しい rc は既存の rc と衝突しない"
@@ -272,7 +272,7 @@ id = "o"
 title = "便の起動の前計測にも鮮度を掛ける — choose_account が fleet select と同じ 1 本の口で測り、撃ち直しは従来どおり全口座を測る"
 req = ["FR36", "FR33"]
 section = "18"
-write-set = ["crates/scribe2/src/pipe/ratelimit.rs", "crates/scribe2/src/fleet/usage.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/tests/e2e/pipe/ratelimit.rs"]
+write-set = ["crates/scribe2/src/pipe/ratelimit.rs", "crates/scribe2/src/fleet/usage.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2-boundary/tests/e2e/pipe/ratelimit.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_ratelimit_fresh_"]
 size = "S"
 done = "形 (1) = 便の起動の前計測（pipe run / pipe resume / 追随の起こし直しの初回）が fleet select の前計測と同じ 1 本の読み手（鮮度の規則は 1 か所・秒は §13 の rules 行）を通り、新しい実測の口座を測り直さず（同じ置き場で 2 便続けて起こすと 2 便目の偽 curl の呼出が増えない・母集団 = 1 便目の呼出 = 口座数）、§13 の行より古い ts の実測の口座は測り直される（呼出 +1）。形 (2) = 待ちが成立した後と Timeout の後の撃ち直しは全口座を測る（既存の待ちの歯の fixture で待ちの後の呼出が口座数だけ増える）。形 (3) = 新しい rules 行は 1 本も足さず（§13 の行を共有）、fleet usage の口と select_for_run と Input と replay と event の形と stderr の kept の行は §13 のまま不変で、純関数 select と Pool の欄と choose_or_wait と極性一覧も不変"
@@ -283,7 +283,7 @@ id = "p"
 title = "便用の並べ鍵の 1 つ目を 7 日窓の reset の早い順にする — 7 日窓の reset を持たない口座は最後・5 時間窓とモデル別窓は鍵にしない・席用の順序と候補の判定は不変（ADR-0042）"
 req = ["FR36", "FR33"]
 section = "19"
-write-set = ["crates/scribe2/src/fleet/select.rs", "crates/scribe2/tests/e2e/fleet.rs"]
+write-set = ["crates/scribe2/src/fleet/select.rs", "crates/scribe2-boundary/tests/e2e/fleet.rs"]
 verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail fleet_select_week_", "cargo nextest run -p scribe2 --lib --no-tests=fail select_run_week_"]
 size = "M"
 done = "便用の選定が 7 日窓の reset の早い口座を 5 時間窓の reset の早い口座より先に選び、7 日窓の reset が同じなら走行中の便数 → label、7 日窓の reset を持たない口座は候補のまま最後で、同じ表の席用の答えと候補なしの周の earliest_reset は変わらない"

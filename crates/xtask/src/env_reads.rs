@@ -166,13 +166,15 @@ mod tests {
         );
     }
 
-    /// (a) 現物の core は違反 0 で、母集団は 6 以上（`args` 1 + `current_dir` 5 が数えられる）。
-    /// 母集団の下限を見るのは、走査が空振りして 0/0 の緑に化ける形を塞ぐため（C10）。
+    /// (a) 現物の core は違反 0 で、母集団は 5 以上（bin 本体〔`main.rs` の `args`〕は境界 crate へ移り core の母集団に
+    /// 居ない＝6 → 5・設計 core-boundary.md §3）。母集団の下限を見るのは、走査が空振りして 0/0 の緑に化ける形を塞ぐため（C10）。
     #[test]
     fn env_reads_passes_on_core_with_a_nonempty_population() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
         let layout = Layout::discover(&root).expect("自 workspace は読める");
         let files = collect_rs_files(&layout.root).expect("crates/*/src を読める");
+        let bin = layout.core_dir.join("src").join("main.rs");
+        assert!(files.iter().all(|file| file.path != bin), "bin 本体は core の母集団に居ない: {}", bin.display());
         let got = measure(&layout, &files);
         assert!(got.violations.is_empty(), "core は env を読まないはず: {:?}", got.violations);
         let population: usize = got
@@ -180,7 +182,7 @@ mod tests {
             .strip_prefix("env-reads=0/")
             .and_then(|tail| tail.parse().ok())
             .unwrap_or_else(|| panic!("fact は env-reads=0/<n> の形のはず: {}", got.fact));
-        assert!(population >= 6, "母集団は 6 以上のはず（args 1 + current_dir 5）: {}", got.fact);
+        assert!(population >= 5, "母集団は 5 以上のはず: {}", got.fact);
     }
 
     /// (b) 非 test 区間の `std::env::var("X")` は違反 1 件で、`file:line` と `var` を名指す。

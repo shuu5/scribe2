@@ -1,0 +1,24 @@
+[package]
+name = "scribe2-boundary"
+version = "0.1.0"
+edition = "2021"
+# 境界 crate（設計 core-boundary.md §3・ADR-0033）: 子 process を撃つ面と binary を持つ。core は依存の向きで
+# この crate を知らない。build 元 commit は core と同じ build script で焼く（e2e の歯と bin が同じ値を読む）。
+license = "MIT OR Apache-2.0"
+publish = false
+build = "../scribe2/build.rs"
+
+[[bin]]
+name = "scribe2"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+scribe2 = { path = "../scribe2" }
+
+[dev-dependencies]
+insta = { version = "1.48.0", default-features = false }
+# 性質の量産（憲法 C12.7）。derive は入れない（C13.2）・default feature も使わない。
+proptest = { version = "1.11.0", default-features = false, features = ["std"] }

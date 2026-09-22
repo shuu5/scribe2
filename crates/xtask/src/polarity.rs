@@ -49,7 +49,7 @@ const NOT_A_GUARD_END: &str = "];";
 /// crate 相対の参照の前置き。
 const CRATE_PREFIX: &str = "crate::";
 
-/// 極性一覧の snapshot（core crate の dir からの相対）。
+/// 極性一覧の snapshot（e2e の歯を持つ crate の dir からの相対・境界 crate が在ればそちら＝[`Layout::e2e_home`]）。
 pub(crate) const SNAPSHOT_REL: &str = "tests/e2e/snapshots/e2e__polarity__polarity_external_form.snap";
 
 /// 集計行の前置き（設計 §4）。
@@ -65,7 +65,7 @@ struct Summary {
 
 /// snapshot の集計行を読み、`polarity=<K>/<N>` を出す。
 pub(crate) fn measure(layout: &Layout) -> Measured {
-    let path = layout.core_dir.join(SNAPSHOT_REL);
+    let path = layout.e2e_home().join(SNAPSHOT_REL);
     let text = match read_text(&path) {
         Ok(found) => found,
         Err(reason) => return failed(TAG, &format!("極性一覧を読めない: {reason}")),

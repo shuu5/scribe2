@@ -665,10 +665,12 @@ pub(super) fn declared_teeth_row(id: &str, filter: &str, write_set: &str) -> Str
     table_row(id, &[("write-set", write_set), ("verify", verify.as_str())])
 }
 
-/// 現物の 2 つの cli module と、それぞれの件数 pin の歯の file（base の字面そのもの・`include_str!`）。
+// flip-check: moved s2-07l.198.2
+/// 現物の 2 つの cli module と、それぞれの件数 pin の歯の file（base の字面そのもの・`include_str!`・core の src は
+/// 境界 crate の外＝`crates/scribe2/src/` を指す）。
 pub(super) const SUBCOMMAND_FILES: &[(&str, &str)] = &[
-    ("crates/scribe2/src/seat/cli.rs", include_str!("../../../src/seat/cli.rs")),
-    ("crates/scribe2/src/pipe/cli.rs", include_str!("../../../src/pipe/cli.rs")),
+    ("crates/scribe2/src/seat/cli.rs", include_str!("../../../../scribe2/src/seat/cli.rs")),
+    ("crates/scribe2/src/pipe/cli.rs", include_str!("../../../../scribe2/src/pipe/cli.rs")),
     ("crates/scribe2/tests/e2e/seat.rs", include_str!("../seat.rs")),
     ("crates/scribe2/tests/e2e/pipe.rs", include_str!("../pipe.rs")),
 ];

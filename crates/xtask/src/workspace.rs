@@ -17,6 +17,9 @@ const NAME_CONST_PREFIX: &str = "pub const NAME: &str =";
 /// core crate の plugin の生成 dir の定数を宣言する行の前置き（設計 consumer-sync.md §17 形 1）。
 const PLUGIN_DIR_CONST_PREFIX: &str = "pub const PLUGIN_DIR: &str =";
 
+/// 境界 crate の dir 名の接尾辞（`crates/<NAME>-boundary`・名は NAME から導く・C2.2）。
+const BOUNDARY_SUFFIX: &str = "-boundary";
+
 /// in-module test の始まりを示す行頭の印（■C の測定定義）。
 const TEST_MOD_MARK: &str = "#[cfg(test)]";
 
@@ -51,6 +54,26 @@ impl Layout {
             member_dirs,
             name,
         })
+    }
+
+    /// 境界 crate の dir（`crates/<NAME>-boundary`・在れば・設計 core-boundary.md §3）。
+    ///
+    /// binary と e2e の歯の置き場。field に持たず都度判定するのは [`Layout::plugin_dir`] と同じ理由（`Layout` を
+    /// literal で組む measure の歯を書き換えない）。dir が無い木（擬似 workspace）は `None`。
+    pub fn boundary_dir(&self) -> Option<PathBuf> {
+        let dir = self.root.join("crates").join(format!("{}{BOUNDARY_SUFFIX}", self.name));
+        dir.is_dir().then_some(dir)
+    }
+
+    /// e2e の歯を持つ crate の dir（境界 crate が在ればその dir、無ければ従来の core の dir・設計 core-boundary.md §5）。
+    /// 読み先の判定はこの 1 本だけ（極性の snapshot と tmux の group の走査が共有する）。
+    pub fn e2e_home(&self) -> PathBuf {
+        self.boundary_dir().unwrap_or_else(|| self.core_dir.clone())
+    }
+
+    /// e2e の歯の木（[`Layout::e2e_home`] の `tests/e2e`）。
+    pub fn e2e_dir(&self) -> PathBuf {
+        self.e2e_home().join("tests").join("e2e")
     }
 
     /// core crate の `[package] version`。
@@ -199,7 +222,8 @@ fn package_field(manifest: &str, key: &str) -> Option<String> {
         .and_then(|(_, value)| quoted(value))
 }
 
-/// member のうち task runner 以外を core crate として 1 本だけ選ぶ。
+/// member のうち task runner 以外で `src/name.rs`（NAME の正本）を持つものを core crate として 1 本だけ選ぶ
+/// （境界 crate は `name.rs` を持たない＝候補に入らない・設計 core-boundary.md §3）。
 fn find_core_dir(member_dirs: &[PathBuf]) -> Result<PathBuf, String> {
     let mut cores = Vec::new();
     for dir in member_dirs {
@@ -207,7 +231,7 @@ fn find_core_dir(member_dirs: &[PathBuf]) -> Result<PathBuf, String> {
         let Some(name) = package_field(&manifest, "name") else {
             continue;
         };
-        if name != RUNNER_PACKAGE {
+        if name != RUNNER_PACKAGE && dir.join("src").join("name.rs").is_file() {
             cores.push(dir.clone());
         }
     }
@@ -240,8 +264,59 @@ pub(crate) fn json_string_field(src: &str, key: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{weighted_lines, SourceFile};
-    use std::path::PathBuf;
+    use super::{weighted_lines, Layout, SourceFile};
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    /// 擬似 workspace を書く（(root 相対 path, 本文) の列・親 dir は作る）。書けなければ理由を返す。
+    fn write_tree(root: &Path, files: &[(&str, &str)]) -> Result<(), String> {
+        for (rel, text) in files {
+            let path = root.join(rel);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).map_err(|err| format!("{}: {err}", parent.display()))?;
+            }
+            fs::write(&path, text).map_err(|err| format!("{}: {err}", path.display()))?;
+        }
+        Ok(())
+    }
+
+    /// core（`name.rs` を持つ）・境界 crate（`name.rs` を持たない）・task runner の 3 member の木。
+    const THREE_MEMBERS: &[(&str, &str)] = &[
+        ("Cargo.toml", "[workspace]\nmembers = [\"crates/demo\", \"crates/demo-boundary\", \"crates/xtask\"]\n"),
+        ("crates/demo/Cargo.toml", "[package]\nname = \"demo\"\n"),
+        ("crates/demo/src/name.rs", "pub const NAME: &str = \"demo\";\n"),
+        ("crates/demo-boundary/Cargo.toml", "[package]\nname = \"demo-boundary\"\n"),
+        ("crates/demo-boundary/src/main.rs", "fn main() {}\n"),
+        ("crates/demo-boundary/tests/e2e/main.rs", "\n"),
+        ("crates/xtask/Cargo.toml", "[package]\nname = \"xtask\"\n"),
+    ];
+
+    /// 境界 crate の在る木: core は `name.rs` を持つ member だけ（境界 crate は core の候補に入らない）・`boundary_dir` は
+    /// `crates/<NAME>-boundary`・e2e の読み先は境界 crate の `tests/e2e`。境界 crate の無い木は `None` で、e2e は従来の
+    /// core の `tests/e2e`。
+    #[test]
+    fn layout_finds_the_boundary_crate() {
+        let root = std::env::temp_dir().join(format!("xtask-layout-boundary-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        write_tree(&root, THREE_MEMBERS).unwrap_or_else(|reason| panic!("fixture を書ける: {reason}"));
+        let with = Layout::discover(&root).map(|layout| {
+            (layout.name.clone(), layout.core_dir.clone(), layout.member_dirs.len(), layout.boundary_dir(), layout.e2e_dir())
+        });
+        let _ = fs::remove_dir_all(root.join("crates/demo-boundary"));
+        write_tree(&root, &[("Cargo.toml", "[workspace]\nmembers = [\"crates/demo\", \"crates/xtask\"]\n")])
+            .unwrap_or_else(|reason| panic!("fixture を書ける: {reason}"));
+        let without = Layout::discover(&root).map(|layout| (layout.boundary_dir(), layout.e2e_dir()));
+        let _ = fs::remove_dir_all(&root);
+        let (name, core_dir, members, boundary, e2e) = with.unwrap_or_else(|reason| panic!("3 member の木を読める: {reason}"));
+        assert_eq!(name, "demo");
+        assert_eq!(core_dir, root.join("crates/demo"), "core は name.rs を持つ member");
+        assert_eq!(members, 3, "member は 3 本");
+        assert_eq!(boundary, Some(root.join("crates/demo-boundary")), "境界 crate の dir");
+        assert_eq!(e2e, root.join("crates/demo-boundary/tests/e2e"), "e2e は境界 crate から読む");
+        let (boundary, e2e) = without.unwrap_or_else(|reason| panic!("2 member の木を読める: {reason}"));
+        assert_eq!(boundary, None, "境界 crate の無い木");
+        assert_eq!(e2e, root.join("crates/demo/tests/e2e"), "無ければ従来の core の e2e");
+    }
 
     /// 幅 10 の fixture と期待値。**core の `pipe::closure` の歯と同じ字面・同じ値**（2 crate の式の一致を守る）。
     const WIDTH_FIXTURES: &[(&str, usize)] = &[

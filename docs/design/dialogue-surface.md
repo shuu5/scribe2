@@ -108,7 +108,7 @@ id = "g"
 title = "planner の雛形に §4 の 4 行を足す（pointer 付き・規範文 0）+ 外形 snapshot"
 req = ["FR30", "FR67"]
 section = "4"
-also = ["crates/scribe2/src/seat/brief/planner.txt", "crates/scribe2/tests/e2e/snapshots/e2e__hook__hook_brief_planner.snap"]
+also = ["crates/scribe2/src/seat/brief/planner.txt", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__hook__hook_brief_planner.snap"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail hook_brief_planner_"]
 size = "S"
 done = "planner の生成文に dialogue-surface.md §2 を指す行 2 本と §3 / §5 を指す行 1 本ずつが → SSOT: 付きで在り、admin の生成文には無い"
@@ -119,7 +119,7 @@ title = "planner の雛形に §4 の 5 本目（裁定を受けた turn で sea
 req = ["FR41", "FR67"]
 section = "4"
 depends = ["g"]
-also = ["crates/scribe2/src/seat/brief/planner.txt", "crates/scribe2/tests/e2e/snapshots/e2e__hook__hook_brief_planner.snap"]
+also = ["crates/scribe2/src/seat/brief/planner.txt", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__hook__hook_brief_planner.snap"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail hook_brief_planner_"]
 size = "S"
 done = "planner の生成文に fleet-event-log.md §9 と ADR-0037 を指す裁定の行が → SSOT: 付きで 1 本増え、admin の生成文には無く、既存の 4 行は不変"

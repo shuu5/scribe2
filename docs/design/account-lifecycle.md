@@ -120,7 +120,7 @@ user-scope MCP 設定の同期・別口座への `--resume` の混線 fence・pr
 - 何が起きているか: §4 の `seat launch` は引数 4〜5 個（置き場・役割・target・口座・model）を毎回書かせる。置き場は `seat heartbeat` が git 設定から解けるのに launch は必須 flag、target と model は同じ鍵（役割 × anchor）の登録 row が既に持つ値。user 直命 2026-09-16 08:2xZ（逐語は台帳 `s2-07l.404`）: 口座 label と役割の flag だけの 1 行で planner / admin を起こせる形が要る。
 - 形: `seat <label> (--planner|--admin) [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]`。第 1 token が既知の verb でなく `--` で始まらなければ口座 label と読む。役割の flag は**ちょうど 1 つ**（0 か 2 は使い方の誤り・rc 1）。既定は全部 1 関数で導く: 置き場 = state_dir_of（`--state-dir` > git 設定・解けなければ `state-dir`）／anchor = `--anchor` か cwd の repo root（`seat register` / `seat launch` と同じ）／target と model = 同じ鍵（役割 × anchor）の**登録 row の値**（`seat/role.rs` の registration_of_target の隣に鍵で引く読み手を 1 本置く・row の `model` が無ければ `--model` が要る）。row が無く flag も無い周は `defaults-unresolved` で typed に断る（足りない flag の名を行に載せる・1 key も送らず row も書かない）。断りの行は `seat launch: refused reason=defaults-unresolved missing=<flag[,flag]>`（`missing=` は足りない flag の名を宣言順 `--target` → `--model` で `,` 区切り・`target=` は載せない＝target が解けない周にも出る断りに未確定の値を置かない・rc は既存の `RC_REFUSED`・字面の定数は `seat/cli.rs` に 1 つ）。明示の flag は row の値に勝つ。導いた値で §4 と**同じ `LaunchFlags` を組み同じ経路**を通る（`seat/cli.rs` の launch_of の本体を flags を受ける 1 関数に括る）＝短い形と長い形は同じ Registration・同じ起動行を作る。使い方の行に短い形を足す（外形 snapshot が動く）。
 - 触らない: `seat/cycle/launch.rs`（起動の本体・derive_launch）・登録 row の schema・`account shell`（§4.5・役割なし）・tick の立て直し・rules 行。
-- 歯（`seat_launch_short_` 接頭辞・`crates/scribe2/tests/e2e/seat/launch.rs`）: 登録 row が在る周に短い形が長い形と同じ row と同じ注入行を作る（両方を偽 tmux と偽 claude で撃ち、inject.jsonl の what と row の差分 0）／row が無く `--target` `--model` も無い周は `defaults-unresolved` + 0 key + row 0／役割の flag が 0 か 2 は使い方 rc 1／既知の verb（`launch` ほか）は従来どおり通る。
+- 歯（`seat_launch_short_` 接頭辞・`crates/scribe2-boundary/tests/e2e/seat/launch.rs`）: 登録 row が在る周に短い形が長い形と同じ row と同じ注入行を作る（両方を偽 tmux と偽 claude で撃ち、inject.jsonl の what と row の差分 0）／row が無く `--target` `--model` も無い周は `defaults-unresolved` + 0 key + row 0／役割の flag が 0 か 2 は使い方 rc 1／既知の verb（`launch` ほか）は従来どおり通る。
 - 却下: session 名を NAME 定数から導く（今の席は別名の session に居る＝改名は移行で本便の外・値を code に焼くのは N3）／host.toml に target を手書き（登録 row が既に持つ値の二重化・C3）／`seat launch` の flag を任意化するだけ（人が打つ形が長いまま）／短い形を `account` の verb に置く（役割の起動は §4 の領分）。
 - 後続: 起動行に effort を運ばせる形（役割ごとの値は rules 行・裁定 id 要・別便）。
 
@@ -152,7 +152,7 @@ user-scope MCP 設定の同期・別口座への `--resume` の混線 fence・pr
   - host の面の読み手は `crates/scribe2/src/rules/manifest.rs` の 1 本で、受ける表は `[[account]]` / `[[plugin]]` / `[[launch-arg]]` / `[[vessel]]` の 4 つ。表の名は閉じた列挙 `Section` が持ち、`Section::header` / `Section::known_keys` / `Section::required_keys` の 3 つの網羅 match と、面ごとの受理を決める `collect` の大きな match が同じ列挙に掛かる。tracked の面にだけ在る表（`[[rule]]`）を host の面で断る枝は在るが、**host の面にだけ在る表**の枝はまだ 1 つも無い。
   - 面の合わせは `Manifest::joined`、host の面の読みの 3 値は `HostManifest::read`（不在 = 0 宣言 / 読めた / 読めない = typed に止まる）。
   - 便用の候補を作る口は **2 つ**在る: `crates/scribe2/src/fleet/replay.rs` の `select_for_run`（除外は `registered_accounts(Some(repo))`）と、`crates/scribe2/src/fleet/cli.rs` の `select_account` の `Purpose::Run` の枝（同じ除外を**自分で**組む）。`select_for_run` を呼ぶのは `crates/scribe2/src/fleet/wait.rs` と `crates/scribe2/src/pipe/ratelimit.rs` の 2 file（どちらも自分の除外は組まない）。
-  - doctor の口座の行は `crates/scribe2/src/account/mod.rs` の `doctor_lines` が組み、その中で合わせた面を既に持っている。席の行は `crates/scribe2/src/seat/role.rs` が先に出し、並べる `render_doctor_with`（`crates/scribe2/src/main.rs`）は 3 つの出所を足すだけである。
+  - doctor の口座の行は `crates/scribe2/src/account/mod.rs` の `doctor_lines` が組み、その中で合わせた面を既に持っている。席の行は `crates/scribe2/src/seat/role.rs` が先に出し、並べる `render_doctor_with`（`crates/scribe2-boundary/src/main.rs`）は 3 つの出所を足すだけである。
   - 群という概念は器に 1 つも無い（`group` の語は process の group にしか当たらない）。ADR-0036 / ADR-0041 が決めた宣言 file と実効の記録も code には 1 行も無い。
 - 約束（1 つずつ歯が測る・行 f の done と 1:1）:
   1. **host の面に群の表が 1 つ増える**: 表は `[[account-group]]`、key は名 `name`（host で一意）・置き場の列 `anchors`（anchor の列・1 つ以上）・候補の口座 label の列 `accounts`（順序が候補の順・1 つ以上）の 3 つ。読み手は既存の 1 本のままで、新しい reader も新しい file も足さない。file が無い host は 0 群として続き、在るのに読めない host は今までどおり typed に止まる。
@@ -165,11 +165,11 @@ user-scope MCP 設定の同期・別口座への `--resume` の混線 fence・pr
   8. **群を 1 つも宣言しない host は 1 語も変わらない**: 群の行を 1 本も出さず、便用の除外も今のままで、既存の doctor の外形 snapshot は動かない（＝既存の consumer と本 repo は無変更）。
 - 触らない: 口座の登録・退役・復帰・一覧の口（§3）・席の起動の口座の解き方（§4）・host の面の置き場と導き方・選定の純関数とその入力の型・rules 行（閾値の行を足すのは第 2 段の便）・event log の schema・host の根（第 3 段まで記録を置かない）。
 - 歯（接頭辞 `host_group_`・crate の統合 test の target に置く。`host_group_` は crate に 1 件も無い〔実測〕ので、verify の filter が当たる file は下の 3 つに閉じる）:
-  - `crates/scribe2/tests/e2e/rules.rs`: 約束 1 / 2 / 3（母集団 = 正常 1 + 不在 1 + tracked の面 1 + 欠陥 6 種 = 9 本。欠陥の周は行番号と欠陥の字面を全件見る）
-  - `crates/scribe2/tests/e2e/fleet.rs`: 約束 4 / 5 / 6（母集団 = 便用で全候補が外れる 1 + 群に属さない口座は残る 1 + 群 0 の host は今の候補のまま 1 + session 用では候補に残る 1 + `fleet select` の口でも同じ除外 1 = 5 本）
-  - `crates/scribe2/tests/e2e/seat/account.rs`: 約束 7 / 8（母集団 = 群 2 つの host が宣言順に 2 行 1 + 席の登録 row の在る群に label が出る 1 + 無い群は無しの語 1 + 群 0 の host は行 0 本 1 = 4 本）
-- verify の当たる file（事前検査の実測・どれも write-set の中）: `rules_host_` は 3 file（`crates/scribe2/tests/e2e/rules.rs`・`crates/scribe2/tests/e2e/fleet.rs`・`crates/scribe2/tests/e2e/seat/rules.rs`）に当たる。`seat/rules.rs` は**中身を変えない**が、歯の置き場の門のため write-set に載せる。`fleet_select_` は `crates/scribe2/tests/e2e/fleet.rs` の 1 file、`doctor_accounts_` は `crates/scribe2/tests/e2e/seat/account.rs` の 1 file だけに当たる。`host_group_` の当たる歯は 0 本（この行が起こす歯が最初の 1 群）。
-- 大きさの余地（事前検査の実測）: 歯を足す `crates/scribe2/tests/e2e/{rules.rs,fleet.rs}` は 1 file の行数の上限に対する余地が 0 で、本体側の 8 file はどれも 1 段の見積より余地が大きい。歯を足す側は上限の外（歯の file は 1 file の上限を数えない）なので受付は通るが、`fleet.rs` は既に 4000 行を超えているので、歯の群をこの file の末尾へ足すか、同じ target の子 module へ割るかは実装の便が決める（割る周は write-set に新しい file を `+` で足す）。
+  - `crates/scribe2-boundary/tests/e2e/rules.rs`: 約束 1 / 2 / 3（母集団 = 正常 1 + 不在 1 + tracked の面 1 + 欠陥 6 種 = 9 本。欠陥の周は行番号と欠陥の字面を全件見る）
+  - `crates/scribe2-boundary/tests/e2e/fleet.rs`: 約束 4 / 5 / 6（母集団 = 便用で全候補が外れる 1 + 群に属さない口座は残る 1 + 群 0 の host は今の候補のまま 1 + session 用では候補に残る 1 + `fleet select` の口でも同じ除外 1 = 5 本）
+  - `crates/scribe2-boundary/tests/e2e/seat/account.rs`: 約束 7 / 8（母集団 = 群 2 つの host が宣言順に 2 行 1 + 席の登録 row の在る群に label が出る 1 + 無い群は無しの語 1 + 群 0 の host は行 0 本 1 = 4 本）
+- verify の当たる file（事前検査の実測・どれも write-set の中）: `rules_host_` は 3 file（`crates/scribe2-boundary/tests/e2e/rules.rs`・`crates/scribe2-boundary/tests/e2e/fleet.rs`・`crates/scribe2-boundary/tests/e2e/seat/rules.rs`）に当たる。`seat/rules.rs` は**中身を変えない**が、歯の置き場の門のため write-set に載せる。`fleet_select_` は `crates/scribe2-boundary/tests/e2e/fleet.rs` の 1 file、`doctor_accounts_` は `crates/scribe2-boundary/tests/e2e/seat/account.rs` の 1 file だけに当たる。`host_group_` の当たる歯は 0 本（この行が起こす歯が最初の 1 群）。
+- 大きさの余地（事前検査の実測）: 歯を足す `crates/scribe2-boundary/tests/e2e/{rules.rs,fleet.rs}` は 1 file の行数の上限に対する余地が 0 で、本体側の 8 file はどれも 1 段の見積より余地が大きい。歯を足す側は上限の外（歯の file は 1 file の上限を数えない）なので受付は通るが、`fleet.rs` は既に 4000 行を超えているので、歯の群をこの file の末尾へ足すか、同じ target の子 module へ割るかは実装の便が決める（割る周は write-set に新しい file を `+` で足す）。
 - 変更する既存の歯（名で数える）: 表の数と受理する表の名を数える `rules_host_` の歯（受理する表が 1 つ増える）と、面の合わせを測る歯。doctor の外形 snapshot は約束 8 のとおり**動かない**。
 - 却下: 群の宣言を新しい file に置く（ADR-0036 の形・宣言の置き場が 2 つになる・読み手も 2 本になる）／群を置き場ごとの面（各 state dir）に置く（同じ群の定義が host に N 個できて食い違う）／群の宣言を持たず席が起きるたびに選定へ落とす（同じ群の席が散る・席が起きていない周は便へ取られる・ADR-0049 の OPT4）／便用の除外を群の今の口座 1 つだけにして候補の残りを便に開ける（便用の選定の上限は 100 % の定数で便は口座を上限まで使う側なので、移り先の候補を先に使い切って逃げ道が残らない・除外が実効の記録の読みに依存し読めない周に typed に決まらない・ADR-0049 の OPT7）／除外を `select_for_run` の中だけに足す（`fleet select` の口から漏れる・約束 5）／doctor の行を群 0 の host でも 1 行出す（既存の外形 snapshot が動き、無変更の約束が崩れる）。
 - 依存: 無し（本 § は宣言と読みと除外と点検だけで、契機も記録も持たない）。
@@ -188,7 +188,7 @@ user-scope MCP 設定の同期・別口座への `--resume` の混線 fence・pr
   4. **役割の flag は今のまま省略可**（0 個 = orchestrator・`Role` の variant は 1 つ）。役割が増えても既定は変えない（増えた役割は flag で名指す）。
   5. `--restore CMD` との併用は可（起動後に 1 回送る手順は不変）。同じ窓の周の `--restore` の断り（§14 の約束 8）も不変。
 - 触らない: `derive_launch` の雛形・登録 row の schema・`seat launch`（長い形）・`account shell`・`.launch` file の中身・置き場の解き方。
-- 歯（`seat_launch_short_` 接頭辞・`crates/scribe2/tests/e2e/seat/launch.rs`・偽 tmux と偽 claude で撃つ既存の型・新設の歯は `.config/nextest.toml` の tmux の群に名を足す）: `-c` の周は inject.jsonl の注入行の末尾が `--continue` で row の `launch` に `--continue` が無い／`-r <id>` の周は注入行の末尾が `--resume <id>` で row の `launch` に無い／`-c -r x`・値の無い `-r`・`-c -c`・**会話 id の形でない `-r` の値（空白を含む・`$(` を含む・`-` 始まり）**は使い方 rc 1 で key 0・row 0（負例は 1 本の歯で 3 値とも撃ち、正例の UUID が通ることも同じ歯で見る）。外形 snapshot（`seat_usage_external_form`・`crates/scribe2/tests/e2e/seat.rs`）は usage の 1 行に `[-c|-r ID]` が増える。
+- 歯（`seat_launch_short_` 接頭辞・`crates/scribe2-boundary/tests/e2e/seat/launch.rs`・偽 tmux と偽 claude で撃つ既存の型・新設の歯は `.config/nextest.toml` の tmux の群に名を足す）: `-c` の周は inject.jsonl の注入行の末尾が `--continue` で row の `launch` に `--continue` が無い／`-r <id>` の周は注入行の末尾が `--resume <id>` で row の `launch` に無い／`-c -r x`・値の無い `-r`・`-c -c`・**会話 id の形でない `-r` の値（空白を含む・`$(` を含む・`-` 始まり）**は使い方 rc 1 で key 0・row 0（負例は 1 本の歯で 3 値とも撃ち、正例の UUID が通ることも同じ歯で見る）。外形 snapshot（`seat_usage_external_form`・`crates/scribe2-boundary/tests/e2e/seat.rs`）は usage の 1 行に `[-c|-r ID]` が増える。
 - 却下: `.launch` file に旗ごと書く（雛形に 1 回きりの値が混ざり、次の起動で古い会話へ戻る）／`-c` を既定にする（会話の無い口座で claude が新規を開くだけだが、人が「引き継いだつもり」になる・明示の flag が安全側）／器が会話の一覧を読んで id を選ぶ（claude の内部形式に依存・N3 の匂い・`-c` は claude 自身が選ぶ）／長い形にも足す（人が打つのは短い形だけ・§14 の却下と同じ）。
 - 後続: 第 3 段（自動の移動・§17 の後続）は本行の `-c` を機械が撃つ形で組める（席の restart = `seat <次の口座> -c` の 1 行）。
 
@@ -200,7 +200,7 @@ id = "a"
 title = "役割なしの起動 — account shell が derive_launch を再利用し登録 row を書かずに起動行を注入する"
 req = ["FR60", "FR59", "FR58"]
 section = "13"
-write-set = ["crates/scribe2/src/account/cli.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2/src/seat/cycle.rs", "crates/scribe2/src/seat/cycle/launch.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/seat/launch.rs", "crates/scribe2/tests/e2e/snapshots/e2e__fleet__fleet_external_form.snap", ".config/nextest.toml"]
+write-set = ["crates/scribe2/src/account/cli.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2/src/seat/cycle.rs", "crates/scribe2/src/seat/cycle/launch.rs", "crates/scribe2-boundary/tests/e2e/fleet.rs", "crates/scribe2-boundary/tests/e2e/seat/launch.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__fleet__fleet_external_form.snap", ".config/nextest.toml"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail account_cmd_shell_", "cargo nextest run -p scribe2 --no-tests=fail seat_launch_", "cargo nextest run -p scribe2 --lib --no-tests=fail account_cmd_errors_"]
 size = "S"
 done = "偽 tmux と偽 claude で account shell が登録 row 0 のまま起動行を 1 回だけ差し込み、resume と拒否 3 種が typed に出る"
@@ -210,7 +210,7 @@ id = "b"
 title = "席の起動の短い形 seat <label> --planner|--admin — 置き場は git 設定、target と model は登録 row から導き、長い形と同じ 1 経路を通る"
 req = ["FR59", "FR40"]
 section = "14"
-write-set = ["crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/seat/role.rs", "crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/seat/launch.rs", "crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_usage_external_form.snap", ".config/nextest.toml"]
+write-set = ["crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/seat/role.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "crates/scribe2-boundary/tests/e2e/seat/launch.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__seat__seat_usage_external_form.snap", ".config/nextest.toml"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_launch_short_", "cargo nextest run -p scribe2 --no-tests=fail seat_usage_external_form"]
 size = "S"
 done = "登録 row の在る anchor で短い形が長い形と同じ row と起動行を作り、row も flag も無い周は defaults-unresolved で 1 key も送らず、既知の verb は従来どおり通る"
@@ -220,7 +220,7 @@ id = "c"
 title = "口座の OAuth 墓標を器が名指す — probe の credential= を present / missing / dead の 3 値にし、tick は墓標の周を account-dead に弁別して連続 N 周で planner の席へ NEEDS-USER の 1 行を注入する"
 req = ["FR33", "FR38"]
 section = "15"
-write-set = ["crates/scribe2/src/account/mod.rs", "crates/scribe2/src/fleet/usage.rs", "rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/tests/e2e/rules.rs", "docs/design/rules-manifest.md", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/seat/account.rs", "crates/scribe2/tests/e2e/snapshots/e2e__fleet__fleet_external_form.snap"]
+write-set = ["crates/scribe2/src/account/mod.rs", "crates/scribe2/src/fleet/usage.rs", "rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2-boundary/tests/e2e/rules.rs", "docs/design/rules-manifest.md", "crates/scribe2-boundary/tests/e2e/fleet.rs", "crates/scribe2-boundary/tests/e2e/seat/account.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__fleet__fleet_external_form.snap"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail account_credential_dead_", "cargo nextest run -p scribe2 --no-tests=fail seat_tick_account_dead_"]
 size = "M"
 done = "墓標の credential の口座が account ls / doctor で credential=dead と出て、その口座の席の tick が account-dead を記録し N 周目に planner の席へ NEEDS-USER の 1 行を注入し、429 の unmeasured は従来どおり鳴らず、rules 行が裁定 id 付きで 1 本増える"
@@ -230,7 +230,7 @@ id = "d"
 title = "席の実口座の記録 — SessionStart hook が入力 JSON の transcript_path から実口座（当たらない周は unknown）を測って席の打刻 dir に 1 file 1 行で毎回上書きし、row も state.jsonl も書かない"
 req = ["FR42", "FR40"]
 section = "16"
-write-set = ["crates/scribe2/src/hook/mod.rs", "+crates/scribe2/src/seat/session_account.rs", "crates/scribe2/src/seat/mod.rs", "crates/scribe2/tests/e2e/hook.rs", ".config/nextest.toml"]
+write-set = ["crates/scribe2/src/hook/mod.rs", "+crates/scribe2/src/seat/session_account.rs", "crates/scribe2/src/seat/mod.rs", "crates/scribe2-boundary/tests/e2e/hook.rs", ".config/nextest.toml"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_account_mismatch_record_"]
 size = "S"
 done = "偽の transcript_path で SessionStart が実口座（置き場の accounts の外・. 始まり・key 無しは unknown）を席の打刻 dir に上書きで記録して前の値を残さず、pane を解けない周は書かず、登録 row と state.jsonl と指示文は 1 byte も変わらず、記録を読んで合図を撃つ・席を止める経路は無い"
@@ -240,7 +240,7 @@ id = "e"
 title = "席の実口座の見える化 — SessionStart の指示文に row の口座・実測の口座・照合の 1 行を出す"
 req = ["FR42", "FR40"]
 section = "16"
-write-set = ["crates/scribe2/src/hook/mod.rs", "crates/scribe2/src/seat/brief/mod.rs", "crates/scribe2/src/seat/brief/orchestrator.txt", "crates/xtask/src/seat_brief.rs", "crates/scribe2/tests/e2e/hook.rs", "crates/scribe2/tests/e2e/snapshots/e2e__hook__hook_brief_orchestrator.snap", ".config/nextest.toml"]
+write-set = ["crates/scribe2/src/hook/mod.rs", "crates/scribe2/src/seat/brief/mod.rs", "crates/scribe2/src/seat/brief/orchestrator.txt", "crates/xtask/src/seat_brief.rs", "crates/scribe2-boundary/tests/e2e/hook.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__hook__hook_brief_orchestrator.snap", ".config/nextest.toml"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_account_mismatch_shown_", "cargo nextest run -p scribe2 --no-tests=fail hook_brief_", "cargo nextest run -p scribe2 --lib --no-tests=fail seat_brief_holes_", "cargo nextest run -p xtask --no-tests=fail seat_brief_"]
 size = "S"
 done = "登録 row の在る席の SessionStart の指示文に row の口座・実測の口座・照合（match / mismatch / unknown）の 1 行が直し方の pointer 付きで出て、雛形の穴は core と xtask で同じ数に揃う"
@@ -250,7 +250,7 @@ id = "f"
 title = "席の口座を持つ単位は project の群（第 1 段）— host の面に群の宣言の表を 1 つ足して既存の読み手と拒否の形で読み、便用の選定の 2 つの口が群の候補の口座を host 全体で外し、doctor が群ごとに 1 行を出す（群を宣言しない host は無変更・移動と記録は作らない）"
 req = ["FR57", "FR36", "NFR4"]
 section = "17"
-write-set = ["crates/scribe2/src/rules/manifest.rs", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2/src/fleet/mod.rs", "crates/scribe2/src/fleet/replay.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/src/fleet/wait.rs", "crates/scribe2/src/pipe/ratelimit.rs", "crates/scribe2/tests/e2e/rules.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/seat/account.rs", "crates/scribe2/tests/e2e/seat/rules.rs", "docs/design/account-lifecycle.md"]
+write-set = ["crates/scribe2/src/rules/manifest.rs", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2/src/fleet/mod.rs", "crates/scribe2/src/fleet/replay.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/src/fleet/wait.rs", "crates/scribe2/src/pipe/ratelimit.rs", "crates/scribe2-boundary/tests/e2e/rules.rs", "crates/scribe2-boundary/tests/e2e/fleet.rs", "crates/scribe2-boundary/tests/e2e/seat/account.rs", "crates/scribe2-boundary/tests/e2e/seat/rules.rs", "docs/design/account-lifecycle.md"]
 verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail host_group_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail rules_host_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail fleet_select_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail doctor_accounts_"]
 size = "M"
 done = "(1) host の面に群の表が 1 つ増え、名・置き場の列・候補の口座 label の列の 3 key を既存の読み手 1 本が読み、file の無い host は 0 群で続き、読めない host は typed に止まる (2) tracked の面に群の表が在る周は未知の表として行番号付きで断る (3) 同じ名が 2 行・同じ置き場が 2 つの群・宣言に無い label・置き場の列が空・候補の列が空・未知の key の 6 種を行番号付きで全件断り、面の中で止まった周は合わせの検査へ進まない (4) 便用の選定の候補から宣言のどの群の候補 label も外れ、便の置き場の席の登録 row の除外はそのまま残り、除外は次の選定から効いて走行中の便は止まらない (5) 同じ除外が便用の候補を作る 2 つの口の両方で効く (6) session 用の選定の候補には群の口座が残り、便用の並べ順は変わらず、群の今の口座の記録は 1 件も書かれない (7) doctor が宣言された群 1 つにつき 1 行を宣言順で出し、名・候補の label の列・置き場の数・その群の置き場の席の登録 row の口座 label の列（無ければ無しの語）を載せて判定しない (8) 群を 1 つも宣言しない host は群の行が 0 本で便用の候補も今のままで、doctor の既存の外形 snapshot が 1 行も動かない"
@@ -260,7 +260,7 @@ id = "g"
 title = "席の起動の短い形が会話を運ぶ — seat <label> [-c|-r ID] で注入する起動行の末尾に --continue / --resume ID を足す（登録 row と .launch は旗無しのまま・両方や値無しは使い方 rc 1・役割の flag は省略可のまま）"
 req = ["FR59", "FR40"]
 section = "18"
-write-set = ["crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/seat/cycle/launch.rs", "crates/scribe2/tests/e2e/seat/launch.rs", "crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/snapshots/e2e__seat__seat_usage_external_form.snap", ".config/nextest.toml"]
+write-set = ["crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/seat/cycle/launch.rs", "crates/scribe2-boundary/tests/e2e/seat/launch.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__seat__seat_usage_external_form.snap", ".config/nextest.toml"]
 verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail seat_launch_short_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail seat_usage_external_form"]
 size = "S"
 done = "(1) seat <label> -c（--continue）で inject.jsonl の注入行の末尾が --continue になり、登録 row の launch と置き場の .launch に --continue が無い (2) seat <label> -r ID（--resume ID）で注入行の末尾が --resume ID になり row の launch に無い (3) -c と -r の両方・値の無い -r・同じ flag の重複・会話 id の形（16 進小文字と - だけの UUID）でない -r の値（空白・$( を含む・- 始まり）は使い方 rc 1 で key 0・row 0 (4) 役割の flag 0 個は今までどおり orchestrator で通り、既存の seat_launch_short_ の歯 4 本は 1 字も変わらず緑 (5) usage の 1 行に [-c|-r ID] が増えて外形 snapshot が更新され、tests/e2e/seat.rs の diff は 0 行"

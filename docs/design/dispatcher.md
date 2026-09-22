@@ -227,7 +227,7 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
   3. **本文は 1 行**: `scribe2 pipe: <bead> <run> <段>=<verdict か kind か detail の 1 語> — 次の 1 手は pipe dispatch ls`（(a)）／`scribe2 pipe: idle ready=<候補の本数> launched=0 reason=<先頭の候補の理由>`（(b)）。対話面の作法（次の 1 手が先頭・dialogue-surface.md §2）に合わせて 1 行に閉じ、逐語も path も載せない（PUBLIC 面ではない state dir だが、pane は人が見る）。
   4. **送達は既存の 1 関数**: `deliver_within` を `pipe.stop_grace_ms` と同じ桁の窓で 1 回撃ち、結果を運転手の stdout に `notify=<delivered|refused:<理由>|unconfirmed|no-seat>` の 1 行で残す（C10）。送達の失敗で便の rc は変えない（通知は副作用・便の終端は既に記帳済み）。
   5. **閉じた型の variant を新設の module に書かない**: 行 p の `+` の src は `Stage` / `EventKind` の variant を `match` の腕や `Type::Variant` の字面で名指さない——名指すと他 doc の行の `touches` の閉包（contract-source.md 行 c の `crate::fleet::Stage`）に新設 file が入り、その行の write-set が不完全になって `contracts check` と gate が落ちる（2026-09-21 の便 1 本で実測・finding 1）。終端の 1 語は最後の `RunStage` / `RunDone` の event の `stage` の `as_str` と `detail` の頭の語を**字面で写す**（既存の読み手 `last_stage_detail` の型・段ごとの分岐は持たない）。`Stage` の `as_str` は variant の名そのもの（`Stopped` / `Failed` / `Questioned`・`fleet/mod.rs`）なので、約束 1 の expect の `Stopped` はその字面と一致する。
-  6. **新設の歯の file は `pipe/` の外に置き、宣言 file の diff は `mod` の 1 行だけにする**（flip-check の同梱の条件・2026-09-21 の便 5 周目の gate FAIL で実測）: flip-check は test file を **1 file ずつ単独で** base へ写して撃ち、宣言 file（`mod x;` の 1 行を持つ側）は差分が `mod` 行だけのときに限って本体の file と同梱する（`crates/xtask/src/flipcheck.rs` の `declaration_only` / `plan_of`・歯の外の行だけが動いた file も同梱される）。新設の歯の file を `pipe/` 配下に置くと、`crates/scribe2/tests/e2e/pipe.rs` の `pipe_hermetic_sites_stay_one`（`pipe/` 配下の tracked の file 数 9 と site 数 1 を pin する歯）を同じ file で 9 → 10 に上げざるを得ず、宣言 file が「歯の中の行が動いた file」になって同梱されない＝本体の file は base に宣言が無いまま単独で写され、compile 対象に入らず全 PASS＝`green-on-base file=<本体>` で gate が落ちる（実測: overlay の 1741 本に `pipe_notify_` の歯は 0 本・flip-check の comment の「本体だけを置くと偽 GREEN」の型）。ゆえに歯の file は行 p の約束 1 の `place` の file（`crates/scribe2/tests/e2e/` 直下・`pipe/` の外）に置き、宣言は `crates/scribe2/tests/e2e/main.rs` に `mod` 1 行を足すだけ（同 file の他の行は触らない）。pin は **9 file・1 site のまま**（`pipe/` の外は母集団に入らない）。歯は `crate::pipe` の `pub(super)` の口（`run_pipe` / `pipe_cmd`・`pub(super)` は親＝crate root の全 module から見える）で起こし、`pipe/` 配下の helper（登録 row を書く口等）を使うなら `tests/e2e/pipe.rs` の**歯の外の行**（`mod` の可視性・helper の可視性）だけを動かす（歯の外の行だけなら flip-check が同梱する・歯の中の行を 1 行でも動かすと同梱されない）。
+  6. **新設の歯の file は `pipe/` の外に置き、宣言 file の diff は `mod` の 1 行だけにする**（flip-check の同梱の条件・2026-09-21 の便 5 周目の gate FAIL で実測）: flip-check は test file を **1 file ずつ単独で** base へ写して撃ち、宣言 file（`mod x;` の 1 行を持つ側）は差分が `mod` 行だけのときに限って本体の file と同梱する（`crates/xtask/src/flipcheck.rs` の `declaration_only` / `plan_of`・歯の外の行だけが動いた file も同梱される）。新設の歯の file を `pipe/` 配下に置くと、`crates/scribe2-boundary/tests/e2e/pipe.rs` の `pipe_hermetic_sites_stay_one`（`pipe/` 配下の tracked の file 数 9 と site 数 1 を pin する歯）を同じ file で 9 → 10 に上げざるを得ず、宣言 file が「歯の中の行が動いた file」になって同梱されない＝本体の file は base に宣言が無いまま単独で写され、compile 対象に入らず全 PASS＝`green-on-base file=<本体>` で gate が落ちる（実測: overlay の 1741 本に `pipe_notify_` の歯は 0 本・flip-check の comment の「本体だけを置くと偽 GREEN」の型）。ゆえに歯の file は行 p の約束 1 の `place` の file（`crates/scribe2-boundary/tests/e2e/` 直下・`pipe/` の外）に置き、宣言は `crates/scribe2-boundary/tests/e2e/main.rs` に `mod` 1 行を足すだけ（同 file の他の行は触らない）。pin は **9 file・1 site のまま**（`pipe/` の外は母集団に入らない）。歯は `crate::pipe` の `pub(super)` の口（`run_pipe` / `pipe_cmd`・`pub(super)` は親＝crate root の全 module から見える）で起こし、`pipe/` 配下の helper（登録 row を書く口等）を使うなら `tests/e2e/pipe.rs` の**歯の外の行**（`mod` の可視性・helper の可視性）だけを動かす（歯の外の行だけなら flip-check が同梱する・歯の中の行を 1 行でも動かすと同梱されない）。
 - 触らない: event の kind（通知は記帳しない・pane の行と stdout の 1 行だけ）・`deliver_within` の中身・登録 row の形・`Landed` / PASS の便（送らない）・席の見張り（Monitor）は席の手順のまま（本行の着地後に止めてよい条件は memo .507 の昇格条件）。
 - 却下: 席の SessionStart / rebrief に終端の一覧を載せる（席の turn が無いと読めない＝同じ穴）／event を足して席が poll する（poll は席の寿命に縛られる・今の見張りと同じ）／全終端を送る（Landed が多く pane が流れる・落ちた便だけが席の手番）。
 
@@ -243,10 +243,10 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
   3. in-file の歯 14 本は 1 本も動かさない（親の `mod tests` に残る・`use super::*` のまま）。
   4. 札 `// flip-check: moved <行 q の bead>` を親の歯の区間の先頭と `+` の file の先頭に対で置く（純移動の機械証明は pipeline.md §5.3）。
   5. 割った後の行数は親が **約 1090**（余地 **約 410**）・`+` の file が **約 345**＝行 o の見積 100 を満たし、size M（300）も受けられる。
-  6. `crates/scribe2/tests/e2e/pipe/dispatch.rs` と `crates/xtask/src/env_reads.rs` の diff は **0 行**（write-set に在るのは受付が verify の filter の当たる歯の file を要求するためだけ・pipeline.md §43 の `polarity.rs` と同じ型）。verify の 3 行目（xtask の `env_reads_passes_on_core_with_a_nonempty_population` を歯の名の全体で 1 本）が約束 2 の置き場を測る: `#[cfg(test)]` の `use` を file の頭に置いた実装では母集団が 6 → 5 に落ちて RED（2026-09-21 の便 2 本目の gate FAIL の形）、歯の区間の直前に置けば GREEN。
+  6. `crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs` と `crates/xtask/src/env_reads.rs` の diff は **0 行**（write-set に在るのは受付が verify の filter の当たる歯の file を要求するためだけ・pipeline.md §43 の `polarity.rs` と同じ型）。verify の 3 行目（xtask の `env_reads_passes_on_core_with_a_nonempty_population` を歯の名の全体で 1 本）が約束 2 の置き場を測る: `#[cfg(test)]` の `use` を file の頭に置いた実装では母集団が 6 → 5 に落ちて RED（2026-09-21 の便 2 本目の gate FAIL の形）、歯の区間の直前に置けば GREEN。
 - verify の filter が当たる歯の母集団（orchestrator の実測・main 6c0bbc8・verified）:
   - **lib（verify 1 行目・接頭辞 7 個）**: 親の in-file の歯は **14 本**で、名は次のとおり（宣言順）——pipe_dispatch_drive_advance_is_forward_same_or_backward / pipe_dispatch_drive_hands_off_only_on_forward_and_names_the_reason / pipe_dispatch_drive_is_added_to_every_run_the_queue_starts / pipe_dispatch_drive_ranks_every_stage_from_the_declared_order / pipe_dispatch_drive_tokens_are_the_closed_five / pipe_dispatch_launched_marks_are_cleared_by_run_created_or_release / pipe_dispatch_marks_keep_the_last_one_and_release_removes_it / pipe_dispatch_order_puts_first_before_priority_then_the_issue_number / pipe_dispatch_order_reads_the_issue_number_as_digits_not_text / pipe_dispatch_release_requeues_failed_stopped_and_gated_but_not_landed_or_reviewed / pipe_dispatch_release_requeues_only_when_the_mark_follows_the_last_record_of_the_run / pipe_dispatch_section_key_applies_to_reviewed_only / pipe_dispatch_waiting_gate_admits_only_forward_drivers_and_every_non_driver / pipe_dispatch_wait_reasons_render_the_name_and_the_value。接頭辞ごとの本数は drive 5・launched 1・marks 1・order 2・release 2・section 1・wait 2（wait は末尾の `_` を付けない＝waiting_gate と wait_reasons の 2 本を 1 個で受ける）＝合計 14 で、lib 全体で 7 個の接頭辞に当たる歯も **14 本・全部この file**（母集団は lib の `#[test]` 全数・当たりの file 数 1）。lib で名に pipe_dispatch_ を含む歯は他に 1 本（`crates/scribe2/src/pipe/mod.rs` の pipe_dispatch_driver_hold_is_an_atomic_lock_that_reclaims_only_dead_owners）だけ在り、接頭辞 driver_ は 7 個に無いので当たらない。
-  - **e2e（verify 2 行目・filter pipe_dispatch_）**: 名に pipe_dispatch_ を含む e2e の歯は **51 本・全部 `crates/scribe2/tests/e2e/pipe/dispatch.rs`**（同 file の `#[test]` は 70 本・当たりの file 数 1＝write-set の中）。write-set の外の e2e file（`crates/scribe2/tests/e2e/pipe/stop.rs` 等）に在る driver_ の名は helper で、pipe_dispatch_ を名に含まないので filter に当たらない。
+  - **e2e（verify 2 行目・filter pipe_dispatch_）**: 名に pipe_dispatch_ を含む e2e の歯は **51 本・全部 `crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs`**（同 file の `#[test]` は 70 本・当たりの file 数 1＝write-set の中）。write-set の外の e2e file（`crates/scribe2-boundary/tests/e2e/pipe/stop.rs` 等）に在る driver_ の名は helper で、pipe_dispatch_ を名に含まないので filter に当たらない。
 - 触らない: (1)(2)(3)(5) の群の本体・`WaitReason` / `Turn` / `Candidate` の欄・in-file の歯の名と assert・e2e の歯・**`crates/scribe2/src/pipe/mod.rs`**（src の側の file・e2e に pipe/mod.rs は無い。pipe_dispatch_driver_ の歯はそこに在り、verify の filter はどちらの行も当たらない＝上の母集団のとおり）。
 - 却下: (1) の型の群を移す（`WaitReason` は行 o が variant を足す＝行 o の write-set が 2 file に割れて交差が増える）／(5) の表示の群を移す（80 行で余地が 100 に届かない）／行 o を S より小さく書く（size は S が最小）／割らずに据え置く（行 o が受付で止まったまま）／`Ledger` と `Marks` も子へ移して field に `pub(super)` を付ける（純移動の機械証明が body の行の可視性を剥かないので items-differ＝残差 0 が外れる・約束 1 と 2 が両立しない・便 4 本目の Question）。
 
@@ -260,7 +260,7 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
   2. **Queued の周の再送は同じ呼び出しの中で 1 回だけ**: `deliver_within` は `settle` が `Queued` で窓を閉じた周に pane を取り直し、入力欄の残りが**この周の本文**（`own_queued` に `Request` の `payload` を渡す・記録の先頭ではなく送った字面そのもの）なら `send_enter` で Enter を 1 回だけ再送して同じ窓でもう 1 度 `settle` する。2 度目も `Queued` なら `Queued` のまま返す（3 回目は無い）。残りが本文でない周（`Foreign` / `UnknownInput`）は 1 key も送らない（不変）。
   3. **本文と Enter の間に settle の 1 歩**（`SETTLE_STEP`）を置く（`send` の 2 つの `send-keys` の間・新しい rules 行も定数も足さない）。
   4. **stdout は消費を写す**: `notify=delivered consumed=<true|false|unknown[:理由]>`（`Settled` の `as_str` と `reason` の既存の字面・tick の `consumed=` と同じ語彙・C10）。`refused:<理由>` / `unconfirmed` / `no-seat` の字面は不変。
-- 歯（`pipe_notify_queued_` / `pipe_notify_delivery_` / `pipe_notify_foreign_` の接頭辞・`crates/scribe2/tests/e2e/notify.rs`・`pipe/` の外＝§19 形 6）: 偽の `tmux` を状態付きにする——`send-keys -l` は入力欄の file へ書き、`send-keys Enter` は「落とす回数」の file が 0 でなければ 1 減らして何もせず、0 なら入力欄を pane の本文へ移して席の打刻 file（`seat/<席>/state.jsonl`）に `UserPromptSubmit` の 1 行を足す、`capture-pane` は本文の後に prompt 行 + 入力欄を返す。(a) 落とす回数 1: 記録に Enter が 2 回・stdout に `consumed=true`。(b) 落とす回数 0: Enter 1 回・`consumed=true`。(c) 落とす回数 2: Enter 2 回（3 回目は無い）・`consumed=false`。(d) 入力欄に他人の文を先に置く: `send-keys` 0 回・`refused:busy`（不変）。
+- 歯（`pipe_notify_queued_` / `pipe_notify_delivery_` / `pipe_notify_foreign_` の接頭辞・`crates/scribe2-boundary/tests/e2e/notify.rs`・`pipe/` の外＝§19 形 6）: 偽の `tmux` を状態付きにする——`send-keys -l` は入力欄の file へ書き、`send-keys Enter` は「落とす回数」の file が 0 でなければ 1 減らして何もせず、0 なら入力欄を pane の本文へ移して席の打刻 file（`seat/<席>/state.jsonl`）に `UserPromptSubmit` の 1 行を足す、`capture-pane` は本文の後に prompt 行 + 入力欄を返す。(a) 落とす回数 1: 記録に Enter が 2 回・stdout に `consumed=true`。(b) 落とす回数 0: Enter 1 回・`consumed=true`。(c) 落とす回数 2: Enter 2 回（3 回目は無い）・`consumed=false`。(d) 入力欄に他人の文を先に置く: `send-keys` 0 回・`refused:busy`（不変）。
 - 触らない: `guard_input` の 3 値と `Foreign` の極性・`pass_input`（次の注入の入口の修復）・`SETTLE_STEP` / `SETTLE_TRIES` の値・記録の schema と `tick.jsonl` の置き場・§19 の契機と本文と宛先・event（通知は記帳しない）。
 - 却下: Claude Code の session 間 message（口座 dir の `sessions/<pid>.json` が指す socket）で送る（公開 docs に無い内部 protocol・版で変わる・他人の帳簿に書く型＝[consumer-sync.md](./consumer-sync.md) §11 の `installed_plugins.json` と同じ却下）／notify が自分で pane を読んで再送する（送達の読みが 2 本になる・C3.4）／Enter を常に 2 回送る（消費済みの周に空の submit が 1 回入る）／席の hook が通知を poll する（席の turn が無いと読めない＝§19 の却下と同じ穴）。
 
@@ -275,7 +275,7 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
   2. 戻すのは **INCONCLUSIVE ∧ unparsed の対だけ**: `FAIL`（kind を問わず・FR49 の判定）・`INCONCLUSIVE` で kind が他の 6 語（審査役が材料を読んで出した理由）・`review.json` が無い / 読めない（`None`・fail-closed で列外のまま）は戻さない。
   3. 印 1 回で起き直るのは 1 回（§12）: 起こし直した便がまた `unparsed` で終端すれば再び列外になる。§16 の § の鍵は不変（§ を直す経路と印の経路の両方が効く）。
   4. `dispatch ls` の理由の字面（`settled:<sha>/Reviewed`）と `release` の記帳は不変。
-- 歯（接頭辞 `pipe_dispatch_release_unparsed_`・in-file は `crates/scribe2/src/pipe/dispatch.rs` の `mod tests`（`candidates` の歯の隣）・e2e は `crates/scribe2/tests/e2e/pipe/dispatch.rs` の §12 の `release` の歯の隣・既存の `reasons_around_release` と `review.json` を書く fixture の型）: (a) in-file: 判定で引く述語が `INCONCLUSIVE` + `Unparsed` で真、`FAIL` + `Unparsed` / `INCONCLUSIVE` + 他の 6 語 / `PASS` で偽（母集団 = `FINDING_KINDS` の 7 語 × 3 値）。(b) e2e: `review.json` を `{"verdict":"INCONCLUSIVE","kind":"unparsed"}` にした便が `release` の後に理由 `-` へ戻り（base は `settled:…/Reviewed` のまま → RED）、同じ sha でまた同じ終端に着けば列外に戻る。(c) e2e: `{"verdict":"INCONCLUSIVE","kind":"section-material-missing"}` の便は `release` の後も理由が変わらない（不変・(b) が「INCONCLUSIVE を全部戻す」変異でないことを測る）。
+- 歯（接頭辞 `pipe_dispatch_release_unparsed_`・in-file は `crates/scribe2/src/pipe/dispatch.rs` の `mod tests`（`candidates` の歯の隣）・e2e は `crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs` の §12 の `release` の歯の隣・既存の `reasons_around_release` と `review.json` を書く fixture の型）: (a) in-file: 判定で引く述語が `INCONCLUSIVE` + `Unparsed` で真、`FAIL` + `Unparsed` / `INCONCLUSIVE` + 他の 6 語 / `PASS` で偽（母集団 = `FINDING_KINDS` の 7 語 × 3 値）。(b) e2e: `review.json` を `{"verdict":"INCONCLUSIVE","kind":"unparsed"}` にした便が `release` の後に理由 `-` へ戻り（base は `settled:…/Reviewed` のまま → RED）、同じ sha でまた同じ終端に着けば列外に戻る。(c) e2e: `{"verdict":"INCONCLUSIVE","kind":"section-material-missing"}` の便は `release` の後も理由が変わらない（不変・(b) が「INCONCLUSIVE を全部戻す」変異でないことを測る）。
 - 触らない: `requeues` / `section_keyed` の網羅 match と in-file の census の歯 3 本・`released_after`・`judgement_of` と `FindingKind` の 7 語・審査の判定と `review.json` の形・`dispatch ls` の理由の字面。
 - 却下: `requeues` の match に `Reviewed => true` を足す（審査 FAIL まで戻る・FR49 / FR68 に反する・census の歯が落ちる）／lens が `unparsed` の周に器が自分で撃ち直す（見分けを誤った周に §2 の無限再起動へ戻る・§12 の「器が自分で戻すことはしない」と同じ却下）／`unparsed` を `Failed` の段へ倒す（審査の段で終端した事実を消す・C10）／§ に空の 1 字を足して鍵を動かす運用（散文の作法・N2・doc の history を汚す）。
 
@@ -288,7 +288,7 @@ title = "pipe dispatch の本体 — 列の導出（台帳 + 設計 pointer + �
 req = ["FR30", "FR39", "FR49"]
 section = "3"
 touches = ["crate::fleet::EventKind"]
-write-set = ["+crates/scribe2/src/pipe/dispatch.rs", "+crates/scribe2/src/pipe/dispatch/candidates.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/src/pipe/admission.rs", "crates/scribe2/src/pipe/queue.rs", "crates/scribe2/src/seat/ledger.rs", "crates/scribe2/src/seat/role.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2/src/fleet/mod.rs", "crates/scribe2/src/fleet/event.rs", "crates/scribe2/src/fleet/replay.rs", "crates/scribe2/src/fleet/usage.rs", "crates/scribe2/src/fleet/cli.rs", "+crates/scribe2/tests/e2e/pipe/dispatch.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/pipe/ratelimit.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/seat.rs", "crates/scribe2/tests/e2e/prop.rs", ".config/nextest.toml", "crates/scribe2/tests/e2e/snapshots/e2e__pipe__pipe_external_form.snap"]
+write-set = ["+crates/scribe2/src/pipe/dispatch.rs", "+crates/scribe2/src/pipe/dispatch/candidates.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/src/pipe/admission.rs", "crates/scribe2/src/pipe/queue.rs", "crates/scribe2/src/seat/ledger.rs", "crates/scribe2/src/seat/role.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2/src/fleet/mod.rs", "crates/scribe2/src/fleet/event.rs", "crates/scribe2/src/fleet/replay.rs", "crates/scribe2/src/fleet/usage.rs", "crates/scribe2/src/fleet/cli.rs", "+crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "crates/scribe2-boundary/tests/e2e/pipe.rs", "crates/scribe2-boundary/tests/e2e/pipe/ratelimit.rs", "crates/scribe2-boundary/tests/e2e/fleet.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "crates/scribe2-boundary/tests/e2e/prop.rs", ".config/nextest.toml", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__pipe__pipe_external_form.snap"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_dispatch_"]
 size = "M"
 done = "偽の台帳と偽の live 便で、交差する便は Overlap で待ち交差しない便だけが起動の構築点に届き、first が priority より先に来て hold は起こさず、直前の便が Reviewed FAIL の契約は同じ sha では ReviewFailed で列外、台帳が読めない周は UNMEASURED で 0 本"
@@ -298,7 +298,7 @@ id = "b"
 title = "契機 — 便の終端（land / stop / retire・run と resume の終端）の直後・pipe dispatch の手動 1 周・first / release の記録の直後に同じ dispatch::turn を撃つ（tick は無い）・1 周の repo の材料の読みは 1 回（候補ごとに読み直さない）"
 req = ["FR30", "FR68"]
 section = "5"
-write-set = ["crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/run.rs", "crates/scribe2/src/pipe/cli/resume.rs", "crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/src/pipe/cli/preflight.rs", "crates/scribe2/src/pipe/declaration.rs", "crates/scribe2/src/pipe/land.rs", "crates/scribe2/src/pipe/stop.rs", "crates/scribe2/src/pipe/retire.rs", "crates/scribe2/tests/e2e/pipe/dispatch.rs", "crates/scribe2/tests/e2e/pipe/land.rs", "crates/scribe2/tests/e2e/pipe/stop.rs", ".config/nextest.toml", "crates/scribe2/tests/e2e/snapshots/e2e__pipe__pipe_external_form.snap"]
+write-set = ["crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/run.rs", "crates/scribe2/src/pipe/cli/resume.rs", "crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/src/pipe/cli/preflight.rs", "crates/scribe2/src/pipe/declaration.rs", "crates/scribe2/src/pipe/land.rs", "crates/scribe2/src/pipe/stop.rs", "crates/scribe2/src/pipe/retire.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "crates/scribe2-boundary/tests/e2e/pipe/land.rs", "crates/scribe2-boundary/tests/e2e/pipe/stop.rs", ".config/nextest.toml", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__pipe__pipe_external_form.snap"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_terminal_dispatch_"]
 size = "S"
 done = "偽 remote の toy repo で land と stop の終端の直後に列が 1 周撃たれて交差の解けた便が起こされ（RunCreated が増える）、契機が重なっても受付の入口の排他で便は 1 本に留まり、着地した bead は起こし直されず契約の行を改訂して sha が動くと列に戻り、run の終端の 1 周は自分の道具で便を起こし、pipe dispatch の手動 1 周と first / release の記録の直後も同じ関数を撃ち、dispatch ls は 1 本も起こさず、終端の中の 1 周が失敗しても終端の rc は変わらず、候補 N 件の 1 周で repo の材料の読みが 1 回（母集団 = 候補数）"
@@ -309,7 +309,7 @@ id = "d"
 title = "driver の死亡 — 札の書き・消し、turn 関数の起こし直し（pipe resume）、record token resumed:<m>、base_of_run の typed 化"
 req = ["FR68", "FR14", "FR50"]
 section = "5"
-write-set = ["crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/cli/run.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/resume.rs", "crates/scribe2/src/pipe/admission.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/follow.rs", "crates/scribe2/src/pipe/land.rs", "crates/scribe2/src/pipe/land/verify.rs", "crates/scribe2/src/fleet/store.rs", "crates/scribe2/tests/e2e/pipe/dispatch.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs"]
+write-set = ["crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/cli/run.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/resume.rs", "crates/scribe2/src/pipe/admission.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/follow.rs", "crates/scribe2/src/pipe/land.rs", "crates/scribe2/src/pipe/land/verify.rs", "crates/scribe2/src/fleet/store.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "crates/scribe2-boundary/tests/e2e/pipe/spawn.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_dispatch_driver_"]
 size = "M"
 done = "driver を殺した便に dispatch の 1 周を撃つと pipe resume が 1 回起きて record に resumed:1・その便が 1 段進み、札の無い live 便と Blocked の便は起こし直さず、生きている driver が握っている札は取れず・古さでも奪われず、正常に抜けた driver は自分の札を外す"
@@ -320,7 +320,7 @@ id = "g"
 title = "dispatch の歯の診断と結合の切り離し — assert の文に rc / stdout / stderr を写し、印の直後の 1 周は子 process を起こさない台帳で測る（歯だけ・src/ は触らない）"
 req = ["FR68", "NFR4"]
 section = "8"
-write-set = ["crates/scribe2/tests/e2e/pipe/dispatch.rs", "crates/scribe2/tests/e2e/pipe.rs"]
+write-set = ["crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "crates/scribe2-boundary/tests/e2e/pipe.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_terminal_dispatch_marks_fire_without_children"]
 size = "S"
 done = "印の直後の 1 周の歯が便を 1 本も起こさずに（RunCreated 0・子 process 0）release の直後の dispatch= 行を測り、既存の手動の 1 周の歯は起こした効果だけを測り、dispatch の歯の assert の文が落ちた周の rc と stdout と stderr を写し、src/ は 1 行も変わらない"
@@ -331,7 +331,7 @@ id = "e"
 title = "便の自走 — pipe run / pipe resume の flag --drive を持つ driver だけが終端の 1 周で自分の便を次の driver に渡し（前進 ∧ 待ちでない ∧ 終端でない周だけ・渡さない理由は record token）、列と起こし直しが起こす便は --drive を持つ"
 req = ["FR68", "FR14", "FR50"]
 section = "5"
-write-set = ["crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/args.rs", "crates/scribe2/src/pipe/cli/run.rs", "crates/scribe2/src/pipe/cli/resume.rs", "crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/queue.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/size.rs", "crates/scribe2/src/pipe/stop.rs", "crates/scribe2/tests/e2e/pipe/dispatch.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs", "crates/scribe2/tests/e2e/snapshots/e2e__pipe__pipe_external_form.snap"]
+write-set = ["crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/args.rs", "crates/scribe2/src/pipe/cli/run.rs", "crates/scribe2/src/pipe/cli/resume.rs", "crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/queue.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/size.rs", "crates/scribe2/src/pipe/stop.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "crates/scribe2-boundary/tests/e2e/pipe/spawn.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__pipe__pipe_external_form.snap"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_dispatch_drive_"]
 size = "M"
 done = "--drive を持つ pipe run が toy repo の契約 1 本を偽 runner と偽 lens で人の手なしに Landed まで通し（run_all の 1 process・record は drive=settled）、--drive を持つ pipe resume が段ごとに次の driver へ継いで Landed まで通り、--drive の無い run / resume は 1 段で止まり既存の歯は 1 本も変わらず、Blocked の便と段の動かなかった周は渡さず理由が record に載り、列の起こし直しが起こす resume は --drive を持ち殺した driver の便が Landed まで通り、usage の外形 snapshot が更新される"
@@ -342,7 +342,7 @@ id = "h"
 title = "列へ戻す印 — Settled の判定が、同じ契約 file を持つ直前の便の最後の記帳より後の release を見て 1 回だけ列外を外す（Landed と審査 FAIL は外さない・新しい event kind は足さない）"
 req = ["FR68", "FR49", "NFR4"]
 section = "12"
-write-set = ["crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/tests/e2e/pipe/dispatch.rs"]
+write-set = ["crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_dispatch_release_requeues_"]
 size = "S"
 done = "偽の台帳と run dir の fixture で、Failed で終端した便の bead が Settled で列外に居り、その後の release で同じ sha のまま列に戻って dispatch ls の reason が - になり、起こし直した便が同じ sha でまた終端に着くと再び Settled になり、終端より前の release は効かず、Landed の便と審査 FAIL の便は release の後も Settled のままで、Stopped の便と gate の判定で終端になった便は戻り（母集団 = 終端の段の種類）、戻すかどうかの段の弁別は段の型の網羅の match 1 本で持つ"
@@ -352,7 +352,7 @@ id = "i"
 title = "起動の失敗の理由と repo の名指し — spawn が実装役の stderr を捕らえて run dir の log に残し呼び手の stderr にも流す・pipe の --repo の読み手を 1 本に畳んで値を std::path::absolute で絶対にする"
 req = ["FR30", "NFR4"]
 section = "12"
-write-set = ["crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/args.rs", "crates/scribe2/src/pipe/cli/intake.rs", "+crates/scribe2/tests/e2e/pipe/launch_failure.rs", "crates/scribe2/tests/e2e/pipe.rs"]
+write-set = ["crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/args.rs", "crates/scribe2/src/pipe/cli/intake.rs", "+crates/scribe2-boundary/tests/e2e/pipe/launch_failure.rs", "crates/scribe2-boundary/tests/e2e/pipe.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_spawn_runner_stderr_", "cargo nextest run -p scribe2 --no-tests=fail pipe_repo_relative_"]
 size = "S"
 done = "stderr に 1 行書いて rc 2 で落ちる偽 runner の便が Failed detail=runner-rc:2,commits:0 に着いた後、run dir の stderr の log にその 1 行が見出し行付きで残り、呼び手の stderr にも同じ行が出て、stderr が空の周は file が作られず、stderr に書いても rc 0 で commit 1 の偽 runner は Implemented に着き、--repo を相対 path で渡した pipe run が絶対 path で渡した周と同じ worktree の場所と同じ段に着く"
@@ -362,7 +362,7 @@ id = "j"
 title = "関門が開いた待ちの便の再開 — 起こし直しの候補に回答済みの Questioned と承認済みの Blocked（生きている driver の居ない便）を足し、pipe answer / pipe approve の記帳の直後にも同じ 1 周を撃つ（関門の判定は resume の入口と同じ 1 本・新しい段も event kind も足さない）"
 req = ["FR68", "FR32", "FR16"]
 section = "13"
-write-set = ["crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/resume.rs", "crates/scribe2/tests/e2e/pipe/dispatch.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "crates/scribe2/tests/e2e/pipe/land.rs", "crates/scribe2/tests/e2e/pipe/ratelimit.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/fleet.rs", "crates/scribe2/tests/e2e/polarity.rs"]
+write-set = ["crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/resume.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "crates/scribe2-boundary/tests/e2e/pipe/spawn.rs", "crates/scribe2-boundary/tests/e2e/pipe/gate.rs", "crates/scribe2-boundary/tests/e2e/pipe/land.rs", "crates/scribe2-boundary/tests/e2e/pipe/ratelimit.rs", "crates/scribe2-boundary/tests/e2e/pipe.rs", "crates/scribe2-boundary/tests/e2e/fleet.rs", "crates/scribe2-boundary/tests/e2e/polarity.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_dispatch_waiting_gate_", "cargo nextest run -p scribe2 --no-tests=fail pipe_dispatch_driver_", "cargo nextest run -p scribe2 --no-tests=fail pipe_question_", "cargo nextest run -p scribe2 --no-tests=fail pipe_approval_"]
 size = "M"
 done = "偽の台帳と偽 runner の toy repo で、回答済みの Questioned の便（driver の札なし）が手動の 1 周で --drive 付きの resume で起こされて先の段へ進み（resumed:1）、未回答の Questioned の便と古い質問に回答が在っても最新の質問が未回答の便は起こされず（resumed:0）、承認済みの Blocked の便も同じく起こされ、札の 4 値（無い・所有者が死んでいる便は起こす／所有者が生きている・在るのに読めない便は触らない）がそれぞれ測られ、道具を渡した pipe answer と pipe approve の記帳の直後に同じ 1 周が撃たれて便が進み、道具を渡さない pipe answer は記帳だけで rc 0 のまま、回答と承認の stdout は記帳の 1 行だけで、1 周が失敗しても回答の rc は変わらず、候補の選別の pure な fn が段の前進の 3 値のそれぞれで測られ（段を前へ進めた driver の周は関門の候補をそのまま起こし、同じ段のままと段が戻った driver の周は 0 本にし、driver でない周は絞らない・in-file の歯）、段を前へ進めた driver の終端の 1 周が別の回答済みの便を起こし（resumed:1）、関門の判定は resume の入口と列が同じ述語 1 本を呼び、待ちの段でない便の起こし直しの規則と未承認の Blocked を外す既存の歯（pipe_dispatch_driver_ の歯）と、質問と回答の歯（pipe_question_）と承認の歯（pipe_approval_）は測っている約束を変えずに緑のまま"
@@ -372,7 +372,7 @@ id = "k"
 title = "台帳の読みの子 process を名指された repo の中で撃つ — 台帳の読みが cwd を引数で取り、列は --repo の値を・SessionStart は payload の cwd を渡す（器は cwd を推さない・close は上限の余地が足りず別の行・新しい断りも rules 行も足さない）"
 req = ["FR68", "FR30", "NFR4"]
 section = "14"
-write-set = ["crates/scribe2/src/seat/ledger.rs", "crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/hook/mod.rs", "crates/scribe2/tests/e2e/pipe/dispatch.rs", "crates/scribe2/tests/e2e/hook.rs"]
+write-set = ["crates/scribe2/src/seat/ledger.rs", "crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/hook/mod.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "crates/scribe2-boundary/tests/e2e/hook.rs"]
 verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_dispatch_ledger_cwd_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail hook_brief_ledger_is_unknown_when_the_client_is_unreadable"]
 size = "S"
 done = "cwd を書き出してから台帳の JSON を吐く偽の台帳 client を --bd で渡し process の cwd を別の dir にしたまま pipe dispatch ls --repo <toy> を撃つと子の見た cwd が toy repo になり（process の cwd でない）、--repo を相対 path で渡した周も子の見た cwd が同じ絶対 path になり、無い dir を --repo に渡した周は列が DISPATCH-UNMEASURED の行で 0 本になり（DISPATCH-NONE と融合しない）、SessionStart の {ledger} の行は 1 字も変わらず、台帳 client の引数と待ち上限の rules 行と LedgerError の 2 値と件数の 1 行の字面は変わらない"
@@ -382,7 +382,7 @@ id = "l"
 title = "席が測り直して PASS になった Gated の便を列が起こし直す — 起こし直しの候補に「Gated ∧ verdict が PASS ∧ 札が無いか所有者が死んでいる」を 1 枝足す（既存の枝は不変・PASS 以外と読めない verdict は候補にしない・段を前へ進めた driver の周だけ起こす）"
 req = ["FR68", "FR14", "NFR4"]
 section = "15"
-write-set = ["crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/tests/e2e/pipe/dispatch.rs"]
+write-set = ["crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs"]
 verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_dispatch_gated_pass_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_dispatch_driver_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_dispatch_waiting_gate_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_dispatch_drive_resume_hands_off_only_with_the_flag"]
 size = "S"
 done = "flag の無い driver の終端の 1 周は自分が段を進めた便を新しい枝の候補にせず（歯 pipe_dispatch_drive_resume_hands_off_only_with_the_flag が緑のまま・flag の無い resume が PASS の Gated で抜けた直後に自分の便が起きないことを新しい歯が測る）、verdict の読みは既存の読み手（land.rs の verdict_of・可視性は不変）を列から呼ぶだけで足り、偽の台帳と偽 runner の toy repo で、verdict が PASS ∧ 札の無い Gated の便が手動の 1 周で --drive 付きの resume で起こされて先の段へ進み（resumed:1）、verdict が INCONCLUSIVE の便と verdict を読めない便は起こされず（resumed:0）、札の所有者が生きている便と札が在るのに読めない便は触らず（母集団 = 札の 4 値）、札の所有者が死んでいる Gated の便は verdict が PASS の周も INCONCLUSIVE の周も今までどおり起こされ、段を前へ進めなかった driver の終端の 1 周はこの候補を 1 本も起こさず、待ちの段の候補の規則と待ちの段でない Gated 以外の便の規則を測る既存の歯（pipe_dispatch_driver_ と pipe_dispatch_waiting_gate_）は測っている約束を変えずに緑のまま"
@@ -392,7 +392,7 @@ id = "m"
 title = "列外の鍵に審査役へ渡る材料を含める — Reviewed で終端した便の鍵に、行の section が指す § の本文（審査の材料の dir の写し）を足す（§ の読みは審査と同じ 1 本・写しが無い周は契約 file だけの鍵に倒す・Reviewed 以外の段の鍵は不変・新しい file も field も足さない）"
 req = ["FR68", "FR49", "NFR4"]
 section = "16"
-write-set = ["crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/review.rs", "crates/scribe2/tests/e2e/pipe/dispatch.rs"]
+write-set = ["crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/review.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs"]
 verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_dispatch_section_key_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_dispatch_release_requeues_"]
 size = "M"
 done = "偽の台帳と run dir の fixture で、審査 INCONCLUSIVE で終端した Reviewed の便の契約が § の本文を直した後の 1 周で列に戻って dispatch ls の理由が値なしの欄になり、§ も契約 file も変わっていない周は列外のままで、審査 FAIL で終端した便も § を直せば戻り、§ の写しを持たない便と写しが在るのに読めない便は契約 file だけの鍵で今までどおり列外になり（母集団 = 写しの 3 値）、Landed の便は § を直しても戻らず（母集団 = 終端の段の種類）、§ の本文を 1 文字だけ変えた周も戻り、Reviewed 以外の段の鍵と dispatch ls の理由の字面と event kind は変わらず、release の印の既存の規則を測る歯（pipe_dispatch_release_requeues_）は測っている約束を変えずに緑のまま"
@@ -411,7 +411,7 @@ text = "起こす前に bead 名義の DispatchMark（mark = Launched・detail =
 files = ["crates/scribe2/src/fleet/mod.rs", "crates/scribe2/src/pipe/dispatch.rs"]
 symbols = ["crate::fleet::Mark", "+Mark::Launched", "marks_of("]
 teeth = ["pipe_dispatch_launched_mark_is_written_before_the_child_is_spawned"]
-place = "crates/scribe2/tests/e2e/pipe/dispatch.rs"
+place = "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs"
 fixture = "偽の台帳に ready の bead 1 本と toy repo を置いて pipe dispatch の 1 周を撃つ。負の枝は event log を読み取り専用にして印が書けない周"
 expect = "event log に bead 名義の DispatchMark mark=launched が RunCreated より前の行として在り、印が書けない周は子が起きず dispatch=started:0 で ls の理由が admission:mark（測れない側）に出る"
 
@@ -422,7 +422,7 @@ text = "最新の Launched より後に RunCreated も Release の印も無い b
 files = ["crates/scribe2/src/pipe/dispatch.rs"]
 symbols = ["crate::pipe::dispatch::WaitReason", "+WaitReason::Launched"]
 teeth = ["pipe_dispatch_launched_bead_is_not_relaunched_until_run_created_or_release"]
-place = "crates/scribe2/tests/e2e/pipe/dispatch.rs"
+place = "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs"
 fixture = "偽の台帳の ready の bead に DispatchMark launched だけを積んだ event log で 2 周目を撃つ。対照は Launched の後に RunCreated を積んだ log と、Launched の後に Release を積んだ log の 2 つ"
 expect = "印だけの周は起こさず ls の理由が launched:<ts>、RunCreated の後は理由が live の側（overlap）に変わり、Release の後の周は起こす（started:1）"
 
@@ -432,7 +432,7 @@ n = 3
 text = "spawn_self の stderr を <state_dir>/pipe/launch.log に append し、file を開けない周は null に落として起動を止めない"
 files = ["crates/scribe2/src/pipe/dispatch.rs"]
 teeth = ["pipe_dispatch_launch_log_keeps_the_child_stderr"]
-place = "crates/scribe2/tests/e2e/pipe/dispatch.rs"
+place = "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs"
 fixture = "偽の bd が 1 回目の呼び出しだけ答えて 2 回目以後は rc 1 で断る（親の周は台帳を読めて起こし、子の intake は台帳で断って stderr に 1 行書く）。負の枝は launch.log の path を dir にして開けなくする"
 expect = "launch.log に子の断りの 1 行が append され、開けない周も子は起きて dispatch=started:1（起動を記録の失敗で止めない）"
 
@@ -451,7 +451,7 @@ text = "列の 1 周は起こす前に health::now を読み、act が Wait の�
 files = ["crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/health.rs", "crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/cli/step.rs"]
 symbols = ["crate::pipe::dispatch::WaitReason", "+WaitReason::HostBusy", "crate::pipe::health::Breaker"]
 teeth = ["pipe_dispatch_host_busy_round_launches_nothing"]
-place = "crates/scribe2/tests/e2e/pipe/dispatch.rs"
+place = "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs"
 fixture = "rules fixture の host.runnable_per_core を 0（閾値 0 = 常に Busy）にした周と既定の値の周の対で、偽の台帳に ready の bead 1 本を置いて 1 周を撃つ"
 expect = "0 の周は dispatch=started:0 で全候補の ls の理由が host-busy、既定の周は started:1"
 
@@ -462,7 +462,7 @@ text = "live の Stage::Intake の枝を運転手の札で読む: Live なら tr
 files = ["crates/scribe2/src/pipe/cli/state.rs"]
 symbols = ["live(", "crate::pipe::Ticket"]
 teeth = ["pipe_dispatch_intake_run_without_a_live_driver_is_not_live"]
-place = "crates/scribe2/tests/e2e/pipe/dispatch.rs"
+place = "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs"
 fixture = "RunCreated stage=Intake だけを持つ run を state dir に置き、札の 4 形（無い・死んだ pid・生きた pid〔歯の自分〕・読めない）で対照。同じ write-set の別 bead を候補にする"
 expect = "無い・死んだ周は overlap にならず候補が起きて started:1、生きた周は理由 overlap:<run>、読めない周は起こさず理由が unmeasured の側"
 
@@ -477,10 +477,10 @@ size = "S"
 of = "p"
 n = 1
 text = "運転手の終端の周で最後の段が Reviewed / Gated の FAIL・INCONCLUSIVE、Failed、Questioned、Stopped のとき、fleet の replay の State.registrations から (Role::Orchestrator, anchor = repo) の最新 row の target へ 1 行を deliver_within で送り、stdout に notify=<delivered|refused:<理由>|unconfirmed|no-seat> を残す（row が無い周は送らず no-seat・便の rc は変えない）"
-files = ["crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/cli.rs", "+crates/scribe2/src/pipe/notify.rs", "crates/scribe2/tests/e2e/main.rs", "crates/scribe2/tests/e2e/pipe.rs", "+crates/scribe2/tests/e2e/notify.rs"]
+files = ["crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/cli.rs", "+crates/scribe2/src/pipe/notify.rs", "crates/scribe2-boundary/tests/e2e/main.rs", "crates/scribe2-boundary/tests/e2e/pipe.rs", "+crates/scribe2-boundary/tests/e2e/notify.rs"]
 symbols = ["seat::inject::Request"]
 teeth = ["pipe_notify_terminal_failure_reaches_the_registered_seat_pane", "pipe_notify_without_a_registered_seat_reports_no_seat"]
-place = "+crates/scribe2/tests/e2e/notify.rs"
+place = "+crates/scribe2-boundary/tests/e2e/notify.rs"
 fixture = "偽の tmux（send-keys の引数を file に記録する script）を PATH に置き、SeatRegistered の row（role orchestrator・anchor = toy repo・target = 任意の pane 名）を state dir に積んだ上で、live な run に pipe stop --run を撃つ（Stopped は終端の 1 つ）。負の枝は row を積まない"
 expect = "記録に send-keys が 1 回だけ在り payload が bead と run と Stopped を含む 1 行で stdout に notify=delivered、row 無しの周は send-keys 0 回で notify=no-seat"
 
@@ -488,9 +488,9 @@ expect = "記録に send-keys が 1 回だけ在り payload が bead と run と
 of = "p"
 n = 2
 text = "同じ周の列の結果が起こした便 0 ∧ 候補 1 本以上のとき、同じ宛先へ idle の 1 行（ready=<本数> launched=0 reason=<先頭の候補の理由>）を送る（Landed と PASS の終端でも列が idle ならこの 1 行だけ送る）"
-files = ["crates/scribe2/src/pipe/cli.rs", "+crates/scribe2/src/pipe/notify.rs", "+crates/scribe2/tests/e2e/notify.rs"]
+files = ["crates/scribe2/src/pipe/cli.rs", "+crates/scribe2/src/pipe/notify.rs", "+crates/scribe2-boundary/tests/e2e/notify.rs"]
 teeth = ["pipe_notify_idle_round_reports_ready_count_and_top_reason"]
-place = "+crates/scribe2/tests/e2e/notify.rs"
+place = "+crates/scribe2-boundary/tests/e2e/notify.rs"
 fixture = "偽の台帳の ready の bead 1 本を hold にした state dir（起こす 0 ∧ 候補 1）と登録 row と偽の tmux を置き、pipe stop --run の終端を撃つ。負の枝は候補 0 の台帳"
 expect = "idle の 1 行に ready=1 launched=0 reason=hold が在り、候補 0 の周は idle の行を送らない（send-keys は終端の 1 行だけ）"
 
@@ -499,7 +499,7 @@ id = "q"
 title = "pipe/dispatch.rs の「台帳から候補を組む」群のうち 16 item（約 325 行・Ledger と Marks の 2 型は親に残す）を子 module candidates へ割る — 純移動・親に増えるのは mod 1 行と use 2 文・in-file の歯 14 本は動かさない・e2e の歯の file は 1 byte も変えない"
 req = ["FR68", "NFR4"]
 section = "20"
-write-set = ["-crates/scribe2/src/pipe/dispatch.rs", "+crates/scribe2/src/pipe/dispatch/candidates.rs", "crates/scribe2/tests/e2e/pipe/dispatch.rs", "crates/xtask/src/env_reads.rs"]
+write-set = ["-crates/scribe2/src/pipe/dispatch.rs", "+crates/scribe2/src/pipe/dispatch/candidates.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "crates/xtask/src/env_reads.rs"]
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail pipe_dispatch_drive_ pipe_dispatch_launched_ pipe_dispatch_marks_ pipe_dispatch_order_ pipe_dispatch_release_ pipe_dispatch_section_ pipe_dispatch_wait", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_dispatch_", "cargo nextest run -p xtask --no-tests=fail env_reads_passes_on_core_with_a_nonempty_population"]
 size = "S"
 done = "(1) 16 item（Ledger と Marks を除く）が名・本文・順序を変えずに子へ移り、Ledger と Marks は親に残って field の可視性が不変、flip-check の moved の機械証明が残差 0 (2) 親に増えるのは mod 1 行と use 2 文だけで turn / fire / revivals の本体は不変、#[cfg(test)] の use は歯の区間の直前（親の #[cfg(test)] + mod tests の直前）に在り、file の最初の行頭 #[cfg(test)] は src の本体の全 item より後＝xtask の env_reads_passes_on_core_with_a_nonempty_population が緑（母集団 6・base と同じ） (3) in-file の歯 14 本と e2e の pipe_dispatch_ の歯が 1 字も変わらず緑 (4) 親の行数が約 1090 で余地が 400 以上 (5) tests/e2e/pipe/dispatch.rs と crates/xtask/src/env_reads.rs の diff が 0 行"
@@ -509,7 +509,7 @@ id = "r"
 title = "通知の送達を消費で閉じる — notify は置き場を渡して自席の記録と打刻を測り、settle が Queued の周は入力欄の残りがこの周の本文なら Enter を 1 回だけ再送して同じ窓で settle し直し、stdout に notify=delivered consumed=<true|false|unknown[:理由]> を出す"
 req = ["FR30", "FR68"]
 section = "21"
-write-set = ["crates/scribe2/src/pipe/notify.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/seat/inject.rs", "crates/scribe2/tests/e2e/notify.rs"]
+write-set = ["crates/scribe2/src/pipe/notify.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/seat/inject.rs", "crates/scribe2-boundary/tests/e2e/notify.rs"]
 verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_notify_queued_ pipe_notify_delivery_ pipe_notify_foreign_"]
 size = "S"
 done = "(1) notify の Request が運転手の置き場を StateDir（Provenance::Flag）で持ち、送達後に tick.jsonl へ自席の記録が 1 行増える (2) settle が Queued で窓を閉じた周に入力欄の残りがこの周の本文なら Enter を 1 回だけ再送して settle し直し、2 度目も Queued ならそのまま返す（Enter は最大 2 回・text の再送は 0 回・Foreign / UnknownInput の周は 0 key） (3) 本文と Enter の間に SETTLE_STEP の 1 歩が在る (4) stdout が notify=delivered consumed=<true|false|unknown[:理由]> で、refused: / unconfirmed / no-seat の字面は不変 (5) 偽 tmux の落とす回数 1 で Enter 2 回・consumed=true、0 で Enter 1 回・consumed=true、2 で Enter 2 回・consumed=false、他人の文が先に在れば send-keys 0 回・refused:busy"
@@ -519,7 +519,7 @@ id = "s"
 title = "審査を測れなかった便（Reviewed の INCONCLUSIVE kind:unparsed）を release で列へ戻す — settled に判定で引く戻しを 1 つ足し（INCONCLUSIVE ∧ unparsed の対だけ・印 1 回で 1 回）、段で引く requeues と § の鍵は不変"
 req = ["FR49", "FR68"]
 section = "22"
-write-set = ["crates/scribe2/src/pipe/dispatch/candidates.rs", "crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/tests/e2e/pipe/dispatch.rs"]
+write-set = ["crates/scribe2/src/pipe/dispatch/candidates.rs", "crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_dispatch_release_unparsed_"]
 size = "S"
 done = "(1) review.json が INCONCLUSIVE ∧ kind unparsed の Reviewed の便は、その便の最後の記帳より後の release で列外を外れ、dispatch ls の理由が - になる (2) FAIL（kind を問わず）・INCONCLUSIVE で kind が他の 6 語・review.json が無い / 読めない便は release の後も settled:<sha>/Reviewed のまま (3) 起こし直した便が同じ sha でまた unparsed に着けば再び列外（印 1 回で 1 回） (4) requeues / section_keyed の網羅 match と in-file の census の歯 3 本・released_after・judgement_of が 1 字も変わらず緑 (5) 判定で引く述語は pure な関数 1 つで、in-file の歯が FINDING_KINDS の 7 語 × 3 値の母集団で測る"
