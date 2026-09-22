@@ -644,6 +644,20 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 - 触らない: `may_queue` / `first_gated_at` / `turn_in` / `train_in`・`FOLLOWING` の字面・`MainRead` の 4 値・`Completion::LandWindow` の判定経路・e2e の `pipe_land_window_` の歯 3 本（1 字も変わらない）。
 - 却下: 撃つ側が古い便に `RunStage` を足して窓を開ける運用（散文の作法・N2・記帳の門〔§39〕が `RunStopped` の後の `RunStage` を断る）／追随中を時間で切る（「N 時間前の `Implemented` は追随中でない」＝閾値が恣意・終端の記帳が在るのに読まない）／`RunStopped` を別の読みで拾う（log を 2 度読む・replay が既に段を持つ）。
 
+## 48. 終端の台帳の close を repo を cwd にして撃つ（契約表の行 ap・§5.4 の終端の 3 段の 3 段目）
+
+やさしく言うと: 便が着地して CI も緑なのに、最後の「台帳を閉じる」だけが落ちることがある。台帳の道具（bd）は「今いる dir」から台帳を探すのに、器はそれを運転手が起きたときの dir のまま撃っている。起こした側の dir が消えていると台帳が見つからない。着地と同じく repo を dir にして撃つ。
+
+- 出所（orchestrator の実測 2026-09-21T23:51Z・verified）: 便 `s2-07l.540` の終端が `terminal:push:origin` → `terminal:ci:success` の後に `terminal:close:failed:rc=1 or set BEADS_DIR to point to your .beads directory` で止まった（bead は open のまま・手で close）。運転手（driver）は dispatch の周を撃った shell の cwd を継承して起きており（`/proc/<pid>/cwd`）、その cwd が docs 便の worktree で、着地の前に `git worktree remove` されていた（`(deleted)`）。同じ周に起きた `s2-07l.502` の運転手も同じ cwd を持つ。
+- 現物（verified・main e6d3134）: 台帳を書く口は `crates/scribe2/src/ledger/mod.rs` の `close`（`Command::new(bd).args([close, <bead>, --reason, <text>]).output()`・**`current_dir` を付けない**＝親 process の cwd を継承する）の 1 site だけで、呼び手は `crates/scribe2/src/pipe/land/finish.rs` の終端（3 段目・`entry.bd` と `entry.bead` を渡し `entry.repo` は渡さない）。同じ finish の push と PR の道具は `sh -c` を `current_dir(entry.repo)` で撃つ（60–70 行）＝終端の 3 段のうち close だけが cwd を repo に固定していない。台帳を**読む**口（`crates/scribe2/src/seat/ledger.rs` の `spawn_read`）は `current_dir(cwd)` を呼び手から受けて撃つ＝読みは既に固定されている。bd は `.beads` を cwd から上へ探す（断り文の字面）ので、cwd が消えた dir なら台帳を解けない。
+- 形:
+  1. `close` は repo を受けて `current_dir(repo)` で撃つ（読みの `spawn_read` と同じ形・引数が 1 つ増える）。呼び手の終端は `entry.repo` を渡す。cwd に依らず、同じ repo なら同じ台帳を閉じる。
+  2. 断りの 2 値（`Unlaunchable` / `Refused { rc, tail }`）と終端の記帳の字面（`close:ok` / `close:failed:…`）は不変。repo が読めない周は従来どおり `bd` の rc と stderr の末尾がそのまま `Refused` に運ばれる（新しい variant は足さない・C17.1）。
+  3. 運転手の cwd は本行では触らない（dispatch が子を起こす cwd の固定は起こす側の別の面・§12 の `--repo` の絶対化と同じ列）。
+- 歯（接頭辞 `pipe_terminal_land_close_cwd_`・in-file は `crates/scribe2/src/ledger/mod.rs` の `mod tests`（既存の `pipe_terminal_land_close_` の歯の隣・偽 bd の shell script を書く fixture の型）・e2e は `crates/scribe2/tests/e2e/pipe/land.rs` の終端の歯の隣（`fake_terminal` の偽 bd）: (a) in-file: 偽 bd が `pwd` を stdout に書いて rc 0 で終わる script で、`close` を「今の cwd とは別の dir」を repo として撃つと、書かれた path が repo に等しい（base は `close` が repo を受けないので compile が止まる＝道具不在の RED）。(b) in-file: 偽 bd が rc 1 と stderr 2 行で断る周は `Refused { rc: Some(1), tail: <末尾の 1 行> }`（不変・既存の歯と同じ形で「cwd を固定しても断りの形が変わらない」を測る）。(c) e2e: 偽 bd が cwd を record に残す fixture で、Gated PASS の便を **消える dir を cwd にした子 process** から `pipe land` すると終端が `terminal:close:ok` まで進み、record の cwd が repo（base は `close:failed`・`(deleted)` の cwd を継承）。
+- 触らない: 終端の 3 段の順（push → CI → close）と CI の照合・`CloseError` の 2 値・`CLOSE_REASON` の字面・台帳を読む口・dispatch が子を起こす cwd。
+- 却下: 運転手の cwd を repo に固定して close の側は触らない（起こす側が複数〔dispatch の周・手の `pipe run`・`--terminal-only`〕で、撃つ側の 1 site を直す方が小さい・C17.4）／`BEADS_DIR` を env で渡す（env の縫い目が 1 つ増える・C2.2・repo を cwd にすれば要らない）／close を `sh -c "cd <repo> && bd …"` で包む（shell を 1 段増やす・`Command` の `current_dir` で足りる）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -1087,5 +1101,15 @@ write-set = ["crates/scribe2/src/pipe/queue.rs"]
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail pipe_window_following_"]
 size = "S"
 done = "(1) Implemented rebase: の後に RunStopped で止めた便と RunDone Landed で終えた便が追随中に数えられず、窓が (a)(c) だけで開く (2) Implemented rebase: のまま終端の記帳が無い便は従来どおり追随中に数える (3) Implemented の detail が rebase: で始まらない便は従来どおり数えない (4) 窓の判定は replay を 1 回だけ読む（(a) の材料の段を (b) が重ねる） (5) e2e の pipe_land_window_ の歯 3 本と queue.rs の既存の in-file の歯が 1 字も変わらず緑"
+
+[[contract]]
+id = "ap"
+title = "終端の台帳の close を repo を cwd にして撃つ — ledger の close が repo を受けて current_dir で撃ち、運転手の cwd（消えた dir でも）に依らず台帳を閉じる。断りの 2 値と記帳の字面は不変"
+req = ["FR50"]
+section = "48"
+write-set = ["crates/scribe2/src/ledger/mod.rs", "crates/scribe2/src/pipe/land/finish.rs", "crates/scribe2/tests/e2e/pipe/land.rs"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_terminal_land_close_cwd_"]
+size = "S"
+done = "(1) ledger の close が repo を受けて current_dir(repo) で bd を撃ち、偽 bd が書いた cwd が repo に等しい (2) 偽 bd が rc 1 で断る周は Refused { rc: Some(1), tail: 末尾の 1 行 } のまま (3) 消える dir を cwd にした子 process からの pipe land が terminal:close:ok まで進む（base は close:failed） (4) 終端の 3 段の順・CI の照合・CloseError の 2 値・CLOSE_REASON・台帳を読む口が 1 字も変わらず、既存の pipe_terminal_land_ の歯が緑"
 
 <!-- contracts:end -->
