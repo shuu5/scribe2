@@ -432,6 +432,7 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
   1. 親の helper 3 本（`run_pipe` / `run_pipe_with_path` / `land_once_with_git_shim`）の**それぞれ**で、`--state-dir` も `--repo` も無い `pipe show` が「repo の root を解決できない」の断りで rc 1 になる（3 本を**1 本ずつ名指した 3 つの歯**で測る＝1 本だけ直して緑にならない）。
   2. 置き場の pin: tracked の 9 file を読み、`Command::new(bin())` と `Command::new(super::bin())` の出現の**合計が 1**（新設の関数の中の 1 箇所）であることを、読んだ file 数と base の 41 site を母集団として同時に出して測る。cwd が主題の 2 site も新設の関数を通るのでこの合計を崩さない。
 - 差し替えの残り: 差し替えで cwd の fallback に頼っていたことが露出した呼出しは、その site に `--repo` / `--state-dir` を明示して直す（歯の名・本数・assert は変えない）。この面は done の 8 門の workspace 実走が担保し、本行は検証行を置かない（**行 g（`s2-07l.310`）が器の cwd の枝を落とせるのはこの状態が前提**＝上の歯 2 が site 数を母集団付きで pin する）。
+- 形 2 の改訂（契約表の行 aq・`s2-07l.547`・歯だけ・src は触らない）: 置き場の pin の「tracked の 9 file」は定数で、`pipe/` 配下に file を足す純移動の便（§42 の行 b）が定数を 12 に触ると純移動の機械証明が items-differ で落ち、lens の入力が要約にならず diff が `gate.token_cap` を超える（run 054450Z・2026-09-22・verified）。定数を**親（`crates/scribe2/tests/e2e/pipe.rs`）の列 0 の `mod` 宣言の数 + 1** に替える: 読んだ file 数と宣言の数を母集団として message に出し、宣言の無い file と file の無い宣言をどちらも赤にする。site の合計 1 と base の 41 site の pin は動かない。歯は base でも緑なので `// flip-check: retroactive s2-07l.547` の札を歯の fn の中の行頭に置き（[contract-source.md](./contract-source.md) §31 と同じ 4 条件・後から形を切り直した歯の申告）、変異の A/B（宣言を 1 本消す・`pipe/` 配下に file を 1 本足す）の撃墜を notes に残す。
 - 触らない: `state_dir_of` / `repo_of` / `vessel::state_dir` の解決順・`vessel init` の呼出しの引数（`--state-dir` と root を明示済み）・`fleet` / `seat` / `hook` の e2e の helper（本便の射程外・同じ型は別便で数える）・汚れた 1 件の処分（消さず `retired/` へ移す = N1.2）・歯の名と本数（site の差し替えだけで期待は変えない＝既存の e2e が全部緑のままなのは done の 8 門が測る）。
 - 却下案: 書く口（intake / run）に `--repo` を必須にして cwd の fallback を消す（変異の下では必須の検査も壊れる＝歯の側で cwd を固定しないと閉じない・admin の launcher の引数も変わる）／CI に `<NAME>.stateDir` の config を足して再現する（露出の面を増やすだけ）／本番の置き場を手で掃除する（不可逆・N1）。
 
@@ -560,8 +561,9 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
   5. 元の file には受付の口の歯 63 本（`pipe_intake_` 55 + `pipe_preflight_` 4 + `pipe_repo_` 3 + `pipe_confine_` 1）だけが残り、4159 行は約 2000 行へ縮む。
   6. 親に `mod` 宣言を 3 本足す（宣言は既存の 8 本と合わせて名の昇順）。歯の本文・名・順序・`#[test]` の総数 134 は変えず、子は親の helper を `use super::*;` で引く。
   7. 札 `// flip-check: moved s2-07l.351` を元の file の歯の区間の先頭と `+` の 3 file の先頭に対で置く（純移動の機械証明は §5.3）。形 4 で 2 本を受ける親（`crates/scribe2/tests/e2e/pipe.rs`）にも、移した 2 本の直前に同じ札を 1 行置く（親は `tests/` 配下＝file 全体が歯の区間なので置いた位置で効く）＝札は元の file・`+` の 3 file・親の 5 file に在り、親に増える残差は `mod` 宣言 3 行と札 1 行と移した 2 本だけ（2026-09-20 の審査 FAIL「親に札の無い `#[test]` 2 本が増える」の再現）。
-  8. 親の置き場の pin 歯 `pipe_hermetic_sites_stay_one`（§28 形 2・`crates/scribe2/tests/e2e/pipe.rs` と `pipe/` 配下の tracked file 数を 9 に pin）は、本便が `pipe/` 配下に `+` の 3 file を足すので **9 → 12** に動かす（file 数の pin と doc の数だけ・site の合計 1 と base の 41 site の母集団は不変＝移す歯は binary を起こす字面を持たず、`+` の 3 file の合計も 0）。run 050345Z の gate FAIL（共通 verify の赤 1 本がこの歯・検出線の rc 2 はその巻き添え）の根で、runner の worktree で `git ls-files` が 12 を返すことを実測した。
-- 触らない: 歯の名・本文・本数（形 8 の pin 歯の file 数 1 か所を除く）・親の 40 本の helper・`prop.rs` / `polarity.rs` / `rules.rs`（filter が当たるだけで中身は触らない）・受付の口の src。
+  8. 親の置き場の pin 歯 `pipe_hermetic_sites_stay_one`（§28 形 2 の改訂・行 aq・`s2-07l.547`）は本便では**触らない**: 行 aq が定数 9 を「親の列 0 の `mod` 宣言の数 + 1」に替えた後に走るので、`+` の 3 file と宣言 3 本で 12 = 11 + 1 のまま緑（run 054450Z は定数を 12 に触って純移動の機械証明が items-differ で落ち、lens の入力が要約にならず diff 313584 byte が cap 150000 を超えて INCONCLUSIVE になった根）。
+  9. 元の file の helper（歯でない fn / const）のうち子が使うものは、逐語で親 `crates/scribe2/tests/e2e/pipe.rs` へ移して `pub(super)` に上げる（子は `use super::*` で引く・run 054450Z の実測では fn 23 本 + const 6 本）か、元の file に残して `pub(super)` に上げ子が元の module を名指す use で引く（1 つの子だけが使う helper）。どちらも純移動の機械証明の中（移動と可視性の差は許容・本文は 1 字も変えない）。
+- 触らない: 歯の名・本文・本数・親の pin 歯（形 8）・親の 40 本の helper・`prop.rs` / `polarity.rs` / `rules.rs`（filter が当たるだけで中身は触らない）・受付の口の src。
 - 却下: `contract_` 1 本の filter で verify を書く（9 file に当たり受付が断る）／歯の名を変えて接頭辞を揃える（純移動でなくなり機械証明が残差を出す）／割らずに据え置く（交差の母集団が減らない）。
 
 ## 43. pipe/land.rs の「squash と finish」の群を割る（契約表の行 ak・`s2-07l.457` の 2 回目・純移動）
@@ -681,8 +683,8 @@ section = "42"
 write-set = ["-crates/scribe2/tests/e2e/pipe/intake.rs", "+crates/scribe2/tests/e2e/pipe/review.rs", "+crates/scribe2/tests/e2e/pipe/contracts.rs", "+crates/scribe2/tests/e2e/pipe/refuse.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/prop.rs", "docs/design/pipeline.md"]
 verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_review_fail_stops_before_spawn pipe_review_fail_is_terminal_for_spawn_resume_stop_and_overlap pipe_review_inconclusive_without_lens_or_unreadable_output_is_terminal pipe_review_pass_spawns pipe_review_kind_fail_keeps_kind_and_at_in_review_json_and_two_word_detail pipe_review_kind_pass_carries_neither_kind_nor_at pipe_review_kind_missing_or_unknown_or_unreadable_falls_to_unparsed_without_moving_the_verdict pipe_review_reads_design_section_and_requirements_from_base pipe_review_reads_requirements_text_from_yaml pipe_review_reads_requirements_text_from_md pipe_review_reads_requirements_reason_for_bare_yaml_id pipe_review_reads_requirements_reason_for_empty_md_heading pipe_review_has_no_skip_flag pipe_review_stage_and_guard_are_pinned_in_declaration_order pipe_review_resume_from_intake_reviews_before_spawning", "cargo nextest run -p scribe2 --test e2e --no-tests=fail contract_closure_ext_ contract_derive_ contract_check_ contract_declared_ contract_table_landed_ contract_schema_ contract_names_ pipe_contract_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_refuse_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_state_ pipe_show_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_intake_ pipe_preflight_"]
 size = "S"
-done = "(1) 審査の段の歯 15 本が + の 1 本目に在り (2) 契約表と閉包の歯 46 本が + の 2 本目に在り (3) 断りの語彙の歯 8 本が + の 3 本目に在り (4) 単発の pipe_state_ / pipe_show_ の 2 本が親の tests/e2e/pipe.rs に在り (5) 元の file には受付の口の歯 63 本だけが残って行数が 4159 から約 2000 へ縮み (6) 親の mod 宣言が 3 本増えて歯の名・本文・順序と #[test] の総数 134 は不変で子は use super::* で親の helper を引き (7) 札 flip-check: moved s2-07l.351 が元の file と + の 3 file と親 tests/e2e/pipe.rs（移した 2 本の直前）に在って純移動の機械証明の残差が mod 宣言と札と移した 2 本と (8) の pin の数だけ (8) 親の pin 歯 pipe_hermetic_sites_stay_one の tracked file 数の pin が 9 から 12 になって共通 verify が緑で、site の合計 1 と母集団 41 は不変"
-depends = ["a"]
+done = "(1) 審査の段の歯 15 本が + の 1 本目に在り (2) 契約表と閉包の歯 46 本が + の 2 本目に在り (3) 断りの語彙の歯 8 本が + の 3 本目に在り (4) 単発の pipe_state_ / pipe_show_ の 2 本が親の tests/e2e/pipe.rs に在り (5) 元の file には受付の口の歯 63 本だけが残って行数が 4159 から約 2000 へ縮み (6) 親の mod 宣言が 3 本増えて歯の名・本文・順序と #[test] の総数 134 は不変で子は use super::* で親の helper を引き (7) 札 flip-check: moved s2-07l.351 が元の file と + の 3 file と親 tests/e2e/pipe.rs（移した 2 本の直前）に在って純移動の機械証明の残差が mod 宣言と札と移した 2 本と (9) の helper だけ (8) 親の pin 歯 pipe_hermetic_sites_stay_one は触られず緑（tracked 12 = 宣言 11 + 1） (9) 子が使う helper は逐語で親へ移して pub(super) か元の file に残して pub(super) のどちらかで、本文の差は 0 で可視性の差だけ"
+depends = ["a", "aq"]
 
 [[contract]]
 id = "c"
@@ -1113,5 +1115,15 @@ write-set = ["crates/scribe2/src/ledger/mod.rs", "crates/scribe2/src/pipe/land/f
 verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_terminal_land_close_cwd_"]
 size = "S"
 done = "(1) ledger の close が repo を受けて current_dir(repo) で bd を撃ち、偽 bd が書いた cwd が repo に等しい (2) 偽 bd が rc 1 で断る周は Refused { rc: Some(1), tail: 末尾の 1 行 } のまま (3) 消える dir を cwd にした子 process からの pipe land が terminal:close:ok まで進む（base は close:failed） (4) 終端の 3 段の順・CI の照合・CloseError の 2 値・CLOSE_REASON・台帳を読む口が 1 字も変わらず、既存の pipe_terminal_land_ の歯が緑"
+
+[[contract]]
+id = "aq"
+title = "e2e の置き場の pin 歯を mod 宣言との整合で測る — pipe_hermetic_sites_stay_one の file 数の定数 9 を親の列 0 の mod 宣言の数 + 1 に替え、site の合計 1 と 41 の母集団は不変（分割のたびに定数を触らない・歯だけ・retroactive 札）"
+req = ["NFR6"]
+section = "28"
+write-set = ["crates/scribe2/tests/e2e/pipe.rs"]
+verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_hermetic_sites_stay_one"]
+size = "S"
+done = "(1) 歯 pipe_hermetic_sites_stay_one が tracked の file 数と親の列 0 の mod 宣言の数 + 1 の等式で置き場を pin し、site の合計 1 と base の 41 site の母集団の出し方は不変 (2) base（9 file・宣言 8）で緑・宣言を 1 本消した A/B と pipe/ 配下に file を 1 本足した A/B が赤（変異 proof は notes） (3) 札 flip-check: retroactive s2-07l.547 が歯の fn の中の行頭に在って base に無い"
 
 <!-- contracts:end -->
