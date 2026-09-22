@@ -113,6 +113,13 @@ const DECLARING: &[&str] = &["struct", "enum", "union", "trait", "impl", "for"];
 /// 実装の行の書き出し（`trim_start` 後にこの語で始まる行が impl 経路の照合の口・§26）。
 const IMPL_HEAD: &str = "impl";
 
+/// Rust の予約語（strict keywords）。backtick の中身の先頭の token がこの語なら名指しでない（`pub(crate)` の `pub`・§25）。
+const KEYWORDS: &[&str] = &[
+    "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern", "false", "fn", "for", "if", "impl",
+    "in", "let", "loop", "match", "mod", "move", "mut", "pub", "ref", "return", "self", "Self", "static", "struct", "super", "trait",
+    "true", "type", "unsafe", "use", "where", "while",
+];
+
 /// 型の宣言の語（`enum Name` / `struct Name` の行＝[`sees`] の (a)「この file がその型を宣言する」）。
 const TYPE_DECLARING: &[&str] = &["enum", "struct"];
 

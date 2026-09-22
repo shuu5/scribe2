@@ -10,7 +10,7 @@
 //! [`declares_fn`] と、`closure::derive` が引く [`backticked`] / [`closed_type`] は `pub(super)`（＝`pipe::closure` の中だけ）に留める。
 
 use super::{declares_type, heads, in_module, is_ident, is_ident_char, texts_of, touched, ClosureError, Source};
-use super::{IMPL_HEAD, PATH_CHARS, RS};
+use super::{IMPL_HEAD, KEYWORDS, PATH_CHARS, RS};
 
 /// 名指しの実在（§3）: `texts` の各 (在り処, 本文) の backtick の中身のうち **path 形 / 型の path 形 / fn 形**だけを
 /// 名指しと読み、base に解けないものを (名, 在り処) で**全件**返す（書かれていた順）。
@@ -21,8 +21,9 @@ use super::{IMPL_HEAD, PATH_CHARS, RS};
 /// 列）は末尾 2 節の「型」と「項目」を [`resolves_type`] の 2 経路（字面 / impl）で解く（§26）。**`touches` に宣言した
 /// 型の variant は名指しと読まない**
 /// （未来の variant は `touches` が説明する）。(3) fn 形（識別子 + `(`〔`)` は任意〕）は `fn 識別子` の宣言が在れば
-/// 解ける。一致しない字面（struct literal・field 付き variant・glob・属性・散文）は名指しではない。別名・generic は
-/// 下界の外。
+/// 解ける。(2) と (3) は中身の**先頭の token**（[`head_of`]・§25）で読む＝field 付き variant の literal と引数付きの呼出しも
+/// 名指しである。一致しない字面（大文字始まりの tuple variant の構築・予約語・末尾 `::` の module path・glob・属性・散文）は
+/// 名指しではない。別名・generic は下界の外。
 pub fn unresolved_names(
     texts: &[(String, String)],
     touches: &[String],
@@ -61,7 +62,7 @@ pub fn symbols_in_base(names: &[&str], tracked: &[String], sources: &[Source]) -
 fn resolved(name: &str, touched: &[&str], paths: &[&str], bodies: &[(&str, &str)]) -> Option<bool> {
     match form_of(name, touched) {
         Form::Path => Some(paths.iter().any(|path| path_matches(path, name))),
-        Form::Type { ty, item } => Some(closed_type(name, bodies) || resolves_type(bodies, &ty, &item)),
+        Form::Type { ty, item } => Some(closed_type(head_of(name).0, bodies) || resolves_type(bodies, &ty, &item)),
         Form::Fn(ident) => Some(bodies.iter().any(|(_, body)| declares_fn(body, &ident))),
         Form::Prose => None,
     }
@@ -113,13 +114,16 @@ fn impls_type(body: &str, ty: &str) -> bool {
         .any(|line| holds_word(line, ty))
 }
 
-/// backtick の中身を 3 形に分ける（`touched` の型の variant は散文扱い）。
+/// backtick の中身を 3 形に分ける（`touched` の型の variant は散文扱い）。path 形は中身全体で、型の path 形と
+/// 引数付きの fn 形は先頭の token（[`head_of`]）で読む（§25）。引数付きの fn 形は小文字始まりの識別子で予約語でない
+/// 周だけ（`Some(…)` は tuple variant の構築・`pub(crate)` は可視性＝散文）。
 fn form_of(name: &str, touched: &[&str]) -> Form {
     let stem = name.rsplit('/').next().unwrap_or(name).strip_suffix(RS);
     if name.chars().all(|found| found.is_ascii_alphanumeric() || PATH_CHARS.contains(&found)) && stem.is_some_and(|stem| !stem.is_empty()) {
         return Form::Path;
     }
-    let segments: Vec<&str> = name.split("::").collect();
+    let (head, rest) = head_of(name);
+    let segments: Vec<&str> = head.split("::").collect();
     if let Some((item, head)) = segments.split_last().filter(|_| segments.iter().all(|segment| is_ident(segment))) {
         if let Some(ty) = head.last() {
             return if touched.contains(ty) {
@@ -132,8 +136,20 @@ fn form_of(name: &str, touched: &[&str]) -> Form {
     let ident = name.strip_suffix("()").or_else(|| name.strip_suffix('('));
     match ident {
         Some(ident) if is_ident(ident) => Form::Fn(ident.to_owned()),
+        _ if rest.starts_with('(')
+            && is_ident(head)
+            && head.starts_with(|found: char| found.is_ascii_lowercase())
+            && !KEYWORDS.contains(&head) =>
+        {
+            Form::Fn(head.to_owned())
+        }
         _ => Form::Prose,
     }
+}
+
+/// backtick の中身の先頭の token（最初の `{` / `(` / 空白の手前まで・末尾の `::` は落とさない）と残り（§25）。
+fn head_of(name: &str) -> (&str, &str) {
+    name.split_at(name.find(|found: char| found == '{' || found == '(' || found.is_whitespace()).unwrap_or(name.len()))
 }
 
 /// 1 本の本文の backtick の中身（対になった backtick だけ・空は除く）。
@@ -185,8 +201,8 @@ mod tests {
     }
 
     /// 名指しの 3 形（path / 型の path / fn）を解き、解けないものを在り処付きで全件返す。`+` 宣言の新規 file と
-    /// `~` 宣言の消える file は解け（write-set に無い同名は解けない）、`touches` の型の variant と一致しない字面（struct literal・field 付き
-    /// variant・glob・属性・散文・単独の語）は名指しと読まない。
+    /// `~` 宣言の消える file は解け（write-set に無い同名は解けない）、`touches` の型の variant（field 付きの literal を
+    /// 含む）と一致しない字面（struct literal・glob・属性・散文・単独の語）は名指しと読まない。
     #[test]
     fn closure_names_resolve_the_three_forms_and_name_every_unresolved_one() {
         let (tracked, sources) = name_fixture();
@@ -285,5 +301,64 @@ mod tests {
             .map(|(name, at)| ((*name).to_owned(), (*at).to_owned()))
             .collect();
         assert_eq!(unresolved_names(&texts, &[], &[], &[], &sources), Ok(want), "解けない名を書かれた順・在り処付き");
+    }
+
+    /// 先頭の token の fixture（§25）: 既存の enum `Tint`（variant `Warm`）と既存 fn `parse_pointer`。`Tide` は無い。
+    /// 型の名は現物の型と重ねない（この file 自身が閉包の母集団で、現物の型の literal を書くと行の閉包が広がる）。
+    fn head_fixture() -> Vec<Source> {
+        vec![
+            source("crates/toy/src/tint.rs", "pub enum Tint {\n    Warm { at: u8 },\n}\n\nfn f() -> Tint {\n    Tint::Warm { at: 0 }\n}\n"),
+            source("crates/toy/src/pipe/table/parse.rs", "pub fn parse_pointer(text: &str) -> bool {\n    text.is_empty()\n}\n"),
+        ]
+    }
+
+    /// struct-like variant の literal（型::項目 に `{ 欄: 値 }` が続く字面）は先頭の token の型の path 形に読まれ、base に
+    /// 無ければ name-unresolved・在れば解ける・`touches` の型なら従来どおり名指しでない（§25）。
+    #[test]
+    fn contract_name_form_struct_like_variant_literal_reads_the_type_path_head() {
+        let sources = head_fixture();
+        let texts = named_texts(&[("section 25 line 3", "`Tide::Ebb { run: 1 }` と `Tint::Warm { at: 0 }`")]);
+        let want = vec![("Tide::Ebb { run: 1 }".to_owned(), "section 25 line 3".to_owned())];
+        assert_eq!(unresolved_names(&texts, &[], &[], &[], &sources), Ok(want), "未 land の型の literal だけが name-unresolved");
+        let touches = ["crate::tide::Tide".to_owned()];
+        assert_eq!(unresolved_names(&texts, &touches, &[], &[], &sources), Ok(Vec::new()), "touches の型の variant は名指しでない");
+        assert_eq!(super::symbols_in_base(&["Tide::Ebb(1)", "Tint::Warm(x)"], &[], &sources), Ok(vec![Some(false), Some(true)]));
+    }
+
+    /// 引数付きの呼出し形（識別子(引数)）は先頭の token の fn 形に読まれる: 既存 fn は解け、無い識別子は解けない（§25）。
+    #[test]
+    fn contract_name_form_call_with_arguments_reads_the_fn_head() {
+        let sources = head_fixture();
+        let names = ["parse_pointer(text)", "parse_pointer(&row.design)", "nope_pointer(text)", "parse_pointer("];
+        assert_eq!(super::symbols_in_base(&names, &[], &sources), Ok(vec![Some(true), Some(true), Some(false), Some(true)]));
+        let texts = named_texts(&[("done", "`parse_pointer(text)` が解け `nope_pointer(x, y)` は解けない")]);
+        let want = vec![("nope_pointer(x, y)".to_owned(), "done".to_owned())];
+        assert_eq!(unresolved_names(&texts, &[], &[], &[], &sources), Ok(want));
+    }
+
+    /// 先頭の token がどの形にも合わない字面は従来どおり散文: 大文字始まりの tuple variant の構築・予約語（可視性）・
+    /// 末尾 `::` の module path・glob の use・属性・method 呼出し・空白で続く散文（§25）。
+    #[test]
+    fn contract_name_form_tuple_variant_keyword_module_path_glob_and_attribute_stay_prose() {
+        let sources = head_fixture();
+        let names = [
+            "Some(x)",
+            "Err(e)",
+            "Gated(FAIL)",
+            "pub(crate)",
+            "pub(super) fn x",
+            "if (a)",
+            "seat::account::",
+            "seat::account:: の下",
+            "use crate::tint::*;",
+            "crate::tint::*",
+            "#[cfg(test)]",
+            "NAME.len()",
+            "row.find(x)",
+            "cargo nextest run",
+            "Type {",
+        ];
+        let want: Vec<Option<bool>> = names.iter().map(|_| None).collect();
+        assert_eq!(super::symbols_in_base(&names, &[], &sources), Ok(want));
     }
 }
