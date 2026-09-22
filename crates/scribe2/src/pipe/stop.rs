@@ -4,6 +4,7 @@
 
 use super::cli::{broken, flag, int_row, live, refused, state_dir_of};
 use super::confine::{self, Reaped};
+use super::regate::REASON_FLAG;
 use super::{current, emit, is_stopping, Emit, STOPPING};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
 use crate::fleet::store::{LockPolicy, StoreError};
@@ -19,9 +20,19 @@ const ROW_GRACE: &str = "pipe.stop_grace_ms";
 ///
 /// **2 つの口の意味は別である**: `--all` は席の掃除（対象なしは rc 0 の冪等）、`--run` は
 /// 放置された便を排他の母集団から外す管理席の操作（設計 pipeline-conflict.md §2）。
+///
+/// `--reason` は `--all` の側だけが受ける（設計 pipeline.md §51 形 2）。`--run` と同時に渡す周は使い方の誤りとして
+/// 断る（1 本を外す操作に逐語の行き先は無い・黙って落とさない＝SRS NFR4）。
 pub(super) fn stop(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Outcome {
+    let words = match flag(args, REASON_FLAG) {
+        Err(reason) => return refused(reason),
+        Ok(found) => found,
+    };
     match flag(args, "--run") {
         Err(reason) => refused(reason),
+        Ok(Some(_)) if words.is_some() => {
+            refused(format!("--run と {REASON_FLAG} は同時に渡せない（{REASON_FLAG} は --all の逐語）"))
+        }
         Ok(Some(id)) => stop_run(args, manifest, policy, id),
         Ok(None) => stop_all(args, manifest, policy),
     }
@@ -98,7 +109,7 @@ fn stop_run(args: &[String], manifest: &Manifest, policy: LockPolicy, id: &str) 
     }
     // **席と運転手の後・`RunStopped` の前に、作り手が死んだ scope を畳む**（設計 gate-cost.md §38 形 4 / 5）。
     line.push_str(&format!(" scopes={}", confine::reap_orphan_scopes().word()));
-    if let Err(err) = record_run_stopped(&state_dir, &state, id, policy) {
+    if let Err(err) = record_run_stopped(&state_dir, &state, id, None, policy) {
         return broken(err);
     }
     Outcome::ok_line(line)
@@ -169,7 +180,8 @@ fn unstoppable(line: String, left: usize) -> Outcome {
     }
 }
 
-/// `pipe stop --all`。生きている席を止める。**冪等**（対象なしは rc 0）。
+/// `pipe stop --all`。生きている席を止める。**冪等**（対象なしは rc 0）。Live な席が指す便が 2 本以上の周は
+/// `--reason` の逐語を要る（設計 pipeline.md §51）。
 fn stop_all(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Outcome {
     stop_all_with(args, manifest, policy, &terminate, &confine::reap_orphan_scopes)
 }
@@ -201,12 +213,17 @@ fn stop_all_with(
     };
     // **pid を持たない Live 席も母集団に数える**。落とすと「対象なし rc 0」に化け、
     // 止まっていない席が在るのに全クリアを名乗ってしまう。
-    let live: Vec<(String, String, Option<u64>)> = state
+    let live: Vec<LiveSeat> = state
         .seats
         .values()
         .filter(|seat| seat.state == SeatState::Live)
         .map(|seat| (seat.id.clone(), seat.run.clone(), seat.pid))
         .collect();
+    // **何かを止める前に**受付を決める（設計 pipeline.md §51 形 1）。断る周は席も events も動かさない。
+    let detail = match flag(args, REASON_FLAG).and_then(|words| admit_scope(live_runs(&live), live.len(), words)) {
+        Ok(found) => found,
+        Err(reason) => return refused(reason),
+    };
     let mut stopped = 0_usize;
     // 止めた席の便（記帳順）と、止め切れなかった席を持つ便。
     let mut stopped_runs: Vec<&str> = Vec::new();
@@ -215,7 +232,9 @@ fn stop_all_with(
         // 止められなかった席に「止めた」を記帳しない。記帳すると次の周が
         // 「対象なし」を返し、生きている席が終端として消える（偽の全クリア）。
         if !pid.is_some_and(|found| terminate(found, grace)) {
-            unstopped_runs.push(run.as_str());
+            if !unstopped_runs.contains(&run.as_str()) {
+                unstopped_runs.push(run);
+            }
             continue;
         }
         stopped += 1;
@@ -229,16 +248,61 @@ fn stop_all_with(
     // 席の後・`RunStopped` の前に、作り手が死んだ scope を畳む（設計 gate-cost.md §38 形 4）。
     let scopes = reap();
     // `--run` と同じ極性: **止め切れなかった席を持つ便には `RunStopped` を書かない**。
-    for run in stopped_runs.iter().filter(|run| !unstopped_runs.contains(run)) {
-        if let Err(err) = record_run_stopped(&state_dir, &state, run, policy) {
+    let ended: Vec<&str> = stopped_runs.iter().filter(|run| !unstopped_runs.contains(run)).copied().collect();
+    for run in &ended {
+        if let Err(err) = record_run_stopped(&state_dir, &state, run, detail.as_deref(), policy) {
             return broken(err);
         }
     }
-    let line = format!("stop: seats={} stopped={stopped} scopes={}", live.len(), scopes.word());
+    let fields = run_fields(&ended, &unstopped_runs);
+    let line = format!("stop: seats={} stopped={stopped}{fields} scopes={}", live.len(), scopes.word());
     if stopped == live.len() {
         Outcome::ok_line(line)
     } else {
         unstoppable(line, live.len().saturating_sub(stopped))
+    }
+}
+
+/// 全部止めが数える Live 席（席 id・便 id・pid）。
+type LiveSeat = (String, String, Option<u64>);
+
+/// 終端を記帳した便の欄の key（記帳順）。
+const ENDED_FIELD: &str = "ended";
+
+/// 止め切れなかった席を持つ便の欄の key。
+const UNSTOPPED_FIELD: &str = "unstopped";
+
+/// 便の終端の記帳に載せる逐語の頭（後ろは `--reason` の入力そのもの）。
+const REASON_PREFIX: &str = "reason:";
+
+/// 止めた便と止め切れなかった便の 2 欄（設計 pipeline.md §51 形 4）。**空の欄は出さない**（便 0 本の周は空文字）。
+fn run_fields(ended: &[&str], unstopped: &[&str]) -> String {
+    [(ENDED_FIELD, ended), (UNSTOPPED_FIELD, unstopped)]
+        .iter()
+        .filter(|(_, runs)| !runs.is_empty())
+        .map(|(key, runs)| format!(" {key}={}", runs.join(",")))
+        .collect()
+}
+
+/// Live な席の列が指す**別々の便**の本数（pure・設計 pipeline.md §51 形 1）。席数ではない。
+fn live_runs(live: &[LiveSeat]) -> usize {
+    let mut runs: Vec<&str> = live.iter().map(|(_, run, _)| run.as_str()).collect();
+    runs.sort_unstable();
+    runs.dedup();
+    runs.len()
+}
+
+/// 全部止めの受付（設計 pipeline.md §51 形 1 / 3）。便が 2 本以上の周は逐語を要る。通る周は便の終端の記帳に
+/// 載せる detail（逐語が在れば `reason:<逐語>`）を返す。空の逐語は本数に依らず断る（逐語を名乗る空を記帳しない）。
+fn admit_scope(runs: usize, seats: usize, words: Option<&str>) -> Result<Option<String>, String> {
+    match words {
+        Some(found) if found.trim().is_empty() => Err(format!("{REASON_FLAG} の逐語が空である")),
+        Some(found) => Ok(Some(format!("{REASON_PREFIX}{found}"))),
+        None if runs >= 2 => Err(format!(
+            "Live な席が指す便が {runs} 本在る（母集団: 便 {runs} 本・席 {seats}）——--all だけでは止めない。\
+             --run ID で 1 本ずつ止めるか、{REASON_FLAG} WORDS で止める理由の逐語を付ける"
+        )),
+        None => Ok(None),
     }
 }
 
@@ -367,10 +431,13 @@ fn record_stopping(
 }
 
 /// 便に「止めた」を記帳する（段 = `Stopped`＝終端＝排他の母集団から外れる）。
+///
+/// `detail` は全部止めの逐語（`reason:<逐語>`）だけが載る。`--run` の周は `None`（設計 pipeline.md §51 形 3）。
 fn record_run_stopped(
     state_dir: &Path,
     state: &State,
     run: &str,
+    detail: Option<&str>,
     policy: LockPolicy,
 ) -> Result<(), String> {
     emit(
@@ -382,7 +449,7 @@ fn record_run_stopped(
             stage: Some(Stage::Stopped),
             seat: None,
             pid: None,
-            detail: None,
+            detail: detail.map(str::to_owned),
         },
         policy,
     )
@@ -397,7 +464,7 @@ fn bead_of<'a>(state: &'a State, run: &str) -> &'a str {
 #[cfg(test)]
 mod tests {
     // flip-check: moved s2-07l.253
-    use super::{stop_all_with, stop_plan, GroupId, Reaped, StopPlan};
+    use super::{live_runs, stop, stop_all_with, LiveSeat, stop_plan, GroupId, Reaped, StopPlan};
     use crate::cli_outcome::{RC_OK, RC_REFUSED};
     use crate::fleet::store::{self, LockPolicy};
     use crate::fleet::{Event, EventKind};
@@ -420,13 +487,9 @@ mod tests {
             .collect()
     }
 
-    /// `stop --all` を stub の kill で撃つ（`stoppable` に在る pid だけが止まる）。
-    fn stop_with_stub(state: &Path, stoppable: &'static [u64]) -> crate::cli_outcome::Outcome {
-        let args: Vec<String> = ["stop", "--all", "--state-dir"]
-            .iter()
-            .map(|arg| (*arg).to_owned())
-            .chain(std::iter::once(state.display().to_string()))
-            .collect();
+    /// `stop --all` を stub の kill で撃つ（`stoppable` に在る pid だけが止まる）。`extra` は `--all` の後ろに足す引数。
+    fn stop_with_stub(state: &Path, stoppable: &'static [u64], extra: &[&str]) -> crate::cli_outcome::Outcome {
+        let args = stop_args(state, &[&["--all"], extra].concat());
         let Ok(manifest) = Manifest::embedded() else {
             return crate::cli_outcome::Outcome::failed_line(2, "埋め込みの manifest を読めない".to_owned());
         };
@@ -434,6 +497,97 @@ mod tests {
             return crate::cli_outcome::Outcome::failed_line(2, "lock 規則を読めない".to_owned());
         };
         stop_all_with(&args, &manifest, policy, &|pid, _grace| stoppable.contains(&pid), &|| Reaped::Unmeasured)
+    }
+
+    /// `stop <flags> --state-dir <state>` の引数列。
+    fn stop_args(state: &Path, flags: &[&str]) -> Vec<String> {
+        std::iter::once("stop")
+            .chain(flags.iter().copied())
+            .map(str::to_owned)
+            .chain(["--state-dir".to_owned(), state.display().to_string()])
+            .collect()
+    }
+
+    /// 置き場の `RunStopped` の (便, detail)（物理順）。
+    fn run_stopped_details(state: &Path) -> Vec<(String, Option<String>)> {
+        store::read_all(state)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|found| found.kind == EventKind::RunStopped)
+            .map(|found| (found.run, found.detail))
+            .collect()
+    }
+
+    /// 席の列（`live_runs` に渡す形）。
+    fn seats(pairs: &[(&str, &str)]) -> Vec<LiveSeat> {
+        pairs.iter().map(|(seat, run)| ((*seat).to_owned(), (*run).to_owned(), None)).collect()
+    }
+
+    /// 逐語（fixture の他の字面〔便 id・席 id・detail の既存の語〕と衝突しない形）。
+    const WORDS: &str = "host-畳み ζ9 撤収";
+
+    /// (a) 席の列が指す**別々の便**を数える（便 0 / 1 / 2 / 3 本の 4 形）。同じ便を指す席 2 つは 1 本
+    /// （席数と便数が食い違う形で測る）。
+    #[test]
+    fn pipe_stop_scope_counts_distinct_runs_of_live_seats() {
+        let forms: [(Vec<LiveSeat>, usize); 4] = [
+            (seats(&[]), 0),
+            (seats(&[("s1", "run-a"), ("s2", "run-a")]), 1),
+            (seats(&[("s1", "run-a"), ("s2", "run-b"), ("s3", "run-a")]), 2),
+            (seats(&[("s1", "run-c"), ("s2", "run-a"), ("s3", "run-b"), ("s4", "run-c")]), 3),
+        ];
+        let population: Vec<(usize, usize)> = forms.iter().map(|(live, runs)| (live.len(), *runs)).collect();
+        for (live, runs) in &forms {
+            assert_eq!(live_runs(live), *runs, "母集団 4 形 (席数, 便数) = {population:?}: {live:?}");
+        }
+    }
+
+    /// (b) 便が 2 本 live な置き場に `--all` だけ・`--all` と逐語・`--run` と逐語 の 3 形（母集団 3 形）。通るのは
+    /// 2 形目だけで、断る 2 形は events が 1 件も増えず席も生きたまま（`SeatStopped` 0 件）。
+    #[test]
+    fn pipe_stop_scope_needs_the_reason_when_two_runs_are_live() {
+        let state = scratch("stop-scope-admit");
+        append_all(&state, &[seat_up("run-a", "seat-a", 9_201), seat_up("run-b", "seat-b", 9_202)]);
+        let before = store::read_all(&state).unwrap_or_default().len();
+
+        let bare = stop_with_stub(&state, &[9_201, 9_202], &[]);
+        assert_eq!(bare.rc, RC_REFUSED, "1 形目（--all だけ）は断る: {:?}", bare.out);
+        assert!(bare.out.is_empty(), "断る周は stdout を出さない: {:?}", bare.out);
+        assert!(bare.err.iter().any(|line| line.contains("便が 2 本")), "便の本数を母集団として名指す: {:?}", bare.err);
+        assert_eq!(store::read_all(&state).unwrap_or_default().len(), before, "1 形目: events は増えない");
+
+        let manifest = Manifest::embedded().expect("埋め込みの manifest を読める");
+        let policy = LockPolicy::from_rules(&manifest).expect("lock 規則を読める");
+        let with_run = stop(&stop_args(&state, &["--run", "run-a", "--reason", WORDS]), &manifest, policy);
+        assert_eq!(with_run.rc, RC_REFUSED, "3 形目（--run と逐語）は断る: {:?}", with_run.out);
+        assert_eq!(store::read_all(&state).unwrap_or_default().len(), before, "3 形目: events は増えない");
+        assert!(runs_of(&state, EventKind::SeatStopped).is_empty(), "断る 2 形の後も席は生きている");
+
+        let worded = stop_with_stub(&state, &[9_201, 9_202], &["--reason", WORDS]);
+        assert_eq!(worded.rc, RC_OK, "2 形目（--all と逐語）は通る: {:?}", worded.err);
+        assert_eq!(runs_of(&state, EventKind::SeatStopped), vec!["run-a", "run-b"], "2 形目: 席を止める");
+        let _ = std::fs::remove_dir_all(&state);
+    }
+
+    /// (c) 通った周の便の終端の記帳は `reason:` の後ろに入力の逐語をそのまま持つ（全便・記帳順）。空の逐語は断る。
+    #[test]
+    fn pipe_stop_scope_reason_lands_verbatim_on_every_run_stopped() {
+        let state = scratch("stop-scope-words");
+        append_all(&state, &[seat_up("run-b", "seat-1", 9_301), seat_up("run-a", "seat-2", 9_302)]);
+        let blank = stop_with_stub(&state, &[9_301, 9_302], &["--reason", " "]);
+        assert_eq!(blank.rc, RC_REFUSED, "空の逐語は断る: {:?}", blank.out);
+        assert!(runs_of(&state, EventKind::SeatStopped).is_empty(), "空の逐語の周は何も止めない");
+
+        let out = stop_with_stub(&state, &[9_301, 9_302], &["--reason", WORDS]);
+        assert_eq!(out.rc, RC_OK, "{:?}", out.err);
+        let detail = Some(format!("reason:{WORDS}"));
+        assert_eq!(
+            run_stopped_details(&state),
+            vec![("run-b".to_owned(), detail.clone()), ("run-a".to_owned(), detail)],
+            "終端の記帳は逐語をそのまま持つ"
+        );
+        assert_eq!(out.out, vec!["stop: seats=2 stopped=2 ended=run-b,run-a scopes=-".to_owned()], "欄は記帳順");
+        let _ = std::fs::remove_dir_all(&state);
     }
 
     // flip-check: retroactive s2-07l.222
@@ -444,9 +598,9 @@ mod tests {
     fn mutant_in_pipe_stop_all_writes_run_stopped_to_every_stopped_run() {
         let state = scratch("stop-all-every");
         append_all(&state, &[seat_up("run-a", "seat-a1", 9_001), seat_up("run-a", "seat-a2", 9_002), seat_up("run-b", "seat-b", 9_003)]);
-        let out = stop_with_stub(&state, &[9_001, 9_002, 9_003]);
+        let out = stop_with_stub(&state, &[9_001, 9_002, 9_003], &["--reason", WORDS]);
         assert_eq!(out.rc, RC_OK, "全席を止めた: {:?}", out.err);
-        assert_eq!(out.out, vec!["stop: seats=3 stopped=3 scopes=-".to_owned()]);
+        assert_eq!(out.out, vec!["stop: seats=3 stopped=3 ended=run-a,run-b scopes=-".to_owned()]);
         assert_eq!(runs_of(&state, EventKind::SeatStopped), vec!["run-a", "run-a", "run-b"], "止めた席ごとに 1 件");
         assert_eq!(runs_of(&state, EventKind::RunStopped), vec!["run-a", "run-b"], "止めた便の全便に 1 件ずつ");
         let _ = std::fs::remove_dir_all(&state);
@@ -460,9 +614,9 @@ mod tests {
     fn mutant_in_pipe_stop_all_skips_runs_with_an_unstopped_seat() {
         let state = scratch("stop-all-partial");
         append_all(&state, &[seat_up("run-a", "seat-a1", 9_101), seat_up("run-a", "seat-a2", 9_102), seat_up("run-b", "seat-b", 9_103)]);
-        let out = stop_with_stub(&state, &[9_101, 9_103]);
+        let out = stop_with_stub(&state, &[9_101, 9_103], &["--reason", WORDS]);
         assert_eq!(out.rc, RC_REFUSED, "止め切れなかった席が残る: {:?}", out.err);
-        assert_eq!(out.out, vec!["stop: seats=3 stopped=2 scopes=-".to_owned()]);
+        assert_eq!(out.out, vec!["stop: seats=3 stopped=2 ended=run-b unstopped=run-a scopes=-".to_owned()]);
         assert_eq!(runs_of(&state, EventKind::SeatStopped), vec!["run-a", "run-b"], "止めた席にだけ書く");
         assert_eq!(runs_of(&state, EventKind::RunStopped), vec!["run-b"], "止め切れた便にだけ書く");
         let _ = std::fs::remove_dir_all(&state);

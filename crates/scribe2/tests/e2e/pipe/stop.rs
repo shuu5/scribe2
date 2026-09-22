@@ -733,6 +733,145 @@ fn pipe_stop_driver_term_ignoring_driver_is_killed_after_the_grace() {
     clean(&[&repo, &state]);
 }
 
+// ───── 全部止めを live な便の本数で絞る（`s2-07l.459`・設計 pipeline.md §51・接頭辞 `pipe_stop_scope_`） ─────
+
+/// 止め得る偽 runner を**孫**として起こし、その pid の Live 席を `run` に置く（test の子のままだと zombie が残る）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn sleeping_seat(state: &Path, run: &str, seat: &str) -> u32 {
+    let spawned = Command::new("sh")
+        .arg("-c")
+        .arg("sleep 60 >/dev/null 2>&1 & echo $!")
+        .output()
+        .expect("fake runner を起こせる");
+    let pid: u32 = String::from_utf8_lossy(&spawned.stdout).trim().parse().expect("pid を読める");
+    assert!(proc_alive(pid), "fake runner が動いている");
+    record_event(state, &["--kind", "SeatSpawned", "--run", run, "--bead", "b", "--seat", seat, "--pid", &pid.to_string()]);
+    pid
+}
+
+/// stdout の `stop:` 行の欄 `key=` の値（無ければ `None`）。
+fn stop_field(out: &std::process::Output, key: &str) -> Option<String> {
+    let prefix = format!("{key}=");
+    stdout_of(out)
+        .split_whitespace()
+        .find_map(|token| token.strip_prefix(&prefix).map(str::to_owned))
+}
+
+/// `RunStopped` の便の列（物理順＝記帳順）。
+fn run_stopped_order(state: &Path) -> Vec<String> {
+    events(state)
+        .into_iter()
+        .filter(|found| found.kind == EventKind::RunStopped)
+        .map(|found| found.run)
+        .collect()
+}
+
+/// (d) 便 2 本を止めた周の rc 0 の 1 行は席数と止めた席数に加えて、2 本の便 id を記帳順で持つ（止め切れなかった
+/// 側の欄は空なので出ない）。1 本の席が止まらない周（pid の無い Live 席）は、その便が止め切れなかった側の欄にだけ
+/// 出て、止めた側の欄には出ない。base は `--reason` が使い方の誤りで断られる。
+#[test]
+fn pipe_stop_scope_line_names_the_stopped_runs_in_record_order() {
+    let (repo, state) = repo_with_state();
+    let dir = state.display().to_string();
+    let first = sleeping_seat(&state, "r-beta", "s-1");
+    let second = sleeping_seat(&state, "r-alpha", "s-2");
+    let out = run_pipe(&["stop", "--all", "--reason", "両便を畳む-ψ", "--state-dir", &dir]);
+    let survived = [first, second].map(proc_alive);
+    reap_own(first);
+    reap_own(second);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "逐語つきで通る: {}", stderr_of(&out));
+    assert!(stdout_of(&out).contains("seats=2 stopped=2"), "{}", stdout_of(&out));
+    assert_eq!(survived, [false, false], "両便の runner は消えている");
+    let order = run_stopped_order(&state);
+    assert_eq!(order.len(), 2, "便 2 本の終端: {order:?}");
+    assert_eq!(stop_field(&out, "ended"), Some(order.join(",")), "記帳順の 2 本: {}", stdout_of(&out));
+    assert_eq!(stop_field(&out, "unstopped"), None, "空の欄は出ない: {}", stdout_of(&out));
+
+    let stoppable = sleeping_seat(&state, "r-gamma", "s-3");
+    record_event(&state, &["--kind", "SeatSpawned", "--run", "r-delta", "--bead", "b", "--seat", "s-4"]);
+    let partial = run_pipe(&["stop", "--all", "--reason", "片方だけ-ψ", "--state-dir", &dir]);
+    let alive = proc_alive(stoppable);
+    reap_own(stoppable);
+    assert_eq!(partial.status.code(), Some(i32::from(RC_REFUSED)), "止め切れない席が残る: {}", stdout_of(&partial));
+    assert!(stdout_of(&partial).contains("seats=2 stopped=1"), "{}", stdout_of(&partial));
+    assert!(!alive, "止め得る runner は消えている");
+    assert_eq!(stop_field(&partial, "ended").as_deref(), Some("r-gamma"), "止めた側の欄: {}", stdout_of(&partial));
+    assert_eq!(stop_field(&partial, "unstopped").as_deref(), Some("r-delta"), "止め切れなかった側の欄: {}", stdout_of(&partial));
+    assert_eq!(kind_count(&state, "r-delta", EventKind::RunStopped), 0, "止め切れなかった便は終端にしない");
+    clean(&[&repo, &state]);
+}
+
+/// (e) 便が 0 本と 1 本 live な置き場に `--all` だけを撃つ 2 形（母集団 2 形）: どちらも従来どおり rc 0 で通り、0 本の
+/// 周は対象なしの字面のまま、1 本の周はその便を止める（逐語なしの終端の記帳は detail を持たない）。
+#[test]
+fn pipe_stop_scope_passes_without_reason_at_one_run_or_fewer() {
+    let (repo, state) = repo_with_state();
+    let dir = state.display().to_string();
+    let none = run_pipe(&["stop", "--all", "--state-dir", &dir]);
+    assert_eq!(none.status.code(), Some(i32::from(RC_OK)), "0 本: {}", stderr_of(&none));
+    assert_eq!(stdout_of(&none).trim(), "stop: seats=0 stopped=0 scopes=-", "0 本は対象なしの字面のまま");
+
+    let first = sleeping_seat(&state, "r-one", "s-a");
+    let second = sleeping_seat(&state, "r-one", "s-b");
+    let one = run_pipe(&["stop", "--all", "--state-dir", &dir]);
+    let survived = [first, second].map(proc_alive);
+    reap_own(first);
+    reap_own(second);
+    assert_eq!(one.status.code(), Some(i32::from(RC_OK)), "1 本（席 2）は逐語なしで通る: {}", stderr_of(&one));
+    assert_eq!(stdout_of(&one).trim(), "stop: seats=2 stopped=2 ended=r-one scopes=-", "1 本の便を止める");
+    assert_eq!(survived, [false, false], "runner は消えている");
+    let details: Vec<Option<String>> =
+        events(&state).into_iter().filter(|found| found.kind == EventKind::RunStopped).map(|found| found.detail).collect();
+    assert_eq!(details, vec![None], "逐語なしの終端は detail を持たない");
+    clean(&[&repo, &state]);
+}
+
+/// (b′)(c′) `--run` の周: 逐語と同時に渡すと rc 1 で何も書かず、逐語なしで止めた便の終端の記帳は detail を持たない。
+#[test]
+fn pipe_stop_scope_run_keeps_the_run_stopped_without_detail() {
+    let (repo, state) = repo_with_state();
+    let dir = state.display().to_string();
+    live_run(&state, "r-run");
+    let before = events(&state).len();
+    let both = run_pipe(&["stop", "--run", "r-run", "--reason", "x-ψ", "--state-dir", &dir]);
+    assert_eq!(both.status.code(), Some(i32::from(RC_REFUSED)), "--run と --reason は断る: {}", stdout_of(&both));
+    assert_eq!(events(&state).len(), before, "断る周は何も書かない");
+
+    let out = run_pipe(&["stop", "--run", "r-run", "--state-dir", &dir]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    let details: Vec<Option<String>> = events(&state)
+        .into_iter()
+        .filter(|found| found.run == "r-run" && found.kind == EventKind::RunStopped)
+        .map(|found| found.detail)
+        .collect();
+    assert_eq!(details, vec![None], "--run の終端は detail を持たない");
+    clean(&[&repo, &state]);
+}
+
+/// (b) の e2e 形: 便が 2 本 live な置き場に `--all` だけを撃つと rc 1 で断られ、席も events も動かず、断りの 1 行が
+/// 便の本数を名指す。
+#[test]
+fn pipe_stop_scope_refuses_bare_all_at_two_runs() {
+    let (repo, state) = repo_with_state();
+    let dir = state.display().to_string();
+    let first = sleeping_seat(&state, "r-x", "s-x");
+    let second = sleeping_seat(&state, "r-y", "s-y");
+    let before = events(&state).len();
+    let out = run_pipe(&["stop", "--all", "--state-dir", &dir]);
+    let alive = [first, second].map(proc_alive);
+    reap_own(first);
+    reap_own(second);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "--all だけは断る: {}", stdout_of(&out));
+    assert!(out.stdout.is_empty(), "断る周は stdout を出さない");
+    assert!(stderr_of(&out).contains("便が 2 本"), "便の本数を名指す: {}", stderr_of(&out));
+    assert_eq!(alive, [true, true], "席は生きたまま");
+    assert_eq!(events(&state).len(), before, "events は増えない");
+    clean(&[&repo, &state]);
+}
+
 // ───── 審査の理由の閉じた型・器が作る INCONCLUSIVE の「scope の中で死んだ」形（`s2-07l.395`・設計 contract-source.md §22） ─────
 
 /// 審査の lens の起動が偽 `systemd-run` を通った（包めた）か（[`runner_was_confined`] の審査の側）。

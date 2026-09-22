@@ -164,9 +164,11 @@ const ALLOWED_RESUME: &[cli_args::Allowed] = &[
     PLACE[0], PLACE[1], PLACE[2],
     value("--run"), TOOLS[0], TOOLS[1], TOOLS[2], TOOLS[3], value("--pr-cmd"), Allowed::switch(super::queue::DRIVE),
 ];
-/// `pipe stop`。
-const ALLOWED_STOP: &[cli_args::Allowed] =
-    &[PLACE[0], PLACE[1], PLACE[2], value("--run"), Allowed::switch("--all"), TOOLS[0], TOOLS[1], TOOLS[2], TOOLS[3]];
+/// `pipe stop`（`--reason` は `--all` の逐語・設計 pipeline.md §51）。
+const ALLOWED_STOP: &[cli_args::Allowed] = &[
+    PLACE[0], PLACE[1], PLACE[2],
+    value("--run"), Allowed::switch("--all"), value(crate::pipe::regate::REASON_FLAG), TOOLS[0], TOOLS[1], TOOLS[2], TOOLS[3],
+];
 /// `pipe dispatch`（`ls|first|hold|release BEAD` は positional）。
 const ALLOWED_DISPATCH: &[cli_args::Allowed] = &[PLACE[0], PLACE[1], PLACE[2], TOOLS[0], TOOLS[1], TOOLS[2], TOOLS[3]];
 /// `pipe land-window`。
