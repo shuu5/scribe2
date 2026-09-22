@@ -746,6 +746,7 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
   (e) 形 1 の逃がし（e2e・done (2)）: 便が 0 本と 1 本 live な置き場に `--all` だけを撃つ 2 形（母集団 2 形）で、どちらも従来どおり rc 0 で通り、0 本の周は対象なしの字面のまま・1 本の周はその便を止める（逐語なしで通る側を pin する）。
   (f) 形 2 の外形（既存の歯・done (3)）: usage の 1 行は `crates/scribe2/tests/e2e/pipe.rs` の既存の snapshot 歯 `pipe_external_form` が pin する。同じ便で snapshot を更新し、verify に同じ歯を名の全体で持つ（`.rs` は触らない＝write-set には置き場だけの印で載せる。審査の要約がこの印を読めるのは [contract-source.md](./contract-source.md) §44 / 行 au の後＝本行はその便の後に出す）。
   (g) 既存の歯の不変（done (6)）: `crates/scribe2/tests/e2e/pipe/stop.rs` の既存の `pipe_stop_` の歯を verify の e2e 行で丸ごと撃つ（新設の歯と同じ file・接頭辞は既存の名の全体を含む）。
+- 審査の器の世代（orchestrator 2026-09-22・便 134836Z の INCONCLUSIVE の再現・verified）: 本行の write-set の `=` の項目は、審査の材料の base の要約が印を剥がして読む世代（行 au・[contract-source.md](./contract-source.md) §44 の着地 86990e2 以後）の器でしか要約に載らない。旧世代の器で審査した便は section-material-missing で止まるので、本行は行 au 着地後の世代の器（PATH の binary を入れ替えた後）で審査する。
 - usage の外形: `--all` の行の flag が増えるので `crates/scribe2/tests/e2e/snapshots/e2e__pipe__pipe_external_form.snap`（pipe の usage 行を逐語で pin する既存の snapshot）を同じ便で更新する（行 at の write-set に含める・§49 形 1 と同じ形）。
 
 ## 52. gate の段の便が base を追随できる口 — 木だけを main の先端へ載せ替えて段を実装へ戻す 1 本を、land の外に開く（契約表の行 au・`s2-07l.470` の論点 4）
