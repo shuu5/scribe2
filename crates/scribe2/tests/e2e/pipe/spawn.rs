@@ -2254,6 +2254,98 @@ fn pipe_question_answer_then_resume_respawns_with_answer_section() {
     clean(&[&repo, &state]);
 }
 
+// ── 回答後の再開が写しを行から取り直す（設計 docs/design/pipeline-question.md §11・契約表の行 a・`s2-07l.546`） ──
+
+/// 質問で止めて回答を記帳した便の id（resume の手前まで）。
+fn answered(repo: &Path, state: &Path) -> String {
+    let id = questioned(repo, state);
+    let out = run_pipe(&["answer", "--run", &id, "--words", "write-set を広げた", "--state-dir", &state.display().to_string()]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    id
+}
+
+/// stdin を `copied` へ写して commit を 1 本作る fake runner で resume する。
+fn resume_copying(repo: &Path, state: &Path, id: &str, copied: &Path) -> Output {
+    let runner = format!("cat > '{}' && {TOY_COMMIT}", copied.display());
+    run_pipe(&[
+        "resume", "--run", id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--runner", &runner,
+    ])
+}
+
+/// 段 `Questioned`・detail=contract:refreshed の `RunStage` の件数。
+fn refreshed_count(state: &Path, id: &str) -> usize {
+    trail(state, id)
+        .iter()
+        .filter(|(kind, stage, detail)| {
+            *kind == EventKind::RunStage
+                && *stage == Some(Stage::Questioned)
+                && detail.as_deref() == Some("contract:refreshed")
+        })
+        .count()
+}
+
+/// (a) 回答 → 行の write-set を 1 本広げて commit → resume: 写しの write-set が広がり、runner の stdin（契約節）にその
+/// file が写り、段 `Questioned` の detail=contract:refreshed が 1 件・判定行に `contract=refreshed`。
+#[test]
+fn pipe_question_refresh_widened_row_rewrites_snapshot_and_records_once() {
+    let (repo, state) = repo_with_state();
+    let id = answered(&repo, &state);
+    let snapshot = vessel::pipe::contract_path(&state, &id);
+    let before = fs::read_to_string(&snapshot).unwrap_or_default();
+    assert!(!before.contains("src/extra.rs"), "受付時の写しは広げる前: {before}");
+    write_contract(&repo, &["write-set"], &[r#"write-set = ["src/lib.rs", "src/extra.rs"]"#]);
+    let copied = state.join("got-stdin.txt");
+    let out = resume_copying(&repo, &state, &id, &copied);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    assert!(stdout_of(&out).contains("contract=refreshed"), "判定行に contract=refreshed: {}", stdout_of(&out));
+    let after = fs::read_to_string(&snapshot).unwrap_or_default();
+    assert!(after.contains(r#"write-set = ["src/lib.rs", "src/extra.rs"]"#), "写しの write-set が広がる: {after}");
+    let stdin = fs::read_to_string(&copied).unwrap_or_default();
+    assert!(stdin.contains("src/extra.rs"), "契約節に広げた file: {stdin}");
+    assert!(stdin.contains("## 回答") && stdin.contains("write-set を広げた"), "回答節は不変: {stdin}");
+    assert_eq!(refreshed_count(&state, &id), 1, "記帳は 1 件: {:?}", trail(&state, &id));
+    assert!(show_line(&repo, &state, &id).contains("stage=Implemented"), "{}", show_line(&repo, &state, &id));
+    clean(&[&repo, &state]);
+}
+
+/// (b) 行を 1 字も変えずに resume した周は写しが byte 不変で記帳 0 件（判定行に `contract=refreshed` を出さない）。
+#[test]
+fn pipe_question_refresh_unchanged_row_keeps_snapshot_bytes() {
+    let (repo, state) = repo_with_state();
+    let id = answered(&repo, &state);
+    let snapshot = vessel::pipe::contract_path(&state, &id);
+    let before = fs::read(&snapshot).unwrap_or_default();
+    let out = resume_copying(&repo, &state, &id, &state.join("got-stdin.txt"));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    assert!(!stdout_of(&out).contains("contract=refreshed"), "{}", stdout_of(&out));
+    assert_eq!(fs::read(&snapshot).unwrap_or_default(), before, "写しは byte 不変");
+    assert_eq!(refreshed_count(&state, &id), 0, "記帳 0 件");
+    clean(&[&repo, &state]);
+}
+
+/// (c) 行を doc から消して resume すると rc 1・runner を起こさず・写し byte 不変・event 0 件・断りが行を名乗る。
+#[test]
+fn pipe_question_refresh_missing_row_refuses_without_touching() {
+    let (repo, state) = repo_with_state();
+    let id = answered(&repo, &state);
+    let snapshot = vessel::pipe::contract_path(&state, &id);
+    let before = fs::read(&snapshot).unwrap_or_default();
+    commit_rows(&repo, &[row_fields("b", &[], &[])]);
+    let events_before = events_bytes(&state);
+    let marker = state.join("runner-ran");
+    let out = run_pipe(&[
+        "resume", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--runner", &runner_cmd(&marker),
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{}", stderr_of(&out));
+    assert!(stderr_of(&out).contains("行 id a"), "断りが行を名乗る: {}", stderr_of(&out));
+    assert!(!marker.exists(), "runner を起こさない");
+    assert_eq!(fs::read(&snapshot).unwrap_or_default(), before, "写しは byte 不変");
+    assert_eq!(events_bytes(&state), events_before, "event 0 件");
+    clean(&[&repo, &state]);
+}
+
 #[test]
 fn pipe_question_run_stops_with_question_token() {
     let (repo, state) = repo_with_state();

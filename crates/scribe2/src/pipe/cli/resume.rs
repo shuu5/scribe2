@@ -4,6 +4,7 @@
 //! （[`review_then_launch`]・`pipe run` と共有・外から呼ぶ path は `cli` の再輸出で不変）、追随の続きの弁別
 //! （[`follow_pending`]）もここに置く。
 
+use super::intake::{regenerated, run_repo, unloadable};
 use super::run::{chain, launch};
 use super::step::{gate_run, land_run, review_run};
 use super::{broken, need, refused, stage_of, state_dir_of};
@@ -11,11 +12,12 @@ use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
 use crate::fleet::store::{self, LockPolicy, StoreError};
 use crate::fleet::{self, Completion, EventKind, Stage, State, Timeout};
 use crate::pipe::approve::RC_BLOCKED;
+use crate::pipe::contract::Contract;
 use crate::pipe::follow;
 use crate::pipe::gate::{Verdict, RC_INCONCLUSIVE};
 use crate::pipe::land::verdict_of;
 use crate::pipe::ratelimit::ride_out_rate_limit;
-use crate::pipe::{current, emit, gate_is_open, last_stage_detail, runner_is_idle, Emit};
+use crate::pipe::{contract_path, current, emit, gate_is_open, last_stage_detail, runner_is_idle, Emit};
 use crate::rules::manifest::Manifest;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -115,7 +117,7 @@ pub(super) fn resume(
                 RC_BLOCKED,
                 format!("pipe: run {id} は回答待ちである（pipe answer --run {id} --words \"<回答の逐語>\"）"),
             ),
-            true => relaunch(args, &id, policy, Stage::Questioned),
+            true => refresh_then_relaunch(args, &id, &state, manifest, policy),
         },
         // 上限で止まった便は器が別口座を選んで起こし直す（設計 account-autonomy.md §4・FR37）。人の
         // 操作は要らない（候補なしは reset まで待つ・終端は stop だけ）。
@@ -204,6 +206,69 @@ fn relaunch(args: &[String], id: &str, policy: LockPolicy, stage: Stage) -> Outc
         Err(reason) => refused(reason),
         Ok(runner) => launch(args, id, runner, policy, &[stage]),
     }
+}
+
+/// 写しを取り直した周の `RunStage`（段 `Questioned` のまま）の detail（設計 pipeline-question.md §11）。
+const CONTRACT_REFRESHED: &str = "contract:refreshed";
+
+/// 回答後の再開（設計 pipeline-question.md §11・契約表の行 a）: 起こす前に写しを設計 doc の行から取り直し、
+/// 変わった周だけ写しを書き替えて `RunStage`（段 `Questioned`・detail=[`CONTRACT_REFRESHED`]）を 1 件記帳し、
+/// 判定行に `contract=refreshed` を足す。行が受付を通らない周は rc 1 で断り、写しも event も触らない。
+///
+/// 取り直しは**この分岐だけ**である: 追随の再 spawn は写しの write-set へ設計 doc を追記しており、行から組み直すと
+/// その追記を消す（上限・runner 死の途中再開も同じく写しのまま起こす）。
+fn refresh_then_relaunch(args: &[String], id: &str, state: &State, manifest: &Manifest, policy: LockPolicy) -> Outcome {
+    let refreshed = match refresh_contract(args, id, state, manifest, policy) {
+        Ok(found) => found,
+        Err(outcome) => return outcome,
+    };
+    let mut outcome = relaunch(args, id, policy, Stage::Questioned);
+    if refreshed {
+        let token = "contract=refreshed";
+        match outcome.out.first_mut().filter(|line| line.starts_with("run=")) {
+            Some(line) => line.push_str(&format!(" {token}")),
+            None => outcome.out.insert(0, format!("run={id} {token}")),
+        }
+    }
+    outcome
+}
+
+/// 写しを受付と同じ導出で組み直して byte 比較する（同じなら何も書かず `false`・違えば写しを書き替えて記帳し `true`）。
+fn refresh_contract(
+    args: &[String],
+    id: &str,
+    state: &State,
+    manifest: &Manifest,
+    policy: LockPolicy,
+) -> Result<bool, Outcome> {
+    let state_dir = &state_dir_of(args).map_err(refused)?;
+    let repo = run_repo(args, state_dir, id).map_err(refused)?;
+    let path = contract_path(state_dir, id);
+    let held = std::fs::read_to_string(&path).map_err(|err| broken(format!("{} を読めない: {err}", path.display())))?;
+    let contract = Contract::parse(&held).map_err(unloadable)?;
+    let Some(body) = regenerated(&repo, state_dir, id, manifest, &contract.design)? else {
+        return Ok(false);
+    };
+    if body == held {
+        return Ok(false);
+    }
+    std::fs::write(&path, &body).map_err(|err| broken(format!("{} を書けない: {err}", path.display())))?;
+    let bead = state.runs.get(id).map(|run| run.bead.as_str()).unwrap_or_default();
+    emit(
+        state_dir,
+        &Emit {
+            kind: EventKind::RunStage,
+            run: id,
+            bead,
+            stage: Some(Stage::Questioned),
+            seat: None,
+            pid: None,
+            detail: Some(CONTRACT_REFRESHED.to_owned()),
+        },
+        policy,
+    )
+    .map_err(|err| broken(err.to_string()))?;
+    Ok(true)
 }
 
 /// 審査（`Intake` → `Reviewed`）を通してから起こす（`pipe run` と `resume` が共有する 1 本・FR49）。

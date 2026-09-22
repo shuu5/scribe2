@@ -361,6 +361,36 @@ pub(in crate::pipe) fn generated(
     Ok((contract, body))
 }
 
+/// 回答後の再開が写しを取り直す本文（設計 pipeline-question.md §11・契約表の行 a）。
+///
+/// 写しの `design` が設計 pointer なら受付と**同じ導出**（[`Materials::of`] → [`generated`]）で本文を組み直して返す
+/// （受付が写す byte と同じ形＝行が変わらなければ写しと 1 byte も違わない）。pointer でない `design` は `Ok(None)`
+/// （取り直す行が無い）。行が受付を通らない周（行が消えた・doc を読めない・表の検査が 1 件でも出る）は受付の断りの
+/// 字面をそのまま rc 1 で返す（起こさない・写しと event は呼び手が触らない）。
+///
+/// 上限の command は**便の写しの有効値**（run dir の `vessel.toml`・受付が上限と突き合わせて凍結した allowlist）で、
+/// 禁じる語列は `manifest` の行（追随の [`crate::pipe::follow::stale_rows_in`] と同じ借り方＝resume は受付の `--rules`
+/// を持たない）。受付の後に宣言の allowlist が広がった周は上限の外として断る側へ倒れる。
+pub(super) fn regenerated(
+    repo: &Path,
+    state_dir: &Path,
+    id: &str,
+    manifest: &Manifest,
+    design: &str,
+) -> Result<Option<String>, Outcome> {
+    let Ok(pointer) = table::parse_pointer(design) else {
+        return Ok(None);
+    };
+    let refused_as = |denial: Denial| Outcome { rc: RC_REFUSED, ..denial.outcome };
+    let frozen = Effective::load(&vessel_path(state_dir, id))
+        .map_err(|errors| Outcome::failed(RC_BROKEN, errors.iter().map(ToString::to_string).collect()))?;
+    let denied_commands = list_row(manifest, DENIED_ROW).map_err(refused)?;
+    let ceiling = Ceiling { row: CEILING_ROW, commands: frozen.allowed(), denied: &denied_commands };
+    let materials = Materials::read(repo, &ceiling).map_err(refused_as)?;
+    let (_, body) = generated(repo, &pointer, &materials).map_err(refused_as)?;
+    Ok(Some(body))
+}
+
 /// 生成した写しを器自身が読めない周の名（生成の不備＝壊れた器・rc 2）。
 const DENIAL_GENERATED: &str = "generated";
 
