@@ -455,7 +455,7 @@ done = "yaml / md の要件面を宣言した toy で contracts check の id 検
 
 [[contract]]
 id = "l"
-title = "受付の門の判定式の検出線の生存 9 本に歯を足す — 余地の境界・外形の usage 行の名・core の名の切り出し・節の切り出しの 4 本を in-file と e2e で赤にする（歯だけ・門の判定は動かさない）"
+title = "受付の門の判定式の検出線の生存 9 本に歯を足す — §31 の (a) 余地の段の除外の否定 1 本・(b) 外形の usage 行の名 2 本・(c) 余地の境界 1 本・(d) core の名の切り出し 1 本・(e) 節の切り出し 4 本の計 9 本を in-file と e2e で赤にする（歯だけ・門の判定は動かさない）"
 req = ["FR48", "FR47"]
 section = "31"
 write-set = ["crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/src/pipe/declaration/write_set.rs", "crates/scribe2/src/pipe/table/check.rs", "crates/scribe2/tests/e2e/pipe/intake.rs"]
