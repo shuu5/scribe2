@@ -293,14 +293,26 @@ impl Released {
 /// §4.3 の「最後の process の終了で scope は消える」は、行が fixture の server や shell を
 /// 孤児で残す周に成立しない——scope は active のまま CPU を焼き、次の周の同名の相手になる。
 /// SIGTERM の猶予は待たない（子は既に終わっている・残りは孤児だけ）。
+///
+/// kill の後に `reset-failed` を 1 回撃つ（設計 gate-cost.md §25・`s2-07l.421`）: kill で殺した scope は
+/// `--collect` があっても failed のまま残る周がある。reset の結果は record に写さない（unit が無い周の
+/// 「not loaded」も含め、[`Released`] は kill の結果だけで決まる＝閉じた 4 値は不変）。
 pub fn release(unit: &str) -> Released {
+    let scope = format!("{unit}.scope");
     let out = Command::new(SYSTEMCTL)
         .args(["--user", "kill", "--signal=SIGKILL"])
-        .arg(format!("{unit}.scope"))
+        .arg(&scope)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .output();
+    let _reset = Command::new(SYSTEMCTL)
+        .args(["--user", "reset-failed"])
+        .arg(&scope)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
     released_of(out)
 }
 
@@ -381,8 +393,8 @@ pub fn orphans_before_release(unit: &str) -> Orphans {
 /// 包めなかった周は撃たない（scope が無い）。`Gone` は正常なので `None`＝record は変わらない。
 ///
 /// **孤児の数はここでは数えない**（[`orphans_before_release`] は runner / lens の終端の 1 行の口だけが
-/// 撃つ）——この口は gate の verify 行ごとの片付けも通り、行の終端の `systemctl` の呼出は 1 行 1 本で
-/// pin されている（`kill` の隣に `show` を足すと、その本数の歯が落ちる）。
+/// 撃つ）——この口は gate の verify 行ごとの片付けも通り、行の終端の `systemctl` の呼出は 1 行
+/// `kill` + `reset-failed` の 2 本で pin されている（`show` を足すと、その本数の歯が落ちる）。
 pub fn release_scope(confinement: &Confinement) -> Option<Released> {
     match confinement {
         Confinement::Confined { unit } => Some(release(unit)).filter(|found| *found != Released::Gone),
@@ -638,11 +650,15 @@ fn scope(inner: Command, mb: u64, entry: &Wrap<'_>, caps: &Caps) -> Command {
 /// `OOMPolicy=continue` は包みを systemd の OOM 停止から外すためである——既定の `stop` では
 /// kernel が箱の中の 1 process を殺した直後に unit ごと止められ、包みが終端行を出す前に
 /// SIGTERM で死ぬ（設計 §4.2・lens-132c M1）。
+///
+/// `--collect` は終了後の unit を failed の周も含めて unload させる（設計 §25・`s2-07l.421`）——無いと
+/// 正常終了した scope が `failed` で host に残り、同じ host の他の観察を汚す。probe の scope もこれで消える。
 fn scope_args(unit: &str, mb: u64, caps: &Caps) -> Vec<String> {
     vec![
         "--user".to_owned(),
         "--scope".to_owned(),
         "--quiet".to_owned(),
+        "--collect".to_owned(),
         format!("--unit={unit}"),
         "-p".to_owned(),
         format!("MemoryMax={mb}M"),
@@ -728,7 +744,7 @@ pub fn read_usage(stdout: &str) -> Usage {
 mod tests {
     use super::{
         control_group_from, limit_mb, limit_of, mem_total_mb, next_seq, orphans_from, orphans_of, peak_from, peak_of,
-        probe_outcome, read_usage, release_scope, released_of, script, tame, unit_name, wrap_command, wrap_line, Caps,
+        probe_outcome, read_usage, release_scope, released_of, scope_args, script, tame, unit_name, wrap_command, wrap_line, Caps,
         Confinement, Limit, Orphans, Peak, Reason, Released, Sampler, Wrap, CGROUP_ROOT, PANE_ENV, REASONS,
     };
     use crate::order::is_declaration_order;
@@ -843,6 +859,35 @@ mod tests {
         assert_eq!(Orphans::Count(0).word(), "0", "読めた 0 は 0 と書く");
         assert_eq!(Orphans::Unreadable.word(), "-", "読めない周は -");
         assert_eq!(Orphans::Count(2).word(), "2");
+    }
+
+    /// scope の引数に `--collect` が**ちょうど 1 回**在り、既存の引数の順序と箱の大きさは不変
+    /// （設計 gate-cost.md §25・`s2-07l.421`）。
+    #[test]
+    fn confine_collect_scope_args_carry_collect_once_in_order() {
+        let args = scope_args("scribe2-probe-unit", 21, &CAPS);
+        assert_eq!(
+            args.iter().filter(|arg| *arg == "--collect").count(),
+            1,
+            "--collect は 1 回: {args:?}"
+        );
+        assert_eq!(
+            args,
+            vec![
+                "--user",
+                "--scope",
+                "--quiet",
+                "--collect",
+                "--unit=scribe2-probe-unit",
+                "-p",
+                "MemoryMax=21M",
+                "-p",
+                "CPUWeight=50",
+                "-p",
+                "OOMPolicy=continue",
+            ],
+            "既存の引数の順序と箱の大きさは不変"
+        );
     }
 
     /// 包めなかった周は片付けを撃たない（record も変わらない）。

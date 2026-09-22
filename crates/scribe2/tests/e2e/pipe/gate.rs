@@ -1608,6 +1608,14 @@ fn row_has(rows: &[Vec<(String, vessel::fleet::json_lite::Value)>], n: usize, ke
     rows.get(n.saturating_sub(1)).is_some_and(|row| row.iter().any(|(found, _)| found == key))
 }
 
+/// 終端の片付けの呼出の並び: `kill --signal=SIGKILL` の後に `reset-failed` を 1 回（設計 gate-cost.md §25）。
+fn release_sequence(unit: &str) -> Vec<String> {
+    vec![
+        format!("--user kill --signal=SIGKILL {unit}.scope"),
+        format!("--user reset-failed {unit}.scope"),
+    ]
+}
+
 /// (a) **verify 行の終端で `kill --signal=SIGKILL <unit>.scope` が 1 回撃たれ**、unit は
 /// `systemd-run` が受けた名と一致する。base では systemctl が撃たれず落ちる（機能不在）。
 #[test]
@@ -1621,9 +1629,61 @@ fn pipe_confine_release_kills_the_verify_scope_once_by_its_unit() {
     let unit = scope_unit(&state, "-contract-3-");
     assert_eq!(
         release_calls(&state, &unit),
-        vec![format!("--user kill --signal=SIGKILL {unit}.scope")],
-        "終端で 1 回だけ、包んだ名の scope を SIGKILL で片付ける"
+        release_sequence(&unit),
+        "終端で 1 回だけ、包んだ名の scope を SIGKILL で片付ける（後に reset-failed が 1 回）"
     );
+    clean(&[&repo, &state]);
+}
+
+/// `s2-07l.421`: 包んだ scope の引数に `--collect` が**ちょうど 1 回**在り、終端の片付けは `kill` の**後に**
+/// `reset-failed` を 1 回撃つ（同じ unit 名・順序つき）。行の record は `scope=killed` のまま（Released の語彙は不変）。
+/// base は `--collect` も `reset-failed` も撃たないので RED。
+#[test]
+fn pipe_confine_collect_release_resets_failed_after_kill() {
+    let (repo, state) = repo_with_state();
+    let path = systemd_stub(&state);
+    systemctl_stub(&state, SYSTEMCTL_KILLED);
+    let marker = state.join("lens-ran");
+    let (id, gated) = confined_run(&repo, &state, &path, &fake_lens(&marker, &lens_verdict("PASS")));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "gate: {}", stderr_of(&gated));
+    let unit = scope_unit(&state, "-contract-3-");
+    let record = scope_record(&state, "-contract-3-");
+    assert_eq!(
+        record.lines().filter(|line| *line == "--collect").count(),
+        1,
+        "--collect は 1 回: {record}"
+    );
+    let calls = release_calls(&state, &unit);
+    assert_eq!(calls, release_sequence(&unit), "kill の後に reset-failed が 1 回");
+    assert_eq!(
+        calls.iter().filter(|call| call.contains(" reset-failed ")).count(),
+        1,
+        "reset-failed は 1 回（母集団 {} 本）",
+        calls.len()
+    );
+    let rows = verify_rows(&state, &id);
+    assert_eq!(row_value(&rows, 3, "scope"), "killed", "record の語彙は不変");
+    assert_eq!(row_value(&rows, 3, "rc"), "0", "行の rc は不変");
+    clean(&[&repo, &state]);
+}
+
+/// `s2-07l.421`: unit が無い周（`kill` も `reset-failed` も「not loaded」で断る）も `Gone` のまま＝record に
+/// `scope=` を書かず、行の rc と判定は変わらない（reset の rc を record に写さない）。
+#[test]
+fn pipe_confine_collect_gone_unit_keeps_the_record() {
+    let (repo, state) = repo_with_state();
+    let path = systemd_stub(&state);
+    systemctl_stub(&state, SYSTEMCTL_GONE);
+    let marker = state.join("lens-ran");
+    let (id, gated) = confined_run(&repo, &state, &path, &fake_lens(&marker, &lens_verdict("PASS")));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "gate: {}", stderr_of(&gated));
+    let unit = scope_unit(&state, "-contract-3-");
+    assert_eq!(release_calls(&state, &unit), release_sequence(&unit), "無い unit にも kill → reset-failed");
+    let rows = verify_rows(&state, &id);
+    assert_eq!(row_value(&rows, 3, "confined"), "true", "包めている");
+    assert!(!row_has(&rows, 3, "scope"), "Gone は書かない: {:?}", rows.get(2));
+    assert_eq!(row_value(&rows, 3, "rc"), "0", "行の rc は不変");
+    assert_eq!(value_of(&verdict_pairs(&state, &id), "verdict"), "PASS", "判定は不変");
     clean(&[&repo, &state]);
 }
 
@@ -1653,7 +1713,7 @@ fn pipe_confine_release_gone_leaves_no_scope_field() {
     let (id, gated) = confined_run(&repo, &state, &path, &fake_lens(&marker, &lens_verdict("PASS")));
     assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "gate: {}", stderr_of(&gated));
     let unit = scope_unit(&state, "-contract-3-");
-    assert_eq!(release_calls(&state, &unit).len(), 1, "片付けは撃たれている（不在は撃たなかったせいではない）");
+    assert_eq!(release_calls(&state, &unit), release_sequence(&unit), "片付けは撃たれている（不在は撃たなかったせいではない）");
     let rows = verify_rows(&state, &id);
     assert!(!row_has(&rows, 3, "scope"), "Gone は書かない: {:?}", rows.get(2));
     assert!(!row_has(&verify_rows(&state, &id), 2, "scope"), "Gone は書かない（共通 verify の行）");
@@ -1731,7 +1791,7 @@ fn pipe_confine_release_runner_and_lens_scopes_are_released() {
         let unit = scope_unit(&state, stage);
         assert_eq!(
             release_calls(&state, &unit),
-            vec![format!("--user kill --signal=SIGKILL {unit}.scope")],
+            release_sequence(&unit),
             "{stage} の scope も終端で 1 回片付ける"
         );
     }
