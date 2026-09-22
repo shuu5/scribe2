@@ -653,6 +653,62 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
 - **見張りの記録の名**: 1 起動 1 file の名は mktemp の一意な名で、systemd-run の記録（unit 名）とは別の記録 dir に置く＝既存の「ちょうど 1 件」の母集団に混ざらない。
 - **既存の歯の総数**: e2e の歯は 1182 本から本行の 3 本を足して 1185 本（既存の歯は 1 本も消えず・名も変わらない）。
 
+## 38. 作り手が死んだ席の scope を unit 名の pid で見つけて畳む — 止めた後に残る tmux の server を cgroup ごと終える（契約表の行 ae・`s2-07l.452`）
+
+- 出所（`s2-07l.452`・planner 実測 2026-09-17 + 本 § の再実測 2026-09-22・verified・main f25084c）: 便が止まった後も席の tmux の server とその子の sh が生き残り、systemd の scope が active running のまま残る。母集団 = その日 active だった scope 5 本のうち走行中でない 4 本で、**4 本とも**再現した。うち 1 本は 5 時間以上残っていた。影響は (a) 走行中の便の本数を scope の active で数える読み手が偽の live を数える、(b) server 1 本ごとに fd と process が漏れる、の 2 つである。
+- 現物（本行の base・main f25084c・verified）:
+  - 片付けの実体は 1 本（`crates/scribe2/src/pipe/confine.rs` の `release`・kill の後に reset-failed を 1 回）で、呼び手は src の **6 か所**である: 終端の 1 行の口（`crates/scribe2/src/headless/runner.rs`）が直に撃つ 1 か所と、`release_scope` を撃つ 5 か所（`crates/scribe2/src/pipe/spawn.rs` / `crates/scribe2/src/pipe/review.rs` / `crates/scribe2/src/pipe/gate/lens.rs` / `crates/scribe2/src/pipe/gate/verify.rs` / `crates/scribe2/src/fleet/usage.rs`）。**6 か所とも、自分が起こした子を待ち終えた周にしか通らない**。
+  - unit の名を知っているのは作った process ただ 1 つである。名は `unit_name` が場所・段・n・**自分の pid**・通し番号から組み、event log にも state にも**どこにも記録しない**（`unit=` の字面は src 全数 grep で 2 件、どちらも `systemd-run` へ渡す引数と in-file の歯の fixture）。作った process が死ぬと、その scope の名を知る者が居なくなる＝6 か所のどれからも畳めない。
+  - 止める口（`crates/scribe2/src/pipe/stop.rs`・485 行）に `confine` の語は **0 件**である。止める相手は席の pid（process group 宛ての signal）と運転手の pid だけで、scope には触らない。tmux の server は自分の session へ離れるので group 宛ての signal に当たらず、cgroup には残ったままになる。
+  - 終端した便は止める口が「既に終端である」で断る（段が `Stopped` の周は生きていない）ので、後から畳み直す口も無い。
+  - **名は既に作り手の pid を持っている**: 形は 器の名・場所・段・n・作り手の pid・通し番号を `-` で連ねた 1 語で、場所と段の中の記号は `tame` が `-` に畳むが、**末尾から 2 番目**は必ず pid である。作り手が生きているかは既にある lock の所有者の判定 1 本（`crates/scribe2/src/fleet/store.rs` の `lock_owner` と `started_ms`）で測れる＝第 2 の probe を作らない（C6.3）。
+- 形（番号は done と歯に 1:1 で対応する）:
+  1. **名から作り手の pid を読む pure な 1 本**（`crates/scribe2/src/pipe/confine.rs`）: `-` で割った列の末尾から 2 番目を数として読む。割れ数が足りない名・数でない名は `None`（推測で埋めない）。
+  2. **残骸の一覧を取る 1 口**: `systemctl` を `--user list-units` で 1 回撃ち、legend と pager を止めた素の形で active な scope に絞り、pattern は器の名から導いた 1 語（`-*.scope`）にする。行頭の unit 名だけを取る。道具が無い周と rc が非 0 の周は**空の一覧ではなく「測れなかった」**を返す（0 件と融合しない・C10）。
+  3. **畳む相手を決める pure な 1 本**: 一覧の行から、名が形 1 で読める ∧ その pid が**生きていない**ものだけを残す。生きている作り手の scope には触らない（自分の pid の scope も、自分が生きているので残る）。
+  4. **撃つのは止める口の終端**: 席への signal と運転手を止めた後・`RunStopped` を書く前に、形 3 が残した unit を既存の `release` で 1 本ずつ畳む（`--run` と `--all` の両方）。kill と reset-failed の並びは §25 のまま 1 unit につき 2 呼出で、verify 行ごとの片付けの並びは 1 字も動かない。
+  5. **数が行に出る**: 止める口の行の末尾に `scopes=<畳んだ数>/<一覧の件数>` を足す（形 2 が測れなかった周は `scopes=-`）。rc と既存の token（`run=` / `seats=` / `stopped=` / `driver=stopped`）は不変で、止め切れなかった周に `RunStopped` を書かない極性も不変である。
+- 触らない: `release` の中身と片付けの結果の 4 値・`release_scope` の filter と 6 か所の呼び手・`unit_name` の形と通し番号・verify 行ごとの片付けの呼出の並び（§25・e2e の `release_sequence` が pin する 2 行）・席と運転手を止める順（[pipeline.md](./pipeline.md) §39）・道具箱の PATH の組み方と bin dir に置く偽 binary の本数（3 件のまま）。**§36 と §37 の「触らない」が挙げる「偽 systemctl の答え 2 つ」は本節が 1 つ足して 3 つになる**（数を測る歯は base に無い——§36 の歯 (c) が数えるのは bin dir の entry 名で、偽 systemctl の script の分岐の本数ではない）。
+- 却下:
+  - **unit の名を event log に記帳して後から読む**: 便 1 本の gate は verify 行ごとに scope を作るので記帳が数十件に膨れ、段を持たない event を記帳の口が運ぶ形になる。名は既に pid を持っている（形 1）ので記帳は要らない。
+  - **止める口が cgroup の中身を直に読んで殺す**: 片付けの経路が 2 本になる（C2）。畳むのは既存の 1 本のままにする。
+  - **便の席の tmux の server を名指しで畳む**: 席の socket の名を知る必要があり、tmux 以外の孤児（sh・cargo）には効かない。scope を畳めば cgroup の全 process が終わる。
+  - **時間で切る**（「N 分 active なら孤児」）: 閾値が恣意で、長い verify 行の scope を殺す。作り手の生死は測れる値である。
+  - **終端した便も止める口が受け付けるようにする**: 終端の極性が緩み、`RunStopped` の二重記帳を招く。残骸は便の段に紐づかない（一覧は host 全体を見る）ので、掃除は段の外に置く。
+  - **一覧が空の周と測れなかった周を同じ `0` にする**: 道具の無い host で「孤児 0 件」が緑に化ける（C10）。
+- 歯（接頭辞 `pipe_scope_reap_`・`crates/` 全体の fn 名の substring として base に 0 件。in-file は `crates/scribe2/src/pipe/confine.rs` の `mod tests`・e2e は偽 `systemctl` の呼出を記録する fixture が既に在る `crates/scribe2/tests/e2e/pipe/gate.rs`）:
+  (a) 形 1: 素直な名・場所に記号を含む名（`tame` が `-` に畳んだ形）の 2 形で末尾から 2 番目の pid が読め、割れ数が足りない名・pid が数でない名が `None`（母集団 = 4 形を assert に出す）。
+  (b) 形 3: 一覧の行の列と「生きている pid の集合」を渡し、死んだ作り手の unit だけが残る。生きた作り手の行と形に合わない行は残らない（母集団 = 入れた行数を assert に出す）。
+  (c) 形 2: 一覧を取る呼出の引数の列が `--user` `list-units` で始まり、末尾の pattern が器の名から導いた字面である（定数を直に読む）。rc 非 0 の答えが「測れなかった」になり、空の一覧と弁別される（2 形を対で）。
+  (d) 形 4 / 形 5（e2e）: 偽 `systemctl` が active な scope を 2 本返し（1 本は生きた pid・1 本は死んだ pid を名に持つ）、止める口を撃つと kill が**死んだ側の 1 本にだけ** 1 回撃たれ、生きた側には 0 回で、行の末尾が `scopes=1/2` になる。base は一覧を 1 度も撃たない＝機能不在の RED。
+
+## 39. 検出線が測っていない package を判定行に出す — 差分が触れた member のうち範囲の外の dir を名指し、母集団 0 と生存 0 を弁別する（契約表の行 af・`s2-07l.274`）
+
+- 出所（`s2-07l.274`・admin の観測 2026-09-14 + 本 § の再実測 2026-09-22・verified・main f25084c）: 検出線は core の package 1 つしか測らないので、task runner の側だけを変える便は母集団 0 で終わる。判定行はそれを「生存 0」と同じ字面で書く。task runner は CI の門そのもの（入口確認・検査・検出線・rules の差分・path の掃除）なので、門の歯が空虚でも検出線が沈黙する＝憲法 C12.4 の範囲に門が入っていない。
+- 現物（本行の base・main f25084c・verified）:
+  - 測る範囲は 1 つの名前に束ねられている: `crates/xtask/src/mutantsdiff.rs` の走らせる手が workspace の配置から core の名を解き、引数を組む関数へ**1 語だけ**渡す。その関数は `-p` の後ろに受けた 1 語を push するだけで、第 2 の package を受ける口が無い。範囲を運ぶ型も名 1 つと歯の語数しか持たない。
+  - `-p xtask` の字面は `crates/xtask/src` の全数 grep で **0 件**である。
+  - 判定行は `mutants-diff:` の後ろに 7 つの token（`total=` `caught=` `missed=` `unviable=` `timeout=` `scope=` `teeth=`）を並べる 1 行で、範囲の外だけを変えた便は `total=0` で終わる。読み手（gate の record・審査役の材料・週次の記録）にとって「生存が 1 本も無い」と「1 本も測っていない」が**同じ字面**になる（C10 に反する面）。
+  - 母集団を導く材料は既に在る: workspace の配置の型が root と core の dir と**全 member の dir** を持ち、走らせる手は cargo-mutants を撃つ前に差分を file へ置いている。
+  - 前提が 1 つ動いた: ADR-0052 で歯の絞り（§34）が入り、mutant の test を nextest の式で絞る道具は既に在る。動いていないのは package の範囲だけである。
+- 形（番号は done と歯に 1:1 で対応する）:
+  1. **差分が触れた member を導く pure な 1 本**: 差分の本文と member の dir の列から、触れた member の dir を root 相対・宣言順・重複無しで返す。member のどれにも属さない path（設計 doc など）は数えない。
+  2. **範囲の外を名指す**: 形 1 の結果から core の dir を除いた残りが「触れたのに測っていない面」である。
+  3. **判定行の末尾に 1 語だけ足す**: `outside=` の後ろに形 2 の dir を `,` で結ぶ（0 件は `-`）。既存 7 token の名・順序・書式は 1 字も変えない（§34 約束 3 が `teeth=` を足したときと同じ足し方）。的を絞った周の行も同じ 1 語を末尾に足す。
+  4. **判定は 1 つも動かない**: 5 数の読み・週次の記録の行の極性と値・rc・`-p` に渡す名・baseline の 2 手・歯の絞りの式は 1 字も変えない。`outside=` は**記録であって門ではない**。
+- 触らない: 引数を組む関数の引数の列と、速さの 3 値と範囲を運ぶ型の形・的を絞った周の引数の組み直しと的の行の読み・baseline の 2 手と timeout の式（§33）・歯の絞りと nextest の式（§34）・workspace の配置を読む手・宣言 file の 4 つの穴と検出線の 1 行。
+- 却下:
+  - **task runner を第 2 の範囲として足す**（memo の候補 (a)）: task runner の歯は fixture の toy な crate を実 cargo で build するので、変異 1 本が分の桁になりうる。**その秒を 1 周も実測していない**（本節の base では撃てない）ので、枠と時間の予算の裁定より先に既定を変えない。本節の `outside=` が、どの便がどれだけ範囲の外だったかを記録に残し、その裁定の材料になる（後続・§11）。
+  - **task runner は in-file の単体の歯だけを対象にする**（候補 (b)）: 同じ費用の実測が要る。絞りの道具は §34 で既に在るので、実測の後は値の面になる。
+  - **「検出線の範囲 = core」と書いて対象外と明記する**（候補 (c)）: 穴を文書で固定するだけで、測れていない周を読み手が見分けられる形にはならない。本節は同じ事実を**記録の側**に置き、見分けを作る。
+  - **範囲の外が在る周を `total=-` に倒す**: 既存 7 token の書式が動き、判定行の最終行を写す読み手が全部動く。足すのは末尾の 1 語に留める。
+  - **範囲の外が在る周を測れなかった（rc 2）にする**: 門の極性が動く。週次の記録の行は今は門ではないので、ここで倒すと deny 化と同じ効きになる。
+  - **member の package 名を解いて名指す**: 各 member の manifest を読む手が 1 つ増える。dir の root 相対の path は既に在る材料から導けて、どの面が測られていないかを同じだけ示す。
+- 歯（接頭辞 `mutants_diff_outside_`・`crates/` 全体の fn 名の substring として base に 0 件。in-file は `crates/xtask/src/mutantsdiff.rs` の `mod tests`）:
+  (a) 形 1: 差分が core だけ・task runner だけ・両方・member の外だけ、の 4 形で、触れた member の dir が宣言順・重複無しで出る（母集団 = 入れた member dir の件数を assert に出す）。同じ member の 2 file を触る差分が 1 件に畳まれることを同じ歯で測る。
+  (b) 形 2: (a) の 4 形から core の dir を除いた結果が、順に 0 件・1 件・1 件・0 件になる。
+  (c) 形 3: 判定行の末尾が `outside=-` と `outside=` + dir 1 件の 2 形で出て、先頭の 7 token が 2 形とも 1 字も変わらない（母集団 = token を割った列の長さを assert に出す）。`crates/xtask/src/main.rs` の既存の行の字面の歯が同じ列を見るので、そちらの期待も末尾の 1 語を持つ形に揃える（名は残す）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -957,4 +1013,23 @@ write-set = ["crates/scribe2/tests/e2e/main.rs", "crates/scribe2/tests/e2e/pipe.
 verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail e2e_ledger_tripwire_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_terminal_dispatch_manual_turn_starts_the_runs_it_can"]
 size = "S"
 done = "(1) 歯の道具箱（tests/e2e/main.rs の toolbox_path）が偽 systemd-run と偽 systemctl に並べて台帳 client の既定名（seat/ledger.rs の DEFAULT_BD）の偽物を置き、呼ばれた argv を 1 起動 1 file で記録 dir へ写してから標準出力を空にして非 0 の rc で断る (2) --repo と --runner と台帳の待ち上限の行を持つ写しつきで --bd を渡さずに撃った列の 1 周が見張りの記録をちょうど 1 件残してその本文が読みの引数を持ち、--bd に偽 client の絶対 path を渡した周は見張りの記録が 0 件のまま偽 client 側に呼出が残り、既存の assert は動かない (3) helper 経由で 1 便を intake から land まで通した周は見張りの記録が 0 件で同じ便の道具箱の systemd-run の記録が 1 件以上在り、器の src と PATH の組み方と 3 つの口と明示の 4 つの口と --bd を渡す既存の起動と既存の歯の総数は 1 字も変わらない"
+[[contract]]
+id = "ae"
+title = "止める口の終端で、作り手の process が死んでいる席の scope を畳む — unit 名の末尾から 2 番目の pid を pure に読み、active な scope の一覧から死んだ作り手のものだけを既存の片付け 1 本で kill し、畳んだ数と一覧の件数を行に出す（測れなかった周は 0 と融合しない）"
+req = ["NFR6", "FR46"]
+section = "38"
+write-set = ["crates/scribe2/src/pipe/confine.rs", "crates/scribe2/src/pipe/stop.rs", "crates/scribe2/tests/e2e/main.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "crates/scribe2/tests/e2e/pipe/stop.rs", "docs/design/gate-cost.md"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail pipe_scope_reap_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_scope_reap_"]
+size = "S"
+done = "(1) unit 名から作り手の pid を読む pure な 1 本が、素直な名と記号を畳んだ名の 2 形で末尾から 2 番目を返し、割れ数が足りない名と数でない名で None を返す (2) active な scope の一覧を取る呼出が --user list-units で始まり末尾の pattern を器の名の定数から導き、rc 非 0 の答えが空の一覧と弁別される測れなかった値になる (3) 一覧の行と生きている pid の集合から、死んだ作り手の unit だけが畳む相手に残り、生きた作り手の行と形に合わない行は残らない (4) 止める口が席の signal と運転手の後・RunStopped の前に、残った unit を既存の片付けで 1 本ずつ畳み、verify 行ごとの片付けの kill と reset-failed の並びは 1 字も動かない (5) 偽 systemctl が active な scope を 2 本（生きた pid と死んだ pid）返す周に、止める口の後の kill が死んだ側だけに 1 回・生きた側に 0 回で、行の末尾が scopes=1/2 になり rc と既存の token は不変"
+
+[[contract]]
+id = "af"
+title = "検出線の判定行の末尾に、差分が触れた member のうち測る範囲の外の dir を root 相対で名指す 1 語を足す — 母集団 0 と生存 0 を字面で弁別し、既存 7 token と 5 数の読みと週次の記録の極性は 1 字も変えない"
+req = ["NFR6", "FR46"]
+section = "39"
+write-set = ["crates/xtask/src/mutantsdiff.rs", "crates/xtask/src/main.rs", "docs/design/gate-cost.md"]
+verify = ["cargo nextest run -p xtask --no-tests=fail mutants_diff_outside_"]
+size = "S"
+done = "(1) 差分の本文と member の dir の列から触れた member の dir を root 相対・宣言順・重複無しで返す pure な 1 本が在り、member のどれにも属さない path を数えず、同じ member の 2 file を 1 件に畳む (2) その結果から core の dir を除いた残りが、core だけ・task runner だけ・両方・member の外だけの 4 形で順に 0 件・1 件・1 件・0 件になる (3) 判定行の末尾が outside=- と outside= + dir 1 件の 2 形で出て、先頭の 7 token（total= から teeth= まで）が 2 形とも 1 字も変わらない (4) 5 数の読みと rc と -p に渡す名と baseline の 2 手と歯の絞りの式と宣言 file の 4 つの穴は 1 字も変わらない"
 <!-- contracts:end -->

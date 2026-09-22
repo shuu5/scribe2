@@ -662,6 +662,35 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 - 触らない: 終端の 3 段の順（push → CI → close）と CI の照合・`CloseError` の 2 値・`CLOSE_REASON` の字面・台帳を読む口・dispatch が子を起こす cwd。
 - 却下: 運転手の cwd を repo に固定して close の側は触らない（起こす側が複数〔dispatch の周・手の `pipe run`・`--terminal-only`〕で、撃つ側の 1 site を直す方が小さい・C17.4）／`BEADS_DIR` を env で渡す（env の縫い目が 1 つ増える・C2.2・repo を cwd にすれば要らない）／close を `sh -c "cd <repo> && bd …"` で包む（shell を 1 段増やす・`Command` の `current_dir` で足りる）。
 
+## 49. 契約の赤でない Gated FAIL を同じ worktree で再 gate する口 — 裁定の逐語を持つ 1 段戻しを、その FAIL につき 1 回だけ許す（契約表の行 ar・`s2-07l.240`）
+
+- 出所（`s2-07l.240`・orchestrator の再実測 2026-09-22・verified・main f25084c）: `.208` の run 3 は器の欠陥（検出線の同名衝突）で、run 4 は上限（環境）で追随の再 gate に落ちた。どちらも実装は合格していたのに、`Gated` の FAIL は終端なので新しい取り込みで runner が一から作り直した（費用 = runner 2 周 + gate 4 周）。memo が待つとした先行（`s2-07l.335` / `.428` / `.502`）は 3 本とも close 済みで、穴だけが残っている。
+- 現物（本行の base・main f25084c・verified）:
+  - 段が生きているかを測る述語は 1 本（`crates/scribe2/src/pipe/cli/state.rs` の `live`・母集団 = 段 11 個の網羅の match）。`Gated` の答えだけが判定から導かれ、**判定が FAIL の周は `Some(false)`＝終端**である。`Landed` / `Failed` / `Stopped` は段だけで終端になる。
+  - 起こし直しの候補を選ぶ述語（`crates/scribe2/src/pipe/dispatch.rs` の `passed_gate`）は `Gated` ∧ 判定が PASS の周しか拾わない＝FAIL の `Gated` は候補にならない。
+  - `release` の印が列へ戻す段は `Gated` / `Stopped` / `Failed` の 3 つ（同 file の `requeues`・in-file の歯が母集団 11 段で pin）だが、戻すのは **bead の印**であって便ではない＝戻り先は新しい取り込みで、worktree は作り直しになる。
+  - 同じ worktree で段を戻す口は `crates/scribe2/src/pipe` の src 全数 grep で **0 件**（`pipe` の subcommand は 15 個で、字面は `crates/scribe2/src/pipe/cli.rs` の 1 か所の表が正本）。`regate` の字面は src に 12 件（`crates/scribe2/src/pipe/land.rs` の追随の後の再 gate と `crates/scribe2/src/pipe/gate/record.rs` の skipped=regate の記録）在るが、どれも追随の撃ち直しであって終端の便を戻す口ではない。
+  - 裁定を運べる形は既に在る: 便の event は `RunStage` が段と `detail` を運び、`QuestionAnswered` が逐語を運ぶ（どちらも既存の種別）。本節は**種別も段も 1 つも足さない**。
+- 形（番号は done と歯に 1:1 で対応する）:
+  1. **口を 1 つ足す**: `pipe regate --run <id> --reason <逐語>`。本体は行 ar の write-set の `+` の file で、`pipe` の subcommand の表（`crates/scribe2/src/pipe/cli.rs`）と flag の表（`crates/scribe2/src/pipe/cli/args.rs`）にそれぞれ 1 行足す。
+  2. **受け付けるのは 4 つ全部を満たす周だけ**: 段が `Gated` ∧ 判定が FAIL（`live` が `Some(false)` を返す面）∧ 運転手の札が無いか所有者が死んでいる ∧ `--reason` が非空。1 つでも外れたら rc 1 で**何も書かない**（測れない周〔`live` が `None`〕も断る・fail-closed）。器は「契約の赤かどうか」を自分では判定しない——それは裁定であって述語ではない（C5）。口は裁定の逐語を記帳するだけである。
+  3. **戻す先は `Implemented`・記帳は 1 件**: `RunStage` を 1 件（段 = `Implemented`・`detail` = `regate:` + 逐語・actor は human）。worktree・commit・判定の file には 1 byte も触らない。段が `Implemented` に戻ると `live` は `Some(true)` を返し、既存の列（`pipe run` / `resume` / 列の 1 周）が**同じ便 id の同じ worktree**で gate をもう 1 周撃つ（新しい取り込みを通らないので worktree を作り直す経路に入らない）。
+  4. **1 つの FAIL につき 1 回だけ**: 便の event を畳み、**最新の `Gated` の `RunStage` より後ろ**に `detail` が `regate:` で始まる `RunStage` が在る周は断る。もう 1 周の gate が `Gated` を書けば次の 1 回が開く＝回数の閾値を値で持たない（恣意の無い上限）。
+  5. **行の字面**: rc 0 の周は `regate: run=<id> from=Gated to=Implemented` の 1 行。断る周は理由 1 行で rc 1。
+- 触らない: `passed_gate`（PASS の候補）と `requeues` の 3 段と `release` の印・`live` の他の 10 段の答え・判定の file の読み書きと `Verdict` の 3 値・gate の中身と追随の形・新しい取り込みの経路・`pipe stop` の終端の極性・運転手の札の 4 値。段の種別（11 個）と event の種別（19 個）はどちらも 1 つも増えない。
+- 却下:
+  - **memo の (b)（新しい取り込みの runner に前 run の commit の cherry-pick を許す）**: 器を変えない代わりに、成果の保全（C9）を runner の判断に預ける。同じ事故が次の周も起こり、何が引き継がれたかが記録に残らない。
+  - **memo の (c)（追随の再 gate を検出線と上限だけの軽い周にする）**: 追随で挙動が変わる可能性を測らないことになる。落ちているのは「終端だから捨てる」であって gate の重さではない。
+  - **段か event の種別を 1 つ足して裁定を typed にする**（memo の (a) の素直な形）: 閉じた型が 2 つ動き、記帳の形が跨版の面になる（ADR 条件 3）。`RunStage` の `detail` で同じ逐語が運べるので、型を増やさない側を採る（C17.1）。**ゆえに本節は ADR を要さない**——遷移表に載る段の組が 1 つ増えるだけで、on-disk の形も外部依存も動かない。
+  - **器が FAIL の理由を分類して自動で戻す**: 「器の欠陥か・上限か・環境か・契約の赤か」は裁定であって述語ではない。自動で戻すと、契約の赤を無限に撃ち直す形が作れてしまう。
+  - **戻せる回数を rules 行の値にする**: 値の線と裁定が 1 つ増える（C5 / A2）。形 4 の「最新の `Gated` より後ろに 1 件」は値を持たずに同じ上限を作る。
+  - **終端の判定そのものを緩める**（FAIL の `Gated` を live に倒す）: 着地の列・排他の母集団・`pipe stop` の断りが全部動く。戻すのは口の側の 1 件の記帳で足りる。
+- 歯（接頭辞 `pipe_regate_`・`crates/` 全体の fn 名の substring として base に 0 件。in-file は行 ar の write-set の `+` の file の `mod tests`・e2e は `crates/scribe2/tests/e2e/pipe/gate.rs`）:
+  (a) 形 2 の核: 受付の pure な述語に、4 つの条件を 1 つずつ外した 4 形と全部満たす 1 形を渡す（母集団 = 5 形を assert に出す）。通るのは 1 形だけで、`live` が `None` の周は断る側である。
+  (b) 形 3: 通った周に書かれる event が **1 件**で、種別が `RunStage`・段が `Implemented`・`detail` が `regate:` の後ろに逐語をそのまま持つ（逐語は入力と別の字面の fixture で測り、`detail` の出所を弁別する）。
+  (c) 形 4: 同じ便に 2 度撃つと 2 度目が断られ、間に `Gated` の `RunStage` を 1 件挟めば 3 度目が通る（3 形を対で）。
+  (d) 形 1 / 形 5（e2e）: 判定が FAIL の `Gated` の便に口を撃つと rc 0 で行が出て、その後の段が `Implemented` になり、便の worktree の path が 1 字も変わらない。base は subcommand の表に字面が無く使い方の誤りで断られる＝機能不在の RED。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -1126,4 +1155,14 @@ verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_hermetic
 size = "S"
 done = "(1) 歯 pipe_hermetic_sites_stay_one が tracked の file 数と親の列 0 の mod 宣言の数 + 1 の等式で置き場を pin し、site の合計 1 と base の 41 site の母集団の出し方は不変 (2) base（9 file・宣言 8）で緑・宣言を 1 本消した A/B と pipe/ 配下に file を 1 本足した A/B が赤（変異 proof は notes） (3) 札 flip-check: retroactive s2-07l.547 が歯の fn の中の行頭に在って base に無い"
 
+[[contract]]
+id = "ar"
+title = "契約の赤でない Gated FAIL を同じ worktree で再 gate する口を足す — 段が Gated かつ判定が FAIL かつ運転手が居ない便に、裁定の逐語を持つ RunStage を 1 件書いて Implemented へ戻し、最新の Gated より後ろの 2 度目は断る（段の種別も event の種別も増やさない）"
+req = ["FR8", "FR34"]
+section = "49"
+touches = ["crate::pipe::cli::PipeCommand"]
+write-set = ["crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/args.rs", "crates/scribe2/src/pipe/mod.rs", "+crates/scribe2/src/pipe/regate.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "docs/design/pipeline.md"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail pipe_regate_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_regate_"]
+size = "M"
+done = "(1) pipe の subcommand の表と flag の表に regate の 1 行が在り、--run と --reason を受ける (2) 段が Gated かつ判定が FAIL かつ運転手の札が無いか死んでいて --reason が非空の 5 形のうち 1 形だけが通り、live が None の周を含む残り 4 形は rc 1 で何も書かない (3) 通った周が書く event はちょうど 1 件で、種別が RunStage・段が Implemented・detail が regate: の後ろに入力の逐語をそのまま持ち、worktree と判定の file は 1 byte も変わらない (4) 同じ便への 2 度目が断られ、間に Gated の RunStage を 1 件挟むと次の 1 回が通る (5) 判定 FAIL の Gated の便に口を撃つと rc 0 で regate: run= from=Gated to=Implemented の 1 行が出て、その後の段が Implemented になり worktree の path が変わらず、段の種別 11 個と event の種別 19 個はどちらも増えない"
 <!-- contracts:end -->
