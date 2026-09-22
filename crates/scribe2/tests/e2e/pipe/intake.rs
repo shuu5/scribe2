@@ -1140,6 +1140,55 @@ fn contract_closure_ext_surfaces_name_the_snapshot_and_the_teeth_that_pin_it() {
     clean(&[&repo]);
 }
 
+/// 外形の usage 行の名（§31 (b)）の toy file: 素の名 `paint`・`-` を含む名 `re-paint`・識別子でも `-` でもない文字を
+/// 含む名 `pa.int` の usage 行を持つ src と、各 usage 文字列を literal に持つ歯。
+const USAGE_NAME_FILES: &[(&str, &str)] = &[
+    (
+        "crates/toy/src/cli.rs",
+        "pub fn usage() -> [&'static str; 3] {\n    [\n        \"usage: {NAME} paint <x>\",\n        \"usage: {NAME} re-paint <y>\",\n        \"usage: {NAME} pa.int <z>\",\n    ]\n}\n",
+    ),
+    ("crates/toy/tests/paint.rs", "#[test]\nfn pins_paint() {\n    assert!(err.contains(\"paint <x>\"));\n}\n"),
+    ("crates/toy/tests/repaint.rs", "#[test]\nfn pins_repaint() {\n    assert!(err.contains(\"re-paint <y>\"));\n}\n"),
+    ("crates/toy/tests/dotted.rs", "#[test]\nfn pins_dotted() {\n    assert!(err.contains(\"pa.int <z>\"));\n}\n"),
+];
+
+/// `surfaces` だけを持つ導出の形の行を受付に通す（toy repo・置き場・出力）。
+fn usage_name_intake(id: &str, surfaces: &str) -> (PathBuf, PathBuf, Output) {
+    let row = derive_row(id, &[("surfaces", surfaces)]);
+    let (repo, state) = derive_repo_with(&table_doc(&table_region(&[row])), USAGE_NAME_FILES);
+    let out = intake_raw(&repo, &state, &pointed_contract(&repo, "a.toml", id), &format!("s2-{id}"));
+    (repo, state, out)
+}
+
+/// (b) 肯定側: 素の名と `-` を含む名の usage 行はどちらも解け、その usage 文字列を持つ歯が導出値に入る（内側の
+/// 論理和を積にすると素の名が、`-` との等値を非等値にすると `-` の名が落ちて `surface-unknown` で断られる）。
+#[test]
+fn contract_closure_ext_survivor_b_name_plain_and_dashed_usage_names_resolve() {
+    // flip-check: retroactive s2-07l.277
+    let (repo, state, out) = usage_name_intake("a", "[\"paint\", \"re-paint\"]");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "2 つの名が解けて通る: {}", stderr_of(&out));
+    let copied = copied_write_set(&state, &run_id_of(&out));
+    let want = ["crates/toy/tests/paint.rs", "crates/toy/tests/repaint.rs"];
+    let hits = want.iter().filter(|path| copied.iter().any(|item| item == *path)).count();
+    assert_eq!(hits, want.len(), "usage 文字列を持つ歯が導出値に入る（{hits} 件 / 母集団 名 {} 個・導出値 {copied:?}）", want.len());
+    stop_run_ok(&state, &run_id_of(&out));
+    clean(&[&repo, &state]);
+}
+
+/// (b) 否定側: 識別子の文字でも `-` でもない文字（`.`）を含む名の usage 行は捨てられ、その名は `surface-unknown` で
+/// 断られる（外側の論理和を積にすると、`-` との等値を非等値にするとその名が解けて通る）。
+#[test]
+fn contract_closure_ext_survivor_b_match_name_with_other_chars_is_surface_unknown() {
+    // flip-check: retroactive s2-07l.277
+    let (repo, state, out) = usage_name_intake("b", "[\"pa.int\"]");
+    let err = stderr_of(&out);
+    let named = err.lines().filter(|line| line.contains("surface-unknown") && line.contains("pa.int")).count();
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "未知の名で断る: {err}");
+    assert_eq!(named, 1, "pa.int を surface-unknown で名指す（{named} 件 / 母集団 stderr {} 行）: {err}", err.lines().count());
+    assert_eq!(run_dirs(&state).len(), 0, "run を作らない");
+    clean(&[&repo, &state]);
+}
+
 /// (2) 項目の実在と dir の展開: 無い file・空の dir は `write-set-item-unresolved` で 1 項目 1 件（実在する file・
 /// 配下を持つ dir・base に無い `+`・**base に在る file への `+`〔契約表の検査は land 済みの実在 file と読む・
 /// `s2-07l.346`〕** は通る）。intake の交差は dir を base の file に展開して数える＝`src/` の live な便と

@@ -474,4 +474,47 @@ mod tests {
         assert_eq!(measured, in_range, "余地を測る範囲は core_of の述語と同じ");
         assert_eq!(measured, strings(&["crates/toy/src/a.rs"]), "範囲は空でない（空虚な一致を断つ）");
     }
+
+    /// (c) 余地の境界（§31）: 見積が余地を**超える**ときだけ断る。file の余地 = 見積（ちょうど）は通り、余地 = 見積 −1
+    /// は名指される（`>` を `>=` にするとちょうどの便が断られる）。core の余地も同じ両側で測る。
+    #[test]
+    fn contract_closure_ext_survivor_c_headroom_refuses_only_above_the_room() {
+        // flip-check: retroactive s2-07l.277
+        let items = vec![WriteSetItem::File("crates/toy/src/a.rs".to_owned())];
+        let lines = whole(&[("crates/toy/src/a.rs", 1_400)]);
+        let caps = |size_lines: u64, core_lines: u64| Caps { file_lines: 1_500, core_lines, size_lines };
+        let exact = headroom_shortfalls(&items, &lines, caps(100, 40_000));
+        assert!(exact.is_empty(), "file の余地 100 = 見積 100 は通る（断り {} 件 / 母集団 1 file）", exact.len());
+        let over = headroom_shortfalls(&items, &lines, caps(101, 40_000));
+        assert_eq!(
+            over,
+            vec![Headroom { file: "crates/toy/src/a.rs".to_owned(), headroom: 100 }],
+            "file の余地 100 = 見積 101 −1 は断る（断り {} 件 / 母集団 1 file）",
+            over.len()
+        );
+        let core_exact = headroom_shortfalls(&items, &lines, caps(100, 1_500));
+        assert!(core_exact.is_empty(), "core の余地 100 = 見積 100 は通る（断り {} 件 / 母集団 1 core）", core_exact.len());
+        let core_over = headroom_shortfalls(&items, &lines, caps(100, 1_499));
+        assert_eq!(
+            core_over,
+            vec![Headroom { file: CORE.to_owned(), headroom: 99 }],
+            "core の余地 99 = 見積 100 −1 は断る（断り {} 件 / 母集団 1 core）",
+            core_over.len()
+        );
+    }
+
+    /// (d) core の名の切り出し（§31）: crate 名が空でなく、かつ `/` を含まないときだけ `crates/<c>/src` と読む
+    /// （`&&` を `||` にすると `crates//src/` と `crates/a/b/src/` が core として通る）。
+    #[test]
+    fn contract_closure_ext_survivor_d_core_of_needs_a_single_nonempty_crate_segment() {
+        // flip-check: retroactive s2-07l.277
+        let table = [
+            ("crates/toy/src/a.rs", Some("crates/toy/src")),
+            ("crates//src/a.rs", None),
+            ("crates/a/b/src/a.rs", None),
+        ];
+        let got: Vec<(&str, Option<&str>)> = table.iter().map(|(path, _)| (*path, super::core_of(path))).collect();
+        let hits = got.iter().zip(&table).filter(|(found, want)| found == want).count();
+        assert_eq!(got, table, "core と読む形は 1 つだけ（一致 {hits} 件 / 母集団 {} 形）", table.len());
+    }
 }

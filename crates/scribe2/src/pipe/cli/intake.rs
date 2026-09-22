@@ -1183,9 +1183,17 @@ fn with_write_set(text: &str, files: &[String]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{with_write_set, Entrance, WriteSet, ENTRANCE_LOCK, WRITE_SETS};
+    use super::{
+        exclude_cap_shortfall, int_row, with_write_set, Entrance, Materials, WriteSet, ENTRANCE_LOCK, ROW_FILE_LINES,
+        ROW_SIZE_S, WRITE_SETS,
+    };
     use crate::fleet::store::LockPolicy;
     use crate::order::is_declaration_order;
+    use crate::pipe::closure::Source;
+    use crate::pipe::contract::Contract;
+    use crate::pipe::declaration::TableFacts;
+    use crate::rules::manifest::Manifest;
+    use std::collections::BTreeSet;
 
     /// 受付の入口は**同時に 1 つしか通さない**（[`judge`] と [`create`] を 1 周として閉じる・ADR-0019 §2.1）。
     ///
@@ -1228,5 +1236,66 @@ mod tests {
         let files = ["+src/new.rs".to_owned(), "src/a.rs".to_owned()];
         let want = "goal = \"g\"\nwrite-set = [\"+src/new.rs\", \"src/a.rs\"]\nwrite-set = [\"+src/new.rs\", \"src/a.rs\"]\nverify = [\"git status\"]\n";
         assert_eq!(with_write_set(text, &files), want);
+    }
+
+    /// 余地の段の除外（§31 (a)）の fixture: 解ける `crates/toy/src/full.rs`（`lines` 行）と base に無い素の
+    /// `crates/toy/src/none.rs` の 2 項目の write-set・S の契約・材料。
+    fn short_of_room(lines: u64) -> (Contract, Materials) {
+        let full = "crates/toy/src/full.rs";
+        let contract = Contract {
+            goal: "g".to_owned(),
+            done: "d".to_owned(),
+            size: "S".to_owned(),
+            owner: "s2-x".to_owned(),
+            disposition: "A-now".to_owned(),
+            write_set: vec![full.to_owned(), "crates/toy/src/none.rs".to_owned()],
+            verify: vec!["git status".to_owned()],
+            req: vec!["FR1".to_owned()],
+            design: "docs/design/toy.md".to_owned(),
+            classes: Vec::new(),
+            opens: Vec::new(),
+            touches: Vec::new(),
+        };
+        let body = "x\n".repeat(usize::try_from(lines).unwrap_or_default());
+        let materials = Materials {
+            tracked: vec![full.to_owned()],
+            sources: vec![Source { path: full.to_owned(), body: Ok(body) }],
+            snapshots: Vec::new(),
+            facts: TableFacts { allowed: Vec::new(), denied: Vec::new(), requirements: String::new() },
+            requirements: Ok(BTreeSet::new()),
+        };
+        (contract, materials)
+    }
+
+    /// (a) 項目の解決に失敗した周は「解けない項目を**除いた**列」で数え直す: 余地の在る full.rs は通って余地の列に
+    /// 1 本だけ載り、満杯の full.rs は `cap-headroom` で断られる（`!` を落とすと解けない none.rs だけで数え直し、列が
+    /// 空になって満杯の file が通る）。
+    #[test]
+    fn contract_closure_ext_survivor_a_cap_shortfall_recounts_without_the_unresolved_items() {
+        // flip-check: retroactive s2-07l.277
+        let Ok(manifest) = Manifest::embedded() else {
+            panic!("埋め込み manifest を読める");
+        };
+        let (cap, size) = (int_row(&manifest, ROW_FILE_LINES), int_row(&manifest, ROW_SIZE_S));
+        let (cap, size) = (cap.unwrap_or_default(), size.unwrap_or_default());
+        assert!(cap > size && size > 0, "rules 行の値が在る（R-C4-2 {cap} > S {size} > 0）");
+        // 余地は境界（(c) の歯の側）から離して置く＝見積の 2 倍と 0。
+        let room = size.saturating_mul(2);
+        let (contract, materials) = short_of_room(cap.saturating_sub(room));
+        let fits = exclude_cap_shortfall(&manifest, &contract, &materials).map(|found| found.rooms);
+        let rooms = fits.as_ref().map(Vec::len).unwrap_or_default();
+        assert_eq!(
+            fits.as_ref().ok(),
+            Some(&vec![("crates/toy/src/full.rs".to_owned(), room)]),
+            "余地の在る full.rs は通り、解ける項目だけが余地の列に載る（件数 {rooms} / 母集団 write-set 2 項目・解ける 1 項目）"
+        );
+        let (contract, materials) = short_of_room(cap);
+        let short = exclude_cap_shortfall(&manifest, &contract, &materials).err().map(|denial| denial.name);
+        assert_eq!(
+            short,
+            Some("cap-headroom"),
+            "余地 0 の full.rs は解ける項目で断る（断り {} 件 / 母集団 write-set 2 項目・解ける 1 項目）",
+            usize::from(short.is_some())
+        );
     }
 }

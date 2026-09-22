@@ -488,7 +488,7 @@ mod tests {
 
     use super::super::read_rows;
     use super::super::tests::full_promise;
-    use super::{check_table, ids_of, judge_text, requirement_ids, Context, ContractRow, BEGIN, END};
+    use super::{check_table, ids_of, judge_text, requirement_ids, section_lines, Context, ContractRow, BEGIN, END};
     use crate::cli_outcome::{RC_BROKEN, RC_REFUSED};
     use crate::pipe::closure::Source;
     use crate::pipe::refuse::Refuse;
@@ -778,5 +778,52 @@ mod tests {
         assert!(found.iter().all(|finding| finding.rc() == RC_BROKEN), "読めない周は rc 2: {rendered:?}");
         assert!(rendered.iter().any(|line| line.starts_with("contracts: docs/design/t.md:10 contract-table:unreadable: srs")));
         assert!(rendered.iter().any(|line| line.contains("src/broken.rs を読めない")), "{rendered:?}");
+    }
+
+    // ─────── 節の切り出し（§31 (e)）: 4 本は腕 / guard / 否定を 1 つずつ落として別の歯が落ちる形 ───────
+
+    /// 節 `number` の本文のうち doc 上の行番号が `keep` を満たす件数と、本文の全件（母集団）。
+    fn counted(doc: &str, number: &str, keep: impl Fn(u64) -> bool) -> (usize, Vec<(u64, String)>) {
+        let found = section_lines(doc, number);
+        (found.iter().filter(|(at, _)| keep(*at)).count(), found)
+    }
+
+    /// (e) 開始の腕: 区間（3〜5 行目）の開始の行と中身は節の本文に混ざらない（腕を落とすと開始の行と行の中身が本文
+    /// に入る）。区間は節の末尾に置く＝終了の腕を落としても後ろに失う行が無い。
+    #[test]
+    fn contract_closure_ext_survivor_e_begin_region_start_is_not_section_body() {
+        // flip-check: retroactive s2-07l.277
+        let doc = format!("## 1. t\nbody\n{BEGIN}\n| r |\n{END}\n");
+        let (leaked, found) = counted(&doc, "1", |at| (3..=5).contains(&at));
+        assert_eq!(leaked, 0, "区間の行は本文でない（区間の行 {leaked} 件 / 母集団 本文 {} 行）: {found:?}", found.len());
+    }
+
+    /// (e) 終了の腕: 区間（2〜4 行目）が閉じた後の行は節の本文に戻る（腕を落とすと区間が閉じず後ろを全部失う）。
+    /// 後ろには fence の外と中の 1 行ずつを置く＝本文を拾う条件の否定を落としても 0 件にならない。
+    #[test]
+    fn contract_closure_ext_survivor_e_end_region_close_resumes_the_section_body() {
+        // flip-check: retroactive s2-07l.277
+        let doc = format!("## 2. t\n{BEGIN}\n| r |\n{END}\nafter\n```\nafter-fenced\n```\n");
+        let (resumed, found) = counted(&doc, "2", |at| at > 4);
+        assert!(resumed >= 1, "区間の後ろの行を拾う（後ろ {resumed} 件 / 母集団 本文 {} 行）: {found:?}", found.len());
+    }
+
+    /// (e) fence の guard: fence の中の `## 4.` は節を切り替えない＝fence（2〜4 行目）の後ろの行も §3 の本文（guard を
+    /// 落とすと fence の中の見出しで §4 に切り替わり後ろを失う）。後ろには fence の外と中の 1 行ずつを置く。
+    #[test]
+    fn contract_closure_ext_survivor_e_fence_heading_inside_a_fence_keeps_the_section() {
+        // flip-check: retroactive s2-07l.277
+        let doc = "## 3. t\n```\n## 4. other\n```\nafter\n```\ntail-fenced\n```\n";
+        let (kept, found) = counted(doc, "3", |at| at > 4);
+        assert!(kept >= 1, "fence の後ろも §3 の本文（後ろ {kept} 件 / 母集団 本文 {} 行）: {found:?}", found.len());
+    }
+
+    /// (e) 本文を拾う条件の否定: fence の外の行（2 行目）は本文に入る（否定を落とすと fence の中だけを拾う）。
+    #[test]
+    fn contract_closure_ext_survivor_e_inside_body_outside_a_fence_is_collected() {
+        // flip-check: retroactive s2-07l.277
+        let doc = "## 5. t\nbody\n```\nin-fence\n```\n";
+        let (outside, found) = counted(doc, "5", |at| at == 2);
+        assert_eq!(outside, 1, "fence の外の行を拾う（外 {outside} 件 / 母集団 本文 {} 行）: {found:?}", found.len());
     }
 }
