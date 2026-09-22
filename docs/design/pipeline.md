@@ -560,7 +560,8 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
   5. 元の file には受付の口の歯 63 本（`pipe_intake_` 55 + `pipe_preflight_` 4 + `pipe_repo_` 3 + `pipe_confine_` 1）だけが残り、4159 行は約 2000 行へ縮む。
   6. 親に `mod` 宣言を 3 本足す（宣言は既存の 8 本と合わせて名の昇順）。歯の本文・名・順序・`#[test]` の総数 134 は変えず、子は親の helper を `use super::*;` で引く。
   7. 札 `// flip-check: moved s2-07l.351` を元の file の歯の区間の先頭と `+` の 3 file の先頭に対で置く（純移動の機械証明は §5.3）。形 4 で 2 本を受ける親（`crates/scribe2/tests/e2e/pipe.rs`）にも、移した 2 本の直前に同じ札を 1 行置く（親は `tests/` 配下＝file 全体が歯の区間なので置いた位置で効く）＝札は元の file・`+` の 3 file・親の 5 file に在り、親に増える残差は `mod` 宣言 3 行と札 1 行と移した 2 本だけ（2026-09-20 の審査 FAIL「親に札の無い `#[test]` 2 本が増える」の再現）。
-- 触らない: 歯の名・本文・本数・親の 40 本の helper・`prop.rs` / `polarity.rs` / `rules.rs`（filter が当たるだけで中身は触らない）・受付の口の src。
+  8. 親の置き場の pin 歯 `pipe_hermetic_sites_stay_one`（§28 形 2・`crates/scribe2/tests/e2e/pipe.rs` と `pipe/` 配下の tracked file 数を 9 に pin）は、本便が `pipe/` 配下に `+` の 3 file を足すので **9 → 12** に動かす（file 数の pin と doc の数だけ・site の合計 1 と base の 41 site の母集団は不変＝移す歯は binary を起こす字面を持たず、`+` の 3 file の合計も 0）。run 050345Z の gate FAIL（共通 verify の赤 1 本がこの歯・検出線の rc 2 はその巻き添え）の根で、runner の worktree で `git ls-files` が 12 を返すことを実測した。
+- 触らない: 歯の名・本文・本数（形 8 の pin 歯の file 数 1 か所を除く）・親の 40 本の helper・`prop.rs` / `polarity.rs` / `rules.rs`（filter が当たるだけで中身は触らない）・受付の口の src。
 - 却下: `contract_` 1 本の filter で verify を書く（9 file に当たり受付が断る）／歯の名を変えて接頭辞を揃える（純移動でなくなり機械証明が残差を出す）／割らずに据え置く（交差の母集団が減らない）。
 
 ## 43. pipe/land.rs の「squash と finish」の群を割る（契約表の行 ak・`s2-07l.457` の 2 回目・純移動）
