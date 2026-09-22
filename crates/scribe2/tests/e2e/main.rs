@@ -186,6 +186,72 @@ fn e2e_fixture_tmp_dir_paths_are_unique() {
     assert!(first.is_dir() && second.is_dir(), "どちらも在る");
 }
 
+// ─────────── 固定日付を持つ fixture の母集団（設計 docs/design/pipeline.md §50・行 as・`s2-07l.469`） ───────────
+
+/// reset / 期限の欄の key（`concat!` で 2 片に割る＝この file の本文が自分の母集団に数えられない）。
+const CLOCK_KEYS: [&str; 5] = [
+    concat!("resets", "_at"),
+    concat!("reset", "_at"),
+    concat!("RESETS", "_AT"),
+    concat!("_RE", "SET"),
+    concat!("expires", "At"),
+];
+
+/// `line` の中で引用符の直後に座る日付の形（`YYYY-MM-DD`）の字面のうち最初の 1 つの年（無ければ `None`）。
+fn quoted_date_year(line: &str) -> Option<u32> {
+    line.as_bytes().windows(11).find_map(|window| match *window {
+        [b'"', y0, y1, y2, y3, b'-', m0, m1, b'-', d0, d1]
+            if [y0, y1, y2, y3, m0, m1, d0, d1].iter().all(u8::is_ascii_digit) =>
+        {
+            Some([y0, y1, y2, y3].iter().fold(0, |year, digit| year * 10 + u32::from(digit - b'0')))
+        }
+        _ => None,
+    })
+}
+
+/// e2e の tracked な `.rs` の本数と、reset / 期限の key を持つ行のうち日付の形の字面を持つ行を年で 2 つに割った
+/// 本数を 3 つ組で pin する。年 2099 以上は番兵（時限にならない）・未満は壁時計と比べれば時限になる字面で、
+/// 1 本で 2 本を兼ねないよう別々の欄で持つ。message は母集団の全数と当たった行（file・行番号・年）を出す。
+#[test]
+fn e2e_fixture_clock_dated_reset_lines_are_pinned() {
+// flip-check: retroactive s2-07l.469
+    const SENTINEL_YEAR: u32 = 2099;
+    let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let listed = Command::new("git")
+        .arg("-C")
+        .arg(&crate_dir)
+        .args(["ls-files", "--", "tests/e2e"])
+        .output()
+        .unwrap_or_else(|e| panic!("git ls-files を撃てる: {e}"));
+    assert!(listed.status.success(), "git ls-files は rc 0: {}", String::from_utf8_lossy(&listed.stderr));
+    let tracked: Vec<String> =
+        String::from_utf8_lossy(&listed.stdout).lines().filter(|path| path.ends_with(".rs")).map(str::to_owned).collect();
+    let mut hits: Vec<(String, usize, u32)> = Vec::new();
+    for path in &tracked {
+        let text = fs::read_to_string(crate_dir.join(path)).unwrap_or_else(|e| panic!("{path} を読める: {e}"));
+        for (at, line) in text.lines().enumerate() {
+            if !CLOCK_KEYS.iter().any(|key| line.contains(key)) {
+                continue;
+            }
+            if let Some(year) = quoted_date_year(line) {
+                hits.push((path.clone(), at + 1, year));
+            }
+        }
+    }
+    let sentinel = hits.iter().filter(|(_, _, year)| *year >= SENTINEL_YEAR).count();
+    let dated = hits.len() - sentinel;
+    let mut files: Vec<&str> = hits.iter().map(|(path, _, _)| path.as_str()).collect();
+    files.dedup();
+    assert_eq!(
+        (tracked.len(), sentinel, dated),
+        (29, 7, 5),
+        "母集団: e2e の tracked な .rs {} 本・当たった行 {} 行（年 {SENTINEL_YEAR} 以上 {sentinel}・未満 {dated}）・\
+         file {files:?}・行 {hits:?}",
+        tracked.len(),
+        hits.len()
+    );
+}
+
 // ─────────── e2e の歯の道具箱（設計 docs/design/gate-cost.md §30・行 v・`s2-07l.504`） ───────────
 //
 // 歯が toy repo で実 binary を撃つときの PATH の組み立ては**この 1 関数**（[`toolbox_path`]）に寄る。
