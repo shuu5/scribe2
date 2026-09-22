@@ -93,12 +93,28 @@ impl SourceFile {
     }
 
     /// 最初に現れる行頭 `#[cfg(test)]` から file 末尾までを test 行、残りを src 行と数える（幅で正規化）。
+    /// 名で test の file（[`is_named_test_file`]）は丸ごと test 行と数える（src 側 0・設計 rules-manifest.md §16）。
     pub(crate) fn split_test_src(&self, width: usize) -> (usize, usize) {
         let lines: Vec<&str> = self.text.lines().collect();
-        let at = lines.iter().position(|line| line.starts_with(TEST_MOD_MARK)).unwrap_or(lines.len());
+        let at = if is_named_test_file(&self.path) {
+            0
+        } else {
+            lines.iter().position(|line| line.starts_with(TEST_MOD_MARK)).unwrap_or(lines.len())
+        };
         let (src, test) = lines.split_at(at);
         (sum_weights(test, width), sum_weights(src, width))
     }
+}
+
+/// file 名が素の `tests.rs` か、`_` で繋いだ接尾辞の `tests.rs` で終わるか（`#[path]` で src 配下へ外出しした
+/// 歯の file・丸ごと test）。
+///
+/// そうした file は `#[cfg(test)] mod` の形を持たず、印だけで切ると全行が src 側に見える。src / test の切れ目・
+/// flip-check の写し方・rules-wired の読み手の除外は、この 1 本で名を弁別する（設計 rules-manifest.md §16・C2）。
+pub(crate) fn is_named_test_file(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name == "tests.rs" || name.ends_with("_tests.rs"))
 }
 
 /// 行の数え方（設計 rules-manifest.md §4・`R-C4.line-width`）: 各行を `max(1, ceil(文字数 ÷ width))` と数えた合計。
@@ -268,5 +284,18 @@ mod tests {
         assert_eq!(file.lines(10), 10, "file の行数は 2 側の和");
         let bare = SourceFile { path: PathBuf::from("y.rs"), text: "abcdefghijklmnopqrstuvwxy\n".to_owned() };
         assert_eq!(bare.split_test_src(10), (0, 3), "test 区間の無い file は全部 src");
+    }
+
+    /// 行頭 `#[cfg(test)]` を持たない同じ本文でも、名が `_tests.rs` / `tests.rs` の file は丸ごと test
+    /// （(test, src) = (全体, 0)）、素の `.rs` は丸ごと src（(0, 全体)）。名は dir でなく file 名で見る。
+    #[test]
+    fn sizes_split_counts_named_test_files_as_whole_test() {
+        let text = "fn a() {}\nabcdefghijklmnopqrstuvwxy\n";
+        let at = |path: &str| SourceFile { path: PathBuf::from(path), text: text.to_owned() };
+        assert_eq!(at("crates/demo/src/fleet/select_tests.rs").split_test_src(10), (4, 0), "_tests.rs は丸ごと test");
+        assert_eq!(at("crates/demo/src/pipe/tests.rs").split_test_src(10), (4, 0), "tests.rs は丸ごと test");
+        assert_eq!(at("crates/demo/src/pipe/select.rs").split_test_src(10), (0, 4), "素の .rs は丸ごと src");
+        assert_eq!(at("crates/demo/src/tests.rs/mod.rs").split_test_src(10), (0, 4), "dir の名は見ない");
+        assert_eq!(at("crates/demo/src/contests.rs").split_test_src(10), (0, 4), "接尾辞は _ で繋いだ形だけ");
     }
 }

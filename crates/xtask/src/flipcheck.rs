@@ -485,11 +485,8 @@ fn is_test_file(rel: &str) -> bool {
     // `#[path]` で src 配下へ外出しした test module は `#[cfg(test)] mod` の形を持たず、
     // 区間判定には **src 区間だけの file** に見える＝そこへ足した歯が 1 本も測られない。
     // 名前で test file と見なして丸ごと写す（base に mod 宣言が在れば base で compile
-    // され、新しい歯の RED を測れる）。
-    parts.get(2) == Some(&"src")
-        && parts
-            .last()
-            .is_some_and(|name| *name == "tests.rs" || name.ends_with("_tests.rs"))
+    // され、新しい歯の RED を測れる）。名の弁別は src / test の切れ目と同じ 1 本の述語。
+    parts.get(2) == Some(&"src") && crate::workspace::is_named_test_file(std::path::Path::new(rel))
 }
 
 /// test 区間の始まる byte offset。

@@ -28,7 +28,8 @@ fn width_of(limits: &Limits) -> usize {
 }
 
 /// core crate の `src` 配下の**本体**の総行数（core-lines・幅で正規化・in-file の歯〔行頭 `#[cfg(test)]` から
-/// file 末尾〕は数えない＝[`SourceFile::split_test_src`] の src 側の合計・設計 core-boundary.md §2）。
+/// file 末尾〕と名で test の file〔丸ごと〕は数えない＝[`SourceFile::split_test_src`] の src 側の合計・設計
+/// core-boundary.md §2・rules-manifest.md §16）。
 ///
 /// 受付の core の余地（core の `pipe::declaration` の `FileLines`）も同じ切り方で数える（crate は互いに依存
 /// しないので式は 2 か所・同じ fixture の歯が一致を守る）。
@@ -154,7 +155,7 @@ pub(crate) fn measure_name_literal(layout: &Layout, files: &[SourceFile]) -> Mea
 
 #[cfg(test)]
 mod tests {
-    use super::{measure_core_lines, measure_core_spawn, ratio_violations};
+    use super::{measure_core_lines, measure_core_spawn, measure_test_src_ratio, ratio_violations};
     use crate::check::{Layout, SourceFile};
     use crate::limits::Limits;
     use std::path::PathBuf;
@@ -224,6 +225,17 @@ mod tests {
         );
         // 幅を広げれば改行の数（本体 2 + 1 = 3・file 全体なら 5 + 1 = 6）。
         assert_eq!(measure_core_lines(&layout, &files, &limits(3, 120)).fact, "core-lines=3/3");
+    }
+
+    /// 名で test の file（`#[path]` で外出しした歯・行頭 `#[cfg(test)]` を持たない）は test 側に載る: 本体 1 本
+    /// （幅 10 で 3 行）と `select_tests.rs`（同じ本文で 3 行）の toy workspace で、test-src-ratio は 3/3・core-lines
+    /// は本体の 3 だけ（名を見ない実装は分子 0 の 0/6・core-lines 6）。
+    #[test]
+    fn sizes_ratio_counts_named_test_files_on_the_test_side() {
+        let (layout, files) = workspace(&[(CORE, "select.rs", BARE_FIXTURE), (CORE, "select_tests.rs", BARE_FIXTURE)]);
+        let ratio = measure_test_src_ratio(&files, &limits(100, 10));
+        assert_eq!(ratio.fact, "test-src-ratio=3/3", "分子が名で test の file を数える");
+        assert_eq!(measure_core_lines(&layout, &files, &limits(100, 10)).fact, "core-lines=3/100", "本体だけ");
     }
 
     /// core-spawn は core の `src` で `Command::new` を含む行の件数と file 数を出し、**違反は立てない**（検出線）:

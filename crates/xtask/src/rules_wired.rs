@@ -3,7 +3,7 @@
 //! manifest の行は機械に効いて初めて規則である（C1・設計 rules-manifest.md §4）。全体監査
 //! 2026-09-12 塊 1（`s2-07l.160`）: enabled な行のうち src から 1 度も読まれない行が在り、lint も
 //! measure も当たらなかった。ここは [`crate::env_reads`] と同型の字面走査で、`crates/*/src` 配下の
-//! `.rs` の**非 test 区間**（最初の行頭 `#[cfg(test)]` より前・`*_tests.rs` は丸ごと test）から
+//! `.rs` の**非 test 区間**（最初の行頭 `#[cfg(test)]` より前・名で test の file〔[`is_named_test_file`]〕は丸ごと test）から
 //! `const NAME: &str = "<id>"` の宣言を集め、その const 名が宣言以外の行で ≥ 1 回使われる id を
 //! 「読み手あり」とする。宣言側の 4 file（[`DECLARING`]・manifest を読む / 生成する / 突合する側）と
 //! 行頭 `//` の行は出所ではない。
@@ -18,15 +18,13 @@
 
 use crate::check::{failed, read_text, Layout, Measured, SourceFile, RULES_REL};
 use crate::toml_lite::quoted;
+use crate::workspace::is_named_test_file;
 
 /// 判定行の tag。
 const TAG: &str = "rules-wired";
 
 /// 宣言側の file（path の末尾で当てる）。ここに在る `"<id>"` は読み手ではなく manifest の側である。
 const DECLARING: &[&str] = &["/rules/mod.rs", "/rules/manifest.rs", "/genmanifest.rs", "/rules_diff.rs"];
-
-/// 名前で丸ごと test と見なす file の末尾（flip-check の写し方と同じ規約）。
-const TEST_FILE_TAIL: &str = "_tests.rs";
 
 /// 非 test 区間の終わり（行頭の印・`workspace::TEST_MOD_MARK` と同じ字面）。
 const TEST_MOD_MARK: &str = "#[cfg(test)]";
@@ -76,7 +74,7 @@ fn reader_lines(files: &[SourceFile]) -> Vec<(usize, usize, &str)> {
     let mut out = Vec::new();
     for (index, file) in files.iter().enumerate() {
         let path = file.path.display().to_string();
-        if path.ends_with(TEST_FILE_TAIL) || DECLARING.iter().any(|tail| path.ends_with(tail)) {
+        if is_named_test_file(&file.path) || DECLARING.iter().any(|tail| path.ends_with(tail)) {
             continue;
         }
         for (at, line) in file.text.lines().enumerate() {

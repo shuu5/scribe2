@@ -4,7 +4,7 @@
 //! 読まない・新しい env の seam を作らない」と定めるが、`std::env::var("SCRIBE2_STATE_DIR")` を
 //! core に 1 行足しても lint も measure も当たらなかった（監査 2026-09-12 塊 26・`s2-07l.178`）。
 //! ここは [`crate::spawn_points`] と同型の字面走査で、core の `src` 配下の `.rs` の**非 test 区間**
-//! （最初の行頭 `#[cfg(test)]` より前＝[`SourceFile::split_test_src`] と同じ切り方）に在る
+//! （最初の行頭 `#[cfg(test)]` より前・名で test の file は丸ごと除く＝[`SourceFile::split_test_src`] と同じ切り方）に在る
 //! `std::env::` / `env::` の直後の識別子を数え、[`ALLOWED`] に無いものを全件 `file:line 識別子` で
 //! 名指す。
 //!
@@ -18,6 +18,7 @@
 //! Rust の parser は足さない（字面で数える・憲法 C13）。
 
 use crate::check::{Layout, Measured, SourceFile};
+use crate::workspace::is_named_test_file;
 
 /// 判定行の tag。
 const TAG: &str = "env-reads";
@@ -47,7 +48,7 @@ pub(crate) fn measure(layout: &Layout, files: &[SourceFile]) -> Measured {
     let mut violations = Vec::new();
     let mut population = 0_usize;
     for file in files {
-        if !file.path.starts_with(&core_src) {
+        if !file.path.starts_with(&core_src) || is_named_test_file(&file.path) {
             continue;
         }
         let rel = file
