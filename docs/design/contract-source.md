@@ -750,6 +750,35 @@ write-set = ["crates/scribe2/src/pipe/table.rs", "crates/scribe2/src/pipe/table/
 verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail contract_names_declared_"]
 size = "S"
 done = "(1) 検査の文脈が宣言済みの新規 file の列を持ち、tracked な設計 doc の区間の全行から印つきの write-set の項目と creates の欄を集める 1 本で組まれる (2) 別の doc の行が宣言した新規 file を名指した行に name-unresolved が出ず、どの行も宣言していない名は従来どおり 1 件出る (3) 同じ母集団を CI の駆動と受付の材料の両方が同じ 1 本から受け、受付でも同じ行が通る (4) 区間を読めない doc が在る周は母集団を縮めたまま通さず従来の読めなさの 1 件が出る (5) name-unresolved の字面と在り処の形・型の path 形と fn 形の解き方・write-set の項目の実在・depends の母集団・findings の順と rc が不変で、現物の契約表は findings 0・rc 0"
+[[contract]]
+id = "ao"
+title = "審査の材料に write-set の各項目の base の要約（行数の 2 面・本体の宣言の名・歯の名）を 1 file として足し、lens の雛形の穴 1 つを器が埋める。観点 3 つと理由の型と既存の 3 材料は不変で、cap を越える周は要約の段だけ落として本数を残す"
+req = ["FR49", "NFR1"]
+section = "40"
+write-set = ["crates/scribe2/src/pipe/review.rs", "+crates/scribe2/src/pipe/review/base.rs", "crates/scribe2/src/headless/lens.rs", "crates/scribe2/src/headless/lens-contract.txt", "crates/scribe2/src/pipe/closure.rs", "crates/scribe2/tests/e2e/pipe/review.rs"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail pipe_review_base_", "cargo nextest run -p scribe2 --lib --no-tests=fail headless_lens_base_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_review_base_"]
+size = "M"
+done = "(1) 審査の材料の dir に要約の file が 1 本増え、置く側は既存の 3 本と同じ 1 か所で、組む側は 1 回だけ呼ばれる (2) 要約 1 本が項目の path と行数の 2 面を持ち、.rs は本体の宣言の名の列と歯の名の列を別の列として持ち、.rs でない項目は行数だけ・+ の項目は新設の 1 行・読めない項目は読めなさの 1 行になる (3) 材料の写しが在る周は雛形の穴が本文で埋まり、無い周は雛形が 1 字も変わらず、契約の本文の中の穴の字面は展開されない (4) 要約を足すと cap を越える周は要約の段だけが落ちて落とした項目の本数の 1 行が残り、既存の 4 材料だけで越える周は claude を呼ばず INCONCLUSIVE のまま (5) 歯の区間と本体の区間と行数の 2 面の読み手は既存の 3 本のままで、新しい読み手を作らない (6) 審査の観点 3 つの本文・理由の型の 6 語・判定の JSON の形・diff の審査の極性・審査の rc が不変"
+
+[[contract]]
+id = "ap"
+title = "Declared 行の歯の置き場の門の断りが、write-set に無い歯の file と、それを解いた verify 行の filter 語を対で名乗る。照合の 1 本と門の条件と断りの語と rc は不変"
+req = ["FR48"]
+section = "41"
+write-set = ["crates/scribe2/src/pipe/closure.rs", "crates/scribe2/src/pipe/closure/derive.rs", "crates/scribe2/src/pipe/refuse.rs", "crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/tests/e2e/pipe/contracts.rs"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail contract_teeth_origin_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail contract_teeth_origin_"]
+size = "S"
+done = "(1) 行ごとに解いた置き場が file と filter 語の対として畳まれ、同じ file を 2 行が解いた周は verify の先の行の語が付き、対は file の辞書順 (2) 照合の 1 本が対を受けて write-set に無い分を対のまま断りの payload にし、正規化と dir 項目の扱いは不変 (3) 断りの理由の 1 行が file と filter 語の両方を名乗り、受付の側の同じ名の型も同じ欄を持ち理由は導出の側の 1 本を写すだけ (4) 置き場を解く関数の signature と Promised の導出・門を撃つ条件と順・解けない filter の断りの字面・断りの語・rc・run dir を作らないことが不変 (5) 受付の stderr が file と filter 語を両方名乗り rc 1 で run dir を作らない"
+
+[[contract]]
+id = "aq"
+title = "Declared 行の歯の置き場の逃がしが、write-set の + の新規 .rs も置き場と読む（宣言済みの新規 file を path だけで認める Promised 形と同じ下界）。断りの字面と型・行ごとに解く形・他の理由の断りは不変"
+req = ["FR48"]
+section = "42"
+write-set = ["crates/scribe2/src/pipe/closure/derive.rs", "crates/scribe2/tests/e2e/pipe/contracts.rs"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail contract_declared_place_new_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail contract_declared_place_new_"]
+size = "S"
+done = "(1) 逃がしの条件が「base に在る歯の file が write-set に在る」か「write-set の + の項目に .rs が在る」のどちらかになり、base 側だけの周の挙動は不変 (2) + の項目は本文を見ず path だけで置き場と認められ、置き場の欄の項目を creates で照合する既存の弁別と同じ 1 つの規則のまま (3) 逃がしが効くのは解けない filter の断りだけで、読めない source と置き場の欄の項目の不整合はそのまま断る (4) base にも + にも歯の置き場が無い write-set は従来と同じ字面と rc 1 で断られ run dir を作らない (5) 契約表の行が + の新規の歯の file と新しい filter 語だけを持つ周に受付が rc 0 で run dir を作る (6) 既存の負例の歯 2 本が本文も期待も変わらず緑"
 <!-- contracts:end -->
 
 
@@ -861,3 +890,54 @@ done = "(1) 検査の文脈が宣言済みの新規 file の列を持ち、track
 - 歯（接頭辞 `contract_names_declared_`・`crates/scribe2/tests/e2e/pipe/contracts.rs` の既存の `contract_names_impl_` / `contract_closure_ext_` の歯の隣。`crates/` 全体で 0 件＝衝突なし）: (a) doc を 2 本持つ toy repo で、doc A の行が新規 file を宣言し doc B の行の done がその名を backtick で名指す → findings 0・rc 0（**base で RED**: name-unresolved が 1 件）。(b) どの行も宣言していない名を名指した行は従来どおり 1 件（負例・母集団が無条件に広がらない）。(c) 同じ doc の別の行の宣言でも解ける。(d) 受付でも同じ: doc B の行を pointer に受付を撃つと run dir と event が作られる（base は断られる）。(e) 現物の契約表が findings 0・rc 0。
 - 既存の歯の書き換え（1 本）: `contract_closure_ext_unresolved_names_are_named_with_their_place` は「別の行が宣言した新規 file を名指した行は解けない」を assert している（母集団が行 1 本に閉じている pin）。本行はこの前提を変えるので、その assert を「解ける」へ替える。同じ歯の他の 4 件（型の path 形・fn 形・節の本文・一致しない字面）は 1 字も変えない。
 
+
+## 40. 審査の材料に write-set の各 file の base の要約を足す（契約表の行 ao・`s2-07l.431`）
+
+- 出所（別 project の planner の報告 2026-09-17・便 6 で 4 周 INCONCLUSIVE ＝ 約 40 分。逐語は台帳 `s2-07l.431` の notes・ここは要旨）: 審査（lens）は契約と設計の節と要件しか読めないので、既存の file を触る契約の「base の中身がこうだから done が測れる」を判定できず、`section-material-missing` の INCONCLUSIVE が往復する。回避は planner が base を実測して設計の節に写すことで、設計 doc の散文が実測の文で肥大する（作法で運んでいる＝N2）。本 repo の事前審査でも同じ型が出る。
+- 何が起きているか（現物・main f25084c・verified）: 審査の材料の穴は **4 つ**（`crates/scribe2/src/headless/lens-contract.txt` の 43 行のうち :37 の契約・:40 の設計の節・:43 の要件と約束の行）で、write-set の file の中身は 1 つも渡っていない。材料の file は **3 本**（`crates/scribe2/src/pipe/review.rs` の :61 / :64 / :67 の 3 つの定数）で、置く側は同じ file の `keep`（:422）、読む側は `crates/scribe2/src/headless/lens.rs` の `material_of`（:275-290）と `promises_of`（:248）である。約束の行の穴は「材料を 1 つ足して穴を 1 つ足す」が 1 例 land 済みであることを示す（`promise_block`・:258）。memo の論点 (2)（「読めば判る」型を gate へ寄せる）は §22 / §23 の理由の型と焼き直しの門で別経路で進んだので、本 § は論点 (1) だけを採り、lens の観点 3 つの本文は 1 字も変えない。
+- 形（材料を 1 本足す・観点は変えない）:
+  1. **材料を 1 本足す**: 契約の write-set の各項目の base の要約を器が作り、審査の材料の dir へ 1 file として置く（既存の 3 本と同じ置き方・`keep` の同じ loop）。材料を組む 1 本は**行 ao の write-set の `+` の file**（`review.rs` の子 module）に置き、`materials`（:295）から 1 回だけ呼ぶ。
+  2. **要約 1 本の中身**: 項目の path・行数の 2 面（全体と本体）・本体の区間の宣言の名の列・歯の区間の `#[test]` の直下の fn の名の列。`.rs` でない項目は path と行数だけ。`+` の項目（base に無い）は「新設」の 1 行。読めない項目はその読めなさの 1 行にする（黙って落とさない・C10・既存の材料と同じ扱い）。
+  3. **雛形の穴を 1 つ足す**: `lens-contract.txt` の末尾に穴を 1 つ足し、`lens.rs` が材料の写しから埋める。**写しが無い周は空文字**＝雛形は 1 字も変わらない（約束の行の穴と同じ形）。diff の審査の雛形（`lens.txt`）は触らない。
+  4. **cap は新しい閾値を作らない**: 要約は**最後に**足し、足すと既存の cap を越える周は**要約の段ごと落として**、落とした項目の本数を明示の 1 行に残す。既存の 4 材料だけで越える周の極性（claude を呼ばず INCONCLUSIVE）は不変＝rules 行も新しい値も足さない（C5 の裁定を要らなくする）。
+  5. **区間の読み手は 1 本**: 歯の区間は `crates/scribe2/src/pipe/closure.rs` の `test_region`（:330）を crate の中へ開いて使い、本体の区間は同じ file の `src_region`（:340・既に開いている）、行数の 2 面は `crates/scribe2/src/pipe/declaration/write_set.rs` の `FileLines` の `of`（:145・既に開いている）を使う＝2 本目の読み手を作らない（C2）。
+  6. **1 走査で埋める**: 穴を埋めるのは既存の 1 走査の対に 1 つ足すだけで、埋めた本文の中の穴の字面は展開しない（外から来る text が雛形の構造へ触れない・既存の裁定と同じ）。
+- 触らない: lens の観点 3 つの本文・理由の型の 6 語・判定の JSON の形・diff の審査の雛形と極性・既存の 3 材料の中身と置き方・`promise_block` の見出しと 3 語の限り・審査の rc。
+- 却下: 設計の節に base の実測を写す運用のまま（作法を増やす・N2・設計 doc が肥大する）／要約でなく write-set の file の**全文**を渡す（NFR1 の予算を材料 1 本で食う・cap で落ちる周が増える）／lens に tool を渡して自分で読ませる（審査の前提「shell も cargo も撃てない」を壊す）／材料 file を増やさず契約の写しの中へ埋める（契約の字面と器の生成物が 1 file に混ざり、焼き直しの門の突合が割れる）／要約の大きさに rules 行を足す（C5 の裁定が要る・既存 cap で足りる）。
+- 歯（接頭辞 2 つ・どちらも `crates/` 全体の fn 名の substring に 0 件＝衝突なし）:
+  - `pipe_review_base_`（行 ao の write-set の `+` の file の in-file の歯と、`crates/scribe2/tests/e2e/pipe/review.rs` の e2e）: (a) fixture の `.rs` 1 本で、本体の宣言の名と歯の名が**別の列**に出る（母集団 = fixture の宣言の本数と歯の本数を同じ assert で数える）・(b) `.rs` でない項目は path と行数だけ・(c) `+` の項目は新設の 1 行・(d) 読めない項目は読めなさの 1 行・(e) cap を越える周は段が落ちて落とした本数の 1 行が残る・(f) e2e は受付から審査まで通した run の材料の dir に要約の file が在り、write-set の各項目の path を持つ。
+  - `headless_lens_base_`（`crates/scribe2/src/headless/lens.rs` の in-file の歯）: 写しが在れば穴が本文で埋まり、無ければ雛形が 1 字も変わらず、契約の本文が穴の字面を持っていても展開されない（1 走査）。
+  - 既存の歯で名を変えるものは無い。`crates/scribe2/src/headless/lens.rs` の既存の材料の歯（2 本とも在る / 片方だけ在る / 読めない の 3 値）は本数も本文も不変。
+
+## 41. 歯の置き場の門の断りに出所（解いた verify 行の filter 語）を添える（契約表の行 ap・`s2-07l.474`）
+
+- 出所（別 project の planner の報告 2026-09-18・便 23 で 1 往復を失った。逐語は台帳 `s2-07l.474` の notes）: 「verify の歯の file が write-set に無い」の断りが 2 つの出所（verify の filter 語から解いた歯の file と、goal / done の backtick が base の歯の名に当たった周）で同じ字面になり、読み手が前者と読んで verify 行を疑った。
+- 何が起きているか（現物・main f25084c・verified）: memo の 2 つ目の出所は**もう無い**。§27（行 aa・`s2-07l.476`）が契約の散文の字面走査を機構ごと消したので、散文の経路の呼び手は 0 件である（`crates/` 全体で `prose_closure` の字面 0 件）。断りを作る 1 本は `crates/scribe2/src/pipe/closure/derive.rs` の `check_teeth_cover`（:135）で、production の呼び手は同じ file の `declared_teeth`（:130）**1 本だけ**＝出所を別の variant に分ける相手が居ない。残っている穴は別で、**照合の 1 本が出所を受け取っていない**: `declared_teeth` は verify の行ごとに置き場を解いて 1 つの集合に畳む（:121-129）ので、断りは write-set に無い file を名乗るが、**どの verify 行の filter 語がその file を連れてきたか**を名乗らない。verify を 3 行持つ契約では planner が対応を手で引き直す。隣の断り（同じ門の解けない filter）は既に filter 語を持っている（`crates/scribe2/src/pipe/closure.rs` の :232 の理由の 1 行）ので、本 § はその形に揃える。
+- 現物の site（母集団・verified）: 断りの型を持つ src の file は **4 本**（`crates/scribe2/src/pipe/closure.rs` の宣言 :213 と理由 :242 / `crates/scribe2/src/pipe/closure/derive.rs` の作る側 :140 / `crates/scribe2/src/pipe/refuse.rs` の宣言 :165 と語 :242 と理由 :295 と rc :338 / `crates/scribe2/src/pipe/cli/intake.rs` の写し :828）で、payload を**分解する** site は 4 つ（closure.rs :242・refuse.rs :295・intake.rs :828・derive.rs :140 の作る側）である。審査の理由の型の同名の語（`crates/scribe2/src/pipe/review.rs` の :139）は別の閉じた型で、本行は触らない。
+- 形（照合の 1 本は共用したまま payload だけを対にする）:
+  1. `declared_teeth` が verify の行ごとに解いた置き場を、file だけの集合でなく **file とその行の filter 語の対**として畳む（同じ file を 2 行が解いた周は verify の**先の行**の語・file の辞書順）。`teeth_places` の signature は変えない（Promised の導出も同じ 1 本を呼ぶ・C2）。
+  2. `check_teeth_cover` はその対を受け、write-set に無い分を**対のまま**断りの payload にする。照合（正規化と dir 項目の配下）は 1 字も変えない。
+  3. 断りの型の欄を対の列にし、理由の 1 行が file と filter 語の両方を名乗る。受付の側の同じ名の型も同じ欄にし、理由の 1 行は導出の側の 1 本を写すだけの形を保つ（2 面に書かない）。
+  4. 断りの語（辞書の 1 語）・rc・run dir を作らないこと・断る条件は 1 字も変えない。
+- 触らない: 門を撃つ条件と順・解けない filter の断りの字面・`teeth_places` の signature と Promised の導出・審査の理由の型の 6 語・受付の rc と event・§20 の門の下界。
+- 却下: 出所ごとに 2 つ目の variant を足す（memo の案。2 つ目の出所は §27 で消えた＝分ける相手が居ない・空の分岐を作る）／新しい pub な対の型を足す（型を 1 つ増やす。対の意味は欄の doc comment で足りる）／file の列と filter 語の列を**別の欄**で並べる（添字で対応させる形は片方が空の周に嘘になる）／断りは file だけのままにして planner が verify 行を引き直す（回避を作法で運ぶ・N2）。
+- 歯（接頭辞 `contract_teeth_origin_`・`crates/` 全体で 0 件＝衝突なし）:
+  - in-file（`crates/scribe2/src/pipe/closure/derive.rs` の歯の区間・pure な 1 本を直に呼ぶ）: verify 2 行の契約で file ごとに**別の** filter 語が付く（母集団 = 対の本数と行の本数を同じ assert で数える）・同じ file を 2 行が解いた周は先の行の語・write-set に全部在れば通る（対は空）。
+  - in-file（`crates/scribe2/src/pipe/refuse.rs` の歯の区間）: 断りの 1 行が file と filter 語の両方を名乗る。既存の歯 `refuse_derive_reasons_are_last_and_name_their_payload`（:523）は payload の字面を測っているので、本行がその 1 件の期待を対の字面に替える（他の理由の期待は 1 字も変えない）。
+  - e2e（`crates/scribe2/tests/e2e/pipe/contracts.rs`）: 受付の stderr が file と filter 語を両方名乗り、rc 1 で run dir を作らない。既存の歯 `contract_declared_teeth_outside_write_set_is_refused`（:951）は file だけを測っているので、本行が filter 語の期待を足す（rc と run dir の期待は不変）。
+
+## 42. Declared 行の歯の置き場が write-set の `+` の新規 .rs も置き場と読む（契約表の行 aq・`s2-07l.481`・§20 の逃がしの 1 点）
+
+- 出所（consumer の報告 2026-09-19・逐語は台帳 `s2-07l.481` の notes）: base に 0 本の filter 語と、新設の歯の file と、既存の歯の file を触らない契約が、Declared 行に置き場の欄が無いので受付できない。回避は「本文を変えない既存の歯の file を write-set に載せる」＝要らない file を write-set に足す作法である。
+- 何が起きているか（現物・main f25084c・verified）: memo の一部は `s2-07l.391`（§20）で塞がった。`crates/scribe2/src/pipe/closure/derive.rs` の `declared_teeth` は :119 の 1 行で逃がしを立てるが、その条件は「write-set に **base に在る**歯の file（歯の区間が空でない `.rs`）が 1 つでも在る」で、母集団は base の source の本文の列だけである。write-set の `+` の項目は base に無いので本文の列に入らず、**新規の歯の file だけを足す Declared 行は今も解けない filter の断りで落ちる**（既存の歯 `contract_declared_teeth_new_filter_needs_a_teeth_file_in_write_set`・`crates/scribe2/tests/e2e/pipe/contracts.rs` :991 の (c) がこの負例を pin している）。別経路は開いている: Promised 形は `crates/scribe2/src/pipe/closure/derive.rs` の `teeth_file`（:284）が置き場の欄の項目を `creates` の側で照合し、宣言済みの新規 file を**本文を見ずに path だけで**置き場と認める。
+- 形（逃がしの条件を 1 つ広げる・下界は Promised 形に揃える）:
+  1. :119 の逃がしの条件に、「write-set の `+` の項目に `.rs` が 1 つでも在る」を**または**で足す。base に在る歯の file が在る周の挙動は 1 字も変えない。
+  2. 下界は Promised 形と同じにする: 宣言済みの新規 file は本文が無いので path だけで置き場と認める（`teeth_file` が `creates` の項目を照合するのと同じ弁別・2 本目の規則を作らない・C2）。
+  3. 逃がしが効く範囲は**解けない filter の断りだけ**で、他の理由（読めない source・置き場の欄の項目の不整合）はそのまま断る＝:125-126 の弁別を 1 字も変えない。
+  4. base にも `+` にも歯の置き場が 1 つも無い write-set は従来どおり同じ字面で断る（負例が残る）。
+- 触らない: 解けない filter の断りの字面と型・行ごとに解く形（先に在る新しい接頭辞の行で止まらない）・置き場を解く関数と Promised の導出・write-set に無い歯の file の断り・受付の rc と run dir の扱い・§20 の門そのもの。
+- 却下: `+` の項目を `tests/` 配下に限る（Promised 形の宣言済みの新規 file は path の位置を見ない＝規則が 2 本に割れる。src の中に歯を置く便を断る根拠も無い）／Declared 行にも置き場の欄を開く（欄の意味が Promised 形と割れ、§33 の導出と衝突する）／base で 0 本の filter 語の行を無条件に読み飛ばす（§20 の門の下界を失い、置き場の検査が空洞化する）／consumer の回避（要らない既存の歯の file を write-set に足す）を作法のまま運ぶ（N2・write-set が事実と食い違う）。
+- 歯（接頭辞 `contract_declared_place_new_`・`crates/` 全体で 0 件＝衝突なし。既存の `contract_declared_teeth_` の歯の隣）:
+  - in-file（`crates/scribe2/src/pipe/closure/derive.rs` の歯の区間・pure な 1 本を直に呼ぶ）: base に 0 本の filter 語 1 つを持つ 3 通の write-set で rc の型を測る（母集団 = 3 通）——`+` の新規 `.rs` を 1 つ持てば通る／`+` が `.rs` でない項目だけなら従来の断り／base の歯の file も `+` の `.rs` も無ければ従来の断り。
+  - e2e（`crates/scribe2/tests/e2e/pipe/contracts.rs`）: 契約表の行が `+` の新規の歯の file と新しい filter 語だけを持つ周に受付が rc 0 で run dir を作り、同じ行から `+` の項目を外すと従来の字面で rc 1・run dir を作らない（母集団 = 2 回の受付の rc）。
+  - 変えない既存の歯: 同じ file の (c) の負例（:991・`+` を持たない write-set は断られたまま）と、`crates/scribe2/src/pipe/closure/derive.rs` の `contract_declared_teeth_resolves_each_line_and_reads_a_written_teeth_file_as_the_place`（:742）は本文も期待も不変。
