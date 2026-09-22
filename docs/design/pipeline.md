@@ -550,15 +550,15 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 ## 42. 受付の e2e の hub を接頭辞ごとに割る（契約表の行 b・`s2-07l.351`・純移動）
 
 - 出所: `crates/scribe2/tests/e2e/pipe/intake.rs` は open な便の write-set に何本も現れる hub で、intake の排他（FR39）の交差の母集団を大きくし便を直列にする。接頭辞で割って母集団を構造から減らす（`.327` / `.349` / `.264` と同じ型・要件は FR30 の配送構造の面）。受付が verify 行の scope（`-p` / `--test` / `--lib`）を読むようになった `s2-07l.451` が着地した後なので、歯の置き場の門は本便の形で通る。
-- 現物（planner が実測・main f678bd0）: `crates/scribe2/tests/e2e/pipe/intake.rs` は 2943 行・`#[test]` の歯 97 本で、接頭辞の内訳は `pipe_intake_` 31・`contract_` で始まる 39（`contract_closure_ext_` 17 / `contract_derive_` 8 / `contract_check_` 6 / `contract_declared_` 3 / `contract_table_landed_` 2 / `contract_schema_` 2 / `contract_names_` 1）・`pipe_review_` 12・`pipe_refuse_` 8・`pipe_preflight_` 4・`pipe_contract_` 1・`pipe_state_` 1・`pipe_show_` 1（母集団は同 file の `#[test]` 全数 97）。共有 helper は親の `crates/scribe2/tests/e2e/pipe.rs` に 40 本在り、子は `use super::*;` で引く（`.264` の分割と同じ形）。親の `mod` 宣言は 8 本。
+- 現物（orchestrator が測り直し・main b010cd4・当初 planner が main f678bd0 で測った 2943 行・97 本から hub は伸び続けている）: `crates/scribe2/tests/e2e/pipe/intake.rs` は **4159 行・`#[test]` の歯 134 本**で、接頭辞の内訳は `pipe_intake_` 55・`contract_` で始まる 45（`contract_closure_ext_` 19 / `contract_derive_` 12 / `contract_check_` 6 / `contract_declared_` 3 / `contract_table_landed_` 2 / `contract_schema_` 2 / `contract_names_` 1）・`pipe_review_` 15・`pipe_refuse_` 8・`pipe_preflight_` 4・`pipe_repo_` 3・`pipe_contract_` 1・`pipe_confine_` 1・`pipe_state_` 1・`pipe_show_` 1（母集団は同 file の `#[test]` 全数 134・数え直しは着地直前に runner がもう一度行い、本節の数と食い違えば実測を採って notes に残す）。共有 helper は親の `crates/scribe2/tests/e2e/pipe.rs` に 40 本在り、子は `use super::*;` で引く（`.264` の分割と同じ形）。親の `mod` 宣言は 8 本。
 - filter の当たりの実測（`--test e2e` の scope・fn 名の substring・母集団は `crates/scribe2/tests/e2e` の `#[test]` 919 本）: 裸の `contract_` は 9 file の 68 本に当たる（`headless.rs` 7 / `hook.rs` 1 / `pipe/dispatch.rs` 5 / `pipe/gate.rs` 2 / `pipe/spawn.rs` 1 / `polarity.rs` 1 / `prop.rs` 1 / `rules.rs` 3 / `pipe/intake.rs` 47）＝**verify 行には使えない**（受付が teeth-outside-write-set で断る）。細かくした接頭辞のうち他 file に漏れるのは 2 つだけで、`contract_closure_ext_` が `crates/scribe2/tests/e2e/prop.rs` の 1 本に当たり（だから行 b の write-set はこの file を持つ＝**本便では 1 字も触らない**）、`contract_table_` は `polarity.rs` 1 本と `rules.rs` 3 本に当たるので `contract_table_landed_` まで伸ばす（当たりは `pipe/intake.rs` の 2 本だけ）。`pipe_intake_` は親の `pipe.rs` の 1 本にも当たる（親は write-set に在る）。
 - 形（純移動・番号は done と 1:1。行 b の write-set の `+` の 3 file は**宣言順に**〔審査の面・契約の面・断りの面〕を受ける）:
   1. 審査の段の歯 `pipe_review_` **15 本**（main 26ac26f の実測・当初 12 本に `pipe_review_kind_` 3 本と要件の読みの歯が増えた）を `+` の 1 本目（審査の面）へそのまま移す。接頭辞 `pipe_review_` は hub の外の 3 本（`pipe_review_kind_lens_that_cannot_start_is_unparsed`〔`tests/e2e/pipe/ratelimit.rs`〕・`pipe_review_kind_report_counts_review_fail_by_kind_in_declaration_order`〔`spawn.rs`〕・`pipe_review_kind_lens_killed_in_scope_is_unparsed`〔`stop.rs`〕）にも当たり、受付が `teeth-outside-write-set` で断る（2026-09-22 の実測）ので、検証行は hub の 15 本を**名の全体**で名指し、外の 3 本は触らない。
-  2. 契約表と閉包の歯 40 本（`contract_` で始まる 39 + `pipe_contract_` 1）を `+` の 2 本目（契約の面）へそのまま移す。
+  2. 契約表と閉包の歯 46 本（`contract_` で始まる 45 + `pipe_contract_` 1）を `+` の 2 本目（契約の面）へそのまま移す。
   3. 断りの語彙の歯 `pipe_refuse_` 8 本を `+` の 3 本目（断りの面）へそのまま移す。
   4. 単発の `pipe_state_` 1 本と `pipe_show_` 1 本は親（`crates/scribe2/tests/e2e/pipe.rs`）へ移す。
-  5. 元の file には受付の口の歯 35 本（`pipe_intake_` 31 + `pipe_preflight_` 4）だけが残り、2943 行は約 800 行へ縮む。
-  6. 親に `mod` 宣言を 3 本足す（宣言は既存の 8 本と合わせて名の昇順）。歯の本文・名・順序・`#[test]` の総数 97 は変えず、子は親の helper を `use super::*;` で引く。
+  5. 元の file には受付の口の歯 63 本（`pipe_intake_` 55 + `pipe_preflight_` 4 + `pipe_repo_` 3 + `pipe_confine_` 1）だけが残り、4159 行は約 2000 行へ縮む。
+  6. 親に `mod` 宣言を 3 本足す（宣言は既存の 8 本と合わせて名の昇順）。歯の本文・名・順序・`#[test]` の総数 134 は変えず、子は親の helper を `use super::*;` で引く。
   7. 札 `// flip-check: moved s2-07l.351` を元の file の歯の区間の先頭と `+` の 3 file の先頭に対で置く（純移動の機械証明は §5.3）。形 4 で 2 本を受ける親（`crates/scribe2/tests/e2e/pipe.rs`）にも、移した 2 本の直前に同じ札を 1 行置く（親は `tests/` 配下＝file 全体が歯の区間なので置いた位置で効く）＝札は元の file・`+` の 3 file・親の 5 file に在り、親に増える残差は `mod` 宣言 3 行と札 1 行と移した 2 本だけ（2026-09-20 の審査 FAIL「親に札の無い `#[test]` 2 本が増える」の再現）。
 - 触らない: 歯の名・本文・本数・親の 40 本の helper・`prop.rs` / `polarity.rs` / `rules.rs`（filter が当たるだけで中身は触らない）・受付の口の src。
 - 却下: `contract_` 1 本の filter で verify を書く（9 file に当たり受付が断る）／歯の名を変えて接頭辞を揃える（純移動でなくなり機械証明が残差を出す）／割らずに据え置く（交差の母集団が減らない）。
@@ -674,13 +674,13 @@ done = "pipe/cli.rs が入口と shim だけになり、lifecycle.rs が ratelim
 
 [[contract]]
 id = "b"
-title = "受付の e2e の hub（2943 行・歯 97 本）を接頭辞ごとに 3 file へ割る（純移動）"
+title = "受付の e2e の hub（4159 行・歯 134 本）を接頭辞ごとに 3 file へ割る（純移動）"
 req = ["FR30"]
 section = "42"
 write-set = ["-crates/scribe2/tests/e2e/pipe/intake.rs", "+crates/scribe2/tests/e2e/pipe/review.rs", "+crates/scribe2/tests/e2e/pipe/contracts.rs", "+crates/scribe2/tests/e2e/pipe/refuse.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/prop.rs", "docs/design/pipeline.md"]
 verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_review_fail_stops_before_spawn pipe_review_fail_is_terminal_for_spawn_resume_stop_and_overlap pipe_review_inconclusive_without_lens_or_unreadable_output_is_terminal pipe_review_pass_spawns pipe_review_kind_fail_keeps_kind_and_at_in_review_json_and_two_word_detail pipe_review_kind_pass_carries_neither_kind_nor_at pipe_review_kind_missing_or_unknown_or_unreadable_falls_to_unparsed_without_moving_the_verdict pipe_review_reads_design_section_and_requirements_from_base pipe_review_reads_requirements_text_from_yaml pipe_review_reads_requirements_text_from_md pipe_review_reads_requirements_reason_for_bare_yaml_id pipe_review_reads_requirements_reason_for_empty_md_heading pipe_review_has_no_skip_flag pipe_review_stage_and_guard_are_pinned_in_declaration_order pipe_review_resume_from_intake_reviews_before_spawning", "cargo nextest run -p scribe2 --test e2e --no-tests=fail contract_closure_ext_ contract_derive_ contract_check_ contract_declared_ contract_table_landed_ contract_schema_ contract_names_ pipe_contract_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_refuse_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_state_ pipe_show_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_intake_ pipe_preflight_"]
 size = "S"
-done = "(1) 審査の段の歯 12 本が + の 1 本目に在り (2) 契約表と閉包の歯 40 本が + の 2 本目に在り (3) 断りの語彙の歯 8 本が + の 3 本目に在り (4) 単発の pipe_state_ / pipe_show_ の 2 本が親の tests/e2e/pipe.rs に在り (5) 元の file には受付の口の歯 35 本だけが残って行数が 2943 から約 800 へ縮み (6) 親の mod 宣言が 3 本増えて歯の名・本文・順序と #[test] の総数 97 は不変で子は use super::* で親の helper を引き (7) 札 flip-check: moved s2-07l.351 が元の file と + の 3 file と親 tests/e2e/pipe.rs（移した 2 本の直前）に在って純移動の機械証明の残差が mod 宣言と札と移した 2 本だけ"
+done = "(1) 審査の段の歯 15 本が + の 1 本目に在り (2) 契約表と閉包の歯 46 本が + の 2 本目に在り (3) 断りの語彙の歯 8 本が + の 3 本目に在り (4) 単発の pipe_state_ / pipe_show_ の 2 本が親の tests/e2e/pipe.rs に在り (5) 元の file には受付の口の歯 63 本だけが残って行数が 4159 から約 2000 へ縮み (6) 親の mod 宣言が 3 本増えて歯の名・本文・順序と #[test] の総数 134 は不変で子は use super::* で親の helper を引き (7) 札 flip-check: moved s2-07l.351 が元の file と + の 3 file と親 tests/e2e/pipe.rs（移した 2 本の直前）に在って純移動の機械証明の残差が mod 宣言と札と移した 2 本だけ"
 depends = ["a"]
 
 [[contract]]
