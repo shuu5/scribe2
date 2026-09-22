@@ -714,6 +714,36 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
 - **path の取り方**: 差分の本文の `--- a/` と `+++ b/` の行から path を取り、`/dev/null` の側は数えない（追加も削除も片側の path で拾う）。member の dir と一致するか dir + `/` で始まる path だけをその member に数える＝名の接頭辞だけが同じ dir は別の member である。
 - **行を組む 2 本は範囲の外の列を引数で受ける**: 5 数の行と的を絞った周の行の両方が同じ 1 語を末尾に足す（的の周は `population=targets` の後ろ）。範囲を運ぶ型の形と引数を組む関数の引数の列は変えない。差分の file が読めない周は空の差分として `outside=-` を書く（記録であって門ではない・rc は動かない）。
 
+## 40. 検出線の走らせる手から「的を絞った周」の群を子 module へ割る（契約表の行 ag・純移動・`s2-07l.198.2` の前提）
+
+- 出所（orchestrator の実測 2026-09-22・verified・main 4aafb6f）: `crates/xtask/src/mutantsdiff.rs` は 1439 行・幅 120 で正規化して **1458**（上限 R-C4-2 = 1500）＝**余地 42** である。行 af（`s2-07l.274`・a4f6255 で Landed）が `outside=` の 1 語を足した直後の姿で、境界 crate の便（`s2-07l.198.2`・size M・見積 `pipe.size_m_lines` = 300）はこの file を write-set に持つ——変異した core の歯が境界 crate へ移るので、cargo-mutants の test の範囲を組む手を直す必要がある。**受付は `cap-headroom` で断る**（余地 42 < 300）。[pipeline.md](./pipeline.md) §42 / §43 と [contract-source.md](./contract-source.md) §37 と同じ型の純移動で余地を作る。
+- 現物（行番号は main 4aafb6f・verified）: 責務は 9 群——(1) 5 数の型（`Counts` と impl・21〜71）、(2) 範囲の外を名指す群（§39 が足した 4 item・72〜114）、(3) 引数を組む inline の子 module（115〜216・既に `mod scope` として割ってある）、(4) **的を絞った周の群**（217〜474）、(5) 5 数の読みと rc（`verdict` / `parse_outcomes` / `measured` / `without_outcomes`・475〜585）、(6) baseline と timeout（586〜660）、(7) manifest の deny 行の読み（661〜712）、(8) 引数の読み（713〜784）、(9) 走らせる手（785〜1014）、そして歯の区間（1015〜1439）。
+  - (4) の item は **14 個・258 行（正規化 260）**: `Target` と impl・`Outcome` と `OUTCOMES` と impl・`Aimed` と impl・`aimed_of` / `targets_of` / `diff_of` / `place_diff` / `targets_in` / `aimed_args` / `regex_literal`（宣言順・217〜474）。
+  - (9) のうち `aimed_run`（886〜924・doc を含めて 884 行から・**39 行**）は (4) の後段（出力 dir を読んで的ごとに分類し判定行を出す手）で、責務は (4) と 1 つである。移すのは **15 item・297 行（正規化 299）**になる。
+  - `mod scope` は既に inline の子で、親は `pub use` 1 文で `measure_args` と `Pace` と `Scope` を再輸出している（115 行）＝**同じ file に子 module を足す形は既に通っている**。
+- 決定的な制約（実測）:
+  - **歯は 1 本も動かせない**: `crates/xtask/src/main.rs` の doc（125〜129 行）が「`mutants-diff` の歯は base に在る file へ置く。新規 module の中に置くと file ごと base に無いので flip-check が構造的に測れない（not-flippable）」と書く。本節が移すのは **src の item だけ**で、歯の区間（1015 行以降・同 file の `#[test]` は **20 本**）は 1 本も動かさない。
+  - **歯は `use super::{…}` で名を引く**（1017〜1021 行）。子へ移した名は親の `use` 文で親の scope に戻せば、歯の本文も `use` 文も 1 字も変わらない（[contract-source.md](./contract-source.md) §37 と同じ名前解決の形）。
+  - **`#[cfg(test)]` の `use` 文の置き場は歯の区間の直前**（親の `#[cfg(test)]` + `mod tests` の 2 行の直前）に限る。xtask の門は file を「最初の行頭 `#[cfg(test)]` より前 = src 区間 / 以後 = test 区間」で切る（`crates/xtask/src/workspace.rs` の `split_test_src`）ので、file の頭へ置くと src の本体が丸ごと test 区間に落ちる（`s2-07l.257` の 2 本目の gate FAIL と同じ形）。
+  - **親の本体が呼ぶ名は 5 つだけ**（実測・移す範囲の外の行）: `targets_of` と `diff_of`（797 行）・`place_diff`（816 行）・`aimed_args`（835 行）・`aimed_run`（851 行）。**歯だけが引く名は 6 つ**: `Target` / `Outcome` / `OUTCOMES` / `Aimed` / `aimed_of` / `targets_in`。`regex_literal` は群の中だけで使う（private のまま子へ）。
+  - **doc の中の参照が 1 つ残る**: `diagnosed`（610 行・親に残る）の doc が `Aimed` を intra-doc link で名指す（609 行）。`Aimed` は歯だけが引く名なので `#[cfg(test)]` の `use` に入り、素の build では親の scope に居ない＝link を子の path 形に書き直す。純移動の機械証明はコメント行を hash から外して差だけを要約に載せる（`crates/scribe2/src/pipe/move_proof.rs` の comment-diff）ので、この 1 行の書き直しは残差にならない。
+  - 子が親から引く名（`use super::{…}`）は実測で 10 個: `flag`（6 site）・`write_diff` / `unmeasured` / `judged` / `diagnosed` / `baseline_log_tail`（各 1）・`Counts`（3）・`Scope`（2）と、`emit` と `ExitCode`。子は親の private item を見る（Rust の可視性は module 単位）ので、可視性を上げるのは**子側**の 5 名だけである。
+- 形（番号は done と 1:1）:
+  1. 上の **15 item（297 行）**を、名・本文・順序を変えずに行 ag の write-set の `+` の file へそのまま移す。
+  2. 親に増えるのは `mod` 宣言 1 行と `use` 2 文（本体用 5 名・`#[cfg(test)]` 付き 6 名）だけ。`run` と `judged` と `own_baseline` の本体は 1 字も変わらない。`#[cfg(test)]` の `use` は歯の区間の直前に置き、file の最初の行頭 `#[cfg(test)]` が src の本体の全 item より後に在る状態を保つ。
+  3. 歯の区間（`#[test]` 20 本）は 1 本も動かさない。`use super::{…}` の名の列も 1 字も変えない。
+  4. 札 `// flip-check: moved s2-07l.198.2` を親の歯の区間の先頭と `+` の file の先頭に対で置く（純移動の機械証明は [pipeline.md](./pipeline.md) §5.3）。
+  5. `diagnosed` の doc の intra-doc link を子の path 形に直す（本文の行は 1 字も変えない・コメント行は hash の外）。
+  6. 割った後の正規化行数は親が **約 1163**（余地 **約 337**）で、`s2-07l.198.2` の size M（300）を受付が通す。`+` の file は約 300 行。
+- 触らない: (1)(2)(3)(5)(6)(7)(8)(9) の残りの群の本体・`measure_args` と `Pace` と `Scope` の再輸出・判定行の 8 token（`total=` から `outside=` まで）の名と順序と書式・rc の極性と `R-C12-1` の読み・baseline の 2 手と timeout の式（§33）・歯の絞りの式（§34）・`crates/xtask/src/main.rs`（この file は歯も本体も 1 字も変わらない＝write-set に入れない）。
+- 却下:
+  - **歯の区間を名前付きの test file へ外出しする**（`check.rs` が `s2-07l.257` でやった形）: 余地は 438 行増えて一番大きいが、親の歯は inline の `mod tests` に畳まれた **1 item** で、外出し先では列 0 の item が 20 本以上に割れる＝(名, hash) の多重集合が合わず純移動の機械証明が items-differ で落ちる（`crates/scribe2/src/pipe/move_proof.rs` の「inline の `mod tests` の歯は外側の 1 本に畳む」）。`check.rs` の便はこの証明が入る前である。
+  - **(9) の走らせる手だけを割る**（230 行）: 余地が 42 + 230 = 272 で size M（300）に届かない。入口の 1 本が子へ移るので親の再輸出も要る。
+  - **(4) だけを割り `aimed_run` を親に残す**（258 行）: 余地が約 297 で **300 に 3 行届かない**。責務も 2 つに割れる（的の分類と的の周の後段）。
+  - **上限 R-C4-2 の値を上げる**: 値の線と裁定が動く（C5・A2）。file を割れば済む面に閾値を持ち込まない。
+  - **`s2-07l.198.2` を size S に書き直す**: size は便の write-set 全体に掛かる見積で、境界 crate の便は core の bin と歯の移動を含む（S では足りない）。
+- 歯（**新しい歯は 1 本も足さない**・純移動ゆえ既存の歯が母集団である）: 移した 15 item を測る歯は `mutants_targets_` **5 本**と `mutants_in_diff_` **2 本**（どちらも同 file の歯の区間に在り、`crates/` 全体で他 file に 0 件）。親に残る群を測る歯は `mutants_diff_fail_fast_` **4 本**・`mutants_diff_teeth_` **5 本**・`mutants_diff_outside_` **3 本**（同じく他 file に 0 件）。母集団は同 file の `#[test]` **20 本**で、便の前後で 20 のまま動かない。接頭辞 `no_fail_fast_` は `crates/xtask/src/check_prose_tests.rs` と `crates/xtask/src/flipcheck_tests.rs` にも当たるので検証行には使わない（受付が teeth-outside-write-set で断る）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -1037,4 +1067,13 @@ write-set = ["crates/xtask/src/mutantsdiff.rs", "crates/xtask/src/main.rs", "doc
 verify = ["cargo nextest run -p xtask --no-tests=fail mutants_diff_outside_"]
 size = "S"
 done = "(1) 差分の本文と member の dir の列から触れた member の dir を root 相対・宣言順・重複無しで返す pure な 1 本が在り、member のどれにも属さない path を数えず、同じ member の 2 file を 1 件に畳む (2) その結果から core の dir を除いた残りが、core だけ・task runner だけ・両方・member の外だけの 4 形で順に 0 件・1 件・1 件・0 件になる (3) 判定行の末尾が outside=- と outside= + dir 1 件の 2 形で出て、先頭の 7 token（total= から teeth= まで）が 2 形とも 1 字も変わらない (4) 5 数の読みと rc と -p に渡す名と baseline の 2 手と歯の絞りの式と宣言 file の 4 つの穴は 1 字も変わらない"
+[[contract]]
+id = "ag"
+title = "検出線の走らせる手から「的を絞った周」の 15 item（297 行）を子 module へ割る — 純移動・歯は 1 本も動かさず親に増えるのは mod 1 行と use 2 文だけ・親の余地を 42 から 300 以上へ戻す"
+req = ["NFR6"]
+section = "40"
+write-set = ["-crates/xtask/src/mutantsdiff.rs", "+crates/xtask/src/mutantsdiff/aimed.rs", "docs/design/gate-cost.md"]
+verify = ["cargo nextest run -p xtask --no-tests=fail mutants_targets_ mutants_in_diff_", "cargo nextest run -p xtask --no-tests=fail mutants_diff_fail_fast_ mutants_diff_teeth_ mutants_diff_outside_"]
+size = "S"
+done = "(1) 的を絞った周の 15 item（的の型・5 値・的ごとの分類・的の一覧の読み・差分の置き・引数の組み立て・的の周の後段）が + の file に名・本文・順序のまま在り、純移動の機械証明の残差が 0 (2) 親に増えた item は mod 宣言 1 つと use 文 2 つ（本体が呼ぶ 5 名の素の use と、歯だけが引く 6 名の #[cfg(test)] 付き use）だけで、run と judged と own_baseline の本体は 1 字も変わらず、#[cfg(test)] の use は歯の区間の直前に在って file の最初の行頭 #[cfg(test)] が src の本体の全 item より後に在り、cfg(test) の無い build で unused_imports が 0 件 (3) 歯の区間の #[test] が便の前後とも 20 本で 1 本も動かず、use super の名の列が 1 字も変わらず、mutants_targets_ の 5 本と mutants_in_diff_ の 2 本と mutants_diff_fail_fast_ の 4 本と mutants_diff_teeth_ の 5 本と mutants_diff_outside_ の 3 本が全部緑 (4) 札 flip-check: moved が親の歯の区間の先頭と + の file の先頭に対で在り (5) 親に残る diagnosed の doc の参照が子の path 形になり、本文の行は 1 字も変わらない (6) 親の正規化行数が 1458 から 1163 前後へ落ちて余地が 300 以上になり、判定行の 8 token と rc の極性は 1 字も変わらない"
 <!-- contracts:end -->
