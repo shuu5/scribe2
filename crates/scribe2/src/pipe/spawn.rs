@@ -10,6 +10,7 @@ use super::approve::{block, Approval, Approve, RC_BLOCKED};
 use super::confine;
 use super::follow::{Halt, Resumption, Section, RUNNER_UNREACHABLE};
 use super::gate::last_json_object;
+use super::land::MAIN_REF;
 use super::refuse;
 use super::{
     base_of_run, branch_name, contract_path, emit, git_line, plugin_path, record_cost, runner_stderr_path,
@@ -473,10 +474,16 @@ fn item_list(items: &[String]) -> String {
     text
 }
 
-/// base から先の commit 数。読めない周は 0（**commit 0 は完了ではない**側へ倒れる）。
-fn commit_count(worktree: &Path, base: &str) -> u64 {
-    let range = format!("{base}..HEAD");
-    git_line(worktree, &["rev-list", "--count", &range])
+/// `from` から先の commit 数。**main に在る commit は数えない**（設計 pipeline-conflict.md §11）: turn の中の
+/// rebase が HEAD に載せた main の commit は便の commit ではない。main は追随の相手と同じ [`MAIN_REF`] を
+/// turn の終わりに読み、読めない周は除外なしで数える（読めなさで判定を変えない）。
+/// 数えられない周は 0（**commit 0 は完了ではない**側へ倒れる）。
+fn commit_count(worktree: &Path, from: &str) -> u64 {
+    let range = format!("{from}..HEAD");
+    let main = git_line(worktree, &["rev-parse", "--verify", "-q", MAIN_REF]).map(|sha| format!("^{sha}"));
+    let mut args = vec!["rev-list", "--count", range.as_str()];
+    args.extend(main.as_deref());
+    git_line(worktree, &args)
         .and_then(|text| text.parse().ok())
         .unwrap_or(0)
 }

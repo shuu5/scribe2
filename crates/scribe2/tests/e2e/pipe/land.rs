@@ -3742,6 +3742,115 @@ fn pipe_follow_commit_before_question_is_a_failure() {
     clean(&[&repo, &state]);
 }
 
+// ───── 便の commit を数えるとき main に在る commit を除く（`s2-07l.546`・設計 §11・接頭辞 `pipe_follow_main_`） ─────
+
+/// turn 2 の本文の頭: 節の 2 sha で `--onto` の rebase を解いて終え、解いた便の commit を 1 つ戻す
+/// （HEAD が新しい main に一致する＝main の commit だけが HEAD に載り、便の commit は無い）。
+const ABSORB_MAIN: &str = "if ! git rebase --onto \"$SHA\" \"$BASE\"; then\nprintf '// seed\\ny\\nx\\n' > src/lib.rs\ngit add src/lib.rs\nGIT_EDITOR=true git rebase --continue\nfi\ngit reset -q --hard HEAD~1";
+
+/// 質問 record を出して rc 76 で終える尾。
+const ASK: &str = "printf '%s\\n' '{\"question\":\"追随の衝突を解けない\",\"about\":\"write-set\"}'\nexit 76";
+
+/// 便の worktree の HEAD が main に一致することを現物で測る（本文が main の commit を HEAD に載せた）。
+fn assert_head_is_main(repo: &Path, id: &str, moved: &str) {
+    assert_eq!(git(&worktree_of(repo, id), &["rev-parse", "HEAD"]), moved, "HEAD は新しい main に一致する");
+    assert_eq!(git(repo, &["rev-parse", "refs/heads/main"]), moved, "main は動かない");
+}
+
+/// (a) 追随の rebase で main の commit を HEAD に載せ、**自分の commit は作らずに**質問 record で止まった
+/// turn は `Questioned` である（main の commit は便の commit に数えない）。
+#[test]
+fn pipe_follow_main_absorbed_then_question_stops_at_questioned() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let runner = stub_runner(&state, &format!("{ABSORB_MAIN}\n{ASK}"));
+    let (id, _base, moved) = conflicting_run(&repo, &state, &marker, &runner);
+    let out = land_extra(&repo, &state, &id, &["--runner", &runner]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BLOCKED)), "質問は rc 3: {} {:?}", stderr_of(&out), stages(&state, &id));
+    assert!(show_line(&repo, &state, &id).contains("stage=Questioned"), "段は Questioned: {:?}", stages(&state, &id));
+    assert!(
+        trail(&state, &id).iter().any(|(kind, _, _)| *kind == EventKind::QuestionRaised),
+        "質問の逐語が残る"
+    );
+    assert_head_is_main(&repo, &id, &moved);
+    clean(&[&repo, &state]);
+}
+
+/// (b) 負例: 同じ木で**自分の commit を 1 本作ってから**質問 record を出した turn は従来どおり実装の失敗で、
+/// detail は `runner-rc:76,commits:1`（除外は main の commit だけ＝質問を無条件に通さない）。
+#[test]
+fn pipe_follow_main_own_commit_then_question_is_a_failure() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let body = format!("{ABSORB_MAIN}\nprintf 'z\\n' >> src/lib.rs\ngit add -A\ngit commit -q -m extra\n{ASK}");
+    let runner = stub_runner(&state, &body);
+    let (id, _base, moved) = conflicting_run(&repo, &state, &marker, &runner);
+    let out = land_extra(&repo, &state, &id, &["--runner", &runner]);
+    assert_ne!(out.status.code(), Some(i32::from(RC_OK)), "land はしない: {}", stdout_of(&out));
+    assert_eq!(
+        stages(&state, &id).last().cloned(),
+        Some((Some(Stage::Failed), Some("runner-rc:76,commits:1".to_owned()))),
+        "turn で作った commit だけを数える: {:?}",
+        stages(&state, &id)
+    );
+    assert!(
+        !trail(&state, &id).iter().any(|(kind, _, _)| *kind == EventKind::QuestionRaised),
+        "質問は記帳しない"
+    );
+    assert_eq!(
+        git(&worktree_of(&repo, &id), &["rev-parse", "HEAD~1"]),
+        moved,
+        "自分の commit は main の真上に 1 本"
+    );
+    clean(&[&repo, &state]);
+}
+
+/// (c) 追随で main を取り込んだだけで rc 0 で終わった turn は `Failed detail=runner-rc:0,commits:0`
+/// （完了の判定も base から数え、同じ除外を受ける）。
+#[test]
+fn pipe_follow_main_absorbed_only_with_rc_zero_is_not_implemented() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let runner = stub_runner(&state, &format!("{ABSORB_MAIN}\nexit 0"));
+    let (id, _base, moved) = conflicting_run(&repo, &state, &marker, &runner);
+    let out = land_extra(&repo, &state, &id, &["--runner", &runner]);
+    assert_ne!(out.status.code(), Some(i32::from(RC_OK)), "land はしない: {}", stdout_of(&out));
+    assert_eq!(
+        stages(&state, &id).last().cloned(),
+        Some((Some(Stage::Failed), Some("runner-rc:0,commits:0".to_owned()))),
+        "main の commit は完了の数にも入らない: {:?}",
+        stages(&state, &id)
+    );
+    assert_head_is_main(&repo, &id, &moved);
+    clean(&[&repo, &state]);
+}
+
+/// (d) main を**読めない**周は除外なしの従来の数え方に落ちる: (a) と同じ木でも、数え手の main の読みだけを
+/// 落とす偽 git の下では `Failed detail=runner-rc:76,commits:1`（読めなさを 0 に倒して質問へ通さない）。
+#[test]
+fn pipe_follow_main_unreadable_main_counts_without_exclusion() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let runner = stub_runner(&state, &format!("{ABSORB_MAIN}\n{ASK}"));
+    let (id, _base, moved) = conflicting_run(&repo, &state, &marker, &runner);
+    let path = shim_path(&state, "main-bin", "case \"$*\" in *'rev-parse --verify -q refs/heads/main'*) exit 1;; esac");
+    let out = bin_cmd()
+        .args(["pipe", "land", "--run", &id, "--repo", &repo.display().to_string(),
+               "--state-dir", &state.display().to_string(), "--runner", &runner])
+        .env("PATH", path)
+        .output()
+        .expect("binary を起動できる");
+    assert_ne!(out.status.code(), Some(i32::from(RC_OK)), "land はしない: {}", stdout_of(&out));
+    assert_eq!(
+        stages(&state, &id).last().cloned(),
+        Some((Some(Stage::Failed), Some("runner-rc:76,commits:1".to_owned()))),
+        "除外なしで数える: {:?}",
+        stages(&state, &id)
+    );
+    assert_head_is_main(&repo, &id, &moved);
+    clean(&[&repo, &state]);
+}
+
 /// runner が **rebase の途中で** turn を終えた周は `Failed detail=rebase-dirty` で終端する
 /// （clean 前提を守る・fail-closed・設計 §3 手順 6）。
 #[test]
