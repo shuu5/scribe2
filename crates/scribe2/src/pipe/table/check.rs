@@ -354,6 +354,8 @@ fn is_requirement(text: &str) -> bool {
 ///
 /// rc = 違反 0 → 0 / 違反 ≥ 1 → 1 / 読めない周 → 2（読めない doc・区間・要件面・閉包の入力も 1 件として名指し、
 /// 判定行も出す）。tracked file の一覧か宣言を読めない周は判定できないので、理由だけを stderr へ出して rc 2。
+/// 未追跡の設計 doc は判定行の前に 1 件 1 行で知らせ、判定行の `untracked=` に本数を出す（findings にも rc にも
+/// 数えない検出線・設計 §43 (3) / 行 at）。
 pub(crate) fn check_repo(repo: &Path, ceiling: &Ceiling<'_>) -> Outcome {
     let judged = match judge_repo(repo, ceiling) {
         Ok(found) => found,
@@ -361,8 +363,30 @@ pub(crate) fn check_repo(repo: &Path, ceiling: &Ceiling<'_>) -> Outcome {
     };
     let rc = judged.found.iter().map(|(_, finding)| finding.rc()).fold(RC_OK, u8::max);
     let mut out: Vec<String> = judged.found.iter().map(|(doc, finding)| finding.render(doc)).collect();
-    out.push(format!("contracts check: docs={} rows={} findings={}", judged.docs, judged.rows, judged.found.len()));
+    let (notices, untracked) = untracked_notices(judged.untracked.as_deref());
+    out.extend(notices);
+    out.push(format!(
+        "contracts check: docs={} rows={} untracked={untracked} findings={}",
+        judged.docs,
+        judged.rows,
+        judged.found.len()
+    ));
     Outcome { out, err: Vec::new(), rc }
+}
+
+/// 未追跡の設計 doc の列から知らせの行（1 件 1 行・path を名乗る）と判定行の `untracked=` の値を組む。git が答え
+/// なかった周（`None`）は知らせ 0 行で値は `?`（0 に化けさせない・NFR4）。
+fn untracked_notices(untracked: Option<&[String]>) -> (Vec<String>, String) {
+    match untracked {
+        None => (Vec::new(), "?".to_owned()),
+        Some(paths) => {
+            let notices = paths
+                .iter()
+                .map(|path| format!("contracts untracked-doc: {path} は未追跡の設計 doc（検査の母集団に入らない）"))
+                .collect();
+            (notices, paths.len().to_string())
+        }
+    }
 }
 
 /// 契約表の検査の 1 件を doc と行 id 付きで持つ（[`repo_findings`] の戻り・設計 pipeline.md §34）。
@@ -399,6 +423,8 @@ struct Judged {
     rows: usize,
     /// (doc, 1 件)（doc 順・doc の中は行番号の順）。
     found: Vec<(String, Finding)>,
+    /// 未追跡の設計 doc（検査の母集団の外・知らせだけ）。git が答えない周は `None`。
+    untracked: Option<Vec<String>>,
 }
 
 /// tracked な `docs/design/*.md` の区間を全行検査する（[`check_repo`] と [`repo_findings`] の共通の 1 本）。判定できない
@@ -432,7 +458,8 @@ fn judge_repo(repo: &Path, ceiling: &Ceiling<'_>) -> Result<Judged, Outcome> {
         rows = rows.saturating_add(count);
         found.extend(judged.into_iter().map(|finding| ((*doc).clone(), finding)));
     }
-    Ok(Judged { docs: docs.len(), rows, found })
+    let untracked = untracked_files(repo).map(|paths| design_docs(&paths).into_iter().cloned().collect());
+    Ok(Judged { docs: docs.len(), rows, found, untracked })
 }
 
 /// tracked な設計 doc（`docs/design/` 直下の `.md`・tracked の順）。
@@ -501,7 +528,20 @@ pub(crate) fn read(repo: &Path, path: &str) -> Result<String, String> {
 /// tracked file の repo 相対 path（`git ls-files -z`・git repo でなければ `None`）。`contracts check` と intake の
 /// 上限の余地・交差の展開が同じ一覧を読む。
 pub(crate) fn tracked_files(repo: &Path) -> Option<Vec<String>> {
-    let listed = super::super::git_bytes(repo, &["ls-files", "-z"])?;
+    ls_files(repo, &[])
+}
+
+/// 設計 doc の dir 配下の未追跡 file の repo 相対 path（ignore された file は除く・git が答えなければ `None`）。
+/// 読む口は [`tracked_files`] と同じ `git ls-files -z` の 1 本（2 本目の読み手を作らない・設計 §43 (3)）。
+fn untracked_files(repo: &Path) -> Option<Vec<String>> {
+    ls_files(repo, &["--others", "--exclude-standard", "--", DESIGN_DIR])
+}
+
+/// `git ls-files -z <extra>` の repo 相対 path の列（rc≠0 は `None`）。
+fn ls_files(repo: &Path, extra: &[&str]) -> Option<Vec<String>> {
+    let mut args = vec!["ls-files", "-z"];
+    args.extend_from_slice(extra);
+    let listed = super::super::git_bytes(repo, &args)?;
     Some(String::from_utf8_lossy(&listed).split('\0').filter(|path| !path.is_empty()).map(str::to_owned).collect())
 }
 
@@ -520,7 +560,9 @@ mod tests {
 
     use super::super::read_rows;
     use super::super::tests::full_promise;
-    use super::{check_table, ids_of, judge_text, requirement_ids, section_lines, Context, ContractRow, BEGIN, END};
+    use super::{
+        check_table, ids_of, judge_text, requirement_ids, section_lines, untracked_notices, Context, ContractRow, BEGIN, END,
+    };
     use crate::cli_outcome::{RC_BROKEN, RC_REFUSED};
     use crate::pipe::closure::Source;
     use crate::pipe::refuse::Refuse;
@@ -817,6 +859,21 @@ mod tests {
         assert!(found.iter().all(|finding| finding.rc() == RC_BROKEN), "読めない周は rc 2: {rendered:?}");
         assert!(rendered.iter().any(|line| line.starts_with("contracts: docs/design/t.md:10 contract-table:unreadable: srs")));
         assert!(rendered.iter().any(|line| line.contains("src/broken.rs を読めない")), "{rendered:?}");
+    }
+
+    /// 未追跡の設計 doc の知らせ（§43 (3)・行 at）: 0 本・1 本・2 本の列で、知らせは 1 件 1 行で path を名乗り
+    /// 列の順のまま、判定行の値は本数。git が答えない周（`None`）は知らせ 0 行で値は `?`（0 に化けない）。
+    #[test]
+    fn contracts_untracked_doc_notices_name_each_path_and_count_or_question_mark() {
+        let paths = |names: &[&str]| names.iter().map(|name| (*name).to_owned()).collect::<Vec<String>>();
+        let notice = |path: &str| format!("contracts untracked-doc: {path} は未追跡の設計 doc（検査の母集団に入らない）");
+        assert_eq!(untracked_notices(Some(&[])), (Vec::new(), "0".to_owned()), "0 本は知らせ無し・値 0");
+        let one = paths(&["docs/design/draft.md"]);
+        assert_eq!(untracked_notices(Some(&one)), (vec![notice("docs/design/draft.md")], "1".to_owned()));
+        let two = paths(&["docs/design/b.md", "docs/design/a.md"]);
+        let want = vec![notice("docs/design/b.md"), notice("docs/design/a.md")];
+        assert_eq!(untracked_notices(Some(&two)), (want, "2".to_owned()), "1 件 1 行・列の順");
+        assert_eq!(untracked_notices(None), (Vec::new(), "?".to_owned()), "git が答えない周は ?");
     }
 
     // ─────── 節の切り出し（§31 (e)）: 4 本は腕 / guard / 否定を 1 つずつ落として別の歯が落ちる形 ───────

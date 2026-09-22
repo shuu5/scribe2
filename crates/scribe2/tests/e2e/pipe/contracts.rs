@@ -72,13 +72,13 @@ fn contract_check_names_the_incomplete_write_set_and_the_missing_section_with_fi
     assert!(!incomplete.contains("src/tint.rs"), "write-set に在る file は名指さない: {incomplete}");
     let section = found.iter().find(|line| line.starts_with(&head("c"))).cloned().unwrap_or_default();
     assert!(section.contains("contract-table:section-missing"), "節の無い行を名指す: {text}");
-    assert_eq!(text.lines().last(), Some("contracts check: docs=1 rows=3 findings=2"), "判定行: {text}");
+    assert_eq!(text.lines().last(), Some("contracts check: docs=1 rows=3 untracked=0 findings=2"), "判定行: {text}");
     // 適合だけの doc は rc 0（write-set が閉包を覆えば touches を持つ行も通る）。
     let covering = ("write-set", "[\"src/tint.rs\", \"src/show.rs\"]");
     let good = table_repo(&table_doc(&table_region(&[table_row("a", &[]), table_row("b", &[covering, touches])])), &[]);
     let passed = contracts_check(&good);
     assert_eq!(passed.status.code(), Some(i32::from(RC_OK)), "適合だけの doc は rc 0: {}", stdout_of(&passed));
-    assert_eq!(stdout_of(&passed).lines().collect::<Vec<&str>>(), ["contracts check: docs=1 rows=2 findings=0"]);
+    assert_eq!(stdout_of(&passed).lines().collect::<Vec<&str>>(), ["contracts check: docs=1 rows=2 untracked=0 findings=0"]);
     clean(&[&repo, &good]);
 }
 
@@ -89,7 +89,7 @@ fn contract_check_treats_a_doc_without_region_as_zero_rows_and_fails_closed_on_u
     let plain = table_repo(&table_doc(""), &[]);
     let out = contracts_check(&plain);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "表なしは違反でない: {}", stdout_of(&out));
-    assert_eq!(stdout_of(&out).trim_end(), "contracts check: docs=1 rows=0 findings=0");
+    assert_eq!(stdout_of(&out).trim_end(), "contracts check: docs=1 rows=0 untracked=0 findings=0");
     let region = table_region(&[table_row("a", &[])]);
     let twice = table_repo(&table_doc(&format!("{region}\n{region}")), &[]);
     let out = contracts_check(&twice);
@@ -102,8 +102,36 @@ fn contract_check_treats_a_doc_without_region_as_zero_rows_and_fails_closed_on_u
     let text = stdout_of(&out);
     assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "読めない doc は rc 2: {text}");
     assert!(text.contains("contracts: docs/design/bad.md:0 contract-table:unreadable"), "読めない doc を名指す: {text}");
-    assert_eq!(text.lines().last(), Some("contracts check: docs=2 rows=0 findings=1"), "母集団は tracked 設計 doc の全数: {text}");
+    assert_eq!(text.lines().last(), Some("contracts check: docs=2 rows=0 untracked=0 findings=1"), "母集団は tracked 設計 doc の全数: {text}");
     clean(&[&plain, &twice]);
+}
+
+/// 未追跡の設計 doc（設計 contract-source.md §43 (3)・行 at）: 未追跡の `.md` を 1 本置いた木の判定行は
+/// `untracked=1` を持ち、判定行の前に path を名乗る知らせが 1 行出て rc 0・findings 0 のまま（母集団に入らない＝
+/// doc 数は 1）。同じ file を追跡すると `untracked=0` で知らせが消え、doc 数が 1 増える（同じ木の 2 回の判定行の対）。
+#[test]
+fn contracts_untracked_doc_is_noticed_without_counting_and_joins_the_population_once_tracked() {
+    let repo = table_repo(&table_doc(&table_region(&[table_row("a", &[])])), &[]);
+    fs::write(repo.join("docs/design/draft.md"), "# 下書き\n").expect("未追跡の doc を書ける");
+    let out = contracts_check(&repo);
+    let text = stdout_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "未追跡は rc に数えない: {text}{}", stderr_of(&out));
+    assert_eq!(
+        text.lines().collect::<Vec<&str>>(),
+        [
+            "contracts untracked-doc: docs/design/draft.md は未追跡の設計 doc（検査の母集団に入らない）",
+            "contracts check: docs=1 rows=1 untracked=1 findings=0",
+        ],
+        "知らせ 1 行 + 判定行: {text}"
+    );
+    assert!(findings_of(&out).is_empty(), "知らせは findings の行でない: {text}");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "draft"]);
+    let out = contracts_check(&repo);
+    let text = stdout_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{text}{}", stderr_of(&out));
+    assert_eq!(text.lines().collect::<Vec<&str>>(), ["contracts check: docs=2 rows=1 untracked=0 findings=0"], "{text}");
+    clean(&[&repo]);
 }
 
 /// (3) `req` が要件面に無い行・`depends` が解決しない行・輪を持つ 2 行・`verify` に `(` を持つ行・末尾 `/` 無しの
@@ -136,7 +164,7 @@ fn contract_check_names_each_row_defect_once_with_its_line() {
         assert!(hits.iter().all(|line| line.contains(needle)), "{needle} を名乗る: {text}");
     }
     assert_eq!(found.len(), 5, "他の行は名指さない: {text}");
-    assert_eq!(text.lines().last(), Some("contracts check: docs=1 rows=6 findings=5"), "{text}");
+    assert_eq!(text.lines().last(), Some("contracts check: docs=1 rows=6 untracked=0 findings=5"), "{text}");
     clean(&[&repo]);
 }
 
@@ -192,7 +220,7 @@ fn contract_check_reads_requirements_from_md_headings() {
     let declared = table_repo(&passing, &[(".vessel.toml", &with_key), ("spec/reqs.md", md)]);
     let out = contracts_check(&declared);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "md の見出しの id は通る: {}", stdout_of(&out));
-    assert_eq!(stdout_of(&out).lines().last(), Some("contracts check: docs=1 rows=1 findings=0"), "{}", stdout_of(&out));
+    assert_eq!(stdout_of(&out).lines().last(), Some("contracts check: docs=1 rows=1 untracked=0 findings=0"), "{}", stdout_of(&out));
     let failing = table_doc(&table_region(&[table_row("a", &[("req", "[\"FR9\"]")])]));
     let missing = table_repo(&failing, &[(".vessel.toml", &with_key), ("spec/reqs.md", md)]);
     let out = contracts_check(&missing);
@@ -256,7 +284,7 @@ fn contract_closure_ext_surfaces_name_the_snapshot_and_the_teeth_that_pin_it() {
     assert_eq!(unknown.len(), 1, "未知の名: {text}");
     assert!(unknown.iter().all(|line| line.contains("nope_external_form")), "{text}");
     assert_eq!(found.len(), 3, "宣言なしの行 d と覆う行 e は名指さない: {text}");
-    assert_eq!(text.lines().last(), Some("contracts check: docs=1 rows=5 findings=3"), "{text}");
+    assert_eq!(text.lines().last(), Some("contracts check: docs=1 rows=5 untracked=0 findings=3"), "{text}");
     clean(&[&repo]);
 }
 
@@ -468,13 +496,13 @@ fn contract_closure_ext_delete_check_passes_after_landing() {
     let present = table_repo(&doc, &[("src/old.rs", "// old\n")]);
     let out = contracts_check(&present);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "まだ消していない周の ~ も解ける: {}", stdout_of(&out));
-    assert_eq!(stdout_of(&out).trim_end(), "contracts check: docs=1 rows=1 findings=0");
+    assert_eq!(stdout_of(&out).trim_end(), "contracts check: docs=1 rows=1 untracked=0 findings=0");
     let landed = table_repo(&doc, &[("src/old.rs", "// old\n")]);
     git(&landed, &["rm", "-q", "src/old.rs"]);
     git(&landed, &["commit", "-q", "-m", "land"]);
     let out = contracts_check(&landed);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "着地で消えた ~ も解ける: {}", stdout_of(&out));
-    assert_eq!(stdout_of(&out).trim_end(), "contracts check: docs=1 rows=1 findings=0");
+    assert_eq!(stdout_of(&out).trim_end(), "contracts check: docs=1 rows=1 untracked=0 findings=0");
     clean(&[&present, &landed]);
 }
 
@@ -665,7 +693,7 @@ fn contract_names_impl_method_is_not_named_by_contracts_check() {
     for resolved in ["Report::violation", "Wide::width"] {
         assert!(!text.contains(resolved), "base が impl で宣言する {resolved} は名指さない: {text}");
     }
-    assert_eq!(text.lines().last(), Some("contracts check: docs=1 rows=1 findings=2"), "判定行: {text}");
+    assert_eq!(text.lines().last(), Some("contracts check: docs=1 rows=1 untracked=0 findings=2"), "判定行: {text}");
     clean(&[&repo]);
 }
 
@@ -692,7 +720,7 @@ fn contract_names_declared_in_another_doc_resolve() {
     let text = stdout_of(&out);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "別の doc の宣言で解ける: {text}{}", stderr_of(&out));
     assert!(!text.contains("name-unresolved"), "名指さない: {text}");
-    assert_eq!(text.lines().last(), Some("contracts check: docs=2 rows=3 findings=0"), "判定行: {text}");
+    assert_eq!(text.lines().last(), Some("contracts check: docs=2 rows=3 untracked=0 findings=0"), "判定行: {text}");
     clean(&[&repo]);
 }
 
@@ -708,7 +736,7 @@ fn contract_names_declared_undeclared_name_is_still_named_once() {
     let row_b = findings_for(&found, &doc, "b", "name-unresolved");
     assert_eq!(row_b.len(), 1, "宣言の無い 1 語だけ: {text}");
     assert!(row_b.iter().all(|line| line.contains("名指し src/ghost.rs が base に無い（done）")), "{row_b:?}");
-    assert_eq!(text.lines().last(), Some("contracts check: docs=2 rows=3 findings=1"), "判定行: {text}");
+    assert_eq!(text.lines().last(), Some("contracts check: docs=2 rows=3 untracked=0 findings=1"), "判定行: {text}");
     clean(&[&repo]);
 }
 
@@ -724,7 +752,7 @@ fn contract_names_declared_in_another_row_of_the_same_doc_resolve() {
     let out = contracts_check(&repo);
     let text = stdout_of(&out);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "同じ doc の別の行の宣言で解ける: {text}{}", stderr_of(&out));
-    assert_eq!(text.lines().last(), Some("contracts check: docs=1 rows=3 findings=0"), "判定行: {text}");
+    assert_eq!(text.lines().last(), Some("contracts check: docs=1 rows=3 untracked=0 findings=0"), "判定行: {text}");
     clean(&[&repo]);
 }
 
@@ -798,11 +826,11 @@ fn contract_table_landed_plus_item_resolves_as_file() {
     let text = stdout_of(&out);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land 済みの + は実在 file と読む: {text}{}", stderr_of(&out));
     assert!(!text.contains("write-set-item-unresolved"), "解けない項目として名指さない: {text}");
-    assert_eq!(text.trim_end(), "contracts check: docs=1 rows=1 findings=0", "判定行: {text}");
+    assert_eq!(text.trim_end(), "contracts check: docs=1 rows=1 untracked=0 findings=0", "判定行: {text}");
     let fresh = table_repo(&landed_plus_doc(), &[]);
     let out = contracts_check(&fresh);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land 前の + は新規 file として解ける: {}", stdout_of(&out));
-    assert_eq!(stdout_of(&out).trim_end(), "contracts check: docs=1 rows=1 findings=0");
+    assert_eq!(stdout_of(&out).trim_end(), "contracts check: docs=1 rows=1 untracked=0 findings=0");
     clean(&[&landed, &fresh]);
 }
 
@@ -1112,7 +1140,7 @@ fn contract_schema_lists_creates_tests_also_and_write_set_is_optional() {
     let repo = table_repo(&doc, &[]);
     let checked = contracts_check(&repo);
     assert_eq!(checked.status.code(), Some(i32::from(RC_OK)), "write-set の無い行は読める: {}", stdout_of(&checked));
-    assert_eq!(stdout_of(&checked).trim_end(), "contracts check: docs=1 rows=1 findings=0");
+    assert_eq!(stdout_of(&checked).trim_end(), "contracts check: docs=1 rows=1 untracked=0 findings=0");
     clean(&[&repo]);
 }
 
