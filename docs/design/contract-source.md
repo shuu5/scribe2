@@ -741,6 +741,15 @@ write-set = ["-crates/scribe2/src/pipe/review.rs", "+crates/scribe2/src/pipe/rev
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail pipe_review_judgement_reads_kind_and_splits_at", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_review_unaddressed_measures_each_kind_with_one_ruler", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_review_unaddressed_teeth_measures_only_path_shaped_items", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_review_check_reads_review_json_fail_closed"]
 size = "S"
 done = "(1) 14 item が名・本文・順序・doc comment を変えずに + の file へ移る（move_proof が pure と判じる・items-differ / residual-line 0 件） (2) 親に増えるのは mod 宣言 1 行・pub use 2 行（8 名）・#[cfg(test)] だけの 1 行と use 1 行（split_at・既存の列 0 #[cfg(test)] の直上）の 5 行だけで、孤立した import 2 行と 1 語を削る (3) in-file の歯の本文と use super::{…} が 1 byte も変わらず、e2e と他 module の review:: の path は触らない (4) 子側の pub(super) は split_at の 1 名だけで、pub の 8 名と Judgement / Rework の pub field と親側の可視性は不変 (5) 札 moved が親の mod tests { の内側（§37 の札の次の行・置き換えない）と子の module doc の直後に 1 行ずつ (6) 名指しの既存 4 本が名・本数・本文不変で緑・clippy -D warnings が通常 build と test build の両方で rc 0"
+[[contract]]
+id = "an"
+title = "名指しの実在が他の行の宣言済み・未着地の新規 file を解く — 検査の文脈に repo の全 doc から集めた宣言済みの新規 file の列を足し、CI と受付が同じ 1 本で母集団を組む。断りの字面と在り処の形と他の検査は不変"
+req = ["FR48", "FR55"]
+section = "39"
+write-set = ["crates/scribe2/src/pipe/table.rs", "crates/scribe2/src/pipe/table/check.rs", "crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/tests/e2e/pipe/contracts.rs"]
+verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail contract_names_declared_"]
+size = "S"
+done = "(1) 検査の文脈が宣言済みの新規 file の列を持ち、tracked な設計 doc の区間の全行から印つきの write-set の項目と creates の欄を集める 1 本で組まれる (2) 別の doc の行が宣言した新規 file を名指した行に name-unresolved が出ず、どの行も宣言していない名は従来どおり 1 件出る (3) 同じ母集団を CI の駆動と受付の材料の両方が同じ 1 本から受け、受付でも同じ行が通る (4) 区間を読めない doc が在る周は母集団を縮めたまま通さず従来の読めなさの 1 件が出る (5) name-unresolved の字面と在り処の形・型の path 形と fn 形の解き方・write-set の項目の実在・depends の母集団・findings の順と rc が不変で、現物の契約表は findings 0・rc 0"
 <!-- contracts:end -->
 
 
@@ -837,3 +846,18 @@ done = "(1) 14 item が名・本文・順序・doc comment を変えずに + の
 - 行 r（[gate-cost.md](./gate-cost.md) §26・`s2-07l.462`）との交差: 行 r が触る `decide` / `settle`（lens の駆動と着地の帯 583–729）は 1 つも動かないので、行 r の write-set は `review.rs` のままでよく、本行の着地で余地だけが増える。
 - 触らない: 移す帯の外の 8 帯・`design_material`・`Judgement` / `Rework` の `pub` field・e2e の歯・§37 が置いた子 `requirements.rs` と札。
 - 却下: 材料の組立の帯（436–581・154 行）を出す（親に残る `review`〔416–434 行〕が `material.promises` を読むので `Material` の field を `pub(super)` に上げる＝items-differ）／lens の駆動と着地の帯（583–729・149 行）を出す（行 r の `decide` / `settle` と正面衝突し、行 r の write-set に受け皿の file を足す往復が要る）／§37 の札を置き換える（持ち越しの対が崩れる）／`pub use` を 1 行に畳む（120 桁超）。
+
+## 39. 名指しの実在が他の行の宣言済み・未着地の新規 file を解く（契約表の行 an・`s2-07l.475`）
+
+- 出所（隣の repo の planner の報告 2026-09-18・便 25 / 26 で実測。本 repo でも同じ型が出る）: 着地前の便の write-set に宣言した新規 file を、次の便の設計文が backtick で名指すと name-unresolved が出る。直列の便で次の便の契約を先に書く運用だと毎回出る。回避は散文で書くこと＝作法（N2）で運んでいる。
+- 何が起きているか（現物・main 4f70b12・verified）: `check.rs` の `name_findings` は解の母集団を**その行の write-set と creates だけ**から組んで `unresolved_names` に渡す。他の行の宣言は見ない。母集団の実測: 契約表の区間を持つ doc は 15 本、宣言の印を持つ write-set の行は 42 本、宣言された新規 file は重複なしで 94 本、うち **41 本が base に無い**＝この 41 本が今はどの行からも名指せない。`depends` の相手は既に doc の全行から解く形（§30・行 ad）が在るが、名指しの母集団は行 1 本に閉じたままである。
+- 形（母集団は **repo の全 doc**）: 行 id は doc の中でだけ一意だが **path は repo で一意**である。宣言の印は「その path がこの repo にこれから在る」の唯一の正本で、doc の境は意味を持たない（隣の repo の報告も doc を跨ぐ形だった）。
+  1. 検査の文脈（`table.rs` の `Context`・「repo の側の事実」を持つ struct）に**宣言済みの新規 file の列**を 1 つ足す。作る 1 本は `check.rs` に置き、tracked な設計 doc の区間を読んで全行の write-set の印つき項目と creates の欄を集める（印は剥がす・重複は畳む）。
+  2. `name_findings` はその行の分に文脈の列を足して母集団にする。`unresolved_names` の引数と、印を剥がして path 形の解に足す規則は 1 字も変えない。
+  3. 文脈を組む側は 2 つ——CI の駆動（`check.rs` の repo 判定）と受付の材料（`intake.rs` の `Materials`・**1 周に 1 回の読み**）。どちらも同じ 1 本を呼ぶ。受付は doc を 22 本（1.65 MB）読み足すが、同じ材料が既に tracked な `.rs` 175 本（6.07 MB）を読んでいる。
+  4. **読めない doc は黙って飛ばさない**: 区間を読めない doc が在る周は母集団を縮めたまま通さず、その読めなさを従来の 1 件として出す口に合流させる（読めなさを「宣言 0 本」に読み替えない）。
+- 触らない: name-unresolved の字面と在り処の形・型の path 形と fn 形の解き方・write-set の項目の実在の検査・`depends` の母集団・findings の順と rc。
+- 却下: 母集団を同じ doc の全行に限る（小さいが、報告された doc 跨ぎの形を閉じない。path は repo で一意ゆえ doc の境を引く根拠が無い）／宣言済みを別の理由で出して rc 0 にする（読み手が毎周読み飛ばす音が残る）／名指しを散文に書き替える運用のまま（作法を増やす・N2）／宣言の印を無条件に解く（印の無い path まで通すと base に無い名の検査が空洞化する）。
+- 歯（接頭辞 `contract_names_declared_`・`crates/scribe2/tests/e2e/pipe/contracts.rs` の既存の `contract_names_impl_` / `contract_closure_ext_` の歯の隣。`crates/` 全体で 0 件＝衝突なし）: (a) doc を 2 本持つ toy repo で、doc A の行が新規 file を宣言し doc B の行の done がその名を backtick で名指す → findings 0・rc 0（**base で RED**: name-unresolved が 1 件）。(b) どの行も宣言していない名を名指した行は従来どおり 1 件（負例・母集団が無条件に広がらない）。(c) 同じ doc の別の行の宣言でも解ける。(d) 受付でも同じ: doc B の行を pointer に受付を撃つと run dir と event が作られる（base は断られる）。(e) 現物の契約表が findings 0・rc 0。
+- 既存の歯の書き換え（1 本）: `contract_closure_ext_unresolved_names_are_named_with_their_place` は「別の行が宣言した新規 file を名指した行は解けない」を assert している（母集団が行 1 本に閉じている pin）。本行はこの前提を変えるので、その assert を「解ける」へ替える。同じ歯の他の 4 件（型の path 形・fn 形・節の本文・一致しない字面）は 1 字も変えない。
+

@@ -103,3 +103,31 @@ lens の verdict（最終行の JSON・`{"verdict":…,"evidence":…}`）と**�
 - 複数の質問・選択肢付きの質問・質問の優先度（1 便 1 質問で始める・ADR を supersede）。
 - 契約の write-set の交差を intake で検査する（席並列の衝突を構造で消す・research §3）。
 - 席の dashboard（`Questioned` の run を一覧で見る口・v3）。
+
+## 11. 回答後の再開は契約の写しを設計 doc の行から取り直す（契約表の行 a・`s2-07l.546`）
+
+- 出所（隣の repo の席の報告 2026-09-22・orchestrator が event log と worktree の reflog で再現・verified）: 席が行の write-set に file を 1 本足して main へ merge してから回答 → 再開したのに、runner は同じ file を編集時の guard に止められ 2 度目の質問で停止した。撮った写しの write-set に当該 file は 0 件。
+- 何が起きているか（現物・main 4f70b12・verified）: `spawn.rs` の `prompt` は 1 行目で置き場の写し（受付時に撮ったもの）を読むだけで、行を引き直す経路を持たない。本 doc の §5 は resume の stdin に「契約（再読・planner が直していれば新しい本文）」を渡すと書いており、**doc と code が食い違う**。取り直しの記帳も無い（`ContractRefreshed` の grep = 0 件）。受付側の導出は `intake.rs` の `generated` の 1 本（base の `HEAD` から doc を読み・行を引き・表の検査を同じ ctx で撃ち・Derived / Promised の write-set まで組んで本文を返す）で、再開はこれを 1 度も呼ばない。
+- 形:
+  1. `resume` の `Questioned` 分岐だけが、起こす前に**写しを取り直す**。受付と同じ導出（`intake.rs` の `generated` に写しの `design` の pointer を渡す）で本文を組み、置き場の写しと byte 比較する。
+  2. **同じなら何も書かない**（event 0 件・写し不変）。**違えば写しを書き替え**、`RunStage` を段 `Questioned` のまま detail=contract:refreshed で 1 件記帳する（段を動かさず事実だけを残す形＝[pipeline-conflict.md](./pipeline-conflict.md) §3 手順 2 / 手順 5 と同じ型。`base_of_run` は接頭辞の違う行を飛ばすので base の読みは不変）。判定行に contract=refreshed を 1 語足す（§5 の question=<id> の列）。
+  3. **行が受付を通らない形に変わっていた周は起こさない**（fail-closed）: 行が消えた・doc を読めない・表の検査が 1 件でも出る周は rc 1 で断り、**写しも event も触らない**（受付の断りと同じ字面をそのまま流す）。
+  4. 取り直しは `Questioned` 分岐**だけ**である。追随（`follow.rs`）の再 spawn は写しの write-set へ設計 doc を**追記**しており、行から組み直すとその追記を消す。上限・runner 死の途中再開も同じ。
+- 触らない: `prompt` の節の順序（契約 → 回答 → 途中再開 → 追随）・「回答」節の字面・`Questioned` から進める条件・写しの置き場と `design` の key・受付の導出そのもの。
+- 審査（lens）のやり直し（**推奨 = やり直す・本行の射程外**）: 取り直した本文は受付の**機械の門**を通り直すが FR49 の審査は通っていない＝新しい本文の契約適合を見ないまま実装に入る穴は残る。ただし審査の口は `Intake` / `Reviewed` の段から入る形で、`Questioned` 分岐に 2 本目の入口を足すのは段の機械を動かす別の射程ゆえ、本行は取り直しと記帳で閉じ、後続の 1 行に回す。
+- 却下: 新しい event 種別を足す（fleet の 3 file と replay の 2 match と宣言順の歯を動かす・段を動かさない事実は既存の `RunStage` の detail が運べる）／受付を撃ち直して新しい便を作る（同じ worktree の実装を捨てる＝いま起きている損失そのもの）／写しを読む側（`prompt`）で引き直す（起動の途中で断れない・C16 の向き）／回答の記帳の時点で取り直す（席が行を直すのは回答の前とは限らない）。
+- 歯（接頭辞 `pipe_question_refresh_`・`crates/scribe2/tests/e2e/pipe/spawn.rs` の既存の `pipe_question_` の歯の隣。`crates/` 全体で 0 件＝衝突なし）: (a) 回答 → 行の write-set を 1 本広げて commit → resume で、写しの write-set が広がり fake runner の stdin（契約節）にその file が写り、段 `Questioned` の detail=contract:refreshed の event が 1 件。**base で RED**（写しは受付時のまま・記帳 0 件）。(b) 行を 1 字も変えずに resume した周は写しが byte 不変で記帳 0 件。(c) 行を doc から消して resume すると rc 1・写し byte 不変・event 0 件・断りが行を名乗る。(d) 既存の `pipe_question_answer_then_resume_respawns_with_answer_section` が本文不変で緑。
+
+<!-- contracts:begin -->
+schema = 1
+
+[[contract]]
+id = "a"
+title = "回答後の再開が契約の写しを設計 doc の行から取り直す — Questioned 分岐だけが受付と同じ導出で本文を組み直し、変わった周だけ写しを書き替えて段 Questioned の detail=contract:refreshed を 1 件記帳し、行が受付を通らない周は起こさない"
+req = ["FR32", "FR47"]
+section = "11"
+write-set = ["crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/src/pipe/cli/resume.rs", "crates/scribe2/tests/e2e/pipe/spawn.rs"]
+verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_question_refresh_"]
+size = "S"
+done = "(1) Questioned からの再開が受付と同じ導出で本文を組み直し、起こす前に写しと突き合わせる (2) 変わった周だけ写しを書き替えて RunStage を段 Questioned・detail=contract:refreshed で 1 件記帳し判定行に contract=refreshed が出る／変わらない周は写しが byte 不変で記帳 0 件 (3) 行が消えた・doc を読めない・表の検査が 1 件でも出る周は rc 1 で起こさず写しと event を触らない (4) 取り直しは Questioned 分岐だけで、追随と途中再開の再 spawn は写しを組み直さない (5) prompt の節の順序と回答節の字面と base の読みが 1 字も変わらず、既存の pipe_question_ の歯が緑"
+<!-- contracts:end -->

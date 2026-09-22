@@ -217,6 +217,22 @@ xtask 側の drift 歯（最小形）: `crates/xtask/src/limits.rs` の `#[cfg(t
 - 触らない: `crates/xtask/src/check.rs`（write-set に持つが 1 字も変えない・上の (3)）・`crates/xtask/src/enum_slices.rs`・§10 が作った 2 つの子・xtask の他 file・歯の中身。
 - 却下: `check_fails_` の 6 本を移す（filter が `crates/xtask/src/check_nonrust_tests.rs` と flipcheck の歯 2 file にも当たり、検証行が write-set を 3 file 広げる）／親の共有 helper を子へ複製する（純移動でなくなり機械証明が残差を出す）／余地 271 のまま据え置く（次の M が受付で止まる）。
 
+## 16. src / test の切れ目に「名で test file」を足す（契約表の行 m・`s2-07l.461`）
+
+- 出所: memo `s2-07l.461`（planner 実測 2026-09-17）と棚卸し 2026-09-22。`crates/xtask/src/workspace.rs` の `split_test_src` は file の最初の行頭 `#[cfg(test)]` の位置だけで割り、file の名を見ない。
+- 何が起きているか（main 4f70b12・verified）: `#[path]` で src 配下へ外出しした歯の file は行頭 `#[cfg(test)]` を 1 つも持たないので**全行が src 側**に数えられる。該当は 11 本（母集団 = `crates/*/src` の `.rs` 145 本）で、幅 120 で正規化した行数の合計は 4854。R-C4-3 の実測は **16660 / 54247 = 30.71%**、名で弁別すると **21514 / 49393 = 43.56%** で、上限 100% にはどちらも当たらない（**閾値を動かさない＝A2 の裁定は要らない**）。R-C4-1（core-lines）は **41278 → 40408**（−870・上限 60000・core 側の該当は `crates/scribe2/src/fleet/select_tests.rs` の 1 本だけ）。3 つの読み手のうち flip-check（`crates/xtask/src/flipcheck.rs` の `is_test_file`）と rules-wired（`crates/xtask/src/rules_wired.rs` の `TEST_FILE_TAIL`）は名で弁別し、`workspace.rs` だけが弁別を持たない。
+- 形（done と 1:1）:
+  1. `workspace.rs` に「file 名が tests.rs か _tests.rs で終わる」述語を 1 本置き、`split_test_src` が真の file を**丸ごと test 区間**（src 側 0）と数える。
+  2. `flipcheck.rs` の `is_test_file` の src 配下の枝と `rules_wired.rs` の `TEST_FILE_TAIL` の判定を、その 1 本の述語の呼び出しへ寄せる（_tests.rs の字面が 3 か所に散らない・C2）。flip-check の `crates/*/tests/` の枝と rules-wired の `DECLARING` の枝は 1 字も変えない。
+  3. `crates/xtask/src/env_reads.rs` の母集団も同じ述語で切る（core の非 test 区間の定義を 1 つにする）。該当 file の env の読みは 0 件なので判定行の値は動かない。
+  4. §4 の切り方の 2 文（「R-C4-3 の src 側と同じ切り方」の文と母集団の文）を新しい形に写す（本 doc が write-set に在る理由はこれだけ）。
+- 触らない: `rules/manifest.toml` の R-C4 の 4 行（値・kind・enabled・裁定 id）／憲法 §3 の閾値セル／`weighted_lines` の式と幅の正規化／core-spawn と file-lines と name-literal の母集団（file 全体で数える＝切れ目に依らない）／判定行の token の名と順序（`SUMMARY_PIN` は値を伏せるので値の変化では動かない）／core 側の `src_region`（`crates/scribe2/src/pipe/closure.rs`・受付の core の余地の見積）は印だけで切るまま＝gate（40408）より厳しい側（41278）に残るが上限 60000 に対して余地は 18722 で実害が無い（後続）。
+- 却下: 閾値 100% を動かす（C5 の裁定が要る形にしない）／`#[path]` の宣言側を読んで解く（xtask に Rust の parser を足す＝C13）／`workspace.rs` だけ直して他の 2 か所の字面を残す（同じ規則が 3 か所に住み続ける＝C2）。
+- 歯（行 m が持つ・置き場は `workspace.rs` と `crates/xtask/src/check_sizes.rs` の in-file の歯・接頭辞 `sizes_` は既存なので**名の全体**で書く）:
+  - `sizes_split_counts_named_test_files_as_whole_test`: 行頭 `#[cfg(test)]` を持たない同じ本文を、名が _tests.rs の file と tests.rs の file と素の .rs の file の 3 つで持ち、前 2 つが (test, src) = (全体, 0)・3 つ目が (0, 全体) になる（base は 3 つとも (0, 全体)＝RED）。
+  - `sizes_ratio_counts_named_test_files_on_the_test_side`: 本体 1 本と名で test の 1 本を持つ toy workspace で、test-src-ratio の分子が 0 でなくなり core-lines が名で test の file を数えない（base は分子 0・core-lines が両方を数える＝RED）。
+- 後続: core 側の `src_region` を同じ述語へ寄せる（crate を跨ぐので別の行・受付の見積が gate と一致する）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -344,4 +360,13 @@ write-set = ["crates/xtask/src/check.rs", "crates/xtask/src/check_tests.rs", "+c
 verify = ["cargo nextest run -p xtask --no-tests=fail enum_slices_", "cargo nextest run -p xtask --no-tests=fail rules_parity_ nextest_tmux_group_"]
 size = "S"
 done = "(1) write_enum_slice と enum_slices_ の歯 5 本が + の file に名・本文・assert・順序のまま在り (2) 宣言が §10 の 2 つと同じ #[path] の形で親の末尾に 1 つ増え enum_slices_ の filter が base と同じ 5 本に当たり (3) 共有 helper は親に残って子が use super:: で読み（可視性を pub(super) に上げる以外は触らず複製もしない） (4) 歯の総数が 30 のまま（親 25 + 子 5）で親に残る rules_parity_ 4 本と nextest_tmux_group_ 4 本が緑のまま (5) 札 flip-check: moved が親の末尾と + の file の module doc の直後に対で在り s2-07l.257 と s2-07l.370 の札が持ち越され (6) crates/xtask/src/check.rs が 1 字も変わらず (7) file-lines で check_tests.rs の余地が base の 271 から 300 以上へ増える"
+[[contract]]
+id = "m"
+title = "src / test の切れ目に「名が tests.rs か _tests.rs で終わる file は丸ごと test」を足し、flip-check と rules-wired の同じ字面をその 1 本の述語へ寄せる（閾値は動かさない）"
+req = ["FR17"]
+section = "16"
+write-set = ["crates/xtask/src/workspace.rs", "crates/xtask/src/check_sizes.rs", "crates/xtask/src/flipcheck.rs", "crates/xtask/src/rules_wired.rs", "crates/xtask/src/env_reads.rs", "docs/design/rules-manifest.md"]
+verify = ["cargo nextest run -p xtask --no-tests=fail sizes_split_counts_named_test_files_as_whole_test", "cargo nextest run -p xtask --no-tests=fail sizes_ratio_counts_named_test_files_on_the_test_side"]
+size = "S"
+done = "(1) 名が tests.rs か _tests.rs で終わる file の src 側が 0 行になり test-src-ratio の判定行が 43% 台（上限 100% で違反 0）・core-lines が 40408（上限 60000）で出る (2) flip-check の is_test_file の src 配下の枝と rules-wired の TEST_FILE_TAIL の判定が同じ 1 本の述語を呼び、_tests.rs の字面が xtask に 1 か所しか無く、flip-check の tests/ の枝と rules-wired の DECLARING の枝の挙動が base と同じ (3) env-reads の判定行の違反と母集団が base と同じ値で出る (4) §4 の切り方の 2 文が新しい形を写し、rules/manifest.toml と憲法 §3 の閾値セルが 1 字も変わらない"
 <!-- contracts:end -->
