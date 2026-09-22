@@ -666,7 +666,7 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 
 - 出所（`s2-07l.240`・orchestrator の再実測 2026-09-22・verified・main f25084c）: `.208` の run 3 は器の欠陥（検出線の同名衝突）で、run 4 は上限（環境）で追随の再 gate に落ちた。どちらも実装は合格していたのに、`Gated` の FAIL は終端なので新しい取り込みで runner が一から作り直した（費用 = runner 2 周 + gate 4 周）。memo が待つとした先行（`s2-07l.335` / `.428` / `.502`）は 3 本とも close 済みで、穴だけが残っている。
 - 現物（本行の base・main f25084c・verified）:
-  - 段が生きているかを測る述語は 1 本（`crates/scribe2/src/pipe/cli/state.rs` の `live`・母集団 = 段 11 個の網羅の match）。`Gated` の答えだけが判定から導かれ、**判定が FAIL の周は `Some(false)`＝終端**である。`Landed` / `Failed` / `Stopped` は段だけで終端になる。
+  - 段が生きているかを測る述語は 1 本（`crates/scribe2/src/pipe/cli/state.rs` の `live`・可視性は `pub(in crate::pipe)` で、行 ar の write-set の `+` の file は `crates/scribe2/src/pipe/` の配下ゆえそのまま呼べる＝`state.rs` は触らず write-set にも入れない。親 module の file は `crates/scribe2/src/pipe/mod.rs` の 1 本で `pipe.rs` 形は無い・母集団 = 段 11 個の網羅の match）。`Gated` の答えだけが判定から導かれ、**判定が FAIL の周は `Some(false)`＝終端**である。`Landed` / `Failed` / `Stopped` は段だけで終端になる。
   - 起こし直しの候補を選ぶ述語（`crates/scribe2/src/pipe/dispatch.rs` の `passed_gate`）は `Gated` ∧ 判定が PASS の周しか拾わない＝FAIL の `Gated` は候補にならない。
   - `release` の印が列へ戻す段は `Gated` / `Stopped` / `Failed` の 3 つ（同 file の `requeues`・in-file の歯が母集団 11 段で pin）だが、戻すのは **bead の印**であって便ではない＝戻り先は新しい取り込みで、worktree は作り直しになる。
   - 同じ worktree で段を戻す口は `crates/scribe2/src/pipe` の src 全数 grep で **0 件**（`pipe` の subcommand は 15 個で、字面は `crates/scribe2/src/pipe/cli.rs` の 1 か所の表が正本）。`regate` の字面は src に 12 件（`crates/scribe2/src/pipe/land.rs` の追随の後の再 gate と `crates/scribe2/src/pipe/gate/record.rs` の skipped=regate の記録）在るが、どれも追随の撃ち直しであって終端の便を戻す口ではない。
@@ -1245,7 +1245,7 @@ touches = ["crate::pipe::cli::PipeCommand"]
 write-set = ["crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/args.rs", "crates/scribe2/src/pipe/mod.rs", "+crates/scribe2/src/pipe/regate.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "crates/scribe2/tests/e2e/snapshots/e2e__pipe__pipe_external_form.snap", "docs/design/pipeline.md"]
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail pipe_regate_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_regate_"]
 size = "M"
-done = "(1) pipe の subcommand の表と flag の表に regate の 1 行が在り、--run と --reason を受ける (2) 段が Gated かつ判定が FAIL かつ運転手の札が無いか死んでいて --reason が非空の 5 形のうち 1 形だけが通り、live が None の周を含む残り 4 形は rc 1 で何も書かない (3) 通った周が書く event はちょうど 1 件で、種別が RunStage・段が Implemented・detail が regate: の後ろに入力の逐語をそのまま持ち、worktree と判定の file は 1 byte も変わらない (4) 同じ便への 2 度目が断られ、間に Gated の RunStage を 1 件挟むと次の 1 回が通る (5) 判定 FAIL の Gated の便に口を撃つと rc 0 で regate: run= from=Gated to=Implemented の 1 行が出て、その後の段が Implemented になり worktree の path が変わらず、段の種別 11 個と event の種別 19 個はどちらも増えない"
+done = "(1) pipe の subcommand の表と flag の表に regate の 1 行が在り、--run と --reason を受ける (2) 判定は state.rs の live（pub(in crate::pipe)・不変）を呼んで読み、段が Gated かつ判定が FAIL かつ運転手の札が無いか死んでいて --reason が非空の 5 形のうち 1 形だけが通り、live が None の周を含む残り 4 形は rc 1 で何も書かない (3) 通った周が書く event はちょうど 1 件で、種別が RunStage・段が Implemented・detail が regate: の後ろに入力の逐語をそのまま持ち、worktree と判定の file は 1 byte も変わらない (4) 同じ便への 2 度目が断られ、間に Gated の RunStage を 1 件挟むと次の 1 回が通る (5) 判定 FAIL の Gated の便に口を撃つと rc 0 で regate: run= from=Gated to=Implemented の 1 行が出て、その後の段が Implemented になり worktree の path が変わらず、段の種別 11 個と event の種別 19 個はどちらも増えない"
 [[contract]]
 id = "as"
 title = "固定日付を持つ fixture の母集団を歯 1 本で pin する — e2e の tracked な .rs の本数と、reset / 期限の欄に座る日付の字面の本数を年で 2 つに割って 3 つ組で留める（fixture と器の src は 1 字も動かさない・歯だけ・retroactive 札）"
