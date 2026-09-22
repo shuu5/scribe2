@@ -34,6 +34,7 @@ pub mod table;
 mod stop;
 mod ratelimit;
 mod queue;
+mod regate;
 mod retire;
 mod train;
 

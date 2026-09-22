@@ -173,6 +173,9 @@ const ALLOWED_DISPATCH: &[cli_args::Allowed] = &[PLACE[0], PLACE[1], PLACE[2], T
 const ALLOWED_LAND_WINDOW: &[cli_args::Allowed] = &[PLACE[0], PLACE[1], PLACE[2], value(super::WINDOW_WAIT_FLAG)];
 /// `pipe report`。
 const ALLOWED_REPORT: &[cli_args::Allowed] = &[PLACE[0], PLACE[1], PLACE[2]];
+/// `pipe regate`（設計 pipeline.md §49）。
+const ALLOWED_REGATE: &[cli_args::Allowed] =
+    &[PLACE[0], PLACE[1], PLACE[2], value("--run"), value(crate::pipe::regate::REASON_FLAG)];
 
 /// subcommand が受ける flag の集合（[`super::dispatch`] が subcommand を選んだ直後に [`crate::cli_args::parse`] へ渡す）。
 pub(super) const fn allowed_of(command: PipeCommand) -> &'static [Allowed] {
@@ -192,6 +195,7 @@ pub(super) const fn allowed_of(command: PipeCommand) -> &'static [Allowed] {
         PipeCommand::Dispatch => ALLOWED_DISPATCH,
         PipeCommand::LandWindow => ALLOWED_LAND_WINDOW,
         PipeCommand::Report => ALLOWED_REPORT,
+        PipeCommand::Regate => ALLOWED_REGATE,
     }
 }
 

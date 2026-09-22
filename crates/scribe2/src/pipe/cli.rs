@@ -45,6 +45,7 @@ use super::declaration::{Ceiling, CEILING_ROW, DENIED_ROW};
 use super::gate;
 use super::land;
 use super::notify;
+use super::regate::REASON_FLAG;
 use super::review::ReviewCheck;
 use super::stop::stop;
 use super::{head_of, repo_of_run, repo_path};
@@ -93,6 +94,8 @@ pub enum PipeCommand {
     LandWindow,
     /// `pipe report`。
     Report,
+    /// `pipe regate`。
+    Regate,
 }
 
 /// [`PipeCommand`] の全部（宣言順）。
@@ -112,6 +115,7 @@ pub const PIPE_COMMANDS: &[PipeCommand] = &[
     PipeCommand::Dispatch,
     PipeCommand::LandWindow,
     PipeCommand::Report,
+    PipeCommand::Regate,
 ];
 
 impl PipeCommand {
@@ -133,6 +137,7 @@ impl PipeCommand {
             Self::Dispatch => "dispatch",
             Self::LandWindow => "land-window",
             Self::Report => "report",
+            Self::Regate => "regate",
         }
     }
 
@@ -145,7 +150,7 @@ impl PipeCommand {
 /// `pipe` の使い方。
 pub fn usage() -> String {
     format!(
-        "usage: {NAME} pipe <intake|preflight|spawn|approve|answer|gate|land|retire|run|show|resume|stop|report|dispatch> [--state-dir D] [--repo R（cwd は読まない＝--state-dir の無い周と便の写し面の無い周は要る）] [--rules PATH] [stop: --all|--run ID] [dispatch: (1 周)|ls|first|hold|release BEAD] [run|resume: --drive] [land: --terminal-only] [--runner CMD] [flags]\nusage: {NAME} pipe land-window [--state-dir D] --repo R [{WINDOW_WAIT_FLAG} N]（pipeline 外の merge の前置: 開けば rc 0 の clear・待ちが切れれば rc 1 の busy）"
+        "usage: {NAME} pipe <intake|preflight|spawn|approve|answer|gate|land|retire|run|show|resume|stop|report|dispatch> [--state-dir D] [--repo R（cwd は読まない＝--state-dir の無い周と便の写し面の無い周は要る）] [--rules PATH] [stop: --all|--run ID] [dispatch: (1 周)|ls|first|hold|release BEAD] [run|resume: --drive] [land: --terminal-only] [--runner CMD] [flags]\nusage: {NAME} pipe land-window [--state-dir D] --repo R [{WINDOW_WAIT_FLAG} N]（pipeline 外の merge の前置: 開けば rc 0 の clear・待ちが切れれば rc 1 の busy）\nusage: {NAME} pipe regate --run ID {REASON_FLAG} WORDS [--state-dir D] [--repo R]（判定 FAIL の Gated を裁定の逐語つきで同じ worktree の Implemented へ 1 段戻す・最新の Gated につき 1 回）"
     )
 }
 
@@ -412,6 +417,11 @@ fn subcommand(
             Err(reason) => refused(reason),
             Ok(state_dir) => super::report::report(&state_dir),
         },
+        // 裁定の逐語を持つ 1 段戻し（設計 pipeline.md §49）。worktree も判定も触らず、記帳 1 件だけ。
+        Some(PipeCommand::Regate) => by_run(args, |id| match (state_dir_of(args), need(args, REASON_FLAG)) {
+            (Ok(state_dir), Ok(reason)) => super::regate::regate(&state_dir, id, reason, policy),
+            (Err(reason), _) | (_, Err(reason)) => refused(reason),
+        }),
         None => Outcome::failed(RC_REFUSED, vec![usage()]),
     }
 }

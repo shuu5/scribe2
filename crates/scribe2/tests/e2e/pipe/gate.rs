@@ -1086,6 +1086,60 @@ fn pipe_gate_refuses_regate_after_fail() {
     clean(&[&repo, &state]);
 }
 
+/// 判定 FAIL の `Gated` で止まった便を 1 本置く（偽 lens の FAIL・`(repo, state, 便 id)`）。
+fn gated_fail_run() -> (PathBuf, PathBuf, String) {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &path);
+    let failing = fake_lens(&state.join("lens-fail"), &lens_verdict("FAIL"));
+    let first = gate_once(&repo, &state, &id, Some(&failing));
+    assert_eq!(first.status.code(), Some(i32::from(RC_REFUSED)), "FAIL の rc は 1");
+    (repo, state, id)
+}
+
+/// `pipe regate` を 1 回撃つ（rc を assert しない形）。
+fn regate_once(repo: &Path, state: &Path, id: &str, reason: &str) -> Output {
+    run_pipe(&[
+        "regate", "--run", id, "--reason", reason, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(),
+    ])
+}
+
+/// 形 1 / 形 5（設計 pipeline.md §49・行 ar）: 判定 FAIL の `Gated` の便に `pipe regate` を撃つと rc 0 で
+/// `regate: run=<id> from=Gated to=Implemented` の 1 行が出て、段が `Implemented` に戻り、worktree の path と HEAD
+/// は変わらない。戻った便は同じ worktree で gate をもう 1 周撃てる。2 度目は断って何も書かない。段の種別 11 個と
+/// event の種別 19 個は増えない（種別を足さずに `RunStage` の detail で裁定を運ぶ）。
+#[test]
+fn pipe_regate_returns_gated_fail_to_implemented_on_the_same_worktree() {
+    let (repo, state, id) = gated_fail_run();
+    let worktree = worktree_of(&repo, &id);
+    let head = || crate::git_out(&worktree, &["rev-parse", "HEAD"]);
+    let head_before = head();
+    let before = event_count(&state);
+    let words = "裁定: 検出線の同名衝突で落ちた（契約の赤でない）";
+    let out = regate_once(&repo, &state, &id, words);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "rc 0: {}", stderr_of(&out));
+    assert_eq!(stdout_of(&out).trim(), format!("regate: run={id} from=Gated to=Implemented"));
+    assert_eq!(event_count(&state), before + 1, "記帳は 1 件");
+    let current = vessel::pipe::current(&state).expect("置き場を読める");
+    let run = current.runs.get(&id).expect("便が在る");
+    assert_eq!(run.stage, Stage::Implemented, "段は Implemented に戻る");
+    assert_eq!(run.detail.as_deref(), Some(format!("regate:{words}").as_str()), "逐語をそのまま");
+    assert!(worktree.is_dir(), "worktree の path は同じ");
+    assert_eq!(head(), head_before, "worktree の HEAD は動かない");
+    assert_eq!(value_of(&verdict_pairs(&state, &id), "verdict"), "FAIL", "判定の file は書き換えない");
+
+    let again = regate_once(&repo, &state, &id, "もう一度");
+    assert_eq!(again.status.code(), Some(i32::from(RC_REFUSED)), "2 度目は断る");
+    assert_eq!(event_count(&state), before + 1, "断った周は何も書かない");
+    let passing = fake_lens(&state.join("lens-pass"), &lens_verdict("PASS"));
+    let regated = gate_once(&repo, &state, &id, Some(&passing));
+    assert_eq!(regated.status.code(), Some(i32::from(RC_OK)), "同じ worktree で gate をもう 1 周: {}", stderr_of(&regated));
+    assert_eq!(head(), head_before, "再 gate も同じ worktree の同じ commit");
+    assert_eq!((vessel::fleet::STAGES.len(), vessel::fleet::KINDS.len()), (11, 19), "段と event の種別は増えない");
+    clean(&[&repo, &state]);
+}
+
 #[test]
 fn pipe_gate_refuses_regate_without_readable_verdict() {
     let (repo, state) = repo_with_state();
