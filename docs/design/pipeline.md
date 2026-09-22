@@ -662,6 +662,59 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 - 触らない: 終端の 3 段の順（push → CI → close）と CI の照合・`CloseError` の 2 値・`CLOSE_REASON` の字面・台帳を読む口・dispatch が子を起こす cwd。
 - 却下: 運転手の cwd を repo に固定して close の側は触らない（起こす側が複数〔dispatch の周・手の `pipe run`・`--terminal-only`〕で、撃つ側の 1 site を直す方が小さい・C17.4）／`BEADS_DIR` を env で渡す（env の縫い目が 1 つ増える・C2.2・repo を cwd にすれば要らない）／close を `sh -c "cd <repo> && bd …"` で包む（shell を 1 段増やす・`Command` の `current_dir` で足りる）。
 
+## 49. 契約の赤でない Gated FAIL を同じ worktree で再 gate する口 — 裁定の逐語を持つ 1 段戻しを、その FAIL につき 1 回だけ許す（契約表の行 ar・`s2-07l.240`）
+
+- 出所（`s2-07l.240`・orchestrator の再実測 2026-09-22・verified・main f25084c）: `.208` の run 3 は器の欠陥（検出線の同名衝突）で、run 4 は上限（環境）で追随の再 gate に落ちた。どちらも実装は合格していたのに、`Gated` の FAIL は終端なので新しい取り込みで runner が一から作り直した（費用 = runner 2 周 + gate 4 周）。memo が待つとした先行（`s2-07l.335` / `.428` / `.502`）は 3 本とも close 済みで、穴だけが残っている。
+- 現物（本行の base・main f25084c・verified）:
+  - 段が生きているかを測る述語は 1 本（`crates/scribe2/src/pipe/cli/state.rs` の `live`・母集団 = 段 11 個の網羅の match）。`Gated` の答えだけが判定から導かれ、**判定が FAIL の周は `Some(false)`＝終端**である。`Landed` / `Failed` / `Stopped` は段だけで終端になる。
+  - 起こし直しの候補を選ぶ述語（`crates/scribe2/src/pipe/dispatch.rs` の `passed_gate`）は `Gated` ∧ 判定が PASS の周しか拾わない＝FAIL の `Gated` は候補にならない。
+  - `release` の印が列へ戻す段は `Gated` / `Stopped` / `Failed` の 3 つ（同 file の `requeues`・in-file の歯が母集団 11 段で pin）だが、戻すのは **bead の印**であって便ではない＝戻り先は新しい取り込みで、worktree は作り直しになる。
+  - 同じ worktree で段を戻す口は `crates/scribe2/src/pipe` の src 全数 grep で **0 件**（`pipe` の subcommand は 15 個で、字面は `crates/scribe2/src/pipe/cli.rs` の 1 か所の表が正本）。`regate` の字面は src に 12 件（`crates/scribe2/src/pipe/land.rs` の追随の後の再 gate と `crates/scribe2/src/pipe/gate/record.rs` の skipped=regate の記録）在るが、どれも追随の撃ち直しであって終端の便を戻す口ではない。
+  - 裁定を運べる形は既に在る: 便の event は `RunStage` が段と `detail` を運び、`QuestionAnswered` が逐語を運ぶ（どちらも既存の種別）。本節は**種別も段も 1 つも足さない**。
+- 形（番号は done と歯に 1:1 で対応する）:
+  1. **口を 1 つ足す**: `pipe regate --run <id> --reason <逐語>`。本体は行 ar の write-set の `+` の file で、`pipe` の subcommand の表（`crates/scribe2/src/pipe/cli.rs`）と flag の表（`crates/scribe2/src/pipe/cli/args.rs`）にそれぞれ 1 行足す。
+  2. **受け付けるのは 4 つ全部を満たす周だけ**: 段が `Gated` ∧ 判定が FAIL（`live` が `Some(false)` を返す面）∧ 運転手の札が無いか所有者が死んでいる ∧ `--reason` が非空。1 つでも外れたら rc 1 で**何も書かない**（測れない周〔`live` が `None`〕も断る・fail-closed）。器は「契約の赤かどうか」を自分では判定しない——それは裁定であって述語ではない（C5）。口は裁定の逐語を記帳するだけである。
+  3. **戻す先は `Implemented`・記帳は 1 件**: `RunStage` を 1 件（段 = `Implemented`・`detail` = `regate:` + 逐語・actor は human）。worktree・commit・判定の file には 1 byte も触らない。段が `Implemented` に戻ると `live` は `Some(true)` を返し、既存の列（`pipe run` / `resume` / 列の 1 周）が**同じ便 id の同じ worktree**で gate をもう 1 周撃つ（新しい取り込みを通らないので worktree を作り直す経路に入らない）。
+  4. **1 つの FAIL につき 1 回だけ**: 便の event を畳み、**最新の `Gated` の `RunStage` より後ろ**に `detail` が `regate:` で始まる `RunStage` が在る周は断る。もう 1 周の gate が `Gated` を書けば次の 1 回が開く＝回数の閾値を値で持たない（恣意の無い上限）。
+  5. **行の字面**: rc 0 の周は `regate: run=<id> from=Gated to=Implemented` の 1 行。断る周は理由 1 行で rc 1。
+- 触らない: `passed_gate`（PASS の候補）と `requeues` の 3 段と `release` の印・`live` の他の 10 段の答え・判定の file の読み書きと `Verdict` の 3 値・gate の中身と追随の形・新しい取り込みの経路・`pipe stop` の終端の極性・運転手の札の 4 値。段の種別（11 個）と event の種別（19 個）はどちらも 1 つも増えない。
+- 却下:
+  - **memo の (b)（新しい取り込みの runner に前 run の commit の cherry-pick を許す）**: 器を変えない代わりに、成果の保全（C9）を runner の判断に預ける。同じ事故が次の周も起こり、何が引き継がれたかが記録に残らない。
+  - **memo の (c)（追随の再 gate を検出線と上限だけの軽い周にする）**: 追随で挙動が変わる可能性を測らないことになる。落ちているのは「終端だから捨てる」であって gate の重さではない。
+  - **段か event の種別を 1 つ足して裁定を typed にする**（memo の (a) の素直な形）: 閉じた型が 2 つ動き、記帳の形が跨版の面になる（ADR 条件 3）。`RunStage` の `detail` で同じ逐語が運べるので、型を増やさない側を採る（C17.1）。**ゆえに本節は ADR を要さない**——遷移表に載る段の組が 1 つ増えるだけで、on-disk の形も外部依存も動かない。
+  - **器が FAIL の理由を分類して自動で戻す**: 「器の欠陥か・上限か・環境か・契約の赤か」は裁定であって述語ではない。自動で戻すと、契約の赤を無限に撃ち直す形が作れてしまう。
+  - **戻せる回数を rules 行の値にする**: 値の線と裁定が 1 つ増える（C5 / A2）。形 4 の「最新の `Gated` より後ろに 1 件」は値を持たずに同じ上限を作る。
+  - **終端の判定そのものを緩める**（FAIL の `Gated` を live に倒す）: 着地の列・排他の母集団・`pipe stop` の断りが全部動く。戻すのは口の側の 1 件の記帳で足りる。
+- 歯（接頭辞 `pipe_regate_`・`crates/` 全体の fn 名の substring として base に 0 件。in-file は行 ar の write-set の `+` の file の `mod tests`・e2e は `crates/scribe2/tests/e2e/pipe/gate.rs`）:
+  (a) 形 2 の核: 受付の pure な述語に、4 つの条件を 1 つずつ外した 4 形と全部満たす 1 形を渡す（母集団 = 5 形を assert に出す）。通るのは 1 形だけで、`live` が `None` の周は断る側である。
+  (b) 形 3: 通った周に書かれる event が **1 件**で、種別が `RunStage`・段が `Implemented`・`detail` が `regate:` の後ろに逐語をそのまま持つ（逐語は入力と別の字面の fixture で測り、`detail` の出所を弁別する）。
+  (c) 形 4: 同じ便に 2 度撃つと 2 度目が断られ、間に `Gated` の `RunStage` を 1 件挟めば 3 度目が通る（3 形を対で）。
+  (d) 形 1 / 形 5（e2e）: 判定が FAIL の `Gated` の便に口を撃つと rc 0 で行が出て、その後の段が `Implemented` になり、便の worktree の path が 1 字も変わらない。base は subcommand の表に字面が無く使い方の誤りで断られる＝機能不在の RED。
+
+## 50. 固定日付を持つ fixture の母集団を歯で pin する（契約表の行 as・`s2-07l.469`・歯だけ・retroactive 札）
+
+- 出所: memo `s2-07l.469`（.468 の notes・planner 2026-09-18T01:4xZ）。.468 の直しは commit `f4eac60`（`crates/scribe2/tests/e2e/fleet.rs` の 1 file・+69 / −36）。
+- **何が起きているか（母集団の実測・main f25084c・verified）**:
+  1. **全体**: `crates/` の tracked な `.rs` は **176 本**。引用符に囲まれた日付の形（`YYYY-MM-DD`）の字面を持つ file は **27 本・のべ 281 件**。大半は裁定 id（`ruled_at` / `ruling` の字面）と event の `ts` と散文で、壁時計と比べる経路には渡らない（`crates/scribe2/tests/e2e/rules.rs` が 73 件・`crates/scribe2/tests/e2e/fleet.rs` が 56 件・`crates/scribe2/src/fleet/usage.rs` が 35 件）。
+  2. **絞り込み（reset / 期限の欄に座る字面だけ）**: 281 件のうち、同じ行に reset か期限の key（`resets_at` / `reset_at` / `RESETS_AT` / 末尾が `_RESET` の定数名 / `expiresAt`）を持つ行は **31 行・6 file**。内訳は `crates/scribe2/src/fleet/select_tests.rs` 6 行・`crates/scribe2/src/fleet/usage.rs` 11 行・`crates/scribe2/src/fleet/wait.rs` 2 行・`crates/scribe2/tests/e2e/fleet.rs` 9 行・`crates/scribe2/tests/e2e/pipe/ratelimit.rs` 2 行・`crates/scribe2/tests/e2e/seat.rs` 1 行。
+  3. **(a) 壁時計と比べない側（19 行・3 file）**: `crates/scribe2/src/fleet/select_tests.rs` と `crates/scribe2/src/fleet/usage.rs` と `crates/scribe2/src/fleet/wait.rs` の in-file の歯。選定の純関数は「いま」を引数で受ける（`crates/scribe2/src/fleet/select.rs` の 188 行が `now` の欄・338 行がその欄と reset を比べる唯一の式）ので、fixture と「いま」が両方とも固定値＝時限にならない。`crates/scribe2/src/fleet/usage.rs` の 11 行は本文の読みと 1 行の組み立ての歯で、比較そのものを持たない。`crates/scribe2/src/fleet/wait.rs` の 2 行は待ちの種別の網羅 match の材料で、reset を読まない。
+  4. **(b) 壁時計と比べる側（12 行・3 file）**: `crates/scribe2/tests/e2e` の下の 3 file。ここは器の binary を起こすので「いま」は器が読む（`crates/scribe2/src/fleet/cli.rs` の 482 行の `now_utc` が唯一の口・呼び手は同 file の 180 行と `crates/scribe2/src/pipe/ratelimit.rs` の 296 行 / 326 行と `crates/scribe2/src/fleet/wait.rs` の 335 行）。12 行の形は 2 つに割れる——**年が 2099 以上の番兵が 7 行**（`crates/scribe2/tests/e2e/fleet.rs` の 3561 / 3564 / 3913 / 3959・`crates/scribe2/tests/e2e/pipe/ratelimit.rs` の 182 / 185・`crates/scribe2/tests/e2e/seat.rs` の 555）と、**年が 2099 未満の字面が 5 行**（`crates/scribe2/tests/e2e/fleet.rs` の 876 / 877 / 881 / 882 / 1039）。
+  5. **(b) の 5 行が今日 赤くないことの根拠**: 5 行の字面はどれも過去（2026-09-12）である。過去の reset が壁時計と比べられれば選定はその口座を古いと読んで候補から落とし、.468 と同じ赤になる。main は f25084c で緑ゆえ、この 5 行は比較に届いていない——`crates/scribe2/tests/e2e/fleet.rs` の 876〜882 は木の読みの歯の本文・1039 は event の直列化と replay の歯が使う定数で、どちらも器の選定を通らない。
+  6. **.468 の形は 1 か所だけ着地している**: `crates/scribe2/tests/e2e/fleet.rs` の 1850 行の遅延 static が、壁時計の今日から 5 時間窓 = 翌日 05:00Z・7 日窓 = 7 日後 00:00Z を器の `format_utc` で組む。同じ「壁時計から組む」形は `crates/scribe2/tests/e2e/pipe/ratelimit.rs` の偽 curl（応答の直前に日付の道具で作る）と `crates/scribe2/tests/e2e/seat.rs` の 641 行の helper にも在る。つまり (b) の 12 行は **番兵・壁時計から組む・過去の字面** の 3 形が同居していて、どれを使うかを**機械が測っていない**。
+  7. **数の欄の族は上の母集団に入らない**: 期限は数（1970 年からのミリ秒）で書かれる面も持つ（`crates/scribe2/src/fleet/usage/read.rs` の 69 行が壁時計と比べる）。fixture 側は遠い未来の 1 定数と「必ず期限切れ」の小さい値の 2 形で、日付の字面ではないので走査に当たらない。本行は日付の字面だけを的にする。
+- **形**（歯だけ・器の src も fixture も 1 字も動かさない）:
+  1. `crates/scribe2/tests/e2e/main.rs` の既存の歯（`e2e_fixture_` の接頭辞・13 本）の隣に**母集団を数える歯 1 本**を足す。`git ls-files` で e2e の下の tracked な `.rs`（base 29 本）を引き、各 file を読み、reset / 期限の key を持つ行のうち日付の形の字面を持つ行を数え、年が 2099 以上の本数と 2099 未満の本数に割る。
+  2. assert は **3 つ組の等値 1 本**（file 数・番兵の本数・2099 未満の本数）で、message に母集団の全数と当たった行の file 名を出す（0 件を「変化なし」と読まない・[contract-source.md](./contract-source.md) §31 の柵と同じ）。base の値は (29, 7, 5)。
+  3. key の字面は歯の file 自身に当たらない形で組む（`concat!` で 2 片に割って連結する・`crates/scribe2/tests/e2e/pipe.rs` の 1302 行の既存の歯と同じ手）。割らないと歯の file が母集団に自分を数えて、数が 1 本ずれる。
+  4. 札 `// flip-check: retroactive s2-07l.469` を歯の fn の中の行頭に 1 行置く（base でも緑になる歯ゆえ・効く条件は test 区間内 / 行頭 / bead id / base に無い、の 4 つ）。
+- **触らない**: 器の src 全部（選定の式・「いま」の口・期限の読み）・(b) の 12 行の fixture の字面・(a) の 19 行・数の欄で書かれた期限の fixture・`crates/scribe2/tests/e2e` の他の歯。
+- **却下**:
+  - (b) の 7 行の番兵を全部「壁時計から組む」形へ書き換える — 番兵は時限ではない（2099 年まで古くならない）ので直す理由が無く、期待の側の字面（`crates/scribe2/tests/e2e/fleet.rs` の 3743 / 3747 / 3784 / 3936 が stderr の 1 行に同じ年を持つ）まで連れて動くので、歯だけの便が fixture の書き換えに化ける。
+  - (b) の 5 行を番兵へ揃える — 5 行は比較に届かない場所に在り（上の 5.）、揃えても測れる面が増えない。揃えた瞬間に「過去の reset を fixture に置けない」という測っていない規律が字面で増える（C1 / N2）。
+  - 日付の字面を repo 全体で 0 件にする規則 — 母集団 281 件の大半は裁定 id と event の `ts` で、消せば裁定の出所が消える。
+  - `xtask check` の門に足す — 門は src の形を測る面で、歯の fixture の形は歯で測る（新しい門を 1 つ増やさない・C17.4）。
+- **歯（接頭辞 `e2e_fixture_clock_`・行の契約が持つ）**: 上の (2) の 3 つ組。`crates/` 全体で `e2e_fixture_` を名に持つ fn は `crates/scribe2/tests/e2e/main.rs` の 1 file にしかない（実測）ので、verify の filter は他の file へ広がらない。**空虚さの柵**: 番兵の本数と 2099 未満の本数を別々の欄で持ち（1 本で 2 本を兼ねない）、message に母集団の全数と当たった行を出す。**変異の A/B**（done の条件・proof は便の notes）: e2e の file に reset の欄を持つ 2026 年の行を 1 行足すと 2099 未満の欄が 5 → 6 で赤・2099 年の行を 1 行足すと番兵の欄が 7 → 8 で赤・e2e に `.rs` を 1 本足すと file 数の欄が 29 → 30 で赤。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -1126,4 +1179,23 @@ verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_hermetic
 size = "S"
 done = "(1) 歯 pipe_hermetic_sites_stay_one が tracked の file 数と親の列 0 の mod 宣言の数 + 1 の等式で置き場を pin し、site の合計 1 と base の 41 site の母集団の出し方は不変 (2) base（9 file・宣言 8）で緑・宣言を 1 本消した A/B と pipe/ 配下に file を 1 本足した A/B が赤（変異 proof は notes） (3) 札 flip-check: retroactive s2-07l.547 が歯の fn の中の行頭に在って base に無い"
 
+[[contract]]
+id = "ar"
+title = "契約の赤でない Gated FAIL を同じ worktree で再 gate する口を足す — 段が Gated かつ判定が FAIL かつ運転手が居ない便に、裁定の逐語を持つ RunStage を 1 件書いて Implemented へ戻し、最新の Gated より後ろの 2 度目は断る（段の種別も event の種別も増やさない）"
+req = ["FR8", "FR34"]
+section = "49"
+touches = ["crate::pipe::cli::PipeCommand"]
+write-set = ["crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/args.rs", "crates/scribe2/src/pipe/mod.rs", "+crates/scribe2/src/pipe/regate.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "docs/design/pipeline.md"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail pipe_regate_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_regate_"]
+size = "M"
+done = "(1) pipe の subcommand の表と flag の表に regate の 1 行が在り、--run と --reason を受ける (2) 段が Gated かつ判定が FAIL かつ運転手の札が無いか死んでいて --reason が非空の 5 形のうち 1 形だけが通り、live が None の周を含む残り 4 形は rc 1 で何も書かない (3) 通った周が書く event はちょうど 1 件で、種別が RunStage・段が Implemented・detail が regate: の後ろに入力の逐語をそのまま持ち、worktree と判定の file は 1 byte も変わらない (4) 同じ便への 2 度目が断られ、間に Gated の RunStage を 1 件挟むと次の 1 回が通る (5) 判定 FAIL の Gated の便に口を撃つと rc 0 で regate: run= from=Gated to=Implemented の 1 行が出て、その後の段が Implemented になり worktree の path が変わらず、段の種別 11 個と event の種別 19 個はどちらも増えない"
+[[contract]]
+id = "as"
+title = "固定日付を持つ fixture の母集団を歯 1 本で pin する — e2e の tracked な .rs の本数と、reset / 期限の欄に座る日付の字面の本数を年で 2 つに割って 3 つ組で留める（fixture と器の src は 1 字も動かさない・歯だけ・retroactive 札）"
+req = ["FR33", "FR36"]
+section = "50"
+write-set = ["crates/scribe2/tests/e2e/main.rs", "docs/design/pipeline.md"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail e2e_fixture_clock_"]
+size = "S"
+done = "(1) 足した歯が e2e の tracked な .rs を git ls-files で引き、reset / 期限の key を持つ行のうち日付の形の字面を持つ行を年で割って (file 数, 年 2099 以上, 年 2099 未満) = (29, 7, 5) を 1 つの等値で測り、失敗の message に母集団の全数と当たった行の file 名が出る (2) 歯の file 自身が母集団に数えられない（key の字面を concat! で割って組む＝歯を足す前後で file 数以外の 2 欄が動かない） (3) 変異の A/B が 3 本とも赤（e2e に 2026 年の reset 行 1 行・2099 年の reset 行 1 行・.rs 1 本をそれぞれ足す・proof は便の notes） (4) 札 flip-check: retroactive s2-07l.469 が歯の fn の中の行頭に在って base に無い (5) crates/scribe2/src の file と e2e の既存の歯が 1 字も変わらず緑"
 <!-- contracts:end -->
