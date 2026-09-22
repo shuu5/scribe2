@@ -35,7 +35,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 /// 使い方の 1 行。
-const USAGE: &str = "usage: cargo xtask <check|gen-manifest|gen-claude-md> [ROOT] | cargo xtask <flip-check|mutants-diff|rules-diff|deps-delta> --base <ref> | cargo xtask ledger-plan --epic <epic id> [ROOT] | cargo xtask main-provenance [--rev <rev>]";
+const USAGE: &str = "usage: cargo xtask <check|gen-manifest|gen-claude-md> [ROOT] | cargo xtask <flip-check|mutants-diff|rules-diff|deps-delta> --base <ref> | cargo xtask ledger-plan --epic <epic id> [--skip <contract id>...] [ROOT] | cargo xtask main-provenance [--rev <rev>]";
 
 /// stdout 出力層。stdout へ書くのはこの関数だけである。
 #[expect(

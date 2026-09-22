@@ -4,13 +4,15 @@
 //! 未着地 = 行が新設を宣言した file（write-set の `+`・`creates`・約束の行の `files` の `+`・
 //! `symbols` の `+` の path 形）のどれかが tracked に無い行。新設の宣言を 1 つも持たない行は
 //! 着地を字面で判じられないので plan に載せない（台帳を読まずに「未着地」と言わない）。
-//! plan の 1 件は title・acceptance の pointer 行・引数の epic id の parent・`doc:` / `size:` の label を
-//! 行から写し、`depends` を `blocks` の edge に、§ の本文が名指す bead の id（epic id と同じ prefix の
-//! 字面）を `discovered-from` の edge に写す。
+//! plan の 1 件は title・引数の epic id の parent・`doc:` / `size:` の label を行から写し、`depends` を
+//! `blocks` の edge に、§ の本文が名指す bead の id（epic id と同じ prefix の字面）を `discovered-from` の
+//! edge に写す。node と edge の key は bd 1.1.0 の graph schema の field（[`NODE_KEYS`] / [`EDGE_KEYS`]・§9）。
+//! schema に無い acceptance の pointer 行は、plan の次の行から「plan の key TAB pointer 行」の対応表で出す。
+//! `--skip` が名指した契約 id の行は plan から外す（plan に無い id は断る）。
 //!
 //! **台帳は 1 度も読まず書かない**（bd を起こさない・`.beads/` を開かない）。起こす子 process は
 //! tracked の列挙の `git ls-files` 1 本だけ。apply は席の手番（bdw で撃つ）で、台帳側の drift は
-//! doctor の lint（行 a の (vii)）が測る。出力は標準出力の JSON 1 つ（1 行）。
+//! doctor の lint（行 a の (vii)）が測る。出力は標準出力の 1 回の書き（1 行目が plan の JSON・2 行目以降が対応表）。
 
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
@@ -18,7 +20,11 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 /// 使い方の 1 行（epic id は必須・既定に倒さない）。
-const USAGE: &str = "usage: cargo xtask ledger-plan --epic <epic id> [ROOT]";
+const USAGE: &str = "usage: cargo xtask ledger-plan --epic <epic id> [--skip <contract id>[,<contract id>...]]... [ROOT]";
+/// plan の node が持つ key（bd 1.1.0 の graph schema の node の field の部分集合・閉じた集合）。
+const NODE_KEYS: [&str; 5] = ["key", "title", "type", "labels", "parent_id"];
+/// plan の edge が持つ key（`to_key` = plan の中の行・`to_id` = 台帳の既存 bead のどちらか 1 つ）。
+const EDGE_KEYS: [&str; 4] = ["from_key", "to_key", "to_id", "type"];
 /// 設計 doc の置き場（直下の `.md` だけを読む）。
 const DESIGN_DIR: &str = "docs/design/";
 /// 契約表の区間の始まり（core の `pipe/table.rs` と同じ字面）。
@@ -52,8 +58,8 @@ pub(crate) struct Node {
     pub(crate) key: String,
     /// bead の title。
     pub(crate) title: String,
-    /// acceptance の pointer 行（`design = <path>#<id>`）。
-    pub(crate) acceptance: String,
+    /// acceptance の pointer 行（`design = <path>#<id>`・graph schema に無いので JSON に載せず対応表に出す）。
+    pub(crate) pointer: String,
     /// label の列（`doc:<doc id>`・`size:<size>`）。
     pub(crate) labels: Vec<String>,
 }
@@ -80,9 +86,20 @@ pub(crate) struct Plan {
     pub(crate) edges: Vec<Edge>,
 }
 
-/// 引数を読む: `--epic <id>`（必須）と任意の `ROOT` 1 つ。
-pub(crate) fn parse_args(args: &[String]) -> Result<(String, Option<String>), String> {
-    let (mut epic, mut root) = (None, None);
+/// 口の引数。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Args {
+    /// 全件の parent（必須）。
+    pub(crate) epic: String,
+    /// plan から外す契約 id（`<doc id>#<行 id>`・既定は空）。
+    pub(crate) skip: Vec<String>,
+    /// repo の root（省略時は cwd）。
+    pub(crate) root: Option<String>,
+}
+
+/// 引数を読む: `--epic <id>`（必須）・`--skip <契約 id の , 区切り>`（0 回以上）・任意の `ROOT` 1 つ。
+pub(crate) fn parse_args(args: &[String]) -> Result<Args, String> {
+    let (mut epic, mut root, mut skip) = (None, None, Vec::new());
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
         match arg.as_str() {
@@ -90,22 +107,39 @@ pub(crate) fn parse_args(args: &[String]) -> Result<(String, Option<String>), St
                 Some(value) if !value.starts_with("--") && !value.trim().is_empty() => epic = Some(value.clone()),
                 _ => return Err(format!("--epic に値が無い\n{USAGE}")),
             },
+            "--skip" => match rest.next() {
+                Some(value) if !value.starts_with("--") && value.split(',').all(|id| !id.trim().is_empty()) => {
+                    skip.extend(value.split(',').map(|id| id.trim().to_owned()));
+                }
+                _ => return Err(format!("--skip に値が無い\n{USAGE}")),
+            },
             other if other.starts_with("--") || root.is_some() => return Err(format!("知らない引数 {other}\n{USAGE}")),
             other => root = Some(other.to_owned()),
         }
     }
     let epic = epic.ok_or_else(|| format!("epic id の引数が無い（plan を出さない）\n{USAGE}"))?;
     id_prefix(&epic).ok_or_else(|| format!("epic id {epic} が bead id の形（<prefix>-<hash>）でない\n{USAGE}"))?;
-    Ok((epic, root))
+    Ok(Args { epic, skip, root })
 }
 
-/// `ledger-plan` subcommand。plan の JSON を標準出力へ 1 つ出す。
+/// `ledger-plan` subcommand。plan の JSON と対応表を標準出力へ 1 回で出す。
 pub(crate) fn run(args: &[String]) -> Result<ExitCode, String> {
-    let (epic, root_arg) = parse_args(args)?;
-    let root = crate::resolve_root(root_arg.as_deref())?;
-    let plan = plan_at(&root, &epic, None)?;
+    let args = parse_args(args)?;
+    let root = crate::resolve_root(args.root.as_deref())?;
+    let plan = skip(plan_at(&root, &args.epic, None)?, &args.skip)?;
     crate::emit(&render(&plan));
     Ok(ExitCode::SUCCESS)
+}
+
+/// `ids` の契約 id の行と、その行に触れる edge を plan から外す。plan に無い id が 1 つでも在れば
+/// 何も外さず Err（rc 1・知らない id を黙って読み捨てない）。
+pub(crate) fn skip(mut plan: Plan, ids: &[String]) -> Result<Plan, String> {
+    if let Some(id) = ids.iter().find(|id| !plan.nodes.iter().any(|node| &node.key == *id)) {
+        return Err(format!("--skip の {id} が plan に無い（未着地の行の契約 id でない）\n{USAGE}"));
+    }
+    plan.nodes.retain(|node| !ids.contains(&node.key));
+    plan.edges.retain(|edge| !ids.contains(&edge.from) && !ids.contains(&edge.to));
+    Ok(plan)
 }
 
 /// repo `root` の tracked な設計 doc を読んで plan を組む。`path_var` は子 process（git）の `PATH`
@@ -165,7 +199,7 @@ pub(crate) fn build(docs: &[(String, String)], tracked: &BTreeSet<String>, epic:
             plan.nodes.push(Node {
                 key: key.clone(),
                 title: row.title.clone(),
-                acceptance: format!("design = {path}#{}", row.id),
+                pointer: format!("design = {path}#{}", row.id),
                 labels,
             });
             pending.push((key, doc.clone(), row.depends.clone(), bead_ids(&body, prefix)));
@@ -387,41 +421,50 @@ fn json_str(text: &str) -> String {
     out
 }
 
-/// plan を `bd create --graph` の JSON 1 つ（1 行）に描く。
+/// JSON の object（key は字面の順・値は描き済みの JSON）。
+fn json_object(pairs: &[(&str, String)]) -> String {
+    let fields: Vec<String> = pairs.iter().map(|(key, value)| format!("{}:{value}", json_str(key))).collect();
+    format!("{{{}}}", fields.join(","))
+}
+
+/// plan を描く: 1 行目が `bd create --graph` の JSON 1 つ、2 行目以降が node ごとの対応表
+/// （`<plan の key>\t<acceptance の pointer 行>`・node の順）。
 pub(crate) fn render(plan: &Plan) -> String {
+    let [key, title, kind, labels, parent_id] = NODE_KEYS;
     let nodes: Vec<String> = plan
         .nodes
         .iter()
         .map(|node| {
-            let labels: Vec<String> = node.labels.iter().map(|label| json_str(label)).collect();
-            format!(
-                "{{\"key\":{},\"title\":{},\"type\":\"task\",\"acceptance\":{},\"parent\":{},\"labels\":[{}]}}",
-                json_str(&node.key),
-                json_str(&node.title),
-                json_str(&node.acceptance),
-                json_str(&plan.epic),
-                labels.join(",")
-            )
+            let label_list: Vec<String> = node.labels.iter().map(|label| json_str(label)).collect();
+            json_object(&[
+                (key, json_str(&node.key)),
+                (title, json_str(&node.title)),
+                (kind, json_str("task")),
+                (labels, format!("[{}]", label_list.join(","))),
+                (parent_id, json_str(&plan.epic)),
+            ])
         })
         .collect();
+    let [from_key, to_key, to_id, edge_kind] = EDGE_KEYS;
     let edges: Vec<String> = plan
         .edges
         .iter()
         .map(|edge| {
-            format!(
-                "{{\"from\":{},\"to\":{},\"type\":{}}}",
-                json_str(&edge.from),
-                json_str(&edge.to),
-                json_str(edge.kind)
-            )
+            // 依られる側が plan の中の行なら key で、それ以外（台帳の既存 bead の id の字面）は id で指す。
+            let to = if plan.nodes.iter().any(|node| node.key == edge.to) { to_key } else { to_id };
+            json_object(&[(from_key, json_str(&edge.from)), (to, json_str(&edge.to)), (edge_kind, json_str(edge.kind))])
         })
         .collect();
-    format!("{{\"nodes\":[{}],\"edges\":[{}]}}", nodes.join(","), edges.join(","))
+    let mut out = format!("{{\"nodes\":[{}],\"edges\":[{}]}}", nodes.join(","), edges.join(","));
+    for node in &plan.nodes {
+        out.push_str(&format!("\n{}\t{}", node.key, node.pointer));
+    }
+    out
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{build, parse_args, plan_at, render, Edge};
+    use super::{build, parse_args, plan_at, render, skip, Args, Edge, USAGE};
     use std::collections::BTreeSet;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -504,19 +547,19 @@ mod tests {
         assert!(plan.edges.iter().all(|edge| edge.from != "probe#c"), "名指しの無い行 c は edge 0");
     }
 
-    /// (c) title・acceptance の pointer 行・parent・label が行から写り、出力は JSON 1 つ（1 行）。
+    /// (c) title・parent・label が行から写り、1 行目は JSON 1 つ・pointer 行は 2 行目の対応表。
     #[test]
     fn ledger_plan_copies_title_pointer_parent_and_labels_into_one_json() {
         let rows = vec![row("b", "2", "\"+src/b.rs\"", "")];
         let docs = vec![("docs/design/probe-doc.md".to_owned(), doc(&rows))];
         let plan = build(&docs, &tracked(&[]), EPIC).expect("plan");
-        let json = render(&plan);
+        let out = render(&plan);
+        let json = out.lines().next().unwrap_or_default();
         assert_eq!(
-            json,
-            "{\"nodes\":[{\"key\":\"probe-doc#b\",\"title\":\"probe-title-b, with comma\",\"type\":\"task\",\"acceptance\":\"design = docs/design/probe-doc.md#b\",\"parent\":\"zq9-e7k\",\"labels\":[\"doc:probe-doc\",\"size:M\"]}],\"edges\":[]}"
+            out,
+            "{\"nodes\":[{\"key\":\"probe-doc#b\",\"title\":\"probe-title-b, with comma\",\"type\":\"task\",\"labels\":[\"doc:probe-doc\",\"size:M\"],\"parent_id\":\"zq9-e7k\"}],\"edges\":[]}\nprobe-doc#b\tdesign = docs/design/probe-doc.md#b"
         );
-        assert_eq!(json.lines().count(), 1, "1 行");
-        assert!(one_json_value(&json), "JSON の値 1 つ: {json}");
+        assert!(one_json_value(json), "JSON の値 1 つ: {json}");
         let quoted = build(&[("docs/design/q.md".to_owned(), doc(&[row("b", "2", "\"+x.rs\"", "").replace("with comma", "with \\\\ back")]))], &tracked(&[]), EPIC).expect("plan");
         assert!(render(&quoted).contains("with \\\\\\\\ back"), "文字列は escape される: {}", render(&quoted));
     }
@@ -530,7 +573,10 @@ mod tests {
         assert!(parse_args(&args("--epic")).is_err(), "値なし");
         assert!(parse_args(&args("--epic --x")).is_err(), "次の flag を値に読まない");
         assert!(parse_args(&args("--epic nohyphen")).is_err(), "bead id の形でない");
-        assert_eq!(parse_args(&args("--epic zq9-e7k /r")), Ok(("zq9-e7k".to_owned(), Some("/r".to_owned()))));
+        assert_eq!(
+            parse_args(&args("--epic zq9-e7k /r")),
+            Ok(Args { epic: "zq9-e7k".to_owned(), skip: Vec::new(), root: Some("/r".to_owned()) })
+        );
         assert_eq!(super::run(&args("")).map(|_| ()).map_err(|reason| reason.contains("epic")), Err(true), "Err = rc 1");
         assert!(build(&[], &tracked(&[]), "nohyphen").is_err(), "build も epic の形を要る");
     }
@@ -558,6 +604,150 @@ mod tests {
         // 偽の bd 自体は PATH から起こせる（marker が書ける）ことを確かめ、上の不在が空虚でないことを示す。
         let called = Command::new("bd").env("PATH", &path).status().map(|status| status.success()).unwrap_or(false);
         assert!(called && marker.exists(), "偽の bd は PATH の先頭で解ける");
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// §9 の歯の fixture: 行 b（c に依り § 1 の id を名指す）・c・d（§ 2・edge 無し）が未着地。
+    fn schema_plan() -> super::Plan {
+        let rows = vec![
+            row("b", "1", "\"+src/b.rs\"", "depends = [\"c\"]"),
+            row("c", "2", "\"+src/c.rs\"", ""),
+            row("d", "2", "\"+src/d.rs\"", ""),
+        ];
+        build(&[("docs/design/probe.md".to_owned(), doc(&rows))], &tracked(&[]), EPIC).expect("plan")
+    }
+
+    /// JSON の各 object の key の集合（閉じた順・文字列の値は key に数えない）。
+    fn object_keys(json: &str) -> Vec<BTreeSet<String>> {
+        let (mut stack, mut found): (Vec<BTreeSet<String>>, Vec<BTreeSet<String>>) = (Vec::new(), Vec::new());
+        let (mut in_str, mut escaped, mut current, mut last_str) = (false, false, String::new(), None::<String>);
+        for c in json.chars() {
+            if in_str {
+                match (escaped, c) {
+                    (true, _) => {
+                        escaped = false;
+                        current.push(c);
+                    }
+                    (false, '\\') => escaped = true,
+                    (false, '"') => {
+                        in_str = false;
+                        last_str = Some(std::mem::take(&mut current));
+                    }
+                    _ => current.push(c),
+                }
+                continue;
+            }
+            match c {
+                '"' => in_str = true,
+                ':' => {
+                    if let (Some(key), Some(top)) = (last_str.take(), stack.last_mut()) {
+                        top.insert(key);
+                    }
+                }
+                '{' => stack.push(BTreeSet::new()),
+                '}' => found.extend(stack.pop()),
+                _ if c.is_whitespace() => {}
+                _ => last_str = None,
+            }
+        }
+        found
+    }
+
+    /// §9 形 1: node の key は key / title / type / description / labels / parent_id に、edge の key は
+    /// from_key と to_key か to_id と type に閉じ、acceptance / parent / from / to は key としてどこにも無い。
+    #[test]
+    fn ledger_plan_renders_the_bd_graph_schema_field_names() {
+        let plan = schema_plan();
+        let out = render(&plan);
+        let json = out.lines().next().unwrap_or_default();
+        let objects = object_keys(json);
+        let set = |keys: &[&str]| -> BTreeSet<String> { keys.iter().map(|key| (*key).to_owned()).collect() };
+        let node_allowed = set(&["key", "title", "type", "description", "labels", "parent_id"]);
+        let (nodes, rest): (Vec<_>, Vec<_>) = objects.iter().partition(|keys| keys.contains("title"));
+        let (top, edges): (Vec<_>, Vec<_>) = rest.into_iter().partition(|keys| keys.contains("nodes"));
+        assert_eq!(top, [&set(&["nodes", "edges"])], "外側は nodes と edges だけ: {json}");
+        assert_eq!(nodes.len(), plan.nodes.len(), "node の object の数: {json}");
+        assert_eq!(edges.len(), plan.edges.len(), "edge の object の数: {json}");
+        for keys in &nodes {
+            assert!(keys.is_subset(&node_allowed) && keys.contains("parent_id") && keys.contains("key"), "node の key: {keys:?}");
+        }
+        let to_key = set(&["from_key", "to_key", "type"]);
+        let to_id = set(&["from_key", "to_id", "type"]);
+        assert!(edges.iter().all(|keys| **keys == to_key || **keys == to_id), "edge の key: {edges:?}");
+        assert!(edges.contains(&&to_key) && edges.contains(&&to_id), "plan の中の行は to_key・台帳の id は to_id: {json}");
+        for banned in ["acceptance", "parent", "from", "to"] {
+            assert!(objects.iter().all(|keys| !keys.contains(banned)), "{banned} が key に在る: {json}");
+        }
+        // 向きと相手の弁別: b → c（plan の中）は to_key、b → 名指しの id は to_id。
+        assert!(json.contains("{\"from_key\":\"probe#b\",\"to_key\":\"probe#c\",\"type\":\"blocks\"}"), "{json}");
+        assert!(json.contains("{\"from_key\":\"probe#b\",\"to_id\":\"zq9-e7k.41\",\"type\":\"discovered-from\"}"), "{json}");
+    }
+
+    /// §9 形 2: 2 行目以降が node と同じ本数の「plan の key TAB pointer 行」で、pointer 行は JSON に無く、
+    /// stdout へ書く呼び出しは本体に 1 回だけ。
+    #[test]
+    fn ledger_plan_emits_the_pointer_line_table_after_the_plan() {
+        let plan = schema_plan();
+        let out = render(&plan);
+        let lines: Vec<&str> = out.lines().collect();
+        let table: Vec<Vec<&str>> = lines.iter().skip(1).map(|line| line.split('\t').collect()).collect();
+        assert_eq!(
+            table,
+            [
+                ["probe#b", "design = docs/design/probe.md#b"],
+                ["probe#c", "design = docs/design/probe.md#c"],
+                ["probe#d", "design = docs/design/probe.md#d"],
+            ],
+            "node と同じ本数・同じ順: {out}"
+        );
+        assert_eq!(table.len(), plan.nodes.len());
+        assert!(!lines.first().is_some_and(|json| json.contains("design = ")), "pointer 行は JSON に載らない: {out}");
+        assert!(render(&skip(plan, &["probe#b".to_owned(), "probe#c".to_owned(), "probe#d".to_owned()]).expect("skip")).lines().count() == 1, "node 0 件は JSON の 1 行だけ");
+        // stdout の口は emit の 1 関数・呼び出しは run の 1 回（本体の区間で数える）。
+        let source = include_str!("ledger_plan.rs");
+        let body = source.split(["#[cfg(", "test)]"].concat().as_str()).next().unwrap_or_default();
+        assert_eq!(body.matches(["crate::", "emit("].concat().as_str()).count(), 1, "stdout へ書く呼び出しは 1 回");
+        assert!(!body.contains(["print", "ln!"].concat().as_str()) && !body.contains(["print", "!("].concat().as_str()), "emit の外で書かない");
+    }
+
+    /// §9 形 3: --skip が名指した行だけが消え、残りの行と edge は不変・plan に無い id は rc 1・usage が --skip を写す。
+    #[test]
+    fn ledger_plan_skips_the_rows_named_by_the_skip_argument() {
+        let plan = schema_plan();
+        let skipped = skip(plan.clone(), &["probe#d".to_owned()]).expect("skip");
+        assert_eq!(skipped.nodes, plan.nodes.iter().filter(|node| node.key != "probe#d").cloned().collect::<Vec<_>>(), "d だけが消える");
+        assert_eq!(skipped.edges, plan.edges, "d に触れない edge は不変");
+        // 依られる行を外すと、その行に触れる edge だけが消える（plan の外の key を指す edge を残さない）。
+        let no_c = skip(plan.clone(), &["probe#c".to_owned()]).expect("skip");
+        assert_eq!(no_c.edges, plan.edges.iter().filter(|edge| edge.to != "probe#c").cloned().collect::<Vec<_>>());
+        assert_eq!(no_c.nodes.len(), 2);
+        assert!(skip(plan.clone(), &[]).is_ok_and(|same| same == plan), "既定は空＝不変");
+        assert!(skip(plan.clone(), &["probe#d".to_owned(), "probe#zz".to_owned()]).is_err(), "plan に無い id は断る");
+        assert!(skip(plan.clone(), &["zq9-e7k.41".to_owned()]).is_err(), "edge の相手の bead id は契約 id でない");
+        let args = |line: &str| -> Vec<String> { line.split_whitespace().map(str::to_owned).collect() };
+        assert_eq!(
+            parse_args(&args("--epic zq9-e7k --skip a#b,c#d --skip e#f /r")).map(|parsed| parsed.skip),
+            Ok(vec!["a#b".to_owned(), "c#d".to_owned(), "e#f".to_owned()])
+        );
+        assert!(parse_args(&args("--epic zq9-e7k --skip")).is_err(), "値なし");
+        assert!(parse_args(&args("--epic zq9-e7k --skip --x")).is_err(), "次の flag を値に読まない");
+        assert!(parse_args(&args("--epic zq9-e7k --skip a#b,")).is_err(), "空の id");
+        assert!(USAGE.lines().count() == 1 && USAGE.contains("--skip"), "usage の 1 行が --skip を写す");
+        run_refuses_unknown_skip_id();
+    }
+
+    /// 口の全体: toy repo で plan に無い id は Err（= rc 1）・在る id は通る。
+    fn run_refuses_unknown_skip_id() {
+        let args = |line: &str| -> Vec<String> { line.split_whitespace().map(str::to_owned).collect() };
+        let base = tmp_dir();
+        let repo = base.join("repo");
+        fs::create_dir_all(repo.join("docs/design")).expect("mkdir");
+        fs::write(repo.join("docs/design/probe.md"), doc(&[row("b", "1", "\"+src/b.rs\"", "")])).expect("doc");
+        assert!(git(&repo, &["init", "-q"]) && git(&repo, &["add", "."]), "toy repo");
+        let root = repo.display().to_string();
+        let refused = super::run(&args(&format!("--epic {EPIC} --skip probe#nope {root}")));
+        assert!(refused.is_err_and(|reason| reason.contains("probe#nope")), "plan に無い id は rc 1");
+        assert!(skip(plan_at(&repo, EPIC, None).expect("plan"), &["probe#b".to_owned()]).is_ok_and(|left| left.nodes.is_empty()));
         let _ = fs::remove_dir_all(&base);
     }
 
