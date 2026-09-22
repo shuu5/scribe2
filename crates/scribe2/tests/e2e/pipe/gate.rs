@@ -4870,3 +4870,89 @@ fn pipe_gate_detection_pure_move_diff_input_keeps_every_added_line() {
     let head = [("lib.rs", MOVE_HEAD_LIB), ("alpha.rs", MOVE_HEAD_ALPHA), ("beta.rs", changed.as_str())];
     assert_keeps_the_git_diff_population(&[("lib.rs", MOVE_BASE_LIB)], &head, "items-differ");
 }
+
+// ───── verify の record の `failed=` と落ちた歯ごとの stderr の区間（設計 pipeline.md §35・行 ac・`s2-07l.401`・接頭辞 `pipe_verify_failed_`） ─────
+
+/// nextest 形の stderr を出して rc 100 で終える契約 verify の行（[`write_nextest_red`] が置く script）。
+pub(super) const NEXTEST_RED: &str = "sh verify-nextest.sh";
+
+/// 最初に落ちた歯の名（fixture の 1 本目の `FAIL [` の行）。
+pub(super) const NEXTEST_FIRST: &str = "toy::alpha::breaks";
+
+/// 1 本目の歯の panic の本文（**cmd にも末尾 20 行にも無い字面**＝区間から来たことだけで写しに載る）。
+pub(super) const NEXTEST_PANIC: &str = "alpha-panic-body";
+
+/// nextest 形の stderr の fixture と、それを stderr へ出して rc 100 で終える script を repo へ置く（commit は呼び手の
+/// `write_contract` の `add -A` が拾う）。落ちた歯 2 本・1 本目は後ろに PASS の進捗行 30 本（末尾 N 行の外）。
+///
+/// `once` の周は 1 回目（gate の便の worktree）を緑で通し、2 回目（主実測）から赤い（印は git の共通 dir）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+pub(super) fn write_nextest_red(repo: &Path, once: bool) {
+    let mut lines: Vec<String> = vec![
+        "────────────".to_owned(),
+        "    Starting 32 tests across 1 binary".to_owned(),
+        format!("        FAIL [   0.003s] (  1/32) toy {NEXTEST_FIRST}"),
+        "  stderr ───".to_owned(),
+        format!("    thread '{NEXTEST_FIRST}' panicked at src/alpha.rs:9:5:"),
+        format!("    assertion failed: {NEXTEST_PANIC}"),
+        String::new(),
+    ];
+    for index in 2..32 {
+        lines.push(format!("        PASS [   0.001s] ({index:>3}/32) toy toy::green::t{index}"));
+    }
+    lines.push("        FAIL [   0.004s] ( 32/32) toy toy::beta::breaks".to_owned());
+    lines.push("  stderr ───".to_owned());
+    lines.push("    assertion failed: beta-panic-body".to_owned());
+    lines.push("────────────".to_owned());
+    lines.push("     Summary [   0.004s] 32 tests run: 30 passed, 2 failed, 0 skipped".to_owned());
+    lines.push(format!("        FAIL [   0.003s] (  1/32) toy {NEXTEST_FIRST}"));
+    lines.push("        FAIL [   0.004s] ( 32/32) toy toy::beta::breaks".to_owned());
+    lines.push("error: test run failed".to_owned());
+    fs::write(repo.join("nextest-red.txt"), format!("{}\n", lines.join("\n"))).expect("fixture を書ける");
+    let gate = if once {
+        "seen=\"$(git rev-parse --git-common-dir)/nextest-seen\"\ntest ! -f \"$seen\" && touch \"$seen\" && exit 0\n"
+    } else {
+        ""
+    };
+    fs::write(repo.join("verify-nextest.sh"), format!("{gate}cat nextest-red.txt >&2\nexit 100\n"))
+        .expect("verify script を書ける");
+}
+
+/// gate の `verify.jsonl` の赤い契約行に `failed=<最初の歯>` と区間が載り、`verify.stderr.log` に末尾 N 行の外の
+/// panic の本文が残る。`FAIL [` を出さない赤い行（`verify-noisy.sh`）は `failed` を持たない（従来の末尾だけ）。
+#[test]
+fn pipe_verify_failed_gate_record_names_the_tooth_and_keeps_its_section() {
+    let (repo, state) = repo_with_state();
+    write_nextest_red(&repo, false);
+    let line = format!(r#"verify = ["{NEXTEST_RED}", "sh verify-noisy.sh"]"#);
+    let path = write_contract(&repo, &["verify"], &[&line]);
+    let id = implemented(&repo, &state, &path);
+    let marker = state.join("lens-ran");
+    let lens = fake_lens(&marker, &lens_verdict("PASS"));
+    let out = gate_once(&repo, &state, &id, Some(&lens));
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "FAIL の rc は 1: {}", stderr_of(&out));
+    let rows = verify_rows(&state, &id);
+    let nextest = rows
+        .iter()
+        .find(|row| value_of(row, "cmd") == NEXTEST_RED)
+        .expect("nextest の行の record が在る");
+    assert_eq!(value_of(nextest, "rc"), "100", "rc は従来どおり: {nextest:?}");
+    assert_eq!(value_of(nextest, "failed"), NEXTEST_FIRST, "failed= は最初の落ちた歯: {nextest:?}");
+    let sections = value_of(nextest, "failed_stderr");
+    assert!(sections.contains(NEXTEST_PANIC), "1 本目の区間が record に載る: {sections}");
+    assert!(sections.contains("beta-panic-body"), "2 本目の区間も順に載る: {sections}");
+    let noisy = rows
+        .iter()
+        .find(|row| value_of(row, "cmd") == "sh verify-noisy.sh")
+        .expect("noisy の行の record が在る");
+    assert_eq!(value_of(noisy, "rc"), "3", "赤い行: {noisy:?}");
+    assert_eq!(value_of(noisy, "failed"), "", "FAIL [ の無い行は failed を持たない: {noisy:?}");
+    assert_eq!(value_of(noisy, "failed_stderr"), "", "区間も持たない: {noisy:?}");
+    let log = fs::read_to_string(run_dir(&state, &id).join("verify.stderr.log")).expect("verify.stderr.log を読める");
+    assert!(log.contains(NEXTEST_PANIC), "末尾 N 行の外の panic が診断 file に残る: {log}");
+    assert!(log.contains("boom"), "FAIL [ の無い行は従来どおり末尾: {log}");
+    clean(&[&repo, &state]);
+}

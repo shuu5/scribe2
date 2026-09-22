@@ -27,6 +27,90 @@ const STDERR_LOG_FILE: &str = "verify.stderr.log";
 /// 採るのは、落ちた command が理由を最後に出すためである。
 pub(super) const STDERR_TAIL_LINES: usize = 20;
 
+/// nextest の落ちた歯の進捗行の頭（`FAIL [ <秒>] (<i>/<n>) <binary> <歯の名>`・cargo-nextest 0.9.143 の実測）。
+///
+/// 行頭の空白を剥がして比べる（進捗行は桁揃えの空白を前に持つ）。`TRY n FAIL [` は頭が違うので当たらない。
+const NEXTEST_FAIL: &str = "FAIL [";
+
+/// 区間を閉じる nextest の行の頭（次の進捗行と Summary・[`NEXTEST_FAIL`] も閉じる）。
+const NEXTEST_ENDS: [&str; 3] = [NEXTEST_FAIL, "PASS [", "Summary ["];
+
+/// 落ちた歯ごとの stderr の小見出し（`FAIL [` の行の後に nextest が出す・行頭の空白は剥がして比べる）。
+const NEXTEST_STDERR: &str = "stderr ───";
+
+/// 写しの中で落ちた歯の区間を始める見出しの頭（`--- failed=<歯の名>`・段の見出し `## ` とは別の字面）。
+const SECTION_HEAD: &str = "--- failed=";
+
+/// nextest 形の stderr から読んだ、落ちた歯（record の `failed=` と `failed_stderr=`・設計 pipeline.md §35）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Failed {
+    /// 最初の `FAIL [` の行の歯の名（record の `failed=`）。
+    pub name: String,
+    /// 落ちた歯ごとの区間を順に継いだ字面（歯 1 本あたり [`STDERR_TAIL_LINES`] 行が上限・区間の無い周は空）。
+    pub sections: String,
+}
+
+/// stderr の写し（診断 file へ書く字面と、落ちた歯）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct Excerpt {
+    /// 落ちた歯の区間（在れば）+ 末尾 [`STDERR_TAIL_LINES`] 行。
+    pub(super) text: String,
+    /// `FAIL [` の行が在った周だけ `Some`（無い周は field を書かない・C10）。
+    pub(super) failed: Option<Failed>,
+}
+
+/// stderr の全文から写しを作る（**pure**・gate も主実測も [`super::verify::run_line_captured`] からここを通る・C2）。
+///
+/// 読むのは nextest の字面の閉じた 2 形だけである: `FAIL [` の進捗行（歯の名）と `stderr ───` の小見出し（区間の頭）。
+/// 区間 = 小見出しの次の行から次の進捗行（[`NEXTEST_ENDS`]）の直前まで・末尾の空行を落として**区間の末尾**
+/// [`STDERR_TAIL_LINES`] 行（panic は区間の最後に出る）。`FAIL [` の無い stderr（clippy 等の行）は従来どおり末尾だけ。
+pub(super) fn excerpt_of(stderr: &str) -> Excerpt {
+    let lines: Vec<&str> = stderr.lines().collect();
+    let from = lines.len().saturating_sub(STDERR_TAIL_LINES);
+    let tail = lines.get(from..).unwrap_or_default().join("\n");
+    let mut first = None;
+    let mut sections: Vec<String> = Vec::new();
+    let mut owner: Option<&str> = None;
+    let mut open: Option<(&str, Vec<&str>)> = None;
+    for line in &lines {
+        let head = line.trim_start();
+        if NEXTEST_ENDS.iter().any(|end| head.starts_with(end)) {
+            sections.extend(open.take().map(|(name, body)| section_text(name, &body)));
+            owner = head.strip_prefix(NEXTEST_FAIL).and_then(tooth_name);
+            first = first.or(owner);
+        } else if let Some((_, body)) = open.as_mut() {
+            body.push(line);
+        } else if head == NEXTEST_STDERR {
+            open = owner.map(|name| (name, Vec::new()));
+        }
+    }
+    sections.extend(open.take().map(|(name, body)| section_text(name, &body)));
+    let Some(name) = first else {
+        return Excerpt { text: tail, failed: None };
+    };
+    let sections = sections.join("\n");
+    let text = if sections.is_empty() { tail } else { format!("{sections}\n{tail}") };
+    Excerpt { text, failed: Some(Failed { name: name.to_owned(), sections }) }
+}
+
+/// `FAIL [` の後ろの残りから歯の名（`]` の後の最後の語・進捗 `(i/n)` と binary id は飛ばす・無ければ `None`）。
+fn tooth_name(rest: &str) -> Option<&str> {
+    rest.split_once(']')?.1.split_whitespace().last()
+}
+
+/// 区間 1 つの字面（見出し 1 行 + 末尾の空行を落とした本文の末尾 [`STDERR_TAIL_LINES`] 行）。
+fn section_text(name: &str, body: &[&str]) -> String {
+    let kept = body.iter().rposition(|line| !line.trim().is_empty()).map_or(0, |last| last.saturating_add(1));
+    let body = body.get(..kept).unwrap_or_default();
+    let from = body.len().saturating_sub(STDERR_TAIL_LINES);
+    let mut text = format!("{SECTION_HEAD}{name}");
+    for line in body.get(from..).unwrap_or_default() {
+        text.push('\n');
+        text.push_str(line);
+    }
+    text
+}
+
 /// lens への入力の通知の頭（**段の見出し `## ` とは別の字面**・[`record_notice`]）。
 ///
 /// 段の見出し（[`append_diagnosis`]）を数える読み手が通知を段と混同しないための 1 文字である
@@ -128,9 +212,9 @@ pub(super) fn record_verify(entry: &Gate<'_>, worktree: &Path, base: &str) -> Re
                 if step.rc != 0 && !is_unreadable(step) && box_kill(step).is_none() && !detection_unmeasured(step) {
                     red += 1;
                 }
-                append_diagnosis(&tail_path, entry.policy, record.n, step)?;
             }
         }
+        record.diagnose(&tail_path, entry.policy)?;
         append_line(&path, &record.body, entry.policy).map_err(|err| err.to_string())?;
     }
     Ok(Counted { red, unreadable, killed, detection_unmeasured: unmeasured, busy })
@@ -467,6 +551,19 @@ pub struct Record<'a> {
     pub step: Option<&'a Step>,
 }
 
+impl Record<'_> {
+    /// この record の段の診断（見出し + stderr の写し）を `path` へ append する（gate の `verify.stderr.log` と
+    /// 主実測の `verify-main.stderr.log` が**同じ 1 本**で書く・設計 pipeline.md §35 (3)）。
+    ///
+    /// 残すのは撃って赤かった段と撃ち直した段だけで、skip record と遮断器が閉じて撃たなかった段は何も書かない。
+    pub fn diagnose(&self, path: &Path, policy: LockPolicy) -> Result<(), String> {
+        match self.step {
+            Some(step) if !step.is_closed() => append_diagnosis(path, policy, self.n, step),
+            _ => Ok(()),
+        }
+    }
+}
+
 /// 撃った段の record 列を組む（`verify.jsonl` と land の `verify-main.jsonl` が**同じ形・同じ位置**で書く）。
 ///
 /// 検出線を省いた周は、その段の位置（[`Check::Contract`] の直前・契約の行が無ければ末尾）に skip record を
@@ -690,6 +787,13 @@ fn step_fields(number: u64, step: &Step) -> Vec<(&'static str, Value)> {
     if let Some(mark) = step.host {
         fields.push(("host", Value::Str(mark.as_str().to_owned())));
     }
+    // nextest 形の stderr に `FAIL [` の行が在った周だけ（設計 pipeline.md §35・無い周は field を欠く・C10）。
+    if let Some(failed) = &step.failed {
+        fields.push(("failed", Value::Str(failed.name.clone())));
+        if !failed.sections.is_empty() {
+            fields.push(("failed_stderr", Value::Str(failed.sections.clone())));
+        }
+    }
     fields
 }
 
@@ -772,8 +876,93 @@ fn append_stderr(path: &Path, policy: LockPolicy, head: &str, stderr: &str) -> R
 
 #[cfg(test)]
 mod tests {
-    use super::{notice_line, skip_record, Skipped};
+    use super::{excerpt_of, notice_line, skip_record, Skipped, STDERR_TAIL_LINES};
     use crate::pipe::move_proof::{LensInput, NOT_PURE};
+
+    /// nextest 形の stderr（cargo-nextest 0.9.143 の実出力の形）: 落ちた歯 2 本が即時の区間を持ち、1 本目は末尾から
+    /// 遠い位置（後ろに PASS の進捗行が 30 本）・2 本目の区間は上限より長い・Summary の後に `FAIL [` が 2 本繰り返す。
+    fn nextest_stderr() -> String {
+        let mut lines: Vec<String> = vec![
+            "────────────".to_owned(),
+            " Nextest run ID 0 with nextest profile: default".to_owned(),
+            "    Starting 33 tests across 1 binary".to_owned(),
+            "        FAIL [   0.003s] (  1/33) scribe2 pipe::alpha::breaks".to_owned(),
+            "  stdout ───".to_owned(),
+            String::new(),
+            "    running 1 test".to_owned(),
+            "    stdout-only-line".to_owned(),
+            String::new(),
+            "  stderr ───".to_owned(),
+            "    thread 'pipe::alpha::breaks' panicked at src/alpha.rs:9:5:".to_owned(),
+            "    assertion failed: alpha-panic-body".to_owned(),
+            String::new(),
+        ];
+        for index in 2..32 {
+            lines.push(format!("        PASS [   0.001s] ({index:>3}/33) scribe2 pipe::green::t{index}"));
+        }
+        lines.push("        FAIL [   0.004s] ( 32/33) scribe2 pipe::beta::breaks".to_owned());
+        lines.push("  stderr ───".to_owned());
+        for index in 0..25 {
+            lines.push(format!("    beta-line-{index:02}"));
+        }
+        lines.push("    assertion failed: beta-panic-body".to_owned());
+        lines.push(String::new());
+        lines.push("        PASS [   0.001s] ( 33/33) scribe2 pipe::green::last".to_owned());
+        lines.push("────────────".to_owned());
+        lines.push("     Summary [   0.004s] 33 tests run: 31 passed, 2 failed, 0 skipped".to_owned());
+        lines.push("        FAIL [   0.003s] (  1/33) scribe2 pipe::alpha::breaks".to_owned());
+        lines.push("        FAIL [   0.004s] ( 32/33) scribe2 pipe::beta::breaks".to_owned());
+        lines.push("error: test run failed".to_owned());
+        lines.join("\n")
+    }
+
+    /// `failed=` は最初の `FAIL [` の歯の名で、区間は歯ごとに順に残る（1 本目の panic は末尾 N 行の外でも残る・
+    /// 区間は次の進捗行の直前で閉じる・歯 1 本あたり末尾 [`STDERR_TAIL_LINES`] 行が上限・設計 pipeline.md §35）。
+    #[test]
+    fn pipe_verify_failed_names_the_first_tooth_and_keeps_each_section() {
+        let stderr = nextest_stderr();
+        let tail: Vec<&str> = stderr.lines().rev().take(STDERR_TAIL_LINES).collect();
+        assert!(!tail.iter().any(|line| line.contains("alpha-panic-body")), "前提: 1 本目の panic は末尾 N 行の外");
+        let excerpt = excerpt_of(&stderr);
+        let failed = excerpt.failed.expect("FAIL [ の行が在る周は failed を持つ");
+        assert_eq!(failed.name, "pipe::alpha::breaks", "最初の落ちた歯: {failed:?}");
+        let sections: Vec<&str> = failed.sections.lines().collect();
+        let heads: Vec<&str> = sections.iter().copied().filter(|line| line.starts_with("--- failed=")).collect();
+        assert_eq!(
+            heads,
+            ["--- failed=pipe::alpha::breaks", "--- failed=pipe::beta::breaks"],
+            "落ちた歯ごとに順に 1 区間（Summary の後の繰り返しは区間を持たない）: {}",
+            failed.sections
+        );
+        assert_eq!(
+            sections.get(1..3),
+            Some(&["    thread 'pipe::alpha::breaks' panicked at src/alpha.rs:9:5:", "    assertion failed: alpha-panic-body"][..]),
+            "1 本目の区間は stderr の小見出しの次から・末尾の空行は落ちる: {}",
+            failed.sections
+        );
+        assert_eq!(sections.get(3).copied(), heads.get(1).copied(), "区間は次の進捗行の直前で閉じる（PASS 行を含まない）");
+        let beta: Vec<&str> = sections.get(4..).unwrap_or_default().to_vec();
+        assert_eq!(beta.len(), STDERR_TAIL_LINES, "2 本目の区間は上限の行数: {beta:?}");
+        assert_eq!(beta.last().copied(), Some("    assertion failed: beta-panic-body"), "上限は区間の末尾から数える");
+        assert!(!failed.sections.contains("stdout-only-line"), "stdout の小見出しの中身は区間に入らない");
+        assert!(excerpt.text.starts_with(&failed.sections), "写しは区間が先: {}", excerpt.text);
+        assert!(excerpt.text.ends_with("error: test run failed"), "写しは末尾 N 行も持つ: {}", excerpt.text);
+        assert!(excerpt.text.contains("alpha-panic-body"), "末尾に入らない歯の panic も写しに残る");
+    }
+
+    /// `FAIL [` の無い stderr（clippy 等の行）は `failed` を持たず、写しは従来どおり末尾 [`STDERR_TAIL_LINES`] 行だけ。
+    /// `stderr ───` の字面が在っても `FAIL [` の後でなければ区間にしない。
+    #[test]
+    fn pipe_verify_failed_absent_without_fail_lines_keeps_only_the_tail() {
+        let mut lines: Vec<String> = vec!["  stderr ───".to_owned()];
+        lines.extend((0..30).map(|index| format!("warning: lint-{index:02}")));
+        let stderr = format!("{}\n", lines.join("\n"));
+        let excerpt = excerpt_of(&stderr);
+        assert_eq!(excerpt.failed, None, "FAIL [ の行が無い周は failed を書かない");
+        let want: Vec<String> = (10..30).map(|index| format!("warning: lint-{index:02}")).collect();
+        assert_eq!(excerpt.text, want.join("\n"), "末尾 N 行だけ（末尾の改行は区切りとして落ちる）");
+        assert_eq!(excerpt_of("").text, "", "空の stderr は空の写し");
+    }
 
     /// 通知の字面は `# lens-input=diff reason=<語>` で、語は `NotPure` の全 variant（母集団 5）が
     /// **それぞれ別の字面**で載る（設計 §21 (4)・要約の周の `-` は e2e の `pipe_gate_notice_summary_` が測る）。

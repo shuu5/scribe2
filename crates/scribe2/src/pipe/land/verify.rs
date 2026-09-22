@@ -149,6 +149,11 @@ fn materials(entry: &Land<'_>) -> Result<(String, Effective), String> {
 /// 別 file にするのは、gate の周の `n` と main 実測の `n` を重ねないためである（設計 gate-cost.md §5）。
 const VERIFY_MAIN_FILE: &str = "verify-main.jsonl";
 
+/// main 実測の赤い行の stderr の写しを残す診断 file の名（[`VERIFY_MAIN_FILE`] と同じ dir・同じ stem・設計 pipeline.md §35 (3)）。
+///
+/// gate の `verify.stderr.log` の対で、**機械は読まない**（人が「main の何の歯がどう赤いか」を読む）。
+const VERIFY_MAIN_STDERR_FILE: &str = "verify-main.stderr.log";
+
 /// 主実測で何を省くか（省く周はその理由と land した木の sha・設計 §30 (ii)・ADR-0021 §2.4）。
 ///
 /// gate を撃った木（verdict の `tree`）と land した木が**同じ**なら `same-tree`（[`verify_main`] は主実測ごと省く・
@@ -173,10 +178,13 @@ fn main_detection(entry: &Land<'_>, new: &str) -> Option<(DetectionSkip, String)
 /// main 実測の段を `verify-main.jsonl` へ逐条で残す。検出線を省いた周は、その段の位置に
 /// `skipped=detection tree=<sha> reason=<理由>` の record を 1 件置き、主実測ごと省いた周は段が空なので
 /// `kind=main skipped=main` の record 1 件だけになる（**撃たなかった事実を黙って落とさない**・
-/// 形と位置は gate の `verify.jsonl` と同じ [`records_of`] の 1 本）。
+/// 形と位置は gate の `verify.jsonl` と同じ [`records_of`] の 1 本）。赤い行の stderr の写しは
+/// [`VERIFY_MAIN_STDERR_FILE`] へ gate と同じ書き口（`Record::diagnose`）で残す（設計 pipeline.md §35 (3)）。
 fn record_main(entry: &Land<'_>, steps: &[Step], skipped: Option<Skipped<'_>>) -> Result<(), String> {
     let path = super::verify_log_path(entry.state_dir, entry.run).with_file_name(VERIFY_MAIN_FILE);
+    let diagnosis = path.with_file_name(VERIFY_MAIN_STDERR_FILE);
     for record in records_of(steps, skipped) {
+        record.diagnose(&diagnosis, entry.policy)?;
         append_line(&path, &record.body, entry.policy).map_err(|err| err.to_string())?;
     }
     Ok(())

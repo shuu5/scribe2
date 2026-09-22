@@ -1,7 +1,7 @@
 //! gate の verify 行の実行（段の列 [`Check`] と、行を撃つ 1 本 [`run_line_captured`]・
 //! [`super`] から純移動・`s2-07l.286`）。判定の順と終端は親（[`super::gate`]）が持つ。
 
-use super::record::{detection_unmeasured, STDERR_TAIL_LINES, USAGE_HEAD};
+use super::record::{detection_unmeasured, excerpt_of, Failed, USAGE_HEAD};
 use super::{UNADMITTED_JOBS, WRITE_SET_CMD};
 use crate::pipe::admission::{self, Grant};
 use crate::pipe::closure;
@@ -61,8 +61,10 @@ pub struct Step {
     pub cmd: String,
     /// process の rc（起動できない周は -1）。
     pub rc: i32,
-    /// stderr の末尾（緑の段は空）。
+    /// stderr の写し（落ちた歯の区間 + 末尾・[`excerpt_of`]・緑の段は空）。
     pub stderr: String,
+    /// nextest 形の stderr で落ちた歯（record の `failed=` / `failed_stderr=`・`FAIL [` の行が無い周は `None`）。
+    pub failed: Option<Failed>,
     /// cgroup の scope で包めたか（record の `confined=`・設計 gate-cost.md §4）。
     pub confined: bool,
     /// 包めなかった理由 か 箱の中で起きたこと（record の `reason=`・閉じた enum）。
@@ -120,6 +122,7 @@ fn unwrapped(cmd: String, rc: i32, stderr: String) -> Step {
         cmd,
         rc,
         stderr,
+        failed: None,
         confined: false,
         reason: None,
         peak_mb: None,
@@ -144,6 +147,7 @@ fn closed(entry: &Fire<'_>) -> Step {
         cmd: entry.raw.to_owned(),
         rc: -1,
         stderr: String::new(),
+        failed: None,
         confined: false,
         reason: None,
         peak_mb: None,
@@ -337,6 +341,7 @@ fn fire(entry: &Fire<'_>, caps: Result<confine::Caps, RuleRead>, admit: Option<&
         cmd,
         rc: fired.rc,
         stderr: fired.stderr,
+        failed: fired.failed,
         confined,
         reason,
         peak_mb,
@@ -428,8 +433,10 @@ pub fn is_unreadable(step: &Step) -> bool {
 pub struct Fired {
     /// process の rc（起動できない周は -1）。
     pub rc: i32,
-    /// stderr の末尾（[`STDERR_TAIL_LINES`] 行）。
+    /// stderr の写し（落ちた歯の区間 + 末尾 [`super::record::STDERR_TAIL_LINES`] 行・[`excerpt_of`]）。
     pub stderr: String,
+    /// nextest 形の stderr で落ちた歯（[`Step::failed`] へ運ぶ・起動できなかった周は `None`）。
+    pub failed: Option<Failed>,
     /// 包みが stdout の終端に出した数（包めなかった周は既定）。
     pub usage: Usage,
     /// 行の壁時計（秒・[`Step::secs`] 経由で record の `secs=`・設計 gate-cost.md §26 形 (1)）。
@@ -489,6 +496,7 @@ pub fn run_line_captured(worktree: &Path, line: &str, wrap: &confine::Wrap<'_>) 
         return Fired {
             rc: -1,
             stderr: String::new(),
+            failed: None,
             usage: Usage::default(),
             secs,
             confinement,
@@ -504,22 +512,17 @@ pub fn run_line_captured(worktree: &Path, line: &str, wrap: &confine::Wrap<'_>) 
     } else {
         Usage::default()
     };
+    let excerpt = excerpt_of(&String::from_utf8_lossy(&out.stderr));
     Fired {
         rc: out.status.code().unwrap_or(-1),
-        stderr: tail_of(&String::from_utf8_lossy(&out.stderr)),
+        stderr: excerpt.text,
+        failed: excerpt.failed,
         usage,
         secs,
         confinement,
         scope,
         stdout_tail: last_line(&stdout),
     }
-}
-
-/// 末尾 [`STDERR_TAIL_LINES`] 行を改行で継いで返す（末尾の改行は行の区切りとして落ちる）。
-fn tail_of(text: &str) -> String {
-    let lines: Vec<&str> = text.lines().collect();
-    let from = lines.len().saturating_sub(STDERR_TAIL_LINES);
-    lines.get(from..).unwrap_or_default().join("\n")
 }
 
 /// stdout の**末尾の非空 1 行**（record の `line=`・設計 gate-cost.md §5.1・pure）。

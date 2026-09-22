@@ -5233,3 +5233,46 @@ fn pipe_land_args_help_prints_usage_with_rc_0_and_moves_nothing() {
     assert_ne!(git(&repo, &["rev-parse", "refs/heads/main"]), before.main, "対照: main が進む");
     clean(&[&repo, &state]);
 }
+
+// ───── 主実測の record の `failed=` と診断 file（設計 pipeline.md §35 (3)・行 ac・`s2-07l.401`・接頭辞 `pipe_verify_failed_`） ─────
+
+/// main-red の便（gate では緑・主実測で nextest 形の赤）の `verify-main.jsonl` に `failed=<最初の歯>` と区間が載り、
+/// 同じ dir に同じ stem の `verify-main.stderr.log` が末尾 N 行の外の panic の本文を持つ。終端は従来の `main-red`。
+#[test]
+fn pipe_verify_failed_main_red_records_the_tooth_and_keeps_the_stderr_log() {
+    let (repo, state) = repo_with_state();
+    super::gate::write_nextest_red(&repo, true);
+    let line = format!(r#"verify = ["{}"]"#, super::gate::NEXTEST_RED);
+    let path = write_contract(&repo, &["verify"], &[&line]);
+    let marker = state.join("lens-ran");
+    let id = gated_pass(&repo, &state, &path, &marker);
+    let log = run_dir(&state, &id).join("verify-main.stderr.log");
+    assert!(!log.exists(), "前提: gate の周（緑）は主実測の診断 file を作らない");
+    make_tree_differ(&repo, &state, &id, "refs/heads/main");
+    let out = land_once(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "main が赤い land は rc 1: {}", stderr_of(&out));
+    assert_eq!(
+        stages(&state, &id).last().cloned(),
+        Some((Some(Stage::Failed), Some("main-red".to_owned()))),
+        "終端は従来の main-red: {:?}",
+        stages(&state, &id)
+    );
+    let rows = super::gate::main_rows(&state, &id);
+    let red = rows
+        .iter()
+        .find(|row| value_of(row, "cmd") == super::gate::NEXTEST_RED)
+        .expect("主実測の nextest の行の record が在る");
+    assert_eq!(value_of(red, "rc"), "100", "rc は従来どおり: {red:?}");
+    assert_eq!(value_of(red, "failed"), super::gate::NEXTEST_FIRST, "failed= は最初の落ちた歯: {red:?}");
+    assert!(
+        value_of(red, "failed_stderr").contains(super::gate::NEXTEST_PANIC),
+        "区間が verify-main.jsonl に載る: {red:?}"
+    );
+    let text = fs::read_to_string(&log).expect("verify-main.jsonl と同じ dir に verify-main.stderr.log が在る");
+    assert!(text.contains(super::gate::NEXTEST_PANIC), "末尾 N 行の外の panic が残る: {text}");
+    assert!(
+        run_dir(&state, &id).join("verify-main.jsonl").exists(),
+        "同じ dir に record が在る"
+    );
+    clean(&[&repo, &state]);
+}
