@@ -744,7 +744,7 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
   (c) 形 3: 通った周に書かれた便の終端の記帳が、`reason:` の後ろに入力の逐語をそのまま持つ（逐語は fixture の他の字面と衝突しない形で渡し、detail の出所を弁別する）。`--run` で止めた便の記帳は detail を持たない。
   (d) 形 4（e2e）: 便 2 本を止めた周の rc 0 の 1 行が、席数と止めた席数に加えて 2 本の便 id を記帳順で持つ。1 本の席が止まらない周は、その便が止め切れなかった側の欄にだけ出て、止めた側の欄には出ない。base は逐語の flag が使い方の誤りで断られる＝機能不在の RED。
   (e) 形 1 の逃がし（e2e・done (2)）: 便が 0 本と 1 本 live な置き場に `--all` だけを撃つ 2 形（母集団 2 形）で、どちらも従来どおり rc 0 で通り、0 本の周は対象なしの字面のまま・1 本の周はその便を止める（逐語なしで通る側を pin する）。
-  (f) 形 2 の外形（既存の歯・done (3)）: usage の 1 行は `crates/scribe2/tests/e2e/pipe.rs` の既存の snapshot 歯 `pipe_external_form` が pin する。同じ便で snapshot を更新し、verify に同じ歯を名の全体で持つ（`.rs` は触らない＝write-set には置き場だけの印で載せる）。
+  (f) 形 2 の外形（既存の歯・done (3)）: usage の 1 行は `crates/scribe2/tests/e2e/pipe.rs` の既存の snapshot 歯 `pipe_external_form` が pin する。同じ便で snapshot を更新し、verify に同じ歯を名の全体で持つ（`.rs` は触らない＝write-set には置き場だけの印で載せる。審査の要約がこの印を読めるのは [contract-source.md](./contract-source.md) §44 / 行 au の後＝本行はその便の後に出す）。
   (g) 既存の歯の不変（done (6)）: `crates/scribe2/tests/e2e/pipe/stop.rs` の既存の `pipe_stop_` の歯を verify の e2e 行で丸ごと撃つ（新設の歯と同じ file・接頭辞は既存の名の全体を含む）。
 - usage の外形: `--all` の行の flag が増えるので `crates/scribe2/tests/e2e/snapshots/e2e__pipe__pipe_external_form.snap`（pipe の usage 行を逐語で pin する既存の snapshot）を同じ便で更新する（行 at の write-set に含める・§49 形 1 と同じ形）。
 
@@ -1270,7 +1270,7 @@ section = "51"
 write-set = ["crates/scribe2/src/pipe/stop.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/args.rs", "crates/scribe2/tests/e2e/pipe/stop.rs", "=crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/snapshots/e2e__pipe__pipe_external_form.snap", "docs/design/pipeline.md"]
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail pipe_stop_scope_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_stop_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_external_form"]
 size = "M"
-done = "(1) Live な席が指す別々の便が 2 本以上の周は --all だけでは rc 1 で断られ、席も events も 1 つも動かず、断りの 1 行が便の本数を母集団として名指す (2) 便が 1 本以下の周は --all だけで従来どおり通り、対象なしは rc 0 のままである（歯 (e) が 0 本と 1 本の 2 形で pin する） (3) stop の flag の表と usage の 1 行が --reason を値つきで持ち（usage の外形 snapshot を更新し既存の歯 pipe_external_form が緑）、--run と --reason を同時に渡す周は rc 1 で断られる (4) --all と --reason で通った周の便の終端の記帳が reason: の後ろに入力の逐語をそのまま持ち、--run で止めた便の記帳は detail を持たない (5) rc 0 の 1 行が席数と止めた席数に加えて、終端を記帳した便の id を記帳順で並べる欄と止め切れなかった席を持つ便の id を並べる欄を持ち、空の欄は出ない (6) rc の 3 値・停止の順・pid を持たない Live 席を母集団に数える形・運転手の札の扱いが変わらず、既存の pipe_stop_ の歯が 1 字も変わらず緑（verify の e2e 行が接頭辞 pipe_stop_ で既存と新設を丸ごと撃つ）"
+done = "(1) Live な席が指す別々の便が 2 本以上の周は --all だけでは rc 1 で断られ、席も events も 1 つも動かず、断りの 1 行が便の本数を母集団として名指す (2) 便が 1 本以下の周は --all だけで従来どおり通り、対象なしは rc 0 のままである（歯 (e) が 0 本と 1 本の 2 形で pin する） (3) stop の flag の表と usage の 1 行が --reason を値つきで持ち（usage の外形 snapshot を更新し既存の歯 pipe_external_form が緑・snapshot の .rs は = の印で write-set に在り審査の要約がそれを剥がして読む）、--run と --reason を同時に渡す周は rc 1 で断られる (4) --all と --reason で通った周の便の終端の記帳が reason: の後ろに入力の逐語をそのまま持ち、--run で止めた便の記帳は detail を持たない (5) rc 0 の 1 行が席数と止めた席数に加えて、終端を記帳した便の id を記帳順で並べる欄と止め切れなかった席を持つ便の id を並べる欄を持ち、空の欄は出ない (6) rc の 3 値・停止の順・pid を持たない Live 席を母集団に数える形・運転手の札の扱いが変わらず、既存の pipe_stop_ の歯が 1 字も変わらず緑（verify の e2e 行が接頭辞 pipe_stop_ で既存と新設を丸ごと撃つ）"
 
 [[contract]]
 id = "au"

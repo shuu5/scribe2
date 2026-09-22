@@ -809,6 +809,15 @@ write-set = ["crates/scribe2/src/pipe/table/check.rs", "crates/scribe2/tests/e2e
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail contracts_untracked_doc_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail contracts_untracked_doc_"]
 size = "S"
 done = "(1) 検査が未追跡の設計 doc を既存の git の 1 本で 1 回引く (2) 判定行に未追跡の本数の欄が 1 つ増え、現物の repo では 0 で出る（判定行を完全一致で読む contracts.rs と intake.rs の既存の歯は新しい欄を含む字面へ更新し、他の期待は変えない） (3) 1 本以上の周は判定行の前に 1 件 1 行で path を名乗り、findings の数も rc も変わらない (4) git が答えない周はその欄が ? になる (5) 追随の口の戻りが 1 つも変わらない (6) 検査の母集団は tracked な設計 doc のままで、findings の順と rc と doc 数と行数の数え方が不変"
+[[contract]]
+id = "au"
+title = "審査の base の要約が置き場だけの印（=）の項目を剥がして本文を読み、行に「置き場だけ」の 1 語を添える — 剥がしは normalize の 1 本に寄せ、+ の 1 行と他の項目の形は不変"
+req = ["FR48", "FR9"]
+section = "44"
+write-set = ["crates/scribe2/src/pipe/review/base.rs", "crates/scribe2/tests/e2e/pipe/review.rs", "docs/design/contract-source.md"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail pipe_review_base_place_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_review_base_place_"]
+size = "S"
+done = "(1) item_text の + の分岐の後の剥がしが normalize の 1 本になり、base.rs に接頭辞の字面の剥がしが残らない (2) = の項目が本文を読んで本体の宣言の名と歯の名の 2 列を出し、行の頭が契約の字面のままで、行数の後ろに置き場だけの 1 語を持つ (3) + の 1 行・- と ~ の行・repo の外の断り・cap を越える周の落とし方が 1 字も変わらない (4) = の項目を持つ契約の審査の材料 base.txt が「読めない」を持たない"
 <!-- contracts:end -->
 
 
@@ -998,3 +1007,14 @@ done = "(1) 検査が未追跡の設計 doc を既存の git の 1 本で 1 回�
   - 触らない: 検査の母集団（tracked な設計 doc だけ）・findings の順と rc・doc 数と行数の数え方・契約表の検査そのもの・受付の経路。
   - 却下: 未追跡 doc を検査の母集団に入れる（tracked でない行から契約を作る口を開く＝FR47 に反する）／findings に数えて rc 1 にする（下書きが 1 本在るだけで CI と受付が落ちる）／作業木の状態を読む別の git の口を足す（tracked の一覧と 2 本目の読み手になる）。
   - 歯（接頭辞 `contracts_untracked_doc_`・`crates/` 全体で 0 件）: e2e（`crates/scribe2/tests/e2e/pipe/contracts.rs`）で、未追跡の `.md` を 1 本置いた木の判定行が未追跡 1 を持ち知らせの 1 行が出て rc 0・findings 0 のまま、その file を追跡すると未追跡 0 になり doc 数が 1 増える（母集団 = 同じ木の 2 回の判定行を対で見る）。in-file（`crates/scribe2/src/pipe/table/check.rs` の歯の区間）で、未追跡の列から知らせの行を組む純関数を 0 本・1 本・2 本で測る。
+## 44. 審査の base の要約が置き場だけの印（`=`）を剥がして読む（契約表の行 au・.459 の便 125532Z の審査 INCONCLUSIVE）
+
+- 出所: 行 at（[pipeline.md](./pipeline.md) §51）が `=crates/scribe2/tests/e2e/pipe.rs` を write-set に持った最初の便で、審査の材料 `base.txt` がその項目を「読めない（No such file or directory）」と出し、lens が印の意味を確かめられず INCONCLUSIVE になった。行 ar（§43 (1)・`s2-07l.441`）は受付と契約表の検査に `=` を足したが、審査の要約（§40・行 ao）は自分で接頭辞を剥がしていて `=` を知らない。
+- 何が起きているか（現物・main 891e27e・verified）: `crates/scribe2/src/pipe/review/base.rs` の `item_text` は `+` の項目を「新設（base に無い）」の 1 行にし、`-` と `~` は自分で剥がして本文を読むが、`=`（`crates/scribe2/src/pipe/refuse.rs` の `PLACE_ONLY_FILE`）は剥がさず、`=` を含んだ path を読んで「読めない」になる。剥がす規則が `crates/scribe2/src/pipe/refuse.rs` の `normalize` と `crates/scribe2/src/pipe/review/base.rs` の 2 か所に在る（§3 に反する・行 ar の形 3 が 1 か所に保った規則の外側）。
+- 形:
+  1. `item_text` の `+` の分岐の後の剥がしを `normalize` の 1 本に替える（`-` / `~` / `=` を同じ 1 か所で剥がす・§3・剥がす規則を base.rs に持たない）。
+  2. `=` の項目は本文を読んで既存と同じ 2 列（本体の宣言の名・歯の名）を出し、行の頭は契約の字面のまま（`=` を含む）で、行数の後ろに「置き場だけ・中身は変えない」の 1 語を添える（lens が印の意味を要約から読める）。
+  3. 他の項目の行の形・cap を越える周の落とし方・`+` の 1 行・repo の外の断りは 1 字も変えない。
+- 触らない: `normalize` の本文と剥がす集合・受付と契約表の検査の `=` の読み（行 ar）・lens の雛形の穴 `{base}`（`crates/scribe2/src/headless/lens-contract.txt`）・要約の cap と本数の 1 行・審査の判定の 3 値。
+- 却下: base.rs に `=` の分岐をもう 1 つ足す（剥がす規則が 3 つ目になる）／`=` の項目を要約から外す（lens が置き場の歯の在処を確かめられない＝本便の INCONCLUSIVE がそのまま残る）／lens の雛形に印の凡例を書く（要約の各行が印の意味を持てば足りる・雛形の穴を増やさない）。
+- 歯（接頭辞 `pipe_review_base_place_`・`crates/` 全体の fn 名の substring に 0 件。既存の接頭辞 `pipe_review_base_` の verify（行 ao）にも自然に含まれる）: in-file（`crates/scribe2/src/pipe/review/base.rs` の `mod tests`・既存の fixture と同じ形）で、`+` / `-` / `~` / `=` の 4 形の項目を同じ木で要約し、`=` の項目が「読めない」を持たず宣言の列と歯の列を持ち、行の頭が `=` を含む字面のままで、置き場だけの 1 語を持つこと（母集団 = 4 形の行数を同じ assert で数え、`-` と `~` の行は 1 字も変わらない）。e2e（`crates/scribe2/tests/e2e/pipe/review.rs`・既存の `pipe_review_base_summary_file_names_every_write_set_item` の隣）で、`=` の項目を持つ契約の審査の材料 `base.txt` が「読めない」を 1 行も持たず、その項目の行に置き場だけの 1 語が在ること。
