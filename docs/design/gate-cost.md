@@ -661,7 +661,7 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
   - unit の名を知っているのは作った process ただ 1 つである。名は `unit_name` が場所・段・n・**自分の pid**・通し番号から組み、event log にも state にも**どこにも記録しない**（`unit=` の字面は src 全数 grep で 2 件、どちらも `systemd-run` へ渡す引数と in-file の歯の fixture）。作った process が死ぬと、その scope の名を知る者が居なくなる＝6 か所のどれからも畳めない。
   - 止める口（`crates/scribe2/src/pipe/stop.rs`・485 行）に `confine` の語は **0 件**である。止める相手は席の pid（process group 宛ての signal）と運転手の pid だけで、scope には触らない。tmux の server は自分の session へ離れるので group 宛ての signal に当たらず、cgroup には残ったままになる。
   - 終端した便は止める口が「既に終端である」で断る（段が `Stopped` の周は生きていない）ので、後から畳み直す口も無い。
-  - **名は既に作り手の pid を持っている**: 形は 器の名・場所・段・n・作り手の pid・通し番号を `-` で連ねた 1 語で、場所と段の中の記号は `tame` が `-` に畳むが、**末尾から 2 番目**は必ず pid である。作り手が生きているかは既にある lock の所有者の判定 1 本（`crates/scribe2/src/fleet/store.rs` の `lock_owner` と `started_ms`）で測れる＝第 2 の probe を作らない（C6.3）。
+  - **名は既に作り手の pid を持っている**: 形は 器の名・場所・段・n・作り手の pid・通し番号を `-` で連ねた 1 語で、場所と段の中の記号は `tame` が `-` に畳むが、**末尾から 2 番目**は必ず pid である。作り手が生きているかは既にある probe 1 本で測れる＝第 2 の probe を作らない（C6.3）: `crates/scribe2/src/fleet/store.rs` の `started_ms`（`pub`・pid 1 つを取り `Probe` を返す）を pid で呼び、`Started` が生きている・`Absent` が死んでいる・`Unreadable` は測れない（生きている側に倒し、畳まない）。lock の本文を取る `lock_owner` は本行では呼ばない。`store.rs` は読むだけで write-set に入れない。
 - 形（番号は done と歯に 1:1 で対応する）:
   1. **名から作り手の pid を読む pure な 1 本**（`crates/scribe2/src/pipe/confine.rs`）: `-` で割った列の末尾から 2 番目を数として読む。割れ数が足りない名・数でない名は `None`（推測で埋めない）。
   2. **残骸の一覧を取る 1 口**: `systemctl` を `--user list-units` で 1 回撃ち、legend と pager を止めた素の形で active な scope に絞り、pattern は器の名から導いた 1 語（`-*.scope`）にする。行頭の unit 名だけを取る。道具が無い周と rc が非 0 の周は**空の一覧ではなく「測れなかった」**を返す（0 件と融合しない・C10）。
@@ -1056,7 +1056,7 @@ section = "38"
 write-set = ["crates/scribe2/src/pipe/confine.rs", "crates/scribe2/src/pipe/stop.rs", "crates/scribe2/tests/e2e/main.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "crates/scribe2/tests/e2e/pipe/stop.rs", "docs/design/gate-cost.md"]
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail pipe_scope_reap_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_scope_reap_"]
 size = "S"
-done = "(1) unit 名から作り手の pid を読む pure な 1 本が、素直な名と記号を畳んだ名の 2 形で末尾から 2 番目を返し、割れ数が足りない名と数でない名で None を返す (2) active な scope の一覧を取る呼出が --user list-units で始まり末尾の pattern を器の名の定数から導き、rc 非 0 の答えが空の一覧と弁別される測れなかった値になる (3) 一覧の行と生きている pid の集合から、死んだ作り手の unit だけが畳む相手に残り、生きた作り手の行と形に合わない行は残らない (4) 止める口が席の signal と運転手の後・RunStopped の前に、残った unit を既存の片付けで 1 本ずつ畳み、verify 行ごとの片付けの kill と reset-failed の並びは 1 字も動かない (5) 偽 systemctl が active な scope を 2 本（生きた pid と死んだ pid）返す周に、止める口の後の kill が死んだ側だけに 1 回・生きた側に 0 回で、行の末尾が scopes=1/2 になり rc と既存の token は不変"
+done = "(1) unit 名から作り手の pid を読む pure な 1 本が、素直な名と記号を畳んだ名の 2 形で末尾から 2 番目を返し、割れ数が足りない名と数でない名で None を返す (2) active な scope の一覧を取る呼出が --user list-units で始まり末尾の pattern を器の名の定数から導き、rc 非 0 の答えが空の一覧と弁別される測れなかった値になる (3) 一覧の行と生きている pid の集合（store.rs の started_ms が Started を返す pid・Unreadable は生きている側）から、死んだ作り手の unit だけが畳む相手に残り、生きた作り手の行と形に合わない行は残らない (4) 止める口が席の signal と運転手の後・RunStopped の前に、残った unit を既存の片付けで 1 本ずつ畳み、verify 行ごとの片付けの kill と reset-failed の並びは 1 字も動かない (5) 偽 systemctl が active な scope を 2 本（生きた pid と死んだ pid）返す周に、止める口の後の kill が死んだ側だけに 1 回・生きた側に 0 回で、行の末尾が scopes=1/2 になり rc と既存の token は不変"
 
 [[contract]]
 id = "af"
