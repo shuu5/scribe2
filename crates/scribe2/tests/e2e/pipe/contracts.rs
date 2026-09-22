@@ -1104,6 +1104,35 @@ fn contract_declared_place_new_plus_teeth_file_passes_intake() {
     clean(&[&repo, &state]);
 }
 
+// flip-check: s2-07l.550
+
+/// §43 (2)（行 as・接頭辞 `contract_teeth_exact_`）: base に `derive_ok`（e2e.rs）と、それを substring に持つ `derive_ok_more`
+/// （wide.rs）が在る。`-- --exact` の行（名の全体 `e2e::derive_ok` と段 1 つの `derive_ok`）を verify に持つ行は wide.rs を
+/// write-set に持たないまま受付を通り（rc 0・run dir を作る）、同じ write-set で `--` の無い部分一致の行は wide.rs を
+/// write-set の外の歯として断る（rc 1・run dir を作らない）。verify 行は括弧も引用符も持たないので宣言の形の門をそのまま
+/// 通る。母集団 = 2 回の受付の rc。
+#[test]
+fn contract_teeth_exact_full_name_line_passes_intake_without_the_substring_file() {
+    let write_set = "[\"crates/toy/src/tint.rs\", \"crates/toy/tests/e2e.rs\"]";
+    let exact = "[\"cargo nextest run -p toy --no-tests=fail -- --exact e2e::derive_ok\", \"cargo nextest run -p toy --no-tests=fail -- --exact derive_ok\"]";
+    let rows = [
+        table_row("ea", &[("write-set", write_set), ("verify", exact)]),
+        declared_teeth_row("eb", "derive_ok", write_set),
+    ];
+    let wide = [("crates/toy/tests/wide.rs", "#[test]\nfn derive_ok_more() {}\n")];
+    let (repo, state) = derive_repo_with(&table_doc(&table_region(&rows)), &wide);
+    let placed = intake_raw(&repo, &state, &pointed_contract(&repo, "ea.toml", "ea"), "s2-ea");
+    assert_eq!(placed.status.code(), Some(i32::from(RC_OK)), "完全一致は e2e.rs だけ: {}", stderr_of(&placed));
+    assert!(intake_tokens(&placed).contains(&"write-set=declared".to_owned()), "{}", stdout_of(&placed));
+    assert_eq!(run_dirs(&state), [run_id_of(&placed)], "run dir を 1 つ作る");
+    let loose = intake_raw(&repo, &state, &pointed_contract(&repo, "eb.toml", "eb"), "s2-eb");
+    let err = stderr_of(&loose);
+    assert_eq!(loose.status.code(), Some(i32::from(RC_REFUSED)), "部分一致は wide.rs も要る: {err}");
+    assert!(err.contains("crates/toy/tests/wide.rs ← filter 語 derive_ok"), "wide.rs を名指す: {err}");
+    assert_eq!(run_dirs(&state), [run_id_of(&placed)], "断った周は run dir を足さない");
+    clean(&[&repo, &state]);
+}
+
 /// (e) `contracts schema` の出力は tracked の `contracts/schema.toml` と一致し、`creates` / `tests` / `also` を任意の list として
 /// 持ち `write-set` は任意である。表の読み手も同じ: `write-set` の無い行を持つ doc は `contracts check` で違反 0（base は
 /// 必須の欠落で断る → RED）。

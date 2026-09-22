@@ -19,6 +19,7 @@ use super::names::closed_type;
 use super::{closure, is_ident, is_ident_char, snapshot_name, surface_closure, test_region};
 use super::{texts_of, ClosureError, Source};
 use super::{CRATES_DIR, CRATE_ROOT_STEMS, LIB_FLAG, MOD_STEM, NEXTEST_HEAD, PACKAGE_FLAGS, RS, SRC_DIR, TESTS_DIR, TEST_ATTR};
+use super::{EXACT_FLAG, LIBTEST_ARG_FLAGS, LIBTEST_BARE_FLAGS, LIBTEST_SEPARATOR, PATH_SEPARATOR};
 use super::{TEST_FLAG, UNREAD_ARG_TARGET_FLAGS, UNREAD_BARE_TARGET_FLAGS};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -155,20 +156,20 @@ fn outside(written: &[String], places: &BTreeMap<String, String>) -> Vec<(String
 }
 
 /// (ii) 歯の置き場: `verify` の nextest 行ごとに、その crate のその行の scope（[`Scope`]・§28）の歯の区間で `#[test]`
-/// の直下の `fn` の名が filter 語を含む file の全部（nextest の positional filter と同じ「含む」・helper の fn は
-/// 数えない）。scope で 0 本の filter 語（新しい接頭辞）は `tests` 欄が置き場で、`tests` も無ければ
+/// の直下の `fn` の名が filter 語を含む file の全部（nextest の positional filter と同じ「含む」・`--` の後ろに `--exact`
+/// の在る行は等しい＝[`Match`]・helper の fn は数えない）。scope で 0 本の filter 語（新しい接頭辞）は `tests` 欄が置き場で、`tests` も無ければ
 /// [`ClosureError::TeethPlaceUnresolved`]。`tests` の項目は歯の file だけ（`creates` に在る新規 file は creates の側が
 /// write-set に載る）。Declared 行の門（[`declared_teeth`]）も同じ 1 関数で読む（2 本目の読み手を作らない）。
 pub(crate) fn teeth_places(fields: &Fields<'_>, base: &Base<'_>, texts: &[(&str, &str)]) -> Result<BTreeSet<String>, ClosureError> {
     let mut found = BTreeSet::new();
     for line in fields.verify {
-        let Some((krate, filter, scope)) = nextest_filter(line, base.core_crate) else {
+        let Some((krate, filter, scope, kind)) = nextest_read(line, base.core_crate) else {
             continue;
         };
         let places: Vec<&str> = texts
             .iter()
             .filter(|(path, text)| {
-                in_crate(path, krate) && in_scope(path, krate, scope) && test_fns(test_region(path, text)).iter().any(|name| name.contains(filter))
+                in_crate(path, krate) && in_scope(path, krate, scope) && test_fns(test_region(path, text)).iter().any(|name| kind.hits(name, filter))
             })
             .map(|(path, _)| *path)
             .collect();
@@ -202,20 +203,59 @@ enum Scope<'l> {
     Test(&'l str),
 }
 
-/// nextest の行から (crate, filter 語, scope) を読む。書き出しが `cargo nextest run` でない行・filter 語（`-` で
+/// filter 語の一致の型（§43 (2)・閉じた 2 値）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Match {
+    /// fn 名が filter 語を含む（nextest の positional filter と同じ・`--exact` の無い行）。
+    Substring,
+    /// fn 名が filter 語（名の全体の末尾の段）と等しい（`--` の後ろに `--exact` が在る行）。
+    Exact,
+}
+
+impl Match {
+    /// 行の裸の語から照合する filter 語: 完全一致は `::` で割った末尾の段（module path の段は照合しない）・部分一致は語のまま。
+    fn word(self, filter: &str) -> &str {
+        match self {
+            Match::Substring => filter,
+            Match::Exact => filter.rsplit(PATH_SEPARATOR).next().unwrap_or(filter),
+        }
+    }
+
+    /// fn 名 `name` が filter 語 `filter` にこの型で当たるか（置き場の照合の述語）。
+    fn hits(self, name: &str, filter: &str) -> bool {
+        match self {
+            Match::Substring => name.contains(filter),
+            Match::Exact => name == filter,
+        }
+    }
+}
+
+/// nextest の行から (crate, filter 語, scope) を読む（一致の型を落とした [`nextest_read`]）。
+fn nextest_filter<'l>(line: &'l str, core_crate: &'l str) -> Option<(&'l str, &'l str, Scope<'l>)> {
+    nextest_read(line, core_crate).map(|(krate, filter, scope, _)| (krate, filter, scope))
+}
+
+/// nextest の行から (crate, filter 語, scope, 一致の型) を読む。書き出しが `cargo nextest run` でない行・filter 語（`-` で
 /// 始まらない末尾の語）の無い行は `None`。crate は `-p` / `--package` の次の語・無ければ core の crate。scope の旗
 /// （`--lib` / `--test <name>`）が丁度 1 つで読めない旗が無い行だけ狭く読み、他は [`Scope::Crate`]。引数を取る旗
-/// （`--test` と [`UNREAD_ARG_TARGET_FLAGS`]）は次の 1 語を消費し（filter 語に数えない）、行末なら `None`。
-fn nextest_filter<'l>(line: &'l str, core_crate: &'l str) -> Option<(&'l str, &'l str, Scope<'l>)> {
+/// （`--test` と [`UNREAD_ARG_TARGET_FLAGS`]）は次の 1 語を消費し（filter 語に数えない）、行末なら `None`。`--` の後ろは
+/// libtest の引数で（§43 (2)）、[`LIBTEST_ARG_FLAGS`] は次の 1 語も消費し（行末なら `None`）、[`LIBTEST_BARE_FLAGS`] と
+/// 他の `-` の語は読み飛ばし、裸の語を filter 語にする（後ろが正本）。`--exact` が在れば [`Match::Exact`] で、filter 語は
+/// `::` で割った末尾の段になる。
+fn nextest_read<'l>(line: &'l str, core_crate: &'l str) -> Option<(&'l str, &'l str, Scope<'l>, Match)> {
     let mut words = line.split_whitespace();
     for head in NEXTEST_HEAD {
         if words.next() != Some(*head) {
             return None;
         }
     }
-    let (mut krate, mut filter, mut scopes) = (core_crate, None, Vec::new());
+    let (mut krate, mut filter, mut scopes, mut kind) = (core_crate, None, Vec::new(), Match::Substring);
     while let Some(word) = words.next() {
-        if PACKAGE_FLAGS.contains(&word) {
+        if word == LIBTEST_SEPARATOR {
+            let (after, exact) = libtest_filter(&mut words)?;
+            filter = after.or(filter);
+            kind = exact;
+        } else if PACKAGE_FLAGS.contains(&word) {
             krate = words.next()?;
         } else if word == LIB_FLAG {
             scopes.push(Scope::Lib);
@@ -236,7 +276,23 @@ fn nextest_filter<'l>(line: &'l str, core_crate: &'l str) -> Option<(&'l str, &'
         [one] => *one,
         _ => Scope::Crate,
     };
-    Some((krate, filter?, scope))
+    Some((krate, kind.word(filter?), scope, kind))
+}
+
+/// `--` の後ろの libtest の引数を行末まで読む（§43 (2)）: 末尾の裸の語（無ければ `None`）と一致の型。[`LIBTEST_ARG_FLAGS`]
+/// は次の 1 語も消費し（行末なら読めない＝`None`）、[`LIBTEST_BARE_FLAGS`] と他の `-` の語は filter 語に数えない。
+fn libtest_filter<'l>(words: &mut impl Iterator<Item = &'l str>) -> Option<(Option<&'l str>, Match)> {
+    let (mut filter, mut kind) = (None, Match::Substring);
+    while let Some(word) = words.next() {
+        if LIBTEST_ARG_FLAGS.contains(&word) {
+            words.next()?;
+        } else if word == EXACT_FLAG {
+            kind = Match::Exact;
+        } else if !LIBTEST_BARE_FLAGS.contains(&word) && !word.starts_with('-') {
+            filter = Some(word);
+        }
+    }
+    Some((filter, kind))
 }
 
 /// `path` が crate `name` の file か（`crates/<name>/` 配下）。
@@ -1134,5 +1190,73 @@ mod tests {
             Some(("x", "foo_", super::Scope::Crate)),
             "取らない旗は語を消費しない"
         );
+    }
+
+    // flip-check: s2-07l.550
+
+    /// 行 as の fixture:歯の fn 名が `exact_case` と等しい file 1 つと、同じ段を substring に持つ別 fn の file 2 つ（計 3 file）。
+    fn exact_base() -> (Vec<Source>, Vec<String>) {
+        let sources = vec![
+            source("crates/toy/tests/hit.rs", "#[test]\nfn exact_case() {}\n"),
+            source("crates/toy/tests/longer.rs", "#[test]\nfn exact_case_more() {}\n"),
+            source("crates/toy/tests/prefixed.rs", "#[test]\nfn pre_exact_case() {}\n"),
+        ];
+        let tracked = sources.iter().map(|found| found.path.clone()).collect();
+        (sources, tracked)
+    }
+
+    /// 行 as (2)(3): `-- --exact <名の全体>` の行は末尾の段と等しい fn を持つ file だけを置き場に取り、同じ段を substring に
+    /// 持つ別 fn の 2 file を取らない。同じ名を `--exact` 無しで `--` の後ろに置いた行・`--` の無い行は従来の部分一致で
+    /// 3 file 全部を取る（母集団 = fixture の 3 file と当たる 1 file を同じ assert で数える）。
+    #[test]
+    fn contract_teeth_exact_full_name_takes_only_the_file_whose_fn_equals_the_last_segment() {
+        let (sources, tracked) = exact_base();
+        let all = set(&["crates/toy/tests/hit.rs", "crates/toy/tests/longer.rs", "crates/toy/tests/prefixed.rs"]);
+        for (line, want) in [
+            ("cargo nextest run -p toy --no-tests=fail -- --exact hit::exact_case", set(&["crates/toy/tests/hit.rs"])),
+            ("cargo nextest run -p toy --no-tests=fail -- hit::exact_case --exact", set(&["crates/toy/tests/hit.rs"])),
+            ("cargo nextest run -p toy --no-tests=fail -- --exact exact_case", set(&["crates/toy/tests/hit.rs"])),
+            ("cargo nextest run -p toy --no-tests=fail -- exact_case", all.clone()),
+            ("cargo nextest run -p toy --no-tests=fail exact_case", all.clone()),
+        ] {
+            let found = derive(&[("verify", &[line])], &sources, &tracked).unwrap_or_else(|err| panic!("{line}: {err:?}"));
+            assert_eq!((found.len(), &found), (want.len(), &want), "fixture 3 file のうち {line}");
+        }
+    }
+
+    /// 行 as (2)(4): `--` の後ろの読み。`--skip` の次の 1 語は filter 語に数えず（行末なら `None`）、引数を取らない旗は
+    /// 読み飛ばし、`--` の前後に裸の語が在れば後ろが正本。`--` の後ろに `--exact` も裸の語も無く前にも無い行は `None`。
+    /// `--` の前の読み（crate・scope）は変わらない。
+    #[test]
+    fn contract_teeth_exact_libtest_flags_are_read_after_the_separator() {
+        use super::Scope::{Lib, Test};
+        for (line, want) in [
+            ("cargo nextest run -p x --lib -- --skip skipped_ kept_", Some(("x", "kept_", Lib))),
+            ("cargo nextest run -p x --lib -- kept_ --skip skipped_", Some(("x", "kept_", Lib))),
+            ("cargo nextest run -p x --test e2e -- --nocapture --include-ignored --no-capture kept_", Some(("x", "kept_", Test("e2e")))),
+            ("cargo nextest run -p x --lib before_ -- after_", Some(("x", "after_", Lib))),
+            ("cargo nextest run -p x --lib -- --exact a::b::after_", Some(("x", "after_", Lib))),
+            ("cargo nextest run -p x --lib --", None),
+            ("cargo nextest run -p x --lib -- --exact", None),
+            ("cargo nextest run -p x --lib -- --nocapture --skip skipped_", None),
+            ("cargo nextest run -p x --lib -- kept_ --skip", None),
+        ] {
+            assert_eq!(nextest_filter(line, "core"), want, "{line}");
+        }
+    }
+
+    /// 行 as (4)(5): `--` の後ろに語の無い行は置き場を持たず（断りも無い）、検出線の語は `--exact` の行で末尾の段・他の行で
+    /// 従来の語のまま（[`super::teeth_words`] と置き場の導出は同じ読み手）。
+    #[test]
+    fn contract_teeth_exact_detection_word_is_the_last_segment() {
+        let verify = strings(&[
+            "cargo nextest run -p toy --no-tests=fail -- --exact hit::exact_case",
+            "cargo nextest run -p toy --no-tests=fail -- --nocapture",
+            "cargo nextest run -p toy --no-tests=fail derive_",
+        ]);
+        assert_eq!(super::teeth_words(&verify), ["exact_case", "derive_"], "語の無い行は飛ばし、--exact の行は末尾の段");
+        let (sources, tracked) = exact_base();
+        let bare = derive(&[("verify", &["cargo nextest run -p toy --no-tests=fail -- --exact"])], &sources, &tracked);
+        assert_eq!(bare, Ok(BTreeSet::new()), "語の無い行は置き場を持たない");
     }
 }

@@ -77,6 +77,21 @@ const UNREAD_ARG_TARGET_FLAGS: &[&str] = &["--bin", "--bench", "--example", "-E"
 /// nextest の行で target を選ぶが scope に読まない旗のうち引数を取らない旗（§28・crate 全体へ倒す・fail-closed）。
 const UNREAD_BARE_TARGET_FLAGS: &[&str] = &["--bins", "--benches", "--examples", "--tests", "--all-targets"];
 
+/// nextest の行で libtest の引数へ切り替える境（§43 (2)・この後ろの語は [`LIBTEST_ARG_FLAGS`] / [`LIBTEST_BARE_FLAGS`] で読む）。
+const LIBTEST_SEPARATOR: &str = "--";
+
+/// `--` の後ろの libtest の旗のうち引数を取る旗（§43 (2)・次の 1 語が旗の引数で filter 語に数えない）。
+const LIBTEST_ARG_FLAGS: &[&str] = &["--skip"];
+
+/// `--` の後ろで filter 語を完全一致で読ませる libtest の旗（§43 (2)・[`LIBTEST_BARE_FLAGS`] の 1 つ）。
+const EXACT_FLAG: &str = "--exact";
+
+/// `--` の後ろの libtest の旗のうち引数を取らない旗（§43 (2)）。
+const LIBTEST_BARE_FLAGS: &[&str] = &[EXACT_FLAG, "--include-ignored", "--nocapture", "--no-capture"];
+
+/// test の名の全体の module path の区切り（完全一致の filter 語はこれで割った末尾の段を fn 名と照合する）。
+const PATH_SEPARATOR: &str = "::";
+
 /// 歯の印（この行の直下の `fn` が歯・helper の fn は数えない）。
 pub(crate) const TEST_ATTR: &str = "#[test]";
 
