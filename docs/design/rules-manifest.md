@@ -233,6 +233,21 @@ xtask 側の drift 歯（最小形）: `crates/xtask/src/limits.rs` の `#[cfg(t
   - `sizes_ratio_counts_named_test_files_on_the_test_side`: 本体 1 本と名で test の 1 本を持つ toy workspace で、test-src-ratio の分子が 0 でなくなり core-lines が名で test の file を数えない（base は分子 0・core-lines が両方を数える＝RED）。
 - 後続: core 側の `src_region` を同じ述語へ寄せる（crate を跨ぐので別の行・受付の見積が gate と一致する）。
 
+## 17. 決定の索引と語彙の突合を xtask check の検出線 1 本にする（契約表の行 n・`s2-07l.165`・棚卸しの (b)）
+
+- 出所: 監査 2026-09-12 塊 7 の memo `s2-07l.165`（憲法 C8.3 / C14.2 / N4）。決定（ADR）を足した便が索引と語彙を更新し忘れても、着地の時点で落とす面が 1 つも無い。memo は 3 面（(a) 条文が動いた便の ADR 要求・(b) 索引と語彙の突合・(c) 要件面の生成物と source の id 一致）を挙げるが、(a) と (c) は `--base` か生成器を要る。本行は (b) だけを採る——base の木 1 つで自足し、外部の道具も `--base` の経路も要らない。
+- 何が起きているか（現物の母集団・main 3b258a3・verified）: `cargo xtask check` の measure の列は `crates/xtask/src/check.rs` の `inspect`（:62-92・vec の 5 本・extend の 2 本・push の 22 本）に在り、`design-intent/` を読む measure は 2 本だけである——`crates/xtask/src/claude_md.rs` の `measure`（憲法 HTML から CLAUDE.md の生成区間を測る）と `crates/xtask/src/rules_parity.rs` の `measure`（憲法 §3 の行 id と `rules/manifest.toml` の R-* 行を双方向に突合する検出線・`s2-07l.164`）。歯の fixture と doc comment の言及は数えない。決定の索引と語彙を読む measure は 0 本である。現物の 3 面はいま一致している: `design-intent/decisions/` 直下の決定 file は 53 本、`design-intent/decisions/README.html` の索引の link は distinct 53 本で両方向の差は 0 本、`design-intent/vocabulary.yaml` が名指す決定 id は distinct 50 個で未解決は 0 個。**0 は「測れていない」であって「守られている」ではない**——いま 0 なのを機械が数えたことは一度も無い。
+- 形（`rules_parity` と同じ検出線 1 本・rc を変えない）:
+  1. **measure を 1 本足す**: 判定を組む純関数を**行 n の write-set の `+` の file** に置き、`crates/xtask/src/check.rs` の `inspect` の列に push を 1 行、`crates/xtask/src/main.rs` の module の列に 1 行足す。tag は 1 つで、fact は「file 側だけ / 索引側だけ」の対と、片側だけの file 名の 2 列と、語彙の未解決の列と、母集団の 3 つ組を同じ行に持つ（`rules_parity` の fact の形をそのまま踏む）。
+  2. **file 集合の面**: 決定 dir 直下の `ADR-` で始まる `.html` を file 系から読み、`design-intent/decisions/README.html` の `a` 要素の `href` のうち決定 file を指すものを索引とする。両方向の差（file にしか無い / 索引にしか無い）を file 名で名指す。HTML の読み手は `crates/xtask/src/claude_md.rs` の tag 読み 4 本（`attr` / `read_tag` / `skip_ignorable` / `skip_raw`・`rules_parity` が同じ 4 本を借りている）を呼ぶ（2 本目の HTML parser を作らない・C2）。
+  3. **語彙の面**: `design-intent/vocabulary.yaml` の本文に現れる決定 id（`ADR-` + 4 桁）を distinct に集め、決定 file の id 集合に解けないものを名指す。語彙は yaml として parse しない（id の字面だけが要る＝2 本目の yaml 読み手を作らない）。
+  4. **極性は検出線**（違反を立てず rc を変えない）。deny 化（両方向 0 と未解決 0 を要求する）は rules 行 + 裁定 id を要るので別便にする（C5・`rules_parity` が同じ順で通った前例）。**値は user 裁定・推奨 = いまの 3 面が 0 のまま 2 週間動かないことを検出線で確かめてから deny へ上げる**。
+  5. **測れないを 0 に化けさせない**（NFR4）: 決定 dir を持たない木は `n/a` の 1 語（0 と別の字面）、索引 file か語彙 file を読めない周は `?` + 違反 1 件。片側だけの列が 0 本の周は `-` を置く（空文字にしない）。
+  6. **判定行の形の pin を 1 つ増やす**: `crates/xtask/src/check_tests.rs` の `SUMMARY_PIN` に新しい token を足し、`ids=` の副 field を持つ token の頭の列（`IDS_OWNERS`）に本 tag の 3 つの列の頭を足す。
+- 触らない: 既存の measure の fact と極性・`rules_parity` の fact の形と歯 4 本・`crates/xtask/src/claude_md.rs` の tag 読みの本文・`crates/xtask/src/limits.rs`（閾値を足さない）・CI の job・`.vessel.toml` の共通 verify の行・`design-intent/` の中身（1 字も書き換えない）。
+- 却下: memo の (a)（条文が動いた便に ADR を要求する）を同じ便に畳む——`--base` の経路が要り flip-check と材料を共有するので M に収まらず、「ADR が在る」の判定が条文の解釈に触れる（A2 の面）。／memo の (c)（要件面の生成物と source の id 一致）——source 側の yaml を読む 2 本目の読み手が要り、生成器は外部の道具である。／外部の道具を CI に積む（`s2-07l.63` が不採用にした形・道具は PATH に無く共通 verify の許す command にも無い）。／索引の JSON-LD の側も測る——JSON の読み手が 1 本増える。生成器の領分として本行は link の列だけを測る。／違反（rc 1）にする——裁定が要る面を裁定なしで立てることになる（C5）。
+- 歯（接頭辞 `decisions_index_`・`crates/` 全体の fn 名の substring に 0 件＝衝突なし）: 置き場は `crates/xtask/src/check_tests.rs`（既存の measure の歯と同じ file）。(a) tmp の木に決定 file 3 本・索引の link 2 本・語彙の参照 1 個を置いて、file 側だけ 1 本・索引側だけ 0 本・語彙の未解決 0 個・母集団 3/2/1 を fact の全文で測る。(b) 実在しない file を指す link を 1 本足すと索引側だけが 1 本になり、実在しない決定 id を語彙に 1 個足すと語彙の未解決が 1 個になる（片側ずつ動かす＝1 つの欄が 2 つを兼ねない）。(c) 決定 dir の無い木は `n/a` の 1 語で違反 0・索引 file を読めない木は `?` + 違反 1 件（0 と融合しない）。(d) `SUMMARY_PIN` に本 tag の token が在り、現物の repo で撃った判定行がその形に一致する（既存の `rules_parity_token_is_in_summary_pin` と同じ形）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -369,4 +384,14 @@ write-set = ["crates/xtask/src/workspace.rs", "crates/xtask/src/check_sizes.rs",
 verify = ["cargo nextest run -p xtask --no-tests=fail sizes_split_counts_named_test_files_as_whole_test", "cargo nextest run -p xtask --no-tests=fail sizes_ratio_counts_named_test_files_on_the_test_side"]
 size = "S"
 done = "(1) 名が tests.rs か _tests.rs で終わる file の src 側が 0 行になり test-src-ratio の判定行が 43% 台（上限 100% で違反 0）・core-lines が 40408（上限 60000）で出る (2) flip-check の is_test_file の src 配下の枝と rules-wired の TEST_FILE_TAIL の判定が同じ 1 本の述語を呼び、_tests.rs の判定の字面が xtask の src 区間（歯の fixture 名を除く）で述語の中の 1 か所だけになり、flip-check の tests/ の枝と rules-wired の DECLARING の枝の挙動が base と同じ (3) env-reads の判定行の違反と母集団が base と同じ値で出る (4) §4 の切り方の 2 文が新しい形を写し（file 名の tail は backtick 無しで書く・現物の契約表の歯 contract_closure_ext_real_table_has_zero_findings が緑のまま）、rules/manifest.toml と憲法 §3 の閾値セルが 1 字も変わらない"
+
+[[contract]]
+id = "n"
+title = "決定の索引（決定 dir の file 集合 ↔ README の link の列）と語彙が名指す決定 id の解決を xtask check の検出線 1 本で双方向に測る — rc は変えず、片側だけの id の列と母集団の 3 つ組を判定行に出す"
+req = ["FR17", "NFR4"]
+section = "17"
+write-set = ["crates/xtask/src/check.rs", "crates/xtask/src/main.rs", "+crates/xtask/src/decisions_index.rs", "crates/xtask/src/check_tests.rs", "docs/design/rules-manifest.md"]
+verify = ["cargo nextest run -p xtask --no-tests=fail decisions_index_"]
+size = "M"
+done = "(1) xtask check の measure の列に push が 1 行増え、判定行に新しい tag の fact が 1 つ増える (2) 決定 dir 直下の ADR- で始まる .html の集合と README の a 要素の href の列を両方向に突合し、片側にしか無い file 名を出現順の列で名乗る（HTML の読み手は既存の tag 読み 4 本を呼び、2 本目の parser を作らない） (3) 語彙 file の本文の決定 id を distinct に集め、決定 file の集合に解けない id を列で名乗る (4) 極性は検出線で、両方向の差が 1 本以上でも違反を立てず cargo xtask check の rc が変わらない (5) 決定 dir の無い木は n/a の 1 語・索引か語彙を読めない周は ? + 違反 1 件・片側 0 本の列は - (6) SUMMARY_PIN に本 tag の token が在り ids= を持つ token の頭の列に 3 つの頭が加わり、現物の repo の判定行がその形に一致する"
 <!-- contracts:end -->
