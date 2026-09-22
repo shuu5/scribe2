@@ -631,7 +631,7 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
   - **いま実台帳へ届いている歯は 0 本である**（本 § の再実測）。終端の close は「押す先を宣言した repo」の後ろに在り（`finish.rs` の早期 return）、宣言する fixture を使う歯 9 本は**全部 --bd を渡す**。列の 1 周で --bd を渡さない 3 か所は --repo を渡さず reason=args で返る。ゆえに本行は**時間の短縮を約束しない**——約束するのは届く経路を塞ぐことと、届きにいった回数を**測れるようにする**ことである（memo の費用の主張はその記録で初めて真偽が決まる）。
   - 台帳 client を明示する口（--bd に偽 client の絶対 path を渡す口）は **43 か所**で、PATH を通らないので本行と交わらない。
 - **形**（番号は done と歯に 1:1 で対応する）:
-  1. **道具箱に見張りを 1 本置く**: 道具箱を組む 1 関数（§30 約束 1）が、偽 systemd-run と偽 systemctl に並べて**台帳 client の既定名の偽物**を置く。呼ばれた argv を 1 起動 1 file で記録 dir へ写してから、**台帳を解けない host と同じ形で断る**（rc は非 0・標準出力は空）。
+  1. **道具箱に見張りを 1 本置く**: 道具箱を組む 1 関数（§30 約束 1・`crates/scribe2/tests/e2e/main.rs` の `toolbox_path`。偽 systemd-run と偽 systemctl を bin dir に書いて PATH の先頭に足す）が、その 2 本に並べて**台帳 client の既定名の偽物**（既定名は `crates/scribe2/src/seat/ledger.rs` の `DEFAULT_BD`）を置く。呼ばれた argv を 1 起動 1 file で記録 dir へ写してから、**台帳を解けない host と同じ形で断る**（rc は非 0・標準出力は空）。
   2. **答えが host に依らなくなる**: 道具箱を通す起動は、実 client を持つ host でも持たない host でも同じ 1 つの答えになる。--bd を渡す既存の 43 か所は絶対 path なので 1 つも通らず、既存の assert は動かない。
   3. **撃ちにいった周が数で残る**: 見張りの記録 dir の件数が「器が台帳 client を起こした回数」である。0 件は「起こしていない」、1 件以上はその argv が読める（母集団は件数と対で出す）。
 - **触らない**: 器の src（台帳 client の解き方・--bd の受け方・rules 行 `seat.ledger_timeout_s` の読み・列の 1 周の分岐の順と unmeasured の理由・終端の 3 段と close の引数と cwd の固定〔[pipeline.md](./pipeline.md) §48〕）・道具箱の既存の 2 本とその記録 dir・PATH の組み方と 3 つの口・明示の 4 つの口・--bd を渡す 43 か所・既存の歯の総数と既存の assert。
@@ -641,7 +641,7 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
   - **器の側に「toy なら台帳を撃たない」分岐を作る**: 契約と宣言の外に既定を作る（C5 / C1）。器が見るのは --bd と rules 行だけ、という面を崩す。
   - **実 client を PATH から外す**: 台帳を読む経路が歯から丸ごと消え、読みの引数も断りの型も測られなくなる（§30 の「全部を包めない host にする」と同型）。
   - **見張りを rc 0 で「空の台帳」として答えさせる**: 列の 1 周が「0 件の台帳を読めた」に倒れ、unmeasured reason=ledger の枝が測られなくなる。断る側なら実 client を持たない host のいまの答えと同じである。
-- **歯**（接頭辞 `e2e_ledger_tripwire_`・置き場は行 ad の write-set の pipe の歯の file と列の歯の file）:
+- **歯**（接頭辞 `e2e_ledger_tripwire_`・置き場は `crates/scribe2/tests/e2e/pipe.rs` と列の歯の file `crates/scribe2/tests/e2e/pipe/dispatch.rs`。行の 2 本目の verify が名指す既存の歯 `pipe_terminal_dispatch_manual_turn_starts_the_runs_it_can` も同じ `pipe/dispatch.rs` に在る）:
   (a) **非空虚の枝**（先に書く）: 列の 1 周を --repo と --runner と台帳の待ち上限の行を持つ写しつきで、--bd を**渡さず**撃つと、見張りの記録が**ちょうど 1 件**在り、その本文が読みの引数（--readonly と一覧の語）を持つ。これが無いと (b) は「経路が無いから 0 件」で空虚に通る。
   (b) **既定の枝**: helper 経由で 1 便を intake → spawn → gate → land まで通した後、見張りの記録が **0 件**である。同じ便で道具箱の systemd-run の記録が**1 件以上**在ることを対で測る（便が道具箱を通っていない周に 0 件が空虚に通らない）。
   (c) **明示の口と食い合わない**: --bd に fixture の偽 client の絶対 path を渡した周は、見張りの記録が 0 件のまま、偽 client 側の log に呼出が残る。
@@ -950,5 +950,5 @@ section = "37"
 write-set = ["crates/scribe2/tests/e2e/main.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/pipe/dispatch.rs", "docs/design/gate-cost.md"]
 verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail e2e_ledger_tripwire_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_terminal_dispatch_manual_turn_starts_the_runs_it_can"]
 size = "S"
-done = "(1) 歯の道具箱が偽 systemd-run と偽 systemctl に並べて台帳 client の既定名の偽物を置き、呼ばれた argv を 1 起動 1 file で記録 dir へ写してから標準出力を空にして非 0 の rc で断る (2) --repo と --runner と台帳の待ち上限の行を持つ写しつきで --bd を渡さずに撃った列の 1 周が見張りの記録をちょうど 1 件残してその本文が読みの引数を持ち、--bd に偽 client の絶対 path を渡した周は見張りの記録が 0 件のまま偽 client 側に呼出が残り、既存の assert は動かない (3) helper 経由で 1 便を intake から land まで通した周は見張りの記録が 0 件で同じ便の道具箱の systemd-run の記録が 1 件以上在り、器の src と PATH の組み方と 3 つの口と明示の 4 つの口と --bd を渡す既存の起動と既存の歯の総数は 1 字も変わらない"
+done = "(1) 歯の道具箱（tests/e2e/main.rs の toolbox_path）が偽 systemd-run と偽 systemctl に並べて台帳 client の既定名（seat/ledger.rs の DEFAULT_BD）の偽物を置き、呼ばれた argv を 1 起動 1 file で記録 dir へ写してから標準出力を空にして非 0 の rc で断る (2) --repo と --runner と台帳の待ち上限の行を持つ写しつきで --bd を渡さずに撃った列の 1 周が見張りの記録をちょうど 1 件残してその本文が読みの引数を持ち、--bd に偽 client の絶対 path を渡した周は見張りの記録が 0 件のまま偽 client 側に呼出が残り、既存の assert は動かない (3) helper 経由で 1 便を intake から land まで通した周は見張りの記録が 0 件で同じ便の道具箱の systemd-run の記録が 1 件以上在り、器の src と PATH の組み方と 3 つの口と明示の 4 つの口と --bd を渡す既存の起動と既存の歯の総数は 1 字も変わらない"
 <!-- contracts:end -->
