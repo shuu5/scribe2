@@ -744,6 +744,12 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
   - **`s2-07l.198.2` を size S に書き直す**: size は便の write-set 全体に掛かる見積で、境界 crate の便は core の bin と歯の移動を含む（S では足りない）。
 - 歯（**新しい歯は 1 本も足さない**・純移動ゆえ既存の歯が母集団である）: 移した 15 item を測る歯は `mutants_targets_` **5 本**と `mutants_in_diff_` **2 本**（どちらも同 file の歯の区間に在り、`crates/` 全体で他 file に 0 件）。親に残る群を測る歯は `mutants_diff_fail_fast_` **4 本**・`mutants_diff_teeth_` **5 本**・`mutants_diff_outside_` **3 本**（同じく他 file に 0 件）。母集団は同 file の `#[test]` **20 本**で、便の前後で 20 のまま動かない。接頭辞 `no_fail_fast_` は `crates/xtask/src/check_prose_tests.rs` と `crates/xtask/src/flipcheck_tests.rs` にも当たるので検証行には使わない（受付が teeth-outside-write-set で断る）。
 
+### 40.1 errata（現物との差・`s2-07l.549`・規範は上の §40 のまま）
+
+- 札の id: 形 4 は `s2-07l.198.2` を名指すが、札は移した便の bead を名乗る（他の純移動の札と同じ・`s2-07l.198.2` はこの移動を前提にする後続の便で、移動はしない）＝`// flip-check: moved s2-07l.549` を親の歯の区間の先頭と行 ag の write-set の `+` の file の先頭に対で置いた。
+- 子側で可視性を上げたのは 2 名（`place_diff` と `aimed_run`・親の本体が呼ぶ 5 名のうち元が private の 2 つ）で、残りの 3 名と歯だけが引く 6 名は元から `pub`。子が親から引く名は 12 個（上の 10 個から `crate::emit` の path 呼びと `ExitCode` の std の use を除き、`parse_outcomes` / `measured` / `without_outcomes` / `outside_token` を足した数）。
+- 移した群の doc の intra-doc link のうち親の再輸出を指す 1 つ（`aimed_args` の doc の `measure_args`）も `super::` の path 形に直した（コメント行・hash の外）。
+
 <!-- contracts:begin -->
 schema = 1
 
