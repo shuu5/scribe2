@@ -59,7 +59,9 @@ use crate::fleet::store::LockPolicy;
 use crate::fleet::{cli::now_utc, Cost, CostSource, EventKind, Stage, SCHEMA};
 use crate::rules::manifest::Manifest;
 use findings::Tally;
-use lens::{ask_lens, fold_renamed_paths, lens_input, substitute, unjudged, write_verdict, Judged, LENS_STAGE};
+use lens::{
+    ask_lens, fold_renamed_paths, head_paths, lens_input, substitute, unjudged, write_verdict, Judged, LENS_STAGE,
+};
 use record::{record_notice, record_verify};
 use std::path::Path;
 use verify::byte_count;
@@ -480,9 +482,11 @@ fn measure(entry: &Gate<'_>, worktree: &Path, base: &str) -> Result<Measured, St
         (diff, input)
     };
     // **畳むのは diff の周だけ**（設計 gate-cost.md §41 形 2）。生 diff は記録（`diff_bytes`）のまま残す。
+    // HEAD の path の列は読めた周だけ渡す（§42 形 2・読めない周は dir の対を導かない）。
     let (lens_diff, elided) = match &input {
         LensInput::Diff(_) => {
-            let (folded, hunks, lines) = fold_renamed_paths(&diff);
+            let head = head_paths(worktree);
+            let (folded, hunks, lines) = fold_renamed_paths(&diff, head.as_deref());
             (folded, (hunks, lines))
         }
         LensInput::Summary(_) => (diff.clone(), (0, 0)),

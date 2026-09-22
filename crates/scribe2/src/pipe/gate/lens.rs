@@ -27,6 +27,17 @@ pub(super) fn lens_input(worktree: &Path, base: &str, diff: &[u8]) -> LensInput 
     move_proof::judge(&String::from_utf8_lossy(diff), &read)
 }
 
+/// HEAD の tracked path の列（設計 gate-cost.md §42 形 2・[`fold_renamed_paths`] の dir の対の材料）。
+///
+/// **読めた周だけ** `Some`——git が落ちた周と列が空の周は `None`（空の列は「配下に path が無い」を空虚に真にし、
+/// 広い dir の対を生む）。`-z` の生の path で読む（引用符で包まれた path も配下に数え落とさない）。
+pub(super) fn head_paths(worktree: &Path) -> Option<Vec<Vec<u8>>> {
+    let listed = git_bytes(worktree, &["ls-tree", "-r", "-z", "--name-only", "HEAD"])?;
+    let paths: Vec<Vec<u8>> =
+        listed.split(|byte| *byte == 0).filter(|path| !path.is_empty()).map(<[u8]>::to_vec).collect();
+    (!paths.is_empty()).then_some(paths)
+}
+
 /// diff の file の見出し（畳みの走査が hunk の終わりを知る）。
 const FILE_HEAD: &[u8] = b"diff --git ";
 
@@ -57,11 +68,16 @@ fn elided_mark(minus: u64, plus: u64) -> String {
 /// （設計 gate-cost.md §41 形 1・**pure**＝diff の字面だけを読み git を呼ばない）。
 ///
 /// 戻りは（畳んだ後の本文, 畳んだ hunk 数, 畳んだ行数）で、行数は畳んだ hunk の `-` と `+` の行の和。畳むのは
-/// 条件を全部満たす hunk だけ——判定の順は path の絞り（[`folds_here`]）→ 置換後の一致 → 各行の効き → 1 塊
-/// （[`replaced_only`]）で、1 つでも欠ければ逐語のまま。header（`diff --git` / `---` / `+++` / `@@`）は残す。
-/// rename の対が 0 の diff は置換が 1 行も効かないので本文そのまま（0/0）。
-pub(super) fn fold_renamed_paths(diff: &[u8]) -> (Vec<u8>, u64, u64) {
-    let mut fold = Fold { pairs: rename_pairs(diff), out: Vec::with_capacity(diff.len()), hunks: 0, lines: 0 };
+/// 条件を全部満たす hunk だけ——判定の順は path の絞り（[`folds_here`]）→ 段の切り分け → 段ごとの一致 → 各行の効き
+/// （[`replaced_only`]・§42 形 1）で、1 つでも欠ければ逐語のまま。header（`diff --git` / `---` / `+++` / `@@`）は残す。
+/// 置換の対は rename の対と、`head`（HEAD の tracked path の列・読めた周だけ）から導く移動で空になった dir の対
+/// （[`dir_pairs`]・§42 形 2）。rename の対が 0 の diff は置換が 1 行も効かないので本文そのまま（0/0）。
+pub(super) fn fold_renamed_paths(diff: &[u8], head: Option<&[Vec<u8>]>) -> (Vec<u8>, u64, u64) {
+    let mut pairs = rename_pairs(diff);
+    let dirs = dir_pairs(&pairs, head);
+    pairs.extend(dirs);
+    pairs.sort_by_key(|(old, _)| std::cmp::Reverse(old.len()));
+    let mut fold = Fold { pairs, out: Vec::with_capacity(diff.len()), hunks: 0, lines: 0 };
     let mut docs = false;
     let mut hunk: Option<Vec<&[u8]>> = None;
     for line in diff.split_inclusive(|byte| *byte == b'\n') {
@@ -87,7 +103,9 @@ pub(super) fn fold_renamed_paths(diff: &[u8]) -> (Vec<u8>, u64, u64) {
 
 /// [`fold_renamed_paths`] の走査の途中の状態（出力と件数）。
 struct Fold {
-    /// rename の対（旧 path, 新 path・長い旧 path から順）。
+    /// 置換の対（旧 path, 新 path・rename の対と dir の対を 1 列に・長い旧 path から順）。
+    ///
+    /// 長い順に並べるのは、短い旧 path が長い旧 path の頭に当たって先に置き換わるのを塞ぐため。
     pairs: Vec<(Vec<u8>, Vec<u8>)>,
     /// 畳んだ後の本文。
     out: Vec<u8>,
@@ -119,10 +137,9 @@ fn folds_here(side: &[u8]) -> bool {
     side.strip_prefix(FOLD_DIR).is_some_and(|rest| rest.ends_with(FOLD_EXT))
 }
 
-/// diff の header から rename の対（旧 path, 新 path）を集める（長い旧 path から順）。
+/// diff の header から rename の対（旧 path, 新 path）を集める（diff の順・並べ替えは呼び手）。
 ///
-/// 長い順に並べるのは、短い旧 path が長い旧 path の頭に当たって先に置き換わるのを塞ぐため。空の旧 path は
-/// 持たない（置換の走査が進まなくなる）。
+/// 空の旧 path は持たない（置換の走査が進まなくなる）。
 fn rename_pairs(diff: &[u8]) -> Vec<(Vec<u8>, Vec<u8>)> {
     let mut pairs = Vec::new();
     let mut from: Option<&[u8]> = None;
@@ -135,40 +152,105 @@ fn rename_pairs(diff: &[u8]) -> Vec<(Vec<u8>, Vec<u8>)> {
             }
         }
     }
-    pairs.sort_by_key(|(old, _)| std::cmp::Reverse(old.len()));
     pairs
+}
+
+/// 移動で空になった dir の対を rename の対から導く（設計 gate-cost.md §42 形 2）。
+///
+/// `head`（HEAD の tracked path の列）が無い周は**導出を丸ごと行わない**（空の列は下の (i) を空虚に真にする）。
+/// rename の対ごとに末尾の共通 component を 1 つずつ剥がした prefix の対 (pa, pb) を長い pa から順に見て、
+/// (i) HEAD に `pa/` 配下の path が無く、(ii) `pa/` 配下の旧 path を持つ rename の対が全部 `pb/` + 同じ相対 path へ
+/// 行く、の間だけ対として足す（どちらかが破れたら、それより短い prefix は見ない）。
+fn dir_pairs(pairs: &[(Vec<u8>, Vec<u8>)], head: Option<&[Vec<u8>]>) -> Vec<(Vec<u8>, Vec<u8>)> {
+    let Some(head) = head else { return Vec::new() };
+    let mut dirs: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+    for (old, new) in pairs {
+        for (pa, pb) in stripped_prefixes(old, new) {
+            let emptied = !head.iter().any(|path| under(path, pa).is_some());
+            let consistent =
+                pairs.iter().all(|(from, to)| under(from, pa).is_none_or(|rest| under(to, pb) == Some(rest)));
+            if !emptied || !consistent {
+                break;
+            }
+            if !dirs.iter().any(|(seen, _)| seen.as_slice() == pa) {
+                dirs.push((pa.to_vec(), pb.to_vec()));
+            }
+        }
+    }
+    dirs
+}
+
+/// rename の対 (a, b) の末尾の共通 component を 1 つずつ剥がした prefix の対（長い方から・空の prefix は持たない）。
+fn stripped_prefixes<'a>(old: &'a [u8], new: &'a [u8]) -> Vec<(&'a [u8], &'a [u8])> {
+    let mut prefixes = Vec::new();
+    let (mut pa, mut pb) = (old, new);
+    while let (Some((head_a, last_a)), Some((head_b, last_b))) = (split_last_component(pa), split_last_component(pb))
+    {
+        if last_a != last_b {
+            break;
+        }
+        (pa, pb) = (head_a, head_b);
+        prefixes.push((pa, pb));
+    }
+    prefixes
+}
+
+/// path を（親の prefix, 末尾の component）に割る（`/` が無いか親が空なら `None`）。
+fn split_last_component(path: &[u8]) -> Option<(&[u8], &[u8])> {
+    let slash = path.iter().rposition(|byte| *byte == b'/')?;
+    let (parent, last) = path.split_at(slash);
+    (!parent.is_empty()).then(|| (parent, last.get(1..).unwrap_or_default()))
+}
+
+/// path が `dir/` 配下なら dir からの相対 path。
+fn under<'a>(path: &'a [u8], dir: &[u8]) -> Option<&'a [u8]> {
+    path.strip_prefix(dir)?.strip_prefix(b"/")
 }
 
 /// hunk の本文が rename の置換だけで説明が付くなら（`-` の行数, `+` の行数）。付かなければ `None`。
 ///
-/// 3 条件を順に見る: `-` の列に置換を当てた結果が `+` の列と順序も本数も同じ → `-` の各行が置換で 1 字以上
-/// 変わる（行の並べ替えや同文の消して足すを隠さない）→ 本文が context・`-` の連続・`+` の連続・context の 1 塊
-/// （`-` と `+` の間に context が在る＝置換を伴う行の移動を隠さない）。`\ No newline` の注記は行に数えない。
+/// 本文を段（[`stages`]）に切り、段ごとに 2 条件を見る: `-` の列に置換を当てた結果が `+` の列と順序も本数も
+/// 同じ（本数の違い・`-` の連続の直後が context の形もここで落ちる＝置換を伴う行の移動を隠さない）→ `-` の各行が
+/// 置換で 1 字以上変わる（行の並べ替えや同文の消して足すを隠さない）。件数は全段の和。`\ No newline` の注記は
+/// 行に数えず段も切らない。
 fn replaced_only(body: &[&[u8]], pairs: &[(Vec<u8>, Vec<u8>)]) -> Option<(u64, u64)> {
     let lines: Vec<&[u8]> = body
         .iter()
         .map(|line| line.strip_suffix(b"\n").unwrap_or(line))
         .filter(|line| !line.starts_with(b"\\"))
         .collect();
-    let minus: Vec<&[u8]> = lines.iter().filter_map(|line| line.strip_prefix(b"-")).collect();
-    let plus: Vec<&[u8]> = lines.iter().filter_map(|line| line.strip_prefix(b"+")).collect();
-    let replaced: Vec<Vec<u8>> = minus.iter().map(|line| replace_paths(line, pairs)).collect();
-    if replaced != plus {
-        return None;
+    let (mut minus_total, mut plus_total) = (0_usize, 0_usize);
+    for (minus, plus) in stages(&lines) {
+        let replaced: Vec<Vec<u8>> = minus.iter().map(|line| replace_paths(line, pairs)).collect();
+        if replaced != plus {
+            return None;
+        }
+        if replaced.iter().zip(&minus).any(|(new, old)| new == old) {
+            return None;
+        }
+        minus_total = minus_total.saturating_add(minus.len());
+        plus_total = plus_total.saturating_add(plus.len());
     }
-    if replaced.iter().zip(&minus).any(|(new, old)| new == old) {
-        return None;
-    }
-    if !one_block(&lines) {
-        return None;
-    }
-    Some((line_count(minus.len()), line_count(plus.len())))
+    Some((line_count(minus_total), line_count(plus_total)))
 }
 
-/// 本文の行の頭の列から前後の context を除いた残りに context が無い（`-` と `+` が 1 塊）か。
-fn one_block(lines: &[&[u8]]) -> bool {
-    let kinds: Vec<u8> = lines.iter().map(|line| line.first().copied().unwrap_or(b' ')).collect();
-    !kinds.trim_ascii().contains(&b' ')
+/// hunk の段（`-` の連続の列, その直後の `+` の連続の列・どちらも頭の 1 字を剥がした行）。
+type Stage<'a> = (Vec<&'a [u8]>, Vec<&'a [u8]>);
+
+/// 本文の行を段（[`Stage`]）に切る。段の間と前後の context は捨てる。
+fn stages<'a>(lines: &[&'a [u8]]) -> Vec<Stage<'a>> {
+    let changed = |line: &&[u8]| line.starts_with(b"-") || line.starts_with(b"+");
+    let mut stages = Vec::new();
+    let mut rest = lines;
+    while let Some(start) = rest.iter().position(changed) {
+        rest = rest.get(start..).unwrap_or_default();
+        let minus: Vec<&[u8]> = rest.iter().map_while(|line| line.strip_prefix(b"-")).collect();
+        rest = rest.get(minus.len()..).unwrap_or_default();
+        let plus: Vec<&[u8]> = rest.iter().map_while(|line| line.strip_prefix(b"+")).collect();
+        rest = rest.get(plus.len()..).unwrap_or_default();
+        stages.push((minus, plus));
+    }
+    stages
 }
 
 /// 1 行に全ての対の置換を 1 走査で当てる（同じ位置では長い旧 path が先・置き換えた字面は再び見ない）。
@@ -410,7 +492,7 @@ pub(super) fn write_verdict(path: &Path, text: &str) -> Result<(), String> {
 mod tests {
     // flip-check: moved s2-07l.286
     use super::super::verify::tests::{names, scratch};
-    use super::{substitute, write_verdict};
+    use super::{dir_pairs, substitute, write_verdict};
     use std::path::Path;
 
     /// 判定の書きは完了後に書きかけを残さず、本 file の中身は完全（前の判定を丸ごと置き換える）。
@@ -472,5 +554,22 @@ mod tests {
             Path::new("/runs/WORKTREE-MARKER"),
         );
         assert_eq!(line, "lens --contract /state/{worktree}/CONTRACT-MARKER.toml");
+    }
+
+    /// (n) HEAD の tracked path の列が無い周は、rename の対が在っても dir の対が 0（空の列として扱わない）。
+    /// 同じ rename の対に配下の path を持たない列を渡した周は対が在る（対照・設計 gate-cost.md §42 形 2）。
+    #[test]
+    fn gate_elide_dir_pairs_absent_head_list_derives_no_pair() {
+        let pairs = vec![(b"tests/e2e/gate.rs".to_vec(), b"boundary/tests/e2e/gate.rs".to_vec())];
+        assert_eq!(dir_pairs(&pairs, None), Vec::<(Vec<u8>, Vec<u8>)>::new(), "列が無い周は導出しない");
+        let head = vec![b"boundary/tests/e2e/gate.rs".to_vec(), b"src/lib.rs".to_vec()];
+        assert_eq!(
+            dir_pairs(&pairs, Some(&head)),
+            vec![
+                (b"tests/e2e".to_vec(), b"boundary/tests/e2e".to_vec()),
+                (b"tests".to_vec(), b"boundary/tests".to_vec()),
+            ],
+            "配下の path を持たない列では空になった dir の対が長い方から在る",
+        );
     }
 }

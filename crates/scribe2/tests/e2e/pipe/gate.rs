@@ -5338,3 +5338,173 @@ fn pipe_gate_elide_context_between_minus_and_plus_is_verbatim() {
     assert!(gated.raw.contains(&shape), "前提: - と + の間に context: {}", gated.raw);
     assert_elide_verbatim(&gated, &format!("\n+{}\n", elide_row(ELIDE_NEW)), "context を挟む移動");
 }
+
+// ───── 段ごとの対と移動で空になった dir の対（設計 gate-cost.md §42・行 ai・接頭辞 `pipe_gate_elide_` のまま） ─────
+
+/// path を名指す 2 本目の row（[`elide_row`] と字面が違う・改行なし）。
+fn elide_next_row(path: &str) -> String {
+    format!("| next row also points at `{path}` |")
+}
+
+/// dir だけを名指す row（改行なし・`dir/` の形）。
+fn elide_dir_row(dir: &str) -> String {
+    format!("| teeth live under `{dir}/` |")
+}
+
+/// 畳まれた周の共通 assert: lens の stdin に `-N/+N` の印が在り、`kept`（置換後の行）が無く、通知は 1 行で
+/// `elided=<notice>` で終わり、`bytes=` は lens に渡した本文の byte、`diff_bytes` は生 diff のまま。
+fn assert_elide_folded(gated: &ElideGate, kept: &str, mark: &str, notice: &str) {
+    assert!(gated.raw.contains(kept), "前提: 生 diff が `{kept}` を持つ: {}", gated.raw);
+    assert!(gated.stdin.contains(&format!("\n~ rename の置換だけの hunk（{mark} 行）を省いた\n")), "{}", gated.stdin);
+    assert!(!gated.stdin.contains(kept), "置換後の行は lens に渡らない: {}", gated.stdin);
+    assert_eq!(gated.notices.len(), 1, "通知は 1 行: {:?}", gated.notices);
+    assert!(
+        gated.notices.iter().all(|line| line.starts_with("# lens-input=diff reason=") && line.ends_with(notice)),
+        "通知に `{notice}`: {:?}",
+        gated.notices
+    );
+    assert_eq!(token_of(&gated.line, "bytes="), gated.stdin.len().to_string(), "bytes= は畳んだ本文の byte");
+    assert_eq!(value_of(&verdict_pairs(&gated.state, &gated.id), "diff_bytes"), gated.raw.len().to_string());
+    clean(&[&gated.repo, &gated.state]);
+}
+
+/// (i) 2 段の hunk（`-A` / `+A'` / context / `-B` / `+B'`・どちらの段も置換だけ）→ 畳む・通知に `elided=1/4`（段の切り分けの歯）。
+#[test]
+fn pipe_gate_elide_two_stage_hunk_is_folded() {
+    let doc = |path: &str| format!("{}\nC context line\n{}\n", elide_row(path), elide_next_row(path));
+    let gated = elide_gate(&[(ELIDE_NOTES, &doc(ELIDE_OLD))], &[(ELIDE_NOTES, &doc(ELIDE_NEW))], true);
+    let shape = format!(
+        "\n-{}\n+{}\n C context line\n-{}\n+{}\n",
+        elide_row(ELIDE_OLD),
+        elide_row(ELIDE_NEW),
+        elide_next_row(ELIDE_OLD),
+        elide_next_row(ELIDE_NEW)
+    );
+    assert!(gated.raw.contains(&shape), "前提: 1 つの hunk に 2 段: {}", gated.raw);
+    let kept = format!("\n+{}\n", elide_next_row(ELIDE_NEW));
+    assert_elide_folded(&gated, &kept, "-2/+2", " elided=1/4");
+}
+
+/// (j) 段の本数が違う（`-A` / `-B` / `+A'`・どちらの `-` も置換で変わる）→ 逐語（列の相等で落ちることを固定する回帰の歯）。
+#[test]
+fn pipe_gate_elide_stage_count_mismatch_is_verbatim() {
+    let base = format!("{}\n{}\n", elide_row(ELIDE_OLD), elide_next_row(ELIDE_OLD));
+    let head = format!("{}\n", elide_row(ELIDE_NEW));
+    let gated = elide_gate(&[(ELIDE_NOTES, &base)], &[(ELIDE_NOTES, &head)], true);
+    let shape = format!("\n-{}\n-{}\n+{}\n", elide_row(ELIDE_OLD), elide_next_row(ELIDE_OLD), elide_row(ELIDE_NEW));
+    assert!(gated.raw.contains(&shape), "前提: -2/+1 の段: {}", gated.raw);
+    assert_elide_verbatim(&gated, &format!("\n+{}\n", elide_row(ELIDE_NEW)), "段の本数の違い");
+}
+
+/// 移動の歯の便を Implemented まで通す: base の file 群と `moves` の旧 path（中身は file ごとに違う）を commit し、runner は
+/// `moves` を全部 `git mv` し、HEAD の file 群を写して commit する（write-set は対と base の file 群）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn elide_moves_run(base: &[(&str, &str)], head: &[(&str, &str)], moves: &[(&str, &str)]) -> (PathBuf, PathBuf, String) {
+    let (repo, state) = repo_with_state();
+    let mut written: Vec<(&str, String)> =
+        moves.iter().enumerate().map(|(index, (old, _))| (*old, format!("// moved module {index}\n"))).collect();
+    written.extend(base.iter().map(|(path, body)| (*path, (*body).to_owned())));
+    for (path, body) in &written {
+        let file = repo.join(path);
+        fs::create_dir_all(file.parent().expect("file の親が在る")).expect("base の dir を作れる");
+        fs::write(&file, body).expect("base の file を書ける");
+    }
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "elide-moves-base"]);
+    let staged = state.join("head");
+    fs::create_dir_all(&staged).expect("HEAD の写しの dir を作れる");
+    let mut steps: Vec<String> = Vec::new();
+    for (old, new) in moves {
+        let parent = Path::new(new).parent().expect("移動先の親が在る");
+        steps.push(format!("mkdir -p {}", parent.display()));
+        steps.push(format!("git mv {old} {new}"));
+    }
+    for (index, (path, body)) in head.iter().enumerate() {
+        let copy = staged.join(index.to_string());
+        fs::write(&copy, body).expect("HEAD の file を書ける");
+        steps.push(format!("cp '{}' {path}", copy.display()));
+    }
+    steps.push("git add -A".to_owned());
+    steps.push("git commit -q -m runner".to_owned());
+    let mut listed: Vec<String> = Vec::new();
+    for (old, new) in moves {
+        listed.push(format!("\"{old}\""));
+        listed.push(format!("\"+{new}\""));
+    }
+    listed.extend(base.iter().map(|(path, _)| format!("\"{path}\"")));
+    let write_set = format!("write-set = [{}]", listed.join(", "));
+    let design = write_contract(&repo, &["write-set"], &[&write_set]);
+    let id = intake(&repo, &state, &design);
+    let out = spawn_with(&repo, &state, &id, &steps.join(" && "));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "spawn: {}", stderr_of(&out));
+    (repo, state, id)
+}
+
+/// [`elide_moves_run`] の便を stdin を写す lens で 1 回 gate する（lens は diff で呼ばれ PASS・rename の header は全部在る）。
+fn elide_moves_gate(base: &[(&str, &str)], head: &[(&str, &str)], moves: &[(&str, &str)]) -> ElideGate {
+    let (repo, state, id) = elide_moves_run(base, head, moves);
+    let seen = state.join("lens-stdin");
+    let out = gate_once(&repo, &state, &id, Some(&recording_lens(&seen)));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "lens は呼ばれ PASS: {}", stderr_of(&out));
+    let line = stdout_of(&out);
+    assert_eq!(token_of(&line, "lens-input="), "diff", "前提: diff の周: {line}");
+    let raw = raw_diff(&repo, &id);
+    for (old, new) in moves {
+        assert!(raw.contains(&format!("rename from {old}\nrename to {new}\n")), "前提: rename の対 {old}: {raw}");
+    }
+    ElideGate {
+        stdin: fs::read_to_string(&seen).unwrap_or_default(),
+        notices: notice_lines(&state, &id),
+        raw,
+        line,
+        repo,
+        state,
+        id,
+    }
+}
+
+/// 移動の歯の rename: `tests/` 配下の file 1 本を boundary 側の同じ相対 path へ。
+const ELIDE_TESTS_MOVE: (&str, &str) = ("tests/gate.rs", "boundary/tests/gate.rs");
+
+/// (k) HEAD に `tests/` 配下の path が無く、docs の行が `tests/` の dir だけを名指す置換 → 畳む（dir の対の導出の歯）。
+#[test]
+fn pipe_gate_elide_emptied_dir_replacement_is_folded() {
+    let (base, head) = (format!("{}\n", elide_dir_row("tests")), format!("{}\n", elide_dir_row("boundary/tests")));
+    let gated = elide_moves_gate(&[(ELIDE_NOTES, &base)], &[(ELIDE_NOTES, &head)], &[ELIDE_TESTS_MOVE]);
+    let listed = git(&worktree_of(&gated.repo, &gated.id), &["ls-tree", "-r", "--name-only", "HEAD", "tests"]);
+    assert_eq!(listed, "", "前提: HEAD の tests/ 配下に path が無い");
+    let kept = format!("\n+{}\n", elide_dir_row("boundary/tests"));
+    assert_elide_folded(&gated, &kept, "-1/+1", " elided=1/2");
+}
+
+/// (l) (k) と同じで HEAD に `tests/` 配下の path が 1 つ残る → 逐語（空の条件の歯・dir の対を足さない）。
+#[test]
+fn pipe_gate_elide_dir_with_a_remaining_path_is_verbatim() {
+    let (base, head) = (format!("{}\n", elide_dir_row("tests")), format!("{}\n", elide_dir_row("boundary/tests")));
+    let gated = elide_moves_gate(
+        &[(ELIDE_NOTES, &base), ("tests/keep.rs", "// stays under tests\n")],
+        &[(ELIDE_NOTES, &head)],
+        &[ELIDE_TESTS_MOVE],
+    );
+    let listed = git(&worktree_of(&gated.repo, &gated.id), &["ls-tree", "-r", "--name-only", "HEAD", "tests"]);
+    assert_eq!(listed, "tests/keep.rs", "前提: HEAD の tests/ 配下に 1 本残る");
+    assert_elide_verbatim(&gated, &format!("\n+{}\n", elide_dir_row("boundary/tests")), "配下に path が残る dir");
+}
+
+/// (m) (k) と同じで `tests/` 配下のもう 1 本の rename が別の dir へ行く → 逐語（一貫の条件の歯）。もう 1 本は file 名も
+/// 変える（それ自身から `tests` の対が導かれない＝一貫の条件だけが `tests` の対を塞ぐ形）。
+#[test]
+fn pipe_gate_elide_dir_whose_renames_diverge_is_verbatim() {
+    let (base, head) = (format!("{}\n", elide_dir_row("tests")), format!("{}\n", elide_dir_row("boundary/tests")));
+    let gated = elide_moves_gate(
+        &[(ELIDE_NOTES, &base)],
+        &[(ELIDE_NOTES, &head)],
+        &[ELIDE_TESTS_MOVE, ("tests/other.rs", "elsewhere/renamed.rs")],
+    );
+    let listed = git(&worktree_of(&gated.repo, &gated.id), &["ls-tree", "-r", "--name-only", "HEAD", "tests"]);
+    assert_eq!(listed, "", "前提: HEAD の tests/ 配下に path が無い（空の条件は満たす）");
+    assert_elide_verbatim(&gated, &format!("\n+{}\n", elide_dir_row("boundary/tests")), "配下の rename が別の dir へ行く");
+}
