@@ -715,6 +715,63 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
   - `xtask check` の門に足す — 門は src の形を測る面で、歯の fixture の形は歯で測る（新しい門を 1 つ増やさない・C17.4）。
 - **歯（接頭辞 `e2e_fixture_clock_`・行の契約が持つ）**: 上の (2) の 3 つ組。`crates/` 全体で `e2e_fixture_` を名に持つ fn は `crates/scribe2/tests/e2e/main.rs` の 1 file にしかない（実測）ので、verify の filter は他の file へ広がらない。**空虚さの柵**: 番兵の本数と 2099 未満の本数を別々の欄で持ち（1 本で 2 本を兼ねない）、message に母集団の全数と当たった行を出す。**変異の A/B**（done の条件・proof は便の notes）: e2e の file に reset の欄を持つ 2026 年の行を 1 行足すと 2099 未満の欄が 5 → 6 で赤・2099 年の行を 1 行足すと番兵の欄が 7 → 8 で赤・e2e に `.rs` を 1 本足すと file 数の欄が 29 → 30 で赤。
 
+## 51. stop の全部止めを live な便の本数で絞り、止めた便を母集団つきで返す — 便が 2 本以上の周は逐語を要り、逐語は止めた便の記帳に残る（契約表の行 at・`s2-07l.459`）
+
+- 出所（`s2-07l.459`・admin 報告 2026-09-17T21:16Z・orchestrator の再実測 2026-09-22・verified・main b0e6e07）: 全部止めを usage の確認のつもりで撃ち、実装中の便 1 本（17 分）を不可逆に失った。停止は「消す」ではないが、走行中の便の token と時間を戻せない形で捨てる（A4.2 の隣）。
+- 現物（本行の base・main b0e6e07・verified）:
+  - `crates/scribe2/src/pipe/stop.rs` は 485 行で、入口（21 行）が `--run` の有無だけで 2 経路に割れる。`--run` が無い周は全部止め（175 行）へ落ち、181〜183 行が `--all` の不在を rc 1 で断る（**引数なしは何も止めない**＝memo の論点 2 は着地済み）。
+  - **理由を受ける口は無い**: `--reason` の字面は `crates/scribe2` の src 全数で 1 件だけで、それは台帳を閉じる側（`crates/scribe2/src/ledger/mod.rs` の 75 行）である。`crates/scribe2/src/pipe/stop.rs` の `reason` 6 件は全部 `Err(reason)` の変数名で、flag ではない。
+  - **live の本数で分岐する式は 0 件**: 全部止めが数える `live` は**席**の列（`SeatState` が Live の席）で、`live.len()` は席の数である。席が指す**便**の本数で受付を分ける式は同 file に 1 つも無い。
+  - **止めた便の一覧は捨てられている**: 全部止めは記帳順の便の列（`stopped_runs`）と止め切れなかった便の列（`unstopped_runs`）を組み立てるが、stdout に出るのは `stop: seats=<席数> stopped=<席数>` の 1 行だけで、**どの便を倒したかは残らない**（memo の論点 3）。
+  - 受ける flag の表は `crates/scribe2/src/pipe/cli/args.rs` の 168〜169 行（置き場 3 つ + `--run` の値 + `--all` の switch + 道具 4 つ）、usage の 1 行は `crates/scribe2/src/pipe/cli.rs` の 148 行にある。
+  - 逐語を運ぶ形は既に在る: 席を止めた記帳は detail を受ける（`crates/scribe2/src/pipe/stop.rs` の 121 行が運転手の席に `stopped-by-stop` を載せる）。便の終端の記帳（363 行）だけが detail を持たない。本節は**段の種別も event の種別も 1 つも足さない**。
+- 形（番号は done と歯に 1:1 で対応する）:
+  1. **全部止めの受付を 2 段にする**: Live な席が指す**別々の便**の本数を先に数え、2 本以上の周は `--reason <逐語>` が無ければ rc 1 で断る（何も止めず、events は 1 件も増えない）。1 本以下の周は従来どおり `--all` だけで通る（対象なしの rc 0 の冪等も不変）。断りの 1 行は便の本数を母集団として名指し、`--run` で 1 本ずつ止める道と逐語を付ける道の両方を書く。
+  2. **`--reason` を値つきで受ける**: `crates/scribe2/src/pipe/cli/args.rs` の stop の表に 1 つ足し、`crates/scribe2/src/pipe/cli.rs` の usage の 1 行に写す。`--run` と `--reason` を同時に渡す周は rc 1 で断る（1 本を外す操作に爆風は無く、逐語の行き先も無い——使い方の誤りを黙って落とさない・SRS NFR4）。
+  3. **逐語は止めた便の記帳に残る**: 便を終端にする記帳に detail を 1 つ渡せるようにし（`crates/scribe2/src/pipe/stop.rs` に閉じた 2 呼び手）、全部止めの周は `reason:` の後ろに入力の逐語をそのまま載せる。`--run` の周は従来どおり detail を持たない。
+  4. **止めた便を母集団つきで返す**: rc 0 の 1 行に、終端を記帳した便の id を記帳順で並べる欄と、止め切れなかった席を持つ便の id を並べる欄を足す（席数と止めた席数の 2 欄は不変・空の欄は出さない）。行は 1 本のまま増やさない。
+- 触らない: `--run` の経路の段と極性（終端の便は rc 1・止め切れない周は終端にしない）・rc の 3 値（0 / 1 / 2）・停止の順（席 → 運転手 → 便の終端）・猶予の規則の行・席を選ぶ述語・pid を持たない Live 席を母集団に数える形・運転手の札の扱い・停止中の印。
+- 却下:
+  - **本数の線を規則の行の値にする**: 2 は調整できる閾値ではなく構造の境目である（live な便が 1 本以下なら、全部止めは `--run` 1 本と同じ爆風しか持たない＝絞る意味が無い）。値の線と裁定 id を 1 つ増やさない（C5 / A2）。
+  - **対話面の承認の event を足す**（memo の後半の案）: 器に対話の口と event の種別が 1 つ増える。逐語 1 つで「誰が何のつもりで撃ったか」は同じだけ残る。
+  - **全部止めを消して `--run` だけにする**: 席の掃除の冪等な 1 コマンドが無くなる（SRS FR13 が名指す形そのもの）。
+  - **2 本以上の周を `--run` だけに倒す**（逐語の道を作らない）: host を畳む周に便の本数だけ撃つことになり、同じ誤操作が「連打」の形で戻る。
+  - **止めた便の一覧を別の行や構造化した形で返す**: stdout の 1 行形（`stop:` で始まる 1 行）は stop の既存の面で、読み手（運転手の待ち手）が行数を前提にしている。欄を足す側に倒す。
+- 歯（接頭辞 `pipe_stop_scope_`・`crates/` 全体の fn 名の substring として base に 0 件。in-file は `crates/scribe2/src/pipe/stop.rs` の `mod tests`・e2e は `crates/scribe2/tests/e2e/pipe/stop.rs`）:
+  (a) 形 1 の核: 席の列から別々の便を数える純な述語に、便 0 / 1 / 2 / 3 本の 4 形を渡す（母集団 = 4 形を assert の message に出す）。同じ便を指す席が 2 つ在る形を 1 本と数えることを、席数と便数が食い違う形で測る。
+  (b) 形 1 / 2 の受付: 便が 2 本 live な置き場に対し、`--all` だけ・`--all` と逐語・`--run` と逐語 の 3 形を撃つ（母集団 3 形）。通るのは 2 形目だけで、断る 2 形は events が 1 件も増えず席も生きたままである。
+  (c) 形 3: 通った周に書かれた便の終端の記帳が、`reason:` の後ろに入力の逐語をそのまま持つ（逐語は fixture の他の字面と衝突しない形で渡し、detail の出所を弁別する）。`--run` で止めた便の記帳は detail を持たない。
+  (d) 形 4（e2e）: 便 2 本を止めた周の rc 0 の 1 行が、席数と止めた席数に加えて 2 本の便 id を記帳順で持つ。1 本の席が止まらない周は、その便が止め切れなかった側の欄にだけ出て、止めた側の欄には出ない。base は逐語の flag が使い方の誤りで断られる＝機能不在の RED。
+
+## 52. gate の段の便が base を追随できる口 — 木だけを main の先端へ載せ替えて段を実装へ戻す 1 本を、land の外に開く（契約表の行 au・`s2-07l.470` の論点 4）
+
+- 出所（`s2-07l.470` の notes・planner 2026-09-18T02:2xZ・orchestrator の再実測 2026-09-22・verified・main b0e6e07）: main の赤を直した便が着地した後も、旧い base の木で走る便の gate は時限の歯で赤のままである。`Gated` の FAIL は終端なので、実装 1 周を捨てて取り込みからやり直した。
+- 現物（本行の base・main b0e6e07・verified）:
+  - **追随の口は着地の中の 1 本だけ**: `crates/scribe2/src/pipe/land.rs` の 400 行が同 file 576 行の追随を呼ぶ唯一の呼び手で、`crates/scribe2/src/pipe/gate.rs` に「追随」の字面は **0 件**である。
+  - 木を載せ替える実体は `crates/scribe2/src/pipe/land.rs` の 746 行で、着地の文脈（衝突の起こし直し・上限・便の写し）を丸ごと受けるので**着地の外から呼べない**。祖先の判定と木の clean の判定は `crates/scribe2/src/pipe/follow.rs` と同 file の 937 行が持つ既存の 1 本ずつである。
+  - §33（行 aa）は追随の**後**に再 gate を省く規則で、base を進める口ではない。§49（行 ar）は判定 FAIL の便を同じ木のまま実装へ戻す口で、**木の base は動かさない**＝時限の歯はもう 1 周も赤である。
+  - 段が生きているかを測る述語は `crates/scribe2/src/pipe/cli/state.rs` の `live`（§49 と同じ 1 本）。本節は**段の種別も event の種別も 1 つも足さない**。
+- 形（番号は done と歯に 1:1 で対応する）:
+  1. **口を 1 つ足す**: 便 1 本を名指して木だけを追随させる subcommand。本体は行 au の write-set の `+` の file で、`crates/scribe2/src/pipe/cli.rs` の subcommand の表と `crates/scribe2/src/pipe/cli/args.rs` の flag の表にそれぞれ 1 行足す。
+  2. **受け付けるのは 5 つ全部を満たす周だけ**: 便が在る ∧ 段が終端でない（測れない周は断る・fail-closed） ∧ 運転手の札が無いか所有者が死んでいる ∧ 木が clean ∧ 記録した base が main の祖先。1 つでも外れたら rc 1 で**何も書かない**。
+  3. **動かすのは木だけ**: main の先端へ載せ替え、段を実装へ戻す記帳を 1 件書く（detail は着地の追随と**同じ字面**）。gate は撃たない・main は 1 byte も動かさない・PR も押さない・runner も起こさない。段が `Gated` だった周も実装へ戻るので、既存の列が gate をもう 1 周撃つ。
+  4. **衝突した周は木を戻して断る**: 載せ替えが衝突したら中止して木を撃つ前の姿へ戻し、rc 1 で何も書かない。着地側の衝突の経路（runner を起こし直す・上限を数える）は通さない——この口は測って戻すだけである。
+  5. **載せ替えの実装は 1 本に畳む**: repo と木と 2 つの sha だけを受ける載せ替えの 1 段を行 au の write-set の `+` の file に置き、`crates/scribe2/src/pipe/land.rs` の 746 行はその 1 本を呼ぶ（追随の載せ替えの実装を 2 本にしない・C3.4）。着地側の差分は呼び出しの 1 行である。
+  6. **行の字面**: rc 0 の周は便 id と載せ替えの 2 つの sha を持つ 1 行。断る周は理由 1 行で rc 1。
+- 触らない: 着地の追随の全体（衝突の起こし直し・上限・stale な行・既着地の判定）・§33 の判定の引き継ぎ・§30 の検出線・gate の判定順と verdict の 3 値・主実測・§49 の口・段の種別と event の種別（どちらも増やさない）・受付と列の経路。
+- 却下:
+  - **gate の前に器が自動で追随する**: main が動くたびに全部の便の木が動き、gate の前提（測った木と着地する木が同じ）が人の知らない間に変わる。口は人が撃つ 1 本にする。
+  - **判定 FAIL の便をこの口で実装へ戻す**: §49（行 ar）と役割が重なる。本節は**段を戻す判断を持たない**——実装へ戻すのは木が変わったからで、判定の可否は既存の列が決める。
+  - **追随の回数に上限を置く**: 値の線と裁定 id が 1 つ増える（C5 / A2）。上限は main が動いた回数で自然に決まる。
+  - **着地の 746 行を丸ごと `+` の file へ移す**: 衝突・stale な行・既着地の 3 経路が着地の文脈を要るので、移すと純移動でなく作り直しになる。畳むのは git の 1 段だけにする。
+  - **gate の中で base の遅れを測って断る**: 遅れを名指すだけで前へ進まない。main が動くのは日常なので、断りが既定になる。
+- 歯（接頭辞 `pipe_follow_step_`・`crates/` 全体の fn 名の substring として base に 0 件。in-file は行 au の write-set の `+` の file の `mod tests`・e2e は `crates/scribe2/tests/e2e/pipe/gate.rs`）:
+  (a) 形 2 の核: 受付の純な述語に、5 つの条件を 1 つずつ外した 5 形と全部満たす 1 形を渡す（母集団 = 6 形を assert の message に出す）。通るのは 1 形だけで、段を測れない周は断る側である。
+  (b) 形 3: 通った周に書かれる event が **1 件**で、段が実装へ戻り、detail が着地の追随と同じ接頭のあとに 2 つの sha を持つ。木の載せ替えの前後で main の sha が 1 字も変わらない。
+  (c) 形 4: 衝突する commit を main に積んだ周は rc 1 で、木の先端が撃つ前と同じ sha に戻り、events が 1 件も増えない。
+  (d) 形 1 / 6（e2e）: `Gated` の便にこの口を撃つと rc 0 で 1 行が出て、その後の段が実装になり、木の base が main の先端になる。base は subcommand の表に字面が無く使い方の誤りで断られる＝機能不在の RED。
+  (e) 形 5: 着地の追随の既存の歯（`crates/scribe2/tests/e2e/pipe/land.rs` の追随の群）が 1 字も変わらず緑である（載せ替えの 1 段を畳んでも着地の 3 経路が動かない）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -1198,4 +1255,24 @@ write-set = ["crates/scribe2/tests/e2e/main.rs", "docs/design/pipeline.md"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail e2e_fixture_clock_"]
 size = "S"
 done = "(1) 足した歯が e2e の tracked な .rs を git ls-files で引き、reset / 期限の key を持つ行のうち日付の形の字面を持つ行を年で割って (file 数, 年 2099 以上, 年 2099 未満) = (29, 7, 5) を 1 つの等値で測り、失敗の message に母集団の全数と当たった行の file 名が出る (2) 歯の file 自身が母集団に数えられない（key の字面を concat! で割って組む＝歯を足す前後で file 数以外の 2 欄が動かない） (3) 変異の A/B が 3 本とも赤（e2e に 2026 年の reset 行 1 行・2099 年の reset 行 1 行・.rs 1 本をそれぞれ足す・proof は便の notes） (4) 札 flip-check: retroactive s2-07l.469 が歯の fn の中の行頭に在って base に無い (5) crates/scribe2/src の file と e2e の既存の歯が 1 字も変わらず緑"
+[[contract]]
+id = "at"
+title = "stop の全部止めを live な便の本数で絞る — Live な席が指す別々の便が 2 本以上の周は理由の逐語を要り、逐語は止めた便の終端の記帳に載り、rc 0 の 1 行が止めた便と止め切れなかった便を母集団つきで返す"
+req = ["FR13", "NFR4"]
+section = "51"
+write-set = ["crates/scribe2/src/pipe/stop.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/args.rs", "crates/scribe2/tests/e2e/pipe/stop.rs", "docs/design/pipeline.md"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail pipe_stop_scope_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_stop_scope_"]
+size = "M"
+done = "(1) Live な席が指す別々の便が 2 本以上の周は --all だけでは rc 1 で断られ、席も events も 1 つも動かず、断りの 1 行が便の本数を母集団として名指す (2) 便が 1 本以下の周は --all だけで従来どおり通り、対象なしは rc 0 のままである (3) stop の flag の表と usage の 1 行が --reason を値つきで持ち、--run と --reason を同時に渡す周は rc 1 で断られる (4) --all と --reason で通った周の便の終端の記帳が reason: の後ろに入力の逐語をそのまま持ち、--run で止めた便の記帳は detail を持たない (5) rc 0 の 1 行が席数と止めた席数に加えて、終端を記帳した便の id を記帳順で並べる欄と止め切れなかった席を持つ便の id を並べる欄を持ち、空の欄は出ない (6) rc の 3 値・停止の順・pid を持たない Live 席を母集団に数える形・運転手の札の扱いが変わらず、既存の pipe_stop_ の歯が 1 字も変わらず緑"
+
+[[contract]]
+id = "au"
+title = "gate の段の便が base を追随できる口を足す — 終端でなく運転手が居ず木が clean で base が main の祖先の便に、木だけを main の先端へ載せ替えて段を実装へ戻す記帳を 1 件書き、衝突した周は木を戻して断る（段の種別も event の種別も増やさない）"
+req = ["FR14", "FR34"]
+section = "52"
+touches = ["crate::pipe::cli::PipeCommand"]
+write-set = ["crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/args.rs", "crates/scribe2/src/pipe/mod.rs", "+crates/scribe2/src/pipe/follow_step.rs", "crates/scribe2/src/pipe/land.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "docs/design/pipeline.md"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail pipe_follow_step_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_follow_step_"]
+size = "M"
+done = "(1) pipe の subcommand の表と flag の表に追随の口の 1 行が在り、便 1 本を名指す flag を受ける (2) 便が在る・段が終端でない・運転手の札が無いか死んでいる・木が clean・base が main の祖先 の 5 つを全部満たす 1 形だけが通り、1 つずつ外した 5 形と段を測れない周は rc 1 で何も書かない (3) 通った周が書く event はちょうど 1 件で段が実装へ戻り、detail が着地の追随と同じ接頭のあとに 2 つの sha を持ち、main の sha は 1 字も変わらない (4) 載せ替えが衝突した周は rc 1 で木の先端が撃つ前と同じ sha に戻り、events が 1 件も増えず、着地側の衝突の起こし直しは通らない (5) 木の載せ替えの 1 段が 1 本だけになり（着地の 746 行がその 1 本を呼ぶ）、着地の追随の既存の歯が 1 字も変わらず緑 (6) Gated の便に口を撃つと rc 0 で便 id と 2 つの sha を持つ 1 行が出て、その後の段が実装になり木の base が main の先端になり、段の種別と event の種別はどちらも増えない"
 <!-- contracts:end -->
