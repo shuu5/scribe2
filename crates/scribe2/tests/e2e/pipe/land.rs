@@ -4353,6 +4353,53 @@ fn pipe_terminal_land_pushes_checks_ci_and_closes_the_bead() {
     clean(&[&repo, &state]);
 }
 
+/// (設計 pipeline.md 行 ap) 運転手の cwd が**消えた dir**でも、台帳の close は repo を cwd にして撃たれ
+/// `terminal:close:ok` まで進む。
+///
+/// 偽 bd は本物と同じく**台帳を cwd から探す**（`.vessel.toml` が cwd に無ければ rc 1 で断る）うえで cwd を
+/// 記録に残す。運転手の cwd を継ぐ実装では、消えた dir から撃たれて `close:failed` で止まる。
+#[test]
+fn pipe_terminal_land_close_cwd_survives_a_vanished_driver_cwd() {
+    let (repo, state) = repo_with_state();
+    let _tools = fake_terminal(&repo, &state, "success");
+    let cwd_log = state.join("bd-cwd.txt");
+    let bd = exec_script(
+        &state.join("fake-bd-cwd.sh"),
+        &format!(
+            "pwd -P > '{}' 2>&1\ntest -e .vessel.toml || {{ echo 'no ledger found from cwd' >&2; exit 1; }}\n",
+            cwd_log.display()
+        ),
+    );
+    let marker = state.join("lens-ran");
+    let design = write_contract(&repo, &[], &[]);
+    let id = gated_pass(&repo, &state, &design, &marker);
+    let rules = ceiling_rules(&state);
+    let gone = state.join("vanishing-cwd");
+    fs::create_dir_all(&gone).expect("消える dir を作れる");
+    let (repo_arg, state_arg) = (repo.display().to_string(), state.display().to_string());
+    let args = [
+        "land", "--run", id.as_str(), "--repo", repo_arg.as_str(), "--state-dir", state_arg.as_str(),
+        "--bd", bd.as_str(), "--rules", rules.as_str(),
+    ];
+    let mut cmd = pipe_cmd(&args);
+    // **後置の cwd が勝つ**（[`bin_cmd`] の tmp dir を上書き）。起こした直後に dir を消す＝子の cwd は消えた dir。
+    let child = cmd.current_dir(&gone).spawn().expect("binary を起動できる");
+    fs::remove_dir(&gone).expect("子の cwd を消せる");
+    assert!(!gone.exists(), "fixture: 子の cwd は消えている");
+    let out = child.wait_with_output().expect("子の終わりを待てる");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "終端まで通った land は rc 0: {}", stderr_of(&out));
+    let details = landed_details(&state, &id);
+    assert_eq!(
+        details.iter().skip(1).cloned().collect::<Vec<String>>(),
+        vec!["terminal:push:fake".to_owned(), "terminal:ci:success".to_owned(), "terminal:close:ok".to_owned()],
+        "消えた cwd からでも close まで進む（母集団 {} 件）: {details:?}",
+        details.len()
+    );
+    let written = fs::read_to_string(&cwd_log).expect("偽 bd が撃たれた");
+    assert_eq!(written.trim_end(), repo.display().to_string(), "偽 bd の cwd は repo");
+    clean(&[&repo, &state]);
+}
+
 /// (§5 land の終端) CI が **failure** の周は**台帳を閉じない**（rc 1・記録は `ci:failure` で終わる）。
 ///
 /// 着地そのものは取り消さない（main は進んだまま）——止めるのは close であって着地ではない。

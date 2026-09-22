@@ -252,7 +252,7 @@ pub(in crate::pipe) fn terminal(entry: &Land<'_>, sha: &str) -> Terminal {
         Some(CiRun::Success) => note(entry, "ci:success"),
     }
     // (3) 台帳の close。閉じられない周も着地は取り消さない（やり直しは `--terminal-only`・冪等）。
-    match crate::ledger::close(entry.bd, entry.bead, &format!("{CLOSE_REASON} {sha} ci=success")) {
+    match crate::ledger::close(entry.bd, entry.repo, entry.bead,&format!("{CLOSE_REASON} {sha} ci=success")) {
         Ok(()) => {
             note(entry, "close:ok");
             Terminal::Closed

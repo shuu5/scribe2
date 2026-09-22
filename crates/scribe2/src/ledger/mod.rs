@@ -17,6 +17,7 @@ pub mod memo;
 
 use crate::cli_outcome::{Outcome, RC_REFUSED};
 use crate::polarity::{OnFailure, Polarity, Timing};
+use std::path::Path;
 use std::process::Command;
 
 /// `ledger` に続く引数を捌く（verb は `memo` の 1 つ）。
@@ -77,8 +78,15 @@ const REASON: &str = "--reason";
 ///
 /// 着地した便の終端だけが撃つ。**冪等である**ことは台帳の側が持つ（既に closed の bead を閉じ直した
 /// 周に client が rc 0 を返すかは client の契約で、器はその rc をそのまま typed に運ぶ）。
-pub fn close(bd: &str, bead: &str, reason: &str) -> Result<(), CloseError> {
-    let out = Command::new(bd).args([CLOSE, bead, REASON, reason]).output().map_err(|_| CloseError::Unlaunchable)?;
+///
+/// **cwd は `repo` に固定する**（読みの口 `spawn_read` と同じ形・設計 pipeline.md 行 ap）: client は台帳を cwd から
+/// 上へ探すので、運転手の cwd（消えた dir でも）を継ぐと同じ repo でも台帳を解けない周が出る。
+pub fn close(bd: &str, repo: &Path, bead: &str, reason: &str) -> Result<(), CloseError> {
+    let out = Command::new(bd)
+        .args([CLOSE, bead, REASON, reason])
+        .current_dir(repo)
+        .output()
+        .map_err(|_| CloseError::Unlaunchable)?;
     if out.status.success() {
         return Ok(());
     }
@@ -96,7 +104,8 @@ mod tests {
     /// 起動できない client は [`CloseError::Unlaunchable`]（「閉じた」に倒さない・C10）。
     #[test]
     fn pipe_terminal_land_close_refuses_when_the_client_cannot_launch() {
-        let err = close("scribe2-no-such-ledger-client", "s2-x", "landed").expect_err("起動できない");
+        let err =
+            close("scribe2-no-such-ledger-client", &std::env::temp_dir(), "s2-x", "landed").expect_err("起動できない");
         assert_eq!(err, CloseError::Unlaunchable, "起動できない周の理由");
         assert_eq!(err.render(), "close:failed:unlaunchable", "記録の 1 行");
     }
@@ -113,13 +122,51 @@ mod tests {
         std::fs::write(&client, "#!/bin/sh\nprintf 'first line\\nlast line\\n' >&2\nexit 7\n")
             .expect("偽の client を書ける");
         std::fs::set_permissions(&client, std::fs::Permissions::from_mode(0o755)).expect("実行権を付ける");
-        let err = close(&client.display().to_string(), "s2-x", "landed").expect_err("rc 7 で断られる");
+        let err = close(&client.display().to_string(), &dir, "s2-x", "landed").expect_err("rc 7 で断られる");
         let CloseError::Refused { rc, tail } = &err else {
             panic!("rc ≠ 0 の形: {err:?}");
         };
         assert_eq!(*rc, Some(7), "client の rc をそのまま運ぶ: {err:?}");
         assert_eq!(tail, "last line", "stderr の**末尾**の 1 行を運ぶ（1 行目ではない）: {err:?}");
         assert_eq!(err.render(), "close:failed:rc=7 last line", "記録の 1 行");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 実行権つきの偽 client を `dir/bd` に書き、その path を返す。
+    fn fake_client(dir: &std::path::Path, body: &str) -> String {
+        use std::os::unix::fs::PermissionsExt;
+        let client = dir.join("bd");
+        std::fs::write(&client, format!("#!/bin/sh\n{body}")).expect("偽の client を書ける");
+        std::fs::set_permissions(&client, std::fs::Permissions::from_mode(0o755)).expect("実行権を付ける");
+        client.display().to_string()
+    }
+
+    /// client は **repo を cwd にして**撃たれる（設計 pipeline.md 行 ap）。repo は test の cwd と**別の** dir で測る
+    /// ——cwd を継ぐ実装では、書かれた path が test の cwd になって落ちる。
+    #[test]
+    fn pipe_terminal_land_close_cwd_is_the_repo() {
+        let dir = crate::pipe::fixture::scratch("ledger-close-cwd");
+        let repo = dir.join("repo");
+        std::fs::create_dir_all(&repo).expect("repo の dir を作れる");
+        let repo = repo.canonicalize().expect("repo の path を解ける");
+        let log = dir.join("cwd.txt");
+        let client = fake_client(&dir, &format!("pwd -P > '{}'\n", log.display()));
+        let here = std::env::current_dir().expect("test の cwd を読める");
+        assert_ne!(here, repo, "fixture: repo は test の cwd と別の dir");
+        close(&client, &repo, "s2-x", "landed").expect("rc 0 の client は閉じる");
+        let written = std::fs::read_to_string(&log).expect("偽 client が撃たれた");
+        assert_eq!(written.trim_end(), repo.display().to_string(), "client の cwd は repo");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// cwd を固定しても**断りの形は変わらない**: rc 1 と stderr 2 行の client は `Refused { rc: Some(1), tail: 末尾 }`。
+    #[test]
+    fn pipe_terminal_land_close_cwd_keeps_the_refusal_shape() {
+        let dir = crate::pipe::fixture::scratch("ledger-close-cwd-refused");
+        let client = fake_client(&dir, "printf 'no beads here\\nlast word\\n' >&2\nexit 1\n");
+        let err = close(&client, &dir, "s2-x", "landed").expect_err("rc 1 で断られる");
+        assert_eq!(err, CloseError::Refused { rc: Some(1), tail: "last word".to_owned() }, "断りの形");
+        assert_eq!(err.render(), "close:failed:rc=1 last word", "記録の 1 行");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
