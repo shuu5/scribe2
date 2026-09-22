@@ -194,9 +194,24 @@ pub fn run(args: &[String], dir: &Path) -> Outcome {
     run_with(args, dir, Freshness::Always)
 }
 
-/// 計測の方針を選べる入口（選定の前計測は [`Freshness::Within`] で呼ぶ・設計 account-autonomy.md §13 (4)）。
+/// 選定の前計測の口（**1 本**・設計 account-autonomy.md §13 (2)(3) / §18 (1)）: 鮮度つき（[`Freshness::Within`]）で、
+/// 秒は rules 行 `fleet.usage_fresh_s`（[`fresh_of`]・manifest は計測と同じ宣言の口 [`declared`] で読む）。呼び手は
+/// `fleet select`（`fleet::cli`）と便の起動の選定（`pipe::ratelimit::choose_account` の初回）の 2 つ＝鮮度の規則を
+/// 2 か所に持たない（C2）。行の無い・不発効・型違いの manifest は測らずに断る（`fleet.usage_timeout_s` と同じ極性）。
+pub fn run_fresh(args: &[String], dir: &Path) -> Outcome {
+    let fresh_s = optional(args, "--rules")
+        .map_err(UsageError::Args)
+        .and_then(|rules| declared(rules, dir))
+        .and_then(|manifest| fresh_of(&manifest));
+    match fresh_s {
+        Ok(secs) => run_with(args, dir, Freshness::Within(secs)),
+        Err(error) => Outcome::failed(error.rc(), vec![error.to_string()]),
+    }
+}
+
+/// 計測の方針を選べる入口（`fleet usage` の口は [`run`]・選定の前計測は [`run_fresh`]・設計 account-autonomy.md §13 (4)）。
 /// `--show` は方針に依らず read-only の表示。
-pub fn run_with(args: &[String], dir: &Path, freshness: Freshness) -> Outcome {
+fn run_with(args: &[String], dir: &Path, freshness: Freshness) -> Outcome {
     let result = if args.iter().any(|arg| arg == "--show") {
         show(args, dir)
     } else {
@@ -570,10 +585,10 @@ fn timeout_of(manifest: &Manifest) -> Result<u64, UsageError> {
     int_row_of(manifest, ROW_TIMEOUT)
 }
 
-/// rules 行 `fleet.usage_fresh_s` の秒（設計 account-autonomy.md §13 (1)）。選定の前計測の呼び手が
+/// rules 行 `fleet.usage_fresh_s` の秒（設計 account-autonomy.md §13 (1)）。選定の前計測の口（[`run_fresh`]）が
 /// [`Freshness::Within`] に渡す。無い・不発効・型違いは `fleet.usage_timeout_s` と**同じ読み手**で断る
 /// （極性・字面・rc は同じ・読み手を増やさない）。
-pub fn fresh_of(manifest: &Manifest) -> Result<u64, UsageError> {
+fn fresh_of(manifest: &Manifest) -> Result<u64, UsageError> {
     int_row_of(manifest, ROW_FRESH)
 }
 

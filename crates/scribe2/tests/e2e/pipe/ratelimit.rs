@@ -251,23 +251,41 @@ fn usage_body(found: &Windows) -> String {
 /// 実測行の表示名（`Opus`）とは**字面が違う**＝歯は 2 つの語彙の組で本番の照合を測る（揃えて隠さない）。
 const RUNNER_MODEL: &str = "opus";
 
-/// `pipe resume` / `pipe run` に渡す manifest: [`write_rules`] の写しに計測の待ち時間の行・便が使う model の行
-/// （値は [`RUNNER_MODEL`]）と `[[account]]` を `labels` の順で足したもの。
+/// `pipe resume` / `pipe run` の歯の既定の鮮度（秒・rules 行 `fleet.usage_fresh_s`）。**0** = 境が「いま」なので、
+/// いま以前の ts の実測はどれも「新しい」と読まれず、選定のたびに全口座を測り直す（鮮度を持つ前の歯の計測回数の
+/// 前提を保つ・鮮度の歯は [`resume_rules_fresh`] で値を持つ）。
+const RESUME_FRESH_S: u64 = 0;
+
+/// `pipe resume` / `pipe run` に渡す manifest: [`write_rules`] の写しに計測の待ち時間の行・鮮度の行（値は
+/// [`RESUME_FRESH_S`]）・便が使う model の行（値は [`RUNNER_MODEL`]）と `[[account]]` を `labels` の順で足したもの。
 pub(super) fn resume_rules(state: &Path, labels: &[&str]) -> String {
-    resume_rules_with_model(state, labels, RUNNER_MODEL)
+    resume_rules_full(state, labels, RUNNER_MODEL, RESUME_FRESH_S)
 }
 
 /// [`resume_rules`] の `runner.model` の値を `model` にした形（未知の値の歯だけが振る）。
+fn resume_rules_with_model(state: &Path, labels: &[&str], model: &str) -> String {
+    resume_rules_full(state, labels, model, RESUME_FRESH_S)
+}
+
+/// [`resume_rules`] の鮮度の行を `fresh` 秒にした形（`pipe_ratelimit_fresh_` の歯だけが振る）。
+fn resume_rules_fresh(state: &Path, labels: &[&str], fresh: u64) -> String {
+    resume_rules_full(state, labels, RUNNER_MODEL, fresh)
+}
+
+/// [`resume_rules`] の全形（model の値と鮮度の秒を持ち分ける）。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn resume_rules_with_model(state: &Path, labels: &[&str], model: &str) -> String {
+fn resume_rules_full(state: &Path, labels: &[&str], model: &str, fresh: u64) -> String {
     let path = write_rules(state, "rules-resume.toml", 1, 1_000_000);
     let mut body = fs::read_to_string(&path).expect("写しを読める");
     body.push_str(
         "\n[[rule]]\nid = \"fleet.usage_timeout_s\"\nkind = \"UsageTimeoutS\"\nvalue = 13\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n",
     );
+    body.push_str(&format!(
+        "\n[[rule]]\nid = \"fleet.usage_fresh_s\"\nkind = \"UsageFreshS\"\nvalue = {fresh}\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n"
+    ));
     body.push_str(&format!(
         "\n[[rule]]\nid = \"runner.model\"\nkind = \"RunnerModel\"\nvalue = \"{model}\"\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n"
     ));
@@ -808,6 +826,171 @@ fn pipe_ratelimit_refuses_unknown_runner_model_value() {
     assert_eq!(curl_calls(&state), 0, "計測しない");
     assert_eq!(stub_calls(&state), 1, "runner を起こし直さない");
     assert!(show_line(&repo, &state, &id).contains("stage=RateLimited"), "便は RateLimited のまま live");
+    clean(&[&repo, &state]);
+}
+
+// ───── 便の起動の前計測の鮮度（`s2-07l.359`・設計 account-autonomy.md §18・SRS FR36 / FR33・接頭辞 `pipe_ratelimit_fresh_`） ─────
+
+/// 鮮度の歯の `fleet.usage_fresh_s`（秒）。歯の壁時計より十分に長い＝「いま」測った・置いた実測は境より新しい。
+const FRESH_S: u64 = 3600;
+
+/// 鮮度の歯の「古い」実測の ts（[`FRESH_S`] より古い・reset は 2099 なので選定は古いと読まない）。
+const STALE_TS: &str = "2026-09-12T02:00:00Z";
+
+/// 口座 `label` の実測の回（5 時間窓 30%・7 日窓 10%・reset は遠い未来）を `ts` で置き場へ直に積む（偽 curl を
+/// 通さない＝呼出回数に数えない）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn put_round(state: &Path, ts: &str, label: &str) {
+    use vessel::fleet::{Allowance, Measured, WindowKind};
+    let policy = vessel::fleet::store::LockPolicy::embedded().expect("埋め込みの lock 行を読める");
+    for (window, used_pct, resets_at) in [(WindowKind::FiveHour, 30, FAR_RESET), (WindowKind::SevenDay, 10, FAR_WEEK_RESET)] {
+        let event = Event {
+            schema: vessel::fleet::SCHEMA,
+            ts: ts.to_owned(),
+            kind: EventKind::AllowanceMeasured,
+            run: String::new(),
+            bead: String::new(),
+            host: vessel::fleet::cli::host(),
+            actor: EventKind::AllowanceMeasured.default_actor().to_owned(),
+            stage: None,
+            seat: None,
+            pid: None,
+            detail: None,
+            allowance: Some(Allowance::Measured(Measured {
+                account: label.to_owned(),
+                window,
+                model: None,
+                endpoint: "usage".to_owned(),
+                used_pct,
+                resets_at: Some(resets_at.to_owned()),
+            })),
+            mark: None,
+            registration: None,
+            account: None,
+        };
+        vessel::fleet::store::append(state, &event, policy).expect("実測の行を積める");
+    }
+}
+
+/// 偽 curl が口座 `label` の token で呼ばれた回数（[`fake_usage_curl`] の token ごとの計数）。
+fn curl_calls_for(state: &Path, label: &str) -> usize {
+    fs::read_to_string(curl_spy(state).join(format!("token-tok-{label}")))
+        .unwrap_or_default()
+        .trim()
+        .parse()
+        .unwrap_or(0)
+}
+
+/// 上限で止まった便を 1 本起こす（write-set は `path` の 1 つ・runner は共有の `runner`）。
+fn limited_run(repo: &Path, state: &Path, runner: &str, name: &str, path: &str) -> String {
+    let design = write_set_contract(repo, name, &[path]);
+    let id = intake_bead(repo, state, &design, &format!("s2-{name}"));
+    let out = spawn_with(repo, state, &id, runner);
+    assert!(stdout_of(&out).contains("stage=RateLimited"), "{} / {}", stdout_of(&out), stderr_of(&out));
+    id
+}
+
+/// 形 (1): 同じ置き場で上限で止まった 2 便を続けて resume すると、1 便目の前計測が全口座を測り（呼出 = 口座数 2）、
+/// 2 便目の前計測は新しい実測の口座を測り直さない（呼出が増えない）。base（`choose_account` が `fleet usage` の口＝
+/// `Always` で撃つ）は 2 便目も全口座を測り呼出 4 → RED。
+#[test]
+fn pipe_ratelimit_fresh_second_run_does_not_remeasure_fresh_accounts() {
+    let (repo, state) = repo_with_state();
+    let runner = turn_runner(&state, &[limit_turn(), limit_turn(), IMPLEMENT.to_owned(), IMPLEMENT.to_owned()]);
+    let one = limited_run(&repo, &state, &runner, "one", "src/lib.rs");
+    let two = limited_run(&repo, &state, &runner, "two", "src/other.rs");
+    let rules = resume_rules_fresh(&state, &["a1", "a2"], FRESH_S);
+    put_account(&state, "a1", &[windows(100, 10)]);
+    put_account(&state, "a2", &[windows(40, 10)]);
+    let first = resume_with_accounts(&repo, &state, &one, &runner, &rules);
+    assert_eq!(first.status.code(), Some(i32::from(RC_OK)), "{} / {}", stdout_of(&first), stderr_of(&first));
+    assert_eq!(curl_calls(&state), 2, "1 便目は全口座を測る（母集団 = 口座数）");
+    let second = resume_with_accounts(&repo, &state, &two, &runner, &rules);
+    assert_eq!(second.status.code(), Some(i32::from(RC_OK)), "{} / {}", stdout_of(&second), stderr_of(&second));
+    assert_eq!(curl_calls(&state), 2, "2 便目は新しい実測の口座を測り直さない");
+    assert!(
+        stdout_of(&second).contains(&format!("run={two} next=spawn account=a2")),
+        "新しい実測で選ぶ: {}",
+        stdout_of(&second)
+    );
+    assert_eq!(stub_calls(&state), 4, "2 便とも起こし直した");
+    clean(&[&repo, &state]);
+}
+
+/// 形 (1): rules 行より古い ts の実測の口座（a2）は測り直され（その口座の呼出 +1）、新しい ts の実測の口座（a1）は
+/// 測り直されない（呼出 0）。base は a1 も測り呼出 2 → RED。
+#[test]
+fn pipe_ratelimit_fresh_remeasures_only_accounts_older_than_the_row() {
+    let (repo, state) = repo_with_state();
+    let (id, runner, _) = rate_limited_with_accounts(&repo, &state, &[IMPLEMENT.to_owned()], &["a1", "a2"]);
+    let rules = resume_rules_fresh(&state, &["a1", "a2"], FRESH_S);
+    put_account(&state, "a1", &[windows(40, 10)]);
+    put_account(&state, "a2", &[windows(40, 10)]);
+    put_round(&state, &vessel::fleet::cli::now_utc(), "a1");
+    put_round(&state, STALE_TS, "a2");
+    let resumed = resume_with_accounts(&repo, &state, &id, &runner, &rules);
+    assert_eq!(resumed.status.code(), Some(i32::from(RC_OK)), "{} / {}", stdout_of(&resumed), stderr_of(&resumed));
+    assert_eq!(curl_calls(&state), 1, "古い実測の口座だけを測る");
+    assert_eq!(curl_calls_for(&state, "a2"), 1, "古い ts の a2 は測り直される");
+    assert_eq!(curl_calls_for(&state, "a1"), 0, "新しい ts の a1 は測り直されない");
+    clean(&[&repo, &state]);
+}
+
+/// 形 (2): reset を待った後（`Timeout`）の撃ち直しは鮮度に依らず全口座を測る（既存の待ちの歯
+/// [`pipe_ratelimit_resume_waits_for_the_earliest_reset_then_remeasures`] の fixture を鮮度 [`FRESH_S`] で撃ち、待ちの後の
+/// 呼出が口座数 2 だけ増える）。撃ち直しも鮮度つきだと待つ前の実測を「新しい」と読んで測らず、reset を過ぎた実測で
+/// 候補なしに倒れる → RED。
+#[test]
+fn pipe_ratelimit_fresh_remeasures_every_account_after_the_wait() {
+    let (repo, state) = repo_with_state();
+    let (id, runner, _) = rate_limited_with_accounts(&repo, &state, &[IMPLEMENT.to_owned()], &["a1", "a2"]);
+    let rules = resume_rules_fresh(&state, &["a1", "a2"], FRESH_S);
+    put_account(&state, "a1", &[limited_for(2), windows(50, 10)]);
+    put_account(&state, "a2", &[limited_for(4), limited_for(4)]);
+    let resumed = resume_with_accounts(&repo, &state, &id, &runner, &rules);
+    assert_eq!(resumed.status.code(), Some(i32::from(RC_OK)), "{} / {}", stdout_of(&resumed), stderr_of(&resumed));
+    let stdout = stdout_of(&resumed);
+    assert!(stdout.contains(&format!("run={id} next=wait reset=")), "待ちに入った: {stdout}");
+    assert!(stdout.contains(&format!("run={id} next=spawn account=a1")), "待ちの後の計測で a1 を選ぶ: {stdout}");
+    assert_eq!(curl_calls(&state), 4, "初回 2 口座 + 待ちの後の撃ち直し 2 口座");
+    assert_eq!((curl_calls_for(&state, "a1"), curl_calls_for(&state, "a2")), (2, 2), "撃ち直しは全口座");
+    clean(&[&repo, &state]);
+}
+
+/// 形 (1): `pipe run` の初回の起動の前計測も新しい実測の口座を測り直さない（呼出 0）で、その実測で口座を選んで
+/// 起こす（`Spawned` の detail に `account:<label>`）。runner は質問で止まる（gate の lens の計測を混ぜない）。
+/// base は初回も全口座を測り呼出 2 → RED。
+#[test]
+fn pipe_ratelimit_fresh_pipe_run_first_launch_does_not_remeasure() {
+    let (repo, state) = repo_with_state();
+    let first = write_set_contract(&repo, "first", &["src/lib.rs"]);
+    let runner = turn_runner(&state, &[ask_turn()]);
+    let rules = resume_rules_fresh(&state, &["a1", "a2"], FRESH_S);
+    put_account(&state, "a1", &[windows(40, 10)]);
+    put_account(&state, "a2", &[windows(40, 10)]);
+    let now = vessel::fleet::cli::now_utc();
+    put_round(&state, &now, "a1");
+    put_round(&state, &now, "a2");
+    let lens = fake_lens(&state.join("lens-ran"), &lens_verdict("PASS"));
+    let out = run_pipe(&[
+        "run", "--design", &first, "--bead", "s2-fresh",
+        "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+        "--rules", &rules, "--curl", &fake_usage_curl(&state), "--runner", &runner, "--lens", &lens,
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BLOCKED)), "質問で止まる: {} / {}", stdout_of(&out), stderr_of(&out));
+    assert_eq!(curl_calls(&state), 0, "初回の起動は新しい実測の口座を測り直さない");
+    let id = run_id_of(&out);
+    let details = spawned_details(&state, &id);
+    assert!(
+        details.len() == 1 && details.first().is_some_and(|found| found.contains(",account:a")),
+        "新しい実測で口座を選んで起こす: {details:?} / {} / {}",
+        stdout_of(&out),
+        stderr_of(&out)
+    );
+    assert_eq!(stub_calls(&state), 1, "runner を 1 回起こした");
     clean(&[&repo, &state]);
 }
 

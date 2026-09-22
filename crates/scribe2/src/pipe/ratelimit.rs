@@ -219,7 +219,7 @@ fn resume_rate_limited(
 }
 
 /// 便用の口座の選定（**1 関数**・設計 account-autonomy.md §3 / §4「初回の起動も同じ選定を通す」・FR36）:
-/// (i) FR33 の計測を 1 回撃つ → (ii) 便用の規則（[`fleet::select_for_run`]・便の `repo` を anchor に持つ席の登録
+/// (i) FR33 の計測を 1 回撃つ（初回は鮮度つき・[`fleet::usage::run_fresh`]・撃ち直しは全口座）→ (ii) 便用の規則（[`fleet::select_for_run`]・便の `repo` を anchor に持つ席の登録
 /// row の口座は除外・設計 §14）で選ぶ → (iii) 候補なしなら最も早い reset まで唯一の wait で待ち、成立なら (ii)
 /// から・`Timeout` なら (i) から。
 ///
@@ -237,10 +237,19 @@ pub(super) fn choose_account(
     expected: Stage,
     outcome: &mut Outcome,
 ) -> Result<String, Outcome> {
+    let mut first = true;
     loop {
         // (i) 計測。口座ごとの失敗は `AllowanceUnmeasured` の行のまま（FailOpen・fleet-usage.md §6）で、
         // command を止めるのは引数・manifest・store の誤りだけ（その rc をそのまま返し、選ばない）。
-        let measured = fleet::usage::run(&pool.args, entry.state_dir);
+        // 初回は `fleet select` と同じ鮮度つきの 1 本の口（新しい実測の口座は測り直さない・設計 account-autonomy.md
+        // §18 (1)）。待ちの後の撃ち直しは全口座を測る（reset を過ぎた実測を「新しい」と読んで測らず候補なしを
+        // 繰り返さない・§18 (2)）。
+        let measured = if first {
+            fleet::usage::run_fresh(&pool.args, entry.state_dir)
+        } else {
+            fleet::usage::run(&pool.args, entry.state_dir)
+        };
+        first = false;
         if measured.rc != RC_OK {
             return Err(Outcome::failed(measured.rc, measured.out.into_iter().chain(measured.err).collect()));
         }

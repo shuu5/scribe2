@@ -103,12 +103,9 @@ fn select_account(args: &[String], dir: &Path) -> Outcome {
         Err(lines) => return Outcome::failed(RC_REFUSED, lines),
     };
     // 前計測は鮮度つき（設計 §13・秒は rules 行 `fleet.usage_fresh_s`・計測の口は `fleet usage` と同じ 1 本で方針だけ
-    // が違う）。行の無い manifest は `fleet usage` の rules 行の読み手と同じ極性で断る（測らない・選ばない）。
-    let fresh_s = match usage::fresh_of(&manifest) {
-        Ok(found) => found,
-        Err(error) => return Outcome::failed(error.rc(), vec![error.to_string()]),
-    };
-    let measured = usage::run_with(args, dir, usage::Freshness::Within(fresh_s));
+    // が違う）。便の起動の選定と同じ 1 本の口（[`usage::run_fresh`]・§18）で測る。行の無い manifest は `fleet usage`
+    // の rules 行の読み手と同じ極性で断る（測らない・選ばない）。
+    let measured = usage::run_fresh(args, dir);
     if measured.rc != RC_OK {
         return measured;
     }
