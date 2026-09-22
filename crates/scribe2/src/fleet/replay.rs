@@ -223,13 +223,15 @@ fn apply_account(state: &mut State, event: &Event) {
         | EventKind::AllowanceUnmeasured
         | EventKind::SeatRegistered
         | EventKind::DispatchMark
-        | EventKind::InstallRecorded => {}
+        | EventKind::InstallRecorded
+        | EventKind::RunCost => {}
     }
 }
 
 /// 1 件の event を便へ反映する。
 fn apply_run(state: &mut State, event: &Event) {
-    // 口座残量・登録・退役・列の印・install の行は便に紐づかない（`run` を持たない）。ここで通すと id が空の
+    // 口座残量・登録・退役・列の印・install の行は便に紐づかない（`run` を持たない）。消費の行は `run` を持つが段を
+    // 持たない（[`Shape::Cost`]）＝便を作らず `updated` も動かさない（設計 gate-cost.md §26 形 (2)）。ここで通すと id が空の
     // 幽霊の便が 1 つ生まれ、`show` / `export` の件数が実在しない便を数える。見分けるのは **kind の
     // [`EventKind::shape`]** である（本体の有無ではない＝退役した役割の登録 row は本体を持たずに読まれる
     // 〔`Event::from_line`〕ので、本体で見分けると幽霊の便が 1 つ生まれる・`account` の有無でもない＝
@@ -303,6 +305,7 @@ fn apply_seat(state: &mut State, event: &Event) {
         | EventKind::AccountRetired
         | EventKind::AccountRestored
         | EventKind::DispatchMark
-        | EventKind::InstallRecorded => {}
+        | EventKind::InstallRecorded
+        | EventKind::RunCost => {}
     }
 }

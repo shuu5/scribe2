@@ -1035,13 +1035,12 @@ fn headless_lens_extracts_last_json_line() {
     );
     assert_eq!(slurp(&dir.join("account")), account.display().to_string(), "口座は子の env へ");
     assert!(slurp(&dir.join("stdin")).contains("--- a"), "diff が prompt に載る");
-    // **lens は既定（text）で呼ぶ**。stream-json にすると全行が JSON になり、
-    // 「最後の JSON 行」が claude 自身の result record になって判定が取れない。
+    // **lens は json（1 object の封筒）で呼ぶ**（設計 gate-cost.md §26 形 (2)）。stream-json にすると全行が JSON になり、
+    // 「最後の JSON 行」が claude 自身の result record になって判定が取れない。封筒でない出力（この fake）は従来どおり
+    // 最後の JSON 行をそのまま読む。
     let args = slurp(&dir.join("args"));
-    assert!(
-        !args.lines().any(|line| line == "--output-format"),
-        "lens は出力形式を指定しない: {args}"
-    );
+    assert!(pair(&args, "--output-format", "json"), "lens は json で呼ぶ: {args}");
+    assert!(!pair(&args, "--output-format", "stream-json"), "stream-json ではない: {args}");
     // 途中の JSON でも末尾の地の文でもなく、**最後の JSON 行**ちょうど 1 行。
     assert_eq!(
         stdout_of(&out).trim(),
@@ -3570,4 +3569,104 @@ fn headless_flag_duplicate_worktree_refuses_runner_and_lens_before_claude() {
     assert!(err.contains("--worktree"), "何が 2 つ在るかを名乗る: {err}");
     assert!(err.contains(&worktree.display().to_string()) && err.contains(&second), "両方の dir を名乗る: {err}");
     clean(&[&dir, &worktree, &other, &lens_dir]);
+}
+
+// ---- claude の消費の 6 値（設計 gate-cost.md §26 形 (2)・接頭辞 `run_cost_`）----
+//
+// 偽 claude が usage 付きの result record を出し、runner の要約行と lens の判定 object に 6 値が載ることを測る。
+// 6 値は互いに違う数（取り違えは字面で落ちる）で、`usage.iterations[]` の中の数（901）に釣られないことも同じ行で見る。
+
+/// text を JSON の文字列 literal にする（`result` の値に判定の JSON 行を埋めるため）。
+fn json_string(text: &str) -> String {
+    format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n"))
+}
+
+/// 偽 claude の result record（stream-json の 1 行と json の封筒は同じ形）。`turns` は `"num_turns":5,` の対の字面
+/// （空で欠く）・`wall` は `duration_ms` の値の字面・`result` は text。
+fn cost_record(turns: &str, wall: &str, result: &str) -> String {
+    format!(
+        "{{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,{turns}\"duration_ms\":{wall},\"result\":{},\
+         \"usage\":{{\"iterations\":[{{\"input_tokens\":901}}],\"input_tokens\":11,\"cache_creation_input_tokens\":44,\
+         \"cache_read_input_tokens\":33,\"output_tokens\":22}},\"total_cost_usd\":0.5}}\n",
+        json_string(result)
+    )
+}
+
+/// 6 値が揃った周に要約行と判定 object へ載る字面（fixture の数そのまま）。
+const COST_WORDS: &str = "usage=in:11,out:22,cache_read:33,cache_create:44 turns=5 wall_ms=6000";
+
+/// 偽 lens の判定（`findings` / `population` を持つ flat な 1 行・`result` の text の最後の JSON 行に置く）。
+const COST_VERDICT: &str = r#"{"verdict":"PASS","evidence":"ok","findings":"a:0","population":"files:1,lines:1"}"#;
+
+/// runner を偽 claude の `body` で 1 回撃ち、stdout を返す（rc は 0 であること）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn runner_stdout_with(body: &str) -> String {
+    let dir = tmp();
+    let worktree = tmp();
+    let claude = fake_claude(&dir, body, false, 0);
+    let write_set = dir.join("write-set.txt");
+    let vessel = write_vessel_copy(&dir, r#"["cargo", "git"]"#);
+    fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
+    let out = run_runner(
+        &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "plan", account: None },
+        b"goal = \"x\"\n",
+    );
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "rc は claude のまま 0: {}", stderr_of(&out));
+    clean(&[&dir, &worktree]);
+    stdout_of(&out)
+}
+
+/// lens を偽 claude の `body` で 1 回撃ち、stdout を返す（rc は 0 であること）。
+fn lens_stdout_with(body: &str) -> String {
+    let dir = tmp();
+    let claude = fake_claude(&dir, body, false, 0);
+    let contract = contract_in(&dir);
+    let out = run_lens(&contract, 4096, "plan", &claude, b"--- a\n+++ b\n");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "rc 0: {}", stderr_of(&out));
+    assert!(dir.join("called").exists(), "cap 内なので claude を呼ぶ");
+    clean(&[&dir]);
+    stdout_of(&out)
+}
+
+/// (d) runner の要約行に `usage=` の 3 語が載る（6 値は result record の値そのまま・`iterations[]` の 901 は載らない）。
+#[test]
+fn run_cost_runner_summary_line_carries_usage_from_the_result_record() {
+    let out = runner_stdout_with(&cost_record("\"num_turns\":5,", "6000", "done"));
+    let summary = out.lines().last().unwrap_or_default();
+    assert_eq!(summary, format!("runner: rc=0 records=1 {COST_WORDS}"), "要約行（最終行）: {out}");
+    assert!(!out.contains("901"), "入れ子の数に釣られない: {out}");
+}
+
+/// (d) lens は json の封筒の `result` の text の最後の JSON 行を判定に読み、封筒の 6 値を判定 object へ足して 1 行で写す。
+#[test]
+fn run_cost_lens_verdict_object_carries_usage_from_the_json_envelope() {
+    let result = format!("読みました\n{{\"verdict\":\"FAIL\",\"evidence\":\"途中\"}}\n{COST_VERDICT}\nおしまい");
+    let out = lens_stdout_with(&cost_record("\"num_turns\":5,", "6000", &result));
+    let head = COST_VERDICT.strip_suffix('}').unwrap_or_default();
+    assert_eq!(
+        out.trim(),
+        format!("{head},\"usage\":\"in:11,out:22,cache_read:33,cache_create:44\",\"turns\":5,\"wall_ms\":6000}}"),
+        "最後の判定 + 6 値"
+    );
+    assert_eq!(out.lines().count(), 1, "stdout は 1 行だけ");
+}
+
+/// (g) 部分欠けと数でない値: `num_turns` だけ欠く周・`duration_ms` が数でない周は、要約行に `usage=` が載らず
+/// 判定 object に `usage` が無い（rc は 0 のまま・判定は同じ行）。同じ歯の中で 6 値揃い＝載るを対に並べる。
+#[test]
+fn run_cost_partial_or_non_number_usage_is_carried_nowhere() {
+    let full = runner_stdout_with(&cost_record("\"num_turns\":5,", "6000", "done"));
+    assert!(full.contains(COST_WORDS), "6 値揃い＝載る: {full}");
+    for (turns, wall, why) in [("", "6000", "num_turns だけ欠く"), ("\"num_turns\":5,", "\"6000\"", "duration_ms が数でない")] {
+        let out = runner_stdout_with(&cost_record(turns, wall, "done"));
+        assert_eq!(out.lines().last().unwrap_or_default(), "runner: rc=0 records=1", "{why}: 要約行は従来の字面: {out}");
+        assert!(!out.contains("usage="), "{why}: {out}");
+        let verdict = lens_stdout_with(&cost_record(turns, wall, COST_VERDICT));
+        assert_eq!(verdict.trim(), COST_VERDICT, "{why}: 判定は 1 字も変わらない");
+    }
+    let verdict = lens_stdout_with(&cost_record("\"num_turns\":5,", "6000", COST_VERDICT));
+    assert!(verdict.contains("\"usage\":"), "6 値揃い＝判定 object に載る: {verdict}");
 }

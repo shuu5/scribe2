@@ -45,10 +45,15 @@
 //! [`PROMISES_FILE`] が在れば `{promises}` の穴に見出しと kind の 3 語の限りと写しを埋め、無ければ穴は空文字＝約束の行を
 //! 持たない行の雛形は 1 字も変わらない。在るのに読めない周は材料の欠けと同じく claude を呼ばず rc 2。cap の照合にも足す。
 
-use super::runner::scope_line;
-use super::{build, feed, fill, flag, need, read_stdin_bytes, rules_of, runner_effort, runner_model, Call, Effort, DEFAULT_CLAUDE};
+use super::runner::{has_top_level_key, is_result_record, result_usage, scope_line, top_level_string};
+use super::{
+    build, feed, fill, flag, need, read_stdin_bytes, rules_of, runner_effort, runner_model, Call, Effort, Format,
+    DEFAULT_CLAUDE,
+};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
+use crate::fleet::json_lite;
 use crate::fleet::select::Model;
+use crate::fleet::Usage;
 use crate::pipe::confine;
 use crate::pipe::contract::Contract;
 use crate::pipe::move_proof::RULINGS_FILE;
@@ -187,9 +192,9 @@ pub fn dispatch(args: &[String]) -> Outcome {
         // **便の worktree で起こす**（anchor の repo は渡さない）。判定に載る憲法は
         // base の checkout のものであり、anchor 側の未 commit な `CLAUDE.md` ではない。
         cwd: Some(Path::new(&worktree)),
-        // 判定を 1 つ受け取るだけなので既定（text）で呼ぶ。stream-json にすると
-        // 「最後の JSON 行」が claude の result record になり、判定が取れない。
-        streaming: false,
+        // 判定と消費の 6 値を 1 object の封筒で受ける（設計 gate-cost.md §26 形 (2)）。stream-json にすると
+        // 「最後の JSON 行」が claude の result record になり、判定が record の中の文字列へ埋もれる。
+        output: Format::Json,
         max_turns: None,
         },
         Path::new(cgroup_root.as_deref().unwrap_or(confine::CGROUP_ROOT)),
@@ -373,20 +378,56 @@ fn poll(child: &mut Child, sampler: &mut confine::Sampler<'_>) -> std::io::Resul
     }
 }
 
-/// 終わった claude の出力から最後の JSON 行を読む。
+/// 終わった claude の出力から判定の JSON 行を読む（[`verdict_line`]）。
 fn read_verdict(waited: std::io::Result<std::process::Output>) -> Outcome {
     let out = match waited {
         Ok(found) => found,
         Err(err) => return Outcome::failed_line(RC_BROKEN, format!("lens: claude の出力を読めない: {err}")),
     };
-    let text = String::from_utf8_lossy(&out.stdout);
-    let found = text
-        .lines()
-        .rev()
-        .find(|line| line.trim_start().starts_with(JSON_HEAD));
-    match found {
+    match verdict_line(&String::from_utf8_lossy(&out.stdout)) {
         // 読めない出力を握り潰さない。**判定に届かなかった**と名乗る。
         None => Outcome::ok_line(inconclusive("lens output has no json line")),
-        Some(line) => Outcome::ok_line(line.trim().to_owned()),
+        Some(line) => Outcome::ok_line(line),
     }
+}
+
+/// text の最後の JSON 行（`{` で始まる行・trim 済み）。
+fn last_json_line(text: &str) -> Option<&str> {
+    text.lines().rev().map(str::trim).find(|line| line.starts_with(JSON_HEAD))
+}
+
+/// stdout から判定の 1 行を組む（**読みの分岐は 1 つ**・設計 gate-cost.md §26 形 (2)）。
+///
+/// 最後の JSON 行が `type` = `result` の封筒（claude の json 出力）なら、その `result` の text の最後の JSON 行を判定に
+/// 読み、封筒の消費の 6 値（[`result_usage`]）を判定 object へ足す（[`with_usage`]）。封筒でなければその行をそのまま
+/// 判定に読む（従来の text の形・偽 lens の fixture は不変）。判定の JSON 行が無い周は `None`。
+fn verdict_line(text: &str) -> Option<String> {
+    let last = last_json_line(text)?;
+    if !is_result_record(last) {
+        return Some(last.to_owned());
+    }
+    let result = top_level_string(last, "result")?;
+    let verdict = last_json_line(&result)?;
+    Some(with_usage(verdict, result_usage(last).as_ref()))
+}
+
+/// 判定 object へ消費の 3 対（[`Usage::pairs`]・`usage` / `turns` / `wall_ms`）を足す。
+///
+/// 6 値が揃わない周（`None`）・判定が既にどれかの key を持つ周（二重にすると flat な読み手が形の壊れと読む）・`}` で
+/// 閉じない周は判定を 1 字も変えない（判定の意味は動かさない・読み手は field の不在を「測れなかった」と読む・C10）。
+fn with_usage(verdict: &str, usage: Option<&Usage>) -> String {
+    let Some(found) = usage else {
+        return verdict.to_owned();
+    };
+    let pairs = found.pairs();
+    if pairs.iter().any(|(key, _)| has_top_level_key(verdict, key)) {
+        return verdict.to_owned();
+    }
+    let Some(head) = verdict.strip_suffix('}').map(str::trim_end) else {
+        return verdict.to_owned();
+    };
+    let added = json_lite::write_object(&pairs);
+    let added = added.strip_prefix('{').and_then(|rest| rest.strip_suffix('}')).unwrap_or_default();
+    let comma = if head.ends_with(JSON_HEAD) { "" } else { "," };
+    format!("{head}{comma}{added}}}")
 }

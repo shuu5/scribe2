@@ -438,7 +438,7 @@ pub(super) fn assert_lands_without_human(repo: &Path, state: &Path, id: &str) {
     assert!(show_line(repo, state, id).contains("stage=Landed"), "Landed まで通る");
     let report = report_once(state);
     assert_eq!(
-        stdout_of(&report).trim(),
+        spawn::report_head(&report),
         format!("runs=1 landed=1 human_events=0 human_events_other_than_approval=0 {}", spawn::NO_REVIEW_FAIL),
         "人由来の event は 0（FR22）"
     );
@@ -485,6 +485,7 @@ pub(super) fn register_seat_account(state: &Path, anchor: &Path, account: &str) 
             model: None,
         }),
         account: None,
+        cost: None,
     };
     let policy = vessel::fleet::store::LockPolicy::embedded().expect("埋め込みの lock 行を読める");
     vessel::fleet::store::append(state, &event, policy).expect("登録 row を積める");
@@ -870,6 +871,7 @@ fn put_round(state: &Path, ts: &str, label: &str) {
             mark: None,
             registration: None,
             account: None,
+            cost: None,
         };
         vessel::fleet::store::append(state, &event, policy).expect("実測の行を積める");
     }

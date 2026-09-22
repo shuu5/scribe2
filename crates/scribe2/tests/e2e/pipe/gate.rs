@@ -3299,6 +3299,89 @@ fn pipe_record_show_external_form() {
     clean(&[&repo, &state]);
 }
 
+// ---- lens の claude の消費（設計 gate-cost.md §26 形 (2)・接頭辞 `run_cost_`）----
+//
+// 偽 lens は判定 object に消費の 3 対（`usage` / `turns` / `wall_ms`）を足して出す（headless の lens が json の封筒から
+// 足す形と同じ）。母集団 = 置き場の `RunCost` の event 数。
+
+/// 6 値が揃った消費の 3 対（数は互いに違う）。
+const LENS_COST: &str = r#""usage":"in:11,out:22,cache_read:33,cache_create:44","turns":5,"wall_ms":6000"#;
+
+/// [`lens_verdict`] の PASS に `extra` の対を足した偽 lens の本文。
+fn verdict_with(extra: &str) -> String {
+    let base = lens_verdict("PASS");
+    format!("{},{extra}}}", base.strip_suffix('}').unwrap_or_default())
+}
+
+/// 便を Implemented まで進め、`body` を出す偽 lens で gate を 1 回撃つ（repo・置き場・便 id・gate の出力）。
+fn gated_with(body: &str) -> (PathBuf, PathBuf, String, Output) {
+    let (repo, state) = repo_with_state();
+    let design = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &design);
+    let marker = state.join("lens-ran");
+    let out = gate_once(&repo, &state, &id, Some(&fake_lens(&marker, body)));
+    (repo, state, id, out)
+}
+
+/// 置き場の消費の event（物理順の位置と event）。
+fn cost_events(state: &Path) -> Vec<(usize, Event)> {
+    events(state).into_iter().enumerate().filter(|(_, event)| event.kind == EventKind::RunCost).collect()
+}
+
+/// (e) gate の lens の消費: 判定 object が 6 値を運ぶ周は `RunCost source=lens` が 1 件、`Gated` の前に書かれ、値は偽
+/// lens の出した数と一致する。判定と rc は PASS のまま。`pipe show --run` は母集団と消費の行を、`pipe report` の 2 行目は
+/// 便の数と token の和を写す（母集団 = event 数 1）。
+#[test]
+fn run_cost_gate_records_one_lens_event_before_gated() {
+    let (repo, state, id, out) = gated_with(&verdict_with(LENS_COST));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "PASS のまま: {}", stderr_of(&out));
+    assert_eq!(value_of(&verdict_pairs(&state, &id), "verdict"), "PASS", "判定は動かない");
+    let costs = cost_events(&state);
+    assert_eq!(costs.len(), 1, "消費の event は lens の 1 件（偽 runner は usage を運ばない）: {costs:?}");
+    let Some((at, event)) = costs.first() else {
+        panic!("消費の event が無い");
+    };
+    let want = vessel::fleet::Usage { input: 11, output: 22, cache_read: 33, cache_create: 44, turns: 5, wall_ms: 6000 };
+    let source = vessel::fleet::CostSource::Lens;
+    assert_eq!(event.cost, Some(vessel::fleet::Cost { source, usage: want }), "値は偽 lens の数");
+    let gated = events(&state).iter().position(|found| found.stage == Some(Stage::Gated));
+    assert!(gated.is_some_and(|found| *at < found), "Gated の前に書く: {at} / {gated:?}");
+    let shown = show_line(&repo, &state, &id);
+    let lines: Vec<&str> = shown.lines().filter(|line| line.starts_with("cost:")).collect();
+    assert_eq!(
+        lines,
+        ["cost: events=1", "cost: source=lens usage=in:11,out:22,cache_read:33,cache_create:44 turns=5 wall_ms=6000"],
+        "{shown}"
+    );
+    let report = report_once(&state);
+    let second = stdout_of(&report).lines().nth(1).unwrap_or_default().to_owned();
+    assert!(second.starts_with("cost: with_usage=1 out=22 cache_read=33 gate_secs="), "{}", stdout_of(&report));
+    clean(&[&repo, &state]);
+}
+
+/// (f)(g) usage を出さない偽 lens・`turns` だけ欠く・`wall_ms` が数でない周は消費の event を書かず、判定と rc は 6 値
+/// 揃いの周と同じ PASS / rc 0（「測れなかった」は field の不在で運ぶ・欠けを 0 に倒さない＝同じ歯の中で揃い＝1 件を対に
+/// 並べる）。
+#[test]
+fn run_cost_gate_without_full_usage_writes_no_event_and_keeps_the_verdict() {
+    let turns_missing = LENS_COST.replacen(",\"turns\":5", "", 1);
+    let wall_text = LENS_COST.replacen("\"wall_ms\":6000", "\"wall_ms\":\"6000\"", 1);
+    let cases = [
+        (lens_verdict("PASS"), 0, "usage を出さない"),
+        (verdict_with(&turns_missing), 0, "turns だけ欠く"),
+        (verdict_with(&wall_text), 0, "wall_ms が数でない"),
+        (verdict_with(LENS_COST), 1, "6 値揃い"),
+    ];
+    for (body, want, why) in cases {
+        let (repo, state, id, out) = gated_with(&body);
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{why}: rc は PASS のまま: {}", stderr_of(&out));
+        assert_eq!(value_of(&verdict_pairs(&state, &id), "verdict"), "PASS", "{why}: 判定は動かない");
+        assert_eq!(cost_events(&state).len(), want, "{why}: 消費の event 数");
+        assert_eq!(show_line(&repo, &state, &id).contains("cost:"), want > 0, "{why}: 描画");
+        clean(&[&repo, &state]);
+    }
+}
+
 /// 行末の段の秒を `[secs]` へ置く（値は周ごとに動く＝snapshot に入れない・外形だけを固定する）。
 fn mask_secs(form: &str) -> String {
     form.lines()

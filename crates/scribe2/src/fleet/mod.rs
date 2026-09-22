@@ -67,6 +67,10 @@ pub enum EventKind {
     /// 器の checkout を ff して build + install した（`vessel update`・設計 consumer-sync.md §5 (4)・[`Shape::Install`]）。
     /// **便に紐づかない**——本体は [`Install`]（`detail` の 1 行）で、host は行の `host` 列が持つ。
     InstallRecorded,
+    /// runner / lens / review の claude が 1 回で消費した量（設計 gate-cost.md §26 形 (2)・[`Shape::Cost`]）。本体は
+    /// [`Cost`]（出所と 6 値）で、`run` / `bead` を持つが**段を動かさない**（replay は便を作らない・C6.3 の store は
+    /// この log 1 つ）。
+    RunCost,
 }
 
 /// [`EventKind`] の全 variant。
@@ -88,6 +92,7 @@ pub const KINDS: &[EventKind] = &[
     EventKind::AccountRestored,
     EventKind::DispatchMark,
     EventKind::InstallRecorded,
+    EventKind::RunCost,
 ];
 
 impl EventKind {
@@ -111,6 +116,7 @@ impl EventKind {
             Self::AccountRestored => "AccountRestored",
             Self::DispatchMark => "DispatchMark",
             Self::InstallRecorded => "InstallRecorded",
+            Self::RunCost => "RunCost",
         }
     }
 
@@ -138,7 +144,8 @@ impl EventKind {
             | Self::AccountRetired
             | Self::AccountRestored
             | Self::DispatchMark
-            | Self::InstallRecorded => ACTOR_MACHINE,
+            | Self::InstallRecorded
+            | Self::RunCost => ACTOR_MACHINE,
         }
     }
 
@@ -166,6 +173,7 @@ impl EventKind {
             Self::AccountRetired | Self::AccountRestored => Shape::Account,
             Self::DispatchMark => Shape::Mark,
             Self::InstallRecorded => Shape::Install,
+            Self::RunCost => Shape::Cost,
         }
     }
 
@@ -196,10 +204,147 @@ pub enum Shape {
     Mark,
     /// install の 1 回（`detail` が [`Install`] の 1 行・`run` / `bead` を持たない・設計 consumer-sync.md §5 (4)）。
     Install,
+    /// `run` + `bead` + 消費の本体 [`Cost`]（便に紐づくが段を持たない＝replay は便を作らない・設計 gate-cost.md §26 形 (2)）。
+    Cost,
 }
 
 /// [`Shape`] の全 variant（宣言順・`enum-slices` が集合完全性を測る）。
-pub const SHAPES: &[Shape] = &[Shape::Run, Shape::Allowance, Shape::Registration, Shape::Account, Shape::Mark, Shape::Install];
+pub const SHAPES: &[Shape] = &[
+    Shape::Run,
+    Shape::Allowance,
+    Shape::Registration,
+    Shape::Account,
+    Shape::Mark,
+    Shape::Install,
+    Shape::Cost,
+];
+
+/// 消費の 1 件の出所（**閉じた 3 値**・設計 gate-cost.md §26 形 (2)）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CostSource {
+    /// runner の claude（実装の周）。
+    Runner,
+    /// gate の lens の claude（diff の審査）。
+    Lens,
+    /// 受付の審査の lens の claude（契約の審査）。
+    Review,
+}
+
+/// [`CostSource`] の全 variant（宣言順・`enum-slices` が集合完全性を測る）。
+pub const COST_SOURCES: &[CostSource] = &[CostSource::Runner, CostSource::Lens, CostSource::Review];
+
+impl CostSource {
+    /// JSON の `source` と `pipe show` に書く字面。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Runner => "runner",
+            Self::Lens => "lens",
+            Self::Review => "review",
+        }
+    }
+
+    /// 字面から引く。未知なら `None`。
+    pub fn parse(text: &str) -> Option<Self> {
+        COST_SOURCES.iter().copied().find(|found| found.as_str() == text)
+    }
+}
+
+/// claude の result record が運ぶ消費の **6 値**（`usage` の token 4 値と `num_turns` / `duration_ms`）。
+///
+/// **6 値が揃った周にだけ組む**（どれか 1 つでも欠けるか数でない周は値を作らない＝「測って 0」と「読めなかった」を
+/// 1 つの値に潰さない・C10）。`total_cost_usd` は CLI の見積（派生値）ゆえ持たない。字面は 3 つの面（runner の
+/// 要約行 [`Self::words`]・lens の判定 object [`Self::pairs`]・event の行）が同じ `usage` の値 [`Self::tokens`] を共有する。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Usage {
+    /// `input_tokens`。
+    pub input: u64,
+    /// `output_tokens`。
+    pub output: u64,
+    /// `cache_read_input_tokens`。
+    pub cache_read: u64,
+    /// `cache_creation_input_tokens`。
+    pub cache_create: u64,
+    /// `num_turns`。
+    pub turns: u64,
+    /// `duration_ms`（claude が測った壁時計）。
+    pub wall_ms: u64,
+}
+
+/// token 4 値の語（[`Usage::tokens`] の並び）。
+const TOKEN_WORDS: [&str; 4] = ["in", "out", "cache_read", "cache_create"];
+
+impl Usage {
+    /// `usage` の値（`in:<n>,out:<n>,cache_read:<n>,cache_create:<n>`）。
+    pub fn tokens(&self) -> String {
+        let values = [self.input, self.output, self.cache_read, self.cache_create];
+        let words: Vec<String> = TOKEN_WORDS.iter().zip(values).map(|(word, value)| format!("{word}:{value}")).collect();
+        words.join(",")
+    }
+
+    /// runner の要約行に足す 3 語（`usage=<tokens> turns=<n> wall_ms=<n>`）。
+    pub fn words(&self) -> String {
+        format!("usage={} turns={} wall_ms={}", self.tokens(), self.turns, self.wall_ms)
+    }
+
+    /// 判定 object と event の行に並ぶ 3 対（`usage` は [`Self::tokens`] の文字列・flat な object のまま）。
+    pub fn pairs(&self) -> Vec<(&'static str, Value)> {
+        vec![("usage", Value::Str(self.tokens())), ("turns", Value::Num(self.turns)), ("wall_ms", Value::Num(self.wall_ms))]
+    }
+
+    /// 6 値から組む（`usage` の文字列が 4 語ちょうどを宣言順に持たない周は `None`）。
+    fn of(tokens: &str, turns: u64, wall_ms: u64) -> Option<Self> {
+        let mut values = [0_u64; 4];
+        let mut items = tokens.split(',');
+        for (word, slot) in TOKEN_WORDS.iter().zip(values.iter_mut()) {
+            let (found, value) = items.next()?.split_once(':')?;
+            if found != *word || value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+                return None;
+            }
+            *slot = value.parse().ok()?;
+        }
+        if items.next().is_some() {
+            return None;
+        }
+        let [input, output, cache_read, cache_create] = values;
+        Some(Self { input, output, cache_read, cache_create, turns, wall_ms })
+    }
+
+    /// [`Self::words`] の 3 語を 1 行の空白区切りの語から読む（3 語のどれかが欠けるか数でない周は `None`）。
+    pub fn from_words(line: &str) -> Option<Self> {
+        let word = |key: &str| line.split_whitespace().find_map(|token| token.strip_prefix(key)?.strip_prefix('='));
+        let number = |key: &str| word(key).filter(|text| text.bytes().all(|byte| byte.is_ascii_digit()))?.parse().ok();
+        Self::of(word("usage")?, number("turns")?, number("wall_ms")?)
+    }
+
+    /// [`Self::pairs`] の 3 対を flat な object から読む（どれかが欠けるか型が違う周は `None`）。
+    pub fn from_pairs(pairs: &[(String, Value)]) -> Option<Self> {
+        let get = |key: &str| pairs.iter().find(|(found, _)| found == key).map(|(_, value)| value);
+        Self::of(get("usage")?.as_str()?, get("turns")?.as_num()?, get("wall_ms")?.as_num()?)
+    }
+}
+
+/// 消費の 1 件（[`EventKind::RunCost`] の本体・出所と 6 値）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Cost {
+    /// どの claude の消費か。
+    pub source: CostSource,
+    /// 6 値。
+    pub usage: Usage,
+}
+
+impl Cost {
+    /// 行へ書く key/value（`source` と [`Usage::pairs`]）。
+    fn pairs(&self) -> Vec<(&'static str, Value)> {
+        let mut pairs = vec![("source", Value::Str(self.source.as_str().to_owned()))];
+        pairs.extend(self.usage.pairs());
+        pairs
+    }
+
+    /// `pipe show` の 1 行（`cost: source=<s> usage=<tokens> turns=<n> wall_ms=<n>`）。
+    pub fn line(&self) -> String {
+        format!("cost: source={} {}", self.source.as_str(), self.usage.words())
+    }
+}
 
 /// `vessel update` が install した 1 回（[`EventKind::InstallRecorded`] の本体・設計 consumer-sync.md §5 (4)）。
 ///

@@ -265,6 +265,7 @@ pub fn register(state_dir: &Path, registration: Registration) -> Result<Registra
         registration: Some(registration.clone()),
         mark: None,
         account: None,
+        cost: None,
     };
     let store_err = |err: store::StoreError| RegisterRefusal::Store(err.to_string());
     store::append(state_dir, &event, LockPolicy::embedded().map_err(store_err)?).map_err(store_err)?;

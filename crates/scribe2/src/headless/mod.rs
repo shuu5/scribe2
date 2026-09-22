@@ -98,12 +98,39 @@ const CLAUDE_STAGE: &str = "claude";
 
 /// claude を起こしたのが runner の口か lens の口か（scope の unit 名に載る）。
 ///
-/// 逐次 record が要るのは runner だけ（[`Call::streaming`]）なので、口の別はその 1 つで読める。
+/// 逐次 record が要るのは runner だけ（[`Format::StreamJson`]）なので、口の別はその 1 つで読める。
 fn claude_place(call: &Call<'_>) -> &'static str {
-    if call.streaming {
-        "runner"
-    } else {
-        "lens"
+    match call.output {
+        Format::StreamJson => "runner",
+        Format::Json | Format::Text => "lens",
+    }
+}
+
+/// claude の出力形式（`--output-format` の値・**閉じた 3 値**・設計 gate-cost.md §26 形 (2)）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Format {
+    /// 既定（text）。`--output-format` を渡さない（`fleet usage` の token refresh・argv は不変）。
+    Text,
+    /// 1 object の封筒（`result` の text と `usage` を持つ）。lens が使う——判定は封筒の `result` の text の
+    /// 最後の JSON 行から読み、`usage` は消費の 6 値として読む。
+    Json,
+    /// record を**逐次**受け取る。runner が使う——rate limit の record を**途中で**見て止めるため。**全行が JSON**
+    /// ゆえ「最後の JSON 行」が claude 自身の result record になり、lens の判定は record の中の文字列へ埋もれる
+    /// （実測 2026-09-10）ので lens には使わない。
+    StreamJson,
+}
+
+/// [`Format`] の全 variant（宣言順）。
+pub const FORMATS: &[Format] = &[Format::Text, Format::Json, Format::StreamJson];
+
+impl Format {
+    /// `--output-format` の値（[`Format::Text`] は flag ごと渡さない＝`None`）。
+    fn flag(self) -> Option<&'static str> {
+        match self {
+            Self::Text => None,
+            Self::Json => Some("json"),
+            Self::StreamJson => Some("stream-json"),
+        }
     }
 }
 
@@ -284,13 +311,9 @@ pub struct Call<'a> {
     pub account_dir: Option<&'a str>,
     /// 起動する cwd。
     pub cwd: Option<&'a Path>,
-    /// record を**逐次**受け取るか（`--output-format stream-json`）。
-    ///
-    /// 逐次が要るのは runner だけである——rate limit の record を**途中で**見て止める
-    /// ためで、lens は判定を 1 つ受け取るだけなので既定（text）で呼ぶ。stream-json は
-    /// **全行が JSON** ゆえ「最後の JSON 行」が claude 自身の result record になり、
-    /// モデルの判定は record の中の文字列へ埋もれる（実測 2026-09-10）。
-    pub streaming: bool,
+    /// 出力形式（[`Format`] の 3 値）。runner は [`Format::StreamJson`]（rate limit の record を途中で見る）・lens は
+    /// [`Format::Json`]（判定と消費の 6 値を 1 object で受ける）・`fleet usage` の token refresh は [`Format::Text`]。
+    pub output: Format,
     /// turn の上限（`--max-turns <n>`）。`Some` の周だけ argv に載る——runner と lens は `None`
     /// （argv は不変）で、`fleet usage` の token refresh の起動だけが `Some(1)` を渡す（設計 fleet-usage.md §3）。
     pub max_turns: Option<u32>,
@@ -365,11 +388,14 @@ pub fn build(call: &Call<'_>) -> (Command, confine::Confinement) {
         .arg("")
         // MCP も同じ極性で閉じる。宣言していない server を拾わせない。
         .arg("--strict-mcp-config");
-    if call.streaming {
+    if let Some(format) = call.output.flag() {
+        inner.arg("--output-format").arg(format);
+    }
+    if call.output == Format::StreamJson {
         // `-p` と `stream-json` の併用は **この版の claude が `--verbose` を要求する**
         // （無いと `requires --verbose` で rc 1・実測 2026-09-10）。fake は flag を
         // 読まないので、これを落としても歯は緑のまま通る＝実 claude でだけ死ぬ。
-        inner.arg("--output-format").arg("stream-json").arg("--verbose");
+        inner.arg("--verbose");
     }
     if let Some(turns) = call.max_turns {
         inner.arg("--max-turns").arg(turns.to_string());
@@ -441,7 +467,7 @@ pub fn feed(child: &mut std::process::Child, prompt: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{build, claude_place, plugin_dirs, Call};
+    use super::{build, claude_place, plugin_dirs, Call, Format, FORMATS};
     use proptest::prelude::*;
     use proptest::test_runner::Config;
     use std::collections::BTreeSet;
@@ -494,7 +520,7 @@ mod tests {
             plugin_dir: Some(&text),
             account_dir: None,
             cwd: None,
-            streaming: true,
+            output: Format::StreamJson,
             max_turns: None,
         });
         let args: Vec<String> = command.get_args().map(|arg| arg.to_string_lossy().into_owned()).collect();
@@ -509,7 +535,7 @@ mod tests {
     /// `runner`・受けない call は `lens`（空や別の字面に潰すと、runner と lens の scope が unit 名で弁別できない）。
     #[test]
     fn mutant_in_pipe_claude_place_names_runner_and_lens() {
-        let call = |streaming: bool| Call {
+        let call = |output: Format| Call {
             claude: "claude",
             prompt: "",
             permission_mode: "plan",
@@ -518,11 +544,43 @@ mod tests {
             plugin_dir: None,
             account_dir: None,
             cwd: None,
-            streaming,
+            output,
             max_turns: None,
         };
-        assert_eq!(claude_place(&call(true)), "runner", "逐次 record を受ける口");
-        assert_eq!(claude_place(&call(false)), "lens", "判定を 1 つ受け取る口");
+        assert_eq!(claude_place(&call(Format::StreamJson)), "runner", "逐次 record を受ける口");
+        assert_eq!(claude_place(&call(Format::Json)), "lens", "判定を 1 つ受け取る口");
+        assert_eq!(claude_place(&call(Format::Text)), "lens", "計測の起動も lens の側（従来の名のまま）");
+    }
+
+    /// 出力形式の 3 値は argv に `--output-format` の値として写る: text は flag ごと渡さず（`fleet usage` の argv は
+    /// 不変）・json は `json` の対だけ・stream-json は `stream-json` の対と `--verbose`（設計 gate-cost.md §26 形 (2)）。
+    #[test]
+    fn run_cost_output_format_is_in_argv_per_variant() {
+        let args_of = |output: Format| {
+            let (command, _) = build(&Call {
+                claude: "claude",
+                prompt: "",
+                permission_mode: "plan",
+                model: None,
+                effort: None,
+                plugin_dir: None,
+                account_dir: None,
+                cwd: None,
+                output,
+                max_turns: None,
+            });
+            command.get_args().map(|arg| arg.to_string_lossy().into_owned()).collect::<Vec<String>>()
+        };
+        assert_eq!(FORMATS.len(), 3, "閉じた 3 値");
+        let text = args_of(Format::Text);
+        assert!(!text.iter().any(|arg| arg == "--output-format" || arg == "--verbose"), "text は渡さない: {text:?}");
+        let json = args_of(Format::Json);
+        assert_eq!(json.windows(2).filter(|pair| pair == &["--output-format", "json"]).count(), 1, "{json:?}");
+        assert!(!json.iter().any(|arg| arg == "--verbose"), "json は --verbose を要らない: {json:?}");
+        assert_eq!(json.len(), text.len() + 2, "足されるのは対の 2 引数だけ: {json:?} / {text:?}");
+        let stream = args_of(Format::StreamJson);
+        assert_eq!(stream.windows(2).filter(|pair| pair == &["--output-format", "stream-json"]).count(), 1, "{stream:?}");
+        assert_eq!(stream.len(), text.len() + 3, "対と --verbose の 3 引数: {stream:?}");
     }
 
     /// `max_turns: Some(1)` の call は argv に `--max-turns` `1` が隣り合って並び、`None` の call には
@@ -539,7 +597,7 @@ mod tests {
                 plugin_dir: None,
                 account_dir: None,
                 cwd: None,
-                streaming: false,
+                output: Format::Text,
                 max_turns,
             });
             command.get_args().map(|arg| arg.to_string_lossy().into_owned()).collect::<Vec<String>>()
@@ -569,7 +627,7 @@ mod tests {
                 plugin_dir: None,
                 account_dir: None,
                 cwd: None,
-                streaming: false,
+                output: Format::Text,
                 max_turns: None,
             });
             command.get_args().map(|arg| arg.to_string_lossy().into_owned()).collect::<Vec<String>>()

@@ -12,13 +12,13 @@ use super::follow::{Halt, Resumption, Section};
 use super::gate::last_json_object;
 use super::refuse;
 use super::{
-    base_of_run, branch_name, contract_path, emit, git_line, plugin_path, runner_stderr_path, runner_stdout_path,
-    vessel_path, worktree_path, Budget, Emit, Question, RC_QUESTION,
+    base_of_run, branch_name, contract_path, emit, git_line, plugin_path, record_cost, runner_stderr_path,
+    runner_stdout_path, vessel_path, worktree_path, Budget, Emit, Question, RC_QUESTION,
 };
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
 use crate::fleet::store::LockPolicy;
-use crate::fleet::{EventKind, Stage};
-use crate::headless::runner::{stop_status, top_level_string};
+use crate::fleet::{Cost, CostSource, EventKind, Stage};
+use crate::headless::runner::{stop_status, summary_usage, top_level_string};
 use crate::headless::{NO_VALUE, RC_RATE_LIMIT};
 use crate::name::{NAME, PLUGIN_DIR};
 use crate::pipe::contract::Contract;
@@ -252,12 +252,15 @@ fn launch_runner(launch: &Launch<'_>, worktree: &Path, cmd: &str, base: &str) ->
     let stderr = String::from_utf8_lossy(&out.stderr);
     // 捕らえた stdout は診断 file へ残す（包みの観測行を端末から消さない）。書けない周は
     // 段の判定を変えない（stderr 1 行で loud）。
-    let kept = keep_stdout(launch, rc, &stdout).err();
+    let kept = keep_stdout(launch, rc, &stdout).err().map(|reason| format!("pipe: runner の stdout を残せない: {reason}"));
     // 捕らえた stderr も同じ形で並べて残し（設計 dispatcher.md §12）、呼び手の stderr へそのまま流す。
     // **段の判定の入力にはしない**（判定は rc と commit の数だけ・C3.3）。
-    let kept_err = keep_stderr(launch, rc, &stderr).err();
+    let kept_err = keep_stderr(launch, rc, &stderr).err().map(|reason| format!("pipe: runner の stderr を残せない: {reason}"));
     relay_stderr(&out.stderr);
-    let mut outcome = if super::is_stopping(launch.state_dir, launch.run) == Some(true) {
+    let stopping = super::is_stopping(launch.state_dir, launch.run) == Some(true);
+    // **runner の消費は段の event の前に 1 件**（設計 gate-cost.md §26 形 (2)）。停止中の便は段と同じく書かない。
+    let cost = if stopping { None } else { runner_cost(launch, &stdout) };
+    let mut outcome = if stopping {
         // **停止中の便は段を 1 件も書かない**（設計 pipeline.md §23）。runner を消したのは `pipe stop` で、
         // 終端は `RunStopped` の経路が書く——ここで `Failed` を書くと stop の終端を上書きする。
         stopped_underneath(launch)
@@ -274,14 +277,15 @@ fn launch_runner(launch: &Launch<'_>, worktree: &Path, cmd: &str, base: &str) ->
         // **rc が 76 / 75 でない周は最終行を読まない**（従来どおり）。
         settle(launch, worktree, base, rc)
     };
-    if let Some(reason) = kept {
-        outcome.err.push(format!("pipe: runner の stdout を残せない: {reason}"));
-    }
-    if let Some(reason) = kept_err {
-        outcome.err.push(format!("pipe: runner の stderr を残せない: {reason}"));
-    }
-    outcome.err.extend(scope);
+    outcome.err.extend(kept.into_iter().chain(kept_err).chain(cost).chain(scope));
     outcome
+}
+
+/// runner の要約行（[`summary_usage`]）の消費の 6 値を 1 件書く（揃わない周は書かない・書けない周の理由は stderr の
+/// 1 行で返す＝段の判定と rc は変えない）。
+fn runner_cost(launch: &Launch<'_>, stdout: &str) -> Option<String> {
+    let cost = summary_usage(stdout).map(|usage| Cost { source: CostSource::Runner, usage });
+    record_cost(launch.state_dir, (launch.run, launch.bead), cost, launch.policy)
 }
 
 /// 捕らえた runner の stderr を呼び手の stderr へ**そのまま**流す（設計 dispatcher.md §12「手で撃った周の

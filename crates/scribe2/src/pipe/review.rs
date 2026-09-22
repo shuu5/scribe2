@@ -40,13 +40,13 @@ pub use judgement::{judgement_of, review_dir, review_path, unaddressed, verdict_
 pub use judgement::{Judgement, Rework, ROW_SAME_KIND_STOP};
 use requirements::requirements_text;
 use super::contract::Contract;
-use super::gate::{last_json_object, Verdict};
+use super::gate::{last_json_object, lens_usage, Verdict};
 use super::lens_record::LensSource;
-use super::{confine, contract_path, emit, table, Emit};
+use super::{confine, contract_path, emit, record_cost, table, Emit};
 use crate::cli_outcome::{Outcome, RC_BROKEN};
 use crate::fleet::json_lite::{self, Value};
 use crate::fleet::store::LockPolicy;
-use crate::fleet::{cli::now_utc, EventKind, Stage, SCHEMA};
+use crate::fleet::{cli::now_utc, Cost, CostSource, EventKind, Stage, Usage, SCHEMA};
 use crate::polarity::{OnFailure, Polarity, Timing};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -274,14 +274,18 @@ pub fn review(entry: &Review<'_>) -> Outcome {
         Ok(found) => found,
         Err(reason) => return broken(reason),
     };
-    let (finding, scope) = decide(entry, &contract);
+    let (finding, scope, usage) = decide(entry, &contract);
     let finding = narrow(finding, !material.promises.is_empty());
     let verdict = finding.verdict;
+    // **審査の lens の消費は判定を書く周に 1 件**（`Reviewed` の前・設計 gate-cost.md §26 形 (2)）。揃わない周は書かず、
+    // 書けない周も判定と rc は変えない。
+    let cost = usage.map(|found| Cost { source: CostSource::Review, usage: found });
+    let noted = record_cost(entry.state_dir, (entry.run, entry.bead), cost, entry.policy);
     match settle(entry, &finding, scope) {
         Err(reason) => broken(reason),
         Ok(()) => Outcome {
             out: vec![format!("run={} stage={} verdict={}", entry.run, Stage::Reviewed.as_str(), verdict.as_str())],
-            err: Vec::new(),
+            err: noted.into_iter().collect(),
             rc: verdict.rc(),
         },
     }
@@ -448,11 +452,12 @@ fn lens_cmd(source: &LensSource) -> Result<&str, Finding> {
 
 /// lens を 1 回撃って判定を得る（**wildcard 無し・判定に届かない周は INCONCLUSIVE**）。
 ///
-/// 2 つ目は lens の scope を片付けた結果（record に書く周だけ `Some`）。
-fn decide(entry: &Review<'_>, contract: &Path) -> (Finding, Option<confine::Released>) {
+/// 2 つ目は lens の scope を片付けた結果（record に書く周だけ `Some`）・3 つ目は lens の claude の消費の 6 値（lens が
+/// rc 0 で終わり判定 object が運んだ周だけ `Some`＝gate の lens と同じ読み [`lens_usage`]）。
+fn decide(entry: &Review<'_>, contract: &Path) -> (Finding, Option<confine::Released>, Option<Usage>) {
     let cmd = match lens_cmd(entry.lens) {
         Ok(found) => found,
-        Err(finding) => return (finding, None),
+        Err(finding) => return (finding, None, None),
     };
     // **渡すのは path であって本文ではない**（cmd は `sh -c` の 1 行）。穴は gate と同じ 2 つで、`{worktree}` は
     // 便の worktree がまだ無いので base の repo（lens が憲法を読む cwd）を置く。**1 走査で埋める**。
@@ -473,12 +478,17 @@ fn decide(entry: &Review<'_>, contract: &Path) -> (Finding, Option<confine::Rele
         .spawn();
     let mut child = match spawned {
         Ok(found) => found,
-        Err(err) => return (Finding::inconclusive(format!("lens を起動できない: {err}")), None),
+        Err(err) => return (Finding::inconclusive(format!("lens を起動できない: {err}")), None, None),
     };
     drop(child.stdin.take());
     let waited = child.wait_with_output();
     let scope = confine::release_scope(&confinement);
-    (lens_outcome(waited, &confinement), scope)
+    let usage = waited
+        .as_ref()
+        .ok()
+        .filter(|out| out.status.success())
+        .and_then(|out| lens_usage(&String::from_utf8_lossy(&out.stdout)));
+    (lens_outcome(waited, &confinement), scope, usage)
 }
 
 /// 終わった lens の出力から判定を読む（箱の中の死 → rc → 最後の JSON 行の順・gate の lens と同じ極性）。

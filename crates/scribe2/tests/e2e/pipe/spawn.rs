@@ -5,6 +5,7 @@
 //! 共有 helper は親（`tests/e2e/pipe.rs`）に在り `use super::*` で引く（歯の本文は移しただけ・`s2-07l.264`）。
 
 use super::*;
+use vessel::fleet::{Cost, CostSource, Usage};
 use vessel::name::PLUGIN_DIR;
 use vessel::pipe::land;
 
@@ -1449,6 +1450,17 @@ fn record_human_stage(state: &Path, id: &str) -> Output {
 pub(super) const NO_REVIEW_FAIL: &str = "review_fail=0 by_kind=teeth-outside-write-set:0,goal-done-contradiction:0,\
                                           vacuous-assert:0,literal-mismatch:0,section-material-missing:0,other:0,unparsed:0";
 
+/// `pipe report` の 1 行目（到達点の行）。2 行目は消費の行（`cost:`・設計 gate-cost.md §26 形 (2)）で、段の秒の和が
+/// 周ごとに動くので到達点の歯は 1 行目だけを逐語で pin する（2 行目の形は [`report_cost`] と `run_cost_` の歯が測る）。
+pub(super) fn report_head(out: &Output) -> String {
+    stdout_of(out).lines().next().unwrap_or_default().to_owned()
+}
+
+/// `pipe report` の 2 行目（消費の行）。
+pub(super) fn report_cost(out: &Output) -> String {
+    stdout_of(out).lines().nth(1).unwrap_or_default().to_owned()
+}
+
 #[test]
 fn pipe_report_counts_human_events() {
     let (repo, state) = repo_with_state();
@@ -1469,10 +1481,12 @@ fn pipe_report_counts_human_events() {
     let out = report_once(&state);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "report は rc 0: {}", stderr_of(&out));
     assert_eq!(
-        stdout_of(&out).trim(),
+        report_head(&out),
         format!("runs=2 landed=1 human_events=1 human_events_other_than_approval=0 {NO_REVIEW_FAIL}"),
         "到達点の 1 行（設計 §5.8・既存 token は不変で §22 の 2 token が末尾に足される）"
     );
+    assert!(report_cost(&out).starts_with("cost: with_usage=0 out=0 cache_read=0 gate_secs="), "{}", stdout_of(&out));
+    assert_eq!(stdout_of(&out).lines().count(), 2, "到達点の行と消費の行の 2 行: {}", stdout_of(&out));
 
     // **approval 以外の人由来 event は別に数える**——ここが 0 であることが到達点の主張
     // なので、0 のままにしか動かない数え方だと主張を測れない。
@@ -1480,7 +1494,7 @@ fn pipe_report_counts_human_events() {
     assert_eq!(recorded.status.code(), Some(i32::from(RC_OK)), "record: {}", stderr_of(&recorded));
     let after = report_once(&state);
     assert_eq!(
-        stdout_of(&after).trim(),
+        report_head(&after),
         format!("runs=2 landed=1 human_events=2 human_events_other_than_approval=1 {NO_REVIEW_FAIL}"),
         "approval 以外の人由来 event を数える"
     );
@@ -1539,7 +1553,7 @@ fn pipe_review_kind_report_counts_review_fail_by_kind_in_declaration_order() {
 
     let report = report_once(&state);
     assert_eq!(report.status.code(), Some(i32::from(RC_OK)), "report は rc 0 のまま: {}", stderr_of(&report));
-    let line = stdout_of(&report).trim().to_owned();
+    let line = report_head(&report);
     // 母集団 = intake の 4 便（FAIL 3 + INCONCLUSIVE 1）+ 古い形の 2 件（PASS の 2 件は外）= 6。
     assert_eq!(
         line,
@@ -1594,11 +1608,95 @@ fn pipe_report_counts_landed_runs_not_landed_events() {
     assert_eq!(doubled.status.code(), Some(i32::from(RC_OK)), "record: {}", stderr_of(&doubled));
     let out = report_once(&state);
     assert_eq!(
-        stdout_of(&out).trim(),
+        report_head(&out),
         format!("runs=1 landed=1 human_events=0 human_events_other_than_approval=0 {NO_REVIEW_FAIL}"),
         "landed は便の数であって event の数ではない"
     );
     clean(&[&repo, &state]);
+}
+
+/// 要約行に消費の 3 語を足して終わる偽 runner（commit を 1 本作ってから、runner の要約行と同じ字面を最後に印字する）。
+const COST_RUNNER: &str = "echo x >> src/lib.rs && git add -A && git commit -q -m runner && \
+                           echo 'runner: rc=0 records=3 usage=in:11,out:22,cache_read:33,cache_create:44 turns=5 wall_ms=6000'";
+
+/// (e) runner の消費（設計 gate-cost.md §26 歯 (e)・spawn の側）: 便 1 本で `RunCost source=runner` が 1 件、`Implemented`
+/// の前に書かれ、6 値は要約行の数と一致する。`pipe show --run` は母集団（`cost: events=1`）と消費の行を写し、`pipe report`
+/// の 2 行目は便の数と token の和を出す。(f) 要約行が usage を運ばない便は event を書かず段は同じ `Implemented`。
+#[test]
+fn run_cost_spawn_records_one_runner_event_before_implemented() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = intake(&repo, &state, &path);
+    let out = spawn_with(&repo, &state, &id, COST_RUNNER);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "spawn は rc 0: {}", stderr_of(&out));
+    assert!(stdout_of(&out).contains("stage=Implemented"), "{}", stdout_of(&out));
+    let all = events(&state);
+    let costs: Vec<(usize, &Event)> = all.iter().enumerate().filter(|(_, event)| event.kind == EventKind::RunCost).collect();
+    assert_eq!(costs.len(), 1, "消費の event は 1 件（母集団 = event 数）: {costs:?}");
+    let Some(&(at, event)) = costs.first() else {
+        panic!("消費の event が無い");
+    };
+    let want = Usage { input: 11, output: 22, cache_read: 33, cache_create: 44, turns: 5, wall_ms: 6000 };
+    assert_eq!(event.cost, Some(Cost { source: CostSource::Runner, usage: want }), "6 値は要約行の数");
+    assert_eq!((event.run.as_str(), event.stage), (id.as_str(), None), "便に紐づき段を持たない");
+    let implemented = all.iter().position(|event| event.stage == Some(Stage::Implemented));
+    assert!(implemented.is_some_and(|found| at < found), "Implemented の前に書く: {at} / {implemented:?}");
+    let shown = show_line(&repo, &state, &id);
+    let cost_lines: Vec<&str> = shown.lines().filter(|line| line.starts_with("cost:")).collect();
+    assert_eq!(
+        cost_lines,
+        [
+            "cost: events=1",
+            "cost: source=runner usage=in:11,out:22,cache_read:33,cache_create:44 turns=5 wall_ms=6000",
+        ],
+        "pipe show は母集団と消費の行を写す: {shown}"
+    );
+    assert!(shown.lines().next().unwrap_or_default().contains("stage=Implemented"), "1 行目は段のまま: {shown}");
+    let report = report_once(&state);
+    assert_eq!(report_cost(&report), "cost: with_usage=1 out=22 cache_read=33 gate_secs=0", "{}", stdout_of(&report));
+    // (f) usage を運ばない便（要約行が無い）は event を書かない・段は同じ `Implemented`（別の置き場で同じ契約）。
+    let (bare_repo, bare_state) = repo_with_state();
+    let bare_path = write_contract(&bare_repo, &[], &[]);
+    let bare_id = intake(&bare_repo, &bare_state, &bare_path);
+    let bare = spawn_with(&bare_repo, &bare_state, &bare_id, "echo x >> src/lib.rs && git add -A && git commit -q -m runner");
+    assert!(stdout_of(&bare).contains("stage=Implemented"), "{}", stdout_of(&bare));
+    let bare_costs = events(&bare_state).iter().filter(|event| event.kind == EventKind::RunCost).count();
+    assert_eq!(bare_costs, 0, "usage の無い便は消費の event を書かない");
+    assert!(!show_line(&bare_repo, &bare_state, &bare_id).contains("cost:"), "消費の無い便の描画は従来のまま");
+    let bare_report = report_once(&bare_state);
+    assert_eq!(report_cost(&bare_report), "cost: with_usage=0 out=0 cache_read=0 gate_secs=0", "{}", stdout_of(&bare_report));
+    clean(&[&repo, &state, &bare_repo, &bare_state]);
+}
+
+/// (e) 審査の lens の消費: intake の審査で判定 object が 6 値を運ぶ周は `RunCost source=review` が 1 件、`Reviewed` の前に
+/// 書かれ、判定は PASS のまま（受付は rc 0）。6 値を運ばない審査は event を書かない（同じ歯の中で対に並べる）。
+#[test]
+fn run_cost_review_records_one_review_event_before_reviewed() {
+    let usage = r#""usage":"in:7,out:8,cache_read:9,cache_create:10","turns":2,"wall_ms":300"#;
+    for (extra, want) in [(Some(usage), 1_usize), (None, 0)] {
+        let (repo, state) = repo_with_state();
+        let path = write_contract(&repo, &[], &[]);
+        let verdict = lens_verdict("PASS");
+        let body = extra.map_or_else(|| verdict.clone(), |pairs| format!("{},{pairs}}}", verdict.trim_end_matches('}')));
+        let rules = ceiling_rules(&state);
+        let marker = state.join("lens-ran");
+        let out = run_pipe(&[
+            "intake", "--design", &path, "--bead", "s2-cost", "--repo", &repo.display().to_string(),
+            "--state-dir", &state.display().to_string(), "--rules", &rules, "--lens", &fake_lens(&marker, &body),
+        ]);
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "審査は PASS のまま: {}", stderr_of(&out));
+        let all = events(&state);
+        let costs: Vec<usize> = all.iter().enumerate().filter(|(_, event)| event.kind == EventKind::RunCost).map(|(at, _)| at).collect();
+        assert_eq!(costs.len(), want, "消費の event 数: {all:?}");
+        if let Some(at) = costs.first() {
+            let found = all.get(*at).and_then(|event| event.cost);
+            let want_usage = Usage { input: 7, output: 8, cache_read: 9, cache_create: 10, turns: 2, wall_ms: 300 };
+            assert_eq!(found, Some(Cost { source: CostSource::Review, usage: want_usage }), "値は偽 lens の数");
+            let reviewed = all.iter().position(|event| event.stage == Some(Stage::Reviewed));
+            assert!(reviewed.is_some_and(|stage| *at < stage), "Reviewed の前に書く: {at} / {reviewed:?}");
+        }
+        clean(&[&repo, &state]);
+    }
 }
 
 /// toy repo の 1 便を intake → spawn まで通す（bead を分けて id の衝突を避ける）。
@@ -1792,7 +1890,7 @@ fn pipe_five_contracts_land_with_fake_runner_in_toy_repo() {
     let out = report_once(&state);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "report: {}", stderr_of(&out));
     assert_eq!(
-        stdout_of(&out).trim(),
+        report_head(&out),
         format!("runs=5 landed=3 human_events=1 human_events_other_than_approval=0 {NO_REVIEW_FAIL}"),
         "5 便の到達点（AC1 の形・人手は承認 1 件だけ）"
     );

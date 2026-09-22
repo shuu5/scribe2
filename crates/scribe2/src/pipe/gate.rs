@@ -35,7 +35,7 @@ mod lens;
 mod record;
 mod verify;
 
-pub(crate) use lens::last_json_object;
+pub(crate) use lens::{last_json_object, lens_usage};
 pub use record::{
     carried_from, carried_record, detection_copies, detection_record, next_number, records_of, skip_record,
     step_record, Carried, DetectionCopy, Record, Skipped,
@@ -51,12 +51,12 @@ use super::lens_record::LensSource;
 use super::move_proof::{self, LensInput, NotPure};
 use super::ratelimit::{select_lens_account, LensAccount, Pool};
 use super::{
-    contract_path, emit, git_bytes, git_line, run_dir, verdict_path, worktree_path, Emit,
+    contract_path, emit, git_bytes, git_line, record_cost, run_dir, verdict_path, worktree_path, Emit,
 };
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
 use crate::fleet::json_lite::{self, Value};
 use crate::fleet::store::LockPolicy;
-use crate::fleet::{cli::now_utc, EventKind, Stage, SCHEMA};
+use crate::fleet::{cli::now_utc, Cost, CostSource, EventKind, Stage, SCHEMA};
 use crate::rules::manifest::Manifest;
 use findings::Tally;
 use lens::{ask_lens, lens_input, substitute, unjudged, write_verdict, Judged, LENS_STAGE};
@@ -406,6 +406,10 @@ pub fn gate(entry: &Gate<'_>) -> Outcome {
         Ok(found) => found,
         Err(reason) => return broken(reason),
     };
+    // **lens の消費は判定を書く周に 1 件**（`Gated` の前・設計 gate-cost.md §26 形 (2)）。6 値の揃わない周は書かず、
+    // 書けない周も判定と rc は変えない（stderr の 1 行だけ）。
+    let cost = decided.judged.usage.map(|usage| Cost { source: CostSource::Lens, usage });
+    notes.extend(record_cost(entry.state_dir, (entry.run, entry.bead), cost, entry.policy));
     let decision = Decision {
         verdict: decided.judged.verdict,
         evidence: decided.judged.evidence,
@@ -570,7 +574,7 @@ fn machine_order(measured: &Measured) -> Option<Judged> {
     if measured.red > 0 {
         // 赤い周は lens を呼ばない＝findings は測っていない（`tally` は `None`・C10）。
         let evidence = format!("verify の {} 行が rc≠0", measured.red);
-        return Some(Judged { verdict: Verdict::Fail, evidence, tally: None, reread: false });
+        return Some(Judged { verdict: Verdict::Fail, evidence, tally: None, reread: false, usage: None });
     }
     // **検出線の rc 2（測れなかった）は、赤が 0 の周だけ INCONCLUSIVE**（`s2-07l.331`・設計 §5.3 の③・
     // FR14）。道具が「測れていない」と言った周を FAIL にすると、便は終端して測り直せない。Gated に

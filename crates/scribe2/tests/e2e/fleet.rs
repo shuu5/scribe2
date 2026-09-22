@@ -18,7 +18,7 @@ use vessel::rules::manifest::Manifest;
 use vessel::fleet::cli::format_utc;
 use vessel::fleet::json_tree::{self, parse, Tree, TreeError, MAX_DEPTH};
 use vessel::fleet::select::{self, Input, Purpose, Selection};
-use vessel::fleet::{KINDS, REASONS, STAGES, WINDOWS};
+use vessel::fleet::{Cost, CostSource, Usage, COST_SOURCES, KINDS, REASONS, STAGES, WINDOWS};
 use vessel::fleet::{
     json_lite, replay, wait, Allowance, AllowanceKey, Completion, Event, EventKind, Measured,
     Registration, SeatState, Stage, Timeout, Unmeasured, UnmeasuredReason, WindowKind, SCHEMA,
@@ -57,6 +57,7 @@ fn event(kind: EventKind, run: &str, ts: &str) -> Event {
         registration: None,
         mark: None,
         account: None,
+        cost: None,
     }
 }
 
@@ -706,8 +707,9 @@ fn fleet_stages_place_rate_limited_after_questioned() {
     assert_eq!(Stage::parse("RateLimited"), Some(Stage::RateLimited), "as_str ↔ parse の往復");
 }
 
-/// `KINDS` の並びが**宣言順**と一致し、母集団は 17 種で末尾が `InstallRecorded`（`vessel update` が足した・設計
-/// consumer-sync.md §5 (4)）。variant を足して列に足し忘れた周・件数だけ合って末尾が違う周はここで赤になる。
+/// `KINDS` の並びが**宣言順**と一致し、母集団は 18 種で末尾の 2 つが `InstallRecorded`（`vessel update` が足した・設計
+/// consumer-sync.md §5 (4)）→ `RunCost`（消費の 1 件・gate-cost.md §26 形 (2)）。variant を足して列に足し忘れた周・
+/// 件数だけ合って末尾が違う周はここで赤になる。
 #[test]
 fn fleet_kinds_follow_declaration_order() {
     assert!(
@@ -715,8 +717,8 @@ fn fleet_kinds_follow_declaration_order() {
         "KINDS の並びが宣言順と乖離している（母集団 {} 種）",
         KINDS.len()
     );
-    assert_eq!(KINDS.len(), 17, "母集団（列の印までの 16 + install 1）");
-    assert_eq!(KINDS.last(), Some(&EventKind::InstallRecorded), "install は宣言順の末尾");
+    assert_eq!(KINDS.len(), 18, "母集団（列の印までの 16 + install 1 + 消費 1）");
+    assert_eq!(KINDS.get(16..), Some(&[EventKind::InstallRecorded, EventKind::RunCost][..]), "install → 消費が宣言順の末尾");
     assert_eq!(EventKind::InstallRecorded.as_str(), "InstallRecorded");
     assert_eq!(EventKind::parse("InstallRecorded"), Some(EventKind::InstallRecorded), "as_str ↔ parse の往復");
     assert_eq!(EventKind::InstallRecorded.default_actor(), "machine", "install は機械由来");
@@ -748,6 +750,7 @@ fn pipe_question_kinds_round_trip_on_schema_1() {
             registration: None,
             mark: None,
             account: None,
+            cost: None,
         };
         let line = event.to_line();
         assert!(line.contains("\"schema\":1"), "{line}");
@@ -756,6 +759,46 @@ fn pipe_question_kinds_round_trip_on_schema_1() {
     }
     let old = r#"{"schema":1,"ts":"2026-09-01T00:00:00Z","kind":"RunCreated","run":"r","bead":"b","host":"h","actor":"machine","stage":"Intake"}"#;
     assert!(Event::from_line(old).is_ok(), "既存の行はそのまま読める");
+}
+
+/// 消費の event の fixture（出所 3 値のどれか・6 値は互いに違う数）。
+fn cost_event(source: CostSource) -> Event {
+    let usage = Usage { input: 11, output: 22, cache_read: 33, cache_create: 44, turns: 5, wall_ms: 6000 };
+    Event { cost: Some(Cost { source, usage }), ..event(EventKind::RunCost, "r1", "2026-09-22T00:00:00Z") }
+}
+
+/// 消費の event（`RunCost`・設計 gate-cost.md §26 形 (2)）は schema 1 のまま書けて読め、`run` / `bead` と `source` /
+/// `usage` / `turns` / `wall_ms` を持つ。**replay は便を作らない**（段を持たない行）。6 値のどれかが欠ける行・`source` が
+/// 3 値の外の行・他の kind に消費の key が在る行は malformed（欠けを 0 に倒して読まない・C10）。
+#[test]
+fn run_cost_event_round_trips_and_malformed_rows_are_refused() {
+    for source in COST_SOURCES {
+        let event = cost_event(*source);
+        let line = event.to_line();
+        assert!(line.contains("\"schema\":1"), "{line}");
+        assert!(line.contains(&format!("\"source\":\"{}\"", source.as_str())), "{line}");
+        assert!(line.contains("\"usage\":\"in:11,out:22,cache_read:33,cache_create:44\",\"turns\":5,\"wall_ms\":6000"), "{line}");
+        assert_eq!(Event::from_line(&line), Ok(event.clone()), "{line}");
+    }
+    assert_eq!(COST_SOURCES.len(), 3, "出所は閉じた 3 値");
+    assert!(replay(&[cost_event(CostSource::Runner)]).runs.is_empty(), "消費の行だけでは便を作らない");
+    let line = cost_event(CostSource::Lens).to_line();
+    for (broken, why) in [
+        (line.replacen(",\"turns\":5", "", 1), "turns が欠ける"),
+        (line.replacen("\"wall_ms\":6000", "\"wall_ms\":\"6000\"", 1), "wall_ms が数でない"),
+        (line.replacen("cache_create:44", "cache_create:x", 1), "usage の token が数でない"),
+        (line.replacen("\"source\":\"lens\"", "\"source\":\"planner\"", 1), "source が 3 値の外"),
+    ] {
+        assert!(Event::from_line(&broken).is_err(), "{why}: {broken}");
+    }
+    let staged = event(EventKind::RunStage, "r1", "2026-09-22T00:00:00Z").to_line();
+    let foreign = staged.replacen("\"host\"", "\"turns\":5,\"host\"", 1);
+    assert!(Event::from_line(&foreign).is_err(), "他の kind の行は消費の key を持たない: {foreign}");
+    let dir = state_dir();
+    let path = dir.display().to_string();
+    let out = run_fleet(&["record", "--kind", "RunCost", "--run", "r1", "--bead", "s2-x", "--state-dir", &path]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "消費の行は record では書けない");
+    assert!(!dir.join("fleet").join("events.jsonl").exists(), "断った周は行を残さない");
 }
 
 /// 口座残量の応答と同じ形（設計 fleet-usage.md §3）: 窓の object・`limits` の配列・
@@ -974,6 +1017,7 @@ fn allowance_event(ts: &str, allowance: Allowance) -> Event {
         registration: None,
         mark: None,
         account: None,
+        cost: None,
     }
 }
 
@@ -1389,7 +1433,11 @@ fn fleet_allowance_windows_round_trip_on_snake_case() {
 /// account-lifecycle.md §3・dispatcher.md §4）。母集団の件数と末尾は [`fleet_kinds_follow_declaration_order`] が pin する。
 #[test]
 fn account_cmd_kinds_are_fifteen_with_retire_and_restore_last() {
-    assert_eq!(KINDS.len(), 17, "母集団（既存 10 + 口座残量 2 + 席の登録 1 + 口座の退役・戻し 2 + 列の印 1 + install 1）");
+    assert_eq!(
+        KINDS.len(),
+        18,
+        "母集団（既存 10 + 口座残量 2 + 席の登録 1 + 口座の退役・戻し 2 + 列の印 1 + install 1 + 消費 1）"
+    );
     assert_eq!(
         KINDS.get(12..16),
         Some(
@@ -1454,6 +1502,7 @@ fn registration_event_with_model(target: &str, model: Option<&str>) -> Event {
             model: model.map(str::to_owned),
         }),
         account: None,
+        cost: None,
     }
 }
 

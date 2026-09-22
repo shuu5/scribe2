@@ -11,12 +11,18 @@
 //! の detail（`verdict:<V> kind:<k>`）のうち verdict が PASS でないものが母集団で、`kind:` を持たない古い
 //! event は `unparsed` に数える。内訳は [`FINDING_KINDS`] の宣言順に 7 語とも出す（0 も出す）——「潰す」は
 //! kind ごとの内訳が 0 に落ちたことを機械で見ることである。
+//!
+//! **2 行目は消費**（設計 gate-cost.md §26 形 (2) (d)・[`Spent`]）: 消費の event（`RunCost`）の token の和を、それを持つ
+//! 便の数（母集団）と同じ行に出し、gate の record の段の秒の和を添える。
 
 use super::review::{read_detail, FindingKind, FINDING_KINDS};
 use crate::cli_outcome::{Outcome, RC_BROKEN};
+use crate::fleet::json_lite;
 use crate::fleet::store::{self, StoreError};
-use crate::fleet::{replay, Event, EventKind, Stage, ACTOR_HUMAN};
+use crate::fleet::{replay, Cost, Event, EventKind, Stage, ACTOR_HUMAN};
 use crate::pipe::gate::Verdict;
+use crate::pipe::verify_log_path;
+use std::collections::BTreeSet;
 use std::path::Path;
 
 /// 数えた 6 つ。**合算値だけを出さない**（内訳が到達点の主張そのものである）。
@@ -106,11 +112,59 @@ fn review_failure(event: &Event) -> Option<FindingKind> {
     (verdict != Some(Verdict::Pass)).then_some(kind)
 }
 
+/// 消費の集計（`pipe report` の 2 行目・設計 gate-cost.md §26 形 (2) (d)）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Spent {
+    /// 消費の event を 1 件以上持つ便の数（**母集団**・token の和はこの便たちのもの）。
+    pub with_usage: usize,
+    /// 全消費の event の `output_tokens` の和。
+    pub out: u64,
+    /// 全消費の event の `cache_read_input_tokens` の和。
+    pub cache_read: u64,
+    /// 置き場の全便の gate の record（`verify.jsonl`）の `secs=` の和（秒を持たない record は足さない・C10）。
+    pub gate_secs: u64,
+}
+
+impl Spent {
+    /// stdout の 2 行目（`cost: with_usage=<便数> out=<token> cache_read=<token> gate_secs=<秒の和>`）。
+    pub fn line(self) -> String {
+        format!(
+            "cost: with_usage={} out={} cache_read={} gate_secs={}",
+            self.with_usage, self.out, self.cache_read, self.gate_secs
+        )
+    }
+}
+
+/// event 列と置き場の gate の record から消費を数える（token は event・秒は record の写し）。
+pub fn spend(state_dir: &Path, events: &[Event]) -> Spent {
+    let costs: Vec<(&str, Cost)> = events
+        .iter()
+        .filter(|event| event.kind == EventKind::RunCost)
+        .filter_map(|event| event.cost.map(|cost| (event.run.as_str(), cost)))
+        .collect();
+    let runs: BTreeSet<&str> = costs.iter().map(|(run, _)| *run).collect();
+    Spent {
+        with_usage: runs.len(),
+        out: costs.iter().fold(0_u64, |sum, (_, cost)| sum.saturating_add(cost.usage.output)),
+        cache_read: costs.iter().fold(0_u64, |sum, (_, cost)| sum.saturating_add(cost.usage.cache_read)),
+        gate_secs: replay(events).runs.keys().fold(0_u64, |sum, id| sum.saturating_add(gate_secs_of(state_dir, id))),
+    }
+}
+
+/// 便 1 本の `verify.jsonl` の `secs` の和（file が無い・行が読めない・`secs` を持たない record は 0 を足す）。
+fn gate_secs_of(state_dir: &Path, id: &str) -> u64 {
+    let text = std::fs::read_to_string(verify_log_path(state_dir, id)).unwrap_or_default();
+    text.lines()
+        .filter_map(|line| json_lite::parse_object(line).ok())
+        .filter_map(|pairs| pairs.into_iter().find(|(key, _)| key == "secs").and_then(|(_, value)| value.as_num()))
+        .fold(0_u64, u64::saturating_add)
+}
+
 /// `pipe report`。読むだけで、event を 1 件も書かない。
 pub fn report(state_dir: &Path) -> Outcome {
     match store::read_all(state_dir) {
         // 読めない行が在る周は数を出さない（**数えられなかったを 0 に化けさせない**）。
         Err(errors) => Outcome::failed(RC_BROKEN, errors.iter().map(StoreError::to_string).collect()),
-        Ok(events) => Outcome::ok_line(count(&events).line()),
+        Ok(events) => Outcome::ok(vec![count(&events).line(), spend(state_dir, &events).line()]),
     }
 }

@@ -372,6 +372,7 @@ fn launched(input: &Input<'_>, launch: &Launch) -> bool {
         registration: None,
         mark: Some(Mark::Launched),
         account: None,
+        cost: None,
     };
     store::append(input.state_dir, &event, policy).is_ok()
 }
@@ -851,6 +852,7 @@ mod tests {
             registration: None,
             mark: Some(mark),
             account: None,
+            cost: None,
         }
     }
 
@@ -872,6 +874,7 @@ mod tests {
             registration: None,
             mark: None,
             account: None,
+            cost: None,
         }
     }
 

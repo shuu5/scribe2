@@ -5,8 +5,8 @@
 
 use super::json_lite::{self, Value};
 use super::{
-    parse_actor, Allowance, EventKind, Install, Mark, Measured, Registration, Shape, Stage, Unmeasured, UnmeasuredReason,
-    WindowKind, SCHEMA,
+    parse_actor, Allowance, Cost, CostSource, EventKind, Install, Mark, Measured, Registration, Shape, Stage, Unmeasured,
+    UnmeasuredReason, Usage, WindowKind, SCHEMA,
 };
 use crate::seat::role::Role;
 
@@ -17,7 +17,7 @@ use crate::seat::role::Role;
 const KNOWN_KEYS: &[&str] = &[
     "schema", "ts", "kind", "run", "bead", "host", "actor", "stage", "seat", "pid", "detail",
     "account", "window", "model", "endpoint", "used_pct", "resets_at", "reason", "role", "anchor", "target", "sid", "launch",
-    "mark",
+    "mark", "source", "usage", "turns", "wall_ms",
 ];
 
 /// 口座残量の kind だけが持てる key（設計 fleet-usage.md §4）。
@@ -40,6 +40,9 @@ const REGISTRATION_KEYS: &[&str] = &["role", "anchor", "target", "sid", "launch"
 
 /// 列の印の kind（[`Shape::Mark`]）だけが持てる key（他の kind の行に在れば malformed）。
 const MARK_KEYS: &[&str] = &["mark"];
+
+/// 消費の kind（[`Shape::Cost`]）だけが持てる key（他の kind の行に在れば malformed・[`Cost`] の 4 key）。
+const COST_KEYS: &[&str] = &["source", "usage", "turns", "wall_ms"];
 
 /// log の 1 行。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,6 +82,8 @@ pub struct Event {
     /// 旧い行は「口座不明」＝数えない）。他の kind に在れば malformed。kind ごとの typed payload・`detail`〔自由文〕を
     /// 判定入力にしない＝憲法 C3.3。
     pub account: Option<String>,
+    /// 消費の本体（[`EventKind::RunCost`] でだけ `Some`＝必須・他の kind に在れば malformed・設計 gate-cost.md §26 形 (2)）。
+    pub cost: Option<Cost>,
 }
 
 impl Event {
@@ -95,7 +100,7 @@ impl Event {
             ("kind", Value::Str(self.kind.as_str().to_owned())),
         ];
         match self.kind.shape() {
-            Shape::Run => {
+            Shape::Run | Shape::Cost => {
                 pairs.push(("run", Value::Str(self.run.clone())));
                 pairs.push(("bead", Value::Str(self.bead.clone())));
             }
@@ -107,6 +112,7 @@ impl Event {
         }
         pairs.extend(self.account.iter().map(|label| ("account", Value::Str(label.clone()))));
         pairs.extend(self.allowance.iter().flat_map(Allowance::pairs));
+        pairs.extend(self.cost.iter().flat_map(Cost::pairs));
         if let Some(found) = &self.registration {
             pairs.push(("role", Value::Str(found.role.as_str().to_owned())));
             pairs.push(("anchor", Value::Str(found.anchor.clone())));
@@ -177,6 +183,7 @@ impl Event {
             registration: body.registration,
             mark: body.mark,
             account: body.account,
+            cost: body.cost,
         })
     }
 }
@@ -196,13 +203,19 @@ struct Body {
     mark: Option<Mark>,
     /// 口座の退役・戻しの label。
     account: Option<String>,
+    /// 消費の本体。
+    cost: Option<Cost>,
 }
 
 impl Body {
     /// kind ごとの必須 field を**網羅 `match`** で読む。
     ///
-    /// kind を足した便は、その kind の行がどの field を要るかをここで必ず決める。
+    /// kind を足した便は、その kind の行がどの field を要るかをここで必ず決める。消費の key（[`COST_KEYS`]）は
+    /// [`Shape::Cost`] の kind の行だけが持てる（他の kind の行に在れば malformed）。
     fn read(pairs: &[(String, Value)], kind: EventKind) -> Result<Self, String> {
+        if kind.shape() != Shape::Cost {
+            forbid(pairs, COST_KEYS)?;
+        }
         match kind {
             EventKind::AllowanceMeasured => {
                 Self::allowance(pairs, Allowance::Measured(measured_of(pairs)?))
@@ -215,6 +228,7 @@ impl Body {
             EventKind::DispatchMark => Self::mark(pairs),
             EventKind::SeatSpawned => Self::spawned(pairs),
             EventKind::InstallRecorded => Self::install(pairs),
+            EventKind::RunCost => Self::cost(pairs),
             EventKind::RunCreated
             | EventKind::RunStage
             | EventKind::RunDone
@@ -313,6 +327,21 @@ impl Body {
         Install::parse(&detail).ok_or(format!("detail {detail:?} は sha=<sha12> path=<path> でない"))?;
         Ok(Self::default())
     }
+
+    /// 消費の行の本体: `run` / `bead` と [`Cost`]（`source` の 3 値と 6 値・**全部が必須**＝欠けを 0 に倒さない）。
+    /// 口座残量・登録・列の印の key は持たない（在れば malformed）。
+    fn cost(pairs: &[(String, Value)]) -> Result<Self, String> {
+        forbid(pairs, ALLOWANCE_KEYS.iter().chain(REGISTRATION_KEYS).chain(MARK_KEYS))?;
+        let source = text_of(field(pairs, "source"), "source")?;
+        let source = CostSource::parse(&source).ok_or(format!("source {source} は runner / lens / review でない"))?;
+        let usage = Usage::from_pairs(pairs).ok_or("usage / turns / wall_ms の 6 値が揃わない")?;
+        Ok(Self {
+            run: text_of(field(pairs, "run"), "run")?,
+            bead: text_of(field(pairs, "bead"), "bead")?,
+            cost: Some(Cost { source, usage }),
+            ..Self::default()
+        })
+    }
 }
 
 impl Event {
@@ -320,7 +349,7 @@ impl Event {
     pub fn install(&self) -> Option<Install> {
         match self.kind.shape() {
             Shape::Install => self.detail.as_deref().and_then(Install::parse),
-            Shape::Run | Shape::Allowance | Shape::Registration | Shape::Account | Shape::Mark => None,
+            Shape::Run | Shape::Allowance | Shape::Registration | Shape::Account | Shape::Mark | Shape::Cost => None,
         }
     }
 }

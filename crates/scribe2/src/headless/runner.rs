@@ -17,10 +17,11 @@
 use crate::polarity::{OnFailure, Polarity, Timing};
 use super::{
     build, feed, fill, flag, need, plugin_dirs, read_stdin_bytes, rules_of, runner_effort, runner_model, Call, Effort,
-    DEFAULT_CLAUDE, RC_RATE_LIMIT,
+    Format, DEFAULT_CLAUDE, RC_RATE_LIMIT,
 };
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
 use crate::fleet::select::Model;
+use crate::fleet::Usage;
 use crate::pipe::confine;
 use crate::pipe::declaration::Effective;
 use crate::pipe::gate::last_json_object;
@@ -120,7 +121,7 @@ pub fn dispatch(args: &[String]) -> Outcome {
         account_dir: account.as_deref(),
         cwd: Some(Path::new(&worktree)),
         // rate limit を**途中で**見るので逐次で受ける。
-        streaming: true,
+        output: Format::StreamJson,
         max_turns: None,
     }, &tools, Path::new(cgroup_root.as_deref().unwrap_or(confine::CGROUP_ROOT)));
     if let Some(reason) = unsaved {
@@ -208,6 +209,8 @@ fn launch(call: &Call<'_>, tools: &str, cgroup_root: &Path) -> Outcome {
                 seen.result_seen = true;
                 seen.result_kind = result_subtype(&line);
                 seen.result_is_error = result_is_error(&line);
+                // 消費の 6 値も同じ record から読む（設計 gate-cost.md §26 形 (2)・揃わない周は `None`）。
+                seen.usage = result_usage(&line);
             }
             if let Some(text) = result_text(&line) {
                 seen.last_result = Some(text);
@@ -286,6 +289,8 @@ struct Watched {
     result_kind: Option<ResultKind>,
     /// 最後に見た `result` record の `is_error`（key が無い・bool でない周は `None`）。
     result_is_error: Option<bool>,
+    /// 最後に見た `result` record の消費の 6 値（[`result_usage`]・揃わない周は `None`＝要約行に載せない）。
+    usage: Option<Usage>,
 }
 
 /// claude が終わった後の 1 行と rc を決める。
@@ -313,7 +318,7 @@ fn conclude(status: std::io::Result<ExitStatus>, seen: &Watched) -> Outcome {
     if seen.result_seen {
         out.push(result_line(seen.result_kind, seen.result_is_error, seen.last_result.as_deref()));
     }
-    out.push(format!("runner: rc={rc} records={}{observed}", seen.records));
+    out.push(summary_line(rc, seen.records, &observed, seen.usage.as_ref()));
     if rc != 0 {
         // 正常終了でない周は最終行を読まない（質問ではなく claude の失敗）。
         return Outcome { out, err: Vec::new(), rc };
@@ -558,6 +563,65 @@ pub fn result_is_error(line: &str) -> Option<bool> {
         return None;
     }
     top_level_bool(body, "is_error")
+}
+
+/// 要約行の頭（[`summary_line`] が書き、[`summary_usage`] が読む・pipe の spawn は要約行をこの頭で見分ける）。
+const SUMMARY_HEAD: &str = "runner: rc=";
+
+/// 要約行（`runner: rc=<rc> records=<n>[ rate-limit-status=<s>][ usage=… turns=<n> wall_ms=<n>]`）。
+///
+/// 消費の 3 語（[`Usage::words`]）は 6 値が揃った周だけ末尾に足す（設計 gate-cost.md §26 形 (2)）——揃わない周は
+/// 語ごと欠く（0 と書かない・C10）。rc は変えない。
+fn summary_line(rc: u8, records: usize, observed: &str, usage: Option<&Usage>) -> String {
+    let words = usage.map(|found| format!(" {}", found.words())).unwrap_or_default();
+    format!("{SUMMARY_HEAD}{rc} records={records}{observed}{words}")
+}
+
+/// runner の stdout から最後の要約行の消費の 6 値を読む（[`summary_line`] の対・pipe の spawn が消費の event の
+/// 材料にする）。要約行が無い・3 語のどれかが欠けるか数でない周は `None`。
+pub fn summary_usage(stdout: &str) -> Option<Usage> {
+    let line = stdout.lines().rev().find(|line| line.starts_with(SUMMARY_HEAD))?;
+    Usage::from_words(line)
+}
+
+/// `result` record の消費の 6 値（`usage` の直下の token 4 値と top-level の `num_turns` / `duration_ms`）。
+///
+/// `usage` は入れ子の object なので flat parser は使わない: [`find_key`] の深さ guard で `usage` の**直下**だけを読む
+/// （`usage.iterations[]` の中の同名の数に釣られない）。record でない・6 値の**どれか 1 つでも**欠けるか非負整数で
+/// ない周は `None`＝値を組まない（欠けを 0 に倒すと「測って 0」と「読めなかった」が潰れる・C10）。
+pub fn result_usage(line: &str) -> Option<Usage> {
+    let body = line.trim_start();
+    if !is_result_record(body) {
+        return None;
+    }
+    let inner = immediate_object(body.get(find_key(body, "usage")?..)?)?;
+    Some(Usage {
+        input: top_level_number(inner, "input_tokens")?,
+        output: top_level_number(inner, "output_tokens")?,
+        cache_read: top_level_number(inner, "cache_read_input_tokens")?,
+        cache_create: top_level_number(inner, "cache_creation_input_tokens")?,
+        turns: top_level_number(body, "num_turns")?,
+        wall_ms: top_level_number(body, "duration_ms")?,
+    })
+}
+
+/// JSON object 1 つの **top-level の** `key` の非負整数を読む（[`find_key`] の深さ guard）。数字の列の直後が区切り
+/// （`,` `}` 空白・末尾）でない周（小数・指数・文字列・負数・`null`）と u64 に収まらない周は `None`。
+fn top_level_number(body: &str, key: &str) -> Option<u64> {
+    let value = body.get(find_key(body, key)?..)?.trim_start();
+    let rest = value.trim_start_matches(|ch: char| ch.is_ascii_digit());
+    let number = value.get(..value.len().saturating_sub(rest.len()))?;
+    match rest.chars().next() {
+        None => number.parse().ok(),
+        Some(next) if next == ',' || next == '}' || next.is_whitespace() => number.parse().ok(),
+        Some(_) => None,
+    }
+}
+
+/// JSON object 1 つが **top-level に** `key` を持つか（[`find_key`] の深さ guard・lens が判定 object へ消費の
+/// field を足す前に、同名の key を二重にしないために見る）。
+pub(crate) fn has_top_level_key(body: &str, key: &str) -> bool {
+    find_key(body, key).is_some()
 }
 
 /// JSON object 1 つの **top-level の** `key` の bool 値を読む（入れ子の同名 key は読まない・
@@ -822,8 +886,69 @@ fn refused(reason: String) -> Outcome {
 
 #[cfg(test)]
 mod tests {
-    use super::{observed_suffix, scope_words, stop_line, stop_status, Scan};
+    use super::{observed_suffix, result_usage, scope_words, stop_line, stop_status, summary_line, summary_usage, Scan};
+    use crate::fleet::Usage;
     use crate::pipe::confine::{Orphans, Peak, Released};
+
+    /// 実 claude の result record と同じ形の 1 行（`usage` の中で `iterations[]` が token 4 値より**前**に在り、その中にも
+    /// 同名の key が違う数で在る・`modelUsage` も入れ子で持つ）。`turns` / `wall` は top-level の 2 値の字面そのまま。
+    fn record(turns: &str, wall: &str) -> String {
+        format!(
+            "{{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"duration_ms\":{wall},\"duration_api_ms\":9,\
+             {turns}\"result\":\"done\",\"total_cost_usd\":0.25,\
+             \"usage\":{{\"iterations\":[{{\"type\":\"message\",\"input_tokens\":901,\"output_tokens\":902}}],\
+             \"input_tokens\":11,\"cache_creation_input_tokens\":44,\"cache_read_input_tokens\":33,\"output_tokens\":22,\
+             \"server_tool_use\":{{\"web_search_requests\":0}},\"service_tier\":\"standard\"}},\
+             \"modelUsage\":{{\"opus\":{{\"inputTokens\":7,\"outputTokens\":8}}}}}}"
+        )
+    }
+
+    /// 6 値の揃った record から読む値（fixture の数は互いに違う＝取り違えは等号で落ちる）。
+    const WANT: Usage = Usage { input: 11, output: 22, cache_read: 33, cache_create: 44, turns: 5, wall_ms: 6000 };
+
+    /// (c) result record の 1 行から usage 4 値と turns / wall_ms を読む: `usage` の直下だけを読み、`usage.iterations[]`
+    /// の中の数（901 / 902）と `modelUsage` の数に釣られない（設計 gate-cost.md §26 歯 (c)）。
+    #[test]
+    fn run_cost_result_usage_reads_the_immediate_usage_and_top_level_turns() {
+        assert_eq!(result_usage(&record("\"num_turns\":5,", "6000")), Some(WANT));
+    }
+
+    /// `usage` を持たない result record と、result でない record（同じ `usage` を持つ assistant の record）は `None`。
+    #[test]
+    fn run_cost_result_usage_is_none_without_usage_or_outside_the_result_record() {
+        let bare = "{\"type\":\"result\",\"subtype\":\"success\",\"num_turns\":5,\"duration_ms\":6000,\"result\":\"x\"}";
+        assert_eq!(result_usage(bare), None, "usage が無い record");
+        let assistant = record("\"num_turns\":5,", "6000").replacen("\"type\":\"result\"", "\"type\":\"assistant\"", 1);
+        assert_eq!(result_usage(&assistant), None, "result でない record");
+    }
+
+    /// (g) 部分欠けと数でない値: `num_turns` だけ欠く周・`duration_ms` が小数 / 文字列の周は `None`（0 を作らない）。
+    /// 同じ歯の中で 6 値揃い＝`Some` を対に並べる（欠けを 0 に倒す実装は欠けの側も `Some` になって落ちる）。
+    #[test]
+    fn run_cost_result_usage_partial_or_non_number_builds_nothing() {
+        assert_eq!(result_usage(&record("\"num_turns\":5,", "6000")), Some(WANT), "6 値揃い＝値が在る");
+        assert_eq!(result_usage(&record("", "6000")), None, "num_turns だけ欠く");
+        assert_eq!(result_usage(&record("\"num_turns\":5,", "60.5")), None, "duration_ms が小数");
+        assert_eq!(result_usage(&record("\"num_turns\":5,", "\"6000\"")), None, "duration_ms が文字列");
+        assert_eq!(result_usage(&record("\"num_turns\":null,", "6000")), None, "num_turns が null");
+    }
+
+    /// 要約行は 6 値が揃った周だけ `usage=` の 3 語を末尾に運び、[`summary_usage`] が同じ値へ読み戻す。揃わない周は
+    /// 語ごと欠き（従来の字面のまま）・読み手は `None`。
+    #[test]
+    fn run_cost_summary_line_carries_usage_only_when_present() {
+        let with = summary_line(0, 3, " rate-limit-status=allowed_warning", Some(&WANT));
+        assert_eq!(
+            with,
+            "runner: rc=0 records=3 rate-limit-status=allowed_warning \
+             usage=in:11,out:22,cache_read:33,cache_create:44 turns=5 wall_ms=6000"
+        );
+        assert_eq!(summary_usage(&format!("runner: result subtype=success is_error=false text=x\n{with}\n")), Some(WANT));
+        let without = summary_line(0, 3, "", None);
+        assert_eq!(without, "runner: rc=0 records=3", "揃わない周は従来の字面");
+        assert_eq!(summary_usage(&without), None);
+        assert_eq!(summary_usage("runner: rc=0 records=3 usage=in:1,out:2,cache_read:3,cache_create:4 turns=5"), None);
+    }
 
     /// 停止行の読み手は [`stop_line`] と往復し、観測行と空行は停止行として読まない。
     #[test]

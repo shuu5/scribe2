@@ -5,6 +5,7 @@
 use super::findings::{Tally, Unread};
 use super::{Verdict, JSON_HEAD};
 use crate::fleet::json_lite::{self, Value};
+use crate::fleet::Usage;
 use crate::pipe::confine::{self, Confinement, Reason, Released};
 use crate::pipe::git_bytes;
 use crate::pipe::move_proof::{self, LensInput, Side};
@@ -47,11 +48,15 @@ pub(super) struct Judged {
     /// 無い・集計の [`Unread::Malformed`]。「読めたが規則で断った」（母集団 0）と、箱の中の死・rc 非 0・
     /// 起動の失敗は伏せたまま（撃ち直しで向きが変わらない）。親（`decide`）はこの印の周だけ 1 回撃ち直す。
     pub(super) reread: bool,
+    /// lens の claude の消費の 6 値（判定 object の `usage` / `turns` / `wall_ms`・設計 gate-cost.md §26 形 (2)）。
+    ///
+    /// **無くても判定を変えない**（古い lens・偽 lens の周は field を欠くだけ＝`None`）。読めた周だけ消費の event を書く。
+    pub(super) usage: Option<Usage>,
 }
 
 /// 判定に届かなかった周の戻り（集計は無い・撃ち直しの印は伏せた側）。
 pub(super) fn unjudged(evidence: String) -> Judged {
-    Judged { verdict: Verdict::Inconclusive, evidence, tally: None, reread: false }
+    Judged { verdict: Verdict::Inconclusive, evidence, tally: None, reread: false, usage: None }
 }
 
 /// 出力の形が読めなかった周の戻り（[`unjudged`] に撃ち直しの印を立てた形・[`parse_lens`] 専用）。
@@ -156,6 +161,12 @@ pub(crate) fn last_json_object(text: &str) -> Result<Vec<(String, Value)>, Strin
     json_lite::parse_object(line.trim()).map_err(|reason| format!("出力を読めない: {reason}"))
 }
 
+/// lens の stdout の最後の JSON 行から消費の 6 値を読む（gate の [`parse_lens`] と審査の口が**同じ 1 本**の形で読む・
+/// 読めない・揃わない周は `None`＝判定は動かさない）。
+pub(crate) fn lens_usage(text: &str) -> Option<Usage> {
+    last_json_object(text).ok().and_then(|pairs| Usage::from_pairs(&pairs))
+}
+
 /// lens の stdout から最後の JSON 行を読む。読めない周は INCONCLUSIVE。
 ///
 /// **`findings` と `population` は必須 key である**（`s2-07l.188`・設計 §6 / §17）: どちらかが
@@ -170,6 +181,12 @@ fn parse_lens(text: &str) -> Judged {
         Ok(parsed) => parsed,
         Err(reason) => return unreadable(format!("lens の{reason}")),
     };
+    // 消費の 6 値は `findings` / `population` と同じ flat な object から読む（揃わない周は `None`・判定は動かさない）。
+    Judged { usage: Usage::from_pairs(&pairs), ..judge_pairs(&pairs) }
+}
+
+/// 読めた object から 3 値と集計を読む（[`parse_lens`] の本体・消費の 6 値は呼び手が足す）。
+fn judge_pairs(pairs: &[(String, Value)]) -> Judged {
     let get = |key: &str| {
         pairs
             .iter()
@@ -189,7 +206,7 @@ fn parse_lens(text: &str) -> Judged {
         (Some(counted), Some(population)) => Tally::parse(counted, population),
     };
     match read {
-        Ok(tally) => Judged { verdict, evidence, tally: Some(tally), reread: false },
+        Ok(tally) => Judged { verdict, evidence, tally: Some(tally), reread: false, usage: None },
         Err(unread) => {
             let evidence = format!("lens の{}", unread.reason());
             match unread {

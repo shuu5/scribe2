@@ -527,7 +527,8 @@ fn refresh(dir: &Path, label: &str, reader: &Reader<'_>) -> Refresh {
         plugin_dir: None,
         account_dir: Some(&account),
         cwd: Some(dir),
-        streaming: false,
+        // 計測の起動は出力を読まない（text のまま＝argv は不変）。
+        output: headless::Format::Text,
         max_turns: Some(REFRESH_MAX_TURNS),
     });
     command.stdout(Stdio::null()).stderr(Stdio::null()).process_group(0);
@@ -622,6 +623,7 @@ fn event_of(ts: &str, host: &str, row: &Allowance) -> Event {
         registration: None,
         mark: None,
         account: None,
+        cost: None,
     }
 }
 

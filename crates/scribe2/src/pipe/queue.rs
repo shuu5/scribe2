@@ -796,6 +796,7 @@ mod tests {
             registration: None,
             mark: None,
             account: None,
+            cost: None,
         }
     }
 

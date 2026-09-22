@@ -39,7 +39,7 @@ mod train;
 
 use crate::polarity::{OnFailure, Polarity, Timing};
 use crate::fleet::store::{self, LockPolicy, StoreError};
-use crate::fleet::{self, replay, Event, EventKind, Mark, Stage, State, SCHEMA};
+use crate::fleet::{self, replay, Cost, Event, EventKind, Mark, Stage, State, SCHEMA};
 use crate::name::NAME;
 use std::path::{Path, PathBuf};
 
@@ -667,6 +667,7 @@ pub fn emit(state_dir: &Path, entry: &Emit<'_>, policy: LockPolicy) -> Result<()
         registration: None,
         mark: None,
         account: None,
+        cost: None,
     };
     let advances = matches!(entry.kind, EventKind::RunStage | EventKind::RunDone | EventKind::SeatSpawned)
         && entry.stage != Some(Stage::Stopped);
@@ -699,8 +700,51 @@ pub fn emit_mark(state_dir: &Path, bead: &str, mark: Mark, policy: LockPolicy) -
         registration: None,
         mark: Some(mark),
         account: None,
+        cost: None,
     };
     store::append(state_dir, &event, policy).map(|_| ())
+}
+
+/// 消費の 1 件を追記する（[`EventKind::RunCost`]・設計 gate-cost.md §26 形 (2)）。
+///
+/// 段の event（[`emit`]）と**本体の形が違う**ので口を分ける——段を持たず、typed な [`Cost`] が本体である（[`Emit`] に
+/// 欄を足すと構築点の閉包が全 file へ広がる）。段を進めない記帳なので記帳の門は通さない。追記そのものは fleet の
+/// 1 本（[`store::append`]）を通る＝store は `fleet/events.jsonl` の 1 つで、run dir に別 file を作らない（C6.3）。
+pub fn emit_cost(state_dir: &Path, run: &str, bead: &str, cost: Cost, policy: LockPolicy) -> Result<(), StoreError> {
+    let event = Event {
+        schema: SCHEMA,
+        ts: fleet::cli::now_utc(),
+        kind: EventKind::RunCost,
+        run: run.to_owned(),
+        bead: bead.to_owned(),
+        host: fleet::cli::host(),
+        actor: EventKind::RunCost.default_actor().to_owned(),
+        stage: None,
+        seat: None,
+        pid: None,
+        detail: None,
+        allowance: None,
+        registration: None,
+        mark: None,
+        account: None,
+        cost: Some(cost),
+    };
+    store::append(state_dir, &event, policy).map(|_| ())
+}
+
+/// 6 値が揃った周だけ消費の 1 件を書き、書けなかった周の理由を stderr の 1 行で返す（**段の判定も rc も変えない**・
+/// 計測は行為を止めない）。揃わない周（`None`）は何も書かない＝欠けを 0 に倒さない（C10）。
+pub fn record_cost(
+    state_dir: &Path,
+    ids: (&str, &str),
+    cost: Option<Cost>,
+    policy: LockPolicy,
+) -> Option<String> {
+    let (run, bead) = ids;
+    let found = cost?;
+    emit_cost(state_dir, run, bead, found, policy)
+        .err()
+        .map(|err| format!("pipe: 消費の event を書けない（source={}）: {err}", found.source.as_str()))
 }
 
 /// 永続面から現在地を読む。**process の記憶を使わない**（GOAL 3）。
@@ -761,6 +805,7 @@ pub(crate) mod fixture {
             registration: None,
             mark: None,
             account: None,
+            cost: None,
         }
     }
 

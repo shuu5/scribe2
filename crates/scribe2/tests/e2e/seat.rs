@@ -629,6 +629,7 @@ fn acct_measured(state: &Path, label: &str, pct: u64, ts: &str) {
             registration: None,
             mark: None,
             account: None,
+            cost: None,
         };
         vessel::fleet::store::append(state, &event, policy).expect("実測行を積める");
     }

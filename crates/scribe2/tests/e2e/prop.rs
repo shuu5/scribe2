@@ -169,6 +169,7 @@ mod fleet {
                 registration: None,
                 mark: None,
                 account: None,
+                cost: None,
             })
     }
 
@@ -219,6 +220,7 @@ mod fleet {
                 registration: None,
                 mark: None,
                 account: None,
+                cost: None,
             })
     }
 
@@ -267,6 +269,7 @@ mod fleet {
                 registration: Some(registration),
                 mark: None,
                 account: None,
+                cost: None,
             })
     }
 
