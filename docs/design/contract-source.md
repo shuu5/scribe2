@@ -298,6 +298,7 @@ scribe2 を載せる consumer が pipe を通すのに要る面は 3 つで、�
 - **触らない**: 受付の判定・断りの型と字面・rc・rules 行・`crates/scribe2/src/pipe/closure.rs` の src（(b) の歯は e2e から測る）。
 - **極性**: 歯だけの便なので検出線の母集団は 0 になる（§16 の gate-cost 側の行 g が的を宣言する形を持つまでは、撃墜の proof は便の notes に手で残す）。
 - 却下案: 9 本を 1 本の歯にまとめる（どの分岐が撃墜されたか分からない・変異 1 本ずつの A/B ができない）／門の判定を「歯を書きやすい形」に直す（歯だけの便に仕様変更を混ぜる）／e2e だけで 9 本とも測る（(a)(c)(d)(e) は受付の手前の断りが先に立ち、負例が別の理由で通る）。
+- flip-check の逃がし（`.277` run 2 の gate FAIL `green-on-base file=crates/scribe2/src/pipe/cli/intake.rs` の根）: 足す歯は既に着地した判定式を pin するので base でも緑である＝**各歯の fn の中の行頭に `// flip-check: retroactive s2-07l.277` の札を 1 行ずつ付ける**（in-file の 3 file は `mod tests {` の内側・e2e の file は全体が歯の区間。効く条件は test 区間内 / 行頭 / bead id 必須 / base に無い札、の 4 つ。札の無い歯は gate の flip-check が green-on-base で落とす・[seat-roles.md](./seat-roles.md) §23 と同じ形）。札は歯の緑を免じるのではなく「後から足した歯」と申告する印なので、done の変異の A/B（撃墜の本数と母集団）を notes に残すことが対になる。
 
 ## 32. 要件面 yaml の本文は `text:` → 無ければ `shall:` の順で読む（契約表の行 ae・`s2-07l.467`）
 
