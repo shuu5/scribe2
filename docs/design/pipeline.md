@@ -787,6 +787,7 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
   1. 列挙を `git diff --name-status -M <base>...HEAD` で取り、R の行は（旧 path・新 path）の対、A / M / D の行は従来どおり 1 path の対にする。対は base 側の path を持ち（`rel` は HEAD の path のまま）、base の本文は旧 path で読む。
   2. 対の test 区間が同一なら test-diff 無し＝flip に数えず、札は base の test 区間に在るので持ち越し（この便の札に数えない）。src だけが動いた対も同じ。test 区間に差が在る対は従来の規則（RED の要求・`moved` の札の免除・`tests-removed-only`・宣言 file と歯の外の file の同梱）がそのまま当たり、overlay の書き先は新 path。新 path の親（crate・mod 宣言）が base に無い周は既存の `not-flippable` の判定がそのまま当たる。
   3. docs-only の面の判定（便が動かした全 path）は旧 path と新 path の両方を数える。
+- 大きさ（受付の cap の実測・main 974dc47）: `crates/xtask/src/flipcheck.rs` の上限の余地は 258 行なので size は S。flipcheck.rs 側の差分は対が base 側の path を持つ 1 欄と load の呼び手だけに留め、列挙と対の組み立ては `crates/xtask/src/flipcheck/git.rs`、歯は `crates/xtask/src/flipcheck_tests.rs` に置く。
 - 触らない: 札の形と上限（rules 行 `flip.marks_per_pr`）・`not-flippable` / `tests-removed-only` / 同梱 / `moved` / `retroactive` の判定そのもの・判定行の書式・nextest を撃つ群。
 - 却下: (i) 行 b の write-set に flipcheck を足して純移動の便の中で直す（純移動に判定の変更を混ぜる・§5 が対象外と置いた面）。(ii) 上限を上げる（札の門が空洞化・値は裁定 id 付き）。(iii) 移す file から過去の札を消す（免除の記録を失う・§7 の持ち越しに反する）。
 - 歯（`crates/xtask/src/flipcheck_tests.rs` の既存の族 `flip_check_` に接頭辞 `flip_check_rename_`・tmp の git repo に base と HEAD を commit して撃つ既存の形）: (a) rename だけの commit（同一本文）に撃つと対の base が旧 path の本文で、flip 0・この便の札 0・rc 0 (b) rename + test 区間 1 行の差は flip に数え、overlay の書き先が新 path (c) 旧 path の test 区間に札 2 本を持つ file を rename すると 2 本とも持ち越しで、新しく置いた札 1 本だけがこの便の札 (d) A / M / D だけの便の対と判定が変わらない（既存の `flip_check_` の歯が全部緑のまま）。
@@ -1302,6 +1303,6 @@ req = ["FR7"]
 section = "53"
 write-set = ["crates/xtask/src/flipcheck/git.rs", "crates/xtask/src/flipcheck.rs", "crates/xtask/src/flipcheck_tests.rs", "docs/design/pipeline.md"]
 verify = ["cargo nextest run -p xtask --lib --no-tests=fail flip_check_rename_"]
-size = "M"
+size = "S"
 done = "(1) rename だけの便（同一本文の対）に入口の flip-check を撃つと too-many-marks にも green-on-base にも not-flippable にも落ちず、flip 0 で rc 0 (2) 対の base の本文が旧 path から読まれ、旧 path の test 区間の札はこの便の札に数えない (3) test 区間に差が在る対は flip に数え、overlay の書き先が新 path で、moved の札の免除と tests-removed-only が従来どおり当たる (4) docs-only の面の判定が旧 path と新 path の両方を数える (5) A / M / D だけの便の対と判定行が 1 字も変わらず、既存の flip_check_ の歯が全部緑"
 <!-- contracts:end -->
