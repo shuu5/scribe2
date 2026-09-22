@@ -43,6 +43,8 @@
 //! 再 gate は `<base>..<main>` の path、主実測は gate を撃った木と land した木の `diff-tree` の path を
 //! [`DETECTION_SCOPE`] と照らし、1 つも触れない周は検出線を省いて理由付きの record を残す（[`detection_needed`]
 //! の 1 本を両方が通す）。読めない周は撃つ（fail-closed）。共通 verify と契約 verify は従来どおり撃つ。
+//! 面に触れた追随でも便の diff の patch-id が前周の検出線の record と同じ周は、前周の record を `carried=` 付きで
+//! 写して検出線を撃たない（[`rerun_detection`]・候補の木の段も同じ 1 本・設計 §40 形 (b)）。
 //!
 //! **既に main に自分の squash が在る便は Landed で終端する**（`s2-07l.389`・設計 §29・FR50・C3 / C10）。追随の
 //! rebase で commit が 0 本になった周、`rebase-empty` に倒す前に main の log を便の trailer（`run: <run id>`）で
@@ -54,7 +56,7 @@ use crate::polarity::{OnFailure, Polarity, Timing};
 use super::contract::Contract;
 use super::follow::{self, Conflict};
 use super::gate::{
-    gate, next_number, skip_record, Detection, DetectionSkip, Gate, Limits, Skipped, Verdict,
+    carry_detection, gate, next_number, skip_record, Detection, DetectionSkip, Gate, Limits, Skipped, Verdict,
 };
 use super::lens_record::LensSource;
 use super::{emit, git_bytes, git_line, git_ok, worktree_path, Emit};
@@ -561,9 +563,11 @@ fn with_lines(mut lines: Vec<String>, mut outcome: Outcome) -> Outcome {
 ///   （[`super::base_of_run`]）はこの行から新しい base を読む。
 /// - 撃ち直しが PASS でない周は gate の判定行と rc で止まる（FAIL は `Gated` のまま
 ///   land しない・INCONCLUSIVE は測り直せる側）。
-/// - main が動いた差分が [`DETECTION_SCOPE`] に 1 つも触れない周（[`follow_detection`]・rebase の**前**に
-///   読む）は**撃ち直しを丸ごと省き**、前周の Gated PASS を新しい base へ引き継ぐ（[`carry_gated_pass`]・
-///   設計 §33 (i)）。面に触れる周と diff を読めない周は従来どおり全段を撃ち直す。
+/// - main が動いた差分が [`DETECTION_SCOPE`] に 1 つも触れない周（[`rerun_detection`] の (1)・`<base>..<main>` は
+///   rebase で動かない）は**撃ち直しを丸ごと省き**、前周の Gated PASS を新しい base へ引き継ぐ（[`carry_gated_pass`]・
+///   設計 §33 (i)）。面に触れる周と diff を読めない周は従来どおり全段を撃ち直す。そのうち rebase 後の便の diff の
+///   patch-id が前周の検出線の record と同じ周は、検出線だけを撃たずに前周の record を写す（[`rerun_detection`] の
+///   (2)・設計 §40 形 (b)）。
 /// - rebase の直後（上の省略と再 gate の**前**・[`rebase_onto`] の中）に契約表の検査を便の木へ撃ち、findings のすべてが
 ///   便の消した path を名指す write-set の項目の未解決なら [`follow::on_stale_rows`] へ委ねる（`Implemented
 ///   detail=rebase-stale-rows:`・runner を起こし直す・設計 §34）。他の findings と撃てない周は従来どおり。
@@ -581,7 +585,6 @@ fn follow_main(entry: &Land<'_>, worktree: &Path, base: &str, main: &str) -> Fol
             check.as_str()
         )));
     }
-    let detection = follow_detection(entry.repo, base, main);
     match rebase_onto(entry, worktree, base, main) {
         Err(stopped) => return Follow::Stopped(stopped),
         // 既着地（設計 §29）: gate を撃ち直さず（lens を起こさない）・追随の event も書かない
@@ -606,7 +609,10 @@ fn follow_main(entry: &Land<'_>, worktree: &Path, base: &str, main: &str) -> Fol
         return Follow::Stopped(broken(err.to_string()));
     }
     let mut lines = vec![format!("run={} rebase={base}..{main}", entry.run)];
-    // **再 gate の要否は検出線の要否と同じ 1 本の判定で決める**（新しい判定関数を足さない・C2）。
+    // **再 gate の要否は検出線の要否と同じ 1 本の判定で決める**（新しい判定関数を足さない・C2）。面の判定は
+    // `<base>..<main>`（rebase で動かない 2 つの sha）、持ち越しの判定は rebase 後の便の diff（`<main>..HEAD`）を読む。
+    let (repo, state_dir, run) = (entry.repo, entry.state_dir, entry.run);
+    let detection = rerun_detection(&Rerun { repo, state_dir, run, moved: (base, main), tree: worktree, diff: (main, "HEAD") });
     if let Detection::Skip(reason) = detection {
         if let Some(carried) = carry_gated_pass(entry, reason) {
             lines.push(carried);
@@ -649,6 +655,36 @@ fn follow_detection(repo: &Path, base: &str, main: &str) -> Detection {
         return Detection::Run;
     }
     Detection::Skip(DetectionSkip::OutsideScope)
+}
+
+/// 撃ち直しの周の検出線の要否を読む材料（[`rerun_detection`]・追随と候補の木の段が組む）。
+pub(super) struct Rerun<'a> {
+    /// 対象 repo（面の diff を読む）。
+    pub(super) repo: &'a Path,
+    /// 置き場（前周の record を読む）。
+    pub(super) state_dir: &'a Path,
+    /// 便 id（record の持ち主）。
+    pub(super) run: &'a str,
+    /// 便の base から動いた main の range（`(<便の base>, <新しい base>)`・面の判定）。
+    pub(super) moved: (&'a str, &'a str),
+    /// 便の diff を測る木（便の worktree か候補の木）。
+    pub(super) tree: &'a Path,
+    /// 便の diff の range（`(<新しい base>, <便の先端>)`・持ち越しの判定）。
+    pub(super) diff: (&'a str, &'a str),
+}
+
+/// 撃ち直しの周の検出線の要否（**追随の撃ち直しと候補の木の各段が通す 1 関数**・設計 §40 形 (b)）。
+///
+/// 順は (1) main の動きが面に触れたか（[`follow_detection`]・§30・触れない周は `outside-scope` で先に効く）→
+/// (2) 前周の検出線の record に `patch_id` が在り今の diff の patch-id と同じか（[`carry_detection`]・同じ周は
+/// [`Detection::Carry`]）。record が無い・`patch_id` が無い・違う・読めない周は [`Detection::Run`]（fail-closed）。
+pub(super) fn rerun_detection(rerun: &Rerun<'_>) -> Detection {
+    let (from, to) = rerun.moved;
+    let scoped = follow_detection(rerun.repo, from, to);
+    if scoped != Detection::Run {
+        return scoped;
+    }
+    carry_detection(rerun.state_dir, rerun.run, rerun.tree, rerun.diff)
 }
 
 /// stdout の判定行で「撃ち直しを省いて引き継いだ」を名乗る token（gate が撃った周には出ない）。

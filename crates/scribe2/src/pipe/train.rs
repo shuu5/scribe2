@@ -17,8 +17,11 @@
 
 use super::contract::Contract;
 use super::declaration::Effective;
-use super::gate::{is_unreadable, run_checks, step_record, Check, Checks, Step};
-use super::land::{land_train, Car, Land, WorktreeCheck, MAIN_REF};
+use super::gate::{
+    carried_record, detection_record, is_unreadable, patch_id, run_checks, skip_record, Check, Checks, Detection, Skipped,
+    Step,
+};
+use super::land::{land_train, rerun_detection, Car, Land, Rerun, WorktreeCheck, MAIN_REF};
 use super::queue::{train_now, Order};
 use super::{base_of_run, contract_path, current, git_line, git_ok, repo_of_run, vessel_path, worktree_path, worktrees_dir};
 use crate::cli_outcome::Outcome;
@@ -184,7 +187,9 @@ fn verify_candidate(entry: &Land<'_>, candidate: &Path, riders: &[Rider], stacke
     let count = u64::try_from(stacked.len()).unwrap_or(u64::MAX);
     let tip = stacked.last().map(|found| found.commit.clone()).ok_or(Why::Read)?;
     let mut red = false;
-    // (1) 検出線: 段ごとに木を戻して、直前の段を base に便の diff へ撃つ（写しに検出線が無い便は撃たない）。
+    // (1) 検出線: 段ごとに木を戻して、直前の段を base に便の diff へ撃つ（写しに検出線が無い便は撃たない）。撃つ前に
+    // 追随と同じ 1 関数で要否を読む（設計 §40 形 (b)）: 便の base から直前の段までの動きが面に触れない段は省き、
+    // 段の diff の patch-id が前周の検出線の record と同じ段は前周の record を写す。
     let mut previous = old.to_owned();
     for found in stacked {
         let rider = riders.get(found.index).ok_or(Why::Read)?;
@@ -193,8 +198,23 @@ fn verify_candidate(entry: &Land<'_>, candidate: &Path, riders: &[Rider], stacke
             if !git_ok(candidate, &["checkout", "-q", "-f", "--detach", &found.commit]) {
                 return Err(Why::Verify);
             }
-            let steps = checks_on(entry, candidate, &previous, &rider.contract, (&[], frozen.detection_verify()));
-            red |= record(entry, &rider.run, &only(steps, Check::Detection), count)?;
+            let detection = rerun_detection(&Rerun {
+                repo: entry.repo,
+                state_dir: entry.state_dir,
+                run: &rider.run,
+                moved: (&rider.base, &previous),
+                tree: candidate,
+                diff: (&previous, &found.commit),
+            });
+            match detection {
+                Detection::Run => {
+                    let patch = patch_id(candidate, &previous, &found.commit);
+                    let steps = checks_on(entry, candidate, &previous, &rider.contract, (&[], frozen.detection_verify()));
+                    red |= record(entry, &rider.run, &only(steps, Check::Detection), (count, patch.as_deref()))?;
+                }
+                Detection::Skip(reason) => place(entry, &rider.run, |n| skip_record(n, Skipped::detection(reason, None)))?,
+                Detection::Carry(carried) => place(entry, &rider.run, |n| carried_record(n, &carried))?,
+            }
         }
         previous.clone_from(&found.commit);
     }
@@ -210,7 +230,7 @@ fn verify_candidate(entry: &Land<'_>, candidate: &Path, riders: &[Rider], stacke
         };
         let steps = checks_on(entry, candidate, old, &rider.contract, (&common, &[]));
         let kept: Vec<Step> = steps.into_iter().filter(|step| matches!(step.stage, Check::Common | Check::Contract)).collect();
-        red |= record(entry, &rider.run, &kept, count)?;
+        red |= record(entry, &rider.run, &kept, (count, None))?;
     }
     match red {
         true => Err(Why::Verify),
@@ -238,16 +258,16 @@ fn only(steps: Vec<Step>, stage: Check) -> Vec<Step> {
     steps.into_iter().filter(|step| step.stage == stage).collect()
 }
 
-/// 撃った段を便の `verify.jsonl` へ足し（`n` は既存の record からの通し・共通 verify だけ `train=<N>`）、赤か
-/// （rc≠0・撃てない・読めない）を返す。書けない周は `Err`（記録が無いものを緑と読まない）。
-fn record(entry: &Land<'_>, run: &str, steps: &[Step], count: u64) -> Result<bool, Why> {
+/// 撃った段を便の `verify.jsonl` へ足し（`n` は既存の record からの通し・共通 verify だけ `train=<N>`・検出線だけ
+/// `patch_id=<id>`）、赤か（rc≠0・撃てない・読めない）を返す。書けない周は `Err`（記録が無いものを緑と読まない）。
+/// `marks` は（列の本数・段の diff の patch-id）。
+fn record(entry: &Land<'_>, run: &str, steps: &[Step], marks: (u64, Option<&str>)) -> Result<bool, Why> {
+    let (count, patch) = marks;
+    let written = written_records(entry, run)?;
     let path = super::verify_log_path(entry.state_dir, run);
-    let written = std::fs::read_to_string(&path)
-        .map(|text| text.lines().filter(|line| !line.trim().is_empty()).count())
-        .map_err(|_| Why::Verify)?;
     for (offset, step) in steps.iter().enumerate() {
         let number = super::gate::next_number(written.saturating_add(offset));
-        let body = step_record(number, step);
+        let body = detection_record(number, step, patch);
         let line = match step.stage {
             Check::Common => with_train(&body, count).ok_or(Why::Verify)?,
             _ => body,
@@ -255,6 +275,22 @@ fn record(entry: &Land<'_>, run: &str, steps: &[Step], count: u64) -> Result<boo
         append_line(&path, &line, entry.policy).map_err(|_| Why::Verify)?;
     }
     Ok(steps.iter().any(|step| step.rc != 0 || step.is_closed() || is_unreadable(step)))
+}
+
+/// 撃っていない検出線の段の record 1 本（skip か前周の写し）を便の `verify.jsonl` へ足す（`n` は既存の record からの
+/// 通し）。書けない周は `Err`（列を解く）。
+fn place(entry: &Land<'_>, run: &str, body: impl FnOnce(u64) -> String) -> Result<(), Why> {
+    let number = super::gate::next_number(written_records(entry, run)?);
+    let path = super::verify_log_path(entry.state_dir, run);
+    append_line(&path, &body(number), entry.policy).map_err(|_| Why::Verify)?;
+    Ok(())
+}
+
+/// 便の `verify.jsonl` の既存の record 数（空行を除く）。読めない周は `Err`。
+fn written_records(entry: &Land<'_>, run: &str) -> Result<usize, Why> {
+    std::fs::read_to_string(super::verify_log_path(entry.state_dir, run))
+        .map(|text| text.lines().filter(|line| !line.trim().is_empty()).count())
+        .map_err(|_| Why::Verify)
 }
 
 /// record の 1 行に `train=<N>` を足す（形は [`step_record`] のまま任意 field を末尾に 1 つ・schema は 1 のまま）。

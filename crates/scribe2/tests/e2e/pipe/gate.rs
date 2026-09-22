@@ -2236,6 +2236,58 @@ fn pipe_detection_verdict_carries_tree_of_gated_head() {
     clean(&[&repo, &state]);
 }
 
+// ---- 検出線の持ち越し（設計 pipeline.md §40 形 (b)・契約表の行 ai・接頭辞 `pipe_detection_carry_`）----------
+//
+// gate は検出線を撃つ周に便の diff の patch-id を record の `patch_id` に残す。追随の撃ち直しの側（写す周・撃つ周）は
+// `land.rs` の同じ接頭辞の歯が持つ。
+
+/// `dir` の `git diff <base>..<tip>` を `git patch-id --stable` に通した値（器の外で測る＝歯の期待値の出所）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+pub(super) fn measured_patch_id(dir: &Path, base: &str, tip: &str) -> String {
+    use std::io::Write;
+    let diff = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["diff", &format!("{base}..{tip}")])
+        .output()
+        .expect("diff を撃てる")
+        .stdout;
+    assert!(!diff.is_empty(), "fixture: 便の diff は空でない");
+    let mut child = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["patch-id", "--stable"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("patch-id を起こせる");
+    child.stdin.take().expect("stdin を取れる").write_all(&diff).expect("diff を渡せる");
+    let out = child.wait_with_output().expect("patch-id が終わる");
+    String::from_utf8_lossy(&out.stdout).split_whitespace().next().unwrap_or_default().to_owned()
+}
+
+/// (h) gate が検出線を撃つ周の record は便の diff の `patch_id` を持ち、`git patch-id --stable`（`<base>..HEAD`）と
+/// 一致する。他の段の record は持たず、撃った record は `carried` を持たない（写しと実測の区別・C10）。
+#[test]
+fn pipe_detection_carry_gate_record_holds_the_patch_id_of_the_diff() {
+    let (repo, state, design) = detection_repo(DETECTION_COUNT);
+    let base = git(&repo, &["rev-parse", "HEAD"]);
+    let id = gated_pass(&repo, &state, &design, &state.join("lens-ran"));
+    let rows = verify_rows(&state, &id);
+    assert_eq!(kinds(&rows), ["write-set", "common", "detection", "contract"], "段の順序: {rows:?}");
+    let want = measured_patch_id(&worktree_of(&repo, &id), &base, "HEAD");
+    assert_eq!(want.len(), 40, "fixture: patch-id は 40 桁: {want}");
+    assert_eq!(row_value(&rows, 3, "patch_id"), want, "検出線の record は便の diff の patch-id: {rows:?}");
+    for n in [1, 2, 4] {
+        assert!(row_value(&rows, n, "patch_id").is_empty(), "検出線の外の段は patch_id を持たない（n={n}）: {rows:?}");
+    }
+    assert!(row_value(&rows, 3, "carried").is_empty(), "撃った record は carried を持たない: {rows:?}");
+    clean(&[&repo, &state]);
+}
+
 /// (3) 木が gate と同じ main 実測は **1 本も撃たず** `kind=main skipped=main tree=<sha>` の record 1 本を記す
 /// （設計 gate-cost.md §27・ADR-0043 §2.1・`s2-07l.464`。以前は ②④ を撃って ③ だけを省いた）。
 #[test]

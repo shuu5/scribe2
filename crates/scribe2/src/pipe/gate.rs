@@ -37,7 +37,8 @@ mod verify;
 
 pub(crate) use lens::last_json_object;
 pub use record::{
-    detection_copies, next_number, records_of, skip_record, step_record, DetectionCopy, Record, Skipped,
+    carried_from, carried_record, detection_copies, detection_record, next_number, records_of, skip_record,
+    step_record, Carried, DetectionCopy, Record, Skipped,
 };
 pub use verify::{is_unreadable, run_checks, Check, Checks, Step, CHECKS};
 
@@ -218,12 +219,58 @@ impl Limits {
 /// （[`super::land`]・`<base>..<main>` の path が検出線の面に 1 つも触れない周だけ [`Skip`](Self::Skip)）。
 /// 撃たない周も `verify.jsonl` に `kind=detection skipped=detection reason=<理由>` の record を残す
 /// （**撃たなかった事実を黙って落とさない**・[`skip_record`]）。共通 verify と契約 verify は従来どおり撃つ。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// 面に触れた周でも便の diff の patch-id が前周の検出線の record と同じなら撃たず、前周の record を
+/// `carried=<前周の n>` 付きで写す（[`Carry`](Self::Carry)・設計 §40 形 (b)・[`carry_detection`]）。
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Detection {
     /// 撃つ（従来の形・読めない周もこちら＝fail-closed）。
     Run,
     /// 撃たない（理由は record の `reason=`）。
     Skip(DetectionSkip),
+    /// 撃たず前周の record を写す（写しは `carried=` の field で実測と区別する・C10）。
+    Carry(Carried),
+}
+
+/// 便の diff（`<base>..<tip>`）の `git patch-id --stable`（設計 §40 形 (b)）。
+///
+/// diff を読めない・空・patch-id を出せない周は `None`（record に `patch_id` を書かない＝持ち越しの根にならない）。
+pub fn patch_id(dir: &Path, base: &str, tip: &str) -> Option<String> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let diff = git_bytes(dir, &["diff", &format!("{base}..{tip}")])?;
+    if diff.is_empty() {
+        return None;
+    }
+    let mut child = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["patch-id", "--stable"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let written = child.stdin.take().map(|mut stdin| stdin.write_all(&diff));
+    let output = child.wait_with_output().ok()?;
+    if !matches!(written, Some(Ok(()))) || !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout).split_whitespace().next().map(str::to_owned)
+}
+
+/// 面に触れた撃ち直しの周の持ち越しの判定（設計 §40 形 (b)・追随と候補の木の段が
+/// [`super::land::rerun_detection`] から通す）。
+///
+/// 今の diff（`range` = `(<base>, <tip>)`）の patch-id が前周の検出線の record の `patch_id` と同じ周だけ
+/// [`Detection::Carry`]。record が無い・`patch_id` が無い・違う・読めない周は [`Detection::Run`]（fail-closed・
+/// [`carried_from`]）。
+pub fn carry_detection(state_dir: &Path, run: &str, dir: &Path, range: (&str, &str)) -> Detection {
+    let (base, tip) = range;
+    match carried_from(state_dir, run, patch_id(dir, base, tip).as_deref()) {
+        Some(carried) => Detection::Carry(carried),
+        None => Detection::Run,
+    }
 }
 
 /// 検出線を撃たない理由（record の `reason=`・閉じた enum・憲法 C11）。
@@ -264,7 +311,7 @@ pub struct Gate<'a> {
     pub pool: Option<&'a Pool>,
     /// 規則から読んだ線。
     pub limits: Limits,
-    /// 検出線を撃つか（設計 §30・追随の再 gate だけが [`Detection::Skip`] を渡しうる）。
+    /// 検出線を撃つか（設計 §30 / §40 形 (b)・追随の再 gate だけが [`Detection::Skip`] / [`Detection::Carry`] を渡しうる）。
     pub detection: Detection,
     /// lock の待ち方。
     pub policy: LockPolicy,
