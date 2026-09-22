@@ -312,12 +312,12 @@ pub fn build(call: &Call<'_>) -> (Command, confine::Confinement) {
     }
     // **claude も cgroup の scope で包む**（設計 gate-cost.md §4.1 の 3 つ目）。包むのは argv が
     // 揃った後・cwd と env を付ける前である——`Command` からは cwd も env も stdio も読み戻せ
-    // ないので、先に包まないと外側へ移せない。`{jobs}` を持つ起動ではないので箱は host の
-    // 予約分（同 §4.2）で、包めない host では素のまま起きる（止めない）。
+    // ないので、先に包まないと外側へ移せない。箱は 1 × `gate.job_memory_mb`（同 §12・裁定 id
+    // user 2026-09-15T18:2xZ）で、包めない host では素のまま起きる（止めない）。
     let unit = confine::unit_name(claude_place(call), CLAUDE_STAGE, 1);
     let wrap = confine::Wrap {
         unit: &unit,
-        limit: confine::Limit::HostReserve,
+        limit: confine::Limit::PerJob(1),
         caps: confine::Caps::embedded(),
     };
     let (mut cmd, confinement) = confine::wrap_command(inner, &wrap);

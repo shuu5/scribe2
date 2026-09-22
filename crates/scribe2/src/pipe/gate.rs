@@ -614,8 +614,8 @@ fn ask_lens_attempt(
     let unit = confine::unit_name(run, LENS_STAGE, attempt);
     let wrap = confine::Wrap {
         unit: &unit,
-        // lens は `{jobs}` を持たない起動なので host の箱である（設計 gate-cost.md §4.2）。
-        limit: confine::Limit::HostReserve,
+        // lens の箱は 1 × `gate.job_memory_mb`（設計 gate-cost.md §12・裁定 id user 2026-09-15T18:2xZ）。
+        limit: confine::Limit::PerJob(1),
         caps: confine::Caps::embedded(),
     };
     ask_lens(line, worktree, body, &wrap)

@@ -164,7 +164,7 @@ impl Confinement {
 pub enum Limit {
     /// `{jobs}` を持つ行 = 実効 jobs × `gate.job_memory_mb`。
     PerJob(u64),
-    /// それ以外（`{jobs}` を持たない verify 行・runner・lens）= `MemTotal − host.reserve_memory_mb`。
+    /// それ以外（`{jobs}` を持たない verify 行）= `MemTotal − host.reserve_memory_mb`。
     HostReserve,
 }
 

@@ -607,7 +607,8 @@ fn decide(entry: &Review<'_>, contract: &Path) -> (Finding, Option<confine::Rele
         &[("{contract}", &contract.display().to_string()), ("{worktree}", &entry.repo.display().to_string())],
     );
     let unit = confine::unit_name(entry.run, REVIEW_STAGE, 1);
-    let wrap = confine::Wrap { unit: &unit, limit: confine::Limit::HostReserve, caps: confine::Caps::embedded() };
+    // 審査の lens の箱は 1 × `gate.job_memory_mb`（設計 gate-cost.md §12）。
+    let wrap = confine::Wrap { unit: &unit, limit: confine::Limit::PerJob(1), caps: confine::Caps::embedded() };
     let (mut command, confinement) = confine::wrap_line(&line, &wrap);
     // diff は無い（stdin は piped のまま閉じる＝lens は EOF を見る）。stderr は捨てる（gate と同じ）。
     let spawned = command

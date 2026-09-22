@@ -3392,6 +3392,46 @@ fn e2e_toolbox_run_bin_confines_the_lens_claude() {
     clean(&[&dir]);
 }
 
+// ───── runner / lens / claude の箱を 1 × gate.job_memory_mb に揃える（`s2-07l.230`・設計 gate-cost.md §12・行 c・
+// 接頭辞 `headless_runner_box_`） ─────
+
+/// runner の雛形の「実行してよい command」節に足した 1 行（検出線は gate が撃つ）。
+const DETECTOR_LINE: &str = "- 検出線（`cargo mutants`）は gate が撃つ。runner は撃たない（禁じる語列で止まる）。";
+
+/// **runner が起こす claude の箱は 1 × `gate.job_memory_mb`**・雛形は検出線を撃たない 1 行を「実行してよい
+/// command」節に 1 本だけ持つ。base は claude を `MemTotal − host.reserve_memory_mb`（host の箱）で包み、
+/// 雛形に行が無い＝どちらの assert でも RED。claude を呼んだことを `called` の印で先に測る。
+#[test]
+fn headless_runner_box_claude_is_one_job_and_the_prompt_names_the_detector() {
+    let dir = tmp();
+    let worktree = tmp();
+    let write_set = dir.join("write-set.txt");
+    fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
+    let claude = fake_claude(&dir, &format!("{RESULT_RECORD}\n"), false, 0);
+    let vessel = write_vessel_copy(&dir, r#"["cargo", "git"]"#);
+    let out = run_runner(
+        &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "acceptEdits", account: None },
+        contract_text(CONTRACT_GOAL).as_bytes(),
+    );
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    assert!(dir.join("called").exists(), "母集団: runner は claude を呼んだ");
+
+    let names = crate::toolbox_record_names(&worktree);
+    let record = crate::toolbox_record(&worktree, "-claude-");
+    assert!(record.lines().any(|line| line == "--scope"), "claude は包めた（母集団 {names:?}）: {record}");
+    assert_eq!(
+        record.lines().find_map(|line| line.strip_prefix("MemoryMax=")).unwrap_or_default(),
+        format!("{}M", crate::pipe::embedded_int("gate.job_memory_mb")),
+        "claude の箱は 1 × gate.job_memory_mb: {record}"
+    );
+
+    let prompt = slurp(&dir.join("stdin"));
+    assert_eq!(prompt.lines().filter(|line| *line == DETECTOR_LINE).count(), 1, "検出線の行は 1 本: {prompt}");
+    let section = prompt.split("## 実行してよい command").nth(1).and_then(|rest| rest.split("\n## ").next()).unwrap_or_default();
+    assert!(section.lines().any(|line| line == DETECTOR_LINE), "行は「実行してよい command」節に在る: {section}");
+    clean(&[&dir, &worktree]);
+}
+
 // ───── 同名の flag が 2 つ在る argv は claude を起こさずに断る（`s2-07l.411`・設計 account-autonomy.md §16・
 // 接頭辞 `headless_flag_duplicate_`） ─────
 //

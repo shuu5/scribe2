@@ -194,13 +194,13 @@ fn launch_runner(launch: &Launch<'_>, worktree: &Path, cmd: &str, base: &str) ->
     // 質問で止まった turn が常に「commit を作った」側へ倒れる。初回は tip = base ゆえ同値。
     // 読めない周は base へ落とす（従来の基準）。
     let tip = git_line(worktree, &["rev-parse", "HEAD"]).unwrap_or_else(|| base.to_owned());
-    // **runner も cgroup の scope で包む**（設計 gate-cost.md §4.1 の 2 つ目）。`{jobs}` を
-    // 持つ起動ではないので箱は host の予約分（同 §4.2）で、包めない host では素のまま撃つ
-    // （止めない・縮退する）。
+    // **runner も cgroup の scope で包む**（設計 gate-cost.md §4.1 の 2 つ目）。箱は
+    // 1 × `gate.job_memory_mb`（同 §12・裁定 id user 2026-09-15T18:2xZ）で、包めない host では
+    // 素のまま撃つ（止めない・縮退する）。
     let unit = confine::unit_name(launch.run, RUNNER_STAGE, 1);
     let wrap = confine::Wrap {
         unit: &unit,
-        limit: confine::Limit::HostReserve,
+        limit: confine::Limit::PerJob(1),
         caps: confine::Caps::embedded(),
     };
     let (mut command, confinement) = confine::wrap_line(cmd, &wrap);

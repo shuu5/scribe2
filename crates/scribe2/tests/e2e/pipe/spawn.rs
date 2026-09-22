@@ -2208,6 +2208,31 @@ fn spawn_confined(repo: &Path, state: &Path, runner: &str) -> (String, Output) {
     (id, out)
 }
 
+/// **runner の箱は 1 × `gate.job_memory_mb`**（設計 gate-cost.md §12・行 c・裁定 id user 2026-09-15T18:2xZ）。
+/// base は `MemTotal − host.reserve_memory_mb`（host の箱）を渡す＝RED。runner の記録はちょうど 1 件を読む
+/// （母集団を確かめずに `contains` すると別の起動の引数で充足する）。
+#[test]
+fn pipe_confine_runner_limit_is_one_job_box() {
+    let (repo, state) = repo_with_state();
+    let (_id, out) = spawn_confined(&repo, &state, TOY_COMMIT);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "spawn: {}", stderr_of(&out));
+    let records = state.join(TERMINAL_SCOPE_RECORDS);
+    let names = dir_names(&records);
+    let runner: Vec<&String> = names.iter().filter(|name| name.contains("-runner-")).collect();
+    assert_eq!(runner.len(), 1, "runner の記録はちょうど 1 件（母集団 {names:?}）");
+    let body = runner
+        .first()
+        .and_then(|name| fs::read_to_string(records.join(name)).ok())
+        .unwrap_or_default();
+    let limit = body.lines().find_map(|line| line.strip_prefix("MemoryMax=")).unwrap_or_default();
+    assert_eq!(
+        limit,
+        format!("{}M", embedded_int("gate.job_memory_mb")),
+        "runner の箱は 1 × gate.job_memory_mb: {body}"
+    );
+    clean(&[&repo, &state]);
+}
+
 /// (b) 包めた周で、終端行を出さずに自分を KILL する runner（kernel の証拠が無い signal 死）は `Failed detail=unknown`。
 /// base は rc < 0 だけで `oom-kill` を書く。
 #[test]

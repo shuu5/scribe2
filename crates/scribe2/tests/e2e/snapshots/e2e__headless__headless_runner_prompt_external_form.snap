@@ -29,6 +29,7 @@ expression: prompt
 - **1 command で撃つ**。pipe（`|`）・redirect（`>` `<`）・`&&`・`;` で繋がない——繋いだ形は一覧の外として扱われ、同じく止まる。
 - **command 置換（`$(…)` / backtick）と変数展開を使わない**。静的に解析できない形は allow の判定に載らず、一覧の中の command でも deny される（実測: `git commit -m "$(printf …)"` が `Contains shell syntax (string) that cannot be statically analyzed` で止まった）。必要な文字列は引数へ直に書く。
 - 出力を絞りたいときは pipe でなく、その command 自身の flag を使う。
+- 検出線（`cargo mutants`）は gate が撃つ。runner は撃たない（禁じる語列で止まる）。
 
 - cargo
 - git

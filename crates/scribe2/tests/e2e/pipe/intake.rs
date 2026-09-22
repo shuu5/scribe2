@@ -2728,7 +2728,32 @@ fn pipe_review_kind_pass_carries_neither_kind_nor_at() {
     clean(&[&repo, &state]);
 }
 
-/// 歯 (2) **7 語目へ倒す枝**: FAIL / INCONCLUSIVE で `kind` が無い周・語でない周は `unparsed` になり **verdict は lens の値
+/// **審査の lens の箱は 1 × `gate.job_memory_mb`**（設計 gate-cost.md §12・行 c・裁定 id user 2026-09-15T18:2xZ）。
+/// 包める周（道具箱の偽 `systemd-run`）で審査を撃ち、unit `-review-1` の記録をちょうど 1 件読む。base は
+/// `MemTotal − host.reserve_memory_mb`（host の箱）を渡す＝RED。
+#[test]
+fn pipe_confine_review_box_is_one_job() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let marker = state.join("lens-ran-review-box");
+    let out = run_pipe_with_path(&crate::toolbox_path(&state), &[
+        "intake", "--design", &path, "--bead", "s2-rbox",
+        "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+        "--rules", &ceiling_rules(&state), "--lens", &fake_lens(&marker, &lens_verdict("PASS")),
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "PASS は rc 0: {}", stderr_of(&out));
+    assert!(marker.exists(), "審査の lens は実際に撃たれている");
+    let record = crate::toolbox_record(&state, "-review-1");
+    assert!(record.lines().any(|line| line == "--scope"), "審査の lens は包めた: {record}");
+    assert_eq!(
+        record.lines().find_map(|line| line.strip_prefix("MemoryMax=")).unwrap_or_default(),
+        format!("{}M", embedded_int("gate.job_memory_mb")),
+        "審査の lens の箱は 1 × gate.job_memory_mb: {record}"
+    );
+    clean(&[&repo, &state]);
+}
+
+/// 歯 (2) **7 語目へ倒す枝**:FAIL / INCONCLUSIVE で `kind` が無い周・語でない周は `unparsed` になり **verdict は lens の値
 /// のまま**（`other` にも INCONCLUSIVE にも化けない・C10）。JSON が読めない周・3 値でない周・rc≠0 の周・`--lens` 無しの
 /// 周（器が作る INCONCLUSIVE）も `unparsed`。どの周も `at` を持たない。
 #[test]

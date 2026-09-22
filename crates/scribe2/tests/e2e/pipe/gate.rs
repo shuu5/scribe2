@@ -1445,6 +1445,37 @@ fn pipe_confine_wraps_the_runner_and_the_lens() {
     clean(&[&repo, &state]);
 }
 
+/// **gate の lens の箱は 1 × `gate.job_memory_mb`・同じ gate の `{jobs}` を持たない verify 行は host の箱のまま**
+/// （設計 §12・行 c・裁定 id user 2026-09-15T18:2xZ）。両方向を 1 本で撃つ——lens だけを見る歯は全部を
+/// job の箱へ潰す実装でも生き残り、verify 行だけを見る歯は lens を host の箱に残す実装で生き残る。
+#[test]
+fn pipe_confine_lens_box_is_one_job_and_the_plain_line_keeps_the_host_box() {
+    let (repo, state) = repo_with_state();
+    commit_vessel(&repo, VESSEL_ALLOWED, r#"["sh verify-jobs.sh {jobs}", "sh verify-ok.sh"]"#);
+    let path = systemd_stub(&state);
+    let marker = state.join("lens-ran");
+    let (_id, gated) = confined_run(&repo, &state, &path, &fake_lens(&marker, &lens_verdict("PASS")));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "gate: {}", stderr_of(&gated));
+    assert!(marker.exists(), "lens は実際に撃たれている");
+
+    let one_job = format!("{}M", embedded_int("gate.job_memory_mb"));
+    let lens = scope_record(&state, "-lens-1-");
+    assert_eq!(scope_prop(&lens, "MemoryMax"), one_job, "lens の箱は 1 × gate.job_memory_mb: {lens}");
+
+    let want_host = vessel::pipe::confine::mem_total_mb(&fs::read_to_string("/proc/meminfo").unwrap_or_default())
+        .and_then(|total| total.checked_sub(embedded_int("host.reserve_memory_mb")))
+        .filter(|mb| *mb > 0)
+        .map(|mb| format!("{mb}M"));
+    let plain = scope_record(&state, "-common-3-");
+    assert_eq!(
+        Some(scope_prop(&plain, "MemoryMax")),
+        want_host,
+        "{{jobs}} を持たない verify 行は host の箱（MemTotal − reserve）のまま: {plain}"
+    );
+    assert_ne!(Some(one_job), want_host, "前提: 2 つの箱は互いに違う値である");
+    clean(&[&repo, &state]);
+}
+
 /// **箱の中で殺された verify 行は赤ではなく「測れなかった」**（設計 §4.2）。
 ///
 /// rc は 0 のままの fixture で撃つ＝根拠が rc ではなく終端行の `oom_kill` であることを測る。
