@@ -335,6 +335,26 @@ pub fn targets_of(args: &[String]) -> Result<Option<Vec<Target>>, String> {
     Ok(Some(targets))
 }
 
+/// `--diff <file>` を読む（設計 gate-cost.md §14 約束 2）。flag が無い周は `Ok(None)`（`git diff <base>...HEAD` を
+/// 母集団にする従来の形）。在る周は file の byte を返し、呼び手はそれを `in.diff` に写して `git diff` を撃たない。
+/// 値の無い flag・読めない file は `Err`＝**測らずに rc 2**（母集団を黙って従来の diff へ戻さない・fail-closed）。
+pub fn diff_of(args: &[String]) -> Result<Option<Vec<u8>>, String> {
+    if !args.iter().any(|arg| arg == "--diff") {
+        return Ok(None);
+    }
+    let path = flag(args, "--diff").ok_or_else(|| "mutants-diff: --diff に file が無い（測れていない・rc 2）".to_owned())?;
+    let bytes = std::fs::read(path).map_err(|err| format!("mutants-diff: 母集団の diff {path} を読めない: {err}（測れていない・rc 2）"))?;
+    Ok(Some(bytes))
+}
+
+/// `in.diff` を置く: 渡された母集団（[`diff_of`]）が在ればそれを写し、無ければ `git diff <base>...HEAD` を落とす。
+fn place_diff(root: &Path, base: &str, given: Option<&[u8]>, path: &Path) -> Result<(), String> {
+    match given {
+        Some(bytes) => std::fs::write(path, bytes).map_err(|err| format!("diff を書けない: {err}")),
+        None => write_diff(root, base, path),
+    }
+}
+
 /// 的の file の本文を読む（1 行 1 本・空行は飛ばす・1 本でも形が外れたら `Err`・0 本も `Err`）。
 pub fn targets_in(text: &str) -> Result<Vec<Target>, String> {
     let targets = text
@@ -643,7 +663,7 @@ fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
 }
 
 /// 使い方（rc 2 の 1 行）。
-const USAGE: &str = "usage: cargo xtask mutants-diff --base <ref> [--jobs <n>] [--threads <t>] [--teeth <語,…|->] [--targets <file>]";
+const USAGE: &str = "usage: cargo xtask mutants-diff --base <ref> [--jobs <n>] [--threads <t>] [--teeth <語,…|->] [--targets <file>] [--diff <file>]";
 
 /// `--teeth` の字面が読めない周の理由（閉じた 1 つ・設計 gate-cost.md §34 約束 1）。
 pub const TEETH_MALFORMED: &str =
@@ -718,7 +738,8 @@ pub fn run(args: &[String]) -> ExitCode {
         return unmeasured(USAGE);
     };
     // **語の形が悪い周・的が読めない周は何も撃たない**（rc 2・設計 gate-cost.md §34 約束 1・§16）。
-    let (teeth, targets) = match teeth_of(args).and_then(|teeth| Ok((teeth, targets_of(args)?))) {
+    // 母集団の diff が渡された周はその byte を `in.diff` にする（読めない周も何も撃たない・設計 gate-cost.md §14）。
+    let (teeth, targets, given) = match teeth_of(args).and_then(|teeth| Ok((teeth, targets_of(args)?, diff_of(args)?))) {
         Ok(found) => found,
         Err(reason) => return unmeasured(&reason),
     };
@@ -737,7 +758,7 @@ pub fn run(args: &[String]) -> ExitCode {
     // cargo-mutants は変異 0 の周に出力 dir へ触らないので、掃除しないと前の周の
     // `total=18 missed=6` がそのまま今の周の測定を名乗る。
     let out = work.join("out");
-    if let Err(reason) = write_diff(&root, base, &diff_path).and_then(|()| clear_previous_out(&out)) {
+    if let Err(reason) = place_diff(&root, base, given.as_deref(), &diff_path).and_then(|()| clear_previous_out(&out)) {
         return unmeasured(&format!("mutants-diff: {reason}"));
     }
     // **package 名は NAME から解決する**（字面を持たない＝憲法 C2.2・`xtask check` の name-literal）。
@@ -931,7 +952,7 @@ fn write_diff(root: &Path, base: &str, path: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        aimed_args, aimed_of, baseline_args, baseline_build_args, baseline_judged, measure_args, mutant_timeout_s,
+        aimed_args, aimed_of, baseline_args, diff_of, place_diff, baseline_build_args, baseline_judged, measure_args, mutant_timeout_s,
         targets_in, targets_of, teeth_of, Counts, Outcome, Pace, Target, BASELINE_TAIL_HEADING, OUTCOMES,
         TEETH_MALFORMED,
     };
@@ -1233,5 +1254,39 @@ mod tests {
         let kept: Vec<&String> = plain.iter().take(1).chain(plain.iter().skip(3)).collect();
         let rest: Vec<&String> = args[..from].iter().chain(&args[dashes..]).collect();
         assert_eq!(rest, kept, "他の語は不変: {args:?}");
+    }
+
+    // ---- 母集団の diff の受け口（設計 gate-cost.md §14 約束 2・歯 (e)・接頭辞 `mutants_in_diff_`）----
+
+    /// `--diff <file>` の在る周は `git diff` を撃たずその file が `in.diff` になる: git repo でない dir・在らない base でも
+    /// 渡した byte（空の母集団も）がそのまま写る。無い周は従来どおり `git diff` を撃つ（同じ dir では撃てず `Err`）。
+    #[test]
+    fn mutants_in_diff_given_file_becomes_the_population_without_git_diff() {
+        let dir = std::env::temp_dir().join(format!("xtask-in-diff-given-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("tmp dir を作れる");
+        let given = dir.join("population.diff");
+        let body = "diff --git a/src/k.rs b/src/k.rs\n--- a/src/k.rs\n+++ b/src/k.rs\n@@ -3,0 +4,1 @@\n+mod m;\n";
+        std::fs::write(&given, body).expect("母集団を書ける");
+        let args = argv(&format!("--base no-such-base-9f --diff {}", given.display()));
+        let bytes = diff_of(&args).expect("読める").expect("--diff が在る");
+        assert_eq!(bytes, body.as_bytes(), "file の byte そのもの");
+        let placed = dir.join("in.diff");
+        assert_eq!(place_diff(&dir, "no-such-base-9f", Some(&bytes), &placed), Ok(()), "git diff を撃たない");
+        assert_eq!(std::fs::read_to_string(&placed).expect("in.diff が在る"), body, "in.diff = 渡した母集団");
+        assert_eq!(place_diff(&dir, "no-such-base-9f", Some(b""), &placed), Ok(()), "空の母集団も写す");
+        assert_eq!(std::fs::read(&placed).expect("in.diff が在る"), b"", "0 行の母集団");
+        assert!(place_diff(&dir, "no-such-base-9f", None, &placed).is_err(), "無い周は git diff を撃つ（repo でない dir では落ちる）");
+        assert_eq!(diff_of(&argv("--base main --teeth -")), Ok(None), "--diff 無しは従来の形");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 値の無い flag・読めない file は測定未了（`Err`＝rc 2 の口）で断る。
+    #[test]
+    fn mutants_in_diff_unreadable_or_valueless_flag_is_unmeasured() {
+        assert!(diff_of(&argv("--base main --diff")).is_err(), "値の無い flag");
+        assert!(diff_of(&argv("--base main --diff --jobs 2")).is_err(), "値の位置に次の flag");
+        let refused = diff_of(&argv("--base main --diff /nonexistent/probe-population-9f"));
+        assert!(refused.as_ref().is_err_and(|reason| reason.contains("rc 2")), "読めない file: {refused:?}");
     }
 }

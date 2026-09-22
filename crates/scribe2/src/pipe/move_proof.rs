@@ -137,6 +137,11 @@ pub enum Side {
 pub struct MoveSummary {
     /// 描いた本文（先頭行は [`HEADLINE`]）。
     text: String,
+    /// file を跨いで動いた item の HEAD 側の区間（(file, (始, 終))・1 始まり・両端含む・設計 gate-cost.md §14 約束 1）。
+    ///
+    /// **本文 `text` には載らない**（要約の字面は不変）。同じ file に留まった item（可視性・字下げ・コメントだけの差）は
+    /// 持たない＝検出線の母集団に残る（約束 5）。
+    moved: Vec<(String, (usize, usize))>,
 }
 
 impl MoveSummary {
@@ -144,6 +149,115 @@ impl MoveSummary {
     pub fn text(&self) -> &str {
         &self.text
     }
+
+    /// 動いた item の HEAD 側の区間。
+    pub fn moved(&self) -> &[(String, (usize, usize))] {
+        &self.moved
+    }
+}
+
+/// 検出線の母集団の diff（純移動の周だけ・設計 gate-cost.md §14 約束 2 / 3）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Population {
+    /// 動いた item の区間の `+` 行を落とした diff（残る `+` 行を連なりごとの挿入の hunk に組む・0 本なら空）。
+    pub text: String,
+    /// 落とした `+` 行の本数（record の `pure-move=`）。
+    pub dropped: usize,
+}
+
+/// 便の diff から、要約が名指す動いた item の区間に入る `+` 行を落とした母集団の diff を組む（**純関数**）。
+///
+/// 残る `+` 行は hunk の中で連なる本数ごとに `@@ -<o>,0 +<n>,<k> @@` の挿入の hunk へ切り直す——HEAD 側の行番号は
+/// 元の diff のまま（道具は行番号で変異を母集団へ当てる）。`-` 行と context は運ばない（母集団は追加行だけ）。
+/// 残る `+` 行の無い file は見出しごと落とす。
+pub fn population(diff: &str, summary: &MoveSummary) -> Population {
+    let mut out = Population { text: String::new(), dropped: 0 };
+    let mut file = Cut::default();
+    for line in diff.lines() {
+        if line.starts_with("diff --git ") {
+            file.flush(&mut out.text);
+            file = Cut { header: vec![line], ..Cut::default() };
+            continue;
+        }
+        if let Some(rest) = line.strip_prefix("@@ ") {
+            file.flush(&mut out.text);
+            file.cursor = hunk_cursor(rest);
+            continue;
+        }
+        let Some(at) = file.cursor else {
+            if let Some(path) = line.strip_prefix("+++ ") {
+                file.head = (path != "/dev/null").then(|| path.strip_prefix("b/").unwrap_or(path).to_owned());
+            }
+            file.header.push(line);
+            continue;
+        };
+        if line.starts_with('+') {
+            let inside = file.head.as_ref().is_some_and(|head| {
+                summary.moved.iter().any(|(path, span)| path == head && covers(*span, at.1))
+            });
+            if inside {
+                out.dropped = out.dropped.saturating_add(1);
+                file.flush(&mut out.text);
+            } else {
+                file.run.get_or_insert((at, Vec::new())).1.push(line);
+            }
+            file.cursor = Some((at.0, at.1.saturating_add(1)));
+        } else if line.starts_with('\\') {
+            if let Some((_, run)) = file.run.as_mut() {
+                run.push(line);
+            }
+        } else {
+            file.flush(&mut out.text);
+            let old = at.0.saturating_add(1);
+            let new = if line.starts_with('-') { at.1 } else { at.1.saturating_add(1) };
+            file.cursor = Some((old, new));
+        }
+    }
+    file.flush(&mut out.text);
+    out
+}
+
+/// [`population`] の file 1 本の途中の状態（見出し・HEAD の path・hunk の中の位置・残す `+` 行の連なり）。
+#[derive(Default)]
+struct Cut<'a> {
+    /// file の見出しの行（`diff --git` から最初の `@@` の前まで）。
+    header: Vec<&'a str>,
+    /// HEAD 側の path（`+++` の行・削除 file は `None`）。
+    head: Option<String>,
+    /// hunk の中の次の (base, HEAD) の行番号（hunk の外は `None`）。
+    cursor: Option<(usize, usize)>,
+    /// 残す `+` 行の連なり（始まりの位置と行）。
+    run: Option<((usize, usize), Vec<&'a str>)>,
+    /// 見出しを書いたか。
+    written: bool,
+}
+
+impl Cut<'_> {
+    /// 連なりを挿入の hunk 1 本として書き出す（初めての周は見出しを先に書く）。
+    fn flush(&mut self, text: &mut String) {
+        let Some(((old, new), lines)) = self.run.take() else { return };
+        if !self.written {
+            self.written = true;
+            for line in &self.header {
+                text.push_str(line);
+                text.push('\n');
+            }
+        }
+        let added = lines.iter().filter(|line| line.starts_with('+')).count();
+        text.push_str(&format!("@@ -{},0 +{new},{added} @@\n", old.saturating_sub(1)));
+        for line in lines {
+            text.push_str(line);
+            text.push('\n');
+        }
+    }
+}
+
+/// hunk 見出し `-l[,n] +l[,n] @@ …` の 2 つの開始行番号（読めない見出しは `None`＝以後の行を hunk の外と読む）。
+fn hunk_cursor(rest: &str) -> Option<(usize, usize)> {
+    let (range, _) = rest.split_once(" @@")?;
+    let (old, new) = range.split_once(' ')?;
+    let start = |token: &str, sign: char| -> Option<usize> { token.strip_prefix(sign)?.split(',').next()?.parse().ok() };
+    Some((start(old, '-')?, start(new, '+')?))
 }
 
 /// 要約の本文を run dir の [`LENS_INPUT_FILE`] へ残す。
@@ -294,6 +408,8 @@ struct Matched {
     comments: Vec<CommentDiff>,
     /// 動いた item の本数。
     moved: usize,
+    /// 動いた item の HEAD 側の区間（[`MoveSummary::moved`] へ運ぶ）。
+    spans: Vec<(String, (usize, usize))>,
 }
 
 /// (名, hash) の多重集合を突き合わせ、同じ file の対を先に取り、残りを移動と数える。
@@ -334,6 +450,7 @@ fn matched_of(pairs: &[(usize, usize)], base: &[Located], head: &[Located]) -> M
     let mut visibility = Vec::new();
     let mut comments = Vec::new();
     let mut moved: usize = 0;
+    let mut spans = Vec::new();
     for (old, new) in pairs {
         let (Some(from), Some(to)) = (base.get(*old), head.get(*new)) else { continue };
         if from.item.visibility != to.item.visibility {
@@ -359,7 +476,8 @@ fn matched_of(pairs: &[(usize, usize)], base: &[Located], head: &[Located]) -> M
             continue;
         }
         moved = moved.saturating_add(1);
-        let lines = to.item.lines.1.saturating_sub(to.item.lines.0).saturating_add(1);
+        spans.push((to.file.clone(), to.item.lines));
+        let lines =to.item.lines.1.saturating_sub(to.item.lines.0).saturating_add(1);
         match moves.iter_mut().find(|found| found.from == from.file && found.to == to.file) {
             Some(found) => {
                 found.names.push(to.item.name.clone());
@@ -368,7 +486,7 @@ fn matched_of(pairs: &[(usize, usize)], base: &[Located], head: &[Located]) -> M
             None => moves.push(Move { from: from.file.clone(), to: to.file.clone(), names: vec![to.item.name.clone()], lines }),
         }
     }
-    Matched { moves, visibility, comments, moved }
+    Matched { moves, visibility, comments, moved, spans }
 }
 
 /// 残差分（file ごとの逐語の行・`-` / `+` 付き）。
@@ -504,7 +622,7 @@ fn render(matched: &Matched, residual: &Residual, total: usize, carried: usize) 
     ));
     let mut text = lines.join("\n");
     text.push('\n');
-    MoveSummary { text }
+    MoveSummary { text, moved: matched.spans.clone() }
 }
 
 #[cfg(test)]

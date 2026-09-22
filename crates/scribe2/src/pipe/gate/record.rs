@@ -10,8 +10,8 @@ use crate::fleet::{Stage, SCHEMA};
 use crate::pipe::admission;
 use crate::pipe::confine::Reason;
 use crate::pipe::declaration::Effective;
-use crate::pipe::move_proof::LensInput;
-use crate::pipe::{contract_path, run_dir, verify_log_path, vessel_path};
+use crate::pipe::move_proof::{self, LensInput};
+use crate::pipe::{contract_path, git_bytes, run_dir, verify_log_path, vessel_path};
 use std::path::Path;
 
 /// 赤い verify 行の stderr を残す診断 file の名（`verify.jsonl` と同じ dir）。
@@ -78,9 +78,13 @@ pub(super) fn record_verify(entry: &Gate<'_>, worktree: &Path, base: &str) -> Re
         },
     };
     // 撃つ周だけ便の diff の patch-id を測り、検出線の record に `patch_id=` で残す（設計 §40 形 (b)・撃つ前の木）。
+    // 純移動の周は母集団の diff を渡し、落とした `+` 行の本数を record の `pure-move=` で残す（設計 §14 約束 2 / 3）。
+    let mut pure_move = None;
     let (detection, placed, patch): (Vec<String>, Option<Placed<'_>>, Option<String>) = match &entry.detection {
         Detection::Run => {
             let lines = aimed_lines(entry, frozen.detection_verify())?;
+            let (lines, dropped) = population_lines(entry, worktree, base, lines)?;
+            pure_move = dropped;
             let patch = if lines.is_empty() { None } else { super::patch_id(worktree, base, "HEAD") };
             (lines, None, patch)
         }
@@ -115,7 +119,7 @@ pub(super) fn record_verify(entry: &Gate<'_>, worktree: &Path, base: &str) -> Re
         .iter()
         .position(detection_unmeasured)
         .map(|index| index as u64 + 1);
-    for record in records_placed(&steps, placed, patch.as_deref()) {
+    for record in records_placed(&steps, placed, Marks { patch: patch.as_deref(), pure_move }) {
         if let Some(step) = record.step {
             if step.is_closed() {
                 // 撃っていない行は赤でも診断の対象でもない（record だけ残す）。
@@ -153,6 +157,35 @@ fn aimed_lines(entry: &Gate<'_>, lines: &[String]) -> Result<Vec<String>, String
     write_copy(&path, &format!("{}\n", targets.join("\n")))?;
     let arg = shell_word(&path.display().to_string());
     Ok(lines.iter().map(|line| format!("{line} {TARGETS_FLAG} {arg}")).collect())
+}
+
+/// 検出線の母集団の diff を渡す旗（`cargo xtask mutants-diff` の `--diff <file>`・設計 gate-cost.md §14 約束 2）。
+const DIFF_FLAG: &str = "--diff";
+
+/// 母集団の diff を置く file の名（run dir 直下・純移動の周だけ・gate の周ごとに書き直す）。
+const POPULATION_FILE: &str = "population.diff";
+
+/// 純移動と証明された便の検出線（設計 gate-cost.md §14 約束 2 / 4）。
+///
+/// lens の入力が要約（[`LensInput::Summary`]）になる便は、動いた item の区間の `+` 行を落とした diff
+/// （[`move_proof::population`]）を run dir の [`POPULATION_FILE`] へ書き、各行の末尾に `--diff <その path>` を足して
+/// 落とした本数を返す。**要約にならない便（[`LensInput::Diff`]）と diff を読めない周は行を 1 字も変えない**＝
+/// 道具が `git diff` の追加行を母集団にする従来の経路のまま（読めない周の判定は段①が持つ）。
+fn population_lines(entry: &Gate<'_>, worktree: &Path, base: &str, lines: Vec<String>) -> Result<(Vec<String>, Option<usize>), String> {
+    if lines.is_empty() {
+        return Ok((lines, None));
+    }
+    let Some(diff) = git_bytes(worktree, &["diff", &format!("{base}..HEAD")]) else {
+        return Ok((lines, None));
+    };
+    let LensInput::Summary(summary) = super::lens::lens_input(worktree, base, &diff) else {
+        return Ok((lines, None));
+    };
+    let population = move_proof::population(&String::from_utf8_lossy(&diff), &summary);
+    let path = run_dir(entry.state_dir, entry.run).join(POPULATION_FILE);
+    write_copy(&path, &population.text)?;
+    let arg = shell_word(&path.display().to_string());
+    Ok((lines.iter().map(|line| format!("{line} {DIFF_FLAG} {arg}")).collect(), Some(population.dropped)))
 }
 
 /// shell の 1 語（安全な字だけの字面はそのまま・他は単引用符で包む）。
@@ -439,7 +472,16 @@ pub struct Record<'a> {
 /// 検出線を省いた周は、その段の位置（[`Check::Contract`] の直前・契約の行が無ければ末尾）に skip record を
 /// 1 本挟み、`n` は挟んだ record も含めて通しで振る（**撃たなかった事実を黙って落とさない**・設計 §30）。
 pub fn records_of<'a>(steps: &'a [Step], skipped: Option<Skipped<'_>>) -> Vec<Record<'a>> {
-    records_placed(steps, skipped.map(Placed::Skip), None)
+    records_placed(steps, skipped.map(Placed::Skip), Marks { patch: None, pure_move: None })
+}
+
+/// 撃った検出線の record だけが持つ印（便の diff の patch-id と、純移動の周に落とした `+` 行の本数）。
+#[derive(Clone, Copy)]
+struct Marks<'a> {
+    /// `patch_id=`（設計 §40 形 (b)）。
+    patch: Option<&'a str>,
+    /// `pure-move=`（設計 gate-cost.md §14 約束 3・要約にならない便は `None`＝field を欠く）。
+    pure_move: Option<usize>,
 }
 
 /// 検出線の段の位置に置く、撃っていない record 1 本（skip か、前周の写し）。
@@ -460,8 +502,8 @@ impl Placed<'_> {
     }
 }
 
-/// [`records_of`] の本体（置く record は skip か写し・撃った検出線の record は `patch` を `patch_id=` で持つ）。
-fn records_placed<'a>(steps: &'a [Step], placed: Option<Placed<'_>>, patch: Option<&str>) -> Vec<Record<'a>> {
+/// [`records_of`] の本体（置く record は skip か写し・撃った検出線の record は `marks` を持つ）。
+fn records_placed<'a>(steps: &'a [Step], placed: Option<Placed<'_>>, marks: Marks<'_>) -> Vec<Record<'a>> {
     let mut records: Vec<Record<'a>> = Vec::new();
     let mut pending = placed;
     for step in steps {
@@ -472,7 +514,7 @@ fn records_placed<'a>(steps: &'a [Step], placed: Option<Placed<'_>>, patch: Opti
             }
         }
         let n = next_number(records.len());
-        records.push(Record { n, body: detection_record(n, step, patch), step: Some(step) });
+        records.push(Record { n, body: marked_record(n, step, marks), step: Some(step) });
     }
     if let Some(place) = pending {
         let n = next_number(records.len());
@@ -490,9 +532,22 @@ const CARRIED_FIELD: &str = "carried";
 /// 撃った 1 段の record（[`step_record`]）に、**検出線の段だけ** `patch_id=<id>` を足す（`patch` が `None` の周と
 /// 他の段は [`step_record`] と同じ字面・schema は 1 のまま・設計 §40 形 (b)）。
 pub fn detection_record(number: u64, step: &Step, patch: Option<&str>) -> String {
+    marked_record(number, step, Marks { patch, pure_move: None })
+}
+
+/// 純移動の周に撃った検出線の record が持つ、落とした `+` 行の本数の field（設計 gate-cost.md §14 約束 3）。
+const PURE_MOVE_FIELD: &str = "pure-move";
+
+/// [`detection_record`] の本体: 検出線の段だけ `patch_id=` と、撃った周の `pure-move=` を足す（撃たなかった行は欠く）。
+fn marked_record(number: u64, step: &Step, marks: Marks<'_>) -> String {
     let mut fields = step_fields(number, step);
-    if let (Check::Detection, Some(found)) = (step.stage, patch) {
-        fields.push((PATCH_ID_FIELD, Value::Str(found.to_owned())));
+    if step.stage == Check::Detection {
+        if let Some(found) = marks.patch {
+            fields.push((PATCH_ID_FIELD, Value::Str(found.to_owned())));
+        }
+        if let Some(dropped) = marks.pure_move.filter(|_| !step.is_closed()) {
+            fields.push((PURE_MOVE_FIELD, Value::Num(u64::try_from(dropped).unwrap_or(u64::MAX))));
+        }
     }
     json_lite::write_object(&fields)
 }

@@ -3582,28 +3582,34 @@ fn move_head() -> Vec<(&'static str, &'static str)> {
 
 /// 純移動の fixture の便を Implemented まで進める: base の file 群を seed の上に commit し、HEAD の file 群を
 /// 置き場へ写して runner に `cp` させる（write-set は 3 file）。
+fn move_run(base: &[(&str, &str)], head: &[(&str, &str)]) -> (PathBuf, PathBuf, String) {
+    let (repo, state) = repo_with_state();
+    let id = move_run_in(&repo, &state, base, head);
+    (repo, state, id)
+}
+
+/// [`move_run`] の本体（toy repo は呼び手が用意する＝宣言を先に commit できる）。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn move_run(base: &[(&str, &str)], head: &[(&str, &str)]) -> (PathBuf, PathBuf, String) {
-    let (repo, state) = repo_with_state();
+fn move_run_in(repo: &Path, state: &Path, base: &[(&str, &str)], head: &[(&str, &str)]) -> String {
     for (name, body) in base {
         fs::write(repo.join("src").join(name), body).expect("base の file を書ける");
     }
-    git(&repo, &["add", "-A"]);
-    git(&repo, &["commit", "-q", "-m", "move-base"]);
+    git(repo, &["add", "-A"]);
+    git(repo, &["commit", "-q", "-m", "move-base"]);
     let staged = state.join("head");
     fs::create_dir_all(&staged).expect("HEAD の写しの dir を作れる");
     for (name, body) in head {
         fs::write(staged.join(name), body).expect("HEAD の file を書ける");
     }
-    let design = write_contract(&repo, &["write-set"], &[r#"write-set = ["src/lib.rs", "src/alpha.rs", "src/beta.rs"]"#]);
-    let id = intake(&repo, &state, &design);
+    let design = write_contract(repo, &["write-set"], &[r#"write-set = ["src/lib.rs", "src/alpha.rs", "src/beta.rs"]"#]);
+    let id = intake(repo, state, &design);
     let runner = format!("cp '{}'/*.rs src/ && git add -A && git commit -q -m runner", staged.display());
-    let out = spawn_with(&repo, &state, &id, &runner);
+    let out = spawn_with(repo, state, &id, &runner);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "spawn: {}", stderr_of(&out));
-    (repo, state, id)
+    id
 }
 
 /// stdin の全文を `seen` へ写してから PASS を返す fake lens。
@@ -4551,4 +4557,173 @@ fn pipe_gate_targets_row_without_targets_keeps_the_diff_population() {
     assert!(!line.contains("population="), "従来の形の行: {line}");
     assert_eq!(value_of(&verdict_pairs(&state, &id), "verify_red"), "0", "赤は 0");
     clean(&[&repo, &state]);
+}
+
+// ---- 純移動と証明された行を検出線の母集団から外す（設計 gate-cost.md §14・行 e・`s2-07l.292`・接頭辞
+// `pipe_gate_detection_pure_move_`）----
+//
+// lens の入力が要約になる便は、gate が動いた item の区間の `+` 行を落とした diff を run dir の file に組み、検出線の行の
+// 末尾に `--diff <file>` を足して撃ち、record に `pure-move=<落とした本数>` を残す。要約にならない便は行を 1 字も変えない。
+
+/// 偽の検出線の名（宣言の `detection-verify` に置く stub）。
+const POP_STUB: &str = "verify-population.sh";
+
+/// 偽の検出線: `--diff <file>` を受けた周は file の `+` 行（`+++` の見出しを除く）の本数を母集団にした行を、受けない周は
+/// 従来の形の行（total=7）を出す。どちらも rc 0（測れた周）。
+const POP_STUB_BODY: &str = r#"if [ "$1" = "--diff" ]; then
+  n="$(grep -v '^+++ ' "$2" | grep -c '^+')"
+  printf 'mutants-diff: total=%s caught=%s missed=0 unviable=0 timeout=0 scope=x teeth=- population=diff\n' "$n" "$n"
+else
+  printf 'mutants-diff: total=7 caught=6 missed=1 unviable=0 timeout=0 scope=x teeth=-\n'
+fi
+exit 0
+"#;
+
+/// 1 本だけ動く純移動の base（`fn two` が `src/alpha.rs` へ移る・残差は空行の `-` だけ）。
+const POP_BASE_LIB: &str = "fn one() -> u8 {\n    1\n}\n\nfn two() -> u8 {\n    2\n}\n";
+
+/// 偽の検出線を宣言した toy repo で純移動の fixture を Implemented まで進め、PASS の lens で 1 回 gate する。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn pure_move_gate(base: &[(&str, &str)], head: &[(&str, &str)]) -> (PathBuf, PathBuf, String, Output) {
+    let (repo, state) = repo_with_state();
+    fs::write(repo.join(POP_STUB), POP_STUB_BODY).expect("stub を書ける");
+    write_vessel(&repo, VESSEL_ALLOWED, r#"["sh verify-ok.sh"]"#);
+    let path = repo.join(".vessel.toml");
+    let body = fs::read_to_string(&path).expect("宣言を読める");
+    fs::write(&path, format!("{body}detection-verify = [\"sh {POP_STUB}\"]\n")).expect("宣言を書ける");
+    git(&repo, &["add", "-f", POP_STUB, ".vessel.toml"]);
+    git(&repo, &["commit", "-q", "-m", "vessel-population"]);
+    let id = move_run_in(&repo, &state, base, head);
+    let out = gate_once(&repo, &state, &id, Some(&fake_lens(&state.join("lens-ran"), &lens_verdict("PASS"))));
+    (repo, state, id, out)
+}
+
+/// run dir の母集団の diff の path。
+fn population_path(state: &Path, id: &str) -> PathBuf {
+    run_dir(state, id).join("population.diff")
+}
+
+/// diff の `+` 行（`+++` の見出しを除く・`+` を付けたまま）。
+fn added_lines(diff: &str) -> Vec<String> {
+    diff.lines().filter(|line| line.starts_with('+') && !line.starts_with("+++ ")).map(str::to_owned).collect()
+}
+
+/// 便の worktree の生の diff（runner の commit は 1 本＝`HEAD~1..HEAD`）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn raw_diff(repo: &Path, id: &str) -> String {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(worktree_of(repo, id))
+        .args(["diff", "HEAD~1..HEAD"])
+        .output()
+        .expect("git を起動できる");
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// 母集団の hunk の `+` 行が、見出しの HEAD 側の行番号で worktree の file の行と逐語で一致する本数（不一致は `None`）。
+///
+/// 道具は HEAD 側の行番号で変異を母集団へ当てる——番号がずれた母集団は別の行を撃つ。
+fn anchored(worktree: &Path, population: &str) -> Option<usize> {
+    let (mut lines, mut at, mut count): (Vec<String>, usize, usize) = (Vec::new(), 0, 0);
+    for line in population.lines() {
+        if let Some(path) = line.strip_prefix("+++ b/") {
+            lines = fs::read_to_string(worktree.join(path)).ok()?.lines().map(str::to_owned).collect();
+        } else if let Some(rest) = line.strip_prefix("@@ ") {
+            let new = rest.split_whitespace().nth(1)?.strip_prefix('+')?;
+            at = new.split(',').next()?.parse().ok()?;
+        } else if let Some(text) = line.strip_prefix('+') {
+            (lines.get(at.checked_sub(1)?)? == text).then_some(())?;
+            at += 1;
+            count += 1;
+        }
+    }
+    Some(count)
+}
+
+/// (a) 純移動だけの便: 母集団の diff は `+` 行 0 本（動いた `fn two` の 3 行を落とす）・検出線の cmd は写しの行の末尾に
+/// `--diff <run dir の file>`・撃たれた側の母集団は 0・record は `pure-move=3` を持ち rc 0（赤にも測定未了にもならない）・PASS。
+#[test]
+fn pipe_gate_detection_pure_move_only_move_has_an_empty_population_and_is_marked() {
+    let head = [("lib.rs", "fn one() -> u8 {\n    1\n}\n"), ("alpha.rs", "fn two() -> u8 {\n    2\n}\n")];
+    let (repo, state, id, out) = pure_move_gate(&[("lib.rs", POP_BASE_LIB)], &head);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "PASS: {}", stderr_of(&out));
+    assert!(stdout_of(&out).contains("verdict=PASS"), "{}", stdout_of(&out));
+    assert_eq!(token_of(&stdout_of(&out), "lens-input="), "summary", "前提: 純移動: {}", stdout_of(&out));
+    let rows = verify_rows(&state, &id);
+    assert_eq!(kinds(&rows), ["write-set", "common", "detection", "contract"], "母集団 4 record: {rows:?}");
+    let file = population_path(&state, &id);
+    assert_eq!(row_value(&rows, 3, "cmd"), format!("sh {POP_STUB} --diff {}", file.display()), "{rows:?}");
+    let population = fs::read_to_string(&file).unwrap_or_else(|_| "unreadable".to_owned());
+    assert_eq!(population, "", "残る `+` 行 0 本の母集団は空");
+    assert_eq!(added_lines(&raw_diff(&repo, &id)).len(), 3, "前提: 生の diff は `+` 3 本");
+    assert_eq!(row_value(&rows, 3, "rc"), "0", "測れた周: {rows:?}");
+    assert_eq!(token_of(&row_value(&rows, 3, "line"), "total="), "0", "母集団 0");
+    assert_eq!(row_value(&rows, 3, "pure-move"), "3", "落とした `+` 行の本数: {rows:?}");
+    for n in [1, 2, 4] {
+        assert_eq!(row_value(&rows, n, "pure-move"), "", "検出線の外は持たない（n={n}）: {rows:?}");
+    }
+    assert_eq!(value_of(&verdict_pairs(&state, &id), "verify_red"), "0", "赤に数えない");
+    clean(&[&repo, &state]);
+}
+
+/// (b) 移動と移動でない追加行が混ざる便（`s2-07l.261` 型の fixture）: 母集団には `mod` / `use` の宣言・module doc・同じ
+/// file に残った item の可視性の変更が残り、動いた item（`fn two` / `struct Pair` / `fn three`・doc と属性ごと 11 行）の
+/// 行は入らない。残した本数 + 落とした本数 = 生の diff の `+` 行・hunk の行番号は worktree の行と一致する。
+#[test]
+fn pipe_gate_detection_pure_move_mixed_run_keeps_only_the_lines_outside_moved_items() {
+    let (repo, state, id, out) = pure_move_gate(&[("lib.rs", MOVE_BASE_LIB)], &move_head());
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "PASS: {}", stderr_of(&out));
+    assert_eq!(token_of(&stdout_of(&out), "lens-input="), "summary", "前提: 純移動: {}", stdout_of(&out));
+    let population = fs::read_to_string(population_path(&state, &id)).unwrap_or_default();
+    let kept = added_lines(&population);
+    for want in ["+mod alpha;", "+mod beta;", "+use super::one;", "+//! alpha.", "+pub(crate) fn one() -> u8 {", "+// flip-check: moved s2-07l.261"] {
+        assert!(kept.iter().any(|line| line == want), "移動でない追加行は残る: {want}: {population}");
+    }
+    for gone in ["+pub(super) fn two() -> u8 {", "+/// helper two.", "+    2", "+pub struct Pair {", "+#[derive(Debug)]", "+pub(super) fn three() -> u8 {", "+    3"] {
+        assert!(!kept.iter().any(|line| line == gone), "動いた item の行は入らない: {gone}: {population}");
+    }
+    let rows = verify_rows(&state, &id);
+    assert_eq!(row_value(&rows, 3, "pure-move"), "11", "落とした本数: {rows:?}");
+    let raw = added_lines(&raw_diff(&repo, &id)).len();
+    assert_eq!(kept.len() + 11, raw, "残した + 落とした = 生の `+` 行: {population}");
+    assert_eq!(anchored(&worktree_of(&repo, &id), &population), Some(kept.len()), "行番号は HEAD の行: {population}");
+    assert_eq!(token_of(&row_value(&rows, 3, "line"), "total="), kept.len().to_string(), "撃たれた側の母集団 = 残した本数");
+    assert_eq!(value_of(&verdict_pairs(&state, &id), "verify_red"), "0", "赤は 0");
+    clean(&[&repo, &state]);
+}
+
+/// 要約にならない便の共通 assert: 検出線の cmd は写しの行のまま（`--diff` を持たない）・母集団の file を置かない・
+/// `pure-move` を持たない・母集団は従来の側（stub の total=7）。
+fn assert_keeps_the_git_diff_population(base: &[(&str, &str)], head: &[(&str, &str)], why: &str) {
+    let (repo, state, id, out) = pure_move_gate(base, head);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{why}: PASS: {}", stderr_of(&out));
+    assert_eq!(token_of(&stdout_of(&out), "lens-input="), "diff", "{why}: 前提: 要約にならない: {}", stdout_of(&out));
+    let rows = verify_rows(&state, &id);
+    assert_eq!(row_value(&rows, 3, "cmd"), format!("sh {POP_STUB}"), "{why}: 写しの行のまま: {rows:?}");
+    assert!(!population_path(&state, &id).exists(), "{why}: 母集団の file を置かない");
+    assert_eq!(row_value(&rows, 3, "pure-move"), "", "{why}: 印を持たない: {rows:?}");
+    assert_eq!(token_of(&row_value(&rows, 3, "line"), "total="), "7", "{why}: 従来の母集団");
+    clean(&[&repo, &state]);
+}
+
+/// (c) 移動でない追加行だけの便（`mod` 宣言の追加・可視性の変更＝移動 0）は従来どおり撃つ（全ての追加行が母集団）。
+#[test]
+fn pipe_gate_detection_pure_move_declarations_only_run_keeps_every_added_line() {
+    let base = "fn one() -> u8 {\n    1\n}\n";
+    let head = "mod gen;\n\npub fn one() -> u8 {\n    1\n}\n";
+    assert_keeps_the_git_diff_population(&[("lib.rs", base)], &[("lib.rs", head)], "nothing-moved");
+}
+
+/// (d) `LensInput::Diff` の便（本文を 1 行変えた移動＝`items-differ`）は全ての追加行が母集団に入る（従来の極性）。
+#[test]
+fn pipe_gate_detection_pure_move_diff_input_keeps_every_added_line() {
+    let changed = MOVE_HEAD_BETA.replace("    3\n", "    4\n");
+    let head = [("lib.rs", MOVE_HEAD_LIB), ("alpha.rs", MOVE_HEAD_ALPHA), ("beta.rs", changed.as_str())];
+    assert_keeps_the_git_diff_population(&[("lib.rs", MOVE_BASE_LIB)], &head, "items-differ");
 }

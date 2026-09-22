@@ -240,6 +240,12 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
 - **触らない**: xtask 側の変異の生成・測定・数え手（`--diff` の受け口と `write_diff` を撃つか否かの分岐以外）、lens の入力の判定、`judge` / `keep` の証明そのものと `MoveSummary` の `text` の字面、`crates/scribe2/src/pipe/move_proof.rs` の in-file の歯の名と assert。
 - **却下案**: 純移動便の検出線を全部 skip する案は、移動でない追加行（mod 宣言の追加や可視性の変更）まで母集団から落としてしまうため不採用。除外の判定を xtask 側に置く案は、証明が core の `crates/scribe2/src/pipe/move_proof.rs` に既にあり、同じ判定を 2 か所に持つことになるため不採用（xtask に足すのは判定でなく diff の受け口 1 つ）。母集団の行数だけ記録して 0 行なら撃たない案（`.292` run 2 の問いの第 2 案）は、移動と実変更が混ざる便（歯 (b)）で移した行が母集団に残り出所の痛みが解けないため不採用。行範囲を `keep` の写し（run dir の file）から読み直す案は、gate が同じ周に持っている値を file 経由で往復させるだけで、写しの形を跨版契約にしてしまうため不採用。
 
+### 14.1 errata（現物との差・`s2-07l.292`・規範は上の §14 のまま）
+
+- **落とす単位は hunk でなく `+` 行**: 純移動の新 file は module doc・`use`・移した item を 1 つの hunk に持つので、hunk ごと落とすと約束 5 の行（残差）まで母集団から消える。`crates/scribe2/src/pipe/move_proof.rs` の `population` は動いた item の区間に入る `+` 行だけを落とし、残る `+` 行を hunk の中で連なる本数ごとの挿入の hunk（`@@ -<o>,0 +<n>,<k> @@`・HEAD 側の行番号は元の diff のまま）に切り直す。`-` 行と context は運ばない（母集団は追加行だけ）。
+- **「一致と証明された item」は file を跨いで動いた item だけ**: 同じ file に留まった item（可視性・字下げ・コメントだけの差）の区間は `MoveSummary` に載せない＝その行は母集団に残る（約束 5 の「可視性の変更」）。
+- **record の field**: 検出線の record は `pure-move`（落とした `+` 行の本数・数値）を持ち、遮断器で撃たなかった行と要約にならない便の行は欠く。xtask の `--diff` は file の byte をそのまま `in.diff` に写す（空の file は 0 行の母集団）。
+
 ## 15. gate の周ごとの検出線の出力を run dir へ写し、show はその写しから読む（契約表の行 f・`s2-07l.298`）
 
 - **出所・現物**: admin の提案（2026-09-14・.286 run 1 の実測）で、検出線の出力が便の worktree の out にだけ在り、追随周の撃ち直しが out を作り直すと前の周の生存の一覧が消えることが分かった。gate の record（`crates/scribe2/src/pipe/gate/record.rs` が書く verify.jsonl）は行ごとの rc を残すが生存の一覧は残していない。現物（verified・main f678bd0）: pipe show の判定行の読み手は **`crates/scribe2/src/pipe/cli/show.rs` の private な `detection_lines(`**（引数は record の path 1 つ・戻り値は行の列・`s2-07l.349` の純移動で `cli.rs` から移った・呼び手は `crates/scribe2/src/pipe/cli/show.rs` の `run(` 1 か所だけ）で、verify.jsonl の detection record の line を逐語で写す。
