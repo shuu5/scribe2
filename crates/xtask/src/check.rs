@@ -90,6 +90,7 @@ pub fn inspect(root: &Path) -> Report {
     measured.push(crate::check_facts::measure_contracts_schema(&layout));
     measured.push(crate::rules_wired::measure(&layout, &files));
     measured.push(crate::rules_parity::measure(&layout));
+    measured.push(crate::decisions_index::measure(&layout));
     fold(measured)
 }
 

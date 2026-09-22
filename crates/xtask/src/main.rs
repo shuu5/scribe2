@@ -9,6 +9,7 @@ mod check;
 mod check_facts;
 mod check_sizes;
 mod claude_md;
+mod decisions_index;
 mod deps_delta;
 mod enum_slices;
 mod env_reads;

@@ -312,7 +312,8 @@ const SUMMARY_PIN: &str = "xtask check: ok core-lines=<v>/<v> core-spawn=<v>/<v>
     claude-md-constitution=<v> claude-md-done=<v> claude-md-prose=<v>/<v> enum-slices=<v> claude-spawn-points=<v> env-reads=<v>/<v> polarity=<v>/<v> \
     polarity-sites=<v>/<v>/<v> \
     prose-gate=<v>/<v> seat-brief=<v> contracts-schema=<v> rules-wired=<v>/<v> \
-    rules-parity=<v>/<v> doc-only=<v> manifest-only=<v> population=<v>/<v>";
+    rules-parity=<v>/<v> doc-only=<v> manifest-only=<v> population=<v>/<v> \
+    decisions-index=<v>/<v> file-only=<v> index-only=<v> vocab-unresolved=<v> population=<v>/<v>/<v>";
 
 /// git を要する measure の fact（`.git` の無い木では測れない形になり、副 field も出ない）。
 fn is_git_fact(token: &str) -> bool {
@@ -322,8 +323,16 @@ fn is_git_fact(token: &str) -> bool {
 }
 
 /// 副 field `ids=`（id の列）を持つ token の頭（判定行での並び順）。`rules-wired` の読み手の無い行
-/// （`s2-07l.160`）と、`rules-parity` の片側だけの id 2 列 `doc-only` / `manifest-only`（`s2-07l.164`）。
-const IDS_OWNERS: &[&str] = &["rules-wired=", "doc-only=", "manifest-only="];
+/// （`s2-07l.160`）と、`rules-parity` の片側だけの id 2 列 `doc-only` / `manifest-only`（`s2-07l.164`）と、
+/// `decisions-index` の片側だけの file 名 2 列と語彙の未解決の列（`s2-07l.165`）。
+const IDS_OWNERS: &[&str] = &[
+    "rules-wired=",
+    "doc-only=",
+    "manifest-only=",
+    "file-only=",
+    "index-only=",
+    "vocab-unresolved=",
+];
 
 /// 副 field `ids=`（id の列）。値の**中身**が形を決める（`R-C7-1` の `-` や `hook.budget_ms` の `.` `_` は
 /// [`shape`] が残す区切り）ので、wire の便が列を縮めるたびに形が変わる。検出線の値であって判定行の形では
@@ -1015,6 +1024,165 @@ fn rules_parity_token_is_in_summary_pin() {
     );
     // 本数と列は対（`doc-only=<n>` の n と `ids=` の要素数）。現物の値は pin しない（Landed 後に admin が実測）。
     for tag in ["doc-only", "manifest-only"] {
+        let count: usize = tokens
+            .iter()
+            .find_map(|token| token.strip_prefix(&format!("{tag}=")))
+            .and_then(|value| value.parse().ok())
+            .unwrap_or_else(|| panic!("{tag}= は数のはず: {line}"));
+        assert_eq!(parity_ids(&line, tag).len(), count, "{tag} の本数と列は対: {line}");
+    }
+}
+
+/// decisions-index の fixture の決定 file 3 本（名は入力にしか無い形）。
+const DECISION_FILES: &[&str] = &["ADR-0001-probe-a.html", "ADR-0002-probe-b.html", "ADR-0003-probe-c.html"];
+
+/// 索引の本文: 決定 file への link 2 本（1 本は fragment 付きで重複）と、決定 file でない link と、
+/// 他の dir の決定 file の形の link と、script の中の link の字面（どれも索引に数えない）。
+fn decisions_readme(extra: &str) -> String {
+    format!(
+        "<!DOCTYPE html><html><head><link href=\"../../common.css\"></head><body>\
+         <!-- <a href=\"./ADR-0008-probe-comment.html\"> -->\
+         <a href=\"#s1\">s1</a><a href=\"../index.html\">top</a>\
+         <a href=\"./ADR-0001-probe-a.html\">1</a><a href=\"ADR-0002-probe-b.html\">2</a>\
+         <a href=\"./ADR-0001-probe-a.html#s2\">1 again</a><a href=\"../other/ADR-0009-probe-far.html\">far</a>\
+         <script>const x = '<a href=\"./ADR-0007-probe-script.html\">';</script>{extra}</body></html>"
+    )
+}
+
+/// 語彙の本文: 決定 id 1 個（2 回）と、id の形に当たらない字面（桁の不足・超過）。
+fn decisions_vocabulary(extra: &str) -> String {
+    format!("terms:\n  - definition: 何か (ADR-0002)。 再掲 ADR-0002・ADR-12・ADR-00031。\n{extra}")
+}
+
+/// tmp の root に決定 dir（`None` なら置かない）・索引・語彙を置いて `decisions-index` を測る。
+/// 決定 dir には決定 file の形でない file と、決定 file の名を持つ dir を混ぜる（どちらも数えない）。
+fn decisions_fixture(readme: Option<&str>, vocabulary: Option<&str>, with_dir: bool) -> super::Measured {
+    use crate::decisions_index::{DECISIONS_REL, INDEX_REL, VOCABULARY_REL};
+    let root = make_tmp_dir();
+    if with_dir {
+        for name in DECISION_FILES {
+            write_at(&root, &format!("{DECISIONS_REL}/{name}"), "<html></html>");
+        }
+        write_at(&root, &format!("{DECISIONS_REL}/notes-ADR-0004.html"), "x");
+        write_at(&root, &format!("{DECISIONS_REL}/ADR-0005-probe-dir.html/inner.txt"), "x");
+        fs::create_dir_all(root.join(DECISIONS_REL)).expect("決定 dir を作れる");
+    }
+    if let Some(text) = readme {
+        write_at(&root, INDEX_REL, text);
+    }
+    if let Some(text) = vocabulary {
+        write_at(&root, VOCABULARY_REL, text);
+    }
+    let layout = Layout {
+        root: root.clone(),
+        core_dir: root.join("crates").join(FIXTURE_CORE),
+        member_dirs: Vec::new(),
+        name: FIXTURE_CORE.to_owned(),
+    };
+    let got = crate::decisions_index::measure(&layout);
+    let _ = fs::remove_dir_all(&root);
+    got
+}
+
+/// (a) 決定 file 3 本・索引の link 2 本・語彙の参照 1 個: file 側だけ 1 本・索引側だけ 0 本・語彙の未解決
+/// 0 個・母集団 3/2/1 を fact の全文で測る（違反は立てない）。
+#[test]
+fn decisions_index_names_the_file_only_side_with_population() {
+    let got = decisions_fixture(Some(&decisions_readme("")), Some(&decisions_vocabulary("")), true);
+    assert!(got.violations.is_empty(), "検出線は違反を立てない: {:?}", got.violations);
+    assert_eq!(
+        got.fact,
+        "decisions-index=1/0 file-only=1 ids=ADR-0003-probe-c.html index-only=0 ids=- \
+         vocab-unresolved=0 ids=- population=3/2/1",
+        "file 側だけの 1 本と母集団"
+    );
+}
+
+/// (b) 片側ずつ動かす: 実在しない file を指す link を 1 本足すと索引側だけが 1 本になり（語彙は動かない）、
+/// 実在しない決定 id を語彙に 1 個足すと語彙の未解決が 1 個になる（索引は動かない）。
+#[test]
+fn decisions_index_moves_one_column_at_a_time() {
+    let ghost = decisions_fixture(
+        Some(&decisions_readme("<a href=\"./ADR-0006-probe-ghost.html\">ghost</a>")),
+        Some(&decisions_vocabulary("")),
+        true,
+    );
+    assert!(ghost.violations.is_empty(), "検出線は違反を立てない: {:?}", ghost.violations);
+    assert_eq!(
+        ghost.fact,
+        "decisions-index=1/1 file-only=1 ids=ADR-0003-probe-c.html index-only=1 ids=ADR-0006-probe-ghost.html \
+         vocab-unresolved=0 ids=- population=3/3/1",
+        "索引側だけが 1 本"
+    );
+    let unresolved = decisions_fixture(
+        Some(&decisions_readme("")),
+        Some(&decisions_vocabulary("  - definition: 別 (ADR-0777)。\n")),
+        true,
+    );
+    assert!(unresolved.violations.is_empty(), "検出線は違反を立てない: {:?}", unresolved.violations);
+    assert_eq!(
+        unresolved.fact,
+        "decisions-index=1/0 file-only=1 ids=ADR-0003-probe-c.html index-only=0 ids=- \
+         vocab-unresolved=1 ids=ADR-0777 population=3/2/2",
+        "語彙の未解決だけが 1 個"
+    );
+    assert_eq!(parity_ids(&unresolved.fact, "vocab-unresolved"), ["ADR-0777"], "{}", unresolved.fact);
+}
+
+/// (c) 測れないを 0 に化けさせない: 決定 dir の無い木は `n/a` の 1 語で違反 0・索引か語彙を読めない木は
+/// `?` + 違反 1 件。3 面が一致する周は 0 と母集団を同じ行に出す。
+#[test]
+fn decisions_index_separates_absent_unreadable_and_zero() {
+    let absent = decisions_fixture(None, Some(&decisions_vocabulary("")), false);
+    assert!(absent.violations.is_empty(), "決定 dir の無い木は測る対象が無い: {:?}", absent.violations);
+    assert_eq!(absent.fact, "decisions-index=n/a", "n/a は 0 と別の字面");
+    let no_index = decisions_fixture(None, Some(&decisions_vocabulary("")), true);
+    assert_eq!(no_index.fact, "decisions-index=?", "索引を読めない周は ?");
+    assert_single(&no_index.violations, "decisions-index");
+    let no_vocabulary = decisions_fixture(Some(&decisions_readme("")), None, true);
+    assert_eq!(no_vocabulary.fact, "decisions-index=?", "語彙を読めない周は ?");
+    assert_single(&no_vocabulary.violations, "decisions-index");
+    let matched = decisions_fixture(
+        Some(&decisions_readme("<a href=\"./ADR-0003-probe-c.html\">3</a>")),
+        Some(&decisions_vocabulary("")),
+        true,
+    );
+    assert!(matched.violations.is_empty(), "検出線は違反を立てない: {:?}", matched.violations);
+    assert_eq!(
+        matched.fact,
+        "decisions-index=0/0 file-only=0 ids=- index-only=0 ids=- vocab-unresolved=0 ids=- population=3/3/1",
+        "0 本でも母集団は出る"
+    );
+}
+
+/// (d) 判定行の形（[`SUMMARY_PIN`]）に token `decisions-index=<file-only>/<index-only>` が在り、現物の repo で
+/// 撃った判定行がその形に一致する。`ids=` の 3 列は [`without_wired_ids`] で突合から外し、本数と対で見る。
+#[test]
+fn decisions_index_token_is_in_summary_pin() {
+    let pinned = " decisions-index=<v>/<v> file-only=<v> index-only=<v> vocab-unresolved=<v> population=<v>/<v>/<v>";
+    assert!(SUMMARY_PIN.contains(pinned), "pin に decisions-index の token が在る: {SUMMARY_PIN}");
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+    let line = summary(&root);
+    let tokens: Vec<&str> = line.split(' ').collect();
+    let at = tokens
+        .iter()
+        .position(|token| token.starts_with("decisions-index="))
+        .unwrap_or_else(|| panic!("判定行に decisions-index= が在るはず: {line}"));
+    let heads: Vec<String> = tokens
+        .iter()
+        .skip(at)
+        .take(8)
+        .map(|token| token.split_once('=').map(|(head, _)| head).unwrap_or_default().to_owned())
+        .collect();
+    assert_eq!(
+        heads,
+        ["decisions-index", "file-only", "ids", "index-only", "ids", "vocab-unresolved", "ids", "population"],
+        "現物の判定行の token の並び: {line}"
+    );
+    let shaped = without_wired_ids(&shape(&line));
+    assert!(shaped.contains(pinned), "現物の判定行が pin の形に一致する: {shaped}");
+    // 本数と列は対。現物の値は pin しない（Landed 後に admin が実測）。
+    for tag in ["file-only", "index-only", "vocab-unresolved"] {
         let count: usize = tokens
             .iter()
             .find_map(|token| token.strip_prefix(&format!("{tag}=")))
