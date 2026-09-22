@@ -796,6 +796,20 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 - 却下: (i) 行 b の write-set に flipcheck を足して純移動の便の中で直す（純移動に判定の変更を混ぜる・§5 が対象外と置いた面）。(ii) 上限を上げる（札の門が空洞化・値は裁定 id 付き）。(iii) 移す file から過去の札を消す（免除の記録を失う・§7 の持ち越しに反する）。
 - 歯（`crates/xtask/src/flipcheck_tests.rs` の既存の族 `flip_check_` に接頭辞 `flip_check_rename_`・tmp の git repo に base と HEAD を commit して撃つ既存の形）: (a) rename だけの commit（同一本文）に撃つと対の base が旧 path の本文で、flip 0・この便の札 0・rc 0 (b) rename + test 区間 1 行の差は flip に数え、overlay の書き先が新 path (c) 旧 path の test 区間に札 2 本を持つ file を rename すると 2 本とも持ち越しで、新しく置いた札 1 本だけがこの便の札 (d) A / M / D だけの便の対と判定が変わらない（既存の `flip_check_` の歯が全部緑のまま）。 (e) 同じ path で本文が同一の M の行（mode だけの変更）を 1 本だけ持つ便は rename に数えず、判定が `no-test-diff` の FAIL のまま（rename の対を本文の同一で決めていないことを撃つ）。 (f) docs-only の面の中の file を面の外へ rename しただけの便（`.rs` の差なし・例: docs/ の .md を面の外の dir へ）は docs-only にならず `no-test-diff` で落ち、面の外から面の中へ rename しただけの便も同じ（旧 path と新 path の両方を面の判定に数えることを撃つ・名は接頭辞 `flip_check_rename_` の下に置き verify の filter が当たる）。
 
+## 54. 宣言の任意 key で「入口の flip は測らない」と名乗った Rust の消費側を、受付と契約表の検査が通す（契約表の行 aw・`s2-07l.554`・[ADR-0054](../../design-intent/decisions/ADR-0054-entrance-flip-may-be-declared-unmeasured-in-the-vessel-declaration.html)）
+
+- 出所: 消費側 1 号の席の報告 2026-09-22（逐語は台帳 `s2-07l.554` の notes）。§7 の約束 4（`NoEntranceRed`・`s2-07l.170`）は common-verify に先頭語 `cargo` の行を持つ宣言に入口の flip の行を要求するが、xtask を持たない Rust の消費側はその行を書けず、契約表の検査が rc 2・preflight と便の起動も通らない。消費側は古い写しの器に固定して運んでいる。裁定 = user 2026-09-22（3 案のうち名乗りの欄を先に・ADR-0054 CTX4）。
+- 現物（main 200b6d5・verified）: `crates/scribe2/src/pipe/declaration.rs` の `kind_gap` は `VerifyKind` の列に `EntranceFlip` が無く `Cargo` が在れば `KindGap::NoEntranceRed`。宣言の key の集合は `schema` / `allowed-commands` / `common-verify` に任意の `detection-verify` / `requirements` / `remote` / `ci-cmd` と path の種別 3 本（`crates/scribe2/src/pipe/declaration/path_kinds.rs`・ADR-0047）で、未知の key は宣言の読みの誤りとして断る。契約表の検査の判定行は `crates/scribe2/src/pipe/table/check.rs` の 1 行（`docs= rows= untracked= findings=`）。
+- 形（ADR-0054 の決定・番号は done と 1:1）:
+  1. 宣言の任意 key `entrance-flip` を 1 本足す。値は閉じた 1 語 `unmeasured` だけ。key を持ち、`cargo` の行を持ち、入口の flip の行を持たない宣言は `kind_gap` が空＝受付と契約表の検査を通る。
+  2. key の無い宣言は現行のとおり（`cargo` の行が在れば `NoEntranceRed`）。本 repo の宣言は key を持たない。
+  3. 値が `unmeasured` 以外・空・list・key の重複は、宣言の読みの誤り（既存の `Unfit` と同じ極性・typed な理由 1 つ）として断る。
+  4. key と入口の flip の行を同時に持つ宣言は矛盾（`KindGap` に 1 値足す・理由の名は variant の名）として断る。
+  5. 契約表の検査の判定行は、key を持つ宣言の周だけ末尾に `entrance=unmeasured` の欄を持つ。key の無い周の判定行は 1 字も変わらない（既存の外形の pin が動かない）。
+- 触らない: `ENTRANCE_FLIP_WORDS` の字面・`VerifyKind` の 3 値・約束 4 の判定そのもの・rules 行・gate の検証（名乗りは受付の入口の要求だけを外す・FR8 は不変）・schema の値（1 のまま）。
+- 却下（ADR-0054 OPT2〜OPT5）: 消費側の自前 command で満たす（器が測れない）／flip の検査を器に内蔵する（規模 L・消費側が求める形は「契約の verify 行を base で撃つ」で別設計＝後続の memo）／rules 行で消費側を免除する（器の行に repo の事実を積む）／何もしない（世代のずれが続く）。
+- 歯（in-file は `crates/scribe2/src/pipe/declaration.rs` の既存の族 `declaration_` に接頭辞 `declaration_entrance_`・e2e は `crates/scribe2/tests/e2e/pipe/contracts.rs` の既存の族 `contract_check_` に接頭辞 `contract_check_entrance_`・tmp の repo に宣言を書いて撃つ既存の型）: (a) key 有り + `cargo` 2 行 + flip 行無し → `kind_gap` が `None`・宣言が通る (b) 同じ宣言から key を外すと `NoEntranceRed`（形 2） (c) 値が `unmeasured` 以外・空・list の 3 形は typed に断られ、理由が key の名を持つ（形 3） (d) key + flip の行の同居は矛盾の 1 値で断られる（形 4） (e) e2e: key を持つ宣言の repo の `contracts check` の判定行が `entrance=unmeasured` で終わり、key を外した同じ repo の判定行は既存の 4 欄のまま（形 5・両方の判定行を同じ歯で並べて pin する）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -1309,4 +1323,14 @@ write-set = ["crates/xtask/src/flipcheck/git.rs", "crates/xtask/src/flipcheck.rs
 verify = ["cargo nextest run -p xtask --no-tests=fail flip_check_rename_"]
 size = "S"
 done = "(1) rename だけの便（同一本文の対）に入口の flip-check を撃つと too-many-marks にも green-on-base にも not-flippable にも落ちず、flip 0 で rc 0 (2) 対の base の本文が旧 path から読まれ、旧 path の test 区間の札はこの便の札に数えない (3) test 区間に差が在る対は flip に数え、overlay の書き先が新 path で、moved の札の免除と tests-removed-only が従来どおり当たる (4) docs-only の面の判定が旧 path と新 path の両方を数え、面の中から外へ・外から中へ rename しただけの便はどちらも docs-only にならない（歯 (f)） (5) A / M / D だけの便の対と判定行が 1 字も変わらず、既存の flip_check_ の歯が全部緑 (6) 対の rename は base 側と HEAD 側の path の違いだけで決まり、同じ path で本文が同一の M の行（mode だけの変更）だけを持つ便は no-test-diff で落ちる"
+
+[[contract]]
+id = "aw"
+title = "宣言の任意 key entrance-flip（値は unmeasured の 1 語だけ）で入口の flip を測らないと名乗った宣言を、受付と契約表の検査が NoEntranceRed で断らず、名乗りと入口の flip の行の同居は矛盾として断り、判定行に entrance=unmeasured の欄を出す（key の不在は現行・本 repo の宣言は key を持たない）"
+req = ["FR7", "FR8"]
+section = "54"
+write-set = ["crates/scribe2/src/pipe/declaration.rs", "crates/scribe2/src/pipe/table/check.rs", "crates/scribe2/tests/e2e/pipe/contracts.rs", "docs/design/pipeline.md"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail declaration_entrance_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail contract_check_entrance_"]
+size = "S"
+done = "(1) key entrance-flip = unmeasured を持ち cargo の行を持ち入口の flip の行を持たない宣言が kind_gap 無しで受付と契約表の検査を通る (2) key の無い同じ宣言は NoEntranceRed のまま断られ、本 repo の宣言は key を持たない (3) 値が unmeasured 以外・空・list・key の重複は宣言の読みの誤りとして typed に断られ、理由が key の名を持つ (4) key と入口の flip の行を同時に持つ宣言は KindGap の 1 値で矛盾として断られる (5) 契約表の検査の判定行が key を持つ周だけ末尾に entrance=unmeasured の欄を持ち、key の無い周の判定行は 1 字も変わらず、既存の declaration_ と contract_check_ の歯が全部緑"
 <!-- contracts:end -->
