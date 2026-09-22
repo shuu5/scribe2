@@ -1268,6 +1268,87 @@ fn pipe_order_unreadable_front_verdict_is_unmeasured_and_lands() {
     clean(&[&repo, &state]);
 }
 
+/// 便の driver の札に pid を書く（本文は 10 進 1 行・dir は run dir で在る前提）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn put_driver_pid(state: &Path, id: &str, pid: u32) {
+    fs::write(state.join("pipe").join(id).join("driver"), format!("{pid}\n")).expect("札を書ける");
+}
+
+/// 確実に居ない pid（`sh -c true` を起こして wait した pid）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn dead_pid() -> u32 {
+    let mut child = std::process::Command::new("sh").args(["-c", "true"]).spawn().expect("sh を起こせる");
+    let pid = child.id();
+    child.wait().expect("sh を待てる");
+    pid
+}
+
+/// 面 5 の便の行の `skipped_dead` の値（行も field も無ければ空）。
+fn exported_skipped_dead(state: &Path, id: &str) -> String {
+    value_of(&exported_pairs(state, id), "skipped_dead")
+}
+
+/// 先頭の便の札が死んだ pid（設計 pipeline.md §36）: 後続の land は待たずに `first` で進み、stdout の `order=` の直後に
+/// `skipped-dead=1`、面 5 の `skipped_dead` に先頭の便 id を載せる。外すだけで先頭の段と worktree は動かない。
+#[test]
+fn pipe_order_dead_front_driver_is_skipped_and_named() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let (id_a, id_b) = two_gated_runs(&repo, &state, &marker);
+    put_driver_pid(&state, &id_a, dead_pid());
+    let rules = write_rules_land_wait(&state, "rules-order.toml", Some(30));
+    let out = land_extra(&repo, &state, &id_b, &["--rules", &rules]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land: {}", stderr_of(&out));
+    assert_eq!(order_token(&out), "first", "死んだ先頭は数えない: {}", stdout_of(&out));
+    assert!(stdout_of(&out).contains(" order=first skipped-dead=1 "), "order= の直後に外した本数: {}", stdout_of(&out));
+    assert_eq!(exported_order(&state, &id_b), "first", "面 5 の order");
+    assert_eq!(exported_skipped_dead(&state, &id_b), id_a, "面 5 の skipped_dead は外した便 id");
+    assert!(show_line(&repo, &state, &id_b).contains("stage=Landed"), "後続は Landed");
+    assert!(show_line(&repo, &state, &id_a).contains("stage=Gated"), "死んだ便の段は動かない");
+    assert!(worktree_of(&repo, &id_a).is_dir(), "死んだ便の worktree は残る");
+    clean(&[&repo, &state]);
+}
+
+/// 先頭の便の札が生きている（所有者 = この test の process）周は従来どおり待つ（上限 1 秒で `degraded`・外した便は
+/// 名指さない）。
+#[test]
+fn pipe_order_dead_live_front_driver_still_waits() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let (id_a, id_b) = two_gated_runs(&repo, &state, &marker);
+    put_driver_pid(&state, &id_a, std::process::id());
+    let rules = write_rules_land_wait(&state, "rules-order.toml", Some(LAND_WAIT_S));
+    let out = land_extra(&repo, &state, &id_b, &["--rules", &rules]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land: {}", stderr_of(&out));
+    assert_eq!(order_token(&out), "degraded", "生きている先頭を待つ: {}", stdout_of(&out));
+    assert!(!stdout_of(&out).contains("skipped-dead="), "外した便は無い: {}", stdout_of(&out));
+    assert_eq!(exported_skipped_dead(&state, &id_b), "", "面 5 に skipped_dead を書かない");
+    assert!(show_line(&repo, &state, &id_a).contains("stage=Gated"), "先頭は列に残ったまま");
+    clean(&[&repo, &state]);
+}
+
+/// 先頭の便に札が無い（`pipe spawn` で起こした便）周も従来どおり待つ（札の無いを「死んだ」に読み替えない）。
+#[test]
+fn pipe_order_dead_absent_front_driver_still_waits() {
+    let (repo, state) = repo_with_state();
+    let marker = state.join("lens-ran");
+    let (id_a, id_b) = two_gated_runs(&repo, &state, &marker);
+    assert!(!state.join("pipe").join(&id_a).join("driver").exists(), "前提: 先頭は札を持たない");
+    let rules = write_rules_land_wait(&state, "rules-order.toml", Some(LAND_WAIT_S));
+    let out = land_extra(&repo, &state, &id_b, &["--rules", &rules]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land: {}", stderr_of(&out));
+    assert_eq!(order_token(&out), "degraded", "札の無い先頭を待つ: {}", stdout_of(&out));
+    assert!(!stdout_of(&out).contains("skipped-dead="), "外した便は無い: {}", stdout_of(&out));
+    assert_eq!(exported_skipped_dead(&state, &id_b), "", "面 5 に skipped_dead を書かない");
+    clean(&[&repo, &state]);
+}
+
 /// 番を取った記帳（設計 pipeline.md §22）の detail。
 const TURN_TAKEN: &str = "turn:taken";
 

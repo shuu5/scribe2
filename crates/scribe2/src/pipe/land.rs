@@ -64,7 +64,7 @@ use super::{emit, git_bytes, git_line, git_ok, worktree_path, Emit};
 // 持たないと**移した本文の path を書き換える**ことになり、純移動の機械証明（設計 §5.3）の (名, 本文の hash)
 // が動く。親自身は従来どおり `super::` で `pipe` の側を呼ぶ（本体は 1 byte も変えていない）。
 use super::{base_of_run, branch_name, declaration, verify_log_path, vessel_path};
-use super::queue::{await_turn, Order};
+use super::queue::{await_turn, Order, Turned};
 use super::retire::verdict_field;
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
 use crate::fleet::store::{self, append_line, LockPolicy};
@@ -319,7 +319,9 @@ pub fn land(entry: &Land<'_>) -> Outcome {
     }
     // **着地の順番**（設計 gate-cost.md §6）: 前提検査の直後・追随の前に列を見て待つ。`--pr-cmd` の形は
     // 上で返っている＝main を動かさないので列を見ない（stale base を見ないのと同じ理由）。
-    let order = await_turn(entry);
+    // 札が死んでいて列から外した便は `finish` が stdout と面 5 に名指す（設計 §36・黙らせない）。
+    let turned = await_turn(entry);
+    let order = turned.order;
     // **番待ちから戻った直後の 1 点で段を読む**（設計 §40）: 列の先頭が自分を候補の木に積んで着地させた便は
     // 何もせず rc 0（§29 の冪等の終端を段で先に読む・worktree の実在を要さない・待たない周も同じ点を通る）。
     if let Some(settled) = settled_in_train(entry, order) {
@@ -336,7 +338,7 @@ pub fn land(entry: &Land<'_>) -> Outcome {
         super::train::Train::Solo => {}
     }
     loop {
-        let (old, now) = match attempt(entry, &worktree, order, &mut lines) {
+        let (old, now) = match attempt(entry, &worktree, &turned, &mut lines) {
             Attempt::Settled(outcome) => return with_lines(lines, outcome),
             Attempt::Stale { old, now } => (old, now),
         };
@@ -382,7 +384,7 @@ fn recorded_base(entry: &Land<'_>) -> Result<String, Outcome> {
 
 /// 着地の試行 1 回（追随 → 撃ち直し → CAS → 主実測 → 終端）。stale の周だけ [`Attempt::Stale`] で戻り、
 /// 呼び手（[`land`]）が記帳して追随し直す。
-fn attempt(entry: &Land<'_>, worktree: &Path, order: Order, lines: &mut Vec<String>) -> Attempt {
+fn attempt(entry: &Land<'_>, worktree: &Path, turned: &Turned, lines: &mut Vec<String>) -> Attempt {
     let base = match recorded_base(entry) {
         Ok(found) => found,
         Err(stopped) => return Attempt::Settled(stopped),
@@ -438,7 +440,7 @@ fn attempt(entry: &Land<'_>, worktree: &Path, order: Order, lines: &mut Vec<Stri
     let anchor = sync_anchor(entry.repo, &plan, &old, synced_to);
     let check = verify_main(entry, new);
     Attempt::Settled(match check {
-        MainCheck::Green => finish(entry, worktree, &landing, &anchor, order),
+        MainCheck::Green => finish(entry, worktree, &landing, &anchor, turned),
         MainCheck::Red(reason) => main_red(entry, &reason, &anchor),
         MainCheck::Unmeasurable(reason) => main_unmeasured(entry, &reason, &anchor),
     })

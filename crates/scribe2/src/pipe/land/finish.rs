@@ -16,7 +16,7 @@
 
 use super::super::contract::Contract;
 use super::super::gate::Verdict;
-use super::super::queue::Order;
+use super::super::queue::{Order, Turned};
 use super::super::{emit, git_bytes, git_line, git_ok, size, verdict_path, Emit};
 use super::verify::{main_red, main_unmeasured, measure_main, verify_train_main};
 use super::{
@@ -293,10 +293,14 @@ fn note(entry: &Land<'_>, detail: &str) {
 /// `landing` は着地の形と宣言値の sha（設計 §29）: [`Landing::AlreadyLanded`] の周は stdout の末尾に
 /// `already-landed=1`、detail の `main:` の後ろに `already-landed` を後置する。[`Landing::Fresh`] の周の stdout と
 /// detail は不変。verdicts.jsonl の行はどちらも従来の key 列（`sha` = 宣言値・任意 field を足さない）。
-pub(super) fn finish(entry: &Land<'_>, worktree: &Path, landing: &Landing, anchor: &AnchorSync, order: Order) -> Outcome {
+///
+/// `turned` は番待ちの結果（設計 pipeline.md §36）: 札が死んでいて列から外した便が在る周は stdout の `order=` の値の
+/// 直後に `skipped-dead=<n>`、面 5 の行に `skipped_dead` を足す（0 本の周は書かない）。
+pub(super) fn finish(entry: &Land<'_>, worktree: &Path, landing: &Landing, anchor: &AnchorSync, turned: &Turned) -> Outcome {
     let new = landing.sha();
+    let order = turned.order;
     let (measured, mut err) = measure_main(entry.repo);
-    if let Err(reason) = export_verdict(entry, new, order) {
+    if let Err(reason) = export_verdict(entry, new, turned) {
         return broken(reason);
     }
     let emitted = emit(
@@ -321,9 +325,13 @@ pub(super) fn finish(entry: &Land<'_>, worktree: &Path, landing: &Landing, ancho
     // **終端**（設計 contract-source.md §5）: push → CI の照合 → 台帳の close。着地は既に成立している
     // ので、終端が止まっても取り消さない——止まった事実を typed な event と token で残し rc を 1 にする。
     let terminal = terminal(entry, new);
+    let skipped = match turned.skipped_dead.len() {
+        0 => String::new(),
+        count => format!(" skipped-dead={count}"),
+    };
     Outcome {
         out: vec![format!(
-            "run={} landed={new} main={measured} {} order={}{} terminal={}",
+            "run={} landed={new} main={measured} {} order={}{skipped}{} terminal={}",
             entry.run,
             anchor.token(),
             order.as_value(),
@@ -391,7 +399,10 @@ pub(in crate::pipe) fn land_train(cars: &[Car<'_>], old: &str) -> Result<Outcome
             continue;
         };
         let outcome = match &check {
-            MainCheck::Green => finish(&car.entry, &car.worktree, &Landing::Fresh(sha.clone()), &anchor, car.order),
+            MainCheck::Green => {
+                let turned = Turned { order: car.order, skipped_dead: Vec::new() };
+                finish(&car.entry, &car.worktree, &Landing::Fresh(sha.clone()), &anchor, &turned)
+            }
             MainCheck::Red(reason) => main_red(&car.entry, reason, &anchor),
             MainCheck::Unmeasurable(reason) => main_unmeasured(&car.entry, reason, &anchor),
         };
@@ -412,7 +423,10 @@ pub(in crate::pipe) fn land_train(cars: &[Car<'_>], old: &str) -> Result<Outcome
 ///
 /// `order` は schema 1 のまま足した**任意 field**（ADR-0021 §2.6 (iv)・古い読み手は無視する）で、
 /// 列の後ろに置く（既存の 7 key の並びは動かさない）。便の規模の 4 field（[`size::fields`]・git を読めない周は欠く）はその後ろ。
-fn export_verdict(entry: &Land<'_>, new: &str, order: Order) -> Result<(), String> {
+/// 札が死んでいて列から外した便が在る周だけ、さらに後ろに任意 field `skipped_dead`（便 id を鍵の順に `,` で連ねた
+/// 文字列・設計 pipeline.md §36）を足す。
+fn export_verdict(entry: &Land<'_>, new: &str, turned: &Turned) -> Result<(), String> {
+    let order = turned.order;
     let evidence = verdict_path(entry.state_dir, entry.run).display().to_string();
     let mut pairs = vec![
         ("schema", Value::Num(SCHEMA)),
@@ -432,6 +446,9 @@ fn export_verdict(entry: &Land<'_>, new: &str, order: Order) -> Result<(), Strin
     // verdict の size の材料は base が分かった周だけ載る（無い周も読めない周も同じ＝欄を持たない）。
     let base = super::base_of_run(entry.state_dir, entry.run).known();
     pairs.extend(size::fields(&entry.contract.size, base.as_deref(), new, |args| git_bytes(entry.repo, args)));
+    if !turned.skipped_dead.is_empty() {
+        pairs.push(("skipped_dead", Value::Str(turned.skipped_dead.join(","))));
+    }
     let line = json_lite::write_object(&pairs);
     append_line(&verdicts_path(entry.state_dir), &line, entry.policy)
         .map(|_| ())

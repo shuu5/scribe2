@@ -5,7 +5,7 @@
 
 use super::gate::Verdict;
 use super::land::{verdict_of, Land, MAIN_REF};
-use super::{emit, git_line, git_ok, worktree_path, Emit};
+use super::{driver_ticket, emit, git_line, git_ok, worktree_path, Emit, Ticket};
 use crate::fleet::store;
 use crate::fleet::{replay, Completion, Event, EventKind, Run, Stage, State, Timeout};
 use std::collections::BTreeMap;
@@ -31,6 +31,9 @@ pub struct Queued {
     /// **最新の** [`TURN_TAKEN`] の ts（番を取った周・設計 pipeline.md §22）。番を取った後に PASS でない判定の記帳が
     /// 在る便（列を一度離れた便）と 1 度も番を取っていない便は `None`＝戻ってきた便は番を持たない側から数え直す。
     pub taken_at: Option<String>,
+    /// driver の札の状態（設計 pipeline.md §36・行 d の [`driver_ticket`] の同じ 1 本）。列に入りうる便でなければ
+    /// 読まない＝`None`（`verdict` と同じ規則）。
+    pub driver: Option<Ticket>,
 }
 
 /// 着地の番を取った周の記帳の detail（`RunStage stage=Gated`・設計 pipeline.md §22・新しい `EventKind` を足さない）。
@@ -61,27 +64,46 @@ pub enum Turn {
 /// **番を取った便が列に居れば鍵の順より先に立つ**（設計 pipeline.md §22）: 列の便（自分を含む）のうち
 /// `taken_at` を持つ便が在れば、最新の `taken_at`（同時刻は run id の辞書順）の 1 本だけが先頭＝撃ち直しの間に
 /// 鍵の早い便が戻ってきても、番を取った便を追い抜かない。番を取った便が 1 本も無ければ鍵の順。
+///
+/// **driver の札が死んでいる便は数えない**（設計 pipeline.md §36・[`turn_skipping`]）。
 pub fn turn_in(queue: Option<&[Queued]>, me: &str) -> Turn {
+    turn_skipping(queue, me).0
+}
+
+/// [`turn_in`] の本体（**pure**・選別はこの 1 本）: 番と、札が死んでいて外した便 id の列（鍵の順）を返す。
+///
+/// 外すのは札が [`Ticket::Dead`] の便だけで、`Live` / `Absent` / `Unreadable` / 読んでいない（`None`）は従来どおり
+/// 数える（測れないを「死んだ」に読み替えない）。自分の札は見ない。外した便として名指すのは、外さなければ自分の
+/// 前に立ちえた便（鍵が自分より前か、番を取っていた便）だけ。判定を読めない便は札に依らず `Unmeasurable`（列は空）。
+pub fn turn_skipping(queue: Option<&[Queued]>, me: &str) -> (Turn, Vec<String>) {
     let Some(entries) = queue else {
-        return Turn::Unmeasurable;
+        return (Turn::Unmeasurable, Vec::new());
     };
     let Some(mine) = entries
         .iter()
         .find(|found| found.run == me)
         .and_then(|found| found.gated_at.as_deref())
     else {
-        return Turn::Unmeasurable;
+        return (Turn::Unmeasurable, Vec::new());
     };
     let mut ahead: Option<(&str, &str)> = None;
     let mut taken: Option<(&str, &str)> = None;
+    let mut skipped: Vec<(&str, &str)> = Vec::new();
     for entry in entries.iter().filter(|found| may_queue(found.stage, found.gated_at.is_some()) && found.worktree) {
         let (Some(verdict), Some(ts)) = (entry.verdict, entry.gated_at.as_deref()) else {
             if entry.run == me {
                 continue;
             }
-            return Turn::Unmeasurable;
+            return (Turn::Unmeasurable, Vec::new());
         };
         if verdict != Verdict::Pass {
+            continue;
+        }
+        let key = (ts, entry.run.as_str());
+        if entry.run != me && entry.driver == Some(Ticket::Dead) {
+            if key < (mine, me) || entry.taken_at.is_some() {
+                skipped.push(key);
+            }
             continue;
         }
         if let Some(at) = entry.taken_at.as_deref() {
@@ -90,21 +112,27 @@ pub fn turn_in(queue: Option<&[Queued]>, me: &str) -> Turn {
                 taken = Some((at, entry.run.as_str()));
             }
         }
-        let key = (ts, entry.run.as_str());
         if entry.run != me && key < (mine, me) && ahead.is_none_or(|found| key < found) {
             ahead = Some(key);
         }
     }
-    match taken {
+    let turn = match taken {
         Some((_, run)) if run == me => Turn::First,
         Some((_, run)) => Turn::After(run.to_owned()),
         None => ahead.map_or(Turn::First, |(_, run)| Turn::After(run.to_owned())),
-    }
+    };
+    skipped.sort_unstable();
+    (turn, skipped.into_iter().map(|(_, run)| run.to_owned()).collect())
 }
 
 /// いまの番（[`Completion::LandTurn`] の観測もこの 1 本を通る）。
 pub(crate) fn turn_now(state_dir: &Path, run: &str) -> Turn {
-    turn_in(queue_of(state_dir).as_deref(), run)
+    skipping_now(state_dir, run).0
+}
+
+/// いまの番と外した便（[`turn_skipping`] を置き場の replay に当てる）。
+fn skipping_now(state_dir: &Path, run: &str) -> (Turn, Vec<String>) {
+    turn_skipping(queue_of(state_dir).as_deref(), run)
 }
 
 /// 列の**自分の後ろ**に並ぶ便を鍵の順に `max − 1` 本まで選ぶ（**pure**・設計 pipeline.md §40・行 ah）。
@@ -172,7 +200,7 @@ fn taken_at(events: &[Event]) -> BTreeMap<&str, &str> {
 /// 同じ置き場の便を replay して列の材料を組む。**store を読めない周は `None`**（空の列に読み替えない）。
 ///
 /// 段は replay（[`replay`]）、判定は [`verdict_of`] の 1 本、`Gated` の ts は追記だけの log の原本から
-/// 読む（[`first_gated_at`]・replay の `Run::updated` は `Gated` の後の自由文でも動く）。判定と worktree は
+/// 読む（[`first_gated_at`]・replay の `Run::updated` は `Gated` の後の自由文でも動く）。判定と worktree と driver の札は
 /// 列に入りうる便（[`may_queue`]）だけ読み、worktree の実在は便の写し面の repo から導く——repo を
 /// 読めない便が在る周も `None` へ倒す。
 fn queue_of(state_dir: &Path) -> Option<Vec<Queued>> {
@@ -204,6 +232,7 @@ fn queue_with(state_dir: &Path, events: &[Event], state: &State) -> Option<Vec<Q
             gated_at: first,
             worktree,
             taken_at: taken.get(id.as_str()).map(|ts| (*ts).to_owned()),
+            driver: open.then(|| driver_ticket(state_dir, id)),
         });
     }
     Some(queue)
@@ -388,8 +417,10 @@ fn after_wake(turn: &Turn, waited_s: u64) -> Next {
 /// 縮退と列を導けなかった周は番を取っていないので書かない。番待ちの間に列の先頭が自分を着地 / 終端させた便（設計 §40・
 /// 段が終端）も列に居ないので書かない（`Gated` の記帳が終端の段を上書きしないため）。記帳できない周も順番は変えない
 /// （待ちは deny の関門でない）。
-pub(super) fn await_turn(entry: &Land<'_>) -> Order {
-    let order = wait_turn(entry);
+///
+/// 返り値は `order=` の値と、番を読んだ最後の周に札が死んでいて列から外した便（設計 pipeline.md §36）。
+pub(super) fn await_turn(entry: &Land<'_>) -> Turned {
+    let (order, skipped_dead) = wait_turn(entry);
     let queued = super::current(entry.state_dir)
         .ok()
         .and_then(|state| state.runs.get(entry.run).map(|run| may_queue(run.stage, true)));
@@ -408,14 +439,24 @@ pub(super) fn await_turn(entry: &Land<'_>) -> Order {
             entry.policy,
         );
     }
-    order
+    Turned { order, skipped_dead }
 }
 
-/// [`await_turn`] の待ちの本体（記帳しない）。
-fn wait_turn(entry: &Land<'_>) -> Order {
-    match turn_now(entry.state_dir, entry.run) {
-        Turn::First => return Order::First,
-        Turn::Unmeasurable => return Order::Unmeasured,
+/// 番待ちの結果（[`await_turn`] の出力・設計 pipeline.md §36）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct Turned {
+    /// `order=` の値。
+    pub(super) order: Order,
+    /// 札が死んでいて列から外した便 id（鍵の順・外さなかった周は空）。
+    pub(super) skipped_dead: Vec<String>,
+}
+
+/// [`await_turn`] の待ちの本体（記帳しない）。外した便は番を読んだ最後の周の選別（[`turn_skipping`]）のもの。
+fn wait_turn(entry: &Land<'_>) -> (Order, Vec<String>) {
+    let (turn, mut skipped) = skipping_now(entry.state_dir, entry.run);
+    match turn {
+        Turn::First => return (Order::First, skipped),
+        Turn::Unmeasurable => return (Order::Unmeasured, skipped),
         Turn::After(_) => {}
     }
     let started = Instant::now();
@@ -426,11 +467,13 @@ fn wait_turn(entry: &Land<'_>) -> Order {
             run: entry.run.to_owned(),
         };
         if crate::fleet::wait(turn, limit.saturating_sub(started.elapsed())) == Err(Timeout) {
-            return Order::Degraded;
+            return (Order::Degraded, skipped);
         }
-        match after_wake(&turn_now(entry.state_dir, entry.run), started.elapsed().as_secs()) {
-            Next::Proceed(order) => return order,
-            Next::KeepWaiting if started.elapsed() >= limit => return Order::Degraded,
+        let (turn, now) = skipping_now(entry.state_dir, entry.run);
+        skipped = now;
+        match after_wake(&turn, started.elapsed().as_secs()) {
+            Next::Proceed(order) => return (order, skipped),
+            Next::KeepWaiting if started.elapsed() >= limit => return (Order::Degraded, skipped),
             Next::KeepWaiting => {}
         }
     }
@@ -439,7 +482,7 @@ fn wait_turn(entry: &Land<'_>) -> Order {
 #[cfg(test)]
 mod tests {
     // flip-check: moved s2-07l.253
-    use super::{after_wake, await_turn, first_gated_at, following_of, train_in, turn_in, Next, Order, Queued, Turn};
+    use super::{after_wake, await_turn, first_gated_at, following_of, train_in, turn_in, turn_skipping, Next, Order, Queued, Turn};
     use crate::fleet::store::LockPolicy;
     use crate::fleet::{replay, wait, Completion, Event, EventKind, Stage};
     use crate::pipe::contract::Contract;
@@ -447,7 +490,7 @@ mod tests {
     use crate::pipe::gate::{Limits, Verdict};
     use crate::pipe::land::Land;
     use crate::pipe::lens_record::LensSource;
-    use crate::pipe::verdict_path;
+    use crate::pipe::{verdict_path, Ticket};
     use std::path::{Path, PathBuf};
     use std::time::Duration;
 
@@ -487,10 +530,10 @@ mod tests {
         let (state, repo, absent) = (root.join("state"), root.join("repo"), root.join("absent"));
         let (policy, contract) = (LockPolicy::embedded().expect("埋め込みの lock 規則を読める"), contract(&[], &[]));
         ["a-front", "b-me"].iter().for_each(|run| gated_run(&state, &repo, run, "PASS"));
-        assert_eq!(await_turn(&land(&state, &repo, &contract, policy, 0)), Order::Degraded, "前の便が居て上限 0");
+        assert_eq!(await_turn(&land(&state, &repo, &contract, policy, 0)).order, Order::Degraded, "前の便が居て上限 0");
         gated_run(&state, &repo, "a-front", "FAIL");
-        assert_eq!(await_turn(&land(&state, &repo, &contract, policy, 0)), Order::First, "前が空なら待たない");
-        assert_eq!(await_turn(&land(&absent, &repo, &contract, policy, 0)), Order::Unmeasured, "列を導けない");
+        assert_eq!(await_turn(&land(&state, &repo, &contract, policy, 0)).order, Order::First, "前が空なら待たない");
+        assert_eq!(await_turn(&land(&absent, &repo, &contract, policy, 0)).order, Order::Unmeasured, "列を導けない");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -512,7 +555,7 @@ mod tests {
             let partial = front.with_extension("json.partial");
             std::fs::write(&partial, "{\"verdict\":\"FAIL\"}\n").and_then(|()| std::fs::rename(&partial, &front)).is_ok()
         });
-        let order = await_turn(&land(&state, &repo, &contract, policy, 30));
+        let order = await_turn(&land(&state, &repo, &contract, policy, 30)).order;
         assert!(writer.join().unwrap_or(false), "前の便の判定を書き直せた");
         assert!(matches!(order, Order::Waited(_)), "解けた周は待った秒で進む: {order:?}");
         let _ = std::fs::remove_dir_all(&root);
@@ -534,7 +577,53 @@ mod tests {
             gated_at: (!ts.is_empty()).then(|| ts.to_owned()),
             worktree,
             taken_at: None,
+            driver: None,
         }
+    }
+
+    /// 札の状態を `ticket` にした列の fixture 1 本（段は `Gated`・PASS・worktree 在り）。
+    fn driven(run: &str, ts: &str, ticket: Ticket) -> Queued {
+        Queued { driver: Some(ticket), ..queued(run, Stage::Gated, Some(Verdict::Pass), ts, true) }
+    }
+
+    /// (pure) 札が `Dead` の便だけを外す: 先頭が死んでいれば次の便が先頭で、外した便を鍵の順に名指す。`Live` /
+    /// `Absent` / `Unreadable` / 読んでいない（`None`）の先頭は従来どおり `After`（外した便は空）。
+    #[test]
+    fn pipe_order_dead_front_is_skipped_only_when_the_ticket_is_dead() {
+        let dead = [driven("early", EARLY, Ticket::Dead), driven("me", LATE, Ticket::Live)];
+        assert_eq!(turn_skipping(Some(&dead), "me"), (Turn::First, vec!["early".to_owned()]), "死んだ先頭は外す");
+        for ticket in [Some(Ticket::Live), Some(Ticket::Absent), Some(Ticket::Unreadable), None] {
+            let queue = [Queued { driver: ticket, ..driven("early", EARLY, Ticket::Live) }, driven("me", LATE, Ticket::Live)];
+            assert_eq!(turn_skipping(Some(&queue), "me"), (Turn::After("early".to_owned()), Vec::new()), "{ticket:?} は従来どおり待つ");
+        }
+    }
+
+    /// (pure) 3 値 × 鍵の順: 死んだ便を外しても生きている便の順は変わらない（外した後の最古を名指す）。外した便の列は
+    /// 鍵の順（与えた並びに依らない）・自分より後ろで番を持たない死んだ便は名指さない・自分の札は見ない。
+    #[test]
+    fn pipe_order_dead_keeps_key_order_among_the_living() {
+        let queue = [
+            driven("mid-dead", MID, Ticket::Dead),
+            driven("early-dead", EARLY, Ticket::Dead),
+            driven("mid-live", MID, Ticket::Absent),
+            driven("me", LATE, Ticket::Dead),
+            driven("later-dead", "2026-09-13T03:00:00Z", Ticket::Dead),
+        ];
+        let expected = (Turn::After("mid-live".to_owned()), vec!["early-dead".to_owned(), "mid-dead".to_owned()]);
+        assert_eq!(turn_skipping(Some(&queue), "me"), expected, "生きている最古を待ち、前の死んだ 2 本を鍵の順に名指す");
+        let front = (Turn::First, vec!["early-dead".to_owned(), "mid-dead".to_owned()]);
+        assert_eq!(turn_skipping(Some(&queue), "mid-live"), front, "同時刻は id 順で前の死んだ便まで・後ろの死んだ便は名指さない");
+        assert_eq!(turn_in(Some(&queue), "me"), Turn::After("mid-live".to_owned()), "turn_in も同じ選別");
+    }
+
+    /// (pure) 番を取ったまま死んだ便（自分より鍵が後ろでも）は先頭に立たず、外した便として名指す。判定を読めない便は
+    /// 札が死んでいても `Unmeasurable`（外した便は空・fail-closed）。
+    #[test]
+    fn pipe_order_dead_taker_and_unreadable_verdict() {
+        let taker = [Queued { taken_at: Some(LATE.to_owned()), ..driven("taker", LATE, Ticket::Dead) }, driven("me", MID, Ticket::Live)];
+        assert_eq!(turn_skipping(Some(&taker), "me"), (Turn::First, vec!["taker".to_owned()]), "死んだ番の便は先頭に立たない");
+        let unreadable = [Queued { verdict: None, ..driven("front", EARLY, Ticket::Dead) }, driven("me", LATE, Ticket::Live)];
+        assert_eq!(turn_skipping(Some(&unreadable), "me"), (Turn::Unmeasurable, Vec::new()), "判定を読めない便は札に依らない");
     }
 
     /// 番を `taken` の ts で取った列の fixture 1 本（段は `Gated`・worktree 在り）。
