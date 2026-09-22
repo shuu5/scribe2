@@ -775,6 +775,21 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
   - **`docs/design/` を lens の入力から丸ごと外す**: 契約表の done や § の散文の変更は lens が読む対象（契約適合の材料）。省くのは置換で説明が付く hunk だけに閉じる。
   - **純移動の要約（[pipeline.md](./pipeline.md) §5.3）に docs の置換を載せる**: 要約は item の多重集合が一致した周にしか組めず、本便のように code 側に差が在る周（items-differ）には届かない。
 
+## 42. 畳みの対を hunk の段ごとに取り、移動で空になった dir の対を rename の対から導く — §41 の畳みでも lens 入力が cap の 1.9 倍残った（契約表の行 ai・`s2-07l.198.2` の便 171521Z の Gated INCONCLUSIVE）
+
+- 出所（orchestrator の実測 2026-09-22 17:2xZ・verified）: `s2-07l.198.2` の便 171521Z は行 ah の着地後の器で gate を撃ち、verify 9/9 rc 0・通知 `# lens-input=diff reason=items-differ elided=226/484` のまま Gated INCONCLUSIVE（evidence「diff 281110 byte が cap 150000 を超えた」・生 diff 806111 byte）。畳まれずに残った docs/design の hunk を §41 形 1 の判定を byte 単位で写した写しで数えると（写しの結果は 281562 byte で器の 281110 と一致）、**(A) 1 塊でない hunk が 19**（契約表の隣り合う行が両方書き換わり、間に無変更の行を挟んで `-` `+` context `-` `+` と並ぶ＝git は近い変更を 1 つの hunk に束ねる）、**(B) 置換後の `-` が `+` と一致しない hunk が 13**（散文や write-set が file でなく **dir** を名指す: `crates/scribe2/tests/`・`tests/e2e/`・`tests/e2e/pipe/`・`tests/e2e/seat/`・`tests/e2e/snapshots/`・`src/snapshots/`＝移動で空になった dir で、rename の対には file の path しか無い）、(C) 効きの条件で残った hunk が 1。写しで (A) を許すと 159538 byte・(A)(B) を許すと **86507 byte**（残る docs の hunk は seat-roles.md の 1 つ・13865 byte・code 側は約 19 KB）で cap に収まる。
+- 現物（main 155a248・verified）: `crates/scribe2/src/pipe/gate/lens.rs` の畳み（行 ah）は diff の字面だけを読み、rename の対を `rename from` / `rename to` の header から集め、hunk ごとに「path の絞り → 置換後の一致 → 各行の効き → 1 塊」の順で判定する。`crates/scribe2/src/pipe/gate.rs` の `measure` が diff の周だけそれを通し、通知は `crates/scribe2/src/pipe/gate/record.rs` が書く。
+- 形（番号は done と 1:1）:
+  1. **段ごとの対**（(A) の解）: hunk の本文を「`-` の連続 k 行の直後に `+` の連続 k 行」の**段**に切り、段と段の間と前後に context が在る形（段が 1 つの周は §41 形 1 の 1 塊と同じ）を許す。段ごとに本数が同じで、`-` の各行が置換で 1 字以上変わり、置換後の列が `+` の列と順序も同じなら hunk 全体を 1 行の印に畳む（印の件数は全段の `-` / `+` の合計）。`-` の連続の直後が context（`+` が続かない）か、段の本数が違えば逐語のまま＝§41 の歯 (f)(h) の形は今までどおり逐語。
+  2. **移動で空になった dir の対**（(B) の解）: `measure` が HEAD の tracked path の列（`git ls-tree -r --name-only HEAD`・読めない周は空の列＝dir の対を 1 つも足さない fail-closed）を pure な 1 本に渡す。1 本は rename の対 (a, b) ごとに末尾の共通の path component を 1 つずつ剥がした prefix の対 (pa, pb) を**長い pa から順に**見て、(i) HEAD の列に `pa/` で始まる path が 1 つも無く、(ii) `pa/` で始まる旧 path を持つ rename の対が全部 `pb/` + 同じ相対 path へ行く、の両方を満たす間だけ dir の対として足す（どちらかが破れたら、それより短い prefix は見ない）。dir の対は file の対と同じ列に入り、長い旧 path から順に置換する（本便の diff では 6 対: tests・tests/e2e・tests/e2e/pipe・tests/e2e/seat・tests/e2e/snapshots・src/snapshots）。
+  3. 通知と判定行の字面は §41 のまま（`elided=<hunk 数>/<行数>`・`bytes=` は畳んだ本文・`diff_bytes` は生 diff）。
+  4. 歯（e2e・`crates/scribe2/tests/e2e/pipe/gate.rs`・接頭辞 `pipe_gate_elide_` のまま・§41 の 8 本は 1 字も変えず緑のまま）: (i) 2 段の hunk（`-A` / `+A'` / context / `-B` / `+B'`・どちらの段も置換だけ）→ 畳む・通知に `elided=1/4`。(j) 段の本数が違う（`-A` / `-B` / `+A'`）→ 逐語。(k) rename が `tests/x.rs` → `boundary/tests/x.rs` の 1 本で HEAD に `tests/` 配下の path が無く、docs の行が `tests/` の dir だけを名指す置換 → 畳む。(l) (k) と同じで HEAD に `tests/` 配下の path が 1 つ残る → 逐語（dir の対を足さない）。(m) (k) と同じで `tests/` 配下のもう 1 本の rename が別の dir へ行く → 逐語（一貫しない dir は対にしない）。変異の A/B（判定の順は 段の切り分け → 段ごとの本数 → 一致 → 効き、dir の対の導出は (i) 空 → (ii) 一貫・条件 1 つに歯 1 本）: 段の切り分けを 1 塊に戻すと (i) が落ちる・段ごとの本数の照合を外すと (j) が落ちる・dir の対の導出を外すと (k) が落ちる・(i) 空の条件を外すと (l) が落ちる・(ii) 一貫の条件を外すと (m) が落ちる。§41 の (a)〜(h) は本便の変異のどれでも落ちない回帰の歯。
+- 触らない: §41 の path の絞り（`docs/design/` の `.md`）・効きの条件・rules 行 `gate.token_cap`・`crate::pipe::move_proof`・通知の字面・`verdict.json` の key 列・機械検証の段と判定順。
+- 却下:
+  - **hunk を context 0 で取り直して 1 塊に戻す**: lens に渡す diff の形が変わり、§41 の (f)(h)（context を挟む並べ替え・移動）が測れなくなる。段ごとの対は同じ diff のまま (A) だけを解く。
+  - **dir の対を「rename の対の共通 prefix」だけで作る**（HEAD の列を見ない）: `crates/scribe2/` → `crates/scribe2-boundary/` のような広い対が生まれ、移動していない file の path の誤った書き換えまで「置換で説明が付く」と畳んで lens から隠す。空の条件 (i) が要る。
+  - **`gate.token_cap` を一時的に上げる**: §41 却下 1 と同じ（A2・前例の最大 169 KB・機械置換で審査を薄める）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -1116,5 +1131,15 @@ write-set = ["crates/scribe2/src/pipe/gate/lens.rs", "crates/scribe2/src/pipe/ga
 verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_gate_elide_"]
 size = "S"
 done = "(1) diff の字面だけを読む pure な 1 本が、rename の header の対を集め、docs/design 配下の .md の hunk のうち - 行の列に置換を当てた結果が + 行の列と順序も本数も同じで、本文が context・- の連続・+ の連続・context の 1 塊で、- の各行が置換で 1 字以上変わるものだけを 1 行の印に置き換え、（本文, hunk 数, 行数）を返し、対が 0 の diff は 0/0 で本文そのまま (2) measure が diff の周だけそれを通して生 diff と lens 用の本文の両方を持ち、cap の照合と lens の stdin は lens 用の本文、verdict.json の diff_bytes と patch_id と検出線の持ち越しは生 diff のままで、純移動の要約の周は 1 字も変わらない (3) 省いた hunk が 1 つ以上の周だけ verify.stderr.log の行に elided=<hunk 数>/<行数> が付き、0 の周は従来の字面のままで既存の歯が全部緑、判定行の bytes= は畳んだ本文の byte (4) .rs の hunk の同じ置換は逐語のまま渡る (5) pipe_gate_elide_ の歯 8 本〔(a) 置換だけの docs は畳む・(b) 1 語の差が在れば逐語・(c) .rs は逐語・(d) rename 無しは従来の字面・(e) 生 diff が cap 超でも畳んだ本文が cap 内なら lens が呼ばれる・(f) 置換が効かない並べ替えだけの hunk は逐語・(g) 効く行と効かない行の混在は逐語・(h) 各行は置換で変わるが - と + の間に context が在る hunk は逐語〕が緑で、docs/design の .md の絞りを外すと (c) が、置換後の一致の判定を常に真にすると (b) が、常に偽にすると (a)(e) が、各行の置換の効きの判定を外すと (g) が、1 塊の判定を外すと (h) が落ち、(d)(f) は単独の変異を持たない回帰の歯"
+
+[[contract]]
+id = "ai"
+title = "lens 入力の畳みを hunk の段ごとに取り（- の連続 k 行の直後の + の連続 k 行を段とし、段の間の context を許す）、移動で空になった dir の対（HEAD に配下の path が無く、配下の rename が全部同じ dir へ行く prefix）を rename の対から導いて置換の列に足す"
+req = ["FR9", "NFR1"]
+section = "42"
+write-set = ["crates/scribe2/src/pipe/gate/lens.rs", "crates/scribe2/src/pipe/gate.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "docs/design/gate-cost.md"]
+verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_gate_elide_"]
+size = "S"
+done = "(1) hunk の本文を - の連続 k 行の直後の + の連続 k 行の段に切り、段の間と前後の context を許し、段ごとに本数が同じで - の各行が置換で 1 字以上変わり置換後の列が + の列と同じなら hunk 全体を 1 行の印に畳み（件数は全段の合計）、- の連続の直後が context か段の本数が違えば逐語のまま (2) measure が HEAD の tracked path の列を渡し（読めない周は空の列）、pure な 1 本が rename の対ごとに末尾の共通 component を剥がした prefix の対を長い方から見て、HEAD に配下の path が無く配下の rename が全部同じ dir へ行く間だけ dir の対として足し、file の対と同じ列で長い旧 path から順に置換する (3) 通知の elided=<hunk 数>/<行数> と bytes= と diff_bytes の字面と意味は §41 のまま (4) §41 の歯 8 本は 1 字も変えず緑のまま、新しい歯 (i) 2 段の hunk は畳む・(j) 段の本数が違えば逐語・(k) 空になった dir を名指す置換は畳む・(l) 配下に path が残る dir は対にしない・(m) 配下の rename が別の dir へ行く dir は対にしない、の 5 本が緑で、段の切り分けを 1 塊に戻すと (i) が、段ごとの本数の照合を外すと (j) が、dir の対の導出を外すと (k) が、空の条件を外すと (l) が、一貫の条件を外すと (m) が落ち、(a)〜(h) はどの変異でも落ちない回帰の歯"
 
 <!-- contracts:end -->
