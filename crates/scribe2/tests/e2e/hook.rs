@@ -21,6 +21,7 @@ use vessel::pipe::declaration::DECL_FILE;
 use vessel::seat::brief;
 use vessel::seat::recent::{self, Kind, Unmeasured, BEAD_LIMIT, COMMIT_LIMIT, DIRTY_SCAN_LIMIT, TITLE_WIDTH, WINDOW_SECS};
 use vessel::seat::role::{Capability, Role};
+use vessel::seat::session_account::{self, AccountRecord, SessionAccount};
 
 /// binary の path。
 fn bin() -> &'static str {
@@ -3937,5 +3938,168 @@ fn hook_recovery_edge_precompact_with_a_socket_resolves_the_registered_seat() {
     assert_eq!(section.len(), 2, "header + 逐語の 1 行: {lines:?}");
     assert_eq!(section[1], text);
     assert!(!slot.exists(), "出した後に枠は消える");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+// ─────────────────── 席の実口座の記録（account-lifecycle.md §16 行 d・`s2-07l.533`・接頭辞 `seat_account_mismatch_record_`） ───────────────────
+
+/// `cwd` と `session_id` と（在れば）`transcript_path` を持つ SessionStart の payload。
+fn account_payload(cwd: &Path, sid: &str, transcript: Option<&Path>) -> String {
+    let tail = transcript.map_or_else(String::new, |path| format!(",\"transcript_path\":\"{}\"", path.display()));
+    format!("{{\"cwd\":\"{}\",\"session_id\":\"{sid}\"{tail}}}", cwd.display())
+}
+
+/// 置き場の accounts の下の transcript の path（file は置かない＝字面だけで導く）。
+fn account_transcript(state: &Path, label: &str) -> PathBuf {
+    state.join("accounts").join(label).join("projects").join("p").join("t.jsonl")
+}
+
+/// `session-start` を payload 付きで撃つ（rc 0・名乗りは不変・stderr 0 byte）。
+fn run_account_start(place: &PluginPlace, extra: &[&str], payload: &str) -> Output {
+    let mut args = vec!["session-start", "--pane", &place.pane, "--tmux-socket", &place.socket];
+    args.extend_from_slice(extra);
+    let out = run_hook_args(&args, payload);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "session-start は rc 0: {}", stderr_text(&out));
+    assert!(String::from_utf8_lossy(&out.stdout).contains(&format!("[{NAME}/SessionStart]")), "名乗りは不変");
+    assert_eq!(stderr_text(&out), "", "stderr 0 byte");
+    out
+}
+
+/// 記録の実口座（`Recorded` でなければ `None`）と、file が 1 行・sid が payload・ts が秒であること。
+fn recorded_account(seat_dir: &Path, sid: &str) -> Option<SessionAccount> {
+    let path = session_account::record_path(seat_dir);
+    let text = fs::read_to_string(&path).unwrap_or_default();
+    assert_eq!(text.lines().count(), 1, "1 file 1 行: {}: {text:?}", path.display());
+    let AccountRecord::Recorded { account, sid: found, ts } = AccountRecord::read(seat_dir) else {
+        return None;
+    };
+    assert_eq!(found, sid, "sid は payload を写す: {text}");
+    assert!(ts > 1_700_000_000, "ts は 1970 年からの秒: {text}");
+    Some(account)
+}
+
+/// (a) accounts の下の transcript → label を記録し（`plugin` の記録と同じ席の打刻 dir）、次の SessionStart で外の transcript →
+/// unknown で上書きする（1 行のまま・前の label は残らない）。base は file が無い（RED）。
+#[test]
+fn seat_account_mismatch_record_writes_the_label_and_overwrites_it_with_unknown() {
+    let place = plugin_place("acctlabel");
+    let root = plugin_root(Some("{}\n"));
+    let root_s = root.display().to_string();
+    let seat_dir = place.state.join("seat").join("acctlabel_acctlabel");
+    let inside = account_transcript(&place.state, "a1");
+    run_account_start(&place, &["--plugin-root", &root_s], &account_payload(&place.repo, "sid-in", Some(&inside)));
+    assert_eq!(recorded_account(&seat_dir, "sid-in"), Some(SessionAccount::Label("a1".to_owned())));
+    let text = fs::read_to_string(session_account::record_path(&seat_dir)).unwrap_or_default();
+    assert!(text.starts_with("schema=1 sid=sid-in account=a1 ts="), "key の順: {text}");
+    assert!(digest::record_path(&seat_dir).exists(), "読み込み元の記録と同じ席の打刻 dir に在る");
+    assert!(state_file(&place.state, "acctlabel").exists(), "打刻と同じ dir");
+    let other = tmp();
+    let outside = account_transcript(&other, "a1");
+    run_account_start(&place, &[], &account_payload(&place.repo, "sid-out", Some(&outside)));
+    assert_eq!(recorded_account(&seat_dir, "sid-out"), Some(SessionAccount::Unknown), "置き場の accounts の外は unknown");
+    let again = fs::read_to_string(session_account::record_path(&seat_dir)).unwrap_or_default();
+    assert!(!again.contains("a1"), "前の値を残さない: {again}");
+    assert!(again.contains(&format!(" account={} ", session_account::UNKNOWN)), "unknown も書く: {again}");
+    drop(place.guard);
+    clean(&[&place.repo, &place.state, &place.sock_dir, &root, &other]);
+}
+
+/// (b) `.` 始まりの label・`transcript_path` の key 無しは unknown（どちらも前の label を上書きする）。
+#[test]
+fn seat_account_mismatch_record_is_unknown_for_a_dot_label_and_a_missing_key() {
+    let place = plugin_place("acctdot");
+    let seat_dir = place.state.join("seat").join("acctdot_acctdot");
+    let label = account_transcript(&place.state, "a2");
+    let dotted = account_transcript(&place.state, ".retired");
+    let cases: [(&str, Option<&Path>); 2] = [("sid-dot", Some(&dotted)), ("sid-nokey", None)];
+    for (sid, transcript) in cases {
+        run_account_start(&place, &[], &account_payload(&place.repo, "sid-a2", Some(&label)));
+        assert_eq!(recorded_account(&seat_dir, "sid-a2"), Some(SessionAccount::Label("a2".to_owned())), "対: label は得る");
+        run_account_start(&place, &[], &account_payload(&place.repo, sid, transcript));
+        assert_eq!(recorded_account(&seat_dir, sid), Some(SessionAccount::Unknown), "{sid}: unknown で上書き");
+    }
+    drop(place.guard);
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// (c) pane を解けない周（`--pane` 無し・空・解けない pane id）は記録を書かず、席の dir も作らない（名乗りは出る・rc 0）。
+#[test]
+fn seat_account_mismatch_record_is_not_written_without_a_resolvable_pane() {
+    let place = plugin_place("acctnopane");
+    let payload = account_payload(&place.repo, "sid-np", Some(&account_transcript(&place.state, "a1")));
+    let cases: [Vec<&str>; 3] = [
+        vec!["session-start"],
+        vec!["session-start", "--pane", "", "--tmux-socket", &place.socket],
+        vec!["session-start", "--pane", "%99999", "--tmux-socket", &place.socket],
+    ];
+    for args in cases {
+        let out = run_hook_args(&args, &payload);
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{args:?}: rc 0");
+        assert!(String::from_utf8_lossy(&out.stdout).contains(&format!("[{NAME}/SessionStart]")), "{args:?}: 名乗りは出る");
+        assert_eq!(stderr_text(&out), "", "{args:?}: stderr 0 byte");
+    }
+    let seats: Vec<String> = fs::read_dir(place.state.join("seat"))
+        .map(|entries| entries.flatten().map(|entry| entry.file_name().to_string_lossy().into_owned()).collect())
+        .unwrap_or_default();
+    assert!(seats.is_empty(), "席の dir を 1 つも作らない（母集団 = seat 配下の entry）: {seats:?}");
+    assert_eq!(AccountRecord::read(&place.state.join("seat").join("acctnopane_acctnopane")), AccountRecord::Absent);
+    drop(place.guard);
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// 置き場の file の (相対 path, bytes) の列（`skip` の名の file は外す・path の順）。
+fn tree_bytes(root: &Path, skip: &[&str]) -> Vec<(PathBuf, Vec<u8>)> {
+    let mut found = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if !skip.iter().any(|name| entry.file_name() == *name) {
+                let rel = path.strip_prefix(root).map(Path::to_path_buf).unwrap_or_default();
+                found.push((rel, fs::read(&path).unwrap_or_default()));
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
+/// 打刻の 1 行から `ts` の値を外した字面（同じ event・sid の打刻は ts の他で 1 byte も違わない）。
+fn without_ts(line: &str) -> String {
+    let Some((head, rest)) = line.split_once("\"ts\":") else {
+        return line.to_owned();
+    };
+    format!("{head}\"ts\":{}", rest.trim_start_matches(|found: char| found.is_ascii_digit()))
+}
+
+/// (d) 登録 row（口座 a1）と食い違う実口座（a2）の周も、row と置き場の他の file・`state.jsonl` の打刻・指示文は
+/// transcript の無い周と 1 byte も変わらない（記録 file だけが動く）。
+#[test]
+fn seat_account_mismatch_record_leaves_the_row_state_jsonl_and_brief_untouched() {
+    let place = role_place();
+    let name = "acctrow";
+    let (seat, pane) = role_seat(&place, name, Some(Role::Orchestrator.as_str()));
+    let seat_dir = place.state.join("seat").join(format!("{name}_{name}"));
+    let skip = ["state.jsonl", "inject.jsonl", session_account::FILE];
+    let before = tree_bytes(&place.state, &skip);
+    assert!(!before.is_empty(), "row が在る置き場（母集団 {}）", before.len());
+    let args = ["session-start", "--pane", &pane, "--tmux-socket", &place.socket, "--rules", &place.rules, "--bd", &place.bd];
+    let mismatch = account_transcript(&place.state, "a2");
+    let with = run_hook_args(&args, &account_payload(&place.repo, "sid-row", Some(&mismatch)));
+    assert_eq!(stderr_text(&with), "", "stderr 0 byte");
+    assert_eq!(recorded_account(&seat_dir, "sid-row"), Some(SessionAccount::Label("a2".to_owned())), "記録は実口座");
+    let without = run_hook_args(&args, &account_payload(&place.repo, "sid-row", None));
+    assert_eq!(recorded_account(&seat_dir, "sid-row"), Some(SessionAccount::Unknown));
+    assert_eq!(tree_bytes(&place.state, &skip), before, "row と置き場の他の file は 1 byte も変わらない");
+    assert!(!after_header(&with).is_empty(), "指示文が出る周: {}", String::from_utf8_lossy(&with.stdout));
+    assert_eq!(with.stdout, without.stdout, "指示文は 1 byte も変わらない");
+    let text = fs::read_to_string(state_file(&place.state, name)).unwrap_or_default();
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 3, "打刻は 1 周 1 行のまま（母集団 {}）: {text}", lines.len());
+    assert_eq!(without_ts(lines[1]), without_ts(lines[2]), "打刻の行は ts の他で 1 byte も違わない");
+    assert!(!text.contains("a2") && !text.contains("account"), "打刻に口座を足さない: {text}");
+    drop(seat);
     clean(&[&place.repo, &place.state, &place.sock_dir]);
 }

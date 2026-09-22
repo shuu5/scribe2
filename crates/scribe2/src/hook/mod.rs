@@ -182,6 +182,8 @@ pub fn dispatch(args: &[String], payload: &str) -> Outcome {
             outcome.err.extend(stamp::stamp(args, payload, Event::SessionStart, &dir));
             // 打刻の後に読み込み元の記録（設計 consumer-sync.md §3・同じく席を止めない）。
             outcome.err.extend(plugin_record(args, payload, &dir));
+            // 実口座の記録（設計 account-lifecycle.md §16 形 (1)・row も state.jsonl も書かない・席を止めない）。
+            outcome.err.extend(account_record(args, payload, &dir));
             outcome
         }
         Some(EVENT_PRE_TOOL_USE) => pre_tool_use(&hooked, payload, started),
@@ -296,6 +298,27 @@ fn plugin_record(args: &[String], payload: &str, state_dir: &Path) -> Vec<String
     match vessel::digest::write(&seat_dir, Path::new(root), &sid, env!("SCRIBE2_BUILD_COMMIT")) {
         Ok(()) => Vec::new(),
         Err(reason) => vec![format!("{NAME}: 読み込み元の記録を書けない reason={reason}")],
+    }
+}
+
+/// 席の実口座の記録（設計 account-lifecycle.md §16 形 (1)・[`crate::seat::session_account`]）: `--pane` から target を
+/// 解けた周だけ、payload の `transcript_path` から導いた実口座（導けない・key 無しは unknown）を `seat/<target>/account` へ
+/// 1 行で上書きする。解けない周は書かない。書けなかった周は席を止めず stderr に 1 行（読み込み元の記録と同じ）。
+fn account_record(args: &[String], payload: &str, state_dir: &Path) -> Vec<String> {
+    use crate::seat::session_account::{self, SessionAccount};
+    let Some(pane) = flag_of(args, FLAG_PANE).filter(|found| !found.trim().is_empty()) else {
+        return Vec::new();
+    };
+    let socket = flag_of(args, FLAG_SOCKET).filter(|found| !found.trim().is_empty());
+    let Some(target) = crate::seat::target_of_pane(socket, pane) else {
+        return Vec::new();
+    };
+    let transcript = field(payload, precompact::KEY_TRANSCRIPT).map(PathBuf::from);
+    let account = SessionAccount::of_transcript(state_dir, transcript.as_deref());
+    let sid = field(payload, KEY_SESSION_ID).unwrap_or_default();
+    match session_account::write(&crate::seat::seat_dir(state_dir, &target), account, &sid) {
+        Ok(()) => Vec::new(),
+        Err(reason) => vec![format!("{NAME}: 実口座の記録を書けない reason={reason}")],
     }
 }
 
