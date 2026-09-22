@@ -236,7 +236,7 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
   3. 残る追加行が 0 本になる純移動だけの便は `Check::Detection` を赤にも測定未了にもせず、純移動として名指す記号を検出線の record に残す（`Detection` の閉じた値に 1 つ足す）。
   4. `LensInput::Summary` にならない便（`LensInput::Diff`）は従来どおり全ての追加行を母集団にする。
   5. 純移動と証明された item の外の追加行（`mod` 宣言の追加・可視性の変更・残差）は母集団に残る。
-- **歯**（接頭辞 `pipe_gate_detection_pure_move_`・置き場は `crates/scribe2/tests/e2e/pipe/gate.rs`・base の当たりは 0 本）: (a) 純移動だけの便は検出線の母集団が 0 行になり `Check::Detection` が赤にも測定未了にもならず record に純移動の記号が残る／(b) 移動と実変更が混ざる便は実変更の追加行だけが母集団に入る（移した item の区間の行は入らない）／(c) 移動でない追加行だけを持つ便（`mod` 宣言の追加・可視性の変更）は母集団に残り従来どおり撃つ／(d) `LensInput::Diff` の便は全ての追加行が母集団に入る（従来の極性）。
+- **歯**（接頭辞 `pipe_gate_detection_pure_move_`・置き場は `crates/scribe2/tests/e2e/pipe/gate.rs`・base の当たりは 0 本。done (1) の「要約の字面と証明の判定は不変」は `crates/scribe2/src/pipe/move_proof.rs` の既存の in-file の歯 3 本〔`move_proof_judge_pins_each_reason`＝判定の理由の pin・`move_proof_comment_diff_inside_items_is_counted_and_markers_inside_items_are_checked` と `move_proof_comment_verbatim_is_absent_when_comments_match`＝要約の本文の字面〕を verify の別の行で名の全体で撃って測る＝要約の本文を描き換えれば赤・2026-09-20 の審査 FAIL vacuous-assert の再現）: (a) 純移動だけの便は検出線の母集団が 0 行になり `Check::Detection` が赤にも測定未了にもならず record に純移動の記号が残る／(b) 移動と実変更が混ざる便は実変更の追加行だけが母集団に入る（移した item の区間の行は入らない）／(c) 移動でない追加行だけを持つ便（`mod` 宣言の追加・可視性の変更）は母集団に残り従来どおり撃つ／(d) `LensInput::Diff` の便は全ての追加行が母集団に入る（従来の極性）。
 - **触らない**: 検出線を実行する xtask 側の実装、lens の入力の判定、`judge` / `keep` の証明そのものと `MoveSummary` の `text` の字面、`crates/scribe2/src/pipe/move_proof.rs` の in-file の歯の名と assert。
 - **却下案**: 純移動便の検出線を全部 skip する案は、移動でない追加行（mod 宣言の追加や可視性の変更）まで母集団から落としてしまうため不採用。除外の判定を xtask 側に置く案は、証明が core の `crates/scribe2/src/pipe/move_proof.rs` に既にあり、同じ判定を 2 か所に持つことになるため不採用。行範囲を `keep` の写し（run dir の file）から読み直す案は、gate が同じ周に持っている値を file 経由で往復させるだけで、写しの形を跨版契約にしてしまうため不採用。
 
@@ -638,7 +638,7 @@ title = "純移動と証明された行を検出線の母集団から外す"
 req = ["FR8", "NFR3"]
 section = "14"
 write-set = ["crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/gate/verify.rs", "crates/scribe2/src/pipe/gate/record.rs", "crates/scribe2/src/pipe/move_proof.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "docs/design/gate-cost.md"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_gate_detection_pure_move_"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_gate_detection_pure_move_", "cargo nextest run -p scribe2 --lib --no-tests=fail move_proof_judge_pins_each_reason", "cargo nextest run -p scribe2 --lib --no-tests=fail move_proof_comment_diff_inside_items_is_counted_and_markers_inside_items_are_checked", "cargo nextest run -p scribe2 --lib --no-tests=fail move_proof_comment_verbatim_is_absent_when_comments_match"]
 size = "S"
 done = "(1) 一致と証明された item の head 側の行範囲が要約に載り、要約の字面と証明の判定は不変 (2) 検出線の母集団はその行範囲の hunk を落とした diff から組まれる (3) 純移動だけの便は母集団が 0 行になり Check::Detection が赤にも測定未了にもならず、検出線の record に純移動の記号が残る〔pipe_gate_detection_pure_move_〕 (4) 純移動でない便は従来どおり全ての追加行を母集団にする (5) 移動でない追加行（mod 宣言の追加・可視性の変更・残差）は母集団に残る"
 
@@ -737,7 +737,7 @@ id = "o"
 title = "host で同時に走る便の本数の最大値 — rules 行 pipe.max_live を足し、受付が live な便を交差と同じ判定で数えて値以上の周は typed に断る（走行中の便は止めない・dispatcher の列の理由は行 a の後）"
 req = ["FR68", "FR39"]
 section = "24"
-write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/tests/e2e/rules.rs", "crates/scribe2/tests/e2e/snapshots/e2e__rules__rules_external_form.snap", "docs/design/rules-manifest.md", "crates/scribe2/src/pipe/refuse.rs", "crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/pipe/intake.rs"]
+write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/tests/e2e/rules.rs", "crates/scribe2/tests/e2e/snapshots/e2e__rules__rules_external_form.snap", "docs/design/rules-manifest.md", "docs/design/gate-cost.md", "crates/scribe2/src/pipe/refuse.rs", "crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/tests/e2e/pipe.rs", "crates/scribe2/tests/e2e/pipe/intake.rs"]
 verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_intake_max_live_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail rules_embedded_manifest_declares_max_live_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail rules_external_form"]
 size = "S"
 done = "rules 行 pipe.max_live が裁定 id と裁定日つきで 1 本増えて RuleKind の variant と対になり外形の rows= と kinds= が 1 つ増え、live な便が値以上の周の intake は max-live の 1 行（live= と cap= を運ぶ）で断られて run dir も event も増えず、上限で断る周も交差の組は列に並び、live の便を止めれば同じ契約が通り、Gated FAIL の便は数えられず、写しを読めない周は write-set-unreadable（rc 2）で止まる"
