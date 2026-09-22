@@ -8,14 +8,15 @@
 //! [`test_region`]、行数の 2 面は [`FileLines::of`] で、2 本目の読み手を作らない（C2）。
 //!
 //! 項目の形は 4 つ: `.rs` は行数と宣言の列と歯の列（別の列）・`.rs` でない file は行数だけ・`+` の項目は「新設」の 1 行・
-//! 読めない項目は読めなさの 1 行（黙って落とさない・C10）。`-` / `~` の項目は接頭辞を剥がした base の file を読む。
+//! 読めない項目は読めなさの 1 行（黙って落とさない・C10）。`-` / `~` / `=` の項目は接頭辞を剥がした base の file を読み
+//! （剥がすのは `pipe::refuse` の [`normalize`] の 1 本・§44）、`=` の項目は行数の後ろに置き場だけの 1 語を添える。
 //!
 //! cap は新しい閾値を作らない: lens が [`base_block`] で既存の `gate.token_cap` の残りに収まるかを測り、収まらない周は
 //! 段ごと落として落とした項目の本数の 1 行を残す（既存の 4 材料だけで越える周の INCONCLUSIVE は lens の側で不変）。
 
 use crate::pipe::closure::{src_region, test_region, TEST_ATTR};
 use crate::pipe::declaration::FileLines;
-use crate::pipe::refuse::{DELETE_FILE, NEW_FILE, SHRINK_FILE};
+use crate::pipe::refuse::{normalize, NEW_FILE, PLACE_ONLY_FILE};
 use crate::pipe::table;
 use std::path::{Component, Path};
 
@@ -30,6 +31,9 @@ const DECL_KEYWORDS: &[&str] = &["fn", "struct", "enum", "union", "trait", "type
 
 /// 宣言の語の前に来てよい修飾の語（`pub(crate)` 等の括弧つきは [`declared_name`] が 1 語として飛ばす）。
 const QUALIFIERS: &[&str] = &["pub", "async", "unsafe", "extern", "\"C\"", "default"];
+
+/// 置き場だけの印（`=`）の項目の行数の後ろに添える 1 語（lens が印の意味を要約から読める・§44）。
+const PLACE_ONLY_NOTE: &str = "・置き場だけ（中身は変えない）";
 
 /// `{base}` の穴の見出し（段を落とした周も見出しは残す）。
 const HEADING: &str = "\n## write-set の base の要約（器が base から測った事実）\n";
@@ -56,21 +60,25 @@ fn item_text(repo: &Path, item: &str, width: u64) -> String {
     if item.starts_with(NEW_FILE) {
         return format!("{ITEM_HEAD}{item}: 新設（base に無い）");
     }
-    let path = item.strip_prefix([SHRINK_FILE, DELETE_FILE]).unwrap_or(item);
-    if !inside(path) {
+    // 外の断りは字面（絶対 path・`..` の段）と剥がして畳んだ path（`=../x` 等）の両方で測る。
+    let path = normalize(item);
+    if !(inside(item) && inside(&path)) {
         return format!("{ITEM_HEAD}{item}: 読めない（repo の外を指す path）");
     }
-    let text = match table::read(repo, path) {
+    let text = match table::read(repo, &path) {
         Ok(found) => found,
         Err(reason) => return format!("{ITEM_HEAD}{item}: 読めない（{reason}）"),
     };
-    let lines = FileLines::of(path, &text, width);
-    let head = format!("{ITEM_HEAD}{item}: 行数 全体 {} / 本体 {}", lines.total, lines.src);
+    let lines = FileLines::of(&path, &text, width);
+    let mut head = format!("{ITEM_HEAD}{item}: 行数 全体 {} / 本体 {}", lines.total, lines.src);
+    if item.starts_with(PLACE_ONLY_FILE) {
+        head.push_str(PLACE_ONLY_NOTE);
+    }
     if !path.ends_with(".rs") {
         return head;
     }
     let decls: Vec<String> = src_region(&text).lines().filter_map(declared_name).collect();
-    let teeth = tooth_names(test_region(path, &text));
+    let teeth = tooth_names(test_region(&path, &text));
     format!("{head}\n  宣言: {}\n  歯: {}", listed(&decls), listed(&teeth))
 }
 
@@ -210,6 +218,54 @@ mod tests {
         assert!(lines.get(2).is_some_and(|line| line.starts_with("- src/: 読めない（")), "{text}");
         assert_eq!(lines.get(3), Some(&"- ../outside.rs: 読めない（repo の外を指す path）"));
         assert!(lines.get(4).is_some_and(|line| line.starts_with("- ~src/gone.rs: 読めない（src/gone.rs を読めない: ")), "{text}");
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// §44: `+` / `-` / `~` / `=` の 4 形を同じ木で要約する（母集団 = 4 形の行数を同じ assert で数える）。`=` の項目は
+    /// 読めないを持たず、行の頭は `=` を含む字面のまま・行数の後ろに置き場だけの 1 語・宣言と歯の 2 列を持つ。`+` の
+    /// 1 行と `-` / `~` の行は 1 字も変わらない。
+    #[test]
+    fn pipe_review_base_place_only_item_is_read_and_marked_while_other_forms_stay() {
+        let repo = scratch("place");
+        let _ = std::fs::write(repo.join("src/a.rs"), FIXTURE);
+        let items: Vec<String> =
+            ["+src/fresh.rs", "-src/a.rs", "~src/a.rs", "=src/a.rs"].iter().map(|item| (*item).to_owned()).collect();
+        let text = summary(&repo, &items, 120);
+        let lines: Vec<&str> = text.lines().collect();
+        let decls = "  宣言: fn width, struct Shape, enum Tone, fn dot, const LIMIT";
+        let teeth = "  歯: shape_one, shape_two";
+        assert_eq!(
+            lines,
+            [
+                "- +src/fresh.rs: 新設（base に無い）",
+                "- -src/a.rs: 行数 全体 35 / 本体 23",
+                decls,
+                teeth,
+                "- ~src/a.rs: 行数 全体 35 / 本体 23",
+                decls,
+                teeth,
+                "- =src/a.rs: 行数 全体 35 / 本体 23・置き場だけ（中身は変えない）",
+                decls,
+                teeth,
+            ],
+            "4 形 = 1 + 3 + 3 + 3 行: {text}"
+        );
+        assert!(!text.contains("読めない"), "{text}");
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// §44: `=` の `.rs` でない項目も本文を読んで行数と置き場だけの 1 語を持ち、`=` の後が repo の外なら従来の断り。
+    #[test]
+    fn pipe_review_base_place_only_non_rs_and_outside_items() {
+        let repo = scratch("place-odd");
+        let _ = std::fs::write(repo.join("notes.md"), "# t\n\nx\n");
+        let items: Vec<String> = ["=notes.md", "=../outside.rs"].iter().map(|item| (*item).to_owned()).collect();
+        let text = summary(&repo, &items, 120);
+        assert_eq!(
+            text.lines().collect::<Vec<&str>>(),
+            ["- =notes.md: 行数 全体 3 / 本体 3・置き場だけ（中身は変えない）", "- =../outside.rs: 読めない（repo の外を指す path）"],
+            "{text}"
+        );
         let _ = std::fs::remove_dir_all(&repo);
     }
 

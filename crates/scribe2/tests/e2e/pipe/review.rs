@@ -184,6 +184,32 @@ fn pipe_review_base_summary_file_names_every_write_set_item() {
     clean(&[&repo, &state]);
 }
 
+/// (g) 置き場だけの印（`=`）の項目を持つ契約の審査の材料 `base.txt` は「読めない」を 1 行も持たず、その項目の行は
+/// 契約の字面のまま本文を読んで行数と置き場だけの 1 語を持ち、宣言と歯の列が続く（§44・行 au）。
+#[test]
+fn pipe_review_base_place_only_item_is_read_in_base_txt() {
+    let (repo, state) = repo_with_state();
+    let _ = fs::write(repo.join("src").join("zq_place.rs"), "pub fn placed() {}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn zq_tooth() {}\n}\n");
+    let items = ["src/lib.rs", "=src/zq_place.rs"];
+    let path = write_set_contract(&repo, "place", &items);
+    let out = run_pipe(&[
+        "intake", "--design", &path, "--bead", "s2-place",
+        "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+        "--rules", &ceiling_rules(&state), "--lens", &format!("cat >/dev/null; echo '{}'", lens_verdict("PASS")),
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "PASS は rc 0: {}", stderr_of(&out));
+    let summary = fs::read_to_string(review_dir(&state, &run_id_of(&out)).join("base.txt")).unwrap_or_default();
+    assert_eq!(summary.lines().filter(|line| line.contains("読めない")).count(), 0, "{summary}");
+    let lines: Vec<&str> = summary.lines().collect();
+    let at = lines.iter().position(|line| line.starts_with("- =src/zq_place.rs: ")).unwrap_or(lines.len());
+    assert_eq!(
+        lines.get(at..at.saturating_add(3)),
+        Some(&["- =src/zq_place.rs: 行数 全体 7 / 本体 2・置き場だけ（中身は変えない）", "  宣言: fn placed", "  歯: zq_tooth"][..]),
+        "{summary}"
+    );
+    clean(&[&repo, &state]);
+}
+
 // ───── 審査の理由の閉じた型（`s2-07l.395`・設計 contract-source.md §22・SRS FR49・接頭辞 `pipe_review_kind_`） ─────
 
 /// 歯 (1) **読みと書き**: FAIL の周に lens の `kind` と `at` が `review.json` の任意 field に逐語で残り、同じ周の event の
