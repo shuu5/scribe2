@@ -805,10 +805,10 @@ id = "at"
 title = "契約表の検査が未追跡の設計 doc を 1 行知らせ、判定行に未追跡の本数の欄を足す（findings にも rc にも数えない検出線・git が答えない周は ? で 0 に化けさせない）"
 req = ["FR55", "NFR4"]
 section = "43"
-write-set = ["crates/scribe2/src/pipe/table/check.rs", "crates/scribe2/tests/e2e/pipe/contracts.rs", "docs/design/contract-source.md"]
+write-set = ["crates/scribe2/src/pipe/table/check.rs", "crates/scribe2/tests/e2e/pipe/contracts.rs", "crates/scribe2/tests/e2e/pipe/intake.rs", "docs/design/contract-source.md"]
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail contracts_untracked_doc_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail contracts_untracked_doc_"]
 size = "S"
-done = "(1) 検査が未追跡の設計 doc を既存の git の 1 本で 1 回引く (2) 判定行に未追跡の本数の欄が 1 つ増え、現物の repo では 0 で出る (3) 1 本以上の周は判定行の前に 1 件 1 行で path を名乗り、findings の数も rc も変わらない (4) git が答えない周はその欄が ? になる (5) 追随の口の戻りが 1 つも変わらない (6) 検査の母集団は tracked な設計 doc のままで、findings の順と rc と doc 数と行数の数え方が不変"
+done = "(1) 検査が未追跡の設計 doc を既存の git の 1 本で 1 回引く (2) 判定行に未追跡の本数の欄が 1 つ増え、現物の repo では 0 で出る（判定行を完全一致で読む contracts.rs と intake.rs の既存の歯は新しい欄を含む字面へ更新し、他の期待は変えない） (3) 1 本以上の周は判定行の前に 1 件 1 行で path を名乗り、findings の数も rc も変わらない (4) git が答えない周はその欄が ? になる (5) 追随の口の戻りが 1 つも変わらない (6) 検査の母集団は tracked な設計 doc のままで、findings の順と rc と doc 数と行数の数え方が不変"
 <!-- contracts:end -->
 
 
@@ -990,7 +990,7 @@ done = "(1) 検査が未追跡の設計 doc を既存の git の 1 本で 1 回�
   - 却下: 同じ門を契約表の検査の段でも回す（memo の 2 つ目の案）——現物で測ると、tracked な設計 doc の Declared 行（write-set と verify を持つ行・192 行）のうち**少なくとも 5 行**（`docs/design/gate-cost.md` の g・`docs/design/pipeline.md` の a と j・`docs/design/rules-manifest.md` の h・`docs/design/seat-roles.md` の m）が、いま main で歯の file を write-set の外に持つ（2 通りの走査で共に当たった行・粗い走査では 18 行）。そのまま findings にすると現物の契約表が 0 件でなくなり、既存の歯 `contract_closure_ext_real_table_has_zero_findings` が赤になる。**先に当たる行を直し、検出線として数えてから findings へ上げる**のが順で、本行には畳まない。／式を読まずに裸の filter 語に完全一致の印を足す（印つきの語をそのまま nextest へ渡せば別の歯に当たる＝撃つ行と測る行が割れる）／`tests` 欄を Declared 行にも開く（§42 で却下した形）。
   - 歯（接頭辞 `contract_teeth_exact_`・`crates/` 全体で 0 件）: in-file（`crates/scribe2/src/pipe/closure/derive.rs` の歯の区間・pure な 1 本を直に呼ぶ）で、完全一致の式が名の全体で 1 file だけを置き場に取り、同じ名を substring に持つ別 file を取らないこと（母集団 = fixture の 3 file と当たる 1 file を同じ assert で数える）・部分一致の式が従来と同じ集合を取ること・読めない式が 0 本に倒れて従来の字面で断られ、その断りが式の字面を名乗ること・式と裸の語が同じ行に在る周は式が正本になること・検出線の語が式から読んだ名になること。e2e（`crates/scribe2/tests/e2e/pipe/contracts.rs`）で、完全一致の式を verify に持つ行が、部分一致なら要求された他の file を write-set に持たないまま受付を通ること。既存の歯 `contract_derive_target_flag_` の接頭辞の歯は、式の旗の 1 例（式の次の語を消費して裸の語を filter にする）だけが本行の読みへ替わり、他の旗の期待は 1 字も変えない。
 - (3) 未追跡の設計 doc を知らせる（行 at）
-  - 形: 1. `judge_repo` が未追跡の設計 doc（設計 doc の dir 直下の `.md`）を 1 回引く。読む口は既存の git の 1 本を使う（2 本目の読み手を作らない）。2. 判定行に未追跡の本数の欄を 1 つ足す（現物は 0）。3. 1 本以上の周は判定行の前に 1 件 1 行で path を名乗る（findings には数えない＝rc も findings の数も不変）。4. git が答えない周はその欄を `?` にする（0 に化けさせない・NFR4）。5. 追随の口（`repo_findings`）の戻りは 1 つも変えない（便の判定材料を変えない）。
+  - 形: 1. `judge_repo` が未追跡の設計 doc（設計 doc の dir 直下の `.md`）を 1 回引く。読む口は既存の git の 1 本を使う（2 本目の読み手を作らない）。2. 判定行に未追跡の本数の欄を 1 つ足す（現物は 0）。判定行の字面を完全一致で読む既存の歯は `crates/scribe2/tests/e2e/pipe/contracts.rs` の中と `crates/scribe2/tests/e2e/pipe/intake.rs` の 1 か所（受付の前に契約表の検査を撃つ歯）で、どちらも新しい欄を含む字面へ更新する（write-set に両 file を持つ・期待の他の部分は変えない）。3. 1 本以上の周は判定行の前に 1 件 1 行で path を名乗る（findings には数えない＝rc も findings の数も不変）。4. git が答えない周はその欄を `?` にする（0 に化けさせない・NFR4）。5. 追随の口（`repo_findings`）の戻りは 1 つも変えない（便の判定材料を変えない）。
   - 触らない: 検査の母集団（tracked な設計 doc だけ）・findings の順と rc・doc 数と行数の数え方・契約表の検査そのもの・受付の経路。
   - 却下: 未追跡 doc を検査の母集団に入れる（tracked でない行から契約を作る口を開く＝FR47 に反する）／findings に数えて rc 1 にする（下書きが 1 本在るだけで CI と受付が落ちる）／作業木の状態を読む別の git の口を足す（tracked の一覧と 2 本目の読み手になる）。
   - 歯（接頭辞 `contracts_untracked_doc_`・`crates/` 全体で 0 件）: e2e（`crates/scribe2/tests/e2e/pipe/contracts.rs`）で、未追跡の `.md` を 1 本置いた木の判定行が未追跡 1 を持ち知らせの 1 行が出て rc 0・findings 0 のまま、その file を追跡すると未追跡 0 になり doc 数が 1 増える（母集団 = 同じ木の 2 回の判定行を対で見る）。in-file（`crates/scribe2/src/pipe/table/check.rs` の歯の区間）で、未追跡の列から知らせの行を組む純関数を 0 本・1 本・2 本で測る。
