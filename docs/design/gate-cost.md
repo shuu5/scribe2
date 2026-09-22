@@ -647,6 +647,12 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
   (c) **明示の口と食い合わない**: --bd に fixture の偽 client の絶対 path を渡した周は、見張りの記録が 0 件のまま、偽 client 側の log に呼出が残る。
 - **flip-check**（歯だけの便）: 器の src を 1 行も触らないので、retroactive の札（[contract-source.md](./contract-source.md) §31・`s2-07l.484` を名指す）を、本便で test 区間が動いた file の**行頭**に置く（効く 4 条件は §36 と同じ）。接頭辞 `e2e_ledger_tripwire_` は base に 0 本なので、行の 1 本目の verify は base で「該当 0 本」＝RED である。
 
+### 37.1 errata（現物との差・`s2-07l.484`・規範は上の §37 のまま）
+
+- **§36 歯 (c) の期待の列が 1 件増えた**: 見張りは形 1 のとおり偽 systemd-run と偽 systemctl に**並べて同じ bin dir** へ置く（§36 の入れ替えの手を通る）ので、bin dir の entry 名の全件を測る §36 歯 (c) の期待は「2 本の名」から「置いた偽 binary の名の全件（既定名の見張りを含む 3 件）」へ変わった。測る性質（一時の名の残骸 0・母集団は entry 名の全件）は変わらない。別の dir に置いて期待を守る案は PATH の組み方を変える（触らないに反する）ので採らない。
+- **見張りの記録の名**: 1 起動 1 file の名は mktemp の一意な名で、systemd-run の記録（unit 名）とは別の記録 dir に置く＝既存の「ちょうど 1 件」の母集団に混ざらない。
+- **既存の歯の総数**: e2e の歯は 1182 本から本行の 3 本を足して 1185 本（既存の歯は 1 本も消えず・名も変わらない）。
+
 <!-- contracts:begin -->
 schema = 1
 

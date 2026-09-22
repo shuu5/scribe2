@@ -976,6 +976,66 @@ fn pipe_terminal_dispatch_manual_turn_starts_the_runs_it_can() {
     clean(&[&repo, &state]);
 }
 
+// ───── 道具箱の台帳 client の見張り（設計 gate-cost.md §37・行 ad・`s2-07l.484`・接頭辞 `e2e_ledger_tripwire_`） ─────
+// flip-check: retroactive s2-07l.484
+
+/// (a) 非空虚の枝: 列の 1 周を `--repo` と `--runner` と台帳の待ち上限の行を持つ写しつきで、`--bd` を**渡さず**撃つと、
+/// 見張りの記録が**ちょうど 1 件**在り、その本文が読みの引数（`--readonly` と一覧の語）を持つ。見張りは台帳を
+/// 解けない host と同じ形で断るので、1 周は理由を名乗る（0 件の台帳に読み替えない）。
+#[test]
+fn e2e_ledger_tripwire_default_client_round_leaves_exactly_one_record() {
+    let (repo, state) = repo_with_state();
+    two_rows(&repo);
+    let out = run_pipe(&[
+        "dispatch",
+        "--state-dir", &state.display().to_string(),
+        "--repo", &repo.display().to_string(),
+        "--rules", &dispatch_rules(&state),
+        "--runner", "true",
+    ]);
+    assert_eq!(stdout_of(&out).trim_end(), "dispatch=unmeasured reason=ledger", "見張りは断る（{}）", told(&out));
+    let calls = crate::toolbox_ledger_record_names(&state);
+    assert_eq!(calls.len(), 1, "見張りの記録はちょうど 1 件（母集団 {calls:?}）");
+    let body = calls
+        .first()
+        .and_then(|name| fs::read_to_string(crate::toolbox_ledger_records(&state).join(name)).ok())
+        .unwrap_or_default();
+    let argv: Vec<&str> = body.lines().collect();
+    assert!(argv.contains(&"--readonly"), "読みの引数を持つ（母集団 {calls:?}）: {argv:?}");
+    assert!(argv.contains(&"list"), "一覧の語を持つ（母集団 {calls:?}）: {argv:?}");
+    clean(&[&repo, &state]);
+}
+
+/// (c) 明示の口と食い合わない: `--bd` に fixture の偽 client の絶対 path を渡した周は、見張りの記録が 0 件のまま、
+/// 偽 client 側の log に呼出が残る（同じ置き場に道具箱は組まれている＝見張りが PATH の先頭に在っても通らない）。
+#[test]
+fn e2e_ledger_tripwire_explicit_client_bypasses_the_tripwire() {
+    let (repo, state) = repo_with_state();
+    two_rows(&repo);
+    let json = state.join("ledger-explicit.json");
+    fs::write(&json, "[]\n").expect("偽の台帳を書ける");
+    let log = state.join("bd-explicit.log");
+    let client = script(
+        &state.join("bd-explicit"),
+        &format!("printf '%s\\n' \"$*\" >> '{}'\ncat '{}'\n", log.display(), json.display()),
+    );
+    let out = run_pipe(&[
+        "dispatch",
+        "--state-dir", &state.display().to_string(),
+        "--repo", &repo.display().to_string(),
+        "--rules", &dispatch_rules(&state),
+        "--bd", &client,
+        "--runner", "true",
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "1 周は rc 0（{}）", told(&out));
+    assert!(state.join(crate::TOOLBOX_BIN).join(vessel::seat::ledger::DEFAULT_BD).is_file(), "母集団: 見張りは置かれている");
+    let calls = fs::read_to_string(&log).map(|text| text.lines().count()).unwrap_or_default();
+    assert!(calls >= 1, "偽 client 側に呼出が残る（{}）", told(&out));
+    let tripped = crate::toolbox_ledger_record_names(&state);
+    assert!(tripped.is_empty(), "見張りの記録は 0 件（{tripped:?}・偽 client の呼出 {calls} 件）");
+    clean(&[&repo, &state]);
+}
+
 /// (§5 便の終端) `pipe stop` の終端の記帳の直後に列が 1 周撃たれ、**交差の解けた便が起こされる**
 /// （`RunCreated` が増える）。台帳を読めない周でも終端の rc は変わらない。
 #[test]

@@ -1457,7 +1457,8 @@ fn e2e_shim_atomic_rebuilding_the_toolbox_replaces_both_inodes() {
 }
 
 /// (c) 形 3: 2 度組んだ後の bin dir の entry は偽 systemd-run と偽 systemctl の**ちょうど 2 件**（一時の名の残骸 0・
-/// 母集団は entry 名の全件）。
+/// 母集団は entry 名の全件）。§37（`s2-07l.484`）が同じ手で置く台帳 client の見張りも同じ母集団に数える
+/// ＝期待は置いた偽 binary の名の全件で、残骸 0 の性質は変わらない。
 #[test]
 fn e2e_shim_atomic_rebuilt_bin_dir_holds_exactly_the_two_shims() {
     let state = tmp();
@@ -1466,8 +1467,8 @@ fn e2e_shim_atomic_rebuilt_bin_dir_holds_exactly_the_two_shims() {
     let _ = crate::toolbox_path(&state);
     assert_eq!(
         toolbox_bin_entries(&bin_dir),
-        vec!["systemctl".to_owned(), "systemd-run".to_owned()],
-        "entry は偽 binary の 2 件だけ（一時の名の残骸が無い）"
+        vec![vessel::seat::ledger::DEFAULT_BD.to_owned(), "systemctl".to_owned(), "systemd-run".to_owned()],
+        "entry は置いた偽 binary の名だけ（一時の名の残骸が無い）"
     );
 }
 
@@ -1488,6 +1489,28 @@ fn e2e_shim_atomic_rebuilt_shim_runs_directly_with_rc_zero() {
     let after = crate::toolbox_record_names(&state);
     assert_eq!(after.len(), before.len() + 1, "記録が 1 件増える（前 {before:?} → 後 {after:?}）");
     assert!(after.iter().any(|name| name == "shim-atomic-direct.args"), "増えた 1 件は直に撃った unit の記録: {after:?}");
+}
+
+// ───── 道具箱の台帳 client の見張り（設計 gate-cost.md §37・行 ad・`s2-07l.484`・接頭辞 `e2e_ledger_tripwire_`） ─────
+// flip-check: retroactive s2-07l.484
+
+/// (b) 既定の枝: helper 経由で 1 便を intake → spawn → gate → land まで通した後、見張りの記録は **0 件**である。
+/// 同じ便で道具箱の systemd-run の記録が**1 件以上**在ることを対で測る（便が道具箱を通っていない周に 0 件が
+/// 空虚に通らない）。非空虚の枝（見張りへ届く経路が在ること）は列の歯の file の (a) が測る。
+#[test]
+fn e2e_ledger_tripwire_helper_run_to_landed_never_reaches_the_ledger() {
+    let (repo, state) = repo_with_state();
+    let design = write_contract(&repo, &[], &[]);
+    let marker = state.join("lens-ran");
+    let id = gated_pass(&repo, &state, &design, &marker);
+    let out = land_once(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land は rc 0: {}", stderr_of(&out));
+    assert!(show_line(&repo, &state, &id).contains("stage=Landed"), "便は Landed まで通った");
+    let scopes = crate::toolbox_record_names(&state);
+    assert!(!scopes.is_empty(), "母集団: 同じ便が道具箱の systemd-run を通っている（{scopes:?}）");
+    let calls = crate::toolbox_ledger_record_names(&state);
+    assert!(calls.is_empty(), "器は台帳 client を 1 度も起こしていない（見張りの記録 {calls:?}・scope の記録 {scopes:?}）");
+    clean(&[&repo, &state]);
 }
 
 // flip-check: moved s2-07l.351

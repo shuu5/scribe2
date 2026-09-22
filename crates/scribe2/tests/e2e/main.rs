@@ -25,6 +25,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use vessel::fleet::Registration;
 use vessel::hook::vessel::digest::{self, PluginRecord};
 use vessel::name::{NAME, PLUGIN_DIR};
+use vessel::seat::ledger::DEFAULT_BD;
 use vessel::seat::role::Role;
 
 /// 同一 process 内での dir 名衝突を避ける連番。
@@ -195,6 +196,7 @@ fn e2e_fixture_tmp_dir_paths_are_unique() {
 
 // flip-check: retroactive s2-07l.504
 // flip-check: retroactive s2-07l.530
+// flip-check: retroactive s2-07l.484
 
 /// 道具箱の偽 binary を置く dir の leaf 名（呼び手の fixture の dir の直下）。
 pub const TOOLBOX_BIN: &str = "toolbox-bin";
@@ -280,9 +282,52 @@ fn write_systemctl_stub(bin_dir: &Path) {
     install_shim(&shim, script);
 }
 
+/// 道具箱の台帳 client の見張りが argv を写す記録 dir の leaf 名（**1 起動 1 file**・設計 §37・`s2-07l.484`）。
+///
+/// [`TOOLBOX_RECORDS`] とは**別の名**である——同じ置き場に重ねると、systemd-run の記録の母集団
+/// （`toolbox_record(` の「ちょうど 1 件」）に台帳の起動が混ざる。
+pub const TOOLBOX_LEDGER_RECORDS: &str = "toolbox-ledger-args";
+
+/// 見張りの記録 dir（[`toolbox_path`] が作る・読み手は dir を走査する）。
+pub fn toolbox_ledger_records(dir: &Path) -> PathBuf {
+    dir.join(TOOLBOX_LEDGER_RECORDS)
+}
+
+/// 道具箱に台帳 client の既定名（[`DEFAULT_BD`]）の見張りを 1 本置く（設計 §37 形 1）。
+///
+/// 呼ばれた argv を `records` の下へ**1 起動 1 file**（mktemp の一意な名）で写してから、台帳を解けない host と
+/// 同じ形で断る（標準出力は空・rc は非 0）。rc 0 の空の台帳として答えさせないのは、列の 1 周が「0 件を読めた」へ
+/// 倒れて unmeasured reason=ledger の枝が測られなくなるからである（§37 却下）。`--bd` に絶対 path を渡す起動は
+/// PATH を通らないので、ここへは届かない。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn write_ledger_tripwire(bin_dir: &Path, records: &Path) {
+    fs::create_dir_all(records).expect("見張りの記録の dir を作れる");
+    let script = format!(
+        "#!/bin/sh\n\
+         __f=$(mktemp '{0}'/call.XXXXXXXX) || exit 127\n\
+         printf '%s\\n' \"$@\" > \"$__f\"\n\
+         exit 127\n",
+        records.display()
+    );
+    install_shim(&bin_dir.join(DEFAULT_BD), &script);
+}
+
+/// 見張りの記録 dir の entry 名（昇順・dir が無ければ空＝器は台帳 client を 1 度も起こしていない）。
+pub fn toolbox_ledger_record_names(dir: &Path) -> Vec<String> {
+    sorted_entry_names(&toolbox_ledger_records(dir))
+}
+
 /// 道具箱の記録 dir の entry 名（昇順・dir が無ければ空＝1 件も作っていない）。
 pub fn toolbox_record_names(dir: &Path) -> Vec<String> {
-    let mut names: Vec<String> = fs::read_dir(toolbox_records(dir))
+    sorted_entry_names(&toolbox_records(dir))
+}
+
+/// `dir` の entry 名（昇順・dir が無ければ空）。
+fn sorted_entry_names(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(dir)
         .into_iter()
         .flatten()
         .flatten()
@@ -307,12 +352,13 @@ pub fn toolbox_record(dir: &Path, needle: &str) -> String {
 
 /// 歯が toy repo で実 binary を撃つときの PATH（設計 §30 約束 1・**3 つの口が全部ここを通る**）。
 ///
-/// 道具箱（偽 `systemd-run` と偽 `systemctl`）を `dir` の直下に置き、その dir を**先頭に積んだ**
-/// PATH の値を返す。host の PATH は後ろに残る（git / sh / cargo の解決は不変）。
+/// 道具箱（偽 `systemd-run` と偽 `systemctl` と台帳 client の見張り）を `dir` の直下に置き、その dir を
+/// **先頭に積んだ** PATH の値を返す。host の PATH は後ろに残る（git / sh / cargo の解決は不変）。
 pub fn toolbox_path(dir: &Path) -> String {
     let bin_dir = dir.join(TOOLBOX_BIN);
     write_systemd_run_stub(&bin_dir, &toolbox_records(dir));
     write_systemctl_stub(&bin_dir);
+    write_ledger_tripwire(&bin_dir, &toolbox_ledger_records(dir));
     format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap_or_default())
 }
 
