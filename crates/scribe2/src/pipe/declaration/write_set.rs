@@ -2,7 +2,7 @@
 //! §14・SRS FR48・pure）。
 //!
 //! 契約の write-set の各項目を base（tracked file の一覧）に対して [`read_write_set`] で読み（実在する file / 末尾 `/`
-//! の dir / `+` の新規 file / `-` の縮む file / `~` の消える file の 5 形）、`.rs` の項目ごとに上限（R-C4-2 / R-C4-1）の余地を
+//! の dir / `+` の新規 file / `-` の縮む file / `~` の消える file / `=` の置き場だけの file の 6 形）、`.rs` の項目ごとに上限（R-C4-2 / R-C4-1）の余地を
 //! [`headroom_shortfalls`] で測る。宣言（`.vessel.toml`）の読みと上限の突き合わせは親 module `declaration.rs` に
 //! 置いたまま。呼び手（`pipe::table` / `pipe::cli::intake`）の `use` は親の再 export を通る。
 
@@ -25,6 +25,10 @@ pub enum WriteSetItem {
     /// 行が永久に解けなくなる罠を塞ぐ）。増分は負なので [`Self::Shrink`] と同じく上限の余地を求めず、core の見積の
     /// 本数にも数えない。閉包・交差・guard・gate の照合は [`Self::File`] と同じ素の path として読む。
     Delete(String),
+    /// `=` 接頭辞で宣言した**置き場だけの file**（base に実在する file・接頭辞を剥がした path・設計 contract-source.md
+    /// §43 (1)・行 ar）。中身を変えず verify の置き場として載せただけなので、[`Self::Shrink`] と同じく上限の余地を
+    /// 求めず core の見積の本数にも数えない。閉包・交差・guard・gate の照合は [`Self::File`] と同じ素の path として読む。
+    PlaceOnly(String),
 }
 
 /// `+` の項目（新規 file の**宣言**）を base（tracked の**実測**）に対して読む場面（設計 contract-source.md §3・C10）。
@@ -40,9 +44,10 @@ pub enum NewFilePolicy {
 
 /// write-set の各項目を base に対して読む。**解けない項目は全件**（1 件目で止めない）。
 ///
-/// 解ける形は 5 つだけ: base に実在する file / 末尾 `/` で base に配下の file を持つ dir / `+` 接頭辞で base に**無い**
-/// 新規 file / `-` 接頭辞で base に**在る**縮む file / `~` 接頭辞で base に**在る**消える file。それ以外（無い file・
-/// 空の dir・base に在る file への `+`・base に無い file への `-` / `~`）は `Err` に項目の字面で積む。接頭辞付きの
+/// 解ける形は 6 つだけ: base に実在する file / 末尾 `/` で base に配下の file を持つ dir / `+` 接頭辞で base に**無い**
+/// 新規 file / `-` 接頭辞で base に**在る**縮む file / `~` 接頭辞で base に**在る**消える file / `=` 接頭辞で base に
+/// **在る**置き場だけの file。それ以外（無い file・空の dir・base に在る file への `+`・base に無い file への `-` /
+/// `~` / `=`）は `Err` に項目の字面で積む。接頭辞付きの
 /// 2 形だけは `policy` で読みが変わる（[`NewFilePolicy::MayBeLanded`] は base に在る `+` を [`WriteSetItem::File`] に、
 /// base に無い `~` を [`WriteSetItem::Delete`]〔着地で消えた〕に解く）。
 pub fn read_write_set(
@@ -83,6 +88,11 @@ fn read_item(item: &str, tracked: &[String], policy: NewFilePolicy) -> Option<Wr
     if let Some(old) = item.strip_prefix(crate::pipe::refuse::SHRINK_FILE) {
         let present = !old.is_empty() && tracked.iter().any(|path| path == old);
         return present.then(|| WriteSetItem::Shrink(old.to_owned()));
+    }
+    if let Some(place) = item.strip_prefix(crate::pipe::refuse::PLACE_ONLY_FILE) {
+        // `-` と同じ弁別（base に在る file だけ・policy を見ない＝受付と契約表の検査で読みを変えない・§43 (1)）。
+        let present = !place.is_empty() && tracked.iter().any(|path| path == place);
+        return present.then(|| WriteSetItem::PlaceOnly(place.to_owned()));
     }
     if let Some(gone) = item.strip_prefix(crate::pipe::refuse::DELETE_FILE) {
         // 契約表の検査は tracked に無くても解く（着地で消えた＝行の履歴・§24）。受付は在ることを要する。
@@ -160,14 +170,15 @@ impl FileLines {
 /// core-lines と同じ母集団）は `size_lines × その core に属する write-set の .rs 本数` を見積として同じ式で 1 回
 /// （母集団は file の余地と同じ [`core_of`] が `Some` の集合＝`tests/` の歯は本数に入れない・C10）。
 /// **縮む面（`-`）と消える file（`~`）は増分が負**なので、file の余地も求めず core の本数にも数えない（満杯の
-/// file を割る便を受付が断って満杯が固定される型を塞ぐ・§3「上限の余地」・§24）。
+/// file を割る便を受付が断って満杯が固定される型を塞ぐ・§3「上限の余地」・§24）。**置き場だけの file（`=`）** は
+/// 増分 0 なので同じ腕（§43 (1)）。
 pub fn headroom_shortfalls(items: &[WriteSetItem], lines: &[FileLines], caps: Caps) -> Vec<Headroom> {
     let files: Vec<&str> = items
         .iter()
         .flat_map(|item| match *item {
             WriteSetItem::File(ref path) | WriteSetItem::New(ref path) => vec![path.as_str()],
             WriteSetItem::Dir(ref under) => under.iter().map(String::as_str).collect(),
-            WriteSetItem::Shrink(_) | WriteSetItem::Delete(_) => Vec::new(),
+            WriteSetItem::Shrink(_) | WriteSetItem::Delete(_) | WriteSetItem::PlaceOnly(_) => Vec::new(),
         })
         .filter(|path| path.ends_with(".rs"))
         .collect();
@@ -365,6 +376,37 @@ mod tests {
         }
     }
 
+    /// 置き場だけの `=`（§43 (1)・行 ar）: base に在る file にだけ解け（2 場面とも同じ読み）、無い file・空の `=` は従来の
+    /// 未解決として字面で返る。解けた `=` は余地の母集団に入らず core の見積の本数にも数えない——同じ fixture の素の
+    /// path の項目は従来どおり入る（母集団 = 項目の本数と対で数える）。
+    #[test]
+    fn contract_place_only_item_resolves_only_in_base_and_asks_no_headroom() {
+        for policy in [NewFilePolicy::MustBeAbsent, NewFilePolicy::MayBeLanded] {
+            let read = read_write_set(&strings(&["=crates/toy/src/a.rs"]), &base(), policy);
+            assert_eq!(read, Ok(vec![WriteSetItem::PlaceOnly("crates/toy/src/a.rs".to_owned())]), "{policy:?} で base の = は解ける");
+            let missing = read_write_set(&strings(&["=crates/toy/src/none.rs", "="]), &base(), policy);
+            assert_eq!(missing, Err(strings(&["=crates/toy/src/none.rs", "="])), "{policy:?} で無い file・空の = は解けない");
+        }
+        let lines = whole(&[("crates/toy/src/a.rs", 1_400), ("crates/toy/src/b.rs", 1_400)]);
+        let caps = |size_lines: u64, core_lines: u64| Caps { file_lines: 1_500, core_lines, size_lines };
+        let policy = NewFilePolicy::MustBeAbsent;
+        let mixed = read_write_set(&strings(&["=crates/toy/src/a.rs", "crates/toy/src/b.rs"]), &base(), policy).unwrap_or_default();
+        assert_eq!(mixed.len(), 2, "母集団は 2 項目");
+        assert_eq!(
+            headroom_shortfalls(&mixed, &lines, caps(300, 40_000)),
+            vec![Headroom { file: "crates/toy/src/b.rs".to_owned(), headroom: 100 }],
+            "余地 100 の 2 file のうち名指すのは素の b.rs だけ（= の a.rs は余地を求めない）"
+        );
+        // core: 合計 2800・上限 2900（余地 100）・S の見積は = を数えない 1 本 × 100 で入り、2 本なら 200 で超える。
+        assert!(headroom_shortfalls(&mixed, &lines, caps(100, 2_900)).is_empty(), "core の見積は素の 1 本だけ");
+        let plain = read_write_set(&strings(&["crates/toy/src/a.rs", "crates/toy/src/b.rs"]), &base(), policy).unwrap_or_default();
+        assert_eq!(
+            headroom_shortfalls(&plain, &lines, caps(100, 2_900)),
+            vec![Headroom { file: CORE.to_owned(), headroom: 100 }],
+            "印を外すと 2 本 × 100 = 200 が core の余地 100 を超える"
+        );
+    }
+
     /// 上限の余地: write-set の `.rs` ごとに `file_lines − 行数` を余地とし、size の見積が超える file を名指す。core
     /// （`crates/<c>/src/` の合計）は `見積 × .rs 本数` で 1 回。`.rs` でない項目と別 crate の行は数えない。
     #[test]
@@ -468,7 +510,7 @@ mod tests {
                 WriteSetItem::File(ref path) | WriteSetItem::New(ref path) => {
                     super::core_of(path).map(|_| path.clone())
                 }
-                WriteSetItem::Dir(_) | WriteSetItem::Shrink(_) | WriteSetItem::Delete(_) => None,
+                WriteSetItem::Dir(_) | WriteSetItem::Shrink(_) | WriteSetItem::Delete(_) | WriteSetItem::PlaceOnly(_) => None,
             })
             .collect();
         assert_eq!(measured, in_range, "余地を測る範囲は core_of の述語と同じ");

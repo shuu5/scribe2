@@ -533,6 +533,27 @@ fn contract_closure_ext_delete_does_not_count_headroom() {
     clean(&[&repo, &state]);
 }
 
+/// 置き場だけの `=`（§43 (1)・行 ar・接頭辞 `contract_place_only_`）: 余地 101 の 1399 行の `.rs` を `=` で持つ size M
+/// （300）の行は受付を**通り** run dir が出来る。同じ行から印だけを外すと従来の `cap-headroom` の字面で rc 1・run dir も
+/// event も作らない（母集団 = 2 回の受付の rc を対で見る）。
+#[test]
+fn contract_place_only_item_passes_intake_and_unmarked_is_refused_by_headroom() {
+    let (repo, state) = repo_with_big_file();
+    let roomy = capped_rules(&state, "rules-roomy.toml", 40_000);
+    let plain = intake_with_rules(&repo, &state, &sized_contract(&repo, "m.toml", "M", "\"crates/toy/src/big.rs\""), "s2-pm", &roomy);
+    let err = stderr_of(&plain);
+    assert_eq!(plain.status.code(), Some(i32::from(RC_REFUSED)), "印の無い M は余地 101 に入らない: {err}");
+    assert!(err.contains("crates/toy/src/big.rs の上限の余地が 101 行") && err.contains("size M"), "cap-headroom: {err}");
+    assert_eq!(event_count(&state), 0, "断った周は event を書かない");
+    assert!(!state.join("pipe").exists(), "run dir も作らない");
+    let place = intake_with_rules(&repo, &state, &sized_contract(&repo, "place.toml", "M", "\"=crates/toy/src/big.rs\""), "s2-pp", &roomy);
+    assert_eq!(place.status.code(), Some(i32::from(RC_OK)), "= の big.rs は余地を求めない: {}", stderr_of(&place));
+    let id = run_id_of(&place);
+    assert!(state.join("pipe").join(&id).is_dir(), "run dir が作られる: {id}");
+    assert_eq!(event_count(&state), 2, "RunCreated と審査の段（Reviewed）の 2 件");
+    clean(&[&repo, &state]);
+}
+
 /// (5) 行の数え方（`s2-07l.254`・設計 rules-manifest.md §4・接頭辞 `contract_closure_ext_width_`）: base の `.rs` が短い
 /// 1399 行と 2000 字を詰めた 1 行を持つとき、余地は改行の数（1400 行 → 100）でなく幅（`--rules` の `R-C4.line-width`）で
 /// 正規化した行数で出て、改行の数なら入る size S（100）が `cap-headroom` で断られる（詰め込みで余地が増えない）。

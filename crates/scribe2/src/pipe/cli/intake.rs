@@ -37,7 +37,7 @@ use crate::name::NAME;
 use crate::pipe::closure::{self, ClosureError, Source};
 use crate::pipe::contract::{Contract, ContractError};
 use crate::pipe::declaration::{self, Ceiling, Effective, NewFilePolicy, WriteSetItem, CEILING_ROW, DENIED_ROW};
-use crate::pipe::refuse::{overlaps, Refuse, DELETE_FILE, NEW_FILE, SHRINK_FILE};
+use crate::pipe::refuse::{overlaps, Refuse, DELETE_FILE, NEW_FILE, PLACE_ONLY_FILE, SHRINK_FILE};
 use crate::pipe::review::{self, FindingKind, Judgement, ROW_SAME_KIND_STOP};
 use crate::pipe::table::{self, ContractRow, TableError};
 use crate::pipe::{contract_path, current, emit, run_dir, run_id, vessel_path, Emit, CONTRACT_FILE};
@@ -1074,7 +1074,7 @@ pub(in crate::pipe) struct Crossed {
 
 /// 上限の余地の事実（[`exclude_cap_shortfall`] が通った周・§21 の `headroom=` の材料）。
 pub(super) struct Headrooms {
-    /// write-set の `.rs`（dir は配下に展開・`+` の新規 file は 0 行・`-` の縮む面と `~` の消える file は余地を求めない）ごとの余地
+    /// write-set の `.rs`（dir は配下に展開・`+` の新規 file は 0 行・`-` / `~` / `=` は余地を求めない）ごとの余地
     /// （R-C4-2 の値 − base の行数）・余地の小さい順（同じ余地は path の辞書順）。
     pub(super) rooms: Vec<(String, u64)>,
     /// 契約の `size` の見積（行・rules 行 `pipe.size_<s|m|l>_lines` の値）。
@@ -1090,7 +1090,7 @@ fn headrooms_of(items: &[WriteSetItem], lines: &[declaration::FileLines], caps: 
         .flat_map(|item| match *item {
             WriteSetItem::File(ref path) | WriteSetItem::New(ref path) => vec![path.clone()],
             WriteSetItem::Dir(ref under) => under.clone(),
-            WriteSetItem::Shrink(_) | WriteSetItem::Delete(_) => Vec::new(),
+            WriteSetItem::Shrink(_) | WriteSetItem::Delete(_) | WriteSetItem::PlaceOnly(_) => Vec::new(),
         })
         .filter(|path| path.ends_with(".rs"))
         .map(|path| {
@@ -1127,7 +1127,9 @@ fn exclude_cap_shortfall(manifest: &Manifest, contract: &Contract, materials: &M
     let items = match declaration::read_write_set(&contract.write_set, tracked, NewFilePolicy::MustBeAbsent) {
         Ok(found) => found,
         Err(unresolved) => {
-            if let Some(item) = unresolved.iter().find(|item| item.starts_with([NEW_FILE, SHRINK_FILE, DELETE_FILE])) {
+            if let Some(item) =
+                unresolved.iter().find(|item| item.starts_with([NEW_FILE, SHRINK_FILE, DELETE_FILE, PLACE_ONLY_FILE]))
+            {
                 return Err(refuse(&Refuse::WriteSetItemUnresolved { item: item.clone() }, &[]));
             }
             let resolvable: Vec<String> =

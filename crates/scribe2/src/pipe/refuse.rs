@@ -393,17 +393,22 @@ pub(crate) const SHRINK_FILE: char = '-';
 /// 照合と gate の write-set 照合は素の path で持つ（消す file は触る file）。
 pub(crate) const DELETE_FILE: char = '~';
 
+/// 中身を変えない・verify の置き場として載せただけの項目の接頭辞（設計 contract-source.md §43 (1)・行 ar・base に
+/// **実在する** file を要する）。[`SHRINK_FILE`] と同じく受付の宣言だけの文法で、上限の余地も core の見積の本数も
+/// 求めない。guard と交差の照合と gate の write-set 照合は素の path で持つ。
+pub(crate) const PLACE_ONLY_FILE: char = '=';
+
 /// path 1 本を字面で畳む（write-set guard の `relative_to` と同じ規則）。
 ///
 /// 先頭の `./` を落とす・連続する `/` を 1 つにする・`..` を畳む・**末尾の `/` は dir の印
-/// として残す**・接頭辞（新規 file の `+`・縮む面の `-`・消える file の `~`）は剥がす。root の外へ出る `..`
+/// として残す**・接頭辞（新規 file の `+`・縮む面の `-`・消える file の `~`・置き場だけの `=`）は剥がす。root の外へ出る `..`
 /// （畳めない分）はそのまま残す
 /// ＝字面が違うものを同じ path に化けさせない。**存在は見ない**ので、まだ無い file を書く契約も同じ規則で測れる。
 ///
 /// `pub(crate)` なのは、spawn が guard へ写す policy（`spawn::write_policy`）が**同じ 1 本**で接頭辞を剥がすため
 /// である（剥がす規則を 2 か所に持たない）。
 pub(crate) fn normalize(raw: &str) -> String {
-    let raw = raw.strip_prefix([NEW_FILE, SHRINK_FILE, DELETE_FILE]).unwrap_or(raw);
+    let raw = raw.strip_prefix([NEW_FILE, SHRINK_FILE, DELETE_FILE, PLACE_ONLY_FILE]).unwrap_or(raw);
     let is_dir = raw.ends_with('/');
     let mut parts: Vec<&str> = Vec::new();
     for part in raw.split('/') {
@@ -699,6 +704,21 @@ mod tests {
         assert_eq!(normalize("src/"), "src/", "末尾の / は dir の印として残る");
         assert_eq!(normalize("+src/new.rs"), "src/new.rs", "新規 file の接頭辞は剥がす");
         assert_eq!(normalize("-src/big.rs"), "src/big.rs", "縮む面の接頭辞も剥がす（交差の照合は素の path）");
+    }
+
+    /// 置き場だけの `=`（§43 (1)・行 ar）も `normalize` の 1 本が既存 3 形の隣で剥がす: 4 形とも同じ素の path に畳まれ、
+    /// 交差と guard の照合（[`covered`]）は素の path の項目と同じ面を触ると読む。剥がすのは先頭の 1 字だけ。
+    #[test]
+    fn contract_place_only_normalize_strips_the_mark_next_to_the_other_three() {
+        let marked = ["+src/a.rs", "-src/a.rs", "~src/a.rs", "=src/a.rs"];
+        let stripped: Vec<String> = marked.iter().map(|item| normalize(item)).collect();
+        assert_eq!(stripped, vec!["src/a.rs".to_owned(); 4], "4 形とも素の path（母集団 {} 形）", marked.len());
+        assert_eq!(normalize("=src/"), "src/", "dir の印は残る");
+        assert_eq!(normalize("==src/a.rs"), "=src/a.rs", "剥がすのは 1 字だけ");
+        let place = vec!["=src/a.rs".to_owned()];
+        assert!(covered(&place, "src/a.rs"), "= の項目は素の path を覆う（guard の照合は不変）");
+        let crossed = overlaps(&place, &["src/a.rs".to_owned()], &tracked());
+        assert_eq!(crossed, vec![("=src/a.rs".to_owned(), "src/a.rs".to_owned())], "交差は素の path で数え、字面のまま返る");
     }
 
     /// 交差の全組が返る（1 組で止めない＝stderr に全組を並べる材料）。
