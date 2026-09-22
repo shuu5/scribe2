@@ -17,7 +17,7 @@
 use crate::polarity::{OnFailure, Polarity, Timing};
 use super::{
     build, feed, fill, flag, need, plugin_dirs, read_stdin_bytes, rules_of, runner_effort, runner_model, Call, Effort,
-    Format, DEFAULT_CLAUDE, RC_RATE_LIMIT,
+    Format, DEFAULT_CLAUDE, RC_RATE_LIMIT, RC_UNREACHABLE,
 };
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
 use crate::fleet::select::Model;
@@ -299,6 +299,8 @@ struct Watched {
 /// result の text の最終行が質問 record だった周だけで、同じ record を stdout の最終行に
 /// **そのまま**写し [`RC_QUESTION`] で終える（観測行はその前・pipeline は最終行を読む）。
 /// record が無い・読めない周は claude の rc（0）を写す（FailOpen・[`QUESTION_POLARITY`]）。
+/// もう 1 つは最終 `result` record が API に届かず止まったと言う周（[`unreachable`]）で、claude の rc に依らず
+/// 停止行（[`halt_line`]）を最終行に足して [`RC_UNREACHABLE`] で終える（設計 account-autonomy.md §17）。
 ///
 /// 要約行の**前**に、最終 `result` record の観測行（[`result_line`]）を 1 本出す（`s2-07l.258`）。
 /// rc≠0 の周も同じ——stream は捨てられるので、これが無いと claude が `is_error` で終わった理由は
@@ -319,6 +321,12 @@ fn conclude(status: std::io::Result<ExitStatus>, seen: &Watched) -> Outcome {
         out.push(result_line(seen.result_kind, seen.result_is_error, seen.last_result.as_deref()));
     }
     out.push(summary_line(rc, seen.records, &observed, seen.usage.as_ref()));
+    // **API に届かず止まった周は rc を作り替える**（設計 account-autonomy.md §17 (1)）。pipe は rc だけで段を分ける
+    // ので、claude の rc（1）を写すと便が `Failed` に倒れ成果が捨てられる。弁別は [`unreachable`] の 1 本（pure）。
+    if unreachable(seen.result_is_error, seen.last_result.as_deref()) {
+        out.push(halt_line(seen.last_result.as_deref().unwrap_or_default()));
+        return Outcome { out, err: Vec::new(), rc: RC_UNREACHABLE };
+    }
     if rc != 0 {
         // 正常終了でない周は最終行を読まない（質問ではなく claude の失敗）。
         return Outcome { out, err: Vec::new(), rc };
@@ -392,14 +400,16 @@ pub fn result_line(kind: Option<ResultKind>, is_error: Option<bool>, text: Optio
         Some(false) => "false",
         None => "-",
     };
-    let text = text.map_or_else(|| "-".to_owned(), |found| {
-        found
-            .chars()
-            .take(RESULT_TEXT_CHARS)
-            .map(|ch| if matches!(ch, '\n' | '\r' | '\t') { ' ' } else { ch })
-            .collect()
-    });
+    let text = text.map_or_else(|| "-".to_owned(), |found| one_line(found, RESULT_TEXT_CHARS));
     format!("runner: result subtype={subtype} is_error={is_error} text={text}")
+}
+
+/// 本文の先頭 `chars` 字を 1 行に収める（改行と tab は空白・`…` は付けない・観測行と停止行が共有する）。
+fn one_line(text: &str, chars: usize) -> String {
+    text.chars()
+        .take(chars)
+        .map(|ch| if matches!(ch, '\n' | '\r' | '\t') { ' ' } else { ch })
+        .collect()
 }
 
 /// 許す command を `--allowedTools` の 1 本へ組む。
@@ -704,6 +714,31 @@ pub fn limited(status: &str) -> Outcome {
     Outcome { out: vec![stop_line(status)], err: Vec::new(), rc: RC_RATE_LIMIT }
 }
 
+/// **API に届かなかったことを表す語の閉じた集合**（設計 account-autonomy.md §17 (1)・宣言順）。
+///
+/// 到達不能を表す typed な record は claude の stream に無い（上限は `rate_limit_event` の status で来るが、
+/// ネットの断は `result` の本文にしか現れない）ので、本文の語で読む。記録時点の語は実測の本文
+/// `API Error: Can't reach the API server (EAI_AGAIN)`（host のネット断 2026-09-14）と、同じ層の errno 2 つ。
+/// **集合は claude の文面に追随する下界**で、見逃した周は従来どおり `Failed`（fail-safe 側）。語を足すのはここ 1 か所。
+pub const UNREACHABLE_WORDS: &[&str] = &["Can't reach the API server", "EAI_AGAIN", "ENETUNREACH", "ECONNREFUSED"];
+
+/// 最終 `result` record が「API に届かず止まった」を言うか（純関数）。
+///
+/// `is_error` が `true` の record の本文が [`UNREACHABLE_WORDS`] のどれかを含む周**だけ**が真である。
+/// `is_error` が `false` / 読めない周は、本文に同じ語が在っても読まない（実装の説明文や tool の出力に語が
+/// 混じった正常終了を、到達不能に化けさせない）。
+pub fn unreachable(is_error: Option<bool>, text: Option<&str>) -> bool {
+    is_error == Some(true) && text.is_some_and(|body| UNREACHABLE_WORDS.iter().any(|word| body.contains(word)))
+}
+
+/// 到達不能の停止行に載せる本文の先頭の字数。
+const HALT_TEXT_CHARS: usize = 200;
+
+/// API に届かず止めた周の 1 行（`runner: halt reason=unreachable text=<本文の先頭>`・[`stop_line`] と同じ stdout の面）。
+pub fn halt_line(text: &str) -> String {
+    format!("runner: halt reason=unreachable text={}", one_line(text, HALT_TEXT_CHARS))
+}
+
 /// 停止行（[`stop_line`]）から `rate-limit-status=` の値を読む（純関数・[`stop_line`] の対）。
 ///
 /// 読むのは**停止行そのもの**だけで、観測の後置き（`runner: rc=… rate-limit-status=…`）は
@@ -886,9 +921,86 @@ fn refused(reason: String) -> Outcome {
 
 #[cfg(test)]
 mod tests {
-    use super::{observed_suffix, result_usage, scope_words, stop_line, stop_status, summary_line, summary_usage, Scan};
+    use super::{
+        conclude, halt_line, observed_suffix, result_usage, scope_words, stop_line, stop_status, summary_line, summary_usage,
+        unreachable, Scan, Watched, UNREACHABLE_WORDS,
+    };
+    use crate::cli_args::RC_USAGE;
+    use crate::cli_outcome::{RC_BROKEN, RC_OK, RC_REFUSED};
     use crate::fleet::Usage;
+    use crate::headless::{RC_RATE_LIMIT, RC_UNREACHABLE};
+    use crate::pipe::approve::RC_BLOCKED;
     use crate::pipe::confine::{Orphans, Peak, Released};
+    use crate::pipe::gate::RC_INCONCLUSIVE;
+    use crate::pipe::RC_QUESTION;
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::ExitStatus;
+
+    /// 実測の本文（host のネット断 2026-09-14 の runner の `result`）。
+    const OBSERVED: &str = "API Error: Can't reach the API server (EAI_AGAIN)";
+
+    /// 弁別は `is_error=true` の本文が集合の語を**どれか 1 つ**含む周だけ（語ごとに 1 本ずつ測る・宣言順）。
+    #[test]
+    fn pipe_unreachable_reads_each_word_of_the_set_on_error_results() {
+        assert!(unreachable(Some(true), Some(OBSERVED)), "実測の本文");
+        for word in UNREACHABLE_WORDS {
+            assert!(unreachable(Some(true), Some(&format!("API Error: {word}"))), "語 {word} を含む error の本文");
+        }
+        assert_eq!(UNREACHABLE_WORDS.len(), 4, "集合は閉じた 4 語（足すのは設計 §17 の 1 か所）");
+    }
+
+    /// **pure**: `is_error=false` / 読めない周は語が在っても読まない。集合に無い error の本文も読まない。
+    #[test]
+    fn pipe_unreachable_is_pure_on_is_error_and_the_set() {
+        assert!(!unreachable(Some(false), Some(OBSERVED)), "is_error=false の本文に語が在っても弁別しない");
+        assert!(!unreachable(None, Some(OBSERVED)), "is_error を読めない周も弁別しない");
+        assert!(!unreachable(Some(true), Some("API Error: 500 Internal server error")), "集合に無い error");
+        assert!(!unreachable(Some(true), None), "本文の無い error");
+        assert!(!unreachable(Some(true), Some("can't reach the api server")), "語は字面のまま照合する（大小を畳まない）");
+    }
+
+    /// 新しい rc は既存の rc のどれとも衝突しない（母集団 = 器が名乗る rc の定数の全部）。
+    #[test]
+    fn pipe_unreachable_rc_does_not_collide_with_existing_rcs() {
+        let existing = [RC_OK, RC_REFUSED, RC_BROKEN, RC_USAGE, RC_BLOCKED, RC_INCONCLUSIVE, RC_RATE_LIMIT, RC_QUESTION];
+        assert!(!existing.contains(&RC_UNREACHABLE), "rc {RC_UNREACHABLE} は既存 {existing:?} と別");
+        assert_eq!(RC_UNREACHABLE, 77);
+    }
+
+    /// 最終 `result` を見た周の [`Watched`]（claude の rc は呼び手が渡す）。
+    fn watched(is_error: bool, text: &str) -> Watched {
+        Watched {
+            records: 2,
+            result_seen: true,
+            result_is_error: Some(is_error),
+            last_result: Some(text.to_owned()),
+            ..Watched::default()
+        }
+    }
+
+    /// claude が rc 1 で終わり最終 `result` が到達不能を言う周は rc [`RC_UNREACHABLE`]・最終行が停止行。
+    /// 同じ本文で `is_error=false` の周と、集合に無い error の周は claude の rc（1）を写す（従来どおり）。
+    #[test]
+    fn pipe_unreachable_conclude_rewrites_only_the_unreachable_rc() {
+        let failed = || Ok(ExitStatus::from_raw(1 << 8));
+        let halted = conclude(failed(), &watched(true, OBSERVED));
+        assert_eq!(halted.rc, RC_UNREACHABLE);
+        assert_eq!(halted.out.last().map(String::as_str), Some(halt_line(OBSERVED).as_str()), "{:?}", halted.out);
+        assert!(halted.out.iter().any(|line| line.starts_with("runner: rc=1 ")), "要約行は claude の rc: {:?}", halted.out);
+        assert_eq!(conclude(failed(), &watched(false, OBSERVED)).rc, 1, "is_error=false は写す");
+        assert_eq!(conclude(failed(), &watched(true, "API Error: 500")).rc, 1, "集合に無い error は写す");
+    }
+
+    /// 停止行は本文の先頭を 1 行に収める（改行は空白）。
+    #[test]
+    fn pipe_unreachable_halt_line_carries_the_head_of_the_text() {
+        assert_eq!(
+            halt_line("API Error: Can't reach the API server\n(EAI_AGAIN)"),
+            "runner: halt reason=unreachable text=API Error: Can't reach the API server (EAI_AGAIN)"
+        );
+        let long = "x".repeat(500);
+        assert_eq!(halt_line(&long), format!("runner: halt reason=unreachable text={}", "x".repeat(200)));
+    }
 
     /// 実 claude の result record と同じ形の 1 行（`usage` の中で `iterations[]` が token 4 値より**前**に在り、その中にも
     /// 同名の key が違う数で在る・`modelUsage` も入れ子で持つ）。`turns` / `wall` は top-level の 2 値の字面そのまま。

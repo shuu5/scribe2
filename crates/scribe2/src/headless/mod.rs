@@ -140,6 +140,11 @@ pub const DEFAULT_CLAUDE: &str = "claude";
 /// rate limit で止めた周の rc。呼出側（`pipe`）はこれを `Failed detail=rate-limit` に写す。
 pub const RC_RATE_LIMIT: u8 = 75;
 
+/// API に届かず止まった周の rc（設計 account-autonomy.md §17・`s2-07l.301`）。呼出側（`pipe`）は `Failed` を記帳せず、
+/// 段を `Spawned` のまま `SeatStopped detail=runner-unreachable` に写す。値は [`RC_RATE_LIMIT`] と
+/// `pipe::RC_QUESTION`（76）の隣で、既存の rc と衝突しない（in-file の歯が pin する）。
+pub const RC_UNREACHABLE: u8 = 77;
+
 /// 口座の切替に使う**子 process の**環境変数。ここへ書くだけで、自分では読まない。
 ///
 /// `--account-dir` を渡さない周は、親のこの env が**そのまま子へ継承される**（planner 裁定

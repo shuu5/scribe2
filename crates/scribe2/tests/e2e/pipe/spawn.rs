@@ -1132,6 +1132,148 @@ fn pipe_resume_kill_at_spawned_refuses_while_runner_alive() {
     clean(&[&repo, &state]);
 }
 
+// ───── API に届かず止まった runner（`s2-07l.301`・設計 account-autonomy.md §17・SRS FR37 / FR14・接頭辞 `pipe_unreachable_`） ─────
+//
+// turn 1 は**実 runner**（`<bin> runner`）を偽 claude で撃つ: 偽 claude が `result` record に `is_error` と本文を書いて rc 1 で
+// 終わる。runner の弁別（到達不能の閉じた語の集合）が rc を決め、pipe の spawn はその rc だけで段を分ける。
+
+/// 実測の到達不能の本文（host のネット断 2026-09-14 の runner の `result`）。
+const UNREACHABLE_TEXT: &str = "API Error: Can't reach the API server (EAI_AGAIN)";
+
+/// 偽 claude（実行 file）: stdin を読み捨て、`is_error` と本文 `text` の `result` record を 1 行書いて rc 1 で終わる。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn result_claude(state: &Path, is_error: bool, text: &str) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let record = format!("{{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":{is_error},\"result\":\"{text}\"}}");
+    let path = state.join("result-claude");
+    fs::write(&path, format!("#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' '{}'\nexit 1\n", record.replace('\'', "'\\''")))
+        .expect("偽 claude を書ける");
+    let mut perm = fs::metadata(&path).expect("偽 claude の権限を読める").permissions();
+    perm.set_mode(0o755);
+    fs::set_permissions(&path, perm).expect("偽 claude を実行可能にできる");
+    path
+}
+
+/// turn 1 つ分の本文: commit を 1 本作ってから、実 runner を偽 claude `claude` で撃ち、その rc で終わる（stdin は
+/// [`turn_runner`] が写した `stdin-<n>`・位置引数は [`unreachable_runner`] が渡す placeholder の 4 つ）。
+fn commit_then_real_runner_turn(claude: &Path) -> String {
+    format!(
+        "printf 'y\\n' >> src/lib.rs\ngit add -A\ngit commit -q -m partial-work\n\
+         '{}' runner --worktree \"$1\" --write-set \"$2\" --vessel \"$3\" --plugin-dir \"$4\" \
+         --permission-mode acceptEdits --claude '{}' < \"$D/stdin-$N\"\nexit $?",
+        bin(),
+        claude.display()
+    )
+}
+
+/// turn 1 = commit + 実 runner（偽 claude の本文は `is_error` / `text`）・turn 2 = [`IMPLEMENT`] の runner cmd。
+fn unreachable_runner(state: &Path, is_error: bool, text: &str) -> String {
+    let claude = result_claude(state, is_error, text);
+    let turns = [commit_then_real_runner_turn(&claude), IMPLEMENT.to_owned()];
+    format!("{} {{worktree}} {{write_set}} {{vessel}} {{plugin_dir}}", turn_runner(state, &turns))
+}
+
+/// write-set `src/lib.rs` の便を intake → [`unreachable_runner`] で spawn する。返すのは（便 id・runner cmd・spawn の出力）。
+fn spawn_real_runner(repo: &Path, state: &Path, is_error: bool, text: &str) -> (String, String, Output) {
+    let contract = write_set_contract(repo, "net", &["src/lib.rs"]);
+    let id = intake_bead(repo, state, &contract, "s2-net");
+    let runner = unreachable_runner(state, is_error, text);
+    let out = spawn_with(repo, state, &id, &runner);
+    (id, runner, out)
+}
+
+/// 便の `SeatStopped` のうち detail が `runner-unreachable` の件数。
+fn unreachable_stop_count(state: &Path, id: &str) -> usize {
+    events(state)
+        .iter()
+        .filter(|found| {
+            found.run == id && found.kind == EventKind::SeatStopped && found.detail.as_deref() == Some("runner-unreachable")
+        })
+        .count()
+}
+
+/// (a) 到達不能の本文で終わった runner の便は `Spawned` のまま `SeatStopped detail=runner-unreachable` が 1 件・`Failed` は
+/// 0・worktree の commit が残る。spawn は rc 3（続きは resume）で、判定行に `halt=unreachable`。
+#[test]
+fn pipe_unreachable_spawn_keeps_the_run_spawned_with_one_seat_stop() {
+    let (repo, state) = repo_with_state();
+    let (id, _runner, out) = spawn_real_runner(&repo, &state, true, UNREACHABLE_TEXT);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BLOCKED)), "{} / {}", stdout_of(&out), stderr_of(&out));
+    assert!(stdout_of(&out).contains(&format!("run={id} stage=Spawned halt=unreachable")), "{}", stdout_of(&out));
+    assert_eq!(stub_calls(&state), 1, "runner は 1 回だけ起きる（連鎖が起こし直さない）");
+    assert_eq!(unreachable_stop_count(&state, &id), 1, "到達不能の SeatStopped を 1 件");
+    assert_eq!(kind_count(&state, &id, EventKind::SeatStopped), 1, "SeatStopped は理由つきの 1 件だけ");
+    assert_eq!(stage_count(&state, &id, Stage::Failed), 0, "Failed に倒さない");
+    assert!(show_line(&repo, &state, &id).contains("stage=Spawned"), "段は Spawned のまま live");
+    let worktree = worktree_of(&repo, &id);
+    assert_eq!(git(&worktree, &["rev-list", "--count", "refs/heads/main..HEAD"]), "1", "turn 1 の commit が残る");
+    let kept = fs::read_to_string(state.join("pipe").join(&id).join("runner.stdout.log")).unwrap_or_default();
+    assert!(kept.contains(&format!("runner: halt reason=unreachable text={UNREACHABLE_TEXT}")), "停止行: {kept}");
+    clean(&[&repo, &state]);
+}
+
+/// (b) (a) の便に `resume --runner` を撃つと、生死の計測を飛ばして（`runner-dead` を記帳しない）runner を 1 回起こし直し、
+/// `Spawned detail=account:a1,resume:unreachable` を記帳して同じ worktree で `Implemented` に至る。2 回目の stdin の
+/// 「途中再開」節に理由の行（`SeatStopped detail=runner-unreachable` の ts）と turn 1 の commit が載る。
+#[test]
+fn pipe_unreachable_resume_skips_liveness_and_respawns_once() {
+    let (repo, state) = repo_with_state();
+    let (id, runner, _) = spawn_real_runner(&repo, &state, true, UNREACHABLE_TEXT);
+    let base = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let resumed = resume_dead_runner(&repo, &state, &id, &runner);
+    assert_eq!(resumed.status.code(), Some(i32::from(RC_OK)), "{} / {}", stdout_of(&resumed), stderr_of(&resumed));
+    assert!(stdout_of(&resumed).contains(&format!("run={id} stage=Implemented")), "{}", stdout_of(&resumed));
+    assert_eq!(stub_calls(&state), 2, "runner を 1 回起こし直した");
+    assert_eq!(runner_dead_count(&state, &id), 0, "生死を測らず runner-dead を二重に記帳しない");
+    assert_eq!(unreachable_stop_count(&state, &id), 1, "到達不能の記帳は 1 件のまま");
+    assert_eq!(
+        spawned_details(&state, &id),
+        vec![format!("base:{base}"), "account:a1,resume:unreachable".to_owned()],
+        "起こし直しの記帳は理由を unreachable と名乗る"
+    );
+    let stopped_at = events(&state)
+        .into_iter()
+        .filter(|event| {
+            event.run == id && event.kind == EventKind::SeatStopped && event.detail.as_deref() == Some("runner-unreachable")
+        })
+        .map(|event| event.ts)
+        .next_back()
+        .unwrap_or_default();
+    let prompt = stub_stdin(&state, 2);
+    let reason = format!("- 前の turn は {stopped_at} に API に届かず止まった（ネットの断）");
+    assert!(!stopped_at.is_empty() && prompt.contains(&reason), "理由の行: {prompt}");
+    assert!(prompt.contains("partial-work"), "turn 1 の commit が一覧に載る: {prompt}");
+    let worktree = worktree_of(&repo, &id);
+    assert_eq!(git(&worktree, &["rev-list", "--count", "refs/heads/main..HEAD"]), "2", "同じ worktree に 2 本目が載る");
+    assert!(show_line(&repo, &state, &id).contains("stage=Implemented"), "Implemented に至る");
+    clean(&[&repo, &state]);
+}
+
+/// (c) 集合に無い `is_error` の本文は従来どおり `Failed detail=runner-rc:1,commits:1`（理由つきの `SeatStopped` は 0）。
+#[test]
+fn pipe_unreachable_other_error_text_still_fails() {
+    let (repo, state) = repo_with_state();
+    let (id, _runner, out) = spawn_real_runner(&repo, &state, true, "API Error: 500 Internal server error");
+    assert!(stdout_of(&out).contains("stage=Failed"), "{} / {}", stdout_of(&out), stderr_of(&out));
+    assert_eq!(stages(&state, &id).pop(), Some((Some(Stage::Failed), Some("runner-rc:1,commits:1".to_owned()))));
+    assert_eq!(unreachable_stop_count(&state, &id), 0, "到達不能と読まない");
+    clean(&[&repo, &state]);
+}
+
+/// (d) `is_error=false` の本文に到達不能の語が在っても弁別しない（pure）＝`Failed detail=runner-rc:1,commits:1`。
+#[test]
+fn pipe_unreachable_is_error_false_is_not_discriminated() {
+    let (repo, state) = repo_with_state();
+    let (id, _runner, out) = spawn_real_runner(&repo, &state, false, UNREACHABLE_TEXT);
+    assert!(stdout_of(&out).contains("stage=Failed"), "{} / {}", stdout_of(&out), stderr_of(&out));
+    assert_eq!(stages(&state, &id).pop(), Some((Some(Stage::Failed), Some("runner-rc:1,commits:1".to_owned()))));
+    assert_eq!(unreachable_stop_count(&state, &id), 0, "is_error=false は到達不能と読まない");
+    clean(&[&repo, &state]);
+}
+
 #[test]
 fn pipe_resume_reports_next_gate_on_inconclusive() {
     let (repo, state) = repo_with_state();

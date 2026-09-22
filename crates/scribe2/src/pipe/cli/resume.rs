@@ -125,7 +125,7 @@ pub(super) fn resume(
         },
         // `Spawned` から再開できるのは **runner が死んだ便だけ**（host の再起動・OOM・kill で `SeatStopped` が
         // 書かれないまま消えた形・設計 account-autonomy.md §4「runner が死んだ便の起こし直し」・C9）。生死は
-        // 唯一の wait で測り、生きている便は断る（runner を 2 本にしない）。
+        // 唯一の wait で測り、生きている便は断る（runner を 2 本にしない）。API に届かず止まった便（§17）も同じ 1 本。
         Stage::Spawned => match need(args, "--runner") {
             Err(reason) => refused(reason),
             Ok(runner) => revive(args, &id, runner, manifest, policy),
@@ -150,6 +150,19 @@ fn revive(args: &[String], id: &str, runner: &str, manifest: &Manifest, policy: 
         Ok(found) => found,
         Err(errors) => return Outcome::failed(RC_BROKEN, errors.iter().map(StoreError::to_string).collect()),
     };
+    // **API に届かず止まった便は生死を測らない**（設計 account-autonomy.md §17 (3)）: 最後の席の event（`SeatSpawned` /
+    // `SeatStopped` の最後の 1 件）が `SeatStopped detail=runner-unreachable` の周は runner が rc で終わった事実と理由が
+    // 既に typed に在る＝`runner-dead` を二重に記帳せず起こし直しの 1 本へ進む。起こし直した後は最後の席の event が
+    // `SeatSpawned` になるので、次の resume は従来どおり生死を測る（生きている runner の隣に起こさない・FR37）。
+    let last_seat = events
+        .iter()
+        .rev()
+        .find(|event| event.run == id && matches!(event.kind, EventKind::SeatSpawned | EventKind::SeatStopped));
+    if last_seat.is_some_and(|event| {
+        event.kind == EventKind::SeatStopped && event.detail.as_deref() == Some(follow::RUNNER_UNREACHABLE)
+    }) {
+        return ride_out_rate_limit(args, id, runner, manifest, policy);
+    }
     // 最後の `SeatSpawned` の行から pid と bead を読む（席の event の原本・replay の `Run` は pid を持たない）。
     let seated = events
         .iter()

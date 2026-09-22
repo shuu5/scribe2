@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 use vessel::cli_outcome::{RC_BROKEN, RC_OK, RC_REFUSED};
-use vessel::headless::RC_RATE_LIMIT;
+use vessel::headless::{RC_RATE_LIMIT, RC_UNREACHABLE};
 
 /// binary の path。
 fn bin() -> &'static str {
@@ -1732,6 +1732,43 @@ fn headless_runner_no_longer_stops_on_error_records_with_limit_words() {
         );
     }
     clean(&[&dir, &worktree]);
+}
+
+/// **API に届かず止まった周**（`s2-07l.301`・設計 account-autonomy.md §17 (1)）: 偽 claude が `is_error:true` と到達不能の
+/// 本文の `result` を書いて rc 1 で終わると、runner は rc [`RC_UNREACHABLE`] で終わり stdout の最終行に停止行を出す。
+/// 同じ本文で `is_error:false` の周と、集合に無い error の本文の周は claude の rc（1）を写す（従来どおり）。
+#[test]
+fn pipe_unreachable_runner_exits_with_its_rc_only_on_unreachable_error_results() {
+    let dir = tmp();
+    let worktree = tmp();
+    let write_set = dir.join("write-set.txt");
+    let vessel = write_vessel_copy(&dir, r#"["cargo", "git"]"#);
+    fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
+    let text = "API Error: Can't reach the API server (EAI_AGAIN)";
+    let record = |is_error: bool, body: &str| {
+        format!("{{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":{is_error},\"result\":\"{body}\"}}\n")
+    };
+    let run = |body: &str| {
+        let claude = fake_claude(&dir, body, false, 1);
+        run_runner(
+            &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "plan", account: None },
+            b"goal = \"x\"\n",
+        )
+    };
+    let halted = run(&record(true, text));
+    let copied = run(&record(false, text));
+    let other = run(&record(true, "API Error: 500 Internal server error"));
+    clean(&[&dir, &worktree]);
+    assert_eq!(halted.status.code(), Some(i32::from(RC_UNREACHABLE)), "{}", stderr_of(&halted));
+    assert_eq!(
+        stdout_of(&halted).lines().last(),
+        Some(format!("runner: halt reason=unreachable text={text}").as_str()),
+        "停止行は stdout の最終行: {}",
+        stdout_of(&halted)
+    );
+    assert_eq!(copied.status.code(), Some(1), "is_error=false は弁別しない: {}", stdout_of(&copied));
+    assert_eq!(other.status.code(), Some(1), "集合に無い error は claude の rc: {}", stdout_of(&other));
+    assert!(!stdout_of(&other).contains("reason=unreachable"), "停止行を出さない: {}", stdout_of(&other));
 }
 
 /// **`--vessel` は必須**（lens の `--contract` と同じ極性）。権限の出所が無いまま

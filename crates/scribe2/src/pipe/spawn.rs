@@ -8,7 +8,7 @@
 
 use super::approve::{block, Approval, Approve, RC_BLOCKED};
 use super::confine;
-use super::follow::{Halt, Resumption, Section};
+use super::follow::{Halt, Resumption, Section, RUNNER_UNREACHABLE};
 use super::gate::last_json_object;
 use super::refuse;
 use super::{
@@ -19,7 +19,7 @@ use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
 use crate::fleet::store::LockPolicy;
 use crate::fleet::{Cost, CostSource, EventKind, Stage};
 use crate::headless::runner::{stop_status, summary_usage, top_level_string};
-use crate::headless::{NO_VALUE, RC_RATE_LIMIT};
+use crate::headless::{NO_VALUE, RC_RATE_LIMIT, RC_UNREACHABLE};
 use crate::name::{NAME, PLUGIN_DIR};
 use crate::pipe::contract::Contract;
 use crate::polarity::{OnFailure, Polarity, Timing};
@@ -91,7 +91,7 @@ pub struct Launch<'a> {
 ///
 /// 段の detail の形は variant ごとに固定である: [`Inherit`](Self::Inherit) は `base:<sha>`、
 /// [`Chosen`](Self::Chosen) は `base:<sha>,account:<label>`、[`Resumed`](Self::Resumed) は
-/// `account:<label>,resume:rate-limit` / `account:<label>,resume:runner-dead`（印は止まった理由 [`Halt`] で
+/// `account:<label>,resume:rate-limit` / `account:<label>,resume:runner-dead` / `account:<label>,resume:unreachable`（印は止まった理由 [`Halt`] で
 /// 分かれる・base は初回の行が持ったまま）。読み手（`base_of_run`）は `base:` の直後から最初の `,` までを sha と読む。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Account<'a> {
@@ -123,11 +123,15 @@ const RESUME_RATE_LIMIT: &str = "resume:rate-limit";
 /// runner が死んだ便の起こし直しを段の detail に名乗る印（`Spawned detail=account:<label>,resume:runner-dead`）。
 const RESUME_RUNNER_DEAD: &str = "resume:runner-dead";
 
-/// 途中再開の印（閉じた 2 つ・理由 [`Halt`] の値ごとに固定）。
+/// API に届かず止まった便の起こし直しを段の detail に名乗る印（`Spawned detail=account:<label>,resume:unreachable`）。
+const RESUME_UNREACHABLE: &str = "resume:unreachable";
+
+/// 途中再開の印（閉じた 3 つ・理由 [`Halt`] の値ごとに固定）。
 fn resume_mark(halt: Halt) -> &'static str {
     match halt {
         Halt::RateLimit => RESUME_RATE_LIMIT,
         Halt::RunnerDead => RESUME_RUNNER_DEAD,
+        Halt::Unreachable => RESUME_UNREACHABLE,
     }
 }
 
@@ -244,12 +248,17 @@ fn launch_runner(launch: &Launch<'_>, worktree: &Path, cmd: &str, base: &str) ->
         Ok(found) => found,
         Err(err) => return broken(format!("runner の終了を待てない: {err}")),
     };
-    if let Err(err) = seat(launch, EventKind::SeatStopped, Some(pid), None) {
-        return broken(err);
-    }
     let rc = out.status.code().unwrap_or(-1);
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
+    let stopping = super::is_stopping(launch.state_dir, launch.run) == Some(true);
+    let killed = box_killed(&confinement, rc, &stdout);
+    // **API に届かず止まった周は `SeatStopped` に理由を載せる**（設計 account-autonomy.md §17 (2)）: 段は `Spawned` の
+    // まま・この 1 件が途中再開の材料（[`super::follow::resumption`]）になる。停止中と箱の中の死は従来の終端が勝つ。
+    let unreachable = (rc == i32::from(RC_UNREACHABLE) && !stopping && killed.is_none()).then_some(RUNNER_UNREACHABLE);
+    if let Err(err) = seat(launch, EventKind::SeatStopped, Some(pid), unreachable.map(str::to_owned)) {
+        return broken(err);
+    }
     // 捕らえた stdout は診断 file へ残す（包みの観測行を端末から消さない）。書けない周は
     // 段の判定を変えない（stderr 1 行で loud）。
     let kept = keep_stdout(launch, rc, &stdout).err().map(|reason| format!("pipe: runner の stdout を残せない: {reason}"));
@@ -257,14 +266,13 @@ fn launch_runner(launch: &Launch<'_>, worktree: &Path, cmd: &str, base: &str) ->
     // **段の判定の入力にはしない**（判定は rc と commit の数だけ・C3.3）。
     let kept_err = keep_stderr(launch, rc, &stderr).err().map(|reason| format!("pipe: runner の stderr を残せない: {reason}"));
     relay_stderr(&out.stderr);
-    let stopping = super::is_stopping(launch.state_dir, launch.run) == Some(true);
     // **runner の消費は段の event の前に 1 件**（設計 gate-cost.md §26 形 (2)）。停止中の便は段と同じく書かない。
     let cost = if stopping { None } else { runner_cost(launch, &stdout) };
     let mut outcome = if stopping {
         // **停止中の便は段を 1 件も書かない**（設計 pipeline.md §23）。runner を消したのは `pipe stop` で、
         // 終端は `RunStopped` の経路が書く——ここで `Failed` を書くと stop の終端を上書きする。
         stopped_underneath(launch)
-    } else if let Some(reason) = box_killed(&confinement, rc, &stdout) {
+    } else if let Some(reason) = killed {
         // **箱の中で死んだ周は便を終端する**（設計 gate-cost.md §4.2）。verify 行の「測れなかった」
         // とは極性が違う——便の内容が測れないのではなく、便自身が箱の中で死んだ。
         // 理由は閉じた語彙の 1 つ（`runner-rc` と同じ終端の段）で、`Failed` から resume しない。
@@ -273,8 +281,10 @@ fn launch_runner(launch: &Launch<'_>, worktree: &Path, cmd: &str, base: &str) ->
         settle_question(launch, worktree, &tip, &stdout)
     } else if rc == i32::from(RC_RATE_LIMIT) {
         settle_rate_limit(launch, rc, &stdout)
+    } else if unreachable.is_some() {
+        settle_unreachable(launch)
     } else {
-        // **rc が 76 / 75 でない周は最終行を読まない**（従来どおり）。
+        // **rc が 76 / 75 / 77 でない周は最終行を読まない**（従来どおり）。
         settle(launch, worktree, base, rc)
     };
     outcome.err.extend(kept.into_iter().chain(kept_err).chain(cost).chain(scope));
@@ -499,6 +509,23 @@ fn settle_rate_limit(launch: &Launch<'_>, rc: i32, stdout: &str) -> Outcome {
     let status = stdout.lines().rev().find_map(stop_status).unwrap_or(UNKNOWN_STATUS);
     let account = launch.account.label().unwrap_or(INHERITED_ACCOUNT);
     record_stage(launch, Stage::RateLimited, Some(format!("rc:{rc},status:{status},account:{account}")))
+}
+
+/// 包みが rc [`RC_UNREACHABLE`] で終わった周（設計 account-autonomy.md §17 (2)）: **段を書かない**＝`Spawned` のまま
+/// live に残る（worktree・commit・未 commit は保つ・N1）。理由は既に記帳した `SeatStopped detail=runner-unreachable`
+/// が持つ。commit の有無は見ない（0 本でも捨てない＝ネットが戻れば `pipe resume` が同じ契約で続ける）。
+///
+/// rc は [`RC_BLOCKED`]（口座待ちと同じ「続きは resume」の極性）——rc 0 で返すと、連鎖（`pipe run`）の次の段が
+/// `Spawned` の空いた便を見て、届かないネットへ runner を起こし直し続ける。
+fn settle_unreachable(launch: &Launch<'_>) -> Outcome {
+    Outcome {
+        out: vec![format!("run={} stage={} halt=unreachable", launch.run, Stage::Spawned.as_str())],
+        err: vec![format!(
+            "pipe: runner が API に届かず止まった（段は Spawned のまま・`pipe resume --run {} --runner <cmd>` が同じ worktree で続ける）",
+            launch.run
+        )],
+        rc: RC_BLOCKED,
+    }
 }
 
 /// 停止行を読めない周の status（閉じた 1 つ）。

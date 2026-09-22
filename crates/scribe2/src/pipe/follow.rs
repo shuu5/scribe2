@@ -695,8 +695,12 @@ fn last_stage_detail(state_dir: &Path, run: &str) -> Option<String> {
 /// 死んだ便の起こし直し」）。書き手は `pipe::cli::resume`、読み手は [`resumption`] の 1 本。
 pub(crate) const RUNNER_DEAD: &str = "runner-dead";
 
-/// 前の turn が止まった理由（**閉じた 2 値**・設計 account-autonomy.md §4）。「途中再開」節の理由の行と
-/// `Spawned` の detail の印（`resume:rate-limit` / `resume:runner-dead`）はこの値で分かれる。
+/// runner が API に届かず止まった便に `pipe spawn` が記帳する `SeatStopped` の理由（設計 account-autonomy.md §17
+/// (2)・[`RUNNER_DEAD`] と同じ形）。書き手は `pipe::spawn`、読み手は [`resumption`] と `pipe::cli::resume`。
+pub(crate) const RUNNER_UNREACHABLE: &str = "runner-unreachable";
+
+/// 前の turn が止まった理由（**閉じた 3 値**・設計 account-autonomy.md §4 / §17）。「途中再開」節の理由の行と
+/// `Spawned` の detail の印（`resume:rate-limit` / `resume:runner-dead` / `resume:unreachable`）はこの値で分かれる。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Halt {
     /// 口座の上限で止まった（`RunStage(RateLimited)`）。別口座で続く。
@@ -704,6 +708,9 @@ pub enum Halt {
     /// runner の process が消えた（host の再起動・OOM・kill で `SeatStopped` が書かれないまま死んだ形・
     /// `pipe resume` が `SeatStopped detail=runner-dead` を記帳した周）。
     RunnerDead,
+    /// runner が API に届かず止まった（`pipe spawn` が `SeatStopped detail=runner-unreachable` を記帳した周）。
+    /// 同じ契約で続く。
+    Unreachable,
 }
 
 impl Halt {
@@ -712,6 +719,16 @@ impl Halt {
         match self {
             Self::RateLimit => "に口座の上限で止まった",
             Self::RunnerDead => "に runner の死亡で止まった（process が消えた）",
+            Self::Unreachable => "に API に届かず止まった（ネットの断）",
+        }
+    }
+
+    /// `Spawned` の段で最後の席の event が `SeatStopped` の周に、その detail から理由を読む（閉じた 2 つ）。
+    fn of_seat_stop(detail: Option<&str>) -> Option<Self> {
+        match detail {
+            Some(RUNNER_DEAD) => Some(Self::RunnerDead),
+            Some(RUNNER_UNREACHABLE) => Some(Self::Unreachable),
+            _ => None,
         }
     }
 }
@@ -722,7 +739,7 @@ impl Halt {
 pub struct Resumption {
     /// 止まった理由。
     pub halt: Halt,
-    /// 止まった時刻（上限なら `RunStage(RateLimited)`・runner の死亡なら `SeatStopped detail=runner-dead` の event の `ts`）。
+    /// 止まった時刻（上限なら `RunStage(RateLimited)`・runner の死亡 / 到達不能なら `SeatStopped` の理由つきの event の `ts`）。
     pub stopped_at: String,
     /// base から便が積んだ commit（`git log --oneline <base>..HEAD` の行・古い順）。
     pub commits: Vec<String>,
@@ -732,7 +749,8 @@ pub struct Resumption {
 
 /// 便が途中再開すべきか（[`section`] と同型の組み立て）。`Some` になるのは 2 つの周だけ——`RateLimited` の段に
 /// 在る周（[`Halt::RateLimit`]）と、`Spawned` の段で最後の席の event が `SeatStopped detail=runner-dead` の周
-/// （[`Halt::RunnerDead`]・`pipe resume` が生死を測って記帳した後）。
+/// （[`Halt::RunnerDead`]・`pipe resume` が生死を測って記帳した後）か `SeatStopped detail=runner-unreachable` の周
+/// （[`Halt::Unreachable`]・`pipe spawn` が runner の rc で記帳した後・設計 account-autonomy.md §17 (3)）。
 ///
 /// 決めるのは runner の stdin の「途中再開」節（[`super::spawn`]）**だけ**である。止まった時刻は
 /// 追記だけの log の原本から読む（最後の該当の行・replay の `updated` は後の event で動く）。
@@ -746,10 +764,9 @@ pub(crate) fn resumption(state_dir: &Path, repo: &Path, run: &str) -> Option<Res
         (Halt::RateLimit, stopped.ts.clone())
     } else if stage == Some(Stage::Spawned) {
         let last = own.find(|event| event.kind == EventKind::SeatSpawned || event.kind == EventKind::SeatStopped)?;
-        if last.kind != EventKind::SeatStopped || last.detail.as_deref() != Some(RUNNER_DEAD) {
-            return None;
-        }
-        (Halt::RunnerDead, last.ts.clone())
+        let seat_stopped = last.kind == EventKind::SeatStopped;
+        let halt = seat_stopped.then(|| Halt::of_seat_stop(last.detail.as_deref())).flatten()?;
+        (halt, last.ts.clone())
     } else {
         return None;
     };
