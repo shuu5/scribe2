@@ -22,12 +22,15 @@ use vessel::pipe::gate::{CHECKS, RC_INCONCLUSIVE, VERDICTS};
 use vessel::rules::manifest::Manifest;
 use vessel::rules::RuleValue;
 
+mod contracts;
 mod dispatch;
 mod gate;
 mod intake;
 mod land;
 mod launch_failure;
 mod ratelimit;
+mod refuse;
+mod review;
 mod spawn;
 mod stop;
 
@@ -1386,4 +1389,385 @@ fn e2e_toolbox_lean_path_adds_no_record_and_stays_unconfined() {
     assert_eq!(row_value(&rows, 2, "confined"), "false", "包めていない");
     assert_eq!(row_value(&rows, 2, "reason"), "no-systemd-run", "理由は閉じた enum の名");
     clean(&[&repo, &state]);
+}
+
+// flip-check: moved s2-07l.351
+#[test]
+fn pipe_state_survives_process_restart() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    // 置き場を **--state-dir なしで** 解く＝repo に紐づいた git 設定から読む。
+    let out = bin_cmd()
+        .args(["pipe", "intake", "--design"])
+        .arg(&path)
+        .args(["--bead", "s2-2e5", "--repo"])
+        .arg(&repo)
+        .args(["--rules", &ceiling_rules(&state), "--lens", &review_lens_pass(&state)])
+        .output()
+        .expect("binary を起動できる");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    let id = run_id_of(&out);
+    // **別 process** が同じ現在地を読む（process の記憶に何も置いていない）。
+    let shown = bin_cmd()
+        .args(["pipe", "show", "--run", &id, "--repo"])
+        .arg(&repo)
+        .output()
+        .expect("binary を起動できる");
+    assert_eq!(shown.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&shown));
+    assert!(stdout_of(&shown).contains("stage=Reviewed"), "{}", stdout_of(&shown));
+    assert!(stdout_of(&shown).contains(&id), "{}", stdout_of(&shown));
+    clean(&[&repo, &state]);
+}
+
+#[test]
+fn pipe_show_reads_repo_from_state() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = intake(&repo, &state, &path);
+    // **--repo を渡さずに** 撃つ。cwd（この test を走らせている repo）でなく、
+    // intake が書き留めた repo から worktree の path が組まれる。
+    let out = run_pipe(&["show", "--run", &id, "--state-dir", &state.display().to_string()]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    let line = stdout_of(&out);
+    assert!(
+        line.contains(&repo.display().to_string()),
+        "worktree は便に紐づいた repo から組む: {line}"
+    );
+    clean(&[&repo, &state]);
+}
+
+/// 置き場に在る run dir の名（「run を作らない」を数で測る）。
+pub(super) fn run_dirs(state: &Path) -> Vec<String> {
+    let Ok(entries) = fs::read_dir(state.join("pipe")) else {
+        return Vec::new();
+    };
+    let mut found: Vec<String> = entries
+        .filter_map(|entry| entry.ok().map(|found| found.file_name().to_string_lossy().into_owned()))
+        .collect();
+    found.sort();
+    found
+}
+
+/// 契約表の toy repo の要件面（要件 id の anchor 3 つ・引用符は 2 形）。
+pub(super) const TABLE_SRS: &str = "<html><body>\n<p id=\"FR1\">1</p>\n<p id=\"FR2\">2</p>\n<p id='AC1'>3</p>\n</body></html>\n";
+
+/// toy repo の閉じた型 `crate::tint::Tint`（const slice `TINTS` の宣言 file）。
+pub(super) const TABLE_TINT: &str = "pub enum Tint {\n    Warm,\n    Cool,\n}\n\npub const TINTS: &[Tint] = &[Tint::Warm, Tint::Cool];\n";
+
+/// toy repo の `Tint` の match の arm を持つ file。
+pub(super) const TABLE_SHOW: &str =
+    "use crate::tint::Tint;\n\npub fn show(tint: Tint) -> u8 {\n    match tint {\n        Tint::Warm => 1,\n        Tint::Cool => 2,\n    }\n}\n";
+
+/// 設計 doc（§1・§2 は本文あり・§3 は本文なし）の末尾に `table` を置く。
+pub(super) fn table_doc(table: &str) -> String {
+    format!("# 設計: toy\n\n## 1. 何を解くか\n\n本文。\n\n## 2. 型\n\n本文。\n\n## 3. 空の節\n\n{table}")
+}
+
+/// 契約表の 1 行。既定の欄（適合する値）を `over` で差し替え、既定に無い key は末尾に足す。
+pub(super) fn table_row(id: &str, over: &[(&str, &str)]) -> String {
+    let defaults = [
+        ("title", format!("\"行 {id}\"")),
+        ("req", "[\"FR1\"]".to_owned()),
+        ("section", "\"1\"".to_owned()),
+        // base に実在する file（項目の実在の検査〔契約 (g)〕を既定で通す）。
+        ("write-set", "[\"src/tint.rs\"]".to_owned()),
+        ("verify", "[\"git status\"]".to_owned()),
+        ("size", "\"S\"".to_owned()),
+        ("done", format!("\"{id} が通る\"")),
+    ];
+    let mut lines = vec!["[[contract]]".to_owned(), format!("id = \"{id}\"")];
+    for (key, value) in &defaults {
+        let chosen = over.iter().find(|(name, _)| name == key).map_or(value.as_str(), |(_, found)| *found);
+        lines.push(format!("{key} = {chosen}"));
+    }
+    let extra = over.iter().filter(|(name, _)| !defaults.iter().any(|(key, _)| key == name));
+    lines.extend(extra.map(|(key, value)| format!("{key} = {value}")));
+    format!("{}\n", lines.join("\n"))
+}
+
+/// 行を区間で囲む（先頭に `schema = 1`）。
+pub(super) fn table_region(rows: &[String]) -> String {
+    format!("<!-- contracts:begin -->\nschema = 1\n\n{}<!-- contracts:end -->\n", rows.join("\n"))
+}
+
+/// doc の中で行 `id` の見出し（`[[contract]]`・`id` の行の 1 つ上）が在る物理行番号（1 始まり）。
+pub(super) fn table_line(doc: &str, id: &str) -> usize {
+    let want = format!("id = \"{id}\"");
+    doc.lines().position(|line| line == want).unwrap_or_default()
+}
+
+/// toy repo の外形: doctor の外形 snapshot（`src/snapshots/`）と、それを描く歯・subcommand `tint` の usage を持つ
+/// src と、その usage 文字列を持つ歯。
+pub(super) const SURFACE_FILES: &[(&str, &str)] = &[
+    ("src/snapshots/toy__tests__doctor_external_form.snap", "---\nsource: src/main.rs\n---\ndoctor: ok\n"),
+    ("tests/e2e/doctor.rs", "#[test]\nfn doctor_external_form() {\n    insta::assert_snapshot!(\"doctor: ok\");\n}\n"),
+    ("src/cli.rs", "pub fn usage() -> String {\n    format!(\"usage: {NAME} tint <show|list> [--all]\")\n}\n"),
+    ("tests/e2e/usage.rs", "#[test]\nfn usage_names_show() {\n    assert!(err.contains(\"tint <show|list> [--all]\"));\n}\n"),
+];
+
+/// findings のうち行 `id` の `label` の行（`file:line label: ` の接頭辞で選ぶ）。
+pub(super) fn findings_for(found: &[String], doc: &str, id: &str, label: &str) -> Vec<String> {
+    let head = format!("contracts: docs/design/toy.md:{} {label}: ", table_line(doc, id));
+    found.iter().filter(|line| line.starts_with(&head)).cloned().collect()
+}
+
+/// 外形の usage 行の名（§31 (b)）の toy file: 素の名 `paint`・`-` を含む名 `re-paint`・識別子でも `-` でもない文字を
+/// 含む名 `pa.int` の usage 行を持つ src と、各 usage 文字列を literal に持つ歯。
+const USAGE_NAME_FILES: &[(&str, &str)] = &[
+    (
+        "crates/toy/src/cli.rs",
+        "pub fn usage() -> [&'static str; 3] {\n    [\n        \"usage: {NAME} paint <x>\",\n        \"usage: {NAME} re-paint <y>\",\n        \"usage: {NAME} pa.int <z>\",\n    ]\n}\n",
+    ),
+    ("crates/toy/tests/paint.rs", "#[test]\nfn pins_paint() {\n    assert!(err.contains(\"paint <x>\"));\n}\n"),
+    ("crates/toy/tests/repaint.rs", "#[test]\nfn pins_repaint() {\n    assert!(err.contains(\"re-paint <y>\"));\n}\n"),
+    ("crates/toy/tests/dotted.rs", "#[test]\nfn pins_dotted() {\n    assert!(err.contains(\"pa.int <z>\"));\n}\n"),
+];
+
+/// `surfaces` だけを持つ導出の形の行を受付に通す（toy repo・置き場・出力）。
+pub(super) fn usage_name_intake(id: &str, surfaces: &str) -> (PathBuf, PathBuf, Output) {
+    let row = derive_row(id, &[("surfaces", surfaces)]);
+    let (repo, state) = derive_repo_with(&table_doc(&table_region(&[row])), USAGE_NAME_FILES);
+    let out = intake_raw(&repo, &state, &pointed_contract(&repo, "a.toml", id), &format!("s2-{id}"));
+    (repo, state, out)
+}
+
+/// toy repo の method / 関連 fn を持つ file（素の impl `Report::violation`・generic impl `Wide::width`）。どちらの
+/// file も「型::項目」の字面は持たない（呼び手は「値.項目(」なので (a) の字面の経路では解けない）。
+pub(super) const IMPL_FILES: &[(&str, &str)] = &[
+    (
+        "src/report.rs",
+        "pub struct Report {\n    pub at: u8,\n}\n\nimpl Report {\n    pub fn violation(&self) -> u8 {\n        self.at\n    }\n}\n",
+    ),
+    (
+        "src/wide.rs",
+        "pub struct Wide<T> {\n    pub inner: T,\n}\n\nimpl<T: Copy> Wide<T> {\n    pub fn width(&self) -> usize {\n        0\n    }\n}\n",
+    ),
+];
+
+/// 行 `i` の write-set の項目（`+` 付きの新規 file の宣言・land すると base に実在する）。
+pub(super) const LANDED_PLUS_ITEM: &str = "+crates/toy/src/new.rs";
+
+/// `+` の項目を 1 つ持つ行 `i` の契約表を載せた設計 doc。
+pub(super) fn landed_plus_doc() -> String {
+    table_doc(&table_region(&[table_row("i", &[("write-set", &format!("[\"{LANDED_PLUS_ITEM}\"]"))])]))
+}
+
+/// 設計 pointer `docs/design/toy.md#i` と行と同じ write-set（`+` 付き）を持つ契約 file。
+pub(super) fn landed_plus_contract(_repo: &Path) -> String {
+    // 契約 (b) 以後、write-set は**行**が持つ（`+` の項目も行の側）。受付へ渡すのは pointer だけである。
+    "docs/design/toy.md#i".to_owned()
+}
+
+/// 導出の toy repo の宣言（`cargo` を許す＝行の verify に nextest の行を書ける・要件面は既定）。
+const DERIVE_VESSEL: &str = "schema = 1\nallowed-commands = [\"git\", \"sh\", \"cargo\"]\ncommon-verify = [\"git status\"]\n";
+
+/// 導出の toy repo の file: crate `toy` の型 `crate::tint::Tint`（宣言 file と arm の file）・`derive_` の歯（tests と
+/// src の test 区間に 1 本ずつ）・helper と別接頭辞の歯・非 `.rs` の面。
+const DERIVE_FILES: &[(&str, &str)] = &[
+    ("crates/toy/src/tint.rs", TABLE_TINT),
+    ("crates/toy/src/show.rs", TABLE_SHOW),
+    ("crates/toy/src/other.rs", "pub fn derive_outside() {}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn derive_in_src() {}\n}\n"),
+    ("crates/toy/tests/e2e.rs", "#[test]\nfn derive_ok() {}\n"),
+    ("crates/toy/tests/helper.rs", "fn derive_helper() {}\n\n#[test]\nfn other_case() {\n    derive_helper();\n}\n"),
+    ("rules/manifest.toml", "schema = 1\n"),
+];
+
+/// 導出の toy repo（[`repo_with_state`] の repo に [`DERIVE_FILES`]・要件面・設計 doc `docs/design/toy.md` を足して
+/// commit）と置き場。
+pub(super) fn derive_repo(doc: &str) -> (PathBuf, PathBuf) {
+    derive_repo_with(doc, &[])
+}
+
+/// [`derive_repo`] に `files` を足した toy repo と置き場。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+pub(super) fn derive_repo_with(doc: &str, files: &[(&str, &str)]) -> (PathBuf, PathBuf) {
+    let (repo, state) = repo_with_state();
+    let seeded = [(".vessel.toml", DERIVE_VESSEL), ("design-intent/spec/srs.html", TABLE_SRS), ("docs/design/toy.md", doc)];
+    for (path, body) in seeded.iter().chain(DERIVE_FILES).chain(files) {
+        let target = repo.join(path);
+        fs::create_dir_all(target.parent().expect("親 dir が在る")).expect("dir を作れる");
+        fs::write(&target, body).expect("file を書ける");
+    }
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "derive"]);
+    (repo, state)
+}
+
+/// 導出の形の行（[`table_row`] から既定の `write-set` を落とす・`over` が `write-set` を持てばそれを載せる）。
+pub(super) fn derive_row(id: &str, over: &[(&str, &str)]) -> String {
+    let keeps = over.iter().any(|(name, _)| *name == "write-set");
+    table_row(id, over).lines().filter(|line| keeps || !line.starts_with("write-set")).map(|line| format!("{line}\n")).collect()
+}
+
+/// 設計 pointer `docs/design/toy.md#<id>` を持つ契約 file（残りの欄は [`contract_body`]・write-set は仮の `src/lib.rs`
+/// ＝写しの差し替えを測る対）。
+pub(super) fn pointed_contract(_repo: &Path, _name: &str, id: &str) -> String {
+    // 契約 (b) 以後、受付が受けるのは pointer そのものである（契約 file は器が行から作る）。
+    format!("docs/design/toy.md#{id}")
+}
+
+/// 便の写しの契約の write-set。
+#[expect(
+    clippy::panic,
+    reason = "統合 test の helper。clippy の allow-panic-in-tests は #[test] 関数の中だけに効く"
+)]
+pub(super) fn copied_write_set(state: &Path, id: &str) -> Vec<String> {
+    vessel::pipe::contract::Contract::load(&state.join("pipe").join(id).join("contract.toml"))
+        .map(|contract| contract.write_set)
+        .unwrap_or_else(|errors| panic!("写しを読める: {errors:?}"))
+}
+
+/// fn 形の toy（歯の中で組む・base の file ではない）: module `pipe::cli` の file が `fn resume(` を宣言し、呼び手
+/// （`main.rs`）と別 module の同名の fn（`tone.rs`）を置く。型形の退行 pin のために**型を持つ file**も同じ toy に置く:
+/// `paint.rs` に `pub enum Hue`（と const slice `HUES`＝宣言 file が第 4 形で閉包に入る・[`TABLE_TINT`] と同じ形）・
+/// `arm.rs` に `Hue::Red =>` の arm。
+const FN_FORM_FILES: &[(&str, &str)] = &[
+    ("crates/toy/src/pipe/cli.rs", "pub fn resume(state: &str) -> usize {\n    state.len()\n}\n"),
+    ("crates/toy/src/main.rs", "fn main() {\n    let _ = crate::pipe::cli::resume(\"x\");\n}\n"),
+    ("crates/toy/src/tone.rs", "pub fn resume() -> usize {\n    0\n}\n"),
+    ("crates/toy/src/paint.rs", "pub enum Hue {\n    Red,\n    Blue,\n}\n\npub const HUES: &[Hue] = &[Hue::Red, Hue::Blue];\n"),
+    ("crates/toy/src/arm.rs", "use crate::paint::Hue;\n\npub fn name(hue: Hue) -> u8 {\n    match hue {\n        Hue::Red => 1,\n        _ => 0,\n    }\n}\n"),
+];
+
+/// fn 形の toy repo に `touches` だけの行 `id` を置いて intake を 1 回撃つ（repo と置き場は呼び手が畳む）。
+pub(super) fn fn_form_intake(id: &str, touches: &[&str]) -> (PathBuf, PathBuf, Output) {
+    let quoted: Vec<String> = touches.iter().map(|item| format!("\"{item}\"")).collect();
+    let touches = format!("[{}]", quoted.join(", "));
+    let row = derive_row(id, &[("touches", touches.as_str())]);
+    let (repo, state) = derive_repo_with(&table_doc(&table_region(&[row])), FN_FORM_FILES);
+    let out = intake_raw(&repo, &state, &pointed_contract(&repo, &format!("{id}.toml"), id), &format!("s2-{id}"));
+    (repo, state, out)
+}
+
+/// toy repo（[`derive_repo_with`] に `files` を足す）に `extra` の欄だけの行 `id` を置いて intake を 1 回撃ち、写しの
+/// 契約の write-set（導出値）を返す（repo と置き場は畳む）。
+pub(super) fn derived_write_set(id: &str, extra: (&str, &str), files: &[(&str, &str)]) -> Vec<String> {
+    let row = derive_row(id, &[extra]);
+    let (repo, state) = derive_repo_with(&table_doc(&table_region(&[row])), files);
+    let out = intake_raw(&repo, &state, &pointed_contract(&repo, &format!("{id}.toml"), id), &format!("s2-{id}"));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "導出値で通る: {}", stderr_of(&out));
+    let found = copied_write_set(&state, &run_id_of(&out));
+    clean(&[&repo, &state]);
+    found
+}
+
+/// `creates` だけの行の導出値（[`derived_write_set`]）。
+pub(super) fn creates_write_set(id: &str, creates: &[&str], files: &[(&str, &str)]) -> Vec<String> {
+    let quoted: Vec<String> = creates.iter().map(|item| format!("\"{item}\"")).collect();
+    derived_write_set(id, ("creates", format!("[{}]", quoted.join(", ")).as_str()), files)
+}
+
+/// 同名の struct `Marker` を持つ module の本文（`Marker {` の構築点・`Marker::HEAD` の arm・`const ALL: &[Marker]` の
+/// 3 形＝現物の `hook::vessel::Marker` の形）。`crate::a::Marker` と `crate::b::Marker`・`crate::hook::vessel::Marker` が
+/// 同じ字面で持つ。
+const SAME_NAME_STRUCT: &str = "pub struct Marker {\n    pub generation: u32,\n}\n\nimpl Marker {\n    pub const HEAD: &'static str = \"marker\";\n\n    pub fn parse(text: &str) -> Marker {\n        Marker { generation: text.len() as u32 }\n    }\n}\n\npub const ALL: &[Marker] = &[Marker { generation: 0 }];\n\npub fn kind(head: &str) -> u8 {\n    match head {\n        Marker::HEAD => 1,\n        _ => 0,\n    }\n}\n";
+
+/// 多段 module の enum `Marker`（`crate::seat::rebrief::Marker`・`Marker::` の arm と `const ALL: &[Marker]`＝現物の
+/// `seat::rebrief::Marker` の形）。
+const SAME_NAME_ENUM: &str = "pub enum Marker {\n    Sid,\n    Wm,\n}\n\npub const ALL: &[Marker] = &[Marker::Sid, Marker::Wm];\n\npub fn name(marker: Marker) -> &'static str {\n    match marker {\n        Marker::Sid => \"sid\",\n        Marker::Wm => \"wm\",\n    }\n}\n";
+
+/// 同名の型の toy: `a` / `b`（同名の struct・同じ 3 形）と `a` から取り込んで構築する `build.rs`・多段 module の
+/// `seat::rebrief`（enum）と同名の `hook::vessel`（struct・同じ 3 形）と `rebrief` から取り込んで分岐する `seat/tick.rs`。
+const SAME_NAME_FILES: &[(&str, &str)] = &[
+    ("src/a.rs", SAME_NAME_STRUCT),
+    ("src/b.rs", SAME_NAME_STRUCT),
+    ("src/build.rs", "use crate::a::Marker;\n\npub fn build() -> Marker {\n    Marker { generation: 1 }\n}\n"),
+    ("src/seat/rebrief.rs", SAME_NAME_ENUM),
+    ("src/hook/vessel.rs", SAME_NAME_STRUCT),
+    ("src/seat/tick.rs", "use crate::seat::rebrief::Marker;\n\npub fn tick(marker: Marker) -> u8 {\n    match marker {\n        Marker::Sid => 1,\n        _ => 0,\n    }\n}\n"),
+];
+
+/// 同名の型の toy repo に `touches` だけの行 `id` を置き、intake の導出値（写しの契約の write-set）を返す。
+pub(super) fn same_name_write_set(id: &str, touches: &str) -> Vec<String> {
+    let touches = format!("[\"{touches}\"]");
+    let row = derive_row(id, &[("touches", touches.as_str())]);
+    let (repo, state) = derive_repo_with(&table_doc(&table_region(&[row])), SAME_NAME_FILES);
+    let out = intake_raw(&repo, &state, &pointed_contract(&repo, &format!("{id}.toml"), id), &format!("s2-{id}"));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "導出値で通る: {}", stderr_of(&out));
+    let found = copied_write_set(&state, &run_id_of(&out));
+    clean(&[&repo, &state]);
+    found
+}
+
+/// 起こされたら marker を置く fake runner（**構築点の呼出**を効果で測る面）。
+pub(super) fn marker_runner(marker: &Path) -> String {
+    format!("touch '{}'; exit 0", marker.display())
+}
+
+/// 便の審査の材料の dir（`<run_dir>/review/`）。
+pub(super) fn review_dir(state: &Path, id: &str) -> PathBuf {
+    state.join("pipe").join(id).join("review")
+}
+
+/// 偽 lens が FAIL を返す契約を `pipe run` で流し、`Reviewed(FAIL)` で止まった便の id と runner の marker（**置かれて
+/// いない**）を返す。runner は起きていない（構築点の呼出 0）ことをここで assert する。
+pub(super) fn reviewed_fail(repo: &Path, state: &Path) -> (String, PathBuf) {
+    let path = write_contract(repo, &[], &[]);
+    let lens_marker = state.join("review-fail-lens-ran");
+    let runner_marker = state.join("runner-ran");
+    let out = run_pipe(&[
+        "run", "--design", &path, "--bead", "s2-2e5",
+        "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+        "--rules", &ceiling_rules(state), "--runner", &marker_runner(&runner_marker),
+        "--lens", &fake_lens(&lens_marker, &lens_verdict("FAIL")),
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "FAIL は rc 1: {}", stderr_of(&out));
+    assert!(lens_marker.exists(), "審査の lens は 1 回起きた");
+    assert!(!runner_marker.exists(), "runner は起きない（構築点の呼出 0）");
+    let id = run_id_of(&out);
+    assert!(!id.is_empty(), "止まった周も run id を出す: {}", stdout_of(&out));
+    assert!(
+        stdout_of(&out).contains(&format!("run={id} stage=Reviewed verdict=FAIL")),
+        "審査の判定行: {}",
+        stdout_of(&out)
+    );
+    (id, runner_marker)
+}
+
+/// lens が最終行に書く 6 語（設計 §22 の (1)・宣言順）。**字面で pin する**——器の const slice を写すと語が
+/// 入れ替わっても緑のままになる。
+pub(super) const LENS_KINDS: [&str; 6] = [
+    "teeth-outside-write-set",
+    "goal-done-contradiction",
+    "vacuous-assert",
+    "literal-mismatch",
+    "section-material-missing",
+    "other",
+];
+
+/// lens の `at` の fixture（`,` 区切りの語の列・空白を含まない）。
+pub(super) const LENS_AT: &str = "crates/toy/src/lib.rs,§2,Marker";
+
+/// 既定の契約を `bead` で intake し、偽 lens に `line` を撃たせる（rc は測らない）。
+pub(super) fn intake_with_lens(repo: &Path, state: &Path, bead: &str, line: &str) -> Output {
+    let path = write_contract(repo, &[], &[]);
+    let marker = state.join(format!("lens-ran-{bead}"));
+    run_pipe(&[
+        "intake", "--design", &path, "--bead", bead,
+        "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+        "--rules", &ceiling_rules(state), "--lens", &fake_lens(&marker, line),
+    ])
+}
+
+/// [`faced_repo`] の行の `req` を選ぶ形（契約 (b) 以後、`req` は**行**が持つ）。
+pub(super) fn faced_repo_with_req(face: &str, body: &str, req: &[&str]) -> (PathBuf, PathBuf) {
+    let quoted: Vec<String> = req.iter().map(|id| format!("\"{id}\"")).collect();
+    let fields = [("write-set", "[\"crates/toy/src/tint.rs\"]"), ("req", &format!("[{}]", quoted.join(", ")))]
+        .map(|(key, value)| (key, value.to_owned()));
+    let pairs: Vec<(&str, &str)> = fields.iter().map(|(key, value)| (*key, value.as_str())).collect();
+    let doc = table_doc(&table_region(&[derive_row("a", &pairs)]));
+    let vessel = format!("{DERIVE_VESSEL}requirements = \"{face}\"\n");
+    derive_repo_with(&doc, &[(".vessel.toml", &vessel), (face, body)])
+}
+
+/// 設計 pointer `docs/design/toy.md#a` と `req` を持つ契約を intake し（偽 PASS の lens）、審査の材料 `requirements.txt`
+/// の本文（末尾の改行を除く）を返す。
+pub(super) fn reviewed_requirements(repo: &Path, state: &Path) -> String {
+    let out = intake_raw(repo, state, "docs/design/toy.md#a", "s2-a");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    let dir = review_dir(state, &run_id_of(&out));
+    fs::read_to_string(dir.join("requirements.txt")).unwrap_or_default().trim_end().to_owned()
 }
