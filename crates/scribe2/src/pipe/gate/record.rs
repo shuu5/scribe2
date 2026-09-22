@@ -425,9 +425,9 @@ fn copy_of(dir: &Path) -> DetectionCopy {
 /// 置き場が `verify.jsonl` ではなく診断 file なのは、record の**通し番号 `n`** を行数から導く読み手が
 /// 在るためである（[`crate::pipe::land`] の追随が引き継ぎの skip record を書く周）——record でない行を
 /// 混ぜると `n` が飛ぶ。診断 file の読み手は人だけで、通知は段の見出しを持たない 1 行に閉じる。
-pub(super) fn record_notice(entry: &Gate<'_>, input: &LensInput) -> Result<(), String> {
+pub(super) fn record_notice(entry: &Gate<'_>, input: &LensInput, elided: (u64, u64)) -> Result<(), String> {
     let path = verify_log_path(entry.state_dir, entry.run).with_file_name(STDERR_LOG_FILE);
-    append_line(&path, &notice_line(input), entry.policy).map_err(|err| err.to_string())?;
+    append_line(&path, &notice_line(input, elided), entry.policy).map_err(|err| err.to_string())?;
     Ok(())
 }
 
@@ -436,12 +436,19 @@ pub(super) fn record_notice(entry: &Gate<'_>, input: &LensInput) -> Result<(), S
 /// `kind` は判定行が出すのと同じ語（[`LensInput::kind`]）、`語` は純移動でない理由（`NotPure`）で、
 /// 要約が組めた周は [`NO_REASON`]。**[`crate::pipe::move_proof`] は触らない**——あちらの
 /// [`LensInput::notice`] は呼び手の端末へ出す `pipe:` の 1 行で、ここは run dir に残る記録である。
-fn notice_line(input: &LensInput) -> String {
+///
+/// lens 用の diff から hunk を 1 つ以上畳んだ周だけ末尾に ` elided=<hunk 数>/<行数>` を足す（設計 gate-cost.md
+/// §41 形 3）。0 の周は従来の字面のまま。
+fn notice_line(input: &LensInput, elided: (u64, u64)) -> String {
     let reason = match input {
         LensInput::Diff(why) => why.as_str(),
         LensInput::Summary(_) => NO_REASON,
     };
-    format!("{NOTICE_HEAD}lens-input={} reason={reason}", input.kind())
+    let line = format!("{NOTICE_HEAD}lens-input={} reason={reason}", input.kind());
+    match elided {
+        (0, _) => line,
+        (hunks, lines) => format!("{line} elided={hunks}/{lines}"),
+    }
 }
 
 /// 赤い行と撃ち直した行の見出し + stderr の末尾を診断 file へ残す（緑で撃ち直しも無い行は残さない）。
@@ -970,7 +977,7 @@ mod tests {
     fn notice_line_carries_the_kind_and_the_reason() {
         let lines: Vec<String> = NOT_PURE
             .iter()
-            .map(|why| notice_line(&LensInput::Diff(*why)))
+            .map(|why| notice_line(&LensInput::Diff(*why), (0, 0)))
             .collect();
         assert_eq!(
             lines.first().map(String::as_str),

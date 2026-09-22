@@ -5083,3 +5083,258 @@ fn pipe_verify_failed_gate_record_names_the_tooth_and_keeps_its_section() {
     assert!(log.contains("boom"), "FAIL [ の無い行は従来どおり末尾: {log}");
     clean(&[&repo, &state]);
 }
+
+// ───── lens に渡す diff の畳み（設計 gate-cost.md §41・行 ah・接頭辞 `pipe_gate_elide_`） ─────
+//
+// runner が code file を `git mv` し（rename の対）、同じ commit で doc の行の旧 path を新 path へ書き換える。
+// 畳むのは `docs/design/` の `.md` の hunk のうち、置換後の一致・各行の効き・1 塊を全部満たすものだけ。
+
+/// rename の対の旧 path（fixture の base に在る code file・item を持たない＝純移動の要約にならない）。
+const ELIDE_OLD: &str = "src/old_mod.rs";
+
+/// rename の対の新 path。
+const ELIDE_NEW: &str = "src/new_mod.rs";
+
+/// 畳みの面の doc（`docs/design/` 配下の `.md`）。
+const ELIDE_NOTES: &str = "docs/design/notes.md";
+
+/// 畳んだ hunk の印の頭。
+const ELIDE_MARK_HEAD: &str = "~ rename の置換だけの hunk";
+
+/// path を名指す契約表の row 1 行（改行なし）。
+fn elide_row(path: &str) -> String {
+    format!("| row names `{path}` in the table |")
+}
+
+/// 畳みの歯の便を Implemented まで通す: base の file 群（と [`ELIDE_OLD`]）を commit し、runner は `rename` の周だけ
+/// [`ELIDE_OLD`] を [`ELIDE_NEW`] へ `git mv` し、HEAD の file 群を写して commit する（write-set は対と base の file 群）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn elide_run(base: &[(&str, &str)], head: &[(&str, &str)], rename: bool) -> (PathBuf, PathBuf, String) {
+    let (repo, state) = repo_with_state();
+    fs::write(repo.join(ELIDE_OLD), "// the renamed module\n").expect("rename の元を書ける");
+    for (path, body) in base {
+        fs::write(repo.join(path), body).expect("base の file を書ける");
+    }
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "elide-base"]);
+    let staged = state.join("head");
+    fs::create_dir_all(&staged).expect("HEAD の写しの dir を作れる");
+    let mut steps: Vec<String> = Vec::new();
+    if rename {
+        steps.push(format!("git mv {ELIDE_OLD} {ELIDE_NEW}"));
+    }
+    for (index, (path, body)) in head.iter().enumerate() {
+        let copy = staged.join(index.to_string());
+        fs::write(&copy, body).expect("HEAD の file を書ける");
+        steps.push(format!("cp '{}' {path}", copy.display()));
+    }
+    steps.push("git add -A".to_owned());
+    steps.push("git commit -q -m runner".to_owned());
+    let listed: Vec<String> = base.iter().map(|(path, _)| format!("\"{path}\"")).collect();
+    let write_set = format!("write-set = [\"{ELIDE_OLD}\", \"+{ELIDE_NEW}\", {}]", listed.join(", "));
+    let design = write_contract(&repo, &["write-set"], &[&write_set]);
+    let id = intake(&repo, &state, &design);
+    let out = spawn_with(&repo, &state, &id, &steps.join(" && "));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "spawn: {}", stderr_of(&out));
+    (repo, state, id)
+}
+
+/// 畳みの歯の gate 1 回の観測（判定行・lens が読んだ stdin・生 diff・通知の行）。
+struct ElideGate {
+    /// toy repo。
+    repo: PathBuf,
+    /// 置き場。
+    state: PathBuf,
+    /// 便 id。
+    id: String,
+    /// gate の stdout の判定行。
+    line: String,
+    /// lens が読んだ stdin の全文。
+    stdin: String,
+    /// 便の生 diff（`HEAD~1..HEAD`）。
+    raw: String,
+    /// `verify.stderr.log` の通知の行。
+    notices: Vec<String>,
+}
+
+/// [`elide_run`] の便を stdin を写す lens で 1 回 gate する（lens は diff で呼ばれ PASS）。
+fn elide_gate(base: &[(&str, &str)], head: &[(&str, &str)], rename: bool) -> ElideGate {
+    let (repo, state, id) = elide_run(base, head, rename);
+    let seen = state.join("lens-stdin");
+    let out = gate_once(&repo, &state, &id, Some(&recording_lens(&seen)));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "lens は呼ばれ PASS: {}", stderr_of(&out));
+    let line = stdout_of(&out);
+    assert_eq!(token_of(&line, "lens-input="), "diff", "前提: diff の周: {line}");
+    let raw = raw_diff(&repo, &id);
+    assert_eq!(raw.contains(&format!("rename from {ELIDE_OLD}\n")), rename, "前提: rename の対の有無: {raw}");
+    ElideGate {
+        stdin: fs::read_to_string(&seen).unwrap_or_default(),
+        notices: notice_lines(&state, &id),
+        raw,
+        line,
+        repo,
+        state,
+        id,
+    }
+}
+
+/// 逐語の周の共通 assert: lens の stdin は生 diff そのもの（`kept` の行を含む・印が無い）・`bytes=` は生 diff の byte・
+/// 通知は 1 行で `elided=` が無い（従来の字面）。
+fn assert_elide_verbatim(gated: &ElideGate, kept: &str, why: &str) {
+    assert!(gated.raw.contains(kept), "{why}: 前提: 生 diff が `{kept}` を持つ: {}", gated.raw);
+    assert_eq!(gated.stdin, gated.raw, "{why}: lens の stdin は生 diff そのもの");
+    assert!(!gated.stdin.contains(ELIDE_MARK_HEAD), "{why}: 印が無い: {}", gated.stdin);
+    assert_eq!(token_of(&gated.line, "bytes="), gated.raw.len().to_string(), "{why}: bytes= は生 diff の byte");
+    assert_eq!(gated.notices.len(), 1, "{why}: 通知は 1 行: {:?}", gated.notices);
+    assert!(
+        gated.notices.iter().all(|line| line.starts_with("# lens-input=diff reason=") && !line.contains("elided=")),
+        "{why}: 従来の字面（elided= が無い）: {:?}",
+        gated.notices
+    );
+    assert_eq!(value_of(&verdict_pairs(&gated.state, &gated.id), "diff_bytes"), gated.raw.len().to_string(), "{why}");
+    clean(&[&gated.repo, &gated.state]);
+}
+
+/// (a) rename 1 本 + その旧 path を名指す `docs/design/` の md の row 1 行の置換 → lens の stdin に印が在り置換後の row が
+/// 無く、header は残り、通知に `elided=1/2`、`bytes=` は畳んだ本文の byte で生 diff より小さく、`diff_bytes` は生 diff のまま。
+#[test]
+fn pipe_gate_elide_replacement_only_docs_hunk_is_folded() {
+    let base = format!("# notes\n\n{}\n", elide_row(ELIDE_OLD));
+    let head = format!("# notes\n\n{}\n", elide_row(ELIDE_NEW));
+    let gated = elide_gate(&[(ELIDE_NOTES, &base)], &[(ELIDE_NOTES, &head)], true);
+    let added = format!("\n+{}\n", elide_row(ELIDE_NEW));
+    assert!(gated.raw.contains(&added), "前提: 生 diff は置換後の row を持つ: {}", gated.raw);
+    assert!(
+        gated.stdin.contains("\n~ rename の置換だけの hunk（-1/+1 行）を省いた\n"),
+        "hunk の本文は印 1 行: {}",
+        gated.stdin
+    );
+    assert!(!gated.stdin.contains(&added), "置換後の row は lens に渡らない: {}", gated.stdin);
+    assert!(gated.stdin.contains(&format!("+++ b/{ELIDE_NOTES}\n@@ ")), "header は残る: {}", gated.stdin);
+    assert!(gated.stdin.contains(&format!("rename to {ELIDE_NEW}\n")), "rename の header も残る: {}", gated.stdin);
+    assert_eq!(gated.notices.len(), 1, "通知は 1 行: {:?}", gated.notices);
+    assert!(
+        gated.notices.iter().all(|line| line.starts_with("# lens-input=diff reason=") && line.ends_with(" elided=1/2")),
+        "通知に elided=<hunk 数>/<行数>: {:?}",
+        gated.notices
+    );
+    let bytes = token_of(&gated.line, "bytes=");
+    assert_eq!(bytes, gated.stdin.len().to_string(), "bytes= は lens に渡した本文の byte: {}", gated.line);
+    assert!(gated.stdin.len() < gated.raw.len(), "畳んだ本文は生 diff より小さい");
+    let pairs = verdict_pairs(&gated.state, &gated.id);
+    assert_eq!(value_of(&pairs, "diff_bytes"), gated.raw.len().to_string(), "diff_bytes は生 diff の byte のまま");
+    assert_eq!(value_of(&pairs, "verdict"), "PASS", "lens の verdict");
+    clean(&[&gated.repo, &gated.state]);
+}
+
+/// (b) 同じ hunk に path 以外の 1 語の差も在る → 逐語のまま・通知に `elided=` が無い（置換後の一致の歯）。
+#[test]
+fn pipe_gate_elide_one_extra_word_keeps_the_hunk_verbatim() {
+    let base = format!("# notes\n\n{}\n", elide_row(ELIDE_OLD));
+    let worded = elide_row(ELIDE_NEW).replace("the table", "a table");
+    let head = format!("# notes\n\n{worded}\n");
+    let gated = elide_gate(&[(ELIDE_NOTES, &base)], &[(ELIDE_NOTES, &head)], true);
+    assert_elide_verbatim(&gated, &format!("\n+{worded}\n"), "1 語の差");
+}
+
+/// (c) 同じ置換が `.rs` の hunk と `docs/design/` の外の `.md` の hunk に在る → どちらも逐語のまま（path の絞りの歯）。
+#[test]
+fn pipe_gate_elide_code_and_outside_docs_keep_the_hunk_verbatim() {
+    let code = |path: &str| format!("// uses {path}\n");
+    let guide = |path: &str| format!("# guide\n\n{}\n", elide_row(path));
+    let (code_old, code_new) = (code(ELIDE_OLD), code(ELIDE_NEW));
+    let (guide_old, guide_new) = (guide(ELIDE_OLD), guide(ELIDE_NEW));
+    let gated = elide_gate(
+        &[("src/user.rs", &code_old), ("docs/guide.md", &guide_old)],
+        &[("src/user.rs", &code_new), ("docs/guide.md", &guide_new)],
+        true,
+    );
+    assert!(gated.stdin.contains(&format!("\n+// uses {ELIDE_NEW}\n")), ".rs の hunk は逐語: {}", gated.stdin);
+    assert_elide_verbatim(&gated, &format!("\n+{}\n", elide_row(ELIDE_NEW)), "畳みの面の外");
+}
+
+/// (d) rename の header が無い diff → 置換に見える docs の hunk も逐語で、通知と `bytes=` は従来の字面のまま（回帰の歯）。
+#[test]
+fn pipe_gate_elide_without_rename_keeps_the_former_form() {
+    let base = format!("# notes\n\n{}\n", elide_row(ELIDE_OLD));
+    let head = format!("# notes\n\n{}\n", elide_row(ELIDE_NEW));
+    let gated = elide_gate(&[(ELIDE_NOTES, &base)], &[(ELIDE_NOTES, &head)], false);
+    assert_elide_verbatim(&gated, &format!("\n+{}\n", elide_row(ELIDE_NEW)), "rename 無し");
+}
+
+/// (e) 生 diff は cap 超・畳んだ本文は cap 内 → INCONCLUSIVE でなく lens が呼ばれ verdict は lens の値
+/// （本節の出所の形）・`diff_bytes` は生 diff の byte（cap 超）のまま。
+#[test]
+fn pipe_gate_elide_folded_body_within_cap_calls_the_lens() {
+    let rows = |path: &str| -> String {
+        (0..80)
+            .map(|number| format!("| row {number:02} names `{path}` and carries enough words to weigh on the cap |\n"))
+            .collect()
+    };
+    let (base, head) = (rows(ELIDE_OLD), rows(ELIDE_NEW));
+    let (repo, state, id) = elide_run(&[(ELIDE_NOTES, &base)], &[(ELIDE_NOTES, &head)], true);
+    let cap = 4_000;
+    let raw = raw_diff(&repo, &id);
+    assert!(raw.len() > cap, "前提: 生 diff は cap 超（{} byte）", raw.len());
+    let rules = write_rules(&repo, "elide-cap.toml", 1, cap as u64);
+    let seen = state.join("lens-stdin");
+    let out = gate_with_rules(&repo, &state, &id, &rules, &recording_lens(&seen));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "判定へ進む: {}", stderr_of(&out));
+    let line = stdout_of(&out);
+    assert_eq!(token_of(&line, "verdict="), "PASS", "{line}");
+    let bytes: usize = token_of(&line, "bytes=").parse().unwrap_or(usize::MAX);
+    assert!(bytes <= cap, "畳んだ本文は cap 内: {line}");
+    let received = fs::read_to_string(&seen).unwrap_or_default();
+    assert_eq!(received.len(), bytes, "lens を起動し、畳んだ本文を渡した");
+    assert!(received.contains("（-80/+80 行）を省いた\n"), "80 row の hunk を畳んだ: {received}");
+    let pairs = verdict_pairs(&state, &id);
+    assert_eq!(value_of(&pairs, "verdict"), "PASS", "INCONCLUSIVE にならない");
+    assert!(!value_of(&pairs, "evidence").contains("cap"), "cap の理由が無い: {}", value_of(&pairs, "evidence"));
+    assert_eq!(value_of(&pairs, "diff_bytes"), raw.len().to_string(), "diff_bytes は生 diff の byte のまま");
+    clean(&[&repo, &state]);
+}
+
+/// (f) rename を含む diff で docs の md の hunk が行の並べ替えだけ（`-X` / context / `+X`・置換が効かない）→ 逐語
+/// （便 161614Z の finding の形・効きと 1 塊の両方を外して初めて落ちる回帰の歯）。
+#[test]
+fn pipe_gate_elide_reorder_only_hunk_is_verbatim() {
+    let base = "X plain line\nC context line\n";
+    let head = "C context line\nX plain line\n";
+    let gated = elide_gate(&[(ELIDE_NOTES, base)], &[(ELIDE_NOTES, head)], true);
+    assert!(
+        gated.raw.contains("\n-X plain line\n C context line\n+X plain line\n"),
+        "前提: 並べ替えの hunk の形: {}",
+        gated.raw
+    );
+    assert_elide_verbatim(&gated, "\n+X plain line\n", "並べ替え");
+}
+
+/// (g) 置換が効く行と効かない行が同じ 1 塊に混在（`-row(旧)` `-X` / `+row(新)` `+X`・X は末尾の改行の有無だけが違う）
+/// → 逐語（各行の置換の効きの歯）。
+#[test]
+fn pipe_gate_elide_mixed_effect_hunk_is_verbatim() {
+    let base = format!("{}\nX tail line", elide_row(ELIDE_OLD));
+    let head = format!("{}\nX tail line\n", elide_row(ELIDE_NEW));
+    let gated = elide_gate(&[(ELIDE_NOTES, &base)], &[(ELIDE_NOTES, &head)], true);
+    let shape = format!(
+        "\n-{}\n-X tail line\n\\ No newline at end of file\n+{}\n+X tail line\n",
+        elide_row(ELIDE_OLD),
+        elide_row(ELIDE_NEW)
+    );
+    assert!(gated.raw.contains(&shape), "前提: 効く行と効かない行の 1 塊: {}", gated.raw);
+    assert_elide_verbatim(&gated, "\n+X tail line\n", "効きの混在");
+}
+
+/// (h) `-` の各行は置換で変わるが `-` と `+` の間に context が在る（置換を伴う行の移動）→ 逐語（1 塊の歯）。
+#[test]
+fn pipe_gate_elide_context_between_minus_and_plus_is_verbatim() {
+    let base = format!("{}\nC context line\n", elide_row(ELIDE_OLD));
+    let head = format!("C context line\n{}\n", elide_row(ELIDE_NEW));
+    let gated = elide_gate(&[(ELIDE_NOTES, &base)], &[(ELIDE_NOTES, &head)], true);
+    let shape = format!("\n-{}\n C context line\n+{}\n", elide_row(ELIDE_OLD), elide_row(ELIDE_NEW));
+    assert!(gated.raw.contains(&shape), "前提: - と + の間に context: {}", gated.raw);
+    assert_elide_verbatim(&gated, &format!("\n+{}\n", elide_row(ELIDE_NEW)), "context を挟む移動");
+}

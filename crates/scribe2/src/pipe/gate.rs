@@ -59,7 +59,7 @@ use crate::fleet::store::LockPolicy;
 use crate::fleet::{cli::now_utc, Cost, CostSource, EventKind, Stage, SCHEMA};
 use crate::rules::manifest::Manifest;
 use findings::Tally;
-use lens::{ask_lens, lens_input, substitute, unjudged, write_verdict, Judged, LENS_STAGE};
+use lens::{ask_lens, fold_renamed_paths, lens_input, substitute, unjudged, write_verdict, Judged, LENS_STAGE};
 use record::{record_notice, record_verify};
 use std::path::Path;
 use verify::byte_count;
@@ -349,6 +349,9 @@ struct Measured {
     busy: Option<u64>,
     /// lens に渡す本文の型（純移動の要約か diff か・設計 §5.3・測れなかった周は diff）。
     input: LensInput,
+    /// lens 用の diff（設計 gate-cost.md §41 形 2・diff の周は rename の置換だけの docs の hunk を畳んだ本文・
+    /// 要約の周は生 diff のまま）。cap の照合と lens の stdin はこちら、`diff_bytes` は [`diff`](Self::diff)。
+    lens_diff: Vec<u8>,
 }
 
 /// 書き留める判定 1 件。
@@ -428,7 +431,7 @@ pub fn gate(entry: &Gate<'_>) -> Outcome {
                 entry.run,
                 decision.verdict.as_str(),
                 measured.input.kind(),
-                byte_count(measured.input.body(&measured.diff))
+                byte_count(measured.input.body(&measured.lens_diff))
             )],
             err: notes.into_iter().chain(measured.input.notice()).collect(),
             rc: decision.verdict.rc(),
@@ -476,8 +479,16 @@ fn measure(entry: &Gate<'_>, worktree: &Path, base: &str) -> Result<Measured, St
         let input = lens_input(worktree, base, &diff);
         (diff, input)
     };
-    record_notice(entry, &input)?;
-    Ok(Measured { red, diff, unreadable, killed, detection_unmeasured, busy, input })
+    // **畳むのは diff の周だけ**（設計 gate-cost.md §41 形 2）。生 diff は記録（`diff_bytes`）のまま残す。
+    let (lens_diff, elided) = match &input {
+        LensInput::Diff(_) => {
+            let (folded, hunks, lines) = fold_renamed_paths(&diff);
+            (folded, (hunks, lines))
+        }
+        LensInput::Summary(_) => (diff.clone(), (0, 0)),
+    };
+    record_notice(entry, &input, elided)?;
+    Ok(Measured { red, diff, unreadable, killed, detection_unmeasured, busy, input, lens_diff })
 }
 
 /// 判定順を 1 か所に閉じる（**wildcard 無し・上から順に効く**）。
@@ -494,9 +505,9 @@ fn decide(
     if let Some(judged) = machine_order(measured) {
         return Ok(Decided { judged, scope: None, account: None });
     }
-    // **予算の照合は lens に渡す本文の byte で行う**（FR9・純移動の周は要約・`verdict.json` の
-    // `diff_bytes` は従来どおり diff の byte）。
-    let body = measured.input.body(&measured.diff);
+    // **予算の照合は lens に渡す本文の byte で行う**（FR9・純移動の周は要約・diff の周は畳んだ本文・
+    // `verdict.json` の `diff_bytes` は従来どおり生 diff の byte）。
+    let body = measured.input.body(&measured.lens_diff);
     let size = byte_count(body);
     if size > entry.limits.token_cap {
         // **換算係数を持たない**（NFR1）。byte ≥ token の保守的な読みで直接比べる。
@@ -781,6 +792,7 @@ mod tests {
             detection_unmeasured,
             busy,
             input: LensInput::Diff(NotPure::Unreadable),
+            lens_diff: Vec::new(),
         }
     }
 

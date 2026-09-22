@@ -1,6 +1,6 @@
-//! gate の lens の呼び出しと parse（lens に渡す本文の型の判定 [`lens_input`]・`--lens` の cmd の
-//! 穴埋め・起動・stdout の JSON 1 行の読み・`verdict.json` の書き・[`super`] から純移動・
-//! `s2-07l.286`）。判定の順と終端は親（[`super::gate`]）が持つ。
+//! gate の lens の呼び出しと parse（lens に渡す本文の型の判定 [`lens_input`]・diff の畳み
+//! [`fold_renamed_paths`]・`--lens` の cmd の穴埋め・起動・stdout の JSON 1 行の読み・`verdict.json` の書き・
+//! [`super`] から純移動・`s2-07l.286`）。判定の順と終端は親（[`super::gate`]）が持つ。
 
 use super::findings::{Tally, Unread};
 use super::{Verdict, JSON_HEAD};
@@ -25,6 +25,177 @@ pub(super) fn lens_input(worktree: &Path, base: &str, diff: &[u8]) -> LensInput 
             .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
     };
     move_proof::judge(&String::from_utf8_lossy(diff), &read)
+}
+
+/// diff の file の見出し（畳みの走査が hunk の終わりを知る）。
+const FILE_HEAD: &[u8] = b"diff --git ";
+
+/// hunk の見出し（本文の行は `-` / `+` / 空白 / `\` で始まり、この字面では始まらない）。
+const HUNK_HEAD: &[u8] = b"@@";
+
+/// HEAD 側の path の見出し（削除の file は `/dev/null` を指す＝畳みの面の外）。
+const NEW_SIDE_HEAD: &[u8] = b"+++ ";
+
+/// rename の対の旧 path の見出し。
+const RENAME_FROM: &[u8] = b"rename from ";
+
+/// rename の対の新 path の見出し。
+const RENAME_TO: &[u8] = b"rename to ";
+
+/// 畳みの面（`+++` の側・設計 gate-cost.md §41 形 4）。code file の同じ置換は lens が読む対象なので畳まない。
+const FOLD_DIR: &[u8] = b"b/docs/design/";
+
+/// 畳みの面の拡張子。
+const FOLD_EXT: &[u8] = b".md";
+
+/// 畳んだ hunk の本文に置く 1 行の印（`-N/+N` は省いた `-` / `+` の行の本数）。
+fn elided_mark(minus: u64, plus: u64) -> String {
+    format!("~ rename の置換だけの hunk（-{minus}/+{plus} 行）を省いた\n")
+}
+
+/// lens に渡す diff から、rename の対の path 置換だけの `docs/design/` の `.md` の hunk を 1 行の印に畳む
+/// （設計 gate-cost.md §41 形 1・**pure**＝diff の字面だけを読み git を呼ばない）。
+///
+/// 戻りは（畳んだ後の本文, 畳んだ hunk 数, 畳んだ行数）で、行数は畳んだ hunk の `-` と `+` の行の和。畳むのは
+/// 条件を全部満たす hunk だけ——判定の順は path の絞り（[`folds_here`]）→ 置換後の一致 → 各行の効き → 1 塊
+/// （[`replaced_only`]）で、1 つでも欠ければ逐語のまま。header（`diff --git` / `---` / `+++` / `@@`）は残す。
+/// rename の対が 0 の diff は置換が 1 行も効かないので本文そのまま（0/0）。
+pub(super) fn fold_renamed_paths(diff: &[u8]) -> (Vec<u8>, u64, u64) {
+    let mut fold = Fold { pairs: rename_pairs(diff), out: Vec::with_capacity(diff.len()), hunks: 0, lines: 0 };
+    let mut docs = false;
+    let mut hunk: Option<Vec<&[u8]>> = None;
+    for line in diff.split_inclusive(|byte| *byte == b'\n') {
+        if line.starts_with(FILE_HEAD) || line.starts_with(HUNK_HEAD) {
+            fold.flush(hunk.take(), docs);
+            fold.out.extend_from_slice(line);
+            hunk = line.starts_with(HUNK_HEAD).then(Vec::new);
+            continue;
+        }
+        match hunk.as_mut() {
+            Some(body) => body.push(line),
+            None => {
+                if let Some(side) = line.strip_prefix(NEW_SIDE_HEAD) {
+                    docs = folds_here(side);
+                }
+                fold.out.extend_from_slice(line);
+            }
+        }
+    }
+    fold.flush(hunk, docs);
+    (fold.out, fold.hunks, fold.lines)
+}
+
+/// [`fold_renamed_paths`] の走査の途中の状態（出力と件数）。
+struct Fold {
+    /// rename の対（旧 path, 新 path・長い旧 path から順）。
+    pairs: Vec<(Vec<u8>, Vec<u8>)>,
+    /// 畳んだ後の本文。
+    out: Vec<u8>,
+    /// 畳んだ hunk 数。
+    hunks: u64,
+    /// 畳んだ行数。
+    lines: u64,
+}
+
+impl Fold {
+    /// 終わった hunk の本文を、畳めれば印 1 行・畳めなければ逐語で出す。
+    fn flush(&mut self, hunk: Option<Vec<&[u8]>>, docs: bool) {
+        let Some(body) = hunk else { return };
+        let folded = if docs { replaced_only(&body, &self.pairs) } else { None };
+        match folded {
+            Some((minus, plus)) => {
+                self.out.extend_from_slice(elided_mark(minus, plus).as_bytes());
+                self.hunks = self.hunks.saturating_add(1);
+                self.lines = self.lines.saturating_add(minus).saturating_add(plus);
+            }
+            None => body.iter().for_each(|line| self.out.extend_from_slice(line)),
+        }
+    }
+}
+
+/// `+++ ` の後の字面が畳みの面（`docs/design/` 配下の `.md`）を指すか。
+fn folds_here(side: &[u8]) -> bool {
+    let side = side.strip_suffix(b"\n").unwrap_or(side);
+    side.strip_prefix(FOLD_DIR).is_some_and(|rest| rest.ends_with(FOLD_EXT))
+}
+
+/// diff の header から rename の対（旧 path, 新 path）を集める（長い旧 path から順）。
+///
+/// 長い順に並べるのは、短い旧 path が長い旧 path の頭に当たって先に置き換わるのを塞ぐため。空の旧 path は
+/// 持たない（置換の走査が進まなくなる）。
+fn rename_pairs(diff: &[u8]) -> Vec<(Vec<u8>, Vec<u8>)> {
+    let mut pairs = Vec::new();
+    let mut from: Option<&[u8]> = None;
+    for line in diff.split(|byte| *byte == b'\n') {
+        if let Some(old) = line.strip_prefix(RENAME_FROM) {
+            from = Some(old);
+        } else if let Some(new) = line.strip_prefix(RENAME_TO) {
+            if let Some(old) = from.take().filter(|old| !old.is_empty()) {
+                pairs.push((old.to_vec(), new.to_vec()));
+            }
+        }
+    }
+    pairs.sort_by_key(|(old, _)| std::cmp::Reverse(old.len()));
+    pairs
+}
+
+/// hunk の本文が rename の置換だけで説明が付くなら（`-` の行数, `+` の行数）。付かなければ `None`。
+///
+/// 3 条件を順に見る: `-` の列に置換を当てた結果が `+` の列と順序も本数も同じ → `-` の各行が置換で 1 字以上
+/// 変わる（行の並べ替えや同文の消して足すを隠さない）→ 本文が context・`-` の連続・`+` の連続・context の 1 塊
+/// （`-` と `+` の間に context が在る＝置換を伴う行の移動を隠さない）。`\ No newline` の注記は行に数えない。
+fn replaced_only(body: &[&[u8]], pairs: &[(Vec<u8>, Vec<u8>)]) -> Option<(u64, u64)> {
+    let lines: Vec<&[u8]> = body
+        .iter()
+        .map(|line| line.strip_suffix(b"\n").unwrap_or(line))
+        .filter(|line| !line.starts_with(b"\\"))
+        .collect();
+    let minus: Vec<&[u8]> = lines.iter().filter_map(|line| line.strip_prefix(b"-")).collect();
+    let plus: Vec<&[u8]> = lines.iter().filter_map(|line| line.strip_prefix(b"+")).collect();
+    let replaced: Vec<Vec<u8>> = minus.iter().map(|line| replace_paths(line, pairs)).collect();
+    if replaced != plus {
+        return None;
+    }
+    if replaced.iter().zip(&minus).any(|(new, old)| new == old) {
+        return None;
+    }
+    if !one_block(&lines) {
+        return None;
+    }
+    Some((line_count(minus.len()), line_count(plus.len())))
+}
+
+/// 本文の行の頭の列から前後の context を除いた残りに context が無い（`-` と `+` が 1 塊）か。
+fn one_block(lines: &[&[u8]]) -> bool {
+    let kinds: Vec<u8> = lines.iter().map(|line| line.first().copied().unwrap_or(b' ')).collect();
+    !kinds.trim_ascii().contains(&b' ')
+}
+
+/// 1 行に全ての対の置換を 1 走査で当てる（同じ位置では長い旧 path が先・置き換えた字面は再び見ない）。
+fn replace_paths(line: &[u8], pairs: &[(Vec<u8>, Vec<u8>)]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(line.len());
+    let mut rest = line;
+    while let Some((&byte, tail)) = rest.split_first() {
+        let hit = pairs
+            .iter()
+            .find_map(|(old, new)| rest.strip_prefix(old.as_slice()).map(|after| (new, after)));
+        match hit {
+            Some((new, after)) => {
+                out.extend_from_slice(new);
+                rest = after;
+            }
+            None => {
+                out.push(byte);
+                rest = tail;
+            }
+        }
+    }
+    out
+}
+
+/// 行の本数を件数の型へ（溢れは上限へ丸める）。
+fn line_count(count: usize) -> u64 {
+    u64::try_from(count).unwrap_or(u64::MAX)
 }
 
 /// lens の scope の unit 名に載せる段の名。
