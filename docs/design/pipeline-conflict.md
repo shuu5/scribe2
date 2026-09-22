@@ -94,7 +94,7 @@ land の追随（pipeline.md §5.4・`follow_main`）で `git rebase <main>` が
 - 形:
   1. 数え手に**除外の相手を 1 つ足す**: rev-list の範囲を `<from>..HEAD` から `<from>..HEAD ^<main>` にする。数え手は 1 本のまま（2 本目の読み手を作らない）。
   2. **左の境（from）は呼び手ごとに今のまま**: 完了の判定は base、質問の判定は turn 開始時の tip。§3 手順 6 の tip 基準は 1 字も変えない——tip を base に戻すと、base から commit を持つ便が追随を解けずに質問へ倒れた周が必ず実装の失敗に化ける（§7 の歯がその極性を持つ）。
-  3. main は追随の相手を読むのと**同じ 1 本**（repo の main の参照を rev-parse で読む・`follow.rs` の節が使う定数）で、**turn の終わりに読む**。turn の途中で main が進み runner がその新しい main へ rebase した周も、取り込んだ commit が除外に入る。
+  3. main は追随の相手を読むのと**同じ 1 本**（`land.rs` の `MAIN_REF`・pub(crate) の定数で `follow.rs` が import している。`spawn.rs` も同じ 1 本を import し、rev-parse で読む＝定数を複製せず `follow.rs` も触らない）で、**turn の終わりに読む**。turn の途中で main が進み runner がその新しい main へ rebase した周も、取り込んだ commit が除外に入る。
   4. **main を読めない周は従来の基準へ落とす**（除外なしで数える・読めなさで判定を変えない）。
 - 触らない: 質問 record の読み方と rc 76 の意味・`Failed` の detail の字面（runner-rc:<rc>,commits:<n>）・段の遷移・追随の節の本文・起こし直しの回数の判定・`base_of_run` の読み。
 - 却下: 完了の判定も tip 基準へ寄せる（起こし直しの turn で 0 commit の便が前の turn の実装を持っていても失敗に化ける）／質問の判定を base 基準へ戻す（§3 手順 6 が塞いだ穴が開く）／rebase の直後に tip を撃ち直して記録する（turn の途中の状態を置き場に増やす・C3 の向き）／main の commit を patch-id で弁別する（同じ答えを高い道具で出す）。
@@ -120,5 +120,5 @@ section = "11"
 write-set = ["crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/tests/e2e/pipe/land.rs"]
 verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_follow_main_"]
 size = "S"
-done = "(1) 数え手が 1 本のまま除外の相手を受け、完了の判定は base から・質問の判定は turn 開始時の tip からを保ったまま main に在る commit を数えない (2) 追随の rebase で main の commit を HEAD に載せ自分の commit を作らずに質問 record で止まった turn が Questioned に着く (3) 自分の commit を 1 本作ってから質問 record を出した turn は従来どおり Failed で detail の字面が runner-rc:76,commits:1 のまま (4) main を読めない周は除外なしの従来の数え方に落ちる (5) 質問 record の読みと rc 76 の意味と段の遷移と追随の節が 1 字も変わらず、既存の pipe_follow_ と pipe_question_ の歯が緑"
+done = "(1) 数え手が 1 本のまま除外の相手を受け、main の参照は land.rs の pub(crate) の定数 1 本を spawn.rs が import して読み、完了の判定は base から・質問の判定は turn 開始時の tip からを保ったまま main に在る commit を数えない (2) 追随の rebase で main の commit を HEAD に載せ自分の commit を作らずに質問 record で止まった turn が Questioned に着く (3) 自分の commit を 1 本作ってから質問 record を出した turn は従来どおり Failed で detail の字面が runner-rc:76,commits:1 のまま (4) main を読めない周は除外なしの従来の数え方に落ちる (5) 質問 record の読みと rc 76 の意味と段の遷移と追随の節が 1 字も変わらず、既存の pipe_follow_ と pipe_question_ の歯が緑"
 <!-- contracts:end -->
