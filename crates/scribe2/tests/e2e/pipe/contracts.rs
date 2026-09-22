@@ -1005,6 +1005,30 @@ fn contract_declared_teeth_new_filter_needs_a_teeth_file_in_write_set() {
     clean(&[&repo, &state]);
 }
 
+// flip-check: s2-07l.481
+
+/// §42（行 aq・接頭辞 `contract_declared_place_new_`）: base で 0 本の filter 語（`fresh_`）の行が `+` の新規の歯の file だけを
+/// 持てば、受付はそれを path だけで置き場と読んで通り（rc 0・run dir を作る）、同じ行から `+` の項目を外すと従来の
+/// `teeth-place-unresolved` の字面で断る（rc 1・run dir を作らない）。母集団 = 2 回の受付の rc。
+#[test]
+fn contract_declared_place_new_plus_teeth_file_passes_intake() {
+    let rows = [
+        declared_teeth_row("x", "fresh_", "[\"crates/toy/src/tint.rs\"]"),
+        declared_teeth_row("y", "fresh_", "[\"crates/toy/src/tint.rs\", \"+crates/toy/tests/fresh.rs\"]"),
+    ];
+    let (repo, state) = derive_repo(&table_doc(&table_region(&rows)));
+    let bare = intake_raw(&repo, &state, &pointed_contract(&repo, "x.toml", "x"), "s2-x");
+    let err = stderr_of(&bare);
+    assert_eq!(bare.status.code(), Some(i32::from(RC_REFUSED)), "+ を外した write-set は rc 1: {err}");
+    assert!(err.contains("filter 語 fresh_ を含む #[test] の fn が base に無く tests 欄も無い"), "teeth-place-unresolved の字面のまま: {err}");
+    assert!(!state.join("pipe").exists(), "run dir を作らない");
+    let placed = intake_raw(&repo, &state, &pointed_contract(&repo, "y.toml", "y"), "s2-y");
+    assert_eq!(placed.status.code(), Some(i32::from(RC_OK)), "+ の新規の歯の file が置き場: {}", stderr_of(&placed));
+    assert!(intake_tokens(&placed).contains(&"write-set=declared".to_owned()), "{}", stdout_of(&placed));
+    assert_eq!(run_dirs(&state), [run_id_of(&placed)], "run dir を 1 つ作る");
+    clean(&[&repo, &state]);
+}
+
 /// (e) `contracts schema` の出力は tracked の `contracts/schema.toml` と一致し、`creates` / `tests` / `also` を任意の list として
 /// 持ち `write-set` は任意である。表の読み手も同じ: `write-set` の無い行を持つ doc は `contracts check` で違反 0（base は
 /// 必須の欠落で断る → RED）。
