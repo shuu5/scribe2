@@ -391,6 +391,17 @@ enabled = true
 ruling = "user 2026-09-17T03:28Z"
 ruled_at = "2026-09-17"
 
+# host で同時に走る便（live な便）の本数の最大値（設計 gate-cost.md §24・ADR-0035）。受付は便を作る前に live な便を
+# 数え、この値以上の周を max-live で断る。走行中の便には効かない（resume と追随の起こし直しは数えない）。
+
+[[rule]]
+id = "pipe.max_live"
+kind = "PipeMaxLive"
+value = 16
+enabled = true
+ruling = "user 2026-09-16T11:14Z"
+ruled_at = "2026-09-16"
+
 # land の終端の CI の照合（設計 contract-source.md §5）。push の後、この上限まで forge の判定を待つ。
 # 超えた周は unmeasurable で止め、**台帳を close しない**（FailClosed・やり直しは pipe land --terminal-only）。
 

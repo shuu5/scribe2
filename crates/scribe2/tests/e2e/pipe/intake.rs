@@ -4021,3 +4021,139 @@ fn pipe_repo_required_state_dir_refuses_without_either_flag() {
     assert!(event_count(&state) > before.1, "救われた周は紐づいた置き場に event を書く");
     clean(&[&repo, &state]);
 }
+
+// ───── 同時本数の最大値（rules 行 `pipe.max_live`・設計 gate-cost.md §24・`s2-07l.398`・接頭辞 `pipe_intake_max_live_`） ─────
+
+/// [`ceiling_rules`] の `pipe.max_live` の行だけを `cap` に差し替えた tmp manifest。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn rules_with_max_live(state: &Path, name: &str, cap: u64) -> String {
+    let path = write_rules(state, name, 1, 1_000_000);
+    let text = fs::read_to_string(&path).expect("tmp manifest を読める");
+    let block = |value: u64| {
+        format!(
+            "[[rule]]\nid = \"{MAX_LIVE_ROW}\"\nkind = \"PipeMaxLive\"\nvalue = {value}\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n"
+        )
+    };
+    let default = block(embedded_int(MAX_LIVE_ROW));
+    assert!(text.contains(&default), "既定の行が在る（差し替えが空振りしない）: {text}");
+    fs::write(&path, text.replace(&default, &block(cap))).expect("tmp manifest を書ける");
+    path.display().to_string()
+}
+
+/// write-set `src/a.rs` の便を上限 `cap` の manifest で受付に通し（審査 PASS＝live）、(run id, manifest の path) を返す。
+fn one_live_run(repo: &Path, state: &Path, cap: u64) -> (String, String) {
+    let rules = rules_with_max_live(state, &format!("rules-max-live-{cap}.toml"), cap);
+    let first = write_set_contract(repo, "first", &["src/a.rs"]);
+    let out = intake_with_rules(repo, state, &first, "s2-live", &rules);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "live 0 本の周は通る: {}", stderr_of(&out));
+    (run_id_of(&out), rules)
+}
+
+/// `pipe preflight` を tmp manifest と置き場つきで 1 回撃つ（judge の断りの列を `refuse=` の行で読む）。
+fn preflight_with_rules(repo: &Path, state: &Path, design: &str, rules: &str) -> Output {
+    run_pipe(&[
+        "preflight", "--design", design, "--bead", "s2-next", "--repo", &repo.display().to_string(),
+        "--rules", rules, "--state-dir", &state.display().to_string(),
+    ])
+}
+
+/// (1) `pipe.max_live = 1` で live 1 本の下の 2 本目（write-set は交差しない）は `max-live` の 1 行（`live=1 cap=1`）だけで
+/// rc 1 に断られ、stdout も run dir も event も増えない。その live の便を `stop --run` で終端に倒すと同じ契約が通る。
+#[test]
+fn pipe_intake_max_live_refuses_at_the_cap_and_admits_after_the_live_run_stops() {
+    let (repo, state) = repo_with_state();
+    let (id, rules) = one_live_run(&repo, &state, 1);
+    let (before, dirs) = (events_bytes(&state), run_dirs(&state));
+    let second = write_set_contract(&repo, "second", &["src/b.rs"]);
+    let out = intake_with_rules(&repo, &state, &second, "s2-next", &rules);
+    let err = stderr_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "上限は rc 1: {err}");
+    assert_eq!(err.lines().collect::<Vec<&str>>(), ["pipe: max-live live=1 cap=1"], "名と 2 値の 1 行だけ");
+    assert!(out.stdout.is_empty(), "断った周は stdout に 1 byte も書かない: {}", stdout_of(&out));
+    assert_eq!(run_dirs(&state), dirs, "run dir を作らない（母集団 {} 本）", dirs.len());
+    assert_eq!(events_bytes(&state), before, "events.jsonl は byte 不変");
+    stop_run_ok(&state, &id);
+    let out = intake_with_rules(&repo, &state, &second, "s2-next", &rules);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "live を止めれば同じ契約が通る: {}", stderr_of(&out));
+    assert_eq!(run_dirs(&state).len(), dirs.len().saturating_add(1), "run dir が 1 つ増える");
+    clean(&[&repo, &state]);
+}
+
+/// (2) 上限は rules 行の値: live 1 本の下で値 2 の manifest なら 2 本目が通り、live 2 本で 3 本目は `live=2 cap=2`。
+#[test]
+fn pipe_intake_max_live_reads_the_cap_from_the_rules_row() {
+    let (repo, state) = repo_with_state();
+    let (_, rules) = one_live_run(&repo, &state, 2);
+    let second = write_set_contract(&repo, "second", &["src/b.rs"]);
+    let out = intake_with_rules(&repo, &state, &second, "s2-next", &rules);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "live 1 < 値 2 は通る: {}", stderr_of(&out));
+    let third = write_set_contract(&repo, "third", &["src/c.rs"]);
+    let out = intake_with_rules(&repo, &state, &third, "s2-third", &rules);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "live 2 = 値 2 は断る: {}", stderr_of(&out));
+    assert_eq!(stderr_of(&out).lines().next(), Some("pipe: max-live live=2 cap=2"), "{}", stderr_of(&out));
+    clean(&[&repo, &state]);
+}
+
+/// (3) `Gated` で verdict FAIL の便は終端＝live に数えず上限 1 でも 2 本目が通る。対: verdict PASS の `Gated` は live で
+/// `max-live` に断られる（段と verdict は交差の歯と同じ fixture で置く）。
+#[test]
+fn pipe_intake_max_live_does_not_count_a_gated_fail_run() {
+    for (verdict, want) in [("FAIL", RC_OK), ("PASS", RC_REFUSED)] {
+        let (repo, state) = repo_with_state();
+        let (id, rules) = one_live_run(&repo, &state, 1);
+        write_verdict(&state, &id, verdict);
+        record_stage(&state, &id, "Gated");
+        let second = write_set_contract(&repo, "second", &["src/b.rs"]);
+        let out = intake_with_rules(&repo, &state, &second, "s2-next", &rules);
+        let err = stderr_of(&out);
+        assert_eq!(out.status.code(), Some(i32::from(want)), "Gated {verdict}: {err}");
+        assert_eq!(err.contains("max-live"), want == RC_REFUSED, "Gated {verdict} の断りの有無: {err}");
+        clean(&[&repo, &state]);
+    }
+}
+
+/// (4) 写しを読めない live の便が在る周は上限に届いていても `max-live` でなく読めない側（rc 2・run id を名指す）で、
+/// run dir も event も増えない（fail-closed・読めない便を数え落とさない）。
+#[test]
+fn pipe_intake_max_live_is_broken_when_a_live_copy_is_unreadable() {
+    let (repo, state) = repo_with_state();
+    let (id, rules) = one_live_run(&repo, &state, 1);
+    fs::remove_file(state.join("pipe").join(&id).join("contract.toml")).ok();
+    let (before, dirs) = (events_bytes(&state), run_dirs(&state));
+    let second = write_set_contract(&repo, "second", &["src/b.rs"]);
+    let out = intake_with_rules(&repo, &state, &second, "s2-next", &rules);
+    let err = stderr_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "読めない周は rc 2: {err}");
+    assert!(err.contains(&id) && err.contains("読めない"), "読めない run を名指す: {err}");
+    assert!(!err.contains("max-live"), "上限の断りに化けない: {err}");
+    let flight = preflight_with_rules(&repo, &state, &second, &rules);
+    let refuses = fact_lines(&flight, "refuse=");
+    assert!(!refuses.is_empty(), "preflight も断る: {}", stdout_of(&flight));
+    assert!(refuses.iter().all(|line| line.starts_with("refuse=write-set-unreadable:")), "名は write-set-unreadable: {refuses:?}");
+    assert_eq!(run_dirs(&state), dirs, "run dir を作らない");
+    assert_eq!(events_bytes(&state), before, "events.jsonl は byte 不変");
+    clean(&[&repo, &state]);
+}
+
+/// (5) 短絡しない: 上限で断る周も交差の判定は撃たれ、preflight の列は `max-live` が先頭・交差が後続に並ぶ（2 件）。intake は
+/// 先頭の 1 件（`max-live`）で断る。
+#[test]
+fn pipe_intake_max_live_still_lists_the_overlap_after_the_cap() {
+    let (repo, state) = repo_with_state();
+    let (id, rules) = one_live_run(&repo, &state, 1);
+    let second = write_set_contract(&repo, "second", &["src/a.rs"]);
+    let out = intake_with_rules(&repo, &state, &second, "s2-next", &rules);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{}", stderr_of(&out));
+    assert_eq!(stderr_of(&out).lines().next(), Some("pipe: max-live live=1 cap=1"), "先頭は上限: {}", stderr_of(&out));
+    let flight = preflight_with_rules(&repo, &state, &second, &rules);
+    let refuses = fact_lines(&flight, "refuse=");
+    let names: Vec<&str> =
+        refuses.iter().filter_map(|line| line.strip_prefix("refuse=")?.split(':').next()).collect();
+    assert_eq!(names, ["max-live", "write-set-overlap"], "上限が先頭・交差が後続: {}", stdout_of(&flight));
+    assert!(refuses.get(1).is_some_and(|line| line.contains(&id) && line.contains("src/a.rs")), "交差の組を名乗る: {refuses:?}");
+    assert_eq!(tail_line(&flight), "preflight: refused n=2", "{}", stdout_of(&flight));
+    clean(&[&repo, &state]);
+}

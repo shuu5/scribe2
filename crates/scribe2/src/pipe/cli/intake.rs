@@ -21,7 +21,7 @@
 //! 断りを判定関数 1 本につき高々 1 件で**全部**集める）と [`create`]（run dir・写し・event）の 2 段で、`intake` = judge →
 //! create（列の先頭の 1 件で断る＝従来の外形）・`pipe preflight`（[`super::preflight`]）= judge だけ。各判定関数
 //! （[`freeze`] / [`settle_write_set`] / [`exclude_same_kind`] / [`exclude_unaddressed`] / [`exclude_cap_shortfall`] /
-//! [`exclude_overlap`] / 重複 run）の中身と「先頭の 1 件で返す」形は不変で、Ok 値だけを事実（[`Headrooms`] / [`Crossed`]）へ
+//! [`exclude_max_live`] / [`exclude_overlap`] / 重複 run）の中身と「先頭の 1 件で返す」形は不変で、Ok 値だけを事実（[`Headrooms`] / [`Crossed`]）へ
 //! 広げる。
 //!
 //! **同型の停止と焼き直しの門**（契約表の行 w・contract-source.md §23・`s2-07l.396`）: 受付は置き場の replay から同じ bead
@@ -53,6 +53,9 @@ const ROW_CORE_LINES: &str = "R-C4-1";
 
 /// 行の数え方の幅を持つ rules 行（上限の余地の行数を xtask check と同じ式で数える・kind `LineWidth`）。
 const ROW_LINE_WIDTH: &str = "R-C4.line-width";
+
+/// host で同時に走る便（live な便）の本数の最大値を持つ rules 行（設計 gate-cost.md §24・値は読むだけ・C1）。
+const ROW_MAX_LIVE: &str = "pipe.max_live";
 
 /// 契約の `size` = S の 1 file あたりの増分の見積（行）を持つ rules 行。
 const ROW_SIZE_S: &str = "pipe.size_s_lines";
@@ -537,7 +540,7 @@ pub(in crate::pipe) struct Judged {
 }
 
 /// 受付の判定（run を作らない・§21）。判定関数を `freeze` → `settle_write_set` → `exclude_cap_shortfall` →
-/// `exclude_overlap` → 重複 run の順に**全部撃ち**、各関数が返した断りを列に積む。前段の Ok 値を取るのは導出値で
+/// `exclude_max_live` → `exclude_overlap` → 重複 run の順に**全部撃ち**、各関数が返した断りを列に積む。前段の Ok 値を取るのは導出値で
 /// write-set を置き換える 1 点だけで、`settle_write_set` が Err の周は契約 file の write-set のまま後段を撃つ
 /// （Declared 行は元々置き換えが無い＝前段と後段の断りが同時に載る）。git repo でない対象は他の関数が撃てないので
 /// `not-a-repo` の 1 件で止まる。
@@ -591,6 +594,10 @@ pub(in crate::pipe) fn judge(material: &Material<'_>) -> Judged {
     let Some(state_dir) = state_dir else {
         return judged;
     };
+    // **同時本数の上限は交差の前**（設計 gate-cost.md §24）。短絡しない＝上限で断る周も交差は撃ち、組は後続に並ぶ。
+    if let Err(denial) = exclude_max_live(manifest, state_dir, &measured, tracked) {
+        judged.denials.push(denial);
+    }
     // **入口で排他する**（ADR-0019 §2.1）。live な便と write-set が交差する契約は、
     // run dir も event も作らずに断る——後段（land の rebase）で衝突を知るより安い。
     match exclude_overlap(state_dir, &measured, tracked) {
@@ -970,6 +977,20 @@ fn exclude_overlap(state_dir: &Path, contract: &Contract, tracked: &[String]) ->
         None => Ok(found),
         Some(reason) => Err(refuse(reason, &found.lines)),
     }
+}
+
+/// 置き場の live な便の本数が rules 行 `pipe.max_live` の値以上の周を断る（設計 gate-cost.md §24・受付だけ）。
+///
+/// 数えるのは [`crossings`] が突き合わせた live な run（**交差と同じ 1 本**の live の判定・C2）で、読めない便が在る周は
+/// 交差と同じ `WriteSetUnreadable`（rc 2・fail-closed）。便を作る前だけ撃つ＝走行中の便は止めない。行の無い manifest は
+/// 受付を動かさない（rc 2）。
+fn exclude_max_live(manifest: &Manifest, state_dir: &Path, contract: &Contract, tracked: &[String]) -> Result<(), Denial> {
+    let cap = int_row(manifest, ROW_MAX_LIVE).map_err(|reason| denied(DENIAL_RULES, broken(reason)))?;
+    let live = u64::try_from(crossings(state_dir, contract, tracked)?.runs.len()).unwrap_or(u64::MAX);
+    if live >= cap {
+        return Err(refuse(&Refuse::MaxLive { live, cap }, &[]));
+    }
+    Ok(())
 }
 
 /// live な便との交差を**測るだけ**の 1 本（断りは作らない・設計 dispatcher.md §3）。

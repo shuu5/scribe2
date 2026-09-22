@@ -885,16 +885,16 @@ fn rules_review_same_kind_stop_row_carries_value_two_and_its_ruling() {
     assert_eq!(shared, 1, "裁定 id は他の行と相乗りしない（母集団 {} 行）", manifest.rows().len());
 }
 
-/// kind `ReviewSameKindStop` は `ALL` の**宣言順の末尾**に在り（`.428` の `LandTrainMax` が後ろに 1 つ足された）、字面から
-/// 引け、行と variant は対で足す＝variant を綴り違えた行の manifest は未知の kind として読めない（片方だけの enum は親 test の
-/// `covers_all_kinds` が落ちる）。
+/// kind `ReviewSameKindStop` は `ALL` の**宣言順の末尾**に在り（`.428` の `LandTrainMax` と `.398` の `PipeMaxLive` が後ろに
+/// 足された）、字面から引け、行と variant は対で足す＝variant を綴り違えた行の manifest は未知の kind として読めない（片方だけの
+/// enum は親 test の `covers_all_kinds` が落ちる）。
 #[test]
 fn rules_review_same_kind_stop_kind_is_last_in_declaration_order_and_paired_with_the_row() {
-    let tail: Vec<RuleKind> = ALL.iter().rev().take(2).rev().copied().collect();
+    let tail: Vec<RuleKind> = ALL.iter().rev().take(3).rev().copied().collect();
     assert_eq!(
         tail,
-        vec![RuleKind::ReviewSameKindStop, RuleKind::LandTrainMax],
-        "宣言順の末尾は `.428` の LandTrainMax・その直前（母集団 {} 種）",
+        vec![RuleKind::ReviewSameKindStop, RuleKind::LandTrainMax, RuleKind::PipeMaxLive],
+        "宣言順の末尾は `.398` の PipeMaxLive・`.428` の LandTrainMax・その直前（母集団 {} 種）",
         ALL.len()
     );
     assert_eq!(RuleKind::parse("ReviewSameKindStop"), Some(RuleKind::ReviewSameKindStop), "kind を字面から引ける");
@@ -1151,6 +1151,35 @@ fn rules_land_train_max_row_is_declared() {
     assert!(joined.contains("未知である"), "行の kind を綴り違えた manifest は読めない: {joined}");
 }
 
+/// host で同時に走る便の本数の最大値の行（`pipe.max_live`・裁定 id `user 2026-09-16T11:14Z`・設計 gate-cost.md §24・
+/// ADR-0035・`s2-07l.398`）。**値は manifest が持ち、設計 doc は写さない**（C1 / C5）。行と variant は対で足す
+/// （片方だけの manifest は未知の kind として読めず、片方だけの enum は `covers_all_kinds` が落とす・行 j と同型）。
+#[test]
+fn rules_embedded_manifest_declares_max_live_row_with_its_ruling() {
+    let manifest = match Manifest::embedded() {
+        Ok(found) => found,
+        Err(errors) => {
+            let lines: Vec<String> = errors.iter().map(ToString::to_string).collect();
+            panic!("埋め込み manifest が拒まれた:\n{}", lines.join("\n"))
+        }
+    };
+    let row = manifest.get("pipe.max_live").expect("同時本数の最大値の行が在る");
+    assert_eq!(row.value, RuleValue::Int(16), "user 裁定 2026-09-16T11:14Z の値（本）");
+    assert_eq!(row.kind, RuleKind::PipeMaxLive, "kind");
+    assert_eq!(row.kind.shape(), ValueShape::Int, "値の形は Int（本）");
+    assert!(row.enabled, "既定で効く");
+    assert_eq!(row.ruling, "user 2026-09-16T11:14Z", "裁定 id");
+    assert_eq!(row.ruled_at, "2026-09-16", "裁定日");
+    assert_eq!(int_row(&manifest, "pipe.max_live"), Ok(16), "整数の読み手で 16 が取れる");
+    assert_eq!(ALL.last(), Some(&RuleKind::PipeMaxLive), "宣言順の末尾（母集団 {} 種）", ALL.len());
+    assert_eq!(RuleKind::parse("PipeMaxLive"), Some(RuleKind::PipeMaxLive), "kind を字面から引ける");
+    let errors = rejected(&one_row_raw("PipeMaxLives", "16")).expect("未知の kind の fixture が受理された");
+    let joined = errors.join("\n");
+    assert!(joined.contains("未知である"), "行の kind を綴り違えた manifest は読めない: {joined}");
+    let errors = rejected(&one_row(RuleKind::PipeMaxLive, "\"sixteen\"")).expect("文字列の値の fixture が受理された");
+    assert!(errors.join("\n").contains("形と合わない"), "形は Int だけ: {errors:?}");
+}
+
 /// rebrief が台帳を待つ上限の行（`seat.ledger_timeout_s`・裁定 id `user 2026-09-12T02:01Z`・設計
 /// working-memory.md §5.2）。**値は manifest が持ち、設計 doc は写さない**（C1 / C5）。
 #[test]
@@ -1323,7 +1352,7 @@ fn rules_embedded_manifest_is_valid_and_covers_all_kinds() {
     // **tracked な `rules/manifest.toml` の全行が受理される**（`parse` は 1 件でも違反が
     // 在れば `Err` を返すので、ここに届いた時点で全行が必須 key を持つ）。母集団を額面に
     // 出すのは、行が黙って落ちた周を「全部読めた」と読み違えないためである。
-    assert_eq!(manifest.rows().len(), 52, "埋め込み manifest の行数（母集団・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.478` で -1〔役割の行 2 本が 1 本〕・`.479.1` で -7〔席の自律の行〕・`.479.2` で -3〔作業記憶の行 1 本と棚卸しの行 2 本〕・`.382` で +1〔終端の CI の上限〕・`.433` で +2〔役割の既定の model と effort〕・`.407` で +1〔選定の前計測の鮮度〕・`.396` で +1〔同型の審査 FAIL の停止の回数〕・`.504` の行 x で +2〔器の健康の遮断器の倍率〕・`.428` で +1〔着地の列の上限〕）");
+    assert_eq!(manifest.rows().len(), 53, "埋め込み manifest の行数（母集団・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.478` で -1〔役割の行 2 本が 1 本〕・`.479.1` で -7〔席の自律の行〕・`.479.2` で -3〔作業記憶の行 1 本と棚卸しの行 2 本〕・`.382` で +1〔終端の CI の上限〕・`.433` で +2〔役割の既定の model と effort〕・`.407` で +1〔選定の前計測の鮮度〕・`.396` で +1〔同型の審査 FAIL の停止の回数〕・`.504` の行 x で +2〔器の健康の遮断器の倍率〕・`.428` で +1〔着地の列の上限〕・`.398` で +1〔同時本数の最大値〕）");
     for kind in ALL {
         let covered = manifest.rows().iter().any(|row| row.kind == *kind);
         assert!(covered, "{} の行が manifest に無い", kind.as_str());
@@ -1493,10 +1522,10 @@ fn rules_embedded_manifest_declares_one_capability_row_per_role() {
             assert!(Capability::parse(name).is_some(), "{id} の値 {name} は Capability の名");
         }
     }
-    assert!(ALL.contains(&RuleKind::RoleCapabilities), "ALL に在る（末尾は `.428` の LandTrainMax）");
+    assert!(ALL.contains(&RuleKind::RoleCapabilities), "ALL に在る（末尾は `.398` の PipeMaxLive）");
     assert_eq!(RuleKind::parse("RoleCapabilities"), Some(RuleKind::RoleCapabilities), "kind を字面から引ける");
     let kinds = ALL.len();
-    assert_eq!(kinds, 52, "kind の母集団（`.201` で +1・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.479.2` で -3・`.382` で +1〔終端の CI の上限〕・`.433` で +2〔役割の既定の 2 種〕・`.407` で +1〔選定の前計測の鮮度〕・`.396` で +1〔同型の審査 FAIL の停止の回数〕・`.504` の行 x で +2〔器の健康の遮断器の倍率〕・`.428` で +1〔着地の列の上限〕）");
+    assert_eq!(kinds, 53, "kind の母集団（`.201` で +1・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.479.2` で -3・`.382` で +1〔終端の CI の上限〕・`.433` で +2〔役割の既定の 2 種〕・`.407` で +1〔選定の前計測の鮮度〕・`.396` で +1〔同型の審査 FAIL の停止の回数〕・`.504` の行 x で +2〔器の健康の遮断器の倍率〕・`.428` で +1〔着地の列の上限〕・`.398` で +1〔同時本数の最大値〕）");
 }
 
 /// 禁じる語列の行（`runner.denied_commands`・`RuleKind::RunnerDeniedCommands`・裁定 id `user 2026-09-14`・ADR-0025 §2.1・

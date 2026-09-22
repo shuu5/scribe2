@@ -62,6 +62,7 @@ pub(crate) const REFUSALS: &[&str] = &[
     "finding-unaddressed",
     "promised-field-written",
     "promise-symbol-unresolved",
+    "max-live",
 ];
 
 /// 契約 file が読めた後の、契約単位の拒否理由。**新しい理由は variant を 1 つ足す**（憲法 C2）。
@@ -209,6 +210,14 @@ pub(crate) enum Refuse {
         /// 名の字面。
         name: String,
     },
+    /// 置き場の live な便の本数が rules 行 `pipe.max_live` の値以上（設計 gate-cost.md §24・受付だけが撃つ・走行中の便は
+    /// 止めない）。数え方は交差と同じ live の判定。
+    MaxLive {
+        /// 数えた live な便の本数。
+        live: u64,
+        /// rules 行の値（本）。
+        cap: u64,
+    },
 }
 
 impl Refuse {
@@ -236,6 +245,7 @@ impl Refuse {
             Self::FindingUnaddressed { .. } => "finding-unaddressed",
             Self::PromisedFieldWritten { .. } => "promised-field-written",
             Self::PromiseSymbolUnresolved { .. } => "promise-symbol-unresolved",
+            Self::MaxLive { .. } => "max-live",
         }
     }
 
@@ -303,6 +313,8 @@ impl Refuse {
                 Some(fresh) => format!("約束 {of} の n {n} の symbols の {name} は base に既に在る（+ は base に無い新設の名・{fresh} は + を外す）"),
                 None => format!("約束 {of} の n {n} の symbols の {name} が base に無い（新設の名なら + を前置する）"),
             },
+            // stderr の 1 行は `pipe: max-live live=<n> cap=<c>`（設計 gate-cost.md §24・名と 2 値だけ）。
+            Self::MaxLive { live, cap } => format!("{} live={live} cap={cap}", self.as_str()),
         }
     }
 
@@ -328,7 +340,8 @@ impl Refuse {
             | Self::SameKindRepeated { .. }
             | Self::FindingUnaddressed { .. }
             | Self::PromisedFieldWritten { .. }
-            | Self::PromiseSymbolUnresolved { .. } => RC_REFUSED,
+            | Self::PromiseSymbolUnresolved { .. }
+            | Self::MaxLive { .. } => RC_REFUSED,
             Self::WriteSetUnreadable { .. } => RC_BROKEN,
             Self::ContractTable(ref found) => found.rc(),
         }
@@ -483,6 +496,7 @@ mod tests {
             Refuse::FindingUnaddressed { kind: FindingKind::TeethOutsideWriteSet, at: vec!["src/a.rs".to_owned()] },
             Refuse::PromisedFieldWritten { row: "ag".to_owned(), fields: vec!["write-set".to_owned(), "done".to_owned()] },
             Refuse::PromiseSymbolUnresolved { of: "ag".to_owned(), n: 2, name: "+Refuse::Fresh".to_owned() },
+            Refuse::MaxLive { live: 3, cap: 2 },
         ]
     }
 
@@ -589,9 +603,15 @@ mod tests {
         // 末尾 2 つ（本便が足した理由）は交差と読めなさである。
         assert_eq!(names.get(2).copied(), Some("write-set-overlap"), "{names:?}");
         assert_eq!(names.get(3).copied(), Some("write-set-unreadable"), "{names:?}");
-        // 約束の行の 2 理由（設計 contract-source.md §33・`s2-07l.512`）が末尾に並び、母集団は 21 値。
-        assert_eq!(REFUSALS.len(), 21, "母集団 21 値");
-        assert_eq!(names.iter().rev().take(2).copied().collect::<Vec<&str>>(), ["promise-symbol-unresolved", "promised-field-written"]);
+        // 約束の行の 2 理由（設計 contract-source.md §33・`s2-07l.512`）が同時本数の上限（gate-cost.md §24・`s2-07l.398`）の
+        // 手前に並び、母集団は 22 値。
+        assert_eq!(REFUSALS.len(), 22, "母集団 22 値");
+        assert_eq!(
+            names.iter().rev().take(3).copied().collect::<Vec<&str>>(),
+            ["max-live", "promise-symbol-unresolved", "promised-field-written"]
+        );
+        let cap = samples().get(21).map(|found| (found.reason(), found.rc()));
+        assert_eq!(cap, Some(("max-live live=3 cap=2".to_owned(), RC_REFUSED)), "名と live / cap の 2 値だけの 1 行・rc 1");
         let found = samples();
         let written = found.get(19).map(Refuse::reason).unwrap_or_default();
         assert!(written.contains("行 ag") && written.contains("write-set, done"), "行 id と欄を全部名乗る: {written}");

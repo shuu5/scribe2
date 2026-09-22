@@ -38,7 +38,7 @@
 | `gate.slot_wait_s` | `GateSlotWaitS`（Int） | 受付で枠が空くのを待つ上限。超えたら並列度 1 で進む（縮退・止めない）。 |
 | `gate.cpu_weight` | `GateCpuWeight`（Int） | 便の scope に付ける CPU の重み（席は既定の重み）。 |
 | `gate.tmux_test_threads` | `GateTmuxTestThreads`（Int） | tmux を立てる歯（e2e の isolated seat）の同時本数。値の写しは nextest の test-group `tmux` の `max-threads`（`.config/nextest.toml`・新規）で、`cargo xtask check` が写しの一致と配線（tmux を立てる歯＝本文が席の fixture の道具を名指すか、それを名指す e2e の木の関数を呼ぶ `#[test]`・閉包は器が関数名の固定点で決め、filter はその歯を module 付きの名で全部列挙する固定形＝file 単位や接頭辞では決めない〔.360 run 2 の QUESTION・helper 越しの歯 21 本を接頭辞が拾えない〕）を測る（clippy.toml ↔ R-C4-4.* と同型・C10.3）。並列 gate 下の負荷で tmux の歯が落ちる flake（`s2-07l.360`・契約表の行 b）の解＝並列度そのものは下げない。 |
-| `pipe.max_live` | `PipeMaxLive`（Int） | host で同時に走る便（live な便）の本数の**最大値**（[ADR-0035](../../design-intent/decisions/ADR-0035-live-run-cap-is-one-rules-row.html)・値は user 裁定 id 付き）。受付が便を作る前に live な便を数え、値以上の周は typed に断る（§24）。変異検査の並列度（`gate.mutants_jobs`）や memory の枠（§3.2）とは別の軸で、走行中の便には効かない。本表の行は在り、manifest の行と `RuleKind` の variant は行 o が足す。 |
+| `pipe.max_live` | `PipeMaxLive`（Int） | host で同時に走る便（live な便）の本数の**最大値**（[ADR-0035](../../design-intent/decisions/ADR-0035-live-run-cap-is-one-rules-row.html)・値は user 裁定 id 付き）。受付が便を作る前に live な便を数え、値以上の周は typed に断る（§24）。変異検査の並列度（`gate.mutants_jobs`）や memory の枠（§3.2）とは別の軸で、走行中の便には効かない。本表の行は在り、manifest の行と `RuleKind` の variant は行 o（`s2-07l.398`）が足した（受付の断りは `max-live`・§24）。 |
 | `host.runnable_per_core` | `HostRunnablePerCore`（Int） | 器の健康の遮断器（§32）が「混んでいる」と判じる走行可能な process 数の**倍率**。閾値 = この値 × 実測の core 数で、超えた周は verify の行を撃たずに空くまで待つ。値は裁定 id 付き。 |
 | `host.blocked_per_core` | `HostBlockedPerCore`（Int） | 同じ遮断器（§32）が読む**待ち**（D 状態）の process 数の倍率。閾値の組み立ては走行可能と同じで、どちらか一方が超えれば「混んでいる」。値は裁定 id 付き。 |
 

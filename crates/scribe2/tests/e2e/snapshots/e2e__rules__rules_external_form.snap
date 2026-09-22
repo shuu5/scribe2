@@ -3,8 +3,8 @@ source: crates/scribe2/tests/e2e/rules.rs
 expression: form
 ---
 usage: scribe2 <name|--version|doctor|account|rules|fleet|vessel|hook|pipe|runner|lens|seat|polarity|contracts>
-rules: ok rows=52 kinds=52
+rules: ok rows=53 kinds=53
 rules: no such id
 95
-rules: ok rows=52 kinds=52 accounts=2 plugins=2 launch-args=2 host=present
+rules: ok rows=53 kinds=53 accounts=2 plugins=2 launch-args=2 host=present
 usage: rules <validate|get <id>> [--rules PATH] [--state-dir S]

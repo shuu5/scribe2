@@ -237,6 +237,9 @@ pub enum RuleKind {
     /// 着地の列を候補の木 1 つに積む本数の上限（本・先頭を含む・設計 pipeline.md §40・ADR-0039）。値 1 と
     /// 行の不在は先頭だけ（列を積まない＝従来の経路）。
     LandTrainMax,
+    /// host で同時に走る便（live な便）の本数の最大値（本・設計 gate-cost.md §24・ADR-0035）。受付は便を作る前に
+    /// live な便を数え、この値以上の周を `max-live` で断る（走行中の便には効かない）。
+    PipeMaxLive,
 }
 
 /// [`RuleKind`] の全 variant。parity test の母集団である。
@@ -293,6 +296,7 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::RoleEffort,
     RuleKind::ReviewSameKindStop,
     RuleKind::LandTrainMax,
+    RuleKind::PipeMaxLive,
 ];
 
 impl RuleKind {
@@ -351,6 +355,7 @@ impl RuleKind {
             Self::RoleEffort => "RoleEffort",
             Self::ReviewSameKindStop => "ReviewSameKindStop",
             Self::LandTrainMax => "LandTrainMax",
+            Self::PipeMaxLive => "PipeMaxLive",
         }
     }
 
@@ -395,6 +400,7 @@ impl RuleKind {
             | Self::PipeSizeLLines
             | Self::ReviewSameKindStop
             | Self::LandTrainMax
+            | Self::PipeMaxLive
             | Self::AccountSelection => ValueShape::Int,
             Self::DialogueSurface
             | Self::RunnerModel
