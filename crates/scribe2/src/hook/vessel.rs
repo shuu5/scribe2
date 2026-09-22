@@ -437,6 +437,89 @@ pub fn update(state_dir: &Path, remote: &str, branch: &str) -> Result<crate::fle
     Ok(install)
 }
 
+/// 上流との差を数えられない周の理由（git が返らない・数が読めない・設計 consumer-sync.md §15 形 1）。
+pub const GIT_FAILED: &str = "git-failed";
+/// 終端の周の fetch が落ちた周の理由（口を撃たない・設計 consumer-sync.md §15 形 2）。
+pub const FETCH_FAILED: &str = "fetch-failed";
+/// host の面を読めず宣言の有無を測れない周の理由（宣言なしに読み替えない・C10）。
+pub const HOST_UNREADABLE: &str = "host-unreadable";
+/// live な便の有無を測れない周の理由（live 0 に読み替えない・C10）。
+pub const LIVE_UNMEASURED: &str = "live-unmeasured";
+
+/// vessel repo の checkout と上流の既定 branch の差（**閉じた 6 値**・bool にしない・設計 consumer-sync.md §15 形 1）。
+///
+/// 読みの 1 本（[`upstream`]）が返すのは先頭の 3 値と [`Self::Unmeasured`] で、[`Self::Updated`] と [`Self::Refused`] は
+/// 終端の周の軸（[`sync`]）が §5 の口を撃った周だけ返す。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Upstream {
+    /// host の面に `[[vessel]] repo` が無い。
+    Undeclared,
+    /// 差が 0（HEAD が上流を含む）。
+    Current,
+    /// HEAD が上流から n 個遅れている（n ≥ 1）。
+    Behind(u64),
+    /// §5 の口が install した（install した HEAD の sha12）。
+    Updated(String),
+    /// §5 の口が断った（[`UpdateError::as_str`] の語）。
+    Refused(&'static str),
+    /// 測れない（理由の語・0 と融合しない・C10）。
+    Unmeasured(&'static str),
+}
+
+impl Upstream {
+    /// `vessel=` の値（`current|behind:<n>|updated:<sha12>|refused:<語>|unmeasured:<理由>|undeclared`）。
+    pub fn render(&self) -> String {
+        match self {
+            Self::Undeclared => "undeclared".to_owned(),
+            Self::Current => "current".to_owned(),
+            Self::Behind(count) => format!("behind:{count}"),
+            Self::Updated(sha) => format!("updated:{sha}"),
+            Self::Refused(word) => format!("refused:{word}"),
+            Self::Unmeasured(reason) => format!("unmeasured:{reason}"),
+        }
+    }
+}
+
+/// behind を読む 1 本（**fetch を撃たない**・設計 consumer-sync.md §15 形 1）: 起点を checkout の HEAD にして
+/// `rev-list --count HEAD..<remote>/<branch>` を 1 回撃つ。宣言が無ければ git を撃たずに [`Upstream::Undeclared`]。
+pub fn upstream(repo: Option<&Path>, remote: &str, branch: &str) -> Upstream {
+    let Some(repo) = repo else {
+        return Upstream::Undeclared;
+    };
+    let counted = git_line(repo, &["rev-list", "--count", &format!("HEAD..{remote}/{branch}")]);
+    match counted.and_then(|found| found.parse::<u64>().ok()) {
+        Some(0) => Upstream::Current,
+        Some(count) => Upstream::Behind(count),
+        None => Upstream::Unmeasured(GIT_FAILED),
+    }
+}
+
+/// 終端の周の軸（設計 consumer-sync.md §15 形 2・呼び手は列の起こす側だけ）。`idle` は live な便が 0 の周か
+/// （`None` = 測れない）。
+///
+/// 宣言が無い周は `None`（軸の主題が無い＝評価しない・git を 1 本も撃たない）。live が残る周は読むだけ（fetch も
+/// 口も撃たない＝次の終端が拾う）。live が 0 の周だけ既定の remote へ fetch を 1 回撃ってから読み、behind ≥ 1 なら
+/// §5 の口（[`update`]）を 1 回呼ぶ。fetch が落ちた周と live を測れない周は口を撃たない。
+pub fn sync(state_dir: &Path, idle: Option<bool>) -> Option<Upstream> {
+    let repo = match crate::rules::read(None, Some(state_dir)) {
+        Ok(manifest) => PathBuf::from(manifest.vessel()?.repo()),
+        Err(_) => return Some(Upstream::Unmeasured(HOST_UNREADABLE)),
+    };
+    let read = || upstream(Some(&repo), DEFAULT_REMOTE, DEFAULT_BRANCH);
+    Some(match idle {
+        None => Upstream::Unmeasured(LIVE_UNMEASURED),
+        Some(false) => read(),
+        Some(true) if !git_ok(&repo, &["fetch", DEFAULT_REMOTE]) => Upstream::Unmeasured(FETCH_FAILED),
+        Some(true) => match read() {
+            Upstream::Behind(_) => match update(state_dir, DEFAULT_REMOTE, DEFAULT_BRANCH) {
+                Ok(install) => Upstream::Updated(install.sha),
+                Err(error) => Upstream::Refused(error.as_str()),
+            },
+            other => other,
+        },
+    })
+}
+
 /// git を 1 回撃って出力を得る（起動できなければ `None`）。
 fn git_output(dir: &Path, args: &[&str]) -> Option<std::process::Output> {
     Command::new("git").arg("-C").arg(dir).args(args).output().ok()

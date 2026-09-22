@@ -2395,3 +2395,204 @@ fn pipe_dispatch_intake_run_without_a_live_driver_is_not_live() {
         clean(&[&repo, &state]);
     }
 }
+
+// ───── 終端の周の軸（consumer-sync.md §15 形 2 / 3・`pipe_dispatch_vessel_` 接頭辞・`s2-07l.408`） ─────
+//
+// 偽 git は `[[vessel]] repo` を名指す呼び出しだけを写して答え（`rev-list` は数・`status` は汚れ・`fetch` は rc）、他は
+// 実 git へ exec する（列そのものの git は現物で動く）。偽 cargo は argv を写して install 先の行を出す。
+
+/// 偽 git が vessel repo の `rev-parse HEAD` に返す 40 桁（先頭 12 桁が `updated:` の sha）。
+const VESSEL_HEAD: &str = "89abcdef0123456789abcdef0123456789abcdef";
+
+/// 空の 1 周の列の行（`dispatch=` の書式は 1 字も変わらない）。
+const IDLE_LINE: &str = "dispatch=started:0,resumed:0,waiting:0";
+
+/// 軸の置き場（偽 git / cargo の PATH と argv の写し）。
+struct VesselPlace {
+    /// 偽 git / cargo を先頭に置いた PATH。
+    path: String,
+    /// argv の写し。
+    log: std::path::PathBuf,
+    /// vessel repo の path（写しの中で `[vessel]` に置き換える）。
+    vessel: String,
+}
+
+impl VesselPlace {
+    /// 写った argv（vessel repo の path は `[vessel]`・撃たれなければ空）。
+    fn argv(&self) -> Vec<String> {
+        fs::read_to_string(&self.log).unwrap_or_default().lines().map(|line| line.replace(&self.vessel, "[vessel]")).collect()
+    }
+}
+
+/// 置き場を作る: `declared` なら host の面に `[[vessel]] repo` を書き、偽 git（`rev-list` は `count`・`status` は `status_out`・
+/// `fetch` は `fetch_rc`）と偽 cargo（rc 0・install 先を stderr へ）を置く。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn vessel_place(state: &Path, declared: bool, count: u64, status_out: &str, fetch_rc: u8) -> VesselPlace {
+    let dir = state.join("vessel-repo");
+    fs::create_dir_all(&dir).expect("vessel repo の dir を作れる");
+    let vessel = dir.display().to_string();
+    if declared {
+        fs::write(state.join("host.toml"), format!("schema = 1\n\n[[vessel]]\nrepo = \"{vessel}\"\n")).expect("host の面を書ける");
+    }
+    let log = state.join("vessel-argv.log");
+    let logged = log.display().to_string();
+    let git = format!(
+        "case \"$2\" in '{vessel}')\n  printf '%s\\n' \"git $*\" >> '{logged}'\n  case \"$3\" in\n    fetch) exit {fetch_rc} ;;\n    rev-list) echo {count} ;;\n    status) printf '{status_out}' ;;\n    rev-parse) echo {VESSEL_HEAD} ;;\n  esac\n  exit 0 ;;\nesac"
+    );
+    let path = shim_path(state, "vessel-bin", &git);
+    script(
+        &state.join("vessel-bin").join("cargo"),
+        &format!("printf '%s\\n' \"cargo $*\" >> '{logged}'\necho '  Installing /opt/e2e-bin/vessel' >&2\n"),
+    );
+    VesselPlace { path, log, vessel }
+}
+
+/// 手動の 1 周（起こす側・道具つき・台帳は空）を偽 git / cargo の PATH で撃つ（`verb` は `dispatch` の後ろの語）。
+fn vessel_turn(repo: &Path, state: &Path, place: &VesselPlace, verb: &[&str]) -> Output {
+    let (state_s, repo_s, rules, bd) =
+        (state.display().to_string(), repo.display().to_string(), dispatch_rules(state), fake_bd(state, &[]));
+    let mut args = vec!["dispatch"];
+    args.extend_from_slice(verb);
+    args.extend_from_slice(&["--state-dir", &state_s, "--repo", &repo_s, "--rules", &rules, "--bd", &bd, "--runner", "true"]);
+    super::run_pipe_with_path(&place.path, &args)
+}
+
+/// 置き場の `InstallRecorded` の件数。
+fn installs(state: &Path) -> usize {
+    let events = vessel::fleet::store::read_all(state).unwrap_or_default();
+    events.iter().filter(|event| event.kind == vessel::fleet::EventKind::InstallRecorded).count()
+}
+
+/// 終端の周が fetch を 1 回撃ってから差を数える 2 本。
+fn fetch_then_count() -> Vec<String> {
+    vec!["git -C [vessel] fetch origin".to_owned(), "git -C [vessel] rev-list --count HEAD..origin/main".to_owned()]
+}
+
+/// (形 2・3) live 便 0 の周に上流が 2 個先なら、fetch を 1 回撃ってから数え、§5 の口を 1 回呼んで `updated:<sha12>` と
+/// `InstallRecorded` 1 件が残る。`vessel=` の行は列の行の前に立ち、最後の行は列の行のまま。base は行も argv も無い（RED）。
+#[test]
+fn pipe_dispatch_vessel_behind_on_an_idle_round_fires_update_once() {
+    let (repo, state) = repo_with_state();
+    let place = vessel_place(&state, true, 2, "", 0);
+    let out = vessel_turn(&repo, &state, &place, &[]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "1 周は rc 0（{}）", told(&out));
+    let sha = VESSEL_HEAD.get(..12).unwrap_or_default();
+    assert_eq!(stdout_of(&out), format!("vessel=updated:{sha}\n{IDLE_LINE}\n"), "軸の行 + 列の行（{}）", told(&out));
+    let mut want = fetch_then_count();
+    want.extend([
+        "git -C [vessel] status --porcelain".to_owned(),
+        "git -C [vessel] fetch origin".to_owned(),
+        "git -C [vessel] merge --ff-only origin/main".to_owned(),
+        format!("cargo install --path [vessel]/crates/{} --locked --color never", vessel::name::NAME),
+        "git -C [vessel] rev-parse HEAD".to_owned(),
+    ]);
+    assert_eq!(place.argv(), want, "fetch 1 回 → 数え → §5 の口 1 回（順序は §5 のまま）");
+    assert_eq!(installs(&state), 1, "記帳 1 件");
+    clean(&[&repo, &state]);
+}
+
+/// (形 2・否定の枝) 上流と同じ周は `current` で口を撃たない（argv は fetch と数えの 2 本・記帳 0 件）。
+#[test]
+fn pipe_dispatch_vessel_current_round_does_not_update() {
+    let (repo, state) = repo_with_state();
+    let place = vessel_place(&state, true, 0, "", 0);
+    let out = vessel_turn(&repo, &state, &place, &[]);
+    assert_eq!(stdout_of(&out), format!("vessel=current\n{IDLE_LINE}\n"), "現行（{}）", told(&out));
+    assert_eq!(place.argv(), fetch_then_count(), "口の argv は 0 本");
+    assert_eq!(installs(&state), 0, "記帳 0 件");
+    clean(&[&repo, &state]);
+}
+
+/// (形 2・否定の枝) live な便が残る周は fetch も口も撃たず、差を読んで `behind:<n>` を名乗るだけ（次の終端が拾う）。
+#[test]
+fn pipe_dispatch_vessel_live_round_only_names_the_lead() {
+    let (repo, state) = repo_with_state();
+    let id = questioned(&repo, &state);
+    let place = vessel_place(&state, true, 3, "", 0);
+    let out = vessel_turn(&repo, &state, &place, &[]);
+    assert_eq!(stdout_of(&out), format!("vessel=behind:3\n{IDLE_LINE}\n"), "live 便 {id} が残る（{}）", told(&out));
+    assert_eq!(place.argv(), ["git -C [vessel] rev-list --count HEAD..origin/main"], "fetch も口も撃たない");
+    assert_eq!(installs(&state), 0, "記帳 0 件");
+    clean(&[&repo, &state]);
+}
+
+/// (形 2・否定の枝) fetch が落ちた周は `unmeasured:fetch-failed` で数えも口も撃たない（0 と融合しない）。
+#[test]
+fn pipe_dispatch_vessel_fetch_failure_is_unmeasured_and_does_not_update() {
+    let (repo, state) = repo_with_state();
+    let place = vessel_place(&state, true, 2, "", 1);
+    let out = vessel_turn(&repo, &state, &place, &[]);
+    assert_eq!(stdout_of(&out), format!("vessel=unmeasured:fetch-failed\n{IDLE_LINE}\n"), "測れない（{}）", told(&out));
+    assert_eq!(place.argv(), ["git -C [vessel] fetch origin"], "fetch の後は何も撃たない");
+    assert_eq!(installs(&state), 0, "記帳 0 件");
+    clean(&[&repo, &state]);
+}
+
+/// (形 2・否定の枝) 汚れた vessel repo は §5 の口が `dirty` で断り、`refused:dirty` を名乗って記帳 0 件（口は status で止まる）。
+#[test]
+fn pipe_dispatch_vessel_dirty_checkout_is_refused_with_the_word() {
+    let (repo, state) = repo_with_state();
+    let place = vessel_place(&state, true, 2, " M src/lib.rs\\n", 0);
+    let out = vessel_turn(&repo, &state, &place, &[]);
+    assert_eq!(stdout_of(&out), format!("vessel=refused:dirty\n{IDLE_LINE}\n"), "断りの語（{}）", told(&out));
+    let mut want = fetch_then_count();
+    want.push("git -C [vessel] status --porcelain".to_owned());
+    assert_eq!(place.argv(), want, "口は status で止まる");
+    assert_eq!(installs(&state), 0, "記帳 0 件");
+    clean(&[&repo, &state]);
+}
+
+/// (形 1・3・否定の枝) `[[vessel]]` の無い置き場は読みの 1 本が git を撃たずに `undeclared` を返し、1 周は軸を評価しない
+/// （git の argv 0・`vessel=` の行は立たず、stdout は列の行 1 行だけ＝既存の歯の字面は動かない）。
+#[test]
+fn pipe_dispatch_vessel_undeclared_shoots_no_git() {
+    use vessel::hook::vessel::{upstream, Upstream, DEFAULT_BRANCH, DEFAULT_REMOTE};
+    let (repo, state) = repo_with_state();
+    let place = vessel_place(&state, false, 2, "", 0);
+    let out = vessel_turn(&repo, &state, &place, &[]);
+    assert_eq!(stdout_of(&out), format!("{IDLE_LINE}\n"), "列の行だけ（{}）", told(&out));
+    assert!(place.argv().is_empty(), "git も cargo も撃たない: {:?}", place.argv());
+    let read = upstream(None, DEFAULT_REMOTE, DEFAULT_BRANCH);
+    assert_eq!(read, Upstream::Undeclared, "宣言なしの値");
+    assert_eq!(read.render(), "undeclared");
+    clean(&[&repo, &state]);
+}
+
+/// (形 2・否定の枝) 見る側の 1 周（`dispatch ls`）は宣言が在って上流が先でも git も cargo も 1 本も撃たず、行に token が載らない。
+#[test]
+fn pipe_dispatch_vessel_ls_shoots_nothing() {
+    let (repo, state) = repo_with_state();
+    let place = vessel_place(&state, true, 2, "", 0);
+    let out = vessel_turn(&repo, &state, &place, &["ls"]);
+    assert_eq!(stdout_of(&out).trim_end(), NONE_LINE, "見る側の行だけ（{}）", told(&out));
+    assert!(place.argv().is_empty(), "見るだけで撃たない: {:?}", place.argv());
+    assert_eq!(installs(&state), 0, "記帳 0 件");
+    clean(&[&repo, &state]);
+}
+
+/// (形 2・3) 便の終端（`pipe stop`）の 1 周も同じ軸を撃つ: 最後の live 便が止まった周は live 0 で口を 1 回呼び、終端の
+/// stdout に `vessel=` の行が 1 行立つ（`--drive` の無い周なので `dispatch=` の行は出ない＝観測の面は増えない）。
+#[test]
+fn pipe_dispatch_vessel_terminal_round_updates_after_the_last_live_run() {
+    let (repo, state) = repo_with_state();
+    two_rows(&repo);
+    let live = intake_bead(&repo, &state, &format!("{DESIGN_FILE}#a"), "s2-live");
+    let place = vessel_place(&state, true, 1, "", 0);
+    let (state_s, repo_s, rules, bd) =
+        (state.display().to_string(), repo.display().to_string(), dispatch_rules(&state), fake_bd(&state, &[]));
+    let out = super::run_pipe_with_path(
+        &place.path,
+        &["stop", "--run", &live, "--state-dir", &state_s, "--repo", &repo_s, "--rules", &rules, "--bd", &bd, "--runner", "true"],
+    );
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "stop は rc 0（{}）", told(&out));
+    let sha = VESSEL_HEAD.get(..12).unwrap_or_default();
+    let stdout = stdout_of(&out);
+    let lines: Vec<&str> = stdout.lines().filter(|line| line.starts_with("vessel=")).collect();
+    assert_eq!(lines, [format!("vessel=updated:{sha}")], "軸の行 1 行（{}）", told(&out));
+    assert!(!stdout.contains("dispatch="), "列の行は出ない（{}）", told(&out));
+    assert_eq!(installs(&state), 1, "記帳 1 件");
+    clean(&[&repo, &state]);
+}

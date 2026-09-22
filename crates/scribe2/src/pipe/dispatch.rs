@@ -446,6 +446,9 @@ pub struct Turn {
     pub unmeasured: Option<Unmeasured>,
     /// 呼び手の便を次の driver へ渡したか（`--drive` の周だけ `Some`・設計 §5）。
     pub drive: Option<Handoff>,
+    /// 終端の周の軸を評価した周の値（起こす側の [`fire`] だけ `Some` になりうる・見る側の [`turn`] は常に `None`・
+    /// 設計 consumer-sync.md §15 形 2）。
+    pub vessel: Option<crate::hook::vessel::Upstream>,
 }
 
 /// 列の 1 周に要る材料（すべて永続面から解いたもの・process の記憶を持たない）。
@@ -614,7 +617,25 @@ pub fn fire(input: &Input<'_>) -> Turn {
             candidate.reason = Some(WaitReason::Admission { reason });
         }
     }
+    // **終端の周の軸は起こし終えた後に 1 回**（設計 consumer-sync.md §15 形 2）: この周に起こした便・起こし直した便が
+    // 在れば live は 0 でない（子の `RunCreated` を待たずに数える＝走り出した便の下で binary を入れ替えない）。
+    turn.vessel = crate::hook::vessel::sync(input.state_dir, idle(input, &turn));
     turn
+}
+
+/// live な便が 0 の周か（`None` = 置き場か便の生死を測れない・live 0 に読み替えない・C10）。
+///
+/// 生死は起こし直しと同じ 1 本（[`live`]）で読む。この周に起こした便か起こし直した便が在れば `Some(false)`。
+fn idle(input: &Input<'_>, turn: &Turn) -> Option<bool> {
+    if !turn.launches.is_empty() || !turn.revives.is_empty() {
+        return Some(false);
+    }
+    let state = current(input.state_dir).ok()?;
+    let lives: Vec<Option<bool>> = state.runs.iter().map(|(id, run)| live(input.state_dir, id, run.stage)).collect();
+    if lives.contains(&Some(true)) {
+        return Some(false);
+    }
+    lives.iter().all(Option::is_some).then_some(true)
 }
 
 /// **人の手を待つ段**（承認待ち・回答待ち）。関門が閉じたままの便は起こし直しの候補から**段で外す**（札は残す）。
@@ -726,7 +747,14 @@ fn digits_of(bead: &str) -> Vec<u64> {
 
 /// 台帳を読めなかった周の 1 周（1 本も起こさない）。
 fn unmeasured(reason: Unmeasured) -> Turn {
-    Turn { candidates: Vec::new(), launches: Vec::new(), revives: Vec::new(), unmeasured: Some(reason), drive: None }
+    Turn {
+        candidates: Vec::new(),
+        launches: Vec::new(),
+        revives: Vec::new(),
+        unmeasured: Some(reason),
+        drive: None,
+        vessel: None,
+    }
 }
 
 /// 印の畳み込みの結果（[`marks_of`]）。
@@ -779,6 +807,13 @@ pub fn line(turn: &Turn) -> String {
             }
         }
     }
+}
+
+/// 終端の周の軸を評価した周の 1 行（`vessel=<値>`・評価していない周は `None`・設計 consumer-sync.md §15 形 3）。
+///
+/// [`line`] とは**別の行**である（`dispatch=` の行の書式と `drive=` の token は 1 字も変えない）。
+pub fn vessel_line(turn: &Turn) -> Option<String> {
+    turn.vessel.as_ref().map(|found| format!("vessel={}", found.render()))
 }
 
 /// 列の 1 周を描く（`dispatch ls`・**観測の面はこの 1 口だけである**・設計 §6）。

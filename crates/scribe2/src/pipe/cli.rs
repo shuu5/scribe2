@@ -234,6 +234,8 @@ pub fn dispatch(args: &[String]) -> Outcome {
                 let run = drove.as_deref().or_else(|| flag(args, "--run").ok().flatten());
                 outcome.out.extend(notices(&queue, run, &turn));
             }
+            // 軸を評価した周だけ `vessel=` の 1 行（設計 consumer-sync.md §15 形 3・列の行より前＝最後の行は列の行のまま）。
+            outcome.out.extend(queue::vessel_line(&turn));
             // 自走を頼んだ周は、渡したか・渡さなかった理由を 1 行で残す（C10・黙って止まらない）。
             if driving.is_some() {
                 outcome.out.push(queue::line(&turn));
@@ -431,15 +433,19 @@ fn subcommand(
 /// 材料（置き場・repo）を解けない周は 1 周を撃たず、`dispatch=unmeasured reason=args` を足す
 /// （**測れないを「起こす便 0」に読み替えない**・C10）。
 fn with_turn(args: &[String], manifest: &Manifest, mut outcome: Outcome) -> Outcome {
-    outcome.out.push(turn_line(args, manifest));
+    outcome.out.extend(turn_lines(args, manifest));
     outcome
 }
 
-/// 列の 1 周の 1 行（引数から材料を解いて [`queue::fire`] を撃つ＝**起こす側**）。
-fn turn_line(args: &[String], manifest: &Manifest) -> String {
+/// 列の 1 周の行（引数から材料を解いて [`queue::fire`] を撃つ＝**起こす側**）。最後の行は列の 1 行で、終端の周の軸を
+/// 評価した周だけその前に `vessel=` の 1 行が立つ（設計 consumer-sync.md §15 形 3）。
+fn turn_lines(args: &[String], manifest: &Manifest) -> Vec<String> {
     match queue_of(args, manifest, None, None) {
-        Some(queue) => queue::line(&queue::fire(&queue.borrow())),
-        None => format!("dispatch=unmeasured reason={ARGS_UNMEASURED}"),
+        Some(queue) => {
+            let turn = queue::fire(&queue.borrow());
+            queue::vessel_line(&turn).into_iter().chain(std::iter::once(queue::line(&turn))).collect()
+        }
+        None => vec![format!("dispatch=unmeasured reason={ARGS_UNMEASURED}")],
     }
 }
 
@@ -473,7 +479,7 @@ fn queued(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Outcome {
             _ => Outcome::failed(RC_REFUSED, vec![queue::usage()]),
         },
         // **手動の 1 周**（権能なしの口・設計 §5）: subcommand の無い周（flag だけ・引数なし）は列を 1 周撃つ。
-        _ => Outcome::ok(vec![turn_line(args, manifest)]),
+        _ => Outcome::ok(turn_lines(args, manifest)),
     }
 }
 

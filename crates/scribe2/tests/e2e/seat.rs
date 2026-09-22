@@ -781,7 +781,7 @@ pub(super) const HOST_ABSENT: &str = "host-manifest=absent";
 /// 登録 row の anchor `/repo` が導入先として出る 1 行（口座の行の後ろ・記録なし・帳簿なし・`[[vessel]]` なし・
 /// consumer-sync.md §4・`s2-07l.303`）。
 pub(super) const CONSUMER_REPO: &str =
-    "consumer=/repo source=launch scope=- binary=unrecorded plugin=unrecorded ledger=- cache=absent head=undeclared drift=unrecorded";
+    "consumer=/repo source=launch scope=- binary=unrecorded plugin=unrecorded ledger=- cache=absent head=undeclared behind=- drift=unrecorded";
 
 /// `[[account]]` を `labels` の順に宣言した manifest の本文。
 fn account_rules(labels: &[&str]) -> String {

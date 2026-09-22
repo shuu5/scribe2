@@ -556,16 +556,23 @@ fn write_record(place: &ConsumerPlace, target: &str, root: &Path, hooks: Option<
 
 /// `doctor --state-dir` を撃ち（socket は server の無い path）、rc 0 と「導入先の行は口座の行の後ろ」を確かめて
 /// `consumer=` の行だけを返す。
+fn consumer_lines(place: &ConsumerPlace) -> Vec<String> {
+    consumer_lines_on(place, None)
+}
+
+/// [`consumer_lines`] を PATH を差し替えて撃つ形（`path` が `None` なら継いだ PATH のまま）。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn consumer_lines(place: &ConsumerPlace) -> Vec<String> {
+fn consumer_lines_on(place: &ConsumerPlace, path: Option<&str>) -> Vec<String> {
     let socket = place.dir.join("no-server-sock").display().to_string();
-    let out = Command::new(env!("CARGO_BIN_EXE_scribe2"))
-        .args(["doctor", "--state-dir", &place.state.display().to_string(), "--tmux-socket", &socket])
-        .output()
-        .expect("binary を起動できる");
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_scribe2"));
+    cmd.args(["doctor", "--state-dir", &place.state.display().to_string(), "--tmux-socket", &socket]);
+    if let Some(found) = path {
+        cmd.env("PATH", found);
+    }
+    let out = cmd.output().expect("binary を起動できる");
     let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
     assert_eq!(out.status.code(), Some(0), "doctor は判定しない（rc 0）: {stderr}");
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -627,11 +634,11 @@ fn doctor_consumer_lines_name_each_drift_word() {
     let (root, payload) = (place.root.display().to_string(), checkout_payload.display().to_string());
     let lines = consumer_lines(&place);
     let want = [
-        format!("consumer=/c/binary source=launch+install scope=local binary=000000000000 plugin={root}:{digest} ledger={head} cache={cache_digest} head={sha12} drift=binary"),
-        format!("consumer=/c/dual source=launch+install scope=project binary={build} plugin={payload}:unreadable ledger={head} cache={cache_digest} head={sha12} drift=dual"),
-        format!("consumer=/c/ledger/.worktrees/w source=launch+install scope=project binary={build} plugin={root}:{digest} ledger={stale} cache=absent head={sha12} drift=ledger"),
-        format!("consumer=/c/none source=launch+install scope=project binary={build} plugin={root}:{digest} ledger={head} cache={cache_digest} head={sha12} drift=none"),
-        format!("consumer=/c/plugin source=launch+install scope=user binary={build} plugin={root}:{other} ledger={head} cache=absent head={sha12} drift=plugin"),
+        format!("consumer=/c/binary source=launch+install scope=local binary=000000000000 plugin={root}:{digest} ledger={head} cache={cache_digest} head={sha12} behind=unmeasured drift=binary"),
+        format!("consumer=/c/dual source=launch+install scope=project binary={build} plugin={payload}:unreadable ledger={head} cache={cache_digest} head={sha12} behind=unmeasured drift=dual"),
+        format!("consumer=/c/ledger/.worktrees/w source=launch+install scope=project binary={build} plugin={root}:{digest} ledger={stale} cache=absent head={sha12} behind=unmeasured drift=ledger"),
+        format!("consumer=/c/none source=launch+install scope=project binary={build} plugin={root}:{digest} ledger={head} cache={cache_digest} head={sha12} behind=unmeasured drift=none"),
+        format!("consumer=/c/plugin source=launch+install scope=user binary={build} plugin={root}:{other} ledger={head} cache=absent head={sha12} behind=unmeasured drift=plugin"),
     ];
     assert_eq!(lines, want, "導入先ごとに 1 行・path の辞書順・語は 1 つずつ");
     assert_ne!(cache_digest, digest, "cache は installPath の hooks.json（記録の root とは別の file）");
@@ -662,11 +669,11 @@ fn doctor_consumer_unrecorded_is_not_none() {
     fs::create_dir_all(digest::record_path(&seat)).expect("記録の位置に dir を置ける");
     let lines = consumer_lines(&place);
     let tail = |source: &str, ledger: &str, drift: &str| {
-        format!("source={source} scope=- binary=unrecorded plugin=unrecorded ledger={ledger} cache=absent head={sha12} drift={drift}")
+        format!("source={source} scope=- binary=unrecorded plugin=unrecorded ledger={ledger} cache=absent head={sha12} behind=unmeasured drift={drift}")
     };
     let want = [
         format!("consumer=/u/broken {}", tail("launch", "-", "unrecorded")),
-        format!("consumer=/u/install source=install scope=project binary=unrecorded plugin=unrecorded ledger={head} cache=absent head={sha12} drift=unrecorded"),
+        format!("consumer=/u/install source=install scope=project binary=unrecorded plugin=unrecorded ledger={head} cache=absent head={sha12} behind=unmeasured drift=unrecorded"),
         format!("consumer=/u/launch {}", tail("launch", "-", "unrecorded")),
         format!("consumer=/u/stale {}", tail("install", &stale, "ledger+unrecorded")),
     ];
@@ -705,9 +712,9 @@ fn plugin_payload_doctor_consumer_reads_the_generated_dir_under_the_checkout() {
     let lines = consumer_lines(&place);
     let payload = payload.display().to_string();
     let want = [
-        format!("consumer=/p/new source=launch+install scope=project binary={build} plugin={payload}:{digest} ledger={head} cache=absent head={sha12} drift=dual"),
-        format!("consumer=/p/none source=launch scope=- binary=unrecorded plugin=unrecorded ledger=- cache=absent head={sha12} drift=unrecorded"),
-        format!("consumer=/p/old source=launch+install scope=project binary={build} plugin={vessel}:{digest} ledger={head} cache=absent head={sha12} drift=plugin"),
+        format!("consumer=/p/new source=launch+install scope=project binary={build} plugin={payload}:{digest} ledger={head} cache=absent head={sha12} behind=unmeasured drift=dual"),
+        format!("consumer=/p/none source=launch scope=- binary=unrecorded plugin=unrecorded ledger=- cache=absent head={sha12} behind=unmeasured drift=unrecorded"),
+        format!("consumer=/p/old source=launch+install scope=project binary={build} plugin={vessel}:{digest} ledger={head} cache=absent head={sha12} behind=unmeasured drift=plugin"),
     ];
     assert_eq!(lines, want, "読み込み元は生成 dir・旧 root は dual にならない・記録の無い導入先は unrecorded");
     fs::remove_dir_all(&place.dir).ok();
@@ -725,9 +732,9 @@ fn doctor_consumer_survives_a_broken_ledger() {
     let before = fs::read(&broken).unwrap_or_default();
     let lines = consumer_lines(&place);
     let want = [
-        "consumer=/g/one source=install scope=project binary=unrecorded plugin=unrecorded ledger=- cache=absent head=undeclared drift=unrecorded".to_owned(),
+        "consumer=/g/one source=install scope=project binary=unrecorded plugin=unrecorded ledger=- cache=absent head=undeclared behind=- drift=unrecorded".to_owned(),
         format!(
-            "consumer={} source=install scope=- binary=unrecorded plugin=unrecorded ledger=unreadable cache=absent head=undeclared drift=unrecorded",
+            "consumer={} source=install scope=- binary=unrecorded plugin=unrecorded ledger=unreadable cache=absent head=undeclared behind=- drift=unrecorded",
             broken.display()
         ),
     ];
@@ -749,16 +756,95 @@ fn doctor_consumer_head_is_undeclared_without_vessel_row() {
     write_record(&place, "h:one", &place.root, Some(&place.digest), env!("SCRIBE2_BUILD_COMMIT"));
     let plugin = format!("{}:{}", place.root.display(), place.digest);
     let build = env!("SCRIBE2_BUILD_COMMIT");
-    let line = |head: &str| {
-        format!("consumer=/h/one source=launch+install scope=project binary={build} plugin={plugin} ledger={stale} cache=absent head={head} drift=none")
+    let line = |head: &str, behind: &str| {
+        format!("consumer=/h/one source=launch+install scope=project binary={build} plugin={plugin} ledger={stale} cache=absent head={head} behind={behind} drift=none")
     };
-    assert_eq!(consumer_lines(&place), [line("undeclared")], "[[vessel]] 無し");
+    assert_eq!(consumer_lines(&place), [line("undeclared", "-")], "[[vessel]] 無し");
     let not_git = place.dir.join("not-a-repo");
     fs::create_dir_all(&not_git).ok();
     write_host(&place, &["acc-a"], Some(&not_git.display().to_string()));
-    assert_eq!(consumer_lines(&place), [line("unknown")], "git の repo でない宣言");
+    assert_eq!(consumer_lines(&place), [line("unknown", "unmeasured")], "git の repo でない宣言");
     write_host(&place, &["acc-a"], Some(&place.vessel.display().to_string()));
     let sha12 = head12(&place);
-    assert_eq!(consumer_lines(&place), [line(&sha12).replace("drift=none", "drift=ledger")], "宣言が在れば帳簿の食い違いを測る");
+    assert_eq!(
+        consumer_lines(&place),
+        [line(&sha12, "unmeasured").replace("drift=none", "drift=ledger")],
+        "宣言が在れば帳簿の食い違いを測る"
+    );
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+// ---- doctor の consumer 行の `behind=`（consumer-sync.md §15 形 4・接頭辞 `doctor_consumer_behind_`・`s2-07l.408`）----
+
+/// 撃たれた git の argv を 1 行ずつ写してから実 git へ exec する偽 git を `place.dir/bin` に置き、(PATH の値, 写しの path) を返す。
+fn logging_git(place: &ConsumerPlace) -> Option<(String, PathBuf)> {
+    use std::os::unix::fs::PermissionsExt;
+    let real = String::from_utf8_lossy(&Command::new("sh").args(["-c", "command -v git"]).output().ok()?.stdout).trim().to_owned();
+    let bin = place.dir.join("bin");
+    fs::create_dir_all(&bin).ok()?;
+    let log = place.dir.join("git-argv.log");
+    let shim = bin.join("git");
+    fs::write(&shim, format!("#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nexec '{real}' \"$@\"\n", log.display())).ok()?;
+    fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).ok()?;
+    Some((format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default()), log))
+}
+
+/// vessel repo の上流の既定 branch（`origin/main` の追跡 ref）を HEAD から `ahead` 個進んだ commit に置く（HEAD は動かさない・
+/// fetch の要らない形＝remote を持たない）。
+fn upstream_ahead(place: &ConsumerPlace, ahead: usize) -> Option<()> {
+    let dir = &place.vessel;
+    for step in 0..ahead {
+        git_out(dir, &["commit", "-q", "--allow-empty", "-m", &format!("ahead-{step}")])?;
+    }
+    git_out(dir, &["update-ref", "refs/remotes/origin/main", "HEAD"])?;
+    git_out(dir, &["reset", "-q", "--hard", &place.head])?;
+    Some(())
+}
+
+/// doctor の consumer 行が `head=` の直後に `behind=<n>` を持つ: 上流が 2 個先なら `behind=2`・同じなら `behind=0`・上流の
+/// ref が無ければ `unmeasured`（0 と融合しない）。**fetch の argv は 1 本も写らない**（doctor は読むだけ）。base は欄が無い（RED）。
+#[test]
+fn doctor_consumer_behind_counts_the_upstream_lead_without_fetching() {
+    let place = consumer_place().unwrap_or_else(|| panic!("置き場を作れる"));
+    let vessel = place.vessel.display().to_string();
+    write_host(&place, &["acc-a"], Some(&vessel));
+    write_ledger(&place, "acc-a", &[LedgerRow { project: "/b/one", scope: Some("project"), install: None, sha: Some(&place.head) }]);
+    let (path, log) = logging_git(&place).unwrap_or_else(|| panic!("偽 git を置ける"));
+    let sha12 = head12(&place);
+    let line = |behind: &str| {
+        format!("consumer=/b/one source=install scope=project binary=unrecorded plugin=unrecorded ledger={} cache=absent head={sha12} behind={behind} drift=unrecorded", place.head)
+    };
+    assert_eq!(consumer_lines_on(&place, Some(&path)), [line("unmeasured")], "上流の ref が無い周は測れない（0 にしない）");
+    upstream_ahead(&place, 2).unwrap_or_else(|| panic!("上流を 2 個先へ置ける"));
+    assert_eq!(consumer_lines_on(&place, Some(&path)), [line("2")], "上流が 2 個先");
+    assert_eq!(git_out(&place.vessel, &["rev-parse", "HEAD"]).as_deref(), Some(place.head.as_str()), "doctor は HEAD を動かさない");
+    git_out(&place.vessel, &["update-ref", "refs/remotes/origin/main", &place.head]).unwrap_or_else(|| panic!("上流を HEAD に揃えられる"));
+    assert_eq!(consumer_lines_on(&place, Some(&path)), [line("0")], "上流と同じ");
+    let argv = fs::read_to_string(&log).unwrap_or_default();
+    assert!(argv.lines().any(|found| found.contains("rev-list --count HEAD..origin/main")), "差は rev-list で数える: {argv}");
+    assert!(!argv.lines().any(|found| found.split(' ').any(|word| word == "fetch")), "fetch を撃たない: {argv}");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// `[[vessel]]` の無い置き場の consumer 行は `behind=-` で、git の argv に差の読みが 1 本も写らない（宣言が無ければ撃たない）。
+/// 壊れた帳簿の行も同じ欄を持つ。
+#[test]
+fn doctor_consumer_behind_is_dash_without_vessel_row() {
+    let place = consumer_place().unwrap_or_else(|| panic!("置き場を作れる"));
+    write_host(&place, &["acc-a", "acc-broken"], None);
+    write_ledger(&place, "acc-a", &[LedgerRow { project: "/b/two", scope: Some("project"), install: None, sha: None }]);
+    let broken = write_ledger_text(&place, "acc-broken", "{\"plugins\":");
+    let (path, log) = logging_git(&place).unwrap_or_else(|| panic!("偽 git を置ける"));
+    let lines = consumer_lines_on(&place, Some(&path));
+    let want = [
+        "consumer=/b/two source=install scope=project binary=unrecorded plugin=unrecorded ledger=- cache=absent head=undeclared behind=- drift=unrecorded".to_owned(),
+        format!(
+            "consumer={} source=install scope=- binary=unrecorded plugin=unrecorded ledger=unreadable cache=absent head=undeclared behind=- drift=unrecorded",
+            broken.display()
+        ),
+    ];
+    assert_eq!(lines, want, "宣言が無ければ behind=-");
+    let argv = fs::read_to_string(&log).unwrap_or_default();
+    assert!(!argv.contains("rev-list"), "宣言が無ければ差を読まない: {argv}");
     fs::remove_dir_all(&place.dir).ok();
 }

@@ -9,6 +9,7 @@
 use crate::fleet::json_tree::{self, Tree};
 use crate::fleet::{account_dir, effective_accounts, replay, store, State};
 use crate::hook::vessel::digest::{self, PluginRecord};
+use crate::hook::vessel::{upstream, Upstream, DEFAULT_BRANCH, DEFAULT_REMOTE};
 use crate::name::{NAME, PLUGIN_DIR};
 use crate::rules::manifest::Manifest;
 use std::collections::BTreeMap;
@@ -35,6 +36,8 @@ const UNRECORDED: &str = "unrecorded";
 const NONE: &str = "none";
 /// 値の無い欄の字面。
 const DASH: &str = "-";
+/// 上流との差を測れない周の字面（`behind=`・0 と融合しない）。
+const UNMEASURED: &str = "unmeasured";
 /// 短縮 sha の桁数（`head=` の表示・build 元 commit と同じ幅）。
 const SHA_LEN: usize = 12;
 
@@ -272,8 +275,34 @@ pub fn drift_of(consumer: &Consumer, head: &Head, vessel: Option<&Path>) -> Vec<
     DRIFTS.iter().copied().filter(|word| holds(*word, consumer, head, vessel)).collect()
 }
 
-/// 導入先 1 行（pure）。
+/// `behind=` の値（`<n|unmeasured|->`・設計 consumer-sync.md §15 形 4）。読みは終端の周の軸と同じ 1 本
+/// （[`upstream`]・fetch を撃たない）で、宣言が無ければ `-`。
+///
+/// [`Upstream::Updated`] / [`Upstream::Refused`] は §5 の口を撃った周だけの値で、読みの 1 本は返さない（測れない側に倒す）。
+pub fn behind_word(upstream: &Upstream) -> String {
+    match upstream {
+        Upstream::Undeclared => DASH.to_owned(),
+        Upstream::Current => "0".to_owned(),
+        Upstream::Behind(count) => count.to_string(),
+        Upstream::Updated(_) | Upstream::Refused(_) | Upstream::Unmeasured(_) => UNMEASURED.to_owned(),
+    }
+}
+
+/// 導入先 1 行（pure・`behind=` の欄を持たない形）。
+///
+/// doctor が出す行は [`render_consumer_behind`] の形である。この形は `behind=` を測らない描画の fixture（src の doctor の
+/// 外形 snapshot）が読む。
 pub fn render_consumer(path: &str, consumer: &Consumer, head: &Head, drift: &[Drift]) -> String {
+    render_line(path, consumer, head, None, drift)
+}
+
+/// doctor が出す導入先 1 行（pure・`head=` の直後に `behind=`・設計 consumer-sync.md §15 形 4）。
+pub fn render_consumer_behind(path: &str, consumer: &Consumer, head: &Head, behind: &Upstream, drift: &[Drift]) -> String {
+    render_line(path, consumer, head, Some(behind), drift)
+}
+
+/// 導入先 1 行の組み手（`behind` が `Some` の周だけ `head=` の直後に欄を 1 つ足す）。
+fn render_line(path: &str, consumer: &Consumer, head: &Head, behind: Option<&Upstream>, drift: &[Drift]) -> String {
     let (binary, plugin) = match &consumer.record {
         PluginRecord::Recorded { root, hooks, binary, .. } => {
             (binary.clone(), format!("{root}:{}", hooks.as_deref().unwrap_or(digest::UNREADABLE)))
@@ -283,23 +312,30 @@ pub fn render_consumer(path: &str, consumer: &Consumer, head: &Head, drift: &[Dr
     let words: Vec<&str> = drift.iter().map(|word| word.as_str()).collect();
     let drift = if words.is_empty() { NONE.to_owned() } else { words.join("+") };
     format!(
-        "consumer={path} source={} scope={} binary={binary} plugin={plugin} ledger={} cache={} head={} drift={drift}",
+        "consumer={path} source={} scope={} binary={binary} plugin={plugin} ledger={} cache={} head={}{} drift={drift}",
         consumer.source.as_str(),
         consumer.scope.as_deref().unwrap_or(DASH),
         consumer.ledger.as_deref().unwrap_or(DASH),
         consumer.cache.as_deref().unwrap_or("absent"),
-        head.render()
+        head.render(),
+        behind_field(behind)
     )
 }
 
+/// `head=` の直後に足す ` behind=<値>`（`None` は空）。
+fn behind_field(behind: Option<&Upstream>) -> String {
+    behind.map_or_else(String::new, |found| format!(" behind={}", behind_word(found)))
+}
+
 /// 壊れた帳簿の 1 行（口座の帳簿を名指し・他の欄は測れない側の字面）。
-fn render_broken(path: &Path, head: &Head) -> String {
+fn render_broken(path: &Path, head: &Head, behind: &Upstream) -> String {
     format!(
-        "consumer={} source={} scope={DASH} binary={UNRECORDED} plugin={UNRECORDED} ledger={} cache=absent head={} drift={UNRECORDED}",
+        "consumer={} source={} scope={DASH} binary={UNRECORDED} plugin={UNRECORDED} ledger={} cache=absent head={}{} drift={UNRECORDED}",
         path.display(),
         Source::Install.as_str(),
         digest::UNREADABLE,
-        head.render()
+        head.render(),
+        behind_field(Some(behind))
     )
 }
 
@@ -341,15 +377,17 @@ pub fn doctor_lines(state_dir: &Path, rules: Option<&str>) -> Vec<String> {
     let state = store::read_all(state_dir).ok().map(|events| replay(&events));
     let vessel = manifest.vessel().map(|found| PathBuf::from(found.repo()));
     let head = head_of(vessel.as_deref());
+    // 上流との差は終端の周の軸と**同じ 1 本**で読む（fetch を撃たない・判定しない・設計 consumer-sync.md §15 形 4）。
+    let behind = upstream(vessel.as_deref(), DEFAULT_REMOTE, DEFAULT_BRANCH);
     let (drafts, broken) = gather(state_dir, &manifest, state.as_ref());
     let mut lines: Vec<String> = drafts
         .iter()
         .map(|(path, draft)| {
             let consumer = draft.measure(state_dir);
-            render_consumer(path, &consumer, &head, &drift_of(&consumer, &head, vessel.as_deref()))
+            render_consumer_behind(path, &consumer, &head, &behind, &drift_of(&consumer, &head, vessel.as_deref()))
         })
         .collect();
-    lines.extend(broken.iter().map(|path| render_broken(path, &head)));
+    lines.extend(broken.iter().map(|path| render_broken(path, &head, &behind)));
     lines
 }
 
