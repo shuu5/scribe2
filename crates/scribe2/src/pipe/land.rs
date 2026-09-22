@@ -744,7 +744,7 @@ fn carry_gated_pass(entry: &Land<'_>, reason: DetectionSkip) -> Option<String> {
 ///   従来どおり撃ち直しの precheck へ流す（fail-closed の向きを変えない・`s2-07l.125`）。
 /// - commit が残った周は、撃ち直しの前に契約表の行が便の消した path を名指すかを見る（[`stale_rows_stop`]・設計 §34）。
 fn rebase_onto(entry: &Land<'_>, worktree: &Path, base: &str, main: &str) -> Result<Rebased, Outcome> {
-    if !git_ok(worktree, &["rebase", "--onto", main, base]) {
+    if !super::follow_step::rebase(worktree, base, main) {
         return Err(follow::on_conflict(&Conflict {
             turn: turn_of(entry),
             base,

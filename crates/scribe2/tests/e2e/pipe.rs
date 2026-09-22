@@ -573,12 +573,12 @@ fn pipe_external_form() {
 #[test]
 fn pipe_command_all_subcommands_round_trip_and_unknown_tokens_are_none() {
     use vessel::pipe::cli::{PipeCommand, PIPE_COMMANDS};
-    assert_eq!(vessel::pipe::cli::PIPE_COMMANDS.len(), 16, "記録時点の subcommand: {PIPE_COMMANDS:?}");
+    assert_eq!(vessel::pipe::cli::PIPE_COMMANDS.len(), 17, "記録時点の subcommand: {PIPE_COMMANDS:?}");
     assert!(is_declaration_order(PIPE_COMMANDS, |command| command as usize), "宣言順: {PIPE_COMMANDS:?}");
     let words: Vec<&str> = PIPE_COMMANDS.iter().map(|command| command.as_str()).collect();
     let want = [
         "intake", "preflight", "spawn", "approve", "answer", "gate", "land", "retire", "run", "show", "resume", "stop", "dispatch",
-        "land-window", "report", "regate",
+        "land-window", "report", "regate", "follow",
     ];
     assert_eq!(words, want, "字面の閉じた列（宣言順）");
     let usage = vessel::pipe::cli::usage();

@@ -1140,6 +1140,38 @@ fn pipe_regate_returns_gated_fail_to_implemented_on_the_same_worktree() {
     clean(&[&repo, &state]);
 }
 
+/// 形 1 / 形 6（設計 pipeline.md §52・行 au）: PASS の `Gated` の便の後に main が進んだ周、`pipe follow` を撃つと
+/// rc 0 で `follow: run=<id> rebase=<base>..<main>` の 1 行が出て、段が `Implemented` に戻り、木の base が main の
+/// 先端になる。main の sha は動かず、記帳は 1 件で、段の種別 11 個と event の種別 19 個は増えない。
+#[test]
+fn pipe_follow_step_moves_gated_tree_onto_main_and_returns_to_implemented() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let base = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let id = gated_pass(&repo, &state, &path, &state.join("lens-ran"));
+    fs::write(repo.join("moved.txt"), "moved\n").expect("別便の変更を書ける");
+    git(&repo, &["add", "moved.txt"]);
+    git(&repo, &["commit", "-q", "-m", "other"]);
+    let moved = git(&repo, &["rev-parse", "refs/heads/main"]);
+    assert_ne!(base, moved, "fixture: main が進んだ");
+    let worktree = worktree_of(&repo, &id);
+    let before = event_count(&state);
+    let out = run_pipe(&[
+        "follow", "--run", &id, "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "rc 0: {}", stderr_of(&out));
+    assert_eq!(stdout_of(&out).trim(), format!("follow: run={id} rebase={base}..{moved}"), "便 id と 2 sha の 1 行");
+    assert_eq!(event_count(&state), before + 1, "記帳は 1 件");
+    let current = vessel::pipe::current(&state).expect("置き場を読める");
+    let run = current.runs.get(&id).expect("便が在る");
+    assert_eq!(run.stage, Stage::Implemented, "段は Implemented に戻る");
+    assert_eq!(run.detail.as_deref(), Some(format!("rebase:{base}..{moved}").as_str()), "着地の追随と同じ字面");
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), moved, "main は動かない");
+    assert_eq!(git(&worktree, &["merge-base", "HEAD", &moved]), moved, "木の base は main の先端");
+    assert_eq!((vessel::fleet::STAGES.len(), vessel::fleet::KINDS.len()), (11, 19), "段と event の種別は増えない");
+    clean(&[&repo, &state]);
+}
+
 #[test]
 fn pipe_gate_refuses_regate_without_readable_verdict() {
     let (repo, state) = repo_with_state();
