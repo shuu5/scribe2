@@ -194,6 +194,7 @@ fn e2e_fixture_tmp_dir_paths_are_unique() {
 // 偽にすると toy の process は歯の process の子のまま走る＝gate の箱の中に留まる。
 
 // flip-check: retroactive s2-07l.504
+// flip-check: retroactive s2-07l.530
 
 /// 道具箱の偽 binary を置く dir の leaf 名（呼び手の fixture の dir の直下）。
 pub const TOOLBOX_BIN: &str = "toolbox-bin";
@@ -209,6 +210,27 @@ pub fn toolbox_records(dir: &Path) -> PathBuf {
     dir.join(TOOLBOX_RECORDS)
 }
 
+/// 実行権つきの偽 binary を `shim` の名へ置く（**道具箱の 2 本が両方通る 1 つの手**・設計 §36 形 1〜3・`s2-07l.530`）。
+///
+/// 目的の名と**同じ dir** の一時の名（目的の名から導く）へ本文を書き、実行権を付けてから、std の fs の rename で
+/// 目的の名へ入れ替える。目的の名をその場で切り詰める書き方（`fs::write(&shim, ..)`）にしないのは、走っている
+/// process が exec している本体（inode）を書き換えて `ExecutableFileBusy` で落ちるからである（同じ置き場で
+/// binary を 2 度撃つ歯・main の CI で 2 回赤・§36 出所）。同じ dir に書くのは file system を跨ぐ rename が
+/// 落ちるから、実行権を入れ替えの**前**に付けるのは付く前の本体が目的の名で見える窓を作らないためである。
+/// 一時の名は rename で消える＝bin dir の entry は置いた偽 binary の名だけになる。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn install_shim(shim: &Path, script: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    let name = shim.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+    let staged = shim.with_file_name(format!(".{name}.staging"));
+    fs::write(&staged, script).expect("stub を書ける");
+    fs::set_permissions(&staged, fs::Permissions::from_mode(0o755)).expect("stub に実行権を付ける");
+    fs::rename(&staged, shim).expect("stub を目的の名へ入れ替える");
+}
+
 /// 偽 `systemd-run` を `bin_dir` に 1 本書く（**偽の本体の唯一の生成元**・設計 §30 約束 3）。
 ///
 /// argv を `<unit>.args` の**1 起動 1 file**で `records` へ写してから `--` の後ろを exec する
@@ -222,7 +244,6 @@ pub fn toolbox_records(dir: &Path) -> PathBuf {
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
 pub fn write_systemd_run_stub(bin_dir: &Path, records: &Path) {
-    use std::os::unix::fs::PermissionsExt;
     fs::create_dir_all(bin_dir).expect("stub の dir を作れる");
     fs::create_dir_all(records).expect("記録の dir を作れる");
     let shim = bin_dir.join("systemd-run");
@@ -240,8 +261,7 @@ pub fn write_systemd_run_stub(bin_dir: &Path, records: &Path) {
          exec \"$@\"\n",
         records.display()
     );
-    fs::write(&shim, script).expect("stub を書ける");
-    fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).expect("stub に実行権を付ける");
+    install_shim(&shim, &script);
 }
 
 /// 道具箱の偽 `systemctl` を `bin_dir` に 1 本書く（設計 §30 約束 4）。
@@ -249,12 +269,7 @@ pub fn write_systemd_run_stub(bin_dir: &Path, records: &Path) {
 /// `kill` は「もう無い」の字面（→ `Released::Gone`＝record に `scope=` を書かない）・`show` は空
 /// （→ peak は読まない）を返す。偽が作らなかった unit に実 host が返す答えと同じなので、record の
 /// field は増えも減りもしない。
-#[expect(
-    clippy::expect_used,
-    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
-)]
 fn write_systemctl_stub(bin_dir: &Path) {
-    use std::os::unix::fs::PermissionsExt;
     let shim = bin_dir.join("systemctl");
     let script = "#!/bin/sh\n\
                   case \"$2\" in\n\
@@ -262,8 +277,7 @@ fn write_systemctl_stub(bin_dir: &Path) {
                   kill) printf 'Failed to kill unit %s: Unit %s not loaded.\\n' \"$4\" \"$4\" >&2; exit 1;;\n\
                   esac\n\
                   exit 1\n";
-    fs::write(&shim, script).expect("stub を書ける");
-    fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).expect("stub に実行権を付ける");
+    install_shim(&shim, script);
 }
 
 /// 道具箱の記録 dir の entry 名（昇順・dir が無ければ空＝1 件も作っていない）。

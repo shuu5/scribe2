@@ -1391,6 +1391,105 @@ fn e2e_toolbox_lean_path_adds_no_record_and_stays_unconfined() {
     clean(&[&repo, &state]);
 }
 
+// ───── 道具箱の偽 binary の入れ替え（設計 gate-cost.md §36・行 ac・`s2-07l.530`・接頭辞 `e2e_shim_atomic_`） ─────
+// flip-check: retroactive s2-07l.530
+
+/// 道具箱の bin dir の entry 名（昇順・母集団として assert に出す）。
+fn toolbox_bin_entries(bin_dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(bin_dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+/// file の inode 番号（同じ名の本体が入れ替わったかを測る）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn inode_of(path: &Path) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    fs::metadata(path).expect("偽 binary の metadata を読める").ino()
+}
+
+/// (a) 形 1 の核: 同じ bin dir へ、記録 dir だけ替えて偽 systemd-run を 2 度置く。1 度目の本体に張った hard link の
+/// 本文は、2 度目の後も**1 度目の記録 dir を名指したまま**で、2 度目の記録 dir の字面を**持たない**（在ると不在の
+/// 両方）。その場で切り詰める書き方（base）では link の本文が 2 度目の字面に変わる。母集団として目的の名の本文が
+/// 2 度目の字面を持つことも対で出す（2 度目が書けていない周に不在が空虚に通らない）。
+#[test]
+fn e2e_shim_atomic_rewrite_leaves_the_running_body_untouched() {
+    let dir = tmp();
+    let bin_dir = dir.join(crate::TOOLBOX_BIN);
+    let first_records = dir.join("records-first");
+    let second_records = dir.join("records-second");
+    crate::write_systemd_run_stub(&bin_dir, &first_records);
+    let link = dir.join("first-body-link");
+    fs::hard_link(bin_dir.join("systemd-run"), &link).expect("1 度目の本体に hard link を張れる");
+    crate::write_systemd_run_stub(&bin_dir, &second_records);
+    let linked = fs::read_to_string(&link).expect("link の本文を読める");
+    let current = fs::read_to_string(bin_dir.join("systemd-run")).expect("目的の名の本文を読める");
+    let (first, second) = (first_records.display().to_string(), second_records.display().to_string());
+    assert!(current.contains(&second), "母集団: 目的の名の本文は 2 度目の記録 dir を名指す: {current}");
+    assert!(linked.contains(&first), "1 度目の本体は 1 度目の記録 dir を名指したまま: {linked}");
+    assert!(!linked.contains(&second), "1 度目の本体は 2 度目の字面を持たない（切り詰めていない）: {linked}");
+}
+
+/// (b) 形 1 の別面: 同じ置き場に道具箱を 2 度組むと、偽 systemd-run と偽 systemctl の inode 番号が**2 本とも**変わる。
+/// 母集団は bin dir の entry 名の全件（同じ assert に出す）。
+#[test]
+fn e2e_shim_atomic_rebuilding_the_toolbox_replaces_both_inodes() {
+    let state = tmp();
+    let bin_dir = state.join(crate::TOOLBOX_BIN);
+    let shims = [bin_dir.join("systemd-run"), bin_dir.join("systemctl")];
+    let _ = crate::toolbox_path(&state);
+    let before: Vec<u64> = shims.iter().map(|shim| inode_of(shim)).collect();
+    let _ = crate::toolbox_path(&state);
+    let after: Vec<u64> = shims.iter().map(|shim| inode_of(shim)).collect();
+    let entries = toolbox_bin_entries(&bin_dir);
+    assert!(
+        before.iter().zip(&after).all(|(old, new)| old != new),
+        "2 本とも本体が入れ替わる（inode 前 {before:?} → 後 {after:?}・母集団 {entries:?}）"
+    );
+}
+
+/// (c) 形 3: 2 度組んだ後の bin dir の entry は偽 systemd-run と偽 systemctl の**ちょうど 2 件**（一時の名の残骸 0・
+/// 母集団は entry 名の全件）。
+#[test]
+fn e2e_shim_atomic_rebuilt_bin_dir_holds_exactly_the_two_shims() {
+    let state = tmp();
+    let bin_dir = state.join(crate::TOOLBOX_BIN);
+    let _ = crate::toolbox_path(&state);
+    let _ = crate::toolbox_path(&state);
+    assert_eq!(
+        toolbox_bin_entries(&bin_dir),
+        vec!["systemctl".to_owned(), "systemd-run".to_owned()],
+        "entry は偽 binary の 2 件だけ（一時の名の残骸が無い）"
+    );
+}
+
+/// (d) 形 1 の権限の窓: 2 度目の後の偽 systemd-run を PATH を通さず**直に** 1 回撃つと rc 0 で終わり、道具箱の記録が
+/// 1 件増える＝実行権は入れ替えの前に付いている。母集団は撃つ前の記録の名の列で、差で測る。
+#[test]
+fn e2e_shim_atomic_rebuilt_shim_runs_directly_with_rc_zero() {
+    let state = tmp();
+    let bin_dir = state.join(crate::TOOLBOX_BIN);
+    let _ = crate::toolbox_path(&state);
+    let _ = crate::toolbox_path(&state);
+    let before = crate::toolbox_record_names(&state);
+    let out = Command::new(bin_dir.join("systemd-run"))
+        .args(["--unit=shim-atomic-direct", "--", "true"])
+        .output()
+        .expect("偽 systemd-run を直に起動できる");
+    assert_eq!(out.status.code(), Some(0), "直に撃った偽 systemd-run は rc 0: {}", stderr_of(&out));
+    let after = crate::toolbox_record_names(&state);
+    assert_eq!(after.len(), before.len() + 1, "記録が 1 件増える（前 {before:?} → 後 {after:?}）");
+    assert!(after.iter().any(|name| name == "shim-atomic-direct.args"), "増えた 1 件は直に撃った unit の記録: {after:?}");
+}
+
 // flip-check: moved s2-07l.351
 #[test]
 fn pipe_state_survives_process_restart() {
