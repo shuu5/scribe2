@@ -3,14 +3,16 @@
 //! 出力は行を組んで返すだけで、stdout / stderr へは bin 側の `emit` / `emit_err` が書く。
 
 use super::{add, ls_lines, restore, retire, AccountError, Add, Delivery, Prepared};
+use crate::cli_args::{self, Allowed, ArgsError};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
 use crate::seat::sanitize_target;
 use std::path::Path;
 
 /// `add` が受ける flag（`--state-dir` は全 verb が要る）。
-const ADD_FLAGS: &[&str] = &["--state-dir", "--anchor", "--target", "--tmux-socket"];
+const ADD_FLAGS: &[cli_args::Allowed] =
+    &[Allowed::value("--state-dir"), Allowed::value("--anchor"), Allowed::value("--target"), Allowed::value("--tmux-socket")];
 /// `ls` / `retire` / `restore` が受ける flag。
-const BARE_FLAGS: &[&str] = &["--state-dir"];
+const BARE_FLAGS: &[cli_args::Allowed] = &[Allowed::value("--state-dir")];
 
 /// `account` の使い方。
 pub fn usage() -> String {
@@ -31,28 +33,32 @@ struct Flags<'a> {
     socket: Option<&'a str>,
 }
 
-/// `--<name> <value>` の組を読む。`allowed` に無い flag・値欠け・空の値・重複・`--state-dir` の欠けは `None`（使い方の誤り）。
-fn flags<'a>(rest: &'a [String], allowed: &[&str]) -> Option<Flags<'a>> {
-    let mut found = Flags::default();
-    for pair in rest.chunks(2) {
-        let (Some(name), Some(value)) = (pair.first(), pair.get(1)) else {
-            return None;
-        };
-        if !allowed.contains(&name.as_str()) || value.trim().is_empty() || value.starts_with("--") {
-            return None;
-        }
-        let slot = match name.as_str() {
-            "--state-dir" => &mut found.state_dir,
-            "--anchor" => &mut found.anchor,
-            "--target" => &mut found.target,
-            "--tmux-socket" => &mut found.socket,
-            _ => return None,
-        };
-        if slot.replace(value.as_str()).is_some() {
-            return None;
-        }
+/// 引数の断り（閉包の 4 値は [`ArgsError`]・残る 2 つは従来どおり使い方の誤りの rc 1）。
+enum FlagsError {
+    /// 未知の flag・値欠け・重複・`--state-dir` の欠け・`--help`（[`crate::cli_args::refusal`] が rc を決める）。
+    Args(ArgsError),
+    /// 空の値・flag の組に続く余りの positional（使い方の誤り・rc 1）。
+    Usage,
+}
+
+/// `--<name> <value>` の組を [`crate::cli_args::parse`] で読む。`allowed` に無い flag・値欠け・重複・`--state-dir` の欠けは
+/// typed な [`ArgsError`]、空の値と余りの positional は [`FlagsError::Usage`]。
+fn flags<'a>(rest: &'a [String], allowed: &[Allowed]) -> Result<Flags<'a>, FlagsError> {
+    let parsed = crate::cli_args::parse(rest, allowed).map_err(FlagsError::Args)?;
+    if !parsed.positionals().is_empty() {
+        return Err(FlagsError::Usage);
     }
-    found.state_dir.is_some().then_some(found)
+    let found = Flags {
+        state_dir: Some(parsed.need("--state-dir").map_err(FlagsError::Args)?),
+        anchor: parsed.value("--anchor"),
+        target: parsed.value("--target"),
+        socket: parsed.value("--tmux-socket"),
+    };
+    let values = [found.state_dir, found.anchor, found.target, found.socket];
+    if values.iter().flatten().any(|value| value.trim().is_empty()) {
+        return Err(FlagsError::Usage);
+    }
+    Ok(found)
 }
 
 /// `account` に続く引数を捌く。
@@ -67,8 +73,10 @@ pub fn dispatch(args: &[String]) -> Outcome {
         _ => return refused(),
     };
     let allowed = if verb == Some("add") { ADD_FLAGS } else { BARE_FLAGS };
-    let Some(found) = flags(rest, allowed) else {
-        return refused();
+    let found = match flags(rest, allowed) {
+        Ok(found) => found,
+        Err(FlagsError::Args(error)) => return crate::cli_args::refusal("account", &error, usage()),
+        Err(FlagsError::Usage) => return refused(),
     };
     let Some(dir) = found.state_dir.map(Path::new) else {
         return refused();

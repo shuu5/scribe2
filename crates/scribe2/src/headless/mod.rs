@@ -9,8 +9,81 @@
 //! 絶対 path も口座名も host 名も書かない（本 repo は PUBLIC・`xtask check` の
 //! `paths-clean` が落とす）。
 
-pub mod lens;
-pub mod runner;
+#[path = "lens.rs"]
+mod lens_body;
+#[path = "runner.rs"]
+mod runner_body;
+
+/// 値を取る headless の flag。**重なりは閉包の断りにしない**: 本体の [`flag`] が両方の値を名乗って断る
+/// （設計 account-autonomy.md §16・その字面と rc は不変）。
+const fn value(name: &'static str) -> crate::cli_args::Allowed {
+    crate::cli_args::Allowed::values(name)
+}
+
+/// 分岐の直後の閉包の検査（設計 pipeline.md §14 約束 5）: 未知の flag と値欠けは rc 2・`--help` は usage で rc 0・
+/// 通った argv は本体へそのまま渡す（本体の reader は従来どおり位置で読む）。
+fn entry(
+    args: &[String],
+    allowed: &[crate::cli_args::Allowed],
+    surface: &str,
+    usage: fn() -> String,
+    body: fn(&[String]) -> crate::cli_outcome::Outcome,
+) -> crate::cli_outcome::Outcome {
+    match crate::cli_args::parse(args, allowed) {
+        Ok(_) => body(args),
+        Err(error) => crate::cli_args::refusal(surface, &error, usage()),
+    }
+}
+
+/// `<NAME> lens` の口（分岐の直後に [`entry`] を 1 回撃ち、通った argv を本体へ渡す）。
+pub mod lens {
+    pub use super::lens_body::*;
+    use super::value;
+    use crate::cli_args;
+    use crate::cli_outcome::Outcome;
+
+    /// lens が受ける flag（本体の `KNOWN_FLAGS` と同じ 7 つ・宣言順）。
+    const ALLOWED: &[cli_args::Allowed] = &[
+        value("--contract"),
+        value("--worktree"),
+        value("--permission-mode"),
+        value("--rules"),
+        value("--account-dir"),
+        value("--claude"),
+        value("--cgroup-root"),
+    ];
+
+    /// `lens` を 1 回。
+    pub fn dispatch(args: &[String]) -> Outcome {
+        super::entry(args, ALLOWED, "lens", usage, super::lens_body::dispatch)
+    }
+}
+
+/// `<NAME> runner` の口（分岐の直後に [`entry`] を 1 回撃ち、通った argv を本体へ渡す）。
+pub mod runner {
+    pub use super::runner_body::*;
+    use super::value;
+    use crate::cli_args;
+    use crate::cli_outcome::Outcome;
+
+    /// runner が受ける flag（usage の 9 つ・宣言順）。
+    const ALLOWED: &[cli_args::Allowed] = &[
+        value("--worktree"),
+        value("--write-set"),
+        value("--vessel"),
+        value("--plugin-dir"),
+        value("--permission-mode"),
+        value("--rules"),
+        value("--account-dir"),
+        value("--claude"),
+        value("--cgroup-root"),
+    ];
+
+    /// `runner` を 1 回。
+    pub fn dispatch(args: &[String]) -> Outcome {
+        super::entry(args, ALLOWED, "runner", usage, super::runner_body::dispatch)
+    }
+}
 
 use crate::fleet::select::{Model, MODELS};
 use crate::pipe::confine;

@@ -2316,12 +2316,12 @@ fn pipe_land_pr_cmd_refuses_empty_or_missing_value() {
     let id = gated_pass(&repo, &state, &path, &marker);
     let before = event_count(&state);
 
-    // 値欠け（SRS NFR4「黙って落とさない」）。
+    // 値欠け（SRS NFR4「黙って落とさない」・入口の閉包の断りで rc 2・設計 pipeline.md §14 約束 4）。
     let missing = run_pipe(&[
         "land", "--run", &id, "--repo", &repo.display().to_string(),
         "--state-dir", &state.display().to_string(), "--pr-cmd",
     ]);
-    assert_eq!(missing.status.code(), Some(i32::from(RC_REFUSED)), "値欠けは rc 1");
+    assert_eq!(missing.status.code(), Some(i32::from(RC_BROKEN)), "値欠けは rc 2");
     assert!(
         stderr_of(&missing).contains("値が無い"),
         "値欠けだと名乗る（squash 経路へ滑らせない）: {}",
@@ -5140,5 +5140,96 @@ fn pipe_train_red_main_fails_every_run_and_keeps_main_advanced() {
         assert_eq!(landed_count(&state, id), 0, "Landed は 0 件: {id}");
     }
     assert_eq!(verdict_lines(&state), 0, "面 5 へ書かない");
+    clean(&[&repo, &state]);
+}
+
+/// 着地が動かしうる面の写し（main の ref・偽 remote の ref・event log の bytes・worktree の一覧と便の木の HEAD / 状態）。
+#[derive(Debug, PartialEq, Eq)]
+struct LandFaces {
+    main: String,
+    remote: String,
+    events: Vec<u8>,
+    worktrees: String,
+    head: String,
+    status: String,
+}
+
+/// [`LandFaces`] を測る。
+fn land_faces(repo: &Path, state: &Path, remote: &Path, id: &str) -> LandFaces {
+    let worktree = worktree_of(repo, id);
+    LandFaces {
+        main: git(repo, &["rev-parse", "refs/heads/main"]),
+        remote: git(remote, &["for-each-ref", "--format=%(refname) %(objectname)"]),
+        events: fs::read(state.join("fleet").join("events.jsonl")).unwrap_or_default(),
+        worktrees: git(repo, &["worktree", "list", "--porcelain"]),
+        head: git(&worktree, &["rev-parse", "HEAD"]),
+        status: git(&worktree, &["status", "--porcelain"]),
+    }
+}
+
+/// 偽 remote の toy repo に Gated(PASS) の便を 1 本立て、land の引数（`--bd` / `--rules` 込み）と面の写しを返す。
+fn land_args_fixture() -> (PathBuf, PathBuf, PathBuf, String, Vec<String>) {
+    let (repo, state) = repo_with_state();
+    let tools = fake_terminal(&repo, &state, "success");
+    let marker = state.join("lens-ran");
+    let design = write_contract(&repo, &[], &[]);
+    let id = gated_pass(&repo, &state, &design, &marker);
+    let bd = state.join("fake-bd.sh").display().to_string();
+    let rules = ceiling_rules(&state);
+    let (repo_arg, state_arg) = (repo.display().to_string(), state.display().to_string());
+    let args = ["land", "--run", id.as_str(), "--repo", repo_arg.as_str(), "--state-dir", state_arg.as_str(), "--bd", bd.as_str()]
+        .into_iter()
+        .chain(["--rules", rules.as_str()])
+        .map(str::to_owned)
+        .collect();
+    (repo, state, tools.remote, id, args)
+}
+
+/// argv の後ろに `extra` を足して `pipe` を撃つ。
+fn pipe_with(args: &[String], extra: &[&str]) -> Output {
+    let mut all: Vec<&str> = args.iter().map(String::as_str).collect();
+    all.extend_from_slice(extra);
+    run_pipe(&all)
+}
+
+/// (6) 偽 remote の toy repo で `pipe land` に**未知の flag** を渡すと、main の ref・偽 remote・event log・worktree が 1 つも
+/// 動かず rc 2 で断る（理由の 1 行が flag を名指し、usage を添える・stdout 0 byte）。flag を外した同じ argv は着地する
+/// （断ったのが閉包の検査であって、材料の欠けではない）。
+#[test]
+fn pipe_land_args_unknown_flag_moves_nothing_and_refuses_with_rc_2() {
+    let (repo, state, remote, id, args) = land_args_fixture();
+    let before = land_faces(&repo, &state, &remote, &id);
+    for extra in [&["--bogus"][..], &["--bogus", "x"], &["--no-such-flag", "--terminal-only"], &["-x"]] {
+        let out = pipe_with(&args, extra);
+        assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "{extra:?}: rc 2: {}", stderr_of(&out));
+        assert!(out.stdout.is_empty(), "{extra:?}: stdout 0 byte: {}", stdout_of(&out));
+        let err = stderr_of(&out);
+        let named = format!("pipe: 未知の引数 {}", extra.first().copied().unwrap_or_default());
+        assert_eq!(err.lines().next(), Some(named.as_str()), "{extra:?}: 理由の 1 行: {err}");
+        assert!(err.contains(&vessel::pipe::cli::usage()), "{extra:?}: usage を添える: {err}");
+        assert_eq!(land_faces(&repo, &state, &remote, &id), before, "{extra:?}: 何も動かない");
+    }
+    let landed = pipe_with(&args, &[]);
+    assert_eq!(landed.status.code(), Some(i32::from(RC_OK)), "対照: flag を外せば着地する: {}", stderr_of(&landed));
+    assert_ne!(git(&repo, &["rev-parse", "refs/heads/main"]), before.main, "対照: main が進む");
+    clean(&[&repo, &state]);
+}
+
+/// (7) 同じ toy repo で `pipe land --run <id> --help`（`-h` も）は usage を stdout に出して rc 0 で終わり、main の ref・偽 remote・
+/// event log・worktree が 1 つも動かない（**2026-09-15 の回帰そのもの**＝base は squash して `Landed` まで走る）。
+#[test]
+fn pipe_land_args_help_prints_usage_with_rc_0_and_moves_nothing() {
+    let (repo, state, remote, id, args) = land_args_fixture();
+    let before = land_faces(&repo, &state, &remote, &id);
+    for extra in [&["--help"][..], &["-h"], &["--bogus", "--help"]] {
+        let out = pipe_with(&args, extra);
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{extra:?}: rc 0: {}", stderr_of(&out));
+        assert_eq!(stdout_of(&out), format!("{}\n", vessel::pipe::cli::usage()), "{extra:?}: usage だけを stdout へ");
+        assert!(out.stderr.is_empty(), "{extra:?}: stderr 0 byte: {}", stderr_of(&out));
+        assert_eq!(land_faces(&repo, &state, &remote, &id), before, "{extra:?}: 何も動かない");
+    }
+    let landed = pipe_with(&args, &[]);
+    assert_eq!(landed.status.code(), Some(i32::from(RC_OK)), "対照: --help を外せば着地する: {}", stderr_of(&landed));
+    assert_ne!(git(&repo, &["rev-parse", "refs/heads/main"]), before.main, "対照: main が進む");
     clean(&[&repo, &state]);
 }

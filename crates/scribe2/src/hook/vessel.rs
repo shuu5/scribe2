@@ -10,6 +10,7 @@
 
 pub mod digest;
 
+use crate::cli_args::{self, Allowed};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
 use crate::name::NAME;
 use std::path::{Path, PathBuf};
@@ -160,8 +161,21 @@ pub fn usage() -> String {
     format!("usage: {NAME} vessel <init --state-dir D [--version N]|show|check> [ROOT]")
 }
 
-/// `vessel` に続く引数を捌く。
+/// `vessel init` が受ける flag（設計 pipeline.md §14 約束 5・`ROOT` は positional）。
+const ALLOWED_INIT: &[cli_args::Allowed] = &[Allowed::value("--state-dir"), Allowed::value("--version")];
+/// `vessel show` / `vessel check`（flag を受けない）。
+const ALLOWED_BARE: &[cli_args::Allowed] = &[];
+
+/// `vessel` に続く引数を捌く。既知の verb は root を解く前に閉包の検査を 1 回撃つ（未知の flag と `--help` を断る）。
 pub fn dispatch(args: &[String]) -> Outcome {
+    let allowed = match args.first().map(String::as_str) {
+        Some("init") => Some(ALLOWED_INIT),
+        Some("show" | "check") => Some(ALLOWED_BARE),
+        _ => None,
+    };
+    if let Some(Err(error)) = allowed.map(|found| crate::cli_args::parse(args.get(1..).unwrap_or_default(), found)) {
+        return crate::cli_args::refusal("vessel", &error, usage());
+    }
     let root = match root_of(args) {
         Ok(found) => found,
         Err(reason) => return Outcome::failed(RC_REFUSED, vec![format!("vessel: {reason}")]),

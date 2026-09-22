@@ -41,6 +41,45 @@ fn tree_facts(path: &Path) -> Vec<(PathBuf, Vec<u8>, Option<SystemTime>)> {
     facts
 }
 
+/// `account` を binary で 1 回撃つ。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn run_account(args: &[&str]) -> Output {
+    Command::new(bin()).arg("account").args(args).output().expect("binary を起動できる")
+}
+
+/// (8) `account` の口: 4 verb のどれに**未知の flag** を足しても rc 2・理由の 1 行が flag を名指し usage を添え・置き場の全 entry
+/// が不変（dir も host の面も event も作らない）。`--help` は usage を stdout へ出して rc 0（設計 pipeline.md §14 約束 3 / 4 / 8・
+/// `flags` が `None` に畳んでいた断りの typed な置き換え）。
+#[test]
+fn account_args_unknown_flag_is_refused_with_rc_2_on_every_verb() {
+    let dir = tmp();
+    let state = dir.join("state");
+    fs::create_dir_all(&state).ok();
+    let path = state.display().to_string();
+    let before = tree_facts(&state);
+    let usage = vessel::account::cli::usage();
+    for verb in [&["add", "a1"][..], &["ls"], &["retire", "a1"], &["restore", "a1"]] {
+        let mut args = verb.to_vec();
+        args.extend_from_slice(&["--state-dir", &path, "--bogus", "x"]);
+        let out = run_account(&args);
+        assert_eq!(rc_of(&out), 2, "{verb:?}: rc 2: {}", stderr_of(&out));
+        assert!(stdout_of(&out).is_empty(), "{verb:?}: stdout 0 byte");
+        assert_eq!(stderr_of(&out), format!("account: 未知の引数 --bogus\n{usage}\n"), "{verb:?}");
+        assert_eq!(tree_facts(&state), before, "{verb:?}: 置き場は不変");
+        let mut help = verb.to_vec();
+        help.extend_from_slice(&["--state-dir", &path, "-h"]);
+        let out = run_account(&help);
+        assert_eq!(rc_of(&out), i32::from(RC_OK), "{verb:?}: -h は rc 0: {}", stderr_of(&out));
+        assert_eq!(stdout_of(&out), format!("{usage}\n"), "{verb:?}: usage を stdout へ");
+        assert!(stderr_of(&out).is_empty(), "{verb:?}: stderr 0 byte");
+        assert_eq!(tree_facts(&state), before, "{verb:?}: -h も置き場は不変");
+    }
+    fs::remove_dir_all(&dir).ok();
+}
+
 /// credential だけの dir と設定 dir 全体（`settings.json` を持つ・link で置く周も）で `config=` が分かれ、
 /// `agentview=` は `disableAgentView` を読む（歯 (a)・flip の RED＝base は口座の行を出さない）。
 #[test]

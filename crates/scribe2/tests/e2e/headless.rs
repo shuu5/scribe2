@@ -612,8 +612,8 @@ fn headless_lens_reads_cap_from_rules_row() {
     clean(&[&dir]);
 }
 
-/// 撤去した `--cap` は**未知の引数として断る**（rc 1・usage・claude 未起動）。黙って読み飛ばすと、手書きの
-/// 数が残った launcher が効いているように見える（`.265` の drift の再発経路）。base は受理するので RED。
+/// 撤去した `--cap` は**未知の引数として断る**（入口の閉包の断りで rc 2・設計 pipeline.md §14 約束 4・usage・claude 未起動）。
+/// 黙って読み飛ばすと、手書きの数が残った launcher が効いているように見える（`.265` の drift の再発経路）。base は受理するので RED。
 #[test]
 fn headless_lens_refuses_cap_flag() {
     let dir = tmp();
@@ -625,7 +625,7 @@ fn headless_lens_refuses_cap_flag() {
         &lens_args(&contract, &dir, &["--rules", &rules.display().to_string(), "--cap", "1"], &claude),
         b"--- a\n+++ b\n",
     );
-    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "--cap は未知の引数: {}", stderr_of(&out));
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "--cap は未知の引数: {}", stderr_of(&out));
     assert!(!dir.join("called").exists(), "claude を 1 度も起動しない");
     let err = stderr_of(&out);
     assert!(err.contains("--cap"), "断った引数を名指す: {err}");
@@ -633,6 +633,40 @@ fn headless_lens_refuses_cap_flag() {
     assert!(!err.contains("--cap BYTES"), "usage に --cap は載らない: {err}");
     assert!(err.contains("[--rules PATH]"), "usage は --rules を載せる: {err}");
     clean(&[&dir]);
+}
+
+/// (8) headless の口: runner と lens の分岐の直後の閉包の検査が**未知の flag** を rc 2 で断り（理由の 1 行が flag を名指し
+/// usage を添える・claude を 1 度も起こさない）、`--help` は usage を stdout へ出して rc 0（設計 pipeline.md §14 約束 3 / 4 / 8）。
+/// base の runner は未知の flag を読み飛ばして claude を起こす＝RED。
+#[test]
+fn headless_args_unknown_flag_is_refused_with_rc_2_on_runner_and_lens() {
+    let dir = tmp();
+    let worktree = tmp();
+    let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"呼ばれてはならない\"}\n", false, 0);
+    let write_set = dir.join("write-set.txt");
+    let vessel = write_vessel_copy(&dir, r#"["cargo", "git"]"#);
+    fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
+    let call = RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "plan", account: None };
+    let contract = contract_in(&dir);
+    let mouths = [
+        ("runner", runner_args(&call, &dir), vessel::headless::runner::usage()),
+        ("lens", lens_args(&contract, &worktree, &[], &claude), vessel::headless::lens::usage()),
+    ];
+    for (mouth, args, usage) in mouths {
+        for (extra, rc, out_want, err_want) in [
+            (&["--bogus", "x"][..], RC_BROKEN, String::new(), format!("{mouth}: 未知の引数 --bogus\n{usage}\n")),
+            (&["--help"][..], RC_OK, format!("{usage}\n"), String::new()),
+        ] {
+            let mut all = args.clone();
+            all.extend(extra.iter().map(|item| (*item).to_owned()));
+            let out = run_bin_owned(&worktree, &all, b"goal = \"x\"\n");
+            assert_eq!(out.status.code(), Some(i32::from(rc)), "{mouth} {extra:?}: {}", stderr_of(&out));
+            assert_eq!(stdout_of(&out), out_want, "{mouth} {extra:?}: stdout");
+            assert_eq!(stderr_of(&out), err_want, "{mouth} {extra:?}: stderr");
+            assert!(!dir.join("called").exists(), "{mouth} {extra:?}: claude を 1 度も起動しない");
+        }
+    }
+    clean(&[&dir, &worktree]);
 }
 
 /// cap の行が解けない周は **claude を呼ばず rc 2** で理由を 1 行（`lens: gate.token_cap …`・pipe の `int_row`
@@ -788,12 +822,12 @@ fn headless_runner_refuses_when_model_row_is_missing() {
         assert_eq!(err.lines().count(), 1, "{want}: stderr は理由の 1 行だけ: {err}");
         assert!(stdout_of(&out).is_empty(), "{want}: stdout には何も出さない: {}", stdout_of(&out));
     }
-    // `--rules` の値欠けは前提違反（rc 1・usage）。
+    // `--rules` の値欠けは入口の閉包の断り（rc 2・usage・設計 pipeline.md §14 約束 4）。
     let mut args = runner_args(&call, &dir);
     args.push("--rules".to_owned());
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
     let out = run_bin(&worktree, &refs, b"goal = \"x\"\n");
-    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "値欠け: {}", stderr_of(&out));
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "値欠け: {}", stderr_of(&out));
     assert!(stderr_of(&out).contains("--rules に値が無い"), "{}", stderr_of(&out));
     assert!(stderr_of(&out).contains("[--rules PATH]"), "usage は --rules を載せる: {}", stderr_of(&out));
     assert!(!dir.join("called").exists(), "claude を 1 度も起動しない");

@@ -5,6 +5,7 @@
 
 use super::cycle;
 use super::role;
+use crate::cli_args::{self, Allowed};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
 use crate::fleet::select::Model;
 use crate::rules::RuleError;
@@ -43,13 +44,59 @@ impl SeatCommand {
     }
 }
 
-/// `seat` に続く引数を捌く。
+/// 値を取る seat の flag。**値欠け・空文字・重なりは閉包の断りにしない**: 本体の [`optional`] / [`nonempty`] が従来どおり
+/// 使い方の rc 1 で断り、重なりは最初の 1 つを読む（設計 pipeline.md §14 約束 9・既存の歯の字面と rc は不変）。
+const fn value(name: &'static str) -> Allowed {
+    Allowed::maybe(name)
+}
+
+/// `seat register` が受ける flag（設計 pipeline.md §14 約束 5・[`SeatCommand`] の宣言順・usage の末尾の 3 つを含む）。
+const ALLOWED_REGISTER: &[cli_args::Allowed] = &[
+    value("--state-dir"),
+    value("--target"),
+    value("--role"),
+    value("--account"),
+    value("--launch"),
+    value("--anchor"),
+    value("--model"),
+    value("--tmux-socket"),
+    value("--capture-file"),
+];
+/// `seat launch`。
+const ALLOWED_LAUNCH: &[cli_args::Allowed] = &[
+    value("--state-dir"),
+    value("--role"),
+    value("--target"),
+    value("--account"),
+    value("--anchor"),
+    value("--model"),
+    value("--restore"),
+    value("--tmux-socket"),
+    value("--capture-file"),
+];
+
+/// [`SeatCommand`] が受ける flag の集合（[`dispatch`] が verb を選んだ直後に [`crate::cli_args::parse`] へ渡す）。
+const fn allowed_of(command: SeatCommand) -> &'static [Allowed] {
+    match command {
+        SeatCommand::Register => ALLOWED_REGISTER,
+        SeatCommand::Launch => ALLOWED_LAUNCH,
+    }
+}
+
+/// `seat` に続く引数を捌く。既知の verb は選んだ直後に閉包の検査を 1 回撃つ（未知の flag と `--help` を typed に断る）。
 pub fn dispatch(args: &[String]) -> Outcome {
     let first = args.first().map(String::as_str);
-    match (first.and_then(SeatCommand::parse), first) {
+    let verb = first.and_then(SeatCommand::parse);
+    if let Some(command) = verb {
+        if let Err(error) = crate::cli_args::parse(args.get(1..).unwrap_or_default(), allowed_of(command)) {
+            return crate::cli_args::refusal("seat", &error, usage());
+        }
+    }
+    match (verb, first) {
         (Some(SeatCommand::Register), _) => register_of(args),
         (Some(SeatCommand::Launch), _) => launch_of(args),
-        // 既知の verb でなく `--` で始まらない第 1 token は口座 label（短い形・account-lifecycle.md §14）。
+        // 既知の verb でなく `--` で始まらない第 1 token は口座 label（短い形・account-lifecycle.md §14）。label は閉じた語を
+        // 持たない＝[`SeatCommand`] の subcommand ではないので閉包の検査の外（消えた口の名もこの腕で従来どおり断る）。
         (None, Some(label)) if !label.starts_with("--") && !label.trim().is_empty() => short_of(label, args.get(1..).unwrap_or_default()),
         _ => refused_usage(),
     }

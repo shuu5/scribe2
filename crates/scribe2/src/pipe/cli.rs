@@ -33,7 +33,7 @@ pub(super) use run::turn_of;
 // 設計 pipeline.md §19）。列の module は `pipe` の外へ見えないので、窓の口だけをここから見せる。
 pub(crate) use super::queue::window_now;
 pub(super) use state::{live, resolve, stage_of};
-use args::{list_row, manifest_of, need, repo_flag, repo_of, REPO_FLAG};
+use args::{allowed_of, list_row, manifest_of, need, repo_flag, repo_of, REPO_FLAG};
 use resume::{resume, review_then_launch};
 use show::show;
 use state::by_run;
@@ -184,6 +184,14 @@ pub fn dispatch(args: &[String]) -> Outcome {
     if let Some(found) = args.iter().find(|arg| REFUSED_FLAGS.contains(&arg.as_str())) {
         return Outcome::failed(RC_REFUSED, vec![format!("pipe: 未知の引数 {found}（審査の段を飛ばす口は無い）"), usage()]);
     }
+    let verb = args.first().and_then(|found| PipeCommand::parse(found));
+    // **閉包の検査は subcommand を選んだ直後の 1 回**（設計 pipeline.md §14 約束 5）: 未知の flag と `--help` を
+    // manifest も state も読まずに断る＝`pipe land --help` が着地を走らせない（2026-09-15 の回帰）。
+    if let Some(command) = verb {
+        if let Err(error) = crate::cli_args::parse(args.get(1..).unwrap_or_default(), allowed_of(command)) {
+            return crate::cli_args::refusal("pipe", &error, usage());
+        }
+    }
     let manifest = match manifest_of(args) {
         Ok(found) => found,
         Err(reason) => return refused(reason),
@@ -192,7 +200,6 @@ pub fn dispatch(args: &[String]) -> Outcome {
         Ok(found) => found,
         Err(err) => return broken(err.to_string()),
     };
-    let verb = args.first().and_then(|found| PipeCommand::parse(found));
     // **自分が段を進めた便**は subcommand しか知らない（run は便を作り、resume は入口の段を読む）ので、
     // 判定の材料を typed に受け取る（stdout の字面から run id を読み戻さない・C3.3）。
     let mut driven: Option<Driven> = None;

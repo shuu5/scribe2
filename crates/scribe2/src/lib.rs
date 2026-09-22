@@ -5,6 +5,7 @@
 //! bin から `use <NAME>::…` と書けないからである（設計 docs/design/rules-manifest.md §2）。
 
 pub mod account;
+pub mod cli_args;
 pub mod cli_outcome;
 pub mod fleet;
 pub mod headless;

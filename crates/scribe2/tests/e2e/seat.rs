@@ -297,6 +297,40 @@ fn seat_usage_external_form() {
     insta::assert_snapshot!(form);
 }
 
+/// (8) `seat` の口: 既知の 2 verb（register / launch）に**未知の flag** を足すと rc 2・理由の 1 行が flag を名指し usage を添え・
+/// 置き場に 1 file も作らない（row も event も書かず tmux も撃たない）。`--help` は usage を stdout へ出して rc 0
+/// （設計 pipeline.md §14 約束 3 / 4 / 8）。
+#[test]
+fn seat_args_unknown_flag_is_refused_with_rc_2_on_every_verb() {
+    let dir = tmp();
+    let state = dir.join("state");
+    fs::create_dir_all(&state).ok();
+    let path = state.display().to_string();
+    let launch = fixture(&dir, "launch.txt", "claude\n");
+    let socket = dir.join("no-such-sock").display().to_string();
+    let verbs: [Vec<&str>; 2] = [
+        vec!["register", "--state-dir", &path, "--target", "s:w", "--role", "orchestrator", "--account", "a1", "--launch", &launch],
+        vec!["launch", "--state-dir", &path, "--role", "orchestrator", "--target", "s:w", "--account", "a1", "--tmux-socket", &socket],
+    ];
+    for verb in verbs {
+        let mut args = verb.clone();
+        args.extend_from_slice(&["--bogus", "x"]);
+        let out = run_seat(&args);
+        assert_eq!(rc_of(&out), 2, "{verb:?}: rc 2: {}", stderr_of(&out));
+        assert!(stdout_of(&out).is_empty(), "{verb:?}: stdout 0 byte");
+        assert_eq!(stderr_of(&out), format!("seat: 未知の引数 --bogus\n{}\n", vessel::seat::cli::usage()), "{verb:?}");
+        assert_eq!(fs::read_dir(&state).map(Iterator::count).unwrap_or(usize::MAX), 0, "{verb:?}: 置き場に何も作らない");
+        let mut help = verb.clone();
+        help.push("--help");
+        let out = run_seat(&help);
+        assert_eq!(rc_of(&out), i32::from(RC_OK), "{verb:?}: --help は rc 0: {}", stderr_of(&out));
+        assert_eq!(stdout_of(&out), format!("{}\n", vessel::seat::cli::usage()), "{verb:?}: usage を stdout へ");
+        assert!(stderr_of(&out).is_empty(), "{verb:?}: stderr 0 byte");
+        assert_eq!(fs::read_dir(&state).map(Iterator::count).unwrap_or(usize::MAX), 0, "{verb:?}: --help も置き場に何も作らない");
+    }
+    fs::remove_dir_all(&dir).ok();
+}
+
 /// `seat` の既知の verb の閉じた enum（設計 contract-source.md §17 の形 (vii)）: const slice の件数（既知の verb の本数・
 /// dispatch の腕の本数ではない）と宣言順が型と一致し、`as_str` と `parse` が往復し、各語は usage に載る。未知の token
 /// （口座 label・空・flag・variant 名）は `parse` が `None`＝dispatch の label の腕へ落ちる側。

@@ -1031,6 +1031,37 @@ fn vessel_external_form() {
     insta::assert_snapshot!(form);
 }
 
+/// (8) `vessel` の口: 既知の 3 verb に**未知の flag** を足すと rc 2・理由の 1 行が flag を名指し usage を添え・marker も git の
+/// local 設定も 1 byte も書かない。`--help` は usage を stdout へ出して rc 0（設計 pipeline.md §14 約束 3 / 4 / 8）。base の
+/// `init` は未知の flag を読み飛ばして marker を書く＝RED。
+#[test]
+fn vessel_args_unknown_flag_is_refused_with_rc_2_on_every_verb() {
+    let repo = git_repo();
+    let state = tmp();
+    let (root, dir) = (repo.display().to_string(), state.display().to_string());
+    let config = repo.join(".git").join("config");
+    let before = fs::read(&config).unwrap_or_default();
+    let usage = vessel::hook::vessel::usage();
+    for verb in [&["init", "--state-dir", dir.as_str()][..], &["show"], &["check"]] {
+        for (extra, rc, out_want, err_want) in [
+            (&["--bogus", "x"][..], RC_BROKEN, String::new(), format!("vessel: 未知の引数 --bogus\n{usage}\n")),
+            (&["--help"][..], RC_OK, format!("{usage}\n"), String::new()),
+        ] {
+            let mut args = verb.to_vec();
+            args.extend_from_slice(extra);
+            args.push(root.as_str());
+            let out = run_vessel(&args);
+            assert_eq!(out.status.code(), Some(i32::from(rc)), "{args:?}: {}", stderr_text(&out));
+            assert_eq!(String::from_utf8_lossy(&out.stdout), out_want, "{args:?}: stdout");
+            assert_eq!(stderr_text(&out), err_want, "{args:?}: stderr");
+            assert!(!repo.join(MARKER).exists(), "{args:?}: marker を書かない");
+            assert_eq!(fs::read(&config).unwrap_or_default(), before, "{args:?}: git の local 設定は不変");
+        }
+    }
+    fs::remove_dir_all(&repo).ok();
+    fs::remove_dir_all(&state).ok();
+}
+
 /// transcript を名指す payload（`transcript_path` は payload の top-level）。
 fn seat_payload(cwd: &Path, tool: &str, file: &str, transcript: Option<&str>) -> String {
     let head = match transcript {

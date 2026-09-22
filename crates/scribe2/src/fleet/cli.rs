@@ -8,6 +8,7 @@
 use super::select;
 use super::store::{self, LockPolicy, StoreError};
 use super::usage;
+use crate::cli_args::{self, Allowed};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
 use crate::rules::manifest::Manifest;
 use crate::rules::{RuleError, RuleValue};
@@ -53,13 +54,66 @@ impl Verb {
             _ => None,
         }
     }
+
+    /// verb が受ける flag の集合（[`dispatch`] が置き場を解く前に [`crate::cli_args::parse`] へ渡す）。
+    const fn allowed(self) -> &'static [Allowed] {
+        match self {
+            Self::Record => ALLOWED_RECORD,
+            Self::Show => ALLOWED_SHOW,
+            Self::Export => ALLOWED_EXPORT,
+            Self::Usage => ALLOWED_USAGE,
+            Self::Select => ALLOWED_SELECT,
+        }
+    }
 }
+
+/// `fleet record` が受ける flag（設計 pipeline.md §14 約束 5・以下 verb の宣言順）。
+const ALLOWED_RECORD: &[cli_args::Allowed] = &[
+    Allowed::value("--state-dir"),
+    Allowed::value("--kind"),
+    Allowed::value("--run"),
+    Allowed::value("--bead"),
+    Allowed::value("--stage"),
+    Allowed::value("--seat"),
+    Allowed::value("--pid"),
+    Allowed::value("--detail"),
+    Allowed::value("--actor"),
+    Allowed::value("--account"),
+];
+/// `fleet show`。
+const ALLOWED_SHOW: &[cli_args::Allowed] = &[Allowed::value("--state-dir"), Allowed::value("--run")];
+/// `fleet export`。
+const ALLOWED_EXPORT: &[cli_args::Allowed] = &[Allowed::value("--state-dir")];
+/// `fleet usage`（`--show` / `--table` は値を取らない）。
+const ALLOWED_USAGE: &[cli_args::Allowed] = &[
+    Allowed::value("--state-dir"),
+    Allowed::value("--rules"),
+    Allowed::value("--curl"),
+    Allowed::value("--claude"),
+    Allowed::switch("--show"),
+    Allowed::switch("--table"),
+];
+/// `fleet select`（`--exclude` は複数可・前計測の `fleet usage` の flag も受ける）。
+const ALLOWED_SELECT: &[cli_args::Allowed] = &[
+    Allowed::value("--state-dir"),
+    Allowed::value("--purpose"),
+    Allowed::value("--model"),
+    Allowed::values("--exclude"),
+    Allowed::value("--anchor"),
+    Allowed::value("--rules"),
+    Allowed::value("--curl"),
+    Allowed::value("--claude"),
+];
 
 /// `fleet` に続く引数を捌く。全 verb が同じ入口（[`place`]）で置き場を解く。
 pub fn dispatch(args: &[String]) -> Outcome {
     let Some(verb) = args.first().and_then(|text| Verb::parse(text)) else {
         return Outcome::failed(RC_REFUSED, vec![usage()]);
     };
+    // 閉包の検査は verb を選んだ直後の 1 回（設計 pipeline.md §14 約束 5）: 未知の flag と `--help` は置き場を解かずに断る。
+    if let Err(error) = crate::cli_args::parse(args.get(1..).unwrap_or_default(), verb.allowed()) {
+        return crate::cli_args::refusal("fleet", &error, usage());
+    }
     let state = match place(args) {
         Ok(found) => found,
         Err(lines) => return Outcome::failed(RC_REFUSED, lines),

@@ -4,6 +4,8 @@
 //! 解き（[`state_dir_of`] / [`repo_of`]）・断りの 2 形（[`refused`] = rc 1 / [`broken`] = rc 2）。外から呼ぶ path は
 //! `cli` の再輸出で不変（`super::flag` 等）。
 
+use super::PipeCommand;
+use crate::cli_args::{self, Allowed};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
 use crate::hook::vessel;
 use crate::rules::manifest::Manifest;
@@ -114,6 +116,83 @@ pub(in crate::pipe) fn repo_flag(args: &[String]) -> Result<Option<PathBuf>, Str
 /// repo に worktree と branch が切られる（2026-09-15 の実測）。
 pub(super) fn repo_of(args: &[String]) -> Result<PathBuf, String> {
     repo_flag(args)?.ok_or(format!("{REPO_FLAG} が要る"))
+}
+
+/// 値を取る pipe の flag（**重なりは従来どおり最初の 1 つを読む**＝[`flag`] が位置で読む意味を変えない・
+/// 設計 pipeline.md §14 約束 9。値欠けだけを閉包の断りにする）。
+const fn value(name: &'static str) -> Allowed {
+    Allowed::values(name)
+}
+
+/// 列の 1 周と起こす便へ渡す道具の flag（[`super::dispatch`] の `queue_of` が終端・関門の周に読む）。
+const TOOLS: [Allowed; 4] = [value("--bd"), value("--lens"), value("--curl"), value("--runner")];
+
+/// 置き場・repo・規則の flag（全 subcommand が受ける・[`state_dir_of`] / [`repo_of`] / [`manifest_of`]）。
+const PLACE: [Allowed; 3] = [value("--state-dir"), value(REPO_FLAG), value("--rules")];
+
+/// `pipe intake` が受ける flag（設計 pipeline.md §14 約束 5・以下 subcommand の宣言順）。
+const ALLOWED_INTAKE: &[cli_args::Allowed] =
+    &[PLACE[0], PLACE[1], PLACE[2], value("--design"), value("--bead"), value("--contract"), value("--lens")];
+/// `pipe preflight`。
+const ALLOWED_PREFLIGHT: &[cli_args::Allowed] = &[PLACE[0], PLACE[1], PLACE[2], value("--design"), value("--bead"), value("--contract")];
+/// `pipe spawn`。
+const ALLOWED_SPAWN: &[cli_args::Allowed] = &[PLACE[0], PLACE[1], PLACE[2], value("--run"), value("--runner"), value("--curl")];
+/// `pipe approve`（記帳が成った周は列を 1 周撃つ＝道具も受ける）。
+const ALLOWED_APPROVE: &[cli_args::Allowed] =
+    &[PLACE[0], PLACE[1], PLACE[2], value("--run"), value("--words"), TOOLS[0], TOOLS[1], TOOLS[2], TOOLS[3]];
+/// `pipe answer`。
+const ALLOWED_ANSWER: &[cli_args::Allowed] = ALLOWED_APPROVE;
+/// `pipe gate`。
+const ALLOWED_GATE: &[cli_args::Allowed] = &[PLACE[0], PLACE[1], PLACE[2], value("--run"), value("--lens"), value("--curl")];
+/// `pipe land`。
+const ALLOWED_LAND: &[cli_args::Allowed] = &[
+    PLACE[0], PLACE[1], PLACE[2],
+    value("--run"), TOOLS[0], TOOLS[1], TOOLS[2], TOOLS[3], value("--pr-cmd"), Allowed::switch("--terminal-only"),
+];
+/// `pipe retire`。
+const ALLOWED_RETIRE: &[cli_args::Allowed] = &[PLACE[0], PLACE[1], PLACE[2], value("--run"), TOOLS[0], TOOLS[1], TOOLS[2], TOOLS[3]];
+/// `pipe run`（受付から着地までを 1 本で通る＝受付と段の手の flag の和）。
+const ALLOWED_RUN: &[cli_args::Allowed] = &[
+    PLACE[0], PLACE[1], PLACE[2],
+    value("--design"), value("--bead"), value("--contract"),
+    TOOLS[0], TOOLS[1], TOOLS[2], TOOLS[3], value("--pr-cmd"), Allowed::switch(super::queue::DRIVE),
+];
+/// `pipe show`。
+const ALLOWED_SHOW: &[cli_args::Allowed] = &[PLACE[0], PLACE[1], PLACE[2], value("--run")];
+/// `pipe resume`。
+const ALLOWED_RESUME: &[cli_args::Allowed] = &[
+    PLACE[0], PLACE[1], PLACE[2],
+    value("--run"), TOOLS[0], TOOLS[1], TOOLS[2], TOOLS[3], value("--pr-cmd"), Allowed::switch(super::queue::DRIVE),
+];
+/// `pipe stop`。
+const ALLOWED_STOP: &[cli_args::Allowed] =
+    &[PLACE[0], PLACE[1], PLACE[2], value("--run"), Allowed::switch("--all"), TOOLS[0], TOOLS[1], TOOLS[2], TOOLS[3]];
+/// `pipe dispatch`（`ls|first|hold|release BEAD` は positional）。
+const ALLOWED_DISPATCH: &[cli_args::Allowed] = &[PLACE[0], PLACE[1], PLACE[2], TOOLS[0], TOOLS[1], TOOLS[2], TOOLS[3]];
+/// `pipe land-window`。
+const ALLOWED_LAND_WINDOW: &[cli_args::Allowed] = &[PLACE[0], PLACE[1], PLACE[2], value(super::WINDOW_WAIT_FLAG)];
+/// `pipe report`。
+const ALLOWED_REPORT: &[cli_args::Allowed] = &[PLACE[0], PLACE[1], PLACE[2]];
+
+/// subcommand が受ける flag の集合（[`super::dispatch`] が subcommand を選んだ直後に [`crate::cli_args::parse`] へ渡す）。
+pub(super) const fn allowed_of(command: PipeCommand) -> &'static [Allowed] {
+    match command {
+        PipeCommand::Intake => ALLOWED_INTAKE,
+        PipeCommand::Preflight => ALLOWED_PREFLIGHT,
+        PipeCommand::Spawn => ALLOWED_SPAWN,
+        PipeCommand::Approve => ALLOWED_APPROVE,
+        PipeCommand::Answer => ALLOWED_ANSWER,
+        PipeCommand::Gate => ALLOWED_GATE,
+        PipeCommand::Land => ALLOWED_LAND,
+        PipeCommand::Retire => ALLOWED_RETIRE,
+        PipeCommand::Run => ALLOWED_RUN,
+        PipeCommand::Show => ALLOWED_SHOW,
+        PipeCommand::Resume => ALLOWED_RESUME,
+        PipeCommand::Stop => ALLOWED_STOP,
+        PipeCommand::Dispatch => ALLOWED_DISPATCH,
+        PipeCommand::LandWindow => ALLOWED_LAND_WINDOW,
+        PipeCommand::Report => ALLOWED_REPORT,
+    }
 }
 
 /// 前提違反・使い方の誤り（rc 1 + stderr 1 行・何もしない）。

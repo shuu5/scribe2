@@ -430,9 +430,43 @@ fn fleet_record_rejects_flag_without_value() {
         "record", "--kind", "RunCreated", "--run", "r1", "--bead", "b1", "--detail",
         "--state-dir", &path,
     ]);
-    assert_eq!(out.status.code(), Some(1), "値の無い flag は黙って落とさない");
+    // 値欠けは入口の閉包の検査が typed に断る（rc 2・設計 pipeline.md §14 約束 4）。
+    assert_eq!(out.status.code(), Some(2), "値の無い flag は黙って落とさない");
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("--detail に値が無い"), "理由: {err}");
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// (8) `fleet` の口: 5 verb のどれに**未知の flag** を足しても rc 2・理由の 1 行が flag を名指し usage を添え・置き場の全 entry が
+/// 不変（event を書かない・計測しない）。`--help` は usage を stdout へ出して rc 0（設計 pipeline.md §14 約束 3 / 4 / 8）。
+#[test]
+fn fleet_args_unknown_flag_is_refused_with_rc_2_on_every_verb() {
+    let dir = state_dir();
+    let path = dir.display().to_string();
+    let before = tree(&dir);
+    let verbs: [&[&str]; 5] = [
+        &["record", "--kind", "RunCreated", "--run", "r1", "--bead", "b1"],
+        &["show", "--run", "r1"],
+        &["export"],
+        &["usage", "--show"],
+        &["select", "--purpose", "run"],
+    ];
+    for verb in verbs {
+        let mut args = verb.to_vec();
+        args.extend_from_slice(&["--state-dir", &path, "--bogus", "x"]);
+        let out = run_fleet(&args);
+        assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "{verb:?}: rc 2: {out:?}");
+        assert!(out.stdout.is_empty(), "{verb:?}: stdout 0 byte");
+        assert_eq!(text(&out.stderr), format!("fleet: 未知の引数 --bogus\n{}\n", vessel::fleet::cli::usage()), "{verb:?}");
+        assert_eq!(tree(&dir), before, "{verb:?}: 置き場は不変");
+        let mut help = verb.to_vec();
+        help.extend_from_slice(&["--state-dir", &path, "--help"]);
+        let out = run_fleet(&help);
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{verb:?}: --help は rc 0: {out:?}");
+        assert_eq!(text(&out.stdout), format!("{}\n", vessel::fleet::cli::usage()), "{verb:?}: usage を stdout へ");
+        assert!(out.stderr.is_empty(), "{verb:?}: stderr 0 byte");
+        assert_eq!(tree(&dir), before, "{verb:?}: --help も置き場は不変");
+    }
     fs::remove_dir_all(&dir).ok();
 }
 
@@ -2785,18 +2819,22 @@ fn account_cmd_refusals_write_no_file_and_no_event() {
     }
     let usage = text(&run_account(&[]).stderr);
     assert!(usage.starts_with("usage: account <add <label>"), "{usage}");
-    for bad in [
-        &["add"][..],
-        &["add", "a2"],
-        &["ls"],
-        &["ls", "--state-dir"],
-        &["ls", "--state-dir", &path, "--state-dir", &path],
-        &["retire", "a1", "--state-dir", &path, "--target", "x:y"],
-        &["nope", "--state-dir", &path],
-    ] {
+    for bad in [&["add"][..], &["nope", "--state-dir", &path]] {
         let out = run_account(bad);
         assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{bad:?}");
         assert_eq!(text(&out.stderr), usage, "{bad:?} は使い方で断る");
+    }
+    // flag の閉包の断り（欠け・値欠け・重複・未知）は typed な理由の 1 行 + usage で rc 2（設計 pipeline.md §14 約束 4）。
+    for (bad, reason) in [
+        (&["add", "a2"][..], "--state-dir に値が無い"),
+        (&["ls"], "--state-dir に値が無い"),
+        (&["ls", "--state-dir"], "--state-dir に値が無い"),
+        (&["ls", "--state-dir", &path, "--state-dir", &path], "--state-dir が 2 回以上在る"),
+        (&["retire", "a1", "--state-dir", &path, "--target", "x:y"], "未知の引数 --target"),
+    ] {
+        let out = run_account(bad);
+        assert_eq!(out.status.code(), Some(2), "{bad:?}");
+        assert_eq!(text(&out.stderr), format!("account: {reason}\n{usage}"), "{bad:?} は理由と使い方で断る");
     }
     assert_eq!(tree(&dir), before, "使い方の誤りも何も書かない");
     fs::remove_dir_all(&dir).ok();
@@ -2890,8 +2928,9 @@ fn account_cmd_retire_refuses_a_missing_dir_before_creating_the_retired_parent()
 }
 
 // flip-check: retroactive s2-07l.283
-/// (e) flag の 3 条件はそれぞれ単独で使い方の誤り: 空の値（`--anchor ''`）・`--` で始まる値（`--anchor --target`）・
-/// 未知の flag（`--bogus x`）のどれも usage（rc 1・stderr・stdout 0 byte）で断り、file も event も書かない（3 形を別々に撃つ）。
+/// (e) flag の 3 条件はそれぞれ単独で使い方の誤り: 空の値（`--anchor ''`）は usage（rc 1）・`--` で始まる値（`--anchor --target`）と
+/// 未知の flag（`--bogus x`）は閉包の断り（typed な理由の 1 行 + usage・rc 2・設計 pipeline.md §14 約束 4）で断り、どれも stdout 0 byte で
+/// file も event も書かない（3 形を別々に撃つ）。
 #[test]
 fn account_cmd_flags_refuse_empty_value_dashed_value_and_unknown_flag() {
     let dir = state_dir();
@@ -2899,13 +2938,17 @@ fn account_cmd_flags_refuse_empty_value_dashed_value_and_unknown_flag() {
     let before = tree(&dir);
     let usage = text(&run_account(&[]).stderr);
     assert!(usage.starts_with("usage: account <add <label>"), "{usage}");
-    for (name, tail) in [("空の値", &["--anchor", ""][..]), ("-- で始まる値", &["--anchor", "--target"]), ("未知の flag", &["--bogus", "x"])] {
+    for (name, tail, rc, err) in [
+        ("空の値", &["--anchor", ""][..], i32::from(RC_REFUSED), usage.clone()),
+        ("-- で始まる値", &["--anchor", "--target"], 2, format!("account: --anchor に値が無い\n{usage}")),
+        ("未知の flag", &["--bogus", "x"], 2, format!("account: 未知の引数 --bogus\n{usage}")),
+    ] {
         let mut call = vec!["add", "a2", "--state-dir", &path];
         call.extend_from_slice(tail);
         let out = run_account(&call);
-        assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{name}: {out:?}");
+        assert_eq!(out.status.code(), Some(rc), "{name}: {out:?}");
         assert!(out.stdout.is_empty(), "{name}: stdout 0 byte");
-        assert_eq!(text(&out.stderr), usage, "{name}: 使い方で断る");
+        assert_eq!(text(&out.stderr), err, "{name}: 使い方で断る");
         assert_eq!(tree(&dir), before, "{name}: file も event も不変");
     }
     fs::remove_dir_all(&dir).ok();
@@ -3616,7 +3659,8 @@ fn fleet_replay_counts_inflight_runs_per_account() {
 
 /// (f) `fleet record --kind SeatSpawned --account x` は行に `"account":"x"` を書き、読み返した便が口座を持つ。
 /// `--kind RunStage --account x` は rc 1（他の kind の `account` は malformed のまま・書かない）。`--account` の
-/// 値欠けも rc 1。field の無い SeatSpawned はこれまでどおり書けて `account` 無しで読める（schema 1 のまま）。
+/// 値欠けは入口の閉包の断りで rc 2（設計 pipeline.md §14 約束 4）。field の無い SeatSpawned はこれまでどおり書けて `account`
+/// 無しで読める（schema 1 のまま）。
 #[test]
 fn fleet_record_seat_spawned_carries_account() {
     let dir = state_dir();
@@ -3630,14 +3674,14 @@ fn fleet_record_seat_spawned_carries_account() {
     assert_eq!(log.lines().count(), 1);
     assert!(log.contains(r#""account":"x""#), "{log}");
     assert!(log.contains(r#""run":"r1""#) && log.contains(r#""bead":"s2-x""#), "便に紐づく行のまま: {log}");
-    for bad in [
-        &["record", "--kind", "RunStage", "--run", "r1", "--bead", "s2-x", "--stage", "Gated", "--account", "x", "--state-dir", &path][..],
-        &["record", "--kind", "RunCreated", "--run", "r2", "--bead", "s2-x", "--account", "x", "--state-dir", &path][..],
-        &["record", "--kind", "SeatStopped", "--run", "r1", "--bead", "s2-x", "--account", "x", "--state-dir", &path][..],
-        &["record", "--kind", "SeatSpawned", "--run", "r1", "--bead", "s2-x", "--account", "--state-dir", &path][..],
+    for (bad, rc) in [
+        (&["record", "--kind", "RunStage", "--run", "r1", "--bead", "s2-x", "--stage", "Gated", "--account", "x", "--state-dir", &path][..], RC_REFUSED),
+        (&["record", "--kind", "RunCreated", "--run", "r2", "--bead", "s2-x", "--account", "x", "--state-dir", &path][..], RC_REFUSED),
+        (&["record", "--kind", "SeatStopped", "--run", "r1", "--bead", "s2-x", "--account", "x", "--state-dir", &path][..], RC_REFUSED),
+        (&["record", "--kind", "SeatSpawned", "--run", "r1", "--bead", "s2-x", "--account", "--state-dir", &path][..], RC_BROKEN),
     ] {
         let refused = run_fleet(bad);
-        assert_eq!(refused.status.code(), Some(i32::from(RC_REFUSED)), "{bad:?}: {refused:?}");
+        assert_eq!(refused.status.code(), Some(i32::from(rc)), "{bad:?}: {refused:?}");
         assert!(refused.stdout.is_empty(), "{bad:?}: 書かない");
         let stderr = String::from_utf8_lossy(&refused.stderr);
         assert!(stderr.contains("--account"), "{bad:?}: 理由は flag を名指す: {stderr}");
@@ -3783,14 +3827,15 @@ fn fleet_select_exclude_drops_the_seat_accounts() {
     );
     let calls = curl_calls(&fx);
     let out = run_select(&fx, &curl, &["--purpose", "run", "--exclude"]);
-    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "値の無い --exclude は断る: {out:?}");
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "値の無い --exclude は入口の閉包の断り: {out:?}");
     assert!(out.stdout.is_empty(), "選ばない");
     assert_eq!(curl_calls(&fx), calls, "断った周は計測しない");
     drop_fixture(&fx);
 }
 
 /// `--exclude` の直後に別の flag が来る周（`--exclude --purpose run`）は **値欠け**で usage に断られる
-/// （rc 1・chosen を出さない・次の flag を label に取らない・計測しない）。`--` で始まる字面は label にならない。
+/// （入口の閉包の断りで rc 2・設計 pipeline.md §14 約束 4・chosen を出さない・次の flag を label に取らない・計測しない）。
+/// `--` で始まる字面は label にならない。
 ///
 /// .191 の検出線で生き残った変異 `excludes` の match guard `!label.starts_with("--")` → `true` は、この周だけ
 /// 挙動が変わる（`--purpose` が label に化けて選定が通り chosen を出す）。現物の挙動を pin する歯なので base
@@ -3806,7 +3851,7 @@ fn mutant_e2e_fleet_select_exclude_followed_by_a_flag_is_a_missing_value() {
         &["--purpose", "run", "--exclude", "--"],
     ] {
         let out = run_select(&fx, &curl, extra);
-        assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{extra:?}: 値欠けは断る: {out:?}");
+        assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "{extra:?}: 値欠けは断る: {out:?}");
         assert!(out.stdout.is_empty(), "{extra:?}: chosen を出さない: {out:?}");
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert!(stderr.contains("fleet: --exclude に値が無い"), "{extra:?}: 値欠けの理由: {stderr}");
@@ -3873,13 +3918,13 @@ fn fleet_select_refuses_with_the_usage_error_when_measurement_cannot_run() {
     drop_fixture(&fx);
 }
 
-/// (6) `--purpose` の未知の値・値欠け・欠落は usage で断る（計測しない）。
+/// (6) `--purpose` の未知の値・値欠け・欠落は usage で断る（計測しない・値欠けは入口の閉包の断りで rc 2）。
 #[test]
 fn fleet_select_refuses_unknown_purpose_with_usage() {
     let (fx, curl) = select_fixture(SELECT_THREE, true, Some("85"));
-    for extra in [&["--purpose", "lane"][..], &["--purpose"][..], &[][..]] {
+    for (extra, rc) in [(&["--purpose", "lane"][..], RC_REFUSED), (&["--purpose"][..], RC_BROKEN), (&[][..], RC_REFUSED)] {
         let out = run_select(&fx, &curl, extra);
-        assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{extra:?}: {out:?}");
+        assert_eq!(out.status.code(), Some(i32::from(rc)), "{extra:?}: {out:?}");
         assert!(out.stdout.is_empty(), "{extra:?}: 選ばない");
         assert!(String::from_utf8_lossy(&out.stderr).contains("usage: fleet"), "{extra:?}: 使い方を stderr へ");
     }
@@ -4214,7 +4259,7 @@ fn fleet_select_anchor_absent_excludes_every_seat_account() {
     assert!(stderr.contains("fleet: --anchor は --purpose run だけが取る"), "断りの理由: {stderr}");
     assert!(stderr.contains("usage: fleet") && stderr.contains("[--anchor DIR]"), "使い方を stderr へ: {stderr}");
     let out = run_select(&fx, &curl, &["--purpose", "run", "--anchor"]);
-    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "値の無い --anchor は断る: {out:?}");
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "値の無い --anchor は入口の閉包の断り: {out:?}");
     assert!(out.stdout.is_empty(), "選ばない");
     assert!(String::from_utf8_lossy(&out.stderr).contains("fleet: --anchor に値が無い"), "{out:?}");
     assert_eq!(curl_calls(&fx), calls, "断った周は計測しない");
