@@ -112,11 +112,14 @@ pub fn check_drift(written: &[String], derived: &BTreeSet<String>) -> Result<(),
 /// **同じ 1 関数**で解き（`tests` 欄は行のまま空・nextest 形でない行は読み飛ばす）、解けた file が行の write-set
 /// `written` に全部含まれるかを [`check_teeth_cover`] で測る。base で 0 本の filter 語（新しい接頭辞）は、Declared
 /// 行に `tests` 欄が無いので write-set の歯の file（[`teeth_file`] と同じ弁別 = 歯の区間が空でない `.rs`・dir 項目は
-/// 配下）を置き場と読む: 1 つも無ければ従来の [`ClosureError::TeethPlaceUnresolved`]（字面不変）。行ごとに解くのは、
-/// 先に在る新しい接頭辞の行で止まると後の行の歯の file を測り落とすからである。
+/// 配下）か write-set の `+` の `.rs`（宣言済みの新規 file は本文が無いので path だけで置き場と読む＝[`teeth_file`] が
+/// `creates` の項目を認めるのと同じ下界・§42）を置き場と読む: どちらも無ければ従来の
+/// [`ClosureError::TeethPlaceUnresolved`]（字面不変）。行ごとに解くのは、先に在る新しい接頭辞の行で止まると後の行の歯の
+/// file を測り落とすからである。
 pub(crate) fn declared_teeth(fields: &Fields<'_>, base: &Base<'_>, written: &[String]) -> Result<(), ClosureError> {
     let texts = texts_of(base.sources)?;
-    let placed = texts.iter().any(|(path, text)| covered(written, path) && !test_region(path, text).is_empty());
+    let fresh = written.iter().any(|item| item.strip_prefix(NEW_FILE).is_some_and(|path| path.ends_with(RS)));
+    let placed = fresh || texts.iter().any(|(path, text)| covered(written, path) && !test_region(path, text).is_empty());
     let mut places = BTreeSet::new();
     for line in fields.verify {
         let one = Fields { verify: std::slice::from_ref(line), ..*fields };
@@ -767,6 +770,24 @@ mod tests {
             Err(ClosureError::TeethOutsideWriteSet { files: strings(&["crates/toy/src/other.rs"]) }),
             "先の行が新しい接頭辞でも後の行の歯は測る"
         );
+    }
+
+    // flip-check: s2-07l.481
+
+    /// §42: base で 0 本の `fresh_` の行に 3 通の write-set（母集団 = 3 通）——`+` の新規 `.rs` を 1 つ持てば path だけで
+    /// 置き場と読んで通り・`+` が `.rs` でない項目だけなら従来の `TeethPlaceUnresolved`・base の歯の file も `+` の `.rs` も
+    /// 無ければ従来の `TeethPlaceUnresolved`。
+    #[test]
+    fn contract_declared_place_new_plus_rs_is_read_as_the_place() {
+        let (sources, tracked) = derive_base();
+        let base = Base { sources: &sources, snapshots: &[], tracked: &tracked, core_crate: "toy" };
+        let verify = strings(&["cargo nextest run -p toy --no-tests=fail fresh_"]);
+        let fields = Fields { touches: &[], surfaces: &[], verify: &verify, creates: &[], tests: &[], also: &[], files: &[] };
+        let gate = |written: &[&str]| declared_teeth(&fields, &base, &strings(written));
+        let unresolved = Err(ClosureError::TeethPlaceUnresolved { filter: "fresh_".to_owned() });
+        assert_eq!(gate(&["crates/toy/src/tint.rs", "+crates/toy/tests/fresh.rs"]), Ok(()), "+ の新規 .rs が置き場");
+        assert_eq!(gate(&["crates/toy/src/tint.rs", "+docs/design/fresh.md"]), unresolved, "+ が .rs でなければ従来の理由");
+        assert_eq!(gate(&["crates/toy/src/tint.rs"]), unresolved, "置き場が無ければ従来の理由");
     }
 
     // flip-check: s2-07l.451
