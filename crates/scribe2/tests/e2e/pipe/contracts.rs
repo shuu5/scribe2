@@ -956,10 +956,36 @@ fn contract_declared_teeth_outside_write_set_is_refused() {
     let err = stderr_of(&out);
     assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "write-set の外の歯は rc 1: {err}");
     assert!(err.contains("verify の歯の file が write-set に無い"), "teeth-outside-write-set の理由: {err}");
-    assert!(err.contains("crates/toy/src/other.rs, crates/toy/tests/e2e.rs"), "両方を辞書順に名指す: {err}");
+    assert!(
+        err.contains("crates/toy/src/other.rs ← filter 語 derive_, crates/toy/tests/e2e.rs ← filter 語 derive_"),
+        "両方を辞書順に filter 語と対で名指す: {err}"
+    );
     assert!(!err.contains("helper.rs"), "helper の fn だけの file は歯の file でない: {err}");
     assert!(!err.contains("write-set が導出値と一致しない"), "drift は撃たない: {err}");
     assert_eq!(run_dirs(&state), before, "便を作らない（run dir は撃つ前と同数）");
+    assert_eq!(event_count(&state), 0, "断った周は event を書かない");
+    clean(&[&repo, &state]);
+}
+
+// ───── 歯の置き場の門の断りの出所（設計 docs/design/contract-source.md §41・行 ap・`s2-07l.474`・接頭辞 `contract_teeth_origin_`） ─────
+
+/// Declared 行の verify 2 行（`derive_ok` は e2e.rs だけ・`derive_in` は other.rs だけ）が write-set（tint.rs だけ）の外の
+/// 歯を解く契約は、受付の stderr が file ごとに**それを解いた行**の filter 語を対で名乗り、rc 1 で run dir を作らない。
+#[test]
+fn contract_teeth_origin_intake_names_file_and_its_line_filter() {
+    let verify = "[\"cargo nextest run -p toy --no-tests=fail derive_ok\", \"cargo nextest run -p toy --no-tests=fail derive_in\"]";
+    let row = table_row("o", &[("write-set", "[\"crates/toy/src/tint.rs\"]"), ("verify", verify)]);
+    let (repo, state) = derive_repo(&table_doc(&table_region(&[row])));
+    let before = run_dirs(&state);
+    let out = intake_raw(&repo, &state, &pointed_contract(&repo, "o.toml", "o"), "s2-o");
+    let err = stderr_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "rc 1: {err}");
+    assert!(err.contains("verify の歯の file が write-set に無い"), "teeth-outside-write-set の理由: {err}");
+    assert!(
+        err.contains("crates/toy/src/other.rs ← filter 語 derive_in, crates/toy/tests/e2e.rs ← filter 語 derive_ok"),
+        "file と filter 語を対で名乗る: {err}"
+    );
+    assert_eq!(run_dirs(&state), before, "run dir を作らない");
     assert_eq!(event_count(&state), 0, "断った周は event を書かない");
     clean(&[&repo, &state]);
 }

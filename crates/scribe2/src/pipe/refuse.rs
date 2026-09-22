@@ -163,8 +163,8 @@ pub(crate) enum Refuse {
     /// Declared 行（新欄を持たず `write-set` を持つ行）の verify の歯の file（base の `#[test]` の fn 名が filter 語を
     /// 含む file）が行の write-set に無い（§20・行 t・受付だけが撃つ）。**足りない file を全部**持つ。
     TeethOutsideWriteSet {
-        /// write-set に無い歯の file（repo 相対・辞書順）。
-        files: Vec<String>,
+        /// write-set に無い歯の file（repo 相対・辞書順）と、その file を解いた verify 行の filter 語の対（§41）。
+        files: Vec<(String, String)>,
     },
     /// 手書きの契約 file を渡された（`--contract`・契約 (b)・FR54）。契約の正本は設計 doc の行だけで、
     /// 器が base の行から写しを作る＝手で書いた file は**使い方の誤りでなく typed な断り**である。
@@ -453,7 +453,7 @@ fn covers(left: &str, right: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{covered, normalize, overlaps, FindingKind, Refuse, REFUSALS};
+    use super::{covered, normalize, overlaps, ClosureError, FindingKind, Refuse, REFUSALS};
     use crate::cli_outcome::{RC_BROKEN, RC_REFUSED};
     use crate::pipe::table::TableError;
     use proptest::prelude::*;
@@ -486,7 +486,9 @@ mod tests {
             Refuse::AlsoNamesRust { item: "src/a.rs".to_owned() },
             Refuse::TestsNotATeethFile { item: "src/a.rs".to_owned() },
             Refuse::FnUndeclared { module: "pipe::cli".to_owned(), name: "missing".to_owned() },
-            Refuse::TeethOutsideWriteSet { files: vec!["src/a.rs".to_owned(), "tests/b.rs".to_owned()] },
+            Refuse::TeethOutsideWriteSet {
+                files: vec![("src/a.rs".to_owned(), "alpha_".to_owned()), ("tests/b.rs".to_owned(), "beta_".to_owned())],
+            },
             Refuse::HandWrittenContract { path: "contract.toml".to_owned() },
             Refuse::SameKindRepeated {
                 kind: FindingKind::LiteralMismatch,
@@ -546,10 +548,23 @@ mod tests {
             "{reasons:?}"
         );
         assert!(
-            reasons.get(5).is_some_and(|line| line.contains("歯の file が write-set に無い") && line.contains("src/a.rs, tests/b.rs")),
+            reasons.get(5).is_some_and(|line| line.contains("歯の file が write-set に無い")
+                && line.contains("src/a.rs ← filter 語 alpha_, tests/b.rs ← filter 語 beta_")),
             "{reasons:?}"
         );
         assert!(found.iter().skip(10).all(|refuse| refuse.rc() == RC_REFUSED && !refuse.reason().contains('\n')), "rc 1・1 行");
+    }
+
+    /// §41: 受付の側の `teeth-outside-write-set` の理由の 1 行が file と filter 語の両方を名乗り、導出の側の 1 本と同じ字面・
+    /// 語と rc は不変。
+    #[test]
+    fn contract_teeth_origin_refuse_reason_names_file_and_filter() {
+        let files = vec![("tests/b.rs".to_owned(), "beta_".to_owned())];
+        let refuse = Refuse::TeethOutsideWriteSet { files: files.clone() };
+        let reason = refuse.reason();
+        assert!(reason.contains("tests/b.rs") && reason.contains("beta_"), "{reason}");
+        assert_eq!(reason, ClosureError::TeethOutsideWriteSet { files }.reason(), "導出の側の 1 本を写す");
+        assert_eq!((refuse.as_str(), refuse.rc()), ("teeth-outside-write-set", RC_REFUSED), "語と rc は不変");
     }
 
     /// 契約表の 3 理由（`s2-07l.208`・設計 contract-source.md §2 / §3）: 見出しは契約表の欠陥だけ理由の名を足し、

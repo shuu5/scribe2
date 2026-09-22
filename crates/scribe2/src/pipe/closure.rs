@@ -211,8 +211,9 @@ pub enum ClosureError {
     /// Declared 行（§20・行 t）の verify の歯の file（base の `#[test]` の fn 名が filter 語を含む file）が行の
     /// write-set に無い。**足りない file を全部**持つ（辞書順）。
     TeethOutsideWriteSet {
-        /// write-set に無い歯の file（repo 相対・辞書順）。
-        files: Vec<String>,
+        /// write-set に無い歯の file（repo 相対・辞書順）と、その file を解いた verify 行の filter 語の対（§41・同じ
+        /// file を 2 行が解いた周は verify の先の行の語）。
+        files: Vec<(String, String)>,
     },
 }
 
@@ -240,7 +241,8 @@ impl ClosureError {
                 format!("{item} は base に解けない（creates は + 無しで base に無い path・tests / also は base に在る file）")
             }
             Self::TeethOutsideWriteSet { ref files } => {
-                format!("verify の歯の file が write-set に無い（{}）", listed(files))
+                let pairs: Vec<String> = files.iter().map(|(file, filter)| format!("{file} ← filter 語 {filter}")).collect();
+                format!("verify の歯の file が write-set に無い（{}）", listed(&pairs))
             }
         }
     }
