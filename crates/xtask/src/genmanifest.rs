@@ -1,21 +1,24 @@
-//! `.claude-plugin/plugin.json` と `hooks/hooks.json` を NAME と rules 行から生成する。
+//! plugin の生成 dir（core の `PLUGIN_DIR`）の下の `.claude-plugin/plugin.json` と `hooks/hooks.json`、root の
+//! `.claude-plugin/marketplace.json` を NAME と rules 行から生成する。
 //!
 //! manifest を手書きしないのは、名前の字面が repo へ散るのを避けるためである
 //! （器 SPEC §7）。生成は冪等で、同じ workspace からは同じ bytes が出る。
 //! hook の timeout は数値を焼かず rules 行 `hook.timeout_s` から読む（憲法 C1 / C5）。
+//! 生成 dir は root 相対の実行時の読み（[`Layout::plugin_dir`]）で、下の定数は dir からの末尾の字面である
+//! （設計 consumer-sync.md §17 形 1・結ぶのは呼び手）。
 
 use crate::check::Layout;
 use crate::toml_lite;
 use std::fs;
 use std::path::Path;
 
-/// plugin manifest の相対 path。
+/// plugin manifest の相対 path（生成 dir 相対）。
 pub const MANIFEST_REL: &str = ".claude-plugin/plugin.json";
 
-/// hook manifest の相対 path。
+/// hook manifest の相対 path（生成 dir 相対）。
 pub const HOOKS_REL: &str = "hooks/hooks.json";
 
-/// marketplace manifest の相対 path。
+/// marketplace manifest の相対 path（root 相対）。
 pub const MARKETPLACE_REL: &str = ".claude-plugin/marketplace.json";
 
 /// 規則の値の正本の相対 path。
@@ -88,14 +91,15 @@ pub fn render(name: &str, version: &str) -> String {
 ///
 /// **個人の handle・repo の URL・host の path・口座名を 1 文字も持たない**（本 repo は
 /// PUBLIC・SRS CON2）。`owner.url` は任意の field なので**置かない**——置けるものを置くと、
-/// 生成器が個人情報を repo へ流し込む常設の口になる。`source` を `./` に取るのは、この repo
-/// 自身を directory marketplace として読ませるためで、絶対 path を書かずに済む形でもある。
+/// 生成器が個人情報を repo へ流し込む常設の口になる。`source` を `./<plugin_dir>` に取るのは、この
+/// repo の生成 dir だけを directory marketplace の plugin として読ませるためで（install の写しの単位を
+/// plugin に閉じる・設計 consumer-sync.md §17・ADR-0038）、絶対 path を書かずに済む形でもある。
 /// marketplace 自身の `description` は `claude plugin validate` が見る key で、plugins 側と
 /// 同じ共有 [`description`] から出す（`author` は個人情報になりうるので足さない・A1）。
-pub fn render_marketplace(name: &str) -> String {
+pub fn render_marketplace(name: &str, plugin_dir: &str) -> String {
     let description = description(name);
     format!(
-        "{{\n  \"name\": \"{name}\",\n  \"description\": \"{description}\",\n  \"owner\": {{\n    \"name\": \"{name}\"\n  }},\n  \"plugins\": [\n    {{\n      \"name\": \"{name}\",\n      \"source\": \"./\",\n      \"description\": \"{description}\"\n    }}\n  ]\n}}\n"
+        "{{\n  \"name\": \"{name}\",\n  \"description\": \"{description}\",\n  \"owner\": {{\n    \"name\": \"{name}\"\n  }},\n  \"plugins\": [\n    {{\n      \"name\": \"{name}\",\n      \"source\": \"./{plugin_dir}\",\n      \"description\": \"{description}\"\n    }}\n  ]\n}}\n"
     )
 }
 
@@ -181,16 +185,19 @@ fn write_under(root: &Path, rel: &str, body: &str) -> Result<String, String> {
     Ok(path.display().to_string())
 }
 
-/// workspace `root` の plugin manifest と hook manifest を生成して書き出し、報告行を返す。
+/// workspace `root` の plugin manifest と hook manifest（生成 dir の下）と marketplace（root）を生成して書き出し、
+/// 報告行を返す。生成 dir の定数が core に無い周は 1 file も書かずに断る。
 pub fn generate(root: &Path) -> Result<String, String> {
     let layout = Layout::discover(root)?;
     let version = layout.core_version()?;
+    let plugin_dir = layout.plugin_dir()?;
     let rules = fs::read_to_string(root.join(RULES_REL))
         .map_err(|err| format!("{RULES_REL} を読めない: {err}"))?;
     let timeout = rule_int(&rules, ROW_TIMEOUT)?;
-    let plugin = write_under(root, MANIFEST_REL, &render(&layout.name, &version))?;
-    let hooks = write_under(root, HOOKS_REL, &render_hooks(&layout.name, timeout))?;
-    let market = write_under(root, MARKETPLACE_REL, &render_marketplace(&layout.name))?;
+    let payload = root.join(&plugin_dir);
+    let plugin = write_under(&payload, MANIFEST_REL, &render(&layout.name, &version))?;
+    let hooks = write_under(&payload, HOOKS_REL, &render_hooks(&layout.name, timeout))?;
+    let market = write_under(root, MARKETPLACE_REL, &render_marketplace(&layout.name, &plugin_dir))?;
     Ok(format!(
         "xtask gen-manifest: wrote {plugin}, {hooks} and {market} (name={} version={version} timeout={timeout}s)",
         layout.name
@@ -218,6 +225,8 @@ mod tests {
     const FIXTURE_VERSION: &str = "9.9.9";
     /// fixture の hook timeout（rules 行）。tracked の値と違えて「読んでいる」ことを測る。
     const FIXTURE_TIMEOUT: u64 = 7;
+    /// fixture の生成 dir（core の `PLUGIN_DIR`）。tracked の値と違えて「core から読んでいる」ことを測る。
+    const FIXTURE_PLUGIN_DIR: &str = "fixture-payload";
 
     /// repo の外に一意な tmp dir を作る（`tempfile` は足さない・憲法 A3）。
     /// `create_dir`（`_all` ではない）で既存 dir を衝突として検出し、連番を変えて取り直す。
@@ -239,6 +248,17 @@ mod tests {
 
     /// `generate` が読む最小の workspace を tmp に組む（Cargo.toml・core crate・runner・rules）。
     fn write_fixture_root() -> PathBuf {
+        let root = write_fixture_root_without_plugin_dir();
+        std::fs::write(
+            root.join("crates/core/src/name.rs"),
+            format!("pub const NAME: &str = \"{FIXTURE_NAME}\";\npub const PLUGIN_DIR: &str = \"{FIXTURE_PLUGIN_DIR}\";\n"),
+        )
+        .expect("name.rs を書ける");
+        root
+    }
+
+    /// [`write_fixture_root`] から core の `PLUGIN_DIR` だけを欠いた workspace（定数の無い core）。
+    fn write_fixture_root_without_plugin_dir() -> PathBuf {
         let root = make_tmp_dir();
         let write = |rel: &str, body: &str| {
             let path = root.join(rel);
@@ -270,20 +290,26 @@ mod tests {
         std::fs::read_to_string(root.join(rel)).unwrap_or_else(|err| panic!("{rel} を読める: {err}"))
     }
 
+    /// 生成 dir の下の生成物を読む（`PLUGIN_DIR` 相対の 2 file）。
+    fn read_payload(root: &Path, rel: &str) -> String {
+        read_generated(&root.join(FIXTURE_PLUGIN_DIR), rel)
+    }
+
     /// `generate(root)` の**書く経路**: 3 つの manifest が実際に書かれ、render の返り値と byte
     /// 一致する（既存の 2 本は tracked 生成物との一致しか見ず、書く経路は無測定だった）。
     #[test]
     fn gen_manifest_writes_all_three_manifests_via_generate() {
         let root = write_fixture_root();
-        for rel in [MANIFEST_REL, HOOKS_REL, MARKETPLACE_REL] {
-            assert!(!root.join(rel).exists(), "生成前に {rel} は無い");
+        for rel in [MANIFEST_REL, HOOKS_REL] {
+            assert!(!root.join(FIXTURE_PLUGIN_DIR).join(rel).exists(), "生成前に {rel} は無い");
         }
+        assert!(!root.join(MARKETPLACE_REL).exists(), "生成前に marketplace は無い");
 
         let report = generate(&root).expect("fixture の workspace から生成できる");
         // 後始末は assert より前に済ませる（赤い回に tmp を漏らさない・check.rs の作法と同じ）。
         let (plugin, hooks, market) = (
-            read_generated(&root, MANIFEST_REL),
-            read_generated(&root, HOOKS_REL),
+            read_payload(&root, MANIFEST_REL),
+            read_payload(&root, HOOKS_REL),
             read_generated(&root, MARKETPLACE_REL),
         );
         std::fs::remove_dir_all(&root).ok();
@@ -296,7 +322,7 @@ mod tests {
         );
         assert_eq!(
             market,
-            render_marketplace(FIXTURE_NAME),
+            render_marketplace(FIXTURE_NAME, FIXTURE_PLUGIN_DIR),
             "marketplace.json は render_marketplace の bytes そのもの"
         );
         assert!(
@@ -319,7 +345,7 @@ mod tests {
     fn gen_manifest_shared_description_reaches_both_manifests_via_generate() {
         let root = write_fixture_root();
         generate(&root).expect("fixture の workspace から生成できる");
-        let plugin = read_generated(&root, MANIFEST_REL);
+        let plugin = read_payload(&root, MANIFEST_REL);
         let market = read_generated(&root, MARKETPLACE_REL);
         // 後始末は assert より前（赤い回に tmp を漏らさない）。
         std::fs::remove_dir_all(&root).ok();
@@ -347,6 +373,11 @@ mod tests {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("..")
             .join("..")
+    }
+
+    /// tracked な生成 dir（workspace root + core の `PLUGIN_DIR`）。
+    fn tracked_payload(layout: &Layout) -> PathBuf {
+        layout.root.join(layout.plugin_dir().expect("core に PLUGIN_DIR が在る"))
     }
 
     /// 6 つの command 行がすべて `--pane`（打刻の席と記録の `seat` 列・`s2-07l.150`）→ `--project`（anchor・
@@ -379,7 +410,7 @@ mod tests {
         let rules = std::fs::read_to_string(root.join(RULES_REL)).expect("rules manifest を読める");
         let timeout = rule_int(&rules, ROW_TIMEOUT).expect("hook.timeout_s を引ける");
         let rendered = render_hooks(&layout.name, timeout);
-        let tracked = std::fs::read_to_string(root.join(HOOKS_REL)).expect("hooks.json を読める");
+        let tracked = std::fs::read_to_string(tracked_payload(&layout).join(HOOKS_REL)).expect("hooks.json を読める");
 
         assert_eq!(rendered, tracked, "tracked な hooks.json は生成物と同じ bytes である");
         assert_ne!(
@@ -423,7 +454,7 @@ mod tests {
     fn gen_manifest_hooks_json_precompact_entry_carries_pane_and_project() {
         let root = workspace_root();
         let layout = Layout::discover(&root).expect("workspace の配置を読める");
-        let tracked = std::fs::read_to_string(root.join(HOOKS_REL)).expect("hooks.json を読める");
+        let tracked = std::fs::read_to_string(tracked_payload(&layout).join(HOOKS_REL)).expect("hooks.json を読める");
         let pane_arg = " --pane \\\"$TMUX_PANE\\\"";
         let project_arg = " --project \\\"$CLAUDE_PROJECT_DIR\\\"";
         assert_eq!(tracked.matches("\"PreCompact\": [").count(), 1, "PreCompact の entry はちょうど 1 つ: {tracked}");
@@ -456,7 +487,7 @@ mod tests {
         let layout = Layout::discover(&root).expect("workspace の配置を読める");
         let version = layout.core_version().expect("core の version を読める");
         let rendered = render(&layout.name, &version);
-        let tracked = std::fs::read_to_string(root.join(MANIFEST_REL)).expect("plugin.json を読める");
+        let tracked = std::fs::read_to_string(tracked_payload(&layout).join(MANIFEST_REL)).expect("plugin.json を読める");
 
         assert_eq!(rendered, tracked, "tracked な plugin.json は生成物と同じ bytes である");
         assert_eq!(render(&layout.name, &version), rendered, "同じ入力からは同じ bytes（冪等）");
@@ -473,7 +504,8 @@ mod tests {
     fn gen_manifest_marketplace_json_is_idempotent() {
         let root = workspace_root();
         let layout = Layout::discover(&root).expect("workspace の配置を読める");
-        let rendered = render_marketplace(&layout.name);
+        let plugin_dir = layout.plugin_dir().expect("core に PLUGIN_DIR が在る");
+        let rendered = render_marketplace(&layout.name, &plugin_dir);
         let tracked =
             std::fs::read_to_string(root.join(MARKETPLACE_REL)).expect("marketplace.json を読める");
 
@@ -482,19 +514,19 @@ mod tests {
             "tracked な marketplace.json は生成物と同じ bytes である"
         );
         assert_eq!(
-            render_marketplace(&layout.name),
+            render_marketplace(&layout.name, &plugin_dir),
             rendered,
             "同じ入力からは同じ bytes（冪等）"
         );
         assert_ne!(
-            render_marketplace("other-name"),
+            render_marketplace("other-name", &plugin_dir),
             rendered,
             "render は引数の name を実際に使う（字面を焼いていない）"
         );
         assert_eq!(
-            tracked.matches("\"source\": \"./\"").count(),
+            tracked.matches(&format!("\"source\": \"./{plugin_dir}\"")).count(),
             1,
-            "source はちょうど 1 回（repo 自身を指す）: {tracked}"
+            "source はちょうど 1 回（生成 dir を指す）: {tracked}"
         );
         let plugins = tracked
             .split_once("\"plugins\"")
@@ -510,5 +542,70 @@ mod tests {
             tracked.ends_with("}\n") && !tracked.ends_with("\n\n"),
             "末尾改行は 1 つ: {tracked:?}"
         );
+    }
+
+    /// (a・形 1) 生成 dir の名は core の `name.rs` の `PLUGIN_DIR` から読んで配置の型に載る: fixture の core の値がそのまま
+    /// 出て（xtask 側に字面を持たない）、tracked の core の値の dir には生成物の 2 file が在る。
+    #[test]
+    fn plugin_payload_layout_reads_the_dir_from_the_core_constant() {
+        let root = write_fixture_root();
+        let got = Layout::discover(&root).and_then(|layout| layout.plugin_dir());
+        std::fs::remove_dir_all(&root).ok();
+        assert_eq!(got.as_deref(), Ok(FIXTURE_PLUGIN_DIR), "fixture の core の PLUGIN_DIR を読む");
+
+        let layout = Layout::discover(&workspace_root()).expect("workspace の配置を読める");
+        let tracked = layout.plugin_dir().expect("tracked の core に PLUGIN_DIR が在る");
+        assert_ne!(tracked, FIXTURE_PLUGIN_DIR, "tracked の値は fixture と別");
+        assert!(!tracked.is_empty() && !tracked.contains('/'), "root 直下の 1 dir 名: {tracked}");
+        for rel in [MANIFEST_REL, HOOKS_REL] {
+            assert!(layout.root.join(&tracked).join(rel).is_file(), "{tracked}/{rel} が tracked に在る");
+        }
+    }
+
+    /// (a・否定の枝) `PLUGIN_DIR` の無い core は配置の読みで断られ、`generate` は 1 file も書かない（推測で root へ倒さない）。
+    #[test]
+    fn plugin_payload_core_without_the_constant_is_refused() {
+        let root = write_fixture_root_without_plugin_dir();
+        let layout = Layout::discover(&root).expect("NAME だけの core でも配置は読める");
+        let refused = layout.plugin_dir();
+        let generated = generate(&root);
+        let written: Vec<&str> =
+            [MANIFEST_REL, HOOKS_REL, MARKETPLACE_REL].into_iter().filter(|rel| root.join(rel).exists()).collect();
+        std::fs::remove_dir_all(&root).ok();
+        let reason = refused.expect_err("定数の無い core は断る");
+        assert!(reason.contains("PLUGIN_DIR"), "断りは定数を名指す: {reason}");
+        assert_eq!(generated.err().as_deref(), Some(reason.as_str()), "generate も同じ理由で断る");
+        assert!(written.is_empty(), "断った周は何も書かない: {written:?}");
+    }
+
+    /// (b・形 2) `generate` は 3 file を書き、plugin.json と hooks.json は生成 dir の下・marketplace は root の
+    /// `.claude-plugin/` で `source` が生成 dir を指す。root 直下の旧 path には何も書かれない（**否定の枝**）。
+    #[test]
+    fn plugin_payload_generate_writes_under_the_dir_and_nothing_at_the_old_paths() {
+        let root = write_fixture_root();
+        let report = generate(&root).expect("fixture の workspace から生成できる");
+        let payload = root.join(FIXTURE_PLUGIN_DIR);
+        let under: Vec<bool> = [MANIFEST_REL, HOOKS_REL].iter().map(|rel| payload.join(rel).is_file()).collect();
+        let old: Vec<bool> = [MANIFEST_REL, HOOKS_REL].iter().map(|rel| root.join(rel).exists()).collect();
+        let old_hooks_dir = root.join("hooks").exists();
+        let market = read_generated(&root, MARKETPLACE_REL);
+        let stray = payload.join(MARKETPLACE_REL).exists();
+        std::fs::remove_dir_all(&root).ok();
+        assert_eq!(under, [true, true], "2 file は生成 dir の下: {report}");
+        assert_eq!(old, [false, false], "root 直下の旧 path には書かない");
+        assert!(!old_hooks_dir, "root 直下に hooks/ を作らない");
+        assert!(!stray, "marketplace は生成 dir の下に書かない");
+        assert_eq!(market.matches(&format!("\"source\": \"./{FIXTURE_PLUGIN_DIR}\"")).count(), 1, "source は生成 dir: {market}");
+        assert_eq!(market.matches("\"source\"").count(), 1, "source は 1 つだけ: {market}");
+    }
+
+    /// (b・否定の枝) tracked の root 直下の旧 path 2 つは消えている（生成物として再び現れない）。
+    #[test]
+    fn plugin_payload_tracked_old_paths_are_gone() {
+        let root = workspace_root();
+        for rel in [MANIFEST_REL, HOOKS_REL] {
+            assert!(!root.join(rel).exists(), "root 直下の {rel} は消えている");
+        }
+        assert!(root.join(MARKETPLACE_REL).is_file(), "marketplace は root に残る");
     }
 }

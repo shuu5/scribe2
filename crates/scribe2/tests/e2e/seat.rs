@@ -27,7 +27,7 @@ use std::process::{Command, Output};
 use std::thread::sleep;
 use std::time::{Duration, Instant, SystemTime};
 use vessel::cli_outcome::{RC_OK, RC_REFUSED};
-use vessel::name::NAME;
+use vessel::name::{NAME, PLUGIN_DIR};
 
 /// binary の path。
 fn bin() -> &'static str {
@@ -807,9 +807,14 @@ fn launch_place() -> AcctPlace {
     place
 }
 
-/// anchor の dir（登録 row の `anchor`・起動行の 1 つ目の `--plugin-dir`）。
+/// anchor の dir（登録 row の `anchor`）。
 fn launch_anchor(place: &AcctPlace) -> String {
     place.dir.join("anchor").display().to_string()
+}
+
+/// anchor の下の生成 dir（起動行の 1 つ目の `--plugin-dir`・設計 consumer-sync.md §17 形 3）。
+fn launch_plugin_root(place: &AcctPlace) -> String {
+    place.dir.join("anchor").join(PLUGIN_DIR).display().to_string()
 }
 
 /// 期待する偽 claude の記録（argv を 1 語 1 行・続けて env の 2 行）。
@@ -817,7 +822,7 @@ fn launch_expected_argv(place: &AcctPlace, label: &str) -> String {
     let account_dir = place.state.join("accounts").join(label).display().to_string();
     format!(
         "--plugin-dir\n{}\n--plugin-dir\n{}\n--plugin-dir\n{}\n{}\n{}\nenv:CLAUDE_CONFIG_DIR={account_dir}\nenv:CLAUDE_CODE_DISABLE_AGENT_VIEW=1\n",
-        launch_anchor(place), LAUNCH_PLUGINS[0], LAUNCH_PLUGINS[1], LAUNCH_ARGS[0], LAUNCH_ARGS[1]
+        launch_plugin_root(place), LAUNCH_PLUGINS[0], LAUNCH_PLUGINS[1], LAUNCH_ARGS[0], LAUNCH_ARGS[1]
     )
 }
 

@@ -170,6 +170,7 @@ mod tests {
     use vessel::account::consumers::{drift_of, render_consumer, Consumer, Head, Source};
     use vessel::account::{render_account, render_host_manifest, AccountProbe, AgentView, Presence, Retired, Trust};
     use vessel::hook::vessel::digest::PluginRecord;
+    use vessel::name::PLUGIN_DIR;
 
     /// workspace root（この crate の 2 つ上）。
     fn workspace_root() -> PathBuf {
@@ -188,11 +189,12 @@ mod tests {
         after_open.split_once('"').map(|(value, _)| value.to_owned())
     }
 
-    /// NAME・package name・plugin.json の name・出力層へ渡る文字列の 4 者が一致する。
+    /// NAME・package name・plugin.json の name・出力層へ渡る文字列の 4 者が一致する。plugin.json は生成 dir（`PLUGIN_DIR`）の
+    /// 下から読む（root 直下の旧 path は読まない・設計 consumer-sync.md §17 形 5）。
     #[test]
     fn name_is_single_source() {
         let manifest_name = env!("CARGO_PKG_NAME");
-        let plugin_path = workspace_root().join(".claude-plugin").join("plugin.json");
+        let plugin_path = workspace_root().join(PLUGIN_DIR).join(".claude-plugin").join("plugin.json");
         let plugin_src = std::fs::read_to_string(&plugin_path)
             .unwrap_or_else(|err| panic!("{} を読めない: {err}", plugin_path.display()));
         let plugin_name = json_string_field(&plugin_src, "name")

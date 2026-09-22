@@ -14,6 +14,9 @@ const RUNNER_PACKAGE: &str = "xtask";
 /// core crate の名前定数を宣言する行の前置き。
 const NAME_CONST_PREFIX: &str = "pub const NAME: &str =";
 
+/// core crate の plugin の生成 dir の定数を宣言する行の前置き（設計 consumer-sync.md §17 形 1）。
+const PLUGIN_DIR_CONST_PREFIX: &str = "pub const PLUGIN_DIR: &str =";
+
 /// in-module test の始まりを示す行頭の印（■C の測定定義）。
 const TEST_MOD_MARK: &str = "#[cfg(test)]";
 
@@ -41,7 +44,7 @@ impl Layout {
         }
         let member_dirs: Vec<PathBuf> = members.iter().map(|rel| root.join(rel)).collect();
         let core_dir = find_core_dir(&member_dirs)?;
-        let name = read_name_const(&core_dir.join("src").join("name.rs"))?;
+        let name = read_str_const(&core_dir.join("src").join("name.rs"), NAME_CONST_PREFIX, "NAME")?;
         Ok(Self {
             root: root.to_path_buf(),
             core_dir,
@@ -53,6 +56,15 @@ impl Layout {
     /// core crate の `[package] version`。
     pub fn core_version(&self) -> Result<String, String> {
         self.core_package_field("version")
+    }
+
+    /// plugin の実体の生成 dir（root 相対・core crate の `name.rs` の `PLUGIN_DIR` が正本・設計 consumer-sync.md §17 形 1）。
+    ///
+    /// 生成 dir を含む path を結ぶのは呼び手である（`genmanifest` の 3 定数は root 相対の末尾の字面のまま）。field に
+    /// 持たず都度読むのは、`Layout` を literal で組む measure の歯を書き換えないため（[`SourceFile::lines`] と同じ理由）。
+    /// 定数の無い core は `Err` で断る（推測で埋めない）。
+    pub fn plugin_dir(&self) -> Result<String, String> {
+        read_str_const(&self.core_dir.join("src").join("name.rs"), PLUGIN_DIR_CONST_PREFIX, "PLUGIN_DIR")
     }
 
     /// core crate の `[package]` から 1 key を読む。
@@ -191,13 +203,13 @@ fn find_core_dir(member_dirs: &[PathBuf]) -> Result<PathBuf, String> {
         .ok_or_else(|| format!("core crate は 1 本のはずが {found} 本"))
 }
 
-/// core crate の `name.rs` から NAME の値を取り出す。
-fn read_name_const(path: &Path) -> Result<String, String> {
+/// core crate の `name.rs` から `prefix` で宣言された文字列 const（`label`）の値を取り出す。
+fn read_str_const(path: &Path, prefix: &str, label: &str) -> Result<String, String> {
     let src = read_text(path)?;
     src.lines()
-        .filter_map(|line| line.trim().strip_prefix(NAME_CONST_PREFIX))
+        .filter_map(|line| line.trim().strip_prefix(prefix))
         .find_map(|rest| quoted(rest.trim()))
-        .ok_or_else(|| format!("{} に NAME const が無い", path.display()))
+        .ok_or_else(|| format!("{} に {label} const が無い", path.display()))
 }
 
 /// JSON から `"<key>": "<値>"` の値を std だけで抜く（骨格に JSON crate を足さない）。

@@ -13,9 +13,11 @@ use crate::workspace::read_dir_sorted;
 use std::collections::BTreeSet;
 use std::path::Path;
 
-/// plugin manifest と core crate の突き合わせ（manifest-name / manifest-version）。
+/// plugin manifest と core crate の突き合わせ（manifest-name / manifest-version）。manifest は core の `PLUGIN_DIR` の
+/// 生成 dir の下から読む（root 直下の旧 path は読まない・設計 consumer-sync.md §17 形 1）。
 pub(crate) fn measure_manifests(layout: &Layout) -> Vec<Measured> {
-    let plugin = match read_text(&layout.root.join(MANIFEST_REL)) {
+    let read = layout.plugin_dir().and_then(|dir| read_text(&layout.root.join(dir).join(MANIFEST_REL)));
+    let plugin = match read {
         Ok(text) => text,
         Err(reason) => {
             return vec![

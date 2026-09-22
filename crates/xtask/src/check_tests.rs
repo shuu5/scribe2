@@ -29,6 +29,13 @@ const FIXTURE_CORE: &str = "demo";
 const FIXTURE_VERSION: &str = "0.1.0";
 /// 擬似 workspace の toolchain channel（版番号の字面）。
 const FIXTURE_CHANNEL: &str = "1.98.1";
+/// 擬似 workspace の plugin の生成 dir（core の `PLUGIN_DIR`・tracked の値と違えて「core から読んでいる」ことを測る）。
+const FIXTURE_PLUGIN_DIR: &str = "demo-payload";
+
+/// 擬似 workspace の plugin manifest の root 相対 path（生成 dir と `genmanifest::MANIFEST_REL` を結ぶ）。
+fn plugin_manifest_rel() -> String {
+    format!("{FIXTURE_PLUGIN_DIR}/{}", genmanifest::MANIFEST_REL)
+}
 
 /// 同一 process 内での dir 名衝突を避ける連番。
 static SEQ: AtomicU32 = AtomicU32::new(0);
@@ -107,15 +114,11 @@ fn write_healthy(dir: &Path) {
     write_at(
         dir,
         &format!("crates/{FIXTURE_CORE}/src/name.rs"),
-        &format!("pub const NAME: &str = \"{FIXTURE_CORE}\";\n"),
+        &format!("pub const NAME: &str = \"{FIXTURE_CORE}\";\npub const PLUGIN_DIR: &str = \"{FIXTURE_PLUGIN_DIR}\";\n"),
     );
     write_at(dir, "crates/xtask/Cargo.toml", &member_manifest("xtask", true));
     write_at(dir, "crates/xtask/src/main.rs", "fn main() {}\n");
-    write_at(
-        dir,
-        genmanifest::MANIFEST_REL,
-        &genmanifest::render(FIXTURE_CORE, FIXTURE_VERSION),
-    );
+    write_at(dir, &plugin_manifest_rel(), &genmanifest::render(FIXTURE_CORE, FIXTURE_VERSION));
     // **実 repo が持つものは fixture も持つ**。rules manifest が無い tree を「測れない」
     // 側へ倒す measure（non-rust-exec）が在るので、無いままだと fixture 全体が赤くなる。
     write_at(dir, RULES_REL, &rules_manifest(&[]));
@@ -469,13 +472,28 @@ fn check_fails_on_missing_lints_optin() {
 fn check_fails_on_manifest_mismatch() {
     let violations = check_fixture(|dir| {
         let other = format!("{FIXTURE_CORE}-x");
-        write_at(
-            dir,
-            genmanifest::MANIFEST_REL,
-            &genmanifest::render(&other, FIXTURE_VERSION),
-        );
+        write_at(dir, &plugin_manifest_rel(), &genmanifest::render(&other, FIXTURE_VERSION));
     });
     assert_single(&violations, "manifest-name");
+}
+
+/// (a・否定の枝) plugin.json を root 直下の旧 path にだけ置いた（生成 dir の下に無い）tree は manifest-name の違反として
+/// 名指される: 突合は生成 dir の下から読み、旧 path の正しい manifest で通らない（結び直しを忘れた実装はここで落ちる）。
+/// 旧 path に**違う名**を置いて生成 dir の下が正しい周は違反 0（旧 path を読んでいない側の A/B）。
+#[test]
+fn plugin_payload_manifest_only_at_the_old_path_is_named_as_manifest_name() {
+    let violations = check_fixture(|dir| {
+        let _ = fs::remove_file(dir.join(plugin_manifest_rel()));
+        write_at(dir, genmanifest::MANIFEST_REL, &genmanifest::render(FIXTURE_CORE, FIXTURE_VERSION));
+    });
+    let named: Vec<&String> = violations.iter().filter(|line| line.starts_with("manifest-name:")).collect();
+    assert_eq!(named.len(), 1, "manifest-name の違反が 1 件: {violations:?}");
+    assert!(named[0].contains(&plugin_manifest_rel()), "生成 dir の下の path を名指す: {violations:?}");
+
+    let clean = check_fixture(|dir| {
+        write_at(dir, genmanifest::MANIFEST_REL, &genmanifest::render(&format!("{FIXTURE_CORE}-old"), "0.0.0"));
+    });
+    assert!(!clean.iter().any(|line| line.starts_with("manifest-")), "旧 path は読まない: {clean:?}");
 }
 
 /// 浮動解決する `1.98` は toolchain-pin だけで落ちる（負の語検査だけの実装なら

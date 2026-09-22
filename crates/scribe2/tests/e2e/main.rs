@@ -24,7 +24,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use vessel::fleet::Registration;
 use vessel::hook::vessel::digest::{self, PluginRecord};
-use vessel::name::NAME;
+use vessel::name::{NAME, PLUGIN_DIR};
 use vessel::seat::role::Role;
 
 /// 同一 process 内での dir 名衝突を避ける連番。
@@ -487,21 +487,22 @@ fn doctor_consumer_lines_name_each_drift_word() {
     );
     let build = env!("SCRIBE2_BUILD_COMMIT");
     let other = "f".repeat(16);
+    let checkout_payload = place.vessel.join(PLUGIN_DIR);
     for (anchor, target, root, hooks, binary) in [
         ("/c/none", "n:n", &place.root, Some(digest), build),
         ("/c/binary", "b:b", &place.root, Some(digest), "000000000000"),
         ("/c/plugin", "p:p", &place.root, Some(other.as_str()), build),
         ("/c/ledger/.worktrees/w", "l:l", &place.root, Some(digest), build),
-        ("/c/dual", "d:d", &place.vessel, None, build),
+        ("/c/dual", "d:d", &checkout_payload, None, build),
     ] {
         register_anchor(&place, anchor, target);
         write_record(&place, target, root, hooks, binary);
     }
-    let root = place.root.display().to_string();
+    let (root, payload) = (place.root.display().to_string(), checkout_payload.display().to_string());
     let lines = consumer_lines(&place);
     let want = [
         format!("consumer=/c/binary source=launch+install scope=local binary=000000000000 plugin={root}:{digest} ledger={head} cache={cache_digest} head={sha12} drift=binary"),
-        format!("consumer=/c/dual source=launch+install scope=project binary={build} plugin={vessel}:unreadable ledger={head} cache={cache_digest} head={sha12} drift=dual"),
+        format!("consumer=/c/dual source=launch+install scope=project binary={build} plugin={payload}:unreadable ledger={head} cache={cache_digest} head={sha12} drift=dual"),
         format!("consumer=/c/ledger/.worktrees/w source=launch+install scope=project binary={build} plugin={root}:{digest} ledger={stale} cache=absent head={sha12} drift=ledger"),
         format!("consumer=/c/none source=launch+install scope=project binary={build} plugin={root}:{digest} ledger={head} cache={cache_digest} head={sha12} drift=none"),
         format!("consumer=/c/plugin source=launch+install scope=user binary={build} plugin={root}:{other} ledger={head} cache=absent head={sha12} drift=plugin"),
@@ -545,6 +546,44 @@ fn doctor_consumer_unrecorded_is_not_none() {
     ];
     assert_eq!(lines, want, "記録の無い導入先は unrecorded");
     assert!(!lines.iter().any(|line| line.ends_with("drift=none")), "none に潰さない: {lines:?}");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (e・形 5・consumer-sync.md §17) 導入先の読み込み元は vessel repo の checkout の生成 dir（`<repo>/<PLUGIN_DIR>`）: そこに在る
+/// hooks.json の digest が `plugin=<生成 dir>:<digest>` に出て、帳簿にも同じ path が在る行は `dual` と名指す。root 直下（旧 root）を
+/// 記録した席は生成 dir ではないので `dual` にならず、旧 root に hooks.json が無いので `plugin` の食い違い。記録の無い導入先は
+/// 従来どおり `unrecorded`（**否定の枝**）。
+#[test]
+fn plugin_payload_doctor_consumer_reads_the_generated_dir_under_the_checkout() {
+    let place = consumer_place().unwrap_or_else(|| panic!("置き場を作れる"));
+    let (head, sha12) = (place.head.as_str(), head12(&place));
+    let vessel = place.vessel.display().to_string();
+    write_host(&place, &["acc-a"], Some(&vessel));
+    let payload = place.vessel.join(PLUGIN_DIR);
+    let digest = hooks_at(&payload, "{\"hooks\":{\"PreCompact\":[]}}\n").unwrap_or_else(|| panic!("生成 dir に hooks.json を置ける"));
+    assert_ne!(digest, place.digest, "生成 dir の hooks.json は plugin root の fixture と別の本文");
+    write_ledger(
+        &place,
+        "acc-a",
+        &[
+            LedgerRow { project: "/p/new", scope: Some("project"), install: None, sha: Some(head) },
+            LedgerRow { project: "/p/old", scope: Some("project"), install: None, sha: Some(head) },
+        ],
+    );
+    let build = env!("SCRIBE2_BUILD_COMMIT");
+    register_anchor(&place, "/p/new", "pn:pn");
+    write_record(&place, "pn:pn", &payload, Some(&digest), build);
+    register_anchor(&place, "/p/old", "po:po");
+    write_record(&place, "po:po", &place.vessel, Some(&digest), build);
+    register_anchor(&place, "/p/none", "pu:pu");
+    let lines = consumer_lines(&place);
+    let payload = payload.display().to_string();
+    let want = [
+        format!("consumer=/p/new source=launch+install scope=project binary={build} plugin={payload}:{digest} ledger={head} cache=absent head={sha12} drift=dual"),
+        format!("consumer=/p/none source=launch scope=- binary=unrecorded plugin=unrecorded ledger=- cache=absent head={sha12} drift=unrecorded"),
+        format!("consumer=/p/old source=launch+install scope=project binary={build} plugin={vessel}:{digest} ledger={head} cache=absent head={sha12} drift=plugin"),
+    ];
+    assert_eq!(lines, want, "読み込み元は生成 dir・旧 root は dual にならない・記録の無い導入先は unrecorded");
     fs::remove_dir_all(&place.dir).ok();
 }
 

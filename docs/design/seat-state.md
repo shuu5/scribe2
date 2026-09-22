@@ -24,7 +24,7 @@
 ## 3. target の解決（hook の中で自席を知る）
 
 - hook は stdin JSON（`session_id` / `transcript_path` / `cwd`）で自分の session を知るが、**tmux の target（`session:window`）は知らない**。tick は target しか知らない。
-- 解決 = 生成される `hooks/hooks.json` の shell 行で `--pane "$TMUX_PANE"` を渡し、core が `tmux display-message -p -t <pane> '#{session_name}:#{window_name}'` で target を解く。**core は env を読まない**（C2.2）——env に触れるのは生成された shell 行だけで、既存の `"${<NAME_UPPER>_BIN:-<NAME>}"` と同じ場所・同じ生成器（`cargo xtask gen-manifest`）である。`--pane` が空（tmux の外・`$TMUX_PANE` 未設定）なら打刻しない（黙る）。
+- 解決 = 生成される `plugin/hooks/hooks.json`（生成 dir は [consumer-sync.md](./consumer-sync.md) §17）の shell 行で `--pane "$TMUX_PANE"` を渡し、core が `tmux display-message -p -t <pane> '#{session_name}:#{window_name}'` で target を解く。**core は env を読まない**（C2.2）——env に触れるのは生成された shell 行だけで、既存の `"${<NAME_UPPER>_BIN:-<NAME>}"` と同じ場所・同じ生成器（`cargo xtask gen-manifest`）である。`--pane` が空（tmux の外・`$TMUX_PANE` 未設定）なら打刻しない（黙る）。
 - `--tmux-socket` は tick と同じ flag（歯は独立 socket で撃つ）。
 - **運用の契約（実測 2026-09-11・tmux 3.6b）**: tick / cycle の `--target` は打刻が解く `session:window` と同じ字面でなければ同じ dir を見ない（両側とも `sanitize_target` で潰す）。window は **`-n` で明示して名付ける**（明示名は automatic-rename を off にする）。名無しの window は前景 process の名を取り、打刻の dir が席の一生の間に散る＝tick は永久に `state-missing`（fail-closed で静か）。writer と reader の dir の突合は doctor の主題（§6）。
 

@@ -5,6 +5,7 @@
 //! 共有 helper は親（`tests/e2e/pipe.rs`）に在り `use super::*` で引く（歯の本文は移しただけ・`s2-07l.264`）。
 
 use super::*;
+use vessel::name::PLUGIN_DIR;
 use vessel::pipe::land;
 
 #[test]
@@ -231,7 +232,7 @@ const HOOKS_JSON: &str = "{\"hooks\":{\"PreToolUse\":[]}}\n";
 /// これが無いと、写し元を anchor に差し替える退行が歯を素通りする。
 const PLUGIN_JSON_DIRTY: &str = "{\"name\":\"dirty-anchor\"}\n";
 
-/// plugin（`.claude-plugin/` と `hooks/`）を持つ toy repo と置き場を作る。
+/// plugin（生成 dir [`PLUGIN_DIR`] の下の `.claude-plugin/` と `hooks/`）を持つ toy repo と置き場を作る。
 ///
 /// `README.md` も置くのは、**写しに worktree の他の file が混ざらない**ことを負例で
 /// 測るためである（plugin の 2 dir だけを写す、が契約）。
@@ -241,22 +242,28 @@ const PLUGIN_JSON_DIRTY: &str = "{\"name\":\"dirty-anchor\"}\n";
 )]
 fn repo_with_plugin() -> (PathBuf, PathBuf) {
     let (repo, state) = repo_with_state();
-    fs::create_dir_all(repo.join(".claude-plugin")).expect(".claude-plugin を作れる");
-    fs::write(repo.join(".claude-plugin").join("plugin.json"), PLUGIN_JSON)
+    let payload = repo.join(PLUGIN_DIR);
+    fs::create_dir_all(payload.join(".claude-plugin")).expect(".claude-plugin を作れる");
+    fs::write(payload.join(".claude-plugin").join("plugin.json"), PLUGIN_JSON)
         .expect("plugin.json を書ける");
-    fs::create_dir_all(repo.join("hooks")).expect("hooks dir を作れる");
-    fs::write(repo.join("hooks").join("hooks.json"), HOOKS_JSON).expect("hooks.json を書ける");
+    fs::create_dir_all(payload.join("hooks")).expect("hooks dir を作れる");
+    fs::write(payload.join("hooks").join("hooks.json"), HOOKS_JSON).expect("hooks.json を書ける");
     // plugin dir の**中**の symlink（写してはならない entry）。
-    std::os::unix::fs::symlink("../README.md", repo.join("hooks").join("outside.json"))
+    std::os::unix::fs::symlink("../../README.md", payload.join("hooks").join("outside.json"))
         .expect("hooks の中に symlink を置ける");
     fs::write(repo.join("README.md"), "# toy\n").expect("README を書ける");
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-q", "-m", "plugin"]);
     // **commit の後**に anchor 側だけを汚す。便の worktree は base の checkout なので
     // 写しがこの本文になったら、写し元が worktree でなく anchor である証拠になる。
-    fs::write(repo.join(".claude-plugin").join("plugin.json"), PLUGIN_JSON_DIRTY)
+    fs::write(payload.join(".claude-plugin").join("plugin.json"), PLUGIN_JSON_DIRTY)
         .expect("anchor の plugin.json を汚せる");
     (repo, state)
+}
+
+/// 生成 dir（[`PLUGIN_DIR`]）の下の repo 相対 path。
+fn payload_rel(rel: &str) -> String {
+    format!("{PLUGIN_DIR}/{rel}")
 }
 
 #[test]
@@ -297,7 +304,7 @@ fn pipe_spawn_copies_plugin_outside_worktree_and_substitutes_plugin_dir() {
         (".claude-plugin", "plugin.json", PLUGIN_JSON),
         ("hooks", "hooks.json", HOOKS_JSON),
     ] {
-        let source = fs::read(worktree.join(dir).join(name)).expect("worktree 側を読める");
+        let source = fs::read(worktree.join(PLUGIN_DIR).join(dir).join(name)).expect("worktree 側を読める");
         let copied = fs::read(consumer.join(dir).join(name)).expect("写しを読める");
         assert_eq!(copied, source, "{dir}/{name} の bytes が worktree と一致する");
         assert_eq!(copied, body.as_bytes(), "{dir}/{name} は toy repo に置いた本文");
@@ -342,12 +349,13 @@ fn pipe_spawn_copies_plugin_outside_worktree_and_substitutes_plugin_dir() {
 #[test]
 fn pipe_spawn_skips_plugin_dir_that_is_a_symlink() {
     let (repo, state) = repo_with_state();
-    fs::create_dir_all(repo.join(".claude-plugin")).expect(".claude-plugin を作れる");
-    fs::write(repo.join(".claude-plugin").join("plugin.json"), PLUGIN_JSON)
+    let payload = repo.join(PLUGIN_DIR);
+    fs::create_dir_all(payload.join(".claude-plugin")).expect(".claude-plugin を作れる");
+    fs::write(payload.join(".claude-plugin").join("plugin.json"), PLUGIN_JSON)
         .expect("plugin.json を書ける");
-    fs::create_dir_all(repo.join("real-hooks")).expect("real-hooks を作れる");
-    fs::write(repo.join("real-hooks").join("hooks.json"), HOOKS_JSON).expect("hooks.json を書ける");
-    std::os::unix::fs::symlink("real-hooks", repo.join("hooks")).expect("hooks を link にできる");
+    fs::create_dir_all(payload.join("real-hooks")).expect("real-hooks を作れる");
+    fs::write(payload.join("real-hooks").join("hooks.json"), HOOKS_JSON).expect("hooks.json を書ける");
+    std::os::unix::fs::symlink("real-hooks", payload.join("hooks")).expect("hooks を link にできる");
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-q", "-m", "plugin-link"]);
 
@@ -382,7 +390,7 @@ const CONSUMER: &str = "consumer";
 )]
 fn tracked_plugin(dir: &str, name: &str) -> Vec<u8> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
-    fs::read(root.join(dir).join(name)).expect("tracked の器の plugin を読める")
+    fs::read(root.join(PLUGIN_DIR).join(dir).join(name)).expect("tracked の器の plugin を読める")
 }
 
 /// root の `<NAME>/` に器の plugin が **tracked と同じ bytes** で在ることを測る。
@@ -408,7 +416,7 @@ fn assert_vessel_plugin(plugin: &Path) {
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn repo_with_files(files: &[(&str, &str)]) -> (PathBuf, PathBuf) {
+fn repo_with_files(files: &[(String, &str)]) -> (PathBuf, PathBuf) {
     let (repo, state) = repo_with_state();
     for (rel, body) in files {
         let path = repo.join(rel);
@@ -490,8 +498,8 @@ fn pipe_spawn_plugin_puts_consumer_beside_vessel_plugin() {
 fn pipe_spawn_plugin_skips_consumer_named_like_vessel() {
     let manifest = format!("{{\n  \"name\": \"{NAME}\",\n  \"version\": \"9.9.9\"\n}}\n");
     let (repo, state) = repo_with_files(&[
-        (".claude-plugin/plugin.json", &manifest),
-        ("hooks/hooks.json", HOOKS_JSON),
+        (payload_rel(".claude-plugin/plugin.json"), &manifest),
+        (payload_rel("hooks/hooks.json"), HOOKS_JSON),
     ]);
     let (plugin, _) = spawn_plugin_run(&repo, &state);
     assert!(!plugin.join(CONSUMER).exists(), "器と同名の plugin を consumer として写さない");
@@ -504,20 +512,15 @@ fn pipe_spawn_plugin_skips_consumer_named_like_vessel() {
 /// （写さない・空 dir も作らない）。
 #[test]
 fn pipe_spawn_plugin_skips_half_or_nameless_consumer() {
-    let cases: [(&str, Vec<(&str, &str)>); 4] = [
-        ("hooks だけ", vec![("hooks/hooks.json", HOOKS_JSON)]),
-        ("plugin.json だけ", vec![(".claude-plugin/plugin.json", PLUGIN_JSON)]),
+    let (manifest, hooks) = (payload_rel(".claude-plugin/plugin.json"), payload_rel("hooks/hooks.json"));
+    let cases: [(&str, Vec<(String, &str)>); 4] = [
+        ("hooks だけ", vec![(hooks.clone(), HOOKS_JSON)]),
+        ("plugin.json だけ", vec![(manifest.clone(), PLUGIN_JSON)]),
         (
             "name が入れ子にだけ在る",
-            vec![
-                (".claude-plugin/plugin.json", "{\"meta\":{\"name\":\"toy-plugin\"}}\n"),
-                ("hooks/hooks.json", HOOKS_JSON),
-            ],
+            vec![(manifest.clone(), "{\"meta\":{\"name\":\"toy-plugin\"}}\n"), (hooks.clone(), HOOKS_JSON)],
         ),
-        (
-            "name が文字列でない",
-            vec![(".claude-plugin/plugin.json", "{\"name\":7}\n"), ("hooks/hooks.json", HOOKS_JSON)],
-        ),
+        ("name が文字列でない", vec![(manifest, "{\"name\":7}\n"), (hooks, HOOKS_JSON)]),
     ];
     for (label, files) in cases {
         let (repo, state) = repo_with_files(&files);
@@ -526,6 +529,40 @@ fn pipe_spawn_plugin_skips_half_or_nameless_consumer() {
         assert_eq!(dir_names(&plugin), vec![NAME.to_owned()], "{label}: root は器の 1 本だけ");
         clean(&[&repo, &state]);
     }
+}
+
+/// (d・形 4) 別名の plugin は生成 dir（[`PLUGIN_DIR`]）の下から写り、root 直下の旧 path の本文は写しに載らない。旧 path にしか
+/// plugin を持たない worktree は consumer と見ない（**否定の枝**）。どちらの周も run dir の写しに器の 2 file が
+/// tracked の生成物（生成 dir の下）と同じ bytes で在り、写し先は `consumer/` の直下（生成 dir を挟まない）。
+#[test]
+fn plugin_payload_consumer_is_read_from_the_dir_and_old_path_is_not_a_consumer() {
+    let old = "{\"name\":\"old-path-plugin\"}\n";
+    let (repo, state) = repo_with_files(&[
+        (payload_rel(".claude-plugin/plugin.json"), PLUGIN_JSON),
+        (payload_rel("hooks/hooks.json"), HOOKS_JSON),
+        (".claude-plugin/plugin.json".to_owned(), old),
+        ("hooks/hooks.json".to_owned(), old),
+    ]);
+    let (plugin, _) = spawn_plugin_run(&repo, &state);
+    assert_eq!(dir_names(&plugin), vec![CONSUMER.to_owned(), NAME.to_owned()], "root は consumer と器");
+    assert_vessel_plugin(&plugin);
+    let consumer = plugin.join(CONSUMER);
+    assert_eq!(dir_names(&consumer), vec![".claude-plugin".to_owned(), "hooks".to_owned()], "写し先は consumer/ の直下");
+    for (dir, name, body) in [(".claude-plugin", "plugin.json", PLUGIN_JSON), ("hooks", "hooks.json", HOOKS_JSON)] {
+        let copied = fs::read(consumer.join(dir).join(name)).unwrap_or_default();
+        assert_eq!(copied, body.as_bytes(), "{dir}/{name} は生成 dir の下の本文（旧 path の本文ではない）");
+    }
+    clean(&[&repo, &state]);
+
+    let (repo, state) = repo_with_files(&[
+        (".claude-plugin/plugin.json".to_owned(), PLUGIN_JSON),
+        ("hooks/hooks.json".to_owned(), HOOKS_JSON),
+    ]);
+    let (plugin, _) = spawn_plugin_run(&repo, &state);
+    assert!(!plugin.join(CONSUMER).exists(), "旧 path にしか plugin を持たない worktree は consumer と見ない");
+    assert_eq!(dir_names(&plugin), vec![NAME.to_owned()], "root は器の 1 本だけ");
+    assert_vessel_plugin(&plugin);
+    clean(&[&repo, &state]);
 }
 
 /// 再走で前の周の `consumer/` が残らない（root を先に空にする）。

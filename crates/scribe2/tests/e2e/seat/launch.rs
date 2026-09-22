@@ -18,7 +18,7 @@ use super::*;
 fn launch_derived(place: &AcctPlace) -> String {
     format!(
         "CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR={{account_dir}} claude --plugin-dir {} --plugin-dir {} --plugin-dir {} {} {}",
-        launch_anchor(place), LAUNCH_PLUGINS[0], LAUNCH_PLUGINS[1], LAUNCH_ARGS[0], LAUNCH_ARGS[1]
+        launch_plugin_root(place), LAUNCH_PLUGINS[0], LAUNCH_PLUGINS[1], LAUNCH_ARGS[0], LAUNCH_ARGS[1]
     )
 }
 
@@ -500,7 +500,7 @@ fn launch_files_text(dir: &Path) -> String {
 fn launch_assert_carried(place: &AcctPlace, name: &str, tail: &[&str], case: &str) {
     let sent = acct_sent(&place.state, &format!("{name}_{name}"));
     assert_eq!(sent.len(), 1, "{case}: 起動行の 1 行: {sent:?}");
-    assert!(sent.first().is_some_and(|line| line.ends_with(&format!(" claude {} --plugin-dir {} --plugin-dir {} --plugin-dir {} {} {} {}", LAUNCH_DEFAULT_FLAGS.join(" "), launch_anchor(place), LAUNCH_PLUGINS[0], LAUNCH_PLUGINS[1], LAUNCH_ARGS[0], LAUNCH_ARGS[1], tail.join(" ")))), "{case}: 注入行の末尾: {sent:?}");
+    assert!(sent.first().is_some_and(|line| line.ends_with(&format!(" claude {} --plugin-dir {} --plugin-dir {} --plugin-dir {} {} {} {}", LAUNCH_DEFAULT_FLAGS.join(" "), launch_plugin_root(place), LAUNCH_PLUGINS[0], LAUNCH_PLUGINS[1], LAUNCH_ARGS[0], LAUNCH_ARGS[1], tail.join(" ")))), "{case}: 注入行の末尾: {sent:?}");
     assert_eq!(fs::read_to_string(place.dir.join("launched")).unwrap_or_default(), launch_carried_argv(place, "l2", tail), "{case}: argv の末尾");
     let rows = acct_rows(&place.state);
     assert_eq!(rows.iter().map(|row| row.launch.as_str()).collect::<Vec<_>>(), [launch_derived(place).as_str()], "{case}: row の launch は旗無し: {rows:?}");

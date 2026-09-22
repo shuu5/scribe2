@@ -20,7 +20,7 @@ use crate::fleet::store::LockPolicy;
 use crate::fleet::{EventKind, Stage};
 use crate::headless::runner::{stop_status, top_level_string};
 use crate::headless::{NO_VALUE, RC_RATE_LIMIT};
-use crate::name::NAME;
+use crate::name::{NAME, PLUGIN_DIR};
 use crate::pipe::contract::Contract;
 use crate::polarity::{OnFailure, Polarity, Timing};
 use std::io::Write;
@@ -31,14 +31,16 @@ use std::process::Stdio;
 /// policy file の名前（guard が読む形・vessel-hook.md §5）。
 const WRITE_SET_FILE: &str = "write-set.txt";
 
-/// runner へ載せる plugin の中身（repo 相対・設計 §6）。
+/// runner へ載せる plugin の中身（生成 dir [`PLUGIN_DIR`] 相対・設計 §6・consumer-sync.md §17 形 4）。
 const PLUGIN_DIRS: [&str; 2] = [".claude-plugin", "hooks"];
 
-/// 器の plugin manifest（`gen-manifest` の生成物＝tracked と同じ bytes・設計 §5.2 手順 5）。
-const EMBEDDED_PLUGIN_JSON: &str = include_str!("../../../../.claude-plugin/plugin.json");
+/// 器の plugin manifest（`gen-manifest` の生成物＝tracked と同じ bytes・設計 §5.2 手順 5）。`include_str!` は literal
+/// しか取れないので path の頭は [`PLUGIN_DIR`] の値の写しで、写しの bytes が [`PLUGIN_DIR`] の下の tracked と一致する
+/// ことは e2e の `pipe_spawn_plugin_` / `plugin_payload_` の歯が [`PLUGIN_DIR`] から読んで測る。
+const EMBEDDED_PLUGIN_JSON: &str = include_str!("../../../../plugin/.claude-plugin/plugin.json");
 
 /// 器の hooks（[`EMBEDDED_PLUGIN_JSON`] と同じく生成物の埋め込み）。
-const EMBEDDED_HOOKS_JSON: &str = include_str!("../../../../hooks/hooks.json");
+const EMBEDDED_HOOKS_JSON: &str = include_str!("../../../../plugin/hooks/hooks.json");
 
 /// 器の plugin として root の `<NAME>/` へ必ず書く 3 つ組（dir・file 名・本文）。
 const EMBEDDED_PLUGIN: [(&str, &str, &str); 2] = [
@@ -659,8 +661,8 @@ fn substitute(
 /// 写しを repo の外（run dir 配下）へ置くことで、「repo の plugin を載せる」意図を保った
 /// まま worktree を保護対象から外す。
 ///
-/// 写すのは **worktree の** [`PLUGIN_DIRS`]（＝便の base の内容）であって anchor の
-/// 現在値ではない。
+/// 写すのは **worktree の生成 dir（[`PLUGIN_DIR`]）の下の** [`PLUGIN_DIRS`]（＝便の base の内容）であって anchor の
+/// 現在値ではない。写し先（`consumer/` の直下）は生成 dir を挟まない。
 fn copy_plugin(worktree: &Path, state_dir: &Path, run: &str) -> Result<PathBuf, String> {
     let dest = plugin_path(state_dir, run);
     // 再走で古い写しが残らないよう、先に空にする。
@@ -679,7 +681,7 @@ fn copy_plugin(worktree: &Path, state_dir: &Path, run: &str) -> Result<PathBuf, 
     if consumer_plugin(worktree) {
         let consumer = dest.join(CONSUMER_DIR);
         for name in PLUGIN_DIRS {
-            let from = worktree.join(name);
+            let from = worktree.join(PLUGIN_DIR).join(name);
             // **`Path::is_dir` では判定しない**。あれは link を辿るので、`hooks` が dir への
             // symlink（例 `hooks -> ../..`）の周に「dir だ」と読んで link 先の木を丸ごと写す
             // ＝「symlink は追わない」が top-level だけ抜ける。最終要素を辿らない
@@ -694,18 +696,20 @@ fn copy_plugin(worktree: &Path, state_dir: &Path, run: &str) -> Result<PathBuf, 
 
 /// worktree が **consumer の plugin** を持つか（設計 §5.2 手順 5 (ii)）。
 ///
-/// `.claude-plugin/plugin.json` と `hooks/hooks.json` が**両方**、link を辿らずに dir の中の
+/// 生成 dir（[`PLUGIN_DIR`]）の下に `.claude-plugin/plugin.json` と `hooks/hooks.json` が**両方**、link を辿らずに dir の中の
 /// file として在り、plugin.json の top-level の `name` が [`NAME`] と**違う**周だけ真。
 /// `name` が同じ周は器自身の repo＝世代がずれていても器の 1 本だけを載せる（同じ hook を
-/// 2 度走らせない）。片方だけの周・`name` が読めない周は consumer の plugin と見ない。
+/// 2 度走らせない）。片方だけの周・`name` が読めない周・root 直下の旧 path にしか持たない周は consumer の plugin と見ない。
 fn consumer_plugin(worktree: &Path) -> bool {
-    let present = EMBEDDED_PLUGIN.iter().all(|(dir, file, _)| {
-        let parent = worktree.join(dir);
-        real_dir(&parent) && std::fs::symlink_metadata(parent.join(file)).is_ok_and(|meta| meta.is_file())
-    });
+    let payload = worktree.join(PLUGIN_DIR);
+    let present = real_dir(&payload)
+        && EMBEDDED_PLUGIN.iter().all(|(dir, file, _)| {
+            let parent = payload.join(dir);
+            real_dir(&parent) && std::fs::symlink_metadata(parent.join(file)).is_ok_and(|meta| meta.is_file())
+        });
     let [(manifest_dir, manifest, _), _] = EMBEDDED_PLUGIN;
     present
-        && std::fs::read_to_string(worktree.join(manifest_dir).join(manifest))
+        && std::fs::read_to_string(payload.join(manifest_dir).join(manifest))
             .ok()
             .and_then(|body| top_level_string(&body, "name"))
             .is_some_and(|name| name != NAME)

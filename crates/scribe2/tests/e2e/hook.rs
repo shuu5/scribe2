@@ -16,7 +16,7 @@ use vessel::hook::vessel::digest::{self, PluginRecord};
 use vessel::hook::precompact::{self, Slot, TEXT_WIDTH};
 use vessel::hook::vessel::{Marker, GENERATION, MARKER};
 use vessel::hook::{guard, inject_path, SCHEMA};
-use vessel::name::NAME;
+use vessel::name::{NAME, PLUGIN_DIR};
 use vessel::pipe::declaration::DECL_FILE;
 use vessel::seat::brief;
 use vessel::seat::recent::{self, Kind, Unmeasured, BEAD_LIMIT, COMMIT_LIMIT, DIRTY_SCAN_LIMIT, TITLE_WIDTH, WINDOW_SECS};
@@ -1221,14 +1221,24 @@ fn hook_permission_request_is_silent_outside_vessel() {
     clean(&[&repo]);
 }
 
-/// 生成物 `hooks/hooks.json` が 3 つ目の entry を持ち、**既存 2 entry は不変**である。
+/// tracked の生成 dir（workspace root + `PLUGIN_DIR`・設計 consumer-sync.md §17）。
+fn tracked_payload() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join(PLUGIN_DIR)
+}
+
+/// tracked の生成物 hooks.json（生成 dir の下）の本文。
+#[expect(
+    clippy::panic,
+    reason = "統合 test の helper。clippy の allow-panic-in-tests は #[test] 関数の中だけに効く"
+)]
+fn tracked_hooks_json() -> String {
+    fs::read_to_string(digest::hooks_path(&tracked_payload())).unwrap_or_else(|err| panic!("hooks.json を読める: {err}"))
+}
+
+/// 生成物 hooks.json（生成 dir の下）が 3 つ目の entry を持ち、**既存 2 entry は不変**である。
 #[test]
 fn hooks_json_carries_permission_request_entry() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..");
-    let body = fs::read_to_string(root.join("hooks").join("hooks.json"))
-        .unwrap_or_else(|err| panic!("hooks.json を読める: {err}"));
+    let body = tracked_hooks_json();
     for needle in [
         "\"PermissionRequest\"",
         "\"matcher\": \"Bash\"",
@@ -1265,7 +1275,7 @@ fn marketplace_json_names_the_same_plugin_as_plugin_json() {
         .join(".claude-plugin");
     let market = fs::read_to_string(dir.join("marketplace.json"))
         .unwrap_or_else(|err| panic!("marketplace.json を読める: {err}"));
-    let plugin = fs::read_to_string(dir.join("plugin.json"))
+    let plugin = fs::read_to_string(tracked_payload().join(".claude-plugin").join("plugin.json"))
         .unwrap_or_else(|err| panic!("plugin.json を読める: {err}"));
 
     let named = format!("\"name\": \"{NAME}\"");
@@ -1479,15 +1489,11 @@ fn seat_state_hook_stays_silent_when_it_cannot_stamp() {
     clean(&[&repo, &state, &sock_dir, &bare]);
 }
 
-/// 生成物 `hooks/hooks.json` は打刻の 2 entry（UserPromptSubmit / Stop）を持ち、5 つの command 行が
+/// 生成物 hooks.json（生成 dir の下）は打刻の 2 entry（UserPromptSubmit / Stop）を持ち、5 つの command 行が
 /// すべて `--pane "$TMUX_PANE"` を受ける（打刻の席と記録の `seat` 列・`s2-07l.150`）。
 #[test]
 fn seat_state_hooks_json_carries_stamp_entries() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..");
-    let body = fs::read_to_string(root.join("hooks").join("hooks.json"))
-        .unwrap_or_else(|err| panic!("hooks.json を読める: {err}"));
+    let body = tracked_hooks_json();
     let pane_arg = " --pane \\\"$TMUX_PANE\\\"";
     for needle in ["\"UserPromptSubmit\"", "\"Stop\"", "hook user-prompt-submit", "hook stop"] {
         assert_eq!(body.matches(needle).count(), 1, "{needle} はちょうど 1 回: {body}");
@@ -1586,6 +1592,21 @@ fn hook_plugin_record_is_written_with_the_digest_of_hooks_json() {
     assert!(state_file(&place.state, "hookplug").exists(), "打刻は従来どおり");
     drop(place.guard);
     clean(&[&place.repo, &place.state, &place.sock_dir, &root]);
+}
+
+/// (形 5・consumer-sync.md §17) tracked の生成 dir（`PLUGIN_DIR`）が plugin root: 生成物の command 行は
+/// `--plugin-root "$CLAUDE_PLUGIN_ROOT"` を 6 行すべてで渡したまま（hook の引数は不変）で、digest の path は root 相対の
+/// `<root>/hooks/hooks.json` のまま生成 dir の下の hooks.json を指し、その bytes の FNV-1a 64 を返す。root 直下（旧 root）には
+/// hooks.json が無く digest は `None`（**否定の枝**＝旧 root を読み込み元と読まない）。
+#[test]
+fn plugin_payload_generated_dir_is_the_plugin_root_of_the_digest() {
+    let body = tracked_hooks_json();
+    assert_eq!(body.matches(" --plugin-root \\\"$CLAUDE_PLUGIN_ROOT\\\"").count(), 6, "6 行が --plugin-root を渡す: {body}");
+    let payload = tracked_payload();
+    assert_eq!(digest::hooks_path(&payload), payload.join("hooks").join("hooks.json"), "digest の path は root 相対のまま");
+    assert_eq!(digest::hooks_digest(&payload), Some(digest::fnv1a_64(body.as_bytes())), "生成 dir の下の hooks.json の digest");
+    let old_root = payload.parent().map(Path::to_path_buf).unwrap_or_default();
+    assert_eq!(digest::hooks_digest(&old_root), None, "root 直下に hooks.json は無い");
 }
 
 /// (b) `--plugin-root` 無し・空・pane が空（tmux の外）は記録しない（file 無し・rc 0・名乗りは出る）＝極性の対。
@@ -1727,12 +1748,10 @@ fn seat_attrib_hook_session_start_and_permission_request_record_the_seat() {
     clean(&[&repo, &state, &sock_dir]);
 }
 
-/// 生成物 `hooks/hooks.json` の **6 entry すべて**が `--pane "$TMUX_PANE"` を渡す（記録の席の出所）。
+/// 生成物 hooks.json（生成 dir の下）の **6 entry すべて**が `--pane "$TMUX_PANE"` を渡す（記録の席の出所）。
 #[test]
 fn seat_attrib_hook_every_hooks_json_entry_passes_the_pane() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
-    let body = fs::read_to_string(root.join("hooks").join("hooks.json"))
-        .unwrap_or_else(|err| panic!("hooks.json を読める: {err}"));
+    let body = tracked_hooks_json();
     let pane_arg = " --pane \\\"$TMUX_PANE\\\"";
     let entries = body.matches("\"type\": \"command\"").count();
     assert_eq!(entries, 6, "entry は 6 つ（母集団・`.489` で PreCompact が +1）: {body}");

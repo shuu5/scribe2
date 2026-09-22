@@ -14,6 +14,7 @@ use crate::fleet::store;
 use crate::fleet::{replay, Registration};
 use crate::headless::{ACCOUNT_ENV, AGENT_VIEW_ENV, AGENT_VIEW_OFF, DEFAULT_CLAUDE};
 use crate::hook::{seat_name, InjectionRecord, SCHEMA};
+use crate::name::PLUGIN_DIR;
 use crate::rules::manifest::{LaunchArg, Manifest, PluginDir};
 use crate::seat::role::{Role, RoleDefaults};
 use crate::seat::{inject, role, sanitize_target, state, tmux_ok, RuleRead, StateDir};
@@ -136,11 +137,11 @@ pub fn single_model(line: &str) -> Result<(), &'static str> {
 }
 
 /// 起動行の導出（**pure**・設計 account-lifecycle.md §4・ADR-0026 §2.3）:
-/// `CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR={account_dir} claude [--model <別名> --effort <値>] --plugin-dir <anchor> [--plugin-dir <dir>…] [<value>…]`。
+/// `CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR={account_dir} claude [--model <別名> --effort <値>] --plugin-dir <anchor>/<PLUGIN_DIR> [--plugin-dir <dir>…] [<value>…]`。
 ///
 /// 穴は [`HOLE`] の 1 つだけ（[`fill_launch`] / [`Holes`] は不変）。`claude` は語（shell の PATH が解く・器は claude の
 /// 場所を持たない）。`defaults` が在れば `claude` の直後に運ぶ（[`with_defaults`]・登録 row の雛形は `None`＝旗無し）。器自身の plugin は
-/// anchor（main checkout・`plugin.json` を持つ）を積み、host 固有の plugin dir と起動引数は host の面の宣言（`[[plugin]]` /
+/// anchor（main checkout）の下の生成 dir（[`PLUGIN_DIR`]・`plugin.json` を持つ・consumer-sync.md §17 形 3）を積み、host 固有の plugin dir と起動引数は host の面の宣言（`[[plugin]]` /
 /// `[[launch-arg]]`・宣言順）から写す（C10.2）。雛形 file は読まない・書かない。値の中の空白は解釈しない（shell が読む字面のまま）。
 pub fn derive_launch(anchor: &Path, plugins: &[PluginDir], args: &[LaunchArg], defaults: Option<RoleDefaults>) -> String {
     let mut words = vec![
@@ -148,7 +149,7 @@ pub fn derive_launch(anchor: &Path, plugins: &[PluginDir], args: &[LaunchArg], d
         format!("{ACCOUNT_ENV}={HOLE}"),
         DEFAULT_CLAUDE.to_owned(),
         "--plugin-dir".to_owned(),
-        anchor.display().to_string(),
+        anchor.join(PLUGIN_DIR).display().to_string(),
     ];
     for plugin in plugins {
         words.push("--plugin-dir".to_owned());
@@ -434,8 +435,26 @@ mod tests {
         assert!(!before_deadline(now, None), "deadline が無い周は待たない");
     }
 
+    /// (c・形 3・consumer-sync.md §17) 起動行の 1 つ目の `--plugin-dir` は anchor の下の生成 dir（[`super::PLUGIN_DIR`]）で anchor
+    /// そのものではなく（**否定の枝**）、2 つ目以降（`[[plugin]]` の dir → `[[launch-arg]]` の value・宣言順）と雛形の形（穴 1 つ・
+    /// 前置の env 2 つ → `claude`）は不変。
+    #[test]
+    fn plugin_payload_first_plugin_dir_is_the_generated_dir_under_the_anchor() {
+        let host = "schema = 1\n\n[[plugin]]\ndir = \"/opt/p2\"\n\n[[launch-arg]]\nvalue = \"--permission-mode\"\n";
+        let manifest = Manifest::parse(host).unwrap_or_default();
+        let line = derive_launch(Path::new("/repo/main"), manifest.plugins(), manifest.launch_args(), None);
+        let words: Vec<&str> = line.split(' ').collect();
+        let payload = Path::new("/repo/main").join(super::PLUGIN_DIR).display().to_string();
+        assert_eq!(words.get(..3), Some(&["CLAUDE_CODE_DISABLE_AGENT_VIEW=1", "CLAUDE_CONFIG_DIR={account_dir}", "claude"][..]), "{line}");
+        assert_eq!(words.get(3..5), Some(&["--plugin-dir", payload.as_str()][..]), "1 つ目は anchor の下の生成 dir: {line}");
+        assert_ne!(words.get(4).copied(), Some("/repo/main"), "anchor そのものではない: {line}");
+        assert_eq!(words.get(5..), Some(&["--plugin-dir", "/opt/p2", "--permission-mode"][..]), "2 つ目以降は宣言順のまま: {line}");
+        assert_eq!(line.matches(HOLE).count(), 1, "穴は 1 つ");
+        assert_eq!(line.matches(&format!("/{}", super::PLUGIN_DIR)).count(), 1, "生成 dir を足すのは 1 つ目の語だけ: {line}");
+    }
+
     /// 起動行の導出（契約 (6f)・account-lifecycle.md §4）: 穴は `{account_dir}` の 1 つ（[`fill_launch`] がそのまま埋める）・
-    /// 順序は agent view off → 口座の env → `claude` → anchor の `--plugin-dir` → `[[plugin]]` の dir（宣言順）→
+    /// 順序は agent view off → 口座の env → `claude` → anchor の下の生成 dir の `--plugin-dir` → `[[plugin]]` の dir（宣言順）→
     /// `[[launch-arg]]` の value（宣言順）。plugin 0 件・引数 0 件は anchor の `--plugin-dir` だけで終わる。後半は model の運び（`s2-07l.313`）。
     #[test]
     fn seat_launch_derive_line_orders_anchor_plugins_and_args_with_one_hole() {
@@ -446,27 +465,27 @@ mod tests {
         let line = derive_launch(Path::new("/repo/main"), manifest.plugins(), manifest.launch_args(), None);
         assert_eq!(
             line,
-            "CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR={account_dir} claude --plugin-dir /repo/main \
+            "CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR={account_dir} claude --plugin-dir /repo/main/plugin \
              --plugin-dir /opt/p2 --plugin-dir /opt/p1 --permission-mode bypassPermissions",
             "宣言順（p2 → p1・--permission-mode → bypassPermissions）"
         );
         assert_eq!(line.matches(HOLE).count(), 1, "穴は 1 つ");
         assert_eq!(
             fill_launch(&line, "/state/accounts/a2").as_deref(),
-            Ok("CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR=/state/accounts/a2 claude --plugin-dir /repo/main \
+            Ok("CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR=/state/accounts/a2 claude --plugin-dir /repo/main/plugin \
                 --plugin-dir /opt/p2 --plugin-dir /opt/p1 --permission-mode bypassPermissions"),
             "穴は既存の fill_launch で埋まる"
         );
         assert_eq!(with_agent_view_off(&line), line, "前置は既に在る（二重にしない）");
         let bare = derive_launch(Path::new("/repo/main"), &[], &[], None);
-        assert_eq!(bare, "CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR={account_dir} claude --plugin-dir /repo/main");
+        assert_eq!(bare, "CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR={account_dir} claude --plugin-dir /repo/main/plugin");
         // 既定の対（C10・§20 の約束 1）: `claude` の直後に `--model <別名>` → `--effort <値>` の順で 1 つずつ・None は従来の行と同一・
         // 雛形へ挟むのも同じ位置（`claude` の語が無い雛形は末尾）・旗ごとに 2 つの行だけを旗ごとの理由で断る（約束 2）。
         let pair = RoleDefaults { model: Model::Fable, effort: Effort::High };
         let fable = derive_launch(Path::new("/repo/main"), &[], &[], Some(pair));
         assert_eq!(
             fable,
-            "CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR={account_dir} claude --model fable --effort high --plugin-dir /repo/main"
+            "CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR={account_dir} claude --model fable --effort high --plugin-dir /repo/main/plugin"
         );
         assert_eq!(with_defaults(&bare, Some(pair)), fable, "導出の後に運んでも同じ行");
         assert_eq!(
@@ -529,7 +548,7 @@ mod tests {
         assert_eq!(seat_defaults(&good, role, Some(Model::Opus)), Err(REASON_MODEL_MISMATCH), "食い違いは断る");
         assert_eq!(
             seat_defaults(&good, role, None).map(|found| derive_launch(Path::new("/r"), &[], &[], Some(found))).as_deref(),
-            Ok("CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR={account_dir} claude --model fable --effort high --plugin-dir /r"),
+            Ok("CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR={account_dir} claude --model fable --effort high --plugin-dir /r/plugin"),
             "読める周だけ起動行を組む"
         );
     }

@@ -9,7 +9,7 @@
 use crate::fleet::json_tree::{self, Tree};
 use crate::fleet::{account_dir, effective_accounts, replay, store, State};
 use crate::hook::vessel::digest::{self, PluginRecord};
-use crate::name::NAME;
+use crate::name::{NAME, PLUGIN_DIR};
 use crate::rules::manifest::Manifest;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -69,7 +69,8 @@ pub enum Drift {
     Plugin,
     /// 帳簿の `gitCommitSha` ≠ vessel repo の HEAD（`source=install` を含む行だけ）。
     Ledger,
-    /// 記録の root が checkout で、かつ同じ path の帳簿にも器が在る（hook が二重）。
+    /// 記録の root が checkout の生成 dir（`<repo>/<PLUGIN_DIR>`・consumer-sync.md §17 形 5）で、かつ同じ path の帳簿にも器が
+    /// 在る（hook が二重）。
     Dual,
     /// 記録が無い・読めない（`none` に潰さない）。
     Unrecorded,
@@ -260,7 +261,7 @@ fn holds(word: Drift, consumer: &Consumer, head: &Head, vessel: Option<&Path>) -
         Drift::Ledger => matches!((head, &consumer.ledger), (Head::Sha(sha), Some(ledger)) if sha != ledger),
         Drift::Dual => {
             consumer.source != Source::Launch
-                && recorded.zip(vessel).is_some_and(|((root, _, _), repo)| same_dir(Path::new(root), repo))
+                && recorded.zip(vessel).is_some_and(|((root, _, _), repo)| same_dir(Path::new(root), &repo.join(PLUGIN_DIR)))
         }
         Drift::Unrecorded => recorded.is_none(),
     }
