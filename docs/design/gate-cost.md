@@ -757,6 +757,23 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
 - 子側で可視性を上げたのは 2 名（`place_diff` と `aimed_run`・親の本体が呼ぶ 5 名のうち元が private の 2 つ）で、残りの 3 名と歯だけが引く 6 名は元から `pub`。子が親から引く名は 12 個（上の 10 個から `crate::emit` の path 呼びと `ExitCode` の std の use を除き、`parse_outcomes` / `measured` / `without_outcomes` / `outside_token` を足した数）。
 - 移した群の doc の intra-doc link のうち親の再輸出を指す 1 つ（`aimed_args` の doc の `measure_args`）も `super::` の path 形に直した（コメント行・hash の外）。
 
+## 41. lens に渡す diff から「rename の対の path 置換だけの docs の hunk」を省く — 移動した file を名指す契約表の行の書き換えが cap を焼き尽くす（契約表の行 ah・`s2-07l.198.2` の便 153839Z の Gated INCONCLUSIVE）
+
+- 出所（orchestrator の実測 2026-09-22 16:0xZ・verified）: `s2-07l.198.2`（境界 crate の新設・core-boundary.md 行 b）の便 153839Z は verify 9/9 rc 0 のまま Gated INCONCLUSIVE（evidence「diff 792551 byte が cap 150000 を超えた」・`# lens-input=diff reason=items-differ`）。diff の内訳は **docs/design の書き換えが 754352 byte・code 側が 38199 byte**。docs 側の変更行は pipeline.md 99・contract-source.md 60・gate-cost.md 56・seat-roles.md 37・dispatcher.md 28・account-lifecycle.md 15・account-autonomy.md 14・consumer-sync.md 11（各 -N/+N で対）で、その 1 行は契約表の 1 row（write-set と done を 1 行に持つ・1 KB 前後）である。書き換えの中身は rename 49 file（tests 45・src 4）の **旧 path → 新 path の置換だけ**（新 path の出現 699 か所が tests/e2e の移動由来）。lens が読む価値の無い機械置換が cap の 5 倍を占め、code 側だけなら cap の 4 分の 1 で収まる。
+- 現物（main 50832c9・verified）: `crates/scribe2/src/pipe/gate/lens.rs` の `lens_input` は diff の字面と両側の file の読みを `crate::pipe::move_proof` の `judge` へ渡し、`LensInput`（diff か純移動の要約）を返す。`crates/scribe2/src/pipe/gate.rs` の `measure` は生 diff と `LensInput` を `Measured` に持ち、`decide` は `LensInput::body`（diff の周は生 diff そのもの）の byte を rules 行 `gate.token_cap` と比べて超えれば INCONCLUSIVE、通れば同じ本文を lens の stdin へ渡す。`crates/scribe2/src/pipe/gate/record.rs` の `notice_line` は run dir の `verify.stderr.log` に `# lens-input=<kind> reason=<語>` を残し、gate の stdout の判定行は `bytes=` に lens へ渡した本文の byte を出す。`verdict.json` の `diff_bytes` は生 diff の byte（NFR1 の記録）。git の diff は rename を `rename from <旧 path>` / `rename to <新 path>` の header の対で運ぶ（100% の rename は `---` / `+++` を持たない・[pipeline.md](./pipeline.md) §53 の flip-check と同じ根）。
+- 形（番号は done と 1:1）:
+  1. **pure な 1 本**（置き場は `crates/scribe2/src/pipe/gate/lens.rs`・入力は diff の字面だけ・git を呼ばない）: diff の header から rename の対（旧 path, 新 path）を集め、`+++ b/` 側の path が `docs/design/` 配下の `.md` である file の各 hunk について、`-` 行の列に全ての対の置換（旧 path の字面 → 新 path・長い旧 path から順）を当てた結果が `+` 行の列と**順序も本数も同じ**なら、その hunk の本文（`-` / `+` / context の行）を **1 行の印**（`~ rename の置換だけの hunk（-N/+N 行）を省いた`）に置き換える。1 行でも合わなければその hunk は逐語のまま。`diff --git` / `---` / `+++` / `@@` の header は残す。戻りは（省いた後の本文, 省いた hunk 数, 省いた行数）。rename の対が 0 の diff は本文も件数もそのまま（0/0）。
+  2. `measure` は `LensInput` が diff の周だけこの 1 本を通し、**生 diff と lens 用の本文の両方**を `Measured` に持つ。`decide` の cap の照合と lens の stdin は lens 用の本文で、`verdict.json` の `diff_bytes`・`patch_id`・検出線の持ち越しは生 diff のまま（記録の意味を変えない・NFR1）。純移動の要約の周は 1 字も変わらない。
+  3. 通知: 省いた hunk が 1 つ以上の周だけ `verify.stderr.log` の行を `# lens-input=diff reason=<語> elided=<hunk 数>/<行数>` にし、0 の周は従来の字面のまま（既存の歯の pin を動かさない）。gate の stdout の `bytes=` は lens に渡した本文の byte（省いた後）。呼び手の端末へ出す `pipe: lens-input=diff reason=<語>` の 1 行は触らない。
+  4. 省く面は `docs/design/` の `.md` に閉じる。code file（`.rs` / `.toml` 等）の同じ置換（`use` / `#[path]` / Cargo の member）は lens が読む対象なので逐語のまま。
+  5. 歯（e2e・`crates/scribe2/tests/e2e/pipe/gate.rs`・接頭辞 `pipe_gate_elide_`・既存の記録 lens と rules の写しの fixture を使う）: (a) rename 1 本 + その旧 path を write-set に持つ docs/design の md 1 行の置換 → lens の stdin に印が在り置換後の row が無く、通知に `elided=1/2`、`bytes=` が生 diff より小さく、`verdict.json` の `diff_bytes` は生 diff の byte のまま。(b) 同じ hunk に path 以外の 1 語の差も在る → 逐語のまま・通知に `elided=` が無い。(c) 同じ置換が `.rs` の hunk に在る → 逐語のまま。(d) rename の header が無い diff → 従来の字面と `bytes=` のまま（既存の `assert_sends_diff` 系の歯が母集団）。(e) rules の写しで cap を小さくし、生 diff は cap 超・省いた本文は cap 内 → INCONCLUSIVE でなく lens が呼ばれ verdict が lens の値（本節の出所の形）。変異の A/B: 置換の一致の判定を常に真にすると (b)(c) が落ち、常に偽にすると (a)(e) が落ちる。
+- 触らない: `crate::pipe::move_proof`（`judge` / `NotPure` / 要約の形）・rules 行 `gate.token_cap` の値・機械検証の段と判定順（[pipeline.md](./pipeline.md) §5.3）・検出線（§28 / §40）・lens の起動の形（`{contract}` / `{worktree}` / stdin）・`verdict.json` の key 列。
+- 却下:
+  - **`gate.token_cap` を一時的に上げる**（`s2-07l.265` / `s2-07l.375` の型・1,000,000）: 値の線と裁定が動く（A2）うえ、gate を通った lens 入力の最大は 116 KB（verdict.json 244 件の実測）で 792 KB を lens が読んだ前例が無い。読めても 754 KB は機械置換で、審査の質を薄める。
+  - **docs の path 書き換えを別 PR に割る**: 移動の前に新 path を書けば CI の名の検査が落ち（base に無い file）、後に書けば移動の PR が同じ検査で落ちる＝同じ PR にしか置けない。
+  - **`docs/design/` を lens の入力から丸ごと外す**: 契約表の done や § の散文の変更は lens が読む対象（契約適合の材料）。省くのは置換で説明が付く hunk だけに閉じる。
+  - **純移動の要約（[pipeline.md](./pipeline.md) §5.3）に docs の置換を載せる**: 要約は item の多重集合が一致した周にしか組めず、本便のように code 側に差が在る周（items-differ）には届かない。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -1089,4 +1106,14 @@ write-set = ["-crates/xtask/src/mutantsdiff.rs", "+crates/xtask/src/mutantsdiff/
 verify = ["cargo nextest run -p xtask --no-tests=fail mutants_targets_ mutants_in_diff_", "cargo nextest run -p xtask --no-tests=fail mutants_diff_fail_fast_ mutants_diff_teeth_ mutants_diff_outside_"]
 size = "S"
 done = "(1) 的を絞った周の 15 item（的の型・5 値・的ごとの分類・的の一覧の読み・差分の置き・引数の組み立て・的の周の後段）が + の file に名・本文・順序のまま在り、純移動の機械証明の残差が 0 (2) 親に増えた item は mod 宣言 1 つと use 文 2 つ（本体が呼ぶ 5 名の素の use と、歯だけが引く 6 名の #[cfg(test)] 付き use）だけで、run と judged と own_baseline の本体は 1 字も変わらず、#[cfg(test)] の use は歯の区間の直前に在って file の最初の行頭 #[cfg(test)] が src の本体の全 item より後に在り、cfg(test) の無い build で unused_imports が 0 件 (3) 歯の区間の #[test] が便の前後とも 20 本で 1 本も動かず、use super の名の列が 1 字も変わらず、mutants_targets_ の 5 本と mutants_in_diff_ の 2 本と mutants_diff_fail_fast_ の 4 本と mutants_diff_teeth_ の 5 本と mutants_diff_outside_ の 3 本が全部緑 (4) 札 flip-check: moved が親の歯の区間の先頭と + の file の先頭に対で在り (5) 親に残る diagnosed の doc の参照が子の path 形になり、本文の行は 1 字も変わらない (6) 親の正規化行数が 1458 から 1163 前後へ落ちて余地が 300 以上になり、判定行の 8 token と rc の極性は 1 字も変わらない"
+[[contract]]
+id = "ah"
+title = "lens に渡す diff から rename の対の path 置換だけの docs/design の hunk を 1 行の印に畳む — 生 diff の記録（diff_bytes / patch_id）は変えず、cap の照合と lens の stdin だけ畳んだ本文にし、省いた周は通知に elided=<hunk 数>/<行数> を残す"
+req = ["FR9", "NFR1"]
+section = "41"
+write-set = ["crates/scribe2/src/pipe/gate/lens.rs", "crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/gate/record.rs", "crates/scribe2/tests/e2e/pipe/gate.rs", "docs/design/gate-cost.md"]
+verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_gate_elide_"]
+size = "S"
+done = "(1) diff の字面だけを読む pure な 1 本が、rename の header の対を集め、docs/design 配下の .md の hunk のうち - 行の列に置換を当てた結果が + 行の列と順序も本数も同じものだけを 1 行の印に置き換え、（本文, hunk 数, 行数）を返し、対が 0 の diff は 0/0 で本文そのまま (2) measure が diff の周だけそれを通して生 diff と lens 用の本文の両方を持ち、cap の照合と lens の stdin は lens 用の本文、verdict.json の diff_bytes と patch_id と検出線の持ち越しは生 diff のままで、純移動の要約の周は 1 字も変わらない (3) 省いた hunk が 1 つ以上の周だけ verify.stderr.log の行に elided=<hunk 数>/<行数> が付き、0 の周は従来の字面のままで既存の歯が全部緑、判定行の bytes= は畳んだ本文の byte (4) .rs の hunk の同じ置換は逐語のまま渡る (5) pipe_gate_elide_ の歯 5 本〔(a) 置換だけの docs は畳む・(b) 1 語の差が在れば逐語・(c) .rs は逐語・(d) rename 無しは従来の字面・(e) 生 diff が cap 超でも畳んだ本文が cap 内なら lens が呼ばれる〕が緑で、一致の判定を常に真にすると (b)(c) が、常に偽にすると (a)(e) が落ちる"
+
 <!-- contracts:end -->
