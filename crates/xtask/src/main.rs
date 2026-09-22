@@ -166,10 +166,10 @@ mod tests {
             "5 つの数を outcomes.json から読む（範囲は行を組むときに呼び手が渡す）"
         );
         // **1 行の形**まで測る（読み取れても書式が崩れれば報告の額面が読めない）。
-        let line = counts.line(&scope_of(PROBE_SCOPE));
+        let line = counts.line(&scope_of(PROBE_SCOPE), &[]);
         assert_eq!(
             line,
-            "mutants-diff: total=18 caught=12 missed=2 unviable=3 timeout=1 scope=probe-pkg-7f3 teeth=-",
+            "mutants-diff: total=18 caught=12 missed=2 unviable=3 timeout=1 scope=probe-pkg-7f3 teeth=- outside=-",
             "1 行の形は固定"
         );
         // ★**不成立は撃墜と別**（rc 101 を撃墜に数えないのと同じ極性）。1 行に別々に出る。
@@ -209,20 +209,20 @@ mod tests {
     #[test]
     fn mutants_diff_line_names_the_scope_it_was_given() {
         let other = "probe-pkg-9c1";
-        let first = parse_outcomes(MISSED_TWO).expect("fixture は読める").line(&scope_of(PROBE_SCOPE));
-        let second = parse_outcomes(MISSED_TWO).expect("fixture は読める").line(&scope_of(other));
+        let first = parse_outcomes(MISSED_TWO).expect("fixture は読める").line(&scope_of(PROBE_SCOPE), &[]);
+        let second = parse_outcomes(MISSED_TWO).expect("fixture は読める").line(&scope_of(other), &[]);
         assert!(
-            first.ends_with(&format!(" scope={PROBE_SCOPE} teeth=-")),
-            "渡した名前を scope= に出す（その後ろは teeth= だけ・§34）: {first}"
+            first.ends_with(&format!(" scope={PROBE_SCOPE} teeth=- outside=-")),
+            "渡した名前を scope= に出す（その後ろは teeth= と outside= だけ・§34 / §39）: {first}"
         );
-        assert!(second.ends_with(&format!(" scope={other} teeth=-")), "別の名前も同じ形で出す: {second}");
+        assert!(second.ends_with(&format!(" scope={other} teeth=- outside=-")), "別の名前も同じ形で出す: {second}");
         assert_ne!(first, second, "scope だけが違う 2 行は違う行になる");
-        // 既存 5 token の名前・順序は据え置き（scope はその後ろ・teeth は末尾）。
+        // 既存 5 token の名前・順序は据え置き（scope はその後ろ・teeth・outside は末尾）。
         let tags: Vec<&str> = first.split(' ').skip(1).filter_map(|t| t.split_once('=').map(|(k, _)| k)).collect();
-        assert_eq!(tags, ["total", "caught", "missed", "unviable", "timeout", "scope", "teeth"], "{first}");
+        assert_eq!(tags, ["total", "caught", "missed", "unviable", "timeout", "scope", "teeth", "outside"], "{first}");
         // 「測る対象が無い」周の行も範囲を名乗る（unmeasured の経路は行を出さないので対象外）。
-        let none = without_outcomes(true).expect("rc 0 なら測る対象が無いだけ").line(&scope_of(other));
-        assert!(none.ends_with(&format!(" scope={other} teeth=-")), "{none}");
+        let none = without_outcomes(true).expect("rc 0 なら測る対象が無いだけ").line(&scope_of(other), &[]);
+        assert!(none.ends_with(&format!(" scope={other} teeth=- outside=-")), "{none}");
         // `-p` の直後に来るのは渡した名前そのもの（literal でも core の NAME でもない）。
         // `--in-diff` と `-o` も対のまま在る（落とすと測った結果を読まずに total=0 へ化ける）。
         for scope in [PROBE_SCOPE, other] {
@@ -354,8 +354,8 @@ mod tests {
         // 値に字面を置いただけの fixture では深さ条件を消しても緑＝空虚な歯だった）。
         let counts = parse_outcomes(MISSED_NONE).expect("fixture は読める");
         assert_eq!(
-            counts.line(&scope_of(PROBE_SCOPE)),
-            "mutants-diff: total=23 caught=23 missed=0 unviable=0 timeout=0 scope=probe-pkg-7f3 teeth=-",
+            counts.line(&scope_of(PROBE_SCOPE), &[]),
+            "mutants-diff: total=23 caught=23 missed=0 unviable=0 timeout=0 scope=probe-pkg-7f3 teeth=- outside=-",
             "入れ子の同名 key を 1 つも拾わない"
         );
     }
@@ -435,8 +435,8 @@ mod tests {
         let ok = diagnosed(measured(survivors, false), never).expect("生存が在る非 0 は測定");
         assert_eq!(ok.missed, 6, "Ok の中身は不変");
         let none = diagnosed(without_outcomes(true), never).expect("rc 0 は測る対象が無いだけ");
-        assert_eq!(none.line(&scope_of(PROBE_SCOPE)), Counts::default().line(&scope_of(PROBE_SCOPE)));
-        assert!(!none.line(&scope_of(PROBE_SCOPE)).contains("baseline.log"), "緑の行に診断は載らない");
+        assert_eq!(none.line(&scope_of(PROBE_SCOPE), &[]), Counts::default().line(&scope_of(PROBE_SCOPE), &[]));
+        assert!(!none.line(&scope_of(PROBE_SCOPE), &[]).contains("baseline.log"), "緑の行に診断は載らない");
     }
 
     #[test]
@@ -495,8 +495,8 @@ mod tests {
         // 出力 dir を作らない。これは「**測る対象が無い**」であって「測れなかった」ではない。
         let counts = without_outcomes(true).expect("道具が rc 0 なら測る対象が無いだけ");
         assert_eq!(
-            counts.line(&scope_of(PROBE_SCOPE)),
-            "mutants-diff: total=0 caught=0 missed=0 unviable=0 timeout=0 scope=probe-pkg-7f3 teeth=-",
+            counts.line(&scope_of(PROBE_SCOPE), &[]),
+            "mutants-diff: total=0 caught=0 missed=0 unviable=0 timeout=0 scope=probe-pkg-7f3 teeth=- outside=-",
             "母集団を額面に出す（0 件の緑と読み違えないため）"
         );
         // **門でも通る**——測る対象が無い周を赤にすると、docs-only 便が恒久 FAIL になる。

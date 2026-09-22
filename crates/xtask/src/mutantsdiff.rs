@@ -45,18 +45,71 @@ impl Counts {
     /// 末尾の `teeth=<-|n>`（設計 gate-cost.md §34 約束 3・行 z）は mutant の test に掛けた filter の
     /// 語の数（`--teeth` 無し = `-`・空 = `0`）。これも [`Scope`] から読む＝`-E` に渡した語と別の数を
     /// 行に書く形は組めない。
-    pub fn line(&self, scope: &Scope) -> String {
+    ///
+    /// さらに末尾の `outside=<-|dir,…>`（設計 gate-cost.md §39 形 3・行 af）は差分が触れた member のうち測る範囲の
+    /// 外の dir（[`outside_of`]）。先頭の 7 token は 1 字も変えずに後ろへ 1 語だけ足す＝`total=0` の周が「生存 0」か
+    /// 「範囲の外だけを触った」かを行の字面で読み分ける。**記録であって門ではない**（rc は動かない）。
+    pub fn line(&self, scope: &Scope, outside: &[String]) -> String {
         format!(
-            "mutants-diff: total={} caught={} missed={} unviable={} timeout={} scope={} teeth={}",
+            "mutants-diff: total={} caught={} missed={} unviable={} timeout={} scope={} teeth={} {}",
             self.total,
             self.caught,
             self.missed,
             self.unviable,
             self.timeout,
             scope.name(),
-            scope.teeth()
+            scope.teeth(),
+            outside_token(outside)
         )
     }
+}
+
+/// 差分が触れた member の dir（root 相対・`members` の宣言順・重複無し・設計 gate-cost.md §39 形 1）。**pure**。
+///
+/// `diff` は unified diff の本文で、`--- a/<path>` と `+++ b/<path>` の行から path を取る（`/dev/null` は数えない＝
+/// 追加も削除も片側の path で拾う）。path が member の dir と一致するか `<dir>/` で始まるときだけその member に数え、
+/// どの member にも属さない path（設計 doc など）は数えない。同じ member の 2 file は 1 件に畳む。
+pub fn touched_members(diff: &str, members: &[String]) -> Vec<String> {
+    let paths: Vec<&str> = diff
+        .lines()
+        .filter_map(|line| line.strip_prefix("--- a/").or_else(|| line.strip_prefix("+++ b/")))
+        .map(|path| path.trim_end_matches('\t').trim_end())
+        .collect();
+    let within = |path: &str, dir: &str| path == dir || path.strip_prefix(dir).is_some_and(|rest| rest.starts_with('/'));
+    let mut touched: Vec<String> = Vec::new();
+    for dir in members {
+        let dir = dir.trim_end_matches('/');
+        if dir.is_empty() || touched.iter().any(|found| found == dir) {
+            continue;
+        }
+        if paths.iter().any(|path| within(path, dir)) {
+            touched.push(dir.to_owned());
+        }
+    }
+    touched
+}
+
+/// 触れた member（[`touched_members`]）から測る範囲の dir（core）を除いた残り＝「触れたのに測っていない面」
+/// （設計 gate-cost.md §39 形 2・順序は入力のまま）。
+pub fn outside_of(touched: &[String], core: &str) -> Vec<String> {
+    let core = core.trim_end_matches('/');
+    touched.iter().filter(|dir| dir.as_str() != core).cloned().collect()
+}
+
+/// 判定行の末尾の 1 語（`outside=` の後ろに `,` で結ぶ・0 件は `-`・設計 gate-cost.md §39 形 3）。
+fn outside_token(outside: &[String]) -> String {
+    if outside.is_empty() {
+        return "outside=-".to_owned();
+    }
+    format!("outside={}", outside.join(","))
+}
+
+/// 範囲の外の dir を差分の file から導く（読めない file は空の差分として扱う＝記録であって門ではない・§39 形 4）。
+fn outside_in(diff_path: &Path, layout: &crate::check::Layout) -> Vec<String> {
+    let diff = std::fs::read(diff_path).map(|bytes| String::from_utf8_lossy(&bytes).into_owned()).unwrap_or_default();
+    let relative = |dir: &Path| dir.strip_prefix(&layout.root).unwrap_or(dir).to_string_lossy().into_owned();
+    let members: Vec<String> = layout.member_dirs.iter().map(|dir| relative(dir)).collect();
+    outside_of(&touched_members(&diff, &members), &relative(&layout.core_dir))
 }
 
 pub use scope::{measure_args, Pace, Scope};
@@ -269,15 +322,17 @@ impl Aimed {
     }
 
     /// stdout へ出す 1 行: `total=<的の本数>` と 5 値を宣言順に並べ、`scope=` / `teeth=` は従来の行と同じ・末尾の
-    /// `population=targets` が「diff の追加行でなく的を母集団にした」ことを名乗る。
-    pub fn line(&self, scope: &Scope) -> String {
+    /// `population=targets` が「diff の追加行でなく的を母集団にした」ことを名乗る。その後ろに従来の行と同じ
+    /// `outside=` の 1 語（設計 gate-cost.md §39 形 3）。
+    pub fn line(&self, scope: &Scope, outside: &[String]) -> String {
         let kinds: Vec<String> = OUTCOMES.iter().map(|kind| format!("{}={}", kind.as_str(), self.count(*kind))).collect();
         format!(
-            "mutants-diff: total={} {} scope={} teeth={} population=targets",
+            "mutants-diff: total={} {} scope={} teeth={} population=targets {}",
             self.0.len(),
             kinds.join(" "),
             scope.name(),
-            scope.teeth()
+            scope.teeth(),
+            outside_token(outside)
         )
     }
 }
@@ -790,8 +845,10 @@ pub fn run(args: &[String]) -> ExitCode {
         return unmeasured("mutants-diff: cargo mutants を起動できない（測れていない・rc 2）");
     };
     let outcomes = out.join("mutants.out").join("outcomes.json");
+    // **範囲の外を名指す**（設計 gate-cost.md §39）: 差分が触れた member のうち core の外の dir。記録であって門ではない。
+    let outside = outside_in(&diff_path, &layout);
     if let Some(found) = &targets {
-        return aimed_run(&root, &out.join("mutants.out"), found, status.success(), (&scope, &log_path));
+        return aimed_run(&root, &out.join("mutants.out"), found, status.success(), (&scope, &log_path, &outside));
     }
     let counts = match std::fs::read_to_string(&outcomes) {
         // 読めた周も **道具の rc を見る**（[`measured`]・baseline 失敗を緑にしない）。
@@ -808,7 +865,7 @@ pub fn run(args: &[String]) -> ExitCode {
         Err(reason) => return unmeasured(&format!("mutants-diff: {reason}")),
     };
     // **`-p` に渡した名前そのもの**を行に持ち回る（[`Scope`] は literal から作れない）。
-    crate::emit(&counts.line(&scope));
+    crate::emit(&counts.line(&scope, &outside));
     judged(&root, &counts)
 }
 
@@ -826,7 +883,13 @@ fn judged(root: &Path, counts: &Counts) -> ExitCode {
 /// 的を絞った周の後段（設計 gate-cost.md §16 (2)）: 出力 dir の `outcomes.json` と 4 つの一覧を読んで的ごとに分類し
 /// （[`aimed_of`]）、判定行 [`Aimed::line`] を出す。読めない周は従来の周と同じく `baseline.log` の末尾を添えて rc 2
 /// （[`diagnosed`]）。rc の極性は従来と同じ `R-C12-1` の 1 本（生存 1 本以上 ∧ deny の周だけ rc 1・absent は赤にしない）。
-fn aimed_run(root: &Path, dir: &Path, targets: &[Target], succeeded: bool, (scope, log): (&Scope, &Path)) -> ExitCode {
+fn aimed_run(
+    root: &Path,
+    dir: &Path,
+    targets: &[Target],
+    succeeded: bool,
+    (scope, log, outside): (&Scope, &Path, &[String]),
+) -> ExitCode {
     let read = |name: &str| match std::fs::read_to_string(dir.join(name)) {
         Ok(text) => Ok(Some(text)),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -847,7 +910,7 @@ fn aimed_run(root: &Path, dir: &Path, targets: &[Target], succeeded: bool, (scop
         Ok(found) => found,
         Err(reason) => return unmeasured(&format!("mutants-diff: {reason}")),
     };
-    crate::emit(&aimed.line(scope));
+    crate::emit(&aimed.line(scope, outside));
     let counts = Counts {
         total: u64::try_from(aimed.0.len()).unwrap_or(u64::MAX),
         caught: aimed.count(Outcome::Caught),
@@ -953,8 +1016,8 @@ fn write_diff(root: &Path, base: &str, path: &Path) -> Result<(), String> {
 mod tests {
     use super::{
         aimed_args, aimed_of, baseline_args, diff_of, place_diff, baseline_build_args, baseline_judged, measure_args, mutant_timeout_s,
-        targets_in, targets_of, teeth_of, Counts, Outcome, Pace, Target, BASELINE_TAIL_HEADING, OUTCOMES,
-        TEETH_MALFORMED,
+        outside_of, targets_in, targets_of, teeth_of, touched_members, Aimed, Counts, Outcome, Pace, Target,
+        BASELINE_TAIL_HEADING, OUTCOMES, TEETH_MALFORMED,
     };
     use std::path::Path;
 
@@ -1128,8 +1191,8 @@ mod tests {
         for (teeth, tail) in [(None, "-"), (Some(&empty[..]), "0"), (Some(&two[..]), "2")] {
             let (_, scope) = measure_args(Path::new("d"), Path::new("o"), "probe-pkg-2e", TEETH_PACE, teeth);
             assert_eq!(
-                counts.line(&scope),
-                format!("mutants-diff: total=9 caught=5 missed=2 unviable=1 timeout=1 scope=probe-pkg-2e teeth={tail}"),
+                counts.line(&scope, &[]),
+                format!("mutants-diff: total=9 caught=5 missed=2 unviable=1 timeout=1 scope=probe-pkg-2e teeth={tail} outside=-"),
                 "teeth={tail}"
             );
         }
@@ -1169,8 +1232,8 @@ mod tests {
         assert_eq!(values.iter().sum::<u64>(), 3, "5 値の和 = 的の本数");
         let (_, scope) = measure_args(Path::new("d"), Path::new("o"), "probe-pkg-5c", TEETH_PACE, None);
         assert_eq!(
-            aimed.line(&scope),
-            "mutants-diff: total=3 caught=1 missed=1 unviable=0 timeout=0 absent=1 scope=probe-pkg-5c teeth=- population=targets"
+            aimed.line(&scope, &[]),
+            "mutants-diff: total=3 caught=1 missed=1 unviable=0 timeout=0 absent=1 scope=probe-pkg-5c teeth=- population=targets outside=-"
         );
     }
 
@@ -1288,5 +1351,89 @@ mod tests {
         assert!(diff_of(&argv("--base main --diff --jobs 2")).is_err(), "値の位置に次の flag");
         let refused = diff_of(&argv("--base main --diff /nonexistent/probe-population-9f"));
         assert!(refused.as_ref().is_err_and(|reason| reason.contains("rc 2")), "読めない file: {refused:?}");
+    }
+
+    // ---- 範囲の外を名指す 1 語（設計 gate-cost.md §39・行 af・接頭辞 `mutants_diff_outside_`）----
+
+    /// 宣言順の member の dir（core・task runner・3 つ目）。字面は実在の配置と衝突しない probe の名。
+    fn outside_members() -> Vec<String> {
+        ["probe-crates/core-4a", "probe-crates/runner-4a", "probe-crates/third-4a"].iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    /// 1 file 分の diff の見出し（`--- a/` と `+++ b/`）。
+    fn file_diff(path: &str) -> String {
+        format!("diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -1,0 +2,1 @@\n+x\n")
+    }
+
+    /// core だけ・task runner だけ・両方・member の外だけ、の 4 形の diff（両方の形は runner を先に書く）。
+    fn outside_shapes() -> [String; 4] {
+        let core = file_diff("probe-crates/core-4a/src/k.rs");
+        let runner = file_diff("probe-crates/runner-4a/src/main.rs");
+        let doc = file_diff("docs/design/probe-4a.md");
+        [core.clone(), runner.clone(), format!("{runner}{core}"), doc]
+    }
+
+    /// §39 (a) 形 1: 4 形で触れた member の dir が宣言順・重複無しで出る。member の外（設計 doc・名の接頭辞だけが
+    /// 同じ dir）は数えず、同じ member の 2 file・追加と削除の片側 path は 1 件に畳む。
+    #[test]
+    fn mutants_diff_outside_touched_members_are_declared_order_without_duplicates() {
+        let members = outside_members();
+        assert_eq!(members.len(), 3, "母集団 = member dir 3 件");
+        let expected: [&[&str]; 4] = [
+            &["probe-crates/core-4a"],
+            &["probe-crates/runner-4a"],
+            &["probe-crates/core-4a", "probe-crates/runner-4a"],
+            &[],
+        ];
+        for (diff, want) in outside_shapes().iter().zip(expected) {
+            assert_eq!(touched_members(diff, &members), want, "{diff}");
+        }
+        let twice = format!(
+            "{}{}diff --git a/probe-crates/core-4a/new.rs b/probe-crates/core-4a/new.rs\n--- /dev/null\n+++ b/probe-crates/core-4a/new.rs\n\
+             --- a/probe-crates/third-4a/gone.rs\n+++ /dev/null\n{}",
+            file_diff("probe-crates/core-4a/src/a.rs"),
+            file_diff("probe-crates/core-4a/src/b.rs"),
+            file_diff("probe-crates/core-4a-sibling/src/c.rs"),
+        );
+        assert_eq!(
+            touched_members(&twice, &members),
+            ["probe-crates/core-4a", "probe-crates/third-4a"],
+            "同じ member の 3 file は 1 件・削除の片側も拾う・接頭辞だけ同じ dir は数えない"
+        );
+    }
+
+    /// §39 (b) 形 2: (a) の 4 形から core の dir を除いた結果が、順に 0 件・1 件・1 件・0 件。
+    #[test]
+    fn mutants_diff_outside_drops_the_core_dir_from_the_touched_members() {
+        let members = outside_members();
+        let counts: Vec<usize> = outside_shapes()
+            .iter()
+            .map(|diff| outside_of(&touched_members(diff, &members), "probe-crates/core-4a").len())
+            .collect();
+        assert_eq!(counts, [0, 1, 1, 0], "core だけ・runner だけ・両方・member の外だけ");
+        let both = outside_shapes()[2].clone();
+        assert_eq!(outside_of(&touched_members(&both, &members), "probe-crates/core-4a"), ["probe-crates/runner-4a"], "残りは runner");
+    }
+
+    /// §39 (c) 形 3: 判定行の末尾が `outside=-` と `outside=<dir>` の 2 形で、先頭の 7 token は 2 形とも 1 字も同じ。
+    /// 的を絞った周の行も同じ 1 語を末尾に持つ。
+    #[test]
+    fn mutants_diff_outside_record_line_appends_one_word_and_keeps_seven_tokens() {
+        let counts = Counts { total: 0, caught: 0, missed: 0, unviable: 0, timeout: 0 };
+        let (_, scope) = measure_args(Path::new("d"), Path::new("o"), "probe-pkg-4a", TEETH_PACE, None);
+        let none = counts.line(&scope, &[]);
+        let one = counts.line(&scope, &["probe-crates/runner-4a".to_owned()]);
+        let head = "mutants-diff: total=0 caught=0 missed=0 unviable=0 timeout=0 scope=probe-pkg-4a teeth=-";
+        assert_eq!(none, format!("{head} outside=-"), "0 件は -");
+        assert_eq!(one, format!("{head} outside=probe-crates/runner-4a"), "1 件は dir");
+        let tokens = |line: &str| line.split(' ').skip(1).map(str::to_owned).collect::<Vec<String>>();
+        let (none_tokens, one_tokens) = (tokens(&none), tokens(&one));
+        assert_eq!((none_tokens.len(), one_tokens.len()), (8, 8), "7 token + outside=");
+        assert_eq!(none_tokens[..7], one_tokens[..7], "先頭の 7 token は 2 形とも同じ");
+        assert_ne!(none, one, "母集団 0 と範囲の外だけの周は字面が違う");
+        let two = counts.line(&scope, &["a-4a".to_owned(), "b-4a".to_owned()]);
+        assert!(two.ends_with(" outside=a-4a,b-4a"), "複数は , で結ぶ: {two}");
+        let aimed = Aimed(vec![Outcome::Absent]);
+        assert!(aimed.line(&scope, &["probe-crates/runner-4a".to_owned()]).ends_with(" population=targets outside=probe-crates/runner-4a"));
     }
 }
