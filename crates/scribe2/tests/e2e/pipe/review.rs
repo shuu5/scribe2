@@ -131,7 +131,11 @@ fn pipe_review_pass_spawns() {
         [dir.join("contract.toml").display().to_string(), repo.display().to_string()],
         "{{contract}} は審査の写し・{{worktree}} は base の repo"
     );
-    assert_eq!(dir_names(&dir), ["contract.toml", "design.txt", "requirements.txt"], "材料の 3 file");
+    assert_eq!(
+        dir_names(&dir),
+        ["base.txt", "contract.toml", "design.txt", "requirements.txt"],
+        "材料の 3 file と base の要約（§40）"
+    );
     assert_eq!(
         fs::read(dir.join("contract.toml")).ok(),
         fs::read(state.join("pipe").join(&id).join("contract.toml")).ok(),
@@ -150,6 +154,33 @@ fn pipe_review_pass_spawns() {
     let listed: Vec<Option<Stage>> = stages(&state, &id).into_iter().map(|(stage, _)| stage).collect();
     assert_eq!(listed, vec![Some(Stage::Reviewed), Some(Stage::Spawned), Some(Stage::Implemented)], "Reviewed → Spawned → Implemented");
     assert!(show_line(&repo, &state, &id).contains("stage=Implemented"));
+    clean(&[&repo, &state]);
+}
+
+// ───── write-set の base の要約（`s2-07l.431`・設計 contract-source.md §40・接頭辞 `pipe_review_base_`） ─────
+
+/// (f) 受付から審査まで通した run の材料の dir に base の要約の file が在り、write-set の各項目の path を宣言順に 1 項目
+/// ずつ持つ（base に在る `.rs` は行数と宣言と歯の列・`+` の項目は新設の 1 行）。既存の 3 材料の file も並んで在る。
+#[test]
+fn pipe_review_base_summary_file_names_every_write_set_item() {
+    let (repo, state) = repo_with_state();
+    let items = ["src/lib.rs", "src/zq_base.rs", "+src/zq_fresh.rs"];
+    let path = write_set_contract(&repo, "base", &items);
+    let out = run_pipe(&[
+        "intake", "--design", &path, "--bead", "s2-base",
+        "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+        "--rules", &ceiling_rules(&state), "--lens", &format!("cat >/dev/null; echo '{}'", lens_verdict("PASS")),
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "PASS は rc 0: {}", stderr_of(&out));
+    let dir = review_dir(&state, &run_id_of(&out));
+    assert_eq!(dir_names(&dir), ["base.txt", "contract.toml", "design.txt", "requirements.txt"], "要約の file が 1 本増える");
+    let summary = fs::read_to_string(dir.join("base.txt")).unwrap_or_default();
+    let heads: Vec<&str> =
+        summary.lines().filter_map(|line| line.strip_prefix("- ")).filter_map(|line| line.split(": ").next()).collect();
+    assert_eq!(heads, items, "write-set の各項目の path を宣言順に 1 項目ずつ: {summary}");
+    assert!(summary.contains("- src/zq_base.rs: 行数 全体 "), "base に在る file は行数を持つ: {summary}");
+    assert!(summary.contains("\n  宣言: ") && summary.contains("\n  歯: "), ".rs は宣言と歯の列を持つ: {summary}");
+    assert!(summary.contains("- +src/zq_fresh.rs: 新設（base に無い）"), "{summary}");
     clean(&[&repo, &state]);
 }
 

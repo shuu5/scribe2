@@ -78,7 +78,7 @@ const UNREAD_ARG_TARGET_FLAGS: &[&str] = &["--bin", "--bench", "--example", "-E"
 const UNREAD_BARE_TARGET_FLAGS: &[&str] = &["--bins", "--benches", "--examples", "--tests", "--all-targets"];
 
 /// 歯の印（この行の直下の `fn` が歯・helper の fn は数えない）。
-const TEST_ATTR: &str = "#[test]";
+pub(crate) const TEST_ATTR: &str = "#[test]";
 
 /// crate の置き場（`crates/<crate>/` 配下がその crate の file・上限の余地の `core_of` と同じ規約）。
 const CRATES_DIR: &str = "crates/";
@@ -326,8 +326,9 @@ fn usages(texts: &[(&str, &str)]) -> Vec<(String, String)> {
     found
 }
 
-/// 歯の区間: `tests` dir 配下の file は全体・src の file は行頭の `#[cfg(test)]` から末尾（無ければ空）。
-fn test_region<'t>(path: &str, text: &'t str) -> &'t str {
+/// 歯の区間: `tests` dir 配下の file は全体・src の file は行頭の `#[cfg(test)]` から末尾（無ければ空）。審査の材料の
+/// base の要約（`pipe::review` の子 module・設計 contract-source.md §40）も歯の名をこの区間で読む（読み手は 1 本）。
+pub fn test_region<'t>(path: &str, text: &'t str) -> &'t str {
     if path.split('/').any(|segment| segment == TESTS_DIR) {
         return text;
     }

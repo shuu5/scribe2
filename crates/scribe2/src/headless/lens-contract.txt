@@ -40,4 +40,4 @@
 {design}
 
 ## 契約が満たす要件
-{requirements}{promises}
+{requirements}{promises}{base}

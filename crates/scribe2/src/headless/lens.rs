@@ -44,6 +44,11 @@
 //! **Promised の行（設計 contract-source.md §33 行 ah）は約束の行の写しも隣の file で受ける**。契約の審査の周に
 //! [`PROMISES_FILE`] が在れば `{promises}` の穴に見出しと kind の 3 語の限りと写しを埋め、無ければ穴は空文字＝約束の行を
 //! 持たない行の雛形は 1 字も変わらない。在るのに読めない周は材料の欠けと同じく claude を呼ばず rc 2。cap の照合にも足す。
+//!
+//! **write-set の base の要約（設計 contract-source.md §40 行 ao）も隣の file で受ける**。契約の審査の周に [`BASE_FILE`] が
+//! 在れば `{base}` の穴に埋め、無ければ穴は空文字＝雛形は 1 字も変わらない。在るのに読めない周は rc 2。cap は新しい閾値を
+//! 作らない: 既存の 4 材料だけで越える周は従来どおり claude を呼ばず INCONCLUSIVE、要約を足すと越える周は要約の段だけを
+//! 落として落とした項目の本数の 1 行を残す（[`base_block`]）。
 
 use super::runner::{has_top_level_key, is_result_record, result_usage, scope_line, top_level_string};
 use super::{
@@ -57,7 +62,7 @@ use crate::fleet::Usage;
 use crate::pipe::confine;
 use crate::pipe::contract::Contract;
 use crate::pipe::move_proof::RULINGS_FILE;
-use crate::pipe::review::{DESIGN_FILE, FINDING_KINDS, PROMISES_FILE, REQUIREMENTS_FILE};
+use crate::pipe::review::{base_block, BASE_FILE, DESIGN_FILE, FINDING_KINDS, PROMISES_FILE, REQUIREMENTS_FILE};
 use crate::rules::int_row;
 use std::io::{ErrorKind, Read};
 use std::path::Path;
@@ -224,13 +229,18 @@ fn prompt_of(contract: &Path, stated: &str, rulings: &str, cap: u64) -> Result<S
             ))
         }
         Some((design, requirements)) => {
-            let promises = promises_of(contract)
+            let promises = beside(contract, PROMISES_FILE)
                 .map(|found| promise_block(&found))
                 .map_err(|reason| Outcome::failed_line(RC_BROKEN, format!("lens: 約束の行を読めない: {reason}")))?;
+            let summary = beside(contract, BASE_FILE)
+                .map_err(|reason| Outcome::failed_line(RC_BROKEN, format!("lens: base の要約を読めない: {reason}")))?;
             let bytes = stated.len().saturating_add(design.len()).saturating_add(requirements.len());
-            if over(bytes.saturating_add(promises.len())) {
+            let bytes = bytes.saturating_add(promises.len());
+            if over(bytes) {
                 return Err(Outcome::ok_line(inconclusive("contract material exceeds cap")));
             }
+            // 要約は**最後に**足す: 既存の 4 材料の残りに収まらなければ段ごと落とす（新しい閾値を作らない）。
+            let base = base_block(&summary, cap.saturating_sub(u64::try_from(bytes).unwrap_or(u64::MAX)));
             Ok(fill(
                 CONTRACT_TEMPLATE,
                 &[
@@ -238,15 +248,17 @@ fn prompt_of(contract: &Path, stated: &str, rulings: &str, cap: u64) -> Result<S
                     ("{design}", &design),
                     ("{requirements}", &requirements),
                     ("{promises}", &promises),
+                    ("{base}", &base),
                 ],
             ))
         }
     }
 }
 
-/// 契約の写しの隣の [`PROMISES_FILE`]（Promised の行だけ `pipe::review` が置く）。無ければ空・在るのに読めない周は `Err`。
-fn promises_of(contract: &Path) -> Result<String, String> {
-    let path = contract.with_file_name(PROMISES_FILE);
+/// 契約の写しの隣の任意の材料（[`PROMISES_FILE`]〔Promised の行だけ `pipe::review` が置く〕と [`BASE_FILE`]）。無ければ
+/// 空・在るのに読めない周は `Err`。
+fn beside(contract: &Path, name: &str) -> Result<String, String> {
+    let path = contract.with_file_name(name);
     match std::fs::read_to_string(&path) {
         Ok(found) => Ok(found),
         Err(err) if err.kind() == ErrorKind::NotFound => Ok(String::new()),
@@ -430,4 +442,74 @@ fn with_usage(verdict: &str, usage: Option<&Usage>) -> String {
     let added = added.strip_prefix('{').and_then(|rest| rest.strip_suffix('}')).unwrap_or_default();
     let comma = if head.ends_with(JSON_HEAD) { "" } else { "," };
     format!("{head}{comma}{added}}}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{prompt_of, CONTRACT_TEMPLATE};
+    use crate::pipe::review::{BASE_FILE, DESIGN_FILE, REQUIREMENTS_FILE};
+    use std::path::PathBuf;
+
+    /// 契約の写しの隣に設計の節と要件（と `base` が在れば base の要約）を置いた tmp dir と写しの path。
+    fn materials(name: &str, base: Option<&str>) -> (PathBuf, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("headless-lens-base-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::write(dir.join(DESIGN_FILE), "節の本文\n");
+        let _ = std::fs::write(dir.join(REQUIREMENTS_FILE), "FR1: 要件の本文\n");
+        if let Some(body) = base {
+            let _ = std::fs::write(dir.join(BASE_FILE), body);
+        }
+        (dir.join("contract.toml"), dir)
+    }
+
+    /// 要約の写し（契約・材料・雛形のどれにも現れない字面の項目 2 本）。
+    const SUMMARY: &str = "- src/zq.rs: 行数 全体 7 / 本体 5\n  宣言: fn zq_one\n  歯: zq_tooth\n- docs/zq.md: 行数 全体 2 / 本体 2\n";
+
+    /// 契約の本文（穴の字面 `{base}` を持つ＝1 走査なら展開されない）。
+    const STATED: &str = "goal: 穴の字面 {base} を持つ契約\ndone: d";
+
+    /// 写しが在れば `{base}` の穴が要約の本文で埋まり、無ければ雛形は 1 字も変わらず（穴は空文字・prompt の末尾は要件の
+    /// 本文のまま）、契約の本文の中の `{base}` はどちらの周も展開されない（1 走査）。
+    #[test]
+    fn headless_lens_base_fills_the_hole_only_when_the_copy_exists_in_one_pass() {
+        assert!(CONTRACT_TEMPLATE.contains("{requirements}{promises}{base}\n"), "穴は雛形の末尾に 1 つ");
+        let (contract, dir) = materials("with", Some(SUMMARY));
+        let filled = prompt_of(&contract, STATED, "（裁定なし）", u64::MAX).unwrap_or_default();
+        assert!(filled.contains(SUMMARY.trim_end()), "要約の本文が埋まる: {filled}");
+        assert!(filled.contains("\n## write-set の base の要約"), "見出しを持つ: {filled}");
+        assert!(filled.contains("穴の字面 {base} を持つ契約"), "契約の中の穴は展開されない: {filled}");
+        assert_eq!(filled.matches("src/zq.rs").count(), 1, "要約は 1 回だけ埋まる");
+        let _ = std::fs::remove_dir_all(&dir);
+        let (contract, dir) = materials("without", None);
+        let bare = prompt_of(&contract, STATED, "（裁定なし）", u64::MAX).unwrap_or_default();
+        assert!(bare.ends_with("## 契約が満たす要件\nFR1: 要件の本文\n\n"), "穴は空文字＝末尾は要件の本文: {bare:?}");
+        assert!(!bare.contains("base の要約") && !bare.contains("src/zq.rs"), "{bare}");
+        assert!(bare.contains("穴の字面 {base} を持つ契約"), "契約の中の穴は写しが無くても展開されない");
+        let expected = CONTRACT_TEMPLATE
+            .replacen("{contract}", STATED, 1)
+            .replacen("{design}", "節の本文\n", 1)
+            .replacen("{requirements}{promises}{base}", "FR1: 要件の本文\n", 1);
+        assert_eq!(bare, expected, "写しが無い周の prompt は穴を足す前の雛形と同じ");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// cap の極性: 要約を足すと越える周は要約の段だけが落ちて本数の 1 行が残り（claude を呼ぶ側＝prompt が返る）、既存の
+    /// 4 材料だけで越える周は prompt を組まず INCONCLUSIVE のまま。
+    #[test]
+    fn headless_lens_base_over_cap_drops_the_stage_but_existing_materials_stay_inconclusive() {
+        let (contract, dir) = materials("cap", Some(SUMMARY));
+        let four = [STATED, "節の本文\n", "FR1: 要件の本文\n"].iter().map(|text| text.len()).sum::<usize>();
+        let four = u64::try_from(four).unwrap_or(u64::MAX);
+        let dropped = prompt_of(&contract, STATED, "（裁定なし）", four).unwrap_or_default();
+        assert!(dropped.contains("段ごと落とした: 項目 2 本"), "本数の 1 行: {dropped}");
+        assert!(!dropped.contains("src/zq.rs"), "要約の本文は落ちる: {dropped}");
+        let over = prompt_of(&contract, STATED, "（裁定なし）", four.saturating_sub(1)).map_err(|outcome| outcome.out);
+        assert_eq!(
+            over,
+            Err(vec![r#"{"verdict":"INCONCLUSIVE","evidence":"contract material exceeds cap"}"#.to_owned()]),
+            "既存の 4 材料だけで越える周は prompt を組まない"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

@@ -33,9 +33,16 @@
 //! （`n` / `text` / `fixture` / `expect` の 4 欄・`n` の順）を材料の [`PROMISES_FILE`] に置き（持たない行は置かない＝
 //! lens の雛形は 1 字も変わらない）、lens の `kind` が 3 語（[`FindingKind::promised`]）の外の FAIL は INCONCLUSIVE に倒す
 //! （残りの 3 語は器が受付で測り終えている・fail-closed・`FindingKind` の 7 語は不変）。
+//!
+//! **write-set の base の要約**（設計 contract-source.md §40 行 ao）: 契約の write-set の各項目の base の要約（行数の
+//! 2 面・本体の宣言の名・歯の名）を子 module `base` が組み、材料の [`BASE_FILE`] として既存の 3 本と同じ [`keep`] の
+//! loop で置く。lens は `{base}` の穴を埋め、要約を足すと cap を越える周は段ごと落とす（[`base_block`]）。観点・理由の
+//! 型・既存の 3 材料は不変。
 
+mod base;
 mod judgement;
 mod requirements;
+pub use base::base_block;
 pub use judgement::{judgement_of, review_dir, review_path, unaddressed, verdict_of};
 pub use judgement::{Judgement, Rework, ROW_SAME_KIND_STOP};
 use requirements::requirements_text;
@@ -65,6 +72,9 @@ pub const REQUIREMENTS_FILE: &str = "requirements.txt";
 
 /// `{promises}` の穴の本文（Promised の行だけ契約の写しの隣に置く・lens が読む）。
 pub const PROMISES_FILE: &str = "promises.txt";
+
+/// `{base}` の穴の本文（write-set の各項目の base の要約・契約の写しの隣・lens が読む・§40）。
+pub const BASE_FILE: &str = "base.txt";
 
 /// lens の scope の unit 名に載せる段の名。
 const REVIEW_STAGE: &str = "review";
@@ -245,6 +255,8 @@ struct Material {
     requirements: String,
     /// 約束の行の写し（[`promises_text`]・Promised でない行は空）。
     promises: String,
+    /// write-set の各項目の base の要約（読めない項目は明示の 1 行・§40）。
+    base: String,
 }
 
 /// 審査の判定 1 件（verdict と根拠と、PASS でない周の理由の型と場所）。
@@ -297,6 +309,7 @@ fn materials(entry: &Review<'_>) -> Material {
         design: design_text(entry.repo, &entry.contract.design),
         requirements: requirements_text(entry.repo, entry.requirements, &entry.contract.req),
         promises: promises_text(entry.repo, &entry.contract.design),
+        base: base::base_text(entry.repo, &entry.contract.write_set),
     }
 }
 
@@ -425,7 +438,9 @@ fn keep(entry: &Review<'_>, material: &Material) -> Result<PathBuf, String> {
     let contract = dir.join(super::CONTRACT_FILE);
     std::fs::copy(contract_path(entry.state_dir, entry.run), &contract)
         .map_err(|err| format!("{} を写せない: {err}", contract.display()))?;
-    for (name, body) in [(DESIGN_FILE, &material.design), (REQUIREMENTS_FILE, &material.requirements)] {
+    for (name, body) in
+        [(DESIGN_FILE, &material.design), (REQUIREMENTS_FILE, &material.requirements), (BASE_FILE, &material.base)]
+    {
         let path = dir.join(name);
         std::fs::write(&path, material_file(body)).map_err(|err| format!("{} を書けない: {err}", path.display()))?;
     }
