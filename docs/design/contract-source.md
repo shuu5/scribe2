@@ -817,7 +817,7 @@ section = "44"
 write-set = ["crates/scribe2/src/pipe/review/base.rs", "crates/scribe2/tests/e2e/pipe/review.rs", "docs/design/contract-source.md"]
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail pipe_review_base_place_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail pipe_review_base_place_"]
 size = "S"
-done = "(1) item_text の + の分岐の後の剥がしが normalize の 1 本になり、base.rs に接頭辞の字面の剥がしが残らない (2) = の項目が本文を読んで本体の宣言の名と歯の名の 2 列を出し、行の頭が契約の字面のままで、行数の後ろに置き場だけの 1 語を持つ (3) + の 1 行・- と ~ の行・repo の外の断り・cap を越える周の落とし方が 1 字も変わらない (4) = の項目を持つ契約の審査の材料 base.txt が「読めない」を持たない"
+done = "(1) = の項目が + の分岐の後で剥がされて本文が読まれ、+ の項目は従来の 1 行のまま（母集団 = + / - / ~ / = の 4 形を同じ木で要約する） (2) = の項目が本文を読んで本体の宣言の名と歯の名の 2 列を出し、行の頭が契約の字面のままで、行数の後ろに置き場だけの 1 語を持つ (3) + の 1 行・- と ~ の行・repo の外の断り・cap を越える周の落とし方が 1 字も変わらない (4) = の項目を持つ契約の審査の材料 base.txt が「読めない」を持たない"
 <!-- contracts:end -->
 
 
@@ -1012,7 +1012,7 @@ done = "(1) item_text の + の分岐の後の剥がしが normalize の 1 本�
 - 出所: 行 at（[pipeline.md](./pipeline.md) §51）が `=crates/scribe2/tests/e2e/pipe.rs` を write-set に持った最初の便で、審査の材料 `base.txt` がその項目を「読めない（No such file or directory）」と出し、lens が印の意味を確かめられず INCONCLUSIVE になった。行 ar（§43 (1)・`s2-07l.441`）は受付と契約表の検査に `=` を足したが、審査の要約（§40・行 ao）は自分で接頭辞を剥がしていて `=` を知らない。
 - 何が起きているか（現物・main 891e27e・verified）: `crates/scribe2/src/pipe/review/base.rs` の `item_text` は `+` の項目を「新設（base に無い）」の 1 行にし、`-` と `~` は自分で剥がして本文を読むが、`=`（`crates/scribe2/src/pipe/refuse.rs` の `PLACE_ONLY_FILE`）は剥がさず、`=` を含んだ path を読んで「読めない」になる。剥がす規則が `crates/scribe2/src/pipe/refuse.rs` の `normalize` と `crates/scribe2/src/pipe/review/base.rs` の 2 か所に在る（§3 に反する・行 ar の形 3 が 1 か所に保った規則の外側）。
 - 形:
-  1. `item_text` の `+` の分岐の後の剥がしを `normalize` の 1 本に替える（`-` / `~` / `=` を同じ 1 か所で剥がす・§3・剥がす規則を base.rs に持たない）。
+  1. `item_text` の `+` の分岐の後の剥がしを `normalize` の 1 本に替える（`-` / `~` / `=` を同じ 1 か所で剥がす・§3・剥がす規則を base.rs に持たない）。この寄せは挙動に差が出ないので歯では弁別できず、done には載せない（字面の pin は書かない・便の diff の設計適合は審査で見る）。
   2. `=` の項目は本文を読んで既存と同じ 2 列（本体の宣言の名・歯の名）を出し、行の頭は契約の字面のまま（`=` を含む）で、行数の後ろに「置き場だけ・中身は変えない」の 1 語を添える（lens が印の意味を要約から読める）。
   3. 他の項目の行の形・cap を越える周の落とし方・`+` の 1 行・repo の外の断りは 1 字も変えない。
 - 触らない: `normalize` の本文と剥がす集合・受付と契約表の検査の `=` の読み（行 ar）・lens の雛形の穴 `{base}`（`crates/scribe2/src/headless/lens-contract.txt`）・要約の cap と本数の 1 行・審査の判定の 3 値。
