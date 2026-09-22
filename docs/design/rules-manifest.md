@@ -225,7 +225,7 @@ xtask 側の drift 歯（最小形）: `crates/xtask/src/limits.rs` の `#[cfg(t
   1. `workspace.rs` に「file 名が tests.rs か _tests.rs で終わる」述語を 1 本置き、`split_test_src` が真の file を**丸ごと test 区間**（src 側 0）と数える。
   2. `flipcheck.rs` の `is_test_file` の src 配下の枝と `rules_wired.rs` の `TEST_FILE_TAIL` の判定を、その 1 本の述語の呼び出しへ寄せる（_tests.rs の判定の字面が xtask の src 区間で 1 か所＝述語の中だけになる・歯の fixture 名は数えない・C2）。flip-check の `crates/*/tests/` の枝と rules-wired の `DECLARING` の枝は 1 字も変えない。
   3. `crates/xtask/src/env_reads.rs` の母集団も同じ述語で切る（core の非 test 区間の定義を 1 つにする）。該当 file の env の読みは 0 件なので判定行の値は動かない。
-  4. §4 の切り方の 2 文（「R-C4-3 の src 側と同じ切り方」の文と母集団の文）を新しい形に写す（本 doc が write-set に在る理由はこれだけ）。
+  4. §4 の切り方の 2 文（「R-C4-3 の src 側と同じ切り方」の文と母集団の文）を新しい形に写す（本 doc が write-set に在る理由はこれだけ）。**file 名の tail（tests.rs / _tests.rs）は backtick で書かない**——§4 は契約表の多くの行が section に持つので、backtick の語は名指しの実在の検査（[contract-source.md](./contract-source.md) §25）に掛かり、現物の契約表の歯 `contract_closure_ext_real_table_has_zero_findings` が name-unresolved で赤になる（run 073504Z の gate FAIL・verified）。
 - 触らない: `rules/manifest.toml` の R-C4 の 4 行（値・kind・enabled・裁定 id）／憲法 §3 の閾値セル／`weighted_lines` の式と幅の正規化／core-spawn と file-lines と name-literal の母集団（file 全体で数える＝切れ目に依らない）／判定行の token の名と順序（`SUMMARY_PIN` は値を伏せるので値の変化では動かない）／core 側の `src_region`（`crates/scribe2/src/pipe/closure.rs`・受付の core の余地の見積）は印だけで切るまま＝gate（40408）より厳しい側（41278）に残るが上限 60000 に対して余地は 18722 で実害が無い（後続）。
 - 却下: 閾値 100% を動かす（C5 の裁定が要る形にしない）／`#[path]` の宣言側を読んで解く（xtask に Rust の parser を足す＝C13）／`workspace.rs` だけ直して他の 2 か所の字面を残す（同じ規則が 3 か所に住み続ける＝C2）。
 - 歯（行 m が持つ・置き場は `workspace.rs` と `crates/xtask/src/check_sizes.rs` の in-file の歯・接頭辞 `sizes_` は既存なので**名の全体**で書く）:
@@ -368,5 +368,5 @@ section = "16"
 write-set = ["crates/xtask/src/workspace.rs", "crates/xtask/src/check_sizes.rs", "crates/xtask/src/flipcheck.rs", "crates/xtask/src/rules_wired.rs", "crates/xtask/src/env_reads.rs", "docs/design/rules-manifest.md"]
 verify = ["cargo nextest run -p xtask --no-tests=fail sizes_split_counts_named_test_files_as_whole_test", "cargo nextest run -p xtask --no-tests=fail sizes_ratio_counts_named_test_files_on_the_test_side"]
 size = "S"
-done = "(1) 名が tests.rs か _tests.rs で終わる file の src 側が 0 行になり test-src-ratio の判定行が 43% 台（上限 100% で違反 0）・core-lines が 40408（上限 60000）で出る (2) flip-check の is_test_file の src 配下の枝と rules-wired の TEST_FILE_TAIL の判定が同じ 1 本の述語を呼び、_tests.rs の判定の字面が xtask の src 区間（歯の fixture 名を除く）で述語の中の 1 か所だけになり、flip-check の tests/ の枝と rules-wired の DECLARING の枝の挙動が base と同じ (3) env-reads の判定行の違反と母集団が base と同じ値で出る (4) §4 の切り方の 2 文が新しい形を写し、rules/manifest.toml と憲法 §3 の閾値セルが 1 字も変わらない"
+done = "(1) 名が tests.rs か _tests.rs で終わる file の src 側が 0 行になり test-src-ratio の判定行が 43% 台（上限 100% で違反 0）・core-lines が 40408（上限 60000）で出る (2) flip-check の is_test_file の src 配下の枝と rules-wired の TEST_FILE_TAIL の判定が同じ 1 本の述語を呼び、_tests.rs の判定の字面が xtask の src 区間（歯の fixture 名を除く）で述語の中の 1 か所だけになり、flip-check の tests/ の枝と rules-wired の DECLARING の枝の挙動が base と同じ (3) env-reads の判定行の違反と母集団が base と同じ値で出る (4) §4 の切り方の 2 文が新しい形を写し（file 名の tail は backtick 無しで書く・現物の契約表の歯 contract_closure_ext_real_table_has_zero_findings が緑のまま）、rules/manifest.toml と憲法 §3 の閾値セルが 1 字も変わらない"
 <!-- contracts:end -->
