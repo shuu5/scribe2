@@ -690,6 +690,7 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
   (b) 形 3: 通った周に書かれる event が **1 件**で、種別が `RunStage`・段が `Implemented`・`detail` が `regate:` の後ろに逐語をそのまま持つ（逐語は入力と別の字面の fixture で測り、`detail` の出所を弁別する）。
   (c) 形 4: 同じ便に 2 度撃つと 2 度目が断られ、間に `Gated` の `RunStage` を 1 件挟めば 3 度目が通る（3 形を対で）。
   (d) 形 1 / 形 5（e2e）: 判定が FAIL の `Gated` の便に口を撃つと rc 0 で行が出て、その後の段が `Implemented` になり、便の worktree の path が 1 字も変わらない。base は subcommand の表に字面が無く使い方の誤りで断られる＝機能不在の RED。
+- 閉包の連鎖: 行 ar の `+` の file は `Stage` の変種（`Gated` / `Implemented`）を名指すので、`crate::fleet::Stage` を touches に持つ [contract-source.md](./contract-source.md) の行 c の閉包に入る。同じ path を行 c の write-set に載せておく（base に無い file は行 ar の `+` の宣言で解ける・§20）。
 
 ## 50. 固定日付を持つ fixture の母集団を歯で pin する（契約表の行 as・`s2-07l.469`・歯だけ・retroactive 札）
 
@@ -773,6 +774,7 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
   (d) 形 1 / 6（e2e）: `Gated` の便にこの口を撃つと rc 0 で 1 行が出て、その後の段が実装になり、木の base が main の先端になる。base は subcommand の表に字面が無く使い方の誤りで断られる＝機能不在の RED。
   (e) 形 5: 着地の追随の既存の歯（`crates/scribe2/tests/e2e/pipe/land.rs` の追随の群）が 1 字も変わらず緑である（載せ替えの 1 段を畳んでも着地の 3 経路が動かない）。
 - usage の外形: subcommand の表に 1 語増えるので `crates/scribe2/tests/e2e/snapshots/e2e__pipe__pipe_external_form.snap`（pipe の usage 行を逐語で pin する既存の snapshot）を同じ便で更新する（行 au の write-set に含める・§49 形 1 と同じ形）。
+- 閉包の連鎖: 行 au の `+` の file は段（`Stage`）の変種を名指すので、`crate::fleet::Stage` を touches に持つ [contract-source.md](./contract-source.md) の行 c の閉包に入る。同じ path を行 c の write-set に載せておく（§51 と同じ形）。
 
 <!-- contracts:begin -->
 schema = 1
