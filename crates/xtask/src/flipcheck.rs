@@ -678,6 +678,8 @@ struct Counts {
     base_retried: usize,
     /// `.rs` の差が無く、docs-only の面の中だけが動いた path の本数（`s2-07l.170`）。
     docs_only: usize,
+    /// 本文が同一のまま path だけが動いた rename の本数（§53・`s2-07l.555`）。
+    renamed: usize,
 }
 
 impl Counts {
@@ -693,6 +695,7 @@ impl Counts {
             fixture: 0,
             base_retried: 0,
             docs_only: 0,
+            renamed: 0,
         }
     }
 }
@@ -720,6 +723,9 @@ fn ok_line(counts: Counts) -> Verdict {
     }
     if counts.docs_only > 0 {
         line.push_str(&format!(" docs-only={}", counts.docs_only));
+    }
+    if counts.renamed > 0 {
+        line.push_str(&format!(" renamed={}", counts.renamed));
     }
     verdict(&line, 0)
 }
@@ -1167,7 +1173,13 @@ fn judge_into(base: &str, workdir: &Path, sink: &mut dyn FnMut(&str)) -> Verdict
             pair.rel
         ));
     }
-    let counts = Counts::of(&pairs);
+    // rename は path の違いだけで決め（mode だけの M は同じ path）、本文が同一の対だけを数える（§53）。
+    let renamed = changed
+        .iter()
+        .zip(&pairs)
+        .filter(|((old, new), pair)| old != new && pair.base == pair.head)
+        .count();
+    let counts = Counts { renamed, ..Counts::of(&pairs) };
     if counts.flipped == 0 {
         return no_flip_verdict(&pairs, counts);
     }
@@ -1203,7 +1215,7 @@ fn no_flip_verdict(pairs: &[FilePair], counts: Counts) -> Verdict {
             pair.rel
         ));
     }
-    if counts.removed > 0 || counts.retro > 0 || counts.moved > 0 {
+    if counts.removed > 0 || counts.retro > 0 || counts.moved > 0 || counts.renamed > 0 {
         return ok_line(counts);
     }
     fail("no-test-diff")

@@ -16,8 +16,9 @@
 // flip-check: moved s2-07l.500
 
 use super::{
-    base_not_green, failed_tests, is_bead_id, is_test_file, judge, judge_into, nextest_args, parse_base,
-    split_regions, BaseNotGreen, FailedTest, FilePair, Verdict, RETROACTIVE_MARK,
+    base_not_green, changed_rs, failed_tests, fresh_marks, is_bead_id, is_test_file, judge, judge_into,
+    load_pairs, nextest_args, parse_base, split_regions, write_one, BaseNotGreen, FailedTest, FilePair, Verdict,
+    RETROACTIVE_MARK,
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -784,4 +785,182 @@ fn flip_check_base_copy_index_excludes_overlay() {
         lines.contains(&format!("head={base}").as_str()),
         "base copy の HEAD は base の sha のはず（commit を捏造しない）: {seen:?}"
     );
+}
+
+// ---- rename を対にして読む（s2-07l.555・設計 docs/design/pipeline.md §53 / 契約表の行 av）----
+//
+// 子 module を足すと `#[path]` の新規 module は flip されない（not-flippable）ので、この便の歯は親 file のここへ置く。
+
+/// rename 元の統合 test file（base に在る）。
+fn rename_old() -> String {
+    format!("crates/{FIXTURE_MEMBER}/tests/old_home.rs")
+}
+
+/// rename 先の統合 test file（HEAD に在る）。
+fn rename_new() -> String {
+    format!("crates/{FIXTURE_MEMBER}/tests/new_home.rs")
+}
+
+/// base で緑の歯 1 本（統合 test の形）。
+fn rename_tooth(name: &str, want: u32) -> String {
+    format!("#[test]\nfn {name}() {{\n    assert_eq!({FIXTURE_MEMBER}::val() * {want}, {want});\n}}\n\n")
+}
+
+/// 札 `marks`（`moved s2-07l.1` の形）を頭に置き、base で緑の歯 3 本を持つ統合 test file の本文。
+fn rename_body(marks: &[&str]) -> String {
+    let head: String = marks.iter().map(|mark| format!("// flip-check: {mark}\n")).collect();
+    format!("{head}{}{}{}", rename_tooth("one", 1), rename_tooth("two", 2), rename_tooth("three", 3))
+}
+
+/// base に `files` を足して commit し、`moves` を `git mv` して `head` を書いた HEAD を commit する。
+/// `manifest` が `None` の周は現物の manifest のまま。dir と base の sha を返す（片付けは呼び手）。
+fn rename_fixture(
+    manifest: Option<&str>,
+    files: &[(&str, &str)],
+    moves: &[(&str, &str)],
+    head: &[(&str, &str)],
+) -> (PathBuf, String) {
+    let dir = make_tmp_dir();
+    scaffold(&dir);
+    if let Some(text) = manifest {
+        write_at(&dir, "rules/manifest.toml", text);
+    }
+    for (rel, body) in files {
+        write_at(&dir, rel, body);
+    }
+    let base = seed_fixture(&dir, BASE_LIB);
+    for (from, to) in moves {
+        if let Some(parent) = dir.join(to).parent() {
+            std::fs::create_dir_all(parent).expect("rename 先の dir を作れる");
+        }
+        assert!(git(&dir, &["mv", *from, *to]), "fixture で {from} を {to} へ git mv できる");
+    }
+    for (rel, body) in head {
+        write_at(&dir, rel, body);
+    }
+    head_commit(&dir);
+    (dir, base)
+}
+
+/// `judge_into` を撃ち、判定と sink の全行を返す。
+fn judge_lines(base: &str, dir: &Path) -> (Verdict, Vec<String>) {
+    let mut lines: Vec<String> = Vec::new();
+    let got = judge_into(base, dir, &mut |line| lines.push(line.to_owned()));
+    (got, lines)
+}
+
+/// (a) 同一本文の rename だけの便は、旧 path の test 区間に上限（2）を超える札 3 本を持っていても
+/// `too-many-marks` / `green-on-base` / `not-flippable` / `no-test-diff` のどれにも落ちず、flip 0 の rc 0 で
+/// `renamed=1` を後置する。対は（旧 path・新 path）で、base の本文は旧 path から読まれ、この便の札は 0 本。
+#[test]
+fn flip_check_rename_same_body_passes_with_no_flip_and_no_fresh_marks() {
+    let (old, new) = (rename_old(), rename_new());
+    let body = rename_body(&["moved s2-07l.1", "moved s2-07l.2", "retroactive s2-07l.3"]);
+    let manifest = flip_manifest("[\"docs/\"]", 2);
+    let (dir, base) = rename_fixture(Some(&manifest), &[(&old, &body)], &[(&old, &new)], &[]);
+    let changed = changed_rs(&base, &dir).expect("列挙できる");
+    let pairs = load_pairs(&base, &dir, &changed).expect("対を読める");
+    let (got, lines) = judge_lines(&base, &dir);
+    drop_fixture(&dir);
+    assert_eq!(changed, vec![(old.clone(), new.clone())], "R の行は（旧 path・新 path）の対");
+    assert_eq!(pairs.len(), 1, "対は 1 本");
+    assert_eq!(pairs[0].rel, new, "対の rel は HEAD の path");
+    assert_eq!(pairs[0].base.as_deref(), Some(body.as_str()), "base の本文は旧 path から読む");
+    assert_eq!(pairs[0].head.as_deref(), Some(body.as_str()), "HEAD の本文は新 path から読む");
+    assert!(fresh_marks(&pairs).is_empty(), "旧 path の札は持ち越し: {:?}", fresh_marks(&pairs));
+    assert_eq!(got.code, 0, "rename だけの便は通る: {}", got.line);
+    assert_eq!(got.line, "flip-check: RED-on-base ok tests_changed=0 renamed=1");
+    assert!(lines.is_empty(), "sink に行は無い: {lines:?}");
+}
+
+/// (b) rename + test 区間に base で赤い歯 1 本を足した対は flip に数えて撃ち（`tests_changed=1`）、overlay の
+/// 書き先は新 path で旧 path には書かない。
+#[test]
+fn flip_check_rename_with_test_diff_flips_and_overlays_at_the_new_path() {
+    let (old, new) = (rename_old(), rename_new());
+    let body = rename_body(&[]);
+    let fresh = format!("{body}#[test]\nfn fresh() {{\n    assert_eq!({FIXTURE_MEMBER}::val(), 2);\n}}\n");
+    let (dir, base) = rename_fixture(None, &[(&old, &body)], &[(&old, &new)], &[(&new, &fresh)]);
+    let changed = changed_rs(&base, &dir).expect("列挙できる");
+    let pairs = load_pairs(&base, &dir, &changed).expect("対を読める");
+    let dest = make_tmp_dir();
+    let wrote = write_one(&dest, &pairs[0]).expect("overlay を書ける");
+    let (at_new, at_old) = (dest.join(&new).is_file(), dest.join(&old).exists());
+    let got = judge(&base, &dir);
+    drop_fixture(&dest);
+    drop_fixture(&dir);
+    assert_eq!(changed, vec![(old, new)], "R の行は（旧 path・新 path）の対");
+    assert!(pairs[0].flips(), "test 区間に差が在る対は flip に数える");
+    assert!(wrote && at_new && !at_old, "overlay は新 path へ書く（new={at_new} old={at_old}）");
+    assert_verdict(&got.line, got.code, 0, "flip-check: RED-on-base ok tests_changed=1");
+    assert!(!got.line.contains("renamed="), "flip した対を rename に数えない: {}", got.line);
+}
+
+/// (c) 旧 path の test 区間に札 2 本を持つ file を rename し新しい札 1 本を置くと、2 本は持ち越しで札の本数は 1
+/// （上限 2 の manifest で `too-many-marks` に落ちない）。`moved` の免除は従来どおり当たる。
+#[test]
+fn flip_check_rename_carries_old_marks_and_counts_only_the_new_one() {
+    let (old, new) = (rename_old(), rename_new());
+    let body = rename_body(&["moved s2-07l.1", "retroactive s2-07l.2"]);
+    let marked = format!("// flip-check: moved s2-07l.555\n{body}");
+    let manifest = flip_manifest("[\"docs/\"]", 2);
+    let (dir, base) = rename_fixture(Some(&manifest), &[(&old, &body)], &[(&old, &new)], &[(&new, &marked)]);
+    let pairs = load_pairs(&base, &dir, &changed_rs(&base, &dir).expect("列挙できる")).expect("対を読める");
+    let (got, _) = judge_lines(&base, &dir);
+    drop_fixture(&dir);
+    assert_eq!(fresh_marks(&pairs), vec![(new.as_str(), "s2-07l.555".to_owned())], "この便の札は新しい 1 本だけ");
+    assert_eq!(got.code, 0, "札の免除が効く: {}", got.line);
+    assert_eq!(got.line, "flip-check: RED-on-base ok tests_changed=0 moved=1");
+}
+
+/// (c) rename + test 区間の歯を 1 本消しただけの対は `tests-removed-only` が従来どおり当たり rc 0。
+#[test]
+fn flip_check_rename_with_removed_tooth_is_removed_only() {
+    let (old, new) = (rename_old(), rename_new());
+    let body = rename_body(&[]);
+    let removed = body.replace(&rename_tooth("three", 3), "");
+    assert_ne!(removed, body, "歯を 1 本消せている");
+    let (dir, base) = rename_fixture(None, &[(&old, &body)], &[(&old, &new)], &[(&new, &removed)]);
+    let (got, _) = judge_lines(&base, &dir);
+    drop_fixture(&dir);
+    assert_eq!(got.code, 0, "{}", got.line);
+    assert_eq!(got.line, "flip-check: RED-on-base ok tests_changed=0 removed-only=1");
+}
+
+/// (e) 同じ path で本文が同一の M の行（mode だけの変更）を 1 本だけ持つ便は rename に数えず、`no-test-diff` の
+/// FAIL のまま（rename の対を本文の同一で決めていないことを撃つ）。
+#[test]
+fn flip_check_rename_mode_only_change_is_not_a_rename() {
+    use std::os::unix::fs::PermissionsExt;
+    let old = rename_old();
+    let body = rename_body(&[]);
+    let dir = make_tmp_dir();
+    scaffold(&dir);
+    write_at(&dir, &old, &body);
+    let base = seed_fixture(&dir, BASE_LIB);
+    std::fs::set_permissions(dir.join(&old), std::fs::Permissions::from_mode(0o755)).expect("mode を変えられる");
+    assert!(git(&dir, &["update-index", "--chmod=+x", &old]), "index の mode を変えられる");
+    head_commit(&dir);
+    let changed = changed_rs(&base, &dir).expect("列挙できる");
+    let (got, _) = judge_lines(&base, &dir);
+    drop_fixture(&dir);
+    assert_eq!(changed, vec![(old.clone(), old)], "mode だけの M は同じ path の対");
+    assert_verdict(&got.line, got.code, 1, "flip-check: FAIL reason=no-test-diff");
+    assert!(!got.line.contains("renamed"), "{}", got.line);
+}
+
+/// (f) docs-only の面の中の file を面の外へ rename しただけの便も、面の外から面の中へ rename しただけの便も
+/// docs-only にならず `no-test-diff` で落ち、sink に面の外の path（前者は新 path・後者は旧 path）を名指す。
+#[test]
+fn flip_check_rename_across_docs_faces_is_not_docs_only() {
+    let cases = [("docs/design/x.md", "notes/x.md", "notes/x.md"), ("notes/y.md", "docs/design/y.md", "notes/y.md")];
+    for (from, to, outside) in cases {
+        let body = "a docs page that keeps its body across the rename\n";
+        let (dir, base) = rename_fixture(None, &[(from, body)], &[(from, to)], &[]);
+        let (got, lines) = judge_lines(&base, &dir);
+        drop_fixture(&dir);
+        assert_verdict(&got.line, got.code, 1, "flip-check: FAIL reason=no-test-diff");
+        assert!(!got.line.contains("docs-only"), "{from} → {to}: {}", got.line);
+        assert_eq!(lines, vec![format!("flip-check: outside-docs-faces {outside}")], "{from} → {to}");
+    }
 }

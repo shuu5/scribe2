@@ -44,30 +44,45 @@ fn git_stdout(dir: &Path, label: &str, args: &[&str]) -> Result<String, String> 
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-/// `git diff --name-only <base>...HEAD -- :(top)*.rs` の出力行。rc≠0 は Err（infra-error）。
+/// 変更 `.rs` の（base 側の path・HEAD 側の path）の対（`-- :(top)*.rs`）。rc≠0 は Err（infra-error）。
 ///
 /// pathspec は shell を介さない独立した 1 引数なのでクォート文字を字面に含めない。
 /// **repo root から撃ち、かつ `:(top)` 錨を付ける**——素の `*.rs` は git の prefix
 /// （cwd）配下へ縮むので、subdir から起動すると差分 0 件に化けて docs-only の側へ倒れる
 /// （面の中だけの便なら何も検証しない rc 0＝fail-open）。
 /// 出力 path は `--relative` を付けない限り root 相対である。
-pub fn changed_rs(base: &str, root: &Path) -> Result<Vec<String>, String> {
+///
+/// rename（name-status の R の行）は（旧 path・新 path）、A / M / D は同じ path の対（設計 pipeline.md §53）。
+/// rename かどうかは 2 つの path の違いだけで決まる（本文の同一では決めない）。
+pub fn changed_rs(base: &str, root: &Path) -> Result<Vec<(String, String)>, String> {
     changed_names(base, root, ":(top)*.rs")
 }
 
-/// `git diff --name-only <base>...HEAD -- :(top)` の出力行＝便が動かした**全部の** path（docs-only の面の判定の
-/// 母集団・設計 pipeline.md §7・`s2-07l.170`）。錨は [`changed_rs`] と同じ理由で付ける。
+/// 便が動かした**全部の** path（docs-only の面の判定の母集団・設計 pipeline.md §7・`s2-07l.170`）。
+/// 錨は [`changed_rs`] と同じ理由で付ける。rename は旧 path と新 path の**両方**を数える（§53 の形 3——
+/// 新 path だけを数えると、面の外から面の中へ移しただけの便が docs-only で通る）。
 pub fn changed_files(base: &str, root: &Path) -> Result<Vec<String>, String> {
-    changed_names(base, root, ":(top)")
+    let mut paths = Vec::new();
+    for (old, new) in changed_names(base, root, ":(top)")? {
+        if old != new {
+            paths.push(old);
+        }
+        paths.push(new);
+    }
+    Ok(paths)
 }
 
-/// `git diff --name-only <base>...HEAD -- <pathspec>` の出力行。rc≠0 は Err（infra-error）。
-fn changed_names(base: &str, root: &Path, pathspec: &str) -> Result<Vec<String>, String> {
+/// `git diff --name-status -z -M <base>...HEAD -- <pathspec>` の出力を（base 側・HEAD 側）の path の対へ読む。
+/// rc≠0 は Err（infra-error）。
+///
+/// `-M` を明示する（`diff.renames` の設定に依らない）。`-z` は path を quote させない（NUL 区切り）。
+/// R の行は状態の後に path を 2 つ、他の行は 1 つ持つ。
+fn changed_names(base: &str, root: &Path, pathspec: &str) -> Result<Vec<(String, String)>, String> {
     let range = format!("{base}...HEAD");
     let output = Command::new("git")
         .arg("-C")
         .arg(root)
-        .args(["diff", "--name-only"])
+        .args(["diff", "--name-status", "-z", "-M"])
         .arg(&range)
         .arg("--")
         .arg(pathspec)
@@ -76,10 +91,20 @@ fn changed_names(base: &str, root: &Path, pathspec: &str) -> Result<Vec<String>,
     if !output.status.success() {
         return Err(format!("git diff が rc≠0: {}", trimmed(&output.stderr)));
     }
-    Ok(String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(str::to_owned)
-        .collect())
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut fields = text.split('\0').filter(|field| !field.is_empty());
+    let mut pairs = Vec::new();
+    while let Some(status) = fields.next() {
+        let missing = || format!("git diff の name-status が {status} の後で途切れた");
+        let first = fields.next().ok_or_else(missing)?.to_owned();
+        let second = if status.starts_with('R') {
+            fields.next().ok_or_else(missing)?.to_owned()
+        } else {
+            first.clone()
+        };
+        pairs.push((first, second));
+    }
+    Ok(pairs)
 }
 
 /// `<rev>:<rel>` の本文。その rev に無ければ `Ok(None)`。
@@ -101,16 +126,23 @@ fn show(root: &Path, rev: &str, rel: &str) -> Result<Option<String>, String> {
     Ok(Some(String::from_utf8_lossy(&output.stdout).into_owned()))
 }
 
-/// 変更 .rs ごとに base / HEAD の本文を読む。
+/// 変更 .rs ごとに base / HEAD の本文を読む。base の本文は base 側の path（rename なら旧 path）で読む（§53）。
+///
+/// 対の `rel` は HEAD 側の path（overlay の書き先）。base 側の path は `changed` の列が持ち、`FilePair` へは
+/// 欄を足さない（構築点が歯の file に在る）。旧 path の test 区間の札は base 側の本文に在るので持ち越しになる。
 ///
 /// `pub(super)` に留める（`FilePair` は親の private 型なので、`pub` に上げると `private_interfaces`
 /// で落ちる）。親は名指しの `use` で読む。
-pub(super) fn load_pairs(base: &str, root: &Path, changed: &[String]) -> Result<Vec<FilePair>, String> {
+pub(super) fn load_pairs(
+    base: &str,
+    root: &Path,
+    changed: &[(String, String)],
+) -> Result<Vec<FilePair>, String> {
     let mut pairs = Vec::new();
-    for rel in changed {
+    for (base_rel, rel) in changed {
         pairs.push(FilePair {
             rel: rel.clone(),
-            base: show(root, base, rel)?,
+            base: show(root, base, base_rel)?,
             head: show(root, "HEAD", rel)?,
         });
     }
