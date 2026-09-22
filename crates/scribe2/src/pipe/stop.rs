@@ -3,6 +3,7 @@
 //! **env も HOME も読まない**（憲法 C2.2）。置き場と規則の値は `pipe::cli` と同じ口から解く。
 
 use super::cli::{broken, flag, int_row, live, refused, state_dir_of};
+use super::confine::{self, Reaped};
 use super::{current, emit, is_stopping, Emit, STOPPING};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
 use crate::fleet::store::{LockPolicy, StoreError};
@@ -95,6 +96,8 @@ fn stop_run(args: &[String], manifest: &Manifest, policy: LockPolicy, id: &str) 
         Ok(true) => line.push_str(" driver=stopped"),
         Err((rc, reason)) => return Outcome { out: vec![line], err: vec![reason], rc },
     }
+    // **席と運転手の後・`RunStopped` の前に、作り手が死んだ scope を畳む**（設計 gate-cost.md §38 形 4 / 5）。
+    line.push_str(&format!(" scopes={}", confine::reap_orphan_scopes().word()));
     if let Err(err) = record_run_stopped(&state_dir, &state, id, policy) {
         return broken(err);
     }
@@ -168,15 +171,17 @@ fn unstoppable(line: String, left: usize) -> Outcome {
 
 /// `pipe stop --all`。生きている席を止める。**冪等**（対象なしは rc 0）。
 fn stop_all(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Outcome {
-    stop_all_with(args, manifest, policy, &terminate)
+    stop_all_with(args, manifest, policy, &terminate, &confine::reap_orphan_scopes)
 }
 
-/// [`stop_all`] の本体。席を止める実装（`terminate`）を受ける＝in-file の歯は実 signal を撃たない stub を渡す。
+/// [`stop_all`] の本体。席を止める実装（`terminate`）と scope を畳む実装（`reap`）を受ける＝in-file の歯は
+/// 実 signal も実 `systemctl` も撃たない stub を渡す。
 fn stop_all_with(
     args: &[String],
     manifest: &Manifest,
     policy: LockPolicy,
     terminate: &dyn Fn(u64, u64) -> bool,
+    reap: &dyn Fn() -> Reaped,
 ) -> Outcome {
     if !super::cli::present(args, "--all") {
         return refused("--all が要る".to_owned());
@@ -221,13 +226,15 @@ fn stop_all_with(
             stopped_runs.push(run);
         }
     }
+    // 席の後・`RunStopped` の前に、作り手が死んだ scope を畳む（設計 gate-cost.md §38 形 4）。
+    let scopes = reap();
     // `--run` と同じ極性: **止め切れなかった席を持つ便には `RunStopped` を書かない**。
     for run in stopped_runs.iter().filter(|run| !unstopped_runs.contains(run)) {
         if let Err(err) = record_run_stopped(&state_dir, &state, run, policy) {
             return broken(err);
         }
     }
-    let line = format!("stop: seats={} stopped={stopped}", live.len());
+    let line = format!("stop: seats={} stopped={stopped} scopes={}", live.len(), scopes.word());
     if stopped == live.len() {
         Outcome::ok_line(line)
     } else {
@@ -390,7 +397,7 @@ fn bead_of<'a>(state: &'a State, run: &str) -> &'a str {
 #[cfg(test)]
 mod tests {
     // flip-check: moved s2-07l.253
-    use super::{stop_all_with, stop_plan, GroupId, StopPlan};
+    use super::{stop_all_with, stop_plan, GroupId, Reaped, StopPlan};
     use crate::cli_outcome::{RC_OK, RC_REFUSED};
     use crate::fleet::store::{self, LockPolicy};
     use crate::fleet::{Event, EventKind};
@@ -426,7 +433,7 @@ mod tests {
         let Ok(policy) = LockPolicy::from_rules(&manifest) else {
             return crate::cli_outcome::Outcome::failed_line(2, "lock 規則を読めない".to_owned());
         };
-        stop_all_with(&args, &manifest, policy, &|pid, _grace| stoppable.contains(&pid))
+        stop_all_with(&args, &manifest, policy, &|pid, _grace| stoppable.contains(&pid), &|| Reaped::Unmeasured)
     }
 
     // flip-check: retroactive s2-07l.222
@@ -439,7 +446,7 @@ mod tests {
         append_all(&state, &[seat_up("run-a", "seat-a1", 9_001), seat_up("run-a", "seat-a2", 9_002), seat_up("run-b", "seat-b", 9_003)]);
         let out = stop_with_stub(&state, &[9_001, 9_002, 9_003]);
         assert_eq!(out.rc, RC_OK, "全席を止めた: {:?}", out.err);
-        assert_eq!(out.out, vec!["stop: seats=3 stopped=3".to_owned()]);
+        assert_eq!(out.out, vec!["stop: seats=3 stopped=3 scopes=-".to_owned()]);
         assert_eq!(runs_of(&state, EventKind::SeatStopped), vec!["run-a", "run-a", "run-b"], "止めた席ごとに 1 件");
         assert_eq!(runs_of(&state, EventKind::RunStopped), vec!["run-a", "run-b"], "止めた便の全便に 1 件ずつ");
         let _ = std::fs::remove_dir_all(&state);
@@ -455,7 +462,7 @@ mod tests {
         append_all(&state, &[seat_up("run-a", "seat-a1", 9_101), seat_up("run-a", "seat-a2", 9_102), seat_up("run-b", "seat-b", 9_103)]);
         let out = stop_with_stub(&state, &[9_101, 9_103]);
         assert_eq!(out.rc, RC_REFUSED, "止め切れなかった席が残る: {:?}", out.err);
-        assert_eq!(out.out, vec!["stop: seats=3 stopped=2".to_owned()]);
+        assert_eq!(out.out, vec!["stop: seats=3 stopped=2 scopes=-".to_owned()]);
         assert_eq!(runs_of(&state, EventKind::SeatStopped), vec!["run-a", "run-b"], "止めた席にだけ書く");
         assert_eq!(runs_of(&state, EventKind::RunStopped), vec!["run-b"], "止め切れた便にだけ書く");
         let _ = std::fs::remove_dir_all(&state);

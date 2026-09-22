@@ -1800,6 +1800,47 @@ fn pipe_confine_release_runner_and_lens_scopes_are_released() {
     clean(&[&repo, &state]);
 }
 
+/// (g) 止める口の終端で、作り手の process が死んだ scope だけを畳む（設計 gate-cost.md §38 形 4 / 5・`s2-07l.452`）。
+///
+/// 偽 `systemctl` の一覧は active な scope を 2 本返す（1 本は生きた pid＝この歯の process、1 本は待ち終えた
+/// `true` の死んだ pid を名に持つ）。kill は死んだ側にだけ 1 回（後に reset-failed が 1 回）撃たれ、生きた側には
+/// 0 回で、行の末尾が `scopes=1/2` になる。base は一覧を 1 度も撃たない＝機能不在の RED。
+#[test]
+fn pipe_scope_reap_stop_kills_only_the_dead_creators_scope() {
+    let (repo, state) = repo_with_state();
+    let path = systemd_stub(&state);
+    let mut gone = Command::new("true").spawn().expect("true を起こせる");
+    let dead = gone.id();
+    gone.wait().expect("true を待てる");
+    let live_unit = format!("{NAME}-reap-live-contract-1-{}-0", std::process::id());
+    let dead_unit = format!("{NAME}-reap-dead-contract-1-{dead}-0");
+    let answer = format!(
+        "case \"$2\" in list-units) printf '%s loaded active running x\\n' '{live_unit}.scope' '{dead_unit}.scope';; esac\nexit 0"
+    );
+    systemctl_stub(&state, &answer);
+    let recorded = bin_cmd()
+        .args(["fleet", "record", "--kind", "RunStage", "--run", "reap", "--bead", "b", "--stage", "Implemented"])
+        .args(["--detail", "x", "--state-dir"])
+        .arg(&state)
+        .output()
+        .expect("fleet record を撃てる");
+    assert_eq!(recorded.status.code(), Some(i32::from(RC_OK)), "走行中の便を置ける: {}", stderr_of(&recorded));
+    let out = run_pipe_with_path(&path, &["stop", "--run", "reap", "--state-dir", &state.display().to_string()]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "rc は不変: {}", stderr_of(&out));
+    assert_eq!(
+        stdout_of(&out).trim(),
+        "stop: run=reap seats=0 stopped=0 scopes=1/2",
+        "既存の token の後に畳んだ数 / 一覧の件数"
+    );
+    let calls = fs::read_to_string(state.join(SYSTEMCTL_CALLS)).unwrap_or_default();
+    let listed = calls.lines().filter(|line| line.starts_with("--user list-units ")).count();
+    assert_eq!(listed, 1, "一覧は 1 回（母集団 {calls:?}）");
+    assert_eq!(release_calls(&state, &dead_unit), release_sequence(&dead_unit), "死んだ作り手の scope は既存の片付けで 1 回");
+    assert!(release_calls(&state, &live_unit).is_empty(), "生きた作り手の scope は触らない: {calls:?}");
+    assert_eq!(kind_count(&state, "reap", EventKind::RunStopped), 1, "RunStopped は従来どおり 1 件");
+    clean(&[&repo, &state]);
+}
+
 /// 便を 1 本 gate まで通し、`path_of` が組んだ PATH の下で書かれた verdict.json を読む
 /// （置き場は片付けてから返す）。
 fn verdict_under(path_of: impl Fn(&Path) -> String) -> Vec<(String, vessel::fleet::json_lite::Value)> {

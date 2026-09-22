@@ -402,6 +402,115 @@ pub fn release_scope(confinement: &Confinement) -> Option<Released> {
     }
 }
 
+/// unit 名から作り手の pid を読む（pure・設計 gate-cost.md §38 形 1）: `-` で割った列の**末尾から 2 番目**。
+///
+/// [`unit_name`] の場所と段は [`tame`] が記号を `-` に畳むので割れ数は名ごとに違うが、末尾の 2 つ（pid と
+/// 通し番号）は畳まれない。割れ数が足りない名・数でない名は `None`（推測で埋めない）。
+pub fn creator_pid(unit: &str) -> Option<u32> {
+    unit.rsplit('-').nth(1)?.parse().ok()
+}
+
+/// 残骸の一覧を取る `systemctl` の引数（設計 §38 形 2）: active な scope だけを legend と pager を止めた素の形で、
+/// pattern は器の名から導いた 1 語。
+pub fn list_args() -> Vec<String> {
+    vec![
+        "--user".to_owned(),
+        "list-units".to_owned(),
+        "--no-legend".to_owned(),
+        "--no-pager".to_owned(),
+        "--plain".to_owned(),
+        "--type=scope".to_owned(),
+        "--state=active".to_owned(),
+        format!("{NAME}-*.scope"),
+    ]
+}
+
+/// active な scope の unit 名（`.scope` 付き）を 1 回引く（PATH 解決・[`SYSTEMCTL`]）。
+///
+/// 道具が無い周と rc 非 0 の周は `None`＝**空の一覧（0 件）と融合しない**（C10）。
+pub fn list_scopes() -> Option<Vec<String>> {
+    let out = Command::new(SYSTEMCTL)
+        .args(list_args())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output();
+    listed_from(out)
+}
+
+/// `systemctl list-units` の結果を読む（pure・in-file の歯が fixture で測る）: 行頭の unit 名だけを取る。
+pub fn listed_from(out: std::io::Result<Output>) -> Option<Vec<String>> {
+    let out = out.ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    Some(
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(|line| line.split_whitespace().next())
+            .map(str::to_owned)
+            .collect(),
+    )
+}
+
+/// 畳む相手を決める（pure・設計 §38 形 3）: 名が器の scope の形で作り手の pid を読め、その pid が `alive` に
+/// **無い**行だけを残す（`.scope` を剥がした unit 名で返す＝[`release`] へそのまま渡せる）。
+pub fn reap_targets(rows: &[String], alive: &std::collections::BTreeSet<u32>) -> Vec<String> {
+    let head = format!("{NAME}-");
+    rows.iter()
+        .filter_map(|row| row.strip_suffix(".scope"))
+        .filter(|unit| unit.starts_with(&head))
+        .filter(|unit| creator_pid(unit).is_some_and(|pid| !alive.contains(&pid)))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// 一覧の行の作り手のうち生きている pid（[`started_ms`](crate::fleet::store::started_ms) が `Started`・
+/// **`Unreadable` は生きている側**＝測れない作り手の scope は畳まない）。
+fn alive_creators(rows: &[String]) -> std::collections::BTreeSet<u32> {
+    use crate::fleet::store::{started_ms, Probe};
+    rows.iter()
+        .filter_map(|row| creator_pid(row.strip_suffix(".scope").unwrap_or(row)))
+        .filter(|pid| !matches!(started_ms(*pid), Probe::Absent))
+        .collect()
+}
+
+/// 作り手が死んだ scope を畳んだ結果（止める口の行の `scopes=`・設計 §38 形 5）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reaped {
+    /// 畳んだ数と一覧の件数。
+    Counted {
+        /// 既存の片付けで畳めた数（`Killed` か `Gone`）。
+        reaped: usize,
+        /// 一覧の件数。
+        listed: usize,
+    },
+    /// 一覧を測れなかった（0 件と融合しない）。
+    Unmeasured,
+}
+
+impl Reaped {
+    /// 行に書く字面（`<畳んだ数>/<一覧の件数>`・測れなかった周は `-`）。
+    pub fn word(self) -> String {
+        match self {
+            Self::Counted { reaped, listed } => format!("{reaped}/{listed}"),
+            Self::Unmeasured => "-".to_owned(),
+        }
+    }
+}
+
+/// 作り手が死んだ器の scope を一覧から見つけ、既存の [`release`] で 1 本ずつ畳む（設計 §38 形 4）。
+pub fn reap_orphan_scopes() -> Reaped {
+    let Some(rows) = list_scopes() else {
+        return Reaped::Unmeasured;
+    };
+    let reaped = reap_targets(&rows, &alive_creators(&rows))
+        .iter()
+        .filter(|unit| matches!(release(unit), Released::Killed | Released::Gone))
+        .count();
+    Reaped::Counted { reaped, listed: rows.len() }
+}
+
 /// cgroup v2 の root（`memory.peak` の置き場の頭・設計 §13）。**typed な既定値**で、runner / lens の
 /// `--cgroup-root DIR` が差し替える（env は読まない・C2.2）。包みの epilogue（[`script`]）は自分の字面を
 /// 持つのでここを参照しない（触らない・設計 §13）。
@@ -743,9 +852,10 @@ pub fn read_usage(stdout: &str) -> Usage {
 #[cfg(test)]
 mod tests {
     use super::{
-        control_group_from, limit_mb, limit_of, mem_total_mb, next_seq, orphans_from, orphans_of, peak_from, peak_of,
-        probe_outcome, read_usage, release_scope, released_of, scope_args, script, tame, unit_name, wrap_command, wrap_line, Caps,
-        Confinement, Limit, Orphans, Peak, Reason, Released, Sampler, Wrap, CGROUP_ROOT, PANE_ENV, REASONS,
+        control_group_from, creator_pid, limit_mb, limit_of, list_args, listed_from, mem_total_mb, next_seq, orphans_from,
+        orphans_of, peak_from, peak_of, probe_outcome, read_usage, reap_targets, release_scope, released_of, scope_args,
+        script, tame, unit_name, wrap_command, wrap_line, Caps, Confinement, Limit, Orphans, Peak, Reaped, Reason, Released,
+        Sampler, Wrap, CGROUP_ROOT, PANE_ENV, REASONS,
     };
     use crate::order::is_declaration_order;
     use crate::rules::manifest::Manifest;
@@ -793,6 +903,73 @@ mod tests {
         assert_eq!(probe_outcome(Ok(ExitStatus::from_raw(256))), Err(Reason::NoScope), "rc 1 は scope を作れない");
         let missing = std::io::Error::new(std::io::ErrorKind::NotFound, "no systemd-run");
         assert_eq!(probe_outcome(Err(missing)), Err(Reason::NoTool), "起動できない");
+    }
+
+    /// (a) 名から作り手の pid を読む: 素直な名・記号を `tame` が畳んだ名の 2 形で末尾から 2 番目が読め、割れ数が
+    /// 足りない名・数でない名は `None`（設計 gate-cost.md §38 形 1）。
+    #[test]
+    fn pipe_scope_reap_creator_pid_reads_the_second_from_last() {
+        let plain = format!("{}-run1-detection-7-4242-3", crate::name::NAME);
+        let folded = format!("{}-{}-{}-2-5151-0", crate::name::NAME, tame("s2-07l.452/run 1"), tame("review-lens"));
+        let cases = [
+            (plain.as_str(), Some(4242)),
+            (folded.as_str(), Some(5151)),
+            (crate::name::NAME, None),
+            ("vessel-run1-detection-7-x42-3", None),
+        ];
+        for (name, want) in cases {
+            assert_eq!(creator_pid(name), want, "{name}（母集団 {} 形）", cases.len());
+        }
+        let own = unit_name("s2-07l.452/run 1", "review", 3);
+        assert_eq!(creator_pid(&own), Some(std::process::id()), "unit_name の組む名は自分の pid を返す: {own}");
+    }
+
+    /// (b) 畳む相手: 死んだ作り手の unit だけが `.scope` を剥がして残り、生きた作り手の行と形に合わない行は
+    /// 残らない（設計 §38 形 3）。
+    #[test]
+    fn pipe_scope_reap_targets_keep_only_dead_creators() {
+        let name = crate::name::NAME;
+        let rows: Vec<String> = vec![
+            format!("{name}-run-a-contract-3-100-0.scope"),
+            format!("{name}-run-b-runner-1-200-4.scope"),
+            format!("{name}-300-probe.scope"),
+            format!("{name}-run-c-lens-1-x-0.scope"),
+            "other-run-d-contract-1-400-0.scope".to_owned(),
+            format!("{name}-run-e-contract-1-500-0.service"),
+        ];
+        let alive: std::collections::BTreeSet<u32> = [200].into_iter().collect();
+        assert_eq!(
+            reap_targets(&rows, &alive),
+            vec![format!("{name}-run-a-contract-3-100-0"), format!("{name}-300-probe")],
+            "死んだ作り手の 2 本だけ（母集団 {} 行）",
+            rows.len()
+        );
+        let all: std::collections::BTreeSet<u32> = [100, 200, 300].into_iter().collect();
+        assert!(reap_targets(&rows, &all).is_empty(), "全員生きていれば 0 本");
+        assert_eq!(Reaped::Counted { reaped: 1, listed: 2 }.word(), "1/2");
+        assert_eq!(Reaped::Counted { reaped: 0, listed: 0 }.word(), "0/0", "空の一覧は測れた 0");
+        assert_eq!(Reaped::Unmeasured.word(), "-", "測れなかった周は -");
+    }
+
+    /// (c) 一覧を取る呼出は `--user list-units` で始まり末尾の pattern は器の名から導き、rc 非 0 は「測れなかった」
+    /// で空の一覧と弁別される（設計 §38 形 2）。
+    #[test]
+    fn pipe_scope_reap_list_call_and_unmeasured_are_distinct() {
+        let args = list_args();
+        assert_eq!(args.get(..2), Some(&["--user".to_owned(), "list-units".to_owned()][..]), "{args:?}");
+        assert_eq!(args.last(), Some(&format!("{}-*.scope", crate::name::NAME)), "{args:?}");
+        let out = |raw: i32, stdout: &str| {
+            Ok(Output { status: ExitStatus::from_raw(raw), stdout: stdout.as_bytes().to_vec(), stderr: Vec::new() })
+        };
+        assert_eq!(listed_from(out(0, "")), Some(Vec::new()), "rc 0 の空は 0 件");
+        assert_eq!(listed_from(out(1 << 8, "")), None, "rc 非 0 は測れなかった");
+        let missing = std::io::Error::new(std::io::ErrorKind::NotFound, "no systemctl");
+        assert_eq!(listed_from(Err(missing)), None, "道具が無い");
+        assert_eq!(
+            listed_from(out(0, "vessel-a-1-9-0.scope loaded active running x\nvessel-b-1-8-0.scope loaded active running y\n")),
+            Some(vec!["vessel-a-1-9-0.scope".to_owned(), "vessel-b-1-8-0.scope".to_owned()]),
+            "行頭の unit 名だけ"
+        );
     }
 
     /// 通し番号は呼ぶたびに単調に増える。

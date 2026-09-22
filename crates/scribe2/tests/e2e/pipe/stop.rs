@@ -679,6 +679,7 @@ fn pipe_stop_driver_self_ticket_is_not_stopped() {
     let ticket = put_driver_ticket(&state, "r2", 1);
     let out = Command::new("sh")
         .current_dir(std::env::temp_dir())
+        .env("PATH", crate::toolbox_path(&state))
         .args([
             "-c",
             "printf '%s\\n' \"$$\" > \"$1\"; exec \"$2\" pipe stop --run r2 --state-dir \"$3\"",
@@ -708,7 +709,7 @@ fn pipe_stop_driver_absent_or_dead_ticket_keeps_the_old_events() {
     for run in ["none", "dead"] {
         let out = run_pipe(&["stop", "--run", run, "--state-dir", &state.display().to_string()]);
         assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{run}: {}", stderr_of(&out));
-        assert_eq!(stdout_of(&out).trim(), format!("stop: run={run} seats=0 stopped=0"), "{run}: 行は従来どおり");
+        assert_eq!(stdout_of(&out).trim(), format!("stop: run={run} seats=0 stopped=0 scopes=-"), "{run}: 既存の token は従来どおり（道具箱の一覧は測れない）");
         let kinds: Vec<EventKind> = trail(&state, run).into_iter().map(|(kind, _, _)| kind).collect();
         assert_eq!(kinds, vec![EventKind::RunStage, EventKind::RunStopped], "{run}: 従来と同じ event 列");
     }
