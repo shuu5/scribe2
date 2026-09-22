@@ -524,6 +524,19 @@ enabled = true
 ruling = "user 2026-09-22T06:48Z"
 ruled_at = "2026-09-22"
 
+# 起票の門（hook の pre-tool-use・Bash）が断る台帳 write の形（設計 vessel-hook.md §10・`s2-07l.169`）。値は形の 1 語の
+# 閉じた列で、列に載る形だけを断る: notes-replace（--notes の置換）/ memory-subcommand（remember / recall / memories）/
+# create-without-parent（--parent を持たない create）/ bd-outside-bdw（台帳の script を経ない bd の書き込み）。判定は
+# core の hook::ledger_guard の 1 関数が持つ。行が無い・読めない・不発効の周は bd / bdw の command を通さない（fail-closed）。
+
+[[rule]]
+id = "ledger.denied_writes"
+kind = "LedgerDeniedWrites"
+value = ["notes-replace", "memory-subcommand", "create-without-parent", "bd-outside-bdw"]
+enabled = true
+ruling = "user 2026-09-22T08:44Z"
+ruled_at = "2026-09-22"
+
 # 口座の宣言（設計 fleet-usage.md §2・account-lifecycle.md §2・ADR-0026 §2.1）は host の manifest（state dir
 # の host.toml）にだけ置く。この file に口座の表は置かない（文法は残る・足す変更は A1 の対話面で聞く・本 repo
 # は PUBLIC・SRS CON2）。器は credential の置き場を走査せず、宣言だけを真実として読む（C3）。

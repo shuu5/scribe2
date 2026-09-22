@@ -103,7 +103,7 @@ xtask 側: `crates/xtask/src/genmanifest.rs` の `#[cfg(test)]` に、render の
      - `create-without-parent` = subcommand が `create` で `--parent`（連結形を含む）を持たない。
      - `bd-outside-bdw` = segment の先頭語の path の末尾が `bd`（`bdw` **でない**）で、subcommand が書き込みの閉じた列に在る。書き込みの語の列は code の定数として持つ（道具の語彙であって裁定ではない＝`bd` に subcommand が増えた周は code に手が入る）。
   4. **断りの形は既存と同じ**: rc 2 + stderr 1 行 + stdout 0 byte、記録は `ledger-deny <理由の 1 語>`（`crates/scribe2/src/hook/mod.rs` の 666 行の経路・4 形とも次の一手を 1 行に持つ）。判定の順序（write-set guard → seat guard → command guard → 起票の門 → 権能 guard）も、極性（in-loop / fail-closed・境界の型は既存の 2 値のまま）も動かない＝極性一覧は 1 行も増えない。
-  5. **rules を読めない周・行が無い周は deny**（fail-closed）。読む口は command guard と同じ（埋め込みの manifest・`--rules` が在ればそれ）。
+  5. **rules を読めない周・行が無い周は deny**（fail-closed）。読む口は command guard と同じ（埋め込みの manifest・`--rules` が在ればそれ）。理由の 1 語は rules-unreadable と no-row（行が無い・不発効・値が列でない）で、rules を読むのは bd / bdw の segment を持つ command だけ（持たない command は読まずに通す＝他の Bash を巻き込まない）。memo の判定（既存の 3 つの理由）は 4 形より先に当たり、4 形の deny 文は memo の deny 文と頭を分ける（「台帳の write は起票の門が止める」）。
 - **触らない**: §5 の write-set guard と command guard の判定・`runner.denied_commands` の値と語列の照合・極性一覧の行数と境界の型の名・memo の 4 節の判定と契約の label の判定（既存の 3 つの理由の字面）・`crates/scribe2/src/rules/manifest.rs` の読み（新しい kind は既存の解決を通る）・`crates/xtask/src/limits.rs`（閾値の行だけを写す面で、値が列の行は写さない＝実測）。
 - **判定できない面（deny の射程の外・却下ではなく限界として残す）**: shell の別名と関数・変数展開と command 置換（門は字面のまま読む＝`crates/scribe2/src/hook/ledger_guard.rs` の 11 行の既存の宣言）・interpreter の引数の中身（`sh -c` の中の台帳の write は §8 の却下案のとおり v3）・台帳の道具の script が内側で起こす子 process（Bash tool の呼び出しではないので門に見えない＝**偽陽性にならない**側）。
 - **却下**:

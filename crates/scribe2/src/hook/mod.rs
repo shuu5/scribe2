@@ -647,7 +647,7 @@ fn brief_refused(reason: &str) -> String {
 /// 2 つの門が同時に落ちる周に、直す側がどちらを直せばよいか読めなくならないため）。write-set guard と
 /// seat guard は cwd の git dir が要る（cwd が repo の外なら測れない＝従来どおり通す側）が、command guard と
 /// role guard は anchor から解くので cwd に依らず評価する。起票の門（[`ledger_guard`]）は command guard の直後で、
-/// body-file の相対 path を payload の `cwd` から解く。
+/// body-file の相対 path を payload の `cwd` から解き、台帳 write の断る形は command guard と同じ rules から読む。
 fn pre_tool_use(hooked: &Hooked, payload: &str, started: Instant) -> Outcome {
     let (root, cwd) = (hooked.root, hooked.cwd);
     let tool = field(payload, KEY_TOOL).unwrap_or_default();
@@ -663,7 +663,8 @@ fn pre_tool_use(hooked: &Hooked, payload: &str, started: Instant) -> Outcome {
         if let CommandDecision::Deny { what, line } = decided {
             return denied(hooked, &format!("command-deny {what}"), line, started);
         }
-        if let LedgerDecision::Deny { what, line } = ledger_guard::decide(command.as_deref().unwrap_or_default(), cwd) {
+        let rules = hooked.rules.map(Path::new);
+        if let LedgerDecision::Deny { what, line } = ledger_guard::decide(command.as_deref().unwrap_or_default(), cwd, rules) {
             return denied(hooked, &format!("ledger-deny {what}"), line, started);
         }
     }

@@ -247,6 +247,10 @@ pub enum RuleKind {
     /// 1 便が足してよい flip check の札（`retroactive` / `moved`）の本数の上限（本・設計 pipeline.md §7・
     /// `s2-07l.170`）。超えた便は `too-many-marks` で落ちる。読み手は xtask 側（core は値を消費しない）。
     FlipMarksPerPr,
+    /// 起票の門が断る台帳 write の形（設計 vessel-hook.md §10・`s2-07l.169`）。値は形の 1 語の閉じた列
+    /// （`notes-replace` / `memory-subcommand` / `create-without-parent` / `bd-outside-bdw`）で、判定そのものは
+    /// [`crate::hook::ledger_guard`] が持つ。列に載る形だけを断る。
+    LedgerDeniedWrites,
 }
 
 /// [`RuleKind`] の全 variant。parity test の母集団である。
@@ -306,6 +310,7 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::PipeMaxLive,
     RuleKind::FlipDocsOnlyFaces,
     RuleKind::FlipMarksPerPr,
+    RuleKind::LedgerDeniedWrites,
 ];
 
 impl RuleKind {
@@ -367,6 +372,7 @@ impl RuleKind {
             Self::PipeMaxLive => "PipeMaxLive",
             Self::FlipDocsOnlyFaces => "FlipDocsOnlyFaces",
             Self::FlipMarksPerPr => "FlipMarksPerPr",
+            Self::LedgerDeniedWrites => "LedgerDeniedWrites",
         }
     }
 
@@ -427,7 +433,8 @@ impl RuleKind {
             | Self::RunnerDeniedCommands
             | Self::RepoNonRustExecAllow
             | Self::RoleCapabilities
-            | Self::FlipDocsOnlyFaces => ValueShape::List,
+            | Self::FlipDocsOnlyFaces
+            | Self::LedgerDeniedWrites => ValueShape::List,
         }
     }
 

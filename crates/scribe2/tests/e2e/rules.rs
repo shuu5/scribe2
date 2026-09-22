@@ -1218,11 +1218,11 @@ fn rules_flip_marks_per_pr_row_is_declared_on_five_faces() {
     assert!(row.enabled, "既定で効く");
     assert_eq!((row.ruling.as_str(), row.ruled_at.as_str()), FLIP_RULING, "裁定 id と裁定日");
     assert_eq!(int_row(&manifest, "flip.marks_per_pr"), Ok(16), "整数の読み手で 16 が取れる");
-    let tail: Vec<RuleKind> = ALL.iter().rev().take(3).rev().copied().collect();
+    let tail: Vec<RuleKind> = ALL.iter().rev().take(4).rev().copied().collect();
     assert_eq!(
         tail,
-        vec![RuleKind::PipeMaxLive, RuleKind::FlipDocsOnlyFaces, RuleKind::FlipMarksPerPr],
-        "宣言順の末尾は flip の 2 kind（母集団 {} 種）",
+        vec![RuleKind::PipeMaxLive, RuleKind::FlipDocsOnlyFaces, RuleKind::FlipMarksPerPr, RuleKind::LedgerDeniedWrites],
+        "flip の 2 kind は PipeMaxLive の後ろに対で在り、その後ろが `.169` の kind（母集団 {} 種）",
         ALL.len()
     );
     assert_eq!(RuleKind::parse("FlipMarksPerPr"), Some(RuleKind::FlipMarksPerPr), "kind を字面から引ける");
@@ -1230,6 +1230,25 @@ fn rules_flip_marks_per_pr_row_is_declared_on_five_faces() {
     assert!(errors.join("\n").contains("未知である"), "綴り違いの kind は読めない: {errors:?}");
     let errors = rejected(&one_row(RuleKind::FlipMarksPerPr, "\"sixteen\"")).expect("文字列の値の fixture が受理された");
     assert!(errors.join("\n").contains("形と合わない"), "形は Int だけ: {errors:?}");
+}
+
+/// 台帳 write の断る形の行（`ledger.denied_writes`・設計 vessel-hook.md §10・`s2-07l.169`）が kind・値の 4 語・enabled・
+/// 裁定 id の 4 面で引ける。**値は manifest が持つ**（C1 / C5）。形は List だけで、kind の綴り違いは未知として読めない。
+#[test]
+fn rules_ledger_denied_writes_row_is_declared_on_four_faces() {
+    let manifest = Manifest::embedded().unwrap_or_else(|errors| panic!("埋め込み manifest が拒まれた: {errors:?}"));
+    let row = manifest.get("ledger.denied_writes").expect("台帳 write の断る形の行が在る");
+    let forms = ["notes-replace", "memory-subcommand", "create-without-parent", "bd-outside-bdw"];
+    assert_eq!(row.value, RuleValue::List(forms.iter().map(|form| (*form).to_owned()).collect()), "裁定の値（閉じた 4 語）");
+    assert_eq!((row.kind, row.kind.shape()), (RuleKind::LedgerDeniedWrites, ValueShape::List), "kind と形");
+    assert!(row.enabled, "既定で効く");
+    assert_eq!((row.ruling.as_str(), row.ruled_at.as_str()), ("user 2026-09-22T08:44Z", "2026-09-22"), "裁定 id と裁定日");
+    assert!(ALL.contains(&RuleKind::LedgerDeniedWrites), "ALL に在る");
+    assert_eq!(RuleKind::parse("LedgerDeniedWrites"), Some(RuleKind::LedgerDeniedWrites), "kind を字面から引ける");
+    let errors = rejected(&one_row_raw("LedgerDeniedWrite", "[\"notes-replace\"]")).expect("未知の kind の fixture が受理された");
+    assert!(errors.join("\n").contains("未知である"), "綴り違いの kind は読めない: {errors:?}");
+    let errors = rejected(&one_row(RuleKind::LedgerDeniedWrites, "16")).expect("整数の値の fixture が受理された");
+    assert!(errors.join("\n").contains("形と合わない"), "形は List だけ: {errors:?}");
 }
 
 /// rebrief が台帳を待つ上限の行（`seat.ledger_timeout_s`・裁定 id `user 2026-09-12T02:01Z`・設計
@@ -1404,7 +1423,7 @@ fn rules_embedded_manifest_is_valid_and_covers_all_kinds() {
     // **tracked な `rules/manifest.toml` の全行が受理される**（`parse` は 1 件でも違反が
     // 在れば `Err` を返すので、ここに届いた時点で全行が必須 key を持つ）。母集団を額面に
     // 出すのは、行が黙って落ちた周を「全部読めた」と読み違えないためである。
-    assert_eq!(manifest.rows().len(), 55, "埋め込み manifest の行数（母集団・`.170` で +2〔flip の免除経路の面と札の上限〕・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.478` で -1〔役割の行 2 本が 1 本〕・`.479.1` で -7〔席の自律の行〕・`.479.2` で -3〔作業記憶の行 1 本と棚卸しの行 2 本〕・`.382` で +1〔終端の CI の上限〕・`.433` で +2〔役割の既定の model と effort〕・`.407` で +1〔選定の前計測の鮮度〕・`.396` で +1〔同型の審査 FAIL の停止の回数〕・`.504` の行 x で +2〔器の健康の遮断器の倍率〕・`.428` で +1〔着地の列の上限〕・`.398` で +1〔同時本数の最大値〕）");
+    assert_eq!(manifest.rows().len(), 56, "埋め込み manifest の行数（母集団・`.169` で +1〔台帳 write の断る形〕・`.170` で +2〔flip の免除経路の面と札の上限〕・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.478` で -1〔役割の行 2 本が 1 本〕・`.479.1` で -7〔席の自律の行〕・`.479.2` で -3〔作業記憶の行 1 本と棚卸しの行 2 本〕・`.382` で +1〔終端の CI の上限〕・`.433` で +2〔役割の既定の model と effort〕・`.407` で +1〔選定の前計測の鮮度〕・`.396` で +1〔同型の審査 FAIL の停止の回数〕・`.504` の行 x で +2〔器の健康の遮断器の倍率〕・`.428` で +1〔着地の列の上限〕・`.398` で +1〔同時本数の最大値〕）");
     for kind in ALL {
         let covered = manifest.rows().iter().any(|row| row.kind == *kind);
         assert!(covered, "{} の行が manifest に無い", kind.as_str());
@@ -1574,10 +1593,10 @@ fn rules_embedded_manifest_declares_one_capability_row_per_role() {
             assert!(Capability::parse(name).is_some(), "{id} の値 {name} は Capability の名");
         }
     }
-    assert!(ALL.contains(&RuleKind::RoleCapabilities), "ALL に在る（末尾は `.170` の FlipMarksPerPr）");
+    assert!(ALL.contains(&RuleKind::RoleCapabilities), "ALL に在る（末尾は `.169` の LedgerDeniedWrites）");
     assert_eq!(RuleKind::parse("RoleCapabilities"), Some(RuleKind::RoleCapabilities), "kind を字面から引ける");
     let kinds = ALL.len();
-    assert_eq!(kinds, 55, "kind の母集団（`.170` で +2〔flip の免除経路の面と札の上限〕・`.201` で +1・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.479.2` で -3・`.382` で +1〔終端の CI の上限〕・`.433` で +2〔役割の既定の 2 種〕・`.407` で +1〔選定の前計測の鮮度〕・`.396` で +1〔同型の審査 FAIL の停止の回数〕・`.504` の行 x で +2〔器の健康の遮断器の倍率〕・`.428` で +1〔着地の列の上限〕・`.398` で +1〔同時本数の最大値〕）");
+    assert_eq!(kinds, 56, "kind の母集団（`.169` で +1〔台帳 write の断る形〕・`.170` で +2〔flip の免除経路の面と札の上限〕・`.201` で +1・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.479.2` で -3・`.382` で +1〔終端の CI の上限〕・`.433` で +2〔役割の既定の 2 種〕・`.407` で +1〔選定の前計測の鮮度〕・`.396` で +1〔同型の審査 FAIL の停止の回数〕・`.504` の行 x で +2〔器の健康の遮断器の倍率〕・`.428` で +1〔着地の列の上限〕・`.398` で +1〔同時本数の最大値〕）");
 }
 
 /// 禁じる語列の行（`runner.denied_commands`・`RuleKind::RunnerDeniedCommands`・裁定 id `user 2026-09-14`・ADR-0025 §2.1・

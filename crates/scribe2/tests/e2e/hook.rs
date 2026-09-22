@@ -822,9 +822,9 @@ fn hook_memo_guard_requires_every_memo_section_in_the_body_file() {
     fs::write(&full, MEMO_BODY).expect("本文を書ける");
     let full = full.display().to_string();
     for command in [
-        "bd create \"[memo] 観測の件\" --type=task --body-file memo.md".to_owned(),
-        format!("scripts/bdw create --title=x --labels=doc:toy,intake:memo --body-file {full}"),
-        format!("cd . && bdw create --title \"[memo] y\" -l intake:memo --body-file={full}"),
+        "bdw create \"[memo] 観測の件\" --type=task --parent s2-1 --body-file memo.md".to_owned(),
+        format!("scripts/bdw create --title=x --parent=s2-1 --labels=doc:toy,intake:memo --body-file {full}"),
+        format!("cd . && bdw create --title \"[memo] y\" --parent s2-1 -l intake:memo --body-file={full}"),
     ] {
         assert_ledger_pass(&state, &repo, &command);
     }
@@ -859,7 +859,7 @@ fn hook_memo_guard_denies_memo_label_on_a_contract_create() {
     );
     assert!(text.contains("intake:memo"), "label を名指す: {text}");
     assert_ledger_deny(&state, &repo, "bdw create c --labels=intake:memo --acceptance=\"x\ndesign = docs/design/toy.md#a\"", "memo-on-contract");
-    assert_ledger_pass(&state, &repo, "bd create --title=c --acceptance \"design = docs/design/toy.md#a\" --labels doc:toy");
+    assert_ledger_pass(&state, &repo, "bdw create --title=c --parent s2-1 --acceptance \"design = docs/design/toy.md#a\" --labels doc:toy");
     clean(&[&repo, &state]);
 }
 
@@ -885,15 +885,108 @@ fn hook_memo_guard_passes_non_memo_creates_and_other_bd_commands() {
     let repo = git_repo();
     let state = linked(&repo);
     for command in [
-        "bd create \"program\" --type epic",
-        "bdw create --title=\"裁定 x\" --type=decision --body-file nope.md",
-        "bd update s2-1 --title \"[memo] x\" --add-label intake:memo",
+        "bdw create \"program\" --type feature --parent s2-1",
+        "bdw create --title=\"裁定 x\" --type=decision --parent=s2-1 --body-file nope.md",
+        "bdw update s2-1 --title \"[memo] x\" --add-label intake:memo",
         "bd list --label intake:memo --json",
         "scripts/bdw update s2-1 --append-notes \"### 出所\"",
         "echo bd create \"[memo] x\"",
     ] {
         assert_ledger_pass(&state, &repo, command);
     }
+    clean(&[&repo, &state]);
+}
+
+// ─────────────── 台帳 write の 4 形（`s2-07l.169`・設計 vessel-hook.md §10・接頭辞 `hook_ledger_write_`） ───────────────
+//
+// memo の判定で止まらない `bd` / `bdw` の segment を、rules 行 `ledger.denied_writes` の値に載る 4 形に掛ける。
+
+/// 台帳 write の形の deny の外形（rc 2・stdout 0 byte・stderr 1 行・理由の 1 語）と記録 1 行（`what = ledger-deny <理由>`）。
+fn assert_write_deny(state: &Path, out: &Output, command: &str, reason: &str) {
+    let text = stderr_text(out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "{command}: deny は rc 2: {text}");
+    assert!(out.stdout.is_empty(), "{command}: deny でも stdout は 0 byte");
+    assert_eq!(stderr_lines(out), 1, "{command}: stderr は 1 行: {text}");
+    assert!(text.starts_with(&format!("{NAME}: deny 台帳の write は起票の門が止める reason={reason}（")), "{command}: {text}");
+    assert!(text.contains(" — "), "{command}: 次の一手を持つ: {text}");
+    let lines = ledger_records(state);
+    assert_eq!(what_of(&lines.last().cloned().unwrap_or_default()), format!("ledger-deny {reason}"), "{command}");
+}
+
+/// 埋め込みの rules で撃ち、形の deny と記録がちょうど 1 行増えることを確かめる。
+fn assert_write_denied(state: &Path, repo: &Path, command: &str, reason: &str) {
+    let before = ledger_records(state).len();
+    let out = run_hook("pre-tool-use", &bash_payload(repo, command));
+    assert_write_deny(state, &out, command, reason);
+    assert_eq!(ledger_records(state).len(), before + 1, "{command}: 記録は 1 行増える");
+}
+
+/// (a) 4 形が断られる: bd と bdw のどちらでも `--notes` の両形・記憶の 3 語・`--parent` の無い create・`bd` の書き込み。
+#[test]
+fn hook_ledger_write_denies_each_form() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    for command in ["bd update s2-1 --notes x", "bdw update s2-1 --notes=x", "scripts/bdw update s2-1 --notes \"a b\"", "bd update s2-1 --notes=x"] {
+        assert_write_denied(&state, &repo, command, "notes-replace");
+    }
+    for command in ["bdw remember x", "bdw recall x", "bdw memories", "bd remember x", "bd recall x", "bd memories"] {
+        assert_write_denied(&state, &repo, command, "memory-subcommand");
+    }
+    for command in ["bdw create \"x\" --type task", "cd . && bdw create --title=x", "bd create \"program\" --type epic"] {
+        assert_write_denied(&state, &repo, command, "create-without-parent");
+    }
+    for command in ["bd update s2-1 --status open", "bd close s2-1", "ls; /usr/bin/bd dep add a b", "bd create x --parent=s2-1"] {
+        assert_write_denied(&state, &repo, command, "bd-outside-bdw");
+    }
+    clean(&[&repo, &state]);
+}
+
+/// (b) 当たらない例が形ごとに通る（rc 0・0 byte・記録なし）: `--append-notes`・`bdw` の書き込み・`--parent` を持つ create・
+/// 読みの subcommand。
+#[test]
+fn hook_ledger_write_passes_the_near_misses() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    for command in [
+        "bdw update s2-1 --append-notes x",
+        "scripts/bdw update s2-1 --append-notes=\"### 出所\"",
+        "bdw close s2-1 --reason x",
+        "bdw update s2-1 --status open",
+        "bdw create x --type task --parent s2-1",
+        "bdw create --title=x --parent=s2-1",
+        "bd list --json",
+        "bd show s2-1",
+        "bd ready",
+        "echo bd update s2-1 --notes x",
+    ] {
+        assert_ledger_pass(&state, &repo, command);
+    }
+    clean(&[&repo, &state]);
+}
+
+/// (c) rules の行が無い fixture では bd / bdw を断り（`no-row`・FailClosed）、bd / bdw の無い command は通す。壊れた
+/// rules は command guard が先に断る（判定の順は動かない）。
+#[test]
+fn hook_ledger_write_fails_closed_without_the_row() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let rowless = state.join("rowless.toml");
+    fs::write(&rowless, role_rules_text(ORCHESTRATOR_CAPS)).expect("rules を書ける");
+    let rowless = rowless.display().to_string();
+    for command in ["bdw show s2-1", "bdw create x --parent s2-1"] {
+        let before = ledger_records(&state).len();
+        let out = run_hook_args(&["pre-tool-use", "--rules", &rowless], &bash_payload(&repo, command));
+        assert_write_deny(&state, &out, command, "no-row");
+        assert!(stderr_text(&out).contains("ledger.denied_writes"), "{command}: 行 id を名指す");
+        assert_eq!(ledger_records(&state).len(), before + 1, "{command}: 記録 1 行");
+    }
+    let out = run_hook_args(&["pre-tool-use", "--rules", &rowless], &bash_payload(&repo, "cargo nextest run -p x"));
+    assert_silent(&out, "bd / bdw の無い command は行が無くても通す");
+    let broken = state.join("broken.toml");
+    fs::write(&broken, "schema = ").expect("rules を書ける");
+    let out = run_hook_args(&["pre-tool-use", "--rules", &broken.display().to_string()], &bash_payload(&repo, "bdw show s2-1"));
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "壊れた rules は deny: {}", stderr_text(&out));
+    assert!(stderr_text(&out).contains("reason=rules-unreadable"), "{}", stderr_text(&out));
     clean(&[&repo, &state]);
 }
 
