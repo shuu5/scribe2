@@ -365,8 +365,10 @@ pub(crate) fn check_repo(repo: &Path, ceiling: &Ceiling<'_>) -> Outcome {
     let mut out: Vec<String> = judged.found.iter().map(|(doc, finding)| finding.render(doc)).collect();
     let (notices, untracked) = untracked_notices(judged.untracked.as_deref());
     out.extend(notices);
+    // 宣言が入口の flip を測らないと名乗った周だけ末尾に欄を足す（名乗りの無い周の判定行は 1 字も変えない・§54 形 5）。
+    let entrance = judged.entrance.map(|named| format!(" entrance={}", named.as_str())).unwrap_or_default();
     out.push(format!(
-        "contracts check: docs={} rows={} untracked={untracked} findings={}",
+        "contracts check: docs={} rows={} untracked={untracked} findings={}{entrance}",
         judged.docs,
         judged.rows,
         judged.found.len()
@@ -425,6 +427,8 @@ struct Judged {
     found: Vec<(String, Finding)>,
     /// 未追跡の設計 doc（検査の母集団の外・知らせだけ）。git が答えない周は `None`。
     untracked: Option<Vec<String>>,
+    /// 宣言の入口の flip の名乗り（任意 key `entrance-flip`・無ければ `None`）。
+    entrance: Option<declaration::EntranceFlip>,
 }
 
 /// tracked な `docs/design/*.md` の区間を全行検査する（[`check_repo`] と [`repo_findings`] の共通の 1 本）。判定できない
@@ -434,7 +438,7 @@ fn judge_repo(repo: &Path, ceiling: &Ceiling<'_>) -> Result<Judged, Outcome> {
         let reason = format!("contracts: {} の tracked file を読めない（git repo でない）", repo.display());
         return Err(Outcome::failed_line(RC_BROKEN, reason));
     };
-    let facts = match declaration::table_facts(repo, ceiling) {
+    let (facts, entrance) = match declaration::table_facts_named(repo, ceiling) {
         Ok(found) => found,
         Err(errors) => return Err(Outcome::failed(RC_BROKEN, errors.iter().map(ToString::to_string).collect())),
     };
@@ -459,7 +463,7 @@ fn judge_repo(repo: &Path, ceiling: &Ceiling<'_>) -> Result<Judged, Outcome> {
         found.extend(judged.into_iter().map(|finding| ((*doc).clone(), finding)));
     }
     let untracked = untracked_files(repo).map(|paths| design_docs(&paths).into_iter().cloned().collect());
-    Ok(Judged { docs: docs.len(), rows, found, untracked })
+    Ok(Judged { docs: docs.len(), rows, found, untracked, entrance })
 }
 
 /// tracked な設計 doc（`docs/design/` 直下の `.md`・tracked の順）。

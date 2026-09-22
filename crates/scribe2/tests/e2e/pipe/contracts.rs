@@ -230,6 +230,47 @@ fn contract_check_reads_requirements_from_md_headings() {
     clean(&[&declared, &missing]);
 }
 
+/// (e) 入口の flip の名乗り（設計 pipeline.md §54 形 5・行 aw・`s2-07l.554`）: `cargo` の 2 行だけで名乗りを持つ宣言の
+/// repo は rc 0 で判定行が ` entrance=unmeasured` で終わり、名乗りを外した同じ repo は `NoEntranceRed` で rc 2・名乗りと
+/// 入口の flip の行を同居させた repo も矛盾で rc 2。宣言が Rust でない（TABLE_VESSEL の）repo の判定行は既存の 4 欄の
+/// まま（名乗りの無い周は 1 字も変わらない）。
+#[test]
+fn contract_check_entrance_unmeasured_is_named_on_the_judgement_line() {
+    let doc = table_doc(&table_region(&[table_row("a", &[])]));
+    let cargo = "schema = 1\nallowed-commands = [\"cargo\", \"git\"]\ncommon-verify = [\"cargo nextest run\", \"cargo clippy --all-targets\"]\n";
+    let named = format!("{cargo}entrance-flip = \"unmeasured\"\n");
+    let declared = table_repo(&doc, &[(".vessel.toml", &named)]);
+    let out = contracts_check(&declared);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "名乗りの宣言は通る: {}{}", stdout_of(&out), stderr_of(&out));
+    let plain = table_repo(&doc, &[]);
+    let bare = contracts_check(&plain);
+    assert_eq!(bare.status.code(), Some(i32::from(RC_OK)), "{}{}", stdout_of(&bare), stderr_of(&bare));
+    let lines = [stdout_of(&out).lines().last().map(str::to_owned), stdout_of(&bare).lines().last().map(str::to_owned)];
+    assert_eq!(
+        lines,
+        [
+            Some("contracts check: docs=1 rows=1 untracked=0 findings=0 entrance=unmeasured".to_owned()),
+            Some("contracts check: docs=1 rows=1 untracked=0 findings=0".to_owned()),
+        ],
+        "名乗りの周だけ末尾に欄を持ち、名乗りの無い周は既存の 4 欄のまま"
+    );
+    let unnamed = table_repo(&doc, &[(".vessel.toml", cargo)]);
+    let refused = contracts_check(&unnamed);
+    assert_eq!(refused.status.code(), Some(i32::from(RC_BROKEN)), "名乗りを外すと断る: {}", stdout_of(&refused));
+    assert!(stderr_of(&refused).contains("NoEntranceRed"), "{}", stderr_of(&refused));
+    assert!(!stdout_of(&refused).contains("entrance="), "断った周は欄を出さない: {}", stdout_of(&refused));
+    let both = "schema = 1\nallowed-commands = [\"cargo\"]\ncommon-verify = [\"cargo xtask flip-check --base {base}\", \"cargo nextest run\"]\nentrance-flip = \"unmeasured\"\n";
+    let clash = table_repo(&doc, &[(".vessel.toml", both)]);
+    let clashed = contracts_check(&clash);
+    assert_eq!(clashed.status.code(), Some(i32::from(RC_BROKEN)), "名乗りと flip の行の同居は断る: {}", stdout_of(&clashed));
+    assert!(stderr_of(&clashed).contains("UnmeasuredWithEntranceFlip"), "{}", stderr_of(&clashed));
+    let wrong = table_repo(&doc, &[(".vessel.toml", &format!("{cargo}entrance-flip = \"measured\"\n"))]);
+    let misread = contracts_check(&wrong);
+    assert_eq!(misread.status.code(), Some(i32::from(RC_BROKEN)), "語の誤りは断る: {}", stdout_of(&misread));
+    assert!(stderr_of(&misread).contains("entrance-flip"), "理由が key の名を持つ: {}", stderr_of(&misread));
+    clean(&[&declared, &plain, &unnamed, &clash, &wrong]);
+}
+
 /// 使い方の誤りは rc 1（stderr に理由）・git repo でない `--repo` は判定できないので rc 2（判定行を出さない）。
 #[test]
 fn contract_check_refuses_usage_errors_and_non_repositories() {

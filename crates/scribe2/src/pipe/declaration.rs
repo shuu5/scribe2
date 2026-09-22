@@ -47,7 +47,12 @@ const DECLARED_KEYS: &[&str] = &[
     path_kinds::DESIGN_INTENT_KEY,
     path_kinds::DESIGN_DOC_KEY,
     path_kinds::TESTS_KEY,
+    ENTRANCE_KEY,
 ];
+
+/// **入口の flip の名乗り**の key（任意・設計 pipeline.md §54・ADR-0054）。値は [`EntranceFlip`] の閉じた 1 語だけ。
+/// 書かない宣言は現行のとおり入口の flip の行を要る（[`KindGap::NoEntranceRed`]）。
+const ENTRANCE_KEY: &str = "entrance-flip";
 
 /// **push 先の remote の名**の key（任意・設計 contract-source.md §5「land の終端」）。
 ///
@@ -100,6 +105,7 @@ const OPTIONAL_KEYS: &[&str] = &[
     path_kinds::DESIGN_INTENT_KEY,
     path_kinds::DESIGN_DOC_KEY,
     path_kinds::TESTS_KEY,
+    ENTRANCE_KEY,
 ];
 
 /// shell が意味を変える文字。**1 行 1 command の粒度**はここで守る——gate と land は行を
@@ -278,6 +284,8 @@ impl VerifyKind {
 pub enum KindGap {
     /// 先頭語 `cargo` の行を持ちながら、入口の flip を撃つ行を持たない（TDD の flip を測らない Rust の宣言）。
     NoEntranceRed,
+    /// `entrance-flip = "unmeasured"` と名乗りながら、入口の flip を撃つ行も持つ（名乗りと行の矛盾・§54 形 4）。
+    UnmeasuredWithEntranceFlip,
 }
 
 impl KindGap {
@@ -288,16 +296,49 @@ impl KindGap {
                 "NoEntranceRed: common-verify に先頭語 cargo の行が在るのに入口の flip（{} --base {BASE_HOLE}）を撃つ行が無い",
                 ENTRANCE_FLIP_WORDS.join(" ")
             ),
+            Self::UnmeasuredWithEntranceFlip => format!(
+                "UnmeasuredWithEntranceFlip: {ENTRANCE_KEY} = \"{}\" と名乗りながら common-verify に入口の flip（{}）を撃つ行が在る（矛盾）",
+                EntranceFlip::Unmeasured.as_str(),
+                ENTRANCE_FLIP_WORDS.join(" ")
+            ),
         }
     }
 }
 
-/// `common-verify` の行の列の分類が断る理由。先頭語 `cargo` の行を 1 本も持たない宣言（Rust でない toy repo）は
-/// 分類だけで断らない（§7「Rust 固有の検査を内蔵しない」のまま）。
+/// 宣言の任意 key `entrance-flip` の値（閉じた 1 語・設計 pipeline.md §54・ADR-0054）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntranceFlip {
+    /// 入口の flip を測らない（撃つ手段を持たない Rust の消費側の名乗り）。
+    Unmeasured,
+}
+
+impl EntranceFlip {
+    /// 宣言 file と判定行に書く語。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unmeasured => "unmeasured",
+        }
+    }
+}
+
+/// `common-verify` の行の列の分類が断る理由（名乗りの無い宣言）。先頭語 `cargo` の行を 1 本も持たない宣言（Rust でない
+/// toy repo）は分類だけで断らない（§7「Rust 固有の検査を内蔵しない」のまま）。
 pub fn kind_gap(lines: &[String]) -> Option<KindGap> {
+    kind_gap_named(lines, None)
+}
+
+/// [`kind_gap`] の、宣言の名乗り `entrance-flip` を受ける形。名乗りの在る宣言は `NoEntranceRed` で断らず、入口の flip の
+/// 行と同居する周だけ [`KindGap::UnmeasuredWithEntranceFlip`] で断る（§54 形 1 / 4）。
+pub fn kind_gap_named(lines: &[String], entrance: Option<EntranceFlip>) -> Option<KindGap> {
     let kinds: Vec<VerifyKind> = lines.iter().map(|line| VerifyKind::of(line)).collect();
-    let rust = kinds.iter().any(|kind| *kind != VerifyKind::Other);
-    (rust && !kinds.contains(&VerifyKind::EntranceFlip)).then_some(KindGap::NoEntranceRed)
+    let flip = kinds.contains(&VerifyKind::EntranceFlip);
+    match entrance {
+        Some(EntranceFlip::Unmeasured) => flip.then_some(KindGap::UnmeasuredWithEntranceFlip),
+        None => {
+            let rust = kinds.iter().any(|kind| *kind != VerifyKind::Other);
+            (rust && !flip).then_some(KindGap::NoEntranceRed)
+        }
+    }
 }
 
 /// 書かれていた宣言の値。
@@ -323,6 +364,8 @@ pub struct Declared {
     ci_cmd: Option<String>,
     /// path の種別の prefix（任意 key 3 本・無い key は `None`・設計 seat-roles.md §24）。
     path_kinds: path_kinds::DeclaredPaths,
+    /// 入口の flip の名乗り（任意 key `entrance-flip`・無ければ `None`＝現行の要求）。
+    entrance_flip: Option<EntranceFlip>,
 }
 
 /// 出所つきの宣言。**[`Effective`] はこれを消費してしか作れない**（C10）。
@@ -433,7 +476,7 @@ impl Sourced {
         let basis = Basis { allowed: &declared.allowed, denied: ceiling.denied };
         check_lines("common-verify", &declared.common_verify, declared.common_line, &basis, &mut errors);
         // **入口の flip の不在**は行ごとの検査では見えない（どの行も撃てる形のまま、flip の行だけが無い）。
-        if let Some(gap) = kind_gap(&declared.common_verify) {
+        if let Some(gap) = kind_gap_named(&declared.common_verify, declared.entrance_flip) {
             errors.push(DeclError::new(declared.common_line, gap.reason()));
         }
         // **検出線の行にも同じ検査を掛ける**（ADR-0010 §2.3 (2)・ADR-0021 §2.6・lens-132d H1）。
@@ -552,6 +595,7 @@ impl Declared {
         let remote = remote_of(&found, &mut errors);
         let ci_cmd = ci_cmd_of(&found, &mut errors);
         let path_kinds = path_kinds::declared_of(&found, &mut errors);
+        let entrance_flip = entrance_of(&found, &mut errors);
         if schema != Some(SCHEMA_VERSION) {
             errors.push(DeclError::new(
                 0,
@@ -570,9 +614,25 @@ impl Declared {
                 remote,
                 ci_cmd,
                 path_kinds,
+                entrance_flip,
             })
         } else {
             Err(errors)
+        }
+    }
+}
+
+/// 入口の flip の名乗り（任意）。値は閉じた 1 語 `unmeasured` の文字列だけを受ける（他の語・空・配列は断る）。
+fn entrance_of(found: &[(String, Raw, u64)], errors: &mut Vec<DeclError>) -> Option<EntranceFlip> {
+    let (_, value, line) = found.iter().find(|(seen, _, _)| seen == ENTRANCE_KEY)?;
+    match value {
+        Raw::Text(word) if word == EntranceFlip::Unmeasured.as_str() => Some(EntranceFlip::Unmeasured),
+        _ => {
+            errors.push(DeclError::new(
+                *line,
+                format!("{ENTRANCE_KEY} は 1 語 \"{}\" の文字列だけである", EntranceFlip::Unmeasured.as_str()),
+            ));
+            None
         }
     }
 }
@@ -641,10 +701,19 @@ pub struct TableFacts {
 
 /// HEAD の宣言を読み、上限と突き合わせて契約表の検査の事実にする（intake と同じ読み口・作業ツリーは読まない）。
 pub fn table_facts(repo: &Path, ceiling: &Ceiling<'_>) -> Result<TableFacts, Vec<DeclError>> {
+    table_facts_named(repo, ceiling).map(|(facts, _)| facts)
+}
+
+/// [`table_facts`] に宣言の名乗り `entrance-flip` を添えた形（契約表の検査の判定行が名乗りの欄を出す・§54 形 5）。
+pub fn table_facts_named(
+    repo: &Path,
+    ceiling: &Ceiling<'_>,
+) -> Result<(TableFacts, Option<EntranceFlip>), Vec<DeclError>> {
     let sourced = Sourced::read(repo, ceiling)?;
     let requirements = sourced.declared.requirements.clone().unwrap_or_else(|| DEFAULT_REQUIREMENTS.to_owned());
+    let entrance = sourced.declared.entrance_flip;
     let effective = sourced.measure(ceiling, &[])?;
-    Ok(TableFacts { allowed: effective.allowed, denied: ceiling.denied.to_vec(), requirements })
+    Ok((TableFacts { allowed: effective.allowed, denied: ceiling.denied.to_vec(), requirements }, entrance))
 }
 
 /// land の終端が読む宣言の事実（設計 contract-source.md §5・push 先と CI の行）。
@@ -849,7 +918,7 @@ mod tests {
     // flip-check: moved s2-07l.373
 
     use super::{
-        kind_gap, unfit, Basis, Ceiling, Declared, Effective, Holes, KindGap, Sourced, Unfit, VerifyKind, BASE_HOLES,
+        kind_gap, kind_gap_named, unfit, Basis, Ceiling, Declared, Effective, EntranceFlip, Holes, KindGap, Sourced, Unfit, VerifyKind, BASE_HOLES,
         BASE_HOLE, CEILING_ROW, DECLARED_KEYS, DECL_FILE, DEFAULT_CI_CMD, DENIED_ROW, CI_SHA_HOLE, JOBS_HOLE,
         SCHEMA_VERSION, TEETH_HOLE, THREADS_HOLE,
     };
@@ -1301,7 +1370,7 @@ mod tests {
     }
 
     /// 先頭語 `cargo` の行を持たない宣言（`sh` / `git` だけの toy repo）は分類だけで断らない（§7「Rust 固有の検査を
-    /// 内蔵しない」のまま）。宣言 file の schema は不変（版 1・key の列も同じ 10 本）。
+    /// 内蔵しない」のまま）。宣言 file の schema は不変（版 1・key の列は 10 本に §54 の任意 key 1 本を足した 11 本）。
     #[test]
     fn declaration_kind_passes_declarations_without_cargo_and_keeps_the_schema() {
         assert!(measured(r#"["git", "sh"]"#, r#"["git rev-parse --verify {base}", "sh verify.sh"]"#).is_ok(), "sh / git だけは通る");
@@ -1320,8 +1389,100 @@ mod tests {
                 "design-intent-paths",
                 "design-doc-paths",
                 "tests-paths",
+                "entrance-flip",
             ],
-            "宣言 file の key の列は動かない"
+            "宣言 file の key の列は動かない（末尾の任意 key は §54・ADR-0054）"
         );
+    }
+
+    // ---- 入口の flip の名乗り（設計 pipeline.md §54・行 aw・`s2-07l.554`・接頭辞 `declaration_entrance_`）----
+
+    /// `cargo` の 2 行だけ（入口の flip の行を持たない）の Rust の消費側の宣言。
+    const CARGO_ONLY: &str = r#"["cargo nextest run", "cargo clippy --all-targets"]"#;
+
+    /// 名乗りの行。
+    const NAMED: &str = "entrance-flip = \"unmeasured\"\n";
+
+    /// 宣言の本文に 1 行を足して上限（`cargo` / `git` / `sh`）と突き合わせる（intake と同じ `Sourced::measure` の経路）。
+    fn measured_with(common: &str, extra: &str) -> Result<Effective, Vec<super::DeclError>> {
+        let text = format!("{}{extra}", body(r#"["cargo", "git"]"#, common));
+        let declared = Declared::parse(&text).unwrap_or_else(|errors| panic!("宣言を読める: {errors:?}"));
+        let (commands, denied) = (strings(&["cargo", "git", "sh"]), denied());
+        Sourced { declared, commit: "c0ffee".to_owned(), source: DECL_FILE.to_owned(), ceiling: CEILING_ROW.to_owned() }
+            .measure(&ceiling(&commands, &denied), &[])
+    }
+
+    /// (a) 名乗り + `cargo` 2 行 + flip の行無し → `kind_gap` は空で、宣言は受付の経路を通る（形 1）。
+    #[test]
+    fn declaration_entrance_unmeasured_passes_cargo_lines_without_the_flip() {
+        let lines = strings(&["cargo nextest run", "cargo clippy --all-targets"]);
+        assert_eq!(kind_gap_named(&lines, Some(EntranceFlip::Unmeasured)), None, "名乗りの在る宣言は NoEntranceRed で断らない");
+        let parsed = Declared::parse(&format!("{}{NAMED}", body(r#"["cargo"]"#, CARGO_ONLY))).expect("名乗りを読める");
+        assert_eq!(parsed.entrance_flip, Some(EntranceFlip::Unmeasured), "値は typed に読める");
+        assert!(measured_with(CARGO_ONLY, NAMED).is_ok(), "名乗りの宣言は受付を通る: {:?}", measured_with(CARGO_ONLY, NAMED).err());
+        assert_eq!(EntranceFlip::Unmeasured.as_str(), "unmeasured", "宣言と判定行に書く語は固定");
+    }
+
+    /// (b) 同じ宣言から名乗りを外すと `NoEntranceRed` のまま断られ（形 2）、本 repo の宣言は名乗りを持たない。
+    #[test]
+    fn declaration_entrance_absent_key_keeps_no_entrance_red_and_this_repo_has_no_key() {
+        let lines = strings(&["cargo nextest run", "cargo clippy --all-targets"]);
+        assert_eq!(kind_gap_named(&lines, None), Some(KindGap::NoEntranceRed), "名乗りの無い宣言は現行のとおり");
+        assert_eq!(kind_gap(&lines), kind_gap_named(&lines, None), "名乗りを受けない口は名乗り無しと同じ");
+        let errors = measured_with(CARGO_ONLY, "").expect_err("名乗りの無い同じ宣言は断る");
+        assert_eq!(
+            errors.iter().filter(|error| error.reason.starts_with("NoEntranceRed")).count(),
+            1,
+            "NoEntranceRed を 1 件: {errors:?}"
+        );
+        let parsed = Declared::parse(&body(r#"["cargo"]"#, CARGO_ONLY)).expect("名乗りの無い宣言を読める");
+        assert_eq!(parsed.entrance_flip, None, "key の不在は None");
+        let own = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join(DECL_FILE);
+        let text = std::fs::read_to_string(&own).unwrap_or_else(|err| panic!("{} を読める: {err}", own.display()));
+        let declared = Declared::parse(&text).unwrap_or_else(|errors| panic!("本 repo の宣言を読める: {errors:?}"));
+        assert_eq!(declared.entrance_flip, None, "本 repo の宣言は名乗りを持たない");
+        assert!(!text.contains("entrance-flip"), "本 repo の宣言に key の字面が無い");
+    }
+
+    /// (c) 値が `unmeasured` 以外・空・配列（空の配列も）・key の重複は宣言の読みの誤りとして typed に断られ、理由が
+    /// key の名を持つ（形 3）。
+    #[test]
+    fn declaration_entrance_refuses_other_values_and_duplicates_naming_the_key() {
+        for extra in [
+            "entrance-flip = \"measured\"\n",
+            "entrance-flip = \"Unmeasured\"\n",
+            "entrance-flip = \"unmeasured \"\n",
+            "entrance-flip = \"\"\n",
+            "entrance-flip = [\"unmeasured\"]\n",
+            "entrance-flip = []\n",
+            "entrance-flip = 1\n",
+            "entrance-flip = unmeasured\n",
+            "entrance-flip = \"unmeasured\"\nentrance-flip = \"unmeasured\"\n",
+        ] {
+            let text = format!("{}{extra}", body(r#"["cargo"]"#, CARGO_ONLY));
+            let errors = Declared::parse(&text).expect_err("名乗りの形の誤りは断る");
+            assert_eq!(errors.len(), 1, "{extra:?} は理由 1 つ: {errors:?}");
+            assert!(errors.iter().all(|error| error.reason.contains("entrance-flip")), "{extra:?} の理由は key の名を持つ: {errors:?}");
+            assert!(errors.iter().all(|error| error.line >= 4), "{extra:?} は key の行を名指す: {errors:?}");
+        }
+    }
+
+    /// (d) 名乗りと入口の flip の行の同居は `KindGap` の 1 値で矛盾として断られ、理由は variant の名を持つ（形 4）。
+    #[test]
+    fn declaration_entrance_unmeasured_with_the_flip_line_is_a_contradiction() {
+        let lines = strings(&["cargo xtask flip-check --base {base}", "cargo xtask check"]);
+        assert_eq!(
+            kind_gap_named(&lines, Some(EntranceFlip::Unmeasured)),
+            Some(KindGap::UnmeasuredWithEntranceFlip),
+            "名乗りと flip の行の同居は矛盾"
+        );
+        assert_eq!(kind_gap_named(&lines, None), None, "名乗りを外せば同じ行の列は通る");
+        let errors = measured_with(FLIP_AND_CHECK, NAMED).expect_err("矛盾は断る");
+        let found: Vec<&super::DeclError> =
+            errors.iter().filter(|error| error.reason.starts_with("UnmeasuredWithEntranceFlip")).collect();
+        assert_eq!(found.len(), 1, "矛盾を 1 件: {errors:?}");
+        assert_eq!(errors.len(), 1, "NoEntranceRed は並ばない: {errors:?}");
+        assert_eq!(found.first().map(|error| error.line), Some(3), "common-verify の行を名指す: {errors:?}");
+        assert!(found.iter().all(|error| error.reason.contains("entrance-flip")), "{errors:?}");
     }
 }
