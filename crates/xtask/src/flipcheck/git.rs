@@ -48,10 +48,21 @@ fn git_stdout(dir: &Path, label: &str, args: &[&str]) -> Result<String, String> 
 ///
 /// pathspec は shell を介さない独立した 1 引数なのでクォート文字を字面に含めない。
 /// **repo root から撃ち、かつ `:(top)` 錨を付ける**——素の `*.rs` は git の prefix
-/// （cwd）配下へ縮むので、subdir から起動すると差分 0 件に化けて
-/// `skip reason=no-rust-diff` の rc 0 が出る（何も検証しない fail-open）。
+/// （cwd）配下へ縮むので、subdir から起動すると差分 0 件に化けて docs-only の側へ倒れる
+/// （面の中だけの便なら何も検証しない rc 0＝fail-open）。
 /// 出力 path は `--relative` を付けない限り root 相対である。
 pub fn changed_rs(base: &str, root: &Path) -> Result<Vec<String>, String> {
+    changed_names(base, root, ":(top)*.rs")
+}
+
+/// `git diff --name-only <base>...HEAD -- :(top)` の出力行＝便が動かした**全部の** path（docs-only の面の判定の
+/// 母集団・設計 pipeline.md §7・`s2-07l.170`）。錨は [`changed_rs`] と同じ理由で付ける。
+pub fn changed_files(base: &str, root: &Path) -> Result<Vec<String>, String> {
+    changed_names(base, root, ":(top)")
+}
+
+/// `git diff --name-only <base>...HEAD -- <pathspec>` の出力行。rc≠0 は Err（infra-error）。
+fn changed_names(base: &str, root: &Path, pathspec: &str) -> Result<Vec<String>, String> {
     let range = format!("{base}...HEAD");
     let output = Command::new("git")
         .arg("-C")
@@ -59,7 +70,7 @@ pub fn changed_rs(base: &str, root: &Path) -> Result<Vec<String>, String> {
         .args(["diff", "--name-only"])
         .arg(&range)
         .arg("--")
-        .arg(":(top)*.rs")
+        .arg(pathspec)
         .output()
         .map_err(|err| format!("git diff を起動できない: {err}"))?;
     if !output.status.success() {

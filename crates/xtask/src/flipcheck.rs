@@ -21,11 +21,13 @@
 mod git;
 mod nextest;
 
-pub use git::{changed_rs, materialize_base, parse_base, repo_root, work_dir};
+pub use git::{changed_files, changed_rs, materialize_base, parse_base, repo_root, work_dir};
 // `load_pairs` は private 型 `FilePair` を返すので `pub(super)` のまま名指しで読む（`private_interfaces`）。
 use git::load_pairs;
 use nextest::{failed_tests, nextest, nextest_with, relay, trimmed};
 
+use crate::check::{read_text, RULES_REL};
+use crate::limits::FlipLimits;
 use crate::{emit, emit_err};
 use std::fs;
 use std::path::Path;
@@ -288,6 +290,78 @@ fn marker_beads(region: &str, mark: &str) -> Vec<String> {
             (!bead.is_empty()).then(|| bead.to_owned())
         })
         .collect()
+}
+
+/// 札の bead id の**閉じた形**（設計 pipeline.md §7 約束 2・`s2-07l.170`）: `<接頭辞>-<段>(.<段>)*`。
+///
+/// 接頭辞は英小文字で始まる英小文字と数字の列、段は空でない英小文字と数字の列（`s2-07l.91` / `s2-07l.479.2` /
+/// `s2-07l.37x`）。空白・大文字・記号・空の段を持つ字面（`TODO`・`s2-07l..3`・`s2-07l.91 (理由)`）は形に合わない
+/// ——誰にも辿れない札を免除の鍵にしない。land の trailer の run id の頭（`main-provenance`）も同じ形で見る。
+pub(crate) fn is_bead_id(id: &str) -> bool {
+    let segment = |part: &str| !part.is_empty() && part.chars().all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit());
+    let Some((prefix, rest)) = id.split_once('-') else {
+        return false;
+    };
+    prefix.starts_with(|ch: char| ch.is_ascii_lowercase()) && segment(prefix) && rest.split('.').all(segment)
+}
+
+/// 便が**この便で足した**札（両方の札・test 区間の行）を `(rel, bead id)` で数えた列。
+fn fresh_marks(pairs: &[FilePair]) -> Vec<(&str, String)> {
+    pairs
+        .iter()
+        .flat_map(|pair| {
+            [RETROACTIVE_MARK, MOVED_MARK]
+                .into_iter()
+                .flat_map(move |mark| pair.fresh_markers(mark).into_iter().map(move |bead| (pair.rel.as_str(), bead)))
+        })
+        .collect()
+}
+
+/// 札の形と本数の門（`bad-marker` / `too-many-marks`）。通れば `None`。
+///
+/// 数えるのは **この便で足した**札だけ（持ち越した札は [`FilePair::fresh_markers`] が落とす）——file に残った
+/// 古い札で後続の便を落とさない。形の門が先（形に合わない札は本数に数える前に名指す）。
+fn marks_verdict(pairs: &[FilePair], limit: u64, sink: &mut dyn FnMut(&str)) -> Option<Verdict> {
+    let marks = fresh_marks(pairs);
+    let bad: Vec<&(&str, String)> = marks.iter().filter(|(_, bead)| !is_bead_id(bead)).collect();
+    for (rel, bead) in &bad {
+        sink(&format!("flip-check: bad-marker {rel} id={bead:?}（札の bead id は <接頭辞>-<段>(.<段>)* の形）"));
+    }
+    if let Some((rel, _)) = bad.first() {
+        return Some(fail(&format!("bad-marker file={rel}")));
+    }
+    let count = u64::try_from(marks.len()).unwrap_or(u64::MAX);
+    (count > limit).then(|| fail(&format!("too-many-marks marks={count} limit={limit}")))
+}
+
+/// path が docs-only の面に入るか（`/` で終わる面は接頭辞・他は path の完全一致）。
+fn in_docs_faces(rel: &str, faces: &[String]) -> bool {
+    faces
+        .iter()
+        .any(|face| if face.ends_with('/') { rel.starts_with(face.as_str()) } else { rel == face })
+}
+
+/// `.rs` の差が 1 本も無い便の判定（設計 pipeline.md §7 約束 1・`s2-07l.170`）。
+///
+/// 動いた path が**全部**面（rules 行 `flip.docs_only_faces`）の中なら `docs-only=N` の後置で通し、面の外の file を
+/// 1 本でも含む便（や差が 1 本も無い便）は `no-test-diff` で落とす。以前の `.rs` の有無だけで通す経路は、
+/// `plugin/` の生成物や `rules/` の規則だけを変えた便を歯無しで通していた（監査 2026-09-12 塊 14）。
+fn docs_only_verdict(base: &str, root: &Path, faces: &[String], sink: &mut dyn FnMut(&str)) -> Verdict {
+    let changed = match changed_files(base, root) {
+        Err(reason) => return infra(&reason),
+        Ok(list) => list,
+    };
+    let outside: Vec<&String> = changed.iter().filter(|rel| !in_docs_faces(rel, faces)).collect();
+    for rel in &outside {
+        sink(&format!("flip-check: outside-docs-faces {rel}"));
+    }
+    if changed.is_empty() || !outside.is_empty() {
+        return fail("no-test-diff");
+    }
+    ok_line(Counts {
+        docs_only: changed.len(),
+        ..Counts::default()
+    })
 }
 
 /// 2 つの本文の**片側にしか無い行**（追加行と削除行）。空白だけの行は数えない。
@@ -605,6 +679,8 @@ struct Counts {
     fixture: usize,
     /// base 段で撃ち直して緑と読んだ歯の本数（負荷下の flaky の検出線・`s2-07l.270`）。
     base_retried: usize,
+    /// `.rs` の差が無く、docs-only の面の中だけが動いた path の本数（`s2-07l.170`）。
+    docs_only: usize,
 }
 
 impl Counts {
@@ -619,6 +695,7 @@ impl Counts {
             decl: 0,
             fixture: 0,
             base_retried: 0,
+            docs_only: 0,
         }
     }
 }
@@ -643,6 +720,9 @@ fn ok_line(counts: Counts) -> Verdict {
     }
     if counts.fixture > 0 {
         line.push_str(&format!(" fixture={}", counts.fixture));
+    }
+    if counts.docs_only > 0 {
+        line.push_str(&format!(" docs-only={}", counts.docs_only));
     }
     verdict(&line, 0)
 }
@@ -1046,8 +1126,8 @@ pub fn judge(base: &str, workdir: &Path) -> Verdict {
     judge_into(base, workdir, &mut emit_err)
 }
 
-/// [`judge`] の本体。効かない札の行（`stale-marker`）と base 段の撃ち直しの行
-/// （`base-retry`）を `sink` へ渡す。
+/// [`judge`] の本体。効かない札の行（`stale-marker`）・base 段の撃ち直しの行（`base-retry`）・
+/// 形に合わない札の行（`bad-marker`）・docs-only の面の外の path の行（`outside-docs-faces`）を `sink` へ渡す。
 ///
 /// stderr へ直に書くと、**出したこと自体を歯から読めない**——`stale-marker` の行は
 /// 判定行にも rc にも載らないので、emit を丸ごと消しても全部の歯が緑のままになる
@@ -1058,17 +1138,25 @@ fn judge_into(base: &str, workdir: &Path, sink: &mut dyn FnMut(&str)) -> Verdict
         Err(reason) => return infra(&reason),
         Ok(found) => found,
     };
+    // 免除経路の上限は rules 行（C1）。読めない周は測れなかった（面も札の上限も既定に倒さない）。
+    let flip = match read_text(&root.join(RULES_REL)).and_then(|text| FlipLimits::read(&text)) {
+        Err(reason) => return infra(&reason),
+        Ok(found) => found,
+    };
     let changed = match changed_rs(base, &root) {
         Err(reason) => return infra(&reason),
         Ok(list) => list,
     };
     if changed.is_empty() {
-        return verdict("flip-check: skip reason=no-rust-diff", 0);
+        return docs_only_verdict(base, &root, &flip.docs_only_faces, sink);
     }
     let pairs = match load_pairs(base, &root, &changed) {
         Err(reason) => return infra(&reason),
         Ok(found) => found,
     };
+    if let Some(refused) = marks_verdict(&pairs, flip.marks_per_pr, sink) {
+        return refused;
+    }
     // **test 区間が動いた便にだけ**言う。札は file に残るので、`stale_marker()` だけで
     // 数えると、その file の src を触るたびに「札を削除しろ」と言われる——免除を
     // 求めていない便には無関係な指示で、狼少年にすると本当に効かない札を見落とす。

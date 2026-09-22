@@ -22,6 +22,7 @@ mod paths_clean;
 mod polarity;
 mod private_clean;
 mod prose_gate;
+mod provenance;
 mod rules_diff;
 mod rules_parity;
 mod rules_wired;
@@ -34,7 +35,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 /// 使い方の 1 行。
-const USAGE: &str = "usage: cargo xtask <check|gen-manifest|gen-claude-md> [ROOT] | cargo xtask <flip-check|mutants-diff|rules-diff|deps-delta> --base <ref> | cargo xtask ledger-plan --epic <epic id> [ROOT]";
+const USAGE: &str = "usage: cargo xtask <check|gen-manifest|gen-claude-md> [ROOT] | cargo xtask <flip-check|mutants-diff|rules-diff|deps-delta> --base <ref> | cargo xtask ledger-plan --epic <epic id> [ROOT] | cargo xtask main-provenance [--rev <rev>]";
 
 /// stdout 出力層。stdout へ書くのはこの関数だけである。
 #[expect(
@@ -108,6 +109,8 @@ fn main() -> ExitCode {
         Some("rules-diff") => return rules_diff::run(tail),
         // deps-delta も rc 2（deny の面が測れなかった）を持つ（設計 rules-manifest.md §4・C13 の増分の門）。
         Some("deps-delta") => return deps_delta::run(tail),
+        // main-provenance も rc 2（測れなかった）を持つ（設計 pipeline.md §7 約束 3・push(main) の入口の出所）。
+        Some("main-provenance") => return provenance::run(tail),
         _ => Err(USAGE.to_owned()),
     };
     match outcome {

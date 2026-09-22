@@ -502,6 +502,28 @@ enabled = true
 ruling = "user 2026-09-16T05:53Z"
 ruled_at = "2026-09-16"
 
+# 入口の flip check（cargo xtask flip-check）の免除経路の閉じ方（設計 pipeline.md §7・`s2-07l.170`）。
+# docs_only_faces: .rs の差が無い便を docs-only と読む path の面（/ で終わる要素は接頭辞・他は path の完全一致）。
+# 面の外の file を 1 本でも含む便は no-test-diff で落ちる（plugin/ と rules/ は生成物と規則で docs でない）。
+# marks_per_pr: 1 便が足してよい札（retroactive / moved）の本数の上限。超えた便は too-many-marks で落ちる。
+# 読み手は xtask の flipcheck.rs と limits.rs の FlipLimits の 1 本（core は値を消費しない）。
+
+[[rule]]
+id = "flip.docs_only_faces"
+kind = "FlipDocsOnlyFaces"
+value = ["docs/", "design-intent/", ".beads/", "README.md", "CLAUDE.md"]
+enabled = true
+ruling = "user 2026-09-22T06:48Z"
+ruled_at = "2026-09-22"
+
+[[rule]]
+id = "flip.marks_per_pr"
+kind = "FlipMarksPerPr"
+value = 16
+enabled = true
+ruling = "user 2026-09-22T06:48Z"
+ruled_at = "2026-09-22"
+
 # 口座の宣言（設計 fleet-usage.md §2・account-lifecycle.md §2・ADR-0026 §2.1）は host の manifest（state dir
 # の host.toml）にだけ置く。この file に口座の表は置かない（文法は残る・足す変更は A1 の対話面で聞く・本 repo
 # は PUBLIC・SRS CON2）。器は credential の置き場を走査せず、宣言だけを真実として読む（C3）。

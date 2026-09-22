@@ -16,7 +16,7 @@
 // flip-check: moved s2-07l.500
 
 use super::{
-    base_not_green, failed_tests, is_test_file, judge, judge_into, nextest_args, parse_base,
+    base_not_green, failed_tests, is_bead_id, is_test_file, judge, judge_into, nextest_args, parse_base,
     split_regions, BaseNotGreen, FailedTest, FilePair, Verdict, RETROACTIVE_MARK,
 };
 use std::path::{Path, PathBuf};
@@ -118,6 +118,14 @@ fn scaffold(dir: &Path) {
             "[package]\nname = \"{FIXTURE_MEMBER}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n"
         ),
     );
+    // 免除経路の上限は rules 行から読む（読めない周は infra-error）ので、現物の manifest をそのまま置く。
+    write_at(dir, "rules/manifest.toml", &real_manifest());
+}
+
+/// 現物の `rules/manifest.toml`（workspace root は この crate の 2 つ上）。
+fn real_manifest() -> String {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../rules/manifest.toml");
+    std::fs::read_to_string(&path).unwrap_or_else(|err| panic!("{} を読めない: {err}", path.display()))
 }
 
 /// base と HEAD の lib 本文を与えて 1 便を判定する（marker まわりの負例で使い回す）。
@@ -204,6 +212,136 @@ mod declaration;
 
 #[path = "flipcheck_moved_tests.rs"]
 mod moved;
+
+// ---- 免除経路の閉じ方（s2-07l.170・設計 docs/design/pipeline.md §7 約束 1 / 2）----
+//
+// docs-only の面（rules 行 `flip.docs_only_faces`）と札の形と本数（rules 行 `flip.marks_per_pr`）。子 module を
+// 足すと `#[path]` の新規 module は flip されない（not-flippable）ので、この便の歯は親 file のここへ置く。
+
+/// base（[`BASE_LIB`]・`manifest` を置いた rules）を積み、HEAD に `head` の (path, 本文) を書いて判定する。
+/// 判定と sink の行を返す。`manifest` が `None` の周は現物の manifest のまま。
+fn judge_with(manifest: Option<&str>, head: &[(&str, &str)]) -> (Verdict, Vec<String>) {
+    let dir = make_tmp_dir();
+    scaffold(&dir);
+    if let Some(text) = manifest {
+        write_at(&dir, "rules/manifest.toml", text);
+    }
+    let base = seed_fixture(&dir, BASE_LIB);
+    for (rel, body) in head {
+        write_at(&dir, rel, body);
+    }
+    head_commit(&dir);
+    let mut lines: Vec<String> = Vec::new();
+    let got = judge_into(&base, &dir, &mut |line| lines.push(line.to_owned()));
+    drop_fixture(&dir);
+    (got, lines)
+}
+
+/// 現物の manifest の flip の 2 行だけを差し替えた本文（面の列と札の上限）。
+fn flip_manifest(faces: &str, marks: u64) -> String {
+    // 行 id の後ろで最初の `value = ` の行を差し替える（行の位置は差し替えのたびに引き直す）。
+    let replace_value = |text: &str, id: &str, value: &str| -> String {
+        let from = text.find(&format!("id = \"{id}\"")).expect("行が在る");
+        let start = from + text[from..].find("\nvalue = ").expect("value の行が在る") + 1;
+        let end = start + text[start..].find('\n').expect("value の行が閉じる");
+        format!("{}value = {value}{}", &text[..start], &text[end..])
+    };
+    let text = replace_value(&real_manifest(), "flip.docs_only_faces", faces);
+    replace_value(&text, "flip.marks_per_pr", &marks.to_string())
+}
+
+/// test 区間へ札 `mark`（`retroactive` / `moved`）を `beads` の数だけ置き、base で緑の歯を 1 本足した lib。
+fn lib_with_marks(mark: &str, beads: &[&str]) -> String {
+    let lines: String = beads.iter().map(|bead| format!("    // flip-check: {mark} {bead}\n")).collect();
+    BASE_LIB.replace(
+        "mod checks {\n",
+        &format!("mod checks {{\n{lines}    #[test]\n    fn added_later() {{\n        assert_eq!(super::val(), 1);\n    }}\n"),
+    )
+}
+
+/// (1) `.rs` の差が無くても、面の外の file を 1 本でも含む便は `no-test-diff` で落ち（rc 1）、面の外の path を
+/// sink に名指す。判定行は `skip` を名乗らない（`.rs` の有無だけで通す経路は消えた）。
+#[test]
+fn flip_check_docs_only_outside_face_fails_without_rust_diff() {
+    // `docs.md` は接頭辞の面 `docs/` に字面だけ近い path（`/` までを面と読む）。
+    for rel in ["plugin/hooks.json", "rules/extra.toml", "notes/keep.md", "docs.md"] {
+        let (got, lines) = judge_with(None, &[("docs/design/x.md", "x\n"), (rel, "outside\n")]);
+        assert_verdict(&got.line, got.code, 1, "FAIL reason=no-test-diff");
+        assert!(!got.line.contains("skip") && !got.line.contains("no-rust-diff"), "{}", got.line);
+        assert_eq!(lines, vec![format!("flip-check: outside-docs-faces {rel}")], "面の外の path だけを名指す");
+    }
+}
+
+/// (1) 面の中だけの便（接頭辞の面と完全一致の面）は従来どおり rc 0 で通り、判定行は `RED-on-base ok` の形に
+/// `docs-only=N`（動いた path の本数）を後置する（`skip reason=no-rust-diff` の語は判定の語彙から消えた）。
+#[test]
+fn flip_check_docs_only_inside_faces_passes_with_the_count() {
+    let (got, lines) = judge_with(
+        None,
+        &[("README.md", "touched\n"), ("docs/design/x.md", "x\n"), ("design-intent/spec/y.html", "y\n")],
+    );
+    assert_verdict(&got.line, got.code, 0, "flip-check: RED-on-base ok tests_changed=0 docs-only=3");
+    assert!(!got.line.contains("skip") && !got.line.contains("no-rust-diff"), "{}", got.line);
+    assert!(lines.is_empty(), "面の外の path は無い: {lines:?}");
+}
+
+/// (1) 面は rules 行 `flip.docs_only_faces` から読む（字面を実装に焼かない）: 面を `notes/` だけにした manifest では
+/// `notes/` の便が通り `README.md` の便が落ちる。行を読めない manifest は測れなかった（infra-error）で、既定に倒さない。
+#[test]
+fn flip_check_docs_only_faces_come_from_the_rules_row() {
+    let manifest = flip_manifest("[\"notes/\"]", 16);
+    let (inside, _) = judge_with(Some(&manifest), &[("notes/keep.md", "note\n")]);
+    assert_verdict(&inside.line, inside.code, 0, "docs-only=1");
+    let (outside, _) = judge_with(Some(&manifest), &[("README.md", "touched\n")]);
+    assert_verdict(&outside.line, outside.code, 1, "reason=no-test-diff");
+    let broken = real_manifest().replace("id = \"flip.docs_only_faces\"", "id = \"flip.renamed\"");
+    let (unread, _) = judge_with(Some(&broken), &[("README.md", "touched\n")]);
+    assert_verdict(&unread.line, unread.code, 1, "reason=infra-error");
+    assert!(unread.line.contains("flip.docs_only_faces"), "読めない行を名指す: {}", unread.line);
+}
+
+/// (2) 札の bead id の形は閉じている: `<接頭辞>-<段>(.<段>)*`（英小文字と数字）。
+#[test]
+fn flip_check_marks_bead_id_shape_is_closed() {
+    for good in ["s2-07l.91", "s2-07l.479.2", "s2-07l.37x", "s2-07l", "ab-c"] {
+        assert!(is_bead_id(good), "形に合う: {good}");
+    }
+    for bad in ["TODO", "s2", "S2-07l.91", "s2-07l..3", "s2-07l.", "-07l", "2s-07l", "s2-07l.91 (理由)", "s2_07l.9", "s2-07L"] {
+        assert!(!is_bead_id(bad), "形に合わない: {bad}");
+    }
+}
+
+/// (2) 形に合わない札は免除を与えず `bad-marker file=<rel>` で落ち（rc 1）、sink に札の id を名指す。
+#[test]
+fn flip_check_marks_bad_shape_fails_as_bad_marker() {
+    for mark in ["retroactive", "moved"] {
+        let (got, lines) = judge_with(None, &[(&lib_rel(), &lib_with_marks(mark, &["TODO"]))]);
+        assert_verdict(&got.line, got.code, 1, &format!("FAIL reason=bad-marker file={}", lib_rel()));
+        assert!(!got.line.contains(&format!("{mark}=")), "免除を数えない: {}", got.line);
+        assert!(lines.iter().any(|line| line.starts_with("flip-check: bad-marker ") && line.contains("\"TODO\"")), "{lines:?}");
+    }
+}
+
+/// (2) 便が足した札の本数が rules 行 `flip.marks_per_pr` を超えると `too-many-marks` で落ち（rc 1）、本数と上限を
+/// 名指す。上限ちょうどは従来どおり免除が効く（境界の両側）。
+#[test]
+fn flip_check_marks_over_the_rules_row_fail_as_too_many_marks() {
+    let manifest = flip_manifest("[\"docs/\"]", 2);
+    let (over, _) = judge_with(Some(&manifest), &[(&lib_rel(), &lib_with_marks("retroactive", &["s2-07l.1", "s2-07l.2", "s2-07l.3"]))]);
+    assert_verdict(&over.line, over.code, 1, "FAIL reason=too-many-marks marks=3 limit=2");
+    let (at, _) = judge_with(Some(&manifest), &[(&lib_rel(), &lib_with_marks("retroactive", &["s2-07l.1", "s2-07l.2"]))]);
+    assert_verdict(&at.line, at.code, 0, "RED-on-base ok tests_changed=0 retroactive=1");
+}
+
+/// (2) 形も本数も満たす札は従来どおり免除が効く（現物の manifest の上限の下・両方の札）。
+#[test]
+fn flip_check_marks_within_shape_and_count_keep_the_exemption() {
+    let (retro, lines) = judge_with(None, &[(&lib_rel(), &lib_with_marks("retroactive", &["s2-07l.170"]))]);
+    assert_verdict(&retro.line, retro.code, 0, "RED-on-base ok tests_changed=0 retroactive=1");
+    assert!(!lines.iter().any(|line| line.contains("bad-marker")), "{lines:?}");
+    let (moved, _) = judge_with(None, &[(&lib_rel(), &lib_with_marks("moved", &["s2-07l.479.2"]))]);
+    assert_verdict(&moved.line, moved.code, 0, "RED-on-base ok tests_changed=0 moved=1");
+}
 
 // ---- base 段の撃ち直し（s2-07l.270・負荷下の flaky の検出線）----
 //

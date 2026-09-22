@@ -240,6 +240,13 @@ pub enum RuleKind {
     /// host で同時に走る便（live な便）の本数の最大値（本・設計 gate-cost.md §24・ADR-0035）。受付は便を作る前に
     /// live な便を数え、この値以上の周を `max-live` で断る（走行中の便には効かない）。
     PipeMaxLive,
+    /// 入口の flip check が `.rs` の差の無い便を docs-only と読む **path の面**（設計 pipeline.md §7・`s2-07l.170`）。
+    /// 値は path の列（`/` で終わる要素は接頭辞・他は完全一致）で、面の外の file を含む便は `no-test-diff` で落ちる。
+    /// 読み手は xtask 側（core は値を消費しない）。
+    FlipDocsOnlyFaces,
+    /// 1 便が足してよい flip check の札（`retroactive` / `moved`）の本数の上限（本・設計 pipeline.md §7・
+    /// `s2-07l.170`）。超えた便は `too-many-marks` で落ちる。読み手は xtask 側（core は値を消費しない）。
+    FlipMarksPerPr,
 }
 
 /// [`RuleKind`] の全 variant。parity test の母集団である。
@@ -297,6 +304,8 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::ReviewSameKindStop,
     RuleKind::LandTrainMax,
     RuleKind::PipeMaxLive,
+    RuleKind::FlipDocsOnlyFaces,
+    RuleKind::FlipMarksPerPr,
 ];
 
 impl RuleKind {
@@ -356,6 +365,8 @@ impl RuleKind {
             Self::ReviewSameKindStop => "ReviewSameKindStop",
             Self::LandTrainMax => "LandTrainMax",
             Self::PipeMaxLive => "PipeMaxLive",
+            Self::FlipDocsOnlyFaces => "FlipDocsOnlyFaces",
+            Self::FlipMarksPerPr => "FlipMarksPerPr",
         }
     }
 
@@ -401,6 +412,7 @@ impl RuleKind {
             | Self::ReviewSameKindStop
             | Self::LandTrainMax
             | Self::PipeMaxLive
+            | Self::FlipMarksPerPr
             | Self::AccountSelection => ValueShape::Int,
             Self::DialogueSurface
             | Self::RunnerModel
@@ -414,7 +426,8 @@ impl RuleKind {
             Self::RunnerAllowedCommands
             | Self::RunnerDeniedCommands
             | Self::RepoNonRustExecAllow
-            | Self::RoleCapabilities => ValueShape::List,
+            | Self::RoleCapabilities
+            | Self::FlipDocsOnlyFaces => ValueShape::List,
         }
     }
 

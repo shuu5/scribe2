@@ -9,7 +9,7 @@ use super::*;
 
 /// subdir を cwd にしても .rs の差分を取り落とさない（pathspec が cwd 配下へ縮まない）。
 ///
-/// 縮むと差分 0 件に化けて `skip reason=no-rust-diff` の rc 0 が出る（fail-open）。
+/// 縮むと差分 0 件に化けて docs-only の側へ倒れる（面の中だけの便なら rc 0＝fail-open）。
 #[test]
 fn flipcheck_sees_rust_diff_from_subdir() {
     let (dir, base) = base_commit();
@@ -32,15 +32,16 @@ fn flipcheck_no_test_diff_fails() {
     assert_verdict(&got.line, got.code, 1, "reason=no-test-diff");
 }
 
-/// .rs の差分が 0 件なら rc 0 / `reason=no-rust-diff` で skip する。
+/// .rs の差分が 0 件でも、docs-only の面（rules 行 `flip.docs_only_faces`）の外の file を含む便は
+/// rc 1 / `reason=no-test-diff` で落ちる（`.rs` の有無だけで通す skip は消えた・`s2-07l.170`）。
 #[test]
-fn flipcheck_no_rust_diff_skips() {
+fn flipcheck_no_rust_diff_outside_docs_faces_fails() {
     let (dir, base) = base_commit();
-    write_at(&dir, "README.md", "fixture touched\n");
+    write_at(&dir, "plugin/hooks.json", "fixture touched\n");
     head_commit(&dir);
     let got = judge(&base, &dir);
     drop_fixture(&dir);
-    assert_verdict(&got.line, got.code, 0, "reason=no-rust-diff");
+    assert_verdict(&got.line, got.code, 1, "reason=no-test-diff");
 }
 
 /// 新しい test が base の src で赤いなら rc 0 / `RED-on-base ok` で通る。

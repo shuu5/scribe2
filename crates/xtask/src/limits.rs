@@ -25,6 +25,10 @@ const DEP_PER_PR: &str = "R-C13-1.per-pr";
 const CHECK_DELTA_MS: &str = "R-C13-1.check-delta-ms";
 const TMUX_TEST_THREADS: &str = "gate.tmux_test_threads";
 
+/// manifest の行 id ↔ [`FlipLimits`] の field。`FlipLimits::read` が要求する 2 本（欠けは Err・`s2-07l.170`）。
+const DOCS_ONLY_FACES: &str = "flip.docs_only_faces";
+const MARKS_PER_PR: &str = "flip.marks_per_pr";
+
 /// `cargo xtask check` / `xtask deps-delta` が比べる閾値（manifest の R-C4 / R-C13 / gate.tmux_test_threads
 /// 行の読み出し）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,6 +96,33 @@ impl Limits {
     }
 }
 
+/// `cargo xtask flip-check` が読む免除経路の上限（manifest の `flip.*` 行・設計 pipeline.md §7・`s2-07l.170`）。
+///
+/// [`Limits`] と別の型に置くのは、[`Limits::read`] の 11 本を要求する読み手（check / deps-delta と、その歯の
+/// fixture）を動かさずに、flip-check だけが要る 2 本を同じ極性（欠け・不発効・形違いは `Err`）で読むためである。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FlipLimits {
+    /// docs-only と読む path の面（`flip.docs_only_faces`・`/` で終わる要素は接頭辞・他は path の完全一致）。
+    pub(crate) docs_only_faces: Vec<String>,
+    /// 1 便が足してよい札（`retroactive` / `moved`）の本数の上限（`flip.marks_per_pr`）。
+    pub(crate) marks_per_pr: u64,
+}
+
+impl FlipLimits {
+    /// manifest の本文から 2 値を読む。不備は**全件**を 1 つの reason に畳む（[`Limits::read`] と同じ極性）。
+    pub(crate) fn read(manifest_text: &str) -> Result<Self, String> {
+        let faces = list_rule(manifest_text, DOCS_ONLY_FACES);
+        let marks = int_rule(manifest_text, MARKS_PER_PR);
+        match (faces, marks) {
+            (Ok(docs_only_faces), Ok(marks_per_pr)) => Ok(Self { docs_only_faces, marks_per_pr }),
+            (faces, marks) => {
+                let problems: Vec<String> = [faces.err(), marks.err()].into_iter().flatten().collect();
+                Err(format!("rules manifest の flip の行を読めない: {}", problems.join("・")))
+            }
+        }
+    }
+}
+
 /// 行 id を持つ有効な `[[rule]]` の整数 `value`。不備は行 id（と行番号）を名指す。
 fn int_rule(text: &str, id: &str) -> Result<u64, String> {
     let at = line_of(text, id).map_or(String::new(), |line| format!("（{line} 行目）"));
@@ -101,8 +132,26 @@ fn int_rule(text: &str, id: &str) -> Result<u64, String> {
     let Ok(value) = raw.trim().parse::<u64>() else {
         return Err(format!("{id} の value が整数でない{at}: {raw}"));
     };
+    enabled_rule(text, id, &at).map(|()| value)
+}
+
+/// 行 id を持つ有効な `[[rule]]` の文字列の列の `value`（空の列・列でない値は Err）。
+fn list_rule(text: &str, id: &str) -> Result<Vec<String>, String> {
+    let at = line_of(text, id).map_or(String::new(), |line| format!("（{line} 行目）"));
+    let Some(raw) = raw_field(text, id, "value") else {
+        return Err(format!("{id} の行か value が無い{at}"));
+    };
+    let items = crate::toml_lite::string_array(&raw);
+    if !raw.trim().starts_with('[') || items.is_empty() || items.iter().any(String::is_empty) {
+        return Err(format!("{id} の value が空でない文字列の列でない{at}: {raw}"));
+    }
+    enabled_rule(text, id, &at).map(|()| items)
+}
+
+/// 行が `enabled = true` か（省略も `false` と同じく拒む）。
+fn enabled_rule(text: &str, id: &str, at: &str) -> Result<(), String> {
     match raw_field(text, id, "enabled") {
-        Some(enabled) if enabled.trim() == "true" => Ok(value),
+        Some(enabled) if enabled.trim() == "true" => Ok(()),
         Some(enabled) => Err(format!("{id} が enabled = true でない{at}: enabled = {enabled}")),
         None => Err(format!("{id} に enabled が無い{at}")),
     }
@@ -200,7 +249,7 @@ pub const ALLOWED_DEPS: &[(&str, &str)] = &[
 
 #[cfg(test)]
 mod tests {
-    use super::{int_value, raw_field, Limits};
+    use super::{int_value, raw_field, FlipLimits, Limits};
     use crate::toml_lite::quoted;
     use std::path::PathBuf;
 
@@ -222,6 +271,8 @@ mod tests {
 
     /// 現物の manifest で [`Limits::read`] が 11 値を返し、`core_lines` / `file_lines` が
     /// R-C4-1 / R-C4-2 の行の値と等しい（憲法 C14.2・const を消して読み手 1 本にした形）。
+    /// flip-check の 2 行（`flip.docs_only_faces` / `flip.marks_per_pr`・`s2-07l.170`）も [`FlipLimits::read`] で
+    /// 欠け無く読め、値は行の現物と等しい（読み手が要求する本数は行の本数に追随する）。
     #[test]
     fn limits_match_rules_manifest() {
         let text = manifest_text();
@@ -248,6 +299,18 @@ mod tests {
         assert!(limits.dep_per_pr > 0 && limits.check_delta_ms > 0, "0 は依存を 1 本も足せない: {limits:?}");
         assert!(limits.line_width > 0, "幅 0 は数え方を縮退させる: {limits:?}");
         assert!(limits.tmux_test_threads > 0, "同時本数 0 は tmux の歯を 1 本も走らせない: {limits:?}");
+        let flip = FlipLimits::read(&text).unwrap_or_else(|reason| panic!("{reason}"));
+        assert_eq!(Some(flip.marks_per_pr), int_value(&text, "flip.marks_per_pr"), "flip.marks_per_pr の行と field");
+        let raw = raw_field(&text, "flip.docs_only_faces", "value").unwrap_or_default();
+        assert_eq!(flip.docs_only_faces, crate::toml_lite::string_array(&raw), "flip.docs_only_faces の行と field");
+        assert!(flip.marks_per_pr > 0 && !flip.docs_only_faces.is_empty(), "{flip:?}");
+        // 2 行のどちらを欠いても・不発効にしても Err が行 id を名指す（0 や空で埋めて Ok に化けない）。
+        for id in ["flip.docs_only_faces", "flip.marks_per_pr"] {
+            let dropped = text.replace(&format!("id = \"{id}\""), "id = \"flip.renamed\"");
+            assert!(FlipLimits::read(&dropped).err().is_some_and(|reason| reason.contains(id)), "{id} の欠け");
+        }
+        let empty = text.replace(&raw, "[]");
+        assert!(FlipLimits::read(&empty).err().is_some_and(|reason| reason.contains("flip.docs_only_faces")), "空の列");
     }
 
     /// 11 行の読み手用 fixture。`drop` に与えた行だけ `value` を落とし、`disabled` の行は

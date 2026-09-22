@@ -243,6 +243,63 @@ impl Unfit {
     }
 }
 
+/// 入口の flip を撃つ行の先頭語列（設計 pipeline.md §7・本 repo の `.vessel.toml` の 1 本目の行の頭）。
+const ENTRANCE_FLIP_WORDS: &[&str] = &["cargo", "xtask", "flip-check"];
+
+/// 宣言の `common-verify` の 1 行の種類。**先頭語列だけ**で閉じる（設計 pipeline.md §7 約束 4・`s2-07l.170`）。
+///
+/// 並びは分類の適用順（先に当たる側が勝つ）: 入口の flip は先頭語 `cargo` の行でもあるので先に取る。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerifyKind {
+    /// 入口の flip（先頭語列 [`ENTRANCE_FLIP_WORDS`]）。
+    EntranceFlip,
+    /// 先頭語 `cargo` の他の行（Rust の repo の検証）。
+    Cargo,
+    /// 先頭語が `cargo` でない行（`sh` / `git` 等＝Rust 固有の検査を内蔵しない側）。
+    Other,
+}
+
+impl VerifyKind {
+    /// 1 行を先頭語列で分類する（語は空白で割る・[`unfit`] が 1 行 1 command を先に保証する）。
+    pub fn of(line: &str) -> Self {
+        let words: Vec<&str> = line.split_whitespace().collect();
+        if words.starts_with(ENTRANCE_FLIP_WORDS) {
+            Self::EntranceFlip
+        } else if words.first() == ENTRANCE_FLIP_WORDS.first() {
+            Self::Cargo
+        } else {
+            Self::Other
+        }
+    }
+}
+
+/// 宣言の行の**分類**が断る理由（行ごとの [`Unfit`] とは別の面＝行の列の全体で決まる）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KindGap {
+    /// 先頭語 `cargo` の行を持ちながら、入口の flip を撃つ行を持たない（TDD の flip を測らない Rust の宣言）。
+    NoEntranceRed,
+}
+
+impl KindGap {
+    /// 断る理由の 1 行（variant の名を先頭に置く）。
+    fn reason(self) -> String {
+        match self {
+            Self::NoEntranceRed => format!(
+                "NoEntranceRed: common-verify に先頭語 cargo の行が在るのに入口の flip（{} --base {BASE_HOLE}）を撃つ行が無い",
+                ENTRANCE_FLIP_WORDS.join(" ")
+            ),
+        }
+    }
+}
+
+/// `common-verify` の行の列の分類が断る理由。先頭語 `cargo` の行を 1 本も持たない宣言（Rust でない toy repo）は
+/// 分類だけで断らない（§7「Rust 固有の検査を内蔵しない」のまま）。
+pub fn kind_gap(lines: &[String]) -> Option<KindGap> {
+    let kinds: Vec<VerifyKind> = lines.iter().map(|line| VerifyKind::of(line)).collect();
+    let rust = kinds.iter().any(|kind| *kind != VerifyKind::Other);
+    (rust && !kinds.contains(&VerifyKind::EntranceFlip)).then_some(KindGap::NoEntranceRed)
+}
+
 /// 書かれていた宣言の値。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Declared {
@@ -375,6 +432,10 @@ impl Sourced {
         }
         let basis = Basis { allowed: &declared.allowed, denied: ceiling.denied };
         check_lines("common-verify", &declared.common_verify, declared.common_line, &basis, &mut errors);
+        // **入口の flip の不在**は行ごとの検査では見えない（どの行も撃てる形のまま、flip の行だけが無い）。
+        if let Some(gap) = kind_gap(&declared.common_verify) {
+            errors.push(DeclError::new(declared.common_line, gap.reason()));
+        }
         // **検出線の行にも同じ検査を掛ける**（ADR-0010 §2.3 (2)・ADR-0021 §2.6・lens-132d H1）。
         // 掛けないと、共通 verify で断った迂回行を検出線の側へ置くだけで撃たせられる。
         check_lines(DETECTION_KEY, &declared.detection_verify, declared.detection_line, &basis, &mut errors);
@@ -788,8 +849,9 @@ mod tests {
     // flip-check: moved s2-07l.373
 
     use super::{
-        unfit, Basis, Ceiling, Declared, Effective, Holes, Sourced, Unfit, BASE_HOLES, BASE_HOLE, CEILING_ROW, DECL_FILE,
-        DEFAULT_CI_CMD, DENIED_ROW, CI_SHA_HOLE, JOBS_HOLE, TEETH_HOLE, THREADS_HOLE,
+        kind_gap, unfit, Basis, Ceiling, Declared, Effective, Holes, KindGap, Sourced, Unfit, VerifyKind, BASE_HOLES,
+        BASE_HOLE, CEILING_ROW, DECLARED_KEYS, DECL_FILE, DEFAULT_CI_CMD, DENIED_ROW, CI_SHA_HOLE, JOBS_HOLE,
+        SCHEMA_VERSION, TEETH_HOLE, THREADS_HOLE,
     };
     use crate::order::is_declaration_order;
 
@@ -941,6 +1003,9 @@ mod tests {
         assert_eq!(unfit("cargo mutants --in-diff x", &open, Holes::None), None, "語列の無い基準では通る");
     }
 
+    /// 入口の flip と Rust の検証の 2 行（`cargo` の行を持つ宣言は入口の flip を要る・`s2-07l.170`）。
+    const FLIP_AND_CHECK: &str = r#"["cargo xtask flip-check --base {base}", "cargo xtask check"]"#;
+
     /// 宣言の本文。
     fn body(allowed: &str, common: &str) -> String {
         format!("schema = 1\nallowed-commands = {allowed}\ncommon-verify = {common}\n")
@@ -966,7 +1031,7 @@ mod tests {
     /// 「実測を経た値」が名ばかりになる。
     #[test]
     fn declaration_copy_round_trips_through_the_same_reader() {
-        let made = effective(r#"["cargo", "git"]"#, r#"["cargo xtask check"]"#);
+        let made = effective(r#"["cargo", "git"]"#, FLIP_AND_CHECK);
         let text = made.render();
         let read = Effective::parse(&text).expect("写しを読み戻せる");
         assert_eq!(read, made, "写しは出所ごと round trip する: {text}");
@@ -978,11 +1043,11 @@ mod tests {
     /// 写しを round trip し、書いた空配列は従来どおり不備である（ADR-0010 §2.1・ADR-0021 §2.4）。
     #[test]
     fn declaration_detection_verify_is_optional_and_round_trips() {
-        let absent = effective(r#"["cargo"]"#, r#"["cargo xtask check"]"#);
+        let absent = effective(r#"["cargo"]"#, FLIP_AND_CHECK);
         assert!(absent.detection_verify().is_empty(), "無い key は空");
         assert!(!absent.render().contains("detection-verify"), "空の周は key ごと書かない: {}", absent.render());
 
-        let text = format!("{}detection-verify = [\"cargo xtask mutants-diff --base {{base}} --jobs {{jobs}}\"]\n", body(r#"["cargo"]"#, r#"["cargo xtask check"]"#));
+        let text = format!("{}detection-verify = [\"cargo xtask mutants-diff --base {{base}} --jobs {{jobs}}\"]\n", body(r#"["cargo"]"#, FLIP_AND_CHECK));
         let declared = Declared::parse(&text).expect("検出線の在る宣言を読める");
         let (commands, denied) = (strings(&["cargo"]), denied());
         let made = Sourced { declared, commit: "c0ffee".to_owned(), source: DECL_FILE.to_owned(), ceiling: CEILING_ROW.to_owned() }
@@ -1189,5 +1254,74 @@ mod tests {
                 "{line:?} が当たる理由 {hit:?} のうち宣言順で最初のものを返す"
             );
         }
+    }
+
+    // ---- 行の分類と入口の flip の不在（設計 pipeline.md §7 約束 4・`s2-07l.170`・接頭辞 `declaration_kind_`）----
+
+    /// 宣言を上限（`cargo` / `git` / `sh`）と突き合わせる（intake と同じ `Sourced::measure` の経路）。
+    fn measured(allowed: &str, common: &str) -> Result<Effective, Vec<super::DeclError>> {
+        let declared = Declared::parse(&body(allowed, common)).expect("宣言を読める");
+        let (commands, denied) = (strings(&["cargo", "git", "sh"]), denied());
+        Sourced { declared, commit: "c0ffee".to_owned(), source: DECL_FILE.to_owned(), ceiling: CEILING_ROW.to_owned() }
+            .measure(&ceiling(&commands, &denied), &[])
+    }
+
+    /// 各行は先頭語列で閉じた 3 種に分かれる: 入口の flip（`cargo xtask flip-check`）・他の `cargo` の行・それ以外。
+    /// 語の途中や 2 語目以降の `cargo` / `flip-check` は分類に効かない（先頭語列だけで見る）。
+    #[test]
+    fn declaration_kind_classifies_each_line_by_its_head_words() {
+        for (line, want) in [
+            ("cargo xtask flip-check --base {base}", VerifyKind::EntranceFlip),
+            ("cargo  xtask   flip-check --base {base}", VerifyKind::EntranceFlip),
+            ("cargo xtask check", VerifyKind::Cargo),
+            ("cargo xtask flip-checks --base {base}", VerifyKind::Cargo),
+            ("cargo nextest run --workspace", VerifyKind::Cargo),
+            ("sh verify.sh cargo xtask flip-check", VerifyKind::Other),
+            ("git rev-parse --verify {base}", VerifyKind::Other),
+            ("cargox xtask flip-check", VerifyKind::Other),
+        ] {
+            assert_eq!(VerifyKind::of(line), want, "{line:?}");
+        }
+    }
+
+    /// 先頭語 `cargo` の行を持ちながら入口の flip の行を持たない宣言は intake の経路（`Sourced::measure`）が
+    /// `NoEntranceRed` で断り、理由は `common-verify` の行番号と variant の名を持つ。flip の行を足せば同じ宣言が通る。
+    #[test]
+    fn declaration_kind_refuses_cargo_lines_without_the_entrance_flip() {
+        let errors = measured(r#"["cargo", "git"]"#, r#"["cargo xtask check", "git status"]"#)
+            .expect_err("入口の flip の無い Rust の宣言は断る");
+        let found: Vec<&super::DeclError> =
+            errors.iter().filter(|error| error.reason.starts_with("NoEntranceRed")).collect();
+        assert_eq!(found.len(), 1, "NoEntranceRed を 1 件: {errors:?}");
+        assert_eq!(found.first().map(|error| error.line), Some(3), "common-verify の行を名指す: {errors:?}");
+        assert!(found.iter().any(|error| error.reason.contains("cargo xtask flip-check --base {base}")), "{errors:?}");
+        assert_eq!(kind_gap(&strings(&["cargo nextest run"])), Some(KindGap::NoEntranceRed), "cargo の行 1 本でも断る");
+        assert!(measured(r#"["cargo", "git"]"#, FLIP_AND_CHECK).is_ok(), "入口の flip を足せば通る");
+        assert_eq!(kind_gap(&strings(&["cargo xtask flip-check --base {base}"])), None, "flip だけの宣言も通る");
+    }
+
+    /// 先頭語 `cargo` の行を持たない宣言（`sh` / `git` だけの toy repo）は分類だけで断らない（§7「Rust 固有の検査を
+    /// 内蔵しない」のまま）。宣言 file の schema は不変（版 1・key の列も同じ 10 本）。
+    #[test]
+    fn declaration_kind_passes_declarations_without_cargo_and_keeps_the_schema() {
+        assert!(measured(r#"["git", "sh"]"#, r#"["git rev-parse --verify {base}", "sh verify.sh"]"#).is_ok(), "sh / git だけは通る");
+        assert_eq!(kind_gap(&strings(&["git status", "sh verify.sh"])), None);
+        assert_eq!(SCHEMA_VERSION, 1, "宣言 file の版は動かない");
+        assert_eq!(
+            DECLARED_KEYS,
+            [
+                "schema",
+                "allowed-commands",
+                "common-verify",
+                "detection-verify",
+                "requirements",
+                "remote",
+                "ci-cmd",
+                "design-intent-paths",
+                "design-doc-paths",
+                "tests-paths",
+            ],
+            "宣言 file の key の列は動かない"
+        );
     }
 }
