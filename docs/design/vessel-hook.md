@@ -118,7 +118,7 @@ xtask 側: `crates/xtask/src/genmanifest.rs` の `#[cfg(test)]` に、render の
 
 やさしく言うと: git の履歴を壊す・元に戻せない削除・tmux の server を壊す・作業の記録簿（台帳）を壊す操作を止める見張りは、いま器の外の script に在って、本体が無いと黙って通す。この § は、その判定を器の中の 1 つの口（subcommand）にまとめ、止める区分を 5 つに閉じ、何を止めるかを user の決定の印つきの規則の行に置く形を決める。口座の設定から呼ぶ配線と健康診断は §12。
 
-- 出所: user 裁定 2026-09-20（破壊防止の見張りを Rust で器へ取り込み、器を入れた machine 全体の共通設定から器の binary を呼ぶ・切る / 調整するのは user の権限・逐語は台帳 `s2-07l.494` の notes）。決定は ADR-0056（口は 1 つ・種類は閉じた 5 つ・値は rules 行・host ごとの緩めは持たない・binary の不在は fail-open・payload が読めない周は fail-closed）。SRS は同じ改訂で user の /folio-architect が FR56 の対象を「口座の設定を読む全 session」へ広げ（AC27 に素の席の経路を足す）、FR24 / AC7 の沈黙を hook の入口に限る字面へ直し、NFR5 の字面を「host-guard の呼出しは git の問い合わせ 1 回まで」に主語を絞って足し（hook の入口の予算は動かさない）、新しい FR 3 つ（見張り自身の設定の編集を断る・doctor の host-guard の行・rm の不可逆削除を断り退役の mv か git rm へ向ける）を足す。**新 FR の番号は SRS 改訂で取る**ので、本 § の行の req には既存の id だけを書く。ADR の草稿は v3.3（2026-09-23・fidelity 4 周目の裁定を当てた版）を基にした。
+- 出所: user 裁定 2026-09-20（破壊防止の見張りを Rust で器へ取り込み、器を入れた machine 全体の共通設定から器の binary を呼ぶ・切る / 調整するのは user の権限・逐語は台帳 `s2-07l.494` の notes）。決定は ADR-0056（口は 1 つ・種類は閉じた 5 つ・値は rules 行・host ごとの緩めは持たない・binary の不在は fail-open・payload が読めない周は fail-closed）。SRS は同じ改訂で user の /folio-architect が FR56 の対象を「口座の設定を読む全 session」へ広げ（AC27 に素の席の経路を足す）、FR24 / AC7 の沈黙を hook の入口に限る字面へ直し、NFR5 の字面を「host-guard の呼出しは git の問い合わせ 1 回まで」に主語を絞って足し（hook の入口の予算は動かさない）、新しい FR 3 つ（見張り自身の設定の編集を断る・doctor の host-guard の行・rm の不可逆削除を断り退役の mv か git rm へ向ける）を足す。新 FR は SRS v0.19 で FR72（見張り自身の設定の編集の拒否）・FR73（doctor の host-guard の行）・FR74（rm の不可逆削除の拒否）として起票され、行 e / d / c の req が指す。ADR の草稿は v3.3（2026-09-23・fidelity 4 周目の裁定を当てた版）を基にした。
 - 現物（verified・main c25eb2d）:
   - hook の入口は `crates/scribe2/src/hook/mod.rs` の `dispatch` で、anchor（`--project` か payload の `cwd` → `repo_root` → `served` → state dir）が解けない周は黙る（FR24）。Bash の門は `pre_tool_use` の順に write-set guard → command guard（`crates/scribe2/src/hook/command.rs`）→ 起票の門（`crates/scribe2/src/hook/ledger_guard.rs`）→ 権能 guard。payload の読み手 `field`（pub(crate)）と `command_of`（private・入れ子の JSON の escape を解く）は同じ file に在る。
   - command guard の照合 `denied_in` は **分割と照合が 1 関数**（`;` `&` `|` 改行で切り、空白で語に分け、語列の先頭語が segment の先頭語と一致し残りの語を全部含む）。読む行は `ROW` = `runner.denied_commands` 1 本（`denied_of`・private・不発効は None → deny）。intake は `crates/scribe2/src/pipe/declaration.rs` の `DENIED_ROW`（同じ id）で `list_row` から値を取り `denied_in` を verify 行に掛け、断りの文は `Unfit::Denied` が `DENIED_ROW` の字面を名指す。`crates/scribe2/src/pipe/declaration.rs` は 1488 行（余地 12）で本 § のどの行も触れない。
@@ -249,7 +249,7 @@ done = "(1) subcommand host-guard が --state-dir と --rules だけを取り、
 [[contract]]
 id = "c"
 title = "host-guard の rm の種類 — 守る集合の記号（state-dir / repo-tracked / repo-git）を閉じた enum にして rules 行 host_guard.rm の値を読み込みで引き、rm の segment の path を cwd から 2 段で解いて守る path に一致・祖先・配下で当たる rm と、解けない path（変数展開・command 置換・~ 始まり・brace・cd / pushd の後ろの相対 path）の rm と、接頭の dir が守る path に当たる glob の rm を断り、それ以外は通す（相対 path は payload の cwd 基準・repo の root は fs で辿り git の子 process は ls-files の 1 回・tracked は git rm・それ以外は退役の mv へ向ける）"
-req = ["FR20", "NFR4", "NFR5"]
+req = ["FR74", "FR20", "NFR4", "NFR5"]
 section = "11"
 write-set = ["+crates/scribe2/src/hook/host_guard.rs", "crates/scribe2/src/rules/mod.rs", "crates/scribe2-boundary/tests/e2e/hook.rs", "crates/scribe2-boundary/tests/e2e/rules.rs", "docs/design/vessel-hook.md"]
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail host_guard_rm_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail host_guard_rm_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_host_guard_rm_symbol_"]
@@ -260,7 +260,7 @@ done = "(1) 守る集合の記号が閉じた 3 値の enum と const slice で�
 [[contract]]
 id = "d"
 title = "host-guard の配線と doctor — 口座の口の verb 1 つが host の面の全口座の settings.json を実体に解き、入れ子 JSON の render 1 本で PreToolUse の hook 行 1 本を足すだけの merge（在れば触らず・他の key を保ち・symlink を保ち・読めない実体は断って書かない）を実体ごとに 1 回書き、doctor が --state-dir の周に種類ごとの on / off / no-row・配線を持つ口座の数と口座の数・実体の数・binary の解決を 1 行で出す"
-req = ["FR61", "FR24", "NFR4"]
+req = ["FR73", "FR61", "FR24", "NFR4"]
 section = "12"
 write-set = ["+crates/scribe2/src/account/wire.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2/src/account/cli.rs", "crates/scribe2/src/fleet/json_tree.rs", "crates/scribe2-boundary/src/main.rs", "crates/scribe2-boundary/tests/e2e/fleet.rs", "crates/scribe2-boundary/tests/e2e/seat/account.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__fleet__fleet_external_form.snap", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__seat__seat_doctor_external_form.snap", "docs/design/vessel-hook.md"]
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail host_guard_wire_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail host_guard_wire_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail host_guard_doctor_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_doctor_external_form", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail fleet_external_form", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail account_cmd_"]
@@ -271,7 +271,7 @@ done = "(1) json_tree に Tree の render が 1 本増え、入れ子・配列�
 [[contract]]
 id = "e"
 title = "host-guard の見張り自身の設定の編集の種類 — 守る file の集合（host の面の全口座の settings.json の実体・payload の cwd の repo の root〔外なら cwd〕の .claude の settings.json と settings.local.json）を code の定数で持ち行を持たず、編集系 4 道具の path と Bash の rm / tee / sed -i / redirect の対象と mv の source と destination と cp / ln の destination を、守る file の導いた path と実体の path の両方と一致・祖先の関係で比べて断る（~ 始まりは末尾一致・glob は自前の fnmatch・~ と glob の併用は末尾を fnmatch・cp / mv の dir への destination は basename を結んで比べ、変数・brace・cd 後の相対 path は通す）"
-req = ["FR20", "NFR4", "NFR5"]
+req = ["FR72", "FR20", "NFR4", "NFR5"]
 section = "12"
 write-set = ["+crates/scribe2/src/hook/host_guard.rs", "crates/scribe2-boundary/tests/e2e/hook.rs", "docs/design/vessel-hook.md"]
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail host_guard_self_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail host_guard_self_"]
