@@ -2945,6 +2945,36 @@ fn hook_role_stop_is_denied_when_the_row_lacks_stop() {
     clean(&[&place.repo, &place.state, &place.sock_dir]);
 }
 
+// ─────────────── 器の口の basename の形（契約行 u・`s2-07l.556`・seat-roles.md §27・接頭辞 `hook_role_guard_self_`） ───────────────
+
+/// §27: orchestrator の席（行は `launch` を持たない）で、tmp 配下の写し `<NAME>-pipe.bin` で便を起こす行は `<NAME>` の同じ
+/// 行と同じ断り（deny 文が同じ字面・記録は `role-deny capability=launch`）で止まり、`<NAME>ctl` の同じ行は権能の guard を
+/// 通る（rc 0・0 byte・role の記録なし）。写しの file は置かない＝guard は字面だけを見る。
+#[test]
+fn hook_role_guard_self_copied_binary_is_denied_like_the_name() {
+    let place = role_place();
+    let path = stub_seat(&place, "roleself", Some("orchestrator"));
+    let me = "roleself_roleself";
+    let tail = "pipe run --run r-1 --repo .";
+    let plain = format!("{NAME} {tail}");
+    let before = role_records(&place.state).len();
+    let want = assert_role_deny(&run_stop_hook(&place, &path, Some(&place.rules), &plain), "器の名の行");
+    assert!(want.contains("（launch）") && want.contains("role.orchestrator"), "launch と行 id を名指す: {want}");
+    assert_role_record(&place.state, before, "role-deny capability=launch", me);
+
+    let copy = format!("{}/{NAME}-pipe.bin {tail}", place.sock_dir.display());
+    let before = role_records(&place.state).len();
+    let text = assert_role_deny(&run_stop_hook(&place, &path, Some(&place.rules), &copy), "写しの行");
+    assert_eq!(text, want, "写しの行は器の名の行と同じ断り");
+    assert_role_record(&place.state, before, "role-deny capability=launch", me);
+
+    let other = format!("{}/{NAME}ctl {tail}", place.sock_dir.display());
+    let before = role_records(&place.state).len();
+    assert_silent(&run_stop_hook(&place, &path, Some(&place.rules), &other), "NAMEctl は器の口でない");
+    assert_eq!(role_records(&place.state).len(), before, "権能付きの操作でない＝role の記録なし");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
 // ---- 席の指示文（設計 seat-roles.md §5・ADR-0022 §2.4・FR42 / FR44・AC17・`s2-07l.248`）----
 // 登録済みの席の SessionStart は名乗りの後ろに役割の雛形 + rules 行から生成した指示文を出す。登録の無い席は 0 byte。
 

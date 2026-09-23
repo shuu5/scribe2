@@ -274,7 +274,7 @@ pub fn subject(op: &Operation, state_dir: Option<&Path>) -> Option<Subject> {
 /// command 行が含む権能付き subcommand の権能（宣言順・重複なし）。
 ///
 /// 照合は空白区切りの token の並び `<NAME> <sub> <sub2>` で、binary の名は `NAME` そのものか path の末尾
-/// （`target/debug/<NAME>`）。`${..._BIN}` の展開後の字面は見ない（shell の展開を器は解かない）。
+/// （`target/debug/<NAME>`）・写しの形（`<NAME>.bin` / `…/<NAME>-pipe.bin`・[`is_self`]）。`${..._BIN}` の展開後の字面は見ない（shell の展開を器は解かない）。
 ///
 /// 停止（[`STOP_COMMAND`]）だけは 2 語の後ろの**窓**も読む: 便 1 本を名指す形（[`named_stop`]）は `Stop`・それ以外は
 /// `Launch` へ降ろす（席の行に `launch` は無いのでどの席でも止まる・fail-closed・§25 約束 4）。
@@ -326,9 +326,12 @@ fn stop_window_is_named(window: &[&str]) -> bool {
     runs == 1
 }
 
-/// token が器の binary を名指すか（`NAME` か `…/NAME`）。
+/// token が器の binary を名指すか: basename（最後の `/` の後ろ）が `NAME` に等しいか、`NAME` で始まりその直後の
+/// 1 文字が `.` か `-`（写しの `NAME.bin` / `NAME-pipe.bin`・`NAMEctl` は違う・設計 seat-roles.md §27）。字面だけを
+/// 見る（file の中身を読まない・実行しない・PATH を引かない）。
 fn is_self(token: &str) -> bool {
-    token == NAME || token.rsplit('/').next() == Some(NAME)
+    let base = token.rsplit('/').next().unwrap_or(token);
+    base.strip_prefix(NAME).is_some_and(|rest| rest.is_empty() || rest.starts_with(['.', '-']))
 }
 
 /// 編集先の所在。
@@ -612,8 +615,8 @@ pub fn unanchored_line(subject: &Subject) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        capabilities_of, judge, refused, unanchored_line, Invalid, PathKind, PathKinds, RefuseReason, RoleDecision,
-        Subject, CAPABILITY_COMMANDS, DECL_FILE, PATH_KINDS,
+        capabilities_of, is_self, judge, refused, unanchored_line, Invalid, PathKind, PathKinds, RefuseReason,
+        RoleDecision, Subject, CAPABILITY_COMMANDS, DECL_FILE, PATH_KINDS,
     };
     use crate::name::NAME;
     use crate::pipe::declaration::path_kinds::{DeclaredPaths, INVALID_REASONS};
@@ -754,6 +757,29 @@ mod tests {
             assert_eq!(name.split(' ').count(), 2, "{name}");
             assert!(name.starts_with("pipe "), "{name}");
         }
+    }
+
+    /// 器の口の basename の形（§27 の歯の母集団 8 形）: `NAME` / `…/NAME` / `NAME.bin` / `…/NAME-pipe.bin` は器の口、
+    /// `NAMEctl` / `…/NAMEx` / 別名 / 空 は違う。同じ token で便を起こす行を組むと、器の口の 4 形だけが `Launch` を要る。
+    #[test]
+    fn role_guard_self_reads_the_basename_and_its_dot_or_dash_copies() {
+        let forms: [(String, bool); 8] = [
+            (NAME.to_owned(), true),
+            (format!("target/debug/{NAME}"), true),
+            (format!("{NAME}.bin"), true),
+            (format!("/tmp/cache/{NAME}-pipe.bin"), true),
+            (format!("{NAME}ctl"), false),
+            (format!("target/debug/{NAME}x"), false),
+            ("cargo".to_owned(), false),
+            (String::new(), false),
+        ];
+        for (token, want) in &forms {
+            assert_eq!(is_self(token), *want, "{token:?}");
+            let line = format!("{token} pipe run --run r");
+            let caps = if *want { vec![Capability::Launch] } else { Vec::new() };
+            assert_eq!(capabilities_of(&line), caps, "{line}");
+        }
+        assert_eq!(forms.iter().filter(|(_, want)| *want).count(), 4, "器の口は 4 形");
     }
 
     /// 停止の呼び出しの窓（2 語の後ろ）の **9 つの形**（§25 の歯の母集団）: 通る形 1 つ（`--run` と値）と起動の権能へ
