@@ -549,6 +549,107 @@ fn mutant_e2e_version_flag_prints_name_and_version_on_the_binary() {
     assert!(stdout.starts_with("usage: ") && !stdout.contains(&expected), "先頭以外の `--version` は使い方: {stdout}");
 }
 
+// ─────────── build script の再走の引き金（consumer-sync.md §18・行 i・`s2-07l.317`） ───────────
+
+// `rerun_paths` の実体は build.rs と同じ 1 file（列挙の実装は 1 か所・build script は歯の外なので、関数を
+// 同じ file から読んで直に撃つ）。
+include!("../../../scribe2/build/rerun.rs");
+
+/// `git -C <dir> <args>` を撃ち、rc 0 だったか。
+fn build_rerun_git(dir: &Path, args: &[&str]) -> bool {
+    Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .is_ok_and(|out| out.status.success())
+}
+
+/// tmp の git repo（symlink を解いた root）: tracked 3 本（1 本は sub dir）・untracked 1 本・tracked にしてから
+/// 作業木で消した 1 本。commit は撃たない（`ls-files` は index を読む）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn build_rerun_repo() -> TmpDir {
+    let dir = tmp().canonical().expect("tmp dir の実 path を解ける");
+    assert!(build_rerun_git(&dir, &["init", "-q"]), "git init が通る");
+    fs::create_dir_all(dir.join("sub")).expect("sub dir を作れる");
+    for name in ["a.txt", "b.txt", "sub/c.txt", "gone.txt", "untracked.txt"] {
+        fs::write(dir.join(name), name).expect("fixture を書ける");
+    }
+    assert!(
+        build_rerun_git(&dir, &["add", "--", "a.txt", "b.txt", "sub/c.txt", "gone.txt"]),
+        "git add が通る"
+    );
+    fs::remove_file(dir.join("gone.txt")).expect("tracked の 1 本を作業木から消せる");
+    dir
+}
+
+/// tmp の git repo で、tracked で在る 3 本の絶対 path と HEAD / index を sort 済みで返し、untracked と消えた
+/// tracked を含まない（行 i の done (1)）。
+#[test]
+fn build_rerun_paths_are_existing_tracked_files_and_git_meta() {
+    let dir = build_rerun_repo();
+    let found = rerun_paths(&dir);
+    let expected: Vec<PathBuf> = [".git/HEAD", ".git/index", "a.txt", "b.txt", "sub/c.txt"]
+        .iter()
+        .map(|name| dir.join(name))
+        .collect();
+    assert_eq!(found, expected, "tracked で在る 3 本 + HEAD / index（絶対 path・sort 済み）");
+    assert!(found.iter().all(|path| path.is_absolute()), "全部が絶対 path: {found:?}");
+    assert!(!found.contains(&dir.join("untracked.txt")), "untracked は含まない: {found:?}");
+    assert!(!found.contains(&dir.join("gone.txt")), "消えた tracked は含まない: {found:?}");
+}
+
+/// 同じ repo で 2 回撃つと同じ並びを返し、その並びは sort 済みで重複が無い（決定的・行 i の done (1)）。
+#[test]
+fn build_rerun_paths_are_deterministic() {
+    let dir = build_rerun_repo();
+    let first = rerun_paths(&dir);
+    let second = rerun_paths(&dir);
+    assert_eq!(first, second, "2 回目も同じ並び");
+    let mut sorted = first.clone();
+    sorted.sort();
+    sorted.dedup();
+    assert_eq!(first, sorted, "sort 済みで重複なし");
+    assert_eq!(first.len(), 5, "数も揃う: {first:?}");
+}
+
+/// git repo でない dir では、`<dir>/../../.git` の HEAD / index のうち在る物だけを返す（0 本を含む）。
+/// `.git` は HEAD だけを置いた素の dir（git は repo と読まない）で、tracked の列挙は 1 本も足されない。
+#[test]
+fn build_rerun_paths_outside_a_repo_are_only_existing_git_meta() {
+    let root = tmp().canonical();
+    assert!(root.is_some(), "tmp dir の実 path を解ける");
+    let Some(root) = root else { return };
+    let dir = root.join("crates").join("pkg");
+    assert!(fs::create_dir_all(&dir).is_ok(), "dir を作れる");
+    assert!(!build_rerun_git(&dir, &["rev-parse", "--show-toplevel"]), "前提: git repo でない");
+    assert_eq!(rerun_paths(&dir), Vec::<PathBuf>::new(), "meta も無い周は 0 本");
+    assert!(fs::create_dir_all(root.join(".git")).is_ok(), ".git dir を作れる");
+    assert!(fs::write(root.join(".git").join("HEAD"), "ref: refs/heads/main\n").is_ok(), "HEAD を書ける");
+    assert!(fs::write(dir.join("stray.txt"), "x").is_ok(), "dir に file を書ける");
+    assert!(!build_rerun_git(&dir, &["rev-parse", "--show-toplevel"]), "前提: HEAD だけの .git は repo でない");
+    let found = rerun_paths(&dir);
+    assert_eq!(found, vec![dir.join("..").join("..").join(".git").join("HEAD")], "在る HEAD だけ（index は無い）");
+}
+
+/// build.rs は列挙を `build/rerun.rs` から `include!` で読み、自分で `rerun_paths` を定義しない＝歯が撃つ関数と
+/// build script が撃つ関数が同じ 1 つ（行 i の done (2)）。build.rs の doc は再走の母集団を tracked 全 file と名指す
+/// （done (3)）。
+#[test]
+fn build_rerun_build_script_reads_the_shared_file() {
+    let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join(NAME);
+    let script = fs::read_to_string(crate_dir.join("build.rs")).unwrap_or_default();
+    let shared = fs::read_to_string(crate_dir.join("build").join("rerun.rs")).unwrap_or_default();
+    assert_eq!(script.matches("\ninclude!(\"build/rerun.rs\");\n").count(), 1, "build.rs が 1 回 include! する");
+    assert_eq!(script.matches("fn rerun_paths(").count(), 0, "build.rs は列挙を自分で持たない");
+    assert_eq!(shared.matches("\nfn rerun_paths(").count(), 1, "列挙は共有 file の 1 関数");
+    assert!(script.contains("emit(&format!(\"cargo:rerun-if-changed={}\", path.display()))"), "列挙を rerun-if-changed に出す");
+    assert!(script.contains("**tracked 全 file**"), "doc が再走の母集団を tracked 全 file と名指す");
+}
+
 // ─────────────────── 口座の歯の共有 fixture（account-autonomy.md §5・`s2-07l.211`） ───────────────────
 
 /// 実測行の reset（遠い未来＝どの「いま」でも古くない）。

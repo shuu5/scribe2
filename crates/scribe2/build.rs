@@ -6,6 +6,11 @@
 //! rc ≠ 0・出力が sha の形でない周は `unknown`（測れない周を成功に倒さない・C10）。
 //! build は落とさない（panic しない・依存は std だけ）。
 //!
+//! 再走の母集団は git の meta（HEAD / index）と **tracked 全 file**（`git ls-files`・在る物だけ）である
+//! （設計 consumer-sync.md §18・`s2-07l.317`）。unstaged の変更は index を動かさないので、meta だけを
+//! `cargo:rerun-if-changed` に出すと build script が再走せず `+dirty` が古い値で止まる。列挙は
+//! `build/rerun.rs` の 1 関数で、e2e の歯も同じ file を `include!` で読む。git の無い周は meta の在る物だけ。
+//!
 //! env 名の接頭辞 `SCRIBE2_` は core の `ENV_PREFIX` と同じ綴りだが、build script は
 //! core の const を import できないので literal で書く（xtask の `name-literal` の母集団は
 //! `src/` だけで、この file は数えられない＝限界）。
@@ -58,28 +63,9 @@ fn build_commit(dir: &Path) -> String {
     }
 }
 
-/// 再 build の引き金にする path の列（`<root>/.git/HEAD` と `<root>/.git/index`・worktree では
-/// `.git` file と実体の git dir〔`rev-parse --absolute-git-dir`〕の同名 2 本）。
-///
-/// **在る file だけ**を出す。存在しない path を `rerun-if-changed` に出すと cargo は落ちないが
-/// 「file が無い＝常に stale」と読んで **毎回** build script と crate を作り直す（worktree の
-/// `.git` は file で `<root>/.git/HEAD` が無い周に実測）。
-fn rerun_paths(dir: &Path) -> Vec<PathBuf> {
-    let dot_git = dir.join("..").join("..").join(".git");
-    let mut candidates = vec![dot_git.join("HEAD"), dot_git.join("index"), dot_git.clone()];
-    if let Some(git_dir) = git(dir, &["rev-parse", "--absolute-git-dir"]) {
-        let git_dir = PathBuf::from(git_dir.trim());
-        candidates.push(git_dir.join("HEAD"));
-        candidates.push(git_dir.join("index"));
-    }
-    let mut paths: Vec<PathBuf> = Vec::new();
-    for path in candidates {
-        if path.is_file() && !paths.contains(&path) {
-            paths.push(path);
-        }
-    }
-    paths
-}
+// 再 build の引き金にする path の列挙 `rerun_paths`（git の meta と **tracked 全 file**・在る物だけ・決定的な
+// 並び）。e2e の歯と同じ file を読む＝列挙の実装は 1 か所（設計 consumer-sync.md §18・`s2-07l.317`）。
+include!("build/rerun.rs");
 
 fn main() {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));

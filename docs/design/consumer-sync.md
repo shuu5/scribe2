@@ -18,7 +18,7 @@
 
 ## 2. build 元 commit（ADR-0028 §2.1・台帳 `s2-07l.302`）
 
-- **焼く場所**: `crates/<NAME>/build.rs`（新規・依存なし）。`std::process::Command` で `git rev-parse HEAD` と `git status --porcelain`（tracked の変更の有無）を読み、`cargo:rustc-env=<ENV_PREFIX>_BUILD_COMMIT=<sha12>[+dirty]` を出す。git が無い・repo でない・失敗した周は `unknown`（失敗を成功に倒さない・C10）。`cargo:rerun-if-changed=.git/HEAD` と `.git/refs/heads/` を出して stale を避ける。
+- **焼く場所**: `crates/<NAME>/build.rs`（新規・依存なし）。`std::process::Command` で `git rev-parse HEAD` と `git status --porcelain`（tracked の変更の有無）を読み、`cargo:rustc-env=<ENV_PREFIX>_BUILD_COMMIT=<sha12>[+dirty]` を出す。git が無い・repo でない・失敗した周は `unknown`（失敗を成功に倒さない・C10）。`cargo:rerun-if-changed=.git/HEAD` と `.git/refs/heads/` を出して stale を避ける（後に再走の母集団は git の meta と tracked 全 file へ広がった・§18）。
 - **読む場所**: 実行時は `env!(…)`（compile time の値・実行時に env を読まない＝C2.2 の外・xtask の `env-reads` は `std::env` の参照だけを数えるので母集団に入らない〔契約化時に fact で実測する〕）。
 - **外形**: `<NAME> --version` = `<NAME> <CARGO_PKG_VERSION> (<sha12>[+dirty])`（`unknown` は `(unknown)`）。doctor の 2 行目も同じ関数（`render_version`）。外形 snapshot の `[version]` の mask は sha と `+dirty` と `unknown` の 3 形を受ける。
 - **意味**: この値は「どの source から build したか」の宣言値で、install 済みかどうか・最新かどうかは言わない（比べるのは §4 の doctor）。
