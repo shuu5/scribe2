@@ -6,8 +6,8 @@
 
 use super::*;
 use super::intake::{
-    capped_rules, contracts_check, declared_teeth_row, findings_of, intake_tokens, intake_with_rules, repo_with_big_file,
-    sized_contract, table_repo, SUBCOMMAND_FILES, TABLE_VESSEL,
+    capped_rules, contracts_check, declared_teeth_row, findings_of, grown_contract, intake_tokens, intake_with_rules,
+    repo_with_big_file, sized_contract, table_repo, SUBCOMMAND_FILES, TABLE_VESSEL,
 };
 
 /// 契約の印 `opens`（`s2-07l.201`・設計 seat-roles.md §3「契約が開く例外」・AC16）: `classes` と同じ optional list
@@ -657,6 +657,75 @@ fn contract_place_only_item_passes_intake_and_unmarked_is_refused_by_headroom() 
     assert!(state.join("pipe").join(&id).is_dir(), "run dir が作られる: {id}");
     assert_eq!(event_count(&state), 2, "RunCreated と審査の段（Reviewed）の 2 件");
     clean(&[&repo, &state]);
+}
+
+// ── file ごとの見込み growth（設計 docs/design/contract-source.md §46・行 ax・`s2-07l.578`・接頭辞 `contract_growth_`） ──
+
+/// §46 形 1〜3（done (1)(2)(6)）: 余地 101 の 1399 行の big.rs を持つ tmp の repo で、同じ base・同じ size M（300）の行が
+/// growth の有無だけで受付の cap-headroom が反転する: growth の無い行は見込み 300 で断られ、`big.rs:50` を書いた行は通り
+/// 写しに growth がそのまま載る。size S（100）でも growth 150 は余地を超えて断られ（見込み 150 を名乗る）、growth の無い
+/// S の行は通って写しに growth を書かない。
+#[test]
+fn contract_growth_flips_cap_headroom_at_intake_and_the_copy_carries_it() {
+    use vessel::pipe::contract::Contract;
+    let (repo, state) = repo_with_big_file();
+    let roomy = capped_rules(&state, "rules-roomy.toml", 40_000);
+    let big = "\"crates/toy/src/big.rs\"";
+    let intake = |size: &str, growth: Option<&str>, bead: &str| {
+        intake_with_rules(&repo, &state, &grown_contract(&repo, "g", size, big, growth), bead, &roomy)
+    };
+    let copied = |id: &str| {
+        Contract::load(&state.join("pipe").join(id).join("contract.toml")).unwrap_or_else(|errors| panic!("{errors:?}"))
+    };
+    let bare = intake("M", None, "s2-gb");
+    let err = stderr_of(&bare);
+    assert_eq!(bare.status.code(), Some(i32::from(RC_REFUSED)), "growth の無い M は余地 101 に入らない: {err}");
+    assert!(err.contains("crates/toy/src/big.rs の上限の余地が 101 行で見込み 300 行"), "cap-headroom の理由: {err}");
+    assert!(!state.join("pipe").exists(), "断った周は run dir を作らない");
+    let grown = intake("M", Some("\"crates/toy/src/big.rs:50\""), "s2-gg");
+    assert_eq!(grown.status.code(), Some(i32::from(RC_OK)), "同じ M でも growth 50 は余地 101 に入る: {}", stderr_of(&grown));
+    let id = run_id_of(&grown);
+    assert_eq!(copied(&id).growth, ["crates/toy/src/big.rs:50"], "写しは行の growth をそのまま運ぶ");
+    stop_run_ok(&state, &id);
+    let over = intake("S", Some("\"crates/toy/src/big.rs:150\""), "s2-go");
+    let err = stderr_of(&over);
+    assert_eq!(over.status.code(), Some(i32::from(RC_REFUSED)), "S でも growth 150 は余地 101 を超える: {err}");
+    assert!(err.contains("crates/toy/src/big.rs の上限の余地が 101 行で見込み 150 行"), "{err}");
+    let plain = intake("S", None, "s2-gp");
+    assert_eq!(plain.status.code(), Some(i32::from(RC_OK)), "growth の無い S は余地 101 に入る: {}", stderr_of(&plain));
+    let body = fs::read_to_string(state.join("pipe").join(run_id_of(&plain)).join("contract.toml")).unwrap_or_default();
+    assert!(copied(&run_id_of(&plain)).growth.is_empty() && !body.contains("growth ="), "行に無ければ写しにも無い: {body}");
+    clean(&[&repo, &state]);
+}
+
+/// §46 形 4（done (3)）: `contracts check` は growth の崩れた項目を `growth-form` の 1 件ずつ行番号付きで名指し、正しい
+/// 項目は名指さない（write-set に無い path の 1 項目だけが findings・rc 1）。
+#[test]
+fn contract_growth_check_names_the_unfit_item_with_its_row_line() {
+    let growth = "[\"src/tint.rs:5\", \"src/none.rs:5\"]";
+    let doc = table_doc(&table_region(&[table_row("a", &[("write-set", "[\"src/tint.rs\"]"), ("growth", growth)])]));
+    let repo = table_repo(&doc, &[]);
+    let out = contracts_check(&repo);
+    let (text, found) = (stdout_of(&out), findings_of(&out));
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{text}{}", stderr_of(&out));
+    let named = findings_for(&found, &doc, "a", "contract-table:growth-form");
+    assert_eq!(named.len(), 1, "崩れた 1 項目だけ: {text}");
+    assert!(named.iter().all(|line| line.contains("\"src/none.rs:5\"") && line.contains("write-set")), "{text}");
+    assert_eq!(found.len(), 1, "他の理由は出ない: {text}");
+    clean(&[&repo]);
+}
+
+/// §46 形 1（done (5)）: `contracts schema` の生成物に growth が任意の list で在り、tracked の `contracts/schema.toml` と
+/// 差分 0。
+#[test]
+fn contract_growth_schema_lists_growth_as_an_optional_list() {
+    let out = bin_cmd().args(["contracts", "schema"]).output().expect("binary を起動できる");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join("contracts").join("schema.toml");
+    let tracked = fs::read_to_string(&path).expect("tracked の生成物を読める");
+    assert_eq!(stdout_of(&out), tracked, "render と tracked の差分 0");
+    let block = "[[field]]\nname = \"growth\"\nneed = \"optional\"\nshape = \"list\"\n";
+    assert_eq!(tracked.matches(block).count(), 1, "growth は任意の list で 1 回: {tracked}");
 }
 
 /// (5) 行の数え方（`s2-07l.254`・設計 rules-manifest.md §4・接頭辞 `contract_closure_ext_width_`）: base の `.rs` が短い

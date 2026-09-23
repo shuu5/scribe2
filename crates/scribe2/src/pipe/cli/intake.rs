@@ -1077,13 +1077,27 @@ pub(super) struct Headrooms {
     /// write-set の `.rs`（dir は配下に展開・`+` の新規 file は 0 行・`-` / `~` / `=` は余地を求めない）ごとの余地
     /// （R-C4-2 の値 − base の行数）・余地の小さい順（同じ余地は path の辞書順）。
     pub(super) rooms: Vec<(String, u64)>,
-    /// 契約の `size` の見積（行・rules 行 `pipe.size_<s|m|l>_lines` の値）。
-    pub(super) size_lines: u64,
+    /// 上限の値と契約の `size` の見積（行・rules 行 `pipe.size_<s|m|l>_lines` の値）。
+    caps: declaration::Caps,
+    /// 契約の growth を読んだ file ごとの見込み（path と行数・設計 contract-source.md §46）。
+    growth: Vec<(String, u64)>,
 }
 
-/// [`Headrooms`] を組む（[`exclude_cap_shortfall`] が余地を測る同じ `items` / `lines` / `caps` から・判定はしない・
-/// file の余地は全体の行数から）。
-fn headrooms_of(items: &[WriteSetItem], lines: &[declaration::FileLines], caps: declaration::Caps) -> Headrooms {
+impl Headrooms {
+    /// file の見込み（growth に在ればその値・無ければ `size` の見積＝受付の判定と同じ [`declaration::Caps::estimate`]）。
+    pub(super) fn estimate(&self, file: &str) -> u64 {
+        self.caps.estimate(file, &self.growth)
+    }
+}
+
+/// [`Headrooms`] を組む（[`exclude_cap_shortfall`] が余地を測る同じ `items` / `lines` / `growth` / `caps` から・判定は
+/// しない・file の余地は全体の行数から）。
+fn headrooms_of(
+    items: &[WriteSetItem],
+    lines: &[declaration::FileLines],
+    growth: Vec<(String, u64)>,
+    caps: declaration::Caps,
+) -> Headrooms {
     let lines_of = |path: &str| lines.iter().find(|found| found.path == path).map_or(0, |found| found.total);
     let mut rooms: Vec<(String, u64)> = items
         .iter()
@@ -1099,7 +1113,7 @@ fn headrooms_of(items: &[WriteSetItem], lines: &[declaration::FileLines], caps: 
         })
         .collect();
     rooms.sort_by(|left, right| left.1.cmp(&right.1).then_with(|| left.0.cmp(&right.0)));
-    Headrooms { rooms, size_lines: caps.size_lines }
+    Headrooms { rooms, caps, growth }
 }
 
 /// 上限の余地（設計 contract-source.md §3・受付だけ）: write-set の各 `.rs` の base の行数と R-C4-2 の差、core の
@@ -1143,12 +1157,33 @@ fn exclude_cap_shortfall(manifest: &Manifest, contract: &Contract, materials: &M
         .iter()
         .map(|source| declaration::FileLines::of(&source.path, source.body.as_deref().unwrap_or_default(), width))
         .collect();
-    let short: Vec<Refuse> = declaration::headroom_shortfalls(&items, &lines, caps)
+    // file ごとの見込み（§46）は契約表の検査と同じ読み手で読む。表の検査を通った行の写しは崩れを持たないが、読めない
+    // 周は `size` へ黙って戻さず表の検査と同じ語で断る（fail-closed・C10）。
+    let growth = match WriteSetItem::read_growth(&contract.growth, &contract.write_set) {
+        Ok(found) => found,
+        Err(unfit) => {
+            let named: Vec<Refuse> = unfit
+                .into_iter()
+                .map(|(item, reason)| Refuse::ContractTable(TableError::GrowthForm { line: 0, item, reason }))
+                .collect();
+            let rest = |rest: &[Refuse]| rest.iter().map(|found| format!("pipe: {}", found.reason())).collect::<Vec<String>>();
+            return Err(named.split_first().map_or_else(
+                || refuse(&Refuse::ContractTable(TableError::Unreadable { line: 0, reason: "growth を読めない".to_owned() }), &[]),
+                |(first, others)| refuse(first, &rest(others)),
+            ));
+        }
+    };
+    let short: Vec<Refuse> = declaration::headroom_shortfalls(&items, &lines, &growth, caps)
         .into_iter()
-        .map(|found| Refuse::CapHeadroom { file: found.file, headroom: found.headroom, size: contract.size.clone() })
+        .map(|found| Refuse::CapHeadroom {
+            file: found.file,
+            headroom: found.headroom,
+            size: contract.size.clone(),
+            estimate: found.estimate,
+        })
         .collect();
     match short.split_first() {
-        None => Ok(headrooms_of(&items, &lines, caps)),
+        None => Ok(headrooms_of(&items, &lines, growth, caps)),
         Some((first, rest)) => {
             let lines: Vec<String> = rest.iter().map(|found| format!("pipe: {}", found.reason())).collect();
             Err(refuse(first, &lines))
@@ -1312,6 +1347,7 @@ mod tests {
             classes: Vec::new(),
             opens: Vec::new(),
             touches: Vec::new(),
+            growth: Vec::new(),
         };
         let body = "x\n".repeat(usize::try_from(lines).unwrap_or_default());
         let materials = Materials {

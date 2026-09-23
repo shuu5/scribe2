@@ -654,6 +654,52 @@ fn pipe_intake_core_headroom_keeps_the_file_headroom_on_the_whole_file() {
     clean(&[&repo, &state]);
 }
 
+// ── file ごとの見込み growth（設計 docs/design/contract-source.md §46・行 ax・`s2-07l.578`・接頭辞 `contract_growth_`） ──
+
+/// [`sized_contract`] と同じ行に `growth` の欄（`None` なら書かない）を足して commit し、pointer を返す。
+pub(super) fn grown_contract(repo: &Path, id: &str, size: &str, write_set: &str, growth: Option<&str>) -> String {
+    let mut fields: Vec<String> = contract_body()
+        .into_iter()
+        .filter(|line| !line.starts_with("size") && !line.starts_with("write-set") && !line.starts_with("id"))
+        .chain([format!("id = \"{id}\""), format!("size = \"{size}\""), format!("write-set = [{write_set}]")])
+        .collect();
+    fields.extend(growth.map(|items| format!("growth = [{items}]")));
+    commit_row(repo, &fields);
+    format!("{DESIGN_FILE}#{id}")
+}
+
+/// §46 形 5: preflight の `headroom=<file>:<余地>/<見積>` の見積は file ごとの見込み。余地 101 の big.rs と新規 file（余地
+/// 1500）を持つ size S の行で、growth に big.rs:50 を書くと big.rs の見積だけが 50 になり新規 file は S の値のまま。同じ行
+/// から growth を外すと 2 file とも S の値（形は不変）。
+#[test]
+fn contract_growth_preflight_headroom_estimate_is_per_file() {
+    let (repo, state) = repo_with_big_file();
+    let rules = capped_rules(&state, "rules-roomy.toml", 40_000);
+    let small = embedded_int("pipe.size_s_lines");
+    let write_set = "\"crates/toy/src/big.rs\", \"+crates/toy/src/new.rs\"";
+    let rooms = |growth: Option<&str>| {
+        let design = grown_contract(&repo, "g", "S", write_set, growth);
+        let out = run_pipe(&[
+            "preflight", "--design", &design, "--bead", "s2-g",
+            "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(), "--rules", &rules,
+        ]);
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "断り 0: {} {}", stdout_of(&out), stderr_of(&out));
+        fact_lines(&out, "headroom=")
+    };
+    assert_eq!(
+        rooms(Some("\"crates/toy/src/big.rs:50\"")),
+        ["headroom=crates/toy/src/big.rs:101/50".to_owned(), format!("headroom=crates/toy/src/new.rs:1500/{small}")],
+        "growth の file だけ見積が 50（余地の小さい順）"
+    );
+    assert_eq!(
+        rooms(None),
+        [format!("headroom=crates/toy/src/big.rs:101/{small}"), format!("headroom=crates/toy/src/new.rs:1500/{small}")],
+        "growth の無い行は全 file が size の見積"
+    );
+    assert_eq!(run_dirs(&state), Vec::<String>::new(), "preflight は run dir を作らない");
+    clean(&[&repo, &state]);
+}
+
 /// intake の判定行（1 行目）の token。
 pub(super) fn intake_tokens(out: &Output) -> Vec<String> {
     stdout_of(out).lines().next().unwrap_or_default().split_whitespace().map(str::to_owned).collect()

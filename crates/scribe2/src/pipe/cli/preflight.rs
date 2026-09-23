@@ -6,7 +6,8 @@
 //! run dir・写し・event は一切書かず、宣言の写しは読むだけ・置き場は交差の読みにだけ使う。
 //!
 //! stdout は **1 行 1 事実**: `design=<doc>#<id> section=<n>` / `write-set=<declared|derived> files=<n>` /
-//! `teeth=<filter>:<本数>@<file,…>`（verify の nextest 行ごと）/ `headroom=<file>:<余地>/<size の見積>`（余地の小さい順）/
+//! `teeth=<filter>:<本数>@<file,…>`（verify の nextest 行ごと）/ `headroom=<file>:<余地>/<file の見込み>`（余地の小さい順・
+//! 見込みは行の growth に在ればその値・無ければ size の見積・設計 contract-source.md §46）/
 //! `overlap=<live run>:<file,…>`（突き合わせた live な run ごと・交差 0 は `-`・置き場が無ければ `overlap=unmeasured`）/
 //! `refuse=<名>:<理由>`（judge の断り・全部・名は [`crate::pipe::refuse::Refuse::as_str`]）/ 末尾に
 //! `preflight: <ok|refused n=<件数>|broken>`。rc = 0（断り 0）/ 1（断り ≥ 1）/ 2（読めない = `RC_BROKEN` の周）。
@@ -86,7 +87,7 @@ fn render(judged: &Judged, measured: bool) -> Outcome {
         out.push(format!("teeth={filter}:{}@{}", files.len(), listed(files)));
     }
     if let Some(found) = &judged.headroom {
-        out.extend(found.rooms.iter().map(|(file, room)| format!("headroom={file}:{room}/{}", found.size_lines)));
+        out.extend(found.rooms.iter().map(|(file, room)| format!("headroom={file}:{room}/{}", found.estimate(file))));
     }
     if !measured {
         out.push(UNMEASURED.to_owned());

@@ -162,6 +162,7 @@ fn contract_with(classes: &[&str]) -> Contract {
         classes: classes.iter().map(|class| (*class).to_owned()).collect(),
         opens: Vec::new(),
         touches: Vec::new(),
+        growth: Vec::new(),
     }
 }
 

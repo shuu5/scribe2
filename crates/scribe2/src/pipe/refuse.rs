@@ -110,8 +110,9 @@ pub(crate) enum Refuse {
         /// 契約が書いた項目の字面。
         item: String,
     },
-    /// 上限の余地（R-C4-2 / R-C4-1 の値と base の行数の差）を `size` の見積が超える（設計 contract-source.md §3
-    /// 「上限の余地」・受付だけが撃つ）。core の合計の周は `file` = `core`。
+    /// 上限の余地（R-C4-2 / R-C4-1 の値と base の行数の差）を file の見込み（行の `growth` に在ればその値・無ければ
+    /// `size` の見積・§46）が超える（設計 contract-source.md §3「上限の余地」・受付だけが撃つ）。core の合計の周は
+    /// `file` = `core`（見込みは core に属する file の見込みの和）。
     CapHeadroom {
         /// 余地の足りない file（repo 相対・core の合計は `core`）。
         file: String,
@@ -119,6 +120,8 @@ pub(crate) enum Refuse {
         headroom: u64,
         /// 契約の `size` の字面。
         size: String,
+        /// その file の見込み（行）。
+        estimate: u64,
     },
     /// `title` / `done` / 節の本文の名指し（backtick の中身・path 形 / 型の path 形 / fn 形）が base に解けない
     /// （設計 contract-source.md §3「名指しの実在」・FR54 と同型）。
@@ -278,8 +281,8 @@ impl Refuse {
             Self::WriteSetItemUnresolved { ref item } => {
                 format!("write-set の {item} は base に解けない（実在する file・末尾 / の dir・+ 接頭辞の新規 file・- 接頭辞の縮む file のどれでもない）")
             }
-            Self::CapHeadroom { ref file, headroom, ref size } => {
-                format!("{file} の上限の余地が {headroom} 行で size {size} の見積に足りない")
+            Self::CapHeadroom { ref file, headroom, ref size, estimate } => {
+                format!("{file} の上限の余地が {headroom} 行で見込み {estimate} 行（size {size}・growth で上書き可）に足りない")
             }
             Self::NameUnresolved { ref name, ref at } => format!("名指し {name} が base に無い（{at}）"),
             // 8 理由の字面は導出の側（`ClosureError`）と同じ 1 本（受付が写すだけ・2 面に書かない）。
@@ -484,7 +487,7 @@ mod tests {
             Refuse::WriteSetDirWithoutSlash { path: "src".to_owned() },
             Refuse::ContractTable(TableError::SectionMissing { line: 3, section: "9".to_owned() }),
             Refuse::WriteSetItemUnresolved { item: "src/none.rs".to_owned() },
-            Refuse::CapHeadroom { file: "src/big.rs".to_owned(), headroom: 7, size: "M".to_owned() },
+            Refuse::CapHeadroom { file: "src/big.rs".to_owned(), headroom: 7, size: "M".to_owned(), estimate: 30 },
             Refuse::NameUnresolved { name: "Guard::Rules".to_owned(), at: "done".to_owned() },
             Refuse::WriteSetDrift { missing: vec!["src/a.rs".to_owned()], extra: vec!["docs/x.md".to_owned()] },
             Refuse::TeethPlaceUnresolved { filter: "fresh_".to_owned() },
@@ -597,6 +600,7 @@ mod tests {
         assert!(reasons.first().is_some_and(|line| line.contains("src/none.rs")), "項目を名乗る: {reasons:?}");
         let headroom = reasons.get(1).cloned().unwrap_or_default();
         assert!(headroom.contains("src/big.rs") && headroom.contains(" 7 ") && headroom.contains("size M"), "{headroom}");
+        assert!(headroom.contains("見込み 30 行"), "file の見込みの値も名乗る（§46）: {headroom}");
         assert!(reasons.get(2).is_some_and(|line| line.contains("Guard::Rules") && line.contains("done")), "{reasons:?}");
         assert!(found.iter().skip(7).take(3).all(|refuse| refuse.rc() == RC_REFUSED), "前提違反は rc 1");
     }

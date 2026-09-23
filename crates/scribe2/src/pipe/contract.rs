@@ -26,7 +26,12 @@ const REQUIRED: &[&str] = &[
 
 /// 任意の key。`touches` は契約 (b) の生成物が行から写す欄（型の閉包の宣言・受付は読まないが
 /// 写しに残す＝run dir の写しだけで行の宣言が読める）。[`TARGETS`] は検出線の的（gate が [`targets_of`] で読む）。
-const OPTIONAL: &[&str] = &["classes", "opens", "touches", TARGETS];
+/// [`GROWTH`] は file ごとの見込み行数（受付の上限の余地が読む・設計 contract-source.md §46）。
+const OPTIONAL: &[&str] = &["classes", "opens", "touches", TARGETS, GROWTH];
+
+/// 行の file ごとの見込み行数の key（`<path>:<行数>` の列・設計 contract-source.md §46・行 ax）。項目の形は受付が
+/// write-set と突き合わせて読む（契約表の検査と同じ読み手の 1 本）。
+pub const GROWTH: &str = "growth";
 
 /// 契約が名指す生存行（変異の的）の key（設計 gate-cost.md §16・行 g）。値は `<file>:<行>:<変異の名>` の列で、
 /// 形は [`target_unfit`] の 1 本が決める。[`Contract`] の field にはしない（読むのは gate の検出線だけ・[`targets_of`]）。
@@ -88,6 +93,8 @@ pub struct Contract {
     pub opens: Vec<String>,
     /// 行が宣言した型の閉包の種（`crate::…` の path の列・既定 空）。生成の写しが行から運ぶ。
     pub touches: Vec<String>,
+    /// file ごとの見込み行数（`<path>:<行数>` の列・既定 空＝全 file が `size` の見込み・[`GROWTH`]）。生成の写しが行から運ぶ。
+    pub growth: Vec<String>,
 }
 
 /// 走査中の 1 key の値。
@@ -279,6 +286,7 @@ fn build(found: &[(String, Raw, u64)], errors: &mut Vec<ContractError>) -> Optio
         classes,
         opens,
         touches: list_of(found, "touches", 0, errors),
+        growth: list_of(found, GROWTH, 0, errors),
     })
 }
 
@@ -399,6 +407,9 @@ pub fn render(row: &crate::pipe::table::ContractRow, design: &str, write_set: &[
     if !row.targets.is_empty() {
         out.push_str(&format!("{TARGETS} = {}\n", list(&row.targets)));
     }
+    if !row.growth.is_empty() {
+        out.push_str(&format!("{GROWTH} = {}\n", list(&row.growth)));
+    }
     out
 }
 
@@ -455,6 +466,7 @@ mod tests {
             classes: Vec::new(),
             opens: Vec::new(),
             targets: Vec::new(),
+            growth: Vec::new(),
         }
     }
 
@@ -480,6 +492,7 @@ mod tests {
         assert_eq!(found.touches, row.touches, "行の touches を写す");
         assert!(found.classes.is_empty() && found.opens.is_empty(), "空の任意 key は書かない");
         assert!(!body.contains("targets ="), "的の無い行は targets を書かない: {body}");
+        assert!(!body.contains("growth =") && found.growth.is_empty(), "見込みの無い行は growth を書かない: {body}");
     }
 
     /// 的の形（設計 gate-cost.md §16）: `<file>:<行>:<変異の名>`（桁 1 つを挟んでよい）は通り、file・行・名のどれかが
