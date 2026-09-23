@@ -33,6 +33,8 @@ use super::{broken, flag, int_row, list_row, live, need, refused, repo_flag, rep
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
 use crate::fleet::store::{self, LockPolicy, StoreError};
 use crate::fleet::{self, EventKind, Stage};
+use crate::hook::command;
+use crate::hook::host_guard::WORD_ROWS;
 use crate::name::NAME;
 use crate::pipe::closure::{self, ClosureError, Source};
 use crate::pipe::contract::{Contract, ContractError};
@@ -42,6 +44,7 @@ use crate::pipe::review::{self, FindingKind, Judgement, ROW_SAME_KIND_STOP};
 use crate::pipe::table::{self, ContractRow, TableError};
 use crate::pipe::{contract_path, current, emit, run_dir, run_id, vessel_path, Emit, CONTRACT_FILE};
 use crate::rules::manifest::Manifest;
+use crate::rules::RuleValue;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -282,8 +285,20 @@ impl Materials {
 
 /// 上限の材料を rules 行から読む（読めない周は [`DENIAL_RULES`] の断り・[`freeze`] と同じ 2 行）。
 pub(super) fn ceiling_of(manifest: &Manifest) -> Result<Rows, Denial> {
-    let rows = |id: &str| list_row(manifest, id).map_err(|reason| denied(DENIAL_RULES, refused(reason)));
-    Ok(Rows { commands: rows(CEILING_ROW)?, denied: rows(DENIED_ROW)? })
+    let rules = |reason| denied(DENIAL_RULES, refused(reason));
+    Ok(Rows { commands: list_row(manifest, CEILING_ROW).map_err(rules)?, denied: denied_rows(manifest).map_err(rules)? })
+}
+
+/// 禁じる語列: command guard の ∪ の読み手 1 本（[`command::denied_of`]・`runner.denied_commands` ∪ host-guard の語列の
+/// 3 行・設計 vessel-hook.md §11 の形 f 3）。揃わない周は欠けた行を名指す（`runner.denied_commands` は従来の字面）。
+/// 断り文の行 id は `declaration` が持つ従来の `runner.denied_commands` のまま（限界・後続の純移動で直す）。
+fn denied_rows(manifest: &Manifest) -> Result<Vec<String>, String> {
+    list_row(manifest, DENIED_ROW)?;
+    let sources = command::denied_of(manifest).ok_or_else(|| {
+        let id = WORD_ROWS.iter().find(|id| !matches!(manifest.get(id).map(|row| &row.value), Some(RuleValue::List(_))));
+        format!("{} が無いか文字列の列でない", id.unwrap_or(&DENIED_ROW))
+    })?;
+    Ok(sources.into_iter().flat_map(|(_, sequences)| sequences).collect())
 }
 
 /// intake / preflight が同じ形で読む引数（`--design` / `--bead` / `--repo`・欠けは理由の 1 行）。
@@ -1213,10 +1228,8 @@ fn refuse(found: &Refuse, extra: &[String]) -> Denial {
 /// **外れは rc 1**（前提違反）で、宣言が読めない周も同じ極性である——「宣言が無い」と
 /// 「宣言が壊れている」で扱いを変えると、器の視野の外の verify 行が片方から入る。
 fn freeze(repo: &Path, manifest: &Manifest, contract: &Contract) -> Result<Effective, Denial> {
-    let rows = |id: &str| list_row(manifest, id).map_err(|reason| denied(DENIAL_RULES, refused(reason)));
-    let (commands, denied_commands) = (rows(CEILING_ROW)?, rows(DENIED_ROW)?);
-    let ceiling = Ceiling { row: CEILING_ROW, commands: &commands, denied: &denied_commands };
-    declaration::measure(repo, &ceiling, &contract.verify).map_err(|errors| {
+    let rows = ceiling_of(manifest)?;
+    declaration::measure(repo, &rows.borrow(), &contract.verify).map_err(|errors| {
         denied(DENIAL_DECLARATION, Outcome::failed(RC_REFUSED, errors.iter().map(ToString::to_string).collect()))
     })
 }
