@@ -12,7 +12,9 @@
 use super::super::closure::{closure, surface_closure, teeth_places, unresolved_names, Base, ClosureError, Fields, Source};
 use super::super::declaration::{self, read_write_set, Basis, Ceiling, NewFilePolicy, WriteSetItem};
 use super::super::refuse::{covered, Refuse, NEW_FILE};
-use super::{read_table, unreadable, Context, ContractRow, Finding, PromiseRow, TableError, BEGIN, DESIGN_DIR, END};
+use super::{
+    read_table, unreadable, Context, ContractRow, Finding, PromiseRow, TableError, BEGIN, DERIVED_GOAL, DESIGN_DIR, END,
+};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK};
 use crate::name::NAME;
 use std::collections::BTreeSet;
@@ -30,7 +32,10 @@ pub fn check_table(doc: &str, rows: &[ContractRow], ids: &[&str], ctx: &Context<
         if rows.iter().take(index).any(|seen| seen.id == row.id) {
             found.push(Finding::table(TableError::DuplicateId { line: row.line, id: row.id.clone() }));
         }
-        if !numbered.iter().any(|(number, filled)| *filled && number.as_deref() == Some(row.section.as_str())) {
+        // goal を持つ行（導出物の行）は節の実在と本文の非空を goal で満たす（見出しを探さない・設計 §47 の 5）。
+        let filled = !row.goal.is_empty()
+            || numbered.iter().any(|(number, filled)| *filled && number.as_deref() == Some(row.section.as_str()));
+        if !filled {
             found.push(Finding::table(TableError::SectionMissing { line: row.line, section: row.section.clone() }));
         }
         found.extend(requirement_findings(row, ctx.requirements));
@@ -121,16 +126,21 @@ fn section_lines(text: &str, number: &str) -> Vec<(u64, String)> {
 /// 名指しの実在（§3）: `title` / `done` と `section` の本文の backtick の中身のうち解けないものを全件（在り処付き）。
 /// 閉包の入力を読めない周は `unreadable`（黙って通さない）。新規 file は write-set の `+` 項目と `creates` の欄
 /// （導出の形・`+` 無しで書く）の両方から解き、他の行が宣言済みの新規 file（[`Context::declared`]・§39）も解に
-/// 足す。宣言の母集団を読めない周も `unreadable` の 1 件（縮めた母集団で通さない）。
+/// 足す。宣言の母集団を読めない周も `unreadable` の 1 件（縮めた母集団で通さない）。goal を持つ行（導出物の行）は
+/// `section` の本文の代わりに goal を同じ読みで数え、在り処は欄の名 goal（設計 §47 の 5）。
 fn name_findings(doc: &str, row: &ContractRow, ctx: &Context<'_>) -> Vec<Finding> {
     let declared = match *ctx.declared {
         Err(ref reason) => return vec![Finding::table(unreadable(row.line, reason))],
         Ok(ref found) => found,
     };
     let mut texts = vec![("title".to_owned(), row.title.clone()), ("done".to_owned(), row.done.clone())];
-    texts.extend(
-        section_lines(doc, &row.section).into_iter().map(|(at, line)| (format!("section {} line {at}", row.section), line)),
-    );
+    if row.goal.is_empty() {
+        texts.extend(
+            section_lines(doc, &row.section).into_iter().map(|(at, line)| (format!("section {} line {at}", row.section), line)),
+        );
+    } else {
+        texts.push((DERIVED_GOAL.to_owned(), row.goal.clone()));
+    }
     let mut new_files = row.write_set.clone();
     new_files.extend(row.creates.iter().chain(declared).map(|item| format!("{NEW_FILE}{item}")));
     match unresolved_names(&texts, &row.touches, &new_files, ctx.tracked, ctx.sources) {
@@ -685,8 +695,10 @@ mod tests {
 
     use super::super::read_rows;
     use super::super::tests::full_promise;
+    use super::super::WHOLE_HEAD;
     use super::{
-        check_table, ids_of, judge_text, requirement_ids, section_lines, untracked_notices, Context, ContractRow, BEGIN, END,
+        check_table, ids_of, judge_text, requirement_ids, section_lines, untracked_notices, Context, ContractRow, TableError,
+        BEGIN, END,
     };
     use crate::cli_outcome::{RC_BROKEN, RC_REFUSED};
     use crate::pipe::closure::Source;
@@ -730,6 +742,7 @@ mod tests {
             opens: Vec::new(),
             targets: Vec::new(),
             growth: Vec::new(),
+            goal: String::new(),
         }
     }
 
@@ -882,6 +895,43 @@ mod tests {
         declared.write_set = vec!["src/kind.rs".to_owned()];
         let labels: Vec<String> = check_table(DOC, &[declared], &["a"], &ctx).iter().map(|finding| finding.refuse.label()).collect();
         assert_eq!(labels, vec!["write-set-incomplete".to_owned()], "write-set を持つ行は閉包 ⊆ write-set を撃つ");
+    }
+
+    /// §47 の 5: 見出しを持たない `.toml` の doc の goal を持つ行は section-missing 0 件、goal の無い行は section-missing の
+    /// 1 件で、goal の中の解けない名は在り処 goal で名指される（goal の中の解ける名と二重引用符は名指さない）。
+    #[test]
+    fn contract_whole_goal_fills_the_section_and_names_unresolved_names_at_the_goal() {
+        let requirements = Ok(["FR1".to_owned()].into_iter().collect::<BTreeSet<String>>());
+        let (allowed, sources) = (["git".to_owned()], sources());
+        let tracked = ["src/kind.rs".to_owned(), "src/use.rs".to_owned()];
+        let ctx = Context {
+            allowed: &allowed,
+            denied: &[],
+            requirements: &requirements,
+            sources: &sources,
+            tracked: &tracked,
+            snapshots: &[],
+            declared: &Ok(Vec::new()),
+        };
+        let row = |id: &str, goal: &str| {
+            let goal = if goal.is_empty() { String::new() } else { format!("goal = \"{goal}\"\n") };
+            format!("\n[[contract]]\nid = \"{id}\"\ntitle = \"t\"\nreq = [\"FR1\"]\nsection = \"47\"\nwrite-set = [\"src/kind.rs\"]\nverify = [\"git status\"]\nsize = \"S\"\ndone = \"d\"\n{goal}")
+        };
+        let doc = format!(
+            "{WHOLE_HEAD}\n{}{}{}",
+            row("a", "`src/kind.rs` を \"逐語\" で読む"),
+            row("b", ""),
+            row("c", "`src/nope.rs` を読む")
+        );
+        let rows = read_rows("docs/design/t.toml", &doc).unwrap_or_else(|errors| panic!("導出物は読める: {errors:?}"));
+        let at = |id: &str| rows.iter().find(|found| found.id == id).map_or(0, |found| found.line);
+        let found: Vec<(u64, Refuse)> =
+            check_table(&doc, &rows, &ids_of(&rows), &ctx).into_iter().map(|finding| (finding.line, finding.refuse)).collect();
+        let want = vec![
+            (at("b"), Refuse::ContractTable(TableError::SectionMissing { line: at("b"), section: "47".to_owned() })),
+            (at("c"), Refuse::NameUnresolved { name: "src/nope.rs".to_owned(), at: "goal".to_owned() }),
+        ];
+        assert_eq!(found, want, "goal の行 a は 0 件・goal の無い行 b は section-missing・行 c は goal の在り処で名指す");
     }
 
     /// 契約表の verify 行にも intake と同じ禁じる語列の判定が掛かる（ADR-0025 §2.3・FR55「intake と同じ検査を表の全行に」）:
