@@ -1,0 +1,113 @@
+# 設計: seat heartbeat — 管理 tick を backoff つきで戻す（合図は 40 分黙った席にだけ・無変化なら間隔を倍々に伸ばし・次の待ちが 24 時間を超える段では送らない）
+
+- 要件: [FR27](../../design-intent/spec/srs.html#FR27) 管理 tick（heartbeat）/ [FR43](../../design-intent/spec/srs.html#FR43) 席の継続 / [FR44](../../design-intent/spec/srs.html#FR44) 席間の連絡（廃止・差し込みは 3 つだけ）/ [FR64](../../design-intent/spec/srs.html#FR64) 管理 tick の駆動 / [FR38](../../design-intent/spec/srs.html#FR38) 群の逼迫（tick は測らない）/ [FR40](../../design-intent/spec/srs.html#FR40) 席の登録 row / [AC18](../../design-intent/spec/srs.html#AC18) / [NFR4](../../design-intent/spec/srs.html#NFR4)。制約: CON2（PUBLIC repo・unit は repo に入れない）
+- 憲法: [C1](../../design-intent/spec/constitution.html#c1) 規則は manifest の行 / [C2](../../design-intent/spec/constitution.html#c2) env を直読しない・読み手は 1 本 / [C3](../../design-intent/spec/constitution.html#c3) 状態は 1 つの置き場・自由文を判定入力にしない / [C9](../../design-intent/spec/constitution.html#c9) 席の停止の検知と再開 / [C10](../../design-intent/spec/constitution.html#c10) 測れないを成功に倒さない / [C11](../../design-intent/spec/constitution.html#c11) 極性は型で / [C17](../../design-intent/spec/constitution.html#c17) 足す前に消すものを名指す
+- 決定: [ADR-0058](../../design-intent/decisions/ADR-0058-heartbeat-returns-with-backoff-and-stops-at-24h.html) §2（判定の列・digest・梯子・rules 行 4 本・unit）/ [ADR-0030](../../design-intent/decisions/ADR-0030-tick-units-are-written-and-enabled-by-the-vessel.html) §2.1〜§2.5（unit の導出と書き）/ [ADR-0015](../../design-intent/decisions/ADR-0015-seat-state-is-stamped-by-hooks-not-read-from-pane.html)（状態は hook の打刻）/ [ADR-0045](../../design-intent/decisions/ADR-0045-seat-role-is-one-orchestrator-and-dispatcher-lands-runs.html) §2 (2)（戻さないもの）
+- crate の形は [rules-manifest.md §2](./rules-manifest.md) に従う。席の面の歯の置き場は [seat-roles.md §7](./seat-roles.md)。
+- この設計から出る契約: 行 a（`seat tick`＝判定の列・変化の digest・梯子の記録・打刻の合図・rules 行 4 本・不在の歯の書き換え）・行 b（`seat tick install` / `uninstall`＝unit の導出と書き・doctor の 1 項目）。行 b は行 a に依存する。
+
+やさしく言うと: 席（人と AI が話す session）が黙ったままになったとき、器が外から「続きを進めて」と 1 行差し入れる仕組みを戻す。ただし、席に何も変化が無ければ差し入れる間隔を 40 分 → 80 分 → … と倍々に伸ばし、次の待ちが 24 時間を超えたら送るのをやめる（合図は最大 6 本）。席が動けば最初の間隔に戻る。周期は host の systemd の timer が作り、その unit は器が書く。
+
+## 1. 何を解くか（裁定と現物）
+
+- 出所: user 裁定 2026-09-23T14:02Z（逐語は台帳 `s2-07l.580` の本文）と ADR-0058 §2。前の器の合図の backoff の形（user 裁定 2026-09-17T00:55Z・逐語は台帳 `s2-07l.423` の notes）は ADR-0058 CTX3 が要約する。
+- 現物（verified・main 0f20808）:
+  - 席の状態は hook の打刻 `<state_dir>/seat/<潰した target>/state.jsonl` が持つ（`crates/scribe2/src/seat/state.rs` の `Stamp`＝`schema` / `state` / `event` / `ts` / `sid`・SessionStart と Stop が Idle・UserPromptSubmit が Busy・書き手は `crates/scribe2/src/hook/stamp.rs`）。読み手は席の起動の送達確認（`evidence_after`）だけで、最終行を読む口は無い。
+  - 席の登録 row は fleet の replay の最新（`crates/scribe2/src/seat/role.rs` の `registration_of_target`・`Registration` は `role` / `anchor` / `target` / `account` / `launch` / `model`）。
+  - 注入の唯一の入口は `crates/scribe2/src/seat/inject.rs` の `deliver_within`（送達 → 消費の証拠は UserPromptSubmit の打刻・記録は同じ dir の `tick.jsonl` に `InjectionRecord`・`who` は `seat-inject`）。入力欄の門は `pass_input`（`guard_input` の 3 値 Clear / OwnQueued / Foreign・自席の文は `last_own_payload` の前方一致・OwnQueued は Enter を 1 回だけ）。呼び手は席の起動（`crates/scribe2/src/seat/cycle/relaunch.rs`）と dispatcher の通知（`crates/scribe2/src/pipe/notify.rs`・窓は rules 行 `pipe.stop_grace_ms`）の 2 つ。
+  - 口座の計測の記録は `crates/scribe2/src/fleet/usage.rs` の `fresh_rows`（鮮度 `fleet.usage_fresh_s` の内側の最新の回だけ・計測は起こさない）と `latest_of`。逼迫の判定は `crates/scribe2/src/hook/group.rs` の `pressed`（pure・`Caps` は `fleet.group_pressure_5h_pct` / `7d_pct` / `model_pct` の 3 行）。
+  - rules 行の読み手は `crates/scribe2/src/rules/mod.rs` の `int_row`。行の種類は `RuleKind`（閉じた enum・`ALL` の宣言順・外形 snapshot `rules_external_form` は rows=63）。`seat.tick_*` / `seat.pointer_backoff_*` の行は無い。
+  - `seat` の使い方は `register` / `launch` / `ruling` / 短い形だけ（`crates/scribe2/src/seat/cli.rs`）。不在を測る歯 3 本（`tests/e2e/seat.rs` の `seat_autonomy_subcommands_are_gone_from_the_usage` / `seat_inject_subcommand_is_gone_from_the_usage` / `seat_working_memory_subcommands_are_gone_from_the_usage`）が `tick` の不在と、席の口が `--rules` を 1 つも受けないことを pin する。
+  - `systemctl` を撃つ口は `crates/scribe2/src/pipe/confine.rs` の定数（private）だけ。
+- 戻すのは 3 つ（ADR-0058・C17.2）: 管理 tick の口・打刻の合図・tick の unit。戻さないもの: 席の context 計測と退避の合図・cycle・tick-stamp の file・席が自分で打つ生存の判子・hook 集合の食い違いの判定・`seat inject` の口・作業記憶の口。
+
+## 2. 管理 tick `seat tick`（契約表の行 a・ADR-0058 §2）
+
+- 口: `seat tick --state-dir S --target S:W [--rules F] [--tmux-socket PATH] [--capture-file PATH]`。stdout に判定行 1 行・rc は 0（inject / noop）か 1（error）。`--rules` は歯の seam（行 4 本の写しを差し替える・`rules` の口と同じ読み）で、席の口のうち `tick` と `tick install` だけが受ける（不在の歯の `--rules` の assert は形 7 で書き換える）。env・home・自分の実行 file の場所は読まない（C2.2）。
+- 形 1 **判定の列**（順序固定の AND・最初に立たなかった条件を理由にする・判定は閉じた enum TickDecision の 3 値 Inject / Noop(NoopReason) / Error(TickError)・bool で持たない・C11）。理由の値の名は次の宣言順（`as_str` の字面＝判定行の `reason=` の語）:
+  1. **登録 row の門** `no-row`: `registration_of_target` が target の row を返さない周は注入しない（登録の無い席は器の管理外・FR40）。
+  2. **状態の打刻** `state-missing` / `state-unreadable` / `busy` / `state-stale`: `state.jsonl` の最終行（読めた行のうち最後）を読む。file が無い（hook が載っていない席）・読めない・最終行が Busy（turn の途中）は注入しない。Busy が `seat.tick_stale_s` より古い周は `state-stale`（Stop の打刻を失った席＝人が見る）。Idle だけが進む。
+  3. **変化の digest の比較**（settle）`settling` / `record-unreadable`: 形 2。梯子の記録が無い周は段 0 として進む。記録が在って基準が未確定の周は settle を試み、確定できなければ `settling`。記録が在るのに読めない周は `record-unreadable`（0 件に潰さない・fail-closed）。
+  4. **黙りの門** `stamp-recent`: 最終行の `ts` から `seat.tick_stale_s` 未満なら送らない（席は最近まで動いていた＝黙っていない）。境界は未満・時計は `state.jsonl` と同じ UTC 秒。
+  5. **上限の判定** `stopped`: 段の候補の待ち（形 2）が `seat.pointer_backoff_max_s` を超える段は送らない（判定行 `pointer=stopped`）。
+  6. **床** `wait`: 記録の `sent_at` から段の候補の待ちが経っていない周は送らない（`pointer=wait:<残り秒>`）。記録が無い周は床を通る（初段）。
+  7. **口座の門** `account-pressed`: 形 4。
+  8. **pane と入力欄の門** `pane-missing` / `input-busy` / `input-unknown` / `input-own-queued`: pane を取れない周は注入しない。`pass_input`（`own` は `last_own_payload`）を通し、Foreign は `input-busy`・prompt 行を特定できなければ `input-unknown`・自席の文が Enter 1 回の後も残れば `input-own-queued`。
+  9. **記録** `record-unwritable`: 形 2 の記録を一時 file → rename で書く。書けない周は 1 key も送らない（fail-closed・ADR-0058）。
+  10. **注入**: `deliver_within`（窓は rules 行 `pipe.stop_grace_ms`＝dispatcher の通知と同じ行・行を増やさない）。送達の結果（消費 / queue / 断り / 未確認）は判定行に載せ、**落ちても送ったと数える**（記録は残す・次の段で再送・best-effort）。
+  - 実行系が回らない周は `decision=error`・rc 1（TickError の閉じた値: `state-dir`＝置き場を解けない / `no-rule`＝行 4 本か `pipe.stop_grace_ms` か群の閾値の行が読めない・不発効・整数でない / `store`＝fleet の replay が読めない）。noop の語彙を汚さない（席が静かなのか器が壊れているのかを記録から読める）。
+- 形 2 **変化の digest と梯子の記録**:
+  - digest は `state.jsonl` の最終行の `ts` の 1 値（event の種類は問わない）。fleet の event log・context・台帳・pane の字面は材料にしない（ADR-0058）。
+  - 記録は席の置き場の file 1 つ `<state_dir>/seat/<潰した target>/pointer-ladder`（1 行 JSON・`schema`=1・`sent_at`〔送った UTC 秒〕・`step`〔段・0 始まり〕・`digest`〔基準の ts・未確定は null〕）。書き手は tick だけ・一時 file → rename・`tick.jsonl` とは別 file（注入の記録は `InjectionRecord` のまま増やさない）。
+  - **settle**（基準の確定）: 記録の `digest` が null の周、`state.jsonl` に `sent_at` より後の Stop の打刻が在ればその `ts` を基準に書く（合図に応えた turn の終わり）。無い周は、`sent_at` から `seat.tick_stale_s` を過ぎていれば今の digest を基準に書く（応えない席＝梯子が登る側に倒す）。どちらでもなければ `settling`（比べない・送らない）。
+  - **段の候補**: 記録が無い → 0。基準あり ∧ 今の digest ≠ 基準 → 0（変化）。同じ → 記録の `step` + 1。段 n の待ち = `seat.tick_stale_s` × `seat.pointer_backoff_factor` ^ n（秒・飽和演算）。初期値では 40 分 → 80 → 160 → 320 → 640 → 1280 分（段 5・21.3 時間）、段 6 の待ち 2560 分は上限 24 時間を超えるので `stopped`＝合図は最大 6 本・最後は初回から約 41 時間後。
+  - **送る周**: 記録を `sent_at`=今・`step`=段の候補・`digest`=null で書いてから注入する（段を記録に進めるのは送った周だけ）。
+  - **打ち切りの後**: 毎周 digest を測り、変化すれば段 0 へ戻る。次の合図は黙りの門を通ってから（席がまた 40 分黙ってから）で、床は段 0 の待ち（`sent_at` から 40 分・とうに過ぎている）を通る。
+  - 席の応答は Stop の打刻で測る（settle）。合図に応えた turn の打刻（UserPromptSubmit と Stop）は基準を作る側で、「変化」には数えない（基準を送出時に取ると毎回「変化あり」になり梯子が登らない・ADR-0058 CTX3）。
+- 形 3 **打刻の合図**: 文面は 1 行 `<NAME> tick: heartbeat step=<段> — 台帳の現在地（bd --readonly ready --limit 0）から続きを進める（変化が無ければ次の合図は <次の段の待ち> 秒後・上限で打ち切り）`。器自身の目印は先頭の `<NAME> tick:`（`InjectionRecord` の `what` は先頭 80 byte＝OwnQueued の照合はこの頭で当たる）。文面の正本は code の 1 定数（規則は持たない・散文の指示は載せない・N2）。席の側の応答は通常の turn（台帳を読んで続きを進める）で、器は応答の中身を読まない。
+- 形 4 **口座の門**（FR27・FR38 の「tick は測らない」）: 登録 row の `account` label について `fresh_rows`（鮮度の内側の最新の回だけ・**計測は起こさない**）を読み、`pressed`（`Caps` は FR38 の閾値の rules 行 3 本）が Some なら `account-pressed`。記録が無い・鮮度の外・読めない周は通す（門は正の証拠でだけ閉じる）。閾値の行が読めない周は `no-rule`（error）。歯は tick の周に偽 client の呼出が 0 件であることを pin する（AC18「計測の起動が 0 件」）。
+- 形 5 **rules 行 4 本**（C1・値は manifest・kind は `RuleKind` の variant 4 つを `ALL` の末尾に宣言順で足す・裁定 id = user 2026-09-23T14:02Z・ruled_at 2026-09-23・値の出所は 2026-09-17T00:55Z の裁定〔台帳 `s2-07l.423`〕）: `seat.tick_interval_s`（60・timer の周期・行 b が読む）/ `seat.tick_stale_s`（2400・初段の待ち・黙りの閾値・Busy の古さの 3 役）/ `seat.pointer_backoff_factor`（2）/ `seat.pointer_backoff_max_s`（86400）。読めない周は `no-rule` で断る（既定値に倒さない）。`rules_external_form` の rows= は 67 に、kinds= は 65 になる。
+- 形 6 **判定行と記録**: 判定行は stdout 1 行 `decision=<inject|noop|error> target=<潰した target> reason=<語|-> pointer=<sent|settling|wait:<残り秒>|stopped|-> step=<段|-> consumed=<true|false|unknown[:理由]|->`。`pointer=` と `step=` は梯子を評価した周（形 1 の 3 以後）に載り、それより前で止まった周は `-`（評価していない印・0 に化けない・C10）。`consumed=` は注入した周だけ（`Settled` の既存の字面）。注入の記録は `deliver_within` が `tick.jsonl` に書く従来の 1 行（`who`=`seat-inject`・tick 専用の `who` は足さない＝`last_own_payload` の照合が同じ 1 本で効く）。
+- 形 7 **使い方と不在の歯の書き換え**: `seat` の使い方の 1 行に `tick --state-dir S --target S:W [--rules F]` を足し（`seat_usage_external_form` の snapshot を同じ便で更新）、不在の歯 3 本は `tick` を「在る側」に移し（`meter` / `heartbeat` / `cycle` / `inject` / `externalize` / `rebrief` / `consume` は不在のまま）、「席の口は `--rules` を 1 つも受けない」の assert を「`tick` だけが受ける」に書き換える。実装は行 a の write-set の `+` の file（seat 配下の新 module）が持ち、`crates/scribe2/src/seat/mod.rs` は `pub mod` 1 行、`cli.rs` は dispatch の 1 arm と flag の許容列 1 つ。
+- 触らない: 状態の打刻の書き手（hook）・`InjectionRecord` の schema・`deliver_within` / `pass_input` / `guard_input` の中身・dispatcher の通知の経路と `pipe.stop_grace_ms` の値・群の逼迫の通知と移動（ADR-0055）・便の起動の契機（FR68）・`fleet usage` の口・極性一覧（tick は境界の行を足さない）・event の種類の閉じた一覧（tick は event を記さない・記録は席 dir の file と `tick.jsonl` だけ）。
+- 却下: 席（AI）に「変化が無ければ heartbeat を打たない」と判断させる（席を起こすこと自体が消費・自由文入力・C3.3）／固定の「N 回無変化で中断」（席が応えない周に永久停止しうる・上限で必ず打ち切る梯子の方が両端を機械で守れる）／digest に fleet の event log を含める（他の席の便の終端で digest が動き無関係の変化で梯子が戻る・ADR-0058 v2）／tick-stamp の file を戻す（床の出所は梯子の記録の `sent_at` の 1 つで足りる・C17.2）／dispatcher の周に相乗りする（黙った席では便も流れず契機が来ない・ADR-0058 OPT2）／合図の窓の rules 行を新設する（dispatcher の通知と同じ行で足りる）。
+- 歯（`tests/e2e/seat.rs` に `seat_tick_` 接頭辞・fixture は隔離 tmux server の偽 pane〔`start_seat`〕か `--capture-file` の pane の写し + 席 dir の `state.jsonl` を手で書く + rules の写し〔`--rules`〕・時刻は記録の `sent_at` と打刻の `ts` を過去に書いて進める〔偽の時計〕・偽 client は PATH の script が呼出を file に残す）:
+  - (a) 登録 row ∧ 最終行 Idle で 40 分前 ∧ 入力欄が空 → `decision=inject … pointer=sent step=0`・pane に合図 1 行・`pointer-ladder` 1 行（`step`=0・`digest`=null）・`tick.jsonl` に `who`=`seat-inject` 1 行。
+  - (b) 登録 row 無し → `no-row`／打刻無し → `state-missing`／読めない → `state-unreadable`／最終行 Busy → `busy`／Busy が 40 分より古い → `state-stale`（各 0 key・記録 0）。
+  - (c) 最終行 Idle が 40 分未満 → `stamp-recent`・0 key。
+  - (d) settle と梯子: 送った後に `sent_at` より後の Stop を 1 行足すと次の周で記録に `digest` が入り `settling` を抜ける／無変化の周は `pointer=wait:<s> step=1` で 0 key／`sent_at` を待ちの分だけ過去に書くと `inject … step=1`／段 5 まで合図 6 本・段 6 は `pointer=stopped step=6` で 0 key（打ち切り）。
+  - (e) 変化: 基準確定の後に最終行の `ts` を進める（Stop）と段 0 へ戻り、最終行から 40 分経った周に `inject … step=0`。打ち切りの後も同じ（stopped → 変化 → 40 分 → inject）。
+  - (f) 応えない席: `sent_at` から 40 分過ぎても Stop が無い周はその周の digest で基準が入り、次の周は段 + 1。
+  - (g) 口座の門: 鮮度の内側の記録が閾値以上 → `account-pressed`・0 key／記録無し・鮮度の外 → 通る／どの周も偽 client の呼出 0 件。
+  - (h) 入力欄に人の文字 → `input-busy`／prompt 行が無い pane → `input-unknown`／自席の前の合図が残る → Enter 1 回の後に `input-own-queued`（text の再送 0）。各 0 key・記録は増えない。
+  - (i) 記録が dir（読めない）→ `record-unreadable`／席 dir が読み取り専用 → `record-unwritable`（0 key・pane 不変）。
+  - (j) rules: 4 行が埋め込み manifest に値と裁定 id つきで在り `RuleKind` の `ALL` と `rules validate` の外形に載る（`tests/e2e/rules.rs` に `rules_embedded_manifest_declares_tick_` 接頭辞・kind の対の parity は既存の `rules_kind_parity_every_kind_has_sample` が数える）／`--rules` で 4 行を欠く写し → `decision=error reason=no-rule` rc 1・0 key／`rules_external_form` の snapshot（rows=67 kinds=65）。
+  - (k) 使い方: `seat_usage_external_form` の snapshot と不在の歯 3 本の書き換え（形 7）。
+  - lib（行 a の `+` の file の中・`seat_tick_` 接頭辞）: 段 → 待ちの pure 関数（飽和・上限の判定）・段の候補（変化 / 同じ / 記録なし）・記録の 1 行の round-trip・理由の `as_str` が宣言順で重複しない。
+
+## 3. tick の unit を器が導出して書く（契約表の行 b・ADR-0030 §2.1〜§2.5・FR64）
+
+- 口: `seat tick install --state-dir S --target S:W --unit-dir U --binary PATH [--rules F]` と `seat tick uninstall --state-dir S --target S:W --unit-dir U`。置き場・binary・unit dir は全部引数（器は env・home・`current_exe` を読まない・C2.2）。母集団は登録 row（row の無い target は `no-row` で断る・FR40）。
+- 導出（pure な 1 関数・入力 = NAME・target・置き場・binary・rules の写し・周期）: file 名は `<NAME>-seat-tick-<潰した target>.service` / `.timer`（潰し方は席 dir と同じ 1 関数・template unit と `%i` は使わない）。service = `[Unit] Description=` + `[Service] Type=oneshot` + `ExecStart=<binary> seat tick --state-dir <S> --target <S:W>`（`--rules` を受けた周だけ末尾に `--rules <F>`）。timer = `[Timer] OnBootSec=<n>s` + `OnUnitActiveSec=<n>s` + `Persistent=false` + `[Install] WantedBy=timers.target`（n = `seat.tick_interval_s`・単調時計・`OnCalendar` は使わない）。`Environment=` / `WorkingDirectory=` / `%h` を持たない。2 file の先頭行に器の印（`# <NAME> tick-install schema=1` の 1 行）を置く。外形は snapshot で pin する（C12.5）。
+- 書き: 一時 file → rename。既存 file は導出の bytes と比べ、一致 → `unchanged`（有効化だけ撃つ）・不一致 → `unit-exists` で断る（人の手書きを上書きしない・N1）。有効化 = 子 process `systemctl --user daemon-reload` → `systemctl --user enable --now <timer>`（順序固定・`systemctl` の綴りは `crates/scribe2/src/pipe/confine.rs` の定数を pub(crate) にして共有・撃つ口は 1 本・失敗は `reload-failed` / `enable-failed` に rc を添える）。記録は `tick.jsonl` に `InjectionRecord` の形で 1 行（`who`=`seat-tick-install`・`what`=unit 名）。
+- 撤去: `systemctl --user disable --now <timer>` → 2 file を `<unit dir>/.retired/<name>.<UTC 秒>` へ mv（N1.2・削除しない）。器の印の無い file は `unit-foreign` で断り、印は在るが記録の bytes と違う file は `unit-exists` と同じ理由で断る（動かさない）。
+- doctor: `doctor --state-dir S --unit-dir U` の周だけ、登録 row の 1 行ごとに `tick-unit=<present|absent|foreign>` を足す（`present` = 2 file が在り印と bytes が導出と一致・`foreign` = 在るが印が無いか bytes が違う・`absent` = 無い・`systemctl` は呼ばない）。`--unit-dir` 無しは `tick-unit=-`（評価していない印）。`--unit-dir` の flag は `crates/scribe2-boundary/src/main.rs` の doctor の flag の列に 1 つ足す（値欠け・重複は使い方の誤り）。
+- 承認: 有効化・撤去は 3 クラス（消す / 出す / 使う）のいずれにも当たらない（ADR-0030 §2.4）＝器が撃つ。人が手で置いた unit は器の管理物でない（`unit-foreign`）。
+- 触らない: tick の判定の列（§2）・`seat.tick_interval_s` 以外の rules 行・`confine.rs` の systemd scope の中身（定数の可視性だけ）・`doctor` の既存の行の形（`--unit-dir` 無しの外形 snapshot は 1 byte も動かない）。
+- 却下: template unit と `%i`（target の潰し方が unit 名の規則と二重になる）／雛形 file を repo に置いて写す（host 固有の値が PUBLIC repo の tracked に入る・ADR-0030 §5 (A)）／周期を引数の既定値で持つ（規則が code に散る・C1）／`systemctl` の結果で unit の有無を判じる（doctor は子 process を起こさない・bytes で判じる）。
+- 歯（`tests/e2e/seat.rs` に `seat_unit_` 接頭辞・unit dir と binary は tmp・`systemctl` は PATH の偽 script が引数を file に残す）:
+  - (a) install → 2 file の bytes が導出と一致（snapshot）・`Environment` / `WorkingDirectory` / `%h` を含まない・timer の `OnUnitActiveSec` が rules 行の値・偽 systemctl の呼出が `daemon-reload` → `enable --now <timer>` の順で 2 回・`tick.jsonl` に `who`=`seat-tick-install` 1 行・rc 0。
+  - (b) 同じ bytes で再 install → `unchanged`・file の mtime 不変・enable だけ 1 回／1 byte 違う file を置いて install → `unit-exists`・file 不変・systemctl 0 回・rc 1／登録 row 無し → `no-row`・file 0・rc 1／rules の写しに `seat.tick_interval_s` が無い → `no-rule`・file 0。
+  - (c) uninstall → `disable --now` 1 回 → 2 file が `.retired/` に同じ bytes で在り元の場所に無い／印の無い file → `unit-foreign`・動かない／bytes 違い → 断り・動かない。
+  - (d) doctor `--unit-dir`: install 後 `tick-unit=present`・撤去後 `absent`・印の無い file を置いて `foreign`・`--unit-dir` 無しは `tick-unit=-` で既存の外形 snapshot（`seat_doctor_external_form`）が 1 byte も動かない。
+  - (e) 使い方の 1 行に `tick install …` / `tick uninstall …` が増え `seat_usage_external_form` が動く。
+  - lib（行 b の `+` の file の中・`seat_unit_` 接頭辞）: 導出の pure 関数の snapshot・印の判定（在る / 無い / bytes 違い）の 3 値。
+- write-set の注: 行 a が `+` で足す seat 配下の file は、行 a の着地前は base に無いので本行も `+` で宣言する。行 a の着地後に素の path へ直す（受付は着地済みの file の `+` を断る）。
+
+<!-- contracts:begin -->
+schema = 1
+
+[[contract]]
+id = "a"
+title = "管理 tick を戻す — seat tick の判定の列（登録 row → 状態の打刻 → digest の比較 → 黙りの門 → 上限 → 床 → 口座の門 → 入力欄の門 → 記録 → 注入）・変化の digest は状態の打刻の最終行の ts・梯子の記録 1 file で backoff（初段 40 分・係数 2・次の待ちが 24 時間を超える段は送らない・変化で段 0）・rules 行 4 本・打刻の合図は既存の注入の経路・不在の歯の書き換え"
+req = ["FR27", "FR43", "FR44", "FR38", "FR40", "AC18", "NFR4"]
+section = "2"
+touches = ["crate::rules::RuleKind"]
+write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "+crates/scribe2/src/seat/tick.rs", "crates/scribe2/src/seat/mod.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "crates/scribe2-boundary/tests/e2e/rules.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__seat__seat_usage_external_form.snap", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__rules__rules_external_form.snap", "docs/design/seat-heartbeat.md"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail seat_tick_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_embedded_manifest_declares_tick_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_usage_external_form", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_external_form"]
+size = "L"
+growth = ["crates/scribe2/src/rules/mod.rs:60", "crates/scribe2/src/seat/mod.rs:10", "crates/scribe2/src/seat/cli.rs:120"]
+done = "(1) seat tick --state-dir S --target S:W [--rules F] が判定行 1 行を出し、登録 row ∧ 最終行 Idle が seat.tick_stale_s 以上前 ∧ 入力欄が空の席にだけ合図 1 行を注入して pointer-ladder に 1 行（step=0・digest=null）を書き tick.jsonl に who=seat-inject の 1 行が増える (2) no-row / state-missing / state-unreadable / busy / state-stale / stamp-recent / input-busy / input-unknown / input-own-queued の各周は 1 key も送らず記録も増えず理由が判定行に出て、pointer= と step= は梯子を評価した周だけに載る (3) settle は sent_at より後の Stop の ts か、応えない席では seat.tick_stale_s を過ぎた周の digest を基準にし、無変化の周は wait:<s> step=n で送らず、待ちの分だけ過去に書いた sent_at で段 1〜5 の合図が出て段 6 は stopped で送らず（合図 6 本で打ち切り）、基準の後に最終行の ts が動くと段 0 に戻って 40 分黙った周に送る（打ち切りの後も同じ） (4) 口座の門は fresh_rows と pressed だけを読み、鮮度の内側の記録が閾値以上の席には account-pressed で送らず、記録無し・鮮度の外は通し、tick の周の偽 client の呼出は 0 件 (5) 記録が読めない周は record-unreadable・書けない周は record-unwritable で送らず、注入が落ちた周も記録は残る (6) rules 行 4 本（seat.tick_interval_s 60 / seat.tick_stale_s 2400 / seat.pointer_backoff_factor 2 / seat.pointer_backoff_max_s 86400）が裁定 id つきで埋め込み manifest に在り RuleKind の ALL と rules validate の外形（rows=67 kinds=65）に載り、行を欠く --rules は decision=error reason=no-rule rc 1 (7) 使い方の 1 行に tick が増えて seat_usage_external_form の snapshot が動き、不在の歯 3 本は tick を在る側・--rules は tick だけが受ける形に書き換わって meter / heartbeat / cycle / inject / externalize / rebrief / consume の不在は不変 (8) 極性一覧・event の種類・InjectionRecord の schema・hook の打刻の書き手は 1 byte も変わらない"
+
+[[contract]]
+id = "b"
+title = "tick の unit を器が導出して host へ書く — seat tick install / uninstall（導出は pure な 1 関数・一時 file → rename・bytes 一致は unchanged・不一致は unit-exists・有効化は daemon-reload → enable --now・撤去は disable --now → 退役 dir へ mv・印の無い file は unit-foreign）と doctor の tick-unit= の 1 項目"
+req = ["FR64", "FR40", "AC18", "NFR4"]
+section = "3"
+write-set = ["+crates/scribe2/src/seat/tick/install.rs", "+crates/scribe2/src/seat/tick.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/seat/role.rs", "crates/scribe2/src/pipe/confine.rs", "crates/scribe2-boundary/src/main.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__seat__seat_usage_external_form.snap", "+crates/scribe2-boundary/tests/e2e/snapshots/e2e__seat__seat_unit_external_form.snap", "docs/design/seat-heartbeat.md"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail seat_unit_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_unit_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_usage_external_form", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_doctor_external_form"]
+size = "M"
+depends = ["a"]
+growth = ["crates/scribe2/src/seat/cli.rs:120", "crates/scribe2/src/seat/role.rs:60", "crates/scribe2/src/pipe/confine.rs:10", "crates/scribe2-boundary/src/main.rs:40"]
+done = "(1) seat tick install が登録 row の席の service と timer の 2 file を導出の bytes で unit dir に書き（Environment / WorkingDirectory / %h 無し・OnUnitActiveSec は seat.tick_interval_s・先頭行に器の印）、偽 systemctl が daemon-reload → enable --now <timer> の順で 2 回呼ばれ、tick.jsonl に who=seat-tick-install の 1 行が増える (2) 同じ bytes は unchanged で file 不変・enable だけ、1 byte 違う既存 file は unit-exists で file 不変・systemctl 0 回・rc 1、登録 row 無しは no-row、seat.tick_interval_s を欠く --rules は no-rule で file 0 (3) uninstall は disable --now の後に 2 file を .retired/<name>.<ts> へ同じ bytes で移し、印の無い file と bytes 違いの file は動かさず理由で断る (4) doctor --unit-dir U が登録 row の行ごとに tick-unit=present|absent|foreign を足し、--unit-dir 無しは tick-unit=- で seat_doctor_external_form の snapshot が 1 byte も動かない (5) 使い方の 1 行に tick install / tick uninstall が増えて seat_usage_external_form が動く (6) systemctl の綴りは confine.rs の定数 1 つを共有し、器は env・home・current_exe を読まない"
+<!-- contracts:end -->

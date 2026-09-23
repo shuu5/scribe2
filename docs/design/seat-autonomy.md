@@ -8,3 +8,4 @@
 - 残ったもの（別 doc が持つ）: 席の登録と起動は [seat-roles.md](./seat-roles.md) §2 / [account-lifecycle.md](./account-lifecycle.md) §4、
   便用の口座選定は [account-autonomy.md](./account-autonomy.md) §3、SessionStart の打刻は [seat-state.md](./seat-state.md) §2。
 - 文脈の圧縮は Claude Code の `/compact`、session を跨ぐ記憶は台帳の構造（metadata / status / 依存）である（ADR-0045 §2 (2)）。
+- 管理 tick（heartbeat）だけは [ADR-0058](../../design-intent/decisions/ADR-0058-heartbeat-returns-with-backoff-and-stops-at-24h.html) が backoff つきで戻した。設計は [seat-heartbeat.md](./seat-heartbeat.md)（打刻の合図・梯子の記録・tick の unit）。
