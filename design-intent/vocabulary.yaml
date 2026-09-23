@@ -483,8 +483,8 @@ terms:
     relationships: [管理 tick, 開発 session]
   - canonical: 退避の合図
     domain: consumer
-    definition: context 使用量が rules 行の上限以上の開発 session に、 管理 tick が idle を待たず注入する 1 行 (SRS FR29)。 作業記憶の退避を促す。
-    relationships: [管理 tick, cap guard, 退避物]
+    definition: 開発 session に作業記憶の退避を促す 1 行。 管理 tick (ADR-0045 で廃止) が context 使用量の上限で注入した形 (SRS FR29) と、 群の移動の周に dispatch の 1 周が古い席の pane へ注入する形 (ADR-0055・proposed) の 2 つが在り、 後者は台帳と git に残して終えることを促す。
+    relationships: [管理 tick, cap guard, 退避物, 群の逼迫, 便の終端の周]
   - canonical: cycle
     domain: consumer
     definition: 作業記憶を退避し、 session を作り直し、 退避物から復元する一周 (SRS FR28)。 退避物が無い session では起こさない。
@@ -1040,3 +1040,18 @@ terms:
     aliases: [optional declaration key]
     definition: 対象 repo の宣言 file の key のうち、 無ければ現行の値で動き、 在れば器がその値を読む key (ADR-0047 の path の種別 3 本・ADR-0054 の entrance-flip)。 未知の key は読みの誤りとして断る
     relationships: [vessel 宣言, 測らない名乗り]
+  - canonical: 群の逼迫
+    domain: consumer
+    aliases: [group pressure]
+    definition: 群の今の口座か群の席が居る口座の使用率が、 5 時間窓・7 日窓・モデル別窓のいずれかで閾値の rules 行の値以上である状態 (ADR-0055・proposed)。 便の終端の周と席自身の hook が既存の計測の 1 本で鮮度つきに読み、 timer では測らない。
+    relationships: [project の群, 群の今の口座, 便の終端の周, 移動を頼む記録, 退避の合図, rules 行]
+  - canonical: 便の終端の周
+    domain: consumer
+    aliases: [run-end round]
+    definition: 便が live で無くなった直後・手動・印の直後に撃たれる dispatch の 1 周 (設計 docs/design/dispatcher.md §5)。 ADR-0055 (proposed) はこの周に群の逼迫の段 (通知と移動) を置く。 時計では撃たれない。
+    relationships: [群の逼迫, 管理 tick, 便]
+  - canonical: 移動を頼む記録
+    domain: consumer
+    aliases: [move request record]
+    definition: 席自身の hook が群の逼迫を読んだ周に host の根へ置く群ごとに高々 1 件の記録 (ADR-0055・proposed)。 席は自分を起こし直さず、 次の便の終端の周がこれを読んで鮮度に依らず計測し移動を判定する。
+    relationships: [群の逼迫, 便の終端の周, host の根, 群の今の口座]
