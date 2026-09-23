@@ -1630,7 +1630,7 @@ fn pipe_intake_promise_row_generates_write_set_verify_and_done() {
         .args(["contracts", "check", "--repo", &repo.display().to_string(), "--rules", &ceiling_rules(&state)])
         .output()
         .expect("binary を起動できる");
-    assert_eq!(stdout_of(&checked).trim_end(), "contracts check: docs=1 rows=1 untracked=0 findings=0", "{}", stderr_of(&checked));
+    assert_eq!(stdout_of(&checked).trim_end(), "contracts check: docs=1 rows=1 untracked=0 findings=0 place-out=0/0", "{}", stderr_of(&checked));
     let out = intake_raw(&repo, &state, "docs/design/toy.md#a", "s2-a");
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "約束の行から生成して通る: {}", stderr_of(&out));
     let tokens = intake_tokens(&out);

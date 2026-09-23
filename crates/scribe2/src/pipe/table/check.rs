@@ -9,11 +9,12 @@
 //! [`super::Finding`] / [`super::Context`]）は親 module `table.rs`・置き場の抜き出しと parse は兄弟 `table/parse.rs`
 //! に置いたまま。呼び手（`pipe/cli.rs`・`pipe/cli/intake.rs`・歯）の `use` は親の再 export を通る。
 
-use super::super::closure::{closure, surface_closure, unresolved_names, ClosureError, Source};
+use super::super::closure::{closure, surface_closure, teeth_places, unresolved_names, Base, ClosureError, Fields, Source};
 use super::super::declaration::{self, read_write_set, Basis, Ceiling, NewFilePolicy};
 use super::super::refuse::{covered, Refuse, NEW_FILE};
 use super::{read_table, unreadable, Context, ContractRow, Finding, PromiseRow, TableError, BEGIN, DESIGN_DIR, END};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK};
+use crate::name::NAME;
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -355,8 +356,9 @@ fn is_requirement(text: &str) -> bool {
 /// rc = 違反 0 → 0 / 違反 ≥ 1 → 1 / 読めない周 → 2（読めない doc・区間・要件面・閉包の入力も 1 件として名指し、
 /// 判定行も出す）。tracked file の一覧か宣言を読めない周は判定できないので、理由だけを stderr へ出して rc 2。
 /// 未追跡の設計 doc は判定行の前に 1 件 1 行で知らせ、判定行の `untracked=` に本数を出す（findings にも rc にも
-/// 数えない検出線・設計 §43 (3) / 行 at）。
-pub(crate) fn check_repo(repo: &Path, ceiling: &Ceiling<'_>) -> Outcome {
+/// 数えない検出線・設計 §43 (3) / 行 at）。Declared 行の歯の置き場も同じ検出線で、判定行の末尾の
+/// `place-out=<行数>/<Declared 行数>` に出し、当たった行は `verbose` の周だけ判定行の前に 1 行ずつ出す（§45・行 av）。
+pub(crate) fn check_repo(repo: &Path, ceiling: &Ceiling<'_>, verbose: bool) -> Outcome {
     let judged = match judge_repo(repo, ceiling) {
         Ok(found) => found,
         Err(stopped) => return stopped,
@@ -365,15 +367,104 @@ pub(crate) fn check_repo(repo: &Path, ceiling: &Ceiling<'_>) -> Outcome {
     let mut out: Vec<String> = judged.found.iter().map(|(doc, finding)| finding.render(doc)).collect();
     let (notices, untracked) = untracked_notices(judged.untracked.as_deref());
     out.extend(notices);
+    let (hits, place_out) = place_notices(&judged.places);
+    if verbose {
+        out.extend(hits);
+    }
     // 宣言が入口の flip を測らないと名乗った周だけ末尾に欄を足す（名乗りの無い周の判定行は 1 字も変えない・§54 形 5）。
     let entrance = judged.entrance.map(|named| format!(" entrance={}", named.as_str())).unwrap_or_default();
     out.push(format!(
-        "contracts check: docs={} rows={} untracked={untracked} findings={}{entrance}",
+        "contracts check: docs={} rows={} untracked={untracked} findings={}{entrance} place-out={place_out}",
         judged.docs,
         judged.rows,
         judged.found.len()
     ));
     Outcome { out, err: Vec::new(), rc }
+}
+
+/// 置き場の検出線から、当たった行の知らせ（1 件 1 行・doc・行 id・write-set の外の歯の file）と判定行の
+/// `place-out=` の値（`<行数>/<Declared 行数>`）を組む。閉包の入力を読めない周は知らせ 0 行で行数は `?`（0 に化けさせ
+/// ない・NFR4）。
+fn place_notices(places: &Places) -> (Vec<String>, String) {
+    match places.outside {
+        None => (Vec::new(), format!("?/{}", places.declared)),
+        Some(ref hits) => {
+            let notices = hits
+                .iter()
+                .map(|hit| format!("contracts place-out: {} 行 {} の歯の file が write-set の外: {}", hit.doc, hit.id, hit.files.join(", ")))
+                .collect();
+            (notices, format!("{}/{}", hits.len(), places.declared))
+        }
+    }
+}
+
+/// Declared 行の歯の置き場の検出線（設計 §45・行 av）: 母集団と、解けた歯の file を write-set の外に持つ行。
+struct Places {
+    /// Declared 行（`creates` / `tests` / `also` を持たず `write-set` を持つ行）の数＝判定行の分母。
+    declared: usize,
+    /// 当たった行（doc 順・doc の中は行の順）。閉包の入力を読めない周は `None`（測れないを 0 行に読み替えない）。
+    outside: Option<Vec<PlaceHit>>,
+}
+
+/// 置き場の検出線に当たった 1 行。
+struct PlaceHit {
+    /// 行を持つ設計 doc（repo 相対）。
+    doc: String,
+    /// 行 id。
+    id: String,
+    /// write-set の外の歯の file（辞書順）。
+    files: Vec<String>,
+}
+
+impl Places {
+    /// doc 1 本の区間の Declared 行を数え、行ごとに歯の置き場を測る（区間を読めない doc は数えない＝`rows=` と同じ母集団）。
+    fn measure(&mut self, doc: &str, text: &str, ctx: &Context<'_>) {
+        let Ok((rows, _)) = read_table(doc, text) else {
+            return;
+        };
+        let declared: Vec<&ContractRow> = rows.iter().filter(|row| is_declared(row)).collect();
+        self.declared = self.declared.saturating_add(declared.len());
+        let texts: Option<Vec<(&str, &str)>> =
+            ctx.sources.iter().map(|source| source.body.as_deref().ok().map(|body| (source.path.as_str(), body))).collect();
+        let (Some(hits), Some(texts)) = (self.outside.as_mut(), texts) else {
+            self.outside = None;
+            return;
+        };
+        let base = Base { sources: ctx.sources, snapshots: ctx.snapshots, tracked: ctx.tracked, core_crate: NAME };
+        for row in declared {
+            let files = teeth_outside(row, &base, &texts);
+            if !files.is_empty() {
+                hits.push(PlaceHit { doc: doc.to_owned(), id: row.id.clone(), files });
+            }
+        }
+    }
+}
+
+/// Declared 行か（受付の弁別と同じ形: 導出の欄 `creates` / `tests` / `also` を持たず `write-set` を持つ・設計 §3）。
+fn is_declared(row: &ContractRow) -> bool {
+    row.creates.is_empty() && row.tests.is_empty() && row.also.is_empty() && !row.write_set.is_empty()
+}
+
+/// 行の verify の nextest 行ごとに歯の置き場を [`teeth_places`] で解き、write-set（印を剥がして照合・dir 項目は配下）の
+/// 外の file を集める（辞書順）。解けない行（base で 0 本の filter 語）は数えない（既存の findings に任せる・§45 形 1）。
+fn teeth_outside(row: &ContractRow, base: &Base<'_>, texts: &[(&str, &str)]) -> Vec<String> {
+    let fields = Fields {
+        touches: &row.touches,
+        surfaces: &row.surfaces,
+        verify: &row.verify,
+        creates: &row.creates,
+        tests: &row.tests,
+        also: &row.also,
+        files: &[],
+    };
+    let mut outside = BTreeSet::new();
+    for line in &row.verify {
+        let one = Fields { verify: std::slice::from_ref(line), ..fields };
+        if let Ok(found) = teeth_places(&one, base, texts) {
+            outside.extend(found.into_iter().filter(|path| !covered(&row.write_set, path)));
+        }
+    }
+    outside.into_iter().collect()
 }
 
 /// 未追跡の設計 doc の列から知らせの行（1 件 1 行・path を名乗る）と判定行の `untracked=` の値を組む。git が答え
@@ -429,6 +520,8 @@ struct Judged {
     untracked: Option<Vec<String>>,
     /// 宣言の入口の flip の名乗り（任意 key `entrance-flip`・無ければ `None`）。
     entrance: Option<declaration::EntranceFlip>,
+    /// Declared 行の歯の置き場の検出線（findings にも rc にも数えない・§45）。
+    places: Places,
 }
 
 /// tracked な `docs/design/*.md` の区間を全行検査する（[`check_repo`] と [`repo_findings`] の共通の 1 本）。判定できない
@@ -457,13 +550,14 @@ fn judge_repo(repo: &Path, ceiling: &Ceiling<'_>) -> Result<Judged, Outcome> {
     };
     let docs = design_docs(&tracked);
     let (mut rows, mut found) = (0_usize, Vec::new());
+    let mut places = Places { declared: 0, outside: Some(Vec::new()) };
     for doc in &docs {
-        let (count, judged) = judge_doc(repo, doc, &ctx);
+        let (count, judged) = judge_doc(repo, doc, &ctx, &mut places);
         rows = rows.saturating_add(count);
         found.extend(judged.into_iter().map(|finding| ((*doc).clone(), finding)));
     }
     let untracked = untracked_files(repo).map(|paths| design_docs(&paths).into_iter().cloned().collect());
-    Ok(Judged { docs: docs.len(), rows, found, untracked, entrance })
+    Ok(Judged { docs: docs.len(), rows, found, untracked, entrance, places })
 }
 
 /// tracked な設計 doc（`docs/design/` 直下の `.md`・tracked の順）。
@@ -494,12 +588,13 @@ pub(crate) fn declared_files(repo: &Path, tracked: &[String]) -> Result<Vec<Stri
     Ok(found.into_iter().collect())
 }
 
-/// doc 1 本の行数と findings（読めない doc・区間は 1 件ずつ名指す）。
-fn judge_doc(repo: &Path, doc: &str, ctx: &Context<'_>) -> (usize, Vec<Finding>) {
+/// doc 1 本の行数と findings（読めない doc・区間は 1 件ずつ名指す）。同じ本文で置き場の検出線も測る。
+fn judge_doc(repo: &Path, doc: &str, ctx: &Context<'_>, places: &mut Places) -> (usize, Vec<Finding>) {
     let text = match read(repo, doc) {
         Ok(found) => found,
         Err(reason) => return (0, vec![Finding::table(unreadable(0, &reason))]),
     };
+    places.measure(doc, &text, ctx);
     judge_text(doc, &text, ctx)
 }
 
@@ -878,6 +973,63 @@ mod tests {
         let want = vec![notice("docs/design/b.md"), notice("docs/design/a.md")];
         assert_eq!(untracked_notices(Some(&two)), (want, "2".to_owned()), "1 件 1 行・列の順");
         assert_eq!(untracked_notices(None), (Vec::new(), "?".to_owned()), "git が答えない周は ?");
+    }
+
+    // ─────── Declared 行の歯の置き場の検出線（§45・行 av・接頭辞 `contract_check_place_`） ───────
+
+    /// tmp の git repo（宣言・要件面・crate `toy` の型と歯 1 本・設計 doc）を作って commit する。
+    fn place_repo(name: &str, doc: &str) -> std::path::PathBuf {
+        let repo = std::env::temp_dir().join(format!("table-check-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&repo);
+        let files = [
+            (".vessel.toml", "schema = 1\nallowed-commands = [\"git\", \"cargo\"]\ncommon-verify = [\"git status\"]\n"),
+            ("design-intent/spec/srs.html", "<p id=\"FR1\">x</p>\n"),
+            ("crates/toy/src/tint.rs", "pub enum Tint {\n    Warm,\n}\n"),
+            ("crates/toy/tests/e2e.rs", "#[test]\nfn place_ok() {}\n"),
+            ("docs/design/toy.md", doc),
+        ];
+        for (path, body) in files {
+            let target = repo.join(path);
+            let _ = target.parent().map(std::fs::create_dir_all);
+            let _ = std::fs::write(&target, body);
+        }
+        let git = |args: &[&str]| crate::pipe::git_bytes(&repo, args).is_some();
+        let seeded = git(&["init", "-q", "-b", "main"])
+            && git(&["config", "user.name", "t"])
+            && git(&["config", "user.email", "t@example.invalid"])
+            && git(&["add", "-A"])
+            && git(&["commit", "-q", "-m", "seed"]);
+        assert!(seeded, "tmp の repo を commit できる: {}", repo.display());
+        repo
+    }
+
+    /// Declared 行 3 本（歯が write-set の内 / 外 / base に 0 本で解けない）の repo で、判定行は `place-out=1/3`（解けない行は
+    /// 数えない）・rc と findings は欄の無い形と同じ（0 件・rc 0）。当たった行は `verbose` の周だけ判定行の前に 1 行
+    /// （doc・行 id・file）出て、無い周は 0 行。
+    #[test]
+    fn contract_check_place_counts_only_rows_whose_resolved_teeth_are_outside_the_write_set() {
+        use super::check_repo;
+        use crate::cli_outcome::RC_OK;
+        use crate::pipe::declaration::Ceiling;
+        let row = |id: &str, filter: &str, write_set: &str| {
+            format!("[[contract]]\nid = \"{id}\"\ntitle = \"t\"\nreq = [\"FR1\"]\nsection = \"1\"\nwrite-set = [{write_set}]\nverify = [\"cargo nextest run -p toy --no-tests=fail {filter}\"]\nsize = \"S\"\ndone = \"d\"\n")
+        };
+        let rows = [
+            row("in", "place_ok", "\"crates/toy/src/tint.rs\", \"crates/toy/tests/e2e.rs\""),
+            row("out", "place_ok", "\"crates/toy/src/tint.rs\""),
+            row("none", "place_fresh", "\"crates/toy/src/tint.rs\""),
+        ];
+        let doc = format!("# t\n\n## 1. 本文の在る節\n\n本文。\n\n{BEGIN}\nschema = 1\n\n{}{END}\n", rows.join("\n"));
+        let repo = place_repo("place", &doc);
+        let commands = ["git".to_owned(), "cargo".to_owned()];
+        let ceiling = Ceiling { row: "runner.allowed_commands", commands: &commands, denied: &[] };
+        let quiet = check_repo(&repo, &ceiling, false);
+        let loud = check_repo(&repo, &ceiling, true);
+        let _ = std::fs::remove_dir_all(&repo);
+        let judgement = "contracts check: docs=1 rows=3 untracked=0 findings=0 place-out=1/3";
+        assert_eq!((quiet.rc, quiet.out.clone()), (RC_OK, vec![judgement.to_owned()]), "旗の無い周は判定行だけ: {:?}", quiet.err);
+        let hit = "contracts place-out: docs/design/toy.md 行 out の歯の file が write-set の外: crates/toy/tests/e2e.rs";
+        assert_eq!((loud.rc, loud.out), (RC_OK, vec![hit.to_owned(), judgement.to_owned()]), "旗の周は当たった行 1 行 + 判定行");
     }
 
     // ─────── 節の切り出し（§31 (e)）: 4 本は腕 / guard / 否定を 1 つずつ落として別の歯が落ちる形 ───────

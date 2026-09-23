@@ -335,6 +335,7 @@ scribe2 を載せる consumer が pipe を通すのに要る面は 3 つで、�
   1. `judge_repo` が Declared 行ごとに `teeth_places` を撃ち、解けた歯の file のうち write-set（`+` / `-` / `~` / `=` を剥がした集合）の外の file を持つ行を数える。解けない行（`TeethPlaceUnresolved` 相当）は数えず、既存の closure の findings に任せる。
   2. 判定行の末尾に `place-out=<行数>/<Declared 行数>` の欄を足す（母集団つき・C10）。findings には上げない（rc は変えない）。判定行を全行で pin する既存の歯は e2e の `crates/scribe2-boundary/tests/e2e/pipe/contracts.rs` に 16 本と `crates/scribe2-boundary/tests/e2e/pipe/intake.rs` に 1 本（`assert_eq!` の字面・末尾を `findings=0` で読む 2 本を含む）が在り、欄の追加ぶん字面を進める＝行 av の write-set と verify に載る（verify の filter 語は歯の名の全体か、e2e の他 file に substring で当たらない接頭辞だけ・`prop.rs` の性質の歯が `contract_closure_ext_` を名の途中に持つ）。
   3. 数えた行の id と file は `--verbose` の周だけ 1 行ずつ出す（doc・行 id・file）。`--verbose` の旗は行 av が `crates/scribe2/src/pipe/cli.rs` の `contracts` に足す（`check_repo` の引数を 1 つ増やし、使い方の文字列にも載せる）。`Fields` / `Base` は `Context` の材料から受付の `fields_of` / `base_of` と同じ形を check.rs が自前で組む（private fn は共有しない）。
+  4. 実測（行 av の便の木・main eb2a5e1 の上・2026-09-23）: 現物の契約表の判定行は place-out=6/210（当たった行は contract-source の a / c / g / j / n / ah・どれも verify の filter 語が歯の名の接頭辞として広く、write-set の外の in-file の歯の file に解ける）。行 aw の前提（main で place-out=0）はこの 6 行を直すまで満たない。
 - 形（行 aw・findings への昇格・行 av の着地後に main で `place-out=0/<n>` を実測してから）:
   1. 行 av の数えた行を findings の 1 語（TeethOutsideWriteSet・doc・行 id・file）に上げ、判定行の欄はそのまま残す。
   2. 現物の契約表の歯（`contract_closure_ext_real_table_has_zero_findings`）が 0 件のまま緑であることを同じ便で確かめる（母集団 = 行 av の判定行の分母）。

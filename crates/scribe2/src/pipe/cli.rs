@@ -494,8 +494,11 @@ fn queued(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Outcome {
 
 /// `contracts` の使い方（設計 contract-source.md §2「表の検査」）。
 pub fn contracts_usage() -> String {
-    format!("usage: {NAME} contracts <check --repo R [--rules PATH]|schema>")
+    format!("usage: {NAME} contracts <check --repo R [--rules PATH] [{VERBOSE_FLAG}]|schema>")
 }
+
+/// `contracts check` の値なし旗: Declared 行の歯の置き場の検出線に当たった行を 1 行ずつ出す（設計 contract-source.md §45）。
+const VERBOSE_FLAG: &str = "--verbose";
 
 /// `<NAME> contracts <check|schema>`: 契約表の全行の検査（上限は `--rules` か埋め込みの `runner.allowed_commands` と
 /// 対の `runner.denied_commands`）と欄の生成物の描画（tracked な `contracts/schema.toml` の出所・設計 contract-source.md §2）。
@@ -506,7 +509,7 @@ pub fn contracts(args: &[String]) -> Outcome {
         let manifest = manifest_of(args)?;
         let (commands, denied) = (list_row(&manifest, CEILING_ROW)?, list_row(&manifest, DENIED_ROW)?);
         let ceiling = Ceiling { row: CEILING_ROW, commands: &commands, denied: &denied };
-        Ok(super::table::check_repo(&repo, &ceiling))
+        Ok(super::table::check_repo(&repo, &ceiling, present(args, VERBOSE_FLAG)))
     };
     match args.first().map(String::as_str) {
         Some("schema") if args.len() == 1 => Outcome::ok(super::table::render_schema()),
