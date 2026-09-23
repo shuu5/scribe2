@@ -665,11 +665,11 @@ terms:
     flagged_ambiguities: ["枠: 圧縮の直前の 1 枠 (席の記録) と並列の枠 (変異検査の並列・SRS NFR6) と host の memory の枠 (受付) は別義"]
   - canonical: 席の queue
     domain: consumer
-    definition: 席に向けた dispatch・席宛ての質問・裁定済みの次の行動の集合。 管理 tick は queue が空でない idle の席に続きの pointer を注入し、 queue が承認と裁定の待ちだけのときを正当な idle とする (SRS FR43)。
+    definition: 席に向けた dispatch・席宛ての質問・裁定済みの次の行動の集合として前の器が持っていた実体。 器は持たず、 続きの pointer を queue から注入しない (ADR-0045・SRS FR43)。 席の次の仕事は台帳の現在値が持ち、 管理 tick が台帳の現在地から続きを促す (ADR-0058)。
     relationships: [管理 tick, 席, 席の状態]
   - canonical: 席間の連絡
     domain: consumer
-    definition: 開発 session の席どうしの message を、 席の入力欄を経由しない経路で届け、 経路自身の記録で着地を確かめること (SRS FR44)。 入力欄への注入は器の tick・heartbeat・復元の command にだけ使う。
+    definition: 開発 session の席どうしの message を届ける経路。 器は持たない (ADR-0045・SRS FR44)。 入力欄への差し込みは席の起動の起動行 (FR59) と管理 tick の打刻の合図 (FR27・ADR-0058) の 2 つだけに使う。
     relationships: [席, 管理 tick, 開発 session]
   - canonical: 契約表
     domain: consumer
