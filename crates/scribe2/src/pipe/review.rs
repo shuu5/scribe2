@@ -388,7 +388,8 @@ fn design_text(repo: &Path, design: &str) -> String {
             return format!("（契約表の行 {} を読めない: {}）", pointer.id, reasons.join(" / "));
         }
     };
-    let body = section_text(&text, &row.section);
+    // goal を持つ行（導出物の行）は goal が節の本文（出所の 1 行は不変・設計 contract-source.md §47 の 6）。
+    let body = if row.goal.is_empty() { section_text(&text, &row.section) } else { row.goal };
     if body.trim().is_empty() {
         return format!("（設計 doc {} の節 {} が無いか空）", pointer.path, row.section);
     }

@@ -6,7 +6,10 @@
 //! （[`super::TableError`] / `Finding` / `Context`）は親 module `table.rs`・表の検査は兄弟 `table/check.rs` に
 //! 置いたまま。呼び手（`pipe/cli/intake.rs`・`pipe/review.rs`・歯）の `use` は親の再 export を通る。
 
-use super::{unreadable, ContractRow, Need, PromiseRow, TableError, BEGIN, END, FIELDS, PROMISE, PROMISE_FIELDS};
+use super::{
+    unreadable, ContractRow, Need, PromiseRow, TableError, BEGIN, DERIVED_GOAL, END, FIELDS, PROMISE, PROMISE_FIELDS,
+    WHOLE_HEAD,
+};
 use crate::pipe::contract::target_unfit;
 use crate::rules::manifest::{contract_rows, list, scalar, Scalar, TableRow, TableValue};
 use std::path::Path;
@@ -75,9 +78,17 @@ pub fn read_rows(path: &str, text: &str) -> Result<Vec<ContractRow>, Vec<TableEr
 /// 契約表の置き場 1 本の契約の行と約束の行 `[[promise]]` を読む（[`read_rows`] と同じ置き場・同じ欠陥の積み方）。
 /// 約束の行の欄は [`super::PROMISE_FIELDS`] の形で型付けし、欠けた必須欄・空の欄・未知の key を doc 上の行番号で
 /// 積む。`of` の親の行の実在と `n` の連番は表の検査（`check_promises`）の段で測る。
+///
+/// 導出物だけの欄 [`DERIVED_GOAL`] は置き場の形で読みを分ける（設計 §47 の 2）: `.toml` の全文の行は逐語で読み、`.md` の
+/// 区間の行が持てば rules manifest と同じ字面の「未知の key goal」を goal の行番号で積む。`.toml` の全文は先頭が版の
+/// 宣言 [`WHOLE_HEAD`] でなければその行番号の 1 件で断る（§47 の 3）。
 pub fn read_table(path: &str, text: &str) -> Result<(Vec<ContractRow>, Vec<PromiseRow>), Vec<TableError>> {
-    let (offset, body) = match form_of(path).map_err(|found| vec![found])? {
-        Form::Whole => (0, text.to_owned()),
+    let form = form_of(path).map_err(|found| vec![found])?;
+    let (offset, body) = match form {
+        Form::Whole => {
+            whole_head(text).map_err(|found| vec![found])?;
+            (0, text.to_owned())
+        }
         Form::Region => match region(text).map_err(|found| vec![found])? {
             Some(found) => found,
             None => return Ok((Vec::new(), Vec::new())),
@@ -94,6 +105,10 @@ pub fn read_table(path: &str, text: &str) -> Result<(Vec<ContractRow>, Vec<Promi
             .collect::<Vec<TableError>>()
     })?;
     let mut errors = Vec::new();
+    if form == Form::Region {
+        let goals = raws.iter().filter_map(|raw| raw.value(DERIVED_GOAL));
+        errors.extend(goals.map(|(_, line)| unreadable(shift(offset, line), &format!("未知の key {DERIVED_GOAL}"))));
+    }
     let rows: Vec<ContractRow> = raws.iter().filter_map(|raw| typed(raw, offset, &mut errors)).collect();
     errors.extend(conditional_missing(&raws, offset, &raw_promises));
     errors.extend(late);
@@ -101,6 +116,21 @@ pub fn read_table(path: &str, text: &str) -> Result<(Vec<ContractRow>, Vec<Promi
         Ok((rows, promises))
     } else {
         Err(errors)
+    }
+}
+
+/// 導出物の全文の先頭（空行と `#` の行を除いた最初の行）が版の宣言 [`WHOLE_HEAD`] か。違えばその行番号・行の無い本文は
+/// 0 の 1 件（設計 §47 の 3）。
+fn whole_head(text: &str) -> Result<(), TableError> {
+    let first = text
+        .lines()
+        .enumerate()
+        .map(|(index, line)| ((index as u64).saturating_add(1), line.trim()))
+        .find(|(_, line)| !line.is_empty() && !line.starts_with('#'));
+    match first {
+        Some((_, line)) if line == WHOLE_HEAD => Ok(()),
+        Some((at, _)) => Err(unreadable(at, &format!("導出物の先頭（空行と # の行を除いた最初の行）が版の宣言 {WHOLE_HEAD} でない"))),
+        None => Err(unreadable(0, &format!("導出物に版の宣言 {WHOLE_HEAD} が無い"))),
     }
 }
 
@@ -259,6 +289,7 @@ fn typed(raw: &TableRow, offset: u64, errors: &mut Vec<TableError>) -> Option<Co
         opens: list_of(raw, "opens", offset, errors),
         targets: targets_of(raw, offset, errors),
         growth: list_of(raw, "growth", offset, errors),
+        goal: text_of(raw, DERIVED_GOAL, offset, errors),
     };
     (errors.len() == before).then_some(row)
 }
@@ -397,8 +428,63 @@ mod tests {
     use super::super::tests::{full_promise, full_row};
     use super::{
         contract_id, find_row, parse_pointer, promises_of, read_rows, read_table, Pointer, PointerError, TableError, BEGIN,
-        END,
+        DERIVED_GOAL, END, WHOLE_HEAD,
     };
+
+    /// §47 の 2 / 3 / 4: `.toml` の全文の行は goal（二重引用符と backtick を含む単一行）を逐語で読み、導出物が省いた任意の
+    /// 一覧は空・`req` を省いた行は行の見出しで断る。同じ行を `.md` の区間に置くと「未知の key goal」を goal の行番号の
+    /// 1 件で断る。`.toml` の先頭（空行と `#` の行を除く）が版の宣言でなければその行番号の 1 件で断る。
+    #[test]
+    fn contract_whole_goal_reads_verbatim_from_toml_and_is_refused_in_a_md_region() {
+        let goal = "節の \"本文\" と `crate::pipe::table::ContractRow` の逐語（各行を trim して空白 1 つで繋ぐ）";
+        let minimal = |without: &str| {
+            let mut text = format!("{WHOLE_HEAD}\n\n[[contract]]\n");
+            let fields = [
+                ("id", "\"a\""),
+                ("title", "\"t\""),
+                ("req", "[\"FR1\"]"),
+                ("section", "\"47\""),
+                ("verify", "[\"git status\"]"),
+                ("size", "\"S\""),
+                ("done", "\"d\""),
+            ];
+            for (key, value) in fields.iter().filter(|(key, _)| *key != without) {
+                text.push_str(&format!("{key} = {value}\n"));
+            }
+            text.push_str(&format!("{DERIVED_GOAL} = \"{goal}\"\n"));
+            text
+        };
+        let whole = minimal("");
+        let rows = read_rows("docs/design/t.toml", &whole).unwrap_or_else(|errors| panic!("導出物は読める: {errors:?}"));
+        let row = rows.first().cloned().unwrap_or_else(|| panic!("1 行"));
+        assert_eq!(row.goal, goal, "goal は逐語");
+        let lists = [
+            &row.touches, &row.surfaces, &row.write_set, &row.creates, &row.tests, &row.also, &row.depends, &row.classes,
+            &row.opens, &row.targets, &row.growth,
+        ];
+        assert!(lists.iter().all(|list| list.is_empty()), "省いた任意の一覧は空: {row:?}");
+        let bare = minimal("req");
+        let head = bare.lines().position(|line| line == "[[contract]]").map_or(0, |index| index as u64 + 1);
+        let errors = read_rows("docs/design/t.toml", &bare).expect_err("req を省いた行は断る");
+        assert!(
+            errors.iter().any(|error| error.line() == head && error.reason().contains("必須 key req が無い")),
+            "行の見出しで req の欠けを名指す: {errors:?}"
+        );
+        let doc = format!("# t\n\n{BEGIN}\n{whole}{END}\n");
+        let at = doc.lines().position(|line| line.starts_with("goal = ")).map_or(0, |index| index as u64 + 1);
+        let refused = read_rows("docs/design/t.md", &doc).expect_err(".md の区間の goal は断る");
+        let named: Vec<(u64, String)> = refused.iter().map(|error| (error.line(), error.reason())).collect();
+        assert_eq!(named, [(at, "未知の key goal".to_owned())], "goal の行番号の 1 件");
+        let headed = format!("# 導出物\n\n{whole}");
+        assert_eq!(read_rows("docs/design/t.toml", &headed).map(|found| found.len()), Ok(1), "# の行と空行は先頭に数えない");
+        for (text, line) in [(whole.replacen(WHOLE_HEAD, "# 導出物\nschema = 2", 1), 2), (whole.replacen(WHOLE_HEAD, "", 1), 3)] {
+            let errors = read_rows("docs/design/t.toml", &text).expect_err("版の宣言でない先頭は断る");
+            assert!(
+                matches!(errors.as_slice(), [found @ TableError::Unreadable { .. }] if found.line() == line && found.reason().contains(WHOLE_HEAD)),
+                "先頭の行番号 {line} の 1 件: {errors:?}"
+            );
+        }
+    }
 
     /// doc 上で `[[promise]]` の見出しが在る行番号（1 始まり・doc 順）。
     fn promise_lines(doc: &str) -> Vec<u64> {

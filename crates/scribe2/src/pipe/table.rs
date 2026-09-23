@@ -49,6 +49,15 @@ pub const END: &str = "<!-- contracts:end -->";
 /// 約束の行の見出し（契約の行の子行・top-level の array of tables・設計 §33）。
 pub const PROMISE: &str = "[[promise]]";
 
+/// 導出物（`.toml` の全文）の行だけが持つ欄の名（節の本文の逐語・設計 contract-source.md §47・行 ay）。[`FIELDS`] と
+/// 生成物には載せない（`.md` の区間の行は節の本文を `section` が指す＝同じ本文を 2 面に持たない）。rules manifest の
+/// 契約表の key 集合はこの分だけ広く、`.md` の区間の行が持てば parse の段が未知の key として断る。
+pub const DERIVED_GOAL: &str = "goal";
+
+/// 導出物（`.toml` の全文）の先頭の版の宣言の字面（folio2 の ADR-3 決定 (4)・値は rules manifest の schema の版と同じ・
+/// 設計 contract-source.md §47 の 3）。空行と `#` の行を除いた最初の行がこの字面でなければ、その行番号で断る。
+pub const WHOLE_HEAD: &str = "schema = 1";
+
 /// 契約表を置く設計 doc の dir（repo 相対・直下の `*.md` が `contracts check` の母集団）。
 pub const DESIGN_DIR: &str = "docs/design/";
 
@@ -220,6 +229,8 @@ pub struct ContractRow {
     pub targets: Vec<String>,
     /// file ごとの見込み行数（`<path>:<行数>` の列・空 = 全 file が `size` の見込み・設計 contract-source.md §46）。
     pub growth: Vec<String>,
+    /// 節の本文の逐語（導出物の行だけの欄 [`DERIVED_GOAL`]・空 = `section` の節を doc から読む・設計 contract-source.md §47）。
+    pub goal: String,
 }
 
 /// 契約表そのものの欠陥（**各 variant が行番号を持つ**・0 は file 全体）。新しい理由は variant を 1 つ足す（C2）。
@@ -534,7 +545,9 @@ pub fn render_schema() -> Vec<String> {
 mod tests {
     // flip-check: moved s2-07l.374
 
-    use super::{read_rows, read_table, render_schema, Need, Shape, TableError, FIELDS, PROMISE_FIELDS};
+    use super::{
+        read_rows, read_table, render_schema, Need, Shape, TableError, DERIVED_GOAL, FIELDS, PROMISE_FIELDS, WHOLE_HEAD,
+    };
     use crate::cli_outcome::{RC_BROKEN, RC_REFUSED};
 
     /// [`TableError`] の全 variant の名（宣言順）。payload 付きの enum は `as` で判別子へ写せないので、名前の slice
@@ -705,6 +718,20 @@ mod tests {
         assert_eq!(needs, want, "生成物の need の列は FIELDS の順");
         assert_eq!(needs.iter().filter(|need| **need == "conditional").count(), 2, "conditional は 2 欄");
         assert_eq!(Need::Conditional.as_str(), format!("{:?}", Need::Conditional).to_lowercase(), "variant 名の小文字");
+    }
+
+    /// §47 の 1 と 3: 導出物の先頭の版の宣言の字面は folio2 の ADR-3 決定 (4) の `schema = 1` と一致し（drift の歯・台帳
+    /// `s2-07l.214` の (3)）、rules manifest の版と同じ値である。導出物だけの欄の名は goal で、欄の正本 `FIELDS`（18 のまま）と
+    /// 生成物に載らない。
+    #[test]
+    fn contract_whole_goal_head_pins_the_folio2_schema_and_the_goal_stays_off_the_fields() {
+        assert_eq!(WHOLE_HEAD, "schema = 1", "folio2 の ADR-3 決定 (4) の字面");
+        assert_eq!(WHOLE_HEAD, format!("schema = {}", crate::rules::manifest::SCHEMA), "rules manifest の版と同じ値");
+        assert_eq!(DERIVED_GOAL, "goal", "導出物だけの欄の名");
+        assert!(FIELDS.iter().all(|field| field.name != DERIVED_GOAL), "FIELDS に goal は無い");
+        assert_eq!(FIELDS.len(), 18, "欄の正本は 18 のまま");
+        let rendered = render_schema();
+        assert!(!rendered.iter().any(|line| line.contains(DERIVED_GOAL)), "生成物に goal は無い: {rendered:?}");
     }
 
     /// 欄の形に合わない値の字面（文字列と数の欄に配列・配列の欄に文字列）。
