@@ -190,7 +190,7 @@ C1（rules 行を足さない・閾値は無い）・C2 / C2.2（`EventKind` / `
 - 形（1 つずつ歯が測る・行 i の done と 1:1）:
   1. 再走の引き金の列挙を 1 関数にし、`git ls-files -z` を repo root で撃って tracked 全 file の絶対 path を今の 2 本に足す。在る file だけを出し（無い path を出すと cargo が毎回作り直す・現物の doc のとおり）、並びは決定的（sort）。git が撃てない周は今の 2 本だけ（build は落とさない・依存は std だけ）。
   2. 列挙の関数は build.rs の外の 1 file に置き、build.rs と歯が同じ file を `include!` で読む（crate の module にはしない・行 i の write-set の `+` の file）。build.rs 自身の doc は再走の母集団が tracked 全 file であることを名指す。
-  3. 歯は e2e（行 i の write-set の `+` の file・`crates/scribe2-boundary/tests/e2e/main.rs` の mod 1 行）で、tmp の git repo に tracked 3 本 + untracked 1 本 + 消した tracked 1 本を作って列挙を撃ち、tracked で在る 3 本と HEAD / index を返し、untracked と消えた file を含まず、同じ repo で 2 回撃つと同じ並びを返し、git repo でない dir では HEAD / index の在る物だけ（0 本を含む）を返す。e2e の tracked な `.rs` の本数を pin する既存の歯（`crates/scribe2-boundary/tests/e2e/main.rs` の `e2e_fixture_clock_dated_reset_lines_are_pinned`・母集団 29）は新設の 1 file ぶん進める（30・進めないと workspace の歯が赤＝便 025617Z の Gated FAIL の根）。
+  3. 歯は既存の e2e file `crates/scribe2-boundary/tests/e2e/seat.rs`（`--version` の外形の歯の隣・接頭辞 `build_rerun_`）に置く。新設 module にしない: e2e の新 file は `crates/scribe2-boundary/tests/e2e/main.rs` の mod 1 行と tracked 本数の pin（同じ file の歯・29）の両方を動かし、flip-check は pin の動いた宣言 file を本体と同梱せず本体を単独で base に写す＝module が compile されず歯が 1 本も走らないまま green-on-base（便 033854Z の実測・再走で再現）。歯は tmp の git repo に tracked 3 本 + untracked 1 本 + 消した tracked 1 本を作って列挙を撃ち、tracked で在る 3 本と HEAD / index を返し、untracked と消えた file を含まず、同じ repo で 2 回撃つと同じ並びを返し、git repo でない dir では HEAD / index の在る物だけ（0 本を含む）を返す。main.rs と tracked 本数の pin（29）は動かない。
   4. 母集団の大きさ（tracked ≈ 330 file）は cargo の mtime 比較だけに載る＝build の費用の変化は notes に実測を 1 行残す（歯にはしない）。
 - 触らない: `build_commit` の判定と 3 形（sha / +dirty / unknown）・env 名・`render_version` と外形 snapshot の mask・xtask の `name-literal` の母集団（build.rs は src の外）。
 - 却下: `+dirty` を測るのを止め sha だけにする（provenance の縮小・C10）／install の口が `touch build.rs` 相当を撃つ（運用で埋める＝散文の規則・N2）／xtask の measure で build.rs を実行して測る（cargo を子として撃つ歯は重く C4 の予算に載る）／repo root の dir を 1 本だけ出す（`target/` を含む dir の再帰走査で毎回作り直す）。
@@ -245,8 +245,8 @@ id = "i"
 title = "--version の +dirty を build script の再走で現在値に保つ — tracked 全 file（git ls-files・在る物だけ・決定的な並び）を rerun-if-changed に足し、列挙の 1 関数を build.rs の外の file に置いて build.rs と歯が include! で共有する（git の無い周は今の 2 本・build は落とさない）"
 req = ["FR61"]
 section = "18"
-write-set = ["crates/scribe2/build.rs", "+crates/scribe2/build/rerun.rs", "+crates/scribe2-boundary/tests/e2e/build_rerun.rs", "crates/scribe2-boundary/tests/e2e/main.rs", "docs/design/consumer-sync.md"]
+write-set = ["crates/scribe2/build.rs", "+crates/scribe2/build/rerun.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "docs/design/consumer-sync.md"]
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail build_rerun_"]
 size = "S"
-done = "(1) 列挙の 1 関数が tmp の git repo で tracked で在る file の絶対 path 全部と HEAD / index を返し、untracked と消えた tracked を含まず、並びが決定的で、git repo でない dir では HEAD / index の在る物だけを返す (2) build.rs がその関数を include! で読んで rerun-if-changed に出し、歯も同じ file を include! で読む（列挙の実装は 1 か所） (3) build.rs の doc が再走の母集団を tracked 全 file と名指し、--version の 3 形と外形 snapshot が 1 字も変わらない (4) build の費用の変化を notes に 1 行実測で残す (5) e2e の tracked な .rs の本数を pin する既存の歯（main.rs の e2e_fixture_clock_dated_reset_lines_are_pinned）の母集団を新設の 1 file ぶん 29 から 30 へ進め、workspace の歯が緑"
+done = "(1) 列挙の 1 関数が tmp の git repo で tracked で在る file の絶対 path 全部と HEAD / index を返し、untracked と消えた tracked を含まず、並びが決定的で、git repo でない dir では HEAD / index の在る物だけを返す (2) build.rs がその関数を include! で読んで rerun-if-changed に出し、歯も同じ file を include! で読む（列挙の実装は 1 か所） (3) build.rs の doc が再走の母集団を tracked 全 file と名指し、--version の 3 形と外形 snapshot が 1 字も変わらない (4) build の費用の変化を notes に 1 行実測で残す (5) 歯は既存の e2e file seat.rs に置き（新設 module にしない）、main.rs と tracked 本数の pin（29）は動かず、flip-check が歯の file を base に写して include! の先の無い compile error で RED を測る"
 <!-- contracts:end -->
