@@ -11,18 +11,18 @@ meta:
   eyebrow_left: 要件定義書 (SRS)
   eyebrow_right: scribe2 — MVP
   subtitle: 契約は小さく・検証は機械が先・止まるときは記帳して止まる
-  version: "0.18"
-  date: "2026-09-19"
+  version: "0.19"
+  date: "2026-09-23"
   reader: この器で開発する人と AI（Claude Code の session）。 専門語には必ずやさしい言い換えを併記する
 
 approval:
   - role: 承認 (user)
     who: user
-    when: 2026-09-19（版 0.18。 版ごとの裁定 id は台帳が持つ）
+    when: 2026-09-23（版 0.19。 版ごとの裁定 id は台帳が持つ）
     stamp: 裁定済
   - role: レビュー (folio review lens)
     who: spec-review 5 軸 + SRS ceiling 3 lens
-    when: 2026-09-13
+    when: 2026-09-23
     stamp: 実施
   - role: 作成 (開発 session)
     who: AI session (Claude Code)
@@ -68,6 +68,7 @@ scope:
     - 設計 doc の散文の門
     - 契約表の検査
     - 禁じる語列の command の拒否
+    - host-guard
     - host の面
     - 口座の登録
     - 口座の退役
@@ -104,7 +105,7 @@ acceptance:
   - { id: AC4, criterion: process を殺して別 process で resume しても、 event log の中断点から Landed まで通る,                   metric_v: 1 回,  metric_l: 再開で完走,        links: [FR3, FR13, FR14] }
   - { id: AC5, criterion: 3 クラス操作を名乗る契約は Blocked で止まり、 逐語付きの approve が記帳されてから再開する,              metric_v: 0 件,  metric_l: 無承認の通過,      links: [FR15, FR16] }
   - { id: AC6, criterion: 不正な契約・rules manifest（欠落 / 未知 kind / 裁定 id 無し / 重複 id）は起動前に全件 loud で落ちる,     metric_v: 0 件,  metric_l: 黙って落とす入力,  links: [FR1, FR17, FR18, NFR3, NFR4] }
-  - { id: AC7, criterion: write-set の外への Edit / Write は編集の時点で deny され、 hook は marker が自分を言うときだけ仕える,    metric_v: 0 件,  metric_l: 素通り,           links: [FR19, FR20, FR21, FR24, NFR5] }
+  - { id: AC7, criterion: write-set の外への Edit / Write は編集の時点で deny され、 hook の入口は marker が自分を言うときだけ仕える（host-guard の口は marker に依らず判定する・AC27 / AC44）,    metric_v: 0 件,  metric_l: 素通り,           links: [FR19, FR20, FR21, FR24, NFR5] }
   - { id: AC8, criterion: ADR-0045 で廃止した作業記憶と context の機構（退避・復元・消費の subcommand と退避物の置き場、 context の計測、 cap guard とその rules 行、 退避の合図、 直命の表と復元の DATA、 skill と skill の起動に反応する hook）が現物に無いことを、 不在を測る歯が nextest で確かめる。 該当する subcommand は器の使い方の行に無く（使い方の行数を母集団として出す）、 廃止した rules 行は manifest に無く（manifest の行数を母集団として出す）、 skill は 0 本（skill dir の file 数を母集団として出す）、 hook の宣言に廃止した hook の event（skill の起動・session の終端・編集の手前の cap guard）が無く、 圧縮の直前の宣言は FR42 の圧縮の直前の 1 枠を書く 1 件だけで（宣言の件数を母集団として出す）、 event の種類の閉じた一覧に直命の種類が無い（種類の数を母集団として出す）, metric_v: subcommand 0/N + rules 行 0/M + skill 0/2 + hook の宣言 0/H + 圧縮の直前の宣言 1/1 + event の種類 0/E, metric_l: 作業記憶と context の機構の不在, links: [FR23, FR25, FR26, FR29, FR65, FR66] }
   - { id: AC10, criterion: toy repo で verify 行が矛盾する契約 1 本を intake に出し、 runner の質問 record → Questioned → orchestrator の回答 event（機械由来）→ resume → Landed まで通り、 人由来の event が 0 件・席が自分の手で実装した commit が 0 件, metric_v: 1 便, metric_l: 質問で止まり回答で再開, links: [FR5, FR14, FR22, FR30, FR31, FR32] }
   - { id: AC11, criterion: live な口座 2 つ以上を持つ host で口座残量の計測を 1 回要求すると、 口座ごとの口座残量が出所付きで fleet の event log に 1 行ずつ増え、 器の外で同じ endpoint を読む独立した手段の値と残量が一致し（reset は 1 分以内）、 認証情報の無い口座は理由付きの「測れなかった」の行になる（0 の値の行にならない）, metric_v: 2 口座, metric_l: 実測値が一致, links: [FR33] }
@@ -123,7 +124,7 @@ acceptance:
   - { id: AC24, criterion: fixture の台帳（台帳 adapter の偽出力）で設計の中身を持ち pointer の無い open な memo 2 本と契約 id を指さない open な契約 1 本を lint が名指し、 全件揃った fixture では 0 件・rc 0。 加えて実台帳で 1 回撃ち、 名指された件数と母集団を記録に残す, metric_v: 3/3 件 + 実 1 回, metric_l: pointer の欠落の名指し, links: [FR51] }
   - { id: AC25, criterion: fixture の設計 doc（規範の印を持つ文 3 つ = pointer 無し・数 + 単位付き・適合）で散文の門が違反 2 件を file と行付きで名指して非 0、 適合だけの fixture で 0 件・rc 0。 加えて tracked な設計 doc 全件で 0 件, metric_v: 2/2 件 + 全件 0, metric_l: 散文の門の違反の名指し, links: [FR52] }
   - { id: AC26, criterion: fixture の設計 doc の契約表（write-set が閉包に足りない行・設計の節が無い行・適合の行の 3 行）で契約表の検査が違反 2 行を file と行付きで名指して非 0、 適合だけの fixture で 0 件・rc 0。 加えて tracked な設計 doc の契約表全件で 0 件, metric_v: 2/2 行 + 全件 0, metric_l: 契約表の違反の名指し, links: [FR55] }
-  - { id: AC27, criterion: 禁じる語列に当たる Bash の command を席と runner の両方の経路で撃ち、 実行されずに deny され、 断る理由に規則の出所と当たった並びが出る。 禁じる語列に当たる verify 行を持つ契約が intake で行番号付きで断られる。 同じ先頭語で禁じる語列に当たらない command 2 本はこの規則では止まらない, metric_v: deny 2/2 + intake の拒否 1/1 + 通過 2/2, metric_l: 禁じる語列の command の拒否, links: [FR56] }
+  - { id: AC27, criterion: 禁じる語列に当たる Bash の command を、 器の plugin を積む席・runner・素の席（器の plugin を積まない対話の session・marker の無い repo）・口座の設定 dir を指定した器を積まない起動の 4 つの経路で撃ち、 実行されずに deny され、 断る理由に規則の出所と当たった並びが出る。 禁じる語列に当たる verify 行を持つ契約が intake で行番号付きで断られる。 同じ先頭語で禁じる語列に当たらない command 2 本はこの規則では止まらない, metric_v: deny 4/4 + intake の拒否 1/1 + 通過 2/2, metric_l: 禁じる語列の command の拒否, links: [FR24, FR56] }
   - { id: AC28, criterion: tmp の state dir に host の面（口座 label・plugin dir・起動引数の 3 種）を置くと器が tracked の manifest と host の面の両方を数え、 両面で重複する口座 label・schema 外の項目・rules 行の混入を行番号付きで全件拒み、 file が無い host では 0 宣言で続き壊れた host では止まる。 口座の登録で口座の設定 dir と席の前提の設定と宣言 1 行が揃い、 既存の dir と宣言済みの口座 label は断られる。 退役で設定 dir が退役先へ動き event が 1 件残り、 復帰で元へ戻り event が 1 件残り、 席の登録 row が持つ口座の退役は断られ、 退役中の口座は選定と計測から外れる。 加えて実 host で 1 回、 口座を登録し user の login の後に doctor が credential の存在を示す, metric_v: 拒否 6/6 + 除外 2/2 + 登録 1/1 + 退役 1/1 + 復帰 1/1 + 実地 1 回, metric_l: host の面と口座の登録・退役, links: [FR57, FR58, FR36] }
   - { id: AC29, criterion: 偽の tmux と偽の claude（fixture）で席の起動を役割付きで撃つと、 窓が 1 回作られ、 器が導出した起動行が 1 回だけ差し込まれ、 席の登録が差し込みの前に 1 件書かれる。 tmux の session が無い・入力欄に文字が在る・口座の候補が無い・口座が退役中・引数の口座が役割の口座と違う、 のそれぞれで typed に断り key を 1 つも送らない。 加えて実 host で 1 回、 器の subcommand 以外の起動経路を使わずに席が立ち、 SessionStart の打刻と席の登録 row が揃う, metric_v: 起動 1/1 + 拒否 5/5 + 実地 1 回, metric_l: 器の subcommand からの席の起動, links: [FR36, FR40, FR59] }
   - { id: AC31, criterion: fixture の install 帳簿と偽の導入先 2 つ（片方は worktree）で doctor を撃つと、 導入先ごとに 1 行が出て食い違いの語が none / binary / plugin / install のそれぞれで出る。 build 元 commit は版の表示口と同じ値で、 build 元を測れない build では unknown と出て失敗にしない。 1 つの口の更新が偽の上流へ前進のみで揃えて偽の build 器で install の記録を 1 行残し、 揃えられない周は typed に断る, metric_v: 行 2/2 + 食い違い 4/4 + unknown 1/1 + 記録 1/1 + 拒否 1/1, metric_l: 導入先の同期の測定と 1 つの口の更新, links: [FR57, FR61] }
@@ -131,6 +132,9 @@ acceptance:
   - { id: AC39, criterion: Spawned の段で偽の runner を kill した便に resume を撃つと、 同じ worktree で runner が起き直り途中再開の節に前の runner の未 commit の変更の file 名が載り、 生きている偽の runner を持つ便は typed に断られて runner が 2 本にならない（試行した便数を母集団として出す）, metric_v: 起こし直し 1/1 + 未 commit の一覧 1/1 + 生存の断り 1/1, metric_l: runner が死んだ便の起こし直し, links: [FR37] }
   - { id: AC40, criterion: 閾値未満の口座の候補が 0 の fixture で席の起動が断られずに逼迫度が最小の口座で席を起こし、 妥協の理由が実効の記録と起動の記録と席の指示文に載り、 上限に当たっていない測れた口座が 0 の周だけ typed に断られて key が 1 つも送られず、 置き場が別の 2 席が同じ実効の口座に揃い、 役割の口座の宣言に余裕が戻っても実効の口座が変わらない（試行した起動の数を母集団として出す）, metric_v: 妥協の起動 1/1 + 理由の記録 3/3 + 全口座が上限の断り 1/1 + 断りの key 0 + 同じ口座への揃い 1/1 + 居続け 1/1, metric_l: 妥協の起動と実効の口座, links: [FR69, FR59] }
   - { id: AC41, criterion: 群の宣言と閾値以上の実測を持つ fixture で、 埋め込みの manifest に群の閾値の rules 行が 3 本在り（manifest の行数を母集団として出す）、 便の終端の周が群の置き場の席へ通知を 1 行ずつ注入して event を 1 件記し、 同じ実測に 2 度通知せず、 席の hook が指示文に 1 行を出して移動を頼む記録を 1 件置き、 移動の周に群の今の口座の記録と承認 event が 1 件ずつ書かれ、 古い席に退避の合図が届いて新しい口座の起動行が同じ target へ差し込まれ、 候補が無い fixture では記録 0・断りの event 1 で、 群を宣言しない fixture では 1 語も変わらない（試行した周の数を母集団として出す）, metric_v: rules 行 3/3 + 通知 N/N + 重複通知 0 + hook の 1 行 1/1 + 移動を頼む記録 1/1 + 記録 1/1 + 承認 event 1/1 + 退避と起動 1/1 + 候補なしの断り 1/1 + 群 0 の差分 0, metric_l: 群の逼迫の通知と移動, links: [FR38, FR59, FR36] }
+  - { id: AC42, criterion: 口座の settings.json の実体（symlink 経由の口座を含む）と対象 repo の root の .claude の settings.json と settings.local.json の 3 file のどれかを、 編集系の道具 4 形（Edit / Write / MultiEdit / NotebookEdit）と Bash の 7 形（rm / tee / mv の source / mv の行き先 / cp の行き先 / ln の行き先 / sed の in-place）と redirect 1 形で書く payload（形ごとに 1 file・3 file が少なくとも 1 度ずつ当たる）と、 守る file を含む dir ごとの rm と mv の 2 形が host-guard で rc 2 で deny され、 断りに種類と当たった実体の path と代わりの経路（user が編集する）が出て、 同じ dir の別 file の編集・守る file の読み・守る file を source にする複写は通り、 host-guard の rules 行を全部 off にしても deny される, metric_v: deny 14/14 + 通過 3/3 + 行を off にしても deny 1/1, metric_l: 見張り自身の設定の編集の拒否, links: [FR72] }
+  - { id: AC43, criterion: 口座 2 つの fixture で doctor が host-guard の 1 行を出し、 配線の無い周は口座 0/2・片方に配線を足すと 1/2 と実体 1・実体が 2 つに割れた周は実体 2 を言い、 rules 行の enabled を off にした種類と行を欠いた種類がそれぞれ off / no-row で出て発効している行の数がそれに合わせて減り、 見張り自身の設定の種類は固定で on、 binary を解けない環境・解ける環境・別の版が解ける環境で missing / ok / other が出て、 rules が読めない周はその旨の 1 行だけが出て、 どの周も rc は変わらない, metric_v: 配線 3/3 + 種類 2/2 + 行数 1/1 + 固定 on 1/1 + binary 3/3 + 読めない rules 1/1 + rc 不変 1/1, metric_l: doctor の host-guard の行, links: [FR73] }
+  - { id: AC44, criterion: tmp の git repo と state dir で、 tracked file・tracked file の親 dir・state dir・state dir の配下・state dir の親・.git の配下・worktree からの本体の 7 つの rm と、 解けない形 6 つ（変数・command 置換・チルダ始まり・brace・cd の後ろの相対 path・repo の root の配下の glob）の rm が host-guard で rc 2 で deny され、 断りに守る集合の記号か解けない形と代わりの経路（git rm か退役の mv）が出て、 untracked の file・一時 dir の下の glob・git rm は通り、 git の子 process は 1 回で、 rm の種類の rules 行が無い周は fail-closed で断り enabled が false の周だけ rm の種類が通る, metric_v: deny 13/13 + 通過 3/3 + git の子 process 1 回 + 行の無い周の deny 1/1 + off の通過 1/1, metric_l: rm の不可逆削除の拒否, links: [FR74, NFR4, NFR5] }
 requirements:
   - id: FR1
     type: FR
@@ -391,11 +395,11 @@ requirements:
     priority: must
     vmethod: T
     rationale_source: N-5
-    trace: { backward: [N-5], acceptance: [AC7] }
+    trace: { backward: [N-5], acceptance: [AC7, AC27] }
     ears:
       pattern: unwanted
       condition: marker（.vessel）が無い、 または別の NAME を言っているとき
-      response: hook は stdout 0 byte・rc 0 で黙り、 その repo を 1 byte も汚さない
+      response: hook の入口は stdout 0 byte・rc 0 で黙り、 その repo を 1 byte も汚さない。 黙るのは hook の入口だけで、 host-guard の口（FR56 / FR72 / FR74）は marker と anchor に依らず判定する
 
   - id: FR25
     type: FR
@@ -752,8 +756,8 @@ requirements:
     trace: { backward: [N-1, N-3], acceptance: [AC27] }
     ears:
       pattern: unwanted
-      condition: 席または runner の session が撃つ Bash の command が manifest の禁じる語列のいずれかに当たるとき
-      response: 器は実行の前に deny し、 断る理由に規則の出所と当たった並びを告げ、 intake は契約と対象 repo の宣言 file の verify 各行に同じ判定を掛け、 当たる行を行番号付きで断り便を作らない
+      condition: 口座の設定を読む session（対話の席・口座の設定 dir を指定した起動・器を積まない session）または runner の session が撃つ Bash の command が manifest の禁じる語列（host-guard の口が読むのは発効している行だけ）のいずれかに当たるとき
+      response: 器は実行の前に deny し（口座の設定を読む session には host-guard の口が掛かり、 器の plugin を積む席と runner には器の plugin の command guard も掛かり、 lens は対象の外。 host-guard の口は payload が読めない周も断る）、 断る理由に規則の出所と当たった並びを告げ、 intake は契約と対象 repo の宣言 file の verify 各行に同じ判定を掛け、 当たる行を行番号付きで断り便を作らない
 
   - id: FR57
     type: FR
@@ -930,13 +934,46 @@ requirements:
       pattern: ubiquitous
       condition: 常時
       response: 器は session の開始で実測した口座を記録せず、 登録 row の口座との食い違いを判定しない（合図を送る管理 tick が無い・ADR-0045 §2 (2) で廃止）。 席の口座は席の起動（FR59）が登録 row に書く値だけが持つ。 不在は不在を測る歯が確かめる
+  - id: FR72
+    type: FR
+    label: 見張り自身の設定の編集の拒否
+    priority: must
+    vmethod: T
+    rationale_source: N-1
+    trace: { backward: [N-1, N-3], acceptance: [AC42] }
+    ears:
+      pattern: unwanted
+      condition: 口座の設定を読む session が、 編集系の道具（Edit / Write / MultiEdit / NotebookEdit）の対象の path か、 Bash の書き込みの語列（rm・tee・sed の in-place・redirect の対象・mv の両端・cp と ln の行き先）の path で、 見張り自身の設定（host の面の口座ごとの settings.json とその実体・対象 repo の root の .claude の settings.json と settings.local.json）を書こうとするとき
+      response: 器の host-guard は対象の path を cwd から解いた path と実体の path の両方で見張り自身の設定の file と比べ（当たるとは一致か、 その file を含む dir であること）、 当たれば実行の前に deny し、 断る理由に種類と当たった実体の path を告げ、 代わりの経路として user が編集することを示す。 この種類は rules 行を持たず切れない
+  - id: FR73
+    type: FR
+    label: doctor の host-guard の行
+    priority: must
+    vmethod: T
+    rationale_source: N-3
+    trace: { backward: [N-1, N-3], acceptance: [AC43] }
+    ears:
+      pattern: ubiquitous
+      condition: 常時
+      response: 器は doctor の 1 行として、 host-guard の種類ごとの on / off（出所は種類ごとの rules 行の enabled・行の無い種類は no-row・見張り自身の設定の種類は固定で on）・発効している行の数・配線を持つ口座の数と口座の数・配線の実体の数・binary の解決（ok / missing / other。 binary が無い周は harness が通すので、 その状態を言うのは doctor だけ）を実測して並べ、 判定せず rc を変えない。 rules が読めない周はその旨の 1 行を出す
+  - id: FR74
+    type: FR
+    label: rm の不可逆削除の拒否
+    priority: must
+    vmethod: T
+    rationale_source: N-1
+    trace: { backward: [N-1, N-3], acceptance: [AC44] }
+    ears:
+      pattern: unwanted
+      condition: 口座の設定を読む session が撃つ Bash の rm の対象の path が、 守る集合（state dir とその配下・cwd の repo の tracked file・repo の .git と worktree の本体）に一致・祖先・配下で当たるとき、 または path が解けない形（変数展開・command 置換・チルダ始まり・brace・同じ command の cd の後ろの相対 path・守る path に当たる dir の配下の glob）のとき
+      response: 器の host-guard は実行の前に deny し、 断る理由に当たった守る集合の記号か解けない形を告げ、 代わりの経路として tracked な file は git rm・それ以外は退役の mv を示す。 守る集合は host に依らない記号（state-dir / repo-tracked / repo-git）の閉じた列で rm の種類の rules 行が持ち、 実行時に解く。 その行が無い周は fail-closed で断り、 enabled が false の周は rm の種類だけを切る
 
 nfr:
   - { id: NFR1, type: NFR, label: lens 予算,   category: 性能, target: 1 lens は 0.15M token 以内（目標値）,                                measure: lens 起動時の diff byte と cap の照合を verdict に記録,        vmethod: T, trace: { backward: [N-2], acceptance: [AC3] }, hero: { cat: 予算, big: "0.15", unit: M token, qual: lens 1 本あたりの上限 } }
   - { id: NFR2, type: NFR, label: 契約の大きさ, category: 大きさ, target: 1 契約の diff は 300 行程度・見積は 550 行以内,                      measure: PR の diff 行数と契約の見積を記録して照合,                   vmethod: A, trace: { backward: [N-4], acceptance: [AC2] }, hero: { cat: 小ささ, big: "300", unit: 行, qual: 1 契約の diff の目安 } }
   - { id: NFR3, type: NFR, label: 依存,        category: 依存, target: 実行時の直接依存 0 本・std だけで build（allowlist の外は歯が落とす）,   measure: cargo xtask check の deps-empty と cargo deny を CI で毎回,     vmethod: T, trace: { backward: [N-2], acceptance: [AC6] }, hero: { cat: 依存, big: "0", unit: 本, qual: 実行時の直接依存 } }
-  - { id: NFR4, type: NFR, label: fail-closed, category: 安全, target: 不正入力を黙って落とす件数 0・読めない store は rc 2,                     measure: fixture 実走（壊した行・未知 kind）で全件 loud を確認,           vmethod: T, trace: { backward: [N-3], acceptance: [AC6] }, hero: { cat: 安全, big: "0", unit: 件, qual: 黙って落とす入力 } }
-  - { id: NFR5, type: NFR, label: hook の予算,  category: 応答, target: hook は binary 1 本の 1 回呼出しで 2.0 秒以内・重い I/O を持たない,      measure: hook の wall time を注入計測の slot に記録,                   vmethod: T, trace: { backward: [N-2], acceptance: [AC7] }, hero: { cat: 速さ, big: "2.0", unit: 秒, qual: hook 1 回の上限 } }
+  - { id: NFR4, type: NFR, label: fail-closed, category: 安全, target: 不正入力を黙って落とす件数 0・読めない store は rc 2,                     measure: fixture 実走（壊した行・未知 kind）で全件 loud を確認,           vmethod: T, trace: { backward: [N-3], acceptance: [AC6, AC44] }, hero: { cat: 安全, big: "0", unit: 件, qual: 黙って落とす入力 } }
+  - { id: NFR5, type: NFR, label: hook の予算,  category: 応答, target: 道具 1 回の呼出しにつき hook は binary 1 本の呼出し 2 回以内（hook の入口と host-guard の口）・各 2.0 秒以内・重い I/O を持たない。 host-guard の呼出しは git の問い合わせ 1 回まで, measure: hook の wall time と host-guard が断る周の wall time を注入計測の slot に記録し、 host-guard が通す周の時間の上限と git の子 process の回数は歯が測る, vmethod: T, trace: { backward: [N-2], acceptance: [AC7, AC44] }, hero: { cat: 速さ, big: "2.0", unit: 秒, qual: hook の呼出し 1 回の上限 } }
   - { id: NFR6, type: NFR, label: host の資源,  category: 安全, target: 封じ込めの外で走る器の子 process 0 本・変異検査の並列度は並列の枠から, measure: 便ごとに封じ込めの有無・並列度・縮退の理由が record に残ることを fixture で確認, vmethod: T, trace: { backward: [N-1, N-2], acceptance: [AC20] }, hero: { cat: 資源, big: "0", unit: 本, qual: 封じ込めの外で走る子 process } }
 
 constraints:
@@ -1007,6 +1044,7 @@ glossary:
   - { term: 設計 pointer,   en: design pointer,         plain_short: どの設計 doc のどの契約か, def: 設計 doc の path と契約 id の対。 intake の入力（FR53）で、 台帳の bead の受入条件が持つ 1 行でもある（FR2）。 }
   - { term: 台帳 adapter,   en: ledger adapter,         plain_short: 台帳への唯一の口,         def: 器が台帳を読む口（読み取り専用）と close を書く口。 台帳へ触る module はこれ 1 つ（FR50 / FR51）。 }
   - { term: 禁じる語列,     en: forbidden token sequence, plain_short: 撃ってはいけない語の並び, def: command のうち撃ってはいけない語の並び。 値は manifest の rules 行だけが持ち（並びの例は行を見る）、 器が実行の前に止め、 intake が verify 行に同じ判定を掛ける（FR56）。 }
+  - { term: host-guard,     en: host guard,             plain_short: 壊す操作を直前に止める見張り, def: 不可逆な操作を実行の直前に止める器の subcommand（見張りの種類の閉じた一覧は ADR-0056。 SRS が要件を持つのは禁じる語列・rm・見張り自身の設定の 3 つ）。 口座の settings.json の hook 行から呼ばれ、 口座の設定を読む全 session に marker の有無に依らず効く（FR56 / FR72 / FR73 / FR74）。 器が起こす session（runner・lens・usage の更新）には届かない。 }
   - { term: host の面,       en: host manifest,          plain_short: host ごとの宣言の置き場,   def: manifest の host の面。 state dir の 1 file が host 固有の宣言値を持ち、 tracked の manifest と同じ読み手で読まれる。 rules 行は置けない（FR57・ADR-0026）。 }
   - { term: 口座の登録,     en: account registration,   plain_short: 口座を器に足すこと,       def: 器の subcommand が口座の設定 dir・席の前提の設定・host の面の宣言を揃え、 login 用の起動 command を user へ渡すこと（FR58）。 login は user の手番で、 器は credential に触れない。 退役と復帰も同じ subcommand が担う。 }
   - { term: 席の起動,       en: seat launch,            plain_short: 器の subcommand で席を起こすこと, def: 役割を必須に受け、 口座を決め、 起動行を導出し、 席の登録を先に書いて target の窓の shell へ差し込むこと（FR59）。 器の subcommand 以外の起動経路を使わない。 }
