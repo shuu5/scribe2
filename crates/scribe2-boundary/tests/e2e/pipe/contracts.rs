@@ -289,7 +289,8 @@ fn contract_check_refuses_usage_errors_and_non_repositories() {
 
 /// Declared 行の歯の置き場の検出線（設計 contract-source.md §45・行 av）: 歯が write-set の内 / 外 / base に 0 本で解けない
 /// Declared 行 3 本の repo で、`--verbose` の周は外の行の 1 行（doc・行 id・file）が判定行の前に出て、旗の無い周は 0 行・
-/// 判定行はどちらも `place-out=1/3` で rc 0。引数の無い周の使い方の文字列に `--verbose` が載る。
+/// 判定行はどちらも `place-out=1/3`。外の行は旗に依らず findings の 1 件（`contract-table:teeth-outside-write-set`・行 aw）
+/// で rc 1。引数の無い周の使い方の文字列に `--verbose` が載る。
 #[test]
 fn contract_check_place_verbose_names_the_outside_row_only_with_the_flag() {
     let rows = [
@@ -304,12 +305,19 @@ fn contract_check_place_verbose_names_the_outside_row_only_with_the_flag() {
         bin_cmd().args(args).arg(&repo).args(extra).output().expect("binary を起動できる")
     };
     let (quiet, loud) = (check(&[]), check(&["--verbose"]));
-    let judgement = "contracts check: docs=1 rows=3 untracked=0 findings=0 place-out=1/3";
+    let judgement = "contracts check: docs=1 rows=3 untracked=0 findings=1 place-out=1/3";
     let hit = "contracts place-out: docs/design/toy.md 行 out の歯の file が write-set の外: crates/toy/tests/e2e.rs";
-    assert_eq!(quiet.status.code(), Some(i32::from(RC_OK)), "{}{}", stdout_of(&quiet), stderr_of(&quiet));
-    assert_eq!(stdout_of(&quiet).lines().collect::<Vec<&str>>(), [judgement], "旗の無い周は当たった行 0 行");
-    assert_eq!(loud.status.code(), Some(i32::from(RC_OK)), "{}{}", stdout_of(&loud), stderr_of(&loud));
-    assert_eq!(stdout_of(&loud).lines().collect::<Vec<&str>>(), [hit, judgement], "旗の周は外の行 1 行 + 判定行");
+    let quiet_text = stdout_of(&quiet);
+    let finding = quiet_text.lines().next().unwrap_or_default();
+    assert!(
+        finding.starts_with("contracts: docs/design/toy.md:")
+            && finding.ends_with(" contract-table:teeth-outside-write-set: 行 out の歯の file が write-set の外: crates/toy/tests/e2e.rs"),
+        "findings の 1 件は外の行: {quiet_text}"
+    );
+    assert_eq!(quiet.status.code(), Some(i32::from(RC_REFUSED)), "{quiet_text}{}", stderr_of(&quiet));
+    assert_eq!(quiet_text.lines().collect::<Vec<&str>>(), [finding, judgement], "旗の無い周は当たった行 0 行");
+    assert_eq!(loud.status.code(), Some(i32::from(RC_REFUSED)), "{}{}", stdout_of(&loud), stderr_of(&loud));
+    assert_eq!(stdout_of(&loud).lines().collect::<Vec<&str>>(), [finding, hit, judgement], "旗の周は外の行 1 行 + 判定行");
     let usage = bin_cmd().arg("contracts").output().expect("binary を起動できる");
     assert!(stderr_of(&usage).contains("--verbose"), "使い方の文字列に旗が載る: {}", stderr_of(&usage));
     clean(&[&repo, &state]);

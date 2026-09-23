@@ -325,6 +325,16 @@ pub enum TableError {
         /// 形に合わない理由（契約 file の読みと同じ判定の 1 本が返す字面）。
         reason: String,
     },
+    /// Declared 行の verify の filter 語が解く歯の file が write-set の外に在る（行の見出しの行・設計 contract-source.md
+    /// §45・行 aw）。
+    TeethOutsideWriteSet {
+        /// 行番号。
+        line: u64,
+        /// 行 id。
+        id: String,
+        /// write-set の外の歯の file（辞書順）。
+        files: Vec<String>,
+    },
 }
 
 impl TableError {
@@ -344,7 +354,8 @@ impl TableError {
             | Self::SurfaceUnknown { line, .. }
             | Self::PromiseOrphan { line, .. }
             | Self::PromiseNumber { line, .. }
-            | Self::TargetForm { line, .. } => line,
+            | Self::TargetForm { line, .. }
+            | Self::TeethOutsideWriteSet { line, .. } => line,
         }
     }
 
@@ -365,6 +376,7 @@ impl TableError {
             Self::PromiseOrphan { .. } => "promise-orphan",
             Self::PromiseNumber { .. } => "promise-number",
             Self::TargetForm { .. } => "target-form",
+            Self::TeethOutsideWriteSet { .. } => "teeth-outside-write-set",
         }
     }
 
@@ -396,6 +408,9 @@ impl TableError {
             }
             Self::TargetForm { ref target, ref reason, .. } => {
                 format!("targets {target:?} が <file>:<行>:<変異の名> の形でない: {reason}")
+            }
+            Self::TeethOutsideWriteSet { ref id, ref files, .. } => {
+                format!("行 {id} の歯の file が write-set の外: {}", files.join(", "))
             }
         }
     }
@@ -523,6 +538,7 @@ mod tests {
         "promise-orphan",
         "promise-number",
         "target-form",
+        "teeth-outside-write-set",
     ];
 
     /// 宣言順に 1 つずつ組んだ全 variant（行番号は 1 から順）。
@@ -543,6 +559,7 @@ mod tests {
             TableError::PromiseOrphan { line: 12, of: text("zz") },
             TableError::PromiseNumber { line: 13, of: text("a"), n: 2, duplicate: false },
             TableError::TargetForm { line: 14, target: text("src/a.rs"), reason: text("r") },
+            TableError::TeethOutsideWriteSet { line: 15, id: text("out"), files: vec![text("tests/a.rs"), text("tests/b.rs")] },
         ]
     }
 
@@ -552,7 +569,7 @@ mod tests {
         let found = samples();
         let names: Vec<&str> = found.iter().map(TableError::as_str).collect();
         assert_eq!(names, TABLE_ERRORS, "名前の slice は宣言順（母集団 {} 値）", TABLE_ERRORS.len());
-        assert_eq!(TABLE_ERRORS.len(), 14, "母集団は 14 値");
+        assert_eq!(TABLE_ERRORS.len(), 15, "母集団は 15 値");
         for (index, error) in found.iter().enumerate() {
             assert_eq!(error.line(), index as u64 + 1, "{} は行番号を持つ", error.as_str());
             assert!(!error.reason().is_empty() && !error.reason().contains('\n'), "{} の理由は 1 行", error.as_str());
