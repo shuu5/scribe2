@@ -333,14 +333,14 @@ scribe2 を載せる consumer が pipe を通すのに要る面は 3 つで、�
 - 現物（main c5738a2・verified）: 置き場の照合は `crates/scribe2/src/pipe/closure/derive.rs` の `teeth_places`（受付と preflight が撃つ・歯の fn 名が filter 語を含むかを §28 の scope で見る）。契約表の検査 `crates/scribe2/src/pipe/table/check.rs` の `judge_repo` は行ごとに requirement / verify / write-set / closure / name の findings を集めるが、`teeth_places` は呼ばない。判定行は `check_repo` の 1 行（`docs= rows= untracked= findings=`・名乗りの周だけ `entrance=` の欄）。
 - 形（行 av・検出線）:
   1. `judge_repo` が Declared 行ごとに `teeth_places` を撃ち、解けた歯の file のうち write-set（`+` / `-` / `~` / `=` を剥がした集合）の外の file を持つ行を数える。解けない行（`TeethPlaceUnresolved` 相当）は数えず、既存の closure の findings に任せる。
-  2. 判定行の末尾に `place-out=<行数>/<Declared 行数>` の欄を足す（母集団つき・C10）。findings には上げない（rc は変えない・既存の外形の pin は欄の追加だけが動く）。
+  2. 判定行の末尾に `place-out=<行数>/<Declared 行数>` の欄を足す（母集団つき・C10）。findings には上げない（rc は変えない）。判定行を全行で pin する既存の歯は e2e の `crates/scribe2-boundary/tests/e2e/pipe/contracts.rs` に 16 本と `crates/scribe2-boundary/tests/e2e/pipe/intake.rs` に 1 本（`assert_eq!` の字面・末尾を `findings=0` で読む 2 本を含む）が在り、欄の追加ぶん字面を進める＝行 av の write-set と verify に載る。
   3. 数えた行の id と file は `--verbose` の周だけ 1 行ずつ出す（doc・行 id・file）。
 - 形（行 aw・findings への昇格・行 av の着地後に main で `place-out=0/<n>` を実測してから）:
   1. 行 av の数えた行を findings の 1 語（TeethOutsideWriteSet・doc・行 id・file）に上げ、判定行の欄はそのまま残す。
   2. 現物の契約表の歯（`contract_closure_ext_real_table_has_zero_findings`）が 0 件のまま緑であることを同じ便で確かめる（母集団 = 行 av の判定行の分母）。
 - 触らない: `teeth_places` の述語と scope の読み・受付と preflight の断り・`=` の意味（§43 (1)）・`--exact` の読み（§43 (2)）・判定行の既存の欄の並び。
 - 却下: 直接 findings に上げる（器の導出が粗い走査の 18 行側に倒れると現物の歯が赤になる＝母集団を判定行で先に見る）／verify 行の tests 欄を必須にする（宣言の形の門が変わる・別便）／置き場の門を受付だけに残す（landed 行の drift を誰も数えない）。
-- 歯: in-file（`crates/scribe2/src/pipe/table/check.rs` の `mod tests`・接頭辞 `contract_check_place_`・`crates/` 全体で 0 件）で、tmp の repo に Declared 行 3 本（歯が write-set の内 / 外 / 解けない）を置いて撃ち、判定行が `place-out=1/3` を出し、rc と findings が変わらず、`--verbose` で当たった行の id と file が 1 行出ること。行 aw は同じ族に `contract_check_place_finding_` の接頭辞で、外の行が findings 1 件・語 1 つ（doc・行 id・file）になり、判定行の欄が残ること。
+- 歯: in-file（`crates/scribe2/src/pipe/table/check.rs` の `mod tests`・接頭辞 `contract_check_place_`・`crates/` 全体で 0 件。同じ `mod tests` の既存の歯 13 本の接頭辞は `table_check_` / `contract_closure_ext_` / `contract_promise_` / `contracts_untracked_` で、`contract_check_` の歯は base に無い）で、tmp の repo に Declared 行 3 本（歯が write-set の内 / 外 / 解けない）を置いて撃ち、判定行が `place-out=1/3` を出し、rc と findings が変わらず、`--verbose` で当たった行の id と file が 1 行出ること。行 aw は同じ族に `contract_check_place_finding_` の接頭辞で、外の行が findings 1 件・語 1 つ（doc・行 id・file）になり、判定行の欄が残ること。
 
 <!-- contracts:begin -->
 schema = 1
@@ -840,10 +840,10 @@ id = "av"
 title = "契約表の検査が Declared 行ごとに teeth_places を撃ち、解けた歯の file が write-set の外に在る行の本数を判定行の欄 place-out=<行数>/<Declared 行数> で出す（検出線・rc と findings は不変・--verbose の周だけ行の id と file を 1 行ずつ）"
 req = ["FR9", "FR48"]
 section = "45"
-write-set = ["crates/scribe2/src/pipe/table/check.rs", "docs/design/contract-source.md"]
-verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail contract_check_place_"]
-size = "S"
-done = "(1) tmp の repo の Declared 行 3 本（歯が write-set の内 / 外 / 解けない）で判定行が place-out=1/3 を出し、解けない行は数えない (2) rc と findings の本数が欄の追加の前後で同じで、既存の contract_check_ の歯が全部緑 (3) --verbose の周だけ当たった行の doc・行 id・file が 1 行出て、無い周は 0 行 (4) 現物の契約表で撃つと place-out=<n>/<m> の実測が notes に残る"
+write-set = ["crates/scribe2/src/pipe/table/check.rs", "crates/scribe2-boundary/tests/e2e/pipe/contracts.rs", "crates/scribe2-boundary/tests/e2e/pipe/intake.rs", "docs/design/contract-source.md"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail contract_check_place_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail contract_check_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail contract_closure_ext_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail contract_names_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail contract_schema_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail contracts_untracked_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail contract_table_landed_plus_item_resolves_as_file", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_intake_promise_row_"]
+size = "M"
+done = "(1) tmp の repo の Declared 行 3 本（歯が write-set の内 / 外 / 解けない）で判定行が place-out=1/3 を出し、解けない行は数えない (2) rc と findings の本数が欄の追加の前後で同じで、check.rs の mod tests の既存の歯 13 本（table_check_ / contract_closure_ext_ / contract_promise_ / contracts_untracked_）と判定行を全行で pin する e2e の歯 17 本（pipe/contracts.rs の 16 本・pipe/intake.rs の 1 本・末尾を findings=0 で読む 2 本を含む）が欄の追加ぶん字面を進めて全部緑 (3) --verbose の周だけ当たった行の doc・行 id・file が 1 行出て、無い周は 0 行 (4) 現物の契約表で撃つと place-out=<n>/<m> の実測が notes に残る"
 
 [[contract]]
 id = "aw"
