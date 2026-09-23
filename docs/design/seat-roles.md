@@ -340,6 +340,17 @@ C1 / C5（権能の値は行・裁定 id）・C1.2（生成文に手書きの規
 - 却下: 呼び手の pane を環境変数（`TMUX_PANE`）から読む（器の `env::` の許し列は 3 つで、足すと構造検査が落ち C2.2 にも反する・tmux への 1 問いで同じ値が取れる）／`seat` に `--pane` の flag を足して人に打たせる（1 語にする便の目的と逆・hook の口と紛れる）／session の名を器の定数から導く（§14 の却下と同じ・測るのであって焼かない）／同じ窓の周も key を送る（前面が起動の口自身なので入力欄の門が必ず閉じる＝実測の穴そのもの）／同じ窓の周に前面の判定を掛けたまま例外を足す（判定の意味が「shell か」から「shell か自分か」へ濁る・判定の前に分ける）／置き換えで shell を 2 枚以上挟む（どの層が起動行を解くかが曖昧になる・1 枚に決める）／断りを今の位置に残して点検の口の側で live を測り直す（記録が嘘のままになる・書く前に断る）／`not-a-shell` の周に生きた席へ置き換えを掛ける（走っている席を殺す）。
 - 大きさの見積: 本体 4 file で約 150 行・歯 2 file で約 280 行＝約 430 行（NFR2 の 550 行の内側・300 行の目安は超える見込みなので、審査で割る判断が出たら約束 1〜4（入口）と約束 5〜9（順序と同じ窓）の 2 便に割る）。
 
+## 27. 席の権能 guard が器の口を basename の形で当てる — `<NAME>` だけでなく `<NAME>.…` / `<NAME>-…` の写しも器の口と読む（契約表の行 u・`s2-07l.556`）
+
+- 出所: 消費側 1 号の席の報告 2026-09-22（要旨・逐語は台帳 `s2-07l.556`）。同じ binary を別 path に写した実行 file（例: cache 配下の `scribe2-pipe.bin`）で便を起こす口の使い方を撃つと権能の guard が止めず、引数の不足の断りまで進んだ（実測 1 件）。本 repo の席では `scribe2` の同じ行は DENIED（実測 1 件）。
+- 現物（main 45774cd・verified）: `crates/scribe2/src/hook/role_guard.rs` の private な `is_self` は token が `NAME` に等しいか basename が `NAME` に等しい周だけ器の口と読む。写しの binary は管理席の道具が世代を固定するために置くもので、`s2-07l.554` の着地後も残る＝運用では穴が閉じない。権能の guard は字面の門（ADR-0025 §2.6: 引用符の中身・変数展開・interpreter の引数は解かない）で、実行 file の中身も実行結果も読まない。
+- 形（1 つずつ歯が測る・行 u の done と 1:1）:
+  1. `is_self` を「basename が `NAME` に等しい ∨ basename が `NAME` で始まりその直後の 1 文字が `.` か `-`」に広げる（`scribe2` / `scribe2.bin` / `scribe2-pipe.bin` は器の口・`scribe2ctl` は違う）。pure な 1 関数のまま・rules 行は増やさない。
+  2. 判定の面は字面のまま（中身を読まない・実行しない・PATH を引かない）。断りの字面・権能の表・route は不変。
+- 触らない: `capabilities_of` の語列の照合・`named_stop` の形・command guard（`hook/command.rs`）・rules 行・ADR-0025 §2.6 の限界。
+- 却下: 実行 file を `--version` で撃って器の名と sha を確かめる（guard が未知の file を実行する・Bash 1 回ごとに exec が載る）／実行 file の中身から器の印を読む（PATH の全 command に数十 MB の読みが載り上限が無い）／席が写しを撃たない運用にする（散文の規則・N2）／写しの置き場を rules 行で名指す（host の事実を器の行に積む・ADR-0047 が退けた分担）。
+- 歯: in-file（`crates/scribe2/src/hook/role_guard.rs` の既存の族 `role_guard_` に接頭辞 `role_guard_self_`・`crates/` 全体で 0 件）で、`NAME` / `…/NAME` / `NAME.bin` / `…/NAME-pipe.bin` の 4 形が器の口で、`NAMEctl` / `…/NAMEx` / 別名 / 空 の 4 形が違うこと（母集団 8 形を 1 表で）。e2e（`crates/scribe2-boundary/tests/e2e/hook.rs` の既存の族 `hook_role_` に接頭辞 `hook_role_guard_self_`）で、runner 役の席の pre-tool-use に写しの path（tmp 配下の `<NAME>-pipe.bin`）で便を起こす口を書いた payload が `scribe2` の同じ行と同じ断り（capability launch）で止まり、`<NAME>ctl` の同じ行は権能の guard を通る。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -389,7 +400,7 @@ id = "m"
 title = "役割ごとの既定 model と effort を rules 行が持つ — 規則の種類を 2 つ・役割ごとに 2 行・値は閉じた表に照合・読み手 1 本と読めない理由 2 つ（裁定 user 2026-09-17T04:23Z）"
 req = ["FR17", "FR40"]
 section = "19"
-write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/src/seat/mod.rs", "crates/scribe2/src/seat/role.rs", "crates/scribe2/src/pipe/confine.rs", "crates/scribe2-boundary/tests/e2e/rules.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__rules__rules_external_form.snap"]
+write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/src/seat/mod.rs", "crates/scribe2/src/seat/role.rs", "crates/scribe2/src/seat/cycle/launch.rs", "crates/scribe2/src/pipe/confine.rs", "crates/scribe2-boundary/tests/e2e/rules.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__rules__rules_external_form.snap"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail rules_role_defaults_", "cargo nextest run -p scribe2 --no-tests=fail rules_embedded_manifest_", "cargo nextest run -p scribe2 --no-tests=fail rules_manifest_carries_", "cargo nextest run -p scribe2 --no-tests=fail rules_external_form", "cargo nextest run -p scribe2 --lib --no-tests=fail seat_role_defaults_", "cargo nextest run -p scribe2 --lib --no-tests=fail rule_read_"]
 size = "S"
 done = "役割の閉じた列のどの役割にも model と effort の 2 行が同じ裁定 id で在り、値が閉じた表に無い manifest は読み込みで拒まれ、読み手が対を型で返して行なし・不発効・文字列でない・表に無いの 4 周を別の理由で名指し、行と種類と理由の列の母集団の数えと rules の外形 snapshot が更新されている"
@@ -464,4 +475,14 @@ write-set = ["crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/seat/mod.rs",
 verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail seat_entry_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail seat_launch_short_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail seat_launch_refuses_typed_without_sending_or_registering", "cargo nextest run -p scribe2 --test e2e --no-tests=fail seat_usage_external_form"]
 size = "M"
 done = "(1) 役割の flag が 0 個の短い形が長い形と同じ登録 row と同じ注入行を作り、flag 1 個は従来どおり通り、flag 2 個（同じ flag の重複を含む）は従来どおり使い方の 1 枚で rc 1 になり、既知の verb を第 1 token に置く形は従来どおり通る (2) 使い方の 1 枚の短い形の並びで役割の flag が任意の形になり、長い形の並びは 1 語も変わらず、使い方の外形 snapshot が更新される (3) 登録 row も --target も無い周は、-t を付けない display-message の 1 問いで測った session の名と役割の字面 orchestrator を : で繋いだ target で席が立ち、器の env:: の読みは許し列の 3 つ（args / args_os / current_dir）のままで 1 つも増えない (4) その問いが撃てない周・session の名が空の周は defaults-unresolved のまま断って missing= に --target を載せ、登録 row も --model も無い周は missing=--model で断る (5) session-missing・not-a-shell・pane-missing・input-busy・input-unknown の 5 つの断りが登録 row を書く前に出て row が 0 件のまま残り、判定の並びは session の有無 → 窓の前面 → 入力欄のままで、窓がまだ無い周と呼び手の target が解いた target と一致する周は前面と入力欄の判定を 2 つとも飛ばし（一致する周の pane に入力欄が busy と見える偽 tmux でも断られない）、入力欄の門は boot から pub(super) の 1 本へ切り出されて boot 側には残らず（門の中身と 3 つの理由の字面と判定の順序は 1 語も変わらない純粋な切り出しで、同じ判定を 2 か所で撃たない） (6) 登録 row より後に残るのは window-unwritable と launch-unconfirmed / restore-unconfirmed だけで、その周は row が 1 件残る (7) 呼び手の target と解いた target の字面が一致する周は、前面の判定も入力欄の門も掛けず、送信 0 件のまま登録 row と起動の記帳を済ませてから sh 1 枚で起動行に置き換え、偽 claude が記録した argv と env が長い形の起動と同じである (8) その一致する周に --restore が在れば登録 row を書く前に閉じた理由 1 つで断り、一致しない周の --restore は今までどおり合図が 1 回送られる (9) 一致しない周に target の前面が shell でなければ not-a-shell で断って送信も置き換えもせず、断りの 1 行が次の 1 手（その窓の席を終わらせてから同じ窓で打つ / 別の名の窓を --target で名指す）の字面を持つ (10) seat <別の label> が同じ鍵（役割 × anchor）の登録 row を新しい label で書き直し、起動行の口座の dir も新しい label を指す、の 10 つを seat_entry_ の歯と既存の 4 本（seat_launch_short_form_requires_exactly_one_role_flag・seat_launch_short_form_refuses_typed_without_a_row・seat_launch_refuses_typed_without_sending_or_registering・seat_usage_external_form）が測り、長い形の flag の必須と並び・登録 row の schema と鍵・起動行の導出・役割ごとの既定の model と effort の経路・rules 行は 1 行も変わらず、tmux を起こす新しい歯の名が直列の列に足されて構造検査の直列の項目が drift にならない"
+
+[[contract]]
+id = "u"
+title = "席の権能 guard が器の口を basename の形で当てる — NAME に等しい形に加え NAME の直後が . か - の写し（NAME.bin / NAME-pipe.bin）も器の口と読み、NAMEctl は読まない（pure な 1 関数のまま・中身を読まず実行せず・rules 行なし）"
+req = ["FR41", "FR45", "NFR4"]
+section = "27"
+write-set = ["crates/scribe2/src/hook/role_guard.rs", "crates/scribe2-boundary/tests/e2e/hook.rs", "docs/design/seat-roles.md"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail role_guard_self_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail hook_role_guard_self_"]
+size = "S"
+done = "(1) is_self が NAME / …/NAME / NAME.bin / …/NAME-pipe.bin の 4 形を器の口と読み、NAMEctl / …/NAMEx / 別名 / 空 の 4 形を読まない（母集団 8 形を 1 表で） (2) runner 役の席の pre-tool-use で tmp 配下の NAME-pipe.bin による便を起こす口が scribe2 の同じ行と同じ断りで止まり、NAMEctl の同じ行は権能の guard を通り、既存の role_guard_ と hook_role_ の歯が全部緑"
 <!-- contracts:end -->

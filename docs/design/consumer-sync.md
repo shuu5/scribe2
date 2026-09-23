@@ -183,6 +183,18 @@ C1（rules 行を足さない・閾値は無い）・C2 / C2.2（`EventKind` / `
   - 形 6 → 設計 doc の追随は `cargo xtask check` の path の検査が測る（歯を足さない）
 - 却下案: ADR-0038 §3 の OPT2〜OPT5（写しは持たない）。加えて設計固有: 生成 dir の名を xtask 側の定数で持つ（正本が 2 つになる・C2.2 の NAME と同じ形を崩す）／旧 path に symlink を残して両方から読めるようにする（cache の copy が link を辿るかが未確認で、写しの単位が閉じない）。
 
+## 18. `--version` の `+dirty` を build script の再走で現在値に保つ — tracked 全 file を再走の引き金に出し、列挙の 1 関数を build.rs と歯が共有する（契約表の行 i・`s2-07l.317`）
+
+- 出所: 管理席の実地 2026-09-15（要旨・逐語は台帳 `s2-07l.317`）。作業木を unstaged で汚しても `--version` が `+dirty` を出さず、`touch build.rs` で再走させて初めて `(<sha12>+dirty)` が出た。
+- 現物（main 45774cd・verified）: `crates/scribe2/build.rs` の `rerun_paths` は `.git/HEAD` と `.git/index`（worktree では実体の git dir の同名 2 本）の**在る物だけ**を `cargo:rerun-if-changed` に出す。`build_commit` は `git status --porcelain --untracked-files=no` で tracked の変更を見る。unstaged の変更は index を動かさないので cargo は build script を再走せず、`+dirty` は最後に再走した時点の値で止まる＝C10 の測定値として測定時刻が古くなりうる（偽の clean）。build script は nextest の歯の外で、cargo の再走そのものは歯で測れない。
+- 形（1 つずつ歯が測る・行 i の done と 1:1）:
+  1. 再走の引き金の列挙を 1 関数にし、`git ls-files -z` を repo root で撃って tracked 全 file の絶対 path を今の 2 本に足す。在る file だけを出し（無い path を出すと cargo が毎回作り直す・現物の doc のとおり）、並びは決定的（sort）。git が撃てない周は今の 2 本だけ（build は落とさない・依存は std だけ）。
+  2. 列挙の関数は build.rs の外の 1 file に置き、build.rs と歯が同じ file を `include!` で読む（crate の module にはしない・行 i の write-set の `+` の file）。build.rs 自身の doc は再走の母集団が tracked 全 file であることを名指す。
+  3. 歯は e2e（行 i の write-set の `+` の file・`crates/scribe2-boundary/tests/e2e/main.rs` の mod 1 行）で、tmp の git repo に tracked 3 本 + untracked 1 本 + 消した tracked 1 本を作って列挙を撃ち、tracked で在る 3 本と HEAD / index を返し、untracked と消えた file を含まず、同じ repo で 2 回撃つと同じ並びを返し、git repo でない dir では HEAD / index の在る物だけ（0 本を含む）を返す。
+  4. 母集団の大きさ（tracked ≈ 330 file）は cargo の mtime 比較だけに載る＝build の費用の変化は notes に実測を 1 行残す（歯にはしない）。
+- 触らない: `build_commit` の判定と 3 形（sha / +dirty / unknown）・env 名・`render_version` と外形 snapshot の mask・xtask の `name-literal` の母集団（build.rs は src の外）。
+- 却下: `+dirty` を測るのを止め sha だけにする（provenance の縮小・C10）／install の口が `touch build.rs` 相当を撃つ（運用で埋める＝散文の規則・N2）／xtask の measure で build.rs を実行して測る（cargo を子として撃つ歯は重く C4 の予算に載る）／repo root の dir を 1 本だけ出す（`target/` を含む dir の再帰走査で毎回作り直す）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -227,4 +239,14 @@ write-set = ["crates/scribe2/src/name.rs", "crates/xtask/src/workspace.rs", "cra
 verify = ["cargo nextest run -p xtask --no-tests=fail plugin_payload_", "cargo nextest run -p scribe2 --no-tests=fail plugin_payload_", "cargo nextest run -p scribe2 --no-tests=fail name_is_single_source"]
 size = "M"
 done = "gen-manifest の 3 file のうち plugin.json と hooks.json が生成 dir の配下に在って root 直下の旧 path は消え、marketplace の source が生成 dir を指し、置き場は core の定数 1 つが正本で xtask は tracked の core からそれを読んで配置の型に載せ（定数の無い core は typed に断る）、生成 dir と結ぶ 3 つの呼び手（生成の書き手・plugin manifest の突合・check の fixture の組み手）が結び直されて旧 path にだけ plugin.json を置いた fixture が manifest-name の違反として名指され、席の起動行の 1 つ目の --plugin-dir と便の worktree への写しと binary の歯と導入先の読み込み元が同じ定数から解け、席の起動行の 2 つ目以降の列と起動行の雛形と、consumer の plugin の判定と写し先と hook の --plugin-root と digest の path と install 帳簿の比較は不変で、消えた path を名指す設計 doc の散文と行の write-set が残らない"
+
+[[contract]]
+id = "i"
+title = "--version の +dirty を build script の再走で現在値に保つ — tracked 全 file（git ls-files・在る物だけ・決定的な並び）を rerun-if-changed に足し、列挙の 1 関数を build.rs の外の file に置いて build.rs と歯が include! で共有する（git の無い周は今の 2 本・build は落とさない）"
+req = ["FR61"]
+section = "18"
+write-set = ["crates/scribe2/build.rs", "+crates/scribe2/build/rerun.rs", "+crates/scribe2-boundary/tests/e2e/build_rerun.rs", "crates/scribe2-boundary/tests/e2e/main.rs", "docs/design/consumer-sync.md"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail build_rerun_"]
+size = "S"
+done = "(1) 列挙の 1 関数が tmp の git repo で tracked で在る file の絶対 path 全部と HEAD / index を返し、untracked と消えた tracked を含まず、並びが決定的で、git repo でない dir では HEAD / index の在る物だけを返す (2) build.rs がその関数を include! で読んで rerun-if-changed に出し、歯も同じ file を include! で読む（列挙の実装は 1 か所） (3) build.rs の doc が再走の母集団を tracked 全 file と名指し、--version の 3 形と外形 snapshot が 1 字も変わらない (4) build の費用の変化を notes に 1 行実測で残す"
 <!-- contracts:end -->
