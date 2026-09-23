@@ -270,6 +270,28 @@ impl FilePair {
             && !changed.iter().any(|line| teeth.contains(&line.trim()))
     }
 
+    /// **宣言と pin の file**（§55 形 1）なら pin の行が在る HEAD 側の歯の名。`crates/<c>/tests/` 配下で
+    /// `mod` 行が動き、他の動いた行が歯の中の削除 1 本と追加 1 本（HEAD に 1 度だけ）の対で数字の並び
+    /// 1 か所だけが違う file。同梱は判定を緩める側なので、どれか外れる file は従来の路のまま。
+    fn pin_tooth(&self) -> Option<String> {
+        let (base, head) = (self.base_test(), self.head_test());
+        let (added, removed) = changed_sides(&base, &head);
+        let rest = |side: &[String]| -> Vec<String> {
+            side.iter().filter(|line| !is_mod_line(line)).map(|line| line.trim().to_owned()).collect()
+        };
+        let moved_mod = added.iter().chain(&removed).any(|line| is_mod_line(line));
+        let (added, removed) = (rest(&added), rest(&removed));
+        let ([new], [old]) = (added.as_slice(), removed.as_slice()) else {
+            return None;
+        };
+        let (new, old) = (new.as_str(), old.as_str());
+        let once = head.lines().filter(|line| line.trim() == new).count() == 1;
+        let in_base = teeth_named(&base).iter().any(|(_, line)| line.trim() == old);
+        (in_tests_dir(&self.rel) && moved_mod && once && in_base && digits_swapped_once(old, new)).then_some(())?;
+        let tooth = teeth_named(&head).into_iter().find(|(_, line)| line.trim() == new)?.0;
+        Some(tooth.to_owned())
+    }
+
     /// 「base で赤くなること」を要求する差か。
     fn flips(&self) -> bool {
         self.test_diff() && !self.removed_only() && !self.escaped()
@@ -369,18 +391,36 @@ fn docs_only_verdict(base: &str, root: &Path, faces: &[String], sink: &mut dyn F
 /// 順序は見ない（行の多重集合の差）。宣言 file の弁別に要るのは「何の行が動いたか」だけで、
 /// どこへ動いたかではない。
 fn changed_lines(base: &str, head: &str) -> Vec<String> {
+    let (mut changed, removed) = changed_sides(base, head);
+    changed.extend(removed);
+    changed
+}
+
+/// [`changed_lines`] を側ごとに割った `(追加行, 削除行)`（同じ多重集合の差・§55 形 1）。
+fn changed_sides(base: &str, head: &str) -> (Vec<String>, Vec<String>) {
     let mut rest: Vec<&str> = meaningful(base);
-    let mut changed = Vec::new();
+    let mut added = Vec::new();
     for line in meaningful(head) {
         match rest.iter().position(|found| *found == line) {
             Some(at) => {
                 rest.remove(at);
             }
-            None => changed.push(line.to_owned()),
+            None => added.push(line.to_owned()),
         }
     }
-    changed.extend(rest.into_iter().map(str::to_owned));
-    changed
+    (added, rest.into_iter().map(str::to_owned).collect())
+}
+
+/// 2 行が「連続する ASCII の数字の並び」の置き換え**ちょうど 1 か所**を除いて 1 字も違わないか（§55 形 1・
+/// 数字の並びと他の並びに割って対ごとに比べる＝並びの数が違う行は当たらない）。
+fn digits_swapped_once(old: &str, new: &str) -> bool {
+    let runs = |text: &str| -> Vec<Vec<u8>> {
+        text.as_bytes().chunk_by(|a, b| a.is_ascii_digit() == b.is_ascii_digit()).map(<[u8]>::to_vec).collect()
+    };
+    let (old, new) = (runs(old), runs(new));
+    let digits = |run: &Vec<u8>| run.first().is_some_and(u8::is_ascii_digit);
+    let differ: Vec<(&Vec<u8>, &Vec<u8>)> = old.iter().zip(&new).filter(|(a, b)| a != b).collect();
+    old.len() == new.len() && matches!(differ.as_slice(), [(a, b)] if digits(a) && digits(b))
 }
 
 /// 空白だけの行を除いた行の列。
@@ -399,24 +439,35 @@ const TEST_ATTR: &str = "#[test]";
 /// 閉じ brace は歯の中に数える——brace を数える parser は足さない（重複する字面が歯の中へ
 /// 倒れるのは狭く取る側）。
 fn teeth_lines(region: &str) -> Vec<&str> {
+    teeth_named(region).into_iter().map(|(_, line)| line).collect()
+}
+
+/// [`teeth_lines`] の行を、その行が在る歯の名と対にした列（読みは同じ 1 本・§55 形 1 / 形 3）。
+fn teeth_named(region: &str) -> Vec<(&str, &str)> {
     let mut found = Vec::new();
     let mut pending = false;
-    let mut inside = false;
+    let mut tooth: Option<&str> = None;
     for line in region.lines() {
         let trimmed = line.trim();
         if trimmed == TEST_ATTR {
             pending = true;
         } else if is_fn_line(trimmed) {
-            inside = pending;
+            tooth = pending.then(|| fn_name(trimmed));
             pending = false;
         } else if pending && !(trimmed.is_empty() || trimmed.starts_with("#[") || trimmed.starts_with("//")) {
             pending = false;
         }
-        if inside {
-            found.push(line);
+        if let Some(name) = tooth {
+            found.push((name, line));
         }
     }
     found
+}
+
+/// [`is_fn_line`] が真の行の fn の名（前置きの語は跨ぐ）。
+fn fn_name(trimmed: &str) -> &str {
+    let rest = trimmed.split_once("fn ").map_or("", |(_, rest)| rest).trim_start();
+    rest.split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_')).next().unwrap_or(rest)
 }
 
 /// `fn` の宣言行か（`pub` / `pub(…)` / `async` / `const` / `unsafe` の前置きは跨ぐ）。
@@ -487,6 +538,12 @@ fn is_test_file(rel: &str) -> bool {
     // 名前で test file と見なして丸ごと写す（base に mod 宣言が在れば base で compile
     // され、新しい歯の RED を測れる）。名の弁別は src / test の切れ目と同じ 1 本の述語。
     parts.get(2) == Some(&"src") && crate::workspace::is_named_test_file(std::path::Path::new(rel))
+}
+
+/// `crates/<c>/tests/` 配下の path か（§55 の形 1 と形 4 が見る面）。
+fn in_tests_dir(rel: &str) -> bool {
+    let parts: Vec<&str> = rel.split('/').collect();
+    parts.first() == Some(&"crates") && parts.get(2) == Some(&"tests")
 }
 
 /// test 区間の始まる byte offset。
@@ -659,6 +716,54 @@ fn judge_one(output: &Output, rel: Option<&str>) -> Result<(), Verdict> {
     }
 }
 
+/// 宣言 file を同梱した turn の、落ちた歯の読み（§55 形 3）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BundledTurn {
+    /// 同梱した宣言 file の歯の外に落ちた歯が在る。
+    Red,
+    /// 落ちた歯が全部、同梱した宣言 file の歯だった。
+    Green,
+    /// 落ちた歯を 1 本も名指せない。
+    Unnamed,
+}
+
+/// 落ちた歯の名の列と除く名（同梱した宣言 file の HEAD 側の歯の名）の列から turn を読む純関数。
+///
+/// 宣言 file は HEAD の字面のまま同梱するので、その歯（pin の数値は base の index を数えて毎 turn 赤い）の
+/// 赤で本体の緑を隠さない。除くのは判定を厳しくする側なので、照合は名の最後の `::` の後の一致で足りる。
+fn bundled_turn(failed: &[&str], own: &[&str]) -> BundledTurn {
+    let last = |name: &str| name.rsplit("::").next().unwrap_or(name).to_owned();
+    if failed.is_empty() {
+        BundledTurn::Unnamed
+    } else if failed.iter().all(|name| own.contains(&last(name).as_str())) {
+        BundledTurn::Green
+    } else {
+        BundledTurn::Red
+    }
+}
+
+/// 本体 1 本の turn の rc を判定する。宣言 file を同梱した turn（`own` が `Some`）の test の失敗
+/// （rc 100）だけを [`bundled_turn`] で読み、他の rc は [`judge_one`] の語のまま。
+fn judge_turn(output: &Output, rel: &str, own: Option<&[&str]>) -> Result<(), Verdict> {
+    let (Some(own), Some(rc @ 100)) = (own, output.status.code()) else {
+        return judge_one(output, Some(rel));
+    };
+    let failed = failed_tests(&output_text(output));
+    let names: Vec<&str> = failed.iter().map(|test| test.name.as_str()).collect();
+    match bundled_turn(&names, own) {
+        BundledTurn::Red => Ok(()),
+        BundledTurn::Green => Err(fail(&format!("green-on-base file={rel}"))),
+        BundledTurn::Unnamed => Err(infra(&format!("bundled-unnamed rc={rc}"))),
+    }
+}
+
+/// runner の stdout と stderr を 1 本の本文にする（[`failed_tests`] が読む形）。
+fn output_text(output: &Output) -> String {
+    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&output.stderr));
+    text
+}
+
 /// 便 1 本の内訳（判定行に載る数）。
 #[derive(Debug, Clone, Copy, Default)]
 struct Counts {
@@ -672,6 +777,8 @@ struct Counts {
     moved: usize,
     /// 本体 file へ同梱した宣言 file の本数。
     decl: usize,
+    /// `decl` のうち宣言と pin の file（§55 形 1）として同梱した本数。
+    pin: usize,
     /// 本体 file へ同梱した歯の外の file の本数（§37・`s2-07l.450`）。
     fixture: usize,
     /// base 段で撃ち直して緑と読んだ歯の本数（負荷下の flaky の検出線・`s2-07l.270`）。
@@ -692,6 +799,7 @@ impl Counts {
             moved: pairs.iter().filter(|pair| pair.moved()).count(),
             // 同梱した本数と撃ち直した本数は base を実体化する段（[`run_on_base`]）で決まる。
             decl: 0,
+            pin: 0,
             fixture: 0,
             base_retried: 0,
             docs_only: 0,
@@ -714,6 +822,9 @@ fn ok_line(counts: Counts) -> Verdict {
     }
     if counts.decl > 0 {
         line.push_str(&format!(" decl={}", counts.decl));
+    }
+    if counts.pin > 0 {
+        line.push_str(&format!(" pin={}", counts.pin));
     }
     if counts.base_retried > 0 {
         line.push_str(&format!(" base-retried={}", counts.base_retried));
@@ -788,6 +899,13 @@ fn judge_each(dest: &Path, target: &Path, plan: &Plan, counts: Counts) -> Verdic
     for pair in &plan.fixtures {
         emit_err(&format!("flip-check: not-flipped reason=outside-teeth {}", pair.rel));
     }
+    for (rel, tooth) in &plan.pins {
+        emit_err(&format!("flip-check: decl-with-pin {rel} tooth={tooth}"));
+    }
+    // 同梱した宣言 file の HEAD 側の歯の名（§55 形 3）。宣言 file を同梱しない便は `None`＝`judge_one` の語のまま。
+    let heads: Vec<String> = plan.decls.iter().map(|pair| pair.head_test()).collect();
+    let own: Vec<&str> = heads.iter().flat_map(|head| teeth_named(head)).map(|(name, _)| name).collect();
+    let own = (!plan.decls.is_empty()).then_some(own.as_slice());
     // 宣言 file（`mod x;` だけの差分）は**単独では撃たず**、本体を撃つ turn ごとに
     // 同梱する（[`bundle_decls`]）。宣言と本体が別 file に割れる新規 module は、単独
     // overlay ではどちらの判定も意味を持たないからである（[`FilePair::declaration_only`]）。
@@ -801,13 +919,15 @@ fn judge_each(dest: &Path, target: &Path, plan: &Plan, counts: Counts) -> Verdic
         // 歯の外の file は絞り込み無しでそのまま置く。**宣言の絞り込みより先**に置く——
         // 新規の歯の外の file が宣言の指す本体なら、先に在ってこそ `mod` 行が残る。
         // **本体を置いた後**に絞る（絞り込みは dest の実体で本体の在処を見る）。
+        // 絞った後の木に本体の宣言が無い turn は撃たない（§55 形 4・compile されない歯の緑を読まない）。
         let judged = match bundle_fixtures(dest, &plan.fixtures).and_then(|()| bundle_decls(dest, &plan.decls)) {
             Err(reason) => Err(infra(&reason)),
+            Ok(()) if undeclared_in_turn(dest, pair) => Err(undeclared(&pair.rel)),
             Ok(()) => match nextest(dest, target) {
                 Err(reason) => Err(infra(&reason)),
                 Ok(output) => {
                     relay(&format!("overlay {}", pair.rel), &output);
-                    judge_one(&output, Some(&pair.rel))
+                    judge_turn(&output, &pair.rel, own)
                 }
             },
         };
@@ -902,12 +1022,47 @@ fn present_mods_only(dest: &Path, rel: &str, body: &str, base: &str) -> String {
         .collect()
 }
 
-/// 1 便の overlay 対象（judge_each が要る 4 つの集合）。
+/// 本体が**その turn の木で宣言されていない新規 module** か（§55 形 4・compile されない歯の緑を読まない）。
+///
+/// 見るのは base に無い `crates/<c>/tests/` 配下で target の根（`tests/<f>.rs`・`tests/<d>/main.rs`）でない
+/// file。在処は [`present_mods_only`] の 3 形の逆（module の dir の `main.rs` / `mod.rs` と dir 同名の
+/// `<dir>.rs`）で、本体が `tests/<d>/mod.rs` の周は target の根 `tests/<f>.rs` 全部も数える。
+fn undeclared_in_turn(dest: &Path, pair: &FilePair) -> bool {
+    let depth = pair.rel.split('/').count();
+    let rel = Path::new(&pair.rel);
+    let at_dir = rel.file_name() == Some("mod.rs".as_ref());
+    let root = depth == 4 || (depth == 5 && rel.file_name() == Some("main.rs".as_ref()));
+    if pair.base.is_some() || root || !in_tests_dir(&pair.rel) {
+        return false;
+    }
+    // `<m>/mod.rs` の module は dir の名で、宣言は 1 段上に在る。
+    let module = if at_dir { rel.parent().unwrap_or(rel).to_path_buf() } else { rel.with_extension("") };
+    let (Some(name), Some(dir)) = (module.file_name().and_then(|name| name.to_str()), module.parent()) else {
+        return false;
+    };
+    let mut sites = vec![dir.join("main.rs"), dir.join("mod.rs"), dir.with_extension("rs")];
+    if at_dir && depth == 5 {
+        let roots = fs::read_dir(dest.join(dir)).into_iter().flatten().flatten().map(|entry| entry.path());
+        sites.extend(roots.filter(|path| path.extension() == Some("rs".as_ref())));
+    }
+    let declares = |text: String| text.lines().any(|line| mod_name(line) == Some(name));
+    !sites.iter().any(|site| fs::read_to_string(dest.join(site)).is_ok_and(declares))
+}
+
+/// 形 4 の turn の判定（`undeclared-in-turn` の行と逃がし方を stderr へ出し `not-flippable` で落とす）。
+fn undeclared(rel: &str) -> Verdict {
+    emit_err(&format!("flip-check: undeclared-in-turn {rel}"));
+    not_flippable(rel)
+}
+
+/// 1 便の overlay 対象（judge_each が要る 4 つの集合と pin の内訳）。
 struct Plan<'a> {
     /// 便の全 pair（flip しない pair は先にまとめて置く）。
     pairs: &'a [FilePair],
-    /// 本体と同梱する宣言 file（単独では撃たない・`mod` 行の絞り込み付き）。
+    /// 本体と同梱する宣言 file（単独では撃たない・`mod` 行の絞り込み付き・宣言と pin の file を含む）。
     decls: Vec<&'a FilePair>,
+    /// `decls` のうち宣言と pin の file の `(rel, pin の歯の名)`（§55 形 1）。
+    pins: Vec<(&'a str, String)>,
     /// 本体と同梱する歯の外の file（単独では撃たない・絞り込み無し・§37）。
     fixtures: Vec<&'a FilePair>,
     /// 1 本ずつ単独で撃つ本体 file。
@@ -921,12 +1076,17 @@ struct Plan<'a> {
 /// **本当の** RED であって、同梱で消してよいものではない。歯の外の file しか flip しない便も
 /// 同じ落とし方＝`green-on-base` のまま落ちる（fail-closed・§37）。宣言 file の弁別が先
 /// （`mod` 行の差は歯の外にも当たるので、先に取り分けないと絞り込みを持たない側へ倒れる）。
+/// 宣言と pin の file（§55 形 1）は宣言 file の次・歯の外の前に見て、宣言 file と同じ側へ置く。
 fn plan_of<'a>(pairs: &'a [FilePair], flipping: &[&'a FilePair]) -> Plan<'a> {
     let mut decls = Vec::new();
+    let mut pins = Vec::new();
     let mut fixtures = Vec::new();
     let mut bodies = Vec::new();
     for pair in flipping.iter().copied() {
         if pair.declaration_only() {
+            decls.push(pair);
+        } else if let Some(tooth) = pair.pin_tooth() {
+            pins.push((pair.rel.as_str(), tooth));
             decls.push(pair);
         } else if pair.outside_teeth() {
             fixtures.push(pair);
@@ -938,11 +1098,12 @@ fn plan_of<'a>(pairs: &'a [FilePair], flipping: &[&'a FilePair]) -> Plan<'a> {
         return Plan {
             pairs,
             decls: Vec::new(),
+            pins: Vec::new(),
             fixtures: Vec::new(),
             bodies: flipping.to_vec(),
         };
     }
-    Plan { pairs, decls, fixtures, bodies }
+    Plan { pairs, decls, pins, fixtures, bodies }
 }
 
 /// base 段が「名指せない失敗」へ倒れた経路（設計 docs/design/pipeline.md §32・`s2-07l.380`）。
@@ -1005,11 +1166,7 @@ fn base_is_green(dest: &Path, target: &Path, sink: &mut dyn FnMut(&str)) -> Resu
     relay("base", &output);
     match output.status.code() {
         Some(0) => Ok(0),
-        Some(rc) => {
-            let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
-            text.push_str(&String::from_utf8_lossy(&output.stderr));
-            retry_named(dest, target, rc, &failed_tests(&text), sink)
-        }
+        Some(rc) => retry_named(dest, target, rc, &failed_tests(&output_text(&output)), sink),
         None => Err(infra(&base_not_green(None, 0, None).label())),
     }
 }
@@ -1077,6 +1234,7 @@ fn run_on_base(
     let counts = Counts {
         flipped: counts.flipped - plan.fixtures.len(),
         decl: plan.decls.len(),
+        pin: plan.pins.len(),
         fixture: plan.fixtures.len(),
         base_retried,
         ..counts
@@ -1086,6 +1244,9 @@ fn run_on_base(
     }
     if let Err(reason) = write_overlay(&dest, pairs) {
         return infra(&reason);
+    }
+    if let Some(pair) = plan.bodies.iter().find(|pair| undeclared_in_turn(&dest, pair)) {
+        return undeclared(&pair.rel);
     }
     match nextest(&dest, &target) {
         Err(reason) => infra(&reason),
@@ -1199,15 +1360,7 @@ fn no_flip_verdict(pairs: &[FilePair], counts: Counts) -> Verdict {
         .map(|pair| pair.rel.as_str())
         .collect();
     if !stuck.is_empty() {
-        // **逃がし方を書く**。「測れない」とだけ言われた側は、次に何をすれば
-        // 測れるようになるのかを自分で探すことになる。
-        emit_err(
-            "flip-check: 新規 module は base に mod 宣言ごと無く compile されない。\
-             test を crates/<c>/tests/<dir>/<f>.rs の module file か既存 file の test 区間へ置くか、\
-             後から足す歯なら test 区間へ `// flip-check: retroactive <bead-id>` を、\
-             歯を足さない純粋な移動なら `// flip-check: moved <bead-id>` を 1 行置く",
-        );
-        return fail(&format!("not-flippable files={}", stuck.join(",")));
+        return not_flippable(&stuck.join(","));
     }
     for pair in pairs.iter().filter(|pair| pair.removed_only()) {
         emit_err(&format!(
@@ -1219,6 +1372,20 @@ fn no_flip_verdict(pairs: &[FilePair], counts: Counts) -> Verdict {
         return ok_line(counts);
     }
     fail("no-test-diff")
+}
+
+/// 構造的に flip を測れない判定（`not-flippable files=<files>`）。
+///
+/// **逃がし方を書く**。「測れない」とだけ言われた側は、次に何をすれば測れるようになるのかを
+/// 自分で探すことになる（[`no_flip_verdict`] と形 4 の turn〔[`undeclared`]〕が共有する 1 行）。
+fn not_flippable(files: &str) -> Verdict {
+    emit_err(
+        "flip-check: 新規 module は base に mod 宣言ごと無く compile されない。\
+         test を crates/<c>/tests/<dir>/<f>.rs の module file か既存 file の test 区間へ置くか、\
+         後から足す歯なら test 区間へ `// flip-check: retroactive <bead-id>` を、\
+         歯を足さない純粋な移動なら `// flip-check: moved <bead-id>` を 1 行置く",
+    );
+    fail(&format!("not-flippable files={files}"))
 }
 
 /// CLI 面。判定行を stdout へ 1 行だけ出し rc を返す（引数不正だけが rc 2）。
