@@ -952,7 +952,7 @@ terms:
     relationships: [権能, 起動の権能, live な便, orchestrator, guard]
   - canonical: project の群
     domain: consumer
-    aliases: [project group, 群]
+        aliases: [project group, 群, かたまり]
     definition: 席の口座を持つ単位 (ADR-0049・proposed)。 名・置き場 (anchor) の列・候補の口座 label の順の列を host の面の表 1 つが宣言し、 群の中の席はどの置き場からでも同じ口座に居る。 置き場が project ごとに分かれていても同じ群に入れられる。 役割は 1 つになったので (ADR-0045)、 役割は単位として働かない。
     relationships: [host の面, 群の今の口座, 便用の除外, 席, 口座選定, 役割の口座]
   - canonical: 群の今の口座
