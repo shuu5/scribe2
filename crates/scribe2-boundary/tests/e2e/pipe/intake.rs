@@ -2119,3 +2119,52 @@ fn pipe_intake_max_live_still_lists_the_overlap_after_the_cap() {
     assert_eq!(tail_line(&flight), "preflight: refused n=2", "{}", stdout_of(&flight));
     clean(&[&repo, &state]);
 }
+
+// ───── host-guard の語列の行を受付が読む（`s2-07l.568`・設計 vessel-hook.md §11 行 f の形 3・接頭辞 `pipe_intake_host_guard_`） ─────
+
+/// host_guard.git にだけ在る語列（[`ceiling_rules`] の runner.denied_commands は `cargo mutants` だけ）を verify 行に持つ契約を
+/// 受付が rc 1 で断り、run dir も event も作らない。断り文は従来の行 id `runner.denied_commands` を名乗る（`declaration` を
+/// 触らない限界の pin・後続の純移動で直す）。
+#[test]
+fn pipe_intake_host_guard_git_only_sequence_is_refused_under_the_old_row_id() {
+    let (repo, state) = repo_with_state();
+    assert!(HOST_GUARD_ROWS[0].1.contains("git branch -D"), "前提: 語列は host_guard.git の fixture に在る");
+    let design = write_contract(&repo, &["verify"], &[r#"verify = ["git branch -D x"]"#]);
+    let out = intake_raw(&repo, &state, &design, "b");
+    let err = stderr_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "host_guard.git の語列は断る: {err}");
+    assert!(err.contains("git branch -D"), "当たった語列を名指す: {err}");
+    assert!(err.contains("runner.denied_commands") && !err.contains("host_guard.git"), "行 id は従来のまま（限界）: {err}");
+    assert_eq!(event_count(&state), 0, "断った周は event を書かない");
+    assert!(!state.join("pipe").exists(), "run dir も作らない");
+    clean(&[&repo, &state]);
+}
+
+/// host_guard.git の行を欠いた `--rules` は、受付も preflight も rules の断り（rc 1・行を名指す）で止まり run dir を作らない
+/// （∪ の読み手は 3 行を欠くと揃わない＝fail-closed）。
+#[test]
+fn pipe_intake_host_guard_rules_without_the_git_row_are_refused() {
+    let (repo, state) = repo_with_state();
+    let design = write_contract(&repo, &[], &[]);
+    let path = write_rules(&state, "rules-no-host-git.toml", 1, 1_000_000);
+    let text = fs::read_to_string(&path).unwrap_or_default();
+    let (id, value) = HOST_GUARD_ROWS[0];
+    let block = format!(
+        "\n[[rule]]\nid = \"{id}\"\nkind = \"HostGuardDeniedCommands\"\nvalue = {value}\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n"
+    );
+    assert!(text.contains(&block), "既定の行が在る（落としが空振りしない）: {text}");
+    fs::write(&path, text.replace(&block, "")).unwrap_or_else(|err| panic!("tmp manifest を書ける: {err}"));
+    let rules = path.display().to_string();
+    let out = intake_with_rules(&repo, &state, &design, "b", &rules);
+    let err = stderr_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "rules の断りは rc 1: {err}");
+    assert_eq!(err.lines().next(), Some("pipe: host_guard.git が無いか文字列の列でない"), "行を名指す: {err}");
+    let flight = preflight_with_rules(&repo, &state, &design, &rules);
+    assert_eq!(flight.status.code(), Some(i32::from(RC_REFUSED)), "preflight も断る: {}", stderr_of(&flight));
+    assert!(stderr_of(&flight).contains("host_guard.git"), "{}", stderr_of(&flight));
+    assert!(run_dirs(&state).is_empty(), "run dir を作らない");
+    let whole = write_rules(&state, "rules-whole.toml", 1, 1_000_000).display().to_string();
+    let out = intake_with_rules(&repo, &state, &design, "b", &whole);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "行が揃えば受理: {}", stderr_of(&out));
+    clean(&[&repo, &state]);
+}

@@ -1321,8 +1321,9 @@ fn rules_ledger_denied_writes_row_is_declared_on_four_faces() {
 const HOST_GUARD_RULING: (&str, &str) = ("user 2026-09-19T15:28Z", "2026-09-19");
 
 /// 4 行（host_guard.git / tmux / ledger は HostGuardDeniedCommands・host_guard.rm は HostGuardRmProtected）が id / kind / 形 List /
-/// enabled / 裁定 id / 裁定日で引け、同じ裁定 id を持つ行はちょうど 4 本。host_guard.git は runner.denied_commands の git の
-/// 7 語列の写しで、rm の値は守る集合の 3 記号。**値は manifest が持つ**（C1 / C5）。
+/// enabled / 裁定 id / 裁定日で引け、同じ裁定 id を持つ行はちょうど 4 本。host_guard.git は git の 7 語列（runner.denied_commands
+/// から移した＝行 f・[`rules_moved_host_guard_git_sequences_leave_runner_denied_commands`]）で、rm の値は守る集合の 3 記号。
+/// **値は manifest が持つ**（C1 / C5）。
 #[test]
 fn rules_embedded_manifest_declares_host_guard_rows_with_one_ruling() {
     let manifest = Manifest::embedded().unwrap_or_else(|errors| panic!("埋め込み manifest が拒まれた: {errors:?}"));
@@ -1345,11 +1346,7 @@ fn rules_embedded_manifest_declares_host_guard_rows_with_one_ruling() {
     assert_eq!(shared, 4, "同じ裁定 id の行はちょうど 4 本（母集団 {} 行）", manifest.rows().len());
     let git = ["git push --force", "git push -f", "git reset --hard", "git branch -D", "git clean -f", "git stash drop", "git stash clear"];
     let want: Vec<String> = git.iter().map(|item| (*item).to_owned()).collect();
-    assert_eq!(manifest.get("host_guard.git").map(|row| row.value.clone()), Some(RuleValue::List(want.clone())), "git の 7 語列");
-    let Some(RuleValue::List(runner)) = manifest.get("runner.denied_commands").map(|row| row.value.clone()) else {
-        panic!("runner.denied_commands の列が在る");
-    };
-    assert!(want.iter().all(|item| runner.contains(item)), "git の語列は runner.denied_commands の写し（外すのは行 f）");
+    assert_eq!(manifest.get("host_guard.git").map(|row| row.value.clone()), Some(RuleValue::List(want)), "git の 7 語列");
     for (id, sequences) in [
         ("host_guard.tmux", &["tmux kill-server", "tmux -C", "tmux -f"][..]),
         ("host_guard.ledger", &["bd delete", "dolt reset --hard", "dolt branch -D", "dolt branch -d"][..]),
@@ -1376,6 +1373,25 @@ fn rules_embedded_manifest_declares_host_guard_kinds_at_the_tail_of_all() {
     }
     assert_eq!(RuleKind::HostGuardDeniedCommands.as_str(), "HostGuardDeniedCommands", "字面は variant 名");
     assert_eq!(RuleKind::HostGuardRmProtected.as_str(), "HostGuardRmProtected", "字面は variant 名");
+}
+
+/// 重なる語列の移動（設計 vessel-hook.md §11 の形 f 4・user 裁定 2026-09-19T15:28Z）: runner.denied_commands は cargo の
+/// 2 語列だけを持ち、host_guard.git は git の 7 語列を持ち、両方に同じ語列は無い（command guard と intake は ∪ で読むので
+/// 語列が禁じられることは変わらない）。
+#[test]
+fn rules_moved_host_guard_git_sequences_leave_runner_denied_commands() {
+    let manifest = Manifest::embedded().unwrap_or_else(|errors| panic!("埋め込み manifest が拒まれた: {errors:?}"));
+    let list = |id: &str| match manifest.get(id).map(|row| row.value.clone()) {
+        Some(RuleValue::List(items)) => items,
+        other => panic!("{id} の値は列: {other:?}"),
+    };
+    let (runner, git) = (list("runner.denied_commands"), list("host_guard.git"));
+    assert_eq!(runner, ["cargo mutants", "cargo publish"], "runner.denied_commands は cargo の 2 語列");
+    let moved = ["git push --force", "git push -f", "git reset --hard", "git branch -D", "git clean -f", "git stash drop", "git stash clear"];
+    assert_eq!(git, moved, "host_guard.git は git の 7 語列");
+    let shared: Vec<&String> = runner.iter().filter(|item| git.contains(item)).collect();
+    assert!(shared.is_empty(), "両方に在る語列は無い: {shared:?}");
+    assert!(runner.iter().all(|item| item.starts_with("cargo ")), "runner に git の語列は残らない: {runner:?}");
 }
 
 /// 語を持たない語列は validate が断り（runner.denied_commands と同じ検査）、2 kind とも形は List だけ。
@@ -1789,21 +1805,8 @@ fn rules_embedded_manifest_declares_one_capability_row_per_role() {
 fn rules_embedded_manifest_declares_the_denied_commands_row() {
     let manifest = Manifest::embedded().unwrap_or_else(|errors| panic!("埋め込み manifest が拒まれた: {errors:?}"));
     let row = manifest.get("runner.denied_commands").expect("禁じる語列の行が在る");
-    let want: Vec<String> = [
-        "cargo mutants",
-        "cargo publish",
-        "git push --force",
-        "git push -f",
-        "git reset --hard",
-        "git branch -D",
-        "git clean -f",
-        "git stash drop",
-        "git stash clear",
-    ]
-    .iter()
-    .map(|item| (*item).to_owned())
-    .collect();
-    assert_eq!(row.value, RuleValue::List(want), "ADR-0025 §2.1 の初期値 9 語列（user 裁定 2026-09-14）");
+    let want: Vec<String> = ["cargo mutants", "cargo publish"].iter().map(|item| (*item).to_owned()).collect();
+    assert_eq!(row.value, RuleValue::List(want), "cargo の 2 語列（git の 7 語列は host_guard.git へ移した・user 裁定 2026-09-19T15:28Z）");
     assert_eq!(row.kind, RuleKind::RunnerDeniedCommands, "kind");
     assert_eq!(row.kind.shape(), ValueShape::List, "値の形は List（語列の配列）");
     assert!(row.enabled, "既定で効く");
