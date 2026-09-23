@@ -225,19 +225,43 @@ fn run_with(args: &[String], dir: &Path, freshness: Freshness) -> Outcome {
 /// `fleet` の dispatch からの入口（設計 §11 (2)）: `--table` は**出力の形**の指定で、計測か表示か（`--show`）とは
 /// 直交する（`--show --table` = read-only の表・`--table` だけ = 計測してから表）。`--table` の無い周は [`run`] の
 /// 1 行形そのまま。置き場の出所（[`StateDir`]）は表の見出し行にだけ載る。
+///
+/// `--fresh` は計測の方針だけを選ぶ（設計 account-lifecycle.md §19 形 5・[`freshness_of`]）: 在る周は選定の前計測と同じ
+/// 鮮度つき（[`Freshness::Within`]）、無い周は今までどおり鮮度なし（[`Freshness::Always`]）。
 pub fn run_in(args: &[String], place: &StateDir) -> Outcome {
+    let dir = place.path.as_path();
+    let freshness = match freshness_of(args, dir) {
+        Ok(found) => found,
+        Err(error) => return Outcome::failed(error.rc(), vec![error.to_string()]),
+    };
     if !args.iter().any(|arg| arg == "--table") {
-        return run(args, &place.path);
+        return run_with(args, dir, freshness);
     }
     let read_only = args.iter().any(|arg| arg == "--show");
-    tabled(args, place, read_only).unwrap_or_else(|error| Outcome::failed(error.rc(), vec![error.to_string()]))
+    tabled(args, place, read_only, freshness).unwrap_or_else(|error| Outcome::failed(error.rc(), vec![error.to_string()]))
+}
+
+/// `fleet usage` の口の値なし旗: 選定の前計測と同じ鮮度つきで測る（設計 account-lifecycle.md §19 形 5）。
+const FRESH_FLAG: &str = "--fresh";
+
+/// `fleet usage` の口の旗: 宣言の 1 口座だけを測る（設計 account-lifecycle.md §19 形 5）。
+const ACCOUNT_FLAG: &str = "--account";
+
+/// `fleet usage` の口の方針（[`FRESH_FLAG`] が在れば秒は rules 行 `fleet.usage_fresh_s`＝[`run_fresh`] と同じ読み手・
+/// 無ければ [`Freshness::Always`]）。行の無い manifest は [`run_fresh`] と同じ極性で断る。
+fn freshness_of(args: &[String], dir: &Path) -> Result<Freshness, UsageError> {
+    if !args.iter().any(|arg| arg == FRESH_FLAG) {
+        return Ok(Freshness::Always);
+    }
+    let rules = optional(args, "--rules").map_err(UsageError::Args)?;
+    fresh_of(&declared(rules, dir)?).map(Freshness::Within)
 }
 
 /// 表を出す。`read_only` でなければ先に計測（[`measure`]・event の追記と stderr の行はそのまま）し、その後の replay の
 /// `allowance` から組む（1 行形と同じ出所・stdout は表に置き換わる）。
-fn tabled(args: &[String], place: &StateDir, read_only: bool) -> Result<Outcome, UsageError> {
+fn tabled(args: &[String], place: &StateDir, read_only: bool, freshness: Freshness) -> Result<Outcome, UsageError> {
     let dir = place.path.as_path();
-    let mut outcome = if read_only { Outcome::ok(Vec::new()) } else { measure(args, dir, Freshness::Always)? };
+    let mut outcome = if read_only { Outcome::ok(Vec::new()) } else { measure(args, dir, freshness)? };
     let (_, labels, _) = accounts(args, dir)?;
     let events = store::read_all(dir).map_err(|errors| UsageError::Store(joined(&errors)))?;
     let state = replay(&events);
@@ -332,7 +356,7 @@ fn read_by_policy(dir: &Path, label: &str, reader: &Reader<'_>, prior: Option<Me
         let (rows, refreshed) = read_account(dir, label, reader);
         return Read::Measured(rows, refreshed);
     };
-    if let Some(found) = prior.as_ref().filter(|found| found.ts.as_str() > cutoff) {
+    if let Some(found) = prior.as_ref().filter(|found| within(found, cutoff)) {
         return Read::Kept(found.rows.clone(), None);
     }
     let (rows, refreshed) = read_account(dir, label, reader);
@@ -340,6 +364,27 @@ fn read_by_policy(dir: &Path, label: &str, reader: &Reader<'_>, prior: Option<Me
         (Some(found), Some(reason)) => Read::Kept(found.rows, Some(reason)),
         _ => Read::Measured(rows, refreshed),
     }
+}
+
+/// 最新の回が鮮度の境より**新しい**か（**鮮度の判定の 1 本**・前計測の [`read_by_policy`] と群の読み [`fresh_rows`] が
+/// 同じ述語を通る＝鮮度の規則を 2 か所に持たない・C2）。
+fn within(found: &MeasuredRound, cutoff: &str) -> bool {
+    found.ts.as_str() > cutoff
+}
+
+/// 口座 1 つの最新の回が鮮度の内側の実測ならその行（設計 account-lifecycle.md §19 形 2 / 5・席の hook が自席の口座を
+/// 読む口）。境は [`Freshness::Within`] と同じ（rules 行 `fleet.usage_fresh_s`・[`fresh_of`]）で、判定は前計測と同じ
+/// [`measured_round`] + [`within`]。外（行なし・数える窓に Unmeasured・古い）は `Ok(None)`。行を読めない manifest は
+/// [`UsageError::Manifest`]（前計測と同じ極性）。
+pub fn fresh_rows(manifest: &Manifest, state: &State, label: &str) -> Result<Option<Vec<Allowance>>, UsageError> {
+    let cutoff = cutoff_of(Freshness::Within(fresh_of(manifest)?)).unwrap_or_default();
+    Ok(measured_round(label, &state.allowance, None).filter(|found| within(found, &cutoff)).map(|found| found.rows))
+}
+
+/// 口座 1 つの最新の回（`ts` が最大の行の集まり・鮮度は見ない・`--show` と同じ出所）。行が無ければ `None`（設計
+/// account-lifecycle.md §19 形 2・dispatch の 1 周が前計測の後に読む口）。
+pub fn latest_of(state: &State, label: &str) -> Option<Vec<Allowance>> {
+    latest_rows(label, &state.allowance)
 }
 
 /// 測った結果が「読みに届かなかった」側（口座単位の `HttpStatus` / `Timeout`・設計 §13 (3)）ならその理由。
@@ -430,11 +475,19 @@ pub(super) fn declared(rules: Option<&str>, dir: &Path) -> Result<Manifest, Usag
 /// manifest を読み、**有効な口座の集合**（宣言 − 退役中・[`super::effective_accounts`]）の label を宣言順で返す
 /// （退役中の口座は測らない・account-lifecycle.md §3）。読んだ置き場の replay も返す（鮮度の判定と `--show` が
 /// 同じ 1 回の読みを使う）。event log を読めない周は [`UsageError::Store`]。
+///
+/// `--account <label>` の周はその 1 口座だけに絞る（設計 account-lifecycle.md §19 形 5）。有効な口座の集合に無い label は
+/// [`UsageError::Args`] で断る（client を 1 回も起こさない・黙って 0 口座に倒さない）。
 fn accounts(args: &[String], dir: &Path) -> Result<(Manifest, Vec<String>, super::State), UsageError> {
     let manifest = declared(optional(args, "--rules").map_err(UsageError::Args)?, dir)?;
     let events = store::read_all(dir).map_err(|errors| UsageError::Store(joined(&errors)))?;
     let state = replay(&events);
     let labels = super::effective_accounts(&manifest, &state);
+    let labels = match optional(args, ACCOUNT_FLAG).map_err(UsageError::Args)? {
+        None => labels,
+        Some(one) if labels.iter().any(|label| label == one) => vec![one.to_owned()],
+        Some(one) => return Err(UsageError::Args(format!("{ACCOUNT_FLAG} {one} は宣言の有効な口座に無い"))),
+    };
     Ok((manifest, labels, state))
 }
 

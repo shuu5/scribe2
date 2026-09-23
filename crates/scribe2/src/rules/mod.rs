@@ -177,6 +177,13 @@ pub enum RuleKind {
     /// 選定の前計測の鮮度（秒・設計 account-autonomy.md §13）。最新の回が全部実測でその ts が
     /// `now − 値` より新しい口座は測り直さない。`fleet usage` の口は読まない（鮮度に関わらず全口座を測る）。
     UsageFreshS,
+    /// 群の逼迫の 5 時間窓の閾値（使用率の百分率・設計 account-lifecycle.md §19 形 1）。最新の実測がこの値以上の口座を
+    /// 逼迫と判じる。読み手は dispatch の 1 周の群の段と席の hook（同じ 1 本の読み手・[`crate::hook::group`]）。
+    GroupPressure5hPct,
+    /// 群の逼迫の 7 日窓の閾値（使用率の百分率・[`Self::GroupPressure5hPct`] と対で読む）。
+    GroupPressure7dPct,
+    /// 群の逼迫のモデル別 7 日窓の閾値（使用率の百分率・[`Self::GroupPressure5hPct`] と対で読む）。
+    GroupPressureModelPct,
     /// land の追随が衝突した便を**起こし直す回数の上限**（回）。値 N = 最大 N 回起こし直す
     /// （N+1 回目の衝突で終端する）。
     FollowRetries,
@@ -285,6 +292,9 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::SeatCyclePollMs,
     RuleKind::UsageTimeoutS,
     RuleKind::UsageFreshS,
+    RuleKind::GroupPressure5hPct,
+    RuleKind::GroupPressure7dPct,
+    RuleKind::GroupPressureModelPct,
     RuleKind::FollowRetries,
     RuleKind::GateMutantsJobs,
     RuleKind::GateJobMemoryMb,
@@ -347,6 +357,9 @@ impl RuleKind {
             Self::SeatCyclePollMs => "SeatCyclePollMs",
             Self::UsageTimeoutS => "UsageTimeoutS",
             Self::UsageFreshS => "UsageFreshS",
+            // 群の逼迫の 3 行は 2 行に畳む（関数 1 本の行数の上限 R-C4-4.fn-lines・閉じた列の網羅は不変）。
+            Self::GroupPressure5hPct => "GroupPressure5hPct", Self::GroupPressure7dPct => "GroupPressure7dPct",
+            Self::GroupPressureModelPct => "GroupPressureModelPct",
             Self::FollowRetries => "FollowRetries",
             Self::GateMutantsJobs => "GateMutantsJobs",
             Self::GateJobMemoryMb => "GateJobMemoryMb",
@@ -400,6 +413,7 @@ impl RuleKind {
             | Self::SeatCyclePollMs
             | Self::UsageTimeoutS
             | Self::UsageFreshS
+            | Self::GroupPressure5hPct | Self::GroupPressure7dPct | Self::GroupPressureModelPct
             | Self::FollowRetries
             | Self::GateMutantsJobs
             | Self::GateJobMemoryMb

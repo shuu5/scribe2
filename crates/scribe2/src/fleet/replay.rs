@@ -225,7 +225,8 @@ fn apply_account(state: &mut State, event: &Event) {
         | EventKind::DispatchMark
         | EventKind::InstallRecorded
         | EventKind::RunCost
-        | EventKind::RulingReceived => {}
+        | EventKind::RulingReceived
+        | EventKind::GroupPressureNotified => {}
     }
 }
 
@@ -308,6 +309,7 @@ fn apply_seat(state: &mut State, event: &Event) {
         | EventKind::DispatchMark
         | EventKind::InstallRecorded
         | EventKind::RunCost
-        | EventKind::RulingReceived => {}
+        | EventKind::RulingReceived
+        | EventKind::GroupPressureNotified => {}
     }
 }

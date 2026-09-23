@@ -84,7 +84,8 @@ const ALLOWED_RECORD: &[cli_args::Allowed] = &[
 const ALLOWED_SHOW: &[cli_args::Allowed] = &[Allowed::value("--state-dir"), Allowed::value("--run")];
 /// `fleet export`。
 const ALLOWED_EXPORT: &[cli_args::Allowed] = &[Allowed::value("--state-dir")];
-/// `fleet usage`（`--show` / `--table` は値を取らない）。
+/// `fleet usage`（`--show` / `--table` / `--fresh` は値を取らない・`--account` は宣言の 1 口座に絞る・設計
+/// account-lifecycle.md §19 形 5）。
 const ALLOWED_USAGE: &[cli_args::Allowed] = &[
     Allowed::value("--state-dir"),
     Allowed::value("--rules"),
@@ -92,6 +93,8 @@ const ALLOWED_USAGE: &[cli_args::Allowed] = &[
     Allowed::value("--claude"),
     Allowed::switch("--show"),
     Allowed::switch("--table"),
+    Allowed::value("--account"),
+    Allowed::switch("--fresh"),
 ];
 /// `fleet select`（`--exclude` は複数可・前計測の `fleet usage` の flag も受ける）。
 const ALLOWED_SELECT: &[cli_args::Allowed] = &[
@@ -339,6 +342,7 @@ fn build_event(args: &[String]) -> Result<Event, String> {
     // 同じ（書き手は install の成功の後の `vessel update` だけ・「撃った」と「入った」を融合しない・consumer-sync.md §5）。
     // 消費の行も同じ（書き手は claude の result record を読んだ pipe の 3 か所だけ・6 値をこの口は持たない・gate-cost.md §26）。
     // run 無しの裁定の行も同じ（書き手は対話面の席を確かめる `seat ruling add` だけ・この口は `run` を要る・§9）。
+    // 群の逼迫の通知の行も同じ（書き手は注入と対の dispatch の 1 周の群の段だけ・account-lifecycle.md §19 形 3）。
     if kind.is_allowance()
         || matches!(
             kind,
@@ -348,6 +352,7 @@ fn build_event(args: &[String]) -> Result<Event, String> {
                 | EventKind::InstallRecorded
                 | EventKind::RunCost
                 | EventKind::RulingReceived
+                | EventKind::GroupPressureNotified
         )
     {
         return Err(format!("kind {kind_text} は record では書けない"));

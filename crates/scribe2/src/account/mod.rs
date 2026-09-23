@@ -315,12 +315,7 @@ fn render_group(group: &AccountGroup, state: Option<&State>) -> String {
     let seats = match state {
         None => GROUP_UNREADABLE.to_owned(),
         Some(found) => {
-            let labels: BTreeSet<&str> = found
-                .registrations
-                .values()
-                .filter(|latest| group.anchors().contains(&latest.registration.anchor))
-                .map(|latest| latest.registration.account.as_str())
-                .collect();
+            let labels = seat_accounts(group, found);
             if labels.is_empty() {
                 GROUP_NONE.to_owned()
             } else {
@@ -334,6 +329,17 @@ fn render_group(group: &AccountGroup, state: Option<&State>) -> String {
         group.accounts().join(","),
         group.anchors().len()
     )
+}
+
+/// 群の置き場を anchor に持つ席の登録 row の口座 label（重複は畳み辞書順・**導きの 1 本**＝doctor の群の行と dispatch の
+/// 1 周の群の段〔account-lifecycle.md §19 形 2〕が同じ集合を読む・C2）。
+pub fn seat_accounts<'a>(group: &AccountGroup, state: &'a State) -> BTreeSet<&'a str> {
+    state
+        .registrations
+        .values()
+        .filter(|latest| group.anchors().contains(&latest.registration.anchor))
+        .map(|latest| latest.registration.account.as_str())
+        .collect()
 }
 
 /// event log の replay（読めない周は `None`）。

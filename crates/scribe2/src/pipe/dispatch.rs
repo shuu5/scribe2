@@ -31,6 +31,9 @@ use std::process::{Command, Stdio};
 /// 台帳から候補を組む群（設計 §20・`s2-07l.531` の純移動）。
 mod candidates;
 
+/// 1 周の群の段（群の逼迫の通知・設計 account-lifecycle.md §19 形 2〜4）。
+mod group;
+
 use candidates::{entry_of, is_input, marks_of, settle, tools};
 
 /// `intake:memo` の bead（契約が未確定＝列に載せない・`.beads/PRIME.md` R3）。
@@ -410,7 +413,9 @@ fn launch_log(state_dir: &Path) -> Stdio {
 ///
 /// **`current_exe` は使わない**——`/proc/self/exe` を読むのは「器は env も HOME も読まない」（C2.2）の
 /// 外側で、xtask の門が違反として数える。`argv[0]` は**呼ばれ方そのもの**なので、同じ呼ばれ方で子を起こす。
-fn myself() -> String {
+///
+/// 席の hook が鮮度の外の口座を子で測る口（`hook::group`・設計 account-lifecycle.md §19 形 5）も同じ 1 本を読む。
+pub(crate) fn myself() -> String {
     std::env::args().next().unwrap_or_else(|| NAME.to_owned())
 }
 
@@ -571,6 +576,9 @@ struct Ledger<'a> {
 /// [`turn`] を撃つ＝**見るだけでは 1 本も起こらない**（§6）。起こせなかった便は起こした数に数えず、
 /// 理由つきで待ちに残す（終端の rc は呼び手が変えない・次の契機で拾う・C10）。
 pub fn fire(input: &Input<'_>) -> Turn {
+    // **群の段は起こす側の 1 周の先頭で走る**（設計 account-lifecycle.md §19 形 2 / 7）: 台帳を読まないので道具
+    // （`--runner`）の無い周も走り、見る側（[`turn`]・`dispatch ls`）は撃たない。群 0 の host は 1 語も出さない。
+    group::round(input);
     // **driver の死んだ便を先に起こし直す**（設計 §5）: 起こし直した便は live のままなので列の交差は
     // 動かない。起こす側より先に撃つのは、同じ 1 周の中で「止まっている便」を先に動かすためである。
     // **実装役の口が無い周は列を測らない**（`pipe run` は `--runner` を要り、器は既定を持たない）。

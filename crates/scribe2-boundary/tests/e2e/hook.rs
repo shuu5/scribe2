@@ -4380,3 +4380,244 @@ fn seat_account_mismatch_record_leaves_the_row_state_jsonl_and_brief_untouched()
     drop(seat);
     clean(&[&place.repo, &place.state, &place.sock_dir]);
 }
+
+// ─────── 群の逼迫の 1 行（account-lifecycle.md §19 形 5・契約表の行 h・`s2-07l.491`・接頭辞 `hook_group_`） ───────
+//
+// 席は偽 tmux（`stub_tmux_path`）で解き、登録 row は core の `register` で積む（口座を歯ごとに選ぶ）。閾値は埋め込みの
+// manifest（`--rules` を渡さない＝5 時間窓 85 / 7 日窓 95 / モデル別窓 95・鮮度 300 秒）。実測は event log に置く。
+
+/// 群の歯の群の名。
+const GROUP_NAME: &str = "g";
+
+/// 群の歯の窓が開き直る時刻（遠い未来の番兵・時限にならない）。
+const GROUP_FAR: &str = "2099-01-01T00:00:00Z";
+
+/// 鮮度の外の実測の ts（埋め込みの鮮度 300 秒より十分古い）。
+const GROUP_STALE_TS: &str = "2026-09-12T02:00:00Z";
+
+/// host の面に口座 a1 / a2 と群 1 つ（置き場 = `anchor`・候補 = a1 → a2＝種は a1）を書く。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn put_group(place: &RolePlace, anchor: &str) {
+    let body = format!(
+        "schema = 1\n\n[[account]]\nlabel = \"a1\"\n\n[[account]]\nlabel = \"a2\"\n\n[[account-group]]\nname = \"{GROUP_NAME}\"\n\
+         anchors = [\"{anchor}\"]\naccounts = [\"a1\", \"a2\"]\n"
+    );
+    fs::write(place.state.join(vessel::rules::HOST_MANIFEST), body).expect("host の面を書ける");
+}
+
+/// 偽 tmux の席（target `<name>:<name>`）に登録 row（口座 `account`・anchor = repo）を積み、PATH の値を返す。
+fn group_seat(place: &RolePlace, name: &str, account: &str) -> String {
+    let path = stub_tmux_path(place, name);
+    let row = Registration {
+        role: Role::Orchestrator,
+        anchor: place.repo.display().to_string(),
+        target: format!("{name}:{name}"),
+        sid: None,
+        account: account.to_owned(),
+        launch: String::new(),
+        model: None,
+    };
+    assert!(vessel::seat::role::register(&place.state, row).is_ok(), "登録 row を積める");
+    path
+}
+
+/// いまの UTC の ts（実測行と同じ字面・鮮度の内側）。
+fn group_now() -> String {
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |elapsed| elapsed.as_secs());
+    vessel::fleet::cli::format_utc(secs)
+}
+
+/// 口座 1 つの実測の回を `ts` で置く（窓ごとの使用率・モデル別窓の model は Fable）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn put_group_round(state: &Path, ts: &str, account: &str, windows: &[(vessel::fleet::WindowKind, u64)]) {
+    use vessel::fleet::{Allowance, Event, EventKind, Measured, WindowKind};
+    let policy = vessel::fleet::store::LockPolicy::embedded().expect("lock の規則を読める");
+    for (window, used_pct) in windows {
+        let measured = Measured {
+            account: account.to_owned(),
+            window: *window,
+            model: (*window == WindowKind::SevenDayModel).then(|| "Fable".to_owned()),
+            endpoint: "oauth-usage".to_owned(),
+            used_pct: *used_pct,
+            resets_at: Some(GROUP_FAR.to_owned()),
+        };
+        let event = Event {
+            schema: vessel::fleet::SCHEMA,
+            ts: ts.to_owned(),
+            kind: EventKind::AllowanceMeasured,
+            run: String::new(),
+            bead: String::new(),
+            host: "h".to_owned(),
+            actor: EventKind::AllowanceMeasured.default_actor().to_owned(),
+            stage: None,
+            seat: None,
+            pid: None,
+            detail: None,
+            allowance: Some(Allowance::Measured(measured)),
+            registration: None,
+            mark: None,
+            account: None,
+            cost: None,
+            rule: None,
+        };
+        vessel::fleet::store::append(state, &event, policy).expect("実測を置ける");
+    }
+}
+
+/// 5 時間窓・7 日窓・モデル別窓の使用率の回（歯ごとに値だけを選ぶ）。
+fn group_windows(five: u64, seven: u64, model: u64) -> [(vessel::fleet::WindowKind, u64); 3] {
+    use vessel::fleet::WindowKind;
+    [(WindowKind::FiveHour, five), (WindowKind::SevenDay, seven), (WindowKind::SevenDayModel, model)]
+}
+
+/// 逼迫の 1 行（器の字面を借りない＝外形を測る側は自分で書く）。
+fn group_line(account: &str, window: &str, used: u64, cap: u64) -> String {
+    format!("group={GROUP_NAME} account={account} window={window} used={used} cap={cap} — 移動は次の 1 周（第 3 段まで手で）")
+}
+
+/// UserPromptSubmit を偽 tmux の席で撃ち、stdout の行を返す（rc 0・stderr 0 byte を要求）。
+fn group_prompt_lines(place: &RolePlace, path: &str) -> Vec<String> {
+    let out = run_stub_hook(path, &["user-prompt-submit", "--pane", STUB_PANE], &stamp_payload(&place.repo, "sid-group"));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "UserPromptSubmit は rc 0: {}", stderr_text(&out));
+    assert_eq!(stderr_text(&out), "", "stderr 0 byte");
+    String::from_utf8_lossy(&out.stdout).lines().map(str::to_owned).collect()
+}
+
+/// SessionStart を偽 tmux の席で撃ち、名乗りの後ろの行（指示文 + 復帰の DATA + 群の行）のうち群の段の行だけを返す。
+fn group_session_lines(place: &RolePlace, path: &str) -> Vec<String> {
+    let args = ["session-start", "--pane", STUB_PANE, "--bd", &place.bd];
+    let lines = after_header(&run_stub_hook(path, &args, &stamp_payload(&place.repo, "sid-group")));
+    lines.into_iter().filter(|line| line.starts_with("group=") || line.starts_with("usage: ")).collect()
+}
+
+/// (1) SessionStart: 種 a1 の 5 時間窓 90（行の値 85 以上）の席は brief の後ろに 1 行を出し、記録 1 行
+/// （`what` = `group-pressure`）を残す。
+#[test]
+fn hook_group_session_start_brief_carries_one_pressure_line() {
+    let place = role_place();
+    put_group(&place, &place.repo.display().to_string());
+    let path = group_seat(&place, "grpstart", "a1");
+    put_group_round(&place.state, &group_now(), "a1", &group_windows(90, 10, 10));
+    let before = inject_lines(&place.state).len();
+    assert_eq!(group_session_lines(&place, &path), vec![group_line("a1", "5h", 90, 85)], "brief の後ろに 1 行");
+    let records = inject_lines(&place.state);
+    let grouped = records.iter().skip(before).filter(|line| what_of(line) == "group-pressure").count();
+    assert_eq!(grouped, 1, "群の行の記録 1 行: {records:?}");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// (2) UserPromptSubmit: 同じ席の追加文脈（stdout）はちょうど 1 行（打刻だけの周の 0 byte に 1 行が足される）。
+#[test]
+fn hook_group_user_prompt_submit_adds_one_context_line() {
+    let place = role_place();
+    put_group(&place, &place.repo.display().to_string());
+    let path = group_seat(&place, "grpprompt", "a1");
+    put_group_round(&place.state, &group_now(), "a1", &group_windows(90, 10, 10));
+    assert_eq!(group_prompt_lines(&place, &path), vec![group_line("a1", "5h", 90, 85)], "追加文脈は 1 行");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// (3) 群に属さない anchor（群の置き場が別の path）は、逼迫の実測が在っても 2 event とも 0 行（UserPromptSubmit は
+/// stdout 0 byte のまま・SessionStart は群の行を足さない）。
+#[test]
+fn hook_group_anchor_outside_every_group_prints_nothing() {
+    let place = role_place();
+    put_group(&place, "/repo/not-this-one");
+    let path = group_seat(&place, "grpoutside", "a1");
+    put_group_round(&place.state, &group_now(), "a1", &group_windows(99, 99, 99));
+    assert_eq!(group_prompt_lines(&place, &path), Vec::<String>::new(), "UserPromptSubmit は 0 byte");
+    assert_eq!(group_session_lines(&place, &path), Vec::<String>::new(), "SessionStart も群の行なし");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// (4) 閾値未満（5 時間窓 84・7 日窓 94・モデル別窓 94）は 0 行（鮮度の内側なので子も起こさない＝measuring も無い）。
+#[test]
+fn hook_group_under_threshold_prints_nothing() {
+    let place = role_place();
+    put_group(&place, &place.repo.display().to_string());
+    let path = group_seat(&place, "grpunder", "a1");
+    put_group_round(&place.state, &group_now(), "a1", &group_windows(84, 94, 94));
+    assert_eq!(group_prompt_lines(&place, &path), Vec::<String>::new(), "閾値未満は 0 行");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// (5) 鮮度の外（実測なし・古い実測）は hook の中で測らず、器を子として 1 本起こして `usage: measuring` の 1 行だけを出す
+/// （古い実測が閾値以上でも逼迫の行は出さない）。子は自席の口座 a1 だけを測る（credential の無い a1 の Unmeasured が
+/// 置き場に届き、a2 の行は 1 件も来ない）。
+#[test]
+fn hook_group_stale_measurement_spawns_one_child_and_says_measuring() {
+    let place = role_place();
+    put_group(&place, &place.repo.display().to_string());
+    let path = group_seat(&place, "grpstale", "a1");
+    let measuring = vec!["usage: measuring account=a1".to_owned()];
+    assert_eq!(group_prompt_lines(&place, &path), measuring, "実測なし: measuring の 1 行");
+    let rows = |label: &str| -> usize {
+        vessel::fleet::store::read_all(&place.state)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|event| event.allowance.as_ref())
+            .filter(|row| row.key().account == label)
+            .count()
+    };
+    let arrived = |label: &str, over: usize| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while rows(label) <= over && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        rows(label) > over
+    };
+    assert!(arrived("a1", 0), "子が a1 を測った行が置き場に届く");
+    assert_eq!(rows("a2"), 0, "子は自席の口座だけを測る");
+    put_group_round(&place.state, GROUP_STALE_TS, "a2", &group_windows(99, 99, 99));
+    let other = group_seat(&place, "grpstale2", "a2");
+    let measuring = vec!["usage: measuring account=a2".to_owned()];
+    assert_eq!(group_prompt_lines(&place, &other), measuring, "古い実測（閾値以上）も measuring の 1 行だけ");
+    assert!(arrived("a2", 3), "古い実測の口座も子が測り直す（置いた 3 行の後ろに届く）");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// (6) 席の登録 row の口座が種と違う周は**自席の口座**を読む: 種 a1 は閾値未満・席の口座 a2 の 5 時間窓 90 → a2 の 1 行
+/// （種を読む変異は 0 行になる）。
+#[test]
+fn hook_group_seat_account_differs_from_the_seed_and_is_read() {
+    let place = role_place();
+    put_group(&place, &place.repo.display().to_string());
+    let path = group_seat(&place, "grpseat", "a2");
+    let now = group_now();
+    put_group_round(&place.state, &now, "a1", &group_windows(10, 10, 10));
+    put_group_round(&place.state, &now, "a2", &group_windows(90, 10, 10));
+    assert_eq!(group_prompt_lines(&place, &path), vec![group_line("a2", "5h", 90, 85)], "自席の口座 a2 の 1 行");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// (7) モデル別窓だけが閾値以上（5 時間窓 10・7 日窓 10・モデル別窓 96）の口座も 1 行で、window は model・cap は
+/// モデル別窓の行の値（5 時間窓と 7 日窓の歯は model の窓を判定から落とす変異を捕まえない）。
+#[test]
+fn hook_group_model_window_alone_prints_the_model_window() {
+    let place = role_place();
+    put_group(&place, &place.repo.display().to_string());
+    let path = group_seat(&place, "grpmodel", "a1");
+    put_group_round(&place.state, &group_now(), "a1", &group_windows(10, 10, 96));
+    assert_eq!(group_prompt_lines(&place, &path), vec![group_line("a1", "model", 96, 95)], "model の 1 行");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// (8) 窓ごとに別の行の値を当てる: 7 日窓 90（5 時間窓の行 85 なら越える値）は 0 行・7 日窓 96 は 1 行で cap は 95
+/// （5 時間窓の行を他の窓に当てる変異を捕まえる）。
+#[test]
+fn hook_group_caps_differ_per_window() {
+    let place = role_place();
+    put_group(&place, &place.repo.display().to_string());
+    let path = group_seat(&place, "grpcaps", "a1");
+    put_group_round(&place.state, &group_now(), "a1", &group_windows(10, 90, 10));
+    assert_eq!(group_prompt_lines(&place, &path), Vec::<String>::new(), "7 日窓 90 は 0 行");
+    put_group_round(&place.state, &group_now(), "a1", &group_windows(10, 96, 10));
+    assert_eq!(group_prompt_lines(&place, &path), vec![group_line("a1", "7d", 96, 95)], "7 日窓 96 は 1 行");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}

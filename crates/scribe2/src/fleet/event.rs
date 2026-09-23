@@ -5,8 +5,8 @@
 
 use super::json_lite::{self, Value};
 use super::{
-    parse_actor, Allowance, Cost, CostSource, EventKind, Install, Mark, Measured, Registration, Shape, Stage, Unmeasured,
-    UnmeasuredReason, Usage, WindowKind, SCHEMA,
+    parse_actor, Allowance, Cost, CostSource, EventKind, Install, Mark, Measured, Pressure, Registration, Shape, Stage,
+    Unmeasured, UnmeasuredReason, Usage, WindowKind, SCHEMA,
 };
 use crate::seat::role::Role;
 
@@ -118,7 +118,7 @@ impl Event {
                 pairs.extend(Some(&self.bead).filter(|bead| !bead.is_empty()).map(|bead| ("bead", Value::Str(bead.clone()))));
                 pairs.extend(self.rule.iter().map(|rule| ("rule", Value::Str(rule.clone()))));
             }
-            Shape::Allowance | Shape::Registration | Shape::Account | Shape::Install => {}
+            Shape::Allowance | Shape::Registration | Shape::Account | Shape::Install | Shape::Pressure => {}
         }
         pairs.extend(self.account.iter().map(|label| ("account", Value::Str(label.clone()))));
         pairs.extend(self.allowance.iter().flat_map(Allowance::pairs));
@@ -246,6 +246,7 @@ impl Body {
             EventKind::InstallRecorded => Self::install(pairs),
             EventKind::RunCost => Self::cost(pairs),
             EventKind::RulingReceived => Self::ruling(pairs),
+            EventKind::GroupPressureNotified => Self::pressure(pairs),
             EventKind::RunCreated
             | EventKind::RunStage
             | EventKind::RunDone
@@ -373,6 +374,18 @@ impl Body {
             ..Self::default()
         })
     }
+
+    /// 群の逼迫の通知の行の本体（設計 account-lifecycle.md §19 形 3）: `account`（口座 label）と `detail`（[`Pressure`] の
+    /// 1 行）が**必須**。`run` / `bead` / `stage` / `seat` / `pid`（`seat` が在ると replay が幽霊の席を作る）・口座残量だけの
+    /// key・登録・列の印の key は**持たない**（在れば malformed）。
+    fn pressure(pairs: &[(String, Value)]) -> Result<Self, String> {
+        let foreign = ["run", "bead", "stage", "seat", "pid"];
+        let allowance = ALLOWANCE_KEYS.iter().filter(|key| **key != "account");
+        forbid(pairs, foreign.iter().chain(allowance).chain(REGISTRATION_KEYS).chain(MARK_KEYS))?;
+        let detail = text_of(field(pairs, "detail"), "detail")?;
+        Pressure::parse(&detail).ok_or(format!("detail {detail:?} は group=<名> window=<窓> used= cap= sent= でない"))?;
+        Ok(Self { account: Some(text_of(field(pairs, "account"), "account")?), ..Self::default() })
+    }
 }
 
 impl Event {
@@ -380,7 +393,29 @@ impl Event {
     pub fn install(&self) -> Option<Install> {
         match self.kind.shape() {
             Shape::Install => self.detail.as_deref().and_then(Install::parse),
-            Shape::Run | Shape::Allowance | Shape::Registration | Shape::Account | Shape::Mark | Shape::Cost | Shape::Ruling => None,
+            Shape::Run
+            | Shape::Allowance
+            | Shape::Registration
+            | Shape::Account
+            | Shape::Mark
+            | Shape::Cost
+            | Shape::Ruling
+            | Shape::Pressure => None,
+        }
+    }
+
+    /// 群の逼迫の通知の本体（[`EventKind::GroupPressureNotified`] でだけ `Some`）。
+    pub fn pressure(&self) -> Option<Pressure> {
+        match self.kind.shape() {
+            Shape::Pressure => self.detail.as_deref().and_then(Pressure::parse),
+            Shape::Run
+            | Shape::Allowance
+            | Shape::Registration
+            | Shape::Account
+            | Shape::Mark
+            | Shape::Install
+            | Shape::Cost
+            | Shape::Ruling => None,
         }
     }
 }

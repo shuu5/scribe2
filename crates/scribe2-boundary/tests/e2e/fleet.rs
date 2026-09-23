@@ -708,9 +708,10 @@ fn fleet_stages_place_rate_limited_after_questioned() {
     assert_eq!(Stage::parse("RateLimited"), Some(Stage::RateLimited), "as_str ↔ parse の往復");
 }
 
-/// `KINDS` の並びが**宣言順**と一致し、母集団は 19 種で末尾の 3 つが `InstallRecorded`（`vessel update` が足した・設計
+/// `KINDS` の並びが**宣言順**と一致し、母集団は 20 種で末尾の 4 つが `InstallRecorded`（`vessel update` が足した・設計
 /// consumer-sync.md §5 (4)）→ `RunCost`（消費の 1 件・gate-cost.md §26 形 (2)）→ `RulingReceived`（run 無しの裁定・
-/// fleet-event-log.md §9）。variant を足して列に足し忘れた周・件数だけ合って末尾が違う周はここで赤になる。
+/// fleet-event-log.md §9）→ `GroupPressureNotified`（群の逼迫の通知・account-lifecycle.md §19 形 3）。variant を足して列に
+/// 足し忘れた周・件数だけ合って末尾が違う周はここで赤になる。
 #[test]
 fn fleet_kinds_follow_declaration_order() {
     assert!(
@@ -718,11 +719,13 @@ fn fleet_kinds_follow_declaration_order() {
         "KINDS の並びが宣言順と乖離している（母集団 {} 種）",
         KINDS.len()
     );
-    assert_eq!(KINDS.len(), 19, "母集団（列の印までの 16 + install 1 + 消費 1 + 裁定 1）");
+    assert_eq!(KINDS.len(), 20, "母集団（列の印までの 16 + install 1 + 消費 1 + 裁定 1 + 群の逼迫の通知 1）");
     assert_eq!(
         KINDS.get(16..),
-        Some(&[EventKind::InstallRecorded, EventKind::RunCost, EventKind::RulingReceived][..]),
-        "install → 消費 → 裁定が宣言順の末尾"
+        Some(
+            &[EventKind::InstallRecorded, EventKind::RunCost, EventKind::RulingReceived, EventKind::GroupPressureNotified][..]
+        ),
+        "install → 消費 → 裁定 → 群の逼迫の通知が宣言順の末尾"
     );
     assert_eq!(EventKind::InstallRecorded.as_str(), "InstallRecorded");
     assert_eq!(EventKind::parse("InstallRecorded"), Some(EventKind::InstallRecorded), "as_str ↔ parse の往復");
@@ -1505,8 +1508,8 @@ fn fleet_allowance_windows_round_trip_on_snake_case() {
 fn account_cmd_kinds_are_fifteen_with_retire_and_restore_last() {
     assert_eq!(
         KINDS.len(),
-        19,
-        "母集団（既存 10 + 口座残量 2 + 席の登録 1 + 口座の退役・戻し 2 + 列の印 1 + install 1 + 消費 1 + 裁定 1）"
+        20,
+        "母集団（既存 10 + 口座残量 2 + 席の登録 1 + 口座の退役・戻し 2 + 列の印 1 + install 1 + 消費 1 + 裁定 1 + 群の逼迫の通知 1）"
     );
     assert_eq!(
         KINDS.get(12..16),
@@ -4663,5 +4666,73 @@ fn host_group_run_selection_applies_to_the_spawn_mouth() {
         "群の a1 は起動の選定からも外れる: {spawned:?}"
     );
     super::pipe::clean(&[&repo]);
+    drop_fixture(&fx);
+}
+
+// ─── `fleet usage` の 2 旗（account-lifecycle.md §19 形 5・席の hook が起こす子の口・接頭辞 `fleet_usage_narrowed_`） ───
+
+/// 置き場の実測の行の口座 label（行の順・重複は残す）。
+fn measured_accounts(fx: &UsageFixture) -> Vec<String> {
+    allowances(fx)
+        .into_iter()
+        .map(|row| match row {
+            Allowance::Measured(found) => found.account,
+            Allowance::Unmeasured(found) => found.account,
+        })
+        .collect()
+}
+
+/// (a) `--account a2` は宣言の 1 口座だけを測る: 偽 client の呼出は 1 回（a1 は 0 回）・stdout は a2 の 1 行・追記される行は
+/// a2 の 2 窓だけ。旗の無い口は同じ置き場で 2 口座とも測る（対）。
+#[test]
+fn fleet_usage_narrowed_account_measures_only_the_named_account() {
+    let (fx, curl) = fresh_select_fixture(&["a1", "a2"], FRESH_S);
+    let out = run_usage(&fx, &curl, &["--account", "a2"]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
+    let lines = out_lines(&out);
+    assert_eq!(lines.len(), 1, "a2 の 1 行だけ: {lines:?}");
+    assert!(lines.first().is_some_and(|line| line.starts_with("usage: account=a2 ")), "{lines:?}");
+    assert_eq!(curl_calls(&fx), 1, "名指した 1 口座だけ client を起こす");
+    assert_eq!(measured_accounts(&fx), vec!["a2".to_owned(), "a2".to_owned()], "追記は a2 の 2 窓だけ");
+    let out = run_usage(&fx, &curl, &[]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
+    assert_eq!(curl_calls(&fx), 3, "旗の無い口は 2 口座とも測る（1 + 2）");
+    drop_fixture(&fx);
+}
+
+/// (b) 宣言に無い label は typed に断る: rc 1・stdout 0 byte・stderr に名指した label の 1 行・client の呼出 0・event 0。
+/// 値の無い `--account` も同じく断る（黙って全口座に倒さない）。
+#[test]
+fn fleet_usage_narrowed_account_refuses_an_undeclared_label_without_calls() {
+    let (fx, curl) = fresh_select_fixture(&["a1", "a2"], FRESH_S);
+    let out = run_usage(&fx, &curl, &["--account", "nope"]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{out:?}");
+    assert!(out.stdout.is_empty(), "測らない: {out:?}");
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert!(stderr.contains("--account nope"), "断りは label を名指す: {stderr}");
+    assert_eq!(curl_calls(&fx), 0, "client を起こさない");
+    assert!(!store::events_path(&fx.state).exists(), "event を書かない");
+    let bare = run_usage(&fx, &curl, &["--fresh", "--account"]);
+    assert_ne!(bare.status.code(), Some(i32::from(RC_OK)), "値の無い --account は断る: {bare:?}");
+    assert_eq!(curl_calls(&fx), 0, "値の無い周も client を起こさない");
+    drop_fixture(&fx);
+}
+
+/// (c) `--fresh` は選定の前計測と同じ鮮度つき: 新しい実測（いまの ts）を持つ a1 は測り直さず（値は置いたまま）、行の無い a2
+/// だけを測る（呼出 1）。`--fresh --account a1` は新しい a1 を測らない（呼出 0 のまま）。旗の無い口の鮮度なしは
+/// `fleet_select_fresh_usage_mouth_measures_every_account_regardless_of_freshness` が pin する。
+#[test]
+fn fleet_usage_narrowed_fresh_skips_the_recently_measured_account() {
+    let (fx, curl) = fresh_select_fixture(&["a1", "a2"], FRESH_S);
+    put_round(&fx, &now_ts(), "a1");
+    let out = run_usage(&fx, &curl, &["--fresh"]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
+    assert_eq!(curl_calls(&fx), 1, "鮮度の外の a2 だけを測る");
+    assert_eq!(latest_five_hour(&fx, "a1"), Some(PLACED_PCT), "a1 は置いた実測のまま");
+    assert_eq!(latest_five_hour(&fx, "a2"), Some(REMEASURED_PCT), "a2 は測った値");
+    let out = run_usage(&fx, &curl, &["--fresh", "--account", "a1"]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
+    assert_eq!(curl_calls(&fx), 1, "新しい a1 は名指しても測り直さない");
+    assert_eq!(out_lines(&out).len(), 1, "a1 の 1 行（最新の実測の 1 行形）: {out:?}");
     drop_fixture(&fx);
 }

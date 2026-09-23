@@ -235,6 +235,32 @@ enabled = true
 ruling = "user 2026-09-16T11:14Z"
 ruled_at = "2026-09-16"
 
+# 群の逼迫の閾値（使用率の百分率・窓ごとに 1 行・設計 account-lifecycle.md §19 形 1・ADR-0055）。どれかの窓の最新の
+# 実測がこの値以上なら群を逼迫と判じる（dispatch の 1 周と席の hook が同じ読み手で読む）。
+[[rule]]
+id = "fleet.group_pressure_5h_pct"
+kind = "GroupPressure5hPct"
+value = 85
+enabled = true
+ruling = "user 2026-09-19T12:12Z"
+ruled_at = "2026-09-19"
+
+[[rule]]
+id = "fleet.group_pressure_7d_pct"
+kind = "GroupPressure7dPct"
+value = 95
+enabled = true
+ruling = "user 2026-09-19T12:12Z"
+ruled_at = "2026-09-19"
+
+[[rule]]
+id = "fleet.group_pressure_model_pct"
+kind = "GroupPressureModelPct"
+value = 95
+enabled = true
+ruling = "user 2026-09-19T12:12Z"
+ruled_at = "2026-09-19"
+
 [[rule]]
 id = "runner.allowed_commands"
 kind = "RunnerAllowedCommands"

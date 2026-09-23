@@ -75,6 +75,10 @@ pub enum EventKind {
     /// user の逐語・`bead` と `rule`（rules 行の id）は任意・**便に紐づかない**（replay は便を作らない）。書き手は
     /// `seat ruling add` だけ（`fleet record` は断る）。
     RulingReceived,
+    /// 群の逼迫を群の置き場の席へ知らせた（設計 account-lifecycle.md §19 形 3・[`Shape::Pressure`]）。`account` = 逼迫の
+    /// 口座 label・本体は [`Pressure`]（`detail` の 1 行）。**便に紐づかない**。同じ群・口座・窓の 2 度目の通知を
+    /// 塞ぐのはこの行の log の位置である（§19 形 4）。
+    GroupPressureNotified,
 }
 
 /// [`EventKind`] の全 variant。
@@ -98,6 +102,7 @@ pub const KINDS: &[EventKind] = &[
     EventKind::InstallRecorded,
     EventKind::RunCost,
     EventKind::RulingReceived,
+    EventKind::GroupPressureNotified,
 ];
 
 impl EventKind {
@@ -123,6 +128,7 @@ impl EventKind {
             Self::InstallRecorded => "InstallRecorded",
             Self::RunCost => "RunCost",
             Self::RulingReceived => "RulingReceived",
+            Self::GroupPressureNotified => "GroupPressureNotified",
         }
     }
 
@@ -151,7 +157,8 @@ impl EventKind {
             | Self::AccountRestored
             | Self::DispatchMark
             | Self::InstallRecorded
-            | Self::RunCost => ACTOR_MACHINE,
+            | Self::RunCost
+            | Self::GroupPressureNotified => ACTOR_MACHINE,
         }
     }
 
@@ -181,6 +188,7 @@ impl EventKind {
             Self::InstallRecorded => Shape::Install,
             Self::RunCost => Shape::Cost,
             Self::RulingReceived => Shape::Ruling,
+            Self::GroupPressureNotified => Shape::Pressure,
         }
     }
 
@@ -216,6 +224,9 @@ pub enum Shape {
     /// run 無しの裁定（`detail` = 逐語が必須・`bead` と `rule` は任意・`run` / `stage` / `seat` / `pid` を持たない・設計
     /// fleet-event-log.md §9）。
     Ruling,
+    /// 群の逼迫の通知（`account` = 口座 label と `detail` = [`Pressure`] の 1 行が必須・`run` / `bead` / `stage` / `seat` /
+    /// `pid` を持たない・設計 account-lifecycle.md §19 形 3）。
+    Pressure,
 }
 
 /// [`Shape`] の全 variant（宣言順・`enum-slices` が集合完全性を測る）。
@@ -228,6 +239,7 @@ pub const SHAPES: &[Shape] = &[
     Shape::Install,
     Shape::Cost,
     Shape::Ruling,
+    Shape::Pressure,
 ];
 
 /// 消費の 1 件の出所（**閉じた 3 値**・設計 gate-cost.md §26 形 (2)）。
@@ -380,6 +392,53 @@ impl Install {
         let (sha, path) = text.strip_prefix("sha=")?.split_once(" path=")?;
         let hex = sha.len() == 12 && sha.chars().all(|ch| matches!(ch, '0'..='9' | 'a'..='f'));
         (hex && !path.is_empty()).then(|| Self { sha: sha.to_owned(), path: path.to_owned() })
+    }
+}
+
+/// 群の逼迫を知らせた 1 回（[`EventKind::GroupPressureNotified`] の本体・設計 account-lifecycle.md §19 形 3）。
+///
+/// 行には `detail` の 1 行（`group=<名> window=<5h|7d|model> used=<n> cap=<n> sent=<n>`）として載り、口座 label は行の
+/// `account` 列が持つ。[`Install`] と同じく書き側（[`Self::render`]）と読み側（[`Self::parse`]）が同じ形を使い、形の外れた
+/// 行は malformed で読む（黙って落とさない）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pressure {
+    /// 群の名（host の面の `[[account-group]]` の `name`）。
+    pub group: String,
+    /// 閾値を越えた窓のうち使用率が最大の 1 つ。
+    pub window: WindowKind,
+    /// その窓の使用率（整数 %）。
+    pub used: u64,
+    /// その窓の閾値の行の値（整数 %）。
+    pub cap: u64,
+    /// 1 行を注入した送り先（群の置き場の orchestrator の登録 row の席）の数。
+    pub sent: u64,
+}
+
+impl Pressure {
+    /// `detail` に書く 1 行。
+    pub fn render(&self) -> String {
+        format!(
+            "group={} window={} used={} cap={} sent={}",
+            self.group,
+            self.window.short(),
+            self.used,
+            self.cap,
+            self.sent
+        )
+    }
+
+    /// [`Self::render`] の字面から読む。群の名が空・窓が 3 語の外・数が整数でない・語の欠けは `None`。群の名は
+    /// 最後の ` window=` の手前までを取る（名の中の空白で割らない）。
+    pub fn parse(text: &str) -> Option<Self> {
+        let (group, rest) = text.strip_prefix("group=")?.rsplit_once(" window=")?;
+        let mut words = rest.split(' ');
+        let window = WindowKind::from_short(words.next()?)?;
+        let mut number = |key: &str| -> Option<u64> {
+            let value = words.next()?.strip_prefix(key)?;
+            (!value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit())).then(|| value.parse().ok())?
+        };
+        let (used, cap, sent) = (number("used=")?, number("cap=")?, number("sent=")?);
+        (!group.is_empty() && words.next().is_none()).then(|| Self { group: group.to_owned(), window, used, cap, sent })
     }
 }
 
@@ -559,6 +618,20 @@ impl WindowKind {
     /// 字面から引く。未知なら `None`。
     pub fn parse(text: &str) -> Option<Self> {
         WINDOWS.iter().copied().find(|found| found.as_str() == text)
+    }
+
+    /// 群の逼迫の行の `window=` に書く短い字面（`5h` / `7d` / `model`・設計 account-lifecycle.md §19 形 3）。
+    pub fn short(self) -> &'static str {
+        match self {
+            Self::FiveHour => "5h",
+            Self::SevenDay => "7d",
+            Self::SevenDayModel => "model",
+        }
+    }
+
+    /// [`Self::short`] の字面から引く。未知なら `None`。
+    pub fn from_short(text: &str) -> Option<Self> {
+        WINDOWS.iter().copied().find(|found| found.short() == text)
     }
 }
 

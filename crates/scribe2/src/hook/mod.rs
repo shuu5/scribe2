@@ -12,6 +12,7 @@
 //! （[`store::append_line`]）を通す。
 
 pub mod command;
+pub mod group;
 pub mod guard;
 pub mod ledger_guard;
 pub mod permission;
@@ -188,7 +189,14 @@ pub fn dispatch(args: &[String], payload: &str) -> Outcome {
         }
         Some(EVENT_PRE_TOOL_USE) => pre_tool_use(&hooked, payload, started),
         Some(EVENT_PERMISSION_REQUEST) => permission_request(&hooked, payload, started),
-        Some(EVENT_USER_PROMPT_SUBMIT) => stamped(args, payload, Event::UserPromptSubmit, &dir),
+        Some(EVENT_USER_PROMPT_SUBMIT) => {
+            let mut outcome = stamped(args, payload, Event::UserPromptSubmit, &dir);
+            // 群の逼迫の 1 行を追加文脈へ（設計 account-lifecycle.md §19 形 5・群に属さない anchor は 0 byte のまま）。
+            let (out, err) = group::lines(&hooked, (EVENT_USER_PROMPT_SUBMIT, "UserPromptSubmit"), started);
+            outcome.out.extend(out);
+            outcome.err.extend(err);
+            outcome
+        }
         Some(EVENT_STOP) => stamped(args, payload, Event::Stop, &dir),
         Some(EVENT_PRE_COMPACT) => pre_compact(&hooked, payload, started),
         _ => Outcome::ok(Vec::new()),
@@ -480,6 +488,10 @@ fn session_start(hooked: &Hooked, version: u64, payload: &str, started: Instant)
     let mut outcome = Outcome::ok_line(line);
     outcome.err = record_lines(hooked.dir, &entry);
     brief(hooked, &mut outcome, payload, started);
+    // 群の逼迫の 1 行は brief の後ろ（設計 account-lifecycle.md §19 形 5・群に属さない anchor は 1 語も足さない）。
+    let (out, err) = group::lines(hooked, (EVENT_SESSION_START, "SessionStart"), started);
+    outcome.out.extend(out);
+    outcome.err.extend(err);
     outcome
 }
 
