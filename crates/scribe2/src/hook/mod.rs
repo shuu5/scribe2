@@ -14,6 +14,7 @@
 pub mod command;
 pub mod group;
 pub mod guard;
+pub mod host_guard;
 pub mod ledger_guard;
 pub mod permission;
 pub mod precompact;
@@ -359,7 +360,7 @@ fn cwd_of(payload: &str) -> Option<PathBuf> {
 /// command 行は `"` や `\` を含みうる（[`field`] は escape を解かないので、escape された `"` の手前で
 /// 切れて後ろの subcommand を見落とす＝fail-open）。入れ子の reader（[`json_tree`]）で escape を解いて
 /// 読み、payload が木として読めない周だけ [`field`] へ倒す。
-fn command_of(payload: &str) -> Option<String> {
+pub(crate) fn command_of(payload: &str) -> Option<String> {
     let parsed = json_tree::parse(payload).ok();
     let nested = parsed
         .as_ref()

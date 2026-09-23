@@ -10,7 +10,7 @@
 //! に置いたまま。呼び手（`pipe/cli.rs`・`pipe/cli/intake.rs`・歯）の `use` は親の再 export を通る。
 
 use super::super::closure::{closure, surface_closure, teeth_places, unresolved_names, Base, ClosureError, Fields, Source};
-use super::super::declaration::{self, read_write_set, Basis, Ceiling, NewFilePolicy};
+use super::super::declaration::{self, read_write_set, Basis, Ceiling, NewFilePolicy, WriteSetItem};
 use super::super::refuse::{covered, Refuse, NEW_FILE};
 use super::{read_table, unreadable, Context, ContractRow, Finding, PromiseRow, TableError, BEGIN, DESIGN_DIR, END};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK};
@@ -38,6 +38,7 @@ pub fn check_table(doc: &str, rows: &[ContractRow], ids: &[&str], ctx: &Context<
         let unresolved = row.depends.iter().filter(|id| !ids.contains(&id.as_str()));
         found.extend(unresolved.map(|id| Finding::table(TableError::DependsUnresolved { line: row.line, id: id.clone() })));
         found.extend(write_set_findings(row, ctx));
+        found.extend(growth_findings(row));
         // 閉包・外形 pin・名指しは `.rs` / `.snap` の本文を読む。1 本でも読めなければ行ごとに 1 件で名指し、
         // 測れない検査は撃たない（読めなさを「足りない file なし」に読み替えない・NFR4）。
         match unreadable_input(ctx) {
@@ -222,6 +223,19 @@ fn write_set_findings(row: &ContractRow, ctx: &Context<'_>) -> Vec<Finding> {
         );
     }
     found
+}
+
+/// `growth` の項目の形（§46 形 4・読み手は受付と同じ 1 本 [`WriteSetItem::read_growth`]）: 崩れた項目を 1 件ずつ
+/// [`TableError::GrowthForm`] で行の見出しに名指す。write-set の欄を持たない行（導出・約束）は名指す先の項目が無いので、
+/// growth の項目は全部「write-set に無い」になる。
+fn growth_findings(row: &ContractRow) -> Vec<Finding> {
+    match WriteSetItem::read_growth(&row.growth, &row.write_set) {
+        Ok(_) => Vec::new(),
+        Err(unfit) => unfit
+            .into_iter()
+            .map(|(item, reason)| Finding::table(TableError::GrowthForm { line: row.line, item, reason }))
+            .collect(),
+    }
 }
 
 /// 閉包の入力（`.rs` と `.snap`）のうち読めない 1 本の理由（全部読めれば `None`・行ごとに 1 件で名指す材料）。
@@ -715,6 +729,7 @@ mod tests {
             classes: Vec::new(),
             opens: Vec::new(),
             targets: Vec::new(),
+            growth: Vec::new(),
         }
     }
 
@@ -1128,5 +1143,53 @@ mod tests {
         let doc = "## 5. t\nbody\n```\nin-fence\n```\n";
         let (outside, found) = counted(doc, "5", |at| at == 2);
         assert_eq!(outside, 1, "fence の外の行を拾う（外 {outside} 件 / 母集団 本文 {} 行）: {found:?}", found.len());
+    }
+
+    /// §46 形 4（行 ax）: growth の 5 つの崩れ（write-set に無い path・`.rs` でない path・`-` の項目・重複・形の崩れ）を
+    /// 1 行 1 例で持つ表は、`growth-form` の 5 件を各行の見出しの行番号で名指し、正しい 3 項目（素の file・行数 0・`+` の
+    /// 新規 file）の行は 0 件。同じ 6 行から growth を外すと 0 件（findings の出所は growth の欄）。
+    #[test]
+    fn contract_check_growth_names_five_unfit_forms_with_their_row_line() {
+        let requirements = Ok(["FR1".to_owned()].into_iter().collect::<BTreeSet<String>>());
+        let (allowed, sources) = (["git".to_owned()], sources());
+        let tracked = ["src/kind.rs".to_owned(), "src/use.rs".to_owned(), "docs/d.md".to_owned()];
+        let ctx = Context {
+            allowed: &allowed,
+            denied: &[],
+            requirements: &requirements,
+            sources: &sources,
+            tracked: &tracked,
+            snapshots: &[],
+            declared: &Ok(Vec::new()),
+        };
+        let owned = |items: &[&str]| items.iter().map(|item| (*item).to_owned()).collect::<Vec<String>>();
+        let cases: [(&[&str], &[&str], &str); 6] = [
+            (&["src/kind.rs"], &["src/none.rs:5"], "write-set の file の項目"),
+            (&["src/kind.rs", "docs/d.md"], &["docs/d.md:5"], ".rs でない"),
+            (&["src/kind.rs", "-src/use.rs"], &["src/use.rs:5"], "- / ~ / ="),
+            (&["src/kind.rs"], &["src/kind.rs:5", "src/kind.rs:6"], "2 回"),
+            (&["src/kind.rs"], &["src/kind.rs"], ": が無い"),
+            (&["src/kind.rs", "src/use.rs", "+src/new.rs"], &["src/kind.rs:10", "src/use.rs:0", "src/new.rs:40"], ""),
+        ];
+        let mut rows: Vec<ContractRow> = Vec::new();
+        for (index, (write_set, growth, _)) in cases.iter().enumerate() {
+            let mut one = row((index as u64 + 1) * 10, &format!("g{index}"));
+            one.write_set = owned(write_set);
+            one.growth = owned(growth);
+            rows.push(one);
+        }
+        let found = check_table(DOC, &rows, &ids_of(&rows), &ctx);
+        let shown: Vec<(u64, String)> = found.iter().map(|finding| (finding.line, finding.refuse.label())).collect();
+        let want: Vec<(u64, String)> = (1..=5_u64).map(|at| (at * 10, "contract-table:growth-form".to_owned())).collect();
+        assert_eq!(shown, want, "5 つの崩れを 1 件ずつ行番号付きで（正しい 3 項目の行 60 は 0 件）");
+        for (finding, (_, growth, needle)) in found.iter().zip(cases) {
+            let reason = finding.refuse.reason();
+            let item = growth.last().copied().unwrap_or_default();
+            assert!(reason.contains(needle) && reason.contains(&format!("{item:?}")), "行 {} は {item} と {needle} を名乗る: {reason}", finding.line);
+        }
+        for one in &mut rows {
+            one.growth.clear();
+        }
+        assert!(check_table(DOC, &rows, &ids_of(&rows), &ctx).is_empty(), "growth を外した同じ行は 0 件");
     }
 }

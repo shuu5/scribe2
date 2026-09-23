@@ -781,6 +781,7 @@ pub(crate) mod fixture {
             classes: owned(classes),
             opens: Vec::new(),
             touches: Vec::new(),
+            growth: Vec::new(),
         }
     }
 

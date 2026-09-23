@@ -1,14 +1,17 @@
 //! Bash の command guard（`pre-tool-use` の 3 番目の門・設計 docs/design/vessel-hook.md §5・ADR-0025 §2.1 / §2.2・
 //! SRS FR56 / FR45 / FR20 / NFR4・憲法 N1 / C1 / C2 / C14 / C16）。
 //!
-//! 禁じる語列は rules 行 [`ROW`]（`runner.denied_commands`・値は語列の配列）が持ち、`runner.allowed_commands`
-//! と対で読む**上限側の禁止**である（vessel 宣言は緩められない・C14）。照合は 1 関数 [`denied_in`]（pure・
-//! I/O なし）で、intake（`pipe::declaration` の unfit）も同じ関数を verify 行に掛ける（C2）。
+//! 禁じる語列は rules 行 [`ROW`]（`runner.denied_commands`・値は語列の配列）と host-guard の語列の 3 行
+//! （[`WORD_ROWS`]・enabled を見ない・設計 vessel-hook.md §11 の形 b 5）が持ち、`runner.allowed_commands` と対で読む
+//! **上限側の禁止**である（vessel 宣言は緩められない・C14）。照合は 1 関数 [`matched`]（pure・I/O なし）で、従来の
+//! 分割 [`split`] との合成 [`denied_in`] を intake（`pipe::declaration` の unfit）も verify 行に掛け、host-guard は
+//! 起票の門の分割で切った segment を同じ [`matched`] に掛ける（C2）。
 //!
 //! **席の弁別はしない**（runner / planner / 管理席の全 Bash に同じ判定・席ごとの例外行を持たない）。rules が読めない・
 //! 行が無い・不発効の周は **deny**（FailClosed・[`POLARITY`]・読めない store を黙って通さない・NFR4）。引用符の中身・
 //! 変数展開・interpreter の引数（`sh -c "…"`）は解かない（ADR-0025 §2.6・v3）。
 
+use super::host_guard::WORD_ROWS;
 use crate::name::NAME;
 use crate::polarity::{OnFailure, Polarity, Timing};
 use crate::rules::manifest::Manifest;
@@ -51,17 +54,27 @@ pub enum CommandDecision {
     },
 }
 
-/// command 行が禁じる語列に当たるか（**この 1 本が唯一の判定**・pure）。
+/// command 行が禁じる語列に当たるか（pure）。従来の分割（[`split`]）と照合（[`matched`]）の合成で、外形は不変。
 ///
 /// command を [`SEPARATORS`] で segment に分け、各 segment を空白で語に分け、語列の**先頭語が segment の先頭語と
 /// 一致し、残りの語がすべて segment の語に含まれる**（順序不問）とき当たる。返すのは manifest の並びで最初の 1 件
 /// （高々 1 つ）。
 pub fn denied_in(command: &str, denied: &[String]) -> Option<Hit> {
-    let segments: Vec<Vec<&str>> = command
+    matched(&split(command), denied)
+}
+
+/// 従来の分割: [`SEPARATORS`] で segment に分け、各 segment を空白で語に分ける（引用符は解かない・空 segment は捨てる）。
+pub fn split(command: &str) -> Vec<Vec<&str>> {
+    command
         .split(SEPARATORS)
         .map(|segment| segment.split_whitespace().collect())
         .filter(|words: &Vec<&str>| !words.is_empty())
-        .collect();
+        .collect()
+}
+
+/// segment の列と語列の照合（**この 1 本が唯一の照合**・pure・host-guard も同じ関数に掛ける＝設計 vessel-hook.md §11
+/// の形 b 4）。語列の先頭語が segment の先頭語と一致し残りの語をすべて含む最初の語列（manifest の並び）を返す。
+pub fn matched<S: AsRef<str>>(segments: &[Vec<S>], denied: &[String]) -> Option<Hit> {
     denied
         .iter()
         .find(|sequence| {
@@ -70,9 +83,10 @@ pub fn denied_in(command: &str, denied: &[String]) -> Option<Hit> {
                 return false;
             };
             let rest: Vec<&str> = words.collect();
-            segments
-                .iter()
-                .any(|segment| segment.first() == Some(&head) && rest.iter().all(|word| segment.contains(word)))
+            segments.iter().any(|segment| {
+                segment.first().map(AsRef::as_ref) == Some(head)
+                    && rest.iter().all(|word| segment.iter().any(|found| found.as_ref() == *word))
+            })
         })
         .map(|sequence| Hit { sequence: sequence.clone() })
 }
@@ -81,43 +95,61 @@ pub fn denied_in(command: &str, denied: &[String]) -> Option<Hit> {
 pub fn decide(command: &str, rules: Option<&Path>) -> CommandDecision {
     match rules.map_or_else(Manifest::embedded, Manifest::load) {
         Ok(manifest) => judge(command, &manifest),
-        Err(_) => refused("rules-unreadable"),
+        Err(_) => refused(ROW, "rules-unreadable"),
     }
 }
 
-/// manifest の行だけから判定する（pure・file を撃たない）。行が無い・不発効・値が列でない周は deny。
+/// manifest の行だけから判定する（pure・file を撃たない）。読む行（[`denied_of`]）のどれかが無い・列でない周は deny。
+/// 当たった周の deny 文は、当たった語列の出所の行 id を名指す（行の並びで最初に当たる語列を持つ行）。
 pub fn judge(command: &str, manifest: &Manifest) -> CommandDecision {
-    let Some(denied) = denied_of(manifest) else {
-        return refused(&format!("no-row {ROW}"));
+    let sources = match sources_of(manifest) {
+        Ok(found) => found,
+        Err(id) => return refused(id, &format!("no-row {id}")),
     };
-    match denied_in(command, &denied) {
-        Some(hit) => CommandDecision::Deny { line: denied_line(&hit), what: hit.sequence },
+    let segments = split(command);
+    match sources.iter().find_map(|(id, sequences)| matched(&segments, sequences).map(|hit| (*id, hit))) {
+        Some((row, hit)) => CommandDecision::Deny { line: denied_line(&hit, row), what: hit.sequence },
         None => CommandDecision::Allow,
     }
 }
 
-/// 行の値（無い・不発効・列でない周は `None`）。
-fn denied_of(manifest: &Manifest) -> Option<Vec<String>> {
-    let row = manifest.get(ROW).filter(|row| row.enabled)?;
-    match row.value {
-        RuleValue::List(ref sequences) => Some(sequences.clone()),
-        _ => None,
+/// 読む行ごとの（行 id, 語列）: [`ROW`]（発効必須・従来）∪ host-guard の語列の 3 行（[`WORD_ROWS`]・**enabled を見ない**＝
+/// host-guard の口を切っても command guard は読み続ける・設計 vessel-hook.md §11 の形 b 5）。行が無い・[`ROW`] が
+/// 不発効・値が列でない周は `None`（[`judge`] は欠けた行の id を名指して `no-row <id>` で断る・FailClosed）。
+pub fn denied_of(manifest: &Manifest) -> Option<Vec<(&'static str, Vec<String>)>> {
+    sources_of(manifest).ok()
+}
+
+/// [`denied_of`] の本体。揃わない周は最初に欠けた行の id を `Err` で返す。
+fn sources_of(manifest: &Manifest) -> Result<Vec<(&'static str, Vec<String>)>, &'static str> {
+    let mut sources = Vec::with_capacity(WORD_ROWS.len().saturating_add(1));
+    let runner = manifest.get(ROW).filter(|row| row.enabled).ok_or(ROW)?;
+    let RuleValue::List(ref sequences) = runner.value else {
+        return Err(ROW);
+    };
+    sources.push((ROW, sequences.clone()));
+    for id in WORD_ROWS {
+        let RuleValue::List(ref sequences) = manifest.get(id).ok_or(id)?.value else {
+            return Err(id);
+        };
+        sources.push((id, sequences.clone()));
     }
+    Ok(sources)
 }
 
 /// deny 文: **rules 行 id と当たった語列と次の一手**を 1 行で（ADR-0025 §2.2・字面は設計 vessel-hook.md §5 が正本）。
-fn denied_line(hit: &Hit) -> String {
+fn denied_line(hit: &Hit, row: &str) -> String {
     format!(
-        "{NAME}: deny {} は rules 行 {ROW} が禁じる（N1 / C16）— 契約の手順（1 行当ての A/B）か別の形に書き直す",
+        "{NAME}: deny {} は rules 行 {row} が禁じる（N1 / C16）— 契約の手順（1 行当ての A/B）か別の形に書き直す",
         hit.sequence
     )
 }
 
-/// 禁じる語列を解けない周の deny（FailClosed・理由の 1 語つき・権能 guard の断りと同じ形）。
-fn refused(reason: &str) -> CommandDecision {
+/// 禁じる語列を解けない周の deny（FailClosed・読めない行の id と理由の 1 語つき・権能 guard の断りと同じ形）。
+fn refused(row: &str, reason: &str) -> CommandDecision {
     CommandDecision::Deny {
         what: format!("reason={reason}"),
-        line: format!("{NAME}: deny Bash は rules 行 {ROW} を読めない reason={reason}（禁じる語列を解けない周は通さない・N1 / C16）"),
+        line: format!("{NAME}: deny Bash は rules 行 {row} を読めない reason={reason}（禁じる語列を解けない周は通さない・N1 / C16）"),
     }
 }
 
@@ -142,10 +174,15 @@ mod tests {
             .collect()
     }
 
-    /// `runner.denied_commands` の行を 1 つ持つ manifest（`enabled` は引数）。
+    /// `runner.denied_commands` の行（`enabled` は引数）と host-guard の語列の 3 行を持つ manifest。
     fn manifest_with(enabled: bool) -> Manifest {
         Manifest::parse(&format!(
-            "schema = 1\n\n[[rule]]\nid = \"{ROW}\"\nkind = \"RunnerDeniedCommands\"\nvalue = [\"git push --force\", \"cargo mutants\"]\nenabled = {enabled}\nruling = \"r\"\nruled_at = \"d\"\n"
+            "schema = 1\n\n[[rule]]\nid = \"{ROW}\"\nkind = \"RunnerDeniedCommands\"\nvalue = [\"git push --force\", \"cargo mutants\"]\nenabled = {enabled}\nruling = \"r\"\nruled_at = \"d\"\n{}",
+            [("git", "git push --force"), ("tmux", "tmux kill-server"), ("ledger", "bd delete")]
+                .map(|(kind, sequence)| format!(
+                    "\n[[rule]]\nid = \"host_guard.{kind}\"\nkind = \"HostGuardDeniedCommands\"\nvalue = [\"{sequence}\"]\nenabled = true\nruling = \"r\"\nruled_at = \"d\"\n"
+                ))
+                .concat()
         ))
         .unwrap_or_else(|errors| panic!("fixture の manifest を読める: {errors:?}"))
     }

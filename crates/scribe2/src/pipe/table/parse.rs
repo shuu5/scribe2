@@ -258,6 +258,7 @@ fn typed(raw: &TableRow, offset: u64, errors: &mut Vec<TableError>) -> Option<Co
         classes: list_of(raw, "classes", offset, errors),
         opens: list_of(raw, "opens", offset, errors),
         targets: targets_of(raw, offset, errors),
+        growth: list_of(raw, "growth", offset, errors),
     };
     (errors.len() == before).then_some(row)
 }

@@ -1277,11 +1277,12 @@ fn rules_flip_marks_per_pr_row_is_declared_on_five_faces() {
     assert!(row.enabled, "既定で効く");
     assert_eq!((row.ruling.as_str(), row.ruled_at.as_str()), FLIP_RULING, "裁定 id と裁定日");
     assert_eq!(int_row(&manifest, "flip.marks_per_pr"), Ok(16), "整数の読み手で 16 が取れる");
-    let tail: Vec<RuleKind> = ALL.iter().rev().take(4).rev().copied().collect();
+    let at = ALL.iter().position(|kind| *kind == RuleKind::PipeMaxLive).unwrap_or_default();
+    let run: Vec<RuleKind> = ALL.iter().skip(at).take(4).copied().collect();
     assert_eq!(
-        tail,
+        run,
         vec![RuleKind::PipeMaxLive, RuleKind::FlipDocsOnlyFaces, RuleKind::FlipMarksPerPr, RuleKind::LedgerDeniedWrites],
-        "flip の 2 kind は PipeMaxLive の後ろに対で在り、その後ろが `.169` の kind（母集団 {} 種）",
+        "flip の 2 kind は PipeMaxLive の後ろに対で在り、その後ろが `.169` の kind（その後ろに `.574` の 2 kind・母集団 {} 種）",
         ALL.len()
     );
     assert_eq!(RuleKind::parse("FlipMarksPerPr"), Some(RuleKind::FlipMarksPerPr), "kind を字面から引ける");
@@ -1308,6 +1309,83 @@ fn rules_ledger_denied_writes_row_is_declared_on_four_faces() {
     assert!(errors.join("\n").contains("未知である"), "綴り違いの kind は読めない: {errors:?}");
     let errors = rejected(&one_row(RuleKind::LedgerDeniedWrites, "16")).expect("整数の値の fixture が受理された");
     assert!(errors.join("\n").contains("形と合わない"), "形は List だけ: {errors:?}");
+}
+
+// ─── host の破壊防止の見張りの種類ごとの行（設計 vessel-hook.md §11 行 b・ADR-0056・`s2-07l.574`・接頭辞
+// `rules_embedded_manifest_declares_host_guard_`） ───
+
+/// host の見張りの 4 行が持つ裁定 id と裁定日（user 裁定 2026-09-19T15:28Z・UTC・逐語は台帳）。
+const HOST_GUARD_RULING: (&str, &str) = ("user 2026-09-19T15:28Z", "2026-09-19");
+
+/// 4 行（host_guard.git / tmux / ledger は HostGuardDeniedCommands・host_guard.rm は HostGuardRmProtected）が id / kind / 形 List /
+/// enabled / 裁定 id / 裁定日で引け、同じ裁定 id を持つ行はちょうど 4 本。host_guard.git は runner.denied_commands の git の
+/// 7 語列の写しで、rm の値は守る集合の 3 記号。**値は manifest が持つ**（C1 / C5）。
+#[test]
+fn rules_embedded_manifest_declares_host_guard_rows_with_one_ruling() {
+    let manifest = Manifest::embedded().unwrap_or_else(|errors| panic!("埋め込み manifest が拒まれた: {errors:?}"));
+    for (id, kind) in [
+        ("host_guard.git", RuleKind::HostGuardDeniedCommands),
+        ("host_guard.tmux", RuleKind::HostGuardDeniedCommands),
+        ("host_guard.ledger", RuleKind::HostGuardDeniedCommands),
+        ("host_guard.rm", RuleKind::HostGuardRmProtected),
+    ] {
+        let row = manifest.get(id).unwrap_or_else(|| panic!("{id} の行が在る"));
+        assert_eq!((row.kind, row.kind.shape()), (kind, ValueShape::List), "{id} の kind と形");
+        assert!(row.enabled, "{id} は既定で効く");
+        assert_eq!((row.ruling.as_str(), row.ruled_at.as_str()), HOST_GUARD_RULING, "{id} の裁定 id と裁定日");
+        let RuleValue::List(ref items) = row.value else {
+            panic!("{id} の値は列");
+        };
+        assert!(!items.is_empty(), "{id} の値は非空");
+    }
+    let shared = manifest.rows().iter().filter(|row| row.ruling == HOST_GUARD_RULING.0).count();
+    assert_eq!(shared, 4, "同じ裁定 id の行はちょうど 4 本（母集団 {} 行）", manifest.rows().len());
+    let git = ["git push --force", "git push -f", "git reset --hard", "git branch -D", "git clean -f", "git stash drop", "git stash clear"];
+    let want: Vec<String> = git.iter().map(|item| (*item).to_owned()).collect();
+    assert_eq!(manifest.get("host_guard.git").map(|row| row.value.clone()), Some(RuleValue::List(want.clone())), "git の 7 語列");
+    let Some(RuleValue::List(runner)) = manifest.get("runner.denied_commands").map(|row| row.value.clone()) else {
+        panic!("runner.denied_commands の列が在る");
+    };
+    assert!(want.iter().all(|item| runner.contains(item)), "git の語列は runner.denied_commands の写し（外すのは行 f）");
+    for (id, sequences) in [
+        ("host_guard.tmux", &["tmux kill-server", "tmux -C", "tmux -f"][..]),
+        ("host_guard.ledger", &["bd delete", "dolt reset --hard", "dolt branch -D", "dolt branch -d"][..]),
+    ] {
+        let want: Vec<String> = sequences.iter().map(|item| (*item).to_owned()).collect();
+        assert_eq!(manifest.get(id).map(|row| row.value.clone()), Some(RuleValue::List(want)), "{id} の初期値（§11 形 3）");
+    }
+    let symbols = ["state-dir", "repo-tracked", "repo-git"].map(str::to_owned).to_vec();
+    assert_eq!(manifest.get("host_guard.rm").map(|row| row.value.clone()), Some(RuleValue::List(symbols)), "守る集合の 3 記号");
+}
+
+/// kind 2 つは `ALL` の末尾（`LedgerDeniedWrites` の後ろ）に宣言順で並び、字面から引ける。
+#[test]
+fn rules_embedded_manifest_declares_host_guard_kinds_at_the_tail_of_all() {
+    let tail: Vec<RuleKind> = ALL.iter().rev().take(3).rev().copied().collect();
+    assert_eq!(
+        tail,
+        vec![RuleKind::LedgerDeniedWrites, RuleKind::HostGuardDeniedCommands, RuleKind::HostGuardRmProtected],
+        "LedgerDeniedWrites の後ろに宣言順で 2 kind（母集団 {} 種）",
+        ALL.len()
+    );
+    for kind in [RuleKind::HostGuardDeniedCommands, RuleKind::HostGuardRmProtected] {
+        assert_eq!(RuleKind::parse(kind.as_str()), Some(kind), "kind を字面から引ける: {}", kind.as_str());
+    }
+    assert_eq!(RuleKind::HostGuardDeniedCommands.as_str(), "HostGuardDeniedCommands", "字面は variant 名");
+    assert_eq!(RuleKind::HostGuardRmProtected.as_str(), "HostGuardRmProtected", "字面は variant 名");
+}
+
+/// 語を持たない語列は validate が断り（runner.denied_commands と同じ検査）、2 kind とも形は List だけ。
+#[test]
+fn rules_embedded_manifest_declares_host_guard_rows_refuse_blank_sequences() {
+    let blank = one_row(RuleKind::HostGuardDeniedCommands, r#"["tmux kill-server", " "]"#);
+    let errors = parsed(&blank).expect_err("語を持たない語列は不備");
+    assert!(errors.contains("語を持たない語列"), "{errors}");
+    assert!(parsed(&one_row(RuleKind::HostGuardDeniedCommands, r#"["tmux kill-server"]"#)).is_ok(), "語を持つ語列は通る");
+    for kind in [RuleKind::HostGuardDeniedCommands, RuleKind::HostGuardRmProtected] {
+        let errors = rejected(&one_row(kind, "16")).expect("整数の値の fixture が受理された");
+        assert!(errors.join("\n").contains("形と合わない"), "{}: 形は List だけ: {errors:?}", kind.as_str());
+    }
 }
 
 /// rebrief が台帳を待つ上限の行（`seat.ledger_timeout_s`・裁定 id `user 2026-09-12T02:01Z`・設計
@@ -1482,7 +1560,7 @@ fn rules_embedded_manifest_is_valid_and_covers_all_kinds() {
     // **tracked な `rules/manifest.toml` の全行が受理される**（`parse` は 1 件でも違反が
     // 在れば `Err` を返すので、ここに届いた時点で全行が必須 key を持つ）。母集団を額面に
     // 出すのは、行が黙って落ちた周を「全部読めた」と読み違えないためである。
-    assert_eq!(manifest.rows().len(), 59, "埋め込み manifest の行数（母集団・`.169` で +1〔台帳 write の断る形〕・`.170` で +2〔flip の免除経路の面と札の上限〕・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.478` で -1〔役割の行 2 本が 1 本〕・`.479.1` で -7〔席の自律の行〕・`.479.2` で -3〔作業記憶の行 1 本と棚卸しの行 2 本〕・`.382` で +1〔終端の CI の上限〕・`.433` で +2〔役割の既定の model と effort〕・`.407` で +1〔選定の前計測の鮮度〕・`.396` で +1〔同型の審査 FAIL の停止の回数〕・`.504` の行 x で +2〔器の健康の遮断器の倍率〕・`.428` で +1〔着地の列の上限〕・`.398` で +1〔同時本数の最大値〕・`.491.3` で +3〔群の逼迫の閾値の窓ごとの行〕）");
+    assert_eq!(manifest.rows().len(), 63, "埋め込み manifest の行数（母集団・`.574` で +4〔host の見張りの種類ごとの行〕・`.169` で +1〔台帳 write の断る形〕・`.170` で +2〔flip の免除経路の面と札の上限〕・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.478` で -1〔役割の行 2 本が 1 本〕・`.479.1` で -7〔席の自律の行〕・`.479.2` で -3〔作業記憶の行 1 本と棚卸しの行 2 本〕・`.382` で +1〔終端の CI の上限〕・`.433` で +2〔役割の既定の model と effort〕・`.407` で +1〔選定の前計測の鮮度〕・`.396` で +1〔同型の審査 FAIL の停止の回数〕・`.504` の行 x で +2〔器の健康の遮断器の倍率〕・`.428` で +1〔着地の列の上限〕・`.398` で +1〔同時本数の最大値〕・`.491.3` で +3〔群の逼迫の閾値の窓ごとの行〕）");
     for kind in ALL {
         let covered = manifest.rows().iter().any(|row| row.kind == *kind);
         assert!(covered, "{} の行が manifest に無い", kind.as_str());
@@ -1652,10 +1730,10 @@ fn rules_embedded_manifest_declares_one_capability_row_per_role() {
             assert!(Capability::parse(name).is_some(), "{id} の値 {name} は Capability の名");
         }
     }
-    assert!(ALL.contains(&RuleKind::RoleCapabilities), "ALL に在る（末尾は `.169` の LedgerDeniedWrites）");
+    assert!(ALL.contains(&RuleKind::RoleCapabilities), "ALL に在る（末尾は `.574` の host の見張りの 2 kind）");
     assert_eq!(RuleKind::parse("RoleCapabilities"), Some(RuleKind::RoleCapabilities), "kind を字面から引ける");
     let kinds = ALL.len();
-    assert_eq!(kinds, 59, "kind の母集団（`.169` で +1〔台帳 write の断る形〕・`.170` で +2〔flip の免除経路の面と札の上限〕・`.201` で +1・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.479.2` で -3・`.382` で +1〔終端の CI の上限〕・`.433` で +2〔役割の既定の 2 種〕・`.407` で +1〔選定の前計測の鮮度〕・`.396` で +1〔同型の審査 FAIL の停止の回数〕・`.504` の行 x で +2〔器の健康の遮断器の倍率〕・`.428` で +1〔着地の列の上限〕・`.398` で +1〔同時本数の最大値〕・`.491.3` で +3〔群の逼迫の閾値の 3 種〕）");
+    assert_eq!(kinds, 61, "kind の母集団（`.574` で +2〔host の見張りの語列と rm の守る集合〕・`.169` で +1〔台帳 write の断る形〕・`.170` で +2〔flip の免除経路の面と札の上限〕・`.201` で +1・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.479.2` で -3・`.382` で +1〔終端の CI の上限〕・`.433` で +2〔役割の既定の 2 種〕・`.407` で +1〔選定の前計測の鮮度〕・`.396` で +1〔同型の審査 FAIL の停止の回数〕・`.504` の行 x で +2〔器の健康の遮断器の倍率〕・`.428` で +1〔着地の列の上限〕・`.398` で +1〔同時本数の最大値〕・`.491.3` で +3〔群の逼迫の閾値の 3 種〕）");
 }
 
 /// 禁じる語列の行（`runner.denied_commands`・`RuleKind::RunnerDeniedCommands`・裁定 id `user 2026-09-14`・ADR-0025 §2.1・
