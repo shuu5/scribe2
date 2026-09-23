@@ -988,6 +988,91 @@ fn host_guard_kind_command_guard_names_the_tmux_row_from_the_embedded_rules() {
     clean(&[&repo, &state]);
 }
 
+// ─────────────── host-guard の rm の種類（`s2-07l.575`・設計 vessel-hook.md §11 行 c・接頭辞 `host_guard_rm_`） ───────────────
+//
+// 埋め込みの rules（host_guard.rm は 3 記号）で binary を撃つ。repo は commit 済みの tmp（`src/lib.rs` が tracked）。
+
+/// rm の deny の 1 行（kind=rm・hit・行 id・裁定 id・代わりの経路）と記録 1 行を確かめる。
+fn assert_rm_deny(state: &Path, out: &Output, hit: &str) {
+    use vessel::hook::host_guard::Kind;
+    let text = assert_host_guard_deny(out, hit);
+    let want = format!(
+        "{NAME}: host-guard deny kind=rm hit={hit} row=host_guard.rm ruling={HOST_GUARD_RULING} — {}",
+        Kind::Rm.route()
+    );
+    assert_eq!(text.trim_end(), want, "5 欄の 1 行");
+    assert_eq!(what_of(&host_guard_records(state).last().cloned().unwrap_or_default()), "host-guard-deny rm", "{hit}");
+}
+
+/// `rm <tracked>` と `rm -rf <tracked の親 dir>` は kind=rm・hit=repo-tracked:<path> で rc 2。
+#[test]
+fn host_guard_rm_denies_a_tracked_file_and_its_parent_dir() {
+    let repo = git_repo();
+    let state = tmp();
+    let out = run_host_guard_in(&state, &bash_payload(&repo, "rm src/lib.rs"));
+    assert_rm_deny(&state, &out, &format!("repo-tracked:{}", repo.join("src/lib.rs").display()));
+    let out = run_host_guard_in(&state, &bash_payload(&repo, "rm -rf src"));
+    assert_rm_deny(&state, &out, &format!("repo-tracked:{}", repo.join("src").display()));
+    assert_eq!(host_guard_records(&state).len(), 2, "断った周ごとに 1 行");
+    clean(&[&repo, &state]);
+}
+
+/// `rm <untracked>` と `git rm <tracked>` は 0 byte・rc 0・記録 0 で通る。
+#[test]
+fn host_guard_rm_passes_an_untracked_file_and_git_rm() {
+    let repo = git_repo();
+    let state = tmp();
+    fs::write(repo.join("notes.txt"), "x\n").expect("untracked を書ける");
+    for command in ["rm notes.txt", "git rm src/lib.rs", "rm -f nope.txt"] {
+        assert_silent(&run_host_guard_in(&state, &bash_payload(&repo, command)), command);
+    }
+    assert!(inject_lines(&state).is_empty(), "通す周は記録を残さない");
+    clean(&[&repo, &state]);
+}
+
+/// state dir そのもの・その配下の host.toml・state dir の親 dir の rm は hit=state-dir で断る。
+#[test]
+fn host_guard_rm_denies_the_state_dir_its_files_and_its_parent() {
+    let bare = tmp();
+    let parent = tmp();
+    let state = parent.join("state");
+    fs::create_dir_all(&state).expect("state dir を作れる");
+    fs::write(state.join("host.toml"), "schema = 1\n").expect("host.toml を書ける");
+    for path in [state.clone(), state.join("host.toml"), parent.to_path_buf()] {
+        let out = run_host_guard_in(&state, &bash_payload(&bare, &format!("rm -rf {}", path.display())));
+        assert_rm_deny(&state, &out, &format!("state-dir:{}", path.display()));
+    }
+    clean(&[&bare, &parent]);
+}
+
+/// `rm "$X"`・チルダ始まり・brace・`cd sub && rm x` は path を解かずに hit=unresolved:<語> で断る（home の短縮の字面は
+/// paths-clean が数えるので `concat!` で組む）。
+#[test]
+fn host_guard_rm_denies_unresolved_paths_without_resolving_them() {
+    const HOME_X: &str = concat!("~", "/x");
+    let repo = git_repo();
+    let state = tmp();
+    let tilde = format!("rm -rf {HOME_X}");
+    for (command, word) in [("rm \"$X\"", "$X"), (&tilde, HOME_X), ("rm {a,b}.txt", "{a,b}.txt"), ("cd sub && rm x", "x")] {
+        let out = run_host_guard_in(&state, &bash_payload(&repo, command));
+        assert_rm_deny(&state, &out, &format!("unresolved:{word}"));
+    }
+    clean(&[&repo, &state]);
+}
+
+/// 一時 dir の下の `rm *.bak` は通り、repo の root の配下の `rm *.bak` は断る。
+#[test]
+fn host_guard_rm_glob_passes_under_a_tmp_dir_and_denies_under_the_repo_root() {
+    let repo = git_repo();
+    let other = tmp();
+    let state = tmp();
+    fs::write(other.join("a.bak"), "x\n").expect("bak を書ける");
+    assert_silent(&run_host_guard_in(&state, &bash_payload(&other, "rm *.bak")), "一時 dir の下の glob");
+    let out = run_host_guard_in(&state, &bash_payload(&repo, "rm *.bak"));
+    assert_rm_deny(&state, &out, &format!("repo-tracked:{}/*.bak", repo.display()));
+    clean(&[&repo, &other, &state]);
+}
+
 // ─────────────── 起票の門（`s2-07l.517`・設計 ledger-form.md §3 の 9 / §6 行 d・接頭辞 `hook_memo_guard_`） ───────────────
 //
 // `bd` / `bdw` の create を読み、memo の create に 4 節の本文を、契約の create に label `intake:memo` の不在を要求する。

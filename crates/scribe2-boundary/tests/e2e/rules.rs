@@ -7,6 +7,7 @@ use std::process::Command;
 use vessel::cli_outcome::{Outcome, RC_OK, RC_REFUSED};
 use vessel::fleet::select::{Model, MODELS};
 use vessel::headless::{Effort, EFFORTS};
+use vessel::hook::host_guard::{Protected, PROTECTED};
 use vessel::order::is_declaration_order;
 use vessel::rules::manifest::{contract_rows, Manifest, TableValue};
 use vessel::rules::{int_row, str_row, Rule, RuleKind, RuleValue, ValueShape, ALL};
@@ -77,13 +78,15 @@ fn one_row(kind: RuleKind, value: &str) -> String {
 }
 
 /// 種類の形に合う値の字面。**閉じた名の集合を指す kind** は名を core の enum から取る（対話面は `Role` の名・
-/// 権能の行は `Capability` の名・`s2-07l.201`／役割の既定は `Model` と `Effort` の字面・`s2-07l.433`）。
+/// 権能の行は `Capability` の名・`s2-07l.201`／役割の既定は `Model` と `Effort` の字面・`s2-07l.433`／rm の守る集合は
+/// `Protected` の記号・`s2-07l.575`）。
 fn sample_value(kind: RuleKind) -> String {
     match kind {
         RuleKind::DialogueSurface => format!("\"{}\"", Role::Orchestrator.as_str()),
         RuleKind::RoleCapabilities => format!("[\"{}\"]", Capability::Answer.as_str()),
         RuleKind::RoleModel => format!("\"{}\"", Model::Fable.alias()),
         RuleKind::RoleEffort => format!("\"{}\"", Effort::High.alias()),
+        RuleKind::HostGuardRmProtected => format!("[\"{}\"]", Protected::StateDir.as_str()),
         _ => match kind.shape() {
             ValueShape::Int => "1".to_owned(),
             ValueShape::Str | ValueShape::Policy => "\"sample\"".to_owned(),
@@ -1385,6 +1388,27 @@ fn rules_embedded_manifest_declares_host_guard_rows_refuse_blank_sequences() {
     for kind in [RuleKind::HostGuardDeniedCommands, RuleKind::HostGuardRmProtected] {
         let errors = rejected(&one_row(kind, "16")).expect("整数の値の fixture が受理された");
         assert!(errors.join("\n").contains("形と合わない"), "{}: 形は List だけ: {errors:?}", kind.as_str());
+    }
+}
+
+// ─── rm の守る集合の記号（設計 vessel-hook.md §11 行 c・`s2-07l.575`・接頭辞 `rules_host_guard_rm_symbol_`） ───
+
+/// host_guard.rm の値の綴り違いの記号は読み込みで拒み（取る記号を名指す）、3 記号は全部受理される。
+#[test]
+fn rules_host_guard_rm_symbol_misspelled_is_refused_and_the_three_are_accepted() {
+    let all: Vec<String> = PROTECTED.iter().map(|symbol| format!("\"{}\"", symbol.as_str())).collect();
+    assert_eq!(all.len(), 3, "記号は 3 つ: {all:?}");
+    let manifest = parsed(&one_row(RuleKind::HostGuardRmProtected, &format!("[{}]", all.join(", "))))
+        .unwrap_or_else(|errors| panic!("3 記号は受理される: {errors}"));
+    let row = manifest.get("probe").unwrap_or_else(|| panic!("probe が在る"));
+    let want: Vec<String> = ["state-dir", "repo-tracked", "repo-git"].map(str::to_owned).to_vec();
+    assert_eq!(row.value, RuleValue::List(want), "宣言順の 3 記号");
+    for bad in ["state_dir", "repo-tracked ", "Repo-Git", "home"] {
+        let errors = rejected(&one_row(RuleKind::HostGuardRmProtected, &format!("[\"repo-git\", \"{bad}\"]")))
+            .unwrap_or_else(|rows| panic!("{bad:?} が受理された（{rows} 行）"));
+        let text = errors.join("\n");
+        assert!(text.contains(&format!("未知の守る集合の記号 {bad}")), "{bad:?}: {text}");
+        assert!(text.contains("state-dir / repo-tracked / repo-git"), "取る記号を名指す: {text}");
     }
 }
 

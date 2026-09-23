@@ -12,6 +12,7 @@ pub mod manifest;
 
 use crate::fleet::select::{Model, MODELS};
 use crate::headless::{Effort, EFFORTS};
+use crate::hook::host_guard::{Protected, PROTECTED};
 use crate::seat::role::{Capability, Role, ALL as ROLES, CAPABILITIES};
 use manifest::{HostManifest, Manifest};
 use std::path::{Path, PathBuf};
@@ -261,8 +262,8 @@ pub enum RuleKind {
     /// host の破壊防止の見張りの語列（設計 vessel-hook.md §11 行 b・ADR-0056）。値は [`Self::RunnerDeniedCommands`] と
     /// 同じ形の語列の配列で、**1 kind で行が 3 つ**（id は [`crate::hook::host_guard::WORD_ROWS`]・種類ごとに 1 行）。
     HostGuardDeniedCommands,
-    /// host の破壊防止の見張りの rm の守る集合（設計 vessel-hook.md §11 行 b / c）。値は守る集合の記号の列（行 b は
-    /// List の形だけを検査し、記号の閉じた集合は行 c が引く）。id は `host_guard.rm` の 1 行。
+    /// host の破壊防止の見張りの rm の守る集合（設計 vessel-hook.md §11 行 b / c）。値は守る集合の記号の列（各語を
+    /// [`crate::hook::host_guard::Protected`] で引く）。id は `host_guard.rm` の 1 行。
     HostGuardRmProtected,
 }
 
@@ -567,7 +568,7 @@ impl RuleRow {
     /// の値は [`Role`] の名、`RoleModel` の値は [`Model`] の字面、`RoleEffort` の値は [`Effort`] の字面。
     /// 綴り違いを黙って「権能なし」「対話面なし」「既定なし」に倒さない（NFR4）。
     /// `RunnerDeniedCommands` と `HostGuardDeniedCommands` の各要素は語を 1 つ以上持つ（空白だけの語列は何にも当たらず黙って
-    /// 効かない・ADR-0025 §2.1）。
+    /// 効かない・ADR-0025 §2.1）。`HostGuardRmProtected` の列は [`Protected`] の記号（綴り違いを「守らない」に倒さない）。
     fn names_are_known(&self) -> Result<(), RuleError> {
         let unknown = |what: &str, name: &str, taken: &[&str]| {
             RuleError::new(
@@ -580,6 +581,13 @@ impl RuleRow {
                 let taken: Vec<&str> = CAPABILITIES.iter().map(|found| found.as_str()).collect();
                 match names.iter().find(|name| Capability::parse(name).is_none()) {
                     Some(name) => Err(unknown("権能", name, &taken)),
+                    None => Ok(()),
+                }
+            }
+            (RuleKind::HostGuardRmProtected, RuleValue::List(names)) => {
+                let taken: Vec<&str> = PROTECTED.iter().map(|found| found.as_str()).collect();
+                match names.iter().find(|name| Protected::parse(name).is_none()) {
+                    Some(name) => Err(unknown("守る集合の記号", name, &taken)),
                     None => Ok(()),
                 }
             }
