@@ -1,5 +1,5 @@
-//! CLI の骨格。`name` / `--version` / `doctor` / `account` / `rules` / `fleet` / `vessel` / `hook` / `pipe` /
-//! `runner` / `lens` / `seat` / `polarity` / `contracts` の 14 subcommand と、memo の plan の口 `ledger` を持つ。
+//! CLI の骨格。`name` / `--version` / `doctor` / `account` / `rules` / `fleet` / `vessel` / `hook` / `host-guard` /
+//! `pipe` / `runner` / `lens` / `seat` / `polarity` / `contracts` の 15 subcommand と、memo の plan の口 `ledger` を持つ。
 //!
 //! subcommand の結果は [`Outcome`] ただ 1 型で、rc はその `rc` をそのまま返す。
 //!
@@ -88,7 +88,7 @@ fn render_doctor_with(rest: &[String]) -> Result<Vec<String>, ()> {
 
 /// 未知の引数に対する使い方の行。
 fn render_usage() -> String {
-    format!("usage: {NAME} <name|--version|doctor|account|rules|fleet|vessel|hook|pipe|runner|lens|seat|polarity|contracts>")
+    format!("usage: {NAME} <name|--version|doctor|account|rules|fleet|vessel|hook|host-guard|pipe|runner|lens|seat|polarity|contracts>")
 }
 
 /// 先頭の引数と続く引数を出力行の列へ写す。未知なら `Err` に使い方を載せる。
@@ -128,6 +128,8 @@ fn run(args: &[String]) -> Outcome {
         Some("lens") => vessel::headless::lens::dispatch(rest),
         // hook だけは stdin の payload を要る（Claude Code が JSON を流し込む）。
         Some("hook") => vessel::hook::dispatch(rest, &read_stdin()),
+        // host の破壊防止の見張り（設計 vessel-hook.md §11）も stdin の payload を読む。marker と anchor に依らない。
+        Some("host-guard") => vessel::hook::host_guard::dispatch(rest, &read_stdin()),
         first => match dispatch(first, rest) {
             Ok(lines) => Outcome::ok(lines),
             // 使い方の行は従来どおり stdout へ出し rc 1 で終える（外形は変えない）。

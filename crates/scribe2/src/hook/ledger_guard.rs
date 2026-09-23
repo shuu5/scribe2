@@ -304,8 +304,8 @@ pub fn judge_write(write: &Write, forms: &[Refusal]) -> Option<Refusal> {
     })
 }
 
-/// `NAME=value` の env の前置きか。
-fn is_assignment(word: &str) -> bool {
+/// `NAME=value` の env の前置きか（host-guard も語列の照合の前に読み飛ばす・設計 vessel-hook.md §11 の形 b 4）。
+pub(crate) fn is_assignment(word: &str) -> bool {
     word.split_once('=').is_some_and(|(name, _)| {
         !name.is_empty() && name.chars().all(|found| found.is_ascii_alphanumeric() || found == '_')
     })

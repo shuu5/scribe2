@@ -563,6 +563,46 @@ enabled = true
 ruling = "user 2026-09-22T08:44Z"
 ruled_at = "2026-09-22"
 
+# host の破壊防止の見張り（subcommand host-guard・設計 vessel-hook.md §11・ADR-0056）が読む種類ごとの行。語列の 3 行
+# （git の履歴破壊 / tmux server の破壊 / 台帳の破壊）は runner.denied_commands と同じ照合（先頭語一致 + 残りの語の包含）で、
+# enabled = false は host-guard の口だけを切る（command guard は 3 行を enabled に関わらず読む）。host_guard.git は
+# runner.denied_commands の git の 7 語列の写し（重複を外すのは行 f）。rm の行の値は守る集合の記号（判定は行 c）。
+# host_guard.tmux は前の器の tmux の見張りが global option の位置で止めた 3 形（kill-server / -C / -f）、host_guard.ledger
+# は台帳の bead と dolt の履歴の破壊の 4 語列。見張り自身の設定の編集の種類は行を持たない（切れない唯一の種類）。
+# 行が無い・列でない周は fail-closed。4 行とも同じ裁定（user 裁定 2026-09-20 JST・UTC の分で id を書く）。
+
+[[rule]]
+id = "host_guard.git"
+kind = "HostGuardDeniedCommands"
+value = ["git push --force", "git push -f", "git reset --hard", "git branch -D", "git clean -f", "git stash drop", "git stash clear"]
+enabled = true
+ruling = "user 2026-09-19T15:28Z"
+ruled_at = "2026-09-19"
+
+[[rule]]
+id = "host_guard.tmux"
+kind = "HostGuardDeniedCommands"
+value = ["tmux kill-server", "tmux -C", "tmux -f"]
+enabled = true
+ruling = "user 2026-09-19T15:28Z"
+ruled_at = "2026-09-19"
+
+[[rule]]
+id = "host_guard.ledger"
+kind = "HostGuardDeniedCommands"
+value = ["bd delete", "dolt reset --hard", "dolt branch -D", "dolt branch -d"]
+enabled = true
+ruling = "user 2026-09-19T15:28Z"
+ruled_at = "2026-09-19"
+
+[[rule]]
+id = "host_guard.rm"
+kind = "HostGuardRmProtected"
+value = ["state-dir", "repo-tracked", "repo-git"]
+enabled = true
+ruling = "user 2026-09-19T15:28Z"
+ruled_at = "2026-09-19"
+
 # 口座の宣言（設計 fleet-usage.md §2・account-lifecycle.md §2・ADR-0026 §2.1）は host の manifest（state dir
 # の host.toml）にだけ置く。この file に口座の表は置かない（文法は残る・足す変更は A1 の対話面で聞く・本 repo
 # は PUBLIC・SRS CON2）。器は credential の置き場を走査せず、宣言だけを真実として読む（C3）。

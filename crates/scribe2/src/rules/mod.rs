@@ -258,6 +258,12 @@ pub enum RuleKind {
     /// （`notes-replace` / `memory-subcommand` / `create-without-parent` / `bd-outside-bdw`）で、判定そのものは
     /// [`crate::hook::ledger_guard`] が持つ。列に載る形だけを断る。
     LedgerDeniedWrites,
+    /// host の破壊防止の見張りの語列（設計 vessel-hook.md §11 行 b・ADR-0056）。値は [`Self::RunnerDeniedCommands`] と
+    /// 同じ形の語列の配列で、**1 kind で行が 3 つ**（id は [`crate::hook::host_guard::WORD_ROWS`]・種類ごとに 1 行）。
+    HostGuardDeniedCommands,
+    /// host の破壊防止の見張りの rm の守る集合（設計 vessel-hook.md §11 行 b / c）。値は守る集合の記号の列（行 b は
+    /// List の形だけを検査し、記号の閉じた集合は行 c が引く）。id は `host_guard.rm` の 1 行。
+    HostGuardRmProtected,
 }
 
 /// [`RuleKind`] の全 variant。parity test の母集団である。
@@ -321,6 +327,8 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::FlipDocsOnlyFaces,
     RuleKind::FlipMarksPerPr,
     RuleKind::LedgerDeniedWrites,
+    RuleKind::HostGuardDeniedCommands,
+    RuleKind::HostGuardRmProtected,
 ];
 
 impl RuleKind {
@@ -357,7 +365,8 @@ impl RuleKind {
             Self::SeatCyclePollMs => "SeatCyclePollMs",
             Self::UsageTimeoutS => "UsageTimeoutS",
             Self::UsageFreshS => "UsageFreshS",
-            // 群の逼迫の 3 行は 2 行に畳む（関数 1 本の行数の上限 R-C4-4.fn-lines・閉じた列の網羅は不変）。
+            // 群の逼迫の 3 行は 2 行に、契約の size の 3 行は 2 行に、host の見張りの 2 kind は 1 行に畳む（関数 1 本の行数の
+            // 上限 R-C4-4.fn-lines・閉じた列の網羅は不変）。
             Self::GroupPressure5hPct => "GroupPressure5hPct", Self::GroupPressure7dPct => "GroupPressure7dPct",
             Self::GroupPressureModelPct => "GroupPressureModelPct",
             Self::FollowRetries => "FollowRetries",
@@ -373,8 +382,7 @@ impl RuleKind {
             Self::PipeCiWaitS => "PipeCiWaitS",
             Self::LedgerTimeoutS => "LedgerTimeoutS",
             Self::RoleCapabilities => "RoleCapabilities",
-            Self::PipeSizeSLines => "PipeSizeSLines",
-            Self::PipeSizeMLines => "PipeSizeMLines",
+            Self::PipeSizeSLines => "PipeSizeSLines", Self::PipeSizeMLines => "PipeSizeMLines",
             Self::PipeSizeLLines => "PipeSizeLLines",
             Self::RunnerModel => "RunnerModel",
             Self::RunnerEffort => "RunnerEffort",
@@ -386,6 +394,7 @@ impl RuleKind {
             Self::FlipDocsOnlyFaces => "FlipDocsOnlyFaces",
             Self::FlipMarksPerPr => "FlipMarksPerPr",
             Self::LedgerDeniedWrites => "LedgerDeniedWrites",
+            Self::HostGuardDeniedCommands => "HostGuardDeniedCommands", Self::HostGuardRmProtected => "HostGuardRmProtected",
         }
     }
 
@@ -448,7 +457,7 @@ impl RuleKind {
             | Self::RepoNonRustExecAllow
             | Self::RoleCapabilities
             | Self::FlipDocsOnlyFaces
-            | Self::LedgerDeniedWrites => ValueShape::List,
+            | Self::LedgerDeniedWrites | Self::HostGuardDeniedCommands | Self::HostGuardRmProtected => ValueShape::List,
         }
     }
 
@@ -557,7 +566,8 @@ impl RuleRow {
     /// seat-roles.md §3 / §19・ADR-0022 §2.2）: `RoleCapabilities` の列は [`Capability`] の名、`DialogueSurface`
     /// の値は [`Role`] の名、`RoleModel` の値は [`Model`] の字面、`RoleEffort` の値は [`Effort`] の字面。
     /// 綴り違いを黙って「権能なし」「対話面なし」「既定なし」に倒さない（NFR4）。
-    /// `RunnerDeniedCommands` の各要素は語を 1 つ以上持つ（空白だけの語列は何にも当たらず黙って効かない・ADR-0025 §2.1）。
+    /// `RunnerDeniedCommands` と `HostGuardDeniedCommands` の各要素は語を 1 つ以上持つ（空白だけの語列は何にも当たらず黙って
+    /// 効かない・ADR-0025 §2.1）。
     fn names_are_known(&self) -> Result<(), RuleError> {
         let unknown = |what: &str, name: &str, taken: &[&str]| {
             RuleError::new(
@@ -585,7 +595,7 @@ impl RuleRow {
                 let taken: Vec<&str> = EFFORTS.iter().map(|found| found.alias()).collect();
                 Err(unknown("effort", name, &taken))
             }
-            (RuleKind::RunnerDeniedCommands, RuleValue::List(sequences)) => {
+            (RuleKind::RunnerDeniedCommands | RuleKind::HostGuardDeniedCommands, RuleValue::List(sequences)) => {
                 match sequences.iter().find(|sequence| sequence.split_whitespace().next().is_none()) {
                     Some(blank) => Err(RuleError::new(
                         self.line,

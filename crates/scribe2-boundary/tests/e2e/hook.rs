@@ -772,6 +772,222 @@ fn hook_command_guard_matches_sequence_regardless_of_flag_order() {
     clean(&[&repo, &state]);
 }
 
+// ─────────────── host の破壊防止の見張り（`s2-07l.574`・設計 vessel-hook.md §11 行 b・ADR-0056・接頭辞 `host_guard_kind_`） ───────────────
+//
+// 口座の設定から呼ばれる subcommand `host-guard` を binary で撃つ。marker と anchor に依らない（hook の入口の沈黙を持ち込まない）
+// ので、判定の歯は repo を器へ紐づけない。置き場は `--state-dir` の tmp だけ。
+
+/// `host-guard` を binary で 1 回撃つ。payload は stdin へ流す。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn run_host_guard(args: &[&str], payload: &str) -> Output {
+    let mut child = Command::new(bin())
+        .arg("host-guard")
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("binary を起動できる");
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin を開ける")
+        .write_all(payload.as_bytes())
+        .expect("payload を書ける");
+    child.wait_with_output().expect("終了を待てる")
+}
+
+/// `--state-dir <state>` だけを付けて撃つ（埋め込みの rules）。
+fn run_host_guard_in(state: &Path, payload: &str) -> Output {
+    run_host_guard(&["--state-dir", &state.display().to_string()], payload)
+}
+
+/// 記録のうち host-guard の行（`who` が `host-guard`）。
+fn host_guard_records(state: &Path) -> Vec<String> {
+    inject_lines(state)
+        .into_iter()
+        .filter(|line| value_of(line, "who") == Some(json_lite::Value::Str("host-guard".to_owned())))
+        .collect()
+}
+
+/// host-guard の deny の外形（rc 2・stdout 0 byte・stderr ちょうど 1 行・器の名乗り）を見て stderr を返す。
+fn assert_host_guard_deny(out: &Output, why: &str) -> String {
+    let text = stderr_text(out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "{why}: deny は rc 2: {text}");
+    assert!(out.stdout.is_empty(), "{why}: deny でも stdout は 0 byte");
+    assert_eq!(stderr_lines(out), 1, "{why}: stderr は 1 行: {text}");
+    assert!(text.starts_with(&format!("{NAME}: host-guard deny kind=")), "{why}: 器が名乗る: {text}");
+    text
+}
+
+/// fail-closed の deny（`hit=<理由>`）と、置き場が在る周の記録 1 行（`what = host-guard-deny reason=<理由>`）を確かめる。
+fn assert_host_guard_fail_closed(state: &Path, out: &Output, reason: &str) {
+    let text = assert_host_guard_deny(out, reason);
+    assert!(text.contains(&format!(" kind=- hit={reason} row=- ruling=- — ")), "{reason}: {text}");
+    let lines = host_guard_records(state);
+    assert_eq!(lines.len(), 1, "{reason}: 記録 1 行: {lines:?}");
+    assert_eq!(what_of(&lines.last().cloned().unwrap_or_default()), format!("host-guard-deny reason={reason}"), "{reason}");
+}
+
+/// marker の無い tmp repo で `git push --force origin main` を rc 2・stdout 0 byte・stderr 1 行（kind / hit / row / ruling /
+/// 代わりの経路の 5 欄）で断り、`inject.jsonl` に what=`host-guard-deny git` の 1 行（who=host-guard・席は null）を残す。
+#[test]
+fn host_guard_kind_denies_force_push_in_a_repo_without_marker() {
+    use vessel::hook::host_guard::Kind;
+    let repo = git_repo();
+    let state = tmp();
+    assert!(!repo.join(MARKER).exists(), "前提: marker が無い");
+    let out = run_host_guard_in(&state, &bash_payload(&repo, "git push --force origin main"));
+    let text = assert_host_guard_deny(&out, "marker の無い repo");
+    let want = format!(
+        "{NAME}: host-guard deny kind=git hit=git push --force row=host_guard.git ruling={HOST_GUARD_RULING} — {}",
+        Kind::Git.route()
+    );
+    assert_eq!(text.trim_end(), want, "5 欄の 1 行");
+    let lines = host_guard_records(&state);
+    assert_eq!(lines.len(), 1, "記録は 1 行: {lines:?}");
+    let line = lines.last().cloned().unwrap_or_default();
+    assert_eq!(what_of(&line), "host-guard-deny git", "{line}");
+    assert_eq!(value_of(&line, "when"), Some(json_lite::Value::Str("PreToolUse".to_owned())), "{line}");
+    assert_eq!(value_of(&line, "seat"), Some(json_lite::Value::Null), "席は null: {line}");
+    assert_eq!(value_of(&line, "bytes"), Some(json_lite::Value::Num(text.len() as u64)), "出した 1 行の byte 数: {line}");
+    clean(&[&repo, &state]);
+}
+
+/// 他の name の marker を持つ repo と git repo でない cwd でも同じ deny（FR24 の沈黙は hook の入口だけ）。
+#[test]
+fn host_guard_kind_denies_the_same_under_other_marker_and_outside_git() {
+    let other = git_repo();
+    let marker = Marker { name: "other-vessel".to_owned(), version: GENERATION };
+    fs::write(other.join(MARKER), marker.render()).expect("marker を書ける");
+    let bare = tmp();
+    assert!(!bare.join(".git").exists(), "前提: git repo でない");
+    for (cwd, why) in [(&other, "他の name の marker"), (&bare, "git repo でない cwd")] {
+        let state = tmp();
+        let out = run_host_guard_in(&state, &bash_payload(cwd, "git push --force origin main"));
+        let text = assert_host_guard_deny(&out, why);
+        assert!(text.contains(" kind=git hit=git push --force row=host_guard.git "), "{why}: {text}");
+        assert_eq!(host_guard_records(&state).len(), 1, "{why}: 記録 1 行");
+        clean(&[&state]);
+    }
+    clean(&[&other, &bare]);
+}
+
+/// `--force-with-lease` の push と、Bash / 編集系でない tool（Read）は 0 byte・rc 0・記録 0。
+#[test]
+fn host_guard_kind_passes_force_with_lease_and_other_tools_silently() {
+    let repo = git_repo();
+    let state = tmp();
+    let out = run_host_guard_in(&state, &bash_payload(&repo, "git push --force-with-lease origin feat/x"));
+    assert_silent(&out, "--force-with-lease は通す");
+    let out = run_host_guard_in(&state, &tool_payload(&repo, "Read", "src/lib.rs"));
+    assert_silent(&out, "Read は判定に載らない");
+    assert!(inject_lines(&state).is_empty(), "通す周は記録を残さない");
+    clean(&[&repo, &state]);
+}
+
+/// payload が JSON でない周は rc 2・stderr 1 行（fail-closed）。
+#[test]
+fn host_guard_kind_fails_closed_on_a_payload_that_is_not_json() {
+    let state = tmp();
+    let out = run_host_guard_in(&state, "git push --force");
+    assert_host_guard_fail_closed(&state, &out, "payload-unreadable");
+    clean(&[&state]);
+}
+
+/// payload に `tool_name` が無い周は rc 2・stderr 1 行（fail-closed）。
+#[test]
+fn host_guard_kind_fails_closed_without_tool_name() {
+    let state = tmp();
+    let out = run_host_guard_in(&state, &payload(&state));
+    assert_host_guard_fail_closed(&state, &out, "no-tool-name");
+    clean(&[&state]);
+}
+
+/// `Bash` なのに command が無い周は rc 2・stderr 1 行（fail-closed）。
+#[test]
+fn host_guard_kind_fails_closed_on_bash_without_command() {
+    let state = tmp();
+    let body = format!("{{\"cwd\":\"{}\",\"tool_name\":\"Bash\",\"tool_input\":{{}}}}", state.display());
+    let out = run_host_guard_in(&state, &body);
+    assert_host_guard_fail_closed(&state, &out, "no-command");
+    clean(&[&state]);
+}
+
+/// `--state-dir` が無い周は、当たらない command でも rc 2・stderr 1 行（fail-closed・置き場が無いので記録も無い）。
+#[test]
+fn host_guard_kind_fails_closed_without_state_dir() {
+    let repo = git_repo();
+    let out = run_host_guard(&[], &bash_payload(&repo, "ls"));
+    let text = assert_host_guard_deny(&out, "--state-dir 無し");
+    assert!(text.contains(" kind=- hit=no-state-dir row=- ruling=- — "), "{text}");
+    clean(&[&repo]);
+}
+
+/// `--rules` が読めない file を指す周は、当たらない command でも rc 2・stderr 1 行（fail-closed）。
+#[test]
+fn host_guard_kind_fails_closed_on_unreadable_rules() {
+    let repo = git_repo();
+    let state = tmp();
+    let rules = state.join("nope.toml").display().to_string();
+    let out = run_host_guard(&["--state-dir", &state.display().to_string(), "--rules", &rules], &bash_payload(&repo, "ls"));
+    assert_host_guard_fail_closed(&state, &out, "rules-unreadable");
+    clean(&[&repo, &state]);
+}
+
+/// tmux の server を壊す語列は kind=tmux・行 id host_guard.tmux で断る。
+#[test]
+fn host_guard_kind_names_tmux_for_kill_server() {
+    let repo = git_repo();
+    let state = tmp();
+    let out = run_host_guard_in(&state, &bash_payload(&repo, "tmux -L x kill-server"));
+    let text = assert_host_guard_deny(&out, "tmux kill-server");
+    assert!(text.contains(" kind=tmux hit=tmux kill-server row=host_guard.tmux "), "{text}");
+    assert_eq!(what_of(&host_guard_records(&state).last().cloned().unwrap_or_default()), "host-guard-deny tmux");
+    clean(&[&repo, &state]);
+}
+
+/// `--rules` で host_guard.tmux を `enabled = false` にした周、その行にだけ在る語列を host-guard は通し（git の種類は動く）、
+/// 同じ fixture で `hook pre-tool-use` の command guard は断って行 id host_guard.tmux を名指す（enabled を見ない）。
+#[test]
+fn host_guard_kind_disabled_tmux_row_passes_here_and_the_command_guard_still_denies() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let rules = state.join("rules.toml");
+    fs::write(&rules, format!("schema = 1\n{}", denied_rows_text(false))).expect("rules を書ける");
+    let rules = rules.display().to_string();
+    let args = ["--state-dir", &state.display().to_string(), "--rules", &rules];
+    let out = run_host_guard(&args, &bash_payload(&repo, "tmux kill-server"));
+    assert_silent(&out, "切った行の語列は host-guard が通す");
+    let out = run_host_guard(&args, &bash_payload(&repo, "git push --force origin main"));
+    assert!(assert_host_guard_deny(&out, "他の種類は動く").contains(" kind=git "));
+    let out = run_hook_args(&["pre-tool-use", "--rules", &rules], &bash_payload(&repo, "tmux kill-server"));
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "command guard は断る: {}", stderr_text(&out));
+    let text = stderr_text(&out);
+    assert!(text.starts_with(&format!("{NAME}: deny tmux kill-server は rules 行 host_guard.tmux が禁じる")), "{text}");
+    assert_eq!(what_of(&command_records(&state).last().cloned().unwrap_or_default()), "command-deny tmux kill-server");
+    clean(&[&repo, &state]);
+}
+
+/// host_guard.tmux にだけ在る語列（runner.denied_commands に無い）を `hook pre-tool-use` の command guard が埋め込みの rules で
+/// 断り、deny 文は行 id host_guard.tmux を名指す（runner の id を名乗らない）。
+#[test]
+fn host_guard_kind_command_guard_names_the_tmux_row_from_the_embedded_rules() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let out = run_hook("pre-tool-use", &bash_payload(&repo, "tmux kill-server"));
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "command guard は断る: {}", stderr_text(&out));
+    assert_eq!(stderr_lines(&out), 1, "stderr 1 行");
+    let text = stderr_text(&out);
+    assert!(text.starts_with(&format!("{NAME}: deny tmux kill-server は rules 行 host_guard.tmux が禁じる")), "{text}");
+    assert!(!text.contains("runner.denied_commands"), "{text}");
+    assert_eq!(what_of(&command_records(&state).last().cloned().unwrap_or_default()), "command-deny tmux kill-server");
+    clean(&[&repo, &state]);
+}
+
 // ─────────────── 起票の門（`s2-07l.517`・設計 ledger-form.md §3 の 9 / §6 行 d・接頭辞 `hook_memo_guard_`） ───────────────
 //
 // `bd` / `bdw` の create を読み、memo の create に 4 節の本文を、契約の create に label `intake:memo` の不在を要求する。
@@ -2087,14 +2303,41 @@ const LEDGER_LINE: &str = "open=2 in_progress=1 blocked=0";
 /// 禁じる語列の fixture（rules 行 `runner.denied_commands`・ADR-0025 §2.1 の初期値の一部・`s2-07l.168`）。
 const DENIED_SEQUENCES: &[&str] = &["cargo mutants", "git push --force", "git push -f", "git branch -D"];
 
-/// 禁じる語列の行の本文（[`DENIED_SEQUENCES`]）。Bash の command guard はこの行が無い manifest では全 Bash を止める
-/// （FailClosed）ので、Bash を撃つ fixture の manifest は必ずこの行を持つ。
+/// 禁じる語列の行の本文（[`DENIED_SEQUENCES`]）と host-guard の語列の 3 行（[`host_guard_rows_text`]）。Bash の command
+/// guard はこの 4 行のどれかが無い manifest では全 Bash を止める（FailClosed）ので、Bash を撃つ fixture の manifest は必ず
+/// この 4 行を持つ。
 fn denied_row_text() -> String {
+    denied_rows_text(true)
+}
+
+/// [`denied_row_text`] の 4 行（host_guard.tmux の enabled は引数）。
+fn denied_rows_text(tmux_enabled: bool) -> String {
     let quoted: Vec<String> = DENIED_SEQUENCES.iter().map(|item| format!("\"{item}\"")).collect();
     format!(
-        "\n[[rule]]\nid = \"runner.denied_commands\"\nkind = \"RunnerDeniedCommands\"\nvalue = [{}]\nenabled = true\nruling = \"r\"\nruled_at = \"2026-09-14\"\n",
-        quoted.join(", ")
+        "\n[[rule]]\nid = \"runner.denied_commands\"\nkind = \"RunnerDeniedCommands\"\nvalue = [{}]\nenabled = true\nruling = \"r\"\nruled_at = \"2026-09-14\"\n{}",
+        quoted.join(", "),
+        host_guard_rows_text(tmux_enabled)
     )
+}
+
+/// host-guard の語列の fixture（git は runner と重複・tmux と台帳の語列は runner に無い）。
+const HOST_GUARD_SEQUENCES: [(&str, &str); 3] =
+    [("host_guard.git", "git push --force"), ("host_guard.tmux", "tmux kill-server"), ("host_guard.ledger", "bd delete")];
+
+/// fixture の host-guard の行の裁定 id。
+const HOST_GUARD_RULING: &str = "user 2026-09-19T15:28Z";
+
+/// host-guard の語列の 3 行の本文（host_guard.tmux の enabled は引数）。
+fn host_guard_rows_text(tmux_enabled: bool) -> String {
+    HOST_GUARD_SEQUENCES
+        .iter()
+        .map(|(id, sequence)| {
+            let enabled = *id != "host_guard.tmux" || tmux_enabled;
+            format!(
+                "\n[[rule]]\nid = \"{id}\"\nkind = \"HostGuardDeniedCommands\"\nvalue = [\"{sequence}\"]\nenabled = {enabled}\nruling = \"{HOST_GUARD_RULING}\"\nruled_at = \"2026-09-19\"\n"
+            )
+        })
+        .collect()
 }
 
 /// 役割の行の本文（役割は orchestrator 1 つ＝行も 1 本・`schema` 行と禁じる語列の行は持たない）。
