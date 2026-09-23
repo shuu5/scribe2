@@ -513,6 +513,21 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
       "@id": "../spec/srs.html#FR61"
     },
     {
+      "@id": "../spec/srs.html#FR72"
+    },
+    {
+      "@id": "../spec/srs.html#FR73"
+    },
+    {
+      "@id": "../spec/srs.html#FR74"
+    },
+    {
+      "@id": "../spec/srs.html#FR75"
+    },
+    {
+      "@id": "../spec/srs.html#FR76"
+    },
+    {
       "@id": "../spec/srs.html#NFR4"
     },
     {
@@ -550,10 +565,10 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 <p class="cover-sub">git の履歴の破壊・rm の不可逆な削除・tmux server の破壊・台帳の破壊を止める見張りは、 いま器の外の script と共有 plugin に在り、 判定の本体が見つからないと黙って通す。 本 ADR は、 その判定を器のプログラムの 1 つの口へ移し、 口座の設定 file の hook 行から呼んで、 口座の設定を読む全 session (器を積まない session を含む) に効かせる形を決める。 切るのは裁定つきの規則の行だけで、 切れた状態は器の健康診断が 1 行で言う。</p>
 <div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">この記録で「器」は scribe2 の本体、 「席」は人と AI が話す 1 つの session、 「口座」は Claude を使う利用者の登録ごとの設定のまとまり (その口座の設定を読んで起きる session が全部読む)、 「見張り」は危ない操作を実行の直前に止める仕組みのことです。 git の履歴を壊す操作・元に戻せない削除・tmux の server を壊す操作・作業の記録簿 (台帳) を壊す操作を止める見張りは、 いま器の外の script と共有の plugin に在り、 判定の本体が見つからないと黙って通してしまいます。 この記録は、 その判定を器のプログラムの 1 つの口へ移し、 口座の共通設定から呼んで、 口座の設定を読む全 session (器を使わない session を含む) に効かせることを決めます。 器が自分で起こす session は口座の設定を読まないので届きません。 そのうち作業を進める session は器の plugin の見張りが守り、 review の session と口座の残りを測る session は権限の設定だけが守ります。 切るのは user の決定の印がついた規則の行だけで、 切れていることは器の健康診断が 1 行で言います。</p></div></div>
 <div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">proposed</span></span><span class="m"><span class="k">選択肢</span><span class="v">5件 (OPT1–OPT5)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 3 / トレードオフ 11</span></span><span class="m"><span class="k">版</span><span class="v">v0.1.0 / 2026-09-23</span></span></div>
-<div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>FR56</b></div>
+<div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>FR56・FR72・FR73・FR74・FR75・FR76</b></div>
 <div data-component="approval-block">
 <div class="sign"><span class="role">裁定 (user)</span><span class="who">user</span><span class="when">2026-09-20 (破壊防止の見張りを Rust で器へ取り込み、 器を入れた fleet (器を入れた machine 全体) の共通設定から器の binary を呼ぶ・切る / 調整するのは user の権限の設定・逐語は非公開の作業記録簿 = 台帳 s2-07l.494 の notes) ・ 2026-09-23 (前の器の本体の退役は本件が依存を切った後・逐語は同じ notes)</span><span class="stamp self">裁定済</span></div>
-<div class="sign"><span class="role">設計 (orchestrator)</span><span class="who">orchestrator</span><span class="when">2026-09-23 草稿 v3.4 (裁定の向きを、 器の hook の入口・command guard・起票の門・口座の口・起動の構築点の現物に合わせて形にし、 ceiling の findings 5 周分を当てた。 拘束する constitution の版 0.5.0)</span><span class="stamp self">作成</span></div>
+<div class="sign"><span class="role">設計 (orchestrator)</span><span class="who">orchestrator</span><span class="when">2026-09-23 草稿 v3.5 (裁定の向きを、 器の hook の入口・command guard・起票の門・口座の口・起動の構築点の現物に合わせて形にし、 ceiling の findings 5 周分を当てた。 拘束する constitution の版 0.5.0)</span><span class="stamp self">作成</span></div>
 </div>
 <div class="reader-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 想定読者: scribe2 の開発 session と消費側 repo の席と user — 器の内部は不要 (専門語はやさしい言葉を併記)</div>
 </header>
@@ -650,7 +665,7 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 </div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの方式を選ぶか</span><h2>選んだ方式と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、 それが要件書のどの要件を支えるかを示します。 見張りは器のプログラムの host-guard という口 1 つにまとまり、 止める区分は閉じた 5 つです。 何を止めるかと on / off は決定の印つきの規則の行が持ち、 machine ごとの緩めは持ちません。 削除の見張りは、 守る場所に当たる削除 (その場所そのもの・それを包む上の dir・その中) と、 行き先が変数・~・{ } や、 同じ命令の中で dir を移った後の相対の場所で決まる削除を断ります。 * を含む行き先は、 その前の場所が守る場所に当たるときだけ断ります。 守る設定 file も同じ「当たる」で比べ、 file ごと書き換えを断ります。 口座の共通設定の実体に呼び出しを 1 行足して書き、 道しるべの口座は 1 度で全部に効きます。 同じ改訂で要件書に足す要件も挙げます。</p></section>
+<section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの方式を選ぶか</span><h2>選んだ方式と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、 それが要件書のどの要件を支えるかを示します。 見張りは器のプログラムの host-guard という口 1 つにまとまり、 止める区分は閉じた 5 つです。 何を止めるかと on / off は決定の印つきの規則の行が持ち、 machine ごとの緩めは持ちません。 削除の見張りは、 守る場所に当たる削除 (その場所そのもの・それを包む上の dir・その中) と、 行き先が変数・~・{ } や、 同じ命令の中で dir を移った後の相対の場所で決まる削除を断ります。 * を含む行き先は、 その前の場所が守る場所に当たるときだけ断ります。 守る設定 file も同じ「当たる」で比べ、 file ごと書き換えを断ります。 口座の共通設定の実体に呼び出しを 1 行足して書き、 道しるべの口座は 1 度で全部に効きます。 要件書の v0.20 がこの決定から起こした要件 (FR72〜FR76) も挙げます。</p></section>
 <div class="chapbody">
 <div data-component="adr-decision-panel" id="decision">
 <p class="dec-kick">採用 — OPT1</p>
@@ -658,7 +673,12 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 <span class="dec-plain" data-prose-slot="plain" data-slot-id="decision-plain">危ない操作の見張りは、 器のプログラムの host-guard という口 1 つにまとめます。 止める区分は 5 つに閉じ、 何を止めるかと on / off は区分ごとの決定の印つきの規則の行が持ち、 machine ごとの緩めは持ちません。 削除の見張りは、 守る場所 (器の置き場の全部・作業中の repo の管理下の file と履歴) に当たる削除を断ります。 当たるとは、 その場所そのもの・それを包む上の dir・その中のどれかを消すことです。 相対の場所は、 作業中の dir を基準に解きます。 行き先が変数・命令の結果・~・{ } で決まる削除と、 同じ命令の中で dir を移った後の相対の場所の削除も、 行き先が確かめられないので断ります。 * を含む行き先は、 その前の場所が守る場所に当たるときだけ断ります。 それ以外は通します。 台帳の見張りは、 台帳と決まった書き込みの道具を持つ repo でだけ掛かり、 その on / off は host-guard の台帳の行が持ちます。 見張り自身の設定の書き換えを止める区分は行を持たず切れず、 守る設定 file (口座の設定 file と、 作業中の repo の設定 file 2 つ) に当たる書き換えを丸ごと断ります。 編集の道具でも、 削除・移動・複写・書き換えの命令でも、 導いた場所と実体の場所の両方で比べ、 ~ で始まる場所は末尾で比べます。 器の中の既存の見張りと重なる語の並びはこちらの行へ移し、 既存の見張りと出発前の審査はその行を on / off に関わらず読むので、 作業の守りは減りません。 口座の共通設定の実体に呼び出しを 1 行足して書き (他の設定と道しるべは保ち、 読めない設定には書かない)、 口座の設定を読むすべての session で効かせます。 器が起こす session には届かず、 作業を進める session は器の plugin の見張りが、 review の session と口座の残りを測る session は権限の設定が守ります。 通すときは何も言わず、 止めるときは区分・当たった並び・規則の出所・代わりの手順を 1 行で告げます。 渡された中身が読めないときは止め、 プログラムが見つからないときは通します。 呼ぶ道具の 5 つと待ち時間の 10 秒は足さずに固定し、 変えるときは新しい呼び出し行と新しい記録で行います。 名前・引数・返し方の形は版を跨いで変えず、 足すだけにします。 健康診断は区分ごとの on / off と出所・呼び出しの実体の数と口座の数・プログラムが見つかるかを 1 行で出します。</span>
 <span class="dec-why" data-prose-slot="rationale" data-slot-id="decision-rationale">見張りの本体が器の外に在ると、 器の規則の行とも決定の印とも照らし合わせられず、 本体が消えれば黙って通します。 判定を器の中に 1 つだけ置けば、 規則は器の他の規則と同じ場所で決まり、 同じ健康診断に乗ります。 呼び出しを口座の共通設定に置くのは、 器の plugin を積まない session にも効かせるためです。 器が起こす session は設定を読まない決まりなのでそこには届きません。 作業を進める session には器の plugin の見張りが既に掛かり、 語の並びの規則も同じ行を読みます。 review の session の起こし方は別の記録が決めていて、 本記録では変えません。 口座の設定を書き換える口は先の記録 (まだ作られていない) で決まっているので、 同じ型で呼び出しの 1 行を足します。 設定 file は道しるべで 1 つの実体を共有しているので、 実体へ書き、 実体の場所で比べ、 実体の数で数えます。 器の既存の入口と口を分けるのは、 その入口が仕える repo を解いて役割の見張りを掛ける仕組みなのに対し、 host-guard は repo を解かず、 置き場を呼び出しの引数だけで解くからです。 既存の見張りの語の切り方を変えずに照合の部品だけを共有するのは、 既存の判定を動かさないためです。 規則の値を machine の宣言 file に置かず、 HOME も読まないのは、 規則の値を repo の 1 file にだけ置き環境を読まない憲法の線を守るためです。 その代わり machine ごとの緩めは諦め、 確かめられない行き先の削除は断る側に倒します。 今のまま残す案は今日から効き作るものが無い利点がありますが、 user の決定で器へ取り込むと決まっており、 規則の本体も外に残るので退けました。 plugin にだけ載せる案は作業の session にも届きますが、 plugin を積まない session に届かないので退けました。 shell の別名は小さく作れますが、 簡単に回避でき規則が文章に置かれるので退けました。 外の製品は表現力が高いものの、 user の決定で Rust で器へ取り込むと決まっており、 部品の追加と規則の置き場の分裂も招くので退けました。</span>
 <div class="justify-box"><p class="jh">この判断が正当化する要件 (cross-doc 照会 → SRS-SCRIBE2-MVP)</p>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR56" data-justifies-req="FR56" data-justifies-role="rationale">FR56</a><span class="justify-role">rationale</span><span class="justify-note">FR56 は席または runner の session が撃つ Bash の command を manifest の禁じる語列で実行の前に断ると書く。 本 ADR はその判定を、 口座の設定を読む全 session (対話の席・口座の設定 dir を指定した起動・器を積まない session) へ広げる根拠 (器の外に本体を置かない理由と、 hook の入口と口を分ける理由) を与える。 runner は現行の経路 (器の plugin の command guard) のまま、 lens は plugin も allowlist も持たない起動形 (ADR-0011 §2.2) で FR56 の外のまま。 同じ SRS の改訂で user の /folio-architect が次を足す。 FR56 の対象の拡張と、 AC27 への素の席・器を積まない session の経路 (id は保つ)。 FR24 に、 黙るのは hook の入口だけで host-guard の口は黙らないと明記し、 AC7 の criterion を hook の入口に限る字面へ直す (id は保つ)。 NFR5 の target を「hook は binary 1 本の呼出し 2 回以内・各 2.0 秒以内・重い I/O を持たない。 host-guard の呼出しは git の問い合わせ 1 回まで」へ直し、 measure に host-guard の git の回数を足す。 新しい FR 3 つ (見張り自身の設定の編集を断る・doctor の host-guard の行・rm の不可逆削除を断り退役の mv か git rm へ向ける・番号は user が取る) と、 その AC の新設か既存 AC への link。 scope の in に host-guard の項目を 1 項目 1 用語で足す。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR56" data-justifies-req="FR56" data-justifies-role="rationale">FR56</a><span class="justify-role">rationale</span><span class="justify-note">本 ADR は、 Bash の command を manifest の禁じる語列で実行の前に断る判定を、 口座の設定を読む全 session (対話の席・口座の設定 dir を指定した起動・器を積まない session) へ広げる根拠 (器の外に本体を置かない理由と、 hook の入口と口を分ける理由) を与える。 SRS v0.20 は FR56 の対象を口座の設定を読む全 session と runner へ広げ (lens は対象の外)、 AC27 に器の plugin を積む席・runner・素の席・口座の設定 dir を指定した器を積まない起動の 4 経路を持ち、 FR24 と AC7 の沈黙を hook の入口に限り、 NFR5 は host-guard の git の問い合わせ 1 回を target に持ってその回数を歯で測る。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR72" data-justifies-req="FR72" data-justifies-role="rationale">FR72</a><span class="justify-role">rationale</span><span class="justify-note">本 ADR の見張り自身の設定の編集の種類 (行を持たず切れない・守る file を file 単位で断る・導いた path と実体の path の両方と「当たる」で比べる) が、 この要件の根拠である。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR73" data-justifies-req="FR73" data-justifies-role="rationale">FR73</a><span class="justify-role">rationale</span><span class="justify-note">本 ADR の doctor の 1 行 (種類ごとの on / off と出所・配線の実体の数と口座の数・binary の解決) と、 切れた状態を黙らせないものさし (DR3) が、 この要件の根拠である。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR74" data-justifies-req="FR74" data-justifies-role="rationale">FR74</a><span class="justify-role">rationale</span><span class="justify-note">本 ADR の rm の種類 (守る集合と「当たる」の定義・解けない path を断る・代わりの経路は git rm か退役の mv) と、 HOME を読まない憲法の読み (CTX6) が、 この要件の根拠である。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR75" data-justifies-req="FR75" data-justifies-role="rationale">FR75</a><span class="justify-role">rationale</span><span class="justify-note">本 ADR の配線の決定 (口座の口が settings.json の実体へ merge する hook 行 1 本・matcher と timeout は固定で足さない・symlink の口座は 1 度で効く) が、 この要件の根拠である。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR76" data-justifies-req="FR76" data-justifies-role="rationale">FR76</a><span class="justify-role">rationale</span><span class="justify-note">本 ADR の台帳の種類 (.beads と scripts/bdw を持つ repo でだけ掛かる・起票の門の判定と 4 形を共有する・host_guard.ledger が語列と形の両方を切る) が、 この要件の根拠である。</span></div>
 <p class="justify-tgt">照会先: SRS-SCRIBE2-MVP — SRS: 設計 → 契約 → 実装 → 検証 → land を、 人の手を借りずに 1 本通す器（MVP）</p>
 </div>
 </div>
@@ -730,7 +750,7 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 </div>
 <footer class="foot" data-component="fidelity-sync-meta"><div class="ft-grid">
 <div class="ft-plain">このページは、大もとの機械データ (正本) から自動で組み立てられています。構造は機械が自動で検査し、内容が元データに忠実かは独立のレビューで確かめます。</div>
-<div data-audience="machine">機械SSoT: <b>ADR-0056-hostguard.adr.yaml</b> &middot; 生成: <b>2026-09-23 09:02</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
+<div data-audience="machine">機械SSoT: <b>ADR-0056-hostguard.adr.yaml</b> &middot; 生成: <b>2026-09-23 12:18</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
 <div class="tags" data-audience="machine"><span>folio design system</span><span>ADR-pack</span><span>folio engine B1 (instance#2)</span><span>cross-doc 照会</span></div>
 </div></footer>
 <!-- folio:chrome-bottom -->
