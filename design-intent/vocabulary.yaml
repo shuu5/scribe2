@@ -661,6 +661,16 @@ terms:
     domain: consumer
     definition: tracked な設計 doc が末尾に持つ機械が読む区間の表。 1 行 = 契約 1 本で、 契約の正本 (SRS FR47・ADR-0023 §2.1)。 欄の集合の正本は core の型で、 文書は生成物 contracts/schema.toml を pointer で指す (ADR-0013 §2.1)。 読み手は rules manifest と同じ 1 組の parser (ADR-0010 §2.1)。
     relationships: [契約, 設計 doc, 設計 pointer, write-set の閉包, 契約 id]
+  - canonical: 見込み行数
+    domain: consumer
+    aliases: [growth]
+    definition: 契約表の行の任意の欄 growth が file ごとに宣言する、 その便でその file が増える行数の見込み。 size は既定の 1 file あたりの見込みで、 growth は名指した file だけを上書きする (ADR-0057・contract-source.md §46)。 受付の上限の余地の判定にだけ効き、 上限そのものは gate が測る (憲法 C10)。
+    relationships: [契約表, 受付, 上限の余地, write-set]
+  - canonical: 上限の余地
+    domain: consumer
+    aliases: [cap headroom]
+    definition: write-set の .rs file の上限 (R-C4-2) と base の行数の差。 受付が file ごとの見込み行数と比べ、 見込みが余地を超える file を名指して断る (contract-source.md §3 / §46・ADR-0057)。 core の合計 (R-C4-1) も見込みの和で同じ式を 1 回。
+    relationships: [受付, 見込み行数, write-set, 便]
   - canonical: 設計 pointer
     domain: consumer
     definition: 設計 doc の path と契約 id の対。 intake の入力 (SRS FR53) で、 台帳の bead の受入条件が持つ 1 行でもある (SRS FR2)。

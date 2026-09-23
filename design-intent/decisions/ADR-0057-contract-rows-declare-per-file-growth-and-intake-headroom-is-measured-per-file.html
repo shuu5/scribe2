@@ -1,0 +1,766 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="folio ADR-pack assembler (folio-bwc / instance#2) — deterministic structure, prose slots unfilled">
+<title>契約表の行は file ごとの見込み行数を任意の欄 growth で宣言でき、 受付の上限の余地は file ごとの見込みで測る (size は既定の見込み・宣言は受付の先読みだけ・上限は gate が守る)</title>
+<style>
+/* ===========================================================================
+   folio human-layer design system — core.css (S3 / folio-8oc プロトタイプ)
+   要件定義書 (SRS) ビジュアル design system の中核 register。
+   視覚言語 = deck帯 × B2高密度 (ADR-0041)。テーマ = 環境追従 prefers-color-scheme。
+   styling は意味クラス、taxonomy 識別は [data-component] 属性 (floor gate A)。
+   taxonomy = design-intent/research/srs-component-taxonomy.html
+   =========================================================================== */
+
+/* ---- requirement-type-color-tokens (meta / 全 register が共有・両テーマ定義) ---- */
+:root{
+  --ink:#08131a; --ink-soft:#3a4a55; --ink-faint:#5b6671;
+  --paper:#ffffff; --paper-2:#f5f8fa; --paper-3:#eef3f7;
+  --line:#dbe4ea; --line-soft:#eef3f7;
+  --brand:#2a4d6e; --brand-deep:#15324a; --brand-tint:#e8f0f7;
+  --ok:#1e7b65; --ok-tint:#e6f6f2; --ok-line:#9fd9cb;
+  --bad:#b22323; --bad-tint:#fdf3f3; --bad-line:#eab3b3;
+  --warn:#916626; --warn-tint:#fefbea; --warn-line:#e4cf8f;
+  --info:#2a5d9e; --info-tint:#eaf1fb; --info-line:#a8c4e8;
+  --violet:#5b3e8e; --violet-tint:#f0eafa; --violet-line:#cdb8ec;
+  --shadow:0 1px 2px rgba(8,19,26,.06),0 8px 24px rgba(8,19,26,.07);
+  --shadow-lg:0 2px 6px rgba(8,19,26,.08),0 18px 50px rgba(8,19,26,.12);
+  /* 要件型カラートークン (FR/NFR/CON/ASM) */
+  --fr:var(--brand); --nfr:var(--violet); --con:var(--warn); --asm:var(--info);
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --ink:#e8eef2; --ink-soft:#a9b7c1; --ink-faint:#8a99a4; /* ink-faint: 全 dark bg で contrast ≥4.85 = WCAG AA (≥4.5) 充足・最小は ok-tint/warn-tint (gate F・folio-vuf) */
+    --paper:#0d171e; --paper-2:#15222b; --paper-3:#1b2c37;
+    --line:#273947; --line-soft:#1b2c37;
+    --brand:#7db8e8; --brand-deep:#1d3a54; --brand-tint:#16293a;
+    --ok:#5ac8b8; --ok-tint:#10302b; --ok-line:#2e6258;
+    --bad:#ef7a7a; --bad-tint:#341c1c; --bad-line:#6e3636;
+    --warn:#d6a94e; --warn-tint:#312a13; --warn-line:#5e4e23;
+    --info:#7da9e8; --info-tint:#16263c; --info-line:#33507c;
+    --violet:#b89be0; --violet-tint:#241a36; --violet-line:#473a64;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.5);
+    --shadow-lg:0 2px 6px rgba(0,0,0,.5),0 18px 50px rgba(0,0,0,.6);
+  }
+}
+*{box-sizing:border-box;}
+html{scroll-behavior:smooth;}
+body{
+  margin:0; background:var(--paper-2); color:var(--ink);
+  font-family:"Noto Sans CJK JP","Noto Sans JP",system-ui,-apple-system,"Hiragino Kaku Gothic ProN",Meiryo,sans-serif;
+  font-feature-settings:"palt" 1; line-height:1.7; letter-spacing:.01em;
+  -webkit-font-smoothing:antialiased;
+}
+.page{max-width:1280px; margin:0 auto; background:var(--paper); box-shadow:var(--shadow-lg);}
+svg{display:block;} .ico{width:1em; height:1em;}
+
+/* ---- plain-language-term-inline (glossary 派生ビュー / 専門語のやさしい併記) ---- */
+.term{
+  /* font-size 下限 (folio-276 #5)。 .72em は em 連鎖 (例 .actor .role=11px 内) で 7.9px<8px へ縮み
+     判読不能化する。 max() で 10.5px を下限に据え、 広文脈では従来比率を保つ。 */
+  display:inline-block; font-size:max(10.5px,.72em); font-weight:700; line-height:1;
+  padding:.18em .5em; border-radius:999px; margin-left:.3em; vertical-align:.08em;
+  background:var(--paper-3); color:var(--ink-soft); border:1px solid var(--line);
+  letter-spacing:.02em; white-space:nowrap;
+}
+.term.en{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;}
+
+/* ===================== doc-cover-band (deck-band / 表紙) ===================== */
+[data-component="doc-cover-band"]{
+  position:relative; overflow:hidden; color:#fff;
+  /* deeper navy にして白文字 (小サイズ含む) を WCAG AA 維持 (gate F worst-case-stop が最明合成でも
+     ≥4.5 を要求)。 highlight radial は薄め、 linear の最明端 (旧 #33658f) を暗色化。 */
+  background:
+    radial-gradient(1200px 500px at 88% -10%, rgba(255,255,255,.07), transparent 60%),
+    linear-gradient(135deg,#0c1f30 0%,#143049 48%,#173a57 100%);
+  padding:54px 56px 46px;
+}
+.cover-eyebrow{font-size:12.5px; font-weight:700; letter-spacing:.22em; text-transform:uppercase; opacity:.86; margin:0 0 14px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;}
+.cover-eyebrow .doc-type{background:rgba(255,255,255,.16); padding:3px 10px; border-radius:6px; letter-spacing:.16em; border:1px solid rgba(255,255,255,.22);}
+[data-component="doc-cover-band"] h1{font-size:42px; line-height:1.14; margin:0 0 8px; font-weight:800; text-wrap:balance;}
+.cover-sub{font-size:17px; opacity:.9; margin:0 0 22px; font-weight:500;}
+.summary-card{background:rgba(255,255,255,.1); border:1px solid rgba(255,255,255,.2); border-radius:14px; padding:18px 22px; display:flex; gap:18px; align-items:flex-start; max-width:880px;}
+.summary-card .lab{font-size:11px; font-weight:700; letter-spacing:.16em; opacity:.8; margin:0 0 4px;}
+.summary-card .txt{font-size:17.5px; line-height:1.6; font-weight:600; margin:0;}
+.summary-card .txt b{color:#ffe8a8;}
+.cover-meta{display:flex; flex-wrap:wrap; gap:10px 26px; margin-top:24px; font-size:13px;}
+.cover-meta .m{display:flex; gap:8px; align-items:center; opacity:.92;}
+.cover-meta .m .k{opacity:.62; font-weight:600;} .cover-meta .m .v{font-weight:700;}
+.reader-chip{display:inline-flex; gap:8px; align-items:center; margin-top:18px; background:#ffce6e; color:#3a2c05; font-weight:700; font-size:13.5px; padding:8px 14px; border-radius:10px; box-shadow:0 3px 10px rgba(0,0,0,.2);}
+a{color:var(--brand);} /* anchor 既定色 — UA 既定 #0000ee は dark bg で 1.72 (skip-link/domain 目次等の素 anchor で 3 例目の同型欠陥・型 selector ゆえ class 付きリンクは specificity で不変・gate F WCAG AA 両テーマ ≥7.6) */
+
+/* ===================== approval-block (deck-band / 承認証跡) ★critic補填 ===== */
+[data-component="approval-block"]{display:flex; flex-wrap:wrap; gap:14px; align-items:stretch; margin-top:22px;}
+.sign{flex:1 1 200px; background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.22); border-radius:12px; padding:13px 16px; display:flex; flex-direction:column; gap:3px; min-width:0;}
+.sign .role{font-size:10.5px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; opacity:.7;}
+.sign .who{font-size:15px; font-weight:800;}
+.sign .when{font-size:11.5px; opacity:.72; font-weight:600;}
+.sign .stamp{align-self:flex-start; margin-top:4px; font-size:10px; font-weight:800; letter-spacing:.08em; padding:2px 8px; border-radius:6px; background:#ffce6e; color:#3a2c05;}
+.sign .stamp.self{background:rgba(255,255,255,.18); color:#fff; border:1px solid rgba(255,255,255,.3);}
+
+/* ===================== chapter-deck-band (deck-band / 章開き) =============== */
+[data-component="chapter-deck-band"]{position:relative; padding:34px 56px 12px;}
+[data-component="chapter-deck-band"] .num{position:absolute; top:-6px; right:34px; font-size:138px; font-weight:900; line-height:1; opacity:.06; letter-spacing:-.04em; user-select:none; pointer-events:none; font-family:ui-monospace,monospace;}
+.kicker{display:inline-flex; align-items:center; gap:9px; font-size:12px; font-weight:800; letter-spacing:.14em; text-transform:uppercase; padding:5px 12px; border-radius:8px; margin-bottom:10px;}
+[data-component="chapter-deck-band"] h2{font-size:27px; margin:0 0 6px; font-weight:800; line-height:1.2;}
+.lead{font-size:15px; color:var(--ink-soft); margin:0; max-width:920px; line-height:1.65;}
+.tint-brand{background:var(--brand-tint);} .tint-ok{background:var(--ok-tint);} .tint-bad{background:var(--bad-tint);}
+.tint-warn{background:var(--warn-tint);} .tint-info{background:var(--info-tint);} .tint-violet{background:var(--violet-tint);}
+.tint-brand .kicker{background:var(--brand); color:#fff;} .tint-ok .kicker{background:var(--ok); color:#fff;}
+.tint-bad .kicker{background:var(--bad); color:#fff;} .tint-warn .kicker{background:var(--warn); color:#fff;}
+.tint-info .kicker{background:var(--info); color:#fff;} .tint-violet .kicker{background:var(--violet); color:#fff;}
+.chapbody{padding:22px 56px 40px; background:var(--paper);}
+
+/* ===================== section-lead-callout (callout / 章導入) ============= */
+[data-component="section-lead-callout"]{display:grid; grid-template-columns:repeat(3,1fr); gap:16px;}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:14px; padding:18px 18px 16px; box-shadow:var(--shadow); position:relative; overflow:hidden;}
+.card.accent::before{content:""; position:absolute; left:0; top:0; bottom:0; width:5px; background:var(--brand);}
+.card .cid{font-size:11.5px; font-weight:800; letter-spacing:.12em; color:var(--brand); margin-bottom:8px; display:flex; align-items:center; gap:8px;}
+.card .ct{font-size:16.5px; font-weight:800; line-height:1.4; margin:0 0 6px;}
+.card .cd{font-size:13px; color:var(--ink-soft); margin:0;}
+
+/* ===================== scope-summary-panel (dense-list / 範囲) ============= */
+[data-component="scope-summary-panel"]{display:grid; grid-template-columns:1fr 1fr; gap:20px;}
+.scol{border-radius:14px; padding:18px 20px; box-shadow:var(--shadow);}
+.scol.in{background:var(--ok-tint); border:1px solid var(--ok-line);}
+.scol.out{background:var(--bad-tint); border:1px solid var(--bad-line);}
+.scol h3{margin:0 0 12px; font-size:15px; font-weight:800; display:flex; align-items:center; gap:9px;}
+.scol.in h3{color:var(--ok);} .scol.out h3{color:var(--bad);}
+.scol ul{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:9px;}
+.scol li{display:flex; gap:10px; align-items:flex-start; font-size:13.5px; line-height:1.5;}
+.scol li .b{flex:0 0 auto; margin-top:3px;}
+
+/* ===================== actor-stakeholder-table (dense-table / 主体) ======== */
+[data-component="actor-stakeholder-table"]{display:flex; flex-wrap:wrap; gap:12px;}
+.actor{display:flex; align-items:center; gap:11px; background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:11px 15px 11px 12px; box-shadow:var(--shadow); min-width:0;}
+.actor .av{flex:0 0 auto; width:38px; height:38px; border-radius:10px; display:grid; place-items:center; color:#fff;}
+.actor .nm{font-size:14px; font-weight:700; line-height:1.25;}
+.actor .role{font-size:11px; color:var(--ink-faint); font-weight:600;}
+.ext-badge{font-size:9.5px; font-weight:800; letter-spacing:.08em; background:var(--warn-tint); color:var(--warn); border:1px solid var(--warn-line); padding:1px 6px; border-radius:5px; margin-left:6px;}
+
+/* ===================== source-trace-origin (dense-table / 上位ニーズ) ★補填 = */
+[data-component="source-trace-origin"]{width:100%; min-width:440px; border-collapse:separate; border-spacing:0; font-size:13.5px;}
+[data-component="source-trace-origin"] thead th{background:var(--info); color:#fff; text-align:left; font-size:11.5px; font-weight:800; letter-spacing:.06em; padding:11px 14px;}
+[data-component="source-trace-origin"] thead th:first-child{border-top-left-radius:12px;} [data-component="source-trace-origin"] thead th:last-child{border-top-right-radius:12px;}
+[data-component="source-trace-origin"] tbody td{padding:12px 14px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.5;}
+[data-component="source-trace-origin"] tbody tr:nth-child(even) td{background:var(--paper-2);}
+[data-component="source-trace-origin"] .nid{font-weight:800; font-family:ui-monospace,monospace; color:var(--info); white-space:nowrap;}
+[data-component="source-trace-origin"] .origin{font-size:11.5px; color:var(--ink-faint); font-weight:700;}
+
+/* ===================== requirement-matrix-table (dense-table / 要件本体) === */
+[data-component="requirement-matrix-table"]{width:100%; min-width:620px; border-collapse:separate; border-spacing:0; font-size:13.5px;}
+[data-component="requirement-matrix-table"] thead th{background:var(--brand-deep); color:#fff; text-align:left; font-size:11.5px; font-weight:800; letter-spacing:.06em; padding:11px 14px;}
+[data-component="requirement-matrix-table"] thead th:first-child{border-top-left-radius:12px;} [data-component="requirement-matrix-table"] thead th:last-child{border-top-right-radius:12px;}
+[data-component="requirement-matrix-table"] tbody td{padding:12px 14px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.5;}
+[data-component="requirement-matrix-table"] tbody tr:nth-child(even) td{background:var(--paper-2);}
+[data-component="requirement-matrix-table"] tbody tr:hover td{background:var(--brand-tint);}
+.fid{font-weight:800; font-family:ui-monospace,monospace; font-size:13px; white-space:nowrap; color:var(--brand);}
+td.cond{color:var(--ink-soft); font-size:13px; width:22%;}
+td.resp{font-size:13.5px; width:40%;}
+/* ears-requirement-row: 根拠 Rationale を必須スロットとして明示 (critic #3 格上げ) */
+td.resp .why{display:block; margin-top:5px; font-size:11.5px; color:var(--ink-faint); padding-left:62px; position:relative;}
+td.resp .why::before{content:"↳ なぜ要る"; position:absolute; left:0; font-weight:700; color:var(--ink-faint);}
+td.resp .plain{display:block; margin-top:5px; font-size:12.5px; color:var(--ink-soft);}
+td.resp .plain::before{content:"やさしく言うと "; font-weight:700; font-size:10px; color:var(--brand);}
+/* dense-table を clip せず狭幅で内部横スクロールへ倒す (folio-276 #1)。 旧 overflow:hidden は
+   375-390px で列を 1 文字/行へ潰し判読不能にした上 scroll も封じていた (gate F 盲点=#2 で捕捉)。
+   overflow-x:auto + table 側 min-width = rtm-grid と同じ「狭幅は横スクロール」方針へ統一する。 */
+.tbl-wrap{border:1px solid var(--line); border-radius:12px; overflow-x:auto; box-shadow:var(--shadow);}
+
+/* ---- priority-badge + EARS chip (badge) ---- */
+.ears{display:inline-flex; align-items:center; gap:5px; font-size:10.5px; font-weight:800; letter-spacing:.04em; padding:3px 9px; border-radius:7px; white-space:nowrap; border:1px solid;}
+.ears.always{background:var(--info-tint); color:var(--info); border-color:var(--info-line);}
+.ears.trigger{background:var(--brand-tint); color:var(--brand); border-color:var(--brand);}
+.ears.state{background:var(--violet-tint); color:var(--violet); border-color:var(--violet-line);}
+.ears.forbid{background:var(--bad-tint); color:var(--bad); border-color:var(--bad-line);}
+.ears.option{background:var(--warn-tint); color:var(--warn); border-color:var(--warn-line);}
+.ears .en{opacity:.7; font-weight:600; font-family:ui-monospace,monospace; font-size:9px;}
+.prio{display:inline-flex; align-items:center; gap:4px; font-size:10px; font-weight:800; letter-spacing:.04em; padding:2px 8px; border-radius:6px; white-space:nowrap;}
+.prio.must{background:var(--bad); color:#fff;} .prio.should{background:var(--warn); color:#fff;} .prio.may{background:var(--paper-3); color:var(--ink-soft); border:1px solid var(--line);}
+.vmeth{font-size:10px; font-weight:800; font-family:ui-monospace,monospace; padding:2px 6px; border-radius:5px; background:var(--ok-tint); color:var(--ok); border:1px solid var(--ok-line);}
+.ears-legend{display:flex; flex-wrap:wrap; gap:10px; margin-bottom:14px; align-items:center;}
+.ears-legend .lt{font-size:12px; font-weight:700; color:var(--ink-soft); margin-right:4px;}
+/* ears-requirement-row = requirement-matrix-table の各 <tr>。行 styling は table を継承し、
+   data-component で floor gate A 識別 + 根拠 (td.resp .why) を空不可スロットに保つ */
+tr[data-component="ears-requirement-row"] td.resp .why:empty::after{content:"⚠ 根拠 未記入"; color:var(--bad); font-weight:700;}
+
+/* ===================== nfr-hero-metrics + nfr-metrics-table =============== */
+[data-component="nfr-hero-metrics"]{display:grid; grid-template-columns:repeat(4,1fr); gap:16px; margin-bottom:24px;}
+.nfr-hero{border-radius:16px; padding:20px 18px 18px; box-shadow:var(--shadow); position:relative; overflow:hidden; border:1px solid var(--line); background:var(--paper);}
+.nfr-hero .cat{font-size:11px; font-weight:800; letter-spacing:.1em; text-transform:uppercase; margin-bottom:8px; display:flex; align-items:center; gap:7px;}
+.nfr-hero .big{font-size:38px; font-weight:900; line-height:1; letter-spacing:-.02em; display:flex; align-items:baseline; gap:4px;}
+.nfr-hero .big .u{font-size:16px; font-weight:800; opacity:.7;}
+.nfr-hero .qual{font-size:12.5px; font-weight:600; color:var(--ink-soft); margin-top:8px; line-height:1.45;}
+.nfr-hero.c1{background:linear-gradient(160deg,var(--info-tint),var(--paper));} .nfr-hero.c1 .cat,.nfr-hero.c1 .big{color:var(--info);}
+.nfr-hero.c2{background:linear-gradient(160deg,var(--ok-tint),var(--paper));} .nfr-hero.c2 .cat,.nfr-hero.c2 .big{color:var(--ok);}
+.nfr-hero.c3{background:linear-gradient(160deg,var(--brand-tint),var(--paper));} .nfr-hero.c3 .cat,.nfr-hero.c3 .big{color:var(--brand);}
+.nfr-hero.c4{background:linear-gradient(160deg,var(--violet-tint),var(--paper));} .nfr-hero.c4 .cat,.nfr-hero.c4 .big{color:var(--violet);}
+[data-component="nfr-metrics-table"]{width:100%; min-width:480px; border-collapse:separate; border-spacing:0; font-size:13px;}
+[data-component="nfr-metrics-table"] th{background:var(--paper-3); text-align:left; font-size:11px; font-weight:800; letter-spacing:.05em; color:var(--ink-soft); padding:10px 14px; text-transform:uppercase;}
+[data-component="nfr-metrics-table"] td{padding:11px 14px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.55;}
+[data-component="nfr-metrics-table"] tbody tr:last-child td{border-bottom:none;}
+.nid{font-weight:800; font-family:ui-monospace,monospace; color:var(--brand); white-space:nowrap;}
+.tgt{font-weight:800; color:var(--ink); white-space:nowrap;}
+.meas{color:var(--ink-soft); font-size:12.5px;}
+
+/* ===================== rtm-grid (rtm-grid / 双方向トレース + 孤立検出) ===== */
+[data-component="rtm-grid"]{overflow-x:auto; border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow);}
+.rtm{border-collapse:separate; border-spacing:0; font-size:12.5px; width:100%; min-width:760px;}
+.rtm th,.rtm td{padding:11px 12px; text-align:center; border-bottom:1px solid var(--line); border-right:1px solid var(--line-soft);}
+.rtm th{background:var(--brand-deep); color:#fff; font-size:11px; font-weight:800; letter-spacing:.04em;}
+.rtm thead th:first-child{text-align:left;}
+.rtm .grp{background:var(--paper-3); color:var(--ink-soft); font-weight:800; font-size:10.5px; letter-spacing:.06em; text-transform:uppercase;}
+.rtm tbody th{background:var(--paper-2); text-align:left; font-weight:800; color:var(--brand); font-family:ui-monospace,monospace; white-space:nowrap; font-size:12px;}
+.rtm tbody th .lbl{display:block; font-family:inherit; font-weight:600; color:var(--ink-soft); font-size:10.5px; margin-top:2px;}
+.rtm td.hit{background:var(--ok-tint);}
+.rtm td .dot{display:inline-grid; place-items:center; width:22px; height:22px; border-radius:50%; background:var(--ok); color:#fff;}
+.rtm td .dot.ac{display:inline-flex; align-items:center; width:auto; min-width:0; height:auto; border-radius:6px; padding:2px 7px; font-size:10px; font-weight:700; line-height:1.2; margin:1px;}
+.rtm td.gap{background:var(--bad-tint);} .rtm td.gap .x{color:var(--bad); font-weight:900;}
+.rtm tbody tr:last-child td,.rtm tbody tr:last-child th{border-bottom:none;}
+
+/* ===================== rtm-collapse (折りたたみ RTM の fold affordance / folio-276 #4) ====
+   生成 SRS は核心 RTM を <details data-component="rtm-collapse"> で既定折りたたむ。 素の details は
+   marker が小さく「開けるUI」と気付けず要旨が素通りした (ceiling 第2層)。 summary を panel ヘッダ化し
+   ▶ caret + 「クリックで開閉」ヒントで開閉可能性を明示する。 折りたたみ機構自体は assembler が所有。 */
+[data-component="rtm-collapse"]{border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow); background:var(--paper); overflow:hidden;}
+[data-component="rtm-collapse"]>summary{cursor:pointer; list-style:none; user-select:none; display:flex; align-items:center; gap:11px; padding:15px 20px; font-size:14.5px; font-weight:800; color:var(--brand); background:var(--brand-tint);}
+[data-component="rtm-collapse"]>summary::-webkit-details-marker{display:none;}
+[data-component="rtm-collapse"]>summary::before{content:""; flex:0 0 auto; width:0; height:0; border-left:7px solid currentColor; border-top:5px solid transparent; border-bottom:5px solid transparent; transition:transform .15s ease;}
+[data-component="rtm-collapse"][open]>summary::before{transform:rotate(90deg);}
+[data-component="rtm-collapse"]>summary::after{content:"クリックで開閉"; margin-left:auto; font-size:10.5px; font-weight:700; letter-spacing:.04em; color:var(--ink-faint); background:var(--paper); border:1px solid var(--line); border-radius:6px; padding:2px 9px;}
+[data-component="rtm-collapse"][open]>summary{border-bottom:1px solid var(--line);}
+[data-component="rtm-collapse"]>.rtm-summary-derived,[data-component="rtm-collapse"]>[data-prose-slot="rtm-summary"]{margin:0; padding:13px 20px 0; font-size:13px; color:var(--ink-soft); line-height:1.6;}
+[data-component="rtm-collapse"]>[data-component="rtm-grid"]{margin:16px 20px 18px;}
+
+/* ===================== acceptance-criteria-checklist (dense-list) ========= */
+[data-component="acceptance-criteria-checklist"]{display:grid; grid-template-columns:repeat(3,1fr); gap:16px;}
+.ac{background:var(--paper); border:1px solid var(--ok-line); border-radius:14px; padding:17px 18px; box-shadow:var(--shadow); position:relative; display:flex; flex-direction:column; gap:8px;}
+.ac::before{content:""; position:absolute; left:0; top:0; bottom:0; width:5px; background:var(--ok); border-radius:14px 0 0 14px;}
+.ac .aid{font-size:11.5px; font-weight:800; color:var(--ok); letter-spacing:.1em; display:flex; align-items:center; gap:8px;}
+.ac .at{font-size:14.5px; font-weight:700; line-height:1.5; margin:0;}
+.ac .at b{color:var(--ok); font-weight:800;}
+.ac .metric{display:flex; align-items:baseline; gap:6px; margin-top:auto; padding-top:6px;}
+.ac .metric .v{font-size:26px; font-weight:900; color:var(--ok); line-height:1;}
+.ac .metric .l{font-size:11.5px; color:var(--ink-faint); font-weight:600;}
+
+/* ===================== constraint-callout (callout / 制約・規制) =========== */
+[data-component="constraint-callout"]{width:100%; border-collapse:separate; border-spacing:0; font-size:13.5px;}
+[data-component="constraint-callout"] td{padding:13px 16px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.55;}
+[data-component="constraint-callout"] tbody tr:last-child td{border-bottom:none;}
+.cid2{font-weight:800; font-family:ui-monospace,monospace; color:var(--warn); white-space:nowrap; width:60px;}
+.cl{font-weight:700; white-space:nowrap; width:170px; color:var(--ink);}
+.reg-badge{font-size:9.5px; font-weight:800; letter-spacing:.06em; background:var(--bad-tint); color:var(--bad); border:1px solid var(--bad-line); padding:1px 7px; border-radius:5px; margin-left:6px;}
+
+/* ===================== glossary-term-table (glossary / 用語 SSoT) ========= */
+[data-component="glossary-term-table"]{display:grid; grid-template-columns:1fr 1fr; gap:0 28px; border:1px solid var(--line); border-radius:14px; overflow:hidden; box-shadow:var(--shadow);}
+.grow{display:flex; gap:16px; padding:15px 20px; border-bottom:1px solid var(--line-soft); align-items:flex-start;}
+.grow:nth-child(odd){background:var(--paper);} .grow:nth-child(even){background:var(--paper-2);}
+.gword{flex:0 0 142px; font-size:14.5px; font-weight:800; color:var(--brand); line-height:1.3;}
+.gword .en{display:block; font-size:11px; font-weight:700; color:var(--ink-faint); font-family:ui-monospace,monospace; margin-top:2px;}
+.gdef{font-size:13px; color:var(--ink-soft); line-height:1.55;}
+
+/* ===================== fidelity-sync-meta + footer (meta) ================= */
+.foot{padding:26px 56px 40px; background:var(--brand-deep); color:rgba(255,255,255,.78); font-size:12px;}
+.foot .ft-grid{display:flex; flex-wrap:wrap; gap:14px 40px; justify-content:space-between; align-items:center;}
+.foot b{color:#fff;}
+.foot .tags{display:flex; flex-wrap:wrap; gap:8px;}
+.foot .tags span{background:rgba(255,255,255,.1); border:1px solid rgba(255,255,255,.18); padding:4px 10px; border-radius:7px; font-size:11px; font-weight:600;}
+/* i6f9: 読者向け平易行は常時可視の第 1 行 (flex-basis:100%)、 dev メタ行は font-size のみ控えめ化
+   (色/opacity は据置 = contrast 不変で gate F に新規 risk を持ち込まない)。 */
+.foot .ft-plain{flex-basis:100%; font-size:13px; color:rgba(255,255,255,.92); font-weight:500;}
+.foot .ft-grid>[data-audience="machine"]{font-size:10.5px;}
+
+/* ===========================================================================
+   残り register (taxonomy 全 37 部品の被覆) — 多くは中核 register を再利用
+   =========================================================================== */
+
+/* ---- dense-table family: interface / data / revision-history ---- */
+[data-component="interface-spec-table"],
+[data-component="data-requirements-block"],
+[data-component="revision-history-table"]{width:100%; border-collapse:separate; border-spacing:0; font-size:13px;}
+[data-component="interface-spec-table"] th,
+[data-component="data-requirements-block"] th,
+[data-component="revision-history-table"] th{background:var(--paper-3); text-align:left; font-size:11px; font-weight:800; letter-spacing:.05em; color:var(--ink-soft); padding:10px 14px; text-transform:uppercase;}
+[data-component="interface-spec-table"] td,
+[data-component="data-requirements-block"] td,
+[data-component="revision-history-table"] td{padding:11px 14px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.55;}
+[data-component="interface-spec-table"] tbody tr:last-child td,
+[data-component="data-requirements-block"] tbody tr:last-child td,
+[data-component="revision-history-table"] tbody tr:last-child td{border-bottom:none;}
+.iid{font-weight:800; font-family:ui-monospace,monospace; color:var(--info); white-space:nowrap;}
+.dir{font-size:10px; font-weight:800; padding:2px 7px; border-radius:5px; background:var(--info-tint); color:var(--info); border:1px solid var(--info-line);}
+
+/* ---- dense-list family: ui / functions / use-case / references / toc / appendix ---- */
+[data-component="ui-spec-block"],
+[data-component="product-functions-list"],
+[data-component="use-case-card"],
+[data-component="references-list"],
+[data-component="toc-navigator"],
+[data-component="assumptions-constraints-list"],
+[data-component="supporting-info-appendix"]{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:9px;}
+[data-component="ui-spec-block"] li,
+[data-component="product-functions-list"] li,
+[data-component="references-list"] li,
+[data-component="toc-navigator"] li,
+[data-component="assumptions-constraints-list"] li,
+[data-component="supporting-info-appendix"] li{display:flex; gap:11px; align-items:flex-start; background:var(--paper); border:1px solid var(--line); border-radius:11px; padding:11px 15px; box-shadow:var(--shadow); font-size:13.5px; line-height:1.5;}
+[data-component="assumptions-constraints-list"] li{border-left:5px solid var(--warn);}
+.li-tag{font-size:10px; font-weight:800; padding:2px 7px; border-radius:5px; background:var(--warn-tint); color:var(--warn); border:1px solid var(--warn-line); flex:0 0 auto;}
+[data-component="toc-navigator"]{display:grid; grid-template-columns:repeat(2,1fr); gap:9px 18px;}
+[data-component="toc-navigator"] li{box-shadow:none; border-color:var(--line-soft);}
+[data-component="toc-navigator"] .tn{font-weight:800; font-family:ui-monospace,monospace; color:var(--brand); flex:0 0 auto;}
+[data-component="references-list"] .ref-n{font-weight:800; font-family:ui-monospace,monospace; color:var(--ink-faint); flex:0 0 auto;}
+.li-key{font-weight:800; color:var(--brand); flex:0 0 auto;}
+
+/* use-case-card: precondition/flow/postcondition の枠 */
+[data-component="use-case-card"] li{flex-direction:column; gap:7px; border-left:5px solid var(--info); padding:14px 17px;}
+.uc-id{font-size:11.5px; font-weight:800; color:var(--info); letter-spacing:.08em;}
+.uc-flow{display:flex; flex-wrap:wrap; gap:6px; align-items:center; font-size:12.5px;}
+.uc-flow .stp{background:var(--paper-2); border:1px solid var(--line); border-radius:7px; padding:3px 9px; font-weight:600;}
+.uc-flow .ar{color:var(--ink-faint); font-weight:800;}
+
+/* ---- rtm-grid family: verification-method-grid / requirement-attributes-rtm ---- */
+[data-component="verification-method-grid"],
+[data-component="requirement-attributes-rtm"]{overflow-x:auto; border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow);}
+[data-component="verification-method-grid"] table,
+[data-component="requirement-attributes-rtm"] table{border-collapse:separate; border-spacing:0; font-size:12.5px; width:100%; min-width:680px;}
+[data-component="verification-method-grid"] th,
+[data-component="requirement-attributes-rtm"] th{background:var(--brand-deep); color:#fff; font-size:11px; font-weight:800; padding:10px 12px; text-align:left;}
+[data-component="verification-method-grid"] td,
+[data-component="requirement-attributes-rtm"] td{padding:10px 12px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.5;}
+[data-component="verification-method-grid"] tbody tr:nth-child(even) td,
+[data-component="requirement-attributes-rtm"] tbody tr:nth-child(even) td{background:var(--paper-2);}
+
+/* ---- callout family: quality-checklist / audience-toggle ---- */
+[data-component="quality-checklist-callout"]{background:var(--paper-2); border:1px solid var(--line); border-left:5px solid var(--ok); border-radius:12px; padding:16px 20px; box-shadow:var(--shadow);}
+[data-component="quality-checklist-callout"] .qt{font-size:13px; font-weight:800; color:var(--ok); margin:0 0 10px; display:flex; align-items:center; gap:8px;}
+[data-component="quality-checklist-callout"] ul{list-style:none; margin:0; padding:0; display:grid; grid-template-columns:repeat(3,1fr); gap:7px 16px;}
+[data-component="quality-checklist-callout"] li{font-size:12.5px; display:flex; gap:7px; color:var(--ink-soft);}
+[data-component="quality-checklist-callout"] li .ck{color:var(--ok); font-weight:900; flex:0 0 auto;}
+[data-component="audience-toggle"]{display:inline-flex; gap:0; border:1px solid var(--line); border-radius:10px; overflow:hidden; box-shadow:var(--shadow);}
+[data-component="audience-toggle"] button{border:none; background:var(--paper); color:var(--ink-soft); font:inherit; font-size:12.5px; font-weight:700; padding:8px 16px; cursor:pointer; border-right:1px solid var(--line);}
+[data-component="audience-toggle"] button:last-child{border-right:none;}
+[data-component="audience-toggle"] button[aria-pressed="true"]{background:var(--brand); color:#fff;}
+
+/* ---- diagram family: context / use-case-flow / state-machine ---- */
+[data-component="context-diagram"],
+[data-component="use-case-flow-diagram"],
+[data-component="state-machine-diagram"]{background:var(--paper); border:1px solid var(--line); border-radius:14px; padding:20px; box-shadow:var(--shadow); overflow-x:auto;}
+[data-component="context-diagram"] figcaption,
+[data-component="use-case-flow-diagram"] figcaption,
+[data-component="state-machine-diagram"] figcaption{font-size:11.5px; color:var(--ink-faint); font-weight:600; margin-top:10px; text-align:center;}
+/* use-case flow steps (横並びステップ) */
+.uc-basic{display:flex; align-items:stretch; gap:0; flex-wrap:wrap;}
+.uc-step{flex:1 1 0; min-width:140px; background:var(--paper); border:1px solid var(--brand); border-radius:13px; padding:14px; box-shadow:var(--shadow); display:flex; flex-direction:column; gap:5px;}
+.uc-arrow{flex:0 0 30px; display:grid; place-items:center; color:var(--brand); font-weight:800;}
+.uc-step .sn{font-size:11px; font-weight:800; color:var(--brand); letter-spacing:.06em;}
+.uc-step .st{font-size:14px; font-weight:800; line-height:1.3;}
+.uc-step .sd{font-size:11.5px; color:var(--ink-faint); line-height:1.45;}
+
+/* ---- badge: informative-normative-label ---- */
+.io-label{display:inline-flex; align-items:center; gap:5px; font-size:10px; font-weight:800; letter-spacing:.06em; padding:2px 9px; border-radius:6px; text-transform:uppercase;}
+.io-label.normative{background:var(--brand); color:#fff;}
+.io-label.informative{background:var(--paper-3); color:var(--ink-soft); border:1px solid var(--line);}
+
+/* ---- responsive ---- */
+@media (max-width:1080px){
+  [data-component="section-lead-callout"],[data-component="nfr-hero-metrics"],[data-component="acceptance-criteria-checklist"]{grid-template-columns:1fr 1fr;}
+  [data-component="scope-summary-panel"],[data-component="glossary-term-table"]{grid-template-columns:1fr;}
+}
+@media (max-width:720px){
+  [data-component="chapter-deck-band"],.chapbody,[data-component="doc-cover-band"],.foot{padding-left:22px; padding-right:22px;}
+  [data-component="section-lead-callout"],[data-component="nfr-hero-metrics"],[data-component="acceptance-criteria-checklist"]{grid-template-columns:1fr;}
+  [data-component="doc-cover-band"] h1{font-size:31px;}
+  [data-component="chapter-deck-band"] .num{font-size:92px;}
+}
+
+/* ============================================================================
+   dark accent コントラスト補正 — ★このブロックはファイル末尾に置くこと (source-order)。
+   dark では accent トークン (--brand/--info/--warn/--ok/--bad/--violet) が明色へ反転するため、
+   それを塗りに使い白文字を載せる小要素 (kicker / priority-badge / actor avatar / dot 等) は
+   WCAG AA が崩れる (gate F low-contrast で実検出)。 文字を暗色へ切替えて contrast を確保する。
+   基底の `color:#fff` ルールと同 specificity ゆえ、 source-order で後勝ちさせるには本ブロックが
+   それら全ての後 (= ファイル末尾) に来る必要がある。 前方へ移すと基底ルールに負け無効化する。
+   構造ヘッダ/フッタ (--brand-deep 塗り) は dark でも暗色維持ゆえ白文字のままで可読。
+   ============================================================================ */
+@media (prefers-color-scheme: dark){
+  .tint-brand .kicker, .tint-ok .kicker, .tint-bad .kicker,
+  .tint-warn .kicker, .tint-info .kicker, .tint-violet .kicker,
+  [data-component="source-trace-origin"] thead th,
+  .prio.must, .prio.should,
+  .rtm td .dot,
+  .actor .av,
+  [data-component="audience-toggle"] button[aria-pressed="true"],
+  .io-label.normative{ color:#08131a; }
+}
+/* ===== ADR-pack 固有部品 (folio-bwc / instance#2)。 srs.css の token を流用 ===== */
+[data-component="adr-context-row"]{display:flex;gap:12px;align-items:flex-start;padding:13px 16px;border:1px solid var(--line);border-left:3px solid var(--info);border-radius:10px;background:var(--paper-2);margin:10px 0}
+[data-component="adr-context-row"] .cxid{flex:0 0 auto;font-weight:700;font-size:12px;color:var(--info);background:var(--info-tint);border:1px solid var(--info-line);border-radius:6px;padding:2px 8px;letter-spacing:.02em}
+[data-component="adr-context-row"] .cxbody .cxh{font-weight:700;margin:0 0 3px;font-size:14.5px}
+[data-component="adr-context-row"] .cxbody .cxd{margin:0;color:var(--ink-soft);font-size:13.5px;line-height:1.7}
+table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;margin:8px 0;font-size:13.5px}
+[data-component="adr-driver-row"] td{border:1px solid var(--line);padding:9px 12px;vertical-align:top}
+[data-component="adr-driver-row"] .drid{font-weight:700;color:var(--brand);white-space:nowrap}
+[data-component="adr-driver-row"] .drg{display:inline-block;margin-left:6px;font-size:11px;color:var(--ink-soft);background:var(--paper-3);border:1px solid var(--line);border-radius:5px;padding:1px 6px}
+.opt-grid{display:flex;flex-direction:column;gap:12px;margin:10px 0}
+[data-component="adr-option-card"]{border:1px solid var(--line);border-radius:12px;padding:14px 16px;background:var(--paper);box-shadow:var(--shadow)}
+[data-component="adr-option-card"].chosen{border:2px solid var(--ok);background:var(--ok-tint)}
+[data-component="adr-option-card"].rejected{opacity:.92}
+.opt-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:4px}
+.opt-head .opt-id{font-weight:700;font-size:12px;color:var(--ink-soft)}
+.opt-head .opt-name{font-weight:800;font-size:15px}
+.opt-verdict{font-size:11.5px;font-weight:700;border-radius:999px;padding:2px 11px;border:1px solid}
+.opt-verdict.chosen{color:var(--ok);background:var(--ok-tint);border-color:var(--ok-line)}
+.opt-verdict.rejected{color:var(--bad);background:var(--bad-tint);border-color:var(--bad-line)}
+.opt-verdict.deferred{color:var(--warn);background:var(--warn-tint);border-color:var(--warn-line)}
+[data-component="adr-option-card"] .opt-sum{margin:2px 0 8px;color:var(--ink-soft);font-size:13.5px;line-height:1.7}
+[data-component="adr-option-card"] .opt-plain{display:block;margin:0 0 9px;font-size:13px;color:var(--ink-soft);background:var(--brand-tint);border-radius:7px;padding:6px 10px}
+.opt-pc{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media(max-width:640px){.opt-pc{grid-template-columns:1fr}}
+.opt-pc ul{margin:3px 0 0;padding-left:2px;list-style:none}
+.opt-pc li{font-size:12.5px;line-height:1.65;padding-left:18px;position:relative;margin:3px 0;color:var(--ink-soft)}
+.opt-pc .pros h4,.opt-pc .cons h4{margin:0;font-size:11.5px;letter-spacing:.04em}
+.opt-pc .pros h4{color:var(--ok)} .opt-pc .cons h4{color:var(--bad)}
+.opt-pc .pros li::before{content:"+";position:absolute;left:2px;color:var(--ok);font-weight:800}
+.opt-pc .cons li::before{content:"\2212";position:absolute;left:2px;color:var(--bad);font-weight:800}
+[data-component="adr-decision-panel"]{border:2px solid var(--ok);border-radius:14px;padding:16px 18px;background:var(--ok-tint);margin:8px 0}
+[data-component="adr-decision-panel"] .dec-kick{font-size:11.5px;font-weight:700;letter-spacing:.05em;color:var(--ok);text-transform:uppercase}
+[data-component="adr-decision-panel"] .dec-state{font-size:15.5px;font-weight:700;line-height:1.7;margin:5px 0 4px}
+[data-component="adr-decision-panel"] .dec-plain{display:block;font-size:13.5px;color:var(--ink-soft);line-height:1.7;margin:0 0 8px}
+[data-component="adr-decision-panel"] .dec-why{display:block;font-size:13px;color:var(--ink);background:var(--paper);border:1px solid var(--ok-line);border-radius:8px;padding:8px 11px;line-height:1.75;margin:0 0 10px}
+.justify-box{background:var(--paper);border:1px solid var(--line);border-radius:9px;padding:10px 12px}
+.justify-box .jh{font-size:12px;font-weight:700;color:var(--ink-faint);margin:0 0 6px}
+.justify-row{display:flex;gap:9px;align-items:baseline;padding:5px 0;border-top:1px dashed var(--line)}
+.justify-row:first-of-type{border-top:0}
+.justify-req{flex:0 0 auto;font-weight:800;font-size:12.5px;color:var(--ok);background:var(--ok-tint);border:1px solid var(--ok-line);border-radius:6px;padding:1px 9px}
+.justify-role{flex:0 0 auto;font-size:10.5px;color:var(--violet);background:var(--violet-tint);border:1px solid var(--violet-line);border-radius:999px;padding:1px 8px}
+.justify-note{flex:1 1 auto;font-size:12.5px;color:var(--ink-soft);line-height:1.6}
+.justify-tgt{font-size:11.5px;color:var(--ink-faint);margin:8px 0 0}
+[data-component="adr-supersession"],[data-component="adr-principle"]{border:1px solid var(--line);border-radius:10px;padding:12px 15px;margin:10px 0;font-size:13.5px;line-height:1.7}
+[data-component="adr-supersession"]{background:var(--paper-2)}
+[data-component="adr-principle"]{background:var(--violet-tint);border-color:var(--violet-line)}
+[data-component="adr-principle"] .prin-id{font-weight:700;color:var(--violet);font-size:12px;letter-spacing:.02em}
+[data-component="adr-principle"] .prin-text{font-weight:700;margin:4px 0 2px;color:var(--ink)}
+[data-component="adr-principle"] .prin-note{color:var(--ink-soft);font-size:12.5px}
+.ss-row{margin:3px 0}.ss-row .ss-k{font-weight:700;color:var(--ink-soft);font-size:12px;margin-right:6px}
+
+</style>
+<meta name="folio-version" content="0.1.0">
+<script type="application/ld+json">
+{
+  "@context": {
+    "dc": "http://purl.org/dc/terms/",
+    "schema": "https://schema.org/",
+    "folio": "https://folio.dev/spec/v1/"
+  },
+  "@id": "./ADR-0057-contract-rows-declare-per-file-growth-and-intake-headroom-is-measured-per-file.html",
+  "@type": "schema:TechArticle",
+  "dc:isPartOf": [
+    {
+      "@id": "./README.html"
+    }
+  ],
+  "dc:title": "契約表の行は file ごとの見込み行数を任意の欄 growth で宣言でき、 受付の上限の余地は file ごとの見込みで測る (size は既定の見込み・宣言は受付の先読みだけ・上限は gate が守る)",
+  "folio:version": "0.1.0",
+  "folio:stakeholders": [
+    "Developer",
+    "AI Agent",
+    "External Reviewer"
+  ],
+  "dc:references": [
+    {
+      "@id": "../spec/constitution.html#c2"
+    },
+    {
+      "@id": "../spec/constitution.html#c4"
+    },
+    {
+      "@id": "../spec/constitution.html#c10"
+    },
+    {
+      "@id": "../spec/constitution.html#c15"
+    },
+    {
+      "@id": "../spec/constitution.html#c17"
+    },
+    {
+      "@id": "../spec/constitution.html#a2"
+    },
+    {
+      "@id": "../spec/srs.html#FR47"
+    },
+    {
+      "@id": "../spec/srs.html#FR68"
+    },
+    {
+      "@id": "../spec/srs.html#FR55"
+    },
+    {
+      "@id": "../spec/srs.html#FR39"
+    },
+    {
+      "@id": "../spec/srs.html#FR18"
+    },
+    {
+      "@id": "./ADR-0004-mvp-persistence-and-cross-version-formats.html"
+    },
+    {
+      "@id": "./ADR-0019-parallel-runs-exclude-overlap-at-intake-and-runner-resolves-conflicts.html"
+    },
+    {
+      "@id": "./ADR-0023-contract-source-is-the-design-document-table.html"
+    },
+    {
+      "@id": "./ADR-0033-core-lines-count-source-only-and-io-lives-in-a-boundary-crate.html"
+    },
+    {
+      "@id": "./ADR-0051-contract-rows-carry-promise-rows-and-ledger-state-is-two-fields.html"
+    }
+  ]
+}
+</script>
+</head>
+<body>
+<!-- folio:chrome-top -->
+<a class="skip-link" href="#cover-summary">本文へスキップ</a>
+<nav class="breadcrumb" aria-label="パンくず"><ol>
+  <li><a href="../index.html">design-intent</a></li>
+  <li><a href="./README.html">decisions</a></li>
+  <li aria-current="page">ADR-0057</li>
+</ol></nav>
+<!-- /folio:chrome-top -->
+<div class="page" data-component="requirement-type-color-tokens">
+<header data-component="doc-cover-band">
+<p class="cover-eyebrow"><span class="doc-type">設計判断記録 (ADR)</span> <span>scribe2 — 上限の余地の見積の粒度</span></p>
+<h1>契約表の行は file ごとの見込み行数を任意の欄 growth で宣言でき、 受付の上限の余地は file ごとの見込みで測る (size は既定の見込み・宣言は受付の先読みだけ・上限は gate が守る)</h1>
+<p class="cover-sub">便の受付は、 契約の size (S / M / L) が表す 1 file あたりの増分の見積を、 触る file の全部に一律に当てて、 file の上限までの余地と比べる。 複数の file を触る契約では、 実際には数十行しか増えない file まで size の値で測られ、 余地の内側に入る契約が断られていた。 本 ADR は、 契約表の行に file ごとの見込み行数を宣言できる任意の欄 growth を足し、 受付は file ごとの見込みと余地を比べる形を決める。 size は既定の見込みのまま、 上限の値と size の 3 段は変えず、 宣言を信じるのは受付の先読みだけで、 上限そのものは gate の測定が守る。</p>
+<div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">この記録で「器」は scribe2 の本体、 「便」は器が自動で進める 1 つの作業、 「余地」は file の上限 (1 file 1500 行) までの空き、 「見込み」はこの作業でその file が増えそうな行数のことです。 器は作業を始める前に、 触る file のそれぞれについて「この作業で増える行数が file の空きに入るか」を見積で確かめます。 今の見積は契約の大きさ (S / M / L) 1 つを触る file の全部に同じ値で当てるので、 増える見込みが数十行の file まで大きな値で測られ、 空きに入る作業が入口で断られていました。 この記録は、 契約の行に file ごとの見込みを書ける欄 growth を足し、 入口の検査は file ごとの見込みと空きを比べることを決めます。 大きさの 3 段と上限の値は変えません。 見込みを信じるのは入口の先読みだけで、 上限そのものは着地前の門が実際に数えて守ります。</p></div></div>
+<div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">proposed</span></span><span class="m"><span class="k">選択肢</span><span class="v">6件 (OPT1–OPT6)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 3 / トレードオフ 5</span></span><span class="m"><span class="k">版</span><span class="v">v0.1.0 / 2026-09-23</span></span></div>
+<div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>FR47・FR68・FR55</b></div>
+<div data-component="approval-block">
+<div class="sign"><span class="role">裁定 (user)</span><span class="who">user</span><span class="when">2026-09-23 (契約表の行に file ごとの見込み行数を宣言する口を器に足し、 受付は file ごとの見込みと余地を比べる・上限の値 (size の 3 段と file の上限) は変えない・設計 § と契約 1 本を先に通し、 断られた契約はその後に受付へ・逐語は非公開の作業記録簿 = 台帳 s2-07l.578 の description)</span><span class="stamp self">裁定済</span></div>
+<div class="sign"><span class="role">設計 (orchestrator)</span><span class="who">orchestrator</span><span class="when">2026-09-23 草稿 v1 (裁定の向きを、 受付の現物の式・契約表の欄の正本・写しの任意 key・rules 行 3 本に合わせて形にし、 設計 § 46 と契約表の行 ax を同じ PR に置いた。 拘束する constitution の版 0.5.0)</span><span class="stamp self">作成</span></div>
+</div>
+<div class="reader-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 想定読者: scribe2 の開発 session と契約表を書く orchestrator と user — 器の内部は不要 (専門語はやさしい言葉を併記)</div>
+</header>
+<!-- folio:chrome-toc -->
+<!-- /folio:chrome-toc -->
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">01</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v6m0 0L9 5m3 3l3-3"/><circle cx="12" cy="14" r="6"/></svg> 背景 / なぜこの判断が要るか</span><h2>いま何が問題か (確定方式を決める力学)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-01">なぜこの判断が要るのかを、 実際に起きたことと現物の仕組みと user の決定から説明します。 2026-09-23 に、 11 の source file を触る作業が入口で断られました。 断られた理由は 3 つの file の空きが足りないことでしたが、 その 3 つの file は実際には 10 行・30 行・45 行しか増えない見込みで、 空きには十分入ります。 今の仕組みは契約の大きさ 1 つを全部の file に同じ値で当てるので、 増えない file まで大きく見積もられます。 断られた作業を通すために、 AI の席が file を分割 (挙動を変えずに file を割る純移動) して空きを作る場当たりの運用も起きていました。 user は、 file ごとの見込みを書ける口を足し、 上限の値は変えないと決めました。 契約の行に欄を足すのは、 これまでに 3 回踏まれた作法です。</p></section>
+<div class="chapbody">
+<div data-component="adr-context-list">
+<div data-component="adr-context-row"><span class="cxid">CTX1</span><div class="cxbody"><p class="cxh">実測 — 余地の内側に入る契約が受付<span class="term" data-component="plain-language-term-inline" data-term="受付">便にする前の検査</span>で断られた</p><p class="cxd">2026-09-23 に、 口座の群の契約表<span class="term" data-component="plain-language-term-inline" data-term="契約表">設計 doc の中の契約の表</span>の行 i (size L・write-set<span class="term" data-component="plain-language-term-inline" data-term="write-set">触ってよい file の列</span> は 17 file・うち source file は 11) が受付の上限の余地<span class="term" data-component="plain-language-term-inline" data-term="上限の余地">file の上限までの空き</span>で断られた。 断りが名指した file は 3 つで、 余地は 297 行・642 行・677 行、 L の見積は 800 行である。 同じ行を形と done から file ごとに見積もると、 その 3 file の増分の見込みは 10 行・30 行・45 行で、 どれも余地の内側に在る (見込みは見積であって実測ではない)。 file 単位の見込みの最大は約 370 行 (群の段の file) で、 source 全体の合計も約 740 行と L の 1 段分に収まる。 行を M (300 行) に割っても、 余地 297 行の file で 3 行足りない。 つまり断りは見積の粒度の問題で、 file ごとの見込みを宣言できれば行は割らずに通る。 実測の数と 2 候補の比較は設計 § 46 の出所に在る。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX2</span><div class="cxbody"><p class="cxh">現物 — 受付の式は size を全 file に一律に当てる</p><p class="cxd">受付の上限の余地は、 write-set の source file (file の上限 R-C4-2 の測定範囲と同じ crates 配下の src の .rs) について、 base の行数と file の上限 (rules 行<span class="term" data-component="plain-language-term-inline" data-term="rules 行">裁定つきの規則の行</span> R-C4-2・1500 行) の差を余地とし、 契約の size が表す 1 file あたりの増分の見積 (rules 行 pipe.size_s_lines / m / l・100 / 300 / 800 行・user 裁定 2026-09-14) を write-set の全 .rs に一律に当て、 見積が余地を超える file を名指して断る。 core<span class="term" data-component="plain-language-term-inline" data-term="core">器の本体の source</span> の合計 (rules 行 R-C4-1) も同じ式で 1 回で、 core の見積は size の値 × write-set の .rs の本数である。 縮む面 (接頭辞 - の項目)・着地で消える file (接頭辞 ~)・置き場だけの file (接頭辞 =) は余地も本数も求めない。 撃つのは受付だけで、 契約表の検査 (CI) は撃たない (表は履歴を持ち、 landed 済みの行の file はその後も育つ)。 宣言を信じるのは受付の先読みだけで、 上限そのものは gate<span class="term" data-component="plain-language-term-inline" data-term="gate">着地前の合格の門</span> の測定 (xtask check の file-lines / core-lines・deny 線) が守る。 契約表の欄の正本は 17 欄 (任意 10) で、 rules manifest の読み手は欄の正本から知っている key を引き、 知らない key を持つ行は doc ごと拒む。 生成の写し (契約 file) は行の任意 key を 4 つ運ぶ (classes / opens / touches / targets)。 表の検査の理由の型は 15 値である。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX3</span><div class="cxbody"><p class="cxh">運用の型 — 席<span class="term" data-component="plain-language-term-inline" data-term="席">AI との対話の場</span>が場当たりの純移動で余地を作り、 戻す経路が無い</p><p class="cxd">満杯に近い file を触る契約が受付で断られると、 席は分割 (挙動を変えずに file を割る純移動) の便<span class="term" data-component="plain-language-term-inline" data-term="便">自動で進む 1 つの作業</span>を先に起こして余地を作っていた。 その純移動は設計の責務の群で切るのでなく、 断られた契約を通すための場当たりの分割になりがちで、 純移動の便自身が同じ上限の余地で断られる型も在った。 断られた契約を orchestrator<span class="term" data-component="plain-language-term-inline" data-term="orchestrator">契約を書く役割の席</span> に戻し、 少し増やせば収まるのか、 上限を大きく超えるので責務ごとに設計し直すのかを決める経路も無かった。 受付の断りの 1 行と preflight の headroom の列は file と余地を既に出すが、 見積は size の語だけで file ごとの数を持たない。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX4</span><div class="cxbody"><p class="cxh">裁定と憲法の向き</p><p class="cxd">2026-09-23 の user 裁定 (要旨) は、 契約表の行に file ごとの見込み行数<span class="term" data-component="plain-language-term-inline" data-term="見込み行数">file ごとの増分の見込み</span>を宣言できる口を器<span class="term" data-component="plain-language-term-inline" data-term="器">scribe2 の本体</span>に足し、 受付は file ごとの見込みと余地を比べ、 上限の値 (size の行数と file の上限) は変えない、 とした。 逐語は非公開の作業記録簿 (台帳 s2-07l.578 の description) に在る。 憲法の向きは次の 4 つである。 上限の値 (R-C4-1 / R-C4-2) は C4 の閾値で A2 の手続きの下に在り、 size の 3 段は裁定 id<span class="term" data-component="plain-language-term-inline" data-term="裁定 id">user の決定を指す印</span> つきの rules 行 (C5) で、 本 ADR はどちらも変えない。 宣言値は測定を経ずに有効値にならない (C10) ので、 見込みは受付の先読みにだけ効き、 gate の測定を緩めない。 受付と契約表の検査が同じ 1 本の読み手を撃ち、 写しは欄を運ぶだけ (C2)。 決定はしご (C17) の段 2「既に在る」により、 断られた周を orchestrator に返す新しい問いの型は足さず、 受付の理由の 1 行が file と余地と size を出し、 preflight の headroom の列が file ごとの余地と見積を出す形に留める。 C17.2 (仕掛けを足すときは除くものを名指す) には次のように答える。 code から除くものは無い (size の意味は既定値として残る)。 除くのは運用の側で、 設計 § 24 / § 43 の純移動を余地づくりの回避策として使う運用 (CSQ-P3) が要らなくなる。 C17.2 の「何を除くか」は code の重複と場当たりの対象で、 本 ADR は足すもの (欄 1 つ・形の検査 1 語・読み手 1 本) と除く運用を名指して条を満たす。 契約表の欄の追加は、 表を読む古い版と新しい版のプログラムの間の約束 (契約表の形・ADR-0004) に触れるので、 ADR を書く条件に当たる。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX5</span><div class="cxbody"><p class="cxh">前例 — 任意の欄の追加は踏まれた作法</p><p class="cxd">契約表の形の版 1 の下で、 後から任意の欄を足す形は 3 度踏まれている (surfaces・creates / tests / also・targets の 5 欄)。 いずれも欄の正本に足し、 生成物 contracts/schema.toml を描き直して着地し、 形の版の数字は動かなかった。 xtask の台帳の計画は自前の行の読み手を持ち、 知らない key は読まないので、 欄の追加で動かない。 一方で古い binary は知らない key を持つ行を doc ごと拒むので、 新しい欄を持つ doc を読ませるには PATH の binary の入れ替えを伴う (縮む面や置き場だけの file の接頭辞を足したときと同じ型)。</p></div></div>
+</div>
+</div>
+<section data-component="chapter-deck-band" class="tint-brand"><span class="num">02</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v18"/><path d="M5 7l-3 6h6z"/><path d="M19 7l-3 6h6z"/><path d="M3 21h18"/></svg> 判断を縛る力 / 評価の軸</span><h2>選択肢を測るものさし (安全・速さ)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-02">この判断を評価する 6 本のものさしです。 見積の粒度を測る単位 (file) に合わせること、 上限の値と大きさの 3 段を変えないこと、 入口の検査と表の検査が同じ 1 つの読み手を使い写しは欄を運ぶだけにすること、 見込みは入口の先読みだけで上限は門が守ること、 表を読むプログラムが古い版から新しい版へ移るときの形をこれまで 3 回使ってきた「任意の欄を足す」やり方に合わせること、 そして断られた作業を戻す経路を持ちつつ新しい仕掛けを足さないことです。</p></section>
+<div class="chapbody">
+<table data-component="adr-driver-table"><tbody>
+<tr data-component="adr-driver-row"><td class="drid">DR1</td><td>見積の粒度を測る単位 (file) に合わせる — 余地は file ごとに測るのだから、 見積も file ごとに宣言できなければ、 実増分の小さい file が満杯の file の隣に在るだけで契約が断られる <span class="drg">CTX1 (余地の内側に在る契約の断り)・CTX2 (一律の式)</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR2</td><td>上限の値と size の 3 段は変えない — file と core の上限は A2 の閾値、 S / M / L の行数は裁定 id つきの rules 行で、 本件は粒度の問題であって値の問題ではない <span class="drg">CTX4 (裁定・A2・C5)</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR3</td><td>受付と表の検査が同じ 1 本を撃つ — 欄の項目を path と行数へ分ける読み手は 1 本で、 受付 (1 行) と契約表の検査 (全行) が同じ関数を撃ち、 写しは欄を運ぶだけ (憲法 C2) <span class="drg">CTX2 (受付だけが撃つ式・写しの任意 key)・憲法 C2 (経路は 1 本)</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR4</td><td>宣言は先読みだけで、 上限は gate が守る — 見込みが偽でも上限は超えられない (憲法 C10・宣言値は測定を経ずに有効値にならない) <span class="drg">CTX2 (gate の deny 線)・CTX4 (C10)</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR5</td><td>表を読むプログラムが古い版から新しい版へ移るときの形を、 これまで 3 回使ってきた「任意の欄を足す」やり方 (surfaces・creates / tests / also・targets) に合わせ、 write-set の項目の文法 (6 形・接頭辞 1 字) に触れない <span class="drg">CTX5 (前例)・CTX2 (項目の文法を読む site の広さ)</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR6</td><td>断られた契約を戻す経路を持ち、 新しい問いの型は足さない — 断りが file・余地・見込みを名指し、 orchestrator が growth を書くか純移動を先に通すか設計に戻るかを決める (憲法 C17 の段 2) <span class="drg">CTX3 (戻す経路の不在)・CTX4 (C17 の段 2・OPT6 を退ける根拠)</span></td></tr>
+</tbody></table>
+</div>
+<section data-component="chapter-deck-band" class="tint-violet"><span class="num">03</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5"/></svg> 検討した選択肢 / 3 つの確定方式</span><h2>それぞれの利点と欠点を並べる</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-03">候補を 6 つ並べます。 契約の行に file ごとの見込みの欄を足す案、 触る file の列の各項目の末尾に見込みを添える案、 大きさを作業全体の合計と読み替える案、 大きさに段を足すか上限を上げる案、 何もせず分割で空きを作り続ける案、 断られたときに器が新しい問いの型で orchestrator に返す案です。 却下した 5 案にも利点を並べ、 退けた決め手が user の決定か分析かを各案に書きます。 末尾に添える案は欄を足さずに済む点で、 合計と読み替える案は数を 1 つのまま保てる点で、 問いの型を足す案は戻す経路が器の型として残る点で、 選んだ案に勝ります。</p></section>
+<div class="chapbody">
+<div class="opt-grid">
+<div data-component="adr-option-card" class="chosen">
+<div class="opt-head"><span class="opt-id">OPT1</span><span class="opt-name">契約表の行に任意の欄 growth を足し、 受付は file ごとの見込みと余地を比べる</span><span class="opt-verdict chosen">採用</span></div>
+<p class="opt-sum">行に任意の欄 growth (list・項目は path と行数をコロンで結んだ 1 語・path は write-set の項目から接頭辞を剥がした素の path・行数は 0 以上の整数) を足す。 size は今までどおり既定の 1 file あたりの見込みで、 growth は名指した file だけをその値で上書きする。 写しは欄をそのまま運び、 項目の読み手は 1 本で受付と表の検査が同じ関数を撃つ。 core の見積は file ごとの見込みの和。 表の検査は項目の形の崩れ 5 つを理由の型 1 値 (GrowthForm) で行番号つきに名指す。 preflight の headroom の列の見積が file ごとの値になる。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT1">契約の行に、 file ごとの見込みを書ける任意の欄 growth を足します。 書き方は「file の場所と行数」の対の並びで、 場所は触る file の列の項目から記号を外した素の場所、 行数は 0 以上の整数です。 大きさ (S / M / L) は今までどおり既定の見込みで、 欄に書いた file だけがその値で上書きされ、 書かない file は大きさのままです。 作業に渡す写しは欄をそのまま運び、 欄を読む部品は 1 つで、 入口の検査と表の検査が同じものを使います。 本体全体の見積は file ごとの見込みの合計です。 表の検査は、 欄の書き間違い (形が違う・触る file の列に無い・Rust の file でない・縮む file や消える file や置き場だけの file・同じ file が 2 回) を行番号つきで名指します。 事前確認の出力は file ごとの見積を出します。 利点は、 触る file の列の書き方に触れないので影響する場所が少なく、 欄を足す作法は 3 回踏まれていて、 大きさ (既定) と欄 (上書き) の意味が分かれて事前確認の 1 行で file ごとの見積が読め、 一番小さい大きさの作業 1 つに収まることです。 代わりに、 手で書く宣言が増え、 見込みと実際の差は門でしか捕まらず、 古いプログラムの入れ替えが要り (入れ替えるまでは欄を書いた作業が同じ理由で断られ続けます)、 触る file の列を器が自動で作る行と約束の行は欄を使えません。 入口を直す file 自身の空きが小さいので、 この作業は末尾に添える案と同じく一番小さい大きさでしか出せません。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>write-set の項目の文法 (6 形・接頭辞 1 字・剥がす関数 1 本) に触れず、 交差・guard・gate・導出・xtask の項目を読む site (11 file 49 か所) が不変で、 赤になる既存の歯<span class="term" data-component="plain-language-term-inline" data-term="歯">自動の検査</span>は欄の pin (FIELDS 17 → 18・任意 10 → 11・TABLE_ERRORS 15 → 16) と Contract の構築点 3 か所 (intake.rs の歯・pipe/mod.rs の歯の fixture・e2e/polarity.rs の fixture) と ContractRow の歯の fixture 2 か所 (table/check.rs・contract.rs) と CapHeadroom の samples (refuse.rs) に閉じる (全部 write-set の中) (DR5)</li>
+<li>表の形の版 1 の下で任意の欄を足す、 という踏まれた前例 3 回 (5 欄) に乗る (DR5)</li>
+<li>意味が size (既定) と growth (上書き) に分かれ、 preflight の headroom の列 1 行で file ごとの見積が読める (DR1・DR6)</li>
+<li>触る面が S の契約 1 本に収まる (DR1)</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>行ごとに file と行数の対を手で書く宣言が増え、 宣言と実増分の乖離は受付では捕まらず、 gate の上限の測定でしか捕まらない (DR4 の裏)</li>
+<li>古い binary は growth を持つ行を doc ごと拒む (知らない key) ので、 着地は PATH の binary の入れ替えを伴い、 入れ替えるまでは growth を書いた行の受付が同じ理由で断り続ける</li>
+<li>write-set の欄を持たない行 (write-set を器が導出する行と約束の行) は growth の path を照らす相手が無く、 growth を持てない</li>
+<li>本便自身は受付の余地が 133 行の file を触るので、 S でしか受付を通らない (OPT2 と同じ制約・触る行は 15 行で足りる)</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT2</span><span class="opt-name">write-set の項目の末尾に見込みを添える (path=+N の形)</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">行の write-set の項目に見込みを添え、 項目 1 つで file と見積を並べる。 決め手は分析 (項目の文法が 7 形になり、 = と + の字を別の位置で別の意味に使い、 項目を読む site 全部に波及する)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT2">触る file の列の各項目の末尾に、 見込みの行数を添える案です。 file と見込みが同じ項目に並び、 欄を足さずに済む利点があります。 けれども項目の書き方が 6 種類から 7 種類に増え、 既に別の意味で使っている記号 (= と +) を末尾で別の意味に使うことになります。 項目を読む場所は 11 の file に 49 か所あり、 その全部と「素の場所で照らす」という決まりを書き直すことになります。 古いプログラムは項目ごと読めずに断り、 直す file の空きが小さいので作業も通りにくく、 赤になる既存の検査も多くなります。 決め手は分析です。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>file と見積が同じ項目に並び、 欄を足さずに済む</li>
+<li>宣言の置き場が write-set 1 つに閉じる</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>項目の文法が 7 形になり、 置き場だけの接頭辞 = と新規 file の接頭辞 + の字を末尾で別の意味に使う。 接頭辞を剥がす site (11 file 49 か所) と、 交差・guard・gate の「素の path」の規則を書き直す (DR5)</li>
+<li>古い binary は項目ごと解けないと断り、 受付を直す file と導出の file の余地 (133 行・188 行) が M に足りず、 便自身が S でしか通らない上に赤になる既存の歯が多い (項目の形の母集団・剥がし方・受付の理由の字面)</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT3</span><span class="opt-name">size を契約全体の合計の見込みと読み替え、 file ごとの判定を外す</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">size の値を「契約全体で増える行数」と読み、 file ごとの余地の判定を外して core の合計だけを測る。 決め手は分析 (1 file の満杯を測れない)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT3">大きさ (S / M / L) を「作業全体で増える行数」と読み替え、 file ごとの判定をやめて本体全体の合計だけを測る案です。 欄も書き方も足さず、 数が 1 つのままで済む利点があります。 けれども 1 つの file が満杯かどうかを入口で測れなくなり、 満杯の file に大きな作業を当てて入口を通り、 着地前の門で落ちる型が戻ってきます。 上限は file ごとに在るのに、 見積が作業ごとになるのは噛み合いません。 決め手は分析です。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>欄も文法も足さず、 数は 1 つのまま</li>
+<li>複数 file の契約が一律の見積で断られる型は消える</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>1 file の満杯を受付で測れなくなり、 満杯の file に M を当てる契約が受付を通って gate で落ちる型 (受付の式の出所 3 件) が戻る (DR1・DR4)</li>
+<li>見積の粒度が file から契約へ粗くなり、 file ごとの余地を測る意味 (上限は file ごと) と噛み合わない</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT4</span><span class="opt-name">size に段を足す・上限の値を上げる</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">S / M / L に段を足すか、 file の上限や core の上限を上げて、 断られる契約を減らす。 決め手は裁定 (値は user 裁定で本件では変えない・A2)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT4">大きさに段を足すか、 file や本体の上限の値を上げて、 断られる作業を減らす案です。 契約の表も書き方も変えず、 規則の行の値を変えるだけで済む利点があります。 けれども上限の値は憲法が定める閾値で、 変えるには user への諮問と裁定が要ります。 大きさの 3 段の値は user の決定の印つきの規則の行にあります。 どちらも今回の決定では動かしません。 どの段を足しても「1 つの値を全部の file に当てる」粒度は変わらないので、 増えない file が満杯の file の隣に在るだけで断られる型は解けません。 決め手は user の決定です。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>契約表の欄も文法も変えず、 rules 行の値の変更だけで済む</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>上限の値 (R-C4-1 / R-C4-2) は憲法 C4 の閾値で A2 の手続きの下に在り、 size の 3 段の値は裁定 id つきの rules 行の user 裁定で、 どちらも本 ADR で動かさない (DR2)</li>
+<li>どの段を足しても 1 file あたりの見積を全 file に一律に当てる粒度は変わらず、 実増分の小さい file が満杯の file の隣に在る型は解けない (DR1)</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT5</span><span class="opt-name">何もしない (純移動で余地を作り続ける)</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">受付の式を変えず、 断られた契約のたびに席が純移動の便を先に起こして余地を作る。 決め手は裁定 (戻す経路を持つべきとの問題提起) と分析 (純移動が場当たりになる)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT5">何もせず、 断られた作業のたびに AI の席が file を分割して空きを作り続ける案です。 器を触らず、 分割は挙動を変えないので門と検査の守りは効く利点があります。 けれども分割が断られた作業を通すための場当たりになり、 分割の作業自身が同じ理由で断られることもあり、 満杯の file が固定されます。 今も断りは file と空きを出しますが、 打てる手は分割だけです。 見込みの欄ができると、 少し増えるだけなら欄を書く・大きく超えるなら分割か設計のやり直し、 と選べるようになり、 これが戻す経路です。 決め手は user の問題提起と分析です。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>器を触らず、 今日の運用のまま</li>
+<li>純移動は挙動を変えない分割なので、 gate と歯の守りは効く</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>純移動が断られた契約を通すための場当たりの分割になり、 純移動の便自身が同じ余地で断られる型も在る。 満杯の file が固定される (DR1・DR6)</li>
+<li>断られた契約を orchestrator に戻して、 少し増やせば収まるか設計し直すかを決める経路が無い (DR6)</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT6</span><span class="opt-name">断られた周に dispatcher<span class="term" data-component="plain-language-term-inline" data-term="dispatcher">便を自動で起こす部品</span> が Questioned の新しい型で orchestrator に返す</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">受付が上限の余地で断った周に、 dispatcher が質問 record の新しい型を起こし、 file ごとの見込み・余地・不足を orchestrator に返す。 決め手は分析 (憲法 C17 の段 2「既に在る」)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT6">入口で断られたときに、 器が新しい種類の問いを起こして orchestrator に file ごとの見込み・空き・不足を返す案です。 戻す経路が器の仕組みとして残り、 席が断りの 1 行を読み落とさず、 既に在る質問と回答の配送に乗る利点があります。 けれども入口の断りの 1 行が file と空きと大きさを出し、 事前確認の列が file ごとの空きと見積を出すので、 同じ数を運ぶ問いの種類を増やすことになります。 断られた作業はまだ便になっていないので、 便の質問に載せるには触らないと決めた面に手を入れることにもなります。 決め手は分析 (既に在るものを使う) です。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>戻す経路が器の型として残り、 席が断りの 1 行を読み落とさない</li>
+<li>質問と回答の既存の配送 (FR31 / FR32) に乗る</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>受付の理由の 1 行が file と余地と size を出し、 preflight の headroom の列が file ごとの余地と見積を出すので、 同じ数を運ぶ問いの型を増やすことになる (C17 の段 2・DR6)</li>
+<li>受付で断られた契約は便を持たない (run dir も event も作らない) ので、 便の質問 record に載せるには dispatch の理由の型 (触らない面) に値を足すことになる</li>
+</ul></div></div>
+</div>
+</div>
+</div>
+<section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの方式を選ぶか</span><h2>選んだ方式と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、 それが要件書のどの要件を支えるかを示します。 契約の行は file ごとの見込みを任意の欄 growth に書けます。 大きさ (S / M / L) は今までどおり既定の見込みで、 欄に書いた file だけがその値で上書きされます。 入口の検査は file ごとの見込みと空きを比べ、 本体全体の見積は file ごとの見込みの合計にします。 表の検査は欄の書き間違い 5 種類を行番号つきで名指します。 断られた作業は、 入口の断りの 1 行 (file・空き・見込み) と、 便を起こす前の事前確認 (preflight) が出す file ごとの空きと見積の列を読んで、 orchestrator が欄を書くか分割を先に通すか設計に戻るかを決めます。 上限の値・大きさの 3 段・門の測定・触る file の列の書き方は変えません。</p></section>
+<div class="chapbody">
+<div data-component="adr-decision-panel" id="decision">
+<p class="dec-kick">採用 — OPT1</p>
+<p class="dec-state">契約表の行 SHALL 任意の欄 growth を持てる。 値は list で、 項目は path と行数をコロンで結んだ 1 語 (path は write-set の項目から接頭辞を剥がした素の path・行数は 0 以上の整数) とする。 size SHALL 今までどおり既定の 1 file あたりの見込みで、 growth は名指した file だけをその値で上書きし、 名指さない file は size のままとする。 欄の正本 (FIELDS) に 1 欄 (任意・list) を足し、 契約表の行の型に field を 1 つ足し、 生成物 contracts/schema.toml を描き直す。 生成の写し (契約 file) SHALL 行の growth をそのまま運び (写しの任意 key に 1 つ足す・行に無ければ写しにも書かない)、 写しの読み手が読む。 項目を path と行数へ分ける読み手 SHALL 1 本で、 受付と契約表の検査が同じ関数を撃つ。 受付 SHALL file ごとの見込み (growth に在ればその値・無ければ size の値) が上限の余地を超える file を名指して断り、 core の見積は core に属する write-set の .rs ごとの見込みの和とする。 接頭辞 - / ~ / = の項目は今までどおり余地も本数も求めない。 断りの理由の 1 行 SHALL file の見込みの値も出す。 契約表の検査 SHALL growth の項目が (a) path と行数の形でない (b) path が行の write-set の file の項目に無い (dir の項目は展開しない・write-set の欄を持たない行は growth を持てない) (c) path が .rs でない (d) path が接頭辞 - / ~ / = の項目 (e) 同じ path が 2 回、 のどれかに当たる周に、 理由の型の 1 値 GrowthForm で行番号と項目と理由を名指す (contracts check は全件・受付は 1 行に同じ関数)。 preflight の headroom の列 SHALL 見積を file ごとの値で出す (形は不変)。 戻す経路は受付の理由の 1 行 (file・余地・見込み) と preflight の headroom の列 (file ごとの余地と見積) とし、 orchestrator は実増分が余地に入るなら行に growth を書き、 超えるならその file を接頭辞 - で宣言する純移動の行を先に通すか責務を割る設計に戻る。 器に新しい問いの型は足さない。 足すのは任意の欄 1 つと形の検査 1 語 (GrowthForm) と読み手 1 本で、 code から除くものは無い (size の意味は既定値として残す)。 除くのは運用の側で、 純移動を余地づくりの回避策として使う運用が要らなくなる (C17.2)。 触らないものは次の 7 つで、 size の 3 段の値と rules 行・file と core の上限の値・gate の測定 (宣言を信じるのは受付の先読みだけで、 宣言が偽でも上限は超えられない)・write-set の項目の文法 (6 形・接頭辞 1 字・剥がす関数)・xtask の台帳の計画・dispatch の理由の型・断りの語である。 契約表の形の版は 1 のまま任意の欄を 1 つ足す形とし、 古い binary が growth を持つ doc を拒む期間は PATH の binary の入れ替えで閉じる。</p>
+<span class="dec-plain" data-prose-slot="plain" data-slot-id="decision-plain">契約の行に、 file ごとの見込みを書ける任意の欄 growth を足します。 書き方は「file の場所と行数」の対の並びで、 場所は触る file の列の項目から記号を外したそのままの場所、 行数は 0 以上の整数です。 大きさ (S / M / L) は今までどおり既定の見込みで、 欄に書いた file だけをその値で上書きし、 書かない file は大きさのままです。 契約の表の欄の一覧に 1 欄を足し、 生成物の一覧も描き直します。 作業に渡す写しは欄をそのまま運び (行に無ければ写しにも書きません)、 欄を読む部品は 1 つで、 入口の検査と表の検査が同じものを使います。 入口の検査は、 file ごとの見込み (欄に在ればその値・無ければ大きさの値) が空きを超える file を名指して断り、 本体全体の見積は file ごとの見込みの合計にします。 縮む file・消える file・置き場だけの file は今までどおり数えません。 断りの 1 行は file の見込みの値も出します。 表の検査は、 欄の書き間違い 5 種類 (形が違う・触る file の列に無い・Rust の file でない・縮む file や消える file や置き場だけの file・同じ file が 2 回) を行番号つきで名指します。 便を起こす前の事前確認 (preflight) が出す列は、 file ごとの空きと見積を出します。 断られた作業を戻す経路は、 入口の断りの 1 行 (file・空き・見込み) と事前確認の列 (file ごとの空きと見積) です。 orchestrator はそれを読んで、 実際の増分が空きに入るなら欄を書き、 超えるならその file を縮める分割 (挙動を変えずに file を割る純移動) の行を先に通すか、 責務を割る設計に戻ります。 器に新しい問いの型は足しません。 プログラムに足すのは欄 1 つと書き間違いの検査 1 種類と欄を読む部品 1 つで、 プログラムから除くものはありません (大きさの意味は既定値として残します)。 除くのは運用の側で、 空きを作るために場当たりの分割を使う運用が要らなくなります。 変えないものは、 大きさの 3 段の値と規則の行・file と本体の上限の値・門の測定・触る file の列の書き方・台帳の計画の読み手・起動の理由の型・断りの語です。 表の形の版は変えずに任意の欄を 1 つ足す形で、 古いプログラムが新しい欄を持つ設計 doc を拒む期間はプログラムの入れ替えで閉じます。</span>
+<span class="dec-why" data-prose-slot="rationale" data-slot-id="decision-rationale">空きは file ごとに測っているのに、 見込みは作業に 1 つしか書けません。 それでは、 増えない file が満杯の file の隣に在るだけで、 空きに入る作業が入口で断られます。 見込みを file ごとに書けるようにすれば、 測る単位と見積の単位が揃い、 断られるのは、 見込みが空きを超える file と、 見込みの合計が本体全体の空きを超える契約になります (見込みは宣言で、 実際の行数は門が測ります)。 触る file の列を器が自動で作る行と約束の行は欄を使えません。 上限の値と大きさの 3 段を変えないのは、 それらが user の決めた値であり、 今回の問題は値ではなく粒度だからです。 見込みを信じるのは入口の先読みだけにして、 上限は着地前の門が実際に数えて守ります。 これは、 人が書いた宣言は測定を経てはじめて効力を持つという憲法の線に沿っています。 欄を読む部品を 1 つにして入口と表の検査で共有し、 写しは欄を運ぶだけにするのは、 判定の経路を 1 本にする憲法の線です。 欄を足す形を選んだのは、 触る file の列の書き方に触れず、 表を読むプログラムの版が移るときの形も、 これまで 3 回使ってきた「任意の欄を足す」やり方に乗るからです。 断られた作業を戻す経路に新しい仕掛けを足さないのは、 入口の断りの 1 行が file と空きと大きさを出し、 事前確認の列が file ごとの空きと見積を出すからです。 今は打てる手が分割だけですが、 欄ができると「欄を書く・分割する・設計し直す」から選べるようになります。 末尾に添える案は欄を足さずに済みますが、 項目の書き方が増えて記号の意味が重なり、 影響する場所が広いので退けました。 合計と読み替える案は数が 1 つのままですが、 1 つの file の満杯を測れなくなるので退けました。 段を足す・上限を上げる案は値の変更だけで済みますが、 値は user の決定で今回は変えず、 粒度の問題も解けないので退けました。 何もしない案は器を触らずに済みますが、 分割が場当たりになり、 打てる手が分割だけで選ぶ経路が無いので退けました。 器が新しい問いの型で返す案は経路が仕組みとして残りますが、 同じ数を運ぶ問いの種類を増やすことになるので退けました。</span>
+<div class="justify-box"><p class="jh">この判断が正当化する要件 (cross-doc 照会 → SRS-SCRIBE2-MVP)</p>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR47" data-justifies-req="FR47" data-justifies-role="rationale">FR47</a><span class="justify-role">rationale</span><span class="justify-note">本 ADR は、 契約の正本である契約表の行に file ごとの見込み行数の任意の欄を足す根拠 (見積の粒度を測る単位に合わせる・size は既定のまま・項目の文法には触れない) を与える。 行が持つ欄の集合は広がるが、 正本が契約表の 1 行だけである線は変わらない。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR68" data-justifies-req="FR68" data-justifies-role="rationale">FR68</a><span class="justify-role">rationale</span><span class="justify-note">本 ADR は、 dispatcher の受付が測る write-set の余地の判定 (file ごとの見込みと余地を比べ、 core は見込みの和) の根拠を与える。 受付が断った契約は今までどおり列に留まり、 断りの 1 行が file・余地・見込みを名指す。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR55" data-justifies-req="FR55" data-justifies-role="implementation">FR55</a><span class="justify-role">implementation</span><span class="justify-note">FR55 は CI が全行に intake と同じ検査を回すことを求める。 growth の形の検査 (形の崩れ 5 つを行番号つきに名指す) もその同じ 1 本に載る。 上限の余地そのものは受付時点の事実なので CI では撃たない線は不変。</span></div>
+<p class="justify-tgt">照会先: SRS-SCRIBE2-MVP — SRS: 設計 → 契約 → 実装 → 検証 → land を、 人の手を借りずに 1 本通す器（MVP）</p>
+</div>
+</div>
+</div>
+<section data-component="chapter-deck-band" class="tint-warn"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> 結果 / 良い面とトレードオフ</span><h2>この判断で何が良くなり、 何を引き受けるか</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">この判断で良くなることと、 代わりに引き受けることです。 空きに入る作業は行を割らずに通り、 見積の粒度が file に揃い、 版を跨ぐ形は欄 1 つで済み、 場当たりの分割が要らなくなります。 代わりに引き受けることは 5 つあります。 file と行数を手で書く宣言が増え、 見込みと実際の差は門でしか捕まりません。 古いプログラムは新しい欄を持つ設計 doc を丸ごと拒むので、 入れ替えが要り、 入れ替えるまでは欄を書いた作業が入口で同じ理由で断られ続けます。 触る file の列を器が自動で作る行と約束の行は欄を使えません。 入口の検査を直す file 自身の空きが小さいので、 この作業自体は一番小さい大きさで出します。 本体全体の見積は file ごとの見込みの合計になるので、 file ごとには空きに入っても本体全体の空きで断られることはあります。 見込みと実際の差の記録は、 この記録では決めません。</p></section>
+<div class="chapbody">
+<div data-component="scope-summary-panel"><div class="scol in"><h3>✓ 良い結果</h3><ul>
+<li data-component="adr-consequence-pos"><span class="b">●</span>実増分が余地の内側に在る契約 (行 i の型) は、 行を割らずに file ごとの見込みを書くだけで受付を通る。 見積の粒度が測る単位 (file) に揃う</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>変わる面は任意の欄 1 つで、 write-set の項目の文法と接頭辞を剥がす関数と項目を読む site は不変。 赤になる既存の歯は欄の pin (FIELDS 17 → 18・任意 10 → 11・TABLE_ERRORS 15 → 16) と Contract の構築点 3 か所 (intake.rs の歯・pipe/mod.rs の歯の fixture・e2e/polarity.rs の fixture) と ContractRow の歯の fixture 2 か所 (table/check.rs・contract.rs) と CapHeadroom の samples (refuse.rs) に閉じる (全部 write-set の中)</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>断られた契約を戻す経路が定まり、 席が場当たりの純移動で余地を作る運用が要らなくなる。 純移動は設計の責務の群で切る便に戻る</li>
+</ul></div><div class="scol out"><h3>⚖ トレードオフ・代償</h3><ul>
+<li data-component="adr-consequence-neg"><span class="b">●</span>行ごとに file と行数の対を手で書く宣言が増える。 宣言と実増分の乖離は受付では捕まらず、 gate の上限の測定でしか捕まらない (宣言を信じるのは受付の先読みだけ)</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>古い binary は growth を持つ doc を知らない key として doc ごと拒む。 着地は PATH の binary の入れ替えを伴い、 入れ替えるまでは growth を書いた行の受付が同じ理由で断り続ける</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>write-set の欄を持たない行 (write-set を器が導出する行と約束の行) は growth を持てず、 その行は今までどおり size の一律の見積で測られる</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>本便自身は受付の余地が 133 行の file を触るので、 S でしか受付を通らない。 core の見積が和になるので、 多くの file に大きな見込みを書く行は core の余地で断られうる</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>見込みは受付の 1 時点の先読みで、 着地時の実増分は記録しない。 乖離の記録 (検出線に載せるか) は本 ADR では決めず、 要るなら別の決定で行う</li>
+</ul></div></div>
+</div>
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">06</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> 改訂関係と原則 / この判断の位置づけ</span><h2>版の系譜と、 行き着く原則 (照会終端)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-06">この記録が版の系譜のどこに在るかと、 判断が最後に行き着く原則です。 これまでの決定を置き換えない追補で、 契約の表の欄を 1 つ広げ、 入口の空きの測り方を file ごとにします。 変えるのは入口の空きの見積 (file ごと・本体は合計) と写しの欄と表の検査で、 上限の値・大きさの 3 段の値・着地前の門・他の作業との重なりで断る仕組み・本体の行数の数え方は変えません。 原則は「見積は測る単位で書き、 上限は宣言でなく測定が守る」です。</p></section>
+<div class="chapbody">
+<div data-component="adr-supersession">
+<p class="ss-row"><span class="ss-k">改訂状態</span>current</p>
+<p class="ss-row"><span class="ss-k">置き換える ADR</span>なし (新規)</p>
+<p class="ss-row"><span class="ss-k">置き換えられた</span>なし (現行)</p>
+<p class="ss-row">追補。 ADR-0023 の契約表 (設計 doc の表が契約の正本) の欄の集合を広げるが、 決定は変えない。 ADR-0004 が決めた版を跨ぐ形 (契約表の形の版) は、 版 1 のまま任意の欄を足す踏まれた作法 (surfaces・creates / tests / also・targets の 3 回) に乗り、 版の数字は動かない。 ADR-0019 の受付の断り (交差) と ADR-0033 の core の行数の数え方 (本体だけ) は不変。 size の 3 段の rules 行 (user 裁定 2026-09-14) と上限の値は不変。</p>
+</div>
+<div data-component="adr-principle">
+<p class="prin-id">照会終端 — PRIN-ESTIMATE-AT-THE-MEASURED-UNIT-CAP-BY-MEASUREMENT</p>
+<p class="prin-text">見積は測る単位で宣言し、 上限は宣言でなく測定が守る。 見積の粒度が測る単位より粗いと、 測れば入るものが宣言で断られる。</p>
+<p class="prin-note">本 ADR が末尾の形・合計への読み替え・段の追加・何もしない案・新しい問いの型を退け、 file ごとの任意の欄を選び、 gate の測定を触らなかったのはこの原則に行き着く (これ以上は遡らない照会終端)。</p>
+</div>
+</div>
+<section data-component="chapter-deck-band" class="tint-brand"><span class="num">07</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg> 用語集 / この文書で使う専門語</span><h2>本文に出てくる専門語のやさしい説明</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-07">本文に出てくる専門語 15 個を、 やさしい言葉で説明します。</p></section>
+<div class="chapbody">
+<div data-component="glossary-term-table">
+<div class="grow"><div class="gword">器<span class="en">vessel</span></div><div class="gdef">scribe2 そのもの。 Rust で書いた 1 つのプログラム (binary) と、 それが持つ規則と記録の全体。</div></div>
+<div class="grow"><div class="gword">便<span class="en">run</span></div><div class="gdef">器が契約 1 本から起こして自動で進める 1 つの作業。 受付を通って起き、 審査と実装と gate を経て着地する。</div></div>
+<div class="grow"><div class="gword">契約表<span class="en">contract table</span></div><div class="gdef">設計 doc の中に在る、 便 1 本の契約を 1 行ずつ持つ表。 行は要件 id・設計の節・触る file の列 (write-set)・確かめ方・size などの欄を持ち、 契約の正本 (ADR-0023)。</div></div>
+<div class="grow"><div class="gword">受付<span class="en">intake</span></div><div class="gdef">契約を便にする前の検査の段。 write-set の項目の実在・他の便との交差・上限の余地・host の memory の枠・同時走行の最大値を測り、 通らない契約は理由を名指して断り便を作らない。</div></div>
+<div class="grow"><div class="gword">write-set<span class="en">write-set</span></div><div class="gdef">契約の行が宣言する、 その便が触ってよい file の列。 項目は素の path か、 接頭辞 1 字 (新規 +・縮む面 -・消える ~・置き場だけ =) つきの path で、 受付・交差・guard・gate は接頭辞を剥がした素の path で照らす。</div></div>
+<div class="grow"><div class="gword">見込み行数<span class="en">per-file growth</span></div><div class="gdef">契約表の行の任意の欄 growth が file ごとに宣言する、 その便でその file が増える行数の見込み。 size は既定の 1 file あたりの見込みで、 growth は名指した file だけを上書きする。 受付の上限の余地の判定にだけ効く。</div></div>
+<div class="grow"><div class="gword">上限の余地<span class="en">cap headroom</span></div><div class="gdef">write-set の .rs file の上限 (1 file 1500 行) と base の行数の差。 受付が file ごとの見込みと比べ、 見込みが余地を超える file を名指して断る。 core の合計も見込みの和で同じ式を 1 回。</div></div>
+<div class="grow"><div class="gword">席<span class="en">seat</span></div><div class="gdef">人と AI が対話する 1 つの session。 器の hook が状態を打刻し、 役割 (orchestrator など) を持つ。</div></div>
+<div class="grow"><div class="gword">orchestrator<span class="en">orchestrator</span></div><div class="gdef">設計 doc と契約表の行を書き、 便を起こす向きを決める役割の席。 受付で断られた契約を読んで、 growth を書くか純移動を先に通すか設計に戻るかを決める。</div></div>
+<div class="grow"><div class="gword">dispatcher<span class="en">dispatcher</span></div><div class="gdef">器の中で、 起動の列の契約を評価して受付を通る契約を席の操作なしに起こす部品 (FR68)。 受付で断った契約は理由を持って列に留める。</div></div>
+<div class="grow"><div class="gword">gate<span class="en">gate</span></div><div class="gdef">便の成果を着地させる前に、 歯と検査を実際に走らせて合否を測る門。 file と core の行数の上限はここで測定され、 宣言が偽でも上限は超えられない。</div></div>
+<div class="grow"><div class="gword">歯<span class="en">tooth (test)</span></div><div class="gdef">決めたことが守られているかを機械で確かめる自動の検査。 器では Rust の test 1 framework だけで書く (憲法 C12)。</div></div>
+<div class="grow"><div class="gword">rules 行<span class="en">rules row</span></div><div class="gdef">規則の値を 1 つ持つ行。 器の規則の manifest (repo 内の 1 file・build 時に binary へ埋め込む) に置き、 id・種類・値・enabled・裁定 id・裁定時刻を持つ (憲法 C1)。 size の 3 段と file と core の上限はここに在る。</div></div>
+<div class="grow"><div class="gword">裁定 id<span class="en">ruling id</span></div><div class="gdef">その値を user が決めたことを指す印。 rules 行が持ち、 裁定 id の無い rules 行の変更は CI が落とす。</div></div>
+<div class="grow"><div class="gword">core<span class="en">core</span></div><div class="gdef">器の本体の Rust source (crates 配下の src の .rs の本体)。 行数の合計に上限 (rules 行 R-C4-1) が在り、 in-file の歯を除いた本体だけを数える (ADR-0033)。</div></div>
+</div>
+</div>
+</div>
+<footer class="foot" data-component="fidelity-sync-meta"><div class="ft-grid">
+<div class="ft-plain">このページは、大もとの機械データ (正本) から自動で組み立てられています。構造は機械が自動で検査し、内容が元データに忠実かは独立のレビューで確かめます。</div>
+<div data-audience="machine">機械SSoT: <b>ADR-0057-growth.adr.yaml</b> &middot; 生成: <b>2026-09-23 14:05</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
+<div class="tags" data-audience="machine"><span>folio design system</span><span>ADR-pack</span><span>folio engine B1 (instance#2)</span><span>cross-doc 照会</span></div>
+</div></footer>
+<!-- folio:chrome-bottom -->
+<nav class="prevnext" aria-label="前後の文書">
+  <a class="prevnext__prev" href="ADR-0056-destructive-guards-are-one-vessel-subcommand-wired-from-account-settings.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">不可逆な操作の見張りは器の binary の 1 つの口に置き、 口座の設定 file から呼ぶ (器を積まない session にも効く・切るのは裁定つきの rules 行だけ)</span></a>
+</nav>
+<script>
+(function () {
+  var openedForPrint = [];
+  window.addEventListener('beforeprint', function () {
+    openedForPrint = [];
+    var ds = document.querySelectorAll('details:not([open])');
+    for (var i = 0; i < ds.length; i++) { ds[i].setAttribute('open', ''); openedForPrint.push(ds[i]); }
+  });
+  window.addEventListener('afterprint', function () {
+    for (var i = 0; i < openedForPrint.length; i++) openedForPrint[i].removeAttribute('open');
+    openedForPrint = [];
+  });
+  if (!document.querySelector('[data-audience]')) return;
+  /* 既定 = 人間プレゼン型 (ADR-0040 / rules §11.3): script 経由で初期 class を付与するため
+     no-JS では付かず全文可視に graceful degrade する。 static DOM は全文を保持 (AI/検索/印刷は不変)。 */
+  document.body.classList.add('audience-human');
+  var bar = document.createElement('nav');
+  bar.className = 'audience-toggle';
+  bar.setAttribute('aria-label', '表示対象の切替');
+  var states = [['both', '両方'], ['human', '人間向け'], ['machine', '機械向け']];
+  for (var s = 0; s < states.length; s++) {
+    (function (mode, label) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.setAttribute('aria-pressed', mode === 'human' ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        document.body.classList.remove('audience-human', 'audience-machine');
+        if (mode !== 'both') document.body.classList.add('audience-' + mode);
+        var bs = bar.querySelectorAll('button');
+        for (var j = 0; j < bs.length; j++) bs[j].setAttribute('aria-pressed', bs[j] === b ? 'true' : 'false');
+      });
+      bar.appendChild(b);
+    })(states[s][0], states[s][1]);
+  }
+  var bc = document.querySelector('nav.breadcrumb');
+  if (bc && bc.parentNode) { bc.parentNode.insertBefore(bar, bc.nextSibling); }
+  else { document.body.insertBefore(bar, document.body.firstChild); }
+})();
+</script>
+<!-- /folio:chrome-bottom -->
+</body>
+</html>
