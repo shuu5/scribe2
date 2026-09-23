@@ -75,7 +75,8 @@
     { "@id": "./ADR-0051-contract-rows-carry-promise-rows-and-ledger-state-is-two-fields.html" },
     { "@id": "./ADR-0052-detection-line-runs-only-contract-teeth-and-unit-teeth.html" },
     { "@id": "./ADR-0053-decisions-sit-in-code-lens-or-human-and-jev-is-not-inserted.html" },
-    { "@id": "./ADR-0054-entrance-flip-may-be-declared-unmeasured-in-the-vessel-declaration.html" }
+    { "@id": "./ADR-0054-entrance-flip-may-be-declared-unmeasured-in-the-vessel-declaration.html" },
+    { "@id": "./ADR-0055-group-pressure-is-measured-at-run-ends-and-seat-turns-without-a-timer.html" }
   ]
 }
 </script>
@@ -174,6 +175,7 @@
     <tr><td>ADR-0052</td><td><a href="./ADR-0052-detection-line-runs-only-contract-teeth-and-unit-teeth.html">検出線は契約が名指した歯と package の単体の歯だけを mutant に当て、 歯の名は宣言 file の 4 つ目の穴 {teeth} で器が渡す (ADR-0021 §2.1 と ADR-0050 の穴の閉じた 3 つを部分 supersede・R-C12-1 の記録の母集団を「契約の歯 + 単体の歯」に狭める)</a></td><td>proposed</td><td>2026-09-21</td></tr>
     <tr><td>ADR-0053</td><td><a href="./ADR-0053-decisions-sit-in-code-lens-or-human-and-jev-is-not-inserted.html">pipeline の判断は「計算できる判断は code・意味の判断は lens・裁定は人」の 3 分類に置き、 Jev は挿さず (再検討は記録が揃った後の shadow 計測で)、 検出線の 2 段化は足さない (分解表の 5 論点の裁定)</a></td><td>proposed</td><td>2026-09-21</td></tr>
     <tr><td>ADR-0054</td><td><a href="./ADR-0054-entrance-flip-may-be-declared-unmeasured-in-the-vessel-declaration.html">入口の flip を撃つ手段を持たない Rust の消費側は、 宣言の任意 key で「入口の flip は測らない」と名乗る (key の不在は現行の要求＝本 repo は無変更・名乗りは受付と契約表の検査の断りを外すだけで、 判定行に測らなかったことを残す)</a></td><td>accepted</td><td>2026-09-22</td></tr>
+    <tr><td>ADR-0055</td><td><a href="./ADR-0055-group-pressure-is-measured-at-run-ends-and-seat-turns-without-a-timer.html">群の逼迫は時計で測らず、 便の終端の周と席自身の hook で測る (通知は席の画面へ 1 行・移動は host の鍵の内側で 1 回)</a></td><td>accepted</td><td>2026-09-23</td></tr>
   </tbody>
 </table>
 <p data-audience="machine">新しい決定を記録したら本表と JSON-LD の <code>dc:hasPart</code> に追記する。 ADR は frozen (改訂は supersede する新 ADR で行う)。</p>

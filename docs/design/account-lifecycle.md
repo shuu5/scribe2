@@ -192,6 +192,59 @@ user-scope MCP 設定の同期・別口座への `--resume` の混線 fence・pr
 - 却下: `.launch` file に旗ごと書く（雛形に 1 回きりの値が混ざり、次の起動で古い会話へ戻る）／`-c` を既定にする（会話の無い口座で claude が新規を開くだけだが、人が「引き継いだつもり」になる・明示の flag が安全側）／器が会話の一覧を読んで id を選ぶ（claude の内部形式に依存・N3 の匂い・`-c` は claude 自身が選ぶ）／長い形にも足す（人が打つのは短い形だけ・§14 の却下と同じ）。
 - 後続: 第 3 段（自動の移動・§17 の後続）は本行の `-c` を機械が撃つ形で組める（席の restart = `seat <次の口座> -c` の 1 行）。
 
+## 19. 群の逼迫の通知（第 2 段）— 閾値の rules 行 3 本を足し、dispatch の 1 周が群ごとに使用率を読んで席の pane へ 1 行を注入し、席自身の hook が自席の口座を読んで指示文で告げる（契約表の行 h・§17 の第 2 段・[ADR-0055](../../design-intent/decisions/ADR-0055-group-pressure-is-measured-at-run-ends-and-seat-turns-without-a-timer.html)・`s2-07l.491`）
+
+やさしく言うと: 「このかたまりの口座、もう残りが少ない」を器が自分で気づいて席に知らせる段。時計は持たない。作業（便）が 1 つ終わった直後に器が回す 1 周と、席が話す番のたびに動く仕組み（hook）の 2 つで測る。移る動きは次の §20。
+
+- 出所: user の要求 2026-09-19（5 時間窓 85 / 7 日窓 95 / モデル別窓 95 を境に群ごと別口座へ・逐語は台帳 `s2-07l.491` の notes）。決定は ADR-0049 §2（3 段の第 2 段・閾値は rules 行）と ADR-0055（契機 = 便の終端の周 + 席自身の hook・timer は持たない）。SRS は FR38 の改稿の後にしか本 § を許さない（ADR-0055 CTX4）。
+- 現物（verified・main）:
+  - 1 周は `crates/scribe2/src/pipe/dispatch.rs` の `fire`（起こす側）と `turn`（見る側・`dispatch ls`）。終端の周の通知は `crates/scribe2/src/pipe/cli.rs` の `notices` が集め、`crates/scribe2/src/pipe/notify.rs` の `send` が repo を anchor に持つ orchestrator の登録 row の席へ `deliver_within` を 1 回撃つ（§5 の契機・[dispatcher.md](./dispatcher.md) §19）。
+  - 使用率の計測は `crates/scribe2/src/fleet/usage.rs` の `measure` の 1 本（usage API・実測は event `AllowanceMeasured`・field は `used_pct`）。鮮度は `run_fresh`（rules 行 `fleet.usage_fresh_s`・[account-autonomy.md](./account-autonomy.md) §13）。窓は `WindowKind` の 3 値（`FiveHour` / `SevenDay` / `SevenDayModel`・`crates/scribe2/src/fleet/mod.rs`）。計測の CLI の口は `fleet usage`（`crates/scribe2/src/fleet/cli.rs`・方針は鮮度なし）。
+  - 群の宣言は `AccountGroup`（`crates/scribe2/src/rules/manifest.rs`・`name` / `anchors` / `accounts`・`Manifest::groups`）。群の置き場の席の登録 row の口座を導く読みは doctor の `render_group`（`crates/scribe2/src/account/mod.rs`）が既に持つ。
+  - rules 行の形は `rules/manifest.toml`（id / kind / value / enabled / ruling / ruled_at）で、kind は `RuleKind`（`crates/scribe2/src/rules/mod.rs`・閉じた列・56 variant）。群の閾値の行は無い。既存の `R-C9-1`（`AccountSelection`）は session 用の選定の閾値 1 値で窓を区別しない＝群の判定には使わず、触らない。
+  - hook は `crates/scribe2/src/hook/mod.rs` の `dispatch` の match: SessionStart は `session_start`（§16 の `account_record` が席の実口座を測って記録する）・UserPromptSubmit は `stamped`（打刻だけ）。hook の timeout は rules 行 `hook.timeout_s`（10 秒）を写して生成される（`crates/xtask/src/genmanifest.rs`）。計測の上限 `fleet.usage_timeout_s` は 30 秒＝hook の中で同期に撃つと timeout を越えうる。
+  - 器は自分を子として起こす口を持つ（1 周の `spawn_self`・待たない）。
+- 形（1 つずつ歯が測る・行 h の done と 1:1）:
+  1. **閾値の rules 行 3 本**: id は fleet.group_pressure_5h_pct / fleet.group_pressure_7d_pct / fleet.group_pressure_model_pct、kind は GroupPressure5hPct / GroupPressure7dPct / GroupPressureModelPct（Int・百分率）。値と裁定は user の要求そのもの（裁定 id = `user 2026-09-19T12:12Z`・裁定日 = 2026-09-19・C5・逐語は台帳）。規範の値を持つのは manifest だけで、ADR-0055 に写した 85 / 95 / 95 は裁定の写しである。行と variant は対で足す（`fleet.usage_fresh_s` と同型・§13 (2)）。読み手は約束 2 と約束 5 の 2 つ（`rules_wired` の門を通る）。
+  2. **1 周の群の段**: `fire` は宣言された群ごとに、測る集合 = 群の今の口座（本便では記録が無いので種 = 候補の先頭・ADR-0049）∪ その群の置き場の席の登録 row の口座（`render_group` と同じ導き・重複は畳む）を取り、口座ごとに 3 窓の最新の実測を **1 周の置き場の event log** から読む（鮮度の規則は `run_fresh` と同じ 1 本・鮮度の外の口座は計測を 1 回撃って追記する・置き場を跨いで読まない = 鮮度は置き場ごと・C3）。どれかの窓の `used_pct` が対応する行の値以上なら**逼迫**。群 0 の host は段が 1 語も出ない。道具（`--runner`）の無い周も群の段は走る（群の段は台帳を読まない＝§5 の「起こせない周は台帳を読まない」と両立する）。
+  3. **通知は群の置き場ごとに 1 行**: 逼迫の（群, 口座）ごとに 1 行を、その群の置き場すべての orchestrator の登録 row の席へ `send` と同じ口で注入する。形は `<NAME> group: pressure group=<名> account=<label> window=<5h|7d|model> used=<n> cap=<n>`（窓は越えた中で使用率が最大の 1 つ）。1 周の置き場の event log に通知の event を 1 件記す（群・口座・窓・値・送り先の数）。
+  4. **同じ実測に 2 度通知しない**: 同じ群・口座・窓で、前回の通知の event より新しい実測が無い周は送らず記さない（event log の順序で判じ、値の比較で判じない）。
+  5. **席自身の hook**: SessionStart と UserPromptSubmit で、自席の登録 row の口座と anchor の属する群（無ければ黙る・1 語も出ない）を読み、約束 2 と同じ読み手で自席の口座 1 つの 3 窓を読む。逼迫なら SessionStart は brief に、UserPromptSubmit は追加文脈に 1 行 `group=<名> account=<label> window=<w> used=<n> cap=<n> — 移動は次の 1 周（第 3 段まで手で）` を出す。**鮮度の外は hook の中で撃たず**、器自身を子として（`fleet usage` の口・鮮度つきの方針で）起こして待たない＝値は次の話す番で読める（hook の timeout を上げない・常駐にしない）。子を起こした周は 1 行 `usage: measuring account=<label>` を出す。
+  6. **群を宣言しない host と群に属さない置き場は 1 語も変わらない**: 既存の hook の brief の外形 snapshot と dispatch の通知の歯は動かない。
+  7. **`dispatch ls` は群を測らない**（観測は起こさない・§6）。移動は本便に無い（第 3 段・§20）。
+- 触らない: 選定の純関数 `select` と `Input`・`R-C9-1`・便用の除外（§17）・doctor の群の行・群の今の口座の記録（§20）・`seat launch`・hooks.json の timeout・event の既存 variant の形。
+- 歯（接頭辞ごとに 1 file・母集団は本文の件数）:
+  - `crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs`（pipe_dispatch_group_ 接頭辞・偽 usage client）: 群 0 は行 0・event 0 ／ 5 時間窓 90 の口座を種に持つ群は 2 つの置き場の席へ各 1 行 + event 1 ／ 鮮度の内側は偽 client の呼出 0・外は 1 ／ 同じ実測の 2 周目は通知 0 ／ 種でなく席の登録 row の口座が逼迫でも通知 ／ 窓ごとに閾値が別（7 日窓 90 は通知せず 96 は通知）＝ 6 本。
+  - `crates/scribe2-boundary/tests/e2e/hook.rs`（hook_group_ 接頭辞）: SessionStart の brief に 1 行 ／ UserPromptSubmit の追加文脈に 1 行 ／ 群に属さない anchor は 0 行 ／ 閾値未満は 0 行 ／ 鮮度の外は子を 1 本起こして待たず measuring の 1 行 ＝ 5 本。
+  - `crates/scribe2-boundary/tests/e2e/rules.rs`（rules_embedded_manifest_declares_group_pressure_ 接頭辞・3 本 + 外形 `rules_external_form` の snapshot 更新）。
+- 却下: hook の中で同期に計測する（`hook.timeout_s` 10 秒 < `fleet.usage_timeout_s` 30 秒・timeout の行を上げるには裁定が要り、話す番が API の待ちぶん延びる）／群の今の口座だけを測る（記録が無い本便では種しか見えず、席が実際に居る口座を見落とす）／閾値を 1 行にする（窓ごとに裁定の値が違う）／通知を dispatch ls にも出す（見る口が起こす口になる・§6）／使用率を置き場を跨いで集める（event log の写しが増える・C3）。
+- 後続: 第 3 段（§20）= 群の今の口座の記録・移動を頼む記録・自動の移動。
+
+## 20. 群の自動の移動（第 3 段）— 群の今の口座を host の根の記録で持ち、逼迫した群は 1 周が lock の内側で移り先を 1 回決めて記録と承認 event を書き、退避の合図の後に同じ target へ新しい口座の席を起こす（契約表の行 i・§19 の続き・[ADR-0049](../../design-intent/decisions/ADR-0049-seat-accounts-are-owned-by-project-groups.html) §2・[ADR-0055](../../design-intent/decisions/ADR-0055-group-pressure-is-measured-at-run-ends-and-seat-turns-without-a-timer.html)）
+
+やさしく言うと: 知らせるだけ（§19）から、器が自分で移す段へ。かたまりの「今の口座」を machine 共通の置き場に 1 件の記録で持ち、残りが線を越えたら、鍵をかけて移り先を 1 回だけ決め、古い席に「まとめて終えて」と伝え、同じ窓に新しい口座で席を起こし直す。対話の記録は運ばず、続きは器が台帳と git から組み直す。
+
+- 出所: §19 と同じ（ADR-0049 §2 の第 3 段・ADR-0055 の契機）。
+- 現物（verified・main）:
+  - host の根は `host_slots_dir`（`crates/scribe2/src/seat/mod.rs`・state dir の親の下の host 用 dir・env を読まない）。lock の実装は 1 本（`create_new`・`crates/scribe2/src/pipe/admission.rs` の受付の lock と同じ）。
+  - 群の今の口座を置く型も reader も無い（`AccountGroup` は宣言値だけ・`render_group` は 1 件も書かない・読まない）。
+  - 席の起動は `crates/scribe2/src/seat/cycle/launch.rs` の `launch`（`pick_account` = `--account` か session 用の選定 `choose`〔`crates/scribe2/src/seat/cycle/relaunch.rs`〕→ `prepare` が登録 row を書く → 窓が無ければ作る）。短い形は `crates/scribe2/src/seat/cli.rs`（§14 / §18）。席を終える口は seat に無い（`/exit` は席の側が打つ・§18 の現物）。
+  - 承認の event は `crates/scribe2/src/pipe/approve.rs` の `record_words`（`ApprovalReceived`・逐語を持つ）。
+- 形（1 つずつ歯が測る・行 i の done と 1:1）:
+  1. **群の今の口座の記録**: host の根の下の群用 dir に群ごとに高々 1 file（口座 label・ts・理由 = move・前の口座）。書くのは 1 周の群の段だけで、lock（群用 dir の 1 file・`create_new`）の内側で一時 file → rename。書き換える周は前の記録を消さず履歴の側へ move する（N1.2・ADR-0041 の形）。
+  2. **群の今の口座の解決は 1 関数**: 記録が在ればその label・無ければ種（宣言の候補の先頭）・在るのに読めなければ typed に止まる（ADR-0049）。§19 の測る集合の「今の口座」はこの解決値に替わる（種の読みはこの関数の中に残る）。doctor の群の行に `current=<label|seed>` を 1 項目足す（群 0 の host の外形は不変）。
+  3. **群の置き場の席は群の今の口座で起きる**: `seat launch` と短い形は、anchor が群に属する周は session 用の選定を撃たず解決値で起き、`--account` / `<label>` が解決値と違う周は使い方の誤りで断る（rc 1・row 0・群の外に席を置かない）。群に属さない anchor は今のまま。
+  4. **移動を頼む記録**: §19 の hook が逼迫を読んだ周に、群用 dir に群ごとに高々 1 file（ts・口座・窓）を置く（在れば上書きしない）。1 周の群の段はこれが在れば鮮度に依らず計測を撃ち、判定の後に履歴の側へ move する。
+  5. **移動の判定は lock の内側で 1 回**: 群の今の口座が逼迫（§19 の判定）なら、移り先 = 宣言の候補の順で、他の群の今の口座でない ∧ 1 周の置き場の live 便が使っていない ∧ 3 窓とも閾値未満の実測（鮮度の内側）を持つ、最初の label。無ければ移らず、断りの event を 1 件記して席へ 1 行 `<NAME> group: move-refused group=<名> reason=no-candidate`（妥協の移動を作らない・ADR-0020 §2.4）。
+  6. **移動の執行**（同じ lock の内側・この順）: 記録を書く（約束 1）→ 承認 event を 1 件（`record_words` と同じ形・逐語は群の宣言の行 = 常設の承認・A1）→ 群の置き場ごとに orchestrator の登録 row が在る席へ退避の合図 1 行 `<NAME> group: evacuate group=<名> to=<label> — 作業記憶を台帳と git に残して /exit` を注入 → 席の pane が shell に戻るのを起動と同じ窓（`seat.cycle_settle_s`）で待ち、戻った置き場から順に `launch` の 1 本で新しい口座の席を**同じ target** に起こす（登録 row は起動が書き直す・会話は運ばない・復帰は SessionStart の brief と §16）。窓の内に戻らない席は保留の event を記し、次の 1 周が記録（新しい口座）と登録 row（古い口座）の食い違いから同じ手を続ける（冪等・判定はやり直さない）。移動した周は §19 の通知を送らない（退避の合図が代わる）。
+  7. **周の中の順序**: 群の段（通知 → 移動）は便の列の前に走り、群の段の失敗は便の列の rc を変えない（§5 の終端の 1 周と同型）。
+  8. **群 0 の host は 1 語も変わらない**。
+- 触らない: 宣言の表 `[[account-group]]`（人が書く宣言と器が書く現状を分ける・ADR-0049）・便用の除外（§17）・選定の純関数・`R-C9-1`・hooks.json・§18 の `-c` / `-r`（機械の復帰は会話を運ばない・ADR-0049）。
+- 歯: `crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs`（pipe_dispatch_group_move_ 接頭辞・偽 tmux と偽 usage）: 逼迫 + 候補ありで記録 1・承認 event 1・退避の 1 行・新しい席の起動行 1 ／ 候補なしは記録 0・断りの event 1・1 行 ／ 他の群の今の口座は候補から外れる ／ 2 周目は判定を繰り返さず保留の席だけ起こす ／ 移動を頼む記録が在る周は鮮度の内側でも計測 1 ＝ 5 本。`crates/scribe2-boundary/tests/e2e/seat/launch.rs`（seat_launch_group_ 接頭辞）: 群の anchor は解決値で起き選定を撃たない ／ 違う label は rc 1・row 0 ／ 群の外の anchor は今のまま ＝ 3 本。`crates/scribe2-boundary/tests/e2e/seat/account.rs`（host_group_record_ 接頭辞）: doctor の current= が記録 / seed を映す ／ 読めない記録は typed に止まる ＝ 2 本。
+- 却下: 席が自分を起こし直す（ADR-0055 OPT3・殺到と権能の柵）／別の window に新しい席を起こす（target が 2 つになり登録 row の鍵が割れる・§14 の短い形と食い違う）／古い席の process を kill する（作業記憶が退避されない・N1）／記録を宣言 file に書き戻す（宣言と現状を分ける・ADR-0049）／移動の判定を hook で行う（群単位の 1 回にならない）／古い席が戻らない周に別口座へ 2 度目の移動をする（判定は 1 回・冪等の続きだけ）。
+- write-set の注: 行 h が `+` で足す 2 file は、行 h の着地前は base に無いので本行も `+` で宣言する。行 h の着地後に素の path へ直す（受付は着地済みの file の `+` を断る）。
+- 後続: 席の登録 row を退役する口（古い置き場の row が便用の除外に残る・`s2-07l.494` の notes）／群の宣言の A1 承認の 1 回目を doctor に見せる形は別便。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -264,4 +317,23 @@ write-set = ["crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/seat/cycle/la
 verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail seat_launch_short_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail seat_usage_external_form"]
 size = "S"
 done = "(1) seat <label> -c（--continue）で inject.jsonl の注入行の末尾が --continue になり、登録 row の launch と置き場の .launch に --continue が無い (2) seat <label> -r ID（--resume ID）で注入行の末尾が --resume ID になり row の launch に無い (3) -c と -r の両方・値の無い -r・同じ flag の重複・会話 id の形（16 進小文字と - だけの UUID）でない -r の値（空白・$( を含む・- 始まり）は使い方 rc 1 で key 0・row 0 (4) 役割の flag 0 個は今までどおり orchestrator で通り、既存の seat_launch_short_ の歯 4 本は 1 字も変わらず緑 (5) usage の 1 行に [-c|-r ID] が増えて外形 snapshot が更新され、tests/e2e/seat.rs の diff は 0 行"
+[[contract]]
+id = "h"
+title = "群の逼迫の通知（第 2 段）— 閾値の rules 行 3 本（5 時間窓 / 7 日窓 / モデル別窓・裁定 id つき）を足し、dispatch の 1 周が群ごとに今の口座と席の口座の使用率を鮮度つきで読んで逼迫の群の置き場の席へ 1 行を注入し event に 1 件記し、席自身の hook が自席の口座を同じ読み手で読んで指示文で告げる（鮮度の外は子を起こして待たない・群 0 の host は無変更・移動は作らない）"
+req = ["FR36", "FR38", "NFR4"]
+section = "19"
+write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/src/pipe/dispatch.rs", "+crates/scribe2/src/pipe/dispatch/group.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/notify.rs", "crates/scribe2/src/fleet/event.rs", "crates/scribe2/src/fleet/usage.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2/src/hook/mod.rs", "+crates/scribe2/src/hook/group.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "crates/scribe2-boundary/tests/e2e/hook.rs", "crates/scribe2-boundary/tests/e2e/rules.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__rules__rules_external_form.snap", "docs/design/account-lifecycle.md"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_group_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail hook_group_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_embedded_manifest_declares_group_pressure_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_external_form"]
+size = "M"
+done = "(1) 埋め込みの manifest が群の閾値の rules 行 3 本を値・裁定 id・裁定日つきで持ち、kind の variant と対で足され、外形 snapshot の rows= が 3 増える (2) 1 周が宣言された群ごとに今の口座（種）と群の置き場の席の登録 row の口座の 3 窓の最新の実測を 1 周の置き場の event log から鮮度つきで読み、鮮度の外の口座だけ計測を 1 回撃ち、どれかの窓が行の値以上なら逼迫と判じ、群 0 の host は 1 語も出さず、runner の無い周も群の段は走る (3) 逼迫の（群, 口座）ごとに 1 行を群の置き場すべての orchestrator の席へ注入し、通知の event を 1 件記す (4) 同じ群・口座・窓で前回の通知より新しい実測が無い周は送らず記さない (5) SessionStart と UserPromptSubmit の hook が自席の口座と anchor の群を読み、逼迫なら brief / 追加文脈に 1 行を出し、群に属さない anchor と閾値未満は 0 行で、鮮度の外は器を子として起こして待たず measuring の 1 行を出す (6) 群を宣言しない host は hook の brief の外形 snapshot と dispatch の通知の既存の歯が動かない (7) dispatch ls は群を測らず、移動は起きない"
+
+[[contract]]
+id = "i"
+title = "群の自動の移動（第 3 段）— 群の今の口座を host の根の記録（群ごとに高々 1 件・履歴へ move）で持ち、解決は記録 > 種の 1 関数、群の置き場の席は解決値で起き、hook は移動を頼む記録を置き、逼迫した群は 1 周が lock の内側で移り先（他の群の今の口座でない ∧ live 便が使っていない ∧ 3 窓とも閾値未満）を 1 回決めて記録と承認 event を書き、退避の合図の後に同じ target へ新しい口座の席を起こす（候補なしは断りの event・群 0 の host は無変更）"
+req = ["FR36", "FR38", "FR59", "NFR4"]
+section = "20"
+write-set = ["+crates/scribe2/src/pipe/dispatch/group.rs", "crates/scribe2/src/pipe/dispatch.rs", "+crates/scribe2/src/hook/group.rs", "crates/scribe2/src/seat/mod.rs", "crates/scribe2/src/seat/cycle/launch.rs", "crates/scribe2/src/seat/cycle/relaunch.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/fleet/event.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "crates/scribe2-boundary/tests/e2e/seat/launch.rs", "crates/scribe2-boundary/tests/e2e/seat/account.rs", "docs/design/account-lifecycle.md"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_group_move_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_launch_group_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail host_group_record_"]
+size = "L"
+done = "(1) 群の今の口座の記録が host の根の群用 dir に群ごとに高々 1 file で在り、1 周の群の段だけが lock の内側で一時 file → rename で書き、書き換える周は前の記録を履歴へ move する (2) 解決の 1 関数が記録 > 種の順で返し、読めない記録は typed に止まり、doctor の群の行に current= が増えて群 0 の host の外形は不変 (3) 群の anchor の seat launch と短い形は選定を撃たず解決値で起き、違う label は rc 1・row 0 で断り、群の外の anchor は今のまま (4) hook が逼迫の周に移動を頼む記録を高々 1 file 置き、1 周はそれが在れば鮮度に依らず計測を撃って判定の後に履歴へ move する (5) 逼迫した群の移り先を宣言の候補の順で他の群の今の口座でない ∧ live 便が使っていない ∧ 3 窓とも閾値未満の最初の label に 1 回だけ決め、無ければ記録 0・断りの event 1・席へ 1 行 (6) 移動の周は記録 → 承認 event（逐語 = 宣言の行）→ 退避の合図 → settle の窓で shell に戻った置き場から同じ target へ新しい口座の席を launch の 1 本で起こし、戻らない席は保留の event を記して次の 1 周が判定を繰り返さず続きだけ行い、移動した周は通知を送らない (7) 群の段は便の列の前に走り、失敗は便の列の rc を変えない (8) 群 0 の host は 1 語も変わらない"
 <!-- contracts:end -->
