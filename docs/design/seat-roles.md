@@ -349,7 +349,7 @@ C1 / C5（権能の値は行・裁定 id）・C1.2（生成文に手書きの規
   2. 判定の面は字面のまま（中身を読まない・実行しない・PATH を引かない）。断りの字面・権能の表・route は不変。
 - 触らない: `capabilities_of` の語列の照合・`named_stop` の形・command guard（`hook/command.rs`）・rules 行・ADR-0025 §2.6 の限界。
 - 却下: 実行 file を `--version` で撃って器の名と sha を確かめる（guard が未知の file を実行する・Bash 1 回ごとに exec が載る）／実行 file の中身から器の印を読む（PATH の全 command に数十 MB の読みが載り上限が無い）／席が写しを撃たない運用にする（散文の規則・N2）／写しの置き場を rules 行で名指す（host の事実を器の行に積む・ADR-0047 が退けた分担）。
-- 歯: in-file（`crates/scribe2/src/hook/role_guard.rs` の既存の族 `role_guard_` に接頭辞 `role_guard_self_`・`crates/` 全体で 0 件）で、`NAME` / `…/NAME` / `NAME.bin` / `…/NAME-pipe.bin` の 4 形が器の口で、`NAMEctl` / `…/NAMEx` / 別名 / 空 の 4 形が違うこと（母集団 8 形を 1 表で）。e2e（`crates/scribe2-boundary/tests/e2e/hook.rs` の既存の族 `hook_role_` に接頭辞 `hook_role_guard_self_`）で、runner 役の席の pre-tool-use に写しの path（tmp 配下の `<NAME>-pipe.bin`）で便を起こす口を書いた payload が `scribe2` の同じ行と同じ断り（capability launch）で止まり、`<NAME>ctl` の同じ行は権能の guard を通る。
+- 歯: in-file（`crates/scribe2/src/hook/role_guard.rs` の既存の族 `role_guard_` に接頭辞 `role_guard_self_`・`crates/` 全体で 0 件）で、`NAME` / `…/NAME` / `NAME.bin` / `…/NAME-pipe.bin` の 4 形が器の口で、`NAMEctl` / `…/NAMEx` / 別名 / 空 の 4 形が違うこと（母集団 8 形を 1 表で）。e2e（`crates/scribe2-boundary/tests/e2e/hook.rs` の既存の族 `hook_role_` に接頭辞 `hook_role_guard_self_`）で、orchestrator で登録した偽 tmux の席（登録できる役割は orchestrator の 1 つ・便を起こす権能を持たない・既存の `hook_role_` の歯と同じ stub）の pre-tool-use に写しの path（tmp 配下の `<NAME>-pipe.bin`）で便を起こす口を書いた payload が `scribe2` の同じ行と同じ断り（capability launch）で止まり、`<NAME>ctl` の同じ行は権能の guard を通る。
 
 <!-- contracts:begin -->
 schema = 1
@@ -484,5 +484,5 @@ section = "27"
 write-set = ["crates/scribe2/src/hook/role_guard.rs", "crates/scribe2-boundary/tests/e2e/hook.rs", "docs/design/seat-roles.md"]
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail role_guard_self_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail hook_role_guard_self_"]
 size = "S"
-done = "(1) is_self が NAME / …/NAME / NAME.bin / …/NAME-pipe.bin の 4 形を器の口と読み、NAMEctl / …/NAMEx / 別名 / 空 の 4 形を読まない（母集団 8 形を 1 表で） (2) runner 役の席の pre-tool-use で tmp 配下の NAME-pipe.bin による便を起こす口が scribe2 の同じ行と同じ断りで止まり、NAMEctl の同じ行は権能の guard を通り、既存の role_guard_ と hook_role_ の歯が全部緑"
+done = "(1) is_self が NAME / …/NAME / NAME.bin / …/NAME-pipe.bin の 4 形を器の口と読み、NAMEctl / …/NAMEx / 別名 / 空 の 4 形を読まない（母集団 8 形を 1 表で） (2) orchestrator で登録した席（登録できる役割は 1 つ・便を起こす権能を持たない）の pre-tool-use で tmp 配下の NAME-pipe.bin による便を起こす口が scribe2 の同じ行と同じ断り（role.orchestrator）で止まり、NAMEctl の同じ行は権能の guard を通り、既存の role_guard_ と hook_role_ の歯が全部緑"
 <!-- contracts:end -->
