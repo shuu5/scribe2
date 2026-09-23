@@ -6,3 +6,4 @@ seat: role=orchestrator anchor=/repo target=rolesdoc:rolesdoc account=acct-1 mod
 seats: registered=1 live=unmeasurable missing=unmeasurable
 host-manifest=absent
 consumer=/repo source=launch scope=- binary=unrecorded plugin=unrecorded ledger=- cache=absent head=undeclared behind=- drift=unrecorded
+host-guard: git=no-row tmux=no-row ledger=no-row rm=no-row self=on rows=0/4 wired=0/0 entities=0 binary=ok

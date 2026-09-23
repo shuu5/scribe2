@@ -56,17 +56,20 @@ fn render_doctor() -> Vec<String> {
 /// つき・1 row 1 行）と実在の target の突合 1 行（C3.2・seat-roles.md §9 (e)）の後ろに、host の面の 1 行と口座の
 /// 前提の行（`account ls` と同じ 1 関数・`retired=` つき・[`vessel::account::doctor_lines`]・account-lifecycle.md §3）、
 /// さらに導入先の行（1 導入先 1 行・[`vessel::account::consumers::doctor_lines`]・consumer-sync.md §4・FR61）を
-/// 足す。`--repo R` 付きは末尾に台帳 lint の 1 行と台帳の形の 1 行（[`vessel::ledger::lint::doctor_lines`]・
+/// 足し、最後に host-guard の 1 行（種類ごとの on / off・配線・binary の解決・[`vessel::account::wire::doctor_line`]・
+/// vessel-hook.md §12 形 5）を足す。`--bin B`（`--state-dir` と並べる歯の seam）は binary の解決に撃つ program を
+/// `<NAME>` から差し替える。`--repo R` 付きは末尾に台帳 lint の 1 行と台帳の形の 1 行（[`vessel::ledger::lint::doctor_lines`]・
 /// contract-source.md §6 / ledger-form.md §3 の 4・台帳は 1 回だけ読む・`--state-dir` 無しでも `--rules` と並べて
 /// 撃てる）。値欠け・空文字・重複・未知の引数は使い方の誤り（`Err`）。
 fn render_doctor_with(rest: &[String]) -> Result<Vec<String>, ()> {
-    let (mut lines, mut state_dir, mut socket, mut rules, mut repo) = (render_doctor(), None, None, None, None);
+    let (mut lines, mut state_dir, mut socket, mut rules, mut repo, mut bin) = (render_doctor(), None, None, None, None, None);
     for pair in rest.chunks(2) {
         match (pair.first().map(String::as_str), pair.get(1).filter(|v| !v.trim().is_empty() && !v.starts_with("--"))) {
             (Some("--state-dir"), Some(found)) if state_dir.is_none() => state_dir = Some(found),
             (Some("--tmux-socket"), Some(found)) if socket.is_none() => socket = Some(found.as_str()),
             (Some("--rules"), Some(found)) if rules.is_none() => rules = Some(found.as_str()),
             (Some("--repo"), Some(found)) if repo.is_none() => repo = Some(found.as_str()),
+            (Some("--bin"), Some(found)) if bin.is_none() => bin = Some(found.as_str()),
             _ => return Err(()),
         }
     }
@@ -76,8 +79,10 @@ fn render_doctor_with(rest: &[String]) -> Result<Vec<String>, ()> {
             lines.extend(vessel::seat::role::doctor_lines(Path::new(dir), socket, rules));
             lines.extend(vessel::account::doctor_lines(Path::new(dir), rules));
             lines.extend(vessel::account::consumers::doctor_lines(Path::new(dir), rules));
+            let program = Path::new(bin.unwrap_or(NAME));
+            lines.push(vessel::account::wire::doctor_line(Path::new(dir), rules, &render_version(), program));
         }
-        (None, None, None, _) | (None, None, Some(_), Some(_)) => {}
+        (None, None, None, _) | (None, None, Some(_), Some(_)) if bin.is_none() => {}
         (None, _, _, _) => return Err(()),
     }
     if let Some(found) = repo {

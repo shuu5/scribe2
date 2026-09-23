@@ -8,8 +8,9 @@ fleet: no such run
 fleet: recorded RunCreated run=r1
 fleet: kind InstallRecorded は record では書けない
 usage: account=a1 unmeasured reason=token_expired refresh=ok
-usage: account <add <label> [--anchor DIR] [--target T] [--tmux-socket PATH]|ls|retire <label>|restore <label>> --state-dir S
+usage: account <add <label> [--anchor DIR] [--target T] [--tmux-socket PATH]|ls|retire <label>|restore <label>|wire> --state-dir S
 account: prepared a1 next=cd [state] && CLAUDE_CONFIG_DIR=[state]/accounts/a1 claude
 account: refused reason=exists label=a1
 account=a1 dir=present credential=missing config=present agentview=off trust=n/a retired=no five_hour=unmeasured seven_day=unmeasured
+account: wired accounts=1 entities=1 added=1 kept=0 refused=0
 account: retired a1

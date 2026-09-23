@@ -181,9 +181,15 @@ fn doctor_accounts_lines_follow_the_seat_lines_in_label_order() {
     let first = lines.iter().position(|line| line.starts_with("account="));
     assert_eq!(host, seats.map(|at| at + 1), "host の面の行は突合の行の直後: {lines:?}");
     assert_eq!(first, seats.map(|at| at + 2), "口座の行は host の面の行の直後: {lines:?}");
-    assert_eq!(lines.len(), 9, "2 行 + 登録 row 1 行 + 突合 1 行 + host の面 1 行 + 口座 3 行 + 導入先 1 行: {lines:?}");
-    assert_eq!(lines.last().map(String::as_str), Some(CONSUMER_REPO), "導入先の行は口座の行の後ろ: {lines:?}");
+    assert_eq!(lines.len(), 10, "2 行 + 登録 row 1 行 + 突合 1 行 + host の面 1 行 + 口座 3 行 + 導入先 1 行 + host-guard 1 行: {lines:?}");
+    assert_eq!(lines.iter().rev().nth(1).map(String::as_str), Some(CONSUMER_REPO), "導入先の行は口座の行の後ろ: {lines:?}");
+    assert_eq!(lines.last().map(String::as_str), Some(HOST_GUARD_BARE.replace("wired=0/0", "wired=0/3").as_str()), "末尾は host-guard: {lines:?}");
     fs::remove_dir_all(&place.dir).ok();
+}
+
+/// 口座の行と、口座の数（`wired=<n>/<口座>`）を名乗る host-guard の行を除いた行の列。
+fn outside_accounts(lines: &[String]) -> Vec<String> {
+    lines.iter().filter(|line| !line.starts_with("account=") && !line.starts_with(HOST_GUARD_HEAD)).cloned().collect()
 }
 
 /// `[[account]]` の無い manifest は口座の行 0 本で他の行は不変・`--rules` 無しは host の面（置き場の `host.toml`）の宣言・
@@ -195,9 +201,8 @@ fn doctor_accounts_no_declared_account_adds_no_line_and_keeps_the_rest() {
     let without = doctor_rows(&place, NO_ACCOUNT_RULES);
     let with = doctor_rows(&place, &account_rules(&["solo"]));
     assert!(!without.iter().any(|line| line.starts_with("account=")), "{without:?}");
-    assert_eq!(without.len(), 6, "2 行 + 登録 row 1 行 + 突合 1 行 + host の面 1 行 + 導入先 1 行: {without:?}");
-    let rest: Vec<String> = with.iter().filter(|line| !line.starts_with("account=")).cloned().collect();
-    assert_eq!(rest, without, "他の行は不変");
+    assert_eq!(without.len(), 7, "2 行 + 登録 row 1 行 + 突合 1 行 + host の面 1 行 + 導入先 1 行 + host-guard 1 行: {without:?}");
+    assert_eq!(outside_accounts(&with), outside_accounts(&without), "他の行は不変");
     assert_eq!(with.len(), without.len() + 1, "{with:?}");
     let state = place.state.display().to_string();
     let doctor = |args: &[&str]| Command::new(bin()).arg("doctor").args(args).output().expect("binary を起動できる");
@@ -211,7 +216,8 @@ fn doctor_accounts_no_declared_account_adds_no_line_and_keeps_the_rest() {
     assert_eq!(rc_of(&bare), i32::from(RC_OK), "stderr={}", stderr_of(&bare));
     assert_eq!(labels_of(&bare), Vec::<String>::new(), "--rules 無し・host の面も無い周は口座の行 0");
     let bare_out = stdout_of(&bare);
-    let bare_tail: Vec<&str> = bare_out.lines().rev().take(2).collect();
+    // 末尾は host-guard の 1 行（binary= は継いだ PATH に依る＝字面は見ない）で、その前に導入先の行。
+    let bare_tail: Vec<&str> = bare_out.lines().rev().skip(1).take(2).collect();
     assert_eq!(bare_tail, [CONSUMER_REPO, HOST_ABSENT], "口座の行 0 でも導入先の行は出る: {bare_out}");
     fs::write(place.state.join(vessel::rules::HOST_MANIFEST), account_rules(&["zhost", "ahost"])).expect("host の面を書ける");
     let hosted = doctor(&["--state-dir", &state, "--tmux-socket", &place.socket]);
@@ -221,7 +227,8 @@ fn doctor_accounts_no_declared_account_adds_no_line_and_keeps_the_rest() {
     let absent = place.dir.join("no-such-rules.toml").display().to_string();
     let unreadable = doctor(&["--state-dir", &state, "--tmux-socket", &place.socket, "--rules", &absent]);
     assert_eq!(rc_of(&unreadable), i32::from(RC_OK), "rc は変えない");
-    assert_eq!(stdout_of(&unreadable).lines().last(), Some("accounts: manifest=unreadable"), "0 行に潰さない");
+    let unreadable_tail: Vec<String> = stdout_of(&unreadable).lines().rev().take(2).map(str::to_owned).collect();
+    assert_eq!(unreadable_tail, ["host-guard: rules=unreadable", "accounts: manifest=unreadable"], "0 行に潰さない");
     let rules = fixture(&place.dir, "solo.toml", &account_rules(&["solo"]));
     for bad in [
         &["--rules", &rules][..],
@@ -252,6 +259,135 @@ fn doctor_accounts_writes_nothing_into_the_account_dirs() {
     assert_eq!(lines.iter().filter(|line| line.starts_with("account=")).count(), 3, "{lines:?}");
     assert_eq!(tree_facts(&accounts), before, "本文・mtime が不変");
     assert!(!accounts.join("w-gone").exists(), "無い口座の dir を作らない");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+// ─── doctor の host-guard の 1 行（vessel-hook.md §12 行 d 形 5 / 6・ADR-0056 §2・接頭辞 `host_guard_doctor_`） ───
+
+/// 種類の行を持たない manifest の host-guard の行の頭（`wired=` より前）。
+const GUARD_NO_ROWS: &str = "host-guard: git=no-row tmux=no-row ledger=no-row rm=no-row self=on rows=0/4";
+
+/// 行の列の末尾の host-guard の 1 行（無ければ空）と、host-guard の行の本数。
+fn guard_line(lines: &[String]) -> (String, usize) {
+    let last = lines.last().filter(|line| line.starts_with(HOST_GUARD_HEAD)).cloned().unwrap_or_default();
+    (last, lines.iter().filter(|line| line.starts_with(HOST_GUARD_HEAD)).count())
+}
+
+/// 種類の 4 行（git の行は `git` が `None` なら欠き、`Some(enabled)` ならその発効で置く）と `labels` の口座を持つ manifest。
+fn guard_rules(git: Option<bool>, labels: &[&str]) -> String {
+    let row = |id: &str, kind: &str, value: &str, enabled: bool| {
+        format!("\n[[rule]]\nid = \"{id}\"\nkind = \"{kind}\"\nvalue = [\"{value}\"]\nenabled = {enabled}\nruling = \"r\"\nruled_at = \"d\"\n")
+    };
+    let git = git.map(|enabled| row("host_guard.git", "HostGuardDeniedCommands", "git push --force", enabled)).unwrap_or_default();
+    format!(
+        "{}{git}{}{}{}",
+        account_rules(labels),
+        row("host_guard.tmux", "HostGuardDeniedCommands", "tmux kill-server", true),
+        row("host_guard.ledger", "HostGuardDeniedCommands", "bd delete", true),
+        row("host_guard.rm", "HostGuardRmProtected", "state-dir", true)
+    )
+}
+
+/// (6) 配線の無い口座 2 つ（1 つは settings.json を持たない）は `wired=0/2 entities=1`、`account wire` で片方に配線を足すと
+/// `wired=1/2 entities=1`、2 つ目の口座が別の実体を持つと `entities=2`（一覧は出さず 1 行のまま）、読めない実体の口座は
+/// 数えず `unreadable=1` の欄が足される、symlink で 1 つの実体を共有すると `wired=2/2 entities=1`。
+#[test]
+fn host_guard_doctor_counts_wired_accounts_and_entities_in_one_line() {
+    let place = role_doctor_place();
+    let rules = account_rules(&["a1", "a2"]);
+    let a1 = account_fixture(&place, "a1", &[("settings.json", "{}")]);
+    let line = |want: &str| format!("{GUARD_NO_ROWS} {want} binary=ok");
+    let (bare, count) = guard_line(&doctor_rows(&place, &rules));
+    assert_eq!((bare, count), (line("wired=0/2 entities=1"), 1), "配線の無い口座 2 つ");
+    let state = place.state.display().to_string();
+    let wire_rules = fixture(&place.dir, "wire-rules.toml", &rules);
+    let wired = run_account(&["wire", "--state-dir", &state, "--rules", &wire_rules]);
+    assert_eq!(stdout_of(&wired), "account: wired accounts=2 entities=1 added=1 kept=0 refused=0\n", "{}", stderr_of(&wired));
+    assert_eq!(guard_line(&doctor_rows(&place, &rules)).0, line("wired=1/2 entities=1"), "片方に配線");
+    let a2 = account_fixture(&place, "a2", &[("settings.json", "{\"k\": 1}")]);
+    let split = doctor_rows(&place, &rules);
+    assert_eq!(guard_line(&split), (line("wired=1/2 entities=2"), 1), "実体が 2 つに割れても 1 行: {split:?}");
+    assert!(!split.iter().any(|line| line.contains(&state) && line.starts_with(HOST_GUARD_HEAD)), "一覧（path）は出さない");
+    fs::write(a2.join("settings.json"), "{").expect("読めない設定を置ける");
+    assert_eq!(guard_line(&doctor_rows(&place, &rules)).0, line("wired=1/2 entities=2 unreadable=1"), "読めない口座は数えない");
+    fs::remove_file(a2.join("settings.json")).expect("設定を外せる");
+    std::os::unix::fs::symlink(a1.join("settings.json"), a2.join("settings.json")).expect("link を置ける");
+    assert_eq!(guard_line(&doctor_rows(&place, &rules)).0, line("wired=2/2 entities=1"), "同じ実体を共有");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (6) 種類ごとの欄は行の `enabled` を読む: 4 行とも発効で `on` と `rows=4/4`、`--rules` で host_guard.git を `enabled = false`
+/// にすると `git=off`、行を欠くと `git=no-row`（どちらも rows=3/4）。口座 0 の host は `wired=0/0 entities=0`。
+#[test]
+fn host_guard_doctor_names_each_kind_on_off_or_no_row() {
+    let place = role_doctor_place();
+    for (git, want) in [
+        (Some(true), "git=on tmux=on ledger=on rm=on self=on rows=4/4"),
+        (Some(false), "git=off tmux=on ledger=on rm=on self=on rows=3/4"),
+        (None, "git=no-row tmux=on ledger=on rm=on self=on rows=3/4"),
+    ] {
+        let lines = doctor_rows(&place, &guard_rules(git, &[]));
+        assert_eq!(guard_line(&lines), (format!("host-guard: {want} wired=0/0 entities=0 binary=ok"), 1), "{git:?}: {lines:?}");
+    }
+    // 列でない値の行（id は host_guard.git・kind は閾値）は発効でも `no-row`。
+    let not_list = "\n[[rule]]\nid = \"host_guard.git\"\nkind = \"CoreLines\"\nvalue = 1\nenabled = true\nruling = \"r\"\nruled_at = \"d\"\n";
+    let lines = doctor_rows(&place, &format!("{}{not_list}", guard_rules(None, &[])));
+    let want = "host-guard: git=no-row tmux=on ledger=on rm=on self=on rows=3/4 wired=0/0 entities=0 binary=ok";
+    assert_eq!(guard_line(&lines), (want.to_owned(), 1), "列でない行: {lines:?}");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (6) 宣言を読めない周（`--rules` が無い file・host の面が壊れている）は `host-guard: rules=unreadable` の 1 行（rc 0）。
+/// `--state-dir` の無い doctor は host-guard の行を出さず、`--bin` だけを渡す doctor は使い方で断る。
+#[test]
+fn host_guard_doctor_says_rules_unreadable_and_prints_nothing_without_state_dir() {
+    let place = role_doctor_place();
+    let state = place.state.display().to_string();
+    let doctor = |args: &[&str]| Command::new(bin()).arg("doctor").args(args).output().expect("binary を起動できる");
+    let absent = place.dir.join("no-such-rules.toml").display().to_string();
+    let missing = doctor(&["--state-dir", &state, "--tmux-socket", &place.socket, "--rules", &absent, "--bin", bin()]);
+    assert_eq!(rc_of(&missing), i32::from(RC_OK), "rc は変えない: {}", stderr_of(&missing));
+    let lines: Vec<String> = stdout_of(&missing).lines().map(str::to_owned).collect();
+    assert_eq!(guard_line(&lines), ("host-guard: rules=unreadable".to_owned(), 1), "{lines:?}");
+    fs::write(place.state.join(vessel::rules::HOST_MANIFEST), "schema = 1\n\n[[account]]\nlabel = \"h\"\nbogus = 1\n").expect("host の面を壊せる");
+    assert_eq!(guard_line(&doctor_rows(&place, NO_ACCOUNT_RULES)).0, "host-guard: rules=unreadable", "壊れた host の面");
+    let bare = doctor(&[]);
+    assert!(!stdout_of(&bare).contains(HOST_GUARD_HEAD), "--state-dir の無い doctor は行を出さない: {}", stdout_of(&bare));
+    let only_bin = doctor(&["--bin", bin()]);
+    assert_eq!(rc_of(&only_bin), i32::from(RC_REFUSED), "--bin だけは使い方で断る");
+    assert!(stdout_of(&only_bin).starts_with("usage: "), "{}", stdout_of(&only_bin));
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (7) binary は `<NAME> --version` を子 process で 1 回撃つ: PATH に何も無い環境変数で起こした doctor は `binary=missing`、
+/// 歯の seam `--bin` で歯の binary を渡すと 1 行目が自分の `--version` の行と同じで `binary=ok`、別の行を出す program は
+/// `binary=other`、在らない path は `missing`。
+#[test]
+fn host_guard_doctor_binary_is_missing_ok_or_other_by_the_child() {
+    use std::os::unix::fs::PermissionsExt;
+    let place = role_doctor_place();
+    let state = place.state.display().to_string();
+    let rules = fixture(&place.dir, "bin-rules.toml", NO_ACCOUNT_RULES);
+    let empty = place.dir.join("empty-path");
+    fs::create_dir_all(&empty).expect("空の PATH の dir を作れる");
+    let other = place.dir.join("other-bin");
+    fs::write(&other, "#!/bin/sh\necho 'scribe2 0.0.0 (other)'\n").expect("別の program を書ける");
+    fs::set_permissions(&other, fs::Permissions::from_mode(0o755)).expect("実行可能にできる");
+    let run = |extra: &[&str], path: Option<&Path>| {
+        let mut command = Command::new(bin());
+        command.args(["doctor", "--state-dir", &state, "--tmux-socket", &place.socket, "--rules", &rules]).args(extra);
+        if let Some(found) = path {
+            command.env("PATH", found);
+        }
+        let out = command.output().expect("binary を起動できる");
+        assert_eq!(rc_of(&out), i32::from(RC_OK), "判定しない: {}", stderr_of(&out));
+        guard_line(&stdout_of(&out).lines().map(str::to_owned).collect::<Vec<String>>()).0
+    };
+    let line = |binary: &str| format!("{GUARD_NO_ROWS} wired=0/0 entities=0 binary={binary}");
+    assert_eq!(run(&[], Some(&empty)), line("missing"), "PATH に <NAME> が無い");
+    assert_eq!(run(&["--bin", bin()], Some(&empty)), line("ok"), "歯の binary 自身");
+    assert_eq!(run(&["--bin", &other.display().to_string()], None), line("other"), "1 行目が違う");
+    assert_eq!(run(&["--bin", &place.dir.join("absent").display().to_string()], None), line("missing"), "在らない path");
     fs::remove_dir_all(&place.dir).ok();
 }
 
@@ -301,7 +437,8 @@ fn host_group_doctor_prints_one_line_per_group_in_declaration_order() {
     let last_account = lines.iter().rposition(|line| line.starts_with("account="));
     let first_group = lines.iter().position(|line| line.starts_with("group="));
     assert_eq!(first_group, last_account.map(|at| at + 1), "群の行は口座の行の後ろ: {lines:?}");
-    assert_eq!(lines.last().map(String::as_str), Some(CONSUMER_REPO), "導入先の行は群の行の後ろ: {lines:?}");
+    assert_eq!(lines.iter().rev().nth(1).map(String::as_str), Some(CONSUMER_REPO), "導入先の行は群の行の後ろ: {lines:?}");
+    assert!(lines.last().is_some_and(|line| line.starts_with(HOST_GUARD_HEAD)), "末尾は host-guard: {lines:?}");
     fs::remove_dir_all(&place.dir).ok();
 }
 
@@ -351,11 +488,11 @@ fn host_group_doctor_prints_no_line_without_groups() {
         .expect("host の面を書ける");
     let hosted = doctor_rows(&place, &rules);
     assert!(!hosted.iter().any(|line| line.starts_with("group=")), "群を持たない面でも 0 本: {hosted:?}");
-    // 比べるのは群の行の入る隙間（口座の行と host の面の 3 値の行を除いた外形）。
+    // 比べるのは群の行の入る隙間（口座の行と host の面の 3 値の行と、口座の数を名乗る host-guard の行を除いた外形）。
     let shape = |lines: &[String]| -> Vec<String> {
         lines
             .iter()
-            .filter(|line| !line.starts_with("account=") && !line.starts_with("host-manifest="))
+            .filter(|line| !line.starts_with("account=") && !line.starts_with("host-manifest=") && !line.starts_with(HOST_GUARD_HEAD))
             .cloned()
             .collect()
     };
