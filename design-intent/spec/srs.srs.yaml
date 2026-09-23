@@ -11,18 +11,18 @@ meta:
   eyebrow_left: 要件定義書 (SRS)
   eyebrow_right: scribe2 — MVP
   subtitle: 契約は小さく・検証は機械が先・止まるときは記帳して止まる
-  version: "0.20"
-  date: "2026-09-23"
+  version: "0.21"
+  date: "2026-09-24"
   reader: この器で開発する人と AI（Claude Code の session）。 専門語には必ずやさしい言い換えを併記する
 
 approval:
   - role: 承認 (user)
     who: user
-    when: 2026-09-23（版 0.20。 版ごとの裁定 id は台帳が持つ）
+    when: 2026-09-24（版 0.21。 版ごとの裁定 id は台帳が持つ）
     stamp: 裁定済
   - role: レビュー (folio review lens)
     who: spec-review 5 軸 + SRS ceiling 3 lens
-    when: 2026-09-23
+    when: 2026-09-24
     stamp: 実施
   - role: 作成 (開発 session)
     who: AI session (Claude Code)
@@ -75,8 +75,9 @@ scope:
     - 席の起動
     - 導入先の同期
     - 対話面の作法
+    - 管理 tick（heartbeat）
   out:
-    - 席の自律機能
+    - 席の自律機能（管理 tick の外）
     - interpreter 経路の中身の解析（v3）
     - lane 計画と席の dashboard（v3）
     - 台帳への write（close と notes 1 行の外）
@@ -115,7 +116,7 @@ acceptance:
   - { id: AC15, criterion: orchestrator の登録 row を持つ席から回答・承認・go の記帳が通り、 同じ席から行に無い権能（便の起動）を試みると deny され（deny 文に欠けた権能と rules 行の id）、 同じ席から便 1 本を名指す停止は通り stop --all は deny され（FR13）、 役割の記録の無い席からは記帳も起動も deny される,        metric_v: 0 件 + 便 1 本を名指す停止 1/1 + stop --all の deny 1/1,  metric_l: 権能の外の記帳,     links: [FR13, FR15, FR16, FR40, FR41, FR45] }
   - { id: AC16, criterion: manifest 行が与えていない path 種別（席の src）への編集は編集時に deny、 与えた種別（tests/・設計 doc・契約）への編集は allow、 契約が typed な印で開いた便の write-set の内側だけ席の src の編集が allow になる,             metric_v: 0 件,  metric_l: 役割の外の編集,     links: [FR20, FR45] }
   - { id: AC17, criterion: 生成された席の指示文は manifest の行と雛形からだけ作られ、 CI が「行に無い規範文」と「行に在って文に無い権能」の両方を 0 件と確かめ（走査した行数を母集団として出す）、 対話面の作法の行が pointer 付きで 1 本在り、 記録の無い席への注入は 0 byte で、 runner への憲法の散文の注入は 0 行。 加えて偽の台帳と toy repo で、 指示文の後ろに直近の流れの事実行の 4 種（仕掛かり中の契約・直近に更新された契約・直近の commit・未 commit の変更）が出て指示文の行数は変わらず、 圧縮の直前の 1 枠は圧縮の直前に書かれ、 圧縮の後の開始で 1 回だけ出て消え（2 回目の開始には出ない）、 repo には 1 byte も書かれず、 1 枠を書けない周も圧縮を止めず、 役割の記録の無い席では事実行も 1 枠も 0 byte,        metric_v: 0 件 + 作法の行 1/1 + 事実行 4/4 + 指示文の行数の不変 1/1 + 1 枠 3/3（書く・1 回出る・消える） + repo への書込み 0 byte + 圧縮の停止 0,  metric_l: 指示文の drift,     links: [FR17, FR18, FR42, FR67] }
-  - { id: AC18, criterion: ADR-0045 が不在と定める管理 tick と cycle の機構（tick の subcommand と unit の導入・撤去、 cycle、 打刻の合図と続きの pointer、 強制サイクルの印と guard、 実測の口座の記録と食い違いの判定）が現物に無いことを、 不在を測る歯が nextest で確かめる。 該当する subcommand は器の使い方の行に無く（使い方の行数を母集団として出す）、 廃止した rules 行は manifest に無く（manifest の行数を母集団として出す）、 極性の一覧に該当する境界の行が無く（極性の行数を母集団として出す）、 event の種類の閉じた一覧に実測の口座と強制サイクルの印の種類が無い（種類の数を母集団として出す）, metric_v: subcommand 0/N + rules 行 0/M + 極性の行 0/K + event の種類 0/E, metric_l: 管理 tick と cycle の不在, links: [FR27, FR28, FR38, FR43, FR64, FR70, FR71] }
+  - { id: AC18, criterion: 偽の tmux と偽の時計と fixture の席の置き場で管理 tick（FR27）を周期で撃つと、 登録 row を持ち状態の打刻の最終行が idle で入力欄が空いている席にだけ打刻の合図が 1 行注入され、 入力欄に文字が在る席・最後の打刻から初段の待ち未満の席・口座の門に掛かる席には送られず理由が判定行に出て、 状態の打刻の最終行の時刻が動かない席では合図の間隔が初段から 2 倍ずつ伸びて次の待ちが 24 時間を超える段では送られず（合図は 6 本で打ち切り）、 時刻が動いた席では初段へ戻り、 梯子の記録が読めない・書けない fixture では送らず理由が判定行に出て、 tick の周に計測（FR33）の起動が 0 件で、 周期・初段・係数・上限の rules 行 4 本が裁定 id つきで manifest に在り、 tick の unit の導入と撤去が host の駆動機構の置き場に unit を置き退役 dir へ移す（unit は 1 関数の導出・doctor が有無と一致を 1 行で言う）ことを歯が nextest で確かめる。 加えて ADR-0045 の残りの不在（cycle、 席の queue と続きの pointer、 強制サイクルの印と guard、 実測の口座の記録と食い違いの判定）は、 該当する subcommand が器の使い方の行に無く（使い方の行数を母集団として出す）、 戻した 4 本の外の廃止した rules 行が manifest に無く（manifest の行数を母集団として出す）、 極性の一覧に該当する境界の行が無く（極性の行数を母集団として出す）、 event の種類の閉じた一覧に実測の口座と強制サイクルの印の種類が無い（種類の数を母集団として出す）ことを不在を測る歯が確かめる, metric_v: 合図 1/1 + 不送 3/3 + 打ち切り 6/6 本 + 初段への戻り 1/1 + 読めない・書けない記録の不送 2/2 + 計測の起動 0 件 + rules 行 4/4 + unit の導入・撤去 1/1 + subcommand 0/N + rules 行 0/M + 極性の行 0/K + event の種類 0/E, metric_l: 管理 tick の合図と backoff と打ち切り（cycle の不在を含む）, links: [FR27, FR28, FR38, FR43, FR64, FR70, FR71] }
   - { id: AC19, criterion: ADR-0045 で廃止した席の形の機構（席間の連絡の経路、 役割なしの起動の subcommand、 hook 集合の食い違いによる作り直し、 statusline の subcommand と口座の設定の描画 command）が現物に無いことを、 不在を測る歯が nextest で確かめる。 該当する subcommand は器の使い方の行に無く（使い方の行数を母集団として出す）、 役割の閉じた一覧は orchestrator の 1 値だけを持ち（一覧の値の数を母集団として出す）、 口座の登録が書く設定に描画 command の key が無い（設定の key の数を母集団として出す）, metric_v: subcommand 0/N + 役割 1/1 + 描画の key 0/K, metric_l: 席の形の機構の不在, links: [FR40, FR44, FR60, FR62, FR63] }
   - { id: AC20, criterion: 変異検査の verify 行が memory 上限付きの箱の中で撃たれ、 箱や並列の枠が使えない fixture では並列度 1 で進んで便が断られない,                                metric_v: 0 件,  metric_l: 資源不足での拒否,   links: [FR8, FR46, NFR6] }
   - { id: AC21, criterion: toy repo の設計 doc に契約表 3 行（正常・型の宣言に対して write-set が足りない・設計の節が無い）を置き、 intake が正常の 1 行から契約 file を生成して便を作り、 残りの 2 行を typed な理由（足りない file・無い節）で断って便が増えず、 契約 file を直接渡す形は受け付けない, metric_v: 1/3 便, metric_l: 契約表からの生成と拒否, links: [FR47, FR48, FR53, FR54] }
@@ -427,15 +428,15 @@ requirements:
       response: 器は編集 tool の hook で context 使用量を上限と比べて編集を止める段（cap guard）と、 その上限の rules 行を持たない（ADR-0045 §2 (2) で廃止）。 不在は不在を測る歯が確かめる
   - id: FR27
     type: FR
-    label: 管理 tick（廃止）
+    label: 管理 tick（heartbeat）
     priority: must
     vmethod: T
     rationale_source: N-1
-    trace: { backward: [N-1, N-3], acceptance: [AC18] }
+    trace: { backward: [N-1, N-2, N-3], acceptance: [AC18] }
     ears:
       pattern: ubiquitous
       condition: 常時
-      response: 器は開発 session を周期で見張り打刻の合図を注入する管理 tick と、 その間隔と backoff の rules 行を持たない（ADR-0045 §2 (2) で廃止）。 便の起動の契機は FR68 が持つ。 不在は不在を測る歯が確かめる
+      response: 器は開発 session（orchestrator の席）が黙っていないかを周期で見て、 登録 row（FR40）を持ち状態の打刻の最終行が idle で入力欄が空いている席にだけ、 台帳の現在地から続きを進めるよう促す打刻の合図 1 行を注入する管理 tick を持つ（ADR-0058）。 送るのは席が最後の打刻から初段の待ち以上黙り、 最後の合図から今の段の待ちが経ち、 口座の門（群の逼迫〔FR38〕の閾値の rules 行のいずれか以上の口座の席には送らず、 計測〔FR33〕の記録の最新値だけを読んで計測は起こさず、 記録が無い・古い周は通す）を通った周だけで、 条件の列と順は ADR-0058 が正本である。 合図の間隔は席に変化が無ければ初段（40 分）から 2 倍ずつ伸ばし（backoff）、 次の待ちが 24 時間を超える段では送らず（合図は最大 6 本）、 席に変化（状態の打刻の最終行の時刻 = 変化の digest が動く。 比べる基準は合図の後に席が idle へ戻った周に取る）があれば初段へ戻す。 周期・初段・係数・上限は rules 行 4 本（user 裁定 id つき）が持つ。 梯子の記録（最後に送った時刻・何本目か・変化の digest）は席の置き場の file 1 つで、 記録が読めない・書けない周は送らず理由を判定行に出す（fail-closed）。 群の逼迫（FR38）は測らず、 便の起動の契機は FR68 が持つ
   - id: FR28
     type: FR
     label: cycle（廃止）
@@ -559,7 +560,7 @@ requirements:
     ears:
       pattern: event
       condition: 便の終端の周（dispatch の 1 周）か席自身の hook が動いたとき
-      response: 器は群の逼迫を時計で測らず、 便の終端の周（dispatch の 1 周）と席自身の hook の 2 系統で、 群の今の口座と群の席が居る口座の使用率を計測（FR33）から鮮度つきで読み、 5 時間窓・7 日窓・モデル別窓の閾値の rules 行 3 本（user 裁定で発効）のいずれか以上になった群について、 便の終端の周は群の置き場の席の pane へ通知を 1 行注入して event に記し（同じ実測には 2 度通知しない）、 席自身の hook は指示文の 1 行で告げて移動を頼む記録を host の根へ群ごと高々 1 件置き、 便の終端の周は群単位で host の lock の内側で 1 回だけ移り先（他の群の今の口座でない ∧ 便が使っていない ∧ 閾値未満の候補の先頭）を決めて群の今の口座の記録（書き換える周は前の記録を消さず履歴の側へ可逆な move で移す）と承認 event を書き、 古い席へ退避の合図を送って新しい口座で席を起こし直し（対話の記録は運ばない・ADR-0049）、 候補が無い周は移らず user へ通知し妥協の移動を作らず、 timer・常駐 process・管理 tick・cycle・強制サイクルの印は持たない（ADR-0045 §2 (2) / ADR-0049 / ADR-0055）
+      response: 器は群の逼迫を時計で測らず、 便の終端の周（dispatch の 1 周）と席自身の hook の 2 系統で、 群の今の口座と群の席が居る口座の使用率を計測（FR33）から鮮度つきで読み、 5 時間窓・7 日窓・モデル別窓の閾値の rules 行 3 本（user 裁定で発効）のいずれか以上になった群について、 便の終端の周は群の置き場の席の pane へ通知を 1 行注入して event に記し（同じ実測には 2 度通知しない）、 席自身の hook は指示文の 1 行で告げて移動を頼む記録を host の根へ群ごと高々 1 件置き、 便の終端の周は群単位で host の lock の内側で 1 回だけ移り先（他の群の今の口座でない ∧ 便が使っていない ∧ 閾値未満の候補の先頭）を決めて群の今の口座の記録（書き換える周は前の記録を消さず履歴の側へ可逆な move で移す）と承認 event を書き、 古い席へ退避の合図を送って新しい口座で席を起こし直し（対話の記録は運ばない・ADR-0049）、 候補が無い周は移らず user へ通知し妥協の移動を作らず、 群の逼迫の計測のための timer・常駐 process と、 cycle・強制サイクルの印は持たない（ADR-0045 §2 (2) / ADR-0049 / ADR-0055）。 管理 tick（FR27）の timer（FR64）は群の逼迫を測らず計測も起こさず、 tick の口座の門（FR27）は計測（FR33）の記録の最新値を読むだけである（ADR-0058）
   - id: FR39
     type: FR
     label: intake の排他
@@ -606,7 +607,7 @@ requirements:
       response: session の開始では、 器は、 その席に役割の記録が在ればその役割の manifest 行と役割ごとの雛形から生成した短い指示文（席の同一性・憲法の効く部分の pointer・役割の特性・台帳の現在地の 4 群からなり、 行の構成と行数の上限は ADR-0045 が正本）を session の開始で文脈へ注入し（入力欄を経由しない）、 役割の記録が無ければ注入せず、 runner には憲法の散文を 1 行も注入しない。 生成した指示文は行が持つ権能をすべて名指し、 C 条文の規範文を持たず、 雛形の外に手書きの規範文を含まない（両向きの drift は CI が検査する・FR18）。 役割の記録が在る席の session の開始では、 器は指示文の後ろに、 台帳と git から機械で導いた直近の流れの事実行（仕掛かり中の契約・直近に更新された契約・直近の commit・未 commit の変更。 規範文を持たず指示文の行数に数えない）を出し、 圧縮の後の開始で圧縮の直前の 1 枠が在れば、 その 1 枠を 1 回だけ出して消す。 圧縮が始まる直前では、 器は役割の記録が在る席の直前の発言を逐語で圧縮の直前の 1 枠（state dir の席ごとの置き場・repo の外）に書き、 圧縮を止めない（役割の記録が無い席では書かない）
   - id: FR43
     type: FR
-    label: 席の継続（廃止）
+    label: 席の継続
     priority: must
     vmethod: T
     rationale_source: N-1
@@ -614,7 +615,7 @@ requirements:
     ears:
       pattern: ubiquitous
       condition: 常時
-      response: 器は席の queue から続きの pointer を注入しない（ADR-0045 §2 (2) で廃止）。 席が抱える次の仕事は台帳の現在値が持ち、 止まった席の続きは user が対話面で促す。 不在は不在を測る歯が確かめる
+      response: 器は席の queue を持たず、 続きの pointer を queue から注入しない（ADR-0045 §2 (2)）。 席が抱える次の仕事は台帳の現在値が持ち、 管理 tick（FR27）が台帳の現在地から続きを進めるよう促す 1 行を注入する（ADR-0058）。 合図が 24 時間で打ち切られた後の席の続きは user が対話面で促す
   - id: FR44
     type: FR
     label: 席間の連絡（廃止）
@@ -625,7 +626,7 @@ requirements:
     ears:
       pattern: ubiquitous
       condition: 常時
-      response: 1 つの anchor の席は orchestrator の 1 席（FR40）であり、 器は席間の連絡の経路と入力欄への合図の注入を持たない（ADR-0045 §2 (2) で廃止）。 入力欄への差し込みは席の起動（FR59）の起動行にだけ使う。 不在は不在を測る歯が確かめる
+      response: 1 つの anchor の席は orchestrator の 1 席（FR40）であり、 器は席間の連絡の経路を持たない（ADR-0045 §2 (2) で廃止・ADR-0058）。 器から席の入力欄への差し込みは席の起動（FR59）の起動行・管理 tick（FR27）の打刻の合図・群の逼迫の通知と移動（FR38）の通知と退避の合図にだけ使い、 席の続きを促す差し込みは打刻の合図だけである。 経路の不在は不在を測る歯が確かめる
   - id: FR45
     type: FR
     label: 権能の執行
@@ -847,7 +848,7 @@ requirements:
 
   - id: FR64
     type: FR
-    label: 管理 tick の駆動（廃止）
+    label: 管理 tick の駆動
     priority: must
     vmethod: T
     rationale_source: N-1
@@ -855,7 +856,7 @@ requirements:
     ears:
       pattern: ubiquitous
       condition: 常時
-      response: 器は tick の unit の導入と撤去の口を持たず、 host の駆動機構に unit を置かない（ADR-0045 §2 (2) で廃止）。 不在は不在を測る歯が確かめる
+      response: 器は管理 tick（FR27）の unit（systemd user の service と timer の対）を登録 row（FR40）を持つ席ごとに導出して host の駆動機構へ置き有効化する口と、 退役 dir への移動で撤去する口を持つ。 unit の本文は NAME・target・置き場・binary・周期の rules 行から器が 1 関数で導出し、 repo には入れず、 器の作った印の無い file は上書きも移動もせず、 有効化と撤去は 3 クラスに当たらない（ADR-0030 §2.1〜§2.5 の形・ADR-0058）。 doctor は席ごとに unit の有無と一致を 1 行で言う
 
   - id: FR65
     type: FR
@@ -935,7 +936,7 @@ requirements:
     ears:
       pattern: ubiquitous
       condition: 常時
-      response: 器は session の開始で実測した口座を記録せず、 登録 row の口座との食い違いを判定しない（合図を送る管理 tick が無い・ADR-0045 §2 (2) で廃止）。 席の口座は席の起動（FR59）が登録 row に書く値だけが持つ。 不在は不在を測る歯が確かめる
+      response: 器は session の開始で実測した口座を記録せず、 登録 row の口座との食い違いを判定しない（ADR-0045 §2 (2) で廃止・管理 tick〔FR27・ADR-0058〕の判定の列に口座の食い違いの判定は無い）。 席の口座は席の起動（FR59）が登録 row に書く値だけが持つ。 不在は不在を測る歯が確かめる
   - id: FR72
     type: FR
     label: 見張り自身の設定の編集の拒否
@@ -1081,3 +1082,6 @@ glossary:
   - { term: 妥協の起動,     en: compromise launch,      plain_short: 余裕が無くても席を立てること, def: 閾値未満の口座の候補が無い周に、 上限に当たっていない中で逼迫度が最小の口座で席を起こすこと。 理由を記録と席の指示文に出し、 席は作業を止めて user の裁定を待つ（FR69・ADR-0041）。 }
   - { term: 群の今の口座, en: group effective account, plain_short: かたまりがいま使う口座, def: project の群の席が実際に使う口座。 器が host の根に群ごとに高々 1 件の記録で持ち、 記録が無い周は群の宣言の候補の先頭が種になる（ADR-0049）。 書き換えは群の移動（FR38）だけが行う。 }
   - { term: 群の逼迫, en: group pressure, plain_short: 口座の残りが線を越えた状態, def: 群の今の口座か群の席が居る口座の使用率が、 5 時間窓・7 日窓・モデル別窓のいずれかで閾値の rules 行の値以上である状態（ADR-0055）。 便の終端の周と席自身の hook が測り、 時計では測らない。 }
+  - { term: heartbeat,      en: heartbeat,              plain_short: 席を促す見回りの呼び名,   def: ADR-0058 での管理 tick の呼び名（席を促す見回り）。 user の裁定はこの語で管理 tick を指す。 前の器に在った、 席が自分で打つ生存の判子の口と file はこの語で呼ばず、 ADR-0058 では戻さない。 }
+  - { term: backoff,        en: backoff,                plain_short: 間隔を倍々に伸ばして打ち切る, def: 同じ相手に同じ働きかけを繰り返すとき、 反応が無ければ次までの間隔を倍々に伸ばし、 上限で打ち切る形。 管理 tick の打刻の合図は初段 40 分から 2 倍ずつ伸ばし、 次の待ちが 24 時間を超える段では送らず、 席に変化があれば初段へ戻す（ADR-0058・値は rules 行）。 }
+  - { term: 変化の digest,  en: change digest,          plain_short: 席が動いたかを比べる値,   def: 席に変化があったかを比べるための値 = 席の状態の打刻の最終行の時刻の 1 値。 読める形で梯子の記録に残し、 fleet の event log・context・台帳・pane の字面は入れない（ADR-0058）。 }

@@ -457,10 +457,24 @@ terms:
     domain: consumer
     definition: 器が binary 1 本で仕える Claude Code の event の口 (PreToolUse 等)。
     relationships: [write-set, cap guard]
+  - canonical: heartbeat
+    domain: consumer
+    definition: ADR-0058 での管理 tick の呼び名 (席を促す見回り)。 user の裁定はこの語で管理 tick を指す。 前の器に在った、 席が自分で打つ生存の判子の口と file はこの語で呼ばず、 ADR-0058 では戻さない。
+    relationships: [管理 tick, 打刻の合図, backoff]
+  - canonical: backoff
+    domain: consumer
+    aliases: [合図の backoff]
+    definition: 同じ相手に同じ働きかけを繰り返すとき、 反応が無ければ次までの間隔を倍々に伸ばし、 上限で打ち切る形。 管理 tick の打刻の合図は初段 40 分から 2 倍ずつ伸ばし、 次の待ちが 24 時間を超える段では送らず、 席に変化があれば初段へ戻す (ADR-0058・値は rules 行)。
+    relationships: [管理 tick, 打刻の合図, 席]
+  - canonical: 変化の digest
+    domain: consumer
+    aliases: [change digest]
+    definition: 席に変化があったかを比べるための値 = 席の状態の打刻の最終行の時刻の 1 値。 読める形で梯子の記録に残し、 fleet の event log・context・台帳・pane の字面は入れない (ADR-0058)。
+    relationships: [管理 tick, 席, 打刻の合図, 開発 session]
   - canonical: 管理 tick
     domain: consumer
-    definition: 開発 session が黙っていないかを周期で見て、 条件が揃ったときだけ打刻の合図か退避の合図 (移れる口座の候補が無い周は妥協の通知) を 1 行注入する仕組み (SRS FR27 / FR29 / FR38)。
-    relationships: [開発 session, cycle, 打刻の合図, 退避の合図, 妥協の通知]
+    definition: 開発 session が黙っていないかを周期で見て、 条件が揃ったときだけ続きを促す打刻の合図を 1 行注入する仕組み (SRS FR27・ADR-0058)。 無変化の席には backoff で合図の間隔を伸ばし、 24 時間で止める。 退避の合図と cycle は ADR-0045 で廃止のまま。
+    relationships: [開発 session, 打刻の合図, backoff, 変化の digest, tick の unit]
   - canonical: statusline
     domain: consumer
     definition: 開発 session の画面の下に Claude Code が描く 1 行。 器の口 (seat statusline) が stdin の payload だけから組み、 管理 tick の context 計測が pane から読む入力でもある (SRS FR25 / FR29・ADR-0029 §2.1 / §2.2)。 描く形と読む形は同じ 1 つの規則で、 口座の設定の statusLine は器の口座の口が書く (ADR-0029 §2.3)。
@@ -479,7 +493,7 @@ terms:
     relationships: [席の状態, hook, 管理 tick]
   - canonical: 打刻の合図
     domain: consumer
-    definition: 管理 tick が idle の開発 session に注入する 1 行 (SRS FR27)。 heartbeat を打って続きを進めるよう促す。
+    definition: 管理 tick が idle の開発 session に注入する 1 行 (SRS FR27・ADR-0058)。 台帳の現在地から続きを進めるよう促す。 無変化なら backoff で間隔が伸びる。
     relationships: [管理 tick, 開発 session]
   - canonical: 退避の合図
     domain: consumer
@@ -651,11 +665,11 @@ terms:
     flagged_ambiguities: ["枠: 圧縮の直前の 1 枠 (席の記録) と並列の枠 (変異検査の並列・SRS NFR6) と host の memory の枠 (受付) は別義"]
   - canonical: 席の queue
     domain: consumer
-    definition: 席に向けた dispatch・席宛ての質問・裁定済みの次の行動の集合。 管理 tick は queue が空でない idle の席に続きの pointer を注入し、 queue が承認と裁定の待ちだけのときを正当な idle とする (SRS FR43)。
+    definition: 席に向けた dispatch・席宛ての質問・裁定済みの次の行動の集合として前の器が持っていた実体。 器は持たず、 続きの pointer を queue から注入しない (ADR-0045・SRS FR43)。 席の次の仕事は台帳の現在値が持ち、 管理 tick が台帳の現在地から続きを促す (ADR-0058)。
     relationships: [管理 tick, 席, 席の状態]
   - canonical: 席間の連絡
     domain: consumer
-    definition: 開発 session の席どうしの message を、 席の入力欄を経由しない経路で届け、 経路自身の記録で着地を確かめること (SRS FR44)。 入力欄への注入は器の tick・heartbeat・復元の command にだけ使う。
+    definition: 開発 session の席どうしの message を届ける経路。 器は持たない (ADR-0045・SRS FR44)。 入力欄への差し込みは席の起動の起動行 (FR59) と管理 tick の打刻の合図 (FR27・ADR-0058) の 2 つだけに使う。
     relationships: [席, 管理 tick, 開発 session]
   - canonical: 契約表
     domain: consumer
