@@ -332,7 +332,7 @@ title = "gate.token_cap を 150000 → 400000 に一時的に上げる — 純�
 req = ["FR9"]
 section = "4"
 write-set = ["rules/manifest.toml", "crates/scribe2-boundary/tests/e2e/rules.rs", "docs/design/rules-manifest.md"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail rules_"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_token_cap_"]
 size = "S"
 done = "manifest の行の値と裁定 id が新しく、埋め込み値の pin が 400000 で緑、§4.1 の表が同じ値と裁定を写し、src は不変"
 

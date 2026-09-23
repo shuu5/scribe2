@@ -819,7 +819,7 @@ title = "pipe/cli.rs を cli/args.rs / state.rs / show.rs / resume.rs に、e2e/
 req = ["FR30"]
 section = "5"
 write-set = ["crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/args.rs", "crates/scribe2/src/pipe/cli/state.rs", "crates/scribe2/src/pipe/cli/show.rs", "crates/scribe2/src/pipe/cli/resume.rs", "crates/scribe2-boundary/tests/e2e/pipe.rs", "crates/scribe2-boundary/tests/e2e/pipe/ratelimit.rs", "crates/scribe2-boundary/tests/e2e/pipe/stop.rs", "docs/design/pipeline.md", "docs/design/dispatcher.md", "docs/design/working-memory.md", "docs/design/contract-source.md", "docs/design/account-autonomy.md", "docs/design/consumer-sync.md"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail pipe_"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_ratelimit_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_stop_"]
 size = "S"
 done = "pipe/cli.rs が入口と shim だけになり、lifecycle.rs が ratelimit.rs / stop.rs に割れて、歯の本数と外形 snapshot が不変"
 
@@ -881,7 +881,7 @@ title = "xtask の flipcheck.rs から git / tar で base を取り出す群を 
 req = ["FR7"]
 section = "13"
 write-set = ["-crates/xtask/src/flipcheck.rs", "+crates/xtask/src/flipcheck/git.rs", "crates/xtask/src/flipcheck_tests.rs"]
-verify = ["cargo nextest run -p xtask --no-tests=fail flip_"]
+verify = ["cargo nextest run -p xtask --no-tests=fail flip_check_base_", "cargo nextest run -p xtask --no-tests=fail flip_check_rename_", "cargo nextest run -p xtask --no-tests=fail flip_manifest"]
 size = "S"
 done = "git 群 10 関数が子 module に在り、親は mod 宣言と pub use だけが増えて呼び手と歯の import は不変、既存の flip_ の歯が全部緑で純移動の機械証明が残差 0"
 
