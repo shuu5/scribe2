@@ -1070,3 +1070,13 @@ terms:
     aliases: [wiring]
     definition: 口座の settings.json に書く hook 行 1 本 (ADR-0056・proposed)。 道具の直前に器の host-guard を state dir つきで呼ぶことだけを登録し、 判定は持たない。 口座の口が実体へ merge して書き、 doctor が実体の数と口座の数を出す。
     relationships: [host-guard, 口座, doctor, host の manifest]
+  - canonical: 口座の設定を読む session
+    domain: consumer
+    aliases: [settings-reading session]
+    definition: 口座の設定 dir の settings.json を読んで起きる session の全体 (ADR-0056・SRS FR56 / FR72 / FR74 / FR75 / FR76)。 対話の席・口座の設定 dir を指定した起動・器を積まない session を含み、 host-guard の配線が効く範囲と一致する。 器が起こす session (runner・lens・usage の更新) は口座の設定を読まない起動形 (ADR-0011 §2.1) なので含まない。 口座の設定 dir を指定しない起動は配線先に入れない (既定の設定 dir が口座の実体を指す host では届くが、 配線の約束ではない・ADR-0056 CSQ-N8)。
+    relationships: [host-guard, host-guard の配線, 席, runner, lens, 口座, hook]
+  - canonical: 起票の門
+    domain: consumer
+    aliases: [ledger write gate, 素 write の門]
+    definition: 器の plugin を積む席の hook の入口が bd / bdw の command に掛ける門 (ADR-0056 CTX2・設計 docs/design/vessel-hook.md §10)。 台帳 write の 4 形 (素 write = notes の置換・記憶の subcommand・親を欠く create・台帳の script を経ない書き込み) を rules 行 ledger.denied_writes の値で断り、 memo の 4 節の判定も持つ。 host-guard の台帳の種類 (SRS FR76) は 4 形の判定を共有して口座の設定を読む session に掛ける。
+    relationships: [hook, rules 行, 台帳, host-guard, 見張りの種類, 口座の設定を読む session]
