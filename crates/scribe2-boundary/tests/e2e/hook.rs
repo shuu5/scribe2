@@ -651,14 +651,15 @@ fn command_records(state: &Path) -> Vec<String> {
     inject_lines(state).into_iter().filter(|line| what_of(line).starts_with("command-deny")).collect()
 }
 
-/// deny の外形（rc 2・stdout 0 byte・stderr 1 行）を見て、stderr が rules 行 id と語列を名指すことを確かめる。
-fn assert_command_deny(out: &Output, sequence: &str, why: &str) -> String {
+/// deny の外形（rc 2・stdout 0 byte・stderr 1 行）を見て、stderr が当たった語列の出所の rules 行 id と語列を名指すことを
+/// 確かめる（git の語列は host_guard.git・cargo の語列は runner.denied_commands＝設計 vessel-hook.md §11 の形 f 4）。
+fn assert_command_deny(out: &Output, sequence: &str, row: &str, why: &str) -> String {
     assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "{why}: deny は rc 2: {}", stderr_text(out));
     assert!(out.stdout.is_empty(), "{why}: deny でも stdout は 0 byte");
     assert_eq!(stderr_lines(out), 1, "{why}: deny の stderr は 1 行: {}", stderr_text(out));
     let text = stderr_text(out);
     assert!(text.starts_with(&format!("{NAME}: deny ")), "{why}: 器が名乗る: {text}");
-    assert!(text.contains("runner.denied_commands"), "{why}: rules 行 id を名指す: {text}");
+    assert!(text.contains(&format!("rules 行 {row} が禁じる")), "{why}: rules 行 id {row} を名指す: {text}");
     assert!(text.contains(sequence), "{why}: 当たった語列 {sequence:?} を名指す: {text}");
     text
 }
@@ -674,7 +675,7 @@ fn hook_command_guard_denies_a_denied_sequence_from_bash() {
 
     let before = command_records(&state).len();
     let out = run_hook("pre-tool-use", &payload);
-    let text = assert_command_deny(&out, "git push --force", "埋め込み manifest の deny");
+    let text = assert_command_deny(&out, "git push --force", "host_guard.git", "埋め込み manifest の deny");
     assert!(text.contains("N1 / C16") && text.contains("書き直す"), "次の一手を含む: {text}");
     let lines = command_records(&state);
     assert_eq!(lines.len(), before + 1, "記録は 1 行増える: {lines:?}");
@@ -689,7 +690,7 @@ fn hook_command_guard_denies_a_denied_sequence_from_bash() {
     let rules = state.join("rules.toml");
     fs::write(&rules, role_rules_text(ORCHESTRATOR_CAPS)).expect("rules を書ける");
     let out = run_hook_args(&["pre-tool-use", "--rules", &rules.display().to_string()], &payload);
-    assert_command_deny(&out, "git push --force", "fixture の manifest の deny");
+    assert_command_deny(&out, "git push --force", "host_guard.git", "fixture の manifest の deny");
     // 語列の先頭語が segment の先頭語でない command（`echo git push --force`）は当たらない。
     let out = run_hook("pre-tool-use", &bash_payload(&repo, "echo git push --force"));
     assert_silent(&out, "先頭語が違う segment は当たらない");
@@ -754,15 +755,15 @@ fn hook_command_guard_denies_when_rules_unreadable() {
 fn hook_command_guard_matches_sequence_regardless_of_flag_order() {
     let repo = git_repo();
     let state = linked(&repo);
-    for (line, sequence) in [
-        ("git push origin main --force", "git push --force"),
-        ("git push origin main -f", "git push -f"),
-        ("cargo build && git push --force origin main", "git push --force"),
-        ("echo x; git branch -D feat", "git branch -D"),
-        ("cargo mutants --in-diff x.diff", "cargo mutants"),
+    for (line, sequence, row) in [
+        ("git push origin main --force", "git push --force", "host_guard.git"),
+        ("git push origin main -f", "git push -f", "host_guard.git"),
+        ("cargo build && git push --force origin main", "git push --force", "host_guard.git"),
+        ("echo x; git branch -D feat", "git branch -D", "host_guard.git"),
+        ("cargo mutants --in-diff x.diff", "cargo mutants", "runner.denied_commands"),
     ] {
         let out = run_hook("pre-tool-use", &bash_payload(&repo, line));
-        let text = assert_command_deny(&out, sequence, line);
+        let text = assert_command_deny(&out, sequence, row, line);
         assert!(text.contains(&format!("deny {sequence} は")), "当たった語列は表の字面: {text}");
     }
     for line in ["git push --force-with-lease origin feat/x", "git branch -d feat", "git stash list"] {
@@ -1071,6 +1072,45 @@ fn host_guard_rm_glob_passes_under_a_tmp_dir_and_denies_under_the_repo_root() {
     let out = run_host_guard_in(&state, &bash_payload(&repo, "rm *.bak"));
     assert_rm_deny(&state, &out, &format!("repo-tracked:{}/*.bak", repo.display()));
     clean(&[&repo, &other, &state]);
+}
+
+// ─────────────── host-guard の台帳の形（`s2-07l.568`・設計 vessel-hook.md §11 行 f・接頭辞 `host_guard_ledger_`） ───────────────
+//
+// 埋め込みの rules（ledger.denied_writes は 4 形）で binary を撃つ。台帳を持つ repo は root に `.beads` の dir と `scripts/bdw`
+// の file を置いた tmp の git repo。
+
+/// 台帳を持つ tmp repo で `bd update x --notes y` を kind=ledger・hit=notes-replace・行 id ledger.denied_writes で rc 2 に
+/// 断り、`inject.jsonl` に what=`host-guard-deny ledger` の 1 行を残す。
+#[test]
+fn host_guard_ledger_denies_notes_replace_in_a_repo_with_a_ledger() {
+    use vessel::hook::host_guard::Kind;
+    let repo = git_repo();
+    let state = tmp();
+    fs::create_dir_all(repo.join(".beads")).expect(".beads を作れる");
+    fs::create_dir_all(repo.join("scripts")).expect("scripts を作れる");
+    fs::write(repo.join("scripts").join("bdw"), "#!/bin/sh\n").expect("bdw を書ける");
+    let out = run_host_guard_in(&state, &bash_payload(&repo, "bd update x --notes y"));
+    let text = assert_host_guard_deny(&out, "台帳を持つ repo");
+    assert!(text.contains(" kind=ledger hit=notes-replace row=ledger.denied_writes "), "{text}");
+    assert!(text.trim_end().ends_with(Kind::Ledger.route()), "代わりの経路: {text}");
+    let lines = host_guard_records(&state);
+    assert_eq!(lines.len(), 1, "記録は 1 行: {lines:?}");
+    assert_eq!(what_of(&lines.last().cloned().unwrap_or_default()), "host-guard-deny ledger");
+    let out = run_host_guard_in(&state, &bash_payload(&repo, "scripts/bdw update x --append-notes y"));
+    assert_silent(&out, "bdw の --append-notes は通す");
+    clean(&[&repo, &state]);
+}
+
+/// 台帳を持たない repo（`.beads` も `scripts/bdw` も無い）では同じ command を 0 byte・rc 0・記録 0 で通す。
+#[test]
+fn host_guard_ledger_passes_the_same_command_in_a_repo_without_a_ledger() {
+    let repo = git_repo();
+    let state = tmp();
+    assert!(!repo.join(".beads").exists() && !repo.join("scripts").exists(), "前提: 台帳を持たない");
+    let out = run_host_guard_in(&state, &bash_payload(&repo, "bd update x --notes y"));
+    assert_silent(&out, "台帳を持たない repo は読まない");
+    assert!(inject_lines(&state).is_empty(), "通す周は記録を残さない");
+    clean(&[&repo, &state]);
 }
 
 // ─────────────── 起票の門（`s2-07l.517`・設計 ledger-form.md §3 の 9 / §6 行 d・接頭辞 `hook_memo_guard_`） ───────────────
@@ -2385,8 +2425,9 @@ const LEDGER_JSON: &str = "[{\"id\":\"x-1\",\"status\":\"open\"},{\"id\":\"x-2\"
 /// [`LEDGER_JSON`] を数えた 1 行（席の指示文の `{ledger}` の値）。
 const LEDGER_LINE: &str = "open=2 in_progress=1 blocked=0";
 
-/// 禁じる語列の fixture（rules 行 `runner.denied_commands`・ADR-0025 §2.1 の初期値の一部・`s2-07l.168`）。
-const DENIED_SEQUENCES: &[&str] = &["cargo mutants", "git push --force", "git push -f", "git branch -D"];
+/// 禁じる語列の fixture（rules 行 `runner.denied_commands`・埋め込みと同じ cargo の 2 語列＝git の語列は host_guard.git へ
+/// 移した・設計 vessel-hook.md §11 の形 f 4）。
+const DENIED_SEQUENCES: &[&str] = &["cargo mutants", "cargo publish"];
 
 /// 禁じる語列の行の本文（[`DENIED_SEQUENCES`]）と host-guard の語列の 3 行（[`host_guard_rows_text`]）。Bash の command
 /// guard はこの 4 行のどれかが無い manifest では全 Bash を止める（FailClosed）ので、Bash を撃つ fixture の manifest は必ず
@@ -2405,7 +2446,7 @@ fn denied_rows_text(tmux_enabled: bool) -> String {
     )
 }
 
-/// host-guard の語列の fixture（git は runner と重複・tmux と台帳の語列は runner に無い）。
+/// host-guard の語列の fixture（どれも runner の語列に無い）。
 const HOST_GUARD_SEQUENCES: [(&str, &str); 3] =
     [("host_guard.git", "git push --force"), ("host_guard.tmux", "tmux kill-server"), ("host_guard.ledger", "bd delete")];
 
