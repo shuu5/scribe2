@@ -810,6 +810,37 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 - 却下（ADR-0054 OPT2〜OPT5）: 消費側の自前 command で満たす（器が測れない）／flip の検査を器に内蔵する（規模 L・消費側が求める形は「契約の verify 行を base で撃つ」で別設計＝後続の memo）／rules 行で消費側を免除する（器の行に repo の事実を積む）／何もしない（世代のずれが続く）。
 - 歯（in-file は `crates/scribe2/src/pipe/declaration.rs` の既存の族 `declaration_` に接頭辞 `declaration_entrance_`・e2e は `crates/scribe2-boundary/tests/e2e/pipe/contracts.rs` の既存の族 `contract_check_` に接頭辞 `contract_check_entrance_`・tmp の repo に宣言を書いて撃つ既存の型）: (a) key 有り + `cargo` 2 行 + flip 行無し → `kind_gap` が `None`・宣言が通る (b) 同じ宣言から key を外すと `NoEntranceRed`（形 2） (c) 値が `unmeasured` 以外・空・list の 3 形は typed に断られ、理由が key の名を持つ（形 3） (d) key + flip の行の同居は矛盾の 1 値で断られる（形 4） (e) e2e: key を持つ宣言の repo の `contracts check` の判定行が `entrance=unmeasured` で終わり、key を外した同じ repo の判定行は既存の 4 欄のまま（形 5・両方の判定行を同じ歯で並べて pin する）。
 
+## 55. flip-check が「mod 行 + pin の数値 1 か所」だけ動いた宣言 file を本体の木へ同梱し、同梱されなかった新規 module を green-on-base と呼ばない（契約表の行 ax・`s2-07l.562`）
+
+- 何が起きているか（orchestrator の実測 2026-09-23・便 `s2-07l.317` の 033854Z の Gated FAIL を worktree で flip-check を撃ち直して再現・verified）: e2e に新設 module を足す便は、宣言 file `crates/scribe2-boundary/tests/e2e/main.rs` に **2 つの差**を持つ——`mod` 宣言 1 行と、同じ file の歯 `e2e_fixture_clock_dated_reset_lines_are_pinned` が pin する tracked な e2e の `.rs` の本数（母集団 29）の数値 1 か所である。flip-check はこの宣言 file を本体と同梱せず、本体を単独で base に写すので、module が compile されず新しい歯が 1 本も走らないまま base の歯が全部緑になり、判定は `green-on-base`（TDD 不履行の語）になる。母集団はこの日の新設 module の便 1 本で 2 便連続（025617Z は pin を上げずに workspace の歯が赤・033854Z は pin を上げて `green-on-base`）。同じ周に出る `stale-marker` の行は判定に効いていない。現状の逃がしは歯を既存の e2e file に置く運用で（`.317` はこの形で通した）、新設 module を置く場所が e2e のどこにも無い。
+- 現物（main b82be74・`crates/xtask/src/flipcheck.rs` を読んで確認）:
+  - `plan_of` は flip した file を 3 つに割る。宣言 file（`declaration_only`＝動いた行が全部 `mod` 行）と歯の外の file（`outside_teeth`＝動いた行が 1 本も歯の中に無い・§37）は同梱の側、残りは単独で撃つ本体。pin の数値の行は歯の中に在るので宣言 file の形にも歯の外の形にも当たらず、宣言 file は**本体**に落ちる。
+  - `judge_each` は本体を 1 本ずつ撃つ。宣言 file を撃つ turn は新しい `mod` 行の本体が木に無く `E0583` の compile error＝RED で通り、新設 module の turn は base の宣言 file のままで module が compile 対象に入らず rc 0＝`judge_one` が `green-on-base file=<本体>` を返す。この語は「新しい歯が base で緑だった」と「新しい歯がそもそも compile されなかった」を区別しない。
+  - **同梱するだけでは足りない**: base の木は `crates/xtask/src/flipcheck/git.rs` の `index_base` が index を base の tracked 集合で作り、overlay は working tree にだけ書く。pin の歯は `git ls-files` で母集団を読むので、どの turn でも base の本数（29）を見る。HEAD の数値（30）のまま同梱すると pin の歯が**毎 turn 赤**になり、本体の歯が base で緑でも turn が RED で通る——`bundle_decls` の doc が記録している `s2-07l.41` の fail-open（兄弟の `E0583` が緑の本体を隠した）と同じ型である。
+  - 同じ型の穴が宣言だけの便にも在る（推論・未実測）: `crates/scribe2-boundary/tests/e2e/pipe.rs` の歯 `pipe_hermetic_sites_stay_one` は tracked な file 数（index）を同じ file の列 0 の `mod` 行の数 + 1（working tree）と比べる。`pipe/` 配下に module を足す便の宣言 file は `mod` 1 行だけの差で同梱されるが、同梱した turn では `mod` 行が 1 本増えて tracked は増えないので、この歯が毎 turn 赤になり本体の緑を隠しうる。
+- 形（番号は done と歯に 1:1）:
+  1. **宣言と pin の file を認める**: test 区間の動いた行を側ごとに取り（追加行と削除行・`changed_lines` と同じ多重集合の差を片側ずつ・空白だけの行は数えない）、次の 4 つが全部成り立つ file を「宣言と pin の file」と呼ぶ。(i) path が `crates/<c>/tests/` 配下 (ii) `mod` 行（`mod_name` が名を返す行）が 1 本以上動いた (iii) `mod` 行でない動いた行は削除 1 本と追加 1 本の対だけで、trim した 2 行が「連続する ASCII の数字の並び」の置き換え**ちょうど 1 か所**を除いて 1 字も違わない (iv) 削除行は base 側の、追加行は HEAD 側の歯の中に在る（`teeth_lines` の読み）。追加行の字面が HEAD の test 区間に 2 度以上現れる file は形に当たらない。どれか 1 つでも外れる file は従来の路（宣言 file・歯の外・本体）のまま。
+  2. **同梱する**: `plan_of` は宣言 file の弁別の次・歯の外の弁別の前にこの形を見て、宣言 file と同じ側（`decls` の列）へ置く。置き方は宣言 file と同じ `bundle_decls`（turn ごとに本体が木に在る `mod` 行だけへ絞る）で、pin の行は HEAD の字面のまま書く（書き換えない）。stderr に `flip-check: decl-with-pin <rel> tooth=<歯の名>` を 1 行出し、判定行は `decl=N` にこの file を数えたうえで `pin=N`（この形で同梱した本数）を `decl=` の直後に後置する（0 の内訳は出さない）。
+  3. **同梱した宣言 file の歯の赤を turn の RED に数えない**: 宣言 file を 1 本以上同梱した turn は、rc が test の失敗（nextest の rc 100）のとき `failed_tests` で落ちた歯を名指し、名の最後の `::` の後が同梱した宣言 file（形 1 の file と `mod` 行だけの宣言 file の両方）の HEAD 側の歯の名に一致する歯を除く。残りが 1 本以上なら RED、0 本なら `green-on-base file=<本体>`、名指しが 0 本なら `infra-error` の `bundled-unnamed rc=<rc>`（RED とも緑とも数えない）。rc 101（compile error）・rc 0・rc 4・signal は従来どおり `judge_one` の語。除くのは判定を厳しくする側なので、名の照合は最後の区切りの一致で足り、同名の歯を余分に除いても緩まない。この弁別は「落ちた歯の名の列と除く名の列から RED / 緑 / 名指せないの 3 値を返す純関数」1 つに置き、`judge_each` はその値を判定行へ写すだけにする。
+  4. **同梱されなかった新規 module を `green-on-base` と呼ばない**: 本体を撃つ turn の前に、本体が base に無い file で `crates/<c>/tests/` 配下かつ target の根（`tests/<f>.rs` と `tests/<d>/main.rs`）でないとき、その turn の木で宣言の在処になりうる file（本体と同じ dir の `main.rs` と `mod.rs`、dir と同名の `<dir>.rs`・`present_mods_only` の 3 形の逆）に本体の module 名を返す `mod` 行が 1 本も無ければ、nextest を撃たずに木を戻して `not-flippable files=<rel>` で落とす（stderr に `flip-check: undeclared-in-turn <rel>` と、既存の `no_flip_verdict` と同じ逃がし方の 1 行）。語は既存の `not-flippable`（「新規 module は base に mod 宣言ごと無く compile されない」）を使い、FAIL の語を増やさない。これで既存の歯 2 本の期待が `green-on-base` から `not-flippable` に替わる: `flip_check_still_judges_declaration_file_that_also_changes_tests`（宣言 file が自前の歯も動かした便）と `flip_check_treats_pub_crate_mod_line_as_declaration` の後半（空白の無い可視性の宣言）。どちらも「同梱されなかった」便で、本体の file を名指す assert と `decl=` の不在の assert は不変。
+  5. **本体が 1 本も無い便は従来どおり**: 形 1 の file しか flip していない便は `plan_of` の空 bodies の分岐のまま単独で撃つ（`E0583` の本当の RED・同梱で消さない）。
+- 触らない: `declaration_only` と `outside_teeth` の述語・`present_mods_only` の 3 形と base の宣言の持ち越し・単独 overlay の骨（本体 1 本ずつ・「どれか 1 本が赤い」へ緩めない）・`removed_only` の部分列・`retroactive` / `moved` の札と `stale-marker` の行・base 段の撃ち直しと `base-not-green` の弁別子・`index_base` の index の作り方・`crates/<c>/src/` 配下の名で test の file（`#[path]` で宣言される新規 file は形 4 の外で、従来どおり `green-on-base` で落ちる）・判定行の先頭と FAIL の語の集合・極性一覧の行・`crates/scribe2-boundary` の歯（pin の値も置き場も動かさない）。
+- 却下:
+  - (b) pin の歯を宣言を持たない別 file へ純移動し、宣言 file の差を `mod` 1 行に保つ——移動そのものが新設 module なので同じ穴に当たり、先に (a) か手で 1 回通す必要がある。しかも形 3 の穴（同梱した turn で宣言 file の歯が赤くなる型）は残る。
+  - (c) 新設 module を禁じて既存 file に足す運用——散文の規則で器の穴を覆う（憲法 N2）。`.317` の逃がしとしては使ったが恒久策ではない。
+  - pin の行を base の字面へ書き戻して同梱する——`git ls-files` で数える pin には効くが、working tree を数える pin では本体の file が木に在るぶん逆に赤くなり、緑の本体を隠す。形 3 の名の除外は pin の数え方に依らない。
+  - 新しい FAIL の語（`undeclared-module` 等）を立てる——意味は既存の `not-flippable` と同じで、逃がし方の案内も同じ。語を増やすと操作役の読む語彙だけが増える。
+  - 数値の差を 2 か所以上まで認める——`e2e_fixture_clock_dated_reset_lines_are_pinned` は本数と当たった行の数の組を pin しており、新設 module が日付の行も足すと 2 か所以上が動く。その便は形 1 に当たらず形 4 で `not-flippable` に落ちる（fail-closed）。広げると歯の中の値の書き換えを同梱で見逃す扉が開く。
+  - 名の照合を binary id と module path の完全一致にする——除くのは厳しくする側なので、照合を狭くしても守るものが無く、宣言 file の path から module path を導く手間だけが増える。
+- 歯（接頭辞 `flipcheck_declaration_pin_`・置き場は既存の `crates/xtask/src/flipcheck_declaration_tests.rs`・既存の fixture〔`base_commit_with_e2e` / `red_body` / `green_body` / `head_commit` / `judge` / `assert_verdict`〕の型・新設 test file は作らない）: fixture の宣言 file は `mod seed;` に加えて `git ls-files` で `tests/e2e` 配下の `.rs` を数えて数値と比べる歯 1 本を持ち、本物の pin と同じ母集団の読み（index）を再現する。
+  - (a) 形 1〜3: `mod newmod;` の追加と pin の数値の +1 と、base で赤い本体の新設を持つ便が `RED-on-base ok` を出し、判定行に `decl=1` と `pin=1` が載る（base は宣言 file が本体に落ちて本体の turn が `green-on-base` → RED）。
+  - (b) 形 3: 同じ便で本体だけを base で緑にすると `green-on-base file=<本体>` で落ちる（pin の歯の赤が本体の緑を隠さない）。
+  - (c) 形 1 の狭さ: 数値の差が 2 か所の便と、pin の行を歯の外（helper の中）に置いた便は形に当たらず、判定行に `pin=` が載らない。
+  - (d) 形 4: 宣言 file が自前の歯の本文も動かした便の新設 module の turn は `not-flippable files=<本体>` で落ち、判定行が `green-on-base` を含まない。
+  - (e) 形 3 の純関数: 落ちた歯が除く名だけ → 緑、除く名の外に 1 本 → RED、名指し 0 本 → 名指せない、の 3 通り（歯からは `super::super::` 始まりの path で引き、`crates/xtask/src/flipcheck_tests.rs` の `use` は触らない）。
+  - 既存の `flip_check_` の宣言の歯と `flipcheck_declaration_nested_` の歯は、形 4 で期待を替える 2 本を除いて 1 字も変えずに緑。
+- 大きさ: `crates/xtask/src/flipcheck.rs` は幅 120 で正規化した行数が 1254（上限 R-C4-2 = 1500・余地 246）。size M の既定の見積（300）は余地を超えるので、行 ax は `growth` でこの file の見積を 200 に置く（形 1〜4 の述語と純関数と doc）。歯の file は 478 行で余地が足りる。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -1333,4 +1364,15 @@ write-set = ["crates/scribe2/src/pipe/declaration.rs", "crates/scribe2/src/pipe/
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail declaration_entrance_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail contract_check_entrance_"]
 size = "S"
 done = "(1) key entrance-flip = unmeasured を持ち cargo の行を持ち入口の flip の行を持たない宣言が kind_gap 無しで受付と契約表の検査を通る (2) key の無い同じ宣言は NoEntranceRed のまま断られ、本 repo の宣言は key を持たない (3) 値が unmeasured 以外・空・list・key の重複は宣言の読みの誤りとして typed に断られ、理由が key の名を持つ (4) key と入口の flip の行を同時に持つ宣言は KindGap の 1 値で矛盾として断られる (5) 契約表の検査の判定行が key を持つ周だけ末尾に entrance=unmeasured の欄を持ち、key の無い周の判定行は 1 字も変わらず、既存の declaration_ と contract_check_ の歯が全部緑"
+
+[[contract]]
+id = "ax"
+title = "flip-check が mod 行と pin の数値 1 か所だけ動いた宣言 file を本体の木へ同梱し、同梱した宣言 file の歯の赤を turn の RED に数えず、同梱されなかった新規 module を green-on-base でなく not-flippable で落とす"
+req = ["FR7"]
+section = "55"
+write-set = ["crates/xtask/src/flipcheck.rs", "crates/xtask/src/flipcheck_declaration_tests.rs"]
+verify = ["cargo nextest run -p xtask --no-tests=fail flipcheck_declaration_pin_"]
+size = "M"
+growth = ["crates/xtask/src/flipcheck.rs:200"]
+done = "(1) tests 配下の file で、mod 行が 1 本以上動き、他の動いた行が歯の中の削除 1 本と追加 1 本の対で数字の並び 1 か所だけが違う file を宣言と pin の file と認め、どれか外れる file は従来の路のまま (2) その file を宣言 file と同じ側で本体の木へ同梱し（mod 行は turn ごとに絞り pin の行は HEAD のまま）、判定行が decl= に数えたうえで pin=N を後置する (3) 宣言 file を同梱した turn は落ちた歯のうち同梱した宣言 file の歯の名を除いて判定し、残り 0 本は green-on-base、名指し 0 本は infra-error の bundled-unnamed で、弁別は 3 値の純関数 1 つ (4) tests 配下の target の根でない新規 module の turn の木に宣言が無ければ nextest を撃たずに not-flippable files=<本体> で落ち、既存の歯 2 本（flip_check_still_judges_declaration_file_that_also_changes_tests と flip_check_treats_pub_crate_mod_line_as_declaration の後半）の期待がこの語に替わる (5) 形 1 の file しか flip しない便は従来どおり単独で撃たれ、宣言 file の他の既存の歯と flipcheck_declaration_nested_ の歯は 1 字も変えずに緑"
 <!-- contracts:end -->
