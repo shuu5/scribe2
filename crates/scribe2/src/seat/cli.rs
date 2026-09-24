@@ -13,7 +13,7 @@ use std::path::Path;
 
 /// `seat` の使い方。
 pub fn usage() -> String {
-    "usage: seat <register --state-dir S --target T --role R --account L --launch FILE [--anchor DIR]|launch --state-dir S --role R --target S:W [--account L] [--anchor DIR] [--model M] [--restore CMD]|ruling add --state-dir S --target T --words W [--bead B] [--rule ID]|ruling ls --state-dir S|<label> [--orchestrator] [-c|-r ID] [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]".to_owned()
+    "usage: seat <register --state-dir S --target T --role R --account L --launch FILE [--anchor DIR]|launch --state-dir S --role R --target S:W [--account L] [--anchor DIR] [--model M] [--restore CMD]|ruling add --state-dir S --target T --words W [--bead B] [--rule ID]|ruling ls --state-dir S|tick --state-dir S --target S:W [--rules F]|<label> [--orchestrator] [-c|-r ID] [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]".to_owned()
 }
 
 /// `seat` の既知の verb（閉じた語・宣言順・設計 contract-source.md §17 の形 (vii)）。短い形の第 1 token（口座 label）は
@@ -26,10 +26,12 @@ pub enum SeatCommand {
     Launch,
     /// `seat ruling add` / `seat ruling ls`（run 無しの裁定・設計 fleet-event-log.md §9）。
     Ruling,
+    /// `seat tick`（管理 tick・設計 seat-heartbeat.md §2）。
+    Tick,
 }
 
 /// [`SeatCommand`] の全部（宣言順・件数は既知の verb の本数で dispatch の腕の本数ではない）。
-pub const SEAT_COMMANDS: &[SeatCommand] = &[SeatCommand::Register, SeatCommand::Launch, SeatCommand::Ruling];
+pub const SEAT_COMMANDS: &[SeatCommand] = &[SeatCommand::Register, SeatCommand::Launch, SeatCommand::Ruling, SeatCommand::Tick];
 
 impl SeatCommand {
     /// 引数の字面。
@@ -38,6 +40,7 @@ impl SeatCommand {
             Self::Register => "register",
             Self::Launch => "launch",
             Self::Ruling => "ruling",
+            Self::Tick => "tick",
         }
     }
 
@@ -85,6 +88,14 @@ const ALLOWED_RULING: &[cli_args::Allowed] = &[
     value("--bead"),
     value("--rule"),
 ];
+/// `seat tick`（席の口で `--rules` を受けるのはこの口だけ・歯の seam＝行の写しを差し替える）。
+const ALLOWED_TICK: &[cli_args::Allowed] = &[
+    value("--state-dir"),
+    value("--target"),
+    value("--rules"),
+    value("--tmux-socket"),
+    value("--capture-file"),
+];
 
 /// [`SeatCommand`] が受ける flag の集合（[`dispatch`] が verb を選んだ直後に [`crate::cli_args::parse`] へ渡す）。
 const fn allowed_of(command: SeatCommand) -> &'static [Allowed] {
@@ -92,6 +103,7 @@ const fn allowed_of(command: SeatCommand) -> &'static [Allowed] {
         SeatCommand::Register => ALLOWED_REGISTER,
         SeatCommand::Launch => ALLOWED_LAUNCH,
         SeatCommand::Ruling => ALLOWED_RULING,
+        SeatCommand::Tick => ALLOWED_TICK,
     }
 }
 
@@ -108,6 +120,7 @@ pub fn dispatch(args: &[String]) -> Outcome {
         (Some(SeatCommand::Register), _) => register_of(args),
         (Some(SeatCommand::Launch), _) => launch_of(args),
         (Some(SeatCommand::Ruling), _) => ruling_of(args.get(1..).unwrap_or_default()),
+        (Some(SeatCommand::Tick), _) => tick_of(args.get(1..).unwrap_or_default()),
         // 既知の verb でなく `--` で始まらない第 1 token は口座 label（短い形・account-lifecycle.md §14）。label は閉じた語を
         // 持たない＝[`SeatCommand`] の subcommand ではないので閉包の検査の外（消えた口の名もこの腕で従来どおり断る）。
         (None, Some(label)) if !label.starts_with("--") && !label.trim().is_empty() => short_of(label, args.get(1..).unwrap_or_default()),
@@ -225,6 +238,21 @@ fn ruling_of(rest: &[String]) -> Outcome {
         },
         _ => refused_usage(),
     }
+}
+
+/// `seat tick`（設計 seat-heartbeat.md §2）: `--state-dir` と `S:W` の `--target` は必須・値欠けと空文字は使い方の誤り
+/// （`--rules` も同じ）。rules は `rules` の口と同じ 1 本（`--rules` か埋め込み）で読み、判定は [`super::tick::run`] が持つ。
+fn tick_of(args: &[String]) -> Outcome {
+    let [state_dir, target] = ["--state-dir", "--target"].map(|name| required_nonempty(args, name));
+    let [socket, capture, rules] = ["--tmux-socket", "--capture-file", "--rules"].map(|name| nonempty(args, name));
+    let (Ok(state_dir), Ok(target), Ok(socket), Ok(capture), Ok(_)) = (state_dir, target, socket, capture, rules) else {
+        return refused_usage();
+    };
+    if !target_well_formed(target) {
+        return refused_usage();
+    }
+    let flags = super::tick::Flags { state_dir, target, socket, capture };
+    super::tick::run(&flags, crate::rules::cli::open(args))
 }
 
 /// `seat ruling add`: 対話面の席の逐語を `RulingReceived` 1 件として書き、ts（裁定 id）を stdout の 1 行で返す。
@@ -498,6 +526,7 @@ fn launch_with(flags: &LaunchFlags, place: &LaunchPlace) -> Outcome {
         rules: &rules,
         threshold_pct,
         carry: flags.carry,
+        replace_own: true,
     });
     let line = cycle::render_launched(flags.target, &result, state);
     match result {

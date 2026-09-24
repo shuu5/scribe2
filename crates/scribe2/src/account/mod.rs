@@ -310,10 +310,10 @@ const GROUP_UNREADABLE: &str = "unreadable";
 
 /// doctor の群の 1 行（設計 account-lifecycle.md §17 の約束 7・**読むだけで判定しない**）。
 ///
-/// 出すのは宣言値 3 つ（名・候補の label の列・置き場の数）と導出値 1 つ（その群の置き場を anchor に持つ席の登録 row の
-/// 口座 label・重複は畳み辞書順・1 つも無ければ [`GROUP_NONE`]）。`state` が `None`（log を読めない）周は
-/// [`GROUP_UNREADABLE`]。群の「今の口座」は第 3 段の記録で、この行は 1 件も書かない・読まない。
-fn render_group(group: &AccountGroup, state: Option<&State>) -> String {
+/// 出すのは宣言値 3 つ（名・候補の label の列・置き場の数）と導出値 2 つ（その群の置き場を anchor に持つ席の登録 row の
+/// 口座 label・重複は畳み辞書順・1 つも無ければ [`GROUP_NONE`]・`state` が `None`〔log を読めない〕周は [`GROUP_UNREADABLE`]
+/// ／群の今の口座 `current=`＝[`render_current`]・§20 形 2）。記録は 1 件も書かない（読むだけ）。
+fn render_group(state_dir: &Path, group: &AccountGroup, state: Option<&State>) -> String {
     let seats = match state {
         None => GROUP_UNREADABLE.to_owned(),
         Some(found) => {
@@ -326,12 +326,26 @@ fn render_group(group: &AccountGroup, state: Option<&State>) -> String {
         }
     };
     format!(
-        "group={} accounts={} anchors={} seat-accounts={seats}",
+        "group={} accounts={} anchors={} seat-accounts={seats} current={}",
         group.name(),
         group.accounts().join(","),
-        group.anchors().len()
+        group.anchors().len(),
+        render_current(state_dir, group)
     )
 }
+
+/// 群の行の `current=` の値（解決の 1 関数 [`crate::hook::group::current_of`] の読み）: 記録が在ればその label・無ければ
+/// [`GROUP_SEED`]（種＝候補の先頭は `accounts=` の先頭に在る）・在るのに読めなければ [`GROUP_UNREADABLE`]（種に潰さない・C11）。
+fn render_current(state_dir: &Path, group: &AccountGroup) -> String {
+    match crate::hook::group::current_of(state_dir, group) {
+        Ok(found) if found.source == crate::hook::group::Source::Record => found.label,
+        Ok(_) => GROUP_SEED.to_owned(),
+        Err(_) => GROUP_UNREADABLE.to_owned(),
+    }
+}
+
+/// 群の行の `current=` が種（記録が無い）であることを表す語。
+const GROUP_SEED: &str = "seed";
 
 /// 群の置き場を anchor に持つ席の登録 row の口座 label（重複は畳み辞書順・**導きの 1 本**＝doctor の群の行と dispatch の
 /// 1 周の群の段〔account-lifecycle.md §19 形 2〕が同じ集合を読む・C2）。
@@ -385,7 +399,7 @@ pub fn doctor_lines(state_dir: &Path, rules: Option<&str>) -> Vec<String> {
     lines.extend(rows(state_dir, &manifest, state.as_ref()).into_iter().map(|(_, line)| line));
     // 群の行は口座の行の後ろに**宣言順**で（設計 account-lifecycle.md §17 の約束 7）。群を 1 つも宣言しない host は
     // 0 本＝既存の外形は 1 行も動かない（約束 8）。
-    lines.extend(manifest.groups().iter().map(|group| render_group(group, state.as_ref())));
+    lines.extend(manifest.groups().iter().map(|group| render_group(state_dir, group, state.as_ref())));
     lines
 }
 

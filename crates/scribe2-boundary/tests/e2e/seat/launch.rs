@@ -984,3 +984,136 @@ fn seat_defaults_short_form_derives_the_model_without_a_row() {
     drop(guard);
     fs::remove_dir_all(&place.dir).ok();
 }
+
+// ─────────────────── 群の置き場の席の口座（account-lifecycle.md §20 形 3・契約表の行 i・接頭辞 `seat_launch_group_`） ───────────────────
+//
+// 本物の tmux を使わない（独立 socket も立てない）: 偽 tmux の script が session と窓の在りか・前面の shell・空の入力欄を返し、
+// `send-keys -l` の行を [`GROUP_LAUNCHED`] へ写して Enter で席の打刻に `SessionStart` を 1 行足す（起動が立ち上がりを確かめられる）。
+
+/// 偽 tmux が受けた起動行の置き場。
+const GROUP_LAUNCHED: &str = "group-launched";
+
+/// 群の歯の target（窓 `seat` は偽 tmux の `list-windows` が返す名）。
+const GROUP_TARGET: &str = "gl:seat";
+
+/// 群の歯の置き場: [`launch_place`] の host の面に群 `g`（置き場 = この置き場の anchor か、`outside` なら別の `/elsewhere`・候補 =
+/// l1 → l2）を足し、偽 tmux だけの PATH を返す。`record` が在れば群の今の口座の記録（host の根の群用 dir の `g.account`）を置く。
+fn launch_group_place(outside: bool, record: Option<&str>) -> (AcctPlace, String) {
+    let place = launch_place();
+    let anchor = if outside { "/elsewhere".to_owned() } else { launch_anchor(&place) };
+    let host = place.state.join(vessel::rules::HOST_MANIFEST);
+    let body = fs::read_to_string(&host).unwrap_or_default();
+    let group = format!("\n[[account-group]]\nname = \"g\"\nanchors = [\"{anchor}\"]\naccounts = [\"l1\", \"l2\"]\n");
+    fs::write(&host, format!("{body}{group}")).ok();
+    if let Some(label) = record {
+        let dir = place.dir.join(format!("{NAME}-host")).join("groups");
+        fs::create_dir_all(&dir).ok();
+        fs::write(dir.join("g.account"), format!("account={label}\nts=2026-09-24T00:00:00Z\nreason=move\nprevious=l1\n")).ok();
+    }
+    let bin = place.dir.join("group-bin");
+    fs::create_dir_all(&bin).ok();
+    let (args, launched, seats) = (place.dir.join(LAUNCH_TMUX_ARGS), place.dir.join(GROUP_LAUNCHED), place.state.join("seat"));
+    let tmux = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{args}'\nt=''; p=''\nfor a in \"$@\"; do [ \"$p\" = '-t' ] && t=\"$a\"; p=\"$a\"; done\n\
+         f=$(printf '%s' \"$t\" | tr ':' '_')\ncase \"$1\" in\n\
+         has-session) exit 0;;\nlist-windows) echo seat;;\nlist-panes) echo bash;;\ncapture-pane) printf '$ \\n';;\n\
+         send-keys) if [ \"$4\" = \"-l\" ]; then printf '%s\\n' \"$5\" >> '{launched}'\n\
+         elif [ \"$4\" = \"Enter\" ]; then mkdir -p '{seats}/'\"$f\"\n\
+         printf '{{\"schema\":1,\"state\":\"idle\",\"event\":\"SessionStart\",\"ts\":%s,\"sid\":\"\"}}\\n' \"$(date +%s)\" \
+         >> '{seats}/'\"$f\"'/state.jsonl'; fi;;\n*) exit 1;;\nesac\nexit 0\n",
+        args = args.display(),
+        launched = launched.display(),
+        seats = seats.display(),
+    );
+    fs::write(bin.join("tmux"), tmux).ok();
+    fs::set_permissions(bin.join("tmux"), fs::Permissions::from_mode(0o755)).ok();
+    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default());
+    (place, path)
+}
+
+/// 偽 tmux だけの PATH で `seat` を 1 回撃つ（`--tmux-socket` は渡さない＝PATH の偽 tmux が答える・anchor は置き場の anchor）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn launch_group_run(place: &AcctPlace, path: &str, head: &[&str]) -> Output {
+    let (state, anchor) = (place.state.display().to_string(), launch_anchor(place));
+    Command::new(bin())
+        .args(head)
+        .args(["--target", GROUP_TARGET, "--state-dir", &state, "--anchor", &anchor])
+        .env("PATH", path)
+        .output()
+        .expect("binary を起動できる")
+}
+
+/// 長い形（`seat launch --role orchestrator`・`extra` は `--account` など）。
+fn launch_group_long(place: &AcctPlace, path: &str, extra: &[&str]) -> Output {
+    let mut head = vec!["seat", "launch", "--role", "orchestrator"];
+    head.extend_from_slice(extra);
+    launch_group_run(place, path, &head)
+}
+
+/// 偽 tmux が写した argv のうち `verb` で始まる呼出しの数（`-S` を渡さない形＝1 語目が verb）。
+fn launch_group_tmux_calls(place: &AcctPlace, verb: &str) -> usize {
+    fs::read_to_string(place.dir.join(LAUNCH_TMUX_ARGS))
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| line.split_whitespace().next() == Some(verb))
+        .count()
+}
+
+/// 起こした周の 3 面: rc 0・成立の行の口座は `label`・起動行はその口座の dir を運び、最新の登録 row の口座も `label`。
+fn launch_group_assert_launched(place: &AcctPlace, out: &Output, label: &str, case: &str) {
+    let line = stdout_of(out);
+    assert_eq!(rc_of(out), i32::from(RC_OK), "{case}: stdout={line} stderr={}", stderr_of(out));
+    assert_eq!(line, format!("seat launch: launched target=gl_seat account={label}{}\n", provenance(&place.state, "flag")), "{case}");
+    let sent = fs::read_to_string(place.dir.join(GROUP_LAUNCHED)).unwrap_or_default();
+    let dir = place.state.join("accounts").join(label).display().to_string();
+    assert!(sent.lines().last().is_some_and(|found| found.contains(&format!("CLAUDE_CONFIG_DIR={dir} "))), "{case}: {sent}");
+    assert_eq!(acct_rows(&place.state).last().map(|row| row.account.clone()), Some(label.to_owned()), "{case}: 登録 row");
+}
+
+/// (解決値で起きる) 群の置き場の anchor は、口座の実測が 1 行も無い（session 用の選定なら `no-account` で断る）置き場でも選定を
+/// 撃たず群の今の口座で起きる: 記録 l2 の周は l2（記録 > 種）・記録の無い周は種 l1。短い形も解決値と同じ label なら起きる。
+#[test]
+fn seat_launch_group_anchor_launches_with_the_resolved_account_without_selection() {
+    for (record, want) in [(Some("l2"), "l2"), (None, "l1")] {
+        let (place, path) = launch_group_place(false, record);
+        let out = launch_group_long(&place, &path, &[]);
+        launch_group_assert_launched(&place, &out, want, &format!("長い形・記録 {record:?}"));
+        let short = launch_group_run(&place, &path, &["seat", want]);
+        launch_group_assert_launched(&place, &short, want, &format!("短い形・記録 {record:?}"));
+        fs::remove_dir_all(&place.dir).ok();
+    }
+}
+
+/// (違う label) 群の今の口座が l2（記録）の置き場で、長い形の `--account l1` と短い形の `seat l1` は `group-account` で断る
+/// （rc 1・stdout 空・1 key も送らず・登録 row 0・`inject.jsonl` に launch の行なし）。
+#[test]
+fn seat_launch_group_other_label_is_refused_without_a_row() {
+    let (place, path) = launch_group_place(false, Some("l2"));
+    for (case, head) in [("長い形", vec!["seat", "launch", "--role", "orchestrator", "--account", "l1"]), ("短い形", vec!["seat", "l1"])] {
+        let out = launch_group_run(&place, &path, &head);
+        assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "{case}: stdout={} stderr={}", stdout_of(&out), stderr_of(&out));
+        assert!(stdout_of(&out).is_empty(), "{case}: stdout は空");
+        assert_eq!(tick_token(&stderr_of(&out), "reason").as_deref(), Some("group-account"), "{case}: {}", stderr_of(&out));
+        assert!(!place.dir.join(GROUP_LAUNCHED).exists(), "{case}: 起動行は送らない");
+        assert_eq!(launch_group_tmux_calls(&place, "send-keys"), 0, "{case}: 1 key も送らない");
+        assert!(acct_rows(&place.state).is_empty(), "{case}: 登録 row 0");
+        assert!(launch_inject_rows(&place).is_empty(), "{case}: inject.jsonl に launch の行なし");
+    }
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (群の外) 群が別の置き場（`/elsewhere`）だけを持つ host では、この anchor は今のまま: 群の記録（l2）が在っても `--account l1` は
+/// l1 で起き、`--account` 無しは session 用の選定へ進んで実測の無い置き場を `no-account` で断る。
+#[test]
+fn seat_launch_group_outside_anchor_is_unchanged() {
+    let (place, path) = launch_group_place(true, Some("l2"));
+    let out = launch_group_long(&place, &path, &["--account", "l1"]);
+    launch_group_assert_launched(&place, &out, "l1", "群の外の --account l1");
+    let picked = launch_group_long(&place, &path, &[]);
+    assert_eq!(rc_of(&picked), i32::from(RC_REFUSED), "stdout={} stderr={}", stdout_of(&picked), stderr_of(&picked));
+    assert_eq!(tick_token(&stderr_of(&picked), "reason").as_deref(), Some("no-account"), "選定へ進む: {}", stderr_of(&picked));
+    fs::remove_dir_all(&place.dir).ok();
+}

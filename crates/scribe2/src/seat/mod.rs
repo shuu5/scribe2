@@ -21,6 +21,7 @@ pub mod role;
 pub mod ruling;
 pub mod session_account;
 pub mod state;
+pub mod tick;
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -288,11 +289,18 @@ impl StateDir {
 /// 運用なので、project をまたいで 1 つの dir になる。env（`XDG_RUNTIME_DIR` / `HOME` /
 /// `TMPDIR`）は読まない（憲法 C2.2）。親を持たない path（`/`）はそれ自身を親と読む。
 pub fn host_slots_dir(state_dir: &Path) -> PathBuf {
-    state_dir
-        .parent()
-        .unwrap_or(state_dir)
-        .join(format!("{}-host", crate::name::NAME))
-        .join("slots")
+    host_root(state_dir).join("slots")
+}
+
+/// host 単位の群の置き場（`<state_dir の親>/<NAME>-host/groups/`・設計 account-lifecycle.md §20 形 1 / 4）: 群の今の口座の
+/// 記録・移動を頼む記録・群の段の lock と、その履歴の dir を置く。[`host_slots_dir`] と同じ host の根から導く（env を読まない）。
+pub fn host_groups_dir(state_dir: &Path) -> PathBuf {
+    host_root(state_dir).join("groups")
+}
+
+/// host の根（`<state_dir の親>/<NAME>-host`・親を持たない path はそれ自身を親と読む）。
+fn host_root(state_dir: &Path) -> PathBuf {
+    state_dir.parent().unwrap_or(state_dir).join(format!("{}-host", crate::name::NAME))
 }
 
 /// 置き場を解く。`--state-dir` が上書きし、無ければ repo の git 設定から読む。
