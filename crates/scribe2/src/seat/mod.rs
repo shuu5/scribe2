@@ -23,9 +23,9 @@ pub mod session_account;
 pub mod state;
 pub mod tick;
 
+use crate::invocation::Invocation;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// 開発 session の入力欄を指す prompt の字。
 ///
@@ -35,7 +35,7 @@ pub const PROMPT: char = '❯';
 
 /// tmux を 1 回撃って stdout を得る。起動失敗・rc 非 0 はいずれも `None`。
 fn tmux_stdout(socket: Option<&str>, args: &[&str]) -> Option<String> {
-    let mut command = Command::new("tmux");
+    let mut command = Invocation::new("tmux");
     if let Some(path) = socket {
         command.arg("-S").arg(path);
     }
@@ -78,7 +78,7 @@ pub fn pane_is_shell(socket: Option<&str>, target: &str) -> bool {
 
 /// tmux を 1 回撃ち、成功したかだけを見る（出力を持たない send 系に使う）。
 pub fn tmux_ok(socket: Option<&str>, args: &[&str]) -> bool {
-    let mut command = Command::new("tmux");
+    let mut command = Invocation::new("tmux");
     if let Some(path) = socket {
         command.arg("-S").arg(path);
     }
@@ -516,10 +516,11 @@ pub fn int_rule_of(manifest: &crate::rules::manifest::Manifest, id: &str) -> Res
 mod tests {
     use super::InputGate;
     use super::{
-        host_slots_dir, int_rule_of, manifest_read, shell_input_empty, Provenance, RuleRead, StateDir, RULE_READS,
-        SHELL_PROMPT_TAILS,
+        capture, host_slots_dir, int_rule_of, manifest_read, shell_input_empty, tmux_ok, Provenance, RuleRead,
+        StateDir, RULE_READS, SHELL_PROMPT_TAILS,
     };
     use crate::order::is_declaration_order;
+    use crate::pipe::fixture::{exited, Call, Stub};
     use crate::rules::manifest::Manifest;
     use proptest::prelude::*;
     use proptest::test_runner::Config;
@@ -648,6 +649,42 @@ mod tests {
     fn seat_relaunch_shell_input_ignores_a_stale_seat_prompt() {
         assert_eq!(shell_input_empty("\u{276f} /exit\nuser@host:dir$ "), Ok(()));
         assert_eq!(shell_input_empty("user@host:dir$ \n\u{276f} "), Err(InputGate::UnknownInput));
+    }
+
+    /// tmux の 2 site は起動の記述を通る（設計 core-boundary.md §9 行 f）: socket が在る周だけ `-S <path>` を
+    /// 呼び手の列の前に付け、無い周は呼び手の列だけ。rc 非 0 と起動の失敗は `None` / `false`。
+    #[test]
+    fn invocation_seat_tmux_socket_flag_follows_the_socket() {
+        let stub = Stub::install(|call| match call.args.last().map(String::as_str) {
+            Some("ok") => exited(0, b"pane text\n"),
+            Some("fail") => exited(1, b"out\n"),
+            _ => Err(std::io::Error::other("gone")),
+        });
+        assert!(tmux_ok(Some("/tmp/sock"), &["send-keys", "ok"]), "socket 付きの rc 0");
+        assert!(tmux_ok(None, &["send-keys", "ok"]), "socket 無しの rc 0");
+        assert!(!tmux_ok(None, &["fail"]), "rc 非 0");
+        assert!(!tmux_ok(None, &["gone"]), "起動の失敗");
+        assert_eq!(capture(Some("/tmp/sock"), "ok"), Some("pane text\n".to_owned()), "socket 付きの stdout");
+        assert_eq!(capture(None, "ok"), Some("pane text\n".to_owned()), "socket 無しの stdout");
+        assert_eq!(capture(None, "fail"), None, "rc 非 0 は stdout が在っても None");
+        assert_eq!(capture(None, "gone"), None, "起動の失敗");
+        let tmux = |args: &[&str]| Call {
+            program: "tmux".to_owned(),
+            args: args.iter().map(|arg| (*arg).to_owned()).collect(),
+            cwd: None,
+            envs: Vec::new(),
+        };
+        let expected = [
+            tmux(&["-S", "/tmp/sock", "send-keys", "ok"]),
+            tmux(&["send-keys", "ok"]),
+            tmux(&["fail"]),
+            tmux(&["gone"]),
+            tmux(&["-S", "/tmp/sock", "capture-pane", "-p", "-t", "ok"]),
+            tmux(&["capture-pane", "-p", "-t", "ok"]),
+            tmux(&["capture-pane", "-p", "-t", "fail"]),
+            tmux(&["capture-pane", "-p", "-t", "gone"]),
+        ];
+        assert_eq!(stub.calls(), expected, "tmux の program と引数");
     }
 
     /// 反例の永続化を切り、case 数を 256 に pin する（`tests/e2e/prop.rs` と同じ形）。

@@ -19,13 +19,13 @@ use crate::fleet::{
     WindowKind, SCHEMA,
 };
 use crate::headless::{ACCOUNT_ENV, DEFAULT_CLAUDE};
+use crate::invocation::Invocation;
 use crate::rules::manifest::{AccountGroup, HostManifest, Manifest};
 use crate::seat::{self, cycle, InputGate, REASON_TMUX_FAILED};
 use std::collections::BTreeSet;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// 口座の設定 dir の直下に書く settings の file 名（器が起こす席の前提・account-autonomy.md §5 (4)）。
 const SETTINGS_FILE: &str = "settings.json";
@@ -579,7 +579,7 @@ fn deliver(socket: Option<&str>, target: &str, line: &str) -> Result<(), &'stati
 /// pane 本文を `-J`（行末の空白を保つ）で読む（shell の門は prompt 末尾の空白まで見る・`seat launch` の門と同じ読み）。
 /// 撃てない・rc 非 0 は `None`。
 fn capture_joined(socket: Option<&str>, target: &str) -> Option<String> {
-    let mut command = Command::new("tmux");
+    let mut command = Invocation::new("tmux");
     if let Some(path) = socket {
         command.arg("-S").arg(path);
     }
@@ -685,11 +685,40 @@ fn record(state_dir: &Path, kind: EventKind, label: &str, ts: &str) -> Result<()
 
 #[cfg(test)]
 mod tests {
-    use super::{label_ok, login_line, retired_path, stage_host, staged_fits, summary, AccountError, ERRORS};
+    use super::{capture_joined, label_ok, login_line, retired_path, stage_host, staged_fits, summary, AccountError, ERRORS};
     use crate::fleet::{Allowance, AllowanceLatest, Measured, State, Unmeasured, UnmeasuredReason, WindowKind};
     use crate::order::is_declaration_order;
+    use crate::pipe::fixture::{exited, Call, Stub};
     use std::fs;
     use std::path::{Path, PathBuf};
+
+    /// 口座の pane の読みは起動の記述を通る（設計 core-boundary.md §9 行 f）: program は tmux・引数は socket が在る周
+    /// だけ `-S <path>` を前に付け、`capture-pane -p -J -t <target>`（`-J` で行末の空白を保つ）。rc 非 0 と起動の失敗は `None`。
+    #[test]
+    fn invocation_seat_account_pane_read_passes_the_target() {
+        let stub = Stub::install(|call| match call.args.last().map(String::as_str) {
+            Some("work:1") => exited(0, b"$ \n"),
+            Some("fail:1") => exited(1, b"out\n"),
+            _ => Err(std::io::Error::other("gone")),
+        });
+        assert_eq!(capture_joined(Some("/tmp/sock"), "work:1"), Some("$ \n".to_owned()), "socket 付きの stdout");
+        assert_eq!(capture_joined(None, "work:1"), Some("$ \n".to_owned()), "socket 無しの stdout");
+        assert_eq!(capture_joined(None, "fail:1"), None, "rc 非 0");
+        assert_eq!(capture_joined(None, "gone:1"), None, "起動の失敗");
+        let tmux = |args: &[&str]| Call {
+            program: "tmux".to_owned(),
+            args: args.iter().map(|arg| (*arg).to_owned()).collect(),
+            cwd: None,
+            envs: Vec::new(),
+        };
+        let expected = [
+            tmux(&["-S", "/tmp/sock", "capture-pane", "-p", "-J", "-t", "work:1"]),
+            tmux(&["capture-pane", "-p", "-J", "-t", "work:1"]),
+            tmux(&["capture-pane", "-p", "-J", "-t", "fail:1"]),
+            tmux(&["capture-pane", "-p", "-J", "-t", "gone:1"]),
+        ];
+        assert_eq!(stub.calls(), expected, "tmux の program と引数");
+    }
 
     /// 断りの字面は設計 §7 の 8 語で、宣言順に閉じる（variant を足した周はここの件数が変わる）。
     #[test]

@@ -13,10 +13,10 @@
 
 use crate::fleet::cli::format_utc;
 use crate::fleet::json_tree::{self, Tree};
+use crate::invocation::Invocation;
 use crate::polarity::{OnFailure, Polarity, Timing};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// この境界の極性（[`Unmeasured`]）: 測れない種類はその種類だけ `[RECENT-UNMEASURED]` を出し、他の種類と
 /// §5 の指示文は出す（読みの失敗で注入全体を黙らせない・fail-open）。行為を止める判定ではないので Guard では
@@ -260,7 +260,7 @@ pub fn ledger_lines(beads: Result<&[Bead], Unmeasured>, now: u64) -> Vec<String>
 
 /// git を anchor で 1 回撃つ。起動できない → `Err(GitUnavailable)`・rc 非 0 → `Ok(None)`・rc 0 → stdout。
 fn git(anchor: &Path, args: &[&str]) -> Result<Option<String>, Unmeasured> {
-    let output = Command::new("git")
+    let output = Invocation::new("git")
         .arg("-C")
         .arg(anchor)
         .args(args)
@@ -415,4 +415,33 @@ pub fn render(beads: Result<&[Bead], Unmeasured>, anchor: &Path, now: u64) -> Ve
     let mut lines = ledger_lines(beads, now);
     lines.extend(git_lines(anchor));
     lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{git, Unmeasured};
+    use crate::pipe::fixture::{exited, Call, Stub};
+    use std::path::Path;
+
+    /// recent の git の読みは起動の記述を通る（設計 core-boundary.md §9 行 f）: program は git・引数は `-C <anchor>`
+    /// の後に呼び手の列。起動の失敗は `Err(GitUnavailable)`・rc 非 0 は `Ok(None)`・rc 0 は stdout をそのまま。
+    #[test]
+    fn invocation_seat_recent_git_passes_the_repo_args() {
+        let stub = Stub::install(|call| match call.args.last().map(String::as_str) {
+            Some("ok") => exited(0, b" true \n"),
+            Some("fail") => exited(128, b"out\n"),
+            _ => Err(std::io::Error::other("gone")),
+        });
+        let anchor = Path::new("/nonexistent-invocation-seat-recent");
+        assert_eq!(git(anchor, &["rev-parse", "ok"]), Ok(Some(" true \n".to_owned())), "rc 0 は stdout のまま");
+        assert_eq!(git(anchor, &["fail"]), Ok(None), "rc 非 0");
+        assert_eq!(git(anchor, &["gone"]), Err(Unmeasured::GitUnavailable), "起動の失敗");
+        let call = |tail: &[&str]| Call {
+            program: "git".to_owned(),
+            args: ["-C", "/nonexistent-invocation-seat-recent"].iter().chain(tail).map(|arg| (*arg).to_owned()).collect(),
+            cwd: None,
+            envs: Vec::new(),
+        };
+        assert_eq!(stub.calls(), [call(&["rev-parse", "ok"]), call(&["fail"]), call(&["gone"])], "git の program と引数");
+    }
 }

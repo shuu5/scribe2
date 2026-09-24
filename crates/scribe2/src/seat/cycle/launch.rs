@@ -14,11 +14,11 @@ use crate::fleet::store;
 use crate::fleet::{replay, Registration};
 use crate::headless::{ACCOUNT_ENV, AGENT_VIEW_ENV, AGENT_VIEW_OFF, DEFAULT_CLAUDE};
 use crate::hook::{seat_name, InjectionRecord, SCHEMA};
+use crate::invocation::Invocation;
 use crate::name::PLUGIN_DIR;
 use crate::rules::manifest::{LaunchArg, Manifest, PluginDir};
 use crate::seat::role::{Role, RoleDefaults};
 use crate::seat::{inject, role, sanitize_target, state, tmux_ok, RuleRead, StateDir};
-use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
@@ -271,7 +271,7 @@ pub fn launch(request: &Launch) -> Launched {
 ///
 /// 成功する周は**返らない**ので、戻り値は失敗の理由 [`REASON_REPLACE`] だけである（`exec` が返る＝置き換えられなかった）。
 fn replace_with(line: &str) -> &'static str {
-    let failed = std::process::Command::new("sh").arg("-c").arg(line).exec();
+    let failed = Invocation::new("sh").arg("-c").arg(line).exec();
     let _ = failed;
     REASON_REPLACE
 }
@@ -430,15 +430,36 @@ pub fn render_launched(target: &str, result: &Launched, state: &StateDir) -> Str
 #[cfg(test)]
 mod tests {
     use super::{
-        before_deadline, derive_launch, fill_launch, model_of, seat_defaults, single_model, with_agent_view_off, with_anchor_cd,
-        with_defaults, with_flags, Holes, Model, Role, RoleDefaults, RuleRead, HOLE, HOLES, REASON_EFFORT_DUPLICATED,
-        REASON_MODEL_DUPLICATED, REASON_MODEL_MISMATCH,
+        before_deadline, derive_launch, fill_launch, model_of, replace_with, seat_defaults, single_model, with_agent_view_off,
+        with_anchor_cd, with_defaults, with_flags, Holes, Model, Role, RoleDefaults, RuleRead, HOLE, HOLES,
+        REASON_EFFORT_DUPLICATED, REASON_MODEL_DUPLICATED, REASON_MODEL_MISMATCH, REASON_REPLACE,
     };
     use crate::headless::Effort;
     use crate::order::is_declaration_order;
+    use crate::pipe::fixture::{exited, Call, Stub};
     use crate::rules::manifest::Manifest;
     use std::path::Path;
     use std::time::{Duration, Instant};
+
+    /// 席の起動の exec は起動の記述の終端を通る（設計 core-boundary.md §9 行 f）: program は `sh`・引数は `-c <起動行>`
+    /// の 2 つだけ（shell は 1 枚）。exec が返る周（起動の失敗・置き換えられなかった）の理由は [`REASON_REPLACE`]。
+    /// base は std の exec で test の process そのものを `exit 7` へ置き換える＝rc 7 で RED。
+    #[test]
+    fn invocation_seat_launch_exec_failure_names_the_reason() {
+        let stub = Stub::install(|call| match call.args.last().map(String::as_str) {
+            Some("exit 7") => Err(std::io::Error::other("gone")),
+            _ => exited(0, b""),
+        });
+        assert_eq!(replace_with("exit 7"), REASON_REPLACE, "起動の失敗の理由");
+        assert_eq!(replace_with("exit 0"), REASON_REPLACE, "exec が返る周はどれも同じ理由");
+        let sh = |line: &str| Call {
+            program: "sh".to_owned(),
+            args: vec!["-c".to_owned(), line.to_owned()],
+            cwd: None,
+            envs: Vec::new(),
+        };
+        assert_eq!(stub.calls(), [sh("exit 7"), sh("exit 0")], "sh -c の 1 枚");
+    }
 
     /// 窓の判定は pure な 4 値表（`s2-07l.344`・.319 の検出線の生存 `<` × 3 を潰す）: `now < at` は手前（true）・
     /// `now == at` は手前ではない（strict・壁時計の等号を待って測らない）・`now > at` は過ぎている・`deadline = None`

@@ -9,13 +9,14 @@
 // flip-check: moved s2-07l.479.2
 
 use crate::fleet::json_tree::{self, Tree};
+use crate::invocation::Invocation;
 use crate::polarity::{OnFailure, Polarity, Timing};
 use crate::rules::manifest::Manifest;
 use crate::rules::RuleValue;
 use std::cell::RefCell;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::process::{Child, ExitStatus, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -201,7 +202,7 @@ pub fn read_text(bd: &str, cwd: &Path, timeout: Duration) -> Result<String, Ledg
 
 /// 子 process を 1 回起こして読む（[`read_text`] の本体）。
 fn spawn_read(bd: &str, cwd: &Path, timeout: Duration) -> Result<String, LedgerError> {
-    let mut child = Command::new(bd)
+    let mut child = Invocation::new(bd)
         .args(BD_ARGS)
         .current_dir(cwd)
         .stdin(Stdio::null())
@@ -252,5 +253,35 @@ fn finish(child: &mut Child, deadline: Option<Instant>) -> Result<ExitStatus, Le
             Ok(None) => return Err(LedgerError::Timeout),
             Err(_) => return Err(LedgerError::Unreadable),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{read_text, LedgerError, BD_ARGS};
+    use crate::pipe::fixture::{exited, Call, Stub};
+    use std::path::{Path, PathBuf};
+    use std::time::Duration;
+
+    /// 台帳の読みの spawn は起動の記述を通る（設計 core-boundary.md §9 行 f）: program は client の名・引数は
+    /// `--readonly list --all --limit 0 --json`・cwd は呼び手が名指した dir。spawn の失敗は `Unreadable`（`Timeout`
+    /// ではない）で、区間の外の 2 度目は撃ち直す。
+    #[test]
+    fn invocation_seat_ledger_stream_spawn_failure_is_typed() {
+        let stub = Stub::install(|call| match call.program.as_str() {
+            "bd-gone" => Err(std::io::Error::other("gone")),
+            _ => exited(0, b"[]"),
+        });
+        let cwd = Path::new("/nonexistent-invocation-seat-ledger");
+        let wait = Duration::from_secs(5);
+        assert_eq!(read_text("bd-gone", cwd, wait), Err(LedgerError::Unreadable), "起動の失敗");
+        assert_eq!(read_text("bd-stub", cwd, wait), Err(LedgerError::Unreadable), "stub は子を起こさない＝spawn の失敗");
+        let bd = |program: &str| Call {
+            program: program.to_owned(),
+            args: BD_ARGS.iter().map(|arg| (*arg).to_owned()).collect(),
+            cwd: Some(PathBuf::from("/nonexistent-invocation-seat-ledger")),
+            envs: Vec::new(),
+        };
+        assert_eq!(stub.calls(), [bd("bd-gone"), bd("bd-stub")], "client の名と引数と cwd");
     }
 }

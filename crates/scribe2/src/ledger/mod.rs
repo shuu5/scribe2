@@ -16,9 +16,9 @@ pub mod lint;
 pub mod memo;
 
 use crate::cli_outcome::{Outcome, RC_REFUSED};
+use crate::invocation::Invocation;
 use crate::polarity::{OnFailure, Polarity, Timing};
 use std::path::Path;
-use std::process::Command;
 
 /// `ledger` に続く引数を捌く（verb は `memo` の 1 つ）。
 pub fn dispatch(args: &[String]) -> Outcome {
@@ -82,7 +82,7 @@ const REASON: &str = "--reason";
 /// **cwd は `repo` に固定する**（読みの口 `spawn_read` と同じ形・設計 pipeline.md 行 ap）: client は台帳を cwd から
 /// 上へ探すので、運転手の cwd（消えた dir でも）を継ぐと同じ repo でも台帳を解けない周が出る。
 pub fn close(bd: &str, repo: &Path, bead: &str, reason: &str) -> Result<(), CloseError> {
-    let out = Command::new(bd)
+    let out = Invocation::new(bd)
         .args([CLOSE, bead, REASON, reason])
         .current_dir(repo)
         .output()
@@ -100,6 +100,35 @@ pub fn close(bd: &str, repo: &Path, bead: &str, reason: &str) -> Result<(), Clos
 #[cfg(test)]
 mod tests {
     use super::{close, CloseError};
+    use crate::pipe::fixture::{exited, Call, Stub};
+    use std::path::{Path, PathBuf};
+
+    /// ledger の bd の起動は起動の記述を通る（設計 core-boundary.md §9 行 f）: program は client の名・引数は
+    /// `close <bead> --reason <text>`・cwd は repo。起動の失敗は `Unlaunchable`・rc 非 0 は `Refused`（rc を運ぶ）・
+    /// rc 0 は閉じた。
+    #[test]
+    fn invocation_seat_bd_output_failure_is_typed() {
+        let stub = Stub::install(|call| match call.args.get(1).map(String::as_str) {
+            Some("s2-ok") => exited(0, b""),
+            Some("s2-refused") => exited(3, b"ignored\n"),
+            _ => Err(std::io::Error::other("gone")),
+        });
+        let repo = Path::new("/nonexistent-invocation-seat-bd");
+        assert_eq!(close("bd-stub", repo, "s2-gone", "landed"), Err(CloseError::Unlaunchable), "起動の失敗");
+        assert_eq!(
+            close("bd-stub", repo, "s2-refused", "landed"),
+            Err(CloseError::Refused { rc: Some(3), tail: String::new() }),
+            "rc 非 0 は rc を運ぶ（stdout は読まない）"
+        );
+        assert_eq!(close("bd-stub", repo, "s2-ok", "landed"), Ok(()), "rc 0 は閉じた");
+        let bd = |bead: &str| Call {
+            program: "bd-stub".to_owned(),
+            args: ["close", bead, "--reason", "landed"].iter().map(|arg| (*arg).to_owned()).collect(),
+            cwd: Some(PathBuf::from("/nonexistent-invocation-seat-bd")),
+            envs: Vec::new(),
+        };
+        assert_eq!(stub.calls(), [bd("s2-gone"), bd("s2-refused"), bd("s2-ok")], "client の名と引数と cwd");
+    }
 
     /// 起動できない client は [`CloseError::Unlaunchable`]（「閉じた」に倒さない・C10）。
     #[test]
