@@ -4878,9 +4878,9 @@ fn group_windows(five: u64, seven: u64, model: u64) -> [(vessel::fleet::WindowKi
     [(WindowKind::FiveHour, five), (WindowKind::SevenDay, seven), (WindowKind::SevenDayModel, model)]
 }
 
-/// 逼迫の 1 行（器の字面を借りない＝外形を測る側は自分で書く）。
+/// 逼迫の 1 行（器の字面を借りない＝外形を測る側は自分で書く・§21 形 2 (b) の後半）。
 fn group_line(account: &str, window: &str, used: u64, cap: u64) -> String {
-    format!("group={GROUP_NAME} account={account} window={window} used={used} cap={cap} — 移動は次の 1 周（第 3 段まで手で）")
+    format!("group={GROUP_NAME} account={account} window={window} used={used} cap={cap} — 次の 1 周が移り先を決める")
 }
 
 /// UserPromptSubmit を偽 tmux の席で撃ち、stdout の行を返す（rc 0・stderr 0 byte を要求）。
@@ -5082,4 +5082,70 @@ fn hook_group_move_under_threshold_or_outside_anchor_puts_no_request() {
     assert_eq!(group_session_lines(&outside, &path), Vec::<String>::new(), "SessionStart も 0 行");
     assert_eq!(group_requests(&outside), Vec::<String>::new(), "群の外は 0 file");
     clean(&[&outside.repo, &outside.state, &outside.sock_dir]);
+}
+
+// ─────── 記録の口座と登録 row の食い違い（account-lifecycle.md §21 形 2・契約表の行 j・接頭辞 `hook_group_current_`・§19 の fixture） ───────
+
+/// 群 `g` の今の口座の記録（host の根の群用 dir の `g.account`）に `body` を書く。
+fn put_group_record(place: &RolePlace, body: &str) {
+    let dir = place.state.parent().unwrap_or(&place.state).join(format!("{}-host", vessel::name::NAME)).join("groups");
+    fs::create_dir_all(&dir).ok();
+    fs::write(dir.join(format!("{GROUP_NAME}.account")), body).ok();
+}
+
+/// 記録の形（[`put_group_record`] の本文・移り先 `account`・前の口座 `previous`）。
+fn group_record(account: &str, previous: &str) -> String {
+    format!("account={account}\nts=2026-09-24T00:00:00Z\nreason=move\nprevious={previous}\n")
+}
+
+/// 移動中の 1 行（器の字面を借りない）。
+fn moving_line(row: &str, current: &str) -> String {
+    format!("group={GROUP_NAME} row={row} current={current} — 器が移動中: 作業記憶を台帳と git に残して待つ（/exit は器が送る）")
+}
+
+/// (食い違い) 記録の口座 a2 ≠ 登録 row の口座 a1 の席は、a1 が逼迫（5 時間窓 90）でも逼迫を測らず、UserPromptSubmit と
+/// SessionStart の両方に `row=a1 current=a2` の 1 行だけを出し（`window=` を持たない）、移動を頼む記録を置かない。
+#[test]
+fn hook_group_current_record_differs_from_the_row_says_moving() {
+    let place = group_role_place();
+    put_group(&place, &place.repo.display().to_string());
+    let path = group_seat(&place, "grpmoving", "a1");
+    put_group_round(&place.state, &group_now(), "a1", &group_windows(90, 10, 10));
+    put_group_record(&place, &group_record("a2", "a1"));
+    let prompt = group_prompt_lines(&place, &path);
+    assert_eq!(prompt, vec![moving_line("a1", "a2")], "UserPromptSubmit は移動中の 1 行");
+    assert!(prompt.iter().all(|line| !line.contains("window=")), "逼迫を測らない: {prompt:?}");
+    assert_eq!(group_session_lines(&place, &path), vec![moving_line("a1", "a2")], "SessionStart も移動中の 1 行");
+    assert_eq!(group_requests(&place), Vec::<String>::new(), "移動を頼む記録は置かない");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// (一致して逼迫) 記録の口座 a2 = 登録 row の口座 a2 で a2 が逼迫の席は「次の 1 周が移り先を決める」の 1 行で、「第 3 段」の
+/// 語を持たない（移動を頼む記録は §20 形 4 のとおり置く）。
+#[test]
+fn hook_group_current_record_matches_the_row_says_the_next_round_decides() {
+    let place = group_role_place();
+    put_group(&place, &place.repo.display().to_string());
+    let path = group_seat(&place, "grpmatch", "a2");
+    put_group_round(&place.state, &group_now(), "a2", &group_windows(90, 10, 10));
+    put_group_record(&place, &group_record("a2", "a1"));
+    let lines = group_prompt_lines(&place, &path);
+    assert_eq!(lines, vec![group_line("a2", "5h", 90, 85)], "逼迫の 1 行");
+    assert!(lines.iter().all(|line| line.contains("次の 1 周が移り先を決める") && !line.contains("第 3 段")), "{lines:?}");
+    assert_eq!(group_requests(&place), vec![format!("{GROUP_NAME}.request")], "頼みは置く");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// (読めない記録) 記録の形が壊れた席は、登録 row の口座が逼迫でも 2 event とも 0 行（席は止めない・rc 0・頼みも置かない）。
+#[test]
+fn hook_group_current_unreadable_record_prints_nothing() {
+    let place = group_role_place();
+    put_group(&place, &place.repo.display().to_string());
+    let path = group_seat(&place, "grpbroken", "a1");
+    put_group_round(&place.state, &group_now(), "a1", &group_windows(90, 10, 10));
+    put_group_record(&place, "account=a2\n");
+    assert_eq!(group_prompt_lines(&place, &path), Vec::<String>::new(), "UserPromptSubmit は 0 行");
+    assert_eq!(group_session_lines(&place, &path), Vec::<String>::new(), "SessionStart も 0 行");
+    assert_eq!(group_requests(&place), Vec::<String>::new(), "頼みも置かない");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
 }

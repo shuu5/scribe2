@@ -3623,3 +3623,80 @@ fn pipe_dispatch_group_move_leftover_lock_stops_the_stage_without_touching_the_q
     assert!(groups_dir(&place.state).join("lock").is_file(), "lock の file は残る");
     clean(&[&place.repo, &place.state]);
 }
+
+// ───── 退避を器が完結させる（account-lifecycle.md §21 形 1・契約表の行 j・接頭辞 `pipe_dispatch_group_exit_`・§20 の fixture） ─────
+//
+// 2 つ目の置き場の席は退避の合図を受けても shell に戻らない（`spy/stuck-<target>`）。偽 tmux は `/exit` を受けても前面を変えない
+// （shell に戻す周は歯が `spy/front-<target>` を書く）。
+
+/// `target` へ送った `/exit` の payload の行（`send-keys -t <target> -l /exit`・退避の合図の末尾の `/exit` とは ` -l ` の直後で
+/// 分ける）。
+fn exit_sends(state: &Path, target: &str) -> usize {
+    group_sends(state).iter().filter(|line| line.contains(&format!("-t {target} ")) && line.ends_with(" -l /exit")).count()
+}
+
+/// 移動の周を撃つ: 候補 [a1, a2]・種 a1 が逼迫・2 つ目の置き場の席は shell に戻らない（1 つ目は a2 で起き、2 つ目は保留 1）。
+fn exit_place() -> GroupPlace {
+    let place = move_place(&[("a1", 90, 10, 10), ("a2", 10, 10, 10)], &["a1", "a2"], "a1");
+    put_spy(&place.state, "stuck", GROUP_ANCHORS[1].1, "");
+    let out = group_terminal(&place, "r-group-1");
+    assert_eq!(move_counts(&place.state), (1, 0, 1), "移動の周は承認 1・保留 1（{}）", told(&out));
+    place
+}
+
+/// (続きの周) 記録 a2 ≠ row a1 の群の続きの周に pane が claude の席へ `/exit` の 1 行を送り、その周は起こさず（起動行 0）、
+/// 保留の event を重ねない（保留 1 のまま）。既に a2 に居る席へは送らない。
+#[test]
+fn pipe_dispatch_group_exit_continuation_round_sends_one_exit_to_the_seat_not_at_a_shell() {
+    let place = exit_place();
+    let ((_, one), (_, two)) = (GROUP_ANCHORS[0], GROUP_ANCHORS[1]);
+    let out = group_terminal(&place, "r-group-2");
+    assert_eq!(exit_sends(&place.state, two), 1, "保留の席へ /exit 1 行（{}）: {:?}", told(&out), group_sends(&place.state));
+    assert_eq!(exit_sends(&place.state, one), 0, "起きた席へは送らない");
+    assert_eq!(launched_lines(&place.state, two).len(), 0, "その周は起こさない");
+    assert_eq!(move_counts(&place.state), (1, 0, 1), "判定を繰り返さず保留の event を重ねない");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (周ごとに 1 回) 同じ席が次の周も shell に戻らなければ、もう 1 行送る（2 周で 2 行・1 周に 2 行は送らない）。
+#[test]
+fn pipe_dispatch_group_exit_is_sent_once_per_round_while_the_seat_is_not_at_a_shell() {
+    let place = exit_place();
+    let two = GROUP_ANCHORS[1].1;
+    group_terminal(&place, "r-group-2");
+    assert_eq!(exit_sends(&place.state, two), 1, "2 周目は 1 行");
+    let out = group_terminal(&place, "r-group-3");
+    assert_eq!(exit_sends(&place.state, two), 2, "3 周目にもう 1 行（{}）", told(&out));
+    assert_eq!(launched_lines(&place.state, two).len(), 0, "起こさない");
+    assert_eq!(move_counts(&place.state), (1, 0, 1), "保留を重ねない");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (shell に戻った周) `/exit` の後に席が shell に戻った周は送り 0 で、§20 形 6 のとおり同じ target へ a2 の口座の起動行 1 本。
+#[test]
+fn pipe_dispatch_group_exit_seat_back_at_a_shell_is_launched_without_another_exit() {
+    let place = exit_place();
+    let (anchor, two) = GROUP_ANCHORS[1];
+    group_terminal(&place, "r-group-2");
+    assert_eq!(exit_sends(&place.state, two), 1, "続きの周に 1 行");
+    put_spy(&place.state, "front", two, "bash");
+    let out = group_terminal(&place, "r-group-3");
+    assert_eq!(exit_sends(&place.state, two), 1, "shell に戻った周は送らない（{}）", told(&out));
+    let lines = launched_lines(&place.state, two);
+    assert_eq!(lines.len(), 1, "起動行 1: {lines:?}");
+    assert!(lines.iter().all(|line| line.contains("accounts/a2")), "a2 の口座で起こす: {lines:?}");
+    assert_eq!(seat_account_of(&place.state, anchor).as_deref(), Some("a2"), "登録 row は a2");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (移動の周) 記録を書いた同じ周は退避の合図の 1 行だけで `/exit` は 0（shell に戻らない席にも送らない＝席が作業記憶を残す番を
+/// 1 周ぶん持つ）。
+#[test]
+fn pipe_dispatch_group_exit_move_round_sends_only_the_evacuation() {
+    let place = exit_place();
+    for (_, target) in GROUP_ANCHORS {
+        assert_eq!(exit_sends(&place.state, target), 0, "{target}: 移動の周は /exit 0");
+    }
+    assert_both_seats(&group_sends(&place.state), &evacuate_payload(GROUP, "a2"));
+    clean(&[&place.repo, &place.state]);
+}

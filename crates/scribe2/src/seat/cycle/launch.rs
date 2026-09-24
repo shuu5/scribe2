@@ -406,9 +406,11 @@ fn record_launch(request: &Launch, label: &str, started: Instant) {
 
 /// `seat launch` の 1 行（成立・断り・失敗）。置き場の 2 語を末尾に載せる（cycle と同じ規律）。
 ///
-/// `not-a-shell` の断りだけ**次の 1 手**（[`NEXT_AFTER_NOT_SHELL`]・約束 9）を置き場の 2 語の**前**に足す
+/// `not-a-shell` の断りは**次の 1 手**（[`NEXT_AFTER_NOT_SHELL`]・約束 9）を置き場の 2 語の**前**に足す
 /// （path は行末のまま＝出所を偽れない）。その窓には生きた席が在り器は殺さないので、手は人が選ぶ。
-pub fn render_launched(target: &str, result: &Launched, state: &StateDir) -> String {
+/// [`REASON_GROUP_ACCOUNT`] の断りも同じ位置に `next=seat <群の今の口座> -c` を足す（`grouped` = 開いた manifest と anchor
+/// から [`crate::hook::group::current_of`] で解く・解けない周は足さない・設計 account-lifecycle.md §21 形 3）。他の断りは足さない。
+pub fn render_launched(target: &str, result: &Launched, state: &StateDir, grouped: Option<(&Manifest, &Path)>) -> String {
     let suffix = state.suffix();
     let target = sanitize_target(target);
     match result {
@@ -420,11 +422,25 @@ pub fn render_launched(target: &str, result: &Launched, state: &StateDir) -> Str
             format!("seat launch: refused reason={REASON_NO_ACCOUNT} detail={} target={target}{suffix}", found.reason.as_str())
         }
         Launched::Refused(reason) => {
-            let next = if *reason == REASON_NOT_SHELL { format!(" next={NEXT_AFTER_NOT_SHELL}") } else { String::new() };
+            let next = match *reason {
+                REASON_NOT_SHELL => Some(NEXT_AFTER_NOT_SHELL.to_owned()),
+                REASON_GROUP_ACCOUNT => next_after_group_account(state, grouped),
+                _ => None,
+            };
+            let next = next.map(|found| format!(" next={found}")).unwrap_or_default();
             format!("seat launch: refused reason={reason} target={target}{next}{suffix}")
         }
         Launched::Failed(reason) => format!("seat launch: failed reason={reason} target={target}{suffix}"),
     }
+}
+
+/// [`REASON_GROUP_ACCOUNT`] の断りの次の 1 手（`seat <群の今の口座> -c`＝短い形で群の口座の席を会話ごと起こし直す）。anchor が
+/// 群に属さない・記録が読めない周は `None`。
+fn next_after_group_account(state: &StateDir, grouped: Option<(&Manifest, &Path)>) -> Option<String> {
+    let (manifest, anchor) = grouped?;
+    let group = crate::hook::group::group_of(manifest, &anchor.display().to_string())?;
+    let current = crate::hook::group::current_of(&state.path, group).ok()?;
+    Some(format!("seat {} -c", current.label))
 }
 
 #[cfg(test)]

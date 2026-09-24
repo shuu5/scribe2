@@ -16,6 +16,7 @@
 //!   settle の窓で shell に戻った置き場から同じ target へ `launch` の 1 本・戻らない席は保留の event）。無ければ断りの event と
 //!   群の置き場ごとに 1 行（[`refuse`]）。どちらの周も §19 の通知は送らない（席への行は群の置き場ごとに高々 1 行）。
 //! - 記録（新しい口座）と置き場の登録 row（古い口座）が食い違う群は判定をやり直さず、shell に戻った席を起こす続きだけを行う。
+//!   pane が shell でない席には退避の合図と同じ口で `/exit` の 1 行を周ごとに 1 回送り、その周は起こさない（§21 形 1）。
 //!
 //! 群 0 の host・読めない面は 1 語も出さず群用 dir も作らない（stdout にも足さない＝列の行は 1 字も変わらない）。
 
@@ -43,6 +44,9 @@ const LOCK_FILE: &str = "lock";
 
 /// 断りの理由（移り先の候補が無い＝妥協の移動を作らない・ADR-0020 §2.4）。
 const NO_CANDIDATE: &str = "no-candidate";
+
+/// 続きの周に pane が shell でない保留の席へ送る 1 行（席は自分の process を終えられない＝器が代わりに打つ・設計 §21 形 1）。
+const EXIT: &str = "/exit";
 
 /// 群の段が止まった理由（typed・列の 1 周の rc と行は変えない・設計 §20 形 7）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -269,12 +273,14 @@ fn execute(read: &mut Read<'_, '_>, plan: &Plan<'_>, target: &str) -> bool {
 enum Wait {
     /// 移動の周: settle の窓の内で待ち、窓の内に戻らない席ごとに保留の event を 1 件記す。
     Settle,
-    /// 続きの周: 1 回だけ見て、戻っていない席は次の周へ残す（保留の event を重ねない）。
+    /// 続きの周: 1 回だけ見て、戻っていない席へ [`EXIT`] の 1 行を送り次の周へ残す（保留の event を重ねない）。
     Once,
 }
 
 /// `seats` の置き場の席を、pane が shell に戻った順に同じ target へ `account` の口座で起こす（`launch` の 1 本・登録 row は
 /// 起動が書き直す・会話は運ばない・呼び手の窓の置き換えは許さない）。起こせなかった席は理由つきの保留の event を 1 件記す。
+/// 続きの周（[`Wait::Once`]）に shell でない席は起こさず、退避の合図と同じ口（[`notify::send`]）で [`EXIT`] を 1 回送る
+/// （移動の周は送らない＝席が作業記憶を残す番を 1 周ぶん持つ・設計 §21 形 1）。
 fn relaunch(read: &Read<'_, '_>, group: &AccountGroup, account: &str, mut seats: Vec<(String, String)>, wait: Wait) {
     let input = read.input;
     let (Some((settle, step)), Ok(rules)) = (cycle::pace_of(read.manifest), crate::seat::embedded_manifest()) else {
@@ -315,8 +321,13 @@ fn relaunch(read: &Read<'_, '_>, group: &AccountGroup, account: &str, mut seats:
         }
         sleep(step);
     }
-    if wait == Wait::Settle {
-        failed.extend(seats.into_iter().map(|(anchor, target)| (anchor, target, REASON_NOT_SHELL)));
+    match wait {
+        Wait::Settle => failed.extend(seats.into_iter().map(|(anchor, target)| (anchor, target, REASON_NOT_SHELL))),
+        Wait::Once => {
+            for (anchor, _) in &seats {
+                let _ = notify::send(&read.state, &place, Path::new(anchor), input.manifest, EXIT);
+            }
+        }
     }
     for (anchor, target, reason) in failed {
         let detail = format!("group={} anchor={anchor} target={target} reason={reason}", group.name());

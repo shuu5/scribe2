@@ -996,6 +996,9 @@ const GROUP_LAUNCHED: &str = "group-launched";
 /// 群の歯の target（窓 `seat` は偽 tmux の `list-windows` が返す名）。
 const GROUP_TARGET: &str = "gl:seat";
 
+/// 偽 tmux の前面の file（在ればその中身を `list-panes` が返す・無ければ `bash`＝shell）。
+const GROUP_FRONT: &str = "group-front";
+
 /// 群の歯の置き場: [`launch_place`] の host の面に群 `g`（置き場 = この置き場の anchor か、`outside` なら別の `/elsewhere`・候補 =
 /// l1 → l2）を足し、偽 tmux だけの PATH を返す。`record` が在れば群の今の口座の記録（host の根の群用 dir の `g.account`）を置く。
 fn launch_group_place(outside: bool, record: Option<&str>) -> (AcctPlace, String) {
@@ -1013,10 +1016,12 @@ fn launch_group_place(outside: bool, record: Option<&str>) -> (AcctPlace, String
     let bin = place.dir.join("group-bin");
     fs::create_dir_all(&bin).ok();
     let (args, launched, seats) = (place.dir.join(LAUNCH_TMUX_ARGS), place.dir.join(GROUP_LAUNCHED), place.state.join("seat"));
+    let front = place.dir.join(GROUP_FRONT);
     let tmux = format!(
         "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{args}'\nt=''; p=''\nfor a in \"$@\"; do [ \"$p\" = '-t' ] && t=\"$a\"; p=\"$a\"; done\n\
          f=$(printf '%s' \"$t\" | tr ':' '_')\ncase \"$1\" in\n\
-         has-session) exit 0;;\nlist-windows) echo seat;;\nlist-panes) echo bash;;\ncapture-pane) printf '$ \\n';;\n\
+         has-session) exit 0;;\nlist-windows) echo seat;;\nlist-panes) cat '{front}' 2>/dev/null || echo bash;;\n\
+         capture-pane) printf '$ \\n';;\n\
          send-keys) if [ \"$4\" = \"-l\" ]; then printf '%s\\n' \"$5\" >> '{launched}'\n\
          elif [ \"$4\" = \"Enter\" ]; then mkdir -p '{seats}/'\"$f\"\n\
          printf '{{\"schema\":1,\"state\":\"idle\",\"event\":\"SessionStart\",\"ts\":%s,\"sid\":\"\"}}\\n' \"$(date +%s)\" \
@@ -1024,6 +1029,7 @@ fn launch_group_place(outside: bool, record: Option<&str>) -> (AcctPlace, String
         args = args.display(),
         launched = launched.display(),
         seats = seats.display(),
+        front = front.display(),
     );
     fs::write(bin.join("tmux"), tmux).ok();
     fs::set_permissions(bin.join("tmux"), fs::Permissions::from_mode(0o755)).ok();
@@ -1116,4 +1122,58 @@ fn seat_launch_group_outside_anchor_is_unchanged() {
     assert_eq!(rc_of(&picked), i32::from(RC_REFUSED), "stdout={} stderr={}", stdout_of(&picked), stderr_of(&picked));
     assert_eq!(tick_token(&stderr_of(&picked), "reason").as_deref(), Some("no-account"), "選定へ進む: {}", stderr_of(&picked));
     fs::remove_dir_all(&place.dir).ok();
+}
+
+// ───── 断りの次の 1 手（account-lifecycle.md §21 形 3・契約表の行 j・接頭辞 `seat_launch_group_next_`・§20 の fixture） ─────
+
+/// 断りの 1 行の全体（`next` が在れば target の後・置き場の 2 語の前）。器の字面を借りない。
+fn launch_group_refused_line(place: &AcctPlace, reason: &str, next: Option<&str>) -> String {
+    let next = next.map(|found| format!(" next={found}")).unwrap_or_default();
+    format!("seat launch: refused reason={reason} target=gl_seat{next}{}\n", provenance(&place.state, "flag"))
+}
+
+/// (次の 1 手) 群の今の口座が l2（記録）の置き場で、短い形の `seat l1` と長い形の `--account l1` の断りの行は
+/// `next=seat l2 -c` を置き場の 2 語の前に持つ（行の全体を 1 字ずつ比べる＝位置も pin）。rc 1・stdout 空・登録 row 0・
+/// 1 key も送らない。記録の無い置き場（種 l1）で `seat l2` を撃つと `next=seat l1 -c`（解決値を写す＝記録の label を焼く変異を
+/// 捕まえる）。
+#[test]
+fn seat_launch_group_next_names_the_current_account_before_the_place_words() {
+    for (record, other, current) in [(Some("l2"), "l1", "l2"), (None, "l2", "l1")] {
+        let (place, path) = launch_group_place(false, record);
+        let next = format!("seat {current} -c");
+        for (case, head) in
+            [("短い形", vec!["seat", other]), ("長い形", vec!["seat", "launch", "--role", "orchestrator", "--account", other])]
+        {
+            let out = launch_group_run(&place, &path, &head);
+            assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "{case}: stdout={} stderr={}", stdout_of(&out), stderr_of(&out));
+            assert!(stdout_of(&out).is_empty(), "{case}: stdout は空");
+            assert_eq!(stderr_of(&out), launch_group_refused_line(&place, "group-account", Some(&next)), "{case}・記録 {record:?}");
+            assert_eq!(launch_group_tmux_calls(&place, "send-keys"), 0, "{case}: 1 key も送らない");
+            assert!(acct_rows(&place.state).is_empty(), "{case}: 登録 row 0");
+        }
+        fs::remove_dir_all(&place.dir).ok();
+    }
+}
+
+/// (他の断りは不変) 群の置き場で前面が shell でない窓の `not-a-shell` の行は従来の `next=`（窓の席を終わらせる手）のままで
+/// `seat ` の手を持たず、読めない記録の `group-record-unreadable` と群の外の置き場の `account-unknown` の行は `next=` を
+/// 持たない（行の全体を 1 字ずつ比べる）。
+#[test]
+fn seat_launch_group_next_leaves_other_refusals_unchanged() {
+    let (place, path) = launch_group_place(false, None);
+    fs::write(place.dir.join(GROUP_FRONT), "claude\n").ok();
+    let out = launch_group_run(&place, &path, &["seat", "l1"]);
+    let shell = "その窓の席を終わらせてから同じ窓で打つ／別の名の窓を--targetで名指す";
+    assert_eq!(stderr_of(&out), launch_group_refused_line(&place, "not-a-shell", Some(shell)), "not-a-shell は従来の行");
+    fs::remove_dir_all(&place.dir).ok();
+    let (broken, path) = launch_group_place(false, Some("l2"));
+    let record = broken.dir.join(format!("{NAME}-host")).join("groups").join("g.account");
+    fs::write(&record, "account=l2\n").ok();
+    let out = launch_group_run(&broken, &path, &["seat", "l1"]);
+    assert_eq!(stderr_of(&out), launch_group_refused_line(&broken, "group-record-unreadable", None), "読めない記録は next 無し");
+    fs::remove_dir_all(&broken.dir).ok();
+    let (outside, path) = launch_group_place(true, Some("l2"));
+    let out = launch_group_long(&outside, &path, &["--account", "zz"]);
+    assert_eq!(stderr_of(&out), launch_group_refused_line(&outside, "account-unknown", None), "群の外の断りは next 無し");
+    fs::remove_dir_all(&outside.dir).ok();
 }

@@ -4,7 +4,9 @@
 //! 読み手は 2 つで、**同じこの 1 本を通る**（C2）: dispatch の 1 周の群の段（`pipe::dispatch` の `group`）と、席自身の
 //! hook（[`lines`]・SessionStart と UserPromptSubmit）。
 //!
-//! hook は自席の登録 row の口座 1 つだけを読み、**鮮度の外は hook の中で測らない**（`hook.timeout_s` < `fleet.usage_timeout_s`）:
+//! hook は自席の登録 row の口座と群の今の口座（[`current_of`]）を読み、記録の口座が登録 row と食い違う周は逼迫を測らず移動中の
+//! 1 行（`row=` / `current=`）だけを出す（設計 §21 形 2・記録が読めない周は 0 行）。それ以外は登録 row の口座 1 つだけを測り、
+//! **鮮度の外は hook の中で測らない**（`hook.timeout_s` < `fleet.usage_timeout_s`）:
 //! 器自身を子として `fleet usage --state-dir D --account <label> --fresh` で起こして待たず、`usage: measuring` の 1 行を出す
 //! （値は次の話す番で読める）。群に属さない anchor・群 0 の host は 1 語も出さない。
 //!
@@ -236,15 +238,20 @@ pub fn group_of<'a>(manifest: &'a Manifest, anchor: &str) -> Option<&'a AccountG
     manifest.groups().iter().find(|group| group.anchors().iter().any(|found| found == anchor))
 }
 
-/// hook の 1 行（`group=<名> account=<label> window=<w> used=<n> cap=<n> — …`・設計 §19 形 5）。
+/// hook の 1 行（`group=<名> account=<label> window=<w> used=<n> cap=<n> — …`・設計 §19 形 5 / §21 形 2 (b)）。
 fn seat_line(group: &AccountGroup, account: &str, found: Pressed) -> String {
     format!(
-        "group={} account={account} window={} used={} cap={} — 移動は次の 1 周（第 3 段まで手で）",
+        "group={} account={account} window={} used={} cap={} — 次の 1 周が移り先を決める",
         group.name(),
         found.window.short(),
         found.used,
         found.cap
     )
+}
+
+/// 移動中の席の 1 行（記録の口座 ≠ 登録 row の口座・設計 §21 形 2 (a)）。
+fn moving_line(group: &AccountGroup, row: &str, current: &str) -> String {
+    format!("group={} row={row} current={current} — 器が移動中: 作業記憶を台帳と git に残して待つ（/exit は器が送る）", group.name())
 }
 
 /// 席の hook の群の段（SessionStart の brief・UserPromptSubmit の追加文脈に足す行）。`who` / `when` は記録の欄。
@@ -272,6 +279,12 @@ fn line_of(hooked: &Hooked) -> Option<String> {
     let events = crate::fleet::store::read_all(hooked.dir).ok()?;
     let state = crate::fleet::replay(&events);
     let account = crate::seat::role::registration_of_target(&state, &target)?.account.clone();
+    // 群の今の口座（記録 > 種）を読む: 記録が読めない周は 0 行・記録が登録 row と食い違う周は逼迫を測らず移動中の 1 行
+    // （移動を頼む記録は置かない＝移動は既に決まっている・設計 §21 形 2）。
+    let current = current_of(hooked.dir, group).ok()?;
+    if current.source == Source::Record && current.label != account {
+        return Some(moving_line(group, &account, &current.label));
+    }
     match usage::fresh_rows(&manifest, &state, &account).ok()? {
         Some(rows) => {
             let found = pressed(&rows, caps)?;

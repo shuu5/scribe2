@@ -512,7 +512,7 @@ fn launch_place(state_dir: Option<&str>, anchor: Option<&str>, target: Option<&s
 /// 載せる（解けていない値を行に置かない・長い形の行は従来の字面のまま）。
 fn refused_before_launch(reason: &'static str, target: Option<&str>, state: Option<&super::StateDir>) -> Outcome {
     let line = match (target, state) {
-        (Some(target), Some(state)) => cycle::render_launched(target, &cycle::Launched::Refused(reason), state),
+        (Some(target), Some(state)) => cycle::render_launched(target, &cycle::Launched::Refused(reason), state, None),
         (Some(target), None) => format!("seat launch: refused reason={reason} target={target}"),
         (None, Some(state)) => format!("seat launch: refused reason={reason}{}", state.suffix()),
         (None, None) => format!("seat launch: refused reason={reason}"),
@@ -525,12 +525,12 @@ fn refused_before_launch(reason: &'static str, target: Option<&str>, state: Opti
 fn launch_with(flags: &LaunchFlags, place: &LaunchPlace) -> Outcome {
     let state = &place.state;
     let refused = |reason: &'static str| {
-        Outcome::failed_line(RC_REFUSED, cycle::render_launched(flags.target, &cycle::Launched::Refused(reason), state))
+        Outcome::failed_line(RC_REFUSED, cycle::render_launched(flags.target, &cycle::Launched::Refused(reason), state, None))
     };
     // 宣言（`[[account]]` / `[[plugin]]` / `[[launch-arg]]`）と確認の刻みは同じ 1 つの manifest から読む（第 2 の parser を作らない）。
     let manifest = match crate::rules::read(None, Some(&state.path)) {
         Ok(manifest) => manifest,
-        Err(errors) => return broken_rules(&errors, vec![cycle::render_launched(flags.target, &cycle::Launched::Refused(cycle::REASON_NO_RULE), state)]),
+        Err(errors) => return broken_rules(&errors, vec![cycle::render_launched(flags.target, &cycle::Launched::Refused(cycle::REASON_NO_RULE), state, None)]),
     };
     let Some((settle, step)) = cycle::pace_of(&manifest) else {
         return refused(cycle::REASON_NO_RULE);
@@ -561,7 +561,8 @@ fn launch_with(flags: &LaunchFlags, place: &LaunchPlace) -> Outcome {
         carry: flags.carry,
         replace_own: true,
     });
-    let line = cycle::render_launched(flags.target, &result, state);
+    // 群の置き場の断りは次の 1 手（群の今の口座）を同じ manifest と anchor から解く（設計 account-lifecycle.md §21 形 3）。
+    let line = cycle::render_launched(flags.target, &result, state, Some((&manifest, &place.anchor)));
     match result {
         cycle::Launched::Done(..) => Outcome::ok_line(line),
         cycle::Launched::None(_) | cycle::Launched::Refused(_) | cycle::Launched::Failed(_) => Outcome::failed_line(RC_REFUSED, line),
