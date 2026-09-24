@@ -31,7 +31,7 @@ use std::process::{Command, Stdio};
 /// 台帳から候補を組む群（設計 §20・`s2-07l.531` の純移動）。
 mod candidates;
 
-/// 1 周の群の段（群の逼迫の通知・設計 account-lifecycle.md §19 形 2〜4）。
+/// 1 周の群の段（群の逼迫の通知と自動の移動・設計 account-lifecycle.md §19 形 2〜4・§20）。
 mod group;
 
 use candidates::{entry_of, is_input, marks_of, settle, tools};
@@ -577,8 +577,9 @@ struct Ledger<'a> {
 /// 理由つきで待ちに残す（終端の rc は呼び手が変えない・次の契機で拾う・C10）。
 pub fn fire(input: &Input<'_>) -> Turn {
     // **群の段は起こす側の 1 周の先頭で走る**（設計 account-lifecycle.md §19 形 2 / 7）: 台帳を読まないので道具
-    // （`--runner`）の無い周も走り、見る側（[`turn`]・`dispatch ls`）は撃たない。群 0 の host は 1 語も出さない。
-    group::round(input);
+    // （`--runner`）の無い周も走り、見る側（[`turn`]・`dispatch ls`）は撃たない。群 0 の host は 1 語も出さない。移動（§20）も
+    // この段の中で便の列の前に走り、段が typed に止まった周（lock の残り・読めない面）も列の rc と行は変えない（§20 形 7）。
+    let _ = group::round(input);
     // **driver の死んだ便を先に起こし直す**（設計 §5）: 起こし直した便は live のままなので列の交差は
     // 動かない。起こす側より先に撃つのは、同じ 1 周の中で「止まっている便」を先に動かすためである。
     // **実装役の口が無い周は列を測らない**（`pipe run` は `--runner` を要り、器は既定を持たない）。

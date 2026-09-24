@@ -354,8 +354,8 @@ terms:
     relationships: [Verdict, 便, land, lens]
   - canonical: flip check
     domain: consumer
-    definition: CI が PR の test 差分だけを base に当てて RED、 HEAD で GREEN であることを確かめる検査 (C12.2)。
-    relationships: [歯, docs-only]
+    definition: CI が PR の test 差分だけを base に当てて RED、 HEAD で GREEN であることを確かめる検査 (C12.2)。 本 repo の入口の RED を測る形で、 名乗った消費側の受付は test 差分を重ねずに契約の検証行そのものを base の木で撃つ (ADR-0059・accepted)。
+    relationships: [歯, docs-only, 入口の RED, 契約の検証行]
   - canonical: KNOWN-RED 台帳
     domain: consumer
     definition: 落ちている test を許容するための一覧。 持たない (C12.6)。
@@ -533,8 +533,8 @@ terms:
     relationships: [上限 record]
   - canonical: 判定行
     domain: consumer
-    definition: 構造検査が違反 0 の周にだけ出す 1 行。 measure tag とその実測値を並べる。 measure の列挙はこの現物が SSOT であり、 文書は列挙を写さない (ADR-0013 §2.1)。
-    relationships: [measure tag, 構造検査]
+    definition: 構造検査が違反 0 の周にだけ出す 1 行。 measure tag とその実測値を並べる。 measure の列挙はこの現物が SSOT であり、 文書は列挙を写さない (ADR-0013 §2.1)。 契約表の検査の 1 行・受付の 1 行・preflight の行も同じ 1 行 1 事実の形で、 ADR-0059 (accepted) は受付の 1 行と preflight の行に entrance=green-on-base の欄を足し、 契約表の検査の entrance= の欄に名乗りの語を写す。
+    relationships: [measure tag, 構造検査, 受付, base で緑の行]
   - canonical: 宣言順
     domain: consumer
     definition: 閉じた enum の variant が宣言された順序。 適用順序はこれだけから取り、 順序の散文注記を持たない (憲法 C2)。 充足形は「閉じた enum + 全 variant の const slice + 網羅 match + 並びが判別子の昇順と一致することを測る歯」の 4 つ組である (ADR-0013 §2.2)。
@@ -780,8 +780,8 @@ terms:
   - canonical: 受付
     domain: consumer
     aliases: [contract intake]
-    definition: 契約 file を便にする前に器が撃つ検査の段。 必須 field・verify の形・allowlist・write-set の余地・host の memory の枠・同時走行の最大値 (SRS FR68) を通った契約だけが便になる (交差の排他は SRS FR39)。 変異検査の並列の枠 (SRS NFR6) とは別。
-    relationships: [dispatcher, 並列の枠, write-set, 便]
+    definition: 契約 file を便にする前に器が撃つ検査の段。 必須 field・verify の形・allowlist・write-set の余地・host の memory の枠・同時走行の最大値 (SRS FR68) を通った契約だけが便になる (交差の排他は SRS FR39)。 変異検査の並列の枠 (SRS NFR6) とは別。 上限の読み・材料の読み・契約表の検査・宣言と上限の突き合わせ (freeze) は入口の lock の前に 1 周 1 回撃ち、 lock の中の判定はその突き合わせの結果 (有効値と名乗りの語) を借りて宣言を読み直さない (ADR-0059・accepted)。 detect か deny を名乗った宣言の契約では、 lock の前に nextest の検証行を base の木で撃って base で緑の行の本数を残し、 deny の契約は base で緑か測れない行が在れば断る (ADR-0059・accepted)。 preflight は同じ判定を便を作らずに撃つ口。
+    relationships: [dispatcher, 並列の枠, write-set, 便, base で緑の行, 名乗りの語, 契約の検証行]
   - canonical: priority
     domain: consumer
     aliases: [契約の priority]
@@ -870,8 +870,8 @@ terms:
   - canonical: 検証行の箱
     domain: consumer
     aliases: [verify-line box]
-    definition: gate と main 実測の共通の検証行を起こす封じ込めの箱。 上限は HostReserve のまま (ADR-0040 では変えない)。
-    relationships: [封じ込めの箱, 箱の上限の 2 種, 共通 verify, gate]
+    definition: gate と main 実測の共通の検証行を起こす封じ込めの箱。 上限は HostReserve のまま (ADR-0040 では変えない)。 受付が base の木で撃つ契約の検証行も gate の契約の検証行と同じ閉じ込めの 1 関数と箱で撃ち、 並列の枠の受付札は取らない (ADR-0059・accepted)。
+    relationships: [封じ込めの箱, 箱の上限の 2 種, 共通 verify, gate, 契約の検証行, base の木]
   - canonical: 役割の口座
     domain: consumer
     aliases: [role account]
@@ -1022,8 +1022,8 @@ terms:
   - canonical: 器の健康の遮断器
     domain: consumer
     aliases: [host health circuit breaker]
-    definition: verify の行を撃つ前に走行可能な process と待ちの process を読み、 閾値と比べて空いている / 混んでいる / 測れないの 3 値を返す境界 (ADR-0050・proposed)。 混んだ周は待ち、 待ち切れなかった周は行を撃たず INCONCLUSIVE に倒す。 行為を止めうるので極性一覧に載る guard。
-    relationships: [極性一覧, guard, 硬い資源, 走行可能な process, 待ちの process, core あたりの倍率]
+    definition: verify の行を撃つ前に走行可能な process と待ちの process を読み、 閾値と比べて空いている / 混んでいる / 測れないの 3 値を返す境界 (ADR-0050・proposed)。 混んだ周は待ち、 待ち切れなかった周は行を撃たず INCONCLUSIVE に倒す。 行為を止めうるので極性一覧に載る guard。 受付が base の木で撃つ契約の検証行も 1 行ごとにこれを通り、 閉じた行とそれ以後の行は「測れない」に写る (ADR-0059・accepted)。
+    relationships: [極性一覧, guard, 硬い資源, 走行可能な process, 待ちの process, core あたりの倍率, base の木]
   - canonical: 走行可能な process
     domain: consumer
     aliases: [runnable process]
@@ -1067,13 +1067,45 @@ terms:
   - canonical: 測らない名乗り
     domain: consumer
     aliases: [declared unmeasured]
-    definition: 対象 repo の宣言 file が任意の項目で「入口の flip は測らない」と名乗ること (ADR-0054)。 受付と契約表の検査は、 この名乗りが在る宣言だけを入口の行の欠けで断らず、 判定行に測らなかったことを残す
-    relationships: [vessel 宣言, flip check, 宣言の任意 key]
+    definition: 対象 repo の宣言 file が任意の項目で「入口の flip は測らない」と名乗ること (ADR-0054)。 受付と契約表の検査は、 この名乗りが在る宣言だけを入口の行の欠けで断らず、 判定行に測らなかったことを残す。 ADR-0059 (accepted) の後は名乗りの語 3 つのうちの unmeasured で、 base の木を用意せず何も撃たない
+    relationships: [vessel 宣言, flip check, 宣言の任意 key, 名乗りの語]
   - canonical: 宣言の任意 key
     domain: consumer
     aliases: [optional declaration key]
-    definition: 対象 repo の宣言 file の key のうち、 無ければ現行の値で動き、 在れば器がその値を読む key (ADR-0047 の path の種別 3 本・ADR-0054 の entrance-flip)。 未知の key は読みの誤りとして断る
-    relationships: [vessel 宣言, 測らない名乗り]
+    definition: 対象 repo の宣言 file の key のうち、 無ければ現行の値で動き、 在れば器がその値を読む key (ADR-0047 の path の種別 3 本・ADR-0054 の entrance-flip)。 未知の key は読みの誤りとして断る。 entrance-flip の値は名乗りの語の閉じた 3 語 (ADR-0059・accepted)
+    relationships: [vessel 宣言, 測らない名乗り, 名乗りの語]
+  - canonical: 名乗りの語
+    domain: consumer
+    aliases: [declared word]
+    definition: 宣言の任意 key entrance-flip の値で、 unmeasured (測らない)・detect (記す)・deny (止める) の閉じた 3 語 (ADR-0059・accepted・ADR-0054 の 1 語を広げた)。 3 語とも入口の行の欠けで断られず、 入口の flip の行との同居は矛盾として断られる。 detect と deny は受付に base の木で nextest の検証行を撃たせ、 deny は base で緑の行か測れない行が在る契約を受付で断らせる。 他の語・空・配列は読みの誤り
+    relationships: [宣言の任意 key, 測らない名乗り, 受付, base で緑の行, 入口の RED]
+  - canonical: 入口の RED
+    domain: consumer
+    aliases: [entrance RED]
+    definition: 契約の検証行を base の木で撃つと「不在」か「落ちた」に写ること (base で緑でも測れないでもないこと・ADR-0059・accepted)。 台帳の規則「検証は base で RED になる歯」の機械の形で、 本 repo では flip check が、 detect か deny を名乗った消費側では受付が測る
+    relationships: [flip check, base の木, base で緑の行, 名乗りの語, 歯]
+  - canonical: base の木
+    domain: consumer
+    aliases: [base tree]
+    definition: 受付と preflight が材料の読みの前に読んだ対象 repo の HEAD の sha を、 state dir の一時 dir に detach した worktree として checkout した作業木 (ADR-0059・accepted)。 detect か deny を名乗った契約の nextest の検証行を撃ち終えたら片付ける。 便の base (spawn が HEAD を読み直して決める) とは違いうる
+    relationships: [受付, 入口の RED, base で緑の行, 名乗りの語]
+  - canonical: base で緑の行
+    domain: consumer
+    aliases: [green-on-base line]
+    definition: 契約の nextest の検証行のうち base の木で撃って rc 0 になった行 (ADR-0059・accepted)。 該当の歯が無い行 (不在)・落ちた行・撃たなかった行と rc から歯の有無を弁別できない行 (測れない) は含めない。 受付の 1 行と preflight の行の entrance=green-on-base の欄がこの行の本数と検証行の全本数を出し、 deny の名乗りでは 1 本以上で契約が断られる
+    relationships: [入口の RED, base の木, 名乗りの語, 受付, 判定行]
+  - canonical: 契約の検証行
+    domain: consumer
+    aliases: [contract verify line]
+    definition: 契約が持つ、 歯を撃つ command の 1 行 (契約表の行の verify の要素)。 gate は便の木で撃ち、 detect か deny を名乗った契約の受付は nextest の行だけを base の木でも撃つ (ADR-0059・accepted)。 vessel 宣言の共通 verify は含まない
+    relationships: [契約表, 共通 verify, gate, 受付, base で緑の行, 入口の RED]
+    flagged_ambiguities: [既存の定義の「契約 verify」「契約の verify」は同じ行を指す]
+  - canonical: 消費側
+    domain: consumer
+    aliases: [consumer repo]
+    definition: 本 repo 以外で、 scribe2 の binary を導入して自分の vessel 宣言と契約で便を回す repo (ADR-0054・ADR-0059・accepted)。 本 repo の xtask を持たず、 入口の RED を測るかは宣言の名乗りの語で選ぶ
+    relationships: [vessel 宣言, 名乗りの語, 導入先, 入口の RED]
+    flagged_ambiguities: [導入先は plugin と binary を積んだ場所 (install 帳簿と席の anchor) の集合で doctor が数える面、 消費側は宣言と契約で便を回す repo の役割の面]
   - canonical: 群の逼迫
     domain: consumer
     aliases: [group pressure]

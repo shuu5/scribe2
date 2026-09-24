@@ -711,10 +711,11 @@ fn fleet_stages_place_rate_limited_after_questioned() {
     assert_eq!(Stage::parse("RateLimited"), Some(Stage::RateLimited), "as_str ↔ parse の往復");
 }
 
-/// `KINDS` の並びが**宣言順**と一致し、母集団は 20 種で末尾の 4 つが `InstallRecorded`（`vessel update` が足した・設計
+/// `KINDS` の並びが**宣言順**と一致し、母集団は 23 種で末尾の 7 つが `InstallRecorded`（`vessel update` が足した・設計
 /// consumer-sync.md §5 (4)）→ `RunCost`（消費の 1 件・gate-cost.md §26 形 (2)）→ `RulingReceived`（run 無しの裁定・
-/// fleet-event-log.md §9）→ `GroupPressureNotified`（群の逼迫の通知・account-lifecycle.md §19 形 3）。variant を足して列に
-/// 足し忘れた周・件数だけ合って末尾が違う周はここで赤になる。
+/// fleet-event-log.md §9）→ `GroupPressureNotified`（群の逼迫の通知・account-lifecycle.md §19 形 3）→ `GroupMoved` /
+/// `GroupMoveRefused` / `GroupMovePending`（群の移動の承認・断り・保留・account-lifecycle.md §20 形 5 / 6）。variant を足して
+/// 列に足し忘れた周・件数だけ合って末尾が違う周はここで赤になる。
 #[test]
 fn fleet_kinds_follow_declaration_order() {
     assert!(
@@ -722,13 +723,21 @@ fn fleet_kinds_follow_declaration_order() {
         "KINDS の並びが宣言順と乖離している（母集団 {} 種）",
         KINDS.len()
     );
-    assert_eq!(KINDS.len(), 20, "母集団（列の印までの 16 + install 1 + 消費 1 + 裁定 1 + 群の逼迫の通知 1）");
+    assert_eq!(KINDS.len(), 23, "母集団（列の印までの 16 + install 1 + 消費 1 + 裁定 1 + 群の逼迫の通知 1 + 群の移動 3）");
     assert_eq!(
         KINDS.get(16..),
         Some(
-            &[EventKind::InstallRecorded, EventKind::RunCost, EventKind::RulingReceived, EventKind::GroupPressureNotified][..]
+            &[
+                EventKind::InstallRecorded,
+                EventKind::RunCost,
+                EventKind::RulingReceived,
+                EventKind::GroupPressureNotified,
+                EventKind::GroupMoved,
+                EventKind::GroupMoveRefused,
+                EventKind::GroupMovePending,
+            ][..]
         ),
-        "install → 消費 → 裁定 → 群の逼迫の通知が宣言順の末尾"
+        "install → 消費 → 裁定 → 群の逼迫の通知 → 群の移動の承認・断り・保留が宣言順の末尾"
     );
     assert_eq!(EventKind::InstallRecorded.as_str(), "InstallRecorded");
     assert_eq!(EventKind::parse("InstallRecorded"), Some(EventKind::InstallRecorded), "as_str ↔ parse の往復");
@@ -1511,8 +1520,8 @@ fn fleet_allowance_windows_round_trip_on_snake_case() {
 fn account_cmd_kinds_are_fifteen_with_retire_and_restore_last() {
     assert_eq!(
         KINDS.len(),
-        20,
-        "母集団（既存 10 + 口座残量 2 + 席の登録 1 + 口座の退役・戻し 2 + 列の印 1 + install 1 + 消費 1 + 裁定 1 + 群の逼迫の通知 1）"
+        23,
+        "母集団（既存 10 + 口座残量 2 + 席の登録 1 + 口座の退役・戻し 2 + 列の印 1 + install 1 + 消費 1 + 裁定 1 + 群の逼迫の通知 1 + 群の移動 3）"
     );
     assert_eq!(
         KINDS.get(12..16),
