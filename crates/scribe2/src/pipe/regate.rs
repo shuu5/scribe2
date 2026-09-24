@@ -45,7 +45,7 @@ fn admit(stage: Stage, judged: Option<bool>, ticket: Ticket, reason: &str) -> Re
 /// 便の**最新の `Gated` の `RunStage` より後ろ**に戻しの記帳が在るか（設計 §49 形 4・1 つの FAIL につき 1 回）。
 ///
 /// 回数の閾値を値で持たない: もう 1 周の gate が `Gated` を書けば次の 1 回が開く。
-fn regated_since_gate(events: &[Event], id: &str) -> bool {
+pub(in crate::pipe) fn regated_since_gate(events: &[Event], id: &str) -> bool {
     let own: Vec<&Event> = events.iter().filter(|event| event.run == id && event.kind == EventKind::RunStage).collect();
     let since = own.iter().rposition(|event| event.stage == Some(Stage::Gated)).map_or(0, |at| at.saturating_add(1));
     own.iter()
@@ -184,6 +184,81 @@ mod tests {
         assert!(regated_since_gate(&[gated(), back(), event("r1", EventKind::SeatStopped, Some(Stage::Gated), None, None)], "r1"));
         assert!(!regated_since_gate(&[gated(), back(), gated()], "r1"), "Gated を挟めば開く");
         assert!(!regated_since_gate(&[gated(), other], "r1"), "他の便の記帳は数えない");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 形ごとの置き場を 1 つ作り、判定 FAIL の `Gated` の便 `r1` を置いてから `shape` で 1 条件だけ崩す。
+    fn form_place(name: &str, shape: impl FnOnce(&std::path::Path)) -> std::path::PathBuf {
+        let root = scratch(&format!("regate-form-{name}"));
+        let state = root.join("state");
+        gated_run(&state, &root.join("repo"), "r1", "FAIL");
+        shape(&state);
+        root
+    }
+
+    /// 形ごとに 1 条件だけ崩す手。
+    type Shape = Box<dyn FnOnce(&std::path::Path)>;
+
+    /// 札の本文を置く（`pid` の行）。
+    fn put_ticket(state: &std::path::Path, body: &str) {
+        let _ = std::fs::write(super::super::driver_path(state, "r1"), body);
+    }
+
+    // flip-check: retroactive s2-07l.593
+    /// (§23 (i)) 口の本体に通る 2 形（札なし・札の所有者が死んでいる）と断る 6 形（母集団 8）を 1 形ずつ別の置き場で
+    /// 渡す: 通る形は rc 0 で記帳ちょうど 1 件、断る形は rc 1 で記帳 0 件・理由の語が形ごとに違う（語は入力の逐語に
+    /// 無い字面で測る）。
+    #[test]
+    fn pipe_regate_forms_body_passes_two_and_refuses_six_with_distinct_reasons() {
+        let dead = std::process::Command::new("true").spawn().and_then(|mut child| child.wait().map(|_| child.id()));
+        let dead = dead.expect("true を起こして待てる");
+        let words = "裁定: 器の欠陥";
+        let forms: [(&str, Option<&str>, &str, Shape); 8] = [
+            ("absent", None, words, Box::new(|_| {})),
+            ("dead", None, words, Box::new(move |state| put_ticket(state, &format!("{dead}\n")))),
+            ("stage", Some("戻せるのは"), words, Box::new(|state| append_all(state, &[event("r1", EventKind::RunStage, Some(Stage::Implemented), None, None)]))),
+            ("verdict", Some("FAIL でない"), words, Box::new(|state| { let _ = std::fs::write(super::super::verdict_path(state, "r1"), "{\"verdict\":\"PASS\"}\n"); })),
+            ("live", Some("運転手が生きている"), words, Box::new(|state| put_ticket(state, &format!("{}\n", std::process::id())))),
+            ("empty", Some("逐語が空"), "  ", Box::new(|_| {})),
+            ("judged", Some("判定を読めない"), words, Box::new(|state| { let _ = std::fs::write(super::super::verdict_path(state, "r1"), "not json\n"); })),
+            ("ticket", Some("札を読めない"), words, Box::new(|state| put_ticket(state, "not-a-pid\n"))),
+        ];
+        let policy = LockPolicy::embedded().expect("埋め込みの lock 規則");
+        let total = forms.len();
+        let mut seen: Vec<String> = Vec::new();
+        for (name, why, reason, shape) in forms {
+            let root = form_place(name, shape);
+            let state = root.join("state");
+            let before = store::read_all(&state).expect("置き場を読める").len();
+            let out = regate(&state, "r1", reason, policy);
+            let written = store::read_all(&state).expect("置き場を読める").len() - before;
+            let told = out.err.join("\n");
+            match why {
+                None => assert_eq!((out.rc, written), (RC_OK, 1), "{name}: 通る形は記帳 1 件（{told}）"),
+                Some(word) => {
+                    assert_eq!((out.rc, written), (RC_REFUSED, 0), "{name}: 断る形は記帳 0 件（{told}）");
+                    assert!(told.contains(word) && !reason.contains(word), "{name}: 理由の語 {word:?}（{told}）");
+                    assert!(!seen.iter().any(|other| told.contains(other.as_str())), "{name}: 語は形ごとに違う（{told}）");
+                    seen.push(word.to_owned());
+                }
+            }
+            let _ = std::fs::remove_dir_all(&root);
+        }
+        assert_eq!((total, seen.len()), (8, 6), "母集団 8 のうち断る形 6");
+    }
+
+    /// (§23 (j)) 通した直後に同じ便へ撃つ 2 度目は、受付の段の条件の語で断り「1 度戻している」の語を持たない
+    /// （AC47「理由 = 段」・受付の 4 条件が先）。
+    #[test]
+    fn pipe_regate_forms_second_right_after_is_refused_by_the_stage() {
+        let root = form_place("second", |_| {});
+        let state = root.join("state");
+        let policy = LockPolicy::embedded().expect("埋め込みの lock 規則");
+        assert_eq!(regate(&state, "r1", "一度目", policy).rc, RC_OK, "1 度目は通る");
+        let again = regate(&state, "r1", "二度目", policy);
+        let told = again.err.join("\n");
+        assert_eq!(again.rc, RC_REFUSED, "2 度目は断る（{told}）");
+        assert!(told.contains("戻せるのは") && !told.contains("1 度戻している"), "理由は段（{told}）");
         let _ = std::fs::remove_dir_all(&root);
     }
 }

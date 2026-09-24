@@ -7,8 +7,8 @@
 use super::{
     ceiling_rules, clean, commit_rows, design_doc_rows, fake_lens, gate_once, git, implemented, intake_bead,
     kind_count, lens_verdict, question_runner, questioned, repo_with_state, review_lens_pass, row_fields, run_pipe,
-    shim_path, stderr_of, run_id_of, stdout_of, write_contract, write_design, DESIGN_FILE, HEALTH_PER_CORE_OPEN,
-    IMPLEMENT, RC_BLOCKED,
+    shim_path, stderr_of, run_id_of, stdout_of, value_of, verdict_pairs, worktree_of, write_contract, write_design,
+    DESIGN_FILE, HEALTH_PER_CORE_OPEN, IMPLEMENT, RC_BLOCKED,
 };
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -2108,6 +2108,186 @@ fn pipe_dispatch_gated_pass_flagless_driver_leaves_its_own_run_for_the_next_turn
     assert_eq!(stdout_of(&manual).trim_end(), resumed_line(1), "手動の 1 周は同じ便を起こす（{}）", told(&manual));
     assert_eq!(stage_reached(&state, &id, "Landed"), 1, "自走で着地まで（段の並び: {}）", stages_of(&state, &id));
     clean(&[&repo, &state]);
+}
+
+// ───── regate で戻された便の再開（行 (t)・設計 §23・`pipe_dispatch_regated_` 接頭辞） ─────
+//
+// `pipe regate` は段を 1 つ戻す記帳だけを書き、札を書かない（driver は正常に抜けて札を外している）ので、§5 の
+// 起こし直し（札の所有者が死んだ便だけ）では候補に戻らなかった（実測 2026-09-23: 手動の 1 周で `resumed:0`）。
+// 列は「段が戻った ∧ 最新の gate の後に regate の記帳 ∧ 札が無いか所有者が死んでいる」便を `--drive` 付きの
+// resume で起こす。段は既存の helper と同じ字面で数える（段の型の変種を名指さない）。
+
+/// 便の `RunStage` のうち段が `stage` で `detail` が `detail` で始まる記帳の件数（いま数えるだけ・空は条件なし）。
+fn run_stages(state: &Path, id: &str, stage: &str, detail: &str) -> usize {
+    fs::read_to_string(state.join("fleet").join("events.jsonl"))
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| line.contains("\"kind\":\"RunStage\""))
+        .filter(|line| line.contains(&format!("\"stage\":\"{stage}\"")))
+        .filter(|line| line.contains(&format!("\"run\":\"{id}\"")))
+        .filter(|line| detail.is_empty() || line.contains(&format!("\"detail\":\"{detail}")))
+        .count()
+}
+
+/// gate の判定の `Gated` の記帳の件数（`detail` が `verdict:`・着地の窓の `turn:` の記帳を数えない）。着地の追随が
+/// 前周の PASS を引き継いで書く同じ形の記帳は `verify.jsonl` の `"skipped":"regate"` の record 1 本につき 1 件引く。
+fn gate_runs(state: &Path, id: &str) -> usize {
+    let carried = fs::read_to_string(state.join("pipe").join(id).join("verify.jsonl"))
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| line.contains("\"skipped\":\"regate\""))
+        .count();
+    run_stages(state, id, "Gated", "verdict:").saturating_sub(carried)
+}
+
+/// `pipe regate` を 1 回撃ち、rc 0 の 1 行で段が戻ったことを確かめる。
+fn regate_run(repo: &Path, state: &Path, id: &str) {
+    let out = run_pipe(&[
+        "regate", "--run", id, "--reason", "裁定: 器の一過性の赤（契約の赤でない）",
+        "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "regate は rc 0（{}）", told(&out));
+    assert_eq!(stdout_of(&out).trim_end(), format!("regate: run={id} from=Gated to=Implemented"), "1 行（{}）", told(&out));
+}
+
+/// 判定 FAIL の `Gated` の便を置いて regate で戻す（札は無い）。
+fn regated_without_ticket(repo: &Path, state: &Path) -> String {
+    let id = gated_without_ticket(repo, state, "FAIL");
+    regate_run(repo, state, &id);
+    id
+}
+
+/// (§23 (a)) 札の無い regate 済みの便は手動の 1 周で `--drive` 付きの resume で起こされ（`resumed:1`）、`Gated` の
+/// 記帳が 1 件増えて `Landed` まで進む。base は `resumed:0`（機能不在）。
+#[test]
+fn pipe_dispatch_regated_run_without_a_ticket_is_resumed_to_landed() {
+    let (repo, state) = repo_with_state();
+    let id = regated_without_ticket(&repo, &state);
+    let gated = gate_runs(&state, &id);
+    let out = waiting_turn(&repo, &state);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "1 周は rc 0（{}）", told(&out));
+    assert_eq!(stdout_of(&out).trim_end(), resumed_line(1), "regate 済みの便を 1 本起こす（{}）", told(&out));
+    assert_eq!(stage_reached(&state, &id, "Landed"), 1, "着地まで（段の並び: {}）", stages_of(&state, &id));
+    assert_eq!(gate_runs(&state, &id), gated + 1, "gate をもう 1 周（段の並び: {}）", stages_of(&state, &id));
+    clean(&[&repo, &state]);
+}
+
+/// (§23 (b)) 札の所有者が死んでいる判定 FAIL の `Gated` の便は regate を通って worktree の path・HEAD・判定の
+/// verdict が変わらず、続く手動の 1 周は `resumed:1`（二重起動 0）で `Gated` が 1 件だけ増え、死んだ札は外れる。
+#[test]
+fn pipe_dispatch_regated_dead_ticket_keeps_three_records_and_resumes_once() {
+    let (repo, state) = repo_with_state();
+    let id = gated_without_ticket(&repo, &state, "FAIL");
+    put_dead_ticket(&state, &id);
+    let ticket = state.join("pipe").join(&id).join("driver");
+    let worktree = worktree_of(&repo, &id);
+    let head = git(&worktree, &["rev-parse", "HEAD"]);
+    regate_run(&repo, &state, &id);
+    assert!(worktree.is_dir(), "worktree の path は同じ");
+    assert_eq!(git(&worktree, &["rev-parse", "HEAD"]), head, "worktree の HEAD は動かない");
+    assert_eq!(value_of(&verdict_pairs(&state, &id), "verdict"), "FAIL", "判定の verdict は書き換えない");
+    let gated = gate_runs(&state, &id);
+    let out = waiting_turn(&repo, &state);
+    assert_eq!(stdout_of(&out).trim_end(), resumed_line(1), "起こすのは 1 本（{}）", told(&out));
+    assert!(gone(&ticket), "継いだ resume が死んだ札を外す（段の並び: {}）", stages_of(&state, &id));
+    assert_eq!(stage_reached(&state, &id, "Landed"), 1, "着地まで（段の並び: {}）", stages_of(&state, &id));
+    assert_eq!(gate_runs(&state, &id), gated + 1, "Gated は 1 件だけ増える（段の並び: {}）", stages_of(&state, &id));
+    clean(&[&repo, &state]);
+}
+
+/// (§23 (c)) regate の後に PASS の gate を通し、main を進めて `pipe follow` で戻した便（札なし）は起こさない
+/// （最新の `Gated` より後ろに regate の記帳が無い）。
+#[test]
+fn pipe_dispatch_regated_then_gated_and_followed_run_is_left_alone() {
+    let (repo, state) = repo_with_state();
+    let id = regated_without_ticket(&repo, &state);
+    let lens = fake_lens(&state.join("regated-pass-lens"), &lens_verdict("PASS"));
+    let passed = gate_once(&repo, &state, &id, Some(&lens));
+    assert_eq!(passed.status.code(), Some(i32::from(RC_OK)), "regate の後の gate は PASS（{}）", told(&passed));
+    fs::write(repo.join("moved.txt"), "moved\n").unwrap_or_else(|err| panic!("別便の変更を書ける: {err}"));
+    git(&repo, &["add", "moved.txt"]);
+    git(&repo, &["commit", "-q", "-m", "other"]);
+    let followed = run_pipe(&[
+        "follow", "--run", &id, "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+    ]);
+    assert_eq!(followed.status.code(), Some(i32::from(RC_OK)), "follow は rc 0（{}）", told(&followed));
+    let before = kind_count(&state, &id, vessel::fleet::EventKind::RunStage);
+    let out = waiting_turn(&repo, &state);
+    assert_eq!(stdout_of(&out).trim_end(), resumed_line(0), "gate を通った後の便は起こさない（{}）", told(&out));
+    assert_eq!(not_reached(&state, &id, "Landed"), 0, "着地しない（段の並び: {}）", stages_of(&state, &id));
+    assert_eq!(kind_count(&state, &id, vessel::fleet::EventKind::RunStage), before, "段を動かさない");
+    clean(&[&repo, &state]);
+}
+
+/// (§23 (d)) 札の所有者が生きている regate 済みの便と、札が在るのに読めない regate 済みの便は起こさず札も触らない
+/// （母集団 = 札の 2 値・(a)(b) と合わせて 4 値）。
+#[test]
+fn pipe_dispatch_regated_live_or_unreadable_ticket_is_left_alone() {
+    for (form, body) in [("live", format!("{}\n", std::process::id())), ("unreadable", "not-a-pid\n".to_owned())] {
+        let (repo, state) = repo_with_state();
+        let id = regated_without_ticket(&repo, &state);
+        put_ticket_body(&state, &id, &body);
+        let before = kind_count(&state, &id, vessel::fleet::EventKind::RunStage);
+        let out = waiting_turn(&repo, &state);
+        assert_eq!(stdout_of(&out).trim_end(), resumed_line(0), "{form}: 起こさない（{}）", told(&out));
+        assert_eq!(not_reached(&state, &id, "Gated"), 1, "{form}: gate を撃たない（段の並び: {}）", stages_of(&state, &id));
+        assert_eq!(kind_count(&state, &id, vessel::fleet::EventKind::RunStage), before, "{form}: 段を動かさない");
+        let kept = fs::read_to_string(state.join("pipe").join(&id).join("driver")).ok();
+        assert_eq!(kept.as_deref(), Some(body.as_str()), "{form}: 札は触らない");
+        clean(&[&repo, &state]);
+    }
+}
+
+/// (§23 (e)) 段を前へ進めなかった driver の終端の 1 周は regate 済みの便を起こさず、その後の手動の 1 周は起こす。
+///
+/// 便 B（行 b）を INCONCLUSIVE の `Gated` に置き、INCONCLUSIVE の lens で `--drive` の resume を撃つ（`no-progress`）。
+/// 同じ置き場の便 A（行 a・判定 FAIL を regate で戻した・札なし）は、その終端の 1 周では動かない。
+#[test]
+fn pipe_dispatch_regated_no_progress_driver_turn_leaves_it_for_the_manual_turn() {
+    let (repo, state) = repo_with_state();
+    two_rows(&repo);
+    let regated = gated_bead(&repo, &state, "a", "s2-toy.1", "FAIL");
+    regate_run(&repo, &state, &regated);
+    let other = gated_bead(&repo, &state, "b", "s2-toy.2", "INCONCLUSIVE");
+    let unsure = fake_lens(&state.join("regated-unsure-lens"), &lens_verdict("INCONCLUSIVE"));
+    let out = resume_once(&repo, &state, &other, &unsure, true);
+    assert_eq!(
+        stdout_of(&out).lines().last(),
+        Some(format!("{} drive=no-progress", resumed_line(0)).as_str()),
+        "段が動かなかった driver の 1 周は A を起こさない（{}）",
+        told(&out)
+    );
+    assert_eq!(not_reached(&state, &regated, "Gated"), 1, "A は gate を撃たれない（段の並び: {}）", stages_of(&state, &regated));
+    let manual = waiting_turn(&repo, &state);
+    assert_eq!(stdout_of(&manual).trim_end(), resumed_line(1), "手動の 1 周は A を起こす（{}）", told(&manual));
+    assert_eq!(stage_reached(&state, &regated, "Landed"), 1, "A は自走で着地まで（段の並び: {}）", stages_of(&state, &regated));
+    clean(&[&repo, &state]);
+}
+
+/// (§23 (f)・AC47 の自動の regate 0/K) 判定 FAIL の `Gated` の便（札なし・札の所有者が死んでいる の 2 形）に regate を
+/// 撃たずに手動の 1 周を K 回撃っても、どの周も `resumed:0` で `Implemented` の記帳は 1 件も増えない。
+#[test]
+fn pipe_dispatch_regated_none_without_a_ruling_over_k_turns() {
+    const K: usize = 3;
+    for form in ["absent", "dead"] {
+        let (repo, state) = repo_with_state();
+        let id = gated_without_ticket(&repo, &state, "FAIL");
+        if form == "dead" {
+            put_dead_ticket(&state, &id);
+        }
+        let implemented_before = run_stages(&state, &id, "Implemented", "");
+        for turn in 1..=K {
+            let out = waiting_turn(&repo, &state);
+            assert_eq!(stdout_of(&out).trim_end(), resumed_line(0), "{form}: 周 {turn}/{K} は起こさない（{}）", told(&out));
+        }
+        assert_eq!(
+            (form, K, run_stages(&state, &id, "Implemented", "")),
+            (form, K, implemented_before),
+            "{form}: K={K} 周で Implemented の記帳は 0 件増（段の並び: {}）",
+            stages_of(&state, &id)
+        );
+        clean(&[&repo, &state]);
+    }
 }
 
 /// 起こした事実の印の行の字面（`DispatchMark` の kind と `launched` の値・器の字面を借りない）。

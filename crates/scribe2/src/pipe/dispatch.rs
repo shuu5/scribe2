@@ -15,11 +15,12 @@ use super::contract::Contract;
 use super::gate::{Limits, Verdict};
 use super::health;
 use super::land::verdict_of;
+use super::regate::regated_since_gate;
 use super::table::Pointer;
 use super::{current, Ticket};
 use crate::cli_outcome::Outcome;
 use crate::fleet::store;
-use crate::fleet::{Event, EventKind, Mark, Stage, State, SCHEMA, STAGES};
+use crate::fleet::{replay, Event, EventKind, Mark, Stage, State, SCHEMA, STAGES};
 use crate::name::NAME;
 use crate::rules::manifest::Manifest;
 use crate::seat::ledger;
@@ -668,20 +669,40 @@ const WAITING: [Stage; 2] = [Stage::Blocked, Stage::Questioned];
 /// 居ないと測れた便）。閉じたままの便は今までどおり候補にしない。PASS の `Gated` の枝も同じ `gated` の絞りを
 /// 受ける（§15「§13 の絞りをそのまま受ける」）——この候補の札は起こす前も後も無いので、§5 の止め金
 /// （resume が抜けると札が消えて候補から落ちる）が効かない。
+///
+/// **regate で `Implemented` へ戻された便**も同じ `gated` の絞りで候補にする（[`regated`]・§23・FR68 の 4 種目）。
+/// event の列は置き場から 1 回だけ読み、便の表と regate の記帳の読みに同じ列を渡す（表と列を食い違わせない）。
 fn revivals(input: &Input<'_>, gated: bool) -> Vec<Revive> {
-    let Ok(state) = current(input.state_dir) else {
+    let Ok(events) = store::read_all(input.state_dir) else {
         return Vec::new();
     };
+    let state = replay(&events);
     state
         .runs
         .iter()
         .filter(|(id, run)| live(input.state_dir, id, run.stage) == Some(true))
         .filter(|(id, run)| match WAITING.contains(&run.stage) {
-            false => super::driver_is_dead(input.state_dir, id) || (gated && passed_gate(input, id, run.stage)),
+            false => {
+                super::driver_is_dead(input.state_dir, id)
+                    || (gated && passed_gate(input, id, run.stage))
+                    || (gated && regated(input.state_dir, &events, id, run.stage))
+            }
             true => gated && self::gated(input.state_dir, &state, id),
         })
         .map(|(id, _)| revive_of(input, id))
         .collect()
+}
+
+/// regate で戻され、その後 gate を通っていない便か（段が `Implemented` ∧ 最新の `Gated` より後ろに regate の
+/// 記帳 ∧ 札が無いか所有者が死んでいる・設計 §23・FR68 の 4 種目）。
+///
+/// regate の記帳の読みは regate の口と同じ 1 本（[`regated_since_gate`]・C2）。札は §13 と同じ 4 値で読み、
+/// `Live` / `Unreadable` は触らない（測れないを「居ない」に読み替えない）。regate の記帳を持たない `Implemented`
+/// の便と、regate の後に `Gated` を経た便（追随で戻った便を含む）は候補にしない（§5 の「札の無い便は触らない」）。
+fn regated(state_dir: &Path, events: &[Event], id: &str, stage: Stage) -> bool {
+    stage == Stage::Implemented
+        && regated_since_gate(events, id)
+        && matches!(super::driver_ticket(state_dir, id), Ticket::Absent | Ticket::Dead)
 }
 
 /// 席が測り直して PASS になった `Gated` の便か（`Gated` ∧ verdict が PASS ∧ 札が無いか所有者が死んでいる・
