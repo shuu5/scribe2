@@ -268,6 +268,15 @@ pub enum RuleKind {
     /// host の破壊防止の見張りの rm の守る集合（設計 vessel-hook.md §11 行 b / c）。値は守る集合の記号の列（各語を
     /// [`crate::hook::host_guard::Protected`] で引く）。id は `host_guard.rm` の 1 行。
     HostGuardRmProtected,
+    /// 管理 tick の timer の周期（秒・設計 seat-heartbeat.md §2 形 5・ADR-0058 §2）。unit を書く口が読み、tick の判定は
+    /// 読むだけで使わない（行が読めない周は `no-rule`）。
+    SeatTickIntervalS,
+    /// 管理 tick の初段の待ち・黙りの閾値・Busy の古さの 3 役（秒・[`crate::seat::tick`]）。
+    SeatTickStaleS,
+    /// 合図の梯子の係数（段 n の待ち = [`Self::SeatTickStaleS`] × 係数 ^ n・飽和演算）。
+    SeatPointerBackoffFactor,
+    /// 合図の梯子の上限（秒）。段の候補の待ちがこの値を超える段は送らない（`stopped`）。
+    SeatPointerBackoffMaxS,
 }
 
 /// [`RuleKind`] の全 variant。parity test の母集団である。
@@ -334,6 +343,10 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::LedgerDeniedWrites,
     RuleKind::HostGuardDeniedCommands,
     RuleKind::HostGuardRmProtected,
+    RuleKind::SeatTickIntervalS,
+    RuleKind::SeatTickStaleS,
+    RuleKind::SeatPointerBackoffFactor,
+    RuleKind::SeatPointerBackoffMaxS,
 ];
 
 impl RuleKind {
@@ -389,10 +402,8 @@ impl RuleKind {
             Self::RoleCapabilities => "RoleCapabilities",
             Self::PipeSizeSLines => "PipeSizeSLines", Self::PipeSizeMLines => "PipeSizeMLines",
             Self::PipeSizeLLines => "PipeSizeLLines",
-            Self::RunnerModel => "RunnerModel",
-            Self::RunnerEffort => "RunnerEffort",
-            Self::RoleModel => "RoleModel",
-            Self::RoleEffort => "RoleEffort",
+            Self::RunnerModel => "RunnerModel", Self::RunnerEffort => "RunnerEffort",
+            Self::RoleModel => "RoleModel", Self::RoleEffort => "RoleEffort",
             Self::ReviewSameKindStop => "ReviewSameKindStop",
             Self::LandTrainMax => "LandTrainMax",
             Self::PipeMaxLive => "PipeMaxLive",
@@ -400,6 +411,9 @@ impl RuleKind {
             Self::FlipMarksPerPr => "FlipMarksPerPr",
             Self::LedgerDeniedWrites => "LedgerDeniedWrites",
             Self::HostGuardDeniedCommands => "HostGuardDeniedCommands", Self::HostGuardRmProtected => "HostGuardRmProtected",
+            // 管理 tick の 4 kind も 2 行に畳み、対で読む model と effort の 2 組も 1 行ずつに畳む（同じ上限）。
+            Self::SeatTickIntervalS => "SeatTickIntervalS", Self::SeatTickStaleS => "SeatTickStaleS",
+            Self::SeatPointerBackoffFactor => "SeatPointerBackoffFactor", Self::SeatPointerBackoffMaxS => "SeatPointerBackoffMaxS",
         }
     }
 
@@ -447,6 +461,7 @@ impl RuleKind {
             | Self::LandTrainMax
             | Self::PipeMaxLive
             | Self::FlipMarksPerPr
+            | Self::SeatTickIntervalS | Self::SeatTickStaleS | Self::SeatPointerBackoffFactor | Self::SeatPointerBackoffMaxS
             | Self::AccountSelection => ValueShape::Int,
             Self::DialogueSurface
             | Self::RunnerModel
