@@ -126,6 +126,9 @@ pub enum RuleKind {
     FnArgs,
     /// 行の数え方の幅（文字）。これを超える行は ceil(文字数 ÷ 幅) 行に数える（R-C4-1〜3 と上限の余地が同じ式）。
     LineWidth,
+    /// 境界 crate の `src` の本体の総行数の上限（行・R-C4-5・設計 core-boundary.md §3 / §9・ADR-0062）。core の外へ判定を
+    /// 押し出して core-lines から逃げる形を塞ぐ。読み手は xtask 側（core は値を消費しない）。
+    BoundaryLines,
     /// 承認の受理面の identity。
     DialogueSurface,
     /// 成熟条件（停止・履歴として残す）。
@@ -293,6 +296,7 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::FnComplexity,
     RuleKind::FnArgs,
     RuleKind::LineWidth,
+    RuleKind::BoundaryLines,
     RuleKind::DialogueSurface,
     RuleKind::MaturityCondition,
     RuleKind::AccountSelection,
@@ -365,7 +369,7 @@ impl RuleKind {
             Self::FnLines => "FnLines",
             Self::FnComplexity => "FnComplexity",
             Self::FnArgs => "FnArgs",
-            Self::LineWidth => "LineWidth",
+            Self::LineWidth => "LineWidth", Self::BoundaryLines => "BoundaryLines",
             Self::DialogueSurface => "DialogueSurface",
             Self::MaturityCondition => "MaturityCondition",
             Self::AccountSelection => "AccountSelection",
@@ -432,7 +436,7 @@ impl RuleKind {
             | Self::FnLines
             | Self::FnComplexity
             | Self::FnArgs
-            | Self::LineWidth
+            | Self::LineWidth | Self::BoundaryLines
             | Self::DepBudget
             | Self::DepPerPr
             | Self::CheckDeltaMs

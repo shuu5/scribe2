@@ -130,11 +130,12 @@ fn write_healthy(dir: &Path) {
     for (rel, body) in crate::check_facts::e2e_fixture() {
         write_at(dir, &format!("crates/{FIXTURE_CORE}/{rel}"), body);
     }
-    // claude の構築点も同じ（claude-spawn-points は見失った形を違反に倒す・`s2-07l.101`）。
+    // claude の構築点も同じ（claude-spawn-points は見失った形を違反に倒す・`s2-07l.101`）。構築は実 repo と同じ起動の
+    // 記述（`Invocation::new(`）で、std の Command を本体に持たない（core-spawn は本体の 1 件で deny・ADR-0062）。
     write_at(
         dir,
         &format!("crates/{FIXTURE_CORE}/src/headless/mod.rs"),
-        "pub fn build(claude: &str) -> std::process::Command {\n    let mut cmd = std::process::Command::new(claude);\n    cmd.arg(\"--setting-sources\").arg(\"\").arg(\"--strict-mcp-config\");\n    cmd\n}\n",
+        "pub fn build(claude: &str) -> Invocation {\n    let mut cmd = Invocation::new(claude);\n    cmd.arg(\"--setting-sources\").arg(\"\").arg(\"--strict-mcp-config\");\n    cmd\n}\n",
     );
     // 極性一覧の snapshot も同じ（polarity は不在を違反に倒す・`s2-07l.25`）。
     write_at(
@@ -176,7 +177,7 @@ fn real_limits() -> Limits {
 }
 
 /// fixture の rules manifest。`allow` に与えた path が例外行に載る。役割の行は orchestrator 1 つ（権能 2 つ）。
-/// 閾値の 11 行（R-C4-* / R-C4.line-width / R-C13-1〔.per-pr / .check-delta-ms〕/ gate.tmux_test_threads）は
+/// 閾値の 12 行（R-C4-* / R-C4.line-width / R-C13-1〔.per-pr / .check-delta-ms〕/ gate.tmux_test_threads）は
 /// 現物と同じ値で持つ（`Limits::read` が無い行を拒むので、fixture も実 repo が持つものを持つ）。
 fn rules_manifest(allow: &[&str]) -> String {
     let items = allow
@@ -184,9 +185,12 @@ fn rules_manifest(allow: &[&str]) -> String {
         .map(|path| format!("\"{path}\""))
         .collect::<Vec<String>>()
         .join(", ");
-    let limits = real_limits();
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join(RULES_REL);
+    let text = fs::read_to_string(&path).unwrap_or_else(|err| panic!("{} を読めない: {err}", path.display()));
+    let (limits, boundary_lines) = Limits::read_with_boundary_lines(&text).unwrap_or_else(|reason| panic!("{reason}"));
     let rows = [
         ("R-C4-1", "CoreLines", limits.core_lines),
+        ("R-C4-5", "BoundaryLines", boundary_lines),
         ("R-C4-2", "ModuleLines", limits.file_lines),
         ("R-C4-3", "TestSrcRatioPct", limits.test_src_ratio_pct),
         ("R-C4-4.fn-lines", "FnLines", limits.fn_lines),
@@ -303,7 +307,8 @@ fn check_passes_on_workspace() {
 }
 
 /// 判定行の外形の pin（repo root で撃ったときの形）。値は [`shape`] で伏せてある。
-const SUMMARY_PIN: &str = "xtask check: ok core-lines=<v>/<v> core-spawn=<v>/<v> file-lines=<v>/<v> \
+const SUMMARY_PIN: &str = "xtask check: ok core-lines=<v>/<v> core-spawn=<v>/<v> boundary-spawn=<v>/<v> \
+    boundary-lines=<v>/<v> file-lines=<v>/<v> \
     test-src-ratio=<v>/<v> name-literal=<v> manifest-name=<v> manifest-version=<v>.<v>.<v> \
     lints-set=<v> lints-optin=<v>/<v> deps-empty=<v> clippy-thresholds=<v> \
     nextest-tmux-group=<v> tests=<v> files=<v> dep-budget=<v>/<v> \

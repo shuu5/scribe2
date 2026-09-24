@@ -12,8 +12,9 @@ use crate::toml_lite::{quoted, sections};
 /// `sections` は `[` を 1 つだけ剥がすので、array-of-tables は `[rule` になる。
 const RULE_HEADER: &str = "[rule";
 
-/// manifest の行 id ↔ [`Limits`] の field。`read` が要求する 11 本（欠けは Err）。
+/// manifest の行 id ↔ [`Limits`] の field と境界 crate の上限。`read` が要求する 12 本（欠けは Err）。
 const CORE_LINES: &str = "R-C4-1";
+const BOUNDARY_LINES: &str = "R-C4-5";
 const FILE_LINES: &str = "R-C4-2";
 const TEST_SRC_RATIO_PCT: &str = "R-C4-3";
 const FN_LINES: &str = "R-C4-4.fn-lines";
@@ -58,13 +59,19 @@ pub(crate) struct Limits {
 }
 
 impl Limits {
-    /// manifest の本文から 11 値を読む。
+    /// manifest の本文から 12 値を読み、[`Limits`] の 11 値を返す（R-C4-5 も必須の行として読む＝[`Self::read_with_boundary_lines`]）。
+    pub(crate) fn read(manifest_text: &str) -> Result<Self, String> {
+        Self::read_with_boundary_lines(manifest_text).map(|(limits, _)| limits)
+    }
+
+    /// manifest の本文から 12 値を読み、[`Limits`] と境界 crate の src の本体の上限（R-C4-5・boundary-lines が読む）を返す。
     ///
-    /// 11 本のどれかが無い / `value` が整数でない / `enabled = true` でない周は `Err`
+    /// R-C4-5 を field に持たないのは、[`Limits`] を literal で組む歯（deps-delta）を動かさないためである（読み手が要求する
+    /// 行は 12 本で同じ）。12 本のどれかが無い / `value` が整数でない / `enabled = true` でない周は `Err`
     /// （測れないを緑にしない・SRS FR18）。不備は**全件**を集めて 1 つの reason に畳み、
     /// 各件が行 id と（本文に在る行なら）行番号を名指す。`enabled` の省略も `false` と
     /// 同じく拒む——省略を true に埋めると書き忘れた行が黙って効く側へ倒れる。
-    pub(crate) fn read(manifest_text: &str) -> Result<Self, String> {
+    pub(crate) fn read_with_boundary_lines(manifest_text: &str) -> Result<(Self, u64), String> {
         let mut problems = Vec::new();
         let mut value_of = |id: &str| -> u64 {
             match int_rule(manifest_text, id) {
@@ -88,8 +95,9 @@ impl Limits {
             check_delta_ms: value_of(CHECK_DELTA_MS),
             tmux_test_threads: value_of(TMUX_TEST_THREADS),
         };
+        let boundary_lines = value_of(BOUNDARY_LINES);
         if problems.is_empty() {
-            Ok(limits)
+            Ok((limits, boundary_lines))
         } else {
             Err(format!("rules manifest の閾値を読めない: {}", problems.join("・")))
         }
@@ -98,7 +106,7 @@ impl Limits {
 
 /// `cargo xtask flip-check` が読む免除経路の上限（manifest の `flip.*` 行・設計 pipeline.md §7・`s2-07l.170`）。
 ///
-/// [`Limits`] と別の型に置くのは、[`Limits::read`] の 11 本を要求する読み手（check / deps-delta と、その歯の
+/// [`Limits`] と別の型に置くのは、[`Limits::read`] の 12 本を要求する読み手（check / deps-delta と、その歯の
 /// fixture）を動かさずに、flip-check だけが要る 2 本を同じ極性（欠け・不発効・形違いは `Err`）で読むためである。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FlipLimits {
@@ -269,16 +277,17 @@ mod tests {
         raw_field(text, id, "ruling").and_then(|value| quoted(&value))
     }
 
-    /// 現物の manifest で [`Limits::read`] が 11 値を返し、`core_lines` / `file_lines` が
+    /// 現物の manifest で [`Limits::read_with_boundary_lines`] が 12 値を返し、`core_lines` / `file_lines` が
     /// R-C4-1 / R-C4-2 の行の値と等しい（憲法 C14.2・const を消して読み手 1 本にした形）。
     /// flip-check の 2 行（`flip.docs_only_faces` / `flip.marks_per_pr`・`s2-07l.170`）も [`FlipLimits::read`] で
     /// 欠け無く読め、値は行の現物と等しい（読み手が要求する本数は行の本数に追随する）。
     #[test]
     fn limits_match_rules_manifest() {
         let text = manifest_text();
-        let limits = Limits::read(&text).unwrap_or_else(|reason| panic!("{reason}"));
-        // field ↔ 行 id の 11 対（`read` の const と同じ対応・field 名の取り違えを行 id で名指す）。
+        let (limits, boundary_lines) = Limits::read_with_boundary_lines(&text).unwrap_or_else(|reason| panic!("{reason}"));
+        // 値 ↔ 行 id の 12 対（`read` の const と同じ対応・field 名の取り違えを行 id で名指す）。
         let pairs = [
+            (boundary_lines, "R-C4-5"),
             (limits.core_lines, "R-C4-1"),
             (limits.file_lines, "R-C4-2"),
             (limits.test_src_ratio_pct, "R-C4-3"),
@@ -291,10 +300,12 @@ mod tests {
             (limits.check_delta_ms, "R-C13-1.check-delta-ms"),
             (limits.tmux_test_threads, "gate.tmux_test_threads"),
         ];
+        assert_eq!(pairs.len(), 12, "読む値の個数（`.600` で +1〔R-C4-5〕）");
         for (field, id) in pairs {
             assert_eq!(Some(field), int_value(&text, id), "{id} の行と field");
         }
-        // 11 値はどれも 0 ではない（`read` が不備を 0 で埋めて Ok に化けていない）。
+        // 12 値はどれも 0 ではない（`read` が不備を 0 で埋めて Ok に化けていない）。
+        assert!(boundary_lines > 0, "上限 0 は境界 crate の本体を 1 行も許さない");
         assert!(limits.core_lines > 0 && limits.file_lines > 0 && limits.dep_budget > 0, "{limits:?}");
         assert!(limits.dep_per_pr > 0 && limits.check_delta_ms > 0, "0 は依存を 1 本も足せない: {limits:?}");
         assert!(limits.line_width > 0, "幅 0 は数え方を縮退させる: {limits:?}");
@@ -313,11 +324,12 @@ mod tests {
         assert!(FlipLimits::read(&empty).err().is_some_and(|reason| reason.contains("flip.docs_only_faces")), "空の列");
     }
 
-    /// 11 行の読み手用 fixture。`drop` に与えた行だけ `value` を落とし、`disabled` の行は
+    /// 12 行の読み手用 fixture。`drop` に与えた行だけ `value` を落とし、`disabled` の行は
     /// `enabled = false` にする。
     fn limits_fixture(drop: Option<&str>, disabled: Option<&str>) -> String {
         let rows = [
             ("R-C4-1", 40_000),
+            ("R-C4-5", 316),
             ("R-C4-2", 1_500),
             ("R-C4-3", 100),
             ("R-C4-4.fn-lines", 60),
@@ -341,7 +353,27 @@ mod tests {
         text
     }
 
-    /// 11 行そろった fixture は読め、`value = 60` を欠いた fixture は `Err` が行 id を名指す。
+    /// 現物の manifest の R-C4-5（境界 crate の src の本体の上限・kind `BoundaryLines`・設計 core-boundary.md §9 行 i）を
+    /// [`Limits::read_with_boundary_lines`] が行の値のまま返し、行を欠いた・不発効にした manifest は [`Limits::read`] も
+    /// `Err` で R-C4-5 を名指す（12 本目の必須の行・他の 11 本と同じ極性）。
+    #[test]
+    fn limits_read_carries_the_boundary_lines_row() {
+        let text = manifest_text();
+        let (_, boundary_lines) = Limits::read_with_boundary_lines(&text).unwrap_or_else(|reason| panic!("{reason}"));
+        assert_eq!(Some(boundary_lines), int_value(&text, "R-C4-5"), "R-C4-5 の行の値");
+        assert_eq!(raw_field(&text, "R-C4-5", "kind").and_then(|kind| quoted(&kind)).as_deref(), Some("BoundaryLines"), "kind");
+        let dropped = text.replace("id = \"R-C4-5\"", "id = \"R-C4-9\"");
+        assert!(Limits::read(&dropped).err().is_some_and(|reason| reason.contains("R-C4-5")), "行の欠けは Err");
+        let fixture = limits_fixture(None, Some("R-C4-5"));
+        assert!(
+            Limits::read(&fixture).err().is_some_and(|reason| reason.contains("R-C4-5") && reason.contains("enabled")),
+            "不発効は Err"
+        );
+        let whole = Limits::read_with_boundary_lines(&limits_fixture(None, None)).map(|(_, value)| value);
+        assert_eq!(whole, Ok(316), "fixture の値");
+    }
+
+    /// 12 行そろった fixture は読め、`value = 60` を欠いた fixture は `Err` が行 id を名指す。
     #[test]
     fn limits_read_names_the_row_missing_its_value() {
         let whole = Limits::read(&limits_fixture(None, None)).unwrap_or_else(|reason| panic!("{reason}"));
@@ -353,7 +385,7 @@ mod tests {
         let reason = missing.err().unwrap_or_default();
         assert!(reason.contains("R-C4-4.fn-lines"), "欠いた行 id を名指す: {reason}");
         assert!(!reason.contains("R-C4-1"), "他の行は名指さない: {reason}");
-        // 行そのものが無い形も同じ（11 本のどれかが無いは Err）。
+        // 行そのものが無い形も同じ（12 本のどれかが無いは Err）。
         let dropped = limits_fixture(None, None).replace("id = \"R-C13-1\"", "id = \"R-C13-9\"");
         assert!(Limits::read(&dropped).err().is_some_and(|reason| reason.contains("R-C13-1")));
     }

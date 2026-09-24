@@ -55,17 +55,21 @@ pub fn inspect(root: &Path) -> Report {
     };
     // 閾値は manifest の 1 面から 1 回だけ読む（憲法 C1・SRS FR17）。読めない周は測れないので
     // 全体を止める（不備を 1 つでも黙って既定値で埋めない・FR18）。
-    let limits = match read_text(&layout.root.join(RULES_REL)).and_then(|text| Limits::read(&text)) {
-        Ok(found) => found,
-        Err(reason) => return blocked(&reason),
-    };
+    let (limits, boundary_lines) =
+        match read_text(&layout.root.join(RULES_REL)).and_then(|text| Limits::read_with_boundary_lines(&text)) {
+            Ok(found) => found,
+            Err(reason) => return blocked(&reason),
+        };
     let mut measured = vec![
         crate::check_sizes::measure_core_lines(&layout, &files, &limits),
         crate::check_sizes::measure_core_spawn(&layout, &files),
-        crate::check_sizes::measure_file_lines(&files, &limits),
-        crate::check_sizes::measure_test_src_ratio(&files, &limits),
-        crate::check_sizes::measure_name_literal(&layout, &files),
     ];
+    // 境界 crate の 2 本は core-spawn の直後（境界 crate の dir が無い木は出さない・設計 core-boundary.md §9 行 i）。
+    measured.extend(crate::check_sizes::measure_boundary_spawn(&layout, &files));
+    measured.extend(crate::check_sizes::measure_boundary_lines(&layout, &files, &limits, boundary_lines));
+    measured.push(crate::check_sizes::measure_file_lines(&files, &limits));
+    measured.push(crate::check_sizes::measure_test_src_ratio(&files, &limits));
+    measured.push(crate::check_sizes::measure_name_literal(&layout, &files));
     measured.extend(crate::check_facts::measure_manifests(&layout));
     measured.extend(crate::check_facts::measure_lints(&layout));
     measured.push(crate::check_facts::measure_deps_empty(&layout));

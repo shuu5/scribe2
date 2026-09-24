@@ -66,6 +66,16 @@ enabled = true
 ruling = "user 2026-09-14T06:5xZ"
 ruled_at = "2026-09-14"
 
+# 境界 crate の src の本体の総行数の上限（設計 core-boundary.md §3 / §9 行 i・ADR-0062）。core-lines と同じ切り方と幅で数え、
+# 値は行 i の便の base で測った本体の 1.2 倍の切り上げ。core の外へ判定を押し出して core-lines から逃げる形を塞ぐ。
+[[rule]]
+id = "R-C4-5"
+kind = "BoundaryLines"
+value = 316
+enabled = true
+ruling = "user 2026-09-15T10:07Z"
+ruled_at = "2026-09-15"
+
 # 対話面（憲法 C7・ADR-0022 §2.2）。値は Role の名（承認・回答・go の記帳はこの役割の席からだけ・AC15）。
 
 [[rule]]

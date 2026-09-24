@@ -1695,7 +1695,7 @@ fn rules_embedded_manifest_is_valid_and_covers_all_kinds() {
     // **tracked な `rules/manifest.toml` の全行が受理される**（`parse` は 1 件でも違反が
     // 在れば `Err` を返すので、ここに届いた時点で全行が必須 key を持つ）。母集団を額面に
     // 出すのは、行が黙って落ちた周を「全部読めた」と読み違えないためである。
-    assert_eq!(manifest.rows().len(), 69, "埋め込み manifest の行数（母集団・`.601` で +1〔クラスの語列表〕・`.582` で +4〔管理 tick の行 4 本〕・`.172` で +1〔便ごとの token 消費の検出線 R-C6-1〕・`.574` で +4〔host の見張りの種類ごとの行〕・`.169` で +1〔台帳 write の断る形〕・`.170` で +2〔flip の免除経路の面と札の上限〕・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.478` で -1〔役割の行 2 本が 1 本〕・`.479.1` で -7〔席の自律の行〕・`.479.2` で -3〔作業記憶の行 1 本と棚卸しの行 2 本〕・`.382` で +1〔終端の CI の上限〕・`.433` で +2〔役割の既定の model と effort〕・`.407` で +1〔選定の前計測の鮮度〕・`.396` で +1〔同型の審査 FAIL の停止の回数〕・`.504` の行 x で +2〔器の健康の遮断器の倍率〕・`.428` で +1〔着地の列の上限〕・`.398` で +1〔同時本数の最大値〕・`.491.3` で +3〔群の逼迫の閾値の窓ごとの行〕）");
+    assert_eq!(manifest.rows().len(), 70, "埋め込み manifest の行数（母集団・`.600` で +1〔境界 crate の上限 R-C4-5〕・`.601` で +1〔クラスの語列表〕・`.582` で +4〔管理 tick の行 4 本〕・`.172` で +1〔便ごとの token 消費の検出線 R-C6-1〕・`.574` で +4〔host の見張りの種類ごとの行〕・`.169` で +1〔台帳 write の断る形〕・`.170` で +2〔flip の免除経路の面と札の上限〕・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.478` で -1〔役割の行 2 本が 1 本〕・`.479.1` で -7〔席の自律の行〕・`.479.2` で -3〔作業記憶の行 1 本と棚卸しの行 2 本〕・`.382` で +1〔終端の CI の上限〕・`.433` で +2〔役割の既定の model と effort〕・`.407` で +1〔選定の前計測の鮮度〕・`.396` で +1〔同型の審査 FAIL の停止の回数〕・`.504` の行 x で +2〔器の健康の遮断器の倍率〕・`.428` で +1〔着地の列の上限〕・`.398` で +1〔同時本数の最大値〕・`.491.3` で +3〔群の逼迫の閾値の窓ごとの行〕）");
     for kind in ALL {
         let covered = manifest.rows().iter().any(|row| row.kind == *kind);
         assert!(covered, "{} の行が manifest に無い", kind.as_str());
@@ -1868,7 +1868,7 @@ fn rules_embedded_manifest_declares_one_capability_row_per_role() {
     assert!(ALL.contains(&RuleKind::RoleCapabilities), "ALL に在る（末尾は `.601` のクラスの語列表）");
     assert_eq!(RuleKind::parse("RoleCapabilities"), Some(RuleKind::RoleCapabilities), "kind を字面から引ける");
     let kinds = ALL.len();
-    assert_eq!(kinds, 67, "kind の母集団（`.601` で +1〔クラスの語列表〕・`.582` で +4〔管理 tick の 4 種〕・`.172` で +1〔便ごとの token 消費の検出線〕・`.574` で +2〔host の見張りの語列と rm の守る集合〕・`.169` で +1〔台帳 write の断る形〕・`.170` で +2〔flip の免除経路の面と札の上限〕・`.201` で +1・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.479.2` で -3・`.382` で +1〔終端の CI の上限〕・`.433` で +2〔役割の既定の 2 種〕・`.407` で +1〔選定の前計測の鮮度〕・`.396` で +1〔同型の審査 FAIL の停止の回数〕・`.504` の行 x で +2〔器の健康の遮断器の倍率〕・`.428` で +1〔着地の列の上限〕・`.398` で +1〔同時本数の最大値〕・`.491.3` で +3〔群の逼迫の閾値の 3 種〕）");
+    assert_eq!(kinds, 68, "kind の母集団（`.600` で +1〔境界 crate の上限〕・`.601` で +1〔クラスの語列表〕・`.582` で +4〔管理 tick の 4 種〕・`.172` で +1〔便ごとの token 消費の検出線〕・`.574` で +2〔host の見張りの語列と rm の守る集合〕・`.169` で +1〔台帳 write の断る形〕・`.170` で +2〔flip の免除経路の面と札の上限〕・`.201` で +1・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.479.2` で -3・`.382` で +1〔終端の CI の上限〕・`.433` で +2〔役割の既定の 2 種〕・`.407` で +1〔選定の前計測の鮮度〕・`.396` で +1〔同型の審査 FAIL の停止の回数〕・`.504` の行 x で +2〔器の健康の遮断器の倍率〕・`.428` で +1〔着地の列の上限〕・`.398` で +1〔同時本数の最大値〕・`.491.3` で +3〔群の逼迫の閾値の 3 種〕）");
 }
 
 /// 禁じる語列の行（`runner.denied_commands`・`RuleKind::RunnerDeniedCommands`・裁定 id `user 2026-09-14`・ADR-0025 §2.1・
@@ -1953,6 +1953,26 @@ fn rules_embedded_manifest_declares_the_line_width_row() {
     let at = ALL.iter().position(|kind| *kind == RuleKind::LineWidth);
     let args = ALL.iter().position(|kind| *kind == RuleKind::FnArgs);
     assert_eq!(at, args.map(|found| found + 1), "宣言順は FnArgs の直後");
+}
+
+/// 境界 crate の src の本体の上限の行（`R-C4-5`・`RuleKind::BoundaryLines`・裁定 id `user 2026-09-15T10:07Z`・設計
+/// core-boundary.md §9 行 i・ADR-0062）。**値は manifest が持つ**（C1 / C5）＝行 i の便の base で測った本体 263 行
+/// （幅 120）の 1.2 倍の切り上げ。kind は宣言順で `LineWidth` の直後（R-C4 の行の並び）・値の形は Int。裁定 id は他の
+/// 行と相乗りしない（rules-diff）。
+#[test]
+fn rules_embedded_manifest_declares_boundary_lines_row_with_its_ruling() {
+    let manifest = Manifest::embedded().unwrap_or_else(|errors| panic!("埋め込み manifest が拒まれた: {errors:?}"));
+    let row = manifest.get("R-C4-5").expect("境界 crate の上限の行が在る");
+    assert_eq!(row.value, RuleValue::Int(316), "base の本体 263 行 × 1.2 の切り上げ");
+    assert_eq!((row.kind, row.kind.shape()), (RuleKind::BoundaryLines, ValueShape::Int), "kind と形");
+    assert!(row.enabled, "既定で効く");
+    assert_eq!((row.ruling.as_str(), row.ruled_at.as_str()), ("user 2026-09-15T10:07Z", "2026-09-15"), "裁定 id と裁定日");
+    let shared = manifest.rows().iter().filter(|found| found.ruling == row.ruling).count();
+    assert_eq!(shared, 1, "裁定 id は他の行と相乗りしない");
+    assert_eq!(RuleKind::parse("BoundaryLines"), Some(RuleKind::BoundaryLines), "kind を字面から引ける");
+    let at = ALL.iter().position(|kind| *kind == RuleKind::BoundaryLines);
+    let width = ALL.iter().position(|kind| *kind == RuleKind::LineWidth);
+    assert_eq!(at, width.map(|found| found + 1), "宣言順は LineWidth の直後");
 }
 
 /// 埋め込み manifest の `role.<役割名>` の行の値（名の列・行が無い・列でない周は空＝呼び側の assert が落とす）。

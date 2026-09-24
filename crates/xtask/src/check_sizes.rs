@@ -1,5 +1,5 @@
-//! `cargo xtask check` の**大きさ系 measure**（core-lines / core-spawn / file-lines / test-src-ratio /
-//! name-literal）。母集団は `collect_rs_files` が読んだ `.rs` の列である。
+//! `cargo xtask check` の**大きさ系 measure**（core-lines / core-spawn / boundary-spawn / boundary-lines / file-lines /
+//! test-src-ratio / name-literal）。母集団は `collect_rs_files` が読んだ `.rs` の列である。
 //!
 //! `check.rs` から分けたのは憲法 C4（1 file の上限）のためで、分けた周は**測る内容は 1 つも変えていない**
 //! （`s2-07l.84`・純粋な移動）。判定行の名前・順序・値の書式は不変である。閾値は const でなく
@@ -7,15 +7,23 @@
 //!
 //! core-lines の母集団は core crate の `src` の**本体**（各 file の最初の行頭 `#[cfg(test)]` より前＝
 //! [`SourceFile::split_test_src`] の src 側・in-file の歯は R-C4-3 が数える側で二重計上しない・user 裁定
-//! 2026-09-15・ADR-0033・設計 core-boundary.md §2）。core-spawn は core の `src` で `Command::new` を含む行の
-//! **検出線**（数だけ出す・値を持たない・deny へ倒すのは境界 crate への移動が終わる便・同 §5）。
+//! 2026-09-15・ADR-0033・設計 core-boundary.md §2）。core-spawn は core の `src` の本体で `Command::new` を含む行を
+//! 数え 1 以上を deny、boundary-spawn は境界 crate の `src` の本体で同じ字面を持つ file が 2 本以上を deny、
+//! boundary-lines は境界 crate の `src` の本体を R-C4-5 で縛る（設計 core-boundary.md §9 行 i・ADR-0062）。
 
 use crate::check::{Layout, Measured, SourceFile};
 use crate::limits::Limits;
-use std::path::PathBuf;
+use crate::workspace::is_named_test_file;
+use std::path::{Path, PathBuf};
 
 /// 子 process を起こす字面（core-spawn の母集団・設計 core-boundary.md §4「規則は 1 つ」）。
 const SPAWN_NEEDLE: &str = "Command::new";
+
+/// in-file の歯の始まりの行頭の印（[`SourceFile::split_test_src`] と同じ字面・本体と歯の区間の切れ目）。
+const TEST_MOD_MARK: &str = "#[cfg(test)]";
+
+/// 境界 crate の `src` の本体で `Command::new` を持ってよい file の本数（std の Command の構築は 1 か所・ADR-0062）。
+const BOUNDARY_SPAWN_HOLDERS: usize = 1;
 
 /// 行数（usize）を manifest の値（u64）と同じ型へ（64 bit では損失なし）。
 fn as_u64(count: usize) -> u64 {
@@ -54,23 +62,97 @@ pub(crate) fn measure_core_lines(layout: &Layout, files: &[SourceFile], limits: 
     }
 }
 
-/// core crate の `src` 配下で `Command::new` を含む行の件数と、それを持つ file の数（core-spawn・検出線・
-/// 設計 core-boundary.md §5）。fact は `core-spawn=<件数>/<file 数>` で、**違反は立てない**（値を持たない＝
-/// `R-C12-1` と同型の検出線・純移動の便が件数を N → N−k へ下げる形を pin する材料・deny へ倒すのは最後の
-/// 移動の便）。母集団は file 全体（in-file の歯の中の起動も core に在る限り数える＝module と一緒に動く）。
+/// file の**本体**の行（core-lines と同じ切り方: 最初の行頭 `#[cfg(test)]` より前・名で test の file は 0 行）。
+fn body_lines(file: &SourceFile) -> impl Iterator<Item = &str> {
+    let whole_test = is_named_test_file(&file.path);
+    file.text.lines().take_while(move |line| !whole_test && !line.starts_with(TEST_MOD_MARK))
+}
+
+/// `src` 配下の file ごとの、本体で `Command::new` を含む行の件数（0 の file は載せない・path 順）。
+fn spawn_holders<'a>(src: &Path, files: &'a [SourceFile]) -> Vec<(&'a PathBuf, usize)> {
+    files
+        .iter()
+        .filter(|file| file.path.starts_with(src))
+        .map(|file| (&file.path, body_lines(file).filter(|line| line.contains(SPAWN_NEEDLE)).count()))
+        .filter(|(_, found)| *found > 0)
+        .collect()
+}
+
+/// 起動の site の件数と file 数の fact（`<tag>=<件数>/<file 数>`）。
+fn spawn_fact(tag: &str, holders: &[(&PathBuf, usize)]) -> String {
+    let sites: usize = holders.iter().map(|(_, found)| found).sum();
+    format!("{tag}={sites}/{}", holders.len())
+}
+
+/// core crate の `src` の**本体**で `Command::new` を含む行の件数と、それを持つ file の数（core-spawn・設計
+/// core-boundary.md §9 採る形 9）。fact は `core-spawn=<件数>/<file 数>` で、1 件以上は file ごとに違反を立てる
+/// （core は起動の記述を差し替え口へ渡し、std の Command を構築しない・ADR-0062）。歯の区間の実物と fixture の
+/// 起動は数えない（量は R-C4-3 が縛る）。
 pub(crate) fn measure_core_spawn(layout: &Layout, files: &[SourceFile]) -> Measured {
-    let core_src = layout.core_dir.join("src");
-    let (mut sites, mut holders) = (0_usize, 0_usize);
-    for file in files.iter().filter(|file| file.path.starts_with(&core_src)) {
-        let found = file.text.lines().filter(|line| line.contains(SPAWN_NEEDLE)).count();
-        if found > 0 {
-            holders = holders.saturating_add(1);
-            sites = sites.saturating_add(found);
-        }
+    let holders = spawn_holders(&layout.core_dir.join("src"), files);
+    let violations = holders
+        .iter()
+        .map(|(path, found)| {
+            format!(
+                "core-spawn: {} の本体が Command::new を {found} 行持つ（core は起動の記述を差し替え口へ渡す・ADR-0062）",
+                path.display()
+            )
+        })
+        .collect();
+    Measured {
+        fact: spawn_fact("core-spawn", &holders),
+        violations,
+    }
+}
+
+/// 境界 crate の `src` の**本体**で `Command::new` を含む行の件数と file 数（boundary-spawn・設計 core-boundary.md
+/// §9 採る形 9）。境界 crate の dir が無い木（[`Layout::boundary_dir`] が `None`）は measure を出さない。
+pub(crate) fn measure_boundary_spawn(layout: &Layout, files: &[SourceFile]) -> Option<Measured> {
+    layout.boundary_dir().map(|dir| boundary_spawn_in(&dir.join("src"), files))
+}
+
+/// boundary-spawn の判定（`src` を引数で受ける＝dir の実在を見ない fixture の歯が撃てる形）。fact は
+/// `boundary-spawn=<件数>/<file 数>` で、file 数が [`BOUNDARY_SPAWN_HOLDERS`] を超えると持つ file を名指す違反を立てる
+/// （値を持たない shape 検査で rules 行は持たない）。
+fn boundary_spawn_in(src: &Path, files: &[SourceFile]) -> Measured {
+    let holders = spawn_holders(src, files);
+    let mut violations = Vec::new();
+    if holders.len() > BOUNDARY_SPAWN_HOLDERS {
+        let names: Vec<String> = holders.iter().map(|(path, _)| path.display().to_string()).collect();
+        violations.push(format!(
+            "boundary-spawn: 境界 crate の src の本体で Command::new を持つ file が {} 本（{BOUNDARY_SPAWN_HOLDERS} 本まで・ADR-0062）: {}",
+            holders.len(),
+            names.join(" ")
+        ));
     }
     Measured {
-        fact: format!("core-spawn={sites}/{holders}"),
-        violations: Vec::new(),
+        fact: spawn_fact("boundary-spawn", &holders),
+        violations,
+    }
+}
+
+/// 境界 crate の `src` の**本体**の総行数（boundary-lines・core-lines と同じ切り方と幅・上限は R-C4-5・設計
+/// core-boundary.md §3 / §9）。境界 crate の dir が無い木は measure を出さない。
+pub(crate) fn measure_boundary_lines(layout: &Layout, files: &[SourceFile], limits: &Limits, max: u64) -> Option<Measured> {
+    layout.boundary_dir().map(|dir| boundary_lines_in(&dir.join("src"), files, width_of(limits), max))
+}
+
+/// boundary-lines の判定（`src` を引数で受ける・[`boundary_spawn_in`] と同じ理由）。
+fn boundary_lines_in(src: &Path, files: &[SourceFile], width: usize, max: u64) -> Measured {
+    let total: usize = files
+        .iter()
+        .filter(|file| file.path.starts_with(src))
+        .map(|file| file.split_test_src(width).1)
+        .sum();
+    let mut violations = Vec::new();
+    if as_u64(total) > max {
+        violations.push(format!(
+            "boundary-lines: 境界 crate の src の本体が {total} 行で上限 {max} 行（R-C4-5）を超える"
+        ));
+    }
+    Measured {
+        fact: format!("boundary-lines={total}/{max}"),
+        violations,
     }
 }
 
@@ -155,7 +237,10 @@ pub(crate) fn measure_name_literal(layout: &Layout, files: &[SourceFile]) -> Mea
 
 #[cfg(test)]
 mod tests {
-    use super::{measure_core_lines, measure_core_spawn, measure_test_src_ratio, ratio_violations};
+    use super::{
+        boundary_lines_in, boundary_spawn_in, measure_boundary_lines, measure_boundary_spawn, measure_core_lines, measure_core_spawn,
+        measure_test_src_ratio, ratio_violations,
+    };
     use crate::check::{Layout, SourceFile};
     use crate::limits::Limits;
     use std::path::PathBuf;
@@ -238,24 +323,99 @@ mod tests {
         assert_eq!(measure_core_lines(&layout, &files, &limits(100, 10)).fact, "core-lines=3/100", "本体だけ");
     }
 
-    /// core-spawn は core の `src` で `Command::new` を含む行の件数と file 数を出し、**違反は立てない**（検出線）:
-    /// 2 行持つ file + 歯の区間に 1 行持つ file = 3 件 / 2 file。持たない file と別 member の file は数えない。
-    /// 起動が 0 の木は `0/0`。
+    /// 本体で 2 行持つ file（`a.rs`）の fixture 本文。
+    const TWO_SPAWNS: &str =
+        "use std::process::Command;\n\nfn f() {\n    let _ = Command::new(\"git\");\n    let _ = std::process::Command::new(\"tmux\");\n}\n";
+
+    /// 歯の区間（行頭 `#[cfg(test)]` の後ろ）にだけ 1 行持つ file の fixture 本文。
+    const TEST_SECTION_SPAWN: &str =
+        "fn g() {}\n\n#[cfg(test)]\nmod tests {\n    fn h() {\n        let _ = std::process::Command::new(\"sh\");\n    }\n}\n";
+
+    /// 本体で 1 行持つ file の fixture 本文。
+    const ONE_SPAWN: &str = "fn f() {\n    let _ = std::process::Command::new(\"cargo\");\n}\n";
+
+    /// core-spawn は core の `src` の**本体**で `Command::new` を含む行の件数と file 数を出し、1 件以上を file ごとに
+    /// deny する: 本体に 2 行の `a.rs` だけを数えて `2/1`。歯の区間にだけ持つ `b.rs`・名で test の `e_tests.rs`・持たない
+    /// `c.rs`・別 member の `d.rs` は数えない（file 全体を数える実装は `4/3` で落ちる）。歯の区間と test の file にだけ
+    /// 持つ木は `0/0` で違反 0（本体で 0 と読む）。
     #[test]
-    fn sizes_core_spawn_counts_lines_and_files_without_denying() {
+    fn sizes_core_spawn_denies_src_body_sites() {
         let (layout, files) = workspace(&[
-            (CORE, "a.rs", "use std::process::Command;\n\nfn f() {\n    let _ = Command::new(\"git\");\n    let _ = std::process::Command::new(\"tmux\");\n}\n"),
-            (CORE, "b.rs", "fn g() {}\n\n#[cfg(test)]\nmod tests {\n    fn h() {\n        let _ = std::process::Command::new(\"sh\");\n    }\n}\n"),
+            (CORE, "a.rs", TWO_SPAWNS),
+            (CORE, "b.rs", TEST_SECTION_SPAWN),
             (CORE, "c.rs", "fn pure() {}\n"),
-            ("xtask", "d.rs", "fn f() {\n    let _ = std::process::Command::new(\"cargo\");\n}\n"),
+            (CORE, "e_tests.rs", ONE_SPAWN),
+            ("xtask", "d.rs", ONE_SPAWN),
         ]);
         let got = measure_core_spawn(&layout, &files);
-        assert_eq!(got.fact, "core-spawn=3/2", "件数 / file 数");
-        assert_eq!(got.violations, Vec::<String>::new(), "検出線は違反を立てない");
-        let (layout, files) = workspace(&[(CORE, "c.rs", "fn pure() {}\n")]);
+        assert_eq!(got.fact, "core-spawn=2/1", "本体の件数 / file 数");
+        assert_eq!(got.violations.len(), 1, "本体に持つ file ごとに 1 件: {:?}", got.violations);
+        assert!(
+            got.violations.first().is_some_and(|line| line.starts_with("core-spawn: ") && line.contains("a.rs") && line.contains(" 2 行")),
+            "持つ file と件数を名指す: {:?}",
+            got.violations
+        );
+        let (layout, files) = workspace(&[(CORE, "b.rs", TEST_SECTION_SPAWN), (CORE, "e_tests.rs", ONE_SPAWN)]);
         let none = measure_core_spawn(&layout, &files);
-        assert_eq!(none.fact, "core-spawn=0/0");
-        assert_eq!(none.violations, Vec::<String>::new());
+        assert_eq!(none.fact, "core-spawn=0/0", "歯の区間と test の file は数えない");
+        assert_eq!(none.violations, Vec::<String>::new(), "本体 0 は通る");
+    }
+
+    /// boundary-spawn は境界 crate の `src` の本体で `Command::new` を持つ file が 2 本以上を deny する: 本体に持つ file
+    /// 2 本（2 行 + 1 行）は `3/2` で持つ 2 file を名指す違反 1 件。1 本と歯の区間だけの file は `2/1` で通り、歯の区間だけの
+    /// 木は `0/0` で通る。core の file は境界 crate の母集団に入らない。境界 crate の dir が無い木は measure を出さない。
+    #[test]
+    fn sizes_boundary_spawn_denies_a_second_holder_file() {
+        let (layout, files) = workspace(&[
+            ("demo-boundary", "spawner.rs", TWO_SPAWNS),
+            ("demo-boundary", "main.rs", ONE_SPAWN),
+            ("demo-boundary", "lib.rs", TEST_SECTION_SPAWN),
+            (CORE, "a.rs", ONE_SPAWN),
+        ]);
+        let src = layout.root.join("crates").join("demo-boundary").join("src");
+        let two = boundary_spawn_in(&src, &files);
+        assert_eq!(two.fact, "boundary-spawn=3/2", "本体の件数 / file 数");
+        assert_eq!(two.violations.len(), 1, "{:?}", two.violations);
+        assert!(
+            two.violations.first().is_some_and(|line| {
+                line.starts_with("boundary-spawn: ") && line.contains("main.rs") && line.contains("spawner.rs") && !line.contains("lib.rs")
+            }),
+            "本体に持つ 2 file を名指す: {:?}",
+            two.violations
+        );
+        let one: Vec<SourceFile> = files.into_iter().filter(|file| !file.path.ends_with("main.rs")).collect();
+        let fits = boundary_spawn_in(&src, &one);
+        assert_eq!(fits.fact, "boundary-spawn=2/1", "1 本は通る");
+        assert_eq!(fits.violations, Vec::<String>::new());
+        let (_, tests_only) = workspace(&[("demo-boundary", "lib.rs", TEST_SECTION_SPAWN)]);
+        let bare = boundary_spawn_in(&src, &tests_only);
+        assert_eq!((bare.fact.as_str(), bare.violations.len()), ("boundary-spawn=0/0", 0), "歯の区間だけは数えない");
+        assert!(measure_boundary_spawn(&layout, &one).is_none(), "境界 crate の dir が無い木は出さない");
+    }
+
+    /// boundary-lines は境界 crate の `src` の本体（core-lines と同じ切り方・幅 10 で `SPLIT_FIXTURE` 4 + `BARE_FIXTURE` 3 =
+    /// 7 行）を上限と比べる: 上限 7 は通り 6 は落ちる（両側の歯・file 全体を数える実装は 13 で両方落ちる）。core の file は
+    /// 数えない。境界 crate の dir が無い木は measure を出さない。
+    #[test]
+    fn sizes_boundary_lines_over_the_limit_is_denied() {
+        let (layout, files) = workspace(&[
+            ("demo-boundary", "main.rs", SPLIT_FIXTURE),
+            ("demo-boundary", "lib.rs", BARE_FIXTURE),
+            (CORE, "heavy.rs", SPLIT_FIXTURE),
+        ]);
+        let src = layout.root.join("crates").join("demo-boundary").join("src");
+        let fits = boundary_lines_in(&src, &files, 10, 7);
+        assert_eq!(fits.fact, "boundary-lines=7/7", "本体の合計 = 4 + 3");
+        assert_eq!(fits.violations, Vec::<String>::new(), "上限ちょうどは通る");
+        let over = boundary_lines_in(&src, &files, 10, 6);
+        assert_eq!(over.fact, "boundary-lines=7/6");
+        assert_eq!(over.violations.len(), 1, "{:?}", over.violations);
+        assert!(
+            over.violations.first().is_some_and(|line| line.starts_with("boundary-lines: ") && line.contains(" 7 行") && line.contains("R-C4-5")),
+            "本体の行数と行 id を名指す: {:?}",
+            over.violations
+        );
+        assert!(measure_boundary_lines(&layout, &files, &limits(1, 10), 6).is_none(), "境界 crate の dir が無い木は出さない");
     }
 
     /// 境界は manifest の pct の側で動く: pct = 100 で test 101 / src 100 は違反、
