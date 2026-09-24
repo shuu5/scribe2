@@ -76,7 +76,7 @@ pub fn driver_path(state_dir: &Path, id: &str) -> PathBuf {
 
 /// driver の札を握る（設計 dispatcher.md §5）。
 ///
-/// 本文は所有者の pid（10 進 1 行）で、生死の判定は lock の所有者と**同じ 1 本**
+/// 本文は所有者の pid と起動時刻（10 進 2 語 1 行・設計 dispatcher.md §24）で、生死の判定は lock の所有者と**同じ 1 本**
 /// （[`store::lock_owner`] + [`store::started_ms`]・C6.3・第 2 の probe を作らない）。`Drop` で消すので、
 /// typed な断りで終わった周も畳まれた周も札は残らない——**残るのは process が死んだ周だけ**で、それが
 /// 列の起こし直しの入力である。
@@ -110,14 +110,15 @@ impl Driver {
 impl Drop for Driver {
     /// **自分の札を外す**（`Drop` が走るのは process が正常に抜ける周だけ）。
     ///
-    /// 札が残るのは **driver が死んだ周だけ**である——それが列の起こし直しの入力になる。消すのは自分の
-    /// pid を持つ札だけで、同じ便に別の driver が後から入っていればその札は落とさない。
+    /// 札が残るのは **driver が死んだ周だけ**である——それが列の起こし直しの入力になる。消すのは先頭の語が
+    /// 自分の pid の札だけ（本文は pid 1 語か pid + 起動時刻の 2 語・設計 dispatcher.md §24）で、同じ便に別の
+    /// driver が後から入っていればその札は落とさない。
     ///
     /// 1 段進めた driver が自分の便を次の driver に渡す形（便の自走）は**本便の外**である（設計
     /// dispatcher.md §5 の行 (e)）。
     fn drop(&mut self) {
         let mine = std::fs::read_to_string(&self.path)
-            .is_ok_and(|body| body.trim().parse::<u32>() == Ok(std::process::id()));
+            .is_ok_and(|body| store::owner_pid(&body) == Some(std::process::id()));
         if mine {
             let _ = std::fs::remove_file(&self.path);
         }
@@ -1087,6 +1088,39 @@ mod tests {
         dead.wait().expect("true を待てる");
         put_ticket(&root, "r3", gone);
         assert!(Driver::hold(&root, "r3", policy).is_some(), "死んだ所有者の札は回収して取れる");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// `Drop` は**先頭の語で自分の札を判じる**（設計 dispatcher.md §24・行 u）: 2 語の自分の札と 1 語の自分の札
+    /// （古い形）は外し、1 語目が他人の pid の札（2 語・1 語）は落とさない。
+    #[test]
+    fn pipe_driver_ticket_drop_removes_only_its_own_two_word_ticket() {
+        let root = scratch("driver-drop");
+        let policy = LockPolicy { retry_ms: 50, stale_ms: 600_000 };
+        let me = std::process::id();
+        let other = std::os::unix::process::parent_id();
+        let held = Driver::hold(&root, "mine", policy).expect("空いている札は取れる");
+        let body = std::fs::read_to_string(driver_path(&root, "mine")).expect("札を読める");
+        let words: Vec<&str> = body.trim_end_matches('\n').split(' ').collect();
+        assert_eq!(words.len(), 2, "hold の札は 2 語: {body:?}");
+        assert_eq!(words.first().copied(), Some(me.to_string().as_str()), "1 語目は自分の pid: {body:?}");
+        drop(held);
+        assert!(!driver_path(&root, "mine").exists(), "2 語の自分の札は外す");
+        for (run, written) in [
+            ("old", format!("{me}\n")),
+            ("theirs", format!("{other} 1\n")),
+            ("theirs-old", format!("{other}\n")),
+        ] {
+            let held = Driver::hold(&root, run, policy).expect("空いている札は取れる");
+            std::fs::write(driver_path(&root, run), &written).expect("札を書き換えられる");
+            drop(held);
+            let kept = std::fs::read_to_string(driver_path(&root, run)).ok();
+            if run == "old" {
+                assert_eq!(kept, None, "{run}: 1 語の自分の札も外す");
+            } else {
+                assert_eq!(kept, Some(written), "{run}: 他人の札は落とさない");
+            }
+        }
         let _ = std::fs::remove_dir_all(&root);
     }
 

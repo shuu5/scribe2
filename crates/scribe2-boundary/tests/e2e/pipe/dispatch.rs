@@ -1306,9 +1306,11 @@ fn pipe_dispatch_drive_revives_a_dead_driver_all_the_way_to_landed() {
     clean(&[&repo, &state]);
 }
 
-/// path が消えるまで待つ（上限 20s・消えなければ `false`）。
+/// path が消えるまで待つ（上限 60s・消えなければ `false`）。
+///
+/// 継いだ子は toy の gate と land を撃つので、負荷の周は 20 秒を越える（設計 dispatcher.md §24・行 u）。
 fn gone(path: &Path) -> bool {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
     while path.exists() && std::time::Instant::now() < deadline {
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
@@ -1459,6 +1461,9 @@ fn pipe_dispatch_driver_blocked_run_is_excluded_by_stage_and_keeps_its_ticket() 
 }
 
 /// 便に**死んだ所有者の札**を置く（`true` を起こして待ち、その pid を書く＝確実に居ない process）。
+///
+/// 2 語目は**どの process の起動時刻とも一致しない値** `1`（epoch ms）である（設計 dispatcher.md §24・行 u）:
+/// 負荷の周に抜けた pid を隣の process が受け取っても、読み手は起動時刻の違いで `Dead` に読む。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
@@ -1468,7 +1473,7 @@ fn put_dead_ticket(state: &Path, id: &str) {
     let pid = child.id();
     child.wait().expect("true を待てる");
     let path = state.join("pipe").join(id).join("driver");
-    fs::write(&path, format!("{pid}\n")).expect("札を書ける");
+    fs::write(&path, format!("{pid} 1\n")).expect("札を書ける");
 }
 
 

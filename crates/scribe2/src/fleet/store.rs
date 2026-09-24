@@ -147,29 +147,44 @@ pub enum Owner {
     Unreadable,
 }
 
-/// lock の本文（所有者の pid・10 進 1 行）を判じる（pure）。
+/// lock の本文（所有者の pid 1 語か pid + 起動時刻の 2 語・10 進 1 行）を判じる（pure）。
 ///
 /// `probe` は呼び手が渡す起動時刻の写像（実 probe は [`started_ms`]）。**`Dead` になるのは
-/// probe が「無い」を返した周だけ**である——本文が 10 進 1 行でない周と probe が「読めない」を
-/// 返した周は `Unreadable` で、fail-closed の極性（stale の線まで待つ）を変えない。
+/// probe が「無い」を返した周と、2 語の本文で probe の起動時刻が本文の値と違う周（pid の再利用・
+/// 設計 dispatcher.md §24）だけ**である——本文が 2 形のどちらでもない周と probe が「読めない」を
+/// 返した周は `Unreadable` で、fail-closed の極性（stale の線まで待つ）を変えない。1 語の本文（古い札）は
+/// 起動時刻を照らせないので `Started(_)` を `Live` に読む（跨版互換）。
 pub fn lock_owner(body: &str, probe: impl Fn(u32) -> Probe) -> Owner {
-    let Some(pid) = owner_pid(body) else {
+    let Some((pid, written)) = owner_words(body) else {
         return Owner::Unreadable;
     };
-    match probe(pid) {
-        Probe::Absent => Owner::Dead,
-        Probe::Started(_) => Owner::Live,
-        Probe::Unreadable => Owner::Unreadable,
+    match (probe(pid), written) {
+        (Probe::Absent, _) => Owner::Dead,
+        (Probe::Started(found), Some(written)) if found != written => Owner::Dead,
+        (Probe::Started(_), _) => Owner::Live,
+        (Probe::Unreadable, _) => Owner::Unreadable,
     }
 }
 
-/// 本文を 10 進 1 行（末尾の改行 1 つは許す）の pid として読む。それ以外は `None`。
+/// 本文の先頭の語（所有者の pid）。本文が 2 形のどちらでもない周は `None`。
 pub(crate) fn owner_pid(body: &str) -> Option<u32> {
+    owner_words(body).map(|(pid, _)| pid)
+}
+
+/// 本文を「pid 1 語」か「pid + 起動時刻の 2 語（空白 1 つ）」の 10 進 1 行（末尾の改行 1 つは許す）として
+/// 読む。2 語目は 1 語の周に `None`。それ以外の形は `None`。
+fn owner_words(body: &str) -> Option<(u32, Option<u64>)> {
     let line = body.strip_suffix('\n').unwrap_or(body);
-    if line.is_empty() || !line.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
-    }
-    line.parse().ok()
+    let (pid, started) = match line.split_once(' ') {
+        Some((pid, started)) => (pid, Some(decimal(started)?.parse().ok()?)),
+        None => (line, None),
+    };
+    Some((decimal(pid)?.parse().ok()?, started))
+}
+
+/// 空でない ASCII 数字だけの語か（符号・空白・非数字を弾く）。
+fn decimal(word: &str) -> Option<&str> {
+    (!word.is_empty() && word.bytes().all(|byte| byte.is_ascii_digit())).then_some(word)
 }
 
 /// pid の起動時刻を実 `/proc` で測る。
@@ -388,8 +403,9 @@ pub const RECLAIMS: &[Reclaim] = &[Reclaim::Stale, Reclaim::DeadOnly];
 /// lock を取る。所有者の死んだ lock と（[`Reclaim::Stale`] の周は）古い lock を外して警告に載せる
 /// （黙って消さない）。
 ///
-/// 取れた lock には**自分の pid を 10 進 1 行**で書く（`create_new` で開いた handle にそのまま
-/// 書く・第 2 の writer を作らない）。書けない周は lock を戻して error（fail-closed）。
+/// 取れた lock には**自分の pid と起動時刻を 10 進 2 語 1 行**で書く（`create_new` で開いた handle に
+/// そのまま書く・第 2 の writer を作らない・自分の起動時刻を読めない周は pid 1 語）。書けない周は lock を
+/// 戻して error（fail-closed）。
 ///
 /// **crate の中へ開く**のは受付（[`crate::pipe::admission`]）が slot dir の lock に、driver の札
 /// （[`crate::pipe::Driver`]）が run dir の札に同じ実装を使うためである（lock file は別・実装は 1 本・
@@ -430,12 +446,27 @@ fn reclaim(lock: &Path, observed: &str) -> bool {
 
 /// [`acquire`] に古い lock の扱いを渡す形（**判定の本文は 1 本**）。
 pub(crate) fn acquire_with(lock: &Path, policy: LockPolicy, policy_reclaim: Reclaim) -> Result<Vec<Warning>, StoreError> {
+    acquire_in(Path::new(PROC_ROOT), lock, policy, policy_reclaim)
+}
+
+/// lock の本文（自分の pid と `root` で測った自分の起動時刻の 2 語・読めない周は pid 1 語・設計 dispatcher.md §24）。
+fn owner_body(root: &Path) -> String {
+    let pid = std::process::id();
+    match started_ms_in(root, pid) {
+        Probe::Started(ms) => format!("{pid} {ms}"),
+        Probe::Absent | Probe::Unreadable => pid.to_string(),
+    }
+}
+
+/// [`acquire_with`] の本体（proc の root を受ける・歯は tmp dir を注入する）。
+fn acquire_in(root: &Path, lock: &Path, policy: LockPolicy, policy_reclaim: Reclaim) -> Result<Vec<Warning>, StoreError> {
     let started = Instant::now();
     let mut warnings = Vec::new();
+    let body = owner_body(root);
     loop {
         match OpenOptions::new().create_new(true).write(true).open(lock) {
             Ok(mut handle) => {
-                if let Err(err) = writeln!(handle, "{}", std::process::id()).and_then(|()| handle.flush()) {
+                if let Err(err) = writeln!(handle, "{body}").and_then(|()| handle.flush()) {
                     let _ = fs::remove_file(lock);
                     return Err(StoreError::Lock(format!("所有者を書けない: {err}")));
                 }
@@ -448,7 +479,7 @@ pub(crate) fn acquire_with(lock: &Path, policy: LockPolicy, policy_reclaim: Recl
         }
         // **観測は 1 度だけ読む**: 判じた本文と外す本文を同じにする（判定の本文は不変・§4）。
         let observed = fs::read_to_string(lock).unwrap_or_default();
-        if lock_owner(&observed, started_ms) == Owner::Dead && reclaim(lock, &observed) {
+        if lock_owner(&observed, |pid| started_ms_in(root, pid)) == Owner::Dead && reclaim(lock, &observed) {
             warnings.push(Warning::DeadOwnerLockRemoved);
             continue;
         }
@@ -515,7 +546,7 @@ fn read_events(events: &Path) -> Result<Vec<Event>, Vec<StoreError>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        acquire_with, boot_s, lock_owner, reclaim, reclaim_token, started_ms_in, starttime_ticks, ticks_to_ms,
+        acquire_in, acquire_with, boot_s, lock_owner, reclaim, reclaim_token, started_ms_in, starttime_ticks, ticks_to_ms,
         LockPolicy, Owner, Probe, Reclaim, StoreError, Warning, USER_HZ,
     };
     use proptest::prelude::*;
@@ -765,7 +796,7 @@ mod tests {
         })
     }
 
-    /// 10 進 1 行として読めない本文（空・前後の空白・非数字・複数行・巨大な数）。
+    /// 1 語の形にも 2 語の形にも読めない本文（空・前後の空白・非数字・複数行・巨大な数・3 語・空白 2 つ）。
     fn broken_body() -> impl Strategy<Value = String> {
         prop_oneof![
             Just(String::new()),
@@ -777,10 +808,119 @@ mod tests {
             any::<u32>().prop_map(|pid| format!("-{pid}")),
             "[a-zA-Z_.:-]{1,8}",
             (any::<u32>(), any::<u32>()).prop_map(|(left, right)| format!("{left}\n{right}\n")),
-            (any::<u32>(), any::<u32>()).prop_map(|(left, right)| format!("{left} {right}")),
+            (any::<u32>(), any::<u64>(), any::<u64>()).prop_map(|(pid, ms, extra)| format!("{pid} {ms} {extra}")),
+            (any::<u32>(), any::<u64>()).prop_map(|(pid, ms)| format!("{pid}  {ms}")),
+            (any::<u32>(), any::<u64>()).prop_map(|(pid, ms)| format!("{pid} +{ms}")),
+            (any::<u32>(), "[a-zA-Z_.:-]{1,8}").prop_map(|(pid, word)| format!("{pid} {word}")),
             any::<u64>().prop_map(|big| format!("{}", u64::from(u32::MAX) + 1 + (big % 1000))),
             any::<u128>().prop_map(|huge| format!("{huge}{huge}")),
         ]
+    }
+
+    /// (u2) **2 語の本文は起動時刻で本人を照らす**（設計 dispatcher.md §24・行 u）: probe の起動時刻が本文の値と
+    /// 違えば `Dead`（pid の再利用）・等しければ `Live`・「無い」は `Dead`・「読めない」は `Unreadable`。
+    /// 末尾の改行の有無は問わない。
+    #[test]
+    fn fleet_store_owner_two_words_tell_a_reused_pid_by_its_start_time() {
+        for body in ["42 1700000002500", "42 1700000002500\n"] {
+            let asked = std::cell::Cell::new(None);
+            let started = |found: u64| {
+                let asked = &asked;
+                move |pid: u32| {
+                    asked.set(Some(pid));
+                    Probe::Started(found)
+                }
+            };
+            assert_eq!(lock_owner(body, started(1_700_000_002_500)), Owner::Live, "{body:?}: 起動時刻が等しい＝本人");
+            assert_eq!(asked.get(), Some(42), "{body:?}: probe には先頭の語を渡す");
+            assert_eq!(lock_owner(body, started(1_700_000_002_510)), Owner::Dead, "{body:?}: 後に起きた別人（再利用）");
+            assert_eq!(lock_owner(body, started(1_700_000_002_490)), Owner::Dead, "{body:?}: 先に起きた別人");
+            assert_eq!(lock_owner(body, |_| Probe::Absent), Owner::Dead, "{body:?}: 無い");
+            assert_eq!(lock_owner(body, |_| Probe::Unreadable), Owner::Unreadable, "{body:?}: 読めない");
+        }
+    }
+
+    /// (u2′) **1 語の本文は今のまま**（古い札との跨版互換）: `Started(_)` は値に依らず `Live`・「無い」は `Dead`。
+    #[test]
+    fn fleet_store_owner_one_word_keeps_the_old_reading() {
+        for body in ["42", "42\n"] {
+            for found in [0, 1, 1_700_000_002_500, u64::MAX] {
+                assert_eq!(lock_owner(body, |_| Probe::Started(found)), Owner::Live, "{body:?} / {found}");
+            }
+            assert_eq!(lock_owner(body, |_| Probe::Absent), Owner::Dead, "{body:?}: 無い");
+            assert_eq!(lock_owner(body, |_| Probe::Unreadable), Owner::Unreadable, "{body:?}: 読めない");
+        }
+    }
+
+    /// (u2″) 2 形のどちらでもない本文は probe に依らず `Unreadable`（3 語・非数・空白の崩れ・2 語目の溢れ）。
+    #[test]
+    fn fleet_store_owner_other_shapes_are_unreadable() {
+        let shapes = [
+            "42 1700000002500 7",
+            "42 1700000002500 7\n",
+            "42 abc",
+            "abc 1700000002500",
+            "42  1700000002500",
+            " 42 1700000002500",
+            "42 1700000002500 ",
+            "42 -1",
+            "42 18446744073709551616",
+            "42 ",
+        ];
+        for body in shapes {
+            for probe in [Probe::Absent, Probe::Started(1_700_000_002_500), Probe::Unreadable] {
+                assert_eq!(lock_owner(body, |_| probe), Owner::Unreadable, "{body:?} / {probe:?}");
+            }
+        }
+    }
+
+    /// (u1) `acquire_with` の本体は `create_new` の直後に**自分の pid と自分の起動時刻の 2 語 1 行**を書き
+    /// （起動時刻は proc root の fixture で測った値）、自分の起動時刻を読めない root の周は pid 1 語を書く。
+    #[test]
+    fn fleet_store_owner_acquire_writes_pid_and_start_time() {
+        let root = scratch("owner-body");
+        let me = std::process::id();
+        let policy = LockPolicy { retry_ms: 30, stale_ms: 600_000 };
+        let lock = root.join("events.jsonl.lock");
+        std::fs::write(root.join("stat"), "cpu 1 2\nbtime 1700000000\n").expect("btime を書ける");
+        std::fs::create_dir_all(root.join(me.to_string())).expect("pid dir を作れる");
+        std::fs::write(root.join(me.to_string()).join("stat"), pid_stat(250)).expect("pid の stat を書ける");
+        assert_eq!(started_ms_in(&root, me), Probe::Started(1_700_000_002_500), "fixture の前提");
+        acquire_in(&root, &lock, policy, Reclaim::DeadOnly).expect("空いている lock は取れる");
+        assert_eq!(
+            std::fs::read_to_string(&lock).unwrap_or_default(),
+            format!("{me} 1700000002500\n"),
+            "2 語 1 行（pid・空白 1 つ・started_ms の値・改行 1 つ）"
+        );
+        assert_eq!(lock_owner(&std::fs::read_to_string(&lock).unwrap_or_default(), |pid| started_ms_in(&root, pid)), Owner::Live);
+        std::fs::remove_file(&lock).expect("lock を外せる");
+        // 自分の pid dir が無い root（起動時刻を読めない）: pid 1 語。
+        std::fs::remove_dir_all(root.join(me.to_string())).expect("pid dir を外せる");
+        acquire_in(&root, &lock, policy, Reclaim::DeadOnly).expect("空いている lock は取れる");
+        assert_eq!(std::fs::read_to_string(&lock).unwrap_or_default(), format!("{me}\n"), "読めない周は 1 語");
+        std::fs::remove_file(&lock).expect("lock を外せる");
+        // `stat` の無い root（`/proc` 自体が読めない）: pid 1 語。
+        std::fs::remove_file(root.join("stat")).expect("stat を外せる");
+        acquire_in(&root, &lock, policy, Reclaim::DeadOnly).expect("空いている lock は取れる");
+        assert_eq!(std::fs::read_to_string(&lock).unwrap_or_default(), format!("{me}\n"), "読めない周は 1 語");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// (u1′) 実 `/proc` の周: `acquire_with` の本文の 1 語目は自分の pid・2 語目は `started_ms(自分)` の値で、
+    /// 読み手はそれを `Live` に読む（書き手と読み手の単位が揃う）。
+    #[test]
+    fn fleet_store_owner_acquire_with_real_proc_is_read_back_live() {
+        let dir = scratch("owner-real");
+        let lock = dir.join("events.jsonl.lock");
+        let me = std::process::id();
+        let Probe::Started(ms) = super::started_ms(me) else {
+            panic!("実 /proc で自分の起動時刻を読める前提");
+        };
+        acquire_with(&lock, LockPolicy { retry_ms: 30, stale_ms: 600_000 }, Reclaim::DeadOnly).expect("取れる");
+        let body = std::fs::read_to_string(&lock).unwrap_or_default();
+        assert_eq!(body, format!("{me} {ms}\n"), "2 語 1 行");
+        assert_eq!(lock_owner(&body, super::started_ms), Owner::Live, "自分の札は生きている");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     proptest! {
