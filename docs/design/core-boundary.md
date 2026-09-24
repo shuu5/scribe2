@@ -2,7 +2,7 @@
 
 - 要件: [FR47](../../design-intent/spec/srs.html#FR47) 契約表 / [FR48](../../design-intent/spec/srs.html#FR48) 受付の余地 / [NFR2](../../design-intent/spec/srs.html#NFR2) 大きさの上限
 - 憲法: [C4](../../design-intent/spec/constitution.html#c4) core の大きさは CI の deny gate・上限の変更は A2 / [C13.2](../../design-intent/spec/constitution.html#c13) 境界 crate / [C2.2](../../design-intent/spec/constitution.html#c2) crate 名は NAME から導く / [C11](../../design-intent/spec/constitution.html#c11) lint / [C12.3](../../design-intent/spec/constitution.html#c12) 歯の比 / [A2](../../design-intent/spec/constitution.html#a2) 閾の変更は user 裁定 / [N4](../../design-intent/spec/constitution.html#n4) C4 の上限を超える変更は拒む
-- 決定: [ADR-0033](../../design-intent/decisions/ADR-0033-core-lines-count-source-only-and-io-lives-in-a-boundary-crate.html)（core-lines の母集団と境界 crate・user 裁定 2026-09-15）/ [ADR-0001](../../design-intent/decisions/README.html)（単一 binary・不変）/ [ADR-0009](../../design-intent/decisions/README.html)（Rust で閉じる）
+- 決定: [ADR-0033](../../design-intent/decisions/ADR-0033-core-lines-count-source-only-and-io-lives-in-a-boundary-crate.html)（core-lines の母集団と境界 crate・user 裁定 2026-09-15）/ [ADR-0001](../../design-intent/decisions/README.html)（単一 binary・不変）/ [ADR-0009](../../design-intent/decisions/README.html)（Rust で閉じる） / [ADR-0062](../../design-intent/decisions/ADR-0062-core-describes-invocations-and-the-boundary-crate-spawns-them.html)（段 2 / 段 3 の形 = 起動の記述と差し替え口・ADR-0033 の実現方法の部分 supersede・§9）
 - 台帳: `s2-07l.198`（本設計の契約群の親）・出所の実測 = `s2-07l.303` run 2 / run 3（受付の core の余地で 2 度断られた 2026-09-15）
 - 土台: [rules-manifest.md](./rules-manifest.md) §4（R-C4 行と行の数え方）/ [contract-source.md](./contract-source.md) §3（受付の余地）/ [pipeline.md](./pipeline.md) §5.3（純移動の機械証明）
 
@@ -116,38 +116,63 @@ flowchart LR
 - 契約表の行（contract-source.md §3 の Derived 形）は本 doc の §6 を出所に planner が起票する（`touches` / `surfaces` で write-set を導出）。
 - v3 の材料（`s2-07l.42`）: 境界 crate の関数の形（引数 → 生の結果）は folio2 と共有できる「器の I/O 面」の芽。
 
-## 9. 段 2 / 段 3 の測り直しと行 c〜i（2026-09-24・main b82be74・§4 の「移す関数」と §6 の段 2 / 段 3 の形を上書きする）
+## 9. 段 2 / 段 3 の測り直しと行 c〜i（2026-09-24・main 8ca0dc9・ADR-0062・§3 の R-C4-5 を測る時点と §4 の「移す関数」と §6 の段 2 / 段 3 の形を上書きする）
 
-やさしく言うと: 外の process を起こす関数は、本体（core）のあちこちから呼ばれていた。そのまま別の箱へ移すと呼び手が壊れるので、本体には「何を起こすかの記述」と「起こす人を差し替える口」だけを置き、実際に起こすのは箱（境界 crate）の 1 か所にする。本体の行数はほとんど減らないが、本体が process を直接起こさなくなり、test が偽物を差して測れるようになる。
+やさしく言うと: 外の process を起こす関数は、本体（core）のあちこちから呼ばれていた。そのまま別の箱へ移すと呼び手が壊れるので、本体には「何を起こすかの記述」と「起こす役を差し替える口」だけを置き、実際に起こすのは箱（境界 crate）の 1 か所にする。本体の行数はほとんど減らないが、本体が process を直接起こさなくなり、test が偽物を差して測れるようになる。
 
-- 出所: `s2-07l.198` の段 2（(c)〜(h)）と段 3（(i)）を契約表の行へ詰める周。§1〜§3 の決定（core-lines の母集団・境界 crate・R-C4-5）は不変で、本節は段 2 / 段 3 の**形**だけを上書きする。
-- **母集団（実測・main b82be74・`cargo xtask check` の core-spawn=43/25 と一致）**: core の src で `Command::new` を含む行は 43 行 / 25 file。うち src の本体（最初の行頭 cfg(test) より前）が **33 行 / 21 file**、歯の区間が 10 行 / 8 file（git の fixture を作る helper 4・死んだ pid を作る true の起動 4・包みの歯が渡す引数 2）。歯の区間だけに持つ file は 4 本（`pipe/follow.rs`・`pipe/follow_step.rs`・`pipe/admission.rs`・`fleet/store.rs`）。本体 33 行の道具別の内訳は git 10・systemctl 4・tmux 3・sh 3・systemd-run 2・kill 2・bd 2・自分自身 2・claude 1・curl 1・hostname 1・cargo 1・CI の照会 1。
-- **決定的な事実（呼び手の数・grep で実測）**: 撃つ関数は core の中から呼ばれている。`pipe/mod.rs` の git の 3 関数は core の 16 file から、`seat/mod.rs` の tmux の 2 関数は 6 file から呼ばれ、`headless/mod.rs` の構築点は 3 file へ、`pipe/confine.rs` の sh の行の包みは 4 file へ Command を値で返し、構築点は包みへ Command を渡す。core は境界 crate に依存できない（依存は一方向・§3）ので、**撃つ関数だけを境界 crate へ純移動すると呼び手が compile できない**。呼び手ごと移すと land / gate / train / follow 等の driver（判定と撃つ面が交互に並ぶ）が丸ごと動き、判定を境界へ押し出す（R-C4-5 が塞ぐ抜け穴そのもの）。＝§6 の「純移動 6 便」は成立せず、pipeline.md §5.3 の純移動の機械証明も使えない（core に残る関数の本文が変わる）。
-- **採る形（推奨・user 裁定と ADR の land が前提）＝起動の記述と差し替え口**:
-  1. core に**起動の記述**（型 1 つ）を置く。std の Command と同じ builder の面（new・arg・args・current_dir・env・env_remove・stdin・stdout・stderr・process_group・get_program・get_args・get_envs＝core の現 site が呼ぶ面の全部・実測）と同じ 4 終端（output・status・spawn・exec）を、同じ名・同じ受け手の形で持つ。終端は差し替え口へ渡すだけで、解釈しない。**site の書き換えは構築の字面と use の行だけ**で、呼び方の形・判定・呼び手の signature は 1 字も変わらない（型の位置で Command を名指す `pipe/confine.rs` の包みと `headless/mod.rs` の構築点の戻り値は、型の字面を置き換える）。
-  2. core に**差し替え口**（trait 1 つ・method は 4 終端と 1:1）と、process に 1 回だけ据える関数を置く（2 回目は据えない）。据えていない周の終端は io の Unsupported を返す＝各 site の既存の「撃てない」分岐に落ちる（fail-closed・新しい分岐を足さない）。
-  3. 境界 crate に**実物**（差し替え口の実装 1 つ・起動の記述を std の Command へ写して撃つ）を置き、bin の main の先頭で据える。本行群の後、workspace の本番の src で `Command::new` を持つのは境界 crate のこの 1 file だけになる。
-  4. **core の歯は据えずに撃てる**: core の cfg(test) の build だけ、据えていない周の代わりに歯の区間の実物を使う（置き場は `pipe/mod.rs` の歯の区間の既存の fixture module・同じ型の先例）。git の fixture で実 repo を作る既存の歯はそのまま動く。新しい歯は記録する stub（撃たれた program と引数を覚え、決めた結果を返す）を据えて「その site が差し替え口を通る」ことを測る。base の site は std の Command を直に撃つので stub に記録が残らず RED（字面の pin ではなく挙動の歯）。nextest は歯ごとに process を分けるので、据えるのは歯ごとに 1 回で衝突しない。
-  5. **置き場の罠（実測の規則）**: 起動の記述の file は歯の区間を持たない（新規 file の歯の区間は flip-check の not-flippable）。cfg(test) の側の実物を引く use は file の末尾に「cfg(test) だけの行 + use の行」の 2 行で置く（次の非空行が mod でないので flip-check の歯の区間の始点にならず、xtask の区間の切れ目は file の末尾の 2 行だけを歯に数える）。cfg(not(test)) の側の 1 関数は本体に置く（区間の切れ目は行頭の cfg(test) の字面なので当たらない）。
-- **効果と代償**: core の本体の行数はほぼ減らない（起動の記述と差し替え口で +150 行前後・site の置換は差 0・境界 crate は +110 行前後）。§1 の「≈2800 行が core の外へ」は撃つ関数を file ごと移す見積で、上の事実で成立しない。core の余地は段 1 (a) が既に戻した（実測 core-lines=43595/60000）。段 2 が作るのは (1) core の本体の `Command::new` が 0 (2) 起動の口が境界 crate の 1 か所 (3) core の歯が stub で撃てる（`s2-07l.198` notes の head_of の空 sha の生存変異を行 h の歯が殺す）の 3 つである。
-- **却下（ADR に残す）**: (A) 撃つ関数の純移動＝呼び手が compile できない。(B) driver ごと境界 crate へ＝判定と撃つ面の切り分けが散文の判断になり（ADR-0033 の DR3 に反する）、境界の上限が数千行に膨らみ、便が L 級になる。(C) 道具ごとの typed な口（git / tmux / systemctl…）＝閉じた集合で強いが、子を流しながら読む面（`headless/lens.rs`・`pipe/spawn.rs`・`seat/ledger.rs` が Child を持つ）は結局 spawn の口が要り、口の定義 file を全行が触るので並列に流せない（本節の後続の候補）。(D) 段 2 をやめ core-spawn を検出線のまま残す＝user に問う選択肢。
-- **行の切り方（write-set が互いに交わらない・呼び手は signature が不変なので触らない）**:
+- 要件: [NFR2](../../design-intent/spec/srs.html#NFR2) 大きさ（口を置く 1 便の後は S の便に割れる）/ [NFR3](../../design-intent/spec/srs.html#NFR3) 依存（std だけで作る）/ [NFR5](../../design-intent/spec/srs.html#NFR5) 応答（host-guard の git の回数を歯が測る形を全 site へ広げる）/ [NFR6](../../design-intent/spec/srs.html#NFR6) 安全（封じ込めの包みは core に残り、箱の外の子 process は増えない）。ADR-0062 の justifies と同じ 4 つ。
+- 決定: [ADR-0062](../../design-intent/decisions/ADR-0062-core-describes-invocations-and-the-boundary-crate-spawns-them.html)（core は起動の記述を差し替え口へ渡し、実物は境界 crate の 1 か所・ADR-0033 の実現方法の部分 supersede）。段 2 の形の user 裁定 id = `user 2026-09-24T00:13Z`（要旨: 案 1 で進める・core の行数が減らないことは了解・段 2 をやめる案は採らない・R-C4-5 を足す時点は core-spawn を deny にする便と同じで、裁定 id `user 2026-09-15T10:07Z` の範囲内。逐語は台帳 `s2-07l.198` の notes）。本節の「採る形」の 1〜9 は ADR-0062 の決定文の SHALL と下の対応表で 1 対 1 に結ぶ。
+- 出所: `s2-07l.198` の段 2（(c)〜(h)）と段 3（(i)）を契約表の行へ詰める周。§1〜§3 の決定（core-lines の母集団・境界 crate・依存の向き・R-C4-1 の値）は不変で、本節は段 2 / 段 3 の**形**と R-C4-5 を測る時点だけを上書きする。
+- **母集団（実測・main 8ca0dc9・`cargo xtask check` の core-spawn=44/26 と一致）**: core の src で `Command::new` を含む行は 44 行 / 26 file。うち src の本体（最初の行頭 cfg(test) より前）が **34 行 / 22 file**、歯の区間が 10 行 / 8 file（git の fixture を作る helper 4・死んだ pid を作る true の起動 4・包みの歯が渡す引数 2）。歯の区間だけに持つ file は 4 本（`pipe/follow.rs`・`pipe/follow_step.rs`・`pipe/admission.rs`・`fleet/store.rs`）。本体 34 行の道具別の内訳は git 10・systemctl 4・tmux 3・sh 3・systemd-run 2・kill 2・bd 2・自分自身 2・claude 1・curl 1・hostname 1・cargo 1・CI の照会 1・doctor が版を照合する bin 1。初版の測り（main b82be74）の本体 33 から、`account/wire.rs` の doctor の版の照合（2026-09-24 着地）が 1 site を足した＝検出線は数を出すだけで増加を止めない（ADR-0062 CSQ-N5）。足された site は行 h に入れた。**行を起票する直前に同じ測りを撃ち直し、増えた site を行へ足す**。
+- **決定的な事実（呼び手の数・grep で実測）**: 撃つ関数は core の中から呼ばれている。`pipe/mod.rs` の git の 3 関数は core の 16 file から、`seat/mod.rs` の tmux に届く公開関数は 9 file から呼ばれ、`pipe/confine.rs` の包みは Command を値で受けて返し 5 file から呼ばれ、`headless/mod.rs` の構築点は Command を組んで包みへ渡す。core は境界 crate に依存できない（依存は一方向・§3）ので、**撃つ関数だけを境界 crate へ純移動すると呼び手が compile できない**。呼び手ごと移すと land / gate / train / follow 等の driver（判定と撃つ面が交互に並ぶ）が丸ごと動き、判定を境界へ押し出す（R-C4-5 が塞ぐ抜け穴そのもの）。＝§6 の「純移動 6 便」は成立せず、pipeline.md §5.3 の純移動の機械証明も使えない（core に残る関数の本文が変わる）。
+- **採る形（ADR-0062 の決定文・user 裁定 `user 2026-09-24T00:13Z`）＝起動の記述と差し替え口**:
+  1. **起動の記述**（core・型 1 つ）: std の Command と同じ builder の面（new・arg・args・current_dir・env・env_remove・stdin・stdout・stderr・process_group・get_program・get_args・get_envs＝core の現 site が呼ぶ面の全部・実測）と同じ 4 終端（output・status・spawn・exec）を、同じ名・同じ受け手の形で持つ。終端は起動の記述を解釈せず、差し替え口へ渡すだけ。
+  2. **差し替え口**（core・trait 1 つ・method は 4 終端と 1 対 1）と、process に 1 回だけ据える関数（OnceLock・2 回目は据えない）。本番の build で据えていない周の終端は io の Unsupported を返す＝各 site の既存の「撃てない」分岐に落ちる（fail-closed・新しい分岐を足さない）。
+  3. **実物**（境界 crate・差し替え口の実装 1 つ・行 c の write-set の + の境界 crate の file 1 つ）: 起動の記述を std の Command へ写して撃つ。bin の main の先頭で据える。本行群の後、core と境界 crate の本番の src で std の Command を構築するのはこの 1 file だけになる。
+  4. **e2e の据え付け**: 境界 crate の e2e の test binary は core の lib を同じ process で呼ぶ歯を持つ。e2e の crate root（`tests/e2e/main.rs`）に共通の関数 1 つを置き、OnceLock で同じ実物を process に 1 回だけ据える。libtest には全歯の前に走る入口が無いので、core の lib の起動の site に同じ process で届く歯が site に届く前にそれを呼ぶ。census（実測・main 8ca0dc9）: seat の recent の git の読みを直に呼ぶ歯 2 本（`tests/e2e/hook.rs`）・fleet の host の読みを呼ぶ歯 4 本（`tests/e2e/fleet.rs` 3・`tests/e2e/hook.rs` 1）・host の読みを呼ぶ fixture の helper 2 つ（`tests/e2e/pipe/ratelimit.rs`・helper の先頭で呼ぶ）。host の読みは /etc/hostname を先に読むので fallback の周だけが site に届く。行 c が共通の関数と census の全部の呼び出しを置き（行 f / g は e2e を触らない）、この census を通らずに core の lib を呼ぶ新しい歯は据え忘れる（ADR-0062 CSQ-N2）。
+  5. **site の置換**: core の既存の site は構築の字面と use の行だけを置き換える（型の位置で Command を名指す `pipe/confine.rs` の包みと `headless/mod.rs` の構築点では型の字面）。呼び方の形・判定と、関数の引数の数・順・戻りの形は 1 字も変わらない。呼び手は process_group と exec のための CommandExt の import を除き変わらない（CommandExt を use する 5 file = `pipe/dispatch.rs`・`pipe/spawn.rs`・`fleet/usage.rs`・`seat/cycle/launch.rs`・`hook/group.rs`・実測）。
+  6. **claude-spawn-points**（`crates/xtask/src/spawn_points.rs`・deny）: std の Command と起動の記述の構築を合わせて数える（2 つの字面の合計が headless/ で 1・その 1 が mod.rs）。flag の字面の検査は不変。
+  7. **core の歯は据えずに撃てる**: cfg(test) の build だけ、据えていない周の代わりに歯の区間の実物を使う（置き場は `pipe/mod.rs` の歯の区間の既存の fixture module・同じ型の先例）。実 repo や tmux を撃つ既存の歯はそのまま動く。
+  8. **記録する stub**: 撃たれた program と引数を覚え、歯が決めた結果を返す。spawn の終端は std の Child を std の外から作れないので失敗だけを返す（spawn の成功の周は cfg(test) の実物を撃つ歯のまま・ADR-0062 CSQ-N9）。stub は**据えた歯の thread に閉じる**（thread ごとの置き場・同じ process で並んで走る他の歯に漏れない。変異検査の道具は baseline と的の歯の名が無い周を cargo test の複数 thread で走らせるので、process 全体に効く偽物は漏れる）。site が別の thread で撃つ経路は stub で測れず、実物で撃つ（ADR-0062 CSQ-N6）。新しい歯は stub を据えて「その site が差し替え口を通る」ことを測る。base の site は std の Command を直に撃つので stub に記録が残らず RED（字面の pin ではなく挙動の歯）。
+  9. **core-spawn の deny と R-C4-5（行 i・同じ便）**: ADR-0033 の「core は Command::new を 0 本しか持たない」を core の src の**本体**（core-lines と同じ切り方・§2）で 0 と読み、core-spawn の母集団を本体にして 1 以上を deny にする。歯の区間の cfg(test) の実物と fixture の起動は数えない（量は R-C4-3 が縛る）。R-C4-5（kind BoundaryLines・Int・deny）を同じ便で manifest に足す。値はその便の base で測った境界 crate の src の本体 × 1.2 の切り上げ・裁定 id `user 2026-09-15T10:07Z`（測る時点を ADR-0033 の「移した直後」から deny の便の base へ置き換えるのは裁定 `user 2026-09-24T00:13Z` の (2) がこの裁定 id の範囲内と扱った）。
+  10. **置き場の罠（実測の規則）**: 起動の記述の file は歯の区間を持たない（新規 file の歯の区間は flip-check の not-flippable）。cfg(test) の側の実物を引く use は file の末尾に「cfg(test) だけの行 + use の行」の 2 行で置く（次の非空行が mod でないので flip-check の歯の区間の始点にならず、xtask の区間の切れ目は file の末尾の 2 行だけを歯に数える）。cfg(not(test)) の側の 1 関数は本体に置く（区間の切れ目は行頭の cfg(test) の字面なので当たらない）。
+- **ADR-0062 の決定文と行の対応**（各 SHALL を測る行と done の番号）:
+
+| ADR-0062 の SHALL | 採る形 | 行 | 測る所 |
+|---|---|---|---|
+| 起動の記述の型 1 つ（builder の 13 面と 4 終端・同じ名と受け手の形） | 1 | c | done (1) |
+| 終端は解釈せず、4 終端と 1 対 1 の trait 1 つへ渡す | 1・2 | c | done (1) |
+| 本番の build で process に 1 回だけ据わり、据えていない周は Unsupported で既存の分岐へ | 2 | c | done (2) |
+| 実物 1 つを境界 crate の 1 file に持ち bin の main の先頭で据え、std の Command の構築はこの file だけ | 3 | c・i | c の done (3)・i の done (1) |
+| e2e の test binary は共通の関数 1 つ（OnceLock）で同じ実物を process に 1 回据える | 4 | c | done (4) |
+| site は構築の字面と use の行だけを置換し、呼び方・判定・引数・戻りは不変、呼び手は CommandExt の import だけ | 5 | c〜h | 各行の done (1)(2) |
+| claude-spawn-points は std の Command と起動の記述の構築を合わせて数える | 6 | e | done (3) |
+| cfg(test) の build では据えずに撃てる（既定は歯の区間の実物） | 7 | c | done (6) |
+| 記録する stub（spawn は失敗だけ）は据えた歯の thread の外へ効かない | 8 | c（置き場）・c〜h（使う歯） | c の done (7)・各行の stub の歯 |
+| core-spawn は core の src の本体で 0 と読み、1 以上を deny | 9 | i | done (1) |
+| R-C4-5 は deny と同じ便で足し、値は base の本体 × 1.2・裁定 id user 2026-09-15T10:07Z | 9 | i | done (3) |
+| 撃つ関数の純移動と driver ごとの移動は採らない・ADR-0001・ADR-0033 の母集団と構成と向き・R-C4-1 は不変 | — | 全行 | 下の「触らない」 |
+| 消すもの（本体で std の Command を直に組む site 34・5 file の CommandExt の import・純移動 6 便の計画） | 5 | c〜h・§6 | 各行の done (1)(2)・§6 の段 2 の行は本節が上書き |
+
+- **効果と代償**: core の本体の行数はほぼ減らない（起動の記述と差し替え口で +150 行前後・site の置換は差 0・境界 crate は +110 行前後）。§1 の「≈2800 行が core の外へ」は撃つ関数を file ごと移す見積で、上の事実で成立しない。core の余地は段 1 (a) が既に戻した（実測 core-lines=44118/60000・main 8ca0dc9）。段 2 が作るのは (1) core の本体の `Command::new` が 0 (2) 起動の口が境界 crate の 1 か所 (3) core の歯が stub で撃てる（`s2-07l.198` notes の head_of の空 sha の生存変異を行 h の歯が殺す）の 3 つである。
+- **却下（ADR-0062 の options）**: 撃つ関数だけの純移動（呼び手が compile できない）・driver ごと境界 crate へ（判定を境界へ押し出すか切り方が散文になる・便が L 級）・道具ごとの typed な口（子を流しながら読む site に結局 spawn の口が要り、口の定義 file を全行が触る）・段 2 をやめ core-spawn を検出線のまま残す（user 裁定 `user 2026-09-24T00:13Z` で不採用）・core を境界 crate に依存させる（依存が循環して build できない）。
+- **行の切り方（write-set が互いに交わらない・呼び手は引数と戻りの形が不変なので触らない）**:
 
 | 行 | 面 | 本体の site | 歯の区間の site | file |
 |---|---|---|---|---|
-| c | 口の新設 + `pipe/mod.rs` の git の 3 関数 | 3 | 2 | pipe/mod.rs + 新設 2（core / 境界）+ lib 2 + main |
+| c | 口の新設 + `pipe/mod.rs` の git の 3 関数 + e2e の据え付け | 3 | 2 | pipe/mod.rs + 新設 2（core / 境界）+ lib 2 + main + e2e 4 |
 | d | pipe の driver（dispatch・stop・gate・land の finish・follow・follow_step・admission） | 4 | 3 | 7 |
-| e | 包みと claude の構築点（confine・headless・その Command に process_group を呼ぶ 2 file・claude-spawn-points） | 9 | 2 | 5 |
+| e | 包みと claude の構築点（confine・headless・その戻り値に process_group を呼ぶ 2 file・claude-spawn-points） | 9 | 2 | 5 |
 | f | 席と tmux と台帳の読み（seat の mod・launch・ledger・recent・account の mod・ledger の mod） | 7 | 0 | 6 |
 | g | fleet（usage の read・cli・wait・store） | 3 | 1 | 4 |
-| h | hook と導入先（vessel・host_guard・group・consumers） | 7 | 2 | 4 |
-| 計 | | 33 | 10 | 25 file（site を持つ file） |
+| h | hook と導入先（vessel・host_guard・group・consumers・wire） | 8 | 2 | 5 |
+| 計 | | 34 | 10 | 26 file（site を持つ file） |
 
-- **構造の連鎖（実測・行の write-set に入れた理由）**: (1) `headless/mod.rs` の構築点と `pipe/confine.rs` の包みは Command を引数と戻り値で受け渡す＝同じ行 e。(2) その戻り値に process_group を呼ぶ `pipe/spawn.rs` と `fleet/usage.rs` は std の CommandExt の use が不要になり unused_imports で clippy が落ちる＝行 e に同梱（`fleet/usage.rs` の kill の site も行 e）。(3) claude-spawn-points（`crates/xtask/src/spawn_points.rs`・deny）は headless/ の構築の字面が mod.rs に 1 つであることを求め、0 は fail-closed の違反＝構築の字面が変わる行 e で、数える字面に起動の記述の構築を足す（2 つの字面の合計が headless/ で 1・その 1 が mod.rs）。(4) exec と process_group のために CommandExt を use する `pipe/dispatch.rs`・`hook/group.rs`・`seat/cycle/launch.rs` は各行が同じ file の use を外す。(5) e2e が lib を直に呼んで起動に届く経路は host 名の読みの fallback（/etc/hostname が読めない host だけ hostname を撃つ）の 1 つで、据えていない e2e の process ではその周だけ unknown に倒れる（bin は据えるので値が割れて e2e が声を上げて落ちる・CI の host は /etc/hostname を持つ）。(6) pipe の driver・headless の runner / lens・gate の verify / lens・review は起動の記述を値で受けて同じ名の method を呼ぶだけなので 1 字も触らない。
-- **歯の置き場**: 各行の新しい歯は write-set の file の歯の区間に置き、名は行ごとの接頭辞（invocation_ に続けて pipe_git_ / pipe_driver_ / wrap_ / seat_ / fleet_ / hook_）で、互いに部分文字列にならない（現物に invocation を含む歯の名は 0・実測）。歯の区間を持たない file（`fleet/cli.rs`・`fleet/usage/read.rs`・`hook/vessel.rs`・`pipe/land/finish.rs`・`seat/ledger.rs`・`seat/recent.rs`）は、撃つ関数が私有か pub(super) なので同じ file の末尾に歯の区間を足す（既存 file なので flip-check が写せる）。host 名の読みは /etc/hostname を先に読むので stub が届かず RED の歯を作れない＝行 g の RED は同じ行の curl と CI の照会の歯が持ち、host の site は done の「その file に std の Command が残らない」で測る。
-- **行 i（段 3）**: core-spawn の母集団を core の src の**本体**に（core-lines と同じ切り方・§2 の裁定と同じ理由＝歯の区間は R-C4-3 が縛る）し、1 以上を deny にする（fact の書式は不変）。歯の区間には cfg(test) の実物と fixture の起動が残る。ADR-0033 の「core は Command::new を 0 本しか持たない」を「core の本体は」と読む解釈は、行 c の前に land する ADR に書く。R-C4-5（kind BoundaryLines・Int・deny）を manifest に足す。値は行 i の便の base で境界 crate の src の本体を測った値 × 1.2 の切り上げで、**仮置き 341**（今の本体 174 + 実物の口の見込み 110 = 284 の 1.2 倍の切り上げ）。裁定 id は `user 2026-09-15T10:07Z`（台帳 `s2-07l.198` notes の字面「裁定 id = user 2026-09-15T10:07Z」・§2 / §3 が書く 09:5xZ は同じ日の前の是認で、境界 crate の上限を決めた AskUserQuestion の裁定はこちら）で、manifest の他の行の ruling と重ならない（rules-diff の相乗りに当たらない・実測）。rules 行を足す面は manifest・`crates/scribe2/src/rules/mod.rs`（variant・ALL・名・値の形）・`crates/scribe2-boundary/tests/e2e/rules.rs`（kind の match の面）・`crates/xtask/src/limits.rs`（値を読む・値の個数の歯）・`crates/xtask/src/check_sizes.rs` と `crates/xtask/src/check.rs`（measure 2 本と列）・`crates/xtask/src/check_tests.rs`（SUMMARY_PIN の core-spawn の直後に boundary-lines）・[rules-manifest.md](./rules-manifest.md) の表。**憲法 §3 の cell は design-intent/spec の編集で folio-architect（user が起動する）の別の周**（rules-parity は検出線なので manifest だけの周も門は赤にならない）。
-- **前提（行 c の前）**: (1) user 裁定 1 問（採る形 = 推奨 / 却下 (B) / 却下 (D) のどれか・A2 ではなく目的と価値の選択）(2) 新しい ADR（ADR-0033 の §4 の「撃つ関数を移す」を「起動の記述と差し替え口」で実現する部分の supersede・core-spawn の母集団を本体に読む解釈・却下 4 案・同じ PR で vocabulary〔起動の記述 / 差し替え口〕と decisions/README）。行 c〜i は ADR の land の後に起票する。
-- 触らない: 判定の関数・呼び手の signature・pipe の driver の本文・歯の本文（歯の区間の site の置換を除く）・§1〜§3 の決定・R-C4-1 の値。
+- **構造の連鎖（実測・行の write-set に入れた理由）**: (1) `headless/mod.rs` の構築点と `pipe/confine.rs` の包みは Command を引数と戻り値で受け渡す＝同じ行 e。(2) その戻り値に process_group を呼ぶ `pipe/spawn.rs` と `fleet/usage.rs` は std の CommandExt の use が不要になり unused_imports で clippy が落ちる＝行 e に同梱（`fleet/usage.rs` の kill の site も行 e）。(3) claude-spawn-points は headless/ の構築の字面が mod.rs に 1 つであることを求め、0 は fail-closed の違反＝構築の字面が変わる行 e で数える字面を広げる（採る形 6）。(4) exec と process_group のために CommandExt を use する `pipe/dispatch.rs`・`hook/group.rs`・`seat/cycle/launch.rs` は各行が同じ file の use を外す。(5) e2e が core の lib を直に呼んで起動に届く経路は採る形 4 の census で、行 c が共通の関数を据えるので行 f / g の置換の後も値が割れない。(6) pipe の driver・headless の runner / lens・gate の verify / lens・review は起動の記述を値で受けて同じ名の method を呼ぶだけなので 1 字も触らない。(7) `account/wire.rs` の版の照合は doctor が bin の中で撃ち、e2e は bin を撃つ（lib を直に呼ぶ歯は 0・実測）ので census に入らない。
+- **歯の置き場**: 各行の新しい歯は write-set の file の歯の区間に置き、名は invocation_ に続く行ごとの語（seam_ / stub_ / pipe_git_ / pipe_driver_ / wrap_ / seat_ / fleet_ / hook_）で始め、verify は歯の fn 名の全体を 1 行 1 本で名指す（現物に invocation を含む歯の名は 0・実測）。歯の区間を持たない file（`fleet/cli.rs`・`fleet/usage/read.rs`・`hook/vessel.rs`・`pipe/land/finish.rs`・`seat/ledger.rs`・`seat/recent.rs`）は、撃つ関数が私有か pub(super) なので同じ file の末尾に歯の区間を足す（既存 file なので flip-check が写せる）。host 名の読みは /etc/hostname を先に読むので stub が届かず RED の歯を作れない＝行 g の RED は同じ行の curl と CI の照会の歯が持ち、host の site は done の「その file に std の Command が残らない」で測る。R-C4-2（file 1 本 1500 行・幅 120 の正規化）の余地が細い file は `hook/host_guard.rs`（1407）と `pipe/confine.rs`（1362）で、そこへ足す歯は余地の内側に収める（実測・main 8ca0dc9）。
+- **行 i（段 3）**: 採る形 9 のとおり core-spawn の母集団を本体にして 1 以上を deny（fact の書式は不変）、R-C4-5 を manifest に足す。値の見込みは 341（ADR-0062 CSQ-P3 と同じ・main b82be74 の境界 crate の本体 174 + 実物の口の見込み 110 = 284 の 1.2 倍の切り上げ）で、main 8ca0dc9 の境界 crate の本体は 178（main.rs の歯の区間の前 173 + lib.rs 5）。**値の正は行 i の便の base で測った本体**（行 c の実物と据え付けを含む）。裁定 id は `user 2026-09-15T10:07Z`（台帳 `s2-07l.198` notes の字面・§2 / §3 が書く 09:5xZ は同じ日の前の是認で、境界 crate の上限を決めた AskUserQuestion の裁定はこちら）で、manifest の他の行の ruling と重ならない（rules-diff の相乗りに当たらない・実測）。limits は R-C4-5 を 12 本目の必須の行として読み（欠けは既存の 11 本と同じく Err）、boundary-lines は Layout に境界 crate の dir が無い周だけ measure を出さない（§5 の表の「R-C4-5 が無い周」を上書き・行と measure が同じ便で入るので行の無い周は起きない）。rules 行を足す面は manifest・`crates/scribe2/src/rules/mod.rs`（variant・ALL・名・値の形）・`crates/scribe2-boundary/tests/e2e/rules.rs`（kind の match の面と manifest の行数 / kind 数の pin）・同じ e2e の rules の外形 snapshot（rows= と kinds= の字面）・`crates/xtask/src/limits.rs`（値を読む・値の個数の歯）・`crates/xtask/src/check_sizes.rs` と `crates/xtask/src/check.rs`（measure 2 本と列）・`crates/xtask/src/check_tests.rs`（SUMMARY_PIN の core-spawn の直後に boundary-lines）・[rules-manifest.md](./rules-manifest.md) の表。**憲法 §3 の cell は design-intent/spec の編集で folio-architect（user が起動する）の別の周**（rules-parity は検出線なので manifest だけの周も門は赤にならない）。
+- **前提（行 c の起票の前）**: user 裁定は済み（`user 2026-09-24T00:13Z`）。ADR-0062 は本節と同じ PR で land し、行 c〜i はその land の後に `s2-07l.198` の子として起票する（起票の直前に母集団と census を測り直す）。
+- 触らない: 判定の関数・呼び手の引数と戻りの形・pipe の driver の本文・歯の本文（歯の区間の site の置換を除く）・§1〜§3 の決定・R-C4-1 の値・ADR-0001 の単一 binary・host-guard の今の偽 git の口と歯。
 
 <!-- contracts:begin -->
 schema = 1
@@ -174,78 +199,78 @@ done = "境界 crate が bin と e2e の歯（歯の file 29 + 外形 snapshot 1
 
 [[contract]]
 id = "c"
-title = "起動の記述と差し替え口 — core に起動の記述（std の Command と同じ builder の面と 4 終端）と差し替え口を置き、境界 crate の実物を bin の main の先頭で据え、pipe/mod.rs の git の 3 関数と歯の区間の true の起動 2 本を置換する（段 2 の 1 便目・呼び手と signature は不変）"
-req = ["FR48", "FR47", "NFR2"]
+title = "起動の記述と差し替え口 — core に起動の記述（std の Command と同じ builder の面と 4 終端）と差し替え口（trait 1 つ）を置き、境界 crate の実物 1 file を bin の main の先頭と e2e の共通の関数 1 つで process に 1 回据え、pipe/mod.rs の git の 3 関数と歯の区間の true の起動 2 本を置換する（ADR-0062・段 2 の 1 便目・呼び手と引数と戻りの形は不変）"
+req = ["NFR3", "NFR2"]
 section = "9"
-write-set = ["+crates/scribe2/src/invocation.rs", "crates/scribe2/src/lib.rs", "crates/scribe2/src/pipe/mod.rs", "+crates/scribe2-boundary/src/spawner.rs", "crates/scribe2-boundary/src/lib.rs", "crates/scribe2-boundary/src/main.rs"]
-verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail invocation_pipe_git_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail"]
+write-set = ["+crates/scribe2/src/invocation.rs", "crates/scribe2/src/lib.rs", "crates/scribe2/src/pipe/mod.rs", "+crates/scribe2-boundary/src/spawner.rs", "crates/scribe2-boundary/src/lib.rs", "crates/scribe2-boundary/src/main.rs", "crates/scribe2-boundary/tests/e2e/main.rs", "crates/scribe2-boundary/tests/e2e/hook.rs", "crates/scribe2-boundary/tests/e2e/fleet.rs", "crates/scribe2-boundary/tests/e2e/pipe/ratelimit.rs"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail invocation_seam_refuses_a_second_install_and_reports_unsupported_when_unset", "cargo nextest run -p scribe2 --lib --no-tests=fail invocation_stub_stays_in_the_installing_thread_and_fails_every_spawn", "cargo nextest run -p scribe2 --lib --no-tests=fail invocation_pipe_git_three_functions_pass_args_and_read_results", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail"]
 size = "M"
-done = "(1) core に起動の記述と差し替え口が在り、起動の記述は core の現 site が呼ぶ builder の面（new・arg・args・current_dir・env・env_remove・stdin・stdout・stderr・process_group・get_program・get_args・get_envs）と 4 終端（output・status・spawn・exec）を std の Command と同じ名と受け手の形で持ち、据えていない周の終端は io の Unsupported を返す (2) 差し替え口は process に 1 回だけ据わり、境界 crate の実物が bin の main の先頭で据えられ、境界 crate の src の本体で std の Command を構築するのは + の境界の file の 1 か所だけ (3) pipe/mod.rs の git の 3 関数と歯の区間の true の起動 2 本が起動の記述を通り、3 関数の signature と呼び手は 1 字も変わらず、pipe/mod.rs に Command::new が 0 (4) pipe/mod.rs の歯の区間の既存の fixture module に cfg(test) の実物と記録する stub が在り、起動の記述の file は歯の区間を持たず、その cfg(test) の use は file の末尾の 2 行（cfg(test) だけの行と use の行） (5) 記録する stub を据えた歯が git の 3 関数の program と引数と結果の読み（rc 非 0 は None / false・空の stdout の 1 行読みは None）を測り、base で RED (6) 境界 crate の e2e が全部緑（bin が据え忘れると撃つ面が全部落ちる）で、core の in-file の歯が全部緑（実 repo を作る既存の歯は cfg(test) の実物で動く）"
+done = "(1) core に起動の記述（型 1 つ）と差し替え口（trait 1 つ・method は 4 終端と 1 対 1）が在り、起動の記述は core の現 site が呼ぶ builder の面（new・arg・args・current_dir・env・env_remove・stdin・stdout・stderr・process_group・get_program・get_args・get_envs）と 4 終端（output・status・spawn・exec）を std の Command と同じ名と受け手の形で持ち、終端は起動の記述を解釈せず差し替え口へ渡す (2) 本番の build で差し替え口は process に 1 回だけ据わり（2 回目は据えない）、据えていない周の終端は io の Unsupported を返して各 site の既存の撃てない分岐に落ち（新しい分岐を足さない）、歯 invocation_seam_refuses_a_second_install_and_reports_unsupported_when_unset がこの 2 つを測る (3) 境界 crate の実物（+ の境界 crate の file 1 つ・起動の記述を std の Command へ写して撃つ）が bin の main の先頭で据えられ、core と境界 crate の本番の src で std の Command を構築するのはこの file の 1 か所だけ (4) e2e の main.rs に共通の関数 1 つが在って OnceLock で同じ実物を process に 1 回だけ据え、core の lib の起動の site に同じ process で届く e2e の歯（recent の git の読みを直に呼ぶ歯 2 本・fleet の host の読みを呼ぶ歯 4 本）と ratelimit.rs の host を読む fixture の helper 2 つが site に届く前にそれを呼ぶ（census は設計 §9 の採る形 4・本行の base で測り直す） (5) pipe/mod.rs の git の 3 関数と歯の区間の true の起動 2 本が起動の記述を通り、3 関数の引数の数・順・戻りの形と呼び手は 1 字も変わらず、pipe/mod.rs に Command::new が 0 (6) cfg(test) の build では据えずに撃て、既定は pipe/mod.rs の歯の区間の既存の fixture module に置く実物で、実 repo を作る既存の歯はそのまま緑、起動の記述の file は歯の区間を持たず、その cfg(test) の use は file の末尾の 2 行（cfg(test) だけの行と use の行） (7) 記録する stub（撃たれた program と引数を覚え決めた結果を返す・spawn の終端は失敗だけ）が同じ fixture module に在り、歯 invocation_stub_stays_in_the_installing_thread_and_fails_every_spawn が据えた歯の thread の外（別 thread）では stub が効かないことと spawn が失敗を返すことを測る (8) stub を据えた歯 invocation_pipe_git_three_functions_pass_args_and_read_results が git の 3 関数の program と引数と結果の読み（rc 非 0 は None / false・空の stdout の 1 行読みは None）を測り、base で RED (9) 境界 crate の e2e が全部緑（bin や共通の関数が据え忘れると撃つ面が落ちる）で、core の in-file の歯が全部緑"
 
 [[contract]]
 id = "d"
-title = "pipe の driver の起動の置換 — dispatch / stop / gate / land の finish の本体 4 site と follow / follow_step / admission の歯の区間 3 site を起動の記述へ（呼び手と signature は不変・CommandExt の use を外す）"
-req = ["FR48", "FR47", "NFR2"]
+title = "pipe の driver の起動の置換 — dispatch / stop / gate / land の finish の本体 4 site と follow / follow_step / admission の歯の区間 3 site を起動の記述へ（ADR-0062・呼び手と引数と戻りの形は不変・dispatch の CommandExt の import を外す）"
+req = ["NFR2", "NFR3"]
 section = "9"
 write-set = ["crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/stop.rs", "crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/land/finish.rs", "crates/scribe2/src/pipe/follow.rs", "crates/scribe2/src/pipe/follow_step.rs", "crates/scribe2/src/pipe/admission.rs"]
-verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail invocation_pipe_driver_"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail invocation_pipe_driver_dispatch_self_launch_failure_is_false", "cargo nextest run -p scribe2 --lib --no-tests=fail invocation_pipe_driver_stop_kill_passes_the_signal_and_pid", "cargo nextest run -p scribe2 --lib --no-tests=fail invocation_pipe_driver_gate_patch_id_spawn_failure_is_none", "cargo nextest run -p scribe2 --lib --no-tests=fail invocation_pipe_driver_finish_pr_line_goes_through_the_seam"]
 depends = ["c"]
 size = "S"
-done = "(1) write-set の 7 file に Command::new と std の Command の use が 0（本体 4 site と歯の区間 3 site が起動の記述を通る）で、関数の signature・呼び手・判定は 1 字も変わらない (2) dispatch.rs の CommandExt の use が消え、clippy の unused_imports が 0 (3) 記録する stub を据えた歯が自分自身の起動（spawn の失敗で偽）・kill の引数・git patch-id の起動（spawn の失敗で None）・PR を開く sh の行の起動を測り、base で RED（land の finish は file の末尾に歯の区間を足す） (4) core の in-file の歯が全部緑"
+done = "(1) write-set の 7 file に Command::new と std の Command の use が 0（本体 4 site と歯の区間 3 site が起動の記述を通る）で、関数の引数の数・順・戻りの形・呼び手・判定は 1 字も変わらない (2) dispatch.rs の CommandExt の import が消え、clippy の unused_imports が 0 (3) 記録する stub を据えた歯 4 本（invocation_pipe_driver_dispatch_self_launch_failure_is_false = 自分自身の起動が spawn の失敗で偽・invocation_pipe_driver_stop_kill_passes_the_signal_and_pid = kill の引数・invocation_pipe_driver_gate_patch_id_spawn_failure_is_none = git patch-id の起動が spawn の失敗で None・invocation_pipe_driver_finish_pr_line_goes_through_the_seam = PR を開く sh の行の program と引数）が base で RED（land の finish は file の末尾に歯の区間を足す） (4) core の in-file の歯が全部緑"
 
 [[contract]]
 id = "e"
-title = "包みと claude の構築点の起動の置換 — confine の systemctl / systemd-run / sh と headless の構築点を起動の記述へ、その戻り値に process_group を呼ぶ spawn.rs と fleet/usage.rs の CommandExt を外し、claude-spawn-points が起動の記述の構築を数える（呼び手は不変）"
-req = ["FR48", "FR47", "NFR2"]
+title = "包みと claude の構築点の起動の置換 — confine の systemctl / systemd-run / sh と headless の構築点を起動の記述へ、その戻り値に process_group を呼ぶ spawn.rs と fleet/usage.rs の CommandExt を外し、claude-spawn-points が std の Command と起動の記述の構築を合わせて数える（ADR-0062・呼び手は不変）"
+req = ["NFR6", "NFR2", "NFR3"]
 section = "9"
 write-set = ["crates/scribe2/src/pipe/confine.rs", "crates/scribe2/src/headless/mod.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/fleet/usage.rs", "crates/xtask/src/spawn_points.rs"]
-verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail invocation_wrap_", "cargo nextest run -p xtask --no-tests=fail spawn_points_counts_the_invocation_constructor_as_the_build_point"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail invocation_wrap_release_shoots_systemctl_kill_then_reset_failed", "cargo nextest run -p scribe2 --lib --no-tests=fail invocation_wrap_headless_build_names_the_program_and_flags", "cargo nextest run -p scribe2 --lib --no-tests=fail invocation_wrap_usage_kill_passes_the_pid", "cargo nextest run -p xtask --no-tests=fail spawn_points_counts_the_invocation_constructor_as_the_build_point"]
 depends = ["c"]
 size = "S"
-done = "(1) confine.rs・headless/mod.rs・fleet/usage.rs に Command::new と std の Command の字面が 0（confine の本体 7 site と歯の区間 2 site・headless の構築点 1 site・fleet/usage の kill 1 site）で、包みの関数と構築点は型の字面だけが起動の記述に替わり、argv・env の外し方・scope の引数は 1 字も変わらない (2) spawn.rs と fleet/usage.rs の CommandExt の use が消え（fleet/usage.rs の ExitStatusExt は残る）、gate の verify / lens・review・headless の runner / lens は 1 字も変わらず compile する (3) claude-spawn-points が headless/ の構築の字面を std の Command と起動の記述の 2 つで数え、合計がちょうど 1 でそれが mod.rs に在ることを求め、flag の字面の検査は不変で、cargo xtask check が緑 (4) 記録する stub を据えた歯が systemctl の kill と reset-failed の 2 起動・構築点の program と flag・kill の引数を測り base で RED、xtask の歯は起動の記述の構築 1 つの fixture を健全と読み base で RED (5) core の in-file の歯が全部緑"
+done = "(1) confine.rs・headless/mod.rs・fleet/usage.rs に Command::new と std の Command の字面が 0（confine の本体 7 site と歯の区間 2 site・headless の構築点 1 site・fleet/usage の kill 1 site）で、包みの関数と構築点は型の字面だけが起動の記述に替わり、引数の数・順・戻りの形・argv・env の外し方・scope の引数は 1 字も変わらない (2) spawn.rs と fleet/usage.rs の CommandExt の import が消え（fleet/usage.rs の ExitStatusExt は残る）、gate の verify / lens・review・headless の runner / lens は 1 字も変わらず compile する (3) claude-spawn-points が headless/ の構築の字面を std の Command と起動の記述の 2 つで数え、合計がちょうど 1 でそれが mod.rs に在ることを求め、flag の字面の検査は不変で、cargo xtask check が緑 (4) 記録する stub を据えた歯 3 本（invocation_wrap_release_shoots_systemctl_kill_then_reset_failed = systemctl の kill と reset-failed の 2 起動・invocation_wrap_headless_build_names_the_program_and_flags = 構築点の program と flag・invocation_wrap_usage_kill_passes_the_pid = kill の引数）が base で RED、xtask の歯 spawn_points_counts_the_invocation_constructor_as_the_build_point は起動の記述の構築 1 つの fixture を健全と読み base で RED (5) 封じ込めの包みが包んだ起動の記述を差し替え口へ渡すだけで、箱の外で走る子 process は増えない（包みの既存の歯が全部緑） (6) core の in-file の歯が全部緑"
 
 [[contract]]
 id = "f"
-title = "席と tmux と台帳の読みの起動の置換 — seat の tmux 2 関数・席の起動の exec・台帳の bd 2 site・recent の git・口座の pane の読みを起動の記述へ（呼び手は不変・launch の CommandExt を外す）"
-req = ["FR48", "FR47", "NFR2"]
+title = "席と tmux と台帳の読みの起動の置換 — seat の tmux 2 site・席の起動の exec・台帳の bd 2 site・recent の git・口座の pane の読みを起動の記述へ（ADR-0062・呼び手は不変・launch の CommandExt の import を外す）"
+req = ["NFR2", "NFR3"]
 section = "9"
 write-set = ["crates/scribe2/src/seat/mod.rs", "crates/scribe2/src/seat/cycle/launch.rs", "crates/scribe2/src/seat/ledger.rs", "crates/scribe2/src/seat/recent.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2/src/ledger/mod.rs"]
-verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail invocation_seat_"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail invocation_seat_tmux_socket_flag_follows_the_socket", "cargo nextest run -p scribe2 --lib --no-tests=fail invocation_seat_account_pane_read_passes_the_target", "cargo nextest run -p scribe2 --lib --no-tests=fail invocation_seat_launch_exec_failure_names_the_reason", "cargo nextest run -p scribe2 --lib --no-tests=fail invocation_seat_ledger_stream_spawn_failure_is_typed", "cargo nextest run -p scribe2 --lib --no-tests=fail invocation_seat_bd_output_failure_is_typed", "cargo nextest run -p scribe2 --lib --no-tests=fail invocation_seat_recent_git_passes_the_repo_args"]
 depends = ["c"]
 size = "S"
-done = "(1) write-set の 6 file に Command::new と std の Command の use が 0（本体 7 site）で、関数の signature・呼び手・判定は 1 字も変わらない (2) launch.rs の CommandExt の use が消え、exec は起動の記述の終端を通る (3) 記録する stub を据えた歯が tmux の socket の引数の付け方（-S の有無）・pane の読みの引数・exec の失敗の理由・bd の起動（spawn の失敗の型）・recent の git の引数を測り base で RED（seat/ledger.rs と seat/recent.rs は file の末尾に歯の区間を足す） (4) core の in-file の歯が全部緑（tmux の実 socket を撃つ既存の歯は cfg(test) の実物で動く）"
+done = "(1) write-set の 6 file に Command::new と std の Command の use が 0（本体 7 site）で、関数の引数の数・順・戻りの形・呼び手・判定は 1 字も変わらない (2) launch.rs の CommandExt の import が消え、exec は起動の記述の終端を通る (3) 記録する stub を据えた歯 6 本（invocation_seat_tmux_socket_flag_follows_the_socket = tmux の socket の引数の付け方〔-S の有無〕・invocation_seat_account_pane_read_passes_the_target = 口座の pane の読みの引数・invocation_seat_launch_exec_failure_names_the_reason = exec の失敗の理由・invocation_seat_ledger_stream_spawn_failure_is_typed = seat の台帳の読みの spawn の失敗の型・invocation_seat_bd_output_failure_is_typed = ledger の bd の起動の失敗の型・invocation_seat_recent_git_passes_the_repo_args = recent の git の引数）が base で RED（seat/ledger.rs と seat/recent.rs は file の末尾に歯の区間を足す） (4) core の in-file の歯が全部緑（tmux の実 socket を撃つ既存の歯は cfg(test) の実物で動く）で、recent の git の読みを直に呼ぶ e2e の歯 2 本は行 c の共通の関数で据わって緑"
 
 [[contract]]
 id = "g"
-title = "fleet の起動の置換 — usage の curl・host 名の読みの hostname・CI の照会・store の歯の true の起動を起動の記述へ（呼び手は不変）"
-req = ["FR48", "FR47", "NFR2"]
+title = "fleet の起動の置換 — usage の curl・host 名の読みの hostname・CI の照会・store の歯の true の起動を起動の記述へ（ADR-0062・呼び手は不変）"
+req = ["NFR2", "NFR3"]
 section = "9"
 write-set = ["crates/scribe2/src/fleet/usage/read.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/src/fleet/wait.rs", "crates/scribe2/src/fleet/store.rs"]
-verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail invocation_fleet_"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail invocation_fleet_usage_curl_reads_stdin_stdout_and_nonzero_rc", "cargo nextest run -p scribe2 --lib --no-tests=fail invocation_fleet_ci_query_names_the_program_and_cwd"]
 depends = ["c"]
 size = "S"
-done = "(1) write-set の 4 file に Command::new と std の Command の use が 0（本体 3 site と歯の区間 1 site）で、関数の signature・呼び手・判定は 1 字も変わらず、host 名の読みは /etc/hostname を先に読む順を保つ (2) 記録する stub を据えた歯が curl の起動（stdin と stdout の形・rc 非 0 の読み）と CI の照会の program と cwd を測り base で RED（fleet/usage/read.rs は file の末尾に歯の区間を足す） (3) core の in-file の歯と境界 crate の e2e が全部緑"
+done = "(1) write-set の 4 file に Command::new と std の Command の use が 0（本体 3 site と歯の区間 1 site）で、関数の引数の数・順・戻りの形・呼び手・判定は 1 字も変わらず、host 名の読みは /etc/hostname を先に読む順を保つ (2) 記録する stub を据えた歯 2 本（invocation_fleet_usage_curl_reads_stdin_stdout_and_nonzero_rc = curl の起動の stdin と stdout の形と rc 非 0 の読み・invocation_fleet_ci_query_names_the_program_and_cwd = CI の照会の program と cwd）が base で RED（fleet/usage/read.rs は file の末尾に歯の区間を足す・host の site は stub が届かないので (1) で測る） (3) core の in-file の歯と境界 crate の e2e が全部緑（host の読みを呼ぶ e2e の歯と fixture の helper は行 c の共通の関数で据わる）"
 
 [[contract]]
 id = "h"
-title = "hook と導入先の起動の置換 — vessel の git 3 関数と cargo・host_guard の git ls-files・group の自分自身の起動・consumers の HEAD の読みを起動の記述へ、HEAD の読みの空 sha の歯を足す（呼び手は不変・group の CommandExt を外す）"
-req = ["FR48", "FR47", "NFR2"]
+title = "hook と導入先の起動の置換 — vessel の git 3 関数と cargo・host_guard の git ls-files・group の自分自身の起動・consumers の HEAD の読み・wire の版の照合を起動の記述へ、HEAD の読みの空 sha の歯を足す（ADR-0062・呼び手は不変・group の CommandExt の import を外す）"
+req = ["NFR5", "NFR2", "NFR3"]
 section = "9"
-write-set = ["crates/scribe2/src/hook/vessel.rs", "crates/scribe2/src/hook/host_guard.rs", "crates/scribe2/src/hook/group.rs", "crates/scribe2/src/account/consumers.rs"]
-verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail invocation_hook_"]
+write-set = ["crates/scribe2/src/hook/vessel.rs", "crates/scribe2/src/hook/host_guard.rs", "crates/scribe2/src/hook/group.rs", "crates/scribe2/src/account/consumers.rs", "crates/scribe2/src/account/wire.rs"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail invocation_hook_vessel_git_and_cargo_pass_their_args", "cargo nextest run -p scribe2 --lib --no-tests=fail invocation_hook_host_guard_ls_files_reads_the_nul_split", "cargo nextest run -p scribe2 --lib --no-tests=fail invocation_hook_group_self_launch_failure_is_false", "cargo nextest run -p scribe2 --lib --no-tests=fail invocation_hook_consumers_head_empty_stdout_is_unknown", "cargo nextest run -p scribe2 --lib --no-tests=fail invocation_hook_wire_version_reads_ok_other_and_missing"]
 depends = ["c"]
 size = "S"
-done = "(1) write-set の 4 file に Command::new と std の Command の use が 0（本体 7 site と歯の区間 2 site）で、関数の signature・呼び手・判定は 1 字も変わらない (2) group.rs の CommandExt の use が消える (3) 記録する stub を据えた歯が vessel の git と cargo の引数・git ls-files の -z の読み・自分自身の起動（spawn の失敗で偽）を測り base で RED（hook/vessel.rs は file の末尾に歯の区間を足す） (4) HEAD の読みの歯が rc 0 で空の stdout を返す stub で Unknown を返すことを測る（台帳 s2-07l.198 notes の生存変異 1 本を殺す） (5) core の in-file の歯が全部緑"
+done = "(1) write-set の 5 file に Command::new と std の Command の use が 0（本体 8 site と歯の区間 2 site）で、関数の引数の数・順・戻りの形・呼び手・判定は 1 字も変わらない (2) group.rs の CommandExt の import が消える (3) 記録する stub を据えた歯 4 本（invocation_hook_vessel_git_and_cargo_pass_their_args = vessel の git と cargo の引数・invocation_hook_host_guard_ls_files_reads_the_nul_split = git ls-files の -z の読み・invocation_hook_group_self_launch_failure_is_false = 自分自身の起動が spawn の失敗で偽・invocation_hook_wire_version_reads_ok_other_and_missing = bin の --version の 1 行目の一致 / 不一致 / 起動の失敗）が base で RED（hook/vessel.rs は file の末尾に歯の区間を足す） (4) 歯 invocation_hook_consumers_head_empty_stdout_is_unknown が rc 0 で空の stdout を返す stub で HEAD の読みが Unknown を返すことを測る（台帳 s2-07l.198 notes の生存変異 1 本を殺す） (5) host-guard の偽 git の口と git の回数の歯は変わらず緑 (6) core の in-file の歯が全部緑で、host_guard.rs は R-C4-2 の余地（1500 行）の内側"
 
 [[contract]]
 id = "i"
-title = "core-spawn を deny に・R-C4-5 を足す — core-spawn の母集団を core の src の本体にして 1 以上を deny、境界 crate の src の本体を数える boundary-lines と manifest の R-C4-5（BoundaryLines・値は本行の base の実測 × 1.2 の切り上げ・仮置き 341・裁定 user 2026-09-15T10:07Z）"
-req = ["FR48", "FR47", "NFR2"]
+title = "core-spawn を deny に・R-C4-5 を足す — core-spawn の母集団を core の src の本体にして 1 以上を deny、境界 crate の src の本体を数える boundary-lines と manifest の R-C4-5（BoundaryLines・値は本行の base の実測 × 1.2 の切り上げ・見込み 341・裁定 user 2026-09-15T10:07Z・ADR-0062）"
+req = ["NFR2", "NFR3"]
 section = "9"
 touches = ["crate::rules::RuleKind"]
-write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2-boundary/tests/e2e/rules.rs", "crates/xtask/src/limits.rs", "crates/xtask/src/check_sizes.rs", "crates/xtask/src/check.rs", "crates/xtask/src/check_tests.rs", "docs/design/rules-manifest.md"]
-verify = ["cargo nextest run -p xtask --no-tests=fail sizes_core_spawn_denies_src_body_sites sizes_boundary_lines_over_the_limit_is_denied limits_read_carries_the_boundary_lines_row"]
+write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2-boundary/tests/e2e/rules.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__rules__rules_external_form.snap", "crates/xtask/src/limits.rs", "crates/xtask/src/check_sizes.rs", "crates/xtask/src/check.rs", "crates/xtask/src/check_tests.rs", "docs/design/rules-manifest.md"]
+verify = ["cargo nextest run -p xtask --no-tests=fail sizes_core_spawn_denies_src_body_sites", "cargo nextest run -p xtask --no-tests=fail sizes_boundary_lines_over_the_limit_is_denied", "cargo nextest run -p xtask --no-tests=fail limits_read_carries_the_boundary_lines_row", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_embedded_manifest_declares_boundary_lines_row_with_its_ruling"]
 depends = ["d", "e", "f", "g", "h"]
 size = "S"
-done = "(1) core-spawn が core の src の本体だけを数え（歯の区間の起動は数えない＝core-lines と同じ切り方）、1 以上で cargo xtask check が rc 1 になり、fact の書式は不変で、本行の base で本体の件数が 0 (2) boundary-lines が境界 crate の src の本体を数え、R-C4-5 を超えると deny、R-C4-5 が無い周は measure を出さず、check_tests.rs の SUMMARY_PIN が core-spawn の直後に boundary-lines を持つ (3) manifest に R-C4-5（kind BoundaryLines・Int・発効・値は本行の base で測った本体 × 1.2 の切り上げ・ruling は user 2026-09-15T10:07Z）が在り、cargo xtask rules-diff の相乗りに当たらず、rules/mod.rs の variant・ALL・名・値の形と e2e の kind の match が揃う (4) limits が R-C4-5 を読み、値の個数の歯が 1 つ増えた数を測る (5) rules-manifest.md の R-C4 の表に行が在る（憲法 §3 の cell は folio-architect の別の周・rules-parity は検出線） (6) 歯 3 本（本体の起動を deny し歯の区間を数えない fixture・上限超えの fixture・現物の manifest の R-C4-5）が base で RED"
+done = "(1) core-spawn が core の src の本体だけを数え（歯の区間の cfg(test) の実物と fixture の起動は数えない＝core-lines と同じ切り方）、1 以上で cargo xtask check が rc 1 になり、fact の書式は不変で、本行の base で本体の件数が 0 (2) boundary-lines が境界 crate の src の本体を数えて R-C4-5 を超えると deny、Layout に境界 crate の dir が無い周は measure を出さず、check_tests.rs の SUMMARY_PIN が core-spawn の直後に boundary-lines を持つ (3) manifest に R-C4-5（kind BoundaryLines・Int・発効・値は本行の base で測った境界 crate の src の本体 × 1.2 の切り上げ・ruling は user 2026-09-15T10:07Z）が在り、cargo xtask rules-diff の相乗りに当たらず、rules/mod.rs の variant・ALL・名・値の形と e2e の kind の match と manifest の行数 / kind 数の pin と rules の外形 snapshot が揃う (4) limits が R-C4-5 を 12 本目の必須の行として読み（欠けは Err）、値の個数の歯が 1 つ増えた数を測る (5) rules-manifest.md の R-C4 の表に行が在る（憲法 §3 の cell は folio-architect の別の周・rules-parity は検出線） (6) 歯 4 本（sizes_core_spawn_denies_src_body_sites = 本体の起動を deny し歯の区間を数えない fixture・sizes_boundary_lines_over_the_limit_is_denied = 上限超えの fixture・limits_read_carries_the_boundary_lines_row = 現物の manifest の R-C4-5 を読む・rules_embedded_manifest_declares_boundary_lines_row_with_its_ruling = 埋め込みの manifest の行と裁定 id）が base で RED"
 <!-- contracts:end -->
