@@ -85,6 +85,39 @@
   - lib（行 b の `+` の file の中・`seat_unit_` 接頭辞）: 導出の pure 関数の出力を fixture の逐語との `assert_eq` で測る（insta の snapshot は使わない＝`crates/scribe2/src` に snapshot file は 0 のまま・dev-dependency は増えない）・印の判定（在る / 無い / bytes 違い）の 3 値。
 - write-set の注: 行 a が `+` で足す seat 配下の file は、行 a の着地前は base に無いので本行も `+` で宣言する。行 a の着地後に素の path へ直す（受付は着地済みの file の `+` を断る）。
 
+## 4. tick が群の移動の続きを撃つ（契約表の行 c・§2 の判定の列に移動の門を足す・ADR-0058 §2・[ADR-0049](../../design-intent/decisions/ADR-0049-seat-accounts-are-owned-by-project-groups.html) §2・[ADR-0055](../../design-intent/decisions/ADR-0055-group-pressure-is-measured-at-run-ends-and-seat-turns-without-a-timer.html) OPT1 の「席自身の仕組み」の側・`s2-07l.616`）
+
+やさしく言うと: 群の移動（[account-lifecycle.md](./account-lifecycle.md) §20〜§22）の続き（古い席に /exit を送り、shell に戻った窓に新しい口座の席を起こす）は dispatch の 1 周でしか撃たれず、周は便の終端か手動でしか起きない。移動が決まった後に便も周も無ければ、席は「移動中」のまま何時間でも止まる。さらに群の段は自分の置き場の登録しか読まないので、同じ群でも別の置き場に登録された席（別 project の席）は退避の対象にならない。管理 tick（§2）は席ごとに周期で回り、席の状態の打刻と入力欄の門を既に持つ。tick が「自席の登録 row の口座 ≠ 群の記録の口座」の周に、自席の退避と起こし直しを 1 手ずつ撃てば、どの置き場の席も、便が無くても、移る。
+
+- 出所: 台帳 `s2-07l.616`（memo・2026-09-24 の実測: 移動が決まった後、退避の対象は列の置き場の席 1 つだけ・その席への /exit は 2 回とも席が作業中の周に当たり input-unknown で保留・以後 8 時間 event 0 件のまま）と user 裁定 2026-09-24T22:09Z（逐語は同じ memo の本文・heartbeat で解く）。
+- 現物（verified・main 564b4cd）:
+  - tick の判定の列は `crates/scribe2/src/seat/tick.rs` の `judge`（`front` = 登録 row → 状態の打刻 → 梯子・`back` = 黙りの門 → 上限 → 床 → 口座の門 → 入力欄の門 → 記録 → 注入）。群は読まない（§2 の「触らない: 群の逼迫の通知と移動」）。判定は閉じた enum `TickDecision`（Inject / Noop / Error）・理由は `NoopReason`（`as_str` の宣言順の列 `NOOP_REASONS`）・判定行は `render`。
+  - 群の記録の解決は `crates/scribe2/src/hook/group.rs` の `current_of`（記録 > 種・読めなければ `RecordError`）・anchor の群は `group_of`・記録の置き場は `crates/scribe2/src/seat/mod.rs` の `host_groups_dir`（置き場の親の下＝置き場を跨いで同じ 1 file）。tick の manifest は host の面を合わせた形で渡る（`crates/scribe2/src/rules/mod.rs` の `with_state_dir`）ので群の宣言は読める。
+  - 群の段の lock・/exit の字面・dialog の既定の行と Enter の記録の語・起こし直しは `crates/scribe2/src/pipe/dispatch/group.rs`（`Lock`・`EXIT`・`EXIT_DIALOG`・`relaunch`）で全部 private。`behind` は列に渡された置き場の登録 row だけを読む＝別の置き場の席は対象外。
+  - 席の起動は `crates/scribe2/src/seat/cycle/launch.rs` の `launch`（`Launch` の引数に target・anchor・account・state_dir・settle / step・manifest・rules）。settle / step は `crates/scribe2/src/seat/cycle.rs` の `pace_of`。
+  - 登録 row（`crates/scribe2/src/seat/role.rs` の `Registration`）は anchor と account を持つ＝tick は自席の anchor と口座を知っている。tick の unit は §3 が置き場と target ごとに書く＝tick は自分の置き場も知っている。
+- 形（1 つずつ歯が測る・行 c の done と 1:1）:
+  1. **移動の門の位置**: `front`（登録 row・打刻が Idle・梯子）の直後、黙りの門の前。登録 row の anchor が群に属し（`group_of`）、群の今の口座（`current_of`）が row の口座と違う周は**移動の周**: 以後の列（黙り・上限・床・口座の門・合図の注入）は撃たず、梯子の記録も触らない（移動中の席に heartbeat を送らない）。群に属さない anchor・群 0 の host・記録と row が一致する席（記録が無く種と一致する席を含む）は今の列のまま 1 字も変わらない。記録が在るのに読めない周は `noop` の `group-unreadable`（種に読み替えない・C10）。
+  2. **lock**: 移動の周は群の段と同じ lock（host の群用 dir の 1 file・`create_new`）の内側で撃つ。取れない周は `noop` の `group-locked`（1 key も送らない＝dispatch の 1 周と同じ target を二重に起こさない）。lock の実装は 1 本を共有する（`crates/scribe2/src/pipe/dispatch/group.rs` の `Lock` を記録の読み手と同じ `crates/scribe2/src/hook/group.rs` へ移して群の段と tick が呼ぶ・二重に書かない・C17）。
+  3. **pane が shell の周は起こす**: `pane_is_shell` の周は `launch` の 1 本で同じ target に群の今の口座の席を起こす（anchor と置き場は自分の row と自分の置き場・settle / step は rules・登録 row は起動が書き直す・会話は運ばない＝§20 形 6 と同じ 1 本）。判定行は `decision=move move=launch launched=<起動の結果の語>`。起こせない周（断り・失敗・候補なし）も語を載せて次の周にまた判じる（冪等・保留の event は tick が記さない）。
+  4. **pane が shell でない周は退避を 1 手**: 入力欄の門（§2 形 1 の 8 と同じ `pass_input`）を通し、空なら `/exit` の 1 行を `deliver_within`（窓は `pipe.stop_grace_ms`）で送る（`decision=move move=exit`・記録は `tick.jsonl` に `who` が `seat-tick-move`・`what` が `/exit` の 1 行・送達が未確認でも残す＝account-lifecycle.md §22 形 1 と同じ）。門が Foreign で、その tail（畳んだ字面）が dialog の既定の行の literal（§22 形 2 の `1. Exit and stop tasks`）に等しい周は /exit を送らず Enter を 1 回だけ（`move=enter`・`what` は `enter:exit-dialog`）。それ以外の Foreign / UnknownInput / OwnQueued は今の語（`input-busy` / `input-unknown` / `input-own-queued`）で 0 key（OwnQueued の Enter 1 回は `pass_input` のまま）。Busy の打刻は `front` で止まる（作業中の席に /exit を送らない＝§20 形 6 の「作業記憶を残す番」は打刻で守る）。
+  5. **/exit と dialog の字面は 1 か所**: `EXIT` / `EXIT_DIALOG` の値は `crates/scribe2/src/hook/group.rs` へ移し、群の段と tick が同じ値を読む（記録の `who` は呼び手ごと）。
+  6. **群の段（dispatch の周）は残る**: `relaunch` の続きの周（`Wait::Once`）は今のまま（便の終端でも進む・同じ lock で排他）。§20 形 6 の移動の周（合図 → settle → 起動）も不変。同じ target を 2 つの手が同じ周に撃つことは lock が防ぐ。
+  7. **event は記さない**（§2 の「tick は event を記さない」のまま）: 移動の周の記録は `tick.jsonl` と判定行だけ。`GroupMovePending` は群の段が記す側のまま。
+  8. **判定行の形**: `decision=move` の周は `reason=-`・`pointer=-`・`step=-`（梯子を評価していない印・C10）・`move=<launch|exit|enter>`・`launched=<語|->`（`move=launch` の周だけ語）・`consumed=` は送りの結果（§2 形 6 と同じ語・`move=launch` の周は `-`）。`decision=inject|noop|error` の周は `move=-` `launched=-` を末尾に足す（列は固定・省かない）。`NoopReason` に `group-unreadable` / `group-locked` の 2 値を宣言順の末尾に足す。`TickDecision` に閉じた 3 値の `Move` を足す（bool で持たない・C11）。
+  9. **群 0 の host・群に属さない anchor・記録と一致する席は 1 字も変わらない**（§2 の歯は判定行の末尾 2 欄以外そのまま）。
+- 触らない: 梯子（形 2）・合図の文面・rules 行（行は足さない: settle / step は `seat.cycle_settle_s` / `seat.cycle_step_s`、窓は `pipe.stop_grace_ms`）・`pass_input` / `input_tail`・群の判定（移り先の 3 条件・記録の形・移動を頼む記録）・§3 の install・hooks.json・event の種類の列・`Launched` の variant。
+- 却下: 席自身の hook（UserPromptSubmit / SessionStart）が続きを撃つ（hook の席は作業中＝入力欄の門を通らない・他席を撃たせると群の段が 2 系統になる）／dispatch の 1 周を timer で撃つ（ADR-0055 OPT2 の据え置き・tick が既に周期を持つ＝C17.2 で足すものが無い）／群の段が別の置き場の登録を読んで起こす（置き場ごとに tick が居るので要らない・列に無い置き場の席を列が起こすと登録 row の書き手が置き場の外に増える）／移動の周にも heartbeat の合図を送る（席は退避中・合図は消費）／tick が移り先を決める（判定は群の段の 1 回・ADR-0055 OPT3 の殺到の柵）／Busy の席に /exit（作業記憶が残らない・N1）／process を kill（§20 の却下のまま）。
+- 歯（`tests/e2e/seat.rs` に `seat_tick_move_` 接頭辞・§2 の fixture〔PATH の偽 tmux・手書きの `state.jsonl`・`--rules` の写し〕に、偽 tmux の `list-panes` の `pane_current_command` と可視域の字面を作り分ける口〔`tests/e2e/pipe/dispatch.rs` の群の fixture と同じ形〕と host の群用 dir の記録〔置き場の親の下・`tests/e2e/hook.rs` の `hook_group_current_` の fixture と同じ形〕を足す。settle は `--rules` の写しで 1 秒に縮める）:
+  - (a) 登録 row（口座 A・anchor は群 g）∧ 記録は口座 B ∧ 最終行 Idle ∧ pane が claude ∧ 入力欄が空 → `decision=move move=exit`・`send-keys` に `/exit` の payload 1 行・`tick.jsonl` に `who` が `seat-tick-move` で `what` が `/exit` の 1 行・pointer-ladder は書かれない・合図の text は 0 key（base では合図の注入か `stamp-recent` ＝ RED）。
+  - (b) 同じ席で pane の最後の `❯` 行が dialog の既定の行 → Enter 1 key・`/exit` 0・`what` が `enter:exit-dialog`／tail が別の字面 → `input-busy`・0 key／prompt 行なし → `input-unknown`・0 key（記録 0）。
+  - (c) pane が shell → `move=launch`・`send-keys` に起動行 1 行（口座 B の設定 dir を持つ）・fleet に口座 B の登録 row が 1 件増える・/exit 0（settle 1 秒で `launched=` に未確認の語）。
+  - (d) 最終行 Busy → `busy`・0 key（移動の門より前で止まる）／記録が dir（読めない）→ `group-unreadable`・0 key／lock の file が在る → `group-locked`・0 key・記録 0・起動行 0。
+  - (e) 記録の口座 = row の口座（移動済み）／群に属さない anchor／記録なしで種 = row → §2 の列のまま（`inject` か `stamp-recent`・`move=-`）。
+  - (f) 親を共有する 2 つの置き場に 1 席ずつ・記録は親の下の 1 file → 両方の tick が `move=exit`（置き場を跨いで同じ記録を読む＝別 project の席も移る）。
+  - lib（`seat_tick_move_` 接頭辞・`crates/scribe2/src/seat/tick.rs` の中）: `NOOP_REASONS` が宣言順で重複しない（既存の歯の母集団が 2 増える）・判定行の `render` に `move=` / `launched=` が載る周と `-` の周。
+- 後続: 席の起動が tick の unit を入れる（unit dir と binary は host の面が持つ＝面の表が増えるので ADR・別の行）／移動の周に席の hook の 1 行を「tick が /exit を送る」に揃える（字面だけ・account-lifecycle.md §21 形 2 (a)）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -111,4 +144,15 @@ size = "M"
 depends = ["a"]
 growth = ["crates/scribe2/src/seat/cli.rs:120", "crates/scribe2/src/seat/role.rs:60", "crates/scribe2/src/pipe/confine.rs:10", "crates/scribe2-boundary/src/main.rs:40"]
 done = "(1) seat tick install が登録 row の席の service と timer の 2 file を導出の bytes で unit dir に書き（Environment / WorkingDirectory / %h 無し・OnUnitActiveSec は seat.tick_interval_s・先頭行に器の印）、偽 systemctl が daemon-reload → enable --now <timer> の順で 2 回呼ばれ、tick.jsonl に who=seat-tick-install の 1 行が増える (2) 同じ bytes は unchanged で file 不変・enable だけ、1 byte 違う既存 file は unit-exists で file 不変・systemctl 0 回・rc 1、登録 row 無しは no-row、seat.tick_interval_s を欠く --rules は no-rule で file 0 (3) uninstall は install と同じ --binary / --rules で導出し直し、disable --now の後に 2 file を .retired/<name>.<ts> へ同じ bytes で移し、印の無い file と導出の bytes と違う file は動かさず理由で断り、--binary を欠く周は使い方の誤りで動かない (4) doctor --unit-dir U --binary PATH [--rules F] が登録 row の行ごとに tick-unit=present|absent|foreign（present = 印と bytes が同じ引数の導出と一致）を足し、--unit-dir だけで --binary 無しは使い方の誤り、--unit-dir 無しは項目を足さず seat_doctor_external_form の snapshot が 1 byte も動かない (5) 使い方の 1 行に tick install / tick uninstall が増えて seat_usage_external_form が動く (6) systemctl の綴りは confine.rs の定数 1 つを共有し、器は env・home・current_exe を読まない"
+[[contract]]
+id = "c"
+title = "tick が群の移動の続きを撃つ — 判定の列の front の直後に移動の門（自席の登録 row の口座 ≠ 群の記録の口座）を足し、群の段と同じ lock の内側で、pane が shell なら同じ target に記録の口座の席を起こし、shell でなければ入力欄の門を通して /exit（dialog の既定の行なら Enter）を 1 手・移動の周は heartbeat を送らず梯子を触らない（§4・ADR-0058 §2・ADR-0055 OPT1・s2-07l.616）"
+req = ["FR38", "FR27", "FR36", "NFR4"]
+section = "4"
+write-set = ["crates/scribe2/src/seat/tick.rs", "crates/scribe2/src/hook/group.rs", "crates/scribe2/src/pipe/dispatch/group.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "docs/design/seat-heartbeat.md"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail seat_tick_move_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_move_"]
+size = "M"
+depends = ["a"]
+growth = ["crates/scribe2/src/hook/group.rs:80", "crates/scribe2/src/pipe/dispatch/group.rs:20"]
+done = "(1) 登録 row の anchor が群に属し群の今の口座（current_of）が row の口座と違う周は、front の直後で移動の周になり、黙り・上限・床・口座の門・合図の注入を撃たず pointer-ladder を書かず、記録が在るのに読めない周は noop の group-unreadable、群に属さない anchor と記録が row と一致する席は 1 字も変わらない (2) 移動の周は群の段と同じ lock（host の群用 dir の 1 file・実装は hook/group.rs の 1 本を群の段と共有）の内側で撃ち、取れない周は noop の group-locked で 1 key も送らない (3) pane が shell の周は launch の 1 本で同じ target に記録の口座の席を起こし（anchor と置き場は自席・settle / step は rules・登録 row は起動が書き直す）、判定行は decision=move move=launch launched=<語> で、起こせない周も語を載せて次の周にまた判じる (4) pane が shell でない周は pass_input を通し、空なら /exit の 1 行を deliver_within（窓は pipe.stop_grace_ms）で送って tick.jsonl に who=seat-tick-move what=/exit の 1 行を未確認でも残し、Foreign で tail が dialog の既定の行の literal に等しい周は Enter 1 回だけで what=enter:exit-dialog、それ以外の Foreign / UnknownInput / OwnQueued は今の語で 0 key（OwnQueued の Enter は pass_input のまま）、Busy の打刻は front で止まる (5) /exit と dialog の既定の行の値は hook/group.rs の 1 か所を群の段と tick が読み、群の段の続きの周と移動の周は不変 (6) 判定行は decision=move の周に reason=- pointer=- step=- move=<launch|exit|enter> launched=<語|-> を持ち、他の周は末尾に move=- launched=- を持ち、NoopReason は末尾に group-unreadable / group-locked の 2 値、TickDecision は閉じた Move を持つ (7) tick は event を記さず、群 0 の host は 1 字も変わらない 歯: seat_tick_move_ の歯が (a)〜(f) と lib の 2 本を測る（base では移動の周に合図の注入か stamp-recent が出て move= の欄が無い ＝ RED）"
 <!-- contracts:end -->
