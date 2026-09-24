@@ -2638,13 +2638,27 @@ fn group_body(five: u64, seven: u64, model: u64) -> String {
     )
 }
 
+/// 群の宣言 1 つ（名・置き場〔[`GROUP_ANCHORS`] の添字の列〕・候補の口座の列）。
+type GroupDecl<'a> = (&'a str, &'a [usize], &'a [&'a str]);
+
 /// 群の歯の置き場を作る: 口座ごと（label, 5h, 7d, model）に credential と本文を置き、host の面に口座と群（置き場 =
 /// [`GROUP_ANCHORS`]・候補 = `candidates`）を書く（`grouped` が偽なら群の表を書かない＝群 0 の host）。
+fn group_place(accounts: &[(&str, u64, u64, u64)], candidates: &[&str], grouped: bool) -> GroupPlace {
+    let both: &[usize] = &[0, 1];
+    if grouped {
+        groups_place(accounts, &[(GROUP, both, candidates)])
+    } else {
+        groups_place(accounts, &[])
+    }
+}
+
+/// [`group_place`] の群を宣言の列で渡す形（群 2 つの歯・§20）。規則の写しには起こし直しの確認の 2 行（settle 2 秒・刻み
+/// 100 ms）も足す（移動の周の `launch` の 1 本が読む）。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn group_place(accounts: &[(&str, u64, u64, u64)], candidates: &[&str], grouped: bool) -> GroupPlace {
+fn groups_place(accounts: &[(&str, u64, u64, u64)], groups: &[GroupDecl<'_>]) -> GroupPlace {
     let (repo, state) = super::repo_with_state();
     let spy = state.join("spy");
     fs::create_dir_all(&spy).expect("偽 client の dir を作れる");
@@ -2659,11 +2673,12 @@ fn group_place(accounts: &[(&str, u64, u64, u64)], candidates: &[&str], grouped:
         fs::write(dir.join(".credentials.json"), credential).expect("credential を書ける");
         fs::write(spy.join(format!("body-tok-{label}")), group_body(*five, *seven, *model)).expect("本文を書ける");
     }
-    if grouped {
-        let quoted = |items: Vec<&str>| items.iter().map(|item| format!("\"{item}\"")).collect::<Vec<String>>().join(", ");
+    let quoted = |items: Vec<&str>| items.iter().map(|item| format!("\"{item}\"")).collect::<Vec<String>>().join(", ");
+    for (name, anchors, candidates) in groups {
+        let anchors: Vec<&str> = anchors.iter().filter_map(|at| GROUP_ANCHORS.get(*at)).map(|(anchor, _)| *anchor).collect();
         host.push_str(&format!(
-            "\n[[account-group]]\nname = \"{GROUP}\"\nanchors = [{}]\naccounts = [{}]\n",
-            quoted(GROUP_ANCHORS.iter().map(|(anchor, _)| *anchor).collect()),
+            "\n[[account-group]]\nname = \"{name}\"\nanchors = [{}]\naccounts = [{}]\n",
+            quoted(anchors),
             quoted(candidates.to_vec())
         ));
     }
@@ -2686,6 +2701,8 @@ fn group_place(accounts: &[(&str, u64, u64, u64)], candidates: &[&str], grouped:
         row("fleet.group_pressure_5h_pct", "GroupPressure5hPct", 85),
         row("fleet.group_pressure_7d_pct", "GroupPressure7dPct", 95),
         row("fleet.group_pressure_model_pct", "GroupPressureModelPct", 95),
+        row("seat.cycle_settle_s", "SeatCycleSettleS", 2),
+        row("seat.cycle_poll_ms", "SeatCyclePollMs", 100),
     ]
     .iter()
     .fold(base, |text, found| format!("{text}\n{found}"));
@@ -2699,6 +2716,13 @@ fn group_place(accounts: &[(&str, u64, u64, u64)], candidates: &[&str], grouped:
 /// 偽 tmux を道具箱の dir に置く（`send-keys -l` は入力欄の file へ・Enter は入力欄を pane へ移して宛先の席の打刻 file に
 /// `UserPromptSubmit` の 1 行を足す＝消費の証拠が窓を待たずに届く・`capture-pane` は pane の本文と prompt 行を返す・どの起動も
 /// 引数を `tmux-calls` へ 1 行で足す）。席の打刻 file は空で先に置く（hook の載った席）。
+///
+/// §20 の移動の歯のために、席の前面を target ごとの file（`spy/front-<target>`・無ければ席＝`claude`）で持つ: 退避の合図
+/// （`group: evacuate`）を消費した席は前面が shell（`bash`）に戻り（`spy/stuck-<target>` が在る席は戻らない）、shell の前面は
+/// `list-panes` で `bash`・`capture-pane` で `$ ` の prompt を返す。shell の前面へ届いた Enter は起動行と読み、送った行を
+/// `spy/launched-<target>` へ・時刻（ns）を `spy/launch-at-<target>` へ写して `SessionStart` の打刻を足し、前面を席に戻す。
+/// 退避の合図を受けた瞬間の時刻（ns）・event log の承認の行数・記録の有無を `spy/{evacuate-at,moved-at-evacuate,record-at-evacuate}-<target>`
+/// へ写す（4 手の順を外から測る）。`list-windows` は窓 `0` を返す（[`GROUP_ANCHORS`] の target の窓）。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
@@ -2714,20 +2738,40 @@ fn group_tmux(state: &Path) {
         fs::create_dir_all(&seat).expect("席の置き場を作れる");
         fs::write(seat.join("state.jsonl"), "").expect("打刻 file を作れる");
     }
-    let seats = state.join("seat");
-    let (pane, input, calls, seats) = (pane.display(), input.display(), calls.display(), seats.display());
+    let (seats, spy) = (state.join("seat"), state.join("spy"));
+    let (events, record) = (state.join("fleet").join("events.jsonl"), groups_dir(state).join(format!("{GROUP}.account")));
+    let (pane, input, calls, seats, spy) = (pane.display(), input.display(), calls.display(), seats.display(), spy.display());
+    let (events, record) = (events.display(), record.display());
     script(
         &bin.join("tmux"),
         &format!(
-            "printf '%s\\n' \"$*\" >> '{calls}'\ncase \"$1\" in\n\
-             capture-pane) cat '{pane}'; printf '\\342\\235\\257 '; cat '{input}'; printf '\\n';;\n\
+            "printf '%s\\n' \"$*\" >> '{calls}'\nt=''; p=''\nfor a in \"$@\"; do [ \"$p\" = '-t' ] && t=\"$a\"; p=\"$a\"; done\n\
+             f=$(printf '%s' \"$t\" | tr ':' '_')\nfront='{spy}/front-'\"$f\"\nshell=$(cat \"$front\" 2>/dev/null)\n\
+             case \"$1\" in\n\
+             list-panes) if [ \"$shell\" = bash ]; then echo bash; else echo claude; fi;;\n\
+             list-windows) echo 0;;\n\
+             capture-pane) cat '{pane}'; if [ \"$shell\" = bash ]; then printf '$ \\n'; else printf '\\342\\235\\257 '; cat '{input}'; printf '\\n'; fi;;\n\
              send-keys) if [ \"$4\" = \"-l\" ]; then printf '%s' \"$5\" >> '{input}'\n\
-             elif [ \"$4\" = \"Enter\" ]; then cat '{input}' >> '{pane}'; printf '\\n' >> '{pane}'; : > '{input}'\n\
+             elif [ \"$4\" = \"Enter\" ] && [ \"$shell\" = bash ]; then date +%s%N > '{spy}/launch-at-'\"$f\"\n\
+             cat '{input}' >> '{spy}/launched-'\"$f\"; printf '\\n' >> '{spy}/launched-'\"$f\"; : > '{input}'; echo claude > \"$front\"\n\
+             printf '{{\"schema\":1,\"state\":\"idle\",\"event\":\"SessionStart\",\"ts\":%s,\"sid\":\"\"}}\\n' \"$(date +%s)\" \
+             >> '{seats}/'\"$f\"'/state.jsonl'\n\
+             elif [ \"$4\" = \"Enter\" ]; then\n\
+             if grep -q 'group: evacuate' '{input}'; then date +%s%N > '{spy}/evacuate-at-'\"$f\"\n\
+             grep -c '\"kind\":\"GroupMoved\"' '{events}' > '{spy}/moved-at-evacuate-'\"$f\"\n\
+             if [ -f '{record}' ]; then echo 1 > '{spy}/record-at-evacuate-'\"$f\"; fi\n\
+             if [ ! -f '{spy}/stuck-'\"$f\" ]; then echo bash > \"$front\"; fi; fi\n\
+             cat '{input}' >> '{pane}'; printf '\\n' >> '{pane}'; : > '{input}'\n\
              printf '{{\"schema\":1,\"state\":\"busy\",\"event\":\"UserPromptSubmit\",\"ts\":%s,\"sid\":\"\"}}\\n' \"$(date +%s)\" \
-             >> '{seats}/'\"$(echo \"$3\" | tr ':' '_')\"'/state.jsonl'; fi;;\n\
+             >> '{seats}/'\"$f\"'/state.jsonl'; fi;;\n\
              esac\nexit 0\n"
         ),
     );
+}
+
+/// host の根の群用 dir（`<置き場の親>/<NAME>-host/groups`・器の字面を借りない）。
+fn groups_dir(state: &Path) -> std::path::PathBuf {
+    state.parent().unwrap_or(state).join(format!("{}-host", vessel::name::NAME)).join("groups")
 }
 
 /// 群の置き場の席の登録 row を積む（口座は置き場ごとに選ぶ）。
@@ -2856,6 +2900,12 @@ fn group_payload(account: &str, window: &str, used: u64, cap: u64) -> String {
     format!("{} group: pressure group={GROUP} account={account} window={window} used={used} cap={cap}", vessel::name::NAME)
 }
 
+/// 閾値未満の種 a0 に鮮度の内側の実測を置く（偽 client を呼ばない）。§20 以後、群の今の口座（種）が逼迫の周は移動の段へ進み
+/// §19 の通知を送らないので、通知の歯は今の口座をこの種に置き、席の登録 row の口座を逼迫にする（候補の列の先頭を `a0` にする）。
+fn quiet_seed(place: &GroupPlace) {
+    put_group_round(&place.state, &group_now(), "a0", (10, 10, 10));
+}
+
 /// 2 つの置き場の席へ `payload` がちょうど 1 回ずつ届いたこと（宛先は登録 row の target）。
 fn assert_both_seats(sends: &[String], payload: &str) {
     for (_, target) in GROUP_ANCHORS {
@@ -2878,11 +2928,12 @@ fn pipe_dispatch_group_zero_groups_sends_and_records_nothing() {
     clean(&[&place.repo, &place.state]);
 }
 
-/// (5 時間窓) 種 a1 の 5 時間窓 90（行の値 85 以上）の群は、2 つの置き場の席へ各 1 行・event 1 件（口座 a1・窓 5h・
-/// 送り先 2）。道具つきの終端の周で撃つ。
+/// (5 時間窓) 口座 a1 の 5 時間窓 90（行の値 85 以上）の群は、2 つの置き場の席へ各 1 行・event 1 件（口座 a1・窓 5h・
+/// 送り先 2）。道具つきの終端の周で撃つ。今の口座は閾値未満の種 a0（[`quiet_seed`]・§20 以後の通知の形）。
 #[test]
 fn pipe_dispatch_group_five_hour_seed_pressure_reaches_both_anchor_seats() {
-    let place = group_place(&[("a1", 90, 10, 10), ("a2", 10, 10, 10)], &["a1", "a2"], true);
+    let place = group_place(&[("a0", 10, 10, 10), ("a1", 90, 10, 10)], &["a0", "a1"], true);
+    quiet_seed(&place);
     group_seats(&place.state, ["a1", "a1"]);
     let out = group_terminal(&place, "r-group-1");
     let sends = group_sends(&place.state);
@@ -2896,18 +2947,20 @@ fn pipe_dispatch_group_five_hour_seed_pressure_reaches_both_anchor_seats() {
     clean(&[&place.repo, &place.state]);
 }
 
-/// (鮮度) 鮮度の内側の実測（いまの ts・5 時間窓 90）を持つ種は偽 client を 1 回も起こさずに置いた実測で通知し、鮮度の外
-/// （古い ts）の種は 1 回だけ測って測った値で通知する。
+/// (鮮度) 鮮度の内側の実測（いまの ts・5 時間窓 90）を持つ口座は偽 client を 1 回も起こさずに置いた実測で通知し、鮮度の外
+/// （古い ts）の口座は 1 回だけ測って測った値で通知する（今の口座は鮮度の内側の種 a0）。
 #[test]
 fn pipe_dispatch_group_fresh_account_is_not_remeasured_but_stale_is_once() {
-    let fresh = group_place(&[("a1", 10, 10, 10)], &["a1"], true);
+    let fresh = group_place(&[("a0", 10, 10, 10), ("a1", 10, 10, 10)], &["a0", "a1"], true);
+    quiet_seed(&fresh);
     group_seats(&fresh.state, ["a1", "a1"]);
     put_group_round(&fresh.state, &group_now(), "a1", (90, 10, 10));
     group_terminal(&fresh, "r-group-1");
     assert_eq!(group_calls(&fresh.state), 0, "鮮度の内側は呼出 0");
     assert_both_seats(&group_sends(&fresh.state), &group_payload("a1", "5h", 90, 85));
     clean(&[&fresh.repo, &fresh.state]);
-    let stale = group_place(&[("a1", 90, 10, 10)], &["a1"], true);
+    let stale = group_place(&[("a0", 10, 10, 10), ("a1", 90, 10, 10)], &["a0", "a1"], true);
+    quiet_seed(&stale);
     group_seats(&stale.state, ["a1", "a1"]);
     put_group_round(&stale.state, GROUP_STALE_TS, "a1", (10, 10, 10));
     group_terminal(&stale, "r-group-1");
@@ -2920,7 +2973,8 @@ fn pipe_dispatch_group_fresh_account_is_not_remeasured_but_stale_is_once() {
 /// （行は 2 のまま・event は 1 のまま・呼出は 1 のまま）。
 #[test]
 fn pipe_dispatch_group_same_measurement_is_not_notified_twice() {
-    let place = group_place(&[("a1", 90, 10, 10)], &["a1"], true);
+    let place = group_place(&[("a0", 10, 10, 10), ("a1", 90, 10, 10)], &["a0", "a1"], true);
+    quiet_seed(&place);
     group_seats(&place.state, ["a1", "a1"]);
     group_terminal(&place, "r-group-1");
     assert_eq!((group_sends(&place.state).len(), group_notices(&place.state).len()), (2, 1), "1 周目は送って記す");
@@ -2935,7 +2989,8 @@ fn pipe_dispatch_group_same_measurement_is_not_notified_twice() {
 /// 「通知済みなら永久に送らない」と「値が同じなら送らない」の 2 変異を捕まえる）。
 #[test]
 fn pipe_dispatch_group_new_measurement_with_the_same_value_notifies_again() {
-    let place = group_place(&[("a1", 90, 10, 10)], &["a1"], true);
+    let place = group_place(&[("a0", 10, 10, 10), ("a1", 90, 10, 10)], &["a0", "a1"], true);
+    quiet_seed(&place);
     group_seats(&place.state, ["a1", "a1"]);
     group_terminal(&place, "r-group-1");
     assert_eq!(group_notices(&place.state).len(), 1, "1 周目は記す");
@@ -2962,16 +3017,17 @@ fn pipe_dispatch_group_seat_account_pressure_is_notified() {
     clean(&[&place.repo, &place.state]);
 }
 
-/// (種) 席が種と違う閾値未満の口座 a2 に居て、種 a1 だけが逼迫する周も (群, a1) の 1 行が出る（他の歯は席を種と同じ
-/// 口座に置くので、測る集合から種を外す変異はここで落ちる）。
+/// (種) 席が種と違う閾値未満の口座 a2 に居て、種 a1 だけが逼迫する周も種を測って逼迫と判じる（他の歯は席を種と同じ口座に
+/// 置くので、測る集合から種を外す変異はここで落ちる）。§20 以後、今の口座（種 a1）の逼迫は §19 の通知でなく移動の周になる:
+/// 群の今の口座の記録は a2（候補の次・3 窓とも閾値未満）・§19 の通知は 0・席は既に a2 に居るので退避の合図も起動も 0。
 #[test]
 fn pipe_dispatch_group_seed_pressure_is_notified_while_the_seats_sit_elsewhere() {
     let place = group_place(&[("a1", 90, 10, 10), ("a2", 10, 10, 10)], &["a1", "a2"], true);
     group_seats(&place.state, ["a2", "a2"]);
-    group_terminal(&place, "r-group-1");
-    assert_both_seats(&group_sends(&place.state), &group_payload("a1", "5h", 90, 85));
-    let accounts: Vec<String> = group_notices(&place.state).into_iter().map(|(account, _)| account).collect();
-    assert_eq!(accounts, vec!["a1".to_owned()], "通知は種 a1 の 1 件だけ（席の a2 は閾値未満）");
+    let out = group_terminal(&place, "r-group-1");
+    assert_eq!(move_account(&place.state, GROUP).as_deref(), Some("a2"), "種 a1 の逼迫で a2 へ移る（{}）", told(&out));
+    assert_eq!(group_notices(&place.state), Vec::new(), "§19 の通知は送らない");
+    assert_eq!(group_sends(&place.state), Vec::<String>::new(), "席は既に a2＝退避の合図も起動行も無い");
     assert_eq!(group_calls(&place.state), 2, "種と席の口座を 1 回ずつ測る");
     clean(&[&place.repo, &place.state]);
 }
@@ -2980,7 +3036,8 @@ fn pipe_dispatch_group_seed_pressure_is_notified_while_the_seats_sit_elsewhere()
 #[test]
 fn pipe_dispatch_group_caps_differ_per_window() {
     for (seven, notified) in [(90, false), (96, true)] {
-        let place = group_place(&[("a1", 10, seven, 10)], &["a1"], true);
+        let place = group_place(&[("a0", 10, 10, 10), ("a1", 10, seven, 10)], &["a0", "a1"], true);
+        quiet_seed(&place);
         group_seats(&place.state, ["a1", "a1"]);
         group_terminal(&place, "r-group-1");
         let sends = group_sends(&place.state);
@@ -2996,7 +3053,8 @@ fn pipe_dispatch_group_caps_differ_per_window() {
 /// `SevenDayModel`）だけが 96 の口座も通知し、window は model（3 窓それぞれを別々の歯が pin する）。
 #[test]
 fn pipe_dispatch_group_model_window_alone_is_notified_as_model() {
-    let place = group_place(&[("a1", 10, 10, 96)], &["a1"], true);
+    let place = group_place(&[("a0", 10, 10, 10), ("a1", 10, 10, 96)], &["a0", "a1"], true);
+    quiet_seed(&place);
     group_seats(&place.state, ["a1", "a1"]);
     group_terminal(&place, "r-group-1");
     assert_both_seats(&group_sends(&place.state), &group_payload("a1", "model", 96, 95));
@@ -3009,7 +3067,8 @@ fn pipe_dispatch_group_model_window_alone_is_notified_as_model() {
 /// 1 周だけが持つ）。対: 同じ置き場の起こす側の手動の 1 周は通知する。
 #[test]
 fn pipe_dispatch_group_ls_round_sends_nothing() {
-    let place = group_place(&[("a1", 90, 10, 10)], &["a1"], true);
+    let place = group_place(&[("a0", 10, 10, 10), ("a1", 90, 10, 10)], &["a0", "a1"], true);
+    quiet_seed(&place);
     group_seats(&place.state, ["a1", "a1"]);
     let listed = group_turn(&place, &["ls"], false);
     assert_eq!(stdout_of(&listed).trim_end(), NONE_LINE, "見る側の行だけ（{}）", told(&listed));
@@ -3026,11 +3085,361 @@ fn pipe_dispatch_group_ls_round_sends_nothing() {
 /// event 1（他の歯は道具つきの終端の周で撃つ＝道具の有無の両側を別々の歯が pin する）。
 #[test]
 fn pipe_dispatch_group_round_without_runner_still_notifies() {
-    let place = group_place(&[("a1", 90, 10, 10)], &["a1"], true);
+    let place = group_place(&[("a0", 10, 10, 10), ("a1", 90, 10, 10)], &["a0", "a1"], true);
+    quiet_seed(&place);
     group_seats(&place.state, ["a1", "a1"]);
     let out = group_turn(&place, &[], false);
     assert_eq!(stdout_of(&out).trim_end(), "dispatch=unmeasured reason=no-runner", "列は測らない（{}）", told(&out));
     assert_both_seats(&group_sends(&place.state), &group_payload("a1", "5h", 90, 85));
     assert_eq!(group_notices(&place.state).len(), 1, "event 1");
+    clean(&[&place.repo, &place.state]);
+}
+
+// ───── 群の自動の移動（account-lifecycle.md §20・契約表の行 i・接頭辞 `pipe_dispatch_group_move_`） ─────
+//
+// §19 の fixture（偽 usage client・偽 tmux・host の面の群）に、偽 tmux の前面の file（退避の合図で shell へ戻る・shell の前面で
+// 受けた Enter を起動行として `spy/launched-<target>` へ写す）を足して撃つ。群の今の口座の記録と移動を頼む記録は host の根の
+// 群用 dir（[`groups_dir`]）に在る。
+
+/// 群の今の口座の記録の label（`<群用 dir>/<群>.account` の `account=` の行・無ければ `None`）。
+fn move_account(state: &Path, group: &str) -> Option<String> {
+    let text = fs::read_to_string(groups_dir(state).join(format!("{group}.account"))).ok()?;
+    text.lines().find_map(|line| line.strip_prefix("account=")).map(str::to_owned)
+}
+
+/// 置き場の `kind` の event（口座 label と detail・log の順）。
+fn move_events(state: &Path, kind: vessel::fleet::EventKind) -> Vec<(String, String)> {
+    vessel::fleet::store::read_all(state)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|event| event.kind == kind)
+        .map(|event| (event.account.unwrap_or_default(), event.detail.unwrap_or_default()))
+        .collect()
+}
+
+/// 群の移動の 3 種の event の件数（承認・断り・保留）。
+fn move_counts(state: &Path) -> (usize, usize, usize) {
+    use vessel::fleet::EventKind;
+    let count = |kind| move_events(state, kind).len();
+    (count(EventKind::GroupMoved), count(EventKind::GroupMoveRefused), count(EventKind::GroupMovePending))
+}
+
+/// 群用 dir の履歴の file 名（辞書順・dir が無ければ空）。
+fn history_names(state: &Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(groups_dir(state).join("history"))
+        .map(|entries| entries.filter_map(Result::ok).map(|entry| entry.file_name().to_string_lossy().into_owned()).collect())
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
+/// 群用 dir の直下の file 名のうち拡張子が `ext` のもの。
+fn group_files(state: &Path, ext: &str) -> Vec<String> {
+    fs::read_dir(groups_dir(state))
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .filter(|name| name.ends_with(&format!(".{ext}")))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// 偽 tmux の spy の file（`spy/<name>-<target の : を _ に>`）の中身。
+fn spy_of(state: &Path, name: &str, target: &str) -> Option<String> {
+    fs::read_to_string(state.join("spy").join(format!("{name}-{}", target.replace(':', "_")))).ok()
+}
+
+/// shell の前面で受けた起動行（target ごと・受けた順）。
+fn launched_lines(state: &Path, target: &str) -> Vec<String> {
+    spy_of(state, "launched", target).unwrap_or_default().lines().map(str::to_owned).collect()
+}
+
+/// 偽 tmux の前面を書く（`bash` = shell に戻った席・`stuck` は退避の合図を受けても戻らない席の印）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn put_spy(state: &Path, name: &str, target: &str, body: &str) {
+    fs::write(state.join("spy").join(format!("{name}-{}", target.replace(':', "_"))), body).expect("spy の file を書ける");
+}
+
+/// 退避の合図の 1 行（器の字面を借りない）。
+fn evacuate_payload(group: &str, to: &str) -> String {
+    format!("{} group: evacuate group={group} to={to} — 作業記憶を台帳と git に残して /exit", vessel::name::NAME)
+}
+
+/// 断りの 1 行。
+fn refused_payload(group: &str) -> String {
+    format!("{} group: move-refused group={group} reason=no-candidate", vessel::name::NAME)
+}
+
+/// 置き場の orchestrator の登録 row の口座（anchor ごと）。
+fn seat_account_of(state: &Path, anchor: &str) -> Option<String> {
+    let found = vessel::fleet::replay(&vessel::fleet::store::read_all(state).unwrap_or_default());
+    vessel::seat::role::registration_of_key(&found, vessel::seat::role::Role::Orchestrator, anchor).map(|row| row.account.clone())
+}
+
+/// 口座 `account` を使う live 便を 1 本置く（`RunCreated` + 口座つきの `SeatSpawned`・fleet の inflight に数わる）。
+fn put_live_run(state: &Path, account: &str) {
+    let state = state.display().to_string();
+    for args in [
+        vec!["fleet", "record", "--kind", "RunCreated", "--run", "r-live", "--bead", "s2-live.1", "--stage", "Implemented"],
+        vec!["fleet", "record", "--kind", "SeatSpawned", "--run", "r-live", "--bead", "s2-live.1", "--seat", "s1", "--account", account],
+    ] {
+        let out = super::bin_cmd().args(&args).args(["--state-dir", &state]).output();
+        assert!(out.is_ok_and(|found| found.status.success()), "live 便を置ける: {args:?}");
+    }
+}
+
+/// 移動の基本の置き場: 候補 `candidates`（口座ごとの 3 窓は `accounts`）・席は 2 つとも `seat` に居る。
+fn move_place(accounts: &[(&str, u64, u64, u64)], candidates: &[&str], seat: &str) -> GroupPlace {
+    let place = group_place(accounts, candidates, true);
+    group_seats(&place.state, [seat, seat]);
+    place
+}
+
+/// (移動) 今の口座（種 a1）の 5 時間窓 90 の群は a2 へ移る: 記録 1（account=a2・previous=a1・reason=move）・承認 event 1
+/// （account=a2・detail は宣言の行の逐語）・2 つの席へ退避の合図が 1 行ずつ・同じ target へ a2 の口座の起動行が 1 本ずつ・
+/// 登録 row は a2・§19 の通知は 0。
+#[test]
+fn pipe_dispatch_group_move_pressed_group_records_approves_evacuates_and_relaunches() {
+    let place = move_place(&[("a1", 90, 10, 10), ("a2", 10, 10, 10)], &["a1", "a2"], "a1");
+    let out = group_terminal(&place, "r-group-1");
+    let record = fs::read_to_string(groups_dir(&place.state).join(format!("{GROUP}.account"))).unwrap_or_default();
+    assert_eq!(move_account(&place.state, GROUP).as_deref(), Some("a2"), "記録は a2（{}）", told(&out));
+    assert!(record.contains("\nreason=move\nprevious=a1\n"), "理由と前の口座: {record}");
+    let moved = move_events(&place.state, vessel::fleet::EventKind::GroupMoved);
+    assert_eq!(moved.len(), 1, "承認 event 1: {moved:?}");
+    let (account, words) = moved.first().cloned().unwrap_or_default();
+    assert_eq!(account, "a2", "account = 移り先");
+    assert!(words.contains("host.toml:") && words.contains("[[account-group]]\nname = \"g\""), "宣言の行の逐語: {words}");
+    assert_both_seats(&group_sends(&place.state), &evacuate_payload(GROUP, "a2"));
+    for (anchor, target) in GROUP_ANCHORS {
+        let lines = launched_lines(&place.state, target);
+        assert_eq!(lines.len(), 1, "{target} へ起動行 1 本: {lines:?}");
+        assert!(lines.iter().all(|line| line.contains("accounts/a2") && !line.contains("accounts/a1")), "a2 の口座で起こす: {lines:?}");
+        assert_eq!(seat_account_of(&place.state, anchor).as_deref(), Some("a2"), "{anchor} の登録 row は a2");
+    }
+    assert_eq!(group_notices(&place.state), Vec::new(), "移動した周は §19 の通知を送らない");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (候補なし) 候補がどれも逼迫（a1 / a2 とも 5 時間窓 90）の群は移らない: 記録 0・断りの event 1・席の pane への行は群の
+/// 置き場ごとに断りの 1 行だけ（全 send の行数 2・§19 の通知の行は 0）・起動行 0。
+#[test]
+fn pipe_dispatch_group_move_without_candidate_refuses_once_per_anchor() {
+    let place = move_place(&[("a1", 90, 10, 10), ("a2", 90, 10, 10)], &["a1", "a2"], "a1");
+    let out = group_terminal(&place, "r-group-1");
+    assert_eq!(move_account(&place.state, GROUP), None, "記録 0（{}）", told(&out));
+    assert_eq!(move_counts(&place.state), (0, 1, 0), "断りの event 1");
+    let sends = group_sends(&place.state);
+    assert_eq!(sends.len(), 2, "席への行は置き場ごとに 1 行だけ: {sends:?}");
+    assert_both_seats(&sends, &refused_payload(GROUP));
+    assert_eq!(group_notices(&place.state), Vec::new(), "断った周は §19 の通知を送らない");
+    assert!(GROUP_ANCHORS.iter().all(|(_, target)| launched_lines(&place.state, target).is_empty()), "起動行 0");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (他の群) 群 h（置き場 2 つ目・候補 [a2, a4]）の今の口座（種 a2）は、群 g（置き場 1 つ目・候補 [a1, a2, a3]）の移り先から
+/// 外れて g は a3 へ移る（飛ばす側）。対: h の候補を [a4, a2]（種 a4）にすると g は a2 へ移る（移る側）。
+#[test]
+fn pipe_dispatch_group_move_skips_another_groups_current_account() {
+    let accounts = [("a1", 90, 10, 10), ("a2", 10, 10, 10), ("a3", 10, 10, 10), ("a4", 10, 10, 10)];
+    for (other, want) in [(["a2", "a4"], "a3"), (["a4", "a2"], "a2")] {
+        let place = groups_place(&accounts, &[(GROUP, &[0], &["a1", "a2", "a3"]), ("h", &[1], &other)]);
+        group_seats(&place.state, ["a1", other[0]]);
+        let out = group_terminal(&place, "r-group-1");
+        assert_eq!(move_account(&place.state, GROUP).as_deref(), Some(want), "h の種 {} で g は {want} へ（{}）", other[0], told(&out));
+        assert_eq!(move_account(&place.state, "h"), None, "h は移らない");
+        clean(&[&place.repo, &place.state]);
+    }
+}
+
+/// (同じ周の 2 群) g（候補 [a1, a3, a4]）と h（候補 [a2, a3, a4]）が同じ周に逼迫し候補を共有する: 先の g が a3 へ移り、後の
+/// h は g の移り先 a3 を飛ばして a4 へ移る（記録 2 の label が異なる＝周の頭の記録だけを読む変異を捕まえる）。
+#[test]
+fn pipe_dispatch_group_move_two_groups_in_one_round_take_different_targets() {
+    let accounts = [("a1", 90, 10, 10), ("a2", 90, 10, 10), ("a3", 10, 10, 10), ("a4", 10, 10, 10)];
+    let place = groups_place(&accounts, &[(GROUP, &[0], &["a1", "a3", "a4"]), ("h", &[1], &["a2", "a3", "a4"])]);
+    group_seats(&place.state, ["a1", "a2"]);
+    let out = group_terminal(&place, "r-group-1");
+    let records = (move_account(&place.state, GROUP), move_account(&place.state, "h"));
+    assert_eq!(records, (Some("a3".to_owned()), Some("a4".to_owned())), "先の g は a3・後の h は a4（{}）", told(&out));
+    assert_eq!(move_counts(&place.state), (2, 0, 0), "承認 event 2・断り 0");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (保留の続き) 2 つ目の置き場の席が退避の合図の後も shell に戻らない周は、1 つ目だけを起こし 2 つ目に保留の event を 1 件
+/// 記す。席が shell に戻った後の 2 周目は判定を繰り返さず（承認 event 1 のまま・退避の合図を重ねない・§19 の通知 0・保留を
+/// 重ねない）、保留の席だけを同じ target へ a2 で起こす。
+#[test]
+fn pipe_dispatch_group_move_second_round_only_relaunches_the_pending_seat() {
+    let place = move_place(&[("a1", 90, 10, 10), ("a2", 10, 10, 10)], &["a1", "a2"], "a1");
+    let ((_, one), (anchor, two)) = (GROUP_ANCHORS[0], GROUP_ANCHORS[1]);
+    put_spy(&place.state, "stuck", two, "");
+    let out = group_terminal(&place, "r-group-1");
+    assert_eq!((launched_lines(&place.state, one).len(), launched_lines(&place.state, two).len()), (1, 0), "{}", told(&out));
+    assert_eq!(move_counts(&place.state), (1, 0, 1), "承認 1・保留 1");
+    let pending = move_events(&place.state, vessel::fleet::EventKind::GroupMovePending);
+    assert!(pending.iter().all(|(account, detail)| account == "a2" && detail.contains(&format!("anchor={anchor}"))), "{pending:?}");
+    assert_eq!(seat_account_of(&place.state, anchor).as_deref(), Some("a1"), "保留の席の row は古い口座のまま");
+    put_spy(&place.state, "front", two, "bash");
+    let again = group_terminal(&place, "r-group-2");
+    assert_eq!(launched_lines(&place.state, two).len(), 1, "保留の席を起こす（{}）", told(&again));
+    assert_eq!(launched_lines(&place.state, one).len(), 1, "起きた席は起こし直さない");
+    assert_eq!(move_counts(&place.state), (1, 0, 1), "判定を繰り返さない・保留を重ねない");
+    let evacuations = group_sends(&place.state).iter().filter(|line| line.contains(" group: evacuate ")).count();
+    assert_eq!(evacuations, 2, "退避の合図は 1 周目の 2 行だけ");
+    assert_eq!(group_notices(&place.state), Vec::new(), "続きの周は §19 の通知を送らない");
+    assert_eq!(seat_account_of(&place.state, anchor).as_deref(), Some("a2"), "保留の席の row は a2");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (移動を頼む記録) 頼みの在る群は今の口座が鮮度の内側でも計測を 1 回撃ち、判定の後に頼みを群用 dir から履歴へ move する
+/// （群用 dir の頼み 0・履歴 1）。同じ fixture の 2 周目は頼みが無いので鮮度の内側の計測 0（move せず残す変異を捕まえる）。
+#[test]
+fn pipe_dispatch_group_move_request_forces_one_measurement_and_moves_to_history() {
+    let place = move_place(&[("a1", 10, 10, 10), ("a2", 10, 10, 10)], &["a1", "a2"], "a1");
+    put_group_round(&place.state, &group_now(), "a1", (10, 10, 10));
+    fs::create_dir_all(groups_dir(&place.state)).unwrap_or_default();
+    fs::write(groups_dir(&place.state).join(format!("{GROUP}.request")), "ts=t\naccount=a1\nwindow=5h\n").unwrap_or_default();
+    let out = group_terminal(&place, "r-group-1");
+    assert_eq!(group_calls(&place.state), 1, "鮮度の内側でも頼みの在る周は 1 回測る（{}）", told(&out));
+    assert_eq!(group_files(&place.state, "request"), Vec::<String>::new(), "群用 dir の頼みは 0");
+    let history = history_names(&place.state);
+    assert_eq!(history.iter().filter(|name| name.starts_with(&format!("{GROUP}.request."))).count(), 1, "履歴に 1: {history:?}");
+    let again = group_terminal(&place, "r-group-2");
+    assert_eq!(group_calls(&place.state), 1, "2 周目は頼みが無い＝鮮度の内側は測らない（{}）", told(&again));
+    assert_eq!(move_account(&place.state, GROUP), None, "閾値未満は移らない");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (4 手の順) 退避の合図を受けた瞬間に記録と承認 event が既に在り（偽 tmux が合図の Enter で測る）、起動行は合図より後に
+/// 届く（時刻の並び）。対: 記録を書けない周（一時 file の path が dir）は承認 event 0・合図 0・起動 0（承認を記録より先に
+/// 書く変異を捕まえる）。
+#[test]
+fn pipe_dispatch_group_move_four_steps_run_in_order() {
+    let place = move_place(&[("a1", 90, 10, 10), ("a2", 10, 10, 10)], &["a1", "a2"], "a1");
+    let out = group_terminal(&place, "r-group-1");
+    for (_, target) in GROUP_ANCHORS {
+        assert_eq!(spy_of(&place.state, "record-at-evacuate", target).as_deref(), Some("1\n"), "合図の時に記録が在る（{}）", told(&out));
+        assert_eq!(spy_of(&place.state, "moved-at-evacuate", target).as_deref(), Some("1\n"), "合図の時に承認 event が在る");
+        let at = |name| spy_of(&place.state, name, target).and_then(|found| found.trim().parse::<u128>().ok());
+        let (evacuated, launched) = (at("evacuate-at"), at("launch-at"));
+        assert!(evacuated.is_some() && launched > evacuated, "{target}: 起動は合図より後: {evacuated:?} {launched:?}");
+    }
+    clean(&[&place.repo, &place.state]);
+    let broken = move_place(&[("a1", 90, 10, 10), ("a2", 10, 10, 10)], &["a1", "a2"], "a1");
+    fs::create_dir_all(groups_dir(&broken.state).join(format!("{GROUP}.account.tmp"))).unwrap_or_default();
+    let out = group_terminal(&broken, "r-group-1");
+    assert_eq!(move_account(&broken.state, GROUP), None, "記録を書けない（{}）", told(&out));
+    assert_eq!(move_counts(&broken.state), (0, 0, 0), "承認 event 0");
+    assert_eq!(group_sends(&broken.state), Vec::<String>::new(), "合図 0");
+    assert!(GROUP_ANCHORS.iter().all(|(_, target)| launched_lines(&broken.state, target).is_empty()), "起動 0");
+    clean(&[&broken.repo, &broken.state]);
+}
+
+/// (群 0) 群を宣言しない host で逼迫の口座と席が在っても、起こす側の周は群用 dir を作らず記録 0・event 0・送り 0・起動 0・
+/// 計測 0 で、便の列の rc（終端の周は rc 0）と `dispatch ls` の外形は今のまま。
+#[test]
+fn pipe_dispatch_group_move_zero_groups_touch_nothing() {
+    let place = group_place(&[("a1", 90, 10, 10), ("a2", 10, 10, 10)], &["a1", "a2"], false);
+    group_seats(&place.state, ["a1", "a1"]);
+    let out = group_terminal(&place, "r-group-1");
+    assert!(!groups_dir(&place.state).exists(), "群用 dir を作らない（{}）", told(&out));
+    assert_eq!(move_counts(&place.state), (0, 0, 0), "event 0");
+    assert_eq!(group_notices(&place.state), Vec::new(), "通知 0");
+    assert_eq!(group_sends(&place.state), Vec::<String>::new(), "送り 0");
+    assert!(GROUP_ANCHORS.iter().all(|(_, target)| launched_lines(&place.state, target).is_empty()), "起動 0");
+    assert_eq!(group_calls(&place.state), 0, "計測 0");
+    let listed = group_turn(&place, &["ls"], false);
+    assert_eq!(listed.status.code(), Some(i32::from(RC_OK)), "{}", told(&listed));
+    assert_eq!(stdout_of(&listed).trim_end(), NONE_LINE, "dispatch ls の外形は今のまま");
+    assert!(!groups_dir(&place.state).exists(), "見る側の周も作らない");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (書き換え) 1 周目に a1 → a2 へ移った群の a2 が 2 周目に逼迫すると、a1（逼迫の実測）を飛ばして a3 へ移り、前の記録
+/// （account=a2）は履歴へ move して群用 dir の記録は 1 file のまま。
+#[test]
+fn pipe_dispatch_group_move_rewrite_moves_the_previous_record_to_history() {
+    let place = move_place(&[("a1", 90, 10, 10), ("a2", 10, 10, 10), ("a3", 10, 10, 10)], &["a1", "a2", "a3"], "a1");
+    group_terminal(&place, "r-group-1");
+    assert_eq!(move_account(&place.state, GROUP).as_deref(), Some("a2"), "1 周目は a2");
+    put_group_round(&place.state, &group_now(), "a2", (90, 10, 10));
+    let out = group_terminal(&place, "r-group-2");
+    assert_eq!(move_account(&place.state, GROUP).as_deref(), Some("a3"), "2 周目は a3（{}）", told(&out));
+    assert_eq!(group_files(&place.state, "account"), vec![format!("{GROUP}.account")], "記録は 1 file");
+    let history: Vec<String> =
+        history_names(&place.state).into_iter().filter(|name| name.starts_with(&format!("{GROUP}.account."))).collect();
+    assert_eq!(history.len(), 1, "前の記録が履歴に 1: {history:?}");
+    let previous = history.first().map(|name| groups_dir(&place.state).join("history").join(name));
+    let text = previous.and_then(|path| fs::read_to_string(path).ok()).unwrap_or_default();
+    assert!(text.starts_with("account=a2\n"), "履歴は前の記録（a2）: {text}");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (live 便) 候補の順で先の a2 を置き場の live 便が使っている周は a2 を飛ばして a3 へ移る（飛ばす側）。対: live 便が無ければ
+/// a2 へ移る（移る側）。
+#[test]
+fn pipe_dispatch_group_move_skips_an_account_used_by_a_live_run() {
+    for (live, want) in [(true, "a3"), (false, "a2")] {
+        let place = move_place(&[("a1", 90, 10, 10), ("a2", 10, 10, 10), ("a3", 10, 10, 10)], &["a1", "a2", "a3"], "a1");
+        if live {
+            put_live_run(&place.state, "a2");
+        }
+        let out = group_terminal(&place, "r-group-1");
+        assert_eq!(move_account(&place.state, GROUP).as_deref(), Some(want), "live={live} は {want} へ（{}）", told(&out));
+        clean(&[&place.repo, &place.state]);
+    }
+}
+
+/// 候補の順で先の a2 の 3 窓が `second`、次の a3 が閾値未満の置き場で 1 周を撃ち、移り先を返す。
+fn move_with_second(second: (u64, u64, u64)) -> Option<String> {
+    let (five, seven, model) = second;
+    let place = move_place(&[("a1", 90, 10, 10), ("a2", five, seven, model), ("a3", 10, 10, 10)], &["a1", "a2", "a3"], "a1");
+    group_terminal(&place, "r-group-1");
+    let found = move_account(&place.state, GROUP);
+    clean(&[&place.repo, &place.state]);
+    found
+}
+
+/// (5 時間窓) 先の a2 の 5 時間窓だけが 90（行の値 85 以上）なら a2 を飛ばして a3 へ移る。
+#[test]
+fn pipe_dispatch_group_move_skips_a_candidate_over_the_five_hour_cap() {
+    assert_eq!(move_with_second((90, 10, 10)).as_deref(), Some("a3"), "5 時間窓の逼迫は飛ばす");
+    assert_eq!(move_with_second((80, 10, 10)).as_deref(), Some("a2"), "閾値未満なら a2 へ");
+}
+
+/// (7 日窓) 先の a2 の 7 日窓だけが 96（行の値 95 以上）なら a2 を飛ばして a3 へ移る。
+#[test]
+fn pipe_dispatch_group_move_skips_a_candidate_over_the_seven_day_cap() {
+    assert_eq!(move_with_second((10, 96, 10)).as_deref(), Some("a3"), "7 日窓の逼迫は飛ばす");
+    assert_eq!(move_with_second((10, 90, 10)).as_deref(), Some("a2"), "7 日窓 90 は行の値 95 未満＝a2 へ");
+}
+
+/// (モデル別窓) 先の a2 のモデル別窓だけが 96 なら a2 を飛ばして a3 へ移る。
+#[test]
+fn pipe_dispatch_group_move_skips_a_candidate_over_the_model_cap() {
+    assert_eq!(move_with_second((10, 10, 96)).as_deref(), Some("a3"), "モデル別窓の逼迫は飛ばす");
+    assert_eq!(move_with_second((10, 10, 90)).as_deref(), Some("a2"), "モデル別窓 90 は行の値 95 未満＝a2 へ");
+}
+
+/// (lock) 群用 dir に lock の file が残る周は群の段が typed に止まり、記録 0・event 0・送り 0・計測 0 で、便の列の rc は
+/// 変わらない（終端の周は rc 0）。lock の file は消さない（他の周のもの）。
+#[test]
+fn pipe_dispatch_group_move_leftover_lock_stops_the_stage_without_touching_the_queue() {
+    let place = move_place(&[("a1", 90, 10, 10), ("a2", 10, 10, 10)], &["a1", "a2"], "a1");
+    fs::create_dir_all(groups_dir(&place.state)).unwrap_or_default();
+    fs::write(groups_dir(&place.state).join("lock"), "pid=1\n").unwrap_or_default();
+    let out = group_terminal(&place, "r-group-1");
+    assert_eq!(move_account(&place.state, GROUP), None, "記録 0（{}）", told(&out));
+    assert_eq!(move_counts(&place.state), (0, 0, 0), "event 0");
+    assert_eq!(group_notices(&place.state), Vec::new(), "通知 0");
+    assert_eq!(group_sends(&place.state), Vec::<String>::new(), "送り 0");
+    assert_eq!(group_calls(&place.state), 0, "計測 0");
+    assert!(groups_dir(&place.state).join("lock").is_file(), "lock の file は残る");
     clean(&[&place.repo, &place.state]);
 }

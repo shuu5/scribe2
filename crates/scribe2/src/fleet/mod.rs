@@ -79,6 +79,13 @@ pub enum EventKind {
     /// 口座 label・本体は [`Pressure`]（`detail` の 1 行）。**便に紐づかない**。同じ群・口座・窓の 2 度目の通知を
     /// 塞ぐのはこの行の log の位置である（§19 形 4）。
     GroupPressureNotified,
+    /// 群の今の口座を移した承認（設計 account-lifecycle.md §20 形 6・[`Shape::Group`]）。`account` = 移り先・`detail` = 群の
+    /// 宣言の行の逐語（host の面の行番号つき＝常設の承認・A1）。**便に紐づかない**（`ApprovalReceived` は run を承認済みにする）。
+    GroupMoved,
+    /// 逼迫した群の移り先が無く移らなかった（§20 形 5・`account` = 今の口座・`detail` = `group=<名> reason=no-candidate`）。
+    GroupMoveRefused,
+    /// 移動の周に settle の窓の内で shell に戻らなかった席（§20 形 6・`account` = 移り先・`detail` = 群・置き場・target・理由）。
+    GroupMovePending,
 }
 
 /// [`EventKind`] の全 variant。
@@ -103,6 +110,9 @@ pub const KINDS: &[EventKind] = &[
     EventKind::RunCost,
     EventKind::RulingReceived,
     EventKind::GroupPressureNotified,
+    EventKind::GroupMoved,
+    EventKind::GroupMoveRefused,
+    EventKind::GroupMovePending,
 ];
 
 impl EventKind {
@@ -129,6 +139,9 @@ impl EventKind {
             Self::RunCost => "RunCost",
             Self::RulingReceived => "RulingReceived",
             Self::GroupPressureNotified => "GroupPressureNotified",
+            Self::GroupMoved => "GroupMoved",
+            Self::GroupMoveRefused => "GroupMoveRefused",
+            Self::GroupMovePending => "GroupMovePending",
         }
     }
 
@@ -158,7 +171,10 @@ impl EventKind {
             | Self::DispatchMark
             | Self::InstallRecorded
             | Self::RunCost
-            | Self::GroupPressureNotified => ACTOR_MACHINE,
+            | Self::GroupPressureNotified
+            | Self::GroupMoved
+            | Self::GroupMoveRefused
+            | Self::GroupMovePending => ACTOR_MACHINE,
         }
     }
 
@@ -189,6 +205,7 @@ impl EventKind {
             Self::RunCost => Shape::Cost,
             Self::RulingReceived => Shape::Ruling,
             Self::GroupPressureNotified => Shape::Pressure,
+            Self::GroupMoved | Self::GroupMoveRefused | Self::GroupMovePending => Shape::Group,
         }
     }
 
@@ -227,6 +244,9 @@ pub enum Shape {
     /// 群の逼迫の通知（`account` = 口座 label と `detail` = [`Pressure`] の 1 行が必須・`run` / `bead` / `stage` / `seat` /
     /// `pid` を持たない・設計 account-lifecycle.md §19 形 3）。
     Pressure,
+    /// 群の移動の承認・断り・保留（`account` = 口座 label と `detail` = 空でない 1 行が必須・`run` / `bead` / `stage` / `seat` /
+    /// `pid` を持たない・設計 account-lifecycle.md §20 形 5 / 6）。
+    Group,
 }
 
 /// [`Shape`] の全 variant（宣言順・`enum-slices` が集合完全性を測る）。
@@ -240,6 +260,7 @@ pub const SHAPES: &[Shape] = &[
     Shape::Cost,
     Shape::Ruling,
     Shape::Pressure,
+    Shape::Group,
 ];
 
 /// 消費の 1 件の出所（**閉じた 3 値**・設計 gate-cost.md §26 形 (2)）。

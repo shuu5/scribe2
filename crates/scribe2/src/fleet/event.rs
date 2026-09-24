@@ -118,7 +118,7 @@ impl Event {
                 pairs.extend(Some(&self.bead).filter(|bead| !bead.is_empty()).map(|bead| ("bead", Value::Str(bead.clone()))));
                 pairs.extend(self.rule.iter().map(|rule| ("rule", Value::Str(rule.clone()))));
             }
-            Shape::Allowance | Shape::Registration | Shape::Account | Shape::Install | Shape::Pressure => {}
+            Shape::Allowance | Shape::Registration | Shape::Account | Shape::Install | Shape::Pressure | Shape::Group => {}
         }
         pairs.extend(self.account.iter().map(|label| ("account", Value::Str(label.clone()))));
         pairs.extend(self.allowance.iter().flat_map(Allowance::pairs));
@@ -247,6 +247,7 @@ impl Body {
             EventKind::RunCost => Self::cost(pairs),
             EventKind::RulingReceived => Self::ruling(pairs),
             EventKind::GroupPressureNotified => Self::pressure(pairs),
+            EventKind::GroupMoved | EventKind::GroupMoveRefused | EventKind::GroupMovePending => Self::group(pairs),
             EventKind::RunCreated
             | EventKind::RunStage
             | EventKind::RunDone
@@ -386,6 +387,19 @@ impl Body {
         Pressure::parse(&detail).ok_or(format!("detail {detail:?} は group=<名> window=<窓> used= cap= sent= でない"))?;
         Ok(Self { account: Some(text_of(field(pairs, "account"), "account")?), ..Self::default() })
     }
+
+    /// 群の移動の承認・断り・保留の行の本体（設計 account-lifecycle.md §20 形 5 / 6）: `account`（口座 label）と空でない
+    /// `detail` が**必須**。持たない key は [`Self::pressure`] と同じ（`run` / `bead` / `stage` / `seat` / `pid`・口座残量だけの
+    /// key・登録・列の印の key は在れば malformed＝承認の行が幽霊の便や席を作らない）。
+    fn group(pairs: &[(String, Value)]) -> Result<Self, String> {
+        let foreign = ["run", "bead", "stage", "seat", "pid"];
+        let allowance = ALLOWANCE_KEYS.iter().filter(|key| **key != "account");
+        forbid(pairs, foreign.iter().chain(allowance).chain(REGISTRATION_KEYS).chain(MARK_KEYS))?;
+        if text_of(field(pairs, "detail"), "detail")?.trim().is_empty() {
+            return Err("detail が空".to_owned());
+        }
+        Ok(Self { account: Some(text_of(field(pairs, "account"), "account")?), ..Self::default() })
+    }
 }
 
 impl Event {
@@ -400,7 +414,8 @@ impl Event {
             | Shape::Mark
             | Shape::Cost
             | Shape::Ruling
-            | Shape::Pressure => None,
+            | Shape::Pressure
+            | Shape::Group => None,
         }
     }
 
@@ -415,7 +430,8 @@ impl Event {
             | Shape::Mark
             | Shape::Install
             | Shape::Cost
-            | Shape::Ruling => None,
+            | Shape::Ruling
+            | Shape::Group => None,
         }
     }
 }
