@@ -4758,6 +4758,36 @@ fn seat_account_mismatch_record_leaves_the_row_state_jsonl_and_brief_untouched()
 /// 群の歯の群の名。
 const GROUP_NAME: &str = "g";
 
+/// 群の歯の置き場（[`role_place`] と同じ形で、置き場を `sock_dir` の 1 段下に置く）。host の根は置き場の親の下に在る
+/// （設計 §20 形 1 / 4）ので、置き場を tmp の根の直下に置くと hook が置く移動を頼む記録が歯どうしで共有され tmp の根に残る。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn group_role_place() -> RolePlace {
+    let repo = git_repo();
+    let sock_dir = tmp();
+    let state = sock_dir.join("state");
+    fs::create_dir_all(&state).expect("置き場を作れる");
+    let out = run_vessel(&["init", "--state-dir", &state.display().to_string(), &repo.display().to_string()]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "vessel init は rc 0");
+    let socket = socket_of(&sock_dir);
+    let launch = sock_dir.join("launch.txt");
+    fs::write(&launch, "claude\n").expect("雛形を書ける");
+    let rules = sock_dir.join("rules.toml");
+    fs::write(&rules, role_rules_text(ORCHESTRATOR_CAPS)).expect("rules を書ける");
+    let bd = fake_bd(&sock_dir, LEDGER_JSON);
+    RolePlace {
+        repo,
+        state: TmpDir { path: Some(state) },
+        sock_dir,
+        socket,
+        launch: launch.display().to_string(),
+        rules: rules.display().to_string(),
+        bd,
+    }
+}
+
 /// 群の歯の窓が開き直る時刻（遠い未来の番兵・時限にならない）。
 const GROUP_FAR: &str = "2099-01-01T00:00:00Z";
 
@@ -4869,7 +4899,7 @@ fn group_session_lines(place: &RolePlace, path: &str) -> Vec<String> {
 /// （`what` = `group-pressure`）を残す。
 #[test]
 fn hook_group_session_start_brief_carries_one_pressure_line() {
-    let place = role_place();
+    let place = group_role_place();
     put_group(&place, &place.repo.display().to_string());
     let path = group_seat(&place, "grpstart", "a1");
     put_group_round(&place.state, &group_now(), "a1", &group_windows(90, 10, 10));
@@ -4884,7 +4914,7 @@ fn hook_group_session_start_brief_carries_one_pressure_line() {
 /// (2) UserPromptSubmit: 同じ席の追加文脈（stdout）はちょうど 1 行（打刻だけの周の 0 byte に 1 行が足される）。
 #[test]
 fn hook_group_user_prompt_submit_adds_one_context_line() {
-    let place = role_place();
+    let place = group_role_place();
     put_group(&place, &place.repo.display().to_string());
     let path = group_seat(&place, "grpprompt", "a1");
     put_group_round(&place.state, &group_now(), "a1", &group_windows(90, 10, 10));
@@ -4896,7 +4926,7 @@ fn hook_group_user_prompt_submit_adds_one_context_line() {
 /// stdout 0 byte のまま・SessionStart は群の行を足さない）。
 #[test]
 fn hook_group_anchor_outside_every_group_prints_nothing() {
-    let place = role_place();
+    let place = group_role_place();
     put_group(&place, "/repo/not-this-one");
     let path = group_seat(&place, "grpoutside", "a1");
     put_group_round(&place.state, &group_now(), "a1", &group_windows(99, 99, 99));
@@ -4908,7 +4938,7 @@ fn hook_group_anchor_outside_every_group_prints_nothing() {
 /// (4) 閾値未満（5 時間窓 84・7 日窓 94・モデル別窓 94）は 0 行（鮮度の内側なので子も起こさない＝measuring も無い）。
 #[test]
 fn hook_group_under_threshold_prints_nothing() {
-    let place = role_place();
+    let place = group_role_place();
     put_group(&place, &place.repo.display().to_string());
     let path = group_seat(&place, "grpunder", "a1");
     put_group_round(&place.state, &group_now(), "a1", &group_windows(84, 94, 94));
@@ -4921,7 +4951,7 @@ fn hook_group_under_threshold_prints_nothing() {
 /// 置き場に届き、a2 の行は 1 件も来ない）。
 #[test]
 fn hook_group_stale_measurement_spawns_one_child_and_says_measuring() {
-    let place = role_place();
+    let place = group_role_place();
     put_group(&place, &place.repo.display().to_string());
     let path = group_seat(&place, "grpstale", "a1");
     let measuring = vec!["usage: measuring account=a1".to_owned()];
@@ -4955,7 +4985,7 @@ fn hook_group_stale_measurement_spawns_one_child_and_says_measuring() {
 /// （種を読む変異は 0 行になる）。
 #[test]
 fn hook_group_seat_account_differs_from_the_seed_and_is_read() {
-    let place = role_place();
+    let place = group_role_place();
     put_group(&place, &place.repo.display().to_string());
     let path = group_seat(&place, "grpseat", "a2");
     let now = group_now();
@@ -4969,7 +4999,7 @@ fn hook_group_seat_account_differs_from_the_seed_and_is_read() {
 /// モデル別窓の行の値（5 時間窓と 7 日窓の歯は model の窓を判定から落とす変異を捕まえない）。
 #[test]
 fn hook_group_model_window_alone_prints_the_model_window() {
-    let place = role_place();
+    let place = group_role_place();
     put_group(&place, &place.repo.display().to_string());
     let path = group_seat(&place, "grpmodel", "a1");
     put_group_round(&place.state, &group_now(), "a1", &group_windows(10, 10, 96));
@@ -4981,7 +5011,7 @@ fn hook_group_model_window_alone_prints_the_model_window() {
 /// （5 時間窓の行を他の窓に当てる変異を捕まえる）。
 #[test]
 fn hook_group_caps_differ_per_window() {
-    let place = role_place();
+    let place = group_role_place();
     put_group(&place, &place.repo.display().to_string());
     let path = group_seat(&place, "grpcaps", "a1");
     put_group_round(&place.state, &group_now(), "a1", &group_windows(10, 90, 10));
@@ -4989,4 +5019,64 @@ fn hook_group_caps_differ_per_window() {
     put_group_round(&place.state, &group_now(), "a1", &group_windows(10, 96, 10));
     assert_eq!(group_prompt_lines(&place, &path), vec![group_line("a1", "7d", 96, 95)], "7 日窓 96 は 1 行");
     clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+// ─────── 移動を頼む記録（account-lifecycle.md §20 形 4・契約表の行 i・接頭辞 `hook_group_move_`・§19 の歯と同じ fixture） ───────
+
+/// host の根の群用 dir（`<置き場の親>/<NAME>-host/groups`・器の字面を借りない）の直下の、移動を頼む記録の file 名。
+fn group_requests(place: &RolePlace) -> Vec<String> {
+    let dir = place.state.parent().unwrap_or(&place.state).join(format!("{}-host", vessel::name::NAME)).join("groups");
+    let mut names: Vec<String> = fs::read_dir(dir)
+        .map(|entries| entries.filter_map(Result::ok).map(|entry| entry.file_name().to_string_lossy().into_owned()).collect())
+        .unwrap_or_default();
+    names.retain(|name| name.ends_with(".request"));
+    names.sort();
+    names
+}
+
+/// 群 `g` の移動を頼む記録の本文（無ければ空）。
+fn group_request_body(place: &RolePlace) -> String {
+    let dir = place.state.parent().unwrap_or(&place.state).join(format!("{}-host", vessel::name::NAME)).join("groups");
+    fs::read_to_string(dir.join(format!("{GROUP_NAME}.request"))).unwrap_or_default()
+}
+
+/// (頼みを置く) 逼迫を読んだ UserPromptSubmit は群用 dir に移動を頼む記録を 1 file（`ts=` / `account=` / `window=` の 3 行）置く。
+/// 別の窓（7 日窓 96）が逼迫する 2 度目の hook（SessionStart）は上書きしない（1 file のまま・本文は 1 度目と同じ＝ts も窓も不変）。
+#[test]
+fn hook_group_move_pressure_puts_one_request_and_never_overwrites_it() {
+    let place = group_role_place();
+    put_group(&place, &place.repo.display().to_string());
+    let path = group_seat(&place, "grpask", "a1");
+    put_group_round(&place.state, &group_now(), "a1", &group_windows(90, 10, 10));
+    assert_eq!(group_prompt_lines(&place, &path), vec![group_line("a1", "5h", 90, 85)], "逼迫の 1 行");
+    assert_eq!(group_requests(&place), vec![format!("{GROUP_NAME}.request")], "頼みは 1 file");
+    let first = group_request_body(&place);
+    let keys: Vec<&str> = first.lines().filter_map(|line| line.split_once('=').map(|(key, _)| key)).collect();
+    assert_eq!(keys, ["ts", "account", "window"], "3 行: {first}");
+    assert!(first.contains("\naccount=a1\nwindow=5h\n"), "口座と窓: {first}");
+    put_group_round(&place.state, &group_now(), "a1", &group_windows(10, 96, 10));
+    assert_eq!(group_session_lines(&place, &path), vec![group_line("a1", "7d", 96, 95)], "2 度目も逼迫の 1 行");
+    assert_eq!(group_requests(&place), vec![format!("{GROUP_NAME}.request")], "2 度目も 1 file");
+    assert_eq!(group_request_body(&place), first, "上書きしない（ts も窓も 1 度目のまま）");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// (頼みを置かない) 閾値未満の周と、群に属さない anchor の逼迫の周は、どちらも移動を頼む記録を 1 file も置かない。
+#[test]
+fn hook_group_move_under_threshold_or_outside_anchor_puts_no_request() {
+    let under = group_role_place();
+    put_group(&under, &under.repo.display().to_string());
+    let path = group_seat(&under, "grpaskunder", "a1");
+    put_group_round(&under.state, &group_now(), "a1", &group_windows(84, 94, 94));
+    assert_eq!(group_prompt_lines(&under, &path), Vec::<String>::new(), "閾値未満は 0 行");
+    assert_eq!(group_requests(&under), Vec::<String>::new(), "閾値未満は 0 file");
+    clean(&[&under.repo, &under.state, &under.sock_dir]);
+    let outside = group_role_place();
+    put_group(&outside, "/repo/not-this-one");
+    let path = group_seat(&outside, "grpaskoutside", "a1");
+    put_group_round(&outside.state, &group_now(), "a1", &group_windows(99, 99, 99));
+    assert_eq!(group_prompt_lines(&outside, &path), Vec::<String>::new(), "群の外は 0 行");
+    assert_eq!(group_session_lines(&outside, &path), Vec::<String>::new(), "SessionStart も 0 行");
+    assert_eq!(group_requests(&outside), Vec::<String>::new(), "群の外は 0 file");
+    clean(&[&outside.repo, &outside.state, &outside.sock_dir]);
 }

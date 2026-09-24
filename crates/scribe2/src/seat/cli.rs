@@ -498,6 +498,7 @@ fn launch_with(flags: &LaunchFlags, place: &LaunchPlace) -> Outcome {
         rules: &rules,
         threshold_pct,
         carry: flags.carry,
+        replace_own: true,
     });
     let line = cycle::render_launched(flags.target, &result, state);
     match result {

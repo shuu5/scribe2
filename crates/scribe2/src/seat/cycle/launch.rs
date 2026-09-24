@@ -191,7 +191,16 @@ pub struct Launch<'a> {
     /// 注入する起動行の**末尾**に足す会話の引き継ぎの語（短い形の `-c` = `--continue`・`-r ID` = `--resume ID`・空は足さない・
     /// 設計 account-lifecycle.md §18）。登録 row の `launch`（雛形）には載せない（会話の id は 1 回きりの値）。
     pub carry: &'a [&'a str],
+    /// 呼び手の pane が target そのものの周に自分の process を起動行へ置き換えるか（人の口 `seat launch` / 短い形は `true`・
+    /// 1 周の群の段の起こし直しは `false`＝器の process を置き換えず、前面の判定と入力欄の門を通る・設計 account-lifecycle.md §20）。
+    pub replace_own: bool,
 }
+
+/// 群の置き場の席に、群の今の口座と違う口座を名指した（設計 account-lifecycle.md §20 形 3・群の外に席を置かない）。
+pub const REASON_GROUP_ACCOUNT: &str = "group-account";
+
+/// 群の今の口座の記録が在るのに読めない（設計 account-lifecycle.md §20 形 2・種に読み替えない）。
+pub const REASON_GROUP_RECORD: &str = "group-record-unreadable";
 
 /// 席の起動 1 回の結果。**「送っていない」と「送ったが確かめられない」を分ける**（[`super::Relaunched`] と同じ）。
 pub enum Launched {
@@ -226,8 +235,8 @@ pub fn launch(request: &Launch) -> Launched {
     };
     let derived = derive_launch(request.anchor, request.manifest.plugins(), request.manifest.launch_args(), None);
     let anchor = request.anchor.display().to_string();
-    // 呼び手の窓そのものへ起こす周（約束 7）: 前面の判定も入力欄の門も掛けず、送らずに置き換える。
-    let same = crate::seat::target_of_caller(request.socket).as_deref() == Some(request.target);
+    // 呼び手の窓そのものへ起こす周（約束 7）: 前面の判定も入力欄の門も掛けず、送らずに置き換える（人の口だけ・機械は置き換えない）。
+    let same = request.replace_own && crate::seat::target_of_caller(request.socket).as_deref() == Some(request.target);
     let carried = with_defaults(&derived, Some(defaults));
     let line = match launch_line(request.state_dir, &carried, &label, &anchor).and_then(|line| prepare(request, (&label, defaults.model), derived, same).map(|()| line)) {
         Ok(found) => with_tail(&found, request.carry),
@@ -267,11 +276,20 @@ fn replace_with(line: &str) -> &'static str {
     REASON_REPLACE
 }
 
-/// 口座を決める: `--account` は宣言（開いた manifest の `[[account]]`）に在る label だけ（無ければ `account-unknown`）・
-/// 無ければ session 用の選定（除外 = 他の席の登録 row の口座・候補なしは [`Launched::None`]）。event log を読めない周は
-/// 選定に入らず断る。**ここまでは row も key も書かない**。
+/// 口座を決める: anchor が群の置き場の周は群の今の口座（[`crate::hook::group::current_of`]・記録 > 種・選定を撃たない・設計
+/// account-lifecycle.md §20 形 3）で、`--account` / 短い形の label がそれと違えば [`REASON_GROUP_ACCOUNT`]・記録を読めなければ
+/// [`REASON_GROUP_RECORD`]。群の外の anchor は今のまま: `--account` は宣言（開いた manifest の `[[account]]`）に在る label だけ
+/// （無ければ `account-unknown`）・無ければ session 用の選定（除外 = 他の席の登録 row の口座・候補なしは [`Launched::None`]）。
+/// event log を読めない周は選定に入らず断る。**ここまでは row も key も書かない**。
 fn pick_account(request: &Launch) -> Result<String, Launched> {
     let labels: Vec<String> = request.manifest.accounts().iter().map(|account| account.label().to_owned()).collect();
+    if let Some(group) = crate::hook::group::group_of(request.manifest, &request.anchor.display().to_string()) {
+        let current = crate::hook::group::current_of(&request.state_dir.path, group).map_err(|_| Launched::Refused(REASON_GROUP_RECORD))?;
+        if request.account.is_some_and(|label| label != current.label) {
+            return Err(Launched::Refused(REASON_GROUP_ACCOUNT));
+        }
+        return labels.contains(&current.label).then_some(current.label).ok_or(Launched::Refused(REASON_ACCOUNT_UNKNOWN));
+    }
     if let Some(label) = request.account {
         return labels.iter().any(|found| found == label).then(|| label.to_owned()).ok_or(Launched::Refused(REASON_ACCOUNT_UNKNOWN));
     }

@@ -6,16 +6,159 @@
 //!
 //! hook は自席の登録 row の口座 1 つだけを読み、**鮮度の外は hook の中で測らない**（`hook.timeout_s` < `fleet.usage_timeout_s`）:
 //! 器自身を子として `fleet usage --state-dir D --account <label> --fresh` で起こして待たず、`usage: measuring` の 1 行を出す
-//! （値は次の話す番で読める）。群に属さない anchor・群 0 の host は 1 語も出さない。移動は作らない（第 3 段・§20）。
+//! （値は次の話す番で読める）。群に属さない anchor・群 0 の host は 1 語も出さない。
+//!
+//! 第 3 段（§20）の host の根の 2 つの記録もここが持つ（読み手が dispatch の 1 周・席の起動・doctor・hook の 4 つ＝1 本に置く）:
+//! 群の今の口座の記録（[`Record`]・書くのは 1 周の群の段だけ・[`write_current`]）とその解決の 1 関数（[`current_of`]・記録 >
+//! 種）、hook が逼迫を読んだ周に置く移動を頼む記録（[`put_request`]・在れば上書きしない）。どちらも前の file を消さず履歴の
+//! dir へ move する（[`to_history`]・N1.2）。
 
 use super::{record, record_lines, Emit, Hooked};
 use crate::fleet::usage;
 use crate::fleet::{Allowance, WindowKind};
 use crate::rules::manifest::{AccountGroup, Manifest};
+use crate::seat::{host_groups_dir, sanitize_target};
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::os::unix::process::CommandExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Instant;
+
+/// 群の今の口座の記録の拡張子（`<群用 dir>/<群の名>.account`）。
+const CURRENT_EXT: &str = "account";
+
+/// 移動を頼む記録の拡張子（`<群用 dir>/<群の名>.request`）。
+const REQUEST_EXT: &str = "request";
+
+/// 群用 dir の下の履歴の dir の名（前の記録と応えた頼みの move 先・消さない）。
+pub const HISTORY_DIR: &str = "history";
+
+/// 記録の理由（器が書くのは移動の 1 つだけ）。
+const REASON_MOVE: &str = "move";
+
+/// 群の今の口座の記録（群ごとに高々 1 file・`account=` / `ts=` / `reason=move` / `previous=` の 4 行をこの順で）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Record {
+    /// 今の口座 label（移り先）。
+    pub account: String,
+    /// 書いた時刻（UTC）。
+    pub ts: String,
+    /// 前の口座 label（移る前の今の口座）。
+    pub previous: String,
+}
+
+impl Record {
+    /// file の本文。
+    pub fn render(&self) -> String {
+        format!("account={}\nts={}\nreason={REASON_MOVE}\nprevious={}\n", self.account, self.ts, self.previous)
+    }
+
+    /// [`Self::render`] の形だけを読む（key の欠け・順の違い・余りの行・空白を含む値・理由が move でない形は `None`）。
+    pub fn parse(text: &str) -> Option<Self> {
+        let mut lines = text.lines();
+        let mut value = |key: &str| -> Option<String> {
+            let found = lines.next()?.strip_prefix(key)?.strip_prefix('=')?;
+            (!found.is_empty() && !found.contains(char::is_whitespace)).then(|| found.to_owned())
+        };
+        let (account, ts, reason, previous) = (value("account")?, value("ts")?, value("reason")?, value("previous")?);
+        (reason == REASON_MOVE && lines.next().is_none()).then_some(Self { account, ts, previous })
+    }
+}
+
+/// 群の今の口座の出所（閉じた 2 値）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    /// host の根の記録（1 周の群の段が移した）。
+    Record,
+    /// 記録が無い＝宣言の候補の先頭（ADR-0049）。
+    Seed,
+}
+
+/// 解決した群の今の口座。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Current {
+    /// 口座 label。
+    pub label: String,
+    /// 出所。
+    pub source: Source,
+}
+
+/// 記録が在るのに読めない（typed に止まる・種に読み替えない・C10）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordError {
+    /// file を開けない・UTF-8 でない（候補の列が空の宣言もここ＝§17 形 3 が断るので現物には来ない）。
+    Unreadable,
+    /// 形が [`Record::render`] でない。
+    Malformed,
+}
+
+/// 群の名の file（群用 dir の直下・名は file 名に使える字面へ潰す）。
+fn group_file(dir: &Path, group: &str, ext: &str) -> PathBuf {
+    dir.join(format!("{}.{ext}", sanitize_target(group)))
+}
+
+/// 群の今の口座の記録の path。
+pub fn current_path(dir: &Path, group: &str) -> PathBuf {
+    group_file(dir, group, CURRENT_EXT)
+}
+
+/// 移動を頼む記録の path。
+pub fn request_path(dir: &Path, group: &str) -> PathBuf {
+    group_file(dir, group, REQUEST_EXT)
+}
+
+/// 群の今の口座（**解決の 1 関数**・設計 §20 形 2）: 記録が在ればその label・無ければ種（宣言の候補の先頭）・在るのに読めなければ
+/// [`RecordError`]。読み手は dispatch の 1 周・席の起動・doctor の 3 つで、種の読みはこの中だけに在る。
+pub fn current_of(state_dir: &Path, group: &AccountGroup) -> Result<Current, RecordError> {
+    match fs::read_to_string(current_path(&host_groups_dir(state_dir), group.name())) {
+        Ok(text) => Record::parse(&text)
+            .map(|found| Current { label: found.account, source: Source::Record })
+            .ok_or(RecordError::Malformed),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => group
+            .accounts()
+            .first()
+            .map(|seed| Current { label: seed.clone(), source: Source::Seed })
+            .ok_or(RecordError::Unreadable),
+        Err(_) => Err(RecordError::Unreadable),
+    }
+}
+
+/// 記録を書く（**1 周の群の段だけが lock の内側で撃つ**・設計 §20 形 1）: 一時 file に書き、前の記録が在れば履歴へ move して
+/// から rename する＝群用 dir の記録は高々 1 file。
+pub fn write_current(dir: &Path, group: &str, record: &Record) -> std::io::Result<()> {
+    fs::create_dir_all(dir)?;
+    let path = current_path(dir, group);
+    let temporary = path.with_extension(format!("{CURRENT_EXT}.tmp"));
+    fs::write(&temporary, record.render())?;
+    if path.exists() {
+        to_history(dir, &path)?;
+    }
+    fs::rename(&temporary, &path)
+}
+
+/// 群用 dir の file を履歴の dir へ move する（`history/<file 名>.<ts>.<n>`・消さない・同じ秒の 2 つ目は `n` で分ける）。
+pub fn to_history(dir: &Path, path: &Path) -> std::io::Result<()> {
+    let history = dir.join(HISTORY_DIR);
+    fs::create_dir_all(&history)?;
+    let name = path.file_name().map(|found| found.to_string_lossy().into_owned()).unwrap_or_default();
+    let stamp = sanitize_target(&crate::fleet::cli::now_utc());
+    let free = (0..1000_u32).map(|n| history.join(format!("{name}.{stamp}.{n}"))).find(|to| !to.exists());
+    fs::rename(path, free.ok_or_else(|| std::io::Error::from(std::io::ErrorKind::AlreadyExists))?)
+}
+
+/// 移動を頼む記録を置く（設計 §20 形 4・`ts=` / `account=` / `window=` の 3 行）。**在れば上書きしない**（`create_new`）。
+/// 置けた周だけ `true`。
+pub fn put_request(dir: &Path, group: &str, account: &str, window: WindowKind) -> bool {
+    let body = format!("ts={}\naccount={account}\nwindow={}\n", crate::fleet::cli::now_utc(), window.short());
+    fs::create_dir_all(dir).is_ok()
+        && OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(request_path(dir, group))
+            .and_then(|mut file| file.write_all(body.as_bytes()))
+            .is_ok()
+}
 
 /// 5 時間窓の閾値の rules 行（値は manifest だけが持つ・C1 / C5）。
 const ROW_FIVE: &str = "fleet.group_pressure_5h_pct";
@@ -130,7 +273,12 @@ fn line_of(hooked: &Hooked) -> Option<String> {
     let state = crate::fleet::replay(&events);
     let account = crate::seat::role::registration_of_target(&state, &target)?.account.clone();
     match usage::fresh_rows(&manifest, &state, &account).ok()? {
-        Some(rows) => pressed(&rows, caps).map(|found| seat_line(group, &account, found)),
+        Some(rows) => {
+            let found = pressed(&rows, caps)?;
+            // 逼迫を読んだ周は移動を頼む記録を置く（§20 形 4・在れば上書きしない・判定と移動は 1 周の群の段が lock の内側で行う）。
+            let _ = put_request(&host_groups_dir(hooked.dir), group.name(), &account, found.window);
+            Some(seat_line(group, &account, found))
+        }
         None => measure_later(hooked.dir, &account).then(|| format!("usage: measuring account={account}")),
     }
 }

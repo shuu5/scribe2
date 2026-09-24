@@ -226,7 +226,10 @@ fn apply_account(state: &mut State, event: &Event) {
         | EventKind::InstallRecorded
         | EventKind::RunCost
         | EventKind::RulingReceived
-        | EventKind::GroupPressureNotified => {}
+        | EventKind::GroupPressureNotified
+        | EventKind::GroupMoved
+        | EventKind::GroupMoveRefused
+        | EventKind::GroupMovePending => {}
     }
 }
 
@@ -310,6 +313,9 @@ fn apply_seat(state: &mut State, event: &Event) {
         | EventKind::InstallRecorded
         | EventKind::RunCost
         | EventKind::RulingReceived
-        | EventKind::GroupPressureNotified => {}
+        | EventKind::GroupPressureNotified
+        | EventKind::GroupMoved
+        | EventKind::GroupMoveRefused
+        | EventKind::GroupMovePending => {}
     }
 }

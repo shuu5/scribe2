@@ -1136,15 +1136,16 @@ fn pipe_regate_returns_gated_fail_to_implemented_on_the_same_worktree() {
     let regated = gate_once(&repo, &state, &id, Some(&passing));
     assert_eq!(regated.status.code(), Some(i32::from(RC_OK)), "同じ worktree で gate をもう 1 周: {}", stderr_of(&regated));
     assert_eq!(head(), head_before, "再 gate も同じ worktree の同じ commit");
-    // event の種別は account-lifecycle.md §19 形 3 の群の逼迫の通知で 19 → 20（regate は種別を足さない）。
-    assert_eq!((vessel::fleet::STAGES.len(), vessel::fleet::KINDS.len()), (11, 20), "段と event の種別は増えない");
+    // event の種別は account-lifecycle.md §19 形 3 の群の逼迫の通知で 19 → 20・§20 形 5 / 6 の群の移動の 3 種で 20 → 23
+    // （regate は種別を足さない）。
+    assert_eq!((vessel::fleet::STAGES.len(), vessel::fleet::KINDS.len()), (11, 23), "段と event の種別は増えない");
     clean(&[&repo, &state]);
 }
 
 /// 形 1 / 形 6（設計 pipeline.md §52・行 au）: PASS の `Gated` の便の後に main が進んだ周、`pipe follow` を撃つと
 /// rc 0 で `follow: run=<id> rebase=<base>..<main>` の 1 行が出て、段が `Implemented` に戻り、木の base が main の
-/// 先端になる。main の sha は動かず、記帳は 1 件で、段の種別 11 個と event の種別 20 個（account-lifecycle.md §19 形 3 の
-/// 群の逼迫の通知で 19 → 20）は増えない。
+/// 先端になる。main の sha は動かず、記帳は 1 件で、段の種別 11 個と event の種別 23 個（account-lifecycle.md §19 形 3 の
+/// 群の逼迫の通知で 19 → 20・§20 形 5 / 6 の群の移動の 3 種で 20 → 23）は増えない。
 #[test]
 fn pipe_follow_step_moves_gated_tree_onto_main_and_returns_to_implemented() {
     let (repo, state) = repo_with_state();
@@ -1170,7 +1171,7 @@ fn pipe_follow_step_moves_gated_tree_onto_main_and_returns_to_implemented() {
     assert_eq!(run.detail.as_deref(), Some(format!("rebase:{base}..{moved}").as_str()), "着地の追随と同じ字面");
     assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), moved, "main は動かない");
     assert_eq!(git(&worktree, &["merge-base", "HEAD", &moved]), moved, "木の base は main の先端");
-    assert_eq!((vessel::fleet::STAGES.len(), vessel::fleet::KINDS.len()), (11, 20), "段と event の種別は増えない");
+    assert_eq!((vessel::fleet::STAGES.len(), vessel::fleet::KINDS.len()), (11, 23), "段と event の種別は増えない");
     clean(&[&repo, &state]);
 }
 
