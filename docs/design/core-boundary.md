@@ -161,7 +161,7 @@ flowchart LR
 | 行 | 面 | 本体の site | 歯の区間の site | file |
 |---|---|---|---|---|
 | c | 口の新設 + `pipe/mod.rs` の git の 3 関数 + e2e の据え付け | 3 | 2 | pipe/mod.rs + 新設 2（core / 境界）+ lib 2 + main + e2e 4 |
-| d | pipe の便を進める関数群（dispatch・stop・gate・land の finish・follow・follow_step・admission） | 4 | 3 | 7 |
+| d | pipe の便を進める関数群（dispatch・stop・land の finish・follow・follow_step・admission。gate の patch-id は .588 で消えた） | 3 | 3 | 6 |
 | e | 包みと claude の構築点（confine・headless・その戻り値に process_group を呼ぶ 2 file・claude-spawn-points） | 9 | 2 | 5 |
 | f | 席と tmux と台帳の読み（seat の mod・launch・ledger・recent・account の mod・ledger の mod） | 7 | 0 | 6 |
 | g | fleet（usage の read・cli・wait・store） | 3 | 1 | 4 |
@@ -209,14 +209,14 @@ done = "(1) core に起動の記述（型 1 つ）と差し替え口（trait 1 �
 
 [[contract]]
 id = "d"
-title = "pipe の便を進める関数群の起動の置換 — dispatch / stop / gate / land の finish の本体 4 site と follow / follow_step / admission の歯の区間 3 site を起動の記述へ（ADR-0062・呼び手と引数と戻りの形は不変・dispatch の CommandExt の import を外す）"
+title = "pipe の便を進める関数群の起動の置換 — dispatch / stop / land の finish の本体 3 site と follow / follow_step / admission の歯の区間 3 site を起動の記述へ（ADR-0062・呼び手と引数と戻りの形は不変・dispatch の CommandExt の import を外す・gate.rs の patch-id の site は .588 で消えた）"
 req = ["NFR2", "NFR3"]
 section = "9"
-write-set = ["crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/stop.rs", "crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/land/finish.rs", "crates/scribe2/src/pipe/follow.rs", "crates/scribe2/src/pipe/follow_step.rs", "crates/scribe2/src/pipe/admission.rs"]
-verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail invocation_pipe_flow_dispatch_self_launch_failure_is_false", "cargo nextest run -p scribe2 --lib --no-tests=fail invocation_pipe_flow_stop_kill_passes_the_signal_and_pid", "cargo nextest run -p scribe2 --lib --no-tests=fail invocation_pipe_flow_gate_patch_id_spawn_failure_is_none", "cargo nextest run -p scribe2 --lib --no-tests=fail invocation_pipe_flow_finish_pr_line_goes_through_the_seam"]
+write-set = ["crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/stop.rs", "crates/scribe2/src/pipe/land/finish.rs", "crates/scribe2/src/pipe/follow.rs", "crates/scribe2/src/pipe/follow_step.rs", "crates/scribe2/src/pipe/admission.rs"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail invocation_pipe_flow_dispatch_self_launch_failure_is_false", "cargo nextest run -p scribe2 --lib --no-tests=fail invocation_pipe_flow_stop_kill_passes_the_signal_and_pid", "cargo nextest run -p scribe2 --lib --no-tests=fail invocation_pipe_flow_finish_pr_line_goes_through_the_seam"]
 depends = ["c"]
 size = "S"
-done = "(1) write-set の 7 file に Command::new と std の Command の use が 0（本体 4 site と歯の区間 3 site が起動の記述を通る）で、関数の引数の数・順・戻りの形・呼び手・判定は 1 字も変わらない (2) dispatch.rs の CommandExt の import が消え、clippy の unused_imports が 0 (3) 記録する stub を据えた歯 4 本（invocation_pipe_flow_dispatch_self_launch_failure_is_false = 自分自身の起動が spawn の失敗で偽・invocation_pipe_flow_stop_kill_passes_the_signal_and_pid = kill の引数・invocation_pipe_flow_gate_patch_id_spawn_failure_is_none = git patch-id の起動が spawn の失敗で None・invocation_pipe_flow_finish_pr_line_goes_through_the_seam = PR を開く sh の行の program と引数）が base で RED（land の finish は file の末尾に歯の区間を足す） (4) core の in-file の歯が全部緑"
+done = "(1) write-set の 6 file に Command::new と std の Command の use が 0（本体 3 site と歯の区間 3 site が起動の記述を通る・gate.rs の git patch-id の site は .588〔bc88844〕で消えたので本行の対象ではない・main 2ea2975 の実測）で、関数の引数の数・順・戻りの形・呼び手・判定は 1 字も変わらない (2) dispatch.rs の CommandExt の import が消え、clippy の unused_imports が 0 (3) 記録する stub を据えた歯 3 本（invocation_pipe_flow_dispatch_self_launch_failure_is_false = 自分自身の起動が spawn の失敗で偽・invocation_pipe_flow_stop_kill_passes_the_signal_and_pid = kill の引数・invocation_pipe_flow_finish_pr_line_goes_through_the_seam = PR を開く sh の行の program と引数）が base で RED（land の finish は file の末尾に歯の区間を足す） (4) core の in-file の歯が全部緑"
 
 [[contract]]
 id = "e"
