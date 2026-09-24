@@ -29,7 +29,7 @@ const ITEM_HEAD: &str = "- ";
 /// 宣言の語（本体の区間でこの語から始まる行が宣言・`impl` / `use` / `let` は名を持つ宣言として数えない）。
 const DECL_KEYWORDS: &[&str] = &["fn", "struct", "enum", "union", "trait", "type", "const", "static", "mod"];
 
-/// 宣言の語の前に来てよい修飾の語（`pub(crate)` 等の括弧つきは [`declared_name`] が 1 語として飛ばす）。
+/// 宣言の語の前に来てよい修飾の語（`pub(crate)` / `pub(in <path>)` の括弧つきは [`declared_name`] が閉じ括弧まで 1 まとまりとして飛ばす）。
 const QUALIFIERS: &[&str] = &["pub", "async", "unsafe", "extern", "\"C\"", "default"];
 
 /// 置き場だけの印（`=`）の項目の行数の後ろに添える 1 語（lens が印の意味を要約から読める・§44）。
@@ -97,9 +97,22 @@ fn listed<T: AsRef<str>>(names: &[T]) -> String {
 }
 
 /// 宣言の行の `<語> <名>`（修飾の語を飛ばした最初の語が [`DECL_KEYWORDS`] で、次の語が識別子の行だけ）。`const fn` は
-/// `fn` として読む。
+/// `fn` として読む。括弧つきの可視性（`pub(crate)` / `pub(in crate::pipe)`）は閉じ括弧を含む語までを 1 まとまりとして
+/// 飛ばし、閉じ括弧の無い行は宣言と読まない（§49）。
 fn declared_name(line: &str) -> Option<String> {
-    let mut words = line.split_whitespace().filter(|word| !word.starts_with("pub("));
+    let mut kept = Vec::new();
+    let mut raw = line.split_whitespace();
+    while let Some(word) = raw.next() {
+        if word.starts_with("pub(") {
+            let mut closing = word;
+            while !closing.contains(')') {
+                closing = raw.next()?;
+            }
+        } else {
+            kept.push(word);
+        }
+    }
+    let mut words = kept.into_iter();
     let mut word = words.next()?;
     while QUALIFIERS.contains(&word) {
         word = words.next()?;
@@ -190,6 +203,30 @@ mod tests {
         assert_eq!(decls, ["fn width", "struct Shape", "enum Tone", "fn dot", "const LIMIT"], "本体の区間だけ");
         assert_eq!(teeth, ["shape_one", "shape_two"], "helper と mod は歯でない");
         let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// 1 本の `.rs` を要約し、宣言の列の行を返す（列が無ければ空）。
+    fn declared_column(name: &str, body: &str) -> String {
+        let repo = scratch(name);
+        let _ = std::fs::write(repo.join("src/v.rs"), body);
+        let text = summary(&repo, &["src/v.rs".to_owned()], 120);
+        let _ = std::fs::remove_dir_all(&repo);
+        text.lines().find_map(|line| line.strip_prefix("  宣言: ")).unwrap_or_default().to_owned()
+    }
+
+    /// §49 (1) 正例: `pub(in <path>)` の可視性は閉じ括弧まで 1 まとまりとして飛ばし、struct / fn / const の 3 形が
+    /// 宣言の列に載る（母集団 = 3 本を同じ assert で数える）。
+    #[test]
+    fn pipe_review_base_pub_in_path_visibility_declarations_are_listed() {
+        let body = "pub(in crate::pipe) struct Materials {\n    x: u8,\n}\n\npub(in crate::pipe) fn design_material() -> u8 {\n    1\n}\n\npub(in super::super) const EDGE: u8 = 2;\n";
+        assert_eq!(declared_column("pub-in-yes", body), "struct Materials, fn design_material, const EDGE");
+    }
+
+    /// §49 (1) 負例: 閉じ括弧の無い `pub(in` の行は宣言と読まない（次の 2 語目で切り上げない・後続の正しい行は載る）。
+    #[test]
+    fn pipe_review_base_pub_in_without_closing_paren_is_not_a_declaration() {
+        let body = "pub(in crate::pipe struct Broken {\n}\n\npub(in crate::pipe) struct Kept;\n";
+        assert_eq!(declared_column("pub-in-no", body), "struct Kept");
     }
 
     /// (b) `.rs` でない項目は path と行数だけ（宣言と歯の列を持たない）。
