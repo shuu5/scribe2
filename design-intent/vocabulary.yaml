@@ -95,12 +95,12 @@ terms:
   # ---------------------------------------------------------------- §4 技術選定が使う概念
   - canonical: glue
     domain: consumer
-    definition: 外部 process (tmux / ssh / git / claude CLI) を叩く責務の領域。 core の外側にあり、 adapter が閉じ込める側。
-    relationships: [adapter, tmux, ssh, git, claude CLI]
+    definition: 外部 process (tmux / ssh / git / claude CLI) を叩く責務の領域で、 adapter が閉じ込める側。 ADR-0062 (proposed) の後は、 何を叩くかを起動の記述として組むのは core で、 実際に叩くのは境界 crate が持つ差し替え口の実物 1 つ。
+    relationships: [adapter, tmux, ssh, git, claude CLI, 起動の記述, 差し替え口]
   - canonical: adapter
     domain: consumer
-    definition: 外部 OSS や glue を閉じ込める実装層 (薄い wrapper)。 台帳は bd の wrapper 1 本、 glue は std::process の adapter、 day-1 optional adapter も同じ seam に置く。
-    relationships: [bd, glue, seam, day-1 optional adapter]
+    definition: 外部 OSS や glue を閉じ込める実装層 (薄い wrapper)。 台帳は bd の wrapper 1 本、 glue は std::process の adapter (ADR-0062・proposed の後は差し替え口の実物 1 つ)、 day-1 optional adapter も同じ seam に置く。
+    relationships: [bd, glue, seam, day-1 optional adapter, 差し替え口]
   - canonical: seam
     domain: consumer
     definition: 外部要素 (依存・設定) を差し込む接合点。 adapter の seam は day-1 に用意し、 env seam は新設しない (C2.2)。
@@ -115,12 +115,12 @@ terms:
     relationships: [単一 static binary]
   - canonical: 境界 crate
     domain: consumer
-    definition: core の外側に置く crate。 外部形式 (serde 等の derive) を扱う面 (C13.2) と、 子 process (tmux / git / claude / curl / cargo / systemd / sh) を起こす I/O 面 (ADR-0033・crates/<NAME>-boundary・binary もここが持つ) がここに閉じる。 core に依存し core からは見えない。 行数の上限 R-C4-5 を持つ。
-    relationships: [adapter, core, 単一 static binary]
+    definition: core の外側に置く crate (crates/<NAME>-boundary・binary もここが持つ)。 外部形式 (serde 等の derive) を扱う面 (C13.2) がここに閉じる。 core に依存し core からは見えない。 子 process (tmux / git / claude / curl / cargo / systemd / sh) を起こす I/O 面は ADR-0033 がここへ分けると置き、 ADR-0062 (proposed) の後は差し替え口の実物 1 つ (起動の記述を std の Command へ写して撃つ 1 file・boundary-spawn が 1 本に閉じる) を持って bin の main の先頭で据える。 行数の上限 R-C4-5 を持つ。
+    relationships: [adapter, core, 単一 static binary, 差し替え口]
   - canonical: core
     domain: consumer
-    definition: 器の本体の crate (crates/<NAME>・lib vessel)。 型・閉じた enum・判定の純関数・state dir と repo の file の読み書きを持ち、 子 process を起こす関数 (std::process::Command) を持たない (xtask check の core-spawn = 0・ADR-0033)。 行数の上限 R-C4-1 は src の本体 (in-file の歯を除く) だけを数える。
-    relationships: [境界 crate, 単一 static binary, 歯]
+    definition: 器の本体の crate (crates/<NAME>・lib vessel)。 型・閉じた enum・判定の純関数・state dir と repo の file の読み書きを持つ。 src の本体で std の Command を組まない (xtask check の core-spawn・ADR-0033 の 0 本を ADR-0062 が本体で 0 と読む)。 ADR-0062 (proposed) の後は、 子 process を撃つ関数と driver の関数も core に残り、 起動の記述を組んで差し替え口へ渡して起こす。 行数の上限 R-C4-1 は src の本体 (in-file の歯を除く) だけを数える。
+    relationships: [境界 crate, 単一 static binary, 歯, 起動の記述, 差し替え口]
   - canonical: docs-only
     domain: consumer
     definition: PR の分類の 1 つで、 変更が文書のみのもの。 flip check の test 差分要件から除外される (C12.3)。 分類は CI が行う。
@@ -787,6 +787,16 @@ terms:
     definition: 台帳の open な契約のうち、 dispatcher が起動を待つものの並び。 入る条件・順序・待ちの理由・release で戻す範囲は SRS FR68 が定める (写さない)。 land の順序 (SRS FR50) とは別の実体。
     relationships: [dispatcher, 介入, 着地]
     flagged_ambiguities: ["列: 起動の列 (dispatcher・起動を待つ契約) と着地の列 (pipe/queue.rs・push の順序) は別義"]
+  - canonical: regate
+    domain: consumer
+    definition: gate の判定が FAIL の Gated の便を、 裁定の逐語つきで同じ worktree の Implemented へ 1 段戻す器の口 (pipe regate・SRS FR77・設計 docs/design/pipeline.md の節)。 戻された便を dispatcher が拾う条件は SRS FR68 が定める (写さない)。
+    relationships: [gate, dispatcher, 起動の列, 便, 所有者の印]
+    flagged_ambiguities: ["regate: 本項 (FAIL の Gated の便を Implemented へ戻す口・pipe regate) と追随の再 gate (land の追随で gate を撃ち直すこと・記録の skipped=regate) は別義"]
+  - canonical: 所有者の印
+    domain: consumer
+    aliases: [運転手の札]
+    definition: 便を運ぶ器の process (driver) が便の記録に置く所有の印。 無い・印の process が退役・印の process が生きている・在るのに読めない、 の 4 値で読み、 dispatcher の再開の候補の判定と regate の受付が読む (SRS FR68 / FR77・設計 docs/design/dispatcher.md)。 設計 doc の「運転手の札」は同じ実体。
+    relationships: [dispatcher, regate, 便]
   - canonical: 受付
     domain: consumer
     aliases: [contract intake]
@@ -1156,3 +1166,18 @@ terms:
     aliases: [ledger write gate, 素 write の門]
     definition: 器の plugin を積む席の hook の入口が bd / bdw の command に掛ける門 (ADR-0056 CTX2・設計 docs/design/vessel-hook.md §10)。 台帳 write の 4 形 (素 write = notes の置換・記憶の subcommand・親を欠く create・台帳の script を経ない書き込み) を rules 行 ledger.denied_writes の値で断り、 memo の 4 節の判定も持つ。 host-guard の台帳の種類 (SRS FR76) は 4 形の判定を共有して口座の設定を読む session に掛ける。
     relationships: [hook, rules 行, 台帳, host-guard, 見張りの種類, 口座の設定を読む session]
+  - canonical: 起動の記述
+    domain: consumer
+    aliases: [invocation]
+    definition: 子 process の program・引数・cwd・env・入出力の向き・process group を持つ core の型 1 つ (ADR-0062・proposed)。 std の Command と同じ builder の面と同じ 4 終端 (output・status・spawn・exec) を同じ名で持ち、 終端は記述を解釈せず差し替え口へ渡す。
+    relationships: [core, 差し替え口, glue]
+  - canonical: 差し替え口
+    domain: consumer
+    aliases: [spawner seam]
+    definition: 起動の記述を受けて子 process を起こす役を表す core の trait 1 つ (ADR-0062・proposed)。 method は 4 終端と 1 対 1。 本番は境界 crate の実物 1 つを bin の main の先頭で process に 1 回だけ据え、 据えていない周の終端は io の Unsupported を返す。 seam の 1 つで、 その実物が glue の adapter にあたる。
+    relationships: [seam, adapter, core, 境界 crate, 起動の記述, 記録する stub]
+  - canonical: 記録する stub
+    domain: consumer
+    aliases: [recording stub]
+    definition: 歯が差し替え口に据える偽物 (ADR-0062・proposed)。 撃たれた program と引数を覚えて歯が決めた結果を返し (spawn の終端は失敗だけ)、 site が差し替え口を通ることと結果の読みを測る。 据えた歯の thread の外へは効かない。
+    relationships: [差し替え口, 歯]
