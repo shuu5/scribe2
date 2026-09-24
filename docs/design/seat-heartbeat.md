@@ -104,7 +104,7 @@ id = "b"
 title = "tick の unit を器が導出して host へ書く — seat tick install / uninstall（導出は pure な 1 関数・一時 file → rename・bytes 一致は unchanged・不一致は unit-exists・有効化は daemon-reload → enable --now・撤去は disable --now → 退役 dir へ mv・印の無い file は unit-foreign）と doctor の tick-unit= の 1 項目"
 req = ["FR64", "FR40", "AC18", "NFR4"]
 section = "3"
-write-set = ["+crates/scribe2/src/seat/tick/install.rs", "+crates/scribe2/src/seat/tick.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/seat/role.rs", "crates/scribe2/src/pipe/confine.rs", "crates/scribe2-boundary/src/main.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__seat__seat_usage_external_form.snap", "+crates/scribe2-boundary/tests/e2e/snapshots/e2e__seat__seat_unit_external_form.snap", "docs/design/seat-heartbeat.md"]
+write-set = ["+crates/scribe2/src/seat/tick/install.rs", "crates/scribe2/src/seat/tick.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/seat/role.rs", "crates/scribe2/src/pipe/confine.rs", "crates/scribe2-boundary/src/main.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__seat__seat_usage_external_form.snap", "+crates/scribe2-boundary/tests/e2e/snapshots/e2e__seat__seat_unit_external_form.snap", "docs/design/seat-heartbeat.md"]
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail seat_unit_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_unit_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_usage_external_form", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_doctor_external_form"]
 size = "M"
 depends = ["a"]
