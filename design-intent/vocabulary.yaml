@@ -190,7 +190,7 @@ terms:
     relationships: [口座, host の manifest, 退役, doctor]
   - canonical: 席の起動
     domain: consumer
-    definition: 器の subcommand seat launch が役割 (必須) と口座 (指定か session 用の選定) から起動行を導出し、 席の登録を先に書いて tmux の窓の shell へ差し込むこと (ADR-0026 §2.3)。 立て直しと同じ経路で、 器の subcommand 以外の起動経路を使わない。
+    definition: 器の subcommand seat launch が役割 (必須) と口座 (指定か session 用の選定) から起動行を導出し、 席の登録を先に書いて tmux の窓の shell へ差し込むこと (ADR-0026 §2.3)。 立て直しと同じ経路で、 器の subcommand 以外の起動経路を使わない。 ADR-0063 (proposed) の後は、 引数の無い形が置き場 (repo の local 設定)・役割 (orchestrator)・target (repo の dir 名)・口座 (群の今の口座か選定) を既定から解く。
     forbidden: [cla, cld, wrapper 起動]
     relationships: [席, 席の登録, 起動行の導出, 口座]
   - canonical: 起動行の導出
@@ -1181,3 +1181,17 @@ terms:
     aliases: [recording stub]
     definition: 歯が差し替え口に据える偽物 (ADR-0062・proposed)。 撃たれた program と引数を覚えて歯が決めた結果を返し (spawn の終端は失敗だけ)、 site が差し替え口を通ることと結果の読みを測る。 据えた歯の thread の外へは効かない。
     relationships: [差し替え口, 歯]
+  - canonical: 雛形の置き場
+    domain: consumer
+    aliases: [template state dir]
+    definition: host init が git の global 設定に登録する既存の state dir 1 つ (ADR-0063・proposed)。 init はここの host の manifest から群を除く 4 表を写し、 口座の dir をここの口座の dir へ symlink で結び、 新しい state dir をこの dir の隣に作る。
+    relationships: [state dir, host の manifest, host-template, init]
+  - canonical: host-template
+    domain: consumer
+    aliases: [host template pointer]
+    definition: git の global 設定に置く key 1 つ (key 名は NAME 定数から導く・ADR-0063・proposed)。 値は雛形の置き場の絶対 path で、 host 単位の唯一の pointer。 doctor の host-template の行が在るか・読めるかを言う。
+    relationships: [雛形の置き場, init, doctor, NAME 定数]
+  - canonical: init
+    domain: consumer
+    definition: repo ごとに 1 回撃つ器の subcommand (ADR-0063・proposed)。 置き場・host の面・口座・marker と local 設定・vessel 宣言・群・commit・tmux と席の段を順に通し、 在る段は skip し、 段ごとに 1 行と次の 1 手を出す。 marker だけを書く vessel init とは別の口。
+    relationships: [雛形の置き場, host-template, state dir, host の manifest, ".vessel", vessel 宣言, project の群, 席の起動, doctor]

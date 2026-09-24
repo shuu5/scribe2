@@ -81,7 +81,7 @@ C1 / C5（R-C9-1 は行・裁定 id）・C2（`Purpose` / `Selection` / `Stage` 
 - 待ちの上限を rules 行で持つ（`SlotFree` と同型）。却下: ADR-0020 §2.3（reset 時刻が上限・縮退を持たない・便を Failed にしない）。
 - 登録 row の口座を tick が env から読む。却下: C2.2。row の項目だけ。
 - 雛形に credential と config の穴を 2 つ持つ（§5 (1)）。却下: 穴 1 つの契約（`fill_launch`・`Holes::Many`）を壊し、計測と立て直しで口座の場所が 2 つに割れる。設定 dir 全体 1 つで両方が足りる。
-- 器が設定 dir 直下の `.claude.json` に `hasTrustDialogAccepted` を書く（§5 (2)）。却下: Claude Code の私有形式への書込（ADR-0017 §2.5 と同じ fence・credential と同じ dir）で、trust は user が folder を信じる宣言＝器が代筆すると信じていない folder を信じたことになる。
+- 器が設定 dir 直下の `.claude.json` に `hasTrustDialogAccepted` を書く（§5 (2)）。**この却下は見直し中**（設計 host-init.md §7・器は入れ子の JSON の読み手を既に持ち書き手だけが無い・依存を足すか書き手を足すかは持ち主の再裁定で決め後続の ADR に書く）。当時の却下: Claude Code の私有形式への書込（ADR-0017 §2.5 と同じ fence・credential と同じ dir）で、trust は user が folder を信じる宣言＝器が代筆すると信じていない folder を信じたことになる。
 - pane の trust dialog を字面で読んで答える。却下: C3.3（描画を判定入力にしない）。
 - 退避の合図の文面に `/exit` まで含めて席に打たせる（§5 (3)）。却下: 散文で席を制御する（N2）・席が従わない周に立て直しが永久に立たない。器が入力欄の門を通して撃つ。
 - `/exit` の代わりに Ctrl-C ×2 / Ctrl-D ×2 を送る。却下: 2 打の間隔（800 ms）と入力欄が空であることに依存し、失敗が入力欄の 1 文字削除や中断に化ける。`/exit` は 1 行の command で送達確認の形が既存の inject と同じ。
