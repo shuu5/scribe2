@@ -247,6 +247,29 @@ user-scope MCP 設定の同期・別口座への `--resume` の混線 fence・pr
 - write-set の注: 行 h が `+` で足す 2 file は、行 h の着地前は base に無いので本行も `+` で宣言する。行 h の着地後に素の path へ直す（受付は着地済みの file の `+` を断る）。
 - 後続: 席の登録 row を退役する口（古い置き場の row が便用の除外に残る・`s2-07l.494` の notes）／群の宣言の A1 承認の 1 回目を doctor に見せる形は別便。
 
+## 21. 退避を器が完結させる（第 3 段の続き）— 保留の席へ器が /exit を送り、席の hook は記録の口座と登録 row の食い違いを告げ、群の置き場の席の断りは次の 1 手を持つ（契約表の行 j・§20 の続き・[ADR-0049](../../design-intent/decisions/ADR-0049-seat-accounts-are-owned-by-project-groups.html) §2・[ADR-0055](../../design-intent/decisions/ADR-0055-group-pressure-is-measured-at-run-ends-and-seat-turns-without-a-timer.html)・`s2-07l.604`）
+
+やさしく言うと: §20 の移動は「古い席に /exit を頼む」ところで止まった。席（AI）は自分の process を終えられない。器が代わりに /exit を送り、席には「いま移動中・作業記憶を残して待て」と正しい 1 行を出し、人が別の口座で席を撃ったときは「どの口座なら通るか」を断りの行に添える。
+
+- 出所: 台帳 `s2-07l.604`（memo・2026-09-24 の実測: 05:17:30Z に `GroupMoved` の後、席の pane が shell に戻らず `GroupMovePending reason=input-unknown` が 5 件・席の hook は登録 row の口座で「第 3 段まで手で」を出し続け・人の短い形は `group-account` で断られた）。
+- 現物（verified・main cbf1d7d）:
+  - 移動の周は `crates/scribe2/src/pipe/dispatch/group.rs` の `execute` が記録 → `GroupMoved` → 退避の 1 行（`notify::send`・`crates/scribe2/src/pipe/notify.rs` の §19 と同じ口）→ `relaunch`（`Wait::Settle`）の順で撃ち、続きの周は `relaunch`（`Wait::Once`）が `pane_is_shell`（`crates/scribe2/src/seat/mod.rs`）の席だけ起こす。pane が shell でない席には何も送らない（保留の event を重ねない）＝席が /exit を打たない限り永久に保留。
+  - 席の hook の群の段は `crates/scribe2/src/hook/group.rs` の `line_of` が**登録 row の口座**だけを読み（`registration_of_target`）、逼迫なら `seat_line` の固定の字面「移動は次の 1 周（第 3 段まで手で）」を出す。群の今の口座（`current_of`・記録 > 種）は読まない＝移動済みの席に古い口座の逼迫を告げ続ける。
+  - 群の置き場の席の起動は `crates/scribe2/src/seat/cycle/launch.rs` の `pick_account` が `current_of` と違う label を `REASON_GROUP_ACCOUNT` で断り、行は `render_launched` の `Launched::Refused` の腕（`next=` を持つのは `not-a-shell` だけ）。`seat launch` の短い形の呼び手は `crates/scribe2/src/seat/cli.rs`（`render_launched` を 4 か所で呼ぶ）。
+  - 偽 tmux の fixture（`crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs`）は `send-keys -l` の payload を入力欄の file に写し、`list-panes` の `pane_current_command` で shell / claude を作り分ける（§20 の歯が使う）。
+- 形（1 つずつ歯が測る・行 j の done と 1:1）:
+  1. **器が /exit を送る**: 続きの周（記録の口座 ≠ 登録 row の口座の群・`Wait::Once`）で pane が shell でない席には、退避の合図と同じ口（`notify::send`）で `/exit` の 1 行を 1 回だけ送り、その周は起こさない（送りは inject の記録に残る・保留の event は重ねない）。次の周に shell に戻っていれば §20 形 6 のとおり同じ target へ起こす。移動の周（`Wait::Settle`）は §20 のまま（退避の合図の直後には送らない＝席が作業記憶を残す番を 1 周ぶん持つ）。/exit で dialog が出て止まる席（描画は読まない）は次の周も shell でないので同じ 1 行をもう 1 回送る（周ごとに 1 回・上限は置かない＝人が窓を見れば分かる・ADR-0055 の柵の内側）。
+  2. **hook の 1 行を記録で組む**: `line_of` は登録 row の口座に加えて群の今の口座（`current_of`）を読み、(a) 記録の口座 ≠ 登録 row の口座の周は逼迫を測らず `group=<名> row=<row の label> current=<記録の label> — 器が移動中: 作業記憶を台帳と git に残して待つ（/exit は器が送る）` の 1 行（移動を頼む記録は置かない）、(b) 一致して逼迫の周は `group=<名> account=<label> window=<w> used=<n> cap=<n> — 次の 1 周が移り先を決める` の 1 行（§19 形 5 の字面の後半を置き換える・「第 3 段まで手で」の語は消える）、(c) それ以外は §19 のまま（0 行か measuring）。記録が読めない周は 0 行（席は止めない・§19 の極性）。
+  3. **断りに次の 1 手**: `reason=group-account` の断りの行は `next=seat <記録の label> -c` を置き場の 2 語の前に足す（`not-a-shell` の `next=` と同じ位置・label は `current_of` の解決値・短い形と長い形の両方）。他の断りの行は 1 字も変わらない。
+  4. **群 0 の host と群に属さない anchor は 1 語も変わらない**。
+- 触らない: §20 の判定（移り先の 3 条件・lock・記録の形）・`GroupMoved` / `GroupMovePending` / `GroupMoveRefused` の kind と `EventKind` の列（event の種類は足さない・detail の語だけ）・`Launched` の variant・`seat.cycle_settle_s`・§18 の `-c` / `-r`・§19 の通知の判定と `fleet usage` の 2 旗・便の列。
+- 歯（置き場は既存の file・接頭辞ごとに 1 file）:
+  - `crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs`（`pipe_dispatch_group_exit_` 接頭辞・偽 tmux と偽 usage・§20 の fixture）: 記録 ≠ row の群の続きの周で pane が claude の席は `/exit` の payload の送りが 1 行・起動行 0・保留の event は増えない ／ 同じ席は次の周も shell でなければもう 1 行（周ごとに 1 回） ／ shell に戻った周は送り 0・起動行 1 ／ 移動の周（記録を書いた同じ周）は退避の 1 行だけで `/exit` は 0（base では続きの周に送り 0 ＝ RED）。
+  - `crates/scribe2-boundary/tests/e2e/hook.rs`（`hook_group_current_` 接頭辞・§19 の hook の fixture）: 記録の口座 ≠ 登録 row の口座の席は UserPromptSubmit と SessionStart に `row=` と `current=` を持つ 1 行で `window=` を持たず、移動を頼む記録が置かれない ／ 一致して逼迫の席は `次の 1 周が移り先を決める` を持ち「第 3 段」の語を持たない ／ 記録が読めない席は 0 行（base では「第 3 段まで手で」を出す ＝ RED）。
+  - `crates/scribe2-boundary/tests/e2e/seat/launch.rs`（`seat_launch_group_next_` 接頭辞・§20 の `seat_launch_group_` の fixture）: 群の置き場で記録と違う label の短い形は rc 1 で行に `next=seat <記録の label> -c` が置き場の 2 語の前に在り row 0 ／ 長い形も同じ ／ `not-a-shell` の行と群の外の断りは 1 字も変わらない（base では `next=` 無し ＝ RED）。
+- 却下: 席が自分を終える（Claude の /exit は人か pane の入力でしか撃てない・ADR-0055 OPT3 の柵と同じ根）／process を kill する（作業記憶が退避されない・N1・§20 の却下のまま）／退避の合図と同じ周に /exit を送る（席が作業記憶を残す番が無い）／hook が記録の口座を移動の周に書き換える（記録を書くのは 1 周の群の段だけ・§20 形 1）／断りの行に候補の一覧を出す（次の 1 手は 1 つ・対話面の作法）。
+- 後続: /exit の送りの上限（周の回数）を置くかは実測を見て決める（rules 行は足さない）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -339,4 +362,15 @@ verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe
 size = "L"
 growth = ["crates/scribe2/src/pipe/dispatch.rs:20", "crates/scribe2/src/fleet/mod.rs:40", "crates/scribe2/src/account/mod.rs:60"]
 done = "(1) 群の今の口座の記録が host の根の群用 dir に群ごとに高々 1 file で在り、1 周の群の段だけが lock の内側で一時 file → rename で書き、書き換える周は前の記録を履歴へ move する (2) 解決の 1 関数が記録 > 種の順で返し、読めない記録は typed に止まり、doctor の群の行に current= が増えて群 0 の host の外形は不変 (3) 群の anchor の seat launch と短い形は選定を撃たず解決値で起き、違う label は rc 1・row 0 で断り、群の外の anchor は今のまま (4) hook が逼迫の周に移動を頼む記録を高々 1 file 置き、1 周はそれが在れば鮮度に依らず計測を撃って判定の後に履歴へ move する（move せず残す変異は 2 周目の計測 0 を測る歯が捕まえる） (5) 逼迫した群の移り先を宣言の候補の順で他の群の今の口座（同じ周で先に移った群の移り先を含む＝2 群が同じ周に同じ label へ移らない）でない ∧ live 便が使っていない ∧ 3 窓とも閾値未満の最初の label に 1 回だけ決め（他の群・live 便・3 窓の各条件を外す変異は別々の歯が捕まえる＝候補を飛ばす側と移る側の両側）、無ければ記録 0・断りの event 1・席へ群の置き場ごとに 1 行だけ（断った周は §19 の通知を送らない） (6) 移動の周は記録 → 承認 event（kind は本行が足す移動の variant で run / bead を持たず・account = 移り先・逐語 = 宣言の行）→（4 手の順は時刻の並びを歯が pin する） 退避の合図 → settle の窓で shell に戻った置き場から同じ target へ新しい口座の席を launch の 1 本で起こし、戻らない席は保留の event を記して次の 1 周が判定を繰り返さず続きだけ行い、移動した周は通知を送らない (7) 群の段は便の列の前に走り、失敗は便の列の rc を変えない (8) 群 0 の host は 1 語も変わらない（起こす側の周で群用 dir が作られず記録 0・event 0・送り 0・起動 0・rc と dispatch ls の外形が不変・歯が pin する）"
+
+[[contract]]
+id = "j"
+title = "退避を器が完結させる — 続きの周は pane が shell でない保留の席へ /exit の 1 行を送り、席の hook は記録の口座と登録 row の食い違い（row= / current=）を告げ、group-account の断りは next=seat <記録の label> -c を持つ（§21・ADR-0049 §2・s2-07l.604）"
+req = ["FR38", "FR36", "NFR4"]
+section = "21"
+write-set = ["crates/scribe2/src/pipe/dispatch/group.rs", "crates/scribe2/src/hook/group.rs", "crates/scribe2/src/seat/cycle/launch.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "crates/scribe2-boundary/tests/e2e/hook.rs", "crates/scribe2-boundary/tests/e2e/seat/launch.rs", "docs/design/account-lifecycle.md"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_group_exit_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail hook_group_current_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_launch_group_next_"]
+size = "M"
+depends = ["i"]
+done = "(1) 記録の口座 ≠ 登録 row の口座の群の続きの周は、pane が shell でない席へ退避の合図と同じ口で /exit の 1 行を周ごとに 1 回送り、その周は起こさず保留の event を重ねず、shell に戻った周は §20 形 6 のとおり同じ target へ起こし、移動の周（記録を書いた周）は退避の 1 行だけで /exit を送らない (2) 席の hook は群の今の口座（current_of）を読み、記録 ≠ row の周は逼迫を測らず row= と current= を持つ移動中の 1 行を出して移動を頼む記録を置かず、一致して逼迫の周は「次の 1 周が移り先を決める」の 1 行で「第 3 段まで手で」の語を持たず、記録が読めない周は 0 行 (3) reason=group-account の断りの行は next=seat <記録の label> -c を置き場の 2 語の前に持ち（短い形と長い形）、他の断りの行は 1 字も変わらない (4) event の kind の列と Launched の variant と §20 の判定は変わらず、群 0 の host と群に属さない anchor は 1 語も変わらない 歯: pipe_dispatch_group_exit_ の歯が続きの周の /exit の送り 1 行・周ごとに 1 回・shell に戻った周は起動 1・移動の周は /exit 0 を測り、hook_group_current_ の歯が row= / current= の 1 行と頼みの記録 0 と「第 3 段」の語の不在を測り、seat_launch_group_next_ の歯が next= の位置と他の断りの不変を測る"
 <!-- contracts:end -->
