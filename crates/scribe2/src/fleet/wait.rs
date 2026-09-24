@@ -6,8 +6,8 @@
 use super::{cli, replay, select, select_for_run, store, RunSelect, Stage};
 use std::collections::{BTreeMap, BTreeSet};
 use std::os::unix::fs::MetadataExt;
+use crate::invocation::Invocation;
 use std::path::Path;
-use std::process::Command;
 use std::time::{Duration, Instant, SystemTime};
 
 /// 待つ対象。**述語を受ける口は作らない**（C3.4: 待機は 1 実装）。
@@ -217,7 +217,7 @@ pub fn ci_now(repo: &Path, sha: &str, cmd: &str) -> Option<CiRun> {
     let line = cmd.replace(crate::pipe::declaration::CI_SHA_HOLE, sha);
     let mut words = line.split_whitespace();
     let head = words.next()?;
-    let out = Command::new(head).args(words).current_dir(repo).output().ok()?;
+    let out = Invocation::new(head).args(words).current_dir(repo).output().ok()?;
     if !out.status.success() {
         return None;
     }
@@ -883,5 +883,22 @@ mod tests {
         assert_eq!(wait(calm, Duration::from_secs(5)), Ok(()), "倍率を十分大きく取れば待たない");
         let busy = Completion::HostCalm { runnable_per_core: 0, blocked_per_core: 0 };
         assert_eq!(wait(busy, Duration::from_millis(60)), Err(Timeout), "倍率 0 は走行可能 1（自分）で混み、上限で Timeout");
+    }
+
+    /// CI の照会は起動の記述を通る（設計 core-boundary.md §9 行 g）: 宣言の 1 語目が program・残りが引数（sha の穴は
+    /// 埋めた後）・cwd は repo。結果の読みは不変（stub の返す JSON を従来どおり判定する）。
+    #[test]
+    fn invocation_fleet_ci_query_names_the_program_and_cwd() {
+        use crate::pipe::fixture::{exited, Stub};
+        let repo = Path::new("/nonexistent-invocation-fleet-ci");
+        let stub = Stub::install(|_| exited(0, br#"[{"status":"completed","conclusion":"success"}]"#));
+        let cmd = "ci-query-stub run list --commit {sha} --json status,conclusion";
+        assert_eq!(super::ci_now(repo, "abc123", cmd), Some(super::CiRun::Success), "stub の JSON を読む");
+        let calls = stub.calls();
+        assert_eq!(calls.len(), 1, "照会は 1 回: {calls:?}");
+        let found = calls.first().map(|call| (call.program.as_str(), call.cwd.as_deref()));
+        assert_eq!(found, Some(("ci-query-stub", Some(repo))), "program は 1 語目・cwd は repo");
+        let args: Vec<&str> = calls.iter().flat_map(|call| call.args.iter().map(String::as_str)).collect();
+        assert_eq!(args, ["run", "list", "--commit", "abc123", "--json", "status,conclusion"], "残りの語が引数");
     }
 }

@@ -471,7 +471,7 @@ pub fn host() -> String {
             return trimmed.to_owned();
         }
     }
-    if let Ok(output) = std::process::Command::new("hostname").output() {
+    if let Ok(output) = crate::invocation::Invocation::new("hostname").output() {
         let text = String::from_utf8_lossy(&output.stdout).trim().to_owned();
         if !text.is_empty() {
             return text;

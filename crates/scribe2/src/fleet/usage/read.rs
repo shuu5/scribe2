@@ -3,6 +3,7 @@
 //! credential を読んで token を取り（[`token_of`]）、client を子 process で起こして本文を受け取り（[`fetch`]）、
 //! 応答の木を窓の行へ写す（[`windows_of`]）群である。`fleet/usage.rs` からの**純移動**で、歯は 1 本も足して
 //! いない（親に残る in-file の歯と e2e が従来どおり測る）。外の呼び手は 0 で、親の本体と歯からだけ入る。
+//! file の末尾の歯は後の起動の記述の置換（設計 core-boundary.md §9 行 g）が [`fetch`] の起動を測るために足した。
 //!
 //! 子孫は親の私有 item を `super::` でそのまま見るので、**親側の可視性は 1 語も上げていない**。親が呼ぶ
 //! 11 名（本体の 7 名と歯の 4 名）だけが `pub(super)` で、残りはこの module に閉じる。
@@ -12,9 +13,10 @@
 use super::{endpoint, BETA, CREDENTIAL_FILE, RC_CLIENT_TIMEOUT, SCOPED_KIND, URL};
 use crate::fleet::json_tree::{self, Tree};
 use crate::fleet::{Allowance, Measured, Unmeasured, UnmeasuredReason, WindowKind};
+use crate::invocation::Invocation;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// credential の path。**`<state_dir>/accounts/` を走査しない**（label から 1 本に決まる）。
@@ -111,7 +113,7 @@ pub(super) fn config_of(token: &str) -> String {
 
 /// client を起こして本文を受け取る。stderr は捨てる（中継しない）。
 pub(super) fn fetch(client: &str, token: &str, timeout_s: u64) -> Result<String, UnmeasuredReason> {
-    let mut child = Command::new(client)
+    let mut child = Invocation::new(client)
         .args(client_args(timeout_s))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -275,4 +277,47 @@ pub(super) fn normalize_resets(text: &str) -> Option<String> {
     };
     let valid = in_range(5, 1, 12) && in_range(8, 1, 31) && in_range(11, 0, 23) && in_range(14, 0, 59) && in_range(17, 0, 59);
     valid.then(|| format!("{stamp}Z"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{client_args, config_of, fetch};
+    use crate::fleet::UnmeasuredReason;
+    use crate::pipe::fixture::{exited, scratch, Stub};
+
+    /// client の起動は起動の記述を通る（設計 core-boundary.md §9 行 g・採る形 8）: 記録の program は client・引数は
+    /// [`client_args`] と同じ列で token を含まない。stub は spawn を断るので、断りは `ClientMissing` に落ちる。
+    #[test]
+    fn invocation_fleet_usage_curl_names_the_client_and_args_and_refused_spawn_is_client_missing() {
+        let (client, token) = ("/nonexistent-invocation-fleet-usage-client", "tok-invocation-secret");
+        let stub = Stub::install(|_| exited(0, b"{}\n200"));
+        assert_eq!(fetch(client, token, 9), Err(UnmeasuredReason::ClientMissing), "stub の断りは ClientMissing");
+        let calls = stub.calls();
+        assert_eq!(calls.len(), 1, "起動は 1 回: {calls:?}");
+        let call = calls.first().cloned().unwrap_or_else(|| panic!("記録が無い"));
+        assert_eq!(call.program, client, "program は client");
+        assert_eq!(call.args, client_args(9), "引数は client_args の列");
+        assert!(!call.args.iter().any(|arg| arg.contains(token)), "引数に token を載せない: {:?}", call.args);
+    }
+
+    /// 据えない周は cfg(test) の実物が撃つ（fetch の読みは不変）: stdin へ [`config_of`] の逐語を書き、stdout の
+    /// 末尾行の 200 を外した本文を返す。rc 非 0 で終わる client は `ClientFailed`。
+    #[test]
+    fn invocation_fleet_usage_curl_real_writes_config_to_stdin_and_reads_stdout_and_nonzero_rc() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = scratch("fleet-usage-curl-real");
+        let seen = dir.join("stdin.txt");
+        let client = |name: &str, tail: &str| {
+            let path = dir.join(name);
+            std::fs::write(&path, format!("#!/bin/sh\ncat > '{}'\n{tail}", seen.display())).expect("偽の client を書ける");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("実行権を付ける");
+            path.display().to_string()
+        };
+        let answering = client("answering", "printf 'body-text\\n200'\n");
+        assert_eq!(fetch(&answering, "tok-real", 5), Ok("body-text".to_owned()), "本文を返す");
+        assert_eq!(std::fs::read_to_string(&seen).ok(), Some(config_of("tok-real")), "stdin は config_of の逐語");
+        let failing = client("failing", "exit 3\n");
+        assert_eq!(fetch(&failing, "tok-real", 5), Err(UnmeasuredReason::ClientFailed), "rc 非 0");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

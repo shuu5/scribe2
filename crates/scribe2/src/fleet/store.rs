@@ -522,9 +522,10 @@ mod tests {
     use proptest::test_runner::Config;
     use std::path::PathBuf;
 
-    /// 確実に居ない pid（`true` を起こして待った pid）。
+    // flip-check: retroactive s2-07l.598
+    /// 確実に居ない pid（`true` を起こして待った pid・起動の記述を通る＝設計 core-boundary.md §9 行 g）。
     fn dead_pid() -> u32 {
-        let mut child = std::process::Command::new("true").spawn().expect("true を起こせる");
+        let mut child = crate::invocation::Invocation::new("true").spawn().expect("true を起こせる");
         let pid = child.id();
         child.wait().expect("true を待てる");
         pid
