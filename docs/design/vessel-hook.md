@@ -222,6 +222,18 @@ xtask 側: `crates/xtask/src/genmanifest.rs` の `#[cfg(test)]` に、render の
   - 行 e・e2e（`crates/scribe2-boundary/tests/e2e/hook.rs`・接頭辞 `host_guard_self_`）: symlink の口座の settings.json を `Write` で書く payload が kind=self で rc 2、同じ dir の別 file は通る／`echo x > <state_dir>/accounts/<label>/settings.json` の Bash と `rm -rf <repo の root>/.claude` と `mv <state_dir>/accounts/<label> x` が断られ、`cp <その path> <一時 dir>` と `cat` は通る ＝ 2 本。
 - 後続: ADR-0029 §2.3 の statusline の key の置換の口を同じ merge の型で足す（別便）／前の器の shim の退役（host 側）／runner への rm と自身の設定の種類の到達（ADR-0056 CSQ-N6・別 ADR）／lens と usage の更新に見張りを掛ける形（ADR-0011 §2.2 の起動形を supersede する別の決定・本 § では変えない）。
 
+## 13. hook/host_guard.rs の歯の module を歯の file へ割る — `#[path]` の子 module で module path と歯の名を変えない（契約表の行 g・純移動・行 e の余地を作る）
+
+やさしく言うと: 見張りの本体の file（§11 / §12）は、書き足すための空きが足りず、次の行 e を受付が断っている。空きを食っているのは本体ではなく、同じ file の後ろ半分に在る確かめの test の塊なので、その塊だけを名前も中身も変えずに隣の file へそのまま引っ越す。動きは 1 つも変わらない。
+
+- 何が起きているか（実測 2026-09-24・main 2cd9509）: `crates/scribe2/src/hook/host_guard.rs` は 1388 行（src 607 + 行頭の `#[cfg(test)]` から後の歯の module 781・歯 39 本〔接頭辞 host_guard_kind_ 12・host_guard_rm_ 23・host_guard_ledger_ 4〕）で R-C4-2（1500）の余地が受付の実測で 93 行しか無く、size M（300 行）の行 e（§12・`s2-07l.577`）を受付が `cap-headroom` で断った。余地を食っているのは歯の module（file の 56%）で、閉じた 1 塊として可視性を 1 語も変えずに外へ出せる最大の群でもある。
+- 決定的な制約（実測・[account-autonomy.md](./account-autonomy.md) §21 と同じ 4 点）: (1) 歯の module を別 file にしても **module path hook::host_guard::tests と歯 39 本の名を変えない**形が要る（行 b / c / f の verify の filter と行 e の接頭辞 host_guard_self_ は名で結ぶ）。`#[path]` 属性付きの `mod tests;` がその形。(2) flip-check と rules-wired は名が _tests.rs で終わる src 配下の file を丸ごと test file と読み、R-C4-3 の比は名を見ず歯の file を src 側に数える（比は緩む側＝違反にならない・§21 の既知の穴）。(3) 純移動の機械証明（[pipeline.md](./pipeline.md) §5.3）は inline の `mod tests {}` を item 1 本に畳むので本便は多重集合が一致せず、lens は従来どおり diff を読む。札 moved は flip-check の側に効く。(4) 歯の module は `use super::{…}`（decide / judge / HostGuardDecision / Kind / Protected / Scene / Unreadable / KINDS / LEDGER_ROW / PROTECTED / RM_ROW / TMUX_ROW / WORD_ROWS の 13 名）と本文中の `super::GIT_ROW` 2 か所と `crate::hook::command` / `crate::hook::ledger_guard` / `crate::name` / `crate::order` / `crate::rules::manifest` と std の `use` だけで親を読み、他の file から hook::host_guard::tests を読む箇所は無い（grep 0 件）＝親側の可視性は 1 語も変えない。
+- 形（§21 と同型・向きは「歯だけを外へ」）: 歯の module の**本文**（`use super::{` から最後の歯の閉じ括弧まで・610〜1387 行）を行 g の write-set の `+` の file（host_guard.rs と同じ dir・名は _tests.rs で終わる形）へ indent を 1 段外して**そのまま**移す。親の歯の区間は `#[cfg(test)]` の単独行と `#[path]` の行と `mod tests;` の 3 行だけになる（module 名は tests のまま・宣言の可視性は private のまま・move_proof の残差の許容形の内）。子は mod の本文そのものなので `use super::{…}` と `super::GIT_ROW` の path は不変。札 `// flip-check: moved <行 g の bead>` は子の file の先頭（module doc の直後・file 全体が歯の区間なので flip-check が数える）に置き、親の宣言の直後にも対で置く（§21 の着地形・親の側は src 区間なので数えられないが `//` 始まりの残差として許される）。src の 607 行・親の `use`・可視性は 1 byte も変えない。
+- 見積: 親 約 611 行（余地 約 870＝行 e の M と後続の余地）・子 約 790 行（上限 1500 の内）。
+- 歯: 既存の 39 本（hook::host_guard::tests 配下）が全部緑で期待を変えない。verify は module path の filter で 39 本を撃ち、base = head の本数を実装役が `cargo nextest list` で写す。
+- 後続: 行 e は歯を in-file に足す（§12 の「行 e・in-file」）ので、本便の後は行 e の write-set に行 g の `+` の file が要る（無いと実装役の diff が write-set の外に出る）。本便が同じ PR で行 g の `+` を剥がし、行 e の write-set にその file を 1 項目足す（§12 の「in-file」の語は歯の file を指すと読む＝本文は変えない）。行 e は台帳の依存と行の depends で本便の Landed を待つ。
+- 却下: 行 e を S に落とす（見積が S の 100 を超える＝size の字面だけ変える嘘）／行 e に growth を書く（余地 93 に 300 が入らない事実は変わらず、次の M で再発）／src の群を子へ割る（群の境界を選び直し、歯が引く名と私有の関数の可視性を動かす＝items-differ の危険・歯の module の 781 行は居座り次の M で再発）／歯を `crates/scribe2-boundary/tests/e2e/` へ移す（私有 item を撃つ歯は e2e から撃てない・`--lib` の scope が変わる）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -277,7 +289,7 @@ section = "12"
 write-set = ["crates/scribe2/src/hook/host_guard.rs", "crates/scribe2-boundary/tests/e2e/hook.rs", "docs/design/vessel-hook.md"]
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail host_guard_self_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail host_guard_self_"]
 size = "M"
-depends = ["b"]
+depends = ["b", "g"]
 done = "(1) 守る集合は [[account]] の label ごとの settings.json の実体（無い口座は入れない）と、payload の cwd の repo の root（行 c と同じ fs の辿り・repo の外なら cwd）の .claude/settings.json と .claude/settings.local.json（実体が在れば実体・無ければ字句で畳んだ path・cwd が repo の下の dir でも root の file を守る・起動 dir が repo の外や別 repo の周は守れない限界）で、rules 行を持たず doctor の self=on は固定、当たる関係は一致と祖先（守る file の祖先の dir の rm と mv は当たり、兄弟の dir は通る）で、比べる相手は導いた path と実体の path の両方 (2) Edit / Write / MultiEdit / NotebookEdit の file_path か notebook_path が symlink 経由でも集合に当たれば kind=self・hit=self:<実体の path>・row=- ruling=- で rc 2、同じ dir の別 file は通る (3) Bash は launcher を剥いだ basename で動詞を同定し、rm / tee の flag でない語全部、mv の source と destination の全部、cp / ln の destination だけ（-t / --target-directory の値を含む・mv の -t も）、cp / mv の destination が実体の dir の周と -t の値は dir と各 source の basename を結んだ path で比べ（cp settings.json <口座の dir> は当たり cp x <口座の dir> は通る・歯 1 本）、sed は -i を含む flag（-i / -i.bak / --in-place[=] / -Ei）を持つ周だけ、閉じた列 > >> >| &> 2> の次の語とその字で始まる語の残りを対象にし、相対 path は行 c と同じ 1 関数で payload の cwd 基準に解き、1 つでも当たれば deny（6 動詞 + 2 形をそれぞれ別の歯が pin）、cp / ln の source と -i の無い sed と cat は通る (4) ~ で始まる語は ~ を除いた残りが導いた path か実体の path の末尾と一致する周に当たり、* ? [ を含む語は自前の fnmatch（依存 0）で導いた path か実体の path に当たる周に当たり、~ と glob を併せ持つ語は残りを末尾に fnmatch で当て、$ か ` を含む語と brace の語と同じ command の cd / pushd より後ろの相対 path は解かずに通し（rm の種類と極性が逆・別の歯が pin）、集合に無い path と列に無い書き込みの命令は通る (5) e2e で symlink の口座の settings.json への Write と echo x > <その path> の Bash と rm -rf <repo の root>/.claude と mv <口座の dir> x が rc 2、cp <その path> <一時 dir> と cat は通る (6) 本行は行 c の着地の後に出す＝repo の root の fs の辿り・launcher を剥ぐ手順・相対 path の扱いは行 c が host_guard.rs に置く現物を共有し、本行は同じ働きの関数を 1 つも足さない"
 
 [[contract]]
@@ -291,4 +303,14 @@ size = "S"
 growth = ["crates/scribe2/src/pipe/cli/intake.rs:40"]
 depends = ["b"]
 done = "(1) 台帳の種類の形の判定は payload の cwd の repo の root（行 c と同じ fs の辿り）に .beads の dir と scripts/bdw の file の両方が在る周だけ掛かり（片方だけは 0 語）、host_guard.ledger の enabled=false は語列と形の両方を切る（同じ fixture の両側を歯が pin）、write_of → forms_of → judge_write の 3 関数で 4 形が起票の門と同じ 1 語（notes-replace 等）で当たり、--append-notes と bdw の書き込みは通る (2) ledger.denied_writes が無い・enabled=false・列でない周（forms_of と同じ 3 つ）は host_guard.ledger が on のときだけ台帳の種類が bd / bdw の segment のうち subcommand が WRITES（ledger_guard.rs の閉じた列・pub(crate) にする）に在るものを全部 fail-closed で断り、読みの subcommand は通り、同じ command の git の語列の判定は動く (3) 受付と preflight の 2 か所が command.rs の ∪ の読み手で host-guard の 3 行を読み、host_guard.git にだけ在る語列を verify 行に持つ契約を断り（断り文は従来の runner.denied_commands を名乗る＝declaration.rs は触らない・限界を歯が pin）、host_guard.git を欠く --rules は rules の断りで止まる (4) runner.denied_commands の値が cargo mutants / cargo publish の 2 語列になり host_guard.git が git の 7 語列を持って両方に同じ語列が無く（裁定 id つきの diff）、値を逐語で pin する歯と hook の command guard の e2e の行 id の assert が新しい id へ動いて hook_command_guard_ の 4 本と hook_ledger_write_ の 3 本が緑 (5) e2e で台帳を持つ tmp repo の bd update x --notes y が kind=ledger・hit=notes-replace で rc 2、持たない repo は通る"
+
+[[contract]]
+id = "g"
+title = "hook/host_guard.rs の歯の module（39 本・781 行）を #[path] の子 module の file へ割る — 純移動・module path hook::host_guard::tests と歯の名は不変・親の src と可視性は不変・札 moved・R-C4-2 の余地を行 e（M）に作る"
+req = ["FR56"]
+section = "13"
+write-set = ["-crates/scribe2/src/hook/host_guard.rs", "+crates/scribe2/src/hook/host_guard_tests.rs", "docs/design/vessel-hook.md"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail hook::host_guard::tests::"]
+size = "S"
+done = "歯の module の本文が子の file に在り、親の歯の区間は cfg(test) の単独行と path と mod 宣言の 3 行だけ、module path と歯 39 本の名は不変で base = head、親の src と可視性は不変、札 moved が子の先頭と親の宣言の直後に対で在って flip-check が moved で通り、file-lines で host_guard.rs の余地が 800 行以上に増え、行 g の + の剥がしと行 e の write-set への歯の file の追加が同じ PR で済む"
 <!-- contracts:end -->
