@@ -15,7 +15,8 @@ use crate::hook::command::{self, denied_in, CommandDecision};
 use crate::hook::ledger_guard;
 use crate::name::NAME;
 use crate::order::is_declaration_order;
-use crate::rules::manifest::Manifest;
+use crate::rules::host_manifest_path;
+use crate::rules::manifest::{HostManifest, Manifest};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -59,7 +60,7 @@ fn manifest(tmux_enabled: bool, drop: Option<&str>) -> Manifest {
 
 /// 語列の判定の場（rm の segment を持たない command には効かない）。
 fn nowhere() -> Scene<'static> {
-    Scene { cwd: Path::new("/nonexistent"), state_dir: Path::new("/nonexistent/state"), git: Path::new("git") }
+    Scene { cwd: Path::new("/nonexistent"), state_dir: Path::new("/nonexistent/state"), git: Path::new("git"), accounts: &[] }
 }
 
 /// Bash の判定の (what, line)。Allow なら `None`。
@@ -80,7 +81,7 @@ fn bash(command: &str) -> String {
 fn host_guard_kind_slice_is_the_five_kinds_in_declaration_order() {
     assert!(is_declaration_order(KINDS, |kind| kind as usize), "KINDS は宣言順: {KINDS:?}");
     let words: Vec<&str> = KINDS.iter().map(|kind| kind.as_str()).collect();
-    assert_eq!(words, ["git", "rm", "tmux", "ledger", "settings"], "5 値の語");
+    assert_eq!(words, ["git", "rm", "tmux", "ledger", "self"], "5 値の語");
     let rows: Vec<Option<&str>> = KINDS.iter().map(|kind| kind.row()).collect();
     assert_eq!(rows, [Some(super::GIT_ROW), Some(RM_ROW), Some(TMUX_ROW), Some(LEDGER_ROW), None], "行 id");
     assert!(!is_declaration_order(&[Kind::Rm, Kind::Git], |kind| kind as usize), "述語は並べ替えを落とす");
@@ -302,7 +303,7 @@ impl Place {
 
     /// manifest と git の program を指定して判定する。
     fn hit_in(&self, command: &str, cwd: &Path, manifest: &Manifest, git: &Path) -> Option<String> {
-        let scene = Scene { cwd, state_dir: &self.state, git };
+        let scene = Scene { cwd, state_dir: &self.state, git, accounts: &[] };
         match judge("Bash", command, manifest, &scene) {
             HostGuardDecision::Deny { line, .. } => Some(line.split(" hit=").nth(1)?.split(" row=").next()?.to_owned()),
             HostGuardDecision::Allow => None,
@@ -585,7 +586,7 @@ fn host_guard_rm_symlink_is_judged_by_the_link_itself() {
     assert_eq!(place.hit("rm st", &place.other), None, "dir の link そのもの");
     assert!(place.hit("rm -rf st/", &place.other).is_some(), "末尾 / は link の先");
     let link = place.other.join("st");
-    let scene = Scene { cwd: &place.other, state_dir: &link, git: Path::new("git") };
+    let scene = Scene { cwd: &place.other, state_dir: &link, git: Path::new("git"), accounts: &[] };
     let command = format!("rm {}", place.state.join("host.toml").display());
     let found = judge("Bash", &command, &rm_manifest(), &scene);
     assert!(matches!(found, HostGuardDecision::Deny { .. }), "link で渡した state dir も実体で守る: {found:?}");
@@ -640,7 +641,7 @@ fn host_guard_rm_missing_row_fails_closed_and_disabled_row_passes() {
     let target = format!("rm {}", place.state.join("host.toml").display());
     let not_list = "\n[[rule]]\nid = \"host_guard.rm\"\nkind = \"CoreLines\"\nvalue = 1\nenabled = true\nruling = \"r\"\nruled_at = \"d\"\n";
     for fixture in [manifest(true, None), manifest_with(true, None, not_list)] {
-        let scene = Scene { cwd: &place.other, state_dir: &place.state, git: Path::new("git") };
+        let scene = Scene { cwd: &place.other, state_dir: &place.state, git: Path::new("git"), accounts: &[] };
         let HostGuardDecision::Deny { what, line } = judge("Bash", "rm nope", &fixture, &scene) else {
             panic!("行が読めない周は rm を断る");
         };
@@ -693,7 +694,7 @@ fn ledger_root(name: &str, beads: bool, bdw: bool) -> PathBuf {
 
 /// root の下の dir を cwd にして判定し、断る周の (what, hit) を返す。通す周は `None`。
 fn ledger_hit(command: &str, root: &Path, manifest: &Manifest) -> Option<(String, String)> {
-    let scene = Scene { cwd: root, state_dir: Path::new("/nonexistent/state"), git: Path::new("git") };
+    let scene = Scene { cwd: root, state_dir: Path::new("/nonexistent/state"), git: Path::new("git"), accounts: &[] };
     match judge("Bash", command, manifest, &scene) {
         HostGuardDecision::Deny { what, line } => Some((what, line.split(" hit=").nth(1)?.split(" row=").next()?.to_owned())),
         HostGuardDecision::Allow => None,
@@ -735,7 +736,7 @@ fn host_guard_ledger_four_forms_hit_with_the_gate_words() {
         assert_eq!(found, Some(("host-guard-deny ledger".to_owned(), hit.to_owned())), "{command}");
         assert_eq!(ledger_guard::FORMS.iter().filter(|form| form.as_str() == hit).count(), 1, "起票の門の語: {hit}");
     }
-    let scene = Scene { cwd: &root, state_dir: Path::new("/nonexistent/state"), git: Path::new("git") };
+    let scene = Scene { cwd: &root, state_dir: Path::new("/nonexistent/state"), git: Path::new("git"), accounts: &[] };
     let HostGuardDecision::Deny { line, .. } = judge("Bash", "bd close s2-1", &manifest, &scene) else {
         panic!("bd の書き込みは断る");
     };
@@ -784,4 +785,585 @@ fn host_guard_ledger_disabled_row_cuts_sequences_and_forms() {
     let git = ledger_hit("git push --force", &root, &ledger_manifest(false, None)).map(|(what, _)| what);
     assert_eq!(git.as_deref(), Some("host-guard-deny git"), "他の種類は動く");
     let _ = fs::remove_dir_all(&root);
+}
+
+// ─── 見張り自身の設定（行 e・接頭辞 `host_guard_self_`） ───
+
+/// home の短縮の字（paths-clean が字面の短縮を数えるので、語は format で組む）。
+const TILDE: &str = "~";
+
+/// 行 e の判定に掛ける manifest（語列の 3 行と、切った rm の行＝rm の segment も見張り自身の設定の種類だけで測る）。
+fn self_manifest() -> Manifest {
+    manifest_with(true, None, &rm_row(&["state-dir", "repo-tracked", "repo-git"], false))
+}
+
+/// 歯の置き場: `base/state`（host.toml が口座 a / b / gone を宣言・a の settings.json は `base/shared/settings.json` の実体への
+/// symlink で同じ dir に別 file `other.json`・b の settings.json は実体・gone は dir が無い・口座でない兄弟 dir `zz`）・`base/repo`
+/// （`.git` の dir・`.claude/settings.json` の実体・`.claude/settings.local.json` は無い・下に `sub`）・`base/plain`（repo の外・
+/// `.claude/settings.json` の実体と file `notes.json`）・`base/bare`（repo の外・`.claude` が無い）。
+struct Home {
+    base: PathBuf,
+    state: PathBuf,
+    shared: PathBuf,
+    a: PathBuf,
+    b: PathBuf,
+    repo: PathBuf,
+    plain: PathBuf,
+    bare: PathBuf,
+}
+
+impl Home {
+    /// 歯ごとに作り直す（名は歯ごとに一意・pid つき）。
+    fn new(name: &str) -> Self {
+        let base = std::env::temp_dir().join(format!("host-guard-self-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let _ = fs::create_dir_all(&base);
+        let base = fs::canonicalize(&base).unwrap_or(base);
+        let state = base.join("state");
+        let (a, b) = (state.join("accounts/a"), state.join("accounts/b"));
+        let (shared, repo, plain, bare) = (base.join("shared"), base.join("repo"), base.join("plain"), base.join("bare"));
+        for dir in [&a, &b, &shared, &state.join("accounts/zz"), &repo.join(".git"), &repo.join(".claude"), &repo.join("sub")] {
+            let _ = fs::create_dir_all(dir);
+        }
+        for dir in [&plain.join(".claude"), &bare] {
+            let _ = fs::create_dir_all(dir);
+        }
+        let host = "schema = 1\n\n[[account]]\nlabel = \"a\"\n\n[[account]]\nlabel = \"b\"\n\n[[account]]\nlabel = \"gone\"\n";
+        let _ = fs::write(state.join("host.toml"), host);
+        for file in [
+            shared.join("settings.json"),
+            b.join("settings.json"),
+            a.join("other.json"),
+            repo.join(".claude/settings.json"),
+            plain.join(".claude/settings.json"),
+            plain.join("notes.json"),
+        ] {
+            let _ = fs::write(file, "{}\n");
+        }
+        let _ = std::os::unix::fs::symlink(shared.join("settings.json"), a.join("settings.json"));
+        Self { base, state, shared, a, b, repo, plain, bare }
+    }
+
+    /// host.toml の口座で判定し、断る周の hit（` hit=` と ` row=` の間）を返す（断る種類は自身の設定であること）。通す周は `None`。
+    fn hit_of(&self, tool: &str, command: &str, cwd: &Path) -> Option<String> {
+        let host = HostManifest::read(&host_manifest_path(&self.state));
+        let HostManifest::Present(face) = host else {
+            panic!("fixture の host.toml を読める: {host:?}");
+        };
+        let scene = Scene { cwd, state_dir: &self.state, git: Path::new("git"), accounts: face.accounts() };
+        match judge(tool, command, &self_manifest(), &scene) {
+            HostGuardDecision::Deny { what, line } => {
+                assert_eq!(what, "host-guard-deny self", "自身の設定の種類が断る: {line}");
+                Some(line.split(" hit=").nth(1)?.split(" row=").next()?.to_owned())
+            }
+            HostGuardDecision::Allow => None,
+        }
+    }
+
+    /// Bash の判定。
+    fn hit(&self, command: &str, cwd: &Path) -> Option<String> {
+        self.hit_of("Bash", command, cwd)
+    }
+
+    /// 口座 a の導いた path（symlink）。
+    fn a_file(&self) -> PathBuf {
+        self.a.join("settings.json")
+    }
+
+    /// 口座 b の守る file（実体）。
+    fn b_file(&self) -> PathBuf {
+        self.b.join("settings.json")
+    }
+
+    /// 置き場を片付ける。
+    fn clean(self) {
+        let _ = fs::remove_dir_all(&self.base);
+    }
+}
+
+/// 守る file の hit の字面。
+fn own(path: &Path) -> Option<String> {
+    Some(format!("self:{}", path.display()))
+}
+
+/// cwd を持つ Bash の payload。
+fn bash_in(cwd: &Path, command: &str) -> String {
+    format!(
+        "{{\"cwd\":\"{}\",\"tool_name\":\"Bash\",\"tool_input\":{{\"command\":{}}}}}",
+        cwd.display(),
+        crate::fleet::json_lite::quote(command)
+    )
+}
+
+/// 編集系の道具の payload（key は file_path か notebook_path）。
+fn edit_payload(cwd: &Path, tool: &str, key: &str, path: &Path) -> String {
+    format!(
+        "{{\"cwd\":\"{}\",\"tool_name\":\"{tool}\",\"tool_input\":{{\"{key}\":\"{}\"}}}}",
+        cwd.display(),
+        path.display()
+    )
+}
+
+/// 埋め込みの rules と host.toml の口座で payload を判定する（decide の経路）: symlink の口座の settings.json への Write は
+/// kind=self・hit=self:<実体の path>・row=- ruling=- の 1 行で断り、NotebookEdit の notebook_path も同じ、同じ dir の別 file は通る。
+#[test]
+fn host_guard_self_write_payload_is_denied_as_kind_self_without_a_row() {
+    let home = Home::new("line");
+    let payload = edit_payload(&home.plain, "Write", "file_path", &home.a_file());
+    let Ok(HostGuardDecision::Deny { what, line }) = decide(&payload, None, &home.state) else {
+        panic!("口座の settings.json への Write は断る");
+    };
+    assert_eq!(what, "host-guard-deny self");
+    let real = home.shared.join("settings.json");
+    let want = format!("{NAME}: host-guard deny kind=self hit=self:{} row=- ruling=- — {}", real.display(), Kind::Settings.route());
+    assert_eq!(line, want);
+    let notebook = edit_payload(&home.plain, "NotebookEdit", "notebook_path", &home.a_file());
+    assert!(matches!(decide(&notebook, None, &home.state), Ok(HostGuardDecision::Deny { .. })), "notebook_path");
+    let other = edit_payload(&home.plain, "Write", "file_path", &home.a.join("other.json"));
+    assert_eq!(decide(&other, None, &home.state), Ok(HostGuardDecision::Allow), "同じ dir の別 file");
+    home.clean();
+}
+
+/// 編集系 4 道具の path が口座の settings.json に当たる: 導いた path（symlink の側）でも実体の path でも hit は実体、実体の file の
+/// 口座は導いた path そのもの。
+#[test]
+fn host_guard_self_edit_tools_hit_the_account_file_by_derived_and_real_path() {
+    let home = Home::new("edit");
+    let real = home.shared.join("settings.json");
+    for tool in ["Edit", "Write", "MultiEdit", "NotebookEdit"] {
+        let path = home.a_file().display().to_string();
+        assert_eq!(home.hit_of(tool, &path, &home.plain), own(&real), "{tool}: 導いた path");
+        assert_eq!(home.hit_of(tool, &real.display().to_string(), &home.plain), own(&real), "{tool}: 実体の path");
+        assert_eq!(home.hit_of(tool, &home.b_file().display().to_string(), &home.plain), own(&home.b_file()), "{tool}: b");
+    }
+    home.clean();
+}
+
+/// 同じ dir の別 file・dir の無い口座（gone）の settings.json・口座でない dir の settings.json は編集系の道具でも通る。
+#[test]
+fn host_guard_self_edit_of_files_outside_the_set_passes() {
+    let home = Home::new("edit-outside");
+    for path in [
+        home.a.join("other.json"),
+        home.state.join("accounts/gone/settings.json"),
+        home.state.join("accounts/zz/settings.json"),
+        home.plain.join("notes.json"),
+    ] {
+        assert_eq!(home.hit_of("Write", &path.display().to_string(), &home.plain), None, "{}", path.display());
+    }
+    home.clean();
+}
+
+/// repo の root の 2 file: 実体の在る settings.json は実体で、無い settings.local.json は字句で畳んだ path で当たる（相対 path も）。
+#[test]
+fn host_guard_self_repo_root_files_hit_with_and_without_an_entity() {
+    let home = Home::new("root-files");
+    let (settings, local) = (home.repo.join(".claude/settings.json"), home.repo.join(".claude/settings.local.json"));
+    assert!(settings.exists() && !local.exists(), "前提: 片方だけ実体が在る");
+    assert_eq!(home.hit_of("Write", &settings.display().to_string(), &home.repo), own(&settings), "在る");
+    assert_eq!(home.hit_of("Write", &local.display().to_string(), &home.repo), own(&local), "無い");
+    assert_eq!(home.hit_of("Edit", ".claude/settings.local.json", &home.repo), own(&local), "相対 path");
+    home.clean();
+}
+
+/// cwd が repo の下の dir でも root の file を守り（`..` も畳む）、その dir 自身の `.claude` は守らない。
+#[test]
+fn host_guard_self_repo_root_files_are_guarded_from_a_subdir() {
+    let home = Home::new("subdir");
+    let sub = home.repo.join("sub");
+    let settings = home.repo.join(".claude/settings.json");
+    assert_eq!(home.hit_of("Write", &settings.display().to_string(), &sub), own(&settings), "root の file");
+    let local = home.repo.join(".claude/settings.local.json");
+    assert_eq!(home.hit_of("Write", "../.claude/settings.local.json", &sub), own(&local), "..");
+    assert_eq!(home.hit_of("Write", ".claude/settings.json", &sub), None, "下の dir の .claude は守らない");
+    home.clean();
+}
+
+/// repo の外の cwd はその cwd の `.claude` の 2 file を守り（実体が無くても）、別の cwd の file は守らない。
+#[test]
+fn host_guard_self_outside_a_repo_the_cwd_files_are_guarded() {
+    let home = Home::new("outside");
+    let file = home.bare.join(".claude/settings.json");
+    assert!(!file.exists(), "前提: 実体が無い");
+    assert_eq!(home.hit_of("Write", &file.display().to_string(), &home.bare), own(&file), "cwd の file");
+    assert_eq!(home.hit_of("Write", &file.display().to_string(), &home.plain), None, "別の cwd の file");
+    let plain = home.plain.join(".claude/settings.local.json");
+    assert_eq!(home.hit_of("Write", &plain.display().to_string(), &home.plain), own(&plain), "local も");
+    home.clean();
+}
+
+/// rm: 守る file は当たり、同じ dir の別 file は通る。
+#[test]
+fn host_guard_self_rm_of_a_guarded_file_hits() {
+    let home = Home::new("rm");
+    assert_eq!(home.hit(&format!("rm -f {}", home.b_file().display()), &home.plain), own(&home.b_file()));
+    assert_eq!(home.hit(&format!("rm -f {}", home.a.join("other.json").display()), &home.plain), None, "別 file");
+    home.clean();
+}
+
+/// tee: flag でない語の全部が対象（pipe の後ろの segment でも）で、集合に無い file は通る。
+#[test]
+fn host_guard_self_tee_to_a_guarded_file_hits() {
+    let home = Home::new("tee");
+    let real = home.shared.join("settings.json");
+    let command = format!("echo x | tee -a {} {}", home.plain.join("notes.json").display(), home.a_file().display());
+    assert_eq!(home.hit(&command, &home.plain), own(&real));
+    assert_eq!(home.hit(&format!("echo x | tee -a {}", home.plain.join("notes.json").display()), &home.plain), None);
+    home.clean();
+}
+
+/// mv: source の守る file と destination の守る file の両方が当たり、どちらも集合に無い周は通る。
+#[test]
+fn host_guard_self_mv_of_or_onto_a_guarded_file_hits() {
+    let home = Home::new("mv");
+    let (b, notes) = (home.b_file().display().to_string(), home.plain.join("notes.json").display().to_string());
+    assert_eq!(home.hit(&format!("mv {b} {}", home.plain.join("x").display()), &home.plain), own(&home.b_file()), "source");
+    assert_eq!(home.hit(&format!("mv {notes} {b}"), &home.plain), own(&home.b_file()), "destination");
+    assert_eq!(home.hit(&format!("mv {notes} {}", home.plain.join("y").display()), &home.plain), None);
+    home.clean();
+}
+
+/// cp: destination の守る file は当たり、守る file を source にした退避の複写は通る。
+#[test]
+fn host_guard_self_cp_onto_a_guarded_file_hits() {
+    let home = Home::new("cp");
+    let (b, notes) = (home.b_file().display().to_string(), home.plain.join("notes.json").display().to_string());
+    assert_eq!(home.hit(&format!("cp -f {notes} {b}"), &home.plain), own(&home.b_file()), "destination");
+    assert_eq!(home.hit(&format!("cp {b} {}", home.plain.join("backup.json").display()), &home.plain), None, "source");
+    home.clean();
+}
+
+/// ln: destination の守る file は当たり、守る file を link の先（source）にした link は通る。
+#[test]
+fn host_guard_self_ln_onto_a_guarded_file_hits() {
+    let home = Home::new("ln");
+    let (b, notes) = (home.b_file().display().to_string(), home.plain.join("notes.json").display().to_string());
+    assert_eq!(home.hit(&format!("ln -sf {notes} {b}"), &home.plain), own(&home.b_file()), "destination");
+    assert_eq!(home.hit(&format!("ln -s {b} {}", home.plain.join("l").display()), &home.plain), None, "source");
+    home.clean();
+}
+
+/// sed -i: in-place の周は flag でない語の全部が対象で、集合に無い file は通る。
+#[test]
+fn host_guard_self_sed_in_place_on_a_guarded_file_hits() {
+    let home = Home::new("sed");
+    assert_eq!(home.hit(&format!("sed -i s/a/b/ {}", home.b_file().display()), &home.plain), own(&home.b_file()));
+    assert_eq!(home.hit(&format!("sed -i s/a/b/ {}", home.plain.join("notes.json").display()), &home.plain), None);
+    home.clean();
+}
+
+/// `>`: 次の語と、`>` で始まる語の残りが対象（前の segment の動詞に依らない）。
+#[test]
+fn host_guard_self_redirect_to_a_guarded_file_hits() {
+    let home = Home::new("gt");
+    let b = home.b_file().display().to_string();
+    assert_eq!(home.hit(&format!("echo x > {b}"), &home.plain), own(&home.b_file()), "次の語");
+    assert_eq!(home.hit(&format!("echo x >{b}"), &home.plain), own(&home.b_file()), "語の残り");
+    assert_eq!(home.hit(&format!("echo x > {}", home.plain.join("notes.json").display()), &home.plain), None);
+    home.clean();
+}
+
+/// `>>`: 次の語と、`>>` で始まる語の残りが対象。
+#[test]
+fn host_guard_self_append_redirect_to_a_guarded_file_hits() {
+    let home = Home::new("gtgt");
+    let b = home.b_file().display().to_string();
+    assert_eq!(home.hit(&format!("echo x >> {b}"), &home.plain), own(&home.b_file()), "次の語");
+    assert_eq!(home.hit(&format!("echo x >>{b}"), &home.plain), own(&home.b_file()), "語の残り");
+    assert_eq!(home.hit(&format!("echo x >> {}", home.plain.join("notes.json").display()), &home.plain), None);
+    home.clean();
+}
+
+/// mv の source と cp / ln の destination は当たり、cp / ln の source（退避の複写・link の先）は通る。
+#[test]
+fn host_guard_self_mv_source_and_cp_ln_destination_hit_but_copy_sources_pass() {
+    let home = Home::new("sources");
+    let (a, x) = (home.a_file().display().to_string(), home.plain.join("x").display().to_string());
+    let real = home.shared.join("settings.json");
+    assert_eq!(home.hit(&format!("mv {a} {x}"), &home.plain), own(&real), "mv の source");
+    assert_eq!(home.hit(&format!("cp {x} {a}"), &home.plain), own(&real), "cp の destination");
+    assert_eq!(home.hit(&format!("ln -s {x} {a}"), &home.plain), own(&real), "ln の destination");
+    assert_eq!(home.hit(&format!("cp -p {a} {x}"), &home.plain), None, "cp の source");
+    assert_eq!(home.hit(&format!("ln -s {a} {x}"), &home.plain), None, "ln の source");
+    home.clean();
+}
+
+/// cp / mv の destination が実体の dir の周と `-t` の周は dir と source の basename を結んだ path で比べる（dir そのものは比べない）。
+#[test]
+fn host_guard_self_cp_mv_into_an_account_dir_joins_the_basename() {
+    let home = Home::new("join");
+    let (b, want) = (home.b.display().to_string(), own(&home.b_file()));
+    assert_eq!(home.hit(&format!("cp settings.json {b}"), &home.plain), want, "cp の dir");
+    assert_eq!(home.hit(&format!("mv -t {b} settings.json"), &home.plain), want, "mv -t");
+    assert_eq!(home.hit(&format!("cp --target-directory={b} ../settings.json"), &home.plain), want, "--target-directory=");
+    assert_eq!(home.hit(&format!("cp x {b}"), &home.plain), None, "cp x <口座の dir>");
+    assert_eq!(home.hit(&format!("cp x -t {b}"), &home.plain), None, "cp x -t <口座の dir>");
+    assert_eq!(home.hit(&format!("mv x {b}/"), &home.plain), None, "mv x <口座の dir>/");
+    home.clean();
+}
+
+/// ln の destination が実体の dir の周も同じ結び方: dir の中の settings.json を名指す link は当たり、dir への link は通る。
+#[test]
+fn host_guard_self_ln_into_an_account_dir_joins_the_basename() {
+    let home = Home::new("ln-join");
+    assert_eq!(home.hit(&format!("ln -s x {}", home.b_file().display()), &home.plain), own(&home.b_file()), "file");
+    assert_eq!(home.hit(&format!("ln -s x {}", home.b.display()), &home.plain), None, "dir");
+    assert_eq!(home.hit(&format!("ln -s ../settings.json {}", home.b.display()), &home.plain), own(&home.b_file()), "basename");
+    home.clean();
+}
+
+/// fd の数字の付いた形（`2>` / `1>` / `2>>`・語の残りも）は当たり、`<` は通る。
+#[test]
+fn host_guard_self_redirect_with_fd_digits_hits_and_input_passes() {
+    let home = Home::new("fd");
+    let b = home.b_file().display().to_string();
+    for form in [format!("ls 2> {b}"), format!("ls 1> {b}"), format!("ls 2>> {b}"), format!("ls 2>{b}"), format!("ls 12>>{b}")] {
+        assert_eq!(home.hit(&form, &home.plain), own(&home.b_file()), "{form}");
+    }
+    for form in [format!("cat < {b}"), format!("cat <{b}"), format!("wc -l {b}")] {
+        assert_eq!(home.hit(&form, &home.plain), None, "{form}");
+    }
+    home.clean();
+}
+
+/// `>|` は `|` で切れて `>` が segment の末尾に残り、次の segment の先頭語が対象（集合に無い先頭語は通る）。
+#[test]
+fn host_guard_self_clobber_redirect_reads_the_next_segment_head() {
+    let home = Home::new("clobber");
+    let b = home.b_file().display().to_string();
+    assert_eq!(ledger_guard::segments(&format!("echo x >| {b}")), [vec!["echo", "x", ">"], vec![b.as_str()]], "前提: 分割の形");
+    assert_eq!(home.hit(&format!("echo x >| {b}"), &home.plain), own(&home.b_file()));
+    assert_eq!(home.hit(&format!("echo x >| {}", home.plain.join("notes.json").display()), &home.plain), None);
+    assert_eq!(home.hit(&format!("echo x | {b}"), &home.plain), None, "`>` の無い pipe の先頭語は対象でない");
+    home.clean();
+}
+
+/// `&>` は `&` で切れて次の segment が `>` で始まり、`>` の形として当たる（集合に無い対象は通る）。
+#[test]
+fn host_guard_self_ampersand_redirect_reads_the_gt_of_the_next_segment() {
+    let home = Home::new("amp");
+    let b = home.b_file().display().to_string();
+    assert_eq!(ledger_guard::segments(&format!("ls &> {b}")), [vec!["ls"], vec![">", b.as_str()]], "前提: 分割の形");
+    assert_eq!(home.hit(&format!("ls &> {b}"), &home.plain), own(&home.b_file()));
+    assert_eq!(home.hit(&format!("ls &>{b}"), &home.plain), own(&home.b_file()), "語の残り");
+    assert_eq!(home.hit(&format!("ls &> {}", home.plain.join("notes.json").display()), &home.plain), None);
+    home.clean();
+}
+
+/// host の面が在るのに壊れている周は、編集系でも Bash でも理由 host-unreadable で断り（rules-unreadable と同じ rc・kind=-）、
+/// 判定に載らない tool は通す。
+#[test]
+fn host_guard_self_unreadable_host_face_fails_closed() {
+    let home = Home::new("host-broken");
+    let _ = fs::write(home.state.join("host.toml"), "schema = 1\n[[account]]\nlabel = \n");
+    let write = edit_payload(&home.plain, "Write", "file_path", &home.plain.join("notes.json"));
+    assert_eq!(decide(&write, None, &home.state), Err(Unreadable::HostUnreadable), "Write");
+    assert_eq!(decide(&bash("ls"), None, &home.state), Err(Unreadable::HostUnreadable), "Bash");
+    let read = "{\"tool_name\":\"Read\"}";
+    assert_eq!(decide(read, None, &home.state), Ok(HostGuardDecision::Allow), "判定に載らない tool");
+    let state = home.state.display().to_string();
+    let outcome = super::dispatch(&["--state-dir".to_owned(), state.clone()], &write);
+    let rules = super::dispatch(&["--state-dir".to_owned(), state, "--rules".to_owned(), "/nonexistent/rules.toml".to_owned()], &write);
+    assert_eq!(outcome.rc, rules.rc, "rules-unreadable と同じ rc");
+    assert_eq!(outcome.err, [format!("{NAME}: host-guard deny kind=- hit=host-unreadable row=- ruling=- — 読めない周は通さない（fail-closed）: 配線の引数・payload・rules・host の面を直す")]);
+    home.clean();
+}
+
+/// host の面が無い周は口座 0 で、口座の dir の settings.json は通り、repo の root の file だけを守る（不活性にしない）。
+#[test]
+fn host_guard_self_absent_host_face_guards_only_the_root_files() {
+    let home = Home::new("host-absent");
+    let _ = fs::remove_file(home.state.join("host.toml"));
+    let account = edit_payload(&home.repo, "Write", "file_path", &home.b_file());
+    assert_eq!(decide(&account, None, &home.state), Ok(HostGuardDecision::Allow), "口座 0");
+    let root = edit_payload(&home.repo, "Write", "file_path", &home.repo.join(".claude/settings.json"));
+    let Ok(HostGuardDecision::Deny { what, .. }) = decide(&root, None, &home.state) else {
+        panic!("root の file は守る");
+    };
+    assert_eq!(what, "host-guard-deny self");
+    home.clean();
+}
+
+/// sed の in-place の flag（`-i`・`-i.bak`・`--in-place`・`--in-place=`・`-Ei`・`-ni`）は当たり、`-e` や `-n` だけは通る。
+#[test]
+fn host_guard_self_sed_in_place_flag_forms() {
+    let home = Home::new("sed-flags");
+    let b = home.b_file().display().to_string();
+    for flag in ["-i", "-i.bak", "--in-place", "--in-place=.orig", "-Ei", "-ni"] {
+        assert_eq!(home.hit(&format!("sed {flag} -e s/a/b/ {b}"), &home.plain), own(&home.b_file()), "{flag}");
+    }
+    for flag in ["-e", "-n", "-E", "--expression=s/i/j/"] {
+        assert_eq!(home.hit(&format!("sed {flag} s/a/b/ {b}"), &home.plain), None, "{flag}");
+    }
+    assert_eq!(home.hit(&format!("sed -e s/a/b/ -- -i {b}"), &home.plain), None, "-- の後ろは flag でない");
+    home.clean();
+}
+
+/// launcher を剥いで動詞を同定する（`sudo tee`・`sudo -u root tee`・`env X=1 tee`・`/usr/bin/tee`）。
+#[test]
+fn host_guard_self_sudo_tee_is_identified_after_launchers() {
+    let home = Home::new("sudo");
+    let b = home.b_file().display().to_string();
+    for head in ["sudo tee", "sudo -u root tee", "env X=1 tee", "/usr/bin/tee", "timeout 5 tee"] {
+        assert_eq!(home.hit(&format!("echo x | {head} {b}"), &home.plain), own(&home.b_file()), "{head}");
+    }
+    assert_eq!(home.hit(&format!("echo x | sudo cat {b}"), &home.plain), None, "sudo cat");
+    home.clean();
+}
+
+/// 守る file の祖先の dir の rm と mv（`.claude` の dir ごと・口座の dir ごと）は当たり、兄弟の dir は通る。
+#[test]
+fn host_guard_self_ancestor_dir_rm_and_mv_hit_but_siblings_pass() {
+    let home = Home::new("ancestor");
+    let settings = home.repo.join(".claude/settings.json");
+    assert_eq!(home.hit("rm -rf .claude", &home.repo), own(&settings), ".claude の rm");
+    assert_eq!(home.hit(&format!("mv .claude {}", home.plain.join("c").display()), &home.repo), own(&settings), ".claude の mv");
+    assert_eq!(home.hit("rm -rf sub", &home.repo), None, "兄弟の dir");
+    assert_eq!(home.hit(&format!("rm -rf {}", home.b.display()), &home.plain), own(&home.b_file()), "口座の dir の rm");
+    assert_eq!(home.hit(&format!("mv {} moved", home.b.display()), &home.plain), own(&home.b_file()), "口座の dir の mv");
+    assert_eq!(home.hit(&format!("rm -rf {}", home.state.join("accounts/zz").display()), &home.plain), None, "兄弟の dir");
+    home.clean();
+}
+
+/// sed は in-place の flag の無い周は通し、cat は通す（読むだけ）。
+#[test]
+fn host_guard_self_sed_without_in_place_and_cat_pass() {
+    let home = Home::new("read");
+    let b = home.b_file().display().to_string();
+    for command in [format!("sed s/a/b/ {b}"), format!("sed -n p {b}"), format!("cat {b}"), format!("cat {b} | head -1")] {
+        assert_eq!(home.hit(&command, &home.plain), None, "{command}");
+    }
+    assert_eq!(home.hit(&format!("sed -i s/a/b/ {b}"), &home.plain), own(&home.b_file()), "-i なら当たる");
+    home.clean();
+}
+
+/// `$` を含む語は解かずに通す（字面のまま畳むと口座の dir＝祖先に当たる語で撃つ・同じ形で `$` の無い語は当たる）。
+#[test]
+fn host_guard_self_variable_word_passes_unresolved() {
+    let home = Home::new("variable");
+    let b = home.b.display().to_string();
+    assert_eq!(home.hit(&format!("tee {b}/x/.."), &home.plain), own(&home.b_file()), "前提: 畳むと祖先に当たる");
+    assert_eq!(home.hit(&format!("tee {b}/$X/.."), &home.plain), None, "$");
+    assert_eq!(home.hit(&format!("tee {b}/$(x)/.."), &home.plain), None, "$(");
+    assert_eq!(home.hit(&format!("tee {b}/`x`/.."), &home.plain), None, "backtick");
+    home.clean();
+}
+
+/// brace の語は解かずに通す（字面のまま畳むと口座の dir＝祖先に当たる語で撃つ・同じ形で brace の無い語は当たる）。
+#[test]
+fn host_guard_self_brace_word_passes_unresolved() {
+    let home = Home::new("brace");
+    let (b, y) = (home.b.display().to_string(), home.plain.join("y").display().to_string());
+    assert_eq!(home.hit(&format!("mv {b}/a/.. {y}"), &home.plain), own(&home.b_file()), "前提: 畳むと祖先に当たる");
+    assert_eq!(home.hit(&format!("mv {b}/{{a,b}}/.. {y}"), &home.plain), None, "brace");
+    home.clean();
+}
+
+/// 同じ command の cd / pushd より後ろの相対 path は解かずに通す（payload の cwd を口座の dir にする＝cwd 基準で解くと守る file に
+/// 当たる語で撃つ）。cd より前と絶対 path は解く。
+#[test]
+fn host_guard_self_relative_after_cd_passes_unresolved() {
+    let home = Home::new("cd");
+    assert_eq!(home.hit("tee settings.json", &home.b), own(&home.b_file()), "前提: cwd 基準で当たる");
+    assert_eq!(home.hit("cd sub && tee settings.json", &home.b), None, "cd");
+    assert_eq!(home.hit("pushd sub; echo x > settings.json", &home.b), None, "pushd と redirect");
+    assert_eq!(home.hit("tee settings.json && cd sub", &home.b), own(&home.b_file()), "cd より前");
+    let absolute = format!("cd sub && tee {}", home.b_file().display());
+    assert_eq!(home.hit(&absolute, &home.b), own(&home.b_file()), "絶対 path は解く");
+    home.clean();
+}
+
+/// `~` 始まりの語は `~` を除いた残りが導いた path（symlink の側）の末尾とも実体の path の末尾とも一致すれば当たり、末尾が別名の語は通る。
+#[test]
+fn host_guard_self_tilde_word_matches_the_tail_of_derived_or_real_path() {
+    let home = Home::new("tilde");
+    let real = home.shared.join("settings.json");
+    assert_eq!(home.hit(&format!("tee {TILDE}/state/accounts/a/settings.json"), &home.plain), own(&real), "導いた path");
+    assert_eq!(home.hit(&format!("tee {TILDE}/shared/settings.json"), &home.plain), own(&real), "実体の path");
+    assert_eq!(home.hit(&format!("tee {TILDE}/state/accounts/a/other.json"), &home.plain), None, "別名");
+    assert_eq!(home.hit(&format!("tee {TILDE}/elsewhere/settings.json"), &home.plain), None, "別の dir");
+    home.clean();
+}
+
+/// glob の語は cwd 基準で畳んだ pattern を fnmatch で当てる（`*.json`・`settings.?son`・`[s]ettings.json` は当たり
+/// `settings.jso?x` と否定の集合は通る）。
+#[test]
+fn host_guard_self_glob_word_is_matched_by_fnmatch() {
+    let home = Home::new("glob");
+    for word in ["*.json", "settings.?son", "[s]ettings.json", "[a-t]ettings.json", "set*"] {
+        assert_eq!(home.hit(&format!("tee {word}"), &home.b), own(&home.b_file()), "{word}");
+    }
+    for word in ["settings.jso?x", "[!s]ettings.json", "[^s]ettings.json", "*.toml"] {
+        assert_eq!(home.hit(&format!("tee {word}"), &home.b), None, "{word}");
+    }
+    home.clean();
+}
+
+/// `~` と glob を併せ持つ語は `~` を除いた残りを末尾に fnmatch で当てる。
+#[test]
+fn host_guard_self_tilde_with_glob_matches_the_tail_by_fnmatch() {
+    let home = Home::new("tilde-glob");
+    let real = home.shared.join("settings.json");
+    assert_eq!(home.hit(&format!("tee {TILDE}/accounts/?/settings.json"), &home.plain), own(&real), "導いた path の末尾");
+    assert_eq!(home.hit(&format!("tee {TILDE}/sha*/settings.json"), &home.plain), own(&real), "実体の path の末尾");
+    assert_eq!(home.hit(&format!("tee {TILDE}/accounts/?/nope.json"), &home.plain), None, "別名");
+    home.clean();
+}
+
+/// 実体の無い守る file（repo の外の cwd の `.claude` が無い周）は祖先を当てず `rm -rf .` が通り、実体の在る周の `rm -rf .claude`
+/// は当たる（埋め込みの rules の decide・rm の種類も通る置き場）。
+#[test]
+fn host_guard_self_ancestor_applies_only_to_guarded_files_with_an_entity() {
+    let home = Home::new("entity");
+    let bare = decide(&bash_in(&home.bare, "rm -rf ."), None, &home.state);
+    assert_eq!(bare, Ok(HostGuardDecision::Allow), "守る物の無い dir");
+    let Ok(HostGuardDecision::Deny { what, line }) = decide(&bash_in(&home.plain, "rm -rf .claude"), None, &home.state) else {
+        panic!("実体の在る .claude の rm は断る");
+    };
+    assert_eq!(what, "host-guard-deny self");
+    assert!(line.contains(&format!(" hit=self:{} row=- ", home.plain.join(".claude/settings.json").display())), "{line}");
+    home.clean();
+}
+
+/// `~` だけの語と、`~` の後ろが区切りの `/` だけの語は残りが空で比べない（cp x と mv x の destination がその 2 形の周は通る）。
+/// `~` の後ろに残りが在れば当たる。
+#[test]
+fn host_guard_self_bare_tilde_destination_passes() {
+    let home = Home::new("bare-tilde");
+    for command in [format!("cp x {TILDE}"), format!("mv x {TILDE}/"), format!("tee {TILDE}"), format!("cp x {TILDE}//")] {
+        assert_eq!(home.hit(&command, &home.plain), None, "{command}");
+    }
+    let named = format!("cp x {TILDE}/state/accounts/b/settings.json");
+    assert_eq!(home.hit(&named, &home.plain), own(&home.b_file()), "残りが在れば当たる");
+    home.clean();
+}
+
+/// 集合に無い path と、列に無い書き込みの命令（truncate・dd）は通る。
+#[test]
+fn host_guard_self_paths_and_verbs_outside_the_set_pass() {
+    let home = Home::new("outside-set");
+    let (notes, b) = (home.plain.join("notes.json").display().to_string(), home.b_file().display().to_string());
+    for command in [
+        format!("tee {notes}"),
+        format!("echo x > {notes}"),
+        format!("cp {notes} {}", home.plain.join("copy.json").display()),
+        format!("truncate -s 0 {b}"),
+        format!("dd if=/dev/null of={b}"),
+        "ls -la".to_owned(),
+    ] {
+        assert_eq!(home.hit(&command, &home.plain), None, "{command}");
+    }
+    home.clean();
+}
+
+/// fnmatch の規則: `*` は `/` を含めて任意の列・`?` は 1 字・`[…]` は字の集合（否定・範囲・頭の `]`）・閉じない `[` は字そのもの。
+#[test]
+fn host_guard_self_fnmatch_follows_the_glob_rules() {
+    use super::fnmatch;
+    for (pattern, text) in [("a*c", "a/b/c"), ("*", ""), ("a?c", "abc"), ("[a-c]x", "bx"), ("[!a]x", "bx"), ("[]]x", "]x"), ("[ab", "[ab"), ("**a", "a")] {
+        assert!(fnmatch(pattern, text), "{pattern} は {text} に当たる");
+    }
+    for (pattern, text) in [("a*c", "a/b/d"), ("a?c", "ac"), ("[a-c]x", "dx"), ("[!a]x", "ax"), ("[ab", "a"), ("abc", "ab"), ("ab", "abc")] {
+        assert!(!fnmatch(pattern, text), "{pattern} は {text} に当たらない");
+    }
 }

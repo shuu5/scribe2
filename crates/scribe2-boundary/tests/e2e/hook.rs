@@ -1113,6 +1113,78 @@ fn host_guard_ledger_passes_the_same_command_in_a_repo_without_a_ledger() {
     clean(&[&repo, &state]);
 }
 
+// ─────────────── host-guard の見張り自身の設定（`s2-07l.577`・設計 vessel-hook.md §12 行 e・接頭辞 `host_guard_self_`） ───────────────
+//
+// 埋め込みの rules で binary を撃つ。置き場の host.toml が口座 a を宣言し、a の settings.json は別の tmp の実体への symlink。
+
+/// 口座 a を宣言した置き場と、a の settings.json の symlink が指す実体の file を作る（戻りは置き場・実体の dir・実体の path）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn self_state() -> (TmpDir, TmpDir, PathBuf) {
+    let state = tmp();
+    let shared = tmp();
+    let real = shared.join("settings.json");
+    fs::write(&real, "{}\n").expect("実体を書ける");
+    fs::write(state.join("host.toml"), "schema = 1\n\n[[account]]\nlabel = \"a\"\n").expect("host.toml を書ける");
+    let account = state.join("accounts").join("a");
+    fs::create_dir_all(&account).expect("口座の dir を作れる");
+    std::os::unix::fs::symlink(&real, account.join("settings.json")).expect("symlink を作れる");
+    fs::write(account.join("other.json"), "{}\n").expect("別 file を書ける");
+    (state, shared, real)
+}
+
+/// symlink の口座の settings.json を `Write` で書く payload は kind=self・hit=self:<実体の path>・row=- ruling=- で rc 2（記録の
+/// what は `host-guard-deny self`）、同じ dir の別 file は 0 byte・rc 0 で通る。
+#[test]
+fn host_guard_self_write_to_the_symlinked_account_settings_is_denied() {
+    use vessel::hook::host_guard::Kind;
+    let (state, shared, real) = self_state();
+    let bare = tmp();
+    let link = state.join("accounts").join("a").join("settings.json");
+    let out = run_host_guard_in(&state, &tool_payload(&bare, "Write", &link.display().to_string()));
+    let text = assert_host_guard_deny(&out, "口座の settings.json への Write");
+    let want = format!("{NAME}: host-guard deny kind=self hit=self:{} row=- ruling=- — {}", real.display(), Kind::Settings.route());
+    assert_eq!(text.trim_end(), want, "5 欄の 1 行");
+    let lines = host_guard_records(&state);
+    assert_eq!(lines.len(), 1, "記録は 1 行: {lines:?}");
+    assert_eq!(what_of(&lines.last().cloned().unwrap_or_default()), "host-guard-deny self");
+    let other = state.join("accounts").join("a").join("other.json");
+    assert_silent(&run_host_guard_in(&state, &tool_payload(&bare, "Write", &other.display().to_string())), "同じ dir の別 file");
+    assert_eq!(host_guard_records(&state).len(), 1, "通す周は記録を残さない");
+    clean(&[&state, &shared, &bare]);
+}
+
+/// `echo x > <口座の settings.json>`・`rm -rf <repo の root>/.claude`・`mv <口座の dir> x` は kind=self で rc 2、口座の
+/// settings.json を一時 dir へ写す `cp` と `cat` は 0 byte・rc 0 で通る。
+#[test]
+fn host_guard_self_bash_writes_removals_and_moves_are_denied_and_copies_out_pass() {
+    let (state, shared, real) = self_state();
+    let repo = git_repo();
+    let spare = tmp();
+    fs::create_dir_all(repo.join(".claude")).expect(".claude を作れる");
+    fs::write(repo.join(".claude").join("settings.json"), "{}\n").expect("project の設定を書ける");
+    let account = state.join("accounts").join("a");
+    let link = account.join("settings.json");
+    let denied = [
+        (format!("echo x > {}", link.display()), real.clone()),
+        (format!("rm -rf {}", repo.join(".claude").display()), repo.join(".claude").join("settings.json")),
+        (format!("mv {} x", account.display()), real.clone()),
+    ];
+    for (command, hit) in &denied {
+        let out = run_host_guard_in(&state, &bash_payload(&repo, command));
+        let text = assert_host_guard_deny(&out, command);
+        assert!(text.contains(&format!(" kind=self hit=self:{} row=- ruling=- — ", hit.display())), "{command}: {text}");
+    }
+    assert_eq!(host_guard_records(&state).len(), denied.len(), "断った周ごとに 1 行");
+    for command in [format!("cp {} {}", link.display(), spare.display()), format!("cat {}", link.display())] {
+        assert_silent(&run_host_guard_in(&state, &bash_payload(&repo, &command)), &command);
+    }
+    assert_eq!(host_guard_records(&state).len(), denied.len(), "通す周は記録を残さない");
+    clean(&[&state, &shared, &repo, &spare]);
+}
+
 // ─────────────── 起票の門（`s2-07l.517`・設計 ledger-form.md §3 の 9 / §6 行 d・接頭辞 `hook_memo_guard_`） ───────────────
 //
 // `bd` / `bdw` の create を読み、memo の create に 4 節の本文を、契約の create に label `intake:memo` の不在を要求する。
