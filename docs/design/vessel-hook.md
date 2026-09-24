@@ -230,7 +230,7 @@ xtask 側: `crates/xtask/src/genmanifest.rs` の `#[cfg(test)]` に、render の
 - 決定的な制約（実測・[account-autonomy.md](./account-autonomy.md) §21 と同じ 4 点）: (1) 歯の module を別 file にしても **module path hook::host_guard::tests と歯 39 本の名を変えない**形が要る（行 b / c / f の verify の filter と行 e の接頭辞 host_guard_self_ は名で結ぶ）。`#[path]` 属性付きの `mod tests;` がその形。(2) flip-check と rules-wired は名が _tests.rs で終わる src 配下の file を丸ごと test file と読み、R-C4-3 の比は名を見ず歯の file を src 側に数える（比は緩む側＝違反にならない・§21 の既知の穴）。(3) 純移動の機械証明（[pipeline.md](./pipeline.md) §5.3）は inline の `mod tests {}` を item 1 本に畳むので本便は多重集合が一致せず、lens は従来どおり diff を読む。札 moved は flip-check の側に効く。(4) 歯の module は `use super::{…}`（decide / judge / HostGuardDecision / Kind / Protected / Scene / Unreadable / KINDS / LEDGER_ROW / PROTECTED / RM_ROW / TMUX_ROW / WORD_ROWS の 13 名）と本文中の `super::GIT_ROW` 2 か所と `crate::hook::command` / `crate::hook::ledger_guard` / `crate::name` / `crate::order` / `crate::rules::manifest` と std の `use` だけで親を読み、他の file から hook::host_guard::tests を読む箇所は無い（grep 0 件）＝親側の可視性は 1 語も変えない。
 - 形（§21 と同型・向きは「歯だけを外へ」）: 歯の module の**本文**（`use super::{` から最後の歯の閉じ括弧まで・610〜1387 行）を行 g の write-set の `+` の file（host_guard.rs と同じ dir・名は _tests.rs で終わる形）へ indent を 1 段外して**そのまま**移す。親の歯の区間は `#[cfg(test)]` の単独行と `#[path]` の行と `mod tests;` の 3 行だけになる（module 名は tests のまま・宣言の可視性は private のまま・move_proof の残差の許容形の内）。子は mod の本文そのものなので `use super::{…}` と `super::GIT_ROW` の path は不変。札 `// flip-check: moved <行 g の bead>` は子の file の先頭（module doc の直後・file 全体が歯の区間なので flip-check が数える）に置き、親の宣言の直後にも対で置く（§21 の着地形・親の側は src 区間なので数えられないが `//` 始まりの残差として許される）。src の 607 行・親の `use`・可視性は 1 byte も変えない。
 - 見積: 親 約 611 行（余地 約 870＝行 e の M と後続の余地）・子 約 790 行（上限 1500 の内）。
-- 歯: 既存の 39 本（hook::host_guard::tests 配下）が全部緑で期待を変えない。verify は module path の filter で 39 本を撃ち、base = head の本数を実装役が `cargo nextest list` で写す。
+- 歯: 既存の 39 本（hook::host_guard::tests 配下）が全部緑で期待を変えない。verify は歯の名の接頭辞 3 語（`host_guard_rm_` / `host_guard_kind_` / `host_guard_ledger_`・合わせて 39 本・module の外に同じ接頭辞の歯は 0）で撃ち（module path の `::` は検出線の `--teeth` の語に使えず gate が INCONCLUSIVE になる）、base = head の本数を実装役が `cargo nextest list` で写す。
 - 後続: 行 e は歯を in-file に足す（§12 の「行 e・in-file」）ので、本便の後は行 e の write-set に行 g の `+` の file が要る（無いと実装役の diff が write-set の外に出る）。本便が同じ PR で行 g の `+` を剥がし、行 e の write-set にその file を 1 項目足す（§12 の「in-file」の語は歯の file を指すと読む＝本文は変えない）。行 e は台帳の依存と行の depends で本便の Landed を待つ。
 - 却下: 行 e を S に落とす（見積が S の 100 を超える＝size の字面だけ変える嘘）／行 e に growth を書く（余地 93 に 300 が入らない事実は変わらず、次の M で再発）／src の群を子へ割る（群の境界を選び直し、歯が引く名と私有の関数の可視性を動かす＝items-differ の危険・歯の module の 781 行は居座り次の M で再発）／歯を `crates/scribe2-boundary/tests/e2e/` へ移す（私有 item を撃つ歯は e2e から撃てない・`--lib` の scope が変わる）。
 
@@ -310,7 +310,7 @@ title = "hook/host_guard.rs の歯の module（39 本・781 行）を #[path] �
 req = ["FR56"]
 section = "13"
 write-set = ["-crates/scribe2/src/hook/host_guard.rs", "+crates/scribe2/src/hook/host_guard_tests.rs", "docs/design/vessel-hook.md"]
-verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail hook::host_guard::tests::"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail host_guard_rm_ host_guard_kind_ host_guard_ledger_"]
 size = "S"
 done = "歯の module の本文が子の file に在り、親の歯の区間は cfg(test) の単独行と path と mod 宣言の 3 行だけ、module path と歯 39 本の名は不変で base = head、親の src と可視性は不変、札 moved が子の先頭と親の宣言の直後に対で在って flip-check が moved で通り、file-lines で host_guard.rs の余地が 800 行以上に増え、行 g の + の剥がしと行 e の write-set への歯の file の追加が同じ PR で済む"
 <!-- contracts:end -->
