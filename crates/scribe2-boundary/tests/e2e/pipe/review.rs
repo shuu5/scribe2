@@ -328,6 +328,30 @@ fn pipe_review_reads_design_section_and_requirements_from_base() {
     clean(&[&repo, &state]);
 }
 
+/// (b'-47) 導出物（`.toml`）の行を指す pointer の受付が通り、審査の材料 design.txt が出所の 1 行と行の goal（二重引用符と
+/// backtick を含む単一行）を持ち、契約 file の goal が行の goal と等しい（設計 contract-source.md §47 の 6 / 7・同じ形の
+/// `.md` の行は (b') の歯が不変で測る）。
+#[test]
+fn pipe_review_contract_whole_goal_reads_the_goal_from_a_derived_toml() {
+    let goal = "節の \"本文\" GOAL-MARK と `crates/toy/src/tint.rs` の逐語";
+    let quoted = format!("\"{goal}\"");
+    let row = derive_row(
+        "g",
+        &[("write-set", "[\"crates/toy/src/tint.rs\"]"), ("section", "\"47\""), ("req", "[\"FR2\"]"), ("goal", &quoted)],
+    );
+    let derived = format!("schema = 1\n\n{row}");
+    let (repo, state) = derive_repo_with(&table_doc(""), &[("docs/design/derived.toml", &derived)]);
+    let out = intake_raw(&repo, &state, "docs/design/derived.toml#g", "s2-g");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "導出物の行の受付は通る: {}", stderr_of(&out));
+    let id = run_id_of(&out);
+    let design = fs::read_to_string(review_dir(&state, &id).join("design.txt")).unwrap_or_default();
+    assert_eq!(design, format!("docs/design/derived.toml#g §47\n{goal}\n"), "出所の 1 行と goal");
+    let contract = vessel::pipe::contract::Contract::load(&state.join("pipe").join(&id).join("contract.toml"))
+        .unwrap_or_else(|errors| panic!("写しを読める: {errors:?}"));
+    assert_eq!(contract.goal, goal, "契約 file の goal は行の goal");
+    clean(&[&repo, &state]);
+}
+
 /// (b'') 要件面が `.yaml` の周は `- id: FR1` と同じ mapping の `text:` の値が材料に載る（設計 §4「yaml の `id` + `text`」・
 /// `s2-07l.354`）。`title:` は本文にしない。base は `id="…"` の字面だけを探すので「要件面に無い」になる（RED）。
 #[test]

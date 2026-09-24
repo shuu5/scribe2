@@ -9,7 +9,9 @@
 //! 語列の 3 種類（git / tmux / 台帳）は、command 行を起票の門の分割（[`segments`]・引用符と `\` を解く）で切り、
 //! `NAME=value` の前置きを読み飛ばしてから command guard と同じ照合（[`matched`]）に掛ける。rm の種類（行 c）は rm の
 //! segment の path を payload の cwd から解き、守る集合（[`Protected`]）と一致・祖先・配下で当たる rm と、解けない path の
-//! rm を断る。台帳の形・見張り自身の設定は行 f / e が同じ関数の中身を埋める（まだ当たらない）。
+//! rm を断る。台帳の形（行 f）は payload の cwd の repo が台帳（`.beads` と `scripts/bdw`）を持つ周だけ、bd / bdw の
+//! segment を起票の門と同じ 3 関数（[`write_of`] → [`ledger_guard::forms_of`] → [`judge_write`]）に掛ける。見張り自身の設定は行 e が
+//! 同じ関数の中身を埋める（まだ当たらない）。
 //!
 //! payload が JSON でない・`tool_name` が無い・`Bash` なのに command が無い・`--state-dir` が無い・rules が読めない周は
 //! **deny**（FailClosed・[`POLARITY`]）。Bash / 編集系でない tool は 1 byte も書かず rc 0。断る周だけ `inject.jsonl` に
@@ -17,7 +19,7 @@
 //! repo の root が解けた周の `git ls-files` 1 回だけ（NFR5）。
 
 use super::command::{matched, BASH};
-use super::ledger_guard::{is_assignment, segments};
+use super::ledger_guard::{self, is_assignment, judge_write, segments, write_of, Write, WRITES};
 use super::{append, command_of, InjectionRecord, SCHEMA};
 use crate::cli_outcome::{Outcome, RC_BROKEN};
 use crate::fleet::json_tree::{self, Tree};
@@ -81,6 +83,10 @@ const UNRESOLVED: [char; 4] = ['$', '`', '{', '}'];
 const GLOB: [char; 3] = ['*', '?', '['];
 /// repo の root の印（dir か worktree の file）。
 const DOT_GIT: &str = ".git";
+/// 台帳を持つ repo の印（root の dir）。
+const BEADS: &str = ".beads";
+/// 台帳の script（root からの相対 path の file・印の対）。
+const BDW: &str = "scripts/bdw";
 /// worktree の `.git` の file が本体の git dir を指す行の頭。
 const GITDIR: &str = "gitdir:";
 /// 本体の git dir の下で worktree ごとの dir を束ねる dir の名（common dir はその 1 つ上）。
@@ -135,7 +141,7 @@ pub enum Kind {
     Rm,
     /// tmux server の破壊。
     Tmux,
-    /// 台帳の破壊と素 write（形の判定は行 f）。
+    /// 台帳の破壊と素 write（語列の後ろに形の判定・行 f）。
     Ledger,
     /// 見張り自身の設定の編集（行 e・行を持たない）。
     Settings,
@@ -362,7 +368,8 @@ pub fn judge(tool: &str, command: &str, manifest: &Manifest, scene: &Scene) -> H
 /// 1 種類の判定（1 種類 1 arm）。当たらなければ `None`。
 fn judge_kind(kind: Kind, subject: &Subject, manifest: &Manifest) -> Option<Refusal> {
     match kind {
-        Kind::Git | Kind::Tmux | Kind::Ledger => sequences(kind, subject, manifest),
+        Kind::Git | Kind::Tmux => sequences(kind, subject, manifest),
+        Kind::Ledger => sequences(kind, subject, manifest).or_else(|| writes(kind, subject, manifest)),
         Kind::Rm => removals(kind, subject, manifest),
         // 見張り自身の設定は行 e が中身を埋める（まだ当たらない）。
         Kind::Settings => None,
@@ -383,6 +390,33 @@ fn sequences(kind: Kind, subject: &Subject, manifest: &Manifest) -> Option<Refus
         return Some(Refusal::no_row(kind, id));
     };
     matched(&subject.segments, denied).map(|hit| Refusal { kind, hit: hit.sequence, row: id, ruling: row.ruling.clone() })
+}
+
+/// 台帳の形の判定（語列の後ろ）: bd / bdw の segment を起票の門と同じ 3 関数に掛ける。掛かるのは payload の cwd の repo の
+/// root（rm と同じ fs の辿り）が [`BEADS`] の dir と [`BDW`] の file を両方持つ周だけ。host_guard.ledger の `enabled = false`
+/// は語列と形の両方を切る（行が無い・列でない周は語列の側が先に断った）。`ledger.denied_writes` が無い・不発効・列でない
+/// 周は、書き込みの subcommand（[`WRITES`]）の segment を全部断る（FailClosed・読みの subcommand は通す）。
+fn writes(kind: Kind, subject: &Subject, manifest: &Manifest) -> Option<Refusal> {
+    let found: Vec<Write> = subject.segments.iter().filter_map(|words| write_of(words)).collect();
+    if found.is_empty() {
+        return None;
+    }
+    manifest.get(LEDGER_ROW).filter(|row| row.enabled)?;
+    let root = root_of(subject.scene.cwd)?;
+    if !(root.join(BEADS).is_dir() && root.join(BDW).is_file()) {
+        return None;
+    }
+    match ledger_guard::forms_of(manifest) {
+        Ok(forms) => {
+            let ruling = manifest.get(ledger_guard::ROW).map_or_else(|| "-".to_owned(), |row| row.ruling.clone());
+            let form = found.iter().find_map(|write| judge_write(write, &forms))?;
+            Some(Refusal { kind, hit: form.as_str().to_owned(), row: ledger_guard::ROW, ruling })
+        }
+        Err(_) => found
+            .iter()
+            .any(|write| WRITES.contains(&write.subcommand.as_str()))
+            .then(|| Refusal::no_row(kind, ledger_guard::ROW)),
+    }
 }
 
 /// rm の種類の判定: rm の segment の path の語を 1 つずつ見て、解けない形か守る集合に当たる最初の 1 つで断る。rm の
@@ -578,6 +612,7 @@ mod tests {
         WORD_ROWS,
     };
     use crate::hook::command::{self, denied_in, CommandDecision};
+    use crate::hook::ledger_guard;
     use crate::name::NAME;
     use crate::order::is_declaration_order;
     use crate::rules::manifest::Manifest;
@@ -795,8 +830,8 @@ mod tests {
         decide(payload, rules, Path::new("/nonexistent/state"))
     }
 
-    /// 台帳の形・見張り自身の設定の 2 arm はまだ Allow: bdw を経ない台帳の write・settings.json への Write が通る（実体の
-    /// 無い path の rm も通る＝rm の判定は行 c の `host_guard_rm_` の歯）。
+    /// 台帳を持たない cwd の台帳の形と、見張り自身の設定の arm は Allow: bdw を経ない台帳の write・settings.json への Write が
+    /// 通る（実体の無い path の rm も通る＝rm の判定は行 c の `host_guard_rm_`・台帳の形は行 f の `host_guard_ledger_` の歯）。
     #[test]
     fn host_guard_kind_rm_ledger_arm_and_settings_arms_allow_in_row_b() {
         for command in ["rm -rf /tmp/state-dir", "bd close s2-1", "bd update s2-1 --notes x"] {
@@ -1218,5 +1253,136 @@ mod tests {
         let git = place.hit_in("git push --force", &place.other, &off, Path::new("git"));
         assert_eq!(git.as_deref(), Some("git push --force"), "他の種類は動く");
         place.clean();
+    }
+
+    // ─── 台帳の形（行 f・接頭辞 `host_guard_ledger_`） ───
+
+    /// 語列の 3 行（host_guard.ledger の enabled は引数）と、`writes` が `Some(enabled)` なら 4 形を持つ ledger.denied_writes
+    /// の行を持つ manifest（`None` は行を持たない）。
+    fn ledger_manifest(ledger_on: bool, writes: Option<bool>) -> Manifest {
+        let mut text = format!("schema = 1\n{}", row(command::ROW, "RunnerDeniedCommands", RUNNER, true));
+        for (id, value, enabled) in [
+            (super::GIT_ROW, "git push --force", true),
+            (TMUX_ROW, "tmux kill-server", true),
+            (LEDGER_ROW, "bd delete", ledger_on),
+        ] {
+            text.push_str(&row(id, "HostGuardDeniedCommands", &[value], enabled));
+        }
+        if let Some(enabled) = writes {
+            let forms: Vec<&str> = ledger_guard::FORMS.iter().map(|form| form.as_str()).collect();
+            text.push_str(&row(ledger_guard::ROW, "LedgerDeniedWrites", &forms, enabled));
+        }
+        Manifest::parse(&text).unwrap_or_else(|errors| panic!("fixture の manifest を読める: {errors:?}"))
+    }
+
+    /// 台帳の印（`.beads` の dir と `scripts/bdw` の file）のうち引数が true のものだけを持つ root（`.git` は dir で作る＝fs の辿り
+    /// だけで root が解ける）。名は歯ごとに一意・pid つき。
+    fn ledger_root(name: &str, beads: bool, bdw: bool) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("host-guard-ledger-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::create_dir_all(root.join(".git"));
+        let _ = fs::create_dir_all(root.join("scripts"));
+        if beads {
+            let _ = fs::create_dir_all(root.join(".beads"));
+        }
+        if bdw {
+            let _ = fs::write(root.join("scripts/bdw"), "#!/bin/sh\n");
+        }
+        root
+    }
+
+    /// root の下の dir を cwd にして判定し、断る周の (what, hit) を返す。通す周は `None`。
+    fn ledger_hit(command: &str, root: &Path, manifest: &Manifest) -> Option<(String, String)> {
+        let scene = Scene { cwd: root, state_dir: Path::new("/nonexistent/state"), git: Path::new("git") };
+        match judge("Bash", command, manifest, &scene) {
+            HostGuardDecision::Deny { what, line } => Some((what, line.split(" hit=").nth(1)?.split(" row=").next()?.to_owned())),
+            HostGuardDecision::Allow => None,
+        }
+    }
+
+    /// 形が掛かるのは root が `.beads` の dir と `scripts/bdw` の file を両方持つ周だけ（片方だけ・どちらも無い root は
+    /// 0 語）。root は cwd から `.git` を辿って解く（root の下の dir からでも同じ）。
+    #[test]
+    fn host_guard_ledger_applies_only_under_a_root_with_both_marks() {
+        let manifest = ledger_manifest(true, Some(true));
+        let command = "bd update s2-1 --notes x";
+        for (name, beads, bdw) in [("beads-only", true, false), ("bdw-only", false, true), ("neither", false, false)] {
+            let root = ledger_root(name, beads, bdw);
+            assert_eq!(ledger_hit(command, &root, &manifest), None, "{name}: 片方だけの root は読まない");
+            let _ = fs::remove_dir_all(&root);
+        }
+        let root = ledger_root("both", true, true);
+        let _ = fs::create_dir_all(root.join("sub"));
+        let want = Some(("host-guard-deny ledger".to_owned(), "notes-replace".to_owned()));
+        assert_eq!(ledger_hit(command, &root, &manifest), want.clone(), "両方を持つ root");
+        assert_eq!(ledger_hit(command, &root.join("sub"), &manifest), want, "root の下の dir からも辿る");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// 4 形が起票の門と同じ 1 語で当たり（行 id は ledger.denied_writes）、`--append-notes` と bdw の書き込みと読みは通る。
+    #[test]
+    fn host_guard_ledger_four_forms_hit_with_the_gate_words() {
+        let manifest = ledger_manifest(true, Some(true));
+        let root = ledger_root("forms", true, true);
+        for (command, hit) in [
+            ("bd update s2-1 --notes x", "notes-replace"),
+            ("scripts/bdw update s2-1 --notes=x", "notes-replace"),
+            ("bdw remember x", "memory-subcommand"),
+            ("bdw create x --type task", "create-without-parent"),
+            ("ls && bd close s2-1", "bd-outside-bdw"),
+        ] {
+            let found = ledger_hit(command, &root, &manifest);
+            assert_eq!(found, Some(("host-guard-deny ledger".to_owned(), hit.to_owned())), "{command}");
+            assert_eq!(ledger_guard::FORMS.iter().filter(|form| form.as_str() == hit).count(), 1, "起票の門の語: {hit}");
+        }
+        let scene = Scene { cwd: &root, state_dir: Path::new("/nonexistent/state"), git: Path::new("git") };
+        let HostGuardDecision::Deny { line, .. } = judge("Bash", "bd close s2-1", &manifest, &scene) else {
+            panic!("bd の書き込みは断る");
+        };
+        assert!(line.contains(&format!(" row={} ruling={RULING} — ", ledger_guard::ROW)), "{line}");
+        assert!(line.ends_with(Kind::Ledger.route()), "{line}");
+        for command in [
+            "bdw update s2-1 --append-notes x",
+            "bdw close s2-1 --reason x",
+            "bdw create x --parent s2-1",
+            "bd list --json",
+            "bd show s2-1",
+        ] {
+            assert_eq!(ledger_hit(command, &root, &manifest), None, "{command}");
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// ledger.denied_writes が無い・不発効の周は、host_guard.ledger が on なら書き込みの subcommand（`bd close x`・bdw も）を
+    /// 全部 `no-row` で断り、読みの subcommand（`bd list`）は通し、同じ command の git の語列の判定は動く。
+    #[test]
+    fn host_guard_ledger_without_the_writes_row_denies_every_write_subcommand() {
+        let root = ledger_root("no-writes", true, true);
+        for (manifest, why) in [(ledger_manifest(true, None), "行が無い"), (ledger_manifest(true, Some(false)), "不発効")] {
+            for command in ["bd close x", "bdw close x", "bdw update x --append-notes y"] {
+                let found = ledger_hit(command, &root, &manifest);
+                assert_eq!(found, Some(("host-guard-deny ledger".to_owned(), "no-row".to_owned())), "{why}: {command}");
+            }
+            for command in ["bd list", "bdw show x"] {
+                assert_eq!(ledger_hit(command, &root, &manifest), None, "{why}: {command}");
+            }
+            let git = ledger_hit("bd list && git push --force", &root, &manifest);
+            assert_eq!(git, Some(("host-guard-deny git".to_owned(), "git push --force".to_owned())), "{why}: git は動く");
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// 同じ fixture で host_guard.ledger を off にすると、台帳の語列（`bd delete`）も形も書き込みの全断りも通る（on なら
+    /// 断る＝切ったことだけが効く）。git の種類は動く。
+    #[test]
+    fn host_guard_ledger_disabled_row_cuts_sequences_and_forms() {
+        let root = ledger_root("off", true, true);
+        for (writes, command) in [(Some(true), "bd delete x"), (Some(true), "bd update x --notes y"), (None, "bd close x")] {
+            assert!(ledger_hit(command, &root, &ledger_manifest(true, writes)).is_some(), "on は断る: {command}");
+            assert_eq!(ledger_hit(command, &root, &ledger_manifest(false, writes)), None, "off は通す: {command}");
+        }
+        let git = ledger_hit("git push --force", &root, &ledger_manifest(false, None)).map(|(what, _)| what);
+        assert_eq!(git.as_deref(), Some("host-guard-deny git"), "他の種類は動く");
+        let _ = fs::remove_dir_all(&root);
     }
 }
