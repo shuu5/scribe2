@@ -37,7 +37,7 @@ use crate::hook::command;
 use crate::hook::host_guard::WORD_ROWS;
 use crate::name::NAME;
 use crate::pipe::closure::{self, ClosureError, Source};
-use crate::pipe::contract::{Contract, ContractError};
+use crate::pipe::contract::{Contract, ContractError, CLASS_ROW};
 use crate::pipe::declaration::{self, Ceiling, Effective, NewFilePolicy, WriteSetItem, CEILING_ROW, DENIED_ROW};
 use crate::pipe::refuse::{overlaps, Refuse, DELETE_FILE, NEW_FILE, PLACE_ONLY_FILE, SHRINK_FILE};
 use crate::pipe::review::{self, FindingKind, Judgement, ROW_SAME_KIND_STOP};
@@ -202,12 +202,14 @@ pub(in crate::pipe) struct Rows {
     commands: Vec<String>,
     /// 禁じる語列（`runner.denied_commands`）。
     denied: Vec<String>,
+    /// クラスの語列表（[`CLASS_ROW`]・設計 contract-source.md §48 の 5）。
+    classes: Vec<String>,
 }
 
 impl Rows {
     /// 借りた形の上限（`row` は同じ 1 つの rules 行 id）。
     pub(in crate::pipe) fn borrow(&self) -> Ceiling<'_> {
-        Ceiling { row: CEILING_ROW, commands: &self.commands, denied: &self.denied }
+        Ceiling { row: CEILING_ROW, commands: &self.commands, denied: &self.denied, classes: &self.classes }
     }
 }
 
@@ -230,6 +232,8 @@ pub(in crate::pipe) struct Materials {
     requirements: Result<BTreeSet<String>, String>,
     /// repo の全 doc が宣言済みの新規 file（`contracts check` と同じ 1 本 [`table::declared_files`]・読めない周は理由）。
     declared: Result<Vec<String>, String>,
+    /// クラスの語列表（上限の [`Ceiling`] から借りた写し・表の検査が verify 行から 3 クラスを導く）。
+    classes: Vec<String>,
 }
 
 impl Materials {
@@ -250,7 +254,7 @@ impl Materials {
         let requirements =
             table::read(repo, &facts.requirements).and_then(|found| table::requirement_ids(&facts.requirements, &found));
         let declared = table::declared_files(repo, &tracked);
-        Ok(Self { tracked, sources, snapshots, facts, requirements, declared })
+        Ok(Self { tracked, sources, snapshots, facts, requirements, declared, classes: ceiling.classes.to_vec() })
     }
 
     /// rules 行の上限から材料を読む（列の入口・上限の読みと base の走査を 1 本にまとめた口）。
@@ -274,6 +278,7 @@ impl Materials {
         table::Context {
             allowed: &self.facts.allowed,
             denied: &self.facts.denied,
+            classes: &self.classes,
             requirements: &self.requirements,
             sources: &self.sources,
             tracked: &self.tracked,
@@ -286,7 +291,9 @@ impl Materials {
 /// 上限の材料を rules 行から読む（読めない周は [`DENIAL_RULES`] の断り・[`freeze`] と同じ 2 行）。
 pub(super) fn ceiling_of(manifest: &Manifest) -> Result<Rows, Denial> {
     let rules = |reason| denied(DENIAL_RULES, refused(reason));
-    Ok(Rows { commands: list_row(manifest, CEILING_ROW).map_err(rules)?, denied: denied_rows(manifest).map_err(rules)? })
+    let commands = list_row(manifest, CEILING_ROW).map_err(rules)?;
+    let denied_commands = denied_rows(manifest).map_err(rules)?;
+    Ok(Rows { commands, denied: denied_commands, classes: list_row(manifest, CLASS_ROW).map_err(rules)? })
 }
 
 /// 禁じる語列: command guard の ∪ の読み手 1 本（[`command::denied_of`]・`runner.denied_commands` ∪ host-guard の語列の
@@ -404,7 +411,8 @@ pub(super) fn regenerated(
     let frozen = Effective::load(&vessel_path(state_dir, id))
         .map_err(|errors| Outcome::failed(RC_BROKEN, errors.iter().map(ToString::to_string).collect()))?;
     let denied_commands = list_row(manifest, DENIED_ROW).map_err(refused)?;
-    let ceiling = Ceiling { row: CEILING_ROW, commands: frozen.allowed(), denied: &denied_commands };
+    let classes = list_row(manifest, CLASS_ROW).map_err(refused)?;
+    let ceiling = Ceiling { row: CEILING_ROW, commands: frozen.allowed(), denied: &denied_commands, classes: &classes };
     let materials = Materials::read(repo, &ceiling).map_err(refused_as)?;
     let (_, body) = generated(repo, &pointer, &materials).map_err(refused_as)?;
     Ok(Some(body))
@@ -1370,6 +1378,7 @@ mod tests {
             facts: TableFacts { allowed: Vec::new(), denied: Vec::new(), requirements: String::new() },
             requirements: Ok(BTreeSet::new()),
             declared: Ok(Vec::new()),
+            classes: Vec::new(),
         };
         (contract, materials)
     }

@@ -293,6 +293,20 @@ enabled = true
 ruling = "user 2026-09-14"
 ruled_at = "2026-09-14"
 
+# クラスの語列表（設計 contract-source.md §48・ADR-0061）。要素は「クラスの名 + 語列」で、契約表の検査（contracts check と
+# 受付）が verify 各行に禁じる語列と同じ照合（先頭語一致 + 残りの語の包含）で要素ごとに当て、当たったクラスが行の classes に
+# 無い行を class-undeclared で断る。consume は要素を持たない（allowlist の cargo / git / bats に追加課金の command が無い）。
+# 要素の先頭語は runner.allowed_commands の値に在り、禁じる語列を含まないこと（loader が断る）。値の変更は裁定 id 付きの
+# user 裁定だけ（C5）。
+
+[[rule]]
+id = "runner.class_commands"
+kind = "RunnerClassCommands"
+value = ["publish git push", "delete git push --delete", "delete git push -d"]
+enabled = true
+ruling = "user 2026-09-24T00:13Z"
+ruled_at = "2026-09-24"
+
 # runner / lens が claude に毎回渡す model（設計 pipeline.md §6・account-autonomy.md §3・`s2-07l.297`）。値は claude CLI の
 # 別名（`opus` …・閉じた表は crates 側の fleet::select::Model）。便用の口座選定はこの model のモデル別 7 日窓だけを
 # 数える（他の model の窓が 100 でも便の候補から外さない）。初期値は実測の既定（`--model` 無しの runner / lens は

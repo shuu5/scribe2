@@ -41,6 +41,7 @@ use state::by_run;
 use super::approve;
 use super::contract::Contract;
 use super::dispatch as queue;
+use super::contract::CLASS_ROW;
 use super::declaration::{Ceiling, CEILING_ROW, DENIED_ROW};
 use super::gate;
 use super::land;
@@ -508,7 +509,9 @@ pub fn contracts(args: &[String]) -> Outcome {
         let repo = repo_flag(args)?.ok_or(format!("{REPO_FLAG} が要る"))?;
         let manifest = manifest_of(args)?;
         let (commands, denied) = (list_row(&manifest, CEILING_ROW)?, list_row(&manifest, DENIED_ROW)?);
-        let ceiling = Ceiling { row: CEILING_ROW, commands: &commands, denied: &denied };
+        // クラスの語列表（設計 contract-source.md §48 の 5）: 行が無い・不発効・列でない周は行 id を名指して断る（空で通さない）。
+        let classes = list_row(&manifest, CLASS_ROW)?;
+        let ceiling = Ceiling { row: CEILING_ROW, commands: &commands, denied: &denied, classes: &classes };
         Ok(super::table::check_repo(&repo, &ceiling, present(args, VERBOSE_FLAG)))
     };
     match args.first().map(String::as_str) {

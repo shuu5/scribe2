@@ -2168,3 +2168,47 @@ fn pipe_intake_host_guard_rules_without_the_git_row_are_refused() {
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "行が揃えば受理: {}", stderr_of(&out));
     clean(&[&repo, &state]);
 }
+
+// ───── クラスの語列表の行を読めない周（設計 contract-source.md §48 の 5・行 az・`s2-07l.601`・接頭辞 `class_derive_`） ─────
+
+/// (7) 語列表の行が無い・不発効・列でない `--rules` では、`contracts check` も受付も行 id `runner.class_commands` を名指して rc 1
+/// で断り、受付は run dir を作らない（導出を空として通さない・NFR4）。行の揃った `--rules` では両方とも通る（対）。
+#[test]
+fn class_derive_rules_without_a_usable_class_row_are_refused_by_check_and_intake() {
+    let (repo, state) = repo_with_state();
+    let design = write_contract(&repo, &[], &[]);
+    let path = write_rules(&state, "rules-class-base.toml", 1, 1_000_000);
+    let text = fs::read_to_string(&path).unwrap_or_default();
+    assert!(text.contains(CLASS_ROW_BLOCK), "既定の行が在る（差し替えが空振りしない）: {text}");
+    let scalar = "\n[[rule]]\nid = \"runner.class_commands\"\nkind = \"CoreLines\"\nvalue = 1\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n";
+    let cases = [
+        ("無い", String::new(), "runner.class_commands が無い"),
+        ("不発効", CLASS_ROW_BLOCK.replace("enabled = true", "enabled = false"), "runner.class_commands は不発効である"),
+        ("列でない", scalar.to_owned(), "runner.class_commands が文字列の列でない"),
+    ];
+    for (index, (why, block, reason)) in cases.into_iter().enumerate() {
+        let rules = state.join(format!("rules-class-{index}.toml"));
+        fs::write(&rules, text.replace(CLASS_ROW_BLOCK, &block)).unwrap_or_else(|err| panic!("tmp manifest を書ける: {err}"));
+        let rules = rules.display().to_string();
+        let check = bin_cmd()
+            .args(["contracts", "check", "--rules", &rules, "--repo"])
+            .arg(&repo)
+            .output()
+            .unwrap_or_else(|err| panic!("binary を起動できる: {err}"));
+        let said = format!("{}{}", stdout_of(&check), stderr_of(&check));
+        assert_eq!(check.status.code(), Some(i32::from(RC_REFUSED)), "{why}: contracts check は rc 1: {said}");
+        assert!(said.contains(&format!("contracts: {reason}")), "{why}: 行 id を名指す: {said}");
+        let out = intake_with_rules(&repo, &state, &design, "b", &rules);
+        let err = stderr_of(&out);
+        assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{why}: 受付は rc 1: {err}");
+        assert_eq!(err.lines().next(), Some(format!("pipe: {reason}").as_str()), "{why}: 行 id を名指す: {err}");
+        assert!(run_dirs(&state).is_empty(), "{why}: run dir を作らない");
+    }
+    let whole = path.display().to_string();
+    let check = bin_cmd().args(["contracts", "check", "--rules", &whole, "--repo"]).arg(&repo).output();
+    let check = check.unwrap_or_else(|err| panic!("binary を起動できる: {err}"));
+    assert_eq!(check.status.code(), Some(i32::from(RC_OK)), "行が揃えば contracts check は通る: {}", stdout_of(&check));
+    let out = intake_with_rules(&repo, &state, &design, "b", &whole);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "行が揃えば受理: {}", stderr_of(&out));
+    clean(&[&repo, &state]);
+}

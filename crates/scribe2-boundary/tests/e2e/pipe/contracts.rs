@@ -1487,3 +1487,59 @@ fn contract_closure_ext_same_name_in_nested_module_keeps_the_declaring_file() {
     let found = same_name_write_set("d", "crate::seat::rebrief::Marker");
     assert_eq!(found, ["src/seat/rebrief.rs", "src/seat/tick.rs"], "宣言 file と取り込む file だけ（同名の vessel.rs は入らない）");
 }
+
+// ───── 3 クラスの導出（設計 docs/design/contract-source.md §48・行 az・`s2-07l.601`・接頭辞 `class_derive_`） ─────
+
+/// [`repo_with_state`] の宣言の allowlist に `cargo` を足して commit した repo と置き場と、語列表の値を `publish cargo yank` の
+/// 1 要素に差し替えた `--rules` の path（fixture の語列は宣言の allowlist の内の `cargo` で始める＝`verify-form` と混ざらない）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn class_repo() -> (PathBuf, PathBuf, String) {
+    let (repo, state) = repo_with_state();
+    write_vessel(&repo, r#"["git", "sh", "cargo"]"#, VESSEL_COMMON);
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "cargo"]);
+    let path = write_rules(&state, "rules-class.toml", 1, 1_000_000);
+    let text = fs::read_to_string(&path).expect("tmp manifest を読める");
+    let ruled = "[\"publish git push\", \"delete git push --delete\", \"delete git push -d\"]";
+    assert!(text.contains(ruled), "既定の語列表が在る（差し替えが空振りしない）: {text}");
+    fs::write(&path, text.replace(ruled, "[\"publish cargo yank\"]")).expect("tmp manifest を書ける");
+    (repo, state, path.display().to_string())
+}
+
+/// (6) tmp の repo で verify 行が語列表の要素に当たり `classes` を名乗らない行を、`contracts check` が
+/// `contract-table:class-undeclared` の 1 件（行の見出しの行番号・verify 行・語列・クラス）で名指して rc 1、受付は rc 1・run dir 0・
+/// event 0 で同じ字面の findings を出す。`classes` を足した同じ行は両方とも通る。
+#[test]
+fn class_derive_undeclared_row_is_named_by_check_and_refused_at_intake_with_the_same_line() {
+    let (repo, state, rules) = class_repo();
+    let verify = r#"verify = ["cargo yank --vers 1.0.0 toy"]"#;
+    let design = write_contract(&repo, &["verify"], &[verify]);
+    let check = |repo: &Path| {
+        bin_cmd().args(["contracts", "check", "--rules", &rules, "--repo"]).arg(repo).output().expect("binary を起動できる")
+    };
+    let out = check(&repo);
+    let found = findings_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "名乗らない行は rc 1: {}{}", stdout_of(&out), stderr_of(&out));
+    let doc = fs::read_to_string(repo.join(DESIGN_FILE)).expect("設計 doc を読める");
+    let head = format!("contracts: {DESIGN_FILE}:{} contract-table:class-undeclared: ", table_line(&doc, DESIGN_ROW));
+    let line = found.first().cloned().unwrap_or_default();
+    assert_eq!(found.len(), 1, "1 件だけ: {found:?}");
+    let named = ["\"cargo yank --vers 1.0.0 toy\"", "runner.class_commands", "語列 cargo yank", "クラス publish"];
+    assert!(line.starts_with(&head) && named.iter().all(|part| line.contains(part)), "行番号・verify 行・語列・クラス: {line}");
+    let before = run_dirs(&state);
+    let refused = intake_with_rules(&repo, &state, &design, "s2-class", &rules);
+    let err = stderr_of(&refused);
+    assert_eq!(refused.status.code(), Some(i32::from(RC_REFUSED)), "受付も rc 1: {err}");
+    assert!(err.lines().any(|found| found == line), "受付は同じ字面の findings: {err}");
+    assert_eq!(run_dirs(&state), before, "run dir を作らない");
+    assert_eq!(event_count(&state), 0, "断った周は event を書かない");
+    let declared = write_contract(&repo, &["verify"], &[verify, r#"classes = ["publish"]"#]);
+    let passed = check(&repo);
+    assert_eq!(passed.status.code(), Some(i32::from(RC_OK)), "classes を足した行は通る: {}", stdout_of(&passed));
+    let accepted = intake_with_rules(&repo, &state, &declared, "s2-class", &rules);
+    assert_eq!(accepted.status.code(), Some(i32::from(RC_OK)), "受付も通る: {}", stderr_of(&accepted));
+    clean(&[&repo, &state]);
+}

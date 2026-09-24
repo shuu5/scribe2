@@ -143,6 +143,8 @@ pub struct Ceiling<'a> {
     pub commands: &'a [String],
     /// 禁じる語列（rules 行 [`DENIED_ROW`]・上限と対で読む）。
     pub denied: &'a [String],
+    /// クラスの語列表（rules 行 `runner.class_commands` の値・表の検査を撃たない組み立ては空・設計 contract-source.md §48）。
+    pub classes: &'a [String],
 }
 
 /// verify 行を測る基準（宣言の allowlist と禁じる語列）。
@@ -936,7 +938,7 @@ mod tests {
 
     /// 上限の fixture（`cargo` / `git` を許し [`denied`] を禁じる）。
     fn ceiling<'a>(commands: &'a [String], denied: &'a [String]) -> Ceiling<'a> {
-        Ceiling { row: CEILING_ROW, commands, denied }
+        Ceiling { row: CEILING_ROW, commands, denied, classes: &[] }
     }
 
     /// 宣言の共通 verify に置ける穴は**閉じた集合**であり、その外は `Hole` で断る

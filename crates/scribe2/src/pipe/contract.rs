@@ -37,8 +37,66 @@ pub const GROWTH: &str = "growth";
 /// 形は [`target_unfit`] の 1 本が決める。[`Contract`] の field にはしない（読むのは gate の検出線だけ・[`targets_of`]）。
 pub const TARGETS: &str = "targets";
 
-/// 3 クラスの自己申告が取れる値（FR15）。
-pub const CLASSES: &[&str] = &["delete", "publish", "consume"];
+/// 3 クラスの自己申告が取れる値（FR15）。受理集合は閉じた型 [`Class`] の名の列（宣言順・字面を 2 面に書かない）。
+pub const CLASSES: &[&str] = &[Class::Delete.as_str(), Class::Publish.as_str(), Class::Consume.as_str()];
+
+/// 3 クラス（消す / 出す / 使う・FR15・設計 contract-source.md §48 の 1・ADR-0061）。宣言順は delete / publish / consume。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Class {
+    /// 消す（戻せない削除）。
+    Delete,
+    /// 出す（repo の外へ出す）。
+    Publish,
+    /// 使う（追加課金の外部資源）。
+    Consume,
+}
+
+/// [`Class`] の全 variant（宣言順）。
+pub const CLASS_ALL: &[Class] = &[Class::Delete, Class::Publish, Class::Consume];
+
+impl Class {
+    /// 名の字面（契約 file の `classes` と語列表の要素の先頭語）。
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Delete => "delete",
+            Self::Publish => "publish",
+            Self::Consume => "consume",
+        }
+    }
+
+    /// 名の字面から引く。未知なら `None`。
+    pub fn parse(text: &str) -> Option<Self> {
+        CLASS_ALL.iter().copied().find(|class| class.as_str() == text)
+    }
+}
+
+/// クラスの語列表を持つ rules 行の id（値は要素「名 + 語列」の列・設計 contract-source.md §48 の 2）。
+pub const CLASS_ROW: &str = "runner.class_commands";
+
+/// 語列表の要素 1 つの読み（§48 の 1）。rules の読みと表の検査がこの 1 本（[`class_element`]）を呼ぶ（C2）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClassElement {
+    /// 先頭語がクラスの名で、残りが 1 語以上の語列（語は空白 1 つで継ぐ）。
+    Pair(Class, String),
+    /// 先頭語がクラスの名でない（先頭語の字面・語を持たない要素は空）。
+    Unknown(String),
+    /// 名だけで語列が空。
+    Bare(Class),
+}
+
+/// 語列表の要素 1 つを 3 形（名 + 語列・未知の名・名だけ）に分ける（pure）。
+pub fn class_element(text: &str) -> ClassElement {
+    let mut words = text.split_whitespace();
+    let head = words.next().unwrap_or_default();
+    let Some(class) = Class::parse(head) else {
+        return ClassElement::Unknown(head.to_owned());
+    };
+    let sequence: Vec<&str> = words.collect();
+    if sequence.is_empty() {
+        return ClassElement::Bare(class);
+    }
+    ClassElement::Pair(class, sequence.join(" "))
+}
 
 /// 契約の印 `opens` の key（設計 seat-roles.md §3「契約が開く例外」・AC16）。値は path 種別
 /// （[`PathKind`]）の名の列で、席が自分の手で編集してよい種別を便ごとに開く。印の無い便は従来どおり。
@@ -443,9 +501,43 @@ pub fn promised_done(promises: &[&crate::pipe::table::PromiseRow]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        promised_done, promised_verify, render, target_unfit, Contract, GENERATED_DISPOSITION, GENERATED_OWNER,
+        class_element, promised_done, promised_verify, render, target_unfit, Class, ClassElement, Contract, CLASSES,
+        CLASS_ALL, GENERATED_DISPOSITION, GENERATED_OWNER,
     };
+    use crate::order::is_declaration_order;
     use crate::pipe::table::{ContractRow, PromiseRow};
+
+    /// §48 の 1: 3 クラスの閉じた型は宣言順 delete / publish / consume の 3 値で、契約 file の `classes` の受理集合がその
+    /// 型の名の列と一致する（型の名に無い字面は `Contract::parse` が断り、名の 3 つは通る）。
+    #[test]
+    fn class_derive_accepted_set_is_the_closed_type_names() {
+        assert!(is_declaration_order(CLASS_ALL, |class| class as usize), "CLASS_ALL は宣言順");
+        let names: Vec<&str> = CLASS_ALL.iter().map(|class| class.as_str()).collect();
+        assert_eq!(names, ["delete", "publish", "consume"], "3 値・宣言順");
+        assert_eq!(CLASSES, names.as_slice(), "受理集合は型の名の列");
+        for class in CLASS_ALL {
+            assert_eq!(Class::parse(class.as_str()), Some(*class), "名から引ける: {}", class.as_str());
+        }
+        let base = render(&row(), "docs/design/toy.md#b", &row().write_set);
+        let all = Contract::parse(&format!("{base}classes = [\"delete\", \"publish\", \"consume\"]\n"));
+        assert_eq!(all.map(|found| found.classes.len()), Ok(3), "型の名の 3 つは通る");
+        let errors = Contract::parse(&format!("{base}classes = [\"Publish\"]\n")).expect_err("型の名に無い字面は断る");
+        assert!(errors.iter().any(|error| error.reason.contains("Publish")), "{errors:?}");
+    }
+
+    /// §48 の 1: 要素の読み手 1 本が 3 形を分ける（名 + 語列は語を空白 1 つで継ぐ・先頭語が名でない要素と語の無い要素は未知の名・
+    /// 名だけの要素は語列が空）。
+    #[test]
+    fn class_derive_element_reader_splits_pair_unknown_and_bare() {
+        let pair = |class: Class, sequence: &str| ClassElement::Pair(class, sequence.to_owned());
+        assert_eq!(class_element("publish git push"), pair(Class::Publish, "git push"));
+        assert_eq!(class_element("  delete   git  push -d "), pair(Class::Delete, "git push -d"), "語は空白 1 つで継ぐ");
+        assert_eq!(class_element("git push"), ClassElement::Unknown("git".to_owned()), "先頭語が名でない");
+        assert_eq!(class_element("Publish git push"), ClassElement::Unknown("Publish".to_owned()), "綴り違いは名でない");
+        assert_eq!(class_element("   "), ClassElement::Unknown(String::new()), "語を持たない要素");
+        assert_eq!(class_element("consume"), ClassElement::Bare(Class::Consume), "名だけ");
+        assert_eq!(class_element(" delete  "), ClassElement::Bare(Class::Delete), "名だけ（空白つき）");
+    }
 
     /// 生成の材料になる行（欄は最小・値は行の parser が通す形）。
     fn row() -> ContractRow {

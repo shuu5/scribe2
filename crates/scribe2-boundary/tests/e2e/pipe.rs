@@ -774,12 +774,13 @@ pub(super) fn write_rules_capped(dir: &Path, name: &str, fixture: RulesFixture) 
     // manifest を渡した周は「上限が無い」で断られる（`--rules` は全 subcommand に効く）。
     // 禁じる語列の行（`runner.denied_commands`・ADR-0025 §2.3・`s2-07l.168`）と host-guard の語列の 3 行
     // （[`HOST_GUARD_ROWS`]・設計 vessel-hook.md §11 の形 f 3）も対で載せる＝intake は verify 行に hook の command guard と
-    // 同じ ∪ の読み手の判定を掛け、4 行のどれかが無い manifest では受付が断られる。
+    // 同じ ∪ の読み手の判定を掛け、4 行のどれかが無い manifest では受付が断られる。クラスの語列表の行（[`CLASS_ROW_BLOCK`]・
+    // 設計 contract-source.md §48 の 5）も載せる＝無い manifest では受付も `contracts check` も行 id を名指して断る。
     let ceiling = format!(
         "[[rule]]\nid = \"runner.allowed_commands\"\nkind = \"RunnerAllowedCommands\"\n\
          value = [\"cargo\", \"git\", \"sh\"]\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n\n\
          [[rule]]\nid = \"runner.denied_commands\"\nkind = \"RunnerDeniedCommands\"\n\
-         value = [\"cargo mutants\"]\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n{}",
+         value = [\"cargo mutants\"]\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n{}{CLASS_ROW_BLOCK}",
         HOST_GUARD_ROWS
             .iter()
             .map(|(id, value)| format!(
@@ -836,6 +837,10 @@ pub(super) const HOST_GUARD_ROWS: [(&str, &str); 3] = [
     ("host_guard.tmux", "[\"tmux kill-server\"]"),
     ("host_guard.ledger", "[\"bd delete\"]"),
 ];
+
+/// tmp manifest のクラスの語列表の行（埋め込みと同じ裁定の 3 要素・`class_derive_` の歯が値を差し替えるか行を落として測る）。
+pub(super) const CLASS_ROW_BLOCK: &str = "\n[[rule]]\nid = \"runner.class_commands\"\nkind = \"RunnerClassCommands\"\n\
+     value = [\"publish git push\", \"delete git push --delete\", \"delete git push -d\"]\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n";
 
 /// intake が読む上限の manifest（`sh` を足した写し）。置き場の中に 1 本だけ作る。
 pub(super) fn ceiling_rules(state: &Path) -> String {

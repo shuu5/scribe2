@@ -30,7 +30,7 @@
 //! 新しい base を記帳できないと、次の gate が**古い base の 2 点 diff**を測り、先着便の file を
 //! write-set の外と誤る。
 
-use super::contract::Contract;
+use super::contract::{Contract, CLASS_ROW};
 use super::declaration::{is_under, Ceiling, Effective, CEILING_ROW, DENIED_ROW};
 use super::gate::RC_INCONCLUSIVE;
 use super::land::MAIN_REF;
@@ -365,13 +365,15 @@ fn names_deleted(item: &str, deleted: &[String]) -> bool {
 /// （`git diff --name-status -M <main> HEAD`）の D / R の旧 path。どれかを読めない周は `None`。
 ///
 /// 上限の command は**便の写しの有効値**（run dir の `vessel.toml`・受付が上限と突き合わせて凍結した allowlist）で、
-/// 禁じる語列は埋め込みの manifest の行（land は `--rules` の manifest を持たない・受付の上限を写しから借りる）。
-/// 追随で宣言の allowlist が広がった周は上限の外として読めない側（`None`＝従来どおり再 gate）へ倒れる。
+/// 禁じる語列とクラスの語列表（設計 contract-source.md §48 の 5）は埋め込みの manifest の行（land は `--rules` の manifest を
+/// 持たない・受付の上限を写しから借りる）。追随で宣言の allowlist が広がった周と語列表の行を読めない周は読めない側（`None`
+/// ＝従来どおり再 gate）へ倒れる。
 pub(crate) fn stale_rows_in(state_dir: &Path, run: &str, worktree: &Path, main: &str) -> Option<Vec<StaleRow>> {
     let deleted = removed_paths(&super::git_bytes(worktree, &["diff", "--name-status", "-z", "-M", main, "HEAD"])?);
     let frozen = Effective::load(&vessel_path(state_dir, run)).ok()?;
-    let denied = list_row(&Manifest::embedded().ok()?, DENIED_ROW)?;
-    let ceiling = Ceiling { row: CEILING_ROW, commands: frozen.allowed(), denied: &denied };
+    let embedded = Manifest::embedded().ok()?;
+    let (denied, classes) = (list_row(&embedded, DENIED_ROW)?, list_row(&embedded, CLASS_ROW)?);
+    let ceiling = Ceiling { row: CEILING_ROW, commands: frozen.allowed(), denied: &denied, classes: &classes };
     let found = repo_findings(worktree, &ceiling);
     stale_rows(found.as_deref(), &deleted)
 }

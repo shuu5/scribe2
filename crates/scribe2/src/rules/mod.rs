@@ -13,6 +13,7 @@ pub mod manifest;
 use crate::fleet::select::{Model, MODELS};
 use crate::headless::{Effort, EFFORTS};
 use crate::hook::host_guard::{Protected, PROTECTED};
+use crate::pipe::contract::{class_element, ClassElement, CLASSES};
 use crate::seat::role::{Capability, Role, ALL as ROLES, CAPABILITIES};
 use manifest::{HostManifest, Manifest};
 use std::path::{Path, PathBuf};
@@ -277,6 +278,10 @@ pub enum RuleKind {
     SeatPointerBackoffFactor,
     /// 合図の梯子の上限（秒）。段の候補の待ちがこの値を超える段は送らない（`stopped`）。
     SeatPointerBackoffMaxS,
+    /// **クラスの語列表**（設計 contract-source.md §48 の 2・ADR-0061）。値は要素「クラスの名 + 語列」の列（読み手は
+    /// [`crate::pipe::contract::class_element`] の 1 本）で、契約表の検査が verify 各行に禁じる語列と同じ照合で当て、導出が
+    /// 行の `classes` に無い行を断る。id は [`crate::pipe::contract::CLASS_ROW`] の 1 行。
+    RunnerClassCommands,
 }
 
 /// [`RuleKind`] の全 variant。parity test の母集団である。
@@ -347,6 +352,7 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::SeatTickStaleS,
     RuleKind::SeatPointerBackoffFactor,
     RuleKind::SeatPointerBackoffMaxS,
+    RuleKind::RunnerClassCommands,
 ];
 
 impl RuleKind {
@@ -377,7 +383,7 @@ impl RuleKind {
             Self::LockStaleMs => "LockStaleMs",
             Self::HookTimeoutS => "HookTimeoutS",
             Self::RunnerAllowedCommands => "RunnerAllowedCommands",
-            Self::RunnerDeniedCommands => "RunnerDeniedCommands",
+            Self::RunnerDeniedCommands => "RunnerDeniedCommands", Self::RunnerClassCommands => "RunnerClassCommands",
             Self::RepoNonRustExecAllow => "RepoNonRustExecAllow",
             Self::SeatCycleSettleS => "SeatCycleSettleS",
             Self::SeatCyclePollMs => "SeatCyclePollMs",
@@ -473,7 +479,7 @@ impl RuleKind {
             | Self::CompileShape
             | Self::CompileSeconds => ValueShape::Policy,
             Self::RunnerAllowedCommands
-            | Self::RunnerDeniedCommands
+            | Self::RunnerDeniedCommands | Self::RunnerClassCommands
             | Self::RepoNonRustExecAllow
             | Self::RoleCapabilities
             | Self::FlipDocsOnlyFaces
@@ -588,6 +594,7 @@ impl RuleRow {
     /// 綴り違いを黙って「権能なし」「対話面なし」「既定なし」に倒さない（NFR4）。
     /// `RunnerDeniedCommands` と `HostGuardDeniedCommands` の各要素は語を 1 つ以上持つ（空白だけの語列は何にも当たらず黙って
     /// 効かない・ADR-0025 §2.1）。`HostGuardRmProtected` の列は [`Protected`] の記号（綴り違いを「守らない」に倒さない）。
+    /// `RunnerClassCommands` の要素は「クラスの名 + 語列」（[`Self::class_elements_are_read`]）。
     fn names_are_known(&self) -> Result<(), RuleError> {
         let unknown = |what: &str, name: &str, taken: &[&str]| {
             RuleError::new(
@@ -631,8 +638,24 @@ impl RuleRow {
                     None => Ok(()),
                 }
             }
+            (RuleKind::RunnerClassCommands, RuleValue::List(elements)) => self.class_elements_are_read(elements),
             _ => Ok(()),
         }
+    }
+
+    /// クラスの語列表の要素の形（設計 contract-source.md §48 の 3 の (a)(b)・読み手は [`class_element`] の 1 本）: 先頭語が
+    /// クラスの名でない要素と名だけの要素（語列が空）を行番号つきで断る（行 1 つで決まる崩れ・最初の 1 件）。行を跨ぐ
+    /// (c)(d)（allowlist と禁じる語列）は manifest の読みの段が撃つ。
+    fn class_elements_are_read(&self, elements: &[String]) -> Result<(), RuleError> {
+        for element in elements {
+            let reason = match class_element(element) {
+                ClassElement::Pair(..) => continue,
+                ClassElement::Unknown(head) => format!("先頭語 {head:?} がクラスの名でない（取るのは {}）", CLASSES.join(" / ")),
+                ClassElement::Bare(class) => format!("クラス {} の語列が空", class.as_str()),
+            };
+            return Err(RuleError::new(self.line, format!("{} の value の要素 {element:?} の{reason}", self.id)));
+        }
+        Ok(())
     }
 }
 

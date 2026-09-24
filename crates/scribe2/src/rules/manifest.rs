@@ -22,6 +22,9 @@
 //! `[[contract]]` を置けない。値の受理集合と**空の配列の拒否**は他の面と同じ（空の列は key の省略で表す）。
 
 use super::{Rule, RuleError, RuleKind, RuleRow, RuleValue, ValueShape, HOST_MANIFEST};
+use crate::hook::command::{denied_in, denied_of};
+use crate::pipe::contract::{class_element, ClassElement};
+use crate::pipe::declaration::CEILING_ROW;
 use crate::pipe::table::{Need, DERIVED_GOAL, FIELDS};
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -600,6 +603,7 @@ fn collect(text: &str, face: Face) -> (Manifest, Vec<RuleError>) {
         }
     }
     check_duplicate_ids(&found.rows, &mut errors);
+    check_class_commands(&found, &mut errors);
     check_duplicate_labels(&found.accounts, &mut errors);
     check_duplicate_groups(&found.groups, &mut errors);
     (found, errors)
@@ -1124,13 +1128,48 @@ fn check_duplicate_ids(rows: &[RuleRow], errors: &mut Vec<RuleError>) {
     }
 }
 
+/// クラスの語列表の要素の行を跨ぐ 2 つの崩れ（設計 contract-source.md §48 の 3 の (c)(d)）を 1 件ずつ行番号つきで断る:
+/// (c) 語列の先頭語が上限の行（[`CEILING_ROW`]）の値に無い (d) 語列が受付の読む禁じる語列の和集合（`runner.denied_commands`
+/// と host の見張りの語列 3 行・読み手は command guard と共有の [`denied_of`] の 1 本）のどれかを含む（語列を 1 本の command と
+/// 見て [`denied_in`] に当てる）。どちらも受付が先に断る要素ゆえ当たる行の無い死に値になる。上限の行か和集合の 4 行が揃わない
+/// manifest では撃たない（契約表の検査を撃つ各経路は自分が読む行の欠けを既に断る）。要素の形の (a)(b) は行 1 つで決まるので
+/// 行の validate が断り、その行はここに届かない。
+fn check_class_commands(found: &Manifest, errors: &mut Vec<RuleError>) {
+    let Some(RuleValue::List(allowed)) = found.get(CEILING_ROW).filter(|row| row.enabled).map(|row| &row.value) else {
+        return;
+    };
+    let Some(sources) = denied_of(found) else {
+        return;
+    };
+    let denied: Vec<String> = sources.into_iter().flat_map(|(_, sequences)| sequences).collect();
+    for row in found.rows.iter().filter(|row| row.kind == RuleKind::RunnerClassCommands) {
+        let RuleValue::List(ref elements) = row.value else {
+            continue;
+        };
+        for element in elements {
+            let ClassElement::Pair(_, sequence) = class_element(element) else {
+                continue;
+            };
+            let head = sequence.split_whitespace().next().unwrap_or_default();
+            if !allowed.iter().any(|command| command == head) {
+                let reason = format!("語列の先頭語 {head} が {CEILING_ROW} の値に無い");
+                errors.push(RuleError::new(row.line, format!("{} の value の要素 {element:?} の{reason}", row.id)));
+            }
+            if let Some(hit) = denied_in(&sequence, &denied) {
+                let reason = format!("語列が禁じる語列 {} を含む（受付が先に断る死に値）", hit.sequence);
+                errors.push(RuleError::new(row.line, format!("{} の value の要素 {element:?} の{reason}", row.id)));
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     // flip-check: retroactive s2-07l.250
     // host の面の読みの 3 値と `labels_over` の歯（設計 account-lifecycle.md §6 / §7・接頭辞 `rules_host_unit_`）。
     // 現物の挙動を pin する歯なので base でも通る（`.243` run 3 の生存変異を塞ぐ）。
 
-    use super::{collect, finish, Face, HostManifest};
+    use super::{collect, finish, Face, HostManifest, Manifest};
 
     /// host の面の本文を読んだ [`HostManifest::Present`]（`[[account]]` を `labels` の順で持つ・見出し行は 3, 6, …）。
     fn host_of(labels: &[&str]) -> HostManifest {
@@ -1197,5 +1236,63 @@ mod tests {
             vec![(3, "host.toml: label b が面をまたいで重複する（tracked の manifest にも在る）".to_owned())],
             "d は拒まない"
         );
+    }
+
+    // ─── クラスの語列表の読み（設計 contract-source.md §48 の 3・接頭辞 `class_derive_`） ───
+
+    /// 語列表の行（見出しは 3 行目・値は `value`）と、上限の行・禁じる語列の 4 行のうち `drop` の id でない行を持つ本文。
+    fn class_manifest(value: &str, drop: &str) -> String {
+        let row = |id: &str, kind: &str, value: &str| {
+            format!("\n[[rule]]\nid = \"{id}\"\nkind = \"{kind}\"\nvalue = {value}\nenabled = true\nruling = \"r\"\nruled_at = \"d\"\n")
+        };
+        let mut text = format!("schema = 1\n{}", row("runner.class_commands", "RunnerClassCommands", value));
+        for (id, kind, value) in [
+            ("runner.allowed_commands", "RunnerAllowedCommands", "[\"cargo\", \"git\", \"bats\", \"tmux\", \"bd\"]"),
+            ("runner.denied_commands", "RunnerDeniedCommands", "[\"cargo mutants\", \"cargo publish\"]"),
+            ("host_guard.git", "HostGuardDeniedCommands", "[\"git push --force\", \"git branch -D\"]"),
+            ("host_guard.tmux", "HostGuardDeniedCommands", "[\"tmux kill-server\"]"),
+            ("host_guard.ledger", "HostGuardDeniedCommands", "[\"bd delete\"]"),
+        ] {
+            if id != drop {
+                text.push_str(&row(id, kind, value));
+            }
+        }
+        text
+    }
+
+    /// 崩れ (a)〜(d) を 1 件ずつ語列表の行の見出しの行番号（3）で断る。(d) は `runner.denied_commands` の語列と host の見張りの
+    /// 語列 3 行のどれを含む要素でも断る。裁定の 3 要素（禁じる語列 `git push --force` と一部だけ重なる `git push` を含む）は通る。
+    #[test]
+    fn class_derive_rules_refuse_each_broken_element_once_with_the_row_line() {
+        let ruled = "[\"publish git push\", \"delete git push --delete\", \"delete git push -d\"]";
+        assert_eq!(Manifest::parse(&class_manifest(ruled, "")).map(|found| found.rows().len()), Ok(6), "裁定の 3 要素は通る");
+        for (value, want) in [
+            ("[\"publish git push\", \"ship git push\"]", "先頭語 \"ship\" がクラスの名でない"),
+            ("[\"publish git push\", \"consume\"]", "クラス consume の語列が空"),
+            ("[\"publish sh push\"]", "語列の先頭語 sh が runner.allowed_commands の値に無い"),
+            ("[\"publish cargo publish --dry-run\"]", "禁じる語列 cargo publish を含む"),
+            ("[\"delete git push origin --force\"]", "禁じる語列 git push --force を含む"),
+            ("[\"delete tmux kill-server\"]", "禁じる語列 tmux kill-server を含む"),
+            ("[\"delete bd delete x\"]", "禁じる語列 bd delete を含む"),
+        ] {
+            let errors = Manifest::parse(&class_manifest(value, "")).expect_err("崩れた要素は断る");
+            let shown: Vec<(u64, bool)> = errors.iter().map(|error| (error.line, error.message.contains(want))).collect();
+            assert_eq!(shown, vec![(3, true)], "{value}: 1 件・行 3・{want}: {errors:?}");
+        }
+    }
+
+    /// 上限の行か禁じる語列の 4 行のどれかを欠く manifest では (c)(d) を撃たない（揃った manifest では同じ要素を断る＝対）。
+    #[test]
+    fn class_derive_rules_skip_the_cross_row_checks_without_the_ceiling_or_the_four_denied_rows() {
+        let (outside, denied) = ("[\"publish sh push\"]", "[\"delete git push --force\"]");
+        for value in [outside, denied] {
+            assert!(Manifest::parse(&class_manifest(value, "")).is_err(), "揃った manifest では断る: {value}");
+        }
+        for drop in ["runner.allowed_commands", "runner.denied_commands", "host_guard.git", "host_guard.tmux", "host_guard.ledger"] {
+            for value in [outside, denied] {
+                let read = Manifest::parse(&class_manifest(value, drop));
+                assert!(read.is_ok(), "{drop} を欠く manifest では撃たない: {value}: {read:?}");
+            }
+        }
     }
 }

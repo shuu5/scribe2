@@ -243,7 +243,8 @@ pub(super) fn review_run(args: &[String], id: &str, manifest: &Manifest, policy:
 fn requirements_of(repo: &Path, manifest: &Manifest) -> Result<String, String> {
     let commands = list_row(manifest, CEILING_ROW)?;
     let denied = list_row(manifest, DENIED_ROW)?;
-    let ceiling = Ceiling { row: CEILING_ROW, commands: &commands, denied: &denied };
+    // 表の検査を撃たない組み立て＝クラスの語列表は読まず空の列（設計 contract-source.md §48 の 5）。
+    let ceiling = Ceiling { row: CEILING_ROW, commands: &commands, denied: &denied, classes: &[] };
     declaration::table_facts(repo, &ceiling)
         .map(|facts| facts.requirements)
         .map_err(|errors| errors.iter().map(ToString::to_string).collect::<Vec<String>>().join(" / "))

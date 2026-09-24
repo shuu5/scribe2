@@ -10,12 +10,14 @@
 //! に置いたまま。呼び手（`pipe/cli.rs`・`pipe/cli/intake.rs`・歯）の `use` は親の再 export を通る。
 
 use super::super::closure::{closure, surface_closure, teeth_places, unresolved_names, Base, ClosureError, Fields, Source};
+use super::super::contract::{class_element, ClassElement};
 use super::super::declaration::{self, read_write_set, Basis, Ceiling, NewFilePolicy, WriteSetItem};
 use super::super::refuse::{covered, Refuse, NEW_FILE};
 use super::{
     read_table, unreadable, Context, ContractRow, Finding, PromiseRow, TableError, BEGIN, DERIVED_GOAL, DESIGN_DIR, END,
 };
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK};
+use crate::hook::command::denied_in;
 use crate::name::NAME;
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -40,6 +42,7 @@ pub fn check_table(doc: &str, rows: &[ContractRow], ids: &[&str], ctx: &Context<
         }
         found.extend(requirement_findings(row, ctx.requirements));
         found.extend(verify_findings(row, &Basis { allowed: ctx.allowed, denied: ctx.denied }));
+        found.extend(class_findings(row, ctx.classes));
         let unresolved = row.depends.iter().filter(|id| !ids.contains(&id.as_str()));
         found.extend(unresolved.map(|id| Finding::table(TableError::DependsUnresolved { line: row.line, id: id.clone() })));
         found.extend(write_set_findings(row, ctx));
@@ -208,6 +211,28 @@ fn verify_findings(row: &ContractRow, basis: &Basis<'_>) -> Vec<Finding> {
             Some(Finding::table(TableError::VerifyForm { line: row.line, verify: line.clone(), reason }))
         })
         .collect()
+}
+
+/// 3 クラスの導出（設計 contract-source.md §48 の 4・ADR-0061）: verify 各行を語列表（rules 行
+/// [`super::super::contract::CLASS_ROW`] の値）の要素ごとに
+/// 禁じる語列と同じ照合の 1 本 [`denied_in`] で当て（照合は最初の 1 件だけを返すので要素ごとに撃って集める）、当たった要素の
+/// クラスが行の `classes` に無い当たりを [`TableError::ClassUndeclared`] で全件名指す。`classes` が導出と同じか広い行は通す。
+/// 入力は verify 行だけ（write-set・land の口・宣言は読まない＝`-` / `~` の項目は「消す」に数えない）。
+fn class_findings(row: &ContractRow, table: &[String]) -> Vec<Finding> {
+    let mut found = Vec::new();
+    for line in &row.verify {
+        for element in table {
+            let ClassElement::Pair(class, sequence) = class_element(element) else {
+                continue;
+            };
+            let named = row.classes.iter().any(|declared| declared == class.as_str());
+            if !named && denied_in(line, std::slice::from_ref(&sequence)).is_some() {
+                let error = TableError::ClassUndeclared { line: row.line, verify: line.clone(), sequence, class };
+                found.push(Finding::table(error));
+            }
+        }
+    }
+    found
 }
 
 /// write-set の項目の 2 検査（base の tracked file だけで測る・§3「項目の実在と展開」）: 末尾 `/` 無しで tracked な
@@ -572,6 +597,7 @@ fn judge_repo(repo: &Path, ceiling: &Ceiling<'_>) -> Result<Judged, Outcome> {
     let ctx = Context {
         allowed: &facts.allowed,
         denied: &facts.denied,
+        classes: ceiling.classes,
         requirements: &requirements,
         sources: &sources,
         tracked: &tracked,
@@ -702,6 +728,7 @@ mod tests {
     };
     use crate::cli_outcome::{RC_BROKEN, RC_REFUSED};
     use crate::pipe::closure::Source;
+    use crate::pipe::contract::Class;
     use crate::pipe::refuse::Refuse;
     use std::collections::BTreeSet;
 
@@ -769,6 +796,7 @@ mod tests {
         let ctx = Context {
             allowed: &allowed,
             denied: &[],
+            classes: &[],
             requirements: &requirements,
             sources: &sources,
             tracked: &tracked,
@@ -820,6 +848,7 @@ mod tests {
         let ctx = Context {
             allowed: &allowed,
             denied: &[],
+            classes: &[],
             requirements: &requirements,
             sources: &sources,
             tracked: &tracked,
@@ -850,6 +879,7 @@ mod tests {
             let ctx = Context {
                 allowed: &allowed,
                 denied: &[],
+                classes: &[],
                 requirements: &requirements,
                 sources,
                 tracked: &tracked,
@@ -875,6 +905,7 @@ mod tests {
         let ctx = Context {
             allowed: &allowed,
             denied: &[],
+            classes: &[],
             requirements: &requirements,
             sources: &sources,
             tracked: &tracked,
@@ -907,6 +938,7 @@ mod tests {
         let ctx = Context {
             allowed: &allowed,
             denied: &[],
+            classes: &[],
             requirements: &requirements,
             sources: &sources,
             tracked: &tracked,
@@ -948,6 +980,7 @@ mod tests {
         let closed = Context {
             allowed: &allowed,
             denied: &denied,
+            classes: &[],
             requirements: &requirements,
             sources: &sources,
             tracked: &tracked,
@@ -975,6 +1008,7 @@ mod tests {
         let ctx = Context {
             allowed: &allowed,
             denied: &[],
+            classes: &[],
             requirements: &requirements,
             sources: &sources,
             tracked: &tracked,
@@ -1021,6 +1055,7 @@ mod tests {
         let ctx = Context {
             allowed: &allowed,
             denied: &[],
+            classes: &[],
             requirements: &requirements,
             sources: &sources,
             tracked: &tracked,
@@ -1050,6 +1085,82 @@ mod tests {
         let want = vec![notice("docs/design/b.md"), notice("docs/design/a.md")];
         assert_eq!(untracked_notices(Some(&two)), (want, "2".to_owned()), "1 件 1 行・列の順");
         assert_eq!(untracked_notices(None), (Vec::new(), "?".to_owned()), "git が答えない周は ?");
+    }
+
+    // ─────── 3 クラスの導出（§48 の 4・行 az・接頭辞 `class_derive_`） ───────
+
+    /// [`row`] の文脈（allowlist は git・禁じる語列なし）で語列表 `table` を持つ検査を撃ち、(行番号, 理由) の列を返す。
+    fn class_check(rows: &[ContractRow], table: &[&str]) -> Vec<(u64, Refuse)> {
+        let requirements = Ok(["FR1".to_owned()].into_iter().collect::<BTreeSet<String>>());
+        let (allowed, sources) = (["git".to_owned()], sources());
+        let tracked = ["src/kind.rs".to_owned(), "src/use.rs".to_owned()];
+        let classes: Vec<String> = table.iter().map(|item| (*item).to_owned()).collect();
+        let ctx = Context {
+            allowed: &allowed,
+            denied: &[],
+            classes: &classes,
+            requirements: &requirements,
+            sources: &sources,
+            tracked: &tracked,
+            snapshots: &[],
+            declared: &Ok(Vec::new()),
+        };
+        check_table(DOC, rows, &ids_of(rows), &ctx).into_iter().map(|finding| (finding.line, finding.refuse)).collect()
+    }
+
+    /// 同じ行の verify 2 本と要素 2 つが 3 件の `class-undeclared`（verify 行・語列・クラスを持つ・verify 行の順 × 要素の順）で
+    /// 出る。名乗ったクラスの当たりは名指さず、`classes` が導出と同じか広い行は 0 件、綴り違いの名は導出を覆わない。
+    #[test]
+    fn class_derive_check_names_every_undeclared_hit_by_verify_line_and_element() {
+        let table = ["publish git push", "delete git push --delete"];
+        let mut hit = row(10, "a");
+        hit.verify = vec!["git push --delete origin x".to_owned(), "git push origin main".to_owned()];
+        let undeclared = |verify: &str, sequence: &str, class: Class| {
+            let error = TableError::ClassUndeclared { line: 10, verify: verify.to_owned(), sequence: sequence.to_owned(), class };
+            (10, Refuse::ContractTable(error))
+        };
+        let want = vec![
+            undeclared("git push --delete origin x", "git push", Class::Publish),
+            undeclared("git push --delete origin x", "git push --delete", Class::Delete),
+            undeclared("git push origin main", "git push", Class::Publish),
+        ];
+        assert_eq!(class_check(std::slice::from_ref(&hit), &table), want, "3 件");
+        let reason = want[1].1.reason();
+        let named = "verify \"git push --delete origin x\" が rules 行 runner.class_commands の語列 git push --delete に当たり\
+                     クラス delete を導くが、行の classes に無い";
+        assert_eq!(reason, named, "verify 行・行 id・語列・クラスを名乗る");
+        let delete_only = vec![want[1].clone()];
+        hit.classes = vec!["publish".to_owned()];
+        assert_eq!(class_check(std::slice::from_ref(&hit), &table), delete_only, "名乗ったクラスの当たりは名指さない");
+        for classes in [&["delete", "publish"][..], &["consume", "publish", "delete"]] {
+            hit.classes = classes.iter().map(|class| (*class).to_owned()).collect();
+            assert_eq!(class_check(std::slice::from_ref(&hit), &table), Vec::new(), "同じか広い classes は 0 件: {classes:?}");
+        }
+        hit.classes = vec!["Delete".to_owned(), "publish".to_owned()];
+        assert_eq!(class_check(&[hit], &table), delete_only, "綴り違いの名は導出を覆わない");
+    }
+
+    /// 照合は禁じる語列と同じ（先頭語一致 + 残りの語の包含・順序不問）: 語の順が違う verify（`git log --grep push`）も要素
+    /// `publish git push` に当たり、先頭語の違う verify（`cargo nextest run git push`）は当たらない。
+    #[test]
+    fn class_derive_check_hits_a_verify_whose_words_come_in_another_order() {
+        let mut grep = row(10, "a");
+        grep.verify = vec!["git log --grep push".to_owned()];
+        let labels: Vec<String> = class_check(&[grep], &["publish git push"]).iter().map(|(_, refuse)| refuse.label()).collect();
+        assert_eq!(labels, vec!["contract-table:class-undeclared".to_owned()], "語の順が違っても当たる");
+        let mut other = row(10, "a");
+        other.verify = vec!["git status push".to_owned()];
+        assert_eq!(class_check(&[other], &["publish git push --tags"]), Vec::new(), "語が 1 つ欠ければ当たらない");
+    }
+
+    /// write-set に `-`（縮む）と `~`（消える）の項目を持ち verify に語列の無い行は 0 件（入力は verify 行だけ・`~` の削除は
+    /// git で戻せるので「消す」に数えない）。
+    #[test]
+    fn class_derive_check_does_not_read_the_write_set() {
+        let table = ["publish git push", "delete git push --delete", "delete git push -d"];
+        let mut shrinking = row(10, "a");
+        shrinking.write_set = vec!["src/kind.rs".to_owned(), "-src/use.rs".to_owned(), "~src/gone.rs".to_owned()];
+        assert_eq!(class_check(&[shrinking], &table), Vec::new(), "write-set の項目から導かない");
     }
 
     // ─────── Declared 行の歯の置き場の検出線（§45・行 av・接頭辞 `contract_check_place_`） ───────
@@ -1106,7 +1217,7 @@ mod tests {
         use crate::pipe::declaration::Ceiling;
         let repo = place_repo("place", &place_doc());
         let commands = place_commands();
-        let ceiling = Ceiling { row: "runner.allowed_commands", commands: &commands, denied: &[] };
+        let ceiling = Ceiling { row: "runner.allowed_commands", commands: &commands, denied: &[], classes: &[] };
         let quiet = check_repo(&repo, &ceiling, false);
         let loud = check_repo(&repo, &ceiling, true);
         let _ = std::fs::remove_dir_all(&repo);
@@ -1128,7 +1239,7 @@ mod tests {
         let doc = place_doc();
         let repo = place_repo("place-finding", &doc);
         let commands = place_commands();
-        let ceiling = Ceiling { row: "runner.allowed_commands", commands: &commands, denied: &[] };
+        let ceiling = Ceiling { row: "runner.allowed_commands", commands: &commands, denied: &[], classes: &[] };
         let checked = check_repo(&repo, &ceiling, false);
         let located = repo_findings(&repo, &ceiling);
         let _ = std::fs::remove_dir_all(&repo);
@@ -1206,6 +1317,7 @@ mod tests {
         let ctx = Context {
             allowed: &allowed,
             denied: &[],
+            classes: &[],
             requirements: &requirements,
             sources: &sources,
             tracked: &tracked,

@@ -25,6 +25,7 @@
 //! `n` の連番は表の検査の段が [`TableError::PromiseOrphan`] / [`TableError::PromiseNumber`] で名指す。
 
 use super::closure::{ClosureError, Source};
+use super::contract::{Class, CLASS_ROW};
 use super::refuse::Refuse;
 use crate::cli_outcome::{RC_BROKEN, RC_REFUSED};
 use crate::name::NAME;
@@ -359,6 +360,18 @@ pub enum TableError {
         /// 崩れの理由（growth の読み手の 1 本が返す字面）。
         reason: String,
     },
+    /// verify 行がクラスの語列表の要素の語列に当たり（禁じる語列と同じ照合）、導いたクラスが行の `classes` に無い（行の
+    /// 見出しの行・当たり 1 つにつき 1 件・設計 contract-source.md §48 の 4・行 az）。
+    ClassUndeclared {
+        /// 行番号。
+        line: u64,
+        /// 当たった verify 行の字面。
+        verify: String,
+        /// 当たった要素の語列。
+        sequence: String,
+        /// 導いたクラス。
+        class: Class,
+    },
 }
 
 impl TableError {
@@ -380,7 +393,8 @@ impl TableError {
             | Self::PromiseNumber { line, .. }
             | Self::TargetForm { line, .. }
             | Self::TeethOutsideWriteSet { line, .. }
-            | Self::GrowthForm { line, .. } => line,
+            | Self::GrowthForm { line, .. }
+            | Self::ClassUndeclared { line, .. } => line,
         }
     }
 
@@ -403,6 +417,7 @@ impl TableError {
             Self::TargetForm { .. } => "target-form",
             Self::TeethOutsideWriteSet { .. } => "teeth-outside-write-set",
             Self::GrowthForm { .. } => "growth-form",
+            Self::ClassUndeclared { .. } => "class-undeclared",
         }
     }
 
@@ -439,6 +454,10 @@ impl TableError {
                 format!("行 {id} の歯の file が write-set の外: {}", files.join(", "))
             }
             Self::GrowthForm { ref item, ref reason, .. } => format!("growth {item:?} が崩れている: {reason}"),
+            Self::ClassUndeclared { ref verify, ref sequence, class, .. } => format!(
+                "verify {verify:?} が rules 行 {CLASS_ROW} の語列 {sequence} に当たりクラス {} を導くが、行の classes に無い",
+                class.as_str()
+            ),
         }
     }
 
@@ -498,6 +517,8 @@ pub struct Context<'a> {
     pub allowed: &'a [String],
     /// 禁じる語列（rules 行 `runner.denied_commands`・verify 行に intake と同じ判定を掛ける・ADR-0025 §2.3）。
     pub denied: &'a [String],
+    /// クラスの語列表（rules 行 [`CLASS_ROW`] の値・verify 行から 3 クラスを導く・設計 contract-source.md §48）。
+    pub classes: &'a [String],
     /// 要件面の id の集合（読めない周は理由）。
     pub requirements: &'a Result<BTreeSet<String>, String>,
     /// 閉包を測る `.rs` の列。
@@ -546,7 +567,8 @@ mod tests {
     // flip-check: moved s2-07l.374
 
     use super::{
-        read_rows, read_table, render_schema, Need, Shape, TableError, DERIVED_GOAL, FIELDS, PROMISE_FIELDS, WHOLE_HEAD,
+        read_rows, read_table, render_schema, Class, Need, Shape, TableError, DERIVED_GOAL, FIELDS, PROMISE_FIELDS,
+        WHOLE_HEAD,
     };
     use crate::cli_outcome::{RC_BROKEN, RC_REFUSED};
 
@@ -569,6 +591,7 @@ mod tests {
         "target-form",
         "teeth-outside-write-set",
         "growth-form",
+        "class-undeclared",
     ];
 
     /// 宣言順に 1 つずつ組んだ全 variant（行番号は 1 から順）。
@@ -591,6 +614,7 @@ mod tests {
             TableError::TargetForm { line: 14, target: text("src/a.rs"), reason: text("r") },
             TableError::TeethOutsideWriteSet { line: 15, id: text("out"), files: vec![text("tests/a.rs"), text("tests/b.rs")] },
             TableError::GrowthForm { line: 16, item: text("src/a.md:5"), reason: text("r") },
+            TableError::ClassUndeclared { line: 17, verify: text("git push o m"), sequence: text("git push"), class: Class::Publish },
         ]
     }
 
@@ -600,7 +624,7 @@ mod tests {
         let found = samples();
         let names: Vec<&str> = found.iter().map(TableError::as_str).collect();
         assert_eq!(names, TABLE_ERRORS, "名前の slice は宣言順（母集団 {} 値）", TABLE_ERRORS.len());
-        assert_eq!(TABLE_ERRORS.len(), 16, "母集団は 16 値");
+        assert_eq!(TABLE_ERRORS.len(), 17, "母集団は 17 値");
         for (index, error) in found.iter().enumerate() {
             assert_eq!(error.line(), index as u64 + 1, "{} は行番号を持つ", error.as_str());
             assert!(!error.reason().is_empty() && !error.reason().contains('\n'), "{} の理由は 1 行", error.as_str());
