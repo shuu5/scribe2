@@ -21,6 +21,7 @@ pub mod role;
 pub mod ruling;
 pub mod session_account;
 pub mod state;
+pub mod tick;
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
