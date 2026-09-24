@@ -28,6 +28,8 @@
 - 効果: git の **global** 設定 `<NAME>.template` に絶対 path を書く（host 単位の唯一の pointer・`vessel init` の local 設定と同じ道具・env と HOME を読まない）。既に同じ値なら書かず `unchanged`。
 - 出力 1 行: `host: init template=<path> <written|unchanged>`。
 - doctor は `host-template=<path|absent|unreadable>` の 1 行を出す（骨格の 2 行の直後・置き場を渡さない周も出る＝`init` の前に確かめられる）。
+- doctor の外形は insta の snapshot 3 本（`crates/scribe2-boundary/src/snapshots/scribe2__tests__doctor_external_form.snap`・`scribe2__tests__ledger_form_doctor_external_form.snap`・`scribe2__tests__ledger_lint_doctor_external_form.snap`）が pin する。骨格の直後に 1 行を足すので、行 a はその 3 本を write-set に持ち、新しい形へ更新する（write-set の外の .snap を触らない）。行 d の `init=` も同じ 3 本を更新する。
+- 要件との対応: 雛形の pointer そのものは SRS の語彙に無い。FR58（1 command の導入）を成す手段として本設計が決め（ADR-0063 §2）、doctor の 1 行は FR61（doctor の 1 項目）の項目の 1 つとして足す。
 
 ## 4. `init [ROOT]`（行 b・repo ごとに 1 回・段の順は固定・各段は冪等）
 
@@ -103,10 +105,10 @@ id = "a"
 title = "host init — 既存の置き場を雛形として git の global 設定 <NAME>.template に絶対 path で書き（unchanged / written の 1 行）、doctor が host-template= の 1 行を出す（§3）"
 req = ["FR61", "FR58"]
 section = "3"
-write-set = ["+crates/scribe2/src/init.rs", "crates/scribe2/src/lib.rs", "crates/scribe2/src/hook/vessel.rs", "crates/scribe2-boundary/src/main.rs", "crates/scribe2-boundary/tests/e2e/main.rs", "docs/design/host-init.md"]
+write-set = ["+crates/scribe2/src/init.rs", "crates/scribe2/src/lib.rs", "crates/scribe2/src/hook/vessel.rs", "crates/scribe2-boundary/src/main.rs", "crates/scribe2-boundary/src/snapshots/scribe2__tests__doctor_external_form.snap", "crates/scribe2-boundary/src/snapshots/scribe2__tests__ledger_form_doctor_external_form.snap", "crates/scribe2-boundary/src/snapshots/scribe2__tests__ledger_lint_doctor_external_form.snap", "crates/scribe2-boundary/tests/e2e/main.rs", "docs/design/host-init.md"]
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail host_init_"]
 size = "S"
-done = "(1) host init <TEMPLATE> は TEMPLATE が dir で host.toml が Absent か Present の周だけ git の global 設定 <NAME>.template に絶対 path を書き、同じ値なら書かず unchanged、dir が無い・Unreadable・引数欠けの周は 1 byte も書かず断る (2) 出力は host: init template=<path> <written|unchanged> の 1 行 (3) doctor は骨格の 2 行の直後に host-template=<path|absent|unreadable> の 1 行を置き場を渡さない周にも出す (4) env と HOME を読まず、git の呼び出しは Invocation で記述する 歯: host_init_ の歯が GIT_CONFIG_GLOBAL を toy の file に向けて written / unchanged / 断り 3 形と doctor の行を測る（base では init の verb が無い ＝ RED）"
+done = "(1) host init <TEMPLATE> は TEMPLATE が dir で host.toml が Absent か Present の周だけ git の global 設定 <NAME>.template に絶対 path を書き、同じ値なら書かず unchanged、dir が無い・Unreadable・引数欠けの周は 1 byte も書かず断る (2) 出力は host: init template=<path> <written|unchanged> の 1 行 (3) doctor は骨格の 2 行の直後に host-template=<path|absent|unreadable> の 1 行を置き場を渡さない周にも出す (4) env と HOME を読まず、git の呼び出しは Invocation で記述する (5) doctor の外形の insta snapshot 3 本を新しい形へ更新し write-set の外の .snap は触らない 歯: host_init_ の歯が GIT_CONFIG_GLOBAL を toy の file に向けて written / unchanged / 断り 3 形と doctor の行を測る（base では init の verb が無い ＝ RED）"
 
 [[contract]]
 id = "b"
@@ -116,6 +118,7 @@ section = "4"
 write-set = ["+crates/scribe2/src/init.rs", "crates/scribe2/src/hook/vessel.rs", "crates/scribe2/src/rules/manifest.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2/src/pipe/declaration.rs", "crates/scribe2-boundary/src/main.rs", "crates/scribe2-boundary/tests/e2e/main.rs", "docs/design/host-init.md"]
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail init_repo_"]
 size = "L"
+growth = ["crates/scribe2/src/hook/vessel.rs:60", "crates/scribe2/src/rules/manifest.rs:40", "crates/scribe2/src/account/mod.rs:60", "crates/scribe2/src/pipe/declaration.rs:20", "crates/scribe2-boundary/src/main.rs:60"]
 depends = ["a"]
 done = "(1) ROOT が git の repo でない・host-template が無い周は 1 段目の前に断り何も書かない (2) 置き場は <雛形の親>/<雛形の dir 名>-<ROOT の dir 名> で在れば skip (3) host の面は雛形の [[plugin]] [[launch-arg]] [[account]] [[vessel]] を写し [[account-group]] は写さず、loader で検査してから rename で置き、在れば 1 字も変えない (4) accounts/<label> は雛形の symlink の先か実 dir へ symlink で結び credential を読まず写さず、雛形に無い label は failed:no-source で名指して続きの段を止めない (5) marker と local 設定は vessel init と同じ 1 本で ByMe は skip・ByOther は failed (6) 宣言は Cargo.toml が在れば cargo の形（allowed-commands cargo と git・common-verify に nextest と clippy・entrance-flip unmeasured）、無ければ git の形（allowed-commands git・common-verify git diff --quiet・entrance-flip unmeasured）で、在れば skip (7) --group は雛形に無い群を failed、在れば同じ親の下で群を宣言する全面の anchors に ROOT を足し新しい面にも写し、1 面でも検査に落ちれば 0 面 (8) 本便が書いた .vessel と .vessel.toml だけを git add と git commit -- で 1 commit にし、0 file なら skip (9) 出力は段ごとに init: <段> <ok|skip|failed:<理由>> の 1 行と最後の next= 1 つで、2 度目は全段 skip 歯: init_repo_ の歯が 7 段の生成物と 2 度目の skip と Cargo.toml の有無の 2 形と --group の 2 面と 0 面と失敗の段の名指しを測る（base では init の verb が無い ＝ RED）"
 
@@ -135,7 +138,7 @@ id = "d"
 title = "doctor の init= 行 — marker / declaration / host-face / accounts / session / registration の欠落を宣言順に名指し next= に最初の欠落を埋める 1 手を置く（§6）"
 req = ["FR61"]
 section = "6"
-write-set = ["+crates/scribe2/src/init.rs", "crates/scribe2-boundary/src/main.rs", "crates/scribe2-boundary/tests/e2e/main.rs", "docs/design/host-init.md"]
+write-set = ["+crates/scribe2/src/init.rs", "crates/scribe2-boundary/src/main.rs", "crates/scribe2-boundary/src/snapshots/scribe2__tests__doctor_external_form.snap", "crates/scribe2-boundary/src/snapshots/scribe2__tests__ledger_form_doctor_external_form.snap", "crates/scribe2-boundary/src/snapshots/scribe2__tests__ledger_lint_doctor_external_form.snap", "crates/scribe2-boundary/tests/e2e/main.rs", "docs/design/host-init.md"]
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail doctor_init_"]
 size = "S"
 depends = ["b"]
