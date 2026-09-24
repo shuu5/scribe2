@@ -6,8 +6,8 @@
 //! `git cherry-pick <base>..<HEAD>` で順に積む。積めなかった後続（衝突）は `cherry-pick --abort` で外し（その便の
 //! event は書かない・後続は詰める）、自分の land で従来どおり追随する。
 //!
-//! 積んだ便ごとにその段の tree を覚え、便の diff に対する検出線をその段で撃つ（base = 直前の段）。全部積んだ木に対して
-//! 共通 verify を **1 回**（record は先頭の便の `verify.jsonl`・field `train=<N>`）と各便の契約 verify をその便の分撃つ
+//! 積んだ便ごとにその段の tree を覚える（検出線は撃たない＝着地後の検出の口だけ・設計 gate-cost.md §44 形 (9)）。全部積んだ
+//! 木に対して共通 verify を **1 回**（record は先頭の便の `verify.jsonl`・field `train=<N>`）と各便の契約 verify をその便の分撃つ
 //! ＝lens は撃たない（各便の verdict PASS が入口の条件で、候補の木で測るのは木の緑）。**緑**なら段の tree で列の順に
 //! 着地する（[`land_train`]・主実測は先端の木で 1 回）。**赤**・切れない・積めない・読めない周は候補の木を畳んで
 //! **列を解き**、先頭 1 本は既存の経路（追随 → 撃ち直し）へそのまま入る（どの便が赤かは帰属しない・後続は列に残る）。
@@ -17,8 +17,8 @@
 
 use super::contract::Contract;
 use super::declaration::Effective;
-use super::gate::{is_unreadable, run_checks, skip_record, step_record, Check, Checks, Detection, Skipped, Step};
-use super::land::{land_train, rerun_detection, Car, Land, Rerun, WorktreeCheck, MAIN_REF};
+use super::gate::{is_unreadable, run_checks, step_record, Check, Checks, Step};
+use super::land::{land_train, Car, Land, WorktreeCheck, MAIN_REF};
 use super::queue::{train_now, Order};
 use super::{base_of_run, contract_path, current, git_line, git_ok, repo_of_run, vessel_path, worktree_path, worktrees_dir};
 use crate::cli_outcome::Outcome;
@@ -48,7 +48,7 @@ enum Why {
     Cut,
     /// 先頭を積めない（衝突・空）か、`cherry-pick --abort` が木を戻せない。
     Stack,
-    /// 候補の木の検査（共通 / 契約 / 検出線）が赤か、record を書けない。
+    /// 候補の木の検査（共通 / 契約）が赤か、record を書けない。
     Verify,
     /// main を CAS で進められない（main は動いていない）。
     Cas,
@@ -178,44 +178,23 @@ fn run_train(entry: &Land<'_>, candidate: &Path, riders: &[Rider], old: &str) ->
     Ok((stacked, check))
 }
 
-/// 候補の木の検査（検出線は段ごと・共通 verify は先端で 1 回・契約 verify は便ごとに先端で）。1 行でも赤 /
-/// 撃てない / 読めない・record を書けない周は `Err`。
+/// 候補の木の検査（共通 verify は先端で 1 回・契約 verify は便ごとに先端で・検出線は撃たない＝着地後の検出の口
+/// だけ・設計 gate-cost.md §44 形 (9)）。1 行でも赤 / 撃てない / 読めない・record を書けない周は `Err`。
 fn verify_candidate(entry: &Land<'_>, candidate: &Path, riders: &[Rider], stacked: &[Stacked], old: &str) -> Result<(), Why> {
     let count = u64::try_from(stacked.len()).unwrap_or(u64::MAX);
     let tip = stacked.last().map(|found| found.commit.clone()).ok_or(Why::Read)?;
     let mut red = false;
-    // (1) 検出線: 段ごとに木を戻して、直前の段を base に便の diff へ撃つ（写しに検出線が無い便は撃たない）。撃つ前に
-    // 追随と同じ 1 関数で要否を読む（設計 §30）: 便の base から直前の段までの動きが面に触れない段は省き、触れた段は
-    // 毎回撃つ（前周の record の持ち越しは無い・設計 gate-cost.md §44 形 (8)）。
-    let mut previous = old.to_owned();
-    for found in stacked {
-        let rider = riders.get(found.index).ok_or(Why::Read)?;
-        let frozen = frozen_of(entry, &rider.run)?;
-        if !frozen.detection_verify().is_empty() {
-            if !git_ok(candidate, &["checkout", "-q", "-f", "--detach", &found.commit]) {
-                return Err(Why::Verify);
-            }
-            match rerun_detection(&Rerun { repo: entry.repo, moved: (&rider.base, &previous) }) {
-                Detection::Run => {
-                    let steps = checks_on(entry, candidate, &previous, &rider.contract, (&[], frozen.detection_verify()));
-                    red |= record(entry, &rider.run, &only(steps, Check::Detection), count)?;
-                }
-                Detection::Skip(reason) => place(entry, &rider.run, |n| skip_record(n, Skipped::detection(reason, None)))?,
-            }
-        }
-        previous.clone_from(&found.commit);
-    }
     if !git_ok(candidate, &["checkout", "-q", "-f", "--detach", &tip]) {
         return Err(Why::Verify);
     }
-    // (2) 先端の木: 先頭は共通 verify（列で 1 回・`train=<N>`）と自分の契約 verify、後続は契約 verify だけ。
+    // 先端の木: 先頭は共通 verify（列で 1 回・`train=<N>`）と自分の契約 verify、後続は契約 verify だけ。
     for found in stacked {
         let rider = riders.get(found.index).ok_or(Why::Read)?;
         let common = match found.index {
             0 => frozen_of(entry, &rider.run)?.common_verify().to_vec(),
             _ => Vec::new(),
         };
-        let steps = checks_on(entry, candidate, old, &rider.contract, (&common, &[]));
+        let steps = checks_on(entry, candidate, old, &rider.contract, &common);
         let kept: Vec<Step> = steps.into_iter().filter(|step| matches!(step.stage, Check::Common | Check::Contract)).collect();
         red |= record(entry, &rider.run, &kept, count)?;
     }
@@ -225,24 +204,16 @@ fn verify_candidate(entry: &Land<'_>, candidate: &Path, riders: &[Rider], stacke
     }
 }
 
-/// 候補の木で行を撃つ（gate と land の主実測と同じ [`run_checks`] の 1 本・受付は通らない＝主実測と同じ）。`lines` は
-/// （共通 verify・検出線）の組。
-fn checks_on(entry: &Land<'_>, candidate: &Path, base: &str, contract: &Contract, lines: (&[String], &[String])) -> Vec<Step> {
-    let (common, detection) = lines;
+/// 候補の木で行を撃つ（gate と land の主実測と同じ [`run_checks`] の 1 本・受付は通らない＝主実測と同じ）。
+fn checks_on(entry: &Land<'_>, candidate: &Path, base: &str, contract: &Contract, common: &[String]) -> Vec<Step> {
     run_checks(&Checks {
         worktree: candidate,
         base,
         contract,
         common,
-        detection,
+        detection: &[],
         host: entry.limits.breaker(),
     })
-}
-
-/// 段の列から 1 つの段の行だけを残す（検出線を段ごとに撃つ周は、同じ呼出が撃った契約 verify を先端の木の測りに
-/// 任せて捨てる＝記録にも判定にも数えない）。
-fn only(steps: Vec<Step>, stage: Check) -> Vec<Step> {
-    steps.into_iter().filter(|step| step.stage == stage).collect()
 }
 
 /// 撃った段を便の `verify.jsonl` へ足し（`n` は既存の record からの通し・共通 verify だけ `train=<N>`・`count` は
@@ -260,15 +231,6 @@ fn record(entry: &Land<'_>, run: &str, steps: &[Step], count: u64) -> Result<boo
         append_line(&path, &line, entry.policy).map_err(|_| Why::Verify)?;
     }
     Ok(steps.iter().any(|step| step.rc != 0 || step.is_closed() || is_unreadable(step)))
-}
-
-/// 撃っていない検出線の段の skip record 1 本を便の `verify.jsonl` へ足す（`n` は既存の record からの
-/// 通し）。書けない周は `Err`（列を解く）。
-fn place(entry: &Land<'_>, run: &str, body: impl FnOnce(u64) -> String) -> Result<(), Why> {
-    let number = super::gate::next_number(written_records(entry, run)?);
-    let path = super::verify_log_path(entry.state_dir, run);
-    append_line(&path, &body(number), entry.policy).map_err(|_| Why::Verify)?;
-    Ok(())
 }
 
 /// 便の `verify.jsonl` の既存の record 数（空行を除く）。読めない周は `Err`。

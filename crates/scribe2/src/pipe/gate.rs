@@ -233,29 +233,15 @@ impl Limits {
     }
 }
 
-/// 検出線（変異検査）を撃つか（**閉じた enum**・設計 §30・`s2-07l.397`）。
+/// 撃たない理由（record の `reason=`・閉じた enum・憲法 C11）。
 ///
-/// literal の構築点は 2 つ——`pipe gate`（[`super::cli`]・常に [`Run`](Self::Run)）と、main が動いた便の追随
-/// （[`super::land`]・`<base>..<main>` の path が検出線の面に 1 つも触れない周だけ [`Skip`](Self::Skip)）。
-/// 撃たない周も `verify.jsonl` に `kind=detection skipped=detection reason=<理由>` の record を残す
-/// （**撃たなかった事実を黙って落とさない**・[`skip_record`]）。共通 verify と契約 verify は従来どおり撃つ。
-///
-/// 面に触れた周は毎回撃つ（前周の record の持ち越しは無い・設計 gate-cost.md §44 形 (8)）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Detection {
-    /// 撃つ（従来の形・読めない周もこちら＝fail-closed）。
-    Run,
-    /// 撃たない（理由は record の `reason=`）。
-    Skip(DetectionSkip),
-}
-
-/// 検出線を撃たない理由（record の `reason=`・閉じた enum・憲法 C11）。
+/// 検出線（③）は gate・主実測・候補の木のどれも撃たない（着地後の検出の口だけ・設計 gate-cost.md §44 形 (9)）ので、
+/// 理由は面の外の 1 つ——追随の再 gate を丸ごと省いた周（`kind=gate skipped=regate`）と着地後の検出が面の外で撃たなかった
+/// 周（`kind=detection skipped=detection`）が同じ字面で持つ。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DetectionSkip {
     /// 差分の path が検出線の面（[`super::land::DETECTION_SCOPE`]）に 1 つも触れない。
     OutsideScope,
-    /// gate を撃った木と land した木が同じ（主実測だけ・ADR-0021 §2.4）。
-    SameTree,
 }
 
 impl DetectionSkip {
@@ -263,7 +249,6 @@ impl DetectionSkip {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::OutsideScope => "outside-scope",
-            Self::SameTree => "same-tree",
         }
     }
 }
@@ -287,8 +272,6 @@ pub struct Gate<'a> {
     pub pool: Option<&'a Pool>,
     /// 規則から読んだ線。
     pub limits: Limits,
-    /// 検出線を撃つか（設計 §30・追随の再 gate だけが [`Detection::Skip`] を渡しうる）。
-    pub detection: Detection,
     /// lock の待ち方。
     pub policy: LockPolicy,
 }

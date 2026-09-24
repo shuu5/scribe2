@@ -4148,8 +4148,8 @@ pub(super) fn advance_main_with(repo: &Path, path: &str) -> String {
 }
 
 /// (a) docs だけで main が動いた便の追随（設計 §33）: **再 gate を丸ごと撃たず**（lens も起こさず）
-/// 前周の Gated PASS を新しい base へ引き継いで着地する。撃つのは主実測の ②④ だけ（③ は木の差が
-/// docs だけ＝面の外なので従来どおり省く）で、`verify.jsonl` に足されるのは引き継ぎの 1 本だけ。
+/// 前周の Gated PASS を新しい base へ引き継いで着地する。撃つのは主実測の ②④ だけ（③ は主実測も撃たない・
+/// 設計 gate-cost.md §44 形 (9)）で、`verify.jsonl` に足されるのは引き継ぎの 1 本だけ。
 ///
 /// base は再 gate を撃つので、呼出が ②④ の 2 行 + record 3 本ぶん多く、偽 lens の marker も立つ＝RED。
 #[test]
@@ -4171,17 +4171,11 @@ fn pipe_follow_docs_only_carries_gated_pass_without_regate() {
     let added = super::gate::detection_calls(&repo).split_off(before);
     assert_eq!(added, ["common", "contract"], "撃つのは主実測の ②④ だけ（母集団 = 前 {before} 行）");
     assert_regate_skip_record(&verify_rows(&state, &id));
-    // 主実測は別 file（`verify-main.jsonl`）に従来どおり ②・③ の skip・④ の 3 本。木は gate を撃った周と
-    // 違う（docs の 1 file ぶん進んでいる）ので、③ を省く理由は木の一致ではなく面の外である。
+    // 主実測は別 file（`verify-main.jsonl`）に ①②④ の 3 本。木は gate を撃った周と違う（docs の 1 file ぶん進んでいる）
+    // ので主実測は撃ち、③ は撃たない（record も置かない・設計 gate-cost.md §44 形 (9)）。
     let (main, after) = super::gate::split_landed(super::gate::main_rows(&state, &id));
     assert_eq!(after.len(), 1, "着地後の record は 1 本: {after:?}");
-    assert_eq!(
-        super::gate::kinds(&main),
-        ["write-set", "common", "detection", "contract"],
-        "主実測は ①②④ を撃ち ③ の位置に record を置く: {main:?}"
-    );
-    assert_eq!(row_value(&main, 3, "skipped"), "detection", "主実測も ③ を省く: {main:?}");
-    assert_eq!(row_value(&main, 3, "reason"), "outside-scope", "省いた理由は面の外");
+    assert_eq!(super::gate::kinds(&main), ["write-set", "common", "contract"], "主実測は ①②④ だけ: {main:?}");
     assert!(show_line(&repo, &state, &id).contains("stage=Landed"), "段は Landed: {}", show_line(&repo, &state, &id));
     assert_eq!(value_of(&verdict_pairs(&state, &id), "verdict"), "PASS", "引き継いだ verdict");
     assert_follow_events(&state, &base, &moved, &git(&repo, &["rev-parse", "refs/heads/main"]));
@@ -4205,29 +4199,6 @@ fn assert_regate_skip_record(rows: &[Vec<(String, vessel::fleet::json_lite::Valu
     assert!(skip.iter().all(|(key, _)| key != "tree"), "引き継ぎの record は木を持たない: {skip:?}");
     assert_eq!(row_value(rows, 4, "n"), "4", "`n` は 1 度目の gate の 3 本からの通し");
     assert_eq!(row_value(rows, 3, "rc"), "0", "1 度目の ④ は撃って緑（引き継ぐ根）");
-}
-
-/// 対: docs だけで main が動いても `<base>..<main>` の diff を**読めない**周は面の外として省かない（fail-closed・
-/// 設計 §30）＝再 gate を撃つ（前周の record の持ち越しは無い・設計 gate-cost.md §44 形 (8)・gate は ③ を撃たない＝
-/// 形 (9)）。面の外の skip record は無い。偽 git はその range の `diff --name-only -z` だけを rc 1 で落とす（段①の
-/// `<base>..HEAD` は落とさない）。
-#[test]
-fn pipe_detection_scope_unreadable_follow_diff_does_not_skip_outside_scope() {
-    let (repo, state, id, base, before) = detection_gated();
-    let moved = advance_main_with(&repo, "docs/design/toy.md");
-    let out = land_once_with_git_shim(&repo, &state, &id, &format!(" diff --name-only -z {base}..{moved}"), None);
-    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land は rc 0: {}", stderr_of(&out));
-    assert!(stdout_of(&out).contains(&format!("rebase={base}..{moved}")), "追随は済む: {}", stdout_of(&out));
-    // 着地後の検出の子は面の外の着地で stub を撃たない（子の終わりを待ってから呼出を数える）。
-    super::gate::await_detection_child(&state, &id);
-    let added = super::gate::detection_calls(&repo).split_off(before);
-    assert_eq!(added, ["common".to_owned(), "contract".to_owned()], "再 gate は ②④ を撃つ・主実測は撃たない: {added:?}");
-    let rows = verify_rows(&state, &id);
-    assert_eq!(rows.len(), 6, "1 度目 3 本 + 再 gate 3 本（引き継ぎの 1 本ではない）: {rows:?}");
-    assert!(super::gate::skip_rows(&rows).is_empty(), "面の外の skip record は無い: {rows:?}");
-    assert_eq!(row_value(&rows, 6, "kind"), "contract", "再 gate の ④ は撃った record: {rows:?}");
-    assert_eq!(row_value(&rows, 4, "rc"), "0", "再 gate の段①（`<base>..HEAD`）は読めている: {rows:?}");
-    clean(&[&repo, &state]);
 }
 
 /// 終端の道具一式（設計 contract-source.md §5・`s2-07l.382` の歯）。
@@ -5159,6 +5130,45 @@ fn pipe_detection_after_landing_train_follower_records_in_its_own_run_dir() {
         assert_eq!(value_of(&row, "cmd"), format!("sh verify-count.sh detection-{parent}"), "{{base}} は自分の squash の親: {row:?}");
         assert!(calls.contains(&format!("detection-{parent}")), "stub は自分の squash の親で呼ばれた: {calls:?}");
     }
+    clean(&[&repo, &state]);
+}
+
+/// 主実測と候補の木は検出線を撃たない（設計 gate-cost.md §44 形 (9)・契約表の行 ao・接頭辞 `pipe_detection_off_main_`）の
+/// (p) の候補の木の側: 検出線を宣言した toy の 3 本（write-set は `crates/` の面の内）を候補の木で着地させると、候補の木は
+/// 後続ごとの ③ の段を持たない＝どの便の `verify.jsonl` に足された record も `kind=detection` を持たず（先頭は共通 verify と
+/// 契約 verify・後続は契約 verify だけ）、先端の木の主実測（先頭の `verify-main.jsonl` の `landed` の無い分）も ①②④ の
+/// 3 本。stub を呼ぶのは着地後の検出の子（便ごとに 1 回・`landed` 付き）だけ。base は後続ごとに ③ を撃ち主実測も ③ を
+/// 撃つ＝RED。
+#[test]
+fn pipe_detection_off_main_train_followers_record_no_detection() {
+    let (repo, state) = repo_with_state();
+    super::gate::commit_detection_vessel(&repo, super::gate::DETECTION_COUNT);
+    let marker = state.join("lens-ran");
+    let files = ["crates/toy/a.rs", "crates/toy/b.rs", "crates/toy/c.rs"];
+    let ids = train_runs_on(&repo, &state, &marker, [ALL_GREEN, ALL_GREEN, ALL_GREEN], files);
+    let before: Vec<usize> = ids.iter().map(|id| verify_rows(&state, id).len()).collect();
+    let calls_before = super::gate::detection_calls(&repo).len();
+    let rules = write_rules_train(&state, "rules-train.toml", Some(3));
+    let out = land_extra(&repo, &state, &ids[0], &["--rules", &rules]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "列の land は rc 0: {} / {}", stdout_of(&out), stderr_of(&out));
+    assert!(stdout_of(&out).contains(&format!("run={} train=3", ids[0])), "列で着地した: {}", stdout_of(&out));
+    for id in &ids {
+        super::gate::await_detection_child(&state, id);
+    }
+    for (index, (id, seen)) in ids.iter().zip(&before).enumerate() {
+        let rows = verify_rows(&state, id);
+        let added: Vec<String> = rows.iter().skip(*seen).map(|row| value_of(row, "kind")).collect();
+        let want: &[&str] = if index == 0 { &["common", "contract"] } else { &["contract"] };
+        assert_eq!(added, want, "候補の木が {id} に足した record に ③ は無い: {rows:?}");
+        let (main, after) = super::gate::split_landed(super::gate::main_rows(&state, id));
+        assert_eq!(after.len(), 1, "{id} の着地後の record は 1 本: {after:?}");
+        assert!(main.iter().all(|row| value_of(row, "kind") != "detection"), "{id}: landed の無い kind=detection は 0 本: {main:?}");
+    }
+    let (head_main, _) = super::gate::split_landed(super::gate::main_rows(&state, &ids[0]));
+    assert_eq!(super::gate::kinds(&head_main), ["write-set", "common", "contract"], "先端の木の主実測は ①②④: {head_main:?}");
+    let added_calls = super::gate::detection_calls(&repo).split_off(calls_before);
+    let marks = added_calls.iter().filter(|call| call.starts_with("detection-")).count();
+    assert_eq!(marks, 3, "stub を呼ぶのは着地後の検出の子の 3 回だけ: {added_calls:?}");
     clean(&[&repo, &state]);
 }
 

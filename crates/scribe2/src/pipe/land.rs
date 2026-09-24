@@ -39,12 +39,10 @@
 //! wait 実装を通り、上限（rules 行 `pipe.land_wait_s`）を超えた周と列を導けない周は**待たずに進む**
 //! （断らない・止めない）。どの周だったかは land の record と stdout の `order=` が残す。
 //!
-//! **検出線（変異検査）は差分が検出線の面に触れた周だけ撃つ**（`s2-07l.397`・設計 §30・FR46）。追随の
-//! 再 gate は `<base>..<main>` の path、主実測は gate を撃った木と land した木の `diff-tree` の path を
-//! [`DETECTION_SCOPE`] と照らし、1 つも触れない周は検出線を省いて理由付きの record を残す（[`detection_needed`]
-//! の 1 本を両方が通す）。読めない周は撃つ（fail-closed）。共通 verify と契約 verify は従来どおり撃つ。
-//! 面に触れた周は追随も候補の木の段も毎回撃つ（前周の record の持ち越しは無い・[`rerun_detection`]・設計
-//! gate-cost.md §44 形 (8)）。
+//! **検出線（変異検査）は gate・主実測・候補の木のどれも撃たない**（着地後の検出の口 [`detection`] だけ・設計
+//! gate-cost.md §44 形 (9)）。追随は `<base>..<main>` の path を [`DETECTION_SCOPE`] と照らし、1 つも触れない周は
+//! 再 gate を丸ごと省いて前周の PASS を引き継ぐ（[`regate_skippable`]・設計 §33・形 (10)）。読めない周は撃ち直す
+//! （fail-closed）。
 //!
 //! **既に main に自分の squash が在る便は Landed で終端する**（`s2-07l.389`・設計 §29・FR50・C3 / C10）。追随の
 //! rebase で commit が 0 本になった周、`rebase-empty` に倒す前に main の log を便の trailer（`run: <run id>`）で
@@ -55,7 +53,7 @@
 use crate::polarity::{OnFailure, Polarity, Timing};
 use super::contract::Contract;
 use super::follow::{self, Conflict};
-use super::gate::{gate, next_number, skip_record, Detection, DetectionSkip, Gate, Limits, Skipped, Verdict};
+use super::gate::{gate, next_number, skip_record, Gate, Limits, Skipped, Verdict};
 use super::lens_record::LensSource;
 use super::{emit, git_bytes, git_line, git_ok, worktree_path, Emit};
 // 子 module（[`verify`] / [`finish`]）が `super::` で呼ぶ 5 本。子から見た `super::` は `land` なので、親が同じ名を
@@ -141,10 +139,10 @@ const RUN_TRAILER: &str = "run: ";
 /// **rules 行にしない**（値でなく閉じた path の集合・variant の領分・§30 却下案）。
 pub const DETECTION_SCOPE: &[&str] = &["crates/", "Cargo.toml", "Cargo.lock", "rules/", ".vessel.toml"];
 
-/// path の列 → 検出線の要否（**pure**・追随の再 gate と主実測の両方がこの 1 本を通す・設計 §30）。
+/// path の列 → 検出線の要否（**pure**・追随の再 gate の省略と着地後の検出の面の両方がこの 1 本を通す・設計 §30）。
 ///
 /// 1 つでも [`DETECTION_SCOPE`] に触れれば真。**空の列は偽**（差分が無い周は撃たない）——読めない周を
-/// 空に読み替えない責任は呼び手（[`follow_detection`] / [`verify::main_detection`]）が持つ。
+/// 空に読み替えない責任は呼び手（[`regate_skippable`] / [`detection`]）が持つ。
 pub fn detection_needed<'a>(paths: impl IntoIterator<Item = &'a str>) -> bool {
     paths.into_iter().any(|path| DETECTION_SCOPE.iter().any(|face| in_face(path, face)))
 }
@@ -420,7 +418,7 @@ fn attempt(entry: &Land<'_>, worktree: &Path, turned: &Turned, lines: &mut Vec<S
     // **既着地の周は squash と CAS を撃たない**（設計 §29・main は 1 byte も動かさない）。anchor は
     // `old → old` の no-op を通す（同期の判定行は従来どおり出る・ref は動いていないので揃える差分も無い）。
     // 主実測は見つけた sha に対して**従来どおり撃つ**——前の周が実測の前に死んだ可能性が在り、記録が
-    // 無いものを緑と読まない（C10）。木が gate と同じ周は検出線を省く（[`main_detection`]・§30）。
+    // 無いものを緑と読まない（C10）。木が gate と同じ周は主実測ごと省く（`verify::same_tree`・gate-cost.md §27）。
     let landing = match already {
         Some(found) => Landing::AlreadyLanded(found),
         None => match squash(entry, worktree, &old) {
@@ -569,10 +567,10 @@ fn with_lines(mut lines: Vec<String>, mut outcome: Outcome) -> Outcome {
 ///   （[`super::base_of_run`]）はこの行から新しい base を読む。
 /// - 撃ち直しが PASS でない周は gate の判定行と rc で止まる（FAIL は `Gated` のまま
 ///   land しない・INCONCLUSIVE は測り直せる側）。
-/// - main が動いた差分が [`DETECTION_SCOPE`] に 1 つも触れない周（[`rerun_detection`] の (1)・`<base>..<main>` は
+/// - main が動いた差分が [`DETECTION_SCOPE`] に 1 つも触れない周（[`regate_skippable`]・`<base>..<main>` は
 ///   rebase で動かない）は**撃ち直しを丸ごと省き**、前周の Gated PASS を新しい base へ引き継ぐ（[`carry_gated_pass`]・
-///   設計 §33 (i)）。面に触れる周と diff を読めない周は従来どおり全段を撃ち直す（検出線も毎回撃つ・設計
-///   gate-cost.md §44 形 (8)）。
+///   設計 §33 (i)）。面に触れる周と diff を読めない周は従来どおり gate の段（①②④）を撃ち直す（設計
+///   gate-cost.md §44 形 (10)）。
 /// - rebase の直後（上の省略と再 gate の**前**・[`rebase_onto`] の中）に契約表の検査を便の木へ撃ち、findings のすべてが
 ///   便の消した path を名指す write-set の項目の未解決なら [`follow::on_stale_rows`] へ委ねる（`Implemented
 ///   detail=rebase-stale-rows:`・runner を起こし直す・設計 §34）。他の findings と撃てない周は従来どおり。
@@ -614,11 +612,10 @@ fn follow_main(entry: &Land<'_>, worktree: &Path, base: &str, main: &str) -> Fol
         return Follow::Stopped(broken(err.to_string()));
     }
     let mut lines = vec![format!("run={} rebase={base}..{main}", entry.run)];
-    // **再 gate の要否は検出線の要否と同じ 1 本の判定で決める**（新しい判定関数を足さない・C2）。面の判定は
+    // **再 gate の要否は検出線の面と同じ 1 本の判定で決める**（新しい判定関数を足さない・C2）。面の判定は
     // `<base>..<main>`（rebase で動かない 2 つの sha）を読む。
-    let detection = rerun_detection(&Rerun { repo: entry.repo, moved: (base, main) });
-    if let Detection::Skip(reason) = detection {
-        if let Some(carried) = carry_gated_pass(entry, reason) {
+    if regate_skippable(entry.repo, base, main) {
+        if let Some(carried) = carry_gated_pass(entry) {
             lines.push(carried);
             return Follow::Ready(lines);
         }
@@ -634,7 +631,6 @@ fn follow_main(entry: &Land<'_>, worktree: &Path, base: &str, main: &str) -> Fol
         // 1 回だけ解いて [`follow::Runner`] へ載っている＝land は借りて渡す（runner の無い周は継承）。
         pool: entry.runner.and_then(|runner| runner.pool),
         limits: entry.limits,
-        detection,
         policy: entry.policy,
     });
     lines.extend(regated.out);
@@ -644,38 +640,18 @@ fn follow_main(entry: &Land<'_>, worktree: &Path, base: &str, main: &str) -> Fol
     Follow::Ready(lines)
 }
 
-/// 追随の再 gate で検出線を撃つか（設計 §30 (i)）。
+/// 追随の再 gate を丸ごと省いて前周の PASS を引き継ぐか（設計 §33 (i)・gate-cost.md §44 形 (10)）。
 ///
 /// main が便の base から進んだ差分（`git diff --name-only -z <base>..<main>`）の path が [`DETECTION_SCOPE`] に
-/// 1 つも触れない周だけ省く（便自身の差分は gate で既に検出線を通っている）。**diff を読めない周は撃つ**
-/// （読めないを「触れていない」に読み替えない・fail-closed）。
-fn follow_detection(repo: &Path, base: &str, main: &str) -> Detection {
+/// 1 つも触れない周だけ真。**diff を読めない周は偽＝撃ち直す**（読めないを「触れていない」に読み替えない・
+/// fail-closed）。
+fn regate_skippable(repo: &Path, base: &str, main: &str) -> bool {
     let range = format!("{base}..{main}");
     let Some(bytes) = git_bytes(repo, &["diff", "--name-only", "-z", &range]) else {
-        return Detection::Run;
+        return false;
     };
     let paths = nul_paths(&bytes);
-    if detection_needed(paths.iter().map(String::as_str)) {
-        return Detection::Run;
-    }
-    Detection::Skip(DetectionSkip::OutsideScope)
-}
-
-/// 撃ち直しの周の検出線の要否を読む材料（[`rerun_detection`]・追随と候補の木の段が組む）。
-pub(super) struct Rerun<'a> {
-    /// 対象 repo（面の diff を読む）。
-    pub(super) repo: &'a Path,
-    /// 便の base から動いた main の range（`(<便の base>, <新しい base>)`・面の判定）。
-    pub(super) moved: (&'a str, &'a str),
-}
-
-/// 撃ち直しの周の検出線の要否（**追随の撃ち直しと候補の木の各段が通す 1 関数**・設計 §30）。
-///
-/// 面の判定だけで決める（[`follow_detection`]・触れない周は `outside-scope`・触れた周と読めない周は
-/// [`Detection::Run`]＝毎回撃つ・前周の record の持ち越しは無い・設計 gate-cost.md §44 形 (8)）。
-pub(super) fn rerun_detection(rerun: &Rerun<'_>) -> Detection {
-    let (from, to) = rerun.moved;
-    follow_detection(rerun.repo, from, to)
+    !detection_needed(paths.iter().map(String::as_str))
 }
 
 /// stdout の判定行で「撃ち直しを省いて引き継いだ」を名乗る token（gate が撃った周には出ない）。
@@ -693,11 +669,11 @@ const REGATE_SKIPPED: &str = "regate=skipped";
 /// **record を書けない周は引き継がない**（`None`＝呼び手は従来どおり撃ち直す・fail-closed）。record を
 /// 先に書くのは、event だけが残って判定の根が無い形を作らないためである（event は「PASS だった」と
 /// 名乗る面で、撃ち直しが FAIL になり得る周にそれを先に置くと嘘が残る）。
-fn carry_gated_pass(entry: &Land<'_>, reason: DetectionSkip) -> Option<String> {
+fn carry_gated_pass(entry: &Land<'_>) -> Option<String> {
     let path = super::verify_log_path(entry.state_dir, entry.run);
     let written = std::fs::read_to_string(&path).ok()?;
     let number = next_number(written.lines().filter(|line| !line.trim().is_empty()).count());
-    let body = skip_record(number, Skipped::regate(reason));
+    let body = skip_record(number, Skipped::regate());
     append_line(&path, &body, entry.policy).ok()?;
     emit(
         entry.state_dir,
@@ -1008,7 +984,7 @@ mod tests {
     // flip-check: moved s2-07l.253
     // flip-check: moved s2-07l.457
     // flip-check: moved s2-07l.498
-    use super::super::gate::{next_number, skip_record, DetectionSkip, Skipped};
+    use super::super::gate::{next_number, skip_record, Skipped};
     use super::{
         detection_needed, landed_sha, squash_message, subject_of, trailer_key, Terminal, CONTRACT_TRAILER,
         REQUIREMENTS_TRAILER, SHA_PREFIX, SUBJECT_CHARS, TERMINAL_TOKENS,
@@ -1017,11 +993,12 @@ mod tests {
     use crate::fleet::{EventKind, Stage};
 
     // flip-check: retroactive s2-07l.222
-    /// `next_number` は record 数の次（1 始まり）で、検出線を省いた record を挟む 2 周分でも単調に増える。
+    // flip-check: retroactive s2-07l.607
+    /// `next_number` は record 数の次（1 始まり）で、主実測を省いた record を挟む 2 周分でも単調に増える。
     #[test]
     fn mutant_in_pipe_land_next_number_increases_across_two_rounds() {
         assert_eq!((0..4).map(next_number).collect::<Vec<u64>>(), vec![1, 2, 3, 4], "1 始まりの通し番号");
-        let skipped = Skipped::detection(DetectionSkip::SameTree, Some("tree"));
+        let skipped = Skipped::main("tree");
         for (len, n) in [(0, 1), (3, 4)] {
             let record = skip_record(next_number(len), skipped);
             assert!(record.contains(&format!("\"n\":{n}")), "{record}");

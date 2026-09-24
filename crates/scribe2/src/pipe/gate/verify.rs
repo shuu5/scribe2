@@ -41,11 +41,11 @@ pub enum Check {
 /// [`Check`] の全 variant。**この並びが適用順序である**。
 pub const CHECKS: &[Check] = &[Check::WriteSet, Check::Common, Check::Detection, Check::Contract];
 
-/// gate が撃つ段の列（[`CHECKS`] から ③ を除いた ①②④・宣言順のまま・設計 gate-cost.md §44 形 (9)）。
+/// gate・land の主実測・候補の木が撃つ段の列（[`CHECKS`] から ③ を除いた ①②④・宣言順のまま・設計 gate-cost.md
+/// §44 形 (9)）。
 ///
 /// ③ は着地後の検出の口だけが撃つ（[`run_detection_admitted`]）。部分集合を `&[Check]` の const で書かず関数で組むのは、
-/// 閉じた enum の const slice は全 variant を持つ形だけにするためである（xtask の enum-slices の門）。land の主実測と
-/// 候補の木は [`CHECKS`] のまま撃つ。
+/// 閉じた enum の const slice は全 variant を持つ形だけにするためである（xtask の enum-slices の門）。
 pub(super) fn gate_checks() -> Vec<Check> {
     CHECKS.iter().copied().filter(|check| *check != Check::Detection).collect()
 }
@@ -182,23 +182,24 @@ pub struct Checks<'a> {
     pub contract: &'a Contract,
     /// **便の写しの**共通 verify（repo / worktree の宣言は読み直さない）。
     pub common: &'a [String],
-    /// **便の写しの**検出線。land の main 実測は木が gate と同じ周に空を渡す（ADR-0021 §2.4）。
+    /// **便の写しの**検出線（撃つのは着地後の検出の口だけ・[`run_detection_admitted`]・段の列に ③ を持たない
+    /// [`run_checks_admitted`] は読まない）。
     pub detection: &'a [String],
     /// 器の健康の遮断器（倍率 2 本と待ちの上限・gate と land の主実測が同じ欄を埋める・設計 gate-cost.md §32 約束 9）。
     pub host: health::Breaker,
 }
 
-/// 全段を**順序どおり**に撃つ。
+/// ①②④ を**順序どおり**に撃つ（③ は撃たない・[`gate_checks`]・設計 gate-cost.md §44 形 (9)）。
 ///
 /// **gate も land もこの 1 本を通る**——2 本になると gate が通した行と main で撃った行の
 /// 意味が静かにずれる（行を撃つ実装を [`run_line_captured`] 1 本に保っているのと同じ理由）。
 pub fn run_checks(checks: &Checks<'_>) -> Vec<Step> {
-    run_checks_admitted(checks, CHECKS, None)
+    run_checks_admitted(checks, &gate_checks(), None)
 }
 
-/// `stages` の段を**順序どおり**に撃つ（受付を持つ形）。[`run_checks`] はこれの全段・受付なしの形である。
+/// `stages` の段を**順序どおり**に撃つ（受付を持つ形）。[`run_checks`] はこれの受付なしの形である。
 ///
-/// `stages` は [`CHECKS`] か gate の列（[`gate_checks`]・③ を除く）。`admit` が在る周だけ、`{jobs}` を持つ共通 verify の
+/// `stages` は gate の列（[`gate_checks`]・③ を除く）。`admit` が在る周だけ、`{jobs}` を持つ共通 verify の
 /// 行が host の受付を通る（設計 gate-cost.md §3.2・§3.3）。行を撃つ実装はこの 1 本のままである。
 ///
 /// どの行も 1 回だけ撃つ——検出線の rc 2 も撃ち直さない（設計 gate-cost.md §44 形 (6)・撃ち直すのは人が

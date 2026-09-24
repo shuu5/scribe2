@@ -3,7 +3,7 @@
 //! 判定の順と終端は親（[`super::gate`]）が持つ。
 
 use super::verify::{gate_checks, is_unreadable, recorded_rc, run_checks_admitted, Admit, Check, Checks, Step};
-use super::{Detection, DetectionSkip, Gate};
+use super::{DetectionSkip, Gate};
 use crate::fleet::json_lite::{self, Value};
 use crate::fleet::store::{append_line, read_all, LockPolicy};
 use crate::fleet::{Stage, SCHEMA};
@@ -136,16 +136,11 @@ pub(super) const USAGE_HEAD: &str = "confine-usage";
 /// 手で撃ち直して理由を取り直すことになる（実測 2026-09-10・`s2-07l.49`）。緑の行は
 /// 残さない——読む理由が無い出力で診断 file を埋めると、赤い行の見出しが埋もれる。
 ///
-/// **検出線（③）は撃たない**（段の列は [`gate_checks`] の ①②④・設計 gate-cost.md §44 形 (9)）: [`Detection::Run`] の周も
-/// 写しの検出線を渡さず、周ごとの写しの置き場も作らない（③ は着地後の検出の口だけが撃ち・写す）。追随の再 gate の
-/// [`Detection::Skip`]（設計 pipeline.md §30）は従来どおり ③ の位置に skip record を 1 本置く（[`records_of`]）。
+/// **検出線（③）は撃たない**（段の列は [`gate_checks`] の ①②④・設計 gate-cost.md §44 形 (9)）: 写しの検出線を渡さず、
+/// 周ごとの写しの置き場も作らず、③ の skip record も置かない（③ は着地後の検出の口だけが撃ち・写す）。
 pub(super) fn record_verify(entry: &Gate<'_>, worktree: &Path, base: &str) -> Result<Counted, String> {
     let frozen = frozen_copy(entry)?;
     let admit = Admit { state_dir: entry.state_dir, run: entry.run, rules: entry.limits.admission(entry.policy) };
-    let placed = match entry.detection {
-        Detection::Run => None,
-        Detection::Skip(reason) => Some(Skipped::detection(reason, None)),
-    };
     let checks = Checks {
         worktree,
         base,
@@ -166,7 +161,7 @@ pub(super) fn record_verify(entry: &Gate<'_>, worktree: &Path, base: &str) -> Re
     // ある（rc に依らず「測れなかった」・設計 gate-cost.md §4.2）。
     let unreadable = steps.iter().any(is_unreadable);
     let killed = steps.iter().find_map(box_kill);
-    for record in records_placed(&steps, placed, None) {
+    for record in records_of(&steps, None) {
         if let Some(step) = record.step {
             if step.is_closed() {
                 // 撃っていない行は赤でも診断の対象でもない（record だけ残す）。
@@ -289,7 +284,7 @@ const DETECTION_OUTPUTS: [&str; 2] = ["outcomes.json", "missed.txt"];
 
 /// 撃った検出線の判定行と出力を run dir の周ごとの置き場へ写す（設計 gate-cost.md §15 (1)(2)）。
 ///
-/// 撃たなかった周（[`super::Detection::Skip`]）は段が列に無いので**何も写さない**（撃っていない周の
+/// 撃たなかった周（面の外など）は段が列に無いので**何も写さない**（撃っていない周の
 /// 置き場を作ると、撃った 0 件の周と読み分けられない）。出力が 1 つも無い周は [`COPY_ABSENT_OUTPUT`] の
 /// marker を、判定行の無い周は [`COPY_ABSENT_LINE`] の 1 行を残す。
 ///
@@ -472,51 +467,48 @@ fn append_diagnosis(path: &Path, policy: LockPolicy, n: u64, step: &Step) -> Res
 
 /// 撃たなかった周の材料（record の `skipped=` の段と `reason=`、主実測だけが持つ `tree=`）。
 ///
-/// **構築は下の 3 つの口だけ**である（field は本 file に閉じる）——段と理由は別の軸で、
-/// 呼び手が任意の組を書けると `kind=detection skipped=regate` のような無い形が生まれる。
+/// **構築は下の 2 つの口だけ**である（field は本 file に閉じる）——段と理由は別の軸で、
+/// 呼び手が任意の組を書けると `kind=gate skipped=main` のような無い形が生まれる。
 #[derive(Debug, Clone, Copy)]
 pub struct Skipped<'a> {
     /// 省いた段。
     stage: SkippedStage,
-    /// 省いた理由。
-    reason: DetectionSkip,
+    /// 省いた理由（record の `reason=` の字面）。
+    reason: &'static str,
     /// land した木（主実測の record だけ・gate の再撃ちは木を持たない＝field を書かない）。
     tree: Option<&'a str>,
 }
 
 impl<'a> Skipped<'a> {
-    /// 検出線の段だけを省いた周（`kind=detection skipped=detection`・主実測は木を持つ）。
-    pub fn detection(reason: DetectionSkip, tree: Option<&'a str>) -> Self {
-        Self { stage: SkippedStage::Detection, reason, tree }
-    }
-
     /// 追随の再 gate を**丸ごと**省いて前周の判定を引き継いだ周（`kind=gate skipped=regate`・設計 §33）。
     ///
-    /// 木は持たない——撃っていないので「どの木を測ったか」が無い（`tree` を書くと測った形に読める）。
-    pub fn regate(reason: DetectionSkip) -> Self {
-        Self { stage: SkippedStage::Regate, reason, tree: None }
+    /// 理由は面の外（[`DetectionSkip::OutsideScope`]）だけで、木は持たない——撃っていないので「どの木を測ったか」が
+    /// 無い（`tree` を書くと測った形に読める）。
+    pub fn regate() -> Self {
+        Self { stage: SkippedStage::Regate, reason: DetectionSkip::OutsideScope.as_str(), tree: None }
     }
 
     /// land の主実測を**丸ごと**省いた周（`kind=main skipped=main reason=same-tree`・設計 gate-cost.md §27・
     /// ADR-0043 §2.2）: gate が判定した木と着地の木が同じ＝同じ木を同じ verify で撃ち直すだけなので撃たない。
     ///
-    /// 理由は木の一致だけ（[`DetectionSkip::SameTree`]・面の外は主実測の省略の理由にならない）で、木は
+    /// 理由は木の一致だけ（[`SAME_TREE`]・面の外は主実測の省略の理由にならない）で、木は
     /// **必ず取る**（`&str`・`Option` にしない）——「どの木を gate が測ったか」が無い skip record は
     /// 撃っていない緑と読み分けられない。
     pub fn main(tree: &'a str) -> Self {
-        Self { stage: SkippedStage::Main, reason: DetectionSkip::SameTree, tree: Some(tree) }
+        Self { stage: SkippedStage::Main, reason: SAME_TREE, tree: Some(tree) }
     }
 }
 
+/// 主実測を丸ごと省いた周の `reason=`（gate を撃った木と着地の木が同じ・設計 gate-cost.md §27）。
+const SAME_TREE: &str = "same-tree";
+
 /// 撃たなかったのはどの段か（record の `skipped=` と `kind=` の字面）。
 ///
-/// **理由（[`DetectionSkip`]）とは別の軸**である（run 2 の裁定 2026-09-16）——`outside-scope` は
-/// 検出線を省く周にも再 gate を省く周にも同じ意味で立つので、理由の enum に段を足すと
-/// 2 つの軸が 1 つの列に潰れる。値は 3 つで、本 file の外へは出ない。
+/// **理由（[`Skipped`] の `reason`）とは別の軸**である（run 2 の裁定 2026-09-16）——`outside-scope` は
+/// 再 gate を省く周にも着地後の検出が面の外で撃たない周にも同じ意味で立つので、理由の enum に段を足すと
+/// 2 つの軸が 1 つの列に潰れる。値は 2 つで、本 file の外へは出ない。
 #[derive(Debug, Clone, Copy)]
 enum SkippedStage {
-    /// 検出線の段（gate / 主実測の中の 1 行）。
-    Detection,
     /// 追随の再 gate 1 周（設計 §33 (i)）。
     Regate,
     /// land の主実測 1 周（設計 gate-cost.md §27・ADR-0043 §2.1）。
@@ -527,16 +519,14 @@ impl SkippedStage {
     /// record の `skipped=` の字面。
     fn as_str(self) -> &'static str {
         match self {
-            Self::Detection => "detection",
             Self::Regate => "regate",
             Self::Main => KIND_MAIN,
         }
     }
 
-    /// record の `kind=` の字面（段の名＝verify 行の kind か、gate 1 周 / 主実測 1 周そのものか）。
+    /// record の `kind=` の字面（gate 1 周 / 主実測 1 周そのもの）。
     fn kind(self) -> &'static str {
         match self {
-            Self::Detection => Check::Detection.as_str(),
             Self::Regate => KIND_GATE,
             Self::Main => KIND_MAIN,
         }
@@ -572,50 +562,25 @@ impl Record<'_> {
     }
 }
 
-/// 撃った段の record 列を組む（`verify.jsonl` と land の `verify-main.jsonl` が**同じ形・同じ位置**で書く）。
+/// 撃った段の record 列を組む（`verify.jsonl` と land の `verify-main.jsonl` が**同じ形**で書く）。
 ///
-/// 検出線を省いた周は、その段の位置（[`Check::Contract`] の直前・契約の行が無ければ末尾）に skip record を
-/// 1 本挟み、`n` は挟んだ record も含めて通しで振る（**撃たなかった事実を黙って落とさない**・設計 §30）。
+/// 段を丸ごと省いた周（主実測の [`Skipped::main`]）は末尾に skip record を 1 本置き、`n` は通しで振る
+/// （**撃たなかった事実を黙って落とさない**・設計 gate-cost.md §27）。
 pub fn records_of<'a>(steps: &'a [Step], skipped: Option<Skipped<'_>>) -> Vec<Record<'a>> {
-    records_placed(steps, skipped, None)
-}
-
-/// [`records_of`] の本体（置く record は skip・撃った検出線の record は純移動の周に落とした `+` 行の本数
-/// `pure_move` を持つ）。
-fn records_placed<'a>(steps: &'a [Step], placed: Option<Skipped<'_>>, pure_move: Option<usize>) -> Vec<Record<'a>> {
     let mut records: Vec<Record<'a>> = Vec::new();
-    let mut pending = placed;
     for step in steps {
-        if step.stage == Check::Contract {
-            if let Some(skip) = pending.take() {
-                let n = next_number(records.len());
-                records.push(Record { n, body: skip_record(n, skip), step: None });
-            }
-        }
         let n = next_number(records.len());
-        records.push(Record { n, body: marked_record(n, step, pure_move), step: Some(step) });
+        records.push(Record { n, body: step_record(n, step), step: Some(step) });
     }
-    if let Some(skip) = pending {
+    if let Some(skip) = skipped {
         let n = next_number(records.len());
         records.push(Record { n, body: skip_record(n, skip), step: None });
     }
     records
 }
 
-/// 純移動の周に撃った検出線の record が持つ、落とした `+` 行の本数の field（設計 gate-cost.md §14 約束 3）。
+/// 着地後の検出が純移動の周に撃った検出線の record が持つ、落とした `+` 行の本数の field（設計 gate-cost.md §14 約束 3）。
 const PURE_MOVE_FIELD: &str = "pure-move";
-
-/// 撃った 1 段の record（[`step_record`]）に、**検出線の段だけ**撃った周の `pure-move=` を足す（撃たなかった行と
-/// 要約にならない便は欠く）。
-fn marked_record(number: u64, step: &Step, pure_move: Option<usize>) -> String {
-    let mut fields = step_fields(number, step);
-    if step.stage == Check::Detection {
-        if let Some(dropped) = pure_move.filter(|_| !step.is_closed()) {
-            fields.push((PURE_MOVE_FIELD, Value::Num(u64::try_from(dropped).unwrap_or(u64::MAX))));
-        }
-    }
-    json_lite::write_object(&fields)
-}
 
 /// 既に積んだ record 数から次の `n`（1 始まり）。
 pub fn next_number(len: usize) -> u64 {
@@ -624,9 +589,8 @@ pub fn next_number(len: usize) -> u64 {
 
 /// 撃たなかった段の record（`kind=<段> skipped=<段> [tree=<sha>] reason=<理由>`・schema は 1 のまま）。
 ///
-/// 検出線を省いた周は `kind=detection skipped=detection`、追随の再 gate を省いて前周の判定を
-/// 引き継いだ周は `kind=gate skipped=regate`（設計 §33 (2)）、land の主実測を省いた周は
-/// `kind=main skipped=main`（設計 gate-cost.md §27）。どれも**撃たなかった事実を
+/// 追随の再 gate を省いて前周の判定を引き継いだ周は `kind=gate skipped=regate`（設計 §33 (2)）、land の主実測を
+/// 省いた周は `kind=main skipped=main`（設計 gate-cost.md §27）。どれも**撃たなかった事実を
 /// 黙って落とさない**ための 1 本で、読み手は `skipped=` の非空でまとめて拾える。
 pub fn skip_record(number: u64, skipped: Skipped<'_>) -> String {
     let mut fields = vec![
@@ -638,7 +602,7 @@ pub fn skip_record(number: u64, skipped: Skipped<'_>) -> String {
     if let Some(tree) = skipped.tree {
         fields.push(("tree", Value::Str(tree.to_owned())));
     }
-    fields.push(("reason", Value::Str(skipped.reason.as_str().to_owned())));
+    fields.push(("reason", Value::Str(skipped.reason.to_owned())));
     json_lite::write_object(&fields)
 }
 
@@ -699,7 +663,7 @@ pub fn landed_unfired_record(number: u64, mark: LandedMark<'_>, unfired: Unfired
     ];
     match unfired {
         Unfired::OutsideScope => {
-            fields.push(("skipped", Value::Str(SkippedStage::Detection.as_str().to_owned())));
+            fields.push(("skipped", Value::Str(Check::Detection.as_str().to_owned())));
             fields.push(("tree", Value::Str(mark.tree.to_owned())));
             fields.push(("reason", Value::Str(DetectionSkip::OutsideScope.as_str().to_owned())));
         }
@@ -728,7 +692,7 @@ pub fn step_record(number: u64, step: &Step) -> String {
     json_lite::write_object(&step_fields(number, step))
 }
 
-/// [`step_record`] の field の並び（[`marked_record`] が検出線の段の末尾に `pure-move` を足す）。
+/// [`step_record`] の field の並び（[`landed_step_record`] が検出線の段の末尾に `pure-move` を足す）。
 fn step_fields(number: u64, step: &Step) -> Vec<(&'static str, Value)> {
     let mut fields = vec![
         ("schema", Value::Num(SCHEMA)),

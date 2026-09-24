@@ -15,10 +15,10 @@
 // flip-check: moved s2-07l.457
 
 use super::super::declaration::Effective;
-use super::super::gate::{is_unreadable, records_of, run_checks, Checks, DetectionSkip, Skipped, Step};
+use super::super::gate::{is_unreadable, records_of, run_checks, Checks, Skipped, Step};
 use super::super::retire::verdict_field;
-use super::super::{emit, git_bytes, git_line, git_ok, worktrees_dir, Emit};
-use super::{broken, detection_needed, nul_paths, refused, AnchorSync, Land, MainCheck, MAIN_REF};
+use super::super::{emit, git_line, git_ok, worktrees_dir, Emit};
+use super::{broken, refused, AnchorSync, Land, MainCheck, MAIN_REF};
 use crate::cli_outcome::Outcome;
 use crate::fleet::store::append_line;
 use crate::fleet::{EventKind, Stage};
@@ -55,9 +55,8 @@ pub(super) fn verify_train_main(entry: &Land<'_>, new: &str, old: &str) -> MainC
 
 /// [`verify_main`] の本体（`base` が `Some` の周だけ材料の base を差し替える）。
 fn verify_main_from(entry: &Land<'_>, new: &str, base: Option<&str>) -> MainCheck {
-    let skipped = main_detection(entry, new);
-    if let Some((DetectionSkip::SameTree, tree)) = &skipped {
-        return match record_main(entry, &[], Some(Skipped::main(tree))) {
+    if let Some(tree) = same_tree(entry, new) {
+        return match record_main(entry, &[], Some(Skipped::main(&tree))) {
             Ok(()) => MainCheck::Green,
             Err(reason) => MainCheck::Unmeasurable(reason),
         };
@@ -73,7 +72,8 @@ fn verify_main_from(entry: &Land<'_>, new: &str, base: Option<&str>) -> MainChec
         // **ここで赤を名乗らない**: verify 行を 1 本も撃てていない。
         return MainCheck::Unmeasurable(format!("{} を切れない", tmp.display()));
     }
-    // **gate と同じ順序を同じ関数で撃つ**（write-set 照合 → 写しの共通 verify → 検出線 → 契約 verify）。
+    // **gate と同じ順序を同じ関数で撃つ**（write-set 照合 → 写しの共通 verify → 契約 verify・検出線は撃たない＝
+    // 着地後の検出の口だけ・設計 gate-cost.md §44 形 (9)）。
     // 材料が揃わない周は**赤を名乗らない**——読めなかったを落ちたに化けさせない。
     let materials = materials(entry);
     let (base, frozen) = match materials {
@@ -88,17 +88,14 @@ fn verify_main_from(entry: &Land<'_>, new: &str, base: Option<&str>) -> MainChec
         base: &base,
         contract: entry.contract,
         common: frozen.common_verify(),
-        detection: if skipped.is_some() { &[] } else { frozen.detection_verify() },
+        detection: &[],
         // gate と同じ遮断器を同じ `Limits` から通す（設計 gate-cost.md §32 約束 9）。
         host: entry.limits.breaker(),
     });
     // 成果は `new` に載っているので、この tmp だけは remove してよい（設計 §5.4）。
     // `--force` は verify が tmp に生んだ中間物ごと畳むためで、履歴・データは触らない。
     let _ = git_ok(entry.repo, &["worktree", "remove", "--force", &path]);
-    let record = skipped
-        .as_ref()
-        .map(|(reason, tree)| Skipped::detection(*reason, Some(tree.as_str())));
-    if let Err(reason) = record_main(entry, &steps, record) {
+    if let Err(reason) = record_main(entry, &steps, None) {
         return MainCheck::Unmeasurable(reason);
     }
     // 段①を読めなかった周（gate と**同じ 1 本の判定**・rc だけでは見ない）は**赤の集計より先に**
@@ -155,29 +152,18 @@ pub(super) const VERIFY_MAIN_FILE: &str = "verify-main.jsonl";
 /// gate の `verify.stderr.log` の対で、**機械は読まない**（人が「main の何の歯がどう赤いか」を読む）。
 pub(super) const VERIFY_MAIN_STDERR_FILE: &str = "verify-main.stderr.log";
 
-/// 主実測で何を省くか（省く周はその理由と land した木の sha・設計 §30 (ii)・ADR-0021 §2.4）。
+/// 主実測ごと省くか（省く周は land した木の sha・設計 gate-cost.md §27・ADR-0043 §2.1）。
 ///
-/// gate を撃った木（verdict の `tree`）と land した木が**同じ**なら `same-tree`（[`verify_main`] は主実測ごと省く・
-/// 設計 gate-cost.md §27）。違う周は
-/// `git diff-tree -r --name-only -z <gated> <landed>` の path を [`super::DETECTION_SCOPE`] と照らし、1 つも触れなければ
-/// `outside-scope`。`tree` の無い verdict（旧 gate）・読めない木・読めない diff はどれも `None`＝全段を撃つ側へ
-/// 倒す（省く側へ倒すと、測っていない検出線を main で通したことになる）。
-fn main_detection(entry: &Land<'_>, new: &str) -> Option<(DetectionSkip, String)> {
+/// gate を撃った木（verdict の `tree`）と land した木が**同じ**周だけ `Some`（[`verify_main`] は主実測ごと省く）。
+/// 木が違う周・`tree` の無い verdict（旧 gate）・読めない木はどれも `None`＝①②④ を撃つ側へ倒す（省く側へ倒すと、
+/// 測っていない木を main で通したことになる）。
+fn same_tree(entry: &Land<'_>, new: &str) -> Option<String> {
     let gated = verdict_field(entry.state_dir, entry.run, "tree")?;
     let landed = git_line(entry.repo, &["rev-parse", &format!("{new}^{{tree}}")])?;
-    if landed == gated {
-        return Some((DetectionSkip::SameTree, landed));
-    }
-    let bytes = git_bytes(entry.repo, &["diff-tree", "-r", "--name-only", "-z", &gated, &landed])?;
-    let paths = nul_paths(&bytes);
-    if detection_needed(paths.iter().map(String::as_str)) {
-        return None;
-    }
-    Some((DetectionSkip::OutsideScope, landed))
+    (landed == gated).then_some(landed)
 }
 
-/// main 実測の段を `verify-main.jsonl` へ逐条で残す。検出線を省いた周は、その段の位置に
-/// `skipped=detection tree=<sha> reason=<理由>` の record を 1 件置き、主実測ごと省いた周は段が空なので
+/// main 実測の段を `verify-main.jsonl` へ逐条で残す。主実測ごと省いた周は段が空なので
 /// `kind=main skipped=main` の record 1 件だけになる（**撃たなかった事実を黙って落とさない**・
 /// 形と位置は gate の `verify.jsonl` と同じ [`records_of`] の 1 本）。赤い行の stderr の写しは
 /// [`VERIFY_MAIN_STDERR_FILE`] へ gate と同じ書き口（`Record::diagnose`）で残す（設計 pipeline.md §35 (3)）。

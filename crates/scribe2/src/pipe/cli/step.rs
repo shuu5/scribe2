@@ -12,7 +12,7 @@ use crate::pipe::approve::{Approve, RC_BLOCKED};
 use crate::pipe::current;
 use crate::pipe::declaration::{self, Ceiling, CEILING_ROW, DENIED_ROW};
 use crate::pipe::follow::Runner;
-use crate::pipe::gate::{Detection, Gate, Limits};
+use crate::pipe::gate::{Gate, Limits};
 use crate::pipe::land::detection::Detect;
 use crate::pipe::land::{Land, Retire};
 use crate::pipe::lens_record::{self, LensSource};
@@ -289,7 +289,6 @@ pub(super) fn gate_run(args: &[String], id: &str, manifest: &Manifest, policy: L
         lens: &lens,
         pool: pool.as_ref(),
         limits,
-        detection: Detection::Run,
         policy,
     })
 }
