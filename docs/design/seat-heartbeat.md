@@ -81,7 +81,7 @@
   - (c) uninstall（install と同じ `--binary` / `--rules`）→ `disable --now` 1 回 → 2 file が `.retired/` に同じ bytes で在り元の場所に無い／印の無い file → `unit-foreign`・動かない／bytes 違い（導出し直した bytes と 1 byte 違う file）→ 断り・動かない／`--binary` を欠く → 使い方の誤り・動かない。
   - (d) doctor `--unit-dir` + `--binary`: install 後 `tick-unit=present`・撤去後 `absent`・印の無い file を置いて `foreign`・`--unit-dir` だけで `--binary` 無しは使い方の誤り・`--unit-dir` 無しは項目が無く既存の外形 snapshot（`seat_doctor_external_form`）が 1 byte も動かない（(d) の歯は `tests/e2e/seat.rs` に置き、`seat/` の sub-file は触らない）。
   - (e) 使い方の 1 行に `tick install …` / `tick uninstall …` が増え `seat_usage_external_form` が動く。
-  - lib（行 b の `+` の file の中・`seat_unit_` 接頭辞）: 導出の pure 関数の snapshot・印の判定（在る / 無い / bytes 違い）の 3 値。
+  - lib（行 b の `+` の file の中・`seat_unit_` 接頭辞）: 導出の pure 関数の出力を fixture の逐語との `assert_eq` で測る（insta の snapshot は使わない＝`crates/scribe2/src` に snapshot file は 0 のまま・dev-dependency は増えない）・印の判定（在る / 無い / bytes 違い）の 3 値。
 - write-set の注: 行 a が `+` で足す seat 配下の file は、行 a の着地前は base に無いので本行も `+` で宣言する。行 a の着地後に素の path へ直す（受付は着地済みの file の `+` を断る）。
 
 <!-- contracts:begin -->
