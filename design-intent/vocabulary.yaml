@@ -777,6 +777,16 @@ terms:
     definition: 台帳の open な契約のうち、 dispatcher が起動を待つものの並び。 入る条件・順序・待ちの理由・release で戻す範囲は SRS FR68 が定める (写さない)。 land の順序 (SRS FR50) とは別の実体。
     relationships: [dispatcher, 介入, 着地]
     flagged_ambiguities: ["列: 起動の列 (dispatcher・起動を待つ契約) と着地の列 (pipe/queue.rs・push の順序) は別義"]
+  - canonical: regate
+    domain: consumer
+    definition: gate の判定が FAIL の Gated の便を、 裁定の逐語つきで同じ worktree の Implemented へ 1 段戻す器の口 (pipe regate・SRS FR77・設計 docs/design/pipeline.md の節)。 戻された便を dispatcher が拾う条件は SRS FR68 が定める (写さない)。
+    relationships: [gate, dispatcher, 起動の列, 便, 所有者の印]
+    flagged_ambiguities: ["regate: 本項 (FAIL の Gated の便を Implemented へ戻す口・pipe regate) と追随の再 gate (land の追随で gate を撃ち直すこと・記録の skipped=regate) は別義"]
+  - canonical: 所有者の印
+    domain: consumer
+    aliases: [運転手の札]
+    definition: 便を運ぶ器の process (driver) が便の記録に置く所有の印。 無い・印の process が退役・印の process が生きている・在るのに読めない、 の 4 値で読み、 dispatcher の再開の候補の判定と regate の受付が読む (SRS FR68 / FR77・設計 docs/design/dispatcher.md)。 設計 doc の「運転手の札」は同じ実体。
+    relationships: [dispatcher, regate, 便]
   - canonical: 受付
     domain: consumer
     aliases: [contract intake]
