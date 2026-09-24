@@ -63,6 +63,7 @@ pub(crate) const REFUSALS: &[&str] = &[
     "promised-field-written",
     "promise-symbol-unresolved",
     "max-live",
+    "entrance-not-red",
 ];
 
 /// 契約 file が読めた後の、契約単位の拒否理由。**新しい理由は variant を 1 つ足す**（憲法 C2）。
@@ -221,6 +222,14 @@ pub(crate) enum Refuse {
         /// rules 行の値（本）。
         cap: u64,
     },
+    /// 宣言が `entrance-flip = "deny"` を名乗り、契約の nextest の検証行を base の木で撃った結果に base で緑か測れない行が
+    /// 1 本以上在る（設計 pipeline.md §56 形 6・ADR-0059・受付だけが撃つ）。
+    EntranceNotRed {
+        /// base で緑か測れない行の本数。
+        count: u64,
+        /// 契約の検証行ごとの 4 値の語（検証行の順）。
+        values: Vec<String>,
+    },
 }
 
 impl Refuse {
@@ -249,6 +258,7 @@ impl Refuse {
             Self::PromisedFieldWritten { .. } => "promised-field-written",
             Self::PromiseSymbolUnresolved { .. } => "promise-symbol-unresolved",
             Self::MaxLive { .. } => "max-live",
+            Self::EntranceNotRed { .. } => "entrance-not-red",
         }
     }
 
@@ -318,6 +328,9 @@ impl Refuse {
             },
             // stderr の 1 行は `pipe: max-live live=<n> cap=<c>`（設計 gate-cost.md §24・名と 2 値だけ）。
             Self::MaxLive { live, cap } => format!("{} live={live} cap={cap}", self.as_str()),
+            Self::EntranceNotRed { count, ref values } => {
+                format!("{} base で緑か測れない契約の検証行が {count} 本在る（deny の名乗り・行ごと {}）", self.as_str(), values.join(","))
+            }
         }
     }
 
@@ -344,7 +357,8 @@ impl Refuse {
             | Self::FindingUnaddressed { .. }
             | Self::PromisedFieldWritten { .. }
             | Self::PromiseSymbolUnresolved { .. }
-            | Self::MaxLive { .. } => RC_REFUSED,
+            | Self::MaxLive { .. }
+            | Self::EntranceNotRed { .. } => RC_REFUSED,
             Self::WriteSetUnreadable { .. } => RC_BROKEN,
             Self::ContractTable(ref found) => found.rc(),
         }
@@ -507,6 +521,7 @@ mod tests {
             Refuse::PromisedFieldWritten { row: "ag".to_owned(), fields: vec!["write-set".to_owned(), "done".to_owned()] },
             Refuse::PromiseSymbolUnresolved { of: "ag".to_owned(), n: 2, name: "+Refuse::Fresh".to_owned() },
             Refuse::MaxLive { live: 3, cap: 2 },
+            Refuse::EntranceNotRed { count: 1, values: vec!["green-on-base".to_owned(), "absent".to_owned()] },
         ]
     }
 
@@ -628,12 +643,15 @@ mod tests {
         assert_eq!(names.get(2).copied(), Some("write-set-overlap"), "{names:?}");
         assert_eq!(names.get(3).copied(), Some("write-set-unreadable"), "{names:?}");
         // 約束の行の 2 理由（設計 contract-source.md §33・`s2-07l.512`）が同時本数の上限（gate-cost.md §24・`s2-07l.398`）の
-        // 手前に並び、母集団は 22 値。
-        assert_eq!(REFUSALS.len(), 22, "母集団 22 値");
+        // 手前に並び、base の木で撃った入口の断り（pipeline.md §56・`s2-07l.557`）が末尾で、母集団は 23 値。
+        assert_eq!(REFUSALS.len(), 23, "母集団 23 値");
         assert_eq!(
-            names.iter().rev().take(3).copied().collect::<Vec<&str>>(),
-            ["max-live", "promise-symbol-unresolved", "promised-field-written"]
+            names.iter().rev().take(4).copied().collect::<Vec<&str>>(),
+            ["entrance-not-red", "max-live", "promise-symbol-unresolved", "promised-field-written"]
         );
+        let entrance = samples().get(22).map(|found| (found.reason(), found.rc()));
+        let want = "entrance-not-red base で緑か測れない契約の検証行が 1 本在る（deny の名乗り・行ごと green-on-base,absent）".to_owned();
+        assert_eq!(entrance, Some((want, RC_REFUSED)), "本数と行ごとの 4 値を名乗る 1 行・rc 1");
         let cap = samples().get(21).map(|found| (found.reason(), found.rc()));
         assert_eq!(cap, Some(("max-live live=3 cap=2".to_owned(), RC_REFUSED)), "名と live / cap の 2 値だけの 1 行・rc 1");
         let found = samples();

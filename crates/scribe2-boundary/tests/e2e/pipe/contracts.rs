@@ -271,6 +271,31 @@ fn contract_check_entrance_unmeasured_is_named_on_the_judgement_line() {
     clean(&[&declared, &plain, &unnamed, &clash, &wrong]);
 }
 
+/// (a) 名乗りの 3 語（設計 pipeline.md §56 形 1・行 ay・`s2-07l.557`）: `cargo` の 2 行だけで `detect` / `deny` を名乗る宣言の
+/// repo は rc 0 で判定行が `entrance=detect` / `entrance=deny` の欄を持つ（語をそのまま写す）。同じ宣言に入口の flip の行を足すと
+/// `UnmeasuredWithEntranceFlip` で断られ、理由の 1 行は語の字面（`unmeasured` / `detect` / `deny`）を持たない。
+#[test]
+fn contract_check_entrance_word_detect_and_deny_are_named_and_clash_without_the_word() {
+    let doc = table_doc(&table_region(&[table_row("a", &[])]));
+    let cargo = "schema = 1\nallowed-commands = [\"cargo\", \"git\"]\ncommon-verify = [\"cargo nextest run\", \"cargo clippy --all-targets\"]\n";
+    let flip = "schema = 1\nallowed-commands = [\"cargo\"]\ncommon-verify = [\"cargo xtask flip-check --base {base}\", \"cargo nextest run\"]\n";
+    for word in ["detect", "deny"] {
+        let named = table_repo(&doc, &[(".vessel.toml", &format!("{cargo}entrance-flip = \"{word}\"\n"))]);
+        let out = contracts_check(&named);
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{word} の宣言は通る: {}{}", stdout_of(&out), stderr_of(&out));
+        let want = format!("contracts check: docs=1 rows=1 untracked=0 findings=0 entrance={word} place-out=0/1");
+        assert_eq!(stdout_of(&out).lines().last(), Some(want.as_str()), "語をそのまま写す");
+        let clash = table_repo(&doc, &[(".vessel.toml", &format!("{flip}entrance-flip = \"{word}\"\n"))]);
+        let clashed = contracts_check(&clash);
+        let err = stderr_of(&clashed);
+        assert_eq!(clashed.status.code(), Some(i32::from(RC_BROKEN)), "{word} と flip の行の同居は断る: {err}");
+        let reason: Vec<&str> = err.lines().filter(|line| line.contains("UnmeasuredWithEntranceFlip")).collect();
+        assert_eq!(reason.len(), 1, "矛盾を 1 行: {err}");
+        assert!(reason.iter().all(|line| ["unmeasured", "detect", "deny"].iter().all(|found| !line.contains(found))), "{reason:?}");
+        clean(&[&named, &clash]);
+    }
+}
+
 /// 使い方の誤りは rc 1（stderr に理由）・git repo でない `--repo` は判定できないので rc 2（判定行を出さない）。
 #[test]
 fn contract_check_refuses_usage_errors_and_non_repositories() {

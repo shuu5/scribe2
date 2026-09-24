@@ -29,6 +29,7 @@
 //! の本数続き契約 file と節の本文がともに不変の周を `same-kind-repeated` で、直前の便の指摘（`at`）に対応する差分の無い
 //! 周を `finding-unaddressed` で断る。どちらも run dir も event も作らず、write-set の弁別の後・余地と交差の前に撃つ。
 
+use super::base_run::{self, BaseRun, Early};
 use super::{broken, flag, int_row, list_row, live, need, refused, repo_flag, repo_of, state_dir_of, REPO_FLAG};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
 use crate::fleet::store::{self, LockPolicy, StoreError};
@@ -38,7 +39,7 @@ use crate::hook::host_guard::WORD_ROWS;
 use crate::name::NAME;
 use crate::pipe::closure::{self, ClosureError, Source};
 use crate::pipe::contract::{Contract, ContractError, CLASS_ROW};
-use crate::pipe::declaration::{self, Ceiling, Effective, NewFilePolicy, WriteSetItem, CEILING_ROW, DENIED_ROW};
+use crate::pipe::declaration::{self, Ceiling, Effective, EntranceFlip, NewFilePolicy, WriteSetItem, CEILING_ROW, DENIED_ROW};
 use crate::pipe::refuse::{overlaps, Refuse, DELETE_FILE, NEW_FILE, PLACE_ONLY_FILE, SHRINK_FILE};
 use crate::pipe::review::{self, FindingKind, Judgement, ROW_SAME_KIND_STOP};
 use crate::pipe::table::{self, ContractRow, TableError};
@@ -102,6 +103,8 @@ struct Intaken {
     id: String,
     /// write-set の弁別と本数（設計 pointer を持たない契約は `None`＝従来の形）。
     write_set: Option<(WriteSet, usize)>,
+    /// base の木で撃った周の欄（[`BaseRun::fact`]・名乗りの無い周は `None`＝1 行は従来の形・§56 形 5）。
+    entrance: Option<String>,
 }
 
 /// 契約 file を読み込み、置き場へ写して run を起こし、**直後に審査の段を通す**（FR49・設計 contract-source.md
@@ -113,6 +116,9 @@ pub(super) fn intake(args: &[String], manifest: &Manifest, policy: LockPolicy) -
             let mut line = intake_line(args, &found.id);
             if let Some((kind, files)) = found.write_set {
                 line.push_str(&format!(" write-set={} files={files}", kind.as_str()));
+            }
+            if let Some(fact) = found.entrance {
+                line.push_str(&format!(" {fact}"));
             }
             let mut reviewed = super::step::review_run(args, &found.id, manifest, policy);
             reviewed.out.insert(0, line);
@@ -146,21 +152,34 @@ fn intake_run(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Resul
     let (pointer, bead, repo) = read_args(args).map_err(|denial| denial.outcome)?;
     // repo は spawn まで使わないが、**intake の時点で** git repo かを確かめる（judge も先頭で同じ検査を撃つが、intake は
     // 置き場と行を読む前に断る＝従来の順）。後段で初めて落ちると、契約は受理されたのに進めない run が残る。
-    if super::head_of(&repo).is_none() {
+    // HEAD の sha は名乗りに依らず材料の読みの前に読む（base の木で撃った後に読み直して比べる・§56 形 2）。
+    let Some(sha) = super::head_of(&repo) else {
         return Err(not_a_repo(&repo).outcome);
-    }
+    };
     let state_dir = state_dir_of(args).map_err(refused)?;
+    // 上限・材料（設計 dispatcher.md §5 の 1 回）・行の生成と表の検査・freeze は**入口の lock の前**に 1 周に 1 回
+    // （§56 形 2・base の木の実走の長さで入口を塞がない）。lock の中の judge は freeze の結果を借りる。
+    let ceiling = ceiling_of(manifest).map_err(|denial| denial.outcome)?;
+    let materials = Materials::read(&repo, &ceiling.borrow()).map_err(|denial| denial.outcome)?;
+    let (contract, body) = generated(&repo, &pointer, &materials).map_err(|denial| denial.outcome)?;
+    let early = early(&repo, manifest, &contract, Some(&state_dir), &sha);
     // **入口の排他はここから**（ADR-0019 §2.1・設計 pipeline-conflict.md §2）: [`judge`] と [`create`] を
     // 1 つの周として閉じる。持たないと、同時に来た 2 つの受付がどちらも「live な便は無い」と読んでから
     // 両方が run を作る（`s2-07l.366` の実測: 契機を同時に 2 回撃つと 20 回に 1 回 2 本作られた）。
     let _entrance = Entrance::hold(&state_dir, policy)?;
-    let ceiling = ceiling_of(manifest).map_err(|denial| denial.outcome)?;
-    // **repo の材料の読みは 1 回**（設計 dispatcher.md §5）。生成も判定も同じ 1 つを借りる。
-    let materials = Materials::read(&repo, &ceiling.borrow()).map_err(|denial| denial.outcome)?;
-    let (contract, body) = generated(&repo, &pointer, &materials).map_err(|denial| denial.outcome)?;
-    let material =
-        Material { repo: &repo, manifest, contract: &contract, state_dir: Some(&state_dir), bead: &bead, materials: &materials };
+    let material = Material {
+        repo: &repo, manifest, contract: &contract, state_dir: Some(&state_dir), bead: &bead, materials: &materials,
+        early: Some(&early),
+    };
     create(judge(&material), &material, &state_dir, &body, policy)
+}
+
+/// lock の前の 1 回の読み（§56 形 2 / 3）: freeze を撃ち、宣言が `detect` / `deny` を名乗る周だけ契約の検証行を base の木で撃つ。
+pub(super) fn early(repo: &Path, manifest: &Manifest, contract: &Contract, state_dir: Option<&Path>, sha: &str) -> Early {
+    let frozen = freeze(repo, manifest, contract);
+    let fires = frozen.as_ref().is_ok_and(|(_, named)| named.is_some_and(EntranceFlip::fires_on_base));
+    let base = fires.then(|| base_run::run(repo, state_dir, sha, &contract.verify, manifest));
+    Early { frozen, base }
 }
 
 /// 受付の入口の lock file の名（置き場の直下・**run dir の側に置かない**）。
@@ -533,6 +552,7 @@ fn not_a_repo(repo: &Path) -> Denial {
 
 /// 判定関数 1 本の断り（**先頭の 1 件が理由**・後続行は stderr に並ぶ・§21）。intake は [`Self::outcome`] で従来どおりの
 /// rc と stderr で断り、preflight は [`Self::name`] と理由を `refuse=` の行に写す。
+#[derive(Clone)]
 pub(in crate::pipe) struct Denial {
     /// 理由の名（[`Refuse::as_str`]・[`Refuse`] を持たない断り〔宣言の写し / rules 行 / 置き場の読み〕は材料の名）。
     pub(in crate::pipe) name: &'static str,
@@ -571,6 +591,8 @@ pub(in crate::pipe) struct Material<'a> {
     pub(in crate::pipe) materials: &'a Materials,
     /// 契約の bead id（この秒の run id の材料）。
     pub(in crate::pipe) bead: &'a str,
+    /// lock の前に撃った freeze と base の木の実走（§56 形 2・`None` = 列の候補＝judge が freeze を撃ち base は撃たない）。
+    pub(in crate::pipe) early: Option<&'a Early>,
 }
 
 /// [`judge`] の結果: 事実（§21 の 1 行 1 事実の材料・関数が Err の周はその関数の事実が無い）と断りの列（判定関数 1 本
@@ -602,7 +624,7 @@ pub(in crate::pipe) struct Judged {
 /// （Declared 行は元々置き換えが無い＝前段と後段の断りが同時に載る）。git repo でない対象は他の関数が撃てないので
 /// `not-a-repo` の 1 件で止まる。
 pub(in crate::pipe) fn judge(material: &Material<'_>) -> Judged {
-    let Material { repo, manifest, contract, state_dir, bead, materials } = *material;
+    let Material { repo, manifest, contract, state_dir, bead, materials, early } = *material;
     let mut judged = Judged {
         design: None,
         write_set: None,
@@ -622,9 +644,9 @@ pub(in crate::pipe) fn judge(material: &Material<'_>) -> Judged {
     }
     let tracked = materials.tracked.as_slice();
     // **宣言は上限と突き合わせてから**。ここで断つ周は run dir も event も作らない
-    // ——撃てない契約の run が置き場に残ると、続きから引ける便に見えてしまう。
-    match freeze(repo, manifest, contract) {
-        Ok(found) => judged.effective = Some(found),
+    // ——撃てない契約の run が置き場に残ると、続きから引ける便に見えてしまう。lock の前に撃った周は結果を借りる（§56 形 2）。
+    match early.map_or_else(|| freeze(repo, manifest, contract), |found| found.frozen.clone()) {
+        Ok((found, _)) => judged.effective = Some(found),
         Err(denial) => judged.denials.push(denial),
     }
     // **write-set の弁別は余地と交差より前**（導出値が write-set になる周は、その導出値で余地と交差を測る）。
@@ -647,6 +669,9 @@ pub(in crate::pipe) fn judge(material: &Material<'_>) -> Judged {
     match exclude_cap_shortfall(manifest, &measured, materials) {
         Ok(found) => judged.headroom = Some(found),
         Err(denial) => judged.denials.push(denial),
+    }
+    if let Some(denial) = exclude_entrance_not_red(early) {
+        judged.denials.push(denial);
     }
     let Some(state_dir) = state_dir else {
         return judged;
@@ -671,6 +696,14 @@ pub(in crate::pipe) fn judge(material: &Material<'_>) -> Judged {
     judged
 }
 
+/// `deny` の名乗りで base の木で撃った結果に base で緑か測れない行が 1 本以上在る周の断り（§56 形 6・余地の判定の後・置き場の
+/// 要る判定の前）。結果を持たない judge（列の候補）と他の名乗りは立てない。
+fn exclude_entrance_not_red(early: Option<&Early>) -> Option<Denial> {
+    let base = early.and_then(Early::denying)?;
+    let count = base.not_red();
+    (count > 0).then(|| refuse(&Refuse::EntranceNotRed { count, values: base.values() }, &[]))
+}
+
 /// 便を作る（run dir・写し・event）。judge の断りが 1 件でも在れば**先頭の 1 件**で断り、何も書かない（従来の外形）。
 fn create(
     judged: Judged,
@@ -690,6 +723,10 @@ fn create(
     write_contract(state_dir, &id, body, derived.as_deref()).map_err(broken)?;
     copy_vessel(state_dir, &id, &effective).map_err(broken)?;
     remember_repo(state_dir, &id, material.repo).map_err(broken)?;
+    let base = material.early.and_then(|found| found.base.as_ref());
+    if let Some(found) = base {
+        found.write(&run_dir(state_dir, &id)).map_err(broken)?;
+    }
     let emitted = emit(
         state_dir,
         &Emit {
@@ -705,7 +742,7 @@ fn create(
     );
     match emitted {
         Err(err) => Err(broken(err.to_string())),
-        Ok(()) => Ok(Intaken { id, write_set }),
+        Ok(()) => Ok(Intaken { id, write_set, entrance: base.map(BaseRun::fact) }),
     }
 }
 
@@ -1234,10 +1271,10 @@ fn refuse(found: &Refuse, extra: &[String]) -> Denial {
 /// 対象 repo の HEAD から vessel 宣言を読み、器の上限と突き合わせて有効値にする。
 ///
 /// **外れは rc 1**（前提違反）で、宣言が読めない周も同じ極性である——「宣言が無い」と
-/// 「宣言が壊れている」で扱いを変えると、器の視野の外の verify 行が片方から入る。
-fn freeze(repo: &Path, manifest: &Manifest, contract: &Contract) -> Result<Effective, Denial> {
+/// 「宣言が壊れている」で扱いを変えると、器の視野の外の verify 行が片方から入る。有効値に宣言の名乗りを添える（§56 形 2）。
+fn freeze(repo: &Path, manifest: &Manifest, contract: &Contract) -> Result<(Effective, Option<EntranceFlip>), Denial> {
     let rows = ceiling_of(manifest)?;
-    declaration::measure(repo, &rows.borrow(), &contract.verify).map_err(|errors| {
+    declaration::measure_named(repo, &rows.borrow(), &contract.verify).map_err(|errors| {
         denied(DENIAL_DECLARATION, Outcome::failed(RC_REFUSED, errors.iter().map(ToString::to_string).collect()))
     })
 }

@@ -11,11 +11,13 @@
 //! および再輸出の shim だけを持つ（`pipe/cli/` は subcommand と helper の責務ごとに 1 file・設計 §5）。引数と規則の
 //! 行の helper は [`args`]、便の状態の helper は [`state`]、表示は [`show`]、再開は [`resume`]（`s2-07l.349` の
 //! 純移動）。受付は [`intake`]、段の手は [`step`]、起動と連鎖は [`run`]（`s2-07l.295` の純移動）、受付と同じ判定を
-//! run を作らず撃つ口は [`preflight`]（契約表の行 u・contract-source.md §21）。外から呼ぶ path
+//! run を作らず撃つ口は [`preflight`]（契約表の行 u・contract-source.md §21）、名乗った消費側の契約の検証行を受付で base の
+//! 木でも撃つ口は [`base_run`]（契約表の行 ay・pipeline.md §56）。外から呼ぶ path
 //! は本 file の再輸出で不変（子 module は helper を `super::` で引き、兄弟 module を `super::approve` /
 //! `super::gate` / `super::land` の path で呼ぶので、その名は本 file の `use` が親として持つ）。
 
 mod args;
+mod base_run;
 mod intake;
 mod preflight;
 mod resume;

@@ -147,6 +147,7 @@ fn blocker(
     }
     // 余地は受付の判定をそのまま撃つ。置き場は渡さない——交差は上で [`crossings`] が測り済みで、
     // 同じ周に 2 度測ると store を 2 度読むだけになる（重複 run の検査も run を作らない列には要らない）。
+    // lock の前の読みは渡さない＝judge が freeze を撃ち、base の木は撃たない（入口の断りは立てない・設計 pipeline.md §56 形 7）。
     let material = Material {
         repo: input.repo,
         manifest: input.manifest,
@@ -154,6 +155,7 @@ fn blocker(
         state_dir: None,
         bead: "",
         materials: room.materials,
+        early: None,
     };
     if let Some(denial) = judge(&material).denials.first() {
         return Some(WaitReason::Admission { reason: denial.name });

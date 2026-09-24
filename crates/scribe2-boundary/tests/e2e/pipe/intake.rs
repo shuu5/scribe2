@@ -2212,3 +2212,197 @@ fn class_derive_rules_without_a_usable_class_row_are_refused_by_check_and_intake
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "行が揃えば受理: {}", stderr_of(&out));
     clean(&[&repo, &state]);
 }
+
+// ───── 名乗った消費側の契約の検証行を受付で base の木でも撃つ（設計 pipeline.md §56・行 ay・`s2-07l.557`・接頭辞 `pipe_intake_base_run_`） ─────
+//
+// 偽の cargo（最後の引数＝filter 語ごとに決めた rc を返し、cwd と引数を記録 file に 1 行ずつ書く shim）を道具箱の PATH の
+// 前に積み、既存の `run_pipe_with_path` で撃つ。契約の行は Declared 行で、検証行は nextest の 2 本（`derive_` / `other_`）。
+
+/// base の木で撃つ契約の行の設計 pointer。
+pub(super) const BASE_RUN_DESIGN: &str = "docs/design/toy.md#t";
+
+/// 契約の検証行（nextest の 2 行・どちらも `--no-tests=fail` を持つ・`-p` だけで `--test` を持たない＝読み切れず撃つ側）。
+const BASE_RUN_VERIFY: &str =
+    "[\"cargo nextest run -p toy --no-tests=fail derive_\", \"cargo nextest run -p toy --no-tests=fail other_\"]";
+
+/// 行の write-set（2 行の歯の file を全部持つ＝Declared 行の歯の置き場の門を通る）。
+const BASE_RUN_WRITE_SET: &str = "[\"crates/toy/src/other.rs\", \"crates/toy/tests/e2e.rs\", \"crates/toy/tests/helper.rs\"]";
+
+/// 名乗りの語 `word`（`None` は key を持たない）の宣言と、行 `t` を持つ導出の toy repo と置き場。
+pub(super) fn base_run_repo(word: Option<&str>) -> (PathBuf, PathBuf) {
+    let named = word.map(|found| format!("entrance-flip = \"{found}\"\n")).unwrap_or_default();
+    let vessel = format!("schema = 1\nallowed-commands = [\"git\", \"sh\", \"cargo\"]\ncommon-verify = [\"git status\"]\n{named}");
+    let row = table_row("t", &[("write-set", BASE_RUN_WRITE_SET), ("verify", BASE_RUN_VERIFY)]);
+    derive_repo_with(&table_doc(&table_region(&[row])), &[(".vessel.toml", &vessel)])
+}
+
+/// 偽の cargo を置き場の隣の `name` の dir に書き、(PATH の値, 記録 file) を返す。`cases` は filter 語と sh の本文の対で、
+/// 当たらない語は rc 101。PATH は偽の cargo の dir を道具箱（`crate::toolbox_path`）の前に積む。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+pub(super) fn fake_cargo(state: &Path, name: &str, cases: &[(&str, &str)]) -> (String, PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = state.parent().expect("置き場は tmp の 1 段下").join(name);
+    fs::create_dir_all(&dir).expect("偽の cargo の dir を作れる");
+    let log = dir.join("calls.log");
+    let arms: Vec<String> = cases.iter().map(|(filter, body)| format!("{filter}) {body};;")).collect();
+    let script = format!(
+        "#!/bin/sh\nprintf '%s %s\\n' \"$(pwd -P)\" \"$*\" >> '{}'\nfor __a in \"$@\"; do __last=$__a; done\ncase \"$__last\" in\n{}\nesac\nexit 101\n",
+        log.display(),
+        arms.join("\n")
+    );
+    let cargo = dir.join("cargo");
+    fs::write(&cargo, script).expect("偽の cargo を書ける");
+    fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).expect("偽の cargo に実行権を付ける");
+    (format!("{}:{}", dir.display(), crate::toolbox_path(state)), log)
+}
+
+/// 偽の cargo の記録（1 起動 1 行・`<cwd> <引数>`・file が無ければ空＝1 度も撃たれていない）。
+pub(super) fn cargo_calls(log: &Path) -> Vec<String> {
+    fs::read_to_string(log).unwrap_or_default().lines().map(str::to_owned).collect()
+}
+
+/// PATH を差し替えて行 `t` の受付を 1 回撃つ（審査の lens は偽 PASS）。
+fn intake_on(repo: &Path, state: &Path, path: &str, bead: &str) -> Output {
+    let (rules, lens) = (ceiling_rules(state), review_lens_pass(state));
+    let (repo, state) = (repo.display().to_string(), state.display().to_string());
+    run_pipe_with_path(path, &[
+        "intake", "--design", BASE_RUN_DESIGN, "--bead", bead, "--repo", &repo, "--state-dir", &state, "--rules", &rules, "--lens", &lens,
+    ])
+}
+
+/// PATH を差し替えて行 `t` の preflight を 1 回撃つ（`--state-dir` は `with_state_dir` の周だけ）。
+fn preflight_on(repo: &Path, state: &Path, path: &str, with_state_dir: bool) -> Output {
+    let (rules, repo, dir) = (ceiling_rules(state), repo.display().to_string(), state.display().to_string());
+    let mut args = vec!["preflight", "--design", BASE_RUN_DESIGN, "--bead", "s2-t", "--repo", repo.as_str(), "--rules", rules.as_str()];
+    if with_state_dir {
+        args.extend(["--state-dir", dir.as_str()]);
+    }
+    run_pipe_with_path(path, &args)
+}
+
+/// 置き場の直下に残った一時の木（`base-run-` で始まる entry）。
+fn leftover_trees(state: &Path) -> Vec<String> {
+    dir_names(state).into_iter().filter(|name| name.starts_with("base-run-")).collect()
+}
+
+/// (d) 形 3・5・6: `deny` の repo で偽の cargo が 1 行目に 0・2 行目に 4 を返すと受付は rc 1 で `entrance-not-red` を名指し、
+/// run dir も event も 0。偽の cargo は 2 行とも対象 repo でなく置き場の直下の一時の木で撃たれ、受付の後に木も worktree の
+/// 登録も残らない。2 行とも 4 なら受付を通り、1 行が `entrance=green-on-base:0/2` を持つ。
+#[test]
+fn pipe_intake_base_run_deny_refuses_a_green_line_and_leaves_no_tree() {
+    let (repo, state) = base_run_repo(Some("deny"));
+    let (path, log) = fake_cargo(&state, "cargo-green", &[("derive_", "exit 0"), ("other_", "exit 4")]);
+    let out = intake_on(&repo, &state, &path, "s2-deny");
+    let err = stderr_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "base で緑の行が在る deny は rc 1: {err}");
+    assert!(err.starts_with("pipe: entrance-not-red ") && err.contains("1 本") && err.contains("green-on-base,absent"), "{err}");
+    assert_eq!((run_dirs(&state).len(), event_count(&state)), (0, 0), "run dir も event も作らない");
+    let calls = cargo_calls(&log);
+    assert_eq!(calls.len(), 2, "2 行を 1 回ずつ撃つ: {calls:?}");
+    let place = format!("{}/base-run-", state.display());
+    assert!(calls.iter().all(|call| call.starts_with(&place) && !call.starts_with(&format!("{} ", repo.display()))), "{calls:?}");
+    assert_eq!((worktree_count(&repo), leftover_trees(&state)), (1, Vec::new()), "一時の木も登録も残らない");
+    let (path, _) = fake_cargo(&state, "cargo-absent", &[("derive_", "exit 4"), ("other_", "exit 4")]);
+    let passed = intake_on(&repo, &state, &path, "s2-deny");
+    assert_eq!(passed.status.code(), Some(i32::from(RC_OK)), "2 行とも不在なら通る: {}", stderr_of(&passed));
+    let line = stdout_of(&passed).lines().next().unwrap_or_default().to_owned();
+    assert!(line.ends_with(" entrance=green-on-base:0/2"), "1 行が本数を持ち測れない欄を持たない: {line}");
+    clean(&[&repo, &state]);
+}
+
+/// (d) 形 5・6 の preflight: 同じ 1 行目 0 の repo で `entrance=` の行と `refuse=entrance-not-red:` の行を並べて rc 1（run dir も
+/// event も作らない）。置き場を解けない周は撃たずに全行が測れない（偽の cargo の記録が増えない）。
+#[test]
+fn pipe_intake_base_run_preflight_lists_the_fact_and_the_refusal() {
+    let (repo, state) = base_run_repo(Some("deny"));
+    let (path, log) = fake_cargo(&state, "cargo-green", &[("derive_", "exit 0"), ("other_", "exit 4")]);
+    let out = preflight_on(&repo, &state, &path, true);
+    let text = stdout_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{text}{}", stderr_of(&out));
+    assert_eq!(fact_lines(&out, "entrance="), ["entrance=green-on-base:1/2"], "{text}");
+    let refuses = fact_lines(&out, "refuse=");
+    assert!(refuses.len() == 1 && refuses.iter().all(|line| line.starts_with("refuse=entrance-not-red:")), "{text}");
+    assert_eq!(tail_line(&out), "preflight: refused n=1", "{text}");
+    assert_eq!((run_dirs(&state).len(), event_count(&state), cargo_calls(&log).len()), (0, 0, 2), "{text}");
+    git(&repo, &["config", "--unset", &format!("{NAME}.stateDir")]);
+    let bare = preflight_on(&repo, &state, &path, false);
+    assert_eq!(fact_lines(&bare, "entrance="), ["entrance=green-on-base:0/2 unmeasurable:2"], "{}", stdout_of(&bare));
+    assert_eq!(cargo_calls(&log).len(), 2, "置き場の無い周は撃たない");
+    clean(&[&repo, &state]);
+}
+
+/// (d) 禁じる語列に当たる nextest の行を持つ `deny` の契約は宣言の断りで落ち、偽の cargo は 1 度も撃たれない。
+#[test]
+fn pipe_intake_base_run_denied_sequence_is_refused_before_firing() {
+    let verify = "[\"cargo nextest run -p toy --no-tests=fail derive_ mutants\"]";
+    let named = "schema = 1\nallowed-commands = [\"git\", \"cargo\"]\ncommon-verify = [\"git status\"]\nentrance-flip = \"deny\"\n";
+    let row = table_row("t", &[("write-set", BASE_RUN_WRITE_SET), ("verify", verify)]);
+    let (repo, state) = derive_repo_with(&table_doc(&table_region(&[row])), &[(".vessel.toml", named)]);
+    let (path, log) = fake_cargo(&state, "cargo-any", &[("derive_", "exit 0"), ("mutants", "exit 0")]);
+    let out = intake_on(&repo, &state, &path, "s2-denied");
+    let err = stderr_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{err}");
+    assert!(err.contains("runner.denied_commands") && err.contains("cargo mutants"), "禁じる語列で断る: {err}");
+    assert!(cargo_calls(&log).is_empty() && run_dirs(&state).is_empty(), "撃たない・run dir も作らない");
+    clean(&[&repo, &state]);
+}
+
+/// (e) 形 5・7: `detect` の repo で同じ偽の cargo なら受付は通り、1 行が `entrance=green-on-base:1/2` を持ち、run dir の記録が
+/// sha = HEAD と 2 行ぶんの 4 値・rc・秒を持つ。key を外した repo と `unmeasured` の repo は 1 行に `entrance=` が無く、偽の
+/// cargo の記録は空・記録 file も無い。
+#[test]
+fn pipe_intake_base_run_detect_records_and_unnamed_declarations_fire_nothing() {
+    let (repo, state) = base_run_repo(Some("detect"));
+    let (path, log) = fake_cargo(&state, "cargo-green", &[("derive_", "exit 0"), ("other_", "exit 4")]);
+    let out = intake_on(&repo, &state, &path, "s2-detect");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "detect は受付の結果を変えない: {}", stderr_of(&out));
+    let line = stdout_of(&out).lines().next().unwrap_or_default().to_owned();
+    assert!(line.ends_with(" write-set=declared files=3 entrance=green-on-base:1/2"), "{line}");
+    let record = fs::read_to_string(state.join("pipe").join(run_id_of(&out)).join("base-run.txt")).unwrap_or_default();
+    let head = git(&repo, &["rev-parse", "HEAD"]);
+    let rows: Vec<&str> = record.lines().collect();
+    assert_eq!(rows.first().copied(), Some(format!("sha={head}").as_str()), "{record}");
+    assert_eq!(rows.len(), 3, "sha と 2 行: {record}");
+    for (row, want) in rows.iter().skip(1).zip(["value=green-on-base rc=0 secs=", "value=absent rc=4 secs="]) {
+        assert!(row.contains(want) && row.contains("cmd=cargo nextest run -p toy"), "{row}");
+    }
+    assert_eq!(cargo_calls(&log).len(), 2, "2 行を撃つ");
+    for word in [None, Some("unmeasured")] {
+        let (repo, state) = base_run_repo(word);
+        let (path, log) = fake_cargo(&state, "cargo-green", &[("derive_", "exit 0"), ("other_", "exit 4")]);
+        let out = intake_on(&repo, &state, &path, "s2-plain");
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{word:?}: {}", stderr_of(&out));
+        assert!(!stdout_of(&out).contains("entrance="), "{word:?}: 1 行は従来の形: {}", stdout_of(&out));
+        assert!(cargo_calls(&log).is_empty(), "{word:?}: 何も撃たない");
+        assert!(!state.join("pipe").join(run_id_of(&out)).join("base-run.txt").exists(), "{word:?}: 記録を書かない");
+        assert!(leftover_trees(&state).is_empty() && worktree_count(&repo) == 1, "{word:?}: 木を用意しない");
+        clean(&[&repo, &state]);
+    }
+    clean(&[&repo, &state]);
+}
+
+/// (f) 形 2・4: `detect` の repo で、偽の cargo が 1 行目を撃たれた間に対象 repo へ宣言を壊す commit を積むと、受付は宣言の断り
+/// で落ちずに run dir を作り、1 行が `entrance=green-on-base:0/2 unmeasurable:2` を持つ（lock の中で宣言を読み直す変異は宣言の
+/// 断りに、実走の後の HEAD を読み直さない変異は本数 1 に倒れる）。
+#[test]
+fn pipe_intake_base_run_head_moved_during_the_run_makes_every_line_unmeasurable() {
+    let (repo, state) = base_run_repo(Some("detect"));
+    let broken = format!(
+        "printf 'schema = 9\\n' > '{0}/.vessel.toml'; git -C '{0}' commit -q -a -m broken; exit 0",
+        repo.display()
+    );
+    let (path, log) = fake_cargo(&state, "cargo-break", &[("derive_", &broken), ("other_", "exit 4")]);
+    let before = git(&repo, &["rev-parse", "HEAD"]);
+    let out = intake_on(&repo, &state, &path, "s2-moved");
+    let err = stderr_of(&out);
+    assert_ne!(git(&repo, &["rev-parse", "HEAD"]), before, "偽の cargo が HEAD を動かした（前提）");
+    // 受付の後の審査の段は HEAD の宣言から要件面を読むので壊れた宣言で落ちうる（受付の外）。受付の判定は run dir の有無で測る。
+    assert_eq!(run_dirs(&state).len(), 1, "lock の中で宣言を読み直さず run dir を作る: {err}");
+    let line = stdout_of(&out).lines().next().unwrap_or_default().to_owned();
+    assert!(line.ends_with(" entrance=green-on-base:0/2 unmeasurable:2"), "結果を捨てて全行が測れない: {line} / {err}");
+    assert_eq!(cargo_calls(&log).len(), 2, "撃った本数は 2");
+    clean(&[&repo, &state]);
+}

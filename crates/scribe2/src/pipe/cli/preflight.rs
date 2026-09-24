@@ -9,12 +9,15 @@
 //! `teeth=<filter>:<本数>@<file,…>`（verify の nextest 行ごと）/ `headroom=<file>:<余地>/<file の見込み>`（余地の小さい順・
 //! 見込みは行の growth に在ればその値・無ければ size の見積・設計 contract-source.md §46）/
 //! `overlap=<live run>:<file,…>`（突き合わせた live な run ごと・交差 0 は `-`・置き場が無ければ `overlap=unmeasured`）/
+//! `entrance=green-on-base:<本数>/<行数>[ unmeasurable:<本数>]`（宣言が `detect` / `deny` を名乗る周だけ・契約の検証行を base
+//! の木で撃った結果・木は置き場の直下の一時の worktree で撃ち終えたら畳む・設計 pipeline.md §56）/
 //! `refuse=<名>:<理由>`（judge の断り・全部・名は [`crate::pipe::refuse::Refuse::as_str`]）/ 末尾に
 //! `preflight: <ok|refused n=<件数>|broken>`。rc = 0（断り 0）/ 1（断り ≥ 1）/ 2（読めない = `RC_BROKEN` の周）。
 //! `--state-dir` が無く git 設定からも解けない周は `overlap=unmeasured` を出し、rc は他の断りで決める（測れないを 0 に
 //! 潰さない・C10・`intake` は従来どおり置き場が無い旨で断る）。
 
-use super::intake::{ceiling_of, generated, judge, read_args, Denial, Judged, Material, Materials};
+use super::base_run::BaseRun;
+use super::intake::{ceiling_of, early, generated, judge, read_args, Denial, Judged, Material, Materials};
 use super::state_dir_of;
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
 use crate::rules::manifest::Manifest;
@@ -34,6 +37,8 @@ pub(super) fn preflight(args: &[String], manifest: &Manifest) -> Outcome {
         Ok(found) => found,
         Err(denial) => return denial.outcome,
     };
+    // 受付と同じ順（§56 形 2）: HEAD の sha を材料の読みの前に読む。読めない repo は judge が `not-a-repo` で断る。
+    let sha = super::head_of(&repo).unwrap_or_default();
     let ceiling = match ceiling_of(manifest) {
         Ok(found) => found,
         Err(denial) => return denial.outcome,
@@ -51,8 +56,10 @@ pub(super) fn preflight(args: &[String], manifest: &Manifest) -> Outcome {
         Ok((found, _)) => found,
         Err(denial) => return tailed(denial),
     };
-    // 置き場は交差と重複 run の 2 検査にだけ要る。解けない周は断りでなく `overlap=unmeasured`。
+    // 置き場は交差と重複 run の 2 検査と base の木の置き場にだけ要る。解けない周は断りでなく `overlap=unmeasured`（base の木を
+    // 撃つ名乗りの周は全行が測れない）。
     let state_dir = state_dir_of(args).ok();
+    let early = early(&repo, manifest, &contract, state_dir.as_deref(), &sha);
     let material = Material {
         repo: &repo,
         manifest,
@@ -60,8 +67,10 @@ pub(super) fn preflight(args: &[String], manifest: &Manifest) -> Outcome {
         state_dir: state_dir.as_deref(),
         bead: &bead,
         materials: &materials,
+        early: Some(&early),
     };
-    render(&judge(&material), state_dir.is_some())
+    let entrance = early.base.as_ref().map(BaseRun::fact);
+    render(&judge(&material), state_dir.is_some(), entrance)
 }
 
 /// 判定の対象が揃わなかった周の断りに**末尾の判定行**を積む（judge を撃てないので事実の行は無い）。
@@ -74,8 +83,8 @@ fn tailed(denial: Denial) -> Outcome {
     outcome
 }
 
-/// judge の結果を 1 行 1 事実に描く。`measured` は置き場が在った（交差を撃った）か。
-fn render(judged: &Judged, measured: bool) -> Outcome {
+/// judge の結果を 1 行 1 事実に描く。`measured` は置き場が在った（交差を撃った）か。`entrance` は base の木で撃った周の欄。
+fn render(judged: &Judged, measured: bool, entrance: Option<String>) -> Outcome {
     let mut out: Vec<String> = Vec::new();
     if let Some((design, section)) = &judged.design {
         out.push(format!("design={design} section={section}"));
@@ -95,6 +104,7 @@ fn render(judged: &Judged, measured: bool) -> Outcome {
     if let Some(found) = &judged.overlap {
         out.extend(found.runs.iter().map(|(run, files)| format!("overlap={run}:{}", listed(files))));
     }
+    out.extend(entrance);
     out.extend(judged.denials.iter().map(refuse_line));
     let broken = judged.denials.iter().any(|denial| denial.outcome.rc == RC_BROKEN);
     let (rc, tail) = match (judged.denials.len(), broken) {

@@ -16,9 +16,12 @@ use crate::polarity::{OnFailure, Polarity, Timing};
 use crate::rules::manifest::{list, scalar, Scalar};
 use std::path::Path;
 
+mod entrance_flip;
 pub mod path_kinds;
 mod write_set;
 
+pub use entrance_flip::{measure_named, EntranceFlip};
+use entrance_flip::{entrance_of, KEY as ENTRANCE_KEY};
 pub use write_set::{headroom_shortfalls, line_count, read_write_set, Caps, FileLines, Headroom, NewFilePolicy, WriteSetItem, CORE};
 pub(crate) use write_set::is_under;
 
@@ -49,10 +52,6 @@ const DECLARED_KEYS: &[&str] = &[
     path_kinds::TESTS_KEY,
     ENTRANCE_KEY,
 ];
-
-/// **入口の flip の名乗り**の key（任意・設計 pipeline.md §54・ADR-0054）。値は [`EntranceFlip`] の閉じた 1 語だけ。
-/// 書かない宣言は現行のとおり入口の flip の行を要る（[`KindGap::NoEntranceRed`]）。
-const ENTRANCE_KEY: &str = "entrance-flip";
 
 /// **push 先の remote の名**の key（任意・設計 contract-source.md §5「land の終端」）。
 ///
@@ -286,7 +285,7 @@ impl VerifyKind {
 pub enum KindGap {
     /// 先頭語 `cargo` の行を持ちながら、入口の flip を撃つ行を持たない（TDD の flip を測らない Rust の宣言）。
     NoEntranceRed,
-    /// `entrance-flip = "unmeasured"` と名乗りながら、入口の flip を撃つ行も持つ（名乗りと行の矛盾・§54 形 4）。
+    /// `entrance-flip` を名乗りながら（語を問わない）、入口の flip を撃つ行も持つ（名乗りと行の矛盾・§54 形 4・§56 形 1）。
     UnmeasuredWithEntranceFlip,
 }
 
@@ -299,26 +298,9 @@ impl KindGap {
                 ENTRANCE_FLIP_WORDS.join(" ")
             ),
             Self::UnmeasuredWithEntranceFlip => format!(
-                "UnmeasuredWithEntranceFlip: {ENTRANCE_KEY} = \"{}\" と名乗りながら common-verify に入口の flip（{}）を撃つ行が在る（矛盾）",
-                EntranceFlip::Unmeasured.as_str(),
+                "UnmeasuredWithEntranceFlip: {ENTRANCE_KEY} を名乗りながら common-verify に入口の flip（{}）を撃つ行が在る（矛盾）",
                 ENTRANCE_FLIP_WORDS.join(" ")
             ),
-        }
-    }
-}
-
-/// 宣言の任意 key `entrance-flip` の値（閉じた 1 語・設計 pipeline.md §54・ADR-0054）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EntranceFlip {
-    /// 入口の flip を測らない（撃つ手段を持たない Rust の消費側の名乗り）。
-    Unmeasured,
-}
-
-impl EntranceFlip {
-    /// 宣言 file と判定行に書く語。
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Unmeasured => "unmeasured",
         }
     }
 }
@@ -330,12 +312,12 @@ pub fn kind_gap(lines: &[String]) -> Option<KindGap> {
 }
 
 /// [`kind_gap`] の、宣言の名乗り `entrance-flip` を受ける形。名乗りの在る宣言は `NoEntranceRed` で断らず、入口の flip の
-/// 行と同居する周だけ [`KindGap::UnmeasuredWithEntranceFlip`] で断る（§54 形 1 / 4）。
+/// 行と同居する周だけ [`KindGap::UnmeasuredWithEntranceFlip`] で断る（§54 形 1 / 4・語は問わない＝§56 形 1）。
 pub fn kind_gap_named(lines: &[String], entrance: Option<EntranceFlip>) -> Option<KindGap> {
     let kinds: Vec<VerifyKind> = lines.iter().map(|line| VerifyKind::of(line)).collect();
     let flip = kinds.contains(&VerifyKind::EntranceFlip);
     match entrance {
-        Some(EntranceFlip::Unmeasured) => flip.then_some(KindGap::UnmeasuredWithEntranceFlip),
+        Some(_) => flip.then_some(KindGap::UnmeasuredWithEntranceFlip),
         None => {
             let rust = kinds.iter().any(|kind| *kind != VerifyKind::Other);
             (rust && !flip).then_some(KindGap::NoEntranceRed)
@@ -620,21 +602,6 @@ impl Declared {
             })
         } else {
             Err(errors)
-        }
-    }
-}
-
-/// 入口の flip の名乗り（任意）。値は閉じた 1 語 `unmeasured` の文字列だけを受ける（他の語・空・配列は断る）。
-fn entrance_of(found: &[(String, Raw, u64)], errors: &mut Vec<DeclError>) -> Option<EntranceFlip> {
-    let (_, value, line) = found.iter().find(|(seen, _, _)| seen == ENTRANCE_KEY)?;
-    match value {
-        Raw::Text(word) if word == EntranceFlip::Unmeasured.as_str() => Some(EntranceFlip::Unmeasured),
-        _ => {
-            errors.push(DeclError::new(
-                *line,
-                format!("{ENTRANCE_KEY} は 1 語 \"{}\" の文字列だけである", EntranceFlip::Unmeasured.as_str()),
-            ));
-            None
         }
     }
 }

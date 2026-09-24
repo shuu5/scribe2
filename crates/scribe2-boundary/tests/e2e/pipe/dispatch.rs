@@ -10,6 +10,8 @@ use super::{
     shim_path, stderr_of, run_id_of, stdout_of, value_of, verdict_pairs, worktree_of, write_contract, write_design,
     DESIGN_FILE, HEALTH_PER_CORE_OPEN, IMPLEMENT, RC_BLOCKED,
 };
+use super::intake::{base_run_repo, cargo_calls, fake_cargo};
+use super::run_pipe_with_path;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -230,6 +232,22 @@ fn pipe_dispatch_unmeasured_ledger_starts_nothing_and_is_not_zero() {
     let bd = fake_bd(&state, &[issue("s2-toy.2", 2, "b")]);
     let measured = ls(&repo, &state, &bd);
     assert_eq!(count_of(&measured), format!("{COUNT} total=1 ready=1"), "読めた周は件数が出る");
+    clean(&[&repo, &state]);
+}
+
+/// (g) 形 7（設計 pipeline.md §56・行 ay）: `deny` を名乗る repo の契約は、偽の cargo が base で緑を返す形でも列の候補の判定で
+/// 待たされず（理由 `-`）、偽の cargo は 1 度も撃たれない（列の候補の judge は base の木を撃たない）。
+#[test]
+fn pipe_dispatch_base_run_deny_contract_is_not_held_and_nothing_is_fired() {
+    let (repo, state) = base_run_repo(Some("deny"));
+    let (path, log) = fake_cargo(&state, "cargo-green", &[("derive_", "exit 0"), ("other_", "exit 0")]);
+    let bd = fake_bd(&state, &[issue("s2-toy.9", 2, "t")]);
+    let (repo_arg, state_arg, rules) = (repo.display().to_string(), state.display().to_string(), dispatch_rules(&state));
+    let out = run_pipe_with_path(&path, &["dispatch", "ls", "--state-dir", &state_arg, "--repo", &repo_arg, "--rules", &rules, "--bd", &bd]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", told(&out));
+    assert_eq!(reason_of(&out, "s2-toy.9"), "-", "deny の契約を待たせない: {}", told(&out));
+    assert_eq!(count_of(&out), format!("{COUNT} total=1 ready=1"), "{}", told(&out));
+    assert!(cargo_calls(&log).is_empty(), "列は base の木を撃たない: {:?}", cargo_calls(&log));
     clean(&[&repo, &state]);
 }
 

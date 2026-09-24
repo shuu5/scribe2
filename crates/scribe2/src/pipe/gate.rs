@@ -45,6 +45,8 @@ pub(crate) use record::{
     population_lines, LandedMark, Unfired,
 };
 pub(crate) use verify::{recorded_rc, run_detection_admitted, Admit};
+// 受付が契約の検証行を base の木で撃つ口（設計 pipeline.md §56 形 3・撃つ実装を 2 本にしない）。
+pub(crate) use verify::run_line_captured;
 pub use verify::{is_unreadable, run_checks, Check, Checks, Step, CHECKS};
 
 use crate::polarity::{OnFailure, Polarity, Timing};
