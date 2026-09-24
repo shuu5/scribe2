@@ -21,6 +21,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 use vessel::fleet::Registration;
 use vessel::hook::vessel::digest::{self, PluginRecord};
@@ -31,12 +32,27 @@ use vessel::seat::role::Role;
 /// 同一 process 内での dir 名衝突を避ける連番。
 static SEQ: AtomicU32 = AtomicU32::new(0);
 
+/// 起動の実物を据えたか（process に 1 回だけ据える）。
+static SPAWNER: OnceLock<bool> = OnceLock::new();
+
+/// core の lib の起動の site に同じ process で届く歯が、site に届く前に撃つ共通の据え付け（bin の main と同じ
+/// 実物を process に 1 回だけ据える・設計 core-boundary.md §9 採る形 4）。libtest には全歯の前に走る入口が無い
+/// ので、census（recent の git の読みを直に呼ぶ歯・fleet の host の読みを呼ぶ歯・ratelimit の host を読む
+/// fixture の helper）の各々が先頭で呼ぶ。
+pub fn install_spawner() {
+    SPAWNER.get_or_init(scribe2_boundary::spawner::install);
+}
+
 /// repo の外に一意な tmp dir を作る。
 ///
 /// `tempfile` は直接依存の追加（憲法 A3）に当たるので足さない。xtask の
 /// `make_tmp_dir` と同形の std だけの helper である。返すのは [`TmpDir`]（drop で dir を再帰削除する包み・
 /// 設計 docs/design/gate-cost.md §17・行 h・`s2-07l.343`）で、panic した歯も dir を残さない。
+///
+/// 先頭で [`install_spawner`] を呼ぶ（この helper を使う歯が core の lib の起動の site に同じ process で届く周の
+/// 据え付け・census の外で `pipe` の git の読みに届く polarity の worktree の判定の歯がこの helper を先に呼ぶ）。
 pub fn make_tmp_dir() -> Option<TmpDir> {
+    install_spawner();
     let base = std::env::temp_dir();
     for _ in 0..8 {
         let nanos = SystemTime::now()

@@ -42,6 +42,7 @@ mod train;
 use crate::polarity::{OnFailure, Polarity, Timing};
 use crate::fleet::store::{self, LockPolicy, StoreError};
 use crate::fleet::{self, replay, Cost, Event, EventKind, Mark, Stage, State, SCHEMA};
+use crate::invocation::Invocation;
 use crate::name::NAME;
 use std::path::{Path, PathBuf};
 
@@ -586,7 +587,7 @@ pub fn question_of_run(state_dir: &Path, id: &str) -> Option<Question> {
 /// [`git_line`] は trim して 1 行にするので、diff の byte 数を測る面には使えない
 /// （末尾改行と空行が落ちて **cap との照合が実際より小さく出る**）。
 pub fn git_bytes(dir: &Path, args: &[&str]) -> Option<Vec<u8>> {
-    let output = std::process::Command::new("git")
+    let output = Invocation::new("git")
         .arg("-C")
         .arg(dir)
         .args(args)
@@ -597,7 +598,7 @@ pub fn git_bytes(dir: &Path, args: &[&str]) -> Option<Vec<u8>> {
 
 /// git を 1 回撃って rc だけを見る。
 pub fn git_ok(dir: &Path, args: &[&str]) -> bool {
-    std::process::Command::new("git")
+    Invocation::new("git")
         .arg("-C")
         .arg(dir)
         .args(args)
@@ -607,7 +608,7 @@ pub fn git_ok(dir: &Path, args: &[&str]) -> bool {
 
 /// git を 1 回撃って stdout の 1 行を得る。失敗・空はいずれも `None`。
 pub fn git_line(dir: &Path, args: &[&str]) -> Option<String> {
-    let output = std::process::Command::new("git")
+    let output = Invocation::new("git")
         .arg("-C")
         .arg(dir)
         .args(args)
@@ -763,7 +764,12 @@ pub(crate) mod fixture {
     use super::contract::Contract;
     use crate::fleet::store::{self, LockPolicy};
     use crate::fleet::{Event, EventKind, Stage, SCHEMA};
+    use crate::invocation::{Invocation, Spawner};
+    use std::cell::RefCell;
+    use std::io;
+    use std::os::unix::process::{CommandExt, ExitStatusExt};
     use std::path::{Path, PathBuf};
+    use std::process::{Child, Command, ExitStatus, Output};
 
     /// 契約（write-set と 3 クラスの自己申告だけを呼び手が選ぶ）。
     pub(crate) fn contract(write_set: &[&str], classes: &[&str]) -> Contract {
@@ -834,12 +840,179 @@ pub(crate) mod fixture {
             let _ = store::append(state_dir, found, policy);
         }
     }
+
+    /// cfg(test) の build の実物（起動の記述を std の Command へ写して撃つ・設計 core-boundary.md §9 採る形 7・
+    /// 境界 crate の実物と同じ写し方）。据えずに撃てる既定である。
+    pub(crate) struct Real;
+
+    impl Real {
+        /// 記述を std の Command へ写す（stdio は記述から取り出す）。
+        fn command_of(invocation: &mut Invocation) -> Command {
+            let mut command = Command::new(invocation.get_program());
+            command.args(invocation.get_args());
+            if let Some(dir) = invocation.get_current_dir() {
+                command.current_dir(dir);
+            }
+            for (key, val) in invocation.get_envs() {
+                match val {
+                    Some(val) => command.env(key, val),
+                    None => command.env_remove(key),
+                };
+            }
+            let [stdin, stdout, stderr] = invocation.take_stdio();
+            if let Some(cfg) = stdin {
+                command.stdin(cfg);
+            }
+            if let Some(cfg) = stdout {
+                command.stdout(cfg);
+            }
+            if let Some(cfg) = stderr {
+                command.stderr(cfg);
+            }
+            if let Some(pgroup) = invocation.get_process_group() {
+                command.process_group(pgroup);
+            }
+            command
+        }
+    }
+
+    impl Spawner for Real {
+        fn output(&self, invocation: &mut Invocation) -> io::Result<Output> {
+            Self::command_of(invocation).output()
+        }
+        fn status(&self, invocation: &mut Invocation) -> io::Result<ExitStatus> {
+            Self::command_of(invocation).status()
+        }
+        fn spawn(&self, invocation: &mut Invocation) -> io::Result<Child> {
+            Self::command_of(invocation).spawn()
+        }
+        fn exec(&self, invocation: &mut Invocation) -> io::Error {
+            Self::command_of(invocation).exec()
+        }
+    }
+
+    /// 記録する stub が覚えた 1 回の起動（program・引数・cwd・env の差分）。
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) struct Call {
+        /// 撃たれた program。
+        pub(crate) program: String,
+        /// 引数（program を含まない）。
+        pub(crate) args: Vec<String>,
+        /// 子の cwd。
+        pub(crate) cwd: Option<PathBuf>,
+        /// env の差分（key の順・`None` = 外す）。
+        pub(crate) envs: Vec<(String, Option<String>)>,
+    }
+
+    impl Call {
+        /// 記述から写す（字面は lossy で String へ）。
+        fn of(invocation: &Invocation) -> Self {
+            let text = |value: &std::ffi::OsStr| value.to_string_lossy().into_owned();
+            Self {
+                program: text(invocation.get_program()),
+                args: invocation.get_args().map(text).collect(),
+                cwd: invocation.get_current_dir().map(Path::to_path_buf),
+                envs: invocation.get_envs().map(|(key, val)| (text(key), val.map(text))).collect(),
+            }
+        }
+    }
+
+    /// 歯が決める結果（撃たれた起動を見て `output` / `status` の結果を返す）。
+    type Answer = Box<dyn Fn(&Call) -> io::Result<Output>>;
+
+    /// thread ごとの stub の置き場（覚えた起動と歯の決めた結果）。
+    struct Slot {
+        calls: Vec<Call>,
+        answer: Answer,
+    }
+
+    thread_local! {
+        /// 据えた歯の thread に閉じる（同じ process で並ぶ他の歯へ漏れない・設計 core-boundary.md §9 採る形 8）。
+        static STUB: RefCell<Option<Slot>> = const { RefCell::new(None) };
+    }
+
+    /// 記録する stub（撃たれた program と引数を覚え、歯が決めた結果を返す・spawn は失敗だけ）。
+    struct Recorded;
+
+    impl Recorded {
+        /// 起動を覚え、歯の決めた結果を返す（置き場が無ければ `Unsupported`）。
+        fn answer(invocation: &Invocation) -> io::Result<Output> {
+            let call = Call::of(invocation);
+            STUB.with(|slot| match slot.borrow_mut().as_mut() {
+                Some(found) => {
+                    let answered = (found.answer)(&call);
+                    found.calls.push(call);
+                    answered
+                }
+                None => Err(io::Error::new(io::ErrorKind::Unsupported, "stub が据えられていない")),
+            })
+        }
+
+        /// 実 process を起こさない stub の失敗（spawn / exec の終端）。
+        fn refused() -> io::Error {
+            io::Error::other("記録する stub は子を起こさない")
+        }
+    }
+
+    impl Spawner for Recorded {
+        fn output(&self, invocation: &mut Invocation) -> io::Result<Output> {
+            Self::answer(invocation)
+        }
+        fn status(&self, invocation: &mut Invocation) -> io::Result<ExitStatus> {
+            Self::answer(invocation).map(|output| output.status)
+        }
+        fn spawn(&self, invocation: &mut Invocation) -> io::Result<Child> {
+            Self::answer(invocation)?;
+            Err(Self::refused())
+        }
+        fn exec(&self, invocation: &mut Invocation) -> io::Error {
+            match Self::answer(invocation) {
+                Ok(_) => Self::refused(),
+                Err(err) => err,
+            }
+        }
+    }
+
+    /// 据えた stub の札（drop で外す・覚えた起動を読む口）。
+    pub(crate) struct Stub;
+
+    impl Stub {
+        /// この thread に stub を据える（歯が決めた結果を `answer` で返す）。
+        pub(crate) fn install(answer: impl Fn(&Call) -> io::Result<Output> + 'static) -> Self {
+            STUB.with(|slot| *slot.borrow_mut() = Some(Slot { calls: Vec::new(), answer: Box::new(answer) }));
+            Self
+        }
+
+        /// 据えてから覚えた起動（撃たれた順）。
+        pub(crate) fn calls(&self) -> Vec<Call> {
+            STUB.with(|slot| slot.borrow().as_ref().map(|found| found.calls.clone()).unwrap_or_default())
+        }
+    }
+
+    impl Drop for Stub {
+        fn drop(&mut self) {
+            STUB.with(|slot| *slot.borrow_mut() = None);
+        }
+    }
+
+    /// rc と stdout を持つ結果（stderr は空・stub の歯が決める結果の形）。
+    pub(crate) fn exited(rc: i32, stdout: &[u8]) -> io::Result<Output> {
+        Ok(Output { status: ExitStatus::from_raw(rc.saturating_mul(256)), stdout: stdout.to_vec(), stderr: Vec::new() })
+    }
+
+    /// cfg(test) の build の差し替え口（この thread に stub が据わっていればそれ・無ければ実物）。
+    pub(crate) fn current() -> io::Result<&'static dyn Spawner> {
+        let stubbed = STUB.with(|slot| slot.borrow().is_some());
+        Ok(if stubbed { &Recorded } else { &Real })
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::fixture::{append_all, event, scratch};
+    use super::fixture::{append_all, event, exited, scratch, Call, Real, Stub};
     use crate::fleet::store::LockPolicy;
+    use crate::invocation::{install_into, resolve, Invocation, Spawner};
+    use std::sync::OnceLock;
     use std::path::Path;
     use super::{
         base_of_run, driver_path, last_stage_detail, question_of_run, questions_of_run, runner_is_idle, Base, Driver,
@@ -909,7 +1082,7 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(5));
         assert!(Driver::hold(&root, "r2", policy).is_none(), "生きている所有者の札は stale を超えても奪わない");
         // 死んだ所有者の札は回収する（起こし直しの入口）。
-        let mut dead = std::process::Command::new("true").spawn().expect("true を起こせる");
+        let mut dead = Invocation::new("true").spawn().expect("true を起こせる");
         let gone = dead.id();
         dead.wait().expect("true を待てる");
         put_ticket(&root, "r3", gone);
@@ -957,7 +1130,7 @@ mod tests {
         assert_eq!(super::live_driver(&root, "none"), None, "札が無い");
         put_ticket(&root, "me", std::process::id());
         assert_eq!(super::live_driver(&root, "me"), Some(std::process::id()), "生きた所有者");
-        let mut dead = std::process::Command::new("true").spawn().expect("true を起こせる");
+        let mut dead = Invocation::new("true").spawn().expect("true を起こせる");
         let gone = dead.id();
         dead.wait().expect("true を待てる");
         put_ticket(&root, "dead", gone);
@@ -1054,5 +1227,80 @@ mod tests {
         assert_eq!(last_stage_detail(&root, "me"), Some("own-stage".to_owned()));
         assert_eq!(last_stage_detail(&root, "seatless"), None, "RunStage を持たない便");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 差し替え口の 2 つの純な部品（設計 core-boundary.md §9 採る形 2）: 据えた物を解く関数は `None` を io の
+    /// `Unsupported` に倒し（本番の build で据えていない周の終端が既存の撃てない分岐に落ちる形）、据える関数は
+    /// 歯が作る局所の cell へ 1 回目だけ据えて 2 回目を断る（process の大域の cell には据えない）。
+    #[test]
+    fn invocation_seam_resolves_none_to_unsupported_and_installs_once_per_local_cell() {
+        assert_eq!(resolve(None).err().map(|err| err.kind()), Some(std::io::ErrorKind::Unsupported), "据えていない");
+        assert!(resolve(Some(&Real)).is_ok(), "据えた物は解ける");
+        let cell: OnceLock<&'static dyn Spawner> = OnceLock::new();
+        assert!(install_into(&cell, &Real).is_ok(), "1 回目は据わる");
+        assert!(install_into(&cell, &Real).is_err(), "2 回目は据えない");
+        let installed = resolve(cell.get().copied()).map(|found| found.output(Invocation::new("sh").args(["-c", "printf once"])));
+        assert_eq!(installed.ok().and_then(Result::ok).map(|output| output.stdout), Some(b"once".to_vec()), "据えた物で撃てる");
+    }
+
+    /// 記録する stub は据えた歯の thread に閉じ（別 thread の起動は実物が撃つ・記録に残らない）、spawn の終端は
+    /// 失敗だけを返す（設計 core-boundary.md §9 採る形 8）。drop した後の同じ thread は実物に戻る。
+    #[test]
+    fn invocation_stub_stays_in_the_installing_thread_and_fails_every_spawn() {
+        let stub = Stub::install(|_| exited(0, b"stubbed\n"));
+        let here = Invocation::new("sh").args(["-c", "printf real"]).output().map(|output| output.stdout);
+        assert_eq!(here.ok(), Some(b"stubbed\n".to_vec()), "据えた thread は stub の結果");
+        assert!(Invocation::new("true").spawn().is_err(), "spawn は失敗だけ");
+        assert_eq!(Invocation::new("false").status().map(|status| status.success()).ok(), Some(true), "status も stub");
+        let other = std::thread::spawn(|| Invocation::new("sh").args(["-c", "printf real"]).output().map(|output| output.stdout));
+        assert_eq!(other.join().ok().and_then(Result::ok), Some(b"real".to_vec()), "別 thread は実物");
+        let programs: Vec<String> = stub.calls().into_iter().map(|call| call.program).collect();
+        assert_eq!(programs, ["sh", "true", "false"], "記録は据えた thread の起動だけ");
+        drop(stub);
+        let after = Invocation::new("sh").args(["-c", "printf real"]).output().map(|output| output.stdout);
+        assert_eq!(after.ok(), Some(b"real".to_vec()), "drop の後は実物");
+    }
+
+    /// git の 3 関数は起動の記述を通る（設計 core-boundary.md §9 行 c）: program は git・引数は `-C <dir>` の後に
+    /// 呼び手の列。結果の読みは rc 非 0 で `None` / `false`・起動の失敗も同じ・`git_bytes` は stdout を byte のまま・
+    /// `git_line` は trim した 1 行で空なら `None`。
+    #[test]
+    fn invocation_pipe_git_three_functions_pass_args_and_read_results() {
+        let dir = Path::new("/nonexistent-invocation-pipe-git");
+        let stub = Stub::install(|call| match call.args.last().map(String::as_str) {
+            Some("ok") => exited(0, b"  line one \n"),
+            Some("empty") => exited(0, b" \n"),
+            Some("fail") => exited(1, b"out\n"),
+            _ => Err(std::io::Error::other("gone")),
+        });
+        assert_eq!(super::git_bytes(dir, &["show", "ok"]), Some(b"  line one \n".to_vec()), "byte のまま");
+        assert_eq!(super::git_bytes(dir, &["fail"]), None, "rc 非 0");
+        assert_eq!(super::git_bytes(dir, &["gone"]), None, "起動の失敗");
+        assert!(super::git_ok(dir, &["ok"]), "rc 0");
+        assert!(!super::git_ok(dir, &["fail"]), "rc 非 0");
+        assert!(!super::git_ok(dir, &["gone"]), "起動の失敗");
+        assert_eq!(super::git_line(dir, &["rev-parse", "ok"]), Some("line one".to_owned()), "trim した 1 行");
+        assert_eq!(super::git_line(dir, &["empty"]), None, "空の stdout");
+        assert_eq!(super::git_line(dir, &["fail"]), None, "rc 非 0 は stdout が在っても None");
+        assert_eq!(super::git_line(dir, &["gone"]), None, "起動の失敗");
+        let git = |tail: &[&str]| Call {
+            program: "git".to_owned(),
+            args: ["-C", "/nonexistent-invocation-pipe-git"].iter().chain(tail).map(|arg| (*arg).to_owned()).collect(),
+            cwd: None,
+            envs: Vec::new(),
+        };
+        let expected = [
+            git(&["show", "ok"]),
+            git(&["fail"]),
+            git(&["gone"]),
+            git(&["ok"]),
+            git(&["fail"]),
+            git(&["gone"]),
+            git(&["rev-parse", "ok"]),
+            git(&["empty"]),
+            git(&["fail"]),
+            git(&["gone"]),
+        ];
+        assert_eq!(stub.calls(), expected, "3 関数の program と引数");
     }
 }

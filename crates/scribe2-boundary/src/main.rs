@@ -174,6 +174,8 @@ fn emit_all(out: &[String], err: &[String]) {
 }
 
 fn main() -> ExitCode {
+    // 起動の実物を最初に据える（core の起動の記述は据えていない周に撃てない・設計 core-boundary.md §9 採る形 3）。
+    scribe2_boundary::spawner::install();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let outcome = run(&args);
     emit_all(&outcome.out, &outcome.err);

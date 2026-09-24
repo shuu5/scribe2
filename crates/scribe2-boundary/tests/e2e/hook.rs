@@ -1589,6 +1589,7 @@ fn update_argv() -> Vec<String> {
 /// host・path）積まれ、stdout が 1 行（sha12 と path）である。base は `update` の verb を知らず rc 1 で 0 件（RED）。
 #[test]
 fn vessel_update_runs_ff_then_install_in_order_and_records_one_install() {
+    crate::install_spawner();
     let place = update_place(true, "", 0, 0);
     let out = run_update(&place);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "成功の rc: {}", stderr_text(&out));
@@ -3893,6 +3894,7 @@ fn add_worktree(repo: &Path, name: &str) -> PathBuf {
 /// dirty な worktree は走査の外に落ち、新しい HEAD の dirty な worktree は出る。
 #[test]
 fn hook_session_recent_dirty_scan_is_cut_to_the_newest_worktrees() {
+    crate::install_spawner();
     let repo = git_repo();
     // worktree の置き場 `.wt/` は anchor の untracked に数えない（anchor の dirty は `untracked.txt` で作る）。
     fs::write(repo.join(".git").join("info").join("exclude"), ".wt/\n").unwrap_or_else(|err| panic!("write: {err}"));
@@ -3930,6 +3932,7 @@ fn hook_session_recent_dirty_scan_is_cut_to_the_newest_worktrees() {
 /// git の 3 種類の UNMEASURED は 1 回の判定で揃って出る（repo でない dir）。
 #[test]
 fn hook_session_recent_git_kinds_are_unmeasured_together_outside_a_repo() {
+    crate::install_spawner();
     let dir = tmp();
     assert!(!dir.join(".git").exists(), "tmp dir は repo でない");
     assert_eq!(

@@ -461,6 +461,7 @@ fn sections_in_order(prompt: &str, with_answer: bool) -> bool {
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
 pub(super) fn register_seat_account(state: &Path, anchor: &Path, account: &str) {
+    crate::install_spawner();
     let event = Event {
         schema: vessel::fleet::SCHEMA,
         ts: vessel::fleet::cli::now_utc(),
@@ -847,6 +848,7 @@ const STALE_TS: &str = "2026-09-12T02:00:00Z";
 )]
 fn put_round(state: &Path, ts: &str, label: &str) {
     use vessel::fleet::{Allowance, Measured, WindowKind};
+    crate::install_spawner();
     let policy = vessel::fleet::store::LockPolicy::embedded().expect("埋め込みの lock 行を読める");
     for (window, used_pct, resets_at) in [(WindowKind::FiveHour, 30, FAR_RESET), (WindowKind::SevenDay, 10, FAR_WEEK_RESET)] {
         let event = Event {

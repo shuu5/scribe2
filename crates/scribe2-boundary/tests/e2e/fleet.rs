@@ -560,6 +560,7 @@ fn fleet_read_collects_every_malformed_line() {
 
 #[test]
 fn fleet_host_ignores_env() {
+    crate::install_spawner();
     let dir = state_dir();
     let out = Command::new(bin())
         .args(["fleet", "export", "--state-dir", &dir.display().to_string()])
@@ -625,6 +626,7 @@ fn fleet_show_reports_missing_run_and_full_line() {
 
 #[test]
 fn fleet_external_form() {
+    crate::install_spawner();
     let dir = state_dir();
     let path = dir.display().to_string();
     let usage = run_fleet(&[]);
@@ -2033,6 +2035,7 @@ fn drop_fixture(fx: &UsageFixture) {
 /// (1) live 2 口座相当: 口座ごと 1 行・口座 × 窓（3 窓 × 2）の event・reset は UTC 形・使用率は % の値の切り捨て。
 #[test]
 fn fleet_usage_measures_two_accounts_into_lines_and_events() {
+    crate::install_spawner();
     let fx = usage_fixture(&["a1", "a2"]);
     put_credential(&fx, "a1", &live_credential(TOKEN_A1));
     put_credential(&fx, "a2", &live_credential(TOKEN_A2));
