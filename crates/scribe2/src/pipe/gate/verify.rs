@@ -224,22 +224,63 @@ pub fn run_checks_admitted(checks: &Checks<'_>, admit: Option<&Admit<'_>>) -> Ve
         for line in lines {
             let n = steps.len().saturating_add(1);
             let entry = Fire { checks, raw: line.as_str(), holes, stage: *check, n };
-            let passage = if steps.iter().any(Step::is_closed) {
-                health::Passage::Closed
-            } else {
-                health::pass(checks.host)
-            };
-            let health::Passage::Fire(mark) = passage else {
-                steps.push(closed(&entry));
-                continue;
-            };
-            let first = fire(&entry, caps, admit);
-            let mut step = if detection_unmeasured(&first) { refire(first, &entry, caps, admit) } else { first };
-            step.host = mark;
+            let step = fire_row(&entry, &steps, (caps, admit), Refire::Once);
             steps.push(step);
         }
     }
     steps
+}
+
+/// **検出線の行だけ**を撃つ入口（着地後の検出の口・設計 gate-cost.md §44 形 (2)）。
+///
+/// 撃つのは `checks.detection` の行だけで（①②④ は撃たない）、行ごとの受付・箱・遮断器は [`run_checks_admitted`] と
+/// 同じ行の手（[`fire_row`]）を通る。rc 2 の撃ち直し（§21）は持たない（撃ち直すのは人が同じ口を撃つ形）。
+pub fn run_detection_admitted(checks: &Checks<'_>, admit: Option<&Admit<'_>>) -> Vec<Step> {
+    let caps = confine::Caps::embedded();
+    let mut steps: Vec<Step> = Vec::new();
+    for line in checks.detection {
+        let n = steps.len().saturating_add(1);
+        let entry = Fire { checks, raw: line.as_str(), holes: true, stage: Check::Detection, n };
+        let step = fire_row(&entry, &steps, (caps, admit), Refire::Never);
+        steps.push(step);
+    }
+    steps
+}
+
+/// 測れなかった検出線を同じ行の中で撃ち直すか（[`fire_row`] の引数・gate は `Once`・着地後の検出は `Never`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Refire {
+    /// rc 2 の検出線を 1 回だけ撃ち直す（設計 gate-cost.md §21）。
+    Once,
+    /// 撃ち直さない。
+    Never,
+}
+
+/// 行 1 本の手: 遮断器を通し（前の行が閉じていれば待たずに閉じる）、受付と箱の中で撃つ（**gate と着地後の検出の
+/// 1 実装**・C2）。
+fn fire_row(
+    entry: &Fire<'_>,
+    steps: &[Step],
+    held: (Result<confine::Caps, RuleRead>, Option<&Admit<'_>>),
+    refire_mode: Refire,
+) -> Step {
+    let (caps, admit) = held;
+    let passage = if steps.iter().any(Step::is_closed) {
+        health::Passage::Closed
+    } else {
+        health::pass(entry.checks.host)
+    };
+    let health::Passage::Fire(mark) = passage else {
+        return closed(entry);
+    };
+    let first = fire(entry, caps, admit);
+    let mut step = if refire_mode == Refire::Once && detection_unmeasured(&first) {
+        refire(first, entry, caps, admit)
+    } else {
+        first
+    };
+    step.host = mark;
+    step
 }
 
 /// 測れなかった検出線を**同じ [`Fire`] で 1 回だけ**撃ち直し、2 回目の [`Step`] に 1 回目の rc と
@@ -542,8 +583,8 @@ fn last_line(stdout: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// rc を JSON の非負整数へ写す。`sh` が signal で落ちた周（負）は 255 に畳む。
-pub(super) fn recorded_rc(rc: i32) -> u64 {
+/// rc を JSON の非負整数へ写す。`sh` が signal で落ちた周（負）は 255 に畳む（着地後の検出の理由の語 `rc-<rc>` も同じ値）。
+pub(crate) fn recorded_rc(rc: i32) -> u64 {
     u64::try_from(rc).unwrap_or(u64::from(u8::MAX))
 }
 

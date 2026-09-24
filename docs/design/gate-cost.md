@@ -855,6 +855,13 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
   - **行 am**（(j)〜(n) は `tests/e2e/pipe/gate.rs`・(o) は候補の木の fixture が在る `tests/e2e/pipe/land.rs`・接頭辞 `pipe_detection_after_landing_`）: (j) 検出線を宣言した便の gate は stub を 1 回も呼ばず、`verify.jsonl` に `kind=detection` の record が無い（base では ③ を撃つ ＝ RED）。(k) 同じ便の land は stub が終わる前に rc 0 で `Landed` を返す（stub は歯が置く解放の file を上限つきで待つ）。land が返った時点で event に `detection:spawned` が 1 件・終えた語は 0 件で、解放の後に helper が待つと `detection:measured` が 1 件と `landed` を持つ record が 1 本在り、主実測の record に `landed` の無い `kind=detection` は 0 本。台帳の見張りの記録は 0 件のまま。(l) 検出線を宣言しない便の land は `detection:` で始まる detail を 1 件も書かない（従来の Landed の detail の並びのまま）。(m) main-red で終えた便は `detection:spawned` を持たない。(n) main が `crates/` に触れて動いた便の追随の再 gate も stub を呼ばない。docs だけの動きは再 gate を省く（pipeline.md §33 の既存の歯が緑のまま）。(o) 候補の木で着地した後続は自分の run dir に `landed` を持つ record を 1 本持ち、stub の `--base` が自分の squash commit の親。runner の雛形の歯（`headless_runner_prompt_external_form` の snapshot と、雛形の検出線の行を 1 本と数える `headless_runner_box_claude_is_one_job_and_the_prompt_names_the_detector`）は同じ便で新しい字面へ写す。
 - 後続: 同時に走る着地後の検出の本数と、着地のたびの冷えた build の秒を、行 am の着地の後に実測する（上限の rules 行が要るかは実測を見て user が裁定・ADR-0050）。`pipe report` に着地後の検出を載せるかは別の便。行 am の着地は PATH の器の入れ替えを伴う（gate が ③ を撃たなくなるのは入れ替えた後から）。
 
+### 44.1 errata（現物との差・行 ak・規範は上の §44 のまま）
+
+- 名前: 置き場の別名は主実測の tmp の dir 名に接尾辞 `-detection` を足した名、理由の file は周の置き場の中の `reason`（中身は形 (4) の 1 語と改行）。rc の語（`rc-<rc>`）の数は record の `rc` と同じ値（負の rc は 255 に畳む）。
+- 形 (5) の「行の末尾」: 理由の file の在る周は、写しを読む 1 本が秒（`secs=`）を行へ畳んでから理由の 1 語を後ろに置く（読み手の描画は変えずに語が末尾に来る）。理由の file の無い周の字面は不変。
+- 形 (4) の遮断器: 先頭の行から閉じた周（1 行も撃っていない周）は理由を持つ record 1 本（`unmeasured=host-closed`）と理由の file だけを残し、判定行の写しを作らない。途中の行で閉じた周は撃った行ごとの record と写しに、理由の file（`host-closed`）を足す。
+- 形 (1) の断り: 宣言の写しを読めない周は検出線の有無を測れないので、何も書かずに rc 2 で止まる（行が無いと読めた周だけが rc 1）。
+
 <!-- contracts:begin -->
 schema = 1
 

@@ -40,9 +40,16 @@ pub use record::{
     carried_from, carried_record, detection_copies, detection_record, next_number, records_of, skip_record,
     step_record, Carried, DetectionCopy, Record, Skipped,
 };
+// 着地後の検出の口（`land::detection`・設計 gate-cost.md §44 形 (2)〜(4)）が gate と同じ 1 本で呼ぶ群。
+pub(crate) use record::{
+    aimed_lines, keep_detection, keep_reason, landed_step_record, landed_unfired_record, next_copy_dir,
+    population_lines, LandedMark, Unfired,
+};
+pub(crate) use verify::{recorded_rc, run_detection_admitted, Admit};
 pub use verify::{is_unreadable, run_checks, Check, Checks, Step, CHECKS};
 
 use crate::polarity::{OnFailure, Polarity, Timing};
+use super::admission;
 use super::confine::{self, Reason, Released};
 use super::contract::Contract;
 use super::cli::int_row;
@@ -211,6 +218,16 @@ impl Limits {
         health::Breaker {
             per_core: health::PerCore { runnable: self.runnable_per_core, blocked: self.blocked_per_core },
             wait_s: self.slot_wait_s,
+        }
+    }
+
+    /// 受付の材料（gate と着地後の検出の口が同じ受付札を組む・設計 gate-cost.md §44 形 (2)・FR46）。
+    pub fn admission(&self, policy: LockPolicy) -> admission::Rules {
+        admission::Rules {
+            sizes: admission::Sizes { job_mb: self.job_memory_mb, reserve_mb: self.reserve_memory_mb },
+            cap: self.mutants_jobs,
+            wait_s: self.slot_wait_s,
+            policy,
         }
     }
 }

@@ -31,8 +31,8 @@ use std::path::{Path, PathBuf};
 /// 衝突しない。
 const CHECK_DIR: &str = "verify";
 
-/// main 実測用の tmp worktree。
-fn check_path(repo: &Path, id: &str) -> PathBuf {
+/// main 実測用の tmp worktree（着地後の検出も同じ置き場に別名で出す・[`super::detection`]）。
+pub(super) fn check_path(repo: &Path, id: &str) -> PathBuf {
     worktrees_dir(repo).join(CHECK_DIR).join(id)
 }
 
@@ -146,13 +146,14 @@ fn materials(entry: &Land<'_>) -> Result<(String, Effective), String> {
 
 /// main 実測の record を書く file の名（gate の `verify.jsonl` と同じ dir・同じ record 形・別 file）。
 ///
-/// 別 file にするのは、gate の周の `n` と main 実測の `n` を重ねないためである（設計 gate-cost.md §5）。
-const VERIFY_MAIN_FILE: &str = "verify-main.jsonl";
+/// 別 file にするのは、gate の周の `n` と main 実測の `n` を重ねないためである（設計 gate-cost.md §5）。着地後の検出の
+/// record（`landed` 付き）も同じ file に追記する（[`super::detection`]・設計 gate-cost.md §44 形 (4)）。
+pub(super) const VERIFY_MAIN_FILE: &str = "verify-main.jsonl";
 
 /// main 実測の赤い行の stderr の写しを残す診断 file の名（[`VERIFY_MAIN_FILE`] と同じ dir・同じ stem・設計 pipeline.md §35 (3)）。
 ///
 /// gate の `verify.stderr.log` の対で、**機械は読まない**（人が「main の何の歯がどう赤いか」を読む）。
-const VERIFY_MAIN_STDERR_FILE: &str = "verify-main.stderr.log";
+pub(super) const VERIFY_MAIN_STDERR_FILE: &str = "verify-main.stderr.log";
 
 /// 主実測で何を省くか（省く周はその理由と land した木の sha・設計 §30 (ii)・ADR-0021 §2.4）。
 ///
@@ -193,8 +194,9 @@ fn record_main(entry: &Land<'_>, steps: &[Step], skipped: Option<Skipped<'_>>) -
 /// 終端で `refs/heads/main` を読めなかった周の実測値の字面（`main=unknown` / `main:unknown`）。
 ///
 /// 読めないを「一致した」にも「動いた」にも化けさせない（C10）。land 自体は成立している
-/// （ref は既に進み実測も緑）ので落とさず、理由は stderr 1 行に残す。
-const MAIN_UNKNOWN: &str = "unknown";
+/// （ref は既に進み実測も緑）ので落とさず、理由は stderr 1 行に残す。着地後の検出の record の `tree` も、親か木を
+/// 読めない周はこの語を書く（[`super::detection`]）。
+pub(super) const MAIN_UNKNOWN: &str = "unknown";
 
 /// 終端の直前に `refs/heads/main` を 1 回実測する（設計 §27・`s2-07l.379`）。
 ///

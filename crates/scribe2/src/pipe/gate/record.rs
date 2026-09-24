@@ -7,12 +7,11 @@ use super::{Detection, DetectionSkip, Gate};
 use crate::fleet::json_lite::{self, Value};
 use crate::fleet::store::{append_line, read_all, LockPolicy};
 use crate::fleet::{Stage, SCHEMA};
-use crate::pipe::admission;
 use crate::pipe::confine::Reason;
 use crate::pipe::declaration::Effective;
 use crate::pipe::move_proof::{self, LensInput};
 use crate::pipe::{contract_path, git_bytes, run_dir, verify_log_path, vessel_path};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// 赤い verify 行の stderr を残す診断 file の名（`verify.jsonl` と同じ dir）。
 ///
@@ -148,26 +147,14 @@ pub(super) const USAGE_HEAD: &str = "confine-usage";
 /// 生存の一覧が消える（`.286` run 1 の実測）。
 pub(super) fn record_verify(entry: &Gate<'_>, worktree: &Path, base: &str) -> Result<Counted, String> {
     let frozen = frozen_copy(entry)?;
-    let admit = Admit {
-        state_dir: entry.state_dir,
-        run: entry.run,
-        rules: admission::Rules {
-            sizes: admission::Sizes {
-                job_mb: entry.limits.job_memory_mb,
-                reserve_mb: entry.limits.reserve_memory_mb,
-            },
-            cap: entry.limits.mutants_jobs,
-            wait_s: entry.limits.slot_wait_s,
-            policy: entry.policy,
-        },
-    };
+    let admit = Admit { state_dir: entry.state_dir, run: entry.run, rules: entry.limits.admission(entry.policy) };
     // 撃つ周だけ便の diff の patch-id を測り、検出線の record に `patch_id=` で残す（設計 §40 形 (b)・撃つ前の木）。
     // 純移動の周は母集団の diff を渡し、落とした `+` 行の本数を record の `pure-move=` で残す（設計 §14 約束 2 / 3）。
     let mut pure_move = None;
     let (detection, placed, patch): (Vec<String>, Option<Placed<'_>>, Option<String>) = match &entry.detection {
         Detection::Run => {
-            let lines = aimed_lines(entry, frozen.detection_verify())?;
-            let (lines, dropped) = population_lines(entry, worktree, base, lines)?;
+            let lines = aimed_lines(entry.state_dir, entry.run, frozen.detection_verify())?;
+            let (lines, dropped) = population_lines(entry.state_dir, entry.run, worktree, base, lines)?;
             pure_move = dropped;
             let patch = if lines.is_empty() { None } else { super::patch_id(worktree, base, "HEAD") };
             (lines, None, patch)
@@ -184,7 +171,7 @@ pub(super) fn record_verify(entry: &Gate<'_>, worktree: &Path, base: &str) -> Re
         host: entry.limits.breaker(),
     };
     let steps = run_checks_admitted(&checks, Some(&admit));
-    keep_detection(entry, worktree, &steps)?;
+    keep_detection(entry.state_dir, entry.run, worktree, &steps)?;
     let path = verify_log_path(entry.state_dir, entry.run);
     let tail_path = path.with_file_name(STDERR_LOG_FILE);
     let mut red = 0;
@@ -232,12 +219,15 @@ const TARGETS_FILE: &str = "targets";
 /// `--targets <その path>` を足す（的を絞った口で撃つ）。**的の無い便は写しの行を 1 字も変えない**＝diff の
 /// 追加行を母集団にする従来の経路のまま。行の穴（`{jobs}` 等）は残すので、受付と箱の選び方は変わらない。
 /// 契約の写しを読めない周は理由を返す（的を空と読んで従来の経路へ黙って倒さない・C10）。
-fn aimed_lines(entry: &Gate<'_>, lines: &[String]) -> Result<Vec<String>, String> {
-    let targets = crate::pipe::contract::targets_of(&contract_path(entry.state_dir, entry.run))?;
+///
+/// 材料は gate の材料でなく**置き場と便 id の対**である（gate と着地後の検出の口が同じ 1 本を呼ぶ・設計 gate-cost.md
+/// §44 形 (2)・C2）。
+pub fn aimed_lines(state_dir: &Path, run: &str, lines: &[String]) -> Result<Vec<String>, String> {
+    let targets = crate::pipe::contract::targets_of(&contract_path(state_dir, run))?;
     if targets.is_empty() {
         return Ok(lines.to_vec());
     }
-    let path = run_dir(entry.state_dir, entry.run).join(TARGETS_FILE);
+    let path = run_dir(state_dir, run).join(TARGETS_FILE);
     write_copy(&path, &format!("{}\n", targets.join("\n")))?;
     let arg = shell_word(&path.display().to_string());
     Ok(lines.iter().map(|line| format!("{line} {TARGETS_FLAG} {arg}")).collect())
@@ -255,7 +245,15 @@ const POPULATION_FILE: &str = "population.diff";
 /// （[`move_proof::population`]）を run dir の [`POPULATION_FILE`] へ書き、各行の末尾に `--diff <その path>` を足して
 /// 落とした本数を返す。**要約にならない便（[`LensInput::Diff`]）と diff を読めない周は行を 1 字も変えない**＝
 /// 道具が `git diff` の追加行を母集団にする従来の経路のまま（読めない周の判定は段①が持つ）。
-fn population_lines(entry: &Gate<'_>, worktree: &Path, base: &str, lines: Vec<String>) -> Result<(Vec<String>, Option<usize>), String> {
+///
+/// 材料は [`aimed_lines`] と同じく置き場と便 id の対（着地後の検出は `worktree` に着地した commit の tmp・`base` に親）。
+pub fn population_lines(
+    state_dir: &Path,
+    run: &str,
+    worktree: &Path,
+    base: &str,
+    lines: Vec<String>,
+) -> Result<(Vec<String>, Option<usize>), String> {
     if lines.is_empty() {
         return Ok((lines, None));
     }
@@ -266,7 +264,7 @@ fn population_lines(entry: &Gate<'_>, worktree: &Path, base: &str, lines: Vec<St
         return Ok((lines, None));
     };
     let population = move_proof::population(&String::from_utf8_lossy(&diff), &summary);
-    let path = run_dir(entry.state_dir, entry.run).join(POPULATION_FILE);
+    let path = run_dir(state_dir, run).join(POPULATION_FILE);
     write_copy(&path, &population.text)?;
     let arg = shell_word(&path.display().to_string());
     Ok((lines.iter().map(|line| format!("{line} {DIFF_FLAG} {arg}")).collect(), Some(population.dropped)))
@@ -318,12 +316,14 @@ const DETECTION_OUTPUTS: [&str; 2] = ["outcomes.json", "missed.txt"];
 /// marker を、判定行の無い周は [`COPY_ABSENT_LINE`] の 1 行を残す。
 ///
 /// 数は**数え直さない**（設計 §15 (4)）——写すのは道具が出した 1 行と出力の byte だけである。
-fn keep_detection(entry: &Gate<'_>, worktree: &Path, steps: &[Step]) -> Result<(), String> {
+///
+/// 材料は置き場と便 id の対（gate と着地後の検出の口が同じ 1 本で写す・設計 gate-cost.md §44 形 (2)）。写した周は
+/// その周の置き場を返す（着地後の検出が同じ置き場に理由の file を足す・[`keep_reason`]）。
+pub fn keep_detection(state_dir: &Path, run: &str, worktree: &Path, steps: &[Step]) -> Result<Option<PathBuf>, String> {
     let Some(step) = steps.iter().find(|step| step.stage == Check::Detection) else {
-        return Ok(());
+        return Ok(None);
     };
-    let copies = run_dir(entry.state_dir, entry.run).join(COPY_DIR);
-    let dir = copies.join(round_of(entry, &copies).to_string());
+    let dir = next_copy_dir(state_dir, run);
     std::fs::create_dir_all(&dir).map_err(|err| format!("{} を作れない: {err}", dir.display()))?;
     let line = step.line.as_deref().unwrap_or(COPY_ABSENT_LINE);
     write_copy(&dir.join(COPY_LINE_FILE), &format!("{line}\n"))?;
@@ -338,23 +338,40 @@ fn keep_detection(entry: &Gate<'_>, worktree: &Path, steps: &[Step]) -> Result<(
     if copied == 0 {
         write_copy(&dir.join(COPY_ABSENT_OUTPUT), "")?;
     }
-    Ok(())
+    Ok(Some(dir))
 }
 
-/// この gate の周の番号（**[`Stage::Gated`] の件数の次**・設計 gate-cost.md §15 (1)）。
+/// 次の周の写しの置き場（run dir の [`COPY_DIR`] の下の周の番号の dir・作らない）。
+pub fn next_copy_dir(state_dir: &Path, run: &str) -> PathBuf {
+    let copies = run_dir(state_dir, run).join(COPY_DIR);
+    copies.join(round_of(state_dir, run, &copies).to_string())
+}
+
+/// この周の番号（**[`Stage::Gated`] の件数の次**・設計 gate-cost.md §15 (1)）。
 ///
 /// `Gated` は周の終端で 1 件追記されるので、写しを書く時点の件数は**済んだ周の数**である。既に在る
 /// 写しの最大の番号も併せて見るのは、event log を読めない周に 1 周目の写しを潰さないためである
-/// （上書きしないことが写しの目的そのもの）。
-fn round_of(entry: &Gate<'_>, copies: &Path) -> u64 {
-    let gated = read_all(entry.state_dir).map_or(0, |events| {
+/// （上書きしないことが写しの目的そのもの）。着地後の検出の周は `Gated` を足さないので、既に在る写しの
+/// 最大の番号の次になる（gate の周と同じ 1 本・設計 gate-cost.md §44 形 (2)）。
+fn round_of(state_dir: &Path, run: &str, copies: &Path) -> u64 {
+    let gated = read_all(state_dir).map_or(0, |events| {
         let count = events
             .iter()
-            .filter(|event| event.run == entry.run && event.stage == Some(Stage::Gated))
+            .filter(|event| event.run == run && event.stage == Some(Stage::Gated))
             .count();
         u64::try_from(count).unwrap_or(u64::MAX)
     });
     gated.max(kept_rounds(copies).into_iter().max().unwrap_or(0)).saturating_add(1)
+}
+
+/// 周の置き場の中の理由の file（着地後の検出が測れなかった周と撃たなかった周だけ・中身は 1 語・設計 gate-cost.md
+/// §44 形 (4)）。**無い周は理由を持たない**（写しの読み手は字面を 1 字も変えない・形 (5)）。
+const COPY_REASON_FILE: &str = "reason";
+
+/// 周の置き場に理由の 1 語（`unmeasured=<理由>` か `skipped=outside-scope`）を置く（置き場が無ければ作る）。
+pub fn keep_reason(dir: &Path, word: &str) -> Result<(), String> {
+    std::fs::create_dir_all(dir).map_err(|err| format!("{} を作れない: {err}", dir.display()))?;
+    write_copy(&dir.join(COPY_REASON_FILE), &format!("{word}\n"))
 }
 
 /// 既に在る写しの周の番号（番号でない名の dir は母集団に入らない）。
@@ -404,16 +421,31 @@ pub fn detection_copies(dir: &Path) -> Vec<DetectionCopy> {
 }
 
 /// 周 1 つの写しを読む（判定行が無い・読めない・空の周は [`COPY_ABSENT_LINE`]）。
+///
+/// 理由の file（[`COPY_REASON_FILE`]）の在る周だけ、行の**末尾**（秒の後ろ）に理由の 1 語を置く（設計 gate-cost.md
+/// §44 形 (5)）: 秒は行へ畳んで `secs` を `None` にする＝読み手（`pipe show`）の描画は変えずに語が末尾に来る。
+/// 理由の file の無い周の字面は 1 字も変わらない。
 fn copy_of(dir: &Path) -> DetectionCopy {
-    let line = std::fs::read_to_string(dir.join(COPY_LINE_FILE))
-        .ok()
-        .and_then(|text| text.lines().next().map(str::to_owned))
-        .filter(|found| !found.is_empty())
-        .unwrap_or_else(|| COPY_ABSENT_LINE.to_owned());
+    let line = first_line(&dir.join(COPY_LINE_FILE)).unwrap_or_else(|| COPY_ABSENT_LINE.to_owned());
     let secs = std::fs::read_to_string(dir.join(COPY_SECS_FILE))
         .ok()
         .and_then(|text| text.trim().parse().ok());
-    DetectionCopy { line, secs }
+    let Some(reason) = first_line(&dir.join(COPY_REASON_FILE)) else {
+        return DetectionCopy { line, secs };
+    };
+    let line = match secs {
+        Some(found) => format!("{line} secs={found} {reason}"),
+        None => format!("{line} {reason}"),
+    };
+    DetectionCopy { line, secs: None }
+}
+
+/// file の先頭の非空 1 行（無い・読めない・空の file は `None`）。
+fn first_line(path: &Path) -> Option<String> {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| text.lines().next().map(str::to_owned))
+        .filter(|found| !found.is_empty())
 }
 
 /// lens へ何を渡したかの 1 行を、段の記録と**同じ log**（[`STDERR_LOG_FILE`]）へ残す（設計 §21 (3)）。
@@ -739,6 +771,79 @@ pub fn skip_record(number: u64, skipped: Skipped<'_>) -> String {
     fields.push(("reason", Value::Str(skipped.reason.as_str().to_owned())));
     json_lite::write_object(&fields)
 }
+
+/// 着地後の検出の record の印（設計 gate-cost.md §44 形 (4)・任意 field＝schema は 1 のまま）。
+///
+/// `landed` が主実測の record と、本口より前の主実測の `kind=detection`（`landed` を持たない）から着地後の検出の
+/// record を分ける。`tree` は着地した木（親か木を読めない周は主実測の `unknown` の語）。
+#[derive(Debug, Clone, Copy)]
+pub struct LandedMark<'a> {
+    /// 着地した commit の sha（`landed=`）。
+    pub sha: &'a str,
+    /// 着地した木（`tree=`）。
+    pub tree: &'a str,
+}
+
+/// 着地後の検出が撃たなかった / 撃てなかった周の理由（record 1 本と理由の file の 1 語・設計 gate-cost.md §44 形 (4)）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unfired<'a> {
+    /// 着地した commit と親の path が検出線の面に触れない（`skipped=detection reason=outside-scope`）。
+    OutsideScope,
+    /// 測れなかった（`unmeasured=<理由>`・理由は `rc-<rc>` / `host-closed` / `unprepared` の語）。
+    Unmeasured(&'a str),
+}
+
+impl Unfired<'_> {
+    /// 理由の file と `pipe show` の行の末尾に置く 1 語。
+    pub fn word(self) -> String {
+        match self {
+            Self::OutsideScope => format!("skipped={}", DetectionSkip::OutsideScope.as_str()),
+            Self::Unmeasured(reason) => format!("{UNMEASURED_FIELD}={reason}"),
+        }
+    }
+}
+
+/// 着地後の検出が測れなかった周の record の field（理由の語を持つ）。
+const UNMEASURED_FIELD: &str = "unmeasured";
+
+/// 着地後の検出が撃った検出線の 1 行の record（[`step_record`] の field + 撃った周の `pure-move=` + `tree` + `landed`）。
+pub fn landed_step_record(number: u64, step: &Step, mark: LandedMark<'_>, pure_move: Option<usize>) -> String {
+    let mut fields = step_fields(number, step);
+    if let Some(dropped) = pure_move.filter(|_| !step.is_closed()) {
+        fields.push((PURE_MOVE_FIELD, Value::Num(u64::try_from(dropped).unwrap_or(u64::MAX))));
+    }
+    fields.push(("tree", Value::Str(mark.tree.to_owned())));
+    fields.push((LANDED_FIELD, Value::Str(mark.sha.to_owned())));
+    json_lite::write_object(&fields)
+}
+
+/// 着地後の検出が撃たなかった / 撃てなかった周の理由を持つ record 1 本（`kind=detection`・`tree` と `landed` を持つ）。
+///
+/// 面の外の周は検出線の skip record と同じ形（`skipped=detection` + `reason=outside-scope`）、測れなかった周は
+/// `unmeasured=<理由>`。
+pub fn landed_unfired_record(number: u64, mark: LandedMark<'_>, unfired: Unfired<'_>) -> String {
+    let mut fields = vec![
+        ("schema", Value::Num(SCHEMA)),
+        ("n", Value::Num(number)),
+        ("kind", Value::Str(Check::Detection.as_str().to_owned())),
+    ];
+    match unfired {
+        Unfired::OutsideScope => {
+            fields.push(("skipped", Value::Str(SkippedStage::Detection.as_str().to_owned())));
+            fields.push(("tree", Value::Str(mark.tree.to_owned())));
+            fields.push(("reason", Value::Str(DetectionSkip::OutsideScope.as_str().to_owned())));
+        }
+        Unfired::Unmeasured(reason) => {
+            fields.push(("tree", Value::Str(mark.tree.to_owned())));
+            fields.push((UNMEASURED_FIELD, Value::Str(reason.to_owned())));
+        }
+    }
+    fields.push((LANDED_FIELD, Value::Str(mark.sha.to_owned())));
+    json_lite::write_object(&fields)
+}
+
+/// 着地後の検出の record が持つ着地した sha の field（設計 gate-cost.md §44 形 (4)）。
+const LANDED_FIELD: &str = "landed";
 
 /// 撃った 1 段の record（`verify.jsonl` と land の `verify-main.jsonl` が**同じ形**で書く）。
 ///

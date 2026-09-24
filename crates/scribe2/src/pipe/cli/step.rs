@@ -13,6 +13,7 @@ use crate::pipe::current;
 use crate::pipe::declaration::{self, Ceiling, CEILING_ROW, DENIED_ROW};
 use crate::pipe::follow::Runner;
 use crate::pipe::gate::{Detection, Gate, Limits};
+use crate::pipe::land::detection::Detect;
 use crate::pipe::land::{Land, Retire};
 use crate::pipe::lens_record::{self, LensSource};
 use crate::pipe::ratelimit::Pool;
@@ -87,6 +88,51 @@ fn terminal_only(args: &[String], id: &str, manifest: &Manifest, policy: LockPol
         err: Vec::new(),
         rc: terminal.rc(),
     }
+}
+
+/// 着地後の検出だけを撃つ flag（値なし・設計 gate-cost.md §44 形 (1)・`--terminal-only` と同じ「着地をやり直さない口」）。
+const DETECTION_ONLY: &str = "--detection-only";
+
+/// 着地をやり直さない口の振り分け（どちらの flag も無い周は `None`＝着地の本体へ進む）。
+///
+/// - `--terminal-only`（設計 contract-source.md §5 手順 3）: 着地は成立しているのに終端が止まった便（push の失敗・
+///   CI の未確定・台帳を閉じられなかった周）を、着地をやり直さずに継ぐ。
+/// - `--detection-only`（設計 gate-cost.md §44 行 ak）: 着地した便の検出線を人が撃つ（撃ち直す）形。
+fn settled_port(args: &[String], id: &str, manifest: &Manifest, policy: LockPolicy) -> Option<Outcome> {
+    if super::present(args, TERMINAL_ONLY) {
+        return Some(terminal_only(args, id, manifest, policy));
+    }
+    super::present(args, DETECTION_ONLY).then(|| detection_only(args, id, manifest, policy))
+}
+
+/// `pipe land --run <id> --detection-only`: **着地をやり直さず**、着地した commit に検出線を 1 回撃つ（人が撃つ口）。
+///
+/// 前提の段は `Landed`（他の段は何も書かずに rc 1）。着地した sha は [`super::land::landed_sha`] で記録から読み、読めない
+/// 周は断る（HEAD の今の sha に読み替えない・`--terminal-only` と同じ理由）。受付札と遮断器の線は `--rules` か埋め込み。
+fn detection_only(args: &[String], id: &str, manifest: &Manifest, policy: LockPolicy) -> Outcome {
+    let resolved = match resolve(args, id, &[Stage::Landed], &Extra::Nothing) {
+        Ok(found) => found,
+        Err(outcome) => return outcome,
+    };
+    let Some(sha) = super::land::landed_sha(&resolved.state_dir, id) else {
+        return refused(format!("run {id} の着地した sha を記録から読めない"));
+    };
+    let limits = match Limits::of(manifest) {
+        Ok(found) => found,
+        Err(reason) => return broken(reason),
+    };
+    super::land::detection::detect(
+        &Detect {
+            run: id,
+            bead: &resolved.bead,
+            repo: &resolved.repo,
+            state_dir: &resolved.state_dir,
+            contract: &resolved.contract,
+            limits,
+            policy,
+        },
+        &sha,
+    )
 }
 
 /// `pipe approve`。**逐語を event へ写すだけ**で、段は動かさない（resume が進める）。
@@ -260,10 +306,9 @@ fn lens_source(args: &[String], id: &str, state_dir: &Path) -> Result<LensSource
 /// lens（`--lens` か run dir の写し・[`lens_source`]）と規則の線は main が動いた便の追随（rebase → gate の
 /// 撃ち直し・設計 §5.4）で gate へ渡すために読む（land 自身は数値を見ない）。
 pub(super) fn land_run(args: &[String], id: &str, manifest: &Manifest, policy: LockPolicy) -> Outcome {
-    // **終端だけを撃ち直す口**（設計 contract-source.md §5 手順 3）: 着地は成立しているのに終端が
-    // 止まった便（push の失敗・CI の未確定・台帳を閉じられなかった周）を、着地をやり直さずに継ぐ。
-    if super::present(args, TERMINAL_ONLY) {
-        return terminal_only(args, id, manifest, policy);
+    // **着地をやり直さない口**（終端だけ・着地後の検出だけ）は着地の前提を見ずに先に分ける。
+    if let Some(outcome) = settled_port(args, id, manifest, policy) {
+        return outcome;
     }
     // `Landed` も通す（設計 pipeline.md §40）: 列の先頭が候補の木に積んで着地させた便の land は、段を読んで何もせず
     // rc 0 で終わる（判定は land の番待ちの直後の 1 点）。`--pr-cmd` の形は列を見ないので従来どおり段違いで断る。

@@ -2742,6 +2742,450 @@ fn pipe_detection_red_line_fails_gate() {
     clean(&[&repo, &state]);
 }
 
+// ---- 着地後の検出の口（設計 gate-cost.md §44 行 ak・ADR-0060・接頭辞 `pipe_landed_detection_`）----------------
+//
+// `Landed` の便に `pipe land --run <id> --detection-only` を撃つ。fixture は gate の後に main を docs だけの 1 commit で
+// 進めてから着地させる（追随は再 gate を省く＝gate が撃った `{base}` と着地した commit の親が異なる）。測るのは口の
+// 前後の差（record +1・写しの周 +1・stub の呼出 +1）で、stub の本体は git の共通 dir に置き rc を口の直前に振る。
+
+/// 検出線の跳び板（tracked・本体は共通 dir の [`LANDED_STUB`]・引数をそのまま渡す）。
+const LANDED_TRAMPOLINE: &str = "verify-landed.sh";
+
+/// 共通 dir に置く検出線の stub の名。
+const LANDED_STUB: &str = "landed-stub.sh";
+
+/// stub が argv を 1 起動 1 行で積む file の名（共通 dir）。
+const LANDED_CALLS: &str = "landed-calls";
+
+/// 宣言の検出線（`{base}` と `{teeth}` の穴を持つ）。
+const LANDED_DETECTION: &str = r#"["sh verify-landed.sh --base {base} --teeth {teeth}"]"#;
+
+/// stub が stdout に出す判定行。
+const LANDED_LINE: &str = "mutants-diff: total=2 caught=1 missed=1 unviable=0 timeout=0 scope=landed";
+
+/// 面の内の歯の置き場（契約の verify 行の filter 語 [`LANDED_WORD`] に当たる歯を持つ）。
+const LANDED_LIB: &str = "crates/toy/src/lib.rs";
+
+/// [`LANDED_LIB`] の base の本文。
+const LANDED_LIB_BODY: &str = "#[cfg(test)]\nmod tests {\n    #[test]\n    fn landed_one() {}\n}\n";
+
+/// 契約の verify 行の filter 語（stub の `--teeth` に載る）。
+const LANDED_WORD: &str = "landed_";
+
+/// 着地後の検出の歯の便の形（base に置く file・runner の 1 行・契約の欄）。
+struct LandedCase {
+    /// 宣言と一緒に commit する file（repo 相対 path と本文）。
+    base: Vec<(&'static str, String)>,
+    /// runner の 1 行（commit を 1 本作る）。
+    runner: String,
+    /// 契約の欄（`write-set` と `verify` は必ず・他は任意）。
+    contract: Vec<String>,
+}
+
+/// 契約の verify 行（偽 `cargo` が rc 0 で返す nextest の形・filter 語は [`LANDED_WORD`]）。
+fn landed_verify() -> String {
+    format!("verify = [\"cargo nextest run -p toy --lib --no-tests=fail {LANDED_WORD}\"]")
+}
+
+/// runner が [`LANDED_LIB`]（面の内＝`crates/`）に 1 行足す便。
+fn landed_crates_case() -> LandedCase {
+    LandedCase {
+        base: vec![(LANDED_LIB, LANDED_LIB_BODY.to_owned())],
+        runner: format!("echo '// landed' >> {LANDED_LIB} && git add -A && git commit -q -m runner"),
+        contract: vec![format!("write-set = [\"{LANDED_LIB}\"]"), landed_verify()],
+    }
+}
+
+/// 着地した便と、gate が撃った `{base}`（便の spawn の base）。
+struct LandedRun {
+    /// toy repo。
+    repo: PathBuf,
+    /// 置き場。
+    state: PathBuf,
+    /// 便 id。
+    id: String,
+    /// 着地した commit（`Gated` の周は空）。
+    sha: String,
+    /// gate が検出線の `{base}` に置いた sha。
+    gate_base: String,
+}
+
+/// 偽 `cargo`（rc 0）を道具箱の前に積んだ PATH（契約の nextest 行を toy repo で緑にする）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn landed_path(state: &Path) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let bin_dir = state.join("landed-cargo-bin");
+    let cargo = bin_dir.join("cargo");
+    if !cargo.exists() {
+        fs::create_dir_all(&bin_dir).expect("偽 cargo の dir を作れる");
+        fs::write(&cargo, "#!/bin/sh\nexit 0\n").expect("偽 cargo を書ける");
+        fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).expect("偽 cargo に実行権を付ける");
+    }
+    format!("{}:{}", bin_dir.display(), crate::toolbox_path(state))
+}
+
+/// 共通 dir の stub を書く（argv を積み、判定行を出して rc で終える・木は汚れない）。
+fn write_landed_stub(repo: &Path, rc: u8) {
+    let body = format!(
+        "printf '%s\\n' \"$*\" >> \"$(git rev-parse --git-common-dir)/{LANDED_CALLS}\"\nprintf '%s\\n' '{LANDED_LINE}'\nexit {rc}\n"
+    );
+    fs::write(repo.join(".git").join(LANDED_STUB), body).ok();
+}
+
+/// stub が受けた argv（撃たれた順・1 起動 1 行）。
+fn landed_calls(repo: &Path) -> Vec<String> {
+    fs::read_to_string(repo.join(".git").join(LANDED_CALLS))
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_owned)
+        .collect()
+}
+
+/// 便を PASS の gate まで通す（検出線は跳び板・共通 verify は `verify-count.sh common`・gate は偽 cargo の PATH）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn landed_gated(case: &LandedCase) -> LandedRun {
+    let (repo, state) = repo_with_state();
+    let trampoline = format!("sh \"$(git rev-parse --git-common-dir)/{LANDED_STUB}\" \"$@\"\n");
+    fs::write(repo.join(LANDED_TRAMPOLINE), trampoline).expect("跳び板を書ける");
+    for (path, body) in &case.base {
+        let file = repo.join(path);
+        fs::create_dir_all(file.parent().expect("親 dir が在る")).expect("dir を作れる");
+        fs::write(&file, body).expect("base の file を書ける");
+    }
+    write_vessel(&repo, r#"["git", "sh", "cargo"]"#, r#"["sh verify-count.sh common"]"#);
+    let path = repo.join(".vessel.toml");
+    let body = fs::read_to_string(&path).expect("宣言を読める");
+    fs::write(&path, format!("{body}detection-verify = {LANDED_DETECTION}\n")).expect("宣言を書ける");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "vessel-landed"]);
+    write_landed_stub(&repo, 0);
+    let fields: Vec<&str> = case.contract.iter().map(String::as_str).collect();
+    let design = write_contract(&repo, &["write-set", "verify"], &fields);
+    let id = intake(&repo, &state, &design);
+    let gate_base = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let spawned = spawn_with(&repo, &state, &id, &case.runner);
+    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "spawn: {}", stderr_of(&spawned));
+    let (repo_arg, state_arg) = (repo.display().to_string(), state.display().to_string());
+    let lens = fake_lens(&state.join("lens-ran"), &lens_verdict("PASS"));
+    let gated = run_pipe_with_path(
+        &landed_path(&state),
+        &["gate", "--run", &id, "--repo", &repo_arg, "--state-dir", &state_arg, "--lens", &lens],
+    );
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "PASS の gate: {}", stderr_of(&gated));
+    LandedRun { repo, state, id, sha: String::new(), gate_base }
+}
+
+/// [`landed_gated`] の便を、main を docs だけの 1 commit で進めてから着地させる（`sha` = 着地した squash）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn landed_run(case: &LandedCase) -> LandedRun {
+    let mut run = landed_gated(case);
+    fs::create_dir_all(run.repo.join("docs")).expect("docs を作れる");
+    fs::write(run.repo.join("docs").join("moved.md"), "moved\n").expect("別便の docs を書ける");
+    git(&run.repo, &["add", "-A"]);
+    git(&run.repo, &["commit", "-q", "-m", "docs-move"]);
+    let (repo_arg, state_arg) = (run.repo.display().to_string(), run.state.display().to_string());
+    let landed = run_pipe_with_path(
+        &landed_path(&run.state),
+        &["land", "--run", &run.id, "--repo", &repo_arg, "--state-dir", &state_arg],
+    );
+    assert_eq!(landed.status.code(), Some(i32::from(RC_OK)), "land: {} / {}", stdout_of(&landed), stderr_of(&landed));
+    run.sha = git(&run.repo, &["rev-parse", "refs/heads/main"]);
+    run
+}
+
+/// 着地後の検出の口を 1 回撃つ（`rules` は任意）。
+fn detection_only(run: &LandedRun, rules: Option<&Path>) -> Output {
+    let (repo_arg, state_arg) = (run.repo.display().to_string(), run.state.display().to_string());
+    let mut args = vec!["land", "--run", run.id.as_str(), "--detection-only", "--repo", &repo_arg, "--state-dir", &state_arg];
+    let rules_arg = rules.map(|path| path.display().to_string());
+    if let Some(found) = &rules_arg {
+        args.extend(["--rules", found.as_str()]);
+    }
+    run_pipe_with_path(&landed_path(&run.state), &args)
+}
+
+/// 口の前の面（主実測の record 数・stub の呼出数・共通 verify の呼出数・写しの周・event 数）。
+struct LandedBefore {
+    /// `verify-main.jsonl` の record 数。
+    rows: usize,
+    /// 検出線の stub の呼出数。
+    calls: usize,
+    /// 共通 verify の stub の呼出数。
+    common: usize,
+    /// 写しの周の番号。
+    rounds: Vec<u64>,
+    /// event log の行数。
+    events: usize,
+}
+
+/// 口の前の面を読む。
+fn landed_before(run: &LandedRun) -> LandedBefore {
+    LandedBefore {
+        rows: main_rows(&run.state, &run.id).len(),
+        calls: landed_calls(&run.repo).len(),
+        common: detection_calls(&run.repo).len(),
+        rounds: copy_rounds(&run.state, &run.id),
+        events: event_count(&run.state),
+    }
+}
+
+/// 口が足した写しの周の番号（前より 1 つ増えたことを要求する）。
+fn added_round(run: &LandedRun, before: &LandedBefore) -> u64 {
+    let rounds = copy_rounds(&run.state, &run.id);
+    assert_eq!(rounds.len(), before.rounds.len() + 1, "写しの周は +1: {:?} → {rounds:?}", before.rounds);
+    rounds.last().copied().unwrap_or_default()
+}
+
+/// 便の `RunDone stage=Landed` の detail のうち `detection:` で始まるもの（物理順）。
+fn detection_details(state: &Path, id: &str) -> Vec<String> {
+    trail(state, id)
+        .into_iter()
+        .filter(|(kind, stage, _)| *kind == EventKind::RunDone && *stage == Some(Stage::Landed))
+        .filter_map(|(_, _, detail)| detail)
+        .filter(|detail| detail.starts_with("detection:"))
+        .collect()
+}
+
+/// `pipe show` の写しの行（判定行か不在の 1 行で始まる行・周の番号順）。
+fn shown_copies(run: &LandedRun) -> Vec<String> {
+    show_line(&run.repo, &run.state, &run.id)
+        .lines()
+        .filter(|line| line.starts_with("mutants-diff:") || line.starts_with(COPY_ABSENT_LINE))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// 口が record を 1 本足し、その record が `kind=detection` と着地した sha・木を持つ（新しい record を返す）。
+fn added_landed_row(run: &LandedRun, before: &LandedBefore) -> Vec<(String, vessel::fleet::json_lite::Value)> {
+    let rows = main_rows(&run.state, &run.id);
+    assert_eq!(rows.len(), before.rows + 1, "record は +1: {rows:?}");
+    let row = rows.last().cloned().unwrap_or_default();
+    assert_eq!(value_of(&row, "kind"), "detection", "kind=detection: {row:?}");
+    assert_eq!(value_of(&row, "landed"), run.sha, "landed=<着地した sha>: {row:?}");
+    assert_eq!(value_of(&row, "tree"), git(&run.repo, &["rev-parse", &format!("{}^{{tree}}", run.sha)]), "着地した木");
+    row
+}
+
+/// 口が stub を 1 回だけ撃ち、`--base` が着地した commit の親（gate の base と異なる）・`--teeth` が契約の語で、共通
+/// verify の stub は呼ばれない。
+fn assert_fired_on_the_parent(run: &LandedRun, before: &LandedBefore) {
+    let parent = git(&run.repo, &["rev-parse", &format!("{}^", run.sha)]);
+    assert_ne!(parent, run.gate_base, "fixture: gate の base と着地した commit の親は異なる");
+    let calls = landed_calls(&run.repo);
+    assert_eq!(calls.len(), before.calls + 1, "stub は 1 回だけ呼ばれる: {calls:?}");
+    let gated = format!("--base {} --teeth {LANDED_WORD}", run.gate_base);
+    assert_eq!(calls.first().cloned().unwrap_or_default(), gated, "fixture: gate の呼出は gate の base");
+    assert_eq!(calls.last().cloned().unwrap_or_default(), format!("--base {parent} --teeth {LANDED_WORD}"), "親と契約の語");
+    assert_eq!(detection_calls(&run.repo).len(), before.common, "共通 verify は撃たない");
+}
+
+/// (a) 測った周: rc 0・`detection=measured`・`landed` 付きの record +1（`line=` は stub の判定行）・stub の `--base` は
+/// 着地した commit の親（gate の base と異なる）で `--teeth` は契約の語・共通 verify は撃たない・event 1 件・show の行
+/// （判定行 + `secs=`）+1・台帳の見張り 0 件。
+#[test]
+fn pipe_landed_detection_measured_round_records_the_landed_commit() {
+    let run = landed_run(&landed_crates_case());
+    let before = landed_before(&run);
+    let shown_before = shown_copies(&run);
+    let out = detection_only(&run, None);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "口は rc 0: {}", stderr_of(&out));
+    assert_eq!(stdout_of(&out), format!("run={} detection=measured\n", run.id), "stdout は 1 行");
+    let row = added_landed_row(&run, &before);
+    assert_eq!(value_of(&row, "line"), LANDED_LINE, "line= は stub の判定行: {row:?}");
+    assert_eq!(value_of(&row, "rc"), "0", "{row:?}");
+    assert_fired_on_the_parent(&run, &before);
+    assert_eq!(detection_details(&run.state, &run.id), ["detection:measured"], "event は 1 件");
+    let round = added_round(&run, &before);
+    assert_eq!(read_copy(&run.state, &run.id, round, COPY_LINE), format!("{LANDED_LINE}\n"), "写しの判定行");
+    assert!(!copy_path(&run.state, &run.id, round, "reason").exists(), "測れた周は理由の file を置かない");
+    let shown = shown_copies(&run);
+    assert_eq!(shown.len(), shown_before.len() + 1, "show の行 +1: {shown:?}");
+    let last = shown.last().cloned().unwrap_or_default();
+    assert!(last.starts_with(&format!("{LANDED_LINE} secs=")), "判定行と secs=: {last}");
+    assert!(crate::toolbox_ledger_record_names(&run.state).is_empty(), "台帳 client を起こさない");
+    assert!(show_line(&run.repo, &run.state, &run.id).contains("stage=Landed"), "段は Landed のまま");
+    clean(&[&run.repo, &run.state]);
+}
+
+/// (b) 面の外: 着地した diff が docs だけの便は stub を呼ばず、`reason=outside-scope` の skip record・理由の file・
+/// `detection:skipped`・show の行は `detection-line: absent skipped=outside-scope`。
+#[test]
+fn pipe_landed_detection_outside_scope_writes_a_skip_record() {
+    let mut case = landed_crates_case();
+    case.runner = "echo x >> docs/landed.md && git add -A && git commit -q -m runner".to_owned();
+    case.contract = vec![format!("write-set = [\"{LANDED_LIB}\", \"docs/landed.md\"]"), landed_verify()];
+    let run = landed_run(&case);
+    let before = landed_before(&run);
+    let out = detection_only(&run, None);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "口は rc 0: {}", stderr_of(&out));
+    assert_eq!(stdout_of(&out), format!("run={} detection=skipped\n", run.id), "stdout は 1 行");
+    assert_eq!(landed_calls(&run.repo).len(), before.calls, "stub は呼ばれない");
+    let row = added_landed_row(&run, &before);
+    assert_eq!(value_of(&row, "skipped"), "detection", "skip record: {row:?}");
+    assert_eq!(value_of(&row, "reason"), "outside-scope", "理由は面の外: {row:?}");
+    let round = added_round(&run, &before);
+    assert_eq!(read_copy(&run.state, &run.id, round, "reason"), "skipped=outside-scope\n", "理由の file");
+    assert_eq!(detection_details(&run.state, &run.id), ["detection:skipped"], "event は 1 件");
+    let shown = shown_copies(&run);
+    assert_eq!(shown.last().cloned().unwrap_or_default(), format!("{COPY_ABSENT_LINE} skipped=outside-scope"), "{shown:?}");
+    clean(&[&run.repo, &run.state]);
+}
+
+/// 測れなかった周の共通 assert: rc 0・`detection=unmeasured`・`landed` 付きの record +1・理由の file と show の行の末尾が
+/// `unmeasured=<理由>`・event は `detection:unmeasured` 1 件・段は `Landed` のまま・main の sha は動かない（record を返す）。
+fn assert_landed_unmeasured(
+    run: &LandedRun,
+    before: &LandedBefore,
+    out: &Output,
+    reason: &str,
+) -> Vec<(String, vessel::fleet::json_lite::Value)> {
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "測れなかった周も rc 0: {}", stderr_of(out));
+    assert_eq!(stdout_of(out), format!("run={} detection=unmeasured\n", run.id), "stdout は 1 行");
+    let row = added_landed_row(run, before);
+    let round = added_round(run, before);
+    assert_eq!(read_copy(&run.state, &run.id, round, "reason"), format!("unmeasured={reason}\n"), "理由の file");
+    let last = shown_copies(run).last().cloned().unwrap_or_default();
+    assert!(last.ends_with(&format!(" unmeasured={reason}")), "show の行の末尾に理由: {last}");
+    assert_eq!(detection_details(&run.state, &run.id), ["detection:unmeasured"], "event は 1 件");
+    assert!(show_line(&run.repo, &run.state, &run.id).contains("stage=Landed"), "段は Landed のまま");
+    assert_eq!(git(&run.repo, &["rev-parse", "refs/heads/main"]), run.sha, "main の sha は動かない");
+    row
+}
+
+/// (c) 測れなかった周: stub が rc 2 の便は stub が 1 回だけ呼ばれ（撃ち直さない）、record の rc が 2・`unmeasured=rc-2`。
+#[test]
+fn pipe_landed_detection_rc2_is_unmeasured_and_fired_once() {
+    let run = landed_run(&landed_crates_case());
+    write_landed_stub(&run.repo, 2);
+    let before = landed_before(&run);
+    let out = detection_only(&run, None);
+    assert_eq!(landed_calls(&run.repo).len(), before.calls + 1, "stub は 1 回だけ呼ばれる");
+    let row = assert_landed_unmeasured(&run, &before, &out, "rc-2");
+    assert_eq!(value_of(&row, "rc"), "2", "record の rc は 2: {row:?}");
+    clean(&[&run.repo, &run.state]);
+}
+
+/// (d) 遮断器: 倍率 0 の `--rules`（§32 の歯と同じ形）で撃つと stub は呼ばれず `unmeasured=host-closed` の record 1 本。
+#[test]
+fn pipe_landed_detection_closed_breaker_fires_nothing() {
+    let run = landed_run(&landed_crates_case());
+    let slots = SlotFixture { runnable_per_core: 0, blocked_per_core: 0, ..default_slots() };
+    let rules = write_rules_full(&run.state, "rules-landed-busy.toml", (1, 1_000_000), FOLLOW_RETRIES, slots);
+    let before = landed_before(&run);
+    let out = detection_only(&run, Some(&rules));
+    assert_eq!(landed_calls(&run.repo).len(), before.calls, "stub は呼ばれない");
+    let row = assert_landed_unmeasured(&run, &before, &out, "host-closed");
+    assert_eq!(value_of(&row, "unmeasured"), "host-closed", "record は理由を持つ: {row:?}");
+    clean(&[&run.repo, &run.state]);
+}
+
+/// (d2) 出せない周: 置き場の別名の path に普通の file を置くと stub は呼ばれず `unmeasured=unprepared` の record 1 本。
+#[test]
+fn pipe_landed_detection_unprepared_worktree_is_unmeasured() {
+    let run = landed_run(&landed_crates_case());
+    let place = run.repo.join(".worktrees").join("scribe2").join("verify").join(format!("{}-detection", run.id));
+    fs::create_dir_all(place.parent().unwrap_or(&run.repo)).ok();
+    fs::write(&place, "occupied\n").expect("置き場の別名を file で塞げる");
+    let before = landed_before(&run);
+    let out = detection_only(&run, None);
+    assert_eq!(landed_calls(&run.repo).len(), before.calls, "stub は呼ばれない");
+    let row = assert_landed_unmeasured(&run, &before, &out, "unprepared");
+    assert_eq!(value_of(&row, "unmeasured"), "unprepared", "record は理由を持つ: {row:?}");
+    assert_eq!(fs::read_to_string(&place).unwrap_or_default(), "occupied\n", "塞いだ file に触れない");
+    clean(&[&run.repo, &run.state]);
+}
+
+/// (e) 的と純移動: 契約が的を持つ便は stub の argv に `--targets <run dir の的の file>`、純移動と証明された便は
+/// `--diff <run dir の母集団の file>` が載る（gate と同じ付け足し）。
+#[test]
+fn pipe_landed_detection_appends_targets_and_the_pure_move_population() {
+    let mut aimed = landed_crates_case();
+    aimed.contract.push(r#"targets = ["crates/toy/src/lib.rs:1:replace landed with ()"]"#.to_owned());
+    let run = landed_run(&aimed);
+    let out = detection_only(&run, None);
+    assert_eq!(stdout_of(&out), format!("run={} detection=measured\n", run.id), "{}", stderr_of(&out));
+    let file = run_dir(&run.state, &run.id).join("targets");
+    let call = landed_calls(&run.repo).last().cloned().unwrap_or_default();
+    assert!(call.ends_with(&format!(" --targets {}", file.display())), "的の file: {call}");
+    clean(&[&run.repo, &run.state]);
+
+    let moved = LandedCase {
+        base: vec![(LANDED_LIB, POP_BASE_LIB.to_owned())],
+        runner: "cp '{}'/*.rs crates/toy/src/ && git add -A && git commit -q -m runner".to_owned(),
+        contract: vec![
+            format!("write-set = [\"{LANDED_LIB}\", \"crates/toy/src/alpha.rs\"]"),
+            r#"verify = ["sh verify-ok.sh"]"#.to_owned(),
+        ],
+    };
+    let run = landed_pure_move(moved);
+    let before = landed_before(&run);
+    let out = detection_only(&run, None);
+    assert_eq!(stdout_of(&out), format!("run={} detection=measured\n", run.id), "{}", stderr_of(&out));
+    let file = run_dir(&run.state, &run.id).join("population.diff");
+    let call = landed_calls(&run.repo).last().cloned().unwrap_or_default();
+    assert!(call.ends_with(&format!(" --diff {}", file.display())), "母集団の file: {call}");
+    let row = added_landed_row(&run, &before);
+    assert_eq!(value_of(&row, "pure-move"), "3", "落とした `+` 行の本数: {row:?}");
+    clean(&[&run.repo, &run.state]);
+}
+
+/// 純移動の便（`fn two` を `alpha.rs` へ移す）: runner の `{}` を HEAD の写しの dir に置き換えて着地させる。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn landed_pure_move(mut case: LandedCase) -> LandedRun {
+    let staged = tmp().join("landed-head");
+    fs::create_dir_all(&staged).expect("HEAD の写しの dir を作れる");
+    fs::write(staged.join("lib.rs"), "fn one() -> u8 {\n    1\n}\n").expect("HEAD の file を書ける");
+    fs::write(staged.join("alpha.rs"), "fn two() -> u8 {\n    2\n}\n").expect("HEAD の file を書ける");
+    case.runner = case.runner.replace("{}", &staged.display().to_string());
+    landed_run(&case)
+}
+
+/// (f) 断り: 段が `Gated` の便と、宣言に検出線の行が無い便は rc 1 で、record・写し・event がどれも増えない。
+#[test]
+fn pipe_landed_detection_refuses_gated_and_undeclared_runs() {
+    let gated = landed_gated(&landed_crates_case());
+    let before = landed_before(&gated);
+    let out = detection_only(&gated, None);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "Gated は rc 1: {}", stderr_of(&out));
+    assert!(stderr_of(&out).contains("Gated"), "段を名指す: {}", stderr_of(&out));
+    assert_landed_untouched(&gated, &before);
+    clean(&[&gated.repo, &gated.state]);
+
+    let (repo, state) = repo_with_state();
+    let design = write_contract(&repo, &[], &[]);
+    let id = gated_pass(&repo, &state, &design, &state.join("lens-ran"));
+    let landed = land_once(&repo, &state, &id);
+    assert_eq!(landed.status.code(), Some(i32::from(RC_OK)), "land: {}", stderr_of(&landed));
+    let sha = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let bare = LandedRun { repo, state, id, sha, gate_base: String::new() };
+    let before = landed_before(&bare);
+    let out = detection_only(&bare, None);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "検出線の無い便は rc 1: {}", stderr_of(&out));
+    assert!(stderr_of(&out).contains("検出線の行が無い"), "理由: {}", stderr_of(&out));
+    assert_landed_untouched(&bare, &before);
+    clean(&[&bare.repo, &bare.state]);
+}
+
+/// 断った周の共通 assert: record・写し・event がどれも増えず、stdout は空。
+fn assert_landed_untouched(run: &LandedRun, before: &LandedBefore) {
+    assert_eq!(main_rows(&run.state, &run.id).len(), before.rows, "record は増えない");
+    assert_eq!(copy_rounds(&run.state, &run.id), before.rounds, "写しは増えない");
+    assert_eq!(event_count(&run.state), before.events, "event は増えない");
+    assert_eq!(landed_calls(&run.repo).len(), before.calls, "stub は呼ばれない");
+}
+
 // ---- 検出線の rc 2 = 測れなかった（`s2-07l.331`・設計 pipeline.md §5.3 の③・FR14）------------
 
 /// rc を **worktree の外**から差し替える verify 行の跳び板 script（tracked・便の worktree にも在る）。

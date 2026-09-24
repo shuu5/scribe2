@@ -148,6 +148,7 @@ const ALLOWED_GATE: &[cli_args::Allowed] = &[PLACE[0], PLACE[1], PLACE[2], value
 const ALLOWED_LAND: &[cli_args::Allowed] = &[
     PLACE[0], PLACE[1], PLACE[2],
     value("--run"), TOOLS[0], TOOLS[1], TOOLS[2], TOOLS[3], value("--pr-cmd"), Allowed::switch("--terminal-only"),
+    Allowed::switch("--detection-only"),
 ];
 /// `pipe retire`。
 const ALLOWED_RETIRE: &[cli_args::Allowed] = &[PLACE[0], PLACE[1], PLACE[2], value("--run"), TOOLS[0], TOOLS[1], TOOLS[2], TOOLS[3]];

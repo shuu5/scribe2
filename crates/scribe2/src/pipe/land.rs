@@ -83,6 +83,9 @@ mod finish;
 use finish::{finish, open_pr, squash};
 pub(in crate::pipe) use finish::{land_train, landed_sha, terminal, Car};
 
+/// 着地後の検出の口（`pipe land --detection-only`・設計 gate-cost.md §44 行 ak）。
+pub(in crate::pipe) mod detection;
+
 pub(crate) use super::queue::turn_now;
 pub use super::queue::{turn_in, Queued, Turn};
 pub use super::retire::{retire, retired_path, Retire};
