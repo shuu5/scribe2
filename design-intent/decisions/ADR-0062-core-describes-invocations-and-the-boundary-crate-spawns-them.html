@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="folio ADR-pack assembler (folio-bwc / instance#2) — deterministic structure, prose slots unfilled">
+<title>core は子 process を自分で起こさず、 何を起こすかの記述を差し替え口へ渡す — 実物は境界 crate の 1 か所に据え、 撃つ関数の純移動はやめる (ADR-0033 の実現方法の一部を置き換える)</title>
+<style>
+/* ===========================================================================
+   folio human-layer design system — core.css (S3 / folio-8oc プロトタイプ)
+   要件定義書 (SRS) ビジュアル design system の中核 register。
+   視覚言語 = deck帯 × B2高密度 (ADR-0041)。テーマ = 環境追従 prefers-color-scheme。
+   styling は意味クラス、taxonomy 識別は [data-component] 属性 (floor gate A)。
+   taxonomy = design-intent/research/srs-component-taxonomy.html
+   =========================================================================== */
+
+/* ---- requirement-type-color-tokens (meta / 全 register が共有・両テーマ定義) ---- */
+:root{
+  --ink:#08131a; --ink-soft:#3a4a55; --ink-faint:#5b6671;
+  --paper:#ffffff; --paper-2:#f5f8fa; --paper-3:#eef3f7;
+  --line:#dbe4ea; --line-soft:#eef3f7;
+  --brand:#2a4d6e; --brand-deep:#15324a; --brand-tint:#e8f0f7;
+  --ok:#1e7b65; --ok-tint:#e6f6f2; --ok-line:#9fd9cb;
+  --bad:#b22323; --bad-tint:#fdf3f3; --bad-line:#eab3b3;
+  --warn:#916626; --warn-tint:#fefbea; --warn-line:#e4cf8f;
+  --info:#2a5d9e; --info-tint:#eaf1fb; --info-line:#a8c4e8;
+  --violet:#5b3e8e; --violet-tint:#f0eafa; --violet-line:#cdb8ec;
+  --shadow:0 1px 2px rgba(8,19,26,.06),0 8px 24px rgba(8,19,26,.07);
+  --shadow-lg:0 2px 6px rgba(8,19,26,.08),0 18px 50px rgba(8,19,26,.12);
+  /* 要件型カラートークン (FR/NFR/CON/ASM) */
+  --fr:var(--brand); --nfr:var(--violet); --con:var(--warn); --asm:var(--info);
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --ink:#e8eef2; --ink-soft:#a9b7c1; --ink-faint:#8a99a4; /* ink-faint: 全 dark bg で contrast ≥4.85 = WCAG AA (≥4.5) 充足・最小は ok-tint/warn-tint (gate F・folio-vuf) */
+    --paper:#0d171e; --paper-2:#15222b; --paper-3:#1b2c37;
+    --line:#273947; --line-soft:#1b2c37;
+    --brand:#7db8e8; --brand-deep:#1d3a54; --brand-tint:#16293a;
+    --ok:#5ac8b8; --ok-tint:#10302b; --ok-line:#2e6258;
+    --bad:#ef7a7a; --bad-tint:#341c1c; --bad-line:#6e3636;
+    --warn:#d6a94e; --warn-tint:#312a13; --warn-line:#5e4e23;
+    --info:#7da9e8; --info-tint:#16263c; --info-line:#33507c;
+    --violet:#b89be0; --violet-tint:#241a36; --violet-line:#473a64;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.5);
+    --shadow-lg:0 2px 6px rgba(0,0,0,.5),0 18px 50px rgba(0,0,0,.6);
+  }
+}
+*{box-sizing:border-box;}
+html{scroll-behavior:smooth;}
+body{
+  margin:0; background:var(--paper-2); color:var(--ink);
+  font-family:"Noto Sans CJK JP","Noto Sans JP",system-ui,-apple-system,"Hiragino Kaku Gothic ProN",Meiryo,sans-serif;
+  font-feature-settings:"palt" 1; line-height:1.7; letter-spacing:.01em;
+  -webkit-font-smoothing:antialiased;
+}
+.page{max-width:1280px; margin:0 auto; background:var(--paper); box-shadow:var(--shadow-lg);}
+svg{display:block;} .ico{width:1em; height:1em;}
+
+/* ---- plain-language-term-inline (glossary 派生ビュー / 専門語のやさしい併記) ---- */
+.term{
+  /* font-size 下限 (folio-276 #5)。 .72em は em 連鎖 (例 .actor .role=11px 内) で 7.9px<8px へ縮み
+     判読不能化する。 max() で 10.5px を下限に据え、 広文脈では従来比率を保つ。 */
+  display:inline-block; font-size:max(10.5px,.72em); font-weight:700; line-height:1;
+  padding:.18em .5em; border-radius:999px; margin-left:.3em; vertical-align:.08em;
+  background:var(--paper-3); color:var(--ink-soft); border:1px solid var(--line);
+  letter-spacing:.02em; white-space:nowrap;
+}
+.term.en{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;}
+
+/* ===================== doc-cover-band (deck-band / 表紙) ===================== */
+[data-component="doc-cover-band"]{
+  position:relative; overflow:hidden; color:#fff;
+  /* deeper navy にして白文字 (小サイズ含む) を WCAG AA 維持 (gate F worst-case-stop が最明合成でも
+     ≥4.5 を要求)。 highlight radial は薄め、 linear の最明端 (旧 #33658f) を暗色化。 */
+  background:
+    radial-gradient(1200px 500px at 88% -10%, rgba(255,255,255,.07), transparent 60%),
+    linear-gradient(135deg,#0c1f30 0%,#143049 48%,#173a57 100%);
+  padding:54px 56px 46px;
+}
+.cover-eyebrow{font-size:12.5px; font-weight:700; letter-spacing:.22em; text-transform:uppercase; opacity:.86; margin:0 0 14px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;}
+.cover-eyebrow .doc-type{background:rgba(255,255,255,.16); padding:3px 10px; border-radius:6px; letter-spacing:.16em; border:1px solid rgba(255,255,255,.22);}
+[data-component="doc-cover-band"] h1{font-size:42px; line-height:1.14; margin:0 0 8px; font-weight:800; text-wrap:balance;}
+.cover-sub{font-size:17px; opacity:.9; margin:0 0 22px; font-weight:500;}
+.summary-card{background:rgba(255,255,255,.1); border:1px solid rgba(255,255,255,.2); border-radius:14px; padding:18px 22px; display:flex; gap:18px; align-items:flex-start; max-width:880px;}
+.summary-card .lab{font-size:11px; font-weight:700; letter-spacing:.16em; opacity:.8; margin:0 0 4px;}
+.summary-card .txt{font-size:17.5px; line-height:1.6; font-weight:600; margin:0;}
+.summary-card .txt b{color:#ffe8a8;}
+.cover-meta{display:flex; flex-wrap:wrap; gap:10px 26px; margin-top:24px; font-size:13px;}
+.cover-meta .m{display:flex; gap:8px; align-items:center; opacity:.92;}
+.cover-meta .m .k{opacity:.62; font-weight:600;} .cover-meta .m .v{font-weight:700;}
+.reader-chip{display:inline-flex; gap:8px; align-items:center; margin-top:18px; background:#ffce6e; color:#3a2c05; font-weight:700; font-size:13.5px; padding:8px 14px; border-radius:10px; box-shadow:0 3px 10px rgba(0,0,0,.2);}
+a{color:var(--brand);} /* anchor 既定色 — UA 既定 #0000ee は dark bg で 1.72 (skip-link/domain 目次等の素 anchor で 3 例目の同型欠陥・型 selector ゆえ class 付きリンクは specificity で不変・gate F WCAG AA 両テーマ ≥7.6) */
+
+/* ===================== approval-block (deck-band / 承認証跡) ★critic補填 ===== */
+[data-component="approval-block"]{display:flex; flex-wrap:wrap; gap:14px; align-items:stretch; margin-top:22px;}
+.sign{flex:1 1 200px; background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.22); border-radius:12px; padding:13px 16px; display:flex; flex-direction:column; gap:3px; min-width:0;}
+.sign .role{font-size:10.5px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; opacity:.7;}
+.sign .who{font-size:15px; font-weight:800;}
+.sign .when{font-size:11.5px; opacity:.72; font-weight:600;}
+.sign .stamp{align-self:flex-start; margin-top:4px; font-size:10px; font-weight:800; letter-spacing:.08em; padding:2px 8px; border-radius:6px; background:#ffce6e; color:#3a2c05;}
+.sign .stamp.self{background:rgba(255,255,255,.18); color:#fff; border:1px solid rgba(255,255,255,.3);}
+
+/* ===================== chapter-deck-band (deck-band / 章開き) =============== */
+[data-component="chapter-deck-band"]{position:relative; padding:34px 56px 12px;}
+[data-component="chapter-deck-band"] .num{position:absolute; top:-6px; right:34px; font-size:138px; font-weight:900; line-height:1; opacity:.06; letter-spacing:-.04em; user-select:none; pointer-events:none; font-family:ui-monospace,monospace;}
+.kicker{display:inline-flex; align-items:center; gap:9px; font-size:12px; font-weight:800; letter-spacing:.14em; text-transform:uppercase; padding:5px 12px; border-radius:8px; margin-bottom:10px;}
+[data-component="chapter-deck-band"] h2{font-size:27px; margin:0 0 6px; font-weight:800; line-height:1.2;}
+.lead{font-size:15px; color:var(--ink-soft); margin:0; max-width:920px; line-height:1.65;}
+.tint-brand{background:var(--brand-tint);} .tint-ok{background:var(--ok-tint);} .tint-bad{background:var(--bad-tint);}
+.tint-warn{background:var(--warn-tint);} .tint-info{background:var(--info-tint);} .tint-violet{background:var(--violet-tint);}
+.tint-brand .kicker{background:var(--brand); color:#fff;} .tint-ok .kicker{background:var(--ok); color:#fff;}
+.tint-bad .kicker{background:var(--bad); color:#fff;} .tint-warn .kicker{background:var(--warn); color:#fff;}
+.tint-info .kicker{background:var(--info); color:#fff;} .tint-violet .kicker{background:var(--violet); color:#fff;}
+.chapbody{padding:22px 56px 40px; background:var(--paper);}
+
+/* ===================== section-lead-callout (callout / 章導入) ============= */
+[data-component="section-lead-callout"]{display:grid; grid-template-columns:repeat(3,1fr); gap:16px;}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:14px; padding:18px 18px 16px; box-shadow:var(--shadow); position:relative; overflow:hidden;}
+.card.accent::before{content:""; position:absolute; left:0; top:0; bottom:0; width:5px; background:var(--brand);}
+.card .cid{font-size:11.5px; font-weight:800; letter-spacing:.12em; color:var(--brand); margin-bottom:8px; display:flex; align-items:center; gap:8px;}
+.card .ct{font-size:16.5px; font-weight:800; line-height:1.4; margin:0 0 6px;}
+.card .cd{font-size:13px; color:var(--ink-soft); margin:0;}
+
+/* ===================== scope-summary-panel (dense-list / 範囲) ============= */
+[data-component="scope-summary-panel"]{display:grid; grid-template-columns:1fr 1fr; gap:20px;}
+.scol{border-radius:14px; padding:18px 20px; box-shadow:var(--shadow);}
+.scol.in{background:var(--ok-tint); border:1px solid var(--ok-line);}
+.scol.out{background:var(--bad-tint); border:1px solid var(--bad-line);}
+.scol h3{margin:0 0 12px; font-size:15px; font-weight:800; display:flex; align-items:center; gap:9px;}
+.scol.in h3{color:var(--ok);} .scol.out h3{color:var(--bad);}
+.scol ul{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:9px;}
+.scol li{display:flex; gap:10px; align-items:flex-start; font-size:13.5px; line-height:1.5;}
+.scol li .b{flex:0 0 auto; margin-top:3px;}
+
+/* ===================== actor-stakeholder-table (dense-table / 主体) ======== */
+[data-component="actor-stakeholder-table"]{display:flex; flex-wrap:wrap; gap:12px;}
+.actor{display:flex; align-items:center; gap:11px; background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:11px 15px 11px 12px; box-shadow:var(--shadow); min-width:0;}
+.actor .av{flex:0 0 auto; width:38px; height:38px; border-radius:10px; display:grid; place-items:center; color:#fff;}
+.actor .nm{font-size:14px; font-weight:700; line-height:1.25;}
+.actor .role{font-size:11px; color:var(--ink-faint); font-weight:600;}
+.ext-badge{font-size:9.5px; font-weight:800; letter-spacing:.08em; background:var(--warn-tint); color:var(--warn); border:1px solid var(--warn-line); padding:1px 6px; border-radius:5px; margin-left:6px;}
+
+/* ===================== source-trace-origin (dense-table / 上位ニーズ) ★補填 = */
+[data-component="source-trace-origin"]{width:100%; min-width:440px; border-collapse:separate; border-spacing:0; font-size:13.5px;}
+[data-component="source-trace-origin"] thead th{background:var(--info); color:#fff; text-align:left; font-size:11.5px; font-weight:800; letter-spacing:.06em; padding:11px 14px;}
+[data-component="source-trace-origin"] thead th:first-child{border-top-left-radius:12px;} [data-component="source-trace-origin"] thead th:last-child{border-top-right-radius:12px;}
+[data-component="source-trace-origin"] tbody td{padding:12px 14px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.5;}
+[data-component="source-trace-origin"] tbody tr:nth-child(even) td{background:var(--paper-2);}
+[data-component="source-trace-origin"] .nid{font-weight:800; font-family:ui-monospace,monospace; color:var(--info); white-space:nowrap;}
+[data-component="source-trace-origin"] .origin{font-size:11.5px; color:var(--ink-faint); font-weight:700;}
+
+/* ===================== requirement-matrix-table (dense-table / 要件本体) === */
+[data-component="requirement-matrix-table"]{width:100%; min-width:620px; border-collapse:separate; border-spacing:0; font-size:13.5px;}
+[data-component="requirement-matrix-table"] thead th{background:var(--brand-deep); color:#fff; text-align:left; font-size:11.5px; font-weight:800; letter-spacing:.06em; padding:11px 14px;}
+[data-component="requirement-matrix-table"] thead th:first-child{border-top-left-radius:12px;} [data-component="requirement-matrix-table"] thead th:last-child{border-top-right-radius:12px;}
+[data-component="requirement-matrix-table"] tbody td{padding:12px 14px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.5;}
+[data-component="requirement-matrix-table"] tbody tr:nth-child(even) td{background:var(--paper-2);}
+[data-component="requirement-matrix-table"] tbody tr:hover td{background:var(--brand-tint);}
+.fid{font-weight:800; font-family:ui-monospace,monospace; font-size:13px; white-space:nowrap; color:var(--brand);}
+td.cond{color:var(--ink-soft); font-size:13px; width:22%;}
+td.resp{font-size:13.5px; width:40%;}
+/* ears-requirement-row: 根拠 Rationale を必須スロットとして明示 (critic #3 格上げ) */
+td.resp .why{display:block; margin-top:5px; font-size:11.5px; color:var(--ink-faint); padding-left:62px; position:relative;}
+td.resp .why::before{content:"↳ なぜ要る"; position:absolute; left:0; font-weight:700; color:var(--ink-faint);}
+td.resp .plain{display:block; margin-top:5px; font-size:12.5px; color:var(--ink-soft);}
+td.resp .plain::before{content:"やさしく言うと "; font-weight:700; font-size:10px; color:var(--brand);}
+/* dense-table を clip せず狭幅で内部横スクロールへ倒す (folio-276 #1)。 旧 overflow:hidden は
+   375-390px で列を 1 文字/行へ潰し判読不能にした上 scroll も封じていた (gate F 盲点=#2 で捕捉)。
+   overflow-x:auto + table 側 min-width = rtm-grid と同じ「狭幅は横スクロール」方針へ統一する。 */
+.tbl-wrap{border:1px solid var(--line); border-radius:12px; overflow-x:auto; box-shadow:var(--shadow);}
+
+/* ---- priority-badge + EARS chip (badge) ---- */
+.ears{display:inline-flex; align-items:center; gap:5px; font-size:10.5px; font-weight:800; letter-spacing:.04em; padding:3px 9px; border-radius:7px; white-space:nowrap; border:1px solid;}
+.ears.always{background:var(--info-tint); color:var(--info); border-color:var(--info-line);}
+.ears.trigger{background:var(--brand-tint); color:var(--brand); border-color:var(--brand);}
+.ears.state{background:var(--violet-tint); color:var(--violet); border-color:var(--violet-line);}
+.ears.forbid{background:var(--bad-tint); color:var(--bad); border-color:var(--bad-line);}
+.ears.option{background:var(--warn-tint); color:var(--warn); border-color:var(--warn-line);}
+.ears .en{opacity:.7; font-weight:600; font-family:ui-monospace,monospace; font-size:9px;}
+.prio{display:inline-flex; align-items:center; gap:4px; font-size:10px; font-weight:800; letter-spacing:.04em; padding:2px 8px; border-radius:6px; white-space:nowrap;}
+.prio.must{background:var(--bad); color:#fff;} .prio.should{background:var(--warn); color:#fff;} .prio.may{background:var(--paper-3); color:var(--ink-soft); border:1px solid var(--line);}
+.vmeth{font-size:10px; font-weight:800; font-family:ui-monospace,monospace; padding:2px 6px; border-radius:5px; background:var(--ok-tint); color:var(--ok); border:1px solid var(--ok-line);}
+.ears-legend{display:flex; flex-wrap:wrap; gap:10px; margin-bottom:14px; align-items:center;}
+.ears-legend .lt{font-size:12px; font-weight:700; color:var(--ink-soft); margin-right:4px;}
+/* ears-requirement-row = requirement-matrix-table の各 <tr>。行 styling は table を継承し、
+   data-component で floor gate A 識別 + 根拠 (td.resp .why) を空不可スロットに保つ */
+tr[data-component="ears-requirement-row"] td.resp .why:empty::after{content:"⚠ 根拠 未記入"; color:var(--bad); font-weight:700;}
+
+/* ===================== nfr-hero-metrics + nfr-metrics-table =============== */
+[data-component="nfr-hero-metrics"]{display:grid; grid-template-columns:repeat(4,1fr); gap:16px; margin-bottom:24px;}
+.nfr-hero{border-radius:16px; padding:20px 18px 18px; box-shadow:var(--shadow); position:relative; overflow:hidden; border:1px solid var(--line); background:var(--paper);}
+.nfr-hero .cat{font-size:11px; font-weight:800; letter-spacing:.1em; text-transform:uppercase; margin-bottom:8px; display:flex; align-items:center; gap:7px;}
+.nfr-hero .big{font-size:38px; font-weight:900; line-height:1; letter-spacing:-.02em; display:flex; align-items:baseline; gap:4px;}
+.nfr-hero .big .u{font-size:16px; font-weight:800; opacity:.7;}
+.nfr-hero .qual{font-size:12.5px; font-weight:600; color:var(--ink-soft); margin-top:8px; line-height:1.45;}
+.nfr-hero.c1{background:linear-gradient(160deg,var(--info-tint),var(--paper));} .nfr-hero.c1 .cat,.nfr-hero.c1 .big{color:var(--info);}
+.nfr-hero.c2{background:linear-gradient(160deg,var(--ok-tint),var(--paper));} .nfr-hero.c2 .cat,.nfr-hero.c2 .big{color:var(--ok);}
+.nfr-hero.c3{background:linear-gradient(160deg,var(--brand-tint),var(--paper));} .nfr-hero.c3 .cat,.nfr-hero.c3 .big{color:var(--brand);}
+.nfr-hero.c4{background:linear-gradient(160deg,var(--violet-tint),var(--paper));} .nfr-hero.c4 .cat,.nfr-hero.c4 .big{color:var(--violet);}
+[data-component="nfr-metrics-table"]{width:100%; min-width:480px; border-collapse:separate; border-spacing:0; font-size:13px;}
+[data-component="nfr-metrics-table"] th{background:var(--paper-3); text-align:left; font-size:11px; font-weight:800; letter-spacing:.05em; color:var(--ink-soft); padding:10px 14px; text-transform:uppercase;}
+[data-component="nfr-metrics-table"] td{padding:11px 14px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.55;}
+[data-component="nfr-metrics-table"] tbody tr:last-child td{border-bottom:none;}
+.nid{font-weight:800; font-family:ui-monospace,monospace; color:var(--brand); white-space:nowrap;}
+.tgt{font-weight:800; color:var(--ink); white-space:nowrap;}
+.meas{color:var(--ink-soft); font-size:12.5px;}
+
+/* ===================== rtm-grid (rtm-grid / 双方向トレース + 孤立検出) ===== */
+[data-component="rtm-grid"]{overflow-x:auto; border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow);}
+.rtm{border-collapse:separate; border-spacing:0; font-size:12.5px; width:100%; min-width:760px;}
+.rtm th,.rtm td{padding:11px 12px; text-align:center; border-bottom:1px solid var(--line); border-right:1px solid var(--line-soft);}
+.rtm th{background:var(--brand-deep); color:#fff; font-size:11px; font-weight:800; letter-spacing:.04em;}
+.rtm thead th:first-child{text-align:left;}
+.rtm .grp{background:var(--paper-3); color:var(--ink-soft); font-weight:800; font-size:10.5px; letter-spacing:.06em; text-transform:uppercase;}
+.rtm tbody th{background:var(--paper-2); text-align:left; font-weight:800; color:var(--brand); font-family:ui-monospace,monospace; white-space:nowrap; font-size:12px;}
+.rtm tbody th .lbl{display:block; font-family:inherit; font-weight:600; color:var(--ink-soft); font-size:10.5px; margin-top:2px;}
+.rtm td.hit{background:var(--ok-tint);}
+.rtm td .dot{display:inline-grid; place-items:center; width:22px; height:22px; border-radius:50%; background:var(--ok); color:#fff;}
+.rtm td .dot.ac{display:inline-flex; align-items:center; width:auto; min-width:0; height:auto; border-radius:6px; padding:2px 7px; font-size:10px; font-weight:700; line-height:1.2; margin:1px;}
+.rtm td.gap{background:var(--bad-tint);} .rtm td.gap .x{color:var(--bad); font-weight:900;}
+.rtm tbody tr:last-child td,.rtm tbody tr:last-child th{border-bottom:none;}
+
+/* ===================== rtm-collapse (折りたたみ RTM の fold affordance / folio-276 #4) ====
+   生成 SRS は核心 RTM を <details data-component="rtm-collapse"> で既定折りたたむ。 素の details は
+   marker が小さく「開けるUI」と気付けず要旨が素通りした (ceiling 第2層)。 summary を panel ヘッダ化し
+   ▶ caret + 「クリックで開閉」ヒントで開閉可能性を明示する。 折りたたみ機構自体は assembler が所有。 */
+[data-component="rtm-collapse"]{border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow); background:var(--paper); overflow:hidden;}
+[data-component="rtm-collapse"]>summary{cursor:pointer; list-style:none; user-select:none; display:flex; align-items:center; gap:11px; padding:15px 20px; font-size:14.5px; font-weight:800; color:var(--brand); background:var(--brand-tint);}
+[data-component="rtm-collapse"]>summary::-webkit-details-marker{display:none;}
+[data-component="rtm-collapse"]>summary::before{content:""; flex:0 0 auto; width:0; height:0; border-left:7px solid currentColor; border-top:5px solid transparent; border-bottom:5px solid transparent; transition:transform .15s ease;}
+[data-component="rtm-collapse"][open]>summary::before{transform:rotate(90deg);}
+[data-component="rtm-collapse"]>summary::after{content:"クリックで開閉"; margin-left:auto; font-size:10.5px; font-weight:700; letter-spacing:.04em; color:var(--ink-faint); background:var(--paper); border:1px solid var(--line); border-radius:6px; padding:2px 9px;}
+[data-component="rtm-collapse"][open]>summary{border-bottom:1px solid var(--line);}
+[data-component="rtm-collapse"]>.rtm-summary-derived,[data-component="rtm-collapse"]>[data-prose-slot="rtm-summary"]{margin:0; padding:13px 20px 0; font-size:13px; color:var(--ink-soft); line-height:1.6;}
+[data-component="rtm-collapse"]>[data-component="rtm-grid"]{margin:16px 20px 18px;}
+
+/* ===================== acceptance-criteria-checklist (dense-list) ========= */
+[data-component="acceptance-criteria-checklist"]{display:grid; grid-template-columns:repeat(3,1fr); gap:16px;}
+.ac{background:var(--paper); border:1px solid var(--ok-line); border-radius:14px; padding:17px 18px; box-shadow:var(--shadow); position:relative; display:flex; flex-direction:column; gap:8px;}
+.ac::before{content:""; position:absolute; left:0; top:0; bottom:0; width:5px; background:var(--ok); border-radius:14px 0 0 14px;}
+.ac .aid{font-size:11.5px; font-weight:800; color:var(--ok); letter-spacing:.1em; display:flex; align-items:center; gap:8px;}
+.ac .at{font-size:14.5px; font-weight:700; line-height:1.5; margin:0;}
+.ac .at b{color:var(--ok); font-weight:800;}
+.ac .metric{display:flex; align-items:baseline; gap:6px; margin-top:auto; padding-top:6px;}
+.ac .metric .v{font-size:26px; font-weight:900; color:var(--ok); line-height:1;}
+.ac .metric .l{font-size:11.5px; color:var(--ink-faint); font-weight:600;}
+
+/* ===================== constraint-callout (callout / 制約・規制) =========== */
+[data-component="constraint-callout"]{width:100%; border-collapse:separate; border-spacing:0; font-size:13.5px;}
+[data-component="constraint-callout"] td{padding:13px 16px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.55;}
+[data-component="constraint-callout"] tbody tr:last-child td{border-bottom:none;}
+.cid2{font-weight:800; font-family:ui-monospace,monospace; color:var(--warn); white-space:nowrap; width:60px;}
+.cl{font-weight:700; white-space:nowrap; width:170px; color:var(--ink);}
+.reg-badge{font-size:9.5px; font-weight:800; letter-spacing:.06em; background:var(--bad-tint); color:var(--bad); border:1px solid var(--bad-line); padding:1px 7px; border-radius:5px; margin-left:6px;}
+
+/* ===================== glossary-term-table (glossary / 用語 SSoT) ========= */
+[data-component="glossary-term-table"]{display:grid; grid-template-columns:1fr 1fr; gap:0 28px; border:1px solid var(--line); border-radius:14px; overflow:hidden; box-shadow:var(--shadow);}
+.grow{display:flex; gap:16px; padding:15px 20px; border-bottom:1px solid var(--line-soft); align-items:flex-start;}
+.grow:nth-child(odd){background:var(--paper);} .grow:nth-child(even){background:var(--paper-2);}
+.gword{flex:0 0 142px; font-size:14.5px; font-weight:800; color:var(--brand); line-height:1.3;}
+.gword .en{display:block; font-size:11px; font-weight:700; color:var(--ink-faint); font-family:ui-monospace,monospace; margin-top:2px;}
+.gdef{font-size:13px; color:var(--ink-soft); line-height:1.55;}
+
+/* ===================== fidelity-sync-meta + footer (meta) ================= */
+.foot{padding:26px 56px 40px; background:var(--brand-deep); color:rgba(255,255,255,.78); font-size:12px;}
+.foot .ft-grid{display:flex; flex-wrap:wrap; gap:14px 40px; justify-content:space-between; align-items:center;}
+.foot b{color:#fff;}
+.foot .tags{display:flex; flex-wrap:wrap; gap:8px;}
+.foot .tags span{background:rgba(255,255,255,.1); border:1px solid rgba(255,255,255,.18); padding:4px 10px; border-radius:7px; font-size:11px; font-weight:600;}
+/* i6f9: 読者向け平易行は常時可視の第 1 行 (flex-basis:100%)、 dev メタ行は font-size のみ控えめ化
+   (色/opacity は据置 = contrast 不変で gate F に新規 risk を持ち込まない)。 */
+.foot .ft-plain{flex-basis:100%; font-size:13px; color:rgba(255,255,255,.92); font-weight:500;}
+.foot .ft-grid>[data-audience="machine"]{font-size:10.5px;}
+
+/* ===========================================================================
+   残り register (taxonomy 全 37 部品の被覆) — 多くは中核 register を再利用
+   =========================================================================== */
+
+/* ---- dense-table family: interface / data / revision-history ---- */
+[data-component="interface-spec-table"],
+[data-component="data-requirements-block"],
+[data-component="revision-history-table"]{width:100%; border-collapse:separate; border-spacing:0; font-size:13px;}
+[data-component="interface-spec-table"] th,
+[data-component="data-requirements-block"] th,
+[data-component="revision-history-table"] th{background:var(--paper-3); text-align:left; font-size:11px; font-weight:800; letter-spacing:.05em; color:var(--ink-soft); padding:10px 14px; text-transform:uppercase;}
+[data-component="interface-spec-table"] td,
+[data-component="data-requirements-block"] td,
+[data-component="revision-history-table"] td{padding:11px 14px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.55;}
+[data-component="interface-spec-table"] tbody tr:last-child td,
+[data-component="data-requirements-block"] tbody tr:last-child td,
+[data-component="revision-history-table"] tbody tr:last-child td{border-bottom:none;}
+.iid{font-weight:800; font-family:ui-monospace,monospace; color:var(--info); white-space:nowrap;}
+.dir{font-size:10px; font-weight:800; padding:2px 7px; border-radius:5px; background:var(--info-tint); color:var(--info); border:1px solid var(--info-line);}
+
+/* ---- dense-list family: ui / functions / use-case / references / toc / appendix ---- */
+[data-component="ui-spec-block"],
+[data-component="product-functions-list"],
+[data-component="use-case-card"],
+[data-component="references-list"],
+[data-component="toc-navigator"],
+[data-component="assumptions-constraints-list"],
+[data-component="supporting-info-appendix"]{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:9px;}
+[data-component="ui-spec-block"] li,
+[data-component="product-functions-list"] li,
+[data-component="references-list"] li,
+[data-component="toc-navigator"] li,
+[data-component="assumptions-constraints-list"] li,
+[data-component="supporting-info-appendix"] li{display:flex; gap:11px; align-items:flex-start; background:var(--paper); border:1px solid var(--line); border-radius:11px; padding:11px 15px; box-shadow:var(--shadow); font-size:13.5px; line-height:1.5;}
+[data-component="assumptions-constraints-list"] li{border-left:5px solid var(--warn);}
+.li-tag{font-size:10px; font-weight:800; padding:2px 7px; border-radius:5px; background:var(--warn-tint); color:var(--warn); border:1px solid var(--warn-line); flex:0 0 auto;}
+[data-component="toc-navigator"]{display:grid; grid-template-columns:repeat(2,1fr); gap:9px 18px;}
+[data-component="toc-navigator"] li{box-shadow:none; border-color:var(--line-soft);}
+[data-component="toc-navigator"] .tn{font-weight:800; font-family:ui-monospace,monospace; color:var(--brand); flex:0 0 auto;}
+[data-component="references-list"] .ref-n{font-weight:800; font-family:ui-monospace,monospace; color:var(--ink-faint); flex:0 0 auto;}
+.li-key{font-weight:800; color:var(--brand); flex:0 0 auto;}
+
+/* use-case-card: precondition/flow/postcondition の枠 */
+[data-component="use-case-card"] li{flex-direction:column; gap:7px; border-left:5px solid var(--info); padding:14px 17px;}
+.uc-id{font-size:11.5px; font-weight:800; color:var(--info); letter-spacing:.08em;}
+.uc-flow{display:flex; flex-wrap:wrap; gap:6px; align-items:center; font-size:12.5px;}
+.uc-flow .stp{background:var(--paper-2); border:1px solid var(--line); border-radius:7px; padding:3px 9px; font-weight:600;}
+.uc-flow .ar{color:var(--ink-faint); font-weight:800;}
+
+/* ---- rtm-grid family: verification-method-grid / requirement-attributes-rtm ---- */
+[data-component="verification-method-grid"],
+[data-component="requirement-attributes-rtm"]{overflow-x:auto; border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow);}
+[data-component="verification-method-grid"] table,
+[data-component="requirement-attributes-rtm"] table{border-collapse:separate; border-spacing:0; font-size:12.5px; width:100%; min-width:680px;}
+[data-component="verification-method-grid"] th,
+[data-component="requirement-attributes-rtm"] th{background:var(--brand-deep); color:#fff; font-size:11px; font-weight:800; padding:10px 12px; text-align:left;}
+[data-component="verification-method-grid"] td,
+[data-component="requirement-attributes-rtm"] td{padding:10px 12px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.5;}
+[data-component="verification-method-grid"] tbody tr:nth-child(even) td,
+[data-component="requirement-attributes-rtm"] tbody tr:nth-child(even) td{background:var(--paper-2);}
+
+/* ---- callout family: quality-checklist / audience-toggle ---- */
+[data-component="quality-checklist-callout"]{background:var(--paper-2); border:1px solid var(--line); border-left:5px solid var(--ok); border-radius:12px; padding:16px 20px; box-shadow:var(--shadow);}
+[data-component="quality-checklist-callout"] .qt{font-size:13px; font-weight:800; color:var(--ok); margin:0 0 10px; display:flex; align-items:center; gap:8px;}
+[data-component="quality-checklist-callout"] ul{list-style:none; margin:0; padding:0; display:grid; grid-template-columns:repeat(3,1fr); gap:7px 16px;}
+[data-component="quality-checklist-callout"] li{font-size:12.5px; display:flex; gap:7px; color:var(--ink-soft);}
+[data-component="quality-checklist-callout"] li .ck{color:var(--ok); font-weight:900; flex:0 0 auto;}
+[data-component="audience-toggle"]{display:inline-flex; gap:0; border:1px solid var(--line); border-radius:10px; overflow:hidden; box-shadow:var(--shadow);}
+[data-component="audience-toggle"] button{border:none; background:var(--paper); color:var(--ink-soft); font:inherit; font-size:12.5px; font-weight:700; padding:8px 16px; cursor:pointer; border-right:1px solid var(--line);}
+[data-component="audience-toggle"] button:last-child{border-right:none;}
+[data-component="audience-toggle"] button[aria-pressed="true"]{background:var(--brand); color:#fff;}
+
+/* ---- diagram family: context / use-case-flow / state-machine ---- */
+[data-component="context-diagram"],
+[data-component="use-case-flow-diagram"],
+[data-component="state-machine-diagram"]{background:var(--paper); border:1px solid var(--line); border-radius:14px; padding:20px; box-shadow:var(--shadow); overflow-x:auto;}
+[data-component="context-diagram"] figcaption,
+[data-component="use-case-flow-diagram"] figcaption,
+[data-component="state-machine-diagram"] figcaption{font-size:11.5px; color:var(--ink-faint); font-weight:600; margin-top:10px; text-align:center;}
+/* use-case flow steps (横並びステップ) */
+.uc-basic{display:flex; align-items:stretch; gap:0; flex-wrap:wrap;}
+.uc-step{flex:1 1 0; min-width:140px; background:var(--paper); border:1px solid var(--brand); border-radius:13px; padding:14px; box-shadow:var(--shadow); display:flex; flex-direction:column; gap:5px;}
+.uc-arrow{flex:0 0 30px; display:grid; place-items:center; color:var(--brand); font-weight:800;}
+.uc-step .sn{font-size:11px; font-weight:800; color:var(--brand); letter-spacing:.06em;}
+.uc-step .st{font-size:14px; font-weight:800; line-height:1.3;}
+.uc-step .sd{font-size:11.5px; color:var(--ink-faint); line-height:1.45;}
+
+/* ---- badge: informative-normative-label ---- */
+.io-label{display:inline-flex; align-items:center; gap:5px; font-size:10px; font-weight:800; letter-spacing:.06em; padding:2px 9px; border-radius:6px; text-transform:uppercase;}
+.io-label.normative{background:var(--brand); color:#fff;}
+.io-label.informative{background:var(--paper-3); color:var(--ink-soft); border:1px solid var(--line);}
+
+/* ---- responsive ---- */
+@media (max-width:1080px){
+  [data-component="section-lead-callout"],[data-component="nfr-hero-metrics"],[data-component="acceptance-criteria-checklist"]{grid-template-columns:1fr 1fr;}
+  [data-component="scope-summary-panel"],[data-component="glossary-term-table"]{grid-template-columns:1fr;}
+}
+@media (max-width:720px){
+  [data-component="chapter-deck-band"],.chapbody,[data-component="doc-cover-band"],.foot{padding-left:22px; padding-right:22px;}
+  [data-component="section-lead-callout"],[data-component="nfr-hero-metrics"],[data-component="acceptance-criteria-checklist"]{grid-template-columns:1fr;}
+  [data-component="doc-cover-band"] h1{font-size:31px;}
+  [data-component="chapter-deck-band"] .num{font-size:92px;}
+}
+
+/* ============================================================================
+   dark accent コントラスト補正 — ★このブロックはファイル末尾に置くこと (source-order)。
+   dark では accent トークン (--brand/--info/--warn/--ok/--bad/--violet) が明色へ反転するため、
+   それを塗りに使い白文字を載せる小要素 (kicker / priority-badge / actor avatar / dot 等) は
+   WCAG AA が崩れる (gate F low-contrast で実検出)。 文字を暗色へ切替えて contrast を確保する。
+   基底の `color:#fff` ルールと同 specificity ゆえ、 source-order で後勝ちさせるには本ブロックが
+   それら全ての後 (= ファイル末尾) に来る必要がある。 前方へ移すと基底ルールに負け無効化する。
+   構造ヘッダ/フッタ (--brand-deep 塗り) は dark でも暗色維持ゆえ白文字のままで可読。
+   ============================================================================ */
+@media (prefers-color-scheme: dark){
+  .tint-brand .kicker, .tint-ok .kicker, .tint-bad .kicker,
+  .tint-warn .kicker, .tint-info .kicker, .tint-violet .kicker,
+  [data-component="source-trace-origin"] thead th,
+  .prio.must, .prio.should,
+  .rtm td .dot,
+  .actor .av,
+  [data-component="audience-toggle"] button[aria-pressed="true"],
+  .io-label.normative{ color:#08131a; }
+}
+/* ===== ADR-pack 固有部品 (folio-bwc / instance#2)。 srs.css の token を流用 ===== */
+[data-component="adr-context-row"]{display:flex;gap:12px;align-items:flex-start;padding:13px 16px;border:1px solid var(--line);border-left:3px solid var(--info);border-radius:10px;background:var(--paper-2);margin:10px 0}
+[data-component="adr-context-row"] .cxid{flex:0 0 auto;font-weight:700;font-size:12px;color:var(--info);background:var(--info-tint);border:1px solid var(--info-line);border-radius:6px;padding:2px 8px;letter-spacing:.02em}
+[data-component="adr-context-row"] .cxbody .cxh{font-weight:700;margin:0 0 3px;font-size:14.5px}
+[data-component="adr-context-row"] .cxbody .cxd{margin:0;color:var(--ink-soft);font-size:13.5px;line-height:1.7}
+table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;margin:8px 0;font-size:13.5px}
+[data-component="adr-driver-row"] td{border:1px solid var(--line);padding:9px 12px;vertical-align:top}
+[data-component="adr-driver-row"] .drid{font-weight:700;color:var(--brand);white-space:nowrap}
+[data-component="adr-driver-row"] .drg{display:inline-block;margin-left:6px;font-size:11px;color:var(--ink-soft);background:var(--paper-3);border:1px solid var(--line);border-radius:5px;padding:1px 6px}
+.opt-grid{display:flex;flex-direction:column;gap:12px;margin:10px 0}
+[data-component="adr-option-card"]{border:1px solid var(--line);border-radius:12px;padding:14px 16px;background:var(--paper);box-shadow:var(--shadow)}
+[data-component="adr-option-card"].chosen{border:2px solid var(--ok);background:var(--ok-tint)}
+[data-component="adr-option-card"].rejected{opacity:.92}
+.opt-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:4px}
+.opt-head .opt-id{font-weight:700;font-size:12px;color:var(--ink-soft)}
+.opt-head .opt-name{font-weight:800;font-size:15px}
+.opt-verdict{font-size:11.5px;font-weight:700;border-radius:999px;padding:2px 11px;border:1px solid}
+.opt-verdict.chosen{color:var(--ok);background:var(--ok-tint);border-color:var(--ok-line)}
+.opt-verdict.rejected{color:var(--bad);background:var(--bad-tint);border-color:var(--bad-line)}
+.opt-verdict.deferred{color:var(--warn);background:var(--warn-tint);border-color:var(--warn-line)}
+[data-component="adr-option-card"] .opt-sum{margin:2px 0 8px;color:var(--ink-soft);font-size:13.5px;line-height:1.7}
+[data-component="adr-option-card"] .opt-plain{display:block;margin:0 0 9px;font-size:13px;color:var(--ink-soft);background:var(--brand-tint);border-radius:7px;padding:6px 10px}
+.opt-pc{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media(max-width:640px){.opt-pc{grid-template-columns:1fr}}
+.opt-pc ul{margin:3px 0 0;padding-left:2px;list-style:none}
+.opt-pc li{font-size:12.5px;line-height:1.65;padding-left:18px;position:relative;margin:3px 0;color:var(--ink-soft)}
+.opt-pc .pros h4,.opt-pc .cons h4{margin:0;font-size:11.5px;letter-spacing:.04em}
+.opt-pc .pros h4{color:var(--ok)} .opt-pc .cons h4{color:var(--bad)}
+.opt-pc .pros li::before{content:"+";position:absolute;left:2px;color:var(--ok);font-weight:800}
+.opt-pc .cons li::before{content:"\2212";position:absolute;left:2px;color:var(--bad);font-weight:800}
+[data-component="adr-decision-panel"]{border:2px solid var(--ok);border-radius:14px;padding:16px 18px;background:var(--ok-tint);margin:8px 0}
+[data-component="adr-decision-panel"] .dec-kick{font-size:11.5px;font-weight:700;letter-spacing:.05em;color:var(--ok);text-transform:uppercase}
+[data-component="adr-decision-panel"] .dec-state{font-size:15.5px;font-weight:700;line-height:1.7;margin:5px 0 4px}
+[data-component="adr-decision-panel"] .dec-plain{display:block;font-size:13.5px;color:var(--ink-soft);line-height:1.7;margin:0 0 8px}
+[data-component="adr-decision-panel"] .dec-why{display:block;font-size:13px;color:var(--ink);background:var(--paper);border:1px solid var(--ok-line);border-radius:8px;padding:8px 11px;line-height:1.75;margin:0 0 10px}
+.justify-box{background:var(--paper);border:1px solid var(--line);border-radius:9px;padding:10px 12px}
+.justify-box .jh{font-size:12px;font-weight:700;color:var(--ink-faint);margin:0 0 6px}
+.justify-row{display:flex;gap:9px;align-items:baseline;padding:5px 0;border-top:1px dashed var(--line)}
+.justify-row:first-of-type{border-top:0}
+.justify-req{flex:0 0 auto;font-weight:800;font-size:12.5px;color:var(--ok);background:var(--ok-tint);border:1px solid var(--ok-line);border-radius:6px;padding:1px 9px}
+.justify-role{flex:0 0 auto;font-size:10.5px;color:var(--violet);background:var(--violet-tint);border:1px solid var(--violet-line);border-radius:999px;padding:1px 8px}
+.justify-note{flex:1 1 auto;font-size:12.5px;color:var(--ink-soft);line-height:1.6}
+.justify-tgt{font-size:11.5px;color:var(--ink-faint);margin:8px 0 0}
+[data-component="adr-supersession"],[data-component="adr-principle"]{border:1px solid var(--line);border-radius:10px;padding:12px 15px;margin:10px 0;font-size:13.5px;line-height:1.7}
+[data-component="adr-supersession"]{background:var(--paper-2)}
+[data-component="adr-principle"]{background:var(--violet-tint);border-color:var(--violet-line)}
+[data-component="adr-principle"] .prin-id{font-weight:700;color:var(--violet);font-size:12px;letter-spacing:.02em}
+[data-component="adr-principle"] .prin-text{font-weight:700;margin:4px 0 2px;color:var(--ink)}
+[data-component="adr-principle"] .prin-note{color:var(--ink-soft);font-size:12.5px}
+.ss-row{margin:3px 0}.ss-row .ss-k{font-weight:700;color:var(--ink-soft);font-size:12px;margin-right:6px}
+
+</style>
+<meta name="folio-version" content="0.1.0">
+<script type="application/ld+json">
+{
+  "@context": {
+    "dc": "http://purl.org/dc/terms/",
+    "schema": "https://schema.org/",
+    "folio": "https://folio.dev/spec/v1/"
+  },
+  "@id": "./ADR-0062-core-describes-invocations-and-the-boundary-crate-spawns-them.html",
+  "@type": "schema:TechArticle",
+  "dc:isPartOf": [
+    {
+      "@id": "./README.html"
+    }
+  ],
+  "dc:title": "core は子 process を自分で起こさず、 何を起こすかの記述を差し替え口へ渡す — 実物は境界 crate の 1 か所に据え、 撃つ関数の純移動はやめる (ADR-0033 の実現方法の一部を置き換える)",
+  "folio:version": "0.1.0",
+  "folio:stakeholders": [
+    "Developer",
+    "AI Agent",
+    "External Reviewer"
+  ],
+  "dc:references": [
+    {
+      "@id": "../spec/constitution.html#c1"
+    },
+    {
+      "@id": "../spec/constitution.html#c4"
+    },
+    {
+      "@id": "../spec/constitution.html#c12"
+    },
+    {
+      "@id": "../spec/constitution.html#c13"
+    },
+    {
+      "@id": "../spec/constitution.html#c17"
+    },
+    {
+      "@id": "../spec/srs.html#NFR2"
+    },
+    {
+      "@id": "../spec/srs.html#NFR3"
+    },
+    {
+      "@id": "../spec/srs.html#NFR5"
+    },
+    {
+      "@id": "../spec/srs.html#NFR6"
+    },
+    {
+      "@id": "./ADR-0001-rust-single-static-binary.html"
+    },
+    {
+      "@id": "./ADR-0033-core-lines-count-source-only-and-io-lives-in-a-boundary-crate.html"
+    },
+    {
+      "@id": "./ADR-0044-decision-ladder-is-a-constitution-article.html"
+    }
+  ]
+}
+</script>
+</head>
+<body>
+<!-- folio:chrome-top -->
+<a class="skip-link" href="#cover-summary">本文へスキップ</a>
+<nav class="breadcrumb" aria-label="パンくず"><ol>
+  <li><a href="../index.html">design-intent</a></li>
+  <li><a href="./README.html">decisions</a></li>
+  <li aria-current="page">ADR-0062</li>
+</ol></nav>
+<!-- /folio:chrome-top -->
+<div class="page" data-component="requirement-type-color-tokens">
+<header data-component="doc-cover-band">
+<p class="cover-eyebrow"><span class="doc-type">設計判断記録 (ADR)</span> <span>scribe2 — 起動の口を 1 つに</span></p>
+<h1>core は子 process を自分で起こさず、 何を起こすかの記述を差し替え口へ渡す — 実物は境界 crate の 1 か所に据え、 撃つ関数の純移動はやめる (ADR-0033 の実現方法の一部を置き換える)</h1>
+<p class="cover-sub">ADR-0033 は、 子 process を撃つ関数を core から境界 crate へ純移動して、 core が process を起こさない形にすると決めた。 測り直すと、 撃つ関数は core の中の多くの file から呼ばれており (git の 3 関数だけで 16 file)、 core は境界 crate に依存できないので、 撃つ関数だけを移すと呼び手が compile できない。 本 ADR は、 core に「何を起こすかの記述」の型 1 つと「起こす役の差し替え口」の trait 1 つを置き、 実物は境界 crate の 1 か所で bin の main の先頭に据えると決める。 呼び手の呼び方と判定は変わらず、 core の本体の Command::new は 0 になり、 歯は偽の起こし役を据えて site を測れる。 代わりに core の行数は減らず (+150 行前後)、 ADR-0033 が見込んだ移す量 (3〜5 千行) は成立しない。 ADR-0033 は何が I/O かを core の Command::new が 0 であることで機械で決めると置いており、 本 ADR はそれを 2026-09-15 の裁定の物差しと読んで満たす。 撃つ関数と driver の関数は core に残り、 core の行数が減らない点が裁定の見込みと違う。 user は core の行数が減らないことを了解した上でこの形 (OPT1) で進めると裁定した (裁定 id user 2026-09-24T00:13Z)。</p>
+<div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">この記録で「core」は器 (scribe2) の本体の箱、 「境界 crate」は外の世界に触れる仕事を受け持つ別の箱、 「子 process」は器が git や tmux などの道具を起こすことです。 前の決定 (ADR-0033) は、 道具を起こす関数を本体の箱から外の箱へそのまま引っ越しさせ、 本体の箱が道具を自分で起こさないようにする、 と決めました。 実際に数え直すと、 道具を起こす関数は本体の箱の中の多くの file から呼ばれていました (git を起こす 3 つの関数だけで 16 file)。 本体の箱は外の箱を名指せない作りなので、 関数だけを引っ越しさせると呼んでいる側が組み立て (compile) できなくなります。 この記録は、 本体の箱には「何を起こすかの記述」と「起こす役を差し込む口」だけを置き、 実際に起こす役は外の箱の 1 か所に置いて、 実行 file が動き出す最初に差し込む、 と決めます。 呼んでいる側の呼び方と判定の code は変わらず、 本体の箱が道具を自分で起こす場所は 0 になり、 test は偽の起こし役を差し込んで、 どんな道具をどんな引数で起こしたかを測れます。 代わりに本体の箱の行数は減らず (150 行前後増える)、 前の決定が見込んだ移す量 (3〜5 千行) は成り立ちません。 前の決定は、 何が外の世界に触れる仕事かを「本体の箱が道具を起こす場所が 0」で機械的に決めると置いており、 この記録はそれを user が 2026-09-15 に決めた「本体を判定と型に絞る」の物差しと読んで、 満たします。 ただ、 道具を起こす関数と、 判定と起動が交互に並ぶ関数群は本体の箱に残り、 行数が減らない点が見込みと違います。 user は 2026-09-24 に、 行数が減らないことを承知の上でこの形で進めると決めました (裁定 id user 2026-09-24T00:13Z)。 この記録は、 受け入れられるまで何も拘束しない発効前 (proposed) の記録です。</p></div></div>
+<div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">proposed</span></span><span class="m"><span class="k">選択肢</span><span class="v">6件 (OPT1–OPT6)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 3 / トレードオフ 9</span></span><span class="m"><span class="k">版</span><span class="v">v0.1.0 / 2026-09-24</span></span></div>
+<div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>NFR2・NFR3・NFR5・NFR6</b></div>
+<div data-component="approval-block">
+<div class="sign"><span class="role">裁定 (user)</span><span class="who">user</span><span class="when">2026-09-24T00:13Z 裁定 id user 2026-09-24T00:13Z (段 2 の形 = OPT1・core の行数が減らないことを了解・R-C4-5 を足す時点は core-spawn の deny と同じ便で裁定 id user 2026-09-15T10:07Z の範囲内。 要旨・逐語は台帳 s2-07l.198 の notes)。 core-lines の母集団と境界 crate と境界 crate の行数の上限は 2026-09-15 の裁定 (裁定 id user 2026-09-15T10:07Z・要旨・逐語は非公開の作業記録簿 = 台帳 s2-07l.198 の notes)</span><span class="stamp self">裁定済</span></div>
+<div class="sign"><span class="role">設計 (orchestrator)</span><span class="who">orchestrator</span><span class="when">2026-09-24 草稿 v1 (設計 core-boundary.md §9 の測り直しを、 main の現物で呼び手と site を数え直して形にした。 拘束する constitution の版 0.5.0)</span><span class="stamp self">作成</span></div>
+</div>
+<div class="reader-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 想定読者: scribe2 の開発 session と user — Rust の crate 構成の専門知識は不要 (専門語はやさしい言葉を併記)</div>
+</header>
+<!-- folio:chrome-toc -->
+<!-- /folio:chrome-toc -->
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">01</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v6m0 0L9 5m3 3l3-3"/><circle cx="12" cy="14" r="6"/></svg> 背景 / なぜこの判断が要るか</span><h2>いま何が問題か (確定方式を決める力学)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-01">なぜこの判断が要るのかを、 これまでの決定と実測と器の現物から説明します。 user は 2026-09-15 に、 本体の箱の行数の数え方から test の行を外すこと、 道具を起こす部分を外の箱へ分けて本体を判定と型に絞ること、 外の箱にも行数の上限を置くことを決めました。 前の決定 (ADR-0033) はその実現方法を「道具を起こす関数を外の箱へ移す」と書き、 移す量を 3〜5 千行、 引っ越しの便を 6 本ほどと見込みました。 最初の 2 便 (数え方の変更と、 外の箱の新設) は済んでいます。 数え直すと、 本体の箱で道具を起こす場所は 34 か所 (22 file) で、 設計の初版が数えた main の 33 か所から、 その約 48 分後に入った変更 1 つで 1 か所増えていました。 今は数を記録するだけなので、 増えるのを止めません。 また、 道具を起こす関数は本体の中の多くの file から呼ばれ、 包みの関数や claude の組み立て役は起動の組み立てそのものを受け渡ししていました。 本体の箱は外の箱を名指せない作りなので、 関数だけを引っ越しさせると呼んでいる側が組み立てできず、 呼んでいる側ごと引っ越しさせると、 判定まで外の箱へ押し出されます。 つまり、 判定を本体に残すか、 道具を起こす関数を本体から出すかの選択になります。 前の決定は、 何が外の世界に触れる仕事かを「本体の箱が道具を起こす場所が 0」で機械的に決めると置き、 「純粋かどうか」を物差しにする案は人の判断に頼るとして退けていました。 この記録は、 その「0」を user の決定の文面の物差しと読みます。 file の読み書きはどの案でも本体に残ります。 test の側では、 git が成功したのに何も返さなかった回を実物の git では作れず、 その回を弾く判定の一行が変異検査で生き残ったままです。</p></section>
+<div class="chapbody">
+<div data-component="adr-context-list">
+<div data-component="adr-context-row"><span class="cxid">CTX1</span><div class="cxbody"><p class="cxh">経緯 — I/O 面を分ける決定と物差しは済み、 段 2 の形と行数の見込みの差が残る</p><p class="cxd">2026-09-15 の user 裁定 (A2・2 問) は、 core<span class="term" data-component="plain-language-term-inline" data-term="core">器の本体の箱</span>-lines (R-C4-1) の母集団を core の src の本体 (in-file の歯を除く) にすること、 子 process を起こす I/O 面を境界 crate<span class="term" data-component="plain-language-term-inline" data-term="境界 crate">process を起こす箱</span> へ分けて core を pure な判定と型に絞ること、 境界 crate にも行数の上限 (新しい rules 行・値は実測の +20%・同じ裁定 id<span class="term" data-component="plain-language-term-inline" data-term="裁定 id">user の決定を指す印</span>) を置くことを決めた。 ADR-0033 はそれを記録し、 実現方法を、 std の Command<span class="term" data-component="plain-language-term-inline" data-term="Command">標準の起動の型</span> を構築する関数を境界 crate へ移すことと、 core が Command::new を 0 本しか持たないこと (deny) と書いた。 見込みは、 移す量が 3〜5 千行、 純移動<span class="term" data-component="plain-language-term-inline" data-term="純移動">中身を変えない移動</span>の機械証明 (pipeline.md §5.3) で lens に渡せる、 純移動の便が 6 本ほど、 とした。 段 1 の 2 便 (core-lines の母集団を本体にする便・境界 crate を新設して bin と e2e の歯を移す便) は着地済みで、 core-spawn (core の src で Command::new を含む行の数) は数だけ出す検出線<span class="term" data-component="plain-language-term-inline" data-term="検出線">止めずに記録する線</span>として動いている。 同じ日の後の裁定で R-C4-1 は一時 60,000 に緩められ、 リファクタリングを定期の枠で続けると決まった。 ADR-0033 は境界を散文でなく機械で決める (DR3) と置き、 何が I/O かを「core は Command::new を 0 本しか持たない (deny)」で決めると書き、 「pure かどうか」を物差しにする案 (判定を新しい crate へ出す案) を散文の判断として退けた。 本 ADR はその Command::new = 0 を裁定の文面の物差しと読む (本 ADR の解釈)。 file の読み書きはどの案でも core に残る。 本 ADR が採る案 (OPT1) はその物差し (本 ADR の読みでは core の本体の Command::new = 0) を満たす。 裁定と ADR-0033 の見込みと違うのは、 撃つ関数と driver の関数<span class="term" data-component="plain-language-term-inline" data-term="driver の関数">便を進める関数群</span> (判定と起動が交互に並ぶ関数群) が core に残って口越しに起こし、 core の行数が減らない点である。 ADR-0033 が見込んだ形 (撃つ関数を core に持たず、 境界は生の結果だけを返す) にいちばん近いのは driver の関数ごと移す案 (OPT2) だが、 それは判定を境界 crate へ押し出す。 段 2 の形について user に 2 つを問い、 裁定 (裁定 id user 2026-09-24T00:13Z) を得た。 1 つ目は、 core の行数が減らない (core +150 行前後・境界 +110 行前後・ADR-0033 が見込んだ 3〜5 千行の移動は成立しない) ことを了解した上で OPT1 で進め、 段 2 をやめる案 (OPT5) は採らない、 である。 2 つ目は、 R-C4-5 を足す時点 (下の supersession) を core-spawn を deny にする便と同じ便とし、 既存の裁定 id user 2026-09-15T10:07Z の範囲内と扱う (新しい A2 の裁定は要らない)、 である。 逐語は非公開の作業記録簿 (台帳 s2-07l.198 の notes) に在る。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX2</span><div class="cxbody"><p class="cxh">実測 — 撃つ site の数と、 検出線が増加を止めないこと</p><p class="cxd">main 9f516d3 (2026-09-24) の core の src で Command::new を含む行は、 本体 (core-lines と同じ切り方) が 34 行 / 22 file、 歯の区間<span class="term" data-component="plain-language-term-inline" data-term="歯の区間">test の区間</span>が 10 行 / 8 file である。 設計 §9 の初版が同じ日に数えた main b82be74 では本体が 33 行 / 21 file で、 その約 48 分後に着地した便 1 本 (s2-07l.576・doctor の版の照合) が本体に 1 site を足した。 検出線は数を出すだけなので増加を止めない (実例はこの 1 件)。 道具別には git が最も多く、 systemctl・tmux・sh・systemd-run・kill・bd・自分自身の bin・claude・curl・hostname・cargo・CI の照会が続く。 歯の区間の 10 行は、 git の fixture を作る helper と、 死んだ pid を作る true の起動と、 包みの歯が渡す引数である。 core の行数は段 1 の母集団の変更の後に 44,118 / 60,000 (main 8ca0dc9・設計 §9 の実測。 9f516d3 では 44,657) で、 余地は段 1 で戻っている。 台帳の notes には、 変異検査の A/B (撃墜 11・生存 1・母集団 12) で生き残った 1 本が記録されている。 それは口座の導入先の HEAD の読み (git が成功して stdout が空の周を空 sha として弾く guard) で、 歯が実 git を撃つので「成功して空」の周を作れない。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX3</span><div class="cxbody"><p class="cxh">現物 — 撃つ関数は core の中から呼ばれ、 core は境界 crate を名指せない</p><p class="cxd">main 9f516d3 で、 pipe/mod.rs の git の 3 関数 (bytes・ok・1 行の読み) は core の他の 16 file から呼ばれる。 seat/mod.rs の tmux に届く公開関数 (送る・pane を読む・pane の前面が shell かを見る・target を解く) は core の他の 10 file から呼ばれる。 pipe/confine.rs の包み (sh の行や Command を memory の囲いに入れる関数) は Command を値で受けて返し、 他の 5 file から呼ばれる。 headless/mod.rs の claude の構築点は Command を組んで返し、 包みへ渡す。 core の Cargo.toml は実行時の依存を 1 つも持たず、 境界 crate は core に依存する (向きは境界 → core の一方向)。 したがって撃つ関数だけを境界 crate へ移すと、 core に残る呼び手<span class="term" data-component="plain-language-term-inline" data-term="呼び手">関数を呼ぶ側</span>が compile できない。 呼び手ごと移すと、 land・gate・train・follow などの driver の関数 (判定と子 process の起動が交互に並ぶ関数群) が丸ごと境界 crate へ動き、 判定が境界へ押し出される。 core に残る関数の本文も変わるので、 純移動の機械証明 (名と本文の hash で「中身を変えていない」を示す仕組み) も使えない。 xtask の claude-spawn-points (deny) は、 claude の構築の字面が headless/ の中で mod.rs に 1 つだけ在ることを求める。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX4</span><div class="cxbody"><p class="cxh">憲法と既存の決定の向き (本 ADR の解釈)</p><p class="cxd">C4 は core の大きさなどの上限を CI の deny で守り、 上限の変更を A2 (user 裁定) に限る。 C13.2 は derive macro を境界 crate に閉じることを求める。 本 ADR はこれを、 core が境界 crate に依存しない構成を前提にした条と読む (条文そのものは依存の向きを言わない)。 C17 は変更のたびに決定はしご<span class="term" data-component="plain-language-term-inline" data-term="決定はしご">足す前に通す 5 段</span> (要るか・既に在るか・std で足りるか・1 行で済むか・最小の実装か) を順に通し、 C17.2 は仕組みを足す前に消すものを名指すことを求める。 C12.4 は変異の生存を検出線として記録する。 ADR-0033 は境界を散文でなく機械 (Command::new の有無) で決める (DR3) と置き、 境界 crate の関数は「引数 → 子 process → 生の結果」だけを返し、 判定は core の純関数に残り、 歯は stub で撃てる、 と帰結 (CSQ-P3) に書いた。 ADR-0001 の実行 file 1 つは不変である。 ADR-0033 の「core は Command::new を 0 本しか持たない」は、 歯の区間を数えるかを書いていない。 本 ADR はこれを、 core-lines と同じ切り方で「core の src の本体は 0 本」と読む (歯の区間の量は R-C4-3 が縛る)。 C1 は rule value (閾値・発効の印・裁定 id など) を manifest の 1 file に置くことを求め、 C1.2 / N2 は規則を散文だけで持たないことを求める (ADR-0033 の DR3 の根)。 claude-spawn-points (1 つだけ) と ADR-0033 が deny と置いた core-spawn (0 本) は、 rules 行<span class="term" data-component="plain-language-term-inline" data-term="rules 行">裁定つきの規則の行</span>を持たない xtask の構造の検査である。 本 ADR はこの型の検査を C1 の rule value と読まない (本 ADR の解釈)。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX5</span><div class="cxbody"><p class="cxh">材料 — std の Command の面は数えられ、 site ごとの差し替えの先例が在る</p><p class="cxd">core の site が std の Command に対して呼ぶ面は数えられる (数は src 全体の字面の件数)。 builder の面は new・arg・args・current_dir・env・env_remove・stdin・stdout・stderr・process_group・get_program・get_args・get_envs で、 終端は output (26 か所)・spawn (15)・status (4)・exec (1・席の起動の行) である。 exec と process_group のために unix の CommandExt を use する file が 5 つ在る。 hook/host_guard.rs は git の program の path を判定の場の引数に持ち、 歯が偽の git で呼出回数を数える。 headless の構築点も claude の program を引数に受ける。 これらは site ごとに program を差し替える先例で、 口は site ごとに別々である。 core の歯は nextest の下では歯ごとに別の process で走るが、 変異検査の道具は baseline を常に、 mutant の歯を的の歯の名が無い周に、 cargo test で同じ process の複数 thread で走らせる。 process 全体に効く偽物を歯が据えると、 並んで走る他の歯に漏れる。 境界 crate の e2e の歯は core の lib を同じ process で呼ぶものを持つ (seat の recent の git の読みを直に呼ぶ歯 2 本は、 実 git が撃てないと dirty の行と not-a-repo の判定が落ちる)。</p></div></div>
+</div>
+</div>
+<section data-component="chapter-deck-band" class="tint-brand"><span class="num">02</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v18"/><path d="M5 7l-3 6h6z"/><path d="M19 7l-3 6h6z"/><path d="M3 21h18"/></svg> 判断を縛る力 / 評価の軸</span><h2>選択肢を測るものさし (安全・速さ)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-02">この判断を評価する 5 本のものさしです。 本体の箱が道具を自分で起こさないこと (前の決定を、 人の判断でなく機械で測れる形で実現すること)、 判定と呼んでいる側を本体の箱に残すこと、 test が実物の道具を起こさずに、 どんな道具をどんな引数で起こしたかを測れること、 変更を小さな便に割って並べて流せること、 そして足すものを最小にして依存する外部の部品を増やさず、 実行 file を 1 つのままにすることです。</p></section>
+<div class="chapbody">
+<table data-component="adr-driver-table"><tbody>
+<tr data-component="adr-driver-row"><td class="drid">DR1</td><td>core は子 process を自分で起こさない — ADR-0033 の決定 (core の Command::new が 0) を実現し、 境界を散文でなく機械で決める <span class="drg">CTX1 (裁定)・CTX4 (ADR-0033 の DR3・C1.2)</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR2</td><td>判定と呼び手を core に残す — 境界 crate へ判定を押し出さない (境界 crate の上限が塞ぐ抜け穴を開けない) <span class="drg">CTX3・CTX4 (C4・ADR-0033)</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR3</td><td>歯が実 process を撃たずに起動の site を測れる — 引数と結果の読みを偽物で決め、 生き残った変異を殺せる <span class="drg">CTX2 (生存 1 本)・CTX4 (C12.4・ADR-0033 の帰結)</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR4</td><td>便を小さく並列に流せる — write-set が互いに交わらず、 呼び手の追随を起こさない <span class="drg">CTX3・SRS NFR2</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR5</td><td>足すものを最小にし消すものを名指す — 依存 OSS を足さず std だけで作り、 実行 file は 1 つのまま <span class="drg">CTX4 (C17 / C17.2・ADR-0001)・CTX5・SRS NFR3</span></td></tr>
+</tbody></table>
+</div>
+<section data-component="chapter-deck-band" class="tint-violet"><span class="num">03</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5"/></svg> 検討した選択肢 / 3 つの確定方式</span><h2>それぞれの利点と欠点を並べる</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-03">候補を 6 つ並べます。 本体に記述と差し込み口だけを置いて外の箱の 1 か所が起こす案、 道具を起こす関数を呼んでいる側ごと外の箱へ移す案、 関数だけを前の決定どおりに引っ越しさせる案、 道具ごとに専用の口を作る案、 この段をやめて数を記録するだけの線のまま残す案、 本体の箱が外の箱に頼る向きに変える案です。 却下した 5 案にも利点を並べ、 退けた決め手が現物か分析かを各案に書きます。 呼んでいる側ごと移す案は本体の行数を数千行減らせ、 前の決定が見込んだ形 (道具を起こす関数を本体に持たない) にいちばん近い点で、 関数だけを移す案と向きを変える案は本体の行数が減る点で、 道具ごとの口の案は引数の形を型で強く縛れる点で、 この段をやめる案は費用が 0 で新しい仕組みを足さず、 増加の歯止めや生き残りの対処も口なしでできる点で、 選んだ案に勝ちます。</p></section>
+<div class="chapbody">
+<div class="opt-grid">
+<div data-component="adr-option-card" class="chosen">
+<div class="opt-head"><span class="opt-id">OPT1</span><span class="opt-name">起動の記述<span class="term" data-component="plain-language-term-inline" data-term="起動の記述">何を起こすかの記述</span>と差し替え口<span class="term" data-component="plain-language-term-inline" data-term="差し替え口">起こす役の差し込み口</span> — core は何を起こすかを組むだけで、 境界 crate の実物 1 つが撃つ</span><span class="opt-verdict chosen">採用</span></div>
+<p class="opt-sum">core に std の Command と同じ builder の面と 4 終端を持つ起動の記述の型 1 つと、 4 終端と 1 対 1 の method を持つ差し替え口の trait 1 つを置く。 実物は境界 crate の 1 file に置き、 bin の main の先頭で据える。 core の各 site は構築の字面と use の行だけを置き換える。 歯は cfg(test) の実物で今のまま動き、 新しい歯は記録する stub<span class="term" data-component="plain-language-term-inline" data-term="記録する stub">記録する偽の起こし役</span> を据えて site を測る。 core の本体の Command::new が 0 になったら core-spawn を deny にし、 同じ便で R-C4-5 を足す。 決め手は分析 (呼び手を動かさずに ADR-0033 の 0 本を実現できる形のうち、 面が最小で便を並列に流せる形)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT1">本体の箱には「何を起こすかの記述」の型と「起こす役を差し込む口」だけを置き、 実際に道具を起こす役は外の箱の 1 か所に置いて、 実行 file が動き出す最初に差し込む案です。 記述の型は標準の起動の型と同じ呼び方を持つので、 本体の各場所は組み立ての書き出しと読み込みの行だけを書き換え、 呼び方も判定も変えません。 test は偽の起こし役を差し込んで、 どんな道具をどんな引数で起こしたかと、 返った結果をどう読んだかを測れます。 本体の箱で道具を起こす場所は 0 になり、 検査で固定できます。 口を置く 1 便の後は、 書き換えの便を並べて流せます。 代わりに、 本体の箱の行数は減らず (150 行前後増える)、 道具を起こす関数と判定を並べる関数群は本体に残るので、 前の決定が見込んだ形にはなりません。 起こして流しながら読む起こし方では、 偽物は実物を起こさないので失敗だけを返します。 差し込んだ口という状態が 1 つ増えて差し込み忘れると全部が止まり、 test の区間には本物の起動が残り、 中身の書き換えなので「中身を変えない引っ越し」の証明は使えません。 決め手は分析で、 呼んでいる側を動かさずに前の決定を実現できる形のうち、 足す面が最小で便を並べて流せる形でした。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>core の本体の Command::new が 0 になり deny で固定され、 何が I/O かが機械で決まる (DR1)</li>
+<li>呼び手の呼び方と判定が変わらず、 判定は core に残る。 関数の引数の数・順・戻りの形も変わらない (型の字面 Command が起動の記述に替わる所はある・DR2)</li>
+<li>歯が記録する stub で起動の引数を測れ、 output と status の周は結果の読みも測れる。 空 sha の生存変異を殺す歯が書ける (DR3)</li>
+<li>口を置く 1 便の後は、 site の置換 5 便が write-set を交えずに並列で流れる (各 S・DR4)</li>
+<li>依存 OSS を足さず、 std の型を写すだけで済む (DR5)</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>driver の関数と git の 1 行の読みなどの撃つ関数は core に残り、 口越しに子 process を起こし続ける。 ADR-0033 が見込んだ形 (撃つ関数を core に持たず、 境界は生の結果だけを返す) にはならない (裁定 id user 2026-09-24T00:13Z で了解済み)</li>
+<li>記録する stub は実 process を起こさないので、 spawn の終端は失敗だけを返す (std の Child は std の外から作れない)。 spawn の 15 site の成功の周は stub で測れず、 cfg(test) の実物を撃つ歯が持つ (DR3)</li>
+<li>core の行数は減らない (起動の記述と差し替え口で +150 行前後)。 ADR-0033 が見込んだ移す量 (3〜5 千行) は成立しない</li>
+<li>process 全体の状態 (据えた口) が 1 つ増え、 据え忘れた bin や e2e の test binary は全 site が撃てなくなる</li>
+<li>歯の区間には cfg(test) の実物と fixture の起動が残る</li>
+<li>site の本文が変わるので純移動の機械証明は使えず、 各便の lens は置換の diff を読む</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT2</span><span class="opt-name">driver の関数ごと境界 crate へ移す</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">撃つ関数を呼ぶ land・gate・train・follow などの driver の関数を、 呼び手ごと境界 crate へ移す。 core には呼ばれない判定と型だけが残る。 決め手は分析 (閉包ごと移せば判定が境界へ押し出され、 判定を残そうと切れば切り方が散文になる)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT2">道具を起こす関数を呼んでいる land や gate などの関数群 (driver の関数) を、 呼んでいる側ごと外の箱へ移す案です。 本体の箱の行数が数千行の単位で減り、 道具を起こす関数を本体に持たないという前の決定の見込みにいちばん近い案です。 新しい型も口も足さず、 移す file の多くは中身を変えずに済みます。 けれども driver の関数の中では判定と道具の起動が交互に並んでいます。 呼ばれる関数を丸ごと移せば切れ目は組み立ての都合で機械的に決まりますが、 判定を含む数千行が外の箱へ出て、 外の箱の上限はその判定ごと認めることになります。 判定を本体に残そうと人が切れば、 どこで切るかを文章で判断することになり、 境界を機械で決めるという前の決定の物差しに反します。 どちらかを引き受けることになり、 1 便も多くの file を跨いで大きくなって並べて流せません。 決め手は分析です。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>core の行数が数千行の単位で減り、 ADR-0033 が見込んだ形 (撃つ関数を core に持たない) にいちばん近い</li>
+<li>新しい型も trait も足さない。 移した file の多くは中身を変えずに済む</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>driver の関数の中では判定と起動が交互に並ぶ。 撃つ関数を呼ぶ閉包ごと移せば境界は compile で機械的に決まるが、 判定を含む数千行が境界 crate へ押し出され、 境界 crate の上限 (R-C4-5) はその判定ごと実測 +20% で認めることになる。 判定を core に残そうと人が切れば、 切り方が散文の判断になる (ADR-0033 の DR3 に反する)。 どちらか一方を引き受ける (DR1 / DR2)</li>
+<li>1 便が多くの呼び手を跨いで L 級になり、 並列に流せない (DR4)</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT3</span><span class="opt-name">撃つ関数だけを境界 crate へ純移動する (ADR-0033 の見込みの 6 便)</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">git・tmux・systemd・claude・curl などを撃つ関数を module ごとに境界 crate へ純移動し、 純移動の機械証明で lens に渡す。 決め手は現物 (core に残る呼び手が compile できない)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT3">道具を起こす関数だけを、 前の決定の見込みどおり 6 便に分けて外の箱へ引っ越しさせる案です。 前の決定の文面どおりで新しい決定が要らず、 「中身を変えない引っ越し」の機械の証明が使えるので審査は要約を読むだけで済み、 本体の行数もその分減ります。 けれども本体の箱は外の箱を名指せない作りなので、 本体に残る呼んでいる側 (git の 3 関数だけで 16 file、 tmux の関数で 10 file) が組み立てできません。 組み立てを通すには呼んでいる側ごと移すしかなく、 それは上の driver の関数ごと移す案になります。 決め手は現物です。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>ADR-0033 の文面どおりで、 新しい決定が要らない</li>
+<li>純移動の機械証明が使え、 lens は要約だけを読む</li>
+<li>core の行数が撃つ関数の分だけ減る</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>core は境界 crate に依存できないので、 core に残る呼び手 (git の 3 関数だけで 16 file・tmux の関数で 10 file) が compile できない (DR2)</li>
+<li>呼び手の compile を通すには呼び手ごと移すしかなく、 それは driver の関数ごと移す案になる</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT4</span><span class="opt-name">道具ごとの typed な口 (git・tmux・systemctl など) を core に置く</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">起動を 1 つの型でなく、 道具ごとに閉じた method の集合 (git の口・tmux の口・systemctl の口…) で表し、 境界 crate が各口を実装する。 決め手は分析 (子を流しながら読む site に結局 spawn の口が要り、 全道具の口を定義する最初の便が大きくなる)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT4">起動を 1 つの型で表す代わりに、 git 用・tmux 用・systemctl 用のように道具ごとに専用の口を作り、 外の箱が各口を実装する案です。 起こせる引数の形が型で閉じるので、 記述の型より強く縛れ、 test の偽物も道具ごとに小さく書けます。 けれども、 子の出力を流しながら読む場所 (審査役の起動・便の起動・台帳の読み) は起こした子そのものを持ち続けるので、 どの道具の口にも汎用の起動の口が要り、 結局は記述の型と同じ面が残ります。 全部の道具の口を最初の便で定義するとその便が大きくなり、 後から道具ごとに足すと口の定義 file を複数の便が触って並べて流せません。 行数も記述の型より増えます。 決め手は分析です。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>撃てる引数の形が型で閉じ、 起動の記述より強く縛れる</li>
+<li>歯の偽物も道具ごとに小さく書ける</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>子を流しながら読む site (headless の lens・pipe の spawn・seat の台帳の読み) は Child を持つので、 どの道具の口にも汎用の spawn が要り、 結局起動の記述と同じ面が残る</li>
+<li>全道具の口を最初の便で定義すると、 その便が大きくなる。 道具ごとに後から足すと、 口の定義 file を複数の便が触って write-set が交わる (DR4)</li>
+<li>道具ごとの method と実装が増え、 行数も起動の記述より多い (DR5)</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT5</span><span class="opt-name">段 2 をやめ、 core-spawn を検出線のまま残す</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">core の余地は段 1 で戻ったので、 起動の site には触らず、 core-spawn は数だけを出す線のまま置く。 決め手は分析 (core が process を直接起こす構造が残り、 歯が差し替え口で起動を撃てない)。 目的と価値の選択でもあり、 裁定 id user 2026-09-24T00:13Z は OPT1 を採り本案を採らないと決めた。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT5">本体の行数の余裕は最初の便で既に戻ったので、 この段はやめて、 道具を起こす場所の数を記録するだけの線のまま残す案です。 費用が 0 で、 新しい仕組みも足さず、 「そもそも要るか」を最初に問う決まりに最も素直です。 選んだ案でも行数は減らないので、 行数という元の目的はもう果たされています。 場所が増えるのは、 今の数を上限にする規則の行 (user の決定が要る) で口なしに止められ、 生き残っていた変異も、 git の出力を値で受ける判定と git を起こす部分に関数を分ければ口なしで捕まえられます。 けれども、 本体が道具を直接起こす作りはそのまま残り、 本体が道具を起こす場所を 0 にするという前の決定は実現せず、 それを取り下げる別の決定が要ります。 test が口に偽物を差し込んで起動を測ることはできず、 分けた場所のほかは場所ごとに分割か専用の口を 1 つずつ足すことになります。 決め手は分析で、 何を大事にするかの選択でもあるので user に尋ね、 user はこの案を採らないと決めました (裁定 id user 2026-09-24T00:13Z)。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>費用が 0 で、 新しい仕組みも足さない (決定はしごの最初の段「要るか」に最も素直)</li>
+<li>core の行数の目的は段 1 で既に果たされ、 OPT1 でも行数は減らない</li>
+<li>site の増加は、 core-spawn を今の数で上限にする形 (ratchet) で口なしに止められる (rules 行なので A2 の裁定は要る)</li>
+<li>空 sha の生存変異は、 HEAD の読みを「git の出力を値で受ける pure 関数」と「撃つ面」に分け、 pure 側に歯を足せば口なしに殺せる (台帳 s2-07l.198 の notes に在る手)</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>core が process を直接起こす構造が残る。 ADR-0033 の決定 (core の Command::new が 0・deny) は実現せず、 それを取り下げる別の ADR が要る (DR1)</li>
+<li>歯が差し替え口で起動を撃てない。 pure 分割や自前の口で測れるのは手を入れた site だけで、 site ごとに 1 つずつ足すことになる (OPT1 は全 site で口が 1 つ・DR3)</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT6</span><span class="opt-name">core を境界 crate に依存させる</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">撃つ関数を境界 crate へ移し、 core の呼び手は境界 crate を use して今の形のまま呼ぶ。 決め手は分析 (今の構成では境界 crate が core に依存しているので依存が循環し Cargo が build を拒むが、 それは bin を別の crate へ移すか、 撃つ関数を std だけの葉の crate に置いて core がそれに依存すれば切れる。 どちらの形でも core は撃つ関数を直に呼び続け、 歯は実 process を撃つ・DR3)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT6">道具を起こす関数を外の箱へ移し、 本体の箱のほうが外の箱に頼る向きに変えて、 呼んでいる側は今の形のまま呼ぶ案です。 呼び方が変わらず、 関数は中身を変えずに引っ越しでき、 本体の行数もその分減ります。 外の箱は実行 file を持ち、 既に本体に頼っているので、 今の作りのまま向きを逆にすると頼り合いが輪になって組み立てができません。 ただしこの輪は、 実行 file を 3 つ目の箱へ移す (済んだ最初の便をやり直す) か、 道具を起こす関数を標準の部品だけで作る小さな箱に置いて本体がそこに頼れば切れます。 退ける理由は輪ではなく、 どちらの形でも本体が道具を起こす関数を直に呼び続けるので、 test が偽物を差し込めず実物を起こし続けることです。 実行 file を移す形では、 この記録の読みでは、 本体が外の箱に頼らないというこの器の作りの前提も崩れます。 決め手は分析です。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>呼び手の呼び方が変わらず、 撃つ関数は純移動で移せる</li>
+<li>core の行数が撃つ関数の分だけ減る</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>境界 crate は bin を持ち core に依存しているので、 依存が循環して build できない。 循環を切るには、 bin を 3 つ目の crate へ移す (着地済みの段 1 を組み直す) か、 撃つ関数を std だけの葉の crate に置いて core がそれに依存するか、 の構成の変更が要る</li>
+<li>どちらの形で循環を切っても core は撃つ関数を直に呼び続けるので、 core の歯は差し替えられずに実 process を撃ち、 site を偽物で測れない (DR3・退ける決め手)。 bin を移す形では core の依存に境界 crate が入る (本 ADR の読みでは C13.2 の前提が崩れる・補助の理由・DR1)</li>
+</ul></div></div>
+</div>
+</div>
+</div>
+<section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの方式を選ぶか</span><h2>選んだ方式と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、 それが要件書のどの要件を支えるかを示します。 本体の箱には、 標準の起動の型と同じ呼び方を持つ「何を起こすかの記述」の型を 1 つ置き、 実際に起こす段になったら、 その記述を「起こす役を差し込む口」へ渡すだけにします。 本番では、 外の箱が持つ本物の起こし役を、 実行 file が動き出す最初に 1 回だけ差し込みます。 外の箱の test も本体の code を同じ process で呼ぶので、 そうした test が最初に呼ぶ共通の関数 1 つで、 同じ本物を 1 回だけ差し込みます。 差し込まれていないときは「できない」を返し、 今ある「道具を起こせなかった」ときの扱いにそのまま落ちます。 本体の箱の各場所は、 組み立ての書き出しと読み込みの行だけを書き換え、 呼び方も判定も変えません。 test では、 何も差し込まなければ今までどおり本物が動き、 新しい test は、 起こした道具と引数を覚えて決めた結果を返す偽物を、 その test の中だけに差し込んで測ります。 全部の場所を書き換え終えたら、 本体の箱で道具を起こす場所が 1 つでも在れば落とす検査に変え、 外の箱で標準の起動の型を組む file が 2 つ以上になっても落とす検査を足し、 同じ便で外の箱の行数の上限を規則の行に足します。 要件書では、 1 つの変更を小さく保つ要件 (NFR2) の根拠になり、 実行時に外部の部品に頼らない要件 (NFR3) と、 器の子 process を memory の囲いの中で走らせる要件 (NFR6) の形を変えず、 見張りの口が git を何回起こすかを test で測る要件 (NFR5) と同じ測り方を全部の場所へ広げる根拠になります。</p></section>
+<div class="chapbody">
+<div data-component="adr-decision-panel" id="decision">
+<p class="dec-kick">採用 — OPT1</p>
+<p class="dec-state">core SHALL 子 process の起動を、 std の Command と同じ builder の面 (new・arg・args・current_dir・env・env_remove・stdin・stdout・stderr・process_group・get_program・get_args・get_envs) と同じ 4 終端 (output・status・spawn・exec) を同じ名と受け手の形で持つ型 1 つ (起動の記述) で組む。 終端 SHALL 起動の記述を解釈せず、 4 終端と 1 対 1 の method を持つ trait 1 つ (差し替え口) へ渡す。 本番の build で差し替え口 SHALL process に 1 回だけ据わり (2 回目は据えない)、 据えていない周の終端は io の Unsupported を返して各 site の既存の撃てない分岐に落ちる (新しい分岐を足さない)。 境界 crate SHALL 差し替え口の実物 1 つ (起動の記述を std の Command へ写して撃つ) を 1 file に持ち、 bin の main の先頭で据える。 境界 crate の e2e の test binary SHALL core の lib を同じ process で呼ぶ歯が最初に呼ぶ共通の関数 1 つで、 同じ実物を process に 1 回だけ据える (OnceLock)。 以後 core と境界 crate の本番の src で std の Command を構築するのはこの 1 file だけとする。 core の既存の site SHALL 構築の字面と use の行 (型の位置で Command を名指す包みと構築点では型の字面) だけを置き換え、 呼び方の形・判定と、 関数の引数の数・順・戻りの形を変えない。 呼び手は process_group と exec のための CommandExt の import を除き変わらない。 claude-spawn-points SHALL std の Command と起動の記述の構築を合わせて数える。 cfg(test) の build で core の歯 SHALL 据えずに撃てる (既定は歯の区間の実物で、 既存の歯はそのまま動く)。 新しい歯 SHALL 記録する stub (撃たれた program と引数を覚え、 決めた結果を返す。 実 process を起こさないので spawn の終端は失敗だけを返す) を据えて site が差し替え口を通ることを測り、 その stub は据えた歯の thread の外へ効かない (同じ process で並んで走る他の歯に漏れない)。 ADR-0033 の「core は Command::new を 0 本しか持たない」SHALL core の src の本体 (core-lines と同じ切り方) で 0 と読み、 core-spawn の母集団を本体にして 1 以上を deny にし、 同じ便で境界 crate の本体で Command::new を持つ file の数 (boundary-spawn) を 2 以上で deny にする。 境界 crate の行数の上限 R-C4-5 (kind BoundaryLines・deny・裁定 id user 2026-09-15T10:07Z) SHALL core-spawn の deny と同じ便で manifest に足し、 値はその便の base で測った境界 crate の src の本体 × 1.2 の切り上げとする (測る時点を ADR-0033 の移した直後から deny の便の base へ置き換える。 係数と裁定 id は変えず、 時点の置き換えは 裁定 id user 2026-09-24T00:13Z で同じ裁定の範囲内とする)。 撃つ関数を呼び手ごと境界 crate へ移す形と、 撃つ関数だけを移す純移動 SHALL NOT 採らない。 ADR-0001 の単一 binary、 ADR-0033 の core-lines の母集団・crate の構成・依存の向き、 R-C4-1 の値 SHALL 不変とする。 本 ADR が足す仕組みと引き換えに消すものは、 core の本体で std の Command を直に組む site (main 9f516d3 の実測で 34)、 5 file の CommandExt の import、 ADR-0033 が見込んだ純移動の 6 便の計画である (C17.2)。</p>
+<span class="dec-plain" data-prose-slot="plain" data-slot-id="decision-plain">本体の箱は、 道具 (子 process) を起こすとき、 標準の起動の型と同じ呼び方 (道具の名前・引数・作業場所・環境の値・入出力の向き・process のまとまり、 の組み立てと読み出し) と、 同じ 4 つの起こし方 (結果を全部受け取る・終わりの状態だけ受け取る・起こして流しながら読む・自分をその道具に置き換える) を持つ型 1 つ (起動の記述) で組みます。 起こし方を呼ばれたら、 記述を解釈せずに、 4 つの起こし方と 1 対 1 の口 (差し替え口) へ渡します。 本番では口に起こし役を process に 1 回だけ差し込み、 2 回目は差し込みません。 差し込まれていないときは「できない」を返し、 今ある「起こせなかった」ときの扱いに落ちます (新しい扱いは足しません)。 外の箱は本物の起こし役 (記述を標準の起動の型へ写して起こす) を 1 file に持ち、 実行 file が動き出す最初に差し込みます。 外の箱の test の実行 file も、 本体の code を同じ process で呼ぶ test が最初に呼ぶ共通の関数 1 つで、 同じ本物を 1 回だけ差し込みます。 以後、 本体の箱と外の箱の本番の code で標準の起動の型を組むのはこの 1 file だけです。 本体の箱の今の各場所は、 組み立ての書き出しと読み込みの行 (起動を値として受け渡す包みと claude の組み立て役では型の名前) だけを書き換え、 呼び方・判定と、 関数の引数の数・順・戻りの形を変えません。 呼んでいる側は、 unix 用の追加の呼び方を読み込む行を除いて変わりません。 claude の組み立て役が 1 つであることを数える検査は、 標準の型と記述の型の組み立てを合わせて数えます。 test の build では何も差し込まずに本物が動き、 実物の git などを起こす今の test はそのまま動きます。 新しい test は、 起こした道具と引数を覚えて決めた結果を返す偽物 (起こして流しながら読む起こし方では失敗だけを返す) を差し込んで、 その場所が口を通ることを測ります。 その偽物は差し込んだ test の thread の外へは効かず、 同じ process で並んで走る他の test には漏れません。 前の決定の「本体の箱は道具を起こす場所を 0 本しか持たない」は、 test の区間を除く本体で 0 本と読み (行数の数え方と同じ切り方)、 1 か所でも在れば検査で落とします。 test の区間の本物と test 用の起動は数えません。 同じ便で、 外の箱の本番の code で標準の起動の型を組む file が 2 つ以上になっても検査で落とします。 外の箱の行数の上限 (R-C4-5・2026-09-15 の user の決定の印を持つ) は、 検査で落とすようにする便と同じ便で規則の行に足し、 値はその便の起点で測った外の箱の本体の行数の 1.2 倍の切り上げにします。 測る時点を引っ越しの直後からこの便の起点へ移すことは、 user が 2026-09-24 の決定 (裁定 id user 2026-09-24T00:13Z) で前の決定の範囲内と扱うと決めました。 道具を起こす関数を呼んでいる側ごと外の箱へ移す形と、 関数だけを移す引っ越しは採りません。 実行 file 1 つの決定 (ADR-0001)、 行数の数え方・箱の構成・頼る向き、 本体の行数の上限の値は変えません。 足す仕組みと引き換えに消すのは、 本体の箱で標準の起動の型を直に組む 34 か所、 5 file にある unix 用の追加の呼び方の読み込み、 前の決定が見込んだ引っ越し 6 便の計画です。</span>
+<span class="dec-why" data-prose-slot="rationale" data-slot-id="decision-rationale">前の決定は、 境界を人の判断でなく機械で決めると置き、 何が外の世界に触れる仕事かを「本体の箱が道具を起こす場所が 0」で決めると書き、 「純粋かどうか」を物差しにする案を退けました。 この記録はその「0」を user の決定の文面の物差しと読み、 本体に残る呼んでいる側を動かさずに満たします。 標準の起動の型と同じ呼び方を持つ記述の型を置けば、 各場所の書き換えは組み立ての書き出しと読み込みの行だけになり、 呼び方も判定も変わりません。 起こし役を口の向こうに置けば、 本物は外の箱の 1 か所に集まり、 test は偽物を差し込んで、 実物の道具では作れない回 (成功したのに空の出力) を作れます。 これは前の決定が帰結に書いた「歯は stub で撃てる」を、 引っ越しでなく口で実現する形です。 引き換えに、 道具を起こす関数と、 判定と起動を並べる関数群は本体に残り、 本体の行数は減りません。 前の決定が見込んだ形 (道具を起こす関数を本体に持たない) にいちばん近いのは呼んでいる側ごと移す案ですが、 それは判定を外の箱へ押し出すか、 切り方を人の判断に委ねます。 判定を本体に残すことを優先してこの案を選びました。 行数が減らない点は見込みと違うので user に尋ね、 user はそれを了解した上でこの案で進めると決めました (裁定 id user 2026-09-24T00:13Z)。 file の読み書きはどの案でも本体に残ります。 関数だけを移す案は、 本体が外の箱を名指せない作りのため組み立てができないので退けました。 向きを変える案の頼り合いの輪は、 実行 file を別の箱へ移すか、 道具を起こす関数を標準の部品だけで作る小さな箱に置けば切れますが、 どちらでも本体は道具を起こす関数を直に呼び続け、 test が偽物を差し込めないので退けました。 道具ごとの口の案は型で強く縛れますが、 流しながら読む場所に汎用の口が結局要り、 全部の口を定義する便が大きくなるので退けました。 この段をやめる案は費用が 0 で、 行数という元の目的は既に果たされており、 場所の増加も今の数を上限にする規則で止められ、 生き残る変異も関数を分ければ捕まえられる、 という強い利点があります。 それでも退けるのは、 本体が道具を直接起こす作りが残り、 偽物で測れる場所を 1 つずつ足していくことになるからです (選んだ案は全部の場所で口が 1 つです)。 実物を起こす今の test が残る点は、 どちらの案も同じです。 これは何を大事にするかの選択でもあるので user に尋ね、 user はこの段をやめる案を採らないと決めました。 偽物を test の thread の中に閉じるのは、 変異検査の道具が同じ process の複数の thread で test を走らせる回があり (基準の測定は常に、 変異の測定は狙う test の名が無い回に)、 process 全体に効く偽物だと他の test に漏れて、 生き残るはずの変異を捕まえたことにしてしまうからです。 外の箱の test でも本物を差し込むのは、 外の箱の test が本体の code を同じ process で呼び、 git を実際に起こして結果を確かめる test があるからです。 test の仕組みには全部の test の前に走る入口が無いので、 差し込むのは共通の関数 1 つです。 起こして流しながら読む起こし方では、 偽物は実物を起こさず、 標準の型の子は外から作れないので失敗だけを返し、 成功した回は本物を起こす test が持ちます。 本体の行数は減らないので、 前の決定が見込んだ移す量は成り立たないとここに書き残します。 行数の余裕は数え方の変更で既に戻っており、 この段が作るのは行数ではなく、 本体が道具を起こさないことと、 test が起動を測れることです。</span>
+<div class="justify-box"><p class="jh">この判断が正当化する要件 (cross-doc 照会 → SRS-SCRIBE2-MVP)</p>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#NFR2" data-justifies-req="NFR2" data-justifies-role="rationale">NFR2</a><span class="justify-role">rationale</span><span class="justify-note">NFR2 は 1 契約の diff を 300 行程度に保つことを求める。 本 ADR は、 口を置く 1 便の後に site の置換を write-set の交わらない S の便に割れる形を選び、 driver の関数ごと移す L 級の便を退ける根拠を与える。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#NFR3" data-justifies-req="NFR3" data-justifies-role="claim">NFR3</a><span class="justify-role">claim</span><span class="justify-note">起動の記述と差し替え口は std の Command の面を写すだけで、 実行時の直接依存を足さない。 実物も境界 crate の中で std だけで書ける。 実行時の依存 0 本の約束はそのまま保たれる。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#NFR5" data-justifies-req="NFR5" data-justifies-role="rationale">NFR5</a><span class="justify-role">rationale</span><span class="justify-note">NFR5 は host-guard が撃つ git の子 process の回数を歯が測ることを求め、 今は host-guard が偽の git の path を受ける自分専用の口を持ち、 それで回数を測っている。 本 ADR の記録する stub は同じ測り方を core の全 site へ広げる根拠になる (host-guard の今の口と歯は変えない)。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#NFR6" data-justifies-req="NFR6" data-justifies-role="rationale">NFR6</a><span class="justify-role">rationale</span><span class="justify-note">封じ込めの包み (confine) は core に残り、 包んだ起動の記述を口へ渡すだけなので、 器の子 process を封じ込めの箱の中で走らせる形は変わらない。 起動の口が 1 か所になっても、 箱の外で走る子 process は増えない (本 ADR は NFR6 を進めも損ないもしない)。</span></div>
+<p class="justify-tgt">照会先: SRS-SCRIBE2-MVP — SRS: 設計 → 契約 → 実装 → 検証 → land を、 人の手を借りずに 1 本通す器（MVP）</p>
+</div>
+</div>
+</div>
+<section data-component="chapter-deck-band" class="tint-warn"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> 結果 / 良い面とトレードオフ</span><h2>この判断で何が良くなり、 何を引き受けるか</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">この判断で良くなることと、 代わりに引き受けることです。 本体の箱で道具を起こす場所が 0 になって検査で固定され、 前の決定が実現し、 場所が増えることもなくなります。 test は偽物を差し込んで、 結果を全部受け取る起こし方と終わりの状態だけ受け取る起こし方では、 実物では作れない「成功したのに空」の回を作れ、 生き残っていた変異を捕まえる test が書けます。 呼んでいる側の呼び方が変わらないので、 口を置く 1 便の後は 5 便を並べて流せ、 判定は本体に残り、 外の箱の上限は小さいまま効きます。 代わりに引き受けることは 9 つです。 本体の箱の行数は減らず、 前の決定が見込んだ移す量は成り立ちません。 差し込んだ口という process 全体の状態が 1 つ増え、 実行 file や外の箱の test が差し込み忘れると道具を起こせなくなります (共通の関数を通らない新しい test は差し込み忘れます)。 test の区間には本物と test 用の起動が残ります。 中身が書き換わるので「中身を変えない引っ越し」の機械の証明は使えません。 全部を書き換えるまでの間に場所が増えうるので、 便を起こす直前に数え直します。 偽物は test の thread の中だけで効くので、 別の thread で道具を起こす経路は偽物で測れません。 外の箱の上限は小さく、 早めに当たりえます。 道具を起こす関数と判定を並べる関数群は本体に残り、 前の決定が見込んだ形にはなりません。 そして、 起こして流しながら読む起こし方では、 偽物は実物の道具を起こさないので失敗だけを返し (標準の型の子は外から作れない)、 成功した回は本物を起こす test のままです。</p></section>
+<div class="chapbody">
+<div data-component="scope-summary-panel"><div class="scol in"><h3>✓ 良い結果</h3><ul>
+<li data-component="adr-consequence-pos"><span class="b">●</span>core の本体の Command::new が 0 になり (main 9f516d3 の実測で 34 行 / 22 file から)、 core-spawn の deny で固定される。 境界 crate で std の Command を組む file も boundary-spawn の deny で 1 本に固定される。 何が I/O かが機械で決まるという ADR-0033 の決定が実現し、 検出線のままでは止まらなかった site の増加が止まる</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>core の歯が記録する stub で起動の引数を測れ、 output と status の周は結果の読みも測れる。 実 git を撃つ歯では作れない「成功して stdout が空」の周を stub で作れ、 台帳の notes に残る空 sha の生存変異を殺す歯が書ける</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>呼び手の呼び方と関数の引数・戻りの形が変わらないので、 site の置換の便は追随を起こさず、 口を置く 1 便の後に 5 便が write-set を交えずに並列で流れる。 判定は core に残り、 境界 crate の上限は小さいまま (設計の見込みで 341 行) で効く</li>
+</ul></div><div class="scol out"><h3>⚖ トレードオフ・代償</h3><ul>
+<li data-component="adr-consequence-neg"><span class="b">●</span>core の行数は減らない。 起動の記述と差し替え口で core は +150 行前後、 境界 crate は +110 行前後 (設計 §9 の見込み)。 ADR-0033 の OPT1 が見込んだ移す量 (3〜5 千行) と台帳の見積 (約 2,800 行を core の外へ) は成立しない。 core の余地は段 1 の母集団の変更が既に戻している</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>process 全体の状態 (据えた差し替え口) が 1 つ増える。 bin が据え忘れると全 site が Unsupported で撃てなくなる (境界 crate の e2e が落ちて気づく)。 境界 crate の e2e の test binary も core の lib を同じ process で呼ぶので、 据えないと、 seat の recent の git の読みを直に呼ぶ歯 2 本が git-unavailable に倒れて赤になる。 host 名の読みは /etc/hostname が無いか空の host だけ fallback の起動に届き、 据えないと unknown に倒れて、 bin の出力の host と照合する e2e の歯が赤になりうる。 libtest には全歯の前に走る入口が無いので、 据えるのは共通の関数 1 つで、 それを通らずに core の lib を呼ぶ新しい歯は据え忘れる</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>歯の区間には cfg(test) の実物と fixture の起動 (main 9f516d3 の実測で 10 行 / 8 file) が残り、 core-spawn はそれを数えない。 core の歯が実 process を撃つ既存の形は残る</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>site の本文が書き換わるので、 純移動の機械証明は使えず、 各便の lens は置換の diff を読む。 各便は stub で site を測る新しい歯を書く</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>起票から deny の便までの間は core-spawn は検出線のままで、 母集団が増えうる (設計 §9 の初版の実測 33 から main 8ca0dc9 以後の 34)。 行を起票する直前に測り直し、 増えた site を行へ足す</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>stub は歯の thread に閉じるので、 site が別の thread で撃つ経路は stub で測れず、 その経路の歯は実物で撃つ</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>記録する stub は実 process を起こさないので、 spawn の終端は失敗だけを返す (std の Child は std の外から作れない)。 子を流しながら読む site (headless の lens・pipe の spawn・seat の台帳の読みなど・spawn は 15 か所) の成功の周は、 cfg(test) の実物で実 process を撃つ歯のままである</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>境界 crate の上限は小さく (仮置き 341 行)、 bin の main は subcommand を足すたびに育つので、 早めに当たりうる。 値の変更は A2 の裁定になる</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>driver の関数と撃つ関数は core に残って口越しに子 process を起こし、 core の行数は減らない。 ADR-0033 の物差し (core の Command::new が 0) は満たすが、 ADR-0033 が見込んだ形 (撃つ関数を core に持たず、 境界は生の結果だけを返す) にはならない。 file の読み書きはどの案でも core に残る。 user は 裁定 id user 2026-09-24T00:13Z でこの形を了解して採った</li>
+</ul></div></div>
+</div>
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">06</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> 改訂関係と原則 / この判断の位置づけ</span><h2>版の系譜と、 行き着く原則 (照会終端)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-06">この記録が版の系譜のどこに在るかと、 判断が最後に行き着く原則です。 前の決定 (ADR-0033) のうち、 「道具を起こす関数を外の箱へ移す」という実現方法の文と、 「本体の箱は道具を起こす場所を 0 本しか持たない」を「test の区間を除く本体は 0 本」と読むこと、 引っ越しの量と便の数の見込み、 外の箱の上限の初期値を測る時点 (引っ越しの直後から、 検査で落とす便の起点へ)、 そして「外の箱は道具を起こして生の結果を返すだけで、 判定は本体に残る」という帰結の読みを置き換えます。 上限の係数 (実測の 1.2 倍) と user の決定の印は変えません。 測る時点の置き換えは、 user が 2026-09-24 の決定 (裁定 id user 2026-09-24T00:13Z) で前の決定の範囲内と扱うと決めたので、 新しい決定は要りません。 行数の数え方、 実行 file を外の箱に置く構成、 箱どうしの頼る向き、 本体の上限の値、 実行 file 1 つの決定 (ADR-0001) は変えません。 この記録は発効前 (proposed) で、 系譜の上では現行 (current) ですが、 受け入れられるまで何も拘束しません。 user は 2026-09-24 の決定で、 この記録の案を採りました。 原則は「本体は何を起こすかを書き、 起こすのは縁の 1 か所。 境界は呼び手を動かさずに引く」です。</p></section>
+<div class="chapbody">
+<div data-component="adr-supersession">
+<p class="ss-row"><span class="ss-k">改訂状態</span>current</p>
+<p class="ss-row"><span class="ss-k">置き換える ADR</span>ADR-0033</p>
+<p class="ss-row"><span class="ss-k">置き換えられた</span>なし (現行)</p>
+<p class="ss-row">部分 supersede で、 置き換えるのは ADR-0033 の実現方法の文だけである。 (1) 決定文のうち、 子 process を撃つ I/O 面 (std の Command を構築する関数) を境界 crate へ移すという部分は、 core が起動の記述を組んで差し替え口へ渡し、 境界 crate が差し替え口の実物 1 つを持って bin の main で据える、 と読む。 (2) 同じ決定文の「core は Command::new を 0 本しか持たない (xtask check の deny)」は、 「core の src の本体は 0 本 (歯の区間は数えない)」と読む。 (3) OPT1 の見込み (移す量は 3〜5 千行・純移動の機械証明で lens に渡せる・純移動の便が 6 本ほど) と、 帰結の「純移動の便が 6 本ほど要り、 その間 core と境界の use の path が動く」は成立せず、 口を置く 1 便と site を置換する 5 便と deny の 1 便に置き換わる。 (4) R-C4-5 の初期値を測る時点は、 決定文の「移した直後の実測」と帰結の「移動の最後の便で実測して確定」から、 「deny の便の base で測った境界 crate の src の本体」へ置き換わる (移動の便が無くなるため)。 係数 1.2 (実測 +20%) と裁定 id user 2026-09-15T10:07Z は変えず、 設計の見込みの値は 341 で、 ADR-0033 の見込み (移す 3〜5 千行の 1.2 倍) とは桁が違う。 時点の置き換えは 裁定 id user 2026-09-24T00:13Z で同じ裁定 (user 2026-09-15T10:07Z) の範囲内とし、 新しい A2 の裁定は要らない。 (5) 帰結 CSQ-P3 (境界 crate の関数は引数 → 子 process → 生の結果だけを返し、 判定は core の純関数に残る) と、 FR47 の note の「純移動の証明で lens に渡る」は、 境界 crate が差し替え口の実物だけを持ち、 撃つ関数と driver の関数は core に残る形と読む。 不変のものは core-lines の母集団 (src の本体)・binary を境界 crate に置く構成・依存の向き (境界 → core)・R-C4-1 の値・ADR-0001 の単一 binary。 R-C4-5 の kind (BoundaryLines) は ADR-0033 には無く、 本 ADR の決定文が新たに置く。 boundary-spawn (境界 crate の本体で Command::new を持つ file が 2 以上で deny) も本 ADR の決定文が新たに置くが、 core-spawn・claude-spawn-points と同じ構造の検査で rules 行を持たない (本 ADR の解釈で C1 の rule value ではなく、 値を変えるのは ADR の改訂)。 発効は本 ADR が accepted になった後で、 それまで何も拘束しない。 段 2 の形は 裁定 id user 2026-09-24T00:13Z で本 ADR の案 (OPT1) に決まった。</p>
+</div>
+<div data-component="adr-principle">
+<p class="prin-id">照会終端 — PRIN-DESCRIBE-IN-THE-CORE-SPAWN-AT-THE-EDGE</p>
+<p class="prin-text">本体は何を起こすかを書き、 起こすのは縁の 1 か所。 境界は呼び手を動かさずに引く。</p>
+<p class="prin-note">本 ADR が driver の関数ごと移す案・撃つ関数だけを移す案・道具ごとの口の案・段 2 をやめる案・依存の向きを逆にする案を退け、 起動の記述と差し替え口を選んだのはこの原則に行き着く (これ以上は遡らない照会終端)。</p>
+</div>
+</div>
+<section data-component="chapter-deck-band" class="tint-brand"><span class="num">07</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg> 用語集 / この文書で使う専門語</span><h2>本文に出てくる専門語のやさしい説明</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-07">本文に出てくる専門語 14 個を、 やさしい言葉で説明します。 この記録で意味を決めた語は「起動の記述」「差し替え口」「記録する stub」の 3 つで、 残りは器の側の言葉です。</p></section>
+<div class="chapbody">
+<div data-component="glossary-term-table">
+<div class="grow"><div class="gword">core<span class="en">core crate</span></div><div class="gdef">器の本体の crate (crates/NAME・lib vessel)。 型・閉じた enum・判定の純関数・file の読み書きを持つ。 本 ADR の後は、 src の本体で子 process を自分で起こさず、 起動の記述を差し替え口へ渡す。</div></div>
+<div class="grow"><div class="gword">境界 crate<span class="en">boundary crate</span></div><div class="gdef">core の外側に置く crate (crates/NAME-boundary)。 binary を持ち、 core に依存し core からは見えない。 本 ADR の後は差し替え口の実物 1 つを持ち、 bin の main の先頭で据える。 行数の上限 R-C4-5 を持つ。</div></div>
+<div class="grow"><div class="gword">起動の記述<span class="en">invocation</span></div><div class="gdef">子 process の program・引数・cwd・env・入出力の向き・process group を持つ core の型 (本 ADR)。 std の Command と同じ builder の面と同じ 4 終端 (output・status・spawn・exec) を持ち、 終端は自分で撃たず差し替え口へ渡す。</div></div>
+<div class="grow"><div class="gword">差し替え口<span class="en">spawner seam</span></div><div class="gdef">起動の記述を受けて実際に子 process を起こす役を表す core の trait (本 ADR)。 method は 4 終端と 1 対 1。 本番は process に 1 回だけ据え、 据えていない周は io の Unsupported を返す。</div></div>
+<div class="grow"><div class="gword">記録する stub<span class="en">recording stub</span></div><div class="gdef">歯が差し替え口に据える偽物。 撃たれた program と引数を覚え、 歯が決めた結果を返す (spawn の終端は失敗だけ)。 site が差し替え口を通ることと、 結果の読みを測る。 据えた歯の thread の外へは効かない。</div></div>
+<div class="grow"><div class="gword">Command<span class="en">std Command</span></div><div class="gdef">Rust の標準 library が持つ子 process の builder (std の process module に在る)。 Command::new で組み、 output などの終端で撃つ。 本 ADR の後、 core と境界 crate の本番の src で組むのは境界 crate の 1 file だけ。</div></div>
+<div class="grow"><div class="gword">歯の区間<span class="en">test region</span></div><div class="gdef">src の .rs の中で最初の行頭の cfg(test) から後ろの区間と、 名で test の file (名が tests.rs か、 _tests.rs で終わる file) の全体。 core-lines と同じ切り方。 core-lines と core-spawn はここを数えず、 量は R-C4-3 が縛る。</div></div>
+<div class="grow"><div class="gword">呼び手<span class="en">caller</span></div><div class="gdef">ある関数を呼んでいる関数と file。 本 ADR では、 撃つ関数を呼ぶ core の file を指す (git の 3 関数で 16 file)。</div></div>
+<div class="grow"><div class="gword">driver の関数<span class="en">driver functions</span></div><div class="gdef">land・gate・train・follow など、 判定と子 process の起動が交互に並んで便を進める core の関数群。 器の中で driver と呼ぶ pipe run の process (便を進める者) が走らせる関数を指し、 その process そのものではない。 本 ADR はこれを境界 crate へ移さない。</div></div>
+<div class="grow"><div class="gword">純移動<span class="en">pure move</span></div><div class="gdef">関数や型の本文を変えずに file や crate の間で動かす変更。 器が名と本文の hash で証明し lens には要約を渡す (pipeline.md 5.3 節)。</div></div>
+<div class="grow"><div class="gword">検出線<span class="en">detection line</span></div><div class="gdef">超えたら機械が検知して記録・起票する線。 PR は止めない。 CI が落とす deny の閾値とは区別する。 core-spawn は deny の便までこの線に在る。</div></div>
+<div class="grow"><div class="gword">rules 行<span class="en">rules row</span></div><div class="gdef">manifest に置く規則の値 1 行 (閾値・有効/無効・裁定 id・裁定時刻・逐語)。 数値の置き場 (C1) で、 変更の手続きは C5。 本 ADR は R-C4-5 の行を deny の便で足す。</div></div>
+<div class="grow"><div class="gword">裁定 id<span class="en">ruling id</span></div><div class="gdef">user 裁定を一意に指す id。 裁定の ts (UTC) で、 rules 行の ruling 欄が指す。 rules 行の変更 (C5)、 閾値変更 (A2)、 憲法改訂 (N4) が要求する。</div></div>
+<div class="grow"><div class="gword">決定はしご<span class="en">decision ladder</span></div><div class="gdef">変更のたびに通す 5 段の問い (要るか・既に在るか・std や既存の依存で足りるか・1 行で済むか・最小の実装か)。 最初に成り立った段で止まる (C17・ADR-0044)。</div></div>
+</div>
+</div>
+</div>
+<footer class="foot" data-component="fidelity-sync-meta"><div class="ft-grid">
+<div class="ft-plain">このページは、大もとの機械データ (正本) から自動で組み立てられています。構造は機械が自動で検査し、内容が元データに忠実かは独立のレビューで確かめます。</div>
+<div data-audience="machine">機械SSoT: <b>ADR-0062-invocation-seam.adr.yaml</b> &middot; 生成: <b>2026-09-24 01:37</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
+<div class="tags" data-audience="machine"><span>folio design system</span><span>ADR-pack</span><span>folio engine B1 (instance#2)</span><span>cross-doc 照会</span></div>
+</div></footer>
+<!-- folio:chrome-bottom -->
+<nav class="prevnext" aria-label="前後の文書">
+  <a class="prevnext__prev" href="ADR-0060-detection-line-runs-after-landing-not-in-the-gate.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">検出線 (変異検査) は gate で撃たず、 便が着地した後に器が切り離して 1 回撃つ — gate の判定は止める段だけで決まり、 変異の生存は record と event に残る (ADR-0009 §2.3・ADR-0021 §2.4・ADR-0039・ADR-0043・ADR-0052 の一部を置き換える)</span></a>
+</nav>
+<script>
+(function () {
+  var openedForPrint = [];
+  window.addEventListener('beforeprint', function () {
+    openedForPrint = [];
+    var ds = document.querySelectorAll('details:not([open])');
+    for (var i = 0; i < ds.length; i++) { ds[i].setAttribute('open', ''); openedForPrint.push(ds[i]); }
+  });
+  window.addEventListener('afterprint', function () {
+    for (var i = 0; i < openedForPrint.length; i++) openedForPrint[i].removeAttribute('open');
+    openedForPrint = [];
+  });
+  if (!document.querySelector('[data-audience]')) return;
+  /* 既定 = 人間プレゼン型 (ADR-0040 / rules §11.3): script 経由で初期 class を付与するため
+     no-JS では付かず全文可視に graceful degrade する。 static DOM は全文を保持 (AI/検索/印刷は不変)。 */
+  document.body.classList.add('audience-human');
+  var bar = document.createElement('nav');
+  bar.className = 'audience-toggle';
+  bar.setAttribute('aria-label', '表示対象の切替');
+  var states = [['both', '両方'], ['human', '人間向け'], ['machine', '機械向け']];
+  for (var s = 0; s < states.length; s++) {
+    (function (mode, label) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.setAttribute('aria-pressed', mode === 'human' ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        document.body.classList.remove('audience-human', 'audience-machine');
+        if (mode !== 'both') document.body.classList.add('audience-' + mode);
+        var bs = bar.querySelectorAll('button');
+        for (var j = 0; j < bs.length; j++) bs[j].setAttribute('aria-pressed', bs[j] === b ? 'true' : 'false');
+      });
+      bar.appendChild(b);
+    })(states[s][0], states[s][1]);
+  }
+  var bc = document.querySelector('nav.breadcrumb');
+  if (bc && bc.parentNode) { bc.parentNode.insertBefore(bar, bc.nextSibling); }
+  else { document.body.insertBefore(bar, document.body.firstChild); }
+})();
+</script>
+<!-- /folio:chrome-bottom -->
+</body>
+</html>
