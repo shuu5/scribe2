@@ -26,11 +26,12 @@
 //! 値を保つ（high-water mark ゆえそれが peak）。終端で 1 回読む形は、最後の process の終了で dir が
 //! 消えた正常系を測れない。
 
+use crate::invocation::Invocation;
 use crate::name::NAME;
 use crate::rules::manifest::Manifest;
 use crate::seat::{embedded_manifest, int_rule_of, RuleRead};
 use std::path::Path;
-use std::process::{Command, Output, Stdio};
+use std::process::{Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 
@@ -300,14 +301,14 @@ impl Released {
 /// 「not loaded」も含め、[`Released`] は kill の結果だけで決まる＝閉じた 4 値は不変）。
 pub fn release(unit: &str) -> Released {
     let scope = format!("{unit}.scope");
-    let out = Command::new(SYSTEMCTL)
+    let out = Invocation::new(SYSTEMCTL)
         .args(["--user", "kill", "--signal=SIGKILL"])
         .arg(&scope)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .output();
-    let _reset = Command::new(SYSTEMCTL)
+    let _reset = Invocation::new(SYSTEMCTL)
         .args(["--user", "reset-failed"])
         .arg(&scope)
         .stdin(Stdio::null())
@@ -430,7 +431,7 @@ pub fn list_args() -> Vec<String> {
 ///
 /// 道具が無い周と rc 非 0 の周は `None`＝**空の一覧（0 件）と融合しない**（C10）。
 pub fn list_scopes() -> Option<Vec<String>> {
-    let out = Command::new(SYSTEMCTL)
+    let out = Invocation::new(SYSTEMCTL)
         .args(list_args())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -574,7 +575,7 @@ pub fn peak_of(root: &Path, control_group: &str) -> Peak {
 /// scope の cgroup の path（root からの相対）を `systemctl --user show <unit>.scope -p ControlGroup --value`
 /// で 1 回引く（PATH 解決・子 process・[`SYSTEMCTL`]）。解けない周は `None`＝peak は読まない。
 pub fn control_group_of(unit: &str) -> Option<String> {
-    let out = Command::new(SYSTEMCTL)
+    let out = Invocation::new(SYSTEMCTL)
         .args(["--user", "show"])
         .arg(format!("{unit}.scope"))
         .args(["-p", CONTROL_GROUP, "--value"])
@@ -664,7 +665,7 @@ fn tame(text: &str) -> String {
 /// 読んでも、それは自分の箱ではない別の cgroup の数である。
 ///
 /// 子の env から [`PANE_ENV`] を外すのは [`wrap_command`] と同じ 1 点（[`wrap`]）である。
-pub fn wrap_line(line: &str, entry: &Wrap<'_>) -> (Command, Confinement) {
+pub fn wrap_line(line: &str, entry: &Wrap<'_>) -> (Invocation, Confinement) {
     wrap(entry, |confined| if confined { shell(&script(line, entry.unit)) } else { shell(line) })
 }
 
@@ -678,17 +679,17 @@ const PANE_ENV: &str = "TMUX_PANE";
 /// 既に組んだ起動を scope で包む。**終端行は足さない**（argv の起動に epilogue は書けない
 /// ＝peak は測らない・設計 §4.3 の記録先は verify 行と runner の 2 面である）。
 ///
-/// cwd・env・stdio は `Command` から読み戻せないので、**包んだ後に**外側へ付けること。
+/// cwd・env・stdio は包みが外側へ写さないので、**包んだ後に**外側へ付けること。
 /// 子の env から [`PANE_ENV`] を外すのは [`wrap_line`] と同じ 1 点（[`wrap`]）である——`pipe` の外で
 /// 席の pane から `runner` / `lens` を単体起動する周（headless の `build`）もここを通る。
-pub fn wrap_command(cmd: Command, entry: &Wrap<'_>) -> (Command, Confinement) {
+pub fn wrap_command(cmd: Invocation, entry: &Wrap<'_>) -> (Invocation, Confinement) {
     wrap(entry, |_| cmd)
 }
 
 /// 起動の包みの 2 口の本体（設計 seat-roles.md §4）。`inner` は包める周（`true`）と包めない周で別の
 /// 起動を組める（`wrap_line` は包める周だけ終端行を足す）。**子の env から [`PANE_ENV`] だけを外す
 /// 唯一の点**（ADR-0022 §2.3）——runner / lens / verify 行のどの経路もここを通る。env は足さない（C2.2）。
-fn wrap(entry: &Wrap<'_>, inner: impl FnOnce(bool) -> Command) -> (Command, Confinement) {
+fn wrap(entry: &Wrap<'_>, inner: impl FnOnce(bool) -> Invocation) -> (Invocation, Confinement) {
     let (mut cmd, confinement) = match fitting(entry) {
         Err(reason) => (inner(false), Confinement::Unconfined(reason)),
         Ok((caps, mb)) => (
@@ -719,7 +720,7 @@ fn probe(caps: &Caps, host_mb: u64) -> Result<(), Reason> {
     static PROBED: OnceLock<Result<(), Reason>> = OnceLock::new();
     *PROBED.get_or_init(|| {
         let unit = format!("{NAME}-{}-probe", std::process::id());
-        let mut cmd = Command::new(SYSTEMD_RUN);
+        let mut cmd = Invocation::new(SYSTEMD_RUN);
         cmd.args(scope_args(&unit, host_mb, caps));
         cmd.arg("--").arg(SHELL).arg("-c").arg("exit 0");
         cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
@@ -739,15 +740,15 @@ fn probe_outcome(started: std::io::Result<std::process::ExitStatus>) -> Result<(
 }
 
 /// `sh -c <line>` の素の起動。
-fn shell(line: &str) -> Command {
-    let mut cmd = Command::new(SHELL);
+fn shell(line: &str) -> Invocation {
+    let mut cmd = Invocation::new(SHELL);
     cmd.arg("-c").arg(line);
     cmd
 }
 
 /// 中身の起動を `systemd-run --user --scope` で包む。
-fn scope(inner: Command, mb: u64, entry: &Wrap<'_>, caps: &Caps) -> Command {
-    let mut outer = Command::new(SYSTEMD_RUN);
+fn scope(inner: Invocation, mb: u64, entry: &Wrap<'_>, caps: &Caps) -> Invocation {
+    let mut outer = Invocation::new(SYSTEMD_RUN);
     outer.args(scope_args(entry.unit, mb, caps));
     outer.arg("--");
     outer.arg(inner.get_program());
@@ -854,17 +855,19 @@ pub fn read_usage(stdout: &str) -> Usage {
 mod tests {
     use super::{
         control_group_from, creator_pid, limit_mb, limit_of, list_args, listed_from, mem_total_mb, next_seq, orphans_from,
-        orphans_of, peak_from, peak_of, probe_outcome, read_usage, reap_targets, release_scope, released_of, scope_args,
-        script, tame, unit_name, wrap_command, wrap_line, Caps, Confinement, Limit, Orphans, Peak, Reaped, Reason, Released,
-        Sampler, Wrap, CGROUP_ROOT, PANE_ENV, REASONS,
+        orphans_of, peak_from, peak_of, probe_outcome, read_usage, reap_targets, release, release_scope, released_of,
+        scope_args, script, tame, unit_name, wrap_command, wrap_line, Caps, Confinement, Limit, Orphans, Peak, Reaped,
+        Reason, Released, Sampler, Wrap, CGROUP_ROOT, PANE_ENV, REASONS,
     };
+    use crate::invocation::Invocation;
     use crate::order::is_declaration_order;
+    use crate::pipe::fixture::{exited, Call, Stub};
     use crate::rules::manifest::Manifest;
     use crate::seat::{manifest_read, RuleRead};
     use std::ffi::OsStr;
     use std::os::unix::process::ExitStatusExt;
     use std::path::Path;
-    use std::process::{Command, ExitStatus, Output};
+    use std::process::{ExitStatus, Output};
 
     /// 同じ引数の `unit_name` を 2 回呼ぶと**別の名**になる（追随の再 gate で同名が衝突しない・`s2-07l.234`）。
     /// `<n>` と pid の位置は変えない（別 process の一意性は pid のまま）。
@@ -1074,6 +1077,29 @@ mod tests {
         assert_eq!(release_scope(&Confinement::Unconfined(Reason::NoTool)), None);
     }
 
+    /// 行の終端の片付けは差し替え口を通る（設計 core-boundary.md §9 行 e）: `systemctl --user kill` の後に
+    /// `systemctl --user reset-failed` の 2 起動で、結果は kill の rc だけで読む（reset の rc は写さない）。
+    /// base は差し替え口を通らずに撃つので stub に記録が残らず RED。
+    #[test]
+    fn invocation_wrap_release_shoots_systemctl_kill_then_reset_failed() {
+        let stub = Stub::install(|call| match call.args.get(1).map(String::as_str) {
+            Some("kill") => exited(0, b""),
+            _ => exited(1, b""),
+        });
+        assert_eq!(release("invocation-wrap-unit"), Released::Killed, "kill の rc 0 で読む（reset の rc 1 は写さない）");
+        let systemctl = |tail: &[&str]| Call {
+            program: "systemctl".to_owned(),
+            args: tail.iter().map(|arg| (*arg).to_owned()).collect(),
+            cwd: None,
+            envs: Vec::new(),
+        };
+        let expected = [
+            systemctl(&["--user", "kill", "--signal=SIGKILL", "invocation-wrap-unit.scope"]),
+            systemctl(&["--user", "reset-failed", "invocation-wrap-unit.scope"]),
+        ];
+        assert_eq!(stub.calls(), expected, "kill の後に reset-failed の 2 起動");
+    }
+
     /// `memory.peak` の読み（設計 §13）: 10 進の値は `Bytes`・空 / parse 不能 / `Err` は `Unreadable`（0 に
     /// 融合しない・C10）。`word` は `Bytes` を 10 進の字面・`Unreadable` を `-` に写す。
     #[test]
@@ -1160,7 +1186,7 @@ mod tests {
     #[test]
     fn pipe_spawn_drops_tmux_pane_in_wrap_command() {
         let entry = Wrap { unit: "scribe2-probe-unit", limit: Limit::HostReserve, caps: Err(RuleRead::Missing) };
-        let (cmd, _) = wrap_command(Command::new("true"), &entry);
+        let (cmd, _) = wrap_command(Invocation::new("true"), &entry);
         let envs: Vec<(&OsStr, Option<&OsStr>)> = cmd.get_envs().collect();
         assert_eq!(envs, vec![(OsStr::new(PANE_ENV), None)], "外すのは TMUX_PANE だけで、足す env は無い");
     }
@@ -1325,7 +1351,7 @@ mod tests {
         assert!(!confinement.confined(), "読めない周は包まない（止めない）");
         assert_eq!(confinement.reason(), Some(Reason::ManifestUnreadable), "理由は manifest-unreadable");
         assert_eq!(cmd.get_program(), OsStr::new("sh"), "素の sh -c のまま");
-        let (_, wrapped) = wrap_command(Command::new("true"), &entry);
+        let (_, wrapped) = wrap_command(Invocation::new("true"), &entry);
         assert_eq!(wrapped.reason(), Some(Reason::ManifestUnreadable), "argv の包みも同じ理由");
 
         // 行が欠ける（読めた manifest に 3 線が無い）周は `no-rules` のまま。

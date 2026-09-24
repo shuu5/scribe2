@@ -25,7 +25,6 @@ use crate::name::{NAME, PLUGIN_DIR};
 use crate::pipe::contract::Contract;
 use crate::polarity::{OnFailure, Polarity, Timing};
 use std::io::Write;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 

@@ -86,12 +86,13 @@ pub mod runner {
 }
 
 use crate::fleet::select::{Model, MODELS};
+use crate::invocation::Invocation;
 use crate::pipe::confine;
 use crate::rules::manifest::Manifest;
 use crate::rules::str_row;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 /// claude の scope の unit 名に載せる段の名。
 const CLAUDE_STAGE: &str = "claude";
@@ -355,7 +356,7 @@ pub fn fill(template: &str, pairs: &[(&str, &str)]) -> String {
     }
 }
 
-/// [`Call`] から `Command` を組む。**prompt は argv でなく stdin で渡す**。
+/// [`Call`] から起動の記述を組む。**prompt は argv でなく stdin で渡す**。
 ///
 /// argv で渡すと Linux の 1 引数上限（`MAX_ARG_STRLEN` = 128KiB）に当たり、**user が
 /// 裁定した cap 150000 が実質 130KB へ黙って切り下がる**（実測 2026-09-10: 131000 byte で
@@ -363,8 +364,8 @@ pub fn fill(template: &str, pairs: &[(&str, &str)]) -> String {
 ///
 /// 包みの結果（unit 名）も返す——呼び手は子の終端で [`confine::release_scope`] を撃つ
 /// （設計 gate-cost.md §4.4 errata・`s2-07l.234`）。
-pub fn build(call: &Call<'_>) -> (Command, confine::Confinement) {
-    let mut inner = Command::new(call.claude);
+pub fn build(call: &Call<'_>) -> (Invocation, confine::Confinement) {
+    let mut inner = Invocation::new(call.claude);
     inner
         .arg("-p")
         // permission mode は**毎回**渡す。省くと版の既定に従い、同じ 1 行が
@@ -415,7 +416,7 @@ pub fn build(call: &Call<'_>) -> (Command, confine::Confinement) {
         }
     }
     // **claude も cgroup の scope で包む**（設計 gate-cost.md §4.1 の 3 つ目）。包むのは argv が
-    // 揃った後・cwd と env を付ける前である——`Command` からは cwd も env も stdio も読み戻せ
+    // 揃った後・cwd と env を付ける前である——包みは cwd も env も stdio も外側へ写さ
     // ないので、先に包まないと外側へ移せない。箱は 1 × `gate.job_memory_mb`（同 §12・裁定 id
     // user 2026-09-15T18:2xZ）で、包めない host では素のまま起きる（止めない）。
     let unit = confine::unit_name(claude_place(call), CLAUDE_STAGE, 1);
@@ -473,6 +474,7 @@ pub fn feed(child: &mut std::process::Child, prompt: &str) {
 #[cfg(test)]
 mod tests {
     use super::{build, claude_place, plugin_dirs, Call, Format, FORMATS};
+    use crate::pipe::fixture::{exited, Stub};
     use proptest::prelude::*;
     use proptest::test_runner::Config;
     use std::collections::BTreeSet;
@@ -649,6 +651,63 @@ mod tests {
         let none = args_of(None);
         assert!(!none.iter().any(|arg| arg == "--model"), "None では現れない: {none:?}");
         assert_eq!(some.len(), none.len() + 2, "足されるのは対の 2 引数だけ: {some:?} / {none:?}");
+    }
+
+    /// 構築点の起動は差し替え口を通る（設計 core-boundary.md §9 行 e）: 撃った 1 起動の argv は構築点が記述した
+    /// program と flag の列そのもので、claude の program の後に `-p` と permission mode と出力形式が並び（包めた host
+    /// では `systemd-run … --` の後ろ）、cwd と口座の env と agent view の env を付けて `TMUX_PANE` を外す。flag の
+    /// 字面は構築点の 1 か所だけが持つ（claude-spawn-points）ので、ここは記述との一致で測る。base は差し替え口を
+    /// 通らずに撃つので stub に記録が残らず RED。
+    #[test]
+    fn invocation_wrap_headless_build_names_the_program_and_flags() {
+        let claude = "/nonexistent-invocation-wrap/claude";
+        let cwd = Path::new("/nonexistent-invocation-wrap");
+        let call = Call {
+            claude,
+            prompt: "",
+            permission_mode: "plan",
+            model: None,
+            effort: None,
+            plugin_dir: None,
+            account_dir: Some("/nonexistent-invocation-wrap/account"),
+            cwd: Some(cwd),
+            output: Format::Json,
+            max_turns: None,
+        };
+        // 包めるかの probe は process に 1 回だけ撃つ（stub の下で初回を撃たないよう、実物で先に済ませる）。
+        let _ = build(&call);
+        let stub = Stub::install(|_| exited(0, b""));
+        let (mut command, _) = build(&call);
+        let described: Vec<String> = std::iter::once(command.get_program())
+            .chain(command.get_args())
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        let _ = command.output();
+        let calls = stub.calls();
+        assert_eq!(calls.len(), 1, "撃ったのは 1 起動: {calls:?}");
+        let found = calls.first();
+        let argv: Vec<String> =
+            found.iter().flat_map(|one| std::iter::once(one.program.clone()).chain(one.args.clone())).collect();
+        assert_eq!(argv, described, "撃った argv は構築点の記述そのもの");
+        let at = argv.iter().position(|arg| arg == claude);
+        let head: Vec<String> = [claude, "-p", "--permission-mode", "plan"].map(str::to_owned).to_vec();
+        let tail = at.and_then(|at| argv.get(at..at.saturating_add(head.len())));
+        assert_eq!(tail, Some(&head[..]), "claude の直後に -p と permission mode: {argv:?}");
+        let json = argv.windows(2).filter(|pair| pair == &["--output-format", "json"]).count();
+        assert_eq!(json, 1, "出力形式の対が 1 つ: {argv:?}");
+        if at != Some(0) {
+            assert_eq!(argv.first().map(String::as_str), Some("systemd-run"), "包めた周の外側: {argv:?}");
+            let dash = at.and_then(|at| at.checked_sub(1)).and_then(|at| argv.get(at));
+            assert_eq!(dash.map(String::as_str), Some("--"), "包みの `--` の直後が claude: {argv:?}");
+        }
+        assert_eq!(found.and_then(|one| one.cwd.clone()), Some(cwd.to_path_buf()), "cwd は包みの外側に付く");
+        let envs = found.map(|one| one.envs.clone()).unwrap_or_default();
+        let want_envs = vec![
+            (super::AGENT_VIEW_ENV.to_owned(), Some(super::AGENT_VIEW_OFF.to_owned())),
+            (super::ACCOUNT_ENV.to_owned(), Some("/nonexistent-invocation-wrap/account".to_owned())),
+            ("TMUX_PANE".to_owned(), None),
+        ];
+        assert_eq!(envs, want_envs, "口座と agent view を置き TMUX_PANE だけを外す");
     }
 
     /// 名前の集合（大小文字を混ぜて byte 順が自明でない形・0〜5 個）。

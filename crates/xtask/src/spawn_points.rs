@@ -4,12 +4,13 @@
 //! 同じ 1 関数 `headless::build` で claude を起こすことに依存する（憲法 C2）。呼出側へ
 //! `Command::new` や flag の字面を複製する変異は argv が同型になるため、argv を比べる歯では
 //! 原理的に落ちない（`.64` の lens LENS-3）。ここは `.88`（enum-slices）と同じ構造検査で、
-//! (a) core の `headless/` 配下にある `Command::new(` の site と (b) core 全体の
+//! (a) core の `headless/` 配下にある構築の字面（std の `Command::new(` と起動の記述の `Invocation::new(`
+//! の合計・設計 core-boundary.md §9 採る形 6）の site と (b) core 全体の
 //! `"--setting-sources"` / `"--strict-mcp-config"` の字面を持つ site を数え、どちらも
 //! `headless/mod.rs` に**ちょうど 1 か所**であることを求める。
 //!
 //! **読めない形・見失った形は違反に倒す**（fail-closed）: `headless/` に file が無い、`mod.rs` に
-//! `Command::new(` が 0 か所、flag の字面が core に 0 か所——どれも「黙って 1」にしない。
+//! 構築の字面が 0 か所、flag の字面が core に 0 か所——どれも「黙って 1」にしない。
 //! 他 dir の `Command::new`（git / tmux / sh を起こす pipe / seat / hook）は数えない＝**射程は (a) が
 //! `headless/` 配下・(b) が core 全体**で、`headless/` の外で flag の字面を持たずに claude を起こす形は
 //! 本 measure の外である（契約どおり・lens-101 MEDIUM-1 の記録）。
@@ -29,8 +30,12 @@ const BUILD_REL: &str = "headless/mod.rs";
 /// 構築点が在るべき dir（core の `src/` からの相対）。
 const HEADLESS_REL: &str = "headless";
 
-/// (a) claude を起こす呼出の字面。
-const SPAWN_NEEDLE: &str = "Command::new(";
+/// (a) claude を起こす構築の字面（std の Command と起動の記述の 2 つ・合計で数える・設計 core-boundary.md §9
+/// 採る形 6）。
+const SPAWN_NEEDLES: &[&str] = &["Command::new(", "Invocation::new("];
+
+/// (a) の字面を違反の行に書く形。
+const SPAWN_TEXT: &str = "`Invocation::new(` / `Command::new(`";
 
 /// (b) 構築点だけが持つ flag の字面（quoted literal の形で数える）。
 const FLAG_NEEDLES: &[&str] = &["\"--setting-sources\"", "\"--strict-mcp-config\""];
@@ -46,25 +51,28 @@ pub(crate) fn measure(layout: &Layout, files: &[SourceFile]) -> Measured {
     let core_src = layout.core_dir.join("src");
     let headless = core_src.join(HEADLESS_REL);
     let mut violations = Vec::new();
-    let spawns = sites_of(files, &core_src, SPAWN_NEEDLE, |path| path.starts_with(&headless));
+    let mut spawns = 0_usize;
     let mut in_build = 0_usize;
-    for site in &spawns {
-        if site.rel == BUILD_REL {
-            in_build = in_build.saturating_add(1);
-        } else {
-            violations.push(format!(
-                "{TAG}: {}:{}: `{SPAWN_NEEDLE}` が構築点（{BUILD_REL}）の外に在る",
-                site.rel, site.line
-            ));
+    for needle in SPAWN_NEEDLES {
+        for site in sites_of(files, &core_src, needle, |path| path.starts_with(&headless)) {
+            spawns = spawns.saturating_add(1);
+            if site.rel == BUILD_REL {
+                in_build = in_build.saturating_add(1);
+            } else {
+                violations.push(format!(
+                    "{TAG}: {}:{}: `{needle}` が構築点（{BUILD_REL}）の外に在る",
+                    site.rel, site.line
+                ));
+            }
         }
     }
     match in_build {
         0 => violations.push(format!(
-            "{TAG}: {BUILD_REL} に `{SPAWN_NEEDLE}` が無い（構築点を見失った・{HEADLESS_REL}/ を読めない形も同じ）"
+            "{TAG}: {BUILD_REL} に {SPAWN_TEXT} が無い（構築点を見失った・{HEADLESS_REL}/ を読めない形も同じ）"
         )),
         1 => {}
         many => violations.push(format!(
-            "{TAG}: {BUILD_REL} に `{SPAWN_NEEDLE}` が {many} か所（構築点は 1 つのはず）"
+            "{TAG}: {BUILD_REL} に {SPAWN_TEXT} が {many} か所（構築点は 1 つのはず）"
         )),
     }
     for needle in FLAG_NEEDLES {
@@ -91,7 +99,7 @@ pub(crate) fn measure(layout: &Layout, files: &[SourceFile]) -> Measured {
         }
     }
     Measured {
-        fact: format!("{TAG}={}", spawns.len()),
+        fact: format!("{TAG}={spawns}"),
         violations,
     }
 }
@@ -246,6 +254,32 @@ mod tests {
             "fn build() {\n    let a = Command::new(\"c\");\n    let b = Command::new(\"d\");\n    let _ = (\"--setting-sources\", \"--strict-mcp-config\");\n}\n",
         )]);
         assert_names(&measure(&layout, &files).violations, 1, "`Command::new(` が 2 か所");
+    }
+
+    /// 起動の記述の構築（`Invocation::new(`）1 つの構築点は健全で、std の Command と合わせて数える（設計
+    /// core-boundary.md §9 採る形 6）: 2 つの字面が mod.rs に 1 つずつ在れば 2 か所・mod.rs の外の起動の記述の
+    /// 構築は構築点の外の違反。base は `Command::new(` だけを数えるので構築点を見失って RED。
+    #[test]
+    fn spawn_points_counts_the_invocation_constructor_as_the_build_point() {
+        let build = "pub fn build(call: &Call<'_>) -> Invocation {\n    let mut cmd = Invocation::new(call.claude);\n    cmd.arg(\"--setting-sources\").arg(\"\").arg(\"--strict-mcp-config\");\n    cmd\n}\n";
+        let (layout, files) = workspace(&[("headless/mod.rs", build)]);
+        let ok = measure(&layout, &files);
+        assert!(ok.violations.is_empty(), "起動の記述の構築 1 つは健全: {:?}", ok.violations);
+        assert_eq!(ok.fact, "claude-spawn-points=1", "構築点を 1 つ数える");
+
+        let both = build.replace("    cmd\n}", "    let _std = Command::new(\"c\");\n    cmd\n}");
+        let (layout, files) = workspace(&[("headless/mod.rs", &both)]);
+        let got = measure(&layout, &files);
+        assert_names(&got.violations, 1, "が 2 か所");
+        assert_eq!(got.fact, "claude-spawn-points=2", "2 つの字面の合計");
+
+        let (layout, files) = workspace(&[
+            ("headless/mod.rs", BUILD_OK),
+            ("headless/runner.rs", "fn launch(call: &Call<'_>) {\n    let _probe = Invocation::new(call.claude);\n}\n"),
+        ]);
+        let got = measure(&layout, &files);
+        assert_names(&got.violations, 1, "headless/runner.rs:2: `Invocation::new(`");
+        assert_eq!(got.fact, "claude-spawn-points=2", "外の構築も数に出る");
     }
 
     /// 他 dir の `Command::new`（git / tmux / sh）とコメント行は数えない（偽陽性を出さない）。

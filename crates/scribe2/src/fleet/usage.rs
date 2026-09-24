@@ -25,15 +25,16 @@ use super::{
 };
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
 use crate::headless::{self, Call, DEFAULT_CLAUDE};
+use crate::invocation::Invocation;
 use crate::pipe::confine;
 use crate::polarity::{OnFailure, Polarity, Timing};
 use crate::rules::manifest::Manifest;
 use crate::rules::RuleValue;
 use crate::seat::StateDir;
 use std::collections::BTreeMap;
-use std::os::unix::process::{CommandExt, ExitStatusExt};
+use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
-use std::process::{Command, ExitStatus, Stdio};
+use std::process::{ExitStatus, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -645,7 +646,7 @@ fn stop_group(group: u32, grace: Duration) {
 
 /// `kill <name> -- <target>` を撃つ（std に kill は無い・結果は待ちの側で測る）。
 fn signal_group(target: &str, name: &str) {
-    let _ = Command::new("kill")
+    let _ = Invocation::new("kill")
         .arg(name)
         .arg("--")
         .arg(target)
@@ -731,9 +732,10 @@ mod tests {
     // flip-check: moved s2-07l.542
     // flip-check: moved s2-07l.544
     use super::{
-        body_of, client_args, config_of, endpoint, grace_of, group_target, normalize_resets, render, table,
+        body_of, client_args, config_of, endpoint, grace_of, group_target, normalize_resets, render, signal_group, table,
         table_row, token_of, windows_of, TableRow, UsageError, ROW_GRACE,
     };
+    use crate::pipe::fixture::{exited, Call, Stub};
     use crate::cli_outcome::{RC_BROKEN, RC_REFUSED};
     use crate::fleet::json_tree::parse;
     use crate::fleet::{
@@ -937,6 +939,22 @@ mod tests {
         assert_eq!(group_target(1), None, "1 は user の全 process");
         assert_eq!(group_target(2), Some("-2".to_owned()), "2 は撃てる最小の id");
         assert_eq!(group_target(4242), Some("-4242".to_owned()));
+    }
+
+    /// group 宛ての signal は差し替え口を通る（設計 core-boundary.md §9 行 e）: program は kill・引数は signal の名・
+    /// `--`・宛先の順で、渡した字面をそのまま運ぶ。base は差し替え口を通らずに撃つので stub に記録が残らず RED
+    /// （base で実物が撃たれても signal 0 と在り得ない宛先なので何も殺さない）。
+    #[test]
+    fn invocation_wrap_usage_kill_passes_the_pid() {
+        let stub = Stub::install(|_| exited(0, b""));
+        signal_group("-invocation-wrap-no-such-group", "-0");
+        let want = Call {
+            program: "kill".to_owned(),
+            args: ["-0", "--", "-invocation-wrap-no-such-group"].map(str::to_owned).to_vec(),
+            cwd: None,
+            envs: Vec::new(),
+        };
+        assert_eq!(stub.calls(), [want], "kill の引数は signal・`--`・宛先");
     }
 
     /// `pipe.stop_grace_ms` を 1 行だけ持つ manifest の fixture。
