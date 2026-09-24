@@ -957,13 +957,14 @@ pub(super) fn make_tree_differ(repo: &Path, state: &Path, id: &str, rev: &str) {
     fs::write(&verdict, swapped).expect("verdict.json を差し替えられる");
 }
 
-/// 便の `RunDone stage=Landed` の detail（無ければ空）。
+/// 便の `RunDone stage=Landed` の detail（無ければ空・着地後の検出の `detection:` は読み飛ばす＝設計 gate-cost.md §44 形 (4)）。
 fn landed_detail(state: &Path, id: &str) -> String {
     trail(state, id)
         .into_iter()
         .rev()
-        .find(|(kind, stage, _)| *kind == EventKind::RunDone && *stage == Some(Stage::Landed))
-        .and_then(|(_, _, detail)| detail)
+        .filter(|(kind, stage, _)| *kind == EventKind::RunDone && *stage == Some(Stage::Landed))
+        .filter_map(|(_, _, detail)| detail)
+        .find(|detail| !detail.starts_with("detection:"))
         .unwrap_or_default()
 }
 
@@ -4164,12 +4165,16 @@ fn pipe_follow_docs_only_carries_gated_pass_without_regate() {
     assert!(stdout.contains(&format!("rebase={base}..{moved}")), "追随は済む: {stdout}");
     assert!(stdout.contains("verdict=PASS"), "引き継いだ判定行: {stdout}");
     assert!(!marker.exists(), "再 gate を撃たない＝lens は 1 度も起きない: {stdout}");
+    // 着地後の検出の子（設計 gate-cost.md §44 形 (11)）は着地した diff が面の外（toy の `src/lib.rs`）＝stub を撃たず
+    // `landed` 付きの skip record 1 本だけを足す。子の終わりを待ってから測る。
+    super::gate::await_detection_child(&state, &id);
     let added = super::gate::detection_calls(&repo).split_off(before);
     assert_eq!(added, ["common", "contract"], "撃つのは主実測の ②④ だけ（母集団 = 前 {before} 行）");
     assert_regate_skip_record(&verify_rows(&state, &id));
     // 主実測は別 file（`verify-main.jsonl`）に従来どおり ②・③ の skip・④ の 3 本。木は gate を撃った周と
     // 違う（docs の 1 file ぶん進んでいる）ので、③ を省く理由は木の一致ではなく面の外である。
-    let main = super::gate::main_rows(&state, &id);
+    let (main, after) = super::gate::split_landed(super::gate::main_rows(&state, &id));
+    assert_eq!(after.len(), 1, "着地後の record は 1 本: {after:?}");
     assert_eq!(
         super::gate::kinds(&main),
         ["write-set", "common", "detection", "contract"],
@@ -4213,6 +4218,8 @@ fn pipe_detection_scope_unreadable_follow_diff_does_not_skip_outside_scope() {
     let out = land_once_with_git_shim(&repo, &state, &id, &format!(" diff --name-only -z {base}..{moved}"), None);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land は rc 0: {}", stderr_of(&out));
     assert!(stdout_of(&out).contains(&format!("rebase={base}..{moved}")), "追随は済む: {}", stdout_of(&out));
+    // 着地後の検出の子は面の外の着地で stub を撃たない（子の終わりを待ってから呼出を数える）。
+    super::gate::await_detection_child(&state, &id);
     let added = super::gate::detection_calls(&repo).split_off(before);
     assert_eq!(
         added,
@@ -4275,6 +4282,8 @@ fn pipe_detection_single_shot_crates_moved_with_unchanged_diff_fires_detection_a
     let out = land_once(&repo, &state, &id);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land は rc 0: {}", stderr_of(&out));
     assert!(stdout_of(&out).contains(&format!("rebase={base}..{moved}")), "追随は済む: {}", stdout_of(&out));
+    // 着地後の検出の子（面の外の着地・stub を撃たない）の終わりを待ってから測る。
+    super::gate::await_detection_child(&state, &id);
     let main = git(&repo, &["rev-parse", "refs/heads/main"]);
     assert_eq!(measured_patch_id(&repo, &moved, &main), gated, "fixture: 便の diff の patch-id は前周と同じ");
     let added = super::gate::detection_calls(&repo).split_off(before);
@@ -4293,7 +4302,9 @@ fn pipe_detection_single_shot_crates_moved_with_unchanged_diff_fires_detection_a
     for key in CARRY_KEYS {
         assert!(!log.contains(key), "record の JSON に {key} の key が無い: {log}");
     }
-    assert_eq!(super::gate::kinds(&super::gate::main_rows(&state, &id)), ["main"], "主実測は再 gate と同じ木");
+    let (measured, after) = super::gate::split_landed(super::gate::main_rows(&state, &id));
+    assert_eq!(super::gate::kinds(&measured), ["main"], "主実測は再 gate と同じ木");
+    assert_eq!(after.len(), 1, "着地後の record は 1 本: {after:?}");
     assert!(show_line(&repo, &state, &id).contains("stage=Landed"), "段は Landed");
     clean(&[&repo, &state]);
 }
@@ -4947,16 +4958,20 @@ const ALL_GREEN: &str = "sh verify-ok.sh";
 /// 同じ base から 3 便を PASS の gate まで通す（行は **1 回の commit** で置く＝3 便の base は main の先端と同じ）。
 /// write-set は `crates/toy/a.rs` / `src/b.rs` / `src/c.rs` で交わらず、Gated の ts と bead は a < b < c（列の順）。
 /// `verify` は便ごとの契約 verify の 1 行（[`TRAIN_RED`] / [`MAIN_RED`] で赤い場所を選ぶ）。
+fn train_runs(repo: &Path, state: &Path, marker: &Path, verify: [&str; 3]) -> [String; 3] {
+    train_runs_on(repo, state, marker, verify, ["crates/toy/a.rs", "src/b.rs", "src/c.rs"])
+}
+
+/// [`train_runs`] の本体（便ごとの write-set の 1 file を `files` で選ぶ・交わらないこと）。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn train_runs(repo: &Path, state: &Path, marker: &Path, verify: [&str; 3]) -> [String; 3] {
+fn train_runs_on(repo: &Path, state: &Path, marker: &Path, verify: [&str; 3], files: [&str; 3]) -> [String; 3] {
     for (name, face) in [("verify-train-red.sh", "*/train/*"), ("verify-main-red.sh", "*/verify/*")] {
         let body = format!("case \"$(git rev-parse --show-toplevel)\" in {face}) exit 1;; esac\nexit 0\n");
         fs::write(repo.join(name), body).expect("verify script を書ける");
     }
-    let files = ["crates/toy/a.rs", "src/b.rs", "src/c.rs"];
     let rows: Vec<Vec<String>> = ["a", "b", "c"]
         .iter()
         .zip(files)
@@ -5191,6 +5206,38 @@ fn pipe_train_red_main_fails_every_run_and_keeps_main_advanced() {
         assert_eq!(landed_count(&state, id), 0, "Landed は 0 件: {id}");
     }
     assert_eq!(verdict_lines(&state), 0, "面 5 へ書かない");
+    clean(&[&repo, &state]);
+}
+
+/// 着地後の検出（設計 gate-cost.md §44 行 am・接頭辞 `pipe_detection_after_landing_`）の (o): 検出線を宣言した toy の 3 本
+/// （write-set は `crates/` の面の内）を候補の木で着地させると、後続も自分の `finish` から口を起こす＝後続は自分の run dir の
+/// `verify-main.jsonl` に `landed=<自分の squash>` の record を 1 本持ち、その `{base}` は自分の squash commit の親。base の
+/// land は子を起こさない＝`landed` を持つ record が 0 本で RED。
+#[test]
+fn pipe_detection_after_landing_train_follower_records_in_its_own_run_dir() {
+    let (repo, state) = repo_with_state();
+    super::gate::commit_detection_vessel(&repo, super::gate::DETECTION_COUNT);
+    let marker = state.join("lens-ran");
+    let files = ["crates/toy/a.rs", "crates/toy/b.rs", "crates/toy/c.rs"];
+    let [id_a, id_b, id_c] = train_runs_on(&repo, &state, &marker, [ALL_GREEN, ALL_GREEN, ALL_GREEN], files);
+    let rules = write_rules_train(&state, "rules-train.toml", Some(3));
+    let out = land_extra(&repo, &state, &id_a, &["--rules", &rules]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "列の land は rc 0: {} / {}", stdout_of(&out), stderr_of(&out));
+    assert!(stdout_of(&out).contains(&format!("run={id_a} train=3")), "列で着地した: {}", stdout_of(&out));
+    for id in [&id_a, &id_b, &id_c] {
+        super::gate::await_detection_child(&state, id);
+    }
+    let (sha_a, sha_b, sha_c) = (landed_sha_of(&state, &id_a), landed_sha_of(&state, &id_b), landed_sha_of(&state, &id_c));
+    let calls = super::gate::detection_calls(&repo);
+    for (id, sha, parent) in [(&id_b, &sha_b, &sha_a), (&id_c, &sha_c, &sha_b)] {
+        assert_eq!(git(&repo, &["rev-parse", &format!("{sha}^")]), *parent, "fixture: 後続の squash の親は前の便の squash");
+        let (_, after) = super::gate::split_landed(super::gate::main_rows(&state, id));
+        assert_eq!(after.len(), 1, "後続 {id} の run dir に landed を持つ record は 1 本: {after:?}");
+        let row = after.first().cloned().unwrap_or_default();
+        assert_eq!(value_of(&row, "landed"), *sha, "landed=<後続自身の squash>: {row:?}");
+        assert_eq!(value_of(&row, "cmd"), format!("sh verify-count.sh detection-{parent}"), "{{base}} は自分の squash の親: {row:?}");
+        assert!(calls.contains(&format!("detection-{parent}")), "stub は自分の squash の親で呼ばれた: {calls:?}");
+    }
     clean(&[&repo, &state]);
 }
 

@@ -2330,7 +2330,7 @@ fn pipe_slots_threads_degraded_run_gets_one_job_and_one_thread() {
 pub(super) const DETECTION_COUNT: &str = r#"["sh verify-count.sh detection-{base}"]"#;
 
 /// `detection-verify` を持つ宣言を commit する（共通 verify も stub・`allowed-commands` は toy のまま）。
-fn commit_detection_vessel(repo: &Path, detection: &str) {
+pub(super) fn commit_detection_vessel(repo: &Path, detection: &str) {
     write_vessel(repo, VESSEL_ALLOWED, r#"["sh verify-count.sh common"]"#);
     let path = repo.join(".vessel.toml");
     let body = fs::read_to_string(&path).unwrap_or_default();
@@ -2377,12 +2377,47 @@ pub(super) fn skip_rows(
     rows.iter().filter(|row| !value_of(row, "skipped").is_empty()).collect()
 }
 
+/// 着地後の検出の子（land が `Landed` の後に切り離して起こす・設計 gate-cost.md §44 形 (11)）の終わりを待つ（§44 実装の
+/// 決め (i)）。便の event に `detection:spawned` が在れば、同じ便の終えた語（measured / unmeasured / skipped）が spawned の
+/// 件数に届くまで上限つきで待つ。spawned が無ければ待たない（検出線を宣言しない便・main-red の便）。
+pub(super) fn await_detection_child(state: &Path, id: &str) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(CHILD_WAIT_S);
+    loop {
+        let details = detection_details(state, id);
+        let spawned = details.iter().filter(|detail| detail.as_str() == SPAWNED_DETAIL).count();
+        let finished = details.iter().filter(|detail| FINISHED_DETAILS.contains(&detail.as_str())).count();
+        if finished >= spawned || std::time::Instant::now() >= deadline {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+/// land が子を起こせた周の detail。
+const SPAWNED_DETAIL: &str = "detection:spawned";
+
+/// 子（口）が終えた語の detail（閉じた 3 値）。
+const FINISHED_DETAILS: [&str; 3] = ["detection:measured", "detection:unmeasured", "detection:skipped"];
+
+/// 子の終わりを待つ上限（秒）。
+const CHILD_WAIT_S: u64 = 60;
+
+/// record の列（1 record = key と値の対の列）。
+pub(super) type Rows = Vec<Vec<(String, vessel::fleet::json_lite::Value)>>;
+
+/// `verify-main.jsonl` の record を主実測の分と着地後の検出の分（`landed` を持つ）に分ける。
+pub(super) fn split_landed(rows: Rows) -> (Rows, Rows) {
+    rows.into_iter().partition(|row| value_of(row, "landed").is_empty())
+}
+
 /// [`detection_land`] の結果。
 struct DetectionLand {
-    /// **land が足した**呼出行（撃たれた順）。
+    /// **land が足した**呼出行（撃たれた順・主実測の分の後ろに着地後の検出の子の分）。
     added: Vec<String>,
-    /// main 実測の record。
-    rows: Vec<Vec<(String, vessel::fleet::json_lite::Value)>>,
+    /// main 実測の record（`landed` を持たない）。
+    rows: Rows,
+    /// 着地後の検出の子の record（`landed` を持つ）。
+    after: Rows,
     /// land の出力。
     out: Output,
     /// 対象 repo。
@@ -2418,9 +2453,27 @@ fn detection_land_shimmed(edit: fn(&str, &str, &str) -> String, shim: Option<&st
         None => land_once(&repo, &state, &id),
         Some(failing) => land_once_with_git_shim(&repo, &state, &id, failing, None),
     };
+    await_detection_child(&state, &id);
     let added = detection_calls(&repo).split_off(before);
-    let rows = main_rows(&state, &id);
-    DetectionLand { added, rows, out, repo, state, id }
+    let (rows, after) = split_landed(main_rows(&state, &id));
+    DetectionLand { added, rows, after, out, repo, state, id }
+}
+
+/// 着地後の検出の子が `landed=<着地した sha>` の record を 1 本足し、呼出行は主実測の `main` 本の後ろに子の分（`fired`
+/// なら着地した commit の親を `{base}` に置いた 1 行・面の外の着地なら 0 行）だけが並ぶ（設計 gate-cost.md §44 形 (11)）。
+fn assert_landed_after(landed: &DetectionLand, main: usize, fired: bool) {
+    let sha = git(&landed.repo, &["rev-parse", "refs/heads/main"]);
+    assert_eq!(landed.after.len(), 1, "着地後の record は 1 本: {:?}", landed.after);
+    let row = landed.after.first().cloned().unwrap_or_default();
+    assert_eq!(value_of(&row, "landed"), sha, "landed=<着地した sha>: {row:?}");
+    assert_eq!(value_of(&row, "kind"), "detection", "kind=detection: {row:?}");
+    assert_eq!(landed.added.len(), main + usize::from(fired), "呼出は主実測 {main} 本 + 子の分: {:?}", landed.added);
+    if fired {
+        let parent = git(&landed.repo, &["rev-parse", &format!("{sha}^")]);
+        assert_eq!(landed.added.last().cloned().unwrap_or_default(), format!("detection-{parent}"), "子は着地した commit の親");
+    } else {
+        assert_eq!(value_of(&row, "reason"), "outside-scope", "toy の着地は面の外: {row:?}");
+    }
 }
 
 /// verdict の `tree` を**便の base の木**（実在する別の木・差分は便の `src/lib.rs` だけ＝面の外）へ差し替える。
@@ -2468,6 +2521,7 @@ fn pipe_detection_land_skips_detection_when_tree_matches() {
     assert_eq!(kinds(rows), ["main"], "record は主実測の skip 1 本だけ: {rows:?}");
     assert_eq!(row_value(rows, 1, "skipped"), "main", "skipped=main");
     assert_eq!(row_value(rows, 1, "tree"), git(&landed.repo, &["rev-parse", "refs/heads/main^{tree}"]), "tree=<land した木>");
+    assert_landed_after(&landed, 0, false);
     clean(&[&landed.repo, &landed.state]);
 }
 
@@ -2477,13 +2531,14 @@ fn pipe_detection_land_skips_detection_when_tree_matches() {
 // `verify-main.jsonl` に主実測の skip record 1 本（`kind=main skipped=main tree=<land した木> reason=same-tree`）を
 // 書いて緑。木が違う周と `tree` の無い周は従来の段数（③ の省き方は `pipe_detection_scope_` の歯の規則のまま）。
 
-/// 便の `RunDone stage=Landed` の detail（無ければ空）。
+/// 便の `RunDone stage=Landed` の detail のうち着地そのものの行（無ければ空・着地後の検出の `detection:` は読み飛ばす）。
 fn landed_done_detail(state: &Path, id: &str) -> String {
     trail(state, id)
         .into_iter()
         .rev()
-        .find(|(kind, stage, _)| *kind == EventKind::RunDone && *stage == Some(Stage::Landed))
-        .and_then(|(_, _, detail)| detail)
+        .filter(|(kind, stage, _)| *kind == EventKind::RunDone && *stage == Some(Stage::Landed))
+        .filter_map(|(_, _, detail)| detail)
+        .find(|detail| !detail.starts_with("detection:"))
         .unwrap_or_default()
 }
 
@@ -2509,6 +2564,7 @@ fn pipe_main_same_tree_writes_one_record_and_fires_nothing() {
     let new = git(&landed.repo, &["rev-parse", "refs/heads/main"]);
     assert!(stdout_of(out).contains(&format!("landed={new}")), "main の先端は squash: {}", stdout_of(out));
     assert_eq!(landed_done_detail(&landed.state, &landed.id), format!("sha:{new} main:{new}"), "Landed の detail は従来の形");
+    assert_landed_after(&landed, 0, false);
     clean(&[&landed.repo, &landed.state]);
 }
 
@@ -2527,6 +2583,7 @@ fn pipe_main_same_tree_different_tree_fires_all_stages() {
     assert_eq!(landed.added, ["common", "contract"], "主実測は ②④ を撃つ: {:?}", landed.added);
     assert_eq!(kinds(rows), ["write-set", "common", "detection", "contract"], "従来の段数: {rows:?}");
     assert!(rows.iter().all(|row| value_of(row, "kind") != "main"), "主実測の skip record は無い: {rows:?}");
+    assert_landed_after(&landed, 2, false);
     clean(&[&landed.repo, &landed.state]);
 }
 
@@ -2536,7 +2593,7 @@ fn pipe_main_same_tree_different_tree_fires_all_stages() {
 fn pipe_main_same_tree_missing_tree_fires_all_stages() {
     let landed = detection_land(|text, tree, _| text.replace(&format!(",\"tree\":\"{tree}\""), ""));
     assert!(verdict_pairs(&landed.state, &landed.id).iter().all(|(key, _)| key != "tree"), "fixture は tree の無い形");
-    assert_detection_fired(&landed);
+    assert_detection_fired(&landed, false);
     assert!(landed.rows.iter().all(|row| value_of(row, "kind") != "main"), "主実測の skip record は無い: {:?}", landed.rows);
     clean(&[&landed.repo, &landed.state]);
 }
@@ -2597,6 +2654,7 @@ fn pipe_detection_scope_same_tree_records_reason() {
     assert_eq!(value_of(&skip, "skipped"), "main", "skipped=main");
     assert_eq!(value_of(&skip, "tree"), git(&landed.repo, &["rev-parse", "refs/heads/main^{tree}"]), "tree=<land した木>");
     assert_eq!(value_of(&skip, "reason"), "same-tree", "理由は木の一致");
+    assert_landed_after(&landed, 0, false);
     clean(&[&landed.repo, &landed.state]);
 }
 
@@ -2621,6 +2679,7 @@ fn pipe_detection_scope_main_skips_detection_when_tree_differs_outside_scope() {
     assert_eq!(row_value(rows, 3, "skipped"), "detection");
     assert_eq!(row_value(rows, 3, "tree"), main_tree, "tree=<land した木>（gate の木ではない）");
     assert_eq!(row_value(rows, 3, "reason"), "outside-scope", "理由は面の外");
+    assert_landed_after(&landed, 2, false);
     clean(&[&landed.repo, &landed.state]);
 }
 
@@ -2632,19 +2691,20 @@ fn pipe_detection_scope_unreadable_diff_fires_detection() {
     // 木を比べられない: `tree` の無い verdict（既存 (5) の型）。
     let no_tree = detection_land(|text, tree, _| text.replace(&format!(",\"tree\":\"{tree}\""), ""));
     assert!(verdict_pairs(&no_tree.state, &no_tree.id).iter().all(|(key, _)| key != "tree"), "fixture は tree の無い形");
-    assert_detection_fired(&no_tree);
+    assert_detection_fired(&no_tree, false);
     clean(&[&no_tree.repo, &no_tree.state]);
-    // 木は違う（(f) と同じ fixture＝偽 git が無ければ省く周）が diff を読めない。
+    // 木は違う（(f) と同じ fixture＝偽 git が無ければ省く周）が diff を読めない。着地後の検出の子も同じ偽 git の PATH を
+    // 継ぐので面を読めず、撃つ側へ倒れる（設計 gate-cost.md §44 形 (3)）。
     let unreadable = detection_land_shimmed(verdict_tree_to_base, Some(" diff-tree -r --name-only -z "));
-    assert_detection_fired(&unreadable);
+    assert_detection_fired(&unreadable, true);
     clean(&[&unreadable.repo, &unreadable.state]);
 }
 
-/// ③ を撃った main 実測の共通 assert（(4) / (5)）。
-fn assert_detection_fired(landed: &DetectionLand) {
+/// ③ を撃った main 実測の共通 assert（(4) / (5)）。`child` は着地後の検出の子が stub を撃つ周か（[`assert_landed_after`]）。
+fn assert_detection_fired(landed: &DetectionLand, child: bool) {
     let (added, rows) = (&landed.added, &landed.rows);
     assert_eq!(landed.out.status.code(), Some(i32::from(RC_OK)), "land は rc 0: {}", stderr_of(&landed.out));
-    assert_eq!(added.len(), 3, "②③④ を全部撃つ: {added:?}");
+    assert_landed_after(landed, 3, child);
     assert!(added.get(1).is_some_and(|call| call.starts_with("detection-")), "③ が呼ばれる: {added:?}");
     assert_eq!(kinds(rows), ["write-set", "common", "detection", "contract"], "③ は撃った record: {rows:?}");
     assert!(rows.iter().all(|row| value_of(row, "skipped").is_empty()), "省いた record は無い: {rows:?}");
@@ -2658,7 +2718,7 @@ fn pipe_detection_land_fires_detection_when_tree_differs() {
     });
     let verdict = verdict_pairs(&landed.state, &landed.id);
     assert_eq!(value_of(&verdict, "tree"), "0".repeat(40), "fixture は壊した tree");
-    assert_detection_fired(&landed);
+    assert_detection_fired(&landed, false);
     clean(&[&landed.repo, &landed.state]);
 }
 
@@ -2669,7 +2729,7 @@ fn pipe_detection_land_fires_detection_when_verdict_has_no_tree() {
     let verdict = verdict_pairs(&landed.state, &landed.id);
     assert!(verdict.iter().all(|(key, _)| key != "tree"), "fixture は tree の無い旧形: {verdict:?}");
     assert_eq!(value_of(&verdict, "verdict"), "PASS", "fixture の verdict は読める形のまま");
-    assert_detection_fired(&landed);
+    assert_detection_fired(&landed, false);
     clean(&[&landed.repo, &landed.state]);
 }
 
@@ -2829,25 +2889,32 @@ fn landed_gated(case: &LandedCase) -> LandedRun {
     LandedRun { repo, state, id, sha: String::new(), gate_base }
 }
 
-/// [`landed_gated`] の便を、main を docs だけの 1 commit で進めてから着地させる（`sha` = 着地した squash）。
+/// [`landed_gated`] の便を、main を docs だけの 1 commit で進めてから着地させる（`sha` = 着地した squash）。land が起こした
+/// 着地後の検出の子の終わりを待ってから返す（[`await_detection_child`]・口の歯は子の後の前後の差で測る）。
+fn landed_run(case: &LandedCase) -> LandedRun {
+    let mut run = landed_gated(case);
+    let landed = land_after_docs_move(&run);
+    assert_eq!(landed.status.code(), Some(i32::from(RC_OK)), "land: {} / {}", stdout_of(&landed), stderr_of(&landed));
+    await_detection_child(&run.state, &run.id);
+    run.sha = git(&run.repo, &["rev-parse", "refs/heads/main"]);
+    run
+}
+
+/// main を docs だけの 1 commit で進めてから [`landed_gated`] の便に land を 1 回撃つ（子の終わりは待たない）。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn landed_run(case: &LandedCase) -> LandedRun {
-    let mut run = landed_gated(case);
+fn land_after_docs_move(run: &LandedRun) -> Output {
     fs::create_dir_all(run.repo.join("docs")).expect("docs を作れる");
     fs::write(run.repo.join("docs").join("moved.md"), "moved\n").expect("別便の docs を書ける");
     git(&run.repo, &["add", "-A"]);
     git(&run.repo, &["commit", "-q", "-m", "docs-move"]);
     let (repo_arg, state_arg) = (run.repo.display().to_string(), run.state.display().to_string());
-    let landed = run_pipe_with_path(
+    run_pipe_with_path(
         &landed_path(&run.state),
         &["land", "--run", &run.id, "--repo", &repo_arg, "--state-dir", &state_arg],
-    );
-    assert_eq!(landed.status.code(), Some(i32::from(RC_OK)), "land: {} / {}", stdout_of(&landed), stderr_of(&landed));
-    run.sha = git(&run.repo, &["rev-parse", "refs/heads/main"]);
-    run
+    )
 }
 
 /// 着地後の検出の口を 1 回撃つ（`rules` は任意）。
@@ -2873,6 +2940,8 @@ struct LandedBefore {
     rounds: Vec<u64>,
     /// event log の行数。
     events: usize,
+    /// 便の `detection:` の detail の件数（着地後の検出の子の分を含む）。
+    details: usize,
 }
 
 /// 口の前の面を読む。
@@ -2883,7 +2952,13 @@ fn landed_before(run: &LandedRun) -> LandedBefore {
         common: detection_calls(&run.repo).len(),
         rounds: copy_rounds(&run.state, &run.id),
         events: event_count(&run.state),
+        details: detection_details(&run.state, &run.id).len(),
     }
+}
+
+/// 口が足した `detection:` の detail（口の前後の差・設計 gate-cost.md §44 実装の決め (i)）。
+fn added_details(run: &LandedRun, before: &LandedBefore) -> Vec<String> {
+    detection_details(&run.state, &run.id).split_off(before.details)
 }
 
 /// 口が足した写しの周の番号（前より 1 つ増えたことを要求する）。
@@ -2951,7 +3026,7 @@ fn pipe_landed_detection_measured_round_records_the_landed_commit() {
     assert_eq!(value_of(&row, "line"), LANDED_LINE, "line= は stub の判定行: {row:?}");
     assert_eq!(value_of(&row, "rc"), "0", "{row:?}");
     assert_fired_on_the_parent(&run, &before);
-    assert_eq!(detection_details(&run.state, &run.id), ["detection:measured"], "event は 1 件");
+    assert_eq!(added_details(&run, &before), ["detection:measured"], "event は 1 件");
     let round = added_round(&run, &before);
     assert_eq!(read_copy(&run.state, &run.id, round, COPY_LINE), format!("{LANDED_LINE}\n"), "写しの判定行");
     assert!(!copy_path(&run.state, &run.id, round, "reason").exists(), "測れた周は理由の file を置かない");
@@ -2982,7 +3057,7 @@ fn pipe_landed_detection_outside_scope_writes_a_skip_record() {
     assert_eq!(value_of(&row, "reason"), "outside-scope", "理由は面の外: {row:?}");
     let round = added_round(&run, &before);
     assert_eq!(read_copy(&run.state, &run.id, round, "reason"), "skipped=outside-scope\n", "理由の file");
-    assert_eq!(detection_details(&run.state, &run.id), ["detection:skipped"], "event は 1 件");
+    assert_eq!(added_details(&run, &before), ["detection:skipped"], "event は 1 件");
     let shown = shown_copies(&run);
     assert_eq!(shown.last().cloned().unwrap_or_default(), format!("{COPY_ABSENT_LINE} skipped=outside-scope"), "{shown:?}");
     clean(&[&run.repo, &run.state]);
@@ -3003,7 +3078,7 @@ fn assert_landed_unmeasured(
     assert_eq!(read_copy(&run.state, &run.id, round, "reason"), format!("unmeasured={reason}\n"), "理由の file");
     let last = shown_copies(run).last().cloned().unwrap_or_default();
     assert!(last.ends_with(&format!(" unmeasured={reason}")), "show の行の末尾に理由: {last}");
-    assert_eq!(detection_details(&run.state, &run.id), ["detection:unmeasured"], "event は 1 件");
+    assert_eq!(added_details(run, before), ["detection:unmeasured"], "event は 1 件");
     assert!(show_line(&run.repo, &run.state, &run.id).contains("stage=Landed"), "段は Landed のまま");
     assert_eq!(git(&run.repo, &["rev-parse", "refs/heads/main"]), run.sha, "main の sha は動かない");
     row
@@ -3132,6 +3207,139 @@ fn assert_landed_untouched(run: &LandedRun, before: &LandedBefore) {
     assert_eq!(copy_rounds(&run.state, &run.id), before.rounds, "写しは増えない");
     assert_eq!(event_count(&run.state), before.events, "event は増えない");
     assert_eq!(landed_calls(&run.repo).len(), before.calls, "stub は呼ばれない");
+}
+
+// ---- land が口を切り離して起こす（設計 gate-cost.md §44 行 am・形 (11)・接頭辞 `pipe_detection_after_landing_`）--------
+//
+// land は `Landed` の event の後に、宣言の写しに検出線の行が在る便だけ行 ak の口を子 process で起こして待たない。
+// ③ は本行ではまだ gate も撃つ（gate の record は残る）。base の land は子を起こさない＝`detection:spawned` が 0 件で RED。
+// 候補の木の後続の歯（(o)）は候補の木の fixture が在る `land.rs` の同じ接頭辞。
+
+/// 解放の file の名（共通 dir・歯が置くまで [`write_blocking_stub`] の stub は上限つきで待つ）。
+const LANDED_RELEASE: &str = "landed-release";
+
+/// 共通 dir の stub を「argv を積んでから解放の file を上限つきで待ち、判定行を出して rc 0」に書き換える。
+fn write_blocking_stub(repo: &Path) {
+    let body = format!(
+        "common=\"$(git rev-parse --git-common-dir)\"\nprintf '%s\\n' \"$*\" >> \"$common/{LANDED_CALLS}\"\ni=0\nwhile [ ! -f \"$common/{LANDED_RELEASE}\" ] && [ \"$i\" -lt 600 ]; do sleep 0.1; i=$((i + 1)); done\nprintf '%s\\n' '{LANDED_LINE}'\nexit 0\n"
+    );
+    fs::write(repo.join(".git").join(LANDED_STUB), body).ok();
+}
+
+/// (k) land は stub が終わる前に rc 0 で `Landed` を返し、返った時点で `detection:spawned` 1 件・終えた語 0 件。解放の後に
+/// 子の終わりを待つと `detection:measured` 1 件と `landed` を持つ record 1 本（`line=` は stub の判定行・stub の `--base` は
+/// 着地した commit の親）。gate の ③ の record（`landed` の無い `kind=detection`）は本行ではまだ 1 本残る・台帳の見張り 0 件。
+#[test]
+fn pipe_detection_after_landing_land_returns_before_the_child_finishes() {
+    let mut run = landed_gated(&landed_crates_case());
+    write_blocking_stub(&run.repo);
+    let out = land_after_docs_move(&run);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land は rc 0: {} / {}", stdout_of(&out), stderr_of(&out));
+    run.sha = git(&run.repo, &["rev-parse", "refs/heads/main"]);
+    assert!(stdout_of(&out).contains(&format!("landed={}", run.sha)), "着地を返す: {}", stdout_of(&out));
+    assert!(show_line(&run.repo, &run.state, &run.id).contains("stage=Landed"), "段は Landed");
+    assert_eq!(detection_details(&run.state, &run.id), [SPAWNED_DETAIL], "返った時点: spawned 1 件・終えた語 0 件");
+    fs::write(run.repo.join(".git").join(LANDED_RELEASE), "").expect("解放の file を置ける");
+    await_detection_child(&run.state, &run.id);
+    assert_eq!(
+        detection_details(&run.state, &run.id),
+        [SPAWNED_DETAIL, "detection:measured"],
+        "解放の後: 子が measured を 1 件記す"
+    );
+    assert_child_measured_the_landed_commit(&run);
+    clean(&[&run.repo, &run.state]);
+}
+
+/// (k) の解放の後の面: `landed` を持つ record 1 本（stub の判定行・rc 0）・stub は gate の 1 回 + 子の 1 回で子の `--base` は
+/// 着地した commit の親・gate の ③ の record は `landed` を持たずに 1 本残る・台帳の見張り 0 件。
+fn assert_child_measured_the_landed_commit(run: &LandedRun) {
+    let (_, after) = split_landed(main_rows(&run.state, &run.id));
+    assert_eq!(after.len(), 1, "landed を持つ record は 1 本: {after:?}");
+    let row = after.first().cloned().unwrap_or_default();
+    assert_eq!(value_of(&row, "landed"), run.sha, "landed=<着地した sha>: {row:?}");
+    assert_eq!(value_of(&row, "line"), LANDED_LINE, "line= は stub の判定行: {row:?}");
+    assert_eq!(value_of(&row, "rc"), "0", "{row:?}");
+    let parent = git(&run.repo, &["rev-parse", &format!("{}^", run.sha)]);
+    assert_ne!(parent, run.gate_base, "fixture: gate の base と着地した commit の親は異なる");
+    let calls = landed_calls(&run.repo);
+    assert_eq!(calls.len(), 2, "stub は gate の 1 回 + 着地後の 1 回: {calls:?}");
+    assert_eq!(calls.last().cloned().unwrap_or_default(), format!("--base {parent} --teeth {LANDED_WORD}"), "子は着地した commit の親");
+    let gated: Vec<_> = verify_rows(&run.state, &run.id).into_iter().filter(|row| value_of(row, "kind") == "detection").collect();
+    assert_eq!(gated.len(), 1, "gate の ③ の record は本行ではまだ 1 本残る: {gated:?}");
+    assert!(gated.iter().all(|row| value_of(row, "landed").is_empty()), "gate の record は landed を持たない: {gated:?}");
+    assert!(crate::toolbox_ledger_record_names(&run.state).is_empty(), "台帳 client を起こさない");
+}
+
+/// (k) の対: land が受けた `--rules` は子へ同じ値で渡る。遮断器を閉じる `--rules`（行 ak の (d) と同じ形）で land すると、
+/// 主実測は同じ木で 1 本も撃たずに着地し、子は stub を呼ばず `unmeasured=host-closed` の record 1 本を残す（渡さない変異は
+/// 埋め込みの規則で撃って measured になる）。
+#[test]
+fn pipe_detection_after_landing_child_reads_the_rules_land_received() {
+    let run = landed_gated(&landed_crates_case());
+    let slots = SlotFixture { runnable_per_core: 0, blocked_per_core: 0, ..default_slots() };
+    let rules = write_rules_full(&run.state, "rules-landed-busy.toml", (1, 1_000_000), FOLLOW_RETRIES, slots);
+    let (repo_arg, state_arg, rules_arg) =
+        (run.repo.display().to_string(), run.state.display().to_string(), rules.display().to_string());
+    let out = run_pipe_with_path(
+        &landed_path(&run.state),
+        &["land", "--run", &run.id, "--repo", &repo_arg, "--state-dir", &state_arg, "--rules", &rules_arg],
+    );
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land は rc 0: {} / {}", stdout_of(&out), stderr_of(&out));
+    await_detection_child(&run.state, &run.id);
+    assert_eq!(
+        detection_details(&run.state, &run.id),
+        [SPAWNED_DETAIL, "detection:unmeasured"],
+        "子は同じ規則の遮断器で測れない"
+    );
+    assert_eq!(landed_calls(&run.repo).len(), 1, "stub は gate の 1 回だけ（子は呼ばない）");
+    let (_, after) = split_landed(main_rows(&run.state, &run.id));
+    assert_eq!(after.len(), 1, "landed を持つ record は 1 本: {after:?}");
+    let row = after.first().cloned().unwrap_or_default();
+    assert_eq!(value_of(&row, "unmeasured"), "host-closed", "記録は遮断器の理由: {row:?}");
+    clean(&[&run.repo, &run.state]);
+}
+
+/// (l) 検出線を宣言しない便の land は `detection:` で始まる detail を 1 件も書かない（Landed の detail は着地そのものの行
+/// だけの従来の並び）。
+#[test]
+fn pipe_detection_after_landing_undeclared_run_writes_no_detection_detail() {
+    let (repo, state) = repo_with_state();
+    let design = write_contract(&repo, &[], &[]);
+    let id = gated_pass(&repo, &state, &design, &state.join("lens-ran"));
+    let out = land_once(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land は rc 0: {}", stderr_of(&out));
+    assert!(detection_details(&state, &id).is_empty(), "detection の detail は無い: {:?}", trail(&state, &id));
+    let sha = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let landed: Vec<String> = trail(&state, &id)
+        .into_iter()
+        .filter(|(kind, stage, _)| *kind == EventKind::RunDone && *stage == Some(Stage::Landed))
+        .filter_map(|(_, _, detail)| detail)
+        .collect();
+    assert_eq!(landed, [format!("sha:{sha} main:{sha}")], "Landed の detail は着地の 1 件だけ");
+    assert!(split_landed(main_rows(&state, &id)).1.is_empty(), "landed を持つ record は無い");
+    clean(&[&repo, &state]);
+}
+
+/// (m) main-red で終えた便は `finish` に届かない＝`detection:spawned` を持たず、`landed` を持つ record も無い。
+#[test]
+fn pipe_detection_after_landing_main_red_run_spawns_nothing() {
+    let (repo, state) = repo_with_state();
+    commit_detection_vessel(&repo, DETECTION_COUNT);
+    // 1 回目（gate）は緑・2 回目（主実測）は赤の契約 verify。主実測を撃つ周にするため verdict の木を main の木へ差し替える。
+    let design = write_contract(&repo, &["verify"], &[r#"verify = ["sh verify-once.sh"]"#]);
+    let id = gated_pass(&repo, &state, &design, &state.join("lens-ran"));
+    super::land::make_tree_differ(&repo, &state, &id, "refs/heads/main");
+    let out = land_once(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "main が赤い land は rc 1: {}", stderr_of(&out));
+    assert_eq!(
+        stages(&state, &id).last().cloned(),
+        Some((Some(Stage::Failed), Some("main-red".to_owned()))),
+        "終端の理由は main-red: {:?}",
+        stages(&state, &id)
+    );
+    assert!(detection_details(&state, &id).is_empty(), "spawned を持たない: {:?}", trail(&state, &id));
+    assert!(split_landed(main_rows(&state, &id)).1.is_empty(), "landed を持つ record は無い");
+    clean(&[&repo, &state]);
 }
 
 /// 便の `Gated` event の detail の並び（測り直しの履歴）。
@@ -3564,7 +3772,10 @@ fn pipe_record_land_skipped_detection_has_no_line() {
     super::land::make_tree_differ(&repo, &state, &id, "refs/heads/main");
     let landed = land_once(&repo, &state, &id);
     assert_eq!(landed.status.code(), Some(i32::from(RC_OK)), "land: {}", stderr_of(&landed));
-    let rows = main_rows(&state, &id);
+    // 着地後の検出の子（設計 gate-cost.md §44 形 (11)）は `landed` 付きの 1 本を足す＝待ってから主実測の分と分ける。
+    await_detection_child(&state, &id);
+    let (rows, after) = split_landed(main_rows(&state, &id));
+    assert_eq!(after.len(), 1, "着地後の record は 1 本: {after:?}");
     assert_eq!(kinds(&rows), ["write-set", "common", "detection", "contract"], "main 実測の母集団: {rows:?}");
     assert_eq!(row_value(&rows, 3, "skipped"), "detection", "面の外だけが違う周は ③ を省く");
     assert!(!row_has(&rows, 3, "line"), "省いた段に `line` は無い: {:?}", rows.get(2));
@@ -3931,7 +4142,9 @@ fn gate_secs_only_fired_steps_carry_the_wall_clock() {
     super::land::make_tree_differ(&repo, &state, &id, "refs/heads/main");
     let landed = land_once(&repo, &state, &id);
     assert_eq!(landed.status.code(), Some(i32::from(RC_OK)), "land: {}", stderr_of(&landed));
-    let main = main_rows(&state, &id);
+    await_detection_child(&state, &id);
+    let (main, after) = split_landed(main_rows(&state, &id));
+    assert_eq!(after.len(), 1, "着地後の record は 1 本: {after:?}");
     assert_eq!(kinds(&main), ["write-set", "common", "detection", "contract"], "main 実測の母集団: {main:?}");
     assert_eq!(row_value(&main, 3, "skipped"), "detection", "面の外だけが違う周は ③ を省く");
     assert!(!row_has(&main, 3, "secs"), "撃たなかった段（skip record）は秒を欠く: {:?}", main.get(2));

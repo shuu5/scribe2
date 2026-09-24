@@ -81,6 +81,7 @@ fn terminal_only(args: &[String], id: &str, manifest: &Manifest, policy: LockPol
         approved: resolved.approved,
         policy,
         train_max: 1,
+        rules: None,
     };
     let terminal = super::land::terminal(&entry, &sha);
     Outcome {
@@ -377,6 +378,8 @@ pub(super) fn land_run(args: &[String], id: &str, manifest: &Manifest, policy: L
         policy,
         // 着地の列を積む上限（設計 pipeline.md §40）。**行が無い・読めない周は 1**＝先頭だけ（従来の経路・止めない）。
         train_max: int_row(manifest, ROW_TRAIN_MAX).unwrap_or(1),
+        // 着地後の検出の子へ同じ規則を渡す（設計 gate-cost.md §44 形 (11)・値の欠けは manifest を読む口が先に断っている）。
+        rules: flag(args, "--rules").ok().flatten().map(Path::new),
     })
 }
 

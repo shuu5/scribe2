@@ -386,7 +386,8 @@ fn launched(input: &Input<'_>, launch: &Launch) -> bool {
 ///
 /// 子の stderr は `<state_dir>/pipe/launch.log` に append する（設計 §17・受付で落ちた子の死因を席が読める
 /// 場所に残す・C10）。file を開けない周は stderr を捨てて**起こす**（起動を記録の失敗で止めない）。
-fn spawn_self(state_dir: &Path, argv: &[String]) -> bool {
+/// land の着地後の検出（設計 gate-cost.md §44 形 (11)）も同じ 1 本で起こす。
+pub(in crate::pipe) fn spawn_self(state_dir: &Path, argv: &[String]) -> bool {
     Invocation::new(myself())
         .arg(PIPE)
         .args(argv)

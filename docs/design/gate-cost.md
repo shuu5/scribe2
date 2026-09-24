@@ -869,6 +869,14 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
 - 形 (7) の赤の数え方: 「検出線 ∧ rc 2」を赤から除く述語は gate の記録の側に 1 本だけ残る（判定の順には段を持たない）。診断 file の撃ち直しの見出し（`retry=1`）も同じ便で消えた。
 - 形 (8) の面の判定: 追随と候補の木の段が組む撃ち直しの材料は、面の range（便の base と新しい base）だけになった（便の diff を測る木と range の欄は消えた）。
 
+### 44.3 errata（現物との差・行 am・規範は上の §44 のまま）
+
+- 形 (11) の起こせなかった周: 理由の file は行 ak の書き手（`land/detection.rs` の unfired・pub(super) に上げた）の 1 本で置くので、同じ書き手が `landed` 付きで `unmeasured=unspawned` を持つ record も 1 本残す（形 (4) の「どの周も 1 本以上」と同じ形）。
+- 形 (11) の event の順: `detection:spawned` は子を起こした直後に land が書く＝物理順では子の終えた語が先に並ぶ周がありうる。歯の helper（実装の決め (i)）は順でなく件数（終えた語が spawned の件数に届くまで）で待つ。
+- 形 (11) の宣言の読み: 宣言の写しを読めない周は検出線の有無を測れないので起こさず、`detection:` の detail も書かない（口は同じ周に rc 2 で止まる形・§44.1 の形 (1) の断り）。
+- 形 (11) の材料: `--rules` の path の欄は land の材料の任意の欄で、候補の木の後続は先頭の材料の写しから同じ値を継ぐ（`train.rs` の構築は既存の写しのまま・字面の変更なし）。子へ渡ることは遮断器を閉じる `--rules` の land で子が `unmeasured=host-closed` を残す歯が測る。
+- 歯の読み手: 歯の側で `Landed` の detail の最後の 1 件を読む helper（gate.rs と land.rs の各 1 本）は `detection:` の detail を読み飛ばす形に直した（着地と終端の読み手が読み飛ばすのと同じ規則）。
+
 <!-- contracts:begin -->
 schema = 1
 

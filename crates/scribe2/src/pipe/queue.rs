@@ -517,7 +517,7 @@ mod tests {
             runnable_per_core: 0,
             blocked_per_core: 0,
         };
-        Land { run: "b-me", bead: "s2-mutant", repo, state_dir: state, contract, pr_cmd: None, lens: &LensSource::Absent, limits, runner: None, retries: 0, land_wait_s: wait_s, ci_wait_s: 0, bd: crate::ledger::DEFAULT_BD, approved: false, policy, train_max: 1 }
+        Land { run: "b-me", bead: "s2-mutant", repo, state_dir: state, contract, pr_cmd: None, lens: &LensSource::Absent, limits, runner: None, retries: 0, land_wait_s: wait_s, ci_wait_s: 0, bd: crate::ledger::DEFAULT_BD, approved: false, policy, train_max: 1, rules: None }
     }
 
     // flip-check: retroactive s2-07l.222

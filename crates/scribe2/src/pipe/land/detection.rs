@@ -8,7 +8,8 @@
 //!
 //! 残すのは 3 つ: 便自身の `verify-main.jsonl` に `landed` 付きの record（撃った周は行ごとに 1 本・撃たなかった周と
 //! 撃てなかった周は理由を持つ 1 本＝どの周も 1 本以上）、§15 の置き場の写しと理由の file、`RunDone stage=Landed` の
-//! detail の `detection:<語>` 1 件。**台帳 client は呼ばない**（C15・FR50）。gate と land の段は変えない（人が撃つ口）。
+//! detail の `detection:<語>` 1 件。**台帳 client は呼ばない**（C15・FR50）。gate と land の段は変えない。口は land が
+//! `Landed` の後に子 process で起こし（[`super::finish`]・待たない・設計 §44 形 (11)）、人も同じ口を撃てる。
 //!
 //! 極性: 検出線は止めない線（C12.4）なので、測れなかった周も rc 0 で語が `unmeasured` になる。rc 2 は record・写し・
 //! event を書けない周だけ。宣言に検出線の行が無い便は何も書かずに rc 1 で断る。
@@ -49,7 +50,10 @@ pub(in crate::pipe) struct Detect<'a> {
 const PLACE_SUFFIX: &str = "-detection";
 
 /// `RunDone stage=Landed` の detail の前置き（`sha:` も `terminal:` も持たない＝着地と終端の読み手は読み飛ばす）。
-const DETAIL_HEAD: &str = "detection:";
+pub(super) const DETAIL_HEAD: &str = "detection:";
+
+/// land が口を子 process で起こせた周の detail の語（設計 §44 形 (11)・終えた語ではない＝子が後から終えた語を記す）。
+pub(super) const SPAWNED: &str = "spawned";
 
 /// worktree か親を出せなかった周の理由の語。
 const UNPREPARED: &str = "unprepared";
@@ -57,9 +61,12 @@ const UNPREPARED: &str = "unprepared";
 /// 遮断器が閉じて撃たなかった周の理由の語。
 const HOST_CLOSED: &str = "host-closed";
 
+/// land が口を子 process で起こせなかった周の理由の語（detail の語も同じ字面・設計 §44 形 (11)）。
+pub(super) const UNSPAWNED: &str = "unspawned";
+
 /// 口が終えた語（stdout の `detection=` と detail の `detection:` の値・閉じた 3 値）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Finished {
+pub(super) enum Finished {
     /// 撃って測れた（rc 0 か 1）。
     Measured,
     /// 測れなかった（rc が 0 と 1 以外・遮断器が閉じた・worktree か親を出せない）。
@@ -204,7 +211,9 @@ fn unmeasured_of(steps: &[Step]) -> Option<String> {
 }
 
 /// 撃たなかった / 撃てなかった周: 理由を持つ record 1 本と、次の周の置き場に理由の file 1 つ。
-fn unfired(entry: &Detect<'_>, mark: LandedMark<'_>, why: Unfired<'_>) -> Result<Finished, String> {
+///
+/// land が口を起こせなかった周（`unmeasured=unspawned`）も [`super::finish`] がこの 1 本で書く（書き手を増やさない・C2）。
+pub(super) fn unfired(entry: &Detect<'_>, mark: LandedMark<'_>, why: Unfired<'_>) -> Result<Finished, String> {
     let path = record_path(entry);
     let n = next_n(&path)?;
     append_line(&path, &landed_unfired_record(n, mark, why), entry.policy).map_err(|err| err.to_string())?;

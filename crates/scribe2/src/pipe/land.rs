@@ -223,6 +223,9 @@ pub struct Land<'a> {
     /// 着地の列を候補の木 1 つに積む本数の上限（先頭を含む・rules 行 `land.train_max`・行が無い / 読めない周は 1
     /// ＝先頭だけ・設計 §40）。land 自身は数値を見ず [`super::train`] へ渡す。
     pub train_max: u64,
+    /// land が受けた `--rules` の path（着地後の検出の子へ同じ値を渡す・受けていない周は `None`＝子も埋め込みを読む・
+    /// 設計 gate-cost.md §44 形 (11)）。
+    pub rules: Option<&'a Path>,
 }
 
 /// main が動いた便の追随の結果（設計 §5.4・§29）。

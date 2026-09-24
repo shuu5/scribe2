@@ -3465,8 +3465,8 @@ fn e2e_toolbox_run_bin_confines_the_lens_claude() {
 // ───── runner / lens / claude の箱を 1 × gate.job_memory_mb に揃える（`s2-07l.230`・設計 gate-cost.md §12・行 c・
 // 接頭辞 `headless_runner_box_`） ─────
 
-/// runner の雛形の「実行してよい command」節に足した 1 行（検出線は gate が撃つ）。
-const DETECTOR_LINE: &str = "- 検出線（`cargo mutants`）は gate が撃つ。runner は撃たない（禁じる語列で止まる）。";
+/// runner の雛形の「実行してよい command」節に足した 1 行（検出線は着地の後に器が撃つ・設計 gate-cost.md §44 形 (12)）。
+const DETECTOR_LINE: &str = "- 検出線（`cargo mutants`）は着地の後に器が撃つ。runner は撃たない（禁じる語列で止まる）。";
 
 /// **runner が起こす claude の箱は 1 × `gate.job_memory_mb`**・雛形は検出線を撃たない 1 行を「実行してよい
 /// command」節に 1 本だけ持つ。base は claude を `MemTotal − host.reserve_memory_mb`（host の箱）で包み、

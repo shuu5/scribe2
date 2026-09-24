@@ -15,10 +15,13 @@
 // flip-check: moved s2-07l.498
 
 use super::super::contract::Contract;
-use super::super::gate::Verdict;
+use super::super::declaration::Effective;
+use super::super::dispatch::spawn_self;
+use super::super::gate::{LandedMark, Unfired, Verdict};
 use super::super::queue::{Order, Turned};
-use super::super::{emit, git_bytes, git_line, git_ok, size, verdict_path, Emit};
-use super::verify::{main_red, main_unmeasured, measure_main, verify_train_main};
+use super::super::{emit, git_bytes, git_line, git_ok, size, verdict_path, vessel_path, Emit};
+use super::detection::{unfired, Detect, DETAIL_HEAD, SPAWNED, UNSPAWNED};
+use super::verify::{main_red, main_unmeasured, measure_main, verify_train_main, MAIN_UNKNOWN};
 use super::{
     broken, refused, retire_worktree, verdicts_path, AnchorSync, Land, Landing, MainCheck, Terminal, MAIN_REF,
     RUN_TRAILER,
@@ -319,6 +322,8 @@ pub(super) fn finish(entry: &Land<'_>, worktree: &Path, landing: &Landing, ancho
     if let Err(err) = emitted {
         return broken(err.to_string());
     }
+    // 着地後の検出を切り離して起こす（設計 gate-cost.md §44 形 (11)・待たない）。起こせなかった周も rc と着地は変えない。
+    err.extend(spawn_detection(entry, new));
     // 後始末の失敗は land を取り消さない（**rc 0 のまま stderr 1 行**）。anchor の warning も同じ列。
     err.extend(retire_worktree(entry.repo, entry.run, worktree));
     err.extend(anchor.warning());
@@ -342,6 +347,65 @@ pub(super) fn finish(entry: &Land<'_>, worktree: &Path, landing: &Landing, ancho
         err,
         rc: terminal.rc(),
     }
+}
+
+/// 着地後の検出の口（`pipe land --run <id> --detection-only`）を子 process で起こし、終わりを待たない（設計 gate-cost.md
+/// §44 形 (11)・行 am）。起こすのは列が便を起こすのと同じ 1 本（[`spawn_self`]・新しい process group・stderr は起動の log）。
+///
+/// 宣言の写しに検出線の行が在る便だけ起こす（写しを読めない周も起こさない＝口が断る形を起こさない）。起こせた周は
+/// `detection:spawned`、起こせなかった周は `detection:unspawned` を 1 件記し、record と理由の file（`unmeasured=unspawned`）
+/// は行 ak の書き手（[`unfired`]）が置いて stderr の行を返す。どの周も rc と着地は変えない（検出線は止めない線・C12.4）。
+fn spawn_detection(entry: &Land<'_>, sha: &str) -> Vec<String> {
+    let declared = Effective::load(&vessel_path(entry.state_dir, entry.run))
+        .is_ok_and(|frozen| !frozen.detection_verify().is_empty());
+    if !declared {
+        return Vec::new();
+    }
+    let mut argv: Vec<String> = ["land", "--run", entry.run, "--detection-only", "--state-dir"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    argv.extend([entry.state_dir.display().to_string(), "--repo".to_owned(), entry.repo.display().to_string()]);
+    if let Some(rules) = entry.rules {
+        argv.extend(["--rules".to_owned(), rules.display().to_string()]);
+    }
+    let spawned = spawn_self(entry.state_dir, &argv);
+    let word = if spawned { SPAWNED } else { UNSPAWNED };
+    let mut err = Vec::new();
+    if !spawned {
+        err.push(format!("pipe: run {} の着地後の検出を起こせなかった（unmeasured={UNSPAWNED}）", entry.run));
+        let tree = git_line(entry.repo, &["rev-parse", &format!("{sha}^{{tree}}")]);
+        let mark = LandedMark { sha, tree: tree.as_deref().unwrap_or(MAIN_UNKNOWN) };
+        let detect = Detect {
+            run: entry.run,
+            bead: entry.bead,
+            repo: entry.repo,
+            state_dir: entry.state_dir,
+            contract: entry.contract,
+            limits: entry.limits,
+            policy: entry.policy,
+        };
+        if let Err(reason) = unfired(&detect, mark, Unfired::Unmeasured(UNSPAWNED)) {
+            err.push(format!("pipe: {reason}"));
+        }
+    }
+    let emitted = emit(
+        entry.state_dir,
+        &Emit {
+            kind: EventKind::RunDone,
+            run: entry.run,
+            bead: entry.bead,
+            stage: Some(Stage::Landed),
+            seat: None,
+            pid: None,
+            detail: Some(format!("{DETAIL_HEAD}{word}")),
+        },
+        entry.policy,
+    );
+    if let Err(reason) = emitted {
+        err.push(format!("pipe: {reason}"));
+    }
+    err
 }
 
 /// 候補の木に積んだ便 1 本（[`land_train`] の材料・設計 pipeline.md §40・行 ah）。
@@ -501,6 +565,7 @@ mod tests {
             approved: false,
             policy,
             train_max: 1,
+            rules: None,
         };
         let stub = Stub::install(|_| exited(0, b""));
         let out = open_pr(&entry, "base-sha", "true {branch} {base}");
