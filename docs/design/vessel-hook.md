@@ -286,7 +286,7 @@ id = "e"
 title = "host-guard の見張り自身の設定の編集の種類 — 守る file の集合（host の面の全口座の settings.json の実体・payload の cwd の repo の root〔外なら cwd〕の .claude の settings.json と settings.local.json）を code の定数で持ち行を持たず、編集系 4 道具の path と Bash の rm / tee / sed -i / redirect の対象と mv の source と destination と cp / ln の destination を、守る file の導いた path と実体の path の両方と一致・祖先の関係で比べて断る（~ 始まりは末尾一致・glob は自前の fnmatch・~ と glob の併用は末尾を fnmatch・cp / mv の dir への destination は basename を結んで比べ、変数・brace・cd 後の相対 path は通す）"
 req = ["FR72", "FR20", "NFR4", "NFR5"]
 section = "12"
-write-set = ["crates/scribe2/src/hook/host_guard.rs", "crates/scribe2-boundary/tests/e2e/hook.rs", "docs/design/vessel-hook.md"]
+write-set = ["crates/scribe2/src/hook/host_guard.rs", "crates/scribe2/src/hook/host_guard_tests.rs", "crates/scribe2-boundary/tests/e2e/hook.rs", "docs/design/vessel-hook.md"]
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail host_guard_self_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail host_guard_self_"]
 size = "M"
 depends = ["b", "g"]
@@ -309,7 +309,7 @@ id = "g"
 title = "hook/host_guard.rs の歯の module（39 本・781 行）を #[path] の子 module の file へ割る — 純移動・module path hook::host_guard::tests と歯の名は不変・親の src と可視性は不変・札 moved・R-C4-2 の余地を行 e（M）に作る"
 req = ["FR56"]
 section = "13"
-write-set = ["-crates/scribe2/src/hook/host_guard.rs", "+crates/scribe2/src/hook/host_guard_tests.rs", "docs/design/vessel-hook.md"]
+write-set = ["-crates/scribe2/src/hook/host_guard.rs", "crates/scribe2/src/hook/host_guard_tests.rs", "docs/design/vessel-hook.md"]
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail host_guard_rm_ host_guard_kind_ host_guard_ledger_"]
 size = "S"
 done = "歯の module の本文が子の file に在り、親の歯の区間は cfg(test) の単独行と path と mod 宣言の 3 行だけ、module path と歯 39 本の名は不変で base = head、親の src と可視性は不変、札 moved が子の先頭と親の宣言の直後に対で在って flip-check が moved で通り、file-lines で host_guard.rs の余地が 800 行以上に増え、行 g の + の剥がしと行 e の write-set への歯の file の追加が同じ PR で済む"
