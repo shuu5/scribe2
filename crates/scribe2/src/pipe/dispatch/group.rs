@@ -16,7 +16,9 @@
 //!   settle の窓で shell に戻った置き場から同じ target へ `launch` の 1 本・戻らない席は保留の event）。無ければ断りの event と
 //!   群の置き場ごとに 1 行（[`refuse`]）。どちらの周も §19 の通知は送らない（席への行は群の置き場ごとに高々 1 行）。
 //! - 記録（新しい口座）と置き場の登録 row（古い口座）が食い違う群は判定をやり直さず、shell に戻った席を起こす続きだけを行う。
-//!   pane が shell でない席には退避の合図と同じ口で `/exit` の 1 行を周ごとに 1 回送り、その周は起こさない（§21 形 1）。
+//!   pane が shell でない席には退避の合図と同じ宛先・門で `/exit` の 1 行を周ごとに 1 回送り、その周は起こさない（§21 形 1）。
+//!   送りは届いても未確認でも inject の記録に残し、門が `/exit` の確認 dialog の既定の行を返す周は `/exit` の代わりに Enter を
+//!   1 回だけ送る（§22 形 1 / 2）。
 //!
 //! 群 0 の host・読めない面は 1 語も出さず群用 dir も作らない（stdout にも足さない＝列の行は 1 字も変わらない）。
 
@@ -30,6 +32,7 @@ use crate::hook::group::{self, Caps, Current, Pressed, Record, Source};
 use crate::name::NAME;
 use crate::rules::manifest::{AccountGroup, Manifest};
 use crate::seat::cycle::{self, Launched, REASON_NO_ACCOUNT, REASON_NOT_SHELL};
+use crate::seat::inject::Confirm;
 use crate::seat::role::{registration_of_key, Role};
 use crate::seat::{host_groups_dir, pane_is_shell, Provenance, StateDir};
 use std::collections::{BTreeMap, BTreeSet};
@@ -47,6 +50,10 @@ const NO_CANDIDATE: &str = "no-candidate";
 
 /// 続きの周に pane が shell でない保留の席へ送る 1 行（席は自分の process を終えられない＝器が代わりに打つ・設計 §21 形 1）。
 const EXIT: &str = "/exit";
+
+/// 続きの周の送りの inject の記録の `who`（群の段の名・設計 §22 形 1）、`/exit` の確認 dialog の既定の行（入力欄の門の tail の
+/// 字面・畳んで等値で比べる）と、その行へ Enter を送った周の記録の `what`（設計 §22 形 2）。
+const EXIT_DIALOG: Confirm<'static> = Confirm { who: "pipe-group", row: "1. Exit and stop tasks", what: "enter:exit-dialog" };
 
 /// 群の段が止まった理由（typed・列の 1 周の rc と行は変えない・設計 §20 形 7）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -279,8 +286,9 @@ enum Wait {
 
 /// `seats` の置き場の席を、pane が shell に戻った順に同じ target へ `account` の口座で起こす（`launch` の 1 本・登録 row は
 /// 起動が書き直す・会話は運ばない・呼び手の窓の置き換えは許さない）。起こせなかった席は理由つきの保留の event を 1 件記す。
-/// 続きの周（[`Wait::Once`]）に shell でない席は起こさず、退避の合図と同じ口（[`notify::send`]）で [`EXIT`] を 1 回送る
-/// （移動の周は送らない＝席が作業記憶を残す番を 1 周ぶん持つ・設計 §21 形 1）。
+/// 続きの周（[`Wait::Once`]）に shell でない席は起こさず、退避の合図と同じ宛先・門（[`notify::send_or_confirm`]）で [`EXIT`] を
+/// 1 回送る（移動の周は送らない＝席が作業記憶を残す番を 1 周ぶん持つ・設計 §21 形 1）。門が [`EXIT_DIALOG`] の既定の行を返す
+/// 周は [`EXIT`] の代わりに Enter を 1 回だけ送り、どちらの送りも群の段の名で inject の記録に残す（設計 §22 形 1 / 2）。
 fn relaunch(read: &Read<'_, '_>, group: &AccountGroup, account: &str, mut seats: Vec<(String, String)>, wait: Wait) {
     let input = read.input;
     let (Some((settle, step)), Ok(rules)) = (cycle::pace_of(read.manifest), crate::seat::embedded_manifest()) else {
@@ -325,7 +333,7 @@ fn relaunch(read: &Read<'_, '_>, group: &AccountGroup, account: &str, mut seats:
         Wait::Settle => failed.extend(seats.into_iter().map(|(anchor, target)| (anchor, target, REASON_NOT_SHELL))),
         Wait::Once => {
             for (anchor, _) in &seats {
-                let _ = notify::send(&read.state, &place, Path::new(anchor), input.manifest, EXIT);
+                let _ = notify::send_or_confirm(&read.state, &place, Path::new(anchor), input.manifest, (EXIT, &EXIT_DIALOG));
             }
         }
     }

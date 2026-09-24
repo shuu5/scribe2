@@ -2921,6 +2921,11 @@ fn groups_place(accounts: &[(&str, u64, u64, u64)], groups: &[GroupDecl<'_>]) ->
 /// `spy/launched-<target>` へ・時刻（ns）を `spy/launch-at-<target>` へ写して `SessionStart` の打刻を足し、前面を席に戻す。
 /// 退避の合図を受けた瞬間の時刻（ns）・event log の承認の行数・記録の有無を `spy/{evacuate-at,moved-at-evacuate,record-at-evacuate}-<target>`
 /// へ写す（4 手の順を外から測る）。`list-windows` は窓 `0` を返す（[`GROUP_ANCHORS`] の target の窓）。
+///
+/// §22 の歯のために、席の前面の可視域を target ごとの file（`spy/screen-<target>`）で作り分ける: 在る席の `capture-pane` は
+/// prompt 行の代わりにその字面を返し、その席へ届いた Enter は画面を消して前面を shell に戻す（dialog の既定の行の確定）。
+/// `spy/dialog-<target>` の在る席は、入力欄が `/exit` の周に届いた Enter で本文を pane へ移さず（echo も打刻も無い＝送達は
+/// 未確認）その字面を `screen-<target>` へ写す（`/exit` の確認 dialog が出た席）。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
@@ -2948,12 +2953,16 @@ fn group_tmux(state: &Path) {
              case \"$1\" in\n\
              list-panes) if [ \"$shell\" = bash ]; then echo bash; else echo claude; fi;;\n\
              list-windows) echo 0;;\n\
-             capture-pane) cat '{pane}'; if [ \"$shell\" = bash ]; then printf '$ \\n'; else printf '\\342\\235\\257 '; cat '{input}'; printf '\\n'; fi;;\n\
+             capture-pane) cat '{pane}'; if [ \"$shell\" = bash ]; then printf '$ \\n'; elif [ -f '{spy}/screen-'\"$f\" ]; then \
+             cat '{spy}/screen-'\"$f\"; else printf '\\342\\235\\257 '; cat '{input}'; printf '\\n'; fi;;\n\
              send-keys) if [ \"$4\" = \"-l\" ]; then printf '%s' \"$5\" >> '{input}'\n\
              elif [ \"$4\" = \"Enter\" ] && [ \"$shell\" = bash ]; then date +%s%N > '{spy}/launch-at-'\"$f\"\n\
              cat '{input}' >> '{spy}/launched-'\"$f\"; printf '\\n' >> '{spy}/launched-'\"$f\"; : > '{input}'; echo claude > \"$front\"\n\
              printf '{{\"schema\":1,\"state\":\"idle\",\"event\":\"SessionStart\",\"ts\":%s,\"sid\":\"\"}}\\n' \"$(date +%s)\" \
              >> '{seats}/'\"$f\"'/state.jsonl'\n\
+             elif [ \"$4\" = \"Enter\" ] && [ -f '{spy}/screen-'\"$f\" ]; then rm -f '{spy}/screen-'\"$f\"; echo bash > \"$front\"\n\
+             elif [ \"$4\" = \"Enter\" ] && [ -f '{spy}/dialog-'\"$f\" ] && [ \"$(cat '{input}')\" = /exit ]; then \
+             cp '{spy}/dialog-'\"$f\" '{spy}/screen-'\"$f\"; : > '{input}'\n\
              elif [ \"$4\" = \"Enter\" ]; then\n\
              if grep -q 'group: evacuate' '{input}'; then date +%s%N > '{spy}/evacuate-at-'\"$f\"\n\
              grep -c '\"kind\":\"GroupMoved\"' '{events}' > '{spy}/moved-at-evacuate-'\"$f\"\n\
@@ -3716,5 +3725,141 @@ fn pipe_dispatch_group_exit_move_round_sends_only_the_evacuation() {
         assert_eq!(exit_sends(&place.state, target), 0, "{target}: 移動の周は /exit 0");
     }
     assert_both_seats(&group_sends(&place.state), &evacuate_payload(GROUP, "a2"));
+    clean(&[&place.repo, &place.state]);
+}
+
+// ───── /exit の dialog を器が確定する（account-lifecycle.md §22 形 1〜4・契約表の行 k・接頭辞 `pipe_dispatch_group_exit_dialog_`・
+// §21 の fixture） ─────
+//
+// 2 つ目の置き場の席（保留の席）の可視域を `spy/screen-<target>` で作り分け、`spy/dialog-<target>` で `/exit` を受けた席に dialog
+// を出す。器の字面（dialog の既定の行・記録の what）は借りずに写す。
+
+/// `/exit` の確認 dialog の既定の行が最後の `❯` 行に在る可視域。
+const DIALOG_SCREEN: &str = "Background work is running\n\u{276f} 1. Exit and stop tasks\n  2. Cancel\n";
+
+/// 既定の行へ Enter を送った周の記録の what。
+const DIALOG_WHAT: &str = "enter:exit-dialog";
+
+/// `target` へ送った Enter だけの行（`send-keys -t <target> Enter`・payload の送りの Enter も含む）。
+fn enter_sends(state: &Path, target: &str) -> usize {
+    let want = format!("send-keys -t {target} Enter");
+    fs::read_to_string(state.join("tmux-calls")).unwrap_or_default().lines().filter(|line| *line == want).count()
+}
+
+/// `target` へ送った payload の行（`send-keys -t <target> -l …`）。
+fn payload_sends(state: &Path, target: &str) -> usize {
+    group_sends(state).iter().filter(|line| line.contains(&format!("-t {target} -l "))).count()
+}
+
+/// 席 `target` の inject の記録（`seat/<target>/tick.jsonl`）のうち `what` が `what` の行の `who`（記録の順）。
+fn record_whos(state: &Path, target: &str, what: &str) -> Vec<String> {
+    fs::read_to_string(vessel::seat::inject::tick_path(state, target))
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| vessel::fleet::json_lite::parse_object(line).ok())
+        .filter(|pairs| pairs.iter().any(|(key, value)| key == "what" && value.as_str() == Some(what)))
+        .filter_map(|pairs| pairs.into_iter().find(|(key, _)| key == "who").and_then(|(_, value)| value.as_str().map(str::to_owned)))
+        .collect()
+}
+
+/// 移動の周を撃つ（[`exit_place`] と同じ置き場）。保留の席は `/exit` を受けると dialog を出し、`screen` が在れば移動の周の前から
+/// その可視域を持つ。
+fn dialog_place(screen: Option<&str>) -> GroupPlace {
+    let place = move_place(&[("a1", 90, 10, 10), ("a2", 10, 10, 10)], &["a1", "a2"], "a1");
+    let two = GROUP_ANCHORS[1].1;
+    put_spy(&place.state, "stuck", two, "");
+    put_spy(&place.state, "dialog", two, DIALOG_SCREEN);
+    if let Some(found) = screen {
+        put_spy(&place.state, "screen", two, found);
+    }
+    let out = group_terminal(&place, "r-group-1");
+    assert_eq!(move_counts(&place.state), (1, 0, 1), "移動の周は承認 1・保留 1（{}）", told(&out));
+    place
+}
+
+/// (形 1) 続きの周の `/exit` は dialog が出て送達を確認できない周（echo が無い）でも inject の記録に 1 行残る（what は `/exit`・
+/// who は 1 つ）。送りは 1 行・その周は起こさない・保留の event を重ねない。
+#[test]
+fn pipe_dispatch_group_exit_dialog_unconfirmed_exit_leaves_one_record() {
+    let place = dialog_place(None);
+    let two = GROUP_ANCHORS[1].1;
+    let out = group_terminal(&place, "r-group-2");
+    assert_eq!(exit_sends(&place.state, two), 1, "/exit の送り 1 行（{}）", told(&out));
+    let whos = record_whos(&place.state, two, "/exit");
+    assert_eq!(whos.len(), 1, "/exit の記録 1 行: {whos:?}");
+    assert_eq!(spy_of(&place.state, "screen", two).as_deref(), Some(DIALOG_SCREEN), "dialog が出ている");
+    assert_eq!(launched_lines(&place.state, two).len(), 0, "起こさない");
+    assert_eq!(move_counts(&place.state), (1, 0, 1), "保留を重ねない");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (形 2 / 3) dialog の出た席の次の周は、門の tail が既定の行なので `/exit` を送らず Enter を 1 回だけ送り、記録に
+/// `enter:exit-dialog` の 1 行（`/exit` の行と同じ who）。Enter で shell に戻った次の周は同じ target へ a2 の口座の起動行 1 本。
+#[test]
+fn pipe_dispatch_group_exit_dialog_default_row_gets_one_enter_and_one_record() {
+    let place = dialog_place(None);
+    let (anchor, two) = GROUP_ANCHORS[1];
+    group_terminal(&place, "r-group-2");
+    let (exits, enters) = (exit_sends(&place.state, two), enter_sends(&place.state, two));
+    let out = group_terminal(&place, "r-group-3");
+    assert_eq!(enter_sends(&place.state, two), enters + 1, "Enter 1 回（{}）", told(&out));
+    assert_eq!(exit_sends(&place.state, two), exits, "/exit の送り 0");
+    let (confirms, exit_whos) = (record_whos(&place.state, two, DIALOG_WHAT), record_whos(&place.state, two, "/exit"));
+    assert_eq!(confirms.len(), 1, "{DIALOG_WHAT} の記録 1 行: {confirms:?}");
+    assert_eq!(confirms, exit_whos, "/exit と同じ who");
+    assert_eq!(launched_lines(&place.state, two).len(), 0, "Enter の周は起こさない");
+    let out = group_terminal(&place, "r-group-4");
+    let lines = launched_lines(&place.state, two);
+    assert_eq!(lines.len(), 1, "shell に戻った周に起動行 1（{}）: {lines:?}", told(&out));
+    assert!(lines.iter().all(|line| line.contains("accounts/a2")), "a2 の口座で起こす: {lines:?}");
+    assert_eq!(seat_account_of(&place.state, anchor).as_deref(), Some("a2"), "登録 row は a2");
+    assert_eq!(record_whos(&place.state, two, DIALOG_WHAT).len(), 1, "起こした周に Enter の記録は増えない");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (形 3) dialog が残る周は周ごとに Enter を 1 回ずつ送る（上限を置かない・1 周に 2 回は送らない）。
+#[test]
+fn pipe_dispatch_group_exit_dialog_remaining_dialog_gets_one_enter_per_round() {
+    let place = dialog_place(None);
+    let two = GROUP_ANCHORS[1].1;
+    group_terminal(&place, "r-group-2");
+    let enters = enter_sends(&place.state, two);
+    for (at, run) in ["r-group-3", "r-group-4"].into_iter().enumerate() {
+        // 前の周の Enter で閉じた dialog を出し直し、前面を席に戻す（dialog が残る席）。
+        put_spy(&place.state, "screen", two, DIALOG_SCREEN);
+        put_spy(&place.state, "front", two, "claude");
+        let out = group_terminal(&place, run);
+        assert_eq!(enter_sends(&place.state, two), enters + at + 1, "{run}: 周ごとに Enter 1 回（{}）", told(&out));
+    }
+    assert_eq!(record_whos(&place.state, two, DIALOG_WHAT).len(), 2, "記録は周ごとに 1 行");
+    assert_eq!(exit_sends(&place.state, two), 1, "/exit は続きの 1 周目だけ");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (形 2 の fail-closed) 門の tail が既定の行と違う字面（1 字欠け・人の打ちかけ）の席へは 1 key も送らず記録も残さない。
+#[test]
+fn pipe_dispatch_group_exit_dialog_other_tail_gets_no_key_and_no_record() {
+    for screen in ["\u{276f} 1. Exit and stop task\n", "\u{276f} foo\n"] {
+        let place = dialog_place(Some(screen));
+        let two = GROUP_ANCHORS[1].1;
+        let (payloads, enters) = (payload_sends(&place.state, two), enter_sends(&place.state, two));
+        let out = group_terminal(&place, "r-group-2");
+        assert_eq!(payload_sends(&place.state, two), payloads, "{screen:?}: payload の送り 0（{}）", told(&out));
+        assert_eq!(enter_sends(&place.state, two), enters, "{screen:?}: Enter 0");
+        assert_eq!(record_whos(&place.state, two, DIALOG_WHAT).len(), 0, "{screen:?}: Enter の記録 0");
+        assert_eq!(record_whos(&place.state, two, "/exit").len(), 0, "{screen:?}: /exit の記録 0");
+        clean(&[&place.repo, &place.state]);
+    }
+}
+
+/// (形 4) 移動の周（記録を書いた同じ周）は dialog の既定の行を返す席にも Enter を送らない（退避の合図は門で断られ、`/exit` も
+/// Enter も 0・記録 0）。
+#[test]
+fn pipe_dispatch_group_exit_dialog_move_round_sends_no_enter() {
+    let place = dialog_place(Some(DIALOG_SCREEN));
+    let two = GROUP_ANCHORS[1].1;
+    assert_eq!(enter_sends(&place.state, two), 0, "移動の周の Enter 0");
+    assert_eq!(payload_sends(&place.state, two), 0, "移動の周の payload の送り 0");
+    assert_eq!(record_whos(&place.state, two, DIALOG_WHAT).len(), 0, "Enter の記録 0");
     clean(&[&place.repo, &place.state]);
 }

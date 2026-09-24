@@ -139,8 +139,8 @@ pub enum Delivery {
     Unconfirmed(&'static str),
 }
 
-/// 注入を 1 回行い、settle を `window` まで見続ける（注入の**唯一の入口**・`s2-07l.479.3` で
-/// 既定窓の入口 `deliver` は口ごと消えた）。
+/// 注入を 1 回行い、settle を `window` まで見続ける（注入の入口・`s2-07l.479.3` で既定窓の入口 `deliver` は口ごと
+/// 消えた・送りを未確認でも記録する口は [`deliver_or_confirm`] で、門・送り・settle は同じ本体 [`attempt`] を通る）。
 ///
 /// 成功の形は「目印が現れた = 送達・送達 ts 以後の `UserPromptSubmit` の打刻 =
 /// `Consumed`・窓の終わりに無ければ `Queued`」で、呼び側が決めるのは**窓の長さだけ**。作り直し直後の席は
@@ -152,21 +152,83 @@ pub enum Delivery {
 /// `Queued` で窓を閉じた周は、入力欄の残りがこの周の本文なら Enter を 1 回だけ再送して同じ窓でもう 1 度
 /// settle する（[`nudge_own`]・設計 dispatcher.md §21）。Enter はこの呼び出しで最大 2 回・text の再送は 0 回。
 pub fn deliver_within(request: &Request, window: Duration) -> Delivery {
+    attempt(request, window, Ledger::Delivered).unwrap_or_else(|_| Delivery::Refused(Blocked::Foreign.as_str()))
+}
+
+/// 記録の書き方（**閉じた 2 値**・憲法 C11）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Ledger<'a> {
+    /// 送達を確認した周だけ [`WHO`] の名で書く（従来の注入）。
+    Delivered,
+    /// 送った周は送達の確認の有無に依らず `who` の名で書く（設計 account-lifecycle.md §22 形 1）。
+    Sent(&'a str),
+}
+
+/// 門が `Foreign` で**直に**断った周の pane（送る前の 1 回目の読み・OwnQueued の Enter を挟んだ周は含まない）。
+struct Foreign(String);
+
+/// 門が `Foreign` で断った周に、入力欄の残りが既定の行なら Enter を 1 回だけ送る口の材料（設計 account-lifecycle.md §22 形 2）。
+pub struct Confirm<'a> {
+    /// 送りの記録の `who`（呼び手の名・payload の周も Enter の周も同じ名）。
+    pub who: &'a str,
+    /// 既定の行の literal（入力欄の残りと [`folded`] で畳んで等値で比べる）。
+    pub row: &'a str,
+    /// Enter を送った周の記録の `what`（固定の字面）。
+    pub what: &'a str,
+}
+
+/// [`deliver_or_confirm`] の結果（**閉じた 2 値**・憲法 C11）。
+pub enum Sent {
+    /// payload の送り（門を通った周・門が断った周）。
+    Payload(Delivery),
+    /// 既定の行へ Enter を 1 回送った（`false` = tmux が落ちた）。
+    Confirmed(bool),
+}
+
+/// 注入を 1 回行う口の 2 本目（設計 account-lifecycle.md §22）: [`deliver_within`] と同じ門・送り・settle を通し、送った周は
+/// `Delivered` でも `Unconfirmed` でも `confirm.who` の名で記録に 1 行残す（`Refused` の周と、送る前に pane を読めない周は
+/// 送っていない＝残さない）。門が `Foreign` で直に断り、入力欄の残り（畳んだ字面）が `confirm.row` に等しい周だけ、payload を
+/// 送らず Enter を 1 回だけ送って `confirm.what` の 1 行を残す。残りがそれ以外の周は従来どおり 1 key も送らない（門は緩めない・N1）。
+pub fn deliver_or_confirm(request: &Request, window: Duration, confirm: &Confirm) -> Sent {
+    let (started, who) = (Instant::now(), confirm.who);
+    let Foreign(pane) = match attempt(request, window, Ledger::Sent(who)) {
+        Ok(delivery) => return Sent::Payload(delivery),
+        Err(foreign) => foreign,
+    };
+    let at_row = input_tail(&pane).is_some_and(|tail| folded(tail) == folded(confirm.row));
+    if !at_row {
+        return Sent::Payload(Delivery::Refused(Blocked::Foreign.as_str()));
+    }
+    let sent = send_enter(request.socket, request.target);
+    if sent {
+        record(request, who, confirm.what, 0, started);
+    }
+    Sent::Confirmed(sent)
+}
+
+/// 注入 1 回の本体（[`deliver_within`] と [`deliver_or_confirm`] の共通）。門が `Foreign` で直に断った周だけ `Err` で
+/// 送る前の pane を返す（呼び手が断りの字面か既定の行への Enter かを決める）。
+fn attempt(request: &Request, window: Duration, ledger: Ledger<'_>) -> Result<Delivery, Foreign> {
     let started = Instant::now();
     let Some(pane) = capture(request.socket, request.target) else {
-        return Delivery::Unconfirmed(REASON_TMUX_FAILED);
+        return Ok(Delivery::Unconfirmed(REASON_TMUX_FAILED));
     };
     let own = request
         .state_dir
         .and_then(|found| last_own_payload(&found.path, request.target));
     let recapture = || capture(request.socket, request.target);
-    if let Err(blocked) = pass_input(request.socket, request.target, &pane, own.as_deref(), recapture) {
-        return Delivery::Refused(blocked.as_str());
+    // 門の 1 回目の読みが直に Foreign の周だけを呼び手へ返す（OwnQueued の Enter を挟んで Foreign に倒れた周は既に 1 key 送った
+    // ＝同じ周にもう 1 key 送らない・設計 account-lifecycle.md §22 形 3）。
+    let direct = guard_input(&pane, own.as_deref());
+    match pass_input(request.socket, request.target, &pane, own.as_deref(), recapture) {
+        Ok(()) => {}
+        Err(Blocked::Foreign) if direct == Err(InputGate::Busy) => return Err(Foreign(pane)),
+        Err(blocked) => return Ok(Delivery::Refused(blocked.as_str())),
     }
     // 送る**前**の pane で目印の出現数を数えておく: 同じ字面が先に在る（前周の pointer の写し・
     // tool の出力の引用）と `contains` 1 本では届いていない周が「届いた」に化ける（lens-90 HIGH-1）。
     let Some(marker) = needle_of(request.payload) else {
-        return Delivery::Refused(REASON_EMPTY);
+        return Ok(Delivery::Refused(REASON_EMPTY));
     };
     let before = folded(&pane).matches(marker.as_str()).count();
     // 消費の証拠を見る先も送る**前**に取る（基線と送達 ts・設計 §6）。
@@ -178,7 +240,7 @@ pub fn deliver_within(request: &Request, window: Duration) -> Delivery {
         since: state::now_secs(),
     };
     if !send(request) {
-        return Delivery::Unconfirmed(REASON_TMUX_FAILED);
+        return Ok(Delivery::Unconfirmed(REASON_TMUX_FAILED));
     }
     let tries = tries_within(window);
     // **Queued の周は同じ呼び出しの中で Enter を 1 回だけ再送する**（設計 dispatcher.md §21 形 2）: 入力欄の残りが
@@ -187,14 +249,24 @@ pub fn deliver_within(request: &Request, window: Duration) -> Delivery {
         Settled::Queued if nudge_own(request) => settle(request, &marker, before, tries, &watch),
         other => Ok(other),
     });
-    match settled {
-        Ok(settled) => {
-            let bytes = request.payload.len() as u64;
-            record(request, bytes, started);
+    let bytes = request.payload.len() as u64;
+    let what = head(request.payload, WHAT_CAP);
+    Ok(match (settled, ledger) {
+        (Ok(settled), Ledger::Delivered) => {
+            record(request, WHO, &what, bytes, started);
             Delivery::Delivered(bytes, settled)
         }
-        Err(reason) => Delivery::Unconfirmed(reason),
-    }
+        (Ok(settled), Ledger::Sent(who)) => {
+            record(request, who, &what, bytes, started);
+            Delivery::Delivered(bytes, settled)
+        }
+        (Err(reason), Ledger::Delivered) => Delivery::Unconfirmed(reason),
+        // 送った周は目印が現れなくても残す（dialog が出て echo の無い `/exit`・設計 account-lifecycle.md §22 形 1）。
+        (Err(reason), Ledger::Sent(who)) => {
+            record(request, who, &what, bytes, started);
+            Delivery::Unconfirmed(reason)
+        }
+    })
 }
 
 /// 消費の証拠を見る先（送る**前**に取る・設計 §6）。置き場が解けない周は `seat` が `None`＝測れない。
@@ -504,14 +576,17 @@ pub fn tick_path(state_dir: &Path, target: &str) -> PathBuf {
 /// （`decision=inject … consumed=…`）と `seat inject` の stdout 行が持つ（planner 裁定 2026-09-11・
 /// 記録 schema は FR21 と共有ゆえ消費の field は足さない）。席（`seat`）と時刻（`ts`）は 3 面の
 /// 書き手が同じ `tick.jsonl` へ混ぜる行を弁別する列で、全 writer が持つ（`s2-07l.150`）。
-fn record(request: &Request, bytes: u64, started: Instant) {
+///
+/// `who` は従来の注入なら [`WHO`]、[`deliver_or_confirm`] の周は呼び手の名（[`last_own_payload`] は [`WHO`] の行しか
+/// 自席の文と読まない＝呼び手の名の行で門は緩まない）。`what` は payload の先頭か、Enter の周の固定の字面。
+fn record(request: &Request, who: &str, what: &str, bytes: u64, started: Instant) {
     let Some(dir) = request.state_dir.map(|state| state.path.as_path()) else {
         return;
     };
     let entry = InjectionRecord {
         schema: SCHEMA,
-        who: WHO.to_owned(),
-        what: head(request.payload, WHAT_CAP),
+        who: who.to_owned(),
+        what: what.to_owned(),
         when: WHEN.to_owned(),
         bytes,
         // 数えていないことを 0 と書かない。

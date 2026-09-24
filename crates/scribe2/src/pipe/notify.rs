@@ -14,7 +14,7 @@ use crate::fleet::State;
 use crate::name::NAME;
 use crate::rules::manifest::Manifest;
 use crate::seat::inject::Request;
-use crate::seat::inject::{deliver_within, Delivery};
+use crate::seat::inject::{deliver_or_confirm, deliver_within, Confirm, Delivery, Sent};
 use crate::seat::role::{registration_of_key, Role};
 use crate::seat::StateDir;
 use std::path::Path;
@@ -31,6 +31,9 @@ const NO_SEAT: &str = "no-seat";
 
 /// 窓の rules 行を読めない周の理由（1 key も送らない）。
 const NO_RULE: &str = "no-rule";
+
+/// 既定の行へ Enter を 1 回送った周の結果の語（[`send_or_confirm`]）。
+const CONFIRMED: &str = "confirmed";
 
 /// 値を持たない欄の字面（detail も理由も無い）。
 const DASH: &str = "-";
@@ -83,15 +86,54 @@ pub(super) fn head_word(detail: Option<&str>) -> &str {
 /// （`tick.jsonl`）と消費の証拠（席の打刻）はここを読む（設計 dispatcher.md §21 形 1）。届いた周は消費を
 /// `consumed=<true|false|unknown[:理由]>` で添える（`Settled` の既存の字面・tick の `consumed=` と同じ語彙・C10）。
 pub(super) fn send(state: &State, place: &StateDir, repo: &Path, manifest: &Manifest, payload: &str) -> String {
+    match route(state, repo, manifest) {
+        Ok((target, window)) => {
+            let request = Request { target: &target, socket: None, payload, state_dir: Some(place) };
+            line_of(deliver_within(&request, window))
+        }
+        Err(line) => line,
+    }
+}
+
+/// [`send`] と同じ宛先・窓で `payload` を撃ち、送った周は届いても未確認でも `confirm.who` の名で inject の記録に 1 行残し、門が
+/// `Foreign` で直に断り入力欄の残りが `confirm` の既定の行に等しい周は payload を送らず Enter を 1 回だけ送る
+/// （[`deliver_or_confirm`]・設計 account-lifecycle.md §22 形 1 / 2）。Enter を送った周の行は `notify=confirmed`（送れない周は
+/// `notify=unconfirmed`）。
+pub(super) fn send_or_confirm(
+    state: &State,
+    place: &StateDir,
+    repo: &Path,
+    manifest: &Manifest,
+    (payload, confirm): (&str, &Confirm<'_>),
+) -> String {
+    match route(state, repo, manifest) {
+        Ok((target, window)) => {
+            let request = Request { target: &target, socket: None, payload, state_dir: Some(place) };
+            match deliver_or_confirm(&request, window, confirm) {
+                Sent::Payload(delivery) => line_of(delivery),
+                Sent::Confirmed(true) => format!("{NOTIFY}{CONFIRMED}"),
+                Sent::Confirmed(false) => format!("{NOTIFY}unconfirmed"),
+            }
+        }
+        Err(line) => line,
+    }
+}
+
+/// 宛先（`repo` を anchor に持つ orchestrator の登録 row の target）と窓。解けない周は送らずに返す行（`Err`）。
+fn route(state: &State, repo: &Path, manifest: &Manifest) -> Result<(String, Duration), String> {
     let anchor = repo.to_string_lossy();
     let Some(row) = registration_of_key(state, Role::Orchestrator, &anchor) else {
-        return format!("{NOTIFY}{NO_SEAT}");
+        return Err(format!("{NOTIFY}{NO_SEAT}"));
     };
     let Ok(ms) = int_row(manifest, ROW_WINDOW) else {
-        return format!("{NOTIFY}refused:{NO_RULE}");
+        return Err(format!("{NOTIFY}refused:{NO_RULE}"));
     };
-    let request = Request { target: &row.target, socket: None, payload, state_dir: Some(place) };
-    match deliver_within(&request, Duration::from_millis(ms)) {
+    Ok((row.target.clone(), Duration::from_millis(ms)))
+}
+
+/// 送達の結果の 1 行。
+fn line_of(delivery: Delivery) -> String {
+    match delivery {
         Delivery::Delivered(_, settled) => match settled.reason() {
             Some(why) => format!("{NOTIFY}delivered consumed={}:{why}", settled.as_str()),
             None => format!("{NOTIFY}delivered consumed={}", settled.as_str()),
