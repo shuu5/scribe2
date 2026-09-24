@@ -4130,7 +4130,7 @@ fn detection_gated() -> (PathBuf, PathBuf, String, String, usize) {
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn advance_main_with(repo: &Path, path: &str) -> String {
+pub(super) fn advance_main_with(repo: &Path, path: &str) -> String {
     let file = repo.join(path);
     if let Some(parent) = file.parent() {
         fs::create_dir_all(parent).expect("別便の dir を作れる");
@@ -4151,7 +4151,7 @@ fn advance_main_with(repo: &Path, path: &str) -> String {
 /// 前周の Gated PASS を新しい base へ引き継いで着地する。撃つのは主実測の ②④ だけ（③ は木の差が
 /// docs だけ＝面の外なので従来どおり省く）で、`verify.jsonl` に足されるのは引き継ぎの 1 本だけ。
 ///
-/// base は再 gate を撃つので、呼出が ②④ の 2 行 + record 4 本ぶん多く、偽 lens の marker も立つ＝RED。
+/// base は再 gate を撃つので、呼出が ②④ の 2 行 + record 3 本ぶん多く、偽 lens の marker も立つ＝RED。
 #[test]
 fn pipe_follow_docs_only_carries_gated_pass_without_regate() {
     let (repo, state, id, base, before) = detection_gated();
@@ -4188,13 +4188,13 @@ fn pipe_follow_docs_only_carries_gated_pass_without_regate() {
     clean(&[&repo, &state]);
 }
 
-/// (a) の `verify.jsonl`: 1 度目の gate の 4 本の後ろに、**引き継ぎの 1 本**（`kind=gate` /
-/// `skipped=regate` / `reason=outside-scope`・`n` は通し・木は持たない）だけが足される。
+/// (a) の `verify.jsonl`: 1 度目の gate の 3 本（①②④・gate は ③ を撃たない＝設計 gate-cost.md §44 形 (9)）の後ろに、
+/// **引き継ぎの 1 本**（`kind=gate` / `skipped=regate` / `reason=outside-scope`・`n` は通し・木は持たない）だけが足される。
 fn assert_regate_skip_record(rows: &[Vec<(String, vessel::fleet::json_lite::Value)>]) {
     assert_eq!(
         super::gate::kinds(rows),
-        ["write-set", "common", "detection", "contract", "gate"],
-        "1 度目の gate の 4 本 + 引き継ぎの 1 本（撃ち直しの 4 本は無い）: {rows:?}"
+        ["write-set", "common", "contract", "gate"],
+        "1 度目の gate の 3 本 + 引き継ぎの 1 本（撃ち直しの 3 本は無い）: {rows:?}"
     );
     let skips = super::gate::skip_rows(rows);
     assert_eq!(skips.len(), 1, "skip record は引き継ぎの 1 本だけ（1 度目の gate は撃っている）: {rows:?}");
@@ -4203,14 +4203,14 @@ fn assert_regate_skip_record(rows: &[Vec<(String, vessel::fleet::json_lite::Valu
     assert_eq!(value_of(&skip, "skipped"), "regate");
     assert_eq!(value_of(&skip, "reason"), "outside-scope", "理由は面の外");
     assert!(skip.iter().all(|(key, _)| key != "tree"), "引き継ぎの record は木を持たない: {skip:?}");
-    assert_eq!(row_value(rows, 5, "n"), "5", "`n` は 1 度目の gate の 4 本からの通し");
-    assert_eq!(row_value(rows, 4, "rc"), "0", "1 度目の ④ は撃って緑（引き継ぐ根）");
+    assert_eq!(row_value(rows, 4, "n"), "4", "`n` は 1 度目の gate の 3 本からの通し");
+    assert_eq!(row_value(rows, 3, "rc"), "0", "1 度目の ④ は撃って緑（引き継ぐ根）");
 }
 
 /// 対: docs だけで main が動いても `<base>..<main>` の diff を**読めない**周は面の外として省かない（fail-closed・
-/// 設計 §30）＝再 gate を撃ち、③ も撃つ（前周の record の持ち越しは無い・設計 gate-cost.md §44 形 (8)）。面の外の
-/// skip record は無い。偽 git はその range の `diff --name-only -z` だけを rc 1 で落とす（段①の `<base>..HEAD` は
-/// 落とさない）。
+/// 設計 §30）＝再 gate を撃つ（前周の record の持ち越しは無い・設計 gate-cost.md §44 形 (8)・gate は ③ を撃たない＝
+/// 形 (9)）。面の外の skip record は無い。偽 git はその range の `diff --name-only -z` だけを rc 1 で落とす（段①の
+/// `<base>..HEAD` は落とさない）。
 #[test]
 fn pipe_detection_scope_unreadable_follow_diff_does_not_skip_outside_scope() {
     let (repo, state, id, base, before) = detection_gated();
@@ -4221,91 +4221,12 @@ fn pipe_detection_scope_unreadable_follow_diff_does_not_skip_outside_scope() {
     // 着地後の検出の子は面の外の着地で stub を撃たない（子の終わりを待ってから呼出を数える）。
     super::gate::await_detection_child(&state, &id);
     let added = super::gate::detection_calls(&repo).split_off(before);
-    assert_eq!(
-        added,
-        ["common".to_owned(), format!("detection-{moved}"), "contract".to_owned()],
-        "再 gate は ②③④ を撃つ・主実測は撃たない: {added:?}"
-    );
+    assert_eq!(added, ["common".to_owned(), "contract".to_owned()], "再 gate は ②④ を撃つ・主実測は撃たない: {added:?}");
     let rows = verify_rows(&state, &id);
-    assert_eq!(rows.len(), 8, "1 度目 4 本 + 再 gate 4 本（引き継ぎの 1 本ではない）: {rows:?}");
+    assert_eq!(rows.len(), 6, "1 度目 3 本 + 再 gate 3 本（引き継ぎの 1 本ではない）: {rows:?}");
     assert!(super::gate::skip_rows(&rows).is_empty(), "面の外の skip record は無い: {rows:?}");
-    assert_eq!(row_value(&rows, 7, "kind"), "detection", "③ の位置は撃った record: {rows:?}");
-    assert_eq!(row_value(&rows, 5, "rc"), "0", "再 gate の段①（`<base>..HEAD`）は読めている: {rows:?}");
-    clean(&[&repo, &state]);
-}
-
-// ───── 検出線は面に触れた追随で毎回撃つ（設計 gate-cost.md §44 形 (8)・契約表の行 al・接頭辞 `pipe_detection_single_shot_`） ─────
-//
-// 持ち越し（旧 pipeline.md §40 形 (b)）は消えた: `crates/` で main が動いた追随の再 gate は、rebase 後の便の diff の
-// patch-id が前周と同じでも検出線を撃ち、写しの record を置かず、record の JSON は `patch_id` と `carried` の key を
-// 持たない。gate の側（1 回撃ち）は `gate.rs` の同じ接頭辞の歯。
-
-/// `dir` の `git diff <base>..<tip>` を `git patch-id --stable` に通した値（器の外で測る＝fixture の前提の出所）。
-#[expect(
-    clippy::expect_used,
-    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
-)]
-fn measured_patch_id(dir: &Path, base: &str, tip: &str) -> String {
-    use std::io::Write;
-    let diff = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(["diff", &format!("{base}..{tip}")])
-        .output()
-        .expect("diff を撃てる")
-        .stdout;
-    assert!(!diff.is_empty(), "fixture: 便の diff は空でない");
-    let mut child = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(["patch-id", "--stable"])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .spawn()
-        .expect("patch-id を起こせる");
-    child.stdin.take().expect("stdin を取れる").write_all(&diff).expect("diff を渡せる");
-    let out = child.wait_with_output().expect("patch-id が終わる");
-    String::from_utf8_lossy(&out.stdout).split_whitespace().next().unwrap_or_default().to_owned()
-}
-
-/// 持ち越しの欄の key（record の JSON に**字面で**無いことを測る）。
-const CARRY_KEYS: [&str; 2] = ["\"patch_id\"", "\"carried\""];
-
-/// (i) `crates/` 配下で main が動いた追随で、便の diff の patch-id が前周と同じ（fixture の前提を器の外で測る）でも、
-/// 再 gate は ③ を**もう 1 回撃ち**（呼出に `detection-<moved>`）、写しの record は無く、`verify.jsonl` の JSON に
-/// `patch_id` と `carried` の key が無い。base は前周の record を写して ③ を撃たない＝RED。
-#[test]
-fn pipe_detection_single_shot_crates_moved_with_unchanged_diff_fires_detection_again() {
-    let (repo, state, id, base, before) = detection_gated();
-    let gated = measured_patch_id(&worktree_of(&repo, &id), &base, "HEAD");
-    let moved = advance_main_with(&repo, "crates/toy/src/other.rs");
-    let out = land_once(&repo, &state, &id);
-    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land は rc 0: {}", stderr_of(&out));
-    assert!(stdout_of(&out).contains(&format!("rebase={base}..{moved}")), "追随は済む: {}", stdout_of(&out));
-    // 着地後の検出の子（面の外の着地・stub を撃たない）の終わりを待ってから測る。
-    super::gate::await_detection_child(&state, &id);
-    let main = git(&repo, &["rev-parse", "refs/heads/main"]);
-    assert_eq!(measured_patch_id(&repo, &moved, &main), gated, "fixture: 便の diff の patch-id は前周と同じ");
-    let added = super::gate::detection_calls(&repo).split_off(before);
-    assert_eq!(
-        added,
-        ["common".to_owned(), format!("detection-{moved}"), "contract".to_owned()],
-        "再 gate は ②③④ を撃つ（③ の穴は rebase 後の base）・主実測は撃たない（木は同じ）"
-    );
-    let rows = verify_rows(&state, &id);
-    assert_eq!(rows.len(), 8, "1 度目 4 本 + 再 gate 4 本: {rows:?}");
-    assert!(super::gate::skip_rows(&rows).is_empty(), "skip record は無い: {rows:?}");
-    assert_eq!(row_value(&rows, 7, "kind"), "detection", "③ の位置: {rows:?}");
-    assert_eq!(row_value(&rows, 7, "cmd"), format!("sh verify-count.sh detection-{moved}"), "③ は撃った record: {rows:?}");
-    let log = fs::read_to_string(state.join("pipe").join(&id).join("verify.jsonl")).unwrap_or_default();
-    assert!(!log.is_empty(), "fixture: verify.jsonl を読める");
-    for key in CARRY_KEYS {
-        assert!(!log.contains(key), "record の JSON に {key} の key が無い: {log}");
-    }
-    let (measured, after) = super::gate::split_landed(super::gate::main_rows(&state, &id));
-    assert_eq!(super::gate::kinds(&measured), ["main"], "主実測は再 gate と同じ木");
-    assert_eq!(after.len(), 1, "着地後の record は 1 本: {after:?}");
-    assert!(show_line(&repo, &state, &id).contains("stage=Landed"), "段は Landed");
+    assert_eq!(row_value(&rows, 6, "kind"), "contract", "再 gate の ④ は撃った record: {rows:?}");
+    assert_eq!(row_value(&rows, 4, "rc"), "0", "再 gate の段①（`<base>..HEAD`）は読めている: {rows:?}");
     clean(&[&repo, &state]);
 }
 

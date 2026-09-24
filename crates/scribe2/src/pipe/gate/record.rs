@@ -2,7 +2,7 @@
 //! lens への入力の通知 [`record_notice`]・便の写しの読み・[`super`] から純移動・`s2-07l.286`）。
 //! 判定の順と終端は親（[`super::gate`]）が持つ。
 
-use super::verify::{is_unreadable, recorded_rc, run_checks_admitted, Admit, Check, Checks, Step};
+use super::verify::{gate_checks, is_unreadable, recorded_rc, run_checks_admitted, Admit, Check, Checks, Step};
 use super::{Detection, DetectionSkip, Gate};
 use crate::fleet::json_lite::{self, Value};
 use crate::fleet::store::{append_line, read_all, LockPolicy};
@@ -136,36 +136,25 @@ pub(super) const USAGE_HEAD: &str = "confine-usage";
 /// 手で撃ち直して理由を取り直すことになる（実測 2026-09-10・`s2-07l.49`）。緑の行は
 /// 残さない——読む理由が無い出力で診断 file を埋めると、赤い行の見出しが埋もれる。
 ///
-/// 検出線を撃たない周（[`Detection::Skip`]・設計 pipeline.md §30）は写しの検出線の代わりに**空の列**を渡し
-/// （行を撃つ実装は 1 本のまま）、その段の位置に skip record を 1 本置く（[`records_of`]・main 実測と同じ形）。
-///
-/// 撃った直後に検出線の判定行と出力を run dir の**周ごとの置き場**へ写す（[`keep_detection`]・設計
-/// gate-cost.md §15 (1)）——便の worktree の出力は追随の撃ち直しが作り直すので、写さないと 1 周目の
-/// 生存の一覧が消える（`.286` run 1 の実測）。
+/// **検出線（③）は撃たない**（段の列は [`gate_checks`] の ①②④・設計 gate-cost.md §44 形 (9)）: [`Detection::Run`] の周も
+/// 写しの検出線を渡さず、周ごとの写しの置き場も作らない（③ は着地後の検出の口だけが撃ち・写す）。追随の再 gate の
+/// [`Detection::Skip`]（設計 pipeline.md §30）は従来どおり ③ の位置に skip record を 1 本置く（[`records_of`]）。
 pub(super) fn record_verify(entry: &Gate<'_>, worktree: &Path, base: &str) -> Result<Counted, String> {
     let frozen = frozen_copy(entry)?;
     let admit = Admit { state_dir: entry.state_dir, run: entry.run, rules: entry.limits.admission(entry.policy) };
-    // 純移動の周は母集団の diff を渡し、落とした `+` 行の本数を record の `pure-move=` で残す（設計 §14 約束 2 / 3）。
-    let mut pure_move = None;
-    let (detection, placed): (Vec<String>, Option<Skipped<'_>>) = match entry.detection {
-        Detection::Run => {
-            let lines = aimed_lines(entry.state_dir, entry.run, frozen.detection_verify())?;
-            let (lines, dropped) = population_lines(entry.state_dir, entry.run, worktree, base, lines)?;
-            pure_move = dropped;
-            (lines, None)
-        }
-        Detection::Skip(reason) => (Vec::new(), Some(Skipped::detection(reason, None))),
+    let placed = match entry.detection {
+        Detection::Run => None,
+        Detection::Skip(reason) => Some(Skipped::detection(reason, None)),
     };
     let checks = Checks {
         worktree,
         base,
         contract: entry.contract,
         common: frozen.common_verify(),
-        detection: &detection,
+        detection: &[],
         host: entry.limits.breaker(),
     };
-    let steps = run_checks_admitted(&checks, Some(&admit));
-    keep_detection(entry.state_dir, entry.run, worktree, &steps)?;
+    let steps = run_checks_admitted(&checks, &gate_checks(), Some(&admit));
     let path = verify_log_path(entry.state_dir, entry.run);
     let tail_path = path.with_file_name(STDERR_LOG_FILE);
     let mut red = 0;
@@ -177,7 +166,7 @@ pub(super) fn record_verify(entry: &Gate<'_>, worktree: &Path, base: &str) -> Re
     // ある（rc に依らず「測れなかった」・設計 gate-cost.md §4.2）。
     let unreadable = steps.iter().any(is_unreadable);
     let killed = steps.iter().find_map(box_kill);
-    for record in records_placed(&steps, placed, pure_move) {
+    for record in records_placed(&steps, placed, None) {
         if let Some(step) = record.step {
             if step.is_closed() {
                 // 撃っていない行は赤でも診断の対象でもない（record だけ残す）。

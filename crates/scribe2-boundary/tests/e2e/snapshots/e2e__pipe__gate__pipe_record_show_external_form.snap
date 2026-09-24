@@ -2,4 +2,4 @@
 source: crates/scribe2/tests/e2e/pipe/gate.rs
 expression: form
 ---
-mutants-diff: total=3 caught=2 missed=1 unviable=0 timeout=0 scope=x secs=[secs]
+

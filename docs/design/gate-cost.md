@@ -878,6 +878,11 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
 - 形 (11) の材料: `--rules` の path の欄は land の材料の任意の欄で、候補の木の後続は先頭の材料の写しから同じ値を継ぐ（`train.rs` の構築は既存の写しのまま・字面の変更なし）。子へ渡ることは遮断器を閉じる `--rules` の land で子が `unmeasured=host-closed` を残す歯が測る。
 - 歯の読み手: 歯の側で `Landed` の detail の最後の 1 件を読む helper（gate.rs と land.rs の各 1 本）は `detection:` の detail を読み飛ばす形に直した（着地と終端の読み手が読み飛ばすのと同じ規則）。
 
+### 44.4 errata（現物との差・行 an・規範は上の §44 のまま）
+
+- 形 (9) の gate の段の列: 行を撃つ 1 本は段の列を引数に取り、gate は `CHECKS` から ③ を除いた列を組む関数を、land の主実測と候補の木は `CHECKS` を渡す（撃つ実装は 1 本のまま）。`Detection::Run` の周は写しの検出線も的の file も母集団の diff も組まず、写しの置き場も作らない。追随の再 gate の `Detection::Skip` の周は従来どおり ③ の位置に skip record を 1 本置く（`Skipped` の構築を消すのは行 ao）。gate の記録の側の「検出線 ∧ rc 2」の述語と箱の中の oom の吸収は、gate の列に ③ が無いので当たらないまま残る（型と一緒に行 ao で畳む）。
+- 形 (13) の歯: 消した 23 本と直した 4 本（遮断器の 3 本は呼出の probe を共通 verify の印の名で読む形・段の秒の 1 本は母集団 3 record）に加え、gate の record の段数が 1 つ減って位置や本数が動いた既存の歯を同じ便で直した: `pipe_record_red_` / `pipe_record_silent_` / `pipe_record_land_` 各 1・`pipe_follow_docs_` 1 と `pipe_detection_scope_` 1（land.rs・再 gate の record が 3 本）・`pipe_detection_after_landing_` 2 と `pipe_landed_detection_` 1（stub の呼出に gate の分が無い）。`pipe_record_show_external_form` の snapshot は gate の後の判定行が無い＝空の形。歯 (n) は land.rs の main を 1 file で進める helper を gate.rs から借りる（可視性を pub(super) に上げた）。
+
 <!-- contracts:begin -->
 schema = 1
 

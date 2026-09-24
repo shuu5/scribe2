@@ -41,6 +41,15 @@ pub enum Check {
 /// [`Check`] の全 variant。**この並びが適用順序である**。
 pub const CHECKS: &[Check] = &[Check::WriteSet, Check::Common, Check::Detection, Check::Contract];
 
+/// gate が撃つ段の列（[`CHECKS`] から ③ を除いた ①②④・宣言順のまま・設計 gate-cost.md §44 形 (9)）。
+///
+/// ③ は着地後の検出の口だけが撃つ（[`run_detection_admitted`]）。部分集合を `&[Check]` の const で書かず関数で組むのは、
+/// 閉じた enum の const slice は全 variant を持つ形だけにするためである（xtask の enum-slices の門）。land の主実測と
+/// 候補の木は [`CHECKS`] のまま撃つ。
+pub(super) fn gate_checks() -> Vec<Check> {
+    CHECKS.iter().copied().filter(|check| *check != Check::Detection).collect()
+}
+
 impl Check {
     /// 段の名（scope の unit 名と record の `kind` に載せる字面）。
     pub fn as_str(self) -> &'static str {
@@ -184,24 +193,24 @@ pub struct Checks<'a> {
 /// **gate も land もこの 1 本を通る**——2 本になると gate が通した行と main で撃った行の
 /// 意味が静かにずれる（行を撃つ実装を [`run_line_captured`] 1 本に保っているのと同じ理由）。
 pub fn run_checks(checks: &Checks<'_>) -> Vec<Step> {
-    run_checks_admitted(checks, None)
+    run_checks_admitted(checks, CHECKS, None)
 }
 
-/// 全段を**順序どおり**に撃つ（受付を持つ形）。[`run_checks`] はこれの受付なしの形である。
+/// `stages` の段を**順序どおり**に撃つ（受付を持つ形）。[`run_checks`] はこれの全段・受付なしの形である。
 ///
-/// `admit` が在る周だけ、`{jobs}` を持つ共通 verify の行が host の受付を通る（設計 gate-cost.md
-/// §3.2・§3.3）。行を撃つ実装はこの 1 本のままである。
+/// `stages` は [`CHECKS`] か gate の列（[`gate_checks`]・③ を除く）。`admit` が在る周だけ、`{jobs}` を持つ共通 verify の
+/// 行が host の受付を通る（設計 gate-cost.md §3.2・§3.3）。行を撃つ実装はこの 1 本のままである。
 ///
 /// どの行も 1 回だけ撃つ——検出線の rc 2 も撃ち直さない（設計 gate-cost.md §44 形 (6)・撃ち直すのは人が
 /// 着地後の検出の口を撃つ形）。
 ///
 /// **行を撃つ前に器の健康の遮断器を通す**（[`health::pass`]・設計 gate-cost.md §32）。待ちの上限を超えた行は
 /// 撃たずに閉じた印の [`Step`] を積み、**以後の行も待たずに閉じる**（上限を行の本数だけ重ねない）。
-pub fn run_checks_admitted(checks: &Checks<'_>, admit: Option<&Admit<'_>>) -> Vec<Step> {
+pub fn run_checks_admitted(checks: &Checks<'_>, stages: &[Check], admit: Option<&Admit<'_>>) -> Vec<Step> {
     // 封じ込めの 3 線は 1 便で 1 度だけ読む（行ごとに manifest を開き直さない）。
     let caps = confine::Caps::embedded();
     let mut steps: Vec<Step> = Vec::new();
-    for check in CHECKS {
+    for check in stages {
         let (lines, holes): (&[String], bool) = match *check {
             Check::WriteSet => {
                 steps.push(check_write_set(checks));
@@ -554,7 +563,10 @@ pub(super) fn byte_count(bytes: &[u8]) -> u64 {
 pub(crate) mod tests {
     // flip-check: moved s2-07l.286
     use super::super::record::USAGE_HEAD;
-    use super::{fill_holes, last_line, listed, run_line_captured, teeth_of, unwrapped, NO_TEETH, TEETH_HOLE, WRITE_SET_CMD};
+    use super::{
+        fill_holes, gate_checks, last_line, listed, run_line_captured, teeth_of, unwrapped, Check, NO_TEETH, TEETH_HOLE,
+        WRITE_SET_CMD,
+    };
     use crate::pipe::confine::{read_usage, Limit, Reason, Wrap};
     use crate::seat::RuleRead;
     use std::path::{Path, PathBuf};
@@ -644,6 +656,13 @@ pub(crate) mod tests {
         let matched = unwrapped(WRITE_SET_CMD.to_owned(), 0, String::new());
         assert_eq!(matched.secs, None, "撃つ process を持たない段は秒を持たない（0 と書かない）");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// gate の段の列は [`super::CHECKS`] から ③ だけを除いた ①②④ で、順は宣言順のまま（設計 gate-cost.md §44 形 (9)）。
+    #[test]
+    fn gate_checks_drop_only_the_detection_stage() {
+        assert_eq!(gate_checks(), [Check::WriteSet, Check::Common, Check::Contract]);
+        assert_eq!(super::CHECKS.len(), gate_checks().len() + 1, "除くのは ③ の 1 段だけ");
     }
 
     /// 検出線の形（4 つの穴・`.vessel.toml` と同じ字面）。
