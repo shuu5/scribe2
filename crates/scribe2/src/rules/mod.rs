@@ -147,6 +147,9 @@ pub enum RuleKind {
     GateLensCount,
     /// 1 周の gate の token 上限（token）。
     GateTokenCap,
+    /// 便ごとの token 消費の検出線（token・憲法 C6.2 の R-C6-1・設計 gate-cost.md §43）。便の消費の event の 4 値の和が
+    /// この値以上の便に `pipe show` が判定行を 1 行出す。読み手はその 1 か所で、便を断る読み手は持たない。
+    RunTokenCeiling,
     /// hook 1 回の実行予算（ミリ秒）。
     HookBudgetMs,
     /// pipeline の停止猶予（ミリ秒）。
@@ -287,6 +290,7 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::CompileSeconds,
     RuleKind::GateLensCount,
     RuleKind::GateTokenCap,
+    RuleKind::RunTokenCeiling,
     RuleKind::HookBudgetMs,
     RuleKind::StopGraceMs,
     RuleKind::LockRetryMs,
@@ -353,7 +357,7 @@ impl RuleKind {
             Self::CompileShape => "CompileShape",
             Self::CompileSeconds => "CompileSeconds",
             Self::GateLensCount => "GateLensCount",
-            Self::GateTokenCap => "GateTokenCap",
+            Self::GateTokenCap => "GateTokenCap", Self::RunTokenCeiling => "RunTokenCeiling",
             Self::HookBudgetMs => "HookBudgetMs",
             Self::StopGraceMs => "StopGraceMs",
             Self::LockRetryMs => "LockRetryMs",
@@ -366,7 +370,7 @@ impl RuleKind {
             Self::SeatCyclePollMs => "SeatCyclePollMs",
             Self::UsageTimeoutS => "UsageTimeoutS",
             Self::UsageFreshS => "UsageFreshS",
-            // 群の逼迫の 3 行は 2 行に、契約の size の 3 行は 2 行に、host の見張りの 2 kind は 1 行に畳む（関数 1 本の行数の
+            // 群の逼迫の 3 行は 2 行に、契約の size の 3 行は 2 行に、host の見張りの 2 kind と token の上限の 2 kind は 1 行に畳む（関数 1 本の行数の
             // 上限 R-C4-4.fn-lines・閉じた列の網羅は不変）。
             Self::GroupPressure5hPct => "GroupPressure5hPct", Self::GroupPressure7dPct => "GroupPressure7dPct",
             Self::GroupPressureModelPct => "GroupPressureModelPct",
@@ -413,7 +417,7 @@ impl RuleKind {
             | Self::DepPerPr
             | Self::CheckDeltaMs
             | Self::GateLensCount
-            | Self::GateTokenCap
+            | Self::GateTokenCap | Self::RunTokenCeiling
             | Self::HookBudgetMs
             | Self::StopGraceMs
             | Self::LockRetryMs

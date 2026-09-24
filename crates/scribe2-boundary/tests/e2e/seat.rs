@@ -494,18 +494,19 @@ fn mutant_e2e_doctor_reconciles_against_the_given_tmux_socket_and_refuses_a_dupl
     let live = doctor(&["--state-dir", &state, "--tmux-socket", &place.socket, "--rules", &rules]);
     assert_eq!(live.as_ref().map(rc_of), Some(i32::from(RC_OK)), "{live:?}");
     let lines: Vec<String> = live.map(|out| stdout_of(&out)).unwrap_or_default().lines().map(str::to_owned).collect();
-    assert_eq!(lines.len(), 6, "2 行 + 登録 row 1 行 + 突合 1 行 + host の面 1 行 + 導入先 1 行: {lines:?}");
+    assert_eq!(lines.len(), 7, "2 行 + 登録 row 1 行 + 突合 1 行 + host の面 1 行 + 導入先 1 行 + host-guard 1 行: {lines:?}");
     assert_eq!(
-        lines.get(3..),
+        lines.get(3..6),
         Some(&["seats: registered=1 live=1 missing=0".to_owned(), HOST_ABSENT.to_owned(), CONSUMER_REPO.to_owned()][..]),
         "席の立つ socket"
     );
+    assert!(lines.last().is_some_and(|line| line.starts_with(HOST_GUARD_HEAD)), "末尾は host-guard の 1 行: {lines:?}");
     let elsewhere = place.dir.join("no-server-sock").display().to_string();
     let away = doctor(&["--state-dir", &state, "--tmux-socket", &elsewhere, "--rules", &rules]);
     assert_eq!(away.as_ref().map(rc_of), Some(i32::from(RC_OK)), "{away:?}");
     let away_lines: Vec<String> = away.map(|out| stdout_of(&out)).unwrap_or_default().lines().map(str::to_owned).collect();
     assert_eq!(
-        away_lines.get(3..),
+        away_lines.get(3..6),
         Some(&["seats: registered=1 live=unmeasurable missing=unmeasurable".to_owned(), HOST_ABSENT.to_owned(), CONSUMER_REPO.to_owned()][..]),
         "server の無い socket は 0 と書かない"
     );
@@ -837,7 +838,8 @@ pub(super) fn role_doctor(place: &RolePlace) -> Output {
     role_doctor_rules(place, NO_ACCOUNT_RULES)
 }
 
-/// `doctor --state-dir --tmux-socket --rules` を撃つ（`body` の manifest を置き場の dir に書いて渡す）。
+/// `doctor --state-dir --tmux-socket --rules --bin` を撃つ（`body` の manifest を置き場の dir に書いて渡す・binary の解決は
+/// 歯の binary 自身へ差し替える＝`binary=ok` で継いだ PATH に依らない）。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
@@ -846,7 +848,7 @@ fn role_doctor_rules(place: &RolePlace, body: &str) -> Output {
     let state = place.state.display().to_string();
     let rules = fixture(&place.dir, "doctor-rules.toml", body);
     Command::new(bin())
-        .args(["doctor", "--state-dir", &state, "--tmux-socket", &place.socket, "--rules", &rules])
+        .args(["doctor", "--state-dir", &state, "--tmux-socket", &place.socket, "--rules", &rules, "--bin", bin()])
         .output()
         .expect("binary を起動できる")
 }
@@ -883,6 +885,13 @@ pub(super) const HOST_ABSENT: &str = "host-manifest=absent";
 /// consumer-sync.md §4・`s2-07l.303`）。
 pub(super) const CONSUMER_REPO: &str =
     "consumer=/repo source=launch scope=- binary=unrecorded plugin=unrecorded ledger=- cache=absent head=undeclared behind=- drift=unrecorded";
+
+/// doctor の host-guard の 1 行の頭（導入先の行の後ろ・`--state-dir` の周は口座 0 でも必ず 1 行・vessel-hook.md §12 形 5）。
+pub(super) const HOST_GUARD_HEAD: &str = "host-guard: ";
+
+/// 種類の行を持たない manifest（[`NO_ACCOUNT_RULES`]）・口座 0 の host・`--bin` が歯の binary の周の host-guard の 1 行。
+pub(super) const HOST_GUARD_BARE: &str =
+    "host-guard: git=no-row tmux=no-row ledger=no-row rm=no-row self=on rows=0/4 wired=0/0 entities=0 binary=ok";
 
 /// `[[account]]` を `labels` の順に宣言した manifest の本文。
 fn account_rules(labels: &[&str]) -> String {

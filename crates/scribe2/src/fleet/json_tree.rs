@@ -183,6 +183,60 @@ pub fn parse(text: &str) -> Result<Tree, TreeError> {
     }
 }
 
+/// 1 つの値を 2 空白の入れ子で書く（[`parse`] の対・`parse(&render(t)) == Ok(t)`・設計 vessel-hook.md §12 形 3）。
+///
+/// key と文字列は [`super::json_lite::quote`] で escape し、数は字面のまま（丸めない）。空の object / 配列は `{}` / `[]`。
+/// 末尾の改行は足さない（file に書く呼び手が足す）。
+pub fn render(tree: &Tree) -> String {
+    let mut out = String::new();
+    write_tree(&mut out, tree, 0);
+    out
+}
+
+/// `depth` 段の入れ子の値を `out` に足す。
+fn write_tree(out: &mut String, tree: &Tree, depth: usize) {
+    let inner = depth.saturating_add(1);
+    match tree {
+        Tree::Object(pairs) if pairs.is_empty() => out.push_str("{}"),
+        Tree::Array(items) if items.is_empty() => out.push_str("[]"),
+        Tree::Object(pairs) => {
+            out.push('{');
+            for (at, (key, value)) in pairs.iter().enumerate() {
+                out.push_str(if at == 0 { "\n" } else { ",\n" });
+                indent(out, inner);
+                out.push_str(&super::json_lite::quote(key));
+                out.push_str(": ");
+                write_tree(out, value, inner);
+            }
+            out.push('\n');
+            indent(out, depth);
+            out.push('}');
+        }
+        Tree::Array(items) => {
+            out.push('[');
+            for (at, item) in items.iter().enumerate() {
+                out.push_str(if at == 0 { "\n" } else { ",\n" });
+                indent(out, inner);
+                write_tree(out, item, inner);
+            }
+            out.push('\n');
+            indent(out, depth);
+            out.push(']');
+        }
+        Tree::Str(text) => out.push_str(&super::json_lite::quote(text)),
+        Tree::Num(text) => out.push_str(text),
+        Tree::Bool(found) => out.push_str(if *found { "true" } else { "false" }),
+        Tree::Null => out.push_str("null"),
+    }
+}
+
+/// `depth` 段ぶんの 2 空白。
+fn indent(out: &mut String, depth: usize) {
+    for _ in 0..depth {
+        out.push_str("  ");
+    }
+}
+
 /// 読み進める位置と深さ。
 struct Parser<'a> {
     /// 入力の全体。
@@ -589,4 +643,35 @@ fn take_exp(text: &str) -> Option<i64> {
     }
     let value = digits.parse::<i128>().ok()?;
     i64::try_from(if negative { -value } else { value }).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse, render, Tree};
+
+    /// 書き手は読み手の対: 入れ子・配列・escape・数の字面・null・真偽・空の object / 配列を持つ値が `parse(render(t)) == t` で
+    /// 戻り、key の順と数の字面（`1.50` / `-0` / `1e400`）は丸めずに保つ。
+    #[test]
+    fn host_guard_wire_render_round_trips_through_parse() {
+        let tree = Tree::Object(vec![
+            ("z".to_owned(), Tree::Num("1.50".to_owned())),
+            ("a".to_owned(), Tree::Array(vec![Tree::Null, Tree::Bool(true), Tree::Bool(false), Tree::Num("-0".to_owned())])),
+            ("esc \"q\"".to_owned(), Tree::Str("tab\t nl\n back\\ quote\" bell\u{7} 日本".to_owned())),
+            (
+                "nest".to_owned(),
+                Tree::Object(vec![
+                    ("deep".to_owned(), Tree::Array(vec![Tree::Object(vec![("n".to_owned(), Tree::Num("1e400".to_owned()))])])),
+                    ("empty".to_owned(), Tree::Object(Vec::new())),
+                    ("none".to_owned(), Tree::Array(Vec::new())),
+                ]),
+            ),
+        ]);
+        let text = render(&tree);
+        assert_eq!(parse(&text), Ok(tree.clone()), "{text}");
+        assert!(text.starts_with("{\n  \"z\": 1.50,\n  \"a\": [\n    null,\n"), "2 空白の入れ子: {text}");
+        assert!(text.contains("\"empty\": {},\n") && text.contains("\"none\": []\n"), "空の object / 配列: {text}");
+        for leaf in [Tree::Null, Tree::Num("12".to_owned()), Tree::Str(String::new()), Tree::Array(Vec::new())] {
+            assert_eq!(parse(&render(&leaf)), Ok(leaf.clone()), "root の {leaf:?}");
+        }
+    }
 }

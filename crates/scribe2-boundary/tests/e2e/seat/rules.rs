@@ -22,18 +22,19 @@ fn rules_host_doctor_names_the_host_manifest_in_three_values() {
         let seats = lines.iter().position(|line| line.starts_with("seats: ")).unwrap_or(lines.len());
         lines.iter().skip(seats + 1).cloned().collect()
     };
+    let guard = |accounts: usize| HOST_GUARD_BARE.replace("wired=0/0", &format!("wired=0/{accounts}"));
     assert_eq!(
         tail_of(&doctor_rows(&place, &account_rules(&["tracked"]))),
-        [HOST_ABSENT, account_line_of("tracked").as_str(), CONSUMER_REPO],
-        "口座の行の後ろに導入先の行"
+        [HOST_ABSENT, account_line_of("tracked").as_str(), CONSUMER_REPO, guard(1).as_str()],
+        "口座の行の後ろに導入先の行・末尾に host-guard の 1 行"
     );
     fs::write(&host, account_rules(&["hosted"])).expect("host の面を書ける");
     assert_eq!(
         tail_of(&doctor_rows(&place, &account_rules(&["tracked"]))),
-        ["host-manifest=present".to_owned(), account_line_of("hosted"), account_line_of("tracked"), CONSUMER_REPO.to_owned()],
+        ["host-manifest=present".to_owned(), account_line_of("hosted"), account_line_of("tracked"), CONSUMER_REPO.to_owned(), guard(2)],
         "host の面込みの宣言（label の辞書順）"
     );
-    let unreadable = ["host-manifest=unreadable", "accounts: manifest=unreadable"];
+    let unreadable = ["host-manifest=unreadable", "accounts: manifest=unreadable", "host-guard: rules=unreadable"];
     fs::write(&host, "schema = 1\n\n[[account]]\nlabel = \"hosted\"\nbogus = 1\n").expect("host の面を壊せる");
     assert_eq!(tail_of(&doctor_rows(&place, &account_rules(&["tracked"]))), unreadable, "壊れた host の面");
     fs::write(&host, account_rules(&["tracked"])).expect("host の面を書ける");

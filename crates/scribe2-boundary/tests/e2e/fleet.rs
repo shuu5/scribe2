@@ -642,16 +642,18 @@ fn fleet_external_form() {
     let curl = fake_curl(&fx, &LIVE_BODY, "200", 0);
     let claude = fake_claude(&fx, "exit 0");
     let refreshed = run_usage_with_claude(&fx, &curl, &claude);
-    // 口座の口の外形（account-lifecycle.md §3）: 使い方・add の 1 行・断りの 1 行・ls の 1 行・retire の 1 行。
+    // 口座の口の外形（account-lifecycle.md §3）: 使い方・add の 1 行・断りの 1 行・ls の 1 行・wire の 1 行（vessel-hook.md
+    // §12）・retire の 1 行。
     let acct = state_dir();
     let acct_path = acct.display().to_string();
     let account_usage = run_account(&[]);
     let prepared = run_account(&["add", "a1", "--state-dir", &acct_path]);
     let exists = run_account(&["add", "a1", "--state-dir", &acct_path]);
     let listed = run_account(&["ls", "--state-dir", &acct_path]);
+    let wired = run_account(&["wire", "--state-dir", &acct_path]);
     let retired = run_account(&["retire", "a1", "--state-dir", &acct_path]);
     let form = format!(
-        "{}{}{}{}{}{}{}{}{}{}{}",
+        "{}{}{}{}{}{}{}{}{}{}{}{}",
         String::from_utf8_lossy(&usage.stderr),
         String::from_utf8_lossy(&missing.stderr),
         String::from_utf8_lossy(&empty.stdout),
@@ -662,6 +664,7 @@ fn fleet_external_form() {
         String::from_utf8_lossy(&prepared.stdout),
         String::from_utf8_lossy(&exists.stderr),
         String::from_utf8_lossy(&listed.stdout),
+        String::from_utf8_lossy(&wired.stdout),
         String::from_utf8_lossy(&retired.stdout)
     )
     .replace(&acct_path, "[state]")
@@ -3136,6 +3139,158 @@ fn account_cmd_flags_refuse_empty_value_dashed_value_and_unknown_flag() {
         assert_eq!(tree(&dir), before, "{name}: file も event も不変");
     }
     fs::remove_dir_all(&dir).ok();
+}
+
+// ─────────────── host-guard の配線（`account wire`・vessel-hook.md §12 行 d・接頭辞 `host_guard_wire_`） ───────────────
+
+/// user の既存の設定（PreToolUse の hook 1 本と他の key・数の字面 `1.50`）。
+const USER_SETTINGS: &str = "{\"model\": \"opus\", \"hooks\": {\"PreToolUse\": [{\"matcher\": \"Bash\", \"hooks\": [{\"type\": \"command\", \"command\": \"mine.sh\"}]}], \"Stop\": []}, \"n\": 1.50}\n";
+
+/// 置き場に host の面（`labels`）を書き、各口座の dir の `settings.json` を `shared` への symlink で置く（`shared` の本文は
+/// [`USER_SETTINGS`]）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn linked_accounts(dir: &Path, labels: &[&str], shared: &Path) {
+    put_host_labels(dir, labels);
+    if let Some(parent) = shared.parent() {
+        fs::create_dir_all(parent).expect("実体の dir を作れる");
+    }
+    fs::write(shared, USER_SETTINGS).expect("実体を書ける");
+    for label in labels {
+        let at = dir.join("accounts").join(label);
+        fs::create_dir_all(&at).expect("口座の dir を作れる");
+        std::os::unix::fs::symlink(shared, at.join("settings.json")).expect("link を置ける");
+    }
+}
+
+/// file を読んで入れ子の値にする（読めなければ `null`＝比べる側の assert が落ちる）。
+fn tree_of(path: &Path) -> Tree {
+    parse(&fs::read_to_string(path).unwrap_or_default()).unwrap_or(Tree::Null)
+}
+
+/// 値の `hooks.PreToolUse` の配列（無ければ空）。
+fn pre_tool_use(tree: &Tree) -> Vec<Tree> {
+    tree.get("hooks").and_then(|hooks| hooks.get("PreToolUse")).and_then(Tree::as_array).unwrap_or_default().to_vec()
+}
+
+/// 値から `hooks.PreToolUse` の末尾の 1 要素を外した値（足した 1 要素を除けば元と同じかを比べる）。
+fn without_last_pre_tool_use(tree: Tree) -> Tree {
+    let Tree::Object(mut pairs) = tree else { return tree };
+    for (key, value) in &mut pairs {
+        if let (true, Tree::Object(events)) = (key == "hooks", value) {
+            for (event, items) in events {
+                if let (true, Tree::Array(found)) = (event == "PreToolUse", items) {
+                    found.pop();
+                }
+            }
+        }
+    }
+    Tree::Object(pairs)
+}
+
+/// (2) 同じ実体への symlink の口座 2 つは実体 1 つとして 1 回だけ書かれ（entities=1 added=1）、実体の PreToolUse に要素が 1 つ
+/// 増え、他の key・順序・値（数の字面）と両口座の symlink は不変、event は 1 件も書かれない（出力は 1 行）。
+#[test]
+fn host_guard_wire_writes_one_entity_once_through_symlinked_accounts() {
+    let dir = state_dir();
+    let path = dir.display().to_string();
+    let shared = dir.join("shared").join("settings.json");
+    linked_accounts(&dir, &["a1", "a2"], &shared);
+    let out = run_account(&["wire", "--state-dir", &path]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
+    assert_eq!(text(&out.stdout), "account: wired accounts=2 entities=1 added=1 kept=0 refused=0\n");
+    assert!(out.stderr.is_empty(), "{out:?}");
+    let after = tree_of(&shared);
+    let before = parse(USER_SETTINGS).unwrap_or_else(|error| panic!("fixture は読める: {error}"));
+    assert_eq!(pre_tool_use(&after).len(), pre_tool_use(&before).len() + 1, "要素が 1 つだけ増える: {after:?}");
+    assert_eq!(pre_tool_use(&after).first(), pre_tool_use(&before).first(), "既存の要素は先頭のまま");
+    assert_eq!(without_last_pre_tool_use(after), before, "足した 1 要素を除けば key・順序・値が不変");
+    for label in ["a1", "a2"] {
+        assert!(is_link_to(&dir.join("accounts").join(label).join("settings.json"), &shared), "{label}: symlink のまま");
+    }
+    assert!(fs::symlink_metadata(store::events_path(&dir)).is_err(), "event を書かない");
+    assert!(fs::symlink_metadata(dir.join("shared").join("settings.json.staged")).is_err(), "一時 file を残さない");
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// (3) 2 回目は host-guard の項目が在るので実体を byte 単位で変えない（kept=1・置き場の全 entry が不変＝冪等）。
+#[test]
+fn host_guard_wire_second_run_keeps_every_byte() {
+    let dir = state_dir();
+    let path = dir.display().to_string();
+    let shared = dir.join("shared").join("settings.json");
+    linked_accounts(&dir, &["a1", "a2"], &shared);
+    let first = run_account(&["wire", "--state-dir", &path]);
+    assert_eq!(first.status.code(), Some(i32::from(RC_OK)), "{first:?}");
+    let before = tree(&dir);
+    let again = run_account(&["wire", "--state-dir", &path]);
+    assert_eq!(again.status.code(), Some(i32::from(RC_OK)), "{again:?}");
+    assert_eq!(text(&again.stdout), "account: wired accounts=2 entities=1 added=0 kept=1 refused=0\n");
+    assert_eq!(tree(&dir), before, "実体も link も byte 単位で不変");
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// (4) 読めない実体（JSON でない・root が配列）は refused に数えて 1 byte も書かず rc 2、読める実体は書かれ、口座の dir が無い
+/// 口座は数に入れて実体に数えない。event は 1 件も書かれない。
+#[test]
+fn host_guard_wire_refuses_an_unreadable_entity_and_writes_the_others() {
+    let dir = state_dir();
+    let path = dir.display().to_string();
+    put_host_labels(&dir, &["a1", "a2", "a3", "gone"]);
+    let bodies = [("a1", "{\"disableAgentView\": tru"), ("a2", "{\"disableAgentView\": true}\n"), ("a3", "[1]\n")];
+    for (label, body) in bodies {
+        let at = dir.join("accounts").join(label);
+        fs::create_dir_all(&at).expect("口座の dir を作れる");
+        fs::write(at.join("settings.json"), body).expect("設定を書ける");
+    }
+    let out = run_account(&["wire", "--state-dir", &path]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "{out:?}");
+    assert_eq!(text(&out.stdout), "account: wired accounts=4 entities=3 added=1 kept=0 refused=2\n");
+    for (label, body) in bodies.into_iter().filter(|(label, _)| *label != "a2") {
+        let settings = dir.join("accounts").join(label).join("settings.json");
+        assert_eq!(fs::read(&settings).unwrap_or_default(), body.as_bytes(), "{label}: 1 byte も書かない");
+        assert!(fs::symlink_metadata(dir.join("accounts").join(label).join("settings.json.staged")).is_err(), "{label}");
+    }
+    let written = tree_of(&dir.join("accounts").join("a2").join("settings.json"));
+    assert_eq!(pre_tool_use(&written).len(), 1, "読める実体は書かれる: {written:?}");
+    assert_eq!(written.get("disableAgentView"), Some(&Tree::Bool(true)), "他の key は保つ");
+    assert!(fs::symlink_metadata(dir.join("accounts").join("gone")).is_err(), "無い口座の dir を作らない");
+    assert!(fs::symlink_metadata(store::events_path(&dir)).is_err(), "event を書かない");
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// (2) 足した要素の command は `<NAME> host-guard --state-dir <絶対 path>`（相対の `--state-dir` も絶対化する）・matcher は 5 道具・
+/// timeout は跨版で固定の 10 で、埋め込みの `hook.timeout_s` の値と同じ（2 面の値が今は一致する事実を pin する）。
+#[test]
+fn host_guard_wire_command_names_the_absolute_state_dir_with_the_fixed_matcher_and_timeout() {
+    let parent = state_dir();
+    let state = parent.join("state");
+    let settings = state.join("accounts").join("a1").join("settings.json");
+    fs::create_dir_all(settings.parent().unwrap_or(&state)).expect("口座の dir を作れる");
+    put_host_labels(&state, &["a1"]);
+    fs::write(&settings, "{}\n").expect("設定を書ける");
+    let out = Command::new(bin()).current_dir(&parent).args(["account", "wire", "--state-dir", "state"]).output().expect("binary を起動できる");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
+    let groups = pre_tool_use(&tree_of(&settings));
+    assert_eq!(groups.len(), 1, "{groups:?}");
+    let group = groups.first().cloned().unwrap_or(Tree::Null);
+    assert_eq!(group.get("matcher").and_then(Tree::as_str), Some("Bash|Edit|Write|MultiEdit|NotebookEdit"));
+    let hooks = group.get("hooks").and_then(Tree::as_array).unwrap_or_default().to_vec();
+    assert_eq!(hooks.len(), 1, "{hooks:?}");
+    let hook = hooks.first().cloned().unwrap_or(Tree::Null);
+    let real = fs::canonicalize(&parent).expect("置き場の親を実 path にできる").join("state");
+    assert_eq!(hook.get("command").and_then(Tree::as_str), Some(format!("{} host-guard --state-dir {}", vessel::name::NAME, real.display()).as_str()));
+    assert_eq!(hook.get("type").and_then(Tree::as_str), Some("command"));
+    let embedded = Manifest::embedded().expect("埋め込みの manifest を読める");
+    let timeout = match embedded.get("hook.timeout_s").map(|row| row.value.clone()) {
+        Some(vessel::rules::RuleValue::Int(found)) => found,
+        other => panic!("hook.timeout_s は整数: {other:?}"),
+    };
+    assert_eq!(hook.get("timeout"), Some(&Tree::Num("10".to_owned())), "跨版で固定の 10");
+    assert_eq!(hook.get("timeout"), Some(&Tree::Num(timeout.to_string())), "埋め込みの hook.timeout_s の値と同じ");
+    fs::remove_dir_all(&parent).ok();
 }
 
 /// (3a) 期限切れの credential を偽 claude が書き換える周は、読み直して measured になり行の末尾に `refresh=ok`。

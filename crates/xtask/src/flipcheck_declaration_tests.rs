@@ -86,8 +86,8 @@ fn flip_check_bundles_module_declaration_with_new_body_file() {
 /// `mod x;` **以外**の行も動いた file は宣言 file と見なさず、従来どおり単独で撃つ。
 ///
 /// 自前の歯を足した file まで宣言と見なすと、その歯が単独で測られなくなる（同梱は判定を
-/// 緩める側なので弁別は狭く取る）。本便では本体 file が単独で緑になるので、判定は
-/// `green-on-base`＝**従来どおりの**結果になり、`decl=` は載らない。
+/// 緩める側なので弁別は狭く取る）。本便の本体 file の turn は木に宣言が無く compile されないので、
+/// 判定は `not-flippable`（§55 形 4）になり、`decl=` は載らない。
 #[test]
 fn flip_check_still_judges_declaration_file_that_also_changes_tests() {
     let (dir, base) = base_commit_with_e2e();
@@ -102,7 +102,7 @@ fn flip_check_still_judges_declaration_file_that_also_changes_tests() {
     head_commit(&dir);
     let got = judge(&base, &dir);
     drop_fixture(&dir);
-    assert_verdict(&got.line, got.code, 1, "reason=green-on-base");
+    assert_verdict(&got.line, got.code, 1, "reason=not-flippable");
     assert!(
         got.line.contains(&e2e_rel("newmod.rs")),
         "単独で緑だった本体 file を名指すはず: {}",
@@ -157,7 +157,7 @@ fn flip_check_treats_pub_crate_mod_line_as_declaration() {
     head_commit(&dir);
     let got = judge(&base, &dir);
     drop_fixture(&dir);
-    assert_verdict(&got.line, got.code, 1, "reason=green-on-base");
+    assert_verdict(&got.line, got.code, 1, "reason=not-flippable");
     assert!(
         !got.line.contains("decl="),
         "空白の無い可視性は宣言に数えない: {}",
@@ -473,6 +473,176 @@ fn flipcheck_declaration_nested_green_child_still_fails() {
     assert!(
         got.line.contains(&e2e_rel("seat/probe.rs")),
         "緑だった子 module の本体を名指すはず: {}",
+        got.line
+    );
+}
+
+// ---- 宣言と pin の file（設計 docs/design/pipeline.md §55・契約表の行 ax・s2-07l.562）----
+
+/// fixture の統合 test の根（`tests/<name>`）の repo 相対 path。
+fn root_rel(name: &str) -> String {
+    format!("crates/{FIXTURE_MEMBER}/tests/{name}")
+}
+
+/// pin の歯を持つ宣言 file（`tests/e2e/main.rs`）の本文。
+///
+/// `mods` の後に歯 `pinned` 1 本を置く。歯は `git ls-files` で `tests/e2e` 配下の `.rs` を数えて
+/// `check` の行で比べる＝本物の pin と同じ母集団の読み（flip-check の木では base の index）を再現する。
+/// 数える helper は歯の後ろ（歯の外）に在る。
+fn pin_main(mods: &str, check: &str) -> String {
+    format!(
+        "{mods}#[test]\nfn pinned() {{\n    let n = e2e_files();\n{check}\n}}\n\n\
+         fn e2e_files() -> usize {{\n    let out = std::process::Command::new(\"git\")\n        \
+         .args([\"ls-files\", \"tests/e2e\"])\n        .current_dir(env!(\"CARGO_MANIFEST_DIR\"))\n        \
+         .output()\n        .map(|out| out.stdout)\n        .unwrap_or_default();\n    \
+         String::from_utf8_lossy(&out).lines().filter(|line| line.ends_with(\".rs\")).count()\n}}\n"
+    )
+}
+
+/// base 側の宣言 file が pin の歯を持つ fixture（`mods` / `check` は base の母集団 2 本に合う形）。
+fn base_commit_with_pin(mods: &str, check: &str) -> (PathBuf, String) {
+    let (dir, _) = base_commit_with_e2e();
+    write_at(&dir, &e2e_rel("main.rs"), &pin_main(mods, check));
+    head_commit(&dir);
+    let base = head_sha(&dir);
+    (dir, base)
+}
+
+/// 形 1〜3: `mod` 行の追加と pin の数値の +1 を持つ宣言 file を本体の木へ同梱し、pin の歯の赤を
+/// turn の RED に数えず本体の歯の赤で通す。判定行は `decl=1` の直後に `pin=1` を持つ。
+///
+/// 同梱しない実装では本体の turn に宣言が無く `not-flippable` で落ちる。
+#[test]
+fn flipcheck_declaration_pin_bundles_mod_line_and_pin_number() {
+    let (dir, base) = base_commit_with_pin("mod seed;\n", "    assert_eq!(n, 2);");
+    write_at(&dir, &e2e_rel("main.rs"), &pin_main("mod seed;\nmod newmod;\n", "    assert_eq!(n, 3);"));
+    write_at(&dir, &e2e_rel("newmod.rs"), &red_body());
+    head_commit(&dir);
+    let got = judge(&base, &dir);
+    drop_fixture(&dir);
+    assert_verdict(&got.line, got.code, 0, "RED-on-base ok");
+    assert!(
+        got.line.contains(" decl=1 pin=1"),
+        "宣言と pin の file を decl= に数え pin= を直後に後置するはず: {}",
+        got.line
+    );
+}
+
+/// 形 3: 同じ便で本体だけを base で緑にすると `green-on-base file=<本体>` で落ちる。
+///
+/// 同梱した pin の歯は base の index を数えて毎 turn 赤い。その赤を turn の RED に数えると本体の
+/// 緑が隠れる（`s2-07l.41` の fail-open と同じ型）。
+#[test]
+fn flipcheck_declaration_pin_red_pin_tooth_does_not_hide_green_body() {
+    let (dir, base) = base_commit_with_pin("mod seed;\n", "    assert_eq!(n, 2);");
+    write_at(&dir, &e2e_rel("main.rs"), &pin_main("mod seed;\nmod newmod;\n", "    assert_eq!(n, 3);"));
+    write_at(&dir, &e2e_rel("newmod.rs"), &green_body());
+    head_commit(&dir);
+    let got = judge(&base, &dir);
+    drop_fixture(&dir);
+    assert_verdict(&got.line, got.code, 1, "reason=green-on-base");
+    assert!(
+        got.line.contains(&format!("file={}", e2e_rel("newmod.rs"))),
+        "緑だった本体 file を名指すはず: {}",
+        got.line
+    );
+}
+
+/// 形 1 の狭さ（数値の差が 2 か所）: 形に当たらず本体へ落ち、`pin=` は載らない（形 4 で落ちる）。
+#[test]
+fn flipcheck_declaration_pin_two_number_changes_are_not_bundled() {
+    let (dir, base) = base_commit_with_pin("mod seed;\n", "    assert_eq!(n * 1, 2);");
+    write_at(&dir, &e2e_rel("main.rs"), &pin_main("mod seed;\nmod newmod;\n", "    assert_eq!(n * 2, 6);"));
+    write_at(&dir, &e2e_rel("newmod.rs"), &red_body());
+    head_commit(&dir);
+    let got = judge(&base, &dir);
+    drop_fixture(&dir);
+    assert_verdict(&got.line, got.code, 1, "reason=not-flippable");
+    assert!(!got.line.contains("pin="), "差が 2 か所の file を pin と数えない: {}", got.line);
+}
+
+/// 形 1 の狭さ（pin の行が歯の外の helper の中）: 形に当たらず、`pin=` は載らない。
+#[test]
+fn flipcheck_declaration_pin_number_outside_teeth_is_not_bundled_as_pin() {
+    let helper = |value: u32| format!("fn expected() -> usize {{\n    {value}\n}}\n");
+    let (dir, base) = base_commit_with_pin(&format!("mod seed;\n{}", helper(2)), "    assert_eq!(n, expected());");
+    write_at(
+        &dir,
+        &e2e_rel("main.rs"),
+        &pin_main(&format!("mod seed;\nmod newmod;\n{}", helper(3)), "    assert_eq!(n, expected());"),
+    );
+    write_at(&dir, &e2e_rel("newmod.rs"), &red_body());
+    head_commit(&dir);
+    let got = judge(&base, &dir);
+    drop_fixture(&dir);
+    assert!(!got.line.contains("pin="), "歯の外の数値の差を pin と数えない: {}", got.line);
+}
+
+/// 形 4: 宣言 file が自前の歯の本文も動かした便は宣言が同梱されず、新設 module の turn は木に宣言が
+/// 無い＝nextest を撃たずに `not-flippable files=<本体>` で落ちる（`green-on-base` と呼ばない）。
+#[test]
+fn flipcheck_declaration_pin_undeclared_new_module_is_not_flippable() {
+    let (dir, base) = base_commit_with_pin("mod seed;\n", "    assert_eq!(n, 2);");
+    write_at(
+        &dir,
+        &e2e_rel("main.rs"),
+        &pin_main("mod seed;\nmod newmod;\n", "    assert_eq!(n, 3);\n    assert!(n > 0);"),
+    );
+    write_at(&dir, &e2e_rel("newmod.rs"), &red_body());
+    head_commit(&dir);
+    let got = judge(&base, &dir);
+    drop_fixture(&dir);
+    assert_verdict(&got.line, got.code, 1, "reason=not-flippable");
+    assert!(
+        got.line.contains(&format!("files={}", e2e_rel("newmod.rs"))),
+        "宣言の無い新設 module を名指すはず: {}",
+        got.line
+    );
+    assert!(!got.line.contains("green-on-base"), "compile されない歯の緑を読まない: {}", got.line);
+}
+
+/// 形 3 の純関数: 落ちた歯が除く名だけ → 緑、除く名の外に 1 本 → RED、名指し 0 本 → 名指せない。
+#[test]
+fn flipcheck_declaration_pin_bundled_turn_reads_three_ways() {
+    let own = ["pinned"];
+    assert_eq!(super::super::bundled_turn(&["pinned"], &own), super::super::BundledTurn::Green);
+    assert_eq!(
+        super::super::bundled_turn(&["pinned", "newmod::probe"], &own),
+        super::super::BundledTurn::Red
+    );
+    assert_eq!(super::super::bundled_turn(&[], &own), super::super::BundledTurn::Unnamed);
+}
+
+/// 形 4 の在処: target の根 `tests/<f>.rs`（`main.rs` でない名）の `mod <d>;` で宣言された新規
+/// `tests/<d>/mod.rs` の turn は撃たれ、同じ便から根の `mod` 行を消すと `not-flippable` で落ちる。
+///
+/// 在処を本体の dir の 3 形に閉じる変異は前半を、在処を見ない変異は後半を落とす。
+#[test]
+fn flipcheck_declaration_pin_root_file_declares_module_dir() {
+    let alt = |mods: &str| format!("{mods}#[test]\nfn alt_holds() {{\n    assert_eq!({FIXTURE_MEMBER}::val(), 1);\n}}\n");
+    let fixture = |declare: bool| {
+        let (dir, _) = base_commit_with_e2e();
+        write_at(&dir, &root_rel("alt.rs"), &alt(""));
+        head_commit(&dir);
+        let base = head_sha(&dir);
+        if declare {
+            write_at(&dir, &root_rel("alt.rs"), &alt("mod pinmod;\n"));
+        }
+        write_at(&dir, &root_rel("pinmod/mod.rs"), &red_body());
+        head_commit(&dir);
+        let got = judge(&base, &dir);
+        drop_fixture(&dir);
+        got
+    };
+    let got = fixture(true);
+    assert_verdict(&got.line, got.code, 0, "RED-on-base ok");
+    assert!(got.line.contains("decl=1"), "根の宣言 file を同梱するはず: {}", got.line);
+
+    let got = fixture(false);
+    assert_verdict(&got.line, got.code, 1, "reason=not-flippable");
+    assert!(
+        got.line.contains(&format!("files={}", root_rel("pinmod/mod.rs"))),
+        "宣言の無い tests/<d>/mod.rs を名指すはず: {}",
         got.line
     );
 }

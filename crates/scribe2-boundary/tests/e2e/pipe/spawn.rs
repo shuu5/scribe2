@@ -1841,6 +1841,119 @@ fn run_cost_review_records_one_review_event_before_reviewed() {
     }
 }
 
+/// 便ごとの token 消費の検出線の歯の偽 runner（commit を 1 本作り、要約行に 4 値がどれも 0 でない消費を載せる・和 16000000）。
+const CEILING_RUNNER: &str = "echo x >> src/lib.rs && git add -A && git commit -q -m runner && \
+    echo 'runner: rc=0 records=3 usage=in:1000000,out:2000000,\
+    cache_read:10000000,cache_create:3000000 turns=5 wall_ms=6000'";
+
+/// 和が閾値ちょうど（25000000）の便の判定行（埋め込みの行 `R-C6-1`・消費の event 2 件）。
+const CEILING_OVER: &str = "cost-ceiling: over total=25000000 limit=25000000 events=2";
+
+/// 偽 lens の判定 object に載せる消費（4 値はどれも 0 でない・和は 9000000 − `short`）。
+fn ceiling_lens(marker: &Path, short: u64) -> String {
+    let cache_create = 2_000_000_u64.saturating_sub(short);
+    let usage = format!(
+        r#""usage":"in:1000000,out:1000000,cache_read:5000000,cache_create:{cache_create}","turns":2,"wall_ms":300"#
+    );
+    let verdict = lens_verdict("PASS");
+    fake_lens(marker, &format!("{},{usage}}}", verdict.trim_end_matches('}')))
+}
+
+/// 便を intake → spawn（偽 runner の消費）→ gate（偽 lens の消費）→ land まで通す。消費の event は 2 件で、4 値の和は
+/// 25000000 − `short`（repo・置き場・便 id）。
+fn ceiling_landed(short: u64) -> (PathBuf, PathBuf, String) {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = intake(&repo, &state, &path);
+    let spawned = spawn_with(&repo, &state, &id, CEILING_RUNNER);
+    assert!(stdout_of(&spawned).contains("stage=Implemented"), "{}", stdout_of(&spawned));
+    let gated = gate_once(&repo, &state, &id, Some(&ceiling_lens(&state.join("lens-ran"), short)));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "PASS の gate は rc 0: {}", stderr_of(&gated));
+    let landed = land_once(&repo, &state, &id);
+    assert_eq!(landed.status.code(), Some(i32::from(RC_OK)), "land は断らない（rc 0）: {}", stderr_of(&landed));
+    let costs = events(&state).iter().filter(|event| event.kind == EventKind::RunCost && event.run == id).count();
+    assert_eq!(costs, 2, "消費の event は runner と lens の 2 件");
+    (repo, state, id)
+}
+
+/// `ceiling_rules` の写しに行 `R-C6-1` を**不発効**で足した `--rules` の fixture（置き場の中に 1 本・`pipe show` は lock の
+/// 行も読むので、写しの行はそのまま残す）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn disabled_ceiling_rules(state: &Path) -> String {
+    let base = fs::read_to_string(ceiling_rules(state)).expect("ceiling_rules を読める");
+    let path = state.join("rules-ceiling-disabled.toml");
+    let row = "\n[[rule]]\nid = \"R-C6-1\"\nkind = \"RunTokenCeiling\"\nvalue = 25000000\n\
+               enabled = false\nruling = \"t\"\nruled_at = \"d\"\n";
+    fs::write(&path, format!("{base}{row}")).expect("tmp manifest を書ける");
+    path.display().to_string()
+}
+
+/// `--rules` を渡して `pipe show --run` を 1 回撃つ。
+fn show_with_rules(repo: &Path, state: &Path, id: &str, rules: &str) -> Output {
+    run_pipe(&[
+        "show", "--run", id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--rules", rules,
+    ])
+}
+
+/// `pipe show` の出力のうち検出線の判定行（`cost-ceiling:` で始まる行）。
+fn ceiling_lines(shown: &str) -> Vec<&str> {
+    shown.lines().filter(|line| line.starts_with("cost-ceiling:")).collect()
+}
+
+/// (a) 値の両側と断らない（設計 gate-cost.md §43 歯 (a)・契約表の行 aj）: 消費の event 2 件の 4 値の和が 25000000 ちょうどの
+/// 便は over の行がちょうど 1 本（消費の行の後＝最後の行）、24999999 の便は 0 本で、どちらも land が rc 0 で `Landed` に着く。
+/// 消費の行と母集団の行は両方の便で従来の形のまま 3 行。4 値のどれかを落とす・最後の event だけを数える・`>` で比べる
+/// 実装は、ちょうどの便で行が消えて落ちる。
+#[test]
+fn run_cost_ceiling_over_line_at_the_limit_and_none_below_while_both_land() {
+    for (short, want) in [(0_u64, vec![CEILING_OVER]), (1, Vec::new())] {
+        let (repo, state, id) = ceiling_landed(short);
+        let shown = show_line(&repo, &state, &id);
+        assert!(shown.lines().next().unwrap_or_default().contains("stage=Landed"), "1 行目は段のまま（Landed）: {shown}");
+        assert_eq!(ceiling_lines(&shown), want, "short={short}: {shown}");
+        let costs = shown.lines().filter(|line| line.starts_with("cost:")).count();
+        assert_eq!(costs, 3, "母集団の行と消費の行 2 本は従来の形のまま: {shown}");
+        if short == 0 {
+            assert_eq!(shown.lines().last(), Some(CEILING_OVER), "判定行は消費の行の後: {shown}");
+        }
+        clean(&[&repo, &state]);
+    }
+}
+
+/// (b) 読めない閾値（設計 gate-cost.md §43 歯 (b)）: 消費の event 2 件の便に、行 `R-C6-1` を持たない fixture
+/// （`ceiling_rules`）と不発効の fixture を渡すと、どちらも `cost-ceiling: unmeasured events=2` が 1 行（rc 0・1 行目は段の行）。
+/// `--rules` 無しの対照は over の行を出し、`pipe show` は event を書かない。消費の event が 0 件の便は読めない fixture でも
+/// `cost-ceiling:` の行が 0 本。
+#[test]
+fn run_cost_ceiling_unreadable_limit_is_unmeasured_and_zero_events_show_nothing() {
+    let (repo, state, id) = ceiling_landed(0);
+    let before = events(&state).len();
+    for rules in [ceiling_rules(&state), disabled_ceiling_rules(&state)] {
+        let out = show_with_rules(&repo, &state, &id, &rules);
+        let shown = stdout_of(&out);
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "rc は 0 のまま: {}", stderr_of(&out));
+        assert!(shown.lines().next().unwrap_or_default().contains("stage=Landed"), "1 行目は段の行: {shown}");
+        assert_eq!(ceiling_lines(&shown), ["cost-ceiling: unmeasured events=2"], "{rules}: {shown}");
+    }
+    assert_eq!(ceiling_lines(&show_line(&repo, &state, &id)), [CEILING_OVER], "--rules 無しの対照は over の行");
+    assert_eq!(events(&state).len(), before, "pipe show は event を書かない");
+    let (bare_repo, bare_state) = repo_with_state();
+    let bare_path = write_contract(&bare_repo, &[], &[]);
+    let bare_id = intake(&bare_repo, &bare_state, &bare_path);
+    let bare = spawn_with(&bare_repo, &bare_state, &bare_id, TOY_COMMIT);
+    assert!(stdout_of(&bare).contains("stage=Implemented"), "{}", stdout_of(&bare));
+    for rules in [ceiling_rules(&bare_state), disabled_ceiling_rules(&bare_state)] {
+        let out = show_with_rules(&bare_repo, &bare_state, &bare_id, &rules);
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "rc 0: {}", stderr_of(&out));
+        assert!(ceiling_lines(&stdout_of(&out)).is_empty(), "消費の event 0 件の便は行を出さない: {}", stdout_of(&out));
+    }
+    clean(&[&repo, &state, &bare_repo, &bare_state]);
+}
+
 /// toy repo の 1 便を intake → spawn まで通す（bead を分けて id の衝突を避ける）。
 fn toy_spawn(repo: &Path, state: &Path, bead: &str, design: &str, runner: &str) -> (String, Output) {
     let id = intake_bead(repo, state, design, bead);

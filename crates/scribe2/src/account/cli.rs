@@ -2,7 +2,7 @@
 //! [`Outcome`] の行へ写す。**env も HOME も読まない**（C2.2）: 置き場は `--state-dir` で必ず外から受け取り、既定を持たない。
 //! 出力は行を組んで返すだけで、stdout / stderr へは bin 側の `emit` / `emit_err` が書く。
 
-use super::{add, ls_lines, restore, retire, AccountError, Add, Delivery, Prepared};
+use super::{add, ls_lines, restore, retire, wire, AccountError, Add, Delivery, Prepared};
 use crate::cli_args::{self, Allowed, ArgsError};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
 use crate::seat::sanitize_target;
@@ -13,10 +13,12 @@ const ADD_FLAGS: &[cli_args::Allowed] =
     &[Allowed::value("--state-dir"), Allowed::value("--anchor"), Allowed::value("--target"), Allowed::value("--tmux-socket")];
 /// `ls` / `retire` / `restore` が受ける flag。
 const BARE_FLAGS: &[cli_args::Allowed] = &[Allowed::value("--state-dir")];
+/// `wire` が受ける flag（`--rules` は歯の seam・host-guard と同じ形）。
+const WIRE_FLAGS: &[cli_args::Allowed] = &[Allowed::value("--state-dir"), Allowed::value("--rules")];
 
 /// `account` の使い方。
 pub fn usage() -> String {
-    "usage: account <add <label> [--anchor DIR] [--target T] [--tmux-socket PATH]|ls|retire <label>|restore <label>> --state-dir S"
+    "usage: account <add <label> [--anchor DIR] [--target T] [--tmux-socket PATH]|ls|retire <label>|restore <label>|wire> --state-dir S"
         .to_owned()
 }
 
@@ -31,6 +33,8 @@ struct Flags<'a> {
     target: Option<&'a str>,
     /// `--tmux-socket`。
     socket: Option<&'a str>,
+    /// `--rules`（`wire` だけ）。
+    rules: Option<&'a str>,
 }
 
 /// 引数の断り（閉包の 4 値は [`ArgsError`]・残る 2 つは従来どおり使い方の誤りの rc 1）。
@@ -53,8 +57,9 @@ fn flags<'a>(rest: &'a [String], allowed: &[Allowed]) -> Result<Flags<'a>, Flags
         anchor: parsed.value("--anchor"),
         target: parsed.value("--target"),
         socket: parsed.value("--tmux-socket"),
+        rules: parsed.value("--rules"),
     };
-    let values = [found.state_dir, found.anchor, found.target, found.socket];
+    let values = [found.state_dir, found.anchor, found.target, found.socket, found.rules];
     if values.iter().flatten().any(|value| value.trim().is_empty()) {
         return Err(FlagsError::Usage);
     }
@@ -65,14 +70,18 @@ fn flags<'a>(rest: &'a [String], allowed: &[Allowed]) -> Result<Flags<'a>, Flags
 pub fn dispatch(args: &[String]) -> Outcome {
     let verb = args.first().map(String::as_str);
     let (label, rest) = match verb {
-        Some("ls") => (None, args.get(1..).unwrap_or_default()),
+        Some("ls" | "wire") => (None, args.get(1..).unwrap_or_default()),
         Some("add" | "retire" | "restore") => match args.get(1).filter(|found| !found.starts_with("--")) {
             Some(found) => (Some(found.as_str()), args.get(2..).unwrap_or_default()),
             None => return refused(),
         },
         _ => return refused(),
     };
-    let allowed = if verb == Some("add") { ADD_FLAGS } else { BARE_FLAGS };
+    let allowed = match verb {
+        Some("add") => ADD_FLAGS,
+        Some("wire") => WIRE_FLAGS,
+        _ => BARE_FLAGS,
+    };
     let found = match flags(rest, allowed) {
         Ok(found) => found,
         Err(FlagsError::Args(error)) => return crate::cli_args::refusal("account", &error, usage()),
@@ -89,7 +98,18 @@ pub fn dispatch(args: &[String]) -> Outcome {
         }
         (Some("retire"), Some(label)) => done("retired", label, retire(dir, label).map(|_| ())),
         (Some("restore"), Some(label)) => done("restored", label, restore(dir, label).map(|_| ())),
+        (Some("wire"), None) => wired(wire::wire(dir, found.rules.map(Path::new))),
         _ => refused(),
+    }
+}
+
+/// `account wire` の結果の 1 行（stdout・読めず断った実体が 1 つ以上なら rc 2・書けた実体はそのまま）。宣言を読めない周は
+/// 1 つも書かず stderr に断りの 1 行（rc 2）。
+fn wired(result: Option<wire::Wired>) -> Outcome {
+    match result {
+        Some(found) if found.refused == 0 => Outcome::ok_line(found.line()),
+        Some(found) => Outcome { out: vec![found.line()], err: Vec::new(), rc: RC_BROKEN },
+        None => Outcome::failed_line(RC_BROKEN, format!("account: refused reason={} verb=wire", AccountError::WriteFailed.as_str())),
     }
 }
 

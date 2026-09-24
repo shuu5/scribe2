@@ -22,7 +22,7 @@
 //! `[[contract]]` を置けない。値の受理集合と**空の配列の拒否**は他の面と同じ（空の列は key の省略で表す）。
 
 use super::{Rule, RuleError, RuleKind, RuleRow, RuleValue, ValueShape, HOST_MANIFEST};
-use crate::pipe::table::{Need, FIELDS};
+use crate::pipe::table::{Need, DERIVED_GOAL, FIELDS};
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -32,8 +32,8 @@ use std::path::Path;
 /// （憲法 C1・単一 static binary の向き）。
 const EMBEDDED: &str = include_str!("../../../../rules/manifest.toml");
 
-/// manifest が要求する schema 版。
-const SCHEMA: u64 = 1;
+/// manifest が要求する schema 版（契約表の導出物の版の宣言 `pipe::table::WHOLE_HEAD` も同じ値・歯が pin する）。
+pub(crate) const SCHEMA: u64 = 1;
 
 /// `[[rule]]` 行が持てる key の全体。ここに無い key は拒む。
 const KNOWN_KEYS: &[&str] = &["id", "kind", "value", "enabled", "ruling", "ruled_at"];
@@ -153,14 +153,15 @@ impl Section {
         SECTIONS.iter().copied().find(|found| found.header() == text)
     }
 
-    /// この section が持てる key の全体（契約表の行は欄の正本 `FIELDS` から引く＝欄の列を 2 面に書かない）。
+    /// この section が持てる key の全体（契約表の行は欄の正本 `FIELDS` から引く＝欄の列を 2 面に書かない・導出物だけの
+    /// 欄 `DERIVED_GOAL` の分だけ広い〔`.md` の区間の行が持てば `pipe::table` の parse の段が断る〕）。
     fn known_keys(self) -> Vec<&'static str> {
         match self {
             Self::Rule => KNOWN_KEYS.to_vec(),
             Self::Account => ACCOUNT_KEYS.to_vec(),
             Self::Plugin => PLUGIN_KEYS.to_vec(),
             Self::LaunchArg => LAUNCH_ARG_KEYS.to_vec(),
-            Self::Contract => FIELDS.iter().map(|field| field.name).collect(),
+            Self::Contract => FIELDS.iter().map(|field| field.name).chain([DERIVED_GOAL]).collect(),
             Self::Vessel => VESSEL_KEYS.to_vec(),
             Self::AccountGroup => GROUP_KEYS.to_vec(),
         }

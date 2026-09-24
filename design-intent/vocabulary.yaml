@@ -306,12 +306,12 @@ terms:
     relationships: [hook, in-loop guard, allowlist, rules 行, 極性一覧]
   - canonical: 共通 verify
     domain: consumer
-    definition: どの便にも共通の deny する検証 (flip check・test・lint・依存監査) を対象 repo の vessel 宣言に置き、 intake が便ごとに凍結した写しを gate が契約 verify の前に撃つもの (C2・ADR-0009 / ADR-0010)。 検出線の行は別の列 (detection-verify・ADR-0021 §2.4) に置き、 契約の verify は便固有の行だけを持つ。
-    relationships: [gate, vessel 宣言, 契約, 変異検出線]
+    definition: どの便にも共通の deny する検証 (flip check・test・lint・依存監査) を対象 repo の vessel 宣言に置き、 intake が便ごとに凍結した写しを gate が契約 verify の前に撃つもの (C2・ADR-0009 / ADR-0010)。 検出線の行は別の列 (detection-verify・ADR-0021 §2.4) に置き、 gate でなく便の着地の後に着地後の検出が撃つ (ADR-0060・proposed)。 契約の verify は便固有の行だけを持つ。
+    relationships: [gate, vessel 宣言, 契約, 変異検出線, 着地後の検出]
   - canonical: 変異検出線
     domain: consumer
-    definition: cargo-mutants で生成した変異のうち歯に撃墜されない数を測る検出線 (C12 R-C12-1)。 1 便では vessel 宣言の検出線の列 (detection-verify) にある xtask mutants-diff が便の diff に対して測り、 極性 (記録のみ / deny) は manifest 行に従う (ADR-0009 / ADR-0021)。 並列度は実効 jobs。
-    relationships: [共通 verify, gate, flip check]
+    definition: cargo-mutants で生成した変異のうち歯に撃墜されない数を測る検出線 (C12 R-C12-1)。 1 便では vessel 宣言の検出線の列 (detection-verify) にある xtask mutants-diff が便の diff に対して測り、 極性 (記録のみ / deny) は manifest 行に従う (ADR-0009 / ADR-0021)。 並列度は実効 jobs。 1 便で測る時点は gate の中でなく便の着地の後で、 着地後の検出が撃ち、 生存が出ても着地は戻さない (ADR-0060・proposed)。
+    relationships: [共通 verify, gate, flip check, 着地後の検出]
   - canonical: lens
     domain: consumer
     definition: diff を読んで verdict (PASS / FAIL / INCONCLUSIVE) を返す headless の Claude process (SRS FR9)。 MVP の gate は lens 1 本。 runner と同じ起動形で、 口座と対象 repo の settings を 1 つも読まない (ADR-0011)。
@@ -840,8 +840,8 @@ terms:
   - canonical: 検出線の持ち越し
     domain: consumer
     aliases: [carried detection line]
-    definition: 便の diff の patch-id が前周の記録と同じ周に、 前周の検出線 (変異の生存) の record を持ち越しの印付きで写して撃たないこと。 記録が無い・patch-id が違う周は撃つ。 持ち越した値は実測と型で区別する (C10・ADR-0039)。
-    relationships: [検出線, 変異検出線, patch-id, 実測行, 候補の木]
+    definition: 便の diff の patch-id が前周の記録と同じ周に、 前周の検出線 (変異の生存) の record を持ち越しの印付きで写して撃たないこと。 記録が無い・patch-id が違う周は撃つ。 持ち越した値は実測と型で区別する (C10・ADR-0039)。 ADR-0060 (proposed) の後は gate が検出線を撃たないので、 この持ち越しは役目を終える。
+    relationships: [検出線, 変異検出線, patch-id, 実測行, 候補の木, 着地後の検出]
   - canonical: patch-id
     domain: consumer
     aliases: [patch id]
@@ -922,13 +922,23 @@ terms:
   - canonical: 同じ木の主実測
     domain: consumer
     aliases: [same-tree main check]
-    definition: 便が main に着地した直後の検査 (主実測・ADR-0021 §2.4) のうち、 着地する commit の木の sha が gate の verdict の tree と一致する周のもの。 木の sha の一致を gate の測定の再現と見なし、 ① write-set 照合・② 共通 verify・③ 検出線・④ 契約 verify の全段を撃たず主実測の省略の record 1 本で残して着地を進める。 一致しない周と tree の無い verdict の周は全段撃つ。 候補の木の主実測も同じ 1 関数を通る (ADR-0043・設計 docs/design/gate-cost.md §27)。
-    relationships: [主実測の省略の record, 候補の木, 検出線の持ち越し, 検証行の箱, gate, land]
+    definition: 便が main に着地した直後の検査 (主実測・ADR-0021 §2.4) のうち、 着地する commit の木の sha が gate の verdict の tree と一致する周のもの。 木の sha の一致を gate の測定の再現と見なし、 ① write-set 照合・② 共通 verify・④ 契約 verify の全段を撃たず主実測の省略の record 1 本で残して着地を進める。 全段は ③ 検出線を含まない (検出線は gate でも主実測でも撃たず、 着地後の検出が撃つ・ADR-0060・proposed)。 一致しない周と tree の無い verdict の周は全段撃つ。 候補の木の主実測も同じ 1 関数を通る (ADR-0043・設計 docs/design/gate-cost.md §27)。
+    relationships: [主実測の省略の record, 候補の木, 検出線の持ち越し, 検証行の箱, gate, land, 着地後の検出]
   - canonical: 主実測の省略の record
     domain: consumer
     aliases: [main skip record]
     definition: 同じ木の主実測の周に verify-main.jsonl へ 1 本だけ書く record (kind=main skipped=main tree=<sha> reason=same-tree)。 既存の skip record と同じ閉じた口から作り、 どの木の測定を再現と見なしたかを木の sha で必ず持つ (C10)。 schema は 1 のまま field を足さず、 読み手は skipped の非空で従来どおり拾う (ADR-0043)。
     relationships: [同じ木の主実測, 検出線の持ち越し, 実測行, 候補の木]
+  - canonical: 着地後の検出
+    domain: consumer
+    aliases: [post-landing detection]
+    definition: 便が Landed に達した後に、 器が land から切り離した子 process で vessel 宣言の検出線の行 (detection-verify) を 1 回撃つこと (ADR-0060・proposed)。 着地した commit を tmp worktree に出して base はその親とし、 撃つ前に今の検出線の行と同じ受付札 (並列の枠) を取って封じ込めの箱と器の健康の遮断器を通る。 結果は verify-main.jsonl の kind=detection の record と RunDone stage=Landed の detail に残し、 着地は戻さず台帳には写さない (C12.4・C15)。
+    relationships: [検出線, 変異検出線, 臨界路, land, 並列の枠, 封じ込めの箱, 器の健康の遮断器, 同じ木の主実測]
+  - canonical: 臨界路
+    domain: consumer
+    aliases: [critical path]
+    definition: 便が着地までに必ず待つ段の列 (runner → gate → land)。 この列に座る段の秒は便 1 本の待ちに足される。 ADR-0060 (proposed) は検出線をこの列から外し、 着地後の検出へ移す。
+    relationships: [便, runner, gate, land, 着地後の検出]
   - canonical: 決定はしご
     domain: consumer
     aliases: [decision ladder]

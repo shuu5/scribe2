@@ -772,13 +772,21 @@ pub(super) fn write_rules_capped(dir: &Path, name: &str, fixture: RulesFixture) 
     };
     // **上限の行も載せる**。intake は宣言をこの行と突き合わせるので、上限を持たない
     // manifest を渡した周は「上限が無い」で断られる（`--rules` は全 subcommand に効く）。
-    // 禁じる語列の行（`runner.denied_commands`・ADR-0025 §2.3・`s2-07l.168`）も対で載せる＝intake は verify 行に
-    // hook の command guard と同じ判定を掛け、行の無い manifest では受付が断られる。
-    let ceiling = "[[rule]]\nid = \"runner.allowed_commands\"\nkind = \"RunnerAllowedCommands\"\n\
-                   value = [\"cargo\", \"git\", \"sh\"]\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n\n\
-                   [[rule]]\nid = \"runner.denied_commands\"\nkind = \"RunnerDeniedCommands\"\n\
-                   value = [\"cargo mutants\", \"git push --force\", \"git push -f\", \"git branch -D\"]\n\
-                   enabled = true\nruling = \"t\"\nruled_at = \"d\"\n";
+    // 禁じる語列の行（`runner.denied_commands`・ADR-0025 §2.3・`s2-07l.168`）と host-guard の語列の 3 行
+    // （[`HOST_GUARD_ROWS`]・設計 vessel-hook.md §11 の形 f 3）も対で載せる＝intake は verify 行に hook の command guard と
+    // 同じ ∪ の読み手の判定を掛け、4 行のどれかが無い manifest では受付が断られる。
+    let ceiling = format!(
+        "[[rule]]\nid = \"runner.allowed_commands\"\nkind = \"RunnerAllowedCommands\"\n\
+         value = [\"cargo\", \"git\", \"sh\"]\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n\n\
+         [[rule]]\nid = \"runner.denied_commands\"\nkind = \"RunnerDeniedCommands\"\n\
+         value = [\"cargo mutants\"]\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n{}",
+        HOST_GUARD_ROWS
+            .iter()
+            .map(|(id, value)| format!(
+                "\n[[rule]]\nid = \"{id}\"\nkind = \"HostGuardDeniedCommands\"\nvalue = {value}\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n"
+            ))
+            .collect::<String>()
+    );
     // 受付の 4 行: 並列度の上限は埋め込みの値を写し、残る 3 行は [`SlotFixture`] の値。遮断器の倍率 2 行も
     // [`SlotFixture`] の値（行の無い manifest では gate / land が線を読めず rc 2 で止まる）。
     // 着地の順番の上限は [`LAND_WAIT_S`]（前の便が列に残る歯で 90 分待たない）。
@@ -820,6 +828,14 @@ pub(super) const SAME_KIND_STOP_ROW: &str = "review.same_kind_stop";
 
 /// 同時本数の最大値を持つ rules 行の id（tmp manifest に埋め込みの値で載せる・値を差し替える歯が名指す）。
 pub(super) const MAX_LIVE_ROW: &str = "pipe.max_live";
+
+/// tmp manifest の host-guard の語列の 3 行（id と値の TOML の字面）。git の語列は host_guard.git にだけ在る（埋め込みと
+/// 同じく runner.denied_commands から移した形・`pipe_intake_host_guard_` の歯が行を落として測る）。
+pub(super) const HOST_GUARD_ROWS: [(&str, &str); 3] = [
+    ("host_guard.git", "[\"git push --force\", \"git push -f\", \"git branch -D\"]"),
+    ("host_guard.tmux", "[\"tmux kill-server\"]"),
+    ("host_guard.ledger", "[\"bd delete\"]"),
+];
 
 /// intake が読む上限の manifest（`sh` を足した写し）。置き場の中に 1 本だけ作る。
 pub(super) fn ceiling_rules(state: &Path) -> String {

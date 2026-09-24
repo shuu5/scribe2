@@ -374,7 +374,8 @@ pub const GENERATED_DISPOSITION: &str = "A-now";
 /// pointer の逐語をそのまま写す。`goal` は**行の `title`**である（planner 裁定 2026-09-19）: 節の本文は
 /// `design` pointer が指しており、写しに複製しない——契約 file の値は 1 行 1 key の TOML subset で `"` を
 /// 表せず（[`quoted_once`]）、実測で設計 doc の 276 節のうち 41 節が `"` を含み最大の節は 27 KB である。
-/// key の順は [`REQUIRED`] の宣言順 + 任意 key で、配列は 1 行に収める。
+/// key の順は [`REQUIRED`] の宣言順 + 任意 key で、配列は 1 行に収める。導出物（`.toml`）の行が節の本文の逐語 goal を
+/// 運ぶ周だけは `goal` がその逐語である（空の行は `title` のまま・設計 contract-source.md §47 の 7）。
 ///
 /// **値は逃がさない**（escape の仕組みが TOML subset に無い）。行の値と契約 file の値は**同じ 1 つの
 /// scalar の読み**（[`scalar`]）を通るので、行が持てた字面は写しでも同じ字面として読み戻る。
@@ -386,7 +387,8 @@ pub fn render(row: &crate::pipe::table::ContractRow, design: &str, write_set: &[
     };
     // 契約 file は `schema` の key を持たない（[`REQUIRED`] / [`OPTIONAL`] の外＝書くと自分の parser が断る）。
     let mut out = String::new();
-    out.push_str(&format!("goal = \"{}\"\n", row.title));
+    let goal = if row.goal.is_empty() { &row.title } else { &row.goal };
+    out.push_str(&format!("goal = \"{goal}\"\n"));
     out.push_str(&format!("done = \"{}\"\n", row.done));
     out.push_str(&format!("size = \"{}\"\n", row.size));
     out.push_str(&format!("owner = \"{GENERATED_OWNER}\"\n"));
@@ -467,6 +469,7 @@ mod tests {
             opens: Vec::new(),
             targets: Vec::new(),
             growth: Vec::new(),
+            goal: String::new(),
         }
     }
 
@@ -529,6 +532,25 @@ mod tests {
             Err(errors) => panic!("生成した本文を読めない: {errors:?}\n{body}"),
         };
         assert_eq!(found.goal, row.title, "字面は行のまま");
+    }
+
+    /// §47 の 7: goal を持つ行（導出物の行）の写しは goal を運び（二重引用符と backtick を含む単一行が `Contract::parse` で
+    /// 逐語に読み戻る）、goal の無い行は `title` のまま。写しの key 集合は同じ。
+    #[test]
+    fn contract_whole_goal_render_carries_the_goal_and_falls_back_to_the_title() {
+        let mut goaled = row();
+        goaled.goal = "節の \"本文\" と `crate::pipe::table::ContractRow` の逐語".to_owned();
+        let body = render(&goaled, "docs/design/toy.toml#b", &goaled.write_set);
+        let found = Contract::parse(&body).unwrap_or_else(|errors| panic!("生成した本文を読めない: {errors:?}\n{body}"));
+        assert_eq!(found.goal, goaled.goal, "goal は行の goal の逐語");
+        let keys = |text: &str| -> Vec<String> {
+            text.lines().filter_map(|line| line.split_once(" = ")).map(|(key, _)| key.to_owned()).collect()
+        };
+        let plain = row();
+        let titled = render(&plain, "docs/design/toy.toml#b", &plain.write_set);
+        let back = Contract::parse(&titled).unwrap_or_else(|errors| panic!("生成した本文を読めない: {errors:?}\n{titled}"));
+        assert_eq!(back.goal, plain.title, "goal の無い行は title のまま");
+        assert_eq!(keys(&body), keys(&titled), "写しの key 集合は変わらない");
     }
 
     // flip-check: s2-07l.512

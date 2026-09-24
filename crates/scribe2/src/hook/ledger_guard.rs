@@ -44,8 +44,9 @@ const RAW_CLIENT: &str = "bd";
 /// 記憶の subcommand（`memory-subcommand` の閉じた列）。
 const MEMORY: [&str; 3] = ["remember", "recall", "memories"];
 
-/// bd の書き込みの subcommand（道具の語彙・`bd-outside-bdw` の閉じた列＝`bd` に subcommand が増えた周は手が入る）。
-const WRITES: &[&str] = &[
+/// bd の書き込みの subcommand（道具の語彙・`bd-outside-bdw` の閉じた列＝`bd` に subcommand が増えた周は手が入る・host-guard
+/// は `ledger.denied_writes` が不発効の周にこの列を全部断る＝設計 vessel-hook.md §11 の形 f 2）。
+pub(crate) const WRITES: &[&str] = &[
     "create", "update", "close", "reopen", "delete", "dep", "label", "comment", "comments", "edit", "remember", "forget",
     "set-state", "rename", "rename-prefix", "move", "promote", "import", "merge", "duplicate", "supersede", "sync",
 ];

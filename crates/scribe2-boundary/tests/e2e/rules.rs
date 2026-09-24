@@ -1321,8 +1321,9 @@ fn rules_ledger_denied_writes_row_is_declared_on_four_faces() {
 const HOST_GUARD_RULING: (&str, &str) = ("user 2026-09-19T15:28Z", "2026-09-19");
 
 /// 4 行（host_guard.git / tmux / ledger は HostGuardDeniedCommands・host_guard.rm は HostGuardRmProtected）が id / kind / 形 List /
-/// enabled / 裁定 id / 裁定日で引け、同じ裁定 id を持つ行はちょうど 4 本。host_guard.git は runner.denied_commands の git の
-/// 7 語列の写しで、rm の値は守る集合の 3 記号。**値は manifest が持つ**（C1 / C5）。
+/// enabled / 裁定 id / 裁定日で引け、同じ裁定 id を持つ行はちょうど 4 本。host_guard.git は git の 7 語列（runner.denied_commands
+/// から移した＝行 f・[`rules_moved_host_guard_git_sequences_leave_runner_denied_commands`]）で、rm の値は守る集合の 3 記号。
+/// **値は manifest が持つ**（C1 / C5）。
 #[test]
 fn rules_embedded_manifest_declares_host_guard_rows_with_one_ruling() {
     let manifest = Manifest::embedded().unwrap_or_else(|errors| panic!("埋め込み manifest が拒まれた: {errors:?}"));
@@ -1345,11 +1346,7 @@ fn rules_embedded_manifest_declares_host_guard_rows_with_one_ruling() {
     assert_eq!(shared, 4, "同じ裁定 id の行はちょうど 4 本（母集団 {} 行）", manifest.rows().len());
     let git = ["git push --force", "git push -f", "git reset --hard", "git branch -D", "git clean -f", "git stash drop", "git stash clear"];
     let want: Vec<String> = git.iter().map(|item| (*item).to_owned()).collect();
-    assert_eq!(manifest.get("host_guard.git").map(|row| row.value.clone()), Some(RuleValue::List(want.clone())), "git の 7 語列");
-    let Some(RuleValue::List(runner)) = manifest.get("runner.denied_commands").map(|row| row.value.clone()) else {
-        panic!("runner.denied_commands の列が在る");
-    };
-    assert!(want.iter().all(|item| runner.contains(item)), "git の語列は runner.denied_commands の写し（外すのは行 f）");
+    assert_eq!(manifest.get("host_guard.git").map(|row| row.value.clone()), Some(RuleValue::List(want)), "git の 7 語列");
     for (id, sequences) in [
         ("host_guard.tmux", &["tmux kill-server", "tmux -C", "tmux -f"][..]),
         ("host_guard.ledger", &["bd delete", "dolt reset --hard", "dolt branch -D", "dolt branch -d"][..]),
@@ -1376,6 +1373,25 @@ fn rules_embedded_manifest_declares_host_guard_kinds_at_the_tail_of_all() {
     }
     assert_eq!(RuleKind::HostGuardDeniedCommands.as_str(), "HostGuardDeniedCommands", "字面は variant 名");
     assert_eq!(RuleKind::HostGuardRmProtected.as_str(), "HostGuardRmProtected", "字面は variant 名");
+}
+
+/// 重なる語列の移動（設計 vessel-hook.md §11 の形 f 4・user 裁定 2026-09-19T15:28Z）: runner.denied_commands は cargo の
+/// 2 語列だけを持ち、host_guard.git は git の 7 語列を持ち、両方に同じ語列は無い（command guard と intake は ∪ で読むので
+/// 語列が禁じられることは変わらない）。
+#[test]
+fn rules_moved_host_guard_git_sequences_leave_runner_denied_commands() {
+    let manifest = Manifest::embedded().unwrap_or_else(|errors| panic!("埋め込み manifest が拒まれた: {errors:?}"));
+    let list = |id: &str| match manifest.get(id).map(|row| row.value.clone()) {
+        Some(RuleValue::List(items)) => items,
+        other => panic!("{id} の値は列: {other:?}"),
+    };
+    let (runner, git) = (list("runner.denied_commands"), list("host_guard.git"));
+    assert_eq!(runner, ["cargo mutants", "cargo publish"], "runner.denied_commands は cargo の 2 語列");
+    let moved = ["git push --force", "git push -f", "git reset --hard", "git branch -D", "git clean -f", "git stash drop", "git stash clear"];
+    assert_eq!(git, moved, "host_guard.git は git の 7 語列");
+    let shared: Vec<&String> = runner.iter().filter(|item| git.contains(item)).collect();
+    assert!(shared.is_empty(), "両方に在る語列は無い: {shared:?}");
+    assert!(runner.iter().all(|item| item.starts_with("cargo ")), "runner に git の語列は残らない: {runner:?}");
 }
 
 /// 語を持たない語列は validate が断り（runner.denied_commands と同じ検査）、2 kind とも形は List だけ。
@@ -1572,6 +1588,27 @@ fn rules_embedded_manifest_declares_host_health_per_core_rows_with_the_ruling() 
     assert!(errors.join("\n").contains("形と合わない"), "形は Int だけ: {errors:?}");
 }
 
+/// 便ごとの token 消費の検出線の行（設計 gate-cost.md §43 歯 (c)・契約表の行 aj・`s2-07l.172`）: 埋め込みの manifest が
+/// `R-C6-1` = 25000000 を**裁定 id `user 2026-09-23T07:16Z`・裁定日 2026-09-23** つきで発効して持ち、整数の読み手で値が
+/// 取れ、kind は Int の新しい variant 1 つで `ALL` の `GateTokenCap` の直後（同じ token の上限の族）に在って字面から引ける。
+#[test]
+fn rules_embedded_manifest_declares_run_token_ceiling_row_with_its_ruling() {
+    let manifest = Manifest::embedded().unwrap_or_else(|errors| panic!("埋め込み manifest が拒まれた: {errors:?}"));
+    let row = manifest.get("R-C6-1").unwrap_or_else(|| panic!("R-C6-1 の行が在る"));
+    assert_eq!(row.value, RuleValue::Int(25_000_000), "値（user 裁定の総 token）");
+    assert_eq!(row.kind, RuleKind::RunTokenCeiling, "kind");
+    assert_eq!(row.kind.shape(), ValueShape::Int, "値の形は Int（token）");
+    assert!(row.enabled, "発効（検出線の読み手を効かせる）");
+    assert_eq!(row.ruling, "user 2026-09-23T07:16Z", "裁定 id");
+    assert_eq!(row.ruled_at, "2026-09-23", "裁定日");
+    assert_eq!(int_row(&manifest, "R-C6-1"), Ok(25_000_000), "整数の読み手で 25000000 が取れる");
+    assert_eq!(RuleKind::parse("RunTokenCeiling"), Some(RuleKind::RunTokenCeiling), "kind を字面から引ける");
+    let at = ALL.iter().position(|kind| *kind == RuleKind::GateTokenCap).expect("GateTokenCap は ALL に在る");
+    assert_eq!(ALL.get(at.saturating_add(1)), Some(&RuleKind::RunTokenCeiling), "宣言順は GateTokenCap の直後");
+    let shared = manifest.rows().iter().filter(|found| found.kind == RuleKind::RunTokenCeiling).count();
+    assert_eq!(shared, 1, "kind の行は 1 本");
+}
+
 #[test]
 fn rules_embedded_manifest_is_valid_and_covers_all_kinds() {
     let manifest = match Manifest::embedded() {
@@ -1584,7 +1621,7 @@ fn rules_embedded_manifest_is_valid_and_covers_all_kinds() {
     // **tracked な `rules/manifest.toml` の全行が受理される**（`parse` は 1 件でも違反が
     // 在れば `Err` を返すので、ここに届いた時点で全行が必須 key を持つ）。母集団を額面に
     // 出すのは、行が黙って落ちた周を「全部読めた」と読み違えないためである。
-    assert_eq!(manifest.rows().len(), 63, "埋め込み manifest の行数（母集団・`.574` で +4〔host の見張りの種類ごとの行〕・`.169` で +1〔台帳 write の断る形〕・`.170` で +2〔flip の免除経路の面と札の上限〕・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.478` で -1〔役割の行 2 本が 1 本〕・`.479.1` で -7〔席の自律の行〕・`.479.2` で -3〔作業記憶の行 1 本と棚卸しの行 2 本〕・`.382` で +1〔終端の CI の上限〕・`.433` で +2〔役割の既定の model と effort〕・`.407` で +1〔選定の前計測の鮮度〕・`.396` で +1〔同型の審査 FAIL の停止の回数〕・`.504` の行 x で +2〔器の健康の遮断器の倍率〕・`.428` で +1〔着地の列の上限〕・`.398` で +1〔同時本数の最大値〕・`.491.3` で +3〔群の逼迫の閾値の窓ごとの行〕）");
+    assert_eq!(manifest.rows().len(), 64, "埋め込み manifest の行数（母集団・`.172` で +1〔便ごとの token 消費の検出線 R-C6-1〕・`.574` で +4〔host の見張りの種類ごとの行〕・`.169` で +1〔台帳 write の断る形〕・`.170` で +2〔flip の免除経路の面と札の上限〕・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.478` で -1〔役割の行 2 本が 1 本〕・`.479.1` で -7〔席の自律の行〕・`.479.2` で -3〔作業記憶の行 1 本と棚卸しの行 2 本〕・`.382` で +1〔終端の CI の上限〕・`.433` で +2〔役割の既定の model と effort〕・`.407` で +1〔選定の前計測の鮮度〕・`.396` で +1〔同型の審査 FAIL の停止の回数〕・`.504` の行 x で +2〔器の健康の遮断器の倍率〕・`.428` で +1〔着地の列の上限〕・`.398` で +1〔同時本数の最大値〕・`.491.3` で +3〔群の逼迫の閾値の窓ごとの行〕）");
     for kind in ALL {
         let covered = manifest.rows().iter().any(|row| row.kind == *kind);
         assert!(covered, "{} の行が manifest に無い", kind.as_str());
@@ -1757,7 +1794,7 @@ fn rules_embedded_manifest_declares_one_capability_row_per_role() {
     assert!(ALL.contains(&RuleKind::RoleCapabilities), "ALL に在る（末尾は `.574` の host の見張りの 2 kind）");
     assert_eq!(RuleKind::parse("RoleCapabilities"), Some(RuleKind::RoleCapabilities), "kind を字面から引ける");
     let kinds = ALL.len();
-    assert_eq!(kinds, 61, "kind の母集団（`.574` で +2〔host の見張りの語列と rm の守る集合〕・`.169` で +1〔台帳 write の断る形〕・`.170` で +2〔flip の免除経路の面と札の上限〕・`.201` で +1・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.479.2` で -3・`.382` で +1〔終端の CI の上限〕・`.433` で +2〔役割の既定の 2 種〕・`.407` で +1〔選定の前計測の鮮度〕・`.396` で +1〔同型の審査 FAIL の停止の回数〕・`.504` の行 x で +2〔器の健康の遮断器の倍率〕・`.428` で +1〔着地の列の上限〕・`.398` で +1〔同時本数の最大値〕・`.491.3` で +3〔群の逼迫の閾値の 3 種〕）");
+    assert_eq!(kinds, 62, "kind の母集団（`.172` で +1〔便ごとの token 消費の検出線〕・`.574` で +2〔host の見張りの語列と rm の守る集合〕・`.169` で +1〔台帳 write の断る形〕・`.170` で +2〔flip の免除経路の面と札の上限〕・`.201` で +1・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.479.2` で -3・`.382` で +1〔終端の CI の上限〕・`.433` で +2〔役割の既定の 2 種〕・`.407` で +1〔選定の前計測の鮮度〕・`.396` で +1〔同型の審査 FAIL の停止の回数〕・`.504` の行 x で +2〔器の健康の遮断器の倍率〕・`.428` で +1〔着地の列の上限〕・`.398` で +1〔同時本数の最大値〕・`.491.3` で +3〔群の逼迫の閾値の 3 種〕）");
 }
 
 /// 禁じる語列の行（`runner.denied_commands`・`RuleKind::RunnerDeniedCommands`・裁定 id `user 2026-09-14`・ADR-0025 §2.1・
@@ -1768,21 +1805,8 @@ fn rules_embedded_manifest_declares_one_capability_row_per_role() {
 fn rules_embedded_manifest_declares_the_denied_commands_row() {
     let manifest = Manifest::embedded().unwrap_or_else(|errors| panic!("埋め込み manifest が拒まれた: {errors:?}"));
     let row = manifest.get("runner.denied_commands").expect("禁じる語列の行が在る");
-    let want: Vec<String> = [
-        "cargo mutants",
-        "cargo publish",
-        "git push --force",
-        "git push -f",
-        "git reset --hard",
-        "git branch -D",
-        "git clean -f",
-        "git stash drop",
-        "git stash clear",
-    ]
-    .iter()
-    .map(|item| (*item).to_owned())
-    .collect();
-    assert_eq!(row.value, RuleValue::List(want), "ADR-0025 §2.1 の初期値 9 語列（user 裁定 2026-09-14）");
+    let want: Vec<String> = ["cargo mutants", "cargo publish"].iter().map(|item| (*item).to_owned()).collect();
+    assert_eq!(row.value, RuleValue::List(want), "cargo の 2 語列（git の 7 語列は host_guard.git へ移した・user 裁定 2026-09-19T15:28Z）");
     assert_eq!(row.kind, RuleKind::RunnerDeniedCommands, "kind");
     assert_eq!(row.kind.shape(), ValueShape::List, "値の形は List（語列の配列）");
     assert!(row.enabled, "既定で効く");
