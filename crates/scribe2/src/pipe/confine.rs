@@ -254,8 +254,9 @@ fn next_seq() -> u64 {
     SEQ.fetch_add(1, Ordering::Relaxed)
 }
 
-/// scope を片付ける道具。**PATH で解決する**（[`SYSTEMD_RUN`] と同じ）。
-const SYSTEMCTL: &str = "systemctl";
+/// scope を片付ける道具。**PATH で解決する**（[`SYSTEMD_RUN`] と同じ）。綴りはこの 1 定数だけで、tick の unit の有効化・撤去
+/// （`crate::seat::tick::install`・設計 seat-heartbeat.md §3）も同じ定数を撃つ。
+pub(crate) const SYSTEMCTL: &str = "systemctl";
 
 /// unit が既に無い周に `systemctl` が stderr へ出す字面。
 const NOT_LOADED: &str = "not loaded";

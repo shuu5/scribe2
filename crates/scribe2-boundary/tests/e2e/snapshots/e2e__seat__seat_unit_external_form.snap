@@ -1,0 +1,24 @@
+---
+source: crates/scribe2-boundary/tests/e2e/seat.rs
+expression: form
+---
+== scribe2-seat-tick-tk_tk.service
+# scribe2 tick-install schema=1
+[Unit]
+Description=scribe2 seat tick tk:tk
+
+[Service]
+Type=oneshot
+ExecStart=[tmp]/opt/scribe2 seat tick --state-dir [tmp]/state --target tk:tk
+== scribe2-seat-tick-tk_tk.timer
+# scribe2 tick-install schema=1
+[Unit]
+Description=scribe2 seat tick timer tk:tk
+
+[Timer]
+OnBootSec=60s
+OnUnitActiveSec=60s
+Persistent=false
+
+[Install]
+WantedBy=timers.target

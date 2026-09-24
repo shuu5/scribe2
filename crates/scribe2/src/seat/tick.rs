@@ -12,6 +12,10 @@
 //! 注入は既存の 1 入口（[`deliver_within`]）を 1 回撃つだけで、`tick.jsonl` の 1 行もその経路が書く。口座は計測済みの記録
 //! （[`fresh_rows`]）を読むだけで**測らない**（FR38・子 process を起こさない）。env・home・自分の実行 file の場所は読まない
 //! （C2.2）。
+//!
+//! 周期を作る systemd の unit は [`install`] が導出して書く（設計 §3・契約表の行 b）。
+
+pub mod install;
 
 use super::inject::{deliver_within, last_own_payload, pass_input, Blocked, Delivery, Request, Settled};
 use super::state::{self, Event, SeatState, Stamp};

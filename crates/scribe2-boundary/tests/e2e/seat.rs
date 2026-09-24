@@ -319,7 +319,8 @@ fn seat_working_memory_subcommands_are_gone_from_the_usage() {
     fs::remove_dir_all(&dir).ok();
     assert!(!usage.contains("--wm-dir"), "退避物の置き場の flag も残らない: {usage}");
     let takers: Vec<&str> = usage.split(['<', '|', '>']).filter(|mouth| mouth.contains("--rules")).collect();
-    assert_eq!(takers, [TICK_USAGE], "席の口で `--rules` を受けるのは tick だけ: {usage}");
+    let unit = |verb: &str| format!("tick {verb} --state-dir S --target S:W --unit-dir U --binary PATH [--rules F]");
+    assert_eq!(takers, [TICK_USAGE.to_owned(), unit("install"), unit("uninstall")], "席の口で `--rules` を受けるのは tick（と unit の口 2 つ・`s2-07l.583`）だけ: {usage}");
     for kept in ["register", "launch", "tick"] {
         assert!(usage.contains(&format!("{kept} --")), "{kept} は使い方に在る: {usage}");
     }
@@ -1558,4 +1559,332 @@ fn seat_tick_missing_rule_rows_and_unreadable_store_are_errors() {
     let out = tick_run(&place, &[]);
     assert_eq!((rc_of(&out), stdout_of(&out)), (i32::from(RC_REFUSED), error("store")), "event log が読めない");
     assert!(tick_keys(&place).is_empty() && tick_ladder(&place).is_none(), "どの周も 0 key・記録 0");
+}
+
+// ─────────────────── tick の unit（seat-heartbeat.md §3・契約表の行 b・`s2-07l.583`・接頭辞 `seat_unit_`） ───────────────────
+//
+// unit dir と binary は tmp・`systemctl` は PATH の偽 script が引数を 1 行ずつ file に残す（host の systemd を 1 度も撃たない）。
+// 置き場と登録 row は tick の歯の fixture（[`tick_place`]）を使う。unit の字面は契約から組む（実装の導出を使わない）。
+
+/// 偽 systemctl の呼出の記録。
+const UNIT_CALLS: &str = "systemctl-calls";
+/// 器の印（2 file の先頭行・契約の字面）。
+const UNIT_MARK: &str = "tick-install schema=1";
+
+/// unit の歯の置き場（tick の置き場 + unit dir + binary の path）。
+struct UnitPlace {
+    /// 置き場・登録 row・偽の PATH。
+    tick: TickPlace,
+    /// `--unit-dir`。
+    units: PathBuf,
+    /// `--binary`（在る必要は無い＝unit の字面にだけ載る）。
+    binary: String,
+}
+
+impl UnitPlace {
+    /// service と timer の file 名（契約の字面・`<NAME>-seat-tick-<潰した target>`）。
+    fn names(&self) -> [String; 2] {
+        [format!("{NAME}-seat-tick-{TICK_SEAT}.service"), format!("{NAME}-seat-tick-{TICK_SEAT}.timer")]
+    }
+
+    /// unit dir の下の file。
+    fn unit(&self, name: &str) -> PathBuf {
+        self.units.join(name)
+    }
+}
+
+/// 置き場を 1 つ作り、偽 systemctl を偽の bin に足す。
+fn unit_place(registered: bool) -> UnitPlace {
+    let tick = tick_place(registered);
+    let path = tick.dir.join("bin").join("systemctl");
+    fs::write(&path, format!("#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\n", tick.at(UNIT_CALLS).display())).ok();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).ok();
+    let units = tick.dir.join("units");
+    let binary = tick.dir.join("opt").join(NAME).display().to_string();
+    UnitPlace { tick, units, binary }
+}
+
+/// `seat tick <verb>` を偽の PATH で 1 回撃つ（`--binary` は置き場の値・`extra` は `--rules` など）。
+fn unit_run(place: &UnitPlace, verb: &str, extra: &[&str]) -> Output {
+    let binary = place.binary.clone();
+    let mut args = vec!["--binary", binary.as_str()];
+    args.extend_from_slice(extra);
+    unit_run_bare(place, verb, &args)
+}
+
+/// `seat tick <verb> --state-dir --target --unit-dir` に `rest` だけを足して撃つ（`--binary` を欠く周の形）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn unit_run_bare(place: &UnitPlace, verb: &str, rest: &[&str]) -> Output {
+    let (state, units) = (place.tick.state.display().to_string(), place.units.display().to_string());
+    Command::new(bin())
+        .args(["seat", "tick", verb, "--state-dir", &state, "--target", TICK_TARGET, "--unit-dir", &units])
+        .args(rest)
+        .env("PATH", &place.tick.path)
+        .output()
+        .expect("binary を起動できる")
+}
+
+/// 偽 systemctl の呼出（引数の行・呼んだ順）。
+fn unit_calls(place: &UnitPlace) -> Vec<String> {
+    fs::read_to_string(place.tick.at(UNIT_CALLS)).unwrap_or_default().lines().map(str::to_owned).collect()
+}
+
+/// unit dir の直下の名（昇順・dir も含む）。
+fn unit_listing(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(dir)
+        .map(|found| found.filter_map(Result::ok).map(|entry| entry.file_name().to_string_lossy().into_owned()).collect())
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
+/// `tick.jsonl` のうち `who`=`seat-tick-install` の行。
+fn unit_installs(place: &UnitPlace) -> Vec<String> {
+    tick_injections(&place.tick).into_iter().filter(|line| acct_text(line, "who").as_deref() == Some("seat-tick-install")).collect()
+}
+
+/// `seat.tick_interval_s` だけを持つ rules の写し（`n` 秒）。
+fn unit_rules(place: &UnitPlace, n: u64) -> String {
+    let body = format!(
+        "schema = 1\n\n[[rule]]\nid = \"seat.tick_interval_s\"\nkind = \"SeatTickIntervalS\"\nvalue = {n}\nenabled = true\nruling = \"r\"\nruled_at = \"d\"\n"
+    );
+    fixture(&place.tick.dir, "unit-rules.toml", &body)
+}
+
+/// 導出の 2 file の本文（契約の字面から組む・設計 §3）: `rules` は `--rules` の値・`n` は周期。
+fn unit_expected(place: &UnitPlace, rules: Option<&str>, n: u64) -> [String; 2] {
+    let state = place.tick.state.display();
+    let rules = rules.map(|found| format!(" --rules {found}")).unwrap_or_default();
+    [
+        format!(
+            "# {NAME} {UNIT_MARK}\n[Unit]\nDescription={NAME} seat tick {TICK_TARGET}\n\n[Service]\nType=oneshot\nExecStart={} seat tick --state-dir {state} --target {TICK_TARGET}{rules}\n",
+            place.binary
+        ),
+        format!(
+            "# {NAME} {UNIT_MARK}\n[Unit]\nDescription={NAME} seat tick timer {TICK_TARGET}\n\n[Timer]\nOnBootSec={n}s\nOnUnitActiveSec={n}s\nPersistent=false\n\n[Install]\nWantedBy=timers.target\n"
+        ),
+    ]
+}
+
+/// 2 file の今の本文（無い file は空）。
+fn unit_bodies(place: &UnitPlace) -> [String; 2] {
+    place.names().map(|name| fs::read_to_string(place.unit(&name)).unwrap_or_default())
+}
+
+/// 導出の 2 file（install した後の service と timer）の外形を snapshot に固定する（C12.5）。tmp の根は `[tmp]` に置換する。
+#[test]
+fn seat_unit_external_form() {
+    let place = unit_place(true);
+    let out = unit_run(&place, "install", &[]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    let [service, timer] = unit_bodies(&place);
+    let [service_name, timer_name] = place.names();
+    let form = format!("== {service_name}\n{service}== {timer_name}\n{timer}").replace(&place.tick.dir.display().to_string(), "[tmp]");
+    fs::remove_dir_all(&place.tick.dir).ok();
+    insta::assert_snapshot!(form);
+}
+
+/// (a) install は登録 row の席の service と timer を導出の bytes で書き（`Environment` / `WorkingDirectory` / `%h` 無し・周期は rules 行の
+/// 値・先頭行は器の印）、偽 systemctl を `daemon-reload` → `enable --now <timer>` の順で 2 回撃ち、`tick.jsonl` に
+/// `who`=`seat-tick-install` の 1 行を足して rc 0。
+#[test]
+fn seat_unit_install_writes_the_derived_pair_and_enables_the_timer() {
+    let place = unit_place(true);
+    let [service_name, timer_name] = place.names();
+    let out = unit_run(&place, "install", &[]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert!(stdout_of(&out).starts_with(&format!("seat tick install: installed timer={timer_name} ")), "{}", stdout_of(&out));
+    assert_eq!(unit_listing(&place.units), [service_name.clone(), timer_name.clone()], "2 file だけ（一時 file を残さない）");
+    assert_eq!(unit_bodies(&place), unit_expected(&place, None, 60), "導出の bytes（周期は埋め込みの seat.tick_interval_s = 60）");
+    for body in unit_bodies(&place) {
+        assert!(body.starts_with(&format!("# {NAME} {UNIT_MARK}\n")), "先頭行は器の印: {body}");
+        for banned in ["Environment", "WorkingDirectory", "%h"] {
+            assert!(!body.contains(banned), "{banned} を持たない: {body}");
+        }
+    }
+    assert_eq!(unit_calls(&place), ["--user daemon-reload".to_owned(), format!("--user enable --now {timer_name}")], "reload → enable の順");
+    let installs = unit_installs(&place);
+    assert_eq!(installs.len(), 1, "記録 1 行: {installs:?}");
+    assert_eq!(acct_text(installs.first().map(String::as_str).unwrap_or_default(), "what").as_deref(), Some(timer_name.as_str()), "what は unit 名");
+    let place = unit_place(true);
+    let rules = unit_rules(&place, 90);
+    let out = unit_run(&place, "install", &["--rules", &rules]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(unit_bodies(&place), unit_expected(&place, Some(&rules), 90), "`--rules` は ExecStart の末尾に載り、周期は写しの行の値");
+    fs::remove_dir_all(&place.tick.dir).ok();
+}
+
+/// 断りを測る: `rest`（`--binary` を含む）で撃つと rc 1・stderr に `seat tick <verb>: refused <tail> target=<target>`・偽 systemctl の
+/// 呼出は増えず、unit dir の 2 file の本文も動かない。
+fn unit_assert_refused(place: &UnitPlace, verb: &str, rest: &[&str], tail: &str) {
+    let (calls, bodies) = (unit_calls(place).len(), unit_bodies(place));
+    let out = unit_run_bare(place, verb, rest);
+    assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "{tail}: rc 1: {}", stderr_of(&out));
+    assert!(stderr_of(&out).contains(&format!("seat tick {verb}: refused {tail} target={TICK_TARGET}")), "{tail}: {}", stderr_of(&out));
+    assert_eq!(unit_calls(place).len(), calls, "{tail}: systemctl 0 回");
+    assert_eq!(unit_bodies(place), bodies, "{tail}: file は動かない");
+}
+
+/// (b) 同じ bytes の再 install は `unchanged`（file の mtime 不変・`enable --now` だけ 1 回）・1 byte 違う既存 file は `unit-exists` で
+/// file 不変・systemctl 0 回・rc 1。
+#[test]
+fn seat_unit_install_is_unchanged_on_same_bytes_and_refuses_a_different_file() {
+    let place = unit_place(true);
+    let [service_name, timer_name] = place.names();
+    assert_eq!(rc_of(&unit_run(&place, "install", &[])), i32::from(RC_OK));
+    let mtimes = || place.names().map(|name| fs::metadata(place.unit(&name)).and_then(|meta| meta.modified()).ok());
+    let before = mtimes();
+    let out = unit_run(&place, "install", &[]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert!(stdout_of(&out).starts_with(&format!("seat tick install: unchanged timer={timer_name} ")), "{}", stdout_of(&out));
+    assert_eq!(mtimes(), before, "file は書き直さない");
+    assert_eq!(unit_calls(&place).get(2..), Some(&[format!("--user enable --now {timer_name}")][..]), "enable だけ 1 回");
+    let changed = unit_expected(&place, None, 60)[0].replacen("oneshot", "oneshoT", 1);
+    fs::write(place.unit(&service_name), &changed).ok();
+    unit_assert_refused(&place, "install", &["--binary", &place.binary], &format!("reason=unit-exists unit={service_name}"));
+    assert_eq!(fs::read_to_string(place.unit(&service_name)).unwrap_or_default(), changed, "1 byte 違いの file は不変");
+    fs::remove_dir_all(&place.tick.dir).ok();
+}
+
+/// (b) 登録 row 無しは `no-row`・`seat.tick_interval_s` を欠く `--rules` は `no-rule`（どちらも file 0・systemctl 0 回・rc 1）。
+#[test]
+fn seat_unit_install_refuses_no_row_and_no_rule_without_a_file() {
+    let bare = unit_place(false);
+    unit_assert_refused(&bare, "install", &["--binary", &bare.binary], "reason=no-row");
+    assert!(unit_listing(&bare.units).is_empty(), "file 0");
+    fs::remove_dir_all(&bare.tick.dir).ok();
+    let place = unit_place(true);
+    let rules = fixture(&place.tick.dir, "no-interval.toml", "schema = 1\n");
+    unit_assert_refused(&place, "install", &["--binary", &place.binary, "--rules", &rules], "reason=no-rule");
+    assert!(unit_listing(&place.units).is_empty(), "file 0");
+    fs::remove_dir_all(&place.tick.dir).ok();
+}
+
+/// (c) uninstall は install と同じ `--binary` / `--rules` で導出し直し、`disable --now` の後に 2 file を `.retired/<name>.<ts>` へ同じ
+/// bytes で移す（元の場所に無い）。
+#[test]
+fn seat_unit_uninstall_retires_the_pair_with_the_same_bytes() {
+    let place = unit_place(true);
+    let rules = unit_rules(&place, 90);
+    assert_eq!(rc_of(&unit_run(&place, "install", &["--rules", &rules])), i32::from(RC_OK));
+    let installed = unit_bodies(&place);
+    let calls = unit_calls(&place).len();
+    let before = unix_now();
+    let out = unit_run(&place, "uninstall", &["--rules", &rules]);
+    let after = unix_now();
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    let timer_name = &place.names()[1];
+    assert_eq!(unit_calls(&place).get(calls..), Some(&[format!("--user disable --now {timer_name}")][..]), "disable --now 1 回");
+    assert_eq!(unit_listing(&place.units), [".retired"], "元の場所に無い");
+    let retired = place.units.join(".retired");
+    let moved = unit_listing(&retired);
+    assert_eq!(moved.len(), 2, "{moved:?}");
+    for (name, body) in place.names().iter().zip(&installed) {
+        let stamp = |entry: &&String| entry.strip_prefix(&format!("{name}.")).and_then(|ts| ts.parse::<u64>().ok());
+        let found = moved.iter().find(|entry| stamp(entry).is_some_and(|ts| (before..=after).contains(&ts)));
+        let found = found.map(|entry| fs::read_to_string(retired.join(entry)).unwrap_or_default());
+        assert_eq!(found.as_ref(), Some(body), "{name} は .retired/<name>.<ts> に同じ bytes");
+    }
+    fs::remove_dir_all(&place.tick.dir).ok();
+}
+
+/// (c) uninstall の断り: `--binary` を欠く周は使い方の誤り・別の `--binary` は導出し直した bytes が違う＝`unit-exists`・印の無い file は
+/// `unit-foreign`・印は在るが 1 byte 違う file は `unit-exists`（どれも動かさず systemctl 0 回）。
+#[test]
+fn seat_unit_uninstall_refuses_foreign_or_changed_files_without_moving_them() {
+    let place = unit_place(true);
+    let [service_name, timer_name] = place.names();
+    let rules = unit_rules(&place, 90);
+    assert_eq!(rc_of(&unit_run(&place, "install", &["--rules", &rules])), i32::from(RC_OK));
+    let installed = unit_bodies(&place);
+    for rest in [&["--rules", rules.as_str()][..], &[]] {
+        let out = unit_run_bare(&place, "uninstall", rest);
+        assert_eq!((rc_of(&out), stdout_of(&out)), (i32::from(RC_REFUSED), String::new()), "`--binary` を欠く周は使い方の誤り");
+        assert!(stderr_of(&out).starts_with("usage: seat "), "{}", stderr_of(&out));
+    }
+    unit_assert_refused(&place, "uninstall", &["--binary", "/elsewhere/bin", "--rules", &rules], &format!("reason=unit-exists unit={service_name}"));
+    assert_eq!(unit_bodies(&place), installed, "断った周は動かない");
+    let changed = format!("{}\n", installed[1]);
+    fs::write(place.unit(&timer_name), &changed).ok();
+    unit_assert_refused(&place, "uninstall", &["--binary", &place.binary, "--rules", &rules], &format!("reason=unit-exists unit={timer_name}"));
+    fs::write(place.unit(&service_name), "[Service]\nExecStart=/bin/true\n").ok();
+    unit_assert_refused(&place, "uninstall", &["--binary", &place.binary, "--rules", &rules], &format!("reason=unit-foreign unit={service_name}"));
+    assert_eq!(unit_listing(&place.units), [service_name, timer_name], "退役 dir を作らない");
+    assert!(!unit_calls(&place).iter().any(|call| call.contains("disable")), "disable を撃たない");
+    fs::remove_dir_all(&place.tick.dir).ok();
+}
+
+/// doctor を unit の置き場の `--state-dir` と `extra` で撃つ（tmux は偽の PATH・socket は無い path）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn unit_doctor(place: &UnitPlace, extra: &[&str]) -> Output {
+    let state = place.tick.state.display().to_string();
+    let socket = place.tick.at("no-such-sock").display().to_string();
+    Command::new(bin())
+        .args(["doctor", "--state-dir", &state, "--tmux-socket", &socket])
+        .args(extra)
+        .env("PATH", &place.tick.path)
+        .output()
+        .expect("binary を起動できる")
+}
+
+/// doctor の登録 row の行（`seat: ` 始まり）。
+fn unit_doctor_rows(out: &Output) -> Vec<String> {
+    stdout_of(out).lines().filter(|line| line.starts_with("seat: ")).map(str::to_owned).collect()
+}
+
+/// (d) doctor `--unit-dir U --binary PATH` は登録 row の行ごとに `tick-unit=present|absent|foreign` を足し（install 後 present・撤去後
+/// absent・印の無い file は foreign）、`--unit-dir` だけ・`--binary` だけは使い方の誤り、`--unit-dir` 無しは項目を足さない。
+#[test]
+fn seat_unit_doctor_names_present_absent_and_foreign_per_row() {
+    let place = unit_place(true);
+    let units = place.units.display().to_string();
+    let binary = place.binary.clone();
+    let probe = ["--unit-dir", units.as_str(), "--binary", binary.as_str()];
+    let word = |want: &str| {
+        let out = unit_doctor(&place, &probe);
+        assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+        let rows = unit_doctor_rows(&out);
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert!(rows.iter().all(|row| row.ends_with(&format!(" tick-unit={want}"))), "{want}: {rows:?}");
+    };
+    word("absent");
+    assert_eq!(rc_of(&unit_run(&place, "install", &[])), i32::from(RC_OK));
+    word("present");
+    let bare = unit_doctor(&place, &[]);
+    assert_eq!(rc_of(&bare), i32::from(RC_OK));
+    assert!(!stdout_of(&bare).contains("tick-unit="), "`--unit-dir` 無しは項目を足さない: {}", stdout_of(&bare));
+    let [service_name, timer_name] = place.names();
+    fs::write(place.unit(&timer_name), "[Timer]\nOnUnitActiveSec=1s\n").ok();
+    word("foreign");
+    fs::remove_file(place.unit(&timer_name)).ok();
+    word("foreign");
+    fs::remove_file(place.unit(&service_name)).ok();
+    word("absent");
+    for half in [&probe[..2], &probe[2..]] {
+        let out = unit_doctor(&place, half);
+        assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "{half:?}: 片方だけは使い方の誤り");
+        assert!(unit_doctor_rows(&out).is_empty(), "{half:?}: {}", stdout_of(&out));
+    }
+    fs::remove_dir_all(&place.tick.dir).ok();
+}
+
+/// (e) 使い方の 1 行に `tick install …` / `tick uninstall …` が在り、`seat tick install` の flag の閉包は tmux の flag を受けない。
+#[test]
+fn seat_unit_usage_names_install_and_uninstall() {
+    let usage = stderr_of(&run_seat(&[]));
+    for verb in ["install", "uninstall"] {
+        let mouth = format!("|tick {verb} --state-dir S --target S:W --unit-dir U --binary PATH [--rules F]|");
+        assert!(usage.contains(&mouth), "{verb} は使い方に在る: {usage}");
+    }
+    let place = unit_place(true);
+    let out = unit_run(&place, "install", &["--tmux-socket", "x"]);
+    assert_eq!(rc_of(&out), 2, "unit の口は tmux の flag を受けない: {}", stderr_of(&out));
+    assert!(unit_listing(&place.units).is_empty() && unit_calls(&place).is_empty(), "file 0・systemctl 0 回");
+    fs::remove_dir_all(&place.tick.dir).ok();
 }

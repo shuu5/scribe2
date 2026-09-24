@@ -5,6 +5,7 @@
 
 use super::cycle;
 use super::role;
+use super::tick::install::Verb;
 use crate::cli_args::{self, Allowed};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
 use crate::fleet::select::Model;
@@ -13,7 +14,7 @@ use std::path::Path;
 
 /// `seat` の使い方。
 pub fn usage() -> String {
-    "usage: seat <register --state-dir S --target T --role R --account L --launch FILE [--anchor DIR]|launch --state-dir S --role R --target S:W [--account L] [--anchor DIR] [--model M] [--restore CMD]|ruling add --state-dir S --target T --words W [--bead B] [--rule ID]|ruling ls --state-dir S|tick --state-dir S --target S:W [--rules F]|<label> [--orchestrator] [-c|-r ID] [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]".to_owned()
+    "usage: seat <register --state-dir S --target T --role R --account L --launch FILE [--anchor DIR]|launch --state-dir S --role R --target S:W [--account L] [--anchor DIR] [--model M] [--restore CMD]|ruling add --state-dir S --target T --words W [--bead B] [--rule ID]|ruling ls --state-dir S|tick --state-dir S --target S:W [--rules F]|tick install --state-dir S --target S:W --unit-dir U --binary PATH [--rules F]|tick uninstall --state-dir S --target S:W --unit-dir U --binary PATH [--rules F]|<label> [--orchestrator] [-c|-r ID] [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]".to_owned()
 }
 
 /// `seat` の既知の verb（閉じた語・宣言順・設計 contract-source.md §17 の形 (vii)）。短い形の第 1 token（口座 label）は
@@ -96,15 +97,29 @@ const ALLOWED_TICK: &[cli_args::Allowed] = &[
     value("--tmux-socket"),
     value("--capture-file"),
 ];
+/// `seat tick install` / `uninstall`（unit の導出と書き・設計 seat-heartbeat.md §3・pane を読まないので tmux の flag は受けない）。
+const ALLOWED_TICK_UNIT: &[cli_args::Allowed] = &[
+    value("--state-dir"),
+    value("--target"),
+    value("--unit-dir"),
+    value("--binary"),
+    value("--rules"),
+];
 
-/// [`SeatCommand`] が受ける flag の集合（[`dispatch`] が verb を選んだ直後に [`crate::cli_args::parse`] へ渡す）。
-const fn allowed_of(command: SeatCommand) -> &'static [Allowed] {
+/// [`SeatCommand`] が受ける flag の集合（[`dispatch`] が verb を選んだ直後に [`crate::cli_args::parse`] へ渡す・`rest` は verb の後ろ）。
+fn allowed_of(command: SeatCommand, rest: &[String]) -> &'static [Allowed] {
     match command {
         SeatCommand::Register => ALLOWED_REGISTER,
         SeatCommand::Launch => ALLOWED_LAUNCH,
         SeatCommand::Ruling => ALLOWED_RULING,
+        SeatCommand::Tick if unit_verb(rest).is_some() => ALLOWED_TICK_UNIT,
         SeatCommand::Tick => ALLOWED_TICK,
     }
+}
+
+/// `seat tick` の後ろの第 1 token が unit の動詞（`install` / `uninstall`）か。
+fn unit_verb(rest: &[String]) -> Option<Verb> {
+    rest.first().and_then(|token| Verb::parse(token))
 }
 
 /// `seat` に続く引数を捌く。既知の verb は選んだ直後に閉包の検査を 1 回撃つ（未知の flag と `--help` を typed に断る）。
@@ -112,7 +127,8 @@ pub fn dispatch(args: &[String]) -> Outcome {
     let first = args.first().map(String::as_str);
     let verb = first.and_then(SeatCommand::parse);
     if let Some(command) = verb {
-        if let Err(error) = crate::cli_args::parse(args.get(1..).unwrap_or_default(), allowed_of(command)) {
+        let rest = args.get(1..).unwrap_or_default();
+        if let Err(error) = crate::cli_args::parse(rest, allowed_of(command, rest)) {
             return crate::cli_args::refusal("seat", &error, usage());
         }
     }
@@ -243,6 +259,9 @@ fn ruling_of(rest: &[String]) -> Outcome {
 /// `seat tick`（設計 seat-heartbeat.md §2）: `--state-dir` と `S:W` の `--target` は必須・値欠けと空文字は使い方の誤り
 /// （`--rules` も同じ）。rules は `rules` の口と同じ 1 本（`--rules` か埋め込み）で読み、判定は [`super::tick::run`] が持つ。
 fn tick_of(args: &[String]) -> Outcome {
+    if let Some(verb) = unit_verb(args) {
+        return tick_unit_of(verb, args.get(1..).unwrap_or_default());
+    }
     let [state_dir, target] = ["--state-dir", "--target"].map(|name| required_nonempty(args, name));
     let [socket, capture, rules] = ["--tmux-socket", "--capture-file", "--rules"].map(|name| nonempty(args, name));
     let (Ok(state_dir), Ok(target), Ok(socket), Ok(capture), Ok(_)) = (state_dir, target, socket, capture, rules) else {
@@ -253,6 +272,20 @@ fn tick_of(args: &[String]) -> Outcome {
     }
     let flags = super::tick::Flags { state_dir, target, socket, capture };
     super::tick::run(&flags, crate::rules::cli::open(args))
+}
+
+/// `seat tick install|uninstall`（設計 seat-heartbeat.md §3）: `--state-dir` / `S:W` の `--target` / `--unit-dir` / `--binary` は必須で、
+/// 値欠けと空文字は使い方の誤り（`--rules` も同じ）。撤去も同じ引数で導出し直して比べる＝どちらの口も同じ引数の形。
+fn tick_unit_of(verb: Verb, args: &[String]) -> Outcome {
+    let [state_dir, target, unit_dir, binary] = ["--state-dir", "--target", "--unit-dir", "--binary"].map(|name| required_nonempty(args, name));
+    let (Ok(state_dir), Ok(target), Ok(unit_dir), Ok(binary), Ok(rules)) = (state_dir, target, unit_dir, binary, nonempty(args, "--rules")) else {
+        return refused_usage();
+    };
+    if !target_well_formed(target) {
+        return refused_usage();
+    }
+    let flags = super::tick::install::Flags { state_dir, target, unit_dir, binary, rules };
+    super::tick::install::run(verb, &flags, crate::rules::cli::open(args))
 }
 
 /// `seat ruling add`: 対話面の席の逐語を `RulingReceived` 1 件として書き、ts（裁定 id）を stdout の 1 行で返す。

@@ -11,6 +11,7 @@ use crate::rules::manifest::Manifest;
 use crate::rules::RuleValue;
 use std::path::Path;
 
+use super::tick::install::{doctor_word, Probe};
 use super::RuleRead;
 
 /// 席の役割。**variant の列挙は core が持つ**（文書は写さない・ADR-0013 §2.1）。
@@ -342,12 +343,22 @@ pub fn render_reconcile(state: Option<&State>, live: Option<&[String]>) -> Strin
 /// doctor の項目（event log を読み、tmux の `list-panes` を 1 回撃つ・C3.2）: 登録 row の一覧（1 row 1 行・
 /// `model` と `default` と `paths` の欄つき・log を読めない周は 0 行）の後に突合の 1 行。`rules` は `--rules` の値（口座の行と
 /// 同じ形・無ければ埋め込み）で、役割の既定の行を引く manifest（読めない周は `default=` の欄が理由を名乗る・rc は変えない）。
-pub fn doctor_lines(state_dir: &Path, socket: Option<&str>, rules: Option<&str>) -> Vec<String> {
+/// `units`（`--unit-dir` と `--binary` がそろった周だけ）が在る周は row の行の末尾に `tick-unit=` の 1 語を足し
+/// （[`crate::seat::tick::install::doctor_word`]・設計 seat-heartbeat.md §3）、無い周は row の行を 1 byte も変えない。
+pub fn doctor_lines(state_dir: &Path, socket: Option<&str>, rules: Option<&str>, units: Option<&Probe>) -> Vec<String> {
     let state = store::read_all(state_dir).ok().map(|events| replay(&events));
     let panes = super::tmux_stdout(socket, &["list-panes", "-a", "-F", "#{session_name}:#{window_name}"]);
     let live: Option<Vec<String>> = panes.map(|out| out.lines().map(str::to_owned).collect());
     let manifest = super::manifest_read(rules.map_or_else(Manifest::embedded, |path| Manifest::load(Path::new(path))));
-    let mut lines = state.as_ref().map(|found| doctor_rows(found, &manifest)).unwrap_or_default();
+    let rows = |found: &State| {
+        let lines = doctor_rows(found, &manifest);
+        let Some(probe) = units else {
+            return lines;
+        };
+        let words = found.registrations.values().map(|latest| doctor_word(state_dir, &latest.registration.target, probe, &manifest));
+        lines.into_iter().zip(words).map(|(line, word)| format!("{line} {word}")).collect()
+    };
+    let mut lines = state.as_ref().map(rows).unwrap_or_default();
     lines.push(render_reconcile(state.as_ref(), live.as_deref()));
     lines
 }
