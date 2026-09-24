@@ -315,6 +315,30 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
   (j) 形 7 の直後の 2 度目: 通した直後に同じ便へ撃つと rc 1 で、理由の行が段の条件の語を持ち「最新の `Gated` の後に 1 度戻している」の語を持たない（AC47「理由 = 段」）。受付の 4 条件より先に「1 度戻している」の判定を置く変異で赤になる（既存の歯は rc と記帳 0 件だけを測るので、この変異は生き残る）。
   (i)(j) は base の挙動を測る歯で base でも緑になるので、`crates/scribe2/src/pipe/regate.rs` の歯の区間の行頭に retroactive の札（本行の契約 bead の id）を置き、上の変異の proof（変異ごとに落ちる歯の名）を契約 bead の notes に記帳する。e2e の file（(a)〜(f)）には札を置かない（(a)(e) が機能不在の RED で入口を測る）。
 
+## 24. 札と lock の所有者を pid の再利用に釣られず判じる — 本文に起動時刻を添え、読み手は pid が生きていても起動時刻が違えば死んだと判じる（契約表の行 u・§5 の続き・`s2-07l.608`）
+
+やさしく言うと: 器は「札に書かれた pid の process が居るか」で driver の生死を判じる。process の番号は使い回されるので、死んだ driver の番号を別の新しい process が受け取ると、器は死んだ driver を生きていると読み、その便を誰も継がない。札に「番号」だけでなく「その process がいつ起動したか」も書いておけば、番号が同じでも起動時刻が違う相手を別人と判じられる。
+
+- 出所: 台帳 `s2-07l.608`（memo・2026-09-24 に 2 回・CI と local で `pipe_dispatch_gated_pass_dead_ticket_` / `pipe_dispatch_regated_dead_ticket_` が交互に落ちる）。2 つの落ち方: (a) 1 周が `resumed:0` を返す（0.12 秒）＝死んだ札の pid を隣の process が受け取り「生きている」と読んだ。歯の fixture は `true` を起こして抜けた pid を札に書くので、負荷の高い周（隣の worktree の build・歯の並列）に再利用が起きやすい。(b) `gone(&ticket)` の 20 秒の待ちが切れる＝継いだ resume の子（toy の gate → land）が負荷で 20 秒を越える。落ちた歯の残骸に `Failed precheck` の event が在ったが、`Driver` は `Drop` で札を外し `process::exit` の site は無いので、札が残る道は「process が死ぬ」だけ（候補 2 は反証）。
+- 現物（verified・main 75829d9）:
+  - 札と lock の本文は `crates/scribe2/src/fleet/store.rs` の `acquire_with` が `create_new` の直後に `process::id()` を 10 進 1 行で書く 1 か所。読み手は `lock_owner`（pure・`owner_pid` が 10 進 1 行だけを受ける）で、`probe`（実物は `started_ms`・`/proc/<pid>/stat` の starttime）が `Absent` の周だけ `Dead`、`Started(_)` は値を見ずに `Live`。
+  - `Driver`（`crates/scribe2/src/pipe/mod.rs`）は `hold` で `acquire_with(Reclaim::DeadOnly)` を撃ち、`Drop` で本文を pid として読んで自分の pid と等しい札だけ外す。
+  - 受付札（gate-cost.md §3.2）と追記の lock も同じ 1 本を使う（C6.3）＝本行で直すと 3 つの面が同時に直る。
+  - 歯の fixture `put_dead_ticket`（`crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs`）は抜けた `true` の pid を 1 行で書き、`gone` は 20 秒・50 ms 刻みで不在を待つ。
+- 形（1 つずつ歯が測る・行 u の done と 1:1）:
+  1. **本文に起動時刻を添える**: `acquire_with` は `<pid> <starttime>`（10 進 2 語・空白 1 つ・末尾改行 1 つ・starttime は `started_ms` と同じ単位の値）を書く。自分の起動時刻を読めない周（`Probe::Unreadable`）は今までどおり pid 1 行を書く（書けないを断りにしない）。
+  2. **読み手は 2 語も受ける**: `owner_pid` の後継は本文を「pid 1 語」か「pid + 起動時刻の 2 語」の 2 形で読み、それ以外は `Unreadable`。`lock_owner` は 2 語の周に `probe` が `Started(t)` を返して **`t` が本文の値と違えば `Dead`**（pid の再利用）、等しければ `Live`。1 語の周は今までどおり（`Started(_)` は `Live`）＝古い札との跨版互換（schema は変えない・新しい語が無い本文は旧形）。
+  3. **`Driver` の `Drop` は先頭の語で自分を判じる**（2 語の本文でも自分の札を外す・他人の札は落とさない）。
+  4. **歯の fixture は再利用に強い死んだ札を書く**: `put_dead_ticket` は抜けた `true` の pid に加えて、その process の起動時刻と一致しない値（例 `1`）を 2 語目に書く（pid が再利用されても `Dead`）。`gone` の待ちは 20 秒から 60 秒へ（継いだ子は toy の gate と land を撃つ・負荷の周の実測は 20 秒超・上限は rules 行にしない＝歯の定数）。
+  5. **外形は不変**: 1 周の行（`dispatch=…`）・`dispatch ls` の行・`Ticket` の 4 値・`Owner` の 3 値・`EventKind` の列・受付札と追記の lock の断りの字面は 1 字も変わらない。
+- 触らない: `Reclaim` の 2 値と回収の順（§5 の「原子的でない」は本行の外）・`started_ms` の読み方（`btime` → `<pid>/stat`）・`LockPolicy`・`Driver::hold` の排他。
+- 歯（置き場は既存の file）:
+  - `crates/scribe2/src/fleet/store.rs` の in-file の歯（`fleet_store_owner_` 接頭辞）: 2 語の本文で `Started(t)` の `t` が本文と違えば `Dead`・等しければ `Live`・`Absent` は `Dead`・1 語の本文は `Started(_)` で `Live`（base では 2 語の本文が `Unreadable` ＝ RED）／ 3 語や非数の本文は `Unreadable` ／ `acquire_with` が書いた本文が 2 語で 1 語目が自分の pid・2 語目が `started_ms(自分)` の値（fixture の proc root を注入・base では 1 語 ＝ RED）。
+  - `crates/scribe2/src/pipe/mod.rs` の in-file の歯（`pipe_driver_ticket_` 接頭辞・既存の `Driver` の歯の隣）: 2 語の本文の自分の札を `Drop` が外し、1 語目が他人の pid の札は外さない（base では 2 語の自分の札を外せない ＝ RED）。
+  - `crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs`: `put_dead_ticket` と `gone` の形 4 の差し替えだけ（既存の歯は約束を変えずに緑のまま・新しい歯は足さない）。
+- 却下: 歯の側だけで済ませる（fixture に 2 語を書いても読み手が 1 語しか受けなければ `Unreadable`＝「読めない札は触らない」で同じく `resumed:0`）／`gone` を無限に待つ（負荷で止まった子を歯が隠す）／pid の namespace や `/proc` の inode で弁別する（`started_ms` の 1 本を増やす・C6.3）／lock file の本文を JSON にする（1 行 2 語で足りる・器の唯一の lock 実装を重くしない）。
+- 後続: §5 の「死んだ所有者の札の回収は原子的でない」は本行の外（同じ面だが別の穴）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -569,4 +593,14 @@ growth = ["crates/scribe2/src/pipe/dispatch.rs:40", "crates/scribe2/src/pipe/reg
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_regated_", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_regate_forms_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_gated_pass_ pipe_dispatch_driver_ pipe_dispatch_waiting_gate_"]
 size = "M"
 done = "(1) revivals の待ちの段でない枝に、gated の周の「段が Implemented ∧ regated_since_gate が真 ∧ 札が Absent か Dead」が 1 つ足り、読み手は regate.rs の既存の 1 本（可視性を pipe の中へ開くだけで本体は不変）、event の列は revivals が 1 回だけ読み、既存の driver_is_dead と passed_gate と待ちの段の枝は 1 字も変わらず、札の無い regate 済みの便が手動の 1 周で --drive 付きの resume で起こされて（resumed:1）Gated が 1 件増えて Landed まで進む (2) regate の後に PASS の gate を通って pipe follow で Implemented へ戻った便は resumed:0、札の所有者が生きている便と札を読めない便は resumed:0 で札も触らず、regate の記帳の無い Implemented の便は既存の歯 pipe_dispatch_driver_live_run_without_a_ticket_is_left_alone が緑のまま起こされない (3) 段を前へ進めなかった driver の終端の 1 周は regate 済みの便を起こさず、その後の手動の 1 周は起こす (4) 札の所有者が死んでいる判定 FAIL の Gated の便は regate を通って worktree の path と HEAD と判定の verdict が変わらず、続く手動の 1 周は resumed:1 で Gated が 1 件だけ増え（二重起動 0）、判定 FAIL の Gated の便（札なしと札の所有者が死んでいる 2 形）に regate を撃たずに手動の 1 周を K 回撃っても Implemented の記帳は 0 件（K と 2 形を assert に出す） (5) Input に項目を足さない (6) Revive・WaitReason・Stage・EventKind・1 周の行と dispatch ls の行の字面が変わらず、e2e の歯の file は段の型の変種を名指さない (7) regate.rs の in-file の歯が、口の本体に通る 2 形（札なし・札の所有者が死んでいる）と断る 6 形を渡して、通る形は記帳 1 件・断る形は記帳 0 件で理由の語が形ごとに違い（母集団 8）、戻した直後の 2 度目の理由が段の条件の語を持ち、歯の区間の行頭に retroactive の札が在り、変異の proof が bead の notes に在り、pipe_dispatch_gated_pass_ と pipe_dispatch_driver_ と pipe_dispatch_waiting_gate_ の既存の歯は測っている約束を変えずに緑のまま"
+
+[[contract]]
+id = "u"
+title = "札と lock の所有者を pid の再利用に釣られず判じる — 本文を pid + 起動時刻の 2 語にし、読み手は 2 語の周に起動時刻が違えば Dead（1 語は今のまま）、Driver の Drop は先頭の語で自分を判じ、死んだ札の fixture は 2 語で書き gone の待ちを 60 秒に（§24・s2-07l.608）"
+req = ["FR68", "FR14"]
+section = "24"
+write-set = ["crates/scribe2/src/fleet/store.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "docs/design/dispatcher.md"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail fleet_store_owner_", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_driver_ticket_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_gated_pass_dead_ticket_ pipe_dispatch_regated_dead_ticket_ pipe_dispatch_driver_"]
+size = "S"
+done = "(1) acquire_with が create_new の直後に pid と started_ms の値を空白 1 つで並べた 2 語 1 行を書き、自分の起動時刻を読めない周は pid 1 語を書く (2) 本文の読み手は pid 1 語と pid + 起動時刻の 2 語の 2 形を受けてそれ以外を Unreadable とし、lock_owner は 2 語の周に probe の Started の値が本文と違えば Dead・等しければ Live・Absent は Dead、1 語の周は今までどおり (3) Driver の Drop は先頭の語で自分の札を判じて 2 語の自分の札を外し他人の札は落とさない (4) put_dead_ticket は抜けた pid と一致しない起動時刻の 2 語を書き、gone は 60 秒を待ち、既存の e2e の歯は約束を変えずに緑のまま (5) 1 周の行と dispatch ls の行と Ticket の 4 値と Owner の 3 値と EventKind の列と受付札と追記の lock の断りの字面は 1 字も変わらない 歯: fleet_store_owner_ の歯が 2 語の Dead / Live と 1 語の互換と 3 語の Unreadable と acquire_with の書く 2 語を測り、pipe_driver_ticket_ の歯が Drop の自分 / 他人の弁別を測り、pipe_dispatch_gated_pass_dead_ticket_ と pipe_dispatch_regated_dead_ticket_ と pipe_dispatch_driver_ の既存の歯が緑のまま"
 <!-- contracts:end -->
