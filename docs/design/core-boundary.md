@@ -267,7 +267,7 @@ done = "(1) write-set の 6 file に Command::new と std の Command の use �
 
 [[contract]]
 id = "i"
-title = "core-spawn を deny に・R-C4-5 を足す — core-spawn の母集団を core の src の本体にして 1 以上を deny、境界 crate の Command::new を持つ file を 1 本に閉じる boundary-spawn、境界 crate の src の本体を数える boundary-lines と manifest の R-C4-5（BoundaryLines・値は本行の base の実測 × 1.2 の切り上げ・見込み 341・裁定 user 2026-09-15T10:07Z・ADR-0062）"
+title = "core-spawn を deny に・R-C4-5 を足す — core-spawn の母集団を core の src の本体にして 1 以上を deny、境界 crate の Command::new を持つ file を 1 本に閉じる boundary-spawn、境界 crate の src の本体を数える boundary-lines と manifest の R-C4-5（BoundaryLines・値は本行の base の実測 × 1.2 の切り上げ・見込み 316・裁定 user 2026-09-15T10:07Z・ADR-0062）"
 req = ["NFR2", "NFR3"]
 section = "9"
 touches = ["crate::rules::RuleKind"]
