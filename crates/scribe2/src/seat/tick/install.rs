@@ -11,6 +11,7 @@ use super::ROW_INTERVAL;
 use crate::cli_outcome::{Outcome, RC_OK, RC_REFUSED};
 use crate::fleet::store::{self, LockPolicy};
 use crate::hook::{seat_name, InjectionRecord, SCHEMA};
+use crate::invocation::Invocation;
 use crate::name::NAME;
 use crate::pipe::confine::SYSTEMCTL;
 use crate::rules::manifest::Manifest;
@@ -20,7 +21,7 @@ use crate::seat::state::now_secs;
 use crate::seat::{sanitize_target, RuleRead};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::Instant;
 
 /// 記録（`tick.jsonl` の `InjectionRecord`）の `who`。
@@ -390,7 +391,7 @@ fn uninstall(units: &Units, unit_dir: &Path) -> Result<String, Refusal> {
 /// `systemctl --user <args>` を子 process で 1 回撃つ（綴りは [`SYSTEMCTL`] の 1 定数・PATH 解決）。落ちた周は rc（signal で死んだ・
 /// 起動できない周は 255）。
 fn systemctl(args: &[&str]) -> Result<(), u8> {
-    let status = Command::new(SYSTEMCTL)
+    let status = Invocation::new(SYSTEMCTL)
         .arg("--user")
         .args(args)
         .stdin(Stdio::null())
@@ -427,8 +428,9 @@ fn record(spec: &Spec, unit: &str, started: Instant) {
 
 #[cfg(test)]
 mod tests {
-    use super::{derive, judge_file, mark, presence_of, unit_word, FileState, Presence, Spec, Verb};
+    use super::{derive, judge_file, mark, presence_of, systemctl, unit_word, FileState, Presence, Spec, Verb};
     use crate::name::NAME;
+    use crate::pipe::confine::SYSTEMCTL;
     use std::path::PathBuf;
 
     /// 導出の入力の fixture（絶対 path・rules なし）。
@@ -502,5 +504,32 @@ mod tests {
         let words: Vec<&str> = [Presence::Present, Presence::Absent, Presence::Foreign].iter().map(|found| found.as_str()).collect();
         assert_eq!(words, ["present", "absent", "foreign"]);
         assert_eq!([Verb::parse("install"), Verb::parse("uninstall"), Verb::parse("tick")], [Some(Verb::Install), Some(Verb::Uninstall), None]);
+    }
+
+    /// unit の有効化・撤去は起動の記述を通る（設計 core-boundary.md §9 行 j）: program は [`SYSTEMCTL`]・引数は `--user` が
+    /// 先頭で args がその後の順。rc 0 は `Ok`・rc 3 は `Err(3)`・起動の失敗は `Err(255)`。
+    #[test]
+    fn invocation_tick_unit_systemctl_passes_user_and_args_and_refused_spawn_is_255() {
+        use crate::pipe::fixture::{exited, Call, Stub};
+        let stub = Stub::install(|call| match call.args.get(1).map(String::as_str) {
+            Some("daemon-reload") => exited(0, b""),
+            Some("enable") => exited(3, b""),
+            _ => Err(std::io::Error::other("refused")),
+        });
+        assert_eq!(systemctl(&["daemon-reload"]), Ok(()), "rc 0");
+        assert_eq!(systemctl(&["enable", "--now", "x.timer"]), Err(3), "rc 3");
+        assert_eq!(systemctl(&["disable", "--now", "x.timer"]), Err(255), "起動の失敗");
+        let call = |args: &[&str]| Call {
+            program: SYSTEMCTL.to_owned(),
+            args: args.iter().map(|arg| (*arg).to_owned()).collect(),
+            cwd: None,
+            envs: Vec::new(),
+        };
+        let expected = [
+            call(&["--user", "daemon-reload"]),
+            call(&["--user", "enable", "--now", "x.timer"]),
+            call(&["--user", "disable", "--now", "x.timer"]),
+        ];
+        assert_eq!(stub.calls(), expected, "SYSTEMCTL の program と --user が先頭の引数");
     }
 }
