@@ -2,8 +2,8 @@
 //!
 //! 契約の `verify` 各行の逐条 rc（機械検証）と lens 1 本の判定を合わせて 3 値を出す。
 //! **判定は wildcard 無しの順序で決める**: 測れなかった（段①が読めない・箱の中の死・器の健康の
-//! 遮断器が閉じた＝設計 gate-cost.md §32）→ INCONCLUSIVE ／ verify に rc≠0 → FAIL ／ 検出線の rc 2（赤が 0 の周だけ・設計
-//! gate-cost.md §28）→ INCONCLUSIVE ／ lens に渡す本文の byte が cap 超
+//! 遮断器が閉じた＝設計 gate-cost.md §32）→ INCONCLUSIVE ／ verify に rc≠0 → FAIL（検出線の rc 2 は赤にも
+//! INCONCLUSIVE にも数えない＝record の rc 2 のまま・設計 gate-cost.md §44 形 (7)）／ lens に渡す本文の byte が cap 超
 //! → INCONCLUSIVE（lens を呼ばない）／ lens 側の不備 → INCONCLUSIVE（出力の**形が読めなかった**
 //! 周だけ同じ gate の中で 1 回撃ち直し、2 回目の戻りで読む・設計 gate-cost.md §29）／ それ以外は
 //! lens の verdict。lens に渡す本文は閉じた型 [`LensInput`]（diff か、純移動の要約・
@@ -37,8 +37,7 @@ mod verify;
 
 pub(crate) use lens::{last_json_object, lens_usage};
 pub use record::{
-    carried_from, carried_record, detection_copies, detection_record, next_number, records_of, skip_record,
-    step_record, Carried, DetectionCopy, Record, Skipped,
+    detection_copies, next_number, records_of, skip_record, step_record, DetectionCopy, Record, Skipped,
 };
 // 着地後の検出の口（`land::detection`・設計 gate-cost.md §44 形 (2)〜(4)）が gate と同じ 1 本で呼ぶ群。
 pub(crate) use record::{
@@ -239,57 +238,13 @@ impl Limits {
 /// 撃たない周も `verify.jsonl` に `kind=detection skipped=detection reason=<理由>` の record を残す
 /// （**撃たなかった事実を黙って落とさない**・[`skip_record`]）。共通 verify と契約 verify は従来どおり撃つ。
 ///
-/// 面に触れた周でも便の diff の patch-id が前周の検出線の record と同じなら撃たず、前周の record を
-/// `carried=<前周の n>` 付きで写す（[`Carry`](Self::Carry)・設計 §40 形 (b)・[`carry_detection`]）。
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// 面に触れた周は毎回撃つ（前周の record の持ち越しは無い・設計 gate-cost.md §44 形 (8)）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Detection {
     /// 撃つ（従来の形・読めない周もこちら＝fail-closed）。
     Run,
     /// 撃たない（理由は record の `reason=`）。
     Skip(DetectionSkip),
-    /// 撃たず前周の record を写す（写しは `carried=` の field で実測と区別する・C10）。
-    Carry(Carried),
-}
-
-/// 便の diff（`<base>..<tip>`）の `git patch-id --stable`（設計 §40 形 (b)）。
-///
-/// diff を読めない・空・patch-id を出せない周は `None`（record に `patch_id` を書かない＝持ち越しの根にならない）。
-pub fn patch_id(dir: &Path, base: &str, tip: &str) -> Option<String> {
-    use std::io::Write;
-    use std::process::{Command, Stdio};
-    let diff = git_bytes(dir, &["diff", &format!("{base}..{tip}")])?;
-    if diff.is_empty() {
-        return None;
-    }
-    let mut child = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(["patch-id", "--stable"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-    let written = child.stdin.take().map(|mut stdin| stdin.write_all(&diff));
-    let output = child.wait_with_output().ok()?;
-    if !matches!(written, Some(Ok(()))) || !output.status.success() {
-        return None;
-    }
-    String::from_utf8_lossy(&output.stdout).split_whitespace().next().map(str::to_owned)
-}
-
-/// 面に触れた撃ち直しの周の持ち越しの判定（設計 §40 形 (b)・追随と候補の木の段が
-/// [`super::land::rerun_detection`] から通す）。
-///
-/// 今の diff（`range` = `(<base>, <tip>)`）の patch-id が前周の検出線の record の `patch_id` と同じ周だけ
-/// [`Detection::Carry`]。record が無い・`patch_id` が無い・違う・読めない周は [`Detection::Run`]（fail-closed・
-/// [`carried_from`]）。
-pub fn carry_detection(state_dir: &Path, run: &str, dir: &Path, range: (&str, &str)) -> Detection {
-    let (base, tip) = range;
-    match carried_from(state_dir, run, patch_id(dir, base, tip).as_deref()) {
-        Some(carried) => Detection::Carry(carried),
-        None => Detection::Run,
-    }
 }
 
 /// 検出線を撃たない理由（record の `reason=`・閉じた enum・憲法 C11）。
@@ -330,7 +285,7 @@ pub struct Gate<'a> {
     pub pool: Option<&'a Pool>,
     /// 規則から読んだ線。
     pub limits: Limits,
-    /// 検出線を撃つか（設計 §30 / §40 形 (b)・追随の再 gate だけが [`Detection::Skip`] / [`Detection::Carry`] を渡しうる）。
+    /// 検出線を撃つか（設計 §30・追随の再 gate だけが [`Detection::Skip`] を渡しうる）。
     pub detection: Detection,
     /// lock の待ち方。
     pub policy: LockPolicy,
@@ -354,13 +309,6 @@ struct Measured {
     /// INCONCLUSIVE へ倒し、record の `reason=` で外からの kill と弁別する（検出線の行の
     /// `oom_kill` は除く＝道具が吸収して完走した周・`record::box_kill`）。
     killed: Option<Reason>,
-    /// 検出線が rc 2（測れなかった）で終えた行の `n`（在れば・`s2-07l.331`・設計 §5.3）。
-    ///
-    /// `cargo xtask mutants-diff` の rc 2 は「生存も時間切れも無いが測れていない」（baseline が
-    /// 落ちた等）で、赤（rc 1 = deny 昇格後）ではない。赤に数えると測れなかった便が FAIL で終端し
-    /// 測り直せない（C10）。rc 1 の検出線と検出線以外の rc 2 は従来どおり赤（`record::detection_unmeasured`）。
-    /// INCONCLUSIVE へ倒すのは [`red`](Self::red) が 0 の周だけ（赤が在れば FAIL が先・設計 gate-cost.md §28）。
-    detection_unmeasured: Option<u64>,
     /// 器の健康の遮断器が閉じて撃たなかった行の `n`（在れば・設計 gate-cost.md §32 約束 5 / 6）。
     ///
     /// 凍った host の下の行は内容を測れていない——赤が在っても信用できないので、赤より先に INCONCLUSIVE へ倒す
@@ -485,8 +433,7 @@ fn precheck(worktree: &Path, base: &str) -> Option<String> {
 /// ——`Outcome.err` の 1 行は呼び手が捨てうる面なので、事後に読める面（run dir）にも同じ事実を置く。
 fn measure(entry: &Gate<'_>, worktree: &Path, base: &str) -> Result<Measured, String> {
     let counted = record_verify(entry, worktree, base)?;
-    let (red, unreadable, killed) = (counted.red, counted.unreadable, counted.killed);
-    let (detection_unmeasured, busy) = (counted.detection_unmeasured, counted.busy);
+    let (red, unreadable, killed, busy) = (counted.red, counted.unreadable, counted.killed, counted.busy);
     // 段①が diff を読めない周は同じ range の生 diff も読めない。ここで broken（rc 2・
     // verdict を書かない）にすると便は Implemented のまま「測り直せる便」に見えない。
     let (diff, input) = if unreadable {
@@ -509,7 +456,7 @@ fn measure(entry: &Gate<'_>, worktree: &Path, base: &str) -> Result<Measured, St
         LensInput::Summary(_) => (diff.clone(), (0, 0)),
     };
     record_notice(entry, &input, elided)?;
-    Ok(Measured { red, diff, unreadable, killed, detection_unmeasured, busy, input, lens_diff })
+    Ok(Measured { red, diff, unreadable, killed, busy, input, lens_diff })
 }
 
 /// 判定順を 1 か所に閉じる（**wildcard 無し・上から順に効く**）。
@@ -522,7 +469,7 @@ fn decide(
     measured: &Measured,
     notes: &mut Vec<String>,
 ) -> Result<Decided, String> {
-    // 機械検証の段の判定（測れなかった → 遮断器 → 赤 → 検出線の rc 2）は pure な 1 本で先に読む。
+    // 機械検証の段の判定（測れなかった → 遮断器 → 赤）は pure な 1 本で先に読む。
     if let Some(judged) = machine_order(measured) {
         return Ok(Decided { judged, scope: None, account: None });
     }
@@ -576,8 +523,9 @@ fn decide(
 
 /// 機械検証の段の判定順（[`decide`] の前半・**wildcard 無し・上から順に効く**・pure）。lens に届く周は `None`。
 ///
-/// 順は 段①が読めない → 箱の中で死んだ → **遮断器が閉じた**（設計 gate-cost.md §32 約束 6）→ 赤 → 検出線の rc 2。
-/// 遮断器の印が無い周の順と字面は §28 のまま動かない。
+/// 順は 段①が読めない → 箱の中で死んだ → **遮断器が閉じた**（設計 gate-cost.md §32 約束 6）→ 赤。
+/// 検出線の rc 2 の段は持たない（赤にも INCONCLUSIVE にも数えず record の rc 2 のまま・設計 gate-cost.md §44 形 (7)・
+/// ADR-0060）。
 fn machine_order(measured: &Measured) -> Option<Judged> {
     // **測れなかったは赤より先**（C10・AC3）。段①の diff が読めない周は判定に届いていない
     // ので lens も呼ばず INCONCLUSIVE（測り直せる側・FR14）。
@@ -600,25 +548,18 @@ fn machine_order(measured: &Measured) -> Option<Judged> {
             "host が混んだまま待ちの上限を超えた（n={n} 以後の verify の行を撃っていない＝測れなかった）"
         )));
     }
-    // **赤は検出線の rc 2 より先**（設計 gate-cost.md §28・`s2-07l.495`）。検出線は測る前に元の木の
-    // 歯を全部走らせるので、歯が赤い木では必ず rc 2 で終わる——rc 2 を先に読むと、赤いと分かって
-    // いる便が INCONCLUSIVE のまま居座る。赤の数え方は変えない（検出線 ∧ rc 2 だけ除く・rc 1 は赤）。
+    // 赤の数え方は変えない（検出線 ∧ rc 2 だけ除く・rc 1 は赤・`record::detection_unmeasured`）。検出線の rc 2 は
+    // 止めない線の「測れなかった」で、gate の判定は検出線を名乗らない（設計 gate-cost.md §44 形 (7)）。
     if measured.red > 0 {
         // 赤い周は lens を呼ばない＝findings は測っていない（`tally` は `None`・C10）。
         let evidence = format!("verify の {} 行が rc≠0", measured.red);
         return Some(Judged { verdict: Verdict::Fail, evidence, tally: None, reread: false, usage: None });
     }
-    // **検出線の rc 2（測れなかった）は、赤が 0 の周だけ INCONCLUSIVE**（`s2-07l.331`・設計 §5.3 の③・
-    // FR14）。道具が「測れていない」と言った周を FAIL にすると、便は終端して測り直せない。Gated に
-    // 留め、検出線を撃ち直せる側へ倒す（PASS には決してならない・C10）。
-    measured
-        .detection_unmeasured
-        .map(|n| unjudged(format!("検出線（n={n}）が測れなかった（rc 2・赤ではない）")))
+    None
 }
 
 /// lens を 1 回撃ち、**出力は在るが形が読めなかった**周（[`Judged::reread`]）だけ同じ行・同じ本文・
-/// 同じ箱の形で **1 回だけ**撃ち直して 2 回目の戻りを採る（設計 gate-cost.md §29・`s2-07l.495`・
-/// 検出線の撃ち直し §21 と同じ 1 回）。
+/// 同じ箱の形で **1 回だけ**撃ち直して 2 回目の戻りを採る（設計 gate-cost.md §29・`s2-07l.495`）。
 ///
 /// 撃ち直すのは「形が読めない」側だけ——「読めたが規則で断った」（母集団 0）と箱の中の死・rc 非 0・
 /// 起動の失敗は撃ち直さない（どれも撃ち直しで向きが変わらない・印は [`lens::parse_lens`] だけが立てる）。
@@ -803,36 +744,31 @@ mod tests {
     use super::{machine_order, Measured, Verdict};
     use crate::pipe::move_proof::{LensInput, NotPure};
 
-    /// 機械検証の段の実測（赤の本数・遮断器の印・検出線の rc 2 だけを振る）。
-    fn measured(red: u64, busy: Option<u64>, detection_unmeasured: Option<u64>) -> Measured {
+    /// 機械検証の段の実測（赤の本数・遮断器の印だけを振る）。
+    fn measured(red: u64, busy: Option<u64>) -> Measured {
         Measured {
             red,
             diff: Vec::new(),
             unreadable: false,
             killed: None,
-            detection_unmeasured,
             busy,
             input: LensInput::Diff(NotPure::Unreadable),
             lens_diff: Vec::new(),
         }
     }
 
-    /// 遮断器の印が在る周は**赤が 1 行在っても** INCONCLUSIVE（印の行を名指す）で、印が無い周の順（赤 → 検出線の
-    /// rc 2）と字面は 1 字も変わらない（設計 gate-cost.md §32 約束 6・2 つの枝を対で並べる）。
+    /// 遮断器の印が在る周は**赤が 1 行在っても** INCONCLUSIVE（印の行を名指す）で、印が無い周の赤の字面は
+    /// 1 字も変わらない（設計 gate-cost.md §32 約束 6・2 つの枝を対で並べる）。
     #[test]
     fn gate_busy_order_mark_wins_over_red_and_leaves_the_unmarked_order() {
-        let marked = machine_order(&measured(1, Some(2), Some(3))).expect("印の周は判定に届く");
+        let marked = machine_order(&measured(1, Some(2))).expect("印の周は判定に届く");
         assert_eq!(marked.verdict, Verdict::Inconclusive, "赤が在っても FAIL で終端しない");
         assert!(marked.evidence.contains("n=2"), "印の行を名指す: {}", marked.evidence);
-        let marked_green = machine_order(&measured(0, Some(2), None)).expect("印の周は判定に届く");
+        let marked_green = machine_order(&measured(0, Some(2))).expect("印の周は判定に届く");
         assert_eq!(marked_green.verdict, Verdict::Inconclusive, "赤が無くても印の周は INCONCLUSIVE");
-        // 印が無い周: 赤は検出線の rc 2 より先に FAIL（§28 の字面のまま）。
-        let red = machine_order(&measured(1, None, Some(3))).expect("赤の周は判定に届く");
+        let red = machine_order(&measured(1, None)).expect("赤の周は判定に届く");
         assert_eq!(red.verdict, Verdict::Fail, "印が無ければ赤が FAIL");
         assert_eq!(red.evidence, "verify の 1 行が rc≠0", "字面は不変");
-        let unmeasured = machine_order(&measured(0, None, Some(3))).expect("検出線の rc 2 の周は判定に届く");
-        assert_eq!(unmeasured.verdict, Verdict::Inconclusive);
-        assert_eq!(unmeasured.evidence, "検出線（n=3）が測れなかった（rc 2・赤ではない）", "字面は不変");
-        assert!(machine_order(&measured(0, None, None)).is_none(), "何も無い周は lens へ進む");
+        assert!(machine_order(&measured(0, None)).is_none(), "何も無い周は lens へ進む");
     }
 }

@@ -2457,58 +2457,6 @@ fn pipe_detection_verdict_carries_tree_of_gated_head() {
     clean(&[&repo, &state]);
 }
 
-// ---- 検出線の持ち越し（設計 pipeline.md §40 形 (b)・契約表の行 ai・接頭辞 `pipe_detection_carry_`）----------
-//
-// gate は検出線を撃つ周に便の diff の patch-id を record の `patch_id` に残す。追随の撃ち直しの側（写す周・撃つ周）は
-// `land.rs` の同じ接頭辞の歯が持つ。
-
-/// `dir` の `git diff <base>..<tip>` を `git patch-id --stable` に通した値（器の外で測る＝歯の期待値の出所）。
-#[expect(
-    clippy::expect_used,
-    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
-)]
-pub(super) fn measured_patch_id(dir: &Path, base: &str, tip: &str) -> String {
-    use std::io::Write;
-    let diff = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(["diff", &format!("{base}..{tip}")])
-        .output()
-        .expect("diff を撃てる")
-        .stdout;
-    assert!(!diff.is_empty(), "fixture: 便の diff は空でない");
-    let mut child = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(["patch-id", "--stable"])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .spawn()
-        .expect("patch-id を起こせる");
-    child.stdin.take().expect("stdin を取れる").write_all(&diff).expect("diff を渡せる");
-    let out = child.wait_with_output().expect("patch-id が終わる");
-    String::from_utf8_lossy(&out.stdout).split_whitespace().next().unwrap_or_default().to_owned()
-}
-
-/// (h) gate が検出線を撃つ周の record は便の diff の `patch_id` を持ち、`git patch-id --stable`（`<base>..HEAD`）と
-/// 一致する。他の段の record は持たず、撃った record は `carried` を持たない（写しと実測の区別・C10）。
-#[test]
-fn pipe_detection_carry_gate_record_holds_the_patch_id_of_the_diff() {
-    let (repo, state, design) = detection_repo(DETECTION_COUNT);
-    let base = git(&repo, &["rev-parse", "HEAD"]);
-    let id = gated_pass(&repo, &state, &design, &state.join("lens-ran"));
-    let rows = verify_rows(&state, &id);
-    assert_eq!(kinds(&rows), ["write-set", "common", "detection", "contract"], "段の順序: {rows:?}");
-    let want = measured_patch_id(&worktree_of(&repo, &id), &base, "HEAD");
-    assert_eq!(want.len(), 40, "fixture: patch-id は 40 桁: {want}");
-    assert_eq!(row_value(&rows, 3, "patch_id"), want, "検出線の record は便の diff の patch-id: {rows:?}");
-    for n in [1, 2, 4] {
-        assert!(row_value(&rows, n, "patch_id").is_empty(), "検出線の外の段は patch_id を持たない（n={n}）: {rows:?}");
-    }
-    assert!(row_value(&rows, 3, "carried").is_empty(), "撃った record は carried を持たない: {rows:?}");
-    clean(&[&repo, &state]);
-}
-
 /// (3) 木が gate と同じ main 実測は **1 本も撃たず** `kind=main skipped=main tree=<sha>` の record 1 本を記す
 /// （設計 gate-cost.md §27・ADR-0043 §2.1・`s2-07l.464`。以前は ②④ を撃って ③ だけを省いた）。
 #[test]
@@ -3186,46 +3134,6 @@ fn assert_landed_untouched(run: &LandedRun, before: &LandedBefore) {
     assert_eq!(landed_calls(&run.repo).len(), before.calls, "stub は呼ばれない");
 }
 
-// ---- 検出線の rc 2 = 測れなかった（`s2-07l.331`・設計 pipeline.md §5.3 の③・FR14）------------
-
-/// rc を **worktree の外**から差し替える verify 行の跳び板 script（tracked・便の worktree にも在る）。
-///
-/// 本体は git の共通 dir（便の worktree からも同じ file）に置く [`DETECTION_STUB`] で、
-/// 跳び板はそれを `sh` で撃つだけである。script 本体を worktree で書き換えると木が dirty になり、
-/// precheck で止まって「測り直せる」（Gated のまま撃ち直す）を測れない。
-const VERIFY_STUBBED: &str = "verify-stubbed.sh";
-
-/// 共通 dir に置く stub の名（本文は `exit <rc>` の 1 行）。
-const DETECTION_STUB: &str = "detection-stub.sh";
-
-/// 跳び板を撃つ verify 行（宣言の `common-verify` / `detection-verify` に置く形）。
-const STUBBED_LINE: &str = r#"["sh verify-stubbed.sh"]"#;
-
-/// 跳び板を repo へ書いて commit する（**便の base に含める**＝`implemented` の前に呼ぶ）。
-fn commit_stub_trampoline(repo: &Path) {
-    fs::write(
-        repo.join(VERIFY_STUBBED),
-        format!("sh \"$(git rev-parse --git-common-dir)/{DETECTION_STUB}\"\n"),
-    )
-    .ok();
-    git(repo, &["add", "-f", VERIFY_STUBBED]);
-    git(repo, &["commit", "-q", "-m", "verify-stubbed"]);
-}
-
-/// stub を `exit <rc>` に書き換える（gate の前・撃ち直しの前のどちらでも・木は汚れない）。
-fn write_detection_stub(repo: &Path, rc: u8) {
-    fs::write(repo.join(".git").join(DETECTION_STUB), format!("exit {rc}\n")).ok();
-}
-
-/// 検出線が跳び板の便を実装済みにする（共通 verify は `verify-count.sh common`・契約 verify も stub）。
-fn stubbed_detection_run(rc: u8) -> (PathBuf, PathBuf, String) {
-    let (repo, state, design) = detection_repo(STUBBED_LINE);
-    commit_stub_trampoline(&repo);
-    write_detection_stub(&repo, rc);
-    let id = implemented(&repo, &state, &design);
-    (repo, state, id)
-}
-
 /// 便の `Gated` event の detail の並び（測り直しの履歴）。
 fn gated_details(state: &Path, id: &str) -> Vec<String> {
     events(state)
@@ -3235,171 +3143,44 @@ fn gated_details(state: &Path, id: &str) -> Vec<String> {
         .collect()
 }
 
-/// (a) 検出線の rc 2 は **赤ではなく「測れなかった」**——verdict は INCONCLUSIVE・`verify_red` は 0・
-/// 段は Gated のまま（測り直せる）・lens は呼ばない。record（verify.jsonl の行・stderr.log の見出し）は
-/// 現物のまま残る。負例: 検出線の rc 1（deny 昇格後の赤）と、共通 verify の rc 2 は従来どおり FAIL。
-#[test]
-fn pipe_gate_detection_unmeasured_is_inconclusive_not_fail() {
-    let (repo, state, id) = stubbed_detection_run(2);
-    let marker = state.join("lens-ran");
-    let out = gate_once(&repo, &state, &id, Some(&fake_lens(&marker, &lens_verdict("PASS"))));
-    assert_eq!(
-        out.status.code(),
-        Some(i32::from(RC_INCONCLUSIVE)),
-        "測れなかった周の rc は 3: {} / {}",
-        stdout_of(&out),
-        stderr_of(&out)
-    );
-    assert!(stdout_of(&out).contains("verdict=INCONCLUSIVE"), "{}", stdout_of(&out));
-    let pairs = verdict_pairs(&state, &id);
-    assert_eq!(value_of(&pairs, "verdict"), "INCONCLUSIVE", "verdict.json も INCONCLUSIVE");
-    assert_eq!(value_of(&pairs, "verify_red"), "0", "検出線の rc 2 は赤に数えない");
-    let evidence = value_of(&pairs, "evidence");
-    for needle in ["検出線", "n=3", "rc 2"] {
-        assert!(evidence.contains(needle), "理由が {needle} を名指す: {evidence}");
-    }
-    assert!(!marker.exists(), "測れなかった周は lens を起動しない");
-    assert!(show_line(&repo, &state, &id).contains("stage=Gated"), "段は Gated のまま（測り直せる）");
-    // record は不変（現物を消さない）。
-    let rows = verify_rows(&state, &id);
-    assert_eq!(kinds(&rows), ["write-set", "common", "detection", "contract"], "段の並び: {rows:?}");
-    assert_eq!(row_value(&rows, 3, "rc"), "2", "③ の rc は現物のまま");
-    let tail = fs::read_to_string(state.join("pipe").join(&id).join("verify.stderr.log")).unwrap_or_default();
-    assert!(tail.contains("## n=3 rc=2"), "stderr.log の見出しも残る: {tail}");
-    clean(&[&repo, &state]);
-
-    // 負例 1: 検出線の rc 1 は赤（R-C12-1 の deny 昇格後の形・除外は rc 2 だけ）。
-    let (repo, state, id) = stubbed_detection_run(1);
-    assert_stays_red(&repo, &state, &id, ("detection", 3, "1"));
-    clean(&[&repo, &state]);
-
-    // 負例 2: 共通 verify の rc 2 は赤（除外は検出線だけ）。
-    let (repo, state, id) = stubbed_common_run(2);
-    assert_stays_red(&repo, &state, &id, ("common", 2, "2"));
-    clean(&[&repo, &state]);
-}
-
-/// 共通 verify が跳び板・検出線は緑（`verify-ok.sh`）の便を実装済みにする（負例の fixture）。
-fn stubbed_common_run(rc: u8) -> (PathBuf, PathBuf, String) {
-    let (repo, state) = repo_with_state();
-    commit_stub_trampoline(&repo);
-    write_detection_stub(&repo, rc);
-    write_vessel(&repo, VESSEL_ALLOWED, STUBBED_LINE);
-    let path = repo.join(".vessel.toml");
-    let body = fs::read_to_string(&path).unwrap_or_default();
-    fs::write(&path, format!("{body}detection-verify = [\"sh verify-ok.sh\"]\n")).ok();
-    git(&repo, &["add", "-f", ".vessel.toml"]);
-    git(&repo, &["commit", "-q", "-m", "vessel-common-stubbed"]);
-    let design = write_contract(&repo, &["verify"], &[r#"verify = ["sh verify-ok.sh"]"#]);
-    let id = implemented(&repo, &state, &design);
-    (repo, state, id)
-}
-
-/// 除外の外の赤は従来どおり FAIL（`red` = (kind, n, rc) の 1 行が赤・`verify_red` は 1）。
-fn assert_stays_red(repo: &Path, state: &Path, id: &str, red: (&str, usize, &str)) {
-    let (kind, n, rc) = red;
-    let out = gate_once(repo, state, id, Some(&fake_lens(&state.join("lens-ran"), &lens_verdict("PASS"))));
-    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{kind} の rc {rc} は FAIL: {}", stderr_of(&out));
-    let rows = verify_rows(state, id);
-    assert_eq!(row_value(&rows, n, "kind"), kind, "n={n} の段: {rows:?}");
-    assert_eq!(row_value(&rows, n, "rc"), rc, "n={n} の rc は現物: {rows:?}");
-    let pairs = verdict_pairs(state, id);
-    assert_eq!(value_of(&pairs, "verdict"), "FAIL");
-    assert_eq!(value_of(&pairs, "verify_red"), "1", "{kind} の rc {rc} は赤に数える: {pairs:?}");
-}
-
-/// (c) 測れなかった検出線は **撃ち直せる**——stub を `exit 0` へ書き換えて `pipe gate` を撃ち直すと
-/// PASS（`pipe_gate_regates_after_inconclusive` と同型・1 度目の INCONCLUSIVE は event に残る）。
-#[test]
-fn pipe_gate_detection_unmeasured_regates_to_pass() {
-    let (repo, state, id) = stubbed_detection_run(2);
-    let marker = state.join("lens-ran");
-    let lens = fake_lens(&marker, &lens_verdict("PASS"));
-    let first = gate_once(&repo, &state, &id, Some(&lens));
-    assert_eq!(first.status.code(), Some(i32::from(RC_INCONCLUSIVE)), "1 度目は測れなかった: {}", stderr_of(&first));
-    assert!(!marker.exists(), "1 度目は lens を起動しない");
-
-    write_detection_stub(&repo, 0);
-    let second = gate_once(&repo, &state, &id, Some(&lens));
-    assert_eq!(
-        second.status.code(),
-        Some(i32::from(RC_OK)),
-        "検出線を直した測り直しは通る: {} / {}",
-        stdout_of(&second),
-        stderr_of(&second)
-    );
-    assert!(marker.exists(), "2 度目は lens を起動する");
-    let pairs = verdict_pairs(&state, &id);
-    assert_eq!(value_of(&pairs, "verdict"), "PASS", "verdict.json は新しい判定で上書きされる");
-    assert_eq!(value_of(&pairs, "verify_red"), "0");
-    // verify.jsonl は追記される（1 度目の rc 2 の record は残り、2 度目の ③ は緑）。
-    let detection_rcs: Vec<String> = verify_rows(&state, &id)
-        .iter()
-        .filter(|row| value_of(row, "kind") == "detection")
-        .map(|row| value_of(row, "rc"))
-        .collect();
-    assert_eq!(detection_rcs, ["2", "0"], "1 度目の record は残り、撃ち直した ③ は緑");
-    assert_eq!(
-        gated_details(&state, &id),
-        vec!["verdict:INCONCLUSIVE".to_owned(), "verdict:PASS".to_owned()],
-        "測り直しは 2 件目を追記する（1 件目を書き換えない）"
-    );
-    clean(&[&repo, &state]);
-}
-
-// ---- 検出線の rc 2 の撃ち直し（設計 gate-cost.md §21・`s2-07l.390`・接頭辞 `pipe_detection_retry_`）------------
+// ---- gate の中の検出線は 1 回撃ち（設計 gate-cost.md §44 形 (6)(7)・契約表の行 al・接頭辞 `pipe_detection_single_shot_`）----
 //
-// 検出線が rc 2（測れなかった）で終えた周は同じ行を **1 回だけ**撃ち直し、record は 2 回目の 1 本に
-// `retried=1` を載せる。母集団 = `detection-calls` の行（撃たれた順・段の印つき）と record の kind 別の本数。
+// 検出線の rc 2 は撃ち直さず（§21 の撃ち直しは消えた）、赤にも INCONCLUSIVE にも数えず record の rc 2 のまま残る
+// （§28 の段は消えた）。検出線の rc 1 と共通 verify の rc 2 は従来どおり赤。母集団 = `detection-calls` の行（撃たれた順・
+// 段の印つき）と record の段の並び。
 
-/// 自分の印の行数が奇数なら rc 2・偶数なら rc 0（1 回目 rc 2 → 2 回目 rc 0）。印は `verify-count.sh` と同じ file。
-const VERIFY_FLAKY2: &str = "verify-flaky2.sh";
-
-/// 印を 1 行足して常に rc 2（撃ち直しても測れない周）。
+/// 印を 1 行足して常に rc 2（測れなかった検出線）。
 const VERIFY_UNMEASURED: &str = "verify-unmeasured.sh";
 
-/// 印を 1 行足して rc 1（`verify-red.sh` の印つきの形＝deny 昇格後の赤・撃ち直さない周）。
+/// 印を 1 行足して rc 1（`verify-red.sh` の印つきの形＝deny 昇格後の赤）。
 const VERIFY_RED_COUNT: &str = "verify-red-count.sh";
 
-/// 撃ち直しの歯の stub 3 本を repo に置いて commit する（便の base に含める＝`implemented` の前に呼ぶ）。
+/// 1 回撃ちの歯の stub 2 本を repo に置いて commit する（便の base に含める＝`implemented` の前に呼ぶ）。
 ///
 /// 印は **git の共通 dir** の `detection-calls`（[`detection_calls`] が読む file）で、第 1 引数を 1 行足す。
-/// `verify-flaky2.sh` は足した後に**自分の印の行数**を数えるので、共通 verify や契約の行の印は数に入らない。
-fn commit_retry_scripts(repo: &Path) {
+fn commit_single_shot_scripts(repo: &Path) {
     let mark = "calls=\"$(git rev-parse --git-common-dir)/detection-calls\"\nprintf '%s\\n' \"$1\" >> \"$calls\"\n";
-    for (name, tail) in [
-        (VERIFY_FLAKY2, "if test \"$(( $(grep -c -x -F -- \"$1\" \"$calls\") % 2 ))\" -eq 1; then exit 2; fi\nexit 0\n"),
-        (VERIFY_UNMEASURED, "exit 2\n"),
-        (VERIFY_RED_COUNT, "exit 1\n"),
-    ] {
+    for (name, tail) in [(VERIFY_UNMEASURED, "exit 2\n"), (VERIFY_RED_COUNT, "exit 1\n")] {
         fs::write(repo.join(name), format!("{mark}{tail}")).ok();
     }
-    git(repo, &["add", "-f", VERIFY_FLAKY2, VERIFY_UNMEASURED, VERIFY_RED_COUNT]);
-    git(repo, &["commit", "-q", "-m", "verify-retry-stubs"]);
+    git(repo, &["add", "-f", VERIFY_UNMEASURED, VERIFY_RED_COUNT]);
+    git(repo, &["commit", "-q", "-m", "verify-single-shot-stubs"]);
 }
 
-/// 撃ち直しの歯の便を 1 本 gate まで通す（共通 verify は呼び手が選ぶ・検出線は `<script> detection-{base}`）。
+/// 1 回撃ちの歯の便を 1 本 gate まで通す（共通 verify と契約 verify は呼び手が選ぶ・検出線は
+/// `<script> detection-{base}`・`contract` は契約 file の `verify = [...]` の行）。
 ///
 /// 返すのは (repo, state, id, base, gate の出力)。印の file は gate の前は空（`implemented` は verify を撃たない）
 /// なので、`detection_calls` の全行が gate 1 周の母集団である。
-fn retry_gate(common: &str, detection_script: &str) -> (PathBuf, PathBuf, String, String, Output) {
-    retry_gate_with(common, detection_script, r#"verify = ["sh verify-count.sh contract"]"#)
-}
-
-/// [`retry_gate`] の契約 verify も呼び手が選ぶ形（`contract` は契約 file の `verify = [...]` の行）。
-fn retry_gate_with(
-    common: &str,
-    detection_script: &str,
-    contract: &str,
-) -> (PathBuf, PathBuf, String, String, Output) {
+fn single_shot_gate(common: &str, detection_script: &str, contract: &str) -> (PathBuf, PathBuf, String, String, Output) {
     let (repo, state) = repo_with_state();
-    commit_retry_scripts(&repo);
+    commit_single_shot_scripts(&repo);
     write_vessel(&repo, VESSEL_ALLOWED, common);
     let path = repo.join(".vessel.toml");
     let body = fs::read_to_string(&path).unwrap_or_default();
     fs::write(&path, format!("{body}detection-verify = [\"sh {detection_script} detection-{{base}}\"]\n")).ok();
     git(&repo, &["add", "-f", ".vessel.toml"]);
-    git(&repo, &["commit", "-q", "-m", "vessel-detection-retry"]);
+    git(&repo, &["commit", "-q", "-m", "vessel-detection-single-shot"]);
     let design = write_contract(&repo, &["verify"], &[contract]);
     let base = git(&repo, &["rev-parse", "HEAD"]);
     let id = implemented(&repo, &state, &design);
@@ -3409,132 +3190,106 @@ fn retry_gate_with(
     (repo, state, id, base, out)
 }
 
+/// 緑の契約 verify（印つき）。
+const CONTRACT_GREEN: &str = r#"verify = ["sh verify-count.sh contract"]"#;
+
+/// 撃ち直しの欄の key（record の JSON に**字面で**無いことを測る・欄を残す変異が落ちる）。
+const RETRY_KEYS: [&str; 2] = ["\"retried\"", "\"retried_from\""];
+
+/// (g) 共通 verify と契約 verify が緑で検出線だけ rc 2 の便の gate は **PASS**（lens の verdict）で、検出線は 1 回だけ
+/// 撃たれ（印は ②③④ の 1 回ずつ）、record は段ごとに 1 本・③ の rc は 2 のまま・JSON に `retried` / `retried_from` の
+/// key が無い。`verify.stderr.log` は ③ の見出しを 1 段だけ持つ（撃ち直しの見出しは無い）。base は撃ち直して
+/// INCONCLUSIVE ＝ RED。
+#[test]
+fn pipe_detection_single_shot_unmeasured_line_fires_once_and_the_gate_passes() {
+    let (repo, state, id, base, out) = single_shot_gate(r#"["sh verify-count.sh common"]"#, VERIFY_UNMEASURED, CONTRACT_GREEN);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "検出線の rc 2 は判定を動かさない: {} / {}", stdout_of(&out), stderr_of(&out));
+    assert!(stdout_of(&out).contains("verdict=PASS"), "{}", stdout_of(&out));
+    let pairs = verdict_pairs(&state, &id);
+    assert_eq!(value_of(&pairs, "verdict"), "PASS", "verdict.json も PASS: {pairs:?}");
+    assert_eq!(value_of(&pairs, "verify_red"), "0", "検出線の rc 2 は赤に数えない");
+    assert!(!value_of(&pairs, "evidence").contains("検出線"), "gate の判定は検出線を名乗らない: {pairs:?}");
+    assert!(state.join("lens-ran").exists(), "lens は起動される（判定は lens の verdict）");
+    assert_eq!(
+        detection_calls(&repo),
+        ["common".to_owned(), format!("detection-{base}"), "contract".to_owned()],
+        "③ は 1 回だけ撃つ（撃ち直さない）"
+    );
+    let rows = verify_rows(&state, &id);
+    assert_eq!(kinds(&rows), ["write-set", "common", "detection", "contract"], "record は段ごとに 1 本: {rows:?}");
+    assert_eq!(row_value(&rows, 3, "rc"), "2", "③ の record は rc 2 のまま: {rows:?}");
+    let log = verify_log(&state, &id);
+    for key in RETRY_KEYS {
+        assert!(!log.contains(key), "record の JSON に {key} の key が無い: {log}");
+    }
+    let tail = fs::read_to_string(state.join("pipe").join(&id).join("verify.stderr.log")).unwrap_or_default();
+    let heads: Vec<&str> = tail.lines().filter(|line| line.starts_with("## ")).collect();
+    assert_eq!(heads, [format!("## n=3 rc=2 cmd=sh {VERIFY_UNMEASURED} detection-{base}").as_str()], "③ の見出しは 1 段だけ: {tail}");
+    assert_eq!(gated_details(&state, &id), vec!["verdict:PASS".to_owned()], "Gated の detail は PASS 1 件");
+    clean(&[&repo, &state]);
+}
+
+/// 赤 ∧ 検出線 rc 2 の周の共通 assert: rc 1・`Gated` verdict=FAIL・evidence は赤い行の数（検出線を含まない＝
+/// `verify_red` は 1）・lens は呼ばれない・③ の record は rc 2 の現物のまま・③ は 1 回だけ撃たれる。
+fn assert_red_without_detection(run: (&Path, &Path, &str, &str), out: &Output, red: (&str, usize)) {
+    let ((repo, state, id, base), (kind, n)) = (run, red);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "赤が在る周は FAIL の rc 1: {} / {}", stdout_of(out), stderr_of(out));
+    assert!(stdout_of(out).contains("verdict=FAIL"), "{}", stdout_of(out));
+    let pairs = verdict_pairs(state, id);
+    assert_eq!(value_of(&pairs, "verdict"), "FAIL", "verdict.json も FAIL: {pairs:?}");
+    assert_eq!(value_of(&pairs, "verify_red"), "1", "赤い行の数に検出線を含まない: {pairs:?}");
+    assert_eq!(value_of(&pairs, "evidence"), "verify の 1 行が rc≠0", "evidence は赤い行の数");
+    assert!(!state.join("lens-ran").exists(), "赤い周は lens を起動しない");
+    let rows = verify_rows(state, id);
+    assert_eq!(kinds(&rows), ["write-set", "common", "detection", "contract"], "段の並び: {rows:?}");
+    assert_eq!(row_value(&rows, n, "kind"), kind, "n={n} の段: {rows:?}");
+    assert_eq!(row_value(&rows, n, "rc"), "1", "n={n} が赤: {rows:?}");
+    assert_eq!(row_value(&rows, 3, "rc"), "2", "③ の rc 2 は現物のまま: {rows:?}");
+    assert_eq!(calls_of(repo, &format!("detection-{base}")), 1, "③ は 1 回だけ撃つ");
+}
+
 /// 印の行のうち、段の印 `mark` に一致する本数。
-fn calls_marked(repo: &Path, mark: &str) -> usize {
+fn calls_of(repo: &Path, mark: &str) -> usize {
     detection_calls(repo).iter().filter(|call| *call == mark).count()
 }
 
-/// record 列のうち `kind` の本数。
-fn kind_count_of(rows: &[Vec<(String, vessel::fleet::json_lite::Value)>], kind: &str) -> usize {
-    rows.iter().filter(|row| value_of(row, "kind") == kind).count()
-}
-
-/// record 列のうち `retried` を持つものの `kind`。
-fn retried_kinds(rows: &[Vec<(String, vessel::fleet::json_lite::Value)>]) -> Vec<String> {
-    rows.iter()
-        .filter(|row| !value_of(row, "retried").is_empty())
-        .map(|row| value_of(row, "kind"))
-        .collect()
-}
-
-/// 撃ち直した周の record 列の共通 assert: 段ごとに 1 本（1 回目は積まない）・③は `rc=<rc>` ∧ `retried=1`・
-/// `retried` を持つのは③だけ。
-fn assert_retried_detection_record(rows: &[Vec<(String, vessel::fleet::json_lite::Value)>], rc: &str) {
-    assert_eq!(kinds(rows), ["write-set", "common", "detection", "contract"], "record は段ごとに 1 本: {rows:?}");
-    assert_eq!(kind_count_of(rows, "detection"), 1, "1 回目の rc 2 は record に積まない: {rows:?}");
-    assert_eq!(row_value(rows, 3, "kind"), "detection", "③ の record");
-    assert_eq!(row_value(rows, 3, "rc"), rc, "record は 2 回目の rc: {rows:?}");
-    assert_eq!(row_value(rows, 3, "retried"), "1", "撃ち直した事実が record に残る: {rows:?}");
-    assert_eq!(retried_kinds(rows), ["detection"], "`retried` を持つのは③だけ: {rows:?}");
-}
-
-/// (a) 1 回目 rc 2 → 2 回目 rc 0 の検出線は gate が **PASS** で終わる。検出線の印は +2（撃ち直した）・②④ は +1 ずつ・
-/// `kind=detection` の record は **1 本**（1 回目は積まない）で `rc=0` ∧ `retried=1`・他の段に `retried` は無い。
+/// (h) 共通 verify が赤（rc 1）で検出線が rc 2 の便は FAIL で、evidence の赤い行の数に検出線を含まない。契約 verify が
+/// 赤の便も同じ（赤の出所が②か④かを問わない）。
 #[test]
-fn pipe_detection_retry_reruns_an_unmeasured_line_once_and_passes() {
-    let (repo, state, id, base, out) = retry_gate(r#"["sh verify-count.sh common"]"#, VERIFY_FLAKY2);
-    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "撃ち直して緑なら PASS: {} / {}", stdout_of(&out), stderr_of(&out));
-    assert!(stdout_of(&out).contains("verdict=PASS"), "{}", stdout_of(&out));
-    assert_eq!(value_of(&verdict_pairs(&state, &id), "verdict"), "PASS", "verdict.json も PASS");
-    assert!(state.join("lens-ran").exists(), "測れた周は lens を起動する");
-    let calls = detection_calls(&repo);
-    assert_eq!(calls.len(), 4, "母集団 = ② 1 + ③ 2 + ④ 1: {calls:?}");
-    assert_eq!(calls_marked(&repo, &format!("detection-{base}")), 2, "③ は 1 回だけ撃ち直す: {calls:?}");
-    assert_eq!(
-        calls,
-        ["common".to_owned(), format!("detection-{base}"), format!("detection-{base}"), "contract".to_owned()],
-        "撃ち直しは同じ行の直後（段の順序は不変）"
+fn pipe_detection_single_shot_red_line_fails_without_counting_the_unmeasured_detection() {
+    let (repo, state, id, base, out) =
+        single_shot_gate(r#"["sh verify-red-count.sh common"]"#, VERIFY_UNMEASURED, CONTRACT_GREEN);
+    assert_red_without_detection((&repo, &state, &id, &base), &out, ("common", 2));
+    clean(&[&repo, &state]);
+    let (repo, state, id, base, out) = single_shot_gate(
+        r#"["sh verify-count.sh common"]"#,
+        VERIFY_UNMEASURED,
+        r#"verify = ["sh verify-red-count.sh contract"]"#,
     );
-    let rows = verify_rows(&state, &id);
-    assert_retried_detection_record(&rows, "0");
-    assert_eq!(row_value(&rows, 3, "cmd"), format!("sh {VERIFY_FLAKY2} detection-{base}"), "穴の値は 2 回目も同じ");
-    let log = verify_log(&state, &id);
-    assert_eq!(log.matches("\"retried\":1").count(), 1, "生の record は数の 1 で 1 か所だけ: {log}");
-    assert_eq!(log.matches("\"retried\"").count(), 1, "`retried` の字面は 1 record だけ（bool や別名を足さない）: {log}");
+    assert_red_without_detection((&repo, &state, &id, &base), &out, ("contract", 4));
     clean(&[&repo, &state]);
 }
 
-/// (b) 2 回目も rc 2 なら従来どおり **INCONCLUSIVE**（3 回目は撃たない）。record は 1 本で `rc=2` ∧ `retried=1`。
+/// 対: 検出線の **rc 1**（deny 昇格後の赤）は従来どおり赤（`verify_red` 1・FAIL）で、**共通 verify の rc 2** も赤（除外は
+/// 検出線 ∧ rc 2 の 1 点だけ）。どちらも 1 回だけ撃たれる。
 #[test]
-fn pipe_detection_retry_stops_after_one_retry_when_still_unmeasured() {
-    let (repo, state, id, base, out) = retry_gate(r#"["sh verify-count.sh common"]"#, VERIFY_UNMEASURED);
-    assert_eq!(
-        out.status.code(),
-        Some(i32::from(RC_INCONCLUSIVE)),
-        "2 回とも測れなかった周は rc 3: {} / {}",
-        stdout_of(&out),
-        stderr_of(&out)
-    );
-    assert!(stdout_of(&out).contains("verdict=INCONCLUSIVE"), "{}", stdout_of(&out));
-    let pairs = verdict_pairs(&state, &id);
-    assert_eq!(value_of(&pairs, "verdict"), "INCONCLUSIVE");
-    assert_eq!(value_of(&pairs, "verify_red"), "0", "検出線の rc 2 は赤に数えない");
-    assert!(value_of(&pairs, "evidence").contains("n=3"), "理由は③を名指す: {pairs:?}");
-    assert!(!state.join("lens-ran").exists(), "測れなかった周は lens を起動しない");
-    let calls = detection_calls(&repo);
-    assert_eq!(calls.len(), 4, "母集団 = ② 1 + ③ 2 + ④ 1: {calls:?}");
-    assert_eq!(calls_marked(&repo, &format!("detection-{base}")), 2, "撃ち直しは 1 回だけ（3 回目は無い）: {calls:?}");
-    assert_retried_detection_record(&verify_rows(&state, &id), "2");
-    clean(&[&repo, &state]);
-}
-
-/// (c) 撃ち直さない 2 つ: 検出線の **rc 1**（deny 昇格後の赤）と、**共通 verify の rc 2**。どちらも印は +1・
-/// record に `retried` は無く・従来どおり FAIL（母集団 = 印の全行）。
-#[test]
-fn pipe_detection_retry_does_not_rerun_red_or_common_lines() {
-    // 検出線の rc 1: 撃ち直さず FAIL。
-    let (repo, state, id, base, out) = retry_gate(r#"["sh verify-count.sh common"]"#, VERIFY_RED_COUNT);
+fn pipe_detection_single_shot_red_detection_and_unmeasured_common_stay_red() {
+    let (repo, state, id, base, out) = single_shot_gate(r#"["sh verify-count.sh common"]"#, VERIFY_RED_COUNT, CONTRACT_GREEN);
     assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "検出線の rc 1 は FAIL: {}", stderr_of(&out));
-    let calls = detection_calls(&repo);
-    assert_eq!(calls, ["common".to_owned(), format!("detection-{base}"), "contract".to_owned()], "③ は 1 回だけ");
+    assert_eq!(calls_of(&repo, &format!("detection-{base}")), 1, "③ は 1 回だけ");
     let rows = verify_rows(&state, &id);
     assert_eq!(row_value(&rows, 3, "kind"), "detection");
     assert_eq!(row_value(&rows, 3, "rc"), "1", "③ が赤");
-    assert!(retried_kinds(&rows).is_empty(), "撃ち直していない record に `retried` は無い: {rows:?}");
-    assert_eq!(value_of(&verdict_pairs(&state, &id), "verdict"), "FAIL");
     assert_eq!(value_of(&verdict_pairs(&state, &id), "verify_red"), "1", "rc 1 の検出線は赤に数える");
     clean(&[&repo, &state]);
 
-    // 共通 verify の rc 2: 撃ち直さず FAIL（除外は検出線だけ）。検出線は緑（`verify-count.sh`）。
-    let (repo, state, id, base, out) = retry_gate(r#"["sh verify-unmeasured.sh common"]"#, "verify-count.sh");
+    let (repo, state, id, _base, out) = single_shot_gate(r#"["sh verify-unmeasured.sh common"]"#, "verify-count.sh", CONTRACT_GREEN);
     assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "共通 verify の rc 2 は FAIL: {}", stderr_of(&out));
-    let calls = detection_calls(&repo);
-    assert_eq!(calls, ["common".to_owned(), format!("detection-{base}"), "contract".to_owned()], "② は 1 回だけ");
+    assert_eq!(calls_of(&repo, "common"), 1, "② は 1 回だけ");
     let rows = verify_rows(&state, &id);
     assert_eq!(row_value(&rows, 2, "kind"), "common");
     assert_eq!(row_value(&rows, 2, "rc"), "2", "② の rc は現物のまま");
-    assert!(retried_kinds(&rows).is_empty(), "共通 verify の rc 2 に `retried` は無い: {rows:?}");
-    assert_eq!(value_of(&verdict_pairs(&state, &id), "verdict"), "FAIL");
     assert_eq!(value_of(&verdict_pairs(&state, &id), "verify_red"), "1", "共通 verify の rc 2 は赤に数える");
-    clean(&[&repo, &state]);
-}
-
-/// (d) 撃ち直した周の `verify.stderr.log` は **1 回目の見出し（`rc=2 retry=1`）→ 2 回目の見出し（`rc=0`）** の順で
-/// 両方を持つ（1 回目を捨てる実装は落ちる・2 回目は緑でも見出しを残す）。1 回目を従来の見出しでは書かない。
-#[test]
-fn pipe_detection_retry_keeps_the_first_stderr_tail() {
-    let (repo, state, id, base, out) = retry_gate(r#"["sh verify-count.sh common"]"#, VERIFY_FLAKY2);
-    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "撃ち直して緑なら PASS: {}", stderr_of(&out));
-    let tail = fs::read_to_string(state.join("pipe").join(&id).join("verify.stderr.log")).unwrap_or_default();
-    let cmd = format!("sh {VERIFY_FLAKY2} detection-{base}");
-    let first = tail.find(&format!("## n=3 rc=2 retry=1 cmd={cmd}"));
-    let second = tail.find(&format!("## n=3 rc=0 cmd={cmd}"));
-    assert!(first.is_some(), "1 回目の見出しが在る: {tail}");
-    assert!(second.is_some(), "2 回目の見出しが在る: {tail}");
-    assert!(first < second, "1 回目が先: {tail}");
-    assert!(!tail.contains("## n=3 rc=2 cmd="), "1 回目を従来の見出しでは書かない: {tail}");
-    let heads: Vec<&str> = tail.lines().filter(|line| line.starts_with("## ")).collect();
-    assert_eq!(heads.len(), 2, "見出しは③の 2 段だけ（②④は緑で撃ち直しも無い）: {tail}");
     clean(&[&repo, &state]);
 }
 
@@ -3668,92 +3423,6 @@ fn pipe_detection_intake_refuses_unfit_lines() {
     commit_detection_vessel(&repo, DETECTION_COUNT);
     let ok = intake_raw(&repo, &state, &path, "b");
     assert_eq!(ok.status.code(), Some(i32::from(RC_OK)), "検査を通る検出線は読める: {}", stderr_of(&ok));
-    clean(&[&repo, &state]);
-}
-
-// ---- 赤い行が在る周は検出線が測れなくても FAIL（設計 gate-cost.md §28・`s2-07l.495`・接頭辞 `pipe_gate_red_wins_over_detection_`）----
-//
-// 検出線は測る前に元の木の歯を全部走らせるので、歯が赤い木では必ず rc 2 で終わる。rc 2 を赤より先に
-// 読むと、赤いと分かっている便が INCONCLUSIVE のまま居座る。赤（検出線 ∧ rc 2 だけ除く）が 1 行でも
-// 在れば FAIL・赤が 0 の周だけ rc 2 が INCONCLUSIVE に倒す。fixture は撃ち直しの歯と同じ stub
-// （`verify-red-count.sh` = rc 1・`verify-unmeasured.sh` = 常に rc 2）。
-
-/// 赤 ∧ 検出線 rc 2 の周の共通 assert: rc 1・`Gated` verdict=FAIL・evidence は赤い行の数（今の FAIL と
-/// 同じ字面・検出線を名指さない）・`verify_red` は 1・lens は呼ばれない・③ の record は rc 2 の現物のまま。
-fn assert_red_wins(state: &Path, id: &str, out: &Output, red: (&str, usize, &str)) {
-    let (kind, n, rc) = red;
-    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "赤が在る周は FAIL の rc 1: {} / {}", stdout_of(out), stderr_of(out));
-    assert!(stdout_of(out).contains("verdict=FAIL"), "{}", stdout_of(out));
-    let pairs = verdict_pairs(state, id);
-    assert_eq!(value_of(&pairs, "verdict"), "FAIL", "verdict.json も FAIL: {pairs:?}");
-    assert_eq!(value_of(&pairs, "verify_red"), "1", "赤の数え方は不変（検出線の rc 2 は数えない）: {pairs:?}");
-    let evidence = value_of(&pairs, "evidence");
-    assert_eq!(evidence, "verify の 1 行が rc≠0", "evidence は赤い行の数（今の FAIL と同じ字面）");
-    assert!(!evidence.contains("検出線"), "evidence は検出線を名指さない: {evidence}");
-    assert!(!state.join("lens-ran").exists(), "赤い周は lens を起動しない");
-    assert_eq!(gated_details(state, id), vec!["verdict:FAIL".to_owned()], "Gated の detail は FAIL 1 件");
-    let rows = verify_rows(state, id);
-    assert_eq!(kinds(&rows), ["write-set", "common", "detection", "contract"], "段の並び: {rows:?}");
-    assert_eq!(row_value(&rows, n, "kind"), kind, "n={n} の段: {rows:?}");
-    assert_eq!(row_value(&rows, n, "rc"), rc, "n={n} の rc は現物: {rows:?}");
-    assert_eq!(row_value(&rows, 3, "rc"), "2", "③ の rc 2 は現物のまま（record の形は不変）: {rows:?}");
-    assert_eq!(row_value(&rows, 3, "retried"), "1", "撃ち直し（§21）は不変＝撃ち直した後の値で順を読む: {rows:?}");
-}
-
-/// (a) 共通 verify が赤（rc 1）∧ 検出線が rc 2 の便は `Gated` verdict=FAIL に着く（INCONCLUSIVE ではない）。
-/// evidence は赤い行の数・lens は呼ばれない。検出線は従来どおり 1 回撃ち直してから順を読む。
-#[test]
-fn pipe_gate_red_wins_over_detection_unmeasured_when_common_is_red() {
-    let (repo, state, id, base, out) = retry_gate(r#"["sh verify-red-count.sh common"]"#, VERIFY_UNMEASURED);
-    assert_red_wins(&state, &id, &out, ("common", 2, "1"));
-    assert_eq!(
-        detection_calls(&repo),
-        ["common".to_owned(), format!("detection-{base}"), format!("detection-{base}"), "contract".to_owned()],
-        "段の順と撃ち直しは不変（③ は 1 回だけ撃ち直す）"
-    );
-    clean(&[&repo, &state]);
-}
-
-/// (b) 契約 verify が赤（rc 1）∧ 検出線が rc 2 の便も同じく FAIL（赤の出所が②か④かを問わない）。
-#[test]
-fn pipe_gate_red_wins_over_detection_unmeasured_when_contract_is_red() {
-    let (repo, state, id, base, out) = retry_gate_with(
-        r#"["sh verify-count.sh common"]"#,
-        VERIFY_UNMEASURED,
-        r#"verify = ["sh verify-red-count.sh contract"]"#,
-    );
-    assert_red_wins(&state, &id, &out, ("contract", 4, "1"));
-    assert_eq!(
-        detection_calls(&repo),
-        ["common".to_owned(), format!("detection-{base}"), format!("detection-{base}"), "contract".to_owned()],
-        "④ は③の後に撃たれる（赤が④に在っても③の撃ち直しは不変）"
-    );
-    clean(&[&repo, &state]);
-}
-
-/// (c) 赤が 0 ∧ 検出線が rc 2 の便は今までどおり INCONCLUSIVE（`Gated` のまま測り直せる・lens は呼ばない）。
-/// 「赤より先」を「常に FAIL」へ倒す変異はここで落ちる。
-#[test]
-fn pipe_gate_red_wins_over_detection_unmeasured_only_when_red_exists() {
-    let (repo, state, id, _base, out) = retry_gate(r#"["sh verify-count.sh common"]"#, VERIFY_UNMEASURED);
-    assert_eq!(
-        out.status.code(),
-        Some(i32::from(RC_INCONCLUSIVE)),
-        "赤が 0 なら検出線の rc 2 は INCONCLUSIVE: {} / {}",
-        stdout_of(&out),
-        stderr_of(&out)
-    );
-    assert!(stdout_of(&out).contains("verdict=INCONCLUSIVE"), "{}", stdout_of(&out));
-    let pairs = verdict_pairs(&state, &id);
-    assert_eq!(value_of(&pairs, "verdict"), "INCONCLUSIVE");
-    assert_eq!(value_of(&pairs, "verify_red"), "0", "赤が 0");
-    let evidence = value_of(&pairs, "evidence");
-    for needle in ["検出線", "n=3", "rc 2"] {
-        assert!(evidence.contains(needle), "理由が {needle} を名指す: {evidence}");
-    }
-    assert!(!state.join("lens-ran").exists(), "測れなかった周は lens を起動しない");
-    assert!(show_line(&repo, &state, &id).contains("stage=Gated"), "段は Gated のまま（測り直せる）");
-    assert_eq!(gated_details(&state, &id), vec!["verdict:INCONCLUSIVE".to_owned()]);
     clean(&[&repo, &state]);
 }
 

@@ -138,9 +138,6 @@ pub(super) const USAGE_HEAD: &str = "confine-usage";
 ///
 /// 検出線を撃たない周（[`Detection::Skip`]・設計 pipeline.md §30）は写しの検出線の代わりに**空の列**を渡し
 /// （行を撃つ実装は 1 本のまま）、その段の位置に skip record を 1 本置く（[`records_of`]・main 実測と同じ形）。
-/// 撃っていないので `detection_unmeasured` は `None` のままである。前周の record を持ち越す周（[`Detection::Carry`]・
-/// 設計 §40 形 (b)）も同じ位置に写しの record を 1 本置く（[`carried_record`]）。撃つ周の検出線の record は便の diff の
-/// `patch_id` を持つ（[`detection_record`]）。
 ///
 /// 撃った直後に検出線の判定行と出力を run dir の**周ごとの置き場**へ写す（[`keep_detection`]・設計
 /// gate-cost.md §15 (1)）——便の worktree の出力は追随の撃ち直しが作り直すので、写さないと 1 周目の
@@ -148,19 +145,16 @@ pub(super) const USAGE_HEAD: &str = "confine-usage";
 pub(super) fn record_verify(entry: &Gate<'_>, worktree: &Path, base: &str) -> Result<Counted, String> {
     let frozen = frozen_copy(entry)?;
     let admit = Admit { state_dir: entry.state_dir, run: entry.run, rules: entry.limits.admission(entry.policy) };
-    // 撃つ周だけ便の diff の patch-id を測り、検出線の record に `patch_id=` で残す（設計 §40 形 (b)・撃つ前の木）。
     // 純移動の周は母集団の diff を渡し、落とした `+` 行の本数を record の `pure-move=` で残す（設計 §14 約束 2 / 3）。
     let mut pure_move = None;
-    let (detection, placed, patch): (Vec<String>, Option<Placed<'_>>, Option<String>) = match &entry.detection {
+    let (detection, placed): (Vec<String>, Option<Skipped<'_>>) = match entry.detection {
         Detection::Run => {
             let lines = aimed_lines(entry.state_dir, entry.run, frozen.detection_verify())?;
             let (lines, dropped) = population_lines(entry.state_dir, entry.run, worktree, base, lines)?;
             pure_move = dropped;
-            let patch = if lines.is_empty() { None } else { super::patch_id(worktree, base, "HEAD") };
-            (lines, None, patch)
+            (lines, None)
         }
-        Detection::Skip(reason) => (Vec::new(), Some(Placed::Skip(Skipped::detection(*reason, None))), None),
-        Detection::Carry(carried) => (Vec::new(), Some(Placed::Carried(carried)), None),
+        Detection::Skip(reason) => (Vec::new(), Some(Skipped::detection(reason, None))),
     };
     let checks = Checks {
         worktree,
@@ -183,19 +177,14 @@ pub(super) fn record_verify(entry: &Gate<'_>, worktree: &Path, base: &str) -> Re
     // ある（rc に依らず「測れなかった」・設計 gate-cost.md §4.2）。
     let unreadable = steps.iter().any(is_unreadable);
     let killed = steps.iter().find_map(box_kill);
-    // 検出線が rc 2（測れなかった）で終えた周も同じ極性（`s2-07l.331`・設計 pipeline.md §5.3）。
-    // 最初にそうなった行の `n` を持つ（理由に名指す・record は残す）。skip record は検出線の段の
-    // 位置＝検出線の行より後ろにしか入らないので、この `n` は record の `n` と一致する。
-    let unmeasured = steps
-        .iter()
-        .position(detection_unmeasured)
-        .map(|index| index as u64 + 1);
-    for record in records_placed(&steps, placed, Marks { patch: patch.as_deref(), pure_move }) {
+    for record in records_placed(&steps, placed, pure_move) {
         if let Some(step) = record.step {
             if step.is_closed() {
                 // 撃っていない行は赤でも診断の対象でもない（record だけ残す）。
                 busy = busy.or(Some(record.n));
             } else {
+                // 検出線の rc 2（測れなかった）は赤にも「測れなかった」の判定にも数えない（record の rc 2 のまま・
+                // 設計 gate-cost.md §44 形 (7)）。
                 if step.rc != 0 && !is_unreadable(step) && box_kill(step).is_none() && !detection_unmeasured(step) {
                     red += 1;
                 }
@@ -204,7 +193,7 @@ pub(super) fn record_verify(entry: &Gate<'_>, worktree: &Path, base: &str) -> Re
         record.diagnose(&tail_path, entry.policy)?;
         append_line(&path, &record.body, entry.policy).map_err(|err| err.to_string())?;
     }
-    Ok(Counted { red, unreadable, killed, detection_unmeasured: unmeasured, busy })
+    Ok(Counted { red, unreadable, killed, busy })
 }
 
 /// 検出線の的を渡す旗（`cargo xtask mutants-diff` の `--targets <file>`・設計 gate-cost.md §16 (2)）。
@@ -483,18 +472,9 @@ fn notice_line(input: &LensInput, elided: (u64, u64)) -> String {
     }
 }
 
-/// 赤い行と撃ち直した行の見出し + stderr の末尾を診断 file へ残す（緑で撃ち直しも無い行は残さない）。
-///
-/// 撃ち直した行（`retried_from` が `Some`・設計 gate-cost.md §21）は **1 回目の見出し
-/// （`## n=<i> rc=<rc> retry=1 cmd=…`）+ 1 回目の末尾を先に**書き、その後に 2 回目を従来の見出しで書く
-/// ——2 回目が緑でも書く（1 回目を捨てると「なぜ撃ち直したか」が便の外から読めない・C10）。
-/// `verify.jsonl` の record は 2 回目の 1 本だけで、2 段になるのは診断 file だけである。
+/// 赤い行の見出し + stderr の末尾を診断 file へ残す（緑の行は残さない）。
 fn append_diagnosis(path: &Path, policy: LockPolicy, n: u64, step: &Step) -> Result<(), String> {
-    if let Some((rc, tail)) = &step.retried_from {
-        let head = format!("## n={n} rc={rc} retry=1 cmd={}", step.cmd);
-        append_stderr(path, policy, &head, tail)?;
-    }
-    if step.rc != 0 || step.retried_from.is_some() {
+    if step.rc != 0 {
         let head = format!("## n={n} rc={} cmd={}", step.rc, step.cmd);
         append_stderr(path, policy, &head, &step.stderr)?;
     }
@@ -594,7 +574,7 @@ impl Record<'_> {
     /// この record の段の診断（見出し + stderr の写し）を `path` へ append する（gate の `verify.stderr.log` と
     /// 主実測の `verify-main.stderr.log` が**同じ 1 本**で書く・設計 pipeline.md §35 (3)）。
     ///
-    /// 残すのは撃って赤かった段と撃ち直した段だけで、skip record と遮断器が閉じて撃たなかった段は何も書かない。
+    /// 残すのは撃って赤かった段だけで、skip record と遮断器が閉じて撃たなかった段は何も書かない。
     pub fn diagnose(&self, path: &Path, policy: LockPolicy) -> Result<(), String> {
         match self.step {
             Some(step) if !step.is_closed() => append_diagnosis(path, policy, self.n, step),
@@ -608,142 +588,43 @@ impl Record<'_> {
 /// 検出線を省いた周は、その段の位置（[`Check::Contract`] の直前・契約の行が無ければ末尾）に skip record を
 /// 1 本挟み、`n` は挟んだ record も含めて通しで振る（**撃たなかった事実を黙って落とさない**・設計 §30）。
 pub fn records_of<'a>(steps: &'a [Step], skipped: Option<Skipped<'_>>) -> Vec<Record<'a>> {
-    records_placed(steps, skipped.map(Placed::Skip), Marks { patch: None, pure_move: None })
+    records_placed(steps, skipped, None)
 }
 
-/// 撃った検出線の record だけが持つ印（便の diff の patch-id と、純移動の周に落とした `+` 行の本数）。
-#[derive(Clone, Copy)]
-struct Marks<'a> {
-    /// `patch_id=`（設計 §40 形 (b)）。
-    patch: Option<&'a str>,
-    /// `pure-move=`（設計 gate-cost.md §14 約束 3・要約にならない便は `None`＝field を欠く）。
-    pure_move: Option<usize>,
-}
-
-/// 検出線の段の位置に置く、撃っていない record 1 本（skip か、前周の写し）。
-enum Placed<'a> {
-    /// 省いた周（[`skip_record`]）。
-    Skip(Skipped<'a>),
-    /// 前周の record を持ち越した周（[`carried_record`]・設計 §40 形 (b)）。
-    Carried(&'a Carried),
-}
-
-impl Placed<'_> {
-    /// `n` 番の record の本文。
-    fn body(&self, number: u64) -> String {
-        match self {
-            Self::Skip(skip) => skip_record(number, *skip),
-            Self::Carried(carried) => carried_record(number, carried),
-        }
-    }
-}
-
-/// [`records_of`] の本体（置く record は skip か写し・撃った検出線の record は `marks` を持つ）。
-fn records_placed<'a>(steps: &'a [Step], placed: Option<Placed<'_>>, marks: Marks<'_>) -> Vec<Record<'a>> {
+/// [`records_of`] の本体（置く record は skip・撃った検出線の record は純移動の周に落とした `+` 行の本数
+/// `pure_move` を持つ）。
+fn records_placed<'a>(steps: &'a [Step], placed: Option<Skipped<'_>>, pure_move: Option<usize>) -> Vec<Record<'a>> {
     let mut records: Vec<Record<'a>> = Vec::new();
     let mut pending = placed;
     for step in steps {
         if step.stage == Check::Contract {
-            if let Some(place) = pending.take() {
+            if let Some(skip) = pending.take() {
                 let n = next_number(records.len());
-                records.push(Record { n, body: place.body(n), step: None });
+                records.push(Record { n, body: skip_record(n, skip), step: None });
             }
         }
         let n = next_number(records.len());
-        records.push(Record { n, body: marked_record(n, step, marks), step: Some(step) });
+        records.push(Record { n, body: marked_record(n, step, pure_move), step: Some(step) });
     }
-    if let Some(place) = pending {
+    if let Some(skip) = pending {
         let n = next_number(records.len());
-        records.push(Record { n, body: place.body(n), step: None });
+        records.push(Record { n, body: skip_record(n, skip), step: None });
     }
     records
-}
-
-/// 撃った検出線の record が持つ便の diff の patch-id の field（設計 §40 形 (b)）。
-const PATCH_ID_FIELD: &str = "patch_id";
-
-/// 写しの record が持つ前周の `n` の field（写しと実測を区別する印・C10）。
-const CARRIED_FIELD: &str = "carried";
-
-/// 撃った 1 段の record（[`step_record`]）に、**検出線の段だけ** `patch_id=<id>` を足す（`patch` が `None` の周と
-/// 他の段は [`step_record`] と同じ字面・schema は 1 のまま・設計 §40 形 (b)）。
-pub fn detection_record(number: u64, step: &Step, patch: Option<&str>) -> String {
-    marked_record(number, step, Marks { patch, pure_move: None })
 }
 
 /// 純移動の周に撃った検出線の record が持つ、落とした `+` 行の本数の field（設計 gate-cost.md §14 約束 3）。
 const PURE_MOVE_FIELD: &str = "pure-move";
 
-/// [`detection_record`] の本体: 検出線の段だけ `patch_id=` と、撃った周の `pure-move=` を足す（撃たなかった行は欠く）。
-fn marked_record(number: u64, step: &Step, marks: Marks<'_>) -> String {
+/// 撃った 1 段の record（[`step_record`]）に、**検出線の段だけ**撃った周の `pure-move=` を足す（撃たなかった行と
+/// 要約にならない便は欠く）。
+fn marked_record(number: u64, step: &Step, pure_move: Option<usize>) -> String {
     let mut fields = step_fields(number, step);
     if step.stage == Check::Detection {
-        if let Some(found) = marks.patch {
-            fields.push((PATCH_ID_FIELD, Value::Str(found.to_owned())));
-        }
-        if let Some(dropped) = marks.pure_move.filter(|_| !step.is_closed()) {
+        if let Some(dropped) = pure_move.filter(|_| !step.is_closed()) {
             fields.push((PURE_MOVE_FIELD, Value::Num(u64::try_from(dropped).unwrap_or(u64::MAX))));
         }
     }
-    json_lite::write_object(&fields)
-}
-
-/// 前周の検出線の record（持ち越しの材料・[`carried_from`] だけが作る・設計 §40 形 (b)）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Carried {
-    /// 前周の record の `n`（写しの `carried=`）。
-    n: u64,
-    /// 前周の record の field（`carried` を除いて並びのまま・`n` は写す周に振り直す）。
-    pairs: Vec<(String, Value)>,
-}
-
-/// 便の `verify.jsonl` から、`patch` と同じ `patch_id` を持つ前周の検出線の record を引く（設計 §40 形 (b)）。
-///
-/// 前周の record は**最後に撃った（または写した）検出線の record**（`kind=detection` ∧ `skipped` を持たない）である。
-/// 引けるのはその record が `patch_id` を持ち、`patch` と同じで、rc 0 の周だけ。`patch` が無い・file を読めない・
-/// 1 行でも JSON として読めない・record が無い・`patch_id` が無い・違う周は `None`（呼び手は撃つ＝fail-closed）。
-pub fn carried_from(state_dir: &Path, run: &str, patch: Option<&str>) -> Option<Carried> {
-    let patch = patch?;
-    let text = std::fs::read_to_string(verify_log_path(state_dir, run)).ok()?;
-    let mut last = None;
-    for line in text.lines().filter(|line| !line.trim().is_empty()) {
-        let pairs = json_lite::parse_object(line.trim()).ok()?;
-        let detection = field(&pairs, "kind") == Some(&Value::Str(Check::Detection.as_str().to_owned()));
-        if detection && field(&pairs, "skipped").is_none() {
-            last = Some(pairs);
-        }
-    }
-    let pairs = last?;
-    if field(&pairs, PATCH_ID_FIELD) != Some(&Value::Str(patch.to_owned())) || field(&pairs, "rc") != Some(&Value::Num(0)) {
-        return None;
-    }
-    let Some(Value::Num(n)) = field(&pairs, "n") else {
-        return None;
-    };
-    let n = *n;
-    let pairs = pairs.into_iter().filter(|(key, _)| key != CARRIED_FIELD).collect();
-    Some(Carried { n, pairs })
-}
-
-/// record の field 1 つ（無ければ `None`）。
-fn field<'a>(pairs: &'a [(String, Value)], key: &str) -> Option<&'a Value> {
-    pairs.iter().find(|(found, _)| found == key).map(|(_, value)| value)
-}
-
-/// 持ち越した周の record（前周の record を `n` だけ振り直して写し、末尾に `carried=<前周の n>`・schema は 1 のまま）。
-///
-/// `cmd` / `rc` / `line` / `patch_id` は前周の値のまま（撃っていない＝新しい値が無い）で、実測との区別は
-/// `carried` の有無が持つ（C10）。
-pub fn carried_record(number: u64, carried: &Carried) -> String {
-    let mut fields: Vec<(&str, Value)> = carried
-        .pairs
-        .iter()
-        .map(|(key, value)| match key.as_str() {
-            "n" => ("n", Value::Num(number)),
-            found => (found, value.clone()),
-        })
-        .collect();
-    fields.push((CARRIED_FIELD, Value::Num(carried.n)));
     json_lite::write_object(&fields)
 }
 
@@ -858,7 +739,7 @@ pub fn step_record(number: u64, step: &Step) -> String {
     json_lite::write_object(&step_fields(number, step))
 }
 
-/// [`step_record`] の field の並び（[`detection_record`] が末尾に `patch_id` を足す）。
+/// [`step_record`] の field の並び（[`marked_record`] が検出線の段の末尾に `pure-move` を足す）。
 fn step_fields(number: u64, step: &Step) -> Vec<(&'static str, Value)> {
     let mut fields = vec![
         ("schema", Value::Num(SCHEMA)),
@@ -881,10 +762,6 @@ fn step_fields(number: u64, step: &Step) -> Vec<(&'static str, Value)> {
     }
     if let Some(released) = step.scope {
         fields.push(("scope", Value::Str(released.as_str().to_owned())));
-    }
-    // 撃ち直した周だけ `retried=1`（設計 gate-cost.md §21・撃ち直さない周は field を欠く・C10）。
-    if step.retried_from.is_some() {
-        fields.push(("retried", Value::Num(1)));
     }
     if let Some(line) = &step.line {
         fields.push(("line", Value::Str(line.clone())));
@@ -909,16 +786,14 @@ fn step_fields(number: u64, step: &Step) -> Vec<(&'static str, Value)> {
     fields
 }
 
-/// `verify.jsonl` の数え上げ（赤の本数と、2 つの「測れなかった」）。
+/// `verify.jsonl` の数え上げ（赤の本数と「測れなかった」の印）。
 pub(super) struct Counted {
-    /// rc≠0 だった verify 行の本数（**測れた行**だけを数える）。
+    /// rc≠0 だった verify 行の本数（**測れた行**だけを数える・検出線の rc 2 は数えない）。
     pub(super) red: u64,
     /// 段①（write-set 照合）で diff の path を読めなかったか。
     pub(super) unreadable: bool,
     /// 箱の中で殺された行の理由（在れば）。
     pub(super) killed: Option<Reason>,
-    /// 検出線が rc 2（測れなかった）で終えた行の `n`（最初の 1 行・在れば）。
-    pub(super) detection_unmeasured: Option<u64>,
     /// 器の健康の遮断器が閉じて撃たなかった行の `n`（最初の 1 行・在れば・設計 gate-cost.md §32 約束 5）。
     pub(super) busy: Option<u64>,
 }
@@ -930,9 +805,9 @@ pub(super) struct Counted {
 /// FAIL（判定に届いた便の終端）に化ける（`s2-07l.329` run 1 の実測）。**rc 1 の検出線と、検出線以外の
 /// rc 2 は従来どおり赤**——除外は「検出線 ∧ rc 2」の 1 点だけで、rc の意味は道具の側が持つ。
 ///
-/// 撃ち直すか（[`super::verify::run_checks_admitted`]・設計 gate-cost.md §21）も**同じ 1 点**で見る
-/// （判定と撃ち直しの条件を 2 面に持たない）。
-pub(super) fn detection_unmeasured(step: &Step) -> bool {
+/// 除いた行は INCONCLUSIVE にも倒さず、撃ち直しもしない（record の rc 2 のまま残る・設計 gate-cost.md §44
+/// 形 (6)(7)）。
+fn detection_unmeasured(step: &Step) -> bool {
     step.stage == Check::Detection && step.rc == 2
 }
 
