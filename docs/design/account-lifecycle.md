@@ -270,6 +270,25 @@ user-scope MCP 設定の同期・別口座への `--resume` の混線 fence・pr
 - 却下: 席が自分を終える（Claude の /exit は人か pane の入力でしか撃てない・ADR-0055 OPT3 の柵と同じ根）／process を kill する（作業記憶が退避されない・N1・§20 の却下のまま）／退避の合図と同じ周に /exit を送る（席が作業記憶を残す番が無い）／hook が記録の口座を移動の周に書き換える（記録を書くのは 1 周の群の段だけ・§20 形 1）／断りの行に候補の一覧を出す（次の 1 手は 1 つ・対話面の作法）。
 - 後続: /exit の送りの上限（周の回数）を置くかは実測を見て決める（rules 行は足さない）。
 
+## 22. /exit の dialog を器が確定する（第 3 段の続き）— 続きの周で入力欄の門が /exit の dialog の既定の行を返す席には Enter を 1 回送り、/exit の送りは未確認でも inject の記録に残す（契約表の行 k・§21 の続き・[ADR-0049](../../design-intent/decisions/ADR-0049-seat-accounts-are-owned-by-project-groups.html) §2・[ADR-0055](../../design-intent/decisions/ADR-0055-group-pressure-is-measured-at-run-ends-and-seat-turns-without-a-timer.html)・`s2-07l.604`）
+
+やさしく言うと: §21 で器は /exit を送るようになったが、席に subagent や background の shell が残っていると Claude Code は「Background work is running」の確認 dialog を出して止まる。器は次の周に同じ /exit を送るつもりだったが、入力欄の門が dialog の画面を「人の打ちかけ」と読んで何も送らず、席は永久に保留になる。dialog の既定は「Exit and stop tasks」なので、門が**その既定の行**を返した周だけ Enter を 1 回送れば席は終わる。
+
+- 出所: 台帳 `s2-07l.604` の notes（2026-09-24 の実地試験・toy の置き場で本物の claude を subagent つきで退避させた）: 続きの周の /exit は届き dialog が出る・その次の周からは `notify::send` が `Blocked::Foreign` で断り記録も event も残らない・手で Enter を 1 回送ると既定が確定して shell に戻り、次の周で同じ target に新しい口座の席が立った。`CLAUDE_CODE_DISABLE_AGENT_VIEW=1` は dialog を消さない（消えるのは「Move to background and exit」の選択肢だけ・公式 doc の記述はその意味）＝ `crates/scribe2/src/seat/cycle/launch.rs` の `with_agent_view_off` の注釈と account-autonomy.md の前提は誤りで、本 § が正す（env の前置は残す: 選択肢が 2 つになり既定が「Exit and stop tasks」で固定される）。
+- 現物（verified・main 75829d9）:
+  - 続きの周は `crates/scribe2/src/pipe/dispatch/group.rs` の `relaunch`（`Wait::Once`）が `notify::send`（`crates/scribe2/src/pipe/notify.rs`）で `/exit` を送り、結果を捨てる。`send` は `deliver_within`（`crates/scribe2/src/seat/inject.rs`）で、送る前に `pass_input` の門を通し、送った後は目印の出現で settle する。dialog の周は目印が現れないので `Delivery::Unconfirmed` ＝ `record` は呼ばれず inject.jsonl に残らない。
+  - 門の読み手は `input_tail`（`crates/scribe2/src/seat/mod.rs`）: 可視域で最後に `❯` を含む行の右側を返す。dialog の画面では既定の選択肢の行 `❯ 1. Exit and stop tasks` が最後の `❯` 行なので tail は `1. Exit and stop tasks`（非空・記録と一致しない）＝ `Blocked::Foreign`。
+  - Enter だけを送る口は `inject.rs` に既に在る（`OwnQueued` の周の 1 回・`send-keys Enter`）。
+- 形（1 つずつ歯が測る・行 k の done と 1:1）:
+  1. **/exit の送りを記録に残す**: 続きの周の /exit は `Delivered` でも `Unconfirmed` でも inject の記録に 1 行残す（`who` は群の段の値・`what` は `/exit`）。`Refused` は残さない（送っていない）。
+  2. **既定の行への Enter**: 続きの周で pane が shell でない席に対し、門が `Foreign` で断り、かつその tail（畳んだ字面）が dialog の既定の行の literal `1. Exit and stop tasks` に等しい周は、/exit を送らず Enter を 1 回だけ送る（同じ周に /exit と Enter の両方は送らない）。送りは inject の記録に 1 行（`what` は `enter:exit-dialog` の固定の字面）。tail がそれ以外（人の打ちかけ・別の dialog・prompt 行なし）の周は今のまま 1 key も送らない（fail-closed・N1）。
+  3. **Enter の後**: 次の周に shell に戻っていれば §20 形 6 のとおり同じ target へ起こす。戻っていなければ同じ判定を繰り返す（dialog が残れば Enter・prompt 行が戻れば /exit・周ごとに 1 key 列）。上限は置かない（§21 の後続のまま）。
+  4. **移動の周（`Wait::Settle`）と群 0 の host と群に属さない anchor は 1 語も変わらない。** 席の hook の行・`Launched` の variant・event の kind の列も変わらない。
+- 触らない: `input_tail` と `pass_input` の判定（門は緩めない＝dialog の弁別は群の段の側で tail の等値で行う）・`seat.cycle_settle_s`・§20 の判定・`with_agent_view_off`（env は残す）。
+- 歯: `crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs`（`pipe_dispatch_group_exit_dialog_` 接頭辞・§21 の偽 tmux の fixture に「pane の可視域の字面」を作り分ける口を足す）: 続きの周で pane が claude で入力欄が空の席は /exit の送り 1 行と inject の記録 1 行（base では記録 0 ＝ RED） ／ 同じ席の次の周で pane の最後の `❯` 行が `❯ 1. Exit and stop tasks` なら Enter の送り 1 回・/exit の送り 0・記録 1 行（`enter:exit-dialog`）（base では送り 0 ＝ RED） ／ tail が別の字面（例 `1. Exit and stop task`・`foo`）なら送り 0・記録 0 ／ 移動の周は Enter 0。
+- 却下: 門を通さず tmux へ直に /exit を送る（co-submit の門を外す・N1）／Enter を条件なしに送る（人の打ちかけを submit する）／dialog の 3 行全部を読む（読む字面は門が既に返す tail の 1 行で足りる・C3.3 の柵）／`CLAUDE_CODE_DISABLE_AGENT_VIEW` を外す（3 択になり「Move to background and exit」が残る）／席の process を kill（§20 の却下のまま）。
+- 後続: 移り先の口座が anchor を一度も trust していない周は起動の trust dialog（既定 No, exit）で席が立たず `launch-unconfirmed` の保留になる（同じ実地試験で実測）。公式 doc は口座の `.claude.json` の `projects[<anchor>].hasTrustDialogAccepted` を書く方法だけを案内する。本 repo は JSON の入れ子を書く道具を持たないので、依存の追加（A3）か画面の読みかの裁定を待って別の行にする。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -373,4 +392,15 @@ verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe
 size = "M"
 depends = ["i"]
 done = "(1) 記録の口座 ≠ 登録 row の口座の群の続きの周は、pane が shell でない席へ退避の合図と同じ口で /exit の 1 行を周ごとに 1 回送り、その周は起こさず保留の event を重ねず、shell に戻った周は §20 形 6 のとおり同じ target へ起こし、移動の周（記録を書いた周）は退避の 1 行だけで /exit を送らない (2) 席の hook は群の今の口座（current_of）を読み、記録 ≠ row の周は逼迫を測らず row= と current= を持つ移動中の 1 行を出して移動を頼む記録を置かず、一致して逼迫の周は「次の 1 周が移り先を決める」の 1 行で「第 3 段まで手で」の語を持たず、記録が読めない周は 0 行 (3) reason=group-account の断りの行は next=seat <記録の label> -c を置き場の 2 語の前に持ち（短い形と長い形）、他の断りの行は 1 字も変わらない (4) event の kind の列と Launched の variant と §20 の判定は変わらず、群 0 の host と群に属さない anchor は 1 語も変わらない 歯: pipe_dispatch_group_exit_ の歯が続きの周の /exit の送り 1 行・周ごとに 1 回・shell に戻った周は起動 1・移動の周は /exit 0 を測り、hook_group_current_ の歯が row= / current= の 1 行と頼みの記録 0 と「第 3 段」の語の不在を測り、seat_launch_group_next_ の歯が next= の位置と他の断りの不変を測る"
+
+[[contract]]
+id = "k"
+title = "/exit の dialog を器が確定する — 続きの周で門が既定の行 1. Exit and stop tasks を返す席には Enter を 1 回送り、/exit の送りは Unconfirmed でも inject に記録する（§22・ADR-0049 §2・s2-07l.604）"
+req = ["FR38", "FR36", "NFR4"]
+section = "22"
+write-set = ["crates/scribe2/src/pipe/dispatch/group.rs", "crates/scribe2/src/pipe/notify.rs", "crates/scribe2/src/seat/inject.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "docs/design/account-lifecycle.md"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_group_exit_dialog_"]
+size = "M"
+depends = ["j"]
+done = "(1) 続きの周の /exit の送りは Delivered でも Unconfirmed でも inject の記録に 1 行残り（what は /exit）、Refused の周は残らない (2) 続きの周で pane が shell でない席に対し、門が Foreign で断りその tail が literal 1. Exit and stop tasks に等しい周は /exit を送らず Enter を 1 回だけ送って inject の記録に what=enter:exit-dialog の 1 行を残し、tail がそれ以外の周は 1 key も送らず記録も残さない (3) Enter の後に shell に戻った周は §20 形 6 のとおり同じ target へ起こし、戻らない周は同じ判定を繰り返して上限を置かない (4) 移動の周と群 0 の host と群に属さない anchor と席の hook の行と Launched の variant と event の kind の列は 1 語も変わらない 歯: pipe_dispatch_group_exit_dialog_ の歯が /exit の記録 1 行・既定の行への Enter 1 回と記録 1 行・別の字面への送り 0・移動の周の Enter 0 を測る"
 <!-- contracts:end -->
