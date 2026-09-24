@@ -10,11 +10,11 @@ use crate::fleet::json_tree::{self, Tree};
 use crate::fleet::{account_dir, effective_accounts, replay, store, State};
 use crate::hook::vessel::digest::{self, PluginRecord};
 use crate::hook::vessel::{upstream, Upstream, DEFAULT_BRANCH, DEFAULT_REMOTE};
+use crate::invocation::Invocation;
 use crate::name::{NAME, PLUGIN_DIR};
 use crate::rules::manifest::Manifest;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// 帳簿の dir（口座の設定 dir の直下）。
 const LEDGER_DIR: &str = "plugins";
@@ -237,7 +237,7 @@ pub fn head_of(vessel: Option<&Path>) -> Head {
     let Some(dir) = vessel else {
         return Head::Undeclared;
     };
-    let out = Command::new("git").arg("-C").arg(dir).args(["rev-parse", "HEAD"]).output().ok();
+    let out = Invocation::new("git").arg("-C").arg(dir).args(["rev-parse", "HEAD"]).output().ok();
     match out.filter(|found| found.status.success()).map(|found| String::from_utf8_lossy(&found.stdout).trim().to_owned()) {
         Some(sha) if !sha.is_empty() => Head::Sha(sha),
         _ => Head::Unknown,
@@ -395,11 +395,12 @@ pub fn doctor_lines(state_dir: &Path, rules: Option<&str>) -> Vec<String> {
 mod tests {
     use super::{drift_of, head_of, read_ledger, record_of, render_consumer, same_dir, Consumer, Drift, Head, Ledger, Source, DRIFTS};
     use crate::hook::vessel::digest::{self, PluginRecord};
+    use crate::invocation::Invocation;
     use crate::order::is_declaration_order;
+    use crate::pipe::fixture::{exited, Call, Stub};
     use crate::seat::seat_dir;
     use std::fs;
     use std::path::{Path, PathBuf};
-    use std::process::Command;
 
     /// 歯ごとの空の tmp dir（in-file の歯の置き場・env を読まないのは器の本体の規律〔C2.2〕）。
     fn scratch(name: &str) -> PathBuf {
@@ -438,7 +439,7 @@ mod tests {
 
     /// git を 1 回撃つ（失敗は読み手の assert が落とす）。
     fn git(dir: &Path, args: &[&str]) {
-        let _ = Command::new("git").arg("-C").arg(dir).args(args).output();
+        let _ = Invocation::new("git").arg("-C").arg(dir).args(args).output();
     }
 
     // flip-check: retroactive s2-07l.338
@@ -538,6 +539,30 @@ mod tests {
         };
         assert_eq!(sha.len(), 40, "全桁: {sha}");
         assert!(sha.chars().all(|ch| ch.is_ascii_hexdigit()), "hex: {sha}");
+    }
+
+    /// HEAD の読みは起動の記述を通る（設計 core-boundary.md §9 行 h）: program は git・引数は `-C <repo> rev-parse HEAD`。
+    /// rc 0 で空（空白だけ）の stdout は `Unknown`（空の sha を `Sha` にしない）・rc 0 の sha は trim した全桁・rc 非 0 と
+    /// 起動の失敗は `Unknown`。
+    #[test]
+    fn invocation_hook_consumers_head_empty_stdout_is_unknown() {
+        let stub = Stub::install(|call| match call.args.get(1).map(String::as_str) {
+            Some("/empty") => exited(0, b" \n"),
+            Some("/sha") => exited(0, b" abc123 \n"),
+            Some("/fail") => exited(128, b"abc123\n"),
+            _ => Err(std::io::Error::other("gone")),
+        });
+        assert_eq!(head_of(Some(Path::new("/empty"))), Head::Unknown, "rc 0 で空の stdout");
+        assert_eq!(head_of(Some(Path::new("/sha"))), Head::Sha("abc123".to_owned()), "trim した sha");
+        assert_eq!(head_of(Some(Path::new("/fail"))), Head::Unknown, "rc 非 0 は stdout が在っても Unknown");
+        assert_eq!(head_of(Some(Path::new("/gone"))), Head::Unknown, "起動の失敗");
+        let call = |dir: &str| Call {
+            program: "git".to_owned(),
+            args: ["-C", dir, "rev-parse", "HEAD"].iter().map(|arg| (*arg).to_owned()).collect(),
+            cwd: None,
+            envs: Vec::new(),
+        };
+        assert_eq!(stub.calls(), [call("/empty"), call("/sha"), call("/fail"), call("/gone")], "git の program と引数");
     }
 
     /// 語は 5 つで宣言順に閉じる（variant を足した周はここの件数が変わる）。

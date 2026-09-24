@@ -15,13 +15,13 @@ use super::SETTINGS_FILE;
 use crate::fleet::account_dir;
 use crate::fleet::json_tree::{self, Tree};
 use crate::hook::host_guard::Kind;
+use crate::invocation::Invocation;
 use crate::name::NAME;
 use crate::rules::manifest::Manifest;
 use crate::rules::RuleValue;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// 配線の matcher（跨版で固定・生成 hooks.json の PreToolUse と同じ 5 道具）。
 pub const MATCHER: &str = "Bash|Edit|Write|MultiEdit|NotebookEdit";
@@ -254,7 +254,7 @@ impl Binary {
 
 /// `bin --version` を子 process で 1 回撃ち、1 行目を `version`（doctor 自身の `--version` の行）と比べる。
 pub fn resolve(bin: &Path, version: &str) -> Binary {
-    let Ok(out) = Command::new(bin).arg("--version").output() else {
+    let Ok(out) = Invocation::new(bin).arg("--version").output() else {
         return Binary::Missing;
     };
     if String::from_utf8_lossy(&out.stdout).lines().next() == Some(version) {
@@ -297,7 +297,7 @@ pub fn doctor_line(state_dir: &Path, rules: Option<&str>, version: &str, bin: &P
 
 #[cfg(test)]
 mod tests {
-    use super::{command_for, entry, merge, wire_entity, Merge, MATCHER, TIMEOUT_S};
+    use super::{command_for, entry, merge, resolve, wire_entity, Binary, Merge, MATCHER, TIMEOUT_S};
     use crate::fleet::json_tree::{parse, Tree};
     use crate::rules::manifest::Manifest;
     use crate::rules::RuleValue;
@@ -407,5 +407,31 @@ mod tests {
         }
         assert_eq!(wire_entity(&dir.join("absent.json"), &command()), Merge::Refused, "読めない file");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 版の照合は起動の記述を通る（設計 core-boundary.md §9 行 h）: program は bin・引数は `--version` の 1 つ。stdout の
+    /// 1 行目が doctor 自身の行と同じなら `Ok`・違えば（rc に依らず）`Other`・起動の失敗は `Missing`。
+    #[test]
+    fn invocation_hook_wire_version_reads_ok_other_and_missing() {
+        use crate::pipe::fixture::{exited, Call, Stub};
+        let stub = Stub::install(|call| match call.program.as_str() {
+            "/bin/same" => exited(0, b"scribe2 1.0\nextra\n"),
+            "/bin/other" => exited(0, b"scribe2 0.9\nscribe2 1.0\n"),
+            "/bin/failed" => exited(1, b"scribe2 1.0\n"),
+            _ => Err(std::io::Error::other("gone")),
+        });
+        let version = "scribe2 1.0";
+        assert_eq!(resolve(Path::new("/bin/same"), version), Binary::Ok, "1 行目が一致");
+        assert_eq!(resolve(Path::new("/bin/other"), version), Binary::Other, "1 行目が不一致（2 行目は見ない）");
+        assert_eq!(resolve(Path::new("/bin/failed"), version), Binary::Ok, "rc は見ない");
+        assert_eq!(resolve(Path::new("/bin/gone"), version), Binary::Missing, "起動の失敗");
+        let call = |program: &str| Call {
+            program: program.to_owned(),
+            args: vec!["--version".to_owned()],
+            cwd: None,
+            envs: Vec::new(),
+        };
+        let expected = [call("/bin/same"), call("/bin/other"), call("/bin/failed"), call("/bin/gone")];
+        assert_eq!(stub.calls(), expected, "bin の program と引数");
     }
 }

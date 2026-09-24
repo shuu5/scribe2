@@ -25,6 +25,7 @@ use super::{append, command_of, InjectionRecord, SCHEMA};
 use crate::cli_outcome::{Outcome, RC_BROKEN};
 use crate::fleet::account_dir;
 use crate::fleet::json_tree::{self, Tree};
+use crate::invocation::Invocation;
 use crate::name::NAME;
 use crate::polarity::{OnFailure, Polarity, Timing};
 use crate::rules::manifest::{AccountLabel, HostManifest, Manifest};
@@ -33,7 +34,6 @@ use std::ffi::OsStr;
 use std::fs;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Component, Path, PathBuf};
-use std::process::Command;
 use std::time::Instant;
 
 /// この境界の極性: 行為の時点で止め、payload・引数・rules を読めない周は通さない。
@@ -587,7 +587,7 @@ fn root_of(cwd: &Path) -> Option<PathBuf> {
 /// root からの `git ls-files -z` の file（root の字面と実体の両方で結ぶ）。git を読めない周は root 全体を守る
 /// （tracked を知らずに通さない・fail-closed）。
 fn tracked(root: &Path, git: &Path) -> Vec<PathBuf> {
-    let listed = Command::new(git).arg("-C").arg(root).args(["ls-files", "-z"]).output().ok();
+    let listed = Invocation::new(git).arg("-C").arg(root).args(["ls-files", "-z"]).output().ok();
     let roots = both(root.to_path_buf());
     let Some(output) = listed.filter(|output| output.status.success()) else {
         return roots;

@@ -18,13 +18,13 @@
 use super::{record, record_lines, Emit, Hooked};
 use crate::fleet::usage;
 use crate::fleet::{Allowance, WindowKind};
+use crate::invocation::Invocation;
 use crate::rules::manifest::{AccountGroup, Manifest};
 use crate::seat::{host_groups_dir, sanitize_target};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::Instant;
 
 /// 群の今の口座の記録の拡張子（`<群用 dir>/<群の名>.account`）。
@@ -299,7 +299,7 @@ fn line_of(hooked: &Hooked) -> Option<String> {
 /// 鮮度の外の口座を**子として**測る（`fleet usage --state-dir D --account <label> --fresh` の 1 形・待たない）。子は新しい
 /// process group の leader にし（hook の終わりで道連れにしない）、入出力は捨てる。起こせた周だけ `true`。
 fn measure_later(state_dir: &Path, account: &str) -> bool {
-    Command::new(crate::pipe::dispatch::myself())
+    Invocation::new(crate::pipe::dispatch::myself())
         .args(["fleet", "usage", "--state-dir"])
         .arg(state_dir)
         .args(["--account", account, "--fresh"])
@@ -313,7 +313,7 @@ fn measure_later(state_dir: &Path, account: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{pressed, Caps, Pressed};
+    use super::{measure_later, pressed, Caps, Pressed};
     use crate::fleet::{Allowance, Measured, WindowKind};
 
     /// 実測の行 1 つ。
@@ -339,5 +339,19 @@ mod tests {
         assert_eq!(pressed(&tie, caps).map(|found| found.window), Some(WindowKind::FiveHour), "同率は先の窓");
         let under = [measured(WindowKind::FiveHour, 84), measured(WindowKind::SevenDay, 94)];
         assert_eq!(pressed(&under, caps), None, "どの窓も閾値未満");
+    }
+
+    /// 鮮度の外の口座を測る子は起動の記述を通る（設計 core-boundary.md §9 行 h）: program は自分・引数は `fleet usage
+    /// --state-dir <D> --account <label> --fresh`。記録する stub は spawn を断るので、起動は偽（起こせた周だけ真）。
+    #[test]
+    fn invocation_hook_group_self_launch_failure_is_false() {
+        use crate::pipe::fixture::{exited, Stub};
+        let state = std::path::Path::new("/nonexistent-invocation-hook-group");
+        let stub = Stub::install(|_| exited(0, b""));
+        assert!(!measure_later(state, "a1"), "stub の断りは起動の失敗＝偽");
+        let found: Vec<(String, Vec<String>)> = stub.calls().into_iter().map(|call| (call.program, call.args)).collect();
+        let args = ["fleet", "usage", "--state-dir", "/nonexistent-invocation-hook-group", "--account", "a1", "--fresh"];
+        let expected = vec![(crate::pipe::dispatch::myself(), args.iter().map(|arg| (*arg).to_owned()).collect())];
+        assert_eq!(found, expected, "program は自分・引数は fleet usage の 1 形");
     }
 }

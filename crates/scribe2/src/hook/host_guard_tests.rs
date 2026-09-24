@@ -13,13 +13,13 @@ use super::{
 };
 use crate::hook::command::{self, denied_in, CommandDecision};
 use crate::hook::ledger_guard;
+use crate::invocation::Invocation;
 use crate::name::NAME;
 use crate::order::is_declaration_order;
 use crate::rules::host_manifest_path;
 use crate::rules::manifest::{HostManifest, Manifest};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// fixture の裁定 id。
 const RULING: &str = "user 2026-09-19T15:28Z";
@@ -318,7 +318,7 @@ impl Place {
 
 /// git を 1 回撃つ（失敗は読み手の assert が落とす）。
 fn git(dir: &Path, args: &[&str]) {
-    let _ = Command::new("git").arg("-C").arg(dir).args(args).output();
+    let _ = Invocation::new("git").arg("-C").arg(dir).args(args).output();
 }
 
 /// 記号は閉じた 3 値の宣言順で、字面から引け、rules 行の値の綴り違いは読み込みで拒み 3 記号は受理される。
@@ -1366,4 +1366,28 @@ fn host_guard_self_fnmatch_follows_the_glob_rules() {
     for (pattern, text) in [("a*c", "a/b/d"), ("a?c", "ac"), ("[a-c]x", "dx"), ("[!a]x", "ax"), ("[ab", "a"), ("abc", "ab"), ("ab", "abc")] {
         assert!(!fnmatch(pattern, text), "{pattern} は {text} に当たらない");
     }
+}
+
+/// tracked の読みは起動の記述を通る（設計 core-boundary.md §9 行 h）: program は scene の git・引数は `-C <root> ls-files -z`。
+/// rc 0 の stdout は NUL で割って空の名を落とし root に結ぶ・rc 非 0 と起動の失敗は root 全体（fail-closed）。
+#[test]
+fn invocation_hook_host_guard_ls_files_reads_the_nul_split() {
+    use crate::pipe::fixture::{exited, Call, Stub};
+    let root = Path::new("/nonexistent-invocation-hook-host-guard");
+    let stub = Stub::install(|call| match call.program.as_str() {
+        "/fake/git-ok" => exited(0, b"a\0dir/b c\0\0"),
+        "/fake/git-fail" => exited(1, b"a\0"),
+        _ => Err(std::io::Error::other("gone")),
+    });
+    let under = |names: &[&str]| -> Vec<PathBuf> { names.iter().map(|name| root.join(name)).collect() };
+    assert_eq!(super::tracked(root, Path::new("/fake/git-ok")), under(&["a", "dir/b c"]), "NUL で割り空の名を落とす");
+    assert_eq!(super::tracked(root, Path::new("/fake/git-fail")), [root.to_path_buf()], "rc 非 0 は root 全体");
+    assert_eq!(super::tracked(root, Path::new("/fake/git-gone")), [root.to_path_buf()], "起動の失敗は root 全体");
+    let call = |program: &str| Call {
+        program: program.to_owned(),
+        args: ["-C", "/nonexistent-invocation-hook-host-guard", "ls-files", "-z"].iter().map(|arg| (*arg).to_owned()).collect(),
+        cwd: None,
+        envs: Vec::new(),
+    };
+    assert_eq!(stub.calls(), [call("/fake/git-ok"), call("/fake/git-fail"), call("/fake/git-gone")], "git の program と引数");
 }

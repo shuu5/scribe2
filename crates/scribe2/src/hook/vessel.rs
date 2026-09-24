@@ -12,9 +12,9 @@ pub mod digest;
 
 use crate::cli_args::{self, Allowed};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
+use crate::invocation::Invocation;
 use crate::name::NAME;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 /// 所属の目印の固定名（ADR-0004 §2.2 面 1）。**版番号に依らず固定**する（R-O3）。
 pub const MARKER: &str = ".vessel";
@@ -111,7 +111,7 @@ pub fn served(root: &Path) -> Served {
 
 /// git を 1 回撃って stdout の 1 行を得る。失敗・空はいずれも `None`。
 fn git_line(dir: &Path, args: &[&str]) -> Option<String> {
-    let output = Command::new("git").arg("-C").arg(dir).args(args).output().ok()?;
+    let output = Invocation::new("git").arg("-C").arg(dir).args(args).output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -125,7 +125,7 @@ fn git_line(dir: &Path, args: &[&str]) -> Option<String> {
 
 /// git を 1 回撃ち、成功したかだけを見る（出力を持たない設定系に使う）。
 fn git_ok(dir: &Path, args: &[&str]) -> bool {
-    Command::new("git")
+    Invocation::new("git")
         .arg("-C")
         .arg(dir)
         .args(args)
@@ -414,7 +414,7 @@ pub fn update(state_dir: &Path, remote: &str, branch: &str) -> Result<crate::fle
     if !git_ok(&repo, &["merge", "--ff-only", &format!("{remote}/{branch}")]) {
         return Err(UpdateError::NotFastForward);
     }
-    let installed = Command::new("cargo")
+    let installed = Invocation::new("cargo")
         .arg("install")
         .arg("--path")
         .arg(repo.join("crates").join(NAME))
@@ -522,7 +522,7 @@ pub fn sync(state_dir: &Path, idle: Option<bool>) -> Option<Upstream> {
 
 /// git を 1 回撃って出力を得る（起動できなければ `None`）。
 fn git_output(dir: &Path, args: &[&str]) -> Option<std::process::Output> {
-    Command::new("git").arg("-C").arg(dir).args(args).output().ok()
+    Invocation::new("git").arg("-C").arg(dir).args(args).output().ok()
 }
 
 /// cargo install の出力から binary の path を引く（`Installing <abs>` か `Replacing <abs>` の最後の行・色は切ってある）。
@@ -561,4 +561,54 @@ fn record_install(state_dir: &Path, install: &crate::fleet::Install) -> Result<(
     };
     let policy = store::LockPolicy::embedded().map_err(|err| err.to_string())?;
     store::append(state_dir, &event, policy).map(|_| ()).map_err(|err| err.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{repo_root, update, UpdateError};
+    use crate::name::NAME;
+    use crate::pipe::fixture::{exited, scratch, Call, Stub};
+    use std::path::PathBuf;
+
+    /// vessel の git の 3 関数と cargo は起動の記述を通る（設計 core-boundary.md §9 行 h）: git は `-C <repo>` の後に
+    /// 呼び手の列・cargo は install の引数を repo の cwd で撃つ。update は status → fetch → merge → cargo の順で、cargo の
+    /// rc 非 0 は `InstallFailed(rc)`。git の 1 行の読みは trim した stdout。
+    #[test]
+    fn invocation_hook_vessel_git_and_cargo_pass_their_args() {
+        let state = scratch("invocation-hook-vessel");
+        let repo = "/nonexistent-invocation-hook-vessel";
+        let _ = std::fs::write(state.join("host.toml"), format!("schema = 1\n\n[[vessel]]\nrepo = \"{repo}\"\n"));
+        let stub = Stub::install(|call| match (call.program.as_str(), call.args.get(2).map(String::as_str)) {
+            ("git", Some("status" | "fetch" | "merge")) => exited(0, b""),
+            ("git", Some("rev-parse")) => exited(0, b" /top \n"),
+            ("cargo", _) => exited(101, b""),
+            _ => Err(std::io::Error::other("gone")),
+        });
+        assert_eq!(update(&state, "up", "trunk").err(), Some(UpdateError::InstallFailed(Some(101))), "cargo の rc");
+        assert_eq!(repo_root(&PathBuf::from(repo)), Some(PathBuf::from("/top")), "git の 1 行");
+        let git = |tail: &[&str]| Call {
+            program: "git".to_owned(),
+            args: ["-C", repo].iter().chain(tail).map(|arg| (*arg).to_owned()).collect(),
+            cwd: None,
+            envs: Vec::new(),
+        };
+        let cargo = Call {
+            program: "cargo".to_owned(),
+            args: ["install", "--path", &format!("{repo}/crates/{NAME}"), "--locked", "--color", "never"]
+                .iter()
+                .map(|arg| (*arg).to_owned())
+                .collect(),
+            cwd: Some(PathBuf::from(repo)),
+            envs: Vec::new(),
+        };
+        let expected = [
+            git(&["status", "--porcelain"]),
+            git(&["fetch", "up"]),
+            git(&["merge", "--ff-only", "up/trunk"]),
+            cargo,
+            git(&["rev-parse", "--show-toplevel"]),
+        ];
+        assert_eq!(stub.calls(), expected, "git と cargo の program と引数");
+        let _ = std::fs::remove_dir_all(&state);
+    }
 }
