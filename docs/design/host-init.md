@@ -52,12 +52,11 @@
 - doctor に `init=` の 1 行を足す（`host-template=` の直後）: 置き場を渡した周は `init=<ok|missing:<項目,…>> next=<次の 1 手>`。項目は宣言順に `marker`（cwd の repo の `.vessel` が `ByMe` でない）・`declaration`（`.vessel.toml` が HEAD に無い）・`host-face`（`host.toml` が `Absent` / `Unreadable`）・`accounts`（`[[account]]` の label で `accounts/<label>` が無い）・`session`（登録 row の target の session が無い）・`registration`（orchestrator の登録 row が無い）。`next=` は最初の欠落を埋める 1 手（`init` か `host init` か `seat launch`）で、欠落 0 なら `next=-`。
 - 「黙って 0 byte」は残す（hook の極性は vessel-hook.md §2 のまま）。名指すのは doctor の役。
 
-## 7. 口座 × anchor の trust を器が先に埋める（行 e・持ち主の裁定 2026-09-24T13:38Z「裁定は受諾する」= serde_json の追加・A3）
+## 7. 口座 × anchor の trust を器が先に埋める（後続の ADR・持ち主の再裁定待ち・契約表の行はまだ無い）
 
-- 出所: memo `s2-07l.604` の実地試験。移り先の口座がその anchor を一度も trust していないと、席の起動で Claude Code の trust dialog（既定 `No, exit`）が出て席が立たず `launch-unconfirmed` の保留になる。公式 doc が案内する唯一の口は口座の設定 dir の `.claude.json` の `projects[<anchor>].hasTrustDialogAccepted` を `true` にすること。入れ子の JSON の読み書きは core の 1 関数（`json_lite`）では足りない。
-- **依存**: 境界 crate に `serde_json`（直接依存 1 つ・`serde` は transitive）を足す。core は足さない（core は「口座の設定 dir と anchor」から書くべき値を pure に決め、file の読み書きは境界の 1 file が行う・ADR-0062 の差し替え口と同じ向き）。`crates/xtask/src/limits.rs` の `ALLOWED_DEPS` に `("dependencies", "serde_json")` を足す（rules 行 `R-C13-1` の予算 12 と `R-C13-1.per-pr` の 1 の内側・値は変えない）。`cargo deny` の allow（MIT / Apache-2.0）の内側。
-- 形: 席の起動（`seat launch`・群の移動の起こし直し・`init` の 8 段目）は、起動行を送る**前**に、その口座の設定 dir の `.claude.json` を読み（無ければ `{}` から）、`projects[<anchor の絶対 path>].hasTrustDialogAccepted` が `true` でなければ `true` を書く（他の key は 1 つも変えない・一時 file → rename）。読めない（壊れた JSON）周は書かず `trust-unreadable` で断る（席を起こさない＝dialog で止まる席を作らない・fail-closed）。既に `true` なら何も書かない。`init` は加えて雛形の `[[account]]` の label 全部について ROOT の trust を同じ規則で埋める（§4 の段 3 の直後・`init: trust ok|skip|failed:<label,…>`）。
-- doctor の `init=` の項目に `trust`（登録 row の口座の dir で anchor の trust が `true` でない）を `accounts` の次に足す（行 d の後・§6）。
+- 出所: memo `s2-07l.604` の実地試験。移り先の口座がその anchor を一度も trust していないと、席の起動で Claude Code の trust dialog（既定 `No, exit`）が出て席が立たず `launch-unconfirmed` の保留になる。公式 doc が案内する唯一の口は口座の設定 dir の `.claude.json` の `projects[<anchor>].hasTrustDialogAccepted` を `true` にすること。
+- 現物: 器は入れ子の JSON の**読み手**を既に持つ（`crates/scribe2/src/account/mod.rs` の `read_tree` / `Tree` / `flag_at`・doctor の `trust=` の行が読む）。無いのは**書き手**（木を JSON に戻す 1 関数）だけ。account-autonomy.md §10 は「器が trust の印を書く」を却下している（当時は trust を user の宣言と読んだ）。
+- 裁定の経緯: 2026-09-24T13:38Z の裁定（逐語は台帳 `s2-07l.609` の notes）は「入れ子の JSON を書く道具が無い」という誤った前提で上げた推奨（境界 crate に serde_json）への受諾だった。serde_json は SRS の NFR3（実行時の直接依存 0 本・std だけで build）と食い違い、NFR3 の改稿（/folio-architect）が要る。代替は既存の読み手に書き手を足す形（依存 0・NFR3 のまま・書き戻しは一時 file → rename・rename の前に書いた本文を同じ読み手で読み直して flag を確かめる）。どちらを採るかは再裁定（1 論点）で決め、決まった側を後続の ADR に書き、契約表に行を足す（席の起動・群の起こし直し・`init` の段 3 の直後・doctor の `init=` の `trust` 項目）。それまで §3〜§6 の行は trust に触れない（`init` の後の初回の席は trust dialog で止まりうる＝doctor が名指す・行 d の項目には入れない）。
 
 ## 8. 人間向けの説明
 
@@ -93,7 +92,7 @@ README の先頭に「新しい repo を器に載せる」の節を置く: 打�
 
 ## 13. 後続
 
-- 移り先の口座の trust は行 e が持つ（account-lifecycle.md §22 の後続の行き先）。
+- 移り先の口座の trust は §7（後続の ADR・再裁定待ち）が持つ（account-lifecycle.md §22 の後続の行き先）。
 - 席の登録 row の退役の kind（`s2-07l.609` の notes (a)）と外部 API の鍵の欄（同 (c)）は本設計の外。
 
 <!-- contracts:begin -->
@@ -142,14 +141,4 @@ size = "S"
 depends = ["b"]
 done = "(1) 置き場を渡した doctor は host-template= の直後に init=<ok|missing:<項目,…>> next=<1 手> の 1 行を出し、項目は marker・declaration・host-face・accounts・session・registration の宣言順で欠けたものだけを並べ、欠落 0 は init=ok next=- (2) next= は最初の欠落を埋める 1 手（host init・init・seat launch のどれか 1 語）で候補の一覧を出さない (3) 他の doctor の行と hook の 0 byte の極性は 1 字も変わらない 歯: doctor_init_ の歯が 6 項目それぞれ 1 つだけ欠けた toy と欠落 0 の toy で行と next= を測る（base では init= の行が無い ＝ RED）"
 
-[[contract]]
-id = "e"
-title = "口座 × anchor の trust を器が先に埋める — 境界 crate に serde_json を足し（A3・持ち主の裁定 2026-09-24T13:38Z）、席の起動と群の起こし直しと init は起動行を送る前に口座の .claude.json の projects[anchor].hasTrustDialogAccepted を true にし（他の key は不変・壊れた JSON は trust-unreadable で断る）、doctor の init= に trust を足す（§7）"
-req = ["FR59", "FR58"]
-section = "7"
-write-set = ["crates/scribe2-boundary/Cargo.toml", "Cargo.lock", "crates/xtask/src/limits.rs", "+crates/scribe2-boundary/src/trust.rs", "crates/scribe2-boundary/src/main.rs", "+crates/scribe2/src/init.rs", "crates/scribe2/src/seat/cycle/launch.rs", "crates/scribe2/src/seat/cycle/relaunch.rs", "crates/scribe2/src/pipe/dispatch/group.rs", "crates/scribe2-boundary/tests/e2e/seat/launch.rs", "crates/scribe2-boundary/tests/e2e/main.rs", "docs/design/host-init.md"]
-verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_launch_trust_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail init_trust_"]
-size = "M"
-depends = ["d"]
-done = "(1) 境界 crate の直接依存に serde_json が 1 つ増え（core は増えない）、ALLOWED_DEPS に (dependencies, serde_json) が 1 対増え、cargo deny と deps-delta と xtask check が緑 (2) 席の起動（seat launch の長い形と短い形・群の移動の起こし直し・init の 8 段目）は起動行を送る前に口座の設定 dir の .claude.json を読み（無ければ空の object から）projects[anchor の絶対 path].hasTrustDialogAccepted が true でなければ true を書き、他の key と順序を 1 つも変えず一時 file から rename で置き、既に true なら書かず、壊れた JSON は書かず trust-unreadable で断って席を起こさない (3) init は§4 の段 3 の直後に雛形の [[account]] の label 全部について ROOT の trust を同じ規則で埋め init: trust の 1 行を出す (4) doctor の init= の項目は accounts の次に trust を持つ (5) 読み書きは境界 crate の 1 file だけが行い core は値を決める pure 関数だけを持つ 歯: seat_launch_trust_ の歯が無い file・false・true・壊れた JSON の 4 形で書きと断りと他 key の不変を測り（base では .claude.json が変わらない ＝ RED）、init_trust_ の歯が label 3 つの trust と doctor の trust の項目を測る"
 <!-- contracts:end -->
