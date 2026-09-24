@@ -141,12 +141,14 @@ mod tests {
     use crate::cli_outcome::{RC_OK, RC_REFUSED};
     use crate::fleet::store::{self, LockPolicy};
     use crate::fleet::{EventKind, Stage};
+    use crate::invocation::Invocation;
     use std::path::{Path, PathBuf};
-    use std::process::Command;
 
-    /// git を 1 回撃ち、stdout の 1 行を返す（失敗は読み手の assert が落とす）。
+    // flip-check: retroactive s2-07l.595
+    /// git を 1 回撃ち、stdout の 1 行を返す（失敗は読み手の assert が落とす・起動の記述を通る＝設計 core-boundary.md
+    /// §9 行 d）。
     fn git(dir: &Path, args: &[&str]) -> String {
-        Command::new("git")
+        Invocation::new("git")
             .arg("-C")
             .arg(dir)
             .args(args)

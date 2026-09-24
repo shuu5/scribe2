@@ -371,7 +371,7 @@ fn stop_plan(pid: u64) -> StopPlan {
 
 /// pid へ signal を送る（std に kill は無いので `kill` を撃つ）。rc 0 の周だけ true。
 fn signal(target: &str, name: &str) -> bool {
-    std::process::Command::new("kill")
+    crate::invocation::Invocation::new("kill")
         .arg(name)
         .arg("--")
         .arg(target)
@@ -642,5 +642,23 @@ mod tests {
         assert_eq!(GroupId::new(1), None);
         assert_eq!(GroupId::new(2).map(GroupId::target), Some("-2".to_owned()));
         assert_eq!(GroupId::new(u64::MAX).map(GroupId::target), Some(format!("-{}", u64::MAX)));
+    }
+
+    /// kill の起動は起動の記述を通る（設計 core-boundary.md §9 行 d）: 記録の program は `kill`・引数は signal の名・
+    /// `--`・宛先の順。rc 0 の周だけ真。宛先は pid_max を超える group（stub を据えない周に撃たれても誰にも届かない）。
+    #[test]
+    fn invocation_pipe_flow_stop_kill_passes_the_signal_and_pid() {
+        use crate::pipe::fixture::{exited, Stub};
+        let target = "-4194304";
+        let stub = Stub::install(|_| exited(0, b""));
+        assert!(super::signal(target, "-TERM"), "rc 0 は真");
+        let calls = stub.calls();
+        let found: Vec<(String, Vec<String>)> = calls.into_iter().map(|call| (call.program, call.args)).collect();
+        let args = vec!["-TERM".to_owned(), "--".to_owned(), target.to_owned()];
+        assert_eq!(found, vec![("kill".to_owned(), args)], "program は kill・引数は名と -- と宛先");
+        drop(stub);
+        let failing = Stub::install(|_| exited(1, b""));
+        assert!(!super::signal(target, "-KILL"), "rc 非 0 は偽");
+        assert_eq!(failing.calls().len(), 1, "起動は 1 回");
     }
 }

@@ -21,13 +21,13 @@ use super::{current, Ticket};
 use crate::cli_outcome::Outcome;
 use crate::fleet::store;
 use crate::fleet::{replay, Event, EventKind, Mark, Stage, State, SCHEMA, STAGES};
+use crate::invocation::Invocation;
 use crate::name::NAME;
 use crate::rules::manifest::Manifest;
 use crate::seat::ledger;
 use std::collections::{BTreeMap, BTreeSet};
-use std::os::unix::process::CommandExt;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 /// 台帳から候補を組む群（設計 §20・`s2-07l.531` の純移動）。
 mod candidates;
@@ -387,7 +387,7 @@ fn launched(input: &Input<'_>, launch: &Launch) -> bool {
 /// 子の stderr は `<state_dir>/pipe/launch.log` に append する（設計 §17・受付で落ちた子の死因を席が読める
 /// 場所に残す・C10）。file を開けない周は stderr を捨てて**起こす**（起動を記録の失敗で止めない）。
 fn spawn_self(state_dir: &Path, argv: &[String]) -> bool {
-    Command::new(myself())
+    Invocation::new(myself())
         .arg(PIPE)
         .args(argv)
         .process_group(0)
@@ -1221,5 +1221,23 @@ mod tests {
             ],
             "値を持つ 6 件は値も描く"
         );
+    }
+
+    /// 自分自身の起動は起動の記述を通る（設計 core-boundary.md §9 行 d）: 記録の program は [`super::myself`]・引数は
+    /// `pipe` に続く argv の逐語。記録する stub は spawn を断るので、起動は偽（呼び手は「起こせなかった」と読む）。
+    /// argv は子が起きても何も撃たない形（歯の binary の該当 0 本の filter）にする。
+    #[test]
+    fn invocation_pipe_flow_dispatch_self_launch_failure_is_false() {
+        use crate::pipe::fixture::{exited, scratch, Stub};
+        let state = scratch("dispatch-self-launch");
+        let argv = vec!["--exact".to_owned(), "no-such-test-invocation-dispatch".to_owned()];
+        let stub = Stub::install(|_| exited(0, b""));
+        assert!(!super::spawn_self(&state, &argv), "stub の断りは起動の失敗＝偽");
+        let calls = stub.calls();
+        assert_eq!(calls.len(), 1, "起動は 1 回: {calls:?}");
+        let found: Vec<(String, Vec<String>)> = calls.into_iter().map(|call| (call.program, call.args)).collect();
+        let expected: Vec<String> = std::iter::once(super::PIPE.to_owned()).chain(argv.iter().cloned()).collect();
+        assert_eq!(found, vec![(super::myself(), expected)], "program は自分・引数は pipe と argv");
+        let _ = std::fs::remove_dir_all(&state);
     }
 }

@@ -922,12 +922,13 @@ mod tests {
     use crate::pipe::approve::RC_BLOCKED;
     use crate::pipe::fixture::{append_all, contract, event, scratch};
     use crate::pipe::spawn::Account;
+    use crate::invocation::Invocation;
     use std::path::{Path, PathBuf};
-    use std::process::Command;
 
-    /// git を 1 回撃つ（失敗は読み手の assert が落とす）。
+    // flip-check: retroactive s2-07l.595
+    /// git を 1 回撃つ（失敗は読み手の assert が落とす・起動の記述を通る＝設計 core-boundary.md §9 行 d）。
     fn git(dir: &Path, args: &[&str]) {
-        let _ = Command::new("git").arg("-C").arg(dir).args(args).output();
+        let _ = Invocation::new("git").arg("-C").arg(dir).args(args).output();
     }
 
     /// commit を 1 つ持つ tmp の git repo（`<root>/repo`）と置き場（`<root>/state`）。

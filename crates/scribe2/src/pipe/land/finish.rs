@@ -62,7 +62,7 @@ pub(super) fn open_pr(entry: &Land<'_>, base: &str, cmd: &str) -> Outcome {
     }
     let branch = super::branch_name(entry.run);
     let line = cmd.replace("{branch}", &branch).replace("{base}", base);
-    let ran = std::process::Command::new("sh")
+    let ran = crate::invocation::Invocation::new("sh")
         .arg("-c")
         .arg(&line)
         .current_dir(entry.repo)
@@ -453,4 +453,64 @@ fn export_verdict(entry: &Land<'_>, new: &str, turned: &Turned) -> Result<(), St
     append_line(&verdicts_path(entry.state_dir), &line, entry.policy)
         .map(|_| ())
         .map_err(|err| err.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{open_pr, Land};
+    use crate::cli_outcome::RC_OK;
+    use crate::fleet::store::LockPolicy;
+    use crate::pipe::fixture::{contract, exited, scratch, Stub};
+    use crate::pipe::gate::Limits;
+    use crate::pipe::lens_record::LensSource;
+
+    /// PR を開く行は起動の記述を通る（設計 core-boundary.md §9 行 d）: 記録の program は `sh`・引数は `-c` と穴を
+    /// 埋めた行・cwd は repo。stub の rc 0 は「PR を出した」として従来どおり `landed=pr` を返す。行は stub を据えない
+    /// 周に撃たれても何もしない `true` で始める。
+    #[test]
+    fn invocation_pipe_flow_finish_pr_line_goes_through_the_seam() {
+        let root = scratch("finish-pr-line");
+        let (repo, state) = (root.join("repo"), root.join("state"));
+        let _ = std::fs::create_dir_all(&repo);
+        let _ = std::fs::create_dir_all(&state);
+        let (policy, contract) = (LockPolicy::embedded().expect("埋め込みの lock 規則を読める"), contract(&[], &[]));
+        let limits = Limits {
+            lens_count: 0,
+            token_cap: 0,
+            mutants_jobs: 0,
+            job_memory_mb: 0,
+            reserve_memory_mb: 0,
+            slot_wait_s: 0,
+            runnable_per_core: 0,
+            blocked_per_core: 0,
+        };
+        let entry = Land {
+            run: "r-pr",
+            bead: "s2-mutant",
+            repo: &repo,
+            state_dir: &state,
+            contract: &contract,
+            pr_cmd: None,
+            lens: &LensSource::Absent,
+            limits,
+            runner: None,
+            retries: 0,
+            land_wait_s: 0,
+            ci_wait_s: 0,
+            bd: crate::ledger::DEFAULT_BD,
+            approved: false,
+            policy,
+            train_max: 1,
+        };
+        let stub = Stub::install(|_| exited(0, b""));
+        let out = open_pr(&entry, "base-sha", "true {branch} {base}");
+        assert_eq!((out.rc, out.out), (RC_OK, vec!["run=r-pr landed=pr".to_owned()]), "rc 0 は PR を出した");
+        let calls = stub.calls();
+        assert_eq!(calls.len(), 1, "起動は 1 回: {calls:?}");
+        let found: Vec<(String, Vec<String>, Option<std::path::PathBuf>)> =
+            calls.into_iter().map(|call| (call.program, call.args, call.cwd)).collect();
+        let line = format!("true {} base-sha", super::super::branch_name("r-pr"));
+        assert_eq!(found, vec![("sh".to_owned(), vec!["-c".to_owned(), line], Some(repo.clone()))], "sh -c の行と cwd");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

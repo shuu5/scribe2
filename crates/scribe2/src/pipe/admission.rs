@@ -733,13 +733,15 @@ mod tests {
         assert_eq!(judge(&line, |pid| (pid == 42).then_some(0)), Judged::Live(3), "札の pid を引く");
     }
 
+    // flip-check: retroactive s2-07l.595
     /// 札の持ち主の生存は**共有の probe**（`fleet::store::started_ms`）で読む: 生きている pid（自分）は
-    /// 起動時刻（now 以前）を返し、回収済みの pid（起こして wait した子）は `None`＝回収側。
+    /// 起動時刻（now 以前）を返し、回収済みの pid（起こして wait した子・起動の記述を通る＝設計 core-boundary.md
+    /// §9 行 d）は `None`＝回収側。
     #[test]
     fn admission_ticket_probe_reads_live_and_reaped_pids() {
         let own = ticket_started_ms(std::process::id());
         assert!(own.is_some_and(|ms| ms <= now_ms()), "自分の pid は起動時刻を返す（now 以前）: {own:?}");
-        let mut child = std::process::Command::new("true").spawn().expect("子を起こせる");
+        let mut child = crate::invocation::Invocation::new("true").spawn().expect("子を起こせる");
         let reaped = child.id();
         child.wait().expect("子を回収できる");
         assert_eq!(ticket_started_ms(reaped), None, "回収済みの pid は None（回収側）");
