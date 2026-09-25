@@ -341,6 +341,37 @@ user-scope MCP 設定の同期・別口座への `--resume` の混線 fence・pr
   - 使い方: `seat_usage_external_form` の snapshot に `retire` が増える（同じ便で更新）。
 - 後続: 退役した row の target の tick の unit（[seat-heartbeat.md](./seat-heartbeat.md) §3）を同じ口で撤去するかは、行 d（§5）の着地の後に決める。
 
+## 25. 便用の候補なしの断りが内訳を出す（契約表の行 n・§17 / §23 の続き・`s2-07l.618`）
+
+やさしく言うと: 便用の口座が 1 つも選べない周、器は「口座待ちである（候補なし: unmeasured・待つ reset が無い）」とだけ言う。どの口座が除外され、どれが測れず、どれが上限に当たっているかが無いので、席は model の窓を疑って時間を使った（2026-09-25 の実測: 便用の口座が host に 1 つしか残らず、その 1 つの OAuth が墓標で、便が 2 時間止まった）。断りの行に口座ごとの内訳を足す。
+
+- 出所: 台帳 `s2-07l.618`（候補 1）。
+- 現物（verified・main 67e74ff）:
+  - 便用の選定は `crates/scribe2/src/fleet/select.rs` の `select_for_run`（結果 `Selection`・候補なしは `NoCandidate`〔`reason` = 宣言順で畳んだ 1 語・`earliest_reset`〕・理由の語は `NoCandidateReason` の `NO_CANDIDATE_REASONS`）。歯は `crates/scribe2/src/fleet/select_tests.rs`。
+  - 断りの行は `crates/scribe2/src/pipe/ratelimit.rs` の `choose_or_wait`（stdout `run=<id> next=wait reset=<ts|->`・stderr `pipe: run <id> は口座待ちである（候補なし: <語>・待つ reset が無い）`）。歯は `crates/scribe2-boundary/tests/e2e/pipe/ratelimit.rs`（`pipe_ratelimit_` 接頭辞）。
+- 形（1 つずつ歯が測る・行 n の done と 1:1）:
+  1. **`NoCandidate` が内訳を持つ**: 口座 label の列 3 本 `excluded`（除外集合に在る）・`unmeasured`（測れない・実測行なし・Unmeasured・reset 過ぎ）・`limited`（上限に当たっている）を宣言順に並べて持つ（1 口座は 1 列にだけ・畳む前の値・`reason` の畳み方は今のまま）。
+  2. **判定行に 3 欄を足す**: `run=<id> next=wait reset=<ts|-> excluded=<n> unmeasured=<n> limited=<n>`（件数・0 も出す・列は固定）。stderr の断りは今の 1 文の後ろに ` excluded=<label,…> unmeasured=<label,…> limited=<label,…>`（label は `,` 区切り・空は `-`）を足す（先頭の字面 `pipe: run <id> は口座待ちである（候補なし: <語>・待つ reset が無い）` は 1 字も変えない＝既存の歯の pin を動かさない）。
+  3. **待つ周（reset が在る周）も同じ 3 欄**を判定行に足す（次の `resume` の判断材料）。
+  4. **選ばれた周の行・待ちの観測・段の判定は 1 字も変わらない。**
+- 触らない: 選定の順・除外の集合（§23）・`NoCandidateReason` の語と優先順・待ちの deadline・`AccountFree` の観測。
+- 却下: 内訳を stderr だけに出す（判定行を読む道具が数えられない）／label を判定行に出す（行が長くなる・stderr に在れば足りる）／群の口座を便にも使う（§17 の決定に反する）／面の検査で「宣言の全部が群に入る面」を断る（§23 以後は除外が群の今の口座だけなので便用の口座が構造として 0 にならない・要らない）。
+- 歯: lib（`crates/scribe2/src/fleet/select_tests.rs` に `select_breakdown_` 接頭辞）: 除外 1・測れない 1・上限 1・空き 0 の fixture で 3 列が宣言順の label（base では field が無い ＝ RED）／同じ口座は 1 列にだけ。e2e（`crates/scribe2-boundary/tests/e2e/pipe/ratelimit.rs` に `pipe_ratelimit_breakdown_` 接頭辞）: 候補なし（reset 無し）の周の stdout の行の末尾 3 欄と stderr の label の列／reset の在る周の判定行にも 3 欄。
+
+## 26. doctor が便用の口座の数を出す（契約表の行 o・§25 の続き・`s2-07l.618`）
+
+やさしく言うと: 便用に残る口座が 0 の host は、便が起きた瞬間に黙って止まる。doctor の host の行に「便用に使える口座の数」を 1 欄足し、0 を先に名指す。
+
+- 出所: 台帳 `s2-07l.618`（候補 2）。
+- 現物（verified・main 67e74ff）: doctor の host の行は `crates/scribe2/src/account/mod.rs` の `render_host_manifest`（`host-manifest=<present|absent|unreadable>[ tick=declared]`）。行の外形は insta の snapshot（`crates/scribe2-boundary/src/snapshots/scribe2__tests__doctor_external_form.snap`・`crates/scribe2-boundary/tests/e2e/snapshots/e2e__seat__seat_doctor_external_form.snap`）と `crates/scribe2-boundary/tests/e2e/seat.rs` / `crates/scribe2-boundary/tests/e2e/seat/account.rs` / `crates/scribe2-boundary/tests/e2e/seat/rules.rs` の字面の歯が pin する。有効な口座の集合（退役を除く）と群の今の口座の解決（§23 の `grouped_accounts`）は既存の 1 本ずつ。
+- 形（1 つずつ歯が測る・行 o の done と 1:1）:
+  1. **欄 1 つ**: 面が `present` の周だけ行の末尾に `run-accounts=<n>` を足す（n = 有効な口座の数 − 群の今の口座の数・§23 の除外と同じ読み手・席の登録 row の除外は repo ごとなので数えない・計測の鮮度も読まない＝宣言と記録だけの静的な数）。面が無い / 読めない周は今のまま（欄を足さない）。
+  2. **判定しない**: 0 でも rc と他の行は 1 字も変わらない（C10.2・FR73）。
+  3. **既存の pin を進める**: snapshot 2 本と字面の歯は `run-accounts=` の 1 欄分だけ更新する（write-set の外の .snap は触らない）。
+- 触らない: 群の行（`group=…`）・口座の行・`account ls`・選定。
+- 却下: 測れる口座の数を出す（doctor が計測を撃つことになる・§3 の「計測は撃たない」）／群の行に出す（群 0 の host で出ない）。
+- 歯（`crates/scribe2-boundary/tests/e2e/seat.rs` に `seat_doctor_run_accounts_` 接頭辞・§17 の host.toml の fixture）: 宣言 3・群 1（今の口座 = 種）→ `run-accounts=2`（base では欄が無い ＝ RED）／退役 1 を足す → 1／群 0 → 3／面 absent → 欄なし。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -476,4 +507,26 @@ verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat
 size = "M"
 growth = ["crates/scribe2/src/fleet/mod.rs:40", "crates/scribe2/src/fleet/event.rs:40", "crates/scribe2/src/fleet/replay.rs:40", "crates/scribe2/src/seat/cli.rs:60", "crates/scribe2/src/seat/role.rs:80", "crates/scribe2-boundary/src/main.rs:20"]
 done = "(1) seat retire --state-dir S --target S:W [--reason WORDS] は登録 row の無い target を no-row で断り（rc 1・event 0）、在る周は SeatRetired の event を 1 件記して（role・anchor・target・account は row の写し・detail に reason・actor は human）stdout に seat retire: retired target=<S:W> role=<role> account=<label> の 1 行を出す (2) replay は同じ鍵（role, anchor）について最新の SeatRetired より後に SeatRegistered が無ければ row を registrations から外し、後に在れば復活させ、物理順で後の event が勝つ (3) doctor の登録 row の行・便用の除外・群の段の behind・tick の no-row・席の起動の群の除外は読み手を 1 字も変えずに退役した row を見なくなる (4) EventKind に SeatRetired（Shape::Registration）を足し、網羅 match と KINDS の pin の歯 4 本を 24 種と新しい順で書き換える (5) SeatRegistered の形・登録 row の鍵・prepare・AccountRetired / AccountRestored・doctor の行の形は変えない 歯: seat_retire_ の歯が登録済みの target の retire で event 1 件と rc 0 の 1 行・row の無い target の no-row と event 0 と rc 1・retire 後の doctor の registered= が 1 減ること・retire 後の seat register で row が戻ることを測り、fleet_replay_seat_retired_ の歯が SeatRegistered → SeatRetired で registered_accounts が空・SeatRegistered → SeatRetired → SeatRegistered で最後の row を測り、pipe_dispatch_group_retired_ の歯が退役した row の target に退避の合図も /exit も送られないことを測り、seat_usage_external_form の snapshot に retire が増える"
+[[contract]]
+id = "n"
+title = "便用の候補なしの断りが内訳を出す — NoCandidate が excluded / unmeasured / limited の label の列を持ち、判定行に件数 3 欄・stderr に label を足す（§25・s2-07l.618 候補 1）"
+req = ["FR36", "FR33", "NFR4"]
+section = "25"
+write-set = ["crates/scribe2/src/fleet/select.rs", "crates/scribe2/src/fleet/select_tests.rs", "crates/scribe2/src/pipe/ratelimit.rs", "crates/scribe2-boundary/tests/e2e/pipe/ratelimit.rs", "docs/design/account-lifecycle.md"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail select_breakdown_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_ratelimit_breakdown_"]
+size = "S"
+growth = ["crates/scribe2/src/fleet/select.rs:40", "crates/scribe2/src/pipe/ratelimit.rs:20"]
+done = "(1) NoCandidate が excluded / unmeasured / limited の label の列 3 本を宣言順に持ち、1 口座は 1 列にだけ入り、reason の畳み方は今のまま (2) 候補なしの判定行は run=<id> next=wait reset=<ts|-> excluded=<n> unmeasured=<n> limited=<n>（0 も出す）、stderr は今の 1 文の後ろに excluded=<label,…> unmeasured=<label,…> limited=<label,…>（空は -）を足し先頭の字面は 1 字も変えない (3) reset の在る待ちの周も同じ 3 欄 (4) 選ばれた周の行・待ちの観測・段の判定は 1 字も変わらない 歯: select_breakdown_ の lib の歯が除外 1・測れない 1・上限 1 の fixture で 3 列の label（base では field が無い ＝ RED）と 1 口座 1 列を測り、pipe_ratelimit_breakdown_ の歯が候補なしの周の stdout の 3 欄と stderr の label と reset の在る周の 3 欄を測る"
+
+[[contract]]
+id = "o"
+title = "doctor が便用の口座の数を出す — host の行の末尾に run-accounts=<n>（有効な口座 − 群の今の口座）を面が present の周だけ足し、snapshot と字面の歯を 1 欄分進める（§26・s2-07l.618 候補 2）"
+req = ["FR73", "FR36"]
+section = "26"
+write-set = ["crates/scribe2/src/account/mod.rs", "crates/scribe2-boundary/src/snapshots/scribe2__tests__doctor_external_form.snap", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__seat__seat_doctor_external_form.snap", "crates/scribe2-boundary/tests/e2e/seat.rs", "crates/scribe2-boundary/tests/e2e/seat/account.rs", "crates/scribe2-boundary/tests/e2e/seat/rules.rs", "docs/design/account-lifecycle.md"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_doctor_run_accounts_"]
+size = "S"
+growth = ["crates/scribe2/src/account/mod.rs:30"]
+depends = ["n"]
+done = "(1) 面が present の周だけ host の行の末尾に run-accounts=<n>（有効な口座の数 − 群の今の口座の数・§23 と同じ読み手・計測は撃たない）を足し、absent / unreadable の周は欄を足さない (2) 0 でも rc と他の行は 1 字も変わらない (3) snapshot 2 本と字面の歯を 1 欄分だけ更新する 歯: seat_doctor_run_accounts_ の歯が、宣言 3・群 1 で run-accounts=2（base では欄が無い ＝ RED）・退役 1 で 1・群 0 で 3・面 absent で欄なしを測る"
 <!-- contracts:end -->
