@@ -324,6 +324,7 @@ user-scope MCP 設定の同期・別口座への `--resume` の混線 fence・pr
   - 登録は `SeatRegistered` の event（`crates/scribe2/src/fleet/mod.rs` の `EventKind`・`Shape::Registration`・`registration` の欄）で、replay（`crates/scribe2/src/fleet/replay.rs` の `replay`）は同じ鍵（role, anchor）の最新の行を `registrations` に置く。退役の kind は無い（口座の退役 `AccountRetired` / `AccountRestored` は在る＝同型の先例）。
   - 読み手: `registration_of_target` / `registration_of_key`（`crates/scribe2/src/seat/role.rs`）・`registered_accounts`（便用の除外）・doctor の登録 row の行・群の段の `behind`・tick の `front`。全部 `State` 経由。
   - `seat` の口は `register` / `launch` / `ruling` / `tick` / 短い形（`crates/scribe2/src/seat/cli.rs`・登録の書き手は `crates/scribe2/src/seat/role.rs` の `register`）。
+  - `seat` の口の列（`SeatCommand`）の件数と字面は `crates/scribe2-boundary/tests/e2e/seat.rs` の pin（`SEAT_COMMANDS`・4 語）が測り、fleet の record の拒否列は `crates/scribe2/src/fleet/cli.rs` が持つ（`retire` と `SeatRetired` を足す周に両方が動く・行 m の write-set）。
   - `KINDS` の pin の歯 4 本（`crates/scribe2-boundary/tests/e2e/fleet.rs` に 2 本・`crates/scribe2-boundary/tests/e2e/pipe/gate.rs` に 2 本）が event の種類の本数（23）と順を測る。
 - 形（1 つずつ歯が測る・行 m の done と 1:1）:
   1. **口**: `seat retire --state-dir S --target S:W [--reason WORDS]`。target の登録 row が無い周は `no-row` で断る（rc 1・event 0）。在る周は `SeatRetired` の event を 1 件記す（role・anchor・target・account は row の写し・detail に reason・actor は human）。stdout 1 行 `seat retire: retired target=<S:W> role=<role> account=<label>`。
@@ -470,7 +471,7 @@ id = "m"
 title = "席の登録 row を退役する口 — seat retire が SeatRetired の event を 1 件記し、replay が最新の退役より後の登録だけを row と読む（§24・ADR-0049・s2-07l.618）"
 req = ["FR36", "FR59", "NFR4"]
 section = "24"
-write-set = ["crates/scribe2/src/fleet/mod.rs", "crates/scribe2/src/fleet/event.rs", "crates/scribe2/src/fleet/replay.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/seat/role.rs", "crates/scribe2-boundary/src/main.rs", "crates/scribe2-boundary/tests/e2e/seat/register.rs", "crates/scribe2-boundary/tests/e2e/fleet.rs", "crates/scribe2-boundary/tests/e2e/pipe/gate.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__seat__seat_usage_external_form.snap", "docs/design/account-lifecycle.md"]
+write-set = ["crates/scribe2/src/fleet/mod.rs", "crates/scribe2/src/fleet/event.rs", "crates/scribe2/src/fleet/replay.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/seat/role.rs", "crates/scribe2-boundary/src/main.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "crates/scribe2-boundary/tests/e2e/seat/register.rs", "crates/scribe2-boundary/tests/e2e/fleet.rs", "crates/scribe2-boundary/tests/e2e/pipe/gate.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__seat__seat_usage_external_form.snap", "docs/design/account-lifecycle.md"]
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_retire_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail fleet_replay_seat_retired_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_group_retired_"]
 size = "M"
 growth = ["crates/scribe2/src/fleet/mod.rs:40", "crates/scribe2/src/fleet/event.rs:40", "crates/scribe2/src/fleet/replay.rs:40", "crates/scribe2/src/seat/cli.rs:60", "crates/scribe2/src/seat/role.rs:80", "crates/scribe2-boundary/src/main.rs:20"]
