@@ -1635,3 +1635,251 @@ fn doctor_init_is_unmeasured_outside_a_repo() {
         "repo でない --repo"
     );
 }
+
+// ─────────── 人向けの案内 `help`（設計 docs/design/cli-help.md §5・行 a・接頭辞 `cli_help_`） ───────────
+
+/// 引数なしで使い方を出さない 6 口（`FORM` は表だけが持ち `SUBCOMMANDS` の突き合わせを免除・cli-help.md §2 の 5）。
+const HELP_EXEMPT: [&str; 6] = ["name", "--version", "doctor", "polarity", "hook", "host-guard"];
+
+/// 1 面の見出しの順（cli-help.md §2 の 2）。
+const HELP_HEADINGS: [&str; 7] = ["NAME", "WHAT", "FORM", "SUBCOMMANDS", "FLAGS", "EXAMPLES", "SEE"];
+
+/// 実 binary を 1 回撃った結果（stdout / stderr の行と rc）。
+struct HelpRun {
+    out: Vec<String>,
+    err: Vec<String>,
+    rc: Option<i32>,
+}
+
+/// 実 binary を cwd = tmp の根・stdin 空で撃つ（`hook` / `host-guard` も stdin を待たない）。撃てない周は rc `None`。
+fn help_run(args: &[&str]) -> HelpRun {
+    let lines = |bytes: &[u8]| String::from_utf8_lossy(bytes).lines().map(str::to_owned).collect::<Vec<_>>();
+    let output = Command::new(env!("CARGO_BIN_EXE_scribe2"))
+        .args(args)
+        .current_dir(std::env::temp_dir())
+        .stdin(std::process::Stdio::null())
+        .output();
+    match output {
+        Ok(found) => HelpRun { out: lines(&found.stdout), err: lines(&found.stderr), rc: found.status.code() },
+        Err(_) => HelpRun { out: Vec::new(), err: Vec::new(), rc: None },
+    }
+}
+
+/// 行の最初の `<…|…>` の語（各選択肢の最初の語・重なりは 1 つ・`<` と `[` の入れ子を数える）。無ければ空。
+fn help_group_words(line: &str) -> Vec<String> {
+    let mut rest = line;
+    while let Some((_, after)) = rest.split_once('<') {
+        let (mut depth, mut alternatives, mut current, mut closed) = (1_usize, Vec::new(), String::new(), false);
+        for ch in after.chars() {
+            match ch {
+                '<' | '[' => depth += 1,
+                '>' | ']' => depth = depth.saturating_sub(1),
+                '|' if depth == 1 => {
+                    alternatives.push(std::mem::take(&mut current));
+                    continue;
+                }
+                _ => {}
+            }
+            if depth == 0 {
+                closed = true;
+                break;
+            }
+            current.push(ch);
+        }
+        if closed && !alternatives.is_empty() {
+            alternatives.push(current);
+            let mut words: Vec<String> = Vec::new();
+            for word in alternatives.iter().filter_map(|alternative| alternative.split_whitespace().next()) {
+                if !words.iter().any(|seen| seen == word) {
+                    words.push(word.to_owned());
+                }
+            }
+            return words;
+        }
+        rest = after;
+    }
+    Vec::new()
+}
+
+/// 面の見出しの直後から空行の手前までの行。
+fn help_section<'a>(lines: &'a [String], heading: &str) -> Vec<&'a str> {
+    lines
+        .iter()
+        .skip_while(|line| line.as_str() != heading)
+        .skip(1)
+        .take_while(|line| !line.is_empty())
+        .map(String::as_str)
+        .collect()
+}
+
+/// 頂点の語（引数なしの生きた出力の 1 行目の `<…|…>`）。
+fn help_top_words() -> Vec<String> {
+    help_run(&[]).out.first().map(|line| help_group_words(line)).unwrap_or_default()
+}
+
+/// 引数なしで撃った口の生きた出力（stdout → stderr の順）のうち `usage:` で始まる最初の行。
+fn help_live_usage(word: &str) -> Option<String> {
+    let run = help_run(&[word]);
+    run.out.into_iter().chain(run.err).find(|line| line.starts_with("usage:"))
+}
+
+/// (a) `help` は頂点の 15 語に各 1 行の目的を出し、`help <command>` への案内の 1 行を持つ（base では使い方の 1 行だけ）。
+#[test]
+fn cli_help_overview_names_every_top_word_with_a_purpose() {
+    let words = help_top_words();
+    assert_eq!(words.len(), 15, "頂点の語は 15: {words:?}");
+    assert!(words.iter().any(|word| word == "--version"), "--version を含む");
+    let run = help_run(&["help"]);
+    assert_eq!(run.rc, Some(0), "rc 0: {:?}", run.err);
+    assert!(run.err.is_empty(), "stderr 0 行: {:?}", run.err);
+    for word in &words {
+        let hit = run.out.iter().find(|line| line.split_whitespace().next() == Some(word.as_str()));
+        assert!(hit.is_some_and(|line| line.split_whitespace().count() >= 3), "{word}: 目的の 1 行が無い: {:?}", run.out);
+    }
+    let pointer = format!("{NAME} help <command>");
+    assert!(run.out.iter().any(|line| line.contains(&pointer)), "案内の行が無い: {:?}", run.out);
+}
+
+/// (b) 15 語の各面は 7 見出しをこの順で持ち、`FORM` は 1 行で、免除の 6 口の `FORM` は表の字面（`usage: <NAME> <語>` で始まる）。
+#[test]
+fn cli_help_pages_carry_the_headings_in_order() {
+    let words = help_top_words();
+    assert_eq!(words.len(), 15, "頂点の語は 15: {words:?}");
+    assert!(HELP_EXEMPT.iter().all(|exempt| words.iter().any(|word| word == exempt)), "免除の 6 口は頂点の語");
+    for word in &words {
+        let run = help_run(&["help", word]);
+        assert_eq!(run.rc, Some(0), "{word}: rc 0: {:?}", run.err);
+        let headings: Vec<&str> = run.out.iter().map(String::as_str).filter(|line| HELP_HEADINGS.contains(line)).collect();
+        assert_eq!(headings, HELP_HEADINGS, "{word}: 見出しの順");
+        let form = help_section(&run.out, "FORM");
+        assert_eq!(form.len(), 1, "{word}: FORM は 1 行: {form:?}");
+        assert!(!help_section(&run.out, "SUBCOMMANDS").is_empty(), "{word}: SUBCOMMANDS は空でない");
+        if HELP_EXEMPT.contains(&word.as_str()) {
+            let head = format!("usage: {NAME} {word}");
+            assert!(form.first().is_some_and(|line| line.starts_with(&head)), "{word}: 免除の口の FORM は表の字面: {form:?}");
+        }
+    }
+}
+
+/// (b) 免除の 6 口の外の 9 口は、`FORM` が引数なしの生きた出力の `usage:` で始まる最初の行と逐語で一致し、`SUBCOMMANDS` が
+/// その行の最初の `<…|…>` の全語を持つ（語を持たない口〔runner / lens〕は `(none)` の 1 行）。
+#[test]
+fn cli_help_pages_match_the_live_form_and_every_subcommand() {
+    let words = help_top_words();
+    let parity: Vec<&String> = words.iter().filter(|word| !HELP_EXEMPT.contains(&word.as_str())).collect();
+    assert_eq!(parity.len(), 9, "突き合わせる口は 9: {parity:?}");
+    for word in parity {
+        let run = help_run(&["help", word]);
+        let form = help_section(&run.out, "FORM").first().copied().unwrap_or_default();
+        let subcommands = help_section(&run.out, "SUBCOMMANDS");
+        let firsts: Vec<&str> = subcommands.iter().filter_map(|line| line.split_whitespace().next()).collect();
+        let live = help_live_usage(word).unwrap_or_else(|| panic!("{word}: 引数なしの出力に usage: の行が無い"));
+        assert_eq!(form, live, "{word}: FORM と生きた使い方の行");
+        let group = help_group_words(&live);
+        if group.is_empty() {
+            assert_eq!(firsts, ["(none)"], "{word}: 語を持たない口の SUBCOMMANDS");
+        }
+        for sub in &group {
+            assert!(firsts.contains(&sub.as_str()), "{word}: SUBCOMMANDS に {sub} が無い: {subcommands:?}");
+        }
+    }
+    let group = help_group_words(&help_live_usage("pipe").unwrap_or_default());
+    assert!(group.len() >= 14 && group.iter().any(|sub| sub == "dispatch"), "語の切り出しが pipe の 14 語に届く: {group:?}");
+}
+
+/// (c) 頂点と各 command の直後の `--help` / `-h` は使い方の 1 行 + pointer の 1 行の 2 行・rc 0（base では 1 行）。
+#[test]
+fn cli_help_flag_prints_usage_and_a_pointer() {
+    let bare = help_run(&[]).out;
+    for flag in ["--help", "-h"] {
+        let run = help_run(&[flag]);
+        assert_eq!(run.rc, Some(0), "{flag}: rc 0");
+        assert!(run.err.is_empty(), "{flag}: stderr 0 行");
+        assert_eq!(run.out.len(), 2, "{flag}: 2 行: {:?}", run.out);
+        assert_eq!(run.out.first(), bare.first(), "{flag}: 1 行目は引数なしの使い方の行");
+        assert_eq!(run.out.get(1).cloned(), Some(format!("run: {NAME} help [<command>]")), "{flag}: pointer");
+        for word in help_top_words() {
+            let run = help_run(&[&word, flag]);
+            assert_eq!(run.rc, Some(0), "{word} {flag}: rc 0: {:?}", run.err);
+            assert!(run.err.is_empty(), "{word} {flag}: stderr 0 行: {:?}", run.err);
+            let page = help_run(&["help", &word]).out;
+            let form = help_section(&page, "FORM").first().map(|line| (*line).to_owned());
+            assert_eq!(run.out.len(), 2, "{word} {flag}: 2 行: {:?}", run.out);
+            assert_eq!(run.out.first().cloned(), form, "{word} {flag}: 1 行目は FORM の行");
+            assert_eq!(run.out.get(1).cloned(), Some(format!("run: {NAME} help {word}")), "{word} {flag}: pointer");
+        }
+    }
+}
+
+/// (d) 引数なしと未知の引数は今の 1 行・rc 1 のまま（不変）で、`help nosuch` と余分な語も同じ 1 行・rc 1。
+#[test]
+fn cli_help_bare_and_unknown_stay_one_usage_line() {
+    let usage = format!(
+        "usage: {NAME} <name|--version|doctor|account|rules|fleet|vessel|hook|host-guard|pipe|runner|lens|seat|polarity|contracts>"
+    );
+    for args in [&[][..], &["nosuch"], &["help", "nosuch"], &["help", "pipe", "show"], &["--helpx"]] {
+        let run = help_run(args);
+        assert_eq!(run.out, std::slice::from_ref(&usage), "{args:?}: 使い方の 1 行");
+        assert!(run.err.is_empty(), "{args:?}: stderr 0 行");
+        assert_eq!(run.rc, Some(1), "{args:?}: rc 1");
+    }
+}
+
+/// (e) 案内は ASCII・幅 100 字以内・頂点 40 行以内・各面 60 行以内で、規範の語 must を持たない（`FORM` の行は生きた
+/// 使い方の行の逐語の写しなので幅と字種を測らない・cli-help.md §2 の 3）。
+#[test]
+fn cli_help_text_is_ascii_and_fits_the_width() {
+    let fits = |line: &str| line.is_ascii() && line.chars().count() <= 100 && !line.to_ascii_lowercase().contains("must");
+    let overview = help_run(&["help"]).out;
+    assert!(!overview.is_empty() && overview.len() <= 40, "頂点は 40 行以内: {}", overview.len());
+    assert!(overview.iter().all(|line| fits(line)), "頂点: {overview:?}");
+    for word in help_top_words() {
+        let page = help_run(&["help", &word]).out;
+        assert!(page.len() <= 60, "{word}: 60 行以内: {}", page.len());
+        let form = help_section(&page, "FORM").first().map(|line| (*line).to_owned()).unwrap_or_default();
+        for line in page.iter().filter(|line| **line != form) {
+            assert!(fits(line), "{word}: ASCII・幅 100・must なし: {line}");
+        }
+    }
+}
+
+/// dir の下の `.rs` を再帰で集める（読めない dir は飛ばす）。
+fn help_rs_files(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut files = Vec::new();
+    for path in entries.filter_map(Result::ok).map(|entry| entry.path()) {
+        if path.is_dir() {
+            files.extend(help_rs_files(&path));
+        } else if path.extension().is_some_and(|ext| ext == "rs") {
+            files.push(path);
+        }
+    }
+    files
+}
+
+/// file の本体（最初の行頭 `#[cfg(test)]` より前）で needle を数える。
+fn help_body_count(path: &Path, needle: &str) -> usize {
+    let text = fs::read_to_string(path).unwrap_or_default();
+    let body = text.split("\n#[cfg(test)]").next().unwrap_or_default();
+    body.matches(needle).count()
+}
+
+/// (g) 案内の描画の呼び出しは境界 crate の dispatch の 1 か所（`main.rs`）で、core の本体（`help.rs` の外）には無い。
+#[test]
+fn cli_help_render_is_called_from_one_site() {
+    let crates = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+    let boundary = help_rs_files(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src"));
+    let sites: Vec<(PathBuf, usize)> =
+        boundary.iter().map(|path| (path.clone(), help_body_count(path, "help::answer("))).filter(|(_, count)| *count > 0).collect();
+    assert_eq!(sites.len(), 1, "境界 crate の site は 1 file: {sites:?}");
+    assert!(sites.iter().all(|(path, count)| *count == 1 && path.ends_with("src/main.rs")), "main.rs の 1 か所: {sites:?}");
+    let core = help_rs_files(&crates.join(NAME).join("src"));
+    assert!(core.iter().any(|path| path.ends_with("src/help.rs")), "core の表の file が在る");
+    for path in core.iter().filter(|path| !path.ends_with("src/help.rs")) {
+        for needle in ["help::", "render_overview(", "render_page("] {
+            assert_eq!(help_body_count(path, needle), 0, "core の本体に案内の呼び出し: {} {needle}", path.display());
+        }
+    }
+}

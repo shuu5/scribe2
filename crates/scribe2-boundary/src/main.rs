@@ -129,6 +129,10 @@ fn dispatch(arg: Option<&str>, rest: &[String]) -> Result<Vec<String>, String> {
 /// 作り替えない。`program` は自分自身の呼ばれ方（`argv[0]`）で、`init` の 9 段目が子の program に使う（host-init.md §5）。
 fn run(args: &[String], program: &Path) -> Outcome {
     let rest = args.get(1..).unwrap_or_default();
+    // 人向けの案内の口（`help [<command>]`・頂点と各 command の直後の `--help` / `-h`・cli-help.md §2）。他の周は下の今の経路。
+    if let Some(outcome) = vessel::help::answer(args, &render_usage()) {
+        return outcome;
+    }
     match args.first().map(String::as_str) {
         // 口座の口（account-lifecycle.md §3）。置き場は `--state-dir` だけ・env を読まない。
         Some("account") => vessel::account::cli::dispatch(rest),

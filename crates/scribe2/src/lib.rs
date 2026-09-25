@@ -9,6 +9,7 @@ pub mod cli_args;
 pub mod cli_outcome;
 pub mod fleet;
 pub mod headless;
+pub mod help;
 pub mod hook;
 pub mod init;
 pub mod invocation;
