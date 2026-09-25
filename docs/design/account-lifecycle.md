@@ -289,6 +289,57 @@ user-scope MCP 設定の同期・別口座への `--resume` の混線 fence・pr
 - 却下: 門を通さず tmux へ直に /exit を送る（co-submit の門を外す・N1）／Enter を条件なしに送る（人の打ちかけを submit する）／dialog の 3 行全部を読む（読む字面は門が既に返す tail の 1 行で足りる・C3.3 の柵）／`CLAUDE_CODE_DISABLE_AGENT_VIEW` を外す（3 択になり「Move to background and exit」が残る）／席の process を kill（§20 の却下のまま）。
 - 後続: 移り先の口座が anchor を一度も trust していない周は起動の trust dialog（既定 No, exit）で席が立たず `launch-unconfirmed` の保留になる（同じ実地試験で実測）。公式 doc は口座の `.claude.json` の `projects[<anchor>].hasTrustDialogAccepted` を書く方法だけを案内する。本 repo は JSON の入れ子を書く道具を持たないので、依存の追加（A3）か画面の読みかの裁定を待って別の行にする。
 
+## 23. 便用の除外は群の今の口座だけ — 群の候補の全部を外す形（§17 約束 4）を改め、群ごとの今の口座（記録 > 種）だけを便用の候補から外す（契約表の行 l・§17 の改め・[ADR-0049](../../design-intent/decisions/ADR-0049-seat-accounts-are-owned-by-project-groups.html) §2・`s2-07l.618`）
+
+やさしく言うと: 群の席は全部同じ口座（群の今の口座）で立つ。§17 は「群が候補に挙げた口座は全部、便に使わない」と決めたので、候補を 6 口座にした host では便に使える口座が群の外の 1 つだけになり、その 1 つの OAuth が死んだ周に全便が黙って止まった。便から外すのは席が実際に使っている口座＝群の今の口座だけでよい。残りの候補は、席が移ってくるまで便が自由に使える。
+
+- 出所: 台帳 `s2-07l.618`（user 裁定 2026-09-25T00:37Z・逐語は台帳の notes・実測は同 bead の本文）。
+- 現物（verified・main 8ff1ead）:
+  - 群の除外の集合は `crates/scribe2/src/rules/manifest.rs` の `grouped_accounts` 2 本（`HostManifest::grouped_accounts`〔面の 3 値の入口〕と `Manifest::grouped_accounts`〔宣言の全群の候補の和〕）と `crates/scribe2/src/rules/mod.rs` の `grouped_accounts(state_dir)`（置き場から面を読む 1 本）。
+  - 呼び手は 2 つ: `crates/scribe2/src/pipe/ratelimit.rs`（`grouped` の欄・`select_for_run` へ渡す）と `crates/scribe2/src/fleet/cli.rs` の `select_account` の `Purpose::Run` の枝（`manifest.grouped_accounts()` を自分の除外に足す）。
+  - 群の今の口座の解決は `crates/scribe2/src/hook/group.rs` の `current_of(state_dir, group)`（記録 > 種・読めない記録は `RecordError`）。読み手は dispatch の 1 周・席の起動・doctor の 3 つ（§20 形 2）。
+  - §17 の歯（`crates/scribe2-boundary/tests/e2e/fleet.rs` と `crates/scribe2-boundary/tests/e2e/rules.rs` の `host_group_` 接頭辞）は「便用で全候補が外れる」を測っている。
+- 形（1 つずつ歯が測る・行 l の done と 1:1）:
+  1. **除外の集合は群ごとの今の口座**: 置き場から解く 1 本（`crates/scribe2/src/rules/mod.rs` の `grouped_accounts(state_dir)`）は、宣言の各群について `current_of` の label（記録 > 種）を集めて返す（2 群が同じ今の口座なら 1 つ）。記録が在るのに読めない群は typed の断り（fail-closed・候補の全部に読み替えない・候補を 1 つも返さない）。面が無い周は空・読めない面は欠陥の全件（今のまま）。
+  2. **口は 1 本**: `fleet select` の `Purpose::Run` の枝も同じ 1 本を使い、宣言の候補の和を返す `Manifest::grouped_accounts` は便用の除外に使わない（残す用途が無ければ消す・C17.2）。
+  3. **除外は次の選定から効き、走行中の便は止めない**（§17 約束 4 のまま）。群が移った周（§20 形 6）に前の今の口座で走っている便もそのまま走る。
+  4. **席の登録 row の除外は今のまま重なる**（[account-autonomy.md](./account-autonomy.md) §14）。
+  5. **doctor の群の行は 1 字も変わらない**（`accounts=` は宣言の候補・`current=` は今の口座・§20 形 2）。群 0 の host と session 用の選定も不変。
+- 触らない: `select_for_run` の並べ順・`select` の判定・session 用の選定・記録の形と書き手（§20 形 1）・`[[account-group]]` の形・便の置き場の登録 row の除外。
+- 却下: 群の候補の全部を外す（今の形・便用の口座が host に残らず 1 口座の死で全便が止まる）／群の口座を便にも使う（席と便が同じ口座を消費し、席の逼迫の判定が便の消費で偽陽性になる・§17 の決定のまま今の口座は外す）／便の側が記録を書く（記録の書き手は 1 周の群の段だけ・§20 形 1）／候補の全部を外したまま候補を減らす運用で凌ぐ（移り先の候補と便用の口座が競合し続ける・規則で解く）。
+- 歯（`crates/scribe2-boundary/tests/e2e/fleet.rs` の `host_group_` 接頭辞・§17 の fixture〔host.toml に群・偽の実測行〕+ host の群用 dir の記録〔`host_group_record_` の fixture と同じ形〕）:
+  - (a) 群 [A, B, C] で記録 = B → 便用の候補から外れるのは B だけ・A と C は候補に残る（base では A / B / C の全部が外れる ＝ RED）。
+  - (b) 記録なし → 種 A だけが外れる／記録が読めない（dir）→ 選定は typed に断り候補を 1 つも返さない／群 0 の host → 除外は登録 row の口座だけ（既存の歯のまま）。
+  - (c) `fleet select --purpose run` の口でも同じ（B だけが外れる・`--exclude` の重なりは今のまま）。
+  - (d) 2 群が同じ今の口座 → 除外は 1 つ／2 群が別の今の口座 → 2 つ。
+  - §17 の既存の歯（便用で全候補が外れる 1 本・`fleet select` の口の 1 本・`crates/scribe2-boundary/tests/e2e/rules.rs` の「便用の除外は全群の候補の和」の assert）は「今の口座だけ」の形へ書き換え、名も新しい形（`host_group_run_selection_drops_only_the_current_account` の形）に改める。
+- 後続: 群の移動の周に、移り先の口座で走っている便を見る形（§20 形 5 の条件のまま・実測を見て決める）。断りの行の内訳と doctor の便用の口座数（`s2-07l.618` の候補 1 / 2）は別の行。
+
+## 24. 席の登録 row を退役する口 — `seat retire` が退役の event を 1 件記し、replay が最新の退役より後の登録だけを row と読む（契約表の行 m・§20 の後続・[ADR-0049](../../design-intent/decisions/ADR-0049-seat-accounts-are-owned-by-project-groups.html)・`s2-07l.618`）
+
+やさしく言うと: 席の登録 row は append-only の event で、消す口が無い。置き場を移した project や役割を畳んだ席の古い row が残り、doctor は missing と数え続け、便用の除外は古い口座を外し続け、群の段は古い target へ退避を送り続ける（実測: 1 つの置き場に別の project の orchestrator の古い row が残り、群の行の `seat-accounts=` に古い口座が出た）。退役の event を 1 つ足し、replay がそれを読めば、row は可逆に消える（N1.2）。
+
+- 出所: 台帳 `s2-07l.618`（実測）と `s2-07l.609` の notes の引き継ぎ (a)（`s2-07l.494` の後続）。
+- 現物（verified・main 8ff1ead）:
+  - 登録は `SeatRegistered` の event（`crates/scribe2/src/fleet/mod.rs` の `EventKind`・`Shape::Registration`・`registration` の欄）で、replay（`crates/scribe2/src/fleet/replay.rs` の `replay`）は同じ鍵（role, anchor）の最新の行を `registrations` に置く。退役の kind は無い（口座の退役 `AccountRetired` / `AccountRestored` は在る＝同型の先例）。
+  - 読み手: `registration_of_target` / `registration_of_key`（`crates/scribe2/src/seat/role.rs`）・`registered_accounts`（便用の除外）・doctor の登録 row の行・群の段の `behind`・tick の `front`。全部 `State` 経由。
+  - `seat` の口は `register` / `launch` / `ruling` / `tick` / 短い形（`crates/scribe2/src/seat/cli.rs`・登録の書き手は `crates/scribe2/src/seat/role.rs` の `register`）。
+  - `KINDS` の pin の歯 4 本（`crates/scribe2-boundary/tests/e2e/fleet.rs` に 2 本・`crates/scribe2-boundary/tests/e2e/pipe/gate.rs` に 2 本）が event の種類の本数（23）と順を測る。
+- 形（1 つずつ歯が測る・行 m の done と 1:1）:
+  1. **口**: `seat retire --state-dir S --target S:W [--reason WORDS]`。target の登録 row が無い周は `no-row` で断る（rc 1・event 0）。在る周は `SeatRetired` の event を 1 件記す（role・anchor・target・account は row の写し・detail に reason・actor は human）。stdout 1 行 `seat retire: retired target=<S:W> role=<role> account=<label>`。
+  2. **replay**: 同じ鍵（role, anchor）について、最新の `SeatRetired` より後に `SeatRegistered` が無ければ row は無い（`registrations` から外す）。後に `SeatRegistered` が在れば復活（起動が row を書き直す今の形のまま）。物理順で後の event が勝つ（§20 現物の replay と同じ規則）。
+  3. **読み手は全部 replay 経由**なので、doctor の登録 row の行・便用の除外・群の段の `behind`・tick の `no-row`・席の起動の `pick_account` の群の除外は、退役した row を見なくなる（読み手の側は 1 字も変えない）。
+  4. **event の種類**: `EventKind` に `SeatRetired` を足し（`Shape::Registration`）、網羅 match と `KINDS` の pin の歯 4 本を新しい本数（24）と順で書き換える（§19 / §20 と同じ形）。
+  5. **権能**: 退役は 3 クラスに当たらない（消さない・可逆・出さない・使わない）ので orchestrator の席が撃てる（PreToolUse の guard は `launch` だけを止める）。
+- 触らない: `SeatRegistered` の形・登録 row の鍵（role, anchor）・席の起動の `prepare`・`AccountRetired` / `AccountRestored`・doctor の行の形（row が消えるだけ）。
+- 却下: event log から行を消す（append-only・N1）／`SeatRegistered` を account 空で書いて消したことにする（row の形を緩める・C10）／退役を host の面に書く（宣言と現状を分ける・ADR-0049）／target でなく (role, anchor) を引数にする（人が知っているのは窓の名・row の鍵は器が引く）。
+- 歯:
+  - `crates/scribe2-boundary/tests/e2e/seat/register.rs`（`seat_retire_` 接頭辞・既存の `role_log` / `role_state` の fixture）: 登録済みの target を retire → event 1 件（kind と role / anchor / target / account）・rc 0 の 1 行／row の無い target → `no-row`・event 0・rc 1／retire の後の doctor は `registered=` が 1 減り missing に数えない／retire の後に同じ target を `seat register` → row が戻る（base では `retire` が使い方の誤り ＝ RED）。
+  - `crates/scribe2-boundary/tests/e2e/fleet.rs`（`fleet_replay_seat_retired_` 接頭辞）: `SeatRegistered` → `SeatRetired` の並びで `registered_accounts` が空・`SeatRegistered` → `SeatRetired` → `SeatRegistered` で最後の row（物理順）・`KINDS` の pin 4 本の本数と順。
+  - `crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs`（`pipe_dispatch_group_retired_` 接頭辞・§20 の fixture）: 退役した orchestrator の row の target には退避の合図も /exit も送られない（送りの行 0）。
+  - 使い方: `seat_usage_external_form` の snapshot に `retire` が増える（同じ便で更新）。
+- 後続: 退役した row の target の tick の unit（[seat-heartbeat.md](./seat-heartbeat.md) §3）を同じ口で撤去するかは、行 d（§5）の着地の後に決める。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -403,4 +454,25 @@ verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe
 size = "M"
 depends = ["j"]
 done = "(1) 続きの周の /exit の送りは Delivered でも Unconfirmed でも inject の記録に 1 行残り（what は /exit）、Refused の周は残らない (2) 続きの周で pane が shell でない席に対し、門が Foreign で断りその tail が literal 1. Exit and stop tasks に等しい周は /exit を送らず Enter を 1 回だけ送って inject の記録に what=enter:exit-dialog の 1 行を残し、tail がそれ以外の周は 1 key も送らず記録も残さない (3) Enter の後に shell に戻った周は §20 形 6 のとおり同じ target へ起こし、戻らない周は同じ判定を繰り返して上限を置かない (4) 移動の周と群 0 の host と群に属さない anchor と席の hook の行と Launched の variant と event の kind の列は 1 語も変わらない 歯: pipe_dispatch_group_exit_dialog_ の歯が /exit の記録 1 行・既定の行への Enter 1 回と記録 1 行・別の字面への送り 0・移動の周の Enter 0 を測る"
+[[contract]]
+id = "l"
+title = "便用の除外は群の今の口座だけ — 置き場から解く 1 本が群ごとの current_of の label を集め、fleet select の便用の枝も同じ 1 本を使う（§23・§17 約束 4 の改め・ADR-0049 §2・s2-07l.618）"
+req = ["FR57", "FR36", "NFR4"]
+section = "23"
+write-set = ["crates/scribe2/src/rules/mod.rs", "crates/scribe2/src/rules/manifest.rs", "crates/scribe2/src/hook/group.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/src/fleet/replay.rs", "crates/scribe2/src/pipe/ratelimit.rs", "crates/scribe2-boundary/tests/e2e/fleet.rs", "crates/scribe2-boundary/tests/e2e/rules.rs", "crates/scribe2-boundary/tests/e2e/seat/account.rs", "docs/design/account-lifecycle.md"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail host_group_"]
+size = "M"
+growth = ["crates/scribe2/src/rules/mod.rs:40", "crates/scribe2/src/hook/group.rs:60", "crates/scribe2/src/fleet/cli.rs:20"]
+done = "(1) 置き場から解く 1 本は宣言の各群について current_of の label（記録 > 種）を集めて返し、2 群が同じ今の口座なら 1 つ、記録が在るのに読めない群は typed に断って候補を 1 つも返さず、面が無い周は空、読めない面は欠陥の全件のまま (2) fleet select の Purpose::Run の枝も同じ 1 本を使い、宣言の候補の和を返す Manifest::grouped_accounts は便用の除外に使わず残す用途が無ければ消す (3) 除外は次の選定から効き走行中の便は止めない (4) 席の登録 row の除外は今のまま重なる (5) doctor の群の行と群 0 の host と session 用の選定は 1 字も変わらない 歯: host_group_ の歯が、群 [A, B, C] で記録 = B なら B だけが外れ A と C は候補に残ること・記録なしなら種 A だけ・読めない記録は typed の断り・fleet select --purpose run の口でも同じ・2 群が同じ今の口座なら除外 1 つで別なら 2 つ・群 0 は登録 row の口座だけを測り、§17 の「全候補が外れる」の歯と rules.rs の「全群の候補の和」の assert は今の口座だけの形へ書き換える"
+
+[[contract]]
+id = "m"
+title = "席の登録 row を退役する口 — seat retire が SeatRetired の event を 1 件記し、replay が最新の退役より後の登録だけを row と読む（§24・ADR-0049・s2-07l.618）"
+req = ["FR36", "FR59", "NFR4"]
+section = "24"
+write-set = ["crates/scribe2/src/fleet/mod.rs", "crates/scribe2/src/fleet/event.rs", "crates/scribe2/src/fleet/replay.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/seat/role.rs", "crates/scribe2-boundary/src/main.rs", "crates/scribe2-boundary/tests/e2e/seat/register.rs", "crates/scribe2-boundary/tests/e2e/fleet.rs", "crates/scribe2-boundary/tests/e2e/pipe/gate.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__seat__seat_usage_external_form.snap", "docs/design/account-lifecycle.md"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_retire_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail fleet_replay_seat_retired_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_group_retired_"]
+size = "M"
+growth = ["crates/scribe2/src/fleet/mod.rs:40", "crates/scribe2/src/fleet/event.rs:40", "crates/scribe2/src/fleet/replay.rs:40", "crates/scribe2/src/seat/cli.rs:60", "crates/scribe2/src/seat/role.rs:80", "crates/scribe2-boundary/src/main.rs:20"]
+done = "(1) seat retire --state-dir S --target S:W [--reason WORDS] は登録 row の無い target を no-row で断り（rc 1・event 0）、在る周は SeatRetired の event を 1 件記して（role・anchor・target・account は row の写し・detail に reason・actor は human）stdout に seat retire: retired target=<S:W> role=<role> account=<label> の 1 行を出す (2) replay は同じ鍵（role, anchor）について最新の SeatRetired より後に SeatRegistered が無ければ row を registrations から外し、後に在れば復活させ、物理順で後の event が勝つ (3) doctor の登録 row の行・便用の除外・群の段の behind・tick の no-row・席の起動の群の除外は読み手を 1 字も変えずに退役した row を見なくなる (4) EventKind に SeatRetired（Shape::Registration）を足し、網羅 match と KINDS の pin の歯 4 本を 24 種と新しい順で書き換える (5) SeatRegistered の形・登録 row の鍵・prepare・AccountRetired / AccountRestored・doctor の行の形は変えない 歯: seat_retire_ の歯が登録済みの target の retire で event 1 件と rc 0 の 1 行・row の無い target の no-row と event 0 と rc 1・retire 後の doctor の registered= が 1 減ること・retire 後の seat register で row が戻ることを測り、fleet_replay_seat_retired_ の歯が SeatRegistered → SeatRetired で registered_accounts が空・SeatRegistered → SeatRetired → SeatRegistered で最後の row を測り、pipe_dispatch_group_retired_ の歯が退役した row の target に退避の合図も /exit も送られないことを測り、seat_usage_external_form の snapshot に retire が増える"
 <!-- contracts:end -->
