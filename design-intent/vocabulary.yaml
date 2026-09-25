@@ -479,12 +479,12 @@ terms:
   - canonical: backoff
     domain: consumer
     aliases: [合図の backoff]
-    definition: 同じ相手に同じ働きかけを繰り返すとき、 反応が無ければ次までの間隔を段ごとに伸ばし、 列が尽きたら打ち切る形。 管理 tick の打刻の合図は梯子の列の順で伸ばし、 梯子の列が尽きた段では送らず、 席に変化があれば梯子の列の先頭へ戻す (規範は SRS FR27・列の値は rules 行)。
+    definition: 同じ相手に同じ働きかけを繰り返すとき、 反応が無ければ次までの間隔を段ごとに伸ばし、 列が尽きたら打ち切る形。 管理 tick の打刻の合図の待ちの列は梯子の列 (規範は SRS FR27・写さない)。
     relationships: [管理 tick, 打刻の合図, 席, 梯子の列, 黙りの初段]
   - canonical: 梯子の列
     domain: consumer
     aliases: [合図の梯子]
-    definition: 管理 tick の打刻の合図の待ちを段ごとに並べた、 空でない昇順の秒の列 (rules 行 1 本)。 段 n の待ちは列の n 番目で、 列を越えた段は送らない (合図の上限は列の長さ)。 席に変化があれば先頭へ戻す。 規範は SRS FR27 (写さない)。
+    definition: 管理 tick の打刻の合図の待ちを段ごとに並べた、 空でない昇順の秒の列 (rules 行 1 本・ADR-0068)。 段の待ち・打ち切り・先頭への戻りの規範は SRS FR27 (写さない)。
     relationships: [backoff, 管理 tick, 黙りの初段]
   - canonical: 黙りの初段
     domain: consumer
