@@ -479,8 +479,17 @@ terms:
   - canonical: backoff
     domain: consumer
     aliases: [合図の backoff]
-    definition: 同じ相手に同じ働きかけを繰り返すとき、 反応が無ければ次までの間隔を倍々に伸ばし、 上限で打ち切る形。 管理 tick の打刻の合図は初段 40 分から 2 倍ずつ伸ばし、 次の待ちが 24 時間を超える段では送らず、 席に変化があれば初段へ戻す (ADR-0058・値は rules 行)。
-    relationships: [管理 tick, 打刻の合図, 席]
+    definition: 同じ相手に同じ働きかけを繰り返すとき、 反応が無ければ次までの間隔を段ごとに伸ばし、 列が尽きたら打ち切る形。 管理 tick の打刻の合図は梯子の列の順で伸ばし、 梯子の列が尽きた段では送らず、 席に変化があれば梯子の列の先頭へ戻す (規範は SRS FR27・列の値は rules 行)。
+    relationships: [管理 tick, 打刻の合図, 席, 梯子の列, 黙りの初段]
+  - canonical: 梯子の列
+    domain: consumer
+    aliases: [合図の梯子]
+    definition: 管理 tick の打刻の合図の待ちを段ごとに並べた、 空でない昇順の秒の列 (rules 行 1 本)。 段 n の待ちは列の n 番目で、 列を越えた段は送らない (合図の上限は列の長さ)。 席に変化があれば先頭へ戻す。 規範は SRS FR27 (写さない)。
+    relationships: [backoff, 管理 tick, 黙りの初段]
+  - canonical: 黙りの初段
+    domain: consumer
+    definition: 管理 tick が席を「黙っている」と判じる、 最後の打刻からの経過の閾値 (rules 行 1 本・秒)。 梯子の列の先頭とは別の値で、 既定が同じでも同じ実体ではない。 規範は SRS FR27 (写さない)。
+    relationships: [管理 tick, 梯子の列, 状態の打刻]
   - canonical: 変化の digest
     domain: consumer
     aliases: [change digest]
@@ -806,7 +815,7 @@ terms:
     aliases: [dispatch queue]
     definition: 台帳の open な契約のうち、 dispatcher が起動を待つものの並び。 入る条件・順序・待ちの理由・release で戻す範囲は SRS FR68 が定める (写さない)。 land の順序 (SRS FR50) とは別の実体。
     relationships: [dispatcher, 介入, 着地]
-    flagged_ambiguities: ["列: 起動の列 (dispatcher・起動を待つ契約) と着地の列 (pipe/queue.rs・push の順序) は別義"]
+    flagged_ambiguities: ["列: 起動の列 (dispatcher・起動を待つ契約) と着地の列 (pipe/queue.rs・push の順序) と梯子の列 (管理 tick の合図の待ちの列) は別義"]
   - canonical: regate
     domain: consumer
     definition: gate の判定が FAIL の Gated の便を、 裁定の逐語つきで同じ worktree の Implemented へ 1 段戻す器の口 (pipe regate・SRS FR77・設計 docs/design/pipeline.md の節)。 戻された便を dispatcher が拾う条件は SRS FR68 が定める (写さない)。
