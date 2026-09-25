@@ -3759,6 +3759,77 @@ fn pipe_dispatch_group_exit_move_round_sends_only_the_evacuation() {
     clean(&[&place.repo, &place.state]);
 }
 
+// ───── 群の段の起こし直しも会話を運ぶ（seat-heartbeat.md §8・契約表の行 g・接頭辞 `pipe_dispatch_group_carry_`・§21 の fixture） ─────
+//
+// §21 の移動の周（2 つ目の席は shell に戻らず保留 1）の後、2 つ目の席の打刻 file を歯が書き直して前面を shell に戻し、続きの周で
+// 起こす（偽 tmux は退避の合図の Enter に sid の無い打刻を足すので、sid の在る最終行は続きの周の前に書く）。
+
+/// 打刻に書く会話 id（UUID の形）。
+const CARRY_SID: &str = "7c1e4b2a-9d3f-4a6b-8e0c-2f5a7b9d1e3c";
+
+/// 打刻の 1 行（`state` / `event` / `sid`・ts は固定＝起動の証拠〔偽 tmux の `SessionStart`〕より前）。
+fn carry_stamp(state: &str, event: &str, sid: &str) -> String {
+    format!("{{\"schema\":1,\"state\":\"{state}\",\"event\":\"{event}\",\"ts\":1700000000,\"sid\":\"{sid}\"}}\n")
+}
+
+/// §21 の移動の周の後、2 つ目の席の打刻 file を `stamps` で置き換え、前面を shell に戻して続きの周を 1 回撃つ。その席の起動行
+/// （1 本であることを測る）を返す。
+fn carry_relaunch(place: &GroupPlace, stamps: &str) -> String {
+    let (_, two) = GROUP_ANCHORS[1];
+    let seat = place.state.join("seat").join(two.replace(':', "_"));
+    fs::write(seat.join("state.jsonl"), stamps).unwrap_or_default();
+    put_spy(&place.state, "front", two, "bash");
+    let out = group_terminal(place, "r-group-carry");
+    let lines = launched_lines(&place.state, two);
+    assert_eq!(lines.len(), 1, "起動行 1 本（{}）: {lines:?}", told(&out));
+    assert_eq!(move_counts(&place.state), (1, 0, 1), "承認・断り・保留の event は変わらない");
+    lines.first().cloned().unwrap_or_default()
+}
+
+/// 置き場の登録 row の全部（log の順）。
+fn carry_rows(state: &Path) -> Vec<vessel::fleet::Registration> {
+    vessel::fleet::store::read_all(state).unwrap_or_default().into_iter().filter_map(|event| event.registration).collect()
+}
+
+/// (a) 起こす席の打刻の最終行に会話 id が在る → 起動行の末尾が `--resume <sid>`（1 つだけ・a2 の口座のまま）。base は `carry`
+/// が空で末尾に無い（RED）。
+#[test]
+fn pipe_dispatch_group_carry_relaunch_resumes_the_stamped_session() {
+    let place = exit_place();
+    let line = carry_relaunch(&place, &carry_stamp("idle", "Stop", CARRY_SID));
+    assert!(line.ends_with(&format!(" --resume {CARRY_SID}")), "末尾に --resume <sid>: {line}");
+    assert_eq!(line.matches("--resume").count(), 1, "--resume は 1 つ: {line}");
+    assert!(line.contains("accounts/a2"), "a2 の口座で起こす: {line}");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (b) 打刻が無い（空の file）・最終行の sid が会話 id の形でない（前の行の会話 id にも倒れない）→ 起こすが `--resume` は無い。
+#[test]
+fn pipe_dispatch_group_carry_without_a_session_id_carries_nothing() {
+    let wrong = format!("{}{}", carry_stamp("idle", "Stop", CARRY_SID), carry_stamp("busy", "UserPromptSubmit", "sid-group"));
+    for (case, stamps) in [("no-stamp", String::new()), ("not-a-uuid", wrong)] {
+        let place = exit_place();
+        let line = carry_relaunch(&place, &stamps);
+        assert!(line.contains("accounts/a2"), "{case}: 起こす: {line}");
+        assert!(!line.contains("--resume"), "{case}: --resume 無し: {line}");
+        clean(&[&place.repo, &place.state]);
+    }
+}
+
+/// (c) 会話を運んだ周も、登録 row の `launch` は雛形のまま（`--resume` も sid も載らない・起こした row は a2 で launch を持つ）。
+#[test]
+fn pipe_dispatch_group_carry_leaves_the_row_launch_without_resume() {
+    let place = exit_place();
+    let (anchor, two) = GROUP_ANCHORS[1];
+    let line = carry_relaunch(&place, &carry_stamp("idle", "Stop", CARRY_SID));
+    assert!(line.ends_with(&format!(" --resume {CARRY_SID}")), "運んだ周: {line}");
+    let rows = carry_rows(&place.state);
+    let last = rows.iter().rev().find(|row| row.anchor == anchor && row.target == two);
+    assert!(last.is_some_and(|row| row.account == "a2" && !row.launch.is_empty()), "起こした row は a2 で launch を持つ: {rows:?}");
+    assert!(rows.iter().all(|row| !row.launch.contains("--resume") && !row.launch.contains(CARRY_SID)), "row の launch は雛形のまま: {rows:?}");
+    clean(&[&place.repo, &place.state]);
+}
+
 // ───── 退役した登録 row（account-lifecycle.md §24 形 3・契約表の行 m・接頭辞 `pipe_dispatch_group_retired_`・§20 / §21 の fixture） ─────
 //
 // 群の段の読み手（`behind`）は 1 字も変えず、`seat retire` の後の replay が row を外すので、退役した row の target には何も送らない。

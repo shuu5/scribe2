@@ -198,9 +198,10 @@
   1. **carry の読み手は 1 本**: 「置き場の `seat/<target>` の打刻の最終行の sid が会話 id の形なら `--resume <sid>`・無ければ空」を `crates/scribe2/src/seat/tick.rs` でなく打刻の側（`crates/scribe2/src/seat/state.rs`）に 1 本置き、§7 の tick と本 § の群の段が同じ 1 本を呼ぶ（C2・二重に書かない）。
   2. **群の段の起こし直しは carry を渡す**: `relaunch` が起こす席ごとに 1 の値を `carry` に渡す。row の `launch` は雛形のまま。
   3. **通知・退避・記録・承認 event は 1 字も変わらない**。
+- 読む時点: 席ごとに pane が shell に戻ったと判じた直後・起こす直前に 1 回読む（退避の合図の後に席が足した打刻まで含めた最終行）。移動の周（settle の窓）と続きの周（1 回だけ見る）で同じ。
 - 触らない: 群の判定・lock・退避の合図・`replace_own`・event の種類。
 - 却下: 群の段だけ `--continue`（§7 の却下と同じ）／carry を event に記す（会話 id は 1 回きりの値・row にも event にも載せない・§18）。
-- 歯（`crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs` に `pipe_dispatch_group_carry_` 接頭辞・§20 の fixture〔偽 tmux と偽 usage〕に打刻の file を足す）: (a) 起こす席の打刻に sid が在る → 起動行の末尾が `--resume <sid>`（base では末尾に無い ＝ RED）(b) 打刻が無い / sid の形でない → 末尾に無し (c) row の `launch` に `--resume` が無い。
+- 歯（`crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs` に `pipe_dispatch_group_carry_` 接頭辞・§20 の fixture〔偽 tmux と偽 usage〕に打刻の file を足す）: (a) 起こす席の打刻に sid が在る → 起動行の末尾が `--resume <sid>`（base では末尾に無い ＝ RED）(b) 打刻が無い / sid の形でない → 末尾に無し (c) row の `launch` に `--resume` が無い。偽 tmux は退避の合図の Enter に sid の無い打刻を足すので、歯は §21 の移動の周（2 つ目の席が shell に戻らず保留 1）の後に 2 つ目の席の打刻 file を書き直し、前面を shell に戻した続きの周で起動行を測る（承認・断り・保留の event の数が変わらないことも同じ周で測る）。
 
 ## 9. tick が群の移動の判定を撃つ（契約表の行 i・§4 / §7 の続き・[ADR-0066](../../design-intent/decisions/ADR-0066-the-management-tick-fires-the-group-move-judgement.html)・[ADR-0055](../../design-intent/decisions/ADR-0055-group-pressure-is-measured-at-run-ends-and-seat-turns-without-a-timer.html) の契機の supersede・`s2-07l.629` 候補 2）
 
