@@ -252,6 +252,21 @@
   - 行 m（`seat_tick_evacuate_` 接頭辞）: (k) 記録 ≠ row ∧ 前面 claude ∧ 最終行 Busy（新しい）∧ 入力欄が空 → /exit 1 行・`decision=move move=exit`（base では `noop busy` ＝ RED）(l) 同じで Busy が stale より古い → /exit 1 行（base では `state-stale` ＝ RED）(m) 記録 = row ∧ Busy → `noop busy`・0 key（不変）(n) 記録 ≠ row ∧ 入力欄に字 → `input-busy`・0 key (o) 2 周続けて撃つと /exit が 2 行（積む・止めない・記録も 2 行）。
 - 後続: 上限で終わった turn を hook が打刻する口（memo `.635` 候補 (b)・Notification の payload の実測が先）／journal の判定行の量（周期 15 秒で 4.6 万行/日・必要なら noop の行を間引く rules 行）。
 
+## 11. 席の起動行が feedback の調査を切る — `CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1` を agent view の env の隣に前置し、/exit の後の調査の dialog を出させない（契約表の行 n・§4 形 4 の前提・`s2-07l.634`）
+
+やさしく言うと: /exit を送ると claude が「使用感の調査」の dialog を出すことがあり、器が読める dialog は「Exit and stop tasks」の 1 形だけなので、tick は `input-unknown` で 40 分止まった（2026-09-25 の soap-copilot）。dialog を読む形を増やすより、出させない設定が在るならそれを起動行に書く（決定はしごの「既に在るか」）。claude の binary の strings に `CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY` が在る（verified 2026-09-25・値の意味は公式 doc に無いので `=1` で切れるかは host で実測して台帳の notes に残す）。
+
+- 出所: 台帳 `s2-07l.634`（候補 2）。
+- 現物（verified・main dae3b91）: 起動行の前置は `crates/scribe2/src/seat/cycle/launch.rs` の `with_agent_view_off`（`CLAUDE_CODE_DISABLE_AGENT_VIEW=1 ` を先頭に・二重にしない・空は空）で、env の名は `crates/scribe2/src/headless/mod.rs` の `AGENT_VIEW_ENV`。起動行の形は `cd '<anchor>' && CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR={account_dir} claude …`。歯は `crates/scribe2-boundary/tests/e2e/seat.rs` と `seat/launch.rs` が先頭 3 語を pin する。
+- 形（行 n・1 つずつ歯が測る・done と 1:1）:
+  1. **env を 1 つ足す**: 前置は `CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1 ` の 2 語（順は固定・名は `AGENT_VIEW_ENV` の隣の定数・値は `1`）。前置の関数は 1 本のまま（2 語を足す）。二重にしない・空は空の規則はそのまま。
+  2. **前置の場所は今のまま**（`cd … &&` の後・`CLAUDE_CONFIG_DIR` の前）。雛形は書き換えない・env は読まない（C2.2）。
+  3. **runner / lens の起動（headless）は触らない**（`-p` の周に調査は出ない・`AGENT_VIEW_ENV` の headless 側の使い方は不変）。
+  4. **dialog の読み手（§4 形 4・`EXIT_DIALOG_ROW`）は触らない**（調査が出なくなれば既知の 1 形で足りる・出た周は今まで通り `input-unknown`）。
+- 触らない: 起動行の他の語・`--resume` と初手の carry（§10）・雛形・headless・dialog の読み手。
+- 却下: 調査の dialog の形を読んで閉じる（読む形が増える・調査の字面は claude の版で変わる）／`input-unknown` が N 周続いたら Enter を送る（読めない画面へ盲目に鍵・fail-open）／settings の json に書く（env 1 語で足りる・trust の json は持ち主の設定 dir を書く重い口）。
+- 歯（起動行の先頭は `crates/scribe2-boundary/tests/e2e/seat.rs` の helper `acct_launch_prefix` と `crates/scribe2-boundary/tests/e2e/seat/launch.rs` の先頭の定数が pin し、`seat_launch_creates_the_window` / `seat_launch_injects_cd` / `seat_entry_same_window` の 3 本がそれを読む＝helper と定数を 2 語に書き換えると 3 本が base で赤くなる。lib は `crates/scribe2/src/seat/cycle/launch.rs` の中の `seat_agent_view_off_` 接頭辞の既存の歯を 2 語に書き換える）: (a) 起動行の先頭が `cd '<anchor>' && CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1 CLAUDE_CONFIG_DIR={account_dir} claude`（base では 3 語 ＝ RED）(b) 既に 2 語で始まる行は二重にしない (c) 空は空 (d) headless の起動行は不変（`crates/scribe2-boundary/tests/e2e/headless.rs` の既存の歯・触らない）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -393,4 +408,15 @@ size = "S"
 growth = ["crates/scribe2/src/seat/tick.rs:30"]
 depends = ["i"]
 done = "(1) front は登録 row → 窓が shell か → 移動の周か（anchor が群 ∧ 記録の口座 ≠ row の口座・記録が読めない周は group-unreadable）の順で見て、移動の周 ∧ 窓が claude なら打刻と梯子を読まずに移動の門（§4 形 4 の規則そのまま）へ進む (2) 移動の門の関数は 1 本のままで呼ぶ場所が front の中へ移り、行 i の判定で移った周の呼び出しは §9 形 3 のまま (3) /exit は周期ごとに送ってよく Busy の周も止めず、記録は 1 送信 1 行 (4) 判定行は decision=move move=exit のままで、移動の周に reason=busy / state-stale は出ない (5) 移動の周でない席・群 0 の host・群の外の席・shell の周（awake）は 1 字も変わらない 歯: seat_tick_evacuate_ の歯が (k) 記録 ≠ row ∧ 前面 claude ∧ 新しい Busy ∧ 空の入力欄で /exit 1 行と move=exit（base では noop busy ＝ RED）(l) Busy が stale より古い同じ席で /exit 1 行（base では state-stale ＝ RED）(m) 記録 = row ∧ Busy で noop busy・0 key (n) 記録 ≠ row ∧ 字の在る入力欄で input-busy・0 key (o) 2 周で /exit 2 行を測る"
+[[contract]]
+id = "n"
+title = "席の起動行が feedback の調査を切る — CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1 を agent view の env の隣に前置する（§11・s2-07l.634 候補 2）"
+req = ["FR59", "FR38", "NFR4"]
+section = "11"
+write-set = ["crates/scribe2/src/headless/mod.rs", "crates/scribe2/src/seat/cycle/launch.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "crates/scribe2-boundary/tests/e2e/seat/launch.rs", "docs/design/seat-heartbeat.md"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail seat_agent_view_off_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_launch_creates_the_window", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_launch_injects_cd", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_entry_same_window"]
+size = "S"
+growth = ["crates/scribe2/src/headless/mod.rs:3", "crates/scribe2/src/seat/cycle/launch.rs:5"]
+depends = ["j"]
+done = "(1) 席の起動行の前置は CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1 の 2 語（順は固定・名は AGENT_VIEW_ENV の隣の定数・値は 1）で、前置の関数は 1 本のまま二重にせず空は空 (2) 前置の場所（cd … && の後・CLAUDE_CONFIG_DIR の前）と起動行の他の語・雛形・--resume と初手の carry は不変 (3) headless（runner / lens）の起動行と dialog の読み手は不変 歯: 起動行の先頭を pin する helper acct_launch_prefix と seat/launch.rs の定数を 2 語に書き換えて seat_launch_creates_the_window / seat_launch_injects_cd / seat_entry_same_window の 3 本が base で赤・lib の seat_agent_view_off_ が二重にしない・空は空を測り・headless の歯は不変"
 <!-- contracts:end -->

@@ -146,6 +146,28 @@ README の先頭に「新しい repo を器に載せる」の節を置く: 打�
 - 移り先の口座の trust は §7 / 行 e（ADR-0065）が持つ（account-lifecycle.md §22 の後続の行き先）。
 - 席の登録 row の退役の kind（`s2-07l.609` の notes (a)）と外部 API の鍵の欄（同 (c)）は本設計の外。
 
+## 14. init が台帳を起こす — `--ledger-prefix` の周に `bd init --prefix P --skip-agents --skip-hooks` と `scripts/bdw` の shim と根の epic を置く（契約表の行 f・§4 の段の追加・`s2-07l.622` / `s2-07l.625`・裁定 2026-09-25T01:29Z / 03:19Z）
+
+やさしく言うと: 新しい repo を器に載せるとき、台帳（beads）は人が手で起こしている。しかも最初の bead は起票の門が「親が無い」で断るので、根の epic を人が素の terminal で置くしかなく、`bd init` は器の規則と食い違う CLAUDE.md / AGENTS.md を作って勝手に commit する（tsuzuri の実測）。init の 1 段に「台帳を起こす」を足し、器の子 process が門の外で根を置き、余計な file を作らない旗で撃つ。
+
+- 出所: 台帳 `s2-07l.622`（根を置けない・裁定 2026-09-25T01:29Z「推奨で進めて」＝候補 2）と `s2-07l.625`（CLAUDE.md / AGENTS.md・裁定 03:19Z・逐語は各 memo の notes）。
+- 現物（verified・main dae3b91）:
+  - `init [ROOT] [--group <名>]` の段は §4 の 7 段 + §5 の 2 段（`session` / `seat`）。段の名と出力の形は §4。flag は `cli_args` の許容列（`--group` の 1 つ）。
+  - 台帳の子 process は dispatcher.md §14（名指された repo の中で撃つ・`bd` は PATH）。起票の門（vessel-hook.md §10）は席の Bash の PreToolUse だけに当たる＝器の子 process の `bd create` は門に当たらない。
+  - `scripts/bdw` は logic の無い shim（canonical の bdw へ exec・無ければ fail-closed）で、本 repo の `scripts/bdw` の 20 行がそのまま雛形。席の `bd create` は shim が無い repo では門の `bd-outside-bdw` で断られる。
+  - `bd init --skip-agents --skip-hooks` は CLAUDE.md / AGENTS.md と hook を作らない（本 repo の `.beads/PRIME.md` の記載・実測）。
+- 形（行 f・1 つずつ歯が測る・done と 1:1）:
+  1. **flag `--ledger-prefix <P>`** を init に足す（許容列に 1 語・値は bead id の接頭辞・無い周は段が `skip`）。
+  2. **段 `ledger`** を `group` の後・`commit` の前に足す（段の名の列は `state-dir` / `host-face` / `accounts` / `marker` / `declaration` / `group` / `ledger` / `commit` / `session` / `seat` の 10 語・出力の形は §4 のまま）。中身はこの順・各項は「既に在れば skip」:
+     - (i) `ROOT/.beads` が無ければ ROOT の中で `bd init --prefix <P> --skip-agents --skip-hooks` を撃つ（`bd` は PATH・stdout / stderr は読まず rc だけ・rc ≠ 0 は `failed:bd-init:<rc>`）。
+     - (ii) `ROOT/scripts/bdw` が無ければ shim を書く（本文は器が定数で持つ＝本 repo の `scripts/bdw` と同じ字面・実行 bit を立てる・書けなければ `failed:write`）。書いた file は `commit` の段の書いた列に足す（`.vessel` / `.vessel.toml` と同じ扱い）。
+     - (iii) 台帳の bead が 0 本なら根の epic を 1 本置く: ROOT の中で `bd create --type epic --title "<ROOT の dir 名> root" --priority 1` を撃つ（`--parent` 無し・器の子 process は門に当たらない・rc ≠ 0 は `failed:bd-create:<rc>`）。0 本かは `bd --readonly list --limit 1` の出力が空かで測る（読めない周は `failed:bd-list:<rc>`）。
+  3. **HEAD に CLAUDE.md / AGENTS.md を増やさない**: (i) の旗で bd が作らない。器は生成された file を消さない・上書きしない（N1・他人の file）。
+  4. **failed の後の段**: `ledger` が failed でも `commit` 以降は撃つ（§4 の規則のまま・`next=fix:ledger`）。
+- 触らない: 起票の門と rules 行 `ledger.denied_writes`（門は緩めない・C14）・§4 の既存 7 段の中身・`bd` の呼び方（PATH）・shim の本文（本 repo の `scripts/bdw` と同じ・drift は歯が測る）。
+- 却下: 門に「bead 0 本の周の最初の create は通す」例外を足す（C14 の例外・vessel-hook.md §10 の却下と衝突）／語を外す当座の手を規則にする（裁定 id が毎回要る・N2）／生成された CLAUDE.md を器が消す（他人の file・N1）／根の epic を `scripts/bdw` 経由で置く（canonical の path が host の値・init の周は書き手が 1 つで直列化が要らない）／`--ledger-prefix` を dir 名から導く（bead id の接頭辞は持ち主が決める字面・A1 の「出す」に近い）。
+- 歯（`crates/scribe2-boundary/tests/e2e/main.rs` の `init_repo_` の隣に `init_ledger_` 接頭辞・toy の repo・PATH に偽 `bd`〔argv を log に写し、`init` は `.beads/` を作り `--skip-agents` が無ければ CLAUDE.md と AGENTS.md も作る・`create` は id を 1 行出す・`list` は空〕）: (a) `--ledger-prefix t9` で `init: ledger ok`・偽 bd の log に `init --prefix t9 --skip-agents --skip-hooks` と `create --type epic` が各 1 回・`scripts/bdw` が shim の字面で実行可・tree に CLAUDE.md / AGENTS.md が無い（base では flag が未知で断られる ＝ RED）(b) flag 無し → `init: ledger skip`・偽 bd の呼出 0 (c) `.beads` と shim が既に在る → `ledger skip`・呼出は `list` だけ (d) 偽 bd の `init` が rc 1 → `failed:bd-init:1`・`next=fix:ledger`・`commit` 以降の行は出る (e) 段の名の列 10 語が宣言順（`init_repo_` の既存の段の列の歯を 10 語に書き換える）。shim の drift は lib の歯（`crates/scribe2/src/init.rs` の中・`init_shim_` 接頭辞）が定数と本 repo の `scripts/bdw` の字面の一致を測る。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -203,4 +225,15 @@ verify = ["cargo nextest run -p scribe2 --no-tests=fail json_tree_set_", "cargo 
 size = "M"
 growth = ["crates/scribe2/src/fleet/json_tree.rs:80", "crates/scribe2/src/account/mod.rs:80", "crates/scribe2/src/seat/cycle/launch.rs:40", "crates/scribe2/src/seat/cli.rs:10", "crates/scribe2/src/pipe/dispatch/group.rs:10", "crates/scribe2/src/seat/tick.rs:10"]
 done = "(1) launch は prepare が通った後・置き換え（replace_with）と boot の分岐の前に 1 回だけ、選んだ口座の dir の .claude.json の projects[<anchor の絶対 path>].hasTrustDialogAccepted を true に置き（置き換えの周も注入の周も同じ 1 回）、呼び手 3 つ（cli の長い形と短い形・dispatch の群の起こし直し・tick の移動）は変えない (2) 書き方は同じ読み手で読み → 木の path に真偽を置く（途中の object が無ければ作り兄弟の key と並びと値と数の字面は変えず書式は render の 2 空白の形で末尾の改行は元の file に在れば保つ）→ render の本文を同じ dir の一時 file に書き → 一時 file を読み直して true を確かめ → rename で置き換え、file が無い周は projects だけの最小の木を同じ手で作り、既に true の周は 1 byte も書かない (3) 言葉は閉じた列 written / created / accepted / unreadable / unwritable (4) どの言葉でも起動行は送り Refused にせず、言葉は起動の記録（record_launch の inject.jsonl の行の what）の末尾に trust=<語> として置き換えの周も注入の周も残し、注入の周はさらに Launched::Done の 3 つ目の値で返して seat launch の stdout の 1 行の末尾に trust=<語> を添え、tick は launched= の後ろに trust=<語> を足し、dispatch の起こし直しと tick は言葉を判定に使わない (5) doctor の trust= の行・init・account add・.credentials.json・settings.json・Tree の形と parse・prepare と登録 row は変えない (6) 同じ設定 dir を使う Claude Code と lock は共有せず、印が消えた周は doctor の trust=missing が名指して次の起動が置き直す 歯: json_tree_set_ の歯が入れ子の path への真偽の設置で途中の object の生成・兄弟の key と並びと数の字面の保存・render → parse の同値・既に true なら不変・途中が object でなければ Err を測り、seat_launch_trust_ の歯が他の key と別 anchor の項目を持つ file で当該の印だけ増えて他の key・並び・値は parse で同じ木かつ末尾改行も同じで stdout と inject の記録の what の末尾が trust=written・同じ窓へ置き換える周は exec の前に印が置かれて記録の what の末尾に trust=<語>・既に true で 1 byte も変わらず accepted・file 無しで最小の file と created・JSON でない file で unreadable かつ起動は送られる・読み取り専用 dir で unwritable かつ起動は送られることを測り、pipe_dispatch_group_trust_ の歯が群の起こし直しで移り先の口座の file に群の anchor の印が置かれてから起動行が送られることを測る"
+[[contract]]
+id = "f"
+title = "init が台帳を起こす — --ledger-prefix の周に段 ledger（bd init --prefix P --skip-agents --skip-hooks・scripts/bdw の shim・根の epic）を group の後 commit の前に足す（§14・s2-07l.622 / .625・裁定 2026-09-25T01:29Z / 03:19Z）"
+req = ["FR57", "FR13", "NFR4"]
+section = "14"
+write-set = ["crates/scribe2/src/init.rs", "crates/scribe2-boundary/tests/e2e/main.rs", "docs/design/host-init.md"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail init_shim_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail init_ledger_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail init_repo_"]
+size = "M"
+growth = ["crates/scribe2/src/init.rs:120"]
+depends = ["c"]
+done = "(1) init は flag --ledger-prefix <P> を受け（無い周は段 ledger が skip）、段 ledger を group の後・commit の前に足して段の名の列は state-dir / host-face / accounts / marker / declaration / group / ledger / commit / session / seat の 10 語 (2) ledger は ROOT/.beads が無ければ ROOT の中で bd init --prefix <P> --skip-agents --skip-hooks（PATH の bd・rc だけ読む・rc ≠ 0 は failed:bd-init:<rc>）、ROOT/scripts/bdw が無ければ本 repo の scripts/bdw と同じ字面の shim を実行 bit つきで書いて commit の段の書いた列に足し、台帳の bead が 0 本（bd --readonly list --limit 1 が空）なら ROOT の中で bd create --type epic --title \"<ROOT の dir 名> root\" --priority 1 を撃つ（--parent 無し・rc ≠ 0 は failed:bd-create:<rc>・list が読めなければ failed:bd-list:<rc>） (3) HEAD / tree に CLAUDE.md と AGENTS.md を増やさず、器は生成 file を消さず上書きしない (4) ledger が failed でも commit 以降は撃ち next=fix:ledger (5) 起票の門・rules 行・§4 の既存 7 段・bd の呼び方は不変 歯: init_ledger_ の歯が偽 bd（argv を log・init は .beads を作り --skip-agents が無ければ CLAUDE.md / AGENTS.md も作る・create は id・list は空）で (a) --ledger-prefix t9 → ledger ok・log に init --prefix t9 --skip-agents --skip-hooks と create --type epic が各 1・shim の字面と実行 bit・tree に CLAUDE.md / AGENTS.md 無し（base では flag が未知 ＝ RED）(b) flag 無しで skip・呼出 0 (c) .beads と shim が在れば skip・呼出は list だけ (d) init が rc 1 で failed:bd-init:1・next=fix:ledger・commit 以降の行あり (e) 段の列 10 語 を測り、init_repo_ の既存の段の列の歯を 10 語に書き換え、lib の init_shim_ が定数と scripts/bdw の一致を測る"
 <!-- contracts:end -->
