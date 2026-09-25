@@ -128,6 +128,7 @@
   - `seat tick install` は `crates/scribe2/src/seat/tick/install.rs` の `run`（`Flags` = `--state-dir` / `--target` / `--unit-dir` / `--binary` / `--rules`）。導出は pure の `derive`・書きと有効化は `install`（`daemon-reload` → `enable --now`）。unit dir と binary は引数だけ（C2.2）。
   - 席の起動は `crates/scribe2/src/seat/cycle/launch.rs` の `launch`（`prepare` が登録 row を書く → 起動行を注入 → 立ち上がりを確かめて `Launched::Done`）。短い形と長い形の呼び手は `crates/scribe2/src/seat/cli.rs`（`render_launched` の 1 行）。
   - doctor の `tick-unit=` は `--unit-dir` と `--binary` を渡した周だけ足す（`crates/scribe2-boundary/src/main.rs` の flag の読み・§3）。
+  - doctor の host の面の行は `crates/scribe2/src/account/mod.rs` の `render_host_manifest`（`host-manifest=<present|absent|unreadable>` の 1 行・読むだけ）が描き、呼び手は `crates/scribe2-boundary/src/main.rs` の doctor（flag を読んで行を組む）と `crates/scribe2/src/account/mod.rs` の口座の行の組み立て（`render_host_manifest` を先頭に置く）の 2 つ。形 3 の `tick=declared` はこの行の末尾の欄＝`render_host_manifest` に欄を足し、呼び手 2 つが面の有無を渡す（`crates/scribe2/src/account/mod.rs` は行 d の write-set）。
   - `init`（host-init.md §4 段 3）は雛形の host の面の 4 表（`[[plugin]]` `[[launch-arg]]` `[[account]]` `[[vessel]]`）を写す（行 b・未着地）。
 - 形（1 つずつ歯が測る・行 d の done と 1:1）:
   1. **host の面の表 `[[tick]]`**: 欄は `unit-dir`（unit を置く dir の絶対 path）と `binary`（unit が撃つ器の絶対 path）の 2 つ・0 か 1 行（2 行目は loader が断る・`[[vessel]]` と同じ形）・相対 path と欠けた欄は loader が行番号つきで断る。`Manifest` は `tick: Option<TickUnit>` で持ち、読み手は `tick()` の 1 つ。表の無い host は今のまま（群 0 と同じく 1 語も変わらない）。
@@ -187,7 +188,7 @@ id = "d"
 title = "席の起動が tick の unit を入れる — host の面の表 [[tick]]（unit-dir / binary・0 か 1 行）を loader が読み、launch が Done の周に §3 の install の 1 本を面の値で撃って行の末尾に tick-unit=<installed|unchanged|refused:<語>> を足し、doctor は flag が無ければ面の値を既定にして表の在る host の行に tick=declared を足す・表の無い host は 1 字も変わらない（§5・ADR-0064・s2-07l.616）"
 req = ["FR64", "FR59", "FR61", "FR40", "NFR4"]
 section = "5"
-write-set = ["crates/scribe2/src/rules/manifest.rs", "crates/scribe2/src/seat/cycle/launch.rs", "crates/scribe2/src/seat/tick/install.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/seat/role.rs", "crates/scribe2-boundary/src/main.rs", "crates/scribe2-boundary/tests/e2e/rules.rs", "crates/scribe2-boundary/tests/e2e/seat/launch.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "docs/design/seat-heartbeat.md"]
+write-set = ["crates/scribe2/src/rules/manifest.rs", "crates/scribe2/src/seat/cycle/launch.rs", "crates/scribe2/src/seat/tick/install.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/seat/role.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2-boundary/src/main.rs", "crates/scribe2-boundary/tests/e2e/rules.rs", "crates/scribe2-boundary/tests/e2e/seat/launch.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "docs/design/seat-heartbeat.md"]
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail host_tick_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_host_tick_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_launch_tick_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_doctor_tick_"]
 size = "M"
 depends = ["b"]
