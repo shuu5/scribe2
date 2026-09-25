@@ -462,7 +462,7 @@ section = "23"
 write-set = ["crates/scribe2/src/rules/mod.rs", "crates/scribe2/src/rules/manifest.rs", "crates/scribe2/src/hook/group.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/src/fleet/replay.rs", "crates/scribe2/src/pipe/ratelimit.rs", "crates/scribe2-boundary/tests/e2e/fleet.rs", "crates/scribe2-boundary/tests/e2e/rules.rs", "crates/scribe2-boundary/tests/e2e/seat/account.rs", "docs/design/account-lifecycle.md"]
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail host_group_"]
 size = "M"
-growth = ["crates/scribe2/src/rules/mod.rs:40", "crates/scribe2/src/hook/group.rs:60", "crates/scribe2/src/fleet/cli.rs:20"]
+growth = ["crates/scribe2/src/rules/mod.rs:40", "crates/scribe2/src/rules/manifest.rs:20", "crates/scribe2/src/hook/group.rs:60", "crates/scribe2/src/fleet/cli.rs:20", "crates/scribe2/src/fleet/replay.rs:10", "crates/scribe2/src/pipe/ratelimit.rs:10"]
 done = "(1) 置き場から解く 1 本は宣言の各群について current_of の label（記録 > 種）を集めて返し、2 群が同じ今の口座なら 1 つ、記録が在るのに読めない群は typed に断って候補を 1 つも返さず、面が無い周は空、読めない面は欠陥の全件のまま (2) fleet select の Purpose::Run の枝も同じ 1 本を使い、宣言の候補の和を返す Manifest::grouped_accounts は便用の除外に使わず残す用途が無ければ消す (3) 除外は次の選定から効き走行中の便は止めない (4) 席の登録 row の除外は今のまま重なる (5) doctor の群の行と群 0 の host と session 用の選定は 1 字も変わらない 歯: host_group_ の歯が、群 [A, B, C] で記録 = B なら B だけが外れ A と C は候補に残ること・記録なしなら種 A だけ・読めない記録は typed の断り・fleet select --purpose run の口でも同じ・2 群が同じ今の口座なら除外 1 つで別なら 2 つ・群 0 は登録 row の口座だけを測り、§17 の「全候補が外れる」の歯と rules.rs の「全群の候補の和」の assert は今の口座だけの形へ書き換える"
 
 [[contract]]
