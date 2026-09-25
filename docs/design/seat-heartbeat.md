@@ -99,7 +99,7 @@
 - 形（1 つずつ歯が測る・行 c の done と 1:1）:
   1. **移動の門の位置**: `front`（登録 row・打刻が Idle・梯子）の直後、黙りの門の前。登録 row の anchor が群に属し（`group_of`）、群の今の口座（`current_of`）が row の口座と違う周は**移動の周**: 以後の列（黙り・上限・床・口座の門・合図の注入）は撃たず、梯子の記録も触らない（移動中の席に heartbeat を送らない）。群に属さない anchor・群 0 の host・記録と row が一致する席（記録が無く種と一致する席を含む）は今の列のまま 1 字も変わらない。記録が在るのに読めない周は `noop` の `group-unreadable`（種に読み替えない・C10）。
   2. **lock**: 移動の周は群の段と同じ lock（host の群用 dir の 1 file・`create_new`）の内側で撃つ。取れない周は `noop` の `group-locked`（1 key も送らない＝dispatch の 1 周と同じ target を二重に起こさない）。lock の実装は 1 本を共有する（`crates/scribe2/src/pipe/dispatch/group.rs` の `Lock` を記録の読み手と同じ `crates/scribe2/src/hook/group.rs` へ移して群の段と tick が呼ぶ・二重に書かない・C17）。
-  3. **pane が shell の周は起こす**: `pane_is_shell` の周は `launch` の 1 本で同じ target に群の今の口座の席を起こす（anchor と置き場は自分の row と自分の置き場・settle / step は rules・登録 row は起動が書き直す・会話は運ばない＝§20 形 6 と同じ 1 本）。判定行は `decision=move move=launch launched=<起動の結果の語>`。起こせない周（断り・失敗・候補なし）も語を載せて次の周にまた判じる（冪等・保留の event は tick が記さない）。
+  3. **pane が shell の周は起こす**: `pane_is_shell` の周は `launch` の 1 本で同じ target に群の今の口座の席を起こす（anchor と置き場は自分の row と自分の置き場・settle / step は rules・登録 row は起動が書き直す・会話は運ばない＝§20 形 6 と同じ 1 本。行 f 以後は §7 形 3 のとおり打刻の sid を `--resume` で運ぶ）。判定行は `decision=move move=launch launched=<起動の結果の語>`。起こせない周（断り・失敗・候補なし）も語を載せて次の周にまた判じる（冪等・保留の event は tick が記さない）。
   4. **pane が shell でない周は退避を 1 手**: 入力欄の門（§2 形 1 の 8 と同じ `pass_input`）を通し、空なら `/exit` の 1 行を `deliver_within`（窓は `pipe.stop_grace_ms`）で送る（`decision=move move=exit`・記録は `tick.jsonl` に `who` が `seat-tick-move`・`what` が `/exit` の 1 行・送達が未確認でも残す＝account-lifecycle.md §22 形 1 と同じ）。門が Foreign で、その tail（畳んだ字面）が dialog の既定の行の literal（§22 形 2 の `1. Exit and stop tasks`）に等しい周は /exit を送らず Enter を 1 回だけ（`move=enter`・`what` は `enter:exit-dialog`・Enter は消費の証拠を持たないので `consumed=unknown:exit-dialog`）。送りは `crates/scribe2/src/seat/inject.rs` の `deliver_or_confirm` の 1 本（`deliver_within` と同じ門・送り・settle）で撃つ。それ以外の Foreign / UnknownInput / OwnQueued は今の語（`input-busy` / `input-unknown` / `input-own-queued`）で 0 key（OwnQueued の Enter 1 回は `pass_input` のまま）。Busy の打刻は `front` で止まる（作業中の席に /exit を送らない＝§20 形 6 の「作業記憶を残す番」は打刻で守る）。
   5. **/exit と dialog の字面は 1 か所**: `EXIT` / `EXIT_DIALOG` の値は `crates/scribe2/src/hook/group.rs` へ移し、群の段と tick が同じ値を読む（記録の `who` は呼び手ごと）。
   6. **群の段（dispatch の周）は残る**: `relaunch` の続きの周（`Wait::Once`）は今のまま（便の終端でも進む・同じ lock で排他）。§20 形 6 の移動の周（合図 → settle → 起動）も不変。同じ target を 2 つの手が同じ周に撃つことは lock が防ぐ。
@@ -175,10 +175,10 @@
 - 形（1 つずつ歯が測る・行 f の done と 1:1）:
   1. **門の順を変える**: `front` は登録 row を読んだ直後に（打刻を読む前に）「窓が shell か」（§6 の判定）を見る。shell の周は打刻・梯子を読まず**起こす周**へ進む（打刻は席が居ない間の値で意味を持たない）。shell でない周は今の列のまま（打刻 → 梯子 → 移動の門 → 黙り → …）。
   2. **起こす周の口座**: anchor が群に属せば群の今の口座（`current_of`・記録 > 種・読めない周は `group-unreadable`）、属さなければ自分の row の口座。lock は群の周だけ今のまま（`group-locked`）。
-  3. **起こし直しは会話を運ぶ**: 打刻の最終行に sid が在れば `carry` = `--resume <sid>`（値は打刻の字面・会話 id の形〔UUID〕でない周は運ばない）、無ければ空のまま。row の `launch`（雛形）には載せない（§18 と同じ）。
+  3. **起こし直しは会話を運ぶ**: 打刻の最終行に sid が在れば `carry` = `--resume <sid>`（値は打刻の字面・会話 id の形〔UUID〕でない周は運ばない）、無ければ空のまま。row の `launch`（雛形）には載せない（§18 と同じ）。要件は SRS v0.23 の FR38 / FR59（起こし直しは打刻の最終行の会話 id を `--resume` で運び、対話の記録の file は複写しない）で、ADR-0049 の「対話の記録は運ばない」は ADR-0067 がその節だけを supersede した（運ぶのは id 1 つ・復帰の道は機械の復帰の 1 本のまま）。
   4. **判定行**: 起こす周は `decision=move move=launch launched=<語>`（今の形 3 と同じ）。群の外の席を起こした周も同じ行（`move=launch`・`reason=-`）。
   5. **移動の周で窓が claude の席**（§4 形 4 の退避）は今のまま: 入力欄が空なら /exit・dialog なら Enter。/exit を送った次の周は 1 の門で shell と読めるので、打刻 busy に止められない（`s2-07l.626` の穴が閉じる）。
-  6. **row の無い窓・群 0 の host・窓が claude で記録と一致する席は 1 字も変わらない**（`no-row` / 今の列）。
+  6. **row の無い窓と、窓が claude で記録と一致する席（群 0 の host の席を含む）は 1 字も変わらない**（`no-row` / 今の列。群 0 の host でも row を持ち窓が shell に戻った席は 2 の「row の口座」で起こす＝1 / 2 と両立する）。
 - 形（行 h・state-stale の再判定・`s2-07l.629` 候補 3）:
   7. 打刻の最終行が Busy で `seat.tick_stale_s` の 2 倍より古い周（Stop の打刻を失った席）は、窓が claude ∧ 入力欄の門が空なら Busy を無視して今の列（黙りの門以後）へ進む（打刻は書き換えない・判定行の `reason=` は今の `state-stale` でなく列の先の語）。入力欄が空でない周は `state-stale` のまま（人が見る）。閾値は rules 行を足さず既存の `seat.tick_stale_s` × 2（値は行に書かない・係数は歯が pin する）。
 - 触らない: 梯子・合図の文面・入力欄の門・`Launched` の variant・群の判定（移り先・記録の書き手）・event の種類・§3 / §5 の install・rules 行（足さない）。
@@ -290,7 +290,7 @@ verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat
 size = "M"
 growth = ["crates/scribe2/src/seat/tick.rs:120", "crates/scribe2/src/seat/state.rs:30"]
 depends = ["e"]
-done = "(1) front は登録 row を読んだ直後・打刻を読む前に窓が shell かを見て、shell の周は打刻と梯子を読まず起こす周へ進み、shell でない周は今の列のまま (2) 起こす周の口座は anchor が群に属せば current_of の解決値（読めない周は group-unreadable・lock は今のまま group-locked）、属さなければ row の口座 (3) 打刻の最終行の sid が会話 id の形なら carry に --resume <sid> を渡し、無ければ空で、row の launch には載せない（読み手は state.rs に 1 本） (4) 判定行は群の外の起こしでも decision=move move=launch launched=<語> reason=- (5) 移動の周で窓が claude の席の退避（/exit・Enter）は今のまま (6) row の無い窓・群 0 の host・窓が claude で記録と一致する席は 1 字も変わらず NOOP_REASONS の母集団も変わらない 歯: seat_tick_wake_ の歯が、最終行 busy ∧ 前面 bash ∧ 群の外の row で move=launch と起動行の末尾の --resume <sid>（base では noop busy ＝ RED）・sid 無しで末尾に無し・群の row では記録の口座・前面 claude ∧ busy は noop busy・row 無しは no-row を測る"
+done = "(1) front は登録 row を読んだ直後・打刻を読む前に窓が shell かを見て、shell の周は打刻と梯子を読まず起こす周へ進み、shell でない周は今の列のまま (2) 起こす周の口座は anchor が群に属せば current_of の解決値（読めない周は group-unreadable・lock は今のまま group-locked）、属さなければ row の口座 (3) 打刻の最終行の sid が会話 id の形なら carry に --resume <sid> を渡し、無ければ空で、row の launch には載せない（読み手は state.rs に 1 本） (4) 判定行は群の外の起こしでも decision=move move=launch launched=<語> reason=- (5) 移動の周で窓が claude の席の退避（/exit・Enter）は今のまま (6) row の無い窓と、窓が claude で記録と一致する席（群 0 の host の席を含む）は 1 字も変わらず NOOP_REASONS の母集団も変わらない（群 0 の host でも row を持ち窓が shell に戻った席は (2) の row の口座で起こす） 歯: seat_tick_wake_ の歯が、最終行 busy ∧ 前面 bash ∧ 群の外の row で move=launch と起動行の末尾の --resume <sid>（base では noop busy ＝ RED）・sid 無しで末尾に無し・群の row では記録の口座・前面 claude ∧ busy は noop busy・row 無しは no-row を測る"
 
 [[contract]]
 id = "g"

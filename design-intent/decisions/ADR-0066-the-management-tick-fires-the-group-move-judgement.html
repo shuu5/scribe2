@@ -457,6 +457,9 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
   },
   "@id": "./ADR-0066-the-management-tick-fires-the-group-move-judgement.html",
   "@type": "schema:TechArticle",
+  "dc:isReferencedBy": [
+    { "@id": "./ADR-0067-the-relaunch-carries-the-conversation-id-with-resume.html" }
+  ],
   "dc:isPartOf": [
     {
       "@id": "./README.html"
@@ -546,7 +549,7 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 <h1>管理 tick が群の移動の判定を撃つ — dispatch の 1 周の群の段と同じ 1 本の判定 (逼迫の読み → 移り先 → 記録 → 承認 event) を、 席ごとの管理 tick が host の lock の内側で群ごとに鮮度の窓に 1 回まで撃ち、 便の無い host でも群が移る。 判定は 1 本に切り出して周と tick が同じ 1 本を呼び、 退避と起こし直しは便の終端の周の群の段 (自分の置き場の席) と各席の tick の移動の門 (他の置き場の席) が撃ち、 dispatch の 1 周を timer で撃たない線は保つ (ADR-0055 の契機の部分を supersede・要件 FR38 の改訂を伴う)</h1>
 <p class="cover-sub">ADR-0055 は群の逼迫の契機を「便の終端の周 (dispatch の 1 周) と席自身の hook の 2 系統」に置き、 timer を持たないと決めた。 その後 ADR-0058 が管理 tick を席ごとの周期の見回りとして器に戻し、 tick は「群の記録と自席の口座が違う周」に退避と起こし直しの続きを自席に撃つ (設計 seat-heartbeat.md §4 / §7) が、 判定 (逼迫の読み・移り先・記録・承認 event) は今も dispatch の 1 周にしか無い。 2026-09-25 の実測で、 群の記録が動いたのは pipeline が 1 周を撃った瞬間だけで、 pipeline を持たない project (設計だけの repo) は誰も移さず、 席の hook は通知と「移動を頼む記録」までで判定は撃たないことが分かった。 本 ADR は、 群の移動の判定を dispatch の群の段から 1 本の関数に切り出し (置き場は群の記録の読み手と lock と同じ)、 dispatch の 1 周と管理 tick が同じ 1 本を host の lock の内側で呼ぶと決める。 tick はその判定を群ごとに鮮度の窓 (rules 行 fleet.usage_fresh_s) に 1 回まで撃ち、 判定の周だけ計測を起こしてよい。 判定の 1 本は退避も起こし直しも撃たず、 便の終端の周の群の段は自分の置き場の席に今まで通り撃ち、 他の置き場の席は各席の tick の移動の門が撃つ。 要件 FR38 の契機に tick の周期を足す改訂を伴う (SRS の改訂は持ち主が spec の編集の口で行う)。</p>
 <div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">この記録で「器」は scribe2 の本体、 「席」は人と AI が話す 1 つの session、 「口座」は席が使う Claude Code の login 単位、 「群」は同じ口座を共有する project のかたまり、 「群の移動」は残りが少なくなった口座から群ごと別の口座へ移ることです。 前の決定 (ADR-0055) は、 群の残りを測って移すきっかけを「作業 (便) が 1 つ終わった直後に器が回す 1 周」と「席が話す番のたびに動く仕組み (hook)」の 2 つに置き、 時計は持たないと決めました。 その後、 席ごとに周期で回る見回り (管理 tick) が器に戻り、 見回りは「移動が決まった後の続き」(古い席を終えて、 新しい口座で席を起こし直す) を自分の席に撃つようになりましたが、 「移るかどうかを決める判定」(残りを読む → 移り先を決める → 記録と承認を書く) は今も 1 周の中にしかありません。 2026-09-25 の実測で、 群の記録が動いたのは pipeline が 1 周を撃った瞬間だけで、 pipeline を持たない project (設計だけの repo) は誰も移さないことが分かりました。 この記録は、 その判定を 1 周の中から 1 本の関数に切り出し、 1 周と見回りが同じ 1 本を鍵 (lock) の内側で呼ぶと決めます。 見回りはその判定を群ごとに「計測をやり直さない窓」(鮮度) に 1 回までしか撃たず、 判定の周だけ口座の残りを測ってよいことにします (席が「移してほしい」と置いたメモがある群は窓に関係なく測り、 無い群は窓の外だけ測ります)。 判定の 1 本は、 古い席を終える手も席を起こし直す手も撃ちません。 その 2 つの手は 2 系統のままです: 便の終端の 1 周は自分の置き場の席にこれまで通り撃ち、 他の置き場の席には各席の見回りが自分の席にだけ撃ちます。 便の終端の 1 周の判定は残り、 1 周を時計で撃たない線も保ちます。 要件書では、 群の逼迫の通知と移動 (FR38) のきっかけに見回りの周期を足し、 見回りは測らない (FR27・受入基準 AC18) の文を改める改訂を伴います (改訂は持ち主が要件書の編集の口で行います)。 この記録は、 受け入れられ要件書が改訂されるまで何も拘束しない発効前 (proposed) の記録です。</p></div></div>
-<div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">proposed</span></span><span class="m"><span class="k">選択肢</span><span class="v">5件 (OPT1–OPT5)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 4 / トレードオフ 6</span></span><span class="m"><span class="k">版</span><span class="v">v0.2.0 / 2026-09-25</span></span></div>
+<div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">accepted</span></span><span class="m"><span class="k">選択肢</span><span class="v">5件 (OPT1–OPT5)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 4 / トレードオフ 6</span></span><span class="m"><span class="k">版</span><span class="v">v0.2.0 / 2026-09-25</span></span></div>
 <div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>FR38・FR27・FR33</b></div>
 <div data-component="approval-block">
 <div class="sign"><span class="role">裁定 (user)</span><span class="who">user</span><span class="when">裁定 id user 2026-09-25T04:13Z (群の口座の移動を含めて器が完全に自律する、 という方針の受諾。 要旨だけを写す。 逐語は非公開の作業記録簿 (台帳 s2-07l.629 の description) に在る)</span><span class="stamp self">裁定済</span></div>
@@ -714,12 +717,13 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 </div>
 <footer class="foot" data-component="fidelity-sync-meta"><div class="ft-grid">
 <div class="ft-plain">このページは、大もとの機械データ (正本) から自動で組み立てられています。構造は機械が自動で検査し、内容が元データに忠実かは独立のレビューで確かめます。</div>
-<div data-audience="machine">機械SSoT: <b>ADR-0066-tick-judges-moves.adr.yaml</b> &middot; 生成: <b>2026-09-25 05:07</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
+<div data-audience="machine">機械SSoT: <b>ADR-0066-tick-judges-moves.adr.yaml</b> &middot; 生成: <b>2026-09-25 08:13</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
 <div class="tags" data-audience="machine"><span>folio design system</span><span>ADR-pack</span><span>folio engine B1 (instance#2)</span><span>cross-doc 照会</span></div>
 </div></footer>
 <!-- folio:chrome-bottom -->
 <nav class="prevnext" aria-label="前後の文書">
   <a class="prevnext__prev" href="ADR-0065-the-vessel-writes-the-trust-flag-before-launching-a-seat.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">口座 × anchor の trust の印は席の起動が置く — seat launch の 1 本が prepare の後・置き換えと boot の分岐の前に、 選んだ口座の設定 dir の .claude.json に、 その anchor の trust の印を true で置いてから起動行を注入する。 依存は足さず既存の入れ子 JSON の読み手に書き手を足し、 言葉は閉じた列 written / created / accepted / unreadable / unwritable、 起動は止めない (ADR-0026 §2.2 / §2.5 の trust の受け入れと代筆の射程外を trust の印 1 key に限って部分 supersede・credential の fence は不変)</span></a>
+  <a class="prevnext__next" href="ADR-0067-the-relaunch-carries-the-conversation-id-with-resume.html"><span class="prevnext__dir">次 &rarr;</span><span class="prevnext__title">席の起こし直しは打刻の会話 id を --resume で運ぶ — 群の移動と管理 tick の起こし直しは、 その席の状態の打刻の最終行の会話 id を起動行の末尾に --resume で渡して直前の会話の続きから始め、 対話の記録の file は複写せず、 復帰の道は機械の復帰の 1 本のまま (ADR-0049 の「対話の記録は運ばない」の節だけを supersede・要件 FR38 / FR59 の改訂を伴う)</span></a>
 </nav>
 <script>
 (function () {
