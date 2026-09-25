@@ -130,8 +130,8 @@ pub struct RunSelect<'a> {
     pub labels: &'a [String],
     /// 便が使う model（rules 行 `runner.model` の値・字面のまま）。`None` は全 model 窓の最大（保守側）。
     pub model: Option<&'a str>,
-    /// host の面が宣言した**どの群の候補の口座も**（設計 account-lifecycle.md §17 の約束 4・host 全体で外す・
-    /// 宣言値だけを読む）。群を 1 つも宣言しない host では空＝除外は今までどおり。
+    /// host の面が宣言した**各群の今の口座**（[`crate::rules::grouped_accounts`]・記録 > 種・host 全体で外す・設計
+    /// account-lifecycle.md §23 形 1）。候補の残りは便用の候補に残る。群を 1 つも宣言しない host では空＝除外は今までどおり。
     pub grouped: &'a BTreeSet<String>,
 }
 

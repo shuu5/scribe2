@@ -36,8 +36,8 @@ pub struct Pool {
     labels: Vec<String>,
     /// rules 行 `runner.model` の値。
     model: String,
-    /// host の面が宣言した群の候補の口座（[`crate::rules::grouped_accounts`]・便用の除外に重なる・設計
-    /// account-lifecycle.md §17 の約束 4）。群を 1 つも宣言しない置き場では空＝除外は今までどおり。
+    /// host の面が宣言した各群の今の口座（[`crate::rules::grouped_accounts`]・便用の除外に重なる・設計
+    /// account-lifecycle.md §23 形 1）。群を 1 つも宣言しない置き場では空＝除外は今までどおり。
     grouped: BTreeSet<String>,
 }
 
@@ -89,12 +89,6 @@ pub(super) fn ride_out_rate_limit(
         Ok(found) => found,
         Err(reason) => return refused(reason),
     };
-    // 群の宣言も置き場から 1 回だけ読む（除外は**次の選定から**効き、走行中の便は止めない・設計
-    // account-lifecycle.md §17 の約束 4）。
-    let grouped = match grouped_accounts(&state_dir) {
-        Ok(found) => found,
-        Err(reason) => return refused(reason),
-    };
     let mut outcome = Outcome::ok(Vec::new());
     loop {
         // 置き場を読めない周は rc 2（読めなさを「上限ではない」に読み替えて gate へ流さない）。
@@ -117,9 +111,11 @@ pub(super) fn ride_out_rate_limit(
         };
         // 便が使う model は上限で止まった周にだけ要る（`pipe run` は段が動かない周にこの行を読まない）。
         // 行が無い / 不発効 / 文字列でない / 閉じた表に無い周は typed に断り、claude を呼ばず再開もしない。
-        // 宣言が 0 の置き場でも組む（候補なしを名乗って口座待ちで止まる＝初回の起動の「継承」とは違う）。
+        // 宣言が 0 の置き場でも組む（候補なしを名乗って口座待ちで止まる＝初回の起動の「継承」とは違う）。群の今の口座は
+        // 周ごとに読み直す（群が移れば**次の選定から**効き、走行中の便は止めない・設計 account-lifecycle.md §23 形 3）。
         let pool = match runner_model_of(manifest).and_then(|model| {
-            Ok(Pool { args: usage_args(args)?, labels: labels.clone(), model: model.to_owned(), grouped: grouped.clone() })
+            let grouped = grouped_accounts(&state_dir)?;
+            Ok(Pool { args: usage_args(args)?, labels: labels.clone(), model: model.to_owned(), grouped })
         }) {
             Ok(found) => found,
             Err(reason) => return refused(reason),
@@ -147,13 +143,13 @@ fn declared_labels(manifest: &Manifest, state_dir: &Path) -> Result<Vec<String>,
     crate::rules::declared_labels(&tracked, state_dir).map_err(joined_errors)
 }
 
-/// 置き場の host の面が宣言した群の候補の口座（[`crate::rules::grouped_accounts`]・便用の除外・設計
-/// account-lifecycle.md §17 の約束 4）。tracked の面は群を持てないので `manifest` を読まない。
+/// 置き場の host の面が宣言した各群の今の口座（[`crate::rules::grouped_accounts`]・便用の除外・設計
+/// account-lifecycle.md §23 形 1）。tracked の面は群を持てないので `manifest` を読まない。
 fn grouped_accounts(state_dir: &Path) -> Result<BTreeSet<String>, String> {
-    crate::rules::grouped_accounts(state_dir).map_err(joined_errors)
+    crate::rules::grouped_accounts(state_dir).map_err(|reason| reason.to_string())
 }
 
-/// 宣言の欠陥の全件を typed な 1 行にまとめる（宣言の読み手 2 本が同じ形で断る）。
+/// 宣言の欠陥の全件を typed な 1 行にまとめる（群の除外の断りも同じ形・[`crate::rules::GroupedError`]）。
 fn joined_errors(errors: Vec<crate::rules::RuleError>) -> String {
     errors.iter().map(ToString::to_string).collect::<Vec<String>>().join(" / ")
 }

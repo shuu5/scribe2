@@ -147,9 +147,10 @@ fn place(args: &[String]) -> Result<StateDir, Vec<String>> {
 /// 前計測は**鮮度つき**（設計 §13・[`usage::Freshness::Within`]）: 新しい実測を持つ口座は測り直さず、測り直した口座が
 /// 読みに届かなかった周は最新の実測を保つ（stderr に `kept` の 1 行）。stdout の 1 行形は不変。
 ///
-/// 除外集合（設計 §14 (3)・account-lifecycle.md §17 の約束 4 / 5）: `--purpose run` は `--exclude` の集合 ∪ 席の登録
+/// 除外集合（設計 §14 (3)・account-lifecycle.md §23 形 1 / 2）: `--purpose run` は `--exclude` の集合 ∪ 席の登録
 /// row の口座（`--anchor DIR` が在ればその anchor の row だけ・無い周は置き場の全 row＝保守側）∪ host の面が宣言した
-/// 群の候補の口座（host 全体・`--anchor` で絞らない）。`--purpose session` は `--exclude` だけ（row も群も読まない）。
+/// 各群の今の口座（[`crate::rules::grouped_accounts`]・host 全体・`--anchor` で絞らない）。記録が読めない群の在る周は
+/// 測らず選ばず断る。`--purpose session` は `--exclude` だけ（row も群も読まない）。
 fn select_account(args: &[String], dir: &Path) -> Outcome {
     let SelectFlags { purpose, model, mut exclude, anchor } = match select_flags(args) {
         Ok(found) => found,
@@ -159,6 +160,13 @@ fn select_account(args: &[String], dir: &Path) -> Outcome {
         Ok(found) => found,
         Err(lines) => return Outcome::failed(RC_REFUSED, lines),
     };
+    // 便用の群の除外は `select_for_run` の束と**同じ 1 本**で置き場から解く（口を 2 本にしない・§23 形 2）。
+    if purpose == select::Purpose::Run {
+        match crate::rules::grouped_accounts(dir) {
+            Ok(found) => exclude.extend(found),
+            Err(reason) => return Outcome::failed(RC_REFUSED, vec![format!("fleet: {reason}")]),
+        }
+    }
     // 前計測は鮮度つき（設計 §13・秒は rules 行 `fleet.usage_fresh_s`・計測の口は `fleet usage` と同じ 1 本で方針だけ
     // が違う）。便の起動の選定と同じ 1 本の口（[`usage::run_fresh`]・§18）で測る。行の無い manifest は `fleet usage`
     // の rules 行の読み手と同じ極性で断る（測らない・選ばない）。
@@ -172,13 +180,10 @@ fn select_account(args: &[String], dir: &Path) -> Outcome {
     };
     // 候補は有効な口座の集合だけ（退役中の口座を候補に入れない・account-lifecycle.md §3）。
     let labels = super::effective_accounts(&manifest, &state);
-    // 便用は席の口座を外す（`select_for_run` と同じ読み手・`--anchor` の有無で絞りが変わる・§14）。加えて host の面が
-    // 宣言した群の候補の口座を host 全体で外す（`select_for_run` と**同じ除外**・設計 account-lifecycle.md §17 の
-    // 約束 4 / 5＝便用の候補を作る口が 2 つ在るので、片方だけでは `fleet select` の口から群の口座が漏れる）。
-    // session 用は群を読まない（約束 6・席を起こす口座の選び方は不変）。
+    // 便用は席の口座を外す（`select_for_run` と同じ読み手・`--anchor` の有無で絞りが変わる・§14）。群の今の口座は上で
+    // 足した（設計 account-lifecycle.md §23 形 4＝登録 row の除外に重なる）。session 用は群を読まない（§17 約束 6）。
     if purpose == select::Purpose::Run {
         exclude.extend(state.registered_accounts(anchor.map(Path::new)));
-        exclude.extend(manifest.grouped_accounts());
     }
     let now = now_utc();
     // 走行中の便数は便用の 2 つ目の鍵（`select_for_run` と同じ導出・ADR-0027 §2.3）。

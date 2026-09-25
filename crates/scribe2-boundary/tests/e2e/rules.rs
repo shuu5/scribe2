@@ -1087,7 +1087,7 @@ fn group_validate(dir: &std::path::Path, body: &str) -> Outcome {
 
 /// (1) host の面の `[[account-group]]` を**既存の読み手 1 本**が読む: 3 key が宣言順で取れ、群も宣言順・行番号は
 /// host の面の行。`rules validate --state-dir` は rc 0（口座の数は従来どおり数える＝群は口座の表を増やさない）。
-/// 便用の除外の集合（`grouped_accounts`）は全群の候補の和。tracked の面（埋め込み）は群を 1 つも持たない。
+/// 便用の除外の集合（`grouped_accounts`）は各群の今の口座（記録なし＝種・§23 形 1）。tracked の面（埋め込み）は群を 1 つも持たない。
 /// base は `[[account-group]]` を未知の section として拒む（RED）。
 #[test]
 fn host_group_table_is_read_from_the_host_face_with_three_keys() {
@@ -1119,8 +1119,13 @@ fn host_group_table_is_read_from_the_host_face_with_three_keys() {
         ],
         "群も置き場も候補も宣言順（候補の順は label の昇順ではない）"
     );
-    let grouped: Vec<String> = manifest.grouped_accounts().into_iter().collect();
-    assert_eq!(grouped, ["g1", "g2", "g3"], "便用の除外は全群の候補の和");
+    // 便用の除外は各群の今の口座だけ（記録なし＝種＝候補の先頭・§23 形 1）。置き場は tmp の 1 段下（host の根の記録を
+    // 歯どうしで共有しない）。
+    let place = dir.join("place");
+    std::fs::create_dir_all(&place).expect("置き場を作れる");
+    std::fs::write(place.join(vessel::rules::HOST_MANIFEST), HOST_GROUPS).expect("host の面を書ける");
+    let grouped: Vec<String> = vessel::rules::grouped_accounts(&place).expect("除外を解ける").into_iter().collect();
+    assert_eq!(grouped, ["g2", "g3"], "便用の除外は各群の今の口座（候補の和ではない）");
     assert!(Manifest::embedded().expect("埋め込み").groups().is_empty(), "tracked の面は群を持たない");
     std::fs::remove_dir_all(&dir).ok();
 }
@@ -1139,7 +1144,6 @@ fn host_group_absent_host_face_declares_zero_groups() {
         .and_then(|tracked| vessel::rules::with_state_dir(tracked, Some(dir.as_path())))
         .expect("面が無くても続く");
     assert!(manifest.groups().is_empty(), "0 群: {:?}", manifest.groups());
-    assert!(manifest.grouped_accounts().is_empty(), "除外 0 件");
     assert_eq!(
         vessel::rules::grouped_accounts(dir.as_path()),
         Ok(std::collections::BTreeSet::new()),

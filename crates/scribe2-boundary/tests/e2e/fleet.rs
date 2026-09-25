@@ -15,6 +15,8 @@ use vessel::fleet::store::{self, LockPolicy, StoreError};
 use vessel::cli_outcome::{RC_BROKEN, RC_OK, RC_REFUSED};
 use vessel::polarity::{OnFailure, Polarity, Timing};
 use vessel::rules::manifest::Manifest;
+use vessel::rules::GroupedError;
+use vessel::hook::group::RecordError;
 use vessel::fleet::cli::format_utc;
 use vessel::fleet::json_tree::{self, parse, Tree, TreeError, MAX_DEPTH};
 use vessel::fleet::select::{self, Input, Purpose, Selection};
@@ -1992,8 +1994,10 @@ fn live_line(label: &str) -> String {
 
 /// `fleet usage` の歯の置き場。
 struct UsageFixture {
-    /// `--state-dir`。
-    state: TmpDir,
+    /// `--state-dir`（既定は [`Self::root`] そのもの・群の歯は 1 段下＝host の根が歯ごとに閉じる・[`group_fixture`]）。
+    state: PathBuf,
+    /// 置き場を包む一時 dir（drop で消える）。
+    root: TmpDir,
     /// 偽 curl の置き場と、偽 curl が残す写し（`args` / `stdin`）。
     spy: TmpDir,
     /// `--rules` の fixture。
@@ -2024,11 +2028,11 @@ fn live_credential(token: &str) -> String {
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
 fn usage_fixture(labels: &[&str]) -> UsageFixture {
-    let state = state_dir();
+    let root = state_dir();
     let spy = state_dir();
     let rules = spy.join("rules.toml");
     fs::write(&rules, usage_rules(labels)).expect("rules fixture を書ける");
-    UsageFixture { state, spy, rules }
+    UsageFixture { state: root.to_path_buf(), root, spy, rules }
 }
 
 /// `<state>/accounts/<label>/.credentials.json` に `text` を置く。
@@ -2106,7 +2110,7 @@ fn allowances(fx: &UsageFixture) -> Vec<Allowance> {
 
 /// 置き場を片付ける。
 fn drop_fixture(fx: &UsageFixture) {
-    fs::remove_dir_all(&fx.state).ok();
+    fs::remove_dir_all(&fx.root).ok();
     fs::remove_dir_all(&fx.spy).ok();
 }
 
@@ -4756,7 +4760,43 @@ fn fleet_select_anchor_pipe_run_passes_the_repo() {
     drop_fixture(&fx);
 }
 
-// ─── 便用の選定は群の候補の口座を host 全体で外す（account-lifecycle.md §17 の約束 4 / 5 / 6・接頭辞 `host_group_`） ───
+// ─── 便用の選定は群ごとの今の口座だけを host 全体で外す（account-lifecycle.md §23・§17 の約束 4 の改め・接頭辞 `host_group_`） ───
+
+/// 余裕の在る 3 口座（どれも当たっていない・7 日窓の reset は同じ＝便用の並びは label に落ちる）。
+const GROUP_THREE: &[(&str, u64, u64)] = &[("a1", 30, 10), ("a2", 20, 10), ("a3", 25, 10)];
+
+/// [`select_fixture`] の置き場を一時 dir の 1 段下（`<root>/place`）へ移した形。群の今の口座の記録は host の根（置き場の
+/// 親の下）に在るので、tmp の直下の置き場では記録が歯どうしで共有される＝群の歯は置き場ごとに host の根を閉じる。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn group_fixture(accounts: &[(&str, u64, u64)]) -> (UsageFixture, PathBuf) {
+    let (mut fx, curl) = select_fixture(accounts, true, Some("85"));
+    let place = fx.root.join("place");
+    fs::create_dir_all(&place).expect("置き場を作れる");
+    fs::rename(fx.root.join("accounts"), place.join("accounts")).expect("credential を置き場へ移せる");
+    fx.state = place;
+    (fx, curl)
+}
+
+/// host の根の群用 dir（`<置き場の親>/<NAME>-host/groups`・器の字面を借りない）に群 `name` の今の口座の記録を置く。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn put_group_record(fx: &UsageFixture, name: &str, body: &str) -> PathBuf {
+    let dir = fx.root.join(format!("{}-host", vessel::name::NAME)).join("groups");
+    fs::create_dir_all(&dir).expect("群用 dir を作れる");
+    let path = dir.join(format!("{name}.account"));
+    fs::write(&path, body).expect("記録を書ける");
+    path
+}
+
+/// 記録の本文（[`vessel::hook::group::Record::render`] の形・今の口座 = `account`）。
+fn record_body(account: &str) -> String {
+    format!("account={account}\nts=2026-09-25T00:00:00Z\nreason=move\nprevious=a1\n")
+}
 
 /// `fx` の置き場に群を宣言した host の面を置く（口座の表は持たない＝候補は tracked の面〔`--rules`〕の label を指す）。
 /// `groups` は (名, 置き場の列, 候補の口座の列) の宣言順。
@@ -4776,30 +4816,99 @@ fn put_groups(fx: &UsageFixture, groups: &[(&str, &[&str], &[&str])]) {
     fs::write(fx.state.join(vessel::rules::HOST_MANIFEST), body).expect("host の面を書ける");
 }
 
-/// (a) 便用の候補から**宣言のどの群の候補の label も**外れる: a1 / a2 を 2 つの群が分けて持つと、残る a3 は 100 で
-/// 当たっている＝候補なし（rc 0・`all-limited`）。除外は置き場（anchor）で絞らない——群の置き場と関係の無い
-/// `--anchor` を付けても同じ答えになる（host 全体で外す）。base は群を読まないので `chosen=a1` → RED。
+/// (a) 群 [a1, a2, a3] の記録 = a2 → 便用の候補から外れるのは **a2 だけ**（`fleet select --purpose run` の口）: 並びの先頭
+/// a1 が選ばれ、`--exclude a1` を重ねると a3 が選ばれ（a1 と a3 は候補に残る）、両方を `--exclude` すると候補なし
+/// （`excluded`＝a2 は候補に戻らない）。除外は置き場（anchor）で絞らない——群の置き場と関係の無い `--anchor` を付けても
+/// 同じ答え（host 全体で外す）。base は群の候補の全部を外すので 1 周目が `none=excluded` → RED。
 #[test]
-fn host_group_run_selection_drops_every_group_candidate() {
-    let (fx, curl) = select_fixture(SELECT_THREE, true, Some("85"));
-    put_groups(&fx, &[("alpha", &["/repo/a"], &["a1"]), ("beta", &["/repo/b"], &["a2"])]);
-    for extra in [&["--purpose", "run"][..], &["--purpose", "run", "--anchor", "/repo/elsewhere"]] {
-        let out = run_select(&fx, &curl, extra);
-        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{extra:?}: 候補なしは断りではない: {out:?}");
+fn host_group_run_selection_drops_only_the_current_account() {
+    let (fx, curl) = group_fixture(GROUP_THREE);
+    put_groups(&fx, &[("alpha", &["/repo/a"], &["a1", "a2", "a3"])]);
+    put_group_record(&fx, "alpha", &record_body("a2"));
+    for anchor in [&[][..], &["--anchor", "/repo/elsewhere"]] {
+        let pick = |more: &[&str]| {
+            let extra: Vec<&str> = ["--purpose", "run"].iter().chain(anchor).chain(more).copied().collect();
+            let out = run_select(&fx, &curl, &extra);
+            assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{extra:?}: {out:?}");
+            out_lines(&out)
+        };
+        assert_eq!(pick(&[]), ["select purpose=run chosen=a1"], "{anchor:?}: 記録の a2 だけが外れ a1 は候補");
+        assert_eq!(pick(&["--exclude", "a1"]), ["select purpose=run chosen=a3"], "{anchor:?}: a3 も候補に残る");
         assert_eq!(
-            out_lines(&out),
-            vec![format!("select purpose=run none=all-limited earliest_reset={SELECT_FIVE_RESET}")],
-            "{extra:?}: 群の候補は host 全体で外れる"
+            pick(&["--exclude", "a1", "--exclude", "a3"]),
+            ["select purpose=run none=excluded earliest_reset=-"],
+            "{anchor:?}: 今の口座 a2 は候補に戻らない"
         );
     }
     drop_fixture(&fx);
 }
 
-/// (b) 群に属さない口座は便用の候補に残る（a1 だけを持つ群 → a2 が選ばれる）。席の登録 row の除外はそのまま重なる:
-/// a2 を口座に持つ席の row を便の anchor に置くと、a1（群）も a2（席）も外れて候補なしになる。
+/// (b) 記録の無い群は種（宣言の候補の先頭 a1）だけが外れる: a2 が選ばれ、`--exclude a2` を重ねると a3（候補の残りは便に開く）。
+/// base は群の候補の全部を外すので `none=excluded` → RED。
+#[test]
+fn host_group_run_selection_drops_the_seed_without_a_record() {
+    let (fx, curl) = group_fixture(GROUP_THREE);
+    put_groups(&fx, &[("alpha", &["/repo/a"], &["a1", "a2", "a3"])]);
+    let out = run_select(&fx, &curl, &["--purpose", "run"]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
+    assert_eq!(out_lines(&out), ["select purpose=run chosen=a2"], "種 a1 だけが外れる");
+    let out = run_select(&fx, &curl, &["--purpose", "run", "--exclude", "a2"]);
+    assert_eq!(out_lines(&out), ["select purpose=run chosen=a3"], "a3 も候補: {out:?}");
+    drop_fixture(&fx);
+}
+
+/// (b) 記録が在るのに読めない群（形の崩れた file・file の位置の dir）は typed に断る: rc 1・stdout 0 byte・stderr に群の名と
+/// 読めなさの型・計測を撃たない（client の呼出 0）＝候補の全部にも種にも読み替えず 1 つも返さない。置き場から解く 1 本も
+/// 同じ断り（[`vessel::rules::GroupedError::Record`]）。session 用は群を読まないので同じ置き場で選ぶ（1 字も変えない）。
+#[test]
+fn host_group_run_selection_refuses_an_unreadable_record() {
+    let (fx, curl) = group_fixture(GROUP_THREE);
+    put_groups(&fx, &[("alpha", &["/repo/a"], &["a1", "a2", "a3"])]);
+    let path = put_group_record(&fx, "alpha", "account=a2\nts=2026-09-25T00:00:00Z\n");
+    let cases = [(RecordError::Malformed, "record=malformed"), (RecordError::Unreadable, "record=unreadable")];
+    for (error, word) in cases {
+        if error == RecordError::Unreadable {
+            fs::remove_file(&path).expect("file を外せる");
+            fs::create_dir_all(&path).expect("記録の位置に dir を置ける");
+        }
+        let out = run_select(&fx, &curl, &["--purpose", "run"]);
+        assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{word}: {out:?}");
+        assert!(out.stdout.is_empty(), "{word}: 選ばない: {out:?}");
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(stderr.contains(&format!("group=alpha {word} ")), "{word}: 断りは群と型を名指す: {stderr}");
+        assert_eq!(curl_calls(&fx), 0, "{word}: 測らない");
+        assert_eq!(vessel::rules::grouped_accounts(&fx.state), Err(GroupedError::Record("alpha".to_owned(), error)));
+    }
+    let out = run_select(&fx, &curl, &["--purpose", "session"]);
+    assert_eq!(out_lines(&out), ["select purpose=session chosen=a2"], "session 用は群を読まない: {out:?}");
+    drop_fixture(&fx);
+}
+
+/// (d) 除外の集合は群ごとの今の口座を畳んだもの（置き場から解く 1 本を直に読む）: 2 群が同じ今の口座（種 a1 と種 a1）なら
+/// 除外は 1 つ、片方の記録が a3 へ移れば 2 つ。`fleet select` の口でも同じ: 1 つの周は a2・2 つの周も a2 で、`--exclude a2`
+/// を重ねると 1 つの周は a3・2 つの周は候補なし。base は候補の和（a1 / a2 / a3）を返す → RED。
+#[test]
+fn host_group_run_exclusion_folds_the_current_accounts_of_the_groups() {
+    let (fx, curl) = group_fixture(GROUP_THREE);
+    put_groups(&fx, &[("alpha", &["/repo/a"], &["a1", "a2"]), ("beta", &["/repo/b"], &["a1", "a3"])]);
+    let set = |labels: &[&str]| -> BTreeSet<String> { labels.iter().map(|label| (*label).to_owned()).collect() };
+    assert_eq!(vessel::rules::grouped_accounts(&fx.state), Ok(set(&["a1"])), "同じ今の口座は 1 つ");
+    let out = run_select(&fx, &curl, &["--purpose", "run", "--exclude", "a2"]);
+    assert_eq!(out_lines(&out), ["select purpose=run chosen=a3"], "除外 1 つ: {out:?}");
+    put_group_record(&fx, "beta", &record_body("a3"));
+    assert_eq!(vessel::rules::grouped_accounts(&fx.state), Ok(set(&["a1", "a3"])), "別の今の口座は 2 つ");
+    let out = run_select(&fx, &curl, &["--purpose", "run"]);
+    assert_eq!(out_lines(&out), ["select purpose=run chosen=a2"], "候補の残り a2 は便に開く: {out:?}");
+    let out = run_select(&fx, &curl, &["--purpose", "run", "--exclude", "a2"]);
+    assert_eq!(out_lines(&out), ["select purpose=run none=excluded earliest_reset=-"], "除外 2 つ: {out:?}");
+    drop_fixture(&fx);
+}
+
+/// (e) 群に属さない口座は便用の候補に残る（a1 だけを持つ群 → a2 が選ばれる）。席の登録 row の除外はそのまま重なる:
+/// a2 を口座に持つ席の row を便の anchor に置くと、a1（群の今の口座）も a2（席）も外れて候補なしになる。
 #[test]
 fn host_group_ungrouped_account_stays_in_the_run_candidates() {
-    let (fx, curl) = select_fixture(SELECT_THREE, true, Some("85"));
+    let (fx, curl) = group_fixture(SELECT_THREE);
     put_groups(&fx, &[("alpha", &["/repo/a"], &["a1"])]);
     let out = run_select(&fx, &curl, &["--purpose", "run"]);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
@@ -4815,12 +4924,13 @@ fn host_group_ungrouped_account_stays_in_the_run_candidates() {
     drop_fixture(&fx);
 }
 
-/// (c) 群を 1 つも宣言しない host は便用の候補が今までどおり（host の面が無い周・`schema = 1` だけの周・群 0 の
+/// (f) 群を 1 つも宣言しない host は便用の候補が今までどおり（host の面が無い周・`schema = 1` だけの周・群 0 の
 /// `[[plugin]]` だけの周のどれも `chosen=a1`）。同じ置き場で面を書き換えながら撃つので、除外が**次の選定から**
-/// 効く（選定のたびに宣言を読み直す＝前の周の宣言を覚えない）ことも同時に測る。
+/// 効く（選定のたびに宣言を読み直す＝前の周の宣言を覚えない）ことも同時に測る。群 0 の除外は席の登録 row の口座だけ
+/// （a1 の row を便の anchor に置くと a1 だけが外れて a2）。
 #[test]
 fn host_group_zero_groups_keeps_the_run_candidates() {
-    let (fx, curl) = select_fixture(SELECT_THREE, true, Some("85"));
+    let (fx, curl) = group_fixture(SELECT_THREE);
     let host = fx.state.join(vessel::rules::HOST_MANIFEST);
     // 群を宣言した周は a1 が外れ、外した宣言を消せば**次の選定で**また候補に戻る。
     put_groups(&fx, &[("alpha", &["/repo/a"], &["a1"])]);
@@ -4837,14 +4947,17 @@ fn host_group_zero_groups_keeps_the_run_candidates() {
         assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{body:?}: {out:?}");
         assert_eq!(out_lines(&out), vec!["select purpose=run chosen=a1".to_owned()], "{body:?}: 除外 0 件");
     }
+    register_anchored_account(&fx.state, "/repo/x", "a1");
+    let out = run_select(&fx, &curl, &["--purpose", "run", "--anchor", "/repo/x"]);
+    assert_eq!(out_lines(&out), ["select purpose=run chosen=a2"], "群 0 は登録 row の口座だけが外れる: {out:?}");
     drop_fixture(&fx);
 }
 
-/// (d) session 用の候補には群の口座が残る（群が a1 を持っていても `--purpose session` は `chosen=a1`）＝席を起こす
+/// (g) session 用の候補には群の口座が残る（群が a1 を持っていても `--purpose session` は `chosen=a1`）＝席を起こす
 /// 口座の選び方は 1 行も変えない。便用の**並べ順**も変わらない（群が a3 だけを持つ周は従来どおり `chosen=a1`）。
 #[test]
 fn host_group_session_selection_keeps_the_group_accounts() {
-    let (fx, curl) = select_fixture(SELECT_THREE, true, Some("85"));
+    let (fx, curl) = group_fixture(SELECT_THREE);
     put_groups(&fx, &[("alpha", &["/repo/a"], &["a1"])]);
     let out = run_select(&fx, &curl, &["--purpose", "session"]);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
@@ -4863,15 +4976,16 @@ fn host_group_session_selection_keeps_the_group_accounts() {
     drop_fixture(&fx);
 }
 
-/// (e) 便用の候補を作る**もう 1 つの口**（`select_for_run`・`pipe spawn` が通る経路）にも同じ除外が効く: 余裕の在る
-/// 口座 a1 / a2 の置き場で群が a1 を持つと、席の登録 row が 1 件も無くても起動は a2 を選ぶ（`Spawned` の detail が
-/// `account:a2`）。base は `select_for_run` が群を読まないので `account:a1` → RED。
+/// (c) 便用の候補を作る**もう 1 つの口**（`select_for_run`・`pipe spawn` が通る経路）も同じ 1 本の除外を読む: 余裕の在る
+/// 口座 a1 / a2 の置き場で群 [a1, a2] の記録が a2 だと、席の登録 row が 1 件も無くても起動は a1 を選ぶ（`Spawned` の
+/// detail が `account:a1`・種 a1 は外れない）。base は群の候補の全部を外すので候補なしの待ち → RED。
 #[test]
 fn host_group_run_selection_applies_to_the_spawn_mouth() {
     use std::os::unix::fs::PermissionsExt;
-    let (fx, curl) = select_fixture(&[("a1", 30, 10), ("a2", 20, 10)], true, Some("85"));
+    let (fx, curl) = group_fixture(&[("a1", 30, 10), ("a2", 20, 10)]);
     let (repo, state) = super::pipe::repo_with_state_in(&fx.state);
-    put_groups(&fx, &[("alpha", &["/repo/a"], &["a1"])]);
+    put_groups(&fx, &[("alpha", &["/repo/a"], &["a1", "a2"])]);
+    put_group_record(&fx, "alpha", &record_body("a2"));
     let mut rules = fs::read_to_string(&fx.rules).expect("rules fixture を読める");
     for (id, kind, value) in [
         ("runner.model", "RunnerModel", "\"opus\""),
@@ -4907,8 +5021,8 @@ fn host_group_run_selection_applies_to_the_spawn_mouth() {
         .collect();
     assert_eq!(spawned.len(), 1, "runner を 1 回起こした: {spawned:?} / {stdout} / {stderr}");
     assert!(
-        spawned.first().is_some_and(|detail| detail.ends_with(",account:a2")),
-        "群の a1 は起動の選定からも外れる: {spawned:?}"
+        spawned.first().is_some_and(|detail| detail.ends_with(",account:a1")),
+        "群の今の口座 a2 だけが起動の選定からも外れる: {spawned:?}"
     );
     super::pipe::clean(&[&repo]);
     drop_fixture(&fx);

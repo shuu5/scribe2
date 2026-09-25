@@ -27,7 +27,6 @@ use crate::hook::command::{denied_in, denied_of};
 use crate::pipe::contract::{class_element, ClassElement};
 use crate::pipe::declaration::CEILING_ROW;
 use crate::pipe::table::{Need, DERIVED_GOAL, FIELDS};
-use std::collections::BTreeSet;
 use std::path::Path;
 
 /// build 時に binary へ埋め込む manifest の本文。
@@ -456,18 +455,6 @@ impl HostManifest {
         }
         Ok(tracked.iter().cloned().chain(face.accounts.into_iter().map(|account| account.label)).collect())
     }
-
-    /// 宣言のどれかの群が候補に挙げている口座 label（便用の選定の除外・設計 account-lifecycle.md §17 の約束 4）。
-    ///
-    /// 面が**無い**周は空（0 群・縮退）、**読めない**周は欠陥の全件（FailClosed＝群の宣言を読めないまま便へ
-    /// 口座を渡さない）。宣言値だけを読み、記録は 1 件も書かない。
-    pub fn grouped_accounts(self) -> Result<BTreeSet<String>, Vec<RuleError>> {
-        match self {
-            Self::Absent => Ok(BTreeSet::new()),
-            Self::Unreadable(errors) => Err(errors),
-            Self::Present(face) => Ok(face.grouped_accounts()),
-        }
-    }
 }
 
 /// 雛形の host の面の本文から `[[account-group]]` の表を除いた写し（`init` の 2 段目・host-init.md §4 の 2）。他の表と
@@ -629,12 +616,6 @@ impl Manifest {
     /// 設計 seat-heartbeat.md §5 形 1）。
     pub fn tick(&self) -> Option<&TickUnit> {
         self.tick.as_deref()
-    }
-
-    /// 宣言のどれかの群が候補に挙げている口座 label の集合（**便用の選定の除外**・設計 account-lifecycle.md §17 の
-    /// 約束 4）。群を 1 つも宣言しない面は空＝除外は 1 件も増えない。
-    pub fn grouped_accounts(&self) -> BTreeSet<String> {
-        self.groups.iter().flat_map(|group| group.accounts.iter().cloned()).collect()
     }
 }
 

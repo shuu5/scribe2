@@ -139,6 +139,16 @@ pub enum RecordError {
     Malformed,
 }
 
+impl RecordError {
+    /// 断りの行の字面（便用の除外の断り・[`crate::rules::GroupedError`]）。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unreadable => "unreadable",
+            Self::Malformed => "malformed",
+        }
+    }
+}
+
 /// 群の名の file（群用 dir の直下・名は file 名に使える字面へ潰す）。
 fn group_file(dir: &Path, group: &str, ext: &str) -> PathBuf {
     dir.join(format!("{}.{ext}", sanitize_target(group)))

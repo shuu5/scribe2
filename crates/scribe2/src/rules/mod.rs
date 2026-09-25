@@ -46,13 +46,45 @@ pub fn declared_labels(tracked: &[String], state_dir: &Path) -> Result<Vec<Strin
     HostManifest::read(&host_manifest_path(state_dir)).labels_over(tracked)
 }
 
-/// `<state_dir>/host.toml` が宣言するどの群の候補にも挙がる口座 label（**便用の選定の除外**・設計
-/// account-lifecycle.md §17 の約束 4）。
+/// `<state_dir>/host.toml` が宣言する各群の**今の口座**の label（**便用の選定の除外**・設計 account-lifecycle.md §23 形 1・
+/// §17 の約束 4 の改め）。**便用の除外を置き場から解く口はこの 1 本**（`select_for_run` の束と `fleet select` の口の両方）。
 ///
-/// tracked の面は群を持てない（置いた周は未知の表として断る）ので、読むのは host の面だけである。面が無い周は
-/// 空（0 群・除外を増やさない）、読めない周は欠陥の全件。宣言値だけを読み、記録は 1 件も書かない。
-pub fn grouped_accounts(state_dir: &Path) -> Result<std::collections::BTreeSet<String>, Vec<RuleError>> {
-    HostManifest::read(&host_manifest_path(state_dir)).grouped_accounts()
+/// 群ごとに [`crate::hook::group::current_of`]（記録 > 種）の label を集める（2 群が同じ今の口座なら 1 つ）。候補の残りは
+/// 便用の候補に残る。tracked の面は群を持てない（置いた周は未知の表として断る）ので、読むのは host の面だけである。面が
+/// 無い周は空（0 群・除外を増やさない）、読めない周は欠陥の全件、記録が在るのに読めない群が 1 つでも在る周は
+/// [`GroupedError::Record`]（候補の全部に読み替えない・1 つも返さない）。記録は 1 件も書かない。
+pub fn grouped_accounts(state_dir: &Path) -> Result<std::collections::BTreeSet<String>, GroupedError> {
+    let face = match HostManifest::read(&host_manifest_path(state_dir)) {
+        HostManifest::Absent => return Ok(std::collections::BTreeSet::new()),
+        HostManifest::Unreadable(errors) => return Err(GroupedError::Manifest(errors)),
+        HostManifest::Present(face) => face,
+    };
+    let current = |group: &manifest::AccountGroup| {
+        crate::hook::group::current_of(state_dir, group)
+            .map(|found| found.label)
+            .map_err(|error| GroupedError::Record(group.name().to_owned(), error))
+    };
+    face.groups().iter().map(current).collect()
+}
+
+/// 便用の除外を置き場から解けない周の断り（[`grouped_accounts`]・閉じた 2 値）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GroupedError {
+    /// host の面が在るのに読めない（欠陥の全件・行番号付き）。
+    Manifest(Vec<RuleError>),
+    /// 群（名）の今の口座の記録が在るのに読めない（読めなさの型）。
+    Record(String, crate::hook::group::RecordError),
+}
+
+impl std::fmt::Display for GroupedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Manifest(errors) => write!(f, "{}", errors.iter().map(ToString::to_string).collect::<Vec<_>>().join(" / ")),
+            Self::Record(group, error) => {
+                write!(f, "group={group} record={} — 群の今の口座の記録が在るのに読めない（除外を決められず選ばない）", error.as_str())
+            }
+        }
+    }
 }
 
 /// 発効した行を 1 つ引く。無い / 不発効の周は理由つきで `Err`（行の無さを既定に倒さない・C1）。
