@@ -454,21 +454,34 @@ fn rows(state_dir: &Path, manifest: &Manifest, state: Option<&State>) -> Vec<(St
 pub fn doctor_lines(state_dir: &Path, rules: Option<&str>) -> Vec<String> {
     let host = HostManifest::read(&crate::rules::host_manifest_path(state_dir));
     let word = host.as_str();
+    let present = matches!(host, HostManifest::Present(_));
     let declared = rules.map_or_else(Manifest::embedded, |path| Manifest::load(Path::new(path))).map(|tracked| tracked.joined(host));
     // tracked の面が読めて合わせで落ちた周は host の面の欠陥（面をまたぐ重複を含む）＝file 単体が読めても unreadable。
     let word = if matches!(declared, Ok(Err(_))) { HostManifest::Unreadable(Vec::new()).as_str() } else { word };
     let tick = declared.as_ref().ok().and_then(|joined| joined.as_ref().ok()).and_then(Manifest::tick);
-    let mut lines = vec![render_host_manifest(word, tick)];
+    let head = render_host_manifest(word, tick);
     let Ok(Ok(manifest)) = declared else {
-        lines.push(MANIFEST_UNREADABLE.to_owned());
-        return lines;
+        return vec![head, MANIFEST_UNREADABLE.to_owned()];
     };
     let state = read_state(state_dir);
+    // 面が present の周だけ末尾に便用の口座の数（account-lifecycle.md §26 形 1・absent の行は 1 字も変わらない）。
+    let head = if present { format!("{head} run-accounts={}", run_accounts(state_dir, &manifest, state.as_ref())) } else { head };
+    let mut lines = vec![head];
     lines.extend(rows(state_dir, &manifest, state.as_ref()).into_iter().map(|(_, line)| line));
     // 群の行は口座の行の後ろに**宣言順**で（設計 account-lifecycle.md §17 の約束 7）。群を 1 つも宣言しない host は
     // 0 本＝既存の外形は 1 行も動かない（約束 8）。
     lines.extend(manifest.groups().iter().map(|group| render_group(state_dir, group, state.as_ref())));
     lines
+}
+
+/// doctor の host の行の `run-accounts=` の値（設計 account-lifecycle.md §26 形 1・**判定しない**）: 有効な口座
+/// （[`effective_accounts`]）のうち群の今の口座（[`crate::rules::grouped_accounts`]・便用の除外と同じ 1 本）に無いものの数。
+/// 席の登録 row の除外（repo ごと）と計測の鮮度は読まない。log か群の記録を読めない周は [`GROUP_UNREADABLE`]（0 に潰さない・C11）。
+fn run_accounts(state_dir: &Path, manifest: &Manifest, state: Option<&State>) -> String {
+    let (Some(found), Ok(grouped)) = (state, crate::rules::grouped_accounts(state_dir)) else {
+        return GROUP_UNREADABLE.to_owned();
+    };
+    effective_accounts(manifest, found).iter().filter(|label| !grouped.contains(*label)).count().to_string()
 }
 
 /// `account ls` の行（設計 §3）: doctor の口座行（[`rows`]・`retired=` 込み）に最新の実測行の要約（[`summary`]・event log を

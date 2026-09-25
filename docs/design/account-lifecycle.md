@@ -366,9 +366,9 @@ user-scope MCP 設定の同期・別口座への `--resume` の混線 fence・pr
 - 出所: 台帳 `s2-07l.618`（候補 2）。
 - 現物（verified・main 67e74ff）: doctor の host の行は `crates/scribe2/src/account/mod.rs` の `render_host_manifest`（`host-manifest=<present|absent|unreadable>[ tick=declared]`）。行の外形は insta の snapshot（`crates/scribe2-boundary/src/snapshots/scribe2__tests__doctor_external_form.snap`・`crates/scribe2-boundary/tests/e2e/snapshots/e2e__seat__seat_doctor_external_form.snap`）と `crates/scribe2-boundary/tests/e2e/seat.rs` / `crates/scribe2-boundary/tests/e2e/seat/account.rs` / `crates/scribe2-boundary/tests/e2e/seat/rules.rs` の字面の歯が pin する。有効な口座の集合（退役を除く）と群の今の口座の解決（§23 の `grouped_accounts`）は既存の 1 本ずつ。
 - 形（1 つずつ歯が測る・行 o の done と 1:1）:
-  1. **欄 1 つ**: 面が `present` の周だけ行の末尾に `run-accounts=<n>` を足す（n = 有効な口座の数 − 群の今の口座の数・§23 の除外と同じ読み手・席の登録 row の除外は repo ごとなので数えない・計測の鮮度も読まない＝宣言と記録だけの静的な数）。面が無い / 読めない周は今のまま（欄を足さない）。
+  1. **欄 1 つ**: 面が `present` の周だけ行の末尾に `run-accounts=<n>` を足す（n = 有効な口座の数 − 群の今の口座の数・§23 の除外と同じ読み手・席の登録 row の除外は repo ごとなので数えない・計測の鮮度も読まない＝宣言と記録だけの静的な数）。面が無い / 読めない周は今のまま（欄を足さない）。面は読めて event log か群の記録が読めない周は `run-accounts=unreadable`（0 に潰さない・C11・群の行の `unreadable` と同じ語）。
   2. **判定しない**: 0 でも rc と他の行は 1 字も変わらない（C10.2・FR73）。
-  3. **既存の pin を進める**: snapshot 2 本と字面の歯は `run-accounts=` の 1 欄分だけ更新する（write-set の外の .snap は触らない）。
+  3. **既存の pin を進める**: snapshot 2 本と字面の歯は `run-accounts=` の 1 欄分だけ更新する（write-set の外の .snap は触らない）。実測（着地の便）: 欄は `doctor_lines` が行の後ろに足すので、`render_host_manifest` を直に撃つ lib の snapshot と面が absent の e2e の snapshot は動かず、動いたのは面が present の字面の歯 4 本（tick の 3 本・rules の 1 本）だけ。
 - 触らない: 群の行（`group=…`）・口座の行・`account ls`・選定。
 - 却下: 測れる口座の数を出す（doctor が計測を撃つことになる・§3 の「計測は撃たない」）／群の行に出す（群 0 の host で出ない）。
 - 歯（`crates/scribe2-boundary/tests/e2e/seat.rs` に `seat_doctor_run_accounts_` 接頭辞・§17 の host.toml の fixture）: 宣言 3・群 1（今の口座 = 種）→ `run-accounts=2`（base では欄が無い ＝ RED）／退役 1 を足す → 1／群 0 → 3／宣言 1・群 1（有効な口座の全部が群の今の口座）→ `run-accounts=0` で rc と他の行は 2 の周と 1 字も変わらない／面 absent → 欄なし。

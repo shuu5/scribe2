@@ -2369,15 +2369,15 @@ fn doctor_tick_assert(place: &UnitPlace, extra: &[&str], want: &str, host: &str)
 }
 
 /// (面が既定) `--unit-dir` / `--binary` が無く面に `[[tick]]` が在る周は、面の値で登録 row の行に `tick-unit=` を足す（install 前は
-/// absent・install 後は present）。host の面の行は `host-manifest=present tick=declared`。base は `[[tick]]` を未知の表として読めず
+/// absent・install 後は present）。host の面の行は `host-manifest=present tick=declared run-accounts=0`（口座 0 の面）。base は `[[tick]]` を未知の表として読めず
 /// host の面の行が `unreadable`・`tick-unit=` の項目が無い（RED）。
 #[test]
 fn seat_doctor_tick_face_values_default_the_probe_without_flags() {
     let place = unit_place(true);
     doctor_tick_face(&place, &place.binary);
-    doctor_tick_assert(&place, &[], "absent", "host-manifest=present tick=declared");
+    doctor_tick_assert(&place, &[], "absent", "host-manifest=present tick=declared run-accounts=0");
     assert_eq!(rc_of(&unit_run(&place, "install", &[])), i32::from(RC_OK));
-    doctor_tick_assert(&place, &[], "present", "host-manifest=present tick=declared");
+    doctor_tick_assert(&place, &[], "present", "host-manifest=present tick=declared run-accounts=0");
     fs::remove_dir_all(&place.tick.dir).ok();
 }
 
@@ -2388,18 +2388,20 @@ fn seat_doctor_tick_flags_win_over_the_face_values() {
     let place = unit_place(true);
     doctor_tick_face(&place, "/elsewhere/bin");
     assert_eq!(rc_of(&unit_run(&place, "install", &[])), i32::from(RC_OK));
-    doctor_tick_assert(&place, &[], "foreign", "host-manifest=present tick=declared");
+    doctor_tick_assert(&place, &[], "foreign", "host-manifest=present tick=declared run-accounts=0");
     let units = place.units.display().to_string();
-    doctor_tick_assert(&place, &["--unit-dir", &units, "--binary", &place.binary], "present", "host-manifest=present tick=declared");
+    doctor_tick_assert(&place, &["--unit-dir", &units, "--binary", &place.binary], "present", "host-manifest=present tick=declared run-accounts=0");
     fs::remove_dir_all(&place.tick.dir).ok();
 }
 
 /// (面にも flag にも無い) host の面が無い周と `[[tick]]` の無い面の周は、登録 row の行に `tick-unit=` を足さず、host の面の行は
-/// 従来の字面のまま（`tick=` の項目が無い＝既存の外形は動かない）。
+/// 従来の字面のまま（`tick=` の項目が無い＝既存の外形は動かない・面の在る周の末尾は §26 の `run-accounts=` だけ）。
 #[test]
 fn seat_doctor_tick_without_face_or_flags_adds_nothing() {
     let place = unit_place(true);
-    for (body, host) in [(None, "host-manifest=absent"), (Some("schema = 1\n\n[[account]]\nlabel = \"h1\"\n"), "host-manifest=present")] {
+    for (body, host) in
+        [(None, "host-manifest=absent"), (Some("schema = 1\n\n[[account]]\nlabel = \"h1\"\n"), "host-manifest=present run-accounts=1")]
+    {
         if let Some(text) = body {
             fs::write(place.tick.state.join(vessel::rules::HOST_MANIFEST), text).ok();
         }
@@ -2410,4 +2412,109 @@ fn seat_doctor_tick_without_face_or_flags_adds_nothing() {
         assert_eq!(unit_doctor_rows(&out).len(), 1, "登録 row の行は在る");
     }
     fs::remove_dir_all(&place.tick.dir).ok();
+}
+
+// ─────────── doctor が便用の口座の数を出す（account-lifecycle.md §26・契約表の行 o・接頭辞 `seat_doctor_run_accounts_`） ───────────
+//
+// §17 の host.toml の fixture（口座と群を host の面に宣言・tracked の面は口座 0）で doctor を撃ち、host の面の行を測る。
+
+/// 置き場の host の面に口座 `accounts` と、`group` が空でなければ群 `g`（置き場 `/repo`・候補 `group`）を宣言する。
+fn run_accounts_face(place: &RolePlace, accounts: &[&str], group: &[&str]) {
+    let quoted: Vec<String> = group.iter().map(|label| format!("\"{label}\"")).collect();
+    let table = if group.is_empty() {
+        String::new()
+    } else {
+        format!("\n[[account-group]]\nname = \"g\"\nanchors = [\"/repo\"]\naccounts = [{}]\n", quoted.join(", "))
+    };
+    fs::create_dir_all(&place.state).ok();
+    fs::write(place.state.join(vessel::rules::HOST_MANIFEST), format!("{}{table}", account_rules(accounts))).ok();
+}
+
+/// doctor を撃ち（rc 0 は [`doctor_rows`] が測る）、host の面の行を返す（無ければ空）。
+fn run_accounts_host(place: &RolePlace) -> String {
+    doctor_rows(place, NO_ACCOUNT_RULES).into_iter().find(|line| line.starts_with("host-manifest=")).unwrap_or_default()
+}
+
+/// (宣言 3・群 1) 群の今の口座（記録なし＝種 `r1`）だけが外れ、host の行の末尾に `run-accounts=2`。base は欄が無い（RED）。
+/// event log を読めない周は `unreadable`（0 に潰さない・C11）。
+#[test]
+fn seat_doctor_run_accounts_subtracts_the_group_current_account() {
+    let place = role_place();
+    run_accounts_face(&place, &["r1", "r2", "r3"], &["r1", "r2"]);
+    assert_eq!(run_accounts_host(&place), "host-manifest=present run-accounts=2");
+    let log = vessel::fleet::store::events_path(&place.state);
+    fs::create_dir_all(log.parent().unwrap_or(&place.state)).expect("log の dir を作れる");
+    fs::write(&log, "not an event\n").expect("log を壊せる");
+    assert_eq!(run_accounts_host(&place), "host-manifest=present run-accounts=unreadable");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (退役 1) 群の外の `r3` を `account retire` で退役させると、有効な口座が 2 に減って `run-accounts=1`。
+#[test]
+fn seat_doctor_run_accounts_drops_a_retired_account() {
+    let place = role_place();
+    run_accounts_face(&place, &["r1", "r2", "r3"], &["r1", "r2"]);
+    fs::create_dir_all(place.state.join("accounts").join("r3")).expect("口座の dir を作れる");
+    let state = place.state.display().to_string();
+    let out = Command::new(bin()).args(["account", "retire", "r3", "--state-dir", &state]).output().expect("binary を起動できる");
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(run_accounts_host(&place), "host-manifest=present run-accounts=1");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (群 0) 群を宣言しない host は何も外れず、有効な口座の全部 `run-accounts=3`。
+#[test]
+fn seat_doctor_run_accounts_counts_every_account_without_groups() {
+    let place = role_place();
+    run_accounts_face(&place, &["r1", "r2", "r3"], &[]);
+    assert_eq!(run_accounts_host(&place), "host-manifest=present run-accounts=3");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (0 は判定しない) 宣言 1・群 1（有効な口座の全部が群の今の口座）は `run-accounts=0` で、rc と stderr と他の行は `2` の周
+/// （宣言 3・同じ群）と 1 字も変わらない（比べるのは口座の数を名乗る行〔口座の行・host-guard の `wired=`〕の外・共通の口座
+/// `r1` の行は同じ字面）。
+#[test]
+fn seat_doctor_run_accounts_zero_changes_no_rc_or_other_line() {
+    let place = role_place();
+    run_accounts_face(&place, &["r1", "r2", "r3"], &["r1"]);
+    let two = role_doctor_rules(&place, NO_ACCOUNT_RULES);
+    run_accounts_face(&place, &["r1"], &["r1"]);
+    let zero = role_doctor_rules(&place, NO_ACCOUNT_RULES);
+    assert_eq!((rc_of(&zero), rc_of(&two)), (i32::from(RC_OK), i32::from(RC_OK)), "stderr={}", stderr_of(&zero));
+    assert_eq!(stderr_of(&zero), stderr_of(&two), "0 でも断りも警告も足さない");
+    let (two, zero): (Vec<String>, Vec<String>) =
+        (stdout_of(&two).lines().map(str::to_owned).collect(), stdout_of(&zero).lines().map(str::to_owned).collect());
+    let host = |lines: &[String]| lines.iter().filter(|line| line.starts_with("host-manifest=")).cloned().collect::<Vec<String>>();
+    assert_eq!(host(&two), ["host-manifest=present run-accounts=2"], "{two:?}");
+    assert_eq!(host(&zero), ["host-manifest=present run-accounts=0"], "{zero:?}");
+    let rest = |lines: &[String]| -> Vec<String> {
+        lines
+            .iter()
+            .filter(|line| {
+                !line.starts_with("host-manifest=")
+                    && !(line.starts_with("account=") && !line.starts_with("account=r1 "))
+                    && !line.starts_with(HOST_GUARD_HEAD)
+            })
+            .cloned()
+            .collect()
+    };
+    assert_eq!(rest(&zero), rest(&two), "host の行の値の外は 1 行も動かない");
+    assert_eq!(zero.len() + 2, two.len(), "行の数の差は口座の行 2 本だけ: {zero:?} / {two:?}");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (面が無い / 読めない) host の面が absent・unreadable の周は欄を足さない（host の行は従来の字面・`run-accounts=` はどこにも無い）。
+#[test]
+fn seat_doctor_run_accounts_absent_or_unreadable_face_adds_no_field() {
+    let place = role_place();
+    fs::create_dir_all(&place.state).expect("置き場を作れる");
+    let lines = doctor_rows(&place, NO_ACCOUNT_RULES);
+    assert!(lines.contains(&HOST_ABSENT.to_owned()), "{lines:?}");
+    assert!(!lines.iter().any(|line| line.contains("run-accounts=")), "{lines:?}");
+    fs::write(place.state.join(vessel::rules::HOST_MANIFEST), "schema = 1\n\n[[account]]\nlabel = \"r1\"\nbogus = 1\n").expect("面を壊せる");
+    let lines = doctor_rows(&place, NO_ACCOUNT_RULES);
+    assert!(lines.contains(&"host-manifest=unreadable".to_owned()), "{lines:?}");
+    assert!(!lines.iter().any(|line| line.contains("run-accounts=")), "{lines:?}");
+    fs::remove_dir_all(&place.dir).ok();
 }

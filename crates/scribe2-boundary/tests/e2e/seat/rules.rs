@@ -31,7 +31,7 @@ fn rules_host_doctor_names_the_host_manifest_in_three_values() {
     fs::write(&host, account_rules(&["hosted"])).expect("host の面を書ける");
     assert_eq!(
         tail_of(&doctor_rows(&place, &account_rules(&["tracked"]))),
-        ["host-manifest=present".to_owned(), account_line_of("hosted"), account_line_of("tracked"), CONSUMER_REPO.to_owned(), guard(2)],
+        ["host-manifest=present run-accounts=2".to_owned(), account_line_of("hosted"), account_line_of("tracked"), CONSUMER_REPO.to_owned(), guard(2)],
         "host の面込みの宣言（label の辞書順）"
     );
     let unreadable = ["host-manifest=unreadable", "accounts: manifest=unreadable", "host-guard: rules=unreadable"];
