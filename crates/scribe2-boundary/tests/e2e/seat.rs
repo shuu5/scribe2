@@ -2136,6 +2136,44 @@ fn seat_tick_wake_does_not_touch_a_window_without_a_row() {
     assert!(!place.at(TICK_CLIENT).exists(), "偽 client は呼ばれない");
 }
 
+// ─────────────────── state-stale の再判定（seat-heartbeat.md §7 形 7・契約表の行 h・`s2-07l.629`・接頭辞 `seat_tick_stale_`） ───────────────────
+
+/// (f) 最終行の Busy が stale の 2 倍より古い ∧ 前面 `claude` ∧ 入力欄が空 → Busy を無視して列の先へ進み、合図 1 行を注入する
+/// （base では `state-stale`）。打刻 file は 1 byte も書き換えない。
+#[test]
+fn seat_tick_stale_busy_past_twice_the_stale_with_a_clear_input_goes_on_to_the_signal() {
+    let place = tick_place(true);
+    tick_stamps(&place, &[("busy", "UserPromptSubmit", unix_now() - 2 * TICK_STALE - 60)]);
+    let stamps = fs::read_to_string(state_file(&place.seat())).unwrap_or_default();
+    let out = tick_run(&place, &[]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(stdout_of(&out), tick_inject(0), "判定行は列の先の語");
+    assert_eq!(tick_keys(&place), [tick_text_key(0), format!("send-keys -t {TICK_TARGET} Enter")], "text 1 回 + Enter 1 回");
+    assert_eq!(fs::read_to_string(state_file(&place.seat())).unwrap_or_default(), stamps, "打刻は書き換えない");
+}
+
+/// (f) 最終行の Busy が stale の 2 倍より古い ∧ 前面 `claude` ∧ 入力欄に字が在る → `state-stale` のまま（人が見る）・0 key。
+#[test]
+fn seat_tick_stale_busy_past_twice_the_stale_with_typed_input_stays_state_stale() {
+    let place = tick_place(true);
+    tick_stamps(&place, &[("busy", "UserPromptSubmit", unix_now() - 2 * TICK_STALE - 60)]);
+    fs::write(place.at(TICK_PANE), format!("{TICK_CLEAR_PANE}half typed")).ok();
+    tick_assert_quiet(&place, &tick_noop("state-stale", "-", "-"));
+    assert!(tick_keys(&place).is_empty(), "0 key");
+}
+
+/// (g) 最終行の Busy が stale より古く 2 倍以内 ∧ 前面 `claude` ∧ 入力欄が空 → `state-stale` のまま・0 key（(f) と対で係数 2 を
+/// pin する＝係数を 1 にする変異はここで落ちる）。
+#[test]
+fn seat_tick_stale_busy_within_twice_the_stale_with_a_clear_input_stays_state_stale() {
+    let place = tick_place(true);
+    for ago in [TICK_STALE + 60, 2 * TICK_STALE - 60] {
+        tick_stamps(&place, &[("busy", "UserPromptSubmit", unix_now() - ago)]);
+        tick_assert_quiet(&place, &tick_noop("state-stale", "-", "-"));
+    }
+    assert!(tick_keys(&place).is_empty(), "0 key");
+}
+
 // ─────────────────── tick の unit（seat-heartbeat.md §3・契約表の行 b・`s2-07l.583`・接頭辞 `seat_unit_`） ───────────────────
 //
 // unit dir と binary は tmp・`systemctl` は PATH の偽 script が引数を 1 行ずつ file に残す（host の systemd を 1 度も撃たない）。

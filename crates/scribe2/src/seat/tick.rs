@@ -23,6 +23,8 @@
 //! 死んだ席も起こす（設計 §7・契約表の行 f）: 登録 row を読んだ直後・打刻を読む前に窓が shell かを見て、shell の周は打刻と
 //! 梯子を読まず起こす周（[`awake`]）へ進む。口座は anchor が群に属せば群の今の口座（lock の内側）、属さなければ row の口座で、
 //! 打刻の最終行の sid を `--resume` で運ぶ（[`state::resume_carry`]）。移動の門（[`moving`]）は窓が shell でない周の退避だけを撃つ。
+//! 最終行の Busy が `seat.tick_stale_s` の 2 倍より古く入力欄が空の周（Stop の打刻を失った席）は Busy を無視して列の先へ進む
+//! （設計 §7 形 7・契約表の行 h）。
 
 pub mod install;
 
@@ -555,7 +557,7 @@ fn front(input: &Input) -> Result<Front, Verdict> {
     if pane_is_shell(input.socket, input.target) {
         return Err(awake(input, &account, role, &anchor, &seat));
     }
-    let stamps = stamps_of(&seat, rows.pace.stale_s, now).map_err(Verdict::noop)?;
+    let stamps = stamps_of(&seat, rows.pace.stale_s, now, || input_gate(input).is_ok()).map_err(Verdict::noop)?;
     let digest = stamps.last().map_or(0, |stamp| stamp.ts);
     let record = read_ladder(&seat).map_err(Verdict::noop)?;
     let record = match record {
@@ -706,8 +708,13 @@ fn aged(ts: u64, now: u64, stale_s: u64) -> bool {
     now.saturating_sub(ts) >= stale_s
 }
 
-/// 状態の打刻を読み、最終行（読めた行のうち最後）が Idle の周だけ全行を返す。
-fn stamps_of(seat: &Path, stale_s: u64, now: u64) -> Result<Vec<Stamp>, NoopReason> {
+/// Stop の打刻を失った席と読む Busy の古さの係数（設計 §7 形 7・`seat.tick_stale_s` × 係数・rules 行を足さない＝係数は歯が pin する）。
+const LOST_STOP_FACTOR: u64 = 2;
+
+/// 状態の打刻を読み、最終行（読めた行のうち最後）が Idle の周だけ全行を返す。最終行の Busy が `stale_s` の
+/// [`LOST_STOP_FACTOR`] 倍より古く `empty`（窓が claude の入力欄の門）が真の周も Busy を無視して全行を返す（設計 §7 形 7・打刻は
+/// 書き換えない）。
+fn stamps_of(seat: &Path, stale_s: u64, now: u64, empty: impl FnOnce() -> bool) -> Result<Vec<Stamp>, NoopReason> {
     let text = match fs::read_to_string(state::path(seat)) {
         Ok(found) => found,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Err(NoopReason::StateMissing),
@@ -717,6 +724,7 @@ fn stamps_of(seat: &Path, stale_s: u64, now: u64) -> Result<Vec<Stamp>, NoopReas
     let last = stamps.last().ok_or(NoopReason::StateUnreadable)?;
     match last.state {
         SeatState::Idle => Ok(stamps),
+        SeatState::Busy if aged(last.ts, now, stale_s.saturating_mul(LOST_STOP_FACTOR)) && empty() => Ok(stamps),
         SeatState::Busy if aged(last.ts, now, stale_s) => Err(NoopReason::StateStale),
         SeatState::Busy => Err(NoopReason::Busy),
     }
