@@ -779,6 +779,25 @@ impl Effective {
     }
 }
 
+/// `init` の 5 段目が置く宣言の雛形（host-init.md §4 の 5）。`cargo` = repo の root に `Cargo.toml` が在る周の形。
+///
+/// 値は上限（[`CEILING_ROW`]）の内側で、`requirements` は書かない（既定を使う）。cargo の行を持つ形は入口の flip の行を
+/// 持たないので `entrance-flip = "unmeasured"` を名乗る（git の形も同じ名乗り・設計の字面のまま）。
+pub fn scaffold(cargo: bool) -> String {
+    let (allowed, common): (&[&str], &[&str]) = if cargo {
+        (&["cargo", "git"], &["cargo nextest run --workspace --no-tests=fail", "cargo clippy --workspace --all-targets -- -D warnings"])
+    } else {
+        (&["git"], &["git diff --quiet"])
+    };
+    let owned = |items: &[&str]| items.iter().map(|item| (*item).to_owned()).collect::<Vec<String>>();
+    format!(
+        "schema = {SCHEMA_VERSION}\nallowed-commands = {}\ncommon-verify = {}\n{ENTRANCE_KEY} = \"{}\"\n",
+        array(&owned(allowed)),
+        array(&owned(common)),
+        EntranceFlip::Unmeasured.as_str(),
+    )
+}
+
 /// 配列 1 つを写す（要素は制御文字も引用符も持てないので、そのまま囲める）。
 fn array(items: &[String]) -> String {
     let quoted: Vec<String> = items.iter().map(|item| format!("\"{item}\"")).collect();

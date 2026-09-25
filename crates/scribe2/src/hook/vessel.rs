@@ -259,26 +259,50 @@ fn init(args: &[String], root: &Path) -> Outcome {
             vec![format!("vessel: {other} が名乗っている（何も書かない）")],
         );
     }
-    // git 設定を**先に**書く。marker が先だと、設定に失敗した周（非 repo・git dir が
-    // 書けない）に marker だけが残り、PUBLIC repo の `git status` を汚す。設定だけが
-    // 残っても marker が無い限り `served` は `Absent` なので hook は黙る。
-    if !git_ok(root, &["config", "--local", &state_dir_key(), dir]) {
-        return Outcome::failed(
-            RC_BROKEN,
-            vec!["vessel: state dir を git の local 設定へ書けない".to_owned()],
-        );
-    }
-    let marker = Marker {
-        name: NAME.to_owned(),
-        version,
-    };
-    if let Err(err) = std::fs::write(marker_path(root), marker.render()) {
-        return Outcome::failed(RC_BROKEN, vec![format!("vessel: marker を書けない: {err}")]);
+    if let Err(reason) = write_binding(root, dir, version) {
+        return Outcome::failed(RC_BROKEN, vec![format!("vessel: {reason}")]);
     }
     Outcome::ok_line(format!(
         "vessel: init {} {KEY_VERSION}={version} stateDir={dir}",
         marker_path(root).display()
     ))
+}
+
+/// local 設定 → marker の順に書く（`vessel init` と `init` の 4 段目の共通の 1 本・host-init.md §4 の 4）。
+///
+/// git 設定を**先に**書く。marker が先だと、設定に失敗した周（非 repo・git dir が書けない）に marker だけが残り、
+/// PUBLIC repo の `git status` を汚す。設定だけが残っても marker が無い限り `served` は `Absent` なので hook は黙る。
+fn write_binding(root: &Path, dir: &str, version: u64) -> Result<(), String> {
+    if !git_ok(root, &["config", "--local", &state_dir_key(), dir]) {
+        return Err("state dir を git の local 設定へ書けない".to_owned());
+    }
+    let marker = Marker { name: NAME.to_owned(), version };
+    std::fs::write(marker_path(root), marker.render()).map_err(|err| format!("marker を書けない: {err}"))
+}
+
+/// `init` の 4 段目の結果（host-init.md §4 の 4・bool にしない）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Bound {
+    /// 既に自分が仕える（何も書かない）。
+    Already,
+    /// local 設定と marker を書いた。
+    Written,
+    /// 別の器が名乗っている（何も書かない・名乗りの名）。
+    Other(String),
+    /// 書けない（理由）。
+    Failed(String),
+}
+
+/// `vessel init --state-dir <dir> <root>` と同じ 1 本を、既に `ByMe` なら撃たずに通す（`init` の 4 段目）。
+pub fn bind(root: &Path, dir: &Path) -> Bound {
+    let Some(dir) = dir.to_str() else {
+        return Bound::Failed(format!("{} は UTF-8 でない", dir.display()));
+    };
+    match served(root) {
+        Served::ByMe(_) => Bound::Already,
+        Served::ByOther(other) => Bound::Other(other),
+        Served::Absent => write_binding(root, dir, GENERATION).map_or_else(Bound::Failed, |()| Bound::Written),
+    }
 }
 
 /// marker の 2 行と state dir を 1 行で出す。

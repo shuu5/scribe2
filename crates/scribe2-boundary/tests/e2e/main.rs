@@ -990,3 +990,279 @@ fn host_init_refuses_without_writing_a_byte() {
     }
     assert_eq!(template_in(&global).as_deref(), Some(good_s.as_str()), "値は受けた雛形のまま");
 }
+
+// ─────────── init [ROOT] の 7 段（host-init.md §4・行 b・`s2-07l.613`） ───────────
+
+/// 雛形の面の `[[account-group]]` より前（plugin・launch-arg・口座 2 つ）。
+const FACE_FRONT: &str = "schema = 1\n\n[[plugin]]\ndir = \"/opt/plugin\"\n\n[[launch-arg]]\nvalue = \"--verbose\"\n\n\
+[[account]]\nlabel = \"a1\"\n\n[[account]]\nlabel = \"a2\"\n\n";
+/// 雛形の面の群の表（写さない表・`--group g1` が anchors に ROOT を足す）。
+const FACE_GROUP: &str = "[[account-group]]\nname = \"g1\"\nanchors = [\"/elsewhere/x\"]\naccounts = [\"a1\"]\n\n";
+/// 雛形の面の群の表より後（vessel・tick）。
+const FACE_BACK: &str = "[[vessel]]\nrepo = \"/opt/vessel\"\n\n[[tick]]\nunit-dir = \"/opt/units\"\nbinary = \"/opt/bin/tick\"\n";
+/// git の形の宣言の雛形（`Cargo.toml` が無い repo）。
+const DECL_GIT: &str = "schema = 1\nallowed-commands = [\"git\"]\ncommon-verify = [\"git diff --quiet\"]\nentrance-flip = \"unmeasured\"\n";
+
+/// init の歯の host（toy の global 設定・雛形 `hosts/base`・口座の実 dir・toy の repo `proj`）。
+struct InitHost {
+    tmp: TmpDir,
+    global: PathBuf,
+    hosts: PathBuf,
+    base: PathBuf,
+    repo: PathBuf,
+}
+
+impl InitHost {
+    /// 新しい置き場（`hosts/base-proj`）。
+    fn place(&self) -> PathBuf {
+        self.hosts.join("base-proj")
+    }
+
+    /// `init` を tmp の cwd で撃つ（toy の global 設定）。
+    fn init(&self, extra: &[&str]) -> Option<HostRun> {
+        let repo = self.repo.display().to_string();
+        let args: Vec<&str> = ["init", repo.as_str()].iter().chain(extra).copied().collect();
+        host_run(&self.global, &self.tmp, &args)
+    }
+}
+
+/// 雛形の面を `face` で置き、口座 a1 を host の設定 dir への symlink・a2 を実 dir にし（credential の file を 1 つずつ）、
+/// `host init` で pointer を書き、commit 1 つの repo を作る（`cargo` なら `Cargo.toml` を commit する）。
+fn init_host(face: &str, cargo: bool) -> Option<InitHost> {
+    let tmp = make_tmp_dir()?.canonical()?;
+    let (global, hosts) = (tmp.join("gitconfig"), tmp.join("hosts"));
+    let base = hosts.join("base");
+    fs::create_dir_all(base.join("accounts").join("a2")).ok()?;
+    fs::write(base.join(vessel::rules::HOST_MANIFEST), face).ok()?;
+    fs::write(base.join("accounts").join("a2").join(".credentials.json"), "secret-a2\n").ok()?;
+    let shared = tmp.join("configs").join("a1");
+    fs::create_dir_all(&shared).ok()?;
+    fs::write(shared.join(".credentials.json"), "secret-a1\n").ok()?;
+    std::os::unix::fs::symlink(&shared, base.join("accounts").join("a1")).ok()?;
+    let repo = tmp.join("proj");
+    git_repo_at(&repo)?;
+    if cargo {
+        fs::write(repo.join("Cargo.toml"), "[package]\nname = \"proj\"\n").ok()?;
+        git_out(&repo, &["add", "Cargo.toml"])?;
+        git_out(&repo, &["commit", "-q", "-m", "cargo"])?;
+    }
+    let pointed = host_run(&global, &tmp, &["host", "init", &base.display().to_string()])?;
+    (pointed.rc == Some(0)).then_some(())?;
+    Some(InitHost { tmp, global, hosts, base, repo })
+}
+
+/// 7 段の出力（`ok|skip|failed:..` を段の順に）と `next=` の 8 行。
+fn init_lines(words: [&str; 7], next: &str) -> String {
+    let stages = ["state-dir", "host-face", "accounts", "marker", "declaration", "group", "commit"];
+    let mut out: String = stages.iter().zip(words).map(|(stage, word)| format!("init: {stage} {word}\n")).collect();
+    out.push_str(&format!("next={next}\n"));
+    out
+}
+
+/// `path` の下の file と link の相対 path（再帰・link は辿らない・並べて返す）。
+fn tree_of(path: &Path) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut stack = vec![path.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let at = entry.path();
+            match fs::symlink_metadata(&at) {
+                Ok(meta) if meta.is_dir() => stack.push(at),
+                _ => found.push(at.strip_prefix(path).map(|rel| rel.display().to_string()).unwrap_or_default()),
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
+/// 群 `name` の anchors（面が読めない・群が無ければ `None`）。
+fn anchors_of(state_dir: &Path, name: &str) -> Option<Vec<String>> {
+    match vessel::rules::manifest::HostManifest::read(&state_dir.join(vessel::rules::HOST_MANIFEST)) {
+        vessel::rules::manifest::HostManifest::Present(face) => {
+            face.groups().iter().find(|group| group.name() == name).map(|group| group.anchors().to_vec())
+        }
+        _ => None,
+    }
+}
+
+/// (2)(3)(4)(9) 7 段を順に通す: 置き場は `<雛形>-<repo 名>`・面は `[[account-group]]` だけを除いた写し（tick を含む）・
+/// 口座は雛形の symlink の先と実 dir への symlink（credential の file を置き場に写さない）。base は `init` の verb が無い（RED）。
+#[test]
+fn init_repo_runs_seven_stages_into_the_new_place() {
+    let host = init_host(&format!("{FACE_FRONT}{FACE_GROUP}{FACE_BACK}"), false).unwrap_or_else(|| panic!("host を組める"));
+    let first = host.init(&[]).unwrap_or_else(|| panic!("binary を撃てる"));
+    assert_eq!((first.rc, first.err.as_str()), (Some(0), ""), "7 段が通る: {}", first.out);
+    assert_eq!(first.out, init_lines(["ok", "ok", "ok", "ok", "ok", "skip", "ok"], "doctor"), "段ごとに 1 行と next=");
+    let place = host.place();
+    assert!(place.is_dir(), "置き場は雛形の親の下の <雛形>-<repo 名>");
+    let face = fs::read_to_string(place.join(vessel::rules::HOST_MANIFEST)).unwrap_or_default();
+    assert_eq!(face, format!("{FACE_FRONT}{FACE_BACK}"), "面は群の表だけを除いて 1 字も変えず写す");
+    assert_eq!(tree_of(&place), ["accounts/a1", "accounts/a2", "host.toml"], "置き場に在るのは面と口座の link だけ（credential を写さない）");
+    let link = |label: &str| fs::read_link(place.join("accounts").join(label)).ok();
+    assert_eq!(link("a1"), Some(host.tmp.join("configs").join("a1")), "雛形の symlink の先へ結ぶ");
+    assert_eq!(link("a2"), Some(host.base.join("accounts").join("a2")), "雛形の実 dir へ結ぶ");
+}
+
+/// (5)(6)(8)(9) marker と local 設定・git の形の宣言・書いた 2 file だけの commit（index に在った他の変更は commit に入らず
+/// staged のまま）。2 度目は全段 skip で面・HEAD・雛形が不変。
+#[test]
+fn init_repo_commits_only_its_files_and_the_second_run_skips_every_stage() {
+    let host = init_host(&format!("{FACE_FRONT}{FACE_GROUP}{FACE_BACK}"), false).unwrap_or_else(|| panic!("host を組める"));
+    fs::write(host.repo.join("other"), "staged\n").unwrap_or_else(|e| panic!("他の変更を置ける: {e}"));
+    git_out(&host.repo, &["add", "other"]).unwrap_or_else(|| panic!("他の変更を stage できる"));
+    let first = host.init(&[]).unwrap_or_else(|| panic!("binary を撃てる"));
+    assert_eq!(first.rc, Some(0), "7 段が通る: {}", first.err);
+    let place = host.place();
+    let face = fs::read_to_string(place.join(vessel::rules::HOST_MANIFEST)).unwrap_or_default();
+    let marker = fs::read_to_string(host.repo.join(".vessel")).unwrap_or_default();
+    assert_eq!(marker, format!("name={NAME}\nversion=2\n"), "marker は vessel init と同じ 2 行");
+    let config = git_out(&host.repo, &["config", "--local", "--get", &format!("{NAME}.stateDir")]);
+    assert_eq!(config, Some(place.display().to_string()), "local 設定は新しい置き場");
+    let decl = fs::read_to_string(host.repo.join(".vessel.toml")).unwrap_or_default();
+    assert_eq!(decl, DECL_GIT, "Cargo.toml の無い repo は git の形");
+
+    let subject = git_out(&host.repo, &["log", "-1", "--format=%s"]);
+    assert_eq!(subject, Some(format!("chore({NAME}): vessel marker and declaration")), "1 commit の題");
+    let files = git_out(&host.repo, &["show", "--name-only", "--format=", "HEAD"]);
+    assert_eq!(files.as_deref(), Some(".vessel\n.vessel.toml"), "commit は書いた 2 file だけ");
+    assert_eq!(git_out(&host.repo, &["diff", "--cached", "--name-only"]).as_deref(), Some("other"), "他の staged は触らない");
+    let head = git_out(&host.repo, &["rev-parse", "HEAD"]);
+
+    let again = host.init(&[]).unwrap_or_else(|| panic!("binary を撃てる"));
+    assert_eq!(again.rc, Some(0), "2 度目も rc 0: {}", again.err);
+    assert_eq!(again.out, init_lines(["skip"; 7], "doctor"), "2 度目は全段 skip");
+    assert_eq!(fs::read_to_string(place.join(vessel::rules::HOST_MANIFEST)).unwrap_or_default(), face, "面は不変");
+    assert_eq!(git_out(&host.repo, &["rev-parse", "HEAD"]), head, "2 度目は commit しない");
+    assert_eq!(fs::read_to_string(host.base.join(vessel::rules::HOST_MANIFEST)).unwrap_or_default(), format!("{FACE_FRONT}{FACE_GROUP}{FACE_BACK}"), "雛形は不変");
+}
+
+/// (6) `Cargo.toml` の在る repo は cargo の形（allowed-commands は cargo と git・common-verify は nextest と clippy・
+/// entrance-flip は unmeasured）で、既に在る宣言は 1 字も変えず skip（書いた marker だけを commit）。
+#[test]
+fn init_repo_declaration_takes_the_cargo_form_and_skips_an_existing_one() {
+    let host = init_host(FACE_FRONT, true).unwrap_or_else(|| panic!("host を組める"));
+    let first = host.init(&[]).unwrap_or_else(|| panic!("binary を撃てる"));
+    assert_eq!(first.out, init_lines(["ok", "ok", "ok", "ok", "ok", "skip", "ok"], "doctor"), "rc={:?} {}", first.rc, first.err);
+    let decl = fs::read_to_string(host.repo.join(".vessel.toml")).unwrap_or_default();
+    assert_eq!(
+        decl,
+        "schema = 1\nallowed-commands = [\"cargo\", \"git\"]\ncommon-verify = [\"cargo nextest run --workspace --no-tests=fail\", \
+         \"cargo clippy --workspace --all-targets -- -D warnings\"]\nentrance-flip = \"unmeasured\"\n",
+        "Cargo.toml の在る repo は cargo の形"
+    );
+
+    let other = init_host(FACE_FRONT, false).unwrap_or_else(|| panic!("host を組める"));
+    fs::write(other.repo.join(".vessel.toml"), "# mine\n").unwrap_or_else(|e| panic!("既存の宣言を置ける: {e}"));
+    let run = other.init(&[]).unwrap_or_else(|| panic!("binary を撃てる"));
+    assert_eq!(run.out, init_lines(["ok", "ok", "ok", "ok", "skip", "skip", "ok"], "doctor"), "宣言だけ skip: {}", run.err);
+    assert_eq!(fs::read_to_string(other.repo.join(".vessel.toml")).unwrap_or_default(), "# mine\n", "既存の宣言は不変");
+    let files = git_out(&other.repo, &["show", "--name-only", "--format=", "HEAD"]);
+    assert_eq!(files.as_deref(), Some(".vessel"), "書いた marker だけを commit");
+}
+
+/// (7) `--group g1` は雛形と同じ親の下で g1 を宣言する 2 面（雛形・兄弟）の anchors に ROOT を足し、新しい面にも群の行を
+/// 写す（宣言しない面は不変）。2 度目の `--group` は skip。雛形に無い群は failed で名指し、他の段は通る。
+#[test]
+fn init_repo_group_adds_the_root_to_every_declaring_face() {
+    let full = format!("{FACE_FRONT}{FACE_GROUP}{FACE_BACK}");
+    let host = init_host(&full, false).unwrap_or_else(|| panic!("host を組める"));
+    let sibling = host.hosts.join("sibling");
+    let sibling_face = "schema = 1\n\n[[account]]\nlabel = \"a1\"\n\n[[account-group]]\nname = \"g1\"\nanchors = [\"/elsewhere/y\"]\naccounts = [\"a1\"]\n";
+    let bystander = host.hosts.join("bystander");
+    let bystander_face = "schema = 1\n\n[[account]]\nlabel = \"a1\"\n\n[[account-group]]\nname = \"g2\"\nanchors = [\"/elsewhere/z\"]\naccounts = [\"a1\"]\n";
+    for (dir, body) in [(&sibling, sibling_face), (&bystander, bystander_face)] {
+        fs::create_dir_all(dir).unwrap_or_else(|e| panic!("兄弟の置き場を作れる: {e}"));
+        fs::write(dir.join(vessel::rules::HOST_MANIFEST), body).unwrap_or_else(|e| panic!("面を置ける: {e}"));
+    }
+    let root = host.repo.display().to_string();
+    let run = host.init(&["--group", "g1"]).unwrap_or_else(|| panic!("binary を撃てる"));
+    assert_eq!(run.out, init_lines(["ok", "ok", "ok", "ok", "ok", "ok", "ok"], "doctor"), "群の段も ok: {}", run.err);
+    let expected = |first: &str| Some(vec![first.to_owned(), root.clone()]);
+    assert_eq!(anchors_of(&host.base, "g1"), expected("/elsewhere/x"), "雛形の面に ROOT");
+    assert_eq!(anchors_of(&sibling, "g1"), expected("/elsewhere/y"), "兄弟の面に ROOT");
+    assert_eq!(anchors_of(&host.place(), "g1"), expected("/elsewhere/x"), "新しい面にも群の行");
+    let edited = full.replace("[\"/elsewhere/x\"]", &format!("[\"/elsewhere/x\", \"{root}\"]"));
+    assert_eq!(fs::read_to_string(host.base.join(vessel::rules::HOST_MANIFEST)).unwrap_or_default(), edited, "anchors の行だけが変わる");
+    assert_eq!(fs::read_to_string(bystander.join(vessel::rules::HOST_MANIFEST)).unwrap_or_default(), bystander_face, "宣言しない面は不変");
+
+    let again = host.init(&["--group", "g1"]).unwrap_or_else(|| panic!("binary を撃てる"));
+    assert_eq!(again.out, init_lines(["skip"; 7], "doctor"), "2 度目の --group は skip: {}", again.err);
+
+    let other = init_host(&full, false).unwrap_or_else(|| panic!("host を組める"));
+    let missing = other.init(&["--group", "nope"]).unwrap_or_else(|| panic!("binary を撃てる"));
+    assert_eq!(missing.rc, Some(1), "failed の段が在れば rc 1");
+    assert_eq!(missing.out, init_lines(["ok", "ok", "ok", "ok", "ok", "failed:no-group:nope", "ok"], "fix:group"), "雛形に無い群");
+    assert_eq!(anchors_of(&other.place(), "g1"), None, "群の行を写さない");
+}
+
+/// (7) 1 面でも検査に落ちれば 0 面: 兄弟の面が宣言に無い口座を候補に持つ（足すと loader が断る）周も、読めない面が
+/// 同じ親の下に在る周も、どの面も 1 byte も変わらず一時 file も残さない。
+#[test]
+fn init_repo_group_writes_zero_faces_when_one_face_fails() {
+    let full = format!("{FACE_FRONT}{FACE_GROUP}{FACE_BACK}");
+    let bad_faces = [
+        ("sibling", "schema = 1\n\n[[account]]\nlabel = \"a1\"\n\n[[account-group]]\nname = \"g1\"\nanchors = [\"/elsewhere/y\"]\naccounts = [\"a9\"]\n", "invalid:sibling"),
+        ("broken", "schema = [\n", "unreadable:broken"),
+    ];
+    for (name, body, reason) in bad_faces {
+        let host = init_host(&full, false).unwrap_or_else(|| panic!("host を組める"));
+        let bad = host.hosts.join(name);
+        fs::create_dir_all(&bad).unwrap_or_else(|e| panic!("兄弟の置き場を作れる: {e}"));
+        fs::write(bad.join(vessel::rules::HOST_MANIFEST), body).unwrap_or_else(|e| panic!("面を置ける: {e}"));
+        let run = host.init(&["--group", "g1"]).unwrap_or_else(|| panic!("binary を撃てる"));
+        let group = format!("failed:{reason}");
+        assert_eq!(run.out, init_lines(["ok", "ok", "ok", "ok", "ok", group.as_str(), "ok"], "fix:group"), "{name}: {}", run.err);
+        assert_eq!(fs::read_to_string(host.base.join(vessel::rules::HOST_MANIFEST)).unwrap_or_default(), full, "{name}: 雛形は不変");
+        assert_eq!(fs::read_to_string(bad.join(vessel::rules::HOST_MANIFEST)).unwrap_or_default(), body, "{name}: 兄弟は不変");
+        assert_eq!(anchors_of(&host.place(), "g1"), None, "{name}: 新しい面に群の行を写さない");
+        for dir in [&host.base, &bad, &host.place()] {
+            assert!(!dir.join("host.toml.staged").exists(), "{name}: 一時 file を残さない {}", dir.display());
+        }
+    }
+}
+
+/// (4)(5)(9) 失敗の段を名指し、続きの段は止めない: 雛形に dir の無い口座は accounts の段で `failed:no-source:<label>` と
+/// 名指して 1 本も結ばず、別の器の marker は marker の段で `failed:by-other:<名>`（marker・設定を書かない）。
+#[test]
+fn init_repo_names_the_failed_stage_and_goes_on() {
+    let face = format!("{FACE_FRONT}[[account]]\nlabel = \"a3\"\n");
+    let host = init_host(&face, false).unwrap_or_else(|| panic!("host を組める"));
+    let run = host.init(&[]).unwrap_or_else(|| panic!("binary を撃てる"));
+    assert_eq!(run.rc, Some(1), "failed の段が在れば rc 1");
+    assert_eq!(run.out, init_lines(["ok", "ok", "failed:no-source:a3", "ok", "ok", "skip", "ok"], "fix:accounts"), "口座の段だけ failed");
+    assert!(!host.place().join("accounts").exists(), "結ぶ先の無い label が在る周は 1 本も結ばない");
+    assert!(host.repo.join(".vessel.toml").is_file(), "続きの段は進む");
+
+    let other = init_host(FACE_FRONT, false).unwrap_or_else(|| panic!("host を組める"));
+    fs::write(other.repo.join(".vessel"), "name=other\nversion=1\n").unwrap_or_else(|e| panic!("別の器の marker を置ける: {e}"));
+    let taken = other.init(&[]).unwrap_or_else(|| panic!("binary を撃てる"));
+    assert_eq!(taken.out, init_lines(["ok", "ok", "ok", "failed:by-other:other", "ok", "skip", "ok"], "fix:marker"), "{}", taken.err);
+    assert_eq!(fs::read_to_string(other.repo.join(".vessel")).unwrap_or_default(), "name=other\nversion=1\n", "別の器の marker は不変");
+    assert_eq!(git_out(&other.repo, &["config", "--local", "--get", &format!("{NAME}.stateDir")]), None, "設定を書かない");
+    let files = git_out(&other.repo, &["show", "--name-only", "--format=", "HEAD"]);
+    assert_eq!(files.as_deref(), Some(".vessel.toml"), "書いた宣言だけを commit");
+}
+
+/// (1) ROOT が git の repo でない周と host-template が無い周は 1 段目の前に断り、置き場も marker も宣言も設定も書かない。
+#[test]
+fn init_repo_refuses_before_the_first_stage_without_writing() {
+    let host = init_host(FACE_FRONT, false).unwrap_or_else(|| panic!("host を組める"));
+    let plain = host.tmp.join("plain");
+    fs::create_dir_all(&plain).unwrap_or_else(|e| panic!("非 repo の dir を作れる: {e}"));
+    let plain_s = plain.display().to_string();
+    let run = host_run(&host.global, &host.tmp, &["init", &plain_s]).unwrap_or_else(|| panic!("binary を撃てる"));
+    assert!(!matches!(run.rc, Some(0) | None), "非 repo は断る: {}", run.out);
+    assert_eq!(run.out, "", "断る周は段の行を出さない");
+    assert!(!host.hosts.join("base-plain").exists(), "置き場を作らない");
+    assert!(!plain.join(".vessel").exists() && !plain.join(".vessel.toml").exists(), "marker も宣言も書かない");
+
+    let fresh = host.tmp.join("fresh-gitconfig");
+    let repo = host.repo.display().to_string();
+    let bare = host_run(&fresh, &host.tmp, &["init", &repo]).unwrap_or_else(|| panic!("binary を撃てる"));
+    assert!(!matches!(bare.rc, Some(0) | None), "pointer が無い周は断る: {}", bare.out);
+    assert_eq!(bare.out, "", "断る周は段の行を出さない");
+    assert!(!host.place().exists(), "置き場を作らない");
+    assert!(!host.repo.join(".vessel").exists() && !host.repo.join(".vessel.toml").exists(), "marker も宣言も書かない");
+    assert_eq!(git_out(&host.repo, &["config", "--local", "--get", &format!("{NAME}.stateDir")]), None, "設定を書かない");
+}

@@ -527,11 +527,50 @@ fn stage_host(root: &Path, label: &str) -> Result<PathBuf, AccountError> {
 
 /// 一時 file が host の面として読め（未知 key・重複・schema・面をまたぐ重複を契約 (a) の loader で）、`label` を宣言するか。
 fn staged_fits(staged: &Path, label: &str) -> bool {
-    let HostManifest::Present(face) = HostManifest::read(staged) else {
+    face_fits(staged, |face| face.accounts().iter().any(|account| account.label() == label))
+}
+
+/// file が host の面として読め、埋め込みの面と合わせられ、`also` を満たすか（`account add` と `init` の検査の 1 本）。
+pub fn face_fits(path: &Path, also: impl Fn(&Manifest) -> bool) -> bool {
+    let HostManifest::Present(face) = HostManifest::read(path) else {
         return false;
     };
-    let names = face.accounts().iter().any(|account| account.label() == label);
-    names && Manifest::embedded().is_ok_and(|tracked| tracked.joined(HostManifest::Present(face)).is_ok())
+    also(&face) && Manifest::embedded().is_ok_and(|tracked| tracked.joined(HostManifest::Present(face)).is_ok())
+}
+
+/// `init` の 3 段目の 1 口座分（host-init.md §4 の 3・bool にしない）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Link {
+    /// 新しい置き場に既に在る（dir か link・中身は読まない）。
+    Present,
+    /// 雛形の `accounts/<label>` が symlink でも dir でもない。
+    NoSource,
+    /// 結べる（結ぶ先の絶対 path）。
+    To(PathBuf),
+}
+
+/// 雛形の `accounts/<label>` が symlink ならその先、実 dir ならその dir を、新しい置き場の結ぶ先として引く（**読むのは
+/// link と種別だけ**・credential は読まず写さない・FR58）。
+pub fn link_source(template: &Path, state_dir: &Path, label: &str) -> Link {
+    if fs::symlink_metadata(account_dir(state_dir, label)).is_ok() {
+        return Link::Present;
+    }
+    let source = account_dir(template, label);
+    match fs::symlink_metadata(&source) {
+        Ok(meta) if meta.file_type().is_symlink() => fs::read_link(&source)
+            .map_or(Link::NoSource, |target| Link::To(source.parent().map_or_else(|| target.clone(), |dir| dir.join(&target)))),
+        Ok(meta) if meta.is_dir() => Link::To(source),
+        _ => Link::NoSource,
+    }
+}
+
+/// 新しい置き場の `accounts/<label>` を `target` への symlink にする（親の dir は作る）。
+pub fn link_account(state_dir: &Path, label: &str, target: &Path) -> std::io::Result<()> {
+    let dir = account_dir(state_dir, label);
+    if let Some(parent) = dir.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    std::os::unix::fs::symlink(target, dir)
 }
 
 /// 口座の dir を作り、直下に `settings.json` を書き、一時 file を host の面へ rename する（この順・rename は同じ dir の中で

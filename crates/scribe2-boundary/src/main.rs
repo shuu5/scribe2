@@ -1,6 +1,6 @@
 //! CLI の骨格。`name` / `--version` / `doctor` / `account` / `rules` / `fleet` / `vessel` / `hook` / `host-guard` /
 //! `pipe` / `runner` / `lens` / `seat` / `polarity` / `contracts` の 15 subcommand と、memo の plan の口 `ledger` と、雛形の
-//! pointer を書く口 `host`（host-init.md §3）を持つ。
+//! pointer を書く口 `host`（host-init.md §3）と、repo を器に載せる口 `init`（同 §4）を持つ。
 //!
 //! subcommand の結果は [`Outcome`] ただ 1 型で、rc はその `rc` をそのまま返す。
 //!
@@ -135,6 +135,8 @@ fn run(args: &[String]) -> Outcome {
         // 雛形の pointer を host に 1 回書く口（host-init.md §3）。使い方は `host` 自身が持つ（上の 1 行の usage は外形
         // snapshot が pin しているので動かさない）。
         Some("host") => vessel::init::host_dispatch(rest),
+        // repo を器に載せる 7 段（host-init.md §4）。使い方は `init` 自身が持つ。
+        Some("init") => vessel::init::dispatch(rest),
         Some("pipe") => vessel::pipe::cli::dispatch(rest),
         Some("seat") => vessel::seat::cli::dispatch(rest),
         // 極性一覧（ADR-0014 §2.2）。引数も stdin も env も読まない。

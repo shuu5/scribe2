@@ -45,6 +45,12 @@
 7. **commit**: `.vessel` と `.vessel.toml` のうち本便が書いた file だけを `git add` して 1 commit（message は「chore(<NAME>): vessel marker and declaration」・書いた file が 0 なら skip・index に他の変更が在っても触らない＝`git add <file>` と `git commit -- <file>`）。
 8. **tmux と席**: 行 c（§5）。
 
+出力の字面（行 b で決めた形・`s2-07l.613`）:
+
+- 段の名は宣言順に `state-dir` / `host-face` / `accounts` / `marker` / `declaration` / `group` / `commit` の 7 語。`--group` の無い周の `group` は `skip`。
+- `failed:` の理由は 1 語か `<語>:<名>`: `no-source:<label,…>`（3 段目・結ぶ先の無い label が 1 つでも在ればこの段は 1 本も結ばない）・`by-other:<名>`（4 段目）・`no-group:<名>`（6 段目・雛形に無い群）・`invalid:<置き場の dir 名>`（6 段目・loader の検査に落ちた面）・`unreadable:<置き場の dir 名>`（6 段目・同じ親の下に読めない面が在る＝群を宣言するかを測れない周も 0 面）・`not-dir` / `write` / `git` / `template-unreadable`。
+- `next=` は全段 ok / skip なら `next=doctor`、failed の段が在れば最初のその段を `next=fix:<段>` で名指し rc 1（段の行は stdout のまま）。前提の断り（非 repo・pointer が無い / 読めない）は段の行を出さず stderr の 1 行で rc 1。
+
 ## 5. tmux の session と引数の無い席の起動（行 c）
 
 - `init` の 8 段目: tmux の session `<ROOT の dir 名>` が無ければ `new-session -d -s <名> -n orchestrator -c ROOT` で作る（在れば skip・socket は既定）。次に行 c の `seat launch` の既定形を 1 回撃つ（登録 row を書き席を起こす・FR59）。tmux が撃てない周は `failed:tmux` で名指し、`next=` に `seat launch` を置く。

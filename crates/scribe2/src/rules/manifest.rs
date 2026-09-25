@@ -470,6 +470,46 @@ impl HostManifest {
     }
 }
 
+/// 雛形の host の面の本文から `[[account-group]]` の表を除いた写し（`init` の 2 段目・host-init.md §4 の 2）。他の表と
+/// 注釈は 1 字も変えない（群は `--group` だけが足す）。
+pub fn without_groups(text: &str) -> String {
+    let mut inside = false;
+    let mut kept = String::new();
+    for line in text.split_inclusive('\n') {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            inside = trimmed == Section::AccountGroup.header();
+        }
+        if !inside {
+            kept.push_str(line);
+        }
+    }
+    kept
+}
+
+/// 群 `name` の `anchors` に `anchor` を足した本文と、足した後の群の表の本文（`init` の 6 段目・host-init.md §4 の 6）。
+///
+/// 群の表が無い・`anchors` の行が 1 行の配列として読めない周は `None`。既に在れば本文は不変（呼び手が比べる）。
+pub fn with_anchor(text: &str, name: &str, anchor: &str) -> Option<(String, String)> {
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let named = |line: &&str| line.split_once('=').is_some_and(|(key, value)| key.trim() == "name" && scalar(value.trim()) == Some(Scalar::Str(name.to_owned())));
+    let starts: Vec<usize> = lines.iter().enumerate().filter(|(_, line)| line.trim().starts_with('[')).map(|(at, _)| at).collect();
+    let (start, end) = starts.iter().enumerate().find_map(|(index, &start)| {
+        let end = starts.get(index + 1).copied().unwrap_or(lines.len());
+        let block = lines.get(start..end)?;
+        (lines.get(start)?.trim() == Section::AccountGroup.header() && block.iter().any(named)).then_some((start, end))
+    })?;
+    let mut edited: Vec<String> = lines.iter().map(|line| (*line).to_owned()).collect();
+    let at = (start..end).find(|&at| lines.get(at).and_then(|line| line.split_once('=')).is_some_and(|(key, _)| key.trim() == "anchors"))?;
+    let mut anchors = list(lines.get(at)?.split_once('=')?.1.trim()).ok()?;
+    if !anchors.iter().any(|found| found == anchor) {
+        anchors.push(anchor.to_owned());
+        let quoted: Vec<String> = anchors.iter().map(|found| format!("\"{found}\"")).collect();
+        *edited.get_mut(at)? = format!("anchors = [{}]\n", quoted.join(", "));
+    }
+    Some((edited.concat(), edited.get(start..end)?.concat()))
+}
+
 /// 欠陥 1 件に host の面の接頭辞を付ける（どの file の行番号かを行の中で名指す）。
 fn on_host(error: RuleError) -> RuleError {
     RuleError::new(error.line, format!("{HOST_MANIFEST}: {}", error.message))
