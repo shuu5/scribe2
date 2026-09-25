@@ -4884,23 +4884,24 @@ fn host_group_run_selection_refuses_an_unreadable_record() {
     drop_fixture(&fx);
 }
 
-/// (d) 除外の集合は群ごとの今の口座を畳んだもの（置き場から解く 1 本を直に読む）: 2 群が同じ今の口座（種 a1 と種 a1）なら
-/// 除外は 1 つ、片方の記録が a3 へ移れば 2 つ。`fleet select` の口でも同じ: 1 つの周は a2・2 つの周も a2 で、`--exclude a2`
-/// を重ねると 1 つの周は a3・2 つの周は候補なし。base は候補の和（a1 / a2 / a3）を返す → RED。
+/// (d) 除外の集合は群ごとの今の口座を畳んだもの（置き場から解く 1 本を直に読む）: 記録の無い 2 群（候補 [a1, a2] と
+/// [a1, a3]）の種は宣言順に重ならない（alpha は a1・beta は a1 でない最初の候補 a3・§28）ので除外は 2 つ、beta の記録が a1
+/// なら 2 群が同じ今の口座で除外は 1 つ。`fleet select` の口でも同じ: 2 つの周は a2 で `--exclude a2` を重ねると候補なし、
+/// 1 つの周は `--exclude a2` で a3。base は種がどちらも先頭 a1（除外 1 つ）→ RED。
 #[test]
 fn host_group_run_exclusion_folds_the_current_accounts_of_the_groups() {
     let (fx, curl) = group_fixture(GROUP_THREE);
     put_groups(&fx, &[("alpha", &["/repo/a"], &["a1", "a2"]), ("beta", &["/repo/b"], &["a1", "a3"])]);
     let set = |labels: &[&str]| -> BTreeSet<String> { labels.iter().map(|label| (*label).to_owned()).collect() };
-    assert_eq!(vessel::rules::grouped_accounts(&fx.state), Ok(set(&["a1"])), "同じ今の口座は 1 つ");
-    let out = run_select(&fx, &curl, &["--purpose", "run", "--exclude", "a2"]);
-    assert_eq!(out_lines(&out), ["select purpose=run chosen=a3"], "除外 1 つ: {out:?}");
-    put_group_record(&fx, "beta", &record_body("a3"));
-    assert_eq!(vessel::rules::grouped_accounts(&fx.state), Ok(set(&["a1", "a3"])), "別の今の口座は 2 つ");
+    assert_eq!(vessel::rules::grouped_accounts(&fx.state), Ok(set(&["a1", "a3"])), "種は重ならない＝別の今の口座は 2 つ");
     let out = run_select(&fx, &curl, &["--purpose", "run"]);
     assert_eq!(out_lines(&out), ["select purpose=run chosen=a2"], "候補の残り a2 は便に開く: {out:?}");
     let out = run_select(&fx, &curl, &["--purpose", "run", "--exclude", "a2"]);
     assert_eq!(out_lines(&out), ["select purpose=run none=excluded earliest_reset=-"], "除外 2 つ: {out:?}");
+    put_group_record(&fx, "beta", &record_body("a1"));
+    assert_eq!(vessel::rules::grouped_accounts(&fx.state), Ok(set(&["a1"])), "同じ今の口座は 1 つ");
+    let out = run_select(&fx, &curl, &["--purpose", "run", "--exclude", "a2"]);
+    assert_eq!(out_lines(&out), ["select purpose=run chosen=a3"], "除外 1 つ: {out:?}");
     drop_fixture(&fx);
 }
 

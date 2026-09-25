@@ -178,18 +178,14 @@ pub fn judged_path(dir: &Path, group: &str) -> PathBuf {
     group_file(dir, group, "judged")
 }
 
-/// 群の今の口座（**解決の 1 関数**・設計 §20 形 2）: 記録が在ればその label・無ければ種（宣言の候補の先頭）・在るのに読めなければ
-/// [`RecordError`]。読み手は dispatch の 1 周・席の起動・doctor の 3 つで、種の読みはこの中だけに在る。
+/// 群の今の口座（**解決の 1 関数**・設計 §20 形 2）: 記録が在ればその label・無ければ種（面の読みが埋めた種の欄・§28）・在るのに
+/// 読めなければ [`RecordError`]。読み手は dispatch の 1 周・席の起動・doctor の 3 つで、種の読みはこの中だけに在る。
 pub fn current_of(state_dir: &Path, group: &AccountGroup) -> Result<Current, RecordError> {
     match fs::read_to_string(current_path(&host_groups_dir(state_dir), group.name())) {
         Ok(text) => Record::parse(&text)
             .map(|found| Current { label: found.account, source: Source::Record })
             .ok_or(RecordError::Malformed),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => group
-            .accounts()
-            .first()
-            .map(|seed| Current { label: seed.clone(), source: Source::Seed })
-            .ok_or(RecordError::Unreadable),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Current { label: group.seed().to_owned(), source: Source::Seed }),
         Err(_) => Err(RecordError::Unreadable),
     }
 }

@@ -1216,6 +1216,89 @@ fn host_group_defects_are_refused_with_line_numbers_and_the_face_prefix() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+// ─── 群の種は宣言順に重ならない（account-lifecycle.md §28・契約表の行 q・接頭辞 `host_group_seed_`） ───
+
+/// 群 1 つの宣言（`GROUP_HEAD` に続ける・見出しは 1 つ目が 12 行目・2 つ目が 17 行目）。
+fn seed_group(name: &str, anchor: &str, accounts: &str) -> String {
+    format!("\n[[account-group]]\nname = \"{name}\"\nanchors = [\"{anchor}\"]\naccounts = {accounts}\n")
+}
+
+/// `body` を tmp の 1 段下の置き場の host の面に置き、宣言順に各群の解決の 1 関数の値（label と出所）を返す
+/// （置き場を 1 段下にするのは host の根の記録を歯どうしで共有しないため）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn seed_currents(place: &std::path::Path, body: &str) -> Vec<(String, vessel::hook::group::Source)> {
+    std::fs::create_dir_all(place).expect("置き場を作れる");
+    std::fs::write(place.join(vessel::rules::HOST_MANIFEST), body).expect("host の面を書ける");
+    let manifest = Manifest::embedded()
+        .and_then(|tracked| vessel::rules::with_state_dir(tracked, Some(place)))
+        .expect("host の面を合わせられる");
+    manifest
+        .groups()
+        .iter()
+        .map(|group| vessel::hook::group::current_of(place, group).expect("記録を読める"))
+        .map(|found| (found.label, found.source))
+        .collect()
+}
+
+/// (d) 同じ候補の列 [g1, g2, g3] を宣言した 2 群の記録なしの周は、今の口座が宣言順に先頭 g1 と 2 番目 g2（種は前の群の種で
+/// ない最初の候補）で、便用の除外も 2 つ。(f) 後の群に記録（g3）が在れば記録が勝ち、前の群は種 g1 のまま。
+/// base は両群とも先頭 g1（除外は 1 つ）→ RED。
+#[test]
+fn host_group_seed_two_groups_with_the_same_candidates_take_the_first_and_the_second() {
+    use vessel::hook::group::Source;
+    let dir = host_state_dir(None).expect("tmp の state dir を作れる");
+    let place = dir.join("place");
+    let same = "[\"g1\", \"g2\", \"g3\"]";
+    let body = format!("{GROUP_HEAD}{}{}", seed_group("alpha", "/repo/a", same), seed_group("beta", "/repo/b", same));
+    assert_eq!(
+        seed_currents(&place, &body),
+        [("g1".to_owned(), Source::Seed), ("g2".to_owned(), Source::Seed)],
+        "種は宣言順に先頭と 2 番目"
+    );
+    let grouped: Vec<String> = vessel::rules::grouped_accounts(&place).expect("除外を解ける").into_iter().collect();
+    assert_eq!(grouped, ["g1", "g2"], "便用の除外は 2 つ（同じ口座に畳まれない）");
+    let record = vessel::hook::group::current_path(&vessel::seat::host_groups_dir(&place), "beta");
+    std::fs::create_dir_all(record.parent().expect("記録の dir")).expect("群用 dir を作れる");
+    std::fs::write(&record, "account=g3\nts=2026-09-25T00:00:00Z\nreason=move\nprevious=g2\n").expect("記録を書ける");
+    assert_eq!(
+        seed_currents(&place, &body),
+        [("g1".to_owned(), Source::Seed), ("g3".to_owned(), Source::Record)],
+        "記録 > 種（記録は種に依らない）"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// (e) 候補 1 つ（g1）を共有する 2 群は、後の群の種を決める候補が無い＝面の欠陥（2 番目の群の見出し 17 行目・`host.toml:` の
+/// 接頭辞・全件 1 件）で、便用の除外も面の欠陥で typed に止まる（fail-closed・前の群の種に読み替えない）。
+/// base は両群とも種 g1 で rc 0 → RED。
+#[test]
+fn host_group_seed_one_shared_candidate_is_a_defect_on_the_second_group_line() {
+    let dir = host_state_dir(None).expect("tmp の state dir を作れる");
+    let body = format!("{GROUP_HEAD}{}{}", seed_group("alpha", "/repo/a", "[\"g1\"]"), seed_group("beta", "/repo/b", "[\"g1\"]"));
+    let outcome = group_validate(dir.as_path(), &body);
+    assert_eq!(outcome.rc, RC_REFUSED, "{outcome:?}");
+    assert!(outcome.out.is_empty(), "stdout へは書かない: {outcome:?}");
+    assert_eq!(outcome.err, vec!["rules: host.toml: 群 beta の種を決める候補が無い line=17".to_owned()], "2 番目の群の行で 1 件");
+    assert!(
+        matches!(vessel::rules::grouped_accounts(dir.as_path()), Err(vessel::rules::GroupedError::Manifest(_))),
+        "除外は面の欠陥で止まる"
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// (g) 群 1 つの host は種が候補の先頭のまま（候補の順は label の昇順ではない＝[g2, g1] の種は g2）。
+#[test]
+fn host_group_seed_single_group_keeps_the_first_candidate() {
+    use vessel::hook::group::Source;
+    let dir = host_state_dir(None).expect("tmp の state dir を作れる");
+    let body = format!("{GROUP_HEAD}{}", seed_group("alpha", "/repo/a", "[\"g2\", \"g1\"]"));
+    assert_eq!(seed_currents(&dir.join("place"), &body), [("g2".to_owned(), Source::Seed)], "先頭のまま");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// 起こし直しの回数の行（`pipe.follow_retries`・裁定 id `user 2026-09-12T03:25Z`・
 /// 設計 pipeline-conflict.md §5）。**値は manifest が持ち、ADR も設計 doc も写さない**（C1 / C5）。
 /// 行が欠けた manifest は `RuleError` で拒まれる（kind の字面は `ALL` を通してしか解けない）。

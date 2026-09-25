@@ -443,16 +443,22 @@ fn host_group_doctor_prints_one_line_per_group_in_declaration_order() {
 }
 
 /// (b) その群の置き場に席の登録 row が 1 つも無い周は無しの語（`none`）で、`0` や空に潰さない。置き場の一致は登録が
-/// 書いた値そのもの（`/repo` の末尾 `/` 違いはどの row とも一致しない）。
+/// 書いた値そのもの（`/repo` の末尾 `/` 違いはどの row とも一致しない）。2 群の候補は 2 つ（種は宣言順に重ならない＝
+/// alpha は acct-1・beta は spare・候補 1 つを共有する 2 群は面の欠陥・account-lifecycle.md §28）。
 #[test]
 fn host_group_doctor_line_says_none_without_seat_rows() {
+    // flip-check: retroactive s2-07l.641
     let place = role_doctor_place();
-    put_groups(&place, &[("alpha", &["/repo/elsewhere"], &["acct-1"]), ("beta", &["/repo/"], &["acct-1"])]);
-    let lines = doctor_rows(&place, &account_rules(&["acct-1"]));
-    assert_eq!(group_line(&lines, "alpha"), "group=alpha accounts=acct-1 anchors=1 seat-accounts=none current=seed", "{lines:?}");
+    put_groups(&place, &[("alpha", &["/repo/elsewhere"], &["acct-1", "spare"]), ("beta", &["/repo/"], &["acct-1", "spare"])]);
+    let lines = doctor_rows(&place, &account_rules(&["acct-1", "spare"]));
+    assert_eq!(
+        group_line(&lines, "alpha"),
+        "group=alpha accounts=acct-1,spare anchors=1 seat-accounts=none current=seed",
+        "{lines:?}"
+    );
     assert_eq!(
         group_line(&lines, "beta"),
-        "group=beta accounts=acct-1 anchors=1 seat-accounts=none current=seed",
+        "group=beta accounts=acct-1,spare anchors=1 seat-accounts=none current=seed",
         "正規化しない: {lines:?}"
     );
     fs::remove_dir_all(&place.dir).ok();

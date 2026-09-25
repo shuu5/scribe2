@@ -291,12 +291,13 @@ impl VesselRepo {
 
 /// `[[account-group]]` 1 行が宣言する群（席の口座を持つ project の群・設計 account-lifecycle.md §17・ADR-0049）。
 ///
-/// **宣言値だけを持つ**（群の「今の口座」は第 3 段の記録で、この型も reader も書かない）。
+/// **宣言値と種だけを持つ**（群の「今の口座」は第 3 段の記録で、この型も reader も書かない・種は面の読みの導出＝§28 形 1）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountGroup {
     name: String,
     anchors: Vec<String>,
     accounts: Vec<String>,
+    seed: String,
     line: u64,
 }
 
@@ -314,6 +315,11 @@ impl AccountGroup {
     /// 候補の口座 label の列を**宣言順**（= 候補の順）で。
     pub fn accounts(&self) -> &[String] {
         &self.accounts
+    }
+
+    /// 種（記録の無い周の今の口座）: 宣言順で前の群の種でない最初の候補（面の読みが埋める・設計 account-lifecycle.md §28）。
+    pub fn seed(&self) -> &str {
+        &self.seed
     }
 
     /// manifest の中でこの行が始まる物理行番号。
@@ -683,6 +689,7 @@ fn collect(text: &str, face: Face) -> (Manifest, Vec<RuleError>) {
     check_class_commands(&found, &mut errors);
     check_duplicate_labels(&found.accounts, &mut errors);
     check_duplicate_groups(&found.groups, &mut errors);
+    seed_groups(&mut found.groups, &mut errors);
     (found, errors)
 }
 
@@ -997,7 +1004,7 @@ fn build_group(raw: &RawRow, errors: &mut Vec<RuleError>) -> Option<AccountGroup
         errors.push(RuleError::new(raw.line, "name が空である".to_owned()));
         return None;
     }
-    Some(AccountGroup { name, anchors, accounts, line: raw.line })
+    Some(AccountGroup { name, anchors, accounts, seed: String::new(), line: raw.line })
 }
 
 /// `[[tick]]` 1 行を組む（設計 seat-heartbeat.md §5 形 1）。欠けや未知 key は全件 `errors` へ積み、[`build_single`] と同じ形で
@@ -1083,6 +1090,19 @@ fn check_duplicate_groups(groups: &[AccountGroup], errors: &mut Vec<RuleError>) 
                 errors.push(RuleError::new(group.line, format!("置き場 {anchor} が 2 つの群に在る")));
             }
         }
+    }
+}
+
+/// 各群の種を宣言順に埋める（設計 account-lifecycle.md §28 形 1）: 前の群の種でない最初の候補。全候補が前の群の種に
+/// 使われている群は群の見出し行の欠陥（fail-closed・同じ候補の列を宣言した群どうしが初期状態で同じ口座に乗らない）。
+fn seed_groups(groups: &mut [AccountGroup], errors: &mut Vec<RuleError>) {
+    let mut taken: Vec<String> = Vec::new();
+    for group in groups.iter_mut() {
+        match group.accounts.iter().find(|label| !taken.contains(label)) {
+            Some(seed) => group.seed.clone_from(seed),
+            None => errors.push(RuleError::new(group.line, format!("群 {} の種を決める候補が無い", group.name))),
+        }
+        taken.push(group.seed.clone());
     }
 }
 
