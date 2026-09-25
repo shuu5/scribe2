@@ -4,6 +4,9 @@
 //! host の周だけ、host の根の群用 dir（[`host_groups_dir`]）の lock（1 file・`create_new`）を握り、**段の全部をその内側で**行う
 //! （lock の file が残る周は [`Stopped::Locked`] で止まり、計測も記録も event も撃たない）。
 //!
+//! lock（[`group::Lock`]）は管理 tick の移動の周（設計 seat-heartbeat.md §4）と同じ 1 本で、同じ target を 2 つの手が同じ周に
+//! 撃つことを防ぐ。
+//!
 //! 群ごとに、測る集合 = 群の今の口座（[`group::current_of`]・記録 > 種）∪ 群の置き場の席の登録 row の口座
 //! （[`crate::account::seat_accounts`] の 1 本）を取り、鮮度の外の口座だけを選定の前計測と同じ口（[`usage::run_fresh`]・
 //! `--account` で 1 口座に絞る）で 1 回測る。移動を頼む記録（席の hook が置く・[`group::put_request`]）の在る群は鮮度に依らず
@@ -32,28 +35,20 @@ use crate::hook::group::{self, Caps, Current, Pressed, Record, Source};
 use crate::name::NAME;
 use crate::rules::manifest::{AccountGroup, Manifest};
 use crate::seat::cycle::{self, Launched, REASON_NO_ACCOUNT, REASON_NOT_SHELL};
-use crate::seat::inject::Confirm;
 use crate::seat::role::{registration_of_key, Role};
 use crate::seat::{host_groups_dir, pane_is_shell, Provenance, StateDir};
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::{self, OpenOptions};
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::fs;
+use std::path::Path;
 use std::thread::sleep;
 use std::time::Instant;
-
-/// 群の段の lock の file 名（群用 dir の 1 file・`create_new`・設計 §20 形 1 / 5）。
-const LOCK_FILE: &str = "lock";
 
 /// 断りの理由（移り先の候補が無い＝妥協の移動を作らない・ADR-0020 §2.4）。
 const NO_CANDIDATE: &str = "no-candidate";
 
-/// 続きの周に pane が shell でない保留の席へ送る 1 行（席は自分の process を終えられない＝器が代わりに打つ・設計 §21 形 1）。
-const EXIT: &str = "/exit";
-
-/// 続きの周の送りの inject の記録の `who`（群の段の名・設計 §22 形 1）、`/exit` の確認 dialog の既定の行（入力欄の門の tail の
-/// 字面・畳んで等値で比べる）と、その行へ Enter を送った周の記録の `what`（設計 §22 形 2）。
-const EXIT_DIALOG: Confirm<'static> = Confirm { who: "pipe-group", row: "1. Exit and stop tasks", what: "enter:exit-dialog" };
+/// 続きの周の送りの inject の記録の `who`（群の段の名・設計 §22 形 1）。`/exit` の 1 行と確認 dialog の既定の行の値は
+/// [`group::EXIT`] / [`group::exit_dialog`] の 1 か所（tick の移動の周と同じ値・設計 seat-heartbeat.md §4 形 5）。
+const WHO_GROUP: &str = "pipe-group";
 
 /// 群の段が止まった理由（typed・列の 1 周の rc と行は変えない・設計 §20 形 7）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,26 +57,6 @@ pub(super) enum Stopped {
     Unreadable,
     /// lock の file が既に在る（別の周が握っている・前の周が残した）か、群用 dir に置けない。
     Locked,
-}
-
-/// 群の段の lock（握った周だけ在る・drop で外す）。
-struct Lock(PathBuf);
-
-impl Lock {
-    /// 群用 dir に lock の file を `create_new` で置く（中身は握った process の pid＝人が残りを読む）。
-    fn take(dir: &Path) -> Result<Self, Stopped> {
-        let path = dir.join(LOCK_FILE);
-        fs::create_dir_all(dir).map_err(|_| Stopped::Locked)?;
-        let mut file = OpenOptions::new().write(true).create_new(true).open(&path).map_err(|_| Stopped::Locked)?;
-        let _ = writeln!(file, "pid={}", std::process::id());
-        Ok(Self(path))
-    }
-}
-
-impl Drop for Lock {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.0);
-    }
 }
 
 /// 群 1 つの 1 周ぶんの計画（今の口座・測る集合・移動を頼む記録の有無）。
@@ -104,7 +79,7 @@ pub(super) fn round(input: &Input<'_>) -> Result<(), Stopped> {
     }
     let caps = Caps::of(&manifest).map_err(|_| Stopped::Unreadable)?;
     let dir = host_groups_dir(input.state_dir);
-    let _lock = Lock::take(&dir)?;
+    let _lock = group::Lock::take(&dir).map_err(|_| Stopped::Locked)?;
     let before = replay(&store::read_all(input.state_dir).map_err(|_| Stopped::Unreadable)?);
     // 記録を読めない群は段から外し（typed に止まる）、その候補は他の群の移り先にしない（今の口座が分からない＝fail-closed）。
     let (mut plans, mut blocked) = (Vec::new(), BTreeSet::new());
@@ -280,15 +255,16 @@ fn execute(read: &mut Read<'_, '_>, plan: &Plan<'_>, target: &str) -> bool {
 enum Wait {
     /// 移動の周: settle の窓の内で待ち、窓の内に戻らない席ごとに保留の event を 1 件記す。
     Settle,
-    /// 続きの周: 1 回だけ見て、戻っていない席へ [`EXIT`] の 1 行を送り次の周へ残す（保留の event を重ねない）。
+    /// 続きの周: 1 回だけ見て、戻っていない席へ [`group::EXIT`] の 1 行を送り次の周へ残す（保留の event を重ねない）。
     Once,
 }
 
 /// `seats` の置き場の席を、pane が shell に戻った順に同じ target へ `account` の口座で起こす（`launch` の 1 本・登録 row は
 /// 起動が書き直す・会話は運ばない・呼び手の窓の置き換えは許さない）。起こせなかった席は理由つきの保留の event を 1 件記す。
-/// 続きの周（[`Wait::Once`]）に shell でない席は起こさず、退避の合図と同じ宛先・門（[`notify::send_or_confirm`]）で [`EXIT`] を
-/// 1 回送る（移動の周は送らない＝席が作業記憶を残す番を 1 周ぶん持つ・設計 §21 形 1）。門が [`EXIT_DIALOG`] の既定の行を返す
-/// 周は [`EXIT`] の代わりに Enter を 1 回だけ送り、どちらの送りも群の段の名で inject の記録に残す（設計 §22 形 1 / 2）。
+/// 続きの周（[`Wait::Once`]）に shell でない席は起こさず、退避の合図と同じ宛先・門（[`notify::send_or_confirm`]）で
+/// [`group::EXIT`] を 1 回送る（移動の周は送らない＝席が作業記憶を残す番を 1 周ぶん持つ・設計 §21 形 1）。門が
+/// [`group::exit_dialog`] の既定の行を返す周は `/exit` の代わりに Enter を 1 回だけ送り、どちらの送りも群の段の名
+/// （[`WHO_GROUP`]）で inject の記録に残す（設計 §22 形 1 / 2）。
 fn relaunch(read: &Read<'_, '_>, group: &AccountGroup, account: &str, mut seats: Vec<(String, String)>, wait: Wait) {
     let input = read.input;
     let (Some((settle, step)), Ok(rules)) = (cycle::pace_of(read.manifest), crate::seat::embedded_manifest()) else {
@@ -333,7 +309,8 @@ fn relaunch(read: &Read<'_, '_>, group: &AccountGroup, account: &str, mut seats:
         Wait::Settle => failed.extend(seats.into_iter().map(|(anchor, target)| (anchor, target, REASON_NOT_SHELL))),
         Wait::Once => {
             for (anchor, _) in &seats {
-                let _ = notify::send_or_confirm(&read.state, &place, Path::new(anchor), input.manifest, (EXIT, &EXIT_DIALOG));
+                let dialog = group::exit_dialog(WHO_GROUP);
+                let _ = notify::send_or_confirm(&read.state, &place, Path::new(anchor), input.manifest, (group::EXIT, &dialog));
             }
         }
     }

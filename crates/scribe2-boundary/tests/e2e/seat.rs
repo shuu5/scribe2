@@ -240,7 +240,11 @@ fn assert_tick_mouth(state: &str, usage: &str) {
     assert!(usage.contains(&format!("|{TICK_USAGE}|")), "tick は使い方に在る: {usage}");
     let out = run_seat(&["tick", "--target", "s:w", "--state-dir", state]);
     assert_eq!(rc_of(&out), i32::from(RC_OK), "tick は自分の口として動く: {}", stderr_of(&out));
-    assert_eq!(stdout_of(&out), "decision=noop target=s_w reason=no-row pointer=- step=- consumed=-\n", "判定行 1 行");
+    assert_eq!(
+        stdout_of(&out),
+        "decision=noop target=s_w reason=no-row pointer=- step=- consumed=- move=- launched=-\n",
+        "判定行 1 行"
+    );
     assert!(stderr_of(&out).is_empty(), "stderr 0 byte");
 }
 
@@ -1291,13 +1295,16 @@ fn tick_text_key(step: u32) -> String {
 
 /// noop の判定行。
 fn tick_noop(reason: &str, pointer: &str, step: &str) -> String {
-    format!("decision=noop target={TICK_SEAT} reason={reason} pointer={pointer} step={step} consumed=-\n")
+    format!("decision=noop target={TICK_SEAT} reason={reason} pointer={pointer} step={step} consumed=-{TICK_NO_MOVE}\n")
 }
 
 /// inject の判定行（偽 tmux は消費の打刻を打たない＝queue の `consumed=false`）。
 fn tick_inject(step: u32) -> String {
-    format!("decision=inject target={TICK_SEAT} reason=- pointer=sent step={step} consumed=false\n")
+    format!("decision=inject target={TICK_SEAT} reason=- pointer=sent step={step} consumed=false{TICK_NO_MOVE}\n")
 }
+
+/// 移動の周でない判定行の末尾 2 欄（設計 seat-heartbeat.md §4 形 8・列は固定で省かない）。
+const TICK_NO_MOVE: &str = " move=- launched=-";
 
 /// 撃って判定行が `want` で rc 0 の周に、key も梯子の記録も注入の記録も増えず、偽 client も呼ばれないことを測る。
 fn tick_assert_quiet(place: &TickPlace, want: &str) {
@@ -1387,7 +1394,7 @@ fn seat_tick_ladder_climbs_six_signals_then_stops() {
     let out = tick_run(&place, &[]);
     let line = stdout_of(&out);
     assert!(line.starts_with(&format!("decision=noop target={TICK_SEAT} reason=wait pointer=wait:")), "{line}");
-    assert!(line.ends_with(" step=1 consumed=-\n"), "{line}");
+    assert!(line.ends_with(&format!(" step=1 consumed=-{TICK_NO_MOVE}\n")), "{line}");
     let left = tick_token(&line, "pointer").and_then(|found| found.strip_prefix("wait:").and_then(|secs| secs.parse::<u64>().ok()));
     assert!(left.is_some_and(|secs| (1795..=1800).contains(&secs)), "残り秒 = 80 分 − 50 分: {line}");
     assert_eq!(tick_ladder(&place), Some((sent, 0, Some(sent + 2))), "基準は sent_at より後の Stop の ts");
@@ -1446,7 +1453,7 @@ fn seat_tick_unanswered_seat_settles_on_the_stale_digest_and_climbs() {
     tick_ladder_put(&place, now - 2500, 0, None);
     let line = stdout_of(&tick_run(&place, &[]));
     assert!(line.starts_with(&format!("decision=noop target={TICK_SEAT} reason=wait pointer=wait:")), "{line}");
-    assert!(line.ends_with(" step=1 consumed=-\n"), "段 + 1: {line}");
+    assert!(line.ends_with(&format!(" step=1 consumed=-{TICK_NO_MOVE}\n")), "段 + 1: {line}");
     let left = tick_token(&line, "pointer").and_then(|found| found.strip_prefix("wait:").and_then(|secs| secs.parse::<u64>().ok()));
     assert!(left.is_some_and(|secs| (2295..=2300).contains(&secs)), "残り秒 = 80 分 − 2500 秒: {line}");
     assert_eq!(tick_ladder(&place), Some((now - 2500, 0, Some(last))), "基準はその周の digest");
@@ -1511,7 +1518,7 @@ fn seat_tick_record_faults_send_nothing_and_a_failed_send_keeps_the_record() {
     let out = tick_run(&place, &[]);
     assert_eq!(
         stdout_of(&out),
-        format!("decision=inject target={TICK_SEAT} reason=- pointer=sent step=0 consumed=unknown:tmux-failed\n"),
+        format!("decision=inject target={TICK_SEAT} reason=- pointer=sent step=0 consumed=unknown:tmux-failed{TICK_NO_MOVE}\n"),
         "送れない周も inject と数える"
     );
     assert_eq!(tick_ladder(&place).map(|(_, step, digest)| (step, digest)), Some((0, None)), "梯子の記録は残る");
@@ -1543,7 +1550,8 @@ fn seat_tick_missing_rule_rows_and_unreadable_store_are_errors() {
     let full = fixture(&place.dir, "full.toml", &body(""));
     let out = tick_run(&place, &["--rules", &full]);
     assert_eq!((rc_of(&out), stdout_of(&out)), (i32::from(RC_OK), tick_noop("stamp-recent", "wait:0", "0")), "全部を持つ写し");
-    let error = |reason: &str| format!("decision=error target={TICK_SEAT} reason={reason} pointer=- step=- consumed=-\n");
+    let error =
+        |reason: &str| format!("decision=error target={TICK_SEAT} reason={reason} pointer=- step=- consumed=-{TICK_NO_MOVE}\n");
     for (id, _, _) in rows.iter().take(4) {
         let rules = fixture(&place.dir, "missing.toml", &body(id));
         let out = tick_run(&place, &["--rules", &rules]);
@@ -1559,6 +1567,325 @@ fn seat_tick_missing_rule_rows_and_unreadable_store_are_errors() {
     let out = tick_run(&place, &[]);
     assert_eq!((rc_of(&out), stdout_of(&out)), (i32::from(RC_REFUSED), error("store")), "event log が読めない");
     assert!(tick_keys(&place).is_empty() && tick_ladder(&place).is_none(), "どの周も 0 key・記録 0");
+}
+
+// ───────────── tick の移動の周（seat-heartbeat.md §4・契約表の行 c・`s2-07l.617`・接頭辞 `seat_tick_move_`） ─────────────
+//
+// §2 の fixture（PATH の偽 tmux・手書きの `state.jsonl`・`--rules` の写し）に、偽 tmux の `list-panes` の前面（file で作り分ける）
+// と host の群用 dir の記録（置き場の親の下）を足す。置き場は親を共有できる形（`<root>/<name>`）で作り、群は host の面（`host.toml`）
+// に口座 2 つ（A・B・種は A）と群 1 つで宣言する。settle は写しの `seat.cycle_settle_s` で 1 秒に縮める。字面は契約から組む。
+
+/// 登録 row の口座（群の種）。
+const MOVE_A: &str = "acct-a";
+/// 群の移り先の口座。
+const MOVE_B: &str = "acct-b";
+/// 群の置き場（1 つ目の置き場の席の anchor）。
+const MOVE_ANCHOR: &str = "/repo";
+/// 群の置き場（2 つ目の置き場の席の anchor）。
+const MOVE_ANCHOR_TWO: &str = "/repo-two";
+/// 群の名。
+const MOVE_GROUP: &str = "g";
+/// 偽 tmux の前面の file（無ければ席＝`claude`）。
+const MOVE_FRONT: &str = "front";
+/// `/exit` の確認 dialog の既定の行（設計 account-lifecycle.md §22 形 2 の literal）。
+const MOVE_DIALOG_ROW: &str = "1. Exit and stop tasks";
+
+/// 移動の歯の置き場 1 つ（`<root>/<name>` の置き場・`<root>/<name>-tools` の偽 tmux と pane と規則の写し）。
+struct MovePlace {
+    /// `--state-dir`。
+    state: PathBuf,
+    /// 偽 tmux・pane・呼出の記録・規則の写しの dir。
+    tools: PathBuf,
+    /// 偽の bin を先頭に置いた PATH。
+    path: String,
+    /// `--rules` の写し。
+    rules: String,
+}
+
+impl MovePlace {
+    /// tools の下の file。
+    fn at(&self, name: &str) -> PathBuf {
+        self.tools.join(name)
+    }
+}
+
+/// host の根の群用 dir（`<置き場の親>/<NAME>-host/groups`・器の字面を借りない）。
+fn move_groups_dir(root: &Path) -> PathBuf {
+    root.join(format!("{NAME}-host")).join("groups")
+}
+
+/// 群の今の口座の記録を書く（契約の 4 行の形・`<群用 dir>/<群の名>.account`）。
+fn move_record(root: &Path, account: &str) {
+    let dir = move_groups_dir(root);
+    fs::create_dir_all(&dir).ok();
+    let body = format!("account={account}\nts=2026-09-25T00:00:00Z\nreason=move\nprevious={MOVE_A}\n");
+    fs::write(dir.join(format!("{MOVE_GROUP}.account")), body).ok();
+}
+
+/// 置き場を 1 つ作る: host の面に口座 A / B と群（置き場 2 つ・候補 A, B）を書き、`anchor` の席の登録 row（口座 A）を積み、
+/// 最終行 Idle の打刻（いま）と空の入力欄の pane を置く。前面の file は置かない（席＝`claude`）。
+fn move_place(root: &Path, name: &str, anchor: &str) -> MovePlace {
+    let state = root.join(name);
+    let tools = root.join(format!("{name}-tools"));
+    let seat = seat_dir_of(&state, TICK_SEAT);
+    fs::create_dir_all(&seat).ok();
+    fs::create_dir_all(&tools).ok();
+    let host = format!(
+        "schema = 1\n\n[[account]]\nlabel = \"{MOVE_A}\"\n\n[[account]]\nlabel = \"{MOVE_B}\"\n\n[[account-group]]\nname = \"{MOVE_GROUP}\"\n\
+         anchors = [\"{MOVE_ANCHOR}\", \"{MOVE_ANCHOR_TWO}\"]\naccounts = [\"{MOVE_A}\", \"{MOVE_B}\"]\n"
+    );
+    fs::write(state.join("host.toml"), host).ok();
+    fs::write(state_file(&seat), format!("{}\n", stamp_line("idle", "SessionStart", unix_now(), "sid-move"))).ok();
+    let launch = fixture(&tools, "launch.txt", "claude\n");
+    let path = state.display().to_string();
+    let out = run_seat(&[
+        "register", "--state-dir", &path, "--target", TICK_TARGET, "--role", "orchestrator", "--account", MOVE_A, "--launch",
+        &launch, "--anchor", anchor,
+    ]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "登録 row を積める: {}", stderr_of(&out));
+    fs::write(tools.join(TICK_PANE), TICK_CLEAR_PANE).ok();
+    let rows = [
+        ("seat.tick_interval_s", "SeatTickIntervalS", 60),
+        ("seat.tick_stale_s", "SeatTickStaleS", TICK_STALE),
+        ("seat.pointer_backoff_factor", "SeatPointerBackoffFactor", 2),
+        ("seat.pointer_backoff_max_s", "SeatPointerBackoffMaxS", 86_400),
+        ("pipe.stop_grace_ms", "StopGraceMs", 300),
+        ("fleet.usage_fresh_s", "UsageFreshS", 300),
+        ("fleet.group_pressure_5h_pct", "GroupPressure5hPct", 85),
+        ("fleet.group_pressure_7d_pct", "GroupPressure7dPct", 95),
+        ("fleet.group_pressure_model_pct", "GroupPressureModelPct", 95),
+        ("seat.cycle_settle_s", "SeatCycleSettleS", 1),
+        ("seat.cycle_poll_ms", "SeatCyclePollMs", 100),
+    ];
+    let body = rows.iter().fold("schema = 1\n".to_owned(), |text, (id, kind, value)| {
+        format!("{text}\n[[rule]]\nid = \"{id}\"\nkind = \"{kind}\"\nvalue = {value}\nenabled = true\nruling = \"r\"\nruled_at = \"d\"\n")
+    });
+    let rules = fixture(&tools, "rules.toml", &body);
+    let path = move_shims(&tools);
+    MovePlace { state, tools, path, rules }
+}
+
+/// 移動の歯の偽 tmux を `<tools>/bin` に置き、PATH の字面を返す。呼出を 1 行残し、`list-panes` は前面の file（無ければ
+/// `claude`）・`list-windows` は窓 `tk`・`has-session` は在る・`capture-pane` は pane の file を返し、`send-keys … -l <text>` は
+/// text を pane へ足し、`send-keys … Enter` は新しい prompt を描く。偽 client（`curl` / `claude`）も置く。
+fn move_shims(tools: &Path) -> String {
+    let bin = tools.join("bin");
+    fs::create_dir_all(&bin).ok();
+    let at = |name: &str| tools.join(name).display().to_string();
+    let tmux = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{calls}'\n\
+         case \"$1\" in\n\
+         list-panes) cat '{front}' 2>/dev/null || echo claude; exit 0;;\n\
+         list-windows) echo tk; exit 0;;\n\
+         has-session) exit 0;;\n\
+         capture-pane) cat '{pane}'; exit 0;;\n\
+         send-keys) ;;\n\
+         *) exit 0;;\n\
+         esac\n\
+         for last in \"$@\"; do :; done\n\
+         case \" $* \" in *' -l '*) printf '%s' \"$last\" >> '{pane}'; exit 0;; esac\n\
+         printf '\\n\u{276f} ' >> '{pane}'\n",
+        calls = at(TICK_CALLS),
+        front = at(MOVE_FRONT),
+        pane = at(TICK_PANE),
+    );
+    let client = format!("#!/bin/sh\nprintf '%s\\n' \"$0 $*\" >> '{}'\n", at(TICK_CLIENT));
+    for (name, body) in [("tmux", tmux), ("curl", client.clone()), ("claude", client)] {
+        let path = bin.join(name);
+        fs::write(&path, body).ok();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).ok();
+    }
+    format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default())
+}
+
+/// `seat tick` を偽の PATH と規則の写しで 1 回撃つ。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn move_run(place: &MovePlace) -> Output {
+    let state = place.state.display().to_string();
+    Command::new(bin())
+        .args(["seat", "tick", "--state-dir", &state, "--target", TICK_TARGET, "--rules", &place.rules])
+        .env("PATH", &place.path)
+        .output()
+        .expect("binary を起動できる")
+}
+
+/// 偽 tmux へ送った key（`send-keys` の呼出の行・送った順）。
+fn move_keys(place: &MovePlace) -> Vec<String> {
+    fs::read_to_string(place.at(TICK_CALLS))
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| line.starts_with("send-keys"))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// 席の記録（`tick.jsonl`）の行。
+fn move_injections(place: &MovePlace) -> Vec<String> {
+    fs::read_to_string(tick_file(&place.state, TICK_SEAT)).unwrap_or_default().lines().map(str::to_owned).collect()
+}
+
+/// 移動の周の判定行（`reason=- pointer=- step=-`・契約の字面）。
+fn move_line(step: &str, consumed: &str, launched: &str) -> String {
+    format!("decision=move target={TICK_SEAT} reason=- pointer=- step=- consumed={consumed} move={step} launched={launched}\n")
+}
+
+/// 移動の門で止まった周の判定行（梯子を評価しない側＝`pointer=- step=-`）。
+fn move_noop(reason: &str) -> String {
+    format!("decision=noop target={TICK_SEAT} reason={reason} pointer=- step=- consumed=-{TICK_NO_MOVE}\n")
+}
+
+/// 撃って判定行が `want` で rc 0 の周に、key も梯子の記録も席の記録も増えず、偽 client も呼ばれないことを測る。
+fn move_assert_quiet(place: &MovePlace, want: &str) {
+    let (keys, injections) = (move_keys(place).len(), move_injections(place).len());
+    let out = move_run(place);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "{want}: rc 0: {}", stderr_of(&out));
+    assert_eq!(stdout_of(&out), want, "判定行");
+    assert_eq!(move_keys(place).len(), keys, "{want}: 1 key も送らない");
+    assert!(!place.state.join("seat").join(TICK_SEAT).join("pointer-ladder").exists(), "{want}: 梯子の記録は書かれない");
+    assert_eq!(move_injections(place).len(), injections, "{want}: 席の記録は増えない");
+    assert!(!place.at(TICK_CLIENT).exists(), "{want}: 偽 client は呼ばれない");
+}
+
+/// `tick.jsonl` の 1 行の `who` と `what`。
+fn move_who_what(line: &str) -> (Option<String>, Option<String>) {
+    (acct_text(line, "who"), acct_text(line, "what"))
+}
+
+/// (a) 登録 row（口座 A・anchor は群 g）∧ 記録は口座 B ∧ 最終行 Idle（いま）∧ pane が claude ∧ 入力欄が空 → `decision=move
+/// move=exit`・`/exit` の text 1 回 + Enter 1 回・`tick.jsonl` に `who=seat-tick-move what=/exit` の 1 行・梯子の記録は書かれず
+/// 合図の text は 0 key（base では黙りの門の `stamp-recent` ＝ RED）。
+#[test]
+fn seat_tick_move_evacuates_a_seat_whose_row_differs_from_the_group_record() {
+    let root = tmp();
+    let place = move_place(&root, "state", MOVE_ANCHOR);
+    move_record(&root, MOVE_B);
+    let out = move_run(&place);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(stdout_of(&out), move_line("exit", "false", "-"), "判定行 1 行");
+    assert_eq!(
+        move_keys(&place),
+        [format!("send-keys -t {TICK_TARGET} -l /exit"), format!("send-keys -t {TICK_TARGET} Enter")],
+        "/exit の text 1 回 + Enter 1 回・合図の text は 0"
+    );
+    let injections = move_injections(&place);
+    assert_eq!(injections.len(), 1, "席の記録 1 行: {injections:?}");
+    let line = injections.first().map(String::as_str).unwrap_or_default();
+    assert_eq!(move_who_what(line), (Some("seat-tick-move".to_owned()), Some("/exit".to_owned())), "{line}");
+    assert!(!place.state.join("seat").join(TICK_SEAT).join("pointer-ladder").exists(), "梯子の記録は書かれない");
+    assert!(!place.at(TICK_CLIENT).exists(), "偽 client は呼ばれない");
+    assert!(!move_groups_dir(&root).join("lock").exists(), "lock は周の後に外れる");
+}
+
+/// (b) pane の最後の `❯` 行が dialog の既定の行 → Enter 1 key だけ・`/exit` 0・記録の `what` は `enter:exit-dialog`／tail が別の
+/// 字面 → `input-busy`・0 key／prompt 行なし → `input-unknown`・0 key（どちらも記録 0）。
+#[test]
+fn seat_tick_move_confirms_the_exit_dialog_and_refuses_other_input() {
+    let root = tmp();
+    let place = move_place(&root, "state", MOVE_ANCHOR);
+    move_record(&root, MOVE_B);
+    fs::write(place.at(TICK_PANE), format!("{TICK_CLEAR_PANE}half typed")).ok();
+    move_assert_quiet(&place, &move_noop("input-busy"));
+    fs::write(place.at(TICK_PANE), "no prompt here\n").ok();
+    move_assert_quiet(&place, &move_noop("input-unknown"));
+    fs::write(place.at(TICK_PANE), format!("Exit?\n\u{276f} {MOVE_DIALOG_ROW}\n  2. Cancel\n")).ok();
+    let out = move_run(&place);
+    assert_eq!(stdout_of(&out), move_line("enter", "unknown:exit-dialog", "-"), "stderr={}", stderr_of(&out));
+    assert_eq!(move_keys(&place), [format!("send-keys -t {TICK_TARGET} Enter")], "Enter の 1 key だけ・/exit 0");
+    let injections = move_injections(&place);
+    assert_eq!(injections.len(), 1, "記録 1 行: {injections:?}");
+    let line = injections.first().map(String::as_str).unwrap_or_default();
+    assert_eq!(move_who_what(line), (Some("seat-tick-move".to_owned()), Some("enter:exit-dialog".to_owned())), "{line}");
+}
+
+/// (c) pane が shell → `move=launch`・`send-keys` に起動行 1 行（口座 B の設定 dir を持つ）・fleet に口座 B の登録 row が 1 件
+/// 増える・`/exit` 0（偽 tmux は打刻を打たない＝settle 1 秒で `launched=launch-unconfirmed`）。
+#[test]
+fn seat_tick_move_launches_the_group_account_into_a_shell_pane() {
+    let root = tmp();
+    let place = move_place(&root, "state", MOVE_ANCHOR);
+    move_record(&root, MOVE_B);
+    fs::write(place.at(MOVE_FRONT), "bash\n").ok();
+    fs::write(place.at(TICK_PANE), "old output\n$ ").ok();
+    let before = acct_rows(&place.state).len();
+    let out = move_run(&place);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(stdout_of(&out), move_line("launch", "-", "launch-unconfirmed"), "判定行 1 行");
+    let dir = place.state.join("accounts").join(MOVE_B).display().to_string();
+    let texts: Vec<String> = move_keys(&place).into_iter().filter(|key| key.contains(" -l ")).collect();
+    assert_eq!(texts.len(), 1, "起動行 1 行: {texts:?}");
+    assert!(texts.iter().all(|key| key.contains(&dir) && !key.contains("/exit")), "口座 B の設定 dir を持つ起動行: {texts:?}");
+    let rows = acct_rows(&place.state);
+    assert_eq!(rows.len(), before + 1, "登録 row が 1 件増える");
+    let last = rows.last().map(|row| (row.account.as_str(), row.anchor.as_str(), row.target.as_str()));
+    assert_eq!(last, Some((MOVE_B, MOVE_ANCHOR, TICK_TARGET)), "口座 B・同じ anchor と target");
+    assert!(!place.state.join("seat").join(TICK_SEAT).join("pointer-ladder").exists(), "梯子の記録は書かれない");
+}
+
+/// (d) 最終行 Busy → `busy`・0 key（移動の門より前で止まる）／記録が dir（読めない）→ `group-unreadable`・0 key／lock の file が
+/// 在る → `group-locked`・0 key・記録 0・起動行 0（pane が shell でも起こさない）。
+#[test]
+fn seat_tick_move_stops_on_busy_unreadable_record_and_held_lock() {
+    let root = tmp();
+    let place = move_place(&root, "state", MOVE_ANCHOR);
+    move_record(&root, MOVE_B);
+    let now = unix_now();
+    let seat = seat_dir_of(&place.state, TICK_SEAT);
+    fs::write(state_file(&seat), format!("{}\n", stamp_line("busy", "UserPromptSubmit", now - 10, "sid-move"))).ok();
+    move_assert_quiet(&place, &move_noop("busy"));
+    fs::write(state_file(&seat), format!("{}\n", stamp_line("idle", "Stop", now - 10, "sid-move"))).ok();
+    let lock = move_groups_dir(&root).join("lock");
+    fs::write(&lock, "pid=1\n").ok();
+    move_assert_quiet(&place, &move_noop("group-locked"));
+    fs::write(place.at(MOVE_FRONT), "bash\n").ok();
+    fs::write(place.at(TICK_PANE), "old output\n$ ").ok();
+    let rows = acct_rows(&place.state).len();
+    move_assert_quiet(&place, &move_noop("group-locked"));
+    assert_eq!(acct_rows(&place.state).len(), rows, "起こさない（登録 row は増えない）");
+    assert!(lock.exists(), "他の手の lock は外さない");
+    fs::remove_file(&lock).ok();
+    let record = move_groups_dir(&root).join(format!("{MOVE_GROUP}.account"));
+    fs::remove_file(&record).ok();
+    fs::create_dir_all(&record).ok();
+    move_assert_quiet(&place, &move_noop("group-unreadable"));
+}
+
+/// (e) 記録の口座 = row の口座（移動済み）／群に属さない anchor／記録なしで種 = row → §2 の列のまま（`stamp-recent`・黙った席は
+/// `inject`・どちらも `move=- launched=-`）。
+#[test]
+fn seat_tick_move_leaves_the_list_unchanged_when_the_row_matches_or_the_anchor_is_outside() {
+    let root = tmp();
+    let place = move_place(&root, "state", MOVE_ANCHOR);
+    move_assert_quiet(&place, &format!("decision=noop target={TICK_SEAT} reason=stamp-recent pointer=wait:0 step=0 consumed=-{TICK_NO_MOVE}\n"));
+    move_record(&root, MOVE_A);
+    move_assert_quiet(&place, &format!("decision=noop target={TICK_SEAT} reason=stamp-recent pointer=wait:0 step=0 consumed=-{TICK_NO_MOVE}\n"));
+    let seat = seat_dir_of(&place.state, TICK_SEAT);
+    fs::write(state_file(&seat), format!("{}\n", stamp_line("idle", "Stop", unix_now() - TICK_STALE - 60, "sid-move"))).ok();
+    let out = move_run(&place);
+    assert_eq!(stdout_of(&out), tick_inject(0), "記録と一致する黙った席は合図: stderr={}", stderr_of(&out));
+    let outside = tmp();
+    let other = move_place(&outside, "state", "/elsewhere");
+    move_record(&outside, MOVE_B);
+    move_assert_quiet(&other, &format!("decision=noop target={TICK_SEAT} reason=stamp-recent pointer=wait:0 step=0 consumed=-{TICK_NO_MOVE}\n"));
+    assert!(!move_groups_dir(&outside).join("lock").exists(), "群に属さない席は lock も取らない");
+}
+
+/// (f) 親を共有する 2 つの置き場に 1 席ずつ（群の置き場 2 つ）・記録は親の下の 1 file → 両方の tick が `move=exit`（置き場を
+/// 跨いで同じ記録を読む＝別 project の席も移る）。
+#[test]
+fn seat_tick_move_reaches_seats_in_two_state_dirs_under_one_parent() {
+    let root = tmp();
+    let one = move_place(&root, "one", MOVE_ANCHOR);
+    let two = move_place(&root, "two", MOVE_ANCHOR_TWO);
+    move_record(&root, MOVE_B);
+    for place in [&one, &two] {
+        let out = move_run(place);
+        assert_eq!(stdout_of(&out), move_line("exit", "false", "-"), "stderr={}", stderr_of(&out));
+        assert_eq!(move_keys(place).first(), Some(&format!("send-keys -t {TICK_TARGET} -l /exit")), "/exit を送る");
+        assert_eq!(move_injections(place).len(), 1, "置き場ごとに記録 1 行");
+    }
 }
 
 // ─────────────────── tick の unit（seat-heartbeat.md §3・契約表の行 b・`s2-07l.583`・接頭辞 `seat_unit_`） ───────────────────
