@@ -17,7 +17,7 @@ use super::*;
 /// 期待する導出行（穴を埋める前・`launch` の row に載る形）。
 fn launch_derived(place: &AcctPlace) -> String {
     format!(
-        "CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR={{account_dir}} claude --plugin-dir {} --plugin-dir {} --plugin-dir {} {} {}",
+        "CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1 CLAUDE_CONFIG_DIR={{account_dir}} claude --plugin-dir {} --plugin-dir {} --plugin-dir {} {} {}",
         launch_plugin_root(place), LAUNCH_PLUGINS[0], LAUNCH_PLUGINS[1], LAUNCH_ARGS[0], LAUNCH_ARGS[1]
     )
 }
@@ -220,8 +220,8 @@ fn seat_launch_restore_is_sent_once_after_session_start() {
 
 /// (g) 起動行は登録 row の anchor への `cd` を先頭に前置する（`s2-07l.324`・account-lifecycle.md §4・C3「真実は row の anchor」）:
 /// pane の shell の cwd が anchor でない（host の再起動後の復元で home に戻った pane の形）まま `seat launch --anchor <dir>` で
-/// 起こすと、席の記録の起動行はちょうど `cd '<anchor>' && CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR=<l2> claude …`
-/// （cd → agent view の env → claude の順）で、効果でも測る: 起こした偽 claude の cwd（pane の前面 process の cwd）は anchor。
+/// 起こすと、席の記録の起動行はちょうど `cd '<anchor>' && CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1
+/// CLAUDE_CONFIG_DIR=<l2> claude …`（cd → agent view と調査の env → claude の順）で、効果でも測る: 起こした偽 claude の cwd（pane の前面 process の cwd）は anchor。
 /// 登録 row の `launch`（雛形）と偽 claude の argv に `cd` は載らない（雛形不変・`--plugin-dir` の列も不変）。base は pane の
 /// cwd のまま起こす（RED）。
 #[test]

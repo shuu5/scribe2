@@ -264,6 +264,7 @@
   3. **runner / lens の起動（headless）は触らない**（`-p` の周に調査は出ない・`AGENT_VIEW_ENV` の headless 側の使い方は不変）。
   4. **dialog の読み手（§4 形 4・`EXIT_DIALOG_ROW`）は触らない**（調査が出なくなれば既知の 1 形で足りる・出た周は今まで通り `input-unknown`）。
 - 触らない: 起動行の他の語・`--resume` と初手の carry（§10）・雛形・headless・dialog の読み手。
+- 着地（行 n）: 名は `crates/scribe2/src/headless/mod.rs` の `FEEDBACK_SURVEY_ENV`（`AGENT_VIEW_ENV` の隣・値は `AGENT_VIEW_OFF` の `1` を共有）。前置の関数 `with_agent_view_off` は 1 本のまま 2 語を足し、器の導出行（`derive_launch`・登録 row に載る形）も同じ 2 語で始まる。agent view の 1 語だけで始まる前の世代の登録 row の行は、その 1 語を 2 語に置き換える（agent view を二重にしない）。
 - 却下: 調査の dialog の形を読んで閉じる（読む形が増える・調査の字面は claude の版で変わる）／`input-unknown` が N 周続いたら Enter を送る（読めない画面へ盲目に鍵・fail-open）／settings の json に書く（env 1 語で足りる・trust の json は持ち主の設定 dir を書く重い口）。
 - 歯（起動行の先頭は `crates/scribe2-boundary/tests/e2e/seat.rs` の helper `acct_launch_prefix` と `crates/scribe2-boundary/tests/e2e/seat/launch.rs` の先頭の定数が pin し、`seat_launch_creates_the_window` / `seat_launch_injects_cd` / `seat_entry_same_window` の 3 本がそれを読む＝helper と定数を 2 語に書き換えると 3 本が base で赤くなる。lib は `crates/scribe2/src/seat/cycle/launch.rs` の中の `seat_agent_view_off_` 接頭辞の既存の歯を 2 語に書き換える）: (a) 起動行の先頭が `cd '<anchor>' && CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1 CLAUDE_CONFIG_DIR={account_dir} claude`（base では 3 語 ＝ RED）(b) 既に 2 語で始まる行は二重にしない (c) 空は空 (d) headless の起動行は不変（`crates/scribe2-boundary/tests/e2e/headless.rs` の既存の歯・触らない）。
 

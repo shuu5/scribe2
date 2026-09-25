@@ -13,7 +13,7 @@ use super::{
 use crate::fleet::select::{Model, NoCandidate, Selection};
 use crate::fleet::store;
 use crate::fleet::{replay, Registration};
-use crate::headless::{ACCOUNT_ENV, AGENT_VIEW_ENV, AGENT_VIEW_OFF, DEFAULT_CLAUDE};
+use crate::headless::{ACCOUNT_ENV, AGENT_VIEW_ENV, AGENT_VIEW_OFF, DEFAULT_CLAUDE, FEEDBACK_SURVEY_ENV};
 use crate::hook::{seat_name, InjectionRecord, SCHEMA};
 use crate::invocation::Invocation;
 use crate::name::PLUGIN_DIR;
@@ -56,17 +56,20 @@ pub fn fill_launch(template: &str, account_dir: &str) -> Result<String, Holes> {
     }
 }
 
-/// 起動行の先頭に agent view を切る env（`CLAUDE_CODE_DISABLE_AGENT_VIEW=1 `）を前置する（pure・設計 account-autonomy.md
-/// §5「agent view の前提」・`s2-07l.239`）。器が起こす claude は常に agent view 無しで動く——有効な session は background
-/// work が残る周の `/exit` で dialog を出して止まり、器は描画を読まない（C3.3）ので答えられない。雛形は user の物で
-/// 書き換えず（[`fill_launch`] は不変）、子へ設定するだけで env は読まない（C2.2）。既に同じ前置で始まる行は二重にせず、
-/// 空の行はそのまま返す。
+/// 起動行の先頭に agent view と feedback の調査を切る env の 2 語（`CLAUDE_CODE_DISABLE_AGENT_VIEW=1
+/// CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1 `・順は固定）を前置する（pure・設計 account-autonomy.md §5「agent view の前提」・
+/// `s2-07l.239`・seat-heartbeat.md §11・`s2-07l.634`）。器が起こす claude は常に agent view 無しで動く——有効な session は background
+/// work が残る周の `/exit` で dialog を出して止まり、器は描画を読まない（C3.3）ので答えられない。調査の dialog も同じ理由で出させない。
+/// 雛形は user の物で書き換えず（[`fill_launch`] は不変）、子へ設定するだけで env は読まない（C2.2）。既に同じ前置で始まる行は
+/// 二重にせず（agent view の 1 語だけで始まる前の世代の行は、その 1 語を 2 語に置き換える）、空の行はそのまま返す。
 pub fn with_agent_view_off(line: &str) -> String {
-    let prefix = format!("{AGENT_VIEW_ENV}={AGENT_VIEW_OFF} ");
-    if line.trim().is_empty() || line.trim_start().starts_with(&prefix) {
+    let view = format!("{AGENT_VIEW_ENV}={AGENT_VIEW_OFF} ");
+    let prefix = format!("{view}{FEEDBACK_SURVEY_ENV}={AGENT_VIEW_OFF} ");
+    let head = line.trim_start();
+    if line.trim().is_empty() || head.starts_with(&prefix) {
         return line.to_owned();
     }
-    format!("{prefix}{line}")
+    format!("{prefix}{}", head.strip_prefix(&view).unwrap_or(line))
 }
 
 /// 起動行の先頭に登録 row の anchor への `cd '<anchor>' && ` を前置する（pure・account-lifecycle.md §4・`s2-07l.324`）。
@@ -138,7 +141,7 @@ pub fn single_model(line: &str) -> Result<(), &'static str> {
 }
 
 /// 起動行の導出（**pure**・設計 account-lifecycle.md §4・ADR-0026 §2.3）:
-/// `CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR={account_dir} claude [--model <別名> --effort <値>] --plugin-dir <anchor>/<PLUGIN_DIR> [--plugin-dir <dir>…] [<value>…]`。
+/// `CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1 CLAUDE_CONFIG_DIR={account_dir} claude [--model <別名> --effort <値>] --plugin-dir <anchor>/<PLUGIN_DIR> [--plugin-dir <dir>…] [<value>…]`。
 ///
 /// 穴は [`HOLE`] の 1 つだけ（[`fill_launch`] / [`Holes`] は不変）。`claude` は語（shell の PATH が解く・器は claude の
 /// 場所を持たない）。`defaults` が在れば `claude` の直後に運ぶ（[`with_defaults`]・登録 row の雛形は `None`＝旗無し）。器自身の plugin は
@@ -147,6 +150,7 @@ pub fn single_model(line: &str) -> Result<(), &'static str> {
 pub fn derive_launch(anchor: &Path, plugins: &[PluginDir], args: &[LaunchArg], defaults: Option<RoleDefaults>) -> String {
     let mut words = vec![
         format!("{AGENT_VIEW_ENV}={AGENT_VIEW_OFF}"),
+        format!("{FEEDBACK_SURVEY_ENV}={AGENT_VIEW_OFF}"),
         format!("{ACCOUNT_ENV}={HOLE}"),
         DEFAULT_CLAUDE.to_owned(),
         "--plugin-dir".to_owned(),
@@ -496,7 +500,7 @@ mod tests {
 
     /// (c・形 3・consumer-sync.md §17) 起動行の 1 つ目の `--plugin-dir` は anchor の下の生成 dir（[`super::PLUGIN_DIR`]）で anchor
     /// そのものではなく（**否定の枝**）、2 つ目以降（`[[plugin]]` の dir → `[[launch-arg]]` の value・宣言順）と雛形の形（穴 1 つ・
-    /// 前置の env 2 つ → `claude`）は不変。
+    /// 前置の env 3 つ → `claude`）は不変。
     #[test]
     fn plugin_payload_first_plugin_dir_is_the_generated_dir_under_the_anchor() {
         let host = "schema = 1\n\n[[plugin]]\ndir = \"/opt/p2\"\n\n[[launch-arg]]\nvalue = \"--permission-mode\"\n";
@@ -504,10 +508,14 @@ mod tests {
         let line = derive_launch(Path::new("/repo/main"), manifest.plugins(), manifest.launch_args(), None);
         let words: Vec<&str> = line.split(' ').collect();
         let payload = Path::new("/repo/main").join(super::PLUGIN_DIR).display().to_string();
-        assert_eq!(words.get(..3), Some(&["CLAUDE_CODE_DISABLE_AGENT_VIEW=1", "CLAUDE_CONFIG_DIR={account_dir}", "claude"][..]), "{line}");
-        assert_eq!(words.get(3..5), Some(&["--plugin-dir", payload.as_str()][..]), "1 つ目は anchor の下の生成 dir: {line}");
-        assert_ne!(words.get(4).copied(), Some("/repo/main"), "anchor そのものではない: {line}");
-        assert_eq!(words.get(5..), Some(&["--plugin-dir", "/opt/p2", "--permission-mode"][..]), "2 つ目以降は宣言順のまま: {line}");
+        assert_eq!(
+            words.get(..4),
+            Some(&["CLAUDE_CODE_DISABLE_AGENT_VIEW=1", "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1", "CLAUDE_CONFIG_DIR={account_dir}", "claude"][..]),
+            "{line}"
+        );
+        assert_eq!(words.get(4..6), Some(&["--plugin-dir", payload.as_str()][..]), "1 つ目は anchor の下の生成 dir: {line}");
+        assert_ne!(words.get(5).copied(), Some("/repo/main"), "anchor そのものではない: {line}");
+        assert_eq!(words.get(6..), Some(&["--plugin-dir", "/opt/p2", "--permission-mode"][..]), "2 つ目以降は宣言順のまま: {line}");
         assert_eq!(line.matches(HOLE).count(), 1, "穴は 1 つ");
         assert_eq!(line.matches(&format!("/{}", super::PLUGIN_DIR)).count(), 1, "生成 dir を足すのは 1 つ目の語だけ: {line}");
     }
@@ -524,27 +532,27 @@ mod tests {
         let line = derive_launch(Path::new("/repo/main"), manifest.plugins(), manifest.launch_args(), None);
         assert_eq!(
             line,
-            "CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR={account_dir} claude --plugin-dir /repo/main/plugin \
+            "CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1 CLAUDE_CONFIG_DIR={account_dir} claude --plugin-dir /repo/main/plugin \
              --plugin-dir /opt/p2 --plugin-dir /opt/p1 --permission-mode bypassPermissions",
             "宣言順（p2 → p1・--permission-mode → bypassPermissions）"
         );
         assert_eq!(line.matches(HOLE).count(), 1, "穴は 1 つ");
         assert_eq!(
             fill_launch(&line, "/state/accounts/a2").as_deref(),
-            Ok("CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR=/state/accounts/a2 claude --plugin-dir /repo/main/plugin \
+            Ok("CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1 CLAUDE_CONFIG_DIR=/state/accounts/a2 claude --plugin-dir /repo/main/plugin \
                 --plugin-dir /opt/p2 --plugin-dir /opt/p1 --permission-mode bypassPermissions"),
             "穴は既存の fill_launch で埋まる"
         );
         assert_eq!(with_agent_view_off(&line), line, "前置は既に在る（二重にしない）");
         let bare = derive_launch(Path::new("/repo/main"), &[], &[], None);
-        assert_eq!(bare, "CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR={account_dir} claude --plugin-dir /repo/main/plugin");
+        assert_eq!(bare, "CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1 CLAUDE_CONFIG_DIR={account_dir} claude --plugin-dir /repo/main/plugin");
         // 既定の対（C10・§20 の約束 1）: `claude` の直後に `--model <別名>` → `--effort <値>` の順で 1 つずつ・None は従来の行と同一・
         // 雛形へ挟むのも同じ位置（`claude` の語が無い雛形は末尾）・旗ごとに 2 つの行だけを旗ごとの理由で断る（約束 2）。
         let pair = RoleDefaults { model: Model::Fable, effort: Effort::High };
         let fable = derive_launch(Path::new("/repo/main"), &[], &[], Some(pair));
         assert_eq!(
             fable,
-            "CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR={account_dir} claude --model fable --effort high --plugin-dir /repo/main/plugin"
+            "CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1 CLAUDE_CONFIG_DIR={account_dir} claude --model fable --effort high --plugin-dir /repo/main/plugin"
         );
         assert_eq!(with_defaults(&bare, Some(pair)), fable, "導出の後に運んでも同じ行");
         assert_eq!(
@@ -607,22 +615,30 @@ mod tests {
         assert_eq!(seat_defaults(&good, role, Some(Model::Opus)), Err(REASON_MODEL_MISMATCH), "食い違いは断る");
         assert_eq!(
             seat_defaults(&good, role, None).map(|found| derive_launch(Path::new("/r"), &[], &[], Some(found))).as_deref(),
-            Ok("CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR={account_dir} claude --model fable --effort high --plugin-dir /r/plugin"),
+            Ok("CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1 CLAUDE_CONFIG_DIR={account_dir} claude --model fable --effort high --plugin-dir /r/plugin"),
             "読める周だけ起動行を組む"
         );
     }
 
-    /// 起動行の先頭に agent view を切る env を 1 つだけ前置する: 行の中身は変えず、既に前置済みの行は二重にせず、空の行は
-    /// そのまま（契約 (c)・`s2-07l.239`）。
+    /// 起動行の先頭に agent view と feedback の調査を切る env の 2 語を 1 度だけ前置する: 行の中身は変えず、既に前置済みの行は
+    /// 二重にせず、agent view の 1 語だけで始まる前の世代の行は 2 語に置き換え、空の行はそのまま（契約 (c)・`s2-07l.239`・
+    /// seat-heartbeat.md §11 行 n の (b) / (c)）。
     #[test]
     fn seat_agent_view_off_prefix_is_single_and_keeps_blank_lines() {
         let line = "CLAUDE_CONFIG_DIR=/state/accounts/a2 claude --resume";
         let once = with_agent_view_off(line);
-        assert_eq!(once, "CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR=/state/accounts/a2 claude --resume");
+        assert_eq!(once, "CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1 CLAUDE_CONFIG_DIR=/state/accounts/a2 claude --resume");
         assert_eq!(with_agent_view_off(&once), once, "前置済みの行は二重にしない");
+        assert_eq!(once.matches("CLAUDE_CODE_DISABLE_AGENT_VIEW=1").count(), 1, "agent view の語は 1 つ: {once}");
+        assert_eq!(once.matches("CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1").count(), 1, "調査の語は 1 つ: {once}");
+        assert_eq!(
+            with_agent_view_off(&format!("CLAUDE_CODE_DISABLE_AGENT_VIEW=1 {line}")),
+            once,
+            "agent view の 1 語だけの前の世代の行は 2 語に置き換える（agent view を二重にしない）"
+        );
         assert_eq!(
             with_agent_view_off("sh l.sh /state/accounts/a2"),
-            "CLAUDE_CODE_DISABLE_AGENT_VIEW=1 sh l.sh /state/accounts/a2",
+            "CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1 sh l.sh /state/accounts/a2",
             "env で始まらない雛形にも前置する"
         );
         assert_eq!(with_agent_view_off(""), "", "空の行はそのまま");
@@ -636,7 +652,7 @@ mod tests {
     fn seat_launch_anchor_cd_prefix_is_single_and_keeps_blank_lines() {
         let line = with_agent_view_off("CLAUDE_CONFIG_DIR=/state/accounts/a2 claude --plugin-dir /repo/main");
         let once = with_anchor_cd(&line, "/repo/main");
-        assert_eq!(once, "cd '/repo/main' && CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR=/state/accounts/a2 claude --plugin-dir /repo/main");
+        assert_eq!(once, "cd '/repo/main' && CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1 CLAUDE_CONFIG_DIR=/state/accounts/a2 claude --plugin-dir /repo/main");
         assert_eq!(with_anchor_cd(&once, "/repo/main"), once, "前置済みの行は二重にしない");
         assert_eq!(with_anchor_cd("sh l.sh /state/accounts/a2", "/repo/acct"), "cd '/repo/acct' && sh l.sh /state/accounts/a2", "env で始まらない雛形にも前置する");
         assert_eq!(with_anchor_cd("", "/repo/main"), "", "空の行はそのまま");

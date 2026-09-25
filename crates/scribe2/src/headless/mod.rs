@@ -163,6 +163,9 @@ pub const AGENT_VIEW_ENV: &str = "CLAUDE_CODE_DISABLE_AGENT_VIEW";
 /// [`AGENT_VIEW_ENV`] に設定する値（agent view off）。
 pub const AGENT_VIEW_OFF: &str = "1";
 
+/// 席の起動行だけが [`AGENT_VIEW_ENV`] の隣に前置する feedback の調査を切る env（seat-heartbeat.md §11・値は [`AGENT_VIEW_OFF`] と同じ `1`・headless は設定しない）。
+pub const FEEDBACK_SURVEY_ENV: &str = "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY";
+
 /// 判定に届かなかった周の 1 行（lens の既定）。
 pub const INCONCLUSIVE_HEAD: &str = r#"{"verdict":"INCONCLUSIVE","evidence":"#;
 

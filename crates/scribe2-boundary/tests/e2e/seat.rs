@@ -809,9 +809,10 @@ fn acct_rows(state: &Path) -> Vec<vessel::fleet::Registration> {
 }
 
 /// 立て直しと起動の起動行の前置（`s2-07l.324`・account-lifecycle.md §4）: `cd '<row の anchor>' && ` が agent view の env より
-/// **前**に来る＝`cd … && CLAUDE_CODE_DISABLE_AGENT_VIEW=1 <tail>`。`tail` は前置の後の字面の先頭（雛形か `CLAUDE_CONFIG_DIR=`）。
+/// **前**に来る＝`cd … && CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1 <tail>`（env の 2 語は
+/// この順・seat-heartbeat.md §11 行 n）。`tail` は前置の後の字面の先頭（雛形か `CLAUDE_CONFIG_DIR=`）。
 fn acct_launch_prefix(anchor: &str, tail: &str) -> String {
-    format!("cd '{anchor}' && CLAUDE_CODE_DISABLE_AGENT_VIEW=1 {tail}")
+    format!("cd '{anchor}' && CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1 {tail}")
 }
 
 /// pane が `ready` を満たすまで待つ（上限 [`PROMPT_WAIT`]）。
@@ -1004,11 +1005,12 @@ fn launch_plugin_root(place: &AcctPlace) -> String {
     place.dir.join("anchor").join(PLUGIN_DIR).display().to_string()
 }
 
-/// 期待する偽 claude の記録（argv を 1 語 1 行・続けて env の 2 行）。
+/// 期待する偽 claude の記録（argv を 1 語 1 行・続けて env の 3 行）。
 fn launch_expected_argv(place: &AcctPlace, label: &str) -> String {
     let account_dir = place.state.join("accounts").join(label).display().to_string();
     format!(
-        "--plugin-dir\n{}\n--plugin-dir\n{}\n--plugin-dir\n{}\n{}\n{}\nenv:CLAUDE_CONFIG_DIR={account_dir}\nenv:CLAUDE_CODE_DISABLE_AGENT_VIEW=1\n",
+        "--plugin-dir\n{}\n--plugin-dir\n{}\n--plugin-dir\n{}\n{}\n{}\nenv:CLAUDE_CONFIG_DIR={account_dir}\nenv:CLAUDE_CODE_DISABLE_AGENT_VIEW=1\n\
+         env:CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1\n",
         launch_plugin_root(place), LAUNCH_PLUGINS[0], LAUNCH_PLUGINS[1], LAUNCH_ARGS[0], LAUNCH_ARGS[1]
     )
 }
@@ -1033,7 +1035,8 @@ fn launch_shims(place: &AcctPlace, target: &str) -> String {
     let file = state_file(&seat);
     let claude = format!(
         "#!/bin/sh\nmkdir -p '{seat}'\nprintf '%s\\n' \"$@\" >> '{launched}'\n\
-         printf 'env:CLAUDE_CONFIG_DIR=%s\\nenv:CLAUDE_CODE_DISABLE_AGENT_VIEW=%s\\n' \"$CLAUDE_CONFIG_DIR\" \"$CLAUDE_CODE_DISABLE_AGENT_VIEW\" >> '{launched}'\n\
+         printf 'env:CLAUDE_CONFIG_DIR=%s\\nenv:CLAUDE_CODE_DISABLE_AGENT_VIEW=%s\\nenv:CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=%s\\n' \
+         \"$CLAUDE_CONFIG_DIR\" \"$CLAUDE_CODE_DISABLE_AGENT_VIEW\" \"$CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY\" >> '{launched}'\n\
          cp '{events}' '{seen}' 2>/dev/null\nprintf '\u{276f} '\n{start}\n\
          while read -r line; do printf '%s\\n' \"$line\" >> '{log}'; {busy}; {stop}; printf '\u{276f} '; done\n",
         seat = seat.display(),
