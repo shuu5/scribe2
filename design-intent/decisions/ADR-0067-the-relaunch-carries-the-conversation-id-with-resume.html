@@ -457,6 +457,9 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
   },
   "@id": "./ADR-0067-the-relaunch-carries-the-conversation-id-with-resume.html",
   "@type": "schema:TechArticle",
+  "dc:isReferencedBy": [
+    { "@id": "./ADR-0068-the-signal-ladder-is-a-list-and-live-runs-do-not-block-group-moves.html" }
+  ],
   "dc:isPartOf": [
     {
       "@id": "./README.html"
@@ -682,6 +685,7 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 <!-- folio:chrome-bottom -->
 <nav class="prevnext" aria-label="前後の文書">
   <a class="prevnext__prev" href="ADR-0066-the-management-tick-fires-the-group-move-judgement.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">管理 tick が群の移動の判定を撃つ — dispatch の 1 周の群の段と同じ 1 本の判定 (逼迫の読み → 移り先 → 記録 → 承認 event) を、 席ごとの管理 tick が host の lock の内側で群ごとに鮮度の窓に 1 回まで撃ち、 便の無い host でも群が移る。 判定は 1 本に切り出して周と tick が同じ 1 本を呼び、 退避と起こし直しは便の終端の周の群の段 (自分の置き場の席) と各席の tick の移動の門 (他の置き場の席) が撃ち、 dispatch の 1 周を timer で撃たない線は保つ (ADR-0055 の契機の部分を supersede・要件 FR38 の改訂を伴う)</span></a>
+  <a class="prevnext__next" href="ADR-0068-the-signal-ladder-is-a-list-and-live-runs-do-not-block-group-moves.html"><span class="prevnext__dir">次 &rarr;</span><span class="prevnext__title">合図の梯子は列で持ち、 群の移り先は終端でない段の便が使う口座も候補にし、 追随で戻った便も列が起こし直す — 管理 tick の合図の待ちは rules 行 1 本の秒の列 (係数と上限の行は退役)、 群の移動の判定は稼働中の便の口座を候補から外さず便用の口座選定が群の今の口座を外し、 追随で Implemented へ戻って所有者の印を失った便は dispatcher の 5 種目として resume で起こす (ADR-0058 の backoff の式と rules 行 4 本・ADR-0049 / ADR-0055 の移り先の「便が使っていない」の条件を部分 supersede・要件 FR27 / FR38 / FR68 と AC18 / AC38 / AC41 の改訂を伴う)</span></a>
 </nav>
 <script>
 (function () {

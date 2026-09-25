@@ -377,7 +377,7 @@ user-scope MCP 設定の同期・別口座への `--resume` の混線 fence・pr
 
 やさしく言うと: 群が口座を移るとき、器は「他の群の今の口座」「閾値以上の口座」に加えて「この置き場で走っている便が使っている口座」も候補から外している。持ち主の整理は違う: 稼働中の便は移動を妨げなくてよく、移り先に選ばれた口座で**新しい便が起きないこと**だけが要る。後者は §23 が既に持つ（便の選定は群の記録の口座を外す・記録は移り先が決まった瞬間に lock の内側で書かれる）。しかも置き場は repo ごとなので他の repo の便はもともと見えず、同じ repo の便にだけ余計に厳しい非対称になっていた。5 口座 2 群で便が走る host では「候補なし」が増えるだけなので、除外を外して統一する。
 
-- 出所: 持ち主の 2026-09-25T15:19Z の問い（群の排他の整理）と 15:2xZ の裁定「外す」（逐語は台帳・契約の bead の notes）。
+- 出所: 持ち主の 2026-09-25T15:19Z の問い（群の排他の整理）と 15:2xZ の裁定「外す」（逐語は台帳・契約の bead の notes）・裁定の記録は ADR-0068（ADR-0049 / ADR-0055 の移り先の条件を部分 supersede・要件 FR38 / AC41・SRS v0.24）。
 - 現物（verified・main 6fcd3d5）:
   - 候補の規則は §20 形 5（`crates/scribe2/src/pipe/dispatch/group.rs` の `target_of`: 今の口座でなく・他の群の今の口座でなく・退役中でなく・**1 周の置き場の live 便が使っていない**〔`crates/scribe2/src/fleet/replay.rs` の `inflight_by_account`〕・3 窓とも閾値未満）。seat-heartbeat.md 行 i の着地後はこの規則は `crates/scribe2/src/hook/group.rs` の判定の 1 本の中に在る（本行はその後に撃つ・write-set は両 file）。
   - 新規の便の除外は §23（`crates/scribe2/src/rules/mod.rs` の `grouped_accounts` が各群の今の口座〔記録 > 種〕を返し、`crates/scribe2/src/pipe/ratelimit.rs` と `crates/scribe2/src/fleet/cli.rs` の便用の選定が外す）。記録は §20 形 6 の執行が lock の内側で先に書く＝選定の後は新しい便がその口座で起きない。
@@ -389,7 +389,7 @@ user-scope MCP 設定の同期・別口座への `--resume` の混線 fence・pr
   4. **判定行・event・通知・記録の形は不変**。候補なしの内訳（§25 の `excluded` / `unmeasured` / `limited`）から live の理由が消える（§25 の内訳の語に live 便の項が在れば消す・無ければ不変）。
 - 触らない: §23 の便用の除外・§20 形 6 の執行の順・lock・記録の形・承認 event・退避と起こし直し・§25 の内訳の 3 欄の形。
 - 却下: 便の側で「群の今の口座で走っている便を止めて別口座で再開する」（便の途中再開は別の要件 FR37 の道・移動と結ばない）／移り先の記録を便の選定が lock の内側で読む（隙間は稼働中の便 1 本が新しい口座で走り出すだけ＝持ち主の整理では害が無い・lock の読み手を増やさない）／置き場を跨いで live 便を集める（置き場ごとの event log の原則を崩す・要らない）。
-- 歯（`crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs`・`pipe_dispatch_group_move_` 接頭辞の既存の fixture）: (a) `pipe_dispatch_group_move_skips_an_account_used_by_a_live_run` を「live 便の在る口座へも移る」の歯に書き換える（名も改める・live あり / なしの両方で同じ移り先＝base では live ありが次の候補へ飛ぶ ＝ RED）(b) 移った直後の便用の選定（`fleet select` の口・§23 の既存の歯の fixture）がその口座を外す（不変・GREEN のまま・本行の証拠として名指す）(c) 既存の `pipe_dispatch_group_` の他の歯は 1 字も変えず GREEN。
+- 歯（`crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs`・`pipe_dispatch_group_move_` 接頭辞の既存の fixture）: (a) `pipe_dispatch_group_move_skips_an_account_used_by_a_live_run` を「live 便の在る口座へも移る」の歯に書き換える（名も改める・live あり / なしの両方で同じ移り先＝base では live ありが次の候補へ飛ぶ ＝ RED）(b) 移った直後の便用の選定（`fleet select` の口・§23 の既存の歯の fixture・fleet.rs）がその口座を外す（不変・GREEN のまま・write-set の外なので verify では撃たず CI の全数で測る）(c) 既存の `pipe_dispatch_group_` の他の歯は 1 字も変えず GREEN（verify の filter は `pipe_dispatch_group_` の全体で (a) と (c) を撃つ）。
 
 ## 28. 群の種は宣言順に重ならない — 記録の無い群の今の口座（種）を「宣言順で前の群の種でない最初の候補」にし、両群が同じ候補の列を宣言しても初期状態で同じ口座に乗らない（契約表の行 q・§20 形 2 の改め・同じ裁定の周）
 
@@ -569,7 +569,7 @@ title = "稼働中の便は群の移動を妨げない — 移り先の候補か
 req = ["FR38", "FR36", "NFR4"]
 section = "27"
 write-set = ["crates/scribe2/src/hook/group.rs", "crates/scribe2/src/pipe/dispatch/group.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "docs/design/account-lifecycle.md"]
-verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_group_move_"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_group_"]
 size = "S"
 growth = ["crates/scribe2/src/hook/group.rs:0", "crates/scribe2/src/pipe/dispatch/group.rs:0"]
 depends = ["l"]

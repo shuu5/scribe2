@@ -226,7 +226,7 @@
 
 やさしく言うと: 2026-09-25 の移動で 3 つが見えた。(1) 起こし直した席は会話が戻るだけで、次の合図（40 分後）まで黙る。(2) 合図の間隔は「初段 × 2^n」の等比で、持ち主が望む切りのよい列（30 分 → 1 時間 → 3 時間 → 6 時間 → 12 時間 → 24 時間 → 停止）が書けない。(3) turn が usage の上限の error で終わると Stop の打刻が無く Busy が残り、tick は打刻を移動の門より先に読むので /exit を送れず席が 2 時間半移らなかった（memo `s2-07l.635`）。持ち主の裁定 2026-09-25T14:32Z（初手は起動行に積む）/ 14:39Z（梯子は列を明示する rules 行 1 本・tick の周期は 15 秒）/ 14:4xZ（上限で終わった席にも /exit は届くべき＝台帳 `s2-07l.635` の notes に逐語）。
 
-- 出所: 台帳 `s2-07l.635`（事象と原因の連鎖）・§7 形 3（起こし直しの carry）・§2 形 5（rules 行 4 本）・§4 形 4（移動の門）。
+- 出所: 台帳 `s2-07l.635`（事象と原因の連鎖）・§7 形 3（起こし直しの carry）・§2 形 5（rules 行 4 本）・§4 形 4（移動の門）・行 k の裁定の記録は ADR-0068（ADR-0058 の式と rules 行 4 本を部分 supersede・要件 FR27 / AC18・SRS v0.24）。
 - 現物（verified・main 087f1df）:
   - 起こし直しの起動行は §7 形 3 の 1 本（`crates/scribe2/src/seat/state.rs` の `resume_carry`・`--resume <sid>` の 2 語か空）を tick の `wake` と群の段の `relaunch` が `carry` に運び、起動の 1 本（`crates/scribe2/src/seat/cycle/launch.rs` の `with_tail`）が行の末尾に語を空白で足して pane へ打つ（shell が読む 1 行＝引用は呼び手の責任）。
   - 梯子の待ちは `crates/scribe2/src/seat/tick.rs` の `Pace`（`stale_s` × `factor` ^ 段・上限 `max_s` を超える段は送らない）で、rules 行は `seat.tick_interval_s`（60）/ `seat.tick_stale_s`（2400・初段の待ち・黙りの閾値・Busy の古さの 3 役）/ `seat.pointer_backoff_factor`（2）/ `seat.pointer_backoff_max_s`（86400）。埋め込み manifest は rows=70 kinds=68。tick 1 回の実測は wall 0.05 秒・CPU 0.04 秒・RSS 29 MB（fleet の event log 6 MB・2.7 万行の replay が主）。
@@ -387,7 +387,7 @@ done = "(1) carry の読み手（§7 形 3 の 1 本）が --resume <sid>（打�
 
 [[contract]]
 id = "k"
-title = "梯子の列と周期 — rules 行 seat.pointer_ladder_s（秒の文字列の列・非空・昇順）を足し factor / max の行を退役、tick_stale_s を 1800・tick_interval_s を 15 に（§10 形 5〜7・裁定 2026-09-25T14:39Z）"
+title = "梯子の列と周期 — rules 行 seat.pointer_ladder_s（秒の文字列の列・非空・昇順）を足し factor / max の行を退役、tick_stale_s を 1800・tick_interval_s を 15 に（§10 形 5〜7・裁定 2026-09-25T14:39Z・ADR-0068）"
 req = ["FR27", "FR43", "FR44", "AC18", "NFR4"]
 section = "10"
 touches = ["crate::rules::RuleKind"]

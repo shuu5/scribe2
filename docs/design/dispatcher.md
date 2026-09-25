@@ -343,7 +343,7 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
 
 やさしく言うと: gate を通った便が着地の順番待ちで main に追随し、衝突を runner が解いて段が Implemented に戻った後、flag の無い driver（`pipe resume`・1 段だけ進める形）は設計どおりそこで抜ける。その便を拾う枝が dispatcher に無く、誰も gate を撃たないまま列の鍵も持ち続ける（2026-09-25 の実測: 2 時間 40 分・後続は 90 分の待ちを丸ごと食った）。regate で戻された便を拾う §23 の枝と同じ型の穴なので、同じ絞りで 4 枝目を足す。
 
-- 出所: 台帳 `s2-07l.633`（便 s2-07l.614-20260925T040409Z の実測）。
+- 出所: 台帳 `s2-07l.633`（便 s2-07l.614-20260925T040409Z の実測）・裁定の記録は ADR-0068（要件 FR68 / AC38 の 5 種目・SRS v0.24）。
 - 現物（verified・main dae3b91）:
   - 起こし直しの候補は `crates/scribe2/src/pipe/dispatch.rs` の `revivals`（3 枝: `driver_is_dead`〔札 Dead〕／`passed_gate`〔Gated ∧ PASS ∧ 札 Absent | Dead〕／`regated`〔Implemented ∧ 最新の Gated より後ろに `regate:` の記帳 ∧ 札 Absent | Dead〕・後の 2 枝は `gated` の周だけ）。起こす argv は `resume --run <id> … --drive`（1 本が組む・`DRIVE` を末尾に足す）。
   - 追随の記帳は `crates/scribe2/src/pipe/follow_step.rs`（`RunStage` 段 Implemented・`detail` = `rebase:<base>..<main>`）と `crates/scribe2/src/pipe/follow.rs`（衝突の起こし直し・`rebase-conflict:` / `rebase-stale-rows:`・読み手 `is_conflict` は接頭辞 2 語）。
@@ -357,7 +357,7 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
   5. **型も字面も足さない**（§23 形 6 と同じ）: `Revive` に理由の field を足さない・`WaitReason` / `Stage` / `EventKind` の変種は増えない・1 周の行と `dispatch ls` の行は不変。
 - 触らない: 列の鍵と `turn_skipping`（§36・Dead だけ外す規則はそのまま＝4 枝目が次の周で driver を戻せば鍵は着地で自然に離れる・memo の候補 2 は要らない〔C17 の 1 段目〕）・flag の無い `pipe resume`（手動の 1 段進めは席の道具として残す）・追随と衝突の起こし直しの記帳の字面。
 - 却下: `turn_skipping` を「Absent ∧ Implemented」へ広げる（4 枝目で足りる・列の判定の読みを増やす）／flag の無い resume を禁じる（席の道具）／追随の起こし直しの側で driver を閉じない（flag 無しの driver は 1 段の契約・設計どおり）。
-- 歯（`crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs` に `pipe_dispatch_revive_followed_` 接頭辞・§23 の regated の歯と同じ fixture〔置き場の event log を手で書く・偽 runner〕）: (a) Gated PASS → 追随 `rebase:` の Implemented ∧ 札 Absent → `gated` の周の 1 周で `resumed:1`・argv の末尾が `--drive`（base では `resumed:0` ＝ RED）(b) 追随が `rebase-conflict:` でも同じ (c) 追随の後にもう 1 度 Gated が在る → `resumed:0`（不変）(d) 追随の記帳の無い Implemented ∧ 札 Absent → `resumed:0`（不変）(e) `gated` でない周（手動の 1 周）でも `resumed:1`。lib は `crates/scribe2/src/pipe/regate.rs` の隣の pure な読み手に `followed_since_gate_` 接頭辞（追随あり / なし / 追随の後の Gated の 3 本）。
+- 歯（`crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs` に `pipe_dispatch_revive_followed_` 接頭辞・§23 の regated の歯と同じ fixture〔置き場の event log を手で書く・偽 runner〕）: (a) Gated PASS → 追随 `rebase:` の Implemented ∧ 札 Absent → `gated` の周の 1 周で `resumed:1`・argv の末尾が `--drive`（base では `resumed:0` ＝ RED）(b) 追随が `rebase-conflict:` でも同じ (c) 追随の後にもう 1 度 Gated が在る → `resumed:0`（新しい fixture。既存の歯 `pipe_dispatch_regated_then_gated_and_followed_run_is_left_alone`〔§23 の regate → PASS の gate → follow〕は追随が最新の Gated より後ろなので 4 枝目で `resumed:1` に変わる＝名を「regate の後の追随でも起こす」に改めて `resumed:1` を測る歯に書き換える）(d) 追随の記帳の無い Implemented ∧ 札 Absent → `resumed:0`（不変）(e) `gated` でない周（手動の 1 周）でも `resumed:1`。lib は `crates/scribe2/src/pipe/regate.rs` の隣の pure な読み手に `followed_since_gate_` 接頭辞（追随あり / なし / 追随の後の Gated の 3 本）。
 
 <!-- contracts:begin -->
 schema = 1
@@ -633,5 +633,5 @@ verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail followed_since_gat
 size = "S"
 growth = ["crates/scribe2/src/pipe/dispatch.rs:20", "crates/scribe2/src/pipe/regate.rs:30"]
 depends = ["t"]
-done = "(1) revivals は gated の周に「段 Implemented ∧ 最新の Gated の RunStage より後ろに追随の記帳（detail が rebase: か is_conflict の 2 語で始まる）∧ その後ろに Gated / Landed が無い ∧ 札 Absent | Dead」の便も候補にし、読み手は regate.rs の隣の pure な 1 本（event の列と便 id）で既存の 3 枝と待ちの段の枝は 1 字も変わらない (2) 起こす argv は既存の 1 本（resume … --drive） (3) 追随の後に Gated を経た便・追随の記帳の無い Implemented・札 Live / Unreadable は起こさない (4) gated の絞りと二重にしない規則は §23 と同じ (5) Revive / WaitReason / Stage / EventKind と 1 周の行・dispatch ls の行は不変・turn_skipping は不変 歯: pipe_dispatch_revive_followed_ の歯が (a) Gated PASS → rebase: の Implemented ∧ 札 Absent で gated の周に resumed:1・argv の末尾 --drive（base では resumed:0 ＝ RED）(b) rebase-conflict: でも同じ (c) 追随の後にもう 1 度 Gated で resumed:0 (d) 追随の記帳の無い Implemented で resumed:0 (e) 手動の 1 周でも resumed:1 を測り、lib の followed_since_gate_ が追随あり / なし / 追随の後の Gated を測る"
+done = "(1) revivals は gated の周に「段 Implemented ∧ 最新の Gated の RunStage より後ろに追随の記帳（detail が rebase: か is_conflict の 2 語で始まる）∧ その後ろに Gated / Landed が無い ∧ 札 Absent | Dead」の便も候補にし、読み手は regate.rs の隣の pure な 1 本（event の列と便 id）で既存の 3 枝と待ちの段の枝は 1 字も変わらない (2) 起こす argv は既存の 1 本（resume … --drive） (3) 追随の後に Gated を経た便・追随の記帳の無い Implemented・札 Live / Unreadable は起こさない (4) gated の絞りと二重にしない規則は §23 と同じ (5) Revive / WaitReason / Stage / EventKind と 1 周の行・dispatch ls の行は不変・turn_skipping は不変 歯: pipe_dispatch_revive_followed_ の歯が (a) Gated PASS → rebase: の Implemented ∧ 札 Absent で gated の周に resumed:1・argv の末尾 --drive（base では resumed:0 ＝ RED）(b) rebase-conflict: でも同じ (c) 追随の後にもう 1 度 Gated で resumed:0・既存の regated_then_gated_and_followed の歯は名を改めて resumed:1 に書き換える (d) 追随の記帳の無い Implemented で resumed:0 (e) 手動の 1 周でも resumed:1 を測り、lib の followed_since_gate_ が追随あり / なし / 追随の後の Gated を測る"
 <!-- contracts:end -->
