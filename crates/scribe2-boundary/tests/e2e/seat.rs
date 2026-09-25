@@ -1177,15 +1177,16 @@ fn tick_place(registered: bool) -> TickPlace {
     TickPlace { dir, state, path }
 }
 
-/// 偽 tmux と偽 client を `<dir>/bin` に置き、PATH の字面を返す。偽 tmux は呼出を 1 行残し、`capture-pane` は pane の file を
-/// 返し（file が無ければ rc 1）、`send-keys … -l <text>` は text を入力欄へ足し、`send-keys … Enter` は入力欄を送って新しい
-/// prompt を描く（[`TICK_STUCK`] が在れば何もしない・[`TICK_REFUSE`] が在れば `send-keys` は rc 1）。
+/// 偽 tmux と偽 client を `<dir>/bin` に置き、PATH の字面を返す。偽 tmux は呼出を 1 行残し、`list-panes` は前面の語 `claude`
+/// （席が立っている窓・pane は触らない）を、`capture-pane` は pane の file を返し（file が無ければ rc 1）、`send-keys … -l <text>`
+/// は text を入力欄へ足し、`send-keys … Enter` は入力欄を送って新しい prompt を描く（[`TICK_STUCK`] が在れば何もしない・
+/// [`TICK_REFUSE`] が在れば `send-keys` は rc 1）。
 fn tick_shims(dir: &Path) -> String {
     let bin = dir.join("bin");
     fs::create_dir_all(&bin).ok();
     let at = |name: &str| dir.join(name).display().to_string();
     let tmux = format!(
-        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{calls}'\n[ -f '{pane}' ] || exit 1\n\
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{calls}'\n[ \"$1\" = list-panes ] && echo claude && exit 0\n[ -f '{pane}' ] || exit 1\n\
          case \" $* \" in *' capture-pane '*) cat '{pane}'; exit 0;; esac\n\
          [ -f '{refuse}' ] && exit 1\n\
          for last in \"$@\"; do :; done\n\
@@ -2012,6 +2013,127 @@ fn seat_pane_shell_does_not_ask_the_pid_when_the_front_is_not_a_shell() {
     assert_eq!(stdout_of(&out), move_line("exit", "false", "-"), "stderr={}", stderr_of(&out));
     assert_eq!(pane_shell_calls(&place, "list-panes").len(), 1, "前面は 1 回だけ引く");
     assert_eq!(pane_shell_calls(&place, "display-message"), Vec::<String>::new(), "display-message は 0 回");
+}
+
+// ───────────── tick が死んだ席を起こし会話を運ぶ（seat-heartbeat.md §7・契約表の行 f・`s2-07l.626`・接頭辞 `seat_tick_wake_`） ─────────────
+//
+// §4 の移動の fixture（偽 tmux の前面の file・群の記録・`--rules` の写し）に §6 の `display-message` の口（pid の file が無い＝
+// 不明で前面の語に倒れる）をそのまま使い、打刻の最終行を Busy（いま）で書く。群の外の row は anchor を群の置き場の外に置く。
+
+/// 打刻に書く会話 id（UUID の形）。
+const WAKE_SID: &str = "3f2a9c4e-1b7d-4e8a-9c0f-5d6e7a8b9c0d";
+
+/// 窓が shell（前面 `bash`・子なしの prompt）で、最終行が Busy（いま・`sid`）の置き場を `anchor` の row で作る（群の記録は口座 B）。
+fn wake_place(root: &Path, anchor: &str, sid: &str) -> MovePlace {
+    let place = move_place(root, "state", anchor);
+    move_record(root, MOVE_B);
+    fs::write(place.at(MOVE_FRONT), "bash\n").ok();
+    fs::write(place.at(TICK_PANE), PANE_SHELL_PROMPT).ok();
+    let seat = seat_dir_of(&place.state, TICK_SEAT);
+    fs::write(state_file(&seat), format!("{}\n", stamp_line("busy", "UserPromptSubmit", unix_now() - 10, sid))).ok();
+    place
+}
+
+/// 送った起動行（`-l` の text の key）。
+fn wake_texts(place: &MovePlace) -> Vec<String> {
+    move_keys(place).into_iter().filter(|key| key.contains(" -l ")).collect()
+}
+
+/// 口座 `account` の設定 dir（起動行が持つ字面）。
+fn wake_account_dir(place: &MovePlace, account: &str) -> String {
+    place.state.join("accounts").join(account).display().to_string()
+}
+
+/// 起こした周を測る: 判定行は `move=launch`・起動行 1 行が `account` の設定 dir を持ち `/exit` を持たない・fleet の最後の row は
+/// `account` で同じ anchor と target・row の launch に `--resume` は載らない。起動行を返す。
+fn wake_assert_launched(place: &MovePlace, account: &str, anchor: &str) -> String {
+    let out = move_run(place);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(stdout_of(&out), move_line("launch", "-", "launch-unconfirmed"), "判定行 1 行: stderr={}", stderr_of(&out));
+    let texts = wake_texts(place);
+    assert_eq!(texts.len(), 1, "起動行 1 行: {texts:?}");
+    let text = texts.first().cloned().unwrap_or_default();
+    assert!(text.contains(&wake_account_dir(place, account)) && !text.contains("/exit"), "{account} の設定 dir を持つ起動行: {text}");
+    let rows = acct_rows(&place.state);
+    let last = rows.last().map(|row| (row.account.as_str(), row.anchor.as_str(), row.target.as_str()));
+    assert_eq!(last, Some((account, anchor, TICK_TARGET)), "起こした row");
+    assert!(rows.iter().all(|row| !row.launch.contains("--resume")), "row の launch に --resume は載らない: {rows:?}");
+    assert!(!place.state.join("seat").join(TICK_SEAT).join("pointer-ladder").exists(), "梯子の記録は書かれない");
+    text
+}
+
+/// (a) 最終行 busy ∧ 前面 `bash` ∧ 群の外の row → `move=launch`・起動行 1 行が row の口座（A）を持ち、末尾に `--resume <打刻の
+/// sid>`（base では打刻 busy で止まる `noop busy` ＝ RED）。群の外の席は lock を取らない。
+#[test]
+fn seat_tick_wake_launches_a_dead_seat_outside_a_group_with_the_stamped_sid() {
+    let root = tmp();
+    let place = wake_place(&root, "/elsewhere", WAKE_SID);
+    let text = wake_assert_launched(&place, MOVE_A, "/elsewhere");
+    assert!(text.ends_with(&format!(" --resume {WAKE_SID}")), "末尾に --resume <sid>: {text}");
+    assert_eq!(text.matches("--resume").count(), 1, "--resume は 1 つ: {text}");
+    assert!(!move_groups_dir(&root).join("lock").exists(), "lock は残らない");
+}
+
+/// (b) 同じ席で最終行の sid が無い・会話 id の形でない → 起こすが末尾に `--resume` は無い（前の行の sid にも倒れない）。
+#[test]
+fn seat_tick_wake_without_a_session_id_carries_nothing() {
+    for sid in ["", "sid-move"] {
+        let root = tmp();
+        let place = wake_place(&root, "/elsewhere", sid);
+        let seat = seat_dir_of(&place.state, TICK_SEAT);
+        let before = stamp_line("idle", "Stop", unix_now() - 100, WAKE_SID);
+        let last = stamp_line("busy", "UserPromptSubmit", unix_now() - 10, sid);
+        fs::write(state_file(&seat), format!("{before}\n{last}\n")).ok();
+        let text = wake_assert_launched(&place, MOVE_A, "/elsewhere");
+        assert!(!text.contains("--resume"), "{sid:?}: --resume 無し: {text}");
+    }
+}
+
+/// (c) 最終行 busy ∧ 前面 `bash` ∧ 群の row（口座 A）∧ 記録 = 口座 B → 記録の口座 B で起動・末尾に `--resume <sid>`。
+#[test]
+fn seat_tick_wake_launches_a_group_seat_with_the_record_account() {
+    let root = tmp();
+    let place = wake_place(&root, MOVE_ANCHOR, WAKE_SID);
+    let text = wake_assert_launched(&place, MOVE_B, MOVE_ANCHOR);
+    assert!(text.ends_with(&format!(" --resume {WAKE_SID}")), "末尾に --resume <sid>: {text}");
+    assert!(!text.contains(&wake_account_dir(&place, MOVE_A)), "row の口座 A では起こさない: {text}");
+    assert!(!move_groups_dir(&root).join("lock").exists(), "lock は周の後に外れる");
+}
+
+/// (d) 前面 `claude` ∧ 最終行 busy → `noop busy`（今のまま・0 key・起動行 0）。群の row も群の外の row も同じ。
+#[test]
+fn seat_tick_wake_leaves_a_busy_claude_front_alone() {
+    for anchor in ["/elsewhere", MOVE_ANCHOR] {
+        let root = tmp();
+        let place = wake_place(&root, anchor, WAKE_SID);
+        fs::remove_file(place.at(MOVE_FRONT)).ok();
+        fs::write(place.at(TICK_PANE), TICK_CLEAR_PANE).ok();
+        let rows = acct_rows(&place.state).len();
+        move_assert_quiet(&place, &move_noop("busy"));
+        assert_eq!(acct_rows(&place.state).len(), rows, "{anchor}: 起こさない");
+    }
+}
+
+/// (e) 前面 `bash` ∧ row 無し（別の target）→ `no-row`・0 key・前面を引かない（row の無い窓は 1 字も変わらない）。
+#[test]
+fn seat_tick_wake_does_not_touch_a_window_without_a_row() {
+    let root = tmp();
+    let place = wake_place(&root, "/elsewhere", WAKE_SID);
+    let state = place.state.display().to_string();
+    let out = Command::new(bin())
+        .args(["seat", "tick", "--state-dir", &state, "--target", "tk:other", "--rules", &place.rules])
+        .env("PATH", &place.path)
+        .output()
+        .expect("binary を起動できる");
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(
+        stdout_of(&out),
+        format!("decision=noop target=tk_other reason=no-row pointer=- step=- consumed=-{TICK_NO_MOVE}\n"),
+        "判定行"
+    );
+    assert!(move_keys(&place).is_empty(), "0 key");
+    assert!(pane_shell_calls(&place, "list-panes").is_empty(), "前面を引かない");
+    assert!(!place.at(TICK_CLIENT).exists(), "偽 client は呼ばれない");
 }
 
 // ─────────────────── tick の unit（seat-heartbeat.md §3・契約表の行 b・`s2-07l.583`・接頭辞 `seat_unit_`） ───────────────────

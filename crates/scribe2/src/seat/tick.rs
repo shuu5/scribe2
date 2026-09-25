@@ -19,6 +19,10 @@
 //! 口座）を置き、移動の周は群の段と同じ lock（[`Lock`]）の内側で、pane が shell なら同じ target に群の今の口座の席を起こし、
 //! shell でなければ入力欄の門を通して `/exit`（dialog の既定の行なら Enter）を 1 手だけ送る。移動の周は合図を送らず梯子を
 //! 触らず、event も記さない（記録は `tick.jsonl` と判定行だけ）。
+//!
+//! 死んだ席も起こす（設計 §7・契約表の行 f）: 登録 row を読んだ直後・打刻を読む前に窓が shell かを見て、shell の周は打刻と
+//! 梯子を読まず起こす周（[`awake`]）へ進む。口座は anchor が群に属せば群の今の口座（lock の内側）、属さなければ row の口座で、
+//! 打刻の最終行の sid を `--resume` で運ぶ（[`state::resume_carry`]）。移動の門（[`moving`]）は窓が shell でない周の退避だけを撃つ。
 
 pub mod install;
 
@@ -487,8 +491,9 @@ pub struct Input<'a> {
     pub manifest: &'a Manifest,
 }
 
-/// 判定の列を 1 周撃つ（順序固定の AND・最初に立たなかった条件を理由にする）。`front` の直後の移動の門（[`moving`]）が
-/// 移動の周と判じた周は、以後の列（黙り・上限・床・口座の門・合図の注入）を撃たない。
+/// 判定の列を 1 周撃つ（順序固定の AND・最初に立たなかった条件を理由にする）。`front` の中で窓が shell と読めた周は起こす周
+/// （[`awake`]）で終わり、`front` の直後の移動の門（[`moving`]）が移動の周と判じた周は、以後の列（黙り・上限・床・口座の門・
+/// 合図の注入）を撃たない。
 pub fn judge(input: &Input) -> Verdict {
     front(input)
         .and_then(|found| moving(input, &found).map_or_else(|| back(input, &found), Ok))
@@ -522,8 +527,8 @@ struct Front {
     fleet: State,
     /// 登録 row の口座 label。
     account: String,
-    /// 登録 row の役割と anchor（移動の門が群を引き、起こし直しが同じ row の鍵で起こす）。
-    row: (Role, String),
+    /// 登録 row の anchor（移動の門が群を引く）。
+    anchor: String,
     /// 席の置き場。
     seat: PathBuf,
     /// 今の digest（最終行の ts）。
@@ -536,16 +541,20 @@ struct Front {
     now: u64,
 }
 
-/// 形 1 の 1〜3（登録 row → 状態の打刻 → digest の比較）。
+/// 形 1 の 1〜3（登録 row → 窓が shell か〔§7 形 1〕→ 状態の打刻 → digest の比較）。窓が shell の周は打刻と梯子を読まず
+/// 起こす周（[`awake`]）の判定で止まる。
 fn front(input: &Input) -> Result<Front, Verdict> {
     let rows = Rows::of(input.manifest).map_err(|_| Verdict::error(TickError::NoRule))?;
     let now = state::now_secs();
     let events = crate::fleet::store::read_all(&input.state.path).map_err(|_| Verdict::error(TickError::Store))?;
     let fleet = crate::fleet::replay(&events);
-    let (account, row) = super::role::registration_of_target(&fleet, input.target)
-        .map(|found| (found.account.clone(), (found.role, found.anchor.clone())))
+    let (account, role, anchor) = super::role::registration_of_target(&fleet, input.target)
+        .map(|found| (found.account.clone(), found.role, found.anchor.clone()))
         .ok_or_else(|| Verdict::noop(NoopReason::NoRow))?;
     let seat = seat_dir(&input.state.path, input.target);
+    if pane_is_shell(input.socket, input.target) {
+        return Err(awake(input, &account, role, &anchor, &seat));
+    }
     let stamps = stamps_of(&seat, rows.pace.stale_s, now).map_err(Verdict::noop)?;
     let digest = stamps.last().map_or(0, |stamp| stamp.ts);
     let record = read_ladder(&seat).map_err(Verdict::noop)?;
@@ -555,18 +564,39 @@ fn front(input: &Input) -> Result<Front, Verdict> {
     };
     let step = candidate(record.as_ref(), digest);
     let pointer = pointer_of(rows.pace, record.map(|found| found.sent_at), step, now);
-    Ok(Front { rows, fleet, account, row, seat, digest, step, pointer, now })
+    Ok(Front { rows, fleet, account, anchor, seat, digest, step, pointer, now })
 }
 
-/// 移動の門（設計 §4 形 1〜4）: 登録 row の anchor が群に属し、群の今の口座（[`current_of`]・記録 > 種）が row の口座と違う周
+/// 窓が shell の周（設計 §7 形 1〜3）: 打刻と梯子を読まず、同じ target に席を起こす（[`wake`]）。口座は anchor が群に属せば群の
+/// 今の口座（[`current_of`]・記録 > 種・群の段と同じ lock の内側）、属さなければ登録 row の口座（群 0 の host を含む）。記録が
+/// 在るのに読めない周と host の面が読めない周は `group-unreadable`・lock を取れない周は `group-locked`。起こし直しは打刻の最終行の
+/// sid を `--resume` で運ぶ（[`state::resume_carry`]・row の launch には載せない）。
+fn awake(input: &Input, account: &str, role: Role, anchor: &str, seat: &Path) -> Verdict {
+    let Ok(manifest) = crate::rules::with_state_dir(input.manifest.clone(), Some(&input.state.path)) else {
+        return Verdict::noop(NoopReason::GroupUnreadable);
+    };
+    let carry = state::resume_carry(seat);
+    let Some(group) = group_of(&manifest, anchor) else {
+        return wake(input, &manifest, (role, anchor), account, &carry);
+    };
+    let Ok(current) = current_of(&input.state.path, group) else {
+        return Verdict::noop(NoopReason::GroupUnreadable);
+    };
+    let Ok(_lock) = Lock::take(&host_groups_dir(&input.state.path)) else {
+        return Verdict::noop(NoopReason::GroupLocked);
+    };
+    wake(input, &manifest, (role, anchor), &current.label, &carry)
+}
+
+/// 移動の門（設計 §4 形 1 / 2 / 4）: 登録 row の anchor が群に属し、群の今の口座（[`current_of`]・記録 > 種）が row の口座と違う周
 /// だけ `Some`（移動の周）。群に属さない anchor・群 0 の host・記録と row が一致する席は `None`（今の列のまま）。記録が在るのに
-/// 読めない周と host の面が読めない周は `group-unreadable`（種に読み替えない・C10）。移動の周は群の段と同じ lock の内側で、
-/// pane が shell なら起こし（[`wake`]）、shell でなければ退避の 1 手（[`evacuate`]）を撃つ。lock を取れない周は `group-locked`。
+/// 読めない周と host の面が読めない周は `group-unreadable`（種に読み替えない・C10）。移動の周は群の段と同じ lock の内側で退避の
+/// 1 手（[`evacuate`]）を撃つ（窓が shell の周は `front` の [`awake`] が先に起こす）。lock を取れない周は `group-locked`。
 fn moving(input: &Input, front: &Front) -> Option<Verdict> {
     let Ok(manifest) = crate::rules::with_state_dir(input.manifest.clone(), Some(&input.state.path)) else {
         return Some(Verdict::noop(NoopReason::GroupUnreadable));
     };
-    let group = group_of(&manifest, &front.row.1)?;
+    let group = group_of(&manifest, &front.anchor)?;
     let Ok(current) = current_of(&input.state.path, group) else {
         return Some(Verdict::noop(NoopReason::GroupUnreadable));
     };
@@ -576,21 +606,18 @@ fn moving(input: &Input, front: &Front) -> Option<Verdict> {
     let Ok(_lock) = Lock::take(&host_groups_dir(&input.state.path)) else {
         return Some(Verdict::noop(NoopReason::GroupLocked));
     };
-    Some(if pane_is_shell(input.socket, input.target) {
-        wake(input, &manifest, front, &current.label)
-    } else {
-        evacuate(input, front.rows.window_ms)
-    })
+    Some(evacuate(input, front.rows.window_ms))
 }
 
-/// pane が shell の移動の周（形 3）: `launch` の 1 本で同じ target に `account` の席を起こす（anchor と役割は自分の row・置き場は
-/// 自分の置き場・settle / step は rules 行・登録 row は起動が書き直す・会話は運ばない・呼び手の窓を置き換えない）。起こせない周
-/// （行が読めない・断り・失敗・候補なし）も語を載せて返す（次の周がまた判じる）。
-fn wake(input: &Input, manifest: &Manifest, front: &Front, account: &str) -> Verdict {
+/// 窓が shell の周の起こし（§4 形 3・§7 形 3）: `launch` の 1 本で同じ target に `account` の席を起こす（anchor と役割は自分の
+/// row・置き場は自分の置き場・settle / step は rules 行・登録 row は起動が書き直す・会話は `carry` で運ぶ・呼び手の窓を置き換え
+/// ない）。起こせない周（行が読めない・断り・失敗・候補なし）も語を載せて返す（次の周がまた判じる）。
+fn wake(input: &Input, manifest: &Manifest, row: (Role, &str), account: &str, carry: &[String]) -> Verdict {
     let (Some((settle, step)), Ok(rules)) = (cycle::pace_of(manifest), super::embedded_manifest()) else {
         return Verdict::moved(Move::Launch, None, Some(REASON_NO_RULE));
     };
-    let (role, anchor) = (front.row.0, Path::new(&front.row.1));
+    let (role, anchor) = (row.0, Path::new(row.1));
+    let carry: Vec<&str> = carry.iter().map(String::as_str).collect();
     let launched = cycle::launch(&cycle::Launch {
         target: input.target,
         socket: input.socket,
@@ -605,7 +632,7 @@ fn wake(input: &Input, manifest: &Manifest, front: &Front, account: &str) -> Ver
         manifest,
         rules: &rules,
         threshold_pct: 0,
-        carry: &[],
+        carry: &carry,
         replace_own: false,
     });
     let trust = match &launched {

@@ -10,7 +10,8 @@
 //! pane の字面は判定入力にしない（C3.3）。
 //!
 //! **最終行を状態として読む面は消えた**（`s2-07l.479.3`）: その読み手（管理 tick と作り直しの cycle）は
-//! `s2-07l.479.1` で機構ごと消え、閾値の rules 行も同じ便で消えた。
+//! `s2-07l.479.1` で機構ごと消え、閾値の rules 行も同じ便で消えた。最終行の sid だけは起こし直しが会話を運ぶ読み手
+//! （[`resume_carry`]・seat-heartbeat.md §7 形 3）が読む。
 
 use crate::fleet::json_lite::{self, Value};
 use crate::fleet::store::{self, LockPolicy, StoreError, Warning};
@@ -261,9 +262,34 @@ pub fn evidence_after(seat_dir: &Path, baseline: Baseline, event: Event, since: 
         .map_or(Evidence::NotYet, Evidence::Found)
 }
 
+/// 起こし直しが会話を運ぶ flag（claude の起動行の末尾・設計 seat-heartbeat.md §7 形 3）。
+pub const RESUME_FLAG: &str = "--resume";
+
+/// 起こし直しの `carry`（**読み手はこの 1 本**・設計 seat-heartbeat.md §7 形 3 / §8 形 1）: 席の置き場の打刻の最終行（読めた行の
+/// うち最後）の sid が会話 id の形なら `--resume <sid>` の 2 語、file が無い・読めない・sid が無い・形違いの周は空（運ばない）。
+pub fn resume_carry(seat_dir: &Path) -> Vec<String> {
+    std::fs::read_to_string(path(seat_dir))
+        .ok()
+        .and_then(|text| last_sid(&text))
+        .map(|sid| vec![RESUME_FLAG.to_owned(), sid])
+        .unwrap_or_default()
+}
+
+/// 打刻の本文の最終行（読めた行のうち最後）の sid。会話 id の形（[`is_session_id`]）でない周は `None`（前の行の sid に倒れない）。
+pub fn last_sid(text: &str) -> Option<String> {
+    let last = text.lines().rev().find_map(|line| Stamp::from_line(line).ok())?;
+    is_session_id(&last.sid).then_some(last.sid)
+}
+
+/// 会話 id の形か: UUID の 8-4-4-4-12 の 16 進（claude の session id）。起動行へ写す字面なので形の外は 1 字も通さない。
+fn is_session_id(sid: &str) -> bool {
+    let parts: Vec<&str> = sid.split('-').collect();
+    parts.iter().map(|part| part.len()).eq([8, 4, 4, 4, 12]) && parts.iter().all(|part| part.chars().all(|found| found.is_ascii_hexdigit()))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Event, SeatState, Stamp, SCHEMA};
+    use super::{last_sid, resume_carry, Event, SeatState, Stamp, RESUME_FLAG, SCHEMA};
 
     /// 打刻は書いた行から同じ値で読める（round-trip）。
     #[test]
@@ -292,4 +318,53 @@ mod tests {
         }
     }
 
+    /// 会話 id の形の sid の打刻 1 行（最終行の読み手の fixture）。
+    fn sid_line(event: Event, sid: &str) -> String {
+        Stamp { schema: SCHEMA, state: event.state(), event, ts: 1_757_600_000, sid: sid.to_owned() }.to_line()
+    }
+
+    /// 会話 id の形。
+    const UUID: &str = "0b7c3f5e-9a1d-4c2e-8f6a-1d2e3f4a5b6c";
+
+    /// 最終行の sid の読み手は UUID の形だけを返す: 最終行の sid が形どおりなら返し、最終行が空・形違いなら前の行の UUID に
+    /// 倒れず `None`。壊れた行は最終行に数えない（読めた行のうち最後）。
+    #[test]
+    fn stamp_sid_reader_returns_only_a_uuid_shaped_last_sid() {
+        let text = format!("{}\n{}\n", sid_line(Event::SessionStart, "sid-0"), sid_line(Event::UserPromptSubmit, UUID));
+        assert_eq!(last_sid(&text).as_deref(), Some(UUID), "最終行の UUID");
+        assert_eq!(last_sid(&format!("{text}not json\n")).as_deref(), Some(UUID), "壊れた行は最終行に数えない");
+        let upper = UUID.to_ascii_uppercase();
+        assert_eq!(last_sid(&sid_line(Event::Stop, &upper)).as_deref(), Some(upper.as_str()), "16 進の大文字も形の内");
+        for bad in [
+            "",
+            "sid-1",
+            "0b7c3f5e-9a1d-4c2e-8f6a-1d2e3f4a5b6",
+            "0b7c3f5e-9a1d-4c2e-8f6a-1d2e3f4a5b6c7",
+            "0b7c3f5e9a1d-4c2e-8f6a-1d2e-3f4a5b6c",
+            "0b7c3f5e-9a1d-4c2e-8f6a-1d2e3f4a5b6g",
+            "0b7c3f5e-9a1d-4c2e-8f6a-1d2e3f4a5b6c-",
+            "0b7c3f5e-9a1d-4c2e-8f6a-1d2e3f4a5b6c ",
+            "0b7c3f5e-9a1d-4c2e-8f6a-1d2e3f4a5b; x",
+        ] {
+            let after = format!("{}\n", sid_line(Event::Stop, bad));
+            assert_eq!(last_sid(&format!("{text}{after}")), None, "{bad:?}: 最終行が形違いなら前の行に倒れない");
+        }
+        assert_eq!(last_sid(""), None, "空の本文");
+        assert_eq!(last_sid("not json\n"), None, "読める行が無い");
+    }
+
+    /// carry は `--resume <sid>` の 2 語か空: 打刻 file の最終行が UUID なら 2 語・形違いと file 無しは空。
+    #[test]
+    fn stamp_sid_carry_is_resume_and_the_sid_or_empty() {
+        let dir = std::env::temp_dir().join(format!("stamp-sid-carry-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::create_dir_all(&dir);
+        assert_eq!(resume_carry(&dir), Vec::<String>::new(), "file 無し");
+        let _ = std::fs::write(super::path(&dir), format!("{}\n", sid_line(Event::UserPromptSubmit, UUID)));
+        assert_eq!(resume_carry(&dir), [RESUME_FLAG.to_owned(), UUID.to_owned()], "最終行の UUID を運ぶ");
+        assert_eq!(RESUME_FLAG, "--resume", "flag の字面");
+        let _ = std::fs::write(super::path(&dir), format!("{}\n", sid_line(Event::UserPromptSubmit, "sid-1")));
+        assert_eq!(resume_carry(&dir), Vec::<String>::new(), "形違いは運ばない");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
