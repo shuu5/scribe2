@@ -18,14 +18,23 @@
 //! 群の段の lock（[`Lock`]）と、移動の続きで保留の席へ送る 1 行（[`EXIT`]）と `/exit` の確認 dialog の既定の行
 //! （[`exit_dialog`]）もここが持つ: 手は 2 つ（dispatch の 1 周の群の段と管理 tick の移動の周・設計 seat-heartbeat.md §4）で、
 //! 同じ 1 本の lock と同じ値を読む（二重に書かない・C17）。
+//!
+//! 群の移動の判定も 1 本（[`judge`]・設計 seat-heartbeat.md §9 形 1）: 測る集合 → 鮮度の外の計測 → 判定 → 記録と承認 event /
+//! 断りの event と頼みの履歴化。呼び手は dispatch の 1 周の群の段と管理 tick で、判定の側は席の pane に触らない（通知・退避の
+//! 合図・起こし直しは呼び手が出力の値で撃つ）。
 
 use super::{record, record_lines, Emit, Hooked};
+use crate::account::seat_accounts;
+use crate::fleet::cli::{host, now_utc};
+use crate::fleet::store::{self, LockPolicy};
 use crate::fleet::usage;
-use crate::fleet::{Allowance, WindowKind};
+use crate::fleet::{replay, Allowance, Event, EventKind, State, WindowKind, SCHEMA};
 use crate::invocation::Invocation;
+use crate::name::NAME;
 use crate::rules::manifest::{AccountGroup, Manifest};
 use crate::seat::inject::Confirm;
 use crate::seat::{host_groups_dir, sanitize_target};
+use std::collections::BTreeSet;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -164,6 +173,11 @@ pub fn request_path(dir: &Path, group: &str) -> PathBuf {
     group_file(dir, group, REQUEST_EXT)
 }
 
+/// 群の判定の打刻の path（`<群用 dir>/<群の名>.judged`・書き手は管理 tick だけ・設計 seat-heartbeat.md §9 形 2）。
+pub fn judged_path(dir: &Path, group: &str) -> PathBuf {
+    group_file(dir, group, "judged")
+}
+
 /// 群の今の口座（**解決の 1 関数**・設計 §20 形 2）: 記録が在ればその label・無ければ種（宣言の候補の先頭）・在るのに読めなければ
 /// [`RecordError`]。読み手は dispatch の 1 周・席の起動・doctor の 3 つで、種の読みはこの中だけに在る。
 pub fn current_of(state_dir: &Path, group: &AccountGroup) -> Result<Current, RecordError> {
@@ -290,6 +304,214 @@ pub fn pressed(rows: &[Allowance], caps: Caps) -> Option<Pressed> {
 /// anchor の属する群（宣言順で最初の 1 つ・宣言は同じ置き場を 2 つの群に置けない）。
 pub fn group_of<'a>(manifest: &'a Manifest, anchor: &str) -> Option<&'a AccountGroup> {
     manifest.groups().iter().find(|group| group.anchors().iter().any(|found| found == anchor))
+}
+
+/// 断りの理由（移り先の候補が無い＝妥協の移動を作らない・ADR-0020 §2.4）。
+const NO_CANDIDATE: &str = "no-candidate";
+
+/// 移り先の無い群の断りの 1 行（群の段の通知と tick の自席への 1 行が同じ字面・設計 seat-heartbeat.md §9 形 3）。
+pub fn refused_line(group: &AccountGroup) -> String {
+    format!("{NAME} group: move-refused group={} reason={NO_CANDIDATE}", group.name())
+}
+
+/// 判定の 1 本の入力（設計 seat-heartbeat.md §9 形 1）。
+pub struct Judge<'a> {
+    /// 置き場（event log・記録の置き場の出所・live 便と登録 row はこの置き場の log から読む）。
+    pub state_dir: &'a Path,
+    /// 合わせた面（tracked + host の面・鮮度の行と起こし直しの行の出所）。
+    pub manifest: &'a Manifest,
+    /// 判じる群。
+    pub group: &'a AccountGroup,
+    /// 他の群の今の口座（と記録を読めない群の候補）＝移り先にしない。
+    pub others: &'a BTreeSet<String>,
+    /// 鮮度に依らず測る口座（頼みの在る群の測る集合の和・tick は空）。
+    pub forced: &'a BTreeSet<String>,
+    /// 窓ごとの閾値。
+    pub caps: Caps,
+    /// 計測の口（口座・鮮度に依らず測るか）。
+    pub measure: &'a dyn Fn(&str, bool),
+}
+
+/// 候補なしの周の断り（閉じた 2 値）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    /// 断りの event を記した。
+    Recorded,
+    /// 同じ実測に既に断った（記さない）。
+    Repeated,
+}
+
+/// 判定の出力（**閉じた 4 値**）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Judgement {
+    /// 記録を移り先へ書き承認 event を記した。
+    Moved(String),
+    /// 今の口座は逼迫でない（測る集合のうち逼迫の口座と窓）。
+    Stay(Vec<(String, Pressed)>),
+    /// 今の口座が逼迫で移り先が無い。
+    NoCandidate(Refusal),
+    /// 記録・event log・移動の前提が読めない。
+    Unreadable,
+}
+
+/// 測る集合: 群の今の口座 ∪ 群の置き場の席の登録 row の口座（重複は畳む）。
+pub fn measured_set(group: &AccountGroup, current: &Current, state: &State) -> BTreeSet<String> {
+    std::iter::once(current.label.as_str()).chain(seat_accounts(group, state)).map(str::to_owned).collect()
+}
+
+/// 群 1 つの移動の判定（**1 本**・lock は呼び手が握る）: 測る集合 ∖ `measured` を 1 回ずつ測り（`forced` の口座は鮮度に依らず）、
+/// 測った口座を `measured` へ足す。今の口座が逼迫でなければ [`Judgement::Stay`]、逼迫なら移り先（[`target_of`]）へ記録を書いて
+/// 承認 event を記すか、断りの event を記す（同じ実測に 2 度断らない）。頼みの在る群（測る集合が全部 `forced`）は判定の後に
+/// 頼みを履歴へ move する。
+pub fn judge(input: &Judge<'_>, measured: &mut BTreeSet<String>) -> Judgement {
+    let dir = host_groups_dir(input.state_dir);
+    let (Ok(current), Ok(events)) = (current_of(input.state_dir, input.group), store::read_all(input.state_dir)) else {
+        return Judgement::Unreadable;
+    };
+    let set = measured_set(input.group, &current, &replay(&events));
+    let request = request_path(&dir, input.group.name());
+    let requested = request.is_file() && set.is_subset(input.forced);
+    for label in &set {
+        if measured.insert(label.clone()) {
+            (input.measure)(label, input.forced.contains(label));
+        }
+    }
+    let judged = decide(input, &current.label, &set, measured);
+    if requested {
+        let _ = to_history(&dir, &request);
+    }
+    judged
+}
+
+/// 計測の後の判定（[`judge`] の続き）。
+fn decide(input: &Judge<'_>, current: &str, set: &BTreeSet<String>, measured: &mut BTreeSet<String>) -> Judgement {
+    let Ok(events) = store::read_all(input.state_dir) else {
+        return Judgement::Unreadable;
+    };
+    let state = replay(&events);
+    let pressed_of = |label: &str| usage::latest_of(&state, label).and_then(|rows| pressed(&rows, input.caps));
+    if pressed_of(current).is_none() {
+        return Judgement::Stay(set.iter().filter_map(|label| Some((label.clone(), pressed_of(label)?))).collect());
+    }
+    match target_of(input, current, measured) {
+        Some(target) if approve(input, current, &target) => Judgement::Moved(target),
+        Some(_) => Judgement::Unreadable,
+        None => refuse(input, current),
+    }
+}
+
+/// 移り先（設計 account-lifecycle.md §20 形 5）: 宣言の候補の順で、今の口座でなく・他の群の今の口座でなく・退役中でなく・置き場の
+/// live 便が使っていない口座を、鮮度の外なら 1 回測り、3 窓とも閾値未満の鮮度の内側の実測を持つ**最初の** label。
+fn target_of(input: &Judge<'_>, current: &str, measured: &mut BTreeSet<String>) -> Option<String> {
+    let mut state = replay(&store::read_all(input.state_dir).ok()?);
+    for label in input.group.accounts() {
+        let live = state.inflight_by_account().get(label).is_some_and(|runs| *runs > 0);
+        if label == current || input.others.contains(label) || state.retired.contains_key(label) || live {
+            continue;
+        }
+        (input.measure)(label, false);
+        measured.insert(label.clone());
+        state = replay(&store::read_all(input.state_dir).ok()?);
+        let fresh = usage::fresh_rows(input.manifest, &state, label).ok().flatten();
+        if fresh.is_some_and(|rows| pressed(&rows, input.caps).is_none()) {
+            return Some(label.clone());
+        }
+    }
+    None
+}
+
+/// 移動の記録と承認（この順）: 前提（宣言の逐語・起こし直しの刻み・役割の既定の面）が揃わない周と記録を書けない周は 1 つも
+/// 書かずに `false`。
+fn approve(input: &Judge<'_>, current: &str, target: &str) -> bool {
+    let (Some(words), Some(_), Ok(_)) = (
+        declaration(input.state_dir, input.group),
+        crate::seat::cycle::pace_of(input.manifest),
+        crate::seat::embedded_manifest(),
+    ) else {
+        return false;
+    };
+    let record = Record { account: target.to_owned(), ts: now_utc(), previous: current.to_owned() };
+    if write_current(&host_groups_dir(input.state_dir), input.group.name(), &record).is_err() {
+        return false;
+    }
+    append(input.state_dir, input.manifest, EventKind::GroupMoved, target, words);
+    true
+}
+
+/// 移り先の無い群の断りの event（前の断りより**後に**今の口座の新しい実測が無い周は記さない＝同じ実測に 2 度断らない）。
+fn refuse(input: &Judge<'_>, current: &str) -> Judgement {
+    let Ok(events) = store::read_all(input.state_dir) else {
+        return Judgement::Unreadable;
+    };
+    let detail = format!("group={} reason={NO_CANDIDATE}", input.group.name());
+    let refused = |event: &Event| event.kind == EventKind::GroupMoveRefused && event.detail.as_deref() == Some(detail.as_str());
+    if !measured_since(&events, current, None, refused) {
+        return Judgement::NoCandidate(Refusal::Repeated);
+    }
+    append(input.state_dir, input.manifest, EventKind::GroupMoveRefused, current, detail);
+    Judgement::NoCandidate(Refusal::Recorded)
+}
+
+/// 群の宣言の行の逐語（承認の逐語・A1）: host の面の path と行番号 + `[[account-group]]` の行から次の表の手前までの行（末尾の
+/// 空行は落とす）。読めない・行番号の行が群の表の頭でない周は `None`（逐語の無い承認で移さない）。
+fn declaration(state_dir: &Path, group: &AccountGroup) -> Option<String> {
+    let path = crate::rules::host_manifest_path(state_dir);
+    let text = fs::read_to_string(&path).ok()?;
+    let start = usize::try_from(group.line()).ok()?.checked_sub(1)?;
+    let mut block: Vec<&str> = text
+        .lines()
+        .skip(start)
+        .enumerate()
+        .take_while(|(at, line)| *at == 0 || !line.trim_start().starts_with('['))
+        .map(|(_, line)| line)
+        .collect();
+    while block.last().is_some_and(|line| line.trim().is_empty()) {
+        block.pop();
+    }
+    (block.first().map(|head| head.trim()) == Some("[[account-group]]"))
+        .then(|| format!("{}:{}\n{}", path.display(), group.line(), block.join("\n")))
+}
+
+/// `mark` に当たる最後の行より**後に**、口座 `label` の実測の行（`window` が在ればその窓だけ）が在るか（印が無ければ `true`・
+/// log の位置で判じ、値の比較で判じない・account-lifecycle.md §19 形 4）。
+pub fn measured_since(events: &[Event], label: &str, window: Option<WindowKind>, mark: impl Fn(&Event) -> bool) -> bool {
+    let marked = events.iter().rposition(mark);
+    let measured = events.iter().rposition(|event| {
+        event.kind == EventKind::AllowanceMeasured
+            && matches!(&event.allowance, Some(Allowance::Measured(row))
+                if row.account == label && window.is_none_or(|found| row.window == found))
+    });
+    match marked {
+        None => true,
+        Some(at) => measured.is_some_and(|last| last > at),
+    }
+}
+
+/// 群の event を 1 件記す（run / bead を持たない・actor は machine・`account` と `detail` の 2 つが本体）。書けない周も止めない。
+pub fn append(state_dir: &Path, manifest: &Manifest, kind: EventKind, account: &str, detail: String) {
+    let Ok(policy) = LockPolicy::from_rules(manifest) else {
+        return;
+    };
+    let event = Event {
+        schema: SCHEMA,
+        ts: now_utc(),
+        kind,
+        run: String::new(),
+        bead: String::new(),
+        host: host(),
+        actor: kind.default_actor().to_owned(),
+        stage: None,
+        seat: None,
+        pid: None,
+        detail: Some(detail),
+        allowance: None,
+        registration: None,
+        mark: None,
+        account: Some(account.to_owned()),
+        cost: None,
+        rule: None,
+    };
+    let _ = store::append(state_dir, &event, policy);
 }
 
 /// hook の 1 行（`group=<名> account=<label> window=<w> used=<n> cap=<n> — …`・設計 §19 形 5 / §21 形 2 (b)）。

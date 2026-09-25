@@ -7,18 +7,16 @@
 //! lock（[`group::Lock`]）は管理 tick の移動の周（設計 seat-heartbeat.md §4）と同じ 1 本で、同じ target を 2 つの手が同じ周に
 //! 撃つことを防ぐ。
 //!
-//! 群ごとに、測る集合 = 群の今の口座（[`group::current_of`]・記録 > 種）∪ 群の置き場の席の登録 row の口座
-//! （[`crate::account::seat_accounts`] の 1 本）を取り、鮮度の外の口座だけを選定の前計測と同じ口（[`usage::run_fresh`]・
-//! `--account` で 1 口座に絞る）で 1 回測る。移動を頼む記録（席の hook が置く・[`group::put_request`]）の在る群は鮮度に依らず
-//! 測り（[`usage::run`]）、判定の後に頼みを履歴へ move する。最新の実測は 1 周の置き場の event log から読む（置き場を跨いで
-//! 読まない・C3）。判定は席の hook と同じ読み手（[`group::pressed`]）。
+//! 群ごとの判定（測る集合 → 鮮度の外の計測 → 判定 → 記録と承認 event / 断りの event と頼みの履歴化）は tick と同じ 1 本
+//! （[`group::judge`]・設計 seat-heartbeat.md §9 形 1）。周の頭は計測を撃たず、鮮度に依らず測る口座（移動を頼む記録の在る群の
+//! 測る集合の和）とこの周で既に測った口座（空で始め 1 本が足す）の 2 集合を組んで 1 本へ渡す（口座ごとに 1 周 1 回）。
 //!
-//! - 今の口座が逼迫でない群は §19 の通知: 逼迫の（群, 口座）ごとに群の置き場の orchestrator の席へ [`notify::send`] の口で 1 行・
-//!   [`EventKind::GroupPressureNotified`] 1 件（同じ群・口座・窓で前回の通知より**後に**新しい実測が無い周は送らず記さない）。
-//! - 今の口座が逼迫の群は移り先を 1 回だけ決める（[`target_of`]）。在れば移す（[`execute`]: 記録 → 承認 event → 退避の合図 →
-//!   settle の窓で shell に戻った置き場から同じ target へ `launch` の 1 本〔打刻の最終行の sid を `--resume` で運ぶ・
-//!   seat-heartbeat.md §8〕・戻らない席は保留の event）。無ければ断りの event と
-//!   群の置き場ごとに 1 行（[`refuse`]）。どちらの周も §19 の通知は送らない（席への行は群の置き場ごとに高々 1 行）。
+//! - 今の口座が逼迫でない群は §19 の通知: 1 本が返す逼迫の（群, 口座）ごとに群の置き場の orchestrator の席へ [`notify::send`]
+//!   の口で 1 行・[`EventKind::GroupPressureNotified`] 1 件（同じ群・口座・窓で前回の通知より**後に**新しい実測が無い周は送らず
+//!   記さない）。
+//! - 移った群は退避の合図 → settle の窓で shell に戻った置き場から同じ target へ `launch` の 1 本〔打刻の最終行の sid を
+//!   `--resume` で運ぶ・seat-heartbeat.md §8〕・戻らない席は保留の event（[`evacuate`]）。1 本が断りの event を記した群は群の
+//!   置き場ごとに断りの 1 行。どちらの周も §19 の通知は送らない（席への行は群の置き場ごとに高々 1 行）。
 //! - 記録（新しい口座）と置き場の登録 row（古い口座）が食い違う群は判定をやり直さず、shell に戻った席を起こす続きだけを行う。
 //!   pane が shell でない席には退避の合図と同じ宛先・門で `/exit` の 1 行を周ごとに 1 回送り、その周は起こさない（§21 形 1）。
 //!   送りは届いても未確認でも inject の記録に残し、門が `/exit` の確認 dialog の既定の行を返す周は `/exit` の代わりに Enter を
@@ -28,25 +26,19 @@
 
 use super::super::notify;
 use super::Input;
-use crate::account::seat_accounts;
-use crate::fleet::cli::{host, now_utc};
-use crate::fleet::store::{self, LockPolicy};
-use crate::fleet::{replay, usage, Allowance, Event, EventKind, Pressure, State, WindowKind, SCHEMA};
-use crate::hook::group::{self, Caps, Current, Pressed, Record, Source};
+use crate::fleet::store;
+use crate::fleet::{replay, usage, Event, EventKind, Pressure, State};
+use crate::hook::group::{self, Caps, Current, Judgement, Pressed, Refusal, Source};
 use crate::name::NAME;
 use crate::rules::manifest::{AccountGroup, Manifest};
 use crate::seat::cycle::{self, Launched, REASON_NO_ACCOUNT, REASON_NOT_SHELL};
 use crate::seat::role::{registration_of_key, Role};
 use crate::seat::state::resume_carry;
 use crate::seat::{host_groups_dir, pane_is_shell, seat_dir, Provenance, StateDir};
-use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::thread::sleep;
 use std::time::Instant;
-
-/// 断りの理由（移り先の候補が無い＝妥協の移動を作らない・ADR-0020 §2.4）。
-const NO_CANDIDATE: &str = "no-candidate";
 
 /// 続きの周の送りの inject の記録の `who`（群の段の名・設計 §22 形 1）。`/exit` の 1 行と確認 dialog の既定の行の値は
 /// [`group::EXIT`] / [`group::exit_dialog`] の 1 か所（tick の移動の周と同じ値・設計 seat-heartbeat.md §4 形 5）。
@@ -59,18 +51,6 @@ pub(super) enum Stopped {
     Unreadable,
     /// lock の file が既に在る（別の周が握っている・前の周が残した）か、群用 dir に置けない。
     Locked,
-}
-
-/// 群 1 つの 1 周ぶんの計画（今の口座・測る集合・移動を頼む記録の有無）。
-struct Plan<'m> {
-    /// 群の宣言。
-    group: &'m AccountGroup,
-    /// 周の頭の今の口座（解決の 1 関数の値）。
-    current: Current,
-    /// 測る集合（今の口座 ∪ 群の置き場の席の登録 row の口座）。
-    measured: BTreeSet<String>,
-    /// 周の頭に移動を頼む記録が在ったか。
-    requested: bool,
 }
 
 /// 1 周の群の段を撃つ（効果は記録・event・席の pane の行・席の起動だけ＝列の 1 周の rc と行を変えない）。
@@ -87,45 +67,28 @@ pub(super) fn round(input: &Input<'_>) -> Result<(), Stopped> {
     let (mut plans, mut blocked) = (Vec::new(), BTreeSet::new());
     for found in manifest.groups() {
         match group::current_of(input.state_dir, found) {
-            Ok(current) => plans.push(Plan {
-                measured: measured_set(found, &current, &before),
-                requested: group::request_path(&dir, found.name()).is_file(),
-                group: found,
-                current,
-            }),
+            Ok(current) => plans.push((found, current)),
             Err(_) => blocked.extend(found.accounts().iter().cloned()),
         }
     }
-    // 口座ごとに**1 周に 1 回**だけ測る（2 つの群が同じ口座を持っても 1 回・頼みの在る群の口座は鮮度に依らず・他は鮮度の外だけ）。
-    let mut forced: BTreeMap<&str, bool> = BTreeMap::new();
-    for plan in &plans {
-        for label in &plan.measured {
-            *forced.entry(label.as_str()).or_insert(false) |= plan.requested;
-        }
-    }
-    for (label, force) in forced {
-        let args = usage_args(input, label);
-        let _ = if force { usage::run(&args, input.state_dir) } else { usage::run_fresh(&args, input.state_dir) };
-    }
+    // 周の頭は測らない: 鮮度に依らず測る口座（頼みの在る群の測る集合の和）と既に測った口座（空）を組み、1 本が口座ごとに 1 回測る。
+    let forced: BTreeSet<String> = plans
+        .iter()
+        .filter(|(found, _)| group::request_path(&dir, found.name()).is_file())
+        .flat_map(|(found, current)| group::measured_set(found, current, &before))
+        .collect();
+    let mut measured = BTreeSet::new();
     let mut read = Read::of(input, &manifest, caps).ok_or(Stopped::Unreadable)?;
     // 「他の群の今の口座」は周の中で更新する（先に移った群の移り先を後の群が飛ばす＝2 群が同じ周に同じ label へ移らない）。
-    let mut currents: Vec<String> = plans.iter().map(|plan| plan.current.label.clone()).collect();
-    for (at, plan) in plans.iter().enumerate() {
+    let mut currents: Vec<String> = plans.iter().map(|(_, current)| current.label.clone()).collect();
+    for (at, (found, current)) in plans.iter().enumerate() {
         let others: BTreeSet<String> =
             currents.iter().enumerate().filter(|(other, _)| *other != at).map(|(_, label)| label.clone()).chain(blocked.iter().cloned()).collect();
-        if let (Some(moved), Some(slot)) = (step(&mut read, plan, &others), currents.get_mut(at)) {
+        if let (Some(moved), Some(slot)) = (step(&mut read, (found, current), (&others, &forced), &mut measured), currents.get_mut(at)) {
             *slot = moved;
-        }
-        if plan.requested {
-            let _ = group::to_history(&dir, &group::request_path(&dir, plan.group.name()));
         }
     }
     Ok(())
-}
-
-/// 測る集合: 群の今の口座 ∪ 群の置き場の席の登録 row の口座（重複は畳む）。
-fn measured_set(group: &AccountGroup, current: &Current, state: &State) -> BTreeSet<String> {
-    std::iter::once(current.label.as_str()).chain(seat_accounts(group, state)).map(str::to_owned).collect()
 }
 
 /// 前計測の口へ渡す引数（1 口座に絞る `--account` + 列に渡された `--rules` / `--curl` の写し）。
@@ -171,27 +134,50 @@ impl<'a, 'b> Read<'a, 'b> {
     }
 }
 
-/// 群 1 つの 1 周（続き・移動・断り・通知のどれか 1 つ）。移した周は移り先を返す。
-fn step(read: &mut Read<'_, '_>, plan: &Plan<'_>, others: &BTreeSet<String>) -> Option<String> {
-    let current = plan.current.label.as_str();
-    let behind = behind(&read.state, plan.group, current);
-    if plan.current.source == Source::Record && !behind.is_empty() {
-        relaunch(read, plan.group, current, behind, Wait::Once);
+/// 群 1 つの 1 周（続き・移動・断り・通知のどれか 1 つ）。続きの周でなければ判定の 1 本を撃ち、その出力から送る。移した周は
+/// 移り先を返す。
+fn step(
+    read: &mut Read<'_, '_>,
+    (found, current): (&AccountGroup, &Current),
+    (others, forced): (&BTreeSet<String>, &BTreeSet<String>),
+    measured: &mut BTreeSet<String>,
+) -> Option<String> {
+    let behind = behind(&read.state, found, &current.label);
+    if current.source == Source::Record && !behind.is_empty() {
+        relaunch(read, found, &current.label, behind, Wait::Once);
         return None;
     }
-    let pressed = usage::latest_of(&read.state, current).and_then(|rows| group::pressed(&rows, read.caps));
-    if pressed.is_none() {
-        for label in &plan.measured {
-            notice(read, plan.group, label);
-        }
+    let input = read.input;
+    let measure = |label: &str, force: bool| {
+        let args = usage_args(input, label);
+        let _ = if force { usage::run(&args, input.state_dir) } else { usage::run_fresh(&args, input.state_dir) };
+    };
+    let judge = group::Judge { state_dir: input.state_dir, manifest: read.manifest, group: found, others, forced, caps: read.caps, measure: &measure };
+    let judged = group::judge(&judge, measured);
+    if !read.refresh() {
         return None;
     }
-    match target_of(read, plan, others) {
-        Some(target) => execute(read, plan, &target).then_some(target),
-        None => {
-            refuse(read, plan.group, current);
+    match judged {
+        Judgement::Stay(pressed) => {
+            for (label, found_pressed) in pressed {
+                notice(read, found, &label, found_pressed);
+            }
             None
         }
+        Judgement::Moved(target) => {
+            evacuate(read, found, &target);
+            Some(target)
+        }
+        Judgement::NoCandidate(Refusal::Recorded) => {
+            let payload = group::refused_line(found);
+            for anchor in found.anchors() {
+                if registration_of_key(&read.state, Role::Orchestrator, anchor).is_some() {
+                    let _ = notify::send(&read.state, &place(input), Path::new(anchor), input.manifest, &payload);
+                }
+            }
+            None
+        }
+        Judgement::NoCandidate(Refusal::Repeated) | Judgement::Unreadable => None,
     }
 }
 
@@ -208,48 +194,16 @@ fn behind(state: &State, group: &AccountGroup, account: &str) -> Vec<(String, St
         .collect()
 }
 
-/// 移り先（設計 §20 形 5）: 宣言の候補の順で、今の口座でなく・他の群の今の口座でなく・退役中でなく・1 周の置き場の live 便が
-/// 使っていない口座を、鮮度の外なら 1 回測り、3 窓とも閾値未満の鮮度の内側の実測を持つ**最初の** label。無ければ `None`。
-fn target_of(read: &mut Read<'_, '_>, plan: &Plan<'_>, others: &BTreeSet<String>) -> Option<String> {
-    for label in plan.group.accounts() {
-        let live = read.state.inflight_by_account().get(label).is_some_and(|runs| *runs > 0);
-        if *label == plan.current.label || others.contains(label) || read.state.retired.contains_key(label) || live {
-            continue;
-        }
-        let _ = usage::run_fresh(&usage_args(read.input, label), read.input.state_dir);
-        if !read.refresh() {
-            return None;
-        }
-        let fresh = usage::fresh_rows(read.manifest, &read.state, label).ok().flatten();
-        if fresh.is_some_and(|rows| group::pressed(&rows, read.caps).is_none()) {
-            return Some(label.clone());
-        }
-    }
-    None
-}
-
-/// 移動の執行（同じ lock の内側・この順・設計 §20 形 6）: 記録を書く → 承認 event → 群の置き場の古い口座の席へ退避の合図 →
-/// settle の窓で shell に戻った置き場から同じ target へ新しい口座の席を起こす。前提（宣言の逐語・確認の刻み・役割の既定の面）が
-/// 揃わない周と記録を書けない周は 1 つも書かずに `false`。
-fn execute(read: &mut Read<'_, '_>, plan: &Plan<'_>, target: &str) -> bool {
+/// 移動の執行の残り（1 本が記録と承認 event を書いた後・同じ lock の内側・設計 §20 形 6）: 群の置き場の古い口座の席へ退避の
+/// 合図 → settle の窓で shell に戻った置き場から同じ target へ新しい口座の席を起こす。
+fn evacuate(read: &Read<'_, '_>, found: &AccountGroup, target: &str) {
     let input = read.input;
-    let (Some(words), Some(_), Ok(_)) =
-        (declaration(input.state_dir, plan.group), cycle::pace_of(read.manifest), crate::seat::embedded_manifest())
-    else {
-        return false;
-    };
-    let record = Record { account: target.to_owned(), ts: now_utc(), previous: plan.current.label.clone() };
-    if group::write_current(&host_groups_dir(input.state_dir), plan.group.name(), &record).is_err() {
-        return false;
-    }
-    append(input, EventKind::GroupMoved, target, words);
-    let seats = behind(&read.state, plan.group, target);
-    let payload = format!("{NAME} group: evacuate group={} to={target} — 作業記憶を台帳と git に残して /exit", plan.group.name());
+    let seats = behind(&read.state, found, target);
+    let payload = format!("{NAME} group: evacuate group={} to={target} — 作業記憶を台帳と git に残して /exit", found.name());
     for (anchor, _) in &seats {
         let _ = notify::send(&read.state, &place(input), Path::new(anchor), input.manifest, &payload);
     }
-    relaunch(read, plan.group, target, seats, Wait::Settle);
-    true
+    relaunch(read, found, target, seats, Wait::Settle);
 }
 
 /// 起こし直しの待ち方（閉じた 2 値）。
@@ -321,7 +275,7 @@ fn relaunch(read: &Read<'_, '_>, group: &AccountGroup, account: &str, mut seats:
     }
     for (anchor, target, reason) in failed {
         let detail = format!("group={} anchor={anchor} target={target} reason={reason}", group.name());
-        append(input, EventKind::GroupMovePending, account, detail);
+        group::append(input.state_dir, input.manifest, EventKind::GroupMovePending, account, detail);
     }
 }
 
@@ -334,43 +288,6 @@ fn launch_failure(launched: &Launched) -> Option<&'static str> {
     }
 }
 
-/// 移り先の無い群の断り（設計 §20 形 5）: 断りの event を 1 件記し、群の置き場の orchestrator の席へ 1 行ずつ送る。前の断りより
-/// **後に**今の口座の新しい実測が無い周は繰り返さない（§19 形 4 と同じ log の位置の規則＝同じ実測に 2 度断らない）。
-fn refuse(read: &Read<'_, '_>, group: &AccountGroup, current: &str) {
-    let detail = format!("group={} reason={NO_CANDIDATE}", group.name());
-    let refused = |event: &Event| event.kind == EventKind::GroupMoveRefused && event.detail.as_deref() == Some(detail.as_str());
-    if !measured_since(&read.events, current, None, refused) {
-        return;
-    }
-    append(read.input, EventKind::GroupMoveRefused, current, detail);
-    let payload = format!("{NAME} group: move-refused group={} reason={NO_CANDIDATE}", group.name());
-    for anchor in group.anchors() {
-        if registration_of_key(&read.state, Role::Orchestrator, anchor).is_some() {
-            let _ = notify::send(&read.state, &place(read.input), Path::new(anchor), read.input.manifest, &payload);
-        }
-    }
-}
-
-/// 群の宣言の行の逐語（承認の逐語・A1）: host の面の path と行番号 + `[[account-group]]` の行から次の表の手前までの行（末尾の
-/// 空行は落とす）。読めない・行番号の行が群の表の頭でない周は `None`（逐語の無い承認で移さない）。
-fn declaration(state_dir: &Path, group: &AccountGroup) -> Option<String> {
-    let path = crate::rules::host_manifest_path(state_dir);
-    let text = fs::read_to_string(&path).ok()?;
-    let start = usize::try_from(group.line()).ok()?.checked_sub(1)?;
-    let mut block: Vec<&str> = text
-        .lines()
-        .skip(start)
-        .enumerate()
-        .take_while(|(at, line)| *at == 0 || !line.trim_start().starts_with('['))
-        .map(|(_, line)| line)
-        .collect();
-    while block.last().is_some_and(|line| line.trim().is_empty()) {
-        block.pop();
-    }
-    (block.first().map(|head| head.trim()) == Some("[[account-group]]"))
-        .then(|| format!("{}:{}\n{}", path.display(), group.line(), block.join("\n")))
-}
-
 /// 注入と起動の置き場（絶対 path・出所は flag＝列に渡された `--state-dir`）。
 fn place(input: &Input<'_>) -> StateDir {
     StateDir {
@@ -379,16 +296,13 @@ fn place(input: &Input<'_>) -> StateDir {
     }
 }
 
-/// （群, 口座）1 つを判じ、逼迫で新しい実測が在れば送って記す（§19 形 3 / 4）。
-fn notice(read: &Read<'_, '_>, group: &AccountGroup, label: &str) {
-    let Some(found) = usage::latest_of(&read.state, label).and_then(|rows| group::pressed(&rows, read.caps)) else {
-        return;
-    };
+/// 1 本が逼迫と判じた（群, 口座）1 つに、新しい実測が在れば送って記す（§19 形 3 / 4）。
+fn notice(read: &Read<'_, '_>, group: &AccountGroup, label: &str, found: Pressed) {
     let noticed = |event: &Event| {
         event.account.as_deref() == Some(label)
             && event.pressure().is_some_and(|body| body.group == group.name() && body.window == found.window)
     };
-    if !measured_since(&read.events, label, Some(found.window), noticed) {
+    if !group::measured_since(&read.events, label, Some(found.window), noticed) {
         return;
     }
     let payload = format!(
@@ -415,54 +329,11 @@ fn pressure_of(group: &AccountGroup, found: Pressed, sent: u64) -> Pressure {
     Pressure { group: group.name().to_owned(), window: found.window, used: found.used, cap: found.cap, sent }
 }
 
-/// `mark` に当たる最後の行より**後に**、口座 `label` の実測の行（`window` が在ればその窓だけ）が在るか（印が無ければ `true`・
-/// log の位置で判じ、値の比較で判じない・§19 形 4）。
-fn measured_since(events: &[Event], label: &str, window: Option<WindowKind>, mark: impl Fn(&Event) -> bool) -> bool {
-    let marked = events.iter().rposition(mark);
-    let measured = events.iter().rposition(|event| {
-        event.kind == EventKind::AllowanceMeasured
-            && matches!(&event.allowance, Some(Allowance::Measured(row))
-                if row.account == label && window.is_none_or(|found| row.window == found))
-    });
-    match marked {
-        None => true,
-        Some(at) => measured.is_some_and(|last| last > at),
-    }
-}
-
 /// 通知の event を 1 件記す（読み返せない形は書かない＝append-only の log に読めない行を残さない）。
 fn record(input: &Input<'_>, label: &str, pressure: &Pressure) {
     let detail = pressure.render();
     if Pressure::parse(&detail).as_ref() != Some(pressure) {
         return;
     }
-    append(input, EventKind::GroupPressureNotified, label, detail);
-}
-
-/// 群の段の event を 1 件記す（run / bead を持たない・actor は machine・`account` と `detail` の 2 つが本体）。書けない周も段は
-/// 止めない（効果は記帳の有無だけ）。
-fn append(input: &Input<'_>, kind: EventKind, account: &str, detail: String) {
-    let Ok(policy) = LockPolicy::from_rules(input.manifest) else {
-        return;
-    };
-    let event = Event {
-        schema: SCHEMA,
-        ts: now_utc(),
-        kind,
-        run: String::new(),
-        bead: String::new(),
-        host: host(),
-        actor: kind.default_actor().to_owned(),
-        stage: None,
-        seat: None,
-        pid: None,
-        detail: Some(detail),
-        allowance: None,
-        registration: None,
-        mark: None,
-        account: Some(account.to_owned()),
-        cost: None,
-        rule: None,
-    };
-    let _ = store::append(input.state_dir, &event, policy);
+    group::append(input.state_dir, input.manifest, EventKind::GroupPressureNotified, label, detail);
 }

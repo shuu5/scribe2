@@ -25,6 +25,11 @@
 //! 打刻の最終行の sid を `--resume` で運び、初手の合図（[`relaunch_signal`]）を 1 語積む（[`state::resume_carry`]・§10 形 1）。移動の門（[`moving`]）は窓が shell でない周の退避だけを撃つ。
 //! 最終行の Busy が `seat.tick_stale_s` の 2 倍より古く入力欄が空の周（Stop の打刻を失った席）は Busy を無視して列の先へ進む
 //! （設計 §7 形 7・契約表の行 h）。
+//!
+//! 群の移動の判定も撃つ（設計 §9・契約表の行 i）: `front` の後・移動の門の前に、自席の anchor が群に属し群の判定の打刻
+//! （`<群>.judged`）が `fleet.usage_fresh_s` より古い（か無い）周だけ、群の段と同じ lock の内側で判定の 1 本
+//! （[`crate::hook::group::judge`]）を撃って打刻を書く（[`judged`]）。判定の側は他の席に触らず、候補なしで断りの event を記した周
+//! だけ断りの 1 行を自席へ送る。判定行の末尾は `judged=<moved:<label>|stay|none|error:<語>|->`。
 
 pub mod install;
 
@@ -35,12 +40,13 @@ use super::state::{self, Event, SeatState, Stamp};
 use super::{host_groups_dir, pane_is_shell, pane_of, sanitize_target, seat_dir, state_dir_of, StateDir, REASON_TMUX_FAILED};
 use crate::cli_outcome::{Outcome, RC_OK, RC_REFUSED};
 use crate::fleet::json_lite::{self, Value};
-use crate::fleet::usage::fresh_rows;
+use crate::fleet::usage::{self, fresh_rows};
 use crate::fleet::State;
-use crate::hook::group::{current_of, exit_dialog, group_of, pressed, Caps, Lock, EXIT};
+use crate::hook::group::{self, current_of, exit_dialog, group_of, pressed, Caps, Judgement, Lock, Refusal, EXIT};
 use crate::name::NAME;
-use crate::rules::manifest::Manifest;
+use crate::rules::manifest::{AccountGroup, Manifest};
 use crate::rules::{int_row, RuleError};
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -458,6 +464,34 @@ pub fn render(target: &str, verdict: &Verdict) -> String {
     )
 }
 
+/// 群の判定を撃った周の結果（**閉じた列**・判定行の `judged=` の語・撃たない周は [`Judged::Unjudged`] の `-`）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Judged {
+    /// 撃たない（群の外・打刻が鮮度の内側・lock を取れない・前で止まった周）。
+    Unjudged,
+    /// 記録が移り先へ動いた。
+    Moved(String),
+    /// 今の口座は逼迫でない。
+    Stay,
+    /// 移り先が無い（断りの event を記した周も同じ実測に既に断った周も）。
+    None,
+    /// 判定できない（理由）。
+    Error(&'static str),
+}
+
+impl Judged {
+    /// 判定行の `judged=` の字面。
+    fn render(&self) -> String {
+        match self {
+            Self::Unjudged => DASH.to_owned(),
+            Self::Moved(label) => format!("moved:{label}"),
+            Self::Stay => "stay".to_owned(),
+            Self::None => "none".to_owned(),
+            Self::Error(why) => format!("error:{why}"),
+        }
+    }
+}
+
 /// 口が解いた引数（置き場・target・pane の出所）。
 pub struct Flags<'a> {
     /// `--state-dir`。
@@ -473,16 +507,16 @@ pub struct Flags<'a> {
 /// `seat tick` の本体: 判定行 1 行を stdout へ・rc は inject / noop が 0・error が 1。manifest が壊れている周は defect を
 /// stderr へ並べる（`rules validate` と同じ字面）。
 pub fn run(flags: &Flags, manifest: Result<Manifest, Vec<RuleError>>) -> Outcome {
-    let (verdict, err) = match (state_dir_of(Some(flags.state_dir)), manifest) {
-        (None, _) => (Verdict::error(TickError::StateDir), Vec::new()),
-        (Some(_), Err(errors)) => (Verdict::error(TickError::NoRule), crate::rules::cli::render_defects(&errors)),
+    let ((verdict, judged), err) = match (state_dir_of(Some(flags.state_dir)), manifest) {
+        (None, _) => ((Verdict::error(TickError::StateDir), Judged::Unjudged), Vec::new()),
+        (Some(_), Err(errors)) => ((Verdict::error(TickError::NoRule), Judged::Unjudged), crate::rules::cli::render_defects(&errors)),
         (Some(state), Ok(manifest)) => {
             let input = Input { state: &state, target: flags.target, socket: flags.socket, capture: flags.capture, manifest: &manifest };
             (judge(&input), Vec::new())
         }
     };
     let rc = if matches!(verdict.decision, TickDecision::Error(_)) { RC_REFUSED } else { RC_OK };
-    Outcome { out: vec![render(flags.target, &verdict)], err, rc }
+    Outcome { out: vec![format!("{} judged={}", render(flags.target, &verdict), judged.render())], err, rc }
 }
 
 /// 判定の入力。
@@ -500,12 +534,74 @@ pub struct Input<'a> {
 }
 
 /// 判定の列を 1 周撃つ（順序固定の AND・最初に立たなかった条件を理由にする）。`front` の中で窓が shell と読めた周は起こす周
-/// （[`awake`]）で終わり、`front` の直後の移動の門（[`moving`]）が移動の周と判じた周は、以後の列（黙り・上限・床・口座の門・
-/// 合図の注入）を撃たない。
-pub fn judge(input: &Input) -> Verdict {
-    front(input)
-        .and_then(|found| moving(input, &found).map_or_else(|| back(input, &found), Ok))
-        .unwrap_or_else(|stopped| stopped)
+/// （[`awake`]）で終わり、`front` の後に群の判定（[`judged`]）を撃ち、移動の門（[`moving`]）が移動の周と判じた周は、以後の列
+/// （黙り・上限・床・口座の門・合図の注入）を撃たない。
+pub fn judge(input: &Input) -> (Verdict, Judged) {
+    let found = match front(input) {
+        Ok(found) => found,
+        Err(stopped) => return (stopped, Judged::Unjudged),
+    };
+    let judged = judged(input, &found);
+    (moving(input, &found).map_or_else(|| back(input, &found), Ok).unwrap_or_else(|stopped| stopped), judged)
+}
+
+/// 群の判定の打刻の間隔の rules 行（計測の鮮度の行を流用・行を足さない・設計 §9 形 2）。
+const ROW_FRESH: &str = "fleet.usage_fresh_s";
+
+/// 群の判定（設計 §9 形 2 / 3）: 自席の anchor が群に属し、群の判定の打刻が `fleet.usage_fresh_s` より古い（か無い）周だけ、群の段
+/// と同じ lock の内側で判定の 1 本を撃ち（他の群の今の口座 ∪ 記録を読めない群の候補を移り先から外し・鮮度に依らず測る口座と既に
+/// 測った口座は空）、打刻を判定の時刻で書く。lock を取れない周は撃たない（列は今のまま）。断りの event を記した周だけ断りの 1 行を
+/// 自席へ注入の経路で送る（入力欄の門を通らない周は落とす）。
+fn judged(input: &Input, front: &Front) -> Judged {
+    let state_dir = input.state.path.as_path();
+    let Ok(manifest) = crate::rules::with_state_dir(input.manifest.clone(), Some(state_dir)) else {
+        return Judged::Error(NoopReason::GroupUnreadable.as_str());
+    };
+    let Some(found) = group_of(&manifest, &front.anchor) else {
+        return Judged::Unjudged;
+    };
+    let Ok(fresh_s) = int_row(&manifest, ROW_FRESH) else {
+        return Judged::Error(TickError::NoRule.as_str());
+    };
+    let dir = host_groups_dir(state_dir);
+    let stamp = group::judged_path(&dir, found.name());
+    let last = fs::read_to_string(&stamp).ok().and_then(|text| text.trim().parse::<u64>().ok());
+    if last.is_some_and(|ts| !aged(ts, front.now, fresh_s)) {
+        return Judged::Unjudged;
+    }
+    let Ok(_lock) = Lock::take(&dir) else {
+        return Judged::Unjudged;
+    };
+    let others: BTreeSet<String> = manifest
+        .groups()
+        .iter()
+        .filter(|other| other.name() != found.name())
+        .flat_map(|other| current_of(state_dir, other).map_or_else(|_| other.accounts().to_vec(), |current| vec![current.label]))
+        .collect();
+    let measure = |label: &str, _: bool| {
+        let _ = usage::run_fresh(&["--account".to_owned(), label.to_owned()], state_dir);
+    };
+    let forced = BTreeSet::new();
+    let judge = group::Judge { state_dir, manifest: &manifest, group: found, others: &others, forced: &forced, caps: front.rows.caps, measure: &measure };
+    let judgement = group::judge(&judge, &mut BTreeSet::new());
+    let _ = fs::write(&stamp, format!("{}\n", front.now));
+    match judgement {
+        Judgement::Moved(label) => Judged::Moved(label),
+        Judgement::Stay(_) => Judged::Stay,
+        Judgement::NoCandidate(Refusal::Recorded) => {
+            refused(input, found, front.rows.window_ms);
+            Judged::None
+        }
+        Judgement::NoCandidate(Refusal::Repeated) => Judged::None,
+        Judgement::Unreadable => Judged::Error("unreadable"),
+    }
+}
+
+/// 断りの 1 行（群の段の断りの字面）を自席へだけ送る（[`deliver_within`]＝入力欄の門を通った周だけ・通らない周は落とす）。
+fn refused(input: &Input, found: &AccountGroup, window_ms: u64) {
+    let payload = group::refused_line(found);
+    let request = Request { target: input.target, socket: input.socket, payload: &payload, state_dir: Some(input.state) };
+    let _ = deliver_within(&request, Duration::from_millis(window_ms));
 }
 
 /// rules の行（行 4 本・送達の窓・群の閾値）。

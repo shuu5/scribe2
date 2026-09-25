@@ -242,7 +242,7 @@ fn assert_tick_mouth(state: &str, usage: &str) {
     assert_eq!(rc_of(&out), i32::from(RC_OK), "tick は自分の口として動く: {}", stderr_of(&out));
     assert_eq!(
         stdout_of(&out),
-        "decision=noop target=s_w reason=no-row pointer=- step=- consumed=- move=- launched=-\n",
+        "decision=noop target=s_w reason=no-row pointer=- step=- consumed=- move=- launched=- judged=-\n",
         "判定行 1 行"
     );
     assert!(stderr_of(&out).is_empty(), "stderr 0 byte");
@@ -1304,8 +1304,8 @@ fn tick_inject(step: u32) -> String {
     format!("decision=inject target={TICK_SEAT} reason=- pointer=sent step={step} consumed=false{TICK_NO_MOVE}\n")
 }
 
-/// 移動の周でない判定行の末尾 2 欄（設計 seat-heartbeat.md §4 形 8・列は固定で省かない）。
-const TICK_NO_MOVE: &str = " move=- launched=-";
+/// 移動の周でなく群の判定を撃たない判定行の末尾 3 欄（設計 seat-heartbeat.md §4 形 8 / §9 形 4・列は固定で省かない）。
+const TICK_NO_MOVE: &str = " move=- launched=- judged=-";
 
 /// 撃って判定行が `want` で rc 0 の周に、key も梯子の記録も注入の記録も増えず、偽 client も呼ばれないことを測る。
 fn tick_assert_quiet(place: &TickPlace, want: &str) {
@@ -1624,13 +1624,16 @@ fn move_record(root: &Path, account: &str) {
 }
 
 /// 置き場を 1 つ作る: host の面に口座 A / B と群（置き場 2 つ・候補 A, B）を書き、`anchor` の席の登録 row（口座 A）を積み、
-/// 最終行 Idle の打刻（いま）と空の入力欄の pane を置く。前面の file は置かない（席＝`claude`）。
+/// 最終行 Idle の打刻（いま）と空の入力欄の pane を置く。前面の file は置かない（席＝`claude`）。群の判定の打刻（いま）も置く
+/// （判定は鮮度の内側＝移動の門の歯は計測を起こさない・判定の歯は [`judge_place`] が消す）。
 fn move_place(root: &Path, name: &str, anchor: &str) -> MovePlace {
     let state = root.join(name);
     let tools = root.join(format!("{name}-tools"));
     let seat = seat_dir_of(&state, TICK_SEAT);
     fs::create_dir_all(&seat).ok();
     fs::create_dir_all(&tools).ok();
+    fs::create_dir_all(move_groups_dir(root)).ok();
+    fs::write(judge_stamp(root), format!("{}\n", unix_now())).ok();
     let host = format!(
         "schema = 1\n\n[[account]]\nlabel = \"{MOVE_A}\"\n\n[[account]]\nlabel = \"{MOVE_B}\"\n\n[[account-group]]\nname = \"{MOVE_GROUP}\"\n\
          anchors = [\"{MOVE_ANCHOR}\", \"{MOVE_ANCHOR_TWO}\"]\naccounts = [\"{MOVE_A}\", \"{MOVE_B}\"]\n"
@@ -1657,6 +1660,8 @@ fn move_place(root: &Path, name: &str, anchor: &str) -> MovePlace {
         ("fleet.group_pressure_model_pct", "GroupPressureModelPct", 95),
         ("seat.cycle_settle_s", "SeatCycleSettleS", 1),
         ("seat.cycle_poll_ms", "SeatCyclePollMs", 100),
+        ("fleet.lock_retry_ms", "LockRetryMs", 5000),
+        ("fleet.lock_stale_ms", "LockStaleMs", 30_000),
     ];
     let body = rows.iter().fold("schema = 1\n".to_owned(), |text, (id, kind, value)| {
         format!("{text}\n[[rule]]\nid = \"{id}\"\nkind = \"{kind}\"\nvalue = {value}\nenabled = true\nruling = \"r\"\nruled_at = \"d\"\n")
@@ -1730,9 +1735,9 @@ fn move_injections(place: &MovePlace) -> Vec<String> {
     fs::read_to_string(tick_file(&place.state, TICK_SEAT)).unwrap_or_default().lines().map(str::to_owned).collect()
 }
 
-/// 移動の周の判定行（`reason=- pointer=- step=-`・契約の字面）。
+/// 移動の周の判定行（`reason=- pointer=- step=-`・群の判定を撃たない周の `judged=-`・契約の字面）。
 fn move_line(step: &str, consumed: &str, launched: &str) -> String {
-    format!("decision=move target={TICK_SEAT} reason=- pointer=- step=- consumed={consumed} move={step} launched={launched}\n")
+    format!("decision=move target={TICK_SEAT} reason=- pointer=- step=- consumed={consumed} move={step} launched={launched} judged=-\n")
 }
 
 /// 移動の門で止まった周の判定行（梯子を評価しない側＝`pointer=- step=-`）。
@@ -1889,6 +1894,187 @@ fn seat_tick_move_reaches_seats_in_two_state_dirs_under_one_parent() {
         assert_eq!(move_keys(place).first(), Some(&format!("send-keys -t {TICK_TARGET} -l /exit")), "/exit を送る");
         assert_eq!(move_injections(place).len(), 1, "置き場ごとに記録 1 行");
     }
+}
+
+// ───────────── tick が群の移動の判定を撃つ（seat-heartbeat.md §9・契約表の行 i・`s2-07l.631`・接頭辞 `seat_tick_judge_`） ─────────────
+//
+// §4 の移動の fixture（偽 tmux・host の群用 dir・`--rules` の写し）に、pipe/dispatch.rs の群の fixture と同じ形の偽 usage client
+// （stdin の token で口座ごとの本文を返し・argv を file に残す）と口座 A / B の credential を足す。群の 2 つ目の置き場の席
+// （`tk:two`・口座 A）を同じ置き場に積み、判定の側がその席へ 1 key も送らないことを測る。判定の打刻は消して始める。
+
+/// 群の判定の打刻（`<群用 dir>/<群>.judged`・契約の字面）。
+fn judge_stamp(root: &Path) -> PathBuf {
+    move_groups_dir(root).join(format!("{MOVE_GROUP}.judged"))
+}
+
+/// 偽 usage client の argv の記録。
+const JUDGE_ARGS: &str = "usage-args";
+/// 群の 2 つ目の置き場の席の target（判定の側が触らない席）。
+const JUDGE_OTHER: &str = "tk:two";
+
+/// 判定の歯の置き場: [`move_place`] に口座 A / B の credential と本文（5 時間窓だけ `five`・他の窓は 10）・偽 usage client・群の
+/// 2 つ目の置き場の席を足し、判定の打刻を消す。
+fn judge_place(root: &Path, anchor: &str, five: [u64; 2]) -> MovePlace {
+    let place = move_place(root, "state", anchor);
+    fs::remove_file(judge_stamp(root)).ok();
+    for (label, used) in [(MOVE_A, five[0]), (MOVE_B, five[1])] {
+        let dir = place.state.join("accounts").join(label);
+        fs::create_dir_all(&dir).ok();
+        let credential =
+            format!("{{\"claudeAiOauth\":{{\"accessToken\":\"tok-{label}\",\"refreshToken\":\"r\",\"expiresAt\":4102444800000}}}}");
+        fs::write(dir.join(".credentials.json"), credential).ok();
+        let far = "2099-01-01T00:00:00Z";
+        let body = format!(
+            "{{\"five_hour\":{{\"utilization\":{used},\"resets_at\":\"{far}\"}},\"seven_day\":{{\"utilization\":10,\"resets_at\":\"{far}\"}},\
+             \"limits\":[{{\"kind\":\"weekly_scoped\",\"percent\":10,\"resets_at\":\"{far}\",\"scope\":{{\"model\":{{\"display_name\":\"Fable\"}}}}}}]}}"
+        );
+        fs::write(place.at(&format!("body-tok-{label}")), body).ok();
+    }
+    let (args, tools) = (place.at(JUDGE_ARGS).display().to_string(), place.tools.display().to_string());
+    let curl = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" >> '{args}'\ncfg=$(cat)\nfor f in '{tools}'/body-*; do\n\
+         case \"$cfg\" in *\"Bearer ${{f##*/body-}}\\\"\"*) cat \"$f\" ;; esac\ndone\nprintf '\\n%s' '200'\n"
+    );
+    fs::write(place.tools.join("bin").join("curl"), curl).ok();
+    let two = seat_dir_of(&place.state, &JUDGE_OTHER.replace(':', "_"));
+    fs::create_dir_all(&two).ok();
+    fs::write(state_file(&two), format!("{}\n", stamp_line("idle", "SessionStart", unix_now(), "sid-two"))).ok();
+    let launch = fixture(&place.tools, "launch-two.txt", "claude\n");
+    let path = place.state.display().to_string();
+    let out = run_seat(&[
+        "register", "--state-dir", &path, "--target", JUDGE_OTHER, "--role", "orchestrator", "--account", MOVE_A, "--launch",
+        &launch, "--anchor", MOVE_ANCHOR_TWO,
+    ]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "2 つ目の席の登録 row を積める: {}", stderr_of(&out));
+    place
+}
+
+/// 偽 usage client の呼出の回数（口座 1 つにつき 1 回）。
+fn judge_calls(place: &MovePlace) -> usize {
+    fs::read_to_string(place.at(JUDGE_ARGS)).unwrap_or_default().lines().filter(|arg| *arg == "--max-time").count()
+}
+
+/// 置き場の event log の `kind` の件数。
+fn judge_events(place: &MovePlace, kind: vessel::fleet::EventKind) -> usize {
+    vessel::fleet::store::read_all(&place.state).unwrap_or_default().iter().filter(|event| event.kind == kind).count()
+}
+
+/// 判定の打刻の ts（無い・読めなければ `None`）。
+fn judge_ts(root: &Path) -> Option<u64> {
+    fs::read_to_string(judge_stamp(root)).ok()?.trim().parse().ok()
+}
+
+/// 黙っていない席（最終行はいま）で移動の周でない判定行（`judged=` の語だけを変える）。
+fn judge_recent(judged: &str) -> String {
+    format!("decision=noop target={TICK_SEAT} reason=stamp-recent pointer=wait:0 step=0 consumed=- move=- launched=- judged={judged}\n")
+}
+
+/// 断りの 1 行（器の字面を借りない）。
+fn judge_refused() -> String {
+    format!("{NAME} group: move-refused group={MOVE_GROUP} reason=no-candidate")
+}
+
+/// (a) 群の今の口座（種 A）が逼迫 ∧ 候補 B は閾値未満 ∧ 判定の打刻なし ∧ 前面 `claude` ∧ 入力欄が空 → 記録が B へ動き・承認
+/// event 1・`judged=moved:acct-b`・自席への key は移動の門の `/exit` の 1 行だけ・2 つ目の席へ 0 key・通知 0・打刻は判定の周の
+/// ts（base では記録不変 ∧ 打刻の file 無し ＝ RED）。
+#[test]
+fn seat_tick_judge_moves_the_record_and_only_the_move_gate_sends_the_exit() {
+    use vessel::fleet::EventKind;
+    let root = tmp();
+    let place = judge_place(&root, MOVE_ANCHOR, [90, 10]);
+    let before = unix_now();
+    let out = move_run(&place);
+    let after = unix_now();
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    let want = format!("decision=move target={TICK_SEAT} reason=- pointer=- step=- consumed=false move=exit launched=- judged=moved:{MOVE_B}\n");
+    assert_eq!(stdout_of(&out), want, "判定行 1 行");
+    let record = fs::read_to_string(move_groups_dir(&root).join(format!("{MOVE_GROUP}.account"))).unwrap_or_default();
+    assert!(record.starts_with(&format!("account={MOVE_B}\n")) && record.contains(&format!("previous={MOVE_A}\n")), "{record}");
+    assert_eq!(judge_events(&place, EventKind::GroupMoved), 1, "承認 event 1");
+    assert_eq!(judge_events(&place, EventKind::GroupPressureNotified), 0, "通知 0");
+    assert_eq!(
+        move_keys(&place),
+        [format!("send-keys -t {TICK_TARGET} -l /exit"), format!("send-keys -t {TICK_TARGET} Enter")],
+        "自席への /exit は移動の門の 1 行だけ・他の席へ 0 key・通知の行 0"
+    );
+    assert_eq!(judge_calls(&place), 2, "今の口座と候補を 1 回ずつ測る");
+    assert!(judge_ts(&root).is_some_and(|ts| (before..=after).contains(&ts)), "打刻は判定の周の ts: {:?}", judge_ts(&root));
+    assert!(!move_groups_dir(&root).join("lock").exists(), "lock は周の後に外れる");
+}
+
+/// (b) 判定の打刻が鮮度の内側 → 計測 0・`judged=-`・打刻は不変。fixture が置いた打刻の周と、(a) の周が書いた打刻の直後に
+/// もう 1 周撃つ周（自前の打刻を鮮度の内側と読む）の 2 本。
+#[test]
+fn seat_tick_judge_skips_a_fresh_stamp_without_measuring() {
+    let root = tmp();
+    let place = judge_place(&root, MOVE_ANCHOR, [90, 10]);
+    let put = unix_now() - 10;
+    fs::write(judge_stamp(&root), format!("{put}\n")).ok();
+    move_assert_quiet(&place, &judge_recent("-"));
+    assert_eq!((judge_calls(&place), judge_ts(&root)), (0, Some(put)), "計測 0・打刻は不変");
+    assert!(!move_groups_dir(&root).join(format!("{MOVE_GROUP}.account")).exists(), "記録は書かれない");
+    let again = tmp();
+    let place = judge_place(&again, MOVE_ANCHOR, [90, 10]);
+    let first = move_run(&place);
+    assert!(stdout_of(&first).ends_with(&format!(" judged=moved:{MOVE_B}\n")), "1 周目は判定する: {}", stdout_of(&first));
+    let (calls, stamped) = (judge_calls(&place), judge_ts(&again));
+    let out = move_run(&place);
+    assert_eq!(stdout_of(&out), move_line("exit", "false", "-"), "2 周目は自前の打刻で撃たない: stderr={}", stderr_of(&out));
+    assert_eq!((judge_calls(&place), judge_ts(&again)), (calls, stamped), "2 周目の計測 0・打刻は不変");
+}
+
+/// (c) 候補なし（A / B とも逼迫）∧ 入力欄が空 → `judged=none`・断りの event 1・記録不変・自席へ断りの 1 行（群の段の断りの
+/// 字面）・他の席へ 0 key（base では 0 行 ＝ RED）。
+#[test]
+fn seat_tick_judge_without_a_candidate_refuses_to_its_own_seat_only() {
+    let root = tmp();
+    let place = judge_place(&root, MOVE_ANCHOR, [90, 90]);
+    let out = move_run(&place);
+    assert_eq!(stdout_of(&out), judge_recent("none"), "stderr={}", stderr_of(&out));
+    assert_eq!(judge_events(&place, vessel::fleet::EventKind::GroupMoveRefused), 1, "断りの event 1");
+    assert!(!move_groups_dir(&root).join(format!("{MOVE_GROUP}.account")).exists(), "記録不変");
+    assert_eq!(
+        move_keys(&place),
+        [format!("send-keys -t {TICK_TARGET} -l {}", judge_refused()), format!("send-keys -t {TICK_TARGET} Enter")],
+        "自席へ断りの 1 行だけ・他の席へ 0 key"
+    );
+}
+
+/// (c2) 候補なし ∧ 同じ実測に断りの event が既に在る（(c) の直後に打刻を消してもう 1 周）→ `judged=none`・event 0・自席へ 0 行。
+#[test]
+fn seat_tick_judge_does_not_refuse_the_same_measurement_twice() {
+    let root = tmp();
+    let place = judge_place(&root, MOVE_ANCHOR, [90, 90]);
+    let first = move_run(&place);
+    assert_eq!(stdout_of(&first), judge_recent("none"), "1 周目は断る: stderr={}", stderr_of(&first));
+    fs::remove_file(judge_stamp(&root)).ok();
+    let keys = move_keys(&place).len();
+    let out = move_run(&place);
+    assert_eq!(stdout_of(&out), judge_recent("none"), "stderr={}", stderr_of(&out));
+    assert_eq!(judge_events(&place, vessel::fleet::EventKind::GroupMoveRefused), 1, "event 0（1 のまま）");
+    assert_eq!(move_keys(&place).len(), keys, "自席へ 0 行");
+}
+
+/// (d) 群用 dir に lock が在る → 判定 0（計測 0・記録 0・打刻なし）・列は今のまま（`judged=-`）。
+#[test]
+fn seat_tick_judge_held_lock_judges_nothing() {
+    let root = tmp();
+    let place = judge_place(&root, MOVE_ANCHOR, [90, 10]);
+    let lock = move_groups_dir(&root).join("lock");
+    fs::write(&lock, "pid=1\n").ok();
+    move_assert_quiet(&place, &judge_recent("-"));
+    assert_eq!((judge_calls(&place), judge_ts(&root)), (0, None), "計測 0・打刻なし");
+    assert_eq!(judge_events(&place, vessel::fleet::EventKind::GroupMoved), 0, "承認 event 0");
+    assert!(lock.exists(), "他の手の lock は外さない");
+}
+
+/// (e) 群に属さない anchor → `judged=-`・0 key・計測 0（今の口座が逼迫でも判定しない）。
+#[test]
+fn seat_tick_judge_outside_the_group_is_unjudged() {
+    let root = tmp();
+    let place = judge_place(&root, "/elsewhere", [90, 10]);
+    move_assert_quiet(&place, &judge_recent("-"));
+    assert_eq!((judge_calls(&place), judge_ts(&root)), (0, None), "計測 0・打刻なし");
 }
 
 // ───────────── pane が shell かの判定は子 process まで見る（seat-heartbeat.md §6・契約表の行 e・`s2-07l.624`・接頭辞 `seat_pane_shell_`） ─────────────
