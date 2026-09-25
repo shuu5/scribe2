@@ -373,6 +373,39 @@ user-scope MCP 設定の同期・別口座への `--resume` の混線 fence・pr
 - 却下: 測れる口座の数を出す（doctor が計測を撃つことになる・§3 の「計測は撃たない」）／群の行に出す（群 0 の host で出ない）。
 - 歯（`crates/scribe2-boundary/tests/e2e/seat.rs` に `seat_doctor_run_accounts_` 接頭辞・§17 の host.toml の fixture）: 宣言 3・群 1（今の口座 = 種）→ `run-accounts=2`（base では欄が無い ＝ RED）／退役 1 を足す → 1／群 0 → 3／宣言 1・群 1（有効な口座の全部が群の今の口座）→ `run-accounts=0` で rc と他の行は 2 の周と 1 字も変わらない／面 absent → 欄なし。
 
+## 27. 稼働中の便は群の移動を妨げない — 移り先の候補から「1 周の置き場の live 便が使っている口座」の除外を外し、新規の便だけが群の記録で止まる（契約表の行 p・§20 形 5 / §23 の改め・持ち主の裁定 2026-09-25T15:2xZ〔逐語は台帳〕）
+
+やさしく言うと: 群が口座を移るとき、器は「他の群の今の口座」「閾値以上の口座」に加えて「この置き場で走っている便が使っている口座」も候補から外している。持ち主の整理は違う: 稼働中の便は移動を妨げなくてよく、移り先に選ばれた口座で**新しい便が起きないこと**だけが要る。後者は §23 が既に持つ（便の選定は群の記録の口座を外す・記録は移り先が決まった瞬間に lock の内側で書かれる）。しかも置き場は repo ごとなので他の repo の便はもともと見えず、同じ repo の便にだけ余計に厳しい非対称になっていた。5 口座 2 群で便が走る host では「候補なし」が増えるだけなので、除外を外して統一する。
+
+- 出所: 持ち主の 2026-09-25T15:19Z の問い（群の排他の整理）と 15:2xZ の裁定「外す」（逐語は台帳・契約の bead の notes）。
+- 現物（verified・main 6fcd3d5）:
+  - 候補の規則は §20 形 5（`crates/scribe2/src/pipe/dispatch/group.rs` の `target_of`: 今の口座でなく・他の群の今の口座でなく・退役中でなく・**1 周の置き場の live 便が使っていない**〔`crates/scribe2/src/fleet/replay.rs` の `inflight_by_account`〕・3 窓とも閾値未満）。seat-heartbeat.md 行 i の着地後はこの規則は `crates/scribe2/src/hook/group.rs` の判定の 1 本の中に在る（本行はその後に撃つ・write-set は両 file）。
+  - 新規の便の除外は §23（`crates/scribe2/src/rules/mod.rs` の `grouped_accounts` が各群の今の口座〔記録 > 種〕を返し、`crates/scribe2/src/pipe/ratelimit.rs` と `crates/scribe2/src/fleet/cli.rs` の便用の選定が外す）。記録は §20 形 6 の執行が lock の内側で先に書く＝選定の後は新しい便がその口座で起きない。
+  - 歯 `pipe_dispatch_group_move_skips_an_account_used_by_a_live_run`（`crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs`）が「live 便の在る口座を飛ばす」を測っている。
+- 形（行 p・1 つずつ歯が測る・done と 1:1）:
+  1. **候補の規則から live 便の項を外す**: 移り先 = 宣言の候補の順で、今の口座でなく ∧ 他の群の今の口座でなく ∧ 退役中でなく ∧ 3 窓とも閾値未満の実測（鮮度の内側）を持つ、最初の label。live 便の読み（`inflight_by_account`）は候補の規則から消える（便用の選定と着地の列はそのまま読む・本行は触らない）。
+  2. **新規の便は記録で止まる（§23 のまま・本行は 1 字も変えない）**: 移り先の記録が書かれた後の便用の選定はその口座を外す。稼働中の便は終端まで走る（止めない・口座を替えない）。
+  3. **他の置き場の便**: もともと見えない（置き場ごとの event log）。本行の後は同じ置き場の便と同じ扱い＝非対称が消える。
+  4. **判定行・event・通知・記録の形は不変**。候補なしの内訳（§25 の `excluded` / `unmeasured` / `limited`）から live の理由が消える（§25 の内訳の語に live 便の項が在れば消す・無ければ不変）。
+- 触らない: §23 の便用の除外・§20 形 6 の執行の順・lock・記録の形・承認 event・退避と起こし直し・§25 の内訳の 3 欄の形。
+- 却下: 便の側で「群の今の口座で走っている便を止めて別口座で再開する」（便の途中再開は別の要件 FR37 の道・移動と結ばない）／移り先の記録を便の選定が lock の内側で読む（隙間は稼働中の便 1 本が新しい口座で走り出すだけ＝持ち主の整理では害が無い・lock の読み手を増やさない）／置き場を跨いで live 便を集める（置き場ごとの event log の原則を崩す・要らない）。
+- 歯（`crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs`・`pipe_dispatch_group_move_` 接頭辞の既存の fixture）: (a) `pipe_dispatch_group_move_skips_an_account_used_by_a_live_run` を「live 便の在る口座へも移る」の歯に書き換える（名も改める・live あり / なしの両方で同じ移り先＝base では live ありが次の候補へ飛ぶ ＝ RED）(b) 移った直後の便用の選定（`fleet select` の口・§23 の既存の歯の fixture）がその口座を外す（不変・GREEN のまま・本行の証拠として名指す）(c) 既存の `pipe_dispatch_group_` の他の歯は 1 字も変えず GREEN。
+
+## 28. 群の種は宣言順に重ならない — 記録の無い群の今の口座（種）を「宣言順で前の群の種でない最初の候補」にし、両群が同じ候補の列を宣言しても初期状態で同じ口座に乗らない（契約表の行 q・§20 形 2 の改め・同じ裁定の周）
+
+やさしく言うと: 群の今の口座は「記録 > 種」で、種は宣言の候補の先頭。Tier1 と Tier2 は同じ 5 口座を同じ順で宣言しているので、記録が無い初期状態では両群とも先頭の口座に乗る。群 ↔ 群の排他は移動の判定にしか無く、種の段では効かない。host を作り直した周・記録を消した周に必ず起きる。種を「宣言順で前の群が種にしていない最初の候補」にすれば、面を書き換えずに初期状態から重ならない。
+
+- 出所: §27 の問いの周の実測（2026-09-25 時点の host.toml は両群が同じ列・両群とも記録あり＝実害なし）。
+- 現物（verified・main 6fcd3d5）: 種は `crates/scribe2/src/hook/group.rs` の `current_of`（記録が無ければ `accounts().first()`）。群の宣言は `crates/scribe2/src/rules/manifest.rs` の `AccountGroup`（name / anchors / accounts）で、面の読みが宣言順の列を持つ。読み手は dispatch の 1 周・席の起動・doctor・hook の 4 つ（§20 形 2・§21）。
+- 形（行 q・1 つずつ歯が測る・done と 1:1）:
+  1. **種は面の読みで 1 回決める**: `AccountGroup` に種の欄を足し、面を読む 1 本が宣言順に「前の群の種でない最初の候補」を種として埋める。全候補が前の群の種に使われている群は面の欠陥（既存の欠陥の列に 1 種足す・行番号つき・fail-closed）。
+  2. **解決の 1 関数は種の欄を読む**（`accounts().first()` をやめる）。記録が在る周は今のまま記録が勝つ。
+  3. **doctor の群の行の `current=` は種の周も同じ 1 関数から出る**（形は不変・値だけ変わりうる）。
+  4. 候補が 1 口座しか無い群 2 つ（同じ口座）は欠陥＝面を直すまで両群の読みが止まる（読めない面は全群を typed に止める今の規則と同じ）。
+- 触らない: 記録の形・移動の判定・§23 の除外・面の表の形（欄を足さない・種は導出）。
+- 却下: 面の検査で「同じ種」を欠陥にする（今の host.toml がそのまま欠陥になり全群が止まる・持ち主に面の書き換えを強いる）／種を乱数や host 名で選ぶ（決定的でない・N3）／群ごとに別の候補の列を強いる（面の書き方の規則が増える・C1）。
+- 歯（`crates/scribe2-boundary/tests/e2e/rules.rs` に `host_group_seed_` 接頭辞〔既存の `host_group_` の歯は fleet.rs / seat/account.rs にも在るので、行 q の verify はこの接頭辞で rules.rs の新しい歯だけを名指す〕と `crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs`）: (d) 同じ列を宣言した 2 群の記録なしの周の `current=` が宣言順に先頭と 2 番目（base では両方先頭 ＝ RED）(e) 候補 1 つを共有する 2 群は欠陥の行番号と語 (f) 記録が在る群は種に依らず記録の口座（不変）(g) 群 1 つの host は先頭のまま（不変）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -530,4 +563,27 @@ size = "S"
 growth = ["crates/scribe2/src/account/mod.rs:30"]
 depends = ["n"]
 done = "(1) 面が present の周だけ host の行の末尾に run-accounts=<n>（有効な口座の数 − 群の今の口座の数・§23 と同じ読み手・計測は撃たない）を足し、absent / unreadable の周は欄を足さない (2) 0 でも rc と他の行は 1 字も変わらない (3) snapshot 2 本と字面の歯を 1 欄分だけ更新する 歯: seat_doctor_run_accounts_ の歯が、宣言 3・群 1 で run-accounts=2（base では欄が無い ＝ RED）・退役 1 で 1・群 0 で 3・宣言 1・群 1 で run-accounts=0 と rc と他の行の不変・面 absent で欄なしを測る"
+[[contract]]
+id = "p"
+title = "稼働中の便は群の移動を妨げない — 移り先の候補から 1 周の置き場の live 便が使っている口座の除外を外し、新規の便だけが群の記録（§23）で止まる（§27・裁定 2026-09-25T15:2xZ）"
+req = ["FR38", "FR36", "NFR4"]
+section = "27"
+write-set = ["crates/scribe2/src/hook/group.rs", "crates/scribe2/src/pipe/dispatch/group.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "docs/design/account-lifecycle.md"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_group_move_"]
+size = "S"
+growth = ["crates/scribe2/src/hook/group.rs:0", "crates/scribe2/src/pipe/dispatch/group.rs:0"]
+depends = ["l"]
+done = "(1) 移り先の候補の規則は「今の口座でなく ∧ 他の群の今の口座でなく ∧ 退役中でなく ∧ 3 窓とも閾値未満の実測を持つ最初の label」で、live 便の読み（inflight_by_account）は候補の規則から消える (2) §23 の便用の除外・§20 形 6 の執行の順・lock・記録・承認 event・退避・起こし直しは 1 字も変わらない (3) 稼働中の便は止めず口座も替えない (4) 候補なしの内訳に live 便の理由が在れば消え、無ければ不変 歯: pipe_dispatch_group_move_ の live 便の歯を「live 便の在る口座へも移る」に書き換え（名も改める・live あり / なしで同じ移り先・base では live ありが次の候補へ飛ぶ ＝ RED）、移った直後の便用の選定がその口座を外す §23 の既存の歯は GREEN のまま、他の pipe_dispatch_group_ の歯は 1 字も変えず GREEN"
+
+[[contract]]
+id = "q"
+title = "群の種は宣言順に重ならない — 面の読みが AccountGroup に種（前の群の種でない最初の候補）を埋め、解決の 1 関数が種の欄を読む（§28・§20 形 2 の改め）"
+req = ["FR38", "FR57", "NFR4"]
+section = "28"
+write-set = ["crates/scribe2/src/rules/manifest.rs", "crates/scribe2/src/hook/group.rs", "crates/scribe2-boundary/tests/e2e/rules.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "docs/design/account-lifecycle.md"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail host_group_seed_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_group_move_"]
+size = "S"
+growth = ["crates/scribe2/src/rules/manifest.rs:30", "crates/scribe2/src/hook/group.rs:5"]
+depends = ["l"]
+done = "(1) 面を読む 1 本が宣言順に各群の種（前の群の種でない最初の候補）を AccountGroup の欄に埋め、全候補が前の群の種に使われている群は面の欠陥（行番号つき・既存の欠陥の列に 1 種）で fail-closed (2) 群の今の口座の解決の 1 関数は記録 > 種の欄で、accounts の先頭を読まない (3) 記録の形・移動の判定・§23 の除外・面の表の形は不変 歯: host_group_seed_ の歯が同じ列を宣言した 2 群の記録なしの周の current= を宣言順に先頭と 2 番目（base では両方先頭 ＝ RED）・候補 1 つを共有する 2 群の欠陥の行番号と語・群 1 つの host は先頭のまま を測り、pipe_dispatch_group_move_ の記録ありの歯は 1 字も変えず GREEN"
 <!-- contracts:end -->
