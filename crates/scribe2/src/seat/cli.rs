@@ -563,6 +563,14 @@ fn launch_with(flags: &LaunchFlags, place: &LaunchPlace) -> Outcome {
     });
     // 群の置き場の断りは次の 1 手（群の今の口座）を同じ manifest と anchor から解く（設計 account-lifecycle.md §21 形 3）。
     let line = cycle::render_launched(flags.target, &result, state, Some((&manifest, &place.anchor)));
+    // 席が立った周だけ、host の面に `[[tick]]` が在れば tick の unit を入れて結果の 1 語を行の末尾に足す（表の無い host の行は
+    // 1 字も変わらない・断りは rc を変えない＝席は立っている・設計 seat-heartbeat.md §5 形 2）。
+    let line = match (&result, manifest.tick()) {
+        (cycle::Launched::Done(..), Some(tick)) => {
+            format!("{line} {}", super::tick::install::on_launch(&state.path, flags.target, tick, &manifest))
+        }
+        _ => line,
+    };
     match result {
         cycle::Launched::Done(..) => Outcome::ok_line(line),
         cycle::Launched::None(_) | cycle::Launched::Refused(_) | cycle::Launched::Failed(_) => Outcome::failed_line(RC_REFUSED, line),

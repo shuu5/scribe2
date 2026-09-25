@@ -11,11 +11,12 @@
 //! **host の面**（`<state_dir>/host.toml`・設計 account-lifecycle.md §2・ADR-0026 §2.1）も同じ reader で読む:
 //! 持てる表は `[[account]]` / `[[plugin]]` / `[[launch-arg]]` / `[[vessel]]`（器自身の checkout・最大 1 行・
 //! 設計 consumer-sync.md §4）/ `[[account-group]]`（席の口座を持つ project の群・設計 account-lifecycle.md §17・
-//! ADR-0049）の 5 種だけで、`[[rule]]` は置けない（規則の行は tracked の面だけ・C1）。無い周は
+//! ADR-0049）/ `[[tick]]` の 6 種だけで、`[[rule]]` は置けない（規則の行は tracked の面だけ・C1）。無い周は
 //! 0 宣言（縮退）・在るが読めない周は欠陥の全件（FailClosed）。
 //!
 //! `[[account-group]]` は**host の面にだけ**置ける最初の表である（`[[rule]]` が tracked の面にだけ置けるのと
-//! 対称・設計 account-lifecycle.md §17 の約束 2）。
+//! 対称・設計 account-lifecycle.md §17 の約束 2）。`[[tick]]`（席の起動が入れる tick の unit の置き場と binary・最大 1 行・
+//! 設計 seat-heartbeat.md §5・ADR-0064）も host の面にだけ置ける。
 //!
 //! **契約表の面**（設計 doc の区間・導出の `.toml`・設計 contract-source.md §2・ADR-0023 §2.1）も同じ reader で読む:
 //! 持てる表は `[[contract]]` 1 種だけで（key 集合は `pipe::table::FIELDS`）、rules manifest と host の面は
@@ -62,6 +63,10 @@ const VESSEL_KEYS: &[&str] = &["repo"];
 /// `name` は host で一意な群の名、`anchors` は群に属する置き場（席の登録 row の anchor）の列、`accounts` は
 /// 候補の口座 label の列で**宣言順が候補の順**である。どちらの列も空は受けない（空の列は [`list`] が断る）。
 const GROUP_KEYS: &[&str] = &["name", "anchors", "accounts"];
+
+/// `[[tick]]` 行が持てる key の全体（**必須もこれと同じ 2 つ**・設計 seat-heartbeat.md §5 形 1）。`unit-dir` は tick の unit を置く
+/// dir・`binary` は unit が撃つ器（どちらも絶対 path・host 固有・host の面にだけ・**最大 1 行**）。
+const TICK_KEYS: &[&str] = &["unit-dir", "binary"];
 
 /// 行に必ず要る key。
 ///
@@ -124,6 +129,9 @@ enum Section {
     /// 席の口座を持つ project の群 1 つの宣言（名・置き場の列・候補の口座 label の列・**host の面にだけ**・
     /// 設計 account-lifecycle.md §17・ADR-0049）。
     AccountGroup,
+    /// 席の起動が入れる tick の unit の置き場と binary の宣言（unit-dir と binary・最大 1 行・**host の面にだけ**・
+    /// 設計 seat-heartbeat.md §5・ADR-0064）。
+    Tick,
 }
 
 /// [`Section`] の全 variant（宣言順）。
@@ -135,6 +143,7 @@ const SECTIONS: &[Section] = &[
     Section::Contract,
     Section::Vessel,
     Section::AccountGroup,
+    Section::Tick,
 ];
 
 impl Section {
@@ -148,6 +157,7 @@ impl Section {
             Self::Contract => "[[contract]]",
             Self::Vessel => "[[vessel]]",
             Self::AccountGroup => "[[account-group]]",
+            Self::Tick => "[[tick]]",
         }
     }
 
@@ -167,6 +177,7 @@ impl Section {
             Self::Contract => FIELDS.iter().map(|field| field.name).chain([DERIVED_GOAL]).collect(),
             Self::Vessel => VESSEL_KEYS.to_vec(),
             Self::AccountGroup => GROUP_KEYS.to_vec(),
+            Self::Tick => TICK_KEYS.to_vec(),
         }
     }
 
@@ -180,6 +191,7 @@ impl Section {
             Self::Contract => FIELDS.iter().filter(|field| field.need == Need::Required).map(|field| field.name).collect(),
             Self::Vessel => VESSEL_KEYS.to_vec(),
             Self::AccountGroup => GROUP_KEYS.to_vec(),
+            Self::Tick => TICK_KEYS.to_vec(),
         }
     }
 }
@@ -311,6 +323,32 @@ impl AccountGroup {
     }
 }
 
+/// `[[tick]]` 1 行が名乗る tick の unit の置き場と binary（host 固有の場所・host の面にだけ書く・設計 seat-heartbeat.md §5 形 1・
+/// ADR-0064）。どちらも絶対 path（unit は `WorkingDirectory=` を持たないので相対 path は解けない）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TickUnit {
+    unit_dir: String,
+    binary: String,
+    line: u64,
+}
+
+impl TickUnit {
+    /// unit を置く dir の字面（`unit-dir`）。
+    pub fn unit_dir(&self) -> &str {
+        &self.unit_dir
+    }
+
+    /// unit が撃つ器の字面（`binary`）。
+    pub fn binary(&self) -> &str {
+        &self.binary
+    }
+
+    /// manifest の中でこの行が始まる物理行番号。
+    pub fn line(&self) -> u64 {
+        self.line
+    }
+}
+
 /// 読み込み済みの manifest。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Manifest {
@@ -321,6 +359,8 @@ pub struct Manifest {
     contracts: Vec<TableRow>,
     vessel: Option<VesselRepo>,
     groups: Vec<AccountGroup>,
+    // Box は `HostManifest::Present` の大きさを抑えるため（clippy large_enum_variant）。
+    tick: Option<Box<TickUnit>>,
 }
 
 /// `[[contract]]` 1 行の値（key 集合は検査済み・値の形の検査は欄の形を持つ `pipe::table` が行う）。
@@ -489,6 +529,8 @@ impl Manifest {
         self.launch_args.extend(face.launch_args);
         self.groups.extend(face.groups);
         self.vessel = self.vessel.take().or(face.vessel);
+        // `[[tick]]` は host の面にだけ在る（tracked の面は `collect` が断る）＝面をまたぐ重複は起きない。
+        self.tick = face.tick;
         Ok(self)
     }
 
@@ -543,6 +585,12 @@ impl Manifest {
         &self.groups
     }
 
+    /// 宣言した tick の unit の置き場と binary（host の面・最大 1 行・無ければ `None`＝席の起動は unit を入れず行も変えない・
+    /// 設計 seat-heartbeat.md §5 形 1）。
+    pub fn tick(&self) -> Option<&TickUnit> {
+        self.tick.as_deref()
+    }
+
     /// 宣言のどれかの群が候補に挙げている口座 label の集合（**便用の選定の除外**・設計 account-lifecycle.md §17 の
     /// 約束 4）。群を 1 つも宣言しない面は空＝除外は 1 件も増えない。
     pub fn grouped_accounts(&self) -> BTreeSet<String> {
@@ -556,7 +604,7 @@ fn collect(text: &str, face: Face) -> (Manifest, Vec<RuleError>) {
     let (schema, raws) = scan(text, &mut errors);
     check_schema(schema, &mut errors);
     let mut found = Manifest::default();
-    let mut vessel_rows = 0_usize;
+    let (mut vessel_rows, mut tick_rows) = (0_usize, 0_usize);
     for raw in &raws {
         match (raw.section, face) {
             (Section::Contract, Face::Table) => found.contracts.extend(build_table(raw, &mut errors)),
@@ -578,10 +626,18 @@ fn collect(text: &str, face: Face) -> (Manifest, Vec<RuleError>) {
             (Section::AccountGroup, Face::Host) => found.groups.extend(build_group(raw, &mut errors)),
             // **host の面にだけ在る表**（`[[rule]]` の対称形・設計 account-lifecycle.md §17 の約束 2）。行の中身は
             // 検査しない（置けない表の欠陥を重ねて報告しない＝1 表 1 件）。
-            (Section::AccountGroup, Face::Tracked) => errors.push(RuleError::new(
+            (Section::AccountGroup, Face::Tracked) => errors.push(host_only(raw, "群の宣言は host の面だけ")),
+            // unit の置き場と binary は host 固有の path（tracked の面は PUBLIC repo に載る＝CON2）。行の中身は検査しない（1 表 1 件）。
+            (Section::Tick, Face::Tracked) => errors.push(host_only(raw, "unit の置き場は host の面だけ")),
+            // 2 行目以降は重複として拒む（`[[vessel]]` と同じ形・1 行目の欠陥は build_tick が別件で報告する）。
+            (Section::Tick, Face::Host) if tick_rows > 0 => errors.push(RuleError::new(
                 raw.line,
-                format!("{} は tracked の manifest に置けない（群の宣言は host の面だけ）", Section::AccountGroup.header()),
+                format!("{} が重複する（最大 1 行）", Section::Tick.header()),
             )),
+            (Section::Tick, Face::Host) => {
+                tick_rows = tick_rows.saturating_add(1);
+                found.tick = build_tick(raw, &mut errors).map(Box::new);
+            }
             (Section::Account, _) => found.accounts.extend(
                 build_single(raw, "label", &mut errors).map(|(label, line)| AccountLabel { label, line }),
             ),
@@ -607,6 +663,11 @@ fn collect(text: &str, face: Face) -> (Manifest, Vec<RuleError>) {
     check_duplicate_labels(&found.accounts, &mut errors);
     check_duplicate_groups(&found.groups, &mut errors);
     (found, errors)
+}
+
+/// host の面にだけ在る表（`[[account-group]]` / `[[tick]]`）を tracked の面に置いた周の 1 件（見出しの行番号・`why` は置き場の理由）。
+fn host_only(raw: &RawRow, why: &str) -> RuleError {
+    RuleError::new(raw.line, format!("{} は tracked の manifest に置けない（{why}）", raw.section.header()))
 }
 
 /// 欠陥が 0 件なら宣言を、在れば行番号の順に並べた欠陥の全件を返す。
@@ -916,6 +977,35 @@ fn build_group(raw: &RawRow, errors: &mut Vec<RuleError>) -> Option<AccountGroup
         return None;
     }
     Some(AccountGroup { name, anchors, accounts, line: raw.line })
+}
+
+/// `[[tick]]` 1 行を組む（設計 seat-heartbeat.md §5 形 1）。欠けや未知 key は全件 `errors` へ積み、[`build_single`] と同じ形で
+/// 打ち切る。2 欄とも**絶対 path**でなければ、その key の行番号で 1 件ずつ拒む（空の字面も相対に数える）。
+fn build_tick(raw: &RawRow, errors: &mut Vec<RuleError>) -> Option<TickUnit> {
+    let before = errors.len();
+    check_keys(raw, errors);
+    if raw
+        .fields
+        .iter()
+        .any(|(_, value, _)| matches!(value, RawValue::Broken))
+    {
+        return None;
+    }
+    let unit_dir = text_field(raw, "unit-dir", errors);
+    let binary = text_field(raw, "binary", errors);
+    let (Some(unit_dir), Some(binary)) = (unit_dir, binary) else {
+        return None;
+    };
+    if errors.len() > before {
+        return None;
+    }
+    for (key, value) in [("unit-dir", &unit_dir), ("binary", &binary)] {
+        if !Path::new(value).is_absolute() {
+            let line = raw.fields.iter().find(|(found, _, _)| found == key).map_or(raw.line, |(_, _, line)| *line);
+            errors.push(RuleError::new(line, format!("{key} が絶対 path でない: {value:?}")));
+        }
+    }
+    (errors.len() == before).then_some(TickUnit { unit_dir, binary, line: raw.line })
 }
 
 /// `[[contract]]` 1 行を組む。欠けや未知 key は全件 `errors` へ積み、[`build_row`] と同じ形で打ち切る
@@ -1235,6 +1325,57 @@ mod tests {
             shown,
             vec![(3, "host.toml: label b が面をまたいで重複する（tracked の manifest にも在る）".to_owned())],
             "d は拒まない"
+        );
+    }
+
+    // ─── host の面の `[[tick]]`（設計 seat-heartbeat.md §5 形 1・接頭辞 `host_tick_`） ───
+
+    /// `body` を host の面の規則で読み、欠陥を (行番号, 文言) の列で返す（読めた周は空）。
+    fn host_defects(body: &str) -> Vec<(u64, String)> {
+        match finish(collect(body, Face::Host)) {
+            Ok(_) => Vec::new(),
+            Err(errors) => errors.into_iter().map(|error| (error.line, error.message)).collect(),
+        }
+    }
+
+    /// 1 行の `[[tick]]` は 2 欄と見出し行を運び（round-trip）、tracked の面に合わせても値が残る。表の無い面は `None`。
+    #[test]
+    fn host_tick_one_row_round_trips_its_two_fields_and_line() {
+        let body = "schema = 1\n\n[[account]]\nlabel = \"h1\"\n\n[[tick]]\nunit-dir = \"/u/units\"\nbinary = \"/opt/bin/x\"\n";
+        let face = finish(collect(body, Face::Host)).unwrap_or_default();
+        let tick = face.tick().map(|found| (found.unit_dir().to_owned(), found.binary().to_owned(), found.line()));
+        assert_eq!(tick, Some(("/u/units".to_owned(), "/opt/bin/x".to_owned(), 6)), "2 欄と見出し行");
+        let joined = Manifest::default().joined(HostManifest::Present(face.clone())).unwrap_or_default();
+        assert_eq!(joined.tick(), face.tick(), "面を合わせても同じ値");
+        let bare = finish(collect("schema = 1\n\n[[account]]\nlabel = \"h1\"\n", Face::Host)).unwrap_or_default();
+        assert_eq!(bare.tick(), None, "表の無い面は None");
+        assert_eq!(Manifest::default().joined(HostManifest::Present(bare)).unwrap_or_default().tick(), None);
+    }
+
+    /// 2 行目・相対 path（欄ごと・空の字面も）・欠けた欄・未知 key を行番号つきで 1 件ずつ断り、tracked の面の表は 1 表 1 件で断る。
+    #[test]
+    fn host_tick_refuses_a_second_row_relative_paths_and_missing_fields_with_line_numbers() {
+        let one = "schema = 1\n\n[[tick]]\nunit-dir = \"/u\"\nbinary = \"/b\"\n";
+        assert!(host_defects(one).is_empty(), "1 行は読める");
+        let cases: [(String, Vec<(u64, &str)>); 6] = [
+            (format!("{one}\n[[tick]]\nunit-dir = \"/v\"\nbinary = \"/c\"\n"), vec![(7, "[[tick]] が重複する（最大 1 行）")]),
+            ("schema = 1\n\n[[tick]]\nunit-dir = \"units\"\nbinary = \"/b\"\n".to_owned(), vec![(4, "unit-dir が絶対 path でない: \"units\"")]),
+            ("schema = 1\n\n[[tick]]\nunit-dir = \"/u\"\nbinary = \"bin/x\"\n".to_owned(), vec![(5, "binary が絶対 path でない: \"bin/x\"")]),
+            ("schema = 1\n\n[[tick]]\nunit-dir = \"\"\nbinary = \"\"\n".to_owned(), vec![(4, "unit-dir が絶対 path でない: \"\""), (5, "binary が絶対 path でない: \"\"")]),
+            ("schema = 1\n\n[[tick]]\nunit-dir = \"/u\"\n".to_owned(), vec![(3, "必須 key binary が無い")]),
+            ("schema = 1\n\n[[tick]]\nunit-dir = \"/u\"\nbinary = \"/b\"\nperiod = 60\n".to_owned(), vec![(6, "未知の key period")]),
+        ];
+        for (body, want) in cases {
+            let want: Vec<(u64, String)> = want.into_iter().map(|(line, text)| (line, text.to_owned())).collect();
+            assert_eq!(host_defects(&body), want, "{body}");
+        }
+        let tracked = finish(collect("schema = 1\n\n[[tick]]\n", Face::Tracked)).map_err(|errors| {
+            errors.into_iter().map(|error| (error.line, error.message)).collect::<Vec<(u64, String)>>()
+        });
+        assert_eq!(
+            tracked,
+            Err(vec![(3, "[[tick]] は tracked の manifest に置けない（unit の置き場は host の面だけ）".to_owned())]),
+            "tracked の面は 1 表 1 件"
         );
     }
 

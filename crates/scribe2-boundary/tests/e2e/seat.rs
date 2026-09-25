@@ -2215,3 +2215,73 @@ fn seat_unit_usage_names_install_and_uninstall() {
     assert!(unit_listing(&place.units).is_empty() && unit_calls(&place).is_empty(), "file 0・systemctl 0 回");
     fs::remove_dir_all(&place.tick.dir).ok();
 }
+
+// ─────────── doctor は host の面の `[[tick]]` を既定にする（seat-heartbeat.md §5 形 3・契約表の行 d・接頭辞 `seat_doctor_tick_`） ───────────
+//
+// §3 の unit の置き場（[`unit_place`]）の host の面に `[[tick]]` を書き、doctor を flag 無し・flag 付きで撃つ。
+
+/// 置き場の host の面に `[[tick]]`（unit dir = 置き場の unit dir・binary = `binary`）だけを書く。
+fn doctor_tick_face(place: &UnitPlace, binary: &str) {
+    let body = format!("schema = 1\n\n[[tick]]\nunit-dir = \"{}\"\nbinary = \"{binary}\"\n", place.units.display());
+    fs::write(place.tick.state.join(vessel::rules::HOST_MANIFEST), body).ok();
+}
+
+/// doctor の host の面の行（`host-manifest=` 始まり）。
+fn doctor_tick_host_lines(out: &Output) -> Vec<String> {
+    stdout_of(out).lines().filter(|line| line.starts_with("host-manifest=")).map(str::to_owned).collect()
+}
+
+/// doctor を撃ち、rc 0 と登録 row の行 1 本の末尾の `tick-unit=` の語（`want`）と host の面の行（`host`）を測る。
+fn doctor_tick_assert(place: &UnitPlace, extra: &[&str], want: &str, host: &str) {
+    let out = unit_doctor(place, extra);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "{extra:?}: stderr={}", stderr_of(&out));
+    let rows = unit_doctor_rows(&out);
+    assert_eq!(rows.len(), 1, "{extra:?}: {rows:?}");
+    assert!(rows.iter().all(|row| row.ends_with(&format!(" tick-unit={want}"))), "{extra:?}: {want}: {rows:?}");
+    assert_eq!(rows.iter().map(|row| row.matches("tick-unit=").count()).sum::<usize>(), 1, "{extra:?}: 1 語だけ: {rows:?}");
+    assert_eq!(doctor_tick_host_lines(&out), [host.to_owned()], "{extra:?}: host の面の行");
+}
+
+/// (面が既定) `--unit-dir` / `--binary` が無く面に `[[tick]]` が在る周は、面の値で登録 row の行に `tick-unit=` を足す（install 前は
+/// absent・install 後は present）。host の面の行は `host-manifest=present tick=declared`。base は `[[tick]]` を未知の表として読めず
+/// host の面の行が `unreadable`・`tick-unit=` の項目が無い（RED）。
+#[test]
+fn seat_doctor_tick_face_values_default_the_probe_without_flags() {
+    let place = unit_place(true);
+    doctor_tick_face(&place, &place.binary);
+    doctor_tick_assert(&place, &[], "absent", "host-manifest=present tick=declared");
+    assert_eq!(rc_of(&unit_run(&place, "install", &[])), i32::from(RC_OK));
+    doctor_tick_assert(&place, &[], "present", "host-manifest=present tick=declared");
+    fs::remove_dir_all(&place.tick.dir).ok();
+}
+
+/// (flag が勝つ) 面の binary（`/elsewhere/bin`）と違う binary で install した unit は、flag 無しでは面の値で導出し直して `foreign`、
+/// install と同じ `--unit-dir` / `--binary` を渡した周は flag の値で `present`。
+#[test]
+fn seat_doctor_tick_flags_win_over_the_face_values() {
+    let place = unit_place(true);
+    doctor_tick_face(&place, "/elsewhere/bin");
+    assert_eq!(rc_of(&unit_run(&place, "install", &[])), i32::from(RC_OK));
+    doctor_tick_assert(&place, &[], "foreign", "host-manifest=present tick=declared");
+    let units = place.units.display().to_string();
+    doctor_tick_assert(&place, &["--unit-dir", &units, "--binary", &place.binary], "present", "host-manifest=present tick=declared");
+    fs::remove_dir_all(&place.tick.dir).ok();
+}
+
+/// (面にも flag にも無い) host の面が無い周と `[[tick]]` の無い面の周は、登録 row の行に `tick-unit=` を足さず、host の面の行は
+/// 従来の字面のまま（`tick=` の項目が無い＝既存の外形は動かない）。
+#[test]
+fn seat_doctor_tick_without_face_or_flags_adds_nothing() {
+    let place = unit_place(true);
+    for (body, host) in [(None, "host-manifest=absent"), (Some("schema = 1\n\n[[account]]\nlabel = \"h1\"\n"), "host-manifest=present")] {
+        if let Some(text) = body {
+            fs::write(place.tick.state.join(vessel::rules::HOST_MANIFEST), text).ok();
+        }
+        let out = unit_doctor(&place, &[]);
+        assert_eq!(rc_of(&out), i32::from(RC_OK), "{host}: stderr={}", stderr_of(&out));
+        assert!(!stdout_of(&out).contains("tick-unit=") && !stdout_of(&out).contains("tick="), "{host}: {}", stdout_of(&out));
+        assert_eq!(doctor_tick_host_lines(&out), [host.to_owned()], "host の面の行は従来の字面");
+        assert_eq!(unit_doctor_rows(&out).len(), 1, "登録 row の行は在る");
+    }
+    fs::remove_dir_all(&place.tick.dir).ok();
+}

@@ -63,7 +63,8 @@ fn render_doctor() -> Vec<String> {
 /// `<NAME>` から差し替える。`--repo R` 付きは末尾に台帳 lint の 1 行と台帳の形の 1 行（[`vessel::ledger::lint::doctor_lines`]・
 /// contract-source.md §6 / ledger-form.md §3 の 4・台帳は 1 回だけ読む・`--state-dir` 無しでも `--rules` と並べて
 /// 撃てる）。`--unit-dir U --binary PATH`（`--state-dir` と並べる・2 つはそろって在る）は登録 row の行の末尾に `tick-unit=` の
-/// 1 語を足す（seat-heartbeat.md §3）。値欠け・空文字・重複・未知の引数・片方だけの `--unit-dir` / `--binary` は使い方の誤り（`Err`）。
+/// 1 語を足す（seat-heartbeat.md §3）。2 つとも無い周は host の面の `[[tick]]` の値が既定（面にも無ければ足さない・flag が勝つ・§5 形 3）。
+/// 値欠け・空文字・重複・未知の引数・片方だけの `--unit-dir` / `--binary` は使い方の誤り（`Err`）。
 fn render_doctor_with(rest: &[String]) -> Result<Vec<String>, ()> {
     let (mut lines, mut state_dir, mut socket, mut rules, mut repo, mut bin) = (render_doctor(), None, None, None, None, None);
     let (mut unit_dir, mut binary) = (None, None);
@@ -289,7 +290,7 @@ mod tests {
             agentview: AgentView::Unreadable,
             trust: Some(vec![("/repo/a".to_owned(), Trust::Accepted), ("/repo/b".to_owned(), Trust::Unreadable)]),
         };
-        lines.push(render_host_manifest("present"));
+        lines.push(render_host_manifest("present", None));
         lines.push(render_account("acct", &probe, Retired::No));
         let consumer = Consumer {
             source: Source::Both,

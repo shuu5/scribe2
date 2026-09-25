@@ -1,5 +1,6 @@
 //! tick の unit を器が導出して host へ書く `seat tick install` / `uninstall`（設計 docs/design/seat-heartbeat.md §3・契約表の
-//! 行 b・ADR-0030 §2.1〜§2.5・FR64）と doctor の `tick-unit=` の 1 項目。
+//! 行 b・ADR-0030 §2.1〜§2.5・FR64）と doctor の `tick-unit=` の 1 項目。席の起動も同じ 1 本（[`on_launch`]）を host の面の
+//! `[[tick]]` の値で撃つ（設計 §5・行 d・ADR-0064）。
 //!
 //! 導出は pure な 1 関数（[`derive`]）: 入力は NAME・target・置き場・binary・rules の写し・周期（`seat.tick_interval_s`）だけで、
 //! 同じ引数からは同じ bytes が出る＝撤去と doctor は記録でなく**導出し直した bytes** と比べる。書きは一時 file → rename・既存の
@@ -14,7 +15,7 @@ use crate::hook::{seat_name, InjectionRecord, SCHEMA};
 use crate::invocation::Invocation;
 use crate::name::NAME;
 use crate::pipe::confine::SYSTEMCTL;
-use crate::rules::manifest::Manifest;
+use crate::rules::manifest::{Manifest, TickUnit};
 use crate::rules::{int_row, RuleError};
 use crate::seat::inject::tick_path;
 use crate::seat::state::now_secs;
@@ -239,20 +240,30 @@ pub enum Refusal {
 }
 
 impl Refusal {
-    /// 行の `reason=` 以後の字面。
-    pub fn render(&self) -> String {
+    /// 理由の語（`reason=` の値・席の起動の行の `tick-unit=refused:<語>` も同じ語）。
+    pub fn word(&self) -> &'static str {
         match self {
-            Self::Path => "reason=path".to_owned(),
-            Self::NoRule => "reason=no-rule".to_owned(),
-            Self::Store => "reason=store".to_owned(),
-            Self::NoRow => "reason=no-row".to_owned(),
-            Self::UnitExists(name) => format!("reason=unit-exists unit={name}"),
-            Self::UnitForeign(name) => format!("reason=unit-foreign unit={name}"),
-            Self::UnitUnwritable => "reason=unit-unwritable".to_owned(),
-            Self::ReloadFailed(rc) => format!("reason=reload-failed rc={rc}"),
-            Self::EnableFailed(rc) => format!("reason=enable-failed rc={rc}"),
-            Self::DisableFailed(rc) => format!("reason=disable-failed rc={rc}"),
+            Self::Path => "path",
+            Self::NoRule => "no-rule",
+            Self::Store => "store",
+            Self::NoRow => "no-row",
+            Self::UnitExists(_) => "unit-exists",
+            Self::UnitForeign(_) => "unit-foreign",
+            Self::UnitUnwritable => "unit-unwritable",
+            Self::ReloadFailed(_) => "reload-failed",
+            Self::EnableFailed(_) => "enable-failed",
+            Self::DisableFailed(_) => "disable-failed",
         }
+    }
+
+    /// 行の `reason=` 以後の字面（理由の語に file 名か rc を添える）。
+    pub fn render(&self) -> String {
+        let detail = match self {
+            Self::UnitExists(name) | Self::UnitForeign(name) => format!(" unit={name}"),
+            Self::ReloadFailed(rc) | Self::EnableFailed(rc) | Self::DisableFailed(rc) => format!(" rc={rc}"),
+            Self::Path | Self::NoRule | Self::Store | Self::NoRow | Self::UnitUnwritable => String::new(),
+        };
+        format!("reason={}{detail}", self.word())
     }
 }
 
@@ -306,13 +317,17 @@ pub fn run(verb: Verb, flags: &Flags, manifest: Result<Manifest, Vec<RuleError>>
         Ok(found) => found,
         Err(errors) => return refused(Refusal::NoRule, crate::rules::cli::render_defects(&errors)),
     };
-    let result = spec_of(flags, &manifest).and_then(|spec| {
-        let units = derive(&spec);
-        let unit_dir = std::path::absolute(flags.unit_dir).map_err(|_| Refusal::Path)?;
-        match verb {
-            Verb::Install => install(&spec, &units, &unit_dir),
-            Verb::Uninstall => uninstall(&units, &unit_dir),
-        }
+    let request = Request {
+        state_dir: Path::new(flags.state_dir),
+        target: flags.target,
+        unit_dir: Path::new(flags.unit_dir),
+        binary: Path::new(flags.binary),
+        rules: flags.rules.map(Path::new),
+    };
+    let result = prepared(&request, &manifest).and_then(|(spec, units, unit_dir)| match verb {
+        Verb::Install => install(&spec, &units, &unit_dir)
+            .map(|done| format!("{done} timer={} unit_dir={}", units.timer_name, unit_dir.display())),
+        Verb::Uninstall => uninstall(&units, &unit_dir),
     });
     match result {
         Ok(done) => Outcome { out: vec![format!("{head} {done} target={}", flags.target)], err: Vec::new(), rc: RC_OK },
@@ -320,20 +335,61 @@ pub fn run(verb: Verb, flags: &Flags, manifest: Result<Manifest, Vec<RuleError>>
     }
 }
 
+/// 席の起動が撃つ install の 1 本（設計 seat-heartbeat.md §5 形 2・ADR-0064）: `seat tick install` と同じ門・導出・照合・書き・
+/// `daemon-reload` → `enable --now` を、置き場 = 起動の置き場・target = 起動の target・unit dir と binary = host の面の
+/// `[[tick]]`・rules = 起動が開いた manifest（`--rules` の写しは持たない＝unit の `ExecStart=` に `--rules` は載らない）で撃つ。
+/// 返すのは起動の行の末尾に足す 1 語 `tick-unit=<installed|unchanged|refused:<理由の語>>`（断りは起動の rc を変えない）。
+pub fn on_launch(state_dir: &Path, target: &str, tick: &TickUnit, manifest: &Manifest) -> String {
+    let request = Request {
+        state_dir,
+        target,
+        unit_dir: Path::new(tick.unit_dir()),
+        binary: Path::new(tick.binary()),
+        rules: None,
+    };
+    let done = prepared(&request, manifest).and_then(|(spec, units, unit_dir)| install(&spec, &units, &unit_dir));
+    match done {
+        Ok(word) => format!("tick-unit={word}"),
+        Err(refusal) => format!("tick-unit=refused:{}", refusal.word()),
+    }
+}
+
+/// install / uninstall の入力（口の flag と席の起動の同じ形・path は引数のまま＝絶対化は [`prepared`] が撃つ）。
+struct Request<'a> {
+    /// 置き場。
+    state_dir: &'a Path,
+    /// `S:W`。
+    target: &'a str,
+    /// unit dir。
+    unit_dir: &'a Path,
+    /// unit が撃つ binary。
+    binary: &'a Path,
+    /// rules の写し（導出の `--rules`）。
+    rules: Option<&'a Path>,
+}
+
+/// 撃つ前の門を通して導出する（周期の行 → 登録 row → 導出の入力 → 導出 → unit dir の絶対化・どれかで止まる周は 1 file も触らない）。
+fn prepared(request: &Request, manifest: &Manifest) -> Result<(Spec, Units, PathBuf), Refusal> {
+    let spec = spec_of(request, manifest)?;
+    let units = derive(&spec);
+    let unit_dir = std::path::absolute(request.unit_dir).map_err(|_| Refusal::Path)?;
+    Ok((spec, units, unit_dir))
+}
+
 /// 周期の行 → 登録 row → 導出の入力（撃つ前の門・どれかで止まる周は 1 file も触らない）。
-fn spec_of(flags: &Flags, manifest: &Manifest) -> Result<Spec, Refusal> {
+fn spec_of(request: &Request, manifest: &Manifest) -> Result<Spec, Refusal> {
     let interval_s = int_row(manifest, ROW_INTERVAL).map_err(|_| Refusal::NoRule)?;
-    let state_dir = std::path::absolute(flags.state_dir).map_err(|_| Refusal::Path)?;
+    let state_dir = std::path::absolute(request.state_dir).map_err(|_| Refusal::Path)?;
     let events = store::read_all(&state_dir).map_err(|_| Refusal::Store)?;
     let fleet = crate::fleet::replay(&events);
-    crate::seat::role::registration_of_target(&fleet, flags.target).ok_or(Refusal::NoRow)?;
-    let rules = flags.rules.map(Path::new);
-    Spec::resolve(flags.target, &state_dir, Path::new(flags.binary), rules, interval_s).ok_or(Refusal::Path)
+    crate::seat::role::registration_of_target(&fleet, request.target).ok_or(Refusal::NoRow)?;
+    Spec::resolve(request.target, &state_dir, request.binary, request.rules, interval_s).ok_or(Refusal::Path)
 }
 
 /// install: 2 file を照合し、どちらかが導出と違えば 1 file も書かず `systemctl` も撃たない。無い file だけを一時 file → rename で
 /// 書き、書いた周は `daemon-reload` → `enable --now`・2 file とも一致の周は `enable --now` だけ。記録は `tick.jsonl` に 1 行。
-fn install(spec: &Spec, units: &Units, unit_dir: &Path) -> Result<String, Refusal> {
+/// 返すのは結果の語（`installed` / `unchanged`）。
+fn install(spec: &Spec, units: &Units, unit_dir: &Path) -> Result<&'static str, Refusal> {
     let started = Instant::now();
     let mut absent = Vec::new();
     for (name, want) in units.files() {
@@ -352,8 +408,7 @@ fn install(spec: &Spec, units: &Units, unit_dir: &Path) -> Result<String, Refusa
     }
     systemctl(&["enable", "--now", &units.timer_name]).map_err(Refusal::EnableFailed)?;
     record(spec, &units.timer_name, started);
-    let done = if absent.is_empty() { "unchanged" } else { "installed" };
-    Ok(format!("{done} timer={} unit_dir={}", units.timer_name, unit_dir.display()))
+    Ok(if absent.is_empty() { "unchanged" } else { "installed" })
 }
 
 /// 1 file を一時 file → rename で書く。

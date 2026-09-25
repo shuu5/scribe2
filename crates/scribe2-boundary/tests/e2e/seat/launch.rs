@@ -1124,6 +1124,163 @@ fn seat_launch_group_outside_anchor_is_unchanged() {
     fs::remove_dir_all(&place.dir).ok();
 }
 
+// ───── 席の起動が tick の unit を入れる（seat-heartbeat.md §5 形 2・契約表の行 d・接頭辞 `seat_launch_tick_`・§20 の fixture） ─────
+//
+// 群の外の置き場（[`launch_group_place`] の `outside`）に偽 tmux と偽 systemctl（引数を 1 行ずつ残す・[`LAUNCH_TICK_FAIL`] が在れば
+// `enable` を rc 1 で落とす）を置き、host の面に `[[tick]]`（unit dir と binary は tmp）を足す。unit の字面は契約から組む。
+
+/// 偽 systemctl の呼出の記録。
+const LAUNCH_TICK_CALLS: &str = "tick-systemctl-calls";
+
+/// 在れば偽 systemctl の `enable` が rc 1 で落ちる。
+const LAUNCH_TICK_FAIL: &str = "tick-systemctl-fail";
+
+/// 起動の歯の置き場（群の外の置き場 + unit dir + binary）。
+struct LaunchTick {
+    /// 置き場・host の面・偽 tmux。
+    place: AcctPlace,
+    /// 偽 tmux と偽 systemctl の PATH。
+    path: String,
+    /// host の面の `unit-dir`。
+    units: PathBuf,
+    /// host の面の `binary`（在る必要は無い＝unit の字面にだけ載る）。
+    binary: String,
+}
+
+impl LaunchTick {
+    /// service と timer の file 名（契約の字面・`<NAME>-seat-tick-<潰した target>`）。
+    fn names(&self) -> [String; 2] {
+        [format!("{NAME}-seat-tick-gl_seat.service"), format!("{NAME}-seat-tick-gl_seat.timer")]
+    }
+
+    /// 2 file の今の本文（無い file は空）。
+    fn bodies(&self) -> [String; 2] {
+        self.names().map(|name| fs::read_to_string(self.units.join(name)).unwrap_or_default())
+    }
+
+    /// 導出の 2 file の本文（契約の字面・`--rules` 無し・周期は埋め込みの `seat.tick_interval_s` = 60）。
+    fn expected(&self) -> [String; 2] {
+        let mark = format!("# {NAME} tick-install schema=1");
+        [
+            format!(
+                "{mark}\n[Unit]\nDescription={NAME} seat tick {GROUP_TARGET}\n\n[Service]\nType=oneshot\nExecStart={} seat tick --state-dir {} --target {GROUP_TARGET}\n",
+                self.binary,
+                self.place.state.display()
+            ),
+            format!(
+                "{mark}\n[Unit]\nDescription={NAME} seat tick timer {GROUP_TARGET}\n\n[Timer]\nOnBootSec=60s\nOnUnitActiveSec=60s\nPersistent=false\n\n[Install]\nWantedBy=timers.target\n"
+            ),
+        ]
+    }
+
+    /// 偽 systemctl の呼出（引数の行・呼んだ順）。
+    fn calls(&self) -> Vec<String> {
+        fs::read_to_string(self.place.dir.join(LAUNCH_TICK_CALLS)).unwrap_or_default().lines().map(str::to_owned).collect()
+    }
+
+    /// 成立の行（`tail` は置き場の 2 語の後ろ・空なら表の無い host の行そのもの）。
+    fn launched(&self, tail: &str) -> String {
+        format!("seat launch: launched target=gl_seat account=l1{}{tail}\n", provenance(&self.place.state, "flag"))
+    }
+}
+
+/// 群の外の置き場に偽 systemctl を足し、`declared` なら host の面に `[[tick]]` を足す。
+fn launch_tick_place(declared: bool) -> LaunchTick {
+    let (place, path) = launch_group_place(true, None);
+    let script = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nif [ \"$2\" = enable ] && [ -f '{}' ]; then exit 1; fi\nexit 0\n",
+        place.dir.join(LAUNCH_TICK_CALLS).display(),
+        place.dir.join(LAUNCH_TICK_FAIL).display()
+    );
+    let systemctl = place.dir.join("group-bin").join("systemctl");
+    fs::write(&systemctl, script).ok();
+    fs::set_permissions(&systemctl, fs::Permissions::from_mode(0o755)).ok();
+    let units = place.dir.join("units");
+    let binary = place.dir.join("opt").join(NAME).display().to_string();
+    if declared {
+        let host = place.state.join(vessel::rules::HOST_MANIFEST);
+        let body = fs::read_to_string(&host).unwrap_or_default();
+        fs::write(&host, format!("{body}\n[[tick]]\nunit-dir = \"{}\"\nbinary = \"{binary}\"\n", units.display())).ok();
+    }
+    LaunchTick { place, path, units, binary }
+}
+
+/// (入れる) `[[tick]]` の在る面で長い形の起動が立つと、2 file が導出の bytes で unit dir に在り、偽 systemctl が `daemon-reload` →
+/// `enable --now <timer>` の順・`tick.jsonl` に `who=seat-tick-install` の 1 行・成立の行の末尾（置き場の 2 語の後ろ）に
+/// `tick-unit=installed`。同じ席を短い形で起こし直すと `unchanged`（file の mtime 不変・`enable --now` だけ 1 回増える）。
+/// base は行に `tick-unit=` が無く file も 0（RED）。
+#[test]
+fn seat_launch_tick_installs_the_derived_pair_and_names_it_at_the_tail() {
+    let tick = launch_tick_place(true);
+    let [service_name, timer_name] = tick.names();
+    let out = launch_group_long(&tick.place, &tick.path, &["--account", "l1"]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={} stderr={}", stdout_of(&out), stderr_of(&out));
+    assert_eq!(stdout_of(&out), tick.launched(" tick-unit=installed"), "起動の行の末尾に 1 語");
+    assert_eq!(tick.bodies(), tick.expected(), "導出の bytes");
+    assert_eq!(tick.calls(), ["--user daemon-reload".to_owned(), format!("--user enable --now {timer_name}")], "reload → enable の順");
+    let tick_jsonl = fs::read_to_string(seat_dir_of(&tick.place.state, "gl_seat").join("tick.jsonl")).unwrap_or_default();
+    let installs: Vec<&str> = tick_jsonl.lines().filter(|line| acct_text(line, "who").as_deref() == Some("seat-tick-install")).collect();
+    assert_eq!(installs.len(), 1, "記録 1 行: {tick_jsonl}");
+    let mtimes = || tick.names().map(|name| fs::metadata(tick.units.join(name)).and_then(|meta| meta.modified()).ok());
+    let before = mtimes();
+    assert!(before.iter().all(Option::is_some), "2 file が在る: {service_name}");
+    let again = launch_group_run(&tick.place, &tick.path, &["seat", "l1"]);
+    assert_eq!(rc_of(&again), i32::from(RC_OK), "stdout={} stderr={}", stdout_of(&again), stderr_of(&again));
+    assert_eq!(stdout_of(&again), tick.launched(" tick-unit=unchanged"), "短い形も同じ 1 本");
+    assert_eq!(mtimes(), before, "file は書き直さない");
+    assert_eq!(tick.calls().get(2..), Some(&[format!("--user enable --now {timer_name}")][..]), "enable だけ 1 回");
+    fs::remove_dir_all(&tick.place.dir).ok();
+}
+
+/// (表の無い host) `[[tick]]` の無い面の起動の行は従来の字面のまま（`tick-unit=` が無い）・unit dir は作られず・systemctl は 0 回。
+#[test]
+fn seat_launch_tick_absent_table_leaves_the_line_and_the_units_untouched() {
+    let tick = launch_tick_place(false);
+    for head in [vec!["seat", "launch", "--role", "orchestrator", "--account", "l1"], vec!["seat", "l1"]] {
+        let out = launch_group_run(&tick.place, &tick.path, &head);
+        assert_eq!(rc_of(&out), i32::from(RC_OK), "{head:?}: stderr={}", stderr_of(&out));
+        assert_eq!(stdout_of(&out), tick.launched(""), "{head:?}: 行は 1 字も変わらない");
+    }
+    assert!(!tick.units.exists(), "unit dir を作らない");
+    assert!(tick.calls().is_empty(), "systemctl 0 回");
+    fs::remove_dir_all(&tick.place.dir).ok();
+}
+
+/// (立たない周は撃たない) `[[tick]]` の在る面でも、起動が断られる周（前面が shell でない `not-a-shell`・短い形と長い形）と候補の
+/// 無い周（`--account` 無しの選定が `no-account`）は unit を入れない: file 0・systemctl 0 回・断りの行に `tick-unit=` が無い。
+#[test]
+fn seat_launch_tick_refused_or_no_candidate_launch_installs_nothing() {
+    let tick = launch_tick_place(true);
+    fs::write(tick.place.dir.join(GROUP_FRONT), "claude\n").ok();
+    for (case, head, reason) in [
+        ("短い形", vec!["seat", "l1"], "not-a-shell"),
+        ("長い形", vec!["seat", "launch", "--role", "orchestrator", "--account", "l1"], "not-a-shell"),
+        ("候補なし", vec!["seat", "launch", "--role", "orchestrator"], "no-account"),
+    ] {
+        let out = launch_group_run(&tick.place, &tick.path, &head);
+        assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "{case}: stdout={} stderr={}", stdout_of(&out), stderr_of(&out));
+        assert_eq!(tick_token(&stderr_of(&out), "reason").as_deref(), Some(reason), "{case}: {}", stderr_of(&out));
+        assert!(!stderr_of(&out).contains("tick-unit="), "{case}: {}", stderr_of(&out));
+    }
+    assert!(!tick.units.exists(), "file 0");
+    assert!(tick.calls().is_empty(), "systemctl 0 回");
+    fs::remove_dir_all(&tick.place.dir).ok();
+}
+
+/// (断りは起動の rc を変えない) 偽 systemctl の `enable` が落ちる周は `tick-unit=refused:enable-failed` を行の末尾に足し、rc は起動の
+/// rc（0）のまま・stdout の成立の行のまま（席は立っている）。
+#[test]
+fn seat_launch_tick_failed_enable_is_named_without_changing_the_launch_rc() {
+    let tick = launch_tick_place(true);
+    fs::write(tick.place.dir.join(LAUNCH_TICK_FAIL), "").ok();
+    let out = launch_group_long(&tick.place, &tick.path, &["--account", "l1"]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={} stderr={}", stdout_of(&out), stderr_of(&out));
+    assert_eq!(stdout_of(&out), tick.launched(" tick-unit=refused:enable-failed"));
+    let timer_name = &tick.names()[1];
+    assert_eq!(tick.calls(), ["--user daemon-reload".to_owned(), format!("--user enable --now {timer_name}")], "reload → enable（落ちる）");
+    fs::remove_dir_all(&tick.place.dir).ok();
+}
+
 // ───── 断りの次の 1 手（account-lifecycle.md §21 形 3・契約表の行 j・接頭辞 `seat_launch_group_next_`・§20 の fixture） ─────
 
 /// 断りの 1 行の全体（`next` が在れば target の後・置き場の 2 語の前）。器の字面を借りない。

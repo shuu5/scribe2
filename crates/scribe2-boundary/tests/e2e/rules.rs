@@ -757,6 +757,78 @@ fn rules_host_vessel_row_is_read_and_duplicates_are_refused() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+// ─────────────────── host の面の `[[tick]]`（seat-heartbeat.md §5 形 1・契約表の行 d・接頭辞 `rules_host_tick_`） ───────────────────
+
+/// 1 行の `[[tick]]` を持つ host の面（見出しは 6 行目・`unit-dir` は 7 行目・`binary` は 8 行目）。
+const HOST_TICK: &str = "schema = 1\n\n[[account]]\nlabel = \"h1\"\n\n[[tick]]\nunit-dir = \"/srv/units\"\nbinary = \"/opt/bin/scribe2\"\n";
+
+/// (1) 1 行の `[[tick]]` は host の面から読める: `validate --state-dir` は rc 0 で宣言の数の 1 行は表の無い面と同じ字面（表を
+/// 数えない＝既存の外形は動かない）・`Manifest::tick` が 2 欄（絶対 path）と見出し行を運ぶ・tracked の面（埋め込み）は持たない。
+/// base は `[[tick]]` を未知の section として拒む（RED）。
+#[test]
+fn rules_host_tick_one_row_is_read_with_two_absolute_fields() {
+    let dir = host_state_dir(Some(HOST_TICK)).expect("tmp の state dir を作れる");
+    let outcome = rules_dispatch(&["validate", "--state-dir", &dir.display().to_string()]);
+    assert_eq!(outcome.rc, RC_OK, "{outcome:?}");
+    assert_eq!(outcome.out, vec![format!("{} accounts=1 plugins=0 launch-args=0 host=present", embedded_validate_line())]);
+    let manifest = Manifest::embedded()
+        .and_then(|tracked| vessel::rules::with_state_dir(tracked, Some(dir.as_path())))
+        .expect("host の面を合わせられる");
+    let tick = manifest.tick().expect("[[tick]] が読める");
+    assert_eq!((tick.unit_dir(), tick.binary(), tick.line()), ("/srv/units", "/opt/bin/scribe2", 6), "2 欄と見出し行");
+    assert_eq!(Manifest::embedded().expect("埋め込み").tick(), None, "tracked の面は持たない");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// (2) 2 行目・相対 path・欠けた欄は行番号つきで断る（`host.toml:` の接頭辞・rc 1・stdout 0 行・1 件ずつ）。tracked の面に置いた
+/// 表は 1 表 1 件で断る。
+#[test]
+fn rules_host_tick_refuses_a_second_row_relative_paths_and_missing_fields() {
+    let dir = host_state_dir(None).expect("tmp の state dir を作れる");
+    let host = dir.join(vessel::rules::HOST_MANIFEST);
+    for (body, want) in [
+        (format!("{HOST_TICK}\n[[tick]]\nunit-dir = \"/srv/other\"\nbinary = \"/opt/bin/other\"\n"), vec!["rules: host.toml: [[tick]] が重複する（最大 1 行） line=10"]),
+        (HOST_TICK.replace("\"/srv/units\"", "\"units\""), vec!["rules: host.toml: unit-dir が絶対 path でない: \"units\" line=7"]),
+        (HOST_TICK.replace("\"/opt/bin/scribe2\"", "\"bin/scribe2\""), vec!["rules: host.toml: binary が絶対 path でない: \"bin/scribe2\" line=8"]),
+        (HOST_TICK.replace("binary = \"/opt/bin/scribe2\"\n", ""), vec!["rules: host.toml: 必須 key binary が無い line=6"]),
+        (HOST_TICK.replace("unit-dir = \"/srv/units\"\n", ""), vec!["rules: host.toml: 必須 key unit-dir が無い line=6"]),
+    ] {
+        std::fs::write(&host, &body).expect("host の面を書ける");
+        let refused = rules_dispatch(&["validate", "--state-dir", &dir.display().to_string()]);
+        assert_eq!(refused.rc, RC_REFUSED, "{body:?}: {refused:?}");
+        assert!(refused.out.is_empty(), "{body:?}: stdout へは書かない");
+        assert_eq!(refused.err, want, "{body:?}");
+    }
+    let tracked = dir.join("tracked.toml");
+    // `GOOD` は 17 行なので、空行を挟んで足した表の見出しは 19 行目。
+    std::fs::write(&tracked, format!("{GOOD}\n[[tick]]\nunit-dir = \"/srv/units\"\nbinary = \"/opt/bin/scribe2\"\n")).expect("tracked の fixture を書ける");
+    std::fs::remove_file(&host).ok();
+    let outcome = rules_dispatch(&["validate", "--rules", &tracked.display().to_string(), "--state-dir", &dir.display().to_string()]);
+    assert_eq!(outcome.rc, RC_REFUSED, "{outcome:?}");
+    assert_eq!(outcome.err, vec!["rules: [[tick]] は tracked の manifest に置けない（unit の置き場は host の面だけ） line=19".to_owned()]);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// (3) 表の無い host は今のまま: `Manifest::tick` は `None`・`validate --state-dir` の 1 行は表を足す前と同じ字面（`HOST_GOOD` の
+/// 3 種の表の数だけ・外形 snapshot `rules_external_form` は同じ本文を撃つ）。
+#[test]
+fn rules_host_tick_absent_table_leaves_the_host_face_unchanged() {
+    let dir = host_state_dir(Some(HOST_GOOD)).expect("tmp の state dir を作れる");
+    let outcome = rules_dispatch(&["validate", "--state-dir", &dir.display().to_string()]);
+    assert_eq!(outcome.out, vec![format!("{} accounts=2 plugins=2 launch-args=2 host=present", embedded_validate_line())]);
+    let manifest = Manifest::embedded()
+        .and_then(|tracked| vessel::rules::with_state_dir(tracked, Some(dir.as_path())))
+        .expect("host の面を合わせられる");
+    assert_eq!(manifest.tick(), None, "表の無い面は None");
+    std::fs::remove_dir_all(&dir).ok();
+    let absent = host_state_dir(None).expect("tmp の state dir を作れる");
+    let manifest = Manifest::embedded()
+        .and_then(|tracked| vessel::rules::with_state_dir(tracked, Some(absent.as_path())))
+        .expect("面が無くても続く");
+    assert_eq!(manifest.tick(), None, "面の無い host も None");
+    std::fs::remove_dir_all(&absent).ok();
+}
+
 // ─────────────────── host の面が dir（在るが読めない・`s2-07l.250`・`.243` run 3 の生存変異を塞ぐ） ───────────────────
 // flip-check: retroactive s2-07l.250
 

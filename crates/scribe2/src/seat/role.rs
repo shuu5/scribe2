@@ -7,7 +7,7 @@ use crate::fleet::{cli, replay, Event, EventKind, Registration, State, ACTOR_MAC
 use crate::headless::Effort;
 use crate::pipe::declaration::path_kinds::PathKinds;
 use crate::polarity::{OnFailure, Polarity, Timing};
-use crate::rules::manifest::Manifest;
+use crate::rules::manifest::{HostManifest, Manifest};
 use crate::rules::RuleValue;
 use std::path::Path;
 
@@ -344,12 +344,23 @@ pub fn render_reconcile(state: Option<&State>, live: Option<&[String]>) -> Strin
 /// `model` と `default` と `paths` の欄つき・log を読めない周は 0 行）の後に突合の 1 行。`rules` は `--rules` の値（口座の行と
 /// 同じ形・無ければ埋め込み）で、役割の既定の行を引く manifest（読めない周は `default=` の欄が理由を名乗る・rc は変えない）。
 /// `units`（`--unit-dir` と `--binary` がそろった周だけ）が在る周は row の行の末尾に `tick-unit=` の 1 語を足し
-/// （[`crate::seat::tick::install::doctor_word`]・設計 seat-heartbeat.md §3）、無い周は row の行を 1 byte も変えない。
+/// （[`crate::seat::tick::install::doctor_word`]・設計 seat-heartbeat.md §3）、flag が無く host の面に `[[tick]]` が在る周は面の値で
+/// 同じ 1 語を足す（flag が勝つ・§5 形 3）。どちらも無い周は row の行を 1 byte も変えない。
 pub fn doctor_lines(state_dir: &Path, socket: Option<&str>, rules: Option<&str>, units: Option<&Probe>) -> Vec<String> {
     let state = store::read_all(state_dir).ok().map(|events| replay(&events));
     let panes = super::tmux_stdout(socket, &["list-panes", "-a", "-F", "#{session_name}:#{window_name}"]);
     let live: Option<Vec<String>> = panes.map(|out| out.lines().map(str::to_owned).collect());
     let manifest = super::manifest_read(rules.map_or_else(Manifest::embedded, |path| Manifest::load(Path::new(path))));
+    let declared = match HostManifest::read(&crate::rules::host_manifest_path(state_dir)) {
+        HostManifest::Present(face) => face.tick().cloned(),
+        HostManifest::Absent | HostManifest::Unreadable(_) => None,
+    };
+    let face = declared.as_ref().map(|tick| Probe {
+        unit_dir: Path::new(tick.unit_dir()),
+        binary: Path::new(tick.binary()),
+        rules: rules.map(Path::new),
+    });
+    let units = units.or(face.as_ref());
     let rows = |found: &State| {
         let lines = doctor_rows(found, &manifest);
         let Some(probe) = units else {
