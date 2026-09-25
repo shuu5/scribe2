@@ -488,8 +488,8 @@ terms:
     relationships: [管理 tick, 席, 打刻の合図, 開発 session]
   - canonical: 管理 tick
     domain: consumer
-    definition: 開発 session が黙っていないかを周期で見て、 条件が揃ったときだけ続きを促す打刻の合図を 1 行注入する仕組み (SRS FR27・ADR-0058)。 無変化の席には backoff で合図の間隔を伸ばし、 24 時間で止める。 退避の合図と cycle は ADR-0045 で廃止のまま。
-    relationships: [開発 session, 打刻の合図, backoff, 変化の digest, tick の unit]
+    definition: 開発 session が黙っていないかを周期で見て、 条件が揃ったときだけ続きを促す打刻の合図を 1 行注入する仕組み (SRS FR27・ADR-0058)。 無変化の席には backoff で合図の間隔を伸ばし、 24 時間で止める。 退避の合図と cycle は ADR-0045 で廃止のまま。 ADR-0066 (proposed) の後は、 自席の anchor が群に属する周に群の移動の判定を群ごとに鮮度の窓 (fleet.usage_fresh_s) に 1 回まで host の lock の内側で撃ち (lock を取れない周は撃たず今の列へ)、 判定の周だけ計測を起こしてよい (退避と起こし直しは自席の移動の門のまま)。
+    relationships: [開発 session, 打刻の合図, backoff, 変化の digest, tick の unit, 群の移動の判定, 判定の打刻, 移動の門]
   - canonical: statusline
     domain: consumer
     definition: 開発 session の画面の下に Claude Code が描く 1 行。 器の口 (seat statusline) が stdin の payload だけから組み、 管理 tick の context 計測が pane から読む入力でもある (SRS FR25 / FR29・ADR-0029 §2.1 / §2.2)。 描く形と読む形は同じ 1 つの規則で、 口座の設定の statusLine は器の口座の口が書く (ADR-0029 §2.3)。
@@ -517,8 +517,8 @@ terms:
     relationships: [管理 tick, 開発 session]
   - canonical: 退避の合図
     domain: consumer
-    definition: 開発 session に作業記憶の退避を促す 1 行。 管理 tick (ADR-0045 で廃止) が context 使用量の上限で注入した形 (SRS FR29) と、 群の移動の周に dispatch の 1 周が古い席の pane へ注入する形 (ADR-0055・proposed) の 2 つが在り、 後者は台帳と git に残して終えることを促す。
-    relationships: [管理 tick, cap guard, 退避物, 群の逼迫, 便の終端の周]
+    definition: 開発 session に作業記憶の退避を促す 1 行。 管理 tick (ADR-0045 で廃止) が context 使用量の上限で注入した形 (SRS FR29) と、 群の移動の周に dispatch の 1 周が古い席の pane へ注入する形 (ADR-0055・proposed) の 2 つが在り、 後者は台帳と git に残して終えることを促す。 ADR-0066 (proposed) の後も送り手は 2 系統 (便の終端の周の群の段は自分の置き場の席へ・他の置き場の席は各席の管理 tick の移動の門が自席へ) で、 群の移動の判定の 1 本は送らない。
+    relationships: [管理 tick, cap guard, 退避物, 群の逼迫, 便の終端の周, 群の段, 移動の門]
   - canonical: cycle
     domain: consumer
     definition: 作業記憶を退避し、 session を作り直し、 退避物から復元する一周 (SRS FR28)。 退避物が無い session では起こさない。
@@ -1139,18 +1139,38 @@ terms:
   - canonical: 群の逼迫
     domain: consumer
     aliases: [group pressure]
-    definition: 群の今の口座か群の席が居る口座の使用率が、 5 時間窓・7 日窓・モデル別窓のいずれかで閾値の rules 行の値以上である状態 (ADR-0055・proposed)。 便の終端の周と席自身の hook が既存の計測の 1 本で鮮度つきに読み、 timer では測らない。
+    definition: 群の今の口座か群の席が居る口座の使用率が、 5 時間窓・7 日窓・モデル別窓のいずれかで閾値の rules 行の値以上である状態 (ADR-0055・proposed)。 便の終端の周と席自身の hook が既存の計測の 1 本で鮮度つきに読み、 timer では測らない。 ADR-0066 (proposed) の後は管理 tick も群ごとに鮮度の窓に 1 回まで読み、 移動の判定は群の段と tick が共有の 1 本 (群の移動の判定) を呼ぶ。
     relationships: [project の群, 群の今の口座, 便の終端の周, 移動を頼む記録, 退避の合図, rules 行]
   - canonical: 便の終端の周
     domain: consumer
     aliases: [run-end round]
-    definition: 便が live で無くなった直後・手動・印の直後に撃たれる dispatch の 1 周 (設計 docs/design/dispatcher.md §5)。 ADR-0055 (proposed) はこの周に群の逼迫の段 (通知と移動) を置く。 時計では撃たれない。
+    definition: 便が live で無くなった直後・手動・印の直後に撃たれる dispatch の 1 周 (設計 docs/design/dispatcher.md §5)。 ADR-0055 (proposed) はこの周に群の逼迫の段 (通知と移動) を置く。 時計では撃たれない。 ADR-0066 (proposed) の後も群の段は残り、 判定は管理 tick と共有の 1 本 (群の移動の判定) を同じ lock の内側で呼ぶ。 この周を timer で撃たない線は保つ。
     relationships: [群の逼迫, 管理 tick, 便]
   - canonical: 移動を頼む記録
     domain: consumer
     aliases: [move request record]
-    definition: 席自身の hook が群の逼迫を読んだ周に host の根へ置く群ごとに高々 1 件の記録 (ADR-0055・proposed)。 席は自分を起こし直さず、 次の便の終端の周がこれを読んで鮮度に依らず計測し移動を判定する。
+    definition: 席自身の hook が群の逼迫を読んだ周に host の根へ置く群ごとに高々 1 件の記録 (ADR-0055・proposed)。 席は自分を起こし直さず、 次の便の終端の周がこれを読んで鮮度に依らず計測し移動を判定する。 ADR-0066 (proposed) の後は次の管理 tick の判定の周も同じ 1 本で拾う (便の無い host で永久に待たない)。
     relationships: [群の逼迫, 便の終端の周, host の根, 群の今の口座]
+  - canonical: 群の移動の判定
+    domain: consumer
+    aliases: [group move judgement]
+    definition: 測る集合を取り、 計測し、 群の今の口座の逼迫を読み、 移り先を候補の順で 1 回決め、 群の今の口座の記録と承認 event (候補なしなら断りの event) を書き、 移動を頼む記録を履歴へ移す 1 本の関数 (ADR-0066・proposed・移り先の 3 条件と記録の形は ADR-0049・出力は閉じた 3 値)。 dispatch の 1 周の群の段と管理 tick が host の lock の内側で同じ 1 本を呼び、 契機ごとに判定を写さない (憲法 C2)。 退避の合図・起こし直し・席の pane への行は持たず、 他の置き場の席に触らない。
+    relationships: [群の逼迫, 群の今の口座, 群の段, 管理 tick, 判定の打刻, 移動を頼む記録, 便の終端の周]
+  - canonical: 判定の打刻
+    domain: consumer
+    aliases: [judgement stamp]
+    definition: host の根の群用 dir に群ごとに 1 file (<群>.judged・ts の 1 行) で持つ、 最後に群の移動の判定を撃った UTC 秒 (ADR-0066・proposed)。 管理 tick はこれと鮮度の rules 行 (fleet.usage_fresh_s) を比べて判定を撃つかを決め、 撃った周に今の ts で書く。 rules 行は足さない。
+    relationships: [群の移動の判定, 管理 tick, host の根, rules 行]
+  - canonical: 群の段
+    domain: consumer
+    aliases: [group stage]
+    definition: dispatch の 1 周の頭で走る、 群ごとの計測・通知・移動・起こし直しの続きの段 (設計 docs/design/account-lifecycle.md §19 / §20・ADR-0055)。 host の lock の内側で走り、 便の列の rc を変えない。 ADR-0066 (proposed) の後は判定を自分で持たず群の移動の判定の 1 本を呼び、 退避の合図・起こし直し・保留の event・席の pane への行は自分の置き場の席に今まで通り撃つ。
+    relationships: [便の終端の周, 群の逼迫, 群の移動の判定, 退避の合図, 群の今の口座]
+  - canonical: 移動の門
+    domain: consumer
+    aliases: [move gate]
+    definition: 管理 tick の判定の列のうち、 群の今の口座と自席の登録 row の口座が違う周に、 退避 (/exit か dialog の Enter) か起こし直し (会話の resume を含む) を自席にだけ撃つ段 (設計 docs/design/seat-heartbeat.md §4 / §7)。 ADR-0066 (proposed) の群の移動の判定はこの門の前に置き、 判定の側は他の席に触らない。
+    relationships: [管理 tick, 群の今の口座, 退避の合図, 席の登録, 群の移動の判定]
   - canonical: host-guard
     domain: consumer
     aliases: [host guard]

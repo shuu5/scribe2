@@ -202,6 +202,25 @@
 - 却下: 群の段だけ `--continue`（§7 の却下と同じ）／carry を event に記す（会話 id は 1 回きりの値・row にも event にも載せない・§18）。
 - 歯（`crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs` に `pipe_dispatch_group_carry_` 接頭辞・§20 の fixture〔偽 tmux と偽 usage〕に打刻の file を足す）: (a) 起こす席の打刻に sid が在る → 起動行の末尾が `--resume <sid>`（base では末尾に無い ＝ RED）(b) 打刻が無い / sid の形でない → 末尾に無し (c) row の `launch` に `--resume` が無い。
 
+## 9. tick が群の移動の判定を撃つ（契約表の行 i・§4 / §7 の続き・[ADR-0066](../../design-intent/decisions/ADR-0066-the-management-tick-fires-the-group-move-judgement.html)・[ADR-0055](../../design-intent/decisions/ADR-0055-group-pressure-is-measured-at-run-ends-and-seat-turns-without-a-timer.html) の契機の supersede・`s2-07l.629` 候補 2）
+
+やさしく言うと: 群の移動の判定（逼迫を読み、移り先を決め、記録を書き換える）は今 dispatch の 1 周の群の段にしか無い。便の無い host / project では周が来ないので、席の hook が「移してほしい」と記録を置いても誰も判定しない（2026-09-25 の実測: 群の記録が動いたのは scribe2 の便の周だけ）。席ごとに周期で回る管理 tick が同じ 1 本の判定を lock の内側で撃てば、便の無い host でも群が移る。持ち主の裁定 2026-09-25T04:13Z（口座の移動を含めて完全自律）。**要件 FR38 の契機（便の終端の周と席の hook の 2 系統）に tick の周期を足し、FR27 / AC18 の「tick は測らない（計測の起動 0 件）」を「判定の周だけ鮮度の外を測る」に改める改訂を伴う**（SRS の改訂は持ち主の裁定・本行の受付の前提）。
+
+- 出所: 台帳 `s2-07l.629`（壁 3）・ADR-0066（決定の逐語と却下案）。
+- 現物（verified・main 67e74ff）:
+  - 群の段は `crates/scribe2/src/pipe/dispatch/group.rs`（`fire` の群の段: 測る集合 `measured_set` → 鮮度の外の口座だけ計測〔`crates/scribe2/src/fleet/usage.rs` の `run_fresh`・頼みの記録が在れば `run`〕→ 判定 `step` / `target_of`〔逼迫は `pressed`・移り先は宣言の候補の順で他の群の今の口座でない ∧ live 便が使っていない ∧ 3 窓とも閾値未満〕→ 執行 `execute`〔記録 `write_current`・承認 event・頼みの記録を `to_history`・退避の合図 → `relaunch`〕・全部 private）。lock と記録の読み手・書き手は `crates/scribe2/src/hook/group.rs`（`Lock` / `current_of` / `write_current` / `put_request` / `pressed` / `group_of`）。
+  - tick（`crates/scribe2/src/seat/tick.rs`）は群を読むのは移動の門（§4 `moving`）だけで、判定は撃たず計測もしない（§2「測らない」）。
+- 形（1 つずつ歯が測る・行 i の done と 1:1）:
+  1. **判定は 1 本**: 群の段の「測る集合 → 鮮度の外の計測 → 判定 → 記録と承認 event と頼みの履歴化」を `crates/scribe2/src/hook/group.rs` の 1 本の関数（入力 = 置き場・群・rules の閾値と鮮度・計測の口・出力 = 移った / 移らない / 候補なしの閉じた enum）へ移し、dispatch の群の段はそれを呼ぶ（判定の順・記録の形・event の kind と detail は 1 字も変わらない・退避の合図と `relaunch` は群の段に残る）。
+  2. **tick が呼ぶ周**: `front` の後・移動の門の前に、自席の anchor が群に属し ∧ その群の判定の打刻（host の群用 dir の `<群>.judged`・ts の 1 行）が `fleet.usage_fresh_s` より古い（か無い）周だけ、群の段と同じ lock の内側で 1 を撃ち、打刻を今の ts で書く。lock を取れない周は撃たず（`group-locked` にはしない・今の列へ進む）。判定の周だけ計測の子 process を起こしてよい（1 と同じ口・鮮度の内側は測らない）。打刻の合図の列（§2）は今まで通り測らない。
+  3. **判定の後は各席の tick の移動の門が続きを撃つ**（§4 形 3 / 4・§7）: 判定の側は他の置き場の席に触らず退避の合図も送らない（tick の周期が来た席から順に /exit → 起こし直し）。
+  4. **判定行**: 判定を撃った周は `decision=` の末尾に `judged=<moved:<label>|stay|none|error:<語>>` を足し、撃たない周は `judged=-`（列は固定・省かない・C10）。event は判定の 1 本が記す（tick 自身は今まで通り event を記さない）。
+  5. **群 0 の host・群に属さない anchor・便の終端の 1 周の群の段の外形（通知・退避・起こし直し・event）は 1 字も変わらない。**
+- 触らない: 閾値の rules 行（足さない・`fleet.usage_fresh_s` を打刻の間隔に流用）・記録の形・承認 event の kind と detail・§19 の通知・退避の字面・`relaunch`・§2 の梯子。
+- 却下: timer で dispatch の 1 周を撃つ（ADR-0055 OPT2・周は pipeline と repo に結びつく）／席の hook が判定して起こし直す（ADR-0055 OPT3・置き場ごとに判断が割れる・席は自分を起こせない）／tick が判定だけして退避も自分で全席に送る（他の置き場の席の pane に触る＝§4 の却下と同じ）／判定の間隔の rules 行を足す（鮮度の行で足りる・C17）／tick を 1 席だけ「判定の席」にする（席の生死に依存・どの席の周期でも同じ 1 本が lock で排他される方が簡単）。
+- 歯（`crates/scribe2-boundary/tests/e2e/seat.rs` に `seat_tick_judge_` 接頭辞・§4 の fixture〔偽 tmux・host の群用 dir・`--rules` の写し〕に §20 の偽 usage〔`crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs` の群の fixture と同じ形〕を足す）: (a) 群の今の口座が逼迫 ∧ 候補あり ∧ 判定の打刻なし → 記録が候補へ動き・承認 event 1・`judged=moved:<label>`・自席への /exit 0（base では記録不変 ＝ RED）(b) 打刻が鮮度の内側 → 計測 0・`judged=-`（c）候補なし → `judged=none`・断りの event 1・記録不変 (d) lock が在る → 判定 0・列は今のまま (e) 群に属さない anchor → `judged=-`・0 key。既存の `pipe_dispatch_group_move_` の歯（`crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs`）は 1 字も変えず GREEN のまま（判定の外形が不変の証拠）。
+- 後続: 要件 FR38 の改訂（持ち主が /folio-architect で撃つ）／復元 script から claude の送りを外す（§6 の後続）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -296,4 +315,15 @@ size = "S"
 growth = ["crates/scribe2/src/seat/tick.rs:40"]
 depends = ["f"]
 done = "(1) 打刻の最終行が Busy で seat.tick_stale_s の 2 倍より古い周は、窓が claude ∧ 入力欄の門が空なら Busy を無視して黙りの門以後の列へ進む（打刻は書き換えず rules 行も足さず係数 2 は歯が pin） (2) 入力欄に字が在る周と 2 倍以内の周は state-stale / busy のまま 歯: seat_tick_stale_ の歯が、古い busy ∧ 空の入力欄で列の先の語（base では state-stale ＝ RED）・字の在る入力欄で state-stale・0 key を測る"
+[[contract]]
+id = "i"
+title = "tick が群の移動の判定を撃つ — 群の段の判定（測る集合 → 鮮度の外の計測 → 判定 → 記録と承認 event）を hook/group.rs の 1 本に移して dispatch の周と tick が同じ 1 本を呼び、tick は群ごとに usage_fresh_s に 1 回・lock の内側で撃つ（§9・ADR-0066）"
+req = ["FR38", "FR27", "NFR4"]
+section = "9"
+write-set = ["crates/scribe2/src/seat/tick.rs", "crates/scribe2/src/hook/group.rs", "crates/scribe2/src/pipe/dispatch/group.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "docs/design/seat-heartbeat.md"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_judge_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_group_move_"]
+size = "L"
+growth = ["crates/scribe2/src/seat/tick.rs:100", "crates/scribe2/src/hook/group.rs:180", "crates/scribe2/src/pipe/dispatch/group.rs:0"]
+depends = ["f"]
+done = "(1) 群の段の測る集合・鮮度の外の計測・判定・記録と承認 event と頼みの履歴化を hook/group.rs の 1 本の関数（出力は閉じた enum）へ移し、dispatch の群の段はそれを呼んで退避の合図と relaunch だけを残し、判定の順と記録の形と event の kind と detail は 1 字も変わらない (2) tick は front の後・移動の門の前に、自席の anchor が群に属し ∧ 群用 dir の <群>.judged の ts が fleet.usage_fresh_s より古いか無い周だけ、同じ lock の内側で 1 本を撃って打刻を書き、lock を取れない周は撃たずに今の列へ進み、判定の周だけ計測の子 process を起こす (3) 判定の側は他の置き場の席に触らず退避の合図も送らない (4) 判定行の末尾に judged=<moved:<label>|stay|none|error:<語>|-> を足す (5) 群 0 の host・群の外の anchor・群の段の外形は 1 字も変わらない 歯: seat_tick_judge_ の歯が、逼迫 ∧ 候補ありで記録が動き承認 event 1 と judged=moved（base では記録不変 ＝ RED）・鮮度の内側で計測 0・候補なしで judged=none と断りの event・lock ありで判定 0・群の外で judged=- を測り、pipe_dispatch_group_move_ の既存の歯は 1 字も変えず GREEN"
 <!-- contracts:end -->
