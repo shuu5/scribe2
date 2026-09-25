@@ -371,7 +371,7 @@ user-scope MCP 設定の同期・別口座への `--resume` の混線 fence・pr
   3. **既存の pin を進める**: snapshot 2 本と字面の歯は `run-accounts=` の 1 欄分だけ更新する（write-set の外の .snap は触らない）。
 - 触らない: 群の行（`group=…`）・口座の行・`account ls`・選定。
 - 却下: 測れる口座の数を出す（doctor が計測を撃つことになる・§3 の「計測は撃たない」）／群の行に出す（群 0 の host で出ない）。
-- 歯（`crates/scribe2-boundary/tests/e2e/seat.rs` に `seat_doctor_run_accounts_` 接頭辞・§17 の host.toml の fixture）: 宣言 3・群 1（今の口座 = 種）→ `run-accounts=2`（base では欄が無い ＝ RED）／退役 1 を足す → 1／群 0 → 3／面 absent → 欄なし。
+- 歯（`crates/scribe2-boundary/tests/e2e/seat.rs` に `seat_doctor_run_accounts_` 接頭辞・§17 の host.toml の fixture）: 宣言 3・群 1（今の口座 = 種）→ `run-accounts=2`（base では欄が無い ＝ RED）／退役 1 を足す → 1／群 0 → 3／宣言 1・群 1（有効な口座の全部が群の今の口座）→ `run-accounts=0` で rc と他の行は 2 の周と 1 字も変わらない／面 absent → 欄なし。
 
 <!-- contracts:begin -->
 schema = 1
@@ -529,5 +529,5 @@ verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat
 size = "S"
 growth = ["crates/scribe2/src/account/mod.rs:30"]
 depends = ["n"]
-done = "(1) 面が present の周だけ host の行の末尾に run-accounts=<n>（有効な口座の数 − 群の今の口座の数・§23 と同じ読み手・計測は撃たない）を足し、absent / unreadable の周は欄を足さない (2) 0 でも rc と他の行は 1 字も変わらない (3) snapshot 2 本と字面の歯を 1 欄分だけ更新する 歯: seat_doctor_run_accounts_ の歯が、宣言 3・群 1 で run-accounts=2（base では欄が無い ＝ RED）・退役 1 で 1・群 0 で 3・面 absent で欄なしを測る"
+done = "(1) 面が present の周だけ host の行の末尾に run-accounts=<n>（有効な口座の数 − 群の今の口座の数・§23 と同じ読み手・計測は撃たない）を足し、absent / unreadable の周は欄を足さない (2) 0 でも rc と他の行は 1 字も変わらない (3) snapshot 2 本と字面の歯を 1 欄分だけ更新する 歯: seat_doctor_run_accounts_ の歯が、宣言 3・群 1 で run-accounts=2（base では欄が無い ＝ RED）・退役 1 で 1・群 0 で 3・宣言 1・群 1 で run-accounts=0 と rc と他の行の不変・面 absent で欄なしを測る"
 <!-- contracts:end -->

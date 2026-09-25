@@ -488,7 +488,7 @@ terms:
     relationships: [管理 tick, 席, 打刻の合図, 開発 session]
   - canonical: 管理 tick
     domain: consumer
-    definition: 開発 session が黙っていないかを周期で見て、 条件が揃ったときだけ続きを促す打刻の合図を 1 行注入する仕組み (SRS FR27・ADR-0058)。 無変化の席には backoff で合図の間隔を伸ばし、 24 時間で止める。 退避の合図と cycle は ADR-0045 で廃止のまま。 ADR-0066 (proposed) の後は、 自席の anchor が群に属する周に群の移動の判定を群ごとに鮮度の窓 (fleet.usage_fresh_s) に 1 回まで host の lock の内側で撃ち (lock を取れない周は撃たず今の列へ)、 判定の周だけ計測を起こしてよい (退避と起こし直しは自席の移動の門のまま)。
+    definition: 開発 session が黙っていないかを周期で見て、 条件が揃ったときだけ続きを促す打刻の合図を 1 行注入する仕組み (SRS FR27・ADR-0058)。 無変化の席には backoff で合図の間隔を伸ばし、 24 時間で止める。 退避の合図と cycle は ADR-0045 で廃止のまま。 ADR-0066 の後は、 自席の anchor が群に属する周に群の移動の判定を群ごとに鮮度の窓 (fleet.usage_fresh_s) に 1 回まで host の lock の内側で撃ち (lock を取れない周は撃たず今の列へ)、 判定の周だけ計測を起こしてよい (退避と起こし直しは自席の移動の門のまま)。
     relationships: [開発 session, 打刻の合図, backoff, 変化の digest, tick の unit, 群の移動の判定, 判定の打刻, 移動の門]
   - canonical: statusline
     domain: consumer
@@ -511,6 +511,16 @@ terms:
     domain: consumer
     definition: 席の中で hook が state.jsonl へ append する 1 行 (state / event / ts / sid)。 target は生成 hooks.json の shell 行が渡す pane id から解く (ADR-0015 §2.2)。 無い・読めない・古い周は注入しない (ADR-0015 §2.3)。
     relationships: [席の状態, hook, 管理 tick]
+  - canonical: 席の起こし直し
+    domain: consumer
+    aliases: [seat relaunch]
+    definition: 群の移動の周の群の段と、 窓が shell に戻った席を見た管理 tick が、 同じ target に席の起動 (SRS FR59) で席を立て直すこと (SRS FR27 / FR28 / FR38・ADR-0067)。 状態の打刻の最終行の会話 id を運び、 対話の記録の file は複写しない。 runner の起こし直し (追随の衝突・ADR-0019) とは別の語。
+    relationships: [席の起動, 管理 tick, 群の今の口座, 会話 id, 機械の復帰]
+  - canonical: 会話 id
+    domain: consumer
+    aliases: [conversation id, session id, sid]
+    definition: claude が 1 つの会話 (session) に付ける id (UUID の形)。 席の hook が状態の打刻の各行に残し、 席の起こし直し (群の段・管理 tick) は最終行の値を起動行の末尾に --resume で運ぶ (ADR-0067・SRS FR38 / FR59)。 器は対話の記録の file を読まず、 形が UUID でない周は運ばない。
+    relationships: [状態の打刻, 起動行, 機械の復帰, 移動の門]
   - canonical: 打刻の合図
     domain: consumer
     definition: 管理 tick が idle の開発 session に注入する 1 行 (SRS FR27・ADR-0058)。 台帳の現在地から続きを進めるよう促す。 無変化なら backoff で間隔が伸びる。
@@ -1037,7 +1047,7 @@ terms:
   - canonical: 機械の復帰
     domain: consumer
     aliases: [mechanical resumption]
-    definition: 席を起こし直した周に、 台帳の行と git の現在地と圧縮の直前の 1 枠だけから直前の流れを組んで session の開始で出す道 (ADR-0049・proposed)。 対話の記録は運ばない。 圧縮・群の移動・異常終了の 3 つが同じ 1 本を通る。
+    definition: 席を起こし直した周に、 台帳の行と git の現在地と圧縮の直前の 1 枠だけから直前の流れを組んで session の開始で出す道 (ADR-0049)。 対話の記録の file は運ばない (複写しない・器は読まない)。 ADR-0067 の後は、 起こし直しが状態の打刻の最終行の会話 id を起動行の末尾に --resume で運ぶが、 復帰の道はこの 1 本のまま (--resume は claude が会話を開く口)。 圧縮・群の移動・異常終了の 3 つが同じ 1 本を通る。
     relationships: [席の指示文, 台帳, project の群, 席の起動]
   - canonical: 硬い資源
     domain: consumer
@@ -1169,7 +1179,7 @@ terms:
   - canonical: 移動の門
     domain: consumer
     aliases: [move gate]
-    definition: 管理 tick の判定の列のうち、 群の今の口座と自席の登録 row の口座が違う周に、 退避 (/exit か dialog の Enter) か起こし直し (会話の resume を含む) を自席にだけ撃つ段 (設計 docs/design/seat-heartbeat.md §4 / §7)。 ADR-0066 (proposed) の群の移動の判定はこの門の前に置き、 判定の側は他の席に触らない。
+    definition: 管理 tick の判定の列のうち、 群の今の口座と自席の登録 row の口座が違う周に、 退避 (/exit か dialog の Enter) か起こし直し (ADR-0067: 状態の打刻の最終行の会話 id を --resume で運ぶ) を自席にだけ撃つ段 (設計 docs/design/seat-heartbeat.md §4 / §7)。 ADR-0066 の群の移動の判定はこの門の前に置き、 判定の側は他の席に触らない。
     relationships: [管理 tick, 群の今の口座, 退避の合図, 席の登録, 群の移動の判定]
   - canonical: host-guard
     domain: consumer
