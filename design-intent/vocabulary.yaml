@@ -180,7 +180,7 @@ terms:
     relationships: [fleet, doctor, 口座の登録]
   - canonical: host の manifest
     domain: consumer
-    definition: manifest の host の面。 state dir の 1 file (host.toml) が host 固有の宣言値 (口座 label・席に積む plugin dir・起動引数) を持ち、 tracked の面と同じ loader が読む。 rules 行は置けない (C10.2 の読み・ADR-0026 §2.1)。
+    definition: manifest の host の面。 state dir の 1 file (host.toml) が host 固有の宣言値 (口座 label・席に積む plugin dir・起動引数) を持ち、 tracked の面と同じ loader が読む。 ADR-0064 (proposed) の後は tick の宣言の表 [[tick]] も持つ。 rules 行は置けない (C10.2 の読み・ADR-0026 §2.1)。
     forbidden: [私用 manifest, overlay]
     relationships: [manifest, state dir, 口座]
     flagged_ambiguities: [SRS の用語集では表示名を「host の面」とする (生成器は manifest を部分文字列に持つ用語を term-inline の曖昧化として拒む)。 同一 entity で正本は本 entry]
@@ -190,7 +190,7 @@ terms:
     relationships: [口座, host の manifest, 退役, doctor]
   - canonical: 席の起動
     domain: consumer
-    definition: 器の subcommand seat launch が役割 (必須) と口座 (指定か session 用の選定) から起動行を導出し、 席の登録を先に書いて tmux の窓の shell へ差し込むこと (ADR-0026 §2.3)。 立て直しと同じ経路で、 器の subcommand 以外の起動経路を使わない。 ADR-0063 (proposed) の後は、 引数の無い形が置き場 (repo の local 設定)・役割 (orchestrator)・target (repo の dir 名)・口座 (群の今の口座か選定) を既定から解く。
+    definition: 器の subcommand seat launch が役割 (必須) と口座 (指定か session 用の選定) から起動行を導出し、 席の登録を先に書いて tmux の窓の shell へ差し込むこと (ADR-0026 §2.3)。 立て直しと同じ経路で、 器の subcommand 以外の起動経路を使わない。 ADR-0063 (proposed) の後は、 引数の無い形が置き場 (repo の local 設定)・役割 (orchestrator)・target (repo の dir 名)・口座 (群の今の口座か選定) を既定から解く。 ADR-0064 (proposed) の後は、 席を立てた周に tick の宣言が在れば tick の unit の install を面の値で撃ち、 結果を起動の 1 行の末尾に足す (断りは起動の rc を変えない)。
     forbidden: [cla, cld, wrapper 起動]
     relationships: [席, 席の登録, 起動行の導出, 口座]
   - canonical: 起動行の導出
@@ -491,8 +491,13 @@ terms:
     relationships: [管理 tick, 開発 session, 口座, doctor]
   - canonical: tick の unit
     domain: consumer
-    definition: 管理 tick を席ごとに周期で撃つ host の systemd user unit (service と timer の対)。 器の口 (seat tick install) が NAME・target・置き場・binary・rules 行の間隔から 1 関数で導出して書き、 有効化まで撃つ (ADR-0030 §2.1〜§2.4)。 撤去は退役 dir への移動で、 doctor が席ごとに有無と一致を名指す (ADR-0030 §2.5)。
-    relationships: [管理 tick, 席の登録, doctor, manifest]
+    definition: 管理 tick を席ごとに周期で撃つ host の systemd user unit (service と timer の対)。 器の口 (seat tick install) が NAME・target・置き場・binary・rules 行の間隔から 1 関数で導出して書き、 有効化まで撃つ (ADR-0030 §2.1〜§2.4)。 撤去は退役 dir への移動で、 doctor が席ごとに有無と一致を名指す (ADR-0030 §2.5)。 ADR-0064 (proposed) の後は、 席の起動が席を立てた周に tick の宣言の値で同じ 1 本を撃つ。
+    relationships: [管理 tick, 席の登録, doctor, manifest, tick の宣言, 席の起動]
+  - canonical: tick の宣言
+    domain: consumer
+    aliases: [tick declaration]
+    definition: host の manifest の表 [[tick]] (ADR-0064・proposed)。 unit を置く dir の絶対 path (unit-dir) と unit が撃つ器の絶対 path (binary) の 2 欄を持つ 0 か 1 行の表で、 vessel 宣言と同じ形。 席の起動と doctor と init が読み、 器は書かない (人が雛形の置き場の面に 1 度だけ書く)。
+    relationships: [host の manifest, tick の unit, 席の起動, doctor, init, 雛形の置き場]
   - canonical: 席の状態
     domain: consumer
     definition: 開発 session が turn を走らせているか (Busy) 止めているか (Idle) の閉じた enum。 出所は hook の打刻 (UserPromptSubmit → Busy・Stop / SessionStart → Idle) で、 pane の字面は判定入力にしない (憲法 C3.3・ADR-0015 §2.1)。
@@ -1184,7 +1189,7 @@ terms:
   - canonical: 雛形の置き場
     domain: consumer
     aliases: [template state dir]
-    definition: host init が git の global 設定に登録する既存の state dir 1 つ (ADR-0063・proposed)。 init はここの host の manifest から群を除く 4 表を写し、 口座の dir をここの口座の dir へ symlink で結び、 新しい state dir をこの dir の隣に作る。
+    definition: host init が git の global 設定に登録する既存の state dir 1 つ (ADR-0063・proposed)。 init はここの host の manifest から群を除く表 (ADR-0063 の 4 表・ADR-0064 (proposed) の後は tick の宣言を含む 5 表) を写し、 口座の dir をここの口座の dir へ symlink で結び、 新しい state dir をこの dir の隣に作る。
     relationships: [state dir, host の manifest, host-template, init]
   - canonical: host-template
     domain: consumer

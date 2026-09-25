@@ -457,6 +457,9 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
   },
   "@id": "./ADR-0063-a-new-repo-joins-the-vessel-with-one-command-inheriting-the-host-face-from-a-template-state-dir.html",
   "@type": "schema:TechArticle",
+  "dc:isReferencedBy": [
+    { "@id": "./ADR-0064-seat-launch-installs-the-tick-unit-from-the-host-face.html" }
+  ],
   "dc:isPartOf": [
     {
       "@id": "./README.html"
@@ -727,6 +730,7 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 <!-- folio:chrome-bottom -->
 <nav class="prevnext" aria-label="前後の文書">
   <a class="prevnext__prev" href="ADR-0062-core-describes-invocations-and-the-boundary-crate-spawns-them.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">core は子 process を自分で起こさず、 何を起こすかの記述を差し替え口へ渡す — 実物は境界 crate の 1 か所に据え、 撃つ関数の純移動はやめる (ADR-0033 の実現方法の一部を置き換える)</span></a>
+  <a class="prevnext__next" href="ADR-0064-seat-launch-installs-the-tick-unit-from-the-host-face.html"><span class="prevnext__dir">次 &rarr;</span><span class="prevnext__title">tick の unit は席の起動が入れる — host の面に表 [[tick]] (unit dir と binary・0 か 1 行) を足し、 seat launch が席を立てた周に §3 の install の 1 本を面の値で撃つ。 doctor は flag が無ければ面の値を既定にし、 init は雛形の 5 表目として写す (ADR-0030 の口と導出は不変・ADR-0063 の init が写す表を 4 から 5 に)</span></a>
 </nav>
 <script>
 (function () {

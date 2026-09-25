@@ -36,7 +36,7 @@
 `ROOT` の既定は cwd。git の repo でない・`host-template` が無い周は 1 段目の前に断る（何も書かない）。各段は「既に在れば skip」で、2 度撃っても壊れない。出力は段ごとに 1 行（`init: <段> <ok|skip|failed:<理由>>`）で、最後に `next=` を 1 つ（全段 ok / skip なら `next=doctor`）。
 
 1. **置き場**: 新しい state dir = `<TEMPLATE の親>/<TEMPLATE の dir 名>-<ROOT の dir 名>`（host の既存の名付けの規則を器の 1 関数にする・repo 名は path の最後の要素）。在れば skip。
-2. **host の面の継承**: `<TEMPLATE>/host.toml` の `[[plugin]]` `[[launch-arg]]` `[[account]]` `[[vessel]]` の行をそのまま写す（`[[account-group]]` は写さない＝群は 3.2 の `--group` だけが足す・A1「使う」の裁定は command の引数で人が持つ）。新しい `host.toml` は既存の loader で検査してから rename で置く（`account add` の `stage_host` と同じ形）。在れば skip（既存の面は 1 字も変えない）。
+2. **host の面の継承**: `<TEMPLATE>/host.toml` の `[[plugin]]` `[[launch-arg]]` `[[account]]` `[[vessel]]` `[[tick]]`（seat-heartbeat.md §5・雛形に在れば）の行をそのまま写す（`[[account-group]]` は写さない＝群は 3.2 の `--group` だけが足す・A1「使う」の裁定は command の引数で人が持つ）。新しい `host.toml` は既存の loader で検査してから rename で置く（`account add` の `stage_host` と同じ形）。在れば skip（既存の面は 1 字も変えない）。
 3. **口座の配線**: 雛形の `accounts/<label>`（`[[account]]` の label ごと）が symlink ならその先へ、実 dir ならその dir へ、新しい置き場の `accounts/<label>` を symlink で結ぶ（credential は読まず写さない・FR58 の柵の内側）。雛形に dir が無い label は `failed:no-source` で名指し、続きの段は止めない。在れば skip。
 4. **marker と設定**: `vessel init --state-dir <新しい置き場> ROOT` と同じ 1 本（local 設定 → marker）。既に `ByMe` なら skip、`ByOther` なら failed（何も書かない）。
 5. **宣言の雛形**: `ROOT/.vessel.toml` が無ければ書く。`ROOT/Cargo.toml` が在る周は cargo の形（`allowed-commands = ["cargo", "git"]`・`common-verify` に nextest と clippy の 2 行・`entrance-flip = "unmeasured"`）、無い周は git の形（`allowed-commands = ["git"]`・`common-verify = ["git diff --quiet"]`・`entrance-flip = "unmeasured"`）。`requirements` は書かない（既定を使う）。値は上限（rules 行 `runner.allowed_commands`）の内側。在れば skip。
@@ -112,7 +112,7 @@ done = "(1) host init <TEMPLATE> は TEMPLATE が dir で host.toml が Absent �
 
 [[contract]]
 id = "b"
-title = "init [ROOT] — 雛形から新しい置き場を作り（名は <雛形>-<repo 名>）、host の面の 4 表を写し、口座の dir を symlink で結び、marker と local 設定と宣言の雛形（Cargo.toml の有無で形を選ぶ）を置き、--group の周は同じ親の下の全面の anchors に足し（全部か皆無か）、書いた file だけを 1 commit にする（§4）"
+title = "init [ROOT] — 雛形から新しい置き場を作り（名は <雛形>-<repo 名>）、host の面の 5 表を写し、口座の dir を symlink で結び、marker と local 設定と宣言の雛形（Cargo.toml の有無で形を選ぶ）を置き、--group の周は同じ親の下の全面の anchors に足し（全部か皆無か）、書いた file だけを 1 commit にする（§4）"
 req = ["FR58", "FR61"]
 section = "4"
 write-set = ["+crates/scribe2/src/init.rs", "crates/scribe2/src/hook/vessel.rs", "crates/scribe2/src/rules/manifest.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2/src/pipe/declaration.rs", "crates/scribe2-boundary/src/main.rs", "crates/scribe2-boundary/tests/e2e/main.rs", "docs/design/host-init.md"]
@@ -120,7 +120,7 @@ verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail init
 size = "L"
 growth = ["crates/scribe2/src/hook/vessel.rs:60", "crates/scribe2/src/rules/manifest.rs:40", "crates/scribe2/src/account/mod.rs:60", "crates/scribe2/src/pipe/declaration.rs:20", "crates/scribe2-boundary/src/main.rs:60"]
 depends = ["a"]
-done = "(1) ROOT が git の repo でない・host-template が無い周は 1 段目の前に断り何も書かない (2) 置き場は <雛形の親>/<雛形の dir 名>-<ROOT の dir 名> で在れば skip (3) host の面は雛形の [[plugin]] [[launch-arg]] [[account]] [[vessel]] を写し [[account-group]] は写さず、loader で検査してから rename で置き、在れば 1 字も変えない (4) accounts/<label> は雛形の symlink の先か実 dir へ symlink で結び credential を読まず写さず、雛形に無い label は failed:no-source で名指して続きの段を止めない (5) marker と local 設定は vessel init と同じ 1 本で ByMe は skip・ByOther は failed (6) 宣言は Cargo.toml が在れば cargo の形（allowed-commands cargo と git・common-verify に nextest と clippy・entrance-flip unmeasured）、無ければ git の形（allowed-commands git・common-verify git diff --quiet・entrance-flip unmeasured）で、在れば skip (7) --group は雛形に無い群を failed、在れば同じ親の下で群を宣言する全面の anchors に ROOT を足し新しい面にも写し、1 面でも検査に落ちれば 0 面 (8) 本便が書いた .vessel と .vessel.toml だけを git add と git commit -- で 1 commit にし、0 file なら skip (9) 出力は段ごとに init: <段> <ok|skip|failed:<理由>> の 1 行と最後の next= 1 つで、2 度目は全段 skip 歯: init_repo_ の歯が 7 段の生成物と 2 度目の skip と Cargo.toml の有無の 2 形と --group の 2 面と 0 面と失敗の段の名指しを測る（base では init の verb が無い ＝ RED）"
+done = "(1) ROOT が git の repo でない・host-template が無い周は 1 段目の前に断り何も書かない (2) 置き場は <雛形の親>/<雛形の dir 名>-<ROOT の dir 名> で在れば skip (3) host の面は雛形の [[plugin]] [[launch-arg]] [[account]] [[vessel]] [[tick]]（在れば）を写し [[account-group]] は写さず、loader で検査してから rename で置き、在れば 1 字も変えない (4) accounts/<label> は雛形の symlink の先か実 dir へ symlink で結び credential を読まず写さず、雛形に無い label は failed:no-source で名指して続きの段を止めない (5) marker と local 設定は vessel init と同じ 1 本で ByMe は skip・ByOther は failed (6) 宣言は Cargo.toml が在れば cargo の形（allowed-commands cargo と git・common-verify に nextest と clippy・entrance-flip unmeasured）、無ければ git の形（allowed-commands git・common-verify git diff --quiet・entrance-flip unmeasured）で、在れば skip (7) --group は雛形に無い群を failed、在れば同じ親の下で群を宣言する全面の anchors に ROOT を足し新しい面にも写し、1 面でも検査に落ちれば 0 面 (8) 本便が書いた .vessel と .vessel.toml だけを git add と git commit -- で 1 commit にし、0 file なら skip (9) 出力は段ごとに init: <段> <ok|skip|failed:<理由>> の 1 行と最後の next= 1 つで、2 度目は全段 skip 歯: init_repo_ の歯が 7 段の生成物と 2 度目の skip と Cargo.toml の有無の 2 形と --group の 2 面と 0 面と失敗の段の名指しを測る（base では init の verb が無い ＝ RED）"
 
 [[contract]]
 id = "c"
