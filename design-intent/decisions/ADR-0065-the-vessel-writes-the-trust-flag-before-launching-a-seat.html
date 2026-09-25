@@ -1,0 +1,769 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="folio ADR-pack assembler (folio-bwc / instance#2) — deterministic structure, prose slots unfilled">
+<title>口座 × anchor の trust の印は席の起動が置く — seat launch の 1 本が prepare の後・置き換えと boot の分岐の前に、 選んだ口座の設定 dir の .claude.json に、 その anchor の trust の印を true で置いてから起動行を注入する。 依存は足さず既存の入れ子 JSON の読み手に書き手を足し、 言葉は閉じた列 written / created / accepted / unreadable / unwritable、 起動は止めない (ADR-0026 §2.2 / §2.5 の trust の受け入れと代筆の射程外を trust の印 1 key に限って部分 supersede・credential の fence は不変)</title>
+<style>
+/* ===========================================================================
+   folio human-layer design system — core.css (S3 / folio-8oc プロトタイプ)
+   要件定義書 (SRS) ビジュアル design system の中核 register。
+   視覚言語 = deck帯 × B2高密度 (ADR-0041)。テーマ = 環境追従 prefers-color-scheme。
+   styling は意味クラス、taxonomy 識別は [data-component] 属性 (floor gate A)。
+   taxonomy = design-intent/research/srs-component-taxonomy.html
+   =========================================================================== */
+
+/* ---- requirement-type-color-tokens (meta / 全 register が共有・両テーマ定義) ---- */
+:root{
+  --ink:#08131a; --ink-soft:#3a4a55; --ink-faint:#5b6671;
+  --paper:#ffffff; --paper-2:#f5f8fa; --paper-3:#eef3f7;
+  --line:#dbe4ea; --line-soft:#eef3f7;
+  --brand:#2a4d6e; --brand-deep:#15324a; --brand-tint:#e8f0f7;
+  --ok:#1e7b65; --ok-tint:#e6f6f2; --ok-line:#9fd9cb;
+  --bad:#b22323; --bad-tint:#fdf3f3; --bad-line:#eab3b3;
+  --warn:#916626; --warn-tint:#fefbea; --warn-line:#e4cf8f;
+  --info:#2a5d9e; --info-tint:#eaf1fb; --info-line:#a8c4e8;
+  --violet:#5b3e8e; --violet-tint:#f0eafa; --violet-line:#cdb8ec;
+  --shadow:0 1px 2px rgba(8,19,26,.06),0 8px 24px rgba(8,19,26,.07);
+  --shadow-lg:0 2px 6px rgba(8,19,26,.08),0 18px 50px rgba(8,19,26,.12);
+  /* 要件型カラートークン (FR/NFR/CON/ASM) */
+  --fr:var(--brand); --nfr:var(--violet); --con:var(--warn); --asm:var(--info);
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --ink:#e8eef2; --ink-soft:#a9b7c1; --ink-faint:#8a99a4; /* ink-faint: 全 dark bg で contrast ≥4.85 = WCAG AA (≥4.5) 充足・最小は ok-tint/warn-tint (gate F・folio-vuf) */
+    --paper:#0d171e; --paper-2:#15222b; --paper-3:#1b2c37;
+    --line:#273947; --line-soft:#1b2c37;
+    --brand:#7db8e8; --brand-deep:#1d3a54; --brand-tint:#16293a;
+    --ok:#5ac8b8; --ok-tint:#10302b; --ok-line:#2e6258;
+    --bad:#ef7a7a; --bad-tint:#341c1c; --bad-line:#6e3636;
+    --warn:#d6a94e; --warn-tint:#312a13; --warn-line:#5e4e23;
+    --info:#7da9e8; --info-tint:#16263c; --info-line:#33507c;
+    --violet:#b89be0; --violet-tint:#241a36; --violet-line:#473a64;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.5);
+    --shadow-lg:0 2px 6px rgba(0,0,0,.5),0 18px 50px rgba(0,0,0,.6);
+  }
+}
+*{box-sizing:border-box;}
+html{scroll-behavior:smooth;}
+body{
+  margin:0; background:var(--paper-2); color:var(--ink);
+  font-family:"Noto Sans CJK JP","Noto Sans JP",system-ui,-apple-system,"Hiragino Kaku Gothic ProN",Meiryo,sans-serif;
+  font-feature-settings:"palt" 1; line-height:1.7; letter-spacing:.01em;
+  -webkit-font-smoothing:antialiased;
+}
+.page{max-width:1280px; margin:0 auto; background:var(--paper); box-shadow:var(--shadow-lg);}
+svg{display:block;} .ico{width:1em; height:1em;}
+
+/* ---- plain-language-term-inline (glossary 派生ビュー / 専門語のやさしい併記) ---- */
+.term{
+  /* font-size 下限 (folio-276 #5)。 .72em は em 連鎖 (例 .actor .role=11px 内) で 7.9px<8px へ縮み
+     判読不能化する。 max() で 10.5px を下限に据え、 広文脈では従来比率を保つ。 */
+  display:inline-block; font-size:max(10.5px,.72em); font-weight:700; line-height:1;
+  padding:.18em .5em; border-radius:999px; margin-left:.3em; vertical-align:.08em;
+  background:var(--paper-3); color:var(--ink-soft); border:1px solid var(--line);
+  letter-spacing:.02em; white-space:nowrap;
+}
+.term.en{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;}
+
+/* ===================== doc-cover-band (deck-band / 表紙) ===================== */
+[data-component="doc-cover-band"]{
+  position:relative; overflow:hidden; color:#fff;
+  /* deeper navy にして白文字 (小サイズ含む) を WCAG AA 維持 (gate F worst-case-stop が最明合成でも
+     ≥4.5 を要求)。 highlight radial は薄め、 linear の最明端 (旧 #33658f) を暗色化。 */
+  background:
+    radial-gradient(1200px 500px at 88% -10%, rgba(255,255,255,.07), transparent 60%),
+    linear-gradient(135deg,#0c1f30 0%,#143049 48%,#173a57 100%);
+  padding:54px 56px 46px;
+}
+.cover-eyebrow{font-size:12.5px; font-weight:700; letter-spacing:.22em; text-transform:uppercase; opacity:.86; margin:0 0 14px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;}
+.cover-eyebrow .doc-type{background:rgba(255,255,255,.16); padding:3px 10px; border-radius:6px; letter-spacing:.16em; border:1px solid rgba(255,255,255,.22);}
+[data-component="doc-cover-band"] h1{font-size:42px; line-height:1.14; margin:0 0 8px; font-weight:800; text-wrap:balance;}
+.cover-sub{font-size:17px; opacity:.9; margin:0 0 22px; font-weight:500;}
+.summary-card{background:rgba(255,255,255,.1); border:1px solid rgba(255,255,255,.2); border-radius:14px; padding:18px 22px; display:flex; gap:18px; align-items:flex-start; max-width:880px;}
+.summary-card .lab{font-size:11px; font-weight:700; letter-spacing:.16em; opacity:.8; margin:0 0 4px;}
+.summary-card .txt{font-size:17.5px; line-height:1.6; font-weight:600; margin:0;}
+.summary-card .txt b{color:#ffe8a8;}
+.cover-meta{display:flex; flex-wrap:wrap; gap:10px 26px; margin-top:24px; font-size:13px;}
+.cover-meta .m{display:flex; gap:8px; align-items:center; opacity:.92;}
+.cover-meta .m .k{opacity:.62; font-weight:600;} .cover-meta .m .v{font-weight:700;}
+.reader-chip{display:inline-flex; gap:8px; align-items:center; margin-top:18px; background:#ffce6e; color:#3a2c05; font-weight:700; font-size:13.5px; padding:8px 14px; border-radius:10px; box-shadow:0 3px 10px rgba(0,0,0,.2);}
+a{color:var(--brand);} /* anchor 既定色 — UA 既定 #0000ee は dark bg で 1.72 (skip-link/domain 目次等の素 anchor で 3 例目の同型欠陥・型 selector ゆえ class 付きリンクは specificity で不変・gate F WCAG AA 両テーマ ≥7.6) */
+
+/* ===================== approval-block (deck-band / 承認証跡) ★critic補填 ===== */
+[data-component="approval-block"]{display:flex; flex-wrap:wrap; gap:14px; align-items:stretch; margin-top:22px;}
+.sign{flex:1 1 200px; background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.22); border-radius:12px; padding:13px 16px; display:flex; flex-direction:column; gap:3px; min-width:0;}
+.sign .role{font-size:10.5px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; opacity:.7;}
+.sign .who{font-size:15px; font-weight:800;}
+.sign .when{font-size:11.5px; opacity:.72; font-weight:600;}
+.sign .stamp{align-self:flex-start; margin-top:4px; font-size:10px; font-weight:800; letter-spacing:.08em; padding:2px 8px; border-radius:6px; background:#ffce6e; color:#3a2c05;}
+.sign .stamp.self{background:rgba(255,255,255,.18); color:#fff; border:1px solid rgba(255,255,255,.3);}
+
+/* ===================== chapter-deck-band (deck-band / 章開き) =============== */
+[data-component="chapter-deck-band"]{position:relative; padding:34px 56px 12px;}
+[data-component="chapter-deck-band"] .num{position:absolute; top:-6px; right:34px; font-size:138px; font-weight:900; line-height:1; opacity:.06; letter-spacing:-.04em; user-select:none; pointer-events:none; font-family:ui-monospace,monospace;}
+.kicker{display:inline-flex; align-items:center; gap:9px; font-size:12px; font-weight:800; letter-spacing:.14em; text-transform:uppercase; padding:5px 12px; border-radius:8px; margin-bottom:10px;}
+[data-component="chapter-deck-band"] h2{font-size:27px; margin:0 0 6px; font-weight:800; line-height:1.2;}
+.lead{font-size:15px; color:var(--ink-soft); margin:0; max-width:920px; line-height:1.65;}
+.tint-brand{background:var(--brand-tint);} .tint-ok{background:var(--ok-tint);} .tint-bad{background:var(--bad-tint);}
+.tint-warn{background:var(--warn-tint);} .tint-info{background:var(--info-tint);} .tint-violet{background:var(--violet-tint);}
+.tint-brand .kicker{background:var(--brand); color:#fff;} .tint-ok .kicker{background:var(--ok); color:#fff;}
+.tint-bad .kicker{background:var(--bad); color:#fff;} .tint-warn .kicker{background:var(--warn); color:#fff;}
+.tint-info .kicker{background:var(--info); color:#fff;} .tint-violet .kicker{background:var(--violet); color:#fff;}
+.chapbody{padding:22px 56px 40px; background:var(--paper);}
+
+/* ===================== section-lead-callout (callout / 章導入) ============= */
+[data-component="section-lead-callout"]{display:grid; grid-template-columns:repeat(3,1fr); gap:16px;}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:14px; padding:18px 18px 16px; box-shadow:var(--shadow); position:relative; overflow:hidden;}
+.card.accent::before{content:""; position:absolute; left:0; top:0; bottom:0; width:5px; background:var(--brand);}
+.card .cid{font-size:11.5px; font-weight:800; letter-spacing:.12em; color:var(--brand); margin-bottom:8px; display:flex; align-items:center; gap:8px;}
+.card .ct{font-size:16.5px; font-weight:800; line-height:1.4; margin:0 0 6px;}
+.card .cd{font-size:13px; color:var(--ink-soft); margin:0;}
+
+/* ===================== scope-summary-panel (dense-list / 範囲) ============= */
+[data-component="scope-summary-panel"]{display:grid; grid-template-columns:1fr 1fr; gap:20px;}
+.scol{border-radius:14px; padding:18px 20px; box-shadow:var(--shadow);}
+.scol.in{background:var(--ok-tint); border:1px solid var(--ok-line);}
+.scol.out{background:var(--bad-tint); border:1px solid var(--bad-line);}
+.scol h3{margin:0 0 12px; font-size:15px; font-weight:800; display:flex; align-items:center; gap:9px;}
+.scol.in h3{color:var(--ok);} .scol.out h3{color:var(--bad);}
+.scol ul{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:9px;}
+.scol li{display:flex; gap:10px; align-items:flex-start; font-size:13.5px; line-height:1.5;}
+.scol li .b{flex:0 0 auto; margin-top:3px;}
+
+/* ===================== actor-stakeholder-table (dense-table / 主体) ======== */
+[data-component="actor-stakeholder-table"]{display:flex; flex-wrap:wrap; gap:12px;}
+.actor{display:flex; align-items:center; gap:11px; background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:11px 15px 11px 12px; box-shadow:var(--shadow); min-width:0;}
+.actor .av{flex:0 0 auto; width:38px; height:38px; border-radius:10px; display:grid; place-items:center; color:#fff;}
+.actor .nm{font-size:14px; font-weight:700; line-height:1.25;}
+.actor .role{font-size:11px; color:var(--ink-faint); font-weight:600;}
+.ext-badge{font-size:9.5px; font-weight:800; letter-spacing:.08em; background:var(--warn-tint); color:var(--warn); border:1px solid var(--warn-line); padding:1px 6px; border-radius:5px; margin-left:6px;}
+
+/* ===================== source-trace-origin (dense-table / 上位ニーズ) ★補填 = */
+[data-component="source-trace-origin"]{width:100%; min-width:440px; border-collapse:separate; border-spacing:0; font-size:13.5px;}
+[data-component="source-trace-origin"] thead th{background:var(--info); color:#fff; text-align:left; font-size:11.5px; font-weight:800; letter-spacing:.06em; padding:11px 14px;}
+[data-component="source-trace-origin"] thead th:first-child{border-top-left-radius:12px;} [data-component="source-trace-origin"] thead th:last-child{border-top-right-radius:12px;}
+[data-component="source-trace-origin"] tbody td{padding:12px 14px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.5;}
+[data-component="source-trace-origin"] tbody tr:nth-child(even) td{background:var(--paper-2);}
+[data-component="source-trace-origin"] .nid{font-weight:800; font-family:ui-monospace,monospace; color:var(--info); white-space:nowrap;}
+[data-component="source-trace-origin"] .origin{font-size:11.5px; color:var(--ink-faint); font-weight:700;}
+
+/* ===================== requirement-matrix-table (dense-table / 要件本体) === */
+[data-component="requirement-matrix-table"]{width:100%; min-width:620px; border-collapse:separate; border-spacing:0; font-size:13.5px;}
+[data-component="requirement-matrix-table"] thead th{background:var(--brand-deep); color:#fff; text-align:left; font-size:11.5px; font-weight:800; letter-spacing:.06em; padding:11px 14px;}
+[data-component="requirement-matrix-table"] thead th:first-child{border-top-left-radius:12px;} [data-component="requirement-matrix-table"] thead th:last-child{border-top-right-radius:12px;}
+[data-component="requirement-matrix-table"] tbody td{padding:12px 14px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.5;}
+[data-component="requirement-matrix-table"] tbody tr:nth-child(even) td{background:var(--paper-2);}
+[data-component="requirement-matrix-table"] tbody tr:hover td{background:var(--brand-tint);}
+.fid{font-weight:800; font-family:ui-monospace,monospace; font-size:13px; white-space:nowrap; color:var(--brand);}
+td.cond{color:var(--ink-soft); font-size:13px; width:22%;}
+td.resp{font-size:13.5px; width:40%;}
+/* ears-requirement-row: 根拠 Rationale を必須スロットとして明示 (critic #3 格上げ) */
+td.resp .why{display:block; margin-top:5px; font-size:11.5px; color:var(--ink-faint); padding-left:62px; position:relative;}
+td.resp .why::before{content:"↳ なぜ要る"; position:absolute; left:0; font-weight:700; color:var(--ink-faint);}
+td.resp .plain{display:block; margin-top:5px; font-size:12.5px; color:var(--ink-soft);}
+td.resp .plain::before{content:"やさしく言うと "; font-weight:700; font-size:10px; color:var(--brand);}
+/* dense-table を clip せず狭幅で内部横スクロールへ倒す (folio-276 #1)。 旧 overflow:hidden は
+   375-390px で列を 1 文字/行へ潰し判読不能にした上 scroll も封じていた (gate F 盲点=#2 で捕捉)。
+   overflow-x:auto + table 側 min-width = rtm-grid と同じ「狭幅は横スクロール」方針へ統一する。 */
+.tbl-wrap{border:1px solid var(--line); border-radius:12px; overflow-x:auto; box-shadow:var(--shadow);}
+
+/* ---- priority-badge + EARS chip (badge) ---- */
+.ears{display:inline-flex; align-items:center; gap:5px; font-size:10.5px; font-weight:800; letter-spacing:.04em; padding:3px 9px; border-radius:7px; white-space:nowrap; border:1px solid;}
+.ears.always{background:var(--info-tint); color:var(--info); border-color:var(--info-line);}
+.ears.trigger{background:var(--brand-tint); color:var(--brand); border-color:var(--brand);}
+.ears.state{background:var(--violet-tint); color:var(--violet); border-color:var(--violet-line);}
+.ears.forbid{background:var(--bad-tint); color:var(--bad); border-color:var(--bad-line);}
+.ears.option{background:var(--warn-tint); color:var(--warn); border-color:var(--warn-line);}
+.ears .en{opacity:.7; font-weight:600; font-family:ui-monospace,monospace; font-size:9px;}
+.prio{display:inline-flex; align-items:center; gap:4px; font-size:10px; font-weight:800; letter-spacing:.04em; padding:2px 8px; border-radius:6px; white-space:nowrap;}
+.prio.must{background:var(--bad); color:#fff;} .prio.should{background:var(--warn); color:#fff;} .prio.may{background:var(--paper-3); color:var(--ink-soft); border:1px solid var(--line);}
+.vmeth{font-size:10px; font-weight:800; font-family:ui-monospace,monospace; padding:2px 6px; border-radius:5px; background:var(--ok-tint); color:var(--ok); border:1px solid var(--ok-line);}
+.ears-legend{display:flex; flex-wrap:wrap; gap:10px; margin-bottom:14px; align-items:center;}
+.ears-legend .lt{font-size:12px; font-weight:700; color:var(--ink-soft); margin-right:4px;}
+/* ears-requirement-row = requirement-matrix-table の各 <tr>。行 styling は table を継承し、
+   data-component で floor gate A 識別 + 根拠 (td.resp .why) を空不可スロットに保つ */
+tr[data-component="ears-requirement-row"] td.resp .why:empty::after{content:"⚠ 根拠 未記入"; color:var(--bad); font-weight:700;}
+
+/* ===================== nfr-hero-metrics + nfr-metrics-table =============== */
+[data-component="nfr-hero-metrics"]{display:grid; grid-template-columns:repeat(4,1fr); gap:16px; margin-bottom:24px;}
+.nfr-hero{border-radius:16px; padding:20px 18px 18px; box-shadow:var(--shadow); position:relative; overflow:hidden; border:1px solid var(--line); background:var(--paper);}
+.nfr-hero .cat{font-size:11px; font-weight:800; letter-spacing:.1em; text-transform:uppercase; margin-bottom:8px; display:flex; align-items:center; gap:7px;}
+.nfr-hero .big{font-size:38px; font-weight:900; line-height:1; letter-spacing:-.02em; display:flex; align-items:baseline; gap:4px;}
+.nfr-hero .big .u{font-size:16px; font-weight:800; opacity:.7;}
+.nfr-hero .qual{font-size:12.5px; font-weight:600; color:var(--ink-soft); margin-top:8px; line-height:1.45;}
+.nfr-hero.c1{background:linear-gradient(160deg,var(--info-tint),var(--paper));} .nfr-hero.c1 .cat,.nfr-hero.c1 .big{color:var(--info);}
+.nfr-hero.c2{background:linear-gradient(160deg,var(--ok-tint),var(--paper));} .nfr-hero.c2 .cat,.nfr-hero.c2 .big{color:var(--ok);}
+.nfr-hero.c3{background:linear-gradient(160deg,var(--brand-tint),var(--paper));} .nfr-hero.c3 .cat,.nfr-hero.c3 .big{color:var(--brand);}
+.nfr-hero.c4{background:linear-gradient(160deg,var(--violet-tint),var(--paper));} .nfr-hero.c4 .cat,.nfr-hero.c4 .big{color:var(--violet);}
+[data-component="nfr-metrics-table"]{width:100%; min-width:480px; border-collapse:separate; border-spacing:0; font-size:13px;}
+[data-component="nfr-metrics-table"] th{background:var(--paper-3); text-align:left; font-size:11px; font-weight:800; letter-spacing:.05em; color:var(--ink-soft); padding:10px 14px; text-transform:uppercase;}
+[data-component="nfr-metrics-table"] td{padding:11px 14px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.55;}
+[data-component="nfr-metrics-table"] tbody tr:last-child td{border-bottom:none;}
+.nid{font-weight:800; font-family:ui-monospace,monospace; color:var(--brand); white-space:nowrap;}
+.tgt{font-weight:800; color:var(--ink); white-space:nowrap;}
+.meas{color:var(--ink-soft); font-size:12.5px;}
+
+/* ===================== rtm-grid (rtm-grid / 双方向トレース + 孤立検出) ===== */
+[data-component="rtm-grid"]{overflow-x:auto; border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow);}
+.rtm{border-collapse:separate; border-spacing:0; font-size:12.5px; width:100%; min-width:760px;}
+.rtm th,.rtm td{padding:11px 12px; text-align:center; border-bottom:1px solid var(--line); border-right:1px solid var(--line-soft);}
+.rtm th{background:var(--brand-deep); color:#fff; font-size:11px; font-weight:800; letter-spacing:.04em;}
+.rtm thead th:first-child{text-align:left;}
+.rtm .grp{background:var(--paper-3); color:var(--ink-soft); font-weight:800; font-size:10.5px; letter-spacing:.06em; text-transform:uppercase;}
+.rtm tbody th{background:var(--paper-2); text-align:left; font-weight:800; color:var(--brand); font-family:ui-monospace,monospace; white-space:nowrap; font-size:12px;}
+.rtm tbody th .lbl{display:block; font-family:inherit; font-weight:600; color:var(--ink-soft); font-size:10.5px; margin-top:2px;}
+.rtm td.hit{background:var(--ok-tint);}
+.rtm td .dot{display:inline-grid; place-items:center; width:22px; height:22px; border-radius:50%; background:var(--ok); color:#fff;}
+.rtm td .dot.ac{display:inline-flex; align-items:center; width:auto; min-width:0; height:auto; border-radius:6px; padding:2px 7px; font-size:10px; font-weight:700; line-height:1.2; margin:1px;}
+.rtm td.gap{background:var(--bad-tint);} .rtm td.gap .x{color:var(--bad); font-weight:900;}
+.rtm tbody tr:last-child td,.rtm tbody tr:last-child th{border-bottom:none;}
+
+/* ===================== rtm-collapse (折りたたみ RTM の fold affordance / folio-276 #4) ====
+   生成 SRS は核心 RTM を <details data-component="rtm-collapse"> で既定折りたたむ。 素の details は
+   marker が小さく「開けるUI」と気付けず要旨が素通りした (ceiling 第2層)。 summary を panel ヘッダ化し
+   ▶ caret + 「クリックで開閉」ヒントで開閉可能性を明示する。 折りたたみ機構自体は assembler が所有。 */
+[data-component="rtm-collapse"]{border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow); background:var(--paper); overflow:hidden;}
+[data-component="rtm-collapse"]>summary{cursor:pointer; list-style:none; user-select:none; display:flex; align-items:center; gap:11px; padding:15px 20px; font-size:14.5px; font-weight:800; color:var(--brand); background:var(--brand-tint);}
+[data-component="rtm-collapse"]>summary::-webkit-details-marker{display:none;}
+[data-component="rtm-collapse"]>summary::before{content:""; flex:0 0 auto; width:0; height:0; border-left:7px solid currentColor; border-top:5px solid transparent; border-bottom:5px solid transparent; transition:transform .15s ease;}
+[data-component="rtm-collapse"][open]>summary::before{transform:rotate(90deg);}
+[data-component="rtm-collapse"]>summary::after{content:"クリックで開閉"; margin-left:auto; font-size:10.5px; font-weight:700; letter-spacing:.04em; color:var(--ink-faint); background:var(--paper); border:1px solid var(--line); border-radius:6px; padding:2px 9px;}
+[data-component="rtm-collapse"][open]>summary{border-bottom:1px solid var(--line);}
+[data-component="rtm-collapse"]>.rtm-summary-derived,[data-component="rtm-collapse"]>[data-prose-slot="rtm-summary"]{margin:0; padding:13px 20px 0; font-size:13px; color:var(--ink-soft); line-height:1.6;}
+[data-component="rtm-collapse"]>[data-component="rtm-grid"]{margin:16px 20px 18px;}
+
+/* ===================== acceptance-criteria-checklist (dense-list) ========= */
+[data-component="acceptance-criteria-checklist"]{display:grid; grid-template-columns:repeat(3,1fr); gap:16px;}
+.ac{background:var(--paper); border:1px solid var(--ok-line); border-radius:14px; padding:17px 18px; box-shadow:var(--shadow); position:relative; display:flex; flex-direction:column; gap:8px;}
+.ac::before{content:""; position:absolute; left:0; top:0; bottom:0; width:5px; background:var(--ok); border-radius:14px 0 0 14px;}
+.ac .aid{font-size:11.5px; font-weight:800; color:var(--ok); letter-spacing:.1em; display:flex; align-items:center; gap:8px;}
+.ac .at{font-size:14.5px; font-weight:700; line-height:1.5; margin:0;}
+.ac .at b{color:var(--ok); font-weight:800;}
+.ac .metric{display:flex; align-items:baseline; gap:6px; margin-top:auto; padding-top:6px;}
+.ac .metric .v{font-size:26px; font-weight:900; color:var(--ok); line-height:1;}
+.ac .metric .l{font-size:11.5px; color:var(--ink-faint); font-weight:600;}
+
+/* ===================== constraint-callout (callout / 制約・規制) =========== */
+[data-component="constraint-callout"]{width:100%; border-collapse:separate; border-spacing:0; font-size:13.5px;}
+[data-component="constraint-callout"] td{padding:13px 16px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.55;}
+[data-component="constraint-callout"] tbody tr:last-child td{border-bottom:none;}
+.cid2{font-weight:800; font-family:ui-monospace,monospace; color:var(--warn); white-space:nowrap; width:60px;}
+.cl{font-weight:700; white-space:nowrap; width:170px; color:var(--ink);}
+.reg-badge{font-size:9.5px; font-weight:800; letter-spacing:.06em; background:var(--bad-tint); color:var(--bad); border:1px solid var(--bad-line); padding:1px 7px; border-radius:5px; margin-left:6px;}
+
+/* ===================== glossary-term-table (glossary / 用語 SSoT) ========= */
+[data-component="glossary-term-table"]{display:grid; grid-template-columns:1fr 1fr; gap:0 28px; border:1px solid var(--line); border-radius:14px; overflow:hidden; box-shadow:var(--shadow);}
+.grow{display:flex; gap:16px; padding:15px 20px; border-bottom:1px solid var(--line-soft); align-items:flex-start;}
+.grow:nth-child(odd){background:var(--paper);} .grow:nth-child(even){background:var(--paper-2);}
+.gword{flex:0 0 142px; font-size:14.5px; font-weight:800; color:var(--brand); line-height:1.3;}
+.gword .en{display:block; font-size:11px; font-weight:700; color:var(--ink-faint); font-family:ui-monospace,monospace; margin-top:2px;}
+.gdef{font-size:13px; color:var(--ink-soft); line-height:1.55;}
+
+/* ===================== fidelity-sync-meta + footer (meta) ================= */
+.foot{padding:26px 56px 40px; background:var(--brand-deep); color:rgba(255,255,255,.78); font-size:12px;}
+.foot .ft-grid{display:flex; flex-wrap:wrap; gap:14px 40px; justify-content:space-between; align-items:center;}
+.foot b{color:#fff;}
+.foot .tags{display:flex; flex-wrap:wrap; gap:8px;}
+.foot .tags span{background:rgba(255,255,255,.1); border:1px solid rgba(255,255,255,.18); padding:4px 10px; border-radius:7px; font-size:11px; font-weight:600;}
+/* i6f9: 読者向け平易行は常時可視の第 1 行 (flex-basis:100%)、 dev メタ行は font-size のみ控えめ化
+   (色/opacity は据置 = contrast 不変で gate F に新規 risk を持ち込まない)。 */
+.foot .ft-plain{flex-basis:100%; font-size:13px; color:rgba(255,255,255,.92); font-weight:500;}
+.foot .ft-grid>[data-audience="machine"]{font-size:10.5px;}
+
+/* ===========================================================================
+   残り register (taxonomy 全 37 部品の被覆) — 多くは中核 register を再利用
+   =========================================================================== */
+
+/* ---- dense-table family: interface / data / revision-history ---- */
+[data-component="interface-spec-table"],
+[data-component="data-requirements-block"],
+[data-component="revision-history-table"]{width:100%; border-collapse:separate; border-spacing:0; font-size:13px;}
+[data-component="interface-spec-table"] th,
+[data-component="data-requirements-block"] th,
+[data-component="revision-history-table"] th{background:var(--paper-3); text-align:left; font-size:11px; font-weight:800; letter-spacing:.05em; color:var(--ink-soft); padding:10px 14px; text-transform:uppercase;}
+[data-component="interface-spec-table"] td,
+[data-component="data-requirements-block"] td,
+[data-component="revision-history-table"] td{padding:11px 14px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.55;}
+[data-component="interface-spec-table"] tbody tr:last-child td,
+[data-component="data-requirements-block"] tbody tr:last-child td,
+[data-component="revision-history-table"] tbody tr:last-child td{border-bottom:none;}
+.iid{font-weight:800; font-family:ui-monospace,monospace; color:var(--info); white-space:nowrap;}
+.dir{font-size:10px; font-weight:800; padding:2px 7px; border-radius:5px; background:var(--info-tint); color:var(--info); border:1px solid var(--info-line);}
+
+/* ---- dense-list family: ui / functions / use-case / references / toc / appendix ---- */
+[data-component="ui-spec-block"],
+[data-component="product-functions-list"],
+[data-component="use-case-card"],
+[data-component="references-list"],
+[data-component="toc-navigator"],
+[data-component="assumptions-constraints-list"],
+[data-component="supporting-info-appendix"]{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:9px;}
+[data-component="ui-spec-block"] li,
+[data-component="product-functions-list"] li,
+[data-component="references-list"] li,
+[data-component="toc-navigator"] li,
+[data-component="assumptions-constraints-list"] li,
+[data-component="supporting-info-appendix"] li{display:flex; gap:11px; align-items:flex-start; background:var(--paper); border:1px solid var(--line); border-radius:11px; padding:11px 15px; box-shadow:var(--shadow); font-size:13.5px; line-height:1.5;}
+[data-component="assumptions-constraints-list"] li{border-left:5px solid var(--warn);}
+.li-tag{font-size:10px; font-weight:800; padding:2px 7px; border-radius:5px; background:var(--warn-tint); color:var(--warn); border:1px solid var(--warn-line); flex:0 0 auto;}
+[data-component="toc-navigator"]{display:grid; grid-template-columns:repeat(2,1fr); gap:9px 18px;}
+[data-component="toc-navigator"] li{box-shadow:none; border-color:var(--line-soft);}
+[data-component="toc-navigator"] .tn{font-weight:800; font-family:ui-monospace,monospace; color:var(--brand); flex:0 0 auto;}
+[data-component="references-list"] .ref-n{font-weight:800; font-family:ui-monospace,monospace; color:var(--ink-faint); flex:0 0 auto;}
+.li-key{font-weight:800; color:var(--brand); flex:0 0 auto;}
+
+/* use-case-card: precondition/flow/postcondition の枠 */
+[data-component="use-case-card"] li{flex-direction:column; gap:7px; border-left:5px solid var(--info); padding:14px 17px;}
+.uc-id{font-size:11.5px; font-weight:800; color:var(--info); letter-spacing:.08em;}
+.uc-flow{display:flex; flex-wrap:wrap; gap:6px; align-items:center; font-size:12.5px;}
+.uc-flow .stp{background:var(--paper-2); border:1px solid var(--line); border-radius:7px; padding:3px 9px; font-weight:600;}
+.uc-flow .ar{color:var(--ink-faint); font-weight:800;}
+
+/* ---- rtm-grid family: verification-method-grid / requirement-attributes-rtm ---- */
+[data-component="verification-method-grid"],
+[data-component="requirement-attributes-rtm"]{overflow-x:auto; border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow);}
+[data-component="verification-method-grid"] table,
+[data-component="requirement-attributes-rtm"] table{border-collapse:separate; border-spacing:0; font-size:12.5px; width:100%; min-width:680px;}
+[data-component="verification-method-grid"] th,
+[data-component="requirement-attributes-rtm"] th{background:var(--brand-deep); color:#fff; font-size:11px; font-weight:800; padding:10px 12px; text-align:left;}
+[data-component="verification-method-grid"] td,
+[data-component="requirement-attributes-rtm"] td{padding:10px 12px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.5;}
+[data-component="verification-method-grid"] tbody tr:nth-child(even) td,
+[data-component="requirement-attributes-rtm"] tbody tr:nth-child(even) td{background:var(--paper-2);}
+
+/* ---- callout family: quality-checklist / audience-toggle ---- */
+[data-component="quality-checklist-callout"]{background:var(--paper-2); border:1px solid var(--line); border-left:5px solid var(--ok); border-radius:12px; padding:16px 20px; box-shadow:var(--shadow);}
+[data-component="quality-checklist-callout"] .qt{font-size:13px; font-weight:800; color:var(--ok); margin:0 0 10px; display:flex; align-items:center; gap:8px;}
+[data-component="quality-checklist-callout"] ul{list-style:none; margin:0; padding:0; display:grid; grid-template-columns:repeat(3,1fr); gap:7px 16px;}
+[data-component="quality-checklist-callout"] li{font-size:12.5px; display:flex; gap:7px; color:var(--ink-soft);}
+[data-component="quality-checklist-callout"] li .ck{color:var(--ok); font-weight:900; flex:0 0 auto;}
+[data-component="audience-toggle"]{display:inline-flex; gap:0; border:1px solid var(--line); border-radius:10px; overflow:hidden; box-shadow:var(--shadow);}
+[data-component="audience-toggle"] button{border:none; background:var(--paper); color:var(--ink-soft); font:inherit; font-size:12.5px; font-weight:700; padding:8px 16px; cursor:pointer; border-right:1px solid var(--line);}
+[data-component="audience-toggle"] button:last-child{border-right:none;}
+[data-component="audience-toggle"] button[aria-pressed="true"]{background:var(--brand); color:#fff;}
+
+/* ---- diagram family: context / use-case-flow / state-machine ---- */
+[data-component="context-diagram"],
+[data-component="use-case-flow-diagram"],
+[data-component="state-machine-diagram"]{background:var(--paper); border:1px solid var(--line); border-radius:14px; padding:20px; box-shadow:var(--shadow); overflow-x:auto;}
+[data-component="context-diagram"] figcaption,
+[data-component="use-case-flow-diagram"] figcaption,
+[data-component="state-machine-diagram"] figcaption{font-size:11.5px; color:var(--ink-faint); font-weight:600; margin-top:10px; text-align:center;}
+/* use-case flow steps (横並びステップ) */
+.uc-basic{display:flex; align-items:stretch; gap:0; flex-wrap:wrap;}
+.uc-step{flex:1 1 0; min-width:140px; background:var(--paper); border:1px solid var(--brand); border-radius:13px; padding:14px; box-shadow:var(--shadow); display:flex; flex-direction:column; gap:5px;}
+.uc-arrow{flex:0 0 30px; display:grid; place-items:center; color:var(--brand); font-weight:800;}
+.uc-step .sn{font-size:11px; font-weight:800; color:var(--brand); letter-spacing:.06em;}
+.uc-step .st{font-size:14px; font-weight:800; line-height:1.3;}
+.uc-step .sd{font-size:11.5px; color:var(--ink-faint); line-height:1.45;}
+
+/* ---- badge: informative-normative-label ---- */
+.io-label{display:inline-flex; align-items:center; gap:5px; font-size:10px; font-weight:800; letter-spacing:.06em; padding:2px 9px; border-radius:6px; text-transform:uppercase;}
+.io-label.normative{background:var(--brand); color:#fff;}
+.io-label.informative{background:var(--paper-3); color:var(--ink-soft); border:1px solid var(--line);}
+
+/* ---- responsive ---- */
+@media (max-width:1080px){
+  [data-component="section-lead-callout"],[data-component="nfr-hero-metrics"],[data-component="acceptance-criteria-checklist"]{grid-template-columns:1fr 1fr;}
+  [data-component="scope-summary-panel"],[data-component="glossary-term-table"]{grid-template-columns:1fr;}
+}
+@media (max-width:720px){
+  [data-component="chapter-deck-band"],.chapbody,[data-component="doc-cover-band"],.foot{padding-left:22px; padding-right:22px;}
+  [data-component="section-lead-callout"],[data-component="nfr-hero-metrics"],[data-component="acceptance-criteria-checklist"]{grid-template-columns:1fr;}
+  [data-component="doc-cover-band"] h1{font-size:31px;}
+  [data-component="chapter-deck-band"] .num{font-size:92px;}
+}
+
+/* ============================================================================
+   dark accent コントラスト補正 — ★このブロックはファイル末尾に置くこと (source-order)。
+   dark では accent トークン (--brand/--info/--warn/--ok/--bad/--violet) が明色へ反転するため、
+   それを塗りに使い白文字を載せる小要素 (kicker / priority-badge / actor avatar / dot 等) は
+   WCAG AA が崩れる (gate F low-contrast で実検出)。 文字を暗色へ切替えて contrast を確保する。
+   基底の `color:#fff` ルールと同 specificity ゆえ、 source-order で後勝ちさせるには本ブロックが
+   それら全ての後 (= ファイル末尾) に来る必要がある。 前方へ移すと基底ルールに負け無効化する。
+   構造ヘッダ/フッタ (--brand-deep 塗り) は dark でも暗色維持ゆえ白文字のままで可読。
+   ============================================================================ */
+@media (prefers-color-scheme: dark){
+  .tint-brand .kicker, .tint-ok .kicker, .tint-bad .kicker,
+  .tint-warn .kicker, .tint-info .kicker, .tint-violet .kicker,
+  [data-component="source-trace-origin"] thead th,
+  .prio.must, .prio.should,
+  .rtm td .dot,
+  .actor .av,
+  [data-component="audience-toggle"] button[aria-pressed="true"],
+  .io-label.normative{ color:#08131a; }
+}
+/* ===== ADR-pack 固有部品 (folio-bwc / instance#2)。 srs.css の token を流用 ===== */
+[data-component="adr-context-row"]{display:flex;gap:12px;align-items:flex-start;padding:13px 16px;border:1px solid var(--line);border-left:3px solid var(--info);border-radius:10px;background:var(--paper-2);margin:10px 0}
+[data-component="adr-context-row"] .cxid{flex:0 0 auto;font-weight:700;font-size:12px;color:var(--info);background:var(--info-tint);border:1px solid var(--info-line);border-radius:6px;padding:2px 8px;letter-spacing:.02em}
+[data-component="adr-context-row"] .cxbody .cxh{font-weight:700;margin:0 0 3px;font-size:14.5px}
+[data-component="adr-context-row"] .cxbody .cxd{margin:0;color:var(--ink-soft);font-size:13.5px;line-height:1.7}
+table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;margin:8px 0;font-size:13.5px}
+[data-component="adr-driver-row"] td{border:1px solid var(--line);padding:9px 12px;vertical-align:top}
+[data-component="adr-driver-row"] .drid{font-weight:700;color:var(--brand);white-space:nowrap}
+[data-component="adr-driver-row"] .drg{display:inline-block;margin-left:6px;font-size:11px;color:var(--ink-soft);background:var(--paper-3);border:1px solid var(--line);border-radius:5px;padding:1px 6px}
+.opt-grid{display:flex;flex-direction:column;gap:12px;margin:10px 0}
+[data-component="adr-option-card"]{border:1px solid var(--line);border-radius:12px;padding:14px 16px;background:var(--paper);box-shadow:var(--shadow)}
+[data-component="adr-option-card"].chosen{border:2px solid var(--ok);background:var(--ok-tint)}
+[data-component="adr-option-card"].rejected{opacity:.92}
+.opt-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:4px}
+.opt-head .opt-id{font-weight:700;font-size:12px;color:var(--ink-soft)}
+.opt-head .opt-name{font-weight:800;font-size:15px}
+.opt-verdict{font-size:11.5px;font-weight:700;border-radius:999px;padding:2px 11px;border:1px solid}
+.opt-verdict.chosen{color:var(--ok);background:var(--ok-tint);border-color:var(--ok-line)}
+.opt-verdict.rejected{color:var(--bad);background:var(--bad-tint);border-color:var(--bad-line)}
+.opt-verdict.deferred{color:var(--warn);background:var(--warn-tint);border-color:var(--warn-line)}
+[data-component="adr-option-card"] .opt-sum{margin:2px 0 8px;color:var(--ink-soft);font-size:13.5px;line-height:1.7}
+[data-component="adr-option-card"] .opt-plain{display:block;margin:0 0 9px;font-size:13px;color:var(--ink-soft);background:var(--brand-tint);border-radius:7px;padding:6px 10px}
+.opt-pc{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media(max-width:640px){.opt-pc{grid-template-columns:1fr}}
+.opt-pc ul{margin:3px 0 0;padding-left:2px;list-style:none}
+.opt-pc li{font-size:12.5px;line-height:1.65;padding-left:18px;position:relative;margin:3px 0;color:var(--ink-soft)}
+.opt-pc .pros h4,.opt-pc .cons h4{margin:0;font-size:11.5px;letter-spacing:.04em}
+.opt-pc .pros h4{color:var(--ok)} .opt-pc .cons h4{color:var(--bad)}
+.opt-pc .pros li::before{content:"+";position:absolute;left:2px;color:var(--ok);font-weight:800}
+.opt-pc .cons li::before{content:"\2212";position:absolute;left:2px;color:var(--bad);font-weight:800}
+[data-component="adr-decision-panel"]{border:2px solid var(--ok);border-radius:14px;padding:16px 18px;background:var(--ok-tint);margin:8px 0}
+[data-component="adr-decision-panel"] .dec-kick{font-size:11.5px;font-weight:700;letter-spacing:.05em;color:var(--ok);text-transform:uppercase}
+[data-component="adr-decision-panel"] .dec-state{font-size:15.5px;font-weight:700;line-height:1.7;margin:5px 0 4px}
+[data-component="adr-decision-panel"] .dec-plain{display:block;font-size:13.5px;color:var(--ink-soft);line-height:1.7;margin:0 0 8px}
+[data-component="adr-decision-panel"] .dec-why{display:block;font-size:13px;color:var(--ink);background:var(--paper);border:1px solid var(--ok-line);border-radius:8px;padding:8px 11px;line-height:1.75;margin:0 0 10px}
+.justify-box{background:var(--paper);border:1px solid var(--line);border-radius:9px;padding:10px 12px}
+.justify-box .jh{font-size:12px;font-weight:700;color:var(--ink-faint);margin:0 0 6px}
+.justify-row{display:flex;gap:9px;align-items:baseline;padding:5px 0;border-top:1px dashed var(--line)}
+.justify-row:first-of-type{border-top:0}
+.justify-req{flex:0 0 auto;font-weight:800;font-size:12.5px;color:var(--ok);background:var(--ok-tint);border:1px solid var(--ok-line);border-radius:6px;padding:1px 9px}
+.justify-role{flex:0 0 auto;font-size:10.5px;color:var(--violet);background:var(--violet-tint);border:1px solid var(--violet-line);border-radius:999px;padding:1px 8px}
+.justify-note{flex:1 1 auto;font-size:12.5px;color:var(--ink-soft);line-height:1.6}
+.justify-tgt{font-size:11.5px;color:var(--ink-faint);margin:8px 0 0}
+[data-component="adr-supersession"],[data-component="adr-principle"]{border:1px solid var(--line);border-radius:10px;padding:12px 15px;margin:10px 0;font-size:13.5px;line-height:1.7}
+[data-component="adr-supersession"]{background:var(--paper-2)}
+[data-component="adr-principle"]{background:var(--violet-tint);border-color:var(--violet-line)}
+[data-component="adr-principle"] .prin-id{font-weight:700;color:var(--violet);font-size:12px;letter-spacing:.02em}
+[data-component="adr-principle"] .prin-text{font-weight:700;margin:4px 0 2px;color:var(--ink)}
+[data-component="adr-principle"] .prin-note{color:var(--ink-soft);font-size:12.5px}
+.ss-row{margin:3px 0}.ss-row .ss-k{font-weight:700;color:var(--ink-soft);font-size:12px;margin-right:6px}
+
+</style>
+<meta name="folio-version" content="0.1.0">
+<script type="application/ld+json">
+{
+  "@context": {
+    "dc": "http://purl.org/dc/terms/",
+    "schema": "https://schema.org/",
+    "folio": "https://folio.dev/spec/v1/"
+  },
+  "@id": "./ADR-0065-the-vessel-writes-the-trust-flag-before-launching-a-seat.html",
+  "@type": "schema:TechArticle",
+  "dc:isPartOf": [
+    {
+      "@id": "./README.html"
+    }
+  ],
+  "dc:title": "口座 × anchor の trust の印は席の起動が置く — seat launch の 1 本が prepare の後・置き換えと boot の分岐の前に、 選んだ口座の設定 dir の .claude.json に、 その anchor の trust の印を true で置いてから起動行を注入する。 依存は足さず既存の入れ子 JSON の読み手に書き手を足し、 言葉は閉じた列 written / created / accepted / unreadable / unwritable、 起動は止めない (ADR-0026 §2.2 / §2.5 の trust の受け入れと代筆の射程外を trust の印 1 key に限って部分 supersede・credential の fence は不変)",
+  "folio:version": "0.1.0",
+  "folio:stakeholders": [
+    "Developer",
+    "AI Agent",
+    "External Reviewer"
+  ],
+  "dc:references": [
+    {
+      "@id": "../spec/constitution.html#c2"
+    },
+    {
+      "@id": "../spec/constitution.html#c3"
+    },
+    {
+      "@id": "../spec/constitution.html#c17"
+    },
+    {
+      "@id": "../spec/constitution.html#a1"
+    },
+    {
+      "@id": "../spec/constitution.html#n1"
+    },
+    {
+      "@id": "../spec/srs.html#FR59"
+    },
+    {
+      "@id": "../spec/srs.html#FR38"
+    },
+    {
+      "@id": "../spec/srs.html#NFR3"
+    },
+    {
+      "@id": "./ADR-0017-account-allowance-measured-into-event-log.html"
+    },
+    {
+      "@id": "./ADR-0026-account-lifecycle-host-manifest-and-seat-launch.html"
+    },
+    {
+      "@id": "./ADR-0045-seat-role-is-one-orchestrator-and-dispatcher-lands-runs.html"
+    },
+    {
+      "@id": "./ADR-0049-seat-accounts-are-owned-by-project-groups.html"
+    },
+    {
+      "@id": "./ADR-0055-group-pressure-is-measured-at-run-ends-and-seat-turns-without-a-timer.html"
+    },
+    {
+      "@id": "./ADR-0062-core-describes-invocations-and-the-boundary-crate-spawns-them.html"
+    },
+    {
+      "@id": "./ADR-0063-a-new-repo-joins-the-vessel-with-one-command-inheriting-the-host-face-from-a-template-state-dir.html"
+    }
+  ]
+}
+</script>
+</head>
+<body>
+<!-- folio:chrome-top -->
+<a class="skip-link" href="#cover-summary">本文へスキップ</a>
+<nav class="breadcrumb" aria-label="パンくず"><ol>
+  <li><a href="../index.html">design-intent</a></li>
+  <li><a href="./README.html">decisions</a></li>
+  <li aria-current="page">ADR-0065</li>
+</ol></nav>
+<!-- /folio:chrome-top -->
+<div class="page" data-component="requirement-type-color-tokens">
+<header data-component="doc-cover-band">
+<p class="cover-eyebrow"><span class="doc-type">設計判断記録 (ADR)</span> <span>scribe2 — trust の印を器が起動の前に置く</span></p>
+<h1>口座 × anchor の trust の印は席の起動が置く — seat launch の 1 本が prepare の後・置き換えと boot の分岐の前に、 選んだ口座の設定 dir の .claude.json に、 その anchor の trust の印を true で置いてから起動行を注入する。 依存は足さず既存の入れ子 JSON の読み手に書き手を足し、 言葉は閉じた列 written / created / accepted / unreadable / unwritable、 起動は止めない (ADR-0026 §2.2 / §2.5 の trust の受け入れと代筆の射程外を trust の印 1 key に限って部分 supersede・credential の fence は不変)</h1>
+<p class="cover-sub">席が別の口座へ移るとき、 その口座がその repo (anchor) を一度も「信じる」と答えていないと、 Claude Code は起動直後に trust の dialog (既定は No, exit) を出して席が立たない。 群の自動の移動 (ADR-0049 §2・ADR-0055) と init が起こす席 (ADR-0063) はここで人の手を待つ (2026-09-25 の本番の移動でも持ち主が手で承認した)。 本 ADR は、 席の起動の 1 本 (seat launch) が登録 row を書いた後・自分の process の置き換えと起動行の注入の分岐の前に、 選んだ口座の設定 dir の .claude.json の該当の印 (projects の下の &lt;anchor&gt; の hasTrustDialogAccepted) を true に置くと決める。 依存は足さず (NFR3)、 既存の入れ子 JSON の読み手に「path に真偽を置く 1 関数」と「一時 file → 読み直し → rename の書き戻し」を足す。 結果は閉じた言葉 (written / created / accepted / unreadable / unwritable) で起動の 1 行の末尾に添え、 印を置けない周も起動は止めない。 書く相手は「今起こす口座 × 今の anchor」の 1 組に閉じ、 .credentials.json と settings.json は触らない。</p>
+<div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">この記録で「器」は scribe2 の本体、 「席」は人と AI が話す 1 つの session、 「口座」は席が使う Claude Code の login 単位、 「anchor」は対象 repo の本体の場所、 「信じた印」(trust の印) は口座ごとの設定 file (.claude.json) に置かれる「この folder を信じる」と答えた記録です。 Claude Code は、 その口座で一度も信じると答えていない folder で起動すると、 起動直後に「信じるか」の問い (trust dialog・既定は No, exit) を出し、 答えるまで席は立ちません。 席が別の口座へ移るとき (群の移動) や、 新しい repo を載せて初めて席を起こすとき (init) は、 ここで人の手を待ちます。 2026-09-25 の本番の移動でも、 持ち主が手で承認するまで席は立ちませんでした。 この記録は、 席を立てる口 (seat launch) が、 席の登録を書いた後・起動行を差し込む (か自分の process を置き換える) 前に、 選んだ口座の設定 file の該当の印を「信じる」に置いてから起動行を送ると決めます。 新しい部品 (依存) は足さず、 器がすでに持つ入れ子 JSON の読み手に「印を置く」と「書き戻す」の 2 つの関数を足します。 書くのはその 1 key だけで、 他の key と並びと値は保ち、 一時 file に書いて読み直してから置き換えます。 結果は 5 つの言葉 (置いた・作って置いた・すでに信じていた・読めなかった・書けなかった) のどれかで起動の記録と起動の 1 行の末尾に残し、 印を置けなくても席は立てます。 書く相手は「今起こす口座 × 今の anchor」の 1 組だけで、 credential と settings の file は触りません。 前の決定 (ADR-0026) の「login そのものと trust の受け入れは user が行い、 器は credential に触りません」のうち trust の受け入れを、 この 1 key に限って置き換えます (credential には触らないままです)。 要件書では、 席の起動 (FR59) の内側にこの 1 手を足し、 群の移動 (FR38) が人の手を待たない根拠になり、 依存 0 本 (NFR3) を保ちます。 この記録は、 受け入れられるまで何も拘束しない発効前 (proposed) の記録です。</p></div></div>
+<div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">proposed</span></span><span class="m"><span class="k">選択肢</span><span class="v">7件 (OPT1–OPT7)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 4 / トレードオフ 6</span></span><span class="m"><span class="k">版</span><span class="v">v0.1.0 / 2026-09-25</span></span></div>
+<div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>FR59・FR38・NFR3</b></div>
+<div data-component="approval-block">
+<div class="sign"><span class="role">裁定 (user)</span><span class="who">user</span><span class="when">裁定 id user 2026-09-24T22:56Z (移り先の口座が anchor を trust していない穴は、 依存を足さず、 既存の入れ子 JSON の読み手に書き手を足す形で器が塞ぐ、 という推奨の受諾。 同日 13:38Z の serde_json を足す推奨の受諾は前提の誤りで取り下げ)。 要旨だけを写す。 逐語は非公開の作業記録簿 (台帳 s2-07l.609 の notes) に在る</span><span class="stamp self">裁定済</span></div>
+<div class="sign"><span class="role">設計 (orchestrator)</span><span class="who">orchestrator</span><span class="when">2026-09-25 草稿 v1 (設計 host-init.md の §7 と契約表の行 e・account-autonomy.md §5 (2) と §10 を、 現物の口 (入れ子 JSON の読み手・doctor の trust= の読み手・seat launch の 1 本と呼び手 3 つ) の読みと合わせて形にした。 拘束する constitution の版 0.5.0)</span><span class="stamp self">作成</span></div>
+</div>
+<div class="reader-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 想定読者: scribe2 の開発 session と user — Claude Code の設定 file や Rust の専門知識は不要 (専門語はやさしい言葉を併記)</div>
+</header>
+<!-- folio:chrome-toc -->
+<!-- /folio:chrome-toc -->
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">01</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v6m0 0L9 5m3 3l3-3"/><circle cx="12" cy="14" r="6"/></svg> 背景 / なぜこの判断が要るか</span><h2>いま何が問題か (確定方式を決める力学)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-01">なぜこの判断が要るのかを、 2 度の決定と、 実際に起きたことと、 器の今の部品と、 これまでの決まりから説明します。 群の移動の実地試験で、 移り先の口座がその repo を一度も信じると答えていないと、 起動直後の問い (trust dialog) で席が立たない穴が見つかりました。 1 回目の決定 (2026-09-24 13:38 UTC) は JSON を扱う部品を足して器が印を書く案を受け入れましたが、 器にはすでに入れ子 JSON の読み手が在り、 部品を足す案は「依存 0 本」の要件を書き換える必要があったので、 前提が誤りでした。 2 回目の決定 (同じ日の 22:56 UTC) は、 部品を足さず、 その読み手に書き手を足す形を受け入れ、 前の決定を取り下げました。 その後の 2026-09-25 の本番の移動では、 移り先の席が問いで止まり、 持ち主が手で承認するまで立ちませんでした。 器の部品は、 JSON を木として読んで戻す読み手と、 点検 (doctor) がその木から印を読む口までは在りますが、 木の path に真偽を置く関数と、 置いた木を同じ file へ書き戻す関数の 2 つが在りません。 席を立てる口は、 口座を選び、 起動行を組み、 登録を書いた後、 呼び手の窓が席の窓と同じなら自分の process を起動行に置き換え、 違えば窓へ差し込みます。 呼ぶ場所は 3 つ (人が打つ形・群の移動・見回りの移動) で、 席の立て直しの経路は前の決定 (ADR-0045) で消えているので、 席の起こし直しは全部この口を通ります。 決まりの側では、 依存 0 本・足す前に外す物を名指す・描画を判定に使わない・環境変数を読まない、 が効き、 前の決定は「器は credential の file に書かず、 trust は user が答える」としていました。 書く相手は席を起こすその 1 組に閉じ、 credential と settings と点検は触りません。</p></section>
+<div class="chapbody">
+<div data-component="adr-context-list">
+<div data-component="adr-context-row"><span class="cxid">CTX1</span><div class="cxbody"><p class="cxh">経緯 — 2 度の裁定と、 取り下げた前提</p><p class="cxd">群の移動<span class="term" data-component="plain-language-term-inline" data-term="群の移動">口座の乗り換え</span>の実地試験 (memo s2-07l.604) で、 移り先の口座がその anchor<span class="term" data-component="plain-language-term-inline" data-term="anchor">repo の本体の場所</span> を一度も trust していないと起動の trust dialog<span class="term" data-component="plain-language-term-inline" data-term="trust dialog">folder を信じる問い</span> (既定は No, exit) で席が立たない穴 (a) が見つかった。 2026-09-24T13:38Z の裁定は「serde_json を依存に足して器が印を書く」推奨を受諾したが、 器には既に入れ子 JSON の読み手 (doctor<span class="term" data-component="plain-language-term-inline" data-term="doctor">点検の 1 コマンド</span> の trust= の行が使う) が在り、 依存を足す案は SRS NFR3 (実行時の直接依存 0 本) の改稿を要するので、 推奨の前提が誤りだった。 2026-09-24T22:56Z の裁定は「依存を足さず、 既存の読み手に書き手を足す形で器が塞ぐ」推奨を受諾し、 前の裁定を取り下げた。 要旨だけを写し、 逐語は非公開の作業記録簿 (台帳 s2-07l.609) に在る。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX2</span><div class="cxbody"><p class="cxh">実測 — 2026-09-25 の本番の移動で、 持ち主が手で trust を承認した</p><p class="cxd">2026-09-25 の群の自動の移動 (台帳 s2-07l.617) では、 tick が移り先の口座で席を起こしたが、 その口座はその anchor を trust しておらず、 起動の dialog で止まった (tick の記録は launched=launch-unconfirmed)。 席が立ったのは持ち主が手で承認した後である。 群の移動 (ADR-0049 §2・ADR-0055) は「新しい口座で新しい席を起こし、 復帰は機械の注入に任せる」と決めたが、 この 1 手だけが人の手に残っている。 init (ADR-0063) が起こす初回の席も同じ穴を持つ。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX3</span><div class="cxbody"><p class="cxh">現物 — 読み手は在るが、 置く関数と書き戻す関数が無い</p><p class="cxd">base 80270bd で、 入れ子 JSON の読み手 (parse / Tree / render) は RFC 8259 の 6 形を読み、 数は 10 進の字面のまま持ち、 重複 key を拒み、 木を JSON に戻せる。 doctor の trust= の行 (accepted / missing / unreadable) は、 この読み手で口座の設定 dir<span class="term" data-component="plain-language-term-inline" data-term="口座の設定 dir">口座ごとの設定の置き場</span> の .claude.json の projects の下の &lt;anchor&gt; の hasTrustDialogAccepted を読む (読むだけ)。 無いのは、 木の path に真偽を置く 1 関数と、 置いた木を同じ file へ書き戻す 1 関数の 2 つ。 席の起動<span class="term" data-component="plain-language-term-inline" data-term="席の起動">席を立てる口</span>の 1 本 (launch) は model → 役割の既定 → 口座の選定 → 起動行の導出 → prepare が登録 row を書く、 まで進んだ後で 2 つに分かれる。 呼び手の pane が target と同じ周 (置き換え・約束 7) は boot を通らず、 自分の process を起動行へ exec で置き換えて返らない (stdout の 1 行も Launched も無く、 記録は record_launch が exec の前に inject.jsonl へ 1 行書く)。 それ以外の周は boot が注入し、 結果は Launched (Done / None / Refused / Failed)。 呼び手は 3 つ (seat の長い形と短い形・群の移動の周に席を起こす経路・tick の移動の周)。 席の立て直しの経路は ADR-0045 §2 (2) で消えており (relaunch.rs が持つのは boot と初回の選定だけ)、 席の起こし直しは全部この 1 本を通る。 口座の設定 dir は state dir の accounts の下の label の dir (実 dir か symlink) で、 ADR-0017 §2.3 の経路で解く。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX4</span><div class="cxbody"><p class="cxh">射程 — 書くのは起動の 1 本だけ、 credential と settings と doctor は触らない</p><p class="cxd">書くのは席の起動の 1 本だけで、 init と account add は書かない (書く相手を「今起こす口座 × 今の anchor」の 1 組に閉じる)。 doctor の trust= の行は読むだけのまま (書いた後の周は accepted と読める＝それが確認)。 .credentials.json と settings.json は書かない (ADR-0017 の fence のまま)。 pane の字面で dialog に答える形は持たない (C3.3)。 Tree の形と parse の判定・prepare と登録 row・Launched の他の variant は変えない。 README の「新しい repo を器に載せる」の trust の 1 文は後続の docs で書く。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX5</span><div class="cxbody"><p class="cxh">憲法と既存の決定の向き (本 ADR の解釈)</p><p class="cxd">NFR3 は実行時の直接依存 0 本 (std だけで build) を求め、 C17.2 は仕組みを足す前に何を外すかを名指させる。 C3.3 は端末の描画や自由文を判定入力にしない。 C2.2 は env を読まず、 口座の設定 dir は state dir から解く (ADR-0017 §2.3・ADR-0026 §2.1)。 A1 は消す・出す・使うの 3 クラスを user に聞く。 本 ADR の読みでは、 .claude.json の 1 key の設置は 3 クラスに当たらない (消さず・repo の外に出さず・新しい資源を使わない)。 口座を使うこと自体は群の宣言の常設の承認 1 回で以後は都度聞かない (ADR-0049 §2)。 N1 は人の手で置いた物を壊さない。 ADR-0017 §2.3 は器が credential を読まず・書かず・代筆しないと決め (§2.5 は再 login を user の手番とするが、 .claude.json と trust には触れていない)、 ADR-0026 §2.2 は「login そのものと trust の受け入れは user が行い、 器は credential に触りません」と決め、 ADR-0026 §2.5 は login と trust の代筆を射程外 (account-autonomy.md §10 で却下済み) とした。 設計 §10 の当時の却下の理由は、 Claude Code の私有形式への書込 (ADR-0017 §2.5 と同じ fence と類推・credential と同じ dir) と、 trust は user が folder を信じる宣言＝器が代筆すると信じていない folder を信じたことになる、 の 2 つ。 ADR-0063 は trust を器が埋めるかを別の裁定と後続の ADR に送った。 ADR-0045 §2 (2) は席の立て直しを消し、 orchestrator の再起動は user が seat launch を撃つと決めた。 ADR-0049 §2 と ADR-0055 は群の移動を「新しい口座で新しい席を起こす」と決め、 ADR-0063 は init の 7 手を 3 語に閉じた。</p></div></div>
+</div>
+</div>
+<section data-component="chapter-deck-band" class="tint-brand"><span class="num">02</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v18"/><path d="M5 7l-3 6h6z"/><path d="M19 7l-3 6h6z"/><path d="M3 21h18"/></svg> 判断を縛る力 / 評価の軸</span><h2>選択肢を測るものさし (安全・速さ)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-02">この判断を評価する 5 本のものさしです。 群の移動と init が起こす席が人の手を待たないこと。 部品 (依存) を足さず、 すでに在る読み手に書き手を足すだけにすること。 Claude Code の file の他の key と並びと値を保ち、 書くのは 1 key だけにし、 credential と settings は触らないこと。 書く相手を「今起こす口座 × 今の anchor」の 1 組に閉じ、 信じていない folder を信じた印を撒かないこと。 起動を止めず、 結果は決まった言葉で残し、 画面の描画は読まないことです。</p></section>
+<div class="chapbody">
+<table data-component="adr-driver-table"><tbody>
+<tr data-component="adr-driver-row"><td class="drid">DR1</td><td>群の移動と init が起こす席が人の手を待たない — trust の穴を器が塞ぎ、 移動の周に持ち主が dialog を承認する 1 手を消す <span class="drg">CTX1 (裁定)・CTX2 (本番の移動の実測)</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR2</td><td>依存を足さない — 読み手は既に在る。 書き手を足すだけで、 crate を足さず NFR3 を改稿しない <span class="drg">CTX1 (取り下げた前提)・CTX3・CTX5 (NFR3・C17.2)</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR3</td><td>Claude Code の file の他の内容を保つ — 書くのは 1 key だけで、 key・並び・値・数の字面を保つ (書式は読み手の render の形＝2 空白の入れ子で、 末尾の改行は元の file に在れば保つ)。 credential と settings は触らない <span class="drg">CTX3 (読み手の性質)・CTX5 (ADR-0017 の fence・N1)</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR4</td><td>書く相手を「今起こす口座 × 今の anchor」の 1 組に閉じる — 信じていない folder を信じた印を撒かない <span class="drg">CTX4・CTX5 (却下の理由 2 つ目・A1)</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR5</td><td>起動を止めず、 結果は閉じた言葉で残す — 描画を読まず (C3.3)、 印を置けない周も席は立て、 doctor が名指す <span class="drg">CTX4・CTX5 (C3.3)</span></td></tr>
+</tbody></table>
+</div>
+<section data-component="chapter-deck-band" class="tint-violet"><span class="num">03</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5"/></svg> 検討した選択肢 / 3 つの確定方式</span><h2>それぞれの利点と欠点を並べる</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-03">候補を 7 つ並べます。 席を立てる口が登録の後・差し込みの前に既存の読み手に足した書き手で印を置く案 (選んだ案)、 JSON の部品を足して書く案、 設定 file を丸ごと書き直す案、 画面の問いを読んで key を送る案、 repo を載せる init の段で全部の口座に先に印を置く案、 印が無ければ起動を断る案、 設定 file の中身を host の宣言 file に写す案です。 却下した 6 案にも利点を並べ、 退けた決め手が現物か分析かを各案に書きます。 部品を足す案は書き手の code が最小になる点で、 丸ごと書く案は書き手が単純になる点で、 画面を読む案は file に触らない点で、 init で先に置く案は起動の口を変えない点で、 起動を断る案は Claude Code の file を書かない点で、 宣言に写す案は器が読むのを自分の面だけにできる点で、 選んだ案に勝ります。</p></section>
+<div class="chapbody">
+<div class="opt-grid">
+<div data-component="adr-option-card" class="chosen">
+<div class="opt-head"><span class="opt-id">OPT1</span><span class="opt-name">席の起動の 1 本が prepare の後・置き換えと boot の分岐の前に、 既存の読み手に足した書き手で印を置く</span><span class="opt-verdict chosen">採用</span></div>
+<p class="opt-sum">launch が登録 row を書いた後・置き換えと注入の分岐の前に 1 回だけ (置き換えの周も注入の周も同じ 1 回を通る)、 選んだ口座の設定 dir の .claude.json の projects の下の &lt;anchor&gt; の hasTrustDialogAccepted を true に置く。 書き方は同じ読み手で読み → 木の path に真偽を置く → 一時 file に書き → 読み直して確かめ → rename。 言葉は written / created / accepted / unreadable / unwritable の閉じた列で起動の記録に残し、 どの言葉でも起動行は送る。 決め手は分析 (裁定の推奨を、 依存を足さず 1 key だけを 1 組にだけ書く形で満たす)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT1">席を立てる口が、 席の登録を書いた後・置き換えか差し込みかの分かれ目の前に 1 回だけ、 選んだ口座の設定 file (.claude.json) の該当の印を「信じる」(true) に置く案です。 器がすでに持つ入れ子 JSON の読み手に、 「木の path に真偽を置く」と「書き戻す」の 2 つの関数を足して使います。 書き方は、 読んで、 置いて、 同じ dir の一時 file に書いて、 読み直して確かめて、 置き換える、 の順です。 結果は 5 つの言葉 (置いた・作って置いた・すでに信じていた・読めなかった・書けなかった) のどれかで起動の記録に残し、 どの言葉でも起動行は送ります。 群の移動と init が起こす席で人の手が消え、 部品を足さず、 他の key と並びと値は保ち、 書くのは今起こす 1 組だけで、 起動は止めず画面も読みません。 代わりに、 Claude Code の私有の file に器が 1 key を書くこと (前の決定の線をこの 1 key に限って置き換える)、 席の起動が file の読み書きを 1 回持って起動の記録と起動の 1 行に項目が 1 つずつ増えること、 印の形は Claude Code 側の約束で変われば問いがまた出ること、 器は「信じる」にしか置かず戻すのは人の手であること、 書式が読み手の形に揃うこと、 同じ file を使う Claude Code と鍵を共有しないこと (印が消えた周は点検が名指して次の起動が置き直す) を引き受けます。 決め手は分析で、 user の決定の推奨を、 部品を足さず 1 key だけを 1 組にだけ書く形で満たす案でした。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>群の移動と init が起こす席で、 持ち主が dialog を承認する 1 手が消える (DR1)</li>
+<li>crate を足さず、 読み手 (parse / Tree / render) に「置く」と「書き戻す」の 2 関数を足すだけ。 NFR3 は不変 (DR2)</li>
+<li>key・並び・値・数の字面を保ち (書式は render の形)、 一時 file → 読み直し → rename で部分書きを作らない。 既に true の周は書かない (DR3)</li>
+<li>書くのは今起こす口座 × 今の anchor の 1 組だけで、 init と account add は書かない (DR4)</li>
+<li>言葉は閉じた列で起動の記録と起動の 1 行の末尾に載り、 印を置けない周も席は立つ。 描画は読まない (DR5)</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>Claude Code の私有形式の file に器が 1 key を書く (ADR-0026 §2.2 / §2.5 の trust の受け入れと代筆の射程外を、 この 1 key に限って supersede する・credential の fence は不変)</li>
+<li>席の起動が file の読みと書き (一時 file・rename) を 1 回持ち、 起動の記録の what の末尾と起動の 1 行の末尾に trust=&lt;語&gt; が 1 項目増える</li>
+<li>書式は読み手の render の形に揃う (key・並び・値は保つが、 元の file の空白や escape の書き方が render の形と違う周はそこが変わる)</li>
+<li>同じ設定 dir を使って走る Claude Code と lock を共有しない (読み → 一時 file → rename の間に同じ file を書いた周はどちらかが負ける)。 印が消えた周は doctor の trust=missing が名指し、 次の起動が置き直す</li>
+<li>Claude Code が印の key 名や置き場を変えると、 器は unreadable か written のまま dialog が出る (印の形は Claude Code の側の約束)</li>
+<li>撤回の口は持たない (器は true にしか置かず、 false に戻すのは人の手)</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT2</span><span class="opt-name">serde_json を境界 crate に足して印を書く</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">境界 crate に JSON の crate を足し、 その読み書きで .claude.json を更新する。 2026-09-24T13:38Z の裁定が一度受諾した形。 決め手は分析 (前提の誤り・NFR3 の改稿が要る)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT2">JSON を扱う部品 (serde_json) を器の外側の crate に足し、 その読み書きで設定 file を更新する案です。 2026-09-24 の 1 回目の決定 (13:38 UTC) が一度受け入れた形です。 JSON の形の網羅を部品に任せられ、 書き手の code が最小になる点で勝ります。 けれども、 「実行時の直接依存 0 本」という要件 (NFR3) を書き換える必要があり、 2 回目の決定 (22:56 UTC) が前の決定を取り下げました。 読み手はすでに在るので、 足す前に外す物が無く (C17.2)、 同じ file を 2 つの読み手で読む形になります。 決め手は分析です。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>JSON の読み書きを自前で持たず、 形の網羅を crate に任せられる</li>
+<li>書き手を足す code が最小になる</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>SRS NFR3 (実行時の直接依存 0 本・std だけで build) の改稿が要る。 裁定 2026-09-24T22:56Z が前の裁定を取り下げた (DR2)</li>
+<li>読み手 (parse / Tree / render) は既に在り、 足す前に外す物が無い (C17.2)。 同じ file を 2 つの読み手で読む形になる (DR2)</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT3</span><span class="opt-name">.claude.json を丸ごと書き直す</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">器が知っている key だけで file を組み立て直して書く。 決め手は分析 (他の key と並びを壊す)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT3">器が知っている key だけで設定 file を組み立て直し、 丸ごと書く案です。 読み手の木を保つ必要が無く、 書き手が単純になる点で勝ります。 けれども、 Claude Code が持つ他の key と並びと数の書き方を壊し、 読み直しても「他は同じ」を確かめられません。 Claude Code 側の状態を器が消す形になります。 決め手は分析です。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>読み手の木を保つ必要が無く、 書き手が単純になる</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>Claude Code が持つ他の key と並び・数の字面を壊す。 読み直しで「他が同じ」を測れない (DR3)</li>
+<li>Claude Code の側の状態を器が消す形になり、 N1 に触れる (DR3)</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT4</span><span class="opt-name">dialog を pane の字面で読んで Enter (か Down + Enter) を送る</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">起動後に pane を読み、 trust dialog が出ていれば承認の key を送る。 13:38Z の裁定の代替案として上がっていた形。 決め手は分析 (C3.3)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT4">起動した後に画面を読み、 問い (trust dialog) が出ていれば承認の key (Enter か Down + Enter) を送る案です。 1 回目の決定のときに代替案として上がっていた形です。 file に触らず、 user が問いに答えるのと同じ手を器が打つ点で勝ります。 けれども、 端末の描画を判定に使うことになり、 決まり (C3.3) と設計 doc の前の却下に反します。 既定の選択肢や行の字面が Claude Code の版で変わると誤った key を送り、 送った key が問い以外に届く周も生まれます。 決め手は分析です。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>file に触らず、 user が dialog で答えるのと同じ手を器が打つ</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>端末の描画を判定入力にする (C3.3・account-autonomy.md §10 の却下のまま) (DR5)</li>
+<li>既定の選択肢や行の字面が Claude Code の版で変わると誤った key を送る。 送った key が dialog 以外に届く周を作る (DR5)</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT5</span><span class="opt-name">init の段で全口座 × anchor を先に trust する</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">repo を載せる init が、 host の面の全口座の設定 dir にその anchor の印を先に置く。 決め手は分析 (書く相手が広がる)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT5">repo を載せる口 (init) の段で、 host に在る全部の口座の設定 file にその repo の印を先に置く案です。 起動の口を変えずに済み、 どの口座へ移っても問いが出ない点で勝ります。 けれども、 信じていない folder を信じた印を全部の口座に撒くことになり、 書く相手を起こす 1 組に閉じたいという、 この判断のものさし (DR4) に反します。 init が起こさない席 (後から足した口座・後から入れた群) には効かず、 穴が残ります。 決め手は分析です。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>起動の 1 本を変えずに済み、 どの口座へ移っても dialog が出ない</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>信じていない folder を信じた印を全部の口座に置く。 書く相手は起こす 1 組に閉じる (DR4)</li>
+<li>init が起こさない席 (後から足した口座・後から入れた群) には効かず、 穴が残る (DR1)</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT6</span><span class="opt-name">trust を起動の前提にして、 dialog が出うる周を断る</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">印が無い口座 × anchor では席を起こさず Refused にし、 人に承認を求める。 決め手は分析 (人の手が要る周を器が増やす)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT6">印が無い口座 × anchor では席を起こさず断り、 人に承認を求める案です。 器が Claude Code の file を書かずに済み、 前の決定の線が動かない点で勝ります。 けれども、 群の移動と init の周に人の手が要る形を器が増やし、 穴を塞がず名指すだけになります。 断りの種類が増え、 移動の周は候補が在るのに移りません。 決め手は分析です。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>器が Claude Code の file を書かずに済み、 fence は動かない</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>群の移動と init の周に人の手が要る形を器が増やす。 穴を塞がず名指すだけになる (DR1)</li>
+<li>起動の断りの列に「trust が無い」が増え、 移動の周は候補が在るのに移らない (DR1・DR5)</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT7</span><span class="opt-name">設定 dir の .claude.json の内容を host の面の宣言に写す</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">trust の印<span class="term" data-component="plain-language-term-inline" data-term="trust の印">信じた印の 1 key</span>を host の manifest の宣言として持ち、 器はそれを読んで起動の可否や書きを決める。 決め手は分析 (私有形式の二重化)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT7">口座の設定 file の中身 (印) を host の宣言 file に写し、 器はそれを読んで起動の可否や書きを決める案です。 器が読むのは自分の面だけになり、 Claude Code の file の形に依らない点で勝ります。 けれども、 Claude Code の私有の状態を器の面に二重に持つことになり、 どちらが正かが割れます。 人が宣言 file に書く行が増え、 問いを消すには結局 .claude.json に印が要ります。 決め手は分析です。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>器が読むのは自分の面だけになり、 Claude Code の file の形に依らない</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>Claude Code の私有形式の状態を器の面に二重に持ち、 どちらが正かが割れる (DR3)</li>
+<li>人が面に書く行が増え、 dialog を消すには結局 .claude.json に印が要る (DR1)</li>
+</ul></div></div>
+</div>
+</div>
+</div>
+<section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの方式を選ぶか</span><h2>選んだ方式と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、 それが要件書のどの要件を支えるかを示します。 席を立てる口 (seat launch) は、 席の登録を書いた後・置き換えか差し込みかの分かれ目の前に 1 回だけ、 選んだ口座の設定 file (.claude.json) の該当の印 (projects の下のその anchor の hasTrustDialogAccepted) を「信じる」(true) に置きます。 書き方は、 同じ読み手で読み、 木の path に真偽を置き (途中の入れ物が無ければ作り、 隣の key と並びと値と数の書き方は変えず、 書式は読み手の形で、 末尾の改行は元に在れば保ち)、 同じ dir の一時 file に書き、 読み直して印が入っていることを確かめ、 置き換えます。 file が無ければ最小の file を作り、 すでに信じていれば 1 byte も書きません。 結果は 5 つの言葉 (置いた・作って置いた・すでに信じていた・読めなかった・書けなかった) のどれかで、 どの言葉でも起動行は送り、 言葉は起動の記録に残し (置き換えの周も差し込みの周も)、 差し込みの周はさらに結果の値と起動の 1 行の末尾に添えます。 群の移動はこの言葉を判定に使わず、 見回りの移動は記録に写すだけです。 同じ設定 file を使う Claude Code とは鍵 (lock) を共有せず、 印が消えた周は点検が名指して次の起動が置き直します。 依存は足さず、 書くのは今起こす 1 組だけで、 init と口座の登録 (account add) は書かず、 点検は読むだけ、 credential と settings は触らず、 画面の問いには答えません。 要件書では、 席の起動 (FR59) の内側にこの 1 手を足して判定と断りは変えず、 群の移動 (FR38) が人の手を待たない根拠になり、 依存 0 本 (NFR3) は変えません。</p></section>
+<div class="chapbody">
+<div data-component="adr-decision-panel" id="decision">
+<p class="dec-kick">採用 — OPT1</p>
+<p class="dec-state">席の起動の 1 本 (seat launch の launch) SHALL prepare が通った後・置き換え (replace_with・約束 7) と boot の分岐の前に 1 回だけ、 選んだ口座の設定 dir の .claude.json について projects の下の &lt;anchor の絶対 path&gt; の hasTrustDialogAccepted を true に置く (置き換えの周も注入の周も同じ 1 回を通る)。 呼び手 3 つ (seat の長い形と短い形・群の移動の周に席を起こす経路・tick の移動の周) SHALL 変えない。 席の起こし直しは全部この 1 本を通る (立て直しの経路は ADR-0045 §2 (2) で消えている)。 書き方 SHALL 同じ読み手で読み → 木の path に真偽を置き (途中の object が無ければ作る・兄弟の key と並びと値と数の字面は変えない・書式は読み手の render の形＝2 空白の入れ子で、 末尾の改行は元の file に在れば保つ) → render の本文を同じ dir の一時 file に書き → 一時 file を同じ読み手で読み直して印が true であることを確かめ → rename で置き換える、 の順とし、 file が無い周 SHALL projects だけを持つ最小の木を同じ手で作り、 既に true の周 SHALL NOT 1 byte も書かない (mtime も動かない)。 言葉 SHALL 閉じた列 written (置いた) / created (file を作って置いた) / accepted (既に true・書かない) / unreadable (file は在るが JSON でない・途中が object でない・末端が真偽でない＝書かない) / unwritable (一時 file の書き・読み直しの不一致・rename のどれかが失敗＝置き換えない) とする。 どの言葉でも起動行 SHALL 送り、 Refused に SHALL NOT しない (trust は起動の前提でなく穴埋め)。 言葉 SHALL 起動の記録 (record_launch が inject.jsonl に書く行の what) の末尾に trust=&lt;語&gt; として、 置き換えの周も注入の周も残す。 注入の周 SHALL さらに Launched::Done の 3 つ目の値として返し、 seat launch の stdout の 1 行の末尾に trust=&lt;語&gt; を添え、 tick は launched= の後ろに trust=&lt;語&gt; を足す。 群の移動の周の起こしと tick の移動 SHALL NOT 言葉を判定に使わない。 器 SHALL NOT 同じ設定 dir を使って走る Claude Code と lock を共有しない。 印が消えた周 SHALL doctor の trust=missing が名指し、 次の起動が置き直す。 器 SHALL NOT 依存を足さない (NFR3 は不変)。 書く相手 SHALL 今起こす口座 × 今の anchor の 1 組に閉じ、 init と account add SHALL NOT 書かない。 doctor の trust= の行 SHALL 読むだけのままとする。 .credentials.json と settings.json SHALL NOT 書かない (ADR-0017 §2.3 の fence のまま)。 Tree の形と parse の判定・prepare と登録 row・Launched の他の variant SHALL 変えない。 器 SHALL NOT pane の字面で dialog に答えない (C3.3)。</p>
+<span class="dec-plain" data-prose-slot="plain" data-slot-id="decision-plain">席を立てる口 (seat launch) は、 席の登録を書いた後・置き換えか差し込みかの分かれ目の前に 1 回だけ (置き換えの周も差し込みの周も同じ 1 回を通ります)、 選んだ口座の設定 file (.claude.json) の該当の印 (projects の下の、 その repo の場所の hasTrustDialogAccepted) を「信じる」(true) に置きます。 呼ぶ場所 3 つ (人が打つ長い形と短い形・群の移動・見回りの移動) は変えません。 席の立て直しの経路は前の決定 (ADR-0045) で消えているので、 席の起こし直しは全部この口を通ります。 書き方は、 同じ読み手で読み、 木の path に真偽を置き (途中の入れ物が無ければ作り、 隣の key と並びと値と数の書き方は変えず、 書式は読み手の形＝2 空白の入れ子で、 末尾の改行は元の file に在れば保ち)、 同じ dir の一時 file に書き、 一時 file を読み直して印が入っていることを確かめ、 置き換える、 の順です。 file が無ければ projects だけを持つ最小の file を同じ手で作り、 すでに「信じる」なら 1 byte も書きません (更新時刻も動きません)。 結果の言葉は 5 つに決めます。 置いた (written)・file を作って置いた (created)・すでに信じていた (accepted)・読めなかった (unreadable・file は在るが JSON でない、 途中が入れ物でない、 末端が真偽でない＝書かない)・書けなかった (unwritable・一時 file の書き、 読み直しの不一致、 置き換えのどれかが失敗＝置き換えない) です。 どの言葉でも起動行は送り、 断りにはしません (印は起動の前提でなく穴埋めです)。 言葉は起動の記録 (差し込みの記録の行の what の末尾) に trust= の形で、 置き換えの周も差し込みの周も残します。 差し込みの周はさらに「立った」の結果の 3 つ目の値として返し、 起動の 1 行の末尾に添え、 見回りの移動は記録の行にも写しますが、 群の移動と見回りの移動はこの言葉を判定に使いません。 同じ設定 dir を使って走る Claude Code とは鍵 (lock) を共有しません。 印が消えた周は点検の trust=missing が名指し、 次の起動が置き直します。 部品 (依存) は足しません。 書く相手は今起こす口座 × 今の repo の 1 組だけで、 init と口座の登録 (account add) は書きません。 点検 (doctor) の trust の行は読むだけのままです。 credential の file と settings の file は書きません。 読み手の木の形と読みの判定・登録の書き・「立った」以外の結果は変えません。 画面の問いには答えません。</span>
+<span class="dec-why" data-prose-slot="rationale" data-slot-id="decision-rationale">user の決定は、 移り先の口座が repo を信じていない穴を、 部品を足さずに、 すでに在る入れ子 JSON の読み手に書き手を足す形で器が塞ぐ、 という推奨の受諾でした。 一度は部品を足す推奨が受け入れられましたが、 読み手はすでに在り、 部品を足すと「依存 0 本」の要件を書き換える必要があったので、 前提が誤りとして取り下げられました。 本番の移動で、 席が問いで止まり持ち主が手で承認するまで立たなかった実測が、 穴が本物であることを示しています。 印を置く場所を席を立てる口の内側 (登録の後・置き換えか差し込みかの分かれ目の前) の 1 か所にしたのは、 置き換えの周も差し込みの周もその 1 回を通り、 群の移動も見回りの移動も init が起こす席も同じ 1 本を通り、 席の立て直しの経路は前の決定 (ADR-0045) で消えているので、 呼ぶ場所を変えずに席が起こされる全部の周で印が置かれるからです。 書くのを 1 key だけにし、 一時 file に書いて読み直してから置き換えるのは、 Claude Code の file の他の key と並びと値を保ち、 途中で壊れた file を残さないためで、 丸ごと書く案を退けた理由です。 画面を読んで答える案を退けたのは、 描画を判定に使わない決まり (C3.3) のためです。 全部の口座に先に置く案を退けたのは、 信じていない folder を信じた印を撒かず、 書く相手を今起こす 1 組に閉じるためです。 起動を断る案を退けたのは、 人の手が要る周を器が増やさないためで、 だから印を置けなくても起動行は送り、 結果は決まった言葉で残して点検が名指します。 宣言 file に写す案を退けたのは、 Claude Code の私有の状態を二重に持たないためです。 前の決定 (ADR-0026) の「trust の受け入れは user が行う」をこの 1 key に限って置き換えるのは、 器が起こす席の前提は器が置くべきで、 credential に触らないという線 (ADR-0017) は保てるからです。 同じ file を使う Claude Code と鍵を共有しないことは代償として引き受け、 印が消えた周は点検が名指して次の起動が置き直します。</span>
+<div class="justify-box"><p class="jh">この判断が正当化する要件 (cross-doc 照会 → SRS-SCRIBE2-MVP)</p>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR59" data-justifies-req="FR59" data-justifies-role="claim">FR59</a><span class="justify-role">claim</span><span class="justify-note">FR59 は席の起動が役割を受け、 口座を決め、 起動行を導出し、 登録を起動の前に書き、 target の窓へ差し込み、 断る周は typed に断り key を 1 つも送らないことを求める。 本 ADR は「登録を書いた後・置き換えと差し込みの分岐の前」に trust の印を置く 1 手をこの 1 本の内側に足し、 起動の判定と断りの列は変えない。 印を置けない周も起動行を送るのは、 FR59 の「席の起動」が席を立てる口であって trust の有無を言う口でないという読みによる。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR38" data-justifies-req="FR38" data-justifies-role="rationale">FR38</a><span class="justify-role">rationale</span><span class="justify-note">FR38 は群の移動を「移り先を 1 回だけ決め、 群の今の口座の記録を書き、 古い席へ退避の合図を送って新しい口座で席を起こし直す」形で求める。 移り先の口座が anchor を trust していない周は、 起こした席が dialog で止まり、 移動が人の手を待つ (CTX2)。 本 ADR は起動の 1 本の内側で印を置くので、 移動の周に席を起こす経路を変えずに、 この 1 手が消える。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#NFR3" data-justifies-req="NFR3" data-justifies-role="rationale">NFR3</a><span class="justify-role">rationale</span><span class="justify-note">NFR3 は実行時の直接依存 0 本 (std だけで build) を求める。 本 ADR は JSON の crate を足さず、 既存の読み手に「置く」と「書き戻す」の 2 関数を足す形を選び、 依存を足す案 (OPT2) を退けた。 NFR3 の文面は変えない。</span></div>
+<p class="justify-tgt">照会先: SRS-SCRIBE2-MVP — SRS: 設計 → 契約 → 実装 → 検証 → land を、 人の手を借りずに 1 本通す器（MVP）</p>
+</div>
+</div>
+</div>
+<section data-component="chapter-deck-band" class="tint-warn"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> 結果 / 良い面とトレードオフ</span><h2>この判断で何が良くなり、 何を引き受けるか</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">この判断で良くなること 4 つと、 代わりに引き受けること 6 つです。 良くなるのは、 群の移動と init が起こす席で持ち主が問いを承認する 1 手が消えること、 部品を足さず読み手に 2 つの関数を足すだけで依存 0 本が変わらないこと、 書くのは 1 key だけで他の key と並びと値は保ち途中で壊れた file を作らないこと、 結果が決まった言葉で起動の記録と起動の 1 行と見回りの記録に残り、 印を置けなくても席が立ち、 確認は点検の既存の行で足りることです。 引き受けるのは、 Claude Code の私有の file に器が 1 key を書くこと (前の決定の線をこの 1 key に限って置き換える)、 席の起動が file の読み書きを 1 回持ち、 起動の記録と起動の 1 行と見回りの記録に項目が 1 つずつ増えること、 印の key 名や置き場は Claude Code 側の約束で、 変われば問いがまた出ること、 器は「信じる」にしか置かず、 戻すのは人の手であること、 書式が読み手の形に揃うので Claude Code の書式と違えば空白や escape の書き方が変わること、 同じ file を使う Claude Code と鍵を共有せず印が消える周がありうること (点検が名指して次の起動が置き直す) です。</p></section>
+<div class="chapbody">
+<div data-component="scope-summary-panel"><div class="scol in"><h3>✓ 良い結果</h3><ul>
+<li data-component="adr-consequence-pos"><span class="b">●</span>群の移動と init が起こす席で、 持ち主が起動の trust dialog を承認する 1 手が消える。 移動の復帰は機械の注入だけで進む (ADR-0049 §2・ADR-0055 の形が閉じる)</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>crate を足さず、 既存の読み手に「置く」と「書き戻す」の 2 関数を足すだけ。 NFR3 (実行時の直接依存 0 本) は不変で、 同じ file を 2 つの読み手で読む形を作らない</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>書くのは 1 key だけで、 key・並び・値・数の字面を保ち (書式は render の 2 空白の形で、 Claude Code の書式と同じである限り byte で同じ)、 一時 file → 読み直し → rename で部分書きを作らない。 既に true の周は 1 byte も書かない。 credential と settings は触らない</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>結果は閉じた言葉 (written / created / accepted / unreadable / unwritable) で起動の記録の行と起動の 1 行の末尾と tick の記録の行に残り、 印を置けない周も席は立つ。 doctor の trust= の行が書いた後の周を accepted と読むので、 確認は既存の口で足りる</li>
+</ul></div><div class="scol out"><h3>⚖ トレードオフ・代償</h3><ul>
+<li data-component="adr-consequence-neg"><span class="b">●</span>Claude Code の私有形式の file (.claude.json) に器が 1 key を書く。 ADR-0026 §2.2 / §2.5 の trust の受け入れと代筆の射程外を、 この 1 key に限って supersede する (.credentials.json と settings.json は ADR-0017 §2.3 の fence のまま)</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>席の起動が file の読み・一時 file の書き・rename を 1 回持ち、 起動の記録の what の末尾と起動の 1 行の末尾に trust=&lt;語&gt; が 1 項目ずつ増える (外形 snapshot が動く)。 tick の記録の行にも 1 項目増える</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>印の key 名と置き場は Claude Code の側の約束で、 変われば器は unreadable か written のまま dialog が出る。 その周は doctor の trust= と起動の行の語で分かるが、 器は直せない</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>器は印を true にしか置かず、 false に戻す口は持たない (撤回は人の手)。 trust は user が folder を信じる宣言だが、 器が起こす席については器が代わりに置く (書く相手は今起こす 1 組に閉じる)</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>書き戻しの書式は読み手の render の形 (2 空白の入れ子・末尾の改行は元に在れば保つ) に揃う。 key・並び・値・数の字面は保つが、 元の file の空白や escape の書き方が render と違う周はそこが変わる。 歯の fixture は実物の .claude.json の書式で作る</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>同じ設定 dir を使って走る Claude Code と lock を共有しない。 読み → 一時 file → rename の間に Claude Code が同じ file を書いた周はどちらかが負け、 印が消えた周は doctor の trust=missing が名指して次の起動が置き直す (器の書きは読んだ木 + 印 1 つで、 他の key を消す方向には負けない)</li>
+</ul></div></div>
+</div>
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">06</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> 改訂関係と原則 / この判断の位置づけ</span><h2>版の系譜と、 行き着く原則 (照会終端)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-06">この記録が版の系譜のどこに在るかと、 判断が最後に行き着く原則です。 この記録は前の決定 1 つ (ADR-0026) を、 信じた印の 1 key に限って部分的に置き換えます。 ADR-0026 の「login そのものと trust の受け入れは user が行い、 器は credential に触りません」のうち trust の受け入れを、 器が起こす席の起動の 1 本に限って器が置く形に読み替え、 同じ記録が範囲の外とした「trust の代筆」も同じ範囲で決めます。 login は user の手番のまま、 credential の file には触らない (ADR-0017 の線) ままです。 設計 doc の側でも、 前に「器は印を書かない」と退けた記述を、 この記録で置き換え済みと記します。 群の移動の形 (ADR-0049・ADR-0055) と、 repo を載せる口 (ADR-0063) は変えません。 この記録は発効前 (proposed) で、 系譜の上では現行 (current) ですが、 受け入れられるまで何も拘束しません。 原則は「器が起こす席の前提は器が置く。 置くのは今起こす 1 組の 1 key だけで、 他の key と値は保つ。」です。</p></section>
+<div class="chapbody">
+<div data-component="adr-supersession">
+<p class="ss-row"><span class="ss-k">改訂状態</span>current</p>
+<p class="ss-row"><span class="ss-k">置き換える ADR</span>ADR-0026</p>
+<p class="ss-row"><span class="ss-k">置き換えられた</span>なし (現行)</p>
+<p class="ss-row">部分 supersede で、 置き換えるのは ADR-0026 の trust に関する 2 か所を、 trust の印 1 key に限ってである。 (1) ADR-0026 §2.2 の「login そのものと trust の受け入れは user が行い、 器は credential に触りません」のうち trust の受け入れを、 器が起こす席の起動の 1 本に限って、 口座の設定 dir の .claude.json の projects の下の &lt;anchor&gt; の hasTrustDialogAccepted を器が true に置く形に読み替える。 login は user の手番のままで、 account add の口 (login の起動行を差し込む) は変えない。 (2) ADR-0026 §2.5 が射程外とした「login と trust の代筆」のうち trust の代筆を、 同じ範囲で本 ADR が決める。 設計 account-autonomy.md §10 の却下 (器が .claude.json に印を書く形) は同 doc が本 ADR で supersede 済みと記す。 ADR-0017 は supersede しない。 §2.3 (credential を読まず・書かず・代筆せず) は不変で、 .credentials.json と settings.json はその fence のまま。 §2.5 (再 login は user の手番) は .claude.json と trust に触れていない。 ADR-0045 §2 (2) (立て直しの廃止)・ADR-0049 §2 (群の移動の形)・ADR-0055 (移動の周)・ADR-0063 (init と引数の無い起動)・ADR-0062 (子 process の記述) は不変。 発効は本 ADR が accepted になった後で、 それまで何も拘束しない。</p>
+</div>
+<div data-component="adr-principle">
+<p class="prin-id">照会終端 — PRIN-THE-DOOR-THAT-RAISES-A-SEAT-LAYS-ITS-OWN-PRECONDITION-ONE-KEY-FOR-ONE-PAIR-AND-KEEPS-THE-REST</p>
+<p class="prin-text">器が起こす席の前提は器が置く。 置くのは今起こす 1 組の 1 key だけで、 他の key と値は保つ。</p>
+<p class="prin-note">本 ADR が依存を足す案・file を丸ごと書く案・描画を読む案・全口座に先に置く案・起動を断る案・面に写す案を退け、 起動の 1 本の内側で 1 key を 1 組にだけ置く形を選んだのはこの原則に行き着く (これ以上は遡らない照会終端)。</p>
+</div>
+</div>
+<section data-component="chapter-deck-band" class="tint-brand"><span class="num">07</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg> 用語集 / この文書で使う専門語</span><h2>本文に出てくる専門語のやさしい説明</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-07">本文に出てくる専門語 9 個を、 やさしい言葉で説明します。 この記録で意味を決めた語は「trust の印」の 1 つで、 残りは器と Claude Code の側の言葉です。</p></section>
+<div class="chapbody">
+<div data-component="glossary-term-table">
+<div class="grow"><div class="gword">trust の印<span class="en">trust flag</span></div><div class="gdef">口座の設定 dir の .claude.json に在る、 anchor ごとの「この folder を信じる」の印 (projects の下のその anchor の項目の真偽)。 true なら Claude Code はその folder (anchor) で起動の trust dialog を出さない。 本 ADR の後は席の起動の 1 本が起動行の前に true に置き、 doctor は読むだけ。</div></div>
+<div class="grow"><div class="gword">trust dialog<span class="en">trust dialog</span></div><div class="gdef">Claude Code が、 その口座で一度も信じると答えていない folder で起動したときに出す確認 (既定は No, exit)。 答えるまで席は立たない。 器は pane の字面でこれに答えない (C3.3)。</div></div>
+<div class="grow"><div class="gword">口座の設定 dir<span class="en">account config dir</span></div><div class="gdef">state dir の accounts の下の label の dir (実 dir か symlink・ADR-0017 §2.3)。 Claude Code の credential・settings・.claude.json が在る。 本 ADR が書くのはこの dir の .claude.json の trust の印 1 key だけ。</div></div>
+<div class="grow"><div class="gword">JSON の木<span class="en">JSON tree</span></div><div class="gdef">器が std だけで持つ入れ子 JSON の読み手 (parse / Tree / render)。 RFC 8259 の 6 形を読み、 数は 10 進の字面のまま持ち、 重複 key を拒み、 木を JSON に戻せる。 本 ADR はこれに「path に真偽を置く」と「書き戻す」の 2 関数を足す。</div></div>
+<div class="grow"><div class="gword">席の起動<span class="en">seat launch</span></div><div class="gdef">器の subcommand seat launch が役割と口座から起動行を導き、 席の登録を先に書いて tmux の窓へ差し込むこと (ADR-0026・ADR-0063 の引数の無い形を含む)。 本 ADR の後は、 登録を書いた後・置き換えと差し込みの分岐の前に trust の印を置く。 呼び手は 3 つ (seat の長い形と短い形・群の移動の周・tick の移動の周)。</div></div>
+<div class="grow"><div class="gword">群の移動<span class="en">group move</span></div><div class="gdef">project の群の今の口座が逼迫したとき、 host の lock の内側で移り先を 1 回だけ決め、 新しい口座で新しい席を起こし、 古い席へ退避の合図を送ること (ADR-0049 §2・ADR-0055・SRS FR38)。 本 ADR は移り先の口座が anchor を trust していない周に人の手を待つ穴を塞ぐ。</div></div>
+<div class="grow"><div class="gword">anchor<span class="en">anchor</span></div><div class="gdef">対象 repo の main checkout の絶対 path。 席と便の鍵の一部 (SRS FR40)。 trust の印はこの path を key にして口座ごとに置かれる。</div></div>
+<div class="grow"><div class="gword">doctor<span class="en">doctor</span></div><div class="gdef">器の状態と host の配線を 1 回で照合して行に並べる subcommand。 trust= の行 (accepted / missing / unreadable) で口座 × anchor の印を読む (読むだけ・本 ADR で変えない)。</div></div>
+<div class="grow"><div class="gword">裁定 id<span class="en">ruling id</span></div><div class="gdef">user 裁定を一意に指す id。 裁定の時刻 (UTC)。 本 ADR は 2026-09-24T22:56Z を指し、 同日 13:38Z の裁定は取り下げられた。</div></div>
+</div>
+</div>
+</div>
+<footer class="foot" data-component="fidelity-sync-meta"><div class="ft-grid">
+<div class="ft-plain">このページは、大もとの機械データ (正本) から自動で組み立てられています。構造は機械が自動で検査し、内容が元データに忠実かは独立のレビューで確かめます。</div>
+<div data-audience="machine">機械SSoT: <b>ADR-0065-trust-flag.adr.yaml</b> &middot; 生成: <b>2026-09-25 01:56</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
+<div class="tags" data-audience="machine"><span>folio design system</span><span>ADR-pack</span><span>folio engine B1 (instance#2)</span><span>cross-doc 照会</span></div>
+</div></footer>
+<!-- folio:chrome-bottom -->
+<nav class="prevnext" aria-label="前後の文書">
+  <a class="prevnext__prev" href="ADR-0064-seat-launch-installs-the-tick-unit-from-the-host-face.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">tick の unit は席の起動が入れる — host の面に表 [[tick]] (unit dir と binary・0 か 1 行) を足し、 seat launch が席を立てた周に §3 の install の 1 本を面の値で撃つ。 doctor は flag が無ければ面の値を既定にし、 init は雛形の 5 表目として写す (ADR-0030 の口と導出は不変・ADR-0063 の init が写す表を 4 から 5 に)</span></a>
+</nav>
+<script>
+(function () {
+  var openedForPrint = [];
+  window.addEventListener('beforeprint', function () {
+    openedForPrint = [];
+    var ds = document.querySelectorAll('details:not([open])');
+    for (var i = 0; i < ds.length; i++) { ds[i].setAttribute('open', ''); openedForPrint.push(ds[i]); }
+  });
+  window.addEventListener('afterprint', function () {
+    for (var i = 0; i < openedForPrint.length; i++) openedForPrint[i].removeAttribute('open');
+    openedForPrint = [];
+  });
+  if (!document.querySelector('[data-audience]')) return;
+  /* 既定 = 人間プレゼン型 (ADR-0040 / rules §11.3): script 経由で初期 class を付与するため
+     no-JS では付かず全文可視に graceful degrade する。 static DOM は全文を保持 (AI/検索/印刷は不変)。 */
+  document.body.classList.add('audience-human');
+  var bar = document.createElement('nav');
+  bar.className = 'audience-toggle';
+  bar.setAttribute('aria-label', '表示対象の切替');
+  var states = [['both', '両方'], ['human', '人間向け'], ['machine', '機械向け']];
+  for (var s = 0; s < states.length; s++) {
+    (function (mode, label) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.setAttribute('aria-pressed', mode === 'human' ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        document.body.classList.remove('audience-human', 'audience-machine');
+        if (mode !== 'both') document.body.classList.add('audience-' + mode);
+        var bs = bar.querySelectorAll('button');
+        for (var j = 0; j < bs.length; j++) bs[j].setAttribute('aria-pressed', bs[j] === b ? 'true' : 'false');
+      });
+      bar.appendChild(b);
+    })(states[s][0], states[s][1]);
+  }
+  var bc = document.querySelector('nav.breadcrumb');
+  if (bc && bc.parentNode) { bc.parentNode.insertBefore(bar, bc.nextSibling); }
+  else { document.body.insertBefore(bar, document.body.firstChild); }
+})();
+</script>
+<!-- /folio:chrome-bottom -->
+</body>
+</html>
