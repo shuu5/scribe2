@@ -13,7 +13,7 @@ use super::follow::{self, Runner, Turn};
 use super::spawn::Account;
 use super::{current, runner_is_idle};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK};
-use crate::fleet::select::{Model, Selection};
+use crate::fleet::select::{Model, NoCandidate, Selection};
 use crate::fleet::store::{LockPolicy, StoreError};
 use crate::fleet::{self, Completion, Stage, Timeout};
 use crate::headless::ROW_MODEL;
@@ -169,7 +169,7 @@ fn runner_model_of(manifest: &Manifest) -> Result<&str, String> {
 /// 待ち）で口座を選び、同じ worktree・契約・base の runner をその口座で起こし直す。`stage` は便が居る段
 /// （上限で止まった `RateLimited`・runner が死んだ `Spawned`）で、待ちの間もその段に居ることを求める。
 ///
-/// 判定行は `run=<id> next=spawn account=<label>` / `run=<id> next=wait reset=<ts>`（既存の
+/// 判定行は `run=<id> next=spawn account=<label>` / `run=<id> next=wait reset=<ts> excluded=<n> unmeasured=<n> limited=<n>`（既存の
 /// `next=gate` と同型）。計測の行は stderr 側（`fleet select` と同じ）。走っている runner の隣に
 /// もう 1 つ起こさない（起きている周は断る・fail-closed）。
 fn resume_rate_limited(
@@ -323,12 +323,15 @@ fn choose_or_wait(
             Selection::Chosen(label) => return Ok(Some(label)),
             Selection::None(found) => found,
         };
-        let Some(reset) = found.earliest_reset else {
+        // 内訳（設計 account-lifecycle.md §25 形 2 / 3）: 判定行は件数 3 欄・stderr は label の列。
+        let tally = breakdown(&found, |labels| labels.len().to_string());
+        let Some(reset) = found.earliest_reset.clone() else {
             return Err(Outcome {
-                out: vec![format!("run={id} next=wait reset=-")],
+                out: vec![format!("run={id} next=wait reset=- {tally}")],
                 err: vec![format!(
-                    "pipe: run {id} は口座待ちである（候補なし: {}・待つ reset が無い）",
-                    found.reason.as_str()
+                    "pipe: run {id} は口座待ちである（候補なし: {}・待つ reset が無い） {}",
+                    found.reason.as_str(),
+                    breakdown(&found, |labels| if labels.is_empty() { "-".to_owned() } else { labels.join(",") })
                 )],
                 rc: RC_BLOCKED,
             });
@@ -337,7 +340,7 @@ fn choose_or_wait(
         let Some(deadline) = until(&reset) else {
             return Err(broken(format!("run {id} の待ち先 reset {reset} を時刻として読めない")));
         };
-        outcome.out.push(format!("run={id} next=wait reset={reset}"));
+        outcome.out.push(format!("run={id} next=wait reset={reset} {tally}"));
         let waited = fleet::wait(
             Completion::AccountFree {
                 reset_at: reset,
@@ -356,6 +359,16 @@ fn choose_or_wait(
             Err(Timeout) => return Ok(None),
         }
     }
+}
+
+/// 候補なしの内訳の 3 欄 `excluded=… unmeasured=… limited=…`（列は固定・値は `value` が列から作る）。
+fn breakdown(found: &NoCandidate, value: impl Fn(&[String]) -> String) -> String {
+    format!(
+        "excluded={} unmeasured={} limited={}",
+        value(&found.excluded),
+        value(&found.unmeasured),
+        value(&found.limited)
+    )
 }
 
 /// いまから `reset`（UTC の `YYYY-MM-DDTHH:MM:SSZ`）までの長さ。過ぎていれば 0。読めない形は `None`。

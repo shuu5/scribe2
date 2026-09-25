@@ -594,6 +594,54 @@ fn pipe_ratelimit_resume_excludes_the_registered_seat_account() {
     clean(&[&repo, &state]);
 }
 
+// ───── 候補なしの内訳（`s2-07l.618`・設計 account-lifecycle.md §25・接頭辞 `pipe_ratelimit_breakdown_`） ─────
+
+/// 待つ reset の無い候補なし（a1 = 席の口座で除外・a2 = credential 無しで測れない）: 判定行の末尾に件数 3 欄
+/// （0 も出す）、stderr は今の 1 文をそのまま残し、その後ろに label の列（空は `-`）。
+#[test]
+fn pipe_ratelimit_breakdown_names_accounts_when_no_reset_is_left() {
+    let (repo, state) = repo_with_state();
+    let (id, runner, rules) = rate_limited_with_accounts(&repo, &state, &[IMPLEMENT.to_owned()], &["a1", "a2"]);
+    put_account(&state, "a1", &[windows(40, 10)]);
+    register_seat_account(&state, &repo, "a1");
+    let resumed = resume_with_accounts(&repo, &state, &id, &runner, &rules);
+    assert_eq!(resumed.status.code(), Some(i32::from(RC_BLOCKED)), "{} / {}", stdout_of(&resumed), stderr_of(&resumed));
+    assert_eq!(
+        stdout_of(&resumed).trim(),
+        format!("run={id} next=wait reset=- excluded=1 unmeasured=1 limited=0"),
+        "{}",
+        stdout_of(&resumed)
+    );
+    let stderr = stderr_of(&resumed);
+    let want = format!(
+        "pipe: run {id} は口座待ちである（候補なし: unmeasured・待つ reset が無い） excluded=a1 unmeasured=a2 limited=-"
+    );
+    assert!(stderr.lines().any(|line| line == want), "先頭の 1 文は変えず後ろに label の列: {stderr}");
+    assert_eq!(stub_calls(&state), 1, "起こし直さない");
+    clean(&[&repo, &state]);
+}
+
+/// reset の在る待ち（a3 が当たっていて計測の 2 秒後に開き直る）の判定行にも同じ 3 欄が付き、開き直った a3 で
+/// 起こし直す（選ばれた周の行は今のまま）。
+#[test]
+fn pipe_ratelimit_breakdown_counts_accounts_on_the_waiting_line() {
+    let (repo, state) = repo_with_state();
+    let labels = ["a1", "a2", "a3"];
+    let (id, runner, rules) = rate_limited_with_accounts(&repo, &state, &[IMPLEMENT.to_owned()], &labels);
+    put_account(&state, "a1", &[windows(40, 10)]);
+    register_seat_account(&state, &repo, "a1");
+    put_account(&state, "a3", &[limited_for(2), windows(50, 10)]);
+    let resumed = resume_with_accounts(&repo, &state, &id, &runner, &rules);
+    assert_eq!(resumed.status.code(), Some(i32::from(RC_OK)), "{} / {}", stdout_of(&resumed), stderr_of(&resumed));
+    let stdout = stdout_of(&resumed);
+    let soon = spy_reset(&state, "a3", 1);
+    assert!(vessel::fleet::epoch_of(&soon).is_some(), "偽 curl が a3 の 1 回目に相対 reset を埋めた: {soon:?}");
+    let waiting = format!("run={id} next=wait reset={soon} excluded=1 unmeasured=1 limited=1");
+    assert!(stdout.lines().any(|line| line == waiting), "待ちの判定行に 3 欄: {stdout}");
+    assert!(stdout.lines().any(|line| line == format!("run={id} next=spawn account=a3")), "選ばれた周の行は今のまま: {stdout}");
+    clean(&[&repo, &state]);
+}
+
 /// (4) 待ちの途中の便を `pipe stop --run` が止める: `RunStopped` が書かれ、待ちから抜けて起こさない。
 ///
 /// 待ちの判定行（`next=wait reset=…`）の有無は見ない: 判定行は process の終了時にだけ stdout へ出て、待ちに
@@ -1054,7 +1102,12 @@ fn pipe_ratelimit_host_resume_without_host_manifest_has_no_candidate() {
     assert!(!state.join(vessel::rules::HOST_MANIFEST).exists(), "host の面は置かない");
     let resumed = resume_with_accounts(&repo, &state, &id, &runner, &rules);
     assert_eq!(resumed.status.code(), Some(i32::from(RC_BLOCKED)), "{} / {}", stdout_of(&resumed), stderr_of(&resumed));
-    assert_eq!(stdout_of(&resumed).trim(), format!("run={id} next=wait reset=-"), "{}", stdout_of(&resumed));
+    assert_eq!(
+        stdout_of(&resumed).trim(),
+        format!("run={id} next=wait reset=- excluded=0 unmeasured=0 limited=0"),
+        "{}",
+        stdout_of(&resumed)
+    );
     assert!(stderr_of(&resumed).contains("候補なし"), "{}", stderr_of(&resumed));
     assert_eq!(curl_calls(&state), 0, "宣言の無い口座は測らない");
     assert_eq!(stub_calls(&state), 1, "起こし直さない");

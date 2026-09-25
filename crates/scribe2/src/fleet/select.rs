@@ -154,6 +154,12 @@ pub struct NoCandidate {
     pub reason: NoCandidateReason,
     /// 当たっている口座が開き直る時刻の最も早いもの（当たっている口座が無ければ `None`）。
     pub earliest_reset: Option<String>,
+    /// 内訳（設計 account-lifecycle.md §25 形 1）: 除外集合に在る口座の label（宣言順・畳む前の値）。
+    pub excluded: Vec<String>,
+    /// 測れない口座（実測行なし・Unmeasured・reset 過ぎ）の label（宣言順）。
+    pub unmeasured: Vec<String>,
+    /// 当たっている口座の label（宣言順）。閾値以上の口座（session 用）はどの列にも入らない。
+    pub limited: Vec<String>,
 }
 
 /// 選定の結果。
@@ -215,11 +221,11 @@ enum Standing<'a> {
 /// 口座を 1 つ選ぶ。同点は label の辞書順で先の口座。
 pub fn select(input: &Input<'_>) -> Selection {
     let mut candidates: Vec<Candidate<'_>> = Vec::new();
-    let mut outs: Vec<(NoCandidateReason, Option<String>)> = Vec::new();
+    let mut outs: Vec<(&str, NoCandidateReason, Option<String>)> = Vec::new();
     for label in input.labels {
         match standing(input, label) {
             Standing::Candidate(found) => candidates.push(found),
-            Standing::Out(reason, reopens) => outs.push((reason, reopens)),
+            Standing::Out(reason, reopens) => outs.push((label.as_str(), reason, reopens)),
         }
     }
     match pick(input.purpose, input.prefer, &candidates) {
@@ -227,12 +233,20 @@ pub fn select(input: &Input<'_>) -> Selection {
         None => Selection::None(NoCandidate {
             reason: outs
                 .iter()
-                .map(|(reason, _)| *reason)
+                .map(|(_, reason, _)| *reason)
                 .min()
                 .unwrap_or(NoCandidateReason::Unmeasured),
-            earliest_reset: outs.into_iter().filter_map(|(_, reopens)| reopens).min(),
+            excluded: labels_of(&outs, NoCandidateReason::Excluded),
+            unmeasured: labels_of(&outs, NoCandidateReason::Unmeasured),
+            limited: labels_of(&outs, NoCandidateReason::AllLimited),
+            earliest_reset: outs.into_iter().filter_map(|(_, _, reopens)| reopens).min(),
         }),
     }
+}
+
+/// 外れた口座のうち理由が `reason` の label（宣言順・1 口座の理由は 1 つなので 1 列にだけ入る）。
+fn labels_of(outs: &[(&str, NoCandidateReason, Option<String>)], reason: NoCandidateReason) -> Vec<String> {
+    outs.iter().filter(|(_, found, _)| *found == reason).map(|(label, _, _)| (*label).to_owned()).collect()
 }
 
 /// `fleet select` の stdout 1 行。

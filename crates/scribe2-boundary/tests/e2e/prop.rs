@@ -370,9 +370,11 @@ mod fleet {
             });
             let fresh = found.resets_at.as_deref().is_none_or(|resets_at| resets_at >= now);
             let want = if !fresh {
-                Selection::None(NoCandidate { reason: NoCandidateReason::Unmeasured, earliest_reset: None })
+                let (excluded, unmeasured, limited) = (Vec::new(), labels.to_vec(), Vec::new());
+                Selection::None(NoCandidate { reason: NoCandidateReason::Unmeasured, earliest_reset: None, excluded, unmeasured, limited })
             } else if used_pct >= 100 {
-                Selection::None(NoCandidate { reason: NoCandidateReason::AllLimited, earliest_reset: found.resets_at.clone() })
+                let (excluded, unmeasured, limited) = (Vec::new(), Vec::new(), labels.to_vec());
+                Selection::None(NoCandidate { reason: NoCandidateReason::AllLimited, earliest_reset: found.resets_at.clone(), excluded, unmeasured, limited })
             } else {
                 Selection::Chosen(found.account.clone())
             };

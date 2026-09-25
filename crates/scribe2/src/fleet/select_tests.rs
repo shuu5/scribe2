@@ -108,7 +108,20 @@ fn session() -> Ask<'static> {
     Ask { purpose: Purpose::Session, ..run() }
 }
 
+/// 選定の結果の理由と reset だけ（内訳の列は空に畳む・内訳は `select_breakdown_` の歯が [`choose_full`] で測る）。
 fn choose(labels: &[&str], allowance: &BTreeMap<AllowanceKey, AllowanceLatest>, ask: &Ask<'_>) -> Selection {
+    match choose_full(labels, allowance, ask) {
+        Selection::None(found) => Selection::None(NoCandidate {
+            excluded: Vec::new(),
+            unmeasured: Vec::new(),
+            limited: Vec::new(),
+            ..found
+        }),
+        chosen => chosen,
+    }
+}
+
+fn choose_full(labels: &[&str], allowance: &BTreeMap<AllowanceKey, AllowanceLatest>, ask: &Ask<'_>) -> Selection {
     let labels: Vec<String> = labels.iter().map(|label| (*label).to_owned()).collect();
     let exclude: BTreeSet<String> = ask.exclude.iter().map(|label| (*label).to_owned()).collect();
     let inflight: BTreeMap<String, usize> = ask.inflight.iter().map(|(label, n)| ((*label).to_owned(), *n)).collect();
@@ -130,7 +143,13 @@ fn chosen(label: &str) -> Selection {
 }
 
 fn none(reason: NoCandidateReason, earliest_reset: Option<&str>) -> Selection {
-    Selection::None(NoCandidate { reason, earliest_reset: earliest_reset.map(str::to_owned) })
+    Selection::None(NoCandidate {
+        reason,
+        earliest_reset: earliest_reset.map(str::to_owned),
+        excluded: Vec::new(),
+        unmeasured: Vec::new(),
+        limited: Vec::new(),
+    })
 }
 
 const THREE: &[&str] = &["a1", "a2", "a3"];
@@ -614,6 +633,41 @@ fn select_reason_folds_to_one_in_declaration_order() {
     assert_eq!(choose(&[], &rows, &ask), none(NoCandidateReason::Unmeasured, None), "口座 0 は測れる口座が無い");
 }
 
+/// 内訳の列 3 本（設計 account-lifecycle.md §25 形 1）の組み立て。
+fn breakdown(reason: NoCandidateReason, earliest_reset: Option<&str>, lists: [&[&str]; 3]) -> Selection {
+    let [excluded, unmeasured, limited] = lists.map(|found| found.iter().map(|label| (*label).to_owned()).collect());
+    Selection::None(NoCandidate { reason, earliest_reset: earliest_reset.map(str::to_owned), excluded, unmeasured, limited })
+}
+
+/// 除外 1・測れない 1・上限 1・空き 0 の周: 3 列が label を持ち、`reason` は今の畳み方（当たっている）のまま。
+/// base では `NoCandidate` に列が無い ＝ RED。
+#[test]
+fn select_breakdown_names_each_account_in_its_column() {
+    let rows = table(&[(TS, [round("a1", 0, 0), round("a3", 100, 0)].concat())]);
+    let ask = Ask { exclude: &["a1"], ..run() };
+    assert_eq!(
+        choose_full(&["a1", "a2", "a3"], &rows, &ask),
+        breakdown(NoCandidateReason::AllLimited, Some(FIVE_RESET), [&["a1"], &["a2"], &["a3"]]),
+        "a1 = 除外・a2 = 実測なし・a3 = 当たっている"
+    );
+}
+
+/// 1 口座は 1 列にだけ入り（除外かつ当たっている → 除外）、列の中は宣言順（label の辞書順ではない）。閾値以上
+/// （session 用）はどの列にも入らない。
+#[test]
+fn select_breakdown_puts_one_account_in_one_column_in_declaration_order() {
+    let rows = table(&[
+        (TS, [round("a1", 100, 0), round("a3", 100, 0), round("a5", 90, 0)].concat()),
+        (TS, vec![unmeasured("a4", None)]),
+    ]);
+    let ask = Ask { exclude: &["a1"], ..session() };
+    assert_eq!(
+        choose_full(&["a3", "a4", "a2", "a1", "a5"], &rows, &ask),
+        breakdown(NoCandidateReason::OverThreshold, Some(FIVE_RESET), [&["a1"], &["a4", "a2"], &["a3"]]),
+        "a1 は除外の列だけ・測れない列は宣言順 a4 → a2・a5（90）はどこにも入らない"
+    );
+}
+
 #[test]
 fn select_names_are_pinned_in_declaration_order() {
     let reasons: Vec<&str> = NO_CANDIDATE_REASONS.iter().map(|reason| reason.as_str()).collect();
@@ -789,6 +843,19 @@ fn evaluate_without_inflight(specs: &[Spec], purpose: Purpose, model: Option<&st
     evaluate(&idle, &IDENTITY, purpose, model, threshold)
 }
 
+/// 内訳の列を label の辞書順に並べ直した結果（宣言順に依らない比較のため）。
+fn unordered(found: Selection) -> Selection {
+    match found {
+        Selection::None(mut found) => {
+            for list in [&mut found.excluded, &mut found.unmeasured, &mut found.limited] {
+                list.sort();
+            }
+            Selection::None(found)
+        }
+        chosen => chosen,
+    }
+}
+
 proptest! {
     #![proptest_config(config())]
 
@@ -847,7 +914,7 @@ proptest! {
         }
     }
 
-    /// 入力の順序を入れ替えても結果は不変。
+    /// 入力の順序を入れ替えても結果は不変（内訳の列は宣言順に並ぶので、列の中身の集合として比べる）。
     #[test]
     fn prop_select_is_invariant_under_input_order(
         specs in specs(),
@@ -857,8 +924,8 @@ proptest! {
         order in Just(IDENTITY.to_vec()).prop_shuffle()
     ) {
         prop_assert_eq!(
-            evaluate(&specs, &order, purpose, model, threshold),
-            evaluate(&specs, &IDENTITY, purpose, model, threshold)
+            unordered(evaluate(&specs, &order, purpose, model, threshold)),
+            unordered(evaluate(&specs, &IDENTITY, purpose, model, threshold))
         );
     }
 }
