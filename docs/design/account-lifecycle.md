@@ -349,6 +349,7 @@ user-scope MCP 設定の同期・別口座への `--resume` の混線 fence・pr
 - 現物（verified・main 67e74ff）:
   - 便用の選定は `crates/scribe2/src/fleet/select.rs` の `select_for_run`（結果 `Selection`・候補なしは `NoCandidate`〔`reason` = 宣言順で畳んだ 1 語・`earliest_reset`〕・理由の語は `NoCandidateReason` の `NO_CANDIDATE_REASONS`）。歯は `crates/scribe2/src/fleet/select_tests.rs`。
   - 断りの行は `crates/scribe2/src/pipe/ratelimit.rs` の `choose_or_wait`（stdout `run=<id> next=wait reset=<ts|->`・stderr `pipe: run <id> は口座待ちである（候補なし: <語>・待つ reset が無い）`）。歯は `crates/scribe2-boundary/tests/e2e/pipe/ratelimit.rs`（`pipe_ratelimit_` 接頭辞）。
+- 構築点（verified・main aa0e8b2）: `NoCandidate` の struct literal は `select.rs` に 1・`select_tests.rs` に 1・`crates/scribe2-boundary/tests/e2e/prop.rs` に 2（性質の歯・`Selection` の等値比較）。field を足す便は 4 か所とも直すので `prop.rs` は行 n の write-set に入る（.618 run 1 の Questioned about:write-set・2026-09-25T07:42Z）。
 - 形（1 つずつ歯が測る・行 n の done と 1:1）:
   1. **`NoCandidate` が内訳を持つ**: 口座 label の列 3 本 `excluded`（除外集合に在る）・`unmeasured`（測れない・実測行なし・Unmeasured・reset 過ぎ）・`limited`（上限に当たっている）を宣言順に並べて持つ（1 口座は 1 列にだけ・畳む前の値・`reason` の畳み方は今のまま）。
   2. **判定行に 3 欄を足す**: `run=<id> next=wait reset=<ts|-> excluded=<n> unmeasured=<n> limited=<n>`（件数・0 も出す・列は固定）。stderr の断りは今の 1 文の後ろに ` excluded=<label,…> unmeasured=<label,…> limited=<label,…>`（label は `,` 区切り・空は `-`）を足す（先頭の字面 `pipe: run <id> は口座待ちである（候補なし: <語>・待つ reset が無い）` は 1 字も変えない＝既存の歯の pin を動かさない）。
@@ -512,11 +513,11 @@ id = "n"
 title = "便用の候補なしの断りが内訳を出す — NoCandidate が excluded / unmeasured / limited の label の列を持ち、判定行に件数 3 欄・stderr に label を足す（§25・s2-07l.618 候補 1）"
 req = ["FR36", "FR33", "NFR4"]
 section = "25"
-write-set = ["crates/scribe2/src/fleet/select.rs", "crates/scribe2/src/fleet/select_tests.rs", "crates/scribe2/src/pipe/ratelimit.rs", "crates/scribe2-boundary/tests/e2e/pipe/ratelimit.rs", "docs/design/account-lifecycle.md"]
+write-set = ["crates/scribe2/src/fleet/select.rs", "crates/scribe2/src/fleet/select_tests.rs", "crates/scribe2/src/pipe/ratelimit.rs", "crates/scribe2-boundary/tests/e2e/pipe/ratelimit.rs", "crates/scribe2-boundary/tests/e2e/prop.rs", "docs/design/account-lifecycle.md"]
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail select_breakdown_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_ratelimit_breakdown_"]
 size = "S"
-growth = ["crates/scribe2/src/fleet/select.rs:40", "crates/scribe2/src/pipe/ratelimit.rs:20"]
-done = "(1) NoCandidate が excluded / unmeasured / limited の label の列 3 本を宣言順に持ち、1 口座は 1 列にだけ入り、reason の畳み方は今のまま (2) 候補なしの判定行は run=<id> next=wait reset=<ts|-> excluded=<n> unmeasured=<n> limited=<n>（0 も出す）、stderr は今の 1 文の後ろに excluded=<label,…> unmeasured=<label,…> limited=<label,…>（空は -）を足し先頭の字面は 1 字も変えない (3) reset の在る待ちの周も同じ 3 欄 (4) 選ばれた周の行・待ちの観測・段の判定は 1 字も変わらない 歯: select_breakdown_ の lib の歯が除外 1・測れない 1・上限 1 の fixture で 3 列の label（base では field が無い ＝ RED）と 1 口座 1 列を測り、pipe_ratelimit_breakdown_ の歯が候補なしの周の stdout の 3 欄と stderr の label と reset の在る周の 3 欄を測る"
+growth = ["crates/scribe2/src/fleet/select.rs:40", "crates/scribe2/src/pipe/ratelimit.rs:20", "crates/scribe2-boundary/tests/e2e/prop.rs:10"]
+done = "(1) NoCandidate が excluded / unmeasured / limited の label の列 3 本を宣言順に持ち、1 口座は 1 列にだけ入り、reason の畳み方は今のまま (2) 候補なしの判定行は run=<id> next=wait reset=<ts|-> excluded=<n> unmeasured=<n> limited=<n>（0 も出す）、stderr は今の 1 文の後ろに excluded=<label,…> unmeasured=<label,…> limited=<label,…>（空は -）を足し先頭の字面は 1 字も変えない (3) reset の在る待ちの周も同じ 3 欄 (4) 選ばれた周の行・待ちの観測・段の判定は 1 字も変わらない (5) crates/scribe2-boundary/tests/e2e/prop.rs の性質の歯にある NoCandidate の構築点 2 つは 3 列つきの形に直すだけで期待値の意味は変えない 歯: select_breakdown_ の lib の歯が除外 1・測れない 1・上限 1 の fixture で 3 列の label（base では field が無い ＝ RED）と 1 口座 1 列を測り、pipe_ratelimit_breakdown_ の歯が候補なしの周の stdout の 3 欄と stderr の label と reset の在る周の 3 欄を測る"
 
 [[contract]]
 id = "o"
