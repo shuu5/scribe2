@@ -75,7 +75,7 @@ pub struct Event {
     pub detail: Option<String>,
     /// 口座残量の本体（口座残量の kind でだけ `Some`）。
     pub allowance: Option<Allowance>,
-    /// 席の登録の本体（[`EventKind::SeatRegistered`] でだけ `Some`）。
+    /// 席の登録の本体（[`EventKind::SeatRegistered`] と退役の [`EventKind::SeatRetired`] でだけ `Some`）。
     pub registration: Option<Registration>,
     /// 列の介入の印（[`EventKind::DispatchMark`] でだけ `Some`＝必須・他の kind に在れば malformed）。
     /// **typed な値で持つ**——`detail`〔自由文〕を判定入力にしない（憲法 C3.3）。
@@ -239,7 +239,8 @@ impl Body {
             EventKind::AllowanceUnmeasured => {
                 Self::allowance(pairs, Allowance::Unmeasured(unmeasured_of(pairs)?))
             }
-            EventKind::SeatRegistered => Self::registration(pairs),
+            // 退役の行は登録の行と同じ本体（退役した row の写し・account-lifecycle.md §24）＝同じ読み手 1 本。
+            EventKind::SeatRegistered | EventKind::SeatRetired => Self::registration(pairs),
             EventKind::AccountRetired | EventKind::AccountRestored => Self::account(pairs),
             EventKind::DispatchMark => Self::mark(pairs),
             EventKind::SeatSpawned => Self::spawned(pairs),

@@ -277,6 +277,134 @@ fn seat_role_doctor_reconciles_rows_with_live_targets() {
     fs::remove_dir_all(&place.dir).ok();
 }
 
+// ─────────────────── 登録 row の退役（account-lifecycle.md §24・契約表の行 m・接頭辞 `seat_retire_`） ───────────────────
+
+/// `seat retire` を 1 回撃つ（`extra` は `--reason` などの追加 flag）。
+fn role_retire(place: &RolePlace, target: &str, extra: &[&str]) -> Output {
+    let state = place.state.display().to_string();
+    let mut args = vec!["retire", "--state-dir", &state, "--target", target];
+    args.extend_from_slice(extra);
+    run_seat(&args)
+}
+
+/// 形 1: 登録済みの target の退役は `SeatRetired` を 1 件積み（role / anchor / target / account は row の写し・`detail` = reason・
+/// actor は human・便に紐づかない）、rc 0 で stdout に 1 行。replay はその row を読まなくなる（base では `retire` が使い方の誤り＝RED）。
+#[test]
+fn seat_retire_records_one_event_with_the_row_copy_and_prints_one_line() {
+    use vessel::fleet::EventKind;
+    let place = role_place();
+    role_stamp(&place, "rt:one", Some("sid-t"));
+    let out = role_register(&place, "rt:one", "orchestrator", &["--anchor", "/repo/rt"]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    let out = role_retire(&place, "rt:one", &["--reason", "moved to another place"]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(stdout_of(&out), "seat retire: retired target=rt:one role=orchestrator account=acct-1\n");
+    assert!(stderr_of(&out).is_empty(), "stderr 0 byte: {}", stderr_of(&out));
+    let events = vessel::fleet::store::read_all(&place.state).unwrap_or_default();
+    let kinds: Vec<EventKind> = events.iter().map(|event| event.kind).collect();
+    assert_eq!(kinds, [EventKind::SeatRegistered, EventKind::SeatRetired], "退役の event は 1 件: {}", role_log(&place));
+    let retired = events.last().cloned().unwrap_or_else(|| panic!("行が在る"));
+    assert_eq!(retired.actor, "human", "退役は人由来");
+    assert_eq!(retired.detail.as_deref(), Some("moved to another place"), "detail は reason の逐語");
+    assert!(retired.run.is_empty() && retired.bead.is_empty(), "便に紐づかない");
+    let row = retired.registration.unwrap_or_else(|| panic!("本体は row の写し"));
+    let registered = events.first().and_then(|event| event.registration.clone()).unwrap_or_else(|| panic!("登録の本体"));
+    assert_eq!(
+        (row.role, row.anchor.as_str(), row.target.as_str(), row.account.as_str()),
+        (vessel::seat::role::Role::Orchestrator, "/repo/rt", "rt:one", "acct-1"),
+        "role / anchor / target / account"
+    );
+    assert_eq!(row, registered, "row の写し（項目を書き換えない）");
+    let state = role_state(&place);
+    assert_eq!(vessel::seat::role::registration_of_target(&state, "rt:one"), None, "退役した row は解けない");
+    assert!(state.registrations.is_empty() && state.runs.is_empty() && state.seats.is_empty(), "{state:?}");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// 形 1: 登録 row の無い target（log が無い・別の target だけ・退役済み）は `no-row` で rc 1・stdout 0 byte・event 0。
+#[test]
+fn seat_retire_refuses_a_target_without_a_row_and_writes_no_event() {
+    let place = role_place();
+    let out = role_retire(&place, "rt:absent", &[]);
+    assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "stdout={}", stdout_of(&out));
+    assert_eq!(stderr_of(&out), "seat retire: refused reason=no-row target=rt:absent\n");
+    assert!(stdout_of(&out).is_empty(), "stdout は空");
+    assert!(!vessel::fleet::store::events_path(&place.state).exists(), "log の無い置き場に行を作らない");
+    role_stamp(&place, "rt:kept", Some("sid-k"));
+    assert_eq!(rc_of(&role_register(&place, "rt:kept", "orchestrator", &["--anchor", "/repo/kept"])), i32::from(RC_OK));
+    let other = role_retire(&place, "rt:other", &[]);
+    assert_eq!(rc_of(&other), i32::from(RC_REFUSED));
+    assert_eq!(stderr_of(&other), "seat retire: refused reason=no-row target=rt:other\n");
+    assert_eq!(role_log(&place).lines().count(), 1, "別の target だけの log は増えない");
+    assert_eq!(rc_of(&role_retire(&place, "rt:kept", &[])), i32::from(RC_OK), "row の在る target は退役できる");
+    let again = role_retire(&place, "rt:kept", &[]);
+    assert_eq!(rc_of(&again), i32::from(RC_REFUSED), "退役済みは row が無い");
+    assert_eq!(stderr_of(&again), "seat retire: refused reason=no-row target=rt:kept\n");
+    assert_eq!(role_log(&place).lines().count(), 2, "2 度目の退役は event を書かない: {}", role_log(&place));
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// 形 1: 値欠け・空文字・`S:W` でない target・空の reason は使い方で断る（rc 1・event 0）。
+#[test]
+fn seat_retire_refuses_malformed_args_with_usage_and_no_event() {
+    let place = role_place();
+    let usage = stderr_of(&run_seat(&[]));
+    let state = place.state.display().to_string();
+    for bad in [
+        &["retire", "--state-dir", &state][..],
+        &["retire", "--state-dir", &state, "--target", ""],
+        &["retire", "--state-dir", &state, "--target", "nowindow"],
+        &["retire", "--target", "rt:absent"],
+        &["retire", "--state-dir", &state, "--target", "rt:absent", "--reason", ""],
+        &["retire", "--state-dir", &state, "--target", "rt:absent", "--reason"],
+    ] {
+        let out = run_seat(bad);
+        assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "{bad:?}");
+        assert_eq!(stderr_of(&out), usage, "{bad:?} は使い方で断る");
+    }
+    assert!(!vessel::fleet::store::events_path(&place.state).exists(), "使い方の断りも行を書かない");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// 形 3: 退役の後の doctor は `registered=` が 1 減り、退役した row の行を出さない（missing にも数えない・読み手は不変）。
+#[test]
+fn seat_retire_drops_the_row_from_the_doctor_reconcile() {
+    let place = role_doctor_place();
+    crate::seat::role_register_extra(&place, "gone:gone", "/repo/gone");
+    let seats_of = |out: &Output| stdout_of(out).lines().filter(|line| line.starts_with("seat: ") || line.starts_with("seats: ")).map(str::to_owned).collect::<Vec<String>>();
+    let before = seats_of(&role_doctor(&place));
+    assert_eq!(before.last().map(String::as_str), Some("seats: registered=2 live=unmeasurable missing=unmeasurable"), "{before:?}");
+    assert_eq!(before.len(), 3, "row 2 行 + 突合 1 行: {before:?}");
+    let out = role_retire(&place, "gone:gone", &["--reason", "gone"]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    let after = seats_of(&role_doctor(&place));
+    assert_eq!(after.last().map(String::as_str), Some("seats: registered=1 live=unmeasurable missing=unmeasurable"), "1 減る: {after:?}");
+    assert_eq!(after.len(), 2, "退役した row の行は出ない: {after:?}");
+    assert!(after.iter().all(|line| !line.contains("target=gone:gone")), "{after:?}");
+    assert_eq!(after.first(), before.iter().find(|line| line.contains("target=rolesdoc:rolesdoc")), "残る row の行は 1 字も変わらない");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// 形 2: 退役の後に同じ target を `seat register` すると row が戻る（物理順で後の登録が勝つ・退役の event は log に残る）。
+#[test]
+fn seat_retire_then_register_brings_the_row_back() {
+    use vessel::seat::role::registration_of_target;
+    let place = role_place();
+    role_stamp(&place, "rt:back", Some("sid-b"));
+    assert_eq!(rc_of(&role_register(&place, "rt:back", "orchestrator", &["--anchor", "/repo/back"])), i32::from(RC_OK));
+    assert_eq!(rc_of(&role_retire(&place, "rt:back", &[])), i32::from(RC_OK));
+    assert_eq!(registration_of_target(&role_state(&place), "rt:back"), None, "退役の直後は row が無い");
+    let out = role_register(&place, "rt:back", "orchestrator", &["--anchor", "/repo/back"]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    let state = role_state(&place);
+    let row = registration_of_target(&state, "rt:back").unwrap_or_else(|| panic!("row が戻る"));
+    assert_eq!((row.anchor.as_str(), row.account.as_str()), ("/repo/back", "acct-1"));
+    assert_eq!(state.registrations.values().map(|latest| latest.seq).collect::<Vec<_>>(), vec![2], "3 件目の登録が解決される");
+    assert_eq!(role_log(&place).lines().count(), 3, "登録 → 退役 → 登録（append のみ）");
+    assert_eq!(rc_of(&role_retire(&place, "rt:back", &[])), i32::from(RC_OK), "戻った row はもう一度退役できる");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
 // ─────────────────────────── register --model（契約 (e)・s2-07l.215） ───────────────────────────
 
 /// target の登録 row の `model`（replay の読み手 `registration_of_target` から運ぶ）。

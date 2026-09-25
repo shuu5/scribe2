@@ -14,7 +14,7 @@ use std::path::Path;
 
 /// `seat` の使い方。
 pub fn usage() -> String {
-    "usage: seat <register --state-dir S --target T --role R --account L --launch FILE [--anchor DIR]|launch --state-dir S --role R --target S:W [--account L] [--anchor DIR] [--model M] [--restore CMD]|ruling add --state-dir S --target T --words W [--bead B] [--rule ID]|ruling ls --state-dir S|tick --state-dir S --target S:W [--rules F]|tick install --state-dir S --target S:W --unit-dir U --binary PATH [--rules F]|tick uninstall --state-dir S --target S:W --unit-dir U --binary PATH [--rules F]|<label> [--orchestrator] [-c|-r ID] [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]".to_owned()
+    "usage: seat <register --state-dir S --target T --role R --account L --launch FILE [--anchor DIR]|launch --state-dir S --role R --target S:W [--account L] [--anchor DIR] [--model M] [--restore CMD]|ruling add --state-dir S --target T --words W [--bead B] [--rule ID]|ruling ls --state-dir S|tick --state-dir S --target S:W [--rules F]|tick install --state-dir S --target S:W --unit-dir U --binary PATH [--rules F]|tick uninstall --state-dir S --target S:W --unit-dir U --binary PATH [--rules F]|retire --state-dir S --target S:W [--reason WORDS]|<label> [--orchestrator] [-c|-r ID] [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]".to_owned()
 }
 
 /// `seat` の既知の verb（閉じた語・宣言順・設計 contract-source.md §17 の形 (vii)）。短い形の第 1 token（口座 label）は
@@ -29,10 +29,12 @@ pub enum SeatCommand {
     Ruling,
     /// `seat tick`（管理 tick・設計 seat-heartbeat.md §2）。
     Tick,
+    /// `seat retire`（席の登録 row の退役・設計 account-lifecycle.md §24）。
+    Retire,
 }
 
 /// [`SeatCommand`] の全部（宣言順・件数は既知の verb の本数で dispatch の腕の本数ではない）。
-pub const SEAT_COMMANDS: &[SeatCommand] = &[SeatCommand::Register, SeatCommand::Launch, SeatCommand::Ruling, SeatCommand::Tick];
+pub const SEAT_COMMANDS: &[SeatCommand] = &[SeatCommand::Register, SeatCommand::Launch, SeatCommand::Ruling, SeatCommand::Tick, SeatCommand::Retire];
 
 impl SeatCommand {
     /// 引数の字面。
@@ -42,6 +44,7 @@ impl SeatCommand {
             Self::Launch => "launch",
             Self::Ruling => "ruling",
             Self::Tick => "tick",
+            Self::Retire => "retire",
         }
     }
 
@@ -105,6 +108,8 @@ const ALLOWED_TICK_UNIT: &[cli_args::Allowed] = &[
     value("--binary"),
     value("--rules"),
 ];
+/// `seat retire`（席の登録 row の退役・設計 account-lifecycle.md §24 形 1・pane を読まないので tmux の flag は受けない）。
+const ALLOWED_RETIRE: &[cli_args::Allowed] = &[value("--state-dir"), value("--target"), value("--reason")];
 
 /// [`SeatCommand`] が受ける flag の集合（[`dispatch`] が verb を選んだ直後に [`crate::cli_args::parse`] へ渡す・`rest` は verb の後ろ）。
 fn allowed_of(command: SeatCommand, rest: &[String]) -> &'static [Allowed] {
@@ -114,6 +119,7 @@ fn allowed_of(command: SeatCommand, rest: &[String]) -> &'static [Allowed] {
         SeatCommand::Ruling => ALLOWED_RULING,
         SeatCommand::Tick if unit_verb(rest).is_some() => ALLOWED_TICK_UNIT,
         SeatCommand::Tick => ALLOWED_TICK,
+        SeatCommand::Retire => ALLOWED_RETIRE,
     }
 }
 
@@ -137,6 +143,7 @@ pub fn dispatch(args: &[String]) -> Outcome {
         (Some(SeatCommand::Launch), _) => launch_of(args),
         (Some(SeatCommand::Ruling), _) => ruling_of(args.get(1..).unwrap_or_default()),
         (Some(SeatCommand::Tick), _) => tick_of(args.get(1..).unwrap_or_default()),
+        (Some(SeatCommand::Retire), _) => retire_of(args.get(1..).unwrap_or_default()),
         // 既知の verb でなく `--` で始まらない第 1 token は口座 label（短い形・account-lifecycle.md §14）。label は閉じた語を
         // 持たない＝[`SeatCommand`] の subcommand ではないので閉包の検査の外（消えた口の名もこの腕で従来どおり断る）。
         (None, Some(label)) if !label.starts_with("--") && !label.trim().is_empty() => short_of(label, args.get(1..).unwrap_or_default()),
@@ -272,6 +279,23 @@ fn tick_of(args: &[String]) -> Outcome {
     }
     let flags = super::tick::Flags { state_dir, target, socket, capture };
     super::tick::run(&flags, crate::rules::cli::open(args))
+}
+
+/// `seat retire`（設計 account-lifecycle.md §24 形 1）: `--state-dir` と `S:W` の `--target` は必須・値欠けと空文字は使い方の誤り
+/// （`--reason` も同じ）。row の無い target は `no-row`（rc 1・event 0）・書けない log は rc 2。
+fn retire_of(args: &[String]) -> Outcome {
+    let [state_dir, target] = ["--state-dir", "--target"].map(|name| required_nonempty(args, name));
+    let (Ok(state_dir), Ok(target), Ok(reason)) = (state_dir, target, nonempty(args, "--reason")) else {
+        return refused_usage();
+    };
+    if !target_well_formed(target) {
+        return refused_usage();
+    }
+    match role::retire(Path::new(state_dir), target, reason) {
+        Ok(row) => Outcome::ok_line(format!("seat retire: retired target={} role={} account={}", row.target, row.role.as_str(), row.account)),
+        Err(err @ role::RetireRefusal::Store(_)) => Outcome::failed_line(RC_BROKEN, err.render(target)),
+        Err(err @ role::RetireRefusal::NoRow) => Outcome::failed_line(RC_REFUSED, err.render(target)),
+    }
 }
 
 /// `seat tick install|uninstall`（設計 seat-heartbeat.md §3）: `--state-dir` / `S:W` の `--target` / `--unit-dir` / `--binary` は必須で、

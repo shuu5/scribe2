@@ -86,6 +86,10 @@ pub enum EventKind {
     GroupMoveRefused,
     /// 移動の周に settle の窓の内で shell に戻らなかった席（§20 形 6・`account` = 移り先・`detail` = 群・置き場・target・理由）。
     GroupMovePending,
+    /// 席の登録 row を退役させた（設計 account-lifecycle.md §24・[`Shape::Registration`]・本体は退役した row の写し・`detail` =
+    /// 理由・actor は human）。replay は同じ鍵（role, anchor）の row を `registrations` から外し、後の `SeatRegistered` が復活させる。
+    /// **便に紐づかない**。書き手は `seat retire` だけ（`fleet record` は断る）。
+    SeatRetired,
 }
 
 /// [`EventKind`] の全 variant。
@@ -113,6 +117,7 @@ pub const KINDS: &[EventKind] = &[
     EventKind::GroupMoved,
     EventKind::GroupMoveRefused,
     EventKind::GroupMovePending,
+    EventKind::SeatRetired,
 ];
 
 impl EventKind {
@@ -142,6 +147,7 @@ impl EventKind {
             Self::GroupMoved => "GroupMoved",
             Self::GroupMoveRefused => "GroupMoveRefused",
             Self::GroupMovePending => "GroupMovePending",
+            Self::SeatRetired => "SeatRetired",
         }
     }
 
@@ -150,10 +156,11 @@ impl EventKind {
         KINDS.iter().copied().find(|kind| kind.as_str() == text)
     }
 
-    /// 既定の actor。人由来は承認の受理と run 無しの裁定の 2 つである（FR22 の計測面・設計 fleet-event-log.md §9）。
+    /// 既定の actor。人由来は承認の受理と run 無しの裁定と席の登録 row の退役の 3 つである（FR22 の計測面・設計
+    /// fleet-event-log.md §9・account-lifecycle.md §24）。
     pub fn default_actor(self) -> &'static str {
         match self {
-            Self::ApprovalReceived | Self::RulingReceived => ACTOR_HUMAN,
+            Self::ApprovalReceived | Self::RulingReceived | Self::SeatRetired => ACTOR_HUMAN,
             Self::RunCreated
             | Self::RunStage
             | Self::RunDone
@@ -198,7 +205,7 @@ impl EventKind {
             | Self::QuestionRaised
             | Self::QuestionAnswered => Shape::Run,
             Self::AllowanceMeasured | Self::AllowanceUnmeasured => Shape::Allowance,
-            Self::SeatRegistered => Shape::Registration,
+            Self::SeatRegistered | Self::SeatRetired => Shape::Registration,
             Self::AccountRetired | Self::AccountRestored => Shape::Account,
             Self::DispatchMark => Shape::Mark,
             Self::InstallRecorded => Shape::Install,

@@ -343,10 +343,12 @@ fn build_event(args: &[String]) -> Result<Event, String> {
     // 消費の行も同じ（書き手は claude の result record を読んだ pipe の 3 か所だけ・6 値をこの口は持たない・gate-cost.md §26）。
     // run 無しの裁定の行も同じ（書き手は対話面の席を確かめる `seat ruling add` だけ・この口は `run` を要る・§9）。
     // 群の逼迫の通知の行も同じ（書き手は注入と対の dispatch の 1 周の群の段だけ・account-lifecycle.md §19 形 3）。
+    // 席の登録 row の退役の行も同じ（書き手は row を引いて写す `seat retire` だけ・account-lifecycle.md §24）。
     if kind.is_allowance()
         || matches!(
             kind,
             EventKind::SeatRegistered
+                | EventKind::SeatRetired
                 | EventKind::AccountRetired
                 | EventKind::AccountRestored
                 | EventKind::InstallRecorded

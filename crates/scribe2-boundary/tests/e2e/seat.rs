@@ -378,10 +378,10 @@ fn seat_args_unknown_flag_is_refused_with_rc_2_on_every_verb() {
 #[test]
 fn seat_command_all_known_verbs_round_trip_and_unknown_tokens_are_none() {
     use vessel::seat::cli::{SeatCommand, SEAT_COMMANDS};
-    assert_eq!(vessel::seat::cli::SEAT_COMMANDS.len(), 4, "記録時点の既知の verb（`.582` で +1〔管理 tick〕）: {SEAT_COMMANDS:?}");
+    assert_eq!(vessel::seat::cli::SEAT_COMMANDS.len(), 5, "記録時点の既知の verb（`.582` で +1〔管理 tick〕・`.620` で +1〔登録 row の退役〕）: {SEAT_COMMANDS:?}");
     assert!(vessel::order::is_declaration_order(SEAT_COMMANDS, |command| command as usize), "宣言順: {SEAT_COMMANDS:?}");
     let words: Vec<&str> = SEAT_COMMANDS.iter().map(|command| command.as_str()).collect();
-    assert_eq!(words, ["register", "launch", "ruling", "tick"], "字面の閉じた列（宣言順）");
+    assert_eq!(words, ["register", "launch", "ruling", "tick", "retire"], "字面の閉じた列（宣言順）");
     let usage = vessel::seat::cli::usage();
     for command in SEAT_COMMANDS {
         assert_eq!(SeatCommand::parse(command.as_str()), Some(*command), "as_str ↔ parse の往復: {command:?}");

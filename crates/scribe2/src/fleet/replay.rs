@@ -170,13 +170,23 @@ pub fn replay(events: &[Event]) -> State {
         apply_seat(&mut state, event);
         apply_allowance(&mut state, event);
         apply_account(&mut state, event);
-        // 登録は同じ鍵を後の行が置き換える（前の行は log に残る・append のみ）。
-        if let Some(found) = &event.registration {
-            let latest = RegistrationLatest { seq, registration: found.clone() };
-            state.registrations.insert((found.role, found.anchor.clone()), latest);
-        }
+        apply_registration(&mut state, event, seq);
     }
     state
+}
+
+/// 1 件の event を登録 row へ反映する（物理順で後の行が勝つ・前の行は log に残る・append のみ）。登録は同じ鍵を置き換え、
+/// 退役は同じ鍵（role, anchor）の row を外す＝後の登録が復活させる（設計 account-lifecycle.md §24 形 2）。
+fn apply_registration(state: &mut State, event: &Event, seq: usize) {
+    let Some(found) = &event.registration else {
+        return;
+    };
+    let key = (found.role, found.anchor.clone());
+    if event.kind == EventKind::SeatRetired {
+        state.registrations.remove(&key);
+    } else {
+        state.registrations.insert(key, RegistrationLatest { seq, registration: found.clone() });
+    }
 }
 
 /// 1 件の event を口座残量へ反映する。
@@ -229,7 +239,8 @@ fn apply_account(state: &mut State, event: &Event) {
         | EventKind::GroupPressureNotified
         | EventKind::GroupMoved
         | EventKind::GroupMoveRefused
-        | EventKind::GroupMovePending => {}
+        | EventKind::GroupMovePending
+        | EventKind::SeatRetired => {}
     }
 }
 
@@ -316,6 +327,7 @@ fn apply_seat(state: &mut State, event: &Event) {
         | EventKind::GroupPressureNotified
         | EventKind::GroupMoved
         | EventKind::GroupMoveRefused
-        | EventKind::GroupMovePending => {}
+        | EventKind::GroupMovePending
+        | EventKind::SeatRetired => {}
     }
 }

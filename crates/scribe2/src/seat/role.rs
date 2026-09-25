@@ -274,6 +274,55 @@ pub fn register(state_dir: &Path, registration: Registration) -> Result<Registra
     Ok(registration)
 }
 
+/// 登録 row の退役を断る理由（閉じた enum・設計 account-lifecycle.md §24 形 1）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RetireRefusal {
+    /// target の登録 row が無い（退役済みを含む＝event を書かない）。
+    NoRow,
+    /// event log を読めない・書けない（理由の本文）。
+    Store(String),
+}
+
+impl RetireRefusal {
+    /// 行に出す字面（store の断りは理由の本文を添える）。
+    pub fn render(&self, target: &str) -> String {
+        let reason = match self {
+            Self::NoRow => "no-row".to_owned(),
+            Self::Store(text) => format!("store detail={text}"),
+        };
+        format!("seat retire: refused reason={reason} target={target}")
+    }
+}
+
+/// target の登録 row を退役させる（設計 account-lifecycle.md §24 形 1）: [`registration_of_target`] の row を引き、その写しを本体に
+/// `SeatRetired` を 1 件積む（`detail` = `reason`・actor は human）。row が無い周は [`RetireRefusal::NoRow`] で event を書かない。
+/// 退役の後の読み手は全部 replay 経由で row を見なくなる（読み手の側は変えない・形 3）。
+pub fn retire(state_dir: &Path, target: &str, reason: Option<&str>) -> Result<Registration, RetireRefusal> {
+    let events = store::read_all(state_dir).map_err(|errors| RetireRefusal::Store(errors.iter().map(ToString::to_string).collect::<Vec<_>>().join("; ")))?;
+    let state = replay(&events);
+    let row = registration_of_target(&state, target).cloned().ok_or(RetireRefusal::NoRow)?;
+    let event = Event {
+        schema: SCHEMA,
+        ts: cli::now_utc(),
+        kind: EventKind::SeatRetired,
+        run: String::new(),
+        bead: String::new(),
+        host: cli::host(),
+        actor: EventKind::SeatRetired.default_actor().to_owned(),
+        stage: None, seat: None, pid: None,
+        detail: reason.map(str::to_owned),
+        allowance: None,
+        registration: Some(row.clone()),
+        mark: None,
+        account: None,
+        cost: None,
+        rule: None,
+    };
+    let store_err = |err: store::StoreError| RetireRefusal::Store(err.to_string());
+    store::append(state_dir, &event, LockPolicy::embedded().map_err(store_err)?).map_err(store_err)?;
+    Ok(row)
+}
+
 /// target の登録 row（**役割の解決の 1 本の隣**・設計 §2 / §9 (e)）: 鍵ごとに最新へ畳んだ行のうち `target` が
 /// 一致するものを引き、複数の鍵が同じ target なら log の後の行が勝つ（同じ鍵の旧 row は畳まれて旧 target では
 /// 解けない）。row の `model` / `account` はここから運ぶ（account-autonomy.md §3 / §5 の読み手・契約 (d) / (e)）。

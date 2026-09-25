@@ -713,11 +713,11 @@ fn fleet_stages_place_rate_limited_after_questioned() {
     assert_eq!(Stage::parse("RateLimited"), Some(Stage::RateLimited), "as_str ↔ parse の往復");
 }
 
-/// `KINDS` の並びが**宣言順**と一致し、母集団は 23 種で末尾の 7 つが `InstallRecorded`（`vessel update` が足した・設計
+/// `KINDS` の並びが**宣言順**と一致し、母集団は 24 種で末尾の 8 つが `InstallRecorded`（`vessel update` が足した・設計
 /// consumer-sync.md §5 (4)）→ `RunCost`（消費の 1 件・gate-cost.md §26 形 (2)）→ `RulingReceived`（run 無しの裁定・
 /// fleet-event-log.md §9）→ `GroupPressureNotified`（群の逼迫の通知・account-lifecycle.md §19 形 3）→ `GroupMoved` /
-/// `GroupMoveRefused` / `GroupMovePending`（群の移動の承認・断り・保留・account-lifecycle.md §20 形 5 / 6）。variant を足して
-/// 列に足し忘れた周・件数だけ合って末尾が違う周はここで赤になる。
+/// `GroupMoveRefused` / `GroupMovePending`（群の移動の承認・断り・保留・account-lifecycle.md §20 形 5 / 6）→ `SeatRetired`（席の
+/// 登録 row の退役・account-lifecycle.md §24 形 4）。variant を足して列に足し忘れた周・件数だけ合って末尾が違う周はここで赤になる。
 #[test]
 fn fleet_kinds_follow_declaration_order() {
     assert!(
@@ -725,7 +725,7 @@ fn fleet_kinds_follow_declaration_order() {
         "KINDS の並びが宣言順と乖離している（母集団 {} 種）",
         KINDS.len()
     );
-    assert_eq!(KINDS.len(), 23, "母集団（列の印までの 16 + install 1 + 消費 1 + 裁定 1 + 群の逼迫の通知 1 + 群の移動 3）");
+    assert_eq!(KINDS.len(), 24, "母集団（列の印までの 16 + install 1 + 消費 1 + 裁定 1 + 群の逼迫の通知 1 + 群の移動 3 + 登録 row の退役 1）");
     assert_eq!(
         KINDS.get(16..),
         Some(
@@ -737,9 +737,10 @@ fn fleet_kinds_follow_declaration_order() {
                 EventKind::GroupMoved,
                 EventKind::GroupMoveRefused,
                 EventKind::GroupMovePending,
+                EventKind::SeatRetired,
             ][..]
         ),
-        "install → 消費 → 裁定 → 群の逼迫の通知 → 群の移動の承認・断り・保留が宣言順の末尾"
+        "install → 消費 → 裁定 → 群の逼迫の通知 → 群の移動の承認・断り・保留 → 登録 row の退役が宣言順の末尾"
     );
     assert_eq!(EventKind::InstallRecorded.as_str(), "InstallRecorded");
     assert_eq!(EventKind::parse("InstallRecorded"), Some(EventKind::InstallRecorded), "as_str ↔ parse の往復");
@@ -1522,8 +1523,8 @@ fn fleet_allowance_windows_round_trip_on_snake_case() {
 fn account_cmd_kinds_are_fifteen_with_retire_and_restore_last() {
     assert_eq!(
         KINDS.len(),
-        23,
-        "母集団（既存 10 + 口座残量 2 + 席の登録 1 + 口座の退役・戻し 2 + 列の印 1 + install 1 + 消費 1 + 裁定 1 + 群の逼迫の通知 1 + 群の移動 3）"
+        24,
+        "母集団（既存 10 + 口座残量 2 + 席の登録 1 + 口座の退役・戻し 2 + 列の印 1 + install 1 + 消費 1 + 裁定 1 + 群の逼迫の通知 1 + 群の移動 3 + 登録 row の退役 1）"
     );
     assert_eq!(
         KINDS.get(12..16),
@@ -1719,6 +1720,83 @@ fn fleet_seat_role_registration_rows_do_not_touch_runs_and_record_refuses_the_ki
     let dir = state_dir();
     let path = dir.display().to_string();
     let out = run_fleet(&["record", "--kind", "SeatRegistered", "--run", "r1", "--bead", "b1", "--state-dir", &path]);
+    assert_eq!(out.status.code(), Some(1), "書き側で断る: {out:?}");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("record では書けない"));
+    assert!(!store::events_path(&dir).exists(), "行を残さない");
+    fs::remove_dir_all(&dir).ok();
+}
+
+// ─────────────── 登録 row の退役（account-lifecycle.md §24・契約表の行 m・接頭辞 `fleet_replay_seat_retired_`） ───────────────
+
+/// `row` の登録 event を退役の event にする（本体は row の写しのまま・`detail` = 理由・actor は human）。
+fn seat_retired_of(row: &Event) -> Event {
+    Event {
+        kind: EventKind::SeatRetired,
+        actor: EventKind::SeatRetired.default_actor().to_owned(),
+        detail: Some("moved".to_owned()),
+        ..row.clone()
+    }
+}
+
+/// 形 2: `SeatRegistered` → `SeatRetired` の並びで row は `registrations` から外れ、`registered_accounts` が空。別の鍵の row は残る。
+/// 退役の行は schema 1 のまま登録と同じ本体で往復し、便も席も作らない（base では kind が無い＝RED）。
+#[test]
+fn fleet_replay_seat_retired_drops_the_row_and_its_account() {
+    let registered = registration_event("s:w");
+    let retired = seat_retired_of(&registered);
+    let line = retired.to_line();
+    assert!(line.contains("\"kind\":\"SeatRetired\"") && line.contains("\"schema\":1"), "{line}");
+    assert!(line.contains("\"actor\":\"human\"") && line.contains("\"detail\":\"moved\""), "{line}");
+    assert!(!line.contains("\"run\":") && !line.contains("\"bead\":"), "便に紐づかない: {line}");
+    assert_eq!(Event::from_line(&line), Ok(retired.clone()), "{line}");
+    let state = replay(&[registered.clone(), retired.clone()]);
+    assert!(state.registrations.is_empty(), "退役した鍵の row は無い: {:?}", state.registrations);
+    assert_eq!(state.registered_accounts(None), BTreeSet::new(), "便用の除外にも載らない");
+    assert_eq!(state.registered_accounts(Some(Path::new("/repo"))), BTreeSet::new(), "anchor の絞りでも空");
+    assert!(state.runs.is_empty() && state.seats.is_empty(), "便も席も作らない: {state:?}");
+    let mut other = registration_event("s:other");
+    other.registration = other.registration.map(|row| Registration { anchor: "/repo/other".to_owned(), account: "a9".to_owned(), ..row });
+    let kept = replay(&[registered, other.clone(), retired]);
+    assert_eq!(kept.registered_accounts(None), BTreeSet::from(["a9".to_owned()]), "退役は同じ鍵（role, anchor）だけを外す");
+    assert_eq!(kept.registrations.values().map(|latest| latest.seq).collect::<Vec<_>>(), vec![1], "別の鍵の row は seq ごと残る");
+}
+
+/// 形 2: `SeatRegistered` → `SeatRetired` → `SeatRegistered` は最後の row が勝つ（物理順・後の登録が復活させる）。退役の前の登録を
+/// 後ろに並べ替えた周は row が在り、退役が最後なら無い。
+#[test]
+fn fleet_replay_seat_retired_then_registered_resolves_the_last_row() {
+    let first = registration_event("s:w");
+    let retired = seat_retired_of(&first);
+    let mut again = registration_event("s:w2");
+    again.registration = again.registration.map(|row| Registration { account: "a2".to_owned(), ..row });
+    let state = replay(&[first.clone(), retired.clone(), again.clone()]);
+    let rows: Vec<(usize, String, String)> = state
+        .registrations
+        .values()
+        .map(|latest| (latest.seq, latest.registration.target.clone(), latest.registration.account.clone()))
+        .collect();
+    assert_eq!(rows, vec![(2, "s:w2".to_owned(), "a2".to_owned())], "最後の登録の row");
+    assert_eq!(state.registered_accounts(None), BTreeSet::from(["a2".to_owned()]));
+    let last = replay(&[first.clone(), again.clone(), retired.clone()]);
+    assert!(last.registrations.is_empty(), "退役が最後なら row は無い: {:?}", last.registrations);
+    let before = replay(&[retired, first]);
+    assert_eq!(before.registrations.len(), 1, "登録より前の退役は後の登録を消さない");
+}
+
+/// 形 4: `SeatRetired` は `Shape::Registration`・既定の actor は human・`KINDS` の末尾（24 種目）で、`fleet record` からは書けない
+/// （書き手は `seat retire` だけ・rc 1・log を作らない）。
+#[test]
+fn fleet_replay_seat_retired_kind_is_a_registration_shape_and_record_refuses_it() {
+    use vessel::fleet::Shape;
+    assert_eq!(KINDS.len(), 24, "母集団");
+    assert_eq!(KINDS.last(), Some(&EventKind::SeatRetired), "宣言順の末尾");
+    assert_eq!(EventKind::SeatRetired.shape(), Shape::Registration);
+    assert_eq!(EventKind::SeatRetired.default_actor(), "human", "退役は人由来");
+    assert_eq!(EventKind::parse("SeatRetired"), Some(EventKind::SeatRetired), "as_str ↔ parse の往復");
+    assert!(!EventKind::SeatRetired.is_allowance());
+    let dir = state_dir();
+    let path = dir.display().to_string();
+    let out = run_fleet(&["record", "--kind", "SeatRetired", "--run", "r1", "--bead", "b1", "--state-dir", &path]);
     assert_eq!(out.status.code(), Some(1), "書き側で断る: {out:?}");
     assert!(String::from_utf8_lossy(&out.stderr).contains("record では書けない"));
     assert!(!store::events_path(&dir).exists(), "行を残さない");

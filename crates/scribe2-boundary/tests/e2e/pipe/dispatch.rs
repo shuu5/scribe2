@@ -3733,6 +3733,61 @@ fn pipe_dispatch_group_exit_move_round_sends_only_the_evacuation() {
     clean(&[&place.repo, &place.state]);
 }
 
+// ───── 退役した登録 row（account-lifecycle.md §24 形 3・契約表の行 m・接頭辞 `pipe_dispatch_group_retired_`・§20 / §21 の fixture） ─────
+//
+// 群の段の読み手（`behind`）は 1 字も変えず、`seat retire` の後の replay が row を外すので、退役した row の target には何も送らない。
+
+/// `target` へ送った payload の行の数（退避の合図・`/exit`・逼迫の 1 行の全部）。
+fn target_sends(state: &Path, target: &str) -> usize {
+    group_sends(state).iter().filter(|line| line.contains(&format!("-t {target} "))).count()
+}
+
+/// `seat retire --state-dir <state> --target <target>` を binary で 1 回撃ち、rc 0 を確かめる。
+fn retire_seat(state: &Path, target: &str) {
+    let state = state.display().to_string();
+    let out = super::bin_cmd().args(["seat", "retire", "--state-dir", &state, "--target", target, "--reason", "moved"]).output();
+    assert!(out.as_ref().is_ok_and(|found| found.status.success()), "{target} の row を退役できる: {out:?}");
+}
+
+/// (移動の周) 2 つ目の置き場の orchestrator の row を退役させてから、種 a1 の逼迫した群を移す周: 退避の合図は残る row の
+/// target にだけ 1 行・退役した row の target へは送り 0・起動行 0（base では `retire` が使い方の誤りで row が残り合図が届く＝RED）。
+#[test]
+fn pipe_dispatch_group_retired_row_target_gets_no_evacuation() {
+    let place = move_place(&[("a1", 90, 10, 10), ("a2", 10, 10, 10)], &["a1", "a2"], "a1");
+    let ((_, one), (anchor, two)) = (GROUP_ANCHORS[0], GROUP_ANCHORS[1]);
+    retire_seat(&place.state, two);
+    assert_eq!(seat_account_of(&place.state, anchor), None, "退役した row は replay に無い");
+    let out = group_terminal(&place, "r-group-1");
+    assert_eq!(move_account(&place.state, GROUP).as_deref(), Some("a2"), "群は移る（{}）", told(&out));
+    let sends = group_sends(&place.state);
+    let evacuate = evacuate_payload(GROUP, "a2");
+    assert_eq!(sends.iter().filter(|line| line.contains(&format!("-t {one} ")) && line.ends_with(&evacuate)).count(), 1, "{sends:?}");
+    assert_eq!(target_sends(&place.state, two), 0, "退役した row の target へは送らない: {sends:?}");
+    assert_eq!(launched_lines(&place.state, two).len(), 0, "起こさない");
+    let out = group_terminal(&place, "r-group-2");
+    assert_eq!(target_sends(&place.state, two), 0, "続きの周も送らない（{}）", told(&out));
+    assert_eq!(exit_sends(&place.state, two), 0, "/exit 0");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (続きの周) 移動の周に shell へ戻らず保留になった席の row を退役させると、続きの周は `/exit` も退避の合図も送らず（送り 0）
+/// 起こさない（base では row が残り `/exit` が 1 行届く＝RED）。保留の event は重ねない。
+#[test]
+fn pipe_dispatch_group_retired_pending_seat_gets_no_exit() {
+    let place = exit_place();
+    let (anchor, two) = GROUP_ANCHORS[1];
+    let before = target_sends(&place.state, two);
+    assert_eq!(before, 1, "移動の周の退避の合図 1 行だけ: {:?}", group_sends(&place.state));
+    retire_seat(&place.state, two);
+    assert_eq!(seat_account_of(&place.state, anchor), None, "退役した row は replay に無い");
+    let out = group_terminal(&place, "r-group-2");
+    assert_eq!(exit_sends(&place.state, two), 0, "/exit 0（{}）: {:?}", told(&out), group_sends(&place.state));
+    assert_eq!(target_sends(&place.state, two), before, "送りは増えない");
+    assert_eq!(launched_lines(&place.state, two).len(), 0, "起こさない");
+    assert_eq!(move_counts(&place.state), (1, 0, 1), "保留の event を重ねない");
+    clean(&[&place.repo, &place.state]);
+}
+
 // ───── /exit の dialog を器が確定する（account-lifecycle.md §22 形 1〜4・契約表の行 k・接頭辞 `pipe_dispatch_group_exit_dialog_`・
 // §21 の fixture） ─────
 //
