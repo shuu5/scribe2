@@ -396,15 +396,15 @@ user-scope MCP 設定の同期・別口座への `--resume` の混線 fence・pr
 やさしく言うと: 群の今の口座は「記録 > 種」で、種は宣言の候補の先頭。Tier1 と Tier2 は同じ 5 口座を同じ順で宣言しているので、記録が無い初期状態では両群とも先頭の口座に乗る。群 ↔ 群の排他は移動の判定にしか無く、種の段では効かない。host を作り直した周・記録を消した周に必ず起きる。種を「宣言順で前の群が種にしていない最初の候補」にすれば、面を書き換えずに初期状態から重ならない。
 
 - 出所: §27 の問いの周の実測（2026-09-25 時点の host.toml は両群が同じ列・両群とも記録あり＝実害なし）。
-- 現物（verified・main 6fcd3d5）: 種は `crates/scribe2/src/hook/group.rs` の `current_of`（記録が無ければ `accounts().first()`）。群の宣言は `crates/scribe2/src/rules/manifest.rs` の `AccountGroup`（name / anchors / accounts）で、面の読みが宣言順の列を持つ。読み手は dispatch の 1 周・席の起動・doctor・hook の 4 つ（§20 形 2・§21）。
+- 現物（verified・main c07b823）: 種は `crates/scribe2/src/hook/group.rs` の `current_of`（記録が無ければ `accounts().first()`）。群の宣言は `crates/scribe2/src/rules/manifest.rs` の `AccountGroup`（name / anchors / accounts / line）で、面の読みが宣言順の列を持つ。面の欠陥の列は同じ file の `Vec<RuleError>`（`RuleError::new(行番号, 文)`・欠陥の種は enum でなく文の literal・群の検査は `check_duplicate_groups` が名の重複と置き場の重複の 2 種を push する）で、欠陥の型の file は他に無い。読み手は dispatch の 1 周・席の起動・doctor・hook の 4 つ（§20 形 2・§21）。
 - 形（行 q・1 つずつ歯が測る・done と 1:1）:
-  1. **種は面の読みで 1 回決める**: `AccountGroup` に種の欄を足し、面を読む 1 本が宣言順に「前の群の種でない最初の候補」を種として埋める。全候補が前の群の種に使われている群は面の欠陥（既存の欠陥の列に 1 種足す・行番号つき・fail-closed）。
+  1. **種は面の読みで 1 回決める**: `AccountGroup` に種の欄を足し、面を読む 1 本が宣言順に「前の群の種でない最初の候補」を種として埋める。全候補が前の群の種に使われている群は面の欠陥＝`check_duplicate_groups` と同じ file・同じ列（`Vec<RuleError>`）に `RuleError::new(群の行番号, 文)` の push を 1 つ足す（文の literal は「群 <名> の種を決める候補が無い」の形で語「種を決める候補が無い」を含む・enum も struct も新しい file も足さない・fail-closed）。
   2. **解決の 1 関数は種の欄を読む**（`accounts().first()` をやめる）。記録が在る周は今のまま記録が勝つ。
   3. **doctor の群の行の `current=` は種の周も同じ 1 関数から出る**（形は不変・値だけ変わりうる）。
   4. 候補が 1 口座しか無い群 2 つ（同じ口座）は欠陥＝面を直すまで両群の読みが止まる（読めない面は全群を typed に止める今の規則と同じ）。
 - 触らない: 記録の形・移動の判定・§23 の除外・面の表の形（欄を足さない・種は導出）。
 - 却下: 面の検査で「同じ種」を欠陥にする（今の host.toml がそのまま欠陥になり全群が止まる・持ち主に面の書き換えを強いる）／種を乱数や host 名で選ぶ（決定的でない・N3）／群ごとに別の候補の列を強いる（面の書き方の規則が増える・C1）。
-- 歯（`crates/scribe2-boundary/tests/e2e/rules.rs` に `host_group_seed_` 接頭辞〔既存の `host_group_` の歯は fleet.rs / seat/account.rs にも在るので、行 q の verify はこの接頭辞で rules.rs の新しい歯だけを名指す〕と `crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs`）: (d) 同じ列を宣言した 2 群の記録なしの周の `current=` が宣言順に先頭と 2 番目（base では両方先頭 ＝ RED）(e) 候補 1 つを共有する 2 群は欠陥の行番号と語 (f) 記録が在る群は種に依らず記録の口座（不変）(g) 群 1 つの host は先頭のまま（不変）。
+- 歯（`crates/scribe2-boundary/tests/e2e/rules.rs` に `host_group_seed_` 接頭辞〔既存の `host_group_` の歯は fleet.rs / seat/account.rs にも在るので、行 q の verify はこの接頭辞で rules.rs の新しい歯だけを名指す〕と `crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs`）: (d) 同じ列を宣言した 2 群の記録なしの周の `current=` が宣言順に先頭と 2 番目（base では両方先頭 ＝ RED）(e) 候補 1 つを共有する 2 群は欠陥の行番号（2 番目の群の行）と語「種を決める候補が無い」（`RuleError` の文の literal・型は足さない） (f) 記録が在る群は種に依らず記録の口座（不変）(g) 群 1 つの host は先頭のまま（不変）。
 
 <!-- contracts:begin -->
 schema = 1
@@ -585,5 +585,5 @@ verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail host
 size = "S"
 growth = ["crates/scribe2/src/rules/manifest.rs:20", "crates/scribe2/src/hook/group.rs:5"]
 depends = ["l"]
-done = "(1) 面を読む 1 本が宣言順に各群の種（前の群の種でない最初の候補）を AccountGroup の欄に埋め、全候補が前の群の種に使われている群は面の欠陥（行番号つき・既存の欠陥の列に 1 種）で fail-closed (2) 群の今の口座の解決の 1 関数は記録 > 種の欄で、accounts の先頭を読まない (3) 記録の形・移動の判定・§23 の除外・面の表の形は不変 歯: host_group_seed_ の歯が同じ列を宣言した 2 群の記録なしの周の current= を宣言順に先頭と 2 番目（base では両方先頭 ＝ RED）・候補 1 つを共有する 2 群の欠陥の行番号と語・群 1 つの host は先頭のまま を測り、pipe_dispatch_group_move_ の記録ありの歯は 1 字も変えず GREEN"
+done = "(1) 面を読む 1 本が宣言順に各群の種（前の群の種でない最初の候補）を AccountGroup の欄に埋め、全候補が前の群の種に使われている群は面の欠陥（check_duplicate_groups と同じ file の Vec<RuleError> に RuleError::new(群の行番号, 文) の push を 1 つ足す・文は語「種を決める候補が無い」を含む・enum も struct も新しい file も足さない）で fail-closed (2) 群の今の口座の解決の 1 関数は記録 > 種の欄で、accounts の先頭を読まない (3) 記録の形・移動の判定・§23 の除外・面の表の形は不変 歯: host_group_seed_ の歯が同じ列を宣言した 2 群の記録なしの周の current= を宣言順に先頭と 2 番目（base では両方先頭 ＝ RED）・候補 1 つを共有する 2 群の欠陥の行番号（2 番目の群の行）と語「種を決める候補が無い」・群 1 つの host は先頭のまま を測り、pipe_dispatch_group_move_ の記録ありの歯は 1 字も変えず GREEN"
 <!-- contracts:end -->
