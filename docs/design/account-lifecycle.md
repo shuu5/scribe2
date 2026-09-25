@@ -583,7 +583,7 @@ section = "28"
 write-set = ["crates/scribe2/src/rules/manifest.rs", "crates/scribe2/src/hook/group.rs", "crates/scribe2-boundary/tests/e2e/rules.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "docs/design/account-lifecycle.md"]
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail host_group_seed_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_group_move_"]
 size = "S"
-growth = ["crates/scribe2/src/rules/manifest.rs:30", "crates/scribe2/src/hook/group.rs:5"]
+growth = ["crates/scribe2/src/rules/manifest.rs:20", "crates/scribe2/src/hook/group.rs:5"]
 depends = ["l"]
 done = "(1) 面を読む 1 本が宣言順に各群の種（前の群の種でない最初の候補）を AccountGroup の欄に埋め、全候補が前の群の種に使われている群は面の欠陥（行番号つき・既存の欠陥の列に 1 種）で fail-closed (2) 群の今の口座の解決の 1 関数は記録 > 種の欄で、accounts の先頭を読まない (3) 記録の形・移動の判定・§23 の除外・面の表の形は不変 歯: host_group_seed_ の歯が同じ列を宣言した 2 群の記録なしの周の current= を宣言順に先頭と 2 番目（base では両方先頭 ＝ RED）・候補 1 つを共有する 2 群の欠陥の行番号と語・群 1 つの host は先頭のまま を測り、pipe_dispatch_group_move_ の記録ありの歯は 1 字も変えず GREEN"
 <!-- contracts:end -->
