@@ -55,11 +55,30 @@
 - doctor に `init=` の 1 行を足す（`host-template=` の直後）: 置き場を渡した周は `init=<ok|missing:<項目,…>> next=<次の 1 手>`。項目は宣言順に `marker`（cwd の repo の `.vessel` が `ByMe` でない）・`declaration`（`.vessel.toml` が HEAD に無い）・`host-face`（`host.toml` が `Absent` / `Unreadable`）・`accounts`（`[[account]]` の label で `accounts/<label>` が無い）・`session`（登録 row の target の session が無い）・`registration`（orchestrator の登録 row が無い）。`next=` は最初の欠落を埋める 1 手（`init` か `host init` か `seat launch`）で、欠落 0 なら `next=-`。
 - 「黙って 0 byte」は残す（hook の極性は vessel-hook.md §2 のまま）。名指すのは doctor の役。
 
-## 7. 口座 × anchor の trust を器が先に埋める（後続の ADR・持ち主の再裁定待ち・契約表の行はまだ無い）
+## 7. 口座 × anchor の trust を器が起動の前に書く — 席の起動の 1 本が、選んだ口座の設定 dir の `.claude.json` に `projects[<anchor>].hasTrustDialogAccepted = true` を書いてから起動行を注入する（契約表の行 e・[ADR-0065](../../design-intent/decisions/ADR-0065-the-vessel-writes-the-trust-flag-before-launching-a-seat.html)・`s2-07l.609` / `s2-07l.604`）
 
-- 出所: memo `s2-07l.604` の実地試験。移り先の口座がその anchor を一度も trust していないと、席の起動で Claude Code の trust dialog（既定 `No, exit`）が出て席が立たず `launch-unconfirmed` の保留になる。公式 doc が案内する唯一の口は口座の設定 dir の `.claude.json` の `projects[<anchor>].hasTrustDialogAccepted` を `true` にすること。
-- 現物: 器は入れ子の JSON の**読み手**を既に持つ（`crates/scribe2/src/account/mod.rs` の `read_tree` / `Tree` / `flag_at`・doctor の `trust=` の行が読む）。無いのは**書き手**（木を JSON に戻す 1 関数）だけ。account-autonomy.md §10 は「器が trust の印を書く」を却下している（当時は trust を user の宣言と読んだ）。
-- 裁定の経緯: 2026-09-24T13:38Z の裁定（逐語は台帳 `s2-07l.609` の notes）は「入れ子の JSON を書く道具が無い」という誤った前提で上げた推奨（境界 crate に serde_json）への受諾だった。serde_json は SRS の NFR3（実行時の直接依存 0 本・std だけで build）と食い違い、NFR3 の改稿（/folio-architect）が要る。代替は既存の読み手に書き手を足す形（依存 0・NFR3 のまま・書き戻しは一時 file → rename・rename の前に書いた本文を同じ読み手で読み直して flag を確かめる）。どちらを採るかは再裁定（1 論点）で決め、決まった側を後続の ADR に書き、契約表に行を足す（席の起動・群の起こし直し・`init` の段 3 の直後・doctor の `init=` の `trust` 項目）。それまで §3〜§6 の行は trust に触れない（`init` の後の初回の席は trust dialog で止まりうる＝doctor が名指す・行 d の項目には入れない）。
+やさしく言うと: 席が別の口座へ移るとき、その口座がその repo を一度も「信じる」と答えていないと、Claude Code は起動直後に trust の dialog（既定は No, exit）を出して席が立たない。群の自動の移動（account-lifecycle.md §20〜§22・seat-heartbeat.md §4）はここで人の手を待つ（2026-09-25 の本番の移動でも持ち主が手で承認した）。器は起動の直前に、その口座の設定 file の該当の印を true に置いてから起動行を送る。印を置けない周も起動は止めない（言葉で残す）。
+
+- 出所: memo `s2-07l.604` の実地試験（穴 (a)）・台帳 `s2-07l.609` の notes の裁定（user 2026-09-24T22:56Z「推奨で良い」= 依存を足さず、既存の入れ子 JSON の読み手に書き手を足す形。2026-09-24T13:38Z の serde_json の受諾は前提の誤りで取り下げ）・2026-09-25T01:00Z の s3:design の移動（tick の `launched=launch-unconfirmed`・持ち主の手で trust を承認・台帳 `s2-07l.617` の notes）。
+- 現物（verified・main 80270bd）:
+  - 読み手: `crates/scribe2/src/fleet/json_tree.rs` の `parse` / `Tree`（RFC 8259 の 6 形・数は 10 進の字面のまま・重複 key を拒む）と `render`（木を JSON に戻す）。`crates/scribe2/src/account/mod.rs` の `read_tree` / `flag_at` が doctor の `trust=<accepted|missing|unreadable>` の行で `projects[<anchor>].hasTrustDialogAccepted` を読む（読むだけ・`probe_account`）。
+  - 無いもの: 木の path に真偽を置く 1 関数と、置いた木を同じ file へ書き戻す 1 関数。
+  - 席の起動の 1 本は `crates/scribe2/src/seat/cycle/launch.rs` の `launch`（model → 役割の既定 → 口座の選定 `pick_account` → 起動行の導出 → `prepare` が登録 row を書く → `boot` が注入）。呼び手は 3 つ: `crates/scribe2/src/seat/cli.rs`（長い形・短い形）・`crates/scribe2/src/pipe/dispatch/group.rs` の `relaunch`（群の起こし直し）・`crates/scribe2/src/seat/tick.rs`（tick の移動の周・seat-heartbeat.md §4）。席の立て直しの経路は ADR-0045 §2 (2) で消えており（`crates/scribe2/src/seat/cycle/relaunch.rs` が持つのは `boot` と初回の選定 `choose` だけ）、席の起こし直しは全部この 1 本を通る。`launch` は `prepare` の後で 2 つに分かれる: 呼び手の pane が target と同じ周（`replace_own`・約束 7）は `boot` を通らず自分の process を起動行へ exec で置き換えて返らない（stdout の 1 行も `Launched` も無い・記録は `record_launch` が exec の前に inject.jsonl へ 1 行）・それ以外は `boot` が注入する。結果は `Launched`（`Done(label, settled)` / `None` / `Refused` / `Failed`）。
+  - 口座の dir は `<state_dir>/accounts/<label>`（実 dir か symlink・[account-autonomy.md](./account-autonomy.md) §5）。
+- 形（1 つずつ歯が測る・行 e の done と 1:1）:
+  1. **書く場所と順**: `launch` は `prepare` が通った後・置き換え（`replace_with`）と `boot` の分岐の**前**に 1 回だけ、選んだ口座の dir の `.claude.json` について `projects[<anchor の絶対 path>].hasTrustDialogAccepted` を `true` に置く（置き換えの周も注入の周も同じ 1 回を通る）。呼び手 3 つは変えない（1 本の内側なので群の起こし直しも tick の移動も同じ 1 回を通る）。
+  2. **書き方**: file を同じ読み手で読み → 木の path に真偽を置く（途中の object が無ければ作る・兄弟の key と並びと値と数の字面は変えない・書式は読み手の `render` の形＝2 空白の入れ子で、末尾の改行は元の file に在れば保つ）→ `render` の本文を同じ dir の一時 file に書き → 一時 file を同じ読み手で読み直して印が `true` であることを確かめ → `rename` で置き換える。file が無い周は `projects` だけを持つ最小の木を同じ手で作る。既に `true` の周は 1 byte も書かない（mtime も動かない）。
+  3. **言葉（閉じた列）**: `written`（置いた）／`created`（file を作って置いた）／`accepted`（既に true・書かない）／`unreadable`（file は在るが JSON でない・途中が object でない・末端が真偽でない＝書かない）／`unwritable`（一時 file の書き・読み直しの不一致・rename のどれかが失敗＝置き換えない）。
+  4. **起動は止めない**: どの言葉でも起動行は送る（trust は起動の前提でなく穴埋め・`Refused` にしない）。言葉は起動の記録（`record_launch` が inject.jsonl に書く行の `what`）の末尾に `trust=<語>` として残す（置き換えの周も注入の周も同じ）。注入の周はさらに `Launched::Done` の 3 つ目の値として返し、`seat launch` の stdout の 1 行の末尾に `trust=<語>` を添え、tick は `launched=` の後ろに `trust=<語>` を足す。dispatch の起こし直しと tick の移動は言葉を判定に使わない。
+  5. **doctor は変えない**（`trust=` の行は読むだけ・書いた後の周は `accepted` と読める＝それが確認）。`init`（§4）と `account add` も書かない（書くのは起動の 1 本だけ・書く相手が「今起こす口座 × 今の anchor」に閉じる）。
+  6. **lock は持たない**: 同じ設定 dir を使って走る Claude Code とは lock を共有しない（読み → 一時 file → rename の間に Claude Code が同じ file を書いた周はどちらかが負ける）。印が消えた周は doctor の `trust=missing` が名指し、次の起動が置き直す（人の手で置いた他の key を器が消す方向には負けない: 器の書きは読んだ木 + 印 1 つ・C3.3 の柵の内側）。
+- 触らない: `.credentials.json` と `settings.json`（書かない・ADR-0017 の fence のまま）・pane の字面で dialog に答える形（C3.3・§21 の却下のまま）・`Tree` の形と `parse` の判定・`prepare` と登録 row・`Launched` の他の variant。
+- 却下: serde_json を境界 crate に足す（NFR3 = 実行時の直接依存 0 本・読み手も書き手も既に在る・C17.2）／`.claude.json` を丸ごと書き直す（Claude Code が持つ他の key と並びを壊す・読み直しで測れない）／dialog を pane の字面で読んで Enter を送る（C3.3・§21 の却下）／`init` の段で全口座 × anchor を先に trust する（信じていない folder を信じた印を全部の口座に置く・書く相手は起こす 1 組に閉じる）／trust を起動の前提にして dialog が出うる周を断る（人の手が要る周を器が増やす）／設定 dir の `.claude.json` を host の面の宣言に写す（Claude Code の私有形式の二重化）。
+- 歯:
+  - `crates/scribe2/src/fleet/json_tree.rs` の in-file の歯（`json_tree_set_` 接頭辞）: 入れ子の path に真偽を置くと途中の object が作られ兄弟の key と並びと数の字面（30 桁）が保たれ `render` → `parse` で同じ木に戻る／既に `true` の周は木が変わらない／途中が object でない周は Err（base では関数が無い ＝ RED）。
+  - `crates/scribe2-boundary/tests/e2e/seat/launch.rs`（`seat_launch_trust_` 接頭辞・偽 tmux と偽 claude の fixture・口座の dir を tmp に作る・fixture の file は実物の `.claude.json` の書式〔2 空白・末尾改行あり〕で作る）: `.claude.json` に他の key と別 anchor の項目が在り当該 anchor が無い周の起動 → 起動行は送られ file は当該 anchor の印だけ増えて他の key・並び・値は `parse` で同じ木・末尾改行も同じ・stdout の末尾 `trust=written`・inject の記録の `what` の末尾も `trust=written`（base では file が変わらない ＝ RED）／同じ窓へ置き換える周（約束 7 の fixture・exec は偽の起動行）→ exec の前に印が置かれ inject の記録の `what` の末尾に `trust=<語>`（base では記録に `trust=` が無い ＝ RED）／既に true → 1 byte も変わらず（mtime 同じ）`trust=accepted`／file が無い → `projects` だけの最小の file が作られ `trust=created`／JSON でない file → 変わらず `trust=unreadable` で起動は送られる／dir が読み取り専用 → 変わらず `trust=unwritable` で起動は送られる。
+  - `crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs`（`pipe_dispatch_group_trust_` 接頭辞・§20 の fixture）: 群の起こし直しの周に移り先の口座の `.claude.json` へ群の anchor の印が置かれてから起動行が送られる（送りの記録の ts が file の書き換えより後・base では file が変わらない ＝ RED）。
+- 後続: README の「新しい repo を器に載せる」（§8）に trust の 1 文（初回の席は器が印を置くので dialog は出ない・出たら doctor の `trust=` を見る）。
 
 ## 8. 人間向けの説明
 
@@ -95,7 +114,7 @@ README の先頭に「新しい repo を器に載せる」の節を置く: 打�
 
 ## 13. 後続
 
-- 移り先の口座の trust は §7（後続の ADR・再裁定待ち）が持つ（account-lifecycle.md §22 の後続の行き先）。
+- 移り先の口座の trust は §7 / 行 e（ADR-0065）が持つ（account-lifecycle.md §22 の後続の行き先）。
 - 席の登録 row の退役の kind（`s2-07l.609` の notes (a)）と外部 API の鍵の欄（同 (c)）は本設計の外。
 
 <!-- contracts:begin -->
@@ -145,4 +164,14 @@ size = "S"
 depends = ["b"]
 done = "(1) 置き場を渡した doctor は host-template= の直後に init=<ok|missing:<項目,…>> next=<1 手> の 1 行を出し、項目は marker・declaration・host-face・accounts・session・registration の宣言順で欠けたものだけを並べ、欠落 0 は init=ok next=- (2) next= は最初の欠落を埋める 1 手（host init・init・seat launch のどれか 1 語）で候補の一覧を出さない (3) 他の doctor の行と hook の 0 byte の極性は 1 字も変わらない 歯: doctor_init_ の歯が 6 項目それぞれ 1 つだけ欠けた toy と欠落 0 の toy で行と next= を測る（base では init= の行が無い ＝ RED）"
 
+[[contract]]
+id = "e"
+title = "口座 × anchor の trust を器が起動の前に書く — 席の起動の 1 本が prepare の後・置き換えと boot の分岐の前に選んだ口座の .claude.json の projects[<anchor>].hasTrustDialogAccepted を true に置き（読み手に書き手を足す・一時 file → 読み直し → rename）、言葉 written / created / accepted / unreadable / unwritable を Launched::Done に返して stdout の末尾に添え、起動は止めない（§7・ADR-0065・s2-07l.609）"
+req = ["FR59", "FR38", "NFR3"]
+section = "7"
+write-set = ["crates/scribe2/src/fleet/json_tree.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2/src/seat/cycle/launch.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/pipe/dispatch/group.rs", "crates/scribe2/src/seat/tick.rs", "crates/scribe2-boundary/tests/e2e/seat/launch.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "docs/design/host-init.md", "docs/design/account-autonomy.md"]
+verify = ["cargo nextest run -p scribe2 --no-tests=fail json_tree_set_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_launch_trust_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_group_trust_"]
+size = "M"
+growth = ["crates/scribe2/src/fleet/json_tree.rs:80", "crates/scribe2/src/account/mod.rs:80", "crates/scribe2/src/seat/cycle/launch.rs:40", "crates/scribe2/src/seat/cli.rs:10", "crates/scribe2/src/pipe/dispatch/group.rs:10", "crates/scribe2/src/seat/tick.rs:10"]
+done = "(1) launch は prepare が通った後・置き換え（replace_with）と boot の分岐の前に 1 回だけ、選んだ口座の dir の .claude.json の projects[<anchor の絶対 path>].hasTrustDialogAccepted を true に置き（置き換えの周も注入の周も同じ 1 回）、呼び手 3 つ（cli の長い形と短い形・dispatch の群の起こし直し・tick の移動）は変えない (2) 書き方は同じ読み手で読み → 木の path に真偽を置く（途中の object が無ければ作り兄弟の key と並びと値と数の字面は変えず書式は render の 2 空白の形で末尾の改行は元の file に在れば保つ）→ render の本文を同じ dir の一時 file に書き → 一時 file を読み直して true を確かめ → rename で置き換え、file が無い周は projects だけの最小の木を同じ手で作り、既に true の周は 1 byte も書かない (3) 言葉は閉じた列 written / created / accepted / unreadable / unwritable (4) どの言葉でも起動行は送り Refused にせず、言葉は起動の記録（record_launch の inject.jsonl の行の what）の末尾に trust=<語> として置き換えの周も注入の周も残し、注入の周はさらに Launched::Done の 3 つ目の値で返して seat launch の stdout の 1 行の末尾に trust=<語> を添え、tick は launched= の後ろに trust=<語> を足し、dispatch の起こし直しと tick は言葉を判定に使わない (5) doctor の trust= の行・init・account add・.credentials.json・settings.json・Tree の形と parse・prepare と登録 row は変えない (6) 同じ設定 dir を使う Claude Code と lock は共有せず、印が消えた周は doctor の trust=missing が名指して次の起動が置き直す 歯: json_tree_set_ の歯が入れ子の path への真偽の設置で途中の object の生成・兄弟の key と並びと数の字面の保存・render → parse の同値・既に true なら不変・途中が object でなければ Err を測り、seat_launch_trust_ の歯が他の key と別 anchor の項目を持つ file で当該の印だけ増えて他の key・並び・値は parse で同じ木かつ末尾改行も同じで stdout と inject の記録の what の末尾が trust=written・同じ窓へ置き換える周は exec の前に印が置かれて記録の what の末尾に trust=<語>・既に true で 1 byte も変わらず accepted・file 無しで最小の file と created・JSON でない file で unreadable かつ起動は送られる・読み取り専用 dir で unwritable かつ起動は送られることを測り、pipe_dispatch_group_trust_ の歯が群の起こし直しで移り先の口座の file に群の anchor の印が置かれてから起動行が送られることを測る"
 <!-- contracts:end -->
