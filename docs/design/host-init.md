@@ -164,6 +164,7 @@ README の先頭に「新しい repo を器に載せる」の節を置く: 打�
      - (iii) 台帳の bead が 0 本なら根の epic を 1 本置く: ROOT の中で `bd create --type epic --title "<ROOT の dir 名> root" --priority 1` を撃つ（`--parent` 無し・器の子 process は門に当たらない・rc ≠ 0 は `failed:bd-create:<rc>`）。0 本かは `bd --readonly list --limit 1` の出力が空かで測る（読めない周は `failed:bd-list:<rc>`）。
   3. **HEAD に CLAUDE.md / AGENTS.md を増やさない**: (i) の旗で bd が作らない。器は生成された file を消さない・上書きしない（N1・他人の file）。
   4. **failed の後の段**: `ledger` が failed でも `commit` 以降は撃つ（§4 の規則のまま・`next=fix:ledger`）。
+     - **段の中の失敗**（実装の決め・行 f）: (i)〜(iii) のどれかが failed なら段はそこで止まり、続きの項を撃たない（`bd init` が落ちた周に shim も起票も試さない）。`<rc>` は bd の exit code の数字、bd を起動できない周は `spawn`・signal で終わった周は `signal`。ROOT の dir 名を UTF-8 で取れない周は `failed:unresolvable`。
   5. **人向けの案内の表は触らない**: `crates/scribe2/src/help.rs` の表は頂点の語 15 個だけを持ち `init` の行は無く、cli-help の突き合わせの歯 9 口の外なので、`init` の usage に `[--ledger-prefix <P>]` が増えても赤にならない（実装役の問い 2026-09-25T23:2xZ で実測）。本便は表に `init` の行を新設しない（人向けの案内に `init` を載せるかは別の便）。
 - 触らない: 起票の門と rules 行 `ledger.denied_writes`（門は緩めない・C14）・§4 の既存 7 段の中身・`bd` の呼び方（PATH）・shim の本文（本 repo の `scripts/bdw` と同じ・drift は歯が測る）。
 - 却下: 門に「bead 0 本の周の最初の create は通す」例外を足す（C14 の例外・vessel-hook.md §10 の却下と衝突）／語を外す当座の手を規則にする（裁定 id が毎回要る・N2）／生成された CLAUDE.md を器が消す（他人の file・N1）／根の epic を `scripts/bdw` 経由で置く（canonical の path が host の値・init の周は書き手が 1 つで直列化が要らない）／`--ledger-prefix` を dir 名から導く（bead id の接頭辞は持ち主が決める字面・A1 の「出す」に近い）。

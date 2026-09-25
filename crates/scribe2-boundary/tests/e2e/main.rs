@@ -1046,6 +1046,11 @@ impl InitHost {
         fs::read_to_string(self.tmp.join(INIT_TMUX_ARGS)).unwrap_or_default().lines().map(str::to_owned).collect()
     }
 
+    /// 偽 bd が受けた呼出（1 行 1 回）。
+    fn bd_calls(&self) -> Vec<String> {
+        fs::read_to_string(self.tmp.join(INIT_BD_ARGS)).unwrap_or_default().lines().map(str::to_owned).collect()
+    }
+
     /// 置き場の登録 row（積んだ順）。
     fn rows(&self) -> Vec<Registration> {
         vessel::fleet::store::read_all(&self.place()).unwrap_or_default().into_iter().filter_map(|event| event.registration).collect()
@@ -1058,8 +1063,14 @@ const INIT_TMUX_ARGS: &str = "init-tmux-args";
 const INIT_TMUX_LIVE: &str = "init-tmux-live";
 /// 在れば偽 tmux はどの呼出も rc 1（tmux を撃てない周）。
 const INIT_TMUX_DOWN: &str = "init-tmux-down";
+/// init の歯の偽 bd の呼出の記録（tmp の直下・1 行 1 回の argv）。
+const INIT_BD_ARGS: &str = "init-bd-args";
+/// 在れば偽 bd の `init` は rc 1。
+const INIT_BD_FAIL: &str = "init-bd-fail";
 
-/// 偽 tmux と偽 systemctl を `tmp/init-bin` に置き、その dir を先頭に足した PATH を返す。本物の tmux の server には 1 度も触れない:
+/// 偽 tmux・偽 bd・偽 systemctl を `tmp/init-bin` に置き、その dir を先頭に足した PATH を返す。偽 bd は argv を [`INIT_BD_ARGS`]
+/// へ写し、`init` は cwd に `.beads/` を作り `--skip-agents` が無ければ CLAUDE.md と AGENTS.md も作り（[`INIT_BD_FAIL`] が在れば
+/// rc 1）、`create` は id を 1 行出し、`--readonly list` は `.beads/issues.jsonl` が在って空でなければ 1 行目を出す。本物の tmux の server には 1 度も触れない:
 /// 偽 tmux は呼出を [`INIT_TMUX_ARGS`] へ写し、`has-session` は [`INIT_TMUX_LIVE`] が在る周だけ rc 0・`new-session` はそれを作り、
 /// 起動の口（窓 `orchestrator` が在る・前面は shell・入力欄は空）に答え、`send-keys … Enter` で席の打刻に `SessionStart` を足す
 /// （置き場 `place` の `seat/<target>`）。systemctl は rc 0 で何もしない（host の unit に触れない）。
@@ -1081,7 +1092,15 @@ fn init_shims(tmp: &Path, place: &Path) -> Option<String> {
         live = tmp.join(INIT_TMUX_LIVE).display(),
         seats = place.join("seat").display(),
     );
-    for (name, body) in [("tmux", tmux), ("systemctl", "#!/bin/sh\nexit 0\n".to_owned())] {
+    let bd = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{args}'\ncase \"$1\" in\n\
+         init) [ -f '{fail}' ] && exit 1\nmkdir -p .beads\n\
+         case \" $* \" in *' --skip-agents '*) ;; *) : > CLAUDE.md; : > AGENTS.md;; esac;;\n\
+         create) echo proj-1;;\n--readonly) [ -s .beads/issues.jsonl ] && head -n 1 .beads/issues.jsonl;;\n*) exit 1;;\nesac\nexit 0\n",
+        args = tmp.join(INIT_BD_ARGS).display(),
+        fail = tmp.join(INIT_BD_FAIL).display(),
+    );
+    for (name, body) in [("tmux", tmux), ("bd", bd), ("systemctl", "#!/bin/sh\nexit 0\n".to_owned())] {
         fs::write(bin.join(name), body).ok()?;
         fs::set_permissions(bin.join(name), fs::Permissions::from_mode(0o755)).ok()?;
     }
@@ -1114,9 +1133,12 @@ fn init_host(face: &str, cargo: bool) -> Option<InitHost> {
     Some(InitHost { tmp, global, hosts, base, repo, path })
 }
 
-/// 9 段の出力（`ok|skip|failed:..` を段の順に）と `next=` の 10 行。
-fn init_lines(words: [&str; 9], next: &str) -> String {
-    let stages = ["state-dir", "host-face", "accounts", "marker", "declaration", "group", "commit", "session", "seat"];
+/// init の段の名の列（宣言順・§4 の 7 段に §14 の `ledger` と §5 の 2 段を足した 10 語）。
+const INIT_STAGES: [&str; 10] = ["state-dir", "host-face", "accounts", "marker", "declaration", "group", "ledger", "commit", "session", "seat"];
+
+/// 10 段の出力（`ok|skip|failed:..` を段の順に）と `next=` の 11 行。
+fn init_lines(words: [&str; 10], next: &str) -> String {
+    let stages = INIT_STAGES;
     let mut out: String = stages.iter().zip(words).map(|(stage, word)| format!("init: {stage} {word}\n")).collect();
     out.push_str(&format!("next={next}\n"));
     out
@@ -1149,8 +1171,11 @@ fn anchors_of(state_dir: &Path, name: &str) -> Option<Vec<String>> {
     }
 }
 
-/// 群の無い新しい置き場の 1 度目の 9 段（口座の実測が無いので 9 段目の子は `no-account` で断る＝`next=fix:seat`）。
-const FIRST_UNGROUPED: [&str; 9] = ["ok", "ok", "ok", "ok", "ok", "skip", "ok", "ok", "failed:seat:no-account"];
+/// 群の無い新しい置き場の 1 度目の 10 段（`--ledger-prefix` が無いので `ledger` は skip・口座の実測が無いので席の段の子は
+/// `no-account` で断る＝`next=fix:seat`）。
+const FIRST_UNGROUPED: [&str; 10] = ["ok", "ok", "ok", "ok", "ok", "skip", "skip", "ok", "ok", "failed:seat:no-account"];
+/// `--group g1` の周の 1 度目の 10 段（群の口座で席が立つ・`ledger` は skip）。
+const FIRST_GROUPED: [&str; 10] = ["ok", "ok", "ok", "ok", "ok", "ok", "skip", "ok", "ok", "ok"];
 
 /// (2)(3)(4)(9) 9 段を順に通す: 置き場は `<雛形>-<repo 名>`・面は `[[account-group]]` だけを除いた写し（tick を含む）・
 /// 口座は雛形の symlink の先と実 dir への symlink（credential の file を置き場に写さない）・session は作り・席の子は選定の断りを
@@ -1201,7 +1226,7 @@ fn init_repo_commits_only_its_files_and_the_second_run_skips_every_stage() {
     assert_eq!(fixed.rc, Some(0), "口座を名指せば既定形で席が立つ: {} {}", fixed.out, fixed.err);
     let again = host.init(&[]).unwrap_or_else(|| panic!("binary を撃てる"));
     assert_eq!(again.rc, Some(0), "2 度目は rc 0: {}", again.err);
-    assert_eq!(again.out, init_lines(["skip"; 9], "doctor"), "2 度目は 9 段が全部 skip");
+    assert_eq!(again.out, init_lines(["skip"; 10], "doctor"), "2 度目は 10 段が全部 skip");
     assert_eq!(fs::read_to_string(place.join(vessel::rules::HOST_MANIFEST)).unwrap_or_default(), face, "面は不変");
     assert_eq!(git_out(&host.repo, &["rev-parse", "HEAD"]), head, "2 度目は commit しない");
     assert_eq!(fs::read_to_string(host.base.join(vessel::rules::HOST_MANIFEST)).unwrap_or_default(), format!("{FACE_FRONT}{FACE_GROUP}{FACE_BACK}"), "雛形は不変");
@@ -1225,7 +1250,7 @@ fn init_repo_declaration_takes_the_cargo_form_and_skips_an_existing_one() {
     let other = init_host(FACE_FRONT, false).unwrap_or_else(|| panic!("host を組める"));
     fs::write(other.repo.join(".vessel.toml"), "# mine\n").unwrap_or_else(|e| panic!("既存の宣言を置ける: {e}"));
     let run = other.init(&[]).unwrap_or_else(|| panic!("binary を撃てる"));
-    let skipped = ["ok", "ok", "ok", "ok", "skip", "skip", "ok", "ok", "failed:seat:no-account"];
+    let skipped = ["ok", "ok", "ok", "ok", "skip", "skip", "skip", "ok", "ok", "failed:seat:no-account"];
     assert_eq!(run.out, init_lines(skipped, "fix:seat"), "宣言だけ skip: {}", run.err);
     assert_eq!(fs::read_to_string(other.repo.join(".vessel.toml")).unwrap_or_default(), "# mine\n", "既存の宣言は不変");
     let files = git_out(&other.repo, &["show", "--name-only", "--format=", "HEAD"]);
@@ -1249,7 +1274,7 @@ fn init_repo_group_adds_the_root_to_every_declaring_face() {
     }
     let root = host.repo.display().to_string();
     let run = host.init(&["--group", "g1"]).unwrap_or_else(|| panic!("binary を撃てる"));
-    assert_eq!(run.out, init_lines(["ok"; 9], "doctor"), "群の段も席の段も ok: {}", run.err);
+    assert_eq!(run.out, init_lines(FIRST_GROUPED, "doctor"), "群の段も席の段も ok: {}", run.err);
     let expected = |first: &str| Some(vec![first.to_owned(), root.clone()]);
     assert_eq!(anchors_of(&host.base, "g1"), expected("/elsewhere/x"), "雛形の面に ROOT");
     assert_eq!(anchors_of(&sibling, "g1"), expected("/elsewhere/y"), "兄弟の面に ROOT");
@@ -1259,12 +1284,12 @@ fn init_repo_group_adds_the_root_to_every_declaring_face() {
     assert_eq!(fs::read_to_string(bystander.join(vessel::rules::HOST_MANIFEST)).unwrap_or_default(), bystander_face, "宣言しない面は不変");
 
     let again = host.init(&["--group", "g1"]).unwrap_or_else(|| panic!("binary を撃てる"));
-    assert_eq!(again.out, init_lines(["skip"; 9], "doctor"), "2 度目の --group は skip: {}", again.err);
+    assert_eq!(again.out, init_lines(["skip"; 10], "doctor"), "2 度目の --group は skip: {}", again.err);
 
     let other = init_host(&full, false).unwrap_or_else(|| panic!("host を組める"));
     let missing = other.init(&["--group", "nope"]).unwrap_or_else(|| panic!("binary を撃てる"));
     assert_eq!(missing.rc, Some(1), "failed の段が在れば rc 1");
-    let words = ["ok", "ok", "ok", "ok", "ok", "failed:no-group:nope", "ok", "ok", "failed:seat:no-account"];
+    let words = ["ok", "ok", "ok", "ok", "ok", "failed:no-group:nope", "skip", "ok", "ok", "failed:seat:no-account"];
     assert_eq!(missing.out, init_lines(words, "fix:group"), "雛形に無い群");
     assert_eq!(anchors_of(&other.place(), "g1"), None, "群の行を写さない");
 }
@@ -1285,7 +1310,7 @@ fn init_repo_group_writes_zero_faces_when_one_face_fails() {
         fs::write(bad.join(vessel::rules::HOST_MANIFEST), body).unwrap_or_else(|e| panic!("面を置ける: {e}"));
         let run = host.init(&["--group", "g1"]).unwrap_or_else(|| panic!("binary を撃てる"));
         let group = format!("failed:{reason}");
-        let words = ["ok", "ok", "ok", "ok", "ok", group.as_str(), "ok", "ok", "failed:seat:no-account"];
+        let words = ["ok", "ok", "ok", "ok", "ok", group.as_str(), "skip", "ok", "ok", "failed:seat:no-account"];
         assert_eq!(run.out, init_lines(words, "fix:group"), "{name}: {}", run.err);
         assert_eq!(fs::read_to_string(host.base.join(vessel::rules::HOST_MANIFEST)).unwrap_or_default(), full, "{name}: 雛形は不変");
         assert_eq!(fs::read_to_string(bad.join(vessel::rules::HOST_MANIFEST)).unwrap_or_default(), body, "{name}: 兄弟は不変");
@@ -1305,7 +1330,7 @@ fn init_repo_names_the_failed_stage_and_goes_on() {
     let host = init_host(&face, false).unwrap_or_else(|| panic!("host を組める"));
     let run = host.init(&[]).unwrap_or_else(|| panic!("binary を撃てる"));
     assert_eq!(run.rc, Some(1), "failed の段が在れば rc 1");
-    let words = ["ok", "ok", "failed:no-source:a3", "ok", "ok", "skip", "ok", "ok", "failed:seat:no-account"];
+    let words = ["ok", "ok", "failed:no-source:a3", "ok", "ok", "skip", "skip", "ok", "ok", "failed:seat:no-account"];
     assert_eq!(run.out, init_lines(words, "fix:accounts"), "口座の段が最初の failed");
     assert!(!host.place().join("accounts").exists(), "結ぶ先の無い label が在る周は 1 本も結ばない");
     assert!(host.repo.join(".vessel.toml").is_file(), "続きの段は進む");
@@ -1313,7 +1338,7 @@ fn init_repo_names_the_failed_stage_and_goes_on() {
     let other = init_host(FACE_FRONT, false).unwrap_or_else(|| panic!("host を組める"));
     fs::write(other.repo.join(".vessel"), "name=other\nversion=1\n").unwrap_or_else(|e| panic!("別の器の marker を置ける: {e}"));
     let taken = other.init(&[]).unwrap_or_else(|| panic!("binary を撃てる"));
-    let words = ["ok", "ok", "ok", "failed:by-other:other", "ok", "skip", "ok", "ok", "failed:seat:defaults-unresolved"];
+    let words = ["ok", "ok", "ok", "failed:by-other:other", "ok", "skip", "skip", "ok", "ok", "failed:seat:defaults-unresolved"];
     assert_eq!(taken.out, init_lines(words, "fix:marker"), "{}", taken.err);
     assert_eq!(fs::read_to_string(other.repo.join(".vessel")).unwrap_or_default(), "name=other\nversion=1\n", "別の器の marker は不変");
     assert_eq!(git_out(&other.repo, &["config", "--local", "--get", &format!("{NAME}.stateDir")]), None, "設定を書かない");
@@ -1342,6 +1367,100 @@ fn init_repo_refuses_before_the_first_stage_without_writing() {
     assert!(!host.place().exists(), "置き場を作らない");
     assert!(!host.repo.join(".vessel").exists() && !host.repo.join(".vessel.toml").exists(), "marker も宣言も書かない");
     assert_eq!(git_out(&host.repo, &["config", "--local", "--get", &format!("{NAME}.stateDir")]), None, "設定を書かない");
+}
+
+// ─────────── init の段 ledger（host-init.md §14・行 f・`s2-07l.622` / `.625`・接頭辞 `init_ledger_`） ───────────
+//
+// bd は [`init_shims`] の偽 bd だけを撃つ（本物の台帳に触れない）。bead の有無は fixture が `.beads/issues.jsonl` で作る。
+
+/// 本 repo の `scripts/bdw`（段 `ledger` が書く shim の字面の正本）。
+const REPO_SHIM: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../scripts/bdw"));
+/// 偽 bd の `bd init` の呼出（CLAUDE.md / AGENTS.md と hook を作らない旗つき）。
+const BD_INIT_T9: &str = "init --prefix t9 --skip-agents --skip-hooks";
+/// 偽 bd の bead の有無の問い。
+const BD_LIST: &str = "--readonly list --limit 1";
+/// 偽 bd の根の epic の起票（`--parent` 無し）。
+const BD_CREATE_ROOT: &str = "create --type epic --title proj root --priority 1";
+
+/// (a)(3) `--ledger-prefix t9` は `.beads` の無い repo で `bd init` を旗つきで 1 回・shim を実行 bit つきで書いて commit に足し・
+/// bead 0 本なので根の epic を 1 本置いて `ledger ok`。tree にも HEAD にも CLAUDE.md / AGENTS.md は無い。base は flag が未知（RED）。
+#[test]
+fn init_ledger_raises_the_ledger_the_shim_and_the_root_epic() {
+    use std::os::unix::fs::PermissionsExt;
+    let host = init_host(FACE_FRONT, false).unwrap_or_else(|| panic!("host を組める"));
+    let run = host.init(&["--ledger-prefix", "t9"]).unwrap_or_else(|| panic!("binary を撃てる"));
+    let words = ["ok", "ok", "ok", "ok", "ok", "skip", "ok", "ok", "ok", "failed:seat:no-account"];
+    assert_eq!(run.out, init_lines(words, "fix:seat"), "ledger は ok: {}", run.err);
+    assert_eq!(host.bd_calls(), [BD_INIT_T9, BD_LIST, BD_CREATE_ROOT], "init・list・create を各 1 回この順");
+    let shim = host.repo.join("scripts").join("bdw");
+    assert_eq!(fs::read_to_string(&shim).unwrap_or_default(), REPO_SHIM, "shim は scripts/bdw と同じ字面");
+    let mode = fs::metadata(&shim).map(|meta| meta.permissions().mode()).unwrap_or_default();
+    assert_eq!(mode & 0o111, 0o111, "shim は実行可");
+    let files = git_out(&host.repo, &["show", "--name-only", "--format=", "HEAD"]);
+    assert_eq!(files.as_deref(), Some(".vessel\n.vessel.toml\nscripts/bdw"), "shim も同じ 1 commit");
+    let staged = git_out(&host.repo, &["ls-files", "-s", "scripts/bdw"]).unwrap_or_default();
+    assert!(staged.starts_with("100755 "), "commit の shim も実行可: {staged}");
+    for name in ["CLAUDE.md", "AGENTS.md"] {
+        assert!(!host.repo.join(name).exists(), "tree に {name} が無い");
+    }
+    let tracked = git_out(&host.repo, &["ls-tree", "-r", "--name-only", "HEAD"]).unwrap_or_default();
+    assert!(!tracked.lines().any(|found| found == "CLAUDE.md" || found == "AGENTS.md"), "HEAD に増やさない: {tracked}");
+}
+
+/// (b)(e) flag の無い周は `ledger skip` で偽 bd の呼出 0・shim も `.beads` も書かない。段の名の列は宣言順の 10 語。
+#[test]
+fn init_ledger_skips_without_the_flag_and_names_ten_stages() {
+    let host = init_host(FACE_FRONT, false).unwrap_or_else(|| panic!("host を組める"));
+    let run = host.init(&[]).unwrap_or_else(|| panic!("binary を撃てる"));
+    assert_eq!(run.out, init_lines(FIRST_UNGROUPED, "fix:seat"), "ledger は skip: {}", run.err);
+    let names: Vec<&str> = run.out.lines().filter_map(|line| line.strip_prefix("init: ")?.split(' ').next()).collect();
+    let want = ["state-dir", "host-face", "accounts", "marker", "declaration", "group", "ledger", "commit", "session", "seat"];
+    assert_eq!(names, want, "段の名の列は 10 語で ledger は group の後・commit の前");
+    assert!(host.bd_calls().is_empty(), "flag が無ければ bd を撃たない");
+    assert!(!host.repo.join("scripts").exists() && !host.repo.join(".beads").exists(), "shim も台帳も書かない");
+}
+
+/// (c) bead 1 本の `.beads` と shim が既に在れば `ledger skip`・偽 bd の呼出は list の 1 回だけ・既存の shim は 1 字も変えず
+/// commit にも入れない。
+#[test]
+fn init_ledger_skips_an_existing_ledger_and_shim_with_one_list_call() {
+    let host = init_host(FACE_FRONT, false).unwrap_or_else(|| panic!("host を組める"));
+    fs::create_dir_all(host.repo.join(".beads")).unwrap_or_else(|e| panic!("台帳を置ける: {e}"));
+    fs::write(host.repo.join(".beads").join("issues.jsonl"), "{\"id\":\"t9-1\"}\n").unwrap_or_else(|e| panic!("bead を置ける: {e}"));
+    fs::create_dir_all(host.repo.join("scripts")).unwrap_or_else(|e| panic!("scripts を作れる: {e}"));
+    fs::write(host.repo.join("scripts").join("bdw"), "# mine\n").unwrap_or_else(|e| panic!("shim を置ける: {e}"));
+    let run = host.init(&["--ledger-prefix", "t9"]).unwrap_or_else(|| panic!("binary を撃てる"));
+    assert_eq!(run.out, init_lines(FIRST_UNGROUPED, "fix:seat"), "ledger は skip: {}", run.err);
+    assert_eq!(host.bd_calls(), [BD_LIST], "呼出は list の 1 回だけ");
+    assert_eq!(fs::read_to_string(host.repo.join("scripts").join("bdw")).unwrap_or_default(), "# mine\n", "既存の shim は不変");
+    let files = git_out(&host.repo, &["show", "--name-only", "--format=", "HEAD"]);
+    assert_eq!(files.as_deref(), Some(".vessel\n.vessel.toml"), "書かない shim は commit しない");
+}
+
+/// (c2) `.beads` は在るが bead 0 本（`issues.jsonl` が無い）なら `bd init` は撃たず、根の epic だけを 1 本置いて `ledger ok`。
+#[test]
+fn init_ledger_places_the_root_epic_in_an_empty_ledger() {
+    let host = init_host(FACE_FRONT, false).unwrap_or_else(|| panic!("host を組める"));
+    fs::create_dir_all(host.repo.join(".beads")).unwrap_or_else(|e| panic!("台帳を置ける: {e}"));
+    let run = host.init(&["--ledger-prefix", "t9"]).unwrap_or_else(|| panic!("binary を撃てる"));
+    let words = ["ok", "ok", "ok", "ok", "ok", "skip", "ok", "ok", "ok", "failed:seat:no-account"];
+    assert_eq!(run.out, init_lines(words, "fix:seat"), "ledger は ok: {}", run.err);
+    assert_eq!(host.bd_calls(), [BD_LIST, BD_CREATE_ROOT], "init 0・create 1");
+}
+
+/// (d)(4) 偽 bd の `init` が rc 1 なら `failed:bd-init:1` で `next=fix:ledger`・rc 1。`commit` 以降の段は撃つ（marker と宣言は
+/// commit され、席の段の行も出る）。
+#[test]
+fn init_ledger_failed_bd_init_names_the_stage_and_goes_on() {
+    let host = init_host(FACE_FRONT, false).unwrap_or_else(|| panic!("host を組める"));
+    fs::write(host.tmp.join(INIT_BD_FAIL), "").unwrap_or_else(|e| panic!("bd init を落とせる: {e}"));
+    let run = host.init(&["--ledger-prefix", "t9"]).unwrap_or_else(|| panic!("binary を撃てる"));
+    assert_eq!(run.rc, Some(1), "failed の段が在れば rc 1");
+    let words = ["ok", "ok", "ok", "ok", "ok", "skip", "failed:bd-init:1", "ok", "ok", "failed:seat:no-account"];
+    assert_eq!(run.out, init_lines(words, "fix:ledger"), "{}", run.err);
+    assert_eq!(host.bd_calls(), [BD_INIT_T9], "init が落ちた周は続きの bd を撃たない");
+    let files = git_out(&host.repo, &["show", "--name-only", "--format=", "HEAD"]);
+    assert_eq!(files.as_deref(), Some(".vessel\n.vessel.toml"), "commit の段は撃つ");
 }
 
 // ─────────── init の tmux の session と席の 2 段（host-init.md §5・行 c・`s2-07l.614`・接頭辞 `init_seat_`） ───────────
@@ -1385,14 +1504,14 @@ fn init_seat_opens_the_session_once_and_skips_it_when_present() {
     let asked = calls.iter().position(|found| found == "has-session -t =proj");
     assert!(asked.is_some_and(|at| calls.get(at.saturating_add(1)) == Some(&made)), "在るかを確かめてから作る: {calls:?}");
     let again = host.init(&[]).unwrap_or_else(|| panic!("binary を撃てる"));
-    let words = ["skip", "skip", "skip", "skip", "skip", "skip", "skip", "skip", "failed:seat:no-account"];
+    let words = ["skip", "skip", "skip", "skip", "skip", "skip", "skip", "skip", "skip", "failed:seat:no-account"];
     assert_eq!(again.out, init_lines(words, "fix:seat"), "2 度目の session は skip: {}", again.err);
     assert_eq!(host.tmux_calls().iter().filter(|found| found.starts_with("new-session")).count(), 1, "2 度目は作らない");
 
     let live = init_host(FACE_FRONT, false).unwrap_or_else(|| panic!("host を組める"));
     fs::write(live.tmp.join(INIT_TMUX_LIVE), "").unwrap_or_else(|e| panic!("session を在らせる: {e}"));
     let run = live.init(&[]).unwrap_or_else(|| panic!("binary を撃てる"));
-    let words = ["ok", "ok", "ok", "ok", "ok", "skip", "ok", "skip", "failed:seat:no-account"];
+    let words = ["ok", "ok", "ok", "ok", "ok", "skip", "skip", "ok", "skip", "failed:seat:no-account"];
     assert_eq!(run.out, init_lines(words, "fix:seat"), "在る session は skip: {}", run.err);
     assert!(!live.tmux_calls().iter().any(|found| found.starts_with("new-session")), "在る周は作らない");
 }
@@ -1407,13 +1526,13 @@ fn init_seat_launches_the_default_form_once_and_skips_a_registered_row() {
     child_wrapper(&wrapper, &log).unwrap_or_else(|| panic!("包みを置ける"));
     let arg0 = wrapper.display().to_string();
     let first = host.init_as(Some(&arg0), &["--group", "g1"]).unwrap_or_else(|| panic!("binary を撃てる"));
-    assert_eq!((first.rc, first.out.as_str()), (Some(0), init_lines(["ok"; 9], "doctor").as_str()), "{}", first.err);
+    assert_eq!((first.rc, first.out.as_str()), (Some(0), init_lines(FIRST_GROUPED, "doctor").as_str()), "{}", first.err);
     assert_eq!(child_calls(&log), vec![format!("{arg0}|seat launch|{}", host.repo.display())], "子は既定形を ROOT で 1 回");
     let rows: Vec<_> = host.rows().into_iter().map(|row| (row.role, row.anchor, row.target, row.account)).collect();
     let want = (Role::Orchestrator, host.repo.display().to_string(), "proj:orchestrator".to_owned(), "a1".to_owned());
     assert_eq!(rows, vec![want], "登録 row は 1 件");
     let again = host.init_as(Some(&arg0), &["--group", "g1"]).unwrap_or_else(|| panic!("binary を撃てる"));
-    assert_eq!((again.rc, again.out.as_str()), (Some(0), init_lines(["skip"; 9], "doctor").as_str()), "{}", again.err);
+    assert_eq!((again.rc, again.out.as_str()), (Some(0), init_lines(["skip"; 10], "doctor").as_str()), "{}", again.err);
     assert_eq!(child_calls(&log).len(), 1, "row が在れば子を撃たない");
 }
 
@@ -1439,7 +1558,7 @@ fn init_seat_copies_the_child_refusal_word_and_skips_after_registration() {
     };
     vessel::seat::role::register(&host.place(), row).unwrap_or_else(|e| panic!("row を積める: {e:?}"));
     let again = host.init_as(Some(&arg0), &[]).unwrap_or_else(|| panic!("binary を撃てる"));
-    assert_eq!((again.rc, again.out.as_str()), (Some(0), init_lines(["skip"; 9], "doctor").as_str()), "{}", again.err);
+    assert_eq!((again.rc, again.out.as_str()), (Some(0), init_lines(["skip"; 10], "doctor").as_str()), "{}", again.err);
     assert_eq!(child_calls(&log).len(), 1, "row が在れば子を撃たない");
 }
 
@@ -1451,7 +1570,7 @@ fn init_seat_failed_tmux_still_fires_the_seat_stage() {
     fs::write(host.tmp.join(INIT_TMUX_DOWN), "").unwrap_or_else(|e| panic!("tmux を落とせる: {e}"));
     let run = host.init(&["--group", "g1"]).unwrap_or_else(|| panic!("binary を撃てる"));
     assert_eq!(run.rc, Some(1), "failed の段が在れば rc 1");
-    let words = ["ok", "ok", "ok", "ok", "ok", "ok", "ok", "failed:tmux", "failed:seat:session-missing"];
+    let words = ["ok", "ok", "ok", "ok", "ok", "ok", "skip", "ok", "failed:tmux", "failed:seat:session-missing"];
     assert_eq!(run.out, init_lines(words, "fix:session"), "{}", run.err);
     assert!(host.rows().is_empty(), "断った子は row を書かない");
 }

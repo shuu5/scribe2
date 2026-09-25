@@ -1,6 +1,7 @@
 //! 新しい repo を器に載せる口（設計 host-init.md）。本 file は行 a の `host init <TEMPLATE>`（§3）と doctor の
 //! `host-template=` の 1 行と、行 b の `init [ROOT] [--group <名>]`（§4 の 7 段）に行 c の tmux の session と席の 2 段
-//! （§5・計 9 段）を足した口と、行 d の doctor の `init=` の 1 行（§6）を持つ。
+//! （§5・計 9 段）を足した口と、行 d の doctor の `init=` の 1 行（§6）と、行 f の `--ledger-prefix` の段 `ledger`（§14・計
+//! 10 段）を持つ。
 //!
 //! 雛形（既存の置き場）の在り処は git の **global** 設定 `<NAME>.template` の絶対 path ただ 1 つで、key 名は
 //! NAME 定数から導く（C2.2）。**env も HOME も読まない**（global 設定の file の在り処は git が解く）。git は
@@ -270,11 +271,36 @@ fn host_init(template: &Path) -> Outcome {
 
 /// `init` の使い方（行 b・§4）。
 pub fn usage() -> String {
-    format!("usage: {NAME} init [ROOT] [--group <名>]")
+    format!("usage: {NAME} init [ROOT] [--group <名>] [--ledger-prefix <P>]")
 }
 
 /// `init` が受ける flag（`ROOT` は positional・既定は cwd）。
-const ALLOWED_INIT: &[cli_args::Allowed] = &[Allowed::value("--group")];
+const ALLOWED_INIT: &[cli_args::Allowed] = &[Allowed::value("--group"), Allowed::value("--ledger-prefix")];
+
+/// 段 `ledger` が書く shim の ROOT からの path（§14 の (ii)）。
+const SHIM_FILE: &str = "scripts/bdw";
+
+/// shim の本文（本 repo の `scripts/bdw` と同じ字面・drift は `init_shim_` の歯が測る）。
+const SHIM_BODY: &str = r#"#!/usr/bin/env bash
+# bdw shim — logic ゼロの薄い委譲。canonical bdw(beads-bdw plugin の単一 SSOT)へ exec する。
+#
+# 各 bd-writer repo はこのファイルを自 repo の scripts/bdw に置く(コピー)。直列化ロジックは
+# 一切持たず、canonical を解決して丸投げするだけ(orch-wvd grill 2026-06-23 合意 = 3 copy
+# drift の撲滅)。canonical の場所は BEADS_BDW で上書きできる(既定 = plugin の標準配置)。
+#
+# fail-closed: canonical が見つからない / 実行可能でなければ、bd write を素通しさせず loud に
+# 停止する(exit 1)。素通しすると直列化が外れて lost-update が黙って復活するため。
+set -uo pipefail
+
+_CANON="${BEADS_BDW:-$HOME/.claude/plugins/beads-bdw/bin/bdw}"
+if [ ! -x "$_CANON" ]; then
+  echo "bdw-shim: canonical bdw not found or not executable: $_CANON" >&2
+  echo "bdw-shim: set BEADS_BDW to the canonical bin/bdw, or install the beads-bdw plugin." >&2
+  echo "bdw-shim: fail-closed — bd write NOT run (直列化を外して実行はしない)。" >&2
+  exit 1
+fi
+exec "$_CANON" "$@"
+"#;
 
 /// 雛形の面が無い周の新しい面の土台（`account add` と同じ `schema = 1` から作る）。
 const FACE_HEAD: &str = "schema = 1\n";
@@ -323,7 +349,7 @@ pub fn dispatch(args: &[String], program: &Path) -> Outcome {
         [root] => PathBuf::from(root),
         [_, extra, ..] => return refused(ArgsError::Unknown((*extra).to_owned())),
     };
-    init(&root, parsed.value("--group"), &program_of(program, cwd.ok().as_deref()))
+    init(&root, parsed.value("--group"), parsed.value("--ledger-prefix"), &program_of(program, cwd.ok().as_deref()))
 }
 
 /// 9 段目の子の program（§5・行 c の done (6)）: `/` を含む相対 path は init の cwd で絶対 path に解く（子は ROOT へ
@@ -342,8 +368,8 @@ pub fn place_of(template: &Path, root: &Path) -> Option<PathBuf> {
     Some(template.parent()?.join(format!("{base}-{repo}")))
 }
 
-/// `init [ROOT]`（§4・§5）: 前提（git の repo・雛形の pointer）を 1 段目の前に確かめ、9 段を順に 1 行ずつ出す。
-fn init(root: &Path, group: Option<&str>, program: &Path) -> Outcome {
+/// `init [ROOT]`（§4・§5・§14）: 前提（git の repo・雛形の pointer）を 1 段目の前に確かめ、10 段を順に 1 行ずつ出す。
+fn init(root: &Path, group: Option<&str>, prefix: Option<&str>, program: &Path) -> Outcome {
     let refuse = |reason: String| Outcome::failed(RC_REFUSED, vec![format!("init: {reason}（何も書かない）")]);
     let Some(root) = vessel::repo_root(root) else {
         return refuse(format!("{} は git の repo でない", root.display()));
@@ -384,6 +410,8 @@ fn init(root: &Path, group: Option<&str>, program: &Path) -> Outcome {
     };
     steps.push(("declaration", declared));
     steps.push(("group", group.map_or(Step::Skip, |name| join_group(&template, &place, &root, name))));
+    // `ledger` が failed の周も `commit` 以降は撃つ（§14 の 4）。
+    steps.push(("ledger", prefix.map_or(Step::Skip, |found| raise_ledger(&root, found, &mut written))));
     steps.push(("commit", commit(&root, &written)));
     // 8 段目が failed の周も 9 段目は撃つ（子の断りの語をそのまま写す・§5）。
     steps.push(("session", open_session(&root)));
@@ -538,7 +566,57 @@ fn replace_all(changes: &[(PathBuf, String)], also: impl Fn(&manifest::Manifest)
     staged.iter().try_for_each(|(from, to)| fs::rename(from, to).map_err(|_| to.parent().map_or_else(PathBuf::new, Path::to_path_buf)))
 }
 
-/// 7 段目: 4 段目と 5 段目が書いた file だけを `git add` と `git commit --` で 1 commit にする（0 file なら skip）。
+/// ROOT の中で PATH の `bd` を撃つ（rc 0 なら stdout・それ以外は rc の語＝起動できない周は `spawn`・signal は `signal`）。
+fn run_bd(root: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
+    let out = Invocation::new("bd").args(args).current_dir(root).output().map_err(|_| "spawn".to_owned())?;
+    match out.status.code() {
+        Some(0) => Ok(out.stdout),
+        Some(code) => Err(code.to_string()),
+        None => Err("signal".to_owned()),
+    }
+}
+
+/// 段 `ledger`（§14・`group` の後・`commit` の前・`--ledger-prefix` の周だけ）: (i) `ROOT/.beads` が無ければ `bd init`（CLAUDE.md / AGENTS.md と hook を
+/// 作らない旗）・(ii) `ROOT/scripts/bdw` が無ければ shim を実行 bit つきで書き `commit` の段の書いた列に足す・(iii) bead が
+/// 0 本なら根の epic を 1 本置く。各項は在れば skip・最初の failed で止まる。器は bd の生成 file を消さず上書きしない（N1）。
+fn raise_ledger(root: &Path, prefix: &str, written: &mut Vec<&'static str>) -> Step {
+    use std::os::unix::fs::PermissionsExt;
+    let mut wrote = false;
+    if fs::symlink_metadata(root.join(".beads")).is_err() {
+        if let Err(rc) = run_bd(root, &["init", "--prefix", prefix, "--skip-agents", "--skip-hooks"]) {
+            return Step::Failed(format!("bd-init:{rc}"));
+        }
+        wrote = true;
+    }
+    let shim = root.join(SHIM_FILE);
+    if fs::symlink_metadata(&shim).is_err() {
+        let placed = shim.parent().is_some_and(|dir| fs::create_dir_all(dir).is_ok())
+            && fs::write(&shim, SHIM_BODY).is_ok()
+            && fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).is_ok();
+        if !placed {
+            return Step::Failed("write".to_owned());
+        }
+        written.push(SHIM_FILE);
+        wrote = true;
+    }
+    let listed = match run_bd(root, &["--readonly", "list", "--limit", "1"]) {
+        Ok(found) => found,
+        Err(rc) => return Step::Failed(format!("bd-list:{rc}")),
+    };
+    if String::from_utf8_lossy(&listed).trim().is_empty() {
+        let Some(name) = root.file_name().and_then(|found| found.to_str()) else {
+            return Step::Failed("unresolvable".to_owned());
+        };
+        let title = format!("{name} root");
+        if let Err(rc) = run_bd(root, &["create", "--type", "epic", "--title", &title, "--priority", "1"]) {
+            return Step::Failed(format!("bd-create:{rc}"));
+        }
+        wrote = true;
+    }
+    if wrote { Step::Wrote } else { Step::Skip }
+}
+
+/// 7 段目: 4 段目と 5 段目と段 `ledger` が書いた file だけを `git add` と `git commit --` で 1 commit にする（0 file なら skip）。
 fn commit(root: &Path, written: &[&str]) -> Step {
     if written.is_empty() {
         return Step::Skip;
@@ -596,4 +674,17 @@ fn launch_seat(program: &Path, place: &Path, root: &Path) -> Step {
     let text = format!("{}\n{}", String::from_utf8_lossy(&out.stderr), String::from_utf8_lossy(&out.stdout));
     let word = text.split_whitespace().find_map(|found| found.strip_prefix("reason=")).unwrap_or("refused");
     Step::Failed(format!("seat:{word}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SHIM_BODY, SHIM_FILE};
+
+    /// 段 `ledger` の shim の定数は本 repo の `scripts/bdw` と 1 byte も違わない（§14 の (ii)・drift を測る）。
+    #[test]
+    fn init_shim_body_matches_the_repo_scripts_bdw() {
+        let repo = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../scripts/bdw"));
+        assert_eq!(SHIM_BODY, repo, "shim の本文は scripts/bdw と同じ字面");
+        assert_eq!(SHIM_FILE, "scripts/bdw", "書く先は ROOT の scripts/bdw");
+    }
 }
