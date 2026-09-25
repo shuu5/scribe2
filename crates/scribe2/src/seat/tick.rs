@@ -399,32 +399,34 @@ pub struct Verdict {
     pub sent: Option<Sent>,
     /// 起こした移動の周だけ（起動の結果の語）。
     pub launched: Option<&'static str>,
+    /// 起こせた移動の周だけ（起動の前に置いた trust の印の語・判定には使わない・host-init.md §7 形 4）。
+    pub trust: Option<&'static str>,
 }
 
 impl Verdict {
     /// 実行系が回らない周。
     fn error(error: TickError) -> Self {
-        Self { decision: TickDecision::Error(error), ladder: None, sent: None, launched: None }
+        Self { decision: TickDecision::Error(error), ladder: None, sent: None, launched: None, trust: None }
     }
 
     /// 梯子の手前で止まった周（移動の門で止まった周も梯子を評価しない側）。
     fn noop(reason: NoopReason) -> Self {
-        Self { decision: TickDecision::Noop(reason), ladder: None, sent: None, launched: None }
+        Self { decision: TickDecision::Noop(reason), ladder: None, sent: None, launched: None, trust: None }
     }
 
     /// 梯子を評価した後で止まった周。
     fn noop_at(reason: NoopReason, pointer: Pointer, step: u32) -> Self {
-        Self { decision: TickDecision::Noop(reason), ladder: Some((pointer, step)), sent: None, launched: None }
+        Self { decision: TickDecision::Noop(reason), ladder: Some((pointer, step)), sent: None, launched: None, trust: None }
     }
 
     /// 移動の周の 1 手（梯子を評価しない＝`pointer=- step=-`）。
     fn moved(step: Move, sent: Option<Sent>, launched: Option<&'static str>) -> Self {
-        Self { decision: TickDecision::Move(step), ladder: None, sent, launched }
+        Self { decision: TickDecision::Move(step), ladder: None, sent, launched, trust: None }
     }
 }
 
 /// 判定行（stdout の 1 行）。`pointer=` / `step=` は梯子を評価した周だけ・`consumed=` は送った周だけ・`move=` は移動の周だけ・
-/// `launched=` は起こした移動の周だけ（他は `-`・列は固定で省かない）。
+/// `launched=` は起こした移動の周だけ（他は `-`・列は固定で省かない）。起こせた周だけ `launched=` の後ろに `trust=<語>`。
 pub fn render(target: &str, verdict: &Verdict) -> String {
     let sent = verdict.sent.is_some();
     let (pointer, step) =
@@ -435,11 +437,12 @@ pub fn render(target: &str, verdict: &Verdict) -> String {
         TickDecision::Inject | TickDecision::Noop(_) | TickDecision::Error(_) => DASH,
     };
     format!(
-        "decision={} target={} reason={} pointer={pointer} step={step} consumed={consumed} move={moved} launched={}",
+        "decision={} target={} reason={} pointer={pointer} step={step} consumed={consumed} move={moved} launched={}{}",
         verdict.decision.as_str(),
         sanitize_target(target),
         verdict.decision.reason(),
-        verdict.launched.unwrap_or(DASH)
+        verdict.launched.unwrap_or(DASH),
+        verdict.trust.map(|word| format!(" trust={word}")).unwrap_or_default()
     )
 }
 
@@ -605,7 +608,11 @@ fn wake(input: &Input, manifest: &Manifest, front: &Front, account: &str) -> Ver
         carry: &[],
         replace_own: false,
     });
-    Verdict::moved(Move::Launch, None, Some(launched_word(&launched)))
+    let trust = match &launched {
+        Launched::Done(_, _, trust) => Some(trust.as_str()),
+        Launched::None(_) | Launched::Refused(_) | Launched::Failed(_) => None,
+    };
+    Verdict { trust, ..Verdict::moved(Move::Launch, None, Some(launched_word(&launched))) }
 }
 
 /// 起動の結果の語（起こせた周は [`LAUNCHED_DONE`]・他は断り・失敗の理由）。
@@ -663,6 +670,7 @@ fn back(input: &Input, front: &Front) -> Result<Verdict, Verdict> {
         ladder: Some((front.pointer, front.step)),
         sent: Some(Sent::of(delivery)),
         launched: None,
+        trust: None,
     })
 }
 
@@ -879,7 +887,7 @@ mod tests {
             "decision=noop target=s_w reason=stamp-recent pointer=wait:0 step=0 consumed=- move=- launched=-"
         );
         let sent =
-            |found| Verdict { decision: TickDecision::Inject, ladder: Some((Pointer::Open, 1)), sent: Some(found), launched: None };
+            |found| Verdict { decision: TickDecision::Inject, sent: Some(found), ..Verdict::noop_at(NoopReason::Wait, Pointer::Open, 1) };
         assert_eq!(
             render("s:w", &sent(Sent::Settled(Settled::Queued))),
             "decision=inject target=s_w reason=- pointer=sent step=1 consumed=false move=- launched=-"
@@ -911,6 +919,11 @@ mod tests {
         assert_eq!(
             render("s:w", &Verdict::moved(Move::Launch, None, Some("launch-unconfirmed"))),
             "decision=move target=s_w reason=- pointer=- step=- consumed=- move=launch launched=launch-unconfirmed"
+        );
+        assert_eq!(
+            render("s:w", &Verdict { trust: Some("written"), ..Verdict::moved(Move::Launch, None, Some("done")) }),
+            "decision=move target=s_w reason=- pointer=- step=- consumed=- move=launch launched=done trust=written",
+            "起こせた周は launched= の後ろに trust="
         );
         assert_eq!(
             render("s:w", &Verdict::moved(Move::Exit, Some(Sent::Settled(Settled::Queued)), None)),

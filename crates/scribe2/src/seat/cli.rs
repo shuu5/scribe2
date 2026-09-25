@@ -595,6 +595,11 @@ fn launch_with(flags: &LaunchFlags, place: &LaunchPlace) -> Outcome {
         }
         _ => line,
     };
+    // 注入の周は起動の前に置いた trust の印の語を行の末尾に添える（設計 host-init.md §7 形 4）。
+    let line = match &result {
+        cycle::Launched::Done(_, _, trust) => format!("{line} trust={}", trust.as_str()),
+        _ => line,
+    };
     match result {
         cycle::Launched::Done(..) => Outcome::ok_line(line),
         cycle::Launched::None(_) | cycle::Launched::Refused(_) | cycle::Launched::Failed(_) => Outcome::failed_line(RC_REFUSED, line),

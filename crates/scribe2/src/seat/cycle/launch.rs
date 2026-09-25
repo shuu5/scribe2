@@ -3,6 +3,7 @@
 //! [`super`] から純移動（`s2-07l.319`）。起動の注入は立て直しと**同じ 1 本**（[`super::relaunch::boot`]）を通る。
 
 use super::relaunch::{boot, choose, input_gate, launch_line, Boot, Booted};
+use crate::account::TrustWrite;
 use super::{
     EFFORT_FLAG, HOLE, MODEL_FLAG, NEXT_AFTER_NOT_SHELL, REASON_ACCOUNT_UNKNOWN, REASON_EFFORT_DUPLICATED,
     REASON_LOG_UNREADABLE, REASON_MODEL_DUPLICATED, REASON_MODEL_MISMATCH, REASON_MODEL_UNKNOWN, REASON_NOT_SHELL,
@@ -204,8 +205,8 @@ pub const REASON_GROUP_RECORD: &str = "group-record-unreadable";
 
 /// 席の起動 1 回の結果。**「送っていない」と「送ったが確かめられない」を分ける**（[`super::Relaunched`] と同じ）。
 pub enum Launched {
-    /// 起動行を注入して立ち上がりを確かめた（選んだ label・`--restore` を送った周はその消費）。
-    Done(String, Option<inject::Settled>),
+    /// 起動行を注入して立ち上がりを確かめた（選んだ label・`--restore` を送った周はその消費・起動の前に trust の印を置いた結果）。
+    Done(String, Option<inject::Settled>, TrustWrite),
     /// 選べる口座が無い（**1 key も送らず row も書かない**）。
     None(NoCandidate),
     /// **1 key も送っていない**（前提の断りは全部ここで、**row を 1 件も書いていない**＝設計 seat-roles.md §26 の約束 5）。
@@ -242,9 +243,11 @@ pub fn launch(request: &Launch) -> Launched {
         Ok(found) => with_tail(&found, request.carry),
         Err(reason) => return Launched::Refused(reason),
     };
+    // 置き換えと注入の分岐の前に 1 回だけ、選んだ口座 × anchor の trust の印を置く（host-init.md §7・どの語でも起動は止めない）。
+    let trust = crate::account::accept_trust(&crate::fleet::account_dir(&request.state_dir.path, &label), &anchor);
     if same {
         // 記帳まで済ませてから置き換える（成功する周は返らない＝以後、器の行は 1 つも出ない）。
-        record_launch(request, &label, started_at);
+        record_launch(request, &label, trust, started_at);
         return Launched::Failed(replace_with(&line));
     }
     let common = Boot {
@@ -257,10 +260,10 @@ pub fn launch(request: &Launch) -> Launched {
     };
     let dir = crate::seat::seat_dir(&request.state_dir.path, request.target);
     let booted = boot(&common, &dir, (&line, WHEN_LAUNCH), || Ok(()));
-    record_launch(request, &label, started_at);
+    record_launch(request, &label, trust, started_at);
     match booted {
-        Booted::Done(Some(inject::Settled::Consumed)) => Launched::Done(label, Some(inject::Settled::Consumed)),
-        Booted::Done(None) => Launched::Done(label, None),
+        Booted::Done(Some(inject::Settled::Consumed)) => Launched::Done(label, Some(inject::Settled::Consumed), trust),
+        Booted::Done(None) => Launched::Done(label, None, trust),
         Booted::Done(Some(_)) => Launched::Failed(REASON_RESTORE),
         Booted::Failed(reason) => Launched::Failed(reason),
     }
@@ -384,11 +387,12 @@ pub(super) fn before_deadline(now: Instant, deadline: Option<Instant>) -> bool {
     deadline.is_some_and(|at| now < at)
 }
 
-/// 起動を `inject.jsonl` に 1 行記録する（`who=seat-launch`・`what` は `decision=inject … kind=launch` の形・
+/// 起動を `inject.jsonl` に 1 行記録する（`who=seat-launch`・`what` は `decision=inject … kind=launch … trust=<語>` の形・
 /// `when=launch`）。**置き場へ書けない周も結果を変えない**。
-fn record_launch(request: &Launch, label: &str, started: Instant) {
+fn record_launch(request: &Launch, label: &str, trust: TrustWrite, started: Instant) {
     let kind = super::KIND_LAUNCH;
-    let what = format!("decision=inject target={} kind={kind} account={label}", sanitize_target(request.target));
+    let what =
+        format!("decision=inject target={} kind={kind} account={label} trust={}", sanitize_target(request.target), trust.as_str());
     let entry = InjectionRecord {
         schema: SCHEMA,
         who: WHO_LAUNCH.to_owned(),
@@ -414,8 +418,8 @@ pub fn render_launched(target: &str, result: &Launched, state: &StateDir, groupe
     let suffix = state.suffix();
     let target = sanitize_target(target);
     match result {
-        Launched::Done(label, None) => format!("seat launch: launched target={target} account={label}{suffix}"),
-        Launched::Done(label, Some(settled)) => {
+        Launched::Done(label, None, _) => format!("seat launch: launched target={target} account={label}{suffix}"),
+        Launched::Done(label, Some(settled), _) => {
             format!("seat launch: launched target={target} account={label} consumed={}{suffix}", settled.as_str())
         }
         Launched::None(found) => {

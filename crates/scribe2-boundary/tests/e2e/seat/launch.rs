@@ -80,7 +80,7 @@ fn seat_launch_creates_the_window_and_injects_the_derived_line_once() {
 
     let line = stdout_of(&out);
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={}", stderr_of(&out));
-    assert_eq!(line, format!("seat launch: launched target={name}_seat account=l2{}\n", provenance(&place.state, "flag")));
+    assert_eq!(line, format!("seat launch: launched target={name}_seat account=l2{} trust=unwritable\n", provenance(&place.state, "flag")));
     assert_eq!(launch_tmux_calls(&place, "new-window"), 1, "window を 1 回作る");
     assert!(
         fs::read_to_string(place.dir.join(LAUNCH_TMUX_ARGS)).unwrap_or_default().lines().any(|found| found.ends_with(&format!("new-window -t ={name}: -n seat"))),
@@ -383,7 +383,7 @@ fn seat_launch_short_form_reuses_the_registered_row_target_and_model() {
 
     let line = stdout_of(&out);
     assert_eq!(rc_of(&out), i32::from(RC_OK), "短い形: stdout={line} stderr={} pane={}", stderr_of(&out), capture(&place.socket, &target));
-    assert_eq!(line, format!("seat launch: launched target={name}_seat account=l2{}\n", provenance(&place.state, "flag")));
+    assert_eq!(line, format!("seat launch: launched target={name}_seat account=l2{} trust=unwritable\n", provenance(&place.state, "flag")));
     assert_eq!(launch_tmux_calls(&place, "new-window"), 1, "短い形は window を作らない（在る window へ起こす）");
     let injected = launch_inject_rows(&place);
     assert_eq!(injected.len(), 2, "長い形と短い形の kind=launch が 1 行ずつ: {injected:?}");
@@ -614,7 +614,7 @@ fn seat_entry_short_form_defaults_the_role_to_orchestrator() {
 
     let line = stdout_of(&out);
     assert_eq!(rc_of(&out), i32::from(RC_OK), "1 語: stdout={line} stderr={} pane={}", stderr_of(&out), capture(&place.socket, &target));
-    assert_eq!(line, format!("seat launch: launched target={name}_seat account=l2{}\n", provenance(&place.state, "flag")));
+    assert_eq!(line, format!("seat launch: launched target={name}_seat account=l2{} trust=unwritable\n", provenance(&place.state, "flag")));
     assert_eq!(launch_tmux_calls(&place, "new-window"), 1, "1 語は window を作らない（row の target の窓へ起こす）");
     let injected = launch_inject_rows(&place);
     assert_eq!(injected.len(), 2, "長い形と 1 語の kind=launch が 1 行ずつ: {injected:?}");
@@ -658,7 +658,7 @@ fn seat_entry_target_defaults_to_the_caller_session_and_role() {
 
     let line = stdout_of(&out);
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={} pane={}", stderr_of(&out), capture(&place.socket, &target));
-    assert_eq!(line, format!("seat launch: launched target={name}_orchestrator account=l2{}\n", provenance(&place.state, "flag")));
+    assert_eq!(line, format!("seat launch: launched target={name}_orchestrator account=l2{} trust=unwritable\n", provenance(&place.state, "flag")));
     assert_eq!(launch_tmux_calls(&place, "new-window"), 1, "役割の名の窓を 1 回作る");
     let rows = acct_rows(&place.state);
     assert_eq!(rows.len(), 1, "登録 row は 1 件: {rows:?}");
@@ -820,7 +820,7 @@ fn seat_entry_relabels_the_registered_row_for_another_account() {
 
     let line = stdout_of(&out);
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={} pane={}", stderr_of(&out), capture(&place.socket, &target));
-    assert_eq!(line, format!("seat launch: launched target={name}_seat account=l1{}\n", provenance(&place.state, "flag")));
+    assert_eq!(line, format!("seat launch: launched target={name}_seat account=l1{} trust=unwritable\n", provenance(&place.state, "flag")));
     let rows = acct_rows(&place.state);
     assert_eq!(rows.len(), 2, "{rows:?}");
     assert_eq!(
@@ -857,7 +857,7 @@ fn seat_launch_short_form_keeps_known_verbs() {
 
     let line = stdout_of(&out);
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={}", stderr_of(&out));
-    assert_eq!(line, format!("seat launch: launched target={name}_seat account=l2{}\n", provenance(&place.state, "flag")));
+    assert_eq!(line, format!("seat launch: launched target={name}_seat account=l2{} trust=unwritable\n", provenance(&place.state, "flag")));
     assert_eq!(launch_tmux_calls(&place, "new-window"), 1, "window を 1 回作る");
     assert_eq!(fs::read_to_string(place.dir.join("launched")).unwrap_or_default(), launch_defaults_argv(&place, "l2"), "導出した行が 1 回だけ届く");
     launch_assert_registered_before_send(&place, &target, "l2");
@@ -973,7 +973,7 @@ fn seat_defaults_short_form_derives_the_model_without_a_row() {
 
     let line = stdout_of(&out);
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={} pane={}", stderr_of(&out), capture(&place.socket, &target));
-    assert_eq!(line, format!("seat launch: launched target={name}_orchestrator account=l2{}\n", provenance(&place.state, "flag")));
+    assert_eq!(line, format!("seat launch: launched target={name}_orchestrator account=l2{} trust=unwritable\n", provenance(&place.state, "flag")));
     assert_eq!(fs::read_to_string(place.dir.join("launched")).unwrap_or_default(), launch_defaults_argv(&place, "l2"), "行の既定を運ぶ");
     let rows = acct_rows(&place.state);
     assert_eq!(
@@ -999,6 +999,9 @@ const GROUP_TARGET: &str = "gl:seat";
 /// 偽 tmux の前面の file（在ればその中身を `list-panes` が返す・無ければ `bash`＝shell）。
 const GROUP_FRONT: &str = "group-front";
 
+/// 偽 tmux の呼び手の target の file（在れば `display-message` がその中身を返す・無ければ rc 1＝呼び手は target でない）。
+const GROUP_CALLER: &str = "group-caller";
+
 /// 群の歯の置き場: [`launch_place`] の host の面に群 `g`（置き場 = この置き場の anchor か、`outside` なら別の `/elsewhere`・候補 =
 /// l1 → l2）を足し、偽 tmux だけの PATH を返す。`record` が在れば群の今の口座の記録（host の根の群用 dir の `g.account`）を置く。
 fn launch_group_place(outside: bool, record: Option<&str>) -> (AcctPlace, String) {
@@ -1016,11 +1019,12 @@ fn launch_group_place(outside: bool, record: Option<&str>) -> (AcctPlace, String
     let bin = place.dir.join("group-bin");
     fs::create_dir_all(&bin).ok();
     let (args, launched, seats) = (place.dir.join(LAUNCH_TMUX_ARGS), place.dir.join(GROUP_LAUNCHED), place.state.join("seat"));
-    let front = place.dir.join(GROUP_FRONT);
+    let (front, caller) = (place.dir.join(GROUP_FRONT), place.dir.join(GROUP_CALLER));
     let tmux = format!(
         "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{args}'\nt=''; p=''\nfor a in \"$@\"; do [ \"$p\" = '-t' ] && t=\"$a\"; p=\"$a\"; done\n\
          f=$(printf '%s' \"$t\" | tr ':' '_')\ncase \"$1\" in\n\
          has-session) exit 0;;\nlist-windows) echo seat;;\nlist-panes) cat '{front}' 2>/dev/null || echo bash;;\n\
+         display-message) cat '{caller}' 2>/dev/null || exit 1;;\n\
          capture-pane) printf '$ \\n';;\n\
          send-keys) if [ \"$4\" = \"-l\" ]; then printf '%s\\n' \"$5\" >> '{launched}'\n\
          elif [ \"$4\" = \"Enter\" ]; then mkdir -p '{seats}/'\"$f\"\n\
@@ -1030,6 +1034,7 @@ fn launch_group_place(outside: bool, record: Option<&str>) -> (AcctPlace, String
         launched = launched.display(),
         seats = seats.display(),
         front = front.display(),
+        caller = caller.display(),
     );
     fs::write(bin.join("tmux"), tmux).ok();
     fs::set_permissions(bin.join("tmux"), fs::Permissions::from_mode(0o755)).ok();
@@ -1068,11 +1073,12 @@ fn launch_group_tmux_calls(place: &AcctPlace, verb: &str) -> usize {
         .count()
 }
 
-/// 起こした周の 3 面: rc 0・成立の行の口座は `label`・起動行はその口座の dir を運び、最新の登録 row の口座も `label`。
+/// 起こした周の 3 面: rc 0・成立の行の口座は `label`（口座の dir が無い fixture なので末尾は `trust=unwritable`）・起動行はその
+/// 口座の dir を運び、最新の登録 row の口座も `label`。
 fn launch_group_assert_launched(place: &AcctPlace, out: &Output, label: &str, case: &str) {
     let line = stdout_of(out);
     assert_eq!(rc_of(out), i32::from(RC_OK), "{case}: stdout={line} stderr={}", stderr_of(out));
-    assert_eq!(line, format!("seat launch: launched target=gl_seat account={label}{}\n", provenance(&place.state, "flag")), "{case}");
+    assert_eq!(line, format!("seat launch: launched target=gl_seat account={label}{} trust=unwritable\n", provenance(&place.state, "flag")), "{case}");
     let sent = fs::read_to_string(place.dir.join(GROUP_LAUNCHED)).unwrap_or_default();
     let dir = place.state.join("accounts").join(label).display().to_string();
     assert!(sent.lines().last().is_some_and(|found| found.contains(&format!("CLAUDE_CONFIG_DIR={dir} "))), "{case}: {sent}");
@@ -1178,9 +1184,9 @@ impl LaunchTick {
         fs::read_to_string(self.place.dir.join(LAUNCH_TICK_CALLS)).unwrap_or_default().lines().map(str::to_owned).collect()
     }
 
-    /// 成立の行（`tail` は置き場の 2 語の後ろ・空なら表の無い host の行そのもの）。
+    /// 成立の行（`tail` は置き場の 2 語の後ろ・空なら表の無い host の行そのもの・末尾は口座の dir が無い周の `trust=` の語）。
     fn launched(&self, tail: &str) -> String {
-        format!("seat launch: launched target=gl_seat account=l1{}{tail}\n", provenance(&self.place.state, "flag"))
+        format!("seat launch: launched target=gl_seat account=l1{}{tail} trust=unwritable\n", provenance(&self.place.state, "flag"))
     }
 }
 
@@ -1333,4 +1339,148 @@ fn seat_launch_group_next_leaves_other_refusals_unchanged() {
     let out = launch_group_long(&outside, &path, &["--account", "zz"]);
     assert_eq!(stderr_of(&out), launch_group_refused_line(&outside, "account-unknown", None), "群の外の断りは next 無し");
     fs::remove_dir_all(&outside.dir).ok();
+}
+
+// ───── 口座 × anchor の trust を起動の前に置く（host-init.md §7・契約表の行 e・ADR-0065・接頭辞 `seat_launch_trust_`） ─────
+
+/// 口座 `l2` の設定 file（置き場の `accounts/l2/.claude.json`）。
+fn trust_file(place: &AcctPlace) -> PathBuf {
+    place.state.join("accounts").join("l2").join(".claude.json")
+}
+
+/// 実物の `.claude.json` の書式（2 空白の入れ子・末尾改行あり）の本文: 他の key（30 桁の数を含む）と別 anchor の項目を持ち、
+/// `extra` を projects の末尾に足す（空なら足さない）。
+fn trust_body(extra: &str) -> String {
+    format!(
+        "{{\n  \"numStartups\": 12,\n  \"projects\": {{\n    \"/elsewhere\": {{\n      \"allowedTools\": [],\n      \
+         \"hasTrustDialogAccepted\": false\n    }}{extra}\n  }},\n  \"userID\": \"abc\",\n  \"big\": 123456789012345678901234567890\n}}\n"
+    )
+}
+
+/// 当該 anchor の印の項目（[`trust_body`] の `extra` の形・器の字面を借りない）。
+fn trust_entry(place: &AcctPlace) -> String {
+    format!(",\n    \"{}\": {{\n      \"hasTrustDialogAccepted\": true\n    }}", launch_anchor(place))
+}
+
+/// 群の外の置き場（§20 の fixture・偽 tmux だけで本物の tmux を立てない）で口座 l2 の dir を作り、`body` の本文を `.claude.json`
+/// に置いて（`None` は置かない）、`before` の後に長い形の `--account l2` で起こす。
+fn trust_launch(body: impl Fn(&AcctPlace) -> Option<String>, before: impl Fn(&AcctPlace)) -> (AcctPlace, Output) {
+    let (place, path) = launch_group_place(true, None);
+    fs::create_dir_all(place.state.join("accounts").join("l2")).ok();
+    if let Some(body) = body(&place) {
+        fs::write(trust_file(&place), body).ok();
+    }
+    before(&place);
+    let out = launch_group_long(&place, &path, &["--account", "l2"]);
+    (place, out)
+}
+
+/// 起動行が l2 の口座の dir を運んで 1 本届き、stdout の 1 行の末尾と inject の記録の `what` の末尾が `trust=<word>`。
+fn trust_assert_launched(place: &AcctPlace, out: &Output, word: &str) {
+    let line = stdout_of(out);
+    assert_eq!(rc_of(out), i32::from(RC_OK), "stdout={line} stderr={}", stderr_of(out));
+    assert!(line.starts_with("seat launch: launched ") && line.ends_with(&format!(" trust={word}\n")), "{line}");
+    let sent = fs::read_to_string(place.dir.join(GROUP_LAUNCHED)).unwrap_or_default();
+    let dir = place.state.join("accounts").join("l2").display().to_string();
+    assert!(sent.lines().count() == 1 && sent.contains(&format!("CLAUDE_CONFIG_DIR={dir} ")), "起動行は送られる: {sent}");
+    let injected = launch_inject_rows(place);
+    assert_eq!(injected.len(), 1, "{injected:?}");
+    assert!(injected.first().is_some_and(|(_, what)| what.ends_with(&format!(" trust={word}"))), "記録の what の末尾: {injected:?}");
+}
+
+/// 他の key と別 anchor の項目を持ち当該 anchor の無い file の周は、当該 anchor の印だけが projects の末尾に増え（他の key・並び・
+/// 値・末尾改行は同じ＝全文が一致）、parse で当該の項目を除けば元と同じ木・`trust=written`。base は file が変わらない（RED）。
+#[test]
+fn seat_launch_trust_writes_only_the_mark_and_names_it_at_the_tail() {
+    use vessel::fleet::json_tree::{parse, Tree};
+    let (place, out) = trust_launch(|_| Some(trust_body("")), |_| {});
+    trust_assert_launched(&place, &out, "written");
+    let written = fs::read_to_string(trust_file(&place)).unwrap_or_default();
+    assert_eq!(written, trust_body(&trust_entry(&place)), "当該の印だけが増える");
+    let anchor = launch_anchor(&place);
+    let strip = |tree: Tree| match tree {
+        Tree::Object(pairs) => Tree::Object(
+            pairs
+                .into_iter()
+                .map(|(key, value)| match value {
+                    Tree::Object(items) if key == "projects" => (key, Tree::Object(items.into_iter().filter(|(at, _)| *at != anchor).collect())),
+                    other => (key, other),
+                })
+                .collect(),
+        ),
+        other => other,
+    };
+    assert_eq!(parse(&written).map(strip), parse(&trust_body("")), "他の key・並び・値は parse で同じ木");
+    assert_eq!(fs::read_dir(place.state.join("accounts").join("l2")).map(Iterator::count).unwrap_or_default(), 1, "一時 file は残らない");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// 同じ窓へ置き換える周（約束 7・偽 tmux が呼び手の target に同じ字面を返す）も分岐の前に印を置く: key は 1 つも送らず器の行も
+/// 出ず、置き換えた先（偽 claude）が起動時に写した file は既に印を持ち、exec の前に書く記録の `what` の末尾は `trust=written`。
+/// base は記録に `trust=` が無く file も変わらない（RED）。
+#[test]
+fn seat_launch_trust_same_window_marks_before_the_exec() {
+    let (place, path) = launch_group_place(true, None);
+    fs::write(place.dir.join(GROUP_CALLER), GROUP_TARGET).ok();
+    let (claude, seen) = (place.dir.join("group-bin").join("claude"), place.dir.join("claude-saw"));
+    fs::write(&claude, format!("#!/bin/sh\ncat '{}' > '{}'\n", trust_file(&place).display(), seen.display())).ok();
+    fs::set_permissions(&claude, fs::Permissions::from_mode(0o755)).ok();
+    fs::create_dir_all(place.state.join("accounts").join("l2")).ok();
+    fs::write(trust_file(&place), trust_body("")).ok();
+
+    let out = launch_group_long(&place, &path, &["--account", "l2"]);
+
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={} stderr={}", stdout_of(&out), stderr_of(&out));
+    assert!(!stdout_of(&out).contains("seat launch:"), "置き換えの後に器の行は出ない: {}", stdout_of(&out));
+    assert_eq!(launch_group_tmux_calls(&place, "send-keys"), 0, "1 key も送らない");
+    assert_eq!(fs::read_to_string(&seen).unwrap_or_default(), trust_body(&trust_entry(&place)), "exec の先が起動時に読む file に印");
+    let injected = launch_inject_rows(&place);
+    assert!(injected.len() == 1 && injected.iter().all(|(_, what)| what.ends_with(" trust=written")), "exec の前の記録: {injected:?}");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// 既に true の周は 1 byte も書かない（全文も mtime も同じ）・`trust=accepted`。
+#[test]
+fn seat_launch_trust_already_true_writes_nothing() {
+    let mtime = |place: &AcctPlace| fs::metadata(trust_file(place)).and_then(|found| found.modified()).ok();
+    let seen = std::cell::Cell::new(None);
+    let (place, out) = trust_launch(|place| Some(trust_body(&trust_entry(place))), |place| seen.set(mtime(place)));
+    trust_assert_launched(&place, &out, "accepted");
+    assert_eq!(fs::read_to_string(trust_file(&place)).unwrap_or_default(), trust_body(&trust_entry(&place)), "全文は同じ");
+    assert!(seen.get().is_some() && mtime(&place) == seen.get(), "mtime も動かない");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// file が無い周は `projects` だけの最小の file（2 空白・末尾改行あり）を作って印を置く・`trust=created`。
+#[test]
+fn seat_launch_trust_missing_file_is_created_minimal() {
+    let (place, out) = trust_launch(|_| None, |_| {});
+    trust_assert_launched(&place, &out, "created");
+    let want = format!("{{\n  \"projects\": {{\n    \"{}\": {{\n      \"hasTrustDialogAccepted\": true\n    }}\n  }}\n}}\n", launch_anchor(&place));
+    assert_eq!(fs::read_to_string(trust_file(&place)).unwrap_or_default(), want, "projects だけの最小の file");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// JSON でない file の周は 1 byte も変えず `trust=unreadable`・起動行は送られる（起動は止めない）。
+#[test]
+fn seat_launch_trust_unreadable_file_is_left_and_the_launch_goes_on() {
+    let (place, out) = trust_launch(|_| Some("not json\n".to_owned()), |_| {});
+    trust_assert_launched(&place, &out, "unreadable");
+    assert_eq!(fs::read_to_string(trust_file(&place)).unwrap_or_default(), "not json\n", "変えない");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// 口座の dir が読み取り専用の周は一時 file を書けず、file を変えず `trust=unwritable`・起動行は送られる。
+#[test]
+fn seat_launch_trust_read_only_dir_is_unwritable_and_the_launch_goes_on() {
+    let dir = |place: &AcctPlace| place.state.join("accounts").join("l2");
+    let lock = |place: &AcctPlace| {
+        fs::set_permissions(dir(place), fs::Permissions::from_mode(0o555)).ok();
+    };
+    let (place, out) = trust_launch(|_| Some(trust_body("")), lock);
+    fs::set_permissions(dir(&place), fs::Permissions::from_mode(0o755)).ok();
+    trust_assert_launched(&place, &out, "unwritable");
+    assert_eq!(fs::read_to_string(trust_file(&place)).unwrap_or_default(), trust_body(""), "変えない");
+    assert_eq!(fs::read_dir(dir(&place)).map(Iterator::count).unwrap_or_default(), 1, "一時 file は残らない");
+    fs::remove_dir_all(&place.dir).ok();
 }

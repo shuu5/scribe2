@@ -274,6 +274,70 @@ fn probe_account(dir: &Path, anchors: Option<&BTreeSet<String>>) -> AccountProbe
     }
 }
 
+// ─────────────────────────── trust の書き手（席の起動の 1 本だけが撃つ） ───────────────────────────
+
+/// 口座の設定 dir の直下の Claude Code の設定 file（trust の印の置き場・読みは [`probe_account`]）。
+const CLAUDE_FILE: &str = ".claude.json";
+
+/// 起動の前に trust の印を置いた結果（設計 host-init.md §7 形 3・**閉じた列**・起動の行の末尾の `trust=` の語）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrustWrite {
+    /// 印を置いて書き戻した。
+    Written,
+    /// file が無く、`projects` だけの最小の file を作って置いた。
+    Created,
+    /// 既に `true`（1 byte も書かない）。
+    Accepted,
+    /// file は在るが読めない・JSON でない・途中が object でない・末端が真偽でない（書かない）。
+    Unreadable,
+    /// 一時 file の書き・読み直しの不一致・rename のどれかが落ちた（置き換えない）。
+    Unwritable,
+}
+
+impl TrustWrite {
+    /// 行の字面。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Written => "written",
+            Self::Created => "created",
+            Self::Accepted => "accepted",
+            Self::Unreadable => "unreadable",
+            Self::Unwritable => "unwritable",
+        }
+    }
+}
+
+/// 口座の dir `dir` の `.claude.json` の `projects[<anchor>].hasTrustDialogAccepted` を `true` に置く（設計 host-init.md §7 形 2・
+/// ADR-0065）: 同じ読み手で読み → 木に印を置き（[`json_tree::set_bool`]）→ `render` の本文（元の file に末尾の改行が在れば保つ）を
+/// 同じ dir の一時 file に書き → 読み直して印が `true` かを確かめ → rename で置き換える。file が無い周は空の木から作る（末尾の改行
+/// あり）。既に `true` の周は書かない。lock は持たない（同じ file を書く Claude Code とは共有しない・§7 形 6）。
+pub fn accept_trust(dir: &Path, anchor: &str) -> TrustWrite {
+    let path = dir.join(CLAUDE_FILE);
+    let (mut tree, newline, created) = match fs::read_to_string(&path) {
+        Ok(text) => match json_tree::parse(&text) {
+            Ok(tree) => (tree, text.ends_with('\n'), false),
+            Err(_) => return TrustWrite::Unreadable,
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => (Tree::Object(Vec::new()), true, true),
+        Err(_) => return TrustWrite::Unreadable,
+    };
+    let key = ["projects", anchor, "hasTrustDialogAccepted"];
+    match json_tree::set_bool(&mut tree, &key, true) {
+        Ok(true) => {}
+        Ok(false) => return TrustWrite::Accepted,
+        Err(_) => return TrustWrite::Unreadable,
+    }
+    let staged = dir.join(format!("{CLAUDE_FILE}.{}.staged", std::process::id()));
+    let body = format!("{}{}", json_tree::render(&tree), if newline { "\n" } else { "" });
+    let mode = fs::metadata(&path).map(|found| found.permissions());
+    let written = fs::write(&staged, body).and_then(|()| mode.map_or(Ok(()), |found| fs::set_permissions(&staged, found)));
+    if written.is_ok() && flag_at(read_tree(&staged).as_ref(), &key) == Ok(true) && fs::rename(&staged, &path).is_ok() {
+        return if created { TrustWrite::Created } else { TrustWrite::Written };
+    }
+    let _ = fs::remove_file(&staged);
+    TrustWrite::Unwritable
+}
+
 /// 口座 1 行（pure・doctor と `account ls` の同じ 1 関数）。trust は anchor が 1 つなら `trust=<値>`・複数なら anchor ごとに
 /// `trust=<潰した anchor>:<値>` を並べ（潰し方は席の dir 名と同じ [`seat::sanitize_target`]）、末尾に `retired=<値>`。
 pub fn render_account(label: &str, probe: &AccountProbe, retired: Retired) -> String {
@@ -728,7 +792,10 @@ fn record(state_dir: &Path, kind: EventKind, label: &str, ts: &str) -> Result<()
 
 #[cfg(test)]
 mod tests {
-    use super::{capture_joined, label_ok, login_line, retired_path, stage_host, staged_fits, summary, AccountError, ERRORS};
+    use super::{
+        accept_trust, capture_joined, label_ok, login_line, retired_path, stage_host, staged_fits, summary, AccountError, TrustWrite,
+        CLAUDE_FILE, ERRORS,
+    };
     use crate::fleet::{Allowance, AllowanceLatest, Measured, State, Unmeasured, UnmeasuredReason, WindowKind};
     use crate::order::is_declaration_order;
     use crate::pipe::fixture::{exited, Call, Stub};
@@ -857,6 +924,21 @@ mod tests {
         let staged = dir.join("host.toml.staged");
         assert!(fs::write(&staged, body).is_ok(), "一時 file を書ける");
         staged_fits(&staged, label)
+    }
+
+    /// trust の書き手は末尾の改行を元の file に合わせる（無い file は無いまま・host-init.md §7 形 2）・2 度目は `accepted` で
+    /// 全文が変わらない。
+    #[test]
+    fn account_trust_keeps_the_trailing_newline_of_the_original() {
+        let dir = scratch("trust-newline");
+        let file = dir.join(CLAUDE_FILE);
+        assert!(fs::write(&file, "{\"k\": 1}").is_ok(), "fixture を書ける");
+        assert_eq!(accept_trust(&dir, "/r"), TrustWrite::Written);
+        let want = "{\n  \"k\": 1,\n  \"projects\": {\n    \"/r\": {\n      \"hasTrustDialogAccepted\": true\n    }\n  }\n}";
+        assert_eq!(fs::read_to_string(&file).ok().as_deref(), Some(want), "末尾の改行は足さない");
+        assert_eq!(accept_trust(&dir, "/r"), TrustWrite::Accepted);
+        assert_eq!(fs::read_to_string(&file).ok().as_deref(), Some(want), "2 度目は書かない");
+        let _ = fs::remove_dir_all(&dir);
     }
 
     // flip-check: retroactive s2-07l.283

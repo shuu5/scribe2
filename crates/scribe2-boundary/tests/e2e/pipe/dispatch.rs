@@ -2923,7 +2923,8 @@ fn groups_place(accounts: &[(&str, u64, u64, u64)], groups: &[GroupDecl<'_>]) ->
 /// §20 の移動の歯のために、席の前面を target ごとの file（`spy/front-<target>`・無ければ席＝`claude`）で持つ: 退避の合図
 /// （`group: evacuate`）を消費した席は前面が shell（`bash`）に戻り（`spy/stuck-<target>` が在る席は戻らない）、shell の前面は
 /// `list-panes` で `bash`・`capture-pane` で `$ ` の prompt を返す。shell の前面へ届いた Enter は起動行と読み、送った行を
-/// `spy/launched-<target>` へ・時刻（ns）を `spy/launch-at-<target>` へ写して `SessionStart` の打刻を足し、前面を席に戻す。
+/// `spy/launched-<target>` へ・時刻（ns）を `spy/launch-at-<target>` へ・その瞬間の口座の `.claude.json`（在るものを連結）を
+/// `spy/claude-at-<target>` へ写して `SessionStart` の打刻を足し、前面を席に戻す（host-init.md §7 の書きと送りの順を外から測る）。
 /// 退避の合図を受けた瞬間の時刻（ns）・event log の承認の行数・記録の有無を `spy/{evacuate-at,moved-at-evacuate,record-at-evacuate}-<target>`
 /// へ写す（4 手の順を外から測る）。`list-windows` は窓 `0` を返す（[`GROUP_ANCHORS`] の target の窓）。
 ///
@@ -2949,7 +2950,8 @@ fn group_tmux(state: &Path) {
     let (seats, spy) = (state.join("seat"), state.join("spy"));
     let (events, record) = (state.join("fleet").join("events.jsonl"), groups_dir(state).join(format!("{GROUP}.account")));
     let (pane, input, calls, seats, spy) = (pane.display(), input.display(), calls.display(), seats.display(), spy.display());
-    let (events, record) = (events.display(), record.display());
+    let (events, record, accounts) = (events.display(), record.display(), state.join("accounts"));
+    let accounts = accounts.display();
     script(
         &bin.join("tmux"),
         &format!(
@@ -2962,6 +2964,7 @@ fn group_tmux(state: &Path) {
              cat '{spy}/screen-'\"$f\"; else printf '\\342\\235\\257 '; cat '{input}'; printf '\\n'; fi;;\n\
              send-keys) if [ \"$4\" = \"-l\" ]; then printf '%s' \"$5\" >> '{input}'\n\
              elif [ \"$4\" = \"Enter\" ] && [ \"$shell\" = bash ]; then date +%s%N > '{spy}/launch-at-'\"$f\"\n\
+             cat '{accounts}'/*/.claude.json > '{spy}/claude-at-'\"$f\" 2>/dev/null\n\
              cat '{input}' >> '{spy}/launched-'\"$f\"; printf '\\n' >> '{spy}/launched-'\"$f\"; : > '{input}'; echo claude > \"$front\"\n\
              printf '{{\"schema\":1,\"state\":\"idle\",\"event\":\"SessionStart\",\"ts\":%s,\"sid\":\"\"}}\\n' \"$(date +%s)\" \
              >> '{seats}/'\"$f\"'/state.jsonl'\n\
@@ -3435,6 +3438,29 @@ fn pipe_dispatch_group_move_pressed_group_records_approves_evacuates_and_relaunc
         assert_eq!(seat_account_of(&place.state, anchor).as_deref(), Some("a2"), "{anchor} の登録 row は a2");
     }
     assert_eq!(group_notices(&place.state), Vec::new(), "移動した周は §19 の通知を送らない");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (trust・host-init.md §7 / 行 e・接頭辞 `pipe_dispatch_group_trust_`) 群の起こし直しの周は、移り先の口座 a2 の `.claude.json`
+/// （無い＝作る）に群の 2 つの anchor の印が置かれ、各 target へ起動行が送られた瞬間の写し（偽 tmux の `claude-at-<target>`）に
+/// その target の anchor の印が既に在る（書き → 送りの順）。base は file が作られない（RED）。
+#[test]
+fn pipe_dispatch_group_trust_marks_the_new_account_before_the_launch_line() {
+    use vessel::fleet::json_tree::parse;
+    let place = move_place(&[("a1", 90, 10, 10), ("a2", 10, 10, 10)], &["a1", "a2"], "a1");
+    let out = group_terminal(&place, "r-group-trust");
+    let marked = |text: &str, anchor: &str| {
+        let tree = parse(text).ok();
+        tree.as_ref().and_then(|found| found.get("projects")?.get(anchor)?.get("hasTrustDialogAccepted")?.as_bool()) == Some(true)
+    };
+    let file = fs::read_to_string(place.state.join("accounts").join("a2").join(".claude.json")).unwrap_or_default();
+    for (anchor, target) in GROUP_ANCHORS {
+        assert!(marked(&file, anchor), "{anchor} の印が a2 に在る（{}）: {file}", told(&out));
+        assert_eq!(launched_lines(&place.state, target).len(), 1, "{target} へ起動行 1 本");
+        let at = spy_of(&place.state, "claude-at", target).unwrap_or_default();
+        assert!(marked(&at, anchor), "{target} へ送った瞬間に {anchor} の印は既に在る: {at:?}");
+    }
+    assert!(!place.state.join("accounts").join("a1").join(".claude.json").exists(), "移る前の口座には書かない");
     clean(&[&place.repo, &place.state]);
 }
 

@@ -68,7 +68,7 @@
 - 出所: memo `s2-07l.604` の実地試験（穴 (a)）・台帳 `s2-07l.609` の notes の裁定（user 2026-09-24T22:56Z「推奨で良い」= 依存を足さず、既存の入れ子 JSON の読み手に書き手を足す形。2026-09-24T13:38Z の serde_json の受諾は前提の誤りで取り下げ）・2026-09-25T01:00Z の s3:design の移動（tick の `launched=launch-unconfirmed`・持ち主の手で trust を承認・台帳 `s2-07l.617` の notes）。
 - 現物（verified・main 80270bd）:
   - 読み手: `crates/scribe2/src/fleet/json_tree.rs` の `parse` / `Tree`（RFC 8259 の 6 形・数は 10 進の字面のまま・重複 key を拒む）と `render`（木を JSON に戻す）。`crates/scribe2/src/account/mod.rs` の `read_tree` / `flag_at` が doctor の `trust=<accepted|missing|unreadable>` の行で `projects[<anchor>].hasTrustDialogAccepted` を読む（読むだけ・`probe_account`）。
-  - 無いもの: 木の path に真偽を置く 1 関数と、置いた木を同じ file へ書き戻す 1 関数。
+  - 無いもの: 木の path に真偽を置く 1 関数と、置いた木を同じ file へ書き戻す 1 関数（行 e の着地で前者は `json_tree.rs` の `set_bool`、後者は `account/mod.rs` の `accept_trust`〔言葉は閉じた列 `TrustWrite`〕として足した）。
   - 席の起動の 1 本は `crates/scribe2/src/seat/cycle/launch.rs` の `launch`（model → 役割の既定 → 口座の選定 `pick_account` → 起動行の導出 → `prepare` が登録 row を書く → `boot` が注入）。呼び手は 3 つ: `crates/scribe2/src/seat/cli.rs`（長い形・短い形）・`crates/scribe2/src/pipe/dispatch/group.rs` の `relaunch`（群の起こし直し）・`crates/scribe2/src/seat/tick.rs`（tick の移動の周・seat-heartbeat.md §4）。席の立て直しの経路は ADR-0045 §2 (2) で消えており（`crates/scribe2/src/seat/cycle/relaunch.rs` が持つのは `boot` と初回の選定 `choose` だけ）、席の起こし直しは全部この 1 本を通る。`launch` は `prepare` の後で 2 つに分かれる: 呼び手の pane が target と同じ周（`replace_own`・約束 7）は `boot` を通らず自分の process を起動行へ exec で置き換えて返らない（stdout の 1 行も `Launched` も無い・記録は `record_launch` が exec の前に inject.jsonl へ 1 行）・それ以外は `boot` が注入する。結果は `Launched`（`Done(label, settled)` / `None` / `Refused` / `Failed`）。
   - 口座の dir は `<state_dir>/accounts/<label>`（実 dir か symlink・[account-autonomy.md](./account-autonomy.md) §5）。
 - 形（1 つずつ歯が測る・行 e の done と 1:1）:

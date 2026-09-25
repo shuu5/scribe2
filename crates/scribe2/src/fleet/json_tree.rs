@@ -193,6 +193,50 @@ pub fn render(tree: &Tree) -> String {
     out
 }
 
+/// 木の path に真偽を置けない理由（[`set_bool`]・閉じた 2 値）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SetError {
+    /// 根か途中の値が object でない（path が空の周も含む）。
+    NotAnObject,
+    /// 末端に真偽でない値が在る（上書きしない）。
+    NotABool,
+}
+
+/// `tree` の key の path（`path`）の末端に真偽 `value` を置く（設計 host-init.md §7 形 2・読み手の対の書き手）。
+///
+/// 途中の object が無ければ空の object を末尾に作り、兄弟の key と並びと値（数の字面を含む）は変えない。返り値は木を
+/// 変えたか（既に同じ値の周は `Ok(false)`＝1 つも変えない）。根か途中が object でない・末端が真偽でない周は `Err` で、
+/// その周に作られた途中の object が残りうるので、呼び手は木ごと捨てる（書き戻さない）。
+pub fn set_bool(tree: &mut Tree, path: &[&str], value: bool) -> Result<bool, SetError> {
+    let Some((last, parents)) = path.split_last() else { return Err(SetError::NotAnObject) };
+    let mut node = tree;
+    for key in parents {
+        let Tree::Object(pairs) = node else { return Err(SetError::NotAnObject) };
+        let at = match pairs.iter().position(|(found, _)| found == key) {
+            Some(at) => at,
+            None => {
+                pairs.push(((*key).to_owned(), Tree::Object(Vec::new())));
+                pairs.len().saturating_sub(1)
+            }
+        };
+        let Some((_, next)) = pairs.get_mut(at) else { return Err(SetError::NotAnObject) };
+        node = next;
+    }
+    let Tree::Object(pairs) = node else { return Err(SetError::NotAnObject) };
+    match pairs.iter_mut().find(|(found, _)| found == last) {
+        Some((_, Tree::Bool(found))) if *found == value => Ok(false),
+        Some((_, slot @ Tree::Bool(_))) => {
+            *slot = Tree::Bool(value);
+            Ok(true)
+        }
+        Some(_) => Err(SetError::NotABool),
+        None => {
+            pairs.push(((*last).to_owned(), Tree::Bool(value)));
+            Ok(true)
+        }
+    }
+}
+
 /// `depth` 段の入れ子の値を `out` に足す。
 fn write_tree(out: &mut String, tree: &Tree, depth: usize) {
     let inner = depth.saturating_add(1);
@@ -647,7 +691,56 @@ fn take_exp(text: &str) -> Option<i64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse, render, Tree};
+    use super::{parse, render, set_bool, SetError, Tree};
+
+    /// 入れ子の path への真偽の設置（host-init.md §7 形 2）: 途中の object が無ければ末尾に作り、兄弟の key と並びと数の字面
+    /// （30 桁）は保ち、`render` → `parse` で同じ木に戻る。既に同じ値なら木は不変（`Ok(false)`）・false は true へ置き換える。
+    #[test]
+    fn json_tree_set_creates_missing_objects_and_keeps_siblings() {
+        let big = "123456789012345678901234567890";
+        let text = format!("{{\"z\": {big}, \"projects\": {{\"/other\": {{\"hasTrustDialogAccepted\": true, \"n\": 1.50}}}}, \"a\": [null]}}");
+        let mut tree = parse(&text).unwrap_or(Tree::Null);
+        let before = tree.clone();
+        assert_eq!(set_bool(&mut tree, &["projects", "/repo", "hasTrustDialogAccepted"], true), Ok(true));
+        let Tree::Object(pairs) = &tree else { panic!("object: {tree:?}") };
+        let keys: Vec<&str> = pairs.iter().map(|(key, _)| key.as_str()).collect();
+        assert_eq!(keys, ["z", "projects", "a"], "根の並びは不変");
+        assert_eq!(tree.get("z"), Some(&Tree::Num(big.to_owned())), "数の字面は 30 桁のまま");
+        let projects = tree.get("projects").cloned().unwrap_or(Tree::Null);
+        assert_eq!(projects.get("/other"), before.get("projects").and_then(|found| found.get("/other")), "兄弟の anchor は不変");
+        let Tree::Object(anchors) = &projects else { panic!("projects: {projects:?}") };
+        assert_eq!(anchors.iter().map(|(key, _)| key.as_str()).collect::<Vec<_>>(), ["/other", "/repo"], "作った object は末尾");
+        assert_eq!(
+            projects.get("/repo"),
+            Some(&Tree::Object(vec![("hasTrustDialogAccepted".to_owned(), Tree::Bool(true))])),
+            "途中の object を作って末端に真偽を置く"
+        );
+        assert_eq!(parse(&render(&tree)), Ok(tree.clone()), "render → parse で同じ木");
+        let set = tree.clone();
+        assert_eq!(set_bool(&mut tree, &["projects", "/repo", "hasTrustDialogAccepted"], true), Ok(false), "既に true");
+        assert_eq!(tree, set, "既に true の周は木が変わらない");
+        let mut off = parse("{\"projects\": {\"/r\": {\"hasTrustDialogAccepted\": false, \"k\": 2}}}").unwrap_or(Tree::Null);
+        assert_eq!(set_bool(&mut off, &["projects", "/r", "hasTrustDialogAccepted"], true), Ok(true), "false は置き換える");
+        assert_eq!(render(&off), "{\n  \"projects\": {\n    \"/r\": {\n      \"hasTrustDialogAccepted\": true,\n      \"k\": 2\n    }\n  }\n}");
+        let mut empty = Tree::Object(Vec::new());
+        assert_eq!(set_bool(&mut empty, &["projects", "/r", "hasTrustDialogAccepted"], true), Ok(true));
+        assert_eq!(render(&empty), "{\n  \"projects\": {\n    \"/r\": {\n      \"hasTrustDialogAccepted\": true\n    }\n  }\n}", "空の木から最小の木");
+    }
+
+    /// 途中が object でない（根・中段）・末端が真偽でない・path が空の周は `Err`（上書きしない）。
+    #[test]
+    fn json_tree_set_refuses_non_object_parents_and_non_bool_leaves() {
+        let path = ["projects", "/r", "hasTrustDialogAccepted"];
+        for (text, what) in [("[1]", "根が配列"), ("{\"projects\": 3}", "projects が数"), ("{\"projects\": {\"/r\": \"x\"}}", "anchor が文字列")] {
+            let mut tree = parse(text).unwrap_or(Tree::Null);
+            assert_eq!(set_bool(&mut tree, &path, true), Err(SetError::NotAnObject), "{what}");
+        }
+        let mut leaf = parse("{\"projects\": {\"/r\": {\"hasTrustDialogAccepted\": \"yes\"}}}").unwrap_or(Tree::Null);
+        let before = leaf.clone();
+        assert_eq!(set_bool(&mut leaf, &path, true), Err(SetError::NotABool), "末端が文字列");
+        assert_eq!(leaf, before, "末端は上書きしない");
+        assert_eq!(set_bool(&mut Tree::Object(Vec::new()), &[], true), Err(SetError::NotAnObject), "path が空");
+    }
 
     /// 書き手は読み手の対: 入れ子・配列・escape・数の字面・null・真偽・空の object / 配列を持つ値が `parse(render(t)) == t` で
     /// 戻り、key の順と数の字面（`1.50` / `-0` / `1e400`）は丸めずに保つ。
