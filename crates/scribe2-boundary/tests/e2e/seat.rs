@@ -1666,7 +1666,7 @@ fn move_place(root: &Path, name: &str, anchor: &str) -> MovePlace {
 }
 
 /// 移動の歯の偽 tmux を `<tools>/bin` に置き、PATH の字面を返す。呼出を 1 行残し、`list-panes` は前面の file（無ければ
-/// `claude`）・`list-windows` は窓 `tk`・`has-session` は在る・`capture-pane` は pane の file を返し、`send-keys … -l <text>` は
+/// `claude`）・`display-message` は pid の file（無ければ空）・`list-windows` は窓 `tk`・`has-session` は在る・`capture-pane` は pane の file を返し、`send-keys … -l <text>` は
 /// text を pane へ足し、`send-keys … Enter` は新しい prompt を描く。偽 client（`curl` / `claude`）も置く。
 fn move_shims(tools: &Path) -> String {
     let bin = tools.join("bin");
@@ -1676,6 +1676,7 @@ fn move_shims(tools: &Path) -> String {
         "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{calls}'\n\
          case \"$1\" in\n\
          list-panes) cat '{front}' 2>/dev/null || echo claude; exit 0;;\n\
+         display-message) cat '{pid}' 2>/dev/null; exit 0;;\n\
          list-windows) echo tk; exit 0;;\n\
          has-session) exit 0;;\n\
          capture-pane) cat '{pane}'; exit 0;;\n\
@@ -1687,6 +1688,7 @@ fn move_shims(tools: &Path) -> String {
          printf '\\n\u{276f} ' >> '{pane}'\n",
         calls = at(TICK_CALLS),
         front = at(MOVE_FRONT),
+        pid = at(PANE_SHELL_PID),
         pane = at(TICK_PANE),
     );
     let client = format!("#!/bin/sh\nprintf '%s\\n' \"$0 $*\" >> '{}'\n", at(TICK_CLIENT));
@@ -1886,6 +1888,130 @@ fn seat_tick_move_reaches_seats_in_two_state_dirs_under_one_parent() {
         assert_eq!(move_keys(place).first(), Some(&format!("send-keys -t {TICK_TARGET} -l /exit")), "/exit を送る");
         assert_eq!(move_injections(place).len(), 1, "置き場ごとに記録 1 行");
     }
+}
+
+// ───────────── pane が shell かの判定は子 process まで見る（seat-heartbeat.md §6・契約表の行 e・`s2-07l.624`・接頭辞 `seat_pane_shell_`） ─────────────
+//
+// §4 の移動の fixture（偽 tmux の前面の file・群の記録）に、偽 tmux の `display-message` が返す pid の file を足す。pid は歯が
+// 起こした実 process（子を持つ `sh -c 'sleep 60; :'`・子の無い `sleep 60`）のもの。判定は tick の移動の周の手（`move=exit` は
+// shell でない・`move=launch` は shell）で測る。
+
+/// 偽 tmux の `display-message` が返す pid の file（無ければ空＝pid 不明）。
+const PANE_SHELL_PID: &str = "pane-pid";
+
+/// 歯が起こした実 process（自分の process group の頭）。drop で group ごと止める（子の `sleep` を残さない）。
+struct PaneShellKin(std::process::Child);
+
+impl Drop for PaneShellKin {
+    fn drop(&mut self) {
+        Command::new("kill").args(["-KILL", "--", &format!("-{}", self.0.id())]).output().ok();
+        self.0.kill().ok();
+        self.0.wait().ok();
+    }
+}
+
+/// `args` を自分の process group で起こし、`children` が空でない（`want_child`）か pid が在る周まで待つ。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn pane_shell_kin(args: &[&str], want_child: bool) -> PaneShellKin {
+    use std::os::unix::process::CommandExt;
+    let (program, rest) = args.split_first().expect("起こす command を持つ");
+    let kin = PaneShellKin(Command::new(program).args(rest).process_group(0).spawn().expect("実 process を起こせる"));
+    let pid = kin.0.id();
+    let children = format!("/proc/{pid}/task/{pid}/children");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while want_child && fs::read_to_string(&children).unwrap_or_default().trim().is_empty() && Instant::now() < deadline {
+        sleep(Duration::from_millis(20));
+    }
+    assert_eq!(!fs::read_to_string(&children).unwrap_or_default().trim().is_empty(), want_child, "{children} の子の有無");
+    kin
+}
+
+/// 子の居ない shell の pane の字面（§4 (c) と同じ形）。
+const PANE_SHELL_PROMPT: &str = "old output\n$ ";
+
+/// 移動の周（row は口座 A・記録は口座 B・前面 `sh`）の置き場を作り、pane を `pane` で・pid の file を `pid` で置いて tick を
+/// 1 回撃つ（tmp の根も返す＝drop で置き場が消えない）。
+fn pane_shell_round(pane: &str, pid: Option<&str>) -> (TmpDir, MovePlace, Output) {
+    let root = tmp();
+    let place = move_place(&root, "state", MOVE_ANCHOR);
+    move_record(&root, MOVE_B);
+    fs::write(place.at(MOVE_FRONT), "sh\n").ok();
+    fs::write(place.at(TICK_PANE), pane).ok();
+    if let Some(body) = pid {
+        fs::write(place.at(PANE_SHELL_PID), body).ok();
+    }
+    let out = move_run(&place);
+    (root, place, out)
+}
+
+/// 偽 tmux の呼出のうち `verb` で始まる行。
+fn pane_shell_calls(place: &MovePlace, verb: &str) -> Vec<String> {
+    fs::read_to_string(place.at(TICK_CALLS))
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| line.starts_with(verb))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// (a) 前面 `sh` ∧ pid の shell が子を持つ → shell でない（席が中で動いている）＝移動の周は `move=exit`・`/exit` を送り
+/// 起動行は 0・`display-message` は pane の pid を 1 回だけ引く（base では前面の語だけで shell と読み `move=launch` ＝ RED）。
+#[test]
+fn seat_pane_shell_reads_a_shell_with_a_child_as_a_running_seat() {
+    let kin = pane_shell_kin(&["sh", "-c", "sleep 60; :"], true);
+    let (_root, place, out) = pane_shell_round(TICK_CLEAR_PANE, Some(&format!("{}\n", kin.0.id())));
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(stdout_of(&out), move_line("exit", "false", "-"), "子を持つ sh は席");
+    assert_eq!(
+        move_keys(&place),
+        [format!("send-keys -t {TICK_TARGET} -l /exit"), format!("send-keys -t {TICK_TARGET} Enter")],
+        "/exit の text 1 回 + Enter 1 回・起動行 0"
+    );
+    assert_eq!(
+        pane_shell_calls(&place, "display-message"),
+        [format!("display-message -p -t {TICK_TARGET} #{{pane_pid}}")],
+        "pane の pid を 1 回引く"
+    );
+}
+
+/// (b) 前面 `sh` ∧ pid の process が子なし → shell のまま（`move=launch`・起動行 1 行）。
+#[test]
+fn seat_pane_shell_keeps_a_childless_shell_as_a_shell() {
+    let kin = pane_shell_kin(&["sleep", "60"], false);
+    let (_root, place, out) = pane_shell_round(PANE_SHELL_PROMPT, Some(&format!("{}\n", kin.0.id())));
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(stdout_of(&out), move_line("launch", "-", "launch-unconfirmed"), "子なしの sh は shell");
+    let texts: Vec<String> = move_keys(&place).into_iter().filter(|key| key.contains(" -l ")).collect();
+    assert_eq!(texts.len(), 1, "起動行 1 行: {texts:?}");
+    assert!(texts.iter().all(|key| !key.contains("/exit")), "/exit 0: {texts:?}");
+}
+
+/// (c) 前面 `sh` ∧ pid の file が無い／整数でない／`/proc` に無い pid → 不明＝前面の語だけで shell（今のまま `move=launch`）。
+#[test]
+fn seat_pane_shell_falls_back_to_the_front_word_when_the_pid_is_unknown() {
+    for pid in [None, Some("not-a-pid\n"), Some("-1\n"), Some("4294967295\n")] {
+        let (_root, place, out) = pane_shell_round(PANE_SHELL_PROMPT, pid);
+        assert_eq!(rc_of(&out), i32::from(RC_OK), "{pid:?}: stderr={}", stderr_of(&out));
+        assert_eq!(stdout_of(&out), move_line("launch", "-", "launch-unconfirmed"), "{pid:?}: 不明は shell のまま");
+        assert!(!pane_shell_calls(&place, "display-message").is_empty(), "{pid:?}: pid を引いた上で前面の語に倒れる");
+    }
+}
+
+/// (d) 前面 `claude` → tmux の判定は `list-panes` の 1 回だけ（`display-message` の呼出 0・pid の file が在っても引かない）。
+#[test]
+fn seat_pane_shell_does_not_ask_the_pid_when_the_front_is_not_a_shell() {
+    let kin = pane_shell_kin(&["sh", "-c", "sleep 60; :"], true);
+    let root = tmp();
+    let place = move_place(&root, "state", MOVE_ANCHOR);
+    move_record(&root, MOVE_B);
+    fs::write(place.at(PANE_SHELL_PID), format!("{}\n", kin.0.id())).ok();
+    let out = move_run(&place);
+    assert_eq!(stdout_of(&out), move_line("exit", "false", "-"), "stderr={}", stderr_of(&out));
+    assert_eq!(pane_shell_calls(&place, "list-panes").len(), 1, "前面は 1 回だけ引く");
+    assert_eq!(pane_shell_calls(&place, "display-message"), Vec::<String>::new(), "display-message は 0 回");
 }
 
 // ─────────────────── tick の unit（seat-heartbeat.md §3・契約表の行 b・`s2-07l.583`・接頭辞 `seat_unit_`） ───────────────────

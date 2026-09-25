@@ -160,7 +160,7 @@
   3. **呼び手 4 つは 1 字も変わらない**（判定は 1 本・引数も戻りも同じ）。
 - 触らない: `SHELLS` の語（`sh` を外さない＝人が sh で開いた窓を shell でなくしない）・入力欄の門・4 つの呼び手の断りの語。
 - 却下: `SHELLS` から `sh` を外す（偽陰性）／process group の leader を `ps` で辿る（子 process を 1 本増やす・`/proc` の 1 file で足りる）／復元 script の側だけを直す（器の外・N3・別 host の復元でまた踏む）／tmux の `pane_current_command` の代わりに常に `/proc` を読む（前面が claude の周に 2 本目の呼び出しが増えるだけ）。
-- 歯（`crates/scribe2-boundary/tests/e2e/seat.rs` に `seat_pane_shell_` 接頭辞・§4 の偽 tmux の fixture に `display-message` の口〔`{pid}` の file を cat〕を足し、pid は歯が起こした実 process〔`sh -c 'sleep 60'` の親〕のもの）: (a) 前面 `sh` ∧ pid の shell が子を持つ → shell でない（tick の移動の周は `move=exit`・base では `move=launch` ＝ RED）(b) 前面 `sh` ∧ 子なし → shell（今のまま `move=launch`）(c) 前面 `sh` ∧ pid の file が無い / 整数でない → shell（今のまま）(d) 前面 `claude` → tmux は 1 回だけ（`display-message` の呼び出し 0）。
+- 歯（`crates/scribe2-boundary/tests/e2e/seat.rs` に `seat_pane_shell_` 接頭辞・§4 の偽 tmux の fixture に `display-message` の口〔`{pid}` の file を cat〕を足し、pid は歯が起こした実 process〔`sh -c 'sleep 60; :'` の親・末尾の `:` は dash が単独の command を exec して子を持たない形を避ける〕のもの）: (a) 前面 `sh` ∧ pid の shell が子を持つ → shell でない（tick の移動の周は `move=exit`・base では `move=launch` ＝ RED）(b) 前面 `sh` ∧ 子なし → shell（今のまま `move=launch`）(c) 前面 `sh` ∧ pid の file が無い / 整数でない → shell（今のまま）(d) 前面 `claude` → tmux は 1 回だけ（`display-message` の呼び出し 0）。
 - 後続: 復元 script（host 側・tracked に書かない）から claude の送りを外し、席の立ち上げは §7 の tick に任せる。
 
 ## 7. tick が死んだ席を起こし、移動の門を打刻の前に置き、起こし直しは会話を運ぶ（契約表の行 f / 行 h・§4 の改め・`s2-07l.626` / `s2-07l.628` / `s2-07l.629`）

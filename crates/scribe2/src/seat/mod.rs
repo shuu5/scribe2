@@ -68,12 +68,25 @@ pub const SHELLS: &[&str] = &["sh", "bash", "zsh", "fish"];
 /// の立て直しの入口 (3)）。`list-panes -F '#{pane_current_command}'` を target で引く（typed な metadata・端末描画の
 /// 字面ではない＝C3.3 の外）。**window の全 pane が [`SHELLS`] のどれかの周だけ真**で、撃てない・pane が無い・shell で
 /// ない pane が 1 つでも在る周は偽（起こし直さない側・fail-closed）。
+///
+/// 前面が shell の周だけ、pane の pid の子 process を 1 回見る（設計 seat-heartbeat.md §6）: tmux の復元が席を
+/// `sh -c '… claude …'` で立て直すと前面は `sh` のままなので、子が居る周は shell でない（席が中で動いている）と読む。
+/// pid が取れない・`/proc` が読めない周は不明として前面の語だけで決める（不明を「子が居る」に倒さない）。
 pub fn pane_is_shell(socket: Option<&str>, target: &str) -> bool {
     let Some(out) = tmux_stdout(socket, &["list-panes", "-t", target, "-F", "#{pane_current_command}"]) else {
         return false;
     };
     let names: Vec<&str> = out.lines().map(str::trim).filter(|name| !name.is_empty()).collect();
-    !names.is_empty() && names.iter().all(|name| SHELLS.contains(name))
+    !names.is_empty() && names.iter().all(|name| SHELLS.contains(name)) && pane_has_child(socket, target) != Some(true)
+}
+
+/// target の pane の pid が子 process を持つか（`display-message -p -t <target> '#{pane_pid}'` →
+/// `/proc/<pid>/task/<pid>/children`）。pid が 10 進の整数でない・撃てない・file が読めない周は `None`（不明）。
+fn pane_has_child(socket: Option<&str>, target: &str) -> Option<bool> {
+    let out = tmux_stdout(socket, &["display-message", "-p", "-t", target, "#{pane_pid}"])?;
+    let pid: u32 = out.trim().parse().ok()?;
+    let children = std::fs::read_to_string(format!("/proc/{pid}/task/{pid}/children")).ok()?;
+    Some(!children.trim().is_empty())
 }
 
 /// tmux を 1 回撃ち、成功したかだけを見る（出力を持たない send 系に使う）。
