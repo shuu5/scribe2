@@ -106,7 +106,7 @@ id = "a"
 title = "host init — 既存の置き場を雛形として git の global 設定 <NAME>.template に絶対 path で書き（unchanged / written の 1 行）、doctor が host-template= の 1 行を出す（§3）"
 req = ["FR61", "FR58"]
 section = "3"
-write-set = ["+crates/scribe2/src/init.rs", "crates/scribe2/src/lib.rs", "crates/scribe2/src/hook/vessel.rs", "crates/scribe2-boundary/src/main.rs", "crates/scribe2-boundary/src/snapshots/scribe2__tests__doctor_external_form.snap", "crates/scribe2-boundary/src/snapshots/scribe2__tests__ledger_form_doctor_external_form.snap", "crates/scribe2-boundary/src/snapshots/scribe2__tests__ledger_lint_doctor_external_form.snap", "crates/scribe2-boundary/tests/e2e/main.rs", "crates/scribe2-boundary/tests/e2e/seat/register.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "crates/scribe2-boundary/tests/e2e/seat/account.rs", "docs/design/host-init.md"]
+write-set = ["crates/scribe2/src/init.rs", "crates/scribe2/src/lib.rs", "crates/scribe2/src/hook/vessel.rs", "crates/scribe2-boundary/src/main.rs", "crates/scribe2-boundary/src/snapshots/scribe2__tests__doctor_external_form.snap", "crates/scribe2-boundary/src/snapshots/scribe2__tests__ledger_form_doctor_external_form.snap", "crates/scribe2-boundary/src/snapshots/scribe2__tests__ledger_lint_doctor_external_form.snap", "crates/scribe2-boundary/tests/e2e/main.rs", "crates/scribe2-boundary/tests/e2e/seat/register.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "crates/scribe2-boundary/tests/e2e/seat/account.rs", "docs/design/host-init.md"]
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail host_init_"]
 size = "S"
 done = "(1) host init <TEMPLATE> は TEMPLATE が dir で host.toml が Absent か Present の周だけ git の global 設定 <NAME>.template に絶対 path を書き、同じ値なら書かず unchanged、dir が無い・Unreadable・引数欠けの周は 1 byte も書かず断る (2) 出力は host: init template=<path> <written|unchanged> の 1 行 (3) doctor は骨格の 2 行の直後に host-template=<path|absent|unreadable> の 1 行を置き場を渡さない周にも出す (4) env と HOME を読まず、git の呼び出しは Invocation で記述する (5) doctor の外形の insta snapshot 3 本を新しい形へ更新し write-set の外の .snap は触らない 歯: host_init_ の歯が GIT_CONFIG_GLOBAL を toy の file に向けて written / unchanged / 断り 3 形と doctor の行を測る（base では init の verb が無い ＝ RED）"
@@ -116,7 +116,7 @@ id = "b"
 title = "init [ROOT] — 雛形から新しい置き場を作り（名は <雛形>-<repo 名>）、host の面の 5 表を写し、口座の dir を symlink で結び、marker と local 設定と宣言の雛形（Cargo.toml の有無で形を選ぶ）を置き、--group の周は同じ親の下の全面の anchors に足し（全部か皆無か）、書いた file だけを 1 commit にする（§4）"
 req = ["FR58", "FR61"]
 section = "4"
-write-set = ["+crates/scribe2/src/init.rs", "crates/scribe2/src/hook/vessel.rs", "crates/scribe2/src/rules/manifest.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2/src/pipe/declaration.rs", "crates/scribe2-boundary/src/main.rs", "crates/scribe2-boundary/tests/e2e/main.rs", "docs/design/host-init.md"]
+write-set = ["crates/scribe2/src/init.rs", "crates/scribe2/src/hook/vessel.rs", "crates/scribe2/src/rules/manifest.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2/src/pipe/declaration.rs", "crates/scribe2-boundary/src/main.rs", "crates/scribe2-boundary/tests/e2e/main.rs", "docs/design/host-init.md"]
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail init_repo_"]
 size = "L"
 growth = ["crates/scribe2/src/hook/vessel.rs:60", "crates/scribe2/src/rules/manifest.rs:40", "crates/scribe2/src/account/mod.rs:60", "crates/scribe2/src/pipe/declaration.rs:20", "crates/scribe2-boundary/src/main.rs:60"]
@@ -128,7 +128,7 @@ id = "c"
 title = "tmux の session と引数の無い席の起動 — init の 8 段目が session <repo 名> を new-session -d で作り seat launch の既定形を 1 回撃ち、seat launch は引数無しで state dir を local 設定・role を orchestrator・target を <repo 名>:orchestrator・口座を群の今の口座か選定から解く（§5）"
 req = ["FR59", "FR36"]
 section = "5"
-write-set = ["+crates/scribe2/src/init.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/seat/cycle/launch.rs", "crates/scribe2-boundary/tests/e2e/main.rs", "crates/scribe2-boundary/tests/e2e/seat/launch.rs", "docs/design/host-init.md"]
+write-set = ["crates/scribe2/src/init.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/seat/cycle/launch.rs", "crates/scribe2-boundary/tests/e2e/main.rs", "crates/scribe2-boundary/tests/e2e/seat/launch.rs", "docs/design/host-init.md"]
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_launch_default_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail init_seat_"]
 size = "M"
 depends = ["b"]
@@ -139,7 +139,7 @@ id = "d"
 title = "doctor の init= 行 — marker / declaration / host-face / accounts / session / registration の欠落を宣言順に名指し next= に最初の欠落を埋める 1 手を置く（§6）"
 req = ["FR61"]
 section = "6"
-write-set = ["+crates/scribe2/src/init.rs", "crates/scribe2-boundary/src/main.rs", "crates/scribe2-boundary/src/snapshots/scribe2__tests__doctor_external_form.snap", "crates/scribe2-boundary/src/snapshots/scribe2__tests__ledger_form_doctor_external_form.snap", "crates/scribe2-boundary/src/snapshots/scribe2__tests__ledger_lint_doctor_external_form.snap", "crates/scribe2-boundary/tests/e2e/main.rs", "crates/scribe2-boundary/tests/e2e/seat/register.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "crates/scribe2-boundary/tests/e2e/seat/account.rs", "docs/design/host-init.md"]
+write-set = ["crates/scribe2/src/init.rs", "crates/scribe2-boundary/src/main.rs", "crates/scribe2-boundary/src/snapshots/scribe2__tests__doctor_external_form.snap", "crates/scribe2-boundary/src/snapshots/scribe2__tests__ledger_form_doctor_external_form.snap", "crates/scribe2-boundary/src/snapshots/scribe2__tests__ledger_lint_doctor_external_form.snap", "crates/scribe2-boundary/tests/e2e/main.rs", "crates/scribe2-boundary/tests/e2e/seat/register.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "crates/scribe2-boundary/tests/e2e/seat/account.rs", "docs/design/host-init.md"]
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail doctor_init_"]
 size = "S"
 depends = ["b"]
