@@ -7,7 +7,7 @@
 やさしく言うと: 今は新しい repo を器に載せるのに人が 7 手（置き場の dir・口座の配線・host の面の写し・git の設定・marker・宣言・tmux と席の長い起動）を打ち、1 つ抜けると席は黙って動かない。裁定は「`init` これで終わり」の簡便さと「人が打つ command は最小限」と「人間向けの説明」の 3 点。本設計は人が打つのを **`host init`（host に 1 回）→ `init`（repo ごとに 1 回）→ 困ったら `doctor`** の 3 語に閉じ、残りは器が行う。
 
 - 出所（verified・2026-09-24）: scribe3 の立ち上げは手作業 7 手で、`vessel init` と `.vessel.toml` が抜けた。抜けた状態では plugin の SessionStart hook が「仕えない repo」として 0 byte で黙り、席に指示文が入らず、`seat launch` は `launch-unconfirmed` で保留になる（memo `s2-07l.604` の実地試験でも同じ）。project-k / paper の移行も散文の runbook（repo の外）を人が辿った（memo `s2-07l.491` の notes・15 段）。doctor はこの欠落を名指さない。
-- 要件: [FR58](../../design-intent/spec/srs.html#FR58)（口座の登録は設定 dir を state dir の下に作り credential は読まず書かない）・[FR59](../../design-intent/spec/srs.html#FR59)（席の起動は役割を必須に受け、群の置き場は群の今の口座で起きる）・[FR61](../../design-intent/spec/srs.html#FR61)（doctor は導入先ごとに実測を名指す）。
+- 要件: [FR58](../../design-intent/spec/srs.html#FR58)（口座の登録は設定 dir を state dir の下に作り credential は読まず書かない）・[FR59](../../design-intent/spec/srs.html#FR59)（席の起動は役割を必須に受け、群の置き場は群の今の口座で起きる）・[FR61](../../design-intent/spec/srs.html#FR61)（doctor は導入先ごとに実測を名指す）・[FR73](../../design-intent/spec/srs.html#FR73)（doctor の行は実測を並べ判定せず rc を変えない・行 d の `init=` の行の要件）。
 
 ## 2. 現物（verified・main 0b6af26）
 
@@ -53,13 +53,33 @@
 
 ## 5. tmux の session と引数の無い席の起動（行 c）
 
-- `init` の 8 段目: tmux の session `<ROOT の dir 名>` が無ければ `new-session -d -s <名> -n orchestrator -c ROOT` で作る（在れば skip・socket は既定）。次に行 c の `seat launch` の既定形を 1 回撃つ（登録 row を書き席を起こす・FR59）。tmux が撃てない周は `failed:tmux` で名指し、`next=` に `seat launch` を置く。
+- `init` の 8 段目 **`session`**: tmux の session `<ROOT の dir 名>`（socket は既定）が在れば skip、無ければ `new-session -d -s <名> -n orchestrator -c ROOT` で作って ok。tmux を撃てない周（has-session / new-session の Invocation を起動できない・new-session が rc≠0）は `failed:tmux`。
+- `init` の 9 段目 **`seat`**: 置き場の event log を replay して、役割 orchestrator・anchor = ROOT の登録 row が在れば skip（§6 の `registration` の項目と同じ 1 述語＝row の live / dead は見ない・それは doctor の役）。無ければ下の `seat launch` の既定形（引数無し・cwd = ROOT・自分自身の binary を境界 crate が Invocation の program に渡す）を 1 回撃ち、rc 0 なら ok、断られた周は `failed:seat:<断りの語>`（子の断りの語をそのまま写す: `session-missing` / `defaults-unresolved` / `no-account` / `launch-unconfirmed` 等・`init` は語を作らない）。8 段目が failed の周も 9 段目は撃つ（§4「その段だけ書かず続きの段へ進む」のまま＝子が `session-missing` で断り `failed:seat:session-missing` になる）。
+- 出力と `next=` は §4 の形のまま: 段の名は 7 語の後ろに `session` / `seat` の 2 語が続き（計 9 行・`init_repo_` の歯が pin する段の列も 7 語から 9 語へ広げる）、failed の段が在れば最初のその段を `next=fix:<段>`（`fix:session` / `fix:seat`）で名指し rc 1、2 度目は 9 段が全部 skip で `next=doctor`（§4 の 2 度目の歯「全段 skip」は 9 段で成り立つ）。
 - **`seat launch` の既定**（引数の無い形）: `--state-dir` は cwd の repo の local 設定（`vessel` の読み）、`--role` は `orchestrator`、`--target` は `<repo の dir 名>:orchestrator`、`--account` は置き場が群に属せば群の今の口座（FR59 のまま）、属さなければ選定（FR36）。明示の引数は既定に勝つ。既定を解けない周は今の `defaults-unresolved` の断り（`missing=` に載せる）。長い形の判定・断りの字面は 1 字も変えない。
 
 ## 6. doctor の欠落の名指し（行 d）
 
-- doctor に `init=` の 1 行を足す（`host-template=` の直後）: 置き場を渡した周は `init=<ok|missing:<項目,…>> next=<次の 1 手>`。項目は宣言順に `marker`（cwd の repo の `.vessel` が `ByMe` でない）・`declaration`（`.vessel.toml` が HEAD に無い）・`host-face`（`host.toml` が `Absent` / `Unreadable`）・`accounts`（`[[account]]` の label で `accounts/<label>` が無い）・`session`（登録 row の target の session が無い）・`registration`（orchestrator の登録 row が無い）。`next=` は最初の欠落を埋める 1 手（`init` か `host init` か `seat launch`）で、欠落 0 なら `next=-`。
-- 「黙って 0 byte」は残す（hook の極性は vessel-hook.md §2 のまま）。名指すのは doctor の役。
+- doctor に `init=` の 1 行を足す（`host-template=` の直後・`--state-dir S` を渡した周だけ・FR73 の「実測を並べ判定せず rc を変えない」のまま）。形は `init=<ok|missing:<項目,…>|unmeasured:no-repo> next=<init|host-init|seat-launch|->`（key=値の 2 語・値に空白を含めない）。
+- ROOT の取り方: `--repo R` が在ればそれ、無ければ cwd（`init [ROOT]` の既定と同じ）。ROOT が git の repo でない周は `init=unmeasured:no-repo next=-`（推測で埋めない・C10）。
+- 項目は `init` の段の順（= 埋める順）に 6 つ。欠けたものだけを `,` で並べ、欠落 0 は `init=ok next=-`:
+  1. `host-face`: `<S>/host.toml` が `Absent` か `Unreadable`。
+  2. `accounts`: 面の `[[account]]` の label のうち `<S>/accounts/<label>` が無い（dir でも dir への symlink でもない）ものが 1 つでも在る。面が無い周は宣言が無いので欠落に数えない。
+  3. `marker`: `ROOT/.vessel` が `ByMe` でない（無い・`ByOther`）。
+  4. `declaration`: `ROOT/.vessel.toml` が HEAD に無い。
+  5. `session`: tmux の session `<ROOT の dir 名>`（§5 の既定の名・socket は `--tmux-socket` が在ればそれ、無ければ既定）が無い。tmux を撃てない周も欠落に数える（席は起きられない）。
+  6. `registration`: 置き場の event log の replay に、役割 orchestrator・anchor = ROOT の登録 row が無い（§5 の 9 段目と同じ 1 述語）。
+- `next=` は最初の欠落を埋める 1 手（対応は固定・候補の一覧を出さない）:
+
+  | 状態 | `next=` |
+  |---|---|
+  | 欠落 0 | `-` |
+  | 欠落が在り `host-template=` が `absent` / `unreadable` | `host-init`（`init` は雛形の pointer が無いと 1 段目の前に断る） |
+  | 最初の欠落が `host-face` / `accounts` / `marker` / `declaration` / `session` | `init`（各段は冪等＝在る段は skip し欠けた段だけ書く） |
+  | 最初の欠落が `registration` | `seat-launch`（§5 の既定形を人が打つ） |
+
+- doctor への渡し方は今の flag のまま（`--state-dir S [--repo R] [--tmux-socket PATH]`・flag を足さない）。`--repo` は台帳 lint の行も出す（今のまま・1 回読む）。
+- 「黙って 0 byte」は残す（hook の極性は vessel-hook.md §2 のまま）。名指すのは doctor の役。既存の doctor の行の字面と順は 1 字も変えず、行数を pin する歯と insta の snapshot 3 本は `init=` の 1 行分だけ進める（§3・行 d の write-set）。
 
 ## 7. 口座 × anchor の trust を器が起動の前に書く — 席の起動の 1 本が、選んだ口座の設定 dir の `.claude.json` に `projects[<anchor>].hasTrustDialogAccepted = true` を書いてから起動行を注入する（契約表の行 e・[ADR-0065](../../design-intent/decisions/ADR-0065-the-vessel-writes-the-trust-flag-before-launching-a-seat.html)・`s2-07l.609` / `s2-07l.604`）
 
@@ -150,25 +170,25 @@ done = "(1) ROOT が git の repo でない・host-template が無い周は 1 �
 
 [[contract]]
 id = "c"
-title = "tmux の session と引数の無い席の起動 — init の 8 段目が session <repo 名> を new-session -d で作り seat launch の既定形を 1 回撃ち、seat launch は引数無しで state dir を local 設定・role を orchestrator・target を <repo 名>:orchestrator・口座を群の今の口座か選定から解く（§5）"
+title = "tmux の session と引数の無い席の起動 — init の 8 段目 session が session <repo 名> を new-session -d で作り、9 段目 seat が orchestrator の登録 row が無い周だけ seat launch の既定形を 1 回撃ち、seat launch は引数無しで state dir を local 設定・role を orchestrator・target を <repo 名>:orchestrator・口座を群の今の口座か選定から解く（§5）"
 req = ["FR59", "FR36"]
 section = "5"
-write-set = ["crates/scribe2/src/init.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/seat/cycle/launch.rs", "crates/scribe2-boundary/tests/e2e/main.rs", "crates/scribe2-boundary/tests/e2e/seat/launch.rs", "docs/design/host-init.md"]
+write-set = ["crates/scribe2/src/init.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/seat/cycle/launch.rs", "crates/scribe2-boundary/src/main.rs", "crates/scribe2-boundary/tests/e2e/main.rs", "crates/scribe2-boundary/tests/e2e/seat/launch.rs", "docs/design/host-init.md"]
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_launch_default_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail init_seat_"]
 size = "M"
 depends = ["b"]
-done = "(1) 引数の無い seat launch は cwd の repo の local 設定から置き場を、orchestrator を役割に、<repo の dir 名>:orchestrator を target に、群の置き場は群の今の口座を、それ以外は選定を使って登録 row を書き席を起こし、明示の引数は既定に勝ち、解けない周は defaults-unresolved の断りで missing= に載せ、長い形の判定と断りの字面は 1 字も変わらない (2) init の 8 段目は session <ROOT の dir 名> が無ければ new-session -d -s <名> -n orchestrator -c ROOT で作り在れば skip、続けて (1) の既定形を Invocation で 1 回撃ち、tmux が撃てない周は failed:tmux で next= に seat launch を置く (3) 子 process は全部 Invocation で記述する 歯: seat_launch_default_ の歯が既定の 3 値と明示の勝ちと断りの不変を測り、init_seat_ の歯が偽 tmux の socket で new-session の 1 回と skip と登録 row を測る（base では引数無しの seat launch が usage で断る ＝ RED）"
+done = "(1) 引数の無い seat launch は cwd の repo の local 設定から置き場を、orchestrator を役割に、<repo の dir 名>:orchestrator を target に、群の置き場は群の今の口座を、それ以外は選定を使って登録 row を書き席を起こし、明示の引数は既定に勝ち、解けない周は defaults-unresolved の断りで missing= に載せ、長い形の判定と断りの字面は 1 字も変わらない (2) init の 8 段目 session は session <ROOT の dir 名> が無ければ new-session -d -s <名> -n orchestrator -c ROOT で作って ok、在れば skip、tmux を撃てない周は failed:tmux (3) init の 9 段目 seat は置き場の replay に役割 orchestrator・anchor = ROOT の登録 row が在れば skip、無ければ (1) の既定形を cwd = ROOT で 1 回撃って rc 0 なら ok、断られた周は子の断りの語をそのまま failed:seat:<語> に写し、8 段目が failed でも撃つ (4) 出力は §4 の形のまま段の列が 9 語になり、failed の段が在れば next=fix:<段> で rc 1、2 度目は 9 段が全部 skip で next=doctor（init_repo_ の歯の段の列を 9 語へ広げる） (5) 子 process は全部 Invocation で記述し境界 crate が撃つ 歯: seat_launch_default_ の歯が既定の 3 値と明示の勝ちと断りの不変を測り、init_seat_ の歯が偽 tmux の socket で new-session の 1 回・在る周の skip・登録 row が在る周の seat の skip・子が断った周の failed:seat:<語> と next=fix:seat を測る（base では引数無しの seat launch が usage で断る ＝ RED）"
 
 [[contract]]
 id = "d"
-title = "doctor の init= 行 — marker / declaration / host-face / accounts / session / registration の欠落を宣言順に名指し next= に最初の欠落を埋める 1 手を置く（§6）"
-req = ["FR61"]
+title = "doctor の init= 行 — host-face / accounts / marker / declaration / session / registration の欠落を init の段の順に名指し、next= に最初の欠落を埋める 1 手（init / host-init / seat-launch の 1 語）を固定の対応で置く（§6）"
+req = ["FR73", "FR59"]
 section = "6"
 write-set = ["crates/scribe2/src/init.rs", "crates/scribe2-boundary/src/main.rs", "crates/scribe2-boundary/src/snapshots/scribe2__tests__doctor_external_form.snap", "crates/scribe2-boundary/src/snapshots/scribe2__tests__ledger_form_doctor_external_form.snap", "crates/scribe2-boundary/src/snapshots/scribe2__tests__ledger_lint_doctor_external_form.snap", "crates/scribe2-boundary/tests/e2e/main.rs", "crates/scribe2-boundary/tests/e2e/seat/register.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "crates/scribe2-boundary/tests/e2e/seat/account.rs", "docs/design/host-init.md"]
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail doctor_init_"]
 size = "S"
 depends = ["b"]
-done = "(1) 置き場を渡した doctor は host-template= の直後に init=<ok|missing:<項目,…>> next=<1 手> の 1 行を出し、項目は marker・declaration・host-face・accounts・session・registration の宣言順で欠けたものだけを並べ、欠落 0 は init=ok next=- (2) next= は最初の欠落を埋める 1 手（host init・init・seat launch のどれか 1 語）で候補の一覧を出さない (3) 他の doctor の行と hook の 0 byte の極性は 1 字も変わらない 歯: doctor_init_ の歯が 6 項目それぞれ 1 つだけ欠けた toy と欠落 0 の toy で行と next= を測る（base では init= の行が無い ＝ RED）"
+done = "(1) --state-dir を渡した doctor は host-template= の直後に init=<ok|missing:<項目,…>|unmeasured:no-repo> next=<init|host-init|seat-launch|-> の 1 行を出し、ROOT は --repo が在ればそれ無ければ cwd、ROOT が git の repo でない周は unmeasured:no-repo next=- (2) 項目は host-face・accounts・marker・declaration・session・registration の init の段の順で欠けたものだけを並べ、欠落 0 は init=ok next=-、面が無い周は accounts を数えず、session は <ROOT の dir 名> の session を --tmux-socket か既定の socket で測り、registration は置き場の replay に役割 orchestrator・anchor = ROOT の登録 row が在るか (3) next= は固定の対応（欠落が在り host-template= が absent / unreadable なら host-init、最初の欠落が host-face・accounts・marker・declaration・session なら init、registration なら seat-launch）の 1 語で候補の一覧を出さず、flag は足さない (4) 他の doctor の行の字面と順と hook の 0 byte の極性は 1 字も変わらず、行数を pin する歯と insta の snapshot 3 本は 1 行分だけ進める 歯: doctor_init_ の歯が 6 項目それぞれ 1 つだけ欠けた toy と欠落 0 の toy と host-template の無い toy と repo でない cwd で行と next= の対応を測る（base では init= の行が無い ＝ RED）"
 
 [[contract]]
 id = "e"
