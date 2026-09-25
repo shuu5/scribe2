@@ -1,5 +1,6 @@
 //! 新しい repo を器に載せる口（設計 host-init.md）。本 file は行 a の `host init <TEMPLATE>`（§3）と doctor の
-//! `host-template=` の 1 行と、行 b の `init [ROOT] [--group <名>]`（§4 の 7 段）を持つ。
+//! `host-template=` の 1 行と、行 b の `init [ROOT] [--group <名>]`（§4 の 7 段）と、行 d の doctor の `init=` の 1 行
+//! （§6）を持つ。
 //!
 //! 雛形（既存の置き場）の在り処は git の **global** 設定 `<NAME>.template` の絶対 path ただ 1 つで、key 名は
 //! NAME 定数から導く（C2.2）。**env も HOME も読まない**（global 設定の file の在り処は git が解く）。git は
@@ -85,9 +86,136 @@ pub fn render_host_template(template: &Template) -> String {
     }
 }
 
-/// doctor の 1 行を測って組む。
-pub fn doctor_line() -> String {
-    render_host_template(&read_template())
+/// doctor の `init=` の項目（`init` の段の順＝埋める順・§6）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Gap {
+    /// `<S>/host.toml` が `Absent` か `Unreadable`。
+    HostFace,
+    /// 面の `[[account]]` の label のうち `<S>/accounts/<label>` が dir（か dir への symlink）でないものが在る。
+    Accounts,
+    /// `ROOT/.vessel` が `ByMe` でない。
+    Marker,
+    /// `ROOT/.vessel.toml` が HEAD に無い。
+    Declaration,
+    /// tmux の session `<ROOT の dir 名>` が無い（tmux を撃てない周も含む）。
+    Session,
+    /// 置き場の replay に役割 orchestrator・anchor = ROOT の登録 row が無い。
+    Registration,
+}
+
+impl Gap {
+    /// 出力の字面。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::HostFace => "host-face",
+            Self::Accounts => "accounts",
+            Self::Marker => "marker",
+            Self::Declaration => "declaration",
+            Self::Session => "session",
+            Self::Registration => "registration",
+        }
+    }
+}
+
+/// doctor の `init=` の読み（bool にしない・C11）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Readiness {
+    /// ROOT が git の repo でない（推測で埋めない・C10）。
+    NoRepo,
+    /// 欠けた項目（段の順・空は欠落 0）。
+    Gaps(Vec<Gap>),
+}
+
+/// 置き場の event log の replay に、役割 orchestrator・anchor = `root` の登録 row が 1 件でも在るか（row の live / dead は
+/// 見ない・§5 の 9 段目と §6 の `registration` が呼ぶ 1 述語）。anchor は登録が書いた値との字面の等値。log を読めない周は
+/// 「無い」側（在ると推測しない）。
+pub fn registered(state_dir: &Path, root: &Path) -> bool {
+    let (Ok(events), Some(anchor)) = (crate::fleet::store::read_all(state_dir), root.to_str()) else {
+        return false;
+    };
+    crate::fleet::replay(&events).registrations.contains_key(&(crate::seat::role::Role::Orchestrator, anchor.to_owned()))
+}
+
+/// tmux の session `name` が在るか（`has-session -t =<名>`・socket は `socket` が在ればそれ、無ければ既定）。撃てない周は
+/// 「無い」側。
+fn session_exists(socket: Option<&str>, name: &str) -> bool {
+    let mut command = Invocation::new("tmux");
+    if let Some(path) = socket {
+        command.arg("-S").arg(path);
+    }
+    command.args(["has-session", "-t", &format!("={name}")]).output().is_ok_and(|out| out.status.success())
+}
+
+/// `root` の HEAD に `.vessel.toml` が在るか（`git cat-file -e HEAD:<file>`）。
+fn declared_at_head(root: &Path) -> bool {
+    Invocation::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["cat-file", "-e", &format!("HEAD:{DECL_FILE}")])
+        .output()
+        .is_ok_and(|out| out.status.success())
+}
+
+/// doctor の `init=` を測る（§6）: `root`（`--repo` か cwd）を含む repo の root について 6 項目を段の順に測る。
+pub fn measure(state_dir: &Path, root: &Path, socket: Option<&str>) -> Readiness {
+    let Some(root) = vessel::repo_root(root) else {
+        return Readiness::NoRepo;
+    };
+    let mut gaps = Vec::new();
+    match HostManifest::read(&host_manifest_path(state_dir)) {
+        HostManifest::Present(face) => {
+            let dir = |label: &str| crate::fleet::account_dir(state_dir, label).is_dir();
+            if face.accounts().iter().any(|found| !dir(found.label())) {
+                gaps.push(Gap::Accounts);
+            }
+        }
+        // 面が無い周は宣言が無いので `accounts` を数えない。
+        HostManifest::Absent | HostManifest::Unreadable(_) => gaps.push(Gap::HostFace),
+    }
+    if !matches!(vessel::served(&root), vessel::Served::ByMe(_)) {
+        gaps.push(Gap::Marker);
+    }
+    if !declared_at_head(&root) {
+        gaps.push(Gap::Declaration);
+    }
+    let name = root.file_name().and_then(|found| found.to_str());
+    if !name.is_some_and(|found| session_exists(socket, found)) {
+        gaps.push(Gap::Session);
+    }
+    if !registered(state_dir, &root) {
+        gaps.push(Gap::Registration);
+    }
+    Readiness::Gaps(gaps)
+}
+
+/// doctor の `init=` の 1 行（`init=<ok|missing:<項目,…>|unmeasured:no-repo> next=<init|host-init|seat-launch|->`・§6）。
+/// `next=` は固定の対応の 1 語（候補の一覧を出さない）。
+pub fn render_init(readiness: &Readiness, template: &Template) -> String {
+    let gaps = match readiness {
+        Readiness::NoRepo => return "init=unmeasured:no-repo next=-".to_owned(),
+        Readiness::Gaps(gaps) => gaps,
+    };
+    let Some(first) = gaps.first() else {
+        return "init=ok next=-".to_owned();
+    };
+    let next = match (template, first) {
+        (Template::Absent | Template::Unreadable, _) => "host-init",
+        (Template::Path(_), Gap::Registration) => "seat-launch",
+        (Template::Path(_), _) => "init",
+    };
+    let names: Vec<&str> = gaps.iter().map(|gap| gap.as_str()).collect();
+    format!("init=missing:{} next={next}", names.join(","))
+}
+
+/// doctor の骨格の直後の行: `host-template=` の 1 行と、置き場を渡した周だけその直後に `init=` の 1 行（§3・§6）。
+/// `root` は `--repo` か cwd。
+pub fn doctor_lines(state_dir: Option<&Path>, root: &Path, socket: Option<&str>) -> Vec<String> {
+    let template = read_template();
+    let mut lines = vec![render_host_template(&template)];
+    if let Some(dir) = state_dir {
+        lines.push(render_init(&measure(dir, root, socket), &template));
+    }
+    lines
 }
 
 /// `host` に続く引数を捌く（verb は `init` だけ・flag を受けない）。

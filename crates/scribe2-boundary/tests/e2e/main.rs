@@ -3,7 +3,8 @@
 //!
 //! doctor の導入先の行（consumer-sync.md §4・AC31・接頭辞 `doctor_consumer_`・`s2-07l.303`）の歯はこの file が持つ
 //! （登録は core の `register` で積み、tmux を立てない）。`host init` と doctor の `host-template=` の行（host-init.md §3・
-//! 行 a・接頭辞 `host_init_`）の歯もこの file が持つ（git の global 設定は `GIT_CONFIG_GLOBAL` で toy の file に向ける）。
+//! 行 a・接頭辞 `host_init_`）の歯と、doctor の `init=` の行（同 §6・行 d・接頭辞 `doctor_init_`・tmux は PATH の先頭の偽 tmux）の歯も
+//! この file が持つ（git の global 設定は `GIT_CONFIG_GLOBAL` で toy の file に向ける）。
 
 mod fleet;
 mod headless;
@@ -1265,4 +1266,165 @@ fn init_repo_refuses_before_the_first_stage_without_writing() {
     assert!(!host.place().exists(), "置き場を作らない");
     assert!(!host.repo.join(".vessel").exists() && !host.repo.join(".vessel.toml").exists(), "marker も宣言も書かない");
     assert_eq!(git_out(&host.repo, &["config", "--local", "--get", &format!("{NAME}.stateDir")]), None, "設定を書かない");
+}
+
+// ─────────── doctor の init= の行（host-init.md §6・行 d・`s2-07l.615`） ───────────
+
+/// 6 項目が全部そろった toy（`init` の 7 段を通した置き場・偽 tmux の session `proj`・登録 row）。tmux は立てない: PATH の
+/// 先頭の偽 tmux が `has-session -t =proj` にだけ（`-S <toy の socket>` か socket 無し＝既定の形で）rc 0 を返す。
+struct ReadyToy {
+    host: InitHost,
+    socket: String,
+    path: String,
+}
+
+impl ReadyToy {
+    /// doctor を偽 tmux の PATH・`cwd` で `--state-dir <置き場>` と `extra` を付けて撃ち、`init=` の行（4 行目）を返す。
+    fn init_line(&self, global: &Path, cwd: &Path, extra: &[&str]) -> Option<String> {
+        let place = self.host.place().display().to_string();
+        let out = Command::new(env!("CARGO_BIN_EXE_scribe2"))
+            .args(["doctor", "--state-dir", place.as_str()])
+            .args(extra)
+            .current_dir(cwd)
+            .env("GIT_CONFIG_GLOBAL", global)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("PATH", &self.path)
+            .output()
+            .ok()?;
+        (out.status.code() == Some(0)).then_some(())?;
+        String::from_utf8_lossy(&out.stdout).lines().nth(3).map(str::to_owned)
+    }
+
+    /// repo の cwd・toy の global 設定・toy の socket で撃った `init=` の行。
+    fn line(&self) -> Option<String> {
+        self.init_line(&self.host.global, &self.host.repo, &["--tmux-socket", &self.socket])
+    }
+}
+
+/// 偽 tmux を `dir/bin/tmux` に置き、その dir を先頭に足した PATH の値を返す（`session` が偽なら常に rc 1＝session が無い）。
+fn stub_session_path(dir: &Path, socket: &str, session: bool) -> Option<String> {
+    use std::os::unix::fs::PermissionsExt;
+    let bin_dir = dir.join("bin");
+    fs::create_dir_all(&bin_dir).ok()?;
+    let stub = bin_dir.join("tmux");
+    let body = if session {
+        format!("#!/bin/sh\ncase \"$*\" in\n  \"-S {socket} has-session -t =proj\" | \"has-session -t =proj\") exit 0 ;;\nesac\nexit 1\n")
+    } else {
+        "#!/bin/sh\nexit 1\n".to_owned()
+    };
+    fs::write(&stub, body).ok()?;
+    fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).ok()?;
+    Some(format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap_or_default()))
+}
+
+/// `registered` が真なら置き場に役割 orchestrator・anchor = repo の登録 row を積み、`session` が真なら偽 tmux に session
+/// `proj` を持たせる（6 項目のうち面・口座・marker・宣言は `init` の 7 段が置く）。
+fn ready_toy(session: bool, registered: bool) -> Option<ReadyToy> {
+    let host = init_host(FACE_FRONT, false)?;
+    let run = host.init(&[])?;
+    (run.rc == Some(0)).then_some(())?;
+    let socket = host.tmp.join("sock").display().to_string();
+    let path = stub_session_path(&host.tmp, &socket, session)?;
+    if registered {
+        let row = Registration {
+            role: Role::Orchestrator,
+            anchor: host.repo.display().to_string(),
+            target: "proj:orchestrator".to_owned(),
+            sid: None,
+            account: "a1".to_owned(),
+            launch: String::new(),
+            model: None,
+        };
+        vessel::seat::role::register(&host.place(), row).ok()?;
+    }
+    Some(ReadyToy { host, socket, path })
+}
+
+/// (1)(2)(3) 6 項目がそろった toy は `init=ok next=-` を `host-template=` の直後に出し、`--repo` は cwd に勝つ（repo でない
+/// cwd から `--repo` で名指しても同じ）。置き場を渡さない doctor は `init=` の行を出さない。base は行が無い（RED）。
+#[test]
+fn doctor_init_names_nothing_when_every_item_is_in_place() {
+    let toy = ready_toy(true, true).unwrap_or_else(|| panic!("toy を組める"));
+    assert_eq!(toy.line().as_deref(), Some("init=ok next=-"), "欠落 0");
+    let plain = toy.host.tmp.join("plain");
+    fs::create_dir_all(&plain).unwrap_or_else(|e| panic!("非 repo の dir を作れる: {e}"));
+    let repo = toy.host.repo.display().to_string();
+    assert_eq!(toy.init_line(&toy.host.global, &plain, &["--repo", &repo]).as_deref(), Some("init=ok next=-"), "--repo が cwd に勝つ");
+    let bare = host_run(&toy.host.global, &toy.host.repo, &["doctor"]).unwrap_or_else(|| panic!("binary を撃てる"));
+    assert!(!bare.out.lines().any(|line| line.starts_with("init=")), "置き場を渡さない周は出さない: {}", bare.out);
+}
+
+/// (2)(3) 6 項目それぞれ 1 つだけ欠けた toy は、その項目だけを名指し `next=` を固定の対応で 1 語置く（registration だけ
+/// seat-launch・他は init）。面が無い周は口座の dir が無くても accounts を数えない。宣言は worktree に在っても HEAD に無ければ欠落。
+#[test]
+fn doctor_init_names_each_single_missing_item_with_its_next() {
+    let face = ready_toy(true, true).unwrap_or_else(|| panic!("toy を組める"));
+    fs::remove_file(face.host.place().join(vessel::rules::HOST_MANIFEST)).unwrap_or_else(|e| panic!("面を外せる: {e}"));
+    assert_eq!(face.line().as_deref(), Some("init=missing:host-face next=init"), "面が無い");
+    fs::remove_dir_all(face.host.place().join("accounts")).unwrap_or_else(|e| panic!("口座の link を外せる: {e}"));
+    assert_eq!(face.line().as_deref(), Some("init=missing:host-face next=init"), "面が無い周は accounts を数えない");
+
+    let accounts = ready_toy(true, true).unwrap_or_else(|| panic!("toy を組める"));
+    fs::remove_file(accounts.host.place().join("accounts").join("a2")).unwrap_or_else(|e| panic!("口座の link を外せる: {e}"));
+    assert_eq!(accounts.line().as_deref(), Some("init=missing:accounts next=init"), "口座の dir が 1 つ無い");
+
+    let marker = ready_toy(true, true).unwrap_or_else(|| panic!("toy を組める"));
+    fs::write(marker.host.repo.join(".vessel"), "name=other\nversion=1\n").unwrap_or_else(|e| panic!("marker を差し替えられる: {e}"));
+    assert_eq!(marker.line().as_deref(), Some("init=missing:marker next=init"), "marker が ByMe でない");
+
+    let declaration = ready_toy(true, true).unwrap_or_else(|| panic!("toy を組める"));
+    git_out(&declaration.host.repo, &["rm", "-q", "--cached", ".vessel.toml"]).unwrap_or_else(|| panic!("宣言を index から外せる"));
+    git_out(&declaration.host.repo, &["commit", "-q", "-m", "drop"]).unwrap_or_else(|| panic!("commit できる"));
+    assert!(declaration.host.repo.join(".vessel.toml").is_file(), "worktree には残る");
+    assert_eq!(declaration.line().as_deref(), Some("init=missing:declaration next=init"), "宣言が HEAD に無い");
+
+    let session = ready_toy(false, true).unwrap_or_else(|| panic!("toy を組める"));
+    assert_eq!(session.line().as_deref(), Some("init=missing:session next=init"), "session <repo 名> が無い");
+    let elsewhere = ready_toy(true, true).unwrap_or_else(|| panic!("toy を組める"));
+    let other = elsewhere.host.tmp.join("other-sock").display().to_string();
+    assert_eq!(
+        elsewhere.init_line(&elsewhere.host.global, &elsewhere.host.repo, &["--tmux-socket", &other]).as_deref(),
+        Some("init=missing:session next=init"),
+        "session は --tmux-socket の socket で測る"
+    );
+    assert_eq!(
+        elsewhere.init_line(&elsewhere.host.global, &elsewhere.host.repo, &[]).as_deref(),
+        Some("init=ok next=-"),
+        "--tmux-socket が無ければ既定の socket"
+    );
+
+    let registration = ready_toy(true, false).unwrap_or_else(|| panic!("toy を組める"));
+    assert_eq!(registration.line().as_deref(), Some("init=missing:registration next=seat-launch"), "登録 row が無い");
+}
+
+/// (3) 欠落が在り雛形の pointer が無い周は、最初の欠落に依らず `next=host-init`（欠落 0 は `-` のまま）。
+#[test]
+fn doctor_init_points_to_host_init_without_a_template() {
+    let toy = ready_toy(true, false).unwrap_or_else(|| panic!("toy を組める"));
+    let fresh = toy.host.tmp.join("fresh-gitconfig");
+    assert_eq!(toy.init_line(&fresh, &toy.host.repo, &[]).as_deref(), Some("init=missing:registration next=host-init"), "pointer が無い");
+    fs::remove_file(toy.host.repo.join(".vessel")).unwrap_or_else(|e| panic!("marker を外せる: {e}"));
+    assert_eq!(
+        toy.init_line(&fresh, &toy.host.repo, &[]).as_deref(),
+        Some("init=missing:marker,registration next=host-init"),
+        "欠落は段の順に並ぶ"
+    );
+    let whole = ready_toy(true, true).unwrap_or_else(|| panic!("toy を組める"));
+    let fresh = whole.host.tmp.join("fresh-gitconfig");
+    assert_eq!(whole.init_line(&fresh, &whole.host.repo, &[]).as_deref(), Some("init=ok next=-"), "欠落 0 は pointer に依らない");
+}
+
+/// (1) ROOT が git の repo でない周（cwd も `--repo` も）は `init=unmeasured:no-repo next=-`。他の行は出たまま。
+#[test]
+fn doctor_init_is_unmeasured_outside_a_repo() {
+    let toy = ready_toy(true, true).unwrap_or_else(|| panic!("toy を組める"));
+    let plain = toy.host.tmp.join("plain");
+    fs::create_dir_all(&plain).unwrap_or_else(|e| panic!("非 repo の dir を作れる: {e}"));
+    assert_eq!(toy.init_line(&toy.host.global, &plain, &[]).as_deref(), Some("init=unmeasured:no-repo next=-"), "repo でない cwd");
+    let plain_s = plain.display().to_string();
+    assert_eq!(
+        toy.init_line(&toy.host.global, &toy.host.repo, &["--repo", &plain_s]).as_deref(),
+        Some("init=unmeasured:no-repo next=-"),
+        "repo でない --repo"
+    );
 }

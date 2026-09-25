@@ -5,6 +5,7 @@ expression: masked
 scribe2
 scribe2 [version] ([commit])
 host-template=absent
+init=missing:host-face,registration next=host-init
 ledger-form: open=6 memos=3 no-source=1:s2-m.1 no-observation=0 no-candidate=0 no-promotion=0 shaped=5 both=1:s2-b.1 neither=1:s2-n.1 contracts=1 undiscovered=1:s2-c.1 unlanded=2 drift=1:toy#b settled=1:s2-m.2
 ledger-form: unreadable reason=ledger-unreadable
 usage: scribe2 <name|--version|doctor|account|rules|fleet|vessel|hook|host-guard|pipe|runner|lens|seat|polarity|contracts>

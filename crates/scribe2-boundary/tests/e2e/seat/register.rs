@@ -258,7 +258,7 @@ fn seat_role_doctor_reconciles_rows_with_live_targets() {
     assert!(seat.ready(), "隔離 seat が立つ");
     let out = role_doctor(&place);
     let lines: Vec<String> = stdout_of(&out).lines().map(str::to_owned).collect();
-    assert_eq!(lines.len(), 10, "2 行 + host-template 1 行 + 登録 row 2 行 + 突合 1 行 + host の面 1 行 + 導入先 2 行 + host-guard 1 行: {lines:?}");
+    assert_eq!(lines.len(), 11, "2 行 + host-template 1 行 + init 1 行 + 登録 row 2 行 + 突合 1 行 + host の面 1 行 + 導入先 2 行 + host-guard 1 行: {lines:?}");
     assert_eq!(
         tail(&out),
         [HOST_GUARD_BARE, consumer_gone.as_str(), CONSUMER_REPO, HOST_ABSENT, "seats: registered=2 live=1 missing=1"]
@@ -515,7 +515,7 @@ fn seat_register_model_shows_in_the_doctor_rows_with_dash_for_none() {
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     let lines: Vec<String> = stdout_of(&out).lines().map(str::to_owned).collect();
     assert_eq!(
-        lines.get(3..),
+        lines.get(4..),
         Some(&[
             "seat: role=orchestrator anchor=/repo/a target=rm:doc-a account=acct-1 model=Fable default=no-rule:missing paths=default".to_owned(),
             "seat: role=orchestrator anchor=/repo/b target=rm:doc-b account=acct-1 model=Fable default=no-rule:missing paths=default".to_owned(),
@@ -528,7 +528,7 @@ fn seat_register_model_shows_in_the_doctor_rows_with_dash_for_none() {
         "{lines:?}"
     );
     let rows = vessel::seat::role::render_rows(&role_state(&place), |_| PathKinds::Default, |_| Err(vessel::seat::RuleRead::Missing));
-    assert_eq!(rows, lines.get(3..5).unwrap_or_default(), "pure の一覧と同じ");
+    assert_eq!(rows, lines.get(4..6).unwrap_or_default(), "pure の一覧と同じ");
     fs::remove_dir_all(&place.dir).ok();
 }
 
@@ -560,8 +560,8 @@ fn seat_line_of(lines: &[String], anchor: &str) -> String {
 
 /// doctor の席の行の末尾の `paths=` の欄は 3 つの state を名乗る（§24・行は増えない）: 宣言 file を持たない anchor
 /// （存在しない dir も同じ）と key を 1 本も書かない宣言は `paths=default`、key を書いた宣言は `paths=declared:<数>`、
-/// 不正な宣言は `paths=invalid:<理由>`。総行数は欄の追加で変わらない（2 行 + host-template + row + 突合 + host + 導入先 +
-/// host-guard）。
+/// 不正な宣言は `paths=invalid:<理由>`。総行数は欄の追加で変わらない（2 行 + host-template + init + row + 突合 + host +
+/// 導入先 + host-guard）。
 #[test]
 fn seat_role_doctor_paths_names_default_declared_and_invalid_per_anchor() {
     let place = role_doctor_place();
@@ -580,7 +580,7 @@ fn seat_role_doctor_paths_names_default_declared_and_invalid_per_anchor() {
     let out = role_doctor(&place);
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     let lines: Vec<String> = stdout_of(&out).lines().map(str::to_owned).collect();
-    assert_eq!(lines.len(), 2 + 1 + 6 + 1 + 1 + 6 + 1,"欄の追加で行は増えない（末尾は host-guard の 1 行）: {lines:?}");
+    assert_eq!(lines.len(), 2 + 1 + 1 + 6 + 1 + 1 + 6 + 1,"欄の追加で行は増えない（末尾は host-guard の 1 行）: {lines:?}");
     assert_eq!(
         seat_line_of(&lines, "/repo"),
         "seat: role=orchestrator anchor=/repo target=rolesdoc:rolesdoc account=acct-1 model=Fable default=no-rule:missing paths=default",

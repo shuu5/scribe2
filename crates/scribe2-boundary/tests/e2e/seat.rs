@@ -533,9 +533,9 @@ fn mutant_e2e_doctor_reconciles_against_the_given_tmux_socket_and_refuses_a_dupl
     let live = doctor(&["--state-dir", &state, "--tmux-socket", &place.socket, "--rules", &rules]);
     assert_eq!(live.as_ref().map(rc_of), Some(i32::from(RC_OK)), "{live:?}");
     let lines: Vec<String> = live.map(|out| stdout_of(&out)).unwrap_or_default().lines().map(str::to_owned).collect();
-    assert_eq!(lines.len(), 8, "2 行 + host-template 1 行 + 登録 row 1 行 + 突合 1 行 + host の面 1 行 + 導入先 1 行 + host-guard 1 行: {lines:?}");
+    assert_eq!(lines.len(), 9, "2 行 + host-template 1 行 + init 1 行 + 登録 row 1 行 + 突合 1 行 + host の面 1 行 + 導入先 1 行 + host-guard 1 行: {lines:?}");
     assert_eq!(
-        lines.get(4..7),
+        lines.get(5..8),
         Some(&["seats: registered=1 live=1 missing=0".to_owned(), HOST_ABSENT.to_owned(), CONSUMER_REPO.to_owned()][..]),
         "席の立つ socket"
     );
@@ -545,7 +545,7 @@ fn mutant_e2e_doctor_reconciles_against_the_given_tmux_socket_and_refuses_a_dupl
     assert_eq!(away.as_ref().map(rc_of), Some(i32::from(RC_OK)), "{away:?}");
     let away_lines: Vec<String> = away.map(|out| stdout_of(&out)).unwrap_or_default().lines().map(str::to_owned).collect();
     assert_eq!(
-        away_lines.get(4..7),
+        away_lines.get(5..8),
         Some(&["seats: registered=1 live=unmeasurable missing=unmeasurable".to_owned(), HOST_ABSENT.to_owned(), CONSUMER_REPO.to_owned()][..]),
         "server の無い socket は 0 と書かない"
     );
