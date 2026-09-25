@@ -14,18 +14,62 @@
 //! 群の今の口座の記録（[`Record`]・書くのは 1 周の群の段だけ・[`write_current`]）とその解決の 1 関数（[`current_of`]・記録 >
 //! 種）、hook が逼迫を読んだ周に置く移動を頼む記録（[`put_request`]・在れば上書きしない）。どちらも前の file を消さず履歴の
 //! dir へ move する（[`to_history`]・N1.2）。
+//!
+//! 群の段の lock（[`Lock`]）と、移動の続きで保留の席へ送る 1 行（[`EXIT`]）と `/exit` の確認 dialog の既定の行
+//! （[`exit_dialog`]）もここが持つ: 手は 2 つ（dispatch の 1 周の群の段と管理 tick の移動の周・設計 seat-heartbeat.md §4）で、
+//! 同じ 1 本の lock と同じ値を読む（二重に書かない・C17）。
 
 use super::{record, record_lines, Emit, Hooked};
 use crate::fleet::usage;
 use crate::fleet::{Allowance, WindowKind};
 use crate::invocation::Invocation;
 use crate::rules::manifest::{AccountGroup, Manifest};
+use crate::seat::inject::Confirm;
 use crate::seat::{host_groups_dir, sanitize_target};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Instant;
+
+/// 群の段の lock の file 名（群用 dir の 1 file・`create_new`・設計 account-lifecycle.md §20 形 1 / 5）。
+const LOCK_FILE: &str = "lock";
+
+/// 移動の続きで pane が shell でない保留の席へ送る 1 行（席は自分の process を終えられない＝器が代わりに打つ・設計
+/// account-lifecycle.md §21 形 1）。
+pub const EXIT: &str = "/exit";
+
+/// `/exit` の確認 dialog の既定の行（入力欄の門の tail の字面・畳んで等値で比べる・設計 account-lifecycle.md §22 形 2）。
+const EXIT_DIALOG_ROW: &str = "1. Exit and stop tasks";
+
+/// 既定の行へ Enter を送った周の記録の `what`（設計 account-lifecycle.md §22 形 2）。
+const EXIT_DIALOG_WHAT: &str = "enter:exit-dialog";
+
+/// `/exit` の確認 dialog の既定の行へ Enter を送る口の材料（値はこの 1 か所・記録の `who` は呼び手の名）。
+pub fn exit_dialog(who: &str) -> Confirm<'_> {
+    Confirm { who, row: EXIT_DIALOG_ROW, what: EXIT_DIALOG_WHAT }
+}
+
+/// 群の段の lock（**群の段と tick の移動の周が共有する 1 本**・握った周だけ在る・drop で外す・設計 seat-heartbeat.md §4 形 2）。
+pub struct Lock(PathBuf);
+
+impl Lock {
+    /// 群用 dir に lock の file を `create_new` で置く（中身は握った process の pid＝人が残りを読む）。既に在る・置けない周は
+    /// `Err`（呼び手は 1 つも撃たずに止まる）。
+    pub fn take(dir: &Path) -> std::io::Result<Self> {
+        let path = dir.join(LOCK_FILE);
+        fs::create_dir_all(dir)?;
+        let mut file = OpenOptions::new().write(true).create_new(true).open(&path)?;
+        let _ = writeln!(file, "pid={}", std::process::id());
+        Ok(Self(path))
+    }
+}
+
+impl Drop for Lock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
+}
 
 /// 群の今の口座の記録の拡張子（`<群用 dir>/<群の名>.account`）。
 const CURRENT_EXT: &str = "account";
