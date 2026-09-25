@@ -339,6 +339,26 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
 - 却下: 歯の側だけで済ませる（fixture に 2 語を書いても読み手が 1 語しか受けなければ `Unreadable`＝「読めない札は触らない」で同じく `resumed:0`）／`gone` を無限に待つ（負荷で止まった子を歯が隠す）／pid の namespace や `/proc` の inode で弁別する（`started_ms` の 1 本を増やす・C6.3）／lock file の本文を JSON にする（1 行 2 語で足りる・器の唯一の lock 実装を重くしない）。
 - 後続: §5 の「死んだ所有者の札の回収は原子的でない」は本行の外（同じ面だが別の穴）。
 
+## 25. 追随の起こし直しの後に driver が抜けた便を列が起こし直す（契約表の行 v・§23 の隣の 4 枝目・`s2-07l.633`）
+
+やさしく言うと: gate を通った便が着地の順番待ちで main に追随し、衝突を runner が解いて段が Implemented に戻った後、flag の無い driver（`pipe resume`・1 段だけ進める形）は設計どおりそこで抜ける。その便を拾う枝が dispatcher に無く、誰も gate を撃たないまま列の鍵も持ち続ける（2026-09-25 の実測: 2 時間 40 分・後続は 90 分の待ちを丸ごと食った）。regate で戻された便を拾う §23 の枝と同じ型の穴なので、同じ絞りで 4 枝目を足す。
+
+- 出所: 台帳 `s2-07l.633`（便 s2-07l.614-20260925T040409Z の実測）。
+- 現物（verified・main dae3b91）:
+  - 起こし直しの候補は `crates/scribe2/src/pipe/dispatch.rs` の `revivals`（3 枝: `driver_is_dead`〔札 Dead〕／`passed_gate`〔Gated ∧ PASS ∧ 札 Absent | Dead〕／`regated`〔Implemented ∧ 最新の Gated より後ろに `regate:` の記帳 ∧ 札 Absent | Dead〕・後の 2 枝は `gated` の周だけ）。起こす argv は `resume --run <id> … --drive`（1 本が組む・`DRIVE` を末尾に足す）。
+  - 追随の記帳は `crates/scribe2/src/pipe/follow_step.rs`（`RunStage` 段 Implemented・`detail` = `rebase:<base>..<main>`）と `crates/scribe2/src/pipe/follow.rs`（衝突の起こし直し・`rebase-conflict:` / `rebase-stale-rows:`・読み手 `is_conflict` は接頭辞 2 語）。
+  - regate の記帳の読み手は `crates/scribe2/src/pipe/regate.rs` の `regated_since_gate`（最新の Gated より後ろに `regate:` が在るか・pure）。
+  - 列の鍵は最初の Gated の ts（pipeline.md §36・札 Dead の便だけ `skipped-dead` で外す）。
+- 形（行 v・1 つずつ歯が測る・done と 1:1・判定の順は §23 と同じ: 段の生死 → 待ちの段か → 既存の 3 枝 → 4 枝目）:
+  1. **`revivals` に 4 枝目**: `gated` の周に「段が Implemented ∧ 最新の Gated の `RunStage` より後ろに追随の記帳（`detail` が `rebase:` か `is_conflict` の 2 語で始まる `RunStage`）が在る ∧ その後ろに Gated / Landed の `RunStage` が無い ∧ 札が Absent か Dead」でも候補にする。読み手は `regated_since_gate` と同じ形の pure な 1 本（`regate.rs` の隣に置き、event の列と便 id を受ける・接頭辞の弁別は `is_conflict` と `rebase:` の literal を写す）。既存の 3 枝と待ちの段の枝は 1 字も変えない。
+  2. **起こす argv は既存の 1 本**（`resume … --drive`）＝flag つきで起こし直すので、次は gate → 列 → 着地まで同じ driver が進む。
+  3. **起こさない便**: 追随の記帳の後に Gated を経た便（gate をもう 1 度通った＝最新の Gated が追随より後ろ）／追随の記帳を持たない Implemented（§5「札の無い便は触らない」のまま）／札 Live / Unreadable。
+  4. **`gated` の絞り**は §23 形 3 と同じ（driver の終端の周は段を前へ進めた周だけ・手動の 1 周と印の直後は絞らない）。**二重にしない**は §23 形 4 と同じ（便ごとに 1 判定）。
+  5. **型も字面も足さない**（§23 形 6 と同じ）: `Revive` に理由の field を足さない・`WaitReason` / `Stage` / `EventKind` の変種は増えない・1 周の行と `dispatch ls` の行は不変。
+- 触らない: 列の鍵と `turn_skipping`（§36・Dead だけ外す規則はそのまま＝4 枝目が次の周で driver を戻せば鍵は着地で自然に離れる・memo の候補 2 は要らない〔C17 の 1 段目〕）・flag の無い `pipe resume`（手動の 1 段進めは席の道具として残す）・追随と衝突の起こし直しの記帳の字面。
+- 却下: `turn_skipping` を「Absent ∧ Implemented」へ広げる（4 枝目で足りる・列の判定の読みを増やす）／flag の無い resume を禁じる（席の道具）／追随の起こし直しの側で driver を閉じない（flag 無しの driver は 1 段の契約・設計どおり）。
+- 歯（`crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs` に `pipe_dispatch_revive_followed_` 接頭辞・§23 の regated の歯と同じ fixture〔置き場の event log を手で書く・偽 runner〕）: (a) Gated PASS → 追随 `rebase:` の Implemented ∧ 札 Absent → `gated` の周の 1 周で `resumed:1`・argv の末尾が `--drive`（base では `resumed:0` ＝ RED）(b) 追随が `rebase-conflict:` でも同じ (c) 追随の後にもう 1 度 Gated が在る → `resumed:0`（不変）(d) 追随の記帳の無い Implemented ∧ 札 Absent → `resumed:0`（不変）(e) `gated` でない周（手動の 1 周）でも `resumed:1`。lib は `crates/scribe2/src/pipe/regate.rs` の隣の pure な読み手に `followed_since_gate_` 接頭辞（追随あり / なし / 追随の後の Gated の 3 本）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -603,4 +623,15 @@ write-set = ["crates/scribe2/src/fleet/store.rs", "crates/scribe2/src/pipe/mod.r
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail fleet_store_owner_", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_driver_ticket_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_gated_pass_dead_ticket_ pipe_dispatch_regated_dead_ticket_ pipe_dispatch_driver_"]
 size = "S"
 done = "(1) acquire_with が create_new の直後に pid と started_ms の値を空白 1 つで並べた 2 語 1 行を書き、自分の起動時刻を読めない周は pid 1 語を書く (2) 本文の読み手は pid 1 語と pid + 起動時刻の 2 語の 2 形を受けてそれ以外を Unreadable とし、lock_owner は 2 語の周に probe の Started の値が本文と違えば Dead・等しければ Live・Absent は Dead、1 語の周は今までどおり (3) Driver の Drop は先頭の語で自分の札を判じて 2 語の自分の札を外し他人の札は落とさない (4) put_dead_ticket は抜けた pid と一致しない起動時刻の 2 語を書き、gone は 60 秒を待ち、既存の e2e の歯は約束を変えずに緑のまま (5) 1 周の行と dispatch ls の行と Ticket の 4 値と Owner の 3 値と EventKind の列と受付札と追記の lock の断りの字面は 1 字も変わらない 歯: fleet_store_owner_ の歯が 2 語の Dead / Live と 1 語の互換と 3 語の Unreadable と acquire_with の書く 2 語を測り、pipe_driver_ticket_ の歯が Drop の自分 / 他人の弁別を測り、pipe_dispatch_gated_pass_dead_ticket_ と pipe_dispatch_regated_dead_ticket_ と pipe_dispatch_driver_ の既存の歯が緑のまま"
+[[contract]]
+id = "v"
+title = "追随の起こし直しの後に driver が抜けた便を列が起こし直す — revivals の 4 枝目（Implemented ∧ 最新の Gated より後ろに rebase: / rebase-conflict: の記帳 ∧ 札 Absent | Dead）・argv は既存の resume --drive（§25・s2-07l.633）"
+req = ["FR68", "FR77", "NFR4"]
+section = "25"
+write-set = ["crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/regate.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "docs/design/dispatcher.md"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail followed_since_gate_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_revive_followed_"]
+size = "S"
+growth = ["crates/scribe2/src/pipe/dispatch.rs:20", "crates/scribe2/src/pipe/regate.rs:30"]
+depends = ["t"]
+done = "(1) revivals は gated の周に「段 Implemented ∧ 最新の Gated の RunStage より後ろに追随の記帳（detail が rebase: か is_conflict の 2 語で始まる）∧ その後ろに Gated / Landed が無い ∧ 札 Absent | Dead」の便も候補にし、読み手は regate.rs の隣の pure な 1 本（event の列と便 id）で既存の 3 枝と待ちの段の枝は 1 字も変わらない (2) 起こす argv は既存の 1 本（resume … --drive） (3) 追随の後に Gated を経た便・追随の記帳の無い Implemented・札 Live / Unreadable は起こさない (4) gated の絞りと二重にしない規則は §23 と同じ (5) Revive / WaitReason / Stage / EventKind と 1 周の行・dispatch ls の行は不変・turn_skipping は不変 歯: pipe_dispatch_revive_followed_ の歯が (a) Gated PASS → rebase: の Implemented ∧ 札 Absent で gated の周に resumed:1・argv の末尾 --drive（base では resumed:0 ＝ RED）(b) rebase-conflict: でも同じ (c) 追随の後にもう 1 度 Gated で resumed:0 (d) 追随の記帳の無い Implemented で resumed:0 (e) 手動の 1 周でも resumed:1 を測り、lib の followed_since_gate_ が追随あり / なし / 追随の後の Gated を測る"
 <!-- contracts:end -->
