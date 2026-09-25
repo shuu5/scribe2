@@ -1484,3 +1484,140 @@ fn seat_launch_trust_read_only_dir_is_unwritable_and_the_launch_goes_on() {
     assert_eq!(fs::read_dir(dir(&place)).map(Iterator::count).unwrap_or_default(), 1, "一時 file は残らない");
     fs::remove_dir_all(&place.dir).ok();
 }
+
+// ───── 引数の無い seat launch（host-init.md §5・契約表の行 c・`s2-07l.614`・接頭辞 `seat_launch_default_`） ─────
+//
+// §20 の群の置き場（群の anchor = 置き場の anchor・候補 l1 → l2・記録なし＝種 l1）の anchor の dir を git の repo にし、local 設定
+// `<NAME>.stateDir` を置き場へ向ける。偽 tmux は本物を使わず、窓 `orchestrator` を在る窓として返し、`new-window` を受ける。
+// 字面は契約から組む（実装の helper を使わない）。
+
+/// 既定の歯の repo の dir 名（既定の target の session）。
+const DEFAULT_REPO: &str = "anchor";
+
+/// 既定の歯の置き場と偽 tmux の PATH（`list-windows` は `orchestrator` を返し `new-window` は rc 0・他の口は §20 と同じ）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn launch_default_place() -> (AcctPlace, String) {
+    let (place, path) = launch_group_place(false, None);
+    let repo = place.dir.join(DEFAULT_REPO);
+    crate::git_repo_at(&repo).expect("anchor を git の repo にできる");
+    let key = format!("{NAME}.stateDir");
+    crate::git_out(&repo, &["config", "--local", &key, &place.state.display().to_string()]).expect("local 設定を書ける");
+    let top = crate::git_out(&repo, &["rev-parse", "--show-toplevel"]);
+    assert_eq!(top, Some(launch_anchor(&place)), "repo の root は群の anchor と同じ字面");
+    let (args, launched, seats) = (place.dir.join(LAUNCH_TMUX_ARGS), place.dir.join(GROUP_LAUNCHED), place.state.join("seat"));
+    let tmux = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{args}'\nt=''; p=''\nfor a in \"$@\"; do [ \"$p\" = '-t' ] && t=\"$a\"; p=\"$a\"; done\n\
+         f=$(printf '%s' \"$t\" | tr ':' '_')\ncase \"$1\" in\n\
+         has-session) exit 0;;\nlist-windows) echo orchestrator;;\nnew-window) exit 0;;\nlist-panes) echo bash;;\n\
+         capture-pane) printf '$ \\n';;\n\
+         send-keys) if [ \"$4\" = \"-l\" ]; then printf '%s\\n' \"$5\" >> '{launched}'\n\
+         elif [ \"$4\" = \"Enter\" ]; then mkdir -p '{seats}/'\"$f\"\n\
+         printf '{{\"schema\":1,\"state\":\"idle\",\"event\":\"SessionStart\",\"ts\":%s,\"sid\":\"\"}}\\n' \"$(date +%s)\" \
+         >> '{seats}/'\"$f\"'/state.jsonl'; fi;;\n*) exit 1;;\nesac\nexit 0\n",
+        args = args.display(),
+        launched = launched.display(),
+        seats = seats.display(),
+    );
+    fs::write(place.dir.join("group-bin").join("tmux"), tmux).expect("偽 tmux を書ける");
+    (place, path)
+}
+
+/// 偽 tmux の PATH・cwd `cwd` で `seat launch` と `extra` だけを撃つ（置き場も役割も target も渡さない）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn launch_default_run(cwd: &Path, path: &str, extra: &[&str]) -> Output {
+    Command::new(bin()).args(["seat", "launch"]).args(extra).current_dir(cwd).env("PATH", path).output().expect("binary を起動できる")
+}
+
+/// 起こした周: rc 0・成立の 1 行の全体（target・種の口座 l1・置き場の出所 `source`）・登録 row は 1 件で役割 orchestrator・
+/// anchor = repo・target = `target`・口座 l1・起動行は l1 の口座の dir を運ぶ。
+fn launch_default_assert_launched(place: &AcctPlace, out: &Output, target: &str, source: &str, case: &str) {
+    let line = stdout_of(out);
+    assert_eq!(rc_of(out), i32::from(RC_OK), "{case}: stdout={line} stderr={}", stderr_of(out));
+    let flat = target.replace(':', "_");
+    assert_eq!(line, format!("seat launch: launched target={flat} account=l1{} trust=unwritable\n", provenance(&place.state, source)), "{case}");
+    let rows: Vec<_> = acct_rows(&place.state).into_iter().map(|row| (row.role, row.anchor, row.target, row.account)).collect();
+    let want = (vessel::seat::role::Role::Orchestrator, launch_anchor(place), target.to_owned(), "l1".to_owned());
+    assert_eq!(rows.last(), Some(&want), "{case}: 登録 row");
+    let sent = fs::read_to_string(place.dir.join(GROUP_LAUNCHED)).unwrap_or_default();
+    let dir = place.state.join("accounts").join("l1").display().to_string();
+    assert!(sent.lines().last().is_some_and(|found| found.contains(&format!("CLAUDE_CONFIG_DIR={dir} "))), "{case}: {sent}");
+    let calls = fs::read_to_string(place.dir.join(LAUNCH_TMUX_ARGS)).unwrap_or_default();
+    let session = target.split(':').next().unwrap_or_default();
+    assert!(calls.lines().any(|found| found == format!("has-session -t ={session}")), "{case}: session {session} を確かめる: {calls}");
+}
+
+/// (1) 引数の無い `seat launch` は cwd の repo の local 設定から置き場（`source=git-config`）を、役割 orchestrator を、
+/// `<repo の dir 名>:orchestrator` を target に、群の今の口座（種 l1）を口座に解いて登録 row を書き席を起こす。`--role orchestrator`
+/// だけを明示した周も target は同じ。base は引数の無い `seat launch` を使い方で断る（RED）。
+#[test]
+fn seat_launch_default_resolves_the_place_the_role_and_the_target_from_the_cwd_repo() {
+    let want = format!("{DEFAULT_REPO}:orchestrator");
+    for (case, extra) in [("引数無し", &[][..]), ("--role だけ", &["--role", "orchestrator"][..])] {
+        let (place, path) = launch_default_place();
+        let out = launch_default_run(&place.dir.join(DEFAULT_REPO), &path, extra);
+        launch_default_assert_launched(&place, &out, &want, "git-config", case);
+        assert_eq!(acct_rows(&place.state).len(), 1, "{case}: row は 1 件");
+        fs::remove_dir_all(&place.dir).ok();
+    }
+}
+
+/// (1) 明示の引数は既定に勝つ: `--target other:win` は役割名に依らずその target・`--state-dir` は local 設定に勝ち出所は `flag`。
+#[test]
+fn seat_launch_default_explicit_flags_win_over_the_defaults() {
+    let (place, path) = launch_default_place();
+    let repo = place.dir.join(DEFAULT_REPO);
+    let out = launch_default_run(&repo, &path, &["--target", "other:win"]);
+    launch_default_assert_launched(&place, &out, "other:win", "git-config", "--target");
+    let state = place.state.display().to_string();
+    let out = launch_default_run(&repo, &path, &["--state-dir", &state]);
+    launch_default_assert_launched(&place, &out, &format!("{DEFAULT_REPO}:orchestrator"), "flag", "--state-dir");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (1) 既定を解けない周は `defaults-unresolved` で解けない名を宣言順に `missing=` に載せ、長い形の判定と断りの字面は変わらない:
+/// 値欠け・空文字・未知の役割・`S:W` でない target は使い方・3 つとも明示で anchor を解けない周は `anchor-unresolvable` の従来の行。
+/// どの周も row を書かず tmux を 1 度も撃たない。
+#[test]
+fn seat_launch_default_unresolved_names_the_missing_flags_and_long_form_refusals_are_unchanged() {
+    let (place, path) = launch_default_place();
+    let plain = place.dir.join("plain");
+    fs::create_dir_all(&plain).ok();
+    let bare = place.dir.join("bare");
+    assert!(crate::git_repo_at(&bare).is_some(), "設定の無い repo を作れる");
+    let state = place.state.display().to_string();
+    let unresolved: [(&str, &Path, Vec<&str>, &str); 4] = [
+        ("repo の外", &plain, vec![], "--state-dir,--target"),
+        ("repo の外・--state-dir", &plain, vec!["--state-dir", &state], "--target"),
+        ("repo の外・--target", &plain, vec!["--target", "x:y"], "--state-dir"),
+        ("設定の無い repo", &bare, vec!["--role", "orchestrator"], "--state-dir"),
+    ];
+    for (case, cwd, extra, missing) in unresolved {
+        let out = launch_default_run(cwd, &path, &extra);
+        assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "{case}: stdout={}", stdout_of(&out));
+        assert!(stdout_of(&out).is_empty(), "{case}: stdout は空");
+        assert_eq!(stderr_of(&out), format!("seat launch: refused reason=defaults-unresolved missing={missing}\n"), "{case}");
+    }
+    let usage = format!("{}\n", vessel::seat::cli::usage());
+    let usages: [(&str, Vec<&str>); 4] = [
+        ("値欠け", vec!["--role"]),
+        ("空文字", vec!["--target", ""]),
+        ("未知の役割", vec!["--role", "planner"]),
+        ("S:W でない", vec!["--target", "bad"]),
+    ];
+    for (case, extra) in usages {
+        let out = launch_default_run(&place.dir.join(DEFAULT_REPO), &path, &extra);
+        assert_eq!((rc_of(&out), stdout_of(&out), stderr_of(&out)), (i32::from(RC_REFUSED), String::new(), usage.clone()), "{case}: 使い方");
+    }
+    let full = launch_default_run(&plain, &path, &["--state-dir", &state, "--role", "orchestrator", "--target", "x:y"]);
+    let line = format!("seat launch: refused reason=anchor-unresolvable target=x_y{}\n", provenance(&place.state, "flag"));
+    assert_eq!((rc_of(&full), stderr_of(&full)), (i32::from(RC_REFUSED), line), "3 つとも明示は従来の断り");
+    assert!(acct_rows(&place.state).is_empty(), "row を書かない");
+    assert!(!place.dir.join(LAUNCH_TMUX_ARGS).exists(), "tmux を 1 度も撃たない");
+    fs::remove_dir_all(&place.dir).ok();
+}

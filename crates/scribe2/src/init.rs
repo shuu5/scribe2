@@ -1,6 +1,6 @@
 //! 新しい repo を器に載せる口（設計 host-init.md）。本 file は行 a の `host init <TEMPLATE>`（§3）と doctor の
-//! `host-template=` の 1 行と、行 b の `init [ROOT] [--group <名>]`（§4 の 7 段）と、行 d の doctor の `init=` の 1 行
-//! （§6）を持つ。
+//! `host-template=` の 1 行と、行 b の `init [ROOT] [--group <名>]`（§4 の 7 段）に行 c の tmux の session と席の 2 段
+//! （§5・計 9 段）を足した口と、行 d の doctor の `init=` の 1 行（§6）を持つ。
 //!
 //! 雛形（既存の置き場）の在り処は git の **global** 設定 `<NAME>.template` の絶対 path ただ 1 つで、key 名は
 //! NAME 定数から導く（C2.2）。**env も HOME も読まない**（global 設定の file の在り処は git が解く）。git は
@@ -306,22 +306,34 @@ impl Step {
     }
 }
 
-/// `init` に続く引数を捌く。
-pub fn dispatch(args: &[String]) -> Outcome {
+/// `init` に続く引数を捌く。`program` は境界 crate が渡す自分自身の呼ばれ方（`argv[0]`・`current_exe` は読まない C2.2）で、
+/// 9 段目が `seat launch` の子を撃つ program になる（§5）。
+pub fn dispatch(args: &[String], program: &Path) -> Outcome {
     let refused = |error: ArgsError| cli_args::refusal("init", &error, usage());
     let parsed = match cli_args::parse(args, ALLOWED_INIT) {
         Ok(found) => found,
         Err(error) => return refused(error),
     };
+    let cwd = std::env::current_dir();
     let root = match parsed.positionals() {
-        [] => match std::env::current_dir() {
-            Ok(found) => found,
+        [] => match &cwd {
+            Ok(found) => found.clone(),
             Err(err) => return Outcome::failed(RC_REFUSED, vec![format!("init: cwd を解決できない: {err}（何も書かない）")]),
         },
         [root] => PathBuf::from(root),
         [_, extra, ..] => return refused(ArgsError::Unknown((*extra).to_owned())),
     };
-    init(&root, parsed.value("--group"))
+    init(&root, parsed.value("--group"), &program_of(program, cwd.ok().as_deref()))
+}
+
+/// 9 段目の子の program（§5・行 c の done (6)）: `/` を含む相対 path は init の cwd で絶対 path に解く（子は ROOT へ
+/// current_dir するので、解かなければ ROOT の下で別の binary を探す）。`/` を含まない名前は PATH の解決のまま・絶対 path と
+/// cwd を解けない周はそのまま。
+fn program_of(program: &Path, cwd: Option<&Path>) -> PathBuf {
+    match cwd {
+        Some(dir) if program.is_relative() && program.as_os_str().to_string_lossy().contains('/') => dir.join(program),
+        _ => program.to_path_buf(),
+    }
 }
 
 /// 新しい置き場の path（`<雛形の親>/<雛形の dir 名>-<ROOT の dir 名>`・§4 の 1）。
@@ -330,8 +342,8 @@ pub fn place_of(template: &Path, root: &Path) -> Option<PathBuf> {
     Some(template.parent()?.join(format!("{base}-{repo}")))
 }
 
-/// `init [ROOT]`（§4）: 前提（git の repo・雛形の pointer）を 1 段目の前に確かめ、7 段を順に 1 行ずつ出す。
-fn init(root: &Path, group: Option<&str>) -> Outcome {
+/// `init [ROOT]`（§4・§5）: 前提（git の repo・雛形の pointer）を 1 段目の前に確かめ、9 段を順に 1 行ずつ出す。
+fn init(root: &Path, group: Option<&str>, program: &Path) -> Outcome {
     let refuse = |reason: String| Outcome::failed(RC_REFUSED, vec![format!("init: {reason}（何も書かない）")]);
     let Some(root) = vessel::repo_root(root) else {
         return refuse(format!("{} は git の repo でない", root.display()));
@@ -373,6 +385,9 @@ fn init(root: &Path, group: Option<&str>) -> Outcome {
     steps.push(("declaration", declared));
     steps.push(("group", group.map_or(Step::Skip, |name| join_group(&template, &place, &root, name))));
     steps.push(("commit", commit(&root, &written)));
+    // 8 段目が failed の周も 9 段目は撃つ（子の断りの語をそのまま写す・§5）。
+    steps.push(("session", open_session(&root)));
+    steps.push(("seat", launch_seat(program, &place, &root)));
     let failed = steps.iter().find(|(_, step)| matches!(step, Step::Failed(_))).map(|(stage, _)| *stage);
     let mut out: Vec<String> = steps.iter().map(|(stage, step)| format!("init: {stage} {}", step.render())).collect();
     out.push(failed.map_or_else(|| "next=doctor".to_owned(), |stage| format!("next=fix:{stage}")));
@@ -541,4 +556,44 @@ fn commit(root: &Path, written: &[&str]) -> Step {
     } else {
         Step::Failed("git".to_owned())
     }
+}
+
+/// 8 段目（§5）: tmux の session `<ROOT の dir 名>`（socket は既定）が在れば skip、無ければ
+/// `new-session -d -s <名> -n <役割名> -c ROOT` で作る。撃てない・rc≠0 の周は `failed:tmux`。
+fn open_session(root: &Path) -> Step {
+    let failed = || Step::Failed("tmux".to_owned());
+    let Some(name) = root.file_name().and_then(|found| found.to_str()) else {
+        return failed();
+    };
+    if session_exists(None, name) {
+        return Step::Skip;
+    }
+    let made = Invocation::new("tmux")
+        .args(["new-session", "-d", "-s", name, "-n", crate::seat::role::Role::Orchestrator.as_str(), "-c"])
+        .arg(root)
+        .output()
+        .is_ok_and(|out| out.status.success());
+    if made { Step::Wrote } else { failed() }
+}
+
+/// 9 段目（§5）: 置き場に役割 orchestrator・anchor = ROOT の登録 row が在れば skip（[`registered`] の 1 述語）、無ければ
+/// `seat launch` の既定形（引数無し）を cwd = ROOT で 1 回撃つ。rc 0 は ok、断られた周は子の行の `reason=` の語をそのまま
+/// `failed:seat:<語>` に写す（撃てない周は `seat:spawn`・語の無い断りは `seat:refused`）。
+fn launch_seat(program: &Path, place: &Path, root: &Path) -> Step {
+    if registered(place, root) {
+        return Step::Skip;
+    }
+    let launched = Invocation::new(program)
+        .args(["seat", crate::seat::cli::SeatCommand::Launch.as_str()])
+        .current_dir(root)
+        .output();
+    let Ok(out) = launched else {
+        return Step::Failed("seat:spawn".to_owned());
+    };
+    if out.status.success() {
+        return Step::Wrote;
+    }
+    let text = format!("{}\n{}", String::from_utf8_lossy(&out.stderr), String::from_utf8_lossy(&out.stdout));
+    let word = text.split_whitespace().find_map(|found| found.strip_prefix("reason=")).unwrap_or("refused");
+    Step::Failed(format!("seat:{word}"))
 }

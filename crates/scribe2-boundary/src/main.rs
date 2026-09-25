@@ -126,8 +126,8 @@ fn dispatch(arg: Option<&str>, rest: &[String]) -> Result<Vec<String>, String> {
 /// 引数列を 1 回分の結果へ写す。
 ///
 /// subcommand は **1 つの [`Outcome`] 型だけ**を返す（憲法 C2）。rc も字面もここでは
-/// 作り替えない。
-fn run(args: &[String]) -> Outcome {
+/// 作り替えない。`program` は自分自身の呼ばれ方（`argv[0]`）で、`init` の 9 段目が子の program に使う（host-init.md §5）。
+fn run(args: &[String], program: &Path) -> Outcome {
     let rest = args.get(1..).unwrap_or_default();
     match args.first().map(String::as_str) {
         // 口座の口（account-lifecycle.md §3）。置き場は `--state-dir` だけ・env を読まない。
@@ -138,8 +138,9 @@ fn run(args: &[String]) -> Outcome {
         // 雛形の pointer を host に 1 回書く口（host-init.md §3）。使い方は `host` 自身が持つ（上の 1 行の usage は外形
         // snapshot が pin しているので動かさない）。
         Some("host") => vessel::init::host_dispatch(rest),
-        // repo を器に載せる 7 段（host-init.md §4）。使い方は `init` 自身が持つ。
-        Some("init") => vessel::init::dispatch(rest),
+        // repo を器に載せる 9 段（host-init.md §4 / §5）。使い方は `init` 自身が持つ。9 段目の `seat launch` の子は自分自身の
+        // 呼ばれ方（`argv[0]`・`current_exe` は読まない）で撃つ。
+        Some("init") => vessel::init::dispatch(rest, program),
         Some("pipe") => vessel::pipe::cli::dispatch(rest),
         Some("seat") => vessel::seat::cli::dispatch(rest),
         // 極性一覧（ADR-0014 §2.2）。引数も stdin も env も読まない。
@@ -190,7 +191,8 @@ fn main() -> ExitCode {
     // 起動の実物を最初に据える（core の起動の記述は据えていない周に撃てない・設計 core-boundary.md §9 採る形 3）。
     scribe2_boundary::spawner::install();
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let outcome = run(&args);
+    let program = std::env::args_os().next().map_or_else(|| std::path::PathBuf::from(NAME), std::path::PathBuf::from);
+    let outcome = run(&args, &program);
     emit_all(&outcome.out, &outcome.err);
     ExitCode::from(outcome.rc)
 }

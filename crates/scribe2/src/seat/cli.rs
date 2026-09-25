@@ -398,8 +398,12 @@ fn launch_flags(args: &[String]) -> Option<LaunchArgs<'_>> {
 }
 
 /// `seat launch`（設計 account-lifecycle.md §4・ADR-0026 §2.3・SRS FR59）: 置き場と anchor（`seat register` と同じ解き方）を
-/// 解き、[`launch_with`] へ渡す（長い形）。
+/// 解き、[`launch_with`] へ渡す（長い形）。`--state-dir` / `--role` / `--target` のどれかが無い周は既定を解く
+/// [`launch_defaults`]（設計 host-init.md §5・3 つとも在る周の判定と断りの字面は従来のまま）。
 fn launch_of(args: &[String]) -> Outcome {
+    if ["--state-dir", "--role", "--target"].iter().any(|name| matches!(flag(args, name), Flag::Absent)) {
+        return launch_defaults(args);
+    }
     let Some(args) = launch_flags(args) else {
         return refused_usage();
     };
@@ -407,6 +411,48 @@ fn launch_of(args: &[String]) -> Outcome {
         Ok(place) => launch_with(&args.flags, &place),
         Err(refused) => refused,
     }
+}
+
+/// 長い形の既定（設計 host-init.md §5・SRS FR59 / FR36）: `--state-dir` は cwd の repo の local 設定（[`super::state_dir_of`]）、
+/// `--role` は [`role::Role::Orchestrator`]、`--target` は `<repo の dir 名>:<役割名>`（[`default_target`]・repo は `--anchor` か
+/// cwd の repo root＝登録 row の anchor と同じ 1 つ）。口座は従来の [`cycle::launch`] が解く（群の置き場は群の今の口座・それ以外は
+/// 選定）。明示の flag は既定に勝ち、値欠け・空文字・未知の `--role`・`S:W` でない `--target` は従来どおり使い方で断る。既定を
+/// 解けない名は宣言順（`--state-dir` → `--target`）で `missing=` に載せて `defaults-unresolved` で断る（1 key も送らず row も書かない）。
+fn launch_defaults(args: &[String]) -> Outcome {
+    let [state_dir, role, target, account, anchor, model, restore, socket] =
+        ["--state-dir", "--role", "--target", "--account", "--anchor", "--model", "--restore", "--tmux-socket"].map(|name| nonempty(args, name).ok());
+    let (Some(state_dir), Some(role), Some(target), Some(account), Some(anchor), Some(model), Some(restore), Some(socket)) =
+        (state_dir, role, target, account, anchor, model, restore, socket)
+    else {
+        return refused_usage();
+    };
+    let Some(role) = role.map_or(Some(role::Role::Orchestrator), role::Role::parse) else {
+        return refused_usage();
+    };
+    if target.is_some_and(|found| !target_well_formed(found)) {
+        return refused_usage();
+    }
+    let target = target.map(str::to_owned).or_else(|| role::anchor_of(anchor.map(Path::new)).and_then(|root| default_target(&root, role)));
+    let missing: Vec<&str> = [("--state-dir", state_dir.is_none() && super::state_dir_of(None).is_none()), ("--target", target.is_none())]
+        .into_iter()
+        .filter_map(|(name, absent)| absent.then_some(name))
+        .collect();
+    let Some(target) = target.filter(|_| missing.is_empty()) else {
+        return Outcome::failed_line(RC_REFUSED, render_defaults_unresolved(&missing));
+    };
+    let place = match launch_place(state_dir, anchor, Some(&target)) {
+        Ok(found) => found,
+        Err(refused) => return refused,
+    };
+    let flags = LaunchFlags { target: &target, role, account, model, restore, socket, carry: &[] };
+    launch_with(&flags, &place)
+}
+
+/// 長い形の既定の target（`<repo の dir 名>:<役割名>`・短い形の `#S:<役割名>` と同じ形）。dir 名が無い・UTF-8 でない・空・
+/// `:` を含む（`S:W` に読めない）周は解けない。
+fn default_target(root: &Path, role: role::Role) -> Option<String> {
+    let name = root.file_name()?.to_str().filter(|found| !found.is_empty() && !found.contains(':'))?;
+    Some(format!("{name}:{}", role.as_str()))
 }
 
 /// 短い形の既定が解けない理由（account-lifecycle.md §14・row も flag も無い・`cycle::launch` の前で終わる断り＝

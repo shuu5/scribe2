@@ -121,7 +121,7 @@ README の先頭に「新しい repo を器に載せる」の節を置く: 打�
 
 ## 10. 歯（置き場は既存の file・接頭辞ごとに 1 file・base で RED）
 
-- `crates/scribe2-boundary/tests/e2e/main.rs`（`host_init_` / `init_repo_` / `doctor_init_` 接頭辞・偽 git は不要＝toy の repo を作る・tmux は偽 socket の fixture）: `host init` が global 設定（`GIT_CONFIG_GLOBAL` を toy の file に向けた env で撃つ）を書き doctor が `host-template=` を出す ／ `init` が 7 段を順に通し、置き場・面・symlink・marker・宣言・commit が在り、2 度目は全段 skip ／ `Cargo.toml` の有無で宣言の形が変わる ／ `--group` が雛形と同じ親の下の 2 面の anchors に足し、1 面が壊れていれば 0 面 ／ `doctor` が欠落を宣言順に名指し `next=` を 1 つ出す。
+- `crates/scribe2-boundary/tests/e2e/main.rs`（`host_init_` / `init_repo_` / `init_seat_` / `doctor_init_` 接頭辞・偽 git は不要＝toy の repo を作る・tmux は偽 socket の fixture）: `host init` が global 設定（`GIT_CONFIG_GLOBAL` を toy の file に向けた env で撃つ）を書き doctor が `host-template=` を出す ／ `init` が 9 段を順に通し、置き場・面・symlink・marker・宣言・commit・session が在り、2 度目は全段 skip ／ `Cargo.toml` の有無で宣言の形が変わる ／ `--group` が雛形と同じ親の下の 2 面の anchors に足し、1 面が壊れていれば 0 面 ／ 8 段目と 9 段目の撃ち方（§5 の done と歯の対応）／ `doctor` が欠落を宣言順に名指し `next=` を 1 つ出す。`init` の歯は PATH の先頭の偽 tmux だけを撃つ（既定の socket の本物の server に触れない）。
 - `crates/scribe2-boundary/tests/e2e/seat/launch.rs`（`seat_launch_default_` 接頭辞）: 引数の無い `seat launch` が cwd の repo の設定と repo 名から target を組んで登録 row を書く ／ 明示の引数が勝つ ／ 解けない周は `defaults-unresolved` の字面が不変。
 
 ## 11. 憲法・制約との整合
