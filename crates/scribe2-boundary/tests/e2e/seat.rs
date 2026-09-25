@@ -1832,18 +1832,13 @@ fn seat_tick_move_launches_the_group_account_into_a_shell_pane() {
     assert!(!place.state.join("seat").join(TICK_SEAT).join("pointer-ladder").exists(), "梯子の記録は書かれない");
 }
 
-/// (d) 最終行 Busy → `busy`・0 key（移動の門より前で止まる）／記録が dir（読めない）→ `group-unreadable`・0 key／lock の file が
-/// 在る → `group-locked`・0 key・記録 0・起動行 0（pane が shell でも起こさない）。
+/// (d) 記録が dir（読めない）→ `group-unreadable`・0 key／lock の file が在る → `group-locked`・0 key・記録 0・起動行 0（pane が
+/// shell でも起こさない）。最終行 Busy の移動の周は §10 形 8 で退避へ進む（`seat_tick_evacuate_` の歯）。
 #[test]
-fn seat_tick_move_stops_on_busy_unreadable_record_and_held_lock() {
+fn seat_tick_move_stops_on_unreadable_record_and_held_lock() {
     let root = tmp();
     let place = move_place(&root, "state", MOVE_ANCHOR);
     move_record(&root, MOVE_B);
-    let now = unix_now();
-    let seat = seat_dir_of(&place.state, TICK_SEAT);
-    fs::write(state_file(&seat), format!("{}\n", stamp_line("busy", "UserPromptSubmit", now - 10, "sid-move"))).ok();
-    move_assert_quiet(&place, &move_noop("busy"));
-    fs::write(state_file(&seat), format!("{}\n", stamp_line("idle", "Stop", now - 10, "sid-move"))).ok();
     let lock = move_groups_dir(&root).join("lock");
     fs::write(&lock, "pid=1\n").ok();
     move_assert_quiet(&place, &move_noop("group-locked"));
@@ -2298,12 +2293,14 @@ fn seat_tick_wake_launches_a_group_seat_with_the_record_account() {
     assert!(!move_groups_dir(&root).join("lock").exists(), "lock は周の後に外れる");
 }
 
-/// (d) 前面 `claude` ∧ 最終行 busy → `noop busy`（今のまま・0 key・起動行 0）。群の row も群の外の row も同じ。
+/// (d) 前面 `claude` ∧ 最終行 busy → `noop busy`（今のまま・0 key・起動行 0）。群の外の row も、記録 = row の群の row も同じ
+/// （記録 ≠ row の移動の周は §10 形 8 で退避へ進む＝`seat_tick_evacuate_` の歯）。
 #[test]
 fn seat_tick_wake_leaves_a_busy_claude_front_alone() {
     for anchor in ["/elsewhere", MOVE_ANCHOR] {
         let root = tmp();
         let place = wake_place(&root, anchor, WAKE_SID);
+        move_record(&root, MOVE_A);
         fs::remove_file(place.at(MOVE_FRONT)).ok();
         fs::write(place.at(TICK_PANE), TICK_CLEAR_PANE).ok();
         let rows = acct_rows(&place.state).len();
@@ -2370,6 +2367,77 @@ fn seat_tick_stale_busy_within_twice_the_stale_with_a_clear_input_stays_state_st
         tick_assert_quiet(&place, &tick_noop("state-stale", "-", "-"));
     }
     assert!(tick_keys(&place).is_empty(), "0 key");
+}
+
+// ─────── 移動の周の退避は打刻に依らない（seat-heartbeat.md §10 形 8〜10・契約表の行 m・`s2-07l.635`・接頭辞 `seat_tick_evacuate_`） ───────
+//
+// §4 の移動の fixture（偽 tmux・host の群用 dir・`--rules` の写し・前面 `claude`・空の入力欄）の打刻を Busy に書き換える。
+
+/// 移動の fixture（登録 row は口座 A・anchor は群）に群の記録 `record` と最終行 Busy（`ago` 秒前）の打刻を置く。
+fn evacuate_place(root: &Path, record: &str, ago: u64) -> MovePlace {
+    let place = move_place(root, "state", MOVE_ANCHOR);
+    move_record(root, record);
+    let seat = seat_dir_of(&place.state, TICK_SEAT);
+    fs::write(state_file(&seat), format!("{}\n", stamp_line("busy", "UserPromptSubmit", unix_now() - ago, "sid-move"))).ok();
+    place
+}
+
+/// 1 周撃ち、判定行が `move=exit` で `/exit` の text 1 回 + Enter 1 回が増え、席の記録が `who=seat-tick-move what=/exit` の 1 行
+/// 増え、梯子の記録が書かれないことを測る。
+fn evacuate_assert_exit(place: &MovePlace) {
+    let (keys, injections) = (move_keys(place).len(), move_injections(place).len());
+    let out = move_run(place);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(stdout_of(&out), move_line("exit", "false", "-"), "判定行 1 行（busy / state-stale は出ない）");
+    let sent: Vec<String> = move_keys(place).into_iter().skip(keys).collect();
+    assert_eq!(sent, [format!("send-keys -t {TICK_TARGET} -l /exit"), format!("send-keys -t {TICK_TARGET} Enter")], "/exit 1 行");
+    let lines = move_injections(place);
+    assert_eq!(lines.len(), injections + 1, "記録は 1 送信 1 行: {lines:?}");
+    let line = lines.last().map(String::as_str).unwrap_or_default();
+    assert_eq!(move_who_what(line), (Some("seat-tick-move".to_owned()), Some("/exit".to_owned())), "{line}");
+    assert!(!place.state.join("seat").join(TICK_SEAT).join("pointer-ladder").exists(), "梯子の記録は書かれない");
+}
+
+/// (k) 記録 ≠ row ∧ 前面 `claude` ∧ 最終行 Busy（新しい）∧ 入力欄が空 → `/exit` 1 行・`decision=move move=exit`（base では
+/// `noop busy` ＝ RED）。
+#[test]
+fn seat_tick_evacuate_sends_the_exit_to_a_fresh_busy_seat() {
+    let root = tmp();
+    evacuate_assert_exit(&evacuate_place(&root, MOVE_B, 10));
+}
+
+/// (l) 同じ席で最終行の Busy が stale より古い → `/exit` 1 行（base では `state-stale` ＝ RED）。
+#[test]
+fn seat_tick_evacuate_sends_the_exit_to_a_stale_busy_seat() {
+    let root = tmp();
+    evacuate_assert_exit(&evacuate_place(&root, MOVE_B, TICK_STALE + 60));
+}
+
+/// (m) 記録 = row ∧ 最終行 Busy → `noop busy`・0 key（移動の周でない席は今のまま）。
+#[test]
+fn seat_tick_evacuate_leaves_a_busy_seat_whose_row_matches_the_record() {
+    let root = tmp();
+    move_assert_quiet(&evacuate_place(&root, MOVE_A, 10), &move_noop("busy"));
+}
+
+/// (n) 記録 ≠ row ∧ 最終行 Busy ∧ 入力欄に字 → `input-busy`・0 key（移動の門の入力欄の門のまま）。
+#[test]
+fn seat_tick_evacuate_refuses_typed_input() {
+    let root = tmp();
+    let place = evacuate_place(&root, MOVE_B, 10);
+    fs::write(place.at(TICK_PANE), format!("{TICK_CLEAR_PANE}half typed")).ok();
+    move_assert_quiet(&place, &move_noop("input-busy"));
+}
+
+/// (o) 2 周続けて撃つ → `/exit` が 2 行（積む・止めない）・記録も 2 行。
+#[test]
+fn seat_tick_evacuate_sends_the_exit_every_round() {
+    let root = tmp();
+    let place = evacuate_place(&root, MOVE_B, 10);
+    evacuate_assert_exit(&place);
+    evacuate_assert_exit(&place);
+    let exits = move_keys(&place).iter().filter(|key| key.ends_with(" -l /exit")).count();
+    assert_eq!((exits, move_injections(&place).len()), (2, 2), "/exit 2 行・記録 2 行");
 }
 
 // ─────────────────── tick の unit（seat-heartbeat.md §3・契約表の行 b・`s2-07l.583`・接頭辞 `seat_unit_`） ───────────────────

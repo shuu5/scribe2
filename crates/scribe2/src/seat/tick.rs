@@ -23,6 +23,8 @@
 //! 死んだ席も起こす（設計 §7・契約表の行 f）: 登録 row を読んだ直後・打刻を読む前に窓が shell かを見て、shell の周は打刻と
 //! 梯子を読まず起こす周（[`awake`]）へ進む。口座は anchor が群に属せば群の今の口座（lock の内側）、属さなければ row の口座で、
 //! 打刻の最終行の sid を `--resume` で運び、初手の合図（[`relaunch_signal`]）を 1 語積む（[`state::resume_carry`]・§10 形 1）。移動の門（[`moving`]）は窓が shell でない周の退避だけを撃つ。
+//! 移動の周の退避は打刻に依らない（設計 §10 形 8〜10・契約表の行 m）: 窓が shell でない周は打刻を読む前に移動の周かを見て、
+//! 移動の周は打刻と梯子を読まず移動の門へ進む（Busy の周も /exit を周期ごとに送る・記録は 1 送信 1 行）。
 //! 最終行の Busy が `seat.tick_stale_s` の 2 倍より古く入力欄が空の周（Stop の打刻を失った席）は Busy を無視して列の先へ進む
 //! （設計 §7 形 7・契約表の行 h）。
 //!
@@ -534,15 +536,18 @@ pub struct Input<'a> {
 }
 
 /// 判定の列を 1 周撃つ（順序固定の AND・最初に立たなかった条件を理由にする）。`front` の中で窓が shell と読めた周は起こす周
-/// （[`awake`]）で終わり、`front` の後に群の判定（[`judged`]）を撃ち、移動の門（[`moving`]）が移動の周と判じた周は、以後の列
-/// （黙り・上限・床・口座の門・合図の注入）を撃たない。
+/// （[`awake`]）で、移動の周（窓が claude）は移動の門（[`moving`]）で終わり、`front` の後に群の判定（[`judged`]）を撃ち、判定で
+/// 移った周は同じ周の移動の門が退避を撃って、以後の列（黙り・上限・床・口座の門・合図の注入）を撃たない。
 pub fn judge(input: &Input) -> (Verdict, Judged) {
     let found = match front(input) {
         Ok(found) => found,
         Err(stopped) => return (stopped, Judged::Unjudged),
     };
     let judged = judged(input, &found);
-    (moving(input, &found).map_or_else(|| back(input, &found), Ok).unwrap_or_else(|stopped| stopped), judged)
+    let moved = matches!(judged, Judged::Moved(_))
+        .then(|| moving(input, &found.anchor, &found.account, found.rows.window_ms))
+        .flatten();
+    (moved.map_or_else(|| back(input, &found), Ok).unwrap_or_else(|stopped| stopped), judged)
 }
 
 /// 群の判定の打刻の間隔の rules 行（計測の鮮度の行を流用・行を足さない・設計 §9 形 2）。
@@ -645,8 +650,9 @@ struct Front {
     now: u64,
 }
 
-/// 形 1 の 1〜3（登録 row → 窓が shell か〔§7 形 1〕→ 状態の打刻 → digest の比較）。窓が shell の周は打刻と梯子を読まず
-/// 起こす周（[`awake`]）の判定で止まる。
+/// 形 1 の 1〜3（登録 row → 窓が shell か〔§7 形 1〕→ 移動の周か〔§10 形 8〕→ 状態の打刻 → digest の比較）。窓が shell の周は
+/// 打刻と梯子を読まず起こす周（[`awake`]）の判定で、移動の周（窓が claude）は打刻と梯子を読まず移動の門（[`moving`]）の判定で
+/// 止まる（Busy の周も /exit を送る＝turn の途中の /exit は入力の列に積まれ turn の終わりで実行される・§10 形 9）。
 fn front(input: &Input) -> Result<Front, Verdict> {
     let rows = Rows::of(input.manifest).map_err(|_| Verdict::error(TickError::NoRule))?;
     let now = state::now_secs();
@@ -658,6 +664,9 @@ fn front(input: &Input) -> Result<Front, Verdict> {
     let seat = seat_dir(&input.state.path, input.target);
     if pane_is_shell(input.socket, input.target) {
         return Err(awake(input, &account, role, &anchor, &seat));
+    }
+    if let Some(moved) = moving(input, &anchor, &account, rows.window_ms) {
+        return Err(moved);
     }
     let stamps = stamps_of(&seat, rows.pace.stale_s, now, || input_gate(input).is_ok()).map_err(Verdict::noop)?;
     let digest = stamps.last().map_or(0, |stamp| stamp.ts);
@@ -696,21 +705,22 @@ fn awake(input: &Input, account: &str, role: Role, anchor: &str, seat: &Path) ->
 /// だけ `Some`（移動の周）。群に属さない anchor・群 0 の host・記録と row が一致する席は `None`（今の列のまま）。記録が在るのに
 /// 読めない周と host の面が読めない周は `group-unreadable`（種に読み替えない・C10）。移動の周は群の段と同じ lock の内側で退避の
 /// 1 手（[`evacuate`]）を撃つ（窓が shell の周は `front` の [`awake`] が先に起こす）。lock を取れない周は `group-locked`。
-fn moving(input: &Input, front: &Front) -> Option<Verdict> {
+/// 呼ぶ場所は `front` の中（打刻の前・§10 形 8）と、群の判定（[`judged`]）で移った周の後（§9 形 3）の 2 つで、関数は 1 本。
+fn moving(input: &Input, anchor: &str, account: &str, window_ms: u64) -> Option<Verdict> {
     let Ok(manifest) = crate::rules::with_state_dir(input.manifest.clone(), Some(&input.state.path)) else {
         return Some(Verdict::noop(NoopReason::GroupUnreadable));
     };
-    let group = group_of(&manifest, &front.anchor)?;
+    let group = group_of(&manifest, anchor)?;
     let Ok(current) = current_of(&input.state.path, group) else {
         return Some(Verdict::noop(NoopReason::GroupUnreadable));
     };
-    if current.label == front.account {
+    if current.label == account {
         return None;
     }
     let Ok(_lock) = Lock::take(&host_groups_dir(&input.state.path)) else {
         return Some(Verdict::noop(NoopReason::GroupLocked));
     };
-    Some(evacuate(input, front.rows.window_ms))
+    Some(evacuate(input, window_ms))
 }
 
 /// 窓が shell の周の起こし（§4 形 3・§7 形 3）: `launch` の 1 本で同じ target に `account` の席を起こす（anchor と役割は自分の
