@@ -2044,8 +2044,15 @@ fn wake_account_dir(place: &MovePlace, account: &str) -> String {
     place.state.join("accounts").join(account).display().to_string()
 }
 
+/// 起動行の末尾の初手の 1 語（§10 形 1〜3・単引用で括った `<NAME> seat: relaunch …`）。
+fn wake_first_word() -> String {
+    let word = vessel::seat::state::relaunch_word();
+    assert!(word.starts_with(&format!("'{NAME} seat: relaunch ")) && word.ends_with('\''), "単引用の初手: {word}");
+    word
+}
+
 /// 起こした周を測る: 判定行は `move=launch`・起動行 1 行が `account` の設定 dir を持ち `/exit` を持たない・fleet の最後の row は
-/// `account` で同じ anchor と target・row の launch に `--resume` は載らない。起動行を返す。
+/// `account` で同じ anchor と target・row の launch に `--resume` も初手も載らない。起動行を返す。
 fn wake_assert_launched(place: &MovePlace, account: &str, anchor: &str) -> String {
     let out = move_run(place);
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
@@ -2058,23 +2065,25 @@ fn wake_assert_launched(place: &MovePlace, account: &str, anchor: &str) -> Strin
     let last = rows.last().map(|row| (row.account.as_str(), row.anchor.as_str(), row.target.as_str()));
     assert_eq!(last, Some((account, anchor, TICK_TARGET)), "起こした row");
     assert!(rows.iter().all(|row| !row.launch.contains("--resume")), "row の launch に --resume は載らない: {rows:?}");
+    assert!(rows.iter().all(|row| !row.launch.contains("seat: relaunch")), "row の launch に初手は載らない: {rows:?}");
     assert!(!place.state.join("seat").join(TICK_SEAT).join("pointer-ladder").exists(), "梯子の記録は書かれない");
     text
 }
 
 /// (a) 最終行 busy ∧ 前面 `bash` ∧ 群の外の row → `move=launch`・起動行 1 行が row の口座（A）を持ち、末尾に `--resume <打刻の
-/// sid>`（base では打刻 busy で止まる `noop busy` ＝ RED）。群の外の席は lock を取らない。
+/// sid> '<NAME> seat: relaunch …'`（base では `--resume <sid>` で終わる ＝ RED）。群の外の席は lock を取らない。
 #[test]
 fn seat_tick_wake_launches_a_dead_seat_outside_a_group_with_the_stamped_sid() {
     let root = tmp();
     let place = wake_place(&root, "/elsewhere", WAKE_SID);
     let text = wake_assert_launched(&place, MOVE_A, "/elsewhere");
-    assert!(text.ends_with(&format!(" --resume {WAKE_SID}")), "末尾に --resume <sid>: {text}");
+    assert!(text.ends_with(&format!(" --resume {WAKE_SID} {}", wake_first_word())), "末尾に --resume <sid> と初手: {text}");
     assert_eq!(text.matches("--resume").count(), 1, "--resume は 1 つ: {text}");
+    assert_eq!(text.matches("seat: relaunch").count(), 1, "初手は 1 つ: {text}");
     assert!(!move_groups_dir(&root).join("lock").exists(), "lock は残らない");
 }
 
-/// (b) 同じ席で最終行の sid が無い・会話 id の形でない → 起こすが末尾に `--resume` は無い（前の行の sid にも倒れない）。
+/// (b) 同じ席で最終行の sid が無い・会話 id の形でない → 起こすが `--resume` は無く、末尾は初手の 1 語だけ（前の行の sid にも倒れない）。
 #[test]
 fn seat_tick_wake_without_a_session_id_carries_nothing() {
     for sid in ["", "sid-move"] {
@@ -2086,16 +2095,19 @@ fn seat_tick_wake_without_a_session_id_carries_nothing() {
         fs::write(state_file(&seat), format!("{before}\n{last}\n")).ok();
         let text = wake_assert_launched(&place, MOVE_A, "/elsewhere");
         assert!(!text.contains("--resume"), "{sid:?}: --resume 無し: {text}");
+        assert!(!text.contains(WAKE_SID), "{sid:?}: 前の行の sid に倒れない: {text}");
+        assert!(text.ends_with(&format!(" {}", wake_first_word())), "{sid:?}: 末尾は初手の 1 語: {text}");
+        assert_eq!(text.matches("seat: relaunch").count(), 1, "{sid:?}: 初手は 1 つ: {text}");
     }
 }
 
-/// (c) 最終行 busy ∧ 前面 `bash` ∧ 群の row（口座 A）∧ 記録 = 口座 B → 記録の口座 B で起動・末尾に `--resume <sid>`。
+/// (c) 最終行 busy ∧ 前面 `bash` ∧ 群の row（口座 A）∧ 記録 = 口座 B → 記録の口座 B で起動・末尾に `--resume <sid>` と初手の 1 語。
 #[test]
 fn seat_tick_wake_launches_a_group_seat_with_the_record_account() {
     let root = tmp();
     let place = wake_place(&root, MOVE_ANCHOR, WAKE_SID);
     let text = wake_assert_launched(&place, MOVE_B, MOVE_ANCHOR);
-    assert!(text.ends_with(&format!(" --resume {WAKE_SID}")), "末尾に --resume <sid>: {text}");
+    assert!(text.ends_with(&format!(" --resume {WAKE_SID} {}", wake_first_word())), "末尾に --resume <sid> と初手: {text}");
     assert!(!text.contains(&wake_account_dir(&place, MOVE_A)), "row の口座 A では起こさない: {text}");
     assert!(!move_groups_dir(&root).join("lock").exists(), "lock は周の後に外れる");
 }

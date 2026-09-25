@@ -22,7 +22,7 @@
 //!
 //! 死んだ席も起こす（設計 §7・契約表の行 f）: 登録 row を読んだ直後・打刻を読む前に窓が shell かを見て、shell の周は打刻と
 //! 梯子を読まず起こす周（[`awake`]）へ進む。口座は anchor が群に属せば群の今の口座（lock の内側）、属さなければ row の口座で、
-//! 打刻の最終行の sid を `--resume` で運ぶ（[`state::resume_carry`]）。移動の門（[`moving`]）は窓が shell でない周の退避だけを撃つ。
+//! 打刻の最終行の sid を `--resume` で運び、初手の合図（[`relaunch_signal`]）を 1 語積む（[`state::resume_carry`]・§10 形 1）。移動の門（[`moving`]）は窓が shell でない周の退避だけを撃つ。
 //! 最終行の Busy が `seat.tick_stale_s` の 2 倍より古く入力欄が空の周（Stop の打刻を失った席）は Busy を無視して列の先へ進む
 //! （設計 §7 形 7・契約表の行 h）。
 
@@ -361,6 +361,12 @@ pub fn signal(step: u32, pace: Pace) -> String {
     )
 }
 
+/// 起こし直しの初手の文面（**正本はこの 1 関数**・設計 §10 形 2・先頭の `<NAME> seat: relaunch` が器自身の目印）。起動行の末尾に
+/// 単引用で括った 1 語として積まれる（[`state::resume_carry`]）ので、字面に単引用と改行を持たない。梯子の段には数えない。
+pub fn relaunch_signal() -> String {
+    format!("{NAME} seat: relaunch — 台帳の現在地（bd --readonly ready --limit 0）から続きを進める（会話は直前から続く・合図の梯子は段 0 から）")
+}
+
 /// 送達の結果（判定行の `consumed=` の材料・落ちても送ったと数える）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Sent {
@@ -572,7 +578,7 @@ fn front(input: &Input) -> Result<Front, Verdict> {
 /// 窓が shell の周（設計 §7 形 1〜3）: 打刻と梯子を読まず、同じ target に席を起こす（[`wake`]）。口座は anchor が群に属せば群の
 /// 今の口座（[`current_of`]・記録 > 種・群の段と同じ lock の内側）、属さなければ登録 row の口座（群 0 の host を含む）。記録が
 /// 在るのに読めない周と host の面が読めない周は `group-unreadable`・lock を取れない周は `group-locked`。起こし直しは打刻の最終行の
-/// sid を `--resume` で運ぶ（[`state::resume_carry`]・row の launch には載せない）。
+/// sid を `--resume` で運び初手の 1 語を積む（[`state::resume_carry`]・row の launch には載せない）。
 fn awake(input: &Input, account: &str, role: Role, anchor: &str, seat: &Path) -> Verdict {
     let Ok(manifest) = crate::rules::with_state_dir(input.manifest.clone(), Some(&input.state.path)) else {
         return Verdict::noop(NoopReason::GroupUnreadable);

@@ -11,7 +11,7 @@
 //!
 //! **最終行を状態として読む面は消えた**（`s2-07l.479.3`）: その読み手（管理 tick と作り直しの cycle）は
 //! `s2-07l.479.1` で機構ごと消え、閾値の rules 行も同じ便で消えた。最終行の sid だけは起こし直しが会話を運ぶ読み手
-//! （[`resume_carry`]・seat-heartbeat.md §7 形 3）が読む。
+//! （[`resume_carry`]・seat-heartbeat.md §7 形 3・初手の 1 語も同じ読み手が積む＝§10 形 1）が読む。
 
 use crate::fleet::json_lite::{self, Value};
 use crate::fleet::store::{self, LockPolicy, StoreError, Warning};
@@ -265,14 +265,22 @@ pub fn evidence_after(seat_dir: &Path, baseline: Baseline, event: Event, since: 
 /// 起こし直しが会話を運ぶ flag（claude の起動行の末尾・設計 seat-heartbeat.md §7 形 3）。
 pub const RESUME_FLAG: &str = "--resume";
 
-/// 起こし直しの `carry`（**読み手はこの 1 本**・設計 seat-heartbeat.md §7 形 3 / §8 形 1）: 席の置き場の打刻の最終行（読めた行の
-/// うち最後）の sid が会話 id の形なら `--resume <sid>` の 2 語、file が無い・読めない・sid が無い・形違いの周は空（運ばない）。
+/// 起こし直しの `carry`（**読み手はこの 1 本**・設計 seat-heartbeat.md §7 形 3 / §8 形 1 / §10 形 1〜3）: 席の置き場の打刻の最終行
+/// （読めた行のうち最後）の sid が会話 id の形なら `--resume <sid>` の 2 語、file が無い・読めない・sid が無い・形違いの周は運ばない。
+/// どの周も末尾に初手の合図（[`super::tick::relaunch_signal`]）を単引用で括った 1 語で積む（空を返す周は無い）。
 pub fn resume_carry(seat_dir: &Path) -> Vec<String> {
-    std::fs::read_to_string(path(seat_dir))
+    let mut carry = std::fs::read_to_string(path(seat_dir))
         .ok()
         .and_then(|text| last_sid(&text))
         .map(|sid| vec![RESUME_FLAG.to_owned(), sid])
-        .unwrap_or_default()
+        .unwrap_or_default();
+    carry.push(relaunch_word());
+    carry
+}
+
+/// 初手の 1 語: 起動行は shell が読むので文面を単引用で括る（括るのは carry の読み手・`with_tail` は引用しない）。
+pub fn relaunch_word() -> String {
+    format!("'{}'", super::tick::relaunch_signal())
 }
 
 /// 打刻の本文の最終行（読めた行のうち最後）の sid。会話 id の形（[`is_session_id`]）でない周は `None`（前の行の sid に倒れない）。
@@ -289,7 +297,7 @@ fn is_session_id(sid: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{last_sid, resume_carry, Event, SeatState, Stamp, RESUME_FLAG, SCHEMA};
+    use super::{last_sid, relaunch_word, resume_carry, Event, SeatState, Stamp, RESUME_FLAG, SCHEMA};
 
     /// 打刻は書いた行から同じ値で読める（round-trip）。
     #[test]
@@ -353,18 +361,32 @@ mod tests {
         assert_eq!(last_sid("not json\n"), None, "読める行が無い");
     }
 
-    /// carry は `--resume <sid>` の 2 語か空: 打刻 file の最終行が UUID なら 2 語・形違いと file 無しは空。
+    /// carry は sid あり / なし / 形違いで `[--resume, sid, 初手]` / `[初手]` / `[初手]`（空を返す周は無い）。
     #[test]
-    fn stamp_sid_carry_is_resume_and_the_sid_or_empty() {
-        let dir = std::env::temp_dir().join(format!("stamp-sid-carry-{}", std::process::id()));
+    fn relaunch_carry_is_resume_and_the_sid_then_the_first_word() {
+        let dir = std::env::temp_dir().join(format!("relaunch-carry-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::create_dir_all(&dir);
-        assert_eq!(resume_carry(&dir), Vec::<String>::new(), "file 無し");
+        let word = relaunch_word();
+        assert_eq!(resume_carry(&dir), std::slice::from_ref(&word), "file 無しは初手だけ");
         let _ = std::fs::write(super::path(&dir), format!("{}\n", sid_line(Event::UserPromptSubmit, UUID)));
-        assert_eq!(resume_carry(&dir), [RESUME_FLAG.to_owned(), UUID.to_owned()], "最終行の UUID を運ぶ");
+        assert_eq!(resume_carry(&dir), [RESUME_FLAG.to_owned(), UUID.to_owned(), word.clone()], "最終行の UUID の後ろに初手");
         assert_eq!(RESUME_FLAG, "--resume", "flag の字面");
         let _ = std::fs::write(super::path(&dir), format!("{}\n", sid_line(Event::UserPromptSubmit, "sid-1")));
-        assert_eq!(resume_carry(&dir), Vec::<String>::new(), "形違いは運ばない");
+        assert_eq!(resume_carry(&dir), std::slice::from_ref(&word), "形違いは sid を運ばず初手だけ");
+        let _ = std::fs::write(super::path(&dir), format!("{}\n", sid_line(Event::UserPromptSubmit, "")));
+        assert_eq!(resume_carry(&dir), [word], "sid 無しは初手だけ");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 初手の 1 語は単引用で始まり終わり、中は `<NAME> seat: relaunch` で始まる文面で単引用と改行を持たない（shell が 1 語で読む）。
+    #[test]
+    fn relaunch_carry_first_word_is_one_single_quoted_word() {
+        let word = relaunch_word();
+        let body = word.strip_prefix('\'').and_then(|rest| rest.strip_suffix('\''));
+        assert_eq!(body, Some(crate::seat::tick::relaunch_signal().as_str()), "文面を単引用で括る: {word}");
+        let body = body.unwrap_or_default();
+        assert!(body.starts_with(&format!("{} seat: relaunch", crate::name::NAME)), "先頭の目印: {body}");
+        assert!(!body.contains('\'') && !body.contains('\n') && !body.contains('\r'), "単引用と改行が無い: {body}");
     }
 }

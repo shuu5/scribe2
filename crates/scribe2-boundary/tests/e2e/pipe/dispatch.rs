@@ -3791,19 +3791,28 @@ fn carry_rows(state: &Path) -> Vec<vessel::fleet::Registration> {
     vessel::fleet::store::read_all(state).unwrap_or_default().into_iter().filter_map(|event| event.registration).collect()
 }
 
-/// (a) 起こす席の打刻の最終行に会話 id が在る → 起動行の末尾が `--resume <sid>`（1 つだけ・a2 の口座のまま）。base は `carry`
-/// が空で末尾に無い（RED）。
+/// 起動行の末尾の初手の 1 語（seat-heartbeat.md §10 形 1〜3・単引用で括った `<NAME> seat: relaunch …`・tick の起こしと同じ 1 本）。
+fn carry_first_word() -> String {
+    let word = vessel::seat::state::relaunch_word();
+    assert!(word.starts_with(&format!("'{} seat: relaunch ", vessel::name::NAME)) && word.ends_with('\''), "単引用の初手: {word}");
+    word
+}
+
+/// (a) 起こす席の打刻の最終行に会話 id が在る → 起動行の末尾が `--resume <sid> '<NAME> seat: relaunch …'`（1 つずつ・a2 の口座の
+/// まま）。base は末尾が `--resume <sid>` で初手が無い（RED）。
 #[test]
 fn pipe_dispatch_group_carry_relaunch_resumes_the_stamped_session() {
     let place = exit_place();
     let line = carry_relaunch(&place, &carry_stamp("idle", "Stop", CARRY_SID));
-    assert!(line.ends_with(&format!(" --resume {CARRY_SID}")), "末尾に --resume <sid>: {line}");
+    assert!(line.ends_with(&format!(" --resume {CARRY_SID} {}", carry_first_word())), "末尾に --resume <sid> と初手: {line}");
     assert_eq!(line.matches("--resume").count(), 1, "--resume は 1 つ: {line}");
+    assert_eq!(line.matches("seat: relaunch").count(), 1, "初手は 1 つ: {line}");
     assert!(line.contains("accounts/a2"), "a2 の口座で起こす: {line}");
     clean(&[&place.repo, &place.state]);
 }
 
-/// (b) 打刻が無い（空の file）・最終行の sid が会話 id の形でない（前の行の会話 id にも倒れない）→ 起こすが `--resume` は無い。
+/// (b) 打刻が無い（空の file）・最終行の sid が会話 id の形でない（前の行の会話 id にも倒れない）→ 起こすが `--resume` は無く、
+/// 末尾は初手の 1 語だけ。
 #[test]
 fn pipe_dispatch_group_carry_without_a_session_id_carries_nothing() {
     let wrong = format!("{}{}", carry_stamp("idle", "Stop", CARRY_SID), carry_stamp("busy", "UserPromptSubmit", "sid-group"));
@@ -3811,22 +3820,25 @@ fn pipe_dispatch_group_carry_without_a_session_id_carries_nothing() {
         let place = exit_place();
         let line = carry_relaunch(&place, &stamps);
         assert!(line.contains("accounts/a2"), "{case}: 起こす: {line}");
-        assert!(!line.contains("--resume"), "{case}: --resume 無し: {line}");
+        assert!(!line.contains("--resume") && !line.contains(CARRY_SID), "{case}: --resume 無し: {line}");
+        assert!(line.ends_with(&format!(" {}", carry_first_word())), "{case}: 末尾は初手の 1 語: {line}");
+        assert_eq!(line.matches("seat: relaunch").count(), 1, "{case}: 初手は 1 つ: {line}");
         clean(&[&place.repo, &place.state]);
     }
 }
 
-/// (c) 会話を運んだ周も、登録 row の `launch` は雛形のまま（`--resume` も sid も載らない・起こした row は a2 で launch を持つ）。
+/// (c) 会話を運んだ周も、登録 row の `launch` は雛形のまま（`--resume` も sid も初手も載らない・起こした row は a2 で launch を持つ）。
 #[test]
 fn pipe_dispatch_group_carry_leaves_the_row_launch_without_resume() {
     let place = exit_place();
     let (anchor, two) = GROUP_ANCHORS[1];
     let line = carry_relaunch(&place, &carry_stamp("idle", "Stop", CARRY_SID));
-    assert!(line.ends_with(&format!(" --resume {CARRY_SID}")), "運んだ周: {line}");
+    assert!(line.ends_with(&format!(" --resume {CARRY_SID} {}", carry_first_word())), "運んだ周: {line}");
     let rows = carry_rows(&place.state);
     let last = rows.iter().rev().find(|row| row.anchor == anchor && row.target == two);
     assert!(last.is_some_and(|row| row.account == "a2" && !row.launch.is_empty()), "起こした row は a2 で launch を持つ: {rows:?}");
     assert!(rows.iter().all(|row| !row.launch.contains("--resume") && !row.launch.contains(CARRY_SID)), "row の launch は雛形のまま: {rows:?}");
+    assert!(rows.iter().all(|row| !row.launch.contains("seat: relaunch")), "row の launch に初手は載らない: {rows:?}");
     clean(&[&place.repo, &place.state]);
 }
 

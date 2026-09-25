@@ -262,8 +262,8 @@ enum Wait {
 }
 
 /// `seats` の置き場の席を、pane が shell に戻った順に同じ target へ `account` の口座で起こす（`launch` の 1 本・登録 row は
-/// 起動が書き直す・会話は席の置き場の打刻の最終行の sid を [`resume_carry`] の 1 本で `carry` に運ぶ〔row の launch と event には
-/// 載せない・設計 seat-heartbeat.md §8〕・呼び手の窓の置き換えは許さない）。起こせなかった席は理由つきの保留の event を 1 件記す。
+/// 起動が書き直す・会話は席の置き場の打刻の最終行の sid を [`resume_carry`] の 1 本で `carry` に運び初手の 1 語も同じ 1 本が積む
+/// 〔row の launch と event には載せない・設計 seat-heartbeat.md §8 / §10 形 1〕・呼び手の窓の置き換えは許さない）。起こせなかった席は理由つきの保留の event を 1 件記す。
 /// 続きの周（[`Wait::Once`]）に shell でない席は起こさず、退避の合図と同じ宛先・門（[`notify::send_or_confirm`]）で
 /// [`group::EXIT`] を 1 回送る（移動の周は送らない＝席が作業記憶を残す番を 1 周ぶん持つ・設計 §21 形 1）。門が
 /// [`group::exit_dialog`] の既定の行を返す周は `/exit` の代わりに Enter を 1 回だけ送り、どちらの送りも群の段の名
