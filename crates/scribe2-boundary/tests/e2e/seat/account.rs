@@ -181,7 +181,7 @@ fn doctor_accounts_lines_follow_the_seat_lines_in_label_order() {
     let first = lines.iter().position(|line| line.starts_with("account="));
     assert_eq!(host, seats.map(|at| at + 1), "host の面の行は突合の行の直後: {lines:?}");
     assert_eq!(first, seats.map(|at| at + 2), "口座の行は host の面の行の直後: {lines:?}");
-    assert_eq!(lines.len(), 10, "2 行 + 登録 row 1 行 + 突合 1 行 + host の面 1 行 + 口座 3 行 + 導入先 1 行 + host-guard 1 行: {lines:?}");
+    assert_eq!(lines.len(), 11, "2 行 + host-template 1 行 + 登録 row 1 行 + 突合 1 行 + host の面 1 行 + 口座 3 行 + 導入先 1 行 + host-guard 1 行: {lines:?}");
     assert_eq!(lines.iter().rev().nth(1).map(String::as_str), Some(CONSUMER_REPO), "導入先の行は口座の行の後ろ: {lines:?}");
     assert_eq!(lines.last().map(String::as_str), Some(HOST_GUARD_BARE.replace("wired=0/0", "wired=0/3").as_str()), "末尾は host-guard: {lines:?}");
     fs::remove_dir_all(&place.dir).ok();
@@ -201,7 +201,7 @@ fn doctor_accounts_no_declared_account_adds_no_line_and_keeps_the_rest() {
     let without = doctor_rows(&place, NO_ACCOUNT_RULES);
     let with = doctor_rows(&place, &account_rules(&["solo"]));
     assert!(!without.iter().any(|line| line.starts_with("account=")), "{without:?}");
-    assert_eq!(without.len(), 7, "2 行 + 登録 row 1 行 + 突合 1 行 + host の面 1 行 + 導入先 1 行 + host-guard 1 行: {without:?}");
+    assert_eq!(without.len(), 8, "2 行 + host-template 1 行 + 登録 row 1 行 + 突合 1 行 + host の面 1 行 + 導入先 1 行 + host-guard 1 行: {without:?}");
     assert_eq!(outside_accounts(&with), outside_accounts(&without), "他の行は不変");
     assert_eq!(with.len(), without.len() + 1, "{with:?}");
     let state = place.state.display().to_string();

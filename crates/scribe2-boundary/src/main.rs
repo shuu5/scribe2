@@ -1,5 +1,6 @@
 //! CLI の骨格。`name` / `--version` / `doctor` / `account` / `rules` / `fleet` / `vessel` / `hook` / `host-guard` /
-//! `pipe` / `runner` / `lens` / `seat` / `polarity` / `contracts` の 15 subcommand と、memo の plan の口 `ledger` を持つ。
+//! `pipe` / `runner` / `lens` / `seat` / `polarity` / `contracts` の 15 subcommand と、memo の plan の口 `ledger` と、雛形の
+//! pointer を書く口 `host`（host-init.md §3）を持つ。
 //!
 //! subcommand の結果は [`Outcome`] ただ 1 型で、rc はその `rc` をそのまま返す。
 //!
@@ -51,7 +52,8 @@ fn render_doctor() -> Vec<String> {
     vec![render_name(), render_version()]
 }
 
-/// `doctor` の出力行。`--state-dir S [--tmux-socket PATH] [--rules FILE]` 付きは先頭に run 無しの裁定の突合の 1 行（数えるものが
+/// `doctor` の出力行。骨格の 2 行の直後は引数に依らず雛形の pointer の 1 行（`host-template=`・[`vessel::init::doctor_line`]・
+/// host-init.md §3）。`--state-dir S [--tmux-socket PATH] [--rules FILE]` 付きは先頭に run 無しの裁定の突合の 1 行（数えるものが
 /// 在る周だけ・[`vessel::seat::ruling::doctor_lines`]・fleet-event-log.md §9 (4)）、続けて登録 row の一覧（`model` の欄
 /// つき・1 row 1 行）と実在の target の突合 1 行（C3.2・seat-roles.md §9 (e)）の後ろに、host の面の 1 行と口座の
 /// 前提の行（`account ls` と同じ 1 関数・`retired=` つき・[`vessel::account::doctor_lines`]・account-lifecycle.md §3）、
@@ -82,6 +84,8 @@ fn render_doctor_with(rest: &[String]) -> Result<Vec<String>, ()> {
         (None, None) => None,
         _ => return Err(()),
     };
+    // 骨格の 2 行の直後に雛形の pointer の 1 行（置き場を渡さない周も出す＝`init` の前に確かめられる・host-init.md §3）。
+    lines.push(vessel::init::doctor_line());
     match (state_dir, socket, rules, repo) {
         (Some(dir), _, _, _) => {
             lines.extend(vessel::seat::ruling::doctor_lines(Path::new(dir), rules));
@@ -127,6 +131,9 @@ fn run(args: &[String]) -> Outcome {
         Some("rules") => vessel::rules::cli::dispatch(rest),
         Some("fleet") => vessel::fleet::cli::dispatch(rest),
         Some("vessel") => vessel::hook::vessel::dispatch(rest),
+        // 雛形の pointer を host に 1 回書く口（host-init.md §3）。使い方は `host` 自身が持つ（上の 1 行の usage は外形
+        // snapshot が pin しているので動かさない）。
+        Some("host") => vessel::init::host_dispatch(rest),
         Some("pipe") => vessel::pipe::cli::dispatch(rest),
         Some("seat") => vessel::seat::cli::dispatch(rest),
         // 極性一覧（ADR-0014 §2.2）。引数も stdin も env も読まない。
@@ -191,6 +198,7 @@ mod tests {
     use vessel::account::consumers::{drift_of, render_consumer, Consumer, Head, Source};
     use vessel::account::{render_account, render_host_manifest, AccountProbe, AgentView, Presence, Retired, Trust};
     use vessel::hook::vessel::digest::PluginRecord;
+    use vessel::init::{render_host_template, Template};
     use vessel::name::PLUGIN_DIR;
 
     /// workspace root（この crate の 2 つ上）。
@@ -265,7 +273,7 @@ mod tests {
 
     /// `doctor` / usage / `--version` の外形を 1 つの snapshot に固定する。
     ///
-    /// 結合の順序は doctor の 2 行 → host の面の行 → 口座の行（fixture 1 つ・anchor 2 つ・退役していない形）→ 導入先の行
+    /// 結合の順序は doctor の 2 行 → 雛形の pointer の行（path の形・host-init.md §3）→ host の面の行 → 口座の行（fixture 1 つ・anchor 2 つ・退役していない形）→ 導入先の行
     /// （記録の無い launch+install の形・帳簿は HEAD と食い違う・consumer-sync.md §4）→ usage → version で、
     /// 区切り文字は LF ただ 1 種である。版番号は assert の前に `[version]` へ、build 元 commit（build ごとに変わる）は
     /// `[commit]` へ置換する 2 段の mask（`default-features = false` では `Settings::add_filter` が無いので `filters`
@@ -273,6 +281,7 @@ mod tests {
     #[test]
     fn doctor_external_form() {
         let mut lines = render_doctor();
+        lines.push(render_host_template(&Template::Path(PathBuf::from("/host/template"))));
         let probe = AccountProbe {
             dir: Presence::Present,
             credential: Presence::Present,
@@ -300,7 +309,7 @@ mod tests {
         insta::assert_snapshot!(masked);
     }
 
-    /// doctor の台帳の形の 1 行（ledger-form.md §6 行 a (e)）の外形: doctor の 2 行 → 測れた周の 1 行（5 つの欠陥が
+    /// doctor の台帳の形の 1 行（ledger-form.md §6 行 a (e)）の外形: doctor の 2 行 → 雛形の pointer の行（absent の形）→ 測れた周の 1 行（5 つの欠陥が
     /// 全部 1 件以上・0 件の欄も同じ行）→ 測れない周の 1 行 → usage → version。台帳は `bd list --json` の形の fixture を
     /// 席の reader（`issues_of`）で読み、契約表と tracked は [`vessel::ledger::form::Docs`] を直に組む。
     #[test]
@@ -320,6 +329,7 @@ mod tests {
         let row = |id: &str| Row { doc: "docs/design/toy.md".to_owned(), id: id.to_owned(), plus: vec![format!("src/{id}.rs")] };
         let docs = Docs { rows: vec![row("a"), row("b")], ..Docs::default() };
         let mut lines = render_doctor();
+        lines.push(render_host_template(&Template::Absent));
         lines.push(render(&judge(&issues, &docs)));
         lines.push(render_unreadable("ledger-unreadable"));
         lines.push(render_usage());
@@ -331,7 +341,7 @@ mod tests {
         insta::assert_snapshot!(masked);
     }
 
-    /// doctor の台帳 lint の 1 行（contract-source.md §6 行 e）の外形: doctor の 2 行 → 測れた周の 1 行（3 つの欠陥の
+    /// doctor の台帳 lint の 1 行（contract-source.md §6 行 e）の外形: doctor の 2 行 → 雛形の pointer の行（unreadable の形）→ 測れた周の 1 行（3 つの欠陥の
     /// 件数を違え・id を欠陥ごとに名指す）→ 欠陥 0 の周の 1 行 → 測れない周の 1 行 → usage → version。台帳は
     /// `bd list --json` の形の fixture を席の reader（`issues_of`）で読み、解けた pointer の集合は直に組む。
     #[test]
@@ -353,6 +363,7 @@ mod tests {
         assert_eq!(issues.len(), 9, "fixture を読める");
         let resolved: BTreeSet<String> = ["docs/design/toy.md#a".to_owned()].into();
         let mut lines = render_doctor();
+        lines.push(render_host_template(&Template::Unreadable));
         lines.push(render(&judge(&issues, &resolved)));
         lines.push(render(&judge(issues.get(3..4).unwrap_or_default(), &resolved)));
         lines.push(render_unreadable("ledger-unreadable"));

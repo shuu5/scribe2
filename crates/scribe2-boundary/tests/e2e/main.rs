@@ -2,7 +2,8 @@
 //! integration test **target** の数で数える。以後の leg は module で足す）。
 //!
 //! doctor の導入先の行（consumer-sync.md §4・AC31・接頭辞 `doctor_consumer_`・`s2-07l.303`）の歯はこの file が持つ
-//! （登録は core の `register` で積み、tmux を立てない）。
+//! （登録は core の `register` で積み、tmux を立てない）。`host init` と doctor の `host-template=` の行（host-init.md §3・
+//! 行 a・接頭辞 `host_init_`）の歯もこの file が持つ（git の global 設定は `GIT_CONFIG_GLOBAL` で toy の file に向ける）。
 
 mod fleet;
 mod headless;
@@ -863,4 +864,129 @@ fn doctor_consumer_behind_is_dash_without_vessel_row() {
     let argv = fs::read_to_string(&log).unwrap_or_default();
     assert!(!argv.contains("rev-list"), "宣言が無ければ差を読まない: {argv}");
     fs::remove_dir_all(&place.dir).ok();
+}
+
+// ─────────── host init と doctor の host-template= の行（host-init.md §3・行 a・`s2-07l.612`） ───────────
+
+/// binary の 1 回の結果（rc・stdout・stderr）。
+struct HostRun {
+    rc: Option<i32>,
+    out: String,
+    err: String,
+}
+
+/// git の global 設定を toy の file `global` に向け（system 設定は読まない）、`cwd` で binary を `args` で撃つ。
+fn host_run(global: &Path, cwd: &Path, args: &[&str]) -> Option<HostRun> {
+    let out = Command::new(env!("CARGO_BIN_EXE_scribe2"))
+        .args(args)
+        .current_dir(cwd)
+        .env("GIT_CONFIG_GLOBAL", global)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .output()
+        .ok()?;
+    Some(HostRun {
+        rc: out.status.code(),
+        out: String::from_utf8_lossy(&out.stdout).into_owned(),
+        err: String::from_utf8_lossy(&out.stderr).into_owned(),
+    })
+}
+
+/// toy の global 設定の file が持つ雛形の pointer（無ければ `None`・git の `--file` で読む）。
+fn template_in(global: &Path) -> Option<String> {
+    let dir = global.parent()?;
+    git_out(dir, &["config", "--file", &global.display().to_string(), "--get", &vessel::init::template_key()])
+}
+
+/// doctor の出力の 3 行目（骨格の 2 行の直後）。
+fn doctor_third(global: &Path, cwd: &Path, extra: &[&str]) -> Option<String> {
+    let args: Vec<&str> = ["doctor"].iter().chain(extra).copied().collect();
+    let run = host_run(global, cwd, &args)?;
+    (run.rc == Some(0)).then_some(())?;
+    run.out.lines().nth(2).map(str::to_owned)
+}
+
+/// (1)(2)(3) `host init` は雛形の dir（`host.toml` が無い周・在る周）の絶対 path を global 設定へ書いて `written`、同じ値の
+/// 2 度目は書かず `unchanged`（file の bytes 不変）。相対の引数も絶対 path で書く。doctor は骨格の 2 行の直後に
+/// `host-template=` を出す: 書く前は `absent`・書いた後は path・指す先の `host.toml` が壊れれば `unreadable`（置き場を
+/// 渡した周も同じ位置）。base は `host` の verb が無い（RED）。
+#[test]
+fn host_init_writes_the_absolute_path_once_and_doctor_names_it() {
+    let tmp = make_tmp_dir().and_then(TmpDir::canonical).unwrap_or_else(|| panic!("tmp dir を作れる"));
+    let global = tmp.join("gitconfig");
+    let bare = tmp.join("place");
+    fs::create_dir_all(&bare).unwrap_or_else(|e| panic!("雛形の dir を作れる: {e}"));
+    let bare_s = bare.display().to_string();
+    assert_eq!(doctor_third(&global, &tmp, &[]).as_deref(), Some("host-template=absent"), "書く前は absent");
+
+    let first = host_run(&global, &tmp, &["host", "init", "place"]).unwrap_or_else(|| panic!("binary を撃てる"));
+    assert_eq!((first.rc, first.err.as_str()), (Some(0), ""), "Absent の雛形を受ける: {}", first.out);
+    assert_eq!(first.out, format!("host: init template={bare_s} written\n"), "出力は 1 行・相対の引数も絶対 path");
+    assert_eq!(template_in(&global).as_deref(), Some(bare_s.as_str()), "global 設定に絶対 path");
+    let before = fs::read(&global).unwrap_or_default();
+
+    let again = host_run(&global, &tmp, &["host", "init", &bare_s]).unwrap_or_else(|| panic!("binary を撃てる"));
+    assert_eq!((again.rc, again.err.as_str()), (Some(0), ""), "同じ値も rc 0");
+    assert_eq!(again.out, format!("host: init template={bare_s} unchanged\n"), "同じ値は unchanged");
+    assert_eq!(fs::read(&global).unwrap_or_default(), before, "unchanged の周は書かない");
+    assert_eq!(doctor_third(&global, &tmp, &[]), Some(format!("host-template={bare_s}")), "書いた後は path");
+
+    let faced = tmp.join("faced");
+    fs::create_dir_all(&faced).unwrap_or_else(|e| panic!("雛形の dir を作れる: {e}"));
+    fs::write(faced.join(vessel::rules::HOST_MANIFEST), "schema = 1\n\n[[account]]\nlabel = \"acct\"\n")
+        .unwrap_or_else(|e| panic!("host の面を置ける: {e}"));
+    let faced_s = faced.display().to_string();
+    let second = host_run(&global, &tmp, &["host", "init", &faced_s]).unwrap_or_else(|| panic!("binary を撃てる"));
+    assert_eq!(second.rc, Some(0), "Present の雛形を受ける: {}", second.err);
+    assert_eq!(second.out, format!("host: init template={faced_s} written\n"), "値が違えば書く");
+    assert_eq!(template_in(&global).as_deref(), Some(faced_s.as_str()), "global 設定は新しい path");
+    let socket = tmp.join("no-server-sock").display().to_string();
+    let with_state = ["--state-dir", bare_s.as_str(), "--tmux-socket", socket.as_str()];
+    assert_eq!(doctor_third(&global, &tmp, &with_state), Some(format!("host-template={faced_s}")), "置き場を渡しても同じ位置");
+
+    fs::write(faced.join(vessel::rules::HOST_MANIFEST), "schema = [\n").unwrap_or_else(|e| panic!("面を壊せる: {e}"));
+    assert_eq!(doctor_third(&global, &tmp, &[]).as_deref(), Some("host-template=unreadable"), "壊れた面は unreadable");
+    assert_eq!(doctor_third(&global, &tmp, &with_state).as_deref(), Some("host-template=unreadable"), "置き場を渡しても同じ");
+}
+
+/// (1) 断る 3 形（引数欠け・dir が無い〔file も dir でない〕・`host.toml` が `Unreadable`）と余分な引数は rc 非 0 で
+/// global 設定を 1 byte も書かない（file を作らない・書いた後の bytes も不変）。
+#[test]
+fn host_init_refuses_without_writing_a_byte() {
+    let tmp = make_tmp_dir().and_then(TmpDir::canonical).unwrap_or_else(|| panic!("tmp dir を作れる"));
+    let global = tmp.join("gitconfig");
+    let broken = tmp.join("broken");
+    fs::create_dir_all(&broken).unwrap_or_else(|e| panic!("dir を作れる: {e}"));
+    fs::write(broken.join(vessel::rules::HOST_MANIFEST), "schema = [\n").unwrap_or_else(|e| panic!("壊れた面を置ける: {e}"));
+    let plain = tmp.join("plain-file");
+    fs::write(&plain, "x\n").unwrap_or_else(|e| panic!("file を置ける: {e}"));
+    let good = tmp.join("good");
+    fs::create_dir_all(&good).unwrap_or_else(|e| panic!("dir を作れる: {e}"));
+    let (missing, broken_s, plain_s, good_s) = (
+        tmp.join("missing").display().to_string(),
+        broken.display().to_string(),
+        plain.display().to_string(),
+        good.display().to_string(),
+    );
+    let refusals: [&[&str]; 5] = [
+        &["host", "init"],
+        &["host", "init", &missing],
+        &["host", "init", &plain_s],
+        &["host", "init", &broken_s],
+        &["host", "init", &good_s, "extra"],
+    ];
+    for args in refusals {
+        let run = host_run(&global, &tmp, args).unwrap_or_else(|| panic!("binary を撃てる"));
+        assert!(!matches!(run.rc, Some(0) | None), "断る {args:?}: rc={:?} out={}", run.rc, run.out);
+        assert_eq!(run.out, "", "断る周は stdout に書かない {args:?}");
+        assert!(!global.exists(), "断る周は global 設定を作らない {args:?}");
+    }
+    let wrote = host_run(&global, &tmp, &["host", "init", &good_s]).unwrap_or_else(|| panic!("binary を撃てる"));
+    assert_eq!(wrote.rc, Some(0), "受ける雛形は書ける: {}", wrote.err);
+    let before = fs::read(&global).unwrap_or_default();
+    for args in refusals {
+        let run = host_run(&global, &tmp, args).unwrap_or_else(|| panic!("binary を撃てる"));
+        assert!(!matches!(run.rc, Some(0) | None), "断る {args:?}");
+        assert_eq!(fs::read(&global).unwrap_or_default(), before, "書いた後も断る周は bytes 不変 {args:?}");
+    }
+    assert_eq!(template_in(&global).as_deref(), Some(good_s.as_str()), "値は受けた雛形のまま");
 }
