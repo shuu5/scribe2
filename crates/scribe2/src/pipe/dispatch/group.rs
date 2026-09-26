@@ -60,6 +60,7 @@ pub(super) fn round(input: &Input<'_>) -> Result<(), Stopped> {
         return Ok(());
     }
     let caps = Caps::of(&manifest).map_err(|_| Stopped::Unreadable)?;
+    let grace_s = crate::rules::int_row(&manifest, crate::seat::tick::ROW_GRACE).map_err(|_| Stopped::Unreadable)?;
     let dir = host_groups_dir(input.state_dir);
     let _lock = group::Lock::take(&dir).map_err(|_| Stopped::Locked)?;
     let before = replay(&store::read_all(input.state_dir).map_err(|_| Stopped::Unreadable)?);
@@ -78,7 +79,7 @@ pub(super) fn round(input: &Input<'_>) -> Result<(), Stopped> {
         .flat_map(|(found, current)| group::measured_set(found, current, &before))
         .collect();
     let mut measured = BTreeSet::new();
-    let mut read = Read::of(input, &manifest, caps).ok_or(Stopped::Unreadable)?;
+    let mut read = Read::of(input, &manifest, (caps, grace_s)).ok_or(Stopped::Unreadable)?;
     // 先の群の予約は周の頭の今の口座から導き（移った群は自分の予約を使った＝後の群はその次へ・§29 形 2）、判じる群の移り先から
     // 外す「今の口座」は周の中で更新する（先に移った群の移り先を後の群が飛ばす＝2 群が同じ周に同じ label へ移らない）。
     let mut currents: Vec<String> = plans.iter().map(|(_, current)| current.label.clone()).collect();
@@ -115,13 +116,15 @@ struct Read<'a, 'b> {
     events: Vec<Event>,
     /// 窓ごとの閾値。
     caps: Caps,
+    /// 退避の猶予（秒・`seat.move_grace_s`・設計 seat-heartbeat.md §13 形 7）。
+    grace_s: u64,
 }
 
 impl<'a, 'b> Read<'a, 'b> {
     /// 置き場の event log を読む（読めない周は `None`）。
-    fn of(input: &'a Input<'b>, manifest: &'a Manifest, caps: Caps) -> Option<Self> {
+    fn of(input: &'a Input<'b>, manifest: &'a Manifest, (caps, grace_s): (Caps, u64)) -> Option<Self> {
         let events = store::read_all(input.state_dir).ok()?;
-        Some(Self { input, manifest, state: replay(&events), events, caps })
+        Some(Self { input, manifest, state: replay(&events), events, caps, grace_s })
     }
 
     /// 計測を撃った後に読み直す（読めない周は `false`）。
@@ -145,7 +148,8 @@ fn step(
 ) -> Option<String> {
     let behind = behind(&read.state, found, &current.label);
     if current.source == Source::Record && !behind.is_empty() {
-        relaunch(read, found, &current.label, behind, Wait::Once);
+        let held = group::grace_left(current, crate::seat::state::now_secs(), read.grace_s).is_some();
+        relaunch(read, found, &current.label, behind, if held { Wait::Hold } else { Wait::Once });
         return None;
     }
     let input = read.input;
@@ -197,24 +201,31 @@ fn behind(state: &State, group: &AccountGroup, account: &str) -> Vec<(String, St
 }
 
 /// 移動の執行の残り（1 本が記録と承認 event を書いた後・同じ lock の内側・設計 §20 形 6）: 群の置き場の古い口座の席へ退避の
-/// 合図 → settle の窓で shell に戻った置き場から同じ target へ新しい口座の席を起こす。
+/// 合図（[`group::evacuate_line`]・残りの秒 = 猶予の値・送達を確認した席ごとに [`group::write_signal`]＝seat-heartbeat.md §13
+/// 形 7）→ settle の窓で shell に戻った置き場から同じ target へ新しい口座の席を起こす。
 fn evacuate(read: &Read<'_, '_>, found: &AccountGroup, target: &str) {
-    let input = read.input;
+    let (input, place) = (read.input, place(read.input));
     let seats = behind(&read.state, found, target);
-    let payload = format!("{NAME} group: evacuate group={} to={target} — 作業記憶を台帳と git に残して /exit", found.name());
-    for (anchor, _) in &seats {
-        let _ = notify::send(&read.state, &place(input), Path::new(anchor), input.manifest, &payload);
+    let payload = group::evacuate_line(found.name(), target, read.grace_s);
+    let ts = group::current_of(input.state_dir, found).ok().and_then(|current| current.ts);
+    for (anchor, seat) in &seats {
+        let line = notify::send(&read.state, &place, Path::new(anchor), input.manifest, &payload);
+        if let (true, Some(ts)) = (line.starts_with("notify=delivered "), ts.as_deref()) {
+            let _ = group::write_signal(&seat_dir(&place.path, seat), ts);
+        }
     }
     relaunch(read, found, target, seats, Wait::Settle);
 }
 
-/// 起こし直しの待ち方（閉じた 2 値）。
+/// 起こし直しの待ち方（閉じた 3 値）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Wait {
     /// 移動の周: settle の窓の内で待ち、窓の内に戻らない席ごとに保留の event を 1 件記す。
     Settle,
     /// 続きの周: 1 回だけ見て、戻っていない席へ [`group::EXIT`] の 1 行を送り次の周へ残す（保留の event を重ねない）。
     Once,
+    /// 猶予の内側の続きの周: 1 回だけ見て、戻っていない席へは送らず次の周へ残す（保留の event を重ねない・`/exit` は猶予の後）。
+    Hold,
 }
 
 /// `seats` の置き場の席を、pane が shell に戻った順に同じ target へ `account` の口座で起こす（`launch` の 1 本・登録 row は
@@ -261,7 +272,7 @@ fn relaunch(read: &Read<'_, '_>, group: &AccountGroup, account: &str, mut seats:
             }
             false
         });
-        if seats.is_empty() || wait == Wait::Once || !deadline.is_some_and(|at| Instant::now() < at) {
+        if seats.is_empty() || wait != Wait::Settle || !deadline.is_some_and(|at| Instant::now() < at) {
             break;
         }
         sleep(step);
@@ -274,6 +285,7 @@ fn relaunch(read: &Read<'_, '_>, group: &AccountGroup, account: &str, mut seats:
                 let _ = notify::send_or_confirm(&read.state, &place, Path::new(anchor), input.manifest, (group::EXIT, &dialog));
             }
         }
+        Wait::Hold => {}
     }
     for (anchor, target, reason) in failed {
         let detail = format!("group={} anchor={anchor} target={target} reason={reason}", group.name());

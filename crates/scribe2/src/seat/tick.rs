@@ -37,6 +37,9 @@
 //! 起こし直し（[`awake`]）・退避（[`moving`]）・群の判定（[`judged`]）は記録を読まず、off の席でも撃つ。
 //!
 //! 毎周の判定の後に最後の周の打刻（[`TICK_LAST_FILE`]）を書き、健全は読み手（[`status`]・doctor）が [`Health`] で判じる（行 p）。
+//!
+//! 移動の周の `/exit` は猶予（`seat.move_grace_s`・起点は群の記録の ts）を越えてから送り、猶予の内側は退避の合図の 1 行を 1 度だけ
+//! 送る（設計 §13・契約表の行 q・ADR-0071＝席の裏の subagent を `/exit` で落とさない）。
 
 pub mod install;
 
@@ -66,6 +69,8 @@ pub const ROW_STALE: &str = "seat.tick_stale_s";
 pub const ROW_LADDER: &str = "seat.pointer_ladder_s";
 /// 送達の窓の rules 行（dispatcher の通知と同じ行・行を増やさない）。
 const ROW_WINDOW: &str = "pipe.stop_grace_ms";
+/// 群の移動の退避の猶予の rules 行（秒・起点は群の記録の ts・設計 §13 形 1）。
+pub const ROW_GRACE: &str = "seat.move_grace_s";
 
 /// 梯子の記録の file 名（席の置き場の直下）。
 pub const LADDER_FILE: &str = "pointer-ladder";
@@ -181,7 +186,7 @@ impl NoopReason {
     }
 }
 
-/// 移動の周の 1 手（**閉じた 3 値**・判定行の `move=` の語）。
+/// 移動の周の 1 手（**閉じた 5 値**・判定行の `move=` の語）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Move {
     /// pane が shell の席に群の今の口座の席を起こした（起動の結果は `launched=`）。
@@ -190,6 +195,10 @@ pub enum Move {
     Exit,
     /// `/exit` の確認 dialog の既定の行へ Enter を 1 回送った。
     Enter,
+    /// 猶予の内側で退避の合図の 1 行を送った（設計 §13 形 5 (c)）。
+    Signal,
+    /// 猶予の内側でこの移動の合図を送り済み（0 key・設計 §13 形 5 (b)）。
+    Wait,
 }
 
 impl Move {
@@ -199,6 +208,8 @@ impl Move {
             Self::Launch => "launch",
             Self::Exit => "exit",
             Self::Enter => "enter",
+            Self::Signal => "signal",
+            Self::Wait => "wait",
         }
     }
 }
@@ -208,7 +219,8 @@ impl Move {
 pub enum TickError {
     /// 置き場を解けない。
     StateDir,
-    /// 行 3 本・`pipe.stop_grace_ms`・群の閾値の行のどれかが読めない（不在・不発効・形違い・列が数でない / 昇順でない・壊れている）。
+    /// 行 3 本・`pipe.stop_grace_ms`・`seat.move_grace_s`・群の閾値の行のどれかが読めない（不在・不発効・形違い・列が数でない /
+    /// 昇順でない・壊れている）。
     NoRule,
     /// fleet の replay が読めない。
     Store,
@@ -233,7 +245,7 @@ impl TickError {
 pub enum TickDecision {
     /// 合図を送った（送達の結果は [`Verdict::sent`]）。
     Inject,
-    /// 移動の周の 1 手を撃った（閉じた 3 値の手・送りの結果は [`Verdict::sent`]・起動の結果は [`Verdict::launched`]）。
+    /// 移動の周の 1 手を撃った（閉じた 5 値の手・送りの結果は [`Verdict::sent`]・起動の結果は [`Verdict::launched`]）。
     Move(Move),
     /// 送らない（理由つき）。
     Noop(NoopReason),
@@ -691,7 +703,7 @@ pub fn judge(input: &Input) -> (Verdict, Judged) {
     };
     let judged = judged(input, &found);
     let moved = matches!(judged, Judged::Moved(_))
-        .then(|| moving(input, &found.anchor, &found.account, found.rows.window_ms))
+        .then(|| moving(input, (&found.anchor, &found.account), &found.seat, (&found.rows, found.now)))
         .flatten();
     (moved.map_or_else(|| back(input, &found), Ok).unwrap_or_else(|stopped| stopped), judged)
 }
@@ -752,12 +764,14 @@ fn refused(input: &Input, found: &AccountGroup, window_ms: u64) {
     let _ = deliver_within(&request, Duration::from_millis(window_ms));
 }
 
-/// rules の行（行 3 本・送達の窓・群の閾値）。
+/// rules の行（行 3 本・送達の窓・退避の猶予・群の閾値）。
 struct Rows {
     /// 梯子の形。
     pace: Pace,
     /// 送達の窓（ms）。
     window_ms: u64,
+    /// 退避の猶予（秒・0 は猶予なし・設計 §13 形 1）。
+    grace_s: u64,
     /// 口座の門の閾値。
     caps: Caps,
 }
@@ -767,7 +781,8 @@ impl Rows {
     fn of(manifest: &Manifest) -> Result<Self, String> {
         int_row(manifest, ROW_INTERVAL)?;
         let pace = Pace::of(int_row(manifest, ROW_STALE)?, list_row(manifest, ROW_LADDER)?)?;
-        Ok(Self { pace, window_ms: int_row(manifest, ROW_WINDOW)?, caps: Caps::of(manifest)? })
+        let (window_ms, grace_s) = (int_row(manifest, ROW_WINDOW)?, int_row(manifest, ROW_GRACE)?);
+        Ok(Self { pace, window_ms, grace_s, caps: Caps::of(manifest)? })
     }
 }
 
@@ -810,7 +825,7 @@ fn front(input: &Input) -> Result<Front, Verdict> {
     if pane_is_shell(input.socket, input.target) {
         return Err(awake(input, &account, role, &anchor, &seat));
     }
-    if let Some(moved) = moving(input, &anchor, &account, rows.window_ms) {
+    if let Some(moved) = moving(input, (&anchor, &account), &seat, (&rows, now)) {
         return Err(moved);
     }
     let stamps = stamps_of(&seat, rows.pace.stale_s, now, || input_gate(input).is_ok()).map_err(Verdict::noop)?;
@@ -852,7 +867,10 @@ fn awake(input: &Input, account: &str, role: Role, anchor: &str, seat: &Path) ->
 /// 読めない周と host の面が読めない周は `group-unreadable`（種に読み替えない・C10）。移動の周は群の段と同じ lock の内側で退避の
 /// 1 手（[`evacuate`]）を撃つ（窓が shell の周は `front` の [`awake`] が先に起こす）。lock を取れない周は `group-locked`。
 /// 呼ぶ場所は `front` の中（打刻の前・§10 形 8）と、群の判定（[`judged`]）で移った周の後（§9 形 3）の 2 つで、関数は 1 本。
-fn moving(input: &Input, anchor: &str, account: &str, window_ms: u64) -> Option<Verdict> {
+/// 移動の周は 3 分岐（設計 §13 形 5）: 猶予の残り（[`group::grace_left`]）が無ければ今の形（lock → `/exit`）、残りが在り席の置き場
+/// の合図の記録が同じ移動のもの（[`group::signalled`]）なら `move=wait`（0 key・lock を取らない・file を書かない）、送っていなければ
+/// 退避の合図の 1 行を同じ門で送り、送れた周だけ記録を書く（[`group::write_signal`]）。
+fn moving(input: &Input, (anchor, account): (&str, &str), seat: &Path, (rows, now): (&Rows, u64)) -> Option<Verdict> {
     let Ok(manifest) = crate::rules::with_state_dir(input.manifest.clone(), Some(&input.state.path)) else {
         return Some(Verdict::noop(NoopReason::GroupUnreadable));
     };
@@ -863,10 +881,21 @@ fn moving(input: &Input, anchor: &str, account: &str, window_ms: u64) -> Option<
     if current.label == account {
         return None;
     }
-    let Ok(_lock) = Lock::take(&host_groups_dir(&input.state.path)) else {
-        return Some(Verdict::noop(NoopReason::GroupLocked));
+    let (Some(left), Some(ts)) = (group::grace_left(&current, now, rows.grace_s), current.ts.as_deref()) else {
+        let Ok(_lock) = Lock::take(&host_groups_dir(&input.state.path)) else {
+            return Some(Verdict::noop(NoopReason::GroupLocked));
+        };
+        return Some(evacuate(input, (EXIT, Move::Exit), rows.window_ms).0);
     };
-    Some(evacuate(input, window_ms))
+    if group::signalled(seat, ts) {
+        return Some(Verdict::moved(Move::Wait, None, None));
+    }
+    let payload = group::evacuate_line(group.name(), &current.label, left);
+    let (verdict, delivered) = evacuate(input, (&payload, Move::Signal), rows.window_ms);
+    if delivered {
+        let _ = group::write_signal(seat, ts);
+    }
+    Some(verdict)
 }
 
 /// 窓が shell の周の起こし（§4 形 3・§7 形 3）: `launch` の 1 本で同じ target に `account` の席を起こす（anchor と役割は自分の
@@ -911,24 +940,28 @@ fn launched_word(launched: &Launched) -> &'static str {
     }
 }
 
-/// pane が shell でない移動の周（形 4）: 入力欄の門（[`input_gate`]＝§2 と同じ `pass_input`）を通し、空なら `/exit` の 1 行を
-/// 送る（[`deliver_or_confirm`]＝`deliver_within` と同じ門・送り・settle・窓は `pipe.stop_grace_ms`・送った周は未確認でも
-/// `tick.jsonl` に [`WHO_MOVE`] の 1 行）。門が人の文字（Foreign）で、その tail が dialog の既定の行の周だけ Enter を 1 回送る。
-/// それ以外の Foreign / 特定できない入力欄 / 残る自席の文は今の語で止まる（OwnQueued の Enter は `pass_input` のまま）。
-fn evacuate(input: &Input, window_ms: u64) -> Verdict {
+/// pane が shell でない移動の周（形 4）: 入力欄の門（[`input_gate`]＝§2 と同じ `pass_input`）を通し、空なら `payload`（`/exit`
+/// か退避の合図）の 1 行を送る（[`deliver_or_confirm`]＝`deliver_within` と同じ門・送り・settle・窓は `pipe.stop_grace_ms`・送った
+/// 周は未確認でも `tick.jsonl` に [`WHO_MOVE`] の 1 行）。門が人の文字（Foreign）で、その tail が dialog の既定の行の周だけ Enter を
+/// 1 回送る。それ以外の Foreign / 特定できない入力欄 / 残る自席の文は今の語で止まる（OwnQueued の Enter は `pass_input` のまま）。
+/// 2 つ目の値は送達を確認した周（`Delivered`）だけ真。
+fn evacuate(input: &Input, (payload, step): (&str, Move), window_ms: u64) -> (Verdict, bool) {
     let foreign = match input_gate(input) {
         Ok(()) => false,
         Err(NoopReason::InputBusy) => true,
-        Err(reason) => return Verdict::noop(reason),
+        Err(reason) => return (Verdict::noop(reason), false),
     };
-    let request = Request { target: input.target, socket: input.socket, payload: EXIT, state_dir: Some(input.state) };
+    let request = Request { target: input.target, socket: input.socket, payload, state_dir: Some(input.state) };
     match deliver_or_confirm(&request, Duration::from_millis(window_ms), &exit_dialog(WHO_MOVE)) {
         inject::Sent::Confirmed(entered) => {
             let why = if entered { CONSUMED_EXIT_DIALOG } else { REASON_TMUX_FAILED };
-            Verdict::moved(Move::Enter, Some(Sent::Unconfirmed(why)), None)
+            (Verdict::moved(Move::Enter, Some(Sent::Unconfirmed(why)), None), false)
         }
-        inject::Sent::Payload(Delivery::Refused(_)) if foreign => Verdict::noop(NoopReason::InputBusy),
-        inject::Sent::Payload(delivery) => Verdict::moved(Move::Exit, Some(Sent::of(delivery)), None),
+        inject::Sent::Payload(Delivery::Refused(_)) if foreign => (Verdict::noop(NoopReason::InputBusy), false),
+        inject::Sent::Payload(delivery) => {
+            let delivered = matches!(delivery, Delivery::Delivered(..));
+            (Verdict::moved(step, Some(Sent::of(delivery)), None), delivered)
+        }
     }
 }
 
@@ -1309,7 +1342,7 @@ mod tests {
     }
 
     /// 移動の門の 2 値と停止の記録の門の 1 値（設計 §12 形 3）は `NoopReason` の宣言順の末尾に在り、既存の 16 値の語と重ならない
-    /// （母集団は 16 → 18 → 19）。
+    /// （母集団は 16 → 18 → 19）。移動の周の手は 5 値（猶予の合図と待ちが末尾・設計 §13 形 6）。
     #[test]
     fn seat_tick_tail_reasons_are_the_last_three_in_declaration_order() {
         assert!(is_declaration_order(NOOP_REASONS, |reason| reason as usize), "NOOP_REASONS は宣言順");
@@ -1320,8 +1353,9 @@ mod tests {
         words.sort_unstable();
         words.dedup();
         assert_eq!((before, words.len()), (19, 19), "19 値で重複しない");
-        let moves: Vec<&str> = [Move::Launch, Move::Exit, Move::Enter].iter().map(|found| found.as_str()).collect();
-        assert_eq!(moves, ["launch", "exit", "enter"], "手の語");
+        let moves = [Move::Launch, Move::Exit, Move::Enter, Move::Signal, Move::Wait];
+        let words: Vec<&str> = moves.iter().map(|found| found.as_str()).collect();
+        assert_eq!(words, ["launch", "exit", "enter", "signal", "wait"], "手の語 5 値（設計 §13 形 6・signal / wait は末尾）");
     }
 
     /// 移動の周の判定行は `decision=move reason=- pointer=- step=-` で、送りの結果を `consumed=`・手を `move=`・起こした周だけ

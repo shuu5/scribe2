@@ -1602,9 +1602,9 @@ fn rules_embedded_manifest_declares_host_guard_rows_with_one_ruling() {
 }
 
 /// kind 2 つは `LedgerDeniedWrites` の直後に宣言順で並び、その直後に管理 tick の 3 kind（`.582`・設計 seat-heartbeat.md §2
-/// 形 5 / §10 形 5＝梯子の列の kind は `SeatTickStaleS` の直後）が宣言順で続き、クラスの語列表の kind（`.601`・設計
-/// contract-source.md §48）で `ALL` が終わり、字面から引ける。末尾の絶対位置でなく `LedgerDeniedWrites` の位置から測る（kind を
-/// 末尾に足した後も同じ並びを測る）。
+/// 形 5 / §10 形 5＝梯子の列の kind は `SeatTickStaleS` の直後）と退避の猶予の kind（`.651`・§13 形 1＝梯子の列の kind の直後）が
+/// 宣言順で続き、クラスの語列表の kind（`.601`・設計 contract-source.md §48）で `ALL` が終わり、字面から引ける。末尾の絶対位置で
+/// なく `LedgerDeniedWrites` の位置から測る（kind を末尾に足した後も同じ並びを測る）。
 #[test]
 fn rules_embedded_manifest_declares_host_guard_kinds_at_the_tail_of_all() {
     let at = ALL.iter().position(|kind| *kind == RuleKind::LedgerDeniedWrites).expect("LedgerDeniedWrites は ALL に在る");
@@ -1618,16 +1618,23 @@ fn rules_embedded_manifest_declares_host_guard_kinds_at_the_tail_of_all() {
             RuleKind::SeatTickIntervalS,
             RuleKind::SeatTickStaleS,
             RuleKind::SeatPointerLadderS,
+            RuleKind::SeatMoveGraceS,
             RuleKind::RunnerClassCommands,
         ],
-        "LedgerDeniedWrites の後ろに宣言順で 2 kind・管理 tick の 3 kind・クラスの語列表の kind で ALL が終わる（母集団 {} 種）",
+        "LedgerDeniedWrites の後ろに宣言順で 2 kind・管理 tick の 3 kind・退避の猶予・クラスの語列表の kind で ALL が終わる（母集団 {} 種）",
         ALL.len()
     );
-    let tail: Vec<RuleKind> = ALL.iter().rev().take(4).rev().copied().collect();
+    let tail: Vec<RuleKind> = ALL.iter().rev().take(5).rev().copied().collect();
     assert_eq!(
         tail,
-        vec![RuleKind::SeatTickIntervalS, RuleKind::SeatTickStaleS, RuleKind::SeatPointerLadderS, RuleKind::RunnerClassCommands],
-        "逆順に 4 つ取った並びが管理 tick の 3 kind とクラスの語列表の kind"
+        vec![
+            RuleKind::SeatTickIntervalS,
+            RuleKind::SeatTickStaleS,
+            RuleKind::SeatPointerLadderS,
+            RuleKind::SeatMoveGraceS,
+            RuleKind::RunnerClassCommands
+        ],
+        "逆順に 5 つ取った並びが管理 tick の 3 kind・退避の猶予・クラスの語列表の kind"
     );
     for kind in [RuleKind::HostGuardDeniedCommands, RuleKind::HostGuardRmProtected] {
         assert_eq!(RuleKind::parse(kind.as_str()), Some(kind), "kind を字面から引ける: {}", kind.as_str());
@@ -1714,6 +1721,27 @@ fn rules_embedded_manifest_declares_tick_kinds_in_all_with_int_and_list_shapes()
         let errors = rejected(&one_row_raw(retired, "2")).expect("未知の kind の fixture が受理された");
         assert!(errors.join("\n").contains("未知である"), "{retired} は読めない: {errors:?}");
     }
+}
+
+/// 退避の猶予の行（設計 seat-heartbeat.md §13 形 1・ADR-0071・`s2-07l.651`）が埋め込み manifest に id / kind / 形 Int / 値 1800 /
+/// enabled / 裁定 id / 裁定日で 1 本在り、kind は `ALL` の `SeatPointerLadderS` の直後で字面から引け、形は Int だけ（base では
+/// 行も kind も無い ＝ RED）。
+#[test]
+fn rules_embedded_manifest_declares_tick_move_grace_row_after_the_ladder() {
+    let manifest = Manifest::embedded().unwrap_or_else(|errors| panic!("埋め込み manifest が拒まれた: {errors:?}"));
+    let id = "seat.move_grace_s";
+    let row = manifest.get(id).unwrap_or_else(|| panic!("{id} の行が在る"));
+    assert_eq!((row.kind, row.kind.shape()), (RuleKind::SeatMoveGraceS, ValueShape::Int), "{id} の kind と形");
+    assert_eq!(row.value, RuleValue::Int(1800), "{id} の値（30 分）");
+    assert!(row.enabled, "{id} は既定で効く");
+    assert_eq!((row.ruling.as_str(), row.ruled_at.as_str()), ("user 2026-09-26T06:29Z", "2026-09-26"), "{id} の裁定 id と裁定日");
+    assert_eq!(int_row(&manifest, id), Ok(1800), "{id} を整数の読み手で引ける");
+    assert_eq!(manifest.rows().iter().filter(|found| found.kind == RuleKind::SeatMoveGraceS).count(), 1, "kind の行は 1 本");
+    let at = ALL.iter().position(|kind| *kind == RuleKind::SeatPointerLadderS).expect("SeatPointerLadderS は ALL に在る");
+    assert_eq!(ALL.get(at + 1), Some(&RuleKind::SeatMoveGraceS), "kind は SeatPointerLadderS の直後");
+    assert_eq!(RuleKind::parse("SeatMoveGraceS"), Some(RuleKind::SeatMoveGraceS), "字面から引ける");
+    let errors = rejected(&one_row(RuleKind::SeatMoveGraceS, "\"half\"")).expect("文字列の値の fixture が受理された");
+    assert!(errors.join("\n").contains("形と合わない"), "形は Int だけ: {errors:?}");
 }
 
 /// 重なる語列の移動（設計 vessel-hook.md §11 の形 f 4・user 裁定 2026-09-19T15:28Z）: runner.denied_commands は cargo の
@@ -1962,7 +1990,7 @@ fn rules_embedded_manifest_is_valid_and_covers_all_kinds() {
     // **tracked な `rules/manifest.toml` の全行が受理される**（`parse` は 1 件でも違反が
     // 在れば `Err` を返すので、ここに届いた時点で全行が必須 key を持つ）。母集団を額面に
     // 出すのは、行が黙って落ちた周を「全部読めた」と読み違えないためである。
-    assert_eq!(manifest.rows().len(), 69, "埋め込み manifest の行数（母集団・`.637` で -2 +1〔梯子の係数と上限の行の退役と梯子の列の行〕・`.600` で +1〔境界 crate の上限 R-C4-5〕・`.601` で +1〔クラスの語列表〕・`.582` で +4〔管理 tick の行 4 本〕・`.172` で +1〔便ごとの token 消費の検出線 R-C6-1〕・`.574` で +4〔host の見張りの種類ごとの行〕・`.169` で +1〔台帳 write の断る形〕・`.170` で +2〔flip の免除経路の面と札の上限〕・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.478` で -1〔役割の行 2 本が 1 本〕・`.479.1` で -7〔席の自律の行〕・`.479.2` で -3〔作業記憶の行 1 本と棚卸しの行 2 本〕・`.382` で +1〔終端の CI の上限〕・`.433` で +2〔役割の既定の model と effort〕・`.407` で +1〔選定の前計測の鮮度〕・`.396` で +1〔同型の審査 FAIL の停止の回数〕・`.504` の行 x で +2〔器の健康の遮断器の倍率〕・`.428` で +1〔着地の列の上限〕・`.398` で +1〔同時本数の最大値〕・`.491.3` で +3〔群の逼迫の閾値の窓ごとの行〕）");
+    assert_eq!(manifest.rows().len(), 70, "埋め込み manifest の行数（母集団・`.651` で +1〔退避の猶予〕・`.637` で -2 +1〔梯子の係数と上限の行の退役と梯子の列の行〕・`.600` で +1〔境界 crate の上限 R-C4-5〕・`.601` で +1〔クラスの語列表〕・`.582` で +4〔管理 tick の行 4 本〕・`.172` で +1〔便ごとの token 消費の検出線 R-C6-1〕・`.574` で +4〔host の見張りの種類ごとの行〕・`.169` で +1〔台帳 write の断る形〕・`.170` で +2〔flip の免除経路の面と札の上限〕・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.478` で -1〔役割の行 2 本が 1 本〕・`.479.1` で -7〔席の自律の行〕・`.479.2` で -3〔作業記憶の行 1 本と棚卸しの行 2 本〕・`.382` で +1〔終端の CI の上限〕・`.433` で +2〔役割の既定の model と effort〕・`.407` で +1〔選定の前計測の鮮度〕・`.396` で +1〔同型の審査 FAIL の停止の回数〕・`.504` の行 x で +2〔器の健康の遮断器の倍率〕・`.428` で +1〔着地の列の上限〕・`.398` で +1〔同時本数の最大値〕・`.491.3` で +3〔群の逼迫の閾値の窓ごとの行〕）");
     for kind in ALL {
         let covered = manifest.rows().iter().any(|row| row.kind == *kind);
         assert!(covered, "{} の行が manifest に無い", kind.as_str());
@@ -2135,7 +2163,7 @@ fn rules_embedded_manifest_declares_one_capability_row_per_role() {
     assert!(ALL.contains(&RuleKind::RoleCapabilities), "ALL に在る（末尾は `.601` のクラスの語列表）");
     assert_eq!(RuleKind::parse("RoleCapabilities"), Some(RuleKind::RoleCapabilities), "kind を字面から引ける");
     let kinds = ALL.len();
-    assert_eq!(kinds, 67, "kind の母集団（`.637` で -2 +1〔梯子の係数と上限の 2 種の退役と梯子の列の 1 種〕・`.600` で +1〔境界 crate の上限〕・`.601` で +1〔クラスの語列表〕・`.582` で +4〔管理 tick の 4 種〕・`.172` で +1〔便ごとの token 消費の検出線〕・`.574` で +2〔host の見張りの語列と rm の守る集合〕・`.169` で +1〔台帳 write の断る形〕・`.170` で +2〔flip の免除経路の面と札の上限〕・`.201` で +1・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.479.2` で -3・`.382` で +1〔終端の CI の上限〕・`.433` で +2〔役割の既定の 2 種〕・`.407` で +1〔選定の前計測の鮮度〕・`.396` で +1〔同型の審査 FAIL の停止の回数〕・`.504` の行 x で +2〔器の健康の遮断器の倍率〕・`.428` で +1〔着地の列の上限〕・`.398` で +1〔同時本数の最大値〕・`.491.3` で +3〔群の逼迫の閾値の 3 種〕）");
+    assert_eq!(kinds, 68, "kind の母集団（`.651` で +1〔退避の猶予〕・`.637` で -2 +1〔梯子の係数と上限の 2 種の退役と梯子の列の 1 種〕・`.600` で +1〔境界 crate の上限〕・`.601` で +1〔クラスの語列表〕・`.582` で +4〔管理 tick の 4 種〕・`.172` で +1〔便ごとの token 消費の検出線〕・`.574` で +2〔host の見張りの語列と rm の守る集合〕・`.169` で +1〔台帳 write の断る形〕・`.170` で +2〔flip の免除経路の面と札の上限〕・`.201` で +1・`.217` で +2・`.249` で +3・`.254` で +1・`.168` で +1・`.297` で +1・`.315` で +1・`.322` で +1・`.360` で +1・`.423` で +2・`.479.2` で -3・`.382` で +1〔終端の CI の上限〕・`.433` で +2〔役割の既定の 2 種〕・`.407` で +1〔選定の前計測の鮮度〕・`.396` で +1〔同型の審査 FAIL の停止の回数〕・`.504` の行 x で +2〔器の健康の遮断器の倍率〕・`.428` で +1〔着地の列の上限〕・`.398` で +1〔同時本数の最大値〕・`.491.3` で +3〔群の逼迫の閾値の 3 種〕）");
 }
 
 /// 禁じる語列の行（`runner.denied_commands`・`RuleKind::RunnerDeniedCommands`・裁定 id `user 2026-09-14`・ADR-0025 §2.1・

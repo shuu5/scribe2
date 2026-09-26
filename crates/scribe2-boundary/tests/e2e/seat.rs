@@ -1298,13 +1298,14 @@ fn tick_signal(step: u32) -> String {
     format!("{NAME} tick: heartbeat step={step} — 台帳の現在地（bd --readonly ready --limit 0）から続きを進める（変化が無ければ{next}）")
 }
 
-/// 管理 tick の行 3 本（id・kind・TOML の値の字面・設計 §10 形 5 / 6）。
+/// 管理 tick の行 3 本と退避の猶予の行（id・kind・TOML の値の字面・設計 §10 形 5 / 6・§13 形 1）。
 fn tick_rule_rows() -> Vec<(&'static str, &'static str, String)> {
     let ladder: Vec<String> = TICK_LADDER.iter().map(|secs| format!("\"{secs}\"")).collect();
     vec![
         ("seat.tick_interval_s", "SeatTickIntervalS", "15".to_owned()),
         ("seat.tick_stale_s", "SeatTickStaleS", TICK_STALE.to_string()),
         ("seat.pointer_ladder_s", "SeatPointerLadderS", format!("[{}]", ladder.join(", "))),
+        ("seat.move_grace_s", "SeatMoveGraceS", GRACE_S.to_string()),
     ]
 }
 
@@ -1973,6 +1974,8 @@ const JUDGE_OTHER: &str = "tk:two";
 /// 2 つ目の置き場の席を足し、判定の打刻を消す。
 fn judge_place(root: &Path, anchor: &str, five: [u64; 2]) -> MovePlace {
     let place = move_place(root, "state", anchor);
+    // 判定の歯は猶予 0 の写しで移った周の今の形（`/exit`）を測る（猶予の合図は `seat_tick_grace_` の歯・seat-heartbeat.md §13）。
+    grace_put(&place, 0);
     fs::remove_file(judge_stamp(root)).ok();
     for (label, used) in [(MOVE_A, five[0]), (MOVE_B, five[1])] {
         let dir = place.state.join("accounts").join(label);
@@ -2571,6 +2574,172 @@ fn seat_tick_evacuate_sends_the_exit_every_round() {
     evacuate_assert_exit(&place);
     let exits = move_keys(&place).iter().filter(|key| key.ends_with(" -l /exit")).count();
     assert_eq!((exits, move_injections(&place).len()), (2, 2), "/exit 2 行・記録 2 行");
+}
+
+// ─────── 群の移動の退避は合図が先で /exit は猶予の後（seat-heartbeat.md §13・契約表の行 q・`s2-07l.651`・接頭辞 `seat_tick_grace_`） ───────
+//
+// §4 の移動の fixture（[`move_place`]・写しの `seat.move_grace_s` は [`GRACE_S`]）に、記録の ts を歯が置く群の記録を足す。合図の
+// 字面・合図の記録の path と形は契約から組む（器の helper を借りない）。
+
+/// 写しの退避の猶予（秒・埋め込み manifest の値と同じ 1800＝値は rules の歯が pin する）。
+const GRACE_S: u64 = 1800;
+
+/// 写しの `seat.move_grace_s` の値を `secs` に書き換える。
+fn grace_put(place: &MovePlace, secs: u64) {
+    let rules = fs::read_to_string(&place.rules).unwrap_or_default();
+    let (from, to) = (format!("kind = \"SeatMoveGraceS\"\nvalue = {GRACE_S}\n"), format!("kind = \"SeatMoveGraceS\"\nvalue = {secs}\n"));
+    assert!(rules.contains(&from), "写しに猶予の行が在る");
+    fs::write(&place.rules, rules.replace(&from, &to)).ok();
+}
+
+/// 群の記録（口座 B・previous は A）を ts = `at`（UNIX 秒）で書き、ts の字面を返す。
+fn grace_record(root: &Path, at: u64) -> String {
+    let ts = vessel::fleet::cli::format_utc(at);
+    let body = format!("account={MOVE_B}\nts={ts}\nreason=move\nprevious={MOVE_A}\n");
+    fs::write(move_groups_dir(root).join(format!("{MOVE_GROUP}.account")), body).ok();
+    ts
+}
+
+/// 合図の記録の path（席の置き場の直下の `move-signal`）。
+fn grace_signal(place: &MovePlace) -> PathBuf {
+    seat_dir_of(&place.state, TICK_SEAT).join("move-signal")
+}
+
+/// 退避の合図の 1 行（残り `left` 秒・契約の字面）。
+fn grace_line(left: u64) -> String {
+    format!(
+        "{NAME} group: evacuate group={MOVE_GROUP} to={MOVE_B} — 新しい subagent を起こさず今の作業に区切りをつけ、作業記憶を台帳と git に\
+         残す（{left} 秒の後に器が /exit を送る）"
+    )
+}
+
+/// 1 周撃ち、判定行が `move=signal` で合図の text 1 回 + Enter 1 回だけが増え（`/exit` 0・残りの秒は記録の ts `at` + 猶予 − 撃った
+/// 周の今）、席の記録が `who=seat-tick-move what=<合図>` の 1 行増え、合図の記録が `ts=<記録の ts>` の 1 行になることを測る。
+fn grace_assert_signal(place: &MovePlace, (ts, at): (&str, u64)) {
+    let (keys, injections, before) = (move_keys(place).len(), move_injections(place).len(), unix_now());
+    let out = move_run(place);
+    let after = unix_now();
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(stdout_of(&out), move_line("signal", "false", "-"), "判定行 1 行（base では move=exit）");
+    let sent: Vec<String> = move_keys(place).into_iter().skip(keys).collect();
+    let line = (before..=after).map(|now| grace_line(at + GRACE_S - now)).find(|line| sent.first() == Some(&format!("send-keys -t {TICK_TARGET} -l {line}")));
+    assert!(line.is_some() && sent.len() == 2 && sent.last() == Some(&format!("send-keys -t {TICK_TARGET} Enter")), "合図の text 1 回 + Enter 1 回: {sent:?}");
+    assert!(sent.iter().all(|key| !key.ends_with(" -l /exit")), "/exit 0: {sent:?}");
+    let lines = move_injections(place);
+    assert_eq!(lines.len(), injections + 1, "記録 1 行: {lines:?}");
+    let last = lines.last().map(String::as_str).unwrap_or_default();
+    let (who, what) = move_who_what(last);
+    let head = format!("{NAME} group: evacuate group={MOVE_GROUP} to={MOVE_B} ");
+    let what = what.filter(|what| what.starts_with(&head) && line.as_deref().is_some_and(|line| line.starts_with(what.as_str())));
+    assert!(who.as_deref() == Some("seat-tick-move") && what.is_some(), "who と what（合図の頭・記録は頭を切る）: {last}");
+    assert_eq!(fs::read_to_string(grace_signal(place)).ok(), Some(format!("ts={ts}\n")), "合図の記録は記録の ts");
+}
+
+/// (a) 記録の ts = 今 − 100 秒 ∧ 猶予 1800 ∧ 合図の記録なし ∧ 入力欄が空 → `move=signal`・合図の text 1 回 + Enter 1 回・`/exit` 0・
+/// 合図の記録が記録の ts を持つ・`tick.jsonl` に `who=seat-tick-move what=<合図>`（base では `/exit` ＝ RED）。
+#[test]
+fn seat_tick_grace_signals_once_inside_the_grace() {
+    let root = tmp();
+    let place = move_place(&root, "state", MOVE_ANCHOR);
+    let at = unix_now() - 100;
+    let ts = grace_record(&root, at);
+    grace_assert_signal(&place, (&ts, at));
+    assert!(!move_groups_dir(&root).join("lock").exists(), "lock は残らない");
+}
+
+/// (b) 同じ状態で合図の記録が記録の ts を持つ → `move=wait`・0 key・記録 0・合図の記録は不変・lock を取らない（他の手の lock が
+/// 在っても `group-locked` にならない）。
+#[test]
+fn seat_tick_grace_waits_after_the_signal_without_the_lock() {
+    let root = tmp();
+    let place = move_place(&root, "state", MOVE_ANCHOR);
+    let ts = grace_record(&root, unix_now() - 100);
+    let body = format!("ts={ts}\n");
+    fs::write(grace_signal(&place), &body).ok();
+    let lock = move_groups_dir(&root).join("lock");
+    fs::write(&lock, "pid=1\n").ok();
+    move_assert_quiet(&place, &move_line("wait", "-", "-"));
+    assert_eq!(fs::read_to_string(grace_signal(&place)).ok(), Some(body), "合図の記録は不変");
+    assert_eq!(fs::read_to_string(&lock).ok().as_deref(), Some("pid=1\n"), "他の手の lock は触らない");
+}
+
+/// (c) 合図の記録の ts が別の移動の ts → 送り直す（(a) と同じ・記録は今の移動の ts に書き換わる）。
+#[test]
+fn seat_tick_grace_resends_when_the_signal_names_another_move() {
+    let root = tmp();
+    let place = move_place(&root, "state", MOVE_ANCHOR);
+    let at = unix_now() - 100;
+    let ts = grace_record(&root, at);
+    fs::write(grace_signal(&place), "ts=2026-09-24T00:00:00Z\n").ok();
+    grace_assert_signal(&place, (&ts, at));
+}
+
+/// (d) 記録の ts = 今 − 1801 秒（猶予を越えた）→ 今の形（`/exit`・合図の記録は書かない）。
+#[test]
+fn seat_tick_grace_past_the_grace_sends_the_exit() {
+    let root = tmp();
+    let place = move_place(&root, "state", MOVE_ANCHOR);
+    grace_record(&root, unix_now() - GRACE_S - 1);
+    evacuate_assert_exit(&place);
+    assert!(!grace_signal(&place).exists(), "合図の記録は書かない");
+}
+
+/// (e) 猶予 0 の `--rules` → 記録の ts が今でも `/exit`。
+#[test]
+fn seat_tick_grace_zero_sends_the_exit_at_once() {
+    let root = tmp();
+    let place = move_place(&root, "state", MOVE_ANCHOR);
+    grace_put(&place, 0);
+    grace_record(&root, unix_now());
+    evacuate_assert_exit(&place);
+    assert!(!grace_signal(&place).exists(), "合図の記録は書かない");
+}
+
+/// (f) 記録なし（種）∧ row ≠ 種 → `/exit`（種は猶予の起点を持たない）。
+#[test]
+fn seat_tick_grace_seed_differing_from_the_row_sends_the_exit() {
+    let root = tmp();
+    let place = move_place(&root, "state", MOVE_ANCHOR);
+    let host = format!(
+        "schema = 1\n\n[[account]]\nlabel = \"{MOVE_A}\"\n\n[[account]]\nlabel = \"{MOVE_B}\"\n\n[[account-group]]\nname = \"{MOVE_GROUP}\"\n\
+         anchors = [\"{MOVE_ANCHOR}\", \"{MOVE_ANCHOR_TWO}\"]\naccounts = [\"{MOVE_B}\", \"{MOVE_A}\"]\n"
+    );
+    fs::write(place.state.join("host.toml"), host).ok();
+    evacuate_assert_exit(&place);
+    assert!(!move_groups_dir(&root).join(format!("{MOVE_GROUP}.account")).exists(), "記録は書かれない（種のまま）");
+}
+
+/// (g) 猶予の内側 ∧ 入力欄に人の字 → `input-busy`・0 key・合図の記録なし（次の周にまた試す）。
+#[test]
+fn seat_tick_grace_typed_input_is_input_busy_without_a_record() {
+    let root = tmp();
+    let place = move_place(&root, "state", MOVE_ANCHOR);
+    grace_record(&root, unix_now() - 100);
+    fs::write(place.at(TICK_PANE), format!("{TICK_CLEAR_PANE}half typed")).ok();
+    move_assert_quiet(&place, &move_noop("input-busy"));
+    assert!(!grace_signal(&place).exists(), "合図の記録は書かない");
+}
+
+/// (h) ts が形でない記録 → `group-unreadable`・0 key（猶予の起点の無い記録を種や 0 秒に読み替えない）。
+#[test]
+fn seat_tick_grace_malformed_ts_is_group_unreadable() {
+    let root = tmp();
+    let place = move_place(&root, "state", MOVE_ANCHOR);
+    let body = format!("account={MOVE_B}\nts=yesterday\nreason=move\nprevious={MOVE_A}\n");
+    fs::write(move_groups_dir(&root).join(format!("{MOVE_GROUP}.account")), body).ok();
+    move_assert_quiet(&place, &move_noop("group-unreadable"));
+    assert!(!grace_signal(&place).exists(), "合図の記録は書かない");
+}
+
+/// (i) `seat.move_grace_s` を欠く `--rules` → rc 1 `no-rule`・0 key（既定の猶予に倒さない・base では判定へ進む ＝ RED）。
+#[test]
+fn seat_tick_grace_missing_row_is_no_rule() {
+    let place = tick_place(true);
+    let rules = fixture(&place.dir, "no-grace.toml", &tick_rules_text("seat.move_grace_s", None));
+    let out = tick_run(&place, &["--rules", &rules]);
+    let want = format!("decision=error target={TICK_SEAT} reason=no-rule pointer=- step=- consumed=-{TICK_NO_MOVE}\n");
+    assert_eq!((rc_of(&out), stdout_of(&out)), (i32::from(RC_REFUSED), want), "stderr={}", stderr_of(&out));
+    assert!(tick_keys(&place).is_empty(), "0 key");
 }
 
 // ───────── 合図を席ごとに止める（seat-heartbeat.md §12・契約表の行 o・`s2-07l.646`・接頭辞 `seat_heartbeat_`） ─────────

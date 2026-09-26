@@ -321,6 +321,9 @@ pub enum RuleKind {
     /// 合図の梯子の列（秒の文字列の列・非空・狭義に昇順・設計 seat-heartbeat.md §10 形 5・ADR-0068）。段 n の待ちは列の
     /// n 番目で、列を越えた段は送らない（`stopped`）。数でない・昇順でない列は tick の読みが `no-rule` で断る。
     SeatPointerLadderS,
+    /// 群の移動の退避の猶予（秒・起点は群の記録の ts・設計 seat-heartbeat.md §13 形 1・ADR-0071）。猶予の内側は退避の合図だけを
+    /// 送り `/exit` は越えてから送る。0 は猶予なし。読めない周は tick が `no-rule` で断る。
+    SeatMoveGraceS,
     /// **クラスの語列表**（設計 contract-source.md §48 の 2・ADR-0061）。値は要素「クラスの名 + 語列」の列（読み手は
     /// [`crate::pipe::contract::class_element`] の 1 本）で、契約表の検査が verify 各行に禁じる語列と同じ照合で当て、導出が
     /// 行の `classes` に無い行を断る。id は [`crate::pipe::contract::CLASS_ROW`] の 1 行。
@@ -395,6 +398,7 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::SeatTickIntervalS,
     RuleKind::SeatTickStaleS,
     RuleKind::SeatPointerLadderS,
+    RuleKind::SeatMoveGraceS,
     RuleKind::RunnerClassCommands,
 ];
 
@@ -462,7 +466,7 @@ impl RuleKind {
             Self::HostGuardDeniedCommands => "HostGuardDeniedCommands", Self::HostGuardRmProtected => "HostGuardRmProtected",
             // 管理 tick の 3 kind も 2 行に畳み、対で読む model と effort の 2 組も 1 行ずつに畳む（同じ上限）。
             Self::SeatTickIntervalS => "SeatTickIntervalS", Self::SeatTickStaleS => "SeatTickStaleS",
-            Self::SeatPointerLadderS => "SeatPointerLadderS",
+            Self::SeatPointerLadderS => "SeatPointerLadderS", Self::SeatMoveGraceS => "SeatMoveGraceS",
         }
     }
 
@@ -510,7 +514,7 @@ impl RuleKind {
             | Self::LandTrainMax
             | Self::PipeMaxLive
             | Self::FlipMarksPerPr
-            | Self::SeatTickIntervalS | Self::SeatTickStaleS
+            | Self::SeatTickIntervalS | Self::SeatTickStaleS | Self::SeatMoveGraceS
             | Self::AccountSelection => ValueShape::Int,
             Self::DialogueSurface
             | Self::RunnerModel

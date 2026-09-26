@@ -2968,6 +2968,10 @@ const GROUP_STALE_TS: &str = "2026-09-12T02:00:00Z";
 const GROUP_ROLE_ROW: &str =
     "[[rule]]\nid = \"seat.model.orchestrator\"\nkind = \"RoleModel\"\nvalue = \"fable\"\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n";
 
+/// 規則の写しの退避の猶予（秒・0＝猶予なし＝続きの周の `/exit` の今の形を測る・猶予の内側は `pipe_dispatch_group_grace_` の歯が
+/// 写しを書き換えて測る・seat-heartbeat.md §13）。
+const GROUP_GRACE_S: u64 = 0;
+
 /// 群の歯の置き場（toy repo・置き場・規則の写し・空の台帳・偽 client）。
 struct GroupPlace {
     /// toy repo（列の `--repo`）。
@@ -3056,6 +3060,7 @@ fn groups_place(accounts: &[(&str, u64, u64, u64)], groups: &[GroupDecl<'_>]) ->
         row("fleet.group_pressure_model_pct", "GroupPressureModelPct", 95),
         row("seat.cycle_settle_s", "SeatCycleSettleS", 2),
         row("seat.cycle_poll_ms", "SeatCyclePollMs", 100),
+        row("seat.move_grace_s", "SeatMoveGraceS", GROUP_GRACE_S),
     ]
     .iter()
     .fold(base, |text, found| format!("{text}\n{found}"));
@@ -3542,9 +3547,18 @@ fn put_spy(state: &Path, name: &str, target: &str, body: &str) {
     fs::write(state.join("spy").join(format!("{name}-{}", target.replace(':', "_"))), body).expect("spy の file を書ける");
 }
 
-/// 退避の合図の 1 行（器の字面を借りない）。
+/// 写しの猶予（[`GROUP_GRACE_S`]）で送る退避の合図の 1 行。
 fn evacuate_payload(group: &str, to: &str) -> String {
-    format!("{} group: evacuate group={group} to={to} — 作業記憶を台帳と git に残して /exit", vessel::name::NAME)
+    evacuate_line(group, to, GROUP_GRACE_S)
+}
+
+/// 退避の合図の 1 行（残り `left` 秒・器の字面を借りない・seat-heartbeat.md §13 形 4）。
+fn evacuate_line(group: &str, to: &str, left: u64) -> String {
+    format!(
+        "{} group: evacuate group={group} to={to} — 新しい subagent を起こさず今の作業に区切りをつけ、作業記憶を台帳と git に\
+         残す（{left} 秒の後に器が /exit を送る）",
+        vessel::name::NAME
+    )
 }
 
 /// 断りの 1 行。
@@ -4071,6 +4085,62 @@ fn pipe_dispatch_group_exit_move_round_sends_only_the_evacuation() {
         assert_eq!(exit_sends(&place.state, target), 0, "{target}: 移動の周は /exit 0");
     }
     assert_both_seats(&group_sends(&place.state), &evacuate_payload(GROUP, "a2"));
+    clean(&[&place.repo, &place.state]);
+}
+
+// ───── 退避の /exit は猶予の後（seat-heartbeat.md §13 形 7・契約表の行 q・接頭辞 `pipe_dispatch_group_grace_`・§21 の fixture） ─────
+//
+// §21 の移動の周（2 つ目の席は shell に戻らず保留 1）を、写しの `seat.move_grace_s` を 1800 に書き換えてから撃つ。合図の記録の
+// path と形は契約から組む（席の置き場の直下の `move-signal`・1 行 `ts=<群の記録の ts>`）。
+
+/// 写しの `seat.move_grace_s` の値を `from` から `to` に書き換える。
+fn grace_put(place: &GroupPlace, from: u64, to: u64) {
+    let rules = fs::read_to_string(&place.rules).unwrap_or_default();
+    let (was, now) = (format!("kind = \"SeatMoveGraceS\"\nvalue = {from}\n"), format!("kind = \"SeatMoveGraceS\"\nvalue = {to}\n"));
+    assert!(rules.contains(&was), "写しに猶予 {from} の行が在る");
+    fs::write(&place.rules, rules.replace(&was, &now)).unwrap_or_default();
+}
+
+/// 猶予 1800 の写しで移動の周を撃つ（候補 [a1, a2]・種 a1 が逼迫・2 つ目の置き場の席は shell に戻らない）。
+fn grace_place() -> GroupPlace {
+    let place = move_place(&[("a1", 90, 10, 10), ("a2", 10, 10, 10)], &["a1", "a2"], "a1");
+    grace_put(&place, GROUP_GRACE_S, 1800);
+    put_spy(&place.state, "stuck", GROUP_ANCHORS[1].1, "");
+    let out = group_terminal(&place, "r-group-1");
+    assert_eq!(move_counts(&place.state), (1, 0, 1), "移動の周は承認 1・保留 1（{}）", told(&out));
+    place
+}
+
+/// (j) 移動の周の合図は形 4 の字面（残りの秒 = 猶予の値 1800）で席ごとに 1 行・合図の記録が各席の置き場に群の記録の ts で在る
+/// （tick が同じ移動で二重に送らない・base では字面が違い記録も無い ＝ RED）。
+#[test]
+fn pipe_dispatch_group_grace_move_round_signals_with_the_grace_and_records_it() {
+    let place = grace_place();
+    assert_both_seats(&group_sends(&place.state), &evacuate_line(GROUP, "a2", 1800));
+    let record = fs::read_to_string(groups_dir(&place.state).join(format!("{GROUP}.account"))).unwrap_or_default();
+    let ts = record.lines().find_map(|line| line.strip_prefix("ts=")).unwrap_or_default().to_owned();
+    assert!(!ts.is_empty(), "群の記録に ts が在る: {record}");
+    for (_, target) in GROUP_ANCHORS {
+        let signal = place.state.join("seat").join(target.replace(':', "_")).join("move-signal");
+        assert_eq!(fs::read_to_string(&signal).ok(), Some(format!("ts={ts}\n")), "{target} の合図の記録は群の記録の ts");
+    }
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (k) 猶予の内側の続きの周は shell に戻らない席へ `/exit` 0・起こさず・保留 1 のまま（event を重ねない）。写しを猶予 0 に書き換えた
+/// 次の周は `/exit` 1（base では猶予の内側でも `/exit` 1 ＝ RED）。
+#[test]
+fn pipe_dispatch_group_grace_continuation_round_holds_the_exit_inside_the_grace() {
+    let place = grace_place();
+    let two = GROUP_ANCHORS[1].1;
+    let out = group_terminal(&place, "r-group-2");
+    assert_eq!(exit_sends(&place.state, two), 0, "猶予の内側は /exit 0（{}）: {:?}", told(&out), group_sends(&place.state));
+    assert_eq!(launched_lines(&place.state, two).len(), 0, "起こさない");
+    assert_eq!(move_counts(&place.state), (1, 0, 1), "保留 1 のまま・判定を繰り返さない");
+    grace_put(&place, 1800, 0);
+    let out = group_terminal(&place, "r-group-3");
+    assert_eq!(exit_sends(&place.state, two), 1, "猶予 0 の周は /exit 1（{}）", told(&out));
+    assert_eq!(move_counts(&place.state), (1, 0, 1), "保留を重ねない");
     clean(&[&place.repo, &place.state]);
 }
 

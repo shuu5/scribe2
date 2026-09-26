@@ -30,7 +30,7 @@ use crate::fleet::cli::{host, now_utc};
 use crate::fleet::select::Model;
 use crate::fleet::store::{self, LockPolicy};
 use crate::fleet::usage;
-use crate::fleet::{replay, Allowance, Event, EventKind, Measured, State, WindowKind, SCHEMA};
+use crate::fleet::{epoch_of, replay, Allowance, Event, EventKind, Measured, State, WindowKind, SCHEMA};
 use crate::invocation::Invocation;
 use crate::name::NAME;
 use crate::rules::manifest::{AccountGroup, Manifest};
@@ -141,6 +141,8 @@ pub struct Current {
     pub label: String,
     /// 出所。
     pub source: Source,
+    /// 記録の ts（`YYYY-MM-DDTHH:MM:SSZ`・種は `None`＝猶予の起点が無い・設計 seat-heartbeat.md §13 形 2）。
+    pub ts: Option<String>,
 }
 
 /// 記録が在るのに読めない（typed に止まる・種に読み替えない・C10）。
@@ -183,15 +185,50 @@ pub fn judged_path(dir: &Path, group: &str) -> PathBuf {
 }
 
 /// 群の今の口座（**解決の 1 関数**・設計 §20 形 2）: 記録が在ればその label・無ければ種（面の読みが埋めた種の欄・§28）・在るのに
-/// 読めなければ [`RecordError`]。読み手は dispatch の 1 周・席の起動・doctor の 3 つで、種の読みはこの中だけに在る。
+/// 読めなければ [`RecordError`]。読み手は dispatch の 1 周・席の起動・doctor の 3 つで、種の読みはこの中だけに在る。記録の ts が
+/// [`epoch_of`] の形でない記録も [`RecordError::Malformed`]（猶予の起点を持たない記録を種や 0 秒に読み替えない・seat-heartbeat.md §13 形 2）。
 pub fn current_of(state_dir: &Path, group: &AccountGroup) -> Result<Current, RecordError> {
     match fs::read_to_string(current_path(&host_groups_dir(state_dir), group.name())) {
         Ok(text) => Record::parse(&text)
-            .map(|found| Current { label: found.account, source: Source::Record })
+            .filter(|found| epoch_of(&found.ts).is_some())
+            .map(|found| Current { label: found.account, source: Source::Record, ts: Some(found.ts) })
             .ok_or(RecordError::Malformed),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Current { label: group.seed().to_owned(), source: Source::Seed }),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            Ok(Current { label: group.seed().to_owned(), source: Source::Seed, ts: None })
+        }
         Err(_) => Err(RecordError::Unreadable),
     }
+}
+
+/// 猶予の残りの秒（**1 関数**・設計 seat-heartbeat.md §13 形 2）: 記録の ts + `grace_s` − `now` が正ならその秒。記録なし（種）・
+/// 猶予 0・越えた周は `None`（猶予なし＝`/exit` を送ってよい）。呼び手は tick の移動の周と群の段の続きの周の 2 つ。
+pub fn grace_left(current: &Current, now: u64, grace_s: u64) -> Option<u64> {
+    let at = epoch_of(current.ts.as_deref()?)?;
+    Some(at.saturating_add(grace_s).saturating_sub(now)).filter(|left| *left > 0)
+}
+
+/// 退避の合図の記録の file 名（席の置き場の直下・1 行 `ts=<群の記録の ts>`・設計 seat-heartbeat.md §13 形 3）。
+pub const SIGNAL_FILE: &str = "move-signal";
+
+/// 席の置き場 `seat` に、群の記録の ts が `ts` の移動の合図を送った記録が在るか（無い・違う ts・読めない周は偽）。
+pub fn signalled(seat: &Path, ts: &str) -> bool {
+    fs::read_to_string(seat.join(SIGNAL_FILE)).is_ok_and(|text| text == format!("ts={ts}\n"))
+}
+
+/// 合図の記録を書く（**書き手はこの 1 本**・一時 file → rename・前の移動の記録は上書きする）。呼び手は tick の合図の周と群の段の
+/// 移動の周の 2 つ。
+pub fn write_signal(seat: &Path, ts: &str) -> std::io::Result<()> {
+    fs::create_dir_all(seat)?;
+    let temporary = seat.join(format!("{SIGNAL_FILE}.tmp"));
+    fs::write(&temporary, format!("ts={ts}\n"))?;
+    fs::rename(&temporary, seat.join(SIGNAL_FILE))
+}
+
+/// 退避の合図の 1 行（**字面はこの 1 関数**・群の段と tick が同じ字面を送る・設計 seat-heartbeat.md §13 形 4）。
+pub fn evacuate_line(group: &str, to: &str, left: u64) -> String {
+    format!(
+        "{NAME} group: evacuate group={group} to={to} — 新しい subagent を起こさず今の作業に区切りをつけ、作業記憶を台帳と git に残す（{left} 秒の後に器が /exit を送る）"
+    )
 }
 
 /// 記録を書く（**1 周の群の段だけが lock の内側で撃つ**・設計 §20 形 1）: 一時 file に書き、前の記録が在れば履歴へ move して
