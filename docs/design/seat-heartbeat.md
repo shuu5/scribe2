@@ -268,6 +268,27 @@
 - 却下: 調査の dialog の形を読んで閉じる（読む形が増える・調査の字面は claude の版で変わる）／`input-unknown` が N 周続いたら Enter を送る（読めない画面へ盲目に鍵・fail-open）／settings の json に書く（env 1 語で足りる・trust の json は持ち主の設定 dir を書く重い口）。
 - 歯（起動行の先頭は `crates/scribe2-boundary/tests/e2e/seat.rs` の helper `acct_launch_prefix` と `crates/scribe2-boundary/tests/e2e/seat/launch.rs` の先頭の定数が pin し、`seat_launch_creates_the_window` / `seat_launch_injects_cd` / `seat_entry_same_window` の 3 本がそれを読む＝helper と定数を 2 語に書き換えると 3 本が base で赤くなる。lib は `crates/scribe2/src/seat/cycle/launch.rs` の中の `seat_agent_view_off_` 接頭辞の既存の歯を 2 語に書き換える）: (a) 起動行の先頭が `cd '<anchor>' && CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1 CLAUDE_CONFIG_DIR={account_dir} claude`（base では 3 語 ＝ RED）(b) 既に 2 語で始まる行は二重にしない (c) 空は空 (d) headless の起動行は不変（`crates/scribe2-boundary/tests/e2e/headless.rs` の既存の歯・触らない）。
 
+## 12. heartbeat は打刻の合図で席ごとに止められ、管理 tick は止めない — seat heartbeat off|on|status（停止の記録 1 file・可逆）・判定の列の合図の段の前の門（noop reason=heartbeat-off）・最後の周の打刻（tick-last）・seat tick status の 6 項目・doctor の席の行の heartbeat= / tick=（契約表の行 o・行 p・ADR-0070・FR78 / AC48・`s2-07l.646`）
+
+やさしく言うと: 管理 tick は「黙った席へ合図を送る」だけでなく「死んだ席を起こす・群の移動の続きを撃つ・群の逼迫を判じる」も担うので、導入した project では常にオンでよい。止めたいのは合図（heartbeat）だけで、席ごとに file 1 つ（停止の記録）を置けば tick は合図を送らず他の仕事は続ける。tick が生きているかは、tick が毎周書く「最後の周の打刻」を読み手（status・doctor・外の画面）が「経過 ≤ 周期 × 2」で判じる。外の画面は 2 つの file を読んでよいが、書くのは器の口だけ。
+
+- 出所: 台帳 `s2-07l.646`（持ち主の要望 2026-09-26T00:48Z・裁定 00:53Z）・ADR-0070・SRS v0.25 FR78 / AC48・FR27 の語の改め。
+- 現物（verified・main 31118b7）: 判定の列は `crates/scribe2/src/seat/tick.rs` の `judge`（`front` → 窓が shell なら `awake` → 移動の周なら `moving` → 群の `judged` → `back`〔黙りの門 → 上限 → 床 → 口座の門 → 入力欄の門 → 記録 → 注入〕）で、判定行は `render`（`decision= target= reason= pointer= step= consumed= move= launched=`）、rc は `run` が決める（error だけ 1）。理由は `NoopReason`（閉じた列・末尾は `GroupLocked`）。席の置き場は `crates/scribe2/src/seat/mod.rs` の `seat_dir`（`<state_dir>/seat/<潰した target>/`・梯子の記録 `pointer-ladder` と注入の記録 `tick.jsonl` の親）。verb は `crates/scribe2/src/seat/cli.rs` の `SeatCommand`（register / launch / ruling / tick / retire・閉じた列）と使い方の 1 行、tick の後ろの語は `crates/scribe2/src/seat/tick/install.rs` の `Verb`（install / uninstall・閉じた列）。doctor の席の行は `crates/scribe2/src/seat/role.rs` の `render_rows`（`seat: role= anchor= target= account= model= default= paths=`・snapshot は e2e seat.rs の `seat_doctor_external_form`・行の字面を pin する歯は e2e seat/register.rs にも在る）。周期は rules 行 `seat.tick_interval_s`、梯子は `seat.pointer_ladder_s`（6 段）。
+- 形（行 o・1 つずつ歯が測る・done と 1:1）:
+  1. **停止の記録**: 席の置き場の直下の `heartbeat-off`（1 行 `ts=<UTC>`・一時 file → rename・書き手は器の口 1 本）。読み書きは tick の file に置く（新しい file を足さない・書き手は 1 本）。
+  2. **口**: `seat heartbeat off|on|status --state-dir S --target S:W`（`SeatCommand` に変種を 1 つ足す・3 語は positional・使い方の 1 行に増える）。off は記録を置く（既に在れば ts を書き換えない・rc 0）、on は消す（無ければ rc 0）、status は 1 行 `seat heartbeat status: target=<T> heartbeat=on|off last=<ts|-> decision=<語|-> reason=<語|->`（last 以下は行 p の打刻・行 p の前は `-`）。登録 row の無い target は rc 1 で語 `no-row`（管理外の席の dir を作らない・FR40）。
+  3. **門**: `back` の頭（黙りの門の前）で停止の記録を読み、在れば `decision=noop reason=heartbeat-off pointer=- step=-`・0 key・梯子の記録を読まず書かない。在るのに読めない周（dir・読めない）も off と読む（合図は正の証拠でだけ送る）。`NoopReason` の末尾に変種 1 つ（語 `heartbeat-off`）を足す。
+  4. **止めないもの**: `awake`（死んだ席の起こし直し・起動行の初手の合図を含む）・`moving`（退避の /exit）・`judged`（群の判定と断りの 1 行）は停止の記録を読まない。
+  5. 判定の列の順・梯子・口座の門・入力欄の門・unit の導出・event の種類・rules 行は不変。off / on は event log に書かない。
+- 形（行 p・1 つずつ歯が測る・done と 1:1）:
+  1. **最後の周の打刻**: `run` が判定の後に席の置き場の直下の `tick-last`（1 行 `ts=<UTC> decision=<語> reason=<語>`・一時 file → rename）を書く。rc 1 の周（no-rule 等）も書く。登録 row の無い target は書かない（dir を作らない）。置き場が解けない周は書けない。event log には書かない。
+  2. **`seat tick status --state-dir S [--target S:W]`**: 登録 row の席ごとに 1 行 `seat tick status: target=<T> last=<ts|-> age=<秒|-> healthy=yes|no heartbeat=on|off step=<段|-> next=<秒|stopped|->`（鍵の順・`--target` は 1 席・row の無い target は rc 1 で語 `no-row`）。healthy = 打刻が在り読めて「今 − ts ≤ 2 × seat.tick_interval_s」（無い・読めない周は no）。step / next は梯子の記録から（段と、その段の待ち〔`seat.pointer_ladder_s` の段の値〕から sent_at からの経過を引いた残りの秒〔0 で切る〕・段が列を越える周は stopped・記録が無ければ `-`）。判じるのは読み手で tick は判じない。`Verb` に変種 1 つ（語 status）を足す。
+  3. **doctor の席の行**に `heartbeat=on|off tick=healthy|stale|absent|unreadable` の 2 項目を `paths=` の後ろに足す（snapshot が動く・row の字面を pin する既存の歯は 2 項目の増分で書き換える）。判定は形 2 と同じ 1 関数（読み手 1 本）。
+  4. 打刻を読む外の画面は 2 file（停止の記録・最後の周の打刻）を読んでよいが書かない（書きは器の口）。
+- 触らない: 判定の列の順・梯子の記録・口座の門・入力欄の門・unit の導出と周期（§3）・退避と起こし直し（§4 / §10）・event の種類。
+- 却下: tick の unit を止める（起こし直しと群の移動が止まる・持ち主の要望の逆）／打刻を event log に書く（15 秒ごとに 8 席で 1 日 46080 行・log が肥大）／健全を tick が判じて書く（自分の死を自分で書けない・読み手が判じる）／off を journal や systemd の状態から導く（外の画面が systemd を読む・器の口 1 本の外）／off / on を rules 行にする（席ごと・可逆・裁定でなく運用の手）。
+- 歯（`crates/scribe2-boundary/tests/e2e/seat.rs`・§2 の `tick_place` / `tick_run` の fixture）: 行 o は `seat_heartbeat_` 接頭辞: (a) off が記録を置き、黙った席への tick が `noop heartbeat-off pointer=- step=-`・0 key・梯子の記録 0（base では注入 ＝ RED）(b) on が消して次の tick が注入する (c) 記録が dir の周も heartbeat-off・0 key (d) off の席でも移動の周の /exit と shell の窓の起こし直しはそのまま撃つ（§10 / §4 の fixture・2 本）(e) 群の判定は off でも撃つ（§9 の fixture・1 本）(f) row の無い target の off は rc 1・file 0 (g) 使い方の 1 行に heartbeat が増える（`seat_usage_external_form` の snapshot）。行 p は `seat_tick_status_` 接頭辞: (h) tick の 1 周の後に tick-last が在り ts / decision / reason が判定行と同じ（base では file 無し ＝ RED）(i) no-rule の rc 1 の周も書く (j) row の無い target は書かない (k) status の healthy が経過 ≤ 2 × 周期で yes、越えると no、file 無しは no と `last=-` (l) heartbeat= が停止の記録を映す (m) step / next が梯子の記録を映し、打ち切りの段は stopped (n) doctor の席の行に 2 項目（snapshot `seat_doctor_external_form` が動く）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -420,4 +441,28 @@ size = "S"
 growth = ["crates/scribe2/src/headless/mod.rs:3", "crates/scribe2/src/seat/cycle/launch.rs:5"]
 depends = ["j"]
 done = "(1) 席の起動行の前置は CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1 の 2 語（順は固定・名は AGENT_VIEW_ENV の隣の定数・値は 1）で、前置の関数は 1 本のまま二重にせず空は空 (2) 前置の場所（cd … && の後・CLAUDE_CONFIG_DIR の前）と起動行の他の語・雛形・--resume と初手の carry は不変 (3) headless（runner / lens）の起動行と dialog の読み手は不変 歯: 起動行の先頭を pin する helper acct_launch_prefix と seat/launch.rs の定数を 2 語に書き換えて seat_launch_creates_the_window / seat_launch_injects_cd / seat_entry_same_window の 3 本が base で赤・lib の seat_agent_view_off_ が二重にしない・空は空を測り・headless の歯は不変"
+[[contract]]
+id = "o"
+title = "heartbeat を席ごとに止める — seat heartbeat off|on|status（停止の記録 heartbeat-off 1 file・可逆）と判定の列の合図の段の前の門（noop reason=heartbeat-off・起こし直し / 退避 / 群の判定は止めない）（§12・ADR-0070・s2-07l.646）"
+req = ["FR78", "FR27", "FR59", "FR38", "AC48", "NFR4"]
+section = "12"
+touches = ["crate::seat::tick::NoopReason", "crate::seat::cli::SeatCommand"]
+write-set = ["crates/scribe2/src/seat/tick.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__seat__seat_usage_external_form.snap", "docs/design/seat-heartbeat.md"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_heartbeat_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_usage_external_form", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_"]
+size = "M"
+growth = ["crates/scribe2/src/seat/tick.rs:140", "crates/scribe2/src/seat/cli.rs:60"]
+done = "(1) 停止の記録は席の置き場の直下の heartbeat-off（1 行 ts=<UTC>・一時 file → rename）で、読み書きは tick の file に在り書き手は器の口 1 本 (2) seat heartbeat off|on|status --state-dir S --target S:W が SeatCommand の変種 1 つで、off は記録を置き（既に在れば ts 不変・rc 0）on は消し（無ければ rc 0）status は 1 行 target= heartbeat=on|off last= decision= reason=（行 p の前は -）を出し、登録 row の無い target は rc 1 で語 no-row・dir 0 (3) back の頭（黙りの門の前）で記録を読み、在れば decision=noop reason=heartbeat-off pointer=- step=- で 0 key・梯子の記録を読まず書かず、記録が dir の周も off と読み、NoopReason の末尾に変種 1 つ（語 heartbeat-off）が増える (4) awake（起こし直しと初手の合図）・moving（退避の /exit）・judged（群の判定と断りの 1 行）は記録を読まず off の席でも撃つ (5) 判定の列の順・梯子・口座の門・入力欄の門・unit の導出・event の種類・rules 行は不変で off / on は event log に書かない (6) 使い方の 1 行に heartbeat が増えて seat_usage_external_form の snapshot が動く 歯: seat_heartbeat_ が off の席への tick の noop heartbeat-off・0 key・梯子の記録 0（base では注入 ＝ RED）・on の後の注入・dir の記録の off・off の席の /exit と起こし直し（2 本）・off の席の群の判定・row の無い target の rc 1 と file 0 を測り、seat_tick_ の既存の歯は 1 字も変えず GREEN"
+
+[[contract]]
+id = "p"
+title = "管理 tick の最後の周の打刻と健全 — tick-last（ts / decision / reason・rc 1 の周も）・seat tick status の 6 項目・doctor の席の行の heartbeat= / tick=（判じるのは読み手・§12・ADR-0070）"
+req = ["FR78", "FR27", "FR40", "AC48", "NFR4"]
+section = "12"
+touches = ["crate::seat::tick::install::Verb"]
+write-set = ["crates/scribe2/src/seat/tick.rs", "crates/scribe2/src/seat/tick/install.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/seat/role.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "crates/scribe2-boundary/tests/e2e/seat/register.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__seat__seat_doctor_external_form.snap", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__seat__seat_usage_external_form.snap", "docs/design/seat-heartbeat.md"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_status_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_doctor_external_form", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_usage_external_form"]
+size = "M"
+depends = ["o"]
+growth = ["crates/scribe2/src/seat/tick.rs:80", "crates/scribe2/src/seat/tick/install.rs:10", "crates/scribe2/src/seat/cli.rs:40", "crates/scribe2/src/seat/role.rs:30"]
+done = "(1) run が判定の後に席の置き場の直下の tick-last（1 行 ts=<UTC> decision=<語> reason=<語>・一時 file → rename）を書き、rc 1 の周も書き、登録 row の無い target は書かず dir も作らず、event log には書かない (2) seat tick status --state-dir S [--target S:W] が登録 row の席ごとに 1 行 target= last= age= healthy=yes|no heartbeat=on|off step= next= を鍵の順で出し、healthy は打刻が在り読めて今 − ts ≤ 2 × seat.tick_interval_s の周だけ yes、step / next は梯子の記録から（段の待ちから経過を引いた残りの秒・列を越える段は stopped・記録なしは -）、row の無い target は rc 1 で語 no-row、Verb に変種 1 つ（語 status）が増える (3) doctor の席の行の paths= の後ろに heartbeat=on|off tick=healthy|stale|absent|unreadable の 2 項目が増え、判定は status と同じ 1 関数で、snapshot と row の字面を pin する既存の歯は増分で書き換えて GREEN (4) 判定の列の順・梯子の記録・口座の門・入力欄の門・unit の導出と周期・event の種類は不変 歯: seat_tick_status_ が 1 周の後の tick-last の ts / decision / reason が判定行と同じ（base では file 無し ＝ RED）・no-rule の rc 1 の周も書く・row の無い target は書かない・healthy の yes / no / file 無し・heartbeat= が停止の記録を映す・step / next と stopped を測り、seat_doctor_external_form と seat_usage_external_form の snapshot が動く"
 <!-- contracts:end -->
