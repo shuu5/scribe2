@@ -420,6 +420,17 @@ pub fn creator_pid(unit: &str) -> Option<u32> {
     unit.rsplit('-').nth(1)?.parse().ok()
 }
 
+/// 席の箱の段の語（設計 account-lifecycle.md §30 形 2 の `unit_name(潰した target, "seat", 0)`・§32）。
+const SEAT_STAGE: &str = "seat";
+
+/// unit 名から段の語を読む（pure・設計 account-lifecycle.md §32 形 1）: `<NAME>-<場所>-<段>-<n>-<pid>-<seq>` の
+/// `-` で割った列の**末尾から 4 つ目**。末尾の 3 つが数でない名・割れ数が足りない名（probe 等）は `None`。
+pub fn stage_of(unit: &str) -> Option<&str> {
+    let mut words = unit.rsplit('-');
+    let numeric = words.by_ref().take(3).filter(|word| word.parse::<u64>().is_ok()).count() == 3;
+    words.next().filter(|word| numeric && !word.is_empty())
+}
+
 /// 残骸の一覧を取る `systemctl` の引数（設計 §38 形 2）: active な scope だけを legend と pager を止めた素の形で、
 /// pattern は器の名から導いた 1 語。
 pub fn list_args() -> Vec<String> {
@@ -465,11 +476,14 @@ pub fn listed_from(out: std::io::Result<Output>) -> Option<Vec<String>> {
 
 /// 畳む相手を決める（pure・設計 §38 形 3）: 名が器の scope の形で作り手の pid を読め、その pid が `alive` に
 /// **無い**行だけを残す（`.scope` を剥がした unit 名で返す＝[`release`] へそのまま渡せる）。
+/// 段の語（[`stage_of`]）が `seat` の unit は作り手の生死に依らず残さない（作り手は起動の直後に終わる・席の箱は
+/// `--collect` が畳む・設計 account-lifecycle.md §32 形 2）。段の語が読めない unit は今のまま pid で判じる。
 pub fn reap_targets(rows: &[String], alive: &std::collections::BTreeSet<u32>) -> Vec<String> {
     let head = format!("{NAME}-");
     rows.iter()
         .filter_map(|row| row.strip_suffix(".scope"))
         .filter(|unit| unit.starts_with(&head))
+        .filter(|unit| stage_of(unit) != Some(SEAT_STAGE))
         .filter(|unit| creator_pid(unit).is_some_and(|pid| !alive.contains(&pid)))
         .map(str::to_owned)
         .collect()
@@ -886,8 +900,8 @@ mod tests {
     use super::{
         control_group_from, creator_pid, limit_mb, limit_of, list_args, listed_from, mem_total_mb, next_seq, orphans_from,
         orphans_of, peak_from, peak_of, probe_outcome, read_usage, reap_targets, release, release_scope, released_of,
-        scope_args, script, tame, unit_name, wrap_command, wrap_line, Caps, Confinement, Limit, Orphans, Peak, Reaped,
-        Reason, Released, Sampler, Wrap, CGROUP_ROOT, PANE_ENV, REASONS,
+        scope_args, script, stage_of, tame, unit_name, wrap_command, wrap_line, Caps, Confinement, Limit, Orphans, Peak,
+        Reaped, Reason, Released, Sampler, Wrap, CGROUP_ROOT, PANE_ENV, REASONS,
     };
     use crate::invocation::Invocation;
     use crate::order::is_declaration_order;
@@ -970,6 +984,7 @@ mod tests {
             format!("{name}-run-c-lens-1-x-0.scope"),
             "other-run-d-contract-1-400-0.scope".to_owned(),
             format!("{name}-run-e-contract-1-500-0.service"),
+            format!("{name}-tgt-seat-0-600-0.scope"),
         ];
         let alive: std::collections::BTreeSet<u32> = [200].into_iter().collect();
         assert_eq!(
@@ -983,6 +998,21 @@ mod tests {
         assert_eq!(Reaped::Counted { reaped: 1, listed: 2 }.word(), "1/2");
         assert_eq!(Reaped::Counted { reaped: 0, listed: 0 }.word(), "0/0", "空の一覧は測れた 0");
         assert_eq!(Reaped::Unmeasured.word(), "-", "測れなかった周は -");
+    }
+
+    /// 席の箱は作り手が死んでいても対象外（a）・便の箱は今のまま対象（b）・段の語の 3 形（c）（設計 account-lifecycle.md §32）。
+    #[test]
+    fn pipe_scope_reap_targets_skip_seat_boxes() {
+        let name = crate::name::NAME;
+        let tails = ["tgt-seat-0-7-0", "r-contract-3-8-0", "r-runner-1-9-2"];
+        let [seat, contract, runner] = tails.map(|tail| format!("{name}-{tail}"));
+        let rows: Vec<String> = [&seat, &contract, &runner].map(|unit| format!("{unit}.scope")).to_vec();
+        assert_eq!(reap_targets(&rows, &std::collections::BTreeSet::new()), vec![contract.clone(), runner], "{rows:?}");
+        let probe = format!("{name}-300-probe");
+        let cases = [(seat.as_str(), Some("seat")), (contract.as_str(), Some("contract")), (probe.as_str(), None)];
+        for (unit, want) in cases {
+            assert_eq!(stage_of(unit), want, "{unit}（母集団 {} 形）", cases.len());
+        }
     }
 
     /// (c) 一覧を取る呼出は `--user list-units` で始まり末尾の pattern は器の名から導き、rc 非 0 は「測れなかった」
