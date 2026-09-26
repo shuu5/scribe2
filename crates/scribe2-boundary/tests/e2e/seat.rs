@@ -328,7 +328,8 @@ fn seat_working_memory_subcommands_are_gone_from_the_usage() {
     assert!(!usage.contains("--wm-dir"), "退避物の置き場の flag も残らない: {usage}");
     let takers: Vec<&str> = usage.split(['<', '|', '>']).filter(|mouth| mouth.contains("--rules")).collect();
     let unit = |verb: &str| format!("tick {verb} --state-dir S --target S:W --unit-dir U --binary PATH [--rules F]");
-    assert_eq!(takers, [TICK_USAGE.to_owned(), unit("install"), unit("uninstall")], "席の口で `--rules` を受けるのは tick（と unit の口 2 つ・`s2-07l.583`）だけ: {usage}");
+    let status = "tick status --state-dir S [--target S:W] [--rules F]".to_owned();
+    assert_eq!(takers, [TICK_USAGE.to_owned(), unit("install"), unit("uninstall"), status], "席の口で `--rules` を受けるのは tick（と unit の口 2 つ・`s2-07l.583`・status の口・`s2-07l.650`）だけ: {usage}");
     for kept in ["register", "launch", "tick"] {
         assert!(usage.contains(&format!("{kept} --")), "{kept} は使い方に在る: {usage}");
     }
@@ -2741,6 +2742,256 @@ fn seat_heartbeat_on_without_a_record_is_a_no_op() {
     assert!(!heartbeat_record(&place.state).exists(), "file 無しのまま");
 }
 
+// ───── 最後の周の打刻と健全（seat-heartbeat.md §12・契約表の行 p・ADR-0070・`s2-07l.650`・接頭辞 `seat_tick_status_`） ─────
+//
+// §2 の tick の fixture（[`tick_place`] / [`tick_run`] / [`tick_rules_text`]＝周期 15）で tick を撃ち、席の置き場の直下の `tick-last` と
+// `seat tick status` / doctor の席の行を読む。打刻の ts は過去に書いて経過を作る（偽の時計）。字面は契約から組む。
+
+/// 最後の周の打刻の path（席の置き場の直下の `tick-last`・契約の字面から組む）。
+fn status_last_path(place: &TickPlace) -> PathBuf {
+    place.seat().join("tick-last")
+}
+
+/// 最後の周の打刻を `ts` で書く（1 行 `ts=<秒> decision=<語> reason=<語>`・契約の字面）。
+fn status_last_put(place: &TickPlace, ts: u64) {
+    fs::write(status_last_path(place), format!("ts={ts} decision=noop reason=stamp-recent\n")).ok();
+}
+
+/// 周期 15 の tick の行の全部の写し（`skip` の id の行を落とす）。
+fn status_rules(place: &TickPlace, skip: &str) -> String {
+    fixture(&place.dir, "status-rules.toml", &tick_rules_text(skip, None))
+}
+
+/// `seat tick status --state-dir S` を `extra` で 1 回撃つ。
+fn status_run(place: &TickPlace, extra: &[&str]) -> Output {
+    let state = place.state.display().to_string();
+    let mut args = vec!["tick", "status", "--state-dir", state.as_str()];
+    args.extend_from_slice(extra);
+    run_seat(&args)
+}
+
+/// status の 1 行（契約の字面）。
+fn status_line(last: &str, age: &str, healthy: &str, heartbeat: &str, ladder: (&str, &str)) -> String {
+    let (step, next) = ladder;
+    format!("seat tick status: target={TICK_TARGET} last={last} age={age} healthy={healthy} heartbeat={heartbeat} step={step} next={next}\n")
+}
+
+/// 経過 `ago` 秒の打刻を置いて status を撃ち（`--rules` は `rules`）、打刻の ts と stdout を返す。秒を跨いで経過がずれた周は
+/// 撃ち直す（`age=` が `ago` に一致した周を返す・10 周で一致しなければ最後の周）。
+fn status_at(place: &TickPlace, rules: &str, ago: u64) -> (u64, String) {
+    let mut last = (0, String::new());
+    for _ in 0..10 {
+        let ts = unix_now() - ago;
+        status_last_put(place, ts);
+        let out = status_run(place, &["--rules", rules]);
+        assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+        last = (ts, stdout_of(&out));
+        if last.1.contains(&format!(" age={ago} ")) {
+            break;
+        }
+    }
+    last
+}
+
+/// doctor を置き場の `--state-dir` と `--rules`（`rules`）で撃ち、rc 0 と登録 row の行 1 本を返す。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn status_doctor_row(place: &TickPlace, rules: &str) -> String {
+    let state = place.state.display().to_string();
+    let socket = place.at("no-such-sock").display().to_string();
+    let out = Command::new(bin())
+        .args(["doctor", "--state-dir", &state, "--tmux-socket", &socket, "--rules", rules])
+        .env("PATH", &place.path)
+        .output()
+        .expect("binary を起動できる");
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "doctor は rc を変えない: stderr={}", stderr_of(&out));
+    let rows: Vec<String> = stdout_of(&out).lines().filter(|line| line.starts_with("seat: ")).map(str::to_owned).collect();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    rows.concat()
+}
+
+/// 経過 `ago` 秒の打刻を置いて doctor を撃ち、席の行の `tick=` の語を返す（秒を跨いだ周は撃ち直す・10 周まで）。
+fn status_doctor_at(place: &TickPlace, rules: &str, ago: u64) -> Option<String> {
+    let mut word = None;
+    for _ in 0..10 {
+        let before = unix_now();
+        status_last_put(place, before - ago);
+        word = tick_token(&status_doctor_row(place, rules), "tick");
+        if unix_now() == before {
+            break;
+        }
+    }
+    word
+}
+
+/// (h) tick の 1 周の後に `tick-last` が 1 行在り、ts は撃った時刻・decision / reason は判定行と同じ（noop と inject の 2 周）
+/// （base では file 無し ＝ RED）。
+#[test]
+fn seat_tick_status_tick_last_mirrors_the_judgement_line() {
+    let place = tick_place(true);
+    for ago in [100, TICK_STALE + 60] {
+        tick_silent_for(&place, ago);
+        let before = unix_now();
+        let out = tick_run(&place, &[]);
+        let after = unix_now();
+        assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+        let line = stdout_of(&out);
+        let (decision, reason) = (tick_token(&line, "decision").unwrap_or_default(), tick_token(&line, "reason").unwrap_or_default());
+        let text = fs::read_to_string(status_last_path(&place)).unwrap_or_default();
+        let ts = text.strip_prefix("ts=").and_then(|rest| rest.split(' ').next()).and_then(|secs| secs.parse::<u64>().ok());
+        assert!(ts.is_some_and(|secs| (before..=after).contains(&secs)), "ts は撃った時刻: {text:?}");
+        let ts = ts.unwrap_or_default();
+        assert_eq!(text, format!("ts={ts} decision={decision} reason={reason}\n"), "判定行と同じ 2 語: {line}");
+    }
+    let text = fs::read_to_string(status_last_path(&place)).unwrap_or_default();
+    assert!(text.ends_with(" decision=inject reason=-\n"), "注入の周は reason=-: {text:?}");
+    assert!(!place.seat().join("tick-last.tmp").exists(), "一時 file は残らない");
+}
+
+/// (i) 周期の行を欠く写しの no-rule（rc 1）の周も打刻を書く。
+#[test]
+fn seat_tick_status_no_rule_round_still_stamps() {
+    let place = tick_place(true);
+    tick_silent_for(&place, 100);
+    let rules = status_rules(&place, "seat.tick_interval_s");
+    let out = tick_run(&place, &["--rules", &rules]);
+    assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "no-rule は rc 1");
+    let text = fs::read_to_string(status_last_path(&place)).unwrap_or_default();
+    assert!(text.starts_with("ts=") && text.ends_with(" decision=error reason=no-rule\n"), "rc 1 の周も書く: {text:?}");
+}
+
+/// (j) 登録 row の無い target の tick は打刻を書かず、席の置き場の無い周は dir も作らない。status の `--target` に row が無ければ
+/// rc 1・語 `no-row`・stdout 0 行。
+#[test]
+fn seat_tick_status_without_a_row_writes_no_stamp() {
+    let bare = tick_place(false);
+    tick_silent_for(&bare, 100);
+    assert_eq!(rc_of(&tick_run(&bare, &[])), i32::from(RC_OK));
+    assert!(!status_last_path(&bare).exists(), "row の無い席に打刻を書かない");
+    fs::remove_dir_all(bare.seat()).ok();
+    assert_eq!(rc_of(&tick_run(&bare, &[])), i32::from(RC_OK));
+    assert!(!bare.seat().exists(), "席の置き場を作らない");
+    let place = tick_place(true);
+    let rules = status_rules(&place, "");
+    let out = status_run(&place, &["--target", "zz:zz", "--rules", &rules]);
+    assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "row の無い target は rc 1");
+    assert!(stdout_of(&out).is_empty(), "stdout 0 行");
+    assert_eq!(stderr_of(&out), "seat tick status: refused reason=no-row target=zz:zz\n");
+}
+
+/// (k) healthy は経過 ≤ 2 × 周期（周期 15）: 30 秒ちょうどは yes・31 秒は no・16 秒は yes、打刻が無ければ no と `last=- age=-`。
+/// doctor の `tick=` も同じ 3 点で healthy / stale / healthy・無ければ absent（係数 1 と `<` の変異を別々の assert が落とす）。
+#[test]
+fn seat_tick_status_healthy_is_within_twice_the_interval() {
+    let place = tick_place(true);
+    let rules = status_rules(&place, "");
+    let out = status_run(&place, &["--rules", &rules]);
+    assert_eq!((rc_of(&out), stdout_of(&out)), (i32::from(RC_OK), status_line("-", "-", "no", "on", ("-", "-"))), "打刻なし");
+    assert_eq!(tick_token(&status_doctor_row(&place, &rules), "tick").as_deref(), Some("absent"), "doctor も打刻なし");
+    for (ago, healthy, word) in [(30, "yes", "healthy"), (31, "no", "stale"), (16, "yes", "healthy")] {
+        let (ts, text) = status_at(&place, &rules, ago);
+        assert_eq!(text, status_line(&ts.to_string(), &ago.to_string(), healthy, "on", ("-", "-")), "経過 {ago} 秒");
+        assert_eq!(status_doctor_at(&place, &rules, ago).as_deref(), Some(word), "doctor の経過 {ago} 秒");
+    }
+    fs::write(status_last_path(&place), "ts=x\n").ok();
+    let out = status_run(&place, &["--rules", &rules, "--target", TICK_TARGET]);
+    assert_eq!(stdout_of(&out), status_line("-", "-", "no", "on", ("-", "-")), "読めない打刻は no");
+    assert_eq!(tick_token(&status_doctor_row(&place, &rules), "tick").as_deref(), Some("unreadable"), "doctor は unreadable");
+}
+
+/// (l) `heartbeat=` は停止の記録を映す（status と doctor の席の行）。
+#[test]
+fn seat_tick_status_heartbeat_reflects_the_off_record() {
+    let place = tick_place(true);
+    let rules = status_rules(&place, "");
+    let heartbeat = |want: &str| {
+        let out = status_run(&place, &["--rules", &rules]);
+        assert_eq!(tick_token(&stdout_of(&out), "heartbeat").as_deref(), Some(want), "status: {}", stdout_of(&out));
+        assert_eq!(tick_token(&status_doctor_row(&place, &rules), "heartbeat").as_deref(), Some(want), "doctor");
+    };
+    heartbeat("on");
+    heartbeat_assert(&place.state, "off", &heartbeat_line("off", "off"));
+    heartbeat("off");
+    heartbeat_assert(&place.state, "on", &heartbeat_line("on", "on"));
+    heartbeat("on");
+}
+
+/// (m) step / next は梯子の記録から: step は記録の段・next は次の段（段 + 1）の待ち − 経過（段 0 の記録なら段 1 の待ちで段 0 の待ち
+/// ではない）・待ちを過ぎた記録は 0・次の段が列を越える記録（段 5）は `stopped`。
+#[test]
+fn seat_tick_status_step_and_next_follow_the_ladder_record() {
+    let place = tick_place(true);
+    let rules = status_rules(&place, "");
+    let ladder = |step: u32, ago: u64| {
+        let before = unix_now();
+        tick_ladder_put(&place, before - ago, step, Some(1));
+        let out = status_run(&place, &["--rules", &rules]);
+        let spent = unix_now() - before;
+        assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+        let text = stdout_of(&out);
+        (tick_token(&text, "step"), tick_token(&text, "next").and_then(|next| next.parse::<u64>().ok()), spent, text)
+    };
+    let (step, next, spent, text) = ladder(0, 100);
+    assert_eq!(step.as_deref(), Some("0"), "{text}");
+    let want = TICK_LADDER[1] - 100;
+    assert!(next.is_some_and(|secs| (want - spent..=want).contains(&secs)), "段 1 の待ち − 経過: {text}");
+    let (step, next, _, text) = ladder(2, TICK_LADDER[3] + 10);
+    assert_eq!((step.as_deref(), next), (Some("2"), Some(0)), "待ちを過ぎた記録: {text}");
+    let (step, _, _, text) = ladder(5, 100);
+    assert_eq!((step.as_deref(), tick_token(&text, "next").as_deref()), (Some("5"), Some("stopped")), "列を越える次の段: {text}");
+}
+
+/// (o) tick の 1 周の後の `seat heartbeat status` は `last=` / `decision=` / `reason=` を tick-last と同じ値で出す
+/// （base では 3 欄とも `-` ＝ RED）。
+#[test]
+fn seat_tick_status_heartbeat_status_carries_the_tick_last() {
+    let place = tick_place(true);
+    tick_silent_for(&place, 100);
+    assert_eq!(rc_of(&tick_run(&place, &[])), i32::from(RC_OK));
+    let text = fs::read_to_string(status_last_path(&place)).unwrap_or_default();
+    let ts = tick_token(&text, "ts").unwrap_or_default();
+    assert!(!ts.is_empty(), "打刻が在る: {text:?}");
+    let want = format!("seat heartbeat status: target={TICK_TARGET} heartbeat=on last={ts} decision=noop reason=stamp-recent\n");
+    heartbeat_assert(&place.state, "status", &want);
+}
+
+/// (p) 周期の行を欠く写しで status は rc 1・語 `no-rule`・stdout 0 行、doctor の `tick=` は `tick-unit=` と同じ no-rule の語（rc 0）。
+#[test]
+fn seat_tick_status_missing_interval_row_is_no_rule() {
+    let place = tick_place(true);
+    status_last_put(&place, unix_now());
+    let rules = status_rules(&place, "seat.tick_interval_s");
+    let out = status_run(&place, &["--rules", &rules]);
+    assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "rc 1");
+    assert!(stdout_of(&out).is_empty(), "stdout 0 行: {}", stdout_of(&out));
+    assert_eq!(stderr_of(&out), "seat tick status: refused reason=no-rule\n");
+    assert_eq!(tick_token(&status_doctor_row(&place, &rules), "tick").as_deref(), Some("no-rule:missing"), "doctor の語");
+}
+
+/// (q-1) 梯子の記録が dir の席は `step=unreadable next=unreadable` で他の欄は不変・rc 0。
+#[test]
+fn seat_tick_status_ladder_record_dir_is_unreadable() {
+    let place = tick_place(true);
+    let rules = status_rules(&place, "");
+    fs::create_dir_all(tick_ladder_path(&place)).ok();
+    let out = status_run(&place, &["--rules", &rules]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "報告であって判定でない: {}", stderr_of(&out));
+    assert_eq!(stdout_of(&out), status_line("-", "-", "no", "on", ("unreadable", "unreadable")));
+}
+
+/// (q-2) 梯子の行を欠く写しで status は rc 1・語 `no-rule`・stdout 0 行、doctor の `tick=` は梯子の行を読まず healthy のまま。
+#[test]
+fn seat_tick_status_missing_ladder_row_is_no_rule_and_doctor_keeps_its_word() {
+    let place = tick_place(true);
+    let rules = status_rules(&place, "seat.pointer_ladder_s");
+    let out = status_run(&place, &["--rules", &rules]);
+    assert_eq!((rc_of(&out), stdout_of(&out)), (i32::from(RC_REFUSED), String::new()), "rc 1・stdout 0 行");
+    assert_eq!(stderr_of(&out), "seat tick status: refused reason=no-rule\n");
+    assert_eq!(status_doctor_at(&place, &rules, 0).as_deref(), Some("healthy"), "doctor は周期の行だけ読む");
+}
+
 // ─────────────────── tick の unit（seat-heartbeat.md §3・契約表の行 b・`s2-07l.583`・接頭辞 `seat_unit_`） ───────────────────
 //
 // unit dir と binary は tmp・`systemctl` は PATH の偽 script が引数を 1 行ずつ file に残す（host の systemd を 1 度も撃たない）。
@@ -3134,7 +3385,9 @@ fn seat_doctor_tick_without_face_or_flags_adds_nothing() {
         }
         let out = unit_doctor(&place, &[]);
         assert_eq!(rc_of(&out), i32::from(RC_OK), "{host}: stderr={}", stderr_of(&out));
-        assert!(!stdout_of(&out).contains("tick-unit=") && !stdout_of(&out).contains("tick="), "{host}: {}", stdout_of(&out));
+        assert!(!stdout_of(&out).contains("tick-unit="), "{host}: {}", stdout_of(&out));
+        let text = stdout_of(&out);
+        assert!(text.lines().filter(|line| !line.starts_with("seat: ")).all(|line| !line.contains("tick=")), "{host}: 席の行の外に tick= は無い: {text}");
         assert_eq!(doctor_tick_host_lines(&out), [host.to_owned()], "host の面の行は従来の字面");
         assert_eq!(unit_doctor_rows(&out).len(), 1, "登録 row の行は在る");
     }

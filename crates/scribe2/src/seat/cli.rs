@@ -14,7 +14,7 @@ use std::path::Path;
 
 /// `seat` の使い方。
 pub fn usage() -> String {
-    "usage: seat <register --state-dir S --target T --role R --account L --launch FILE [--anchor DIR]|launch --state-dir S --role R --target S:W [--account L] [--anchor DIR] [--model M] [--restore CMD]|ruling add --state-dir S --target T --words W [--bead B] [--rule ID]|ruling ls --state-dir S|tick --state-dir S --target S:W [--rules F]|tick install --state-dir S --target S:W --unit-dir U --binary PATH [--rules F]|tick uninstall --state-dir S --target S:W --unit-dir U --binary PATH [--rules F]|retire --state-dir S --target S:W [--reason WORDS]|heartbeat off --state-dir S --target S:W|heartbeat on --state-dir S --target S:W|heartbeat status --state-dir S --target S:W|<label> [--orchestrator] [-c|-r ID] [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]".to_owned()
+    "usage: seat <register --state-dir S --target T --role R --account L --launch FILE [--anchor DIR]|launch --state-dir S --role R --target S:W [--account L] [--anchor DIR] [--model M] [--restore CMD]|ruling add --state-dir S --target T --words W [--bead B] [--rule ID]|ruling ls --state-dir S|tick --state-dir S --target S:W [--rules F]|tick install --state-dir S --target S:W --unit-dir U --binary PATH [--rules F]|tick uninstall --state-dir S --target S:W --unit-dir U --binary PATH [--rules F]|tick status --state-dir S [--target S:W] [--rules F]|retire --state-dir S --target S:W [--reason WORDS]|heartbeat off --state-dir S --target S:W|heartbeat on --state-dir S --target S:W|heartbeat status --state-dir S --target S:W|<label> [--orchestrator] [-c|-r ID] [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]".to_owned()
 }
 
 /// `seat` の既知の verb（閉じた語・宣言順・設計 contract-source.md §17 の形 (vii)）。短い形の第 1 token（口座 label）は
@@ -111,6 +111,10 @@ const ALLOWED_TICK_UNIT: &[cli_args::Allowed] = &[
     value("--binary"),
     value("--rules"),
 ];
+/// `seat tick status`（最後の周の打刻と健全・設計 seat-heartbeat.md §12 行 p 形 2・`--target` は任意・pane を読まないので tmux の flag は受けない）。
+const ALLOWED_TICK_STATUS: &[cli_args::Allowed] = &[value("--state-dir"), value("--target"), value("--rules")];
+/// `seat tick` の後ろの第 1 token のうち status の語（`install.rs` の [`Verb`] は unit の 2 値のまま＝語はこの振り分けだけが読む）。
+const TICK_STATUS: &str = "status";
 /// `seat retire`（席の登録 row の退役・設計 account-lifecycle.md §24 形 1・pane を読まないので tmux の flag は受けない）。
 const ALLOWED_RETIRE: &[cli_args::Allowed] = &[value("--state-dir"), value("--target"), value("--reason")];
 /// `seat heartbeat`（`off` / `on` / `status` の 3 語は positional・設計 seat-heartbeat.md §12 形 2・pane を読まないので tmux の flag は受けない）。
@@ -123,6 +127,7 @@ fn allowed_of(command: SeatCommand, rest: &[String]) -> &'static [Allowed] {
         SeatCommand::Launch => ALLOWED_LAUNCH,
         SeatCommand::Ruling => ALLOWED_RULING,
         SeatCommand::Tick if unit_verb(rest).is_some() => ALLOWED_TICK_UNIT,
+        SeatCommand::Tick if status_verb(rest) => ALLOWED_TICK_STATUS,
         SeatCommand::Tick => ALLOWED_TICK,
         SeatCommand::Retire => ALLOWED_RETIRE,
         SeatCommand::Heartbeat => ALLOWED_HEARTBEAT,
@@ -132,6 +137,11 @@ fn allowed_of(command: SeatCommand, rest: &[String]) -> &'static [Allowed] {
 /// `seat tick` の後ろの第 1 token が unit の動詞（`install` / `uninstall`）か。
 fn unit_verb(rest: &[String]) -> Option<Verb> {
     rest.first().and_then(|token| Verb::parse(token))
+}
+
+/// `seat tick` の後ろの第 1 token が status の語か。
+fn status_verb(rest: &[String]) -> bool {
+    rest.first().is_some_and(|token| token == TICK_STATUS)
 }
 
 /// `seat` に続く引数を捌く。既知の verb は選んだ直後に閉包の検査を 1 回撃つ（未知の flag と `--help` を typed に断る）。
@@ -276,6 +286,9 @@ fn tick_of(args: &[String]) -> Outcome {
     if let Some(verb) = unit_verb(args) {
         return tick_unit_of(verb, args.get(1..).unwrap_or_default());
     }
+    if status_verb(args) {
+        return tick_status_of(args.get(1..).unwrap_or_default());
+    }
     let [state_dir, target] = ["--state-dir", "--target"].map(|name| required_nonempty(args, name));
     let [socket, capture, rules] = ["--tmux-socket", "--capture-file", "--rules"].map(|name| nonempty(args, name));
     let (Ok(state_dir), Ok(target), Ok(socket), Ok(capture), Ok(_)) = (state_dir, target, socket, capture, rules) else {
@@ -286,6 +299,19 @@ fn tick_of(args: &[String]) -> Outcome {
     }
     let flags = super::tick::Flags { state_dir, target, socket, capture };
     super::tick::run(&flags, crate::rules::cli::open(args))
+}
+
+/// `seat tick status`（設計 seat-heartbeat.md §12 行 p 形 2）: `--state-dir` は必須・`--target` は任意で `S:W`・値欠けと空文字は
+/// 使い方の誤り（`--rules` も同じ）。読みと行は [`super::tick::status`] が持つ。
+fn tick_status_of(args: &[String]) -> Outcome {
+    let [state_dir, target, rules] = ["--state-dir", "--target", "--rules"].map(|name| nonempty(args, name));
+    let (Ok(Some(state_dir)), Ok(target), Ok(_)) = (state_dir, target, rules) else {
+        return refused_usage();
+    };
+    if target.is_some_and(|found| !target_well_formed(found)) {
+        return refused_usage();
+    }
+    super::tick::status(state_dir, target, crate::rules::cli::open(args))
 }
 
 /// `seat retire`（設計 account-lifecycle.md §24 形 1）: `--state-dir` と `S:W` の `--target` は必須・値欠けと空文字は使い方の誤り

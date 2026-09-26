@@ -12,6 +12,7 @@ use crate::rules::RuleValue;
 use std::path::Path;
 
 use super::tick::install::{doctor_word, Probe};
+use super::tick::{self, ROW_INTERVAL};
 use super::RuleRead;
 
 /// 席の役割。**variant の列挙は core が持つ**（文書は写さない・ADR-0013 §2.1）。
@@ -394,7 +395,8 @@ pub fn render_reconcile(state: Option<&State>, live: Option<&[String]>) -> Strin
 /// 同じ形・無ければ埋め込み）で、役割の既定の行を引く manifest（読めない周は `default=` の欄が理由を名乗る・rc は変えない）。
 /// `units`（`--unit-dir` と `--binary` がそろった周だけ）が在る周は row の行の末尾に `tick-unit=` の 1 語を足し
 /// （[`crate::seat::tick::install::doctor_word`]・設計 seat-heartbeat.md §3）、flag が無く host の面に `[[tick]]` が在る周は面の値で
-/// 同じ 1 語を足す（flag が勝つ・§5 形 3）。どちらも無い周は row の行を 1 byte も変えない。
+/// 同じ 1 語を足す（flag が勝つ・§5 形 3）。どちらも無い周は `tick-unit=` を足さない。`paths=` の直後には常に
+/// `heartbeat=` / `tick=` の 2 項目（[`tick_words`]・§12 行 p 形 3）。
 pub fn doctor_lines(state_dir: &Path, socket: Option<&str>, rules: Option<&str>, units: Option<&Probe>) -> Vec<String> {
     let state = store::read_all(state_dir).ok().map(|events| replay(&events));
     let panes = super::tmux_stdout(socket, &["list-panes", "-a", "-F", "#{session_name}:#{window_name}"]);
@@ -411,7 +413,8 @@ pub fn doctor_lines(state_dir: &Path, socket: Option<&str>, rules: Option<&str>,
     });
     let units = units.or(face.as_ref());
     let rows = |found: &State| {
-        let lines = doctor_rows(found, &manifest);
+        let beats = found.registrations.values().map(|latest| tick_words(state_dir, &latest.registration.target, &manifest));
+        let lines: Vec<String> = doctor_rows(found, &manifest).into_iter().zip(beats).map(|(line, words)| format!("{line} {words}")).collect();
         let Some(probe) = units else {
             return lines;
         };
@@ -421,6 +424,16 @@ pub fn doctor_lines(state_dir: &Path, socket: Option<&str>, rules: Option<&str>,
     let mut lines = state.as_ref().map(rows).unwrap_or_default();
     lines.push(render_reconcile(state.as_ref(), live.as_deref()));
     lines
+}
+
+/// doctor の席の行の 2 項目 `heartbeat=on|off tick=<語>`（設計 seat-heartbeat.md §12 行 p 形 3）: `tick=` は `seat tick status` と
+/// 同じ健全の 1 関数（[`crate::seat::tick::health`]）の語で、周期の行を読めない周は `tick-unit=` と同じ no-rule の語（rc は変えない）。
+/// 梯子の行は読まない。
+fn tick_words(state_dir: &Path, target: &str, manifest: &Result<Manifest, RuleRead>) -> String {
+    let seat = super::seat_dir(state_dir, target);
+    let interval = manifest.as_ref().map_err(|failed| *failed).and_then(|found| super::int_rule_of(found, ROW_INTERVAL));
+    let tick = interval.map_or_else(RuleRead::no_rule, |secs| tick::health(&seat, secs).as_str());
+    format!("heartbeat={} tick={tick}", tick::switch_word(&seat))
 }
 
 #[cfg(test)]

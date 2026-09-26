@@ -517,8 +517,8 @@ fn seat_register_model_shows_in_the_doctor_rows_with_dash_for_none() {
     assert_eq!(
         lines.get(4..),
         Some(&[
-            "seat: role=orchestrator anchor=/repo/a target=rm:doc-a account=acct-1 model=Fable default=no-rule:missing paths=default".to_owned(),
-            "seat: role=orchestrator anchor=/repo/b target=rm:doc-b account=acct-1 model=Fable default=no-rule:missing paths=default".to_owned(),
+            format!("seat: role=orchestrator anchor=/repo/a target=rm:doc-a account=acct-1 model=Fable default=no-rule:missing paths=default{TICK_TAIL}"),
+            format!("seat: role=orchestrator anchor=/repo/b target=rm:doc-b account=acct-1 model=Fable default=no-rule:missing paths=default{TICK_TAIL}"),
             "seats: registered=2 live=unmeasurable missing=unmeasurable".to_owned(),
             HOST_ABSENT.to_owned(),
             consumer_line_of("/repo/a"),
@@ -528,7 +528,8 @@ fn seat_register_model_shows_in_the_doctor_rows_with_dash_for_none() {
         "{lines:?}"
     );
     let rows = vessel::seat::role::render_rows(&role_state(&place), |_| PathKinds::Default, |_| Err(vessel::seat::RuleRead::Missing));
-    assert_eq!(rows, lines.get(4..6).unwrap_or_default(), "pure の一覧と同じ");
+    let rows: Vec<String> = rows.into_iter().map(|row| format!("{row}{TICK_TAIL}")).collect();
+    assert_eq!(rows, lines.get(4..6).unwrap_or_default(), "pure の一覧に `paths=` の後ろの 2 項目を足した形と同じ");
     fs::remove_dir_all(&place.dir).ok();
 }
 
@@ -551,6 +552,9 @@ fn paths_repo(place: &RolePlace, name: &str, declaration: Option<&str>) -> Strin
     }
     dir.display().to_string()
 }
+
+/// `paths=` の後ろの 2 項目（打刻の無い席・周期の行を持たない [`NO_ACCOUNT_RULES`] の周・seat-heartbeat.md §12 行 p 形 3）。
+const TICK_TAIL: &str = " heartbeat=on tick=no-rule:missing";
 
 /// doctor の登録 row の行のうち anchor `anchor` の 1 行（無ければ空＝呼び側の assert が落ちる）。
 fn seat_line_of(lines: &[String], anchor: &str) -> String {
@@ -583,7 +587,7 @@ fn seat_role_doctor_paths_names_default_declared_and_invalid_per_anchor() {
     assert_eq!(lines.len(), 2 + 1 + 1 + 6 + 1 + 1 + 6 + 1,"欄の追加で行は増えない（末尾は host-guard の 1 行）: {lines:?}");
     assert_eq!(
         seat_line_of(&lines, "/repo"),
-        "seat: role=orchestrator anchor=/repo target=rolesdoc:rolesdoc account=acct-1 model=Fable default=no-rule:missing paths=default",
+        format!("seat: role=orchestrator anchor=/repo target=rolesdoc:rolesdoc account=acct-1 model=Fable default=no-rule:missing paths=default{TICK_TAIL}"),
         "存在しない anchor は宣言 file が無い repo と同じ"
     );
     for (anchor, want) in [
@@ -594,7 +598,7 @@ fn seat_role_doctor_paths_names_default_declared_and_invalid_per_anchor() {
         (&overlap, "paths=invalid:overlap"),
     ] {
         let line = seat_line_of(&lines, anchor);
-        assert!(line.ends_with(want), "{anchor}: 末尾の欄 {want}: {line}");
+        assert!(line.ends_with(&format!("{want}{TICK_TAIL}")), "{anchor}: `paths=` の欄 {want} と 2 項目: {line}");
         assert_eq!(line.matches("paths=").count(), 1, "{line}");
     }
     assert!(!lines.iter().any(|line| line.starts_with("paths:")), "paths の行は足さない（席の行の欄で名乗る）: {lines:?}");
@@ -627,10 +631,10 @@ fn seat_role_doctor_paths_invalid_reasons_and_worktree_declarations() {
     let lines = doctor_rows(&place, NO_ACCOUNT_RULES);
     for ((_, _, reason), anchor) in cases.iter().zip(&anchors) {
         let line = seat_line_of(&lines, anchor);
-        assert!(line.ends_with(&format!(" paths=invalid:{reason}")), "{anchor}: {line}");
+        assert!(line.ends_with(&format!(" paths=invalid:{reason}{TICK_TAIL}")), "{anchor}: {line}");
     }
-    assert!(seat_line_of(&lines, &uncommitted).ends_with(" paths=default"), "作業ツリーの宣言は効かない");
-    assert!(seat_line_of(&lines, &broken).ends_with(" paths=declared:1"), "HEAD の宣言で名乗る（作業ツリーの壊れは見ない）");
+    assert!(seat_line_of(&lines, &uncommitted).ends_with(&format!(" paths=default{TICK_TAIL}")), "作業ツリーの宣言は効かない");
+    assert!(seat_line_of(&lines, &broken).ends_with(&format!(" paths=declared:1{TICK_TAIL}")), "HEAD の宣言で名乗る（作業ツリーの壊れは見ない）");
     fs::remove_dir_all(&place.dir).ok();
 }
 
@@ -699,8 +703,8 @@ fn seat_defaults_doctor_adds_the_row_default_or_names_why_it_cannot() {
     let row_of = |text: &str| text.lines().find(|line| line.starts_with("seat: ")).map(str::to_owned).unwrap_or_default();
     assert_eq!(
         row_of(&bare.1),
-        "seat: role=orchestrator anchor=/repo target=rolesdoc:rolesdoc account=acct-1 model=Fable default=Fable/high paths=default",
-        "埋め込みの行の既定"
+        "seat: role=orchestrator anchor=/repo target=rolesdoc:rolesdoc account=acct-1 model=Fable default=Fable/high paths=default heartbeat=on tick=absent",
+        "埋め込みの行の既定（周期の行も埋め込み＝打刻の無い席は absent）"
     );
     let count = doctor_rows(&place, NO_ACCOUNT_RULES).len();
     for (body, want) in [

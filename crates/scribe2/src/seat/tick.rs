@@ -35,6 +35,8 @@
 //! 合図は席ごとに止められる（設計 §12・契約表の行 o・ADR-0070）: 席の置き場の直下の停止の記録（[`HEARTBEAT_OFF_FILE`]・書き手は
 //! [`heartbeat`] の口 1 本）が在る周は `back` の頭（黙りの門の前）で `heartbeat-off` の noop に止まり、梯子の記録を読まず書かない。
 //! 起こし直し（[`awake`]）・退避（[`moving`]）・群の判定（[`judged`]）は記録を読まず、off の席でも撃つ。
+//!
+//! 毎周の判定の後に最後の周の打刻（[`TICK_LAST_FILE`]）を書き、健全は読み手（[`status`]・doctor）が [`Health`] で判じる（行 p）。
 
 pub mod install;
 
@@ -69,6 +71,12 @@ const ROW_WINDOW: &str = "pipe.stop_grace_ms";
 pub const LADDER_FILE: &str = "pointer-ladder";
 /// 停止の記録の file 名（席の置き場の直下・1 行 `ts=<UTC 秒>`・書き手は [`heartbeat`] の口 1 本・設計 §12 形 1）。
 pub const HEARTBEAT_OFF_FILE: &str = "heartbeat-off";
+/// 最後の周の打刻の file 名（席の置き場の直下・1 行 `ts=<UTC 秒> decision=<語> reason=<語>`・書き手は [`run`] 1 本・設計 §12 行 p 形 1）。
+pub const TICK_LAST_FILE: &str = "tick-last";
+/// 健全の係数（経過 ≤ `seat.tick_interval_s` × 係数・rules 行を足さない＝係数は歯が pin する・設計 §12 行 p 形 2）。
+const HEALTH_FACTOR: u64 = 2;
+/// 在るのに読めない記録の字面（`-` に潰さない）。
+const UNREADABLE: &str = "unreadable";
 /// 梯子の記録の schema 版。
 const LADDER_SCHEMA: u64 = 1;
 /// 評価していない欄の字面（0 に化けない・C10）。
@@ -521,16 +529,142 @@ pub struct Flags<'a> {
 /// `seat tick` の本体: 判定行 1 行を stdout へ・rc は inject / noop が 0・error が 1。manifest が壊れている周は defect を
 /// stderr へ並べる（`rules validate` と同じ字面）。
 pub fn run(flags: &Flags, manifest: Result<Manifest, Vec<RuleError>>) -> Outcome {
-    let ((verdict, judged), err) = match (state_dir_of(Some(flags.state_dir)), manifest) {
+    let state = state_dir_of(Some(flags.state_dir));
+    let ((verdict, judged), err) = match (&state, manifest) {
         (None, _) => ((Verdict::error(TickError::StateDir), Judged::Unjudged), Vec::new()),
         (Some(_), Err(errors)) => ((Verdict::error(TickError::NoRule), Judged::Unjudged), crate::rules::cli::render_defects(&errors)),
         (Some(state), Ok(manifest)) => {
-            let input = Input { state: &state, target: flags.target, socket: flags.socket, capture: flags.capture, manifest: &manifest };
+            let input = Input { state, target: flags.target, socket: flags.socket, capture: flags.capture, manifest: &manifest };
             (judge(&input), Vec::new())
         }
     };
+    if let Some(state) = &state {
+        stamp_last(&state.path, flags.target, verdict.decision);
+    }
     let rc = if matches!(verdict.decision, TickDecision::Error(_)) { RC_REFUSED } else { RC_OK };
     Outcome { out: vec![format!("{} judged={}", render(flags.target, &verdict), judged.render())], err, rc }
+}
+
+/// 最後の周の打刻を書く（設計 §12 行 p 形 1・判定の後・rc 1 の周も・登録 row の在る席だけ＝row の無い target は dir も作らない・
+/// 一時 file → rename・書けない周は判定行も rc も変えない・event log には書かない）。
+fn stamp_last(state_dir: &Path, target: &str, decision: TickDecision) {
+    let Ok(events) = crate::fleet::store::read_all(state_dir) else {
+        return;
+    };
+    if super::role::registration_of_target(&crate::fleet::replay(&events), target).is_none() {
+        return;
+    }
+    let seat = seat_dir(state_dir, target);
+    let temporary = seat.join(format!("{TICK_LAST_FILE}.tmp"));
+    let line = format!("ts={} decision={} reason={}\n", state::now_secs(), decision.as_str(), decision.reason());
+    let _ = fs::create_dir_all(&seat).and_then(|()| fs::write(&temporary, line)).and_then(|()| fs::rename(&temporary, seat.join(TICK_LAST_FILE)));
+}
+
+/// 最後の周の打刻の 3 欄（`ts` / `decision` / `reason`）。
+type Last = (u64, String, String);
+
+/// 最後の周の打刻を読む（無い周は `Ok(None)`・在るのに読めない周〔dir・1 行の 3 欄でない〕は `Err`）。読み手は status・doctor・
+/// `seat heartbeat status` の 1 本。
+fn read_last(seat: &Path) -> Result<Option<Last>, ()> {
+    let text = match fs::read_to_string(seat.join(TICK_LAST_FILE)) {
+        Ok(found) => found,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(()),
+    };
+    let fields = match text.lines().collect::<Vec<&str>>().as_slice() {
+        [line] => match line.split(' ').collect::<Vec<&str>>().as_slice() {
+            [ts, decision, reason] => ts.strip_prefix("ts=").and_then(|secs| secs.parse::<u64>().ok()).zip(decision.strip_prefix("decision=")).zip(reason.strip_prefix("reason=")),
+            _ => None,
+        },
+        _ => None,
+    };
+    fields.map(|((ts, decision), reason)| Some((ts, decision.to_owned(), reason.to_owned()))).ok_or(())
+}
+
+/// 最後の周の健全（**閉じた 4 値**・判じるのは読み手で tick は判じない・設計 §12 行 p 形 2 / 3）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Health {
+    /// 打刻が在り読めて、経過 ≤ 周期 × [`HEALTH_FACTOR`]。
+    Healthy,
+    /// 打刻が在り読めて、経過が越える。
+    Stale,
+    /// 打刻が無い。
+    Absent,
+    /// 打刻が在るのに読めない。
+    Unreadable,
+}
+
+impl Health {
+    /// doctor の `tick=` の語。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Healthy => "healthy",
+            Self::Stale => "stale",
+            Self::Absent => "absent",
+            Self::Unreadable => UNREADABLE,
+        }
+    }
+}
+
+/// 健全を判じる 1 関数（status と doctor の同じ 1 本）。
+fn health_of(last: &Result<Option<Last>, ()>, interval_s: u64, now: u64) -> Health {
+    match last {
+        Ok(Some((ts, _, _))) if now.saturating_sub(*ts) <= interval_s.saturating_mul(HEALTH_FACTOR) => Health::Healthy,
+        Ok(Some(_)) => Health::Stale,
+        Ok(None) => Health::Absent,
+        Err(()) => Health::Unreadable,
+    }
+}
+
+/// 席の置き場の健全（doctor の `tick=` の読み手・時計は判定と同じ UTC 秒）。
+pub fn health(seat: &Path, interval_s: u64) -> Health {
+    health_of(&read_last(seat), interval_s, state::now_secs())
+}
+
+/// `seat tick status`（設計 §12 行 p 形 2）: 登録 row の席ごとに 1 行（鍵の順・`target` は 1 席）。周期と梯子の行のどちらかを読めない
+/// 周は `no-rule`・row の無い target は `no-row`（rc 1・stdout 0 行・既定を出さない）。梯子の記録は読むだけ。
+pub fn status(state_dir: &str, target: Option<&str>, manifest: Result<Manifest, Vec<RuleError>>) -> Outcome {
+    let named = target.map(|found| format!(" target={found}")).unwrap_or_default();
+    let refused = |rc, reason: &str| Outcome::failed_line(rc, format!("seat tick status: refused reason={reason}{named}"));
+    let Some(state) = state_dir_of(Some(state_dir)) else {
+        return refused(RC_REFUSED, TickError::StateDir.as_str());
+    };
+    // 黙りの閾値は status が読まない（梯子の列だけを使う）ので 0 を置く。
+    let rows = manifest.ok().and_then(|found| Some((int_row(&found, ROW_INTERVAL).ok()?, Pace::of(0, list_row(&found, ROW_LADDER).ok()?).ok()?)));
+    let Some((interval_s, pace)) = rows else {
+        return refused(RC_REFUSED, TickError::NoRule.as_str());
+    };
+    let Ok(events) = crate::fleet::store::read_all(&state.path) else {
+        return refused(RC_BROKEN, TickError::Store.as_str());
+    };
+    let fleet = crate::fleet::replay(&events);
+    let seats: Vec<&str> = match target.map(|found| super::role::registration_of_target(&fleet, found)) {
+        Some(Some(row)) => vec![row.target.as_str()],
+        Some(None) => return refused(RC_REFUSED, NoopReason::NoRow.as_str()),
+        None => fleet.registrations.values().map(|latest| latest.registration.target.as_str()).collect(),
+    };
+    let now = state::now_secs();
+    Outcome::ok(seats.into_iter().map(|found| status_line(&seat_dir(&state.path, found), found, (interval_s, &pace), now)).collect())
+}
+
+/// status の 1 行: `next=` は次の段（記録の段 + 1）の待ちの残り（判定行の `pointer=` と同じ [`pointer_of`]・列を越える段は `stopped`）。
+fn status_line(seat: &Path, target: &str, (interval_s, pace): (u64, &Pace), now: u64) -> String {
+    let last = read_last(seat);
+    let healthy = if health_of(&last, interval_s, now) == Health::Healthy { "yes" } else { "no" };
+    let (ts, age) = match &last {
+        Ok(Some((ts, _, _))) => (ts.to_string(), now.saturating_sub(*ts).to_string()),
+        Ok(None) | Err(()) => (DASH.to_owned(), DASH.to_owned()),
+    };
+    let (step, next) = match read_ladder(seat) {
+        Ok(Some(record)) => match pointer_of(pace, Some(record.sent_at), record.step.saturating_add(1), now) {
+            Pointer::Wait(left) => (record.step.to_string(), left.to_string()),
+            Pointer::Stopped => (record.step.to_string(), Pointer::Stopped.render(false)),
+            Pointer::Open | Pointer::Settling => (record.step.to_string(), "0".to_owned()),
+        },
+        Ok(None) => (DASH.to_owned(), DASH.to_owned()),
+        Err(_) => (UNREADABLE.to_owned(), UNREADABLE.to_owned()),
+    };
+    format!("seat tick status: target={target} last={ts} age={age} healthy={healthy} heartbeat={} step={step} next={next}", switch_word(seat))
 }
 
 /// 判定の入力。
@@ -921,7 +1055,7 @@ fn heartbeat_off(seat: &Path) -> bool {
 
 /// `seat heartbeat off|on|status`（設計 §12 形 2）: 登録 row の無い target は `no-row`（rc 1・席の置き場を作らない＝FR40）。off は
 /// 停止の記録を置き（一時 file → rename・既に在れば ts を書き換えない）、on は消し（無ければ何もしない）、status は有無を 1 行で
-/// 出す（`last=` 以下は行 p の打刻・今は `-`）。event log には書かない。
+/// 出す（`last=` 以下は最後の周の打刻〔[`read_last`]〕・無い / 読めない周は `-`）。event log には書かない。
 pub fn heartbeat(switch: Switch, state_dir: &str, target: &str) -> Outcome {
     let head = format!("seat heartbeat {}:", switch.as_str());
     let refused = |rc, reason: &str| Outcome::failed_line(rc, format!("{head} refused reason={reason} target={target}"));
@@ -943,12 +1077,17 @@ pub fn heartbeat(switch: Switch, state_dir: &str, target: &str) -> Outcome {
     if written.is_err() {
         return refused(RC_BROKEN, NoopReason::RecordUnwritable.as_str());
     }
-    let word = if heartbeat_off(&seat) { Switch::Off } else { Switch::On }.as_str();
-    let tail = match switch {
-        Switch::Status => format!(" last={DASH} decision={DASH} reason={DASH}"),
-        Switch::Off | Switch::On => String::new(),
+    let tail = match (switch, read_last(&seat)) {
+        (Switch::Status, Ok(Some((ts, decision, reason)))) => format!(" last={ts} decision={decision} reason={reason}"),
+        (Switch::Status, _) => format!(" last={DASH} decision={DASH} reason={DASH}"),
+        (Switch::Off | Switch::On, _) => String::new(),
     };
-    Outcome::ok_line(format!("{head} target={target} heartbeat={word}{tail}"))
+    Outcome::ok_line(format!("{head} target={target} heartbeat={}{tail}", switch_word(&seat)))
+}
+
+/// 停止の記録の有無の語（`off` / `on`・heartbeat の口・status・doctor の同じ 1 本）。
+pub fn switch_word(seat: &Path) -> &'static str {
+    if heartbeat_off(seat) { Switch::Off } else { Switch::On }.as_str()
 }
 
 /// 停止の記録を置く（既に在る周は触らない・席の置き場は登録 row の在る席にだけ作る・一時 file → rename）。
