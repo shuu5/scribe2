@@ -549,12 +549,12 @@ terms:
   - canonical: 退避の猶予
     domain: consumer
     aliases: [move grace]
-    definition: 群が別の口座へ移った周から器が古い席へ /exit を送るまでの待ち (SRS FR38・ADR-0071)。 rules 行 seat.move_grace_s (整数の秒・既定 1800・user 裁定 id つき) が持ち、 起点は群の今の口座の記録の時刻。 0 は待たない。 管理 tick の移動の門と群の段の続きの周が同じ 1 関数で残りの秒を読む。
+    definition: 群が別の口座へ移った席へ器が /exit を送るまでの待ち (SRS FR38・ADR-0071・ADR-0073)。 rules 行 seat.move_grace_s (整数の秒・既定 1800・user 裁定 id つき) が持ち、 起点は合図の記録に書いた時刻 (ADR-0073 が群の記録の時刻から改めた)。 0 は待たない。 管理 tick の移動の門と群の段の続きの周が同じ 1 関数で残りの秒を読む。
     forbidden: [grace period, 退避の待ち]
     relationships: [移動の門, 退避の合図, 合図の記録, 群の今の口座, 管理 tick]
   - canonical: 合図の記録
     domain: consumer
-    definition: 席の状態の dir に置く 1 行の file (群の今の口座の記録の時刻・SRS FR38・ADR-0071)。 同じ時刻の記録が在れば管理 tick は退避の合図を送り直さない。 書き手は 1 関数で、 群の段の移動の周と管理 tick の合図の周が書く。 前の移動の記録は害なく残る。
+    definition: 席の状態の dir に置く 1 行の file (移り先の口座・群の今の口座の記録の時刻か種の印・合図を書いた時刻・SRS FR38・ADR-0071・ADR-0073)。 同じ移動 (移り先と記録の時刻が同じ) の記録が在れば管理 tick は退避の合図を送り直さず、 退避の猶予はその時刻から数える。 書き手も読み手も 1 関数で、 群の段の移動の周と管理 tick の合図の周が書く。 前の移動の記録は害なく残る。
     forbidden: [move-signal flag, signal mark]
     relationships: [退避の合図, 退避の猶予, 移動の門]
   - canonical: 退避の合図
