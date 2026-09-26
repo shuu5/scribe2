@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="generator" content="folio ADR-pack assembler (folio-bwc / instance#2) — deterministic structure, prose slots unfilled">
-<title>席の口座を持つ単位は project の群で、群の宣言は host の面の 1 表・群の今の口座は host の根の記録 (役割 → 口座の ADR-0036 と役割の実効の記録の ADR-0041 を単位ごと置き換え・便用の選定は群の候補の口座を host 全体で外し・移動は新しい口座で新しい席を起こして機械の復帰に任せる・候補が無い周は移らず通知・初期化の口と鍵の欄は後続の ADR)</title>
+<title>host の面は端末の表 [[device]] を持つ — 名・ssh の宛先・Chrome の path・OS を必須に、 画面の番号・IME の env・専用の profile の dir を任意にして host の面にだけ宣言し、 器は形を検査して doctor に名の列を出すだけで値は使わない</title>
 <style>
 /* ===========================================================================
    folio human-layer design system — core.css (S3 / folio-8oc プロトタイプ)
@@ -455,26 +455,14 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
     "schema": "https://schema.org/",
     "folio": "https://folio.dev/spec/v1/"
   },
-  "@id": "./ADR-0049-seat-accounts-are-owned-by-project-groups.html",
+  "@id": "./ADR-0076-the-host-face-declares-devices-for-consumers.html",
   "@type": "schema:TechArticle",
-  "dc:isReferencedBy": [
-    { "@id": "./ADR-0076-the-host-face-declares-devices-for-consumers.html" },
-    { "@id": "./ADR-0069-group-moves-pick-by-headroom-and-reserve-in-tier-order.html" },
-    { "@id": "./ADR-0068-the-signal-ladder-is-a-list-and-live-runs-do-not-block-group-moves.html" },
-    { "@id": "./ADR-0067-the-relaunch-carries-the-conversation-id-with-resume.html" },
-    { "@id": "./ADR-0066-the-management-tick-fires-the-group-move-judgement.html" },
-    { "@id": "./ADR-0065-the-vessel-writes-the-trust-flag-before-launching-a-seat.html" },
-    { "@id": "./ADR-0064-seat-launch-installs-the-tick-unit-from-the-host-face.html" },
-    { "@id": "./ADR-0063-a-new-repo-joins-the-vessel-with-one-command-inheriting-the-host-face-from-a-template-state-dir.html" },
-    { "@id": "./ADR-0061-classes-are-derived-from-verify-lines-and-undeclared-rows-are-refused.html" },
-    { "@id": "./ADR-0055-group-pressure-is-measured-at-run-ends-and-seat-turns-without-a-timer.html" }
-  ],
   "dc:isPartOf": [
     {
       "@id": "./README.html"
     }
   ],
-  "dc:title": "席の口座を持つ単位は project の群で、群の宣言は host の面の 1 表・群の今の口座は host の根の記録 (役割 → 口座の ADR-0036 と役割の実効の記録の ADR-0041 を単位ごと置き換え・便用の選定は群の候補の口座を host 全体で外し・移動は新しい口座で新しい席を起こして機械の復帰に任せる・候補が無い周は移らず通知・初期化の口と鍵の欄は後続の ADR)",
+  "dc:title": "host の面は端末の表 [[device]] を持つ — 名・ssh の宛先・Chrome の path・OS を必須に、 画面の番号・IME の env・専用の profile の dir を任意にして host の面にだけ宣言し、 器は形を検査して doctor に名の列を出すだけで値は使わない",
   "folio:version": "0.1.0",
   "folio:stakeholders": [
     "Developer",
@@ -483,19 +471,10 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
   ],
   "dc:references": [
     {
-      "@id": "../spec/constitution.html#c3"
-    },
-    {
-      "@id": "../spec/constitution.html#c5"
-    },
-    {
-      "@id": "../spec/constitution.html#c10"
+      "@id": "../spec/constitution.html#c2"
     },
     {
       "@id": "../spec/constitution.html#c17"
-    },
-    {
-      "@id": "../spec/constitution.html#a1"
     },
     {
       "@id": "../spec/constitution.html#n3"
@@ -504,34 +483,13 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
       "@id": "../spec/srs.html#FR57"
     },
     {
-      "@id": "../spec/srs.html#FR36"
-    },
-    {
-      "@id": "../spec/srs.html#FR59"
-    },
-    {
-      "@id": "../spec/srs.html#NFR4"
-    },
-    {
-      "@id": "./ADR-0021-gate-cost-is-measured-and-confined.html"
-    },
-    {
       "@id": "./ADR-0026-account-lifecycle-host-manifest-and-seat-launch.html"
     },
     {
-      "@id": "./ADR-0027-run-account-order-earliest-reset-and-no-per-account-cap.html"
+      "@id": "./ADR-0049-seat-accounts-are-owned-by-project-groups.html"
     },
     {
-      "@id": "./ADR-0036-role-accounts-are-declared-once-per-host.html"
-    },
-    {
-      "@id": "./ADR-0041-role-effective-account-is-one-host-record-and-moves-only-under-pressure.html"
-    },
-    {
-      "@id": "./ADR-0042-run-account-order-is-earliest-seven-day-reset.html"
-    },
-    {
-      "@id": "./ADR-0045-seat-role-is-one-orchestrator-and-dispatcher-lands-runs.html"
+      "@id": "./ADR-0064-seat-launch-installs-the-tick-unit-from-the-host-face.html"
     }
   ]
 }
@@ -543,206 +501,155 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 <nav class="breadcrumb" aria-label="パンくず"><ol>
   <li><a href="../index.html">design-intent</a></li>
   <li><a href="./README.html">decisions</a></li>
-  <li aria-current="page">ADR-0049</li>
+  <li aria-current="page">ADR-0076</li>
 </ol></nav>
 <!-- /folio:chrome-top -->
 <div class="page" data-component="requirement-type-color-tokens">
 <header data-component="doc-cover-band">
-<p class="cover-eyebrow"><span class="doc-type">設計判断記録 (ADR)</span> <span>scribe2 — 席の口座の単位</span></p>
-<h1>席の口座を持つ単位は project の群で、群の宣言は host の面の 1 表・群の今の口座は host の根の記録 (役割 → 口座の ADR-0036 と役割の実効の記録の ADR-0041 を単位ごと置き換え・便用の選定は群の候補の口座を host 全体で外し・移動は新しい口座で新しい席を起こして機械の復帰に任せる・候補が無い周は移らず通知・初期化の口と鍵の欄は後続の ADR)</h1>
-<p class="cover-sub">席の口座は project ごとの置き場に閉じていて、 複数の project の席を同じ口座にまとめる宣言も、 上限に当たった周にまとめて別の口座へ移す口も無い (実測 2026-09-19 = 席の口座が上限に当たり人が手で移した)。 本 ADR は口座を持つ単位を project の群に決め、 群の宣言と群の今の口座を host の面に置き、 便用の選定は群の候補の口座を host 全体で外し、 移動は新しい席を起こして機械の復帰に任せる形にする。 契機 (拍) と初期化の口と鍵の欄は本 ADR では決めない。</p>
-<div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">席（人と話す開発 session）がどの口座で立つかを、project 1 つずつでなく「project のかたまり（群）」ごとに決めます。どの project を同じかたまりにし、どの口座を候補にするかは、この machine に 1 つだけ在る宣言 file に書きます。いまそのかたまりがどの口座に居るかは、器が別の記録に書きます（人が書く宣言と、器が書く現状を分けます）。便（自動で走る実装の仕事）には、かたまりの候補になっている口座を 1 つも渡しません。口座が上限に近づいたら、かたまりごと別の口座へ移りますが、生きている対話を運ぶのではなく、新しい口座で新しい席を立てて、続きは器が台帳と git から組み直して渡します。移り先の候補が 1 つも無い回は、無理に移らず user に知らせます。</p></div></div>
-<div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">proposed</span></span><span class="m"><span class="k">選択肢</span><span class="v">7件 (OPT1–OPT7)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 4 / トレードオフ 4</span></span><span class="m"><span class="k">版</span><span class="v">v0.1.0 / 2026-09-20</span></span></div>
-<div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>FR57・FR36・FR59・NFR4</b></div>
+<p class="cover-eyebrow"><span class="doc-type">設計判断記録 (ADR)</span> <span>scribe2 — host の面の端末の表</span></p>
+<h1>host の面は端末の表 [[device]] を持つ — 名・ssh の宛先・Chrome の path・OS を必須に、 画面の番号・IME の env・専用の profile の dir を任意にして host の面にだけ宣言し、 器は形を検査して doctor に名の列を出すだけで値は使わない</h1>
+<p class="cover-sub">表示面を持つ別の project の席は、 持ち主の端末の Chrome を ssh 経由で起こして画面を操作する。 そのための端末の値は host ごとに違い code に焼けないので、 今は席が手で持っている。 本 ADR は host の面 (host.toml) に端末の表を 1 つ足し、 器の読み手が形を検査し、 doctor が宣言の名を名乗る形を決める。 器は ssh も Chrome も撃たない。</p>
+<div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">この記録で「器」は scribe2 の本体、 「席」は人と AI が話す 1 つの session、 「host の面」は machine ごとの宣言を持つ file (host.toml)、 「端末」は持ち主が画面を見る別の machine です。 表示面を持つ別の project の席は、 持ち主の端末の Chrome を ssh 経由で窓だけのモードで起こし、 その画面を外から操作します。 そのための値 (ssh の宛先・Chrome の場所・画面の番号・日本語入力の設定・専用の保存場所・OS) は端末ごとに違い、 code に焼けません。 今は host の面に置き場が無く、 席が手で持っています。 この記録は、 host の面に端末の表を 1 つ足し、 器の読み手が形を検査し、 doctor が宣言した端末の名を名乗る形を決めます。 器は値を読むだけで、 ssh も Chrome も撃ちません。 持ち主は 2026-09-26 にこの形を裁定しました。</p></div></div>
+<div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">accepted</span></span><span class="m"><span class="k">選択肢</span><span class="v">4件 (OPT1–OPT4)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 3 / トレードオフ 3</span></span><span class="m"><span class="k">版</span><span class="v">v0.1.0 / 2026-09-26</span></span></div>
+<div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>FR57</b></div>
 <div data-component="approval-block">
-<div class="sign"><span class="role">裁定 (user)</span><span class="who">user</span><span class="when">2026-09-19 (対話面・要求 4 点と「実装の仕方は推奨の方法で」の裁定・要旨は本文 CTX4・逐語は台帳 s2-07l.491 の notes)</span><span class="stamp self">裁定済</span></div>
-<div class="sign"><span class="role">設計 (orchestrator)</span><span class="who">orchestrator</span><span class="when">2026-09-20 起票 (host の面の読み手・便用の選定の除外・席の口座の解き方・doctor の行の現物を実測・拘束する constitution の版 0.5.0)。 発効は群の宣言と便用の除外と doctor の行が land した版</span><span class="stamp self">作成</span></div>
+<div class="sign"><span class="role">裁定 (user)</span><span class="who">user</span><span class="when">裁定 id user 2026-09-26T15:16Z (推奨の受諾 = host.toml に端末の表を足し、 読み手の閉じた key の列で読み、 doctor に 1 行。 宣言の形を決めるので ADR を伴う。 逐語は台帳にだけ在る)</span><span class="stamp self">裁定済</span></div>
+<div class="sign"><span class="role">設計 (orchestrator)</span><span class="who">orchestrator</span><span class="when">2026-09-26 草稿 v1 (host の面の読み手と既存の host の表の先例を現物で読み、 端末の表の欄と検査と doctor の形を決めた。 拘束する constitution の版 0.5.0)</span><span class="stamp self">作成</span></div>
 </div>
-<div class="reader-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 想定読者: scribe2 の開発 session と user — 口座の窓や tmux の知識は不要 (専門語はやさしい言葉を併記)</div>
+<div class="reader-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 想定読者: scribe2 の開発 session と user — 器の内部と Rust の専門知識は不要 (専門語はやさしい言葉を併記)</div>
 </header>
 <!-- folio:chrome-toc -->
 <!-- /folio:chrome-toc -->
-<section data-component="chapter-deck-band" class="tint-info"><span class="num">01</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v6m0 0L9 5m3 3l3-3"/><circle cx="12" cy="14" r="6"/></svg> 背景 / なぜこの判断が要るか</span><h2>いま何が問題か (確定方式を決める力学)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-01">なぜこの判断が要るのかを、実測と現物と user の要求から説明します。席の口座が上限に当たって人が手で移した回が実際に在り、いま器には「どの project をまとめて同じ口座に置くか」を書く場所も、まとめて移す口もありません。前に決めた「役割ごとに 1 口座」は、役割が 1 つになった時点で分け方として働かず、しかも code には 1 行も入っていません。</p></section>
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">01</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v6m0 0L9 5m3 3l3-3"/><circle cx="12" cy="14" r="6"/></svg> 背景 / なぜこの判断が要るか</span><h2>いま何が問題か (確定方式を決める力学)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-01">なぜこの判断が要るのかを、 経緯 (host 固有の値は host の面だけが持つ)・事象 (表示面を持つ project の席が端末の値を手で持っている)・機序 (今の読み手は未知の表を面ごと断る)・これまでの決まり・この判断の範囲の 5 つから説明します。 群の表と tick の表が、 host の面にだけ置ける表の先例です。</p></section>
 <div class="chapbody">
 <div data-component="adr-context-list">
-<div data-component="adr-context-row"><span class="cxid">CTX1</span><div class="cxbody"><p class="cxh">実測 — 席の口座が上限に当たり、 人が手で別の口座へ移した</p><p class="cxd">2026-09-19 に席の口座が窓の上限に当たり、 user が手で別の口座へ移した (経緯の逐語は台帳 s2-07l.491 の notes)。 席が自分で判断して進む度合いを上げるほど、 上限で黙って止まる席は増える。 いまの器には、 止まった席を別の口座で立て直す口はあっても、 止まる前に移す判断も、 複数の project の席をまとめて移す単位も無い。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX2</span><div class="cxbody"><p class="cxh">現物 — 在るもの (口座の宣言・使用率の計測・閾値の行 1 本・便用の除外・口座を指定した起動)</p><p class="cxd">口座 label の宣言は host の面 (state dir の host の manifest 1 file) の口座の表が持ち、 tracked の面と同じ loader・同じ 3 値 (無い = 0 宣言 / 読めた / 在るのに読めない = typed に止まる)・同じ拒否の形 (未知 key・型違い・両面の重複を行番号付きで全件) で読む (ADR-0026 §2.1・SRS FR57)。 口座ごとの窓の使用率は計測されて event log に残り、 session 用の閾値の rules 行が 1 本在る。 便用の口座選定は、 便の置き場 (anchor) の席の登録 row が持つ口座だけを候補から外す (置き場を共有する他の vessel の席の口座は候補に残す)。 席は口座を指定して起こせる。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX3</span><div class="cxbody"><p class="cxh">現物 — 無いもの (群の宣言・群単位の移動・host 全体の除外)、 および ADR-0036 / ADR-0041 が code に 1 行も無いこと</p><p class="cxd">群の宣言・群単位の移動・移動の契機・host 全体での除外は、 どれも器に無い。 さらに ADR-0036 が決めた役割 → 口座の宣言 file と ADR-0041 が決めた役割の実効の記録は、 設計 doc と語彙には在るが code には 1 行も無い (実測 = その file 名は設計 doc にしか現れない)。 その 2 本が前提にしていた軸も残っていない — 席の役割は orchestrator の 1 つになり、 宣言と実効の記録を比べて席を移していた管理 tick は削除された (ADR-0045 §2 (2))。 つまり「役割ごとに 1 口座」は、 役割が 1 つになった時点で単位として働かない。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX4</span><div class="cxbody"><p class="cxh">要求 — user の 4 点と、 全口座が等価に交換できること</p><p class="cxd">user の要求 (要旨・逐語は台帳 s2-07l.491 の notes) は 4 点である。 (1) 席の口座が上限に近づいたら自動で別の口座へ移す (2) 複数の project の席を同じ口座に置ける (3) project の群<span class="term" data-component="plain-language-term-inline" data-term="project の群">同じ口座にまとめて置く project のかたまり</span>を作り、 群ごとに別の口座へまとめて置き、 上限が来たら群が一斉に同じ別の口座へ移る (4) 席の居る口座は便に使わない。 加えて、 全口座の設定は同一で等価に交換できることが前提である。 裁定は「実装の仕方は推奨の方法で」であり、 推奨は「移動 = 新しい口座で新しい席 + 機械の復帰」「段は宣言と点検 → 通知 → 自動の移動」であった。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX5</span><div class="cxbody"><p class="cxh">重い所 — 生きた対話を別の口座へ運ぶこと</p><p class="cxd">要求 (1) の実装で唯一重いのは「生きた対話 session をそのまま別の口座へ移す」ことである。 対話の記録は口座ごとの置き場の下に在るので、 持ち越しには file の複写と起動行の再現が要る。 この host では全口座の置き場が 1 つの実体を共有しているため複写なしで持ち越せるが、 それは器の外の host の設定であって器が前提にできる形ではない (N3 = host 固有の値で分岐しない)。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX6</span><div class="cxbody"><p class="cxh">憲法の向き</p><p class="cxd">C3 は状態の真実を 1 つの置き場に持ち host ごとの dir に真実を置かないことを、 C5 は rules 行の追加・変更に裁定 id を、 C10 は宣言値と実効値を型で分け昇格は測定を通すことを、 C10.3 は配線されていない設定を CI が拒むことを、 C17 は決定はしごと「足す前に消すものを名指す」ことを、 A1 は「使う」に当たる操作の承認を、 N3 は host 固有の値で分岐しないことを求める。 口座を消費する session を器が起こすことは A1 の「使う」に当たる。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX1</span><div class="cxbody"><p class="cxh">経緯 — host 固有の値は host の面<span class="term" data-component="plain-language-term-inline" data-term="host の面">machine ごとの宣言</span>だけが持つ (ADR-0026・FR57)</p><p class="cxd">ADR-0026 は host 固有の宣言値を state dir の host の面 (host.toml) 1 file だけが持ち、 tracked の manifest と同じ読み手と同じ断り方で検査すると決めた (要件 FR57)。 その後、 群の表 (ADR-0049) と tick の unit の表 (ADR-0064) が host の面にだけ置ける表として足された。 表ごとに受ける key の閉じた列を持ち、 未知の key と未知の表は行番号つきで断る。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX2</span><div class="cxbody"><p class="cxh">事象 — 表示面を持つ project の席が端末の値を手で持っている</p><p class="cxd">表示面を持つ別の project の席は、 持ち主の端末の Chrome を ssh 経由で窓だけのモードで起こし、 画面の遠隔操作の口 (CDP<span class="term" data-component="plain-language-term-inline" data-term="CDP">Chrome の遠隔操作</span>) で操作する。 そのための値 (ssh の宛先・Chrome の path・画面の番号・日本語入力の env・専用の profile の dir・OS) は端末ごとに違う。 同じ profile の既存の process が窓を開くと env が効かない実測 (2026-09-25) があり、 専用の profile<span class="term" data-component="plain-language-term-inline" data-term="専用の profile">Chrome の別の保存場所</span> の dir も要る。 今は host の面に端末の表<span class="term" data-component="plain-language-term-inline" data-term="端末の表">持ち主の端末の一覧</span>が無く、 席が値を手で持っている。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX3</span><div class="cxbody"><p class="cxh">機序 — 今の読み手は未知の表を面ごと断る</p><p class="cxd">host の面に端末の表を人が書き足すと、 今の読み手は未知の表として面ごと読めないと判じ、 口座・群・tick の宣言まで効かなくなる。 表を足すには読み手の表の列に 1 つ足すしかない。 読み手の本体の file は 1481 行で、 1 file の上限 (1500 行) の余地が 19 行しか無い。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX4</span><div class="cxbody"><p class="cxh">憲法と既存の決定の向き (本 ADR の解釈)</p><p class="cxd">N3 (host 固有の値で code を分岐させない) から、 端末の値は code に焼かず宣言にする。 C2 (同じ事実の読みは 1 本) から、 host の面の読み手は 1 つで、 端末の表もその読み手が読む。 C17 (決定はしご) から、 器は値を読むだけで ssh も Chrome も撃たない (使い方は消費側の設計の範囲)。 CON2 (公開面に host 固有の値を載せない) から、 表は host の面にだけ置け、 doctor は値を出さない。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX5</span><div class="cxbody"><p class="cxh">射程 — 動かすのは host の面の表の列と doctor の host の行だけ</p><p class="cxd">動かすのは (1) host の面が受ける表に端末の表を 1 つ足すこと (欄と検査は本 ADR が決める)、 (2) doctor の host の面の行の末尾に端末の名の列を出すこと。 動かさないのは、 既存の表の形と検査・rules 行・init の写し (本文のまま写る)・席の起動と tick・validate の宣言の数の行。</p></div></div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-brand"><span class="num">02</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v18"/><path d="M5 7l-3 6h6z"/><path d="M19 7l-3 6h6z"/><path d="M3 21h18"/></svg> 判断を縛る力 / 評価の軸</span><h2>選択肢を測るものさし (安全・速さ)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-02">この判断を評価する 5 本のものさしです。口座を持つ分け方が 1 つに決まること、席の口座と便の口座が重ならないこと、移るのに生きた対話を運ばなくて済むこと、人が書く宣言と器が書く現状を分けて読み手の無い宣言を足さないこと、そして段階ごとに止められることです。</p></section>
+<section data-component="chapter-deck-band" class="tint-brand"><span class="num">02</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v18"/><path d="M5 7l-3 6h6z"/><path d="M19 7l-3 6h6z"/><path d="M3 21h18"/></svg> 判断を縛る力 / 評価の軸</span><h2>選択肢を測るものさし (安全・速さ)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-02">この判断を評価する 4 本のものさしです。 host 固有の値は宣言にすること (code にも席の手にも持たせない)。 読み手は 1 つにすること (端末の表も同じ断り方で検査する)。 器は宣言の形だけを守ること (値を使う口は足さない)。 公開面と file の上限を守ること (表は host の面にだけ・doctor は名だけ・本体の増分は余地に収める)。</p></section>
 <div class="chapbody">
 <table data-component="adr-driver-table"><tbody>
-<tr data-component="adr-driver-row"><td class="drid">DR1</td><td>口座を持つ単位が 1 つに決まり、 同じ単位の席がどの置き場からでも同じ口座に揃う <span class="drg">CTX4 の要求 (2) / (3)・CTX3 (役割は単位として働かない)</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR2</td><td>席の口座と便の口座が host 全体で交わらない <span class="drg">CTX4 の要求 (4)・CTX2 (いまの除外は便の置き場の席だけ)</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR3</td><td>移動が「生きた対話の持ち越し」を要らない (復帰の道は 1 本) <span class="drg">CTX5・憲法 N3・圧縮 / 移動 / 異常終了が同じ復帰を通る</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR4</td><td>宣言値と実効値を型と file で分け、 読み手の無い宣言を足さない <span class="drg">憲法 C10 / C10.3 / C17.2</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR5</td><td>段で止められる (宣言と点検 → 通知 → 自動の移動) <span class="drg">CTX4 の裁定・DR4 (段ごとに読み手が揃う)</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR1</td><td>host 固有の値は宣言にする — 端末の値を code にも席の手にも持たせない (N3) <span class="drg">CTX2・CTX4</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR2</td><td>読み手は 1 つ — 端末の表も host の面の読み手が同じ断り方で検査する (C2・FR57) <span class="drg">CTX1・CTX3</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR3</td><td>器は宣言の形だけを守る — 値を使う口 (ssh・Chrome) は器に足さない (C17) <span class="drg">CTX4・CTX5</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR4</td><td>公開面と上限を守る — 表は host の面にだけ・doctor は名だけ・読み手の本体の増分は上限の余地に収める (CON2・C4) <span class="drg">CTX3・CTX4</span></td></tr>
 </tbody></table>
 </div>
-<section data-component="chapter-deck-band" class="tint-violet"><span class="num">03</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5"/></svg> 検討した選択肢 / 3 つの確定方式</span><h2>それぞれの利点と欠点を並べる</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-03">候補を 7 つ並べます。かたまりを分け方にする案、前の「役割ごと」を残す案、生きた対話を運ぶのを基準にする案、宣言を持たず起動のたびに選ぶ案、候補が無くても無理に移る案、導入の口や鍵の欄まで 1 本にまとめる案、そして便に渡さない口座を「いま居る 1 つ」だけに絞る案です。6 つ目は別の記録へ送ります。</p></section>
+<section data-component="chapter-deck-band" class="tint-violet"><span class="num">03</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5"/></svg> 検討した選択肢 / 3 つの確定方式</span><h2>それぞれの利点と欠点を並べる</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-03">候補を 4 つ並べます。 host の面に端末の表を足し器は検査と doctor の名の列だけにする案 (選んだ案)、 消費側の repo の宣言に持つ案、 器の外の file に持つ案、 器が端末の値で Chrome を起こす口を持つ案です。 選ばなかった 3 つは、 端末は host 固有で repo の宣言でない・宣言が 2 か所になる・器の範囲を越える、 という理由で退けました。</p></section>
 <div class="chapbody">
 <div class="opt-grid">
 <div data-component="adr-option-card" class="chosen">
-<div class="opt-head"><span class="opt-id">OPT1</span><span class="opt-name">口座を持つ単位を project の群にし、 宣言は host の面の 1 表・今の口座は host の根の記録・移動は新しい席 + 機械の復帰<span class="term" data-component="plain-language-term-inline" data-term="機械の復帰">続きを人でなく器が組み立て直すこと</span></span><span class="opt-verdict chosen">採用</span></div>
-<p class="opt-sum">群 (名・置き場の列・候補の口座 label の順の列) を host の面の表 1 つで宣言し、 群の今の口座<span class="term" data-component="plain-language-term-inline" data-term="群の今の口座">その群の席がいま実際に使っている口座</span>は host の根の記録 1 件 (群ごとに高々 1 件) が実効値として持つ。 便用の選定は宣言のどの群の候補の口座も host 全体で外す。 上限に当たった周は群単位で 1 回だけ移り先を決め、 新しい口座で新しい席を起こして復帰は機械の注入に任せる。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT1">project をいくつかのかたまりに分け、かたまりごとに「この口座を順に使う」という候補の並びを宣言します。宣言は人が書き、いまどの口座に居るかは器が別の記録に書きます。便にはかたまりの候補口座を渡しません。上限が近づいた回は、かたまり単位で 1 回だけ移り先を決め、新しい口座で新しい席を立てて、続きは器が組み直します。</span>
+<div class="opt-head"><span class="opt-id">OPT1</span><span class="opt-name">host の面に端末の表を足し、 器は検査と doctor の名の列だけ</span><span class="opt-verdict chosen">採用</span></div>
+<p class="opt-sum">host の面に端末の表を足す。 必須の欄は名・ssh の宛先・Chrome の path・OS (3 語)、 任意の欄は画面の番号・IME の env (KEY=VALUE の列)・専用の profile の dir。 読み手が形と名の一意を行番号つきで検査し、 doctor は host の行に名の列を出す。 決め手は持ち主の裁定 (15:16Z)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT1">host の面に端末の表を足す案です。 必須の欄は名・ssh の宛先・Chrome の path・OS (linux・macos・windows の 3 語)、 任意の欄は画面の番号・日本語入力の設定 (KEY=VALUE の列)・専用の保存場所です。 器の読み手が形と名の一意を行番号つきで検査し、 doctor は host の行に端末の名の列だけを出します。 端末の値が宣言になり、 既存の読み手と同じ断り方で検査され、 器に口は増えず、 値は host の面の外へ出ません。 代わりに、 消費側が値を読む形はこの記録では決まらず、 読み手の本体の file の余地がほぼ無くなります。 持ち主の裁定で選びました。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>要求 (2) / (3) が単位 1 つで満たされ、 置き場が project ごとに分かれていても同じ群に入れられる</li>
-<li>要求 (4) が「宣言された候補の口座を便用から外す」1 つの規則になる</li>
-<li>移動の判定が host で 1 回・群単位・lock の内側に閉じるので、 同じ口座へ席が殺到する型が構造で消える</li>
-<li>圧縮・移動・異常終了が同じ 1 本の復帰を通る (実装が 1 本)</li>
-<li>宣言値 (候補の列) と実効値 (今の口座) が file も型も分かれる (C10)</li>
+<li>端末の値が宣言になり、 席が手で持たなくてよい (DR1)</li>
+<li>既存の host の面の読み手と同じ断り方で検査される (DR2)</li>
+<li>器に足す口は無く、 値の使い方は消費側が決める (DR3)</li>
+<li>表は host の面にだけ置け、 doctor は値を出さない (DR4)</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>host の根に実効の記録という置き場が 1 つ増える</li>
-<li>移動のたびに、 対話の文脈は機械が戻せるぶんしか残らない</li>
-<li>便が使える口座が群の候補のぶんだけ減る (今の口座 1 つだけを外す案は OPT7・却下)</li>
+<li>消費側が値を読む形 (host の面を直に読むか、 読み出しの口を足すか) は本 ADR では決まらない</li>
+<li>読み手の本体の余地が 1 行台まで減り、 次の表は兄弟 module への移動が先に要る</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT2</span><span class="opt-name">役割 → 口座の宣言を残す (ADR-0036 の形のまま単位を役割にする)</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">host の根に役割ごとの宣言 file を置き、 役割ごとに 1 口座を持つ。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT2">前に決めた「役割ごとに 1 口座」をそのまま残す案です。書き直しは要りませんが、役割は 1 つになったので、全部の project の席が同じ 1 口座に集まることしか表せません。「かたまりごとに別の口座」という要求が書けず、そもそも code には 1 行も入っていません。</span>
+<div class="opt-head"><span class="opt-id">OPT2</span><span class="opt-name">消費側の repo の宣言 (.vessel.toml) に持つ</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">表示面を持つ project の repo の宣言に端末の値を書く。 決め手は分析 (端末は host 固有)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT2">表示面を持つ project の repo の宣言に、 端末の値を書く案です。 器の host の面を触らない点で勝ります。 けれども、 端末は host 固有で repo の宣言ではなく、 tracked の file に host 固有の値が載ります。 同じ host の他の project と端末の宣言を共有することもできません。 退けました。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>既に決定記録と設計 doc と語彙が在る (書き直しが要らない)</li>
+<li>器の host の面を触らない</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>役割は orchestrator の 1 つになったので、 単位として働かない (全 project の席が 1 口座に集まる = 要求 (3) の「群ごとに別の口座」が表せない)</li>
-<li>宣言と実効を比べて席を移していた管理 tick が削除済みで、 移す軸が無い</li>
-<li>code に 1 行も無いので「残す」の中身が無い (実測)</li>
+<li>端末は host 固有で repo の宣言でなく、 tracked の file に host 固有の値が載る (DR4)</li>
+<li>同じ host の他の project と端末の宣言を共有できない (DR1)</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT3</span><span class="opt-name">生きた対話を持ち越して別の口座へ移すのを基準の道にする</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">対話の記録を複写し起動行を再現して、 同じ対話のまま別の口座で続ける。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT3">生きている対話をそのまま別の口座へ持ち越すのを基準の道にする案です。文脈は 1 つも落ちませんが、対話の記録の置き場が共有されているかどうかは器の外の設定なので、それを当てにすると machine ごとの事情で動きが変わることになります。続きを戻す道も 2 本に分かれます。</span>
+<div class="opt-head"><span class="opt-id">OPT3</span><span class="opt-name">器の外の file に持つ</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">host の面とは別の file に端末の値を置き、 消費側がそれを読む。 決め手は分析 (宣言が 2 か所になる)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT3">host の面とは別の file に端末の値を置く案です。 器の読み手を触らない点で勝ります。 けれども、 host 固有の宣言が 2 か所になり、 「host の面 1 file だけ」という要件から外れます。 形の検査が無いので、 書き損じが消費側で使う時まで見えません。 退けました。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>文脈が 1 つも落ちない</li>
-<li>この host では置き場が共有されているので複写すら要らない</li>
+<li>器の読み手を触らない</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>置き場が共有かどうかは器の外の host の設定で、 器が前提にすると host 固有の値で分岐することになる (N3)</li>
-<li>復帰の道が 2 本になる (圧縮・異常終了は機械の復帰・移動だけ持ち越し)</li>
-<li>器が対話の記録を読む口を持つことになる (いまは 1 つも持たない)</li>
+<li>host 固有の宣言が 2 か所になり、 FR57 の「host の面 1 file だけ」から外れる (DR2)</li>
+<li>形の検査が無く、 書き損じが消費側の実行の時まで見えない (DR2)</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT4</span><span class="opt-name">群の宣言を持たず、 席が起きるたびに選定へ落とす</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">席の口座は起動のたびに session 用の選定で決める。 宣言も記録も持たない。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT4">かたまりの宣言を持たず、席を立てるたびにその場で空いている口座を選ぶ案です。いちばん小さくて済みますが、同じかたまりのはずの席がばらばらの口座に散り、席が立っていない間はその口座が便に取られます。</span>
+<div class="opt-head"><span class="opt-id">OPT4</span><span class="opt-name">器が端末の値で Chrome を起こす口を持つ</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">器の口が ssh で端末の Chrome を起こし、 消費側はその口を呼ぶ。 決め手は分析 (器の範囲を越える)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT4">器の口が ssh で端末の Chrome を起こし、 消費側はその口を呼ぶ案です。 消費側が起こし方を書かなくてよい点で勝ります。 けれども、 表示面の起こし方は消費側の設計の範囲で、 器が持つと外部の process を撃つ口が増えます。 端末ごとの差 (OS・日本語入力) の扱いも器に入ります。 退けました。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>置き場も表も増えない (いちばん小さい)</li>
+<li>消費側が起こし方を書かなくてよい</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>同じ群のはずの席が別々の口座に散る (要求 (2) / (3) を満たさない)</li>
-<li>便用の除外<span class="term" data-component="plain-language-term-inline" data-term="便用の除外">便に渡してはいけない口座を候補から外すこと</span>が「いま席が居る口座」だけになり、 席が起きていない周は便に取られる (要求 (4) が周ごとに破れる)</li>
-<li>上限が来た周に群が一斉に移れない</li>
-</ul></div></div>
-</div>
-<div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT5</span><span class="opt-name">妥協の移動 — 候補が無い周も閾値以上の口座へ群を移す</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">移り先の候補が 1 つも無い周も、 いちばん余裕のある口座へ群を移して席を立てる。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT5">移り先の候補が 1 つも無い回でも、いちばん余裕のある口座へかたまりごと移してしまう案です。席は止まりませんが、上限に当たっている口座へ移すだけなので止まる席が増え、移った先で便と口座が重なります。</span>
-<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>席が止まらない</li>
-</ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>上限に当たっている口座へ群ごと移すので、 止まる席が増えるだけで解決しない</li>
-<li>移った先で便と口座が交わる (要求 (4) が破れる)</li>
-<li>「移った」という実効値が残るので、 次の周の判定が汚れる</li>
-</ul></div></div>
-</div>
-<div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT6</span><span class="opt-name">初期化の口・consumer の rules の写しの廃止・外部 API の鍵の欄を同じ ADR に畳む</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">導入を 1 command にする口 (host の面を作る口と置き場ごとの面を作る口・差分だけ出す形) と、 consumer が規則の写しを持たない形と、 外部 API の鍵を名乗る欄を、 本 ADR で一緒に決める。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT6">かたまりの話と一緒に、導入を 1 コマンドにする口や、相手の repo が規則の写しを持たない形や、外部 API の鍵を名乗る欄まで、この 1 本で決めてしまう案です。まとまりは良くなりますが、1 つの記録が独立した 3 つの決定を抱えることになり、あとから片方だけ直せません。鍵の欄は読む側がまだ無いので、いま足すと「配線されていない設定」になります。別の記録へ送ります。</span>
-<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>host の面と置き場の面を分ける話が 1 本にまとまる</li>
-<li>鍵の欄は 1 表で足りる</li>
-</ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>1 つの決定記録が 3 つの独立した決定を持つことになる (後から片方だけ改訂できない)</li>
-<li>鍵の欄は読み手を持たないので、 いま決めて足すと配線されていない設定になる (C10.3)</li>
-<li>導入の口は本 ADR の群とは独立に決められる (依存が無い)</li>
-</ul></div></div>
-</div>
-<div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT7</span><span class="opt-name">便用の除外を群の今の口座だけにする (候補の列の残りは便に開ける)</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">便用の候補から外すのは「その群がいま居る口座」1 つだけとし、 記録が無い周は候補の先頭 1 つを外す。 候補の列の残りは便が使える。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT7">便に渡さない口座を、かたまりの候補ぜんぶではなく「いまそのかたまりが居る 1 つ」だけに絞る案です。user の言い方にいちばん近く、便が使える口座もほとんど減りません。ただし便は口座を上限いっぱいまで使う側なので、候補の残りを便が先に使い切ってしまい、いざ移りたい回には移り先がどれも上限に近い、ということが起こります。つまり候補の列が逃げ道として働かなくなります。便に回せる量と逃げ道の広さは、候補をいくつ書くか（user が書く宣言）で調整できるので、この案で取り戻す必要はありません。加えて、外す口座を「器が書いた現状の記録」から決めることになるので、その記録が読めない回に何を外すかが決まりません。</span>
-<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>user の要求 (4)「席の居る口座は便に使わない」の字面にいちばん近い</li>
-<li>便が使える口座が群ごとに 1 つしか減らないので、 便の容量が落ちない</li>
-</ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>移り先になる候補を便が先に使い切る (実測 = 便用の選定の上限は 100 % の定数で、 便は口座を上限まで使う側の規則である。 一方で移り先の条件は閾値未満〔5 時間窓 85 ・ 7 日窓 95 ・ モデル別窓 95〕なので、 群が移りたい周には候補が全部閾値を越えている見込みが高い) ＝候補の列が逃げ道として働かない</li>
-<li>便の容量と逃げ道の釣り合いは、 候補の列の長さ (user が書く宣言値) で選べる。 この案で取り戻す必要が無い</li>
-<li>除外の規則が実効の記録の読みに依存する。 本 ADR は読めない記録を typed に止めると決めたので、 記録が読めない周の便用の除外が「止まる」か「黙って広がる」かの二択になり、 typed に決まらない (宣言値だけを読む OPT1 にはこの周が無い)</li>
+<li>表示面の起こし方は消費側の設計の範囲で、 器が持つと外部の process を撃つ口が増える (DR3)</li>
+<li>端末ごとの差 (OS・IME) の扱いが器に入り、 N3 の境界が曖昧になる (DR1)</li>
 </ul></div></div>
 </div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの方式を選ぶか</span><h2>選んだ方式と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、それが要件書のどの要件を支えるかを示します。かたまりの宣言は machine ごとの宣言 file に 1 表として置き、いまの口座は別の記録が持ち、便の候補からはかたまりの候補口座を全部外し、移動は新しい席と器による続きの組み直しで行います。</p></section>
+<section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの方式を選ぶか</span><h2>選んだ方式と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、 それが要件書のどの要件を支えるかを示します。 端末の表の必須の欄は名・ssh の宛先・Chrome の path・OS、 任意の欄は画面の番号・日本語入力の設定の列・専用の保存場所です。 読み手は形と名の一意を行番号つきで検査し、 tracked の manifest に置いた表は断ります。 doctor は host の行に名の列を出します。 支えるのは FR57 (host 固有の宣言値は host の面 1 file だけから同じ読み手で読む) への主張です。</p></section>
 <div class="chapbody">
 <div data-component="adr-decision-panel" id="decision">
 <p class="dec-kick">採用 — OPT1</p>
-<p class="dec-state">器 SHALL 席の口座を持つ単位を project の群 (名・置き場の列・候補の口座 label の順の列) とし、 群の宣言 SHALL host の面 (state dir の host の manifest 1 file) の表 1 つが持ち、 tracked の面には置けない (宣言は host に 1 か所・別の宣言 file を作らない)。 読み手 SHALL 既存の host の面の loader と同じ 3 値・同じ拒否の形をそのまま使い、 宣言 SHALL 宣言値のまま扱う。 器 SHALL 群の今の口座を実効値として host の根 (state dir の親の下の host 用 dir・受付札と同じ導き方・環境変数を読まない) の記録 1 件 (群ごとに高々 1 件) で持ち、 宣言とは file も型も分け (C10)、 記録が無い周 SHALL 宣言の候補の先頭を種とし、 記録が在るのに読めない周 SHALL typed に止まる。 便用の口座選定 SHALL 宣言のどの群の候補の口座も host 全体で候補から外し (次の選定から効き、 走行中の便は止めない)、 便の置き場の席の登録 row の除外 SHALL 残す。 便用の並べ順と 1 口座あたりの上限を置かないこと (ADR-0027 / ADR-0042) SHALL 変えない。 移動の判定 SHALL 群単位で host の lock の内側で 1 回だけ行い、 移り先 SHALL 他の群が使っていない ∧ 便が使っていない ∧ 閾値未満の候補の先頭とし、 候補が無い周 SHALL 移らず user へ通知する (妥協の移動を作らない)。 移動 SHALL 新しい口座で新しい席を起こすことで行い、 対話の記録 SHALL NOT 運び、 復帰 SHALL 機械の注入 (台帳の行・git の現在地・圧縮の直前の 1 枠) に任せる。 群の宣言 SHALL A1 の「使う」の常設の承認<span class="term" data-component="plain-language-term-inline" data-term="常設の承認">1 回の承認で以後は都度聞かずに済む形</span>とし、 移動の周 SHALL 承認 event を 1 件記す。 段 SHALL 3 つ = 群の宣言と点検の 1 行と便用の除外 / 閾値越えの通知だけ / 自動の移動、 とし、 通知と移動の契機 SHALL 別の決定記録に委ね、 本 ADR SHALL NOT 契機を決める。 閾値 SHALL 5 時間窓 85 ・ 7 日窓 95 ・ モデル別窓 95 の rules 行とし (値と裁定 id は既に在る裁定の引き継ぎ・C5)、 行を足すのは通知の段の便とする。 器 SHALL NOT 本 ADR で導入の口・consumer の規則の写しの廃止・外部 API の鍵の欄を決める (後続の決定記録・C17 の 1 記録 1 決定)。</p>
-<span class="dec-plain" data-prose-slot="plain" data-slot-id="decision-plain">席の口座を持つ分け方を「project のかたまり」にします。かたまりの名前・入る project の置き場・候補の口座の並びは、この machine に 1 つだけ在る宣言 file に表 1 つとして書き、読み方も断り方も既に在る読み手をそのまま使います。いまどの口座に居るかは、器が machine の共通の場所に別の記録として書きます（人が書く宣言と、器が書く現状は file も型も分けます）。便に口座を渡すときは、宣言されたどのかたまりの候補口座も外します。移るときは、かたまり単位で 1 回だけ移り先を決め、他のかたまりが使っておらず、便も使っておらず、上限に届いていない候補の先頭へ移ります。候補が 1 つも無い回は移らず user に知らせます。移動は新しい口座で新しい席を立てることで行い、対話の記録は運ばず、続きは器が台帳と git と圧縮直前の 1 枠から組み直します。かたまりの宣言そのものを user の常設の承認とし、移った回ごとに承認の記録を 1 件残します。進め方は 3 段階（宣言と点検の行と便からの除外／上限越えの通知だけ／自動で移る）で、通知と移動のきっかけは別の記録に委ねます。</span>
-<span class="dec-why" data-prose-slot="rationale" data-slot-id="decision-rationale">要求は「複数の project の席を同じ口座に」「かたまりごとに別の口座へ、上限が来たら一斉に」「席の口座は便に使わない」の 3 つで、どれも「口座を持つ分け方」を 1 つ決めれば満たせます。役割はもう 1 つしか無いので分け方として使えず、置き場ごとでは散ってしまうので、かたまりが残ります。移り先を 1 回だけ、かたまり単位で、鍵を掛けた内側で決めれば、同じ口座に席が殺到する事故は構造として起こりません。生きた対話を運ぶ道は、対話の記録の置き場が machine の設定に依っているので器の基準にはできず、圧縮のあとも異常終了のあとも同じ「器が組み直す」道を通せば実装は 1 本で済みます。人が書く宣言と器が書く現状を file も型も分けるのは、宣言をそのまま現状だと思い込まないためで、読む側の無い欄は足しません。</span>
+<p class="dec-state">host の面 SHALL 端末の表を受け、 行は 0 以上、 必須の欄は name (host の面で一意・空白を含まない 1 語)・ssh (ssh の宛先・空白を含まない 1 語)・chrome (端末の上の Chrome の path・空でない)・os (閉じた 3 語 linux / macos / windows)、 任意の欄は display (画面の番号・空でない)・ime-env (KEY=VALUE の文字列の配列・KEY は英大文字と数字と下線で先頭は数字でない・最初の = で割り VALUE は空でない・同じ KEY は重複しない)・profile-dir (端末の上の専用の profile の dir・空でない) とする。 host の面の読み手 SHALL 未知の key・欠けた必須の欄・形に外れる値・name の重複を行番号つきで 1 件ずつ断り、 tracked の manifest に置いた表 SHALL 1 表 1 件で断る。 表の組み立てと検査 SHALL 読み手の兄弟 module<span class="term" data-component="plain-language-term-inline" data-term="読み手の兄弟 module">読み手の隣の file</span> に置き、 読み手の本体の増分は表の登録と呼びだけにする。 doctor SHALL 表を持つ host の host の面の行の末尾に端末の名の列 (宣言順・欄の値は書かない) を出し、 表の無い host の行は変えない。 器 SHALL 端末の値を使わない (ssh と Chrome を撃つ口を足さない)。 既存の表の形と検査・rules 行・init の写し・validate の宣言の数の行は変えない。 要件書は変えない (FR57 の範囲)。</p>
+<span class="dec-plain" data-prose-slot="plain" data-slot-id="decision-plain">host の面は端末の表を受けます。 行は 0 以上で、 必須の欄は名 (host の面で一意・空白の無い 1 語)・ssh の宛先 (空白の無い 1 語)・Chrome の path (空でない)・OS (linux・macos・windows の 3 語) です。 任意の欄は画面の番号 (空でない)・日本語入力の設定 (KEY=VALUE の文字列の列・KEY は英大文字と数字と下線で先頭は数字でない・VALUE は空でない・同じ KEY は重ねない)・専用の保存場所 (空でない) です。 読み手は、 未知の key・欠けた必須の欄・形に外れる値・名の重複を行番号つきで 1 件ずつ断り、 tracked の manifest に置いた表は 1 表 1 件で断ります。 組み立てと検査は読み手の隣の file に置き、 本体には表の登録と呼びだけを足します。 doctor は表を持つ host の host の行の末尾に端末の名の列を出し、 表の無い host の行は変えません。 器は端末の値を使いません。 要件書は変えません。</span>
+<span class="dec-why" data-prose-slot="rationale" data-slot-id="decision-rationale">持ち主の裁定は、 host の面に端末の表を足し、 読み手の閉じた key の列で読み、 doctor に 1 行出す、 の受諾でした。 端末の値は host ごとに違うので、 code に焼かず宣言にします。 host 固有の宣言は host の面 1 file だけが持つ決まりなので、 端末の表もそこに置き、 同じ読み手が同じ断り方で検査します。 今の読み手は未知の表を面ごと断るので、 表を足さないまま人が書き足すと口座や群の宣言まで効かなくなります。 器は値の使い方 (ssh で Chrome を起こす) を持たず、 使い方は消費側の設計に任せます。 doctor に値を出さないのは、 path に空白が入りうることと、 ssh の宛先を出力へ広げないためです。 読み手の本体の file は上限の余地が小さいので、 組み立てと検査は隣の file に置きます。</span>
 <div class="justify-box"><p class="jh">この判断が正当化する要件 (cross-doc 照会 → SRS-SCRIBE2-MVP)</p>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR57" data-justifies-req="FR57" data-justifies-role="claim">FR57</a><span class="justify-role">claim</span><span class="justify-note">群の宣言は host 固有の宣言値の 1 種で、 host の面 1 file だけから、 tracked の面と同じ読み手・同じ拒否の形で読む。 file が無い host は 0 群として続き、 在るのに読めない host は typed に止まる。</span></div>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR36" data-justifies-req="FR36" data-justifies-role="claim">FR36</a><span class="justify-role">claim</span><span class="justify-note">便用の除外に「宣言された群の候補の口座」を置く。 役割が 1 つになった後の「役割の口座 (宣言値)」の単位を群に決めるのが本 ADR で、 便用の並べ順と session 用の規則は変えない。</span></div>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR59" data-justifies-req="FR59" data-justifies-role="rationale">FR59</a><span class="justify-role">rationale</span><span class="justify-note">席の起動が口座を解く順に群の今の口座を置く根拠を与える。 解く順の実装は自動の移動の段の便で、 本 ADR は記録の置き場と型だけを決める。</span></div>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#NFR4" data-justifies-req="NFR4" data-justifies-role="claim">NFR4</a><span class="justify-role">claim</span><span class="justify-note">壊れた群の宣言と読めない記録は黙って既定へ倒さず、 行番号付きで全件名指して typed に止まる。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR57" data-justifies-req="FR57" data-justifies-role="claim">FR57</a><span class="justify-role">claim</span><span class="justify-note">FR57 (host 固有の宣言値は host の面 1 file だけから読み、 tracked の manifest と同じ読み手と同じ断り方で検査する) の宣言値に端末の値を加える。 本 ADR は端末の表を同じ読み手が同じ断り方で読み、 tracked の面では断ると主張する (裁定 2026-09-26T15:16Z)。</span></div>
 <p class="justify-tgt">照会先: SRS-SCRIBE2-MVP — SRS: 設計 → 契約 → 実装 → 検証 → land を、 人の手を借りずに 1 本通す器（MVP）</p>
 </div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-warn"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> 結果 / 良い面とトレードオフ</span><h2>この判断で何が良くなり、 何を引き受けるか</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">この判断で良くなることと、代わりに引き受けることです。複数の project の席が 1 つの口座にまとまって一斉に移れる一方、移るたびに対話の文脈は器が戻せるぶんだけになり、記録の置き場が 1 つ増え、便が使える口座はかたまりの候補のぶんだけ減ります。</p></section>
+<section data-component="chapter-deck-band" class="tint-warn"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> 結果 / 良い面とトレードオフ</span><h2>この判断で何が良くなり、 何を引き受けるか</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">この判断で良くなること 3 つと、 代わりに引き受けること 3 つです。 良くなるのは、 端末の値が宣言になり書き損じが行番号つきで見えること、 端末の表を書き足しても他の宣言が面ごと読めなくならないこと、 器に外部の process を撃つ口が増えず doctor に値が出ないことです。 引き受けるのは、 消費側が値を読む形が決まらないこと、 読み手の本体の file の余地がほぼ無くなること、 表の欄の形が跨版の約束になることです。</p></section>
 <div class="chapbody">
 <div data-component="scope-summary-panel"><div class="scol in"><h3>✓ 良い結果</h3><ul>
-<li data-component="adr-consequence-pos"><span class="b">●</span>複数の置き場の席が 1 つの口座にまとまり、 上限が来た周に群ごと一斉に移れる (要求 2 / 3)</li>
-<li data-component="adr-consequence-pos"><span class="b">●</span>席の口座と便の口座が host 全体で交わらない (要求 4 が 1 つの規則になる)</li>
-<li data-component="adr-consequence-pos"><span class="b">●</span>圧縮・移動・異常終了の 3 つが同じ 1 本の復帰を通る (実装が 1 本で済む)</li>
-<li data-component="adr-consequence-pos"><span class="b">●</span>段ごとに止められ、 最初の段は宣言と点検の行と除外だけで契機を持たない</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>端末の値が host の面の宣言になり、 席が手で持たなくてよい。 書き損じは読み手が行番号つきで名指す</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>端末の表を人が書き足しても、 口座・群・tick の宣言が面ごと読めなくなることが無い</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>器に外部の process を撃つ口は増えず、 doctor の出力に端末の値は出ない</li>
 </ul></div><div class="scol out"><h3>⚖ トレードオフ・代償</h3><ul>
-<li data-component="adr-consequence-neg"><span class="b">●</span>移動のたびに、 対話の文脈は機械が戻せるぶんしか残らない (運ばないと決めた代償)</li>
-<li data-component="adr-consequence-neg"><span class="b">●</span>host の根に実効の記録という置き場が 1 つ増える (宣言と分ける代償・状態の真実は台帳のまま)</li>
-<li data-component="adr-consequence-neg"><span class="b">●</span>便が使える口座が群の候補のぶんだけ減る (口座の総数が少ない host では便が待つ周が増えうる)</li>
-<li data-component="adr-consequence-neg"><span class="b">●</span>要件書の口座選定と席の起動の条文は「役割の口座」の語で書かれているので、 群の語へ改稿するまで要件文と決定の語が食い違う (改稿は spec の編集の口を通る user の手)</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>消費側が値を読む形は決まらず、 消費側の表示面の設計で決める必要が残る</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>読み手の本体の file の余地が 1 行台まで減り、 次に host の面へ表を足す便は兄弟 module への移動が先に要る</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>表の欄の形 (必須と任意・OS の 3 語) は跨版の約束になり、 変えるときは新しい ADR が要る</li>
 </ul></div></div>
 </div>
-<section data-component="chapter-deck-band" class="tint-info"><span class="num">06</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> 改訂関係と原則 / この判断の位置づけ</span><h2>版の系譜と、 行き着く原則 (照会終端)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-06">この記録が版の系譜のどこに在るかと、判断が最後に行き着く原則です。「役割ごとに 1 口座」を決めた記録と「役割ごとの現状の口座」を決めた記録を、分け方ごと置き換えます。便に渡す口座の並べ方を決めた記録は変えません。</p></section>
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">06</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> 改訂関係と原則 / この判断の位置づけ</span><h2>版の系譜と、 行き着く原則 (照会終端)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-06">この記録が版の系譜のどこに在るかと、 判断が最後に行き着く原則です。 この記録は何も置き換えません。 host の面の読み手と断り方 (ADR-0026)・群の表 (ADR-0049)・tick の表 (ADR-0064) はそのまま保ち、 host の面が受ける表を 1 つ足すだけです。 行き着く原則は「器は場所を宣言させ、 そこへ行くのは使う者に任せる」です。</p></section>
 <div class="chapbody">
 <div data-component="adr-supersession">
 <p class="ss-row"><span class="ss-k">改訂状態</span>current</p>
-<p class="ss-row"><span class="ss-k">置き換える ADR</span>ADR-0026, ADR-0036, ADR-0041</p>
+<p class="ss-row"><span class="ss-k">置き換える ADR</span>なし (新規)</p>
 <p class="ss-row"><span class="ss-k">置き換えられた</span>なし (現行)</p>
-<p class="ss-row">ADR-0036 は全部 (宣言の単位・宣言 file の置き場と形・席の起動が宣言を先に読む順・便用の除外・宣言の書き換えの口・点検の行) を本 ADR が置き換える。 別の宣言 file は作らず、 宣言は host の面の表 1 つになり、 単位は役割でなく群になる。 ADR-0041 は単位 (役割 → 群)・記録の置き場と形・選び直しの除外・便用の除外・相談席の写し (相談席は ADR-0045 で削除済み) を置き換え、 管理 tick の軸は ADR-0045 §2 (2) で削除済みである。 ADR-0041 のうち席の起動で閾値未満の候補が無い周の扱い (妥協の起動) は本 ADR では決め直さず据え置く — 本 ADR が作らないと決めるのは群の移動の妥協である。 ADR-0026 は §2.1 の host の面の表の集合に群の表を足す部分と、 §2.3 の席の起動が口座を解く順に群の今の口座を差し込む部分だけを置き換え、 host の面の置き場・読み手・拒否の形・口座の登録と退役と一覧の口は変えない。 ADR-0027 と ADR-0042 (便用の並べ順・1 口座あたりの上限を置かないこと) は不変で、 本 ADR が替えるのは候補の集合だけである。 ADR-0021 §2.3 の host 用 dir の導き方と ADR-0045 (役割は 1 つ・管理 tick の削除) は不変である。</p>
+<p class="ss-row">supersede は無い。 ADR-0026 の host の面の読み手と断り方、 ADR-0049 の群の表、 ADR-0064 の tick の表はそのまま保ち、 host の面が受ける表を 1 つ足すだけである。</p>
 </div>
 <div data-component="adr-principle">
-<p class="prin-id">照会終端 — PRIN-CONTEXT-IS-REBUILT-NOT-CARRIED</p>
-<p class="prin-text">席の続きは運ぶものではなく、 測り直して入れ直すものである。 運ばなければ保てない続きは、 そもそも席が持ってはいけない。</p>
-<p class="prin-note">本 ADR の「移動 = 新しい席 + 機械の復帰」はこの原則に行き着く (これ以上は遡らない照会終端)。</p>
+<p class="prin-id">照会終端 — PRIN-DECLARE-DO-NOT-DRIVE</p>
+<p class="prin-text">器は場所を宣言させ、 そこへ行くのは使う者に任せる。</p>
+<p class="prin-note">本 ADR が「消費側の repo に持つ」「器の外の file」「器が Chrome を起こす口」を退け、 端末の値を host の面の宣言と検査だけにしたのはこの原則に行き着く (これ以上は遡らない照会終端)。</p>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-brand"><span class="num">07</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg> 用語集 / この文書で使う専門語</span><h2>本文に出てくる専門語のやさしい説明</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-07">本文に出てくる専門語を、やさしい言葉で説明します。</p></section>
+<section data-component="chapter-deck-band" class="tint-brand"><span class="num">07</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg> 用語集 / この文書で使う専門語</span><h2>本文に出てくる専門語のやさしい説明</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-07">本文に出てくる専門語 6 個を、 やさしい言葉で説明します。</p></section>
 <div class="chapbody">
 <div data-component="glossary-term-table">
-<div class="grow"><div class="gword">project の群<span class="en">project group</span></div><div class="gdef">席の口座を持つ単位。 名・置き場の列・候補の口座 label の順の列を host の面が宣言し、 群の中の席はどの置き場からでも同じ口座に居る。 置き場が project ごとに分かれていても同じ群に入れられる。</div></div>
-<div class="grow"><div class="gword">群の今の口座<span class="en">group effective account</span></div><div class="gdef">器が host の根に書く実効値 (群ごとに高々 1 件)。 宣言の候補の列 (宣言値) とは file も型も別で、 記録が無い周は候補の先頭が種になる (憲法 C10)。</div></div>
-<div class="grow"><div class="gword">便用の除外<span class="en">run-purpose exclusion</span></div><div class="gdef">便用の口座選定の候補から、 便の置き場の席の登録 row が持つ口座と、 宣言されたすべての群の候補の口座を外すこと。 次の選定から効き、 走行中の便は止めない。</div></div>
-<div class="grow"><div class="gword">常設の承認<span class="en">standing approval</span></div><div class="gdef">憲法 A1 の「使う」に当たる操作のうち、 宣言そのものを user の承認と見なし、 以後の 1 回ごとは承認の event を記すだけで足りるとする形。</div></div>
-<div class="grow"><div class="gword">機械の復帰<span class="en">mechanical resumption</span></div><div class="gdef">席を起こし直した周に、 台帳の行と git の現在地と圧縮の直前の 1 枠だけから直前の流れを組んで session の開始で出す道。 対話の記録は運ばない。</div></div>
+<div class="grow"><div class="gword">host の面<span class="en">host face</span></div><div class="gdef">state dir の host.toml。 host 固有の宣言値 (口座・plugin の場所・起動引数・群・tick の unit・本 ADR の端末) を持ち、 tracked の manifest と同じ読み手で検査される (ADR-0026・FR57)。</div></div>
+<div class="grow"><div class="gword">端末の表<span class="en">device table</span></div><div class="gdef">host の面の表で、 端末 1 つにつき 1 行。 名・ssh の宛先・Chrome の path・OS が必須、 画面の番号・IME の env・専用の profile の dir が任意。 本 ADR で足す。</div></div>
+<div class="grow"><div class="gword">専用の profile<span class="en">dedicated profile</span></div><div class="gdef">Chrome の設定と履歴の置き場を端末の既定と分けた dir。 既存の process と同じ profile では窓を開いても env が効かないので、 表示面の窓はこれで起こす。</div></div>
+<div class="grow"><div class="gword">IME の env<span class="en">IME env</span></div><div class="gdef">日本語入力を Chrome の窓で効かせるための環境変数の組 (例: 入力方式の module の名)。 端末の表では KEY=VALUE の文字列の列で書く。</div></div>
+<div class="grow"><div class="gword">CDP<span class="en">Chrome DevTools Protocol</span></div><div class="gdef">Chrome を外から操作し、 画面や DOM を取る口。 消費側の席が表示面の窓を操作するのに使う。 器は使わない。</div></div>
+<div class="grow"><div class="gword">読み手の兄弟 module<span class="en">sibling module</span></div><div class="gdef">host の面の読み手の本体と同じ dir に置く別の file。 本体の file の行数の上限を守るため、 表の組み立てと検査をここに置く (群の名の検査が先例)。</div></div>
 </div>
 </div>
 </div>
 <footer class="foot" data-component="fidelity-sync-meta"><div class="ft-grid">
 <div class="ft-plain">このページは、大もとの機械データ (正本) から自動で組み立てられています。構造は機械が自動で検査し、内容が元データに忠実かは独立のレビューで確かめます。</div>
-<div data-audience="machine">機械SSoT: <b>ADR-0049.adr.yaml</b> &middot; 生成: <b>2026-09-20 06:37</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
+<div data-audience="machine">機械SSoT: <b>ADR-0076-the-host-face-declares-devices-for-consumers.adr.yaml</b> &middot; 生成: <b>2026-09-26 16:36</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
 <div class="tags" data-audience="machine"><span>folio design system</span><span>ADR-pack</span><span>folio engine B1 (instance#2)</span><span>cross-doc 照会</span></div>
 </div></footer>
 <!-- folio:chrome-bottom -->
 <nav class="prevnext" aria-label="前後の文書">
-  <a class="prevnext__prev" href="ADR-0048-stopping-a-run-is-a-separate-capability-of-the-orchestrator.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">便を止める権能は起動の権能から分かれ、 orchestrator の席が持つ: pipe stop を launch から外して新しい権能 stop に結び、 rules 行 role.orchestrator に stop を足す (席が撃てるのは --run で便 1 本を名指す形だけ・--all は launch のままでどの席からも撃てない・起動 / 再開 / 受付 / 退役は launch のまま dispatcher の口・止めた便は Stopped で列外に入り契約の字か release の印で列に戻る・SRS FR30 / FR41 の字は変えない)</span></a>
-  <a class="prevnext__next" href="ADR-0050-cores-and-scope-creation-are-hard-resources.html"><span class="prevnext__dir">次 &rarr;</span><span class="prevnext__title">core と器が host に頼む scope の作成も硬い資源で、 受付の枠は memory の 2 項と core の 1 項の min・行を撃つ前に器の健康を読んで混んだ周は待ち、 待てなかった周は FAIL でなく INCONCLUSIVE で終える (ADR-0021 §2.1 / §2.2 / §2.3 / §2.7 を部分 supersede・scope の作成の面は歯の道具箱が持ち本 ADR は機構を足さない)</span></a>
+  <a class="prevnext__prev" href="ADR-0075-group-pressure-counts-only-the-role-model-window.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">逼迫の門のモデル別窓は役割の model の窓だけを数える — 5 時間窓と 7 日窓は今のまま全部、 モデル別 7 日窓は群の席の役割の model の行だけで逼迫を判じる (ADR-0055 と ADR-0069 の窓の読みを部分 supersede)</span></a>
 </nav>
 <script>
 (function () {

@@ -180,10 +180,15 @@ terms:
     relationships: [fleet, doctor, 口座の登録]
   - canonical: host の manifest
     domain: consumer
-    definition: manifest の host の面。 state dir の 1 file (host.toml) が host 固有の宣言値 (口座 label・席に積む plugin dir・起動引数) を持ち、 tracked の面と同じ loader が読む。 ADR-0064 (proposed) の後は tick の宣言の表 [[tick]] も持つ。 rules 行は置けない (C10.2 の読み・ADR-0026 §2.1)。
+    definition: manifest の host の面。 state dir の 1 file (host.toml) が host 固有の宣言値 (口座 label・席に積む plugin dir・起動引数) を持ち、 tracked の面と同じ loader が読む。 ADR-0064 (proposed) の後は tick の宣言の表 [[tick]] も持つ。 ADR-0076 の後は端末の表 [[device]] も持つ。 rules 行は置けない (C10.2 の読み・ADR-0026 §2.1)。
     forbidden: [私用 manifest, overlay]
-    relationships: [manifest, state dir, 口座]
+    relationships: [manifest, state dir, 口座, 端末の表]
     flagged_ambiguities: [SRS の用語集では表示名を「host の面」とする (生成器は manifest を部分文字列に持つ用語を term-inline の曖昧化として拒む)。 同一 entity で正本は本 entry]
+  - canonical: 端末の表
+    domain: consumer
+    aliases: [device table, "[[device]]"]
+    definition: host の manifest の表で、 持ち主の端末 1 つにつき 1 行 (ADR-0076)。 必須の欄は name (host の面で一意)・ssh (ssh の宛先)・chrome (端末の上の Chrome の path)・os (linux / macos / windows)、 任意の欄は display・ime-env (KEY=VALUE の列)・profile-dir (専用の profile の dir)。 host の面にだけ置け、 読み手が形を行番号つきで検査し、 doctor は host の行に名の列だけを出す。 器は値を使わない (消費側の表示面が使う)。
+    relationships: [host の manifest, doctor, state dir]
   - canonical: 口座の登録
     domain: consumer
     definition: 器の subcommand account add が口座の設定 dir・席の前提の設定・host の manifest の宣言を揃え、 login 用の起動 command を user へ渡すこと (ADR-0026 §2.2)。 login は user の手番で、 器は credential に触れない。 trust の印は ADR-0065 (proposed) の後は席の起動が置く (account add は書かない)。
