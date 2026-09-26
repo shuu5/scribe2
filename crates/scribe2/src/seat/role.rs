@@ -519,15 +519,15 @@ mod tests {
         assert_eq!(defaults_of(&only_model, role), Err(RuleRead::Missing), "effort の行が無い");
     }
 
-    /// 歯 (c): 埋め込みの薄い口は tracked の行（`fable` / `high`・裁定 `user 2026-09-17T04:23Z`）を返し、
+    /// 歯 (c): 埋め込みの薄い口は tracked の行（`opus` / `xhigh`・裁定 `user 2026-09-26T15:41Z`・§28）を返し、
     /// 閉じた列のどの役割でも読める（行が 1 本でも欠ければここが落ちる）。
     #[test]
     fn seat_role_defaults_reads_every_role_from_the_embedded_manifest() {
         for role in ALL.iter().copied() {
             assert_eq!(
                 defaults(role),
-                Ok(RoleDefaults { model: Model::Fable, effort: Effort::High }),
-                "{role:?} の既定は裁定 user 2026-09-17T04:23Z の対"
+                Ok(RoleDefaults { model: Model::Opus, effort: Effort::Xhigh }),
+                "{role:?} の既定は裁定 user 2026-09-26T15:41Z の対"
             );
         }
     }

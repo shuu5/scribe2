@@ -2,7 +2,7 @@
 source: crates/scribe2/tests/e2e/seat.rs
 expression: form
 ---
-seat: role=orchestrator anchor=/repo target=rolesdoc:rolesdoc account=acct-1 model=Fable default=no-rule:missing paths=default heartbeat=on tick=no-rule:missing
+seat: role=orchestrator anchor=/repo target=rolesdoc:rolesdoc account=acct-1 model=Opus default=no-rule:missing paths=default heartbeat=on tick=no-rule:missing
 seats: registered=1 live=unmeasurable missing=unmeasurable
 host-manifest=absent
 consumer=/repo source=launch scope=- binary=unrecorded plugin=unrecorded ledger=- cache=absent head=undeclared behind=- drift=unrecorded
