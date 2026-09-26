@@ -336,7 +336,7 @@ pub const TABLE: &[Entry] = &[
             "installs its timer, and retires seats. 'seat <label>' starts a session under that",
             "account in the current terminal.",
         ],
-        form: "seat <register --state-dir S --target T --role R --account L --launch FILE [--anchor DIR]|launch --state-dir S --role R --target S:W [--account L] [--anchor DIR] [--model M] [--restore CMD]|ruling add --state-dir S --target T --words W [--bead B] [--rule ID]|ruling ls --state-dir S|tick --state-dir S --target S:W [--rules F]|tick install --state-dir S --target S:W --unit-dir U --binary PATH [--rules F]|tick uninstall --state-dir S --target S:W --unit-dir U --binary PATH [--rules F]|retire --state-dir S --target S:W [--reason WORDS]|<label> [--orchestrator] [-c|-r ID] [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]",
+        form: "seat <register --state-dir S --target T --role R --account L --launch FILE [--anchor DIR]|launch --state-dir S --role R --target S:W [--account L] [--anchor DIR] [--model M] [--restore CMD]|ruling add --state-dir S --target T --words W [--bead B] [--rule ID]|ruling ls --state-dir S|tick --state-dir S --target S:W [--rules F]|tick install --state-dir S --target S:W --unit-dir U --binary PATH [--rules F]|tick uninstall --state-dir S --target S:W --unit-dir U --binary PATH [--rules F]|retire --state-dir S --target S:W [--reason WORDS]|heartbeat off --state-dir S --target S:W|heartbeat on --state-dir S --target S:W|heartbeat status --state-dir S --target S:W|<label> [--orchestrator] [-c|-r ID] [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]",
         subcommands: &[
             ("register", "Record a seat row: target, role, account and launch file."),
             ("launch", "Open a tmux window and start a seat with its role."),
@@ -346,6 +346,9 @@ pub const TABLE: &[Entry] = &[
             ("tick install", "Install the timer unit that runs the tick."),
             ("tick uninstall", "Remove the timer unit of the tick."),
             ("retire", "Retire the registered row of a seat."),
+            ("heartbeat off", "Stop the tick's heartbeat signal to one seat (the tick keeps running)."),
+            ("heartbeat on", "Resume the tick's heartbeat signal to one seat."),
+            ("heartbeat status", "Print whether the heartbeat signal of one seat is on or off."),
             ("<label>", "Start a session under account <label> (-c continues, -r ID resumes)."),
         ],
         flags: &[

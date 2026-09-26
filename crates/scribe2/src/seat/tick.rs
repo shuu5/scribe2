@@ -31,6 +31,10 @@
 //! （`<群>.judged`）が `fleet.usage_fresh_s` より古い（か無い）周だけ、群の段と同じ lock の内側で判定の 1 本
 //! （[`crate::hook::group::judge`]）を撃って打刻を書く（[`judged`]）。判定の側は他の席に触らず、候補なしで断りの event を記した周
 //! だけ断りの 1 行を自席へ送る。判定行の末尾は `judged=<moved:<label>|stay|none|error:<語>|->`。
+//!
+//! 合図は席ごとに止められる（設計 §12・契約表の行 o・ADR-0070）: 席の置き場の直下の停止の記録（[`HEARTBEAT_OFF_FILE`]・書き手は
+//! [`heartbeat`] の口 1 本）が在る周は `back` の頭（黙りの門の前）で `heartbeat-off` の noop に止まり、梯子の記録を読まず書かない。
+//! 起こし直し（[`awake`]）・退避（[`moving`]）・群の判定（[`judged`]）は記録を読まず、off の席でも撃つ。
 
 pub mod install;
 
@@ -39,7 +43,7 @@ use super::inject::{self, deliver_or_confirm, deliver_within, last_own_payload, 
 use super::role::Role;
 use super::state::{self, Event, SeatState, Stamp};
 use super::{host_groups_dir, pane_is_shell, pane_of, sanitize_target, seat_dir, state_dir_of, StateDir, REASON_TMUX_FAILED};
-use crate::cli_outcome::{Outcome, RC_OK, RC_REFUSED};
+use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
 use crate::fleet::json_lite::{self, Value};
 use crate::fleet::usage::{self, fresh_rows};
 use crate::fleet::State;
@@ -63,6 +67,8 @@ const ROW_WINDOW: &str = "pipe.stop_grace_ms";
 
 /// 梯子の記録の file 名（席の置き場の直下）。
 pub const LADDER_FILE: &str = "pointer-ladder";
+/// 停止の記録の file 名（席の置き場の直下・1 行 `ts=<UTC 秒>`・書き手は [`heartbeat`] の口 1 本・設計 §12 形 1）。
+pub const HEARTBEAT_OFF_FILE: &str = "heartbeat-off";
 /// 梯子の記録の schema 版。
 const LADDER_SCHEMA: u64 = 1;
 /// 評価していない欄の字面（0 に化けない・C10）。
@@ -113,6 +119,8 @@ pub enum NoopReason {
     GroupUnreadable,
     /// 群の段の lock を取れない（1 key も送らない＝同じ target を二重に撃たない）。
     GroupLocked,
+    /// 停止の記録が在る（在るのに読めない周も・合図だけを止める・設計 §12 形 3・ADR-0070）。
+    HeartbeatOff,
 }
 
 /// [`NoopReason`] の全部（宣言順・歯の母集団）。
@@ -135,6 +143,7 @@ pub const NOOP_REASONS: &[NoopReason] = &[
     NoopReason::RecordUnwritable,
     NoopReason::GroupUnreadable,
     NoopReason::GroupLocked,
+    NoopReason::HeartbeatOff,
 ];
 
 impl NoopReason {
@@ -159,6 +168,7 @@ impl NoopReason {
             Self::RecordUnwritable => "record-unwritable",
             Self::GroupUnreadable => "group-unreadable",
             Self::GroupLocked => "group-locked",
+            Self::HeartbeatOff => "heartbeat-off",
         }
     }
 }
@@ -650,6 +660,8 @@ struct Front {
     pointer: Pointer,
     /// 判定の時刻（UTC 秒）。
     now: u64,
+    /// 停止の記録が在る（梯子の記録を読まない周・`back` の頭で止まる）。
+    off: bool,
 }
 
 /// 形 1 の 1〜3（登録 row → 窓が shell か〔§7 形 1〕→ 移動の周か〔§10 形 8〕→ 状態の打刻 → digest の比較）。窓が shell の周は
@@ -672,14 +684,15 @@ fn front(input: &Input) -> Result<Front, Verdict> {
     }
     let stamps = stamps_of(&seat, rows.pace.stale_s, now, || input_gate(input).is_ok()).map_err(Verdict::noop)?;
     let digest = stamps.last().map_or(0, |stamp| stamp.ts);
-    let record = read_ladder(&seat).map_err(Verdict::noop)?;
+    let off = heartbeat_off(&seat);
+    let record = if off { None } else { read_ladder(&seat).map_err(Verdict::noop)? };
     let record = match record {
         Some(found) => Some(settled(&seat, found, &stamps, digest, (now, rows.pace.stale_s))?),
         None => None,
     };
     let step = candidate(record.as_ref(), digest);
     let pointer = pointer_of(&rows.pace, record.map(|found| found.sent_at), step, now);
-    Ok(Front { rows, fleet, account, anchor, seat, digest, step, pointer, now })
+    Ok(Front { rows, fleet, account, anchor, seat, digest, step, pointer, now, off })
 }
 
 /// 窓が shell の周（設計 §7 形 1〜3）: 打刻と梯子を読まず、同じ target に席を起こす（[`wake`]）。口座は anchor が群に属せば群の
@@ -788,8 +801,11 @@ fn evacuate(input: &Input, window_ms: u64) -> Verdict {
     }
 }
 
-/// 形 1 の 4〜10（黙りの門 → 上限 → 床 → 口座の門 → 入力欄の門 → 記録 → 注入）。
+/// 形 1 の 4〜10（停止の記録の門〔§12 形 3〕→ 黙りの門 → 上限 → 床 → 口座の門 → 入力欄の門 → 記録 → 注入）。
 fn back(input: &Input, front: &Front) -> Result<Verdict, Verdict> {
+    if front.off {
+        return Err(Verdict::noop(NoopReason::HeartbeatOff));
+    }
     let at = |reason| Verdict::noop_at(reason, front.pointer, front.step);
     if !aged(front.digest, front.now, front.rows.pace.stale_s) {
         return Err(at(NoopReason::StampRecent));
@@ -864,6 +880,97 @@ fn write_ladder(seat: &Path, record: &Ladder) -> std::io::Result<()> {
     let temporary = seat.join(format!("{LADDER_FILE}.tmp"));
     fs::write(&temporary, format!("{}\n", record.to_line()))?;
     fs::rename(&temporary, &path)
+}
+
+/// `seat heartbeat` の後ろの語（**閉じた 3 値**・設計 §12 形 2・positional）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Switch {
+    /// 停止の記録を置く（既に在れば触らない）。
+    Off,
+    /// 停止の記録を消す（無ければ何もしない）。
+    On,
+    /// 停止の記録の有無を 1 行で出す。
+    Status,
+}
+
+/// [`Switch`] の全部（宣言順）。
+pub const SWITCHES: &[Switch] = &[Switch::Off, Switch::On, Switch::Status];
+
+impl Switch {
+    /// 引数の字面。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::On => "on",
+            Self::Status => "status",
+        }
+    }
+
+    /// 字面から読む（3 語でなければ `None`）。
+    pub fn parse(token: &str) -> Option<Self> {
+        SWITCHES.iter().copied().find(|switch| switch.as_str() == token)
+    }
+}
+
+/// 停止の記録の path。
+pub fn heartbeat_off_path(seat: &Path) -> PathBuf {
+    seat.join(HEARTBEAT_OFF_FILE)
+}
+
+/// 停止の記録が在るか。無い周だけ偽で、在るのに読めない周（dir・読めない）も真（合図は正の証拠でだけ送る）。
+fn heartbeat_off(seat: &Path) -> bool {
+    !matches!(fs::symlink_metadata(heartbeat_off_path(seat)), Err(err) if err.kind() == std::io::ErrorKind::NotFound)
+}
+
+/// `seat heartbeat off|on|status`（設計 §12 形 2）: 登録 row の無い target は `no-row`（rc 1・席の置き場を作らない＝FR40）。off は
+/// 停止の記録を置き（一時 file → rename・既に在れば ts を書き換えない）、on は消し（無ければ何もしない）、status は有無を 1 行で
+/// 出す（`last=` 以下は行 p の打刻・今は `-`）。event log には書かない。
+pub fn heartbeat(switch: Switch, state_dir: &str, target: &str) -> Outcome {
+    let head = format!("seat heartbeat {}:", switch.as_str());
+    let refused = |rc, reason: &str| Outcome::failed_line(rc, format!("{head} refused reason={reason} target={target}"));
+    let Some(state) = state_dir_of(Some(state_dir)) else {
+        return refused(RC_REFUSED, TickError::StateDir.as_str());
+    };
+    let Ok(events) = crate::fleet::store::read_all(&state.path) else {
+        return refused(RC_BROKEN, TickError::Store.as_str());
+    };
+    if super::role::registration_of_target(&crate::fleet::replay(&events), target).is_none() {
+        return refused(RC_REFUSED, NoopReason::NoRow.as_str());
+    }
+    let seat = seat_dir(&state.path, target);
+    let written = match switch {
+        Switch::Off => switch_off(&seat),
+        Switch::On => switch_on(&seat),
+        Switch::Status => Ok(()),
+    };
+    if written.is_err() {
+        return refused(RC_BROKEN, NoopReason::RecordUnwritable.as_str());
+    }
+    let word = if heartbeat_off(&seat) { Switch::Off } else { Switch::On }.as_str();
+    let tail = match switch {
+        Switch::Status => format!(" last={DASH} decision={DASH} reason={DASH}"),
+        Switch::Off | Switch::On => String::new(),
+    };
+    Outcome::ok_line(format!("{head} target={target} heartbeat={word}{tail}"))
+}
+
+/// 停止の記録を置く（既に在る周は触らない・席の置き場は登録 row の在る席にだけ作る・一時 file → rename）。
+fn switch_off(seat: &Path) -> std::io::Result<()> {
+    if heartbeat_off(seat) {
+        return Ok(());
+    }
+    fs::create_dir_all(seat)?;
+    let temporary = seat.join(format!("{HEARTBEAT_OFF_FILE}.tmp"));
+    fs::write(&temporary, format!("ts={}\n", state::now_secs()))?;
+    fs::rename(&temporary, heartbeat_off_path(seat))
+}
+
+/// 停止の記録を消す（無い周は何もしない）。
+fn switch_on(seat: &Path) -> std::io::Result<()> {
+    match fs::remove_file(heartbeat_off_path(seat)) {
+        Err(err) if err.kind() != std::io::ErrorKind::NotFound => Err(err),
+        _ => Ok(()),
+    }
 }
 
 /// 基準の無い記録に settle を試み、確定した基準を書いた記録を返す（基準の在る記録はそのまま）。確定できない周は
@@ -1015,14 +1122,14 @@ mod tests {
     #[test]
     fn seat_tick_reasons_are_unique_in_declaration_order() {
         assert!(is_declaration_order(NOOP_REASONS, |reason| reason as usize), "NOOP_REASONS は宣言順");
-        assert_eq!(NOOP_REASONS.len(), 18, "母集団");
+        assert_eq!(NOOP_REASONS.len(), 19, "母集団");
         let words: Vec<&str> = NOOP_REASONS.iter().map(|reason| reason.as_str()).collect();
         assert_eq!(
             words,
             [
                 "no-row", "state-missing", "state-unreadable", "busy", "state-stale", "settling", "record-unreadable",
                 "stamp-recent", "stopped", "wait", "account-pressed", "pane-missing", "input-busy", "input-unknown",
-                "input-own-queued", "record-unwritable", "group-unreadable", "group-locked",
+                "input-own-queued", "record-unwritable", "group-unreadable", "group-locked", "heartbeat-off",
             ]
         );
         assert!(is_declaration_order(TICK_ERRORS, |error| error as usize), "TICK_ERRORS は宣言順");
@@ -1031,7 +1138,7 @@ mod tests {
         let mut all: Vec<&str> = words.iter().chain(errors.iter()).copied().collect();
         all.sort_unstable();
         all.dedup();
-        assert_eq!(all.len(), 21, "noop と error の語は重ならない");
+        assert_eq!(all.len(), 22, "noop と error の語は重ならない");
     }
 
     /// 判定行: 梯子の手前は `pointer=- step=-`・梯子の後は評価と段・注入した周だけ `consumed=`（届かない周は unknown:理由）。
@@ -1065,17 +1172,18 @@ mod tests {
         assert!(render("s:w", &sent(Sent::Unconfirmed("absent"))).ends_with(" consumed=unknown:absent move=- launched=-"));
     }
 
-    /// 移動の門の 2 値は `NoopReason` の宣言順の末尾に在り、既存の 16 値の語と重ならない（母集団は 16 → 18）。
+    /// 移動の門の 2 値と停止の記録の門の 1 値（設計 §12 形 3）は `NoopReason` の宣言順の末尾に在り、既存の 16 値の語と重ならない
+    /// （母集団は 16 → 18 → 19）。
     #[test]
-    fn seat_tick_move_reasons_are_the_last_two_in_declaration_order() {
+    fn seat_tick_tail_reasons_are_the_last_three_in_declaration_order() {
         assert!(is_declaration_order(NOOP_REASONS, |reason| reason as usize), "NOOP_REASONS は宣言順");
-        let tail: Vec<&str> = NOOP_REASONS.iter().rev().take(2).map(|reason| reason.as_str()).collect();
-        assert_eq!(tail, ["group-locked", "group-unreadable"], "末尾の 2 値（逆順）");
+        let tail: Vec<&str> = NOOP_REASONS.iter().rev().take(3).map(|reason| reason.as_str()).collect();
+        assert_eq!(tail, ["heartbeat-off", "group-locked", "group-unreadable"], "末尾の 3 値（逆順）");
         let mut words: Vec<&str> = NOOP_REASONS.iter().map(|reason| reason.as_str()).collect();
         let before = words.len();
         words.sort_unstable();
         words.dedup();
-        assert_eq!((before, words.len()), (18, 18), "18 値で重複しない");
+        assert_eq!((before, words.len()), (19, 19), "19 値で重複しない");
         let moves: Vec<&str> = [Move::Launch, Move::Exit, Move::Enter].iter().map(|found| found.as_str()).collect();
         assert_eq!(moves, ["launch", "exit", "enter"], "手の語");
     }

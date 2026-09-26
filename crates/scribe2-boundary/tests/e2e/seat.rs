@@ -250,17 +250,21 @@ fn assert_tick_mouth(state: &str, usage: &str) {
 
 /// 席の自律機能の口のうち、作り直しの cycle・打刻の heartbeat・context の計測 meter は**もう無い**（ADR-0045 §2 (2)・
 /// `s2-07l.479.1`）: 口を持たない第 1 token として断られ（[`assert_gone_mouth`]）、使い方の 1 行にもその名が出ない。
-/// 管理 tick は backoff つきで**戻った**（ADR-0058・`s2-07l.582`）＝在る側（[`assert_tick_mouth`]）。残る口（register /
-/// launch）は従来どおり使い方に在る。
+/// 管理 tick は backoff つきで**戻った**（ADR-0058・`s2-07l.582`）＝在る側（[`assert_tick_mouth`]）。`heartbeat` の語は打刻の口
+/// としては戻らず、席ごとの合図の停止の記録の口（`off` / `on` / `status` の 3 語・ADR-0070・`s2-07l.646`）として使い方に在る。
+/// 残る口（register / launch）は従来どおり使い方に在る。
 ///
 /// **消えたことと戻ったことを測る歯**である（base では tick が消えた口として断られるので RED）。
 #[test]
 fn seat_autonomy_subcommands_are_gone_from_the_usage() {
     let (dir, state) = gone_mouth_place();
     let usage = stderr_of(&run_seat(&[]));
-    for gone in ["meter", "heartbeat", "cycle"] {
+    for gone in ["meter", "cycle"] {
         assert_gone_mouth(&state, gone, &[]);
         assert!(!usage.contains(&format!("|{gone} ")), "{gone} は使い方に出ない: {usage}");
+    }
+    for switch in ["off", "on", "status"] {
+        assert!(usage.contains(&format!("|heartbeat {switch} --state-dir S --target S:W|")), "heartbeat {switch} は停止の記録の口: {usage}");
     }
     assert_tick_mouth(&state, &usage);
     for kept in ["register", "launch", "tick"] {
@@ -378,10 +382,10 @@ fn seat_args_unknown_flag_is_refused_with_rc_2_on_every_verb() {
 #[test]
 fn seat_command_all_known_verbs_round_trip_and_unknown_tokens_are_none() {
     use vessel::seat::cli::{SeatCommand, SEAT_COMMANDS};
-    assert_eq!(vessel::seat::cli::SEAT_COMMANDS.len(), 5, "記録時点の既知の verb（`.582` で +1〔管理 tick〕・`.620` で +1〔登録 row の退役〕）: {SEAT_COMMANDS:?}");
+    assert_eq!(vessel::seat::cli::SEAT_COMMANDS.len(), 6, "記録時点の既知の verb（`.582` で +1〔管理 tick〕・`.620` で +1〔登録 row の退役〕・`.646` で +1〔合図の停止の記録〕）: {SEAT_COMMANDS:?}");
     assert!(vessel::order::is_declaration_order(SEAT_COMMANDS, |command| command as usize), "宣言順: {SEAT_COMMANDS:?}");
     let words: Vec<&str> = SEAT_COMMANDS.iter().map(|command| command.as_str()).collect();
-    assert_eq!(words, ["register", "launch", "ruling", "tick", "retire"], "字面の閉じた列（宣言順）");
+    assert_eq!(words, ["register", "launch", "ruling", "tick", "retire", "heartbeat"], "字面の閉じた列（宣言順）");
     let usage = vessel::seat::cli::usage();
     for command in SEAT_COMMANDS {
         assert_eq!(SeatCommand::parse(command.as_str()), Some(*command), "as_str ↔ parse の往復: {command:?}");
@@ -2489,6 +2493,175 @@ fn seat_tick_evacuate_sends_the_exit_every_round() {
     evacuate_assert_exit(&place);
     let exits = move_keys(&place).iter().filter(|key| key.ends_with(" -l /exit")).count();
     assert_eq!((exits, move_injections(&place).len()), (2, 2), "/exit 2 行・記録 2 行");
+}
+
+// ───────── 合図を席ごとに止める（seat-heartbeat.md §12・契約表の行 o・`s2-07l.646`・接頭辞 `seat_heartbeat_`） ─────────
+//
+// §2 の tick の fixture（[`tick_place`] / [`tick_run`]）と §4 / §7 / §9 の移動・起こし・判定の fixture をそのまま使い、停止の記録を
+// `seat heartbeat off|on` の口で置き消す。字面は契約から組む（実装の helper を使わない）。
+
+/// 停止の記録の path（席の置き場の直下の `heartbeat-off`・契約の字面から組む）。
+fn heartbeat_record(state: &Path) -> PathBuf {
+    seat_dir_of(state, TICK_SEAT).join("heartbeat-off")
+}
+
+/// `seat heartbeat <switch>` を置き場 `state` の [`TICK_TARGET`] へ 1 回撃つ。
+fn heartbeat_run(state: &Path, switch: &str) -> Output {
+    let path = state.display().to_string();
+    run_seat(&["heartbeat", switch, "--state-dir", &path, "--target", TICK_TARGET])
+}
+
+/// 撃って rc 0・stdout が `want`・stderr 0 byte を測る。
+fn heartbeat_assert(state: &Path, switch: &str, want: &str) {
+    let out = heartbeat_run(state, switch);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "heartbeat {switch}: rc 0: {}", stderr_of(&out));
+    assert_eq!(stdout_of(&out), want, "heartbeat {switch}: 1 行");
+    assert!(stderr_of(&out).is_empty(), "heartbeat {switch}: stderr 0 byte");
+}
+
+/// off / on の 1 行（契約の字面）。
+fn heartbeat_line(switch: &str, word: &str) -> String {
+    format!("seat heartbeat {switch}: target={TICK_TARGET} heartbeat={word}\n")
+}
+
+/// status の 1 行（行 p の前は `last=` 以下の 3 欄が `-`・契約の字面）。
+fn heartbeat_status(word: &str) -> String {
+    format!("seat heartbeat status: target={TICK_TARGET} heartbeat={word} last=- decision=- reason=-\n")
+}
+
+/// (a) off が停止の記録（1 行 `ts=<UTC 秒>`）を置き、黙った席への tick は `noop heartbeat-off pointer=- step=-`・0 key・梯子の記録 0。
+/// 基準の無い梯子の記録が在る席でも記録は 1 byte も動かない（読まず書かない）（base では verb が無く、tick は注入 ＝ RED）。
+#[test]
+fn seat_heartbeat_off_silences_the_signal_to_a_silent_seat() {
+    let place = tick_place(true);
+    tick_silent_for(&place, TICK_STALE + 60);
+    let before = unix_now();
+    heartbeat_assert(&place.state, "off", &heartbeat_line("off", "off"));
+    let after = unix_now();
+    let record = fs::read_to_string(heartbeat_record(&place.state)).unwrap_or_default();
+    let ts = record.strip_prefix("ts=").and_then(|rest| rest.strip_suffix('\n')).and_then(|secs| secs.parse::<u64>().ok());
+    assert!(ts.is_some_and(|secs| (before..=after).contains(&secs)), "1 行 ts=<置いた時刻>: {record:?}");
+    tick_assert_quiet(&place, &tick_noop("heartbeat-off", "-", "-"));
+    assert!(tick_keys(&place).is_empty(), "0 key");
+    assert!(!tick_ladder_path(&place).exists(), "梯子の記録 0");
+    tick_ladder_put(&place, unix_now() - TICK_STALE - 120, 0, None);
+    let ladder = fs::read(tick_ladder_path(&place)).unwrap_or_default();
+    tick_assert_quiet(&place, &tick_noop("heartbeat-off", "-", "-"));
+    assert_eq!(fs::read(tick_ladder_path(&place)).unwrap_or_default(), ladder, "settle も書かない（記録は 1 byte も動かない）");
+}
+
+/// (b) on が停止の記録を消し、次の tick は黙った席へ合図を注入する。
+#[test]
+fn seat_heartbeat_on_resumes_the_signal() {
+    let place = tick_place(true);
+    tick_silent_for(&place, TICK_STALE + 60);
+    heartbeat_assert(&place.state, "off", &heartbeat_line("off", "off"));
+    tick_assert_quiet(&place, &tick_noop("heartbeat-off", "-", "-"));
+    heartbeat_assert(&place.state, "on", &heartbeat_line("on", "on"));
+    assert!(!heartbeat_record(&place.state).exists(), "停止の記録は消える");
+    let out = tick_run(&place, &[]);
+    assert_eq!(stdout_of(&out), tick_inject(0), "on の後は注入: stderr={}", stderr_of(&out));
+    assert_eq!(tick_keys(&place), [tick_text_key(0), format!("send-keys -t {TICK_TARGET} Enter")], "text 1 回 + Enter 1 回");
+}
+
+/// (c) 停止の記録が dir（在るのに読めない）の周も `heartbeat-off`・0 key（合図は正の証拠でだけ送る）。
+#[test]
+fn seat_heartbeat_record_that_is_a_dir_still_reads_off() {
+    let place = tick_place(true);
+    tick_silent_for(&place, TICK_STALE + 60);
+    fs::create_dir_all(heartbeat_record(&place.state)).ok();
+    tick_assert_quiet(&place, &tick_noop("heartbeat-off", "-", "-"));
+    assert!(tick_keys(&place).is_empty() && !tick_ladder_path(&place).exists(), "0 key・梯子の記録 0");
+}
+
+/// (d-1) off の席でも移動の周の退避（`/exit` の text 1 回 + Enter 1 回）はそのまま撃つ。
+#[test]
+fn seat_heartbeat_off_still_evacuates_on_a_move_round() {
+    let root = tmp();
+    let place = move_place(&root, "state", MOVE_ANCHOR);
+    move_record(&root, MOVE_B);
+    heartbeat_assert(&place.state, "off", &heartbeat_line("off", "off"));
+    let out = move_run(&place);
+    assert_eq!(stdout_of(&out), move_line("exit", "false", "-"), "退避の判定行: stderr={}", stderr_of(&out));
+    assert_eq!(
+        move_keys(&place),
+        [format!("send-keys -t {TICK_TARGET} -l /exit"), format!("send-keys -t {TICK_TARGET} Enter")],
+        "/exit の text 1 回 + Enter 1 回"
+    );
+}
+
+/// (d-2) off の席でも窓が shell なら起こし直し（起動行の末尾の `--resume <sid>` と初手の合図）はそのまま撃つ。
+#[test]
+fn seat_heartbeat_off_still_relaunches_a_dead_seat() {
+    let root = tmp();
+    let place = wake_place(&root, "/elsewhere", WAKE_SID);
+    heartbeat_assert(&place.state, "off", &heartbeat_line("off", "off"));
+    let text = wake_assert_launched(&place, MOVE_A, "/elsewhere");
+    assert!(text.ends_with(&format!(" --resume {WAKE_SID} {}", wake_first_word())), "初手の合図も積む: {text}");
+}
+
+/// (e) off の席でも群の判定は撃ち（計測と打刻・`judged=stay`）、同じ周の合図の段だけが `heartbeat-off` で止まる。
+#[test]
+fn seat_heartbeat_off_still_judges_the_group() {
+    let root = tmp();
+    let place = judge_place(&root, MOVE_ANCHOR, [10, 10]);
+    heartbeat_assert(&place.state, "off", &heartbeat_line("off", "off"));
+    let before = unix_now();
+    let out = move_run(&place);
+    let after = unix_now();
+    let want = format!("decision=noop target={TICK_SEAT} reason=heartbeat-off pointer=- step=- consumed=- move=- launched=- judged=stay\n");
+    assert_eq!(stdout_of(&out), want, "判定は撃ち合図は止まる: stderr={}", stderr_of(&out));
+    assert!(judge_calls(&place) > 0, "群の判定は計測する");
+    assert!(judge_ts(&root).is_some_and(|ts| (before..=after).contains(&ts)), "打刻は判定の周の ts: {:?}", judge_ts(&root));
+    assert!(move_keys(&place).is_empty(), "0 key");
+}
+
+/// (f) 登録 row の無い target は off / on / status とも rc 1・語 `no-row`・置き場に 1 file も作らない。
+#[test]
+fn seat_heartbeat_without_a_row_is_refused_and_writes_nothing() {
+    let dir = tmp();
+    let state = dir.join("state");
+    fs::create_dir_all(&state).ok();
+    for switch in ["off", "on", "status"] {
+        let out = heartbeat_run(&state, switch);
+        assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "{switch}: rc 1");
+        assert!(stdout_of(&out).is_empty(), "{switch}: stdout 0 byte");
+        assert_eq!(stderr_of(&out), format!("seat heartbeat {switch}: refused reason=no-row target={TICK_TARGET}\n"), "{switch}");
+        assert_eq!(fs::read_dir(&state).map(Iterator::count).unwrap_or(usize::MAX), 0, "{switch}: 置き場に何も作らない");
+    }
+    let place = tick_place(false);
+    assert_eq!(rc_of(&heartbeat_run(&place.state, "off")), i32::from(RC_REFUSED), "席の置き場が在っても row が無ければ断る");
+    assert!(!heartbeat_record(&place.state).exists(), "停止の記録 0");
+}
+
+/// (i) status の 1 行が停止の記録の有無を映す（記録なしで `heartbeat=on`・off の後で `heartbeat=off`・行 p の前は 3 欄とも `-`）。
+#[test]
+fn seat_heartbeat_status_prints_one_line_for_the_record() {
+    let place = tick_place(true);
+    heartbeat_assert(&place.state, "status", &heartbeat_status("on"));
+    heartbeat_assert(&place.state, "off", &heartbeat_line("off", "off"));
+    heartbeat_assert(&place.state, "status", &heartbeat_status("off"));
+    heartbeat_assert(&place.state, "on", &heartbeat_line("on", "on"));
+    heartbeat_assert(&place.state, "status", &heartbeat_status("on"));
+}
+
+/// (j) off を 2 度撃つと 2 度目は記録の `ts=` の行を 1 byte も変えず rc 0（fixture の ts を先に書き、2 度目の後に同じ bytes を読む）。
+#[test]
+fn seat_heartbeat_off_twice_keeps_the_record_bytes() {
+    let place = tick_place(true);
+    heartbeat_assert(&place.state, "off", &heartbeat_line("off", "off"));
+    let fixed = "ts=1000\n";
+    fs::write(heartbeat_record(&place.state), fixed).ok();
+    heartbeat_assert(&place.state, "off", &heartbeat_line("off", "off"));
+    assert_eq!(fs::read_to_string(heartbeat_record(&place.state)).unwrap_or_default(), fixed, "ts は書き換えない");
+}
+
+/// (k) 記録の無い席への on は rc 0 で、file は無いまま。
+#[test]
+fn seat_heartbeat_on_without_a_record_is_a_no_op() {
+    let place = tick_place(true);
+    heartbeat_assert(&place.state, "on", &heartbeat_line("on", "on"));
+    assert!(!heartbeat_record(&place.state).exists(), "file 無しのまま");
 }
 
 // ─────────────────── tick の unit（seat-heartbeat.md §3・契約表の行 b・`s2-07l.583`・接頭辞 `seat_unit_`） ───────────────────

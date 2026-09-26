@@ -14,7 +14,7 @@ use std::path::Path;
 
 /// `seat` の使い方。
 pub fn usage() -> String {
-    "usage: seat <register --state-dir S --target T --role R --account L --launch FILE [--anchor DIR]|launch --state-dir S --role R --target S:W [--account L] [--anchor DIR] [--model M] [--restore CMD]|ruling add --state-dir S --target T --words W [--bead B] [--rule ID]|ruling ls --state-dir S|tick --state-dir S --target S:W [--rules F]|tick install --state-dir S --target S:W --unit-dir U --binary PATH [--rules F]|tick uninstall --state-dir S --target S:W --unit-dir U --binary PATH [--rules F]|retire --state-dir S --target S:W [--reason WORDS]|<label> [--orchestrator] [-c|-r ID] [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]".to_owned()
+    "usage: seat <register --state-dir S --target T --role R --account L --launch FILE [--anchor DIR]|launch --state-dir S --role R --target S:W [--account L] [--anchor DIR] [--model M] [--restore CMD]|ruling add --state-dir S --target T --words W [--bead B] [--rule ID]|ruling ls --state-dir S|tick --state-dir S --target S:W [--rules F]|tick install --state-dir S --target S:W --unit-dir U --binary PATH [--rules F]|tick uninstall --state-dir S --target S:W --unit-dir U --binary PATH [--rules F]|retire --state-dir S --target S:W [--reason WORDS]|heartbeat off --state-dir S --target S:W|heartbeat on --state-dir S --target S:W|heartbeat status --state-dir S --target S:W|<label> [--orchestrator] [-c|-r ID] [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]".to_owned()
 }
 
 /// `seat` の既知の verb（閉じた語・宣言順・設計 contract-source.md §17 の形 (vii)）。短い形の第 1 token（口座 label）は
@@ -31,10 +31,12 @@ pub enum SeatCommand {
     Tick,
     /// `seat retire`（席の登録 row の退役・設計 account-lifecycle.md §24）。
     Retire,
+    /// `seat heartbeat off|on|status`（席ごとの合図の停止の記録・設計 seat-heartbeat.md §12）。
+    Heartbeat,
 }
 
 /// [`SeatCommand`] の全部（宣言順・件数は既知の verb の本数で dispatch の腕の本数ではない）。
-pub const SEAT_COMMANDS: &[SeatCommand] = &[SeatCommand::Register, SeatCommand::Launch, SeatCommand::Ruling, SeatCommand::Tick, SeatCommand::Retire];
+pub const SEAT_COMMANDS: &[SeatCommand] = &[SeatCommand::Register, SeatCommand::Launch, SeatCommand::Ruling, SeatCommand::Tick, SeatCommand::Retire, SeatCommand::Heartbeat];
 
 impl SeatCommand {
     /// 引数の字面。
@@ -45,6 +47,7 @@ impl SeatCommand {
             Self::Ruling => "ruling",
             Self::Tick => "tick",
             Self::Retire => "retire",
+            Self::Heartbeat => "heartbeat",
         }
     }
 
@@ -110,6 +113,8 @@ const ALLOWED_TICK_UNIT: &[cli_args::Allowed] = &[
 ];
 /// `seat retire`（席の登録 row の退役・設計 account-lifecycle.md §24 形 1・pane を読まないので tmux の flag は受けない）。
 const ALLOWED_RETIRE: &[cli_args::Allowed] = &[value("--state-dir"), value("--target"), value("--reason")];
+/// `seat heartbeat`（`off` / `on` / `status` の 3 語は positional・設計 seat-heartbeat.md §12 形 2・pane を読まないので tmux の flag は受けない）。
+const ALLOWED_HEARTBEAT: &[cli_args::Allowed] = &[value("--state-dir"), value("--target")];
 
 /// [`SeatCommand`] が受ける flag の集合（[`dispatch`] が verb を選んだ直後に [`crate::cli_args::parse`] へ渡す・`rest` は verb の後ろ）。
 fn allowed_of(command: SeatCommand, rest: &[String]) -> &'static [Allowed] {
@@ -120,6 +125,7 @@ fn allowed_of(command: SeatCommand, rest: &[String]) -> &'static [Allowed] {
         SeatCommand::Tick if unit_verb(rest).is_some() => ALLOWED_TICK_UNIT,
         SeatCommand::Tick => ALLOWED_TICK,
         SeatCommand::Retire => ALLOWED_RETIRE,
+        SeatCommand::Heartbeat => ALLOWED_HEARTBEAT,
     }
 }
 
@@ -144,6 +150,7 @@ pub fn dispatch(args: &[String]) -> Outcome {
         (Some(SeatCommand::Ruling), _) => ruling_of(args.get(1..).unwrap_or_default()),
         (Some(SeatCommand::Tick), _) => tick_of(args.get(1..).unwrap_or_default()),
         (Some(SeatCommand::Retire), _) => retire_of(args.get(1..).unwrap_or_default()),
+        (Some(SeatCommand::Heartbeat), _) => heartbeat_of(args.get(1..).unwrap_or_default()),
         // 既知の verb でなく `--` で始まらない第 1 token は口座 label（短い形・account-lifecycle.md §14）。label は閉じた語を
         // 持たない＝[`SeatCommand`] の subcommand ではないので閉包の検査の外（消えた口の名もこの腕で従来どおり断る）。
         (None, Some(label)) if !label.starts_with("--") && !label.trim().is_empty() => short_of(label, args.get(1..).unwrap_or_default()),
@@ -296,6 +303,20 @@ fn retire_of(args: &[String]) -> Outcome {
         Err(err @ role::RetireRefusal::Store(_)) => Outcome::failed_line(RC_BROKEN, err.render(target)),
         Err(err @ role::RetireRefusal::NoRow) => Outcome::failed_line(RC_REFUSED, err.render(target)),
     }
+}
+
+/// `seat heartbeat off|on|status`（設計 seat-heartbeat.md §12 形 2）: 第 1 token は 3 語のどれか・`--state-dir` と `S:W` の
+/// `--target` は必須で、値欠けと空文字は使い方の誤り。記録の読み書きは [`super::tick::heartbeat`] が持つ。
+fn heartbeat_of(args: &[String]) -> Outcome {
+    let switch = args.first().and_then(|token| super::tick::Switch::parse(token));
+    let [state_dir, target] = ["--state-dir", "--target"].map(|name| required_nonempty(args, name));
+    let (Some(switch), Ok(state_dir), Ok(target)) = (switch, state_dir, target) else {
+        return refused_usage();
+    };
+    if !target_well_formed(target) {
+        return refused_usage();
+    }
+    super::tick::heartbeat(switch, state_dir, target)
 }
 
 /// `seat tick install|uninstall`（設計 seat-heartbeat.md §3）: `--state-dir` / `S:W` の `--target` / `--unit-dir` / `--binary` は必須で、
