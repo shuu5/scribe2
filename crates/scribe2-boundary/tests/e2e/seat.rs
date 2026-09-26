@@ -1701,11 +1701,14 @@ fn move_groups_dir(root: &Path) -> PathBuf {
     root.join(format!("{NAME}-host")).join("groups")
 }
 
-/// 群の今の口座の記録を書く（契約の 4 行の形・`<群用 dir>/<群の名>.account`）。
+/// 移動の fixture の群の記録の ts（猶予より十分古い）。
+const MOVE_TS: &str = "2026-09-25T00:00:00Z";
+
+/// 群の今の口座の記録を書く（契約の 4 行の形・`<群用 dir>/<群の名>.account`・ts は [`MOVE_TS`]）。
 fn move_record(root: &Path, account: &str) {
     let dir = move_groups_dir(root);
     fs::create_dir_all(&dir).ok();
-    let body = format!("account={account}\nts=2026-09-25T00:00:00Z\nreason=move\nprevious={MOVE_A}\n");
+    let body = format!("account={account}\nts={MOVE_TS}\nreason=move\nprevious={MOVE_A}\n");
     fs::write(dir.join(format!("{MOVE_GROUP}.account")), body).ok();
 }
 
@@ -1852,6 +1855,7 @@ fn seat_tick_move_evacuates_a_seat_whose_row_differs_from_the_group_record() {
     let root = tmp();
     let place = move_place(&root, "state", MOVE_ANCHOR);
     move_record(&root, MOVE_B);
+    move_signal_past(&place);
     let out = move_run(&place);
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     assert_eq!(stdout_of(&out), move_line("exit", "false", "-"), "判定行 1 行");
@@ -1876,6 +1880,7 @@ fn seat_tick_move_confirms_the_exit_dialog_and_refuses_other_input() {
     let root = tmp();
     let place = move_place(&root, "state", MOVE_ANCHOR);
     move_record(&root, MOVE_B);
+    move_signal_past(&place);
     fs::write(place.at(TICK_PANE), format!("{TICK_CLEAR_PANE}half typed")).ok();
     move_assert_quiet(&place, &move_noop("input-busy"));
     fs::write(place.at(TICK_PANE), "no prompt here\n").ok();
@@ -1897,6 +1902,7 @@ fn seat_tick_move_launches_the_group_account_into_a_shell_pane() {
     let root = tmp();
     let place = move_place(&root, "state", MOVE_ANCHOR);
     move_record(&root, MOVE_B);
+    move_signal_past(&place);
     fs::write(place.at(MOVE_FRONT), "bash\n").ok();
     fs::write(place.at(TICK_PANE), "old output\n$ ").ok();
     let before = acct_rows(&place.state).len();
@@ -1921,6 +1927,7 @@ fn seat_tick_move_stops_on_unreadable_record_and_held_lock() {
     let root = tmp();
     let place = move_place(&root, "state", MOVE_ANCHOR);
     move_record(&root, MOVE_B);
+    move_signal_past(&place);
     let lock = move_groups_dir(&root).join("lock");
     fs::write(&lock, "pid=1\n").ok();
     move_assert_quiet(&place, &move_noop("group-locked"));
@@ -1943,6 +1950,7 @@ fn seat_tick_move_stops_on_unreadable_record_and_held_lock() {
 fn seat_tick_move_leaves_the_list_unchanged_when_the_row_matches_or_the_anchor_is_outside() {
     let root = tmp();
     let place = move_place(&root, "state", MOVE_ANCHOR);
+    move_signal_past(&place);
     move_assert_quiet(&place, &format!("decision=noop target={TICK_SEAT} reason=stamp-recent pointer=wait:0 step=0 consumed=-{TICK_NO_MOVE}\n"));
     move_record(&root, MOVE_A);
     move_assert_quiet(&place, &format!("decision=noop target={TICK_SEAT} reason=stamp-recent pointer=wait:0 step=0 consumed=-{TICK_NO_MOVE}\n"));
@@ -1953,6 +1961,7 @@ fn seat_tick_move_leaves_the_list_unchanged_when_the_row_matches_or_the_anchor_i
     let outside = tmp();
     let other = move_place(&outside, "state", "/elsewhere");
     move_record(&outside, MOVE_B);
+    move_signal_past(&other);
     move_assert_quiet(&other, &format!("decision=noop target={TICK_SEAT} reason=stamp-recent pointer=wait:0 step=0 consumed=-{TICK_NO_MOVE}\n"));
     assert!(!move_groups_dir(&outside).join("lock").exists(), "群に属さない席は lock も取らない");
 }
@@ -1966,6 +1975,7 @@ fn seat_tick_move_reaches_seats_in_two_state_dirs_under_one_parent() {
     let two = move_place(&root, "two", MOVE_ANCHOR_TWO);
     move_record(&root, MOVE_B);
     for place in [&one, &two] {
+        move_signal_past(place);
         let out = move_run(place);
         assert_eq!(stdout_of(&out), move_line("exit", "false", "-"), "stderr={}", stderr_of(&out));
         assert_eq!(move_keys(place).first(), Some(&format!("send-keys -t {TICK_TARGET} -l /exit")), "/exit を送る");
@@ -2275,6 +2285,7 @@ fn pane_shell_round(pane: &str, pid: Option<&str>) -> (TmpDir, MovePlace, Output
     let root = tmp();
     let place = move_place(&root, "state", MOVE_ANCHOR);
     move_record(&root, MOVE_B);
+    move_signal_past(&place);
     fs::write(place.at(MOVE_FRONT), "sh\n").ok();
     fs::write(place.at(TICK_PANE), pane).ok();
     if let Some(body) = pid {
@@ -2344,6 +2355,7 @@ fn seat_pane_shell_does_not_ask_the_pid_when_the_front_is_not_a_shell() {
     let root = tmp();
     let place = move_place(&root, "state", MOVE_ANCHOR);
     move_record(&root, MOVE_B);
+    move_signal_past(&place);
     fs::write(place.at(PANE_SHELL_PID), format!("{}\n", kin.0.id())).ok();
     let out = move_run(&place);
     assert_eq!(stdout_of(&out), move_line("exit", "false", "-"), "stderr={}", stderr_of(&out));
@@ -2579,6 +2591,7 @@ fn seat_tick_stale_busy_within_twice_the_stale_with_a_clear_input_stays_state_st
 fn evacuate_place(root: &Path, record: &str, ago: u64) -> MovePlace {
     let place = move_place(root, "state", MOVE_ANCHOR);
     move_record(root, record);
+    move_signal_past(&place);
     let seat = seat_dir_of(&place.state, TICK_SEAT);
     fs::write(state_file(&seat), format!("{}\n", stamp_line("busy", "UserPromptSubmit", unix_now() - ago, "sid-move"))).ok();
     place
@@ -2642,10 +2655,11 @@ fn seat_tick_evacuate_sends_the_exit_every_round() {
     assert_eq!((exits, move_injections(&place).len()), (2, 2), "/exit 2 行・記録 2 行");
 }
 
-// ─────── 群の移動の退避は合図が先で /exit は猶予の後（seat-heartbeat.md §13・契約表の行 q・`s2-07l.651`・接頭辞 `seat_tick_grace_`） ───────
+// ─────── 群の移動の退避は合図が先で /exit は猶予の後（seat-heartbeat.md §13 / §14・契約表の行 q / 行 r・`s2-07l.651` / `s2-07l.654`・接頭辞 `seat_tick_grace_`） ───────
 //
-// §4 の移動の fixture（[`move_place`]・写しの `seat.move_grace_s` は [`GRACE_S`]）に、記録の ts を歯が置く群の記録を足す。合図の
-// 字面・合図の記録の path と形は契約から組む（器の helper を借りない）。
+// §4 の移動の fixture（[`move_place`]・写しの `seat.move_grace_s` は [`GRACE_S`]・群の記録の ts は猶予より古い [`MOVE_TS`]）に、
+// 合図の記録を 3 field で置く helper 1 つ（[`grace_signal_put`]）を足す。猶予の起点は合図の `at`（群の記録の ts は鍵にだけ使う）。
+// 合図の字面・合図の記録の path と形は契約から組む（器の helper を借りない）。
 
 /// 写しの退避の猶予（秒・埋め込み manifest の値と同じ 1800＝値は rules の歯が pin する）。
 const GRACE_S: u64 = 1800;
@@ -2658,17 +2672,20 @@ fn grace_put(place: &MovePlace, secs: u64) {
     fs::write(&place.rules, rules.replace(&from, &to)).ok();
 }
 
-/// 群の記録（口座 B・previous は A）を ts = `at`（UNIX 秒）で書き、ts の字面を返す。
-fn grace_record(root: &Path, at: u64) -> String {
-    let ts = vessel::fleet::cli::format_utc(at);
-    let body = format!("account={MOVE_B}\nts={ts}\nreason=move\nprevious={MOVE_A}\n");
-    fs::write(move_groups_dir(root).join(format!("{MOVE_GROUP}.account")), body).ok();
-    ts
-}
-
 /// 合図の記録の path（席の置き場の直下の `move-signal`）。
 fn grace_signal(place: &MovePlace) -> PathBuf {
     seat_dir_of(&place.state, TICK_SEAT).join("move-signal")
+}
+
+/// 合図の記録を 3 field（`to=<移り先> ts=<群の記録の ts か seed> at=<epoch 秒>`）で置く。
+fn grace_signal_put(place: &MovePlace, (to, ts): (&str, &str), at: u64) {
+    fs::write(grace_signal(place), format!("to={to} ts={ts} at={at}\n")).ok();
+}
+
+/// 同じ移動（口座 B・[`MOVE_TS`]）の合図の記録を猶予の外（`at` = 今 − 猶予 − 1）で置く（`/exit` を期待する移動の歯の fixture・
+/// seat-heartbeat.md §14 形 5）。
+fn move_signal_past(place: &MovePlace) {
+    grace_signal_put(place, (MOVE_B, MOVE_TS), unix_now() - GRACE_S - 1);
 }
 
 /// 退避の合図の 1 行（残り `left` 秒・契約の字面）。
@@ -2679,91 +2696,47 @@ fn grace_line(left: u64) -> String {
     )
 }
 
-/// 1 周撃ち、判定行が `move=signal` で合図の text 1 回 + Enter 1 回だけが増え（`/exit` 0・残りの秒は記録の ts `at` + 猶予 − 撃った
-/// 周の今）、席の記録が `who=seat-tick-move what=<合図>` の 1 行増え、合図の記録が `ts=<記録の ts>` の 1 行になることを測る。
-fn grace_assert_signal(place: &MovePlace, (ts, at): (&str, u64)) {
+/// 1 周撃ち、判定行が `move=signal` で合図の text 1 回 + Enter 1 回だけが増え（`/exit` 0・残りの秒は猶予の値）、席の記録が
+/// `who=seat-tick-move what=<合図>` の 1 行増え、合図の記録が `to=<口座 B> ts=<ts> at=<撃った周の今>` の 3 field になることを測る。
+fn grace_assert_signal(place: &MovePlace, ts: &str) {
     let (keys, injections, before) = (move_keys(place).len(), move_injections(place).len(), unix_now());
     let out = move_run(place);
     let after = unix_now();
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
-    assert_eq!(stdout_of(&out), move_line("signal", "false", "-"), "判定行 1 行（base では move=exit）");
+    assert_eq!(stdout_of(&out), move_line("signal", "false", "-"), "判定行 1 行");
     let sent: Vec<String> = move_keys(place).into_iter().skip(keys).collect();
-    let line = (before..=after).map(|now| grace_line(at + GRACE_S - now)).find(|line| sent.first() == Some(&format!("send-keys -t {TICK_TARGET} -l {line}")));
-    assert!(line.is_some() && sent.len() == 2 && sent.last() == Some(&format!("send-keys -t {TICK_TARGET} Enter")), "合図の text 1 回 + Enter 1 回: {sent:?}");
-    assert!(sent.iter().all(|key| !key.ends_with(" -l /exit")), "/exit 0: {sent:?}");
+    let line = grace_line(GRACE_S);
+    let want = [format!("send-keys -t {TICK_TARGET} -l {line}"), format!("send-keys -t {TICK_TARGET} Enter")];
+    assert_eq!(sent, want, "合図の text 1 回（残りは猶予の値）+ Enter 1 回・/exit 0");
     let lines = move_injections(place);
     assert_eq!(lines.len(), injections + 1, "記録 1 行: {lines:?}");
     let last = lines.last().map(String::as_str).unwrap_or_default();
     let (who, what) = move_who_what(last);
     let head = format!("{NAME} group: evacuate group={MOVE_GROUP} to={MOVE_B} ");
-    let what = what.filter(|what| what.starts_with(&head) && line.as_deref().is_some_and(|line| line.starts_with(what.as_str())));
+    let what = what.filter(|what| what.starts_with(&head) && line.starts_with(what.as_str()));
     assert!(who.as_deref() == Some("seat-tick-move") && what.is_some(), "who と what（合図の頭・記録は頭を切る）: {last}");
-    assert_eq!(fs::read_to_string(grace_signal(place)).ok(), Some(format!("ts={ts}\n")), "合図の記録は記録の ts");
+    let found = fs::read_to_string(grace_signal(place)).unwrap_or_default();
+    let at = found
+        .strip_prefix(&format!("to={MOVE_B} ts={ts} at="))
+        .and_then(|rest| rest.strip_suffix('\n'))
+        .and_then(|at| at.parse::<u64>().ok());
+    assert!(at.is_some_and(|at| (before..=after).contains(&at)), "合図の記録は 3 field・at は撃った周の今: {found:?}");
 }
 
-/// (a) 記録の ts = 今 − 100 秒 ∧ 猶予 1800 ∧ 合図の記録なし ∧ 入力欄が空 → `move=signal`・合図の text 1 回 + Enter 1 回・`/exit` 0・
-/// 合図の記録が記録の ts を持つ・`tick.jsonl` に `who=seat-tick-move what=<合図>`（base では `/exit` ＝ RED）。
+/// (a) 群の記録の ts が猶予の外（[`MOVE_TS`]）∧ 合図の記録なし ∧ 入力欄が空 → `move=signal`・合図の text 1 回 + Enter 1 回・
+/// `/exit` 0・記録が `to=<口座 B> ts=<記録の ts> at=<今>`（base では `/exit` ＝ RED）。
 #[test]
-fn seat_tick_grace_signals_once_inside_the_grace() {
+fn seat_tick_grace_old_record_still_signals_first() {
     let root = tmp();
     let place = move_place(&root, "state", MOVE_ANCHOR);
-    let at = unix_now() - 100;
-    let ts = grace_record(&root, at);
-    grace_assert_signal(&place, (&ts, at));
+    move_record(&root, MOVE_B);
+    grace_assert_signal(&place, MOVE_TS);
     assert!(!move_groups_dir(&root).join("lock").exists(), "lock は残らない");
 }
 
-/// (b) 同じ状態で合図の記録が記録の ts を持つ → `move=wait`・0 key・記録 0・合図の記録は不変・lock を取らない（他の手の lock が
-/// 在っても `group-locked` にならない）。
+/// (b) 記録なし（種）∧ row ≠ 種 ∧ 合図の記録なし → `move=signal`・記録の `ts` 欄が `seed`（base では `/exit` ＝ RED）。
 #[test]
-fn seat_tick_grace_waits_after_the_signal_without_the_lock() {
-    let root = tmp();
-    let place = move_place(&root, "state", MOVE_ANCHOR);
-    let ts = grace_record(&root, unix_now() - 100);
-    let body = format!("ts={ts}\n");
-    fs::write(grace_signal(&place), &body).ok();
-    let lock = move_groups_dir(&root).join("lock");
-    fs::write(&lock, "pid=1\n").ok();
-    move_assert_quiet(&place, &move_line("wait", "-", "-"));
-    assert_eq!(fs::read_to_string(grace_signal(&place)).ok(), Some(body), "合図の記録は不変");
-    assert_eq!(fs::read_to_string(&lock).ok().as_deref(), Some("pid=1\n"), "他の手の lock は触らない");
-}
-
-/// (c) 合図の記録の ts が別の移動の ts → 送り直す（(a) と同じ・記録は今の移動の ts に書き換わる）。
-#[test]
-fn seat_tick_grace_resends_when_the_signal_names_another_move() {
-    let root = tmp();
-    let place = move_place(&root, "state", MOVE_ANCHOR);
-    let at = unix_now() - 100;
-    let ts = grace_record(&root, at);
-    fs::write(grace_signal(&place), "ts=2026-09-24T00:00:00Z\n").ok();
-    grace_assert_signal(&place, (&ts, at));
-}
-
-/// (d) 記録の ts = 今 − 1801 秒（猶予を越えた）→ 今の形（`/exit`・合図の記録は書かない）。
-#[test]
-fn seat_tick_grace_past_the_grace_sends_the_exit() {
-    let root = tmp();
-    let place = move_place(&root, "state", MOVE_ANCHOR);
-    grace_record(&root, unix_now() - GRACE_S - 1);
-    evacuate_assert_exit(&place);
-    assert!(!grace_signal(&place).exists(), "合図の記録は書かない");
-}
-
-/// (e) 猶予 0 の `--rules` → 記録の ts が今でも `/exit`。
-#[test]
-fn seat_tick_grace_zero_sends_the_exit_at_once() {
-    let root = tmp();
-    let place = move_place(&root, "state", MOVE_ANCHOR);
-    grace_put(&place, 0);
-    grace_record(&root, unix_now());
-    evacuate_assert_exit(&place);
-    assert!(!grace_signal(&place).exists(), "合図の記録は書かない");
-}
-
-/// (f) 記録なし（種）∧ row ≠ 種 → `/exit`（種は猶予の起点を持たない）。
-#[test]
-fn seat_tick_grace_seed_differing_from_the_row_sends_the_exit() {
+fn seat_tick_grace_seed_differing_from_the_row_signals_first() {
     let root = tmp();
     let place = move_place(&root, "state", MOVE_ANCHOR);
     let host = format!(
@@ -2771,22 +2744,87 @@ fn seat_tick_grace_seed_differing_from_the_row_sends_the_exit() {
          anchors = [\"{MOVE_ANCHOR}\", \"{MOVE_ANCHOR_TWO}\"]\naccounts = [\"{MOVE_B}\", \"{MOVE_A}\"]\n"
     );
     fs::write(place.state.join("host.toml"), host).ok();
-    evacuate_assert_exit(&place);
-    assert!(!move_groups_dir(&root).join(format!("{MOVE_GROUP}.account")).exists(), "記録は書かれない（種のまま）");
+    grace_assert_signal(&place, "seed");
+    assert!(!move_groups_dir(&root).join(format!("{MOVE_GROUP}.account")).exists(), "群の記録は書かれない（種のまま）");
 }
 
-/// (g) 猶予の内側 ∧ 入力欄に人の字 → `input-busy`・0 key・合図の記録なし（次の周にまた試す）。
+/// (c) 同じ移動の記録で `at` = 今 − 100 → `move=wait`・0 key・記録 0・合図の記録は不変・lock を取らない（他の手の lock が在っても
+/// `group-locked` にならない・base では群の記録の ts が古く `/exit` ＝ RED）。
+#[test]
+fn seat_tick_grace_waits_after_the_signal_without_the_lock() {
+    let root = tmp();
+    let place = move_place(&root, "state", MOVE_ANCHOR);
+    move_record(&root, MOVE_B);
+    grace_signal_put(&place, (MOVE_B, MOVE_TS), unix_now() - 100);
+    let body = fs::read_to_string(grace_signal(&place)).ok();
+    let lock = move_groups_dir(&root).join("lock");
+    fs::write(&lock, "pid=1\n").ok();
+    move_assert_quiet(&place, &move_line("wait", "-", "-"));
+    assert_eq!(fs::read_to_string(grace_signal(&place)).ok(), body, "合図の記録は不変");
+    assert_eq!(fs::read_to_string(&lock).ok().as_deref(), Some("pid=1\n"), "他の手の lock は触らない");
+}
+
+/// (d) 同じ移動の記録で `at` = 今 − 1801（猶予を越えた）→ 今の形（`move=exit`・合図の記録は不変・base では旧形の等値が外れて
+/// signal ＝ RED）。
+#[test]
+fn seat_tick_grace_past_the_grace_sends_the_exit() {
+    let root = tmp();
+    let place = move_place(&root, "state", MOVE_ANCHOR);
+    move_record(&root, MOVE_B);
+    move_signal_past(&place);
+    let body = fs::read_to_string(grace_signal(&place)).ok();
+    evacuate_assert_exit(&place);
+    assert_eq!(fs::read_to_string(grace_signal(&place)).ok(), body, "合図の記録は書き換えない");
+}
+
+/// (e) 前の版の形（`ts=<記録の ts>` だけの 1 行）→ 記録なしと読んで送り直す（`move=signal`・記録が 3 field に書き換わる・base では
+/// wait ＝ RED）。
+#[test]
+fn seat_tick_grace_old_form_record_resends() {
+    let root = tmp();
+    let place = move_place(&root, "state", MOVE_ANCHOR);
+    move_record(&root, MOVE_B);
+    fs::write(grace_signal(&place), format!("ts={MOVE_TS}\n")).ok();
+    grace_assert_signal(&place, MOVE_TS);
+}
+
+/// (f) `to` が別の口座か `ts` が別の移動の記録（`at` は猶予の内側）→ 送り直す（記録は今の移動の鍵に書き換わる）。
+#[test]
+fn seat_tick_grace_resends_when_the_signal_names_another_move() {
+    for other in [(MOVE_A, MOVE_TS), (MOVE_B, "2026-09-24T00:00:00Z")] {
+        let root = tmp();
+        let place = move_place(&root, "state", MOVE_ANCHOR);
+        move_record(&root, MOVE_B);
+        grace_signal_put(&place, other, unix_now() - 100);
+        grace_assert_signal(&place, MOVE_TS);
+    }
+}
+
+/// (g) 猶予 0 の `--rules` → 合図の記録に依らず `/exit`（記録なし・猶予の内側の同じ移動の記録のどちらも・記録は書かない）。
+#[test]
+fn seat_tick_grace_zero_sends_the_exit_at_once() {
+    let root = tmp();
+    let place = move_place(&root, "state", MOVE_ANCHOR);
+    grace_put(&place, 0);
+    move_record(&root, MOVE_B);
+    evacuate_assert_exit(&place);
+    assert!(!grace_signal(&place).exists(), "合図の記録は書かない");
+    grace_signal_put(&place, (MOVE_B, MOVE_TS), unix_now());
+    evacuate_assert_exit(&place);
+}
+
+/// (h) 合図の記録なし ∧ 入力欄に人の字 → `input-busy`・0 key・合図の記録なし（次の周にまた試す）。
 #[test]
 fn seat_tick_grace_typed_input_is_input_busy_without_a_record() {
     let root = tmp();
     let place = move_place(&root, "state", MOVE_ANCHOR);
-    grace_record(&root, unix_now() - 100);
+    move_record(&root, MOVE_B);
     fs::write(place.at(TICK_PANE), format!("{TICK_CLEAR_PANE}half typed")).ok();
     move_assert_quiet(&place, &move_noop("input-busy"));
     assert!(!grace_signal(&place).exists(), "合図の記録は書かない");
 }
 
-/// (h) ts が形でない記録 → `group-unreadable`・0 key（猶予の起点の無い記録を種や 0 秒に読み替えない）。
+/// (i) ts が形でない群の記録 → `group-unreadable`・0 key（形でない記録を種に読み替えない）。
 #[test]
 fn seat_tick_grace_malformed_ts_is_group_unreadable() {
     let root = tmp();
@@ -2797,7 +2835,7 @@ fn seat_tick_grace_malformed_ts_is_group_unreadable() {
     assert!(!grace_signal(&place).exists(), "合図の記録は書かない");
 }
 
-/// (i) `seat.move_grace_s` を欠く `--rules` → rc 1 `no-rule`・0 key（既定の猶予に倒さない・base では判定へ進む ＝ RED）。
+/// (j) `seat.move_grace_s` を欠く `--rules` → rc 1 `no-rule`・0 key（既定の猶予に倒さない・base では判定へ進む ＝ RED）。
 #[test]
 fn seat_tick_grace_missing_row_is_no_rule() {
     let place = tick_place(true);
@@ -2893,6 +2931,7 @@ fn seat_heartbeat_off_still_evacuates_on_a_move_round() {
     let root = tmp();
     let place = move_place(&root, "state", MOVE_ANCHOR);
     move_record(&root, MOVE_B);
+    move_signal_past(&place);
     heartbeat_assert(&place.state, "off", &heartbeat_line("off", "off"));
     let out = move_run(&place);
     assert_eq!(stdout_of(&out), move_line("exit", "false", "-"), "退避の判定行: stderr={}", stderr_of(&out));

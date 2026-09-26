@@ -38,8 +38,8 @@
 //!
 //! 毎周の判定の後に最後の周の打刻（[`TICK_LAST_FILE`]）を書き、健全は読み手（[`status`]・doctor）が [`Health`] で判じる（行 p）。
 //!
-//! 移動の周の `/exit` は猶予（`seat.move_grace_s`・起点は群の記録の ts）を越えてから送り、猶予の内側は退避の合図の 1 行を 1 度だけ
-//! 送る（設計 §13・契約表の行 q・ADR-0071＝席の裏の subagent を `/exit` で落とさない）。
+//! 移動の周の `/exit` は猶予（`seat.move_grace_s`・起点は席に合図を書いた時刻）を越えてから送り、合図の記録が無ければ先に退避の
+//! 合図の 1 行を 1 度だけ送る（設計 §13 / §14・契約表の行 q / 行 r・ADR-0071 / ADR-0073＝席の裏の subagent を `/exit` で落とさない）。
 
 pub mod install;
 
@@ -867,9 +867,10 @@ fn awake(input: &Input, account: &str, role: Role, anchor: &str, seat: &Path) ->
 /// 読めない周と host の面が読めない周は `group-unreadable`（種に読み替えない・C10）。移動の周は群の段と同じ lock の内側で退避の
 /// 1 手（[`evacuate`]）を撃つ（窓が shell の周は `front` の [`awake`] が先に起こす）。lock を取れない周は `group-locked`。
 /// 呼ぶ場所は `front` の中（打刻の前・§10 形 8）と、群の判定（[`judged`]）で移った周の後（§9 形 3）の 2 つで、関数は 1 本。
-/// 移動の周は 3 分岐（設計 §13 形 5）: 猶予の残り（[`group::grace_left`]）が無ければ今の形（lock → `/exit`）、残りが在り席の置き場
-/// の合図の記録が同じ移動のもの（[`group::signalled`]）なら `move=wait`（0 key・lock を取らない・file を書かない）、送っていなければ
-/// 退避の合図の 1 行を同じ門で送り、送れた周だけ記録を書く（[`group::write_signal`]）。
+/// 移動の周は 3 分岐（設計 §14 形 3）: 猶予 0 なら今の形（lock → `/exit`）、席の置き場に同じ移動の合図の記録
+/// （[`group::signalled`]）が在れば残り（[`group::grace_left`]・起点は合図の `at`）が正で `move=wait`（0 key・lock を取らない・
+/// file を書かない）・`None` で lock → `/exit`、記録が無い・別の移動・読めない周は退避の合図の 1 行を同じ門で送り、送れた周だけ
+/// `at` = 今の記録を書く（[`group::write_signal`]）。群の記録の ts の古さと種は分岐に入らない。
 fn moving(input: &Input, (anchor, account): (&str, &str), seat: &Path, (rows, now): (&Rows, u64)) -> Option<Verdict> {
     let Ok(manifest) = crate::rules::with_state_dir(input.manifest.clone(), Some(&input.state.path)) else {
         return Some(Verdict::noop(NoopReason::GroupUnreadable));
@@ -881,19 +882,21 @@ fn moving(input: &Input, (anchor, account): (&str, &str), seat: &Path, (rows, no
     if current.label == account {
         return None;
     }
-    let (Some(left), Some(ts)) = (group::grace_left(&current, now, rows.grace_s), current.ts.as_deref()) else {
+    let key = group::signal_key(&current);
+    let signalled = group::signalled(seat, key);
+    if rows.grace_s == 0 || signalled.is_some_and(|at| group::grace_left(at, now, rows.grace_s).is_none()) {
         let Ok(_lock) = Lock::take(&host_groups_dir(&input.state.path)) else {
             return Some(Verdict::noop(NoopReason::GroupLocked));
         };
         return Some(evacuate(input, (EXIT, Move::Exit), rows.window_ms).0);
-    };
-    if group::signalled(seat, ts) {
+    }
+    if signalled.is_some() {
         return Some(Verdict::moved(Move::Wait, None, None));
     }
-    let payload = group::evacuate_line(group.name(), &current.label, left);
+    let payload = group::evacuate_line(group.name(), &current.label, rows.grace_s);
     let (verdict, delivered) = evacuate(input, (&payload, Move::Signal), rows.window_ms);
     if delivered {
-        let _ = group::write_signal(seat, ts);
+        let _ = group::write_signal(seat, key, now);
     }
     Some(verdict)
 }

@@ -141,7 +141,7 @@ pub struct Current {
     pub label: String,
     /// 出所。
     pub source: Source,
-    /// 記録の ts（`YYYY-MM-DDTHH:MM:SSZ`・種は `None`＝猶予の起点が無い・設計 seat-heartbeat.md §13 形 2）。
+    /// 記録の ts（`YYYY-MM-DDTHH:MM:SSZ`・種は `None`・移動の鍵 [`signal_key`] にだけ使う・seat-heartbeat.md §14 形 2）。
     pub ts: Option<String>,
 }
 
@@ -186,7 +186,7 @@ pub fn judged_path(dir: &Path, group: &str) -> PathBuf {
 
 /// 群の今の口座（**解決の 1 関数**・設計 §20 形 2）: 記録が在ればその label・無ければ種（面の読みが埋めた種の欄・§28）・在るのに
 /// 読めなければ [`RecordError`]。読み手は dispatch の 1 周・席の起動・doctor の 3 つで、種の読みはこの中だけに在る。記録の ts が
-/// [`epoch_of`] の形でない記録も [`RecordError::Malformed`]（猶予の起点を持たない記録を種や 0 秒に読み替えない・seat-heartbeat.md §13 形 2）。
+/// [`epoch_of`] の形でない記録も [`RecordError::Malformed`]（形でない記録を種に読み替えない・seat-heartbeat.md §13 形 2）。
 pub fn current_of(state_dir: &Path, group: &AccountGroup) -> Result<Current, RecordError> {
     match fs::read_to_string(current_path(&host_groups_dir(state_dir), group.name())) {
         Ok(text) => Record::parse(&text)
@@ -200,27 +200,55 @@ pub fn current_of(state_dir: &Path, group: &AccountGroup) -> Result<Current, Rec
     }
 }
 
-/// 猶予の残りの秒（**1 関数**・設計 seat-heartbeat.md §13 形 2）: 記録の ts + `grace_s` − `now` が正ならその秒。記録なし（種）・
-/// 猶予 0・越えた周は `None`（猶予なし＝`/exit` を送ってよい）。呼び手は tick の移動の周と群の段の続きの周の 2 つ。
-pub fn grace_left(current: &Current, now: u64, grace_s: u64) -> Option<u64> {
-    let at = epoch_of(current.ts.as_deref()?)?;
+/// 猶予の残りの秒（**1 関数**・設計 seat-heartbeat.md §14 形 2）: 合図の `at` + `grace_s` − `now` が正ならその秒。猶予 0・越えた
+/// 周は `None`（猶予なし＝`/exit` を送ってよい）。群の記録の ts は入らない。呼び手は tick の移動の周と群の段の続きの周の 2 つ。
+pub fn grace_left(at: u64, now: u64, grace_s: u64) -> Option<u64> {
     Some(at.saturating_add(grace_s).saturating_sub(now)).filter(|left| *left > 0)
 }
 
-/// 退避の合図の記録の file 名（席の置き場の直下・1 行 `ts=<群の記録の ts>`・設計 seat-heartbeat.md §13 形 3）。
+/// 退避の合図の記録の file 名（席の置き場の直下・1 行 `to=<移り先> ts=<記録の ts か seed> at=<epoch 秒>`・seat-heartbeat.md §14）。
 pub const SIGNAL_FILE: &str = "move-signal";
 
-/// 席の置き場 `seat` に、群の記録の ts が `ts` の移動の合図を送った記録が在るか（無い・違う ts・読めない周は偽）。
-pub fn signalled(seat: &Path, ts: &str) -> bool {
-    fs::read_to_string(seat.join(SIGNAL_FILE)).is_ok_and(|text| text == format!("ts={ts}\n"))
+/// 移動の鍵（移り先・群の記録の ts か種の `seed`）。「同じ移動」はこの 2 つの等値（口座が同じでも記録が別なら別の移動）。
+pub fn signal_key(current: &Current) -> (&str, &str) {
+    (current.label.as_str(), current.ts.as_deref().unwrap_or("seed"))
 }
 
-/// 合図の記録を書く（**書き手はこの 1 本**・一時 file → rename・前の移動の記録は上書きする）。呼び手は tick の合図の周と群の段の
-/// 移動の周の 2 つ。
-pub fn write_signal(seat: &Path, ts: &str) -> std::io::Result<()> {
+/// 合図の記録（鍵 + 合図を書いた epoch 秒）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Signal {
+    /// 移り先の口座。
+    pub to: String,
+    /// 群の記録の ts か `seed`。
+    pub ts: String,
+    /// 合図を書いた epoch 秒（猶予の起点）。
+    pub at: u64,
+}
+
+impl Signal {
+    /// 1 行を読む（**読み手はこの 1 本**）: 3 field が揃わない・順が違う・`at` が整数でない・前の版の `ts=` だけの行は `None`。
+    pub fn parse(text: &str) -> Option<Self> {
+        let mut fields = text.strip_suffix('\n')?.split(' ');
+        let mut value = |key: &str| -> Option<String> {
+            let found = fields.next()?.strip_prefix(key)?.strip_prefix('=')?;
+            (!found.is_empty() && !found.contains(char::is_whitespace)).then(|| found.to_owned())
+        };
+        let (to, ts, at) = (value("to")?, value("ts")?, value("at")?.parse().ok()?);
+        fields.next().is_none().then_some(Self { to, ts, at })
+    }
+}
+
+/// 席の置き場 `seat` の、鍵が `key` の移動の合図の `at`（無い・別の移動・読めない周は `None`）。
+pub fn signalled(seat: &Path, key: (&str, &str)) -> Option<u64> {
+    let found = Signal::parse(&fs::read_to_string(seat.join(SIGNAL_FILE)).ok()?)?;
+    (found.to == key.0 && found.ts == key.1).then_some(found.at)
+}
+
+/// 合図の記録を書く（**書き手はこの 1 本**・一時 file → rename・前の記録は上書き）。呼び手は tick の合図の周と群の段の移動の周。
+pub fn write_signal(seat: &Path, (to, ts): (&str, &str), now: u64) -> std::io::Result<()> {
     fs::create_dir_all(seat)?;
     let temporary = seat.join(format!("{SIGNAL_FILE}.tmp"));
-    fs::write(&temporary, format!("ts={ts}\n"))?;
+    fs::write(&temporary, format!("to={to} ts={ts} at={now}\n"))?;
     fs::rename(&temporary, seat.join(SIGNAL_FILE))
 }
 
@@ -717,9 +745,29 @@ fn measure_later(state_dir: &Path, account: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{by_key, measure_later, pressed, Caps, Pressed};
+    use super::{by_key, grace_left, measure_later, pressed, Caps, Pressed, Signal};
     use crate::fleet::{Allowance, Measured, WindowKind};
     use std::collections::BTreeSet;
+
+    /// 合図の記録の parse（seat-heartbeat.md §14 形 1）: 3 field は読める・旧形・`at` が整数でない・欠け / 余り / 順違いは記録なし。
+    #[test]
+    fn group_signal_parse_reads_three_fields_and_refuses_the_rest() {
+        let want = Signal { to: "a2".to_owned(), ts: "2026-09-25T00:00:00Z".to_owned(), at: 1_790_000_000 };
+        assert_eq!(Signal::parse("to=a2 ts=2026-09-25T00:00:00Z at=1790000000\n"), Some(want), "3 field が読める");
+        assert_eq!(Signal::parse("to=a2 ts=seed at=7\n").map(|found| (found.ts, found.at)), Some(("seed".to_owned(), 7)), "種の鍵");
+        let t = "ts=2026-09-25T00:00:00Z";
+        // 前の版の形・at が整数でない / 負 / 欠ける・余りの field・順が違う・空の値。
+        let refused = [format!("{t}\n"), format!("to=a2 {t} at=soon\n"), format!("to=a2 {t} at=-1\n"), format!("to=a2 {t}\n")];
+        let refused = refused.into_iter().chain([format!("to=a2 {t} at=1 x=2\n"), format!("{t} to=a2 at=1\n"), format!("to= {t} at=1\n")]);
+        refused.for_each(|text| assert_eq!(Signal::parse(&text), None, "記録なし: {text:?}"));
+    }
+
+    /// 残りの秒は合図の `at` + 猶予 − 今 が正ならその秒・越えた周（境界の 0 を含む）と猶予 0 は `None`。
+    #[test]
+    fn group_signal_grace_left_counts_from_the_signal_at() {
+        let found = [(1100, 1800), (2799, 1800), (2800, 1800), (2801, 1800), (1000, 0)].map(|(now, grace)| grace_left(1000, now, grace));
+        assert_eq!(found, [Some(1700), Some(1), None, None, None], "内側・越える 1 秒前・ちょうど・越えた・猶予 0");
+    }
 
     /// 実測の行 1 つ。
     fn measured(window: WindowKind, used_pct: u64) -> Allowance {

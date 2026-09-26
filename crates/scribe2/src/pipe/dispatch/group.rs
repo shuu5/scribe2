@@ -148,8 +148,7 @@ fn step(
 ) -> Option<String> {
     let behind = behind(&read.state, found, &current.label);
     if current.source == Source::Record && !behind.is_empty() {
-        let held = group::grace_left(current, crate::seat::state::now_secs(), read.grace_s).is_some();
-        relaunch(read, found, &current.label, behind, if held { Wait::Hold } else { Wait::Once });
+        relaunch(read, found, group::signal_key(current), behind, Wait::Once);
         return None;
     }
     let input = read.input;
@@ -201,42 +200,43 @@ fn behind(state: &State, group: &AccountGroup, account: &str) -> Vec<(String, St
 }
 
 /// 移動の執行の残り（1 本が記録と承認 event を書いた後・同じ lock の内側・設計 §20 形 6）: 群の置き場の古い口座の席へ退避の
-/// 合図（[`group::evacuate_line`]・残りの秒 = 猶予の値・送達を確認した席ごとに [`group::write_signal`]＝seat-heartbeat.md §13
-/// 形 7）→ settle の窓で shell に戻った置き場から同じ target へ新しい口座の席を起こす。
+/// 合図（[`group::evacuate_line`]・残りの秒 = 猶予の値・送達を確認した席ごとに `at` = 今の [`group::write_signal`]＝
+/// seat-heartbeat.md §14 形 4）→ settle の窓で shell に戻った置き場から同じ target へ新しい口座の席を起こす。
 fn evacuate(read: &Read<'_, '_>, found: &AccountGroup, target: &str) {
     let (input, place) = (read.input, place(read.input));
     let seats = behind(&read.state, found, target);
     let payload = group::evacuate_line(found.name(), target, read.grace_s);
-    let ts = group::current_of(input.state_dir, found).ok().and_then(|current| current.ts);
+    let current = group::current_of(input.state_dir, found).ok();
+    let ts = current.as_ref().map(|found| group::signal_key(found).1);
     for (anchor, seat) in &seats {
         let line = notify::send(&read.state, &place, Path::new(anchor), input.manifest, &payload);
-        if let (true, Some(ts)) = (line.starts_with("notify=delivered "), ts.as_deref()) {
-            let _ = group::write_signal(&seat_dir(&place.path, seat), ts);
+        if let (true, Some(ts)) = (line.starts_with("notify=delivered "), ts) {
+            let _ = group::write_signal(&seat_dir(&place.path, seat), (target, ts), crate::seat::state::now_secs());
         }
     }
-    relaunch(read, found, target, seats, Wait::Settle);
+    relaunch(read, found, (target, ts.unwrap_or_default()), seats, Wait::Settle);
 }
 
-/// 起こし直しの待ち方（閉じた 3 値）。
+/// 起こし直しの待ち方（閉じた 2 値）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Wait {
     /// 移動の周: settle の窓の内で待ち、窓の内に戻らない席ごとに保留の event を 1 件記す。
     Settle,
-    /// 続きの周: 1 回だけ見て、戻っていない席へ [`group::EXIT`] の 1 行を送り次の周へ残す（保留の event を重ねない）。
+    /// 続きの周: 1 回だけ見て、戻っていない席のうち同じ移動の合図の記録が猶予を越えた席へだけ [`group::EXIT`] の 1 行を送り次の
+    /// 周へ残す（保留の event を重ねない・席ごとに読む・seat-heartbeat.md §14 形 4）。
     Once,
-    /// 猶予の内側の続きの周: 1 回だけ見て、戻っていない席へは送らず次の周へ残す（保留の event を重ねない・`/exit` は猶予の後）。
-    Hold,
 }
 
 /// `seats` の置き場の席を、pane が shell に戻った順に同じ target へ `account` の口座で起こす（`launch` の 1 本・登録 row は
 /// 起動が書き直す・会話は席の置き場の打刻の最終行の sid を [`resume_carry`] の 1 本で `carry` に運び初手の 1 語も同じ 1 本が積む
 /// 〔row の launch と event には載せない・設計 seat-heartbeat.md §8 / §10 形 1〕・呼び手の窓の置き換えは許さない）。起こせなかった席は理由つきの保留の event を 1 件記す。
-/// 続きの周（[`Wait::Once`]）に shell でない席は起こさず、退避の合図と同じ宛先・門（[`notify::send_or_confirm`]）で
-/// [`group::EXIT`] を 1 回送る（移動の周は送らない＝席が作業記憶を残す番を 1 周ぶん持つ・設計 §21 形 1）。門が
-/// [`group::exit_dialog`] の既定の行を返す周は `/exit` の代わりに Enter を 1 回だけ送り、どちらの送りも群の段の名
-/// （[`WHO_GROUP`]）で inject の記録に残す（設計 §22 形 1 / 2）。
-fn relaunch(read: &Read<'_, '_>, group: &AccountGroup, account: &str, mut seats: Vec<(String, String)>, wait: Wait) {
-    let input = read.input;
+/// 続きの周（[`Wait::Once`]）に shell でない席は起こさず、席の置き場の合図の記録が同じ移動（鍵 `key`・[`group::signalled`]）で
+/// 残り（[`group::grace_left`]）が `None` の席にだけ、退避の合図と同じ宛先・門（[`notify::send_or_confirm`]）で [`group::EXIT`] を
+/// 1 回送る（移動の周は送らない＝席が作業記憶を残す番を 1 周ぶん持つ・設計 §21 形 1。残りが在る席と記録の無い・別の移動の席には
+/// 送らない＝合図は tick が送る・seat-heartbeat.md §14 形 4）。門が [`group::exit_dialog`] の既定の行を返す周は `/exit` の代わりに
+/// Enter を 1 回だけ送り、どちらの送りも群の段の名（[`WHO_GROUP`]）で inject の記録に残す（設計 §22 形 1 / 2）。
+fn relaunch(read: &Read<'_, '_>, group: &AccountGroup, key: (&str, &str), mut seats: Vec<(String, String)>, wait: Wait) {
+    let (input, account) = (read.input, key.0);
     let (Some((settle, step)), Ok(rules)) = (cycle::pace_of(read.manifest), crate::seat::embedded_manifest()) else {
         return;
     };
@@ -282,12 +282,16 @@ fn relaunch(read: &Read<'_, '_>, group: &AccountGroup, account: &str, mut seats:
     match wait {
         Wait::Settle => failed.extend(seats.into_iter().map(|(anchor, target)| (anchor, target, REASON_NOT_SHELL))),
         Wait::Once => {
-            for (anchor, _) in &seats {
+            let now = crate::seat::state::now_secs();
+            for (anchor, target) in &seats {
+                let signalled = group::signalled(&seat_dir(&place.path, target), key);
+                if !signalled.is_some_and(|at| group::grace_left(at, now, read.grace_s).is_none()) {
+                    continue;
+                }
                 let dialog = group::exit_dialog(WHO_GROUP);
                 let _ = notify::send_or_confirm(&read.state, &place, Path::new(anchor), input.manifest, (group::EXIT, &dialog));
             }
         }
-        Wait::Hold => {}
     }
     for (anchor, target, reason) in failed {
         let detail = format!("group={} anchor={anchor} target={target} reason={reason}", group.name());
