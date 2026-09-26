@@ -457,6 +457,10 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
   },
   "@id": "./ADR-0068-the-signal-ladder-is-a-list-and-live-runs-do-not-block-group-moves.html",
   "@type": "schema:TechArticle",
+  "dc:isReferencedBy": [
+    { "@id": "./ADR-0069-group-moves-pick-by-headroom-and-reserve-in-tier-order.html" },
+    { "@id": "./ADR-0070-heartbeat-is-the-stamp-signal-and-can-be-paused-per-seat.html" }
+  ],
   "dc:isPartOf": [
     {
       "@id": "./README.html"
@@ -701,6 +705,7 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 <!-- folio:chrome-bottom -->
 <nav class="prevnext" aria-label="前後の文書">
   <a class="prevnext__prev" href="ADR-0067-the-relaunch-carries-the-conversation-id-with-resume.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">席の起こし直しは打刻の会話 id を --resume で運ぶ — 群の移動と管理 tick の起こし直しは、 その席の状態の打刻の最終行の会話 id を起動行の末尾に --resume で渡して直前の会話の続きから始め、 対話の記録の file は複写せず、 復帰の道は機械の復帰の 1 本のまま (ADR-0049 の「対話の記録は運ばない」の節だけを supersede・要件 FR38 / FR59 の改訂を伴う)</span></a>
+  <a class="prevnext__next" href="ADR-0069-group-moves-pick-by-headroom-and-reserve-in-tier-order.html"><span class="prevnext__dir">次 &rarr;</span><span class="prevnext__title">群の移り先は残量の鍵で並べ、 群ごとの予約を宣言順に導出し、 群の名は Tier と数字に固定する — 移り先は「7 日窓と役割の model の 7 日窓の残量の小さい方が大きい順 → 7 日窓の reset が早い順 → 宣言順」で並べた候補から、 群を宣言順に見て「どの群の今の口座でもなく先の群の予約でもない先頭」を各群の予約とし、 予約は記録せず周ごとに lock の内側で導出し、 便の起動は排他しない (ADR-0049 の「候補の順 = 宣言順」と ADR-0055 / ADR-0068 の移り先の「候補の先頭」を部分 supersede・要件 FR38 と AC41 の改訂を伴う)</span></a>
 </nav>
 <script>
 (function () {

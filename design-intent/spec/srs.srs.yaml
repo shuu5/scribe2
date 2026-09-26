@@ -11,14 +11,14 @@ meta:
   eyebrow_left: 要件定義書 (SRS)
   eyebrow_right: scribe2 — MVP
   subtitle: 契約は小さく・検証は機械が先・止まるときは記帳して止まる
-  version: "0.24"
+  version: "0.25"
   date: "2026-09-26"
   reader: この器で開発する人と AI（Claude Code の session）。 専門語には必ずやさしい言い換えを併記する
 
 approval:
   - role: 承認 (user)
     who: user
-    when: 2026-09-26（版 0.24。 版ごとの裁定 id は台帳が持つ）
+    when: 2026-09-26（版 0.25。 版ごとの裁定 id は台帳が持つ）
     stamp: 裁定済
   - role: レビュー (folio review lens)
     who: spec-review 5 軸 + SRS ceiling 3 lens
@@ -75,7 +75,8 @@ scope:
     - 席の起動
     - 導入先の同期
     - 対話面の作法
-    - 管理 tick（heartbeat）
+    - 管理 tick
+    - heartbeat の停止
   out:
     - 席の自律機能（管理 tick の外）
     - interpreter 経路の中身の解析（v3）
@@ -132,13 +133,14 @@ acceptance:
   - { id: AC38, criterion: 偽の台帳と偽の終端でない段の便で、 審査 PASS ∧ 依存 closed ∧ write-set の交差 0 ∧ 受付を通る契約が、 席の操作なしに便の終端の直後か手動の 1 周で受付と Reviewed の段を経て待機の段を挟まず Spawned になり、 条件を満たす契約が N 本なら同じ契機で N 本（同時走行の最大値の範囲内）起き、 最大値に達した周の契約は最大値の理由で起動の列に留まり、 交差する契約は交差の理由（Overlap）で起動の列に留まり、 typed な介入（first / hold / release）のうち first の印を持つ契約が契約の priority の高い契約より先に起き、 同じ介入では priority の高い契約が先に起き、 同じ介入と priority の契約は起票順に起き、 hold の契約は起きず release で戻り、 介入の印を記録した直後だけで 1 周が起き、 便を運ぶ process を殺した便は 1 周で再開が 1 回だけ起きて Landed まで通り、 終端に達した便が起動の列から外した契約は release の印 1 つで 1 回だけ起き直り（着地済みの便と審査 FAIL の便の契約は起き直らない）、 回答 event か approval.received を記帳した直後だけで 1 周が起き、 回答が記帳された Questioned の便と承認が記帳された Blocked の便は所有者の印が無くても再開が 1 回だけ起き（便を運ぶ process が生きている便には触らない）、 verdict が PASS で所有者の印の無い Gated の便も再開が 1 回だけ起き（verdict が PASS でない Gated の便と verdict を読めない Gated の便は起きない）、 regate（FR77）で Implemented へ戻され所有者の印が無いか印の process が退役した便も再開が 1 回だけ起き（regate の記帳も追随の記帳も持たない Implemented の便は起きない。 退役の節の再開と重なる周も二重にならず本種目の 1 回に寄る）、 追随で最新の gate の後に Implemented へ戻され所有者の印が無いか印の process が退役した便も再開が 1 回だけ起き（追随の後にもう 1 度 gate を通った便は起きない）、 手動の 1 周と便の終端の直後が重なっても起こす便が二重にならず（重複起動 0・起動試行を母集団）、 周期の timer の経路が 0（走査した契機の数を母集団として出す）、 台帳が読めない周は 1 本も起こさず unmeasured の 1 行が出る（列挙した契約数と起こした便数を母集団として出す）, metric_v: 自動起動 1/1 + 段の遷移 1/1 + 同じ契機 N/N（最大値の範囲内） + 最大値の待ち 1/1 + 交差の待ち 1/1 + first 1/1 + priority 1/1 + 起票順 1/1 + hold / release 2/2 + 印の直後の 1 周 1/1 + 退役した便の再開 1/1 + 終端の便の契約の起き直り 1/1（起き直らない 2/2） + 記帳の直後の 1 周 1/1 + 待ちが解けた便の再開 2/2（生きている便への再開 0） + PASS の Gated の再開 1/1（起きない 2/2） + regate 後の再開 2/2（起きない 1/1・二重起動 0/1） + 追随後の再開 2/2（起きない 1/1・二重起動 0/1） + 契機の重なりの重複起動 0/2 + timer の経路 0/K + unmeasured 1/1 + 母集団 = 列挙 N / 起動 M, metric_l: dispatcher の自動起動, links: [FR68, FR77] }
   - { id: AC39, criterion: Spawned の段で偽の runner を kill した便に resume を撃つと、 同じ worktree で runner が起き直り途中再開の節に前の runner の未 commit の変更の file 名が載り、 生きている偽の runner を持つ便は typed に断られて runner が 2 本にならない（試行した便数を母集団として出す）, metric_v: 起こし直し 1/1 + 未 commit の一覧 1/1 + 生存の断り 1/1, metric_l: runner が死んだ便の起こし直し, links: [FR37] }
   - { id: AC40, criterion: 閾値未満の口座の候補が 0 の fixture で席の起動が断られずに逼迫度が最小の口座で席を起こし、 妥協の理由が実効の記録と起動の記録と席の指示文に載り、 上限に当たっていない測れた口座が 0 の周だけ typed に断られて key が 1 つも送られず、 置き場が別の 2 席が同じ実効の口座に揃い、 役割の口座の宣言に余裕が戻っても実効の口座が変わらない（試行した起動の数を母集団として出す）, metric_v: 妥協の起動 1/1 + 理由の記録 3/3 + 全口座が上限の断り 1/1 + 断りの key 0 + 同じ口座への揃い 1/1 + 居続け 1/1, metric_l: 妥協の起動と実効の口座, links: [FR69, FR59] }
-  - { id: AC41, criterion: 群の宣言と閾値以上の実測を持つ fixture で、 埋め込みの manifest に群の閾値の rules 行が 3 本在り（manifest の行数を母集団として出す）、 便の終端の周が群の置き場の席へ通知を 1 行ずつ注入して event を 1 件記し、 同じ実測に 2 度通知せず、 席の hook が指示文に 1 行を出して移動を頼む記録を 1 件置き、 移動の周に群の今の口座の記録と承認 event が 1 件ずつ書かれ、 古い席に退避の合図が届いて新しい口座の起動行が同じ target へ差し込まれ（起動行はその席の状態の打刻の最終行の会話 id を運び、 会話 id の形でない打刻の fixture では運ばず、 対話の記録の file の複写は 0）、 候補が無い fixture では記録 0・断りの event 1 で、 終端でない段の便が使う口座しか候補に無い fixture ではその口座へ移り、 移った後の便用の口座選定（FR36）が群の今の口座を外し、 群を宣言しない fixture では 1 語も変わらない（試行した周の数を母集団として出す）, metric_v: rules 行 3/3 + 通知 N/N + 重複通知 0 + hook の 1 行 1/1 + 移動を頼む記録 1/1 + 記録 1/1 + 承認 event 1/1 + 退避と起動 1/1 + 会話 id の運び 1/1 + 形でない周の不運び 1/1 + 記録の複写 0 + 候補なしの断り 1/1 + 終端でない段の便の口座への移動 1/1 + 移った後の便用の口座選定の除外 1/1 + 群 0 の差分 0, metric_l: 群の逼迫の通知と移動, links: [FR38, FR59, FR36] }
+  - { id: AC41, criterion: 群の宣言と閾値以上の実測を持つ fixture で、 埋め込みの manifest に群の閾値の rules 行が 3 本在り（manifest の行数を母集団として出す）、 便の終端の周が群の置き場の席へ通知を 1 行ずつ注入して event を 1 件記し、 同じ実測に 2 度通知せず、 席の hook が指示文に 1 行を出して移動を頼む記録を 1 件置き、 移動の周に群の今の口座の記録と承認 event が 1 件ずつ書かれ、 古い席に退避の合図が届いて新しい口座の起動行が同じ target へ差し込まれ（起動行はその席の状態の打刻の最終行の会話 id を運び、 会話 id の形でない打刻の fixture では運ばず、 対話の記録の file の複写は 0）、 候補が無い fixture では記録 0・断りの event 1 で、 終端でない段の便が使う口座しか候補に無い fixture ではその口座へ移り、 残量の鍵の fixture（役割の model の窓が高く 7 日窓が低い口座と、 両方が中位の口座）では後者へ移り、 役割の model の行が無い口座は最後に並び、 残量が同点の fixture では 7 日窓の reset が早い口座が先で reset も同点なら宣言順が先で、 5 時間窓だけが閾値以上の口座は門で落ちて鍵には効かず、 予約の記録は 0 file で、 2 群が同時に逼迫した fixture では宣言順で先の群が上位の口座へ・後の群が次の口座へ移り（同じ口座への移動 0）、 予約された口座を便用の口座選定が外さず、 doctor の群の行が next= に導出した予約を出し、 名が Tier<数字> でない群と宣言順が昇順でない群の面は読みで断られ、 移った後の便用の口座選定（FR36）が群の今の口座を外し、 群を宣言しない fixture では 1 語も変わらない（試行した周の数を母集団として出す）, metric_v: rules 行 3/3 + 通知 N/N + 重複通知 0 + hook の 1 行 1/1 + 移動を頼む記録 1/1 + 記録 1/1 + 承認 event 1/1 + 退避と起動 1/1 + 会話 id の運び 1/1 + 形でない周の不運び 1/1 + 記録の複写 0 + 候補なしの断り 1/1 + 終端でない段の便の口座への移動 1/1 + 残量の鍵の移り先 1/1 + model の行なしの順位 1/1 + 同点の順 2/2 + 5 時間窓は門だけ 1/1 + 予約の記録 0 + 2 群の同時逼迫の排他 1/1（同じ口座 0） + 予約と便用の非排他 1/1 + doctor の next= 1/1 + Tier の名の断り 2/2 + 移った後の便用の口座選定の除外 1/1 + 群 0 の差分 0, metric_l: 群の逼迫の通知と移動, links: [FR38, FR59, FR36] }
   - { id: AC42, criterion: 口座の settings.json の実体（symlink 経由の口座を含む）と対象 repo の root の .claude の settings.json と settings.local.json の 3 file のどれかを、 編集系の道具 4 形（Edit / Write / MultiEdit / NotebookEdit）と Bash の 7 形（rm / tee / mv の source / mv の行き先 / cp の行き先 / ln の行き先 / sed の in-place）と redirect 1 形で書く payload（形ごとに 1 file・3 file が少なくとも 1 度ずつ当たる）と、 守る file を含む dir ごとの rm と mv の 2 形が host-guard で rc 2 で deny され、 断りに種類と当たった実体の path と代わりの経路（user が編集する）が出て、 同じ dir の別 file の編集・守る file の読み・守る file を source にする複写は通り、 host-guard の rules 行を全部 off にしても deny される, metric_v: deny 14/14 + 通過 3/3 + 行を off にしても deny 1/1, metric_l: 見張り自身の設定の編集の拒否, links: [FR72] }
   - { id: AC43, criterion: 口座 2 つの fixture で doctor が host-guard の 1 行を出し、 配線の無い周は口座 0/2・片方に配線を足すと 1/2 と実体 1・実体が 2 つに割れた周は実体 2 を言い、 rules 行の enabled を off にした種類と行を欠いた種類がそれぞれ off / no-row で出て発効している行の数がそれに合わせて減り、 見張り自身の設定の種類は固定で on、 binary を解けない環境・解ける環境・別の版が解ける環境で missing / ok / other が出て、 rules が読めない周はその旨の 1 行だけが出て、 どの周も rc は変わらない, metric_v: 配線 3/3 + 種類 2/2 + 行数 1/1 + 固定 on 1/1 + binary 3/3 + 読めない rules 1/1 + rc 不変 1/1, metric_l: doctor の host-guard の行, links: [FR73] }
   - { id: AC44, criterion: tmp の git repo と state dir で、 tracked file・tracked file の親 dir・state dir・state dir の配下・state dir の親・.git の配下・worktree からの本体の 7 つの rm と、 解けない形 6 つ（変数・command 置換・チルダ始まり・brace・cd の後ろの相対 path・repo の root の配下の glob）の rm が host-guard で rc 2 で deny され、 断りに守る集合の記号か解けない形と代わりの経路（git rm か退役の mv）が出て、 untracked の file・一時 dir の下の glob・git rm は通り、 git の子 process は 1 回で、 rm の種類の rules 行が無い周は fail-closed で断り enabled が false の周だけ rm の種類が通る, metric_v: deny 13/13 + 通過 3/3 + git の子 process 1 回 + 行の無い周の deny 1/1 + off の通過 1/1, metric_l: rm の不可逆削除の拒否, links: [FR74, NFR4, NFR5] }
   - { id: AC45, criterion: 同じ実体への symlink の口座 2 つを持つ fixture で口座の口の配線の verb を撃つと 1 行の出力が口座 2・実体 1・足した 1 で実体に PreToolUse の hook 行が 1 つ増え symlink のまま、 2 回目は在ったので触らなかった 1 で実体が byte 単位で不変、 binary の path を書き換えた行も在るとして触らず、 読めない実体は断った 1 で rc 2 になり他の実体は書かれ、 足した行の対象の道具と timeout が code の固定の値で hook の timeout の rules 行の値を変えても動かず、 実体の他の key と順序は不変で event log は 1 行も増えない, metric_v: 配線 1/1 + 冪等 1/1 + 書き換え済みの行 1/1 + 読めない実体 1/1 + 固定の面 2/2 + 他の key の保存 1/1 + event 0, metric_l: host-guard の配線, links: [FR75, NFR4] }
   - { id: AC46, criterion: 台帳（.beads と scripts/bdw）を持つ tmp repo で、 台帳の破壊の語列の command 1 本と台帳 write の 4 形（notes の置換・記憶の subcommand・親を欠く create・bdw を経ない書き込み）の command 4 本が host-guard で rc 2 で deny され断りに台帳の種類が出て、 台帳を持たない repo では語列と形の 2 本が通り、 起票の門の rules 行が不発効の fixture では rules 行 host_guard.ledger が on のときだけ bd と bdw の書き込みの subcommand 2 本が deny され読みの subcommand 1 本は通り、 同じ行を off にすると語列・形・全断りの 3 本が通り、 起票の門の rules 行が発効している fixture で --append-notes と bdw の書き込みの 2 本と foreign の台帳（-C / --db / --global / 別 prefix）の 4 本は通る, metric_v: deny 7/7 + 通過 12/12, metric_l: 台帳の破壊と素 write の拒否, links: [FR76, NFR4] }
   - { id: AC47, criterion: 偽の便で、 Gated ∧ 判定 FAIL ∧ 逐語ありの便のうち所有者の印が無い 1 形と印の process が退役した 1 形が regate を通り、 段 Implemented と裁定の逐語を持つ記帳が 1 件だけ書かれ（逐語は入力と別の字面の fixture で出所を弁別）、 段が Gated でない・判定が FAIL でない・印の process が生きている・逐語が空・判定を読めない・印を読めない、 の 6 形は何も書かれずに理由付きで断られ（母集団 8 形）、 戻した直後の 2 度目は段の理由で断られ、 再び Gated（判定 FAIL）が記帳された後は 1 回通り、 通る 2 形で worktree・commit・判定の記録は変わらず、 判定 FAIL の Gated の便に逐語の無い周を回しても Implemented への記帳は 0（回した周の数を母集団）, metric_v: 通る 2/2 + 断り 6/6 + 直後の 2 度目の断り 1/1（理由 = 段） + 再び Gated の後 1/1 + 不変 6/6（2 形 × 3 記録） + 自動の regate 0/K, metric_l: regate の受付と段の条件による 1 回の制限, links: [FR77] }
+  - { id: AC48, criterion: "管理 tick の fixture で、 停止の記録を置いた席は合図の周に判定行が noop reason=heartbeat-off で注入 0・梯子の記録 0、 同じ周に死んだ席の起こし直しと移動の周の退避と群の判定は撃たれ（停止の記録の無い fixture と件数が同じ）、 on で記録が消えて次の周に合図が 1 行送られ、 記録が在るのに読めない周も送らず、 seat tick status が最後の周の時刻・経過・健全・on/off・段・次の合図の 6 項目を出し、 seat heartbeat status が on/off と最後の周の打刻を、 doctor の席の行が on/off と健全の 2 項目を出し、 管理 tick が周ごとに最後の周の打刻を 1 行書き rc 1 の周も書き、 経過が周期の 2 倍を越えた fixture では healthy=no で、 停止の記録の書き手は器の口だけ（管理 tick は書かない）であることを歯が nextest で確かめる", metric_v: "off の周の注入 0 + tick の仕事の件数 同（3/3） + on の後の合図 1/1 + 読めない記録の不送 1/1 + tick status の項目 6/6 + heartbeat status の項目 2/2 + doctor の項目 2/2 + 最後の周の打刻 1/1（rc 1 含む） + healthy=no 1/1 + 記録の書き手 1/1", metric_l: "heartbeat の停止と管理 tick の健全", links: [FR78, FR27] }
 requirements:
   - id: FR1
     type: FR
@@ -429,15 +431,15 @@ requirements:
       response: 器は編集 tool の hook で context 使用量を上限と比べて編集を止める段（cap guard）と、 その上限の rules 行を持たない（ADR-0045 §2 (2) で廃止）。 不在は不在を測る歯が確かめる
   - id: FR27
     type: FR
-    label: 管理 tick（heartbeat）
+    label: 管理 tick
     priority: must
     vmethod: T
     rationale_source: N-1
-    trace: { backward: [N-1, N-2, N-3], acceptance: [AC18] }
+    trace: { backward: [N-1, N-2, N-3], acceptance: [AC18, AC48] }
     ears:
       pattern: ubiquitous
       condition: 常時
-      response: 器は開発 session（orchestrator の席）が黙っていないかを周期で見て、 登録 row（FR40）を持ち状態の打刻の最終行が idle で入力欄が空いている席にだけ、 台帳の現在地から続きを進めるよう促す打刻の合図 1 行を注入する管理 tick を持つ（ADR-0058）。 送るのは席が最後の打刻から黙りの初段（rules 行 1 本・既定 30 分）以上黙り、 最後の合図から今の段の待ち（段 n の待ちは梯子の列の n 番目・列を越えた段は送らない）が経ち、 口座の門（群の逼迫〔FR38〕の閾値の rules 行のいずれか以上の口座の席には送らず、 計測〔FR33〕の記録の最新値だけを読んで計測は起こさず、 記録が無い・古い周は通す）を通った周だけで、 条件の列と順は ADR-0058 が正本で、 梯子の列と打ち切りの段は ADR-0068 が置き換える。 合図の間隔は席に変化が無ければ梯子の列（rules 行 1 本が持つ空でない昇順の秒の列・既定は 30 分 → 1 時間 → 3 時間 → 6 時間 → 12 時間 → 24 時間）の順で伸ばし（backoff）、 梯子の列が尽きた段では送らず（合図は梯子の列の長さまで・既定 6 本）、 席に変化（状態の打刻の最終行の時刻 = 変化の digest が動く。 比べる基準は合図の後に席が idle へ戻った周に取る）があれば梯子の列の先頭へ戻す。 周期・黙りの初段・梯子の列は rules 行 3 本（user 裁定 id つき）が持ち、 係数と上限の行は持たない。 梯子の記録（最後に送った時刻・何本目か・変化の digest）は席の置き場の file 1 つで、 記録が読めない・書けない周は送らず理由を判定行に出す（fail-closed）。 自席の置き場が群に属する周は、 群の移動の判定（FR38・1 本の関数）を群ごとに鮮度の窓に 1 回まで host の lock の内側で撃ち、 その周だけ計測（FR33）を起こしてよく、 他の周は測らない（ADR-0066）。 登録 row を持ち窓が shell に戻った席（再起動・退避の後）は、 黙りと変化の判定（打刻の最終行の状態と梯子）を経ずに口座（群なら群の今の口座・群の外なら row の口座）を決めて席の起動（FR59）で席の起こし直しを撃つ（FR28）。 便の起動の契機は FR68 が持つ
+      response: 器は開発 session（orchestrator の席）が黙っていないかを周期で見て、 登録 row（FR40）を持ち状態の打刻の最終行が idle で入力欄が空いている席にだけ、 台帳の現在地から続きを進めるよう促す打刻の合図（heartbeat）1 行を注入する管理 tick を持つ（ADR-0058・heartbeat を席ごとに止める口と管理 tick の最後の周の打刻は FR78・ADR-0070）。 送るのは席が最後の打刻から黙りの初段（rules 行 1 本・既定 30 分）以上黙り、 最後の合図から今の段の待ち（段 n の待ちは梯子の列の n 番目・列を越えた段は送らない）が経ち、 口座の門（群の逼迫〔FR38〕の閾値の rules 行のいずれか以上の口座の席には送らず、 計測〔FR33〕の記録の最新値だけを読んで計測は起こさず、 記録が無い・古い周は通す）を通った周だけで、 条件の列と順は ADR-0058 が正本で、 梯子の列と打ち切りの段は ADR-0068 が正本。 合図の間隔は席に変化が無ければ梯子の列（rules 行 1 本が持つ空でない昇順の秒の列・既定は 30 分 → 1 時間 → 3 時間 → 6 時間 → 12 時間 → 24 時間）の順で伸ばし（backoff）、 梯子の列が尽きた段では送らず（合図は梯子の列の長さまで・既定 6 本）、 席に変化（状態の打刻の最終行の時刻 = 変化の digest が動く。 比べる基準は合図の後に席が idle へ戻った周に取る）があれば梯子の列の先頭へ戻す。 周期・黙りの初段・梯子の列は rules 行 3 本（user 裁定 id つき）が持ち、 係数と上限の行は持たない。 梯子の記録（最後に送った時刻・何本目か・変化の digest）は席の置き場の file 1 つで、 記録が読めない・書けない周は送らず理由を判定行に出す（fail-closed）。 自席の置き場が群に属する周は、 群の移動の判定（FR38・1 本の関数）を群ごとに鮮度の窓に 1 回まで host の lock の内側で撃ち、 その周だけ計測（FR33）を起こしてよく、 他の周は測らない（ADR-0066）。 登録 row を持ち窓が shell に戻った席（再起動・退避の後）は、 黙りと変化の判定（打刻の最終行の状態と梯子）を経ずに口座（群なら群の今の口座・群の外なら row の口座）を決めて席の起動（FR59）で席の起こし直しを撃つ（FR28）。 便の起動の契機は FR68 が持つ
   - id: FR28
     type: FR
     label: cycle（廃止）
@@ -561,7 +563,7 @@ requirements:
     ears:
       pattern: event
       condition: 便の終端の周（dispatch の 1 周）か席自身の hook か管理 tick（FR27）の周期が動いたとき
-      response: 器は群の逼迫を計測のための常駐 timer では測らず、 便の終端の周（dispatch の 1 周）と席自身の hook と管理 tick（FR27）の周期（群ごとに鮮度の窓に 1 回まで）の 3 系統で、 群の今の口座と群の席が居る口座の使用率を計測（FR33）から鮮度つきで読み、 5 時間窓・7 日窓・モデル別窓の閾値の rules 行 3 本（user 裁定で発効）のいずれか以上になった群について、 便の終端の周は群の置き場の席の pane へ通知を 1 行注入して event に記し（同じ実測には 2 度通知しない）、 席自身の hook は指示文の 1 行で告げて移動を頼む記録を host の根へ群ごと高々 1 件置き、 便の終端の周と管理 tick は群単位で host の lock の内側で 1 回だけ移り先（他の群の今の口座でない ∧ 閾値未満の候補の先頭。 終端でない段の便が使う口座は候補から外さない）を決めて群の今の口座の記録（書き換える周は前の記録を消さず履歴の側へ可逆な move で移す）と承認 event を書き（判定は 1 本の関数で、 便の終端の周と管理 tick が同じ 1 本を呼び、 管理 tick は群ごとに鮮度の窓〔rules 行〕に 1 回まで撃ち、 判定の周だけ計測〔FR33〕を起こしてよい・ADR-0066）、 古い席へ退避の合図を送って新しい口座で席を起こし直し（席の起こし直しは席の起動〔FR59〕が行い、 直前の会話 id を運んで会話の続きから再開する・ADR-0067）、 候補が無い周は移らず user へ通知し妥協の移動を作らず、 群の逼迫の計測のための常駐 process と、 cycle・強制サイクルの印は持たず、 dispatch の 1 周を timer では撃たない（ADR-0045 §2 (2) / ADR-0049 / ADR-0055 / ADR-0066）。 管理 tick（FR27）の timer（FR64）は判定の周の外では群の逼迫を測らず計測も起こさず、 tick の口座の門（FR27）は計測（FR33）の記録の最新値を読むだけである（ADR-0058）
+      response: 器は群の逼迫を計測のための常駐 timer では測らず、 便の終端の周（dispatch の 1 周）と席自身の hook と管理 tick（FR27）の周期（群ごとに鮮度の窓に 1 回まで）の 3 系統で、 群の今の口座と群の席が居る口座の使用率を計測（FR33）から鮮度つきで読み、 5 時間窓・7 日窓・モデル別窓の閾値の rules 行 3 本（user 裁定で発効）のいずれか以上になった群について、 便の終端の周は群の置き場の席の pane へ通知を 1 行注入して event に記し（同じ実測には 2 度通知しない）、 席自身の hook は指示文の 1 行で告げて移動を頼む記録を host の根へ群ごと高々 1 件置き、 便の終端の周と管理 tick は群単位で host の lock の内側で 1 回だけ移り先（群の候補のうち、 今の口座でなく・他の群の今の口座でなく・退役中でなく・鮮度の内側の実測を持ち 3 窓とも閾値未満の口座を、 残量の鍵〔7 日窓と群の席の役割の model（rules 行 seat.model.<役割>）の 7 日窓の残量（100 − 使用率）の小さい方が大きい順 → 7 日窓の reset が早い順 → 宣言順〕で並べ〔役割の model の行が無い口座は最後・5 時間窓は門にだけ使う・鮮度の外の候補は 1 回測る〕、 群を宣言順に見て「どの群の今の口座でもなく先の群の予約でもない先頭」をその群の予約〔群の予約〕とし、 移る群は自分の予約へ移る。 予約は記録せず周ごとに lock の内側で導出し、 他の群の移動と予約を排他するが便の起動は排他しない〔便用の口座選定の除外は群の今の口座だけ〕。 宣言の候補の列は集合で、 順は同点の tie-break にだけ効く。 終端でない段の便が使う口座は候補から外さない・ADR-0069）を決めて群の今の口座の記録（書き換える周は前の記録を消さず履歴の側へ可逆な move で移す）と承認 event を書き（判定は 1 本の関数で、 便の終端の周と管理 tick が同じ 1 本を呼び、 管理 tick は群ごとに鮮度の窓〔rules 行〕に 1 回まで撃ち、 判定の周だけ計測〔FR33〕を起こしてよい・ADR-0066）、 古い席へ退避の合図を送って新しい口座で席を起こし直し（席の起こし直しは席の起動〔FR59〕が行い、 直前の会話 id を運んで会話の続きから再開する・ADR-0067）、 候補が無い周は移らず user へ通知し妥協の移動を作らず、 群の逼迫の計測のための常駐 process と、 cycle・強制サイクルの印は持たず、 dispatch の 1 周を timer では撃たない（ADR-0045 §2 (2) / ADR-0049 / ADR-0055 / ADR-0066）。 管理 tick（FR27）の timer（FR64）は判定の周の外では群の逼迫を測らず計測も起こさず、 tick の口座の門（FR27）は計測（FR33）の記録の最新値を読むだけである（ADR-0058）。 群の名は Tier<数字>（数字は重複しない）に限り、 宣言順が数字の昇順でない host の面は読みで断り（fail-closed）、 優先は宣言順のままで、 doctor の群の行は next=<label|none>（残量の鍵で導出した群の予約）を持ち、 移り先の判定と doctor は同じ 1 本の残量の鍵の関数を呼ぶ（ADR-0069）
   - id: FR39
     type: FR
     label: intake の排他
@@ -1005,6 +1007,17 @@ requirements:
       pattern: event
       condition: 便に裁定の逐語を添えて regate（gate の判定が FAIL の Gated の便を Implemented へ 1 段戻す器の口）が要求されたとき
       response: 器は、 段が Gated ∧ 判定が FAIL ∧ 所有者の印が無いか印の process が退役 ∧ 逐語が非空、 の 4 つを全部満たす周だけ、 便の記録に段 Implemented と裁定の逐語を持つ記帳を 1 件書いて戻し（worktree・commit・判定の記録には触れない）、 戻った便は同じ worktree で再開の候補になる（FR68 の regate の種目）。 1 つでも外れる周と、 判定か所有者の印を読めない周は、 何も書かずに理由 1 行で断る。 戻した直後は段が Implemented なので、 gate が再び Gated を記帳するまで次の regate は段の条件で断られる（1 つの FAIL につき戻すのは 1 回）。 器は FAIL の理由（契約の赤か・器の欠陥か・環境か）を自分では分類せず、 裁定なしに自動では戻さない
+  - id: FR78
+    type: FR
+    label: heartbeat の停止と管理 tick の健全
+    priority: must
+    vmethod: T
+    rationale_source: N-1
+    trace: { backward: [N-1, N-2], acceptance: [AC48] }
+    ears:
+      pattern: ubiquitous
+      condition: 常時
+      response: 器は、 管理 tick（FR27）が黙った席へ送る打刻の合図を heartbeat と呼び、 heartbeat を席ごとに止める口（seat heartbeat off|on|status・off は席の状態の dir に停止の記録 1 つ〔1 行・時刻〕を置き on は消す・可逆）を持ち、 停止の記録の在る席には管理 tick は合図を送らず判定行に理由 heartbeat-off を出し、 死んだ席の起こし直し（FR59）・移動の周の退避・群の判定（FR38）はそのまま撃つ（管理 tick は止めない）。 記録が在るのに読めない周も止めたと読む。 管理 tick は周ごとに席の状態の dir へ最後の周の打刻（時刻・判定・理由の 1 行・rc 1 の周も）を書き、 seat tick status は席ごとに最後の周の時刻・経過・健全（経過が周期の rules 行の 2 倍以内）・heartbeat の on/off・梯子の段・次の合図の 6 項目を、 seat heartbeat status は on/off と最後の周の打刻を、 doctor の席の行は heartbeat の on/off と管理 tick の健全の 2 項目を出す。 健全かを判じるのは読み手で、 管理 tick は判じない。 外の読み手（別 project の画面など）は 2 つの file を読んでよいが、 off / on は器の口を撃つ（停止の記録の書き手は器の 1 本）。 最後の周の打刻は event log に書かない（ADR-0070）
 
 nfr:
   - { id: NFR1, type: NFR, label: lens 予算,   category: 性能, target: 1 lens は 0.15M token 以内（目標値）,                                measure: lens 起動時の diff byte と cap の照合を verdict に記録,        vmethod: T, trace: { backward: [N-2], acceptance: [AC3] }, hero: { cat: 予算, big: "0.15", unit: M token, qual: lens 1 本あたりの上限 } }
@@ -1093,10 +1106,12 @@ glossary:
   - { term: 実効の口座,     en: effective role account, plain_short: その役割の席が使う口座,   def: 解決の時点で役割の席が使うと器が解いた口座（解き方は FR59・ADR-0041）。 同じ役割の席は project をまたいで同じ口座に揃う。 }
   - { term: 実効の記録,     en: effective role record,  plain_short: 使う口座の記録,           def: 器が host の根に書く、 役割ごとに高々 1 件の記録（役割・口座 label・時刻・妥協の理由）。 人が書く役割の口座の宣言とは別の file。 書き換えの規則は FR59 が正本（ADR-0041）。 }
   - { term: 妥協の起動,     en: compromise launch,      plain_short: 余裕が無くても席を立てること, def: 閾値未満の口座の候補が無い周に、 上限に当たっていない中で逼迫度が最小の口座で席を起こすこと。 理由を記録と席の指示文に出し、 席は作業を止めて user の裁定を待つ（FR69・ADR-0041）。 }
-  - { term: 群の今の口座, en: group effective account, plain_short: かたまりがいま使う口座, def: project の群の席が実際に使う口座。 器が host の根に群ごとに高々 1 件の記録で持ち、 記録が無い周は群の宣言の候補の先頭が種になる（ADR-0049）。 書き換えは群の移動（FR38）だけが行う。 }
+  - { term: 群の今の口座, en: group effective account, plain_short: "かたまりがいま使う口座", def: "project の群の席が実際に使う口座。 器が host の根に群ごとに高々 1 件の記録で持ち（ADR-0049）、 記録が無い周は種（宣言順で前の群の種でない最初の候補・ADR-0069）になる。 書き換えは群の移動（FR38）だけが行う。" }
   - { term: 群の逼迫, en: group pressure, plain_short: 口座の残りが線を越えた状態, def: 群の今の口座か群の席が居る口座の使用率が、 5 時間窓・7 日窓・モデル別窓のいずれかで閾値の rules 行の値以上である状態（ADR-0055）。 便の終端の周と席自身の hook が測り、 時計では測らない。 }
-  - { term: heartbeat,      en: heartbeat,              plain_short: 席を促す見回りの呼び名,   def: ADR-0058 での管理 tick の呼び名（席を促す見回り）。 user の裁定はこの語で管理 tick を指す。 前の器に在った、 席が自分で打つ生存の判子の口と file はこの語で呼ばず、 ADR-0058 では戻さない。 }
+  - { term: heartbeat, en: heartbeat, plain_short: "黙った席へ送る合図", def: "管理 tick が黙った席の入力欄へ注入する、 続きを促す 1 行（打刻の合図）の呼び名（ADR-0070）。 席ごとに止められる（FR78）。 前の器に在った、 席が自分で打つ生存の判子の口と file はこの語で呼ばない。" }
   - { term: backoff,        en: backoff,                plain_short: 間隔を梯子で伸ばして打ち切る, def: 同じ相手に同じ働きかけを繰り返すとき、 反応が無ければ次までの間隔を段ごとに伸ばし、 列が尽きたら打ち切る形。 管理 tick の打刻の合図の待ちの列は梯子の列（規範は FR27）。 }
   - { term: 梯子の列,         en: signal ladder,          plain_short: 合図の待ちを並べた列,   def: 管理 tick の打刻の合図の待ちを段ごとに並べた、 空でない昇順の秒の列（rules 行 1 本・ADR-0068）。 段の待ち・打ち切り・先頭への戻りの規範は FR27。 }
   - { term: 黙りの初段,       en: silence threshold,      plain_short: 黙ったと判じる長さ,     def: 管理 tick が席を「黙っている」と判じる、 最後の打刻からの経過の閾値（rules 行 1 本・既定 30 分）。 梯子の列の先頭とは別の値（規範は FR27）。 }
   - { term: 変化の digest,  en: change digest,          plain_short: 席が動いたかを比べる値,   def: 席に変化があったかを比べるための値 = 席の状態の打刻の最終行の時刻の 1 値。 読める形で梯子の記録に残し、 fleet の event log・context・台帳・pane の字面は入れない（ADR-0058）。 }
+  - { term: 群の予約, en: group reservation, plain_short: "かたまりが次に移る口座", def: "群ごとに周ごと導出する、 その群が次に移る口座（FR38・ADR-0069）。 群を宣言順に見て、 どの群の今の口座でもなく先の群の予約でもない、 並べた候補の先頭。 記録せず、 他の群の移動と予約を排他し、 便の起動は排他しない。 doctor の群の行の next= の値。" }
+  - { term: 残量の鍵, en: headroom key, plain_short: "残りの量で候補を並べる決まり", def: "群の移り先の候補を並べる比較の値の組（FR38・ADR-0069）。 7 日窓と役割の model の 7 日窓の残量（100 − 使用率）の小さい方が大きい順 → 7 日窓の reset が早い順 → 宣言順。 役割の model の行が無い口座は最後。 5 時間窓は門にだけ効く。 便用の口座選定の並べ順（reset が早い順）とは別。" }
