@@ -21,19 +21,23 @@
 //!
 //! 群の移動の判定も 1 本（[`judge`]・設計 seat-heartbeat.md §9 形 1）: 測る集合 → 鮮度の外の計測 → 判定 → 記録と承認 event /
 //! 断りの event と頼みの履歴化。呼び手は dispatch の 1 周の群の段と管理 tick で、判定の側は席の pane に触らない（通知・退避の
-//! 合図・起こし直しは呼び手が出力の値で撃つ）。
+//! 合図・起こし直しは呼び手が出力の値で撃つ）。移り先は群の予約（[`reserve`]・残量の鍵 [`by_key`] で並べる・設計
+//! account-lifecycle.md §29）で、doctor の群の行の `next=` も同じ 1 関数を測らずに呼ぶ。
 
 use super::{record, record_lines, Emit, Hooked};
 use crate::account::seat_accounts;
 use crate::fleet::cli::{host, now_utc};
+use crate::fleet::select::Model;
 use crate::fleet::store::{self, LockPolicy};
 use crate::fleet::usage;
-use crate::fleet::{replay, Allowance, Event, EventKind, State, WindowKind, SCHEMA};
+use crate::fleet::{replay, Allowance, Event, EventKind, Measured, State, WindowKind, SCHEMA};
 use crate::invocation::Invocation;
 use crate::name::NAME;
 use crate::rules::manifest::{AccountGroup, Manifest};
+use crate::rules::RuleValue;
 use crate::seat::inject::Confirm;
 use crate::seat::{host_groups_dir, sanitize_target};
+use std::cmp::Reverse;
 use std::collections::BTreeSet;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -318,8 +322,10 @@ pub struct Judge<'a> {
     pub manifest: &'a Manifest,
     /// 判じる群。
     pub group: &'a AccountGroup,
-    /// 他の群の今の口座（と記録を読めない群の候補）＝移り先にしない。
-    pub others: &'a BTreeSet<String>,
+    /// 周の頭の各群の今の口座（と記録を読めない群の候補）＝先の群の予約の導きが外す。
+    pub head: &'a BTreeSet<String>,
+    /// いまの各群の今の口座（同じ周で先に移った群の移り先で更新・記録を読めない群の候補も）＝判じる群の移り先にしない。
+    pub taken: &'a BTreeSet<String>,
     /// 鮮度に依らず測る口座（頼みの在る群の測る集合の和・tick は空）。
     pub forced: &'a BTreeSet<String>,
     /// 窓ごとの閾値。
@@ -356,7 +362,7 @@ pub fn measured_set(group: &AccountGroup, current: &Current, state: &State) -> B
 }
 
 /// 群 1 つの移動の判定（**1 本**・lock は呼び手が握る）: 測る集合 ∖ `measured` を 1 回ずつ測り（`forced` の口座は鮮度に依らず）、
-/// 測った口座を `measured` へ足す。今の口座が逼迫でなければ [`Judgement::Stay`]、逼迫なら移り先（[`target_of`]）へ記録を書いて
+/// 測った口座を `measured` へ足す。今の口座が逼迫でなければ [`Judgement::Stay`]、逼迫なら移り先（[`reserve`]）へ記録を書いて
 /// 承認 event を記すか、断りの event を記す（同じ実測に 2 度断らない）。頼みの在る群（測る集合が全部 `forced`）は判定の後に
 /// 頼みを履歴へ move する。
 pub fn judge(input: &Judge<'_>, measured: &mut BTreeSet<String>) -> Judgement {
@@ -389,31 +395,120 @@ fn decide(input: &Judge<'_>, current: &str, set: &BTreeSet<String>, measured: &m
     if pressed_of(current).is_none() {
         return Judgement::Stay(set.iter().filter_map(|label| Some((label.clone(), pressed_of(label)?))).collect());
     }
-    match target_of(input, current, measured) {
-        Some(target) if approve(input, current, &target) => Judgement::Moved(target),
-        Some(_) => Judgement::Unreadable,
-        None => refuse(input, current),
+    // 移り先は自分の予約（役割の model の行が無い周・読めない周は移らず断らない＝記録 0・event 0・設計 §29 形 1 / 2）。
+    match reserve(input, measured) {
+        Ok(Some(target)) if approve(input, current, &target) => Judgement::Moved(target),
+        Ok(None) => refuse(input, current),
+        Ok(Some(_)) | Err(_) => Judgement::Unreadable,
     }
 }
 
-/// 移り先（設計 account-lifecycle.md §20 形 5 / §27 形 1）: 宣言の候補の順で、今の口座でなく・他の群の今の口座でなく・退役中で
-/// ない口座を、鮮度の外なら 1 回測り、3 窓とも閾値未満の鮮度の内側の実測を持つ**最初の** label（live 便は候補を妨げない＝新規の
-/// 便は §23 の群の記録で止まる）。
-fn target_of(input: &Judge<'_>, current: &str, measured: &mut BTreeSet<String>) -> Option<String> {
-    let mut state = replay(&store::read_all(input.state_dir).ok()?);
-    for label in input.group.accounts() {
-        if label == current || input.others.contains(label) || state.retired.contains_key(label) {
-            continue;
+/// 予約を導けない周（閉じた 2 値・判定は [`Judgement::Unreadable`] に、doctor の `next=` は語に写す）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unreserved {
+    /// 役割の model・鮮度の rules 行が無い（集合を空に読み替えない・既定を出さない・C1）。
+    NoRule,
+    /// event log を読めない。
+    Unreadable,
+}
+
+/// 各群の今の口座（記録 > 種）∪ 記録を読めない群の候補の全部（今の口座が分からない＝移り先にしない・fail-closed）。
+pub fn currents_of(state_dir: &Path, manifest: &Manifest) -> BTreeSet<String> {
+    manifest
+        .groups()
+        .iter()
+        .flat_map(|found| current_of(state_dir, found).map_or_else(|_| found.accounts().to_vec(), |current| vec![current.label]))
+        .collect()
+}
+
+/// 役割の model の集合（設計 §29 形 1）: 群の置き場の席の登録 row の役割（重複は畳む）ごとの rules 行 `seat.model.<役割>` の
+/// 表示名。どれかの行が無い・不発効・表に無い周は `None`（空に読み替えない）。席の row が無い群は空の集合。
+pub fn role_models(manifest: &Manifest, group: &AccountGroup, state: &State) -> Option<BTreeSet<&'static str>> {
+    state
+        .registrations
+        .values()
+        .filter(|latest| group.anchors().contains(&latest.registration.anchor))
+        .map(|latest| {
+            let row = manifest.get(&latest.registration.role.model_row()).filter(|row| row.enabled)?;
+            let RuleValue::Str(text) = &row.value else {
+                return None;
+            };
+            Model::parse(text).map(Model::display)
+        })
+        .collect()
+}
+
+/// 残量の鍵で候補を並べる（**pure**・設計 §29 形 1）: `rows` は宣言の候補の順の (label, 鮮度の内側の実測の行)・`models` は役割の
+/// model の表示名の集合。モデル別窓の行を 1 つでも欠く口座は最後 → 残量 = min(100 − 7 日窓の使用率, model ごとの 100 − モデル別
+/// 7 日窓の使用率) の大きい順（7 日窓の行が無ければ 0）→ 7 日窓の `resets_at` の早い順（無い口座は後）→ 宣言の順。5 時間窓は
+/// 読まない（門にだけ使う）。
+pub fn by_key<'a>(rows: &'a [(String, Vec<Allowance>)], models: &BTreeSet<&str>) -> Vec<&'a str> {
+    let mut keyed: Vec<_> = rows.iter().enumerate().map(|(at, (label, found))| (key_of(found, models), at, label.as_str())).collect();
+    keyed.sort();
+    keyed.into_iter().map(|(_, _, label)| label).collect()
+}
+
+/// 口座 1 つの鍵（小さい方が先）。
+fn key_of(rows: &[Allowance], models: &BTreeSet<&str>) -> (bool, Reverse<u64>, bool, Option<String>) {
+    let measured: Vec<&Measured> = rows
+        .iter()
+        .filter_map(|row| match row {
+            Allowance::Measured(found) => Some(found),
+            Allowance::Unmeasured(_) => None,
+        })
+        .collect();
+    let left = |found: &&Measured| 100_u64.saturating_sub(found.used_pct);
+    let seven: Vec<&Measured> = measured.iter().copied().filter(|found| found.window == WindowKind::SevenDay).collect();
+    let model = |name: &str| {
+        measured
+            .iter()
+            .filter(|found| found.window == WindowKind::SevenDayModel)
+            .filter(|found| found.model.as_deref().and_then(Model::parse).map(Model::display) == Some(name))
+            .map(left)
+            .min()
+    };
+    let missing = models.iter().any(|name| model(name).is_none());
+    let remaining = models.iter().filter_map(|name| model(name)).fold(seven.iter().map(left).min().unwrap_or(0), u64::min);
+    let reset = seven.iter().filter_map(|found| found.resets_at.clone()).min();
+    (missing, Reverse(remaining), reset.is_none(), reset)
+}
+
+/// 群の予約（**1 関数**・設計 §29 形 2 / 3）: 群を宣言順に `input.group` まで見て、群ごとに門を通る候補を残量の鍵（[`by_key`]）で
+/// 並べ、先の群の予約でない先頭をその群の予約とし、`input.group` の予約を返す（無ければ `None`）。門は今の口座でなく・どの群の
+/// 今の口座でもなく（先の群は周の頭の `head`・判じる群は `taken`）・退役中でなく・鮮度の内側の実測を持ち 3 窓とも閾値未満（鮮度の
+/// 外の候補は `measure` で口座ごとに 1 周 1 回測る）。予約は記録しない（周ごとに導き直す）。役割の model の行が無い周は測らずに
+/// [`Unreserved::NoRule`]。
+pub fn reserve(input: &Judge<'_>, measured: &mut BTreeSet<String>) -> Result<Option<String>, Unreserved> {
+    let read = || store::read_all(input.state_dir).map(|events| replay(&events)).map_err(|_| Unreserved::Unreadable);
+    let state = read()?;
+    let groups = input.manifest.groups();
+    let upto = groups.iter().position(|found| found.name() == input.group.name()).map_or(0, |at| at.saturating_add(1));
+    let models = groups.iter().take(upto).map(|found| role_models(input.manifest, found, &state).ok_or(Unreserved::NoRule));
+    let models = models.collect::<Result<Vec<_>, _>>()?;
+    let mut reserved: BTreeSet<String> = BTreeSet::new();
+    for (found, models) in groups.iter().zip(&models) {
+        let target = found.name() == input.group.name();
+        let taken = if target { input.taken } else { input.head };
+        let open: Vec<&String> =
+            found.accounts().iter().filter(|label| !taken.contains(*label) && !state.retired.contains_key(*label)).collect();
+        for label in &open {
+            if measured.insert((*label).clone()) {
+                (input.measure)(label, false);
+            }
         }
-        (input.measure)(label, false);
-        measured.insert(label.clone());
-        state = replay(&store::read_all(input.state_dir).ok()?);
-        let fresh = usage::fresh_rows(input.manifest, &state, label).ok().flatten();
-        if fresh.is_some_and(|rows| pressed(&rows, input.caps).is_none()) {
-            return Some(label.clone());
+        let state = read()?;
+        let mut rows = Vec::new();
+        for label in open {
+            let fresh = usage::fresh_rows(input.manifest, &state, label).map_err(|_| Unreserved::NoRule)?;
+            rows.extend(fresh.filter(|found| pressed(found, input.caps).is_none()).map(|found| (label.clone(), found)));
         }
+        let pick = by_key(&rows, models).into_iter().find(|label| !reserved.contains(*label)).map(str::to_owned);
+        if target {
+            return Ok(pick);
+        }
+        reserved.extend(pick);
     }
-    None
+    Ok(None)
 }
 
 /// 移動の記録と承認（この順）: 前提（宣言の逐語・起こし直しの刻み・役割の既定の面）が揃わない周と記録を書けない周は 1 つも
@@ -585,8 +680,9 @@ fn measure_later(state_dir: &Path, account: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{measure_later, pressed, Caps, Pressed};
+    use super::{by_key, measure_later, pressed, Caps, Pressed};
     use crate::fleet::{Allowance, Measured, WindowKind};
+    use std::collections::BTreeSet;
 
     /// 実測の行 1 つ。
     fn measured(window: WindowKind, used_pct: u64) -> Allowance {
@@ -611,6 +707,81 @@ mod tests {
         assert_eq!(pressed(&tie, caps).map(|found| found.window), Some(WindowKind::FiveHour), "同率は先の窓");
         let under = [measured(WindowKind::FiveHour, 84), measured(WindowKind::SevenDay, 94)];
         assert_eq!(pressed(&under, caps), None, "どの窓も閾値未満");
+    }
+
+    /// 鍵の歯の口座 1 つの行（5 時間窓・7 日窓〔reset つき〕・model ごとのモデル別窓）。
+    fn account(label: &str, (five, seven, reset): (u64, u64, Option<&str>), models: &[(&str, u64)]) -> (String, Vec<Allowance>) {
+        let row = |window, model: Option<&str>, used_pct, resets_at: Option<&str>| {
+            Allowance::Measured(Measured {
+                account: label.to_owned(),
+                window,
+                model: model.map(str::to_owned),
+                endpoint: "oauth-usage".to_owned(),
+                used_pct,
+                resets_at: resets_at.map(str::to_owned),
+            })
+        };
+        let mut rows = vec![row(WindowKind::FiveHour, None, five, None), row(WindowKind::SevenDay, None, seven, reset)];
+        rows.extend(models.iter().map(|(name, used)| row(WindowKind::SevenDayModel, Some(name), *used, None)));
+        (label.to_owned(), rows)
+    }
+
+    /// 並びの label（役割の model の集合は表示名の列）。
+    fn order(rows: &[(String, Vec<Allowance>)], models: &[&'static str]) -> Vec<String> {
+        by_key(rows, &models.iter().copied().collect::<BTreeSet<&str>>()).into_iter().map(str::to_owned).collect()
+    }
+
+    /// 役割の集合が空の群は 7 日窓の残量だけで並べ（モデル別窓・5 時間窓は読まない）、同点は 7 日窓の reset の早い方・reset の
+    /// 無い口座は後・reset も同じなら宣言の順。
+    #[test]
+    fn group_key_empty_role_set_orders_by_the_seven_day_window_then_reset_then_declaration() {
+        let (early, late) = (Some("2099-01-01T00:00:00Z"), Some("2099-02-01T00:00:00Z"));
+        let rows = [
+            account("low", (0, 80, early), &[("Fable", 0)]),
+            account("high", (99, 10, early), &[("Fable", 99)]),
+            account("late", (0, 50, late), &[]),
+            account("none", (0, 50, None), &[]),
+            account("early", (0, 50, early), &[]),
+            account("twin", (0, 50, early), &[]),
+        ];
+        assert_eq!(order(&rows, &[]), ["high", "early", "twin", "late", "none", "low"]);
+    }
+
+    /// 役割の model 1 つ: 残量は 7 日窓とその model の窓の小さい方。別の model の窓は読まない。
+    #[test]
+    fn group_key_one_role_model_takes_the_smaller_remainder() {
+        let reset = Some("2099-01-01T00:00:00Z");
+        let rows = [
+            account("seven", (0, 10, reset), &[("Fable", 70), ("Opus", 0)]),
+            account("model", (0, 40, reset), &[("Fable", 20), ("Opus", 99)]),
+        ];
+        assert_eq!(order(&rows, &["Fable"]), ["model", "seven"], "min(90, 30) = 30 < min(60, 80) = 60");
+        assert_eq!(order(&rows, &[]), ["seven", "model"], "集合が空なら 7 日窓だけ");
+    }
+
+    /// 役割の model 2 つ: 残量は 7 日窓と 2 つの model の窓の最小。
+    #[test]
+    fn group_key_two_role_models_take_the_smallest_remainder() {
+        let reset = Some("2099-01-01T00:00:00Z");
+        let rows = [
+            account("opus-full", (0, 10, reset), &[("Fable", 10), ("Opus", 90)]),
+            account("even", (0, 30, reset), &[("Fable", 30), ("Opus", 30)]),
+        ];
+        assert_eq!(order(&rows, &["Fable", "Opus"]), ["even", "opus-full"], "min(90, 90, 10) = 10 < 70");
+        assert_eq!(order(&rows, &["Fable"]), ["opus-full", "even"], "Opus を集合に入れなければ opus-full が先");
+    }
+
+    /// 役割の model のモデル別窓の行を 1 つでも欠く口座は残量に依らず最後（欠く口座どうしは残量の順）。
+    #[test]
+    fn group_key_account_missing_a_role_model_row_goes_last() {
+        let reset = Some("2099-01-01T00:00:00Z");
+        let rows = [
+            account("bare", (0, 0, reset), &[]),
+            account("half", (0, 5, reset), &[("Fable", 0)]),
+            account("worn", (0, 90, reset), &[("Fable", 90), ("Opus", 90)]),
+        ];
+        assert_eq!(order(&rows, &["Fable", "Opus"]), ["worn", "bare", "half"]);
+        assert_eq!(order(&rows, &["Fable"]), ["half", "worn", "bare"]);
     }
 
     /// 鮮度の外の口座を測る子は起動の記述を通る（設計 core-boundary.md §9 行 h）: program は自分・引数は `fleet usage

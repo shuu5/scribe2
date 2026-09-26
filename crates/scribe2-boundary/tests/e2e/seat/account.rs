@@ -433,7 +433,7 @@ fn host_group_doctor_prints_one_line_per_group_in_declaration_order() {
     assert_eq!(names, ["Tier2", "Tier10"], "宣言順（辞書順ではない）: {lines:?}");
     assert_eq!(
         group_line(&lines, "Tier2"),
-        "group=Tier2 accounts=acct-1,spare anchors=2 seat-accounts=acct-1 current=seed",
+        "group=Tier2 accounts=acct-1,spare anchors=2 seat-accounts=acct-1 current=seed next=no-rule",
         "候補は宣言順・置き場は数・席の口座は登録 row から: {lines:?}"
     );
     let last_account = lines.iter().rposition(|line| line.starts_with("account="));
@@ -446,21 +446,22 @@ fn host_group_doctor_prints_one_line_per_group_in_declaration_order() {
 
 /// (b) その群の置き場に席の登録 row が 1 つも無い周は無しの語（`none`）で、`0` や空に潰さない。置き場の一致は登録が
 /// 書いた値そのもの（`/repo` の末尾 `/` 違いはどの row とも一致しない）。2 群の候補は 2 つ（種は宣言順に重ならない＝
-/// Tier1 は acct-1・Tier2 は spare・候補 1 つを共有する 2 群は面の欠陥・account-lifecycle.md §28）。
+/// Tier1 は acct-1・Tier2 は spare・候補 1 つを共有する 2 群は面の欠陥・account-lifecycle.md §28）。行の末尾は `next=`
+/// （§29 形 5）: 席の row が無い群は役割の model の集合が空＝役割の行が無くても `no-rule` にならず、実測が無い候補は門を
+/// 通らない＝`none`。
 #[test]
 fn host_group_doctor_line_says_none_without_seat_rows() {
-    // flip-check: retroactive s2-07l.641
     let place = role_doctor_place();
     put_groups(&place, &[("Tier1", &["/repo/elsewhere"], &["acct-1", "spare"]), ("Tier2", &["/repo/"], &["acct-1", "spare"])]);
-    let lines = doctor_rows(&place, &account_rules(&["acct-1", "spare"]));
+    let lines = doctor_rows(&place, &next_rules(&["acct-1", "spare"], false));
     assert_eq!(
         group_line(&lines, "Tier1"),
-        "group=Tier1 accounts=acct-1,spare anchors=1 seat-accounts=none current=seed",
+        "group=Tier1 accounts=acct-1,spare anchors=1 seat-accounts=none current=seed next=none",
         "{lines:?}"
     );
     assert_eq!(
         group_line(&lines, "Tier2"),
-        "group=Tier2 accounts=acct-1,spare anchors=1 seat-accounts=none current=seed",
+        "group=Tier2 accounts=acct-1,spare anchors=1 seat-accounts=none current=seed next=none",
         "正規化しない: {lines:?}"
     );
     fs::remove_dir_all(&place.dir).ok();
@@ -476,13 +477,13 @@ fn host_group_doctor_line_lists_the_seat_accounts_of_the_group_anchors() {
     let rules = account_rules(&["acct-1"]);
     assert_eq!(
         group_line(&doctor_rows(&place, &rules), "Tier1"),
-        "group=Tier1 accounts=acct-1 anchors=2 seat-accounts=acct-1 current=seed",
+        "group=Tier1 accounts=acct-1 anchors=2 seat-accounts=acct-1 current=seed next=no-rule",
         "2 つの row は同じ口座＝畳んで 1 つ"
     );
     fs::write(vessel::fleet::store::events_path(&place.state), "not an event\n").expect("log を壊せる");
     assert_eq!(
         group_line(&doctor_rows(&place, &rules), "Tier1"),
-        "group=Tier1 accounts=acct-1 anchors=2 seat-accounts=unreadable current=seed",
+        "group=Tier1 accounts=acct-1 anchors=2 seat-accounts=unreadable current=seed next=no-rule",
         "読めなさを none に潰さない"
     );
     fs::remove_dir_all(&place.dir).ok();
@@ -537,11 +538,12 @@ fn host_group_record_doctor_current_shows_the_record_or_the_seed() {
     put_groups(&place, &[("Tier1", &["/repo"], &["acct-1", "spare"]), ("Tier2", &["/repo/b"], &["acct-1", "spare"])]);
     let rules = account_rules(&["acct-1", "spare"]);
     let lines = doctor_rows(&place, &rules);
-    assert_eq!(group_line(&lines, "Tier1"), "group=Tier1 accounts=acct-1,spare anchors=1 seat-accounts=acct-1 current=seed", "{lines:?}");
+    let line = |seats: &str, current: &str| format!("accounts=acct-1,spare anchors=1 seat-accounts={seats} current={current} next=no-rule");
+    assert_eq!(group_line(&lines, "Tier1"), format!("group=Tier1 {}", line("acct-1", "seed")), "{lines:?}");
     put_group_record(&place, "Tier1","account=spare\nts=2026-09-24T00:00:00Z\nreason=move\nprevious=acct-1\n");
     let lines = doctor_rows(&place, &rules);
-    assert_eq!(group_line(&lines, "Tier1"), "group=Tier1 accounts=acct-1,spare anchors=1 seat-accounts=acct-1 current=spare", "{lines:?}");
-    assert_eq!(group_line(&lines, "Tier2"), "group=Tier2 accounts=acct-1,spare anchors=1 seat-accounts=none current=seed", "{lines:?}");
+    assert_eq!(group_line(&lines, "Tier1"), format!("group=Tier1 {}", line("acct-1", "spare")), "{lines:?}");
+    assert_eq!(group_line(&lines, "Tier2"), format!("group=Tier2 {}", line("none", "seed")), "{lines:?}");
     fs::remove_dir_all(&place.dir).ok();
 }
 
@@ -560,7 +562,8 @@ fn host_group_record_unreadable_record_stops_typed() {
     fs::write(place.state.join(vessel::rules::HOST_MANIFEST), host).ok();
     put_group_record(&place, "Tier1","account=spare\nts=2026-09-24T00:00:00Z\n");
     let lines = doctor_rows(&place, NO_ACCOUNT_RULES);
-    assert_eq!(group_line(&lines, "Tier1"), "group=Tier1 accounts=acct-1,spare anchors=1 seat-accounts=none current=unreadable", "{lines:?}");
+    let want = "group=Tier1 accounts=acct-1,spare anchors=1 seat-accounts=none current=unreadable next=unreadable";
+    assert_eq!(group_line(&lines, "Tier1"), want, "{lines:?}");
     let out = run_seat(&[
         "launch", "--state-dir", &state, "--role", "orchestrator", "--target", "grec:seat", "--anchor", &anchor, "--tmux-socket", &place.socket,
     ]);
@@ -568,6 +571,137 @@ fn host_group_record_unreadable_record_stops_typed() {
     assert_eq!(tick_token(&stderr_of(&out), "reason").as_deref(), Some("group-record-unreadable"), "{}", stderr_of(&out));
     assert!(acct_rows(&place.state).is_empty(), "登録 row 0");
     assert!(!Path::new(&place.socket).exists(), "tmux を撃たない（socket が作られない）");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+// ─── doctor の群の行の `next=`（account-lifecycle.md §29 形 5・契約表の行 r・接頭辞 `host_group_next_`） ───
+//
+// `role_doctor_place` の登録 row（anchor `/repo`・口座 acct-1・役割 orchestrator）の置き場に群 Tier1（置き場 `/repo`・候補
+// [acct-1, spare, third]・種 acct-1）を宣言し、候補の実測の行を event log へ直に置く（doctor は測らない）。
+
+/// 口座の表・閾値の 3 行・鮮度の行（3600 秒）と、`role` が真なら役割の model の行（`seat.model.orchestrator` = fable）の写し。
+fn next_rules(labels: &[&str], role: bool) -> String {
+    let row = |id: &str, kind: &str, value: &str| {
+        format!("\n[[rule]]\nid = \"{id}\"\nkind = \"{kind}\"\nvalue = {value}\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n")
+    };
+    let mut body = account_rules(labels);
+    for (id, kind, value) in [
+        ("fleet.usage_fresh_s", "UsageFreshS", "3600"),
+        ("fleet.group_pressure_5h_pct", "GroupPressure5hPct", "85"),
+        ("fleet.group_pressure_7d_pct", "GroupPressure7dPct", "95"),
+        ("fleet.group_pressure_model_pct", "GroupPressureModelPct", "95"),
+    ] {
+        body.push_str(&row(id, kind, value));
+    }
+    if role {
+        body.push_str(&row("seat.model.orchestrator", "RoleModel", "\"fable\""));
+    }
+    body
+}
+
+/// 実測の窓が開き直る時刻（遠い未来の番兵）。
+const NEXT_FAR: &str = "2099-01-01T00:00:00Z";
+
+/// 口座 1 つの実測の回（5 時間窓 10・7 日窓 `seven`・モデル別窓〔Fable〕`model`）を `ts` で置く。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn put_next_round(place: &RolePlace, ts: &str, account: &str, (seven, model): (u64, u64)) {
+    use vessel::fleet::{Allowance, Event, EventKind, Measured, WindowKind};
+    let policy = vessel::fleet::store::LockPolicy::embedded().expect("lock の規則を読める");
+    for (window, used_pct) in [(WindowKind::FiveHour, 10), (WindowKind::SevenDay, seven), (WindowKind::SevenDayModel, model)] {
+        let measured = Measured {
+            account: account.to_owned(),
+            window,
+            model: (window == WindowKind::SevenDayModel).then(|| "Fable".to_owned()),
+            endpoint: "oauth-usage".to_owned(),
+            used_pct,
+            resets_at: Some(NEXT_FAR.to_owned()),
+        };
+        let event = Event {
+            schema: vessel::fleet::SCHEMA,
+            ts: ts.to_owned(),
+            kind: EventKind::AllowanceMeasured,
+            run: String::new(),
+            bead: String::new(),
+            host: "h".to_owned(),
+            actor: EventKind::AllowanceMeasured.default_actor().to_owned(),
+            stage: None,
+            seat: None,
+            pid: None,
+            detail: None,
+            allowance: Some(Allowance::Measured(measured)),
+            registration: None,
+            mark: None,
+            account: None,
+            cost: None,
+            rule: None,
+        };
+        vessel::fleet::store::append(&place.state, &event, policy).expect("実測を置ける");
+    }
+}
+
+/// 群 Tier1 の置き場を作り、`rounds` の (口座, ts, 7 日窓, モデル別窓) を置いて doctor の Tier1 の行を返す。
+fn next_line(role: bool, rounds: &[(&str, &str, u64, u64)]) -> (RolePlace, String) {
+    let place = role_doctor_place();
+    let labels = ["acct-1", "spare", "third"];
+    put_groups(&place, &[("Tier1", &["/repo"], &labels)]);
+    for (account, ts, seven, model) in rounds {
+        put_next_round(&place, ts, account, (*seven, *model));
+    }
+    let line = group_line(&doctor_rows(&place, &next_rules(&labels, role)), "Tier1");
+    (place, line)
+}
+
+/// Tier1 の行の頭（`next=` の手前まで）。
+const NEXT_HEAD: &str = "group=Tier1 accounts=acct-1,spare,third anchors=1 seat-accounts=acct-1 current=seed";
+
+/// (label) 鮮度の内側の実測を持つ候補の鍵の先頭: spare（7 日窓 60・model 10＝残量 40）より third（20 / 20＝残量 80）が先
+/// （宣言順の先頭 spare ではない・base は `next=` が無い ＝ RED）。
+#[test]
+fn host_group_next_names_the_key_head() {
+    let now = vessel::fleet::cli::now_utc();
+    let (place, line) = next_line(true, &[("spare", &now, 60, 10), ("third", &now, 20, 20)]);
+    assert_eq!(line, format!("{NEXT_HEAD} next=third"));
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (none) 門を通る候補が無い: 候補の実測が鮮度の外だけ（doctor は測らない＝門を通らない）の周も、鮮度の内側で third が閾値以上・
+/// spare が実測なしの周も `next=none`（base は `next=` が無い ＝ RED）。
+#[test]
+fn host_group_next_says_none_without_a_passing_candidate() {
+    let stale = "2026-09-12T02:00:00Z";
+    let (place, line) = next_line(true, &[("spare", stale, 10, 10), ("third", stale, 10, 10)]);
+    assert_eq!(line, format!("{NEXT_HEAD} next=none"), "鮮度の外は測らない");
+    fs::remove_dir_all(&place.dir).ok();
+    let now = vessel::fleet::cli::now_utc();
+    let (place, line) = next_line(true, &[("third", &now, 96, 10)]);
+    assert_eq!(line, format!("{NEXT_HEAD} next=none"), "閾値以上は門で落ちる");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (unreadable) 記録が在るのに読めない群は `next=unreadable`（none に潰さない・base は `next=` が無い ＝ RED）。
+#[test]
+fn host_group_next_says_unreadable_for_an_unreadable_record() {
+    let now = vessel::fleet::cli::now_utc();
+    let place = role_doctor_place();
+    let labels = ["acct-1", "spare", "third"];
+    put_groups(&place, &[("Tier1", &["/repo"], &labels)]);
+    put_next_round(&place, &now, "third", (20, 20));
+    put_group_record(&place, "Tier1", "account=spare\n");
+    let line = group_line(&doctor_rows(&place, &next_rules(&labels, true)), "Tier1");
+    assert_eq!(line, "group=Tier1 accounts=acct-1,spare,third anchors=1 seat-accounts=acct-1 current=unreadable next=unreadable");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (no-rule) 群の席の役割〔orchestrator〕の `seat.model.orchestrator` 行を欠く `--rules` は、門を通る候補が在っても
+/// `next=no-rule`（集合を空に読み替えて label を出さない・none / unreadable に潰さない・base は `next=` が無い ＝ RED）。
+#[test]
+fn host_group_next_says_no_rule_without_the_role_model_row() {
+    let now = vessel::fleet::cli::now_utc();
+    let (place, line) = next_line(false, &[("spare", &now, 60, 10), ("third", &now, 20, 20)]);
+    assert_eq!(line, format!("{NEXT_HEAD} next=no-rule"));
     fs::remove_dir_all(&place.dir).ok();
 }
 

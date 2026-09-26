@@ -79,12 +79,13 @@ pub(super) fn round(input: &Input<'_>) -> Result<(), Stopped> {
         .collect();
     let mut measured = BTreeSet::new();
     let mut read = Read::of(input, &manifest, caps).ok_or(Stopped::Unreadable)?;
-    // 「他の群の今の口座」は周の中で更新する（先に移った群の移り先を後の群が飛ばす＝2 群が同じ周に同じ label へ移らない）。
+    // 先の群の予約は周の頭の今の口座から導き（移った群は自分の予約を使った＝後の群はその次へ・§29 形 2）、判じる群の移り先から
+    // 外す「今の口座」は周の中で更新する（先に移った群の移り先を後の群が飛ばす＝2 群が同じ周に同じ label へ移らない）。
     let mut currents: Vec<String> = plans.iter().map(|(_, current)| current.label.clone()).collect();
+    let head: BTreeSet<String> = currents.iter().chain(&blocked).cloned().collect();
     for (at, (found, current)) in plans.iter().enumerate() {
-        let others: BTreeSet<String> =
-            currents.iter().enumerate().filter(|(other, _)| *other != at).map(|(_, label)| label.clone()).chain(blocked.iter().cloned()).collect();
-        if let (Some(moved), Some(slot)) = (step(&mut read, (found, current), (&others, &forced), &mut measured), currents.get_mut(at)) {
+        let taken: BTreeSet<String> = currents.iter().chain(&blocked).cloned().collect();
+        if let (Some(moved), Some(slot)) = (step(&mut read, (found, current), [&head, &taken, &forced], &mut measured), currents.get_mut(at)) {
             *slot = moved;
         }
     }
@@ -139,7 +140,7 @@ impl<'a, 'b> Read<'a, 'b> {
 fn step(
     read: &mut Read<'_, '_>,
     (found, current): (&AccountGroup, &Current),
-    (others, forced): (&BTreeSet<String>, &BTreeSet<String>),
+    [head, taken, forced]: [&BTreeSet<String>; 3],
     measured: &mut BTreeSet<String>,
 ) -> Option<String> {
     let behind = behind(&read.state, found, &current.label);
@@ -152,7 +153,8 @@ fn step(
         let args = usage_args(input, label);
         let _ = if force { usage::run(&args, input.state_dir) } else { usage::run_fresh(&args, input.state_dir) };
     };
-    let judge = group::Judge { state_dir: input.state_dir, manifest: read.manifest, group: found, others, forced, caps: read.caps, measure: &measure };
+    let judge =
+        group::Judge { state_dir: input.state_dir, manifest: read.manifest, group: found, head, taken, forced, caps: read.caps, measure: &measure };
     let judged = group::judge(&judge, measured);
     if !read.refresh() {
         return None;

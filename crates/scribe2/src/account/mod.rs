@@ -379,8 +379,9 @@ const GROUP_UNREADABLE: &str = "unreadable";
 ///
 /// 出すのは宣言値 3 つ（名・候補の label の列・置き場の数）と導出値 2 つ（その群の置き場を anchor に持つ席の登録 row の
 /// 口座 label・重複は畳み辞書順・1 つも無ければ [`GROUP_NONE`]・`state` が `None`〔log を読めない〕周は [`GROUP_UNREADABLE`]
-/// ／群の今の口座 `current=`＝[`render_current`]・§20 形 2）。記録は 1 件も書かない（読むだけ）。
-fn render_group(state_dir: &Path, group: &AccountGroup, state: Option<&State>) -> String {
+/// ／群の今の口座 `current=`＝[`render_current`]・§20 形 2 ／群の予約 `next=`＝[`render_next`]・§29 形 5）。記録は 1 件も書かない
+/// （読むだけ）。
+fn render_group(state_dir: &Path, manifest: &Manifest, group: &AccountGroup, state: Option<&State>) -> String {
     let seats = match state {
         None => GROUP_UNREADABLE.to_owned(),
         Some(found) => {
@@ -393,13 +394,38 @@ fn render_group(state_dir: &Path, group: &AccountGroup, state: Option<&State>) -
         }
     };
     format!(
-        "group={} accounts={} anchors={} seat-accounts={seats} current={}",
+        "group={} accounts={} anchors={} seat-accounts={seats} current={} next={}",
         group.name(),
         group.accounts().join(","),
         group.anchors().len(),
-        render_current(state_dir, group)
+        render_current(state_dir, group),
+        render_next(state_dir, manifest, group)
     )
 }
+
+/// 群の行の `next=` の値（群の予約の 1 関数 [`crate::hook::group::reserve`] を**測らずに**呼ぶ＝鮮度の外の候補は門を通らない）:
+/// 予約の label・無ければ [`GROUP_NONE`]・記録か event log を読めなければ [`GROUP_UNREADABLE`]・閾値 / 鮮度 / 役割の model の
+/// rules 行が無ければ [`NEXT_NO_RULE`]（どれにも潰さない・C10）。
+fn render_next(state_dir: &Path, manifest: &Manifest, group: &AccountGroup) -> String {
+    use crate::hook::group::{current_of, currents_of, reserve, Caps, Judge, Unreserved};
+    if current_of(state_dir, group).is_err() {
+        return GROUP_UNREADABLE.to_owned();
+    }
+    let Ok(caps) = Caps::of(manifest) else {
+        return NEXT_NO_RULE.to_owned();
+    };
+    let currents = currents_of(state_dir, manifest);
+    let judge =
+        Judge { state_dir, manifest, group, head: &currents, taken: &currents, forced: &BTreeSet::new(), caps, measure: &|_, _| {} };
+    match reserve(&judge, &mut BTreeSet::new()) {
+        Ok(found) => found.unwrap_or_else(|| GROUP_NONE.to_owned()),
+        Err(Unreserved::NoRule) => NEXT_NO_RULE.to_owned(),
+        Err(Unreserved::Unreadable) => GROUP_UNREADABLE.to_owned(),
+    }
+}
+
+/// 群の行の `next=` が rules 行の無さで導けないことを表す語。
+const NEXT_NO_RULE: &str = "no-rule";
 
 /// 群の行の `current=` の値（解決の 1 関数 [`crate::hook::group::current_of`] の読み）: 記録が在ればその label・無ければ
 /// [`GROUP_SEED`]（種＝候補の先頭は `accounts=` の先頭に在る）・在るのに読めなければ [`GROUP_UNREADABLE`]（種に潰さない・C11）。
@@ -470,7 +496,7 @@ pub fn doctor_lines(state_dir: &Path, rules: Option<&str>) -> Vec<String> {
     lines.extend(rows(state_dir, &manifest, state.as_ref()).into_iter().map(|(_, line)| line));
     // 群の行は口座の行の後ろに**宣言順**で（設計 account-lifecycle.md §17 の約束 7）。群を 1 つも宣言しない host は
     // 0 本＝既存の外形は 1 行も動かない（約束 8）。
-    lines.extend(manifest.groups().iter().map(|group| render_group(state_dir, group, state.as_ref())));
+    lines.extend(manifest.groups().iter().map(|group| render_group(state_dir, &manifest, group, state.as_ref())));
     lines
 }
 

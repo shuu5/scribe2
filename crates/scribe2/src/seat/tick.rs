@@ -589,17 +589,14 @@ fn judged(input: &Input, front: &Front) -> Judged {
     let Ok(_lock) = Lock::take(&dir) else {
         return Judged::Unjudged;
     };
-    let others: BTreeSet<String> = manifest
-        .groups()
-        .iter()
-        .filter(|other| other.name() != found.name())
-        .flat_map(|other| current_of(state_dir, other).map_or_else(|_| other.accounts().to_vec(), |current| vec![current.label]))
-        .collect();
+    // 各群の今の口座（記録を読めない群は候補の全部）＝移り先にせず、先の群の予約もこの集合から導く（§29 形 2 / 3）。
+    let currents = group::currents_of(state_dir, &manifest);
     let measure = |label: &str, _: bool| {
         let _ = usage::run_fresh(&["--account".to_owned(), label.to_owned()], state_dir);
     };
     let forced = BTreeSet::new();
-    let judge = group::Judge { state_dir, manifest: &manifest, group: found, others: &others, forced: &forced, caps: front.rows.caps, measure: &measure };
+    let (head, taken) = (&currents, &currents);
+    let judge = group::Judge { state_dir, manifest: &manifest, group: found, head, taken, forced: &forced, caps: front.rows.caps, measure: &measure };
     let judgement = group::judge(&judge, &mut BTreeSet::new());
     let _ = fs::write(&stamp, format!("{}\n", front.now));
     match judgement {

@@ -2963,6 +2963,11 @@ const GROUP_FAR: &str = "2099-01-01T00:00:00Z";
 /// 鮮度の外の実測の ts（写しの鮮度 3600 秒より十分古い）。
 const GROUP_STALE_TS: &str = "2026-09-12T02:00:00Z";
 
+/// 規則の写しの役割の model の行（席の役割 orchestrator・値 fable の表示名 Fable は本文のモデル別窓の名・account-lifecycle.md
+/// §29 形 1）。役割の行を欠く歯はこの字面を写しから落とす。
+const GROUP_ROLE_ROW: &str =
+    "[[rule]]\nid = \"seat.model.orchestrator\"\nkind = \"RoleModel\"\nvalue = \"fable\"\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n";
+
 /// 群の歯の置き場（toy repo・置き場・規則の写し・空の台帳・偽 client）。
 struct GroupPlace {
     /// toy repo（列の `--repo`）。
@@ -3054,6 +3059,7 @@ fn groups_place(accounts: &[(&str, u64, u64, u64)], groups: &[GroupDecl<'_>]) ->
     ]
     .iter()
     .fold(base, |text, found| format!("{text}\n{found}"));
+    let rules = format!("{rules}\n{GROUP_ROLE_ROW}");
     let path = state.join("rules-group.toml");
     fs::write(&path, rules).expect("群の写しを書ける");
     group_tmux(&state);
@@ -3151,21 +3157,32 @@ fn group_seats(state: &Path, accounts: [&str; 2]) {
 }
 
 /// 口座 1 つの実測の回（5h / 7d / model〔Fable〕）を `ts` で置く。
+fn put_group_round(state: &Path, ts: &str, account: &str, (five, seven, model): (u64, u64, u64)) {
+    put_rows(state, ts, account, &[(None, five, GROUP_FAR), (Some(""), seven, GROUP_FAR), (Some("Fable"), model, GROUP_FAR)]);
+}
+
+/// 口座 1 つの実測の回を `ts` で置く: 行ごとに (窓の印〔`None` = 5 時間窓・`Some("")` = 7 日窓・`Some(名)` = その表示名の
+/// モデル別窓〕, 使用率, reset)。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn put_group_round(state: &Path, ts: &str, account: &str, (five, seven, model): (u64, u64, u64)) {
+fn put_rows(state: &Path, ts: &str, account: &str, rows: &[(Option<&str>, u64, &str)]) {
     use vessel::fleet::{Allowance, Event, EventKind, Measured, WindowKind};
     let policy = vessel::fleet::store::LockPolicy::embedded().expect("lock の規則を読める");
-    for (window, used_pct) in [(WindowKind::FiveHour, five), (WindowKind::SevenDay, seven), (WindowKind::SevenDayModel, model)] {
+    for (mark, used_pct, reset) in rows {
+        let window = match mark {
+            None => WindowKind::FiveHour,
+            Some("") => WindowKind::SevenDay,
+            Some(_) => WindowKind::SevenDayModel,
+        };
         let measured = Measured {
             account: account.to_owned(),
             window,
-            model: (window == WindowKind::SevenDayModel).then(|| "Fable".to_owned()),
+            model: mark.filter(|name| !name.is_empty()).map(str::to_owned),
             endpoint: "oauth-usage".to_owned(),
-            used_pct,
-            resets_at: Some(GROUP_FAR.to_owned()),
+            used_pct: *used_pct,
+            resets_at: Some((*reset).to_owned()),
         };
         let event = Event {
             schema: vessel::fleet::SCHEMA,
@@ -3781,10 +3798,10 @@ fn pipe_dispatch_group_move_also_moves_to_an_account_used_by_a_live_run() {
     }
 }
 
-/// 候補の順で先の a2 の 3 窓が `second`、次の a3 が閾値未満の置き場で 1 周を撃ち、移り先を返す。
-fn move_with_second(second: (u64, u64, u64)) -> Option<String> {
-    let (five, seven, model) = second;
-    let place = move_place(&[("a1", 90, 10, 10), ("a2", five, seven, model), ("a3", 10, 10, 10)], &["a1", "a2", "a3"], "a1");
+/// 候補の順で先の a2 の 3 窓が `second`、次の a3 が `third` の置き場で 1 周を撃ち、移り先を返す。
+fn move_with_second(second: (u64, u64, u64), third: (u64, u64, u64)) -> Option<String> {
+    let ((five, seven, model), (five3, seven3, model3)) = (second, third);
+    let place = move_place(&[("a1", 90, 10, 10), ("a2", five, seven, model), ("a3", five3, seven3, model3)], &["a1", "a2", "a3"], "a1");
     group_terminal(&place, "r-group-1");
     let found = move_account(&place.state, GROUP);
     clean(&[&place.repo, &place.state]);
@@ -3794,22 +3811,23 @@ fn move_with_second(second: (u64, u64, u64)) -> Option<String> {
 /// (5 時間窓) 先の a2 の 5 時間窓だけが 90（行の値 85 以上）なら a2 を飛ばして a3 へ移る。
 #[test]
 fn pipe_dispatch_group_move_skips_a_candidate_over_the_five_hour_cap() {
-    assert_eq!(move_with_second((90, 10, 10)).as_deref(), Some("a3"), "5 時間窓の逼迫は飛ばす");
-    assert_eq!(move_with_second((80, 10, 10)).as_deref(), Some("a2"), "閾値未満なら a2 へ");
+    assert_eq!(move_with_second((90, 10, 10), (10, 10, 10)).as_deref(), Some("a3"), "5 時間窓の逼迫は飛ばす");
+    assert_eq!(move_with_second((80, 10, 10), (10, 10, 10)).as_deref(), Some("a2"), "閾値未満なら a2 へ");
 }
 
-/// (7 日窓) 先の a2 の 7 日窓だけが 96（行の値 95 以上）なら a2 を飛ばして a3 へ移る。
+/// (7 日窓) 先の a2 の 7 日窓だけが 96（行の値 95 以上）なら a2 を飛ばして a3 へ移る。閾値未満の対は a3 も同じ 90 にして
+/// 残量の鍵を同点にする（§29 の鍵は宣言の順に戻る＝門だけを測る）。
 #[test]
 fn pipe_dispatch_group_move_skips_a_candidate_over_the_seven_day_cap() {
-    assert_eq!(move_with_second((10, 96, 10)).as_deref(), Some("a3"), "7 日窓の逼迫は飛ばす");
-    assert_eq!(move_with_second((10, 90, 10)).as_deref(), Some("a2"), "7 日窓 90 は行の値 95 未満＝a2 へ");
+    assert_eq!(move_with_second((10, 96, 10), (10, 90, 10)).as_deref(), Some("a3"), "7 日窓の逼迫は飛ばす");
+    assert_eq!(move_with_second((10, 90, 10), (10, 90, 10)).as_deref(), Some("a2"), "7 日窓 90 は行の値 95 未満＝a2 へ");
 }
 
-/// (モデル別窓) 先の a2 のモデル別窓だけが 96 なら a2 を飛ばして a3 へ移る。
+/// (モデル別窓) 先の a2 のモデル別窓だけが 96 なら a2 を飛ばして a3 へ移る（閾値未満の対は 7 日窓の歯と同じく同点）。
 #[test]
 fn pipe_dispatch_group_move_skips_a_candidate_over_the_model_cap() {
-    assert_eq!(move_with_second((10, 10, 96)).as_deref(), Some("a3"), "モデル別窓の逼迫は飛ばす");
-    assert_eq!(move_with_second((10, 10, 90)).as_deref(), Some("a2"), "モデル別窓 90 は行の値 95 未満＝a2 へ");
+    assert_eq!(move_with_second((10, 10, 96), (10, 10, 90)).as_deref(), Some("a3"), "モデル別窓の逼迫は飛ばす");
+    assert_eq!(move_with_second((10, 10, 90), (10, 10, 90)).as_deref(), Some("a2"), "モデル別窓 90 は行の値 95 未満＝a2 へ");
 }
 
 /// (lock) 群用 dir に lock の file が残る周は群の段が typed に止まり、記録 0・event 0・送り 0・計測 0 で、便の列の rc は
@@ -3826,6 +3844,156 @@ fn pipe_dispatch_group_move_leftover_lock_stops_the_stage_without_touching_the_q
     assert_eq!(group_sends(&place.state), Vec::<String>::new(), "送り 0");
     assert_eq!(group_calls(&place.state), 0, "計測 0");
     assert!(groups_dir(&place.state).join("lock").is_file(), "lock の file は残る");
+    clean(&[&place.repo, &place.state]);
+}
+
+// ───── 群の移り先は残量の鍵と群の予約（account-lifecycle.md §29 形 1〜3・契約表の行 r・接頭辞 `pipe_dispatch_group_reserve_`・§20 の fixture） ─────
+//
+// 今の口座 a1 は偽 client の本文で逼迫（鮮度の外＝1 周が測る）。候補の窓は本文（reset は遠い未来の番兵・モデル別窓は Fable）か、
+// 鮮度の内側の実測の行を event log へ直に置く（[`put_rows`]・偽 client を呼ばない＝reset とモデル別窓の名を口座ごとに作れる）。
+
+/// reset の早い番兵と遅い番兵（どちらも遠い未来）。
+const RESERVE_EARLY: &str = "2099-01-01T00:00:00Z";
+const RESERVE_LATE: &str = "2099-02-01T00:00:00Z";
+
+/// 群 1 つ（候補 a1, a2, a3・席は 2 つとも a1）で、a2 / a3 の実測の行を鮮度の内側に置いて 1 周を撃ち、移り先を返す。
+fn reserve_move(second: &[(Option<&str>, u64, &str)], third: &[(Option<&str>, u64, &str)]) -> Option<String> {
+    let place = move_place(&[("a1", 90, 10, 10), ("a2", 10, 10, 10), ("a3", 10, 10, 10)], &["a1", "a2", "a3"], "a1");
+    put_rows(&place.state, &group_now(), "a2", second);
+    put_rows(&place.state, &group_now(), "a3", third);
+    let out = group_terminal(&place, "r-group-1");
+    let found = move_account(&place.state, GROUP);
+    assert_eq!(move_counts(&place.state).0, usize::from(found.is_some()), "移った周だけ承認 event 1（{}）", told(&out));
+    clean(&[&place.repo, &place.state]);
+    found
+}
+
+/// (a) 宣言順で先の a2 の残量が小さく（7 日窓 60）後の a3 の残量が大きい（7 日窓 20）周は a3 へ移る（base は宣言順の a2 ＝ RED）。
+#[test]
+fn pipe_dispatch_group_reserve_moves_to_the_larger_remainder_not_the_first_declared() {
+    let found = move_with_second((10, 60, 10), (10, 20, 10));
+    assert_eq!(found.as_deref(), Some("a3"), "残量 80 の a3 が残量 40 の a2 より先");
+}
+
+/// (b) 7 日窓が同じ（20）で役割の model〔Fable〕の窓が違う 2 候補は model の残量の大きい方へ（a2 は 70 ＝残量 30・a3 は 30 ＝
+/// 残量 70・base は宣言順の a2 ＝ RED）。
+#[test]
+fn pipe_dispatch_group_reserve_model_window_remainder_decides_between_equal_seven_day() {
+    let found = move_with_second((10, 20, 70), (10, 20, 30));
+    assert_eq!(found.as_deref(), Some("a3"), "min(80, 30) < min(80, 70)");
+}
+
+/// (c) 残量の同点（7 日窓・model とも 50）は 7 日窓の reset の早い a3 へ（base は宣言順の a2 ＝ RED）。
+#[test]
+fn pipe_dispatch_group_reserve_tie_goes_to_the_earlier_seven_day_reset() {
+    let second = [(None, 10, RESERVE_EARLY), (Some(""), 50, RESERVE_LATE), (Some("Fable"), 50, RESERVE_EARLY)];
+    let third = [(None, 10, RESERVE_EARLY), (Some(""), 50, RESERVE_EARLY), (Some("Fable"), 50, RESERVE_EARLY)];
+    assert_eq!(reserve_move(&second, &third).as_deref(), Some("a3"), "reset の早い方");
+}
+
+/// (c) 残量も 7 日窓の reset も同じ 2 候補は宣言順の a2 へ（鍵の最後の段）。
+#[test]
+fn pipe_dispatch_group_reserve_full_tie_keeps_the_declaration_order() {
+    let rows = [(None, 10, RESERVE_EARLY), (Some(""), 50, RESERVE_EARLY), (Some("Fable"), 50, RESERVE_EARLY)];
+    assert_eq!(reserve_move(&rows, &rows).as_deref(), Some("a2"), "宣言の順");
+}
+
+/// (d) 役割の model〔Fable〕のモデル別窓の行を持たない a2 は残量（7 日窓 0）に依らず最後で、行を持つ a3（残量 50）へ移る（base は
+/// 宣言順の a2 ＝ RED）。別の model〔Opus〕の行は役割の model の行の代わりにならない。
+#[test]
+fn pipe_dispatch_group_reserve_candidate_missing_the_role_model_row_goes_last() {
+    let second = [(None, 10, RESERVE_EARLY), (Some(""), 0, RESERVE_EARLY), (Some("Opus"), 0, RESERVE_EARLY)];
+    let third = [(None, 10, RESERVE_EARLY), (Some(""), 50, RESERVE_EARLY), (Some("Fable"), 50, RESERVE_EARLY)];
+    assert_eq!(reserve_move(&second, &third).as_deref(), Some("a3"), "model の行を欠く候補は最後");
+}
+
+/// (e) 5 時間窓が閾値（85）以上の a2 は残量が最大でも門で落ちて a3 へ移る。
+#[test]
+fn pipe_dispatch_group_reserve_five_hour_over_the_cap_is_gated_out() {
+    assert_eq!(move_with_second((90, 0, 0), (10, 50, 50)).as_deref(), Some("a3"), "5 時間窓の逼迫は門で落ちる");
+}
+
+/// (e) 5 時間窓が閾値未満の周は 5 時間窓の値が並びを変えない: a2（5h 0・7 日窓 50）より a3（5h 80・7 日窓 10）の残量が大きく
+/// a3 へ移る（base は宣言順の a2 ＝ RED・5 時間窓を鍵に入れる変異はここで落ちる）。
+#[test]
+fn pipe_dispatch_group_reserve_five_hour_under_the_cap_does_not_reorder() {
+    assert_eq!(move_with_second((0, 50, 10), (80, 10, 10)).as_deref(), Some("a3"), "5 時間窓は鍵に入らない");
+}
+
+/// (f) Tier1（候補 [a1, a3, a4, a5]）と Tier2（候補 [a2, a3, a4, a5]）が同じ周に逼迫し、残量は a5 > a4 > a3（宣言の先頭 a3 は
+/// 鍵の最後）: Tier1 は鍵の先頭 a5 へ（自分の予約）・Tier2 は Tier1 の予約 a5 を飛ばして次の a4 へ（base は宣言順の a3 / a4 ＝
+/// RED）。
+#[test]
+fn pipe_dispatch_group_reserve_two_pressed_groups_tier1_takes_the_key_head() {
+    let accounts = [("a1", 90, 10, 10), ("a2", 90, 10, 10), ("a3", 10, 60, 10), ("a4", 10, 40, 10), ("a5", 10, 20, 10)];
+    let place = groups_place(&accounts, &[(GROUP, &[0], &["a1", "a3", "a4", "a5"]), ("Tier2", &[1], &["a2", "a3", "a4", "a5"])]);
+    group_seats(&place.state, ["a1", "a2"]);
+    let out = group_terminal(&place, "r-group-1");
+    let records = (move_account(&place.state, GROUP), move_account(&place.state, "Tier2"));
+    assert_eq!(records, (Some("a5".to_owned()), Some("a4".to_owned())), "Tier1 は鍵の先頭・Tier2 は次（{}）", told(&out));
+    assert_eq!(move_counts(&place.state), (2, 0, 0), "承認 event 2・断り 0");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// Tier1（置き場 1 つ目・候補 [a1, a3, a4]・今の口座 a1 は閾値未満）と Tier2（置き場 2 つ目・候補 [a2, a3, a4]・今の口座 a2 は
+/// 逼迫）の置き場（a3 の残量 80 > a4 の残量 40＝Tier1 の予約は a3）。
+fn tier2_alone_place() -> GroupPlace {
+    let accounts = [("a1", 10, 10, 10), ("a2", 90, 10, 10), ("a3", 10, 20, 10), ("a4", 10, 60, 10)];
+    let place = groups_place(&accounts, &[(GROUP, &[0], &["a1", "a3", "a4"]), ("Tier2", &[1], &["a2", "a3", "a4"])]);
+    group_seats(&place.state, ["a1", "a2"]);
+    place
+}
+
+/// (g) Tier2 だけが逼迫する周も、Tier2 は Tier1 の予約 a3（Tier1 の鍵の先頭）を飛ばして a4 へ移る（base は a3 ＝ RED）。
+/// (h) 予約は記録しない: Tier1 の記録は動かず、群用 dir の file は Tier2 の記録 1 つだけ（予約の file 0）で、同じ周の後の便用の
+/// 除外（群の今の口座・§23）は予約の口座 a3 を外さない＝便は予約の口座を使う。
+#[test]
+fn pipe_dispatch_group_reserve_tier2_alone_skips_the_tier1_reservation() {
+    let place = tier2_alone_place();
+    let out = group_terminal(&place, "r-group-1");
+    let records = (move_account(&place.state, GROUP), move_account(&place.state, "Tier2"));
+    assert_eq!(records, (None, Some("a4".to_owned())), "Tier1 は移らず Tier2 は a4（{}）", told(&out));
+    let files: Vec<String> = fs::read_dir(groups_dir(&place.state))
+        .map(|entries| entries.filter_map(Result::ok).filter(|entry| entry.path().is_file()))
+        .map(|entries| entries.map(|entry| entry.file_name().to_string_lossy().into_owned()).collect())
+        .unwrap_or_default();
+    assert_eq!(files, ["Tier2.account"], "予約の file 0");
+    let grouped = vessel::rules::grouped_accounts(&place.state).unwrap_or_default();
+    assert_eq!(grouped.into_iter().collect::<Vec<String>>(), ["a1", "a4"], "便用の除外は今の口座だけ＝予約の a3 は便に開く");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (i) Tier2 だけが逼迫する周に、Tier1 だけの候補 a5（実測なし＝鮮度の外）が Tier1 の予約の導きで 1 回測られる（base は Tier2 の
+/// 候補しか測らない ＝ RED）。
+#[test]
+fn pipe_dispatch_group_reserve_tier2_alone_measures_the_tier1_candidates() {
+    let accounts = [("a1", 10, 10, 10), ("a2", 90, 10, 10), ("a3", 10, 20, 10), ("a5", 10, 30, 10)];
+    let place = groups_place(&accounts, &[(GROUP, &[0], &["a1", "a5", "a3"]), ("Tier2", &[1], &["a2", "a3"])]);
+    group_seats(&place.state, ["a1", "a2"]);
+    let out = group_terminal(&place, "r-group-1");
+    let measured = |label: &str| {
+        vessel::fleet::store::read_all(&place.state).unwrap_or_default().iter().filter(|event| {
+            matches!(&event.allowance, Some(vessel::fleet::Allowance::Measured(row)) if row.account == label)
+        }).count()
+    };
+    assert_eq!(measured("a5"), 3, "a5 の 3 窓を 1 回測る（{}）", told(&out));
+    assert_eq!(move_account(&place.state, "Tier2"), None, "Tier2 の候補 a3 は Tier1 の予約＝移り先なし");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (j) 群の席の役割〔orchestrator〕の `seat.model.orchestrator` 行を欠く `--rules` で逼迫の周を撃つと、集合を空に読み替えず typed
+/// に止まる: 移らず記録 0・承認 event 0・断りの event 0・送り 0 で、便の列の rc は不変（終端の周は rc 0・base は宣言順の a2 へ移る
+/// ＝ RED）。
+#[test]
+fn pipe_dispatch_group_reserve_missing_role_row_stops_typed_without_moving() {
+    let place = move_place(&[("a1", 90, 10, 10), ("a2", 10, 10, 10)], &["a1", "a2"], "a1");
+    let rules = fs::read_to_string(&place.rules).unwrap_or_default();
+    assert!(rules.contains(GROUP_ROLE_ROW), "写しに役割の行が在る");
+    fs::write(&place.rules, rules.replace(GROUP_ROLE_ROW, "")).unwrap_or_default();
+    let out = group_terminal(&place, "r-group-1");
+    assert_eq!(move_account(&place.state, GROUP), None, "記録 0（{}）", told(&out));
+    assert_eq!(move_counts(&place.state), (0, 0, 0), "承認 event 0・断りの event 0");
+    assert_eq!(group_sends(&place.state), Vec::<String>::new(), "送り 0");
     clean(&[&place.repo, &place.state]);
 }
 

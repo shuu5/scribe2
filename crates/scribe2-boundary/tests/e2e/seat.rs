@@ -1649,6 +1649,8 @@ const MOVE_ANCHOR_TWO: &str = "/repo-two";
 
 /// 群の名。
 const MOVE_GROUP: &str = "Tier1";
+/// 役割の model の行の id（写しの値 fable の表示名 Fable は偽 client の本文のモデル別窓の名・account-lifecycle.md §29 形 1）。
+const MOVE_ROLE_ROW: &str = "seat.model.orchestrator";
 /// 偽 tmux の前面の file（無ければ席＝`claude`）。
 const MOVE_FRONT: &str = "front";
 /// `/exit` の確認 dialog の既定の行（設計 account-lifecycle.md §22 形 2 の literal）。
@@ -1724,6 +1726,7 @@ fn move_place(root: &Path, name: &str, anchor: &str) -> MovePlace {
         ("fleet.lock_stale_ms", "LockStaleMs", 30_000),
     ];
     rows.extend(others.map(|(id, kind, value)| (id, kind, value.to_string())));
+    rows.push((MOVE_ROLE_ROW, "RoleModel", "\"fable\"".to_owned()));
     let rules = fixture(&tools, "rules.toml", &tick_rules_body(&rows));
     let path = move_shims(&tools);
     MovePlace { state, tools, path, rules }
@@ -2128,6 +2131,77 @@ fn seat_tick_judge_outside_the_group_is_unjudged() {
     let place = judge_place(&root, "/elsewhere", [90, 10]);
     move_assert_quiet(&place, &judge_recent("-"));
     assert_eq!((judge_calls(&place), judge_ts(&root)), (0, None), "計測 0・打刻なし");
+}
+
+// ───────────── tick の判定も群の予約で移る（account-lifecycle.md §29 形 2 / 3・契約表の行 r・接頭辞 `seat_tick_judge_reserve_`） ─────────────
+//
+// §9 の判定の fixture（[`judge_place`]）の host の面を群 2 つに書き換える: 先の Tier1（置き場は席の無い `/elsewhere`・候補
+// [D, B, C]・種 D）と自席の Tier2（置き場 2 つ・候補 [A, B, C]・種 A）。
+
+/// 群 2 つ目の候補の口座（7 日窓 30＝残量 70 < B の残量 90）。
+const RESERVE_C: &str = "acct-c";
+/// Tier1 の種の口座（測らない）。
+const RESERVE_D: &str = "acct-d";
+
+/// [`judge_place`] の host の面を群 2 つ（Tier1 → Tier2 の宣言順）に書き換え、口座 C の credential と本文を足す。
+fn reserve_place(root: &Path) -> MovePlace {
+    let place = judge_place(root, MOVE_ANCHOR, [90, 10]);
+    let host = format!(
+        "schema = 1\n\n[[account]]\nlabel = \"{MOVE_A}\"\n\n[[account]]\nlabel = \"{MOVE_B}\"\n\n[[account]]\nlabel = \"{RESERVE_C}\"\n\n\
+         [[account]]\nlabel = \"{RESERVE_D}\"\n\n[[account-group]]\nname = \"Tier1\"\nanchors = [\"/elsewhere\"]\n\
+         accounts = [\"{RESERVE_D}\", \"{MOVE_B}\", \"{RESERVE_C}\"]\n\n[[account-group]]\nname = \"Tier2\"\n\
+         anchors = [\"{MOVE_ANCHOR}\", \"{MOVE_ANCHOR_TWO}\"]\naccounts = [\"{MOVE_A}\", \"{MOVE_B}\", \"{RESERVE_C}\"]\n"
+    );
+    fs::write(place.state.join("host.toml"), host).ok();
+    let dir = place.state.join("accounts").join(RESERVE_C);
+    fs::create_dir_all(&dir).ok();
+    let credential = format!("{{\"claudeAiOauth\":{{\"accessToken\":\"tok-{RESERVE_C}\",\"refreshToken\":\"r\",\"expiresAt\":4102444800000}}}}");
+    fs::write(dir.join(".credentials.json"), credential).ok();
+    let far = "2099-01-01T00:00:00Z";
+    let body = format!(
+        "{{\"five_hour\":{{\"utilization\":10,\"resets_at\":\"{far}\"}},\"seven_day\":{{\"utilization\":30,\"resets_at\":\"{far}\"}},\
+         \"limits\":[{{\"kind\":\"weekly_scoped\",\"percent\":10,\"resets_at\":\"{far}\",\"scope\":{{\"model\":{{\"display_name\":\"Fable\"}}}}}}]}}"
+    );
+    fs::write(place.at(&format!("body-tok-{RESERVE_C}")), body).ok();
+    place
+}
+
+/// 自席の群 Tier2 の今の口座（記録の `account=`・無ければ `None`）。
+fn reserve_record(root: &Path) -> Option<String> {
+    let text = fs::read_to_string(move_groups_dir(root).join("Tier2.account")).ok()?;
+    text.lines().find_map(|line| line.strip_prefix("account=")).map(str::to_owned)
+}
+
+/// Tier2 の今の口座 A が逼迫の周、tick の判定は先の Tier1 の予約 B（Tier1 の鍵の先頭・残量 90）を飛ばして C へ移る
+/// （`judged=moved:acct-c`・承認 event 1・base は宣言順の B ＝ RED）。
+#[test]
+fn seat_tick_judge_reserve_skips_the_tier1_reservation() {
+    let root = tmp();
+    let place = reserve_place(&root);
+    let out = move_run(&place);
+    assert!(stdout_of(&out).ends_with(&format!(" judged=moved:{RESERVE_C}\n")), "stdout={} stderr={}", stdout_of(&out), stderr_of(&out));
+    assert_eq!(reserve_record(&root).as_deref(), Some(RESERVE_C), "記録は C");
+    assert_eq!(judge_events(&place, vessel::fleet::EventKind::GroupMoved), 1, "承認 event 1");
+    assert!(!move_groups_dir(&root).join("Tier1.account").exists(), "Tier1 の記録は書かない（予約は記録しない）");
+}
+
+/// 群の席の役割の `seat.model.orchestrator` 行を欠く `--rules` の tick は、今の口座が逼迫でも移らず `judged=error:unreadable`
+/// で 0 key・記録 0・承認 event 0・断りの event 0（集合を空に読み替えない・base は B へ移る ＝ RED）。
+#[test]
+fn seat_tick_judge_reserve_missing_role_row_is_an_error_with_zero_keys() {
+    use vessel::fleet::EventKind;
+    let root = tmp();
+    let place = judge_place(&root, MOVE_ANCHOR, [90, 10]);
+    let row = format!("\n[[rule]]\nid = \"{MOVE_ROLE_ROW}\"\nkind = \"RoleModel\"\nvalue = \"fable\"\nenabled = true\nruling = \"r\"\nruled_at = \"d\"\n");
+    let rules = fs::read_to_string(&place.rules).unwrap_or_default();
+    assert!(rules.contains(&row), "写しに役割の行が在る");
+    fs::write(&place.rules, rules.replace(&row, "")).ok();
+    let out = move_run(&place);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(stdout_of(&out), judge_recent("error:unreadable"), "stderr={}", stderr_of(&out));
+    assert_eq!(move_keys(&place), Vec::<String>::new(), "0 key");
+    assert!(!move_groups_dir(&root).join(format!("{MOVE_GROUP}.account")).exists(), "記録 0");
+    assert_eq!((judge_events(&place, EventKind::GroupMoved), judge_events(&place, EventKind::GroupMoveRefused)), (0, 0), "event 0");
 }
 
 // ───────────── pane が shell かの判定は子 process まで見る（seat-heartbeat.md §6・契約表の行 e・`s2-07l.624`・接頭辞 `seat_pane_shell_`） ─────────────
