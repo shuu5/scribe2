@@ -463,6 +463,20 @@ user-scope MCP 設定の同期・別口座への `--resume` の混線 fence・pr
 - 却下: 逼迫した後の群が先の群の予約を「奪う」（§29 の却下のまま・両方が逼迫した周の優先は残す＝予約を持てるかで分ける方が 1 規則）／先の群の候補を測ってから逼迫を判じる（候補を全部測る呼びは無駄・今の口座 1 回で足りる・C17）／断りの 1 行を host の全席へ送る（tick は自分の置き場の row しか読まず、別の置き場の列挙は host 固有の path になる・N3）／`next=` の語に断りを畳む（`next=` は予約の導出値・断りは判定の実測の印・C10）／印を event log から導く（別の置き場の event は読めない・群用 dir は host で 1 つ）。
 - 歯（`crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs` の `pipe_dispatch_group_reserve_` 接頭辞・§29 の偽 usage の fixture）: (a) Tier2 だけが逼迫し、門を通る候補が 1 つ（Tier1 の鍵の先頭）の周は Tier2 がそこへ移る（記録が書かれ・base では none ＝ RED・既存 `tier2_alone_skips_the_tier1_reservation` の書き換え）(b) Tier2 だけが逼迫する周は Tier1 の今の口座を 1 回測り Tier1 の候補は測らない（偽 usage の呼びに Tier1 の候補の label が無く今の口座の label が 1 回・base では候補も測る ＝ RED・既存 `tier2_alone_measures_the_tier1_candidates` の反転）(c) 両方が逼迫する周は Tier1 が鍵の先頭・Tier2 は次（既存 `two_pressed_groups_tier1_takes_the_key_head` 不変）(d) 移り先の無い断りの周に `<群>.refused` が `ts=` と `reason=no-candidate` で書かれ（base では file 無し ＝ RED）、次の Stay の周（今の口座が閾値未満の実測）に history へ退避される（file が消え history に 1 つ）(d2) 同じ実測に 2 度目の断りの周（`Refusal::Repeated`・event 0）は印を書き直さない（印の字面が (d) の ts のまま・base では file 無し ＝ RED）(d3) 印が在る状態で移る周（記録が書かれる・approve）は印が history へ退避される（file が消え history に 1 つ・記録は移り先・base では file 無し ＝ RED）。`crates/scribe2-boundary/tests/e2e/seat.rs`（`seat_tick_judge_reserve_` 接頭辞・§9 の fixture）: (e) tick の判定も Tier2 だけの逼迫で Tier1 の鍵の先頭へ（既存 `skips_the_tier1_reservation` の書き換え）(f) tick の断りの周に印が書かれる（base では無し ＝ RED）(f2) 同じ実測の 2 周目（既存 `does_not_refuse_the_same_measurement_twice` の fixture）は印の字面が不変（base では無し ＝ RED）(f3) tick の移る周に在る印が history へ退避される（base では無し ＝ RED）。`crates/scribe2-boundary/tests/e2e/seat/account.rs`（`host_group_refused_` 接頭辞・`host_group_next_` の fixture）: (g) 印の在る群の行が `refused=<ts>`・無い群は `refused=-`・形でない印は `refused=unreadable`（3 本・base では欄なし ＝ RED）／既存の `host_group_doctor_` / `host_group_next_` の歯（行の全文を pin する 9 か所）は末尾に `refused=-` が増えるので書き換え。lib: `crates/scribe2/src/hook/group.rs` の `group_refused_` 接頭辞（印の render / parse の 2 形）。
 
+## 32. 席の箱は reaper が畳まない — 段の語 `seat` の scope は「作り手が死んだ scope」の判定から外す（§30 の errata・契約表の行 v・[gate-cost.md](./gate-cost.md) §38 の reaper の改め・FR59 / NFR6・`s2-07l.660`・2026-09-26T15:15:59Z の事故）
+
+やさしく言うと: 行 t で席を箱（systemd の scope）に入れた。器には「作り手が死んだ箱を畳む」掃除（便を止める口の末尾の reaper）が在り、箱の名の中の pid が生きていなければ畳む。席の箱の名の pid は `seat launch` / tick の process で、起動の直後に終わるので、掃除は席の箱を**必ず**「作り手が死んだ」と見て畳む。2026-09-26 15:15:59Z に便の終端の止める口が host の全席 7 本を SIGKILL した。掃除は段の語が `seat` の箱を対象にしない。
+
+- 出所: 台帳 `s2-07l.660`（journal: `scribe2-<target>-seat-0-<pid>-<seq>.scope` 7 本へ client request の SIGKILL・同じ秒に便 .657 の runner の席の SeatStopped）。
+- 現物（verified・main 04cd7a0）: `crates/scribe2/src/pipe/confine.rs` の `reap_targets`（一覧の行のうち `<NAME>-` で始まり `.scope` を剥がせて、`creator_pid`〔unit 名の末尾から 2 つ目の語〕が `alive` に無い unit）と `reap_orphan_scopes`（一覧 → `reap_targets` → `release` で 1 本ずつ畳む）。呼び手は `crates/scribe2/src/pipe/stop.rs` の止める口の末尾（行の `scopes=`）で、便の終端の `pipe stop --run` と `--all` の両方が撃つ。席の箱の unit 名は §30 形 2 の `unit_name(潰した target, "seat", 0)` = `<NAME>-<target>-seat-0-<pid>-<seq>`（`<pid>` = 起動を撃った process＝`seat launch` / tick / 群の段の pid・起動の直後に終わる）。便の箱の unit 名は `<NAME>-<run>-<段: runner|lens|common|contract|review>-<n>-<pid>-<seq>`（作り手 = 便を撃つ driver・便の間は生きている）。
+- 穴（verified）: 席の箱は作り手が起動の直後に終わる設計（§30 形 3「probe は撃たない・起動して離れる」）なので、reaper の判定「作り手が死んだ = 残骸」が席の箱では常に真になる。便の終端のたびに host の全席（箱の中）が SIGKILL され、pane の端末の mode（mouse の追跡）が戻らずに shell が端末の応答を command として実行した（実害なし・全部 command not found）。§30 は reaper との関係を数えていなかった（errata）。手当て（2026-09-26T15:20Z）: PATH の binary を行 t より前の c4d6d20 に戻し、席は箱の外で起こし直した（行 t / r は本行の着地と binary の入れ替えまで効かない）。
+- 形（行 v・1 つずつ歯が測る・done と 1:1）:
+  1. **段の語の読みは 1 関数**: confine.rs に unit 名から段の語を読む pure な 1 関数（`<NAME>-<場所>-<段>-<n>-<pid>-<seq>` の末尾から 4 つ目の語・形に合わない unit は `None`）を置く。`creator_pid` は不変。
+  2. **reaper は段の語 `seat` の unit を外す**: `reap_targets` は形 1 の語が `seat` の unit を、作り手の生死に依らず対象にしない（席の箱は claude の終わりで `--collect` が畳む＝reaper の仕事ではない）。段の語が読めない unit（前の形の probe 等）は今のまま作り手の pid で判じる。
+  3. **触らない**: `release`・`list_args`・止める口の行の `scopes=` の語・便の箱の unit 名・席の箱の unit 名と頭（§30 形 2 / 3）・`--collect`。
+- 却下: 席の箱の unit 名の pid を claude の pid にする（起動の前に分からない・名は起動の行に載る）／席の箱の作り手を常駐の process にする（tick は 1 周で終わる・器に常駐は無い・C1）／席の箱をやめる（`.627` の事故〔席の Bash の暴走で host が止まる〕が戻る）／reaper を `--all` の周だけにする（便の終端の残骸〔tmux の server〕を畳む役が消える・§38 の目的が壊れる）。
+- 歯（lib・`crates/scribe2/src/pipe/confine.rs` の `pipe_scope_reap_targets_` 接頭辞・既存の歯の母集団に足す）: (a) 段の語 `seat` の unit（`<NAME>-tgt-seat-0-<pid>-0.scope`・pid は `alive` に無い）は対象に**入らない**（base では入る ＝ RED）(b) 同じ一覧の便の箱（`-contract-3-`・`-runner-1-`・pid が死んでいる）は今のまま対象（不変）(c) 段の語を読む関数の 3 形（便の箱 → `contract` 等・席の箱 → `seat`・形に合わない `<NAME>-300-probe` → `None`）（base では関数が無い ＝ RED）。既存の歯 `pipe_scope_reap_targets_keep_only_dead_creators` は母集団に席の箱 1 行を足して期待は不変（席の箱を数えない）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -686,4 +700,14 @@ verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe
 size = "M"
 growth = ["crates/scribe2/src/hook/group.rs:60", "crates/scribe2/src/account/mod.rs:20"]
 done = "(1) reserve は先の群ごとに今の口座の鮮度の内側の実測（鮮度の外なら今の口座だけ 1 回測る）が pressed の周だけ候補を測って予約を導き、逼迫でない先の群と実測を持たない先の群は予約なし・候補を測らず、判じる群の導きと両方が逼迫した周の宣言順と NoRule は不変 (2) refuse が event を記す周に群用 dir に <群>.refused（1 行 ts=<UTC の秒> reason=no-candidate・一時 file → rename・書き手 1 関数）を書き、Repeated の周は書かず、Stay の周と記録を書く周は印を history へ退避する (3) doctor の群の行の next= の後ろに refused=<ts|-|unreadable> が付き、群 0 の host は不変 (4) 残量の鍵・門・tick と群の段の断りの宛先・断りの event の 1 回性・next= の語・記録の形・種・便用の選定は不変で、pipe_dispatch_group_reserve_（Tier2 だけの逼迫で Tier1 の鍵の先頭へ移る・Tier1 の今の口座だけ測って候補は測らない・両方の逼迫は Tier1 が先頭・断りの印・Repeated の周は書き直さない・Stay の周と移る周の退避）・seat_tick_judge_reserve_（tick の判定も同じ・断りの印・2 周目の不変・移る周の退避）・host_group_refused_ と既存の host_group_next_ / host_group_doctor_ の行の書き換え・lib の group_refused_ を測る"
+[[contract]]
+id = "v"
+title = "席の箱は reaper が畳まない — 段の語 seat の scope は作り手が死んでいても reap_targets の対象に入らない・段の語を読む pure な 1 関数（§32・§30 の errata・s2-07l.660・2026-09-26T15:15:59Z の事故）"
+req = ["FR59", "NFR6", "FR27"]
+section = "32"
+write-set = ["crates/scribe2/src/pipe/confine.rs", "docs/design/account-lifecycle.md"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail pipe_scope_reap_targets_"]
+size = "S"
+growth = ["crates/scribe2/src/pipe/confine.rs:30"]
+done = "(1) confine.rs に unit 名から段の語を読む pure な 1 関数（末尾から 4 つ目の語・形に合わない unit は None）が在り creator_pid は不変 (2) reap_targets は段の語 seat の unit を作り手の生死に依らず対象にせず、段の語が読めない unit は今のまま作り手の pid で判じる (3) release・list_args・scopes= の語・便と席の箱の unit 名と頭は不変で、pipe_scope_reap_targets_（席の箱は対象に入らない・便の箱は入る・段の語の 3 形）を測る"
 <!-- contracts:end -->
