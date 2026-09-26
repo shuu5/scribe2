@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="generator" content="folio ADR-pack assembler (folio-bwc / instance#2) — deterministic structure, prose slots unfilled">
-<title>群の逼迫は時計で測らず、 便の終端の周と席自身の hook で測る (通知は席の画面へ 1 行・移動は host の鍵の内側で 1 回)</title>
+<title>逼迫の門のモデル別窓は役割の model の窓だけを数える — 5 時間窓と 7 日窓は今のまま全部、 モデル別 7 日窓は群の席の役割の model の行だけで逼迫を判じる (ADR-0055 と ADR-0069 の窓の読みを部分 supersede)</title>
 <style>
 /* ===========================================================================
    folio human-layer design system — core.css (S3 / folio-8oc プロトタイプ)
@@ -455,24 +455,14 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
     "schema": "https://schema.org/",
     "folio": "https://folio.dev/spec/v1/"
   },
-  "@id": "./ADR-0055-group-pressure-is-measured-at-run-ends-and-seat-turns-without-a-timer.html",
+  "@id": "./ADR-0075-group-pressure-counts-only-the-role-model-window.html",
   "@type": "schema:TechArticle",
-  "dc:isReferencedBy": [
-    { "@id": "./ADR-0075-group-pressure-counts-only-the-role-model-window.html" },
-    { "@id": "./ADR-0069-group-moves-pick-by-headroom-and-reserve-in-tier-order.html" },
-    { "@id": "./ADR-0068-the-signal-ladder-is-a-list-and-live-runs-do-not-block-group-moves.html" },
-    { "@id": "./ADR-0067-the-relaunch-carries-the-conversation-id-with-resume.html" },
-    { "@id": "./ADR-0066-the-management-tick-fires-the-group-move-judgement.html" },
-    { "@id": "./ADR-0065-the-vessel-writes-the-trust-flag-before-launching-a-seat.html" },
-    { "@id": "./ADR-0061-classes-are-derived-from-verify-lines-and-undeclared-rows-are-refused.html" },
-    { "@id": "./ADR-0058-heartbeat-returns-with-backoff-and-stops-at-24h.html" }
-  ],
   "dc:isPartOf": [
     {
       "@id": "./README.html"
     }
   ],
-  "dc:title": "群の逼迫は時計で測らず、 便の終端の周と席自身の hook で測る (通知は席の画面へ 1 行・移動は host の鍵の内側で 1 回)",
+  "dc:title": "逼迫の門のモデル別窓は役割の model の窓だけを数える — 5 時間窓と 7 日窓は今のまま全部、 モデル別 7 日窓は群の席の役割の model の行だけで逼迫を判じる (ADR-0055 と ADR-0069 の窓の読みを部分 supersede)",
   "folio:version": "0.1.0",
   "folio:stakeholders": [
     "Developer",
@@ -481,34 +471,28 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
   ],
   "dc:references": [
     {
-      "@id": "../spec/constitution.html#c2"
+      "@id": "../spec/constitution.html#c1"
     },
     {
-      "@id": "../spec/constitution.html#c10"
+      "@id": "../spec/constitution.html#c2"
     },
     {
       "@id": "../spec/constitution.html#c17"
     },
     {
-      "@id": "../spec/constitution.html#a1"
-    },
-    {
-      "@id": "../spec/srs.html#FR36"
-    },
-    {
       "@id": "../spec/srs.html#FR38"
     },
     {
-      "@id": "../spec/srs.html#FR57"
+      "@id": "../spec/srs.html#FR27"
     },
     {
-      "@id": "./ADR-0049-seat-accounts-are-owned-by-project-groups.html"
+      "@id": "./ADR-0055-group-pressure-is-measured-at-run-ends-and-seat-turns-without-a-timer.html"
     },
     {
-      "@id": "./ADR-0045-seat-role-is-one-orchestrator-and-dispatcher-lands-runs.html"
+      "@id": "./ADR-0058-heartbeat-returns-with-backoff-and-stops-at-24h.html"
     },
     {
-      "@id": "./ADR-0020-account-autonomy-limit-stop-resume-and-selection.html"
+      "@id": "./ADR-0069-group-moves-pick-by-headroom-and-reserve-in-tier-order.html"
     }
   ]
 }
@@ -520,164 +504,157 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 <nav class="breadcrumb" aria-label="パンくず"><ol>
   <li><a href="../index.html">design-intent</a></li>
   <li><a href="./README.html">decisions</a></li>
-  <li aria-current="page">ADR-0055</li>
+  <li aria-current="page">ADR-0075</li>
 </ol></nav>
 <!-- /folio:chrome-top -->
 <div class="page" data-component="requirement-type-color-tokens">
 <header data-component="doc-cover-band">
-<p class="cover-eyebrow"><span class="doc-type">設計判断記録 (ADR)</span> <span>scribe2 — 群の逼迫の契機</span></p>
-<h1>群の逼迫は時計で測らず、 便の終端の周と席自身の hook で測る (通知は席の画面へ 1 行・移動は host の鍵の内側で 1 回)</h1>
-<p class="cover-sub">ADR-0049 は席の口座を群 (project のかたまり) で持ち、 閾値を越えたら群ごと別口座へ移ると決めたが、 通知と移動の契機 (いつ測るか) は別の記録に委ねた。 常駐の時計で席を見回る仕組み (管理 tick) は ADR-0045 で廃止され、 器の timer で 1 周を撃つ案 (拍) も据え置かれた。 本 ADR は、 時計を持たずに逼迫を測る契機を決める。</p>
-<div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">この記録で「器」は scribe2 の本体、 「席」は人と AI が話す 1 つの session、 「便」は器が自動で進める 1 つの作業のことです。 席の口座を project のかたまり (群) で持ち、 残りが少なくなったら群ごと別の口座へ移る、 という決定は先の記録で決まっています。 決まっていなかったのは「いつ測るか」です。 器は見回りの時計を持たないと決めているので、 この記録は、 作業が 1 つ終わった直後の 1 周と、 席が話す番のたびに動く仕組みの 2 つを計測の契機にすることを決めます。</p></div></div>
-<div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">accepted</span></span><span class="m"><span class="k">選択肢</span><span class="v">4件 (OPT1–OPT4)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 3 / トレードオフ 3</span></span><span class="m"><span class="k">版</span><span class="v">v0.1.0 / 2026-09-23</span></span></div>
-<div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>FR38</b></div>
+<p class="cover-eyebrow"><span class="doc-type">設計判断記録 (ADR)</span> <span>scribe2 — 逼迫の門の窓</span></p>
+<h1>逼迫の門のモデル別窓は役割の model の窓だけを数える — 5 時間窓と 7 日窓は今のまま全部、 モデル別 7 日窓は群の席の役割の model の行だけで逼迫を判じる (ADR-0055 と ADR-0069 の窓の読みを部分 supersede)</h1>
+<p class="cover-sub">口座が上限に近いかは 3 つの窓 (5 時間・7 日・model ごとの 7 日) で判じる。 今の門は model ごとの窓を「どの model でも」数えるので、 席を Opus で走らせても Fable の窓が埋まった口座は上限扱いのまま、 移り先にも使えず、 今の口座なら移動を起こす。 本 ADR は model ごとの窓を席の役割の model の窓だけに絞り、 移り先の並べ方 (ADR-0069 の残量の鍵) と同じ読みに揃える。</p>
+<div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">この記録で「器」は scribe2 の本体、 「席」は人と AI が話す 1 つの session、 「群」は同じ口座の候補を共に使う project の集まり、 「逼迫」は口座が上限に近いこと、 「役割の model」は席の役割ごとの既定の model です。 口座が上限に近いかは 3 つの窓 (5 時間・7 日・model ごとの 7 日) で判じます。 今の門は model ごとの窓を「どの model でも」数えるので、 持ち主が席の既定を Opus に替えても、 Fable の窓が埋まった口座は上限扱いのまま移り先にならず、 今の口座なら移動を起こします。 同じ日の実測では、 口座 6 つのうち 4 つが Fable の窓は 95 以上なのに 7 日窓には余裕がありました。 この記録は、 model ごとの窓を席の役割の model の窓だけに絞り、 移り先の並べ方 (残量の鍵) と同じ読みに揃えると決めます。 5 時間窓と 7 日窓は今のまま全部数えます。 持ち主は 2026-09-26 にこの形を裁定しました。</p></div></div>
+<div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">accepted</span></span><span class="m"><span class="k">選択肢</span><span class="v">4件 (OPT1–OPT4)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 3 / トレードオフ 3</span></span><span class="m"><span class="k">版</span><span class="v">v0.1.0 / 2026-09-26</span></span></div>
+<div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>FR38・FR27</b></div>
 <div data-component="approval-block">
-<div class="sign"><span class="role">裁定 (user)</span><span class="who">user</span><span class="when">2026-09-19 (群の閾値 3 値と一斉の移動の要求・逐語は台帳 s2-07l.491 の notes) ・ 2026-09-22 (拍の据え置き・逐語は台帳 s2-07l.490 の notes)</span><span class="stamp self">裁定済</span></div>
-<div class="sign"><span class="role">設計 (orchestrator)</span><span class="who">orchestrator</span><span class="when">2026-09-23 起票 (ADR-0049 の未決の契機を、 dispatch の 1 周と席の hook の現物に合わせて決めた。 拘束する constitution の版 0.5.0)</span><span class="stamp self">作成</span></div>
+<div class="sign"><span class="role">裁定 (user)</span><span class="who">user</span><span class="when">裁定 id user 2026-09-26T15:52Z (推奨の受諾 = 群の逼迫の門のモデル別窓は役割の model の集合の行だけを数える。 逐語は台帳にだけ在る)</span><span class="stamp self">裁定済</span></div>
+<div class="sign"><span class="role">設計 (orchestrator)</span><span class="who">orchestrator</span><span class="when">2026-09-26 草稿 v1 (実測の口座の窓と門の 1 関数の現物を照らし、 門の窓の読みを改めた。 拘束する constitution の版 0.5.0)</span><span class="stamp self">作成</span></div>
 </div>
-<div class="reader-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 想定読者: scribe2 の開発 session と消費側 repo の席と user — 器の内部は不要 (専門語はやさしい言葉を併記)</div>
+<div class="reader-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 想定読者: scribe2 の開発 session と user — 器の内部と Rust の専門知識は不要 (専門語はやさしい言葉を併記)</div>
 </header>
 <!-- folio:chrome-toc -->
 <!-- /folio:chrome-toc -->
-<section data-component="chapter-deck-band" class="tint-info"><span class="num">01</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v6m0 0L9 5m3 3l3-3"/><circle cx="12" cy="14" r="6"/></svg> 背景 / なぜこの判断が要るか</span><h2>いま何が問題か (確定方式を決める力学)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-01">なぜこの判断が要るのかを、 決まっていることと無いものから説明します。 群と閾値と移り方は先の記録で決まりました。 見回りの時計は廃止され、 timer の案も据え置かれました。 器が持つ契機は、 作業の終端の 1 周と席自身の仕組みの 2 系統だけです。 測る口・知らせる口・記録の置き場は既に器の中に在ります。 要件書の 1 条 (口座の使用率を理由にした通知と立て直しの禁止) は、 この記録と同じ改訂で群の形へ書き換わりました。</p></section>
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">01</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v6m0 0L9 5m3 3l3-3"/><circle cx="12" cy="14" r="6"/></svg> 背景 / なぜこの判断が要るか</span><h2>いま何が問題か (確定方式を決める力学)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-01">なぜこの判断が要るのかを、 経緯 (門は 3 窓の全部を閾値で断る)・事象 (席の既定を Opus に替えても Fable の窓で群が止まる)・機序 (判定の関数が model の名を見ずに数える)・これまでの決まり・この判断の範囲の 5 つから説明します。 移り先の並べ方 (ADR-0069 の残量の鍵) は既に役割の model の窓だけを読んでいて、 門と並べ方とで読みが食い違っていました。</p></section>
 <div class="chapbody">
 <div data-component="adr-context-list">
-<div data-component="adr-context-row"><span class="cxid">CTX1</span><div class="cxbody"><p class="cxh">決まっていること — 群・閾値・移動の形 (ADR-0049)</p><p class="cxd">席の口座を持つ単位は project の群 (かたまり) で、 宣言は host (この machine) の面の表 1 つ (第 1 段 = 作る順番の 1 番目・着地済み)。 閾値は 5 時間窓 85・7 日窓 95・モデル別窓 95 の rules 行<span class="term" data-component="plain-language-term-inline" data-term="rules 行">裁定つきの値を持つ設定の行</span> (値と裁定は既に在る裁定の引き継ぎ)。 移動は群単位で host の lock<span class="term" data-component="plain-language-term-inline" data-term="lock">1 度に 1 つしか通さない鍵</span> の内側で 1 回だけ判定し、 移り先は他の群が使っていない ∧ 便 (pipeline の 1 走行) が使っていない ∧ 閾値未満の候補の先頭、 候補が無ければ移らず user へ通知する。 移動は新しい口座で新しい席を起こすことで行い、 対話の記録は運ばず復帰は機械の注入に任せる。 ADR-0049 は通知と移動の契機を決めていない。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX2</span><div class="cxbody"><p class="cxh">無いもの — 時計の契機</p><p class="cxd">管理 tick (常駐の時計で席を見回る仕組み) は ADR-0045 §2 (2) で廃止され、 拍 (器の timer<span class="term" data-component="plain-language-term-inline" data-term="timer">一定の間隔で動く時計</span> が dispatch の 1 周<span class="term" data-component="plain-language-term-inline" data-term="dispatch の 1 周">器が次の作業を配る 1 巡</span>を撃つ案) は 2026-09-22 に据え置かれた。 器が今持つ契機は 2 系統だけである。 1 つは dispatch の 1 周 (設計 dispatcher.md §5) で、 便の終端 (便が終わった直後)・手動 (人が撃った周)・印の直後 (承認などの記録の直後) に撃たれる。 もう 1 つは席自身の hook<span class="term" data-component="plain-language-term-inline" data-term="hook">席の番ごとに自動で動く仕組み</span> で、 席の開始・圧縮の直前・道具の直前に動き、 話す番の直前と終わりの口も宣言されている。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX3</span><div class="cxbody"><p class="cxh">現物 — 計測・通知・記録の口は既に在る</p><p class="cxd">口座の使用率 (残りの割合) は便用と lens 用の選定が usage API<span class="term" data-component="plain-language-term-inline" data-term="usage API">口座の残りを返す外部の口</span> を撃って event log<span class="term" data-component="plain-language-term-inline" data-term="event log">器が出来事を追記する記録の列</span> に実測として残し、 鮮度の rules 行の内側 (直近に測った周) では測り直さない (ADR-0020・設計 account-autonomy.md §13)。 dispatch の 1 周は「起こす便 0 ∧ 候補あり」を orchestrator の席の pane<span class="term" data-component="plain-language-term-inline" data-term="pane">席の画面</span> へ 1 行で知らせる注入の口を持つ (設計 dispatcher.md §19)。 host の根<span class="term" data-component="plain-language-term-inline" data-term="host の根">machine に 1 つの共通の置き場</span>は受付札と lock を既に置いている。 群の今の口座の記録は ADR-0049 が host の根の 1 件と決め、 まだ書かれていない＝記録が無い周の「今の口座」は種 (候補の先頭) で、 群の席が実際に居る口座 (登録 row の口座) は種と違いうる。 その口座は doctor の群の行が既に導いている。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX4</span><div class="cxbody"><p class="cxh">要件文との関係</p><p class="cxd">SRS FR38 は管理 tick の廃止に合わせて「器は口座の窓の使用率を理由に開発 session へ退避の合図<span class="term" data-component="plain-language-term-inline" data-term="退避の合図">古い席に「作業をまとめて終えて」と伝える 1 行</span>や妥協の通知を注入せず、 強制サイクルの印を書かず、 席を立て直さず、 窓ごとの強制の rules 行を持たない」と書かれ、 AC18 の不在の歯がその機構の不在を測る。 ADR-0049 の群の移動 (通知・席の起こし直し・窓ごとの閾値の rules 行) はこれと食い違った (ADR-0049 CSQ-N4)。 FR38 は spec の編集の口を通る user の手で本 ADR と同じ改訂で改稿され、 群の閾値越えの通知と群単位の席の起こし直しと窓ごとの閾値の rules 行 3 本を許し、 強制サイクルの印と timer は持たないままとなった (AC18 の不在の歯は管理 tick と cycle の機構を測り続ける)。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX1</span><div class="cxbody"><p class="cxh">経緯 — 門は 3 窓の全部を閾値で断る (ADR-0055・ADR-0069)</p><p class="cxd">ADR-0055 は群の逼迫<span class="term" data-component="plain-language-term-inline" data-term="逼迫">口座が上限に近いこと</span>を 5 時間窓・7 日窓・モデル別窓のいずれかが閾値の rules 行の値以上である状態と決めた。 ADR-0069 は移り先の門<span class="term" data-component="plain-language-term-inline" data-term="移り先の門">移り先に使える条件</span>も 3 窓の全部を閾値で断り、 実データのモデル別の行は Fable だけなので Fable が 95 以上の口座は候補に入らないと書いた。 同じ ADR-0069 の残量の鍵<span class="term" data-component="plain-language-term-inline" data-term="残量の鍵">候補を並べる物差し</span>は、 モデル別窓<span class="term" data-component="plain-language-term-inline" data-term="モデル別窓">model ごとの 7 日枠</span>を役割の model<span class="term" data-component="plain-language-term-inline" data-term="役割の model">席の既定の model</span> (rules 行 seat.model.&lt;役割&gt;) の行だけで読む。 門と鍵とで、 モデル別窓の読みが食い違っている。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX2</span><div class="cxbody"><p class="cxh">事象 — 席の役割の既定を Opus に替えても、 Fable の窓で群が止まる</p><p class="cxd">2026-09-26、 持ち主は orchestrator の既定の対を opus / xhigh に替えると裁定した (設計 seat-roles.md §28)。 同じ日の実測で、 口座 6 つのうち 5 つの Fable の窓が 95 以上で、 そのうち 4 つは 7 日窓が 50 から 92 だった (口座名は台帳)。 usage API<span class="term" data-component="plain-language-term-inline" data-term="usage API">使用率を返す外部の口</span> は Fable の窓しか返さない。 今の門のままでは、 席が Opus で走る群もこの 4 口座を移り先にできず、 今の口座なら逼迫と読んで移動や断りを起こす。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX3</span><div class="cxbody"><p class="cxh">機序 — 門の 1 関数は model の名を見ずにモデル別窓の行を数える</p><p class="cxd">逼迫の判定は 1 つの pure な関数 (口座の最新の実測の行を窓の閾値と比べ、 どれかが閾値以上なら越えた窓の最大の 1 つ) で、 群の移動の判定・移り先の門・先の群の逼迫・席の turn の 1 行・管理 tick の口座の門<span class="term" data-component="plain-language-term-inline" data-term="口座の門">上限の席を促さない条件</span>の 5 か所が呼ぶ。 モデル別窓の行は model の名を持つのに、 関数は名を読まない。 役割の model の集合を読む関数 (群の置き場の席の登録 row の役割ごとの rules 行の表示名) は既に在り、 鍵だけが使っている。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX4</span><div class="cxbody"><p class="cxh">憲法と既存の決定の向き (本 ADR の解釈)</p><p class="cxd">C2 (同じ事実の読みは 1 本) から、 モデル別窓をどの model で読むかは門と鍵で 1 つにし、 役割の model の集合を読む既存の関数を門でも使う。 C17 (決定はしご) から、 新しい rules 行も新しい計測も足さず、 既に在る集合を判定の関数へ渡すだけにする。 C1 (既定を出さない) から、 役割の行が無い周は集合を空に読み替えず、 今の typed な止まり方 (判定は読めない・予約は行なし) に倒す。 ADR-0058 の口座の門は「閾値を越えた口座」とだけ書き窓を名指さないので、 同じ関数を通して本 ADR に従う。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX5</span><div class="cxbody"><p class="cxh">射程 — 動かすのはモデル別窓の読みと、 呼び手が渡す集合だけ</p><p class="cxd">動かすのは (1) 判定の関数がモデル別 7 日窓を役割の model の表示名の集合に在る行だけで数えること (集合が空ならモデル別窓を数えない)、 (2) 役割 1 つの model を読む関数を 1 つに切り出すこと、 (3) 5 つの呼び手が判じる群 (tick は自席の役割) の集合を渡すこと。 動かさないのは、 5 時間窓と 7 日窓の読み・閾値の rules 行 3 本と値・残量の鍵・予約の規則 (ADR-0069・ADR-0074)・便用の口座選定 (ADR-0042)・usage の計測と実測の行の形・event の種類。</p></div></div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-brand"><span class="num">02</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v18"/><path d="M5 7l-3 6h6z"/><path d="M19 7l-3 6h6z"/><path d="M3 21h18"/></svg> 判断を縛る力 / 評価の軸</span><h2>選択肢を測るものさし (安全・速さ)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-02">この判断を評価する 4 本のものさしです。 時計も常駐の仕組みも足さないこと、 測る口と知らせる口と記録の置き場を既存の 1 本ずつで済ませること、 残りが減る周に契機が在ること、 そして移動は群ごとに 1 回で記録と承認を伴うことです。</p></section>
+<section data-component="chapter-deck-band" class="tint-brand"><span class="num">02</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v18"/><path d="M5 7l-3 6h6z"/><path d="M19 7l-3 6h6z"/><path d="M3 21h18"/></svg> 判断を縛る力 / 評価の軸</span><h2>選択肢を測るものさし (安全・速さ)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-02">この判断を評価する 4 本のものさしです。 席を走らせる model の上限だけが群を止めること (使わない model の窓は移動を起こさない)。 門と並べ方のモデル別窓の読みを 1 つにすること。 使う model の上限は今のまま守ること (役割の model の窓が閾値以上の口座は断る)。 足すものを最小にすること (新しい rules 行・計測・状態を足さない)。</p></section>
 <div class="chapbody">
 <table data-component="adr-driver-table"><tbody>
-<tr data-component="adr-driver-row"><td class="drid">DR1</td><td>時計の契機を足さない (足すなら先に消すものを名指す・憲法 C17.2)・常駐 process (立ちっぱなしの見張り) を持たない (ADR-0034 / ADR-0045) <span class="drg">CTX2・憲法 C17</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR2</td><td>測る口と通知の口と記録の置き場は既存の 1 本ずつを使い、 新しい系統を増やさない (同じ仕事の口を 2 つ作らない・憲法 C2 / C17) <span class="drg">CTX3・憲法 C2</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR3</td><td>逼迫は席が動いている周に進み、 席が動いている周には契機が在る (席の話す番・便の終端) <span class="drg">CTX2 (2 系統の契機)・ADR-0020 §2.4</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR4</td><td>移動は 1 回・群単位・記録つき・承認 event (承認の記録) つき (憲法 A1「使う」・C10) <span class="drg">CTX1・憲法 A1 / C10</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR1</td><td>席を走らせる model の上限だけが群を止める — 使わない model の窓は移動を起こさない <span class="drg">CTX2・CTX3</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR2</td><td>門と鍵のモデル別窓の読みは 1 つ — 役割の model の集合を読む関数を両方が使う (C2) <span class="drg">CTX1・CTX4</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR3</td><td>使う model の上限は今のまま守る — 役割の model の窓が閾値以上の口座は門で断る (ADR-0069 の差し戻しへの答えを保つ) <span class="drg">CTX1・CTX5</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR4</td><td>足すものを最小にする — 新しい rules 行・計測・状態を足さず、 既に在る集合を渡すだけ (C17) <span class="drg">CTX3・CTX4</span></td></tr>
 </tbody></table>
 </div>
-<section data-component="chapter-deck-band" class="tint-violet"><span class="num">03</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5"/></svg> 検討した選択肢 / 3 つの確定方式</span><h2>それぞれの利点と欠点を並べる</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-03">候補を 4 つ並べます。 作業の終端の 1 周と席自身の仕組みの 2 系統で測る案、 timer で 1 周を撃つ案、 席自身が測って自分で起こし直す案、 表示の行に出して人が見る案です。 却下した 3 案も利点を 2 つずつ持ち、 それを含めて秤に掛けます。</p></section>
+<section data-component="chapter-deck-band" class="tint-violet"><span class="num">03</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5"/></svg> 検討した選択肢 / 3 つの確定方式</span><h2>それぞれの利点と欠点を並べる</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-03">候補を 4 つ並べます。 モデル別窓を役割の model の窓だけ数える案 (選んだ案)、 今のままどの model の窓も数える案、 モデル別窓を門から外す案、 席の登録 row に残る起動の model で数える案です。 選ばなかった 3 つは、 役割の既定を替えた意味が群に届かない・使う model の上限を守れない・読みが 2 つになる、 という理由で退けました。</p></section>
 <div class="chapbody">
 <div class="opt-grid">
 <div data-component="adr-option-card" class="chosen">
-<div class="opt-head"><span class="opt-id">OPT1</span><span class="opt-name">便の終端の周<span class="term" data-component="plain-language-term-inline" data-term="便の終端の周">作業の終端などに器が回す 1 周</span>と席自身の hook の 2 系統で測り、 通知は席の画面への 1 行、 移動は dispatch の 1 周が host の鍵の内側で行う</span><span class="opt-verdict chosen">採用</span></div>
-<p class="opt-sum">第 1 段〜第 3 段は作る順番の段階 (宣言 → 通知 → 移動) で、 1 周の中の手順ではない。 (1) dispatch の 1 周 (便の終端・手動・印の直後) が、 宣言された群ごとに、 群の今の口座とその群の席が実際に居る口座 (登録 row の口座・重複は畳む) の使用率を鮮度つきで読み、 どれかが閾値以上なら席の画面へ 1 行を注入して event に 1 件記し (第 2 段)、 第 3 段では同じ周が host の lock の内側で移り先を決めて記録と承認 event を書き、 新しい口座の席を起こし古い席へ退避の合図を送る。 (2) 席自身の hook (席の開始と、 話す番ごとの hook) は自席の口座を同じ読み手で読み、 閾値以上なら指示文の 1 行で告げ、 移動を頼む記録<span class="term" data-component="plain-language-term-inline" data-term="移動を頼む記録">「そろそろ別の口座へ」と席が置いておくメモ</span> 1 件を host の根に置く (移動そのものは次の dispatch の 1 周が行う＝席は自分を起こし直さない)。 計測は既存の 1 本で、 鮮度の内側では usage API を撃たない。 鮮度の外は席の hook が器を子として起こして待たず、 値は次の話す番で読む。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT1">作業が 1 つ終わった直後 (と手で撃ったとき・承認などの記録の直後) に器が回す 1 周が、 かたまりごとに、 今の口座とそのかたまりの席が実際に居る口座の残りを読みます。 閾値以上なら、 第 2 段では席の画面に 1 行を差し込んで知らせ、 その 1 件を記録に残します。 第 3 段では同じ 1 周が鍵をかけて移り先を 1 回だけ決め、 今の口座の記録と承認の記録 (event) を書き、 新しい口座で新しい席を起こし、 古い席には「まとめて終えて」の 1 行を送ります。 席自身の仕組みは、 自分の口座の残りを読んで、 閾値以上なら指示文で告げ、 「そろそろ移して」の記録を machine 共通の置き場 (host の根) に 1 件置くだけです。 自分で起こし直しません。 残りの読みは既存の 1 本で、 直近に測った周は測り直しません。 測り直しが要る周は、 席の仕組みは測り直しを起こすだけで待たず、 次の番で読みます。</span>
+<div class="opt-head"><span class="opt-id">OPT1</span><span class="opt-name">モデル別窓は役割の model の窓だけを数える</span><span class="opt-verdict chosen">採用</span></div>
+<p class="opt-sum">判定の関数に役割の model の表示名の集合を渡し、 モデル別 7 日窓は model の名が集合に在る行だけを数える。 5 時間窓と 7 日窓は今のまま全部数える。 呼び手は判じる群の集合 (tick は自席の役割 1 つ) を渡す。 決め手は持ち主の裁定 (15:52Z)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT1">判定の関数に、 群の席の役割の model の名の集合を渡す案です。 model ごとの 7 日窓は、 名が集合に在る行だけを閾値と比べます。 5 時間窓と 7 日窓は今のまま全部比べます。 席が Opus で走る群は Fable の窓で止まらず、 7 日窓に余裕のある口座へ移れます。 門と並べ方が同じ集合を読み、 役割の model が Fable の群は今のまま Fable の窓で断られます。 足すのは関数の引数 1 つと、 役割 1 つの model を読む関数 1 つです。 代わりに、 usage API が Opus の窓を返さない間は Opus の群の門が 5 時間窓と 7 日窓だけで判じ、 呼び手と既存の歯の fixture が動きます。 持ち主の裁定で選びました。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>時計も常駐 process も足さず、 増えるのは既存の口の読み手だけ (DR1 / DR2)</li>
-<li>席が動いている周 (話す番) と便が動いている周 (終端) の両方で測るので、 逼迫が進む周に契機が在る (DR3)</li>
-<li>移動は dispatch の 1 周に閉じ、 host の lock の内側で 1 回・記録と承認 event つき (DR4)</li>
+<li>席を Opus で走らせる群は Fable の窓で止まらず、 7 日窓に余裕のある口座へ移れる (DR1)</li>
+<li>門と鍵が同じ集合でモデル別窓を読む (DR2)</li>
+<li>役割の model が Fable の群は今のまま Fable の窓で断る (DR3)</li>
+<li>足すのは関数の引数 1 つと役割 1 つを読む関数 1 つで、 rules 行も計測も増えない (DR4)</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>席も便も動いていない周は測らない (逼迫も進まないので実害は無いが、 user が手で 1 周を撃つ周が在る)</li>
-<li>鮮度が切れた周は hook が計測を起こして待たないので、 告げるのが次の話す番に 1 つ遅れる</li>
+<li>usage API が Opus の窓を返さない間は、 Opus の群のモデル別窓は空で、 門は 5 時間窓と 7 日窓だけで判じる</li>
+<li>判定の関数の呼び手 5 つと既存の歯の fixture (モデル別窓の名) が動く</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT2</span><span class="opt-name">器の timer (拍) が dispatch の 1 周を撃つ</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">一定の間隔で 1 周を撃ち、 その周が群の逼迫<span class="term" data-component="plain-language-term-inline" data-term="群の逼迫">口座の残りが決めた線に届くこと</span>も測る。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT2">一定の間隔で器が 1 周を撃つ timer を足す案です。 席も作業も動いていない周も測れ、 契機が 1 系統で済む利点はありますが、 見回りの時計を廃止した決定を一部戻すことになり、 足すなら先に消すものを名指す憲法の決まりにも当たります。 据え置きの裁定が既に在り、 覆すには新しい裁定が要ります。</span>
+<div class="opt-head"><span class="opt-id">OPT2</span><span class="opt-name">現状維持 — どの model のモデル別窓も数える</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">門は今のまま 3 窓の全部を閾値で断る。 決め手は分析 (役割の既定を替えた意味が群に届かない)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT2">門を今のまま、 どの model の窓も閾値で数える案です。 器に足すものが無い点で勝ります。 けれども、 席を Opus に替えても Fable の窓が埋まった口座は移り先にならず、 今の口座なら移動を起こします。 門と並べ方とでモデル別窓の読みが食い違ったまま残ります。 退けました。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>席も便も動いていない周も測れる (人が 1 周を撃つ手間が要らない)</li>
-<li>契機が 1 系統で済み、 席の hook に何も足さない</li>
+<li>器に足すものが無い</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>時計の契機を足す (ADR-0045 §2 (2) の廃止を一部戻す・C17.2 で先に消すものが要る・DR1)</li>
-<li>据え置きの裁定が既に在り (2026-09-22・逐語は台帳 s2-07l.490)、 覆すには新しい裁定が要る</li>
+<li>席を Opus に替えても Fable の窓が埋まった口座は移り先にならず、 今の口座なら移動を起こす (DR1)</li>
+<li>門と鍵とでモデル別窓の読みが食い違ったまま残る (DR2)</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT3</span><span class="opt-name">席自身の hook だけで測り、 席が自分を起こし直す</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">席の話す番ごとの hook が閾値を測り、 閾値以上なら席が自分で別口座の席を起こして終わる。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT3">席自身の仕組みだけで測り、 閾値以上なら席が自分で別の口座の席を起こして終わる案です。 器の 1 周に何も足さず、 席が話した直後に移れる利点はありますが、 同じかたまりの席が置き場ごとに別々に判断して同じ口座へ殺到する問題が戻り、 席は自分を起こす権能を持たない柵ともぶつかります。</span>
+<div class="opt-head"><span class="opt-id">OPT3</span><span class="opt-name">モデル別窓を門から外す</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">門は 5 時間窓と 7 日窓だけで判じ、 モデル別窓は鍵にだけ使う。 決め手は分析 (使う model の上限を守れない)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT3">門は 5 時間窓と 7 日窓だけで判じ、 model ごとの窓は並べ方にだけ使う案です。 判定の関数の入力が変わらない点で勝ります。 けれども、 役割の model の窓が閾値以上の口座を門が通してしまい、 前の決定の差し戻し (Fable の窓が高い口座が選ばれないか) への答えを失います。 usage API が Opus の窓を返すようになった周にも、 Opus の上限を守れません。 退けました。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>dispatch の 1 周に何も足さず、 作るものが hook の側だけで済む</li>
-<li>席が話した直後に移れるので、 便が無い周でも待ちが無い</li>
+<li>判定の関数の入力が変わらない</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>同じ群の席が置き場ごとに別々に判定し、 同時に同じ口座へ殺到する (ADR-0049 が群単位の 1 回の判定で消した問題が戻る・DR4)</li>
-<li>席が自分を起こし直す口は権能の柵 (席は起動を撃てない・ADR-0045) と衝突する</li>
+<li>役割の model の窓が閾値以上の口座を門が通す。 ADR-0069 の差し戻し (Fable の窓が高い口座が選ばれないか) への答えを失う (DR3)</li>
+<li>usage API が Opus の窓を返すようになった周に、 Opus の上限を守れない (DR3)</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT4</span><span class="opt-name">statusline (席の表示行) で測って表示だけする</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">席の statusline が話す番ごとに使用率を出し、 閾値を越えた表示を人が見て手で移る。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT4">席の表示の行に残りを出して、 人が見て手で移る案です。 作るものがほぼ無く今日から使え、 器が席を動かさないので誤って移る事故も起きませんが、 知らせることも移ることも人の目に頼り、 群ごと一斉に移る要求を満たしません。 表示の字面に判定を置くことにもなります。</span>
+<div class="opt-head"><span class="opt-id">OPT4</span><span class="opt-name">席の登録 row の model (起動の実物) で数える</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">役割の既定でなく、 席の登録 row に残る起動の model の名でモデル別窓を選ぶ。 決め手は分析 (読みが 2 つになる)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT4">役割の既定でなく、 席の登録 row に残る起動の model の名で窓を選ぶ案です。 手で model を替えた席の実物に合う点で勝ります。 けれども、 役割の既定と起動の実物が食い違う周に、 門と並べ方とで読みが 2 つになります。 登録 row の model は起動の 1 回の値で、 席の中の切り替えは届かないので、 実物とも限りません。 退けました。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>作るものがほぼ無く、 今日から使える (器の変更が最小)</li>
-<li>器が席を動かさないので、 誤って移る事故が構造として起きない</li>
+<li>手で /model を替えた席の実物に合う</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>通知も移動も人の目に頼り、 第 2 段・第 3 段の要求 (一斉の移動) を満たさない</li>
-<li>表示の面に判定を置く (憲法 C3・判定の入力を表示の字面にしない)</li>
+<li>役割の既定と起動の実物が食い違う周に、 門と鍵とでモデル別窓の読みが 2 つになる (DR2)</li>
+<li>登録 row の model は起動の 1 回の値で、 席の中の切り替えは届かないので実物とも限らない</li>
 </ul></div></div>
 </div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの方式を選ぶか</span><h2>選んだ方式と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、 それが要件書のどの要件を支えるかを示します。 「第 2 段」「第 3 段」は作る順番の段階 (第 1 段 = 宣言・第 2 段 = 通知・第 3 段 = 移動) で、 1 周の中の手順ではありません。 作業の終端の 1 周が群ごとに残りを読み、 閾値以上なら第 2 段では席に 1 行で知らせて記録に残し、 第 3 段では鍵の内側で移り先を 1 回だけ決めて新しい席を起こします。 席自身の仕組みは告げて頼むだけで、 自分を起こし直しません。</p></section>
+<section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの方式を選ぶか</span><h2>選んだ方式と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、 それが要件書のどの要件を支えるかを示します。 判定の関数は役割の model の名の集合を受け、 model ごとの 7 日窓は名が集合に在る行だけを閾値と比べます。 5 時間窓と 7 日窓は今のまま全部比べます。 呼び手は判じる群の集合を渡し、 管理 tick は自席の役割 1 つの集合を渡します。 支えるのは FR38 (群の逼迫の通知と移動) の根拠と FR27 (管理 tick) への主張です。</p></section>
 <div class="chapbody">
 <div data-component="adr-decision-panel" id="decision">
 <p class="dec-kick">採用 — OPT1</p>
-<p class="dec-state">器 SHALL 群の逼迫を時計で測らず、 便の終端の周 (dispatch の 1 周) と席自身の hook の 2 系統で測る。 dispatch の 1 周 SHALL 宣言された群ごとに、 群の今の口座とその群の席が居る口座 (登録 row の口座・重複は畳む) の使用率 (5 時間窓・7 日窓・モデル別窓) を既存の計測の 1 本で鮮度つきで読み、 閾値の rules 行 (5 時間窓 85・7 日窓 95・モデル別窓 95・裁定 id つき) 以上になった群について、 第 2 段では席の画面へ 1 行を注入し event に 1 件記し、 第 3 段では host の lock の内側で移り先 (他の群が使っていない ∧ 便が使っていない ∧ 閾値未満の候補の先頭) を 1 回だけ決め、 群の今の口座の記録と承認 event を書き、 新しい口座で席を起こし、 古い席へ退避の合図を送る。 席自身の hook SHALL 自席の口座を同じ読み手で読み、 閾値以上なら指示文の 1 行で告げ、 移動を頼む記録を host の根に 1 件置き、 席 SHALL NOT 自分を起こし直さない。 候補が無い群 SHALL 移らず、 user へ通知し、 妥協の移動を作らない。 計測 SHALL 鮮度の内側では usage API を撃たず、 席の hook SHALL 鮮度の外の計測を待たない (器を子として起こし、 値は次の話す番で読む)。 器 SHALL NOT timer・常駐 process・窓ごとの強制の印を持たない。</p>
-<span class="dec-plain" data-prose-slot="plain" data-slot-id="decision-plain">器は、 かたまりの残りを時計で測りません。 作業が 1 つ終わった直後の 1 周 (手で撃った周と承認などの記録の直後の周も同じ) と、 席自身の仕組みの 2 つで測ります。 1 周は、 かたまりごとに今の口座と席が居る口座の残りを 3 つの窓 (5 時間・7 日・モデル別) で読み、 閾値 (85・95・95) 以上なら、 第 2 段では席に 1 行で知らせてその 1 件を記録に残します。 第 3 段では、 鍵の内側で移り先を 1 回だけ決めます。 移り先は、 他のかたまりが使っておらず、 走っている作業も使っておらず、 残りがどの窓でも線を越えていない候補の先頭です。 今の口座の記録と承認の記録 (event) を書き、 新しい口座で席を起こし、 古い席に終えるよう伝えます。 席自身の仕組みは、 告げて machine 共通の置き場に記録を 1 件置くだけで、 測り直しを待たず、 自分を起こし直しません。 移り先が無ければ移らず、 人に知らせ、 妥協の移動は作りません。 timer も常駐の process も、 窓ごとに強制で移す印も持ちません。</span>
-<span class="dec-why" data-prose-slot="rationale" data-slot-id="decision-rationale">残りは、 席が話すか作業が走るかしたときにだけ減ります。 その 2 つには器の契機が既に在るので、 時計を足さなくても減る周に測れます。 測る口も知らせる口も記録の置き場も既に 1 本ずつ在り、 新しい系統を増やさずに済みます。 測る集合に席が実際に居る口座も入れるのは、 記録が無い周の「今の口座」は候補の先頭にすぎず、 席の現物と違いうるからです。 移動を 1 周に閉じ、 鍵の内側で群ごとに 1 回だけ決めるのは、 同じかたまりの席が同時に同じ口座へ向かう事故を構造で消すためです。 席自身に起こし直させる案は、 作るものが少なく待ちも無い利点はありますが、 同じかたまりの席の殺到が戻り、 席の権能の柵も破るので退けました。 timer は、 動いていない周も測れる利点はありますが、 廃止した決定を一部戻すことになり、 据え置きの裁定も在るので退けました。 表示だけの案は、 作るものが最も少ない利点はありますが、 一斉に移る要求を満たさないので退けました。</span>
+<p class="dec-state">逼迫の判定の関数 SHALL 役割の model の表示名の集合を受け、 モデル別 7 日窓の実測の行は model の名 (閉じた表で読んだ表示名) が集合に在る行だけを閾値と比べ、 集合が空ならモデル別窓を数えない。 5 時間窓と 7 日窓 SHALL 集合に依らず今のまま全部を閾値と比べる。 役割 1 つの model (rules 行 seat.model.&lt;役割&gt; の表示名) を読む関数 SHALL 1 つで、 役割の model の集合を読む既存の関数はそれを登録 row ごとに呼ぶ。 群の移動の判定・先の群の逼迫・席の turn の 1 行 SHALL 判じる群の集合を渡し、 移り先の門 SHALL 群ごとの集合を渡し、 管理 tick の口座の門 SHALL 自席の役割 1 つの集合 (行が無い周は空＝門は正の証拠でだけ閉じる) を渡す。 群の移動の判定は集合を読めない周に逼迫を測らず読めないと判じ、 席の turn の 1 行は出さない。 閾値の rules 行と値・残量の鍵・予約の規則・便用の口座選定・usage の計測と実測の行の形・event の種類は変えない。 本 ADR は ADR-0055 の「モデル別窓のいずれか」と ADR-0069 の「門は 3 窓の全部」のモデル別窓の読みを置き換え、 要件書は変えない (FR38 / AC41 の範囲)。</p>
+<span class="dec-plain" data-prose-slot="plain" data-slot-id="decision-plain">逼迫を判じる関数は、 役割の model の名の集合を受けます。 model ごとの 7 日窓の実測の行は、 名が集合に在る行だけを閾値と比べ、 集合が空なら model ごとの窓は数えません。 5 時間窓と 7 日窓は集合に依らず今のまま全部比べます。 役割 1 つの model を読む関数は 1 つで、 集合を読む既存の関数はそれを登録 row ごとに呼びます。 群の移動の判定・先の群の逼迫・席の turn の 1 行は判じる群の集合を、 移り先の門は群ごとの集合を、 管理 tick の口座の門は自席の役割 1 つの集合 (行が無い周は空) を渡します。 群の移動の判定は集合を読めない周に逼迫を測らず読めないと判じ、 席の turn の 1 行は出しません。 閾値の行と値・残量の鍵・予約の規則・便用の口座選定・計測と実測の行の形・event の種類は変えません。 この記録は ADR-0055 と ADR-0069 のモデル別窓の読みを置き換え、 要件書は変えません。</span>
+<span class="dec-why" data-prose-slot="rationale" data-slot-id="decision-rationale">持ち主の裁定は、 群の逼迫の門のモデル別窓を役割の model の集合の行だけで数える、 の受諾でした。 席は役割の model で走るので、 群を止める理由になる上限はその model の窓と、 model に依らない 5 時間窓と 7 日窓です。 移り先の並べ方は既に役割の model の窓だけを読んでいて、 門だけがどの model の窓も数えていました。 同じ事実の読みを 1 つにするため、 並べ方が使う集合の関数を門でも使います。 モデル別窓を門から外す形は、 役割の model の窓が埋まった口座を通してしまうので採りません。 起動の実物で数える形は読みが 2 つになるので採りません。 集合を読めない周は空に読み替えず、 今の typed な止まり方に倒します。</span>
 <div class="justify-box"><p class="jh">この判断が正当化する要件 (cross-doc 照会 → SRS-SCRIBE2-MVP)</p>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR38" data-justifies-req="FR38" data-justifies-role="rationale">FR38</a><span class="justify-role">rationale</span><span class="justify-note">FR38 は群の逼迫を便の終端の周と席自身の hook で測り、 閾値の rules 行 3 本以上になった群の席へ通知し、 群単位で 1 回移動し、 timer・管理 tick・cycle・強制サイクルの印は持たないと書く。 本 ADR はその文言の根拠 (契機を時計に置かない理由と、 移動を 1 周に閉じる理由) を与える。 FR38 の改稿は本 ADR と同じ改訂で行われた。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR38" data-justifies-req="FR38" data-justifies-role="rationale">FR38</a><span class="justify-role">rationale</span><span class="justify-note">FR38 (群の逼迫の通知と移動) は逼迫した群が別の口座へ移ると書く。 本 ADR は、 逼迫を席の役割の model の上限で判じる根拠 (使わない model の窓で群を止めない・門と鍵の読みを揃える) を与える (裁定 2026-09-26T15:52Z)。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR27" data-justifies-req="FR27" data-justifies-role="claim">FR27</a><span class="justify-role">claim</span><span class="justify-note">FR27 (管理 tick) の口座の門と群の判定の周は同じ判定の関数を呼ぶ。 本 ADR はその周が自席の役割の model の窓だけを読み、 計測を起こさない形と判定の列の順は変えないと主張する。</span></div>
 <p class="justify-tgt">照会先: SRS-SCRIBE2-MVP — SRS: 設計 → 契約 → 実装 → 検証 → land を、 人の手を借りずに 1 本通す器（MVP）</p>
 </div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-warn"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> 結果 / 良い面とトレードオフ</span><h2>この判断で何が良くなり、 何を引き受けるか</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">この判断で良くなることと、 代わりに引き受けることです。 時計も常駐の process も無いまま群ごと一斉に移れ、 新しい系統は増えません。 移動は 1 周に閉じてかたまりごとに 1 回だけ起き、 殺到が起きません。 代わりに、 席も作業も動いていない周は測らず、 鮮度が切れた周は告げるのが次の番に 1 つ遅れ、 移った後の席は機械が戻せるぶんの文脈しか持ちません。</p></section>
+<section data-component="chapter-deck-band" class="tint-warn"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> 結果 / 良い面とトレードオフ</span><h2>この判断で何が良くなり、 何を引き受けるか</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">この判断で良くなること 3 つと、 代わりに引き受けること 3 つです。 良くなるのは、 Opus で走る群が Fable の窓の埋まった口座へも移れること、 門と並べ方の読みが 1 つになること、 役割の model が Fable の群は今のまま守られることです。 引き受けるのは、 usage API が Opus の窓を返さない間は Opus 固有の上限が見えないこと、 判定の関数の呼び手と既存の歯の fixture が動くこと、 役割の行を欠く規則の写しでは群の判定が逼迫を測る前に読めないと判じることです。</p></section>
 <div class="chapbody">
 <div data-component="scope-summary-panel"><div class="scol in"><h3>✓ 良い結果</h3><ul>
-<li data-component="adr-consequence-pos"><span class="b">●</span>時計も常駐 process も無いまま、 席が動いている周と便が動いている周に逼迫が測られ、 群ごと一斉に移れる</li>
-<li data-component="adr-consequence-pos"><span class="b">●</span>測る・通知・記録・起動の口が既存の 1 本ずつで、 新しい系統が増えない</li>
-<li data-component="adr-consequence-pos"><span class="b">●</span>移動は dispatch の 1 周に閉じ、 群単位で 1 回・記録と承認 event つきで、 同じ群の席の殺到が構造で起きない</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>席を Opus で走らせる群は、 Fable の窓が埋まっていても 7 日窓に余裕のある口座へ移れ、 今の口座も Fable の窓だけでは逼迫と読まれない</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>門と鍵が同じ役割の model の集合でモデル別窓を読み、 読みが 1 つになる</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>役割の model が Fable の群は今のまま Fable の窓で断られ、 使う model の上限は守られる</li>
 </ul></div><div class="scol out"><h3>⚖ トレードオフ・代償</h3><ul>
-<li data-component="adr-consequence-neg"><span class="b">●</span>席も便も動いていない周は測らず、 手で 1 周を撃つまで通知も移動も起きない (逼迫も進まないので実害は限定的)</li>
-<li data-component="adr-consequence-neg"><span class="b">●</span>鮮度が切れた周は席の hook が計測を起こして待たないので、 告げるのが次の話す番に 1 つ遅れる</li>
-<li data-component="adr-consequence-neg"><span class="b">●</span>移動の後の席は対話の記録を持たず、 機械の注入で戻せるぶんしか文脈が残らない (ADR-0049 CSQ-N1 と同じ代償)</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>usage API が Opus の窓を返さない間、 Opus の群の門は 5 時間窓と 7 日窓だけで判じる (Opus 固有の上限は見えない)</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>判定の関数の呼び手 5 つと、 モデル別窓の名を決め打ちした既存の歯の fixture が動く</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>役割の行を欠く規則の写しでは、 群の移動の判定が逼迫を測る前に読めないと判じる (今は逼迫でない周は留まると判じていた)</li>
 </ul></div></div>
 </div>
-<section data-component="chapter-deck-band" class="tint-info"><span class="num">06</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> 改訂関係と原則 / この判断の位置づけ</span><h2>版の系譜と、 行き着く原則 (照会終端)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-06">この記録が版の系譜のどこに在るかと、 判断が最後に行き着く原則です。 群の記録の未決の契機を決めるもので、 時計の廃止は戻しません。 原則は「動いた周にだけ測る」です。</p></section>
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">06</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> 改訂関係と原則 / この判断の位置づけ</span><h2>版の系譜と、 行き着く原則 (照会終端)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-06">この記録が版の系譜のどこに在るかと、 判断が最後に行き着く原則です。 この記録は ADR-0055 の「モデル別窓のいずれか」と ADR-0069 の「門は 3 窓の全部」のうち、 モデル別窓の読みだけを置き換えます。 測る契機・通知の形・閾値の値・残量の鍵・門の他の条件・予約の導き・口座の門の位置は保ちます。 行き着く原則は「止まる理由は、 自分が使うものの上限だけ」です。</p></section>
 <div class="chapbody">
 <div data-component="adr-supersession">
 <p class="ss-row"><span class="ss-k">改訂状態</span>current</p>
-<p class="ss-row"><span class="ss-k">置き換える ADR</span>なし (新規)</p>
+<p class="ss-row"><span class="ss-k">置き換える ADR</span>ADR-0055, ADR-0069</p>
 <p class="ss-row"><span class="ss-k">置き換えられた</span>なし (現行)</p>
-<p class="ss-row">ADR-0049 (群・閾値・移動の形) の未決の契機を決める。 ADR-0045 §2 (2) (管理 tick の廃止) は不変で、 本 ADR は時計を戻さない。 ADR-0020 §2.4 (候補なしの周は立て直さない) は群の移動にもそのまま効く。</p>
+<p class="ss-row">部分 supersede で、 置き換えるのは 2 つ — ADR-0055 の群の逼迫の定義の「モデル別窓のいずれか」と、 ADR-0069 の門の「3 窓の全部 (モデル別 7 日窓はどの model でも)」 — のモデル別窓の読みだけで、 他は保つ。 保つのは、 ADR-0055 の測る契機 (便の終端の周と席の hook の 2 系統)・通知の形・閾値の値、 ADR-0069 の残量の鍵・門の他の条件・予約の導き (ADR-0074 の改めを含む)・予約を記録しないこと、 ADR-0058 の口座の門の位置と計測を起こさない形、 の全部。</p>
 </div>
 <div data-component="adr-principle">
-<p class="prin-id">照会終端 — PRIN-MEASURE-WHEN-SOMETHING-MOVES</p>
-<p class="prin-text">逼迫は何かが動いた周にだけ進むので、 動いた周に測る。 時計で見回らず、 動きの終端と席の話す番を契機にする。</p>
-<p class="prin-note">本 ADR が timer を退け、 便の終端と席の hook の 2 系統に契機を置いたのはこの原則に行き着く (これ以上は遡らない照会終端)。</p>
+<p class="prin-id">照会終端 — PRIN-MEASURE-WHAT-YOU-RUN-ON</p>
+<p class="prin-text">止まる理由は、 自分が使うものの上限だけ。</p>
+<p class="prin-note">本 ADR が「どの model の窓も数える」「モデル別窓を門から外す」「起動の実物で数える」を退け、 モデル別窓を役割の model の窓に絞ったのはこの原則に行き着く (これ以上は遡らない照会終端)。</p>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-brand"><span class="num">07</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg> 用語集 / この文書で使う専門語</span><h2>本文に出てくる専門語のやさしい説明</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-07">本文に出てくる専門語を、 やさしい言葉で説明します。 この記録の造語 4 つと、 器の側の言葉 9 つです。</p></section>
+<section data-component="chapter-deck-band" class="tint-brand"><span class="num">07</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg> 用語集 / この文書で使う専門語</span><h2>本文に出てくる専門語のやさしい説明</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-07">本文に出てくる専門語 7 個を、 やさしい言葉で説明します。</p></section>
 <div class="chapbody">
 <div data-component="glossary-term-table">
-<div class="grow"><div class="gword">群の逼迫<span class="en">group pressure</span></div><div class="gdef">群の今の口座か群の席が居る口座の使用率が、 5 時間窓・7 日窓・モデル別窓のいずれかで閾値の rules 行の値以上である状態。 契機の周に既存の計測の 1 本で読む。</div></div>
-<div class="grow"><div class="gword">便の終端の周<span class="en">run-end round</span></div><div class="gdef">便 (pipeline の 1 走行) が終わった直後と、 人が手で撃った周と、 承認などの記録の直後に撃たれる dispatch の 1 周。 本 ADR ではこの周が群の逼迫の計測と通知と移動を担う。</div></div>
-<div class="grow"><div class="gword">移動を頼む記録<span class="en">move request record</span></div><div class="gdef">席自身の hook が閾値以上を読んだ周に host の根へ置く 1 件の記録。 席は自分を起こし直さず、 次の dispatch の 1 周がこれを読んで移動を判定する。</div></div>
-<div class="grow"><div class="gword">退避の合図<span class="en">evacuation signal</span></div><div class="gdef">移動の周に古い席の画面へ注入する 1 行。 席はこれを受けて作業記憶を台帳と git に残して終える。 新しい席の復帰は機械の注入 (ADR-0049) に任せる。</div></div>
-<div class="grow"><div class="gword">hook<span class="en">hook</span></div><div class="gdef">席 (Claude Code の session) が決まった瞬間 (開始・話す番の直前・道具の直前・圧縮の直前・話す番の終わり) に器を呼ぶ口。 器は plugin の宣言 file でどの瞬間に呼ばれるかを名指す。</div></div>
-<div class="grow"><div class="gword">dispatch の 1 周<span class="en">dispatch round</span></div><div class="gdef">契約の列を読んで起こせる便を起こす器の 1 巡 (設計 dispatcher.md)。 便の終端・手動・印の直後に撃たれ、 時計では撃たれない。 本 ADR はこの 1 巡に群の逼迫の段を足す。</div></div>
-<div class="grow"><div class="gword">host の根<span class="en">host root</span></div><div class="gdef">state dir (置き場) の親の下の host 用 dir。 受付札と lock が既に在り、 群の今の口座の記録と移動を頼む記録もここに置く (ADR-0049)。</div></div>
-<div class="grow"><div class="gword">lock<span class="en">lock</span></div><div class="gdef">host の根に置く排他の file。 群の移動の判定はこの鍵の内側で 1 回だけ行い、 同じ群の席が同時に同じ口座へ向かう事故を構造で消す。</div></div>
-<div class="grow"><div class="gword">pane<span class="en">pane</span></div><div class="gdef">席が動いている tmux の枠。 器はここへ 1 行を注入して席に知らせる (通知の口は既存の 1 本)。</div></div>
-<div class="grow"><div class="gword">timer<span class="en">timer</span></div><div class="gdef">壁時計に従って器を撃つ契機。 管理 tick (ADR-0045 で廃止) と拍 (据え置き) がこれに当たり、 本 ADR は持たない。</div></div>
-<div class="grow"><div class="gword">rules 行<span class="en">rules row</span></div><div class="gdef">器の規則の manifest に置く 1 行 (id・種類・値・裁定 id・裁定日)。 閾値 3 値はこの形で持ち、 散文には写さない (憲法 C5)。</div></div>
+<div class="grow"><div class="gword">モデル別窓<span class="en">per-model window</span></div><div class="gdef">口座の使用率のうち、 model ごと (Fable など) に 7 日で数える枠。 usage API は今 Fable の枠だけを返す。 本 ADR で、 門は役割の model の枠だけを数える。</div></div>
+<div class="grow"><div class="gword">役割の model<span class="en">role model</span></div><div class="gdef">席の役割ごとの既定の model で、 rules 行 seat.model.&lt;役割&gt; が値を持つ。 群の役割の model の集合は、 群の置き場の席の登録 row の役割ごとの行の表示名。</div></div>
+<div class="grow"><div class="gword">逼迫<span class="en">pressure</span></div><div class="gdef">口座の実測の窓のどれかが閾値の rules 行の値以上であること。 本 ADR で、 5 時間窓と 7 日窓は全部、 モデル別窓は役割の model の枠だけを数える。</div></div>
+<div class="grow"><div class="gword">移り先の門<span class="en">candidate gate</span></div><div class="gdef">群の移り先の候補に課す条件 (今の口座でない・他の群の今の口座でない・退役中でない・鮮度の内側の実測を持ち逼迫でない) (ADR-0069)。 逼迫の読みは本 ADR に従う。</div></div>
+<div class="grow"><div class="gword">残量の鍵<span class="en">headroom key</span></div><div class="gdef">7 日窓と役割の model の枠の残量の小さい方が大きい順 → 7 日窓の reset が早い順 → 宣言順 (ADR-0069)。 本 ADR で変えない。</div></div>
+<div class="grow"><div class="gword">口座の門<span class="en">account gate</span></div><div class="gdef">管理 tick が席を促す前に、 登録 row の口座の新しい実測が逼迫なら促さない条件 (ADR-0058)。 計測は起こさない。 本 ADR で、 自席の役割の model の枠だけを数える。</div></div>
 <div class="grow"><div class="gword">usage API<span class="en">usage API</span></div><div class="gdef">口座ごとの使用率 (5 時間窓・7 日窓・モデル別窓) を返す外部の口。 器は既存の計測の 1 本でこれを撃ち、 鮮度の内側では撃ち直さない。</div></div>
-<div class="grow"><div class="gword">event log<span class="en">event log</span></div><div class="gdef">置き場ごとに器が追記する記録 (計測の値・登録・承認など)。 使用率の実測と通知の記録はここに残る。</div></div>
 </div>
 </div>
 </div>
 <footer class="foot" data-component="fidelity-sync-meta"><div class="ft-grid">
 <div class="ft-plain">このページは、大もとの機械データ (正本) から自動で組み立てられています。構造は機械が自動で検査し、内容が元データに忠実かは独立のレビューで確かめます。</div>
-<div data-audience="machine">機械SSoT: <b>ADR-0055.adr.yaml</b> &middot; 生成: <b>2026-09-23 00:41</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
+<div data-audience="machine">機械SSoT: <b>ADR-0075-group-pressure-counts-only-the-role-model-window.adr.yaml</b> &middot; 生成: <b>2026-09-26 16:07</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
 <div class="tags" data-audience="machine"><span>folio design system</span><span>ADR-pack</span><span>folio engine B1 (instance#2)</span><span>cross-doc 照会</span></div>
 </div></footer>
 <!-- folio:chrome-bottom -->
 <nav class="prevnext" aria-label="前後の文書">
-  <a class="prevnext__prev" href="ADR-0054-entrance-flip-may-be-declared-unmeasured-in-the-vessel-declaration.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">入口の flip を撃つ手段を持たない Rust の消費側は、 宣言の任意 key で「入口の flip は測らない」と名乗る (key の不在は現行の要求＝本 repo は無変更・名乗りは受付と契約表の検査の断りを外すだけで、 判定行に測らなかったことを残す・自前 command で満たす案と器への内蔵は採らない)</span></a>
-  <a class="prevnext__next" href="ADR-0056-destructive-guards-are-one-vessel-subcommand-wired-from-account-settings.html"><span class="prevnext__dir">次 &rarr;</span><span class="prevnext__title">不可逆な操作の見張りは器の binary の 1 つの口に置き、 口座の設定 file から呼ぶ (器を積まない session にも効く・切るのは裁定つきの rules 行だけ)</span></a>
+  <a class="prevnext__prev" href="ADR-0074-reservations-belong-to-pressed-groups-only.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">予約は逼迫した群だけが持つ — 逼迫していない先の群は候補を測らず予約も導かず、 逼迫した後の群が鍵の先頭を取る。 移り先の無い断りは群用 dir の印と doctor の群の行で host の全席から読める (ADR-0069 の予約の読みを部分 supersede)</span></a>
 </nav>
 <script>
 (function () {

@@ -1085,8 +1085,8 @@ terms:
     relationships: [群の予約, 口座残量, 役割の model, 口座選定]
   - canonical: 役割の model
     domain: consumer
-    definition: 席の役割ごとに rules 行 seat.model.<役割> が宣言する model (orchestrator は fable)。 残量の鍵はこの model のモデル別 7 日窓を見る。
-    relationships: [残量の鍵, 役割, 口座残量]
+    definition: 席の役割ごとに rules 行 seat.model.<役割> が宣言する model (値は rules 行が持つ)。 残量の鍵 (ADR-0069) と逼迫の門 (ADR-0075) はこの model のモデル別 7 日窓だけを見る。
+    relationships: [残量の鍵, 役割, 口座残量, 群の逼迫]
   - canonical: 便用の除外
     domain: consumer
     aliases: [run-purpose exclusion]
@@ -1202,8 +1202,8 @@ terms:
   - canonical: 群の逼迫
     domain: consumer
     aliases: [group pressure]
-    definition: 群の今の口座か群の席が居る口座の使用率が、 5 時間窓・7 日窓・モデル別窓のいずれかで閾値の rules 行の値以上である状態 (ADR-0055・proposed)。 便の終端の周と席自身の hook が既存の計測の 1 本で鮮度つきに読み、 timer では測らない。 ADR-0066 (proposed) の後は管理 tick も群ごとに鮮度の窓に 1 回まで読み、 移動の判定は群の段と tick が共有の 1 本 (群の移動の判定) を呼ぶ。
-    relationships: [project の群, 群の今の口座, 便の終端の周, 移動を頼む記録, 退避の合図, rules 行]
+    definition: 群の今の口座か群の席が居る口座の使用率が、 5 時間窓・7 日窓・モデル別窓のいずれかで閾値の rules 行の値以上である状態 (ADR-0055・proposed)。 便の終端の周と席自身の hook が既存の計測の 1 本で鮮度つきに読み、 timer では測らない。 ADR-0066 (proposed) の後は管理 tick も群ごとに鮮度の窓に 1 回まで読み、 移動の判定は群の段と tick が共有の 1 本 (群の移動の判定) を呼ぶ。 ADR-0075 の後は、 モデル別窓は群の席の役割の model の窓だけを数える (5 時間窓と 7 日窓は全部・管理 tick の口座の門は自席の役割の model の窓)。
+    relationships: [project の群, 群の今の口座, 便の終端の周, 移動を頼む記録, 退避の合図, rules 行, 役割の model]
   - canonical: 便の終端の周
     domain: consumer
     aliases: [run-end round]
