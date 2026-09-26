@@ -36,7 +36,7 @@ fn seat_role_register_appends_one_seat_registered_row() {
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     assert_eq!(
         stdout_of(&out),
-        "seat register: registered role=orchestrator target=rs:planner sid=sid-a account=acct-1 anchor=/repo/anchor model=Fable\n"
+        "seat register: registered role=orchestrator target=rs:planner sid=sid-a account=acct-1 anchor=/repo/anchor model=Opus\n"
     );
     let events = vessel::fleet::store::read_all(&place.state).unwrap_or_default();
     assert_eq!(events.len(), 1, "1 件だけ: {}", role_log(&place));
@@ -253,7 +253,7 @@ fn seat_role_doctor_reconciles_rows_with_live_targets() {
     // 設計 seat-roles.md §20 の約束 5 / 8）。
     let seats: Vec<String> = stdout_of(&out).lines().filter(|line| line.starts_with("seat: ")).map(str::to_owned).collect();
     assert_eq!(seats.len(), 2, "{seats:?}");
-    assert!(seats.iter().all(|line| line.contains(" model=Fable default=no-rule:missing paths=")), "{seats:?}");
+    assert!(seats.iter().all(|line| line.contains(" model=Opus default=no-rule:missing paths=")), "{seats:?}");
     let seat = start_seat(&place.socket, "rolesdoc");
     assert!(seat.ready(), "隔離 seat が立つ");
     let out = role_doctor(&place);
@@ -412,37 +412,37 @@ fn model_of_target(place: &RolePlace, target: &str) -> Option<String> {
     vessel::seat::role::registration_of_target(&role_state(place), target).and_then(|row| row.model.clone())
 }
 
-/// `--model Fable` で登録 → `SeatRegistered` 1 件の束に model = Fable・行の key に `"model":"Fable"`・
-/// replay の読み手が `Some("Fable")` を返す・出力行の末尾に `model=Fable`（歯 (e)(1)・flip の RED）。
+/// `--model Opus` で登録 → `SeatRegistered` 1 件の束に model = Opus・行の key に `"model":"Opus"`・
+/// replay の読み手が `Some("Opus")` を返す・出力行の末尾に `model=Opus`（歯 (e)(1)・flip の RED）。
 #[test]
 fn seat_register_model_lands_in_the_row_and_the_reader_returns_it() {
     let place = role_place();
     role_stamp(&place, "rm:planner", Some("sid-m"));
-    let out = role_register(&place, "rm:planner", "orchestrator", &["--anchor", "/repo/anchor", "--model", "Fable"]);
+    let out = role_register(&place, "rm:planner", "orchestrator", &["--anchor", "/repo/anchor", "--model", "Opus"]);
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     assert_eq!(
         stdout_of(&out),
-        "seat register: registered role=orchestrator target=rm:planner sid=sid-m account=acct-1 anchor=/repo/anchor model=Fable\n"
+        "seat register: registered role=orchestrator target=rm:planner sid=sid-m account=acct-1 anchor=/repo/anchor model=Opus\n"
     );
     let events = vessel::fleet::store::read_all(&place.state).unwrap_or_default();
     assert_eq!(events.len(), 1, "1 件だけ: {}", role_log(&place));
     let registration = events.first().and_then(|event| event.registration.clone()).unwrap_or_else(|| panic!("本体が在る"));
-    assert_eq!(registration.model.as_deref(), Some("Fable"));
+    assert_eq!(registration.model.as_deref(), Some("Opus"));
     assert_eq!(registration.role, vessel::seat::role::Role::Orchestrator, "他の項目はそのまま");
     assert_eq!(registration.account, "acct-1");
     let log = role_log(&place);
-    assert!(log.contains("\"model\":\"Fable\""), "行の key: {log}");
+    assert!(log.contains("\"model\":\"Opus\""), "行の key: {log}");
     assert!(log.contains("\"schema\":1"), "schema 1 のまま: {log}");
     let state = role_state(&place);
     let row = vessel::seat::role::registration_of_target(&state, "rm:planner").unwrap_or_else(|| panic!("row が在る"));
-    assert_eq!(row.model.as_deref(), Some("Fable"), "読み手が model を運ぶ");
+    assert_eq!(row.model.as_deref(), Some("Opus"), "読み手が model を運ぶ");
     assert_eq!(row.role, vessel::seat::role::Role::Orchestrator);
     assert_eq!(vessel::seat::role::role_of_target(&state, "rm:planner"), Some(vessel::seat::role::Role::Orchestrator), "役割の解決は同じ 1 本");
     assert_eq!(vessel::seat::role::registration_of_target(&state, "rm:absent"), None, "登録の無い target は None");
     fs::remove_dir_all(&place.dir).ok();
 }
 
-/// `--model` 無しで登録 → 器が役割の既定の行から導いた値（表示名 `Fable`）が row に載り、出力行の末尾にも `model=Fable`
+/// `--model` 無しで登録 → 器が役割の既定の行から導いた値（表示名 `Opus`）が row に載り、出力行の末尾にも `model=Opus`
 /// （歯 (e)(2)・設計 seat-roles.md §20 の約束 5 で「省いた周は導出値」へ期待値が変わった）。旧 row（`model` の key 無し）は
 /// 読み手が `None` で読む形のまま（fleet の歯が測る）。
 #[test]
@@ -453,12 +453,12 @@ fn seat_register_model_absent_reads_as_none_and_keeps_the_old_row_form() {
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     assert_eq!(
         stdout_of(&out),
-        "seat register: registered role=orchestrator target=rm:plain sid=sid-p account=acct-1 anchor=/repo/anchor model=Fable\n"
+        "seat register: registered role=orchestrator target=rm:plain sid=sid-p account=acct-1 anchor=/repo/anchor model=Opus\n"
     );
     let log = role_log(&place);
     assert_eq!(log.lines().count(), 1, "1 件: {log}");
-    assert!(log.contains("\"model\":\"Fable\""), "導出値が key に載る: {log}");
-    assert_eq!(model_of_target(&place, "rm:plain").as_deref(), Some("Fable"));
+    assert!(log.contains("\"model\":\"Opus\""), "導出値が key に載る: {log}");
+    assert_eq!(model_of_target(&place, "rm:plain").as_deref(), Some("Opus"));
     assert!(vessel::seat::role::registration_of_target(&role_state(&place), "rm:plain").is_some(), "row は在る");
     fs::remove_dir_all(&place.dir).ok();
 }
@@ -486,15 +486,15 @@ fn seat_register_model_reregistration_replaces_the_model_with_the_latest() {
     let place = role_place();
     role_stamp(&place, "rm:again", Some("sid-g"));
     let register = |extra: &[&str]| role_register(&place, "rm:again", "orchestrator", extra);
-    let out = register(&["--anchor", "/repo/main", "--model", "Fable"]);
+    let out = register(&["--anchor", "/repo/main", "--model", "Opus"]);
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
-    assert_eq!(model_of_target(&place, "rm:again").as_deref(), Some("Fable"));
-    let other = register(&["--anchor", "/repo/main", "--model", "Opus"]);
+    assert_eq!(model_of_target(&place, "rm:again").as_deref(), Some("Opus"));
+    let other = register(&["--anchor", "/repo/main", "--model", "Fable"]);
     assert_eq!(rc_of(&other), i32::from(RC_REFUSED), "行と食い違う値は断る: stdout={}", stdout_of(&other));
-    assert_eq!(model_of_target(&place, "rm:again").as_deref(), Some("Fable"), "断った周は row が変わらない");
+    assert_eq!(model_of_target(&place, "rm:again").as_deref(), Some("Opus"), "断った周は row が変わらない");
     let out = register(&["--anchor", "/repo/main"]);
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
-    assert_eq!(model_of_target(&place, "rm:again").as_deref(), Some("Fable"), "外した再登録は行から導いた値");
+    assert_eq!(model_of_target(&place, "rm:again").as_deref(), Some("Opus"), "外した再登録は行から導いた値");
     assert_eq!(role_log(&place).lines().count(), 2, "前の row は残る（append のみ・断った周は書かない）");
     assert_eq!(role_state(&place).registrations.len(), 1, "同じ鍵は 1 つに畳む");
     fs::remove_dir_all(&place.dir).ok();
@@ -506,7 +506,7 @@ fn seat_register_model_reregistration_replaces_the_model_with_the_latest() {
 #[test]
 fn seat_register_model_shows_in_the_doctor_rows_with_dash_for_none() {
     let place = role_place();
-    for (target, role, extra) in [("rm:doc-a", "orchestrator", &["--anchor", "/repo/a", "--model", "Fable"][..]), ("rm:doc-b", "orchestrator", &["--anchor", "/repo/b"])] {
+    for (target, role, extra) in [("rm:doc-a", "orchestrator", &["--anchor", "/repo/a", "--model", "Opus"][..]), ("rm:doc-b", "orchestrator", &["--anchor", "/repo/b"])] {
         role_stamp(&place, target, Some("sid-d"));
         let out = role_register(&place, target, role, extra);
         assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
@@ -517,8 +517,8 @@ fn seat_register_model_shows_in_the_doctor_rows_with_dash_for_none() {
     assert_eq!(
         lines.get(4..),
         Some(&[
-            format!("seat: role=orchestrator anchor=/repo/a target=rm:doc-a account=acct-1 model=Fable default=no-rule:missing paths=default{TICK_TAIL}"),
-            format!("seat: role=orchestrator anchor=/repo/b target=rm:doc-b account=acct-1 model=Fable default=no-rule:missing paths=default{TICK_TAIL}"),
+            format!("seat: role=orchestrator anchor=/repo/a target=rm:doc-a account=acct-1 model=Opus default=no-rule:missing paths=default{TICK_TAIL}"),
+            format!("seat: role=orchestrator anchor=/repo/b target=rm:doc-b account=acct-1 model=Opus default=no-rule:missing paths=default{TICK_TAIL}"),
             "seats: registered=2 live=unmeasurable missing=unmeasurable".to_owned(),
             HOST_ABSENT.to_owned(),
             consumer_line_of("/repo/a"),
@@ -587,7 +587,7 @@ fn seat_role_doctor_paths_names_default_declared_and_invalid_per_anchor() {
     assert_eq!(lines.len(), 2 + 1 + 1 + 6 + 1 + 1 + 6 + 1,"欄の追加で行は増えない（末尾は host-guard の 1 行）: {lines:?}");
     assert_eq!(
         seat_line_of(&lines, "/repo"),
-        format!("seat: role=orchestrator anchor=/repo target=rolesdoc:rolesdoc account=acct-1 model=Fable default=no-rule:missing paths=default{TICK_TAIL}"),
+        format!("seat: role=orchestrator anchor=/repo target=rolesdoc:rolesdoc account=acct-1 model=Opus default=no-rule:missing paths=default{TICK_TAIL}"),
         "存在しない anchor は宣言 file が無い repo と同じ"
     );
     for (anchor, want) in [
@@ -647,14 +647,14 @@ fn consumer_line_of(anchor: &str) -> String {
 
 // ─────────────────── 席の既定の model と effort（設計 seat-roles.md §20・`s2-07l.433`・接頭辞 `seat_defaults_`） ───────────────────
 
-/// 約束 5 / 6: `--model` を省いた登録は器が行から導いた値を row に書き、その字面は実測の行と同じ**表示名**（`Fable`・別名の
-/// `fable` ではない）・row に effort の項目は載らない。行と食い違う `--model Opus` は登録の断りの閉じた列の 1 つ
+/// 約束 5 / 6: `--model` を省いた登録は器が行から導いた値を row に書き、その字面は実測の行と同じ**表示名**（`Opus`・別名の
+/// `opus` ではない）・row に effort の項目は載らない。行と食い違う `--model Fable` は登録の断りの閉じた列の 1 つ
 /// （`reason=model-mismatch`）で rc 1・event を 1 件も書かない。
 #[test]
 fn seat_defaults_register_writes_the_derived_model_and_refuses_a_mismatch() {
     let place = role_place();
     role_stamp(&place, "rd:mismatch", Some("sid-x"));
-    let refused = role_register(&place, "rd:mismatch", "orchestrator", &["--anchor", "/repo/x", "--model", "Opus"]);
+    let refused = role_register(&place, "rd:mismatch", "orchestrator", &["--anchor", "/repo/x", "--model", "Fable"]);
     assert_eq!(rc_of(&refused), i32::from(RC_REFUSED), "stdout={}", stdout_of(&refused));
     assert!(stdout_of(&refused).is_empty(), "stdout は空");
     assert_eq!(stderr_of(&refused), "seat register: refused reason=model-mismatch target=rd:mismatch\n");
@@ -666,15 +666,15 @@ fn seat_defaults_register_writes_the_derived_model_and_refuses_a_mismatch() {
     let rows: Vec<vessel::fleet::Registration> =
         vessel::fleet::store::read_all(&place.state).unwrap_or_default().into_iter().filter_map(|event| event.registration).collect();
     assert_eq!(rows.len(), 1, "{rows:?}");
-    assert_eq!(rows.first().and_then(|row| row.model.as_deref()), Some("Fable"), "表示名（実測の行と同じ語彙）: {rows:?}");
+    assert_eq!(rows.first().and_then(|row| row.model.as_deref()), Some("Opus"), "表示名（実測の行と同じ語彙）: {rows:?}");
     let log = role_log(&place);
-    assert!(log.contains("\"model\":\"Fable\"") && !log.contains("\"model\":\"fable\""), "別名の字面を row に書かない: {log}");
+    assert!(log.contains("\"model\":\"Opus\"") && !log.contains("\"model\":\"opus\""), "別名の字面を row に書かない: {log}");
     assert!(!log.contains("effort"), "row に effort の項目は無い: {log}");
     // 別名で渡しても row に載るのは行と同じ表示名。
-    let alias = role_register(&place, "rd:derived", "orchestrator", &["--anchor", "/repo/d", "--model", "fable"]);
+    let alias = role_register(&place, "rd:derived", "orchestrator", &["--anchor", "/repo/d", "--model", "opus"]);
     assert_eq!(rc_of(&alias), i32::from(RC_OK), "stderr={}", stderr_of(&alias));
-    assert!(stdout_of(&alias).ends_with(" model=Fable\n"), "{}", stdout_of(&alias));
-    assert!(!role_log(&place).contains("\"model\":\"fable\""), "別名は表示名で書く: {}", role_log(&place));
+    assert!(stdout_of(&alias).ends_with(" model=Opus\n"), "{}", stdout_of(&alias));
+    assert!(!role_log(&place).contains("\"model\":\"opus\""), "別名は表示名で書く: {}", role_log(&place));
     fs::remove_dir_all(&place.dir).ok();
 }
 
@@ -690,7 +690,7 @@ fn defaults_rules(model: &str, effort: &str, enabled: bool) -> String {
     )
 }
 
-/// 約束 8: doctor の登録 row の行は `model=` の直後に行の既定を 1 語添える（`--rules` 無しは埋め込みの行＝`default=Fable/high`・
+/// 約束 8: doctor の登録 row の行は `model=` の直後に行の既定を 1 語添える（`--rules` 無しは埋め込みの行＝`default=Opus/xhigh`・
 /// `--rules` の行の値が違えばその値）。行を読めない manifest（行なし・不発効）は既定の語を出さず理由の字面（`no-rule:<variant>`）を
 /// 出し、rc は 0 のまま・行の数も変わらない。突合の面は doctor の 1 つだけ（`seat register` の出力行は既定を添えない）。
 #[test]
@@ -703,18 +703,18 @@ fn seat_defaults_doctor_adds_the_row_default_or_names_why_it_cannot() {
     let row_of = |text: &str| text.lines().find(|line| line.starts_with("seat: ")).map(str::to_owned).unwrap_or_default();
     assert_eq!(
         row_of(&bare.1),
-        "seat: role=orchestrator anchor=/repo target=rolesdoc:rolesdoc account=acct-1 model=Fable default=Fable/high paths=default heartbeat=on tick=absent",
+        "seat: role=orchestrator anchor=/repo target=rolesdoc:rolesdoc account=acct-1 model=Opus default=Opus/xhigh paths=default heartbeat=on tick=absent",
         "埋め込みの行の既定（周期の行も埋め込み＝打刻の無い席は absent）"
     );
     let count = doctor_rows(&place, NO_ACCOUNT_RULES).len();
     for (body, want) in [
-        (defaults_rules("opus", "xhigh", true), "default=Opus/xhigh"),
-        (defaults_rules("fable", "high", false), "default=no-rule:disabled"),
+        (defaults_rules("fable", "high", true), "default=Fable/high"),
+        (defaults_rules("opus", "xhigh", false), "default=no-rule:disabled"),
         (NO_ACCOUNT_RULES.to_owned(), "default=no-rule:missing"),
     ] {
         let lines = doctor_rows(&place, &body);
         let row = lines.iter().find(|line| line.starts_with("seat: ")).cloned().unwrap_or_default();
-        assert!(row.contains(&format!(" model=Fable {want} paths=")), "{want}: {row}");
+        assert!(row.contains(&format!(" model=Opus {want} paths=")), "{want}: {row}");
         assert_eq!(row.matches("default=").count(), 1, "1 語だけ: {row}");
         assert_eq!(lines.len(), count, "{want}: 行の数は変わらない: {lines:?}");
     }

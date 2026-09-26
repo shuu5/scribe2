@@ -24,7 +24,7 @@ fn launch_derived(place: &AcctPlace) -> String {
 
 /// 役割の既定の対（埋め込みの行 `seat.model.orchestrator` / `seat.effort.orchestrator`）が起動行で `claude` の直後に運ぶ 4 語
 /// （設計 seat-roles.md §20 の約束 1・`--model` → `--effort` の順）。
-const LAUNCH_DEFAULT_FLAGS: [&str; 4] = ["--model", "fable", "--effort", "high"];
+const LAUNCH_DEFAULT_FLAGS: [&str; 4] = ["--model", "opus", "--effort", "xhigh"];
 
 /// 期待する偽 claude の記録に既定の 4 語を前置した形（argv の先頭が `claude` の直後の語）。
 fn launch_defaults_argv(place: &AcctPlace, label: &str) -> String {
@@ -71,7 +71,7 @@ fn launch_rules_copy(place: &AcctPlace, memory: Option<u64>) -> String {
     let row = |id: &str, kind: &str, value: &str| {
         format!("\n[[rule]]\nid = \"{id}\"\nkind = \"{kind}\"\nvalue = {value}\nenabled = true\nruling = \"r\"\nruled_at = \"d\"\n")
     };
-    let mut text = format!("schema = 1\n{}{}", row("seat.model.orchestrator", "RoleModel", "\"fable\""), row("seat.effort.orchestrator", "RoleEffort", "\"high\""));
+    let mut text = format!("schema = 1\n{}{}", row("seat.model.orchestrator", "RoleModel", "\"opus\""), row("seat.effort.orchestrator", "RoleEffort", "\"xhigh\""));
     if let Some(mb) = memory {
         text.push_str(&row("seat.memory_max_mb", "SeatMemoryMaxMb", &mb.to_string()));
     }
@@ -227,7 +227,7 @@ fn launch_assert_registered_before_send(place: &AcctPlace, target: &str, label: 
         sid: None,
         account: label.to_owned(),
         launch: launch_derived(place),
-        model: Some("Fable".to_owned()),
+        model: Some("Opus".to_owned()),
     };
     assert_eq!(rows, vec![want], "SeatRegistered 1 件・sid 無し・launch は導出した行（穴を埋める前）");
     let seen_text = fs::read_to_string(place.dir.join(LAUNCH_EVENTS_SEEN)).unwrap_or_default();
@@ -382,9 +382,9 @@ fn seat_launch_injects_cd_to_the_row_anchor_before_the_line() {
     fs::remove_dir_all(&place.dir).ok();
 }
 
-/// (f) 起動行は model を typed に運ぶ（`s2-07l.313`・C2.2 / C10・SRS FR59 / FR36）: 行と一致する `--model Fable`（表示名）で
-/// 起こすと偽 claude の argv は `--model fable --effort high`（別名・既定の対）で**始まり**（`claude` の直後・anchor の
-/// `--plugin-dir` より前）、送った行に `--model` の語は 1 つ・登録 row は `model=Fable` を持ち **`launch`（雛形）に旗の語は無い**
+/// (f) 起動行は model を typed に運ぶ（`s2-07l.313`・C2.2 / C10・SRS FR59 / FR36）: 行と一致する `--model Opus`（表示名）で
+/// 起こすと偽 claude の argv は `--model opus --effort xhigh`（別名・既定の対）で**始まり**（`claude` の直後・anchor の
+/// `--plugin-dir` より前）、送った行に `--model` の語は 1 つ・登録 row は `model=Opus` を持ち **`launch`（雛形）に旗の語は無い**
 /// （旗無しの導出行のまま）。表に無い `--model nope` は `launch-model-unknown` で row も key も書かない（設計 seat-roles.md §20）。
 #[test]
 fn seat_launch_carries_the_model_alias_in_the_launch_line() {
@@ -400,27 +400,27 @@ fn seat_launch_carries_the_model_alias_in_the_launch_line() {
     assert_eq!(tick_token(&stderr_of(&unknown), "reason").as_deref(), Some("launch-model-unknown"), "{}", stderr_of(&unknown));
     launch_assert_not_sent(&place, 0, "model-unknown");
 
-    let out = launch_run(&place, &path, &target, &["--account", "l2", "--model", "Fable"]);
+    let out = launch_run(&place, &path, &target, &["--account", "l2", "--model", "Opus"]);
 
     let line = stdout_of(&out);
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={}", stderr_of(&out));
     assert_eq!(
         fs::read_to_string(place.dir.join("launched")).unwrap_or_default(),
         launch_defaults_argv(&place, "l2"),
-        "別名の `--model fable --effort high` が `claude` の直後に 1 回だけ届く"
+        "別名の `--model opus --effort xhigh` が `claude` の直後に 1 回だけ届く"
     );
     let sent = acct_sent(&place.state, &format!("{name}_{name}"));
     assert_eq!(sent.len(), 1, "起動行の 1 行: {sent:?}");
-    assert!(sent.first().is_some_and(|what| what.contains(" claude --model fable --effort high --plugin-dir ") && launch_model_words(what) == 1), "{sent:?}");
+    assert!(sent.first().is_some_and(|what| what.contains(" claude --model opus --effort xhigh --plugin-dir ") && launch_model_words(what) == 1), "{sent:?}");
     let rows = acct_rows(&place.state);
     assert_eq!(rows.len(), 1, "{rows:?}");
-    assert_eq!(rows.first().map(|row| row.model.as_deref()), Some(Some("Fable")), "row の model は表示名のまま: {rows:?}");
+    assert_eq!(rows.first().map(|row| row.model.as_deref()), Some(Some("Opus")), "row の model は表示名のまま: {rows:?}");
     assert_eq!(rows.first().map(|row| row.launch.as_str()), Some(launch_derived(&place).as_str()), "雛形は旗無しの導出行: {rows:?}");
     drop(guard);
     fs::remove_dir_all(&place.dir).ok();
 }
 
-/// (d) 雛形に literal の `--model` が在る（host の面の `[[launch-arg]]` に `--model` / `opus`＝暫定の再登録の形）周に `--model Fable`
+/// (d) 雛形に literal の `--model` が在る（host の面の `[[launch-arg]]` に `--model` / `opus`＝暫定の再登録の形）周に `--model Opus`
 /// で起こすと、器の 1 つと二重になるので後勝ちにせず `launch-model-duplicated` で断る（row も key も書かない）。器は `--model` 無しの
 /// 周も行の model を運ぶので（設計 seat-roles.md §20 の約束 1）、literal を持つ雛形は `--model` 無しでも同じ理由で断られる
 /// （literal だけが載って行を黙って上書きする形は無い）。
@@ -436,7 +436,7 @@ fn seat_launch_refuses_a_duplicated_model_in_the_template() {
     let guard = launch_session(&place, name, &path);
     assert!(guard.ready(), "独立 socket に shell の session を立てられる");
 
-    let out = launch_run(&place, &path, &target, &["--account", "l2", "--model", "Fable"]);
+    let out = launch_run(&place, &path, &target, &["--account", "l2", "--model", "Opus"]);
 
     let line = stderr_of(&out);
     assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "stdout={}", stdout_of(&out));
@@ -482,10 +482,10 @@ fn launch_assert_refused_line(out: &Output, line: &str, case: &str) {
     assert_eq!(stderr_of(out), format!("{line}\n"), "{case}");
 }
 
-/// (a) 登録 row の在る anchor で短い形 `<label> --orchestrator` は長い形と同じ row と同じ起動行を作る: 長い形（`--account l2 --model Fable`）
+/// (a) 登録 row の在る anchor で短い形 `<label> --orchestrator` は長い形と同じ row と同じ起動行を作る: 長い形（`--account l2 --model Opus`）
 /// で 1 回起こして row を作った place で、席を終えて前面を shell に戻し、短い形を `--target` / `--model` 無しで撃つ → rc 0・
 /// `inject.jsonl` の `kind=launch` の `what` は 2 行とも同一・最新 row の target / model / account は長い形の row と一致・偽 claude の
-/// argv も同じ（`--model fable` を運ぶ）・`new-window` は長い形の 1 回だけ（短い形は 0 回＝window は在る）。base は第 1 token を
+/// argv も同じ（`--model opus` を運ぶ）・`new-window` は長い形の 1 回だけ（短い形は 0 回＝window は在る）。base は第 1 token を
 /// verb と読めず使い方で断る（RED）。
 #[test]
 fn seat_launch_short_form_reuses_the_registered_row_target_and_model() {
@@ -495,7 +495,7 @@ fn seat_launch_short_form_reuses_the_registered_row_target_and_model() {
     let path = launch_shims(&place, &target);
     let guard = launch_session(&place, name, &path);
     assert!(guard.ready(), "独立 socket に shell の session を立てられる");
-    let long = launch_run(&place, &path, &target, &["--account", "l2", "--model", "Fable"]);
+    let long = launch_run(&place, &path, &target, &["--account", "l2", "--model", "Opus"]);
     assert_eq!(rc_of(&long), i32::from(RC_OK), "長い形: stdout={} stderr={}", stdout_of(&long), stderr_of(&long));
     assert_eq!(launch_tmux_calls(&place, "new-window"), 1, "長い形が window を 1 回作る");
     assert!(launch_quit_seat(&place, &target), "席を終えて前面を shell に戻せる: {}", capture(&place.socket, &target));
@@ -512,7 +512,7 @@ fn seat_launch_short_form_reuses_the_registered_row_target_and_model() {
     let rows = acct_rows(&place.state);
     assert_eq!(rows.len(), 2, "同じ鍵の row が 2 件: {rows:?}");
     assert_eq!(rows.first(), rows.get(1), "短い形の row は長い形の row と同じ（target / model / account）: {rows:?}");
-    assert_eq!(rows.get(1).map(|row| (row.target.as_str(), row.model.as_deref(), row.account.as_str())), Some((target.as_str(), Some("Fable"), "l2")));
+    assert_eq!(rows.get(1).map(|row| (row.target.as_str(), row.model.as_deref(), row.account.as_str())), Some((target.as_str(), Some("Opus"), "l2")));
     let argv = launch_defaults_argv(&place, "l2");
     assert_eq!(
         fs::read_to_string(place.dir.join("launched")).unwrap_or_default(),
@@ -526,7 +526,7 @@ fn seat_launch_short_form_reuses_the_registered_row_target_and_model() {
 /// (b) row が無く flag も無い周は `defaults-unresolved` で typed に断る: rc 1・stderr の行はちょうど
 /// `seat launch: refused reason=defaults-unresolved missing=--target`（`target=` を持たない）・0 key・row 0・`inject.jsonl` に
 /// launch 行なし。`missing=` に `--model` は載らない（model は役割の既定の行から導く＝欠けるのは行を読めない周だけ・設計
-/// seat-roles.md §20 の約束 4）。2 周目: 長い形（`--model` 無し）で作った row は行から導いた `model=Fable` を持ち、その place で
+/// seat-roles.md §20 の約束 4）。2 周目: 長い形（`--model` 無し）で作った row は行から導いた `model=Opus` を持ち、その place で
 /// 短い形を `--model` 無しで撃つと断られず、row の target と行の model で起きる。
 #[test]
 fn seat_launch_short_form_refuses_typed_without_a_row() {
@@ -548,7 +548,7 @@ fn seat_launch_short_form_refuses_typed_without_a_row() {
     assert_eq!(rc_of(&long), i32::from(RC_OK), "長い形（model 無し）: stdout={} stderr={}", stdout_of(&long), stderr_of(&long));
     assert!(launch_quit_seat(&place, &target), "席を終えて前面を shell に戻せる: {}", capture(&place.socket, &target));
     let rows = acct_rows(&place.state);
-    assert_eq!(rows.first().and_then(|row| row.model.as_deref()), Some("Fable"), "長い形の row は行から導いた model を持つ: {rows:?}");
+    assert_eq!(rows.first().and_then(|row| row.model.as_deref()), Some("Opus"), "長い形の row は行から導いた model を持つ: {rows:?}");
 
     let again = launch_run_short(&place, &path, "l2", &["--orchestrator"]);
 
@@ -573,7 +573,7 @@ fn seat_launch_short_form_requires_exactly_one_role_flag() {
     let guard = launch_session(&place, name, &path);
     assert!(guard.ready(), "独立 socket に shell の session を立てられる");
 
-    let two = launch_run_short(&place, &path, "l2", &["--orchestrator", "--orchestrator", "--target", &target, "--model", "Fable"]);
+    let two = launch_run_short(&place, &path, "l2", &["--orchestrator", "--orchestrator", "--target", &target, "--model", "Opus"]);
 
     assert_eq!(rc_of(&two), i32::from(RC_REFUSED), "two: stdout={} stderr={}", stdout_of(&two), stderr_of(&two));
     assert!(stdout_of(&two).is_empty(), "two: stdout は空");
@@ -581,7 +581,7 @@ fn seat_launch_short_form_requires_exactly_one_role_flag() {
     assert!(stderr_of(&two).contains("[--orchestrator]"), "two: 使い方の短い形で役割の flag は任意: {}", stderr_of(&two));
     launch_assert_not_sent(&place, 0, "two");
 
-    let zero = launch_run_short(&place, &path, "l2", &["--target", &target, "--model", "Fable"]);
+    let zero = launch_run_short(&place, &path, "l2", &["--target", &target, "--model", "Opus"]);
 
     assert_eq!(rc_of(&zero), i32::from(RC_OK), "zero: stdout={} stderr={}", stdout_of(&zero), stderr_of(&zero));
     assert!(stdout_of(&zero).starts_with(&format!("seat launch: launched target={name}_{name} account=l2 ")), "zero: {}", stdout_of(&zero));
@@ -643,7 +643,7 @@ fn seat_launch_short_form_continues_the_last_conversation_at_the_tail() {
         let guard = launch_session(&place, name, &path);
         assert!(guard.ready(), "{case}: 独立 socket に shell の session を立てられる");
 
-        let out = launch_run_short(&place, &path, "l2", &[flag, "--target", &target, "--model", "Fable"]);
+        let out = launch_run_short(&place, &path, "l2", &[flag, "--target", &target, "--model", "Opus"]);
 
         assert_eq!(rc_of(&out), i32::from(RC_OK), "{case}: stdout={} stderr={}", stdout_of(&out), stderr_of(&out));
         assert_eq!(acct_rows(&place.state).first().map(|row| row.role), Some(vessel::seat::role::Role::Orchestrator), "{case}: 既定の役割");
@@ -679,7 +679,7 @@ fn seat_launch_short_form_resumes_a_named_conversation_and_refuses_malformed_ids
         ("short", &["-r", "0f3c9a2e"][..]),
     ] {
         let mut args = extra.to_vec();
-        args.extend_from_slice(&["--target", &target, "--model", "Fable"]);
+        args.extend_from_slice(&["--target", &target, "--model", "Opus"]);
 
         let out = launch_run_short(&place, &path, "l2", &args);
 
@@ -689,7 +689,7 @@ fn seat_launch_short_form_resumes_a_named_conversation_and_refuses_malformed_ids
         launch_assert_not_sent(&place, 0, case);
     }
 
-    let out = launch_run_short(&place, &path, "l2", &["-r", id, "--target", &target, "--model", "Fable"]);
+    let out = launch_run_short(&place, &path, "l2", &["-r", id, "--target", &target, "--model", "Opus"]);
 
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={} stderr={}", stdout_of(&out), stderr_of(&out));
     launch_assert_carried(&place, name, &["--resume", id], "resume");
@@ -714,7 +714,7 @@ fn launch_wait_front(place: &AcctPlace, target: &str, want: &str) -> bool {
 }
 
 /// 約束 1（§26）: **役割の flag が 0 個**の短い形が、長い形と同じ登録 row と同じ注入行を作る。長い形
-/// （`--account l2 --model Fable`）で row を作って席を終えた place で `seat l2` の 1 語（役割の flag も `--target` も
+/// （`--account l2 --model Opus`）で row を作って席を終えた place で `seat l2` の 1 語（役割の flag も `--target` も
 /// `--model` も無い）を撃つ → rc 0・`inject.jsonl` の `kind=launch` の `what` は 2 行とも同一・row は 2 件とも等しい・
 /// 偽 claude の argv も 2 回とも同じ・`new-window` は長い形の 1 回だけ（1 語は在る窓へ起こす）。
 /// base は 0 個を使い方で断る（RED）。
@@ -726,7 +726,7 @@ fn seat_entry_short_form_defaults_the_role_to_orchestrator() {
     let path = launch_shims(&place, &target);
     let guard = launch_session(&place, name, &path);
     assert!(guard.ready(), "独立 socket に shell の session を立てられる");
-    let long = launch_run(&place, &path, &target, &["--account", "l2", "--model", "Fable"]);
+    let long = launch_run(&place, &path, &target, &["--account", "l2", "--model", "Opus"]);
     assert_eq!(rc_of(&long), i32::from(RC_OK), "長い形: stdout={} stderr={}", stdout_of(&long), stderr_of(&long));
     assert_eq!(launch_tmux_calls(&place, "new-window"), 1, "長い形が window を 1 回作る");
     assert!(launch_quit_seat(&place, &target), "席を終えて前面を shell に戻せる: {}", capture(&place.socket, &target));
@@ -764,12 +764,12 @@ fn seat_entry_target_defaults_to_the_caller_session_and_role() {
     let guard = launch_session(&place, name, &path);
     assert!(guard.ready(), "独立 socket に shell の session を立てられる");
 
-    let away = launch_run_short(&place, &path, "l2", &["--model", "Fable"]);
+    let away = launch_run_short(&place, &path, "l2", &["--model", "Opus"]);
     launch_assert_refused_line(&away, "seat launch: refused reason=defaults-unresolved missing=--target", "no-tmux");
     launch_assert_not_sent(&place, 0, "no-tmux");
 
     launch_caller_session(&place, "");
-    let empty = launch_run_short(&place, &path, "l2", &["--model", "Fable"]);
+    let empty = launch_run_short(&place, &path, "l2", &["--model", "Opus"]);
     launch_assert_refused_line(&empty, "seat launch: refused reason=defaults-unresolved missing=--target", "empty-session");
     launch_assert_not_sent(&place, 0, "empty-session");
 
@@ -850,7 +850,7 @@ fn seat_entry_refuses_before_writing_the_registration_row() {
         };
         launch_arrange_refusal(&place, &target, case);
 
-        let out = launch_run_short(&place, &path, "l2", &["--target", &aimed, "--model", "Fable"]);
+        let out = launch_run_short(&place, &path, "l2", &["--target", &aimed, "--model", "Opus"]);
 
         let line = stderr_of(&out);
         assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "{case}: stdout={}", stdout_of(&out));
@@ -894,7 +894,7 @@ fn seat_entry_same_window_replaces_the_process_with_the_launch_line() {
     assert!(launch_wait_front(&place, &target, "cat"), "前面が shell でなくなる: {}", capture(&place.socket, &target));
     assert!(tmux(&place.socket, &["send-keys", "-t", &target, "-l", "half typed"]).status.success());
 
-    let restore = launch_run_short(&place, &path, "l2", &["--target", &target, "--model", "Fable", "--restore", "/rebrief"]);
+    let restore = launch_run_short(&place, &path, "l2", &["--target", &target, "--model", "Opus", "--restore", "/rebrief"]);
 
     launch_assert_refused_line(
         &restore,
@@ -903,7 +903,7 @@ fn seat_entry_same_window_replaces_the_process_with_the_launch_line() {
     );
     launch_assert_not_sent(&place, 0, "same-restore");
 
-    let out = launch_run_short(&place, &path, "l2", &["--target", &target, "--model", "Fable"]);
+    let out = launch_run_short(&place, &path, "l2", &["--target", &target, "--model", "Opus"]);
 
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={} stderr={}", stdout_of(&out), stderr_of(&out));
     assert!(!stdout_of(&out).contains("seat launch:"), "置き換えの後に器の行は 1 つも出ない: {}", stdout_of(&out));
@@ -933,7 +933,7 @@ fn seat_entry_relabels_the_registered_row_for_another_account() {
     let path = launch_shims(&place, &target);
     let guard = launch_session(&place, name, &path);
     assert!(guard.ready(), "独立 socket に shell の session を立てられる");
-    let long = launch_run(&place, &path, &target, &["--account", "l2", "--model", "Fable"]);
+    let long = launch_run(&place, &path, &target, &["--account", "l2", "--model", "Opus"]);
     assert_eq!(rc_of(&long), i32::from(RC_OK), "長い形: stdout={} stderr={}", stdout_of(&long), stderr_of(&long));
     assert!(launch_quit_seat(&place, &target), "席を終えて前面を shell に戻せる: {}", capture(&place.socket, &target));
 
@@ -951,7 +951,7 @@ fn seat_entry_relabels_the_registered_row_for_another_account() {
     );
     assert_eq!(
         rows.get(1).map(|row| (row.account.as_str(), row.target.as_str(), row.model.as_deref())),
-        Some(("l1", target.as_str(), Some("Fable"))),
+        Some(("l1", target.as_str(), Some("Opus"))),
         "同じ鍵の row を新しい label で書き直す: {rows:?}"
     );
     assert_eq!(
@@ -988,7 +988,7 @@ fn seat_launch_short_form_keeps_known_verbs() {
 
 // ─────────────────── 席の既定の model と effort（設計 seat-roles.md §20・`s2-07l.433`・接頭辞 `seat_defaults_`） ───────────────────
 
-/// 約束 1: `--model` 無しの起動行は `claude` の語の直後に `--model fable` → `--effort high`（役割の既定の行の値・この順）を
+/// 約束 1: `--model` 無しの起動行は `claude` の語の直後に `--model opus` → `--effort xhigh`（役割の既定の行の値・この順）を
 /// **1 つずつ**運ぶ（送った行の語の並びと偽 claude の argv の先頭の 4 語で測る）。雛形（登録 row の `launch`）には旗の語が
 /// 1 つも残らず、導出行と 1 語も違わない。
 #[test]
@@ -1048,8 +1048,8 @@ fn seat_defaults_launch_refuses_a_duplicated_effort_with_its_own_reason() {
     fs::remove_dir_all(&place.dir).ok();
 }
 
-/// 約束 3: `--model` は照合であって宣言ではない。行（`fable`）と食い違う `--model Opus` は `launch-model-mismatch` で断り、1 key も
-/// 送らず登録 row も書かない。一致する `--model fable`（別名）は通り、row の model は行の表示名。使い方の 1 枚に `--effort` の
+/// 約束 3: `--model` は照合であって宣言ではない。行（`opus`）と食い違う `--model Fable` は `launch-model-mismatch` で断り、1 key も
+/// 送らず登録 row も書かない。一致する `--model opus`（別名）は通り、row の model は行の表示名。使い方の 1 枚に `--effort` の
 /// flag は無い（席の effort の宣言は行の 1 か所）。
 #[test]
 fn seat_defaults_launch_model_is_a_check_against_the_row() {
@@ -1060,18 +1060,18 @@ fn seat_defaults_launch_model_is_a_check_against_the_row() {
     let guard = launch_session(&place, name, &path);
     assert!(guard.ready(), "独立 socket に shell の session を立てられる");
 
-    let other = launch_run(&place, &path, &target, &["--account", "l2", "--model", "Opus"]);
+    let other = launch_run(&place, &path, &target, &["--account", "l2", "--model", "Fable"]);
 
     assert_eq!(rc_of(&other), i32::from(RC_REFUSED), "stdout={}", stdout_of(&other));
     assert_eq!(tick_token(&stderr_of(&other), "reason").as_deref(), Some("launch-model-mismatch"), "{}", stderr_of(&other));
     launch_assert_not_sent(&place, 0, "model-mismatch");
 
-    let same = launch_run(&place, &path, &target, &["--account", "l2", "--model", "fable"]);
+    let same = launch_run(&place, &path, &target, &["--account", "l2", "--model", "opus"]);
 
     assert_eq!(rc_of(&same), i32::from(RC_OK), "stdout={} stderr={}", stdout_of(&same), stderr_of(&same));
     assert_eq!(fs::read_to_string(place.dir.join("launched")).unwrap_or_default(), launch_defaults_argv(&place, "l2"));
     let rows = acct_rows(&place.state);
-    assert_eq!(rows.iter().map(|row| row.model.as_deref()).collect::<Vec<_>>(), [Some("Fable")], "{rows:?}");
+    assert_eq!(rows.iter().map(|row| row.model.as_deref()).collect::<Vec<_>>(), [Some("Opus")], "{rows:?}");
     assert!(!stderr_of(&run_seat(&[])).contains("--effort"), "使い方に --effort の flag は無い");
     drop(guard);
     fs::remove_dir_all(&place.dir).ok();
@@ -1099,7 +1099,7 @@ fn seat_defaults_short_form_derives_the_model_without_a_row() {
     let rows = acct_rows(&place.state);
     assert_eq!(
         rows.iter().map(|row| (row.target.as_str(), row.model.as_deref())).collect::<Vec<_>>(),
-        [(target.as_str(), Some("Fable"))],
+        [(target.as_str(), Some("Opus"))],
         "{rows:?}"
     );
     drop(guard);

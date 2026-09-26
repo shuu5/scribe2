@@ -2443,11 +2443,11 @@ fn rules_role_capabilities_reject_unknown_capability_names() {
     assert!(errors.join("\n").contains("未知の権能 Answer"), "{errors:?}");
 }
 
-/// 役割ごとの既定の対の裁定 id（設計 seat-roles.md §19・逐語は台帳 `s2-07l.433`）。
-const DEFAULTS_RULING: &str = "user 2026-09-17T04:23Z";
+/// 役割ごとの既定の対の裁定 id（設計 seat-roles.md §19 の形・値は §28 の改め・逐語は台帳）。
+const DEFAULTS_RULING: &str = "user 2026-09-26T15:41Z";
 
 /// [`DEFAULTS_RULING`] の裁定日。
-const DEFAULTS_RULED_AT: &str = "2026-09-17";
+const DEFAULTS_RULED_AT: &str = "2026-09-26";
 
 /// 歯 (a・設計 seat-roles.md §19 の形 1 / 2): 役割の閉じた列の**どの役割にも** model と effort の 2 行が在り、
 /// kind と値の形（`Str`）と発効と裁定 id が一致する。**行の本数は役割の閉じた列の 2 倍**（母集団を同時に出す）。
@@ -2536,18 +2536,22 @@ fn rules_role_defaults_reject_values_outside_the_closed_tables() {
     }
 }
 
-/// 歯 (d・形 6): 埋め込み manifest が役割の既定の 2 行を**値ごと**運ぶ（裁定 `user 2026-09-17T04:23Z` の
-/// `fable` / `high`・値の正本は manifest で設計 doc は写さない・C1 / C5）。kind は宣言順で隣り合う 2 つ
+/// 歯 (d・形 6): 埋め込み manifest が役割の既定の 2 行を**値ごと**運ぶ（裁定 `user 2026-09-26T15:41Z` の
+/// `opus` / `xhigh`・§28・値の正本は manifest で設計 doc は写さない・C1 / C5）。kind は宣言順で隣り合う 2 つ
 /// （`RunnerEffort` の直後が `RoleModel`・その直後が `RoleEffort`・末尾は `.396` の `ReviewSameKindStop`）で、字面から引ける。
 #[test]
 fn rules_manifest_carries_role_defaults() {
     let manifest = Manifest::embedded().unwrap_or_else(|errors| panic!("埋め込み manifest が拒まれた: {errors:?}"));
     let model = manifest.get("seat.model.orchestrator").expect("既定の model の行が在る");
-    assert_eq!(model.value, RuleValue::Str("fable".to_owned()), "裁定 user 2026-09-17T04:23Z の model");
-    assert_eq!(Model::parse("fable"), Some(Model::Fable), "値は閉じた表で引ける");
+    assert_eq!(model.value, RuleValue::Str("opus".to_owned()), "裁定 user 2026-09-26T15:41Z の model");
+    assert_eq!(Model::parse("opus"), Some(Model::Opus), "値は閉じた表で引ける");
+    assert_eq!(model.ruling, DEFAULTS_RULING, "model の行の裁定 id");
+    assert_eq!(model.ruled_at, DEFAULTS_RULED_AT, "model の行の裁定日");
     let effort = manifest.get("seat.effort.orchestrator").expect("既定の effort の行が在る");
-    assert_eq!(effort.value, RuleValue::Str("high".to_owned()), "裁定 user 2026-09-17T04:23Z の effort");
-    assert_eq!(Effort::parse("high"), Some(Effort::High), "値は閉じた表で引ける");
+    assert_eq!(effort.value, RuleValue::Str("xhigh".to_owned()), "裁定 user 2026-09-26T15:41Z の effort");
+    assert_eq!(Effort::parse("xhigh"), Some(Effort::Xhigh), "値は閉じた表で引ける");
+    assert_eq!(effort.ruling, DEFAULTS_RULING, "effort の行の裁定 id");
+    assert_eq!(effort.ruled_at, DEFAULTS_RULED_AT, "effort の行の裁定日");
     let at = ALL.iter().position(|kind| *kind == RuleKind::RunnerEffort).unwrap_or_default();
     assert_eq!(ALL.get(at.saturating_add(1)), Some(&RuleKind::RoleModel), "宣言順は RunnerEffort の直後");
     assert_eq!(ALL.get(at.saturating_add(2)), Some(&RuleKind::RoleEffort), "対は宣言順で隣り合う");
