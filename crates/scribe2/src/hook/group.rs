@@ -312,7 +312,7 @@ pub fn refused_line(group: &AccountGroup) -> String {
 
 /// 判定の 1 本の入力（設計 seat-heartbeat.md §9 形 1）。
 pub struct Judge<'a> {
-    /// 置き場（event log・記録の置き場の出所・live 便と登録 row はこの置き場の log から読む）。
+    /// 置き場（event log・記録の置き場の出所・登録 row はこの置き場の log から読む）。
     pub state_dir: &'a Path,
     /// 合わせた面（tracked + host の面・鮮度の行と起こし直しの行の出所）。
     pub manifest: &'a Manifest,
@@ -396,13 +396,13 @@ fn decide(input: &Judge<'_>, current: &str, set: &BTreeSet<String>, measured: &m
     }
 }
 
-/// 移り先（設計 account-lifecycle.md §20 形 5）: 宣言の候補の順で、今の口座でなく・他の群の今の口座でなく・退役中でなく・置き場の
-/// live 便が使っていない口座を、鮮度の外なら 1 回測り、3 窓とも閾値未満の鮮度の内側の実測を持つ**最初の** label。
+/// 移り先（設計 account-lifecycle.md §20 形 5 / §27 形 1）: 宣言の候補の順で、今の口座でなく・他の群の今の口座でなく・退役中で
+/// ない口座を、鮮度の外なら 1 回測り、3 窓とも閾値未満の鮮度の内側の実測を持つ**最初の** label（live 便は候補を妨げない＝新規の
+/// 便は §23 の群の記録で止まる）。
 fn target_of(input: &Judge<'_>, current: &str, measured: &mut BTreeSet<String>) -> Option<String> {
     let mut state = replay(&store::read_all(input.state_dir).ok()?);
     for label in input.group.accounts() {
-        let live = state.inflight_by_account().get(label).is_some_and(|runs| *runs > 0);
-        if label == current || input.others.contains(label) || state.retired.contains_key(label) || live {
+        if label == current || input.others.contains(label) || state.retired.contains_key(label) {
             continue;
         }
         (input.measure)(label, false);

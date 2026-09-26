@@ -3761,17 +3761,19 @@ fn pipe_dispatch_group_move_rewrite_moves_the_previous_record_to_history() {
     clean(&[&place.repo, &place.state]);
 }
 
-/// (live 便) 候補の順で先の a2 を置き場の live 便が使っている周は a2 を飛ばして a3 へ移る（飛ばす側）。対: live 便が無ければ
-/// a2 へ移る（移る側）。
+/// (live 便・§27) 候補の順で先の a2 を置き場の live 便が使っている周も a2 へ移る（live 便は移動を妨げない）。対: live 便が
+/// 無くても a2 へ移る（live あり / なしで同じ移り先）。
 #[test]
-fn pipe_dispatch_group_move_skips_an_account_used_by_a_live_run() {
-    for (live, want) in [(true, "a3"), (false, "a2")] {
+fn pipe_dispatch_group_move_also_moves_to_an_account_used_by_a_live_run() {
+    for (live, want) in [(true, "a2"), (false, "a2")] {
         let place = move_place(&[("a1", 90, 10, 10), ("a2", 10, 10, 10), ("a3", 10, 10, 10)], &["a1", "a2", "a3"], "a1");
         if live {
             put_live_run(&place.state, "a2");
         }
         let out = group_terminal(&place, "r-group-1");
         assert_eq!(move_account(&place.state, GROUP).as_deref(), Some(want), "live={live} は {want} へ（{}）", told(&out));
+        let inflight = vessel::fleet::replay(&vessel::fleet::store::read_all(&place.state).unwrap_or_default()).inflight_by_account();
+        assert_eq!(inflight.get("a2").copied().unwrap_or(0), usize::from(live), "live 便は止めず口座も替えない");
         clean(&[&place.repo, &place.state]);
     }
 }
