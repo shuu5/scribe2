@@ -2173,11 +2173,22 @@ fn seat_tick_judge_outside_the_group_is_unjudged() {
 
 /// 群 2 つ目の候補の口座（7 日窓 30＝残量 70 < B の残量 90）。
 const RESERVE_C: &str = "acct-c";
-/// Tier1 の種の口座（測らない）。
+/// Tier1 の種の口座（閾値未満＝Tier1 は逼迫でない・account-lifecycle.md §31 形 1）。
 const RESERVE_D: &str = "acct-d";
 
-/// [`judge_place`] の host の面を群 2 つ（Tier1 → Tier2 の宣言順）に書き換え、口座 C の credential と本文を足す。
+/// [`judge_place`] の host の面を群 2 つ（Tier1 → Tier2 の宣言順）に書き換え、口座 C / D の credential と本文を足す。
 fn reserve_place(root: &Path) -> MovePlace {
+    let place = reserve_place_with_c(root);
+    let dir = place.state.join("accounts").join(RESERVE_D);
+    fs::create_dir_all(&dir).ok();
+    let credential = format!("{{\"claudeAiOauth\":{{\"accessToken\":\"tok-{RESERVE_D}\",\"refreshToken\":\"r\",\"expiresAt\":4102444800000}}}}");
+    fs::write(dir.join(".credentials.json"), credential).ok();
+    fs::copy(place.at(&format!("body-tok-{RESERVE_C}")), place.at(&format!("body-tok-{RESERVE_D}"))).ok();
+    place
+}
+
+/// [`reserve_place`] の口座 C までの形。
+fn reserve_place_with_c(root: &Path) -> MovePlace {
     let place = judge_place(root, MOVE_ANCHOR, [90, 10]);
     let host = format!(
         "schema = 1\n\n[[account]]\nlabel = \"{MOVE_A}\"\n\n[[account]]\nlabel = \"{MOVE_B}\"\n\n[[account]]\nlabel = \"{RESERVE_C}\"\n\n\
@@ -2205,17 +2216,73 @@ fn reserve_record(root: &Path) -> Option<String> {
     text.lines().find_map(|line| line.strip_prefix("account=")).map(str::to_owned)
 }
 
-/// Tier2 の今の口座 A が逼迫の周、tick の判定は先の Tier1 の予約 B（Tier1 の鍵の先頭・残量 90）を飛ばして C へ移る
-/// （`judged=moved:acct-c`・承認 event 1・base は宣言順の B ＝ RED）。
+/// (e・§31) Tier2 の今の口座 A だけが逼迫の周（Tier1 の今の口座 D は閾値未満）、tick の判定は逼迫でない Tier1 に予約を持たせず、
+/// Tier1 の鍵の先頭 B（残量 90）へ移る（`judged=moved:acct-b`・承認 event 1・base は Tier1 の予約 B を飛ばして C ＝ RED）。
 #[test]
-fn seat_tick_judge_reserve_skips_the_tier1_reservation() {
+fn seat_tick_judge_reserve_takes_the_tier1_key_head() {
     let root = tmp();
     let place = reserve_place(&root);
     let out = move_run(&place);
-    assert!(stdout_of(&out).ends_with(&format!(" judged=moved:{RESERVE_C}\n")), "stdout={} stderr={}", stdout_of(&out), stderr_of(&out));
-    assert_eq!(reserve_record(&root).as_deref(), Some(RESERVE_C), "記録は C");
+    assert!(stdout_of(&out).ends_with(&format!(" judged=moved:{MOVE_B}\n")), "stdout={} stderr={}", stdout_of(&out), stderr_of(&out));
+    assert_eq!(reserve_record(&root).as_deref(), Some(MOVE_B), "記録は B");
     assert_eq!(judge_events(&place, vessel::fleet::EventKind::GroupMoved), 1, "承認 event 1");
     assert!(!move_groups_dir(&root).join("Tier1.account").exists(), "Tier1 の記録は書かない（予約は記録しない）");
+}
+
+/// 自席の群 Tier1 の断りの印（無ければ `None`）。
+fn reserve_mark(root: &Path) -> Option<String> {
+    fs::read_to_string(move_groups_dir(root).join(format!("{MOVE_GROUP}.refused"))).ok()
+}
+
+/// 歯が置く番兵の断りの印（周が書く ts と別の字面）。
+const RESERVE_SENTINEL: &str = "ts=2026-09-26T12:05:00Z reason=no-candidate\n";
+
+/// 候補なし（A / B とも逼迫）の tick を 1 周撃ち、断りの印が 1 行 `ts=<UTC の秒> reason=no-candidate` で書かれたことを測る。
+fn reserve_refused(root: &Path) -> MovePlace {
+    let place = judge_place(root, MOVE_ANCHOR, [90, 90]);
+    let out = move_run(&place);
+    assert_eq!(stdout_of(&out), judge_recent("none"), "1 周目は断る: stderr={}", stderr_of(&out));
+    let mark = reserve_mark(root).unwrap_or_default();
+    let ts = mark.strip_prefix("ts=").and_then(|rest| rest.strip_suffix(" reason=no-candidate\n")).unwrap_or_default();
+    assert!(ts.len() == 20 && ts.ends_with('Z'), "印は 1 行 ts=<UTC の秒> reason=no-candidate: {mark:?}");
+    place
+}
+
+/// (f・§31) tick の断りの周に群用 dir の印が書かれる（base は印が無い ＝ RED）。
+#[test]
+fn seat_tick_judge_reserve_refusal_writes_the_mark() {
+    let root = tmp();
+    let place = reserve_refused(&root);
+    assert_eq!(judge_events(&place, vessel::fleet::EventKind::GroupMoveRefused), 1, "断りの event 1");
+}
+
+/// (f2・§31) 同じ実測の 2 周目（event を記さない）は印を書き直さない（番兵の字面のまま・base は 1 周目の印が無い ＝ RED）。
+#[test]
+fn seat_tick_judge_reserve_repeated_refusal_keeps_the_mark() {
+    let root = tmp();
+    let place = reserve_refused(&root);
+    fs::write(move_groups_dir(&root).join(format!("{MOVE_GROUP}.refused")), RESERVE_SENTINEL).ok();
+    fs::remove_file(judge_stamp(&root)).ok();
+    let out = move_run(&place);
+    assert_eq!(stdout_of(&out), judge_recent("none"), "stderr={}", stderr_of(&out));
+    assert_eq!(judge_events(&place, vessel::fleet::EventKind::GroupMoveRefused), 1, "event 0（1 のまま）");
+    assert_eq!(reserve_mark(&root).as_deref(), Some(RESERVE_SENTINEL), "印の字面は不変");
+}
+
+/// (f3・§31) 印が在る状態で tick が移る周（記録を B へ書く）は印が history へ退避される（base は印が残る ＝ RED）。
+#[test]
+fn seat_tick_judge_reserve_move_round_moves_the_mark_to_history() {
+    let root = tmp();
+    let place = judge_place(&root, MOVE_ANCHOR, [90, 10]);
+    fs::write(move_groups_dir(&root).join(format!("{MOVE_GROUP}.refused")), RESERVE_SENTINEL).ok();
+    let out = move_run(&place);
+    assert!(stdout_of(&out).ends_with(&format!(" judged=moved:{MOVE_B}\n")), "stdout={} stderr={}", stdout_of(&out), stderr_of(&out));
+    assert_eq!(reserve_mark(&root), None, "印は消える");
+    let history: Vec<String> = fs::read_dir(move_groups_dir(&root).join("history"))
+        .map(|entries| entries.filter_map(Result::ok).map(|entry| entry.file_name().to_string_lossy().into_owned()).collect())
+        .unwrap_or_default();
+    let marks = history.iter().filter(|name| name.starts_with(&format!("{MOVE_GROUP}.refused."))).count();
+    assert_eq!(marks, 1, "history に 1 つ: {history:?}");
 }
 
 /// 群の席の役割の `seat.model.orchestrator` 行を欠く `--rules` の tick は、今の口座が逼迫でも移らず `judged=error:unreadable`

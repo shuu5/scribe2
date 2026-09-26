@@ -3977,7 +3977,7 @@ fn pipe_dispatch_group_reserve_two_pressed_groups_tier1_takes_the_key_head() {
 }
 
 /// Tier1（置き場 1 つ目・候補 [a1, a3, a4]・今の口座 a1 は閾値未満）と Tier2（置き場 2 つ目・候補 [a2, a3, a4]・今の口座 a2 は
-/// 逼迫）の置き場（a3 の残量 80 > a4 の残量 40＝Tier1 の予約は a3）。
+/// 逼迫）の置き場（a3 の残量 80 > a4 の残量 40＝Tier1 の鍵の先頭は a3）。
 fn tier2_alone_place() -> GroupPlace {
     let accounts = [("a1", 10, 10, 10), ("a2", 90, 10, 10), ("a3", 10, 20, 10), ("a4", 10, 60, 10)];
     let place = groups_place(&accounts, &[(GROUP, &[0], &["a1", "a3", "a4"]), ("Tier2", &[1], &["a2", "a3", "a4"])]);
@@ -3985,29 +3985,29 @@ fn tier2_alone_place() -> GroupPlace {
     place
 }
 
-/// (g) Tier2 だけが逼迫する周も、Tier2 は Tier1 の予約 a3（Tier1 の鍵の先頭）を飛ばして a4 へ移る（base は a3 ＝ RED）。
-/// (h) 予約は記録しない: Tier1 の記録は動かず、群用 dir の file は Tier2 の記録 1 つだけ（予約の file 0）で、同じ周の後の便用の
-/// 除外（群の今の口座・§23）は予約の口座 a3 を外さない＝便は予約の口座を使う。
+/// (g・§31 (a)) Tier2 だけが逼迫する周は、逼迫でない Tier1 が予約を持たず、Tier2 は Tier1 の鍵の先頭 a3 へ移る（base は Tier1 の
+/// 予約 a3 を飛ばして a4 ＝ RED）。(h) 予約は記録しない: Tier1 の記録は動かず、群用 dir の file は Tier2 の記録 1 つだけ（予約の
+/// file 0・断りの印 0）で、同じ周の後の便用の除外（群の今の口座・§23）は今の口座だけ。
 #[test]
-fn pipe_dispatch_group_reserve_tier2_alone_skips_the_tier1_reservation() {
+fn pipe_dispatch_group_reserve_tier2_alone_takes_the_tier1_key_head() {
     let place = tier2_alone_place();
     let out = group_terminal(&place, "r-group-1");
     let records = (move_account(&place.state, GROUP), move_account(&place.state, "Tier2"));
-    assert_eq!(records, (None, Some("a4".to_owned())), "Tier1 は移らず Tier2 は a4（{}）", told(&out));
+    assert_eq!(records, (None, Some("a3".to_owned())), "Tier1 は移らず Tier2 は a3（{}）", told(&out));
     let files: Vec<String> = fs::read_dir(groups_dir(&place.state))
         .map(|entries| entries.filter_map(Result::ok).filter(|entry| entry.path().is_file()))
         .map(|entries| entries.map(|entry| entry.file_name().to_string_lossy().into_owned()).collect())
         .unwrap_or_default();
-    assert_eq!(files, ["Tier2.account"], "予約の file 0");
+    assert_eq!(files, ["Tier2.account"], "予約の file 0・断りの印 0");
     let grouped = vessel::rules::grouped_accounts(&place.state).unwrap_or_default();
-    assert_eq!(grouped.into_iter().collect::<Vec<String>>(), ["a1", "a4"], "便用の除外は今の口座だけ＝予約の a3 は便に開く");
+    assert_eq!(grouped.into_iter().collect::<Vec<String>>(), ["a1", "a3"], "便用の除外は今の口座だけ");
     clean(&[&place.repo, &place.state]);
 }
 
-/// (i) Tier2 だけが逼迫する周に、Tier1 だけの候補 a5（実測なし＝鮮度の外）が Tier1 の予約の導きで 1 回測られる（base は Tier2 の
-/// 候補しか測らない ＝ RED）。
+/// (i・§31 (b)) Tier2 だけが逼迫する周は、Tier1 の今の口座 a1 を 1 回（3 窓）測り、Tier1 だけの候補 a5（実測なし＝鮮度の外）は
+/// 測らない（base は Tier1 の予約の導きで a5 も測る ＝ RED）。Tier2 は Tier1 の予約に阻まれず a3 へ移る。
 #[test]
-fn pipe_dispatch_group_reserve_tier2_alone_measures_the_tier1_candidates() {
+fn pipe_dispatch_group_reserve_tier2_alone_measures_only_the_tier1_current() {
     let accounts = [("a1", 10, 10, 10), ("a2", 90, 10, 10), ("a3", 10, 20, 10), ("a5", 10, 30, 10)];
     let place = groups_place(&accounts, &[(GROUP, &[0], &["a1", "a5", "a3"]), ("Tier2", &[1], &["a2", "a3"])]);
     group_seats(&place.state, ["a1", "a2"]);
@@ -4017,8 +4017,68 @@ fn pipe_dispatch_group_reserve_tier2_alone_measures_the_tier1_candidates() {
             matches!(&event.allowance, Some(vessel::fleet::Allowance::Measured(row)) if row.account == label)
         }).count()
     };
-    assert_eq!(measured("a5"), 3, "a5 の 3 窓を 1 回測る（{}）", told(&out));
-    assert_eq!(move_account(&place.state, "Tier2"), None, "Tier2 の候補 a3 は Tier1 の予約＝移り先なし");
+    assert_eq!((measured("a1"), measured("a5")), (3, 0), "今の口座 a1 を 1 回・候補 a5 は 0（{}）", told(&out));
+    assert_eq!(move_account(&place.state, "Tier2").as_deref(), Some("a3"), "Tier2 は a3 へ");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// 群の断りの印（`<群用 dir>/<群>.refused`・無ければ `None`）。
+fn refused_mark(state: &Path, group: &str) -> Option<String> {
+    fs::read_to_string(groups_dir(state).join(format!("{group}.refused"))).ok()
+}
+
+/// 履歴へ退避した群の断りの印の数。
+fn refused_history(state: &Path, group: &str) -> usize {
+    history_names(state).iter().filter(|name| name.starts_with(&format!("{group}.refused."))).count()
+}
+
+/// 番兵の断りの印（歯が置く・周が書く ts と別の字面）。
+const REFUSED_SENTINEL: &str = "ts=2026-09-26T12:05:00Z reason=no-candidate\n";
+
+/// 候補がどれも逼迫（a1 / a2 とも 5 時間窓 90）の群で 1 周を撃ち、断りの event 1 と印を確かめた置き場を返す。
+fn refused_place() -> GroupPlace {
+    let place = move_place(&[("a1", 90, 10, 10), ("a2", 90, 10, 10)], &["a1", "a2"], "a1");
+    let out = group_terminal(&place, "r-group-1");
+    assert_eq!(move_counts(&place.state), (0, 1, 0), "断りの event 1（{}）", told(&out));
+    let mark = refused_mark(&place.state, GROUP).unwrap_or_default();
+    let ts = mark.strip_prefix("ts=").and_then(|rest| rest.strip_suffix(" reason=no-candidate\n")).unwrap_or_default();
+    assert!(ts.len() == 20 && ts.ends_with('Z'), "印は 1 行 ts=<UTC の秒> reason=no-candidate: {mark:?}");
+    place
+}
+
+/// (d・§31) 移り先の無い断りの周に印が書かれ、次の Stay の周（今の口座 a1 が閾値未満の実測）に history へ退避される（base は
+/// 印が無い ＝ RED）。
+#[test]
+fn pipe_dispatch_group_reserve_refusal_writes_the_mark_and_stay_moves_it_to_history() {
+    let place = refused_place();
+    put_group_round(&place.state, &group_now(), "a1", (10, 10, 10));
+    let out = group_terminal(&place, "r-group-2");
+    assert_eq!(refused_mark(&place.state, GROUP), None, "Stay の周に印は消える（{}）", told(&out));
+    assert_eq!(refused_history(&place.state, GROUP), 1, "history に 1 つ");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (d2・§31) 同じ実測に 2 度目の断りの周（event を記さない）は印を書き直さない（番兵の字面のまま・base は 1 周目の印が無い ＝ RED）。
+#[test]
+fn pipe_dispatch_group_reserve_repeated_refusal_does_not_rewrite_the_mark() {
+    let place = refused_place();
+    fs::write(groups_dir(&place.state).join(format!("{GROUP}.refused")), REFUSED_SENTINEL).unwrap_or_default();
+    let out = group_terminal(&place, "r-group-2");
+    assert_eq!(move_counts(&place.state), (0, 1, 0), "2 周目は断りの event を記さない（{}）", told(&out));
+    assert_eq!(refused_mark(&place.state, GROUP).as_deref(), Some(REFUSED_SENTINEL), "印の字面は不変");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (d3・§31) 印が在る状態で移る周（記録を a2 へ書く）は印が history へ退避される（base は印が残る ＝ RED）。
+#[test]
+fn pipe_dispatch_group_reserve_move_round_moves_the_mark_to_history() {
+    let place = move_place(&[("a1", 90, 10, 10), ("a2", 10, 10, 10)], &["a1", "a2"], "a1");
+    fs::create_dir_all(groups_dir(&place.state)).unwrap_or_default();
+    fs::write(groups_dir(&place.state).join(format!("{GROUP}.refused")), REFUSED_SENTINEL).unwrap_or_default();
+    let out = group_terminal(&place, "r-group-1");
+    assert_eq!(move_account(&place.state, GROUP).as_deref(), Some("a2"), "記録は移り先（{}）", told(&out));
+    assert_eq!(refused_mark(&place.state, GROUP), None, "印は消える");
+    assert_eq!(refused_history(&place.state, GROUP), 1, "history に 1 つ");
     clean(&[&place.repo, &place.state]);
 }
 

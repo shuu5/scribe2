@@ -394,13 +394,25 @@ fn render_group(state_dir: &Path, manifest: &Manifest, group: &AccountGroup, sta
         }
     };
     format!(
-        "group={} accounts={} anchors={} seat-accounts={seats} current={} next={}",
+        "group={} accounts={} anchors={} seat-accounts={seats} current={} next={} refused={}",
         group.name(),
         group.accounts().join(","),
         group.anchors().len(),
         render_current(state_dir, group),
-        render_next(state_dir, manifest, group)
+        render_next(state_dir, manifest, group),
+        render_refused(state_dir, group)
     )
+}
+
+/// 群の行の `refused=` の値（断りの印・account-lifecycle.md §31 形 3）: 印の ts・無ければ `-`・在るのに形でない・読めなければ
+/// [`GROUP_UNREADABLE`]。
+fn render_refused(state_dir: &Path, group: &AccountGroup) -> String {
+    use crate::hook::group::{refused_path, refused_ts};
+    match std::fs::read_to_string(refused_path(&crate::seat::host_groups_dir(state_dir), group.name())) {
+        Ok(text) => refused_ts(&text).unwrap_or(GROUP_UNREADABLE).to_owned(),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => "-".to_owned(),
+        Err(_) => GROUP_UNREADABLE.to_owned(),
+    }
 }
 
 /// 群の行の `next=` の値（群の予約の 1 関数 [`crate::hook::group::reserve`] を**測らずに**呼ぶ＝鮮度の外の候補は門を通らない）:

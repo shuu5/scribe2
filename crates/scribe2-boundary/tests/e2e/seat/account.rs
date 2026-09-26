@@ -433,7 +433,7 @@ fn host_group_doctor_prints_one_line_per_group_in_declaration_order() {
     assert_eq!(names, ["Tier2", "Tier10"], "宣言順（辞書順ではない）: {lines:?}");
     assert_eq!(
         group_line(&lines, "Tier2"),
-        "group=Tier2 accounts=acct-1,spare anchors=2 seat-accounts=acct-1 current=seed next=no-rule",
+        "group=Tier2 accounts=acct-1,spare anchors=2 seat-accounts=acct-1 current=seed next=no-rule refused=-",
         "候補は宣言順・置き場は数・席の口座は登録 row から: {lines:?}"
     );
     let last_account = lines.iter().rposition(|line| line.starts_with("account="));
@@ -456,12 +456,12 @@ fn host_group_doctor_line_says_none_without_seat_rows() {
     let lines = doctor_rows(&place, &next_rules(&["acct-1", "spare"], false));
     assert_eq!(
         group_line(&lines, "Tier1"),
-        "group=Tier1 accounts=acct-1,spare anchors=1 seat-accounts=none current=seed next=none",
+        "group=Tier1 accounts=acct-1,spare anchors=1 seat-accounts=none current=seed next=none refused=-",
         "{lines:?}"
     );
     assert_eq!(
         group_line(&lines, "Tier2"),
-        "group=Tier2 accounts=acct-1,spare anchors=1 seat-accounts=none current=seed next=none",
+        "group=Tier2 accounts=acct-1,spare anchors=1 seat-accounts=none current=seed next=none refused=-",
         "正規化しない: {lines:?}"
     );
     fs::remove_dir_all(&place.dir).ok();
@@ -477,13 +477,13 @@ fn host_group_doctor_line_lists_the_seat_accounts_of_the_group_anchors() {
     let rules = account_rules(&["acct-1"]);
     assert_eq!(
         group_line(&doctor_rows(&place, &rules), "Tier1"),
-        "group=Tier1 accounts=acct-1 anchors=2 seat-accounts=acct-1 current=seed next=no-rule",
+        "group=Tier1 accounts=acct-1 anchors=2 seat-accounts=acct-1 current=seed next=no-rule refused=-",
         "2 つの row は同じ口座＝畳んで 1 つ"
     );
     fs::write(vessel::fleet::store::events_path(&place.state), "not an event\n").expect("log を壊せる");
     assert_eq!(
         group_line(&doctor_rows(&place, &rules), "Tier1"),
-        "group=Tier1 accounts=acct-1 anchors=2 seat-accounts=unreadable current=seed next=no-rule",
+        "group=Tier1 accounts=acct-1 anchors=2 seat-accounts=unreadable current=seed next=no-rule refused=-",
         "読めなさを none に潰さない"
     );
     fs::remove_dir_all(&place.dir).ok();
@@ -538,7 +538,7 @@ fn host_group_record_doctor_current_shows_the_record_or_the_seed() {
     put_groups(&place, &[("Tier1", &["/repo"], &["acct-1", "spare"]), ("Tier2", &["/repo/b"], &["acct-1", "spare"])]);
     let rules = account_rules(&["acct-1", "spare"]);
     let lines = doctor_rows(&place, &rules);
-    let line = |seats: &str, current: &str| format!("accounts=acct-1,spare anchors=1 seat-accounts={seats} current={current} next=no-rule");
+    let line = |seats: &str, current: &str| format!("accounts=acct-1,spare anchors=1 seat-accounts={seats} current={current} next=no-rule refused=-");
     assert_eq!(group_line(&lines, "Tier1"), format!("group=Tier1 {}", line("acct-1", "seed")), "{lines:?}");
     put_group_record(&place, "Tier1","account=spare\nts=2026-09-24T00:00:00Z\nreason=move\nprevious=acct-1\n");
     let lines = doctor_rows(&place, &rules);
@@ -562,7 +562,7 @@ fn host_group_record_unreadable_record_stops_typed() {
     fs::write(place.state.join(vessel::rules::HOST_MANIFEST), host).ok();
     put_group_record(&place, "Tier1","account=spare\nts=2026-09-24T00:00:00Z\n");
     let lines = doctor_rows(&place, NO_ACCOUNT_RULES);
-    let want = "group=Tier1 accounts=acct-1,spare anchors=1 seat-accounts=none current=unreadable next=unreadable";
+    let want = "group=Tier1 accounts=acct-1,spare anchors=1 seat-accounts=none current=unreadable next=unreadable refused=-";
     assert_eq!(group_line(&lines, "Tier1"), want, "{lines:?}");
     let out = run_seat(&[
         "launch", "--state-dir", &state, "--role", "orchestrator", "--target", "grec:seat", "--anchor", &anchor, "--tmux-socket", &place.socket,
@@ -663,7 +663,7 @@ const NEXT_HEAD: &str = "group=Tier1 accounts=acct-1,spare,third anchors=1 seat-
 fn host_group_next_names_the_key_head() {
     let now = vessel::fleet::cli::now_utc();
     let (place, line) = next_line(true, &[("spare", &now, 60, 10), ("third", &now, 20, 20)]);
-    assert_eq!(line, format!("{NEXT_HEAD} next=third"));
+    assert_eq!(line, format!("{NEXT_HEAD} next=third refused=-"));
     fs::remove_dir_all(&place.dir).ok();
 }
 
@@ -673,11 +673,11 @@ fn host_group_next_names_the_key_head() {
 fn host_group_next_says_none_without_a_passing_candidate() {
     let stale = "2026-09-12T02:00:00Z";
     let (place, line) = next_line(true, &[("spare", stale, 10, 10), ("third", stale, 10, 10)]);
-    assert_eq!(line, format!("{NEXT_HEAD} next=none"), "鮮度の外は測らない");
+    assert_eq!(line, format!("{NEXT_HEAD} next=none refused=-"), "鮮度の外は測らない");
     fs::remove_dir_all(&place.dir).ok();
     let now = vessel::fleet::cli::now_utc();
     let (place, line) = next_line(true, &[("third", &now, 96, 10)]);
-    assert_eq!(line, format!("{NEXT_HEAD} next=none"), "閾値以上は門で落ちる");
+    assert_eq!(line, format!("{NEXT_HEAD} next=none refused=-"), "閾値以上は門で落ちる");
     fs::remove_dir_all(&place.dir).ok();
 }
 
@@ -691,7 +691,7 @@ fn host_group_next_says_unreadable_for_an_unreadable_record() {
     put_next_round(&place, &now, "third", (20, 20));
     put_group_record(&place, "Tier1", "account=spare\n");
     let line = group_line(&doctor_rows(&place, &next_rules(&labels, true)), "Tier1");
-    assert_eq!(line, "group=Tier1 accounts=acct-1,spare,third anchors=1 seat-accounts=acct-1 current=unreadable next=unreadable");
+    assert_eq!(line, "group=Tier1 accounts=acct-1,spare,third anchors=1 seat-accounts=acct-1 current=unreadable next=unreadable refused=-");
     fs::remove_dir_all(&place.dir).ok();
 }
 
@@ -701,8 +701,58 @@ fn host_group_next_says_unreadable_for_an_unreadable_record() {
 fn host_group_next_says_no_rule_without_the_role_model_row() {
     let now = vessel::fleet::cli::now_utc();
     let (place, line) = next_line(false, &[("spare", &now, 60, 10), ("third", &now, 20, 20)]);
-    assert_eq!(line, format!("{NEXT_HEAD} next=no-rule"));
+    assert_eq!(line, format!("{NEXT_HEAD} next=no-rule refused=-"));
     fs::remove_dir_all(&place.dir).ok();
+}
+
+// ─── doctor の群の行の `refused=`（account-lifecycle.md §31 形 3・契約表の行 u・接頭辞 `host_group_refused_`） ───
+//
+// `host_group_next_` の置き場に群 Tier1（置き場 `/repo`・候補 [acct-1]）と Tier2（置き場 `/repo/b`・候補 [spare]）を宣言し、
+// 群用 dir に断りの印を直に置く（doctor は印を読むだけ）。
+
+/// 群 2 つの置き場で、Tier1 の断りの印を `mark`（`None` は置かない）にして doctor の 2 群の行を返す。
+fn refused_lines(mark: Option<&str>) -> (RolePlace, String, String) {
+    let place = role_doctor_place();
+    put_groups(&place, &[("Tier1", &["/repo"], &["acct-1"]), ("Tier2", &["/repo/b"], &["spare"])]);
+    if let Some(body) = mark {
+        let dir = place.dir.join(format!("{NAME}-host")).join("groups");
+        fs::create_dir_all(&dir).ok();
+        fs::write(dir.join("Tier1.refused"), body).ok();
+    }
+    let lines = doctor_rows(&place, &account_rules(&["acct-1", "spare"]));
+    let (one, two) = (group_line(&lines, "Tier1"), group_line(&lines, "Tier2"));
+    (place, one, two)
+}
+
+/// Tier1 の行の頭（`refused=` の手前まで）。
+const REFUSED_HEAD: &str = "group=Tier1 accounts=acct-1 anchors=1 seat-accounts=acct-1 current=seed next=no-rule";
+
+/// (ts) 印の在る群の行は `refused=<印の ts>`・印の無い群は `refused=-`（群ごとに読む・base は欄が無い ＝ RED）。
+#[test]
+fn host_group_refused_names_the_mark_ts() {
+    let (place, one, two) = refused_lines(Some("ts=2026-09-26T14:07:00Z reason=no-candidate\n"));
+    assert_eq!(one, format!("{REFUSED_HEAD} refused=2026-09-26T14:07:00Z"));
+    assert_eq!(two, "group=Tier2 accounts=spare anchors=1 seat-accounts=none current=seed next=no-rule refused=-", "印の無い群");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (-) 印の無い群は `refused=-`（空や none に潰さない・base は欄が無い ＝ RED）。
+#[test]
+fn host_group_refused_says_dash_without_a_mark() {
+    let (place, one, _) = refused_lines(None);
+    assert_eq!(one, format!("{REFUSED_HEAD} refused=-"));
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (unreadable) 在るのに形でない印（理由の違い・ts が時刻の形でない）は `refused=unreadable`（`-` に潰さない・base は欄が無い
+/// ＝ RED）。
+#[test]
+fn host_group_refused_says_unreadable_for_a_malformed_mark() {
+    for body in ["ts=2026-09-26T14:07:00Z reason=other\n", "ts=soon reason=no-candidate\n"] {
+        let (place, one, _) = refused_lines(Some(body));
+        assert_eq!(one, format!("{REFUSED_HEAD} refused=unreadable"), "{body:?}");
+        fs::remove_dir_all(&place.dir).ok();
+    }
 }
 
 // ─────────────────── 口座の退避と立て直し（account-autonomy.md §5・`s2-07l.211`・接頭辞 `seat_account_`） ───────────────────

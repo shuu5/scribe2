@@ -184,6 +184,39 @@ pub fn judged_path(dir: &Path, group: &str) -> PathBuf {
     group_file(dir, group, "judged")
 }
 
+/// 移り先の無い断りの印の path（`<群用 dir>/<群の名>.refused`・読み手は doctor だけ・設計 account-lifecycle.md §31 形 2）。
+pub fn refused_path(dir: &Path, group: &str) -> PathBuf {
+    group_file(dir, group, "refused")
+}
+
+/// 断りの印の本文（1 行 `ts=<UTC の秒> reason=no-candidate`）。
+pub fn refused_mark(ts: &str) -> String {
+    format!("ts={ts} reason={NO_CANDIDATE}\n")
+}
+
+/// 断りの印の ts（[`refused_mark`] の形だけ・ts が [`epoch_of`] の形でない・余りの field・理由の違いは `None`）。
+pub fn refused_ts(text: &str) -> Option<&str> {
+    let ts = text.strip_suffix(&format!(" reason={NO_CANDIDATE}\n"))?.strip_prefix("ts=")?;
+    (!ts.contains(char::is_whitespace) && epoch_of(ts).is_some()).then_some(ts)
+}
+
+/// 断りの印を書く（**書き手はこの 1 本**・一時 file → rename・前の印は上書き）。
+fn write_refused(dir: &Path, group: &str) -> std::io::Result<()> {
+    fs::create_dir_all(dir)?;
+    let path = refused_path(dir, group);
+    let temporary = path.with_extension("refused.tmp");
+    fs::write(&temporary, refused_mark(&now_utc()))?;
+    fs::rename(&temporary, &path)
+}
+
+/// 断りの印が在れば履歴へ退避する（消さない・C1）。呼び手は Stay の周と記録を書く周。
+fn clear_refused(dir: &Path, group: &str) {
+    let path = refused_path(dir, group);
+    if path.exists() {
+        let _ = to_history(dir, &path);
+    }
+}
+
 /// 群の今の口座（**解決の 1 関数**・設計 §20 形 2）: 記録が在ればその label・無ければ種（面の読みが埋めた種の欄・§28）・在るのに
 /// 読めなければ [`RecordError`]。読み手は dispatch の 1 周・席の起動・doctor の 3 つで、種の読みはこの中だけに在る。記録の ts が
 /// [`epoch_of`] の形でない記録も [`RecordError::Malformed`]（形でない記録を種に読み替えない・seat-heartbeat.md §13 形 2）。
@@ -458,6 +491,7 @@ fn decide(input: &Judge<'_>, current: &str, set: &BTreeSet<String>, measured: &m
     let state = replay(&events);
     let pressed_of = |label: &str| usage::latest_of(&state, label).and_then(|rows| pressed(&rows, input.caps));
     if pressed_of(current).is_none() {
+        clear_refused(&host_groups_dir(input.state_dir), input.group.name());
         return Judgement::Stay(set.iter().filter_map(|label| Some((label.clone(), pressed_of(label)?))).collect());
     }
     // 移り先は自分の予約（役割の model の行が無い周・読めない周は移らず断らない＝記録 0・event 0・設計 §29 形 1 / 2）。
@@ -538,11 +572,11 @@ fn key_of(rows: &[Allowance], models: &BTreeSet<&str>) -> (bool, Reverse<u64>, b
     (missing, Reverse(remaining), reset.is_none(), reset)
 }
 
-/// 群の予約（**1 関数**・設計 §29 形 2 / 3）: 群を宣言順に `input.group` まで見て、群ごとに門を通る候補を残量の鍵（[`by_key`]）で
-/// 並べ、先の群の予約でない先頭をその群の予約とし、`input.group` の予約を返す（無ければ `None`）。門は今の口座でなく・どの群の
-/// 今の口座でもなく（先の群は周の頭の `head`・判じる群は `taken`）・退役中でなく・鮮度の内側の実測を持ち 3 窓とも閾値未満（鮮度の
-/// 外の候補は `measure` で口座ごとに 1 周 1 回測る）。予約は記録しない（周ごとに導き直す）。役割の model の行が無い周は測らずに
-/// [`Unreserved::NoRule`]。
+/// 群の予約（**1 関数**・設計 §29 形 2 / 3・§31 形 1）: 群を宣言順に `input.group` まで見て、判じる群と**今の口座が逼迫の先の群**
+/// （[`pressed_now`]）ごとに門を通る候補を残量の鍵（[`by_key`]）で並べ、先の群の予約でない先頭をその群の予約とし、`input.group` の
+/// 予約を返す（無ければ `None`）。逼迫でない先の群は候補を測らず予約を持たない。門は今の口座でなく・どの群の今の口座でもなく（先の
+/// 群は周の頭の `head`・判じる群は `taken`）・退役中でなく・鮮度の内側の実測を持ち 3 窓とも閾値未満（鮮度の外の候補は `measure` で
+/// 口座ごとに 1 周 1 回測る）。予約は記録しない（周ごとに導き直す）。役割の model の行が無い周は測らずに [`Unreserved::NoRule`]。
 pub fn reserve(input: &Judge<'_>, measured: &mut BTreeSet<String>) -> Result<Option<String>, Unreserved> {
     let read = || store::read_all(input.state_dir).map(|events| replay(&events)).map_err(|_| Unreserved::Unreadable);
     let state = read()?;
@@ -553,6 +587,9 @@ pub fn reserve(input: &Judge<'_>, measured: &mut BTreeSet<String>) -> Result<Opt
     let mut reserved: BTreeSet<String> = BTreeSet::new();
     for (found, models) in groups.iter().zip(&models) {
         let target = found.name() == input.group.name();
+        if !target && !pressed_now(input, found, measured)? {
+            continue;
+        }
         let taken = if target { input.taken } else { input.head };
         let open: Vec<&String> =
             found.accounts().iter().filter(|label| !taken.contains(*label) && !state.retired.contains_key(*label)).collect();
@@ -576,6 +613,20 @@ pub fn reserve(input: &Judge<'_>, measured: &mut BTreeSet<String>) -> Result<Opt
     Ok(None)
 }
 
+/// 先の群の今の口座が逼迫か（設計 §31 形 1）: 記録を読めない群・鮮度の内側の実測を持たない群は偽。鮮度の外は**今の口座だけ**を
+/// `measure` で口座ごとに 1 周 1 回測る。
+fn pressed_now(input: &Judge<'_>, found: &AccountGroup, measured: &mut BTreeSet<String>) -> Result<bool, Unreserved> {
+    let Ok(current) = current_of(input.state_dir, found) else {
+        return Ok(false);
+    };
+    if measured.insert(current.label.clone()) {
+        (input.measure)(&current.label, false);
+    }
+    let state = store::read_all(input.state_dir).map(|events| replay(&events)).map_err(|_| Unreserved::Unreadable)?;
+    let fresh = usage::fresh_rows(input.manifest, &state, &current.label).map_err(|_| Unreserved::NoRule)?;
+    Ok(fresh.is_some_and(|rows| pressed(&rows, input.caps).is_some()))
+}
+
 /// 移動の記録と承認（この順）: 前提（宣言の逐語・起こし直しの刻み・役割の既定の面）が揃わない周と記録を書けない周は 1 つも
 /// 書かずに `false`。
 fn approve(input: &Judge<'_>, current: &str, target: &str) -> bool {
@@ -587,9 +638,11 @@ fn approve(input: &Judge<'_>, current: &str, target: &str) -> bool {
         return false;
     };
     let record = Record { account: target.to_owned(), ts: now_utc(), previous: current.to_owned() };
-    if write_current(&host_groups_dir(input.state_dir), input.group.name(), &record).is_err() {
+    let dir = host_groups_dir(input.state_dir);
+    if write_current(&dir, input.group.name(), &record).is_err() {
         return false;
     }
+    clear_refused(&dir, input.group.name());
     append(input.state_dir, input.manifest, EventKind::GroupMoved, target, words);
     true
 }
@@ -605,6 +658,7 @@ fn refuse(input: &Judge<'_>, current: &str) -> Judgement {
         return Judgement::NoCandidate(Refusal::Repeated);
     }
     append(input.state_dir, input.manifest, EventKind::GroupMoveRefused, current, detail);
+    let _ = write_refused(&host_groups_dir(input.state_dir), input.group.name());
     Judgement::NoCandidate(Refusal::Recorded)
 }
 
@@ -745,9 +799,26 @@ fn measure_later(state_dir: &Path, account: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{by_key, grace_left, measure_later, pressed, Caps, Pressed, Signal};
+    use super::{by_key, grace_left, measure_later, pressed, refused_mark, refused_ts, Caps, Pressed, Signal};
     use crate::fleet::{Allowance, Measured, WindowKind};
     use std::collections::BTreeSet;
+
+    /// 断りの印（account-lifecycle.md §31 形 2）: render した 1 行は parse で同じ ts に戻る。
+    #[test]
+    fn group_refused_render_parses_back_to_the_ts() {
+        let ts = "2026-09-26T14:07:00Z";
+        assert_eq!(refused_mark(ts), format!("ts={ts} reason=no-candidate\n"), "1 行の形");
+        assert_eq!(refused_ts(&refused_mark(ts)), Some(ts), "同じ ts に戻る");
+    }
+
+    /// 形でない印（改行の欠け・理由の違い・余りの field・ts が時刻の形でない・空）は `None`（doctor は unreadable と読む）。
+    #[test]
+    fn group_refused_parse_refuses_other_forms() {
+        let t = "ts=2026-09-26T14:07:00Z";
+        let refused = [format!("{t} reason=no-candidate"), format!("{t} reason=other\n"), format!("{t} reason=no-candidate x=1\n")];
+        let refused = refused.into_iter().chain(["ts=soon reason=no-candidate\n".to_owned(), String::new()]);
+        refused.for_each(|text| assert_eq!(refused_ts(&text), None, "印でない: {text:?}"));
+    }
 
     /// 合図の記録の parse（seat-heartbeat.md §14 形 1）: 3 field は読める・旧形・`at` が整数でない・欠け / 余り / 順違いは記録なし。
     #[test]
