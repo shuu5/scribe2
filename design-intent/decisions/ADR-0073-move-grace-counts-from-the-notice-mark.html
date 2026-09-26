@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="generator" content="folio ADR-pack assembler (folio-bwc / instance#2) — deterministic structure, prose slots unfilled">
-<title>群の移動の退避は合図が先で /exit は猶予の後 — 群が別の口座へ移った周に古い席へ送るのは退避の合図の 1 行で、 /exit は猶予 (rules 行 1 本・起点は群の記録の時刻) を越えた周に送り、 合図は席ごとの記録 1 つで移動につき 1 回、 群の段の続きの周も同じ猶予を読む (ADR-0066 の移動の門と ADR-0068 の梯子は前提のまま・要件は FR38 / AC41 の範囲)</title>
+<title>退避の猶予の起点は合図の記録 — 猶予は席が退避の合図を受けた時刻から数え、 群の記録が古い周も記録の無い群の周も合図が先で /exit は猶予の後 (ADR-0071 の起点の読みを部分 supersede)</title>
 <style>
 /* ===========================================================================
    folio human-layer design system — core.css (S3 / folio-8oc プロトタイプ)
@@ -455,17 +455,14 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
     "schema": "https://schema.org/",
     "folio": "https://folio.dev/spec/v1/"
   },
-  "@id": "./ADR-0071-group-move-signal-then-exit-after-grace.html",
+  "@id": "./ADR-0073-move-grace-counts-from-the-notice-mark.html",
   "@type": "schema:TechArticle",
-  "dc:isReferencedBy": [
-    { "@id": "./ADR-0073-move-grace-counts-from-the-notice-mark.html" }
-  ],
   "dc:isPartOf": [
     {
       "@id": "./README.html"
     }
   ],
-  "dc:title": "群の移動の退避は合図が先で /exit は猶予の後 — 群が別の口座へ移った周に古い席へ送るのは退避の合図の 1 行で、 /exit は猶予 (rules 行 1 本・起点は群の記録の時刻) を越えた周に送り、 合図は席ごとの記録 1 つで移動につき 1 回、 群の段の続きの周も同じ猶予を読む (ADR-0066 の移動の門と ADR-0068 の梯子は前提のまま・要件は FR38 / AC41 の範囲)",
+  "dc:title": "退避の猶予の起点は合図の記録 — 猶予は席が退避の合図を受けた時刻から数え、 群の記録が古い周も記録の無い群の周も合図が先で /exit は猶予の後 (ADR-0071 の起点の読みを部分 supersede)",
   "folio:version": "0.1.0",
   "folio:stakeholders": [
     "Developer",
@@ -489,19 +486,10 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
       "@id": "../spec/srs.html#FR27"
     },
     {
-      "@id": "../spec/srs.html#FR59"
-    },
-    {
       "@id": "./ADR-0066-the-management-tick-fires-the-group-move-judgement.html"
     },
     {
-      "@id": "./ADR-0067-the-relaunch-carries-the-conversation-id-with-resume.html"
-    },
-    {
-      "@id": "./ADR-0068-the-signal-ladder-is-a-list-and-live-runs-do-not-block-group-moves.html"
-    },
-    {
-      "@id": "./ADR-0069-group-moves-pick-by-headroom-and-reserve-in-tier-order.html"
+      "@id": "./ADR-0071-group-move-signal-then-exit-after-grace.html"
     }
   ]
 }
@@ -513,173 +501,159 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 <nav class="breadcrumb" aria-label="パンくず"><ol>
   <li><a href="../index.html">design-intent</a></li>
   <li><a href="./README.html">decisions</a></li>
-  <li aria-current="page">ADR-0071</li>
+  <li aria-current="page">ADR-0073</li>
 </ol></nav>
 <!-- /folio:chrome-top -->
 <div class="page" data-component="requirement-type-color-tokens">
 <header data-component="doc-cover-band">
-<p class="cover-eyebrow"><span class="doc-type">設計判断記録 (ADR)</span> <span>scribe2 — 群の移動の退避の猶予</span></p>
-<h1>群の移動の退避は合図が先で /exit は猶予の後 — 群が別の口座へ移った周に古い席へ送るのは退避の合図の 1 行で、 /exit は猶予 (rules 行 1 本・起点は群の記録の時刻) を越えた周に送り、 合図は席ごとの記録 1 つで移動につき 1 回、 群の段の続きの周も同じ猶予を読む (ADR-0066 の移動の門と ADR-0068 の梯子は前提のまま・要件は FR38 / AC41 の範囲)</h1>
-<p class="cover-sub">ADR-0066 は群の移動の判定を管理 tick に置き、 移った周は各席の tick が自席に退避 (/exit) を撃つと決めた。 席が前面で作業中なら /exit は turn の終わりまで待つが、 席が裏で走らせる subagent は席の turn が先に終わるため待たれず、 次の周の /exit で claude ごと落ちる。 2026-09-26 に別 project の設計席がこれを 3 回観測して報告し、 持ち主は「合図 → 猶予 → /exit」の二段の退避を裁定した (06:29Z)。 限度を越えた口座で席が猶予の分だけ動き続ける害を、 走行中の作業を毎回落とす害より小さいと判断した。</p>
-<div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">この記録で「器」は scribe2 の本体、 「席」は人と AI が話す 1 つの session、 「群」はある project の席が使う口座の集まり、 「見回り (管理 tick)」は席の外から周期で席を見る仕組み、 「subagent」は席が起こす下請けの agent です。 群が別の口座へ移ると、 古い口座の席は終わらせて新しい口座で起こし直します。 これまで見回りは移った 15 秒後に古い席へ /exit を送っていました。 席が前面で作業中なら /exit は作業の区切りまで待ちますが、 席が裏で走らせている subagent は待たれず、 途中で落ちていました。 この記録は、 移った周にまず「退避の合図」の 1 行を送り、 /exit は猶予 (規則の表の行 1 本・既定 30 分・起点は群の記録の時刻) を越えてから送ると決めます。 合図は席ごとの記録 1 つで移動につき 1 回だけ送り、 便の終端の周 (群の段) も同じ猶予を読みます。 持ち主は 2026-09-26 に、 限度を越えた口座で席が猶予の分だけ動き続ける害を受け入れると裁定しました。</p></div></div>
-<div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">accepted</span></span><span class="m"><span class="k">選択肢</span><span class="v">5件 (OPT1–OPT5)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 3 / トレードオフ 3</span></span><span class="m"><span class="k">版</span><span class="v">v0.1.0 / 2026-09-26</span></span></div>
-<div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>FR38・FR27・FR59</b></div>
+<p class="cover-eyebrow"><span class="doc-type">設計判断記録 (ADR)</span> <span>scribe2 — 退避の猶予の起点</span></p>
+<h1>退避の猶予の起点は合図の記録 — 猶予は席が退避の合図を受けた時刻から数え、 群の記録が古い周も記録の無い群の周も合図が先で /exit は猶予の後 (ADR-0071 の起点の読みを部分 supersede)</h1>
+<p class="cover-sub">ADR-0071 は退避を二段 (合図 → 猶予 → /exit) にし、 猶予の起点を群の記録の時刻に置いた。 群の記録が猶予より古いまま席がその群に入ると (群の宣言の編集・記録の無い群)、 猶予は最初から過ぎており合図なしで /exit が飛ぶ。 2026-09-26 の群の再編で 2 席がこの形で落ちた。 本 ADR は起点を「席に合図を書いた時刻」に改める。</p>
+<div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">この記録で「器」は scribe2 の本体、 「席」は人と AI が話す 1 つの session、 「群」は同じ口座の候補を共に使う project の集まり、 「退避の合図」は群が別の口座へ移った周に古い席へ送る 1 行、 「猶予」は合図から /exit までの待ち時間です。 前の決定 (ADR-0071) は退避を二段 (合図 → 猶予 → /exit) にしましたが、 猶予を「群の記録の時刻」から数えていました。 群の記録が古いまま席がその群に入ると (群の宣言を編集して置き場を移す・記録の無い群に席が加わる)、 猶予は最初から過ぎており、 合図なしで /exit が飛びます。 2026-09-26 の群の再編で 2 席がこの形で落ちました。 この記録は、 猶予を「その席に合図を書いた時刻」から数えると決めます。 合図の記録に書いた時刻を持たせ、 記録が無ければ器は必ず合図を先に送り、 /exit は合図の時刻 + 猶予 を越えた周にだけ送ります。</p></div></div>
+<div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">accepted</span></span><span class="m"><span class="k">選択肢</span><span class="v">4件 (OPT1–OPT4)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 3 / トレードオフ 3</span></span><span class="m"><span class="k">版</span><span class="v">v0.1.0 / 2026-09-26</span></span></div>
+<div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>FR38・FR27</b></div>
 <div data-component="approval-block">
-<div class="sign"><span class="role">裁定 (user)</span><span class="who">user</span><span class="when">裁定 id user 2026-09-26T06:29Z (推奨の受諾 = 移った周に送るのは退避の合図の 1 行・/exit は猶予の rules 行 1 本を越えた周・猶予の起点は群の記録の時刻・席は合図を受けたら新しい subagent を起こさず今の subagent の終わりを待つ)。 報告は別 project の設計席の relay (同 06:2xZ)。 要旨だけを写す。 逐語は非公開の作業記録簿 (台帳 s2-07l.651 の notes) に在る</span><span class="stamp self">裁定済</span></div>
-<div class="sign"><span class="role">設計 (orchestrator)</span><span class="who">orchestrator</span><span class="when">2026-09-26 草稿 v1 (relay の事象を現物 (tick の移動の門・群の段の退避・群の記録) で再現し、 機序を弁別して形にした。 拘束する constitution の版 0.5.0)</span><span class="stamp self">作成</span></div>
+<div class="sign"><span class="role">設計 (orchestrator)</span><span class="who">orchestrator</span><span class="when">2026-09-26 草稿 v1 (群の再編の直後に 2 席が合図なしで即 /exit された事象を現物 (猶予の 1 関数・合図の記録・tick の移動の門・群の段の続きの周) で再現し、 起点の読みを改めた。 持ち主の裁定は不要 (憲法の Ask-first の 3 クラスに当たらない・値の変更なし)。 拘束する constitution の版 0.5.0)</span><span class="stamp self">作成</span></div>
 </div>
 <div class="reader-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 想定読者: scribe2 の開発 session と user — 器の内部と Rust の専門知識は不要 (専門語はやさしい言葉を併記)</div>
 </header>
 <!-- folio:chrome-toc -->
 <!-- /folio:chrome-toc -->
-<section data-component="chapter-deck-band" class="tint-info"><span class="num">01</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v6m0 0L9 5m3 3l3-3"/><circle cx="12" cy="14" r="6"/></svg> 背景 / なぜこの判断が要るか</span><h2>いま何が問題か (確定方式を決める力学)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-01">なぜこの判断が要るのかを、 経緯 (移った周の退避の今の形)・事象 (裏の subagent が落ちた)・器の今の部品・これまでの決まり・この判断の範囲の 5 つから説明します。 前の決定 (ADR-0066) は群の移動の判定を見回りに置き、 移った周は各席の見回りが自席へ退避 (/exit) を撃つと決めました。 設計はさらに、 移動の周は席の状態の打刻を読まずに /exit を周期ごとに送ると決めました (打刻を失った席が移らない穴を塞ぐため)。 2026-09-26 に別 project の席が、 移動のたびに裏で走らせていた subagent が途中で消えたと報告し、 本席が機序を再現しました。 部品は見回りの移動の門・群の段の退避・群の記録・規則の表の行です。</p></section>
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">01</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v6m0 0L9 5m3 3l3-3"/><circle cx="12" cy="14" r="6"/></svg> 背景 / なぜこの判断が要るか</span><h2>いま何が問題か (確定方式を決める力学)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-01">なぜこの判断が要るのかを、 経緯 (二段の退避と猶予の起点)・事象 (群の再編で 2 席が合図なしで即 /exit された)・機序 (起点が群の記録の時刻だと席が群に入った時刻を器が知らない)・これまでの決まり・この判断の範囲の 5 つから説明します。 前の決定 (ADR-0071) が防ごうとした「走行中の subagent を落とす」害が、 席が後から群に入る周にはそのまま残っていました。</p></section>
 <div class="chapbody">
 <div data-component="adr-context-list">
-<div data-component="adr-context-row"><span class="cxid">CTX1</span><div class="cxbody"><p class="cxh">経緯 — 移った周の退避は各席の tick が撃ち、 打刻を読まずに /exit を送る (ADR-0066・設計 §10)</p><p class="cxd">ADR-0066 は群の移動の判定 (逼迫の読み・移り先・記録・承認 event) を管理 tick<span class="term" data-component="plain-language-term-inline" data-term="管理 tick">席を周期で見る仕組み</span> に置き、 判定の後は各席の tick の移動の門<span class="term" data-component="plain-language-term-inline" data-term="移動の門">移る周の tick の段</span>が自席にだけ退避 (/exit・確認 dialog なら Enter) か起こし直しを撃つと決めた。 設計 seat-heartbeat.md §10 (形 8〜10) はさらに、 移動の周は席の状態の打刻 (Busy / Idle) を読まずに /exit を周期ごとに送ると決めた。 上限の error で終わった turn が Busy の打刻を残し、 打刻に依る門では席が移らない穴 (台帳 s2-07l.635) を塞ぐためである。 turn の途中に送った /exit は claude の入力の列に積まれ turn の終わりで実行されるので、 前面の作業は落ちない、 が根拠だった。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX2</span><div class="cxbody"><p class="cxh">事象 — 席が裏で走らせる subagent<span class="term" data-component="plain-language-term-inline" data-term="subagent">席が起こす下請けの agent</span> が移動のたびに落ちた</p><p class="cxd">2026-09-26 に別 project の設計席が、 群 (口座の群) の移動 3 回のたびに席が /exit → 起こし直しされ、 そのとき席が走らせていた subagent (制作の便・20〜40 分) が 3 回とも途中で消えたと報告した。 出力は file に残るが途中の状態で止まり、 席は毎回起こし直しの後に点検からやり直した。 席の状態の打刻が busy と記されていた周でも退避が撃たれていた。 本席は現物で再現した — 打刻を読まないのは設計どおり (形 8・形 10) で、 機序は形 9 の外側に在る。 Agent tool の subagent は background で走り、 席の turn は subagent の完了を待たずに終わる。 turn が終わると入力欄が空に戻り、 次の周 (15 秒) の /exit が即実行され、 claude の process ごと subagent が落ちる。 「turn の終わりで実行」は前面の turn だけを守っていた。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX3</span><div class="cxbody"><p class="cxh">現物 — tick の移動の門・群の段の退避・群の記録・rules 行</p><p class="cxd">main 735c7f4 で、 管理 tick の移動の周 (seat/tick.rs の moving) は群の記録<span class="term" data-component="plain-language-term-inline" data-term="群の記録">群の今の口座の控え</span>の口座と自席の登録 row の口座が違う周に、 lock の内側で退避 (evacuate = 入力欄の門 → /exit の 1 行・dialog の既定の行なら Enter・記録は tick.jsonl に who=seat-tick-move) を撃つ。 判定で移った周も同じ関数を撃つ。 手の語<span class="term" data-component="plain-language-term-inline" data-term="手の語">移動の周の判定行の語</span> (Move) は launch / exit / enter の閉じた 3 値。 群の段 (pipe/dispatch/group.rs) は移動の周に古い口座の席へ退避の合図<span class="term" data-component="plain-language-term-inline" data-term="退避の合図">移るための席への 1 行</span>の 1 行 (字面は群の段の中の format!) を送って起動の待ち (settle) を置き、 続きの周<span class="term" data-component="plain-language-term-inline" data-term="続きの周">群の段の 2 周目以降</span>に shell へ戻らない席へ /exit を 1 回送る。 群の記録 (hook/group.rs の Record) は口座・時刻 (UTC 秒の字面)・理由・前の口座の 4 行で、 読み手 current_of は口座と出所だけを返して時刻を落とす。 時刻の字面を UNIX 秒にする読み手 (fleet/wait.rs の epoch_of) と tick の今 (seat/state.rs の now_secs) は在る。 rules 行は周期・黙りの初段・梯子の列・送達の窓・群の閾値を tick が読み、 欠く周は rc 1 で語 no-rule。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX4</span><div class="cxbody"><p class="cxh">憲法と既存の決定の向き (本 ADR の解釈)</p><p class="cxd">C2 (経路は 1 本) から、 猶予の判定・合図の字面・合図の記録の書き手はそれぞれ 1 関数で、 tick と群の段が同じものを読む。 C10 (宣言値・実測値・導出値を分ける) から、 猶予は rules 行の宣言値、 起点は群の記録の時刻 (実測値)、 残りの秒はその導出値で、 時刻の字面が形でない記録は読めない記録として断る (数の読み替えをしない)。 C17 (足すときに何を外すかを名指す) から、 足すのは rules 行 1 本・合図の記録 1 file・Move の変種 2 つ・関数 3 本で、 外すのは群の段の中の合図の字面 (hook/group.rs へ移す) である。 決定はしごの各段を通した — 要るか (走行中の作業が毎回落ちる)・既に在るか (群の段の合図は在るが tick の周には無く、 /exit を待たせる口も無い)・既存の記録で足りるか (群の記録の時刻を起点にすれば猶予の起点は足りる・合図の 1 回性だけ席ごとの記録 1 つが要る)・1 行で書けるか (合図の記録<span class="term" data-component="plain-language-term-inline" data-term="合図の記録">合図を送った印</span>は 1 行)・最小か (rules 行 1 本と file 1 つ)。 N2 (散文にしか無い規則は規則として扱わない) から、 席の側の作法 (新しい subagent を起こさず今のを待つ) は合図の字面が伝える案内であって規則ではない。 ADR-0066 の判定の置き場と移動の門、 ADR-0067 の起こし直し (会話 id を運ぶ)、 ADR-0068 の梯子、 ADR-0069 の移り先の鍵は本 ADR の前提で変えない。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX5</span><div class="cxbody"><p class="cxh">射程 — 動かすのは退避の順と猶予・合図の 1 回性・群の段の続きの周の 3 か所</p><p class="cxd">動かすのは (1) tick の移動の周の退避の順 (合図が先・/exit は猶予の後・猶予は rules 行 seat.move_grace_s・起点は群の記録の時刻・値 0 は今の形)、 (2) 合図の 1 回性 (席の状態の dir の合図の記録 1 file に群の記録の時刻を書き、 同じ時刻の記録が在れば送らない・群の段の合図も同じ記録を書く)、 (3) 群の段の続きの周 (/exit は猶予を越えた周だけ) の 3 つ。 動かさないのは、 判定の列の順と移動の周の位置 (打刻を読まない)・lock・起こし直し・梯子・heartbeat の停止・status と doctor の項目・event の種類・rules 行の他の値。 要件は FR38 (群の移動) と AC41 (古い席に退避の合図が届く) の範囲に収まり、 SRS の改訂を伴わない。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX1</span><div class="cxbody"><p class="cxh">経緯 — 二段の退避と猶予の起点 (ADR-0071・設計 §13)</p><p class="cxd">ADR-0071 は群が別の口座へ移った周の退避を二段にした。 古い席へまず退避の合図<span class="term" data-component="plain-language-term-inline" data-term="退避の合図">移るための席への 1 行</span>の 1 行を送り、 rules 行 seat.move_grace_s (既定 1800 秒) の猶予を越えた周にだけ /exit を送る。 猶予の残りは 1 関数が「群の記録の時刻 + 猶予 − 今」で読み、 合図の記録<span class="term" data-component="plain-language-term-inline" data-term="合図の記録">合図を送った印</span> (席の状態の dir の 1 行・群の記録の時刻) が同じ時刻を持てば合図を送り直さない。 tick の移動の門<span class="term" data-component="plain-language-term-inline" data-term="移動の門">移る周の tick の段</span>は「残りが無い → /exit」を先に判じ、 次に「送った → 待つ」、 残りは「合図を送る」の順。 群の段の続きの周<span class="term" data-component="plain-language-term-inline" data-term="続きの周">群の段の 2 周目以降</span>は群の記録<span class="term" data-component="plain-language-term-inline" data-term="群の記録">群の今の口座の控え</span> 1 つで残りを読み、 群の全席に一括で /exit を送るか送らないかを選ぶ。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX2</span><div class="cxbody"><p class="cxh">事象 — 群の再編で 2 席が合図なしで即 /exit された</p><p class="cxd">2026-09-26T09:40Z に持ち主の求めで群の宣言を編集し、 置き場 2 つを Tier1 から Tier2 へ移した。 Tier2 の記録は前日の移動の時刻 (2026-09-25T02:19:50Z) のままだったので、 移した 2 席の tick は次の周で「残りが無い」と読み、 合図を送らず /exit を送って新しい口座で起こし直した (09:42Z・tick-last は decision=move が 2 周・合図の記録は前の群の時刻のまま)。 席が subagent を回していれば落ちていた形で、 ADR-0071 が防ごうとした害がそのまま残っていた。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX3</span><div class="cxbody"><p class="cxh">機序 — 起点が群の記録の時刻だと、 席がその群に入った時刻を器が知らない</p><p class="cxd">群の記録の時刻は「群が移った時刻」であって「この席に合図を書いた時刻」ではない。 席が後からその群に入る周 (宣言の編集・記録の無い群 (種) に席が加わる周) は、 記録の時刻からの経過が席の実際の待ちと無関係になる。 同じ理由で、 席が入力欄の門や dialog で合図を受け取れなかった周の分だけ猶予が削られ、 合図の字面の「&lt;秒&gt; 秒の後に /exit」が席の側では守られない (合図が 20 分遅れれば残りは 10 分)。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX4</span><div class="cxbody"><p class="cxh">憲法と既存の決定の向き (本 ADR の解釈)</p><p class="cxd">C2 (経路は 1 本) から、 猶予の判定と合図の記録の書き手・読み手は 1 関数のままで、 tick と群の段が同じ記録を読む。 C10 (宣言値・実測値・導出値を分ける) から、 猶予は rules 行の宣言値、 起点は器が合図を書いた実測の時刻、 残りは導出値で、 合図の記録に残りの秒を写さない。 C17 (決定はしご) から、 起点を 2 つ (記録の時刻と合図の時刻) 持って遅い方を採る形は 1 つで足りるので採らない。 N2 (散文の規則は規則でない) から、 再編のたびに記録を書き直す運用の手順は規則にならない。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX5</span><div class="cxbody"><p class="cxh">射程 — 動かすのは猶予の起点・合図の記録の形・tick の分岐の順・群の段の続きの周の 4 か所</p><p class="cxd">動かすのは (1) 猶予の起点 (群の記録の時刻 → 合図の記録の時刻)、 (2) 合図の記録の形 (1 行に移り先・群の記録の時刻か種の印・書いた時刻の 3 つ)、 (3) tick の移動の門の分岐の順 (猶予 0 → /exit、 同じ移動の記録が在る → 残りで待つか /exit、 無い → 合図が先・記録の古さと種は分岐に入らない)、 (4) 群の段の続きの周 (席ごとに記録を読み、 残りの無い席にだけ /exit)。 動かさないのは、 合図の字面・rules 行の値と読み・手の語・判定の列の順・起こし直し・群の記録の形と書き手。</p></div></div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-brand"><span class="num">02</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v18"/><path d="M5 7l-3 6h6z"/><path d="M19 7l-3 6h6z"/><path d="M3 21h18"/></svg> 判断を縛る力 / 評価の軸</span><h2>選択肢を測るものさし (安全・速さ)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-02">この判断を評価する 4 本のものさしです。 走行中の作業を落とさないこと (裏の subagent が移動のたびに途中で消える害を無くす)。 限度を越えた口座で動き続ける時間に上限を置くこと (猶予は規則の表の行 1 本で、 越えた周は今どおり /exit を送る)。 打刻に依らないこと (席の自己申告や状態の打刻で待つと、 打刻を失った席が移らない穴が戻る)。 経路は 1 本であること (猶予の判定・合図の字面・合図の記録の書き手はそれぞれ 1 関数で、 見回りと群の段が同じものを読む)。</p></section>
+<section data-component="chapter-deck-band" class="tint-brand"><span class="num">02</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v18"/><path d="M5 7l-3 6h6z"/><path d="M19 7l-3 6h6z"/><path d="M3 21h18"/></svg> 判断を縛る力 / 評価の軸</span><h2>選択肢を測るものさし (安全・速さ)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-02">この判断を評価する 4 本のものさしです。 合図の無い /exit を無くすこと (どの経路でその群に入った席も /exit の前に合図と猶予を持つ)。 猶予が席の実際に待てる時間であること (合図の字面の秒と器の /exit の時刻が揃う)。 限度を越えた口座で動き続ける時間の上限は保つこと (合図から猶予を越えた周は今どおり /exit)。 経路は 1 本のままであること (判定と記録の書き手・読み手はそれぞれ 1 関数で、 tick と群の段が同じ記録を読む)。</p></section>
 <div class="chapbody">
 <table data-component="adr-driver-table"><tbody>
-<tr data-component="adr-driver-row"><td class="drid">DR1</td><td>走行中の作業を落とさない — 席が裏で走らせる subagent が移動のたびに途中で消える害を無くす (持ち主の裁定) <span class="drg">CTX2・CTX5</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR2</td><td>限度を越えた口座で動き続ける時間に上限を置く — 猶予は rules 行 1 本の宣言値で、 越えた周は今どおり /exit を送る <span class="drg">CTX1・CTX4</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR3</td><td>打刻に依らない — 席の自己申告や状態の打刻で待つと、 打刻を失った席が移らない穴 (台帳 .635) が戻る <span class="drg">CTX1・CTX4</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR4</td><td>経路は 1 本 — 猶予の判定・合図の字面・合図の記録の書き手はそれぞれ 1 関数で、 tick と群の段が同じものを読む (C2・C17) <span class="drg">CTX3・CTX4</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR1</td><td>合図の無い /exit を無くす — どの経路でその群に入った席も、 /exit の前に必ず合図と猶予を持つ <span class="drg">CTX2・CTX3</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR2</td><td>猶予は席が実際に待てる時間にする — 合図の字面の「&lt;秒&gt; 秒の後」と器の /exit の時刻を一致させる <span class="drg">CTX3・CTX4</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR3</td><td>限度を越えた口座で動き続ける時間の上限は保つ — 合図から猶予を越えた周は今どおり /exit を送る <span class="drg">CTX1・CTX4</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR4</td><td>経路は 1 本のまま — 猶予の判定と記録の書き手・読み手はそれぞれ 1 関数で、 tick と群の段が同じ記録を読む (C2・C17) <span class="drg">CTX4・CTX5</span></td></tr>
 </tbody></table>
 </div>
-<section data-component="chapter-deck-band" class="tint-violet"><span class="num">03</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5"/></svg> 検討した選択肢 / 3 つの確定方式</span><h2>それぞれの利点と欠点を並べる</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-03">候補を 5 つ並べます。 合図が先・/exit は猶予の後・合図は席ごとの記録 1 つで移動につき 1 回とする案 (選んだ案)、 席が「作業中」の札を自分で書き見回りが待つ案、 器を変えず subagent の出力を file に落とす案、 見回りが subagent の有無を process の木で読む案、 猶予を群の段の起動の待ちの窓で持つ案です。 選ばなかった 4 つは、 自己申告の穴・損失が毎回・見えない・意味が別、 という理由で退けました。</p></section>
+<section data-component="chapter-deck-band" class="tint-violet"><span class="num">03</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5"/></svg> 検討した選択肢 / 3 つの確定方式</span><h2>それぞれの利点と欠点を並べる</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-03">候補を 4 つ並べます。 起点を合図の記録の時刻にする案 (選んだ案)、 群の宣言を編集するたびに群の記録の時刻を書き直す運用の案、 群の記録の時刻と合図の記録の時刻の遅い方を起点にする案、 群の宣言の編集を器の口にして口が記録を書き直す案です。 選ばなかった 3 つは、 手順は規則でない・1 つで足りる・口が増えて種の周は残る、 という理由で退けました。</p></section>
 <div class="chapbody">
 <div class="opt-grid">
 <div data-component="adr-option-card" class="chosen">
-<div class="opt-head"><span class="opt-id">OPT1</span><span class="opt-name">二段の退避 — 合図が先・/exit は猶予の後・合図は席ごとの記録 1 つで移動につき 1 回</span><span class="opt-verdict chosen">採用</span></div>
-<p class="opt-sum">rules 行 seat.move_grace_s (整数の秒・既定 1800・裁定 id つき) を足す。 tick の移動の周は、 群の記録の時刻 + 猶予 − 今 が正なら「残りが在る」と読み、 合図の記録 (席の状態の dir の move-signal・1 行 ts=&lt;群の記録の時刻&gt;) が同じ時刻を持たない周は退避の合図の 1 行 (字面は hook/group.rs の 1 関数・群の段と共通・残りの秒を載せる) を入力欄が空なら送って記録を書き、 同じ時刻を持つ周は待つ (0 key)。 残りが無い周 (猶予 0・越えた・記録なし = 種) は今の形 (/exit・dialog なら Enter)。 群の段の移動の周は同じ字面の合図を送って席ごとに記録を書き、 続きの周の /exit は残りが無い周だけ。 手の語に signal / wait を足す。 決め手は現物 (持ち主の裁定)。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT1">移った周にまず退避の合図の 1 行を送り、 /exit は猶予 (規則の表の行 1 本・既定 30 分) を越えてから送る案です。 猶予の起点は器が書く群の記録の時刻で、 合図は席ごとの記録 1 つで移動につき 1 回だけ送ります。 猶予が残っていない周 (猶予 0・越えた・記録なし) は今どおり /exit です。 群の段の続きの周も同じ猶予を読みます。 裏の subagent は猶予の間に終われ、 限度を越えた口座で動き続ける時間は猶予が上限で、 打刻も自己申告も読まず、 判定・字面・記録の書き手は 1 関数ずつです。 代わりに、 席の dir に file が 1 つと規則の表に行が 1 本増え、 猶予の間は限度を越えた口座で席が動き、 席の作法は案内で器が強制できません。 持ち主の裁定で選びました。</span>
+<div class="opt-head"><span class="opt-id">OPT1</span><span class="opt-name">起点を合図の記録の時刻にする — 記録に書いた時刻を持たせ、 無ければ必ず合図が先</span><span class="opt-verdict chosen">採用</span></div>
+<p class="opt-sum">合図の記録を「移り先・群の記録の時刻か種の印・書いた時刻」の 3 つにし、 猶予の残りは「書いた時刻 + 猶予 − 今」で読む。 tick は同じ移動の記録が無ければ記録の古さに依らず合図を送り、 記録が在れば残りで待つか /exit を送る。 群の段の続きの周は席ごとに記録を読む。 決め手は分析 (起点が席の実測になる)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT1">合図の記録に「いつ合図を書いたか」を持たせ、 猶予をその時刻から数える案です。 記録には移り先の口座・群の記録の時刻 (無ければ種の印)・書いた時刻の 3 つを書き、 同じ移動の記録が無ければ器は記録の古さに関係なく先に合図を送ります。 記録が在れば残りの秒で待つか /exit を送ります。 群の段の続きの周も席ごとに記録を読みます。 どの経路で群に入った席も合図と猶予を持ち、 猶予が席の実際の待ちと一致し、 上限は保たれ、 判定と記録は 1 関数ずつのままである点で勝ります。 代わりに、 前の版の記録は「無い」と読むので版の入れ替えの直後に合図が 1 回重なり、 群の段の判定が 1 席ずつになります。 分析で選びました。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>席が裏で走らせる subagent は猶予の間に終われ、 席は合図で新しい subagent を起こすのを止められる (DR1)</li>
-<li>限度を越えた口座で動き続ける時間は猶予の値が上限で、 越えれば今どおり /exit が届く (DR2)</li>
-<li>打刻も席の自己申告も読まず、 起点は器が書く群の記録の時刻で、 打刻を失った席も猶予の後に必ず移る (DR3)</li>
-<li>猶予の判定・合図の字面・記録の書き手が 1 関数ずつで、 tick と群の段が同じ字面と同じ記録を使う (DR4)</li>
+<li>どの経路でその群に入った席も /exit の前に合図と猶予を持つ (DR1)</li>
+<li>猶予が席の実際の待ちと一致し、 合図の字面の秒と器の /exit の時刻が揃う (DR2)</li>
+<li>合図から猶予を越えた周は今どおり /exit が届き、 上限は保たれる (DR3)</li>
+<li>判定・書き手・読み手は 1 関数ずつのままで、 rules 行も字面も変えない (DR4)</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>席の状態の dir に file が 1 つ増え (合図の記録)、 rules 行が 1 本増える</li>
-<li>猶予の間 (既定 30 分) は限度を越えた口座で席が動き続ける</li>
-<li>合図の送達が入力欄の門で断られた周は次の周に送り直すが、 席が合図を読むのは次の turn の頭で、 席の作法 (新しい subagent を起こさない) は案内であって器は強制できない</li>
+<li>合図の記録の形が変わり、 前の版の記録は「無い」と読むので、 移行の周に合図が 1 回重なる (害なし)</li>
+<li>群の段の続きの周が席ごとに記録を読む分、 群の段の判定が 1 席ずつになる</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT2</span><span class="opt-name">席が「作業中」の札を自分で書き、 tick が札の在る間は /exit を待つ</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">席の状態の dir に席自身が作業中の記録を置き、 tick は在る間は退避しない。 決め手は分析 (自己申告の穴)。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT2">席が「いま作業中」の札を自分で書き、 見回りは札が在る間は /exit を待つ案です。 席が自分の区切りを最も正確に知っている点で勝ります。 けれども、 書き忘れ・消し忘れ・落ちた席が残した札で移動が止まり、 打刻を失った席が移らない穴 (台帳 .635) と同じ形になります。 上限も無く、 限度を越えた口座で動き続ける時間を器が抑えられません。 退けました。</span>
+<div class="opt-head"><span class="opt-id">OPT2</span><span class="opt-name">群の宣言を編集するたびに群の記録の時刻を今で書き直す運用</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">器は変えず、 再編の手順に「先に移り先の記録を書き直す」を加える。 決め手は分析 (手順は規則でない)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT2">器は変えず、 群の宣言を編集する手順に「先に移り先の記録の時刻を今で書き直す」を加える案です。 器に足すものが無い点で勝ります。 けれども、 散文にしか無い手順は規則として扱えず、 忘れれば同じ事故が起きます。 記録の時刻は「移った時刻」なので書き直すと履歴の意味が壊れ、 記録の無い群には書き直す記録がありません。 退けました。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>席が自分の区切りを最も正確に知っている</li>
+<li>器に足すものが無い</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>書き忘れ・消し忘れ・落ちた席の残した札で移動が止まり、 打刻を失った席が移らない穴 (台帳 .635) と同型になる (DR3)</li>
-<li>上限が無く、 限度を越えた口座で動き続ける時間を器が抑えられない (DR2)</li>
+<li>散文にしか無い手順は規則として扱えず、 忘れれば同じ事故が起きる (N2・DR1)</li>
+<li>記録の時刻は「移った時刻」で、 書き直すと履歴の意味が壊れる (C10)</li>
+<li>記録の無い群 (種) には書き直す記録が無い (DR1)</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT3</span><span class="opt-name">現状維持 — subagent の出力を file に落とし、 起こし直した席が file から拾う</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">器は変えず、 席の運用で損失を小さくする。 決め手は分析 (損失は毎回)。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT3">器は変えず、 subagent の出力を file に落として起こし直した席が file から拾う運用にする案です。 器に足すものが無く、 限度を越えた口座は 15 秒で止まる点で勝ります。 けれども、 走行中の便は毎回途中で落ち、 席は起こし直しの後に点検からやり直します。 損失は移動のたびに繰り返し、 file に落とす作法も席の側の案内で器が保証できません。 退けました。</span>
+<div class="opt-head"><span class="opt-id">OPT3</span><span class="opt-name">群の記録の時刻と合図の記録の時刻の遅い方を起点にする</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">起点を 2 つ持ち、 遅い方から猶予を数える。 決め手は分析 (1 つで足りる)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT3">群の記録の時刻と合図の記録の時刻の 2 つを持ち、 遅い方から猶予を数える案です。 前の版の読みを残せる点で勝ります。 けれども、 記録が古い周は必ず合図の時刻が遅い方になり、 記録の時刻は起点に効きません。 2 つ持つ理由が無く、 判定の入力が 2 つになると tick と群の段の読みが揃いにくくなります。 退けました。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>器に足すものが無く、 限度を越えた口座は 1 周 (15 秒) で止まる (DR2)</li>
+<li>前の版の読みを残せる</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>走行中の便は毎回途中で落ち、 席は起こし直しの後に点検からやり直す。 損失は移動のたびに繰り返す (DR1)</li>
-<li>出力を file に落とす作法は席の側の案内で、 器が保証できない (DR3)</li>
+<li>記録が古い周は必ず合図の時刻が遅い方になり、 記録の時刻は起点に効かない。 2 つ持つ理由が無い (C17・DR4)</li>
+<li>判定の入力が 2 つになり、 tick と群の段の読みが揃いにくい (DR4)</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT4</span><span class="opt-name">tick が subagent の有無を process の木で読み、 在る間は待つ</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">窓が shell かの判定 (子 process まで見る・設計 §6) と同じ読みで、 claude の下に subagent が在れば待つ。 決め手は分析 (見えない)。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT4">見回りが subagent の有無を process の木で読み、 在る間は待つ案です。 席の作法に依らず器が実測で待てる点で勝ります。 けれども、 Agent tool の subagent は claude の process の内側で走り、 process の木には現れません (Bash の子 process しか見えません)。 見えたとしても上限が無く、 長い Bash が在る限り移動が止まります。 退けました。</span>
+<div class="opt-head"><span class="opt-id">OPT4</span><span class="opt-name">群の宣言の編集を器の口にして、 口が記録を書き直す</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">置き場を別の群へ移す口を器に足し、 その口が移り先の記録を今の時刻で書く。 決め手は分析 (口が増える)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT4">置き場を別の群へ移す口を器に足し、 その口が移り先の記録を今の時刻で書く案です。 手順でなく器が守る点で勝ります。 けれども、 口が 1 つ増え (群の宣言の編集は今のところ host の面の file の編集だけで足りている)、 記録の無い群には書き直す記録が無いので種の周の事故は残り、 席が合図を受け取れなかった周の分だけ猶予が削られる問題も残ります。 退けました。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>席の作法に依らず器が実測で待てる</li>
+<li>手順でなく器が守る</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>Agent tool の subagent は claude の process の内側で走り、 process の木には現れない (Bash の子 process しか見えない) (DR1)</li>
-<li>見えたとしても上限が無く、 長い Bash が在る限り移動が止まる (DR2)</li>
-</ul></div></div>
-</div>
-<div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT5</span><span class="opt-name">猶予を群の段の settle の窓で持つ (合図 → settle → /exit)</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">群の段は既に合図 → 起動の待ち (settle) の順で撃つので、 その窓を伸ばして tick の /exit もそれに合わせる。 決め手は分析 (意味が別)。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT5">群の段は既に「合図 → 起動の待ち (settle)」の順で撃つので、 その待ちの窓を伸ばして見回りの /exit もそれに合わせる案です。 規則の表に行を足さない点で勝ります。 けれども、 起動の待ちは「窓が shell に戻るのを待つ秒」で、 退避の猶予とは別の量です。 1 つの値に 2 つの意味を持たせると片方を変えると片方が壊れます。 見回りの周は群の段の待ちを読まず、 群の段は便の終端にしか回らないので、 猶予には見回りが周ごとに読める起点 (群の記録の時刻) が要ります。 退けました。</span>
-<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>rules 行を足さない</li>
-</ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>settle は「窓が shell に戻るのを待つ秒」で、 起動の待ちと退避の猶予<span class="term" data-component="plain-language-term-inline" data-term="退避の猶予">/exit までの待ち時間</span>は別の量。 1 つの値に 2 つの意味を持たせると片方を変えると片方が壊れる (DR4)</li>
-<li>tick の周は群の段の待ちを読まず、 群の段は便の終端にしか回らない。 猶予は tick が周ごとに読める起点 (群の記録の時刻) が要る (DR3)</li>
+<li>口が 1 つ増え、 群の宣言の編集は今のところ host の面の file の編集だけで足りている (C17)</li>
+<li>記録の無い群 (種) には書き直す記録が無く、 種の周の事故は残る (DR1)</li>
+<li>席が合図を受け取れなかった周の分だけ猶予が削られる問題 (CTX3) は残る (DR2)</li>
 </ul></div></div>
 </div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの方式を選ぶか</span><h2>選んだ方式と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、 それが要件書のどの要件を支えるかを示します。 器は規則の表に猶予の行 (seat.move_grace_s・既定 30 分・裁定 id つき) を持ちます。 見回りの移動の周は、 群の記録の時刻から猶予がまだ残っていれば、 合図の記録が無い周に退避の合図の 1 行を送って記録を書き、 記録が在る周は待ちます (何も送りません)。 猶予が残っていない周 (猶予 0・越えた・記録なし) は今の形 (/exit・確認の dialog なら Enter) です。 合図の字面は 1 関数で、 群の段と見回りが同じものを送ります。 群の段の続きの周も、 猶予が残っていない周だけ /exit を送ります。 支えるのは FR38 (群の移動) の根拠と、 FR27 (見回り)・FR59 (席の起動) への主張です。</p></section>
+<section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの方式を選ぶか</span><h2>選んだ方式と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、 それが要件書のどの要件を支えるかを示します。 合図の記録は 1 行 3 つの欄 (移り先の口座・群の記録の時刻か種の印・合図を書いた時刻) になり、 猶予の残りは合図を書いた時刻から数えます。 管理 tick の移動の門は「猶予 0 → /exit」「同じ移動の記録が在る → 残りで待つか /exit」「記録が無い → 合図が先」の順で判じ、 群の記録の古さと種は分岐に入りません。 群の段の続きの周は席ごとに記録を読みます。 支えるのは FR38 (群の逼迫の通知と移動) の根拠と FR27 (管理 tick) への主張です。</p></section>
 <div class="chapbody">
 <div data-component="adr-decision-panel" id="decision">
 <p class="dec-kick">採用 — OPT1</p>
-<p class="dec-state">器 SHALL rules 行 seat.move_grace_s (整数の秒・既定 1800・user 裁定 id つき) を埋め込み manifest に持ち、 管理 tick SHALL その行を他の rules 行と同じ場所で読み、 欠く周 SHALL rc 1 で語 no-rule とする。 管理 tick の移動の周 SHALL 群の記録の時刻 + 猶予 − 今 が正なら退避の猶予の内側と読み、 席の状態の dir の合図の記録 (1 行 ts=&lt;群の記録の時刻&gt;・一時 file → rename) が同じ時刻を持たない周 SHALL 退避の合図の 1 行を入力欄が空なら送って記録を書き (判定行 move=signal・tick.jsonl に who=seat-tick-move)、 同じ時刻を持つ周 SHALL 待つ (move=wait・0 key・lock を取らない)。 猶予の内側でない周 (猶予 0・越えた・記録なし) SHALL 今の形 (lock の内側で /exit・確認 dialog の既定の行なら Enter) とする。 時刻の字面が形でない記録 SHALL 読めない記録として断る (数に読み替えない)。 退避の合図の字面 SHALL hook/group.rs の 1 関数 (群の名・移り先・残りの秒) とし、 群の段と管理 tick SHALL 同じ字面を送る。 群の段の移動の周 SHALL 送った席ごとに合図の記録を書き、 続きの周 SHALL 猶予の内側でない周だけ /exit を送り、 内側の周 SHALL 送らず保留を重ねない。 手の語 SHALL signal と wait を末尾に足す。 移動の周 SHALL NOT 状態の打刻を読まず (設計 §10 形 8 のまま)、 判定の列の順・lock・起こし直し・梯子・heartbeat の停止・status と doctor の項目・event の種類 SHALL 変えない。 席の側の作法 (合図を受けたら新しい subagent を起こさず今のを待つ) SHALL 合図の字面が伝える案内であって規則ではない。</p>
-<span class="dec-plain" data-prose-slot="plain" data-slot-id="decision-plain">器は規則の表に猶予の行 (seat.move_grace_s・整数の秒・既定 1800・裁定 id つき) を持ち、 見回りは他の行と同じ場所で読み、 無ければ「規則が無い」と断ります。 見回りの移動の周は、 群の記録の時刻に猶予を足して今を引いた値が正なら「猶予の内側」と読みます。 内側で、 席の dir の合図の記録が同じ時刻を持たなければ、 入力欄が空のときに退避の合図の 1 行を送って記録を書きます (判定の行は signal)。 同じ時刻を持てば待ちます (wait・何も送らず lock も取りません)。 内側でない周 (猶予 0・越えた・記録なし) は今の形 (/exit・確認の dialog なら Enter) です。 時刻の字面が形でない記録は読めない記録として断ります。 合図の字面は 1 関数 (群の名・移り先・残りの秒) で、 群の段と見回りが同じものを送ります。 群の段の移動の周は送った席ごとに合図の記録を書き、 続きの周は猶予の内側でない周だけ /exit を送ります。 手の語に signal と wait を足します。 移動の周が打刻を読まない形・判定の順・lock・起こし直し・梯子・heartbeat の停止・status と doctor・出来事の種類は変えません。 席の作法 (合図を受けたら新しい subagent を起こさず今のを待つ) は合図の字面が伝える案内で、 規則ではありません。</span>
-<span class="dec-why" data-prose-slot="rationale" data-slot-id="decision-rationale">持ち主の裁定は、 本席が上げた推奨 (合図が先・猶予は規則の表の行 1 本・起点は群の記録の時刻・/exit は猶予の後・席は合図を受けたら新しい subagent を起こさず今のを待つ) の受諾でした。 猶予の起点を群の記録の時刻にするのは、 器が自分で書いた実測値を起点にすれば席の打刻にも自己申告にも依らず、 打刻を失った席も猶予の後に必ず移るからです。 合図の記録を席ごとに 1 つ置くのは、 見回りが 15 秒ごとに回るので、 記録が無いと同じ移動で合図を何度も送ってしまうからです。 合図の字面と猶予の判定を 1 関数にするのは、 群の段 (便の終端の周) と見回りの 2 系統が同じ移動を扱うので、 字面や判定が 2 つあると片方だけ直す事故が起きるからです。 席の自己申告の札は打刻を失った席が移らない穴と同じ形、 現状維持は損失が毎回、 process の木は subagent が見えず、 起動の待ちの流用は意味が別、 という理由で退けました。</span>
+<p class="dec-state">器 SHALL 合図の記録 (席の状態の dir の move-signal) を 1 行 3 つの欄 — 移り先の口座・群の記録の時刻か種の印・合図を書いた時刻 (epoch 秒) — で持ち、 書き手 SHALL 1 関数、 読み手 SHALL 1 関数で、 3 つが揃わない行・書いた時刻が整数でない行・前の版の形の行は記録なしと読む。 「同じ移動」は移り先と群の記録の時刻の等値とする。 猶予の残り SHALL 合図を書いた時刻 + 猶予 − 今 が正ならその秒、 猶予 0 と越えた周は無し、 で、 群の記録の時刻は残りに入らない。 管理 tick<span class="term" data-component="plain-language-term-inline" data-term="管理 tick">席を周期で見る仕組み</span> の移動の門 SHALL (a) 猶予 0 の周は今の形で /exit を送り、 (b) 同じ移動の記録が在る周は残りが在れば待ち (0 key・lock を取らない・file を書かない)、 無ければ lock の内側で /exit を送り、 (c) 記録が無い・別の移動・読めない周は入力欄が空なら合図を送り、 送れた周だけ今の時刻で記録を書く。 群の記録の古さと種は分岐に入らない。 群の段 SHALL 移動の周に送達を確認した席ごとに今の時刻で記録を書き、 続きの周は席ごとに記録を読んで同じ移動で残りの無い席にだけ /exit を 1 回送り、 残りが在る席と記録の無い席には送らない (記録の無い席は tick が合図する)。 合図の字面・rules 行 seat.move_grace_s・手の語・判定の列の順・群の記録の形と書き手は変えない。 本 ADR は ADR-0071 の「猶予の起点は群の記録の時刻」の読みを置き換え、 要件書は変えない (FR38 / AC41 の範囲)。</p>
+<span class="dec-plain" data-prose-slot="plain" data-slot-id="decision-plain">器は合図の記録 (席の状態の dir の 1 行の file) に、 移り先の口座・群の記録の時刻か種の印・合図を書いた時刻の 3 つを持ちます。 書き手も読み手も 1 関数で、 3 つが揃わない行・時刻が整数でない行・前の版の形の行は「記録なし」と読みます。 「同じ移動」は移り先と群の記録の時刻が同じことです。 猶予の残りは「合図を書いた時刻 + 猶予 − 今」が正ならその秒で、 猶予 0 と越えた周は無し、 群の記録の時刻は残りに入りません。 管理 tick の移動の門は、 猶予 0 なら今の形で /exit、 同じ移動の記録が在れば残りが在る間は待ち (何も送らず lock も取らず file も書かない) 無ければ lock の内側で /exit、 記録が無い・別の移動・読めない周は入力欄が空なら合図を送り送れた周だけ今の時刻で記録を書きます。 群の記録の古さと種は分岐に入りません。 群の段は移動の周に送達を確認した席ごとに今の時刻で記録を書き、 続きの周は席ごとに記録を読んで残りの無い席にだけ /exit を 1 回送り、 残りが在る席と記録の無い席には送りません。 合図の字面・rules 行・手の語・判定の列の順・群の記録の形は変えません。 この記録は ADR-0071 の起点の読みを置き換え、 要件書は変えません。</span>
+<span class="dec-why" data-prose-slot="rationale" data-slot-id="decision-rationale">起点を合図の記録の時刻にするのは、 群の記録の時刻が「群が移った時刻」であって「この席に合図を書いた時刻」ではなく、 席が後から群に入る周や合図を受け取れなかった周に、 席の実際の待ちと無関係になるからです。 合図の記録に書いた時刻を持たせれば、 器が席に伝えた時刻を起点にでき、 記録が無い周は「まだ伝えていない」として必ず合図が先になります。 群の記録の書き直しの運用は散文の手順で規則にならず、 記録の意味 (移った時刻) も壊れます。 起点を 2 つ持って遅い方を採る形は、 記録が古い周には結局合図の時刻しか効かないので 1 つで足ります。 群の宣言の編集を器の口にする形は口が増え、 記録の無い群の周と合図が遅れた周の問題が残ります。 rules 行の値・合図の字面・手の語・判定の列の順を変えないのは、 直すのは起点の読みだけで、 二段の退避の形 (ADR-0071) はそのまま正しいからです。</span>
 <div class="justify-box"><p class="jh">この判断が正当化する要件 (cross-doc 照会 → SRS-SCRIBE2-MVP)</p>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR38" data-justifies-req="FR38" data-justifies-role="rationale">FR38</a><span class="justify-role">rationale</span><span class="justify-note">FR38 (群の逼迫の通知と移動) は移った群の古い席に退避の合図が届き新しい口座の席が起こされると書く。 本 ADR は退避の順 (合図が先・/exit は猶予の後) と猶予の起点 (群の記録の時刻) と合図の 1 回性の根拠を与える (裁定 2026-09-26T06:29Z)。</span></div>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR27" data-justifies-req="FR27" data-justifies-role="claim">FR27</a><span class="justify-role">claim</span><span class="justify-note">FR27 (管理 tick) の移動の周は打刻を読まず自席に退避を撃つ。 本 ADR はその周が /exit の前に合図と猶予を持つと主張し、 判定の列の順と打刻を読まない形は変えない。</span></div>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR59" data-justifies-req="FR59" data-justifies-role="claim">FR59</a><span class="justify-role">claim</span><span class="justify-note">FR59 (席の起動) による起こし直しは /exit の後に今のまま撃つ。 本 ADR は猶予が起こし直しの形を変えないと主張する。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR38" data-justifies-req="FR38" data-justifies-role="rationale">FR38</a><span class="justify-role">rationale</span><span class="justify-note">FR38 (群の逼迫の通知と移動) は移った群の古い席に退避の合図が届き新しい口座の席が起こされると書く。 本 ADR は「どの経路でその群に入った席も合図が先で /exit は猶予の後」の根拠と、 猶予の起点 (合図の記録の時刻) を与える。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR27" data-justifies-req="FR27" data-justifies-role="claim">FR27</a><span class="justify-role">claim</span><span class="justify-note">FR27 (管理 tick) の移動の周は打刻を読まず自席に退避を撃つ。 本 ADR はその周の 3 分岐の順を改め (猶予 0 → 記録の有無と残り → 合図)、 判定の列の順と打刻を読まない形は変えないと主張する。</span></div>
 <p class="justify-tgt">照会先: SRS-SCRIBE2-MVP — SRS: 設計 → 契約 → 実装 → 検証 → land を、 人の手を借りずに 1 本通す器（MVP）</p>
 </div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-warn"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> 結果 / 良い面とトレードオフ</span><h2>この判断で何が良くなり、 何を引き受けるか</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">この判断で良くなること 3 つと、 代わりに引き受けること 3 つです。 良くなるのは、 裏の subagent が猶予の間に終われ席は合図で新しい subagent を起こすのを止められること、 限度を越えた口座で動き続ける時間は猶予が上限で打刻を失った席も猶予の後に必ず /exit が届くこと、 合図の字面・猶予の判定・記録の書き手が 1 関数ずつで見回りと群の段が同じものを使うことです。 引き受けるのは、 猶予の間は限度を越えた口座で席が動き続けること (file 1 つと行 1 本が増える)、 席の作法は案内で器が強制できないこと、 合図の送達が断られた周は次の周に送り直すので届くのが数周遅れうることです。</p></section>
+<section data-component="chapter-deck-band" class="tint-warn"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> 結果 / 良い面とトレードオフ</span><h2>この判断で何が良くなり、 何を引き受けるか</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">この判断で良くなること 3 つと、 代わりに引き受けること 3 つです。 良くなるのは、 どの経路で群に入った席も /exit の前に合図と猶予を持つこと、 猶予が席の実際の待ちと一致すること、 判定と記録の書き手・読み手が 1 関数ずつのままで rules 行も字面も変わらないことです。 引き受けるのは、 前の版の記録を「無い」と読むので版の入れ替えの直後に合図が 1 回重なること、 限度を越えた口座で動き続ける時間が「合図が届くまでの遅れ + 猶予」になること、 同じ群の席が別々の周に /exit を受けることです。</p></section>
 <div class="chapbody">
 <div data-component="scope-summary-panel"><div class="scol in"><h3>✓ 良い結果</h3><ul>
-<li data-component="adr-consequence-pos"><span class="b">●</span>群が移った周に席が裏で走らせる subagent は猶予の間に終われ、 席は合図で新しい subagent を起こすのを止められる</li>
-<li data-component="adr-consequence-pos"><span class="b">●</span>限度を越えた口座で席が動き続ける時間は猶予の値が上限で、 打刻を失った席も猶予の後に必ず /exit が届く</li>
-<li data-component="adr-consequence-pos"><span class="b">●</span>合図の字面・猶予の判定・記録の書き手が 1 関数ずつで、 管理 tick と群の段が同じ合図と同じ記録を使う</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>群の宣言の編集や記録の無い群への参加でその群に入った席も、 /exit の前に合図と猶予を持つ</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>猶予が席の実際の待ちと一致し、 合図の字面の「&lt;秒&gt; 秒の後」と器の /exit の時刻が揃う</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>猶予の判定と記録の書き手・読み手は 1 関数ずつのままで、 rules 行・合図の字面・手の語は変わらない</li>
 </ul></div><div class="scol out"><h3>⚖ トレードオフ・代償</h3><ul>
-<li data-component="adr-consequence-neg"><span class="b">●</span>猶予の間 (既定 30 分) は限度を越えた口座で席が動き続ける。 席の状態の dir に file が 1 つ、 rules 行が 1 本増える</li>
-<li data-component="adr-consequence-neg"><span class="b">●</span>席の作法 (合図を受けたら新しい subagent を起こさない) は案内で、 器は強制できない。 従わない席は猶予の後の /exit で今と同じ害を受ける</li>
-<li data-component="adr-consequence-neg"><span class="b">●</span>合図の送達が入力欄の門で断られた周は次の周に送り直すので、 合図が席に届くのは最大で数周遅れる</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>前の版の合図の記録は「無い」と読むので、 版の入れ替えの直後に移動中の席には合図が 1 回重なる (害なし)</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>席が合図を受け取れる状態になるまで猶予が始まらないので、 限度を越えた口座で動き続ける時間は「合図が届くまでの遅れ + 猶予」になる</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>群の段の続きの周は席ごとに記録を読むので、 同じ群の席が別々の周に /exit を受ける</li>
 </ul></div></div>
 </div>
-<section data-component="chapter-deck-band" class="tint-info"><span class="num">06</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> 改訂関係と原則 / この判断の位置づけ</span><h2>版の系譜と、 行き着く原則 (照会終端)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-06">この記録が版の系譜のどこに在るかと、 判断が最後に行き着く原則です。 この記録は新規で、 置き換える決定はありません。 前提として保つのは、 ADR-0066 の判定の置き場と移動の門、 ADR-0067 の起こし直し (会話 id を運ぶ)、 ADR-0068 の梯子と走行中の便の非阻止、 ADR-0069 の移り先の鍵と予約の全部です。 変えるのは移動の周の退避の順 (合図 → 猶予 → /exit) だけで、 打刻を読まない形はそのままです。 行き着く原則は「席を終わらせる前に合図を送り、 待つ時間には器が上限を置く。 起点は器が書いた記録で、 席の申告には依らない」です。</p></section>
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">06</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> 改訂関係と原則 / この判断の位置づけ</span><h2>版の系譜と、 行き着く原則 (照会終端)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-06">この記録が版の系譜のどこに在るかと、 判断が最後に行き着く原則です。 この記録は ADR-0071 の「猶予の起点は群の記録の時刻」の読みだけを置き換え、 二段の退避・rules 行の値・合図の字面・合図の 1 回性・手の語は保ちます。 ADR-0066 の判定の置き場、 ADR-0067 の起こし直し、 ADR-0069 の移り先の鍵と予約も保ちます。 行き着く原則は「待つ時間は、 器が相手に伝えた時刻から数える。 伝えた記録が無ければ、 先に伝える」です。</p></section>
 <div class="chapbody">
 <div data-component="adr-supersession">
 <p class="ss-row"><span class="ss-k">改訂状態</span>current</p>
-<p class="ss-row"><span class="ss-k">置き換える ADR</span>なし (新規)</p>
+<p class="ss-row"><span class="ss-k">置き換える ADR</span>ADR-0071</p>
 <p class="ss-row"><span class="ss-k">置き換えられた</span>なし (現行)</p>
-<p class="ss-row">新規で、 置き換える ADR は無い。 前提として保つのは、 ADR-0066 の判定の置き場と移動の門 (各席の tick が自席にだけ撃つ)、 ADR-0067 の起こし直し (会話 id を運ぶ)、 ADR-0068 の梯子と live 便の非阻止、 ADR-0069 の移り先の鍵と予約、 の全部。 変えるのは移動の周の退避の順 (合図 → 猶予 → /exit) だけで、 設計 seat-heartbeat.md §10 形 8〜10 (打刻を読まない) はそのまま。 発効は本 ADR が accepted になり契約表の行 q が land した時点。</p>
+<p class="ss-row">部分 supersede で、 置き換えるのは 1 つ — ADR-0071 の「猶予の起点は群の記録の時刻」の読み (合図の記録の時刻に改める) — で、 他は保つ。 保つのは、 ADR-0071 の二段の退避 (合図が先・/exit は猶予の後)・rules 行 seat.move_grace_s の値と読み・合図の字面・合図の 1 回性・手の語 (signal / wait)・打刻を読まない移動の門、 ADR-0066 の判定の置き場、 ADR-0067 の起こし直し、 ADR-0069 の移り先の鍵と予約、 の全部。</p>
 </div>
 <div data-component="adr-principle">
-<p class="prin-id">照会終端 — PRIN-SIGNAL-THEN-EXIT-WITHIN-A-BOUND</p>
-<p class="prin-text">席を終わらせる前に合図を送り、 待つ時間には器が上限を置く。 起点は器が書いた記録で、 席の申告には依らない。</p>
-<p class="prin-note">本 ADR が席の自己申告の札・現状維持・process の木の読み・settle の窓の流用を退け、 rules 行 1 本と席ごとの記録 1 つにしたのはこの原則に行き着く (これ以上は遡らない照会終端)。</p>
+<p class="prin-id">照会終端 — PRIN-GRACE-STARTS-WHEN-THE-SEAT-IS-TOLD</p>
+<p class="prin-text">待つ時間は、 器が相手に伝えた時刻から数える。 伝えた記録が無ければ、 先に伝える。</p>
+<p class="prin-note">本 ADR が群の記録の時刻・記録の書き直しの運用・起点の 2 本立て・器の口の追加を退け、 合図の記録に書いた時刻を起点にしたのはこの原則に行き着く (これ以上は遡らない照会終端)。</p>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-brand"><span class="num">07</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg> 用語集 / この文書で使う専門語</span><h2>本文に出てくる専門語のやさしい説明</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-07">本文に出てくる専門語 9 個を、 やさしい言葉で説明します。</p></section>
+<section data-component="chapter-deck-band" class="tint-brand"><span class="num">07</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg> 用語集 / この文書で使う専門語</span><h2>本文に出てくる専門語のやさしい説明</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-07">本文に出てくる専門語 8 個を、 やさしい言葉で説明します。</p></section>
 <div class="chapbody">
 <div data-component="glossary-term-table">
-<div class="grow"><div class="gword">退避の猶予<span class="en">move grace</span></div><div class="gdef">群が別の口座へ移った周から、 器が古い席へ /exit を送るまでの待ち。 rules 行 seat.move_grace_s (整数の秒・既定 1800) が持ち、 起点は群の記録の時刻。 0 は待たない。</div></div>
-<div class="grow"><div class="gword">退避の合図<span class="en">evacuation notice</span></div><div class="gdef">群が別の口座へ移った周に古い席の入力欄へ注入する 1 行。 新しい subagent を起こさず今の作業に区切りをつけ作業記憶を残すよう案内し、 残りの秒を載せる。 字面は 1 関数で、 群の段と管理 tick が同じものを送る。</div></div>
-<div class="grow"><div class="gword">合図の記録<span class="en">notice mark</span></div><div class="gdef">席の状態の dir に置く 1 行の file (群の記録の時刻)。 同じ時刻の記録が在れば管理 tick は合図を送り直さない。 書き手は 1 関数で、 群の段と管理 tick が書く。</div></div>
-<div class="grow"><div class="gword">群の記録<span class="en">group record</span></div><div class="gdef">host の群用 dir に群ごとに高々 1 つ置く file (口座・時刻・理由・前の口座)。 移動の周に器が書く。 本 ADR はその時刻を猶予の起点にする。</div></div>
-<div class="grow"><div class="gword">移動の門<span class="en">move gate</span></div><div class="gdef">管理 tick の判定の列のうち、 群の記録の口座と自席の登録 row の口座が違う周に自席へ退避か起こし直しを撃つ段 (ADR-0066)。 本 ADR で退避は合図 → 待つ → /exit の 3 分岐になる。</div></div>
-<div class="grow"><div class="gword">続きの周<span class="en">continuation round</span></div><div class="gdef">群の段 (便の終端の周) が、 移った後に shell へ戻らない席を見る周。 これまで /exit を 1 回送っていたが、 本 ADR で猶予の内側の周は送らない。</div></div>
+<div class="grow"><div class="gword">退避の猶予<span class="en">move grace</span></div><div class="gdef">群が別の口座へ移った席へ、 器が /exit を送るまでの待ち。 rules 行 seat.move_grace_s (整数の秒・既定 1800) が持つ。 本 ADR で起点は合図の記録に書いた時刻になる。 0 は待たない。</div></div>
+<div class="grow"><div class="gword">合図の記録<span class="en">notice mark</span></div><div class="gdef">席の状態の dir に置く 1 行の file。 本 ADR で移り先の口座・群の記録の時刻か種の印・合図を書いた時刻の 3 つを持つ。 同じ移動の記録が在れば合図を送り直さず、 猶予はその時刻から数える。</div></div>
+<div class="grow"><div class="gword">退避の合図<span class="en">evacuation notice</span></div><div class="gdef">群が別の口座へ移った周に古い席の入力欄へ注入する 1 行。 新しい subagent を起こさず今の作業に区切りをつけ作業記憶を残すよう案内し、 残りの秒を載せる。 字面は本 ADR で変えない。</div></div>
+<div class="grow"><div class="gword">群の記録<span class="en">group record</span></div><div class="gdef">host の群用 dir に群ごとに高々 1 つ置く file (口座・時刻・理由・前の口座)。 移動の周に器が書く。 本 ADR でその時刻は猶予の起点でなくなり、 同じ移動を見分ける鍵にだけ使う。</div></div>
+<div class="grow"><div class="gword">群の種<span class="en">group seed</span></div><div class="gdef">群の記録がまだ無い群の今の口座 (宣言順で決まる)。 前の版は種の群の席を猶予なしで /exit していたが、 本 ADR では種でも合図が先になる。</div></div>
+<div class="grow"><div class="gword">移動の門<span class="en">move gate</span></div><div class="gdef">管理 tick の判定の列のうち、 群の記録の口座と自席の登録 row の口座が違う周に自席へ退避か起こし直しを撃つ段 (ADR-0066)。 本 ADR で 3 分岐の順が「猶予 0 → 記録の有無と残り → 合図」になる。</div></div>
+<div class="grow"><div class="gword">続きの周<span class="en">continuation round</span></div><div class="gdef">群の段 (便の終端の周) が、 移った後に shell へ戻らない席を見る周。 本 ADR で席ごとに合図の記録を読み、 残りの無い席にだけ /exit を送る。</div></div>
 <div class="grow"><div class="gword">管理 tick<span class="en">management tick</span></div><div class="gdef">席の外から周期 (rules 行 1 本・既定 15 秒) で回り、 死んだ席を起こし直し、 移動の周に退避を撃ち、 黙った席へ合図を送り、 群の移動の判定を撃つ仕組み (ADR-0058・ADR-0066)。</div></div>
-<div class="grow"><div class="gword">subagent<span class="en">subagent</span></div><div class="gdef">席 (claude) が Agent tool で起こす下請けの agent。 background で走り、 席の turn は完了を待たずに終わる。 claude の process の内側で走るので process の木には現れない。</div></div>
-<div class="grow"><div class="gword">手の語<span class="en">move word</span></div><div class="gdef">管理 tick の判定行の move= に載る閉じた語 (launch / exit / enter)。 本 ADR で signal / wait を末尾に足す。</div></div>
 </div>
 </div>
 </div>
 <footer class="foot" data-component="fidelity-sync-meta"><div class="ft-grid">
 <div class="ft-plain">このページは、大もとの機械データ (正本) から自動で組み立てられています。構造は機械が自動で検査し、内容が元データに忠実かは独立のレビューで確かめます。</div>
-<div data-audience="machine">機械SSoT: <b>ADR-0071-group-move-signal-then-exit-after-grace.adr.yaml</b> &middot; 生成: <b>2026-09-26 06:42</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
+<div data-audience="machine">機械SSoT: <b>ADR-0073-move-grace-counts-from-the-notice-mark.adr.yaml</b> &middot; 生成: <b>2026-09-26 11:07</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
 <div class="tags" data-audience="machine"><span>folio design system</span><span>ADR-pack</span><span>folio engine B1 (instance#2)</span><span>cross-doc 照会</span></div>
 </div></footer>
 <!-- folio:chrome-bottom -->
 <nav class="prevnext" aria-label="前後の文書">
-  <a class="prevnext__prev" href="ADR-0070-heartbeat-is-the-stamp-signal-and-can-be-paused-per-seat.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">heartbeat は打刻の合図を指し、 席ごとに止められ、 管理 tick は止めない — 席の状態の dir の停止の記録 1 つで管理 tick は合図だけを送らず (起こし直し・退避・群の判定は撃つ)、 tick は周ごとに最後の周の打刻を書き、 seat tick status と doctor が健全と on/off を出し、 外の画面は file を読んで止める口は器の CLI を撃つ (ADR-0058 の「heartbeat = 管理 tick」の読みを部分 supersede・要件 FR78 / AC48 の新設と FR27 の語の改めを伴う)</span></a>
-  <a class="prevnext__next" href="ADR-0072-seats-launch-inside-a-memory-bounded-scope.html"><span class="prevnext__dir">次 &rarr;</span><span class="prevnext__title">席の起動を封じ込めの箱で包む — 席 (人と話す claude とその subagent) の起動行の頭に便と同じ systemd の scope (memory の上限は rules 行 1 本・32 GiB・CPU の重みは付けない) を置き、 行が 0 / 読めない周と道具が無い host は素の行に縮退し、 溢れて殺されるのは箱の中の 1 process だけで claude が死んだ周は管理 tick が起こし直す (ADR-0026 の「cgroup の防壁は席には持ち込まない」の読みを部分 supersede・要件は FR59 / NFR6 の範囲)</span></a>
+  <a class="prevnext__prev" href="ADR-0072-seats-launch-inside-a-memory-bounded-scope.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">席の起動を封じ込めの箱で包む — 席 (人と話す claude とその subagent) の起動行の頭に便と同じ systemd の scope (memory の上限は rules 行 1 本・32 GiB・CPU の重みは付けない) を置き、 行が 0 / 読めない周と道具が無い host は素の行に縮退し、 溢れて殺されるのは箱の中の 1 process だけで claude が死んだ周は管理 tick が起こし直す (ADR-0026 の「cgroup の防壁は席には持ち込まない」の読みを部分 supersede・要件は FR59 / NFR6 の範囲)</span></a>
 </nav>
 <script>
 (function () {
