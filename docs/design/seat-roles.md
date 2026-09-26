@@ -351,6 +351,19 @@ C1 / C5（権能の値は行・裁定 id）・C1.2（生成文に手書きの規
 - 却下: 実行 file を `--version` で撃って器の名と sha を確かめる（guard が未知の file を実行する・Bash 1 回ごとに exec が載る）／実行 file の中身から器の印を読む（PATH の全 command に数十 MB の読みが載り上限が無い）／席が写しを撃たない運用にする（散文の規則・N2）／写しの置き場を rules 行で名指す（host の事実を器の行に積む・ADR-0047 が退けた分担）。
 - 歯: in-file（`crates/scribe2/src/hook/role_guard.rs` の既存の族 `role_guard_` に接頭辞 `role_guard_self_`・`crates/` 全体で 0 件）で、`NAME` / `…/NAME` / `NAME.bin` / `…/NAME-pipe.bin` の 4 形が器の口で、`NAMEctl` / `…/NAMEx` / 別名 / 空 の 4 形が違うこと（母集団 8 形を 1 表で）。e2e（`crates/scribe2-boundary/tests/e2e/hook.rs` の既存の族 `hook_role_` に接頭辞 `hook_role_guard_self_`）で、orchestrator で登録した偽 tmux の席（登録できる役割は orchestrator の 1 つ・便を起こす権能を持たない・既存の `hook_role_` の歯と同じ stub）の pre-tool-use に写しの path（tmp 配下の `<NAME>-pipe.bin`）で便を起こす口を書いた payload が `scribe2` の同じ行と同じ断り（capability launch）で止まり、`<NAME>ctl` の同じ行は権能の guard を通る。
 
+## 28. orchestrator の既定の対を opus / xhigh に改める — rules 行 2 本の値と裁定 id だけを替え、読み手と形は §19 のまま（契約表の行 v・§19 の値の改め・FR59・持ち主の裁定 2026-09-26T15:41Z〔逐語は台帳〕）
+
+やさしく言うと: 席を起こす行が `claude` の直後に運ぶ既定の model と effort は、rules 行 2 本（`seat.model.orchestrator` と `seat.effort.orchestrator`）が持つ。この 2 行は器の binary に埋め込まれ、host の全 project の席が同じ binary を使うので、値を替えれば host の全 project の orchestrator の席の既定が替わる。持ち主の裁定で値を fable / high から opus / xhigh に改める。読み手・行の id と kind・起動行の形は変えない。今走っている席は起こし直されるまで今の model のまま。
+
+- 出所: 持ち主の裁定 2026-09-26T15:41Z（orchestrator の既定を host の全 project で Opus / xhigh に・逐語は台帳）。
+- 現物（verified・main 01c21b6）: `rules/manifest.toml` の 2 行（`seat.model.orchestrator` = `"fable"`・`seat.effort.orchestrator` = `"high"`・裁定 id `user 2026-09-17T04:23Z`・`ruled_at` `2026-09-17`）。読み手は §19 のとおり `crates/scribe2/src/seat/role.rs` の `defaults_of` / `defaults`、起動行は `crates/scribe2/src/seat/cycle/launch.rs` の `with_defaults`（`claude` の直後に `--model <別名> --effort <語>`）。値は閉じた表で引く（model は `Model::parse` が別名 `opus` を `Opus` に・effort は `Effort` の `xhigh`）。値を pin する歯は e2e の 3 file: `crates/scribe2-boundary/tests/e2e/rules.rs` の `rules_manifest_carries_role_defaults`（値と裁定 id）、`crates/scribe2-boundary/tests/e2e/seat/launch.rs` の期待の対の const 1 か所・`--rules` の写しの helper 1 か所・起動行の字面を直に書く歯 1 本（`seat_launch_carries_the_model_alias_in_the_launch_line`）、`crates/scribe2-boundary/tests/e2e/seat/register.rs` の doctor の行（`default=<表示名>/<語>`）。lib の `role.rs` の歯は fixture の値で埋め込みを読まない（不変）。
+- 形（行 v・done と 1:1）:
+  1. **値と裁定 id**: `rules/manifest.toml` の 2 行の `value` を `"opus"` / `"xhigh"` に、`ruling` を `user 2026-09-26T15:41Z` に、`ruled_at` を `2026-09-26` に改める。id・kind・enabled・行の順は不変（rows / kinds の数も不変）。
+  2. **歯の期待**: 上の 3 file の期待の対を同じ値に改める（起動行は `--model opus --effort xhigh`・doctor は `default=Opus/xhigh`・rules の歯は値 2 つと裁定 id）。helper と const は 1 か所ずつで、歯の本体の他の語は変えない。
+  3. **触らない**: 読み手（`defaults_of` / `defaults`）・`with_defaults` の位置・`--model` を運ぶ席の起動の断り（`single_model`）・`runner.model` / `runner.effort`（便の model は別の行）・群の予約の役割の model の集合（`role_models` は同じ行を読むので Opus に替わる・窓の読みは §29 のまま）。
+- 却下: host の面に上書きの表を足す（`[[rule]]` は tracked の面にだけ置ける・§19）／起動行の `[[launch-arg]]` に `--model` を足す（既定の `--model` と 2 つになり `single_model` が断る）／席ごとに `/model` を打つ運用（起こし直しで戻る）。
+- 歯: 上の 4 本（rules.rs 1・seat/launch.rs 2 + const を読む `seat_defaults_` 接頭辞の 3 本・register.rs 1）が新しい値で GREEN・base では埋め込みが fable / high なので RED。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -485,4 +498,13 @@ write-set = ["crates/scribe2/src/hook/role_guard.rs", "crates/scribe2-boundary/t
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail role_guard_self_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail hook_role_guard_self_"]
 size = "S"
 done = "(1) is_self が NAME / …/NAME / NAME.bin / …/NAME-pipe.bin の 4 形を器の口と読み、NAMEctl / …/NAMEx / 別名 / 空 の 4 形を読まない（母集団 8 形を 1 表で） (2) orchestrator で登録した席（登録できる役割は 1 つ・便を起こす権能を持たない）の pre-tool-use で tmp 配下の NAME-pipe.bin による便を起こす口が scribe2 の同じ行と同じ断り（role.orchestrator）で止まり、NAMEctl の同じ行は権能の guard を通り、既存の role_guard_ と hook_role_ の歯が全部緑"
+[[contract]]
+id = "v"
+title = "orchestrator の既定の対を opus / xhigh に改める — rules 行 seat.model.orchestrator / seat.effort.orchestrator の値と裁定 id（user 2026-09-26T15:41Z）だけを替え、期待の対を pin する e2e 3 file を同じ値に（§28）"
+req = ["FR59"]
+section = "28"
+write-set = ["rules/manifest.toml", "crates/scribe2-boundary/tests/e2e/rules.rs", "crates/scribe2-boundary/tests/e2e/seat/launch.rs", "crates/scribe2-boundary/tests/e2e/seat/register.rs", "docs/design/seat-roles.md"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_manifest_carries_role_defaults", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_launch_carries_the_model_alias_in_the_launch_line", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_defaults_"]
+size = "S"
+done = "(1) rules/manifest.toml の seat.model.orchestrator が \"opus\"・seat.effort.orchestrator が \"xhigh\"・両行の ruling が user 2026-09-26T15:41Z・ruled_at が 2026-09-26 で、id・kind・enabled・行の順と rows / kinds の数は不変 (2) rules_manifest_carries_role_defaults が新しい値と裁定 id を pin し、seat/launch.rs の期待の対の const と --rules の写しの helper と起動行の字面を直に書く歯が --model opus --effort xhigh を、register.rs の doctor の行が default=Opus/xhigh を期待する (3) 読み手・with_defaults の位置・single_model・runner.model / runner.effort は不変"
 <!-- contracts:end -->
