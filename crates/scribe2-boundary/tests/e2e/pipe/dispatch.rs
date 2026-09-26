@@ -2218,30 +2218,6 @@ fn pipe_dispatch_regated_dead_ticket_keeps_three_records_and_resumes_once() {
     clean(&[&repo, &state]);
 }
 
-/// (§23 (c)) regate の後に PASS の gate を通し、main を進めて `pipe follow` で戻した便（札なし）は起こさない
-/// （最新の `Gated` より後ろに regate の記帳が無い）。
-#[test]
-fn pipe_dispatch_regated_then_gated_and_followed_run_is_left_alone() {
-    let (repo, state) = repo_with_state();
-    let id = regated_without_ticket(&repo, &state);
-    let lens = fake_lens(&state.join("regated-pass-lens"), &lens_verdict("PASS"));
-    let passed = gate_once(&repo, &state, &id, Some(&lens));
-    assert_eq!(passed.status.code(), Some(i32::from(RC_OK)), "regate の後の gate は PASS（{}）", told(&passed));
-    fs::write(repo.join("moved.txt"), "moved\n").unwrap_or_else(|err| panic!("別便の変更を書ける: {err}"));
-    git(&repo, &["add", "moved.txt"]);
-    git(&repo, &["commit", "-q", "-m", "other"]);
-    let followed = run_pipe(&[
-        "follow", "--run", &id, "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
-    ]);
-    assert_eq!(followed.status.code(), Some(i32::from(RC_OK)), "follow は rc 0（{}）", told(&followed));
-    let before = kind_count(&state, &id, vessel::fleet::EventKind::RunStage);
-    let out = waiting_turn(&repo, &state);
-    assert_eq!(stdout_of(&out).trim_end(), resumed_line(0), "gate を通った後の便は起こさない（{}）", told(&out));
-    assert_eq!(not_reached(&state, &id, "Landed"), 0, "着地しない（段の並び: {}）", stages_of(&state, &id));
-    assert_eq!(kind_count(&state, &id, vessel::fleet::EventKind::RunStage), before, "段を動かさない");
-    clean(&[&repo, &state]);
-}
-
 /// (§23 (d)) 札の所有者が生きている regate 済みの便と、札が在るのに読めない regate 済みの便は起こさず札も触らない
 /// （母集団 = 札の 2 値・(a)(b) と合わせて 4 値）。
 #[test]
@@ -2311,6 +2287,172 @@ fn pipe_dispatch_regated_none_without_a_ruling_over_k_turns() {
         );
         clean(&[&repo, &state]);
     }
+}
+
+// ───── 追随の後に driver が抜けた便の再開（行 (v)・設計 §25・`pipe_dispatch_revive_followed_` 接頭辞） ─────
+//
+// gate を通った便が追随（`rebase:`）か衝突の起こし直し（`rebase-conflict:`）で `Implemented` へ戻り、flag の無い
+// driver がそこで抜けると札の無いまま残り、§5 / §15 / §23 のどの枝にも当たらなかった（実測 2026-09-25: 2 時間 40 分）。
+// 列は「最新の gate の後ろに追随の記帳 ∧ その後ろに gate も着地も無い ∧ 札が無いか所有者が死んでいる」便を `--drive`
+// 付きの resume で起こす。起こし直しが `--drive` 付きだった証拠は `Landed` まで進むこと（flag の無い resume は 1 段で
+// 止まる）。段は既存の helper と同じ字面で数える（段の型の変種を名指さない）。
+
+/// main を 1 commit 進めて `pipe follow` を撃ち、便を `rebase:` の記帳で戻す（札は書かない）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn follow_run(repo: &Path, state: &Path, id: &str) {
+    fs::write(repo.join("moved.txt"), "moved\n").expect("別便の変更を書ける");
+    git(repo, &["add", "moved.txt"]);
+    git(repo, &["commit", "-q", "-m", "other"]);
+    let followed = run_pipe(&[
+        "follow", "--run", id, "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+    ]);
+    assert_eq!(followed.status.code(), Some(i32::from(RC_OK)), "follow は rc 0（{}）", told(&followed));
+    assert_eq!(run_stages(state, id, "Implemented", "rebase:"), 1, "前提: 追随の記帳（段の並び: {}）", stages_of(state, id));
+}
+
+/// 便の `RunStage` を event log へ直に 1 行書く（段と `detail` は呼び手が選ぶ・`None` は runner の完了と同じ
+/// `detail` の無い行・bead と ts は便の最後の行から写す）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn put_run_stage(state: &Path, id: &str, stage: &str, detail: Option<&str>) {
+    let path = state.join("fleet").join("events.jsonl");
+    let log = fs::read_to_string(&path).expect("event log を読める");
+    let last = log.lines().rev().find(|line| line.contains(&format!("\"run\":\"{id}\""))).expect("便の行が在る");
+    let field = |key: &str| {
+        let rest = last.split(&format!("\"{key}\":\"")).nth(1).expect("field が在る");
+        rest.split('"').next().unwrap_or_default().to_owned()
+    };
+    let detail = detail.map(|words| format!(",\"detail\":\"{words}\"")).unwrap_or_default();
+    let line = format!(
+        "{{\"schema\":1,\"ts\":\"{}\",\"kind\":\"RunStage\",\"run\":\"{id}\",\"bead\":\"{}\",\"host\":\"h\",\
+         \"actor\":\"machine\",\"stage\":\"{stage}\"{detail}}}\n",
+        field("ts"),
+        field("bead")
+    );
+    let mut file = fs::OpenOptions::new().append(true).open(&path).expect("event log を開ける");
+    std::io::Write::write_all(&mut file, line.as_bytes()).expect("段の行を書ける");
+}
+
+/// 判定 PASS の `Gated` の便（札なし）を衝突の起こし直しの記帳で `Implemented` へ戻し、runner が衝突を解いた
+/// 完了の記帳（`detail` の無い `Implemented`）を続ける（main は動かさない）。
+fn conflict_followed(repo: &Path, state: &Path) -> String {
+    let id = gated_without_ticket(repo, state, "PASS");
+    let head = git(repo, &["rev-parse", "HEAD"]);
+    put_run_stage(state, &id, "Implemented", Some(&format!("rebase-conflict:{head}..{head}")));
+    put_run_stage(state, &id, "Implemented", None);
+    id
+}
+
+/// 1 周が起こし直した便が `--drive` で着地まで進み、gate がもう 1 周撃たれたことを測る。
+fn revived_to_landed(state: &Path, id: &str, gated: usize) {
+    assert_eq!(stage_reached(state, id, "Landed"), 1, "`--drive` で着地まで（段の並び: {}）", stages_of(state, id));
+    assert_eq!(gate_runs(state, id), gated + 1, "gate をもう 1 周（段の並び: {}）", stages_of(state, id));
+}
+
+/// (§25 (a)) Gated PASS → 追随 `rebase:` で戻った札の無い便 A は、段を前へ進めた別の便 B の driver の終端の 1 周
+/// （`gated` の周）で起こされ（`resumed:1`）、`--drive` 付きなので着地まで進む。base は `resumed:0`（機能不在）。
+///
+/// B は A より先に `Gated` へ着ける（列の鍵は最初の `Gated` の ts＝B が先に着地できる）。A の追随の記帳は main を
+/// 動かさない字面（`rebase:<HEAD>..<HEAD>`）で手で置く。B の `--drive` の resume が `Gated` → `Landed` と進め、
+/// その終端の 1 周が A を起こす。
+#[test]
+fn pipe_dispatch_revive_followed_rebase_is_resumed_by_a_progressing_driver_turn() {
+    let (repo, state) = repo_with_state();
+    two_rows(&repo);
+    let driver = gated_bead(&repo, &state, "b", "s2-toy.2", "PASS");
+    let followed = gated_bead(&repo, &state, "a", "s2-toy.1", "PASS");
+    let head = git(&repo, &["rev-parse", "HEAD"]);
+    put_run_stage(&state, &followed, "Implemented", Some(&format!("rebase:{head}..{head}")));
+    let gated = gate_runs(&state, &followed);
+    let mut tools = toy_tools(&repo, &state);
+    tools.push("--drive".to_owned());
+    let out = with_tools(&["resume", "--run", &driver], &tools);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "B の resume は rc 0（{}）", told(&out));
+    assert_eq!(
+        stdout_of(&out).lines().last(),
+        Some(format!("{} drive=settled", resumed_line(1)).as_str()),
+        "B の終端の 1 周が A を 1 本起こす（{}）",
+        told(&out)
+    );
+    assert_eq!(stage_reached(&state, &driver, "Landed"), 1, "B は着地（段の並び: {}）", stages_of(&state, &driver));
+    revived_to_landed(&state, &followed, gated);
+    clean(&[&repo, &state]);
+}
+
+/// (§25 (b)) 衝突の起こし直し（`rebase-conflict:`）で戻った札の無い便も同じく起こされ、着地まで進む。
+#[test]
+fn pipe_dispatch_revive_followed_conflict_is_resumed_with_drive() {
+    let (repo, state) = repo_with_state();
+    let id = conflict_followed(&repo, &state);
+    let gated = gate_runs(&state, &id);
+    let out = waiting_turn(&repo, &state);
+    assert_eq!(stdout_of(&out).trim_end(), resumed_line(1), "衝突の後の便を 1 本起こす（{}）", told(&out));
+    revived_to_landed(&state, &id, gated);
+    clean(&[&repo, &state]);
+}
+
+/// (§25 (c)) 追随の後にもう 1 度 `Gated` を経た便は、その後ろの runner の完了の記帳で `Implemented` に在っても
+/// 起こさない（最新の `Gated` より後ろに追随の記帳が無い）。
+#[test]
+fn pipe_dispatch_revive_followed_then_gated_again_is_left_alone() {
+    let (repo, state) = repo_with_state();
+    let id = conflict_followed(&repo, &state);
+    put_run_stage(&state, &id, "Gated", Some("verdict:PASS"));
+    put_run_stage(&state, &id, "Implemented", None);
+    let before = kind_count(&state, &id, vessel::fleet::EventKind::RunStage);
+    let out = waiting_turn(&repo, &state);
+    assert_eq!(stdout_of(&out).trim_end(), resumed_line(0), "追随の後に gate を経た便は起こさない（{}）", told(&out));
+    assert_eq!(not_reached(&state, &id, "Landed"), 0, "着地しない（段の並び: {}）", stages_of(&state, &id));
+    assert_eq!(kind_count(&state, &id, vessel::fleet::EventKind::RunStage), before, "段を動かさない");
+    clean(&[&repo, &state]);
+}
+
+/// (§25 (c) 書き換え・旧 §23 (c)) regate の後に PASS の gate を通し、main を進めて `pipe follow` で戻した便（札なし）
+/// は、追随が最新の `Gated` より後ろなので起こされる（regate の後の追随でも起こす）。
+#[test]
+fn pipe_dispatch_revive_followed_after_a_regate_and_a_gate_is_resumed() {
+    let (repo, state) = repo_with_state();
+    let id = regated_without_ticket(&repo, &state);
+    let lens = fake_lens(&state.join("regated-pass-lens"), &lens_verdict("PASS"));
+    let passed = gate_once(&repo, &state, &id, Some(&lens));
+    assert_eq!(passed.status.code(), Some(i32::from(RC_OK)), "regate の後の gate は PASS（{}）", told(&passed));
+    follow_run(&repo, &state, &id);
+    let gated = gate_runs(&state, &id);
+    let out = waiting_turn(&repo, &state);
+    assert_eq!(stdout_of(&out).trim_end(), resumed_line(1), "regate の後の追随でも起こす（{}）", told(&out));
+    revived_to_landed(&state, &id, gated);
+    clean(&[&repo, &state]);
+}
+
+/// (§25 (d)) 追随の記帳の無い `Implemented` ∧ 札の無い便は起こさない（§5「札の無い便は触らない」のまま）。
+#[test]
+fn pipe_dispatch_revive_followed_none_without_a_follow_record() {
+    let (repo, state) = repo_with_state();
+    let contract = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &contract);
+    assert_eq!(run_stages(&state, &id, "Implemented", "rebase"), 0, "前提: 追随の記帳は無い");
+    let out = waiting_turn(&repo, &state);
+    assert_eq!(stdout_of(&out).trim_end(), resumed_line(0), "追随していない便は起こさない（{}）", told(&out));
+    assert_eq!(not_reached(&state, &id, "Gated"), 0, "gate を撃たない（段の並び: {}）", stages_of(&state, &id));
+    clean(&[&repo, &state]);
+}
+
+/// (§25 (e)) driver でない契機（手動の 1 周）でも、追随 `rebase:` で戻った札の無い便を起こし、着地まで進む。
+#[test]
+fn pipe_dispatch_revive_followed_rebase_is_resumed_by_a_manual_turn() {
+    let (repo, state) = repo_with_state();
+    let id = gated_without_ticket(&repo, &state, "PASS");
+    follow_run(&repo, &state, &id);
+    let gated = gate_runs(&state, &id);
+    let out = waiting_turn(&repo, &state);
+    assert_eq!(stdout_of(&out).trim_end(), resumed_line(1), "手動の 1 周が起こす（{}）", told(&out));
+    revived_to_landed(&state, &id, gated);
+    clean(&[&repo, &state]);
 }
 
 /// 起こした事実の印の行の字面（`DispatchMark` の kind と `launched` の値・器の字面を借りない）。

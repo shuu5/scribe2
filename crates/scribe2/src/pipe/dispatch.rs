@@ -15,7 +15,7 @@ use super::contract::Contract;
 use super::gate::{Limits, Verdict};
 use super::health;
 use super::land::verdict_of;
-use super::regate::regated_since_gate;
+use super::regate::{followed_since_gate, regated_since_gate};
 use super::table::Pointer;
 use super::{current, Ticket};
 use crate::cli_outcome::Outcome;
@@ -687,6 +687,7 @@ fn revivals(input: &Input<'_>, gated: bool) -> Vec<Revive> {
                 super::driver_is_dead(input.state_dir, id)
                     || (gated && passed_gate(input, id, run.stage))
                     || (gated && regated(input.state_dir, &events, id, run.stage))
+                    || (gated && followed(input.state_dir, &events, id, run.stage))
             }
             true => gated && self::gated(input.state_dir, &state, id),
         })
@@ -703,6 +704,17 @@ fn revivals(input: &Input<'_>, gated: bool) -> Vec<Revive> {
 fn regated(state_dir: &Path, events: &[Event], id: &str, stage: Stage) -> bool {
     stage == Stage::Implemented
         && regated_since_gate(events, id)
+        && matches!(super::driver_ticket(state_dir, id), Ticket::Absent | Ticket::Dead)
+}
+
+/// 追随で `Implemented` へ戻った後に driver が抜けた便か（段が `Implemented` ∧ 最新の `Gated` より後ろに追随の記帳
+/// ∧ その後ろに `Gated` / `Landed` が無い ∧ 札が無いか所有者が死んでいる・設計 §25・FR68 の 5 種目）。
+///
+/// 追随の記帳の読みは [`followed_since_gate`] の 1 本。札の読みと除外は [`regated`] と同じ（`Live` / `Unreadable`
+/// は触らない・追随の記帳を持たない `Implemented` と追随の後に `Gated` を経た便は候補にしない）。
+fn followed(state_dir: &Path, events: &[Event], id: &str, stage: Stage) -> bool {
+    stage == Stage::Implemented
+        && followed_since_gate(events, id)
         && matches!(super::driver_ticket(state_dir, id), Ticket::Absent | Ticket::Dead)
 }
 

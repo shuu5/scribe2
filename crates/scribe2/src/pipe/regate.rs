@@ -8,6 +8,7 @@
 //! event の種別も足さない。
 
 use super::cli::{live, refused};
+use super::follow::is_conflict;
 use super::{driver_ticket, Ticket};
 use crate::cli_outcome::{Outcome, RC_BROKEN};
 use crate::fleet::store::{self, Condition, LockPolicy, StoreError};
@@ -51,6 +52,19 @@ pub(in crate::pipe) fn regated_since_gate(events: &[Event], id: &str) -> bool {
     own.iter()
         .skip(since)
         .any(|event| event.detail.as_deref().is_some_and(|detail| detail.starts_with(PREFIX)))
+}
+
+/// 追随の記帳の `detail` の頭（`follow_step` と着地の追随が書く `rebase:<base>..<main>` の字面の写し）。
+const FOLLOWED: &str = "rebase:";
+
+/// 便の**最新の `Gated` の `RunStage` より後ろ**に追随の記帳（`rebase:` か衝突の起こし直し〔[`is_conflict`]〕）が在り、
+/// その後ろに `Gated` / `Landed` の `RunStage` が無いか（設計 dispatcher.md §25・形は [`regated_since_gate`] と同じ）。
+pub(in crate::pipe) fn followed_since_gate(events: &[Event], id: &str) -> bool {
+    let own: Vec<&Event> = events.iter().filter(|event| event.run == id && event.kind == EventKind::RunStage).collect();
+    let since = own.iter().rposition(|event| matches!(event.stage, Some(Stage::Gated | Stage::Landed)));
+    own.iter().skip(since.map_or(0, |at| at.saturating_add(1))).any(|event| {
+        event.detail.as_deref().is_some_and(|detail| detail.starts_with(FOLLOWED) || is_conflict(detail))
+    })
 }
 
 /// `pipe regate --run <id> --reason <逐語>`: 受付を通った周だけ `RunStage` を 1 件書き、`regate: run=<id>
@@ -104,7 +118,7 @@ pub(in crate::pipe) fn regate(state_dir: &Path, id: &str, reason: &str, policy: 
 #[cfg(test)]
 mod tests {
     use super::super::fixture::{append_all, event, gated_run, scratch};
-    use super::{admit, regate, regated_since_gate, Ticket, PREFIX};
+    use super::{admit, followed_since_gate, regate, regated_since_gate, Ticket, PREFIX};
     use crate::cli_outcome::{RC_OK, RC_REFUSED};
     use crate::fleet::store::{self, LockPolicy};
     use crate::fleet::{EventKind, Stage, ACTOR_HUMAN};
@@ -185,6 +199,38 @@ mod tests {
         assert!(!regated_since_gate(&[gated(), back(), gated()], "r1"), "Gated を挟めば開く");
         assert!(!regated_since_gate(&[gated(), other], "r1"), "他の便の記帳は数えない");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 便 `r1` の `RunStage` を 1 件作る（段と `detail` だけ呼び手が選ぶ）。
+    fn stage(stage: Stage, detail: &str) -> crate::fleet::Event {
+        event("r1", EventKind::RunStage, Some(stage), None, Some(detail))
+    }
+
+    /// (§25 形 1) 最新の `Gated` の後ろの追随（`rebase:` と衝突の起こし直しの 2 語）は数える。
+    #[test]
+    fn followed_since_gate_counts_a_follow_after_the_latest_gated() {
+        for detail in ["rebase:a..b", "rebase-conflict:a..b", "rebase-stale-rows:a..b"] {
+            let events = [stage(Stage::Gated, "verdict:FAIL"), stage(Stage::Gated, "verdict:PASS"), stage(Stage::Implemented, detail)];
+            assert!(followed_since_gate(&events, "r1"), "{detail}: 追随した");
+        }
+    }
+
+    /// (§25 形 3) 追随の記帳の無い `Implemented`（regate・同一変更の終端・他の便の追随）は数えない。
+    #[test]
+    fn followed_since_gate_ignores_runs_without_a_follow() {
+        let other = event("r2", EventKind::RunStage, Some(Stage::Implemented), None, Some("rebase:a..b"));
+        for tail in [stage(Stage::Implemented, "regate:x"), stage(Stage::Implemented, "rebase-empty:a..b"), other] {
+            assert!(!followed_since_gate(&[stage(Stage::Gated, "verdict:PASS"), tail.clone()], "r1"), "{:?}", tail.detail);
+        }
+    }
+
+    /// (§25 形 3) 追随の後ろに `Gated` / `Landed` を経た便は数えない（最新の `Gated` より前の追随は開かない）。
+    #[test]
+    fn followed_since_gate_closes_after_a_later_gated_or_landed() {
+        for later in [Stage::Gated, Stage::Landed] {
+            let events = [stage(Stage::Gated, "verdict:PASS"), stage(Stage::Implemented, "rebase:a..b"), stage(later, "x")];
+            assert!(!followed_since_gate(&events, "r1"), "{later:?} の後ろに追随は無い");
+        }
     }
 
     /// 形ごとの置き場を 1 つ作り、判定 FAIL の `Gated` の便 `r1` を置いてから `shape` で 1 条件だけ崩す。

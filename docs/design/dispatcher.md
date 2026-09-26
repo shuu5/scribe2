@@ -358,6 +358,11 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
 - 触らない: 列の鍵と `turn_skipping`（§36・Dead だけ外す規則はそのまま＝4 枝目が次の周で driver を戻せば鍵は着地で自然に離れる・memo の候補 2 は要らない〔C17 の 1 段目〕）・flag の無い `pipe resume`（手動の 1 段進めは席の道具として残す）・追随と衝突の起こし直しの記帳の字面。
 - 却下: `turn_skipping` を「Absent ∧ Implemented」へ広げる（4 枝目で足りる・列の判定の読みを増やす）／flag の無い resume を禁じる（席の道具）／追随の起こし直しの側で driver を閉じない（flag 無しの driver は 1 段の契約・設計どおり）。
 - 歯（`crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs` に `pipe_dispatch_revive_followed_` 接頭辞・§23 の regated の歯と同じ fixture〔置き場の event log を手で書く・偽 runner〕）: (a) Gated PASS → 追随 `rebase:` の Implemented ∧ 札 Absent → `gated` の周の 1 周で `resumed:1`・argv の末尾が `--drive`（base では `resumed:0` ＝ RED）(b) 追随が `rebase-conflict:` でも同じ (c) 追随の後にもう 1 度 Gated が在る → `resumed:0`（新しい fixture。既存の歯 `pipe_dispatch_regated_then_gated_and_followed_run_is_left_alone`〔§23 の regate → PASS の gate → follow〕は追随が最新の Gated より後ろなので 4 枝目で `resumed:1` に変わる＝名を「regate の後の追随でも起こす」に改めて `resumed:1` を測る歯に書き換える）(d) 追随の記帳の無い Implemented ∧ 札 Absent → `resumed:0`（不変）(e) `gated` でない周（手動の 1 周）でも `resumed:1`。lib は `crates/scribe2/src/pipe/regate.rs` の隣の pure な読み手に `followed_since_gate_` 接頭辞（追随あり / なし / 追随の後の Gated の 3 本）。
+- 実装の注（行 v・land 時の現物）:
+  - 読み手は `regate.rs` の `followed_since_gate`（`regated_since_gate` と同じ形・`detail` の頭は `rebase:` の literal と `follow.rs` の `is_conflict` の 1 本）。「最新の Gated より後ろ ∧ その後ろに Gated / Landed が無い」は、最新の Gated か Landed の `RunStage` より後ろに追随の記帳が在るかの 1 回の走査で読む（2 つの条件は同値）。
+  - (a) は `Gated` を先に持つ便 B の `--drive` の resume（`Gated` → `Landed`＝前進・`drive=settled`）の終端の 1 周で測る。B を先に `Gated` へ着けるのは列の鍵（§36 の最初の `Gated` の ts）を B に持たせるため。flag の無い driver の終端の 1 周は行を出さない（効果だけ）ので `resumed:1` の字面を測れない。
+  - (b)(c) の fixture は衝突の記帳の後ろに runner の完了の記帳（`detail` の無い `Implemented`）を置く。最新の `RunStage` が衝突の記帳のままだと resume は runner を起こし直す側（pipeline-conflict.md §3）へ分かれ、gate へ進まない。実測の便（衝突を runner が解いた後に抜けた便）もこの形である。
+  - `--drive` で起こした証拠は `Landed` まで進むこと（flag の無い resume は 1 段で止まる）。base（4 枝目なし）で (a)(b)(e) と書き換えた歯は `resumed:0` で赤、(c)(d) は緑。(c) は読み手の「最新の Gated より後ろ」を外す変異で赤になる。
 
 <!-- contracts:begin -->
 schema = 1
