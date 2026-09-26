@@ -117,6 +117,14 @@ pub fn str_row<'a>(manifest: &'a Manifest, id: &str) -> Result<&'a str, String> 
     }
 }
 
+/// 列の行の値。行が無い / 不発効 / 列でない周は 3 理由の `Err`（[`int_row`] と同じ極性・読み手は管理 tick の梯子）。
+pub fn list_row<'a>(manifest: &'a Manifest, id: &str) -> Result<&'a [String], String> {
+    match &enabled_row(manifest, id)?.value {
+        RuleValue::List(found) => Ok(found),
+        _ => Err(format!("{id} が列でない")),
+    }
+}
+
 /// 種類が要求する値の形。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ValueShape {
@@ -307,12 +315,11 @@ pub enum RuleKind {
     /// 管理 tick の timer の周期（秒・設計 seat-heartbeat.md §2 形 5・ADR-0058 §2）。unit を書く口が読み、tick の判定は
     /// 読むだけで使わない（行が読めない周は `no-rule`）。
     SeatTickIntervalS,
-    /// 管理 tick の初段の待ち・黙りの閾値・Busy の古さの 3 役（秒・[`crate::seat::tick`]）。
+    /// 管理 tick の黙りの閾値（settle の基準）・Busy の古さの 2 役（秒・[`crate::seat::tick`]）。
     SeatTickStaleS,
-    /// 合図の梯子の係数（段 n の待ち = [`Self::SeatTickStaleS`] × 係数 ^ n・飽和演算）。
-    SeatPointerBackoffFactor,
-    /// 合図の梯子の上限（秒）。段の候補の待ちがこの値を超える段は送らない（`stopped`）。
-    SeatPointerBackoffMaxS,
+    /// 合図の梯子の列（秒の文字列の列・非空・狭義に昇順・設計 seat-heartbeat.md §10 形 5・ADR-0068）。段 n の待ちは列の
+    /// n 番目で、列を越えた段は送らない（`stopped`）。数でない・昇順でない列は tick の読みが `no-rule` で断る。
+    SeatPointerLadderS,
     /// **クラスの語列表**（設計 contract-source.md §48 の 2・ADR-0061）。値は要素「クラスの名 + 語列」の列（読み手は
     /// [`crate::pipe::contract::class_element`] の 1 本）で、契約表の検査が verify 各行に禁じる語列と同じ照合で当て、導出が
     /// 行の `classes` に無い行を断る。id は [`crate::pipe::contract::CLASS_ROW`] の 1 行。
@@ -386,8 +393,7 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::HostGuardRmProtected,
     RuleKind::SeatTickIntervalS,
     RuleKind::SeatTickStaleS,
-    RuleKind::SeatPointerBackoffFactor,
-    RuleKind::SeatPointerBackoffMaxS,
+    RuleKind::SeatPointerLadderS,
     RuleKind::RunnerClassCommands,
 ];
 
@@ -453,9 +459,9 @@ impl RuleKind {
             Self::FlipMarksPerPr => "FlipMarksPerPr",
             Self::LedgerDeniedWrites => "LedgerDeniedWrites",
             Self::HostGuardDeniedCommands => "HostGuardDeniedCommands", Self::HostGuardRmProtected => "HostGuardRmProtected",
-            // 管理 tick の 4 kind も 2 行に畳み、対で読む model と effort の 2 組も 1 行ずつに畳む（同じ上限）。
+            // 管理 tick の 3 kind も 2 行に畳み、対で読む model と effort の 2 組も 1 行ずつに畳む（同じ上限）。
             Self::SeatTickIntervalS => "SeatTickIntervalS", Self::SeatTickStaleS => "SeatTickStaleS",
-            Self::SeatPointerBackoffFactor => "SeatPointerBackoffFactor", Self::SeatPointerBackoffMaxS => "SeatPointerBackoffMaxS",
+            Self::SeatPointerLadderS => "SeatPointerLadderS",
         }
     }
 
@@ -503,7 +509,7 @@ impl RuleKind {
             | Self::LandTrainMax
             | Self::PipeMaxLive
             | Self::FlipMarksPerPr
-            | Self::SeatTickIntervalS | Self::SeatTickStaleS | Self::SeatPointerBackoffFactor | Self::SeatPointerBackoffMaxS
+            | Self::SeatTickIntervalS | Self::SeatTickStaleS
             | Self::AccountSelection => ValueShape::Int,
             Self::DialogueSurface
             | Self::RunnerModel
@@ -519,7 +525,7 @@ impl RuleKind {
             | Self::RepoNonRustExecAllow
             | Self::RoleCapabilities
             | Self::FlipDocsOnlyFaces
-            | Self::LedgerDeniedWrites | Self::HostGuardDeniedCommands | Self::HostGuardRmProtected => ValueShape::List,
+            | Self::LedgerDeniedWrites | Self::HostGuardDeniedCommands | Self::HostGuardRmProtected | Self::SeatPointerLadderS => ValueShape::List,
         }
     }
 

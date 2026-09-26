@@ -1123,7 +1123,9 @@ const TICK_SEAT: &str = "tk_tk";
 /// 登録 row の口座 label。
 const TICK_ACCOUNT: &str = "acct-tick";
 /// `seat.tick_stale_s` の初期値（秒・値は rules の歯が埋め込み manifest で pin する）。
-const TICK_STALE: u64 = 2400;
+const TICK_STALE: u64 = 1800;
+/// `seat.pointer_ladder_s` の初期値（秒の列・設計 seat-heartbeat.md §10 形 5・値は rules の歯が埋め込み manifest で pin する）。
+const TICK_LADDER: [u64; 6] = [1800, 3600, 10_800, 21_600, 43_200, 86_400];
 /// 偽 tmux の pane の file。
 const TICK_PANE: &str = "pane";
 /// 偽 tmux の呼出の記録。
@@ -1279,17 +1281,54 @@ fn tick_injections(place: &TickPlace) -> Vec<String> {
     fs::read_to_string(tick_file(&place.state, TICK_SEAT)).unwrap_or_default().lines().map(str::to_owned).collect()
 }
 
-/// 段 n の待ち（秒・初期値の梯子 2400 × 2 ^ n）。
-fn tick_wait(step: u32) -> u64 {
-    TICK_STALE.saturating_mul(2_u64.saturating_pow(step))
+/// 段 n の待ち（秒・初期値の梯子の列の n 番目・列を越えた段は `None`＝打ち切り）。
+fn tick_wait(step: u32) -> Option<u64> {
+    usize::try_from(step).ok().and_then(|at| TICK_LADDER.get(at)).copied()
 }
 
-/// 段 `step` の合図の文面（契約の字面・設計 §2 形 3）。
+/// 段 `step` の合図の文面（契約の字面・設計 §2 形 3・§10 形 7＝次の待ちは列から引き、最後の段は次が無い）。
 fn tick_signal(step: u32) -> String {
-    format!(
-        "{NAME} tick: heartbeat step={step} — 台帳の現在地（bd --readonly ready --limit 0）から続きを進める（変化が無ければ次の合図は {} 秒後・上限で打ち切り）",
-        tick_wait(step.saturating_add(1))
-    )
+    let next = tick_wait(step.saturating_add(1))
+        .map_or_else(|| "次の合図は無い・打ち切り".to_owned(), |secs| format!("次の合図は {secs} 秒後"));
+    format!("{NAME} tick: heartbeat step={step} — 台帳の現在地（bd --readonly ready --limit 0）から続きを進める（変化が無ければ{next}）")
+}
+
+/// 管理 tick の行 3 本（id・kind・TOML の値の字面・設計 §10 形 5 / 6）。
+fn tick_rule_rows() -> Vec<(&'static str, &'static str, String)> {
+    let ladder: Vec<String> = TICK_LADDER.iter().map(|secs| format!("\"{secs}\"")).collect();
+    vec![
+        ("seat.tick_interval_s", "SeatTickIntervalS", "15".to_owned()),
+        ("seat.tick_stale_s", "SeatTickStaleS", TICK_STALE.to_string()),
+        ("seat.pointer_ladder_s", "SeatPointerLadderS", format!("[{}]", ladder.join(", "))),
+    ]
+}
+
+/// rules の写しの本文（`schema = 1` の後に `[[rule]]` を行の順に並べる）。
+fn tick_rules_body(rows: &[(&str, &str, String)]) -> String {
+    rows.iter().fold("schema = 1\n".to_owned(), |text, (id, kind, value)| {
+        format!("{text}\n[[rule]]\nid = \"{id}\"\nkind = \"{kind}\"\nvalue = {value}\nenabled = true\nruling = \"r\"\nruled_at = \"d\"\n")
+    })
+}
+
+/// tick の判定が読む行の全部（行 3 本・送達の窓・群の閾値）の写し。`skip` の id の行を落とし、`ladder` が在れば梯子の列の
+/// 値をその字面に差し替える。
+fn tick_rules_text(skip: &str, ladder: Option<&str>) -> String {
+    let mut rows = tick_rule_rows();
+    rows.extend(
+        [
+            ("pipe.stop_grace_ms", "StopGraceMs", 2000),
+            ("fleet.usage_fresh_s", "UsageFreshS", 300),
+            ("fleet.group_pressure_5h_pct", "GroupPressure5hPct", 85),
+            ("fleet.group_pressure_7d_pct", "GroupPressure7dPct", 95),
+            ("fleet.group_pressure_model_pct", "GroupPressureModelPct", 95),
+        ]
+        .map(|(id, kind, value)| (id, kind, value.to_string())),
+    );
+    rows.retain(|(id, _, _)| *id != skip);
+    for row in rows.iter_mut().filter(|(id, _, _)| *id == "seat.pointer_ladder_s") {
+        row.2 = ladder.map_or_else(|| row.2.clone(), str::to_owned);
+    }
+    tick_rules_body(&rows)
 }
 
 /// 合図の text を送った key（`-l` の呼出の行）。
@@ -1384,55 +1423,71 @@ fn seat_tick_stamp_recent_sends_nothing() {
     assert!(tick_keys(&place).is_empty(), "0 key");
 }
 
-/// (d) 梯子: 送った直後は `settling`・`sent_at` より後の Stop を足すと基準が入り無変化の床は `wait:<s> step=1`・`sent_at` を待ちの
-/// 分だけ過去に書くと段 1〜5 の合図が出て、段 6 は `stopped` で送らない（合図 6 本で打ち切り）。
+/// 段 `step` を列の待ち `wait` で登る（`--rules` は `rules`）: 前の段の `sent_at` が待ちの 5 秒手前の周は床の内（`wait`）で
+/// 送らず、待ちを 5 秒過ぎた周に段 `step` の合図を送り、記録は段 `step`・基準 null になる。
+fn tick_climb(place: &TickPlace, rules: &str, step: u32, wait: u64) {
+    let run = || stdout_of(&tick_run(place, &["--rules", rules]));
+    let early = unix_now() - wait + 5;
+    tick_ladder_put(place, early, step - 1, None);
+    tick_stamps(place, &[("busy", "UserPromptSubmit", early + 1), ("idle", "Stop", early + 2)]);
+    let line = run();
+    assert!(line.contains(" reason=wait pointer=wait:") && line.contains(&format!(" step={step} ")), "段 {step} の床の内: {line}");
+    let sent = unix_now() - wait - 5;
+    tick_ladder_put(place, sent, step - 1, None);
+    tick_stamps(place, &[("busy", "UserPromptSubmit", sent + 1), ("idle", "Stop", sent + 2)]);
+    assert_eq!(run(), tick_inject(step), "段 {step}（待ち {wait} 秒）");
+    assert_eq!(tick_ladder(place).map(|(_, found, digest)| (found, digest)), Some((u64::from(step), None)), "段 {step} の記録");
+}
+
+/// (d) 梯子（設計 §10 形 5・`--rules` は梯子の列の写し）: 送った直後は `settling`・`sent_at` より後の Stop を足すと基準が入り
+/// 無変化の床は `wait:<s> step=1`・`sent_at` を列の待ちの分だけ過去に書くと段 1〜5 の合図が出て、7 段目（段 6）は `stopped` で
+/// 送らない（合図は列の長さの 6 本で打ち切り）。段 n の待ちは列の n 番目で、その 5 秒手前の周は床の内（`wait`）。
 #[test]
 fn seat_tick_ladder_climbs_six_signals_then_stops() {
     let place = tick_place(true);
+    let rules = fixture(&place.dir, "ladder.toml", &tick_rules_text("", None));
+    let run = || tick_run(&place, &["--rules", &rules]);
     tick_silent_for(&place, TICK_STALE + 60);
-    assert_eq!(stdout_of(&tick_run(&place, &[])), tick_inject(0), "段 0");
-    tick_assert_quiet(&place, &tick_noop("settling", "settling", "0"));
+    assert_eq!(stdout_of(&run()), tick_inject(0), "段 0");
+    assert_eq!(stdout_of(&run()), tick_noop("settling", "settling", "0"), "送った直後");
     let sent = unix_now() - 3000;
     tick_ladder_put(&place, sent, 0, None);
     tick_stamps(&place, &[("busy", "UserPromptSubmit", sent + 1), ("idle", "Stop", sent + 2)]);
-    let out = tick_run(&place, &[]);
-    let line = stdout_of(&out);
+    let line = stdout_of(&run());
     assert!(line.starts_with(&format!("decision=noop target={TICK_SEAT} reason=wait pointer=wait:")), "{line}");
     assert!(line.ends_with(&format!(" step=1 consumed=-{TICK_NO_MOVE}\n")), "{line}");
     let left = tick_token(&line, "pointer").and_then(|found| found.strip_prefix("wait:").and_then(|secs| secs.parse::<u64>().ok()));
-    assert!(left.is_some_and(|secs| (1795..=1800).contains(&secs)), "残り秒 = 80 分 − 50 分: {line}");
+    assert!(left.is_some_and(|secs| (595..=600).contains(&secs)), "残り秒 = 列の 2 番目 3600 − 3000: {line}");
     assert_eq!(tick_ladder(&place), Some((sent, 0, Some(sent + 2))), "基準は sent_at より後の Stop の ts");
     for step in 1..=5 {
-        let sent = unix_now() - tick_wait(step) - 5;
-        tick_ladder_put(&place, sent, step - 1, None);
-        tick_stamps(&place, &[("busy", "UserPromptSubmit", sent + 1), ("idle", "Stop", sent + 2)]);
-        assert_eq!(stdout_of(&tick_run(&place, &[])), tick_inject(step), "段 {step}");
-        assert_eq!(tick_ladder(&place).map(|(_, found, digest)| (found, digest)), Some((u64::from(step), None)), "段 {step} の記録");
+        tick_climb(&place, &rules, step, tick_wait(step).expect("段 1〜5 は列の内"));
     }
     let sent = unix_now() - 200_000;
     tick_ladder_put(&place, sent, 5, None);
     tick_stamps(&place, &[("busy", "UserPromptSubmit", sent + 1), ("idle", "Stop", sent + 2)]);
     let keys = tick_keys(&place).len();
-    assert_eq!(stdout_of(&tick_run(&place, &[])), tick_noop("stopped", "stopped", "6"), "段 6 は打ち切り");
+    assert_eq!(stdout_of(&run()), tick_noop("stopped", "stopped", "6"), "7 段目（段 6）は打ち切り");
     assert_eq!(tick_keys(&place).len(), keys, "段 6 は 0 key");
     assert_eq!(tick_ladder(&place), Some((sent, 5, Some(sent + 2))), "記録は段 5 のまま（基準だけが入る）");
-    tick_assert_quiet(&place, &tick_noop("stopped", "stopped", "6"));
     let texts: Vec<String> = tick_keys(&place).into_iter().filter(|key| key.contains(" -l ")).collect();
-    assert_eq!(texts, (0..=5).map(tick_text_key).collect::<Vec<_>>(), "合図は段 0〜5 の 6 本");
+    assert_eq!(texts, (0..=5).map(tick_text_key).collect::<Vec<_>>(), "合図は段 0〜5 の 6 本（列の長さ・段 5 は次が無い）");
     assert_eq!(tick_injections(&place).len(), 6, "注入の記録 6 行");
 }
 
-/// (e) 基準の後に最終行の ts が動くと段 0 に戻り、40 分黙った周に段 0 で送る（打ち切りの後も同じ）。
+/// (e) 基準の後に最終行の ts が動くと段 0 に戻り、列の先頭の 1800 秒（30 分）黙った周に段 0 で送る（打ち切りの後も同じ）。
+/// 1800 秒の手前の周は `stamp-recent` で送らない（埋め込み manifest の `seat.tick_stale_s` = 1800・列の先頭 = 1800）。
 #[test]
-fn seat_tick_change_returns_to_step_zero_after_forty_silent_minutes() {
+fn seat_tick_change_returns_to_step_zero_after_thirty_silent_minutes() {
     let place = tick_place(true);
     let now = unix_now();
     let base = now - 20_000;
     tick_ladder_put(&place, base - 10, 3, Some(base));
     tick_stamps(&place, &[("idle", "Stop", base), ("busy", "UserPromptSubmit", now - 120), ("idle", "Stop", now - 100)]);
     tick_assert_quiet(&place, &tick_noop("stamp-recent", "wait:0", "0"));
-    tick_stamps(&place, &[("idle", "Stop", base), ("idle", "Stop", now - TICK_STALE - 60)]);
-    assert_eq!(stdout_of(&tick_run(&place, &[])), tick_inject(0), "変化の後 40 分黙った周は段 0");
+    tick_stamps(&place, &[("idle", "Stop", base), ("idle", "Stop", now - 1800 + 30)]);
+    tick_assert_quiet(&place, &tick_noop("stamp-recent", "wait:0", "0"));
+    tick_stamps(&place, &[("idle", "Stop", base), ("idle", "Stop", now - 1800 - 60)]);
+    assert_eq!(stdout_of(&tick_run(&place, &[])), tick_inject(0), "変化の後 1800 秒黙った周は段 0");
     let base = now - 200_000;
     tick_ladder_put(&place, base - 10, 5, Some(base));
     tick_stamps(&place, &[("idle", "Stop", base)]);
@@ -1445,7 +1500,7 @@ fn seat_tick_change_returns_to_step_zero_after_forty_silent_minutes() {
     assert_eq!(texts, [tick_text_key(0), tick_text_key(0)], "送ったのは段 0 の 2 本だけ");
 }
 
-/// (f) 応えない席: `sent_at` から 40 分の手前は `settling`・過ぎても Stop が無い周はその周の digest で基準が入り、段の候補は段 + 1。
+/// (f) 応えない席: `sent_at` から `seat.tick_stale_s`（30 分）の手前は `settling`・過ぎても Stop が無い周はその周の digest で基準が入り、段の候補は段 + 1。
 #[test]
 fn seat_tick_unanswered_seat_settles_on_the_stale_digest_and_climbs() {
     let place = tick_place(true);
@@ -1459,7 +1514,7 @@ fn seat_tick_unanswered_seat_settles_on_the_stale_digest_and_climbs() {
     assert!(line.starts_with(&format!("decision=noop target={TICK_SEAT} reason=wait pointer=wait:")), "{line}");
     assert!(line.ends_with(&format!(" step=1 consumed=-{TICK_NO_MOVE}\n")), "段 + 1: {line}");
     let left = tick_token(&line, "pointer").and_then(|found| found.strip_prefix("wait:").and_then(|secs| secs.parse::<u64>().ok()));
-    assert!(left.is_some_and(|secs| (2295..=2300).contains(&secs)), "残り秒 = 80 分 − 2500 秒: {line}");
+    assert!(left.is_some_and(|secs| (1095..=1100).contains(&secs)), "残り秒 = 列の 2 番目 3600 − 2500 秒: {line}");
     assert_eq!(tick_ladder(&place), Some((now - 2500, 0, Some(last))), "基準はその周の digest");
     assert!(tick_keys(&place).is_empty(), "0 key");
 }
@@ -1529,38 +1584,36 @@ fn seat_tick_record_faults_send_nothing_and_a_failed_send_keeps_the_record() {
     assert!(tick_injections(&place).is_empty(), "送達していない注入は tick.jsonl に書かない");
 }
 
-/// (j) `--rules` の写しが行 4 本のどれかを欠く周は `decision=error reason=no-rule` rc 1・0 key（全部を持つ写しは判定へ進む）。
+/// (j) `--rules` の写しが行 3 本のどれかを欠く周・梯子の列の要素が数でない周・列が狭義に昇順でない周は tick の読みが
+/// `decision=error reason=no-rule` rc 1・0 key（stderr は空・全部を持つ写しは判定へ進む）。空の列 `[]` の写しは面の読みが
+/// 断り、同じ `no-rule` rc 1・0 key で stderr が `rules: ` で始まり「配列が空である」を含む（経路の違いを stderr で弁別する）。
 /// manifest が壊れている周も `no-rule`（defect は stderr）・event log が読めない周は `store`。
 #[test]
 fn seat_tick_missing_rule_rows_and_unreadable_store_are_errors() {
     let place = tick_place(true);
     tick_silent_for(&place, 100);
-    let rows = [
-        ("seat.tick_interval_s", "SeatTickIntervalS", 60),
-        ("seat.tick_stale_s", "SeatTickStaleS", TICK_STALE),
-        ("seat.pointer_backoff_factor", "SeatPointerBackoffFactor", 2),
-        ("seat.pointer_backoff_max_s", "SeatPointerBackoffMaxS", 86_400),
-        ("pipe.stop_grace_ms", "StopGraceMs", 2000),
-        ("fleet.usage_fresh_s", "UsageFreshS", 300),
-        ("fleet.group_pressure_5h_pct", "GroupPressure5hPct", 85),
-        ("fleet.group_pressure_7d_pct", "GroupPressure7dPct", 95),
-        ("fleet.group_pressure_model_pct", "GroupPressureModelPct", 95),
-    ];
-    let body = |skip: &str| {
-        rows.iter().filter(|(id, _, _)| *id != skip).fold("schema = 1\n".to_owned(), |text, (id, kind, value)| {
-            format!("{text}\n[[rule]]\nid = \"{id}\"\nkind = \"{kind}\"\nvalue = {value}\nenabled = true\nruling = \"r\"\nruled_at = \"d\"\n")
-        })
-    };
-    let full = fixture(&place.dir, "full.toml", &body(""));
+    let full = fixture(&place.dir, "full.toml", &tick_rules_text("", None));
     let out = tick_run(&place, &["--rules", &full]);
     assert_eq!((rc_of(&out), stdout_of(&out)), (i32::from(RC_OK), tick_noop("stamp-recent", "wait:0", "0")), "全部を持つ写し");
     let error =
         |reason: &str| format!("decision=error target={TICK_SEAT} reason={reason} pointer=- step=- consumed=-{TICK_NO_MOVE}\n");
-    for (id, _, _) in rows.iter().take(4) {
-        let rules = fixture(&place.dir, "missing.toml", &body(id));
+    let refused_by_tick = |label: &str, body: &str| {
+        let rules = fixture(&place.dir, "refused.toml", body);
         let out = tick_run(&place, &["--rules", &rules]);
-        assert_eq!((rc_of(&out), stdout_of(&out)), (i32::from(RC_REFUSED), error("no-rule")), "{id} を欠く写し");
+        assert_eq!((rc_of(&out), stdout_of(&out)), (i32::from(RC_REFUSED), error("no-rule")), "{label}");
+        assert_eq!(stderr_of(&out), "", "{label}: tick の読みの断り（面は通る）");
+    };
+    for (id, _, _) in tick_rule_rows() {
+        refused_by_tick(&format!("{id} を欠く写し"), &tick_rules_text(id, None));
     }
+    for ladder in [r#"["1800", "x"]"#, r#"["1800", "-3600"]"#, r#"["3600", "1800"]"#, r#"["1800", "1800"]"#] {
+        refused_by_tick(&format!("列 {ladder}"), &tick_rules_text("", Some(ladder)));
+    }
+    let empty = fixture(&place.dir, "empty.toml", &tick_rules_text("", Some("[]")));
+    let out = tick_run(&place, &["--rules", &empty]);
+    assert_eq!((rc_of(&out), stdout_of(&out)), (i32::from(RC_REFUSED), error("no-rule")), "空の列");
+    let stderr = stderr_of(&out);
+    assert!(stderr.starts_with("rules: ") && stderr.contains("配列が空である"), "空の列は面の読みが断る: {stderr}");
     let broken = fixture(&place.dir, "broken.toml", "こわれ\n");
     let out = tick_run(&place, &["--rules", &broken]);
     assert_eq!((rc_of(&out), stdout_of(&out)), (i32::from(RC_REFUSED), error("no-rule")), "壊れた manifest");
@@ -1651,11 +1704,8 @@ fn move_place(root: &Path, name: &str, anchor: &str) -> MovePlace {
     ]);
     assert_eq!(rc_of(&out), i32::from(RC_OK), "登録 row を積める: {}", stderr_of(&out));
     fs::write(tools.join(TICK_PANE), TICK_CLEAR_PANE).ok();
-    let rows = [
-        ("seat.tick_interval_s", "SeatTickIntervalS", 60),
-        ("seat.tick_stale_s", "SeatTickStaleS", TICK_STALE),
-        ("seat.pointer_backoff_factor", "SeatPointerBackoffFactor", 2),
-        ("seat.pointer_backoff_max_s", "SeatPointerBackoffMaxS", 86_400),
+    let mut rows = tick_rule_rows();
+    let others = [
         ("pipe.stop_grace_ms", "StopGraceMs", 300),
         ("fleet.usage_fresh_s", "UsageFreshS", 300),
         ("fleet.group_pressure_5h_pct", "GroupPressure5hPct", 85),
@@ -1666,10 +1716,8 @@ fn move_place(root: &Path, name: &str, anchor: &str) -> MovePlace {
         ("fleet.lock_retry_ms", "LockRetryMs", 5000),
         ("fleet.lock_stale_ms", "LockStaleMs", 30_000),
     ];
-    let body = rows.iter().fold("schema = 1\n".to_owned(), |text, (id, kind, value)| {
-        format!("{text}\n[[rule]]\nid = \"{id}\"\nkind = \"{kind}\"\nvalue = {value}\nenabled = true\nruling = \"r\"\nruled_at = \"d\"\n")
-    });
-    let rules = fixture(&tools, "rules.toml", &body);
+    rows.extend(others.map(|(id, kind, value)| (id, kind, value.to_string())));
+    let rules = fixture(&tools, "rules.toml", &tick_rules_body(&rows));
     let path = move_shims(&tools);
     MovePlace { state, tools, path, rules }
 }
@@ -2580,7 +2628,7 @@ fn seat_unit_install_writes_the_derived_pair_and_enables_the_timer() {
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     assert!(stdout_of(&out).starts_with(&format!("seat tick install: installed timer={timer_name} ")), "{}", stdout_of(&out));
     assert_eq!(unit_listing(&place.units), [service_name.clone(), timer_name.clone()], "2 file だけ（一時 file を残さない）");
-    assert_eq!(unit_bodies(&place), unit_expected(&place, None, 60), "導出の bytes（周期は埋め込みの seat.tick_interval_s = 60）");
+    assert_eq!(unit_bodies(&place), unit_expected(&place, None, 15), "導出の bytes（周期は埋め込みの seat.tick_interval_s = 15）");
     for body in unit_bodies(&place) {
         assert!(body.starts_with(&format!("# {NAME} {UNIT_MARK}\n")), "先頭行は器の印: {body}");
         for banned in ["Environment", "WorkingDirectory", "%h"] {
@@ -2624,7 +2672,7 @@ fn seat_unit_install_is_unchanged_on_same_bytes_and_refuses_a_different_file() {
     assert!(stdout_of(&out).starts_with(&format!("seat tick install: unchanged timer={timer_name} ")), "{}", stdout_of(&out));
     assert_eq!(mtimes(), before, "file は書き直さない");
     assert_eq!(unit_calls(&place).get(2..), Some(&[format!("--user enable --now {timer_name}")][..]), "enable だけ 1 回");
-    let changed = unit_expected(&place, None, 60)[0].replacen("oneshot", "oneshoT", 1);
+    let changed = unit_expected(&place, None, 15)[0].replacen("oneshot", "oneshoT", 1);
     fs::write(place.unit(&service_name), &changed).ok();
     unit_assert_refused(&place, "install", &["--binary", &place.binary], &format!("reason=unit-exists unit={service_name}"));
     assert_eq!(fs::read_to_string(place.unit(&service_name)).unwrap_or_default(), changed, "1 byte 違いの file は不変");

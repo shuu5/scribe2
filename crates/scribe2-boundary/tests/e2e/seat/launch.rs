@@ -1164,7 +1164,7 @@ impl LaunchTick {
         self.names().map(|name| fs::read_to_string(self.units.join(name)).unwrap_or_default())
     }
 
-    /// 導出の 2 file の本文（契約の字面・`--rules` 無し・周期は埋め込みの `seat.tick_interval_s` = 60）。
+    /// 導出の 2 file の本文（契約の字面・`--rules` 無し・周期は埋め込みの `seat.tick_interval_s` = 15）。
     fn expected(&self) -> [String; 2] {
         let mark = format!("# {NAME} tick-install schema=1");
         [
@@ -1174,7 +1174,7 @@ impl LaunchTick {
                 self.place.state.display()
             ),
             format!(
-                "{mark}\n[Unit]\nDescription={NAME} seat tick timer {GROUP_TARGET}\n\n[Timer]\nOnBootSec=60s\nOnUnitActiveSec=60s\nPersistent=false\n\n[Install]\nWantedBy=timers.target\n"
+                "{mark}\n[Unit]\nDescription={NAME} seat tick timer {GROUP_TARGET}\n\n[Timer]\nOnBootSec=15s\nOnUnitActiveSec=15s\nPersistent=false\n\n[Install]\nWantedBy=timers.target\n"
             ),
         ]
     }

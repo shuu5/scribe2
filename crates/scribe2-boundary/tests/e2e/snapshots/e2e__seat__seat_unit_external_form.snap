@@ -16,8 +16,8 @@ ExecStart=[tmp]/opt/scribe2 seat tick --state-dir [tmp]/state --target tk:tk
 Description=scribe2 seat tick timer tk:tk
 
 [Timer]
-OnBootSec=60s
-OnUnitActiveSec=60s
+OnBootSec=15s
+OnUnitActiveSec=15s
 Persistent=false
 
 [Install]

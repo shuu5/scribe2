@@ -5,9 +5,8 @@
 //! 3 値に畳む（bool で持たない・C11）。
 //!
 //! 無変化の席には合図の間隔を段ごとに伸ばす（梯子・[`Ladder`]）: 変化の digest は打刻の最終行の `ts` の 1 値、段 n の待ちは
-//! `seat.tick_stale_s` × `seat.pointer_backoff_factor` ^ n（[`Pace::wait_of`]）、待ちが `seat.pointer_backoff_max_s` を超える段は
-//! 送らない。記録は席の置き場の 1 file（[`LADDER_FILE`]・書き手はここだけ・一時 file → rename）で、注入の記録
-//! （`tick.jsonl` の `InjectionRecord`）とは別に持つ。
+//! `seat.pointer_ladder_s` の n 番目（[`Pace::wait_of`]・設計 §10 形 5）、列を越えた段は送らない。記録は席の置き場の 1 file
+//! （[`LADDER_FILE`]・書き手はここだけ・一時 file → rename）で、注入の記録（`tick.jsonl` の `InjectionRecord`）とは別に持つ。
 //!
 //! 注入は既存の 1 入口（[`deliver_within`]）を 1 回撃つだけで、`tick.jsonl` の 1 行もその経路が書く。口座は計測済みの記録
 //! （[`fresh_rows`]）を読むだけで**測らない**（FR38・子 process を起こさない）。env・home・自分の実行 file の場所は読まない
@@ -47,7 +46,7 @@ use crate::fleet::State;
 use crate::hook::group::{self, current_of, exit_dialog, group_of, pressed, Caps, Judgement, Lock, Refusal, EXIT};
 use crate::name::NAME;
 use crate::rules::manifest::{AccountGroup, Manifest};
-use crate::rules::{int_row, RuleError};
+use crate::rules::{int_row, list_row, RuleError};
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -55,12 +54,10 @@ use std::time::Duration;
 
 /// timer の周期の rules 行（tick の判定は読むだけ・unit を書く口が使う）。
 pub const ROW_INTERVAL: &str = "seat.tick_interval_s";
-/// 初段の待ち・黙りの閾値・Busy の古さの 3 役の rules 行（秒）。
+/// 黙りの閾値・Busy の古さの 2 役の rules 行（秒）。
 pub const ROW_STALE: &str = "seat.tick_stale_s";
-/// 梯子の係数の rules 行。
-pub const ROW_FACTOR: &str = "seat.pointer_backoff_factor";
-/// 梯子の上限の rules 行（秒）。
-pub const ROW_MAX: &str = "seat.pointer_backoff_max_s";
+/// 梯子の列の rules 行（秒の文字列の列・設計 §10 形 5）。
+pub const ROW_LADDER: &str = "seat.pointer_ladder_s";
 /// 送達の窓の rules 行（dispatcher の通知と同じ行・行を増やさない）。
 const ROW_WINDOW: &str = "pipe.stop_grace_ms";
 
@@ -96,7 +93,7 @@ pub enum NoopReason {
     RecordUnreadable,
     /// 最終行が `seat.tick_stale_s` 未満前（席は最近まで動いていた）。
     StampRecent,
-    /// 段の候補の待ちが上限を超える（打ち切り）。
+    /// 段の候補が梯子の列を越える（打ち切り）。
     Stopped,
     /// 記録の `sent_at` から段の候補の待ちが経っていない（床）。
     Wait,
@@ -193,7 +190,7 @@ impl Move {
 pub enum TickError {
     /// 置き場を解けない。
     StateDir,
-    /// 行 4 本・`pipe.stop_grace_ms`・群の閾値の行のどれかが読めない（不在・不発効・整数でない・manifest が壊れている）。
+    /// 行 3 本・`pipe.stop_grace_ms`・群の閾値の行のどれかが読めない（不在・不発効・形違い・列が数でない / 昇順でない・壊れている）。
     NoRule,
     /// fleet の replay が読めない。
     Store,
@@ -252,11 +249,11 @@ impl TickDecision {
 pub enum Pointer {
     /// 送った合図の基準が未確定。
     Settling,
-    /// 床を過ぎていて上限の内（送った周は `sent`・送らなかった周は残り 0 秒の `wait:0`）。
+    /// 床を過ぎていて列の内（送った周は `sent`・送らなかった周は残り 0 秒の `wait:0`）。
     Open,
     /// 床の内（残り秒）。
     Wait(u64),
-    /// 段の候補の待ちが上限を超える。
+    /// 段の候補が梯子の列を越える。
     Stopped,
 }
 
@@ -273,21 +270,29 @@ impl Pointer {
     }
 }
 
-/// 行 3 本の値（梯子の形）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// 行 2 本の値（黙りの閾値と梯子の列）。
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pace {
-    /// `seat.tick_stale_s`。
+    /// `seat.tick_stale_s`（黙りの閾値＝settle の基準・Busy の古さ）。
     pub stale_s: u64,
-    /// `seat.pointer_backoff_factor`。
-    pub factor: u64,
-    /// `seat.pointer_backoff_max_s`。
-    pub max_s: u64,
+    /// `seat.pointer_ladder_s`（段 n の待ちは n 番目・非空・狭義に昇順）。
+    pub ladder: Vec<u64>,
 }
 
 impl Pace {
-    /// 段 `step` の待ち（秒・`stale_s` × `factor` ^ `step`・飽和演算）。
-    pub fn wait_of(self, step: u32) -> u64 {
-        self.stale_s.saturating_mul(self.factor.saturating_pow(step))
+    /// 列の字面を読む。要素が数でない・狭義に昇順でない・空の列は `Err`（既定に倒さない・C1）。
+    pub fn of(stale_s: u64, items: &[String]) -> Result<Self, String> {
+        let ladder = items.iter().map(|item| item.parse::<u64>().map_err(|_| format!("{ROW_LADDER} の要素 {item:?} が数でない")));
+        let ladder = ladder.collect::<Result<Vec<u64>, String>>()?;
+        if ladder.is_empty() || ladder.iter().zip(ladder.iter().skip(1)).any(|(before, after)| before >= after) {
+            return Err(format!("{ROW_LADDER} が非空の狭義の昇順でない"));
+        }
+        Ok(Self { stale_s, ladder })
+    }
+
+    /// 段 `step` の待ち（秒・列の `step` 番目）。列を越えた段は `None`（打ち切り）。
+    pub fn wait_of(&self, step: u32) -> Option<u64> {
+        usize::try_from(step).ok().and_then(|at| self.ladder.get(at)).copied()
     }
 }
 
@@ -348,25 +353,22 @@ pub fn settle(record: &Ladder, stamps: &[Stamp], digest: u64, now: u64, stale_s:
     answered.or_else(|| (now.saturating_sub(record.sent_at) >= stale_s).then_some(digest))
 }
 
-/// 段の候補の上限と床（pure）: 待ちが上限を超えれば [`Pointer::Stopped`]、記録の `sent_at` から待ちが経っていなければ
+/// 段の候補の打ち切りと床（pure）: 段が列を越えれば [`Pointer::Stopped`]、記録の `sent_at` から待ちが経っていなければ
 /// [`Pointer::Wait`]（残り秒）、それ以外（記録なしを含む）は [`Pointer::Open`]。
-pub fn pointer_of(pace: Pace, sent_at: Option<u64>, step: u32, now: u64) -> Pointer {
-    let wait = pace.wait_of(step);
-    if wait > pace.max_s {
+pub fn pointer_of(pace: &Pace, sent_at: Option<u64>, step: u32, now: u64) -> Pointer {
+    let Some(wait) = pace.wait_of(step) else {
         return Pointer::Stopped;
-    }
+    };
     match sent_at.map(|at| now.saturating_sub(at)) {
         Some(elapsed) if elapsed < wait => Pointer::Wait(wait.saturating_sub(elapsed)),
         _ => Pointer::Open,
     }
 }
 
-/// 打刻の合図の文面（**正本はこの 1 関数**・先頭の `<NAME> tick:` が器自身の目印・規則は持たない）。
-pub fn signal(step: u32, pace: Pace) -> String {
-    format!(
-        "{NAME} tick: heartbeat step={step} — 台帳の現在地（bd --readonly ready --limit 0）から続きを進める（変化が無ければ次の合図は {} 秒後・上限で打ち切り）",
-        pace.wait_of(step.saturating_add(1))
-    )
+/// 打刻の合図の文面（**正本はこの 1 関数**・先頭の `<NAME> tick:` が器自身の目印・次の待ちは列から引き、最後の段は次が無い）。
+pub fn signal(step: u32, pace: &Pace) -> String {
+    let next = pace.wait_of(step.saturating_add(1)).map_or_else(|| "次の合図は無い・打ち切り".to_owned(), |wait| format!("次の合図は {wait} 秒後"));
+    format!("{NAME} tick: heartbeat step={step} — 台帳の現在地（bd --readonly ready --limit 0）から続きを進める（変化が無ければ{next}）")
 }
 
 /// 起こし直しの初手の文面（**正本はこの 1 関数**・設計 §10 形 2・先頭の `<NAME> seat: relaunch` が器自身の目印）。起動行の末尾に
@@ -609,7 +611,7 @@ fn refused(input: &Input, found: &AccountGroup, window_ms: u64) {
     let _ = deliver_within(&request, Duration::from_millis(window_ms));
 }
 
-/// rules の行（行 4 本・送達の窓・群の閾値）。
+/// rules の行（行 3 本・送達の窓・群の閾値）。
 struct Rows {
     /// 梯子の形。
     pace: Pace,
@@ -623,7 +625,7 @@ impl Rows {
     /// 全部を読む。どれかが読めない周は `Err`（既定値に倒さない・C1）。
     fn of(manifest: &Manifest) -> Result<Self, String> {
         int_row(manifest, ROW_INTERVAL)?;
-        let pace = Pace { stale_s: int_row(manifest, ROW_STALE)?, factor: int_row(manifest, ROW_FACTOR)?, max_s: int_row(manifest, ROW_MAX)? };
+        let pace = Pace::of(int_row(manifest, ROW_STALE)?, list_row(manifest, ROW_LADDER)?)?;
         Ok(Self { pace, window_ms: int_row(manifest, ROW_WINDOW)?, caps: Caps::of(manifest)? })
     }
 }
@@ -676,7 +678,7 @@ fn front(input: &Input) -> Result<Front, Verdict> {
         None => None,
     };
     let step = candidate(record.as_ref(), digest);
-    let pointer = pointer_of(rows.pace, record.map(|found| found.sent_at), step, now);
+    let pointer = pointer_of(&rows.pace, record.map(|found| found.sent_at), step, now);
     Ok(Front { rows, fleet, account, anchor, seat, digest, step, pointer, now })
 }
 
@@ -803,7 +805,7 @@ fn back(input: &Input, front: &Front) -> Result<Verdict, Verdict> {
     input_gate(input).map_err(at)?;
     let record = Ladder { sent_at: front.now, step: front.step, digest: None };
     write_ladder(&front.seat, &record).map_err(|_| at(NoopReason::RecordUnwritable))?;
-    let payload = signal(front.step, front.rows.pace);
+    let payload = signal(front.step, &front.rows.pace);
     let request = Request { target: input.target, socket: input.socket, payload: &payload, state_dir: Some(input.state) };
     let delivery = deliver_within(&request, Duration::from_millis(front.rows.window_ms));
     Ok(Verdict {
@@ -910,34 +912,53 @@ mod tests {
     use crate::seat::inject::{Settled, Unmeasured};
     use crate::seat::state::{Event, Stamp, SCHEMA};
 
-    /// 初期値の梯子（rules 行の値を写さない fixture・値の対応は e2e が manifest で測る）。
-    const PACE: Pace = Pace { stale_s: 2400, factor: 2, max_s: 86_400 };
+    /// 初期値の梯子の列（rules 行の値を写さない fixture・値の対応は e2e が manifest で測る）。
+    const LADDER: [u64; 6] = [1800, 3600, 10_800, 21_600, 43_200, 86_400];
+
+    /// 初期値の梯子（黙りの閾値 1800 と列）。
+    fn pace() -> Pace {
+        Pace { stale_s: 1800, ladder: LADDER.to_vec() }
+    }
 
     /// 打刻 1 行。
     fn stamp(event: Event, ts: u64) -> Stamp {
         Stamp { schema: SCHEMA, state: event.state(), event, ts, sid: String::new() }
     }
 
-    /// 段 → 待ちは stale × factor ^ 段で倍々に伸び、段 5 までが上限の内・段 6 から打ち切り。巨大な値は飽和する。
+    /// 段 → 待ちは列の n 番目で、段 0〜5 が列の内・段 6 から打ち切り（合図の本数は列の長さ）。
     #[test]
-    fn seat_tick_wait_doubles_per_step_and_saturates() {
-        let waits: Vec<u64> = (0..=6).map(|step| PACE.wait_of(step)).collect();
-        assert_eq!(waits, [2400, 4800, 9600, 19_200, 38_400, 76_800, 153_600]);
-        assert_eq!(pointer_of(PACE, None, 5, 0), Pointer::Open, "段 5 は上限の内（記録なしは床を通る）");
-        assert_eq!(pointer_of(PACE, None, 6, 0), Pointer::Stopped, "段 6 は上限を超える");
-        let huge = Pace { stale_s: u64::MAX / 2, factor: 3, max_s: u64::MAX };
-        assert_eq!(huge.wait_of(1), u64::MAX, "積の飽和");
-        assert_eq!(Pace { stale_s: 1, factor: 2, max_s: 0 }.wait_of(200), u64::MAX, "冪の飽和");
-        assert_eq!(pointer_of(Pace { stale_s: 10, factor: 2, max_s: 10 }, None, 0, 0), Pointer::Open, "上限と等しい待ちは送る側");
+    fn seat_tick_wait_follows_the_ladder_and_stops_past_it() {
+        let pace = pace();
+        let waits: Vec<Option<u64>> = (0..=6).map(|step| pace.wait_of(step)).collect();
+        let want: Vec<Option<u64>> = LADDER.iter().copied().map(Some).chain([None]).collect();
+        assert_eq!(waits, want, "列の待ちと段 6 の打ち切り");
+        let open = (0..=6).filter(|step| pointer_of(&pace, None, *step, 0) == Pointer::Open).count();
+        assert_eq!(open, LADDER.len(), "送る段は列の長さ");
+        assert_eq!(pointer_of(&pace, None, 6, 0), Pointer::Stopped, "段 6 は列を越える（段 0〜5 は記録なしで床を通る）");
+        assert_eq!(pointer_of(&pace, None, u32::MAX, 0), Pointer::Stopped, "段の飽和も打ち切り");
+        let one = Pace { stale_s: 1, ladder: vec![10] };
+        assert_eq!((pointer_of(&one, None, 0, 0), pointer_of(&one, None, 1, 0)), (Pointer::Open, Pointer::Stopped), "1 要素の列");
+    }
+
+    /// 列の字面: 数で狭義に昇順の列は読み、数でない・昇順でない（等しい隣を含む）・空の列は断る。
+    #[test]
+    fn seat_tick_pace_reads_the_ladder_and_refuses_malformed_lists() {
+        let words = ["1800", "3600", "10800", "21600", "43200", "86400"];
+        assert_eq!(Pace::of(1800, &words.map(str::to_owned)), Ok(pace()), "初期値の列");
+        for bad in [&["1800", "x"][..], &["1800", "-1"], &["1800", " 3600"], &["3600", "1800"], &["1800", "1800"], &[]] {
+            let items: Vec<String> = bad.iter().map(|word| (*word).to_owned()).collect();
+            assert!(Pace::of(1800, &items).is_err(), "{bad:?} は断る");
+        }
     }
 
     /// 床: `sent_at` から待ちが経っていない周は残り秒の Wait・ちょうど経った周は Open。
     #[test]
     fn seat_tick_floor_counts_the_seconds_left_from_sent_at() {
-        assert_eq!(pointer_of(PACE, Some(1000), 1, 1000 + 3000), Pointer::Wait(1800));
-        assert_eq!(pointer_of(PACE, Some(1000), 1, 1000 + 4800), Pointer::Open, "境界は経った側");
-        assert_eq!(pointer_of(PACE, Some(1000), 0, 1000 + 2399), Pointer::Wait(1));
-        assert_eq!(pointer_of(PACE, Some(5000), 0, 10), Pointer::Wait(2400), "未来の sent_at は経過 0");
+        let pace = pace();
+        assert_eq!(pointer_of(&pace, Some(1000), 1, 1000 + 3000), Pointer::Wait(600));
+        assert_eq!(pointer_of(&pace, Some(1000), 1, 1000 + 3600), Pointer::Open, "境界は経った側");
+        assert_eq!(pointer_of(&pace, Some(1000), 0, 1000 + 1799), Pointer::Wait(1));
+        assert_eq!(pointer_of(&pace, Some(5000), 0, 10), Pointer::Wait(1800), "未来の sent_at は経過 0");
     }
 
     /// 段の候補: 記録なし → 0・基準と同じ digest → 段 + 1・変化 → 0・基準の無い記録 → 0。
@@ -1086,13 +1107,18 @@ mod tests {
         );
     }
 
-    /// 合図の文面は器の目印で始まり、段と次の段の待ちを名乗る。
+    /// 合図の文面は器の目印で始まり、段と次の段の待ち（列から引く）を名乗り、最後の段は次が無いと書く。
     #[test]
     fn seat_tick_signal_names_the_step_and_the_next_wait() {
-        let line = signal(0, PACE);
+        let pace = pace();
+        let line = signal(0, &pace);
         assert!(line.starts_with(&format!("{NAME} tick: heartbeat step=0 — ")), "{line}");
-        assert!(line.contains("（変化が無ければ次の合図は 4800 秒後・上限で打ち切り）"), "{line}");
+        assert!(line.ends_with("（変化が無ければ次の合図は 3600 秒後）"), "{line}");
         assert!(!line.contains('\n'), "1 行");
-        assert!(signal(5, PACE).contains("次の合図は 153600 秒後"), "段 5 の次は上限の外でも数を名乗る");
+        let nexts: Vec<bool> =
+            (0u32..).zip(LADDER.iter().skip(1)).map(|(step, next)| signal(step, &pace).contains(&format!("次の合図は {next} 秒後"))).collect();
+        assert_eq!(nexts, [true; 5], "段 0〜4 の次は列の次の要素");
+        let last = signal(5, &pace);
+        assert!(last.ends_with("（変化が無ければ次の合図は無い・打ち切り）"), "最後の段は次が無い: {last}");
     }
 }
