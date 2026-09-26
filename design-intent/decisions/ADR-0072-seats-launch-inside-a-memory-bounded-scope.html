@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="generator" content="folio ADR-pack assembler (folio-bwc / instance#2) — deterministic structure, prose slots unfilled">
-<title>群の移動の退避は合図が先で /exit は猶予の後 — 群が別の口座へ移った周に古い席へ送るのは退避の合図の 1 行で、 /exit は猶予 (rules 行 1 本・起点は群の記録の時刻) を越えた周に送り、 合図は席ごとの記録 1 つで移動につき 1 回、 群の段の続きの周も同じ猶予を読む (ADR-0066 の移動の門と ADR-0068 の梯子は前提のまま・要件は FR38 / AC41 の範囲)</title>
+<title>席の起動を封じ込めの箱で包む — 席 (人と話す claude とその subagent) の起動行の頭に便と同じ systemd の scope (memory の上限は rules 行 1 本・32 GiB・CPU の重みは付けない) を置き、 行が 0 / 読めない周と道具が無い host は素の行に縮退し、 溢れて殺されるのは箱の中の 1 process だけで claude が死んだ周は管理 tick が起こし直す (ADR-0026 の「cgroup の防壁は席には持ち込まない」の読みを部分 supersede・要件は FR59 / NFR6 の範囲)</title>
 <style>
 /* ===========================================================================
    folio human-layer design system — core.css (S3 / folio-8oc プロトタイプ)
@@ -455,14 +455,14 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
     "schema": "https://schema.org/",
     "folio": "https://folio.dev/spec/v1/"
   },
-  "@id": "./ADR-0071-group-move-signal-then-exit-after-grace.html",
+  "@id": "./ADR-0072-seats-launch-inside-a-memory-bounded-scope.html",
   "@type": "schema:TechArticle",
   "dc:isPartOf": [
     {
       "@id": "./README.html"
     }
   ],
-  "dc:title": "群の移動の退避は合図が先で /exit は猶予の後 — 群が別の口座へ移った周に古い席へ送るのは退避の合図の 1 行で、 /exit は猶予 (rules 行 1 本・起点は群の記録の時刻) を越えた周に送り、 合図は席ごとの記録 1 つで移動につき 1 回、 群の段の続きの周も同じ猶予を読む (ADR-0066 の移動の門と ADR-0068 の梯子は前提のまま・要件は FR38 / AC41 の範囲)",
+  "dc:title": "席の起動を封じ込めの箱で包む — 席 (人と話す claude とその subagent) の起動行の頭に便と同じ systemd の scope (memory の上限は rules 行 1 本・32 GiB・CPU の重みは付けない) を置き、 行が 0 / 読めない周と道具が無い host は素の行に縮退し、 溢れて殺されるのは箱の中の 1 process だけで claude が死んだ周は管理 tick が起こし直す (ADR-0026 の「cgroup の防壁は席には持ち込まない」の読みを部分 supersede・要件は FR59 / NFR6 の範囲)",
   "folio:version": "0.1.0",
   "folio:stakeholders": [
     "Developer",
@@ -480,25 +480,25 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
       "@id": "../spec/constitution.html#c17"
     },
     {
-      "@id": "../spec/srs.html#FR38"
+      "@id": "../spec/srs.html#FR59"
+    },
+    {
+      "@id": "../spec/srs.html#NFR6"
     },
     {
       "@id": "../spec/srs.html#FR27"
     },
     {
-      "@id": "../spec/srs.html#FR59"
+      "@id": "./ADR-0021-gate-cost-is-measured-and-confined.html"
     },
     {
-      "@id": "./ADR-0066-the-management-tick-fires-the-group-move-judgement.html"
+      "@id": "./ADR-0026-account-lifecycle-host-manifest-and-seat-launch.html"
+    },
+    {
+      "@id": "./ADR-0058-heartbeat-returns-with-backoff-and-stops-at-24h.html"
     },
     {
       "@id": "./ADR-0067-the-relaunch-carries-the-conversation-id-with-resume.html"
-    },
-    {
-      "@id": "./ADR-0068-the-signal-ladder-is-a-list-and-live-runs-do-not-block-group-moves.html"
-    },
-    {
-      "@id": "./ADR-0069-group-moves-pick-by-headroom-and-reserve-in-tier-order.html"
     }
   ]
 }
@@ -510,173 +510,172 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 <nav class="breadcrumb" aria-label="パンくず"><ol>
   <li><a href="../index.html">design-intent</a></li>
   <li><a href="./README.html">decisions</a></li>
-  <li aria-current="page">ADR-0071</li>
+  <li aria-current="page">ADR-0072</li>
 </ol></nav>
 <!-- /folio:chrome-top -->
 <div class="page" data-component="requirement-type-color-tokens">
 <header data-component="doc-cover-band">
-<p class="cover-eyebrow"><span class="doc-type">設計判断記録 (ADR)</span> <span>scribe2 — 群の移動の退避の猶予</span></p>
-<h1>群の移動の退避は合図が先で /exit は猶予の後 — 群が別の口座へ移った周に古い席へ送るのは退避の合図の 1 行で、 /exit は猶予 (rules 行 1 本・起点は群の記録の時刻) を越えた周に送り、 合図は席ごとの記録 1 つで移動につき 1 回、 群の段の続きの周も同じ猶予を読む (ADR-0066 の移動の門と ADR-0068 の梯子は前提のまま・要件は FR38 / AC41 の範囲)</h1>
-<p class="cover-sub">ADR-0066 は群の移動の判定を管理 tick に置き、 移った周は各席の tick が自席に退避 (/exit) を撃つと決めた。 席が前面で作業中なら /exit は turn の終わりまで待つが、 席が裏で走らせる subagent は席の turn が先に終わるため待たれず、 次の周の /exit で claude ごと落ちる。 2026-09-26 に別 project の設計席がこれを 3 回観測して報告し、 持ち主は「合図 → 猶予 → /exit」の二段の退避を裁定した (06:29Z)。 限度を越えた口座で席が猶予の分だけ動き続ける害を、 走行中の作業を毎回落とす害より小さいと判断した。</p>
-<div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">この記録で「器」は scribe2 の本体、 「席」は人と AI が話す 1 つの session、 「群」はある project の席が使う口座の集まり、 「見回り (管理 tick)」は席の外から周期で席を見る仕組み、 「subagent」は席が起こす下請けの agent です。 群が別の口座へ移ると、 古い口座の席は終わらせて新しい口座で起こし直します。 これまで見回りは移った 15 秒後に古い席へ /exit を送っていました。 席が前面で作業中なら /exit は作業の区切りまで待ちますが、 席が裏で走らせている subagent は待たれず、 途中で落ちていました。 この記録は、 移った周にまず「退避の合図」の 1 行を送り、 /exit は猶予 (規則の表の行 1 本・既定 30 分・起点は群の記録の時刻) を越えてから送ると決めます。 合図は席ごとの記録 1 つで移動につき 1 回だけ送り、 便の終端の周 (群の段) も同じ猶予を読みます。 持ち主は 2026-09-26 に、 限度を越えた口座で席が猶予の分だけ動き続ける害を受け入れると裁定しました。</p></div></div>
+<p class="cover-eyebrow"><span class="doc-type">設計判断記録 (ADR)</span> <span>scribe2 — 席の封じ込め</span></p>
+<h1>席の起動を封じ込めの箱で包む — 席 (人と話す claude とその subagent) の起動行の頭に便と同じ systemd の scope (memory の上限は rules 行 1 本・32 GiB・CPU の重みは付けない) を置き、 行が 0 / 読めない周と道具が無い host は素の行に縮退し、 溢れて殺されるのは箱の中の 1 process だけで claude が死んだ周は管理 tick が起こし直す (ADR-0026 の「cgroup の防壁は席には持ち込まない」の読みを部分 supersede・要件は FR59 / NFR6 の範囲)</h1>
+<p class="cover-sub">ADR-0021 は便 (runner / lens / 検証行) を memory の上限つきの箱に入れ、 ADR-0026 は席の起動を器に足すときに「前の版の launcher の cgroup の防壁は席には持ち込まない」と決めた。 2026-09-25 に席の subagent が撃った sed 1 本が RSS 81 GB まで膨らみ、 user の slice 全体が詰まって ssh の login まで止まった。 持ち主は 2026-09-26 に、 席の起動を systemd の scope で包み上限を 32 GiB とすると裁定した。</p>
+<div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">この記録で「器」は scribe2 の本体、 「席」は人と AI が話す 1 つの session (その席が起こす下請けの agent = subagent と、 それらが撃つ Bash を含む)、 「便」は器が起こす作業の process (実装役・審査役・検証の行)、 「箱」は memory の上限つきの囲い (systemd の scope) です。 これまで便は箱の中で走り、 溢れても便 1 本が落ちるだけで済みましたが、 席には箱が無く、 2026-09-25 に席の subagent が撃った sed 1 本が RSS 81 GB まで膨らんで machine 全体が詰まり、 ssh の login まで止まりました。 この記録は、 席を起こす 1 行の頭にも便と同じ箱 (上限は規則の表の行 1 本・32 GiB・CPU の重みは付けない) を置くと決めます。 道具が無い machine や行が 0 / 読めない周は今までどおりの素の行で起こし、 理由を結果の 1 行に出します。 溢れて殺されるのは箱の中の process だけで、 席の claude 自身が死んだ周は見回り (管理 tick) が起こし直します。 持ち主は 2026-09-26 に上限を 32 GiB と裁定しました。</p></div></div>
 <div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">accepted</span></span><span class="m"><span class="k">選択肢</span><span class="v">5件 (OPT1–OPT5)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 3 / トレードオフ 3</span></span><span class="m"><span class="k">版</span><span class="v">v0.1.0 / 2026-09-26</span></span></div>
-<div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>FR38・FR27・FR59</b></div>
+<div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>FR59・NFR6・FR27</b></div>
 <div data-component="approval-block">
-<div class="sign"><span class="role">裁定 (user)</span><span class="who">user</span><span class="when">裁定 id user 2026-09-26T06:29Z (推奨の受諾 = 移った周に送るのは退避の合図の 1 行・/exit は猶予の rules 行 1 本を越えた周・猶予の起点は群の記録の時刻・席は合図を受けたら新しい subagent を起こさず今の subagent の終わりを待つ)。 報告は別 project の設計席の relay (同 06:2xZ)。 要旨だけを写す。 逐語は非公開の作業記録簿 (台帳 s2-07l.651 の notes) に在る</span><span class="stamp self">裁定済</span></div>
-<div class="sign"><span class="role">設計 (orchestrator)</span><span class="who">orchestrator</span><span class="when">2026-09-26 草稿 v1 (relay の事象を現物 (tick の移動の門・群の段の退避・群の記録) で再現し、 機序を弁別して形にした。 拘束する constitution の版 0.5.0)</span><span class="stamp self">作成</span></div>
+<div class="sign"><span class="role">裁定 (user)</span><span class="who">user</span><span class="when">裁定 id user 2026-09-26T08:28Z (席の起動を systemd の scope で包む・上限は 32 GiB = rules 行 seat.memory_max_mb 32768・§4 の「持ち込まない」を覆す)。 報告は 2026-09-25 12:55 JST (別 host の login 不能)。 要旨だけを写す。 逐語は非公開の作業記録簿 (台帳 s2-07l.627 の notes) に在る</span><span class="stamp self">裁定済</span></div>
+<div class="sign"><span class="role">設計 (orchestrator)</span><span class="who">orchestrator</span><span class="when">2026-09-26 草稿 v1 (事故の追跡 (subagent の sed・破滅的 backtrack) と現物 (便の封じ込めの語列・席の起動行の導出・systemd-run --scope の exec の実測) を合わせて形にした。 拘束する constitution の版 0.5.0)</span><span class="stamp self">作成</span></div>
 </div>
 <div class="reader-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 想定読者: scribe2 の開発 session と user — 器の内部と Rust の専門知識は不要 (専門語はやさしい言葉を併記)</div>
 </header>
 <!-- folio:chrome-toc -->
 <!-- /folio:chrome-toc -->
-<section data-component="chapter-deck-band" class="tint-info"><span class="num">01</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v6m0 0L9 5m3 3l3-3"/><circle cx="12" cy="14" r="6"/></svg> 背景 / なぜこの判断が要るか</span><h2>いま何が問題か (確定方式を決める力学)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-01">なぜこの判断が要るのかを、 経緯 (移った周の退避の今の形)・事象 (裏の subagent が落ちた)・器の今の部品・これまでの決まり・この判断の範囲の 5 つから説明します。 前の決定 (ADR-0066) は群の移動の判定を見回りに置き、 移った周は各席の見回りが自席へ退避 (/exit) を撃つと決めました。 設計はさらに、 移動の周は席の状態の打刻を読まずに /exit を周期ごとに送ると決めました (打刻を失った席が移らない穴を塞ぐため)。 2026-09-26 に別 project の席が、 移動のたびに裏で走らせていた subagent が途中で消えたと報告し、 本席が機序を再現しました。 部品は見回りの移動の門・群の段の退避・群の記録・規則の表の行です。</p></section>
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">01</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v6m0 0L9 5m3 3l3-3"/><circle cx="12" cy="14" r="6"/></svg> 背景 / なぜこの判断が要るか</span><h2>いま何が問題か (確定方式を決める力学)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-01">なぜこの判断が要るのかを、 経緯 (便は箱の中・席は箱の外)・事象 (席の subagent の 1 本が machine を止めた)・器の今の部品・これまでの決まり・この判断の範囲の 5 つから説明します。 前の決定 (ADR-0021) は便を箱に入れ、 別の決定 (ADR-0026) は席を器で起こすときに「前の版の launcher の cgroup の防壁は席には持ち込まない」と決めました。 席は shell の子で器の子ではないからです。 2026-09-25 の事故で、 席の側にも箱が要ると分かりました。</p></section>
 <div class="chapbody">
 <div data-component="adr-context-list">
-<div data-component="adr-context-row"><span class="cxid">CTX1</span><div class="cxbody"><p class="cxh">経緯 — 移った周の退避は各席の tick が撃ち、 打刻を読まずに /exit を送る (ADR-0066・設計 §10)</p><p class="cxd">ADR-0066 は群の移動の判定 (逼迫の読み・移り先・記録・承認 event) を管理 tick<span class="term" data-component="plain-language-term-inline" data-term="管理 tick">席を周期で見る仕組み</span> に置き、 判定の後は各席の tick の移動の門<span class="term" data-component="plain-language-term-inline" data-term="移動の門">移る周の tick の段</span>が自席にだけ退避 (/exit・確認 dialog なら Enter) か起こし直しを撃つと決めた。 設計 seat-heartbeat.md §10 (形 8〜10) はさらに、 移動の周は席の状態の打刻 (Busy / Idle) を読まずに /exit を周期ごとに送ると決めた。 上限の error で終わった turn が Busy の打刻を残し、 打刻に依る門では席が移らない穴 (台帳 s2-07l.635) を塞ぐためである。 turn の途中に送った /exit は claude の入力の列に積まれ turn の終わりで実行されるので、 前面の作業は落ちない、 が根拠だった。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX2</span><div class="cxbody"><p class="cxh">事象 — 席が裏で走らせる subagent<span class="term" data-component="plain-language-term-inline" data-term="subagent">席が起こす下請けの agent</span> が移動のたびに落ちた</p><p class="cxd">2026-09-26 に別 project の設計席が、 群 (口座の群) の移動 3 回のたびに席が /exit → 起こし直しされ、 そのとき席が走らせていた subagent (制作の便・20〜40 分) が 3 回とも途中で消えたと報告した。 出力は file に残るが途中の状態で止まり、 席は毎回起こし直しの後に点検からやり直した。 席の状態の打刻が busy と記されていた周でも退避が撃たれていた。 本席は現物で再現した — 打刻を読まないのは設計どおり (形 8・形 10) で、 機序は形 9 の外側に在る。 Agent tool の subagent は background で走り、 席の turn は subagent の完了を待たずに終わる。 turn が終わると入力欄が空に戻り、 次の周 (15 秒) の /exit が即実行され、 claude の process ごと subagent が落ちる。 「turn の終わりで実行」は前面の turn だけを守っていた。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX3</span><div class="cxbody"><p class="cxh">現物 — tick の移動の門・群の段の退避・群の記録・rules 行</p><p class="cxd">main 735c7f4 で、 管理 tick の移動の周 (seat/tick.rs の moving) は群の記録<span class="term" data-component="plain-language-term-inline" data-term="群の記録">群の今の口座の控え</span>の口座と自席の登録 row の口座が違う周に、 lock の内側で退避 (evacuate = 入力欄の門 → /exit の 1 行・dialog の既定の行なら Enter・記録は tick.jsonl に who=seat-tick-move) を撃つ。 判定で移った周も同じ関数を撃つ。 手の語<span class="term" data-component="plain-language-term-inline" data-term="手の語">移動の周の判定行の語</span> (Move) は launch / exit / enter の閉じた 3 値。 群の段 (pipe/dispatch/group.rs) は移動の周に古い口座の席へ退避の合図<span class="term" data-component="plain-language-term-inline" data-term="退避の合図">移るための席への 1 行</span>の 1 行 (字面は群の段の中の format!) を送って起動の待ち (settle) を置き、 続きの周<span class="term" data-component="plain-language-term-inline" data-term="続きの周">群の段の 2 周目以降</span>に shell へ戻らない席へ /exit を 1 回送る。 群の記録 (hook/group.rs の Record) は口座・時刻 (UTC 秒の字面)・理由・前の口座の 4 行で、 読み手 current_of は口座と出所だけを返して時刻を落とす。 時刻の字面を UNIX 秒にする読み手 (fleet/wait.rs の epoch_of) と tick の今 (seat/state.rs の now_secs) は在る。 rules 行は周期・黙りの初段・梯子の列・送達の窓・群の閾値を tick が読み、 欠く周は rc 1 で語 no-rule。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX4</span><div class="cxbody"><p class="cxh">憲法と既存の決定の向き (本 ADR の解釈)</p><p class="cxd">C2 (経路は 1 本) から、 猶予の判定・合図の字面・合図の記録の書き手はそれぞれ 1 関数で、 tick と群の段が同じものを読む。 C10 (宣言値・実測値・導出値を分ける) から、 猶予は rules 行の宣言値、 起点は群の記録の時刻 (実測値)、 残りの秒はその導出値で、 時刻の字面が形でない記録は読めない記録として断る (数の読み替えをしない)。 C17 (足すときに何を外すかを名指す) から、 足すのは rules 行 1 本・合図の記録 1 file・Move の変種 2 つ・関数 3 本で、 外すのは群の段の中の合図の字面 (hook/group.rs へ移す) である。 決定はしごの各段を通した — 要るか (走行中の作業が毎回落ちる)・既に在るか (群の段の合図は在るが tick の周には無く、 /exit を待たせる口も無い)・既存の記録で足りるか (群の記録の時刻を起点にすれば猶予の起点は足りる・合図の 1 回性だけ席ごとの記録 1 つが要る)・1 行で書けるか (合図の記録<span class="term" data-component="plain-language-term-inline" data-term="合図の記録">合図を送った印</span>は 1 行)・最小か (rules 行 1 本と file 1 つ)。 N2 (散文にしか無い規則は規則として扱わない) から、 席の側の作法 (新しい subagent を起こさず今のを待つ) は合図の字面が伝える案内であって規則ではない。 ADR-0066 の判定の置き場と移動の門、 ADR-0067 の起こし直し (会話 id を運ぶ)、 ADR-0068 の梯子、 ADR-0069 の移り先の鍵は本 ADR の前提で変えない。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX5</span><div class="cxbody"><p class="cxh">射程 — 動かすのは退避の順と猶予・合図の 1 回性・群の段の続きの周の 3 か所</p><p class="cxd">動かすのは (1) tick の移動の周の退避の順 (合図が先・/exit は猶予の後・猶予は rules 行 seat.move_grace_s・起点は群の記録の時刻・値 0 は今の形)、 (2) 合図の 1 回性 (席の状態の dir の合図の記録 1 file に群の記録の時刻を書き、 同じ時刻の記録が在れば送らない・群の段の合図も同じ記録を書く)、 (3) 群の段の続きの周 (/exit は猶予を越えた周だけ) の 3 つ。 動かさないのは、 判定の列の順と移動の周の位置 (打刻を読まない)・lock・起こし直し・梯子・heartbeat の停止・status と doctor の項目・event の種類・rules 行の他の値。 要件は FR38 (群の移動) と AC41 (古い席に退避の合図が届く) の範囲に収まり、 SRS の改訂を伴わない。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX1</span><div class="cxbody"><p class="cxh">経緯 — 便は箱の中、 席は箱の外 (ADR-0021・ADR-0026)</p><p class="cxd">ADR-0021 は便 (runner / lens / 検証行) を systemd の transient scope (memory の上限つきの箱) の内側で走らせ、 溢れたときに殺されるのは箱の中の process だけにした。 上限は rules 行 2 本 (gate.job_memory_mb と host.reserve_memory_mb) から導く 2 種で、 scope を作れない host は縮退<span class="term" data-component="plain-language-term-inline" data-term="縮退">箱なしで起こすこと</span>して素の起動に戻る。 ADR-0026 は席の起動 (seat launch) を器に足すとき、 前の版の launcher が持っていた cgroup の防壁は席には持ち込まないと決めた。 席は shell の子で器の子ではなく、 NFR6 (封じ込めの外で走る器の子 process 0 本) の対象でもないからである。 席 (人と話す claude と、 席が Agent tool で起こす subagent<span class="term" data-component="plain-language-term-inline" data-term="subagent">席が起こす下請けの agent</span> と、 それらの Bash) は user の slice<span class="term" data-component="plain-language-term-inline" data-term="user の slice">その user の process 全部の囲い</span> に直に入る。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX2</span><div class="cxbody"><p class="cxh">事象 — 席の subagent の 1 本が host 全体を止めた</p><p class="cxd">2026-09-25 12:10 JST 頃、 別 host が ssh と console の両方で login できなくなった。 原因は user の slice (MemoryHigh 100 GiB / MemoryMax 110 GiB) で 1 process が RSS 81 GB と swap 5.7 GB を使い、 slice 全体が throttle された (PSI memory full 98%・load 73)。 犯人は別 project の席の subagent が撃った sed 1 本で、 word-diff の長い行 (29〜12,663 字) に量指定子つきの後方参照を当てた破滅的 backtrack だった。 12:52 JST に TERM で消して復旧した。 同種の正規表現を配る skill や prompt は無く (grep 0 件)、 ad-hoc の 1 本だった。 便なら箱の中で 1 本が落ちて済んだが、 席には箱が無い。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX3</span><div class="cxbody"><p class="cxh">現物 — 起動行の導出・封じ込めの語列・systemd-run --scope の振る舞い</p><p class="cxd">main c4d6d20 で、 席の起動行は seat/cycle/launch.rs の derive_launch (pure) が env 3 語 → claude → plugin dir の列 → host の面の引数の順で組み、 launch が役割の既定 (--model / --effort)・cd の前置・会話の引き継ぎの語を足して pane へ注入する。 登録 row には導出した行 (穴を埋める前) が載る。 起動の呼び手は 4 つ (seat launch・管理 tick の起こし直し・群の段の起こし直し・follow の起こし直し) で関数は 1 本。 便の封じ込め (pipe/confine.rs) は語列 scope_args (--user --scope --quiet --collect --unit=&lt;name&gt; -p MemoryMax=&lt;mb&gt;M -p CPUWeight=&lt;w&gt; -p OOMPolicy=continue) と unit 名の 1 関数 (&lt;NAME&gt;-&lt;場所&gt;-&lt;段&gt;-&lt;n&gt;-&lt;pid&gt;-&lt;seq&gt;) と probe<span class="term" data-component="plain-language-term-inline" data-term="probe">箱を試しに 1 つ作ること</span> (scope を 1 つ試しに作る) と閉じた理由 (no-systemd-run / no-scope / no-rules …) を持つ。 systemd-run --scope は -- の後ろの command を exec して自分は残らない (実測 — 子の親は起動した shell)。 pane の前面は claude のままで、 管理 tick<span class="term" data-component="plain-language-term-inline" data-term="管理 tick">席を周期で見る仕組み</span> の「窓が shell か」の読みは変わらない。 env の前置は exec した子へ継承される。 e2e の道具箱は偽 systemd-run を PATH の先頭に積み、 実 scope を作らない。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX4</span><div class="cxbody"><p class="cxh">憲法と既存の決定の向き (本 ADR の解釈)</p><p class="cxd">C2 (経路は 1 本) から、 席の箱<span class="term" data-component="plain-language-term-inline" data-term="席の箱">席を入れる memory の囲い</span>の語列は便の封じ込めと同じ 1 関数 (CPU の重みの有無の引数 1 つで 2 形) とし、 unit 名も同じ 1 関数で組む。 C10 (宣言値・実測値・導出値を分ける) から、 上限は rules 行の宣言値 (user 裁定 id つき)、 道具の有無は PATH の実測値、 起動の 1 行<span class="term" data-component="plain-language-term-inline" data-term="起動の 1 行">seat launch が出す結果の 1 行</span>の scope= はその導出値で、 行を読めない周と道具が無い周は理由の語で縮退する (止めない)。 C17 (足すときに何を外すかを名指す) から、 足すのは rules 行 1 本・起動行の頭の語列・Launch の欄 1 つ・起動の 1 行の項目 1 つで、 外すのは無い (§4 の「持ち込まない」の判断を取り消す)。 決定はしごの各段を通した — 要るか (host の login 不能・持ち主の裁定)・既に在るか (便の箱は在るが席には無い)・既存の仕組みで足りるか (足りる — 便の scope の語列と unit 名の関数をそのまま使う)・1 行で書けるか (起動行の頭に語列 1 つ)・最小か (rules 行 1 本)。 N2 (散文にしか無い規則は規則として扱わない) から、 正規表現の字面を見張る形は退ける。 ADR-0021 の便の封じ込め、 ADR-0026 の口座の管理と起動の口、 ADR-0058 の管理 tick、 ADR-0067 の起こし直し (会話 id を運ぶ) は本 ADR の前提で変えない。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX5</span><div class="cxbody"><p class="cxh">射程 — 動かすのは起動行の頭と rules 行 1 本・起動の 1 行の項目 1 つ</p><p class="cxd">動かすのは (1) 席の起動行の頭 (systemd の scope の語列・上限は rules 行 seat.memory_max_mb・値 0 と読めない周と道具の無い host は素の行)、 (2) 起動の 1 行の末尾の scope= (unit 名か縮退の語)、 (3) Launch の欄 1 つ (行の読み・4 つの呼び手が自分の manifest から埋める) の 3 つ。 動かさないのは、 席の起動の口と口座の選定・登録 row の形 (雛形には頭を載せない)・trust の書き・便の封じ込め (Wrap / probe / release)・管理 tick の判定の列・host の面・役割なしの手動の入口 (account shell)。 要件は FR59 (席の起動) と NFR6 (host の資源) の範囲に収まり、 SRS の改訂を伴わない。</p></div></div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-brand"><span class="num">02</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v18"/><path d="M5 7l-3 6h6z"/><path d="M19 7l-3 6h6z"/><path d="M3 21h18"/></svg> 判断を縛る力 / 評価の軸</span><h2>選択肢を測るものさし (安全・速さ)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-02">この判断を評価する 4 本のものさしです。 走行中の作業を落とさないこと (裏の subagent が移動のたびに途中で消える害を無くす)。 限度を越えた口座で動き続ける時間に上限を置くこと (猶予は規則の表の行 1 本で、 越えた周は今どおり /exit を送る)。 打刻に依らないこと (席の自己申告や状態の打刻で待つと、 打刻を失った席が移らない穴が戻る)。 経路は 1 本であること (猶予の判定・合図の字面・合図の記録の書き手はそれぞれ 1 関数で、 見回りと群の段が同じものを読む)。</p></section>
+<section data-component="chapter-deck-band" class="tint-brand"><span class="num">02</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v18"/><path d="M5 7l-3 6h6z"/><path d="M19 7l-3 6h6z"/><path d="M3 21h18"/></svg> 判断を縛る力 / 評価の軸</span><h2>選択肢を測るものさし (安全・速さ)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-02">この判断を評価する 4 本のものさしです。 1 本の暴走が machine を道連れにしないこと (席とその subagent の Bash が溢れても殺されるのは席の箱の中だけ)。 上限は宣言値 1 つであること (規則の表の行 1 本で、 席ごと・役割ごとに分けない)。 止めずに縮退すること (道具が無い machine と行が 0 / 読めない周は素の行で起こし、 理由を結果の 1 行に出す)。 経路は 1 本であること (箱の語列と unit の名は便の封じ込めと同じ関数で、 席を起こす 4 つの呼び手は同じ 1 本を通る)。</p></section>
 <div class="chapbody">
 <table data-component="adr-driver-table"><tbody>
-<tr data-component="adr-driver-row"><td class="drid">DR1</td><td>走行中の作業を落とさない — 席が裏で走らせる subagent が移動のたびに途中で消える害を無くす (持ち主の裁定) <span class="drg">CTX2・CTX5</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR2</td><td>限度を越えた口座で動き続ける時間に上限を置く — 猶予は rules 行 1 本の宣言値で、 越えた周は今どおり /exit を送る <span class="drg">CTX1・CTX4</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR3</td><td>打刻に依らない — 席の自己申告や状態の打刻で待つと、 打刻を失った席が移らない穴 (台帳 .635) が戻る <span class="drg">CTX1・CTX4</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR4</td><td>経路は 1 本 — 猶予の判定・合図の字面・合図の記録の書き手はそれぞれ 1 関数で、 tick と群の段が同じものを読む (C2・C17) <span class="drg">CTX3・CTX4</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR1</td><td>1 本の暴走が host を道連れにしない — 席とその subagent の Bash が溢れても、 殺されるのは席の箱の中の process だけ (持ち主の裁定) <span class="drg">CTX2・CTX5</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR2</td><td>上限は宣言値 1 つ — rules 行 1 本 (user 裁定 id つき) で、 席ごと・役割ごとに分けない (C10) <span class="drg">CTX4</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR3</td><td>止めない、 縮退する — 道具が無い host と行が 0 / 読めない周は素の行で起こし、 理由を起動の 1 行に出す (ADR-0021 と同じ極性) <span class="drg">CTX1・CTX3・CTX4</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR4</td><td>経路は 1 本 — 箱の語列と unit 名は便の封じ込めと同じ関数で、 起動の 4 つの呼び手は同じ 1 本を通る (C2・C17) <span class="drg">CTX3・CTX4</span></td></tr>
 </tbody></table>
 </div>
-<section data-component="chapter-deck-band" class="tint-violet"><span class="num">03</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5"/></svg> 検討した選択肢 / 3 つの確定方式</span><h2>それぞれの利点と欠点を並べる</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-03">候補を 5 つ並べます。 合図が先・/exit は猶予の後・合図は席ごとの記録 1 つで移動につき 1 回とする案 (選んだ案)、 席が「作業中」の札を自分で書き見回りが待つ案、 器を変えず subagent の出力を file に落とす案、 見回りが subagent の有無を process の木で読む案、 猶予を群の段の起動の待ちの窓で持つ案です。 選ばなかった 4 つは、 自己申告の穴・損失が毎回・見えない・意味が別、 という理由で退けました。</p></section>
+<section data-component="chapter-deck-band" class="tint-violet"><span class="num">03</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5"/></svg> 検討した選択肢 / 3 つの確定方式</span><h2>それぞれの利点と欠点を並べる</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-03">候補を 5 つ並べます。 席を起こす 1 行の頭に便と同じ箱を置く案 (選んだ案)、 席の Bash を hook で 1 command ずつ箱に包む案、 正規表現の字面を規則で見張る案、 machine の user 全体の囲いの上限を下げる運用で受ける案、 起動の前に箱を試しに作って作れない machine は縮退する案です。 選ばなかった 4 つは、 hook の限界・散文の規則は規則でない・ssh も同じ囲いに居る・試しの箱が test の machine を詰まらせる、 という理由で退けました。</p></section>
 <div class="chapbody">
 <div class="opt-grid">
 <div data-component="adr-option-card" class="chosen">
-<div class="opt-head"><span class="opt-id">OPT1</span><span class="opt-name">二段の退避 — 合図が先・/exit は猶予の後・合図は席ごとの記録 1 つで移動につき 1 回</span><span class="opt-verdict chosen">採用</span></div>
-<p class="opt-sum">rules 行 seat.move_grace_s (整数の秒・既定 1800・裁定 id つき) を足す。 tick の移動の周は、 群の記録の時刻 + 猶予 − 今 が正なら「残りが在る」と読み、 合図の記録 (席の状態の dir の move-signal・1 行 ts=&lt;群の記録の時刻&gt;) が同じ時刻を持たない周は退避の合図の 1 行 (字面は hook/group.rs の 1 関数・群の段と共通・残りの秒を載せる) を入力欄が空なら送って記録を書き、 同じ時刻を持つ周は待つ (0 key)。 残りが無い周 (猶予 0・越えた・記録なし = 種) は今の形 (/exit・dialog なら Enter)。 群の段の移動の周は同じ字面の合図を送って席ごとに記録を書き、 続きの周の /exit は残りが無い周だけ。 手の語に signal / wait を足す。 決め手は現物 (持ち主の裁定)。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT1">移った周にまず退避の合図の 1 行を送り、 /exit は猶予 (規則の表の行 1 本・既定 30 分) を越えてから送る案です。 猶予の起点は器が書く群の記録の時刻で、 合図は席ごとの記録 1 つで移動につき 1 回だけ送ります。 猶予が残っていない周 (猶予 0・越えた・記録なし) は今どおり /exit です。 群の段の続きの周も同じ猶予を読みます。 裏の subagent は猶予の間に終われ、 限度を越えた口座で動き続ける時間は猶予が上限で、 打刻も自己申告も読まず、 判定・字面・記録の書き手は 1 関数ずつです。 代わりに、 席の dir に file が 1 つと規則の表に行が 1 本増え、 猶予の間は限度を越えた口座で席が動き、 席の作法は案内で器が強制できません。 持ち主の裁定で選びました。</span>
+<div class="opt-head"><span class="opt-id">OPT1</span><span class="opt-name">席の起動行の頭に便と同じ scope を置く (上限は rules 行 1 本・CPU の重みは付けない・probe は撃たない)</span><span class="opt-verdict chosen">採用</span></div>
+<p class="opt-sum">rules 行 seat.memory_max_mb (MiB・既定 32768・裁定 id つき) を足す。 起動行の導出<span class="term" data-component="plain-language-term-inline" data-term="起動行の導出">席を起こす 1 行を組む関数</span> (pure) は頭の語列を Option で受け、 launch が決める — 値 0 / 読めない周は無し (語 no-rules)、 systemd-run が PATH の dir に実行可能な file として無い周は無し (語 no-systemd-run)、 在れば systemd-run --user --scope --quiet --collect --unit=&lt;name&gt; -p MemoryMax=&lt;mb&gt;M -p OOMPolicy=continue -- を env 3 語の直後・claude の前に置く。 語列は便の scope_args と同じ関数 (CPU の重みの有無の引数 1 つ)、 unit 名は便と同じ unit_name (&lt;NAME&gt;-&lt;target&gt;-seat-0-&lt;pid&gt;-&lt;seq&gt;)。 probe (scope を試しに作る) は撃たない。 登録 row の雛形には頭を載せない。 起動の 1 行の末尾に scope=&lt;unit 名|off|no-rules|no-systemd-run&gt;。 溢れた周は箱の中の 1 process が殺され、 claude が死んだ周は管理 tick が起こし直す。 決め手は現物 (持ち主の裁定)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT1">席を起こす 1 行の頭に、 便と同じ systemd の scope (memory の上限つきの箱) を置く案です。 上限は規則の表の行 1 本 (既定 32 GiB)、 CPU の重みは席には付けません。 行が 0 / 読めない周と systemd-run が無い machine は頭を付けずに素の行で起こし、 結果の 1 行に理由を出します。 起動の前に箱を試しに作ることはしません。 溢れて殺されるのは箱の中の process だけで、 claude 自身が死んだ周は見回りが起こし直します。 他の席と ssh が生き、 上限が宣言値 1 つで、 語列と名が便と同じ関数である点で勝ります。 代わりに、 起こす 1 行が長くなって既存の歯の期待が動き、 session manager の無い machine では起こす行が失敗し、 上限に届いた周は claude 自身が殺されて turn が失われることがあります。 持ち主の裁定で選びました。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>席が裏で走らせる subagent は猶予の間に終われ、 席は合図で新しい subagent を起こすのを止められる (DR1)</li>
-<li>限度を越えた口座で動き続ける時間は猶予の値が上限で、 越えれば今どおり /exit が届く (DR2)</li>
-<li>打刻も席の自己申告も読まず、 起点は器が書く群の記録の時刻で、 打刻を失った席も猶予の後に必ず移る (DR3)</li>
-<li>猶予の判定・合図の字面・記録の書き手が 1 関数ずつで、 tick と群の段が同じ字面と同じ記録を使う (DR4)</li>
+<li>席の subagent の Bash が溢れても殺されるのは席の箱の中で、 他の席と ssh は生きる (DR1)</li>
+<li>上限は rules 行 1 本の宣言値で、 裁定 id が残る (DR2)</li>
+<li>道具の無い host と行が 0 / 読めない周は素の行で起こし、 理由が起動の 1 行に出る (DR3)</li>
+<li>語列と unit 名が便の封じ込めと同じ関数で、 4 つの呼び手が同じ 1 本を通る (DR4)</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>席の状態の dir に file が 1 つ増え (合図の記録)、 rules 行が 1 本増える</li>
-<li>猶予の間 (既定 30 分) は限度を越えた口座で席が動き続ける</li>
-<li>合図の送達が入力欄の門で断られた周は次の周に送り直すが、 席が合図を読むのは次の turn の頭で、 席の作法 (新しい subagent を起こさない) は案内であって器は強制できない</li>
+<li>席の起動行が長くなり、 起動行を pin する既存の歯 (31 本) の期待が動く</li>
+<li>probe を撃たないので、 systemd-run は在るが user の session manager が無い host では起動行が pane で失敗する (管理 tick の unit と同じ前提・その host では行を 0 にする裁定で戻せる)</li>
+<li>箱の上限に届いた周は claude 自身が殺されることがあり、 会話は管理 tick の起こし直し (--resume) で戻るが、 その周の turn は失われる</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT2</span><span class="opt-name">席が「作業中」の札を自分で書き、 tick が札の在る間は /exit を待つ</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">席の状態の dir に席自身が作業中の記録を置き、 tick は在る間は退避しない。 決め手は分析 (自己申告の穴)。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT2">席が「いま作業中」の札を自分で書き、 見回りは札が在る間は /exit を待つ案です。 席が自分の区切りを最も正確に知っている点で勝ります。 けれども、 書き忘れ・消し忘れ・落ちた席が残した札で移動が止まり、 打刻を失った席が移らない穴 (台帳 .635) と同じ形になります。 上限も無く、 限度を越えた口座で動き続ける時間を器が抑えられません。 退けました。</span>
+<div class="opt-head"><span class="opt-id">OPT2</span><span class="opt-name">席の Bash を hook で 1 command ずつ scope に包む</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">PreToolUse の見張り (host-guard) が撃つ command を systemd-run の scope で包む。 決め手は分析 (hook の限界)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT2">席の Bash を、 hook (command を撃つ前の見張り) で 1 command ずつ箱に包む案です。 落ちるのが 1 command だけで claude 自身は殺されない点で勝ります。 けれども、 hook は command を書き換えられず、 subagent の Bash は hook を通らない周が在ります。 上限も command ごとで、 席の合計 (並走する Bash と claude 自身) を抑えられません。 退けました。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>席が自分の区切りを最も正確に知っている</li>
+<li>落ちるのは 1 command だけで、 claude 自身は殺されない</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>書き忘れ・消し忘れ・落ちた席の残した札で移動が止まり、 打刻を失った席が移らない穴 (台帳 .635) と同型になる (DR3)</li>
-<li>上限が無く、 限度を越えた口座で動き続ける時間を器が抑えられない (DR2)</li>
+<li>PreToolUse は command を書き換えられず、 subagent の Bash は hook を通らない周が在る (DR1)</li>
+<li>上限が command ごとで、 席の合計 (並走する Bash と claude 自身) を抑えられない (DR2)</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT3</span><span class="opt-name">現状維持 — subagent の出力を file に落とし、 起こし直した席が file から拾う</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">器は変えず、 席の運用で損失を小さくする。 決め手は分析 (損失は毎回)。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT3">器は変えず、 subagent の出力を file に落として起こし直した席が file から拾う運用にする案です。 器に足すものが無く、 限度を越えた口座は 15 秒で止まる点で勝ります。 けれども、 走行中の便は毎回途中で落ち、 席は起こし直しの後に点検からやり直します。 損失は移動のたびに繰り返し、 file に落とす作法も席の側の案内で器が保証できません。 退けました。</span>
+<div class="opt-head"><span class="opt-id">OPT3</span><span class="opt-name">正規表現の字面を見張る (規則で塞ぐ)</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">破滅的 backtrack の形 (量指定子つきの後方参照など) を prompt や hook の規則で禁じる。 決め手は分析 (N2)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT3">破滅的な正規表現の形を prompt や hook の規則で禁じる案です。 今回の事故の直接の原因に当たる点で勝ります。 けれども、 散文にしか無い規則は規則として扱えず、 GNU sed には複雑度の上限が無いので塞ぐ先がありません。 次の暴走は正規表現とは限りません。 退けました。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>器に足すものが無く、 限度を越えた口座は 1 周 (15 秒) で止まる (DR2)</li>
+<li>今回の事故の直接の原因に当たる</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>走行中の便は毎回途中で落ち、 席は起こし直しの後に点検からやり直す。 損失は移動のたびに繰り返す (DR1)</li>
-<li>出力を file に落とす作法は席の側の案内で、 器が保証できない (DR3)</li>
+<li>散文にしか無い規則は規則として扱えず (N2)、 GNU sed には複雑度の上限が無いので塞ぐ先が無い (DR1)</li>
+<li>次の暴走は正規表現とは限らない (DR1)</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT4</span><span class="opt-name">tick が subagent の有無を process の木で読み、 在る間は待つ</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">窓が shell かの判定 (子 process まで見る・設計 §6) と同じ読みで、 claude の下に subagent が在れば待つ。 決め手は分析 (見えない)。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT4">見回りが subagent の有無を process の木で読み、 在る間は待つ案です。 席の作法に依らず器が実測で待てる点で勝ります。 けれども、 Agent tool の subagent は claude の process の内側で走り、 process の木には現れません (Bash の子 process しか見えません)。 見えたとしても上限が無く、 長い Bash が在る限り移動が止まります。 退けました。</span>
+<div class="opt-head"><span class="opt-id">OPT4</span><span class="opt-name">user の slice の MemoryHigh を下げる (host の運用)</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">systemd の user slice の上限を下げ、 暴走が host の他の部分に及ばないようにする。 決め手は分析 (器の外・同じ slice)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT4">machine の user 全体の囲い (slice) の上限を下げて、 暴走が machine の他の部分に及ばないようにする運用の案です。 器に足すものが無い点で勝ります。 けれども、 ssh の login も同じ囲いに居るので、 囲いの上限では login 不能を防げません。 machine の運用であって、 器の宣言値にも記録にもなりません。 退けました。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>席の作法に依らず器が実測で待てる</li>
+<li>器に足すものが無い</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>Agent tool の subagent は claude の process の内側で走り、 process の木には現れない (Bash の子 process しか見えない) (DR1)</li>
-<li>見えたとしても上限が無く、 長い Bash が在る限り移動が止まる (DR2)</li>
+<li>ssh の login も同じ slice に居るので、 slice の上限では login 不能を防げない (DR1)</li>
+<li>host の運用で、 器の宣言値にも記録にもならない (DR2・DR3)</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT5</span><span class="opt-name">猶予を群の段の settle の窓で持つ (合図 → settle → /exit)</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">群の段は既に合図 → 起動の待ち (settle) の順で撃つので、 その窓を伸ばして tick の /exit もそれに合わせる。 決め手は分析 (意味が別)。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT5">群の段は既に「合図 → 起動の待ち (settle)」の順で撃つので、 その待ちの窓を伸ばして見回りの /exit もそれに合わせる案です。 規則の表に行を足さない点で勝ります。 けれども、 起動の待ちは「窓が shell に戻るのを待つ秒」で、 退避の猶予とは別の量です。 1 つの値に 2 つの意味を持たせると片方を変えると片方が壊れます。 見回りの周は群の段の待ちを読まず、 群の段は便の終端にしか回らないので、 猶予には見回りが周ごとに読める起点 (群の記録の時刻) が要ります。 退けました。</span>
+<div class="opt-head"><span class="opt-id">OPT5</span><span class="opt-name">起動で probe を撃ち、 scope を作れない host は縮退する (便の封じ込めと同じ)</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">便の封じ込めと同じく、 起動の前に scope を 1 つ試しに作り、 作れない host は素の行に縮退する。 決め手は分析 (歯が実 scope を作る)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT5">便の封じ込めと同じく、 起動の前に箱を 1 つ試しに作って、 作れない machine は素の行に縮退する案です。 session manager の無い machine でも起こす行が失敗しない点で勝ります。 けれども、 席の起動の歯 (test) は偽の systemd-run の道具箱を積まないので、 試しの箱が本物の scope を作って test を走らせた machine の systemd を詰まらせます (以前の事故と同じ形)。 席の起動は user の session manager が在る machine が前提 (見回りの unit と同じ) なので、 試しの箱が守る周がありません。 退けました。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>rules 行を足さない</li>
+<li>session manager の無い host でも起動行が失敗しない</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>settle は「窓が shell に戻るのを待つ秒」で、 起動の待ちと退避の猶予<span class="term" data-component="plain-language-term-inline" data-term="退避の猶予">/exit までの待ち時間</span>は別の量。 1 つの値に 2 つの意味を持たせると片方を変えると片方が壊れる (DR4)</li>
-<li>tick の周は群の段の待ちを読まず、 群の段は便の終端にしか回らない。 猶予は tick が周ごとに読める起点 (群の記録の時刻) が要る (DR3)</li>
+<li>席の起動の歯は偽 systemd-run の道具箱を積まないので、 probe が実 scope を作り user の systemd を詰まらせる (台帳 .504 の事故と同型) (DR4)</li>
+<li>席の起動は user の session manager が在る host が前提 (管理 tick の unit と同じ) で、 probe が守る周が無い (DR3)</li>
 </ul></div></div>
 </div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの方式を選ぶか</span><h2>選んだ方式と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、 それが要件書のどの要件を支えるかを示します。 器は規則の表に猶予の行 (seat.move_grace_s・既定 30 分・裁定 id つき) を持ちます。 見回りの移動の周は、 群の記録の時刻から猶予がまだ残っていれば、 合図の記録が無い周に退避の合図の 1 行を送って記録を書き、 記録が在る周は待ちます (何も送りません)。 猶予が残っていない周 (猶予 0・越えた・記録なし) は今の形 (/exit・確認の dialog なら Enter) です。 合図の字面は 1 関数で、 群の段と見回りが同じものを送ります。 群の段の続きの周も、 猶予が残っていない周だけ /exit を送ります。 支えるのは FR38 (群の移動) の根拠と、 FR27 (見回り)・FR59 (席の起動) への主張です。</p></section>
+<section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの方式を選ぶか</span><h2>選んだ方式と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、 それが要件書のどの要件を支えるかを示します。 器は規則の表に席の箱の行 (seat.memory_max_mb・既定 32768 MiB・裁定 id つき) を持ちます。 席を起こす 1 行の頭 (env の 3 語の直後・claude の前) に systemd の scope の語列を置き、 語列は便の箱と同じ関数 (CPU の重みは席には付けない)、 箱の名も便と同じ関数で組みます。 行が 0 / 読めない周と systemd-run が PATH に無い周は頭を付けず、 起動の前に箱を試しに作ることはしません。 登録の記録の雛形には頭を載せません。 結果の 1 行の末尾に箱の名か縮退の理由が付きます。 支えるのは FR59 (席の起動) の根拠と、 NFR6 (machine の資源)・FR27 (見回り) への主張です。</p></section>
 <div class="chapbody">
 <div data-component="adr-decision-panel" id="decision">
 <p class="dec-kick">採用 — OPT1</p>
-<p class="dec-state">器 SHALL rules 行 seat.move_grace_s (整数の秒・既定 1800・user 裁定 id つき) を埋め込み manifest に持ち、 管理 tick SHALL その行を他の rules 行と同じ場所で読み、 欠く周 SHALL rc 1 で語 no-rule とする。 管理 tick の移動の周 SHALL 群の記録の時刻 + 猶予 − 今 が正なら退避の猶予の内側と読み、 席の状態の dir の合図の記録 (1 行 ts=&lt;群の記録の時刻&gt;・一時 file → rename) が同じ時刻を持たない周 SHALL 退避の合図の 1 行を入力欄が空なら送って記録を書き (判定行 move=signal・tick.jsonl に who=seat-tick-move)、 同じ時刻を持つ周 SHALL 待つ (move=wait・0 key・lock を取らない)。 猶予の内側でない周 (猶予 0・越えた・記録なし) SHALL 今の形 (lock の内側で /exit・確認 dialog の既定の行なら Enter) とする。 時刻の字面が形でない記録 SHALL 読めない記録として断る (数に読み替えない)。 退避の合図の字面 SHALL hook/group.rs の 1 関数 (群の名・移り先・残りの秒) とし、 群の段と管理 tick SHALL 同じ字面を送る。 群の段の移動の周 SHALL 送った席ごとに合図の記録を書き、 続きの周 SHALL 猶予の内側でない周だけ /exit を送り、 内側の周 SHALL 送らず保留を重ねない。 手の語 SHALL signal と wait を末尾に足す。 移動の周 SHALL NOT 状態の打刻を読まず (設計 §10 形 8 のまま)、 判定の列の順・lock・起こし直し・梯子・heartbeat の停止・status と doctor の項目・event の種類 SHALL 変えない。 席の側の作法 (合図を受けたら新しい subagent を起こさず今のを待つ) SHALL 合図の字面が伝える案内であって規則ではない。</p>
-<span class="dec-plain" data-prose-slot="plain" data-slot-id="decision-plain">器は規則の表に猶予の行 (seat.move_grace_s・整数の秒・既定 1800・裁定 id つき) を持ち、 見回りは他の行と同じ場所で読み、 無ければ「規則が無い」と断ります。 見回りの移動の周は、 群の記録の時刻に猶予を足して今を引いた値が正なら「猶予の内側」と読みます。 内側で、 席の dir の合図の記録が同じ時刻を持たなければ、 入力欄が空のときに退避の合図の 1 行を送って記録を書きます (判定の行は signal)。 同じ時刻を持てば待ちます (wait・何も送らず lock も取りません)。 内側でない周 (猶予 0・越えた・記録なし) は今の形 (/exit・確認の dialog なら Enter) です。 時刻の字面が形でない記録は読めない記録として断ります。 合図の字面は 1 関数 (群の名・移り先・残りの秒) で、 群の段と見回りが同じものを送ります。 群の段の移動の周は送った席ごとに合図の記録を書き、 続きの周は猶予の内側でない周だけ /exit を送ります。 手の語に signal と wait を足します。 移動の周が打刻を読まない形・判定の順・lock・起こし直し・梯子・heartbeat の停止・status と doctor・出来事の種類は変えません。 席の作法 (合図を受けたら新しい subagent を起こさず今のを待つ) は合図の字面が伝える案内で、 規則ではありません。</span>
-<span class="dec-why" data-prose-slot="rationale" data-slot-id="decision-rationale">持ち主の裁定は、 本席が上げた推奨 (合図が先・猶予は規則の表の行 1 本・起点は群の記録の時刻・/exit は猶予の後・席は合図を受けたら新しい subagent を起こさず今のを待つ) の受諾でした。 猶予の起点を群の記録の時刻にするのは、 器が自分で書いた実測値を起点にすれば席の打刻にも自己申告にも依らず、 打刻を失った席も猶予の後に必ず移るからです。 合図の記録を席ごとに 1 つ置くのは、 見回りが 15 秒ごとに回るので、 記録が無いと同じ移動で合図を何度も送ってしまうからです。 合図の字面と猶予の判定を 1 関数にするのは、 群の段 (便の終端の周) と見回りの 2 系統が同じ移動を扱うので、 字面や判定が 2 つあると片方だけ直す事故が起きるからです。 席の自己申告の札は打刻を失った席が移らない穴と同じ形、 現状維持は損失が毎回、 process の木は subagent が見えず、 起動の待ちの流用は意味が別、 という理由で退けました。</span>
+<p class="dec-state">器 SHALL rules 行 seat.memory_max_mb (MiB の整数・既定 32768・user 裁定 id つき) を埋め込み manifest に持つ。 席の起動 SHALL 起動行の頭 (env 3 語の直後・claude の前) に systemd-run --user --scope --quiet --collect --unit=&lt;name&gt; -p MemoryMax=&lt;mb&gt;M -p OOMPolicy=continue -- の語列を置き、 語列 SHALL 便の封じ込めの scope の語列と同じ 1 関数 (CPU の重みの有無の引数 1 つ・席は付けない) とし、 unit 名 SHALL 便と同じ 1 関数 (&lt;NAME&gt;-&lt;target&gt;-seat-0-&lt;pid&gt;-&lt;seq&gt;) で組む。 値 0 と読めない周 SHALL 頭を付けず (語 no-rules)、 systemd-run が PATH の dir に実行可能な file として無い周 SHALL 頭を付けず (語 no-systemd-run)、 起動 SHALL NOT probe を撃たない。 登録 row の雛形 SHALL 頭を載せない。 起動の 1 行 SHALL 末尾に scope=&lt;unit 名|off|no-rules|no-systemd-run&gt; を持つ。 起動の 4 つの呼び手 SHALL 同じ 1 本を通り、 行の読みを自分の manifest から渡す。 席の起動の口・口座の選定・登録 row の形・trust の書き・便の封じ込め・管理 tick の判定の列・役割なしの手動の入口 SHALL 変えない。 本 ADR は ADR-0026 の「cgroup の防壁は席には持ち込まない」の読みを置き換え、 要件は FR59 / NFR6 の範囲で SRS の改訂を伴わない。</p>
+<span class="dec-plain" data-prose-slot="plain" data-slot-id="decision-plain">器は規則の表に席の箱の行 (seat.memory_max_mb・MiB の整数・既定 32768・裁定 id つき) を持ちます。 席を起こす 1 行の頭 (env の 3 語の直後・claude の前) に systemd-run --user --scope --quiet --collect --unit=&lt;名&gt; -p MemoryMax=&lt;上限&gt;M -p OOMPolicy=continue -- の語列を置き、 語列は便の箱と同じ 1 関数 (CPU の重みの有無だけ引数で分け、 席は付けない)、 箱の名は便と同じ 1 関数 (scribe2-&lt;席&gt;-seat-0-&lt;pid&gt;-&lt;通し番号&gt;) で組みます。 行が 0 / 読めない周は頭を付けず (理由 no-rules)、 systemd-run が PATH の dir に実行できる file として無い周も頭を付けず (理由 no-systemd-run)、 起動の前に箱を試しに作ることはしません。 登録の記録の雛形には頭を載せません。 結果の 1 行の末尾に scope=&lt;箱の名|off|no-rules|no-systemd-run&gt; が付きます。 席を起こす 4 つの呼び手は同じ 1 本を通り、 行の読みを自分の規則の表から渡します。 席の起動の口・口座の選定・登録の記録の形・trust の書き・便の封じ込め・見回りの判定の順・役割なしの手動の入口は変えません。 この記録は ADR-0026 の「cgroup の防壁は席には持ち込まない」の読みを置き換え、 要件書は変えません (FR59 / NFR6 の範囲)。</span>
+<span class="dec-why" data-prose-slot="rationale" data-slot-id="decision-rationale">持ち主の裁定は、 席の起動を systemd の箱で包み上限を 32 GiB とする、 の受諾でした (本席の推奨は 16 GiB で、 持ち主は余地を優先して 32 GiB を選びました)。 箱の語列と名を便の封じ込めと同じ関数にするのは、 同じ意味の語列が 2 か所にあると片方だけ直す事故が起きるからです。 CPU の重みを席に付けないのは、 対話の席を便より軽くする理由が無いからです。 起動の前に箱を試しに作らないのは、 席の起動の歯が偽の systemd-run を積まず、 試しの箱が本物の scope を作って test の machine の systemd を詰まらせた事故があるからで、 席の起動は user の session manager が在る machine が前提 (見回りの unit と同じ) です。 上限を規則の表の行 1 本にするのは、 宣言値に裁定 id が残り、 席ごと・役割ごとに分ける理由が無いからです。 hook で command ごとに包む案は subagent の Bash が hook を通らず合計も抑えられない、 正規表現の見張りは散文の規則で塞ぐ先が無い、 囲いの上限の運用は ssh も同じ囲いに居る、 という理由で退けました。</span>
 <div class="justify-box"><p class="jh">この判断が正当化する要件 (cross-doc 照会 → SRS-SCRIBE2-MVP)</p>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR38" data-justifies-req="FR38" data-justifies-role="rationale">FR38</a><span class="justify-role">rationale</span><span class="justify-note">FR38 (群の逼迫の通知と移動) は移った群の古い席に退避の合図が届き新しい口座の席が起こされると書く。 本 ADR は退避の順 (合図が先・/exit は猶予の後) と猶予の起点 (群の記録の時刻) と合図の 1 回性の根拠を与える (裁定 2026-09-26T06:29Z)。</span></div>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR27" data-justifies-req="FR27" data-justifies-role="claim">FR27</a><span class="justify-role">claim</span><span class="justify-note">FR27 (管理 tick) の移動の周は打刻を読まず自席に退避を撃つ。 本 ADR はその周が /exit の前に合図と猶予を持つと主張し、 判定の列の順と打刻を読まない形は変えない。</span></div>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR59" data-justifies-req="FR59" data-justifies-role="claim">FR59</a><span class="justify-role">claim</span><span class="justify-note">FR59 (席の起動) による起こし直しは /exit の後に今のまま撃つ。 本 ADR は猶予が起こし直しの形を変えないと主張する。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR59" data-justifies-req="FR59" data-justifies-role="rationale">FR59</a><span class="justify-role">rationale</span><span class="justify-note">FR59 (席の起動) は起動行の導出と注入を書く。 本 ADR は起動行の頭に封じ込めの箱<span class="term" data-component="plain-language-term-inline" data-term="封じ込めの箱">便を入れる memory の囲い</span>を置く根拠 (host の login 不能・裁定 2026-09-26T08:28Z) と縮退の形を与える。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#NFR6" data-justifies-req="NFR6" data-justifies-role="claim">NFR6</a><span class="justify-role">claim</span><span class="justify-note">NFR6 (host の資源) は封じ込めの外で走る器の子 process 0 本を目標にする。 席は器の子ではないが、 本 ADR は席の起動行にも同じ箱を付けて host の資源を守ると主張する (目標の文は変えない)。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR27" data-justifies-req="FR27" data-justifies-role="claim">FR27</a><span class="justify-role">claim</span><span class="justify-note">FR27 (管理 tick) の起こし直しは本 ADR の後も同じ 1 本を通り、 箱の上限で claude が死んだ周は窓が shell に戻って起こし直される。 本 ADR は判定の列を変えないと主張する。</span></div>
 <p class="justify-tgt">照会先: SRS-SCRIBE2-MVP — SRS: 設計 → 契約 → 実装 → 検証 → land を、 人の手を借りずに 1 本通す器（MVP）</p>
 </div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-warn"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> 結果 / 良い面とトレードオフ</span><h2>この判断で何が良くなり、 何を引き受けるか</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">この判断で良くなること 3 つと、 代わりに引き受けること 3 つです。 良くなるのは、 裏の subagent が猶予の間に終われ席は合図で新しい subagent を起こすのを止められること、 限度を越えた口座で動き続ける時間は猶予が上限で打刻を失った席も猶予の後に必ず /exit が届くこと、 合図の字面・猶予の判定・記録の書き手が 1 関数ずつで見回りと群の段が同じものを使うことです。 引き受けるのは、 猶予の間は限度を越えた口座で席が動き続けること (file 1 つと行 1 本が増える)、 席の作法は案内で器が強制できないこと、 合図の送達が断られた周は次の周に送り直すので届くのが数周遅れうることです。</p></section>
+<section data-component="chapter-deck-band" class="tint-warn"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> 結果 / 良い面とトレードオフ</span><h2>この判断で何が良くなり、 何を引き受けるか</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">この判断で良くなること 3 つと、 代わりに引き受けること 3 つです。 良くなるのは、 席とその subagent の Bash が溢れても殺されるのは席の箱の中だけで他の席と ssh が生きること、 上限が規則の表の行 1 本の宣言値で結果の 1 行に箱の名か理由が出ること、 箱の語列と名が便と同じ関数で 4 つの呼び手が同じ 1 本を通ることです。 引き受けるのは、 起こす 1 行が長くなり既存の歯 31 本の期待が動くこと、 試しの箱を作らないので systemd-run が在って user の session manager が無い machine では起こす 1 行が失敗すること (行を 0 にする裁定で戻す)、 上限に届いた周は claude 自身が殺されることがあり、 会話は起こし直しで戻るがその turn は失われることです。</p></section>
 <div class="chapbody">
 <div data-component="scope-summary-panel"><div class="scol in"><h3>✓ 良い結果</h3><ul>
-<li data-component="adr-consequence-pos"><span class="b">●</span>群が移った周に席が裏で走らせる subagent は猶予の間に終われ、 席は合図で新しい subagent を起こすのを止められる</li>
-<li data-component="adr-consequence-pos"><span class="b">●</span>限度を越えた口座で席が動き続ける時間は猶予の値が上限で、 打刻を失った席も猶予の後に必ず /exit が届く</li>
-<li data-component="adr-consequence-pos"><span class="b">●</span>合図の字面・猶予の判定・記録の書き手が 1 関数ずつで、 管理 tick と群の段が同じ合図と同じ記録を使う</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>席とその subagent の Bash が溢れても、 殺されるのは席の箱の中の process だけで、 他の席と ssh の login は生きる</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>上限は rules 行 1 本の宣言値で裁定 id が残り、 起動の 1 行に箱の unit 名か縮退の理由が出る</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>箱の語列と unit 名は便の封じ込めと同じ関数で、 席の起動の 4 つの呼び手が同じ 1 本を通る</li>
 </ul></div><div class="scol out"><h3>⚖ トレードオフ・代償</h3><ul>
-<li data-component="adr-consequence-neg"><span class="b">●</span>猶予の間 (既定 30 分) は限度を越えた口座で席が動き続ける。 席の状態の dir に file が 1 つ、 rules 行が 1 本増える</li>
-<li data-component="adr-consequence-neg"><span class="b">●</span>席の作法 (合図を受けたら新しい subagent を起こさない) は案内で、 器は強制できない。 従わない席は猶予の後の /exit で今と同じ害を受ける</li>
-<li data-component="adr-consequence-neg"><span class="b">●</span>合図の送達が入力欄の門で断られた周は次の周に送り直すので、 合図が席に届くのは最大で数周遅れる</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>起動行が長くなり、 起動行を pin する既存の歯 31 本の期待が動く (雛形の pin は素のまま)</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>probe を撃たないので、 systemd-run が在って user の session manager が無い host では起動行が pane で失敗する。 その host では行を 0 にする裁定で戻す</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>上限に届いた周は claude 自身が殺されることがあり、 会話は起こし直しで戻るがその turn は失われる</li>
 </ul></div></div>
 </div>
-<section data-component="chapter-deck-band" class="tint-info"><span class="num">06</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> 改訂関係と原則 / この判断の位置づけ</span><h2>版の系譜と、 行き着く原則 (照会終端)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-06">この記録が版の系譜のどこに在るかと、 判断が最後に行き着く原則です。 この記録は新規で、 置き換える決定はありません。 前提として保つのは、 ADR-0066 の判定の置き場と移動の門、 ADR-0067 の起こし直し (会話 id を運ぶ)、 ADR-0068 の梯子と走行中の便の非阻止、 ADR-0069 の移り先の鍵と予約の全部です。 変えるのは移動の周の退避の順 (合図 → 猶予 → /exit) だけで、 打刻を読まない形はそのままです。 行き着く原則は「席を終わらせる前に合図を送り、 待つ時間には器が上限を置く。 起点は器が書いた記録で、 席の申告には依らない」です。</p></section>
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">06</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> 改訂関係と原則 / この判断の位置づけ</span><h2>版の系譜と、 行き着く原則 (照会終端)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-06">この記録が版の系譜のどこに在るかと、 判断が最後に行き着く原則です。 この記録は前の決定 ADR-0026 の「cgroup の防壁は席には持ち込まない」の読みだけを置き換え、 他は保ちます。 保つのは、 ADR-0026 の machine の面の宣言・口座の口・席の起動の口と口座の選定・登録の記録の形、 ADR-0021 の便の封じ込め (2 種の上限・縮退・記録)、 ADR-0058 の見回り、 ADR-0067 の起こし直しの全部です。 行き着く原則は「器が起こす process は便も席も箱の中で走る。 上限は宣言値 1 つで、 箱が作れない周は理由を出して素で起こす」です。</p></section>
 <div class="chapbody">
 <div data-component="adr-supersession">
 <p class="ss-row"><span class="ss-k">改訂状態</span>current</p>
-<p class="ss-row"><span class="ss-k">置き換える ADR</span>なし (新規)</p>
+<p class="ss-row"><span class="ss-k">置き換える ADR</span>ADR-0026</p>
 <p class="ss-row"><span class="ss-k">置き換えられた</span>なし (現行)</p>
-<p class="ss-row">新規で、 置き換える ADR は無い。 前提として保つのは、 ADR-0066 の判定の置き場と移動の門 (各席の tick が自席にだけ撃つ)、 ADR-0067 の起こし直し (会話 id を運ぶ)、 ADR-0068 の梯子と live 便の非阻止、 ADR-0069 の移り先の鍵と予約、 の全部。 変えるのは移動の周の退避の順 (合図 → 猶予 → /exit) だけで、 設計 seat-heartbeat.md §10 形 8〜10 (打刻を読まない) はそのまま。 発効は本 ADR が accepted になり契約表の行 q が land した時点。</p>
+<p class="ss-row">部分 supersede で、 置き換えるのは 1 つ — ADR-0026 の「前の版の launcher が持つ cgroup の防壁は席には持ち込まない」の読み (席の起動行の頭に器の封じ込めの箱を置く) — で、 他は保つ。 保つのは、 ADR-0026 の host の面の宣言・口座の口 4 つ・席の起動の口と口座の選定・登録 row の形、 ADR-0021 の便の封じ込め (2 種の上限・縮退・record)、 ADR-0058 の管理 tick、 ADR-0067 の起こし直し、 の全部。 発効は本 ADR が accepted になり契約表の行 t が land した時点。</p>
 </div>
 <div data-component="adr-principle">
-<p class="prin-id">照会終端 — PRIN-SIGNAL-THEN-EXIT-WITHIN-A-BOUND</p>
-<p class="prin-text">席を終わらせる前に合図を送り、 待つ時間には器が上限を置く。 起点は器が書いた記録で、 席の申告には依らない。</p>
-<p class="prin-note">本 ADR が席の自己申告の札・現状維持・process の木の読み・settle の窓の流用を退け、 rules 行 1 本と席ごとの記録 1 つにしたのはこの原則に行き着く (これ以上は遡らない照会終端)。</p>
+<p class="prin-id">照会終端 — PRIN-EVERY-VESSEL-PROCESS-HAS-A-BOX</p>
+<p class="prin-text">器が起こす process は便も席も箱の中で走る。 上限は宣言値 1 つで、 箱が作れない周は理由を出して素で起こす。</p>
+<p class="prin-note">本 ADR が hook で command ごとに包む案・正規表現の見張り・slice の運用・probe の流用を退け、 便と同じ語列を rules 行 1 本の上限で席の起動行の頭に置いたのはこの原則に行き着く (これ以上は遡らない照会終端)。</p>
 </div>
 </div>
 <section data-component="chapter-deck-band" class="tint-brand"><span class="num">07</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg> 用語集 / この文書で使う専門語</span><h2>本文に出てくる専門語のやさしい説明</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-07">本文に出てくる専門語 9 個を、 やさしい言葉で説明します。</p></section>
 <div class="chapbody">
 <div data-component="glossary-term-table">
-<div class="grow"><div class="gword">退避の猶予<span class="en">move grace</span></div><div class="gdef">群が別の口座へ移った周から、 器が古い席へ /exit を送るまでの待ち。 rules 行 seat.move_grace_s (整数の秒・既定 1800) が持ち、 起点は群の記録の時刻。 0 は待たない。</div></div>
-<div class="grow"><div class="gword">退避の合図<span class="en">evacuation notice</span></div><div class="gdef">群が別の口座へ移った周に古い席の入力欄へ注入する 1 行。 新しい subagent を起こさず今の作業に区切りをつけ作業記憶を残すよう案内し、 残りの秒を載せる。 字面は 1 関数で、 群の段と管理 tick が同じものを送る。</div></div>
-<div class="grow"><div class="gword">合図の記録<span class="en">notice mark</span></div><div class="gdef">席の状態の dir に置く 1 行の file (群の記録の時刻)。 同じ時刻の記録が在れば管理 tick は合図を送り直さない。 書き手は 1 関数で、 群の段と管理 tick が書く。</div></div>
-<div class="grow"><div class="gword">群の記録<span class="en">group record</span></div><div class="gdef">host の群用 dir に群ごとに高々 1 つ置く file (口座・時刻・理由・前の口座)。 移動の周に器が書く。 本 ADR はその時刻を猶予の起点にする。</div></div>
-<div class="grow"><div class="gword">移動の門<span class="en">move gate</span></div><div class="gdef">管理 tick の判定の列のうち、 群の記録の口座と自席の登録 row の口座が違う周に自席へ退避か起こし直しを撃つ段 (ADR-0066)。 本 ADR で退避は合図 → 待つ → /exit の 3 分岐になる。</div></div>
-<div class="grow"><div class="gword">続きの周<span class="en">continuation round</span></div><div class="gdef">群の段 (便の終端の周) が、 移った後に shell へ戻らない席を見る周。 これまで /exit を 1 回送っていたが、 本 ADR で猶予の内側の周は送らない。</div></div>
-<div class="grow"><div class="gword">管理 tick<span class="en">management tick</span></div><div class="gdef">席の外から周期 (rules 行 1 本・既定 15 秒) で回り、 死んだ席を起こし直し、 移動の周に退避を撃ち、 黙った席へ合図を送り、 群の移動の判定を撃つ仕組み (ADR-0058・ADR-0066)。</div></div>
-<div class="grow"><div class="gword">subagent<span class="en">subagent</span></div><div class="gdef">席 (claude) が Agent tool で起こす下請けの agent。 background で走り、 席の turn は完了を待たずに終わる。 claude の process の内側で走るので process の木には現れない。</div></div>
-<div class="grow"><div class="gword">手の語<span class="en">move word</span></div><div class="gdef">管理 tick の判定行の move= に載る閉じた語 (launch / exit / enter)。 本 ADR で signal / wait を末尾に足す。</div></div>
+<div class="grow"><div class="gword">席の箱<span class="en">seat box</span></div><div class="gdef">席の起動行の頭に置く systemd の scope。 上限は席の箱の行 (既定 32 GiB)。 溢れて殺されるのは箱の中の process だけ。 CPU の重みは付けない。</div></div>
+<div class="grow"><div class="gword">封じ込めの箱<span class="en">confinement scope</span></div><div class="gdef">便 (runner / lens / 検証行) を閉じ込める memory 上限付きの囲い (ADR-0021)。 本 ADR は同じ語列と unit 名の関数で席の箱を組む。</div></div>
+<div class="grow"><div class="gword">起動行の導出<span class="en">launch line derivation</span></div><div class="gdef">席の起動行 (env・claude・plugin・引数) を組む pure な 1 関数 (ADR-0026)。 本 ADR で頭の語列を Option で受け、 None なら 1 字も変わらない。</div></div>
+<div class="grow"><div class="gword">縮退<span class="en">degradation</span></div><div class="gdef">箱を作れない周 (行が 0 / 読めない・道具が無い) に、 起動を止めずに素の行で起こし理由の語を出すこと (ADR-0021 と同じ極性)。</div></div>
+<div class="grow"><div class="gword">起動の 1 行<span class="en">launch line</span></div><div class="gdef">seat launch が stdout に出す結果 (launched / refused …)。 本 ADR で launched の末尾に scope=&lt;unit 名|off|no-rules|no-systemd-run&gt; が付く。</div></div>
+<div class="grow"><div class="gword">user の slice<span class="en">user slice</span></div><div class="gdef">systemd が user ごとに作る cgroup。 ssh の login も席もこの中に居るので、 席の 1 本の暴走が login を止める。</div></div>
+<div class="grow"><div class="gword">管理 tick<span class="en">management tick</span></div><div class="gdef">席の外から周期で回り、 死んだ席を起こし直し、 移動の周に退避を撃ち、 黙った席へ合図を送る仕組み (ADR-0058・ADR-0066)。 箱の上限で claude が死んだ周もこれが起こし直す。</div></div>
+<div class="grow"><div class="gword">subagent<span class="en">subagent</span></div><div class="gdef">席 (claude) が Agent tool で起こす下請けの agent。 その Bash も席の箱の中で走る。</div></div>
+<div class="grow"><div class="gword">probe<span class="en">probe</span></div><div class="gdef">便の封じ込めが起動の前に scope を 1 つ作って作れるかを確かめる手 (ADR-0021)。 席の起動では撃たない (歯が実 scope を作る事故を避ける)。</div></div>
 </div>
 </div>
 </div>
 <footer class="foot" data-component="fidelity-sync-meta"><div class="ft-grid">
 <div class="ft-plain">このページは、大もとの機械データ (正本) から自動で組み立てられています。構造は機械が自動で検査し、内容が元データに忠実かは独立のレビューで確かめます。</div>
-<div data-audience="machine">機械SSoT: <b>ADR-0071-group-move-signal-then-exit-after-grace.adr.yaml</b> &middot; 生成: <b>2026-09-26 06:42</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
+<div data-audience="machine">機械SSoT: <b>ADR-0072-seats-launch-inside-a-memory-bounded-scope.adr.yaml</b> &middot; 生成: <b>2026-09-26 08:37</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
 <div class="tags" data-audience="machine"><span>folio design system</span><span>ADR-pack</span><span>folio engine B1 (instance#2)</span><span>cross-doc 照会</span></div>
 </div></footer>
 <!-- folio:chrome-bottom -->
 <nav class="prevnext" aria-label="前後の文書">
-  <a class="prevnext__prev" href="ADR-0070-heartbeat-is-the-stamp-signal-and-can-be-paused-per-seat.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">heartbeat は打刻の合図を指し、 席ごとに止められ、 管理 tick は止めない — 席の状態の dir の停止の記録 1 つで管理 tick は合図だけを送らず (起こし直し・退避・群の判定は撃つ)、 tick は周ごとに最後の周の打刻を書き、 seat tick status と doctor が健全と on/off を出し、 外の画面は file を読んで止める口は器の CLI を撃つ (ADR-0058 の「heartbeat = 管理 tick」の読みを部分 supersede・要件 FR78 / AC48 の新設と FR27 の語の改めを伴う)</span></a>
-  <a class="prevnext__next" href="ADR-0072-seats-launch-inside-a-memory-bounded-scope.html"><span class="prevnext__dir">次 &rarr;</span><span class="prevnext__title">席の起動を封じ込めの箱で包む — 席 (人と話す claude とその subagent) の起動行の頭に便と同じ systemd の scope (memory の上限は rules 行 1 本・32 GiB・CPU の重みは付けない) を置き、 行が 0 / 読めない周と道具が無い host は素の行に縮退し、 溢れて殺されるのは箱の中の 1 process だけで claude が死んだ周は管理 tick が起こし直す (ADR-0026 の「cgroup の防壁は席には持ち込まない」の読みを部分 supersede・要件は FR59 / NFR6 の範囲)</span></a>
+  <a class="prevnext__prev" href="ADR-0071-group-move-signal-then-exit-after-grace.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">群の移動の退避は合図が先で /exit は猶予の後 — 群が別の口座へ移った周に古い席へ送るのは退避の合図の 1 行で、 /exit は猶予 (rules 行 1 本・起点は群の記録の時刻) を越えた周に送り、 合図は席ごとの記録 1 つで移動につき 1 回、 群の段の続きの周も同じ猶予を読む (ADR-0066 の移動の門と ADR-0068 の梯子は前提のまま・要件は FR38 / AC41 の範囲)</span></a>
 </nav>
 <script>
 (function () {

@@ -195,7 +195,7 @@ terms:
     relationships: [口座, anchor, 席の起動, 口座の登録, doctor]
   - canonical: 席の起動
     domain: consumer
-    definition: 器の subcommand seat launch が役割 (必須) と口座 (指定か session 用の選定) から起動行を導出し、 席の登録を先に書いて tmux の窓の shell へ差し込むこと (ADR-0026 §2.3)。 立て直しと同じ経路で、 器の subcommand 以外の起動経路を使わない。 ADR-0063 (proposed) の後は、 引数の無い形が置き場 (repo の local 設定)・役割 (orchestrator)・target (repo の dir 名)・口座 (群の今の口座か選定) を既定から解く。 ADR-0064 (proposed) の後は、 席を立てた周に tick の宣言が在れば tick の unit の install を面の値で撃ち、 結果を起動の 1 行の末尾に足す (断りは起動の rc を変えない)。 ADR-0065 (proposed) の後は、 登録を書いた後・起動行を差し込む前に、 選んだ口座の設定 dir の .claude.json に anchor の trust の印を置く (結果は閉じた言葉で 1 行の末尾に添え、 起動は止めない)。
+    definition: 器の subcommand seat launch が役割 (必須) と口座 (指定か session 用の選定) から起動行を導出し、 席の登録を先に書いて tmux の窓の shell へ差し込むこと (ADR-0026 §2.3)。 立て直しと同じ経路で、 器の subcommand 以外の起動経路を使わない。 ADR-0063 (proposed) の後は、 引数の無い形が置き場 (repo の local 設定)・役割 (orchestrator)・target (repo の dir 名)・口座 (群の今の口座か選定) を既定から解く。 ADR-0064 (proposed) の後は、 席を立てた周に tick の宣言が在れば tick の unit の install を面の値で撃ち、 結果を起動の 1 行の末尾に足す (断りは起動の rc を変えない)。 ADR-0065 (proposed) の後は、 登録を書いた後・起動行を差し込む前に、 選んだ口座の設定 dir の .claude.json に anchor の trust の印を置く (結果は閉じた言葉で 1 行の末尾に添え、 起動は止めない)。 ADR-0072 で起動行の頭に席の箱が付く (行が 0 / 読めない周と道具の無い host は素の行)。
     forbidden: [cla, cld, wrapper 起動]
     relationships: [席, 席の登録, 起動行の導出, 口座]
   - canonical: 起動行の導出
@@ -924,10 +924,16 @@ terms:
     aliases: [train max]
     definition: 候補の木に積む便の数の上限。 rules 行 land.train_max の値で、 裁定 id 付きで manifest が持つ (C5・ADR-0039)。
     relationships: [rules 行, 裁定 id, manifest, 候補の木, 着地の列]
+  - canonical: 席の箱
+    domain: consumer
+    aliases: [seat box]
+    definition: 席 (人と話す claude とその subagent の Bash) の起動行の頭に置く memory 上限付きの systemd の scope (SRS FR59 / NFR6・ADR-0072)。 上限は rules 行 seat.memory_max_mb (MiB・既定 32768・user 裁定 id つき)。 語列と unit 名は封じ込めの箱と同じ 1 関数で、 CPU の重みは付けない。 行が 0 / 読めない周と systemd-run が PATH に無い host は素の行に縮退し、 起動の 1 行の scope= に理由が出る。 溢れて殺されるのは箱の中の process だけで、 claude が死んだ周は管理 tick が起こし直す。
+    forbidden: [seat cgroup, 席の cgroup の防壁]
+    relationships: [封じ込めの箱, 席の起動, 起動行の導出, 管理 tick, rules 行]
   - canonical: 封じ込めの箱
     domain: consumer
     aliases: [箱, confinement scope]
-    definition: 封じ込めが process を閉じ込める memory 上限付きの囲い (systemd-run --user --scope で作る transient scope)。 上限を超えると殺されるのはその中の process だけ (ADR-0021 §2.2・ADR-0040)。
+    definition: 封じ込めが process を閉じ込める memory 上限付きの囲い (systemd-run --user --scope で作る transient scope)。 上限を超えると殺されるのはその中の process だけ (ADR-0021 §2.2・ADR-0040)。 ADR-0072 で席の箱も同じ語列と unit 名の関数で組む (席は CPU の重みを付けない)。
     relationships: [封じ込め, 箱の上限の 2 種, 実装役の箱, 検証行の箱]
   - canonical: 箱の上限の 2 種
     domain: consumer
