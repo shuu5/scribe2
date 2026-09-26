@@ -8,6 +8,7 @@
 //! 書かない（対応の追加漏れを compile 時に落とすため）。
 
 pub mod cli;
+pub mod device;
 mod groups;
 pub mod manifest;
 

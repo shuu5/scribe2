@@ -11,7 +11,8 @@
 //! **host の面**（`<state_dir>/host.toml`・設計 account-lifecycle.md §2・ADR-0026 §2.1）も同じ reader で読む:
 //! 持てる表は `[[account]]` / `[[plugin]]` / `[[launch-arg]]` / `[[vessel]]`（器自身の checkout・最大 1 行・
 //! 設計 consumer-sync.md §4）/ `[[account-group]]`（席の口座を持つ project の群・設計 account-lifecycle.md §17・
-//! ADR-0049）/ `[[tick]]` の 6 種だけで、`[[rule]]` は置けない（規則の行は tracked の面だけ・C1）。無い周は
+//! ADR-0049）/ `[[tick]]` / `[[device]]`（端末の表・兄弟 [`super::device`]・設計 host-init.md §15）の 7 種だけで、
+//! `[[rule]]` は置けない（規則の行は tracked の面だけ・C1）。無い周は
 //! 0 宣言（縮退）・在るが読めない周は欠陥の全件（FailClosed）。
 //!
 //! `[[account-group]]` は**host の面にだけ**置ける最初の表である（`[[rule]]` が tracked の面にだけ置けるのと
@@ -22,7 +23,7 @@
 //! 持てる表は `[[contract]]` 1 種だけで（key 集合は `pipe::table::FIELDS`）、rules manifest と host の面は
 //! `[[contract]]` を置けない。値の受理集合と**空の配列の拒否**は他の面と同じ（空の列は key の省略で表す）。
 
-use super::{Rule, RuleError, RuleKind, RuleRow, RuleValue, ValueShape, HOST_MANIFEST};
+use super::{device::Device, Rule, RuleError, RuleKind, RuleRow, RuleValue, ValueShape, HOST_MANIFEST};
 use crate::hook::command::{denied_in, denied_of};
 use crate::pipe::contract::{class_element, ClassElement};
 use crate::pipe::declaration::CEILING_ROW;
@@ -96,7 +97,7 @@ pub enum Scalar {
 /// `pipe` の契約 file も同じ切り方（[`elements`] / [`quoted_once`]）を使う
 /// ——配列を読む実装が 2 本あると、書いた本数と通る本数の食い違いが片側だけ直る。
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum RawValue {
+pub(super) enum RawValue {
     /// 単一の値。
     One(Scalar),
     /// 文字列の列。
@@ -131,6 +132,8 @@ enum Section {
     /// 席の起動が入れる tick の unit の置き場と binary の宣言（unit-dir と binary・最大 1 行・**host の面にだけ**・
     /// 設計 seat-heartbeat.md §5・ADR-0064）。
     Tick,
+    /// 端末 1 台の宣言（**host の面にだけ**・組み立てと検査は兄弟 [`super::device`]・設計 host-init.md §15・ADR-0076）。
+    Device,
 }
 
 /// [`Section`] の全 variant（宣言順）。
@@ -143,6 +146,7 @@ const SECTIONS: &[Section] = &[
     Section::Vessel,
     Section::AccountGroup,
     Section::Tick,
+    Section::Device,
 ];
 
 impl Section {
@@ -157,6 +161,7 @@ impl Section {
             Self::Vessel => "[[vessel]]",
             Self::AccountGroup => "[[account-group]]",
             Self::Tick => "[[tick]]",
+            Self::Device => super::device::HEADER,
         }
     }
 
@@ -177,6 +182,7 @@ impl Section {
             Self::Vessel => VESSEL_KEYS.to_vec(),
             Self::AccountGroup => GROUP_KEYS.to_vec(),
             Self::Tick => TICK_KEYS.to_vec(),
+            Self::Device => super::device::KEYS.to_vec(),
         }
     }
 
@@ -191,6 +197,7 @@ impl Section {
             Self::Vessel => VESSEL_KEYS.to_vec(),
             Self::AccountGroup => GROUP_KEYS.to_vec(),
             Self::Tick => TICK_KEYS.to_vec(),
+            Self::Device => super::device::REQUIRED.to_vec(),
         }
     }
 }
@@ -207,10 +214,10 @@ enum Face {
 }
 
 /// section 1 つ分の生の key/value。
-struct RawRow {
+pub(super) struct RawRow {
     section: Section,
-    line: u64,
-    fields: Vec<(String, RawValue, u64)>,
+    pub(super) line: u64,
+    pub(super) fields: Vec<(String, RawValue, u64)>,
 }
 
 /// `[[account]]` 1 行が名乗る**不透明な** label（設計 fleet-usage.md §2）。
@@ -366,6 +373,7 @@ pub struct Manifest {
     groups: Vec<AccountGroup>,
     // Box は `HostManifest::Present` の大きさを抑えるため（clippy large_enum_variant）。
     tick: Option<Box<TickUnit>>,
+    devices: Vec<Device>,
 }
 
 /// `[[contract]]` 1 行の値（key 集合は検査済み・値の形の検査は欄の形を持つ `pipe::table` が行う）。
@@ -561,6 +569,7 @@ impl Manifest {
         self.plugins.extend(face.plugins);
         self.launch_args.extend(face.launch_args);
         self.groups.extend(face.groups);
+        self.devices.extend(face.devices);
         self.vessel = self.vessel.take().or(face.vessel);
         // `[[tick]]` は host の面にだけ在る（tracked の面は `collect` が断る）＝面をまたぐ重複は起きない。
         self.tick = face.tick;
@@ -623,6 +632,11 @@ impl Manifest {
     pub fn tick(&self) -> Option<&TickUnit> {
         self.tick.as_deref()
     }
+
+    /// 宣言した端末を**宣言順**で返す（host の面・無ければ空・設計 host-init.md §15）。
+    pub fn devices(&self) -> &[Device] {
+        &self.devices
+    }
 }
 
 /// 本文を面の規則で読み、組めた宣言と欠陥の全件を返す（`parse` と host の面の共通の本体）。
@@ -657,14 +671,16 @@ fn collect(text: &str, face: Face) -> (Manifest, Vec<RuleError>) {
             // unit の置き場と binary は host 固有の path（tracked の面は PUBLIC repo に載る＝CON2）。行の中身は検査しない（1 表 1 件）。
             (Section::Tick, Face::Tracked) => errors.push(host_only(raw, "unit の置き場は host の面だけ")),
             // 2 行目以降は重複として拒む（`[[vessel]]` と同じ形・1 行目の欠陥は build_tick が別件で報告する）。
-            (Section::Tick, Face::Host) if tick_rows > 0 => errors.push(RuleError::new(
-                raw.line,
-                format!("{} が重複する（最大 1 行）", Section::Tick.header()),
-            )),
+            (Section::Tick, Face::Host) if tick_rows > 0 => {
+                errors.push(RuleError::new(raw.line, format!("{} が重複する（最大 1 行）", Section::Tick.header())));
+            }
             (Section::Tick, Face::Host) => {
                 tick_rows = tick_rows.saturating_add(1);
                 found.tick = build_tick(raw, &mut errors).map(Box::new);
             }
+            (Section::Device, Face::Host) => found.devices.extend(super::device::build(raw, &mut errors)),
+            // 端末の値は host 固有（tracked の面は PUBLIC repo に載る＝CON2）。行の中身は検査しない（1 表 1 件）。
+            (Section::Device, Face::Tracked) => errors.push(host_only(raw, "端末の値は host の面だけ")),
             (Section::Account, _) => found.accounts.extend(
                 build_single(raw, "label", &mut errors).map(|(label, line)| AccountLabel { label, line }),
             ),
@@ -690,6 +706,7 @@ fn collect(text: &str, face: Face) -> (Manifest, Vec<RuleError>) {
     check_duplicate_labels(&found.accounts, &mut errors);
     check_duplicate_groups(&found.groups, &mut errors);
     super::groups::check_tiers(&found.groups, &mut errors);
+    super::device::check_names(&found.devices, &mut errors);
     seed_groups(&mut found.groups, &mut errors);
     (found, errors)
 }
@@ -1134,7 +1151,7 @@ fn unknown_candidates(face: &Manifest, known: impl Fn(&str) -> bool) -> Vec<Rule
 /// 塞ぐためである（SRS AC6「黙って落とす入力 0 件」・NFR4）。とりわけ
 /// `enabled = true` の次に `enabled = false` を書くと、不発効の行が有効なまま
 /// 機械に読まれてしまう。
-fn check_keys(raw: &RawRow, errors: &mut Vec<RuleError>) {
+pub(super) fn check_keys(raw: &RawRow, errors: &mut Vec<RuleError>) {
     let known = raw.section.known_keys();
     for (index, (key, _, line)) in raw.fields.iter().enumerate() {
         if !known.contains(&key.as_str()) {
@@ -1157,7 +1174,7 @@ fn check_keys(raw: &RawRow, errors: &mut Vec<RuleError>) {
 }
 
 /// 文字列 field を取り出す。型違いは error にする。
-fn text_field(raw: &RawRow, key: &str, errors: &mut Vec<RuleError>) -> Option<String> {
+pub(super) fn text_field(raw: &RawRow, key: &str, errors: &mut Vec<RuleError>) -> Option<String> {
     let (_, value, line) = raw.fields.iter().find(|(found, _, _)| found == key)?;
     match value {
         RawValue::One(Scalar::Str(text)) => Some(text.clone()),
@@ -1173,7 +1190,7 @@ fn text_field(raw: &RawRow, key: &str, errors: &mut Vec<RuleError>) -> Option<St
 
 /// 文字列の配列の field を取り出す。型違いは error にする（**空の配列は [`list`] が scan の時点で断る**ので、
 /// ここへ届く列は 1 要素以上である）。
-fn list_field(raw: &RawRow, key: &str, errors: &mut Vec<RuleError>) -> Option<Vec<String>> {
+pub(super) fn list_field(raw: &RawRow, key: &str, errors: &mut Vec<RuleError>) -> Option<Vec<String>> {
     let (_, value, line) = raw.fields.iter().find(|(found, _, _)| found == key)?;
     match value {
         RawValue::List(items) => Some(items.clone()),

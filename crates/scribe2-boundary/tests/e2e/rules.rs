@@ -829,6 +829,100 @@ fn rules_host_tick_absent_table_leaves_the_host_face_unchanged() {
     std::fs::remove_dir_all(&absent).ok();
 }
 
+// ─────────────────── host の面の `[[device]]`（host-init.md §15・契約表の行 g・接頭辞 `rules_host_device_`） ───────────────────
+
+/// 2 行の `[[device]]` を持つ host の面（1 行目は必須の欄だけ・見出しは 3 行目／2 行目は全部の欄・見出しは 9 行目）。
+const HOST_DEVICE: &str = "schema = 1\n\n[[device]]\nname = \"win-1\"\nssh = \"me@win\"\nchrome = \"C:/Chrome/chrome.exe\"\nos = \"windows\"\n\n[[device]]\nname = \"mac-2\"\nssh = \"me@mac\"\nchrome = \"/Applications/Google Chrome.app\"\nos = \"macos\"\ndisplay = \":1\"\nime-env = [\"GTK_IM_MODULE=fcitx\", \"XMODIFIERS=@im=fcitx\"]\nprofile-dir = \"/tmp/prof\"\n";
+
+/// 1 行の `[[device]]`（必須の欄だけ・見出しは 3 行目・name 4・ssh 5・chrome 6・os 7）。
+const HOST_DEVICE_ONE: &str = "schema = 1\n\n[[device]]\nname = \"a\"\nssh = \"me@a\"\nchrome = \"/c\"\nos = \"linux\"\n";
+
+/// 端末 1 台の欄を `|` で繋いだ 1 行（名・ssh・chrome・os・display・ime-env・profile-dir・見出し行）。
+fn device_facts(device: &vessel::rules::device::Device) -> String {
+    let env: Vec<String> = device.ime_env().iter().map(|(key, value)| format!("{key}={value}")).collect();
+    format!(
+        "{}|{}|{}|{}|{:?}|{env:?}|{:?}|{}",
+        device.name(),
+        device.ssh(),
+        device.chrome(),
+        device.os().as_str(),
+        device.display(),
+        device.profile_dir(),
+        device.line()
+    )
+}
+
+/// (a) 2 行の `[[device]]` は host の面から読める: `validate --state-dir` は rc 0 で宣言の数の 1 行は表の無い面と同じ字面（表を
+/// 数えない）・合わせた `Manifest::devices` が宣言順の 2 行と各欄と見出し行を運ぶ・埋め込みの面は 0 行。base は `[[device]]` を
+/// 未知の section として拒む（RED）。
+#[test]
+fn rules_host_device_two_rows_are_read_in_declaration_order_with_every_field() {
+    let dir = host_state_dir(Some(HOST_DEVICE)).expect("tmp の state dir を作れる");
+    let outcome = rules_dispatch(&["validate", "--state-dir", &dir.display().to_string()]);
+    assert_eq!(outcome.rc, RC_OK, "{outcome:?}");
+    assert_eq!(outcome.out, vec![format!("{} accounts=0 plugins=0 launch-args=0 host=present", embedded_validate_line())]);
+    let manifest = Manifest::embedded()
+        .and_then(|tracked| vessel::rules::with_state_dir(tracked, Some(dir.as_path())))
+        .expect("host の面を合わせられる");
+    let facts: Vec<String> = manifest.devices().iter().map(device_facts).collect();
+    assert_eq!(
+        facts,
+        [
+            "win-1|me@win|C:/Chrome/chrome.exe|windows|None|[]|None|3",
+            "mac-2|me@mac|/Applications/Google Chrome.app|macos|Some(\":1\")|[\"GTK_IM_MODULE=fcitx\", \"XMODIFIERS=@im=fcitx\"]|Some(\"/tmp/prof\")|9",
+        ],
+        "宣言順・任意の欄は無ければ None と空"
+    );
+    assert!(Manifest::embedded().expect("埋め込み").devices().is_empty(), "埋め込みの面は 0 行");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// (b) 欠けた必須の欄・未知の key・`os` の 3 語の外・`ime-env` の形の外と KEY の重複・`name` の重複・空白を含む `name` と `ssh`
+/// は、行番号つきで 1 件ずつ断る（`host.toml:` の接頭辞・rc 1・stdout 0 行）。
+#[test]
+fn rules_host_device_refuses_each_defect_once_with_its_line() {
+    let dir = host_state_dir(None).expect("tmp の state dir を作れる");
+    let host = dir.join(vessel::rules::HOST_MANIFEST);
+    let second = "\n[[device]]\nname = \"a\"\nssh = \"me@b\"\nchrome = \"/d\"\nos = \"macos\"\n";
+    for (body, want) in [
+        (HOST_DEVICE_ONE.replace("chrome = \"/c\"\n", ""), "必須 key chrome が無い line=3"),
+        (format!("{HOST_DEVICE_ONE}color = \"red\"\n"), "未知の key color line=8"),
+        (HOST_DEVICE_ONE.replace("\"linux\"", "\"beos\""), "os \"beos\" が linux / macos / windows のどれでもない line=7"),
+        (format!("{HOST_DEVICE_ONE}ime-env = [\"LANG\"]\n"), "ime-env の要素 \"LANG\" が KEY=VALUE の形でない（= が無い） line=8"),
+        (format!("{HOST_DEVICE_ONE}ime-env = [\"A=1\", \"A=2\"]\n"), "ime-env の KEY A が重複する line=8"),
+        (format!("{HOST_DEVICE_ONE}{second}"), "端末の名 a が重複する line=9"),
+        (HOST_DEVICE_ONE.replace("name = \"a\"", "name = \"a b\""), "name が空白を含む: \"a b\" line=4"),
+        (HOST_DEVICE_ONE.replace("\"me@a\"", "\"me @a\""), "ssh が空白を含む: \"me @a\" line=5"),
+    ] {
+        std::fs::write(&host, &body).expect("host の面を書ける");
+        let refused = rules_dispatch(&["validate", "--state-dir", &dir.display().to_string()]);
+        assert_eq!(refused.rc, RC_REFUSED, "{body:?}: {refused:?}");
+        assert!(refused.out.is_empty(), "{body:?}: stdout へは書かない");
+        assert_eq!(refused.err, vec![format!("rules: host.toml: {want}")], "{body:?}: 1 件");
+    }
+    std::fs::write(&host, HOST_DEVICE_ONE).expect("host の面を書ける");
+    let alone = rules_dispatch(&["validate", "--state-dir", &dir.display().to_string()]);
+    assert_eq!(alone.rc, RC_OK, "崩す前の 1 行は通る: {alone:?}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// (c) tracked の面（`--rules` の写し）に置いた表は 1 表 1 件で断る（中身は検査しない・2 表なら 2 件）。
+#[test]
+fn rules_host_device_table_on_the_tracked_face_is_refused_once_per_table() {
+    let dir = host_state_dir(None).expect("tmp の state dir を作れる");
+    let tracked = dir.join("tracked.toml");
+    // `GOOD` は 17 行なので、空行を挟んで足した 2 表の見出しは 19 行目と 25 行目。
+    let tables = HOST_DEVICE.trim_start_matches("schema = 1\n\n");
+    std::fs::write(&tracked, format!("{GOOD}\n{tables}")).expect("tracked の fixture を書ける");
+    let outcome = rules_dispatch(&["validate", "--rules", &tracked.display().to_string(), "--state-dir", &dir.display().to_string()]);
+    assert_eq!(outcome.rc, RC_REFUSED, "{outcome:?}");
+    assert_eq!(
+        outcome.err,
+        [19, 25].map(|line| format!("rules: [[device]] は tracked の manifest に置けない（端末の値は host の面だけ） line={line}"))
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 // ─────────────────── host の面が dir（在るが読めない・`s2-07l.250`・`.243` run 3 の生存変異を塞ぐ） ───────────────────
 // flip-check: retroactive s2-07l.250
 

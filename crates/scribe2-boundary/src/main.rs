@@ -303,7 +303,7 @@ mod tests {
             agentview: AgentView::Unreadable,
             trust: Some(vec![("/repo/a".to_owned(), Trust::Accepted), ("/repo/b".to_owned(), Trust::Unreadable)]),
         };
-        lines.push(render_host_manifest("present", None));
+        lines.push(render_host_manifest("present", None, &[]));
         lines.push(render_account("acct", &probe, Retired::No));
         let consumer = Consumer {
             source: Source::Both,

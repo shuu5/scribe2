@@ -190,6 +190,7 @@ README の先頭に「新しい repo を器に載せる」の節を置く: 打�
   - `crates/scribe2-boundary/tests/e2e/rules.rs`（`rules_host_device_` 接頭辞・`host_state_dir` の fixture）: (a) 2 行の `[[device]]`（必須の欄だけの行と全部の欄の行）を持つ面は `validate --state-dir` が rc 0 で宣言の数の 1 行は表の無い面と同じ字面・合わせた `Manifest` の読み手が宣言順の 2 行と各欄と見出し行を運ぶ・埋め込みの面は 0 行（base では未知の section で面が読めない ＝ RED）(b) 欠けた必須の欄・未知の key・`os` の 3 語の外・`ime-env` の形の外と KEY の重複・`name` の重複・空白を含む `name` と `ssh` は、行番号つきで 1 件ずつ断る (c) tracked の面（`--rules` の写し）に置いた表は 1 表 1 件で断る。
   - `crates/scribe2-boundary/tests/e2e/seat/account.rs`（`host_device_doctor_` 接頭辞・host の面を書く fixture）: 表の在る host の doctor の host の面の行の末尾に ` devices=<名>,<名>`（宣言順）／表の無い host の行は 1 字も変わらない（base では面が unreadable ＝ RED）。
   - lib（行 g の write-set の `+` の file の中・`host_device_` 接頭辞）: 1 行の組み立ての round-trip・`ime-env` の形の境界（先頭の数字・`=` の無い字面・空の KEY・空の VALUE・VALUE の中の `=`）。
+- 実装の決め（行 g・base 67ee2f5）: 欄の値の欠陥（空・空白・`os` の 3 語の外・`ime-env` の要素）はその key の行で、欠けた必須の欄と `name` の重複は見出しの行で名指す。`ime-env` は (KEY, VALUE) の組の列として宣言順で返す。兄弟が組み立てに引くため、manifest.rs の生の行・生の値の型と key の検査の 3 関数（`check_keys` / `text_field` / `list_field`）の可視性を親の module までに広げた（行は増えない）。`collect` は clippy の関数の行数の上限（60）に当たるので、`[[tick]]` の重複の腕を同じ挙動のまま 1 行詰めた。manifest.rs は 1301 → 1318 行。
 - 後続: 消費側が値を読む形（host の面を直に読むか、器に読み出しの口を足すか）は消費側の表示面の便の設計で決める（本行は宣言と検査と doctor だけ）。
 
 ## 16. rules/manifest.rs の歯の module を歯の file へ割る — `#[path]` の子 module で module path と歯の名を変えない（契約表の行 h・純移動・行 g の余地を作る）

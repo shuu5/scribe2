@@ -773,6 +773,62 @@ fn host_group_refused_says_unreadable_for_a_malformed_mark() {
     }
 }
 
+// ─── host の面の端末の表（host-init.md §15 形 3・契約表の行 g・接頭辞 `host_device_doctor_`） ───
+
+/// 2 行の `[[device]]`（宣言順は win-1 → mac-2・名の昇順ではない・値は doctor に出ない字面 `me@`）。
+const DEVICE_TABLES: &str = "\n[[device]]\nname = \"win-1\"\nssh = \"me@win\"\nchrome = \"C:/Chrome/chrome.exe\"\nos = \"windows\"\n\n[[device]]\nname = \"mac-2\"\nssh = \"me@mac\"\nchrome = \"/Applications/Chrome\"\nos = \"macos\"\ndisplay = \":1\"\n";
+
+/// 1 行の `[[tick]]`（絶対 path の 2 欄）。
+const DEVICE_TICK: &str = "\n[[tick]]\nunit-dir = \"/srv/units\"\nbinary = \"/opt/bin/scribe2\"\n";
+
+/// 置き場の host の面を `body` で書き、doctor の行の列を返す。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn device_doctor_rows(place: &RolePlace, body: &str) -> Vec<String> {
+    fs::create_dir_all(&place.state).expect("置き場を作れる");
+    fs::write(place.state.join(vessel::rules::HOST_MANIFEST), body).expect("host の面を書ける");
+    doctor_rows(place, &account_rules(&["acct-1"]))
+}
+
+/// 行の列のうち host の面の 1 行（無ければ空）。
+fn host_line(lines: &[String]) -> String {
+    lines.iter().find(|line| line.starts_with("host-manifest=")).cloned().unwrap_or_default()
+}
+
+/// (a) 表の在る host の doctor の host の面の行は、末尾（` tick=declared` の後ろ・`run-accounts=` の前）に ` devices=<名>,<名>`
+/// を宣言順で 1 項目足す（欄の値は書かない）。base は `[[device]]` を未知の表として読めず行が `unreadable`（RED）。
+#[test]
+fn host_device_doctor_appends_the_names_in_declaration_order() {
+    let place = role_doctor_place();
+    let bare = host_line(&device_doctor_rows(&place, "schema = 1\n"));
+    assert!(bare.starts_with("host-manifest=present run-accounts="), "表の無い面の行: {bare}");
+    let with = host_line(&device_doctor_rows(&place, &format!("schema = 1\n{DEVICE_TABLES}")));
+    assert_eq!(with, bare.replacen("host-manifest=present", "host-manifest=present devices=win-1,mac-2", 1));
+    assert!(!with.contains("me@") && !with.contains("chrome"), "欄の値は書かない: {with}");
+    let ticked = host_line(&device_doctor_rows(&place, &format!("schema = 1\n{DEVICE_TICK}")));
+    assert!(ticked.starts_with("host-manifest=present tick=declared run-accounts="), "{ticked}");
+    let both = host_line(&device_doctor_rows(&place, &format!("schema = 1\n{DEVICE_TICK}{DEVICE_TABLES}")));
+    assert_eq!(both, ticked.replacen(" tick=declared", " tick=declared devices=win-1,mac-2", 1), "tick=declared の後ろ");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (b) 表の無い host の行は 1 字も変わらず（面の無い周は従来の 1 行）、表を足しても host の面の行の外は 1 行も動かない。
+#[test]
+fn host_device_doctor_leaves_the_host_line_without_the_table_and_the_other_lines_unchanged() {
+    let place = role_doctor_place();
+    let absent = doctor_rows(&place, &account_rules(&["acct-1"]));
+    assert!(absent.contains(&HOST_ABSENT.to_owned()), "面の無い周の 1 行は従来どおり: {absent:?}");
+    let bare = device_doctor_rows(&place, "schema = 1\n");
+    assert!(!host_line(&bare).contains("devices="), "表の無い面は項目を足さない: {bare:?}");
+    let with = device_doctor_rows(&place, &format!("schema = 1\n{DEVICE_TABLES}"));
+    let others = |lines: &[String]| -> Vec<String> { lines.iter().filter(|line| !line.starts_with("host-manifest=")).cloned().collect() };
+    assert_eq!(others(&with), others(&bare), "host の面の行の外は動かない");
+    assert_eq!(with.len(), bare.len(), "行の数も同じ");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
 // ─────────────────── 口座の退避と立て直し（account-autonomy.md §5・`s2-07l.211`・接頭辞 `seat_account_`） ───────────────────
 
 // ─────────────────── hook 集合の食い違いの後の終了の手と立て直し（consumer-sync.md §6・AC32・`s2-07l.304`・接頭辞 `seat_tick_hook_drift_`） ───────────────────

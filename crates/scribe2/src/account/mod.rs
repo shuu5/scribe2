@@ -363,10 +363,12 @@ pub fn render_account(label: &str, probe: &AccountProbe, retired: Retired) -> St
 
 /// doctor の host の面の 1 行（`host-manifest=<present|absent|unreadable>`・account-lifecycle.md §2・読むだけ）。面に `[[tick]]` が
 /// 在る周（`tick`）だけ末尾に `tick=declared` を 1 項目足す（値は書かない・表の無い host の行は 1 字も変わらない・設計
-/// seat-heartbeat.md §5 形 3）。
-pub fn render_host_manifest(word: &str, tick: Option<&TickUnit>) -> String {
+/// seat-heartbeat.md §5 形 3）。面に `[[device]]` が在る周（`devices` が空でない）だけ、その後ろに端末の名の列を宣言順で
+/// `devices=<名>,<名>` の 1 項目として足す（欄の値は書かない・設計 host-init.md §15 形 3）。
+pub fn render_host_manifest(word: &str, tick: Option<&TickUnit>, devices: &[&str]) -> String {
     let declared = if tick.is_some() { " tick=declared" } else { "" };
-    format!("host-manifest={word}{declared}")
+    let named = if devices.is_empty() { String::new() } else { format!(" devices={}", devices.join(",")) };
+    format!("host-manifest={word}{declared}{named}")
 }
 
 /// 群の行の「1 つも無い」を表す語（席の登録 row がどの置き場にも無い周・`0` や空に潰さない）。
@@ -496,8 +498,9 @@ pub fn doctor_lines(state_dir: &Path, rules: Option<&str>) -> Vec<String> {
     let declared = rules.map_or_else(Manifest::embedded, |path| Manifest::load(Path::new(path))).map(|tracked| tracked.joined(host));
     // tracked の面が読めて合わせで落ちた周は host の面の欠陥（面をまたぐ重複を含む）＝file 単体が読めても unreadable。
     let word = if matches!(declared, Ok(Err(_))) { HostManifest::Unreadable(Vec::new()).as_str() } else { word };
-    let tick = declared.as_ref().ok().and_then(|joined| joined.as_ref().ok()).and_then(Manifest::tick);
-    let head = render_host_manifest(word, tick);
+    let joined = declared.as_ref().ok().and_then(|joined| joined.as_ref().ok());
+    let devices: Vec<&str> = joined.map(|found| found.devices().iter().map(|device| device.name()).collect()).unwrap_or_default();
+    let head = render_host_manifest(word, joined.and_then(Manifest::tick), &devices);
     let Ok(Ok(manifest)) = declared else {
         return vec![head, MANIFEST_UNREADABLE.to_owned()];
     };
