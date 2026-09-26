@@ -1644,8 +1644,11 @@ const MOVE_B: &str = "acct-b";
 const MOVE_ANCHOR: &str = "/repo";
 /// 群の置き場（2 つ目の置き場の席の anchor）。
 const MOVE_ANCHOR_TWO: &str = "/repo-two";
+// 群の名を Tier と数字に改めただけの歯（account-lifecycle.md §29 の行 s・base でも緑）。
+// flip-check: retroactive s2-07l.647
+
 /// 群の名。
-const MOVE_GROUP: &str = "g";
+const MOVE_GROUP: &str = "Tier1";
 /// 偽 tmux の前面の file（無ければ席＝`claude`）。
 const MOVE_FRONT: &str = "front";
 /// `/exit` の確認 dialog の既定の行（設計 account-lifecycle.md §22 形 2 の literal）。
@@ -1817,7 +1820,7 @@ fn move_who_what(line: &str) -> (Option<String>, Option<String>) {
     (acct_text(line, "who"), acct_text(line, "what"))
 }
 
-/// (a) 登録 row（口座 A・anchor は群 g）∧ 記録は口座 B ∧ 最終行 Idle（いま）∧ pane が claude ∧ 入力欄が空 → `decision=move
+/// (a) 登録 row（口座 A・anchor は群 Tier1）∧ 記録は口座 B ∧ 最終行 Idle（いま）∧ pane が claude ∧ 入力欄が空 → `decision=move
 /// move=exit`・`/exit` の text 1 回 + Enter 1 回・`tick.jsonl` に `who=seat-tick-move what=/exit` の 1 行・梯子の記録は書かれず
 /// 合図の text は 0 key（base では黙りの門の `stamp-recent` ＝ RED）。
 #[test]
@@ -3068,13 +3071,13 @@ fn seat_doctor_tick_without_face_or_flags_adds_nothing() {
 //
 // §17 の host.toml の fixture（口座と群を host の面に宣言・tracked の面は口座 0）で doctor を撃ち、host の面の行を測る。
 
-/// 置き場の host の面に口座 `accounts` と、`group` が空でなければ群 `g`（置き場 `/repo`・候補 `group`）を宣言する。
+/// 置き場の host の面に口座 `accounts` と、`group` が空でなければ群 `Tier1`（置き場 `/repo`・候補 `group`）を宣言する。
 fn run_accounts_face(place: &RolePlace, accounts: &[&str], group: &[&str]) {
     let quoted: Vec<String> = group.iter().map(|label| format!("\"{label}\"")).collect();
     let table = if group.is_empty() {
         String::new()
     } else {
-        format!("\n[[account-group]]\nname = \"g\"\nanchors = [\"/repo\"]\naccounts = [{}]\n", quoted.join(", "))
+        format!("\n[[account-group]]\nname = \"Tier1\"\nanchors = [\"/repo\"]\naccounts = [{}]\n", quoted.join(", "))
     };
     fs::create_dir_all(&place.state).ok();
     fs::write(place.state.join(vessel::rules::HOST_MANIFEST), format!("{}{table}", account_rules(accounts))).ok();

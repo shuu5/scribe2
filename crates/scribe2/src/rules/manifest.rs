@@ -689,6 +689,7 @@ fn collect(text: &str, face: Face) -> (Manifest, Vec<RuleError>) {
     check_class_commands(&found, &mut errors);
     check_duplicate_labels(&found.accounts, &mut errors);
     check_duplicate_groups(&found.groups, &mut errors);
+    super::groups::check_tiers(&found.groups, &mut errors);
     seed_groups(&mut found.groups, &mut errors);
     (found, errors)
 }

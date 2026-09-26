@@ -393,6 +393,8 @@ fn host_guard_doctor_binary_is_missing_ok_or_other_by_the_child() {
 
 // ─── doctor の群の行（account-lifecycle.md §17 の約束 7 / 8・ADR-0049・接頭辞 `host_group_`） ───
 
+// 群の名を Tier と数字に改めただけの歯（account-lifecycle.md §29 の行 s・base でも緑）。
+// flip-check: retroactive s2-07l.647
 /// 置き場の host の面に群を宣言する（口座の表は持たない＝候補は `--rules` の tracked の面の label を指す）。
 /// `groups` は (名, 置き場の列, 候補の口座の列) の宣言順。
 #[expect(
@@ -424,14 +426,14 @@ fn group_line(lines: &[String], name: &str) -> String {
 #[test]
 fn host_group_doctor_prints_one_line_per_group_in_declaration_order() {
     let place = role_doctor_place();
-    put_groups(&place, &[("zeta", &["/repo", "/repo/b"], &["acct-1", "spare"]), ("alpha", &["/repo/c"], &["spare"])]);
+    put_groups(&place, &[("Tier2", &["/repo", "/repo/b"], &["acct-1", "spare"]), ("Tier10", &["/repo/c"], &["spare"])]);
     let lines = doctor_rows(&place, &account_rules(&["acct-1", "spare"]));
     let names: Vec<&str> =
         lines.iter().filter_map(|line| line.strip_prefix("group=")).filter_map(|rest| rest.split(' ').next()).collect();
-    assert_eq!(names, ["zeta", "alpha"], "宣言順（辞書順ではない）: {lines:?}");
+    assert_eq!(names, ["Tier2", "Tier10"], "宣言順（辞書順ではない）: {lines:?}");
     assert_eq!(
-        group_line(&lines, "zeta"),
-        "group=zeta accounts=acct-1,spare anchors=2 seat-accounts=acct-1 current=seed",
+        group_line(&lines, "Tier2"),
+        "group=Tier2 accounts=acct-1,spare anchors=2 seat-accounts=acct-1 current=seed",
         "候補は宣言順・置き場は数・席の口座は登録 row から: {lines:?}"
     );
     let last_account = lines.iter().rposition(|line| line.starts_with("account="));
@@ -444,21 +446,21 @@ fn host_group_doctor_prints_one_line_per_group_in_declaration_order() {
 
 /// (b) その群の置き場に席の登録 row が 1 つも無い周は無しの語（`none`）で、`0` や空に潰さない。置き場の一致は登録が
 /// 書いた値そのもの（`/repo` の末尾 `/` 違いはどの row とも一致しない）。2 群の候補は 2 つ（種は宣言順に重ならない＝
-/// alpha は acct-1・beta は spare・候補 1 つを共有する 2 群は面の欠陥・account-lifecycle.md §28）。
+/// Tier1 は acct-1・Tier2 は spare・候補 1 つを共有する 2 群は面の欠陥・account-lifecycle.md §28）。
 #[test]
 fn host_group_doctor_line_says_none_without_seat_rows() {
     // flip-check: retroactive s2-07l.641
     let place = role_doctor_place();
-    put_groups(&place, &[("alpha", &["/repo/elsewhere"], &["acct-1", "spare"]), ("beta", &["/repo/"], &["acct-1", "spare"])]);
+    put_groups(&place, &[("Tier1", &["/repo/elsewhere"], &["acct-1", "spare"]), ("Tier2", &["/repo/"], &["acct-1", "spare"])]);
     let lines = doctor_rows(&place, &account_rules(&["acct-1", "spare"]));
     assert_eq!(
-        group_line(&lines, "alpha"),
-        "group=alpha accounts=acct-1,spare anchors=1 seat-accounts=none current=seed",
+        group_line(&lines, "Tier1"),
+        "group=Tier1 accounts=acct-1,spare anchors=1 seat-accounts=none current=seed",
         "{lines:?}"
     );
     assert_eq!(
-        group_line(&lines, "beta"),
-        "group=beta accounts=acct-1,spare anchors=1 seat-accounts=none current=seed",
+        group_line(&lines, "Tier2"),
+        "group=Tier2 accounts=acct-1,spare anchors=1 seat-accounts=none current=seed",
         "正規化しない: {lines:?}"
     );
     fs::remove_dir_all(&place.dir).ok();
@@ -470,17 +472,17 @@ fn host_group_doctor_line_says_none_without_seat_rows() {
 fn host_group_doctor_line_lists_the_seat_accounts_of_the_group_anchors() {
     let place = role_doctor_place();
     role_register_extra(&place, "grpb:grpb", "/repo/b");
-    put_groups(&place, &[("alpha", &["/repo", "/repo/b"], &["acct-1"])]);
+    put_groups(&place, &[("Tier1", &["/repo", "/repo/b"], &["acct-1"])]);
     let rules = account_rules(&["acct-1"]);
     assert_eq!(
-        group_line(&doctor_rows(&place, &rules), "alpha"),
-        "group=alpha accounts=acct-1 anchors=2 seat-accounts=acct-1 current=seed",
+        group_line(&doctor_rows(&place, &rules), "Tier1"),
+        "group=Tier1 accounts=acct-1 anchors=2 seat-accounts=acct-1 current=seed",
         "2 つの row は同じ口座＝畳んで 1 つ"
     );
     fs::write(vessel::fleet::store::events_path(&place.state), "not an event\n").expect("log を壊せる");
     assert_eq!(
-        group_line(&doctor_rows(&place, &rules), "alpha"),
-        "group=alpha accounts=acct-1 anchors=2 seat-accounts=unreadable current=seed",
+        group_line(&doctor_rows(&place, &rules), "Tier1"),
+        "group=Tier1 accounts=acct-1 anchors=2 seat-accounts=unreadable current=seed",
         "読めなさを none に潰さない"
     );
     fs::remove_dir_all(&place.dir).ok();
@@ -532,14 +534,14 @@ fn put_group_record(place: &RolePlace, name: &str, body: &str) {
 #[test]
 fn host_group_record_doctor_current_shows_the_record_or_the_seed() {
     let place = role_doctor_place();
-    put_groups(&place, &[("alpha", &["/repo"], &["acct-1", "spare"]), ("beta", &["/repo/b"], &["acct-1", "spare"])]);
+    put_groups(&place, &[("Tier1", &["/repo"], &["acct-1", "spare"]), ("Tier2", &["/repo/b"], &["acct-1", "spare"])]);
     let rules = account_rules(&["acct-1", "spare"]);
     let lines = doctor_rows(&place, &rules);
-    assert_eq!(group_line(&lines, "alpha"), "group=alpha accounts=acct-1,spare anchors=1 seat-accounts=acct-1 current=seed", "{lines:?}");
-    put_group_record(&place, "alpha", "account=spare\nts=2026-09-24T00:00:00Z\nreason=move\nprevious=acct-1\n");
+    assert_eq!(group_line(&lines, "Tier1"), "group=Tier1 accounts=acct-1,spare anchors=1 seat-accounts=acct-1 current=seed", "{lines:?}");
+    put_group_record(&place, "Tier1","account=spare\nts=2026-09-24T00:00:00Z\nreason=move\nprevious=acct-1\n");
     let lines = doctor_rows(&place, &rules);
-    assert_eq!(group_line(&lines, "alpha"), "group=alpha accounts=acct-1,spare anchors=1 seat-accounts=acct-1 current=spare", "{lines:?}");
-    assert_eq!(group_line(&lines, "beta"), "group=beta accounts=acct-1,spare anchors=1 seat-accounts=none current=seed", "{lines:?}");
+    assert_eq!(group_line(&lines, "Tier1"), "group=Tier1 accounts=acct-1,spare anchors=1 seat-accounts=acct-1 current=spare", "{lines:?}");
+    assert_eq!(group_line(&lines, "Tier2"), "group=Tier2 accounts=acct-1,spare anchors=1 seat-accounts=none current=seed", "{lines:?}");
     fs::remove_dir_all(&place.dir).ok();
 }
 
@@ -553,12 +555,12 @@ fn host_group_record_unreadable_record_stops_typed() {
     fs::create_dir_all(&place.state).ok();
     let host = format!(
         "schema = 1\n\n[[account]]\nlabel = \"acct-1\"\n\n[[account]]\nlabel = \"spare\"\n\n\
-         [[account-group]]\nname = \"alpha\"\nanchors = [\"{anchor}\"]\naccounts = [\"acct-1\", \"spare\"]\n"
+         [[account-group]]\nname = \"Tier1\"\nanchors = [\"{anchor}\"]\naccounts = [\"acct-1\", \"spare\"]\n"
     );
     fs::write(place.state.join(vessel::rules::HOST_MANIFEST), host).ok();
-    put_group_record(&place, "alpha", "account=spare\nts=2026-09-24T00:00:00Z\n");
+    put_group_record(&place, "Tier1","account=spare\nts=2026-09-24T00:00:00Z\n");
     let lines = doctor_rows(&place, NO_ACCOUNT_RULES);
-    assert_eq!(group_line(&lines, "alpha"), "group=alpha accounts=acct-1,spare anchors=1 seat-accounts=none current=unreadable", "{lines:?}");
+    assert_eq!(group_line(&lines, "Tier1"), "group=Tier1 accounts=acct-1,spare anchors=1 seat-accounts=none current=unreadable", "{lines:?}");
     let out = run_seat(&[
         "launch", "--state-dir", &state, "--role", "orchestrator", "--target", "grec:seat", "--anchor", &anchor, "--tmux-socket", &place.socket,
     ]);

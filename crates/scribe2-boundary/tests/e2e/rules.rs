@@ -1062,12 +1062,12 @@ label = "g2"
 label = "g3"
 
 [[account-group]]
-name = "alpha"
+name = "Tier1"
 anchors = ["/repo/a", "/repo/b"]
 accounts = ["g2", "g1"]
 
 [[account-group]]
-name = "beta"
+name = "Tier2"
 anchors = ["/repo/c"]
 accounts = ["g3"]
 "#;
@@ -1114,8 +1114,8 @@ fn host_group_table_is_read_from_the_host_face_with_three_keys() {
     assert_eq!(
         groups,
         [
-            ("alpha", vec!["/repo/a", "/repo/b"], vec!["g2", "g1"], 12),
-            ("beta", vec!["/repo/c"], vec!["g3"], 17),
+            ("Tier1", vec!["/repo/a", "/repo/b"], vec!["g2", "g1"], 12),
+            ("Tier2", vec!["/repo/c"], vec!["g3"], 17),
         ],
         "群も置き場も候補も宣言順（候補の順は label の昇順ではない）"
     );
@@ -1180,20 +1180,20 @@ fn host_group_defects_are_refused_with_line_numbers_and_the_face_prefix() {
     let group = |name: &str, anchors: &str, accounts: &str| {
         format!("\n[[account-group]]\nname = \"{name}\"\nanchors = {anchors}\naccounts = {accounts}\n")
     };
-    let alpha = group("alpha", "[\"/repo/a\"]", "[\"g1\"]");
+    let tier1 = group("Tier1", "[\"/repo/a\"]", "[\"g1\"]");
     for (body, want) in [
         // 2 つ目の群の見出し（17 行目）で名の重複。
-        (format!("{GROUP_HEAD}{alpha}{}", group("alpha", "[\"/repo/b\"]", "[\"g2\"]")), vec![(17, "群の名 alpha が重複する")]),
+        (format!("{GROUP_HEAD}{tier1}{}", group("Tier1", "[\"/repo/b\"]", "[\"g2\"]")), vec![(17, "群の名 Tier1 が重複する")]),
         // 同じ置き場が 2 つの群に在る（2 つ目の群の見出し）。
-        (format!("{GROUP_HEAD}{alpha}{}", group("beta", "[\"/repo/a\"]", "[\"g2\"]")), vec![(17, "置き場 /repo/a が 2 つの群に在る")]),
+        (format!("{GROUP_HEAD}{tier1}{}", group("Tier2", "[\"/repo/a\"]", "[\"g2\"]")), vec![(17, "置き場 /repo/a が 2 つの群に在る")]),
         // 宣言に無い候補（合わせの検査・群の見出し行）。
-        (format!("{GROUP_HEAD}{}", group("alpha", "[\"/repo/a\"]", "[\"nope\"]")), vec![(12, "群 alpha の候補 nope が宣言された口座に無い")]),
+        (format!("{GROUP_HEAD}{}", group("Tier1", "[\"/repo/a\"]", "[\"nope\"]")), vec![(12, "群 Tier1 の候補 nope が宣言された口座に無い")]),
         // 置き場の列が空（14 行目 = anchors の行）。
-        (format!("{GROUP_HEAD}{}", group("alpha", "[]", "[\"g1\"]")), vec![(14, "anchors の 配列が空である")]),
+        (format!("{GROUP_HEAD}{}", group("Tier1", "[]", "[\"g1\"]")), vec![(14, "anchors の 配列が空である")]),
         // 候補の列が空（15 行目 = accounts の行）。
-        (format!("{GROUP_HEAD}{}", group("alpha", "[\"/repo/a\"]", "[]")), vec![(15, "accounts の 配列が空である")]),
+        (format!("{GROUP_HEAD}{}", group("Tier1", "[\"/repo/a\"]", "[]")), vec![(15, "accounts の 配列が空である")]),
         // 未知の key（16 行目）。
-        (format!("{GROUP_HEAD}{alpha}model = \"opus\"\n"), vec![(16, "未知の key model")]),
+        (format!("{GROUP_HEAD}{tier1}model = \"opus\"\n"), vec![(16, "未知の key model")]),
     ] {
         let outcome = group_validate(dir.as_path(), &body);
         assert_eq!(outcome.rc, RC_REFUSED, "{body}: {outcome:?}");
@@ -1205,12 +1205,12 @@ fn host_group_defects_are_refused_with_line_numbers_and_the_face_prefix() {
         }
     }
     // 面の中の欠陥（名の重複）と合わせの欠陥（未知の候補 nope）を同時に持つ本文は、面の中の 1 件だけを出す。
-    let both = format!("{GROUP_HEAD}{alpha}{}", group("alpha", "[\"/repo/b\"]", "[\"nope\"]"));
+    let both = format!("{GROUP_HEAD}{tier1}{}", group("Tier1", "[\"/repo/b\"]", "[\"nope\"]"));
     let outcome = group_validate(dir.as_path(), &both);
     assert_eq!(outcome.rc, RC_REFUSED, "{outcome:?}");
     assert_eq!(
         outcome.err,
-        vec!["rules: host.toml: 群の名 alpha が重複する line=17".to_owned()],
+        vec!["rules: host.toml: 群の名 Tier1 が重複する line=17".to_owned()],
         "面の中で止まった周は合わせの検査へ進まない"
     );
     std::fs::remove_dir_all(&dir).ok();
@@ -1252,7 +1252,7 @@ fn host_group_seed_two_groups_with_the_same_candidates_take_the_first_and_the_se
     let dir = host_state_dir(None).expect("tmp の state dir を作れる");
     let place = dir.join("place");
     let same = "[\"g1\", \"g2\", \"g3\"]";
-    let body = format!("{GROUP_HEAD}{}{}", seed_group("alpha", "/repo/a", same), seed_group("beta", "/repo/b", same));
+    let body = format!("{GROUP_HEAD}{}{}", seed_group("Tier1", "/repo/a", same), seed_group("Tier2", "/repo/b", same));
     assert_eq!(
         seed_currents(&place, &body),
         [("g1".to_owned(), Source::Seed), ("g2".to_owned(), Source::Seed)],
@@ -1260,7 +1260,7 @@ fn host_group_seed_two_groups_with_the_same_candidates_take_the_first_and_the_se
     );
     let grouped: Vec<String> = vessel::rules::grouped_accounts(&place).expect("除外を解ける").into_iter().collect();
     assert_eq!(grouped, ["g1", "g2"], "便用の除外は 2 つ（同じ口座に畳まれない）");
-    let record = vessel::hook::group::current_path(&vessel::seat::host_groups_dir(&place), "beta");
+    let record = vessel::hook::group::current_path(&vessel::seat::host_groups_dir(&place), "Tier2");
     std::fs::create_dir_all(record.parent().expect("記録の dir")).expect("群用 dir を作れる");
     std::fs::write(&record, "account=g3\nts=2026-09-25T00:00:00Z\nreason=move\nprevious=g2\n").expect("記録を書ける");
     assert_eq!(
@@ -1277,11 +1277,11 @@ fn host_group_seed_two_groups_with_the_same_candidates_take_the_first_and_the_se
 #[test]
 fn host_group_seed_one_shared_candidate_is_a_defect_on_the_second_group_line() {
     let dir = host_state_dir(None).expect("tmp の state dir を作れる");
-    let body = format!("{GROUP_HEAD}{}{}", seed_group("alpha", "/repo/a", "[\"g1\"]"), seed_group("beta", "/repo/b", "[\"g1\"]"));
+    let body = format!("{GROUP_HEAD}{}{}", seed_group("Tier1", "/repo/a", "[\"g1\"]"), seed_group("Tier2", "/repo/b", "[\"g1\"]"));
     let outcome = group_validate(dir.as_path(), &body);
     assert_eq!(outcome.rc, RC_REFUSED, "{outcome:?}");
     assert!(outcome.out.is_empty(), "stdout へは書かない: {outcome:?}");
-    assert_eq!(outcome.err, vec!["rules: host.toml: 群 beta の種を決める候補が無い line=17".to_owned()], "2 番目の群の行で 1 件");
+    assert_eq!(outcome.err, vec!["rules: host.toml: 群 Tier2 の種を決める候補が無い line=17".to_owned()], "2 番目の群の行で 1 件");
     assert!(
         matches!(vessel::rules::grouped_accounts(dir.as_path()), Err(vessel::rules::GroupedError::Manifest(_))),
         "除外は面の欠陥で止まる"
@@ -1294,8 +1294,89 @@ fn host_group_seed_one_shared_candidate_is_a_defect_on_the_second_group_line() {
 fn host_group_seed_single_group_keeps_the_first_candidate() {
     use vessel::hook::group::Source;
     let dir = host_state_dir(None).expect("tmp の state dir を作れる");
-    let body = format!("{GROUP_HEAD}{}", seed_group("alpha", "/repo/a", "[\"g2\", \"g1\"]"));
+    let body = format!("{GROUP_HEAD}{}", seed_group("Tier1", "/repo/a", "[\"g2\", \"g1\"]"));
     assert_eq!(seed_currents(&dir.join("place"), &body), [("g2".to_owned(), Source::Seed)], "先頭のまま");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+// ─── 群の名は Tier と数字・宣言順は数字の昇順（account-lifecycle.md §29 の行 s・ADR-0069・接頭辞 `host_group_tier_`） ───
+
+/// 群の宣言の列（名・置き場 `/repo/<n>`・候補 1 つ）を `GROUP_HEAD` に続け、host の面の欠陥の行（rc 1 と stdout 0 行を測った後）を返す。
+fn tier_refusals(dir: &std::path::Path, groups: &[(&str, &str)]) -> Vec<String> {
+    let body = groups.iter().enumerate().fold(GROUP_HEAD.to_owned(), |body, (at, (name, label))| {
+        format!("{body}{}", seed_group(name, &format!("/repo/{at}"), &format!("[\"{label}\"]")))
+    });
+    let outcome = group_validate(dir, &body);
+    assert_eq!(outcome.rc, RC_REFUSED, "{body}: {outcome:?}");
+    assert!(outcome.out.is_empty(), "{body}: stdout へは書かない");
+    outcome.err
+}
+
+/// (j) 名が Tier と数字の形でない群（alpha）は群の見出し行（12 行目）の欠陥で 1 件（`host.toml:` の接頭辞）。base は通る（RED）。
+#[test]
+fn host_group_tier_non_tier_name_is_a_defect_on_the_group_line() {
+    let dir = host_state_dir(None).expect("tmp の state dir を作れる");
+    let err = tier_refusals(&dir, &[("alpha", "g1")]);
+    assert_eq!(err.len(), 1, "1 件: {err:?}");
+    let got = err.first().cloned().unwrap_or_default();
+    assert!(got.starts_with("rules: host.toml: 群の名 alpha "), "面と名を名指す: {got}");
+    assert!(got.contains("Tier と数字の形でない") && got.ends_with(" line=12"), "群の行の形の欠陥: {got}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// (k) Tier2, Tier1 の宣言順は 2 番目の群の見出し行（17 行目）の欠陥で 1 件（数字の昇順でない）。
+#[test]
+fn host_group_tier_descending_order_is_a_defect_on_the_second_group_line() {
+    let dir = host_state_dir(None).expect("tmp の state dir を作れる");
+    let err = tier_refusals(&dir, &[("Tier2", "g1"), ("Tier1", "g2")]);
+    assert_eq!(err.len(), 1, "1 件: {err:?}");
+    let got = err.first().cloned().unwrap_or_default();
+    assert!(got.starts_with("rules: host.toml: 群 Tier1 "), "後の群を名指す: {got}");
+    assert!(got.contains("前の群より大きくない") && got.ends_with(" line=17"), "2 番目の群の行: {got}");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// (l) Tier1, Tier1 は名の重複の 1 件だけ（昇順の欠陥を重ねない＝同じ欠陥を 2 行にしない）。
+#[test]
+fn host_group_tier_same_name_twice_is_only_the_duplicate_defect() {
+    let dir = host_state_dir(None).expect("tmp の state dir を作れる");
+    let err = tier_refusals(&dir, &[("Tier1", "g1"), ("Tier1", "g2")]);
+    assert_eq!(err, vec!["rules: host.toml: 群の名 Tier1 が重複する line=17".to_owned()], "名の重複の 1 件だけ");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// (m) 先頭の 0（Tier01・Tier0）・数字なし（Tier）・接頭辞の綴り違い（tier1）・数字の後ろの字（Tier1a）は形の欠陥で 1 件。
+#[test]
+fn host_group_tier_malformed_digits_are_a_form_defect() {
+    let dir = host_state_dir(None).expect("tmp の state dir を作れる");
+    for name in ["Tier01", "Tier0", "Tier", "tier1", "Tier1a"] {
+        let err = tier_refusals(&dir, &[(name, "g1")]);
+        assert_eq!(err.len(), 1, "{name}: 1 件: {err:?}");
+        let got = err.first().cloned().unwrap_or_default();
+        assert!(got.contains(&format!("群の名 {name} ")) && got.contains("Tier と数字の形でない"), "{name}: {got}");
+        assert!(got.ends_with(" line=12"), "{name}: 群の行: {got}");
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// (n) Tier1, Tier2, Tier10 は通る（数字は数値で比べる＝辞書順で Tier10 < Tier2 と読まない）。群は宣言順のまま。
+#[test]
+fn host_group_tier_ascending_numbers_pass_compared_numerically() {
+    let dir = host_state_dir(None).expect("tmp の state dir を作れる");
+    let body = format!(
+        "{GROUP_HEAD}{}{}{}",
+        seed_group("Tier1", "/repo/a", "[\"g1\"]"),
+        seed_group("Tier2", "/repo/b", "[\"g2\"]"),
+        seed_group("Tier10", "/repo/c", "[\"g3\"]")
+    );
+    let outcome = group_validate(dir.as_path(), &body);
+    assert_eq!(outcome.rc, RC_OK, "{outcome:?}");
+    assert!(outcome.err.is_empty(), "欠陥 0: {outcome:?}");
+    let manifest = Manifest::embedded()
+        .and_then(|tracked| vessel::rules::with_state_dir(tracked, Some(dir.as_path())))
+        .expect("host の面を合わせられる");
+    let names: Vec<&str> = manifest.groups().iter().map(|group| group.name()).collect();
+    assert_eq!(names, ["Tier1", "Tier2", "Tier10"], "宣言順のまま（数字で並べ替えない）");
     std::fs::remove_dir_all(&dir).ok();
 }
 

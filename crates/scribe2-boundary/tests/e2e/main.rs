@@ -1006,8 +1006,11 @@ fn host_init_refuses_without_writing_a_byte() {
 /// 雛形の面の `[[account-group]]` より前（plugin・launch-arg・口座 2 つ）。
 const FACE_FRONT: &str = "schema = 1\n\n[[plugin]]\ndir = \"/opt/plugin\"\n\n[[launch-arg]]\nvalue = \"--verbose\"\n\n\
 [[account]]\nlabel = \"a1\"\n\n[[account]]\nlabel = \"a2\"\n\n";
-/// 雛形の面の群の表（写さない表・`--group g1` が anchors に ROOT を足す）。
-const FACE_GROUP: &str = "[[account-group]]\nname = \"g1\"\nanchors = [\"/elsewhere/x\"]\naccounts = [\"a1\"]\n\n";
+// 群の名を Tier と数字に改めただけの歯（account-lifecycle.md §29 の行 s・base でも緑）。
+// flip-check: retroactive s2-07l.647
+
+/// 雛形の面の群の表（写さない表・`--group Tier1` が anchors に ROOT を足す）。
+const FACE_GROUP: &str = "[[account-group]]\nname = \"Tier1\"\nanchors = [\"/elsewhere/x\"]\naccounts = [\"a1\"]\n\n";
 /// 雛形の面の群の表より後（vessel・tick）。
 const FACE_BACK: &str = "[[vessel]]\nrepo = \"/opt/vessel\"\n\n[[tick]]\nunit-dir = \"/opt/units\"\nbinary = \"/opt/bin/tick\"\n";
 /// git の形の宣言の雛形（`Cargo.toml` が無い repo）。
@@ -1174,7 +1177,7 @@ fn anchors_of(state_dir: &Path, name: &str) -> Option<Vec<String>> {
 /// 群の無い新しい置き場の 1 度目の 10 段（`--ledger-prefix` が無いので `ledger` は skip・口座の実測が無いので席の段の子は
 /// `no-account` で断る＝`next=fix:seat`）。
 const FIRST_UNGROUPED: [&str; 10] = ["ok", "ok", "ok", "ok", "ok", "skip", "skip", "ok", "ok", "failed:seat:no-account"];
-/// `--group g1` の周の 1 度目の 10 段（群の口座で席が立つ・`ledger` は skip）。
+/// `--group Tier1` の周の 1 度目の 10 段（群の口座で席が立つ・`ledger` は skip）。
 const FIRST_GROUPED: [&str; 10] = ["ok", "ok", "ok", "ok", "ok", "ok", "skip", "ok", "ok", "ok"];
 
 /// (2)(3)(4)(9) 9 段を順に通す: 置き場は `<雛形>-<repo 名>`・面は `[[account-group]]` だけを除いた写し（tick を含む）・
@@ -1257,7 +1260,7 @@ fn init_repo_declaration_takes_the_cargo_form_and_skips_an_existing_one() {
     assert_eq!(files.as_deref(), Some(".vessel"), "書いた marker だけを commit");
 }
 
-/// (7) `--group g1` は雛形と同じ親の下で g1 を宣言する 2 面（雛形・兄弟）の anchors に ROOT を足し、新しい面にも群の行を
+/// (7) `--group Tier1` は雛形と同じ親の下で Tier1 を宣言する 2 面（雛形・兄弟）の anchors に ROOT を足し、新しい面にも群の行を
 /// 写す（宣言しない面は不変）。群の置き場になった ROOT の席は群の今の口座（種 a1）で立ち 9 段が ok。2 度目の `--group` は
 /// 9 段が skip。雛形に無い群は failed で名指し、他の段は通る（群に入らない席は選定の断り）。
 #[test]
@@ -1265,25 +1268,25 @@ fn init_repo_group_adds_the_root_to_every_declaring_face() {
     let full = format!("{FACE_FRONT}{FACE_GROUP}{FACE_BACK}");
     let host = init_host(&full, false).unwrap_or_else(|| panic!("host を組める"));
     let sibling = host.hosts.join("sibling");
-    let sibling_face = "schema = 1\n\n[[account]]\nlabel = \"a1\"\n\n[[account-group]]\nname = \"g1\"\nanchors = [\"/elsewhere/y\"]\naccounts = [\"a1\"]\n";
+    let sibling_face = "schema = 1\n\n[[account]]\nlabel = \"a1\"\n\n[[account-group]]\nname = \"Tier1\"\nanchors = [\"/elsewhere/y\"]\naccounts = [\"a1\"]\n";
     let bystander = host.hosts.join("bystander");
-    let bystander_face = "schema = 1\n\n[[account]]\nlabel = \"a1\"\n\n[[account-group]]\nname = \"g2\"\nanchors = [\"/elsewhere/z\"]\naccounts = [\"a1\"]\n";
+    let bystander_face = "schema = 1\n\n[[account]]\nlabel = \"a1\"\n\n[[account-group]]\nname = \"Tier2\"\nanchors = [\"/elsewhere/z\"]\naccounts = [\"a1\"]\n";
     for (dir, body) in [(&sibling, sibling_face), (&bystander, bystander_face)] {
         fs::create_dir_all(dir).unwrap_or_else(|e| panic!("兄弟の置き場を作れる: {e}"));
         fs::write(dir.join(vessel::rules::HOST_MANIFEST), body).unwrap_or_else(|e| panic!("面を置ける: {e}"));
     }
     let root = host.repo.display().to_string();
-    let run = host.init(&["--group", "g1"]).unwrap_or_else(|| panic!("binary を撃てる"));
+    let run = host.init(&["--group", "Tier1"]).unwrap_or_else(|| panic!("binary を撃てる"));
     assert_eq!(run.out, init_lines(FIRST_GROUPED, "doctor"), "群の段も席の段も ok: {}", run.err);
     let expected = |first: &str| Some(vec![first.to_owned(), root.clone()]);
-    assert_eq!(anchors_of(&host.base, "g1"), expected("/elsewhere/x"), "雛形の面に ROOT");
-    assert_eq!(anchors_of(&sibling, "g1"), expected("/elsewhere/y"), "兄弟の面に ROOT");
-    assert_eq!(anchors_of(&host.place(), "g1"), expected("/elsewhere/x"), "新しい面にも群の行");
+    assert_eq!(anchors_of(&host.base, "Tier1"), expected("/elsewhere/x"), "雛形の面に ROOT");
+    assert_eq!(anchors_of(&sibling, "Tier1"), expected("/elsewhere/y"), "兄弟の面に ROOT");
+    assert_eq!(anchors_of(&host.place(), "Tier1"), expected("/elsewhere/x"), "新しい面にも群の行");
     let edited = full.replace("[\"/elsewhere/x\"]", &format!("[\"/elsewhere/x\", \"{root}\"]"));
     assert_eq!(fs::read_to_string(host.base.join(vessel::rules::HOST_MANIFEST)).unwrap_or_default(), edited, "anchors の行だけが変わる");
     assert_eq!(fs::read_to_string(bystander.join(vessel::rules::HOST_MANIFEST)).unwrap_or_default(), bystander_face, "宣言しない面は不変");
 
-    let again = host.init(&["--group", "g1"]).unwrap_or_else(|| panic!("binary を撃てる"));
+    let again = host.init(&["--group", "Tier1"]).unwrap_or_else(|| panic!("binary を撃てる"));
     assert_eq!(again.out, init_lines(["skip"; 10], "doctor"), "2 度目の --group は skip: {}", again.err);
 
     let other = init_host(&full, false).unwrap_or_else(|| panic!("host を組める"));
@@ -1291,7 +1294,7 @@ fn init_repo_group_adds_the_root_to_every_declaring_face() {
     assert_eq!(missing.rc, Some(1), "failed の段が在れば rc 1");
     let words = ["ok", "ok", "ok", "ok", "ok", "failed:no-group:nope", "skip", "ok", "ok", "failed:seat:no-account"];
     assert_eq!(missing.out, init_lines(words, "fix:group"), "雛形に無い群");
-    assert_eq!(anchors_of(&other.place(), "g1"), None, "群の行を写さない");
+    assert_eq!(anchors_of(&other.place(), "Tier1"), None, "群の行を写さない");
 }
 
 /// (7) 1 面でも検査に落ちれば 0 面: 兄弟の面が宣言に無い口座を候補に持つ（足すと loader が断る）周も、読めない面が
@@ -1300,7 +1303,7 @@ fn init_repo_group_adds_the_root_to_every_declaring_face() {
 fn init_repo_group_writes_zero_faces_when_one_face_fails() {
     let full = format!("{FACE_FRONT}{FACE_GROUP}{FACE_BACK}");
     let bad_faces = [
-        ("sibling", "schema = 1\n\n[[account]]\nlabel = \"a1\"\n\n[[account-group]]\nname = \"g1\"\nanchors = [\"/elsewhere/y\"]\naccounts = [\"a9\"]\n", "invalid:sibling"),
+        ("sibling", "schema = 1\n\n[[account]]\nlabel = \"a1\"\n\n[[account-group]]\nname = \"Tier1\"\nanchors = [\"/elsewhere/y\"]\naccounts = [\"a9\"]\n", "invalid:sibling"),
         ("broken", "schema = [\n", "unreadable:broken"),
     ];
     for (name, body, reason) in bad_faces {
@@ -1308,13 +1311,13 @@ fn init_repo_group_writes_zero_faces_when_one_face_fails() {
         let bad = host.hosts.join(name);
         fs::create_dir_all(&bad).unwrap_or_else(|e| panic!("兄弟の置き場を作れる: {e}"));
         fs::write(bad.join(vessel::rules::HOST_MANIFEST), body).unwrap_or_else(|e| panic!("面を置ける: {e}"));
-        let run = host.init(&["--group", "g1"]).unwrap_or_else(|| panic!("binary を撃てる"));
+        let run = host.init(&["--group", "Tier1"]).unwrap_or_else(|| panic!("binary を撃てる"));
         let group = format!("failed:{reason}");
         let words = ["ok", "ok", "ok", "ok", "ok", group.as_str(), "skip", "ok", "ok", "failed:seat:no-account"];
         assert_eq!(run.out, init_lines(words, "fix:group"), "{name}: {}", run.err);
         assert_eq!(fs::read_to_string(host.base.join(vessel::rules::HOST_MANIFEST)).unwrap_or_default(), full, "{name}: 雛形は不変");
         assert_eq!(fs::read_to_string(bad.join(vessel::rules::HOST_MANIFEST)).unwrap_or_default(), body, "{name}: 兄弟は不変");
-        assert_eq!(anchors_of(&host.place(), "g1"), None, "{name}: 新しい面に群の行を写さない");
+        assert_eq!(anchors_of(&host.place(), "Tier1"), None, "{name}: 新しい面に群の行を写さない");
         for dir in [&host.base, &bad, &host.place()] {
             assert!(!dir.join("host.toml.staged").exists(), "{name}: 一時 file を残さない {}", dir.display());
         }
@@ -1525,13 +1528,13 @@ fn init_seat_launches_the_default_form_once_and_skips_a_registered_row() {
     let (wrapper, log) = (host.tmp.join("wrap").join(NAME), host.tmp.join("child-log"));
     child_wrapper(&wrapper, &log).unwrap_or_else(|| panic!("包みを置ける"));
     let arg0 = wrapper.display().to_string();
-    let first = host.init_as(Some(&arg0), &["--group", "g1"]).unwrap_or_else(|| panic!("binary を撃てる"));
+    let first = host.init_as(Some(&arg0), &["--group", "Tier1"]).unwrap_or_else(|| panic!("binary を撃てる"));
     assert_eq!((first.rc, first.out.as_str()), (Some(0), init_lines(FIRST_GROUPED, "doctor").as_str()), "{}", first.err);
     assert_eq!(child_calls(&log), vec![format!("{arg0}|seat launch|{}", host.repo.display())], "子は既定形を ROOT で 1 回");
     let rows: Vec<_> = host.rows().into_iter().map(|row| (row.role, row.anchor, row.target, row.account)).collect();
     let want = (Role::Orchestrator, host.repo.display().to_string(), "proj:orchestrator".to_owned(), "a1".to_owned());
     assert_eq!(rows, vec![want], "登録 row は 1 件");
-    let again = host.init_as(Some(&arg0), &["--group", "g1"]).unwrap_or_else(|| panic!("binary を撃てる"));
+    let again = host.init_as(Some(&arg0), &["--group", "Tier1"]).unwrap_or_else(|| panic!("binary を撃てる"));
     assert_eq!((again.rc, again.out.as_str()), (Some(0), init_lines(["skip"; 10], "doctor").as_str()), "{}", again.err);
     assert_eq!(child_calls(&log).len(), 1, "row が在れば子を撃たない");
 }
@@ -1568,7 +1571,7 @@ fn init_seat_copies_the_child_refusal_word_and_skips_after_registration() {
 fn init_seat_failed_tmux_still_fires_the_seat_stage() {
     let host = init_host(&grouped_face(), false).unwrap_or_else(|| panic!("host を組める"));
     fs::write(host.tmp.join(INIT_TMUX_DOWN), "").unwrap_or_else(|e| panic!("tmux を落とせる: {e}"));
-    let run = host.init(&["--group", "g1"]).unwrap_or_else(|| panic!("binary を撃てる"));
+    let run = host.init(&["--group", "Tier1"]).unwrap_or_else(|| panic!("binary を撃てる"));
     assert_eq!(run.rc, Some(1), "failed の段が在れば rc 1");
     let words = ["ok", "ok", "ok", "ok", "ok", "ok", "skip", "ok", "failed:tmux", "failed:seat:session-missing"];
     assert_eq!(run.out, init_lines(words, "fix:session"), "{}", run.err);

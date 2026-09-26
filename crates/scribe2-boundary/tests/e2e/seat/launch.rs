@@ -1002,19 +1002,22 @@ const GROUP_FRONT: &str = "group-front";
 /// 偽 tmux の呼び手の target の file（在れば `display-message` がその中身を返す・無ければ rc 1＝呼び手は target でない）。
 const GROUP_CALLER: &str = "group-caller";
 
-/// 群の歯の置き場: [`launch_place`] の host の面に群 `g`（置き場 = この置き場の anchor か、`outside` なら別の `/elsewhere`・候補 =
-/// l1 → l2）を足し、偽 tmux だけの PATH を返す。`record` が在れば群の今の口座の記録（host の根の群用 dir の `g.account`）を置く。
+// 群の名を Tier と数字に改めただけの歯（account-lifecycle.md §29 の行 s・base でも緑）。
+// flip-check: retroactive s2-07l.647
+
+/// 群の歯の置き場: [`launch_place`] の host の面に群 `Tier1`（置き場 = この置き場の anchor か、`outside` なら別の `/elsewhere`・候補 =
+/// l1 → l2）を足し、偽 tmux だけの PATH を返す。`record` が在れば群の今の口座の記録（host の根の群用 dir の `Tier1.account`）を置く。
 fn launch_group_place(outside: bool, record: Option<&str>) -> (AcctPlace, String) {
     let place = launch_place();
     let anchor = if outside { "/elsewhere".to_owned() } else { launch_anchor(&place) };
     let host = place.state.join(vessel::rules::HOST_MANIFEST);
     let body = fs::read_to_string(&host).unwrap_or_default();
-    let group = format!("\n[[account-group]]\nname = \"g\"\nanchors = [\"{anchor}\"]\naccounts = [\"l1\", \"l2\"]\n");
+    let group = format!("\n[[account-group]]\nname = \"Tier1\"\nanchors = [\"{anchor}\"]\naccounts = [\"l1\", \"l2\"]\n");
     fs::write(&host, format!("{body}{group}")).ok();
     if let Some(label) = record {
         let dir = place.dir.join(format!("{NAME}-host")).join("groups");
         fs::create_dir_all(&dir).ok();
-        fs::write(dir.join("g.account"), format!("account={label}\nts=2026-09-24T00:00:00Z\nreason=move\nprevious=l1\n")).ok();
+        fs::write(dir.join("Tier1.account"), format!("account={label}\nts=2026-09-24T00:00:00Z\nreason=move\nprevious=l1\n")).ok();
     }
     let bin = place.dir.join("group-bin");
     fs::create_dir_all(&bin).ok();
@@ -1330,7 +1333,7 @@ fn seat_launch_group_next_leaves_other_refusals_unchanged() {
     assert_eq!(stderr_of(&out), launch_group_refused_line(&place, "not-a-shell", Some(shell)), "not-a-shell は従来の行");
     fs::remove_dir_all(&place.dir).ok();
     let (broken, path) = launch_group_place(false, Some("l2"));
-    let record = broken.dir.join(format!("{NAME}-host")).join("groups").join("g.account");
+    let record = broken.dir.join(format!("{NAME}-host")).join("groups").join("Tier1.account");
     fs::write(&record, "account=l2\n").ok();
     let out = launch_group_run(&broken, &path, &["seat", "l1"]);
     assert_eq!(stderr_of(&out), launch_group_refused_line(&broken, "group-record-unreadable", None), "読めない記録は next 無し");

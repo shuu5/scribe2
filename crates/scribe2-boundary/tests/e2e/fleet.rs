@@ -4762,6 +4762,8 @@ fn fleet_select_anchor_pipe_run_passes_the_repo() {
 
 // ─── 便用の選定は群ごとの今の口座だけを host 全体で外す（account-lifecycle.md §23・§17 の約束 4 の改め・接頭辞 `host_group_`） ───
 
+// 群の名を Tier と数字に改めただけの歯（account-lifecycle.md §29 の行 s・base でも緑）。
+// flip-check: retroactive s2-07l.647
 /// 余裕の在る 3 口座（どれも当たっていない・7 日窓の reset は同じ＝便用の並びは label に落ちる）。
 const GROUP_THREE: &[(&str, u64, u64)] = &[("a1", 30, 10), ("a2", 20, 10), ("a3", 25, 10)];
 
@@ -4823,8 +4825,8 @@ fn put_groups(fx: &UsageFixture, groups: &[(&str, &[&str], &[&str])]) {
 #[test]
 fn host_group_run_selection_drops_only_the_current_account() {
     let (fx, curl) = group_fixture(GROUP_THREE);
-    put_groups(&fx, &[("alpha", &["/repo/a"], &["a1", "a2", "a3"])]);
-    put_group_record(&fx, "alpha", &record_body("a2"));
+    put_groups(&fx, &[("Tier1", &["/repo/a"], &["a1", "a2", "a3"])]);
+    put_group_record(&fx, "Tier1", &record_body("a2"));
     for anchor in [&[][..], &["--anchor", "/repo/elsewhere"]] {
         let pick = |more: &[&str]| {
             let extra: Vec<&str> = ["--purpose", "run"].iter().chain(anchor).chain(more).copied().collect();
@@ -4848,7 +4850,7 @@ fn host_group_run_selection_drops_only_the_current_account() {
 #[test]
 fn host_group_run_selection_drops_the_seed_without_a_record() {
     let (fx, curl) = group_fixture(GROUP_THREE);
-    put_groups(&fx, &[("alpha", &["/repo/a"], &["a1", "a2", "a3"])]);
+    put_groups(&fx, &[("Tier1", &["/repo/a"], &["a1", "a2", "a3"])]);
     let out = run_select(&fx, &curl, &["--purpose", "run"]);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
     assert_eq!(out_lines(&out), ["select purpose=run chosen=a2"], "種 a1 だけが外れる");
@@ -4863,8 +4865,8 @@ fn host_group_run_selection_drops_the_seed_without_a_record() {
 #[test]
 fn host_group_run_selection_refuses_an_unreadable_record() {
     let (fx, curl) = group_fixture(GROUP_THREE);
-    put_groups(&fx, &[("alpha", &["/repo/a"], &["a1", "a2", "a3"])]);
-    let path = put_group_record(&fx, "alpha", "account=a2\nts=2026-09-25T00:00:00Z\n");
+    put_groups(&fx, &[("Tier1", &["/repo/a"], &["a1", "a2", "a3"])]);
+    let path = put_group_record(&fx, "Tier1", "account=a2\nts=2026-09-25T00:00:00Z\n");
     let cases = [(RecordError::Malformed, "record=malformed"), (RecordError::Unreadable, "record=unreadable")];
     for (error, word) in cases {
         if error == RecordError::Unreadable {
@@ -4875,9 +4877,9 @@ fn host_group_run_selection_refuses_an_unreadable_record() {
         assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{word}: {out:?}");
         assert!(out.stdout.is_empty(), "{word}: 選ばない: {out:?}");
         let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
-        assert!(stderr.contains(&format!("group=alpha {word} ")), "{word}: 断りは群と型を名指す: {stderr}");
+        assert!(stderr.contains(&format!("group=Tier1 {word} ")), "{word}: 断りは群と型を名指す: {stderr}");
         assert_eq!(curl_calls(&fx), 0, "{word}: 測らない");
-        assert_eq!(vessel::rules::grouped_accounts(&fx.state), Err(GroupedError::Record("alpha".to_owned(), error)));
+        assert_eq!(vessel::rules::grouped_accounts(&fx.state), Err(GroupedError::Record("Tier1".to_owned(), error)));
     }
     let out = run_select(&fx, &curl, &["--purpose", "session"]);
     assert_eq!(out_lines(&out), ["select purpose=session chosen=a2"], "session 用は群を読まない: {out:?}");
@@ -4885,20 +4887,20 @@ fn host_group_run_selection_refuses_an_unreadable_record() {
 }
 
 /// (d) 除外の集合は群ごとの今の口座を畳んだもの（置き場から解く 1 本を直に読む）: 記録の無い 2 群（候補 [a1, a2] と
-/// [a1, a3]）の種は宣言順に重ならない（alpha は a1・beta は a1 でない最初の候補 a3・§28）ので除外は 2 つ、beta の記録が a1
+/// [a1, a3]）の種は宣言順に重ならない（Tier1 は a1・Tier2 は a1 でない最初の候補 a3・§28）ので除外は 2 つ、Tier2 の記録が a1
 /// なら 2 群が同じ今の口座で除外は 1 つ。`fleet select` の口でも同じ: 2 つの周は a2 で `--exclude a2` を重ねると候補なし、
 /// 1 つの周は `--exclude a2` で a3。base は種がどちらも先頭 a1（除外 1 つ）→ RED。
 #[test]
 fn host_group_run_exclusion_folds_the_current_accounts_of_the_groups() {
     let (fx, curl) = group_fixture(GROUP_THREE);
-    put_groups(&fx, &[("alpha", &["/repo/a"], &["a1", "a2"]), ("beta", &["/repo/b"], &["a1", "a3"])]);
+    put_groups(&fx, &[("Tier1", &["/repo/a"], &["a1", "a2"]), ("Tier2", &["/repo/b"], &["a1", "a3"])]);
     let set = |labels: &[&str]| -> BTreeSet<String> { labels.iter().map(|label| (*label).to_owned()).collect() };
     assert_eq!(vessel::rules::grouped_accounts(&fx.state), Ok(set(&["a1", "a3"])), "種は重ならない＝別の今の口座は 2 つ");
     let out = run_select(&fx, &curl, &["--purpose", "run"]);
     assert_eq!(out_lines(&out), ["select purpose=run chosen=a2"], "候補の残り a2 は便に開く: {out:?}");
     let out = run_select(&fx, &curl, &["--purpose", "run", "--exclude", "a2"]);
     assert_eq!(out_lines(&out), ["select purpose=run none=excluded earliest_reset=-"], "除外 2 つ: {out:?}");
-    put_group_record(&fx, "beta", &record_body("a1"));
+    put_group_record(&fx, "Tier2", &record_body("a1"));
     assert_eq!(vessel::rules::grouped_accounts(&fx.state), Ok(set(&["a1"])), "同じ今の口座は 1 つ");
     let out = run_select(&fx, &curl, &["--purpose", "run", "--exclude", "a2"]);
     assert_eq!(out_lines(&out), ["select purpose=run chosen=a3"], "除外 1 つ: {out:?}");
@@ -4910,7 +4912,7 @@ fn host_group_run_exclusion_folds_the_current_accounts_of_the_groups() {
 #[test]
 fn host_group_ungrouped_account_stays_in_the_run_candidates() {
     let (fx, curl) = group_fixture(SELECT_THREE);
-    put_groups(&fx, &[("alpha", &["/repo/a"], &["a1"])]);
+    put_groups(&fx, &[("Tier1", &["/repo/a"], &["a1"])]);
     let out = run_select(&fx, &curl, &["--purpose", "run"]);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
     assert_eq!(out_lines(&out), vec!["select purpose=run chosen=a2".to_owned()], "群の a1 だけ外れ、a2 は候補");
@@ -4934,7 +4936,7 @@ fn host_group_zero_groups_keeps_the_run_candidates() {
     let (fx, curl) = group_fixture(SELECT_THREE);
     let host = fx.state.join(vessel::rules::HOST_MANIFEST);
     // 群を宣言した周は a1 が外れ、外した宣言を消せば**次の選定で**また候補に戻る。
-    put_groups(&fx, &[("alpha", &["/repo/a"], &["a1"])]);
+    put_groups(&fx, &[("Tier1", &["/repo/a"], &["a1"])]);
     let out = run_select(&fx, &curl, &["--purpose", "run"]);
     assert_eq!(out_lines(&out), vec!["select purpose=run chosen=a2".to_owned()], "宣言の在る周: {out:?}");
     for body in [None, Some("schema = 1\n"), Some("schema = 1\n\n[[plugin]]\ndir = \"/opt/p\"\n")] {
@@ -4959,11 +4961,11 @@ fn host_group_zero_groups_keeps_the_run_candidates() {
 #[test]
 fn host_group_session_selection_keeps_the_group_accounts() {
     let (fx, curl) = group_fixture(SELECT_THREE);
-    put_groups(&fx, &[("alpha", &["/repo/a"], &["a1"])]);
+    put_groups(&fx, &[("Tier1", &["/repo/a"], &["a1"])]);
     let out = run_select(&fx, &curl, &["--purpose", "session"]);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
     assert_eq!(out_lines(&out), vec!["select purpose=session chosen=a1".to_owned()], "session 用は群を読まない");
-    put_groups(&fx, &[("alpha", &["/repo/a"], &["a3"])]);
+    put_groups(&fx, &[("Tier1", &["/repo/a"], &["a3"])]);
     let out = run_select(&fx, &curl, &["--purpose", "run"]);
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
     assert_eq!(out_lines(&out), vec!["select purpose=run chosen=a1".to_owned()], "外れるのが候補外の口座なら並びは不変");
@@ -4985,8 +4987,8 @@ fn host_group_run_selection_applies_to_the_spawn_mouth() {
     use std::os::unix::fs::PermissionsExt;
     let (fx, curl) = group_fixture(&[("a1", 30, 10), ("a2", 20, 10)]);
     let (repo, state) = super::pipe::repo_with_state_in(&fx.state);
-    put_groups(&fx, &[("alpha", &["/repo/a"], &["a1", "a2"])]);
-    put_group_record(&fx, "alpha", &record_body("a2"));
+    put_groups(&fx, &[("Tier1", &["/repo/a"], &["a1", "a2"])]);
+    put_group_record(&fx, "Tier1", &record_body("a2"));
     let mut rules = fs::read_to_string(&fx.rules).expect("rules fixture を読める");
     for (id, kind, value) in [
         ("runner.model", "RunnerModel", "\"opus\""),

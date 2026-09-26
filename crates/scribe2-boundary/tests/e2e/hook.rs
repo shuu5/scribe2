@@ -4830,8 +4830,11 @@ fn seat_account_mismatch_record_leaves_the_row_state_jsonl_and_brief_untouched()
 // 席は偽 tmux（`stub_tmux_path`）で解き、登録 row は core の `register` で積む（口座を歯ごとに選ぶ）。閾値は埋め込みの
 // manifest（`--rules` を渡さない＝5 時間窓 85 / 7 日窓 95 / モデル別窓 95・鮮度 300 秒）。実測は event log に置く。
 
+// 群の名を Tier と数字に改めただけの歯（account-lifecycle.md §29 の行 s・base でも緑）。
+// flip-check: retroactive s2-07l.647
+
 /// 群の歯の群の名。
-const GROUP_NAME: &str = "g";
+const GROUP_NAME: &str = "Tier1";
 
 /// 群の歯の置き場（[`role_place`] と同じ形で、置き場を `sock_dir` の 1 段下に置く）。host の根は置き場の親の下に在る
 /// （設計 §20 形 1 / 4）ので、置き場を tmp の根の直下に置くと hook が置く移動を頼む記録が歯どうしで共有され tmp の根に残る。
@@ -5109,7 +5112,7 @@ fn group_requests(place: &RolePlace) -> Vec<String> {
     names
 }
 
-/// 群 `g` の移動を頼む記録の本文（無ければ空）。
+/// 群 `Tier1` の移動を頼む記録の本文（無ければ空）。
 fn group_request_body(place: &RolePlace) -> String {
     let dir = place.state.parent().unwrap_or(&place.state).join(format!("{}-host", vessel::name::NAME)).join("groups");
     fs::read_to_string(dir.join(format!("{GROUP_NAME}.request"))).unwrap_or_default()
@@ -5158,7 +5161,7 @@ fn hook_group_move_under_threshold_or_outside_anchor_puts_no_request() {
 
 // ─────── 記録の口座と登録 row の食い違い（account-lifecycle.md §21 形 2・契約表の行 j・接頭辞 `hook_group_current_`・§19 の fixture） ───────
 
-/// 群 `g` の今の口座の記録（host の根の群用 dir の `g.account`）に `body` を書く。
+/// 群 `Tier1` の今の口座の記録（host の根の群用 dir の `Tier1.account`）に `body` を書く。
 fn put_group_record(place: &RolePlace, body: &str) {
     let dir = place.state.parent().unwrap_or(&place.state).join(format!("{}-host", vessel::name::NAME)).join("groups");
     fs::create_dir_all(&dir).ok();

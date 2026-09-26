@@ -2948,8 +2948,11 @@ fn pipe_dispatch_vessel_terminal_round_updates_after_the_last_live_run() {
 // 偽の pane へ写し Enter で本文へ移す）を置き、群は host の面（`host.toml`）に、席は core の `register` で積む。閾値は
 // 埋め込みと同じ値（85 / 95 / 95）を写しの manifest に持つ。群の置き場は 2 つ（[`GROUP_ANCHORS`]）。
 
+// 群の名を Tier と数字に改めただけの歯（account-lifecycle.md §29 の行 s・base でも緑）。
+// flip-check: retroactive s2-07l.647
+
 /// 群の歯の群の名。
-const GROUP: &str = "g";
+const GROUP: &str = "Tier1";
 
 /// 群の置き場 2 つと、その席の target（偽 tmux は target を読まない）。
 const GROUP_ANCHORS: [(&str, &str); 2] = [("/g/one", "gone:0"), ("/g/two", "gtwo:0")];
@@ -3571,7 +3574,7 @@ fn pipe_dispatch_group_move_pressed_group_records_approves_evacuates_and_relaunc
     assert_eq!(moved.len(), 1, "承認 event 1: {moved:?}");
     let (account, words) = moved.first().cloned().unwrap_or_default();
     assert_eq!(account, "a2", "account = 移り先");
-    assert!(words.contains("host.toml:") && words.contains("[[account-group]]\nname = \"g\""), "宣言の行の逐語: {words}");
+    assert!(words.contains("host.toml:") && words.contains("[[account-group]]\nname = \"Tier1\""), "宣言の行の逐語: {words}");
     assert_both_seats(&group_sends(&place.state), &evacuate_payload(GROUP, "a2"));
     for (anchor, target) in GROUP_ANCHORS {
         let lines = launched_lines(&place.state, target);
@@ -3622,31 +3625,31 @@ fn pipe_dispatch_group_move_without_candidate_refuses_once_per_anchor() {
     clean(&[&place.repo, &place.state]);
 }
 
-/// (他の群) 群 h（置き場 2 つ目・候補 [a2, a4]）の今の口座（種 a2）は、群 g（置き場 1 つ目・候補 [a1, a2, a3]）の移り先から
-/// 外れて g は a3 へ移る（飛ばす側）。対: h の候補を [a4, a2]（種 a4）にすると g は a2 へ移る（移る側）。
+/// (他の群) 群 Tier2（置き場 2 つ目・候補 [a2, a4]）の今の口座（種 a2）は、群 Tier1（置き場 1 つ目・候補 [a1, a2, a3]）の移り先から
+/// 外れて Tier1 は a3 へ移る（飛ばす側）。対: Tier2 の候補を [a4, a2]（種 a4）にすると Tier1 は a2 へ移る（移る側）。
 #[test]
 fn pipe_dispatch_group_move_skips_another_groups_current_account() {
     let accounts = [("a1", 90, 10, 10), ("a2", 10, 10, 10), ("a3", 10, 10, 10), ("a4", 10, 10, 10)];
     for (other, want) in [(["a2", "a4"], "a3"), (["a4", "a2"], "a2")] {
-        let place = groups_place(&accounts, &[(GROUP, &[0], &["a1", "a2", "a3"]), ("h", &[1], &other)]);
+        let place = groups_place(&accounts, &[(GROUP, &[0], &["a1", "a2", "a3"]), ("Tier2", &[1], &other)]);
         group_seats(&place.state, ["a1", other[0]]);
         let out = group_terminal(&place, "r-group-1");
-        assert_eq!(move_account(&place.state, GROUP).as_deref(), Some(want), "h の種 {} で g は {want} へ（{}）", other[0], told(&out));
-        assert_eq!(move_account(&place.state, "h"), None, "h は移らない");
+        assert_eq!(move_account(&place.state, GROUP).as_deref(), Some(want), "Tier2 の種 {} で Tier1 は {want} へ（{}）", other[0], told(&out));
+        assert_eq!(move_account(&place.state, "Tier2"), None, "Tier2 は移らない");
         clean(&[&place.repo, &place.state]);
     }
 }
 
-/// (同じ周の 2 群) g（候補 [a1, a3, a4]）と h（候補 [a2, a3, a4]）が同じ周に逼迫し候補を共有する: 先の g が a3 へ移り、後の
-/// h は g の移り先 a3 を飛ばして a4 へ移る（記録 2 の label が異なる＝周の頭の記録だけを読む変異を捕まえる）。
+/// (同じ周の 2 群) Tier1（候補 [a1, a3, a4]）と Tier2（候補 [a2, a3, a4]）が同じ周に逼迫し候補を共有する: 先の Tier1 が a3 へ移り、後の
+/// Tier2 は Tier1 の移り先 a3 を飛ばして a4 へ移る（記録 2 の label が異なる＝周の頭の記録だけを読む変異を捕まえる）。
 #[test]
 fn pipe_dispatch_group_move_two_groups_in_one_round_take_different_targets() {
     let accounts = [("a1", 90, 10, 10), ("a2", 90, 10, 10), ("a3", 10, 10, 10), ("a4", 10, 10, 10)];
-    let place = groups_place(&accounts, &[(GROUP, &[0], &["a1", "a3", "a4"]), ("h", &[1], &["a2", "a3", "a4"])]);
+    let place = groups_place(&accounts, &[(GROUP, &[0], &["a1", "a3", "a4"]), ("Tier2", &[1], &["a2", "a3", "a4"])]);
     group_seats(&place.state, ["a1", "a2"]);
     let out = group_terminal(&place, "r-group-1");
-    let records = (move_account(&place.state, GROUP), move_account(&place.state, "h"));
-    assert_eq!(records, (Some("a3".to_owned()), Some("a4".to_owned())), "先の g は a3・後の h は a4（{}）", told(&out));
+    let records = (move_account(&place.state, GROUP), move_account(&place.state, "Tier2"));
+    assert_eq!(records, (Some("a3".to_owned()), Some("a4".to_owned())), "先の Tier1 は a3・後の Tier2 は a4（{}）", told(&out));
     assert_eq!(move_counts(&place.state), (2, 0, 0), "承認 event 2・断り 0");
     clean(&[&place.repo, &place.state]);
 }
