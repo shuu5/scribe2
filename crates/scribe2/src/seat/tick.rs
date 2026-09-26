@@ -794,6 +794,8 @@ struct Front {
     fleet: State,
     /// 登録 row の口座 label。
     account: String,
+    /// 登録 row の役割（口座の門がモデル別窓を役割の model に絞る・account-lifecycle.md §33 形 3）。
+    role: Role,
     /// 登録 row の anchor（移動の門が群を引く）。
     anchor: String,
     /// 席の置き場。
@@ -838,7 +840,7 @@ fn front(input: &Input) -> Result<Front, Verdict> {
     };
     let step = candidate(record.as_ref(), digest);
     let pointer = pointer_of(&rows.pace, record.map(|found| found.sent_at), step, now);
-    Ok(Front { rows, fleet, account, anchor, seat, digest, step, pointer, now, off })
+    Ok(Front { rows, fleet, account, role, anchor, seat, digest, step, pointer, now, off })
 }
 
 /// 窓が shell の周（設計 §7 形 1〜3）: 打刻と梯子を読まず、同じ target に席を起こす（[`wake`]）。口座は anchor が群に属せば群の
@@ -1163,9 +1165,11 @@ fn settled(seat: &Path, mut record: Ladder, stamps: &[Stamp], digest: u64, clock
 }
 
 /// 口座の門（形 4）: 登録 row の口座の鮮度の内側の記録（[`fresh_rows`]・計測は起こさない）が閾値以上なら真。記録が無い・
-/// 鮮度の外・読めない周は偽（門は正の証拠でだけ閉じる）。
+/// 鮮度の外・読めない周は偽（門は正の証拠でだけ閉じる）。モデル別窓は自席の役割 1 つの model の窓だけを数える（役割の行が
+/// 無い周は空の集合＝モデル別窓を数えない・account-lifecycle.md §33 形 3）。
 fn account_pressed(manifest: &Manifest, front: &Front) -> bool {
-    matches!(fresh_rows(manifest, &front.fleet, &front.account), Ok(Some(rows)) if pressed(&rows, front.rows.caps).is_some())
+    let models: BTreeSet<&str> = group::role_model(manifest, front.role).into_iter().collect();
+    matches!(fresh_rows(manifest, &front.fleet, &front.account), Ok(Some(rows)) if pressed(&rows, front.rows.caps, &models).is_some())
 }
 
 /// pane と入力欄の門（形 1 の 8）: pane を取れない周は `pane-missing`・[`pass_input`]（自席の文は [`last_own_payload`]）を

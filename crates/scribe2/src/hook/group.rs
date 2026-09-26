@@ -36,6 +36,7 @@ use crate::name::NAME;
 use crate::rules::manifest::{AccountGroup, Manifest};
 use crate::rules::RuleValue;
 use crate::seat::inject::Confirm;
+use crate::seat::role::Role;
 use crate::seat::{host_groups_dir, sanitize_target};
 use std::cmp::Reverse;
 use std::collections::BTreeSet;
@@ -384,12 +385,17 @@ pub struct Pressed {
 
 /// 口座 1 つの最新の実測の行から逼迫を判じる（**pure**・判定の 1 本）。実測の窓のどれかの `used_pct` が対応する行の値
 /// **以上**なら、越えた窓のうち使用率が最大の 1 つ（同率は行の並び＝窓の宣言順で先の 1 つ）。測れなかった行は数えない
-/// （0 に読み替えない・越えたとも言わない）。
-pub fn pressed(rows: &[Allowance], caps: Caps) -> Option<Pressed> {
+/// （0 に読み替えない・越えたとも言わない）。モデル別 7 日窓は `models`（役割の model の表示名の集合）に表示名が在る行だけを
+/// 数え（集合が空なら数えない・model を parse できない行も数えない）、5 時間窓と 7 日窓は集合に依らない（設計 §33 形 1）。
+pub fn pressed(rows: &[Allowance], caps: Caps, models: &BTreeSet<&str>) -> Option<Pressed> {
     rows.iter()
         .filter_map(|row| match row {
             Allowance::Measured(found) => Some(found),
             Allowance::Unmeasured(_) => None,
+        })
+        .filter(|found| {
+            found.window != WindowKind::SevenDayModel
+                || found.model.as_deref().and_then(Model::parse).is_some_and(|model| models.contains(model.display()))
         })
         .map(|found| Pressed { window: found.window, used: found.used_pct, cap: caps.cap(found.window) })
         .filter(|found| found.used >= found.cap)
@@ -489,7 +495,11 @@ fn decide(input: &Judge<'_>, current: &str, set: &BTreeSet<String>, measured: &m
         return Judgement::Unreadable;
     };
     let state = replay(&events);
-    let pressed_of = |label: &str| usage::latest_of(&state, label).and_then(|rows| pressed(&rows, input.caps));
+    // 役割の model の行が無い周は逼迫を測らず移らず断らない（記録 0・event 0・設計 §33 形 3）。
+    let Some(models) = role_models(input.manifest, input.group, &state) else {
+        return Judgement::Unreadable;
+    };
+    let pressed_of = |label: &str| usage::latest_of(&state, label).and_then(|rows| pressed(&rows, input.caps, &models));
     if pressed_of(current).is_none() {
         clear_refused(&host_groups_dir(input.state_dir), input.group.name());
         return Judgement::Stay(set.iter().filter_map(|label| Some((label.clone(), pressed_of(label)?))).collect());
@@ -521,20 +531,25 @@ pub fn currents_of(state_dir: &Path, manifest: &Manifest) -> BTreeSet<String> {
 }
 
 /// 役割の model の集合（設計 §29 形 1）: 群の置き場の席の登録 row の役割（重複は畳む）ごとの rules 行 `seat.model.<役割>` の
-/// 表示名。どれかの行が無い・不発効・表に無い周は `None`（空に読み替えない）。席の row が無い群は空の集合。
+/// 表示名（[`role_model`] を登録 row ごとに呼ぶ）。どれかの行が無い・不発効・表に無い周は `None`（空に読み替えない）。席の
+/// row が無い群は空の集合。
 pub fn role_models(manifest: &Manifest, group: &AccountGroup, state: &State) -> Option<BTreeSet<&'static str>> {
     state
         .registrations
         .values()
         .filter(|latest| group.anchors().contains(&latest.registration.anchor))
-        .map(|latest| {
-            let row = manifest.get(&latest.registration.role.model_row()).filter(|row| row.enabled)?;
-            let RuleValue::Str(text) = &row.value else {
-                return None;
-            };
-            Model::parse(text).map(Model::display)
-        })
+        .map(|latest| role_model(manifest, latest.registration.role))
         .collect()
+}
+
+/// 役割 1 つの model の表示名（**読みの 1 本**・設計 §33 形 2）: rules 行 `seat.model.<役割>` の値を閉じた表で引く。行が無い・
+/// 不発効・文字列でない・表に無い周は `None`。
+pub fn role_model(manifest: &Manifest, role: Role) -> Option<&'static str> {
+    let row = manifest.get(&role.model_row()).filter(|row| row.enabled)?;
+    let RuleValue::Str(text) = &row.value else {
+        return None;
+    };
+    Model::parse(text).map(Model::display)
 }
 
 /// 残量の鍵で候補を並べる（**pure**・設計 §29 形 1）: `rows` は宣言の候補の順の (label, 鮮度の内側の実測の行)・`models` は役割の
@@ -587,7 +602,7 @@ pub fn reserve(input: &Judge<'_>, measured: &mut BTreeSet<String>) -> Result<Opt
     let mut reserved: BTreeSet<String> = BTreeSet::new();
     for (found, models) in groups.iter().zip(&models) {
         let target = found.name() == input.group.name();
-        if !target && !pressed_now(input, found, measured)? {
+        if !target && !pressed_now(input, found, models, measured)? {
             continue;
         }
         let taken = if target { input.taken } else { input.head };
@@ -602,7 +617,7 @@ pub fn reserve(input: &Judge<'_>, measured: &mut BTreeSet<String>) -> Result<Opt
         let mut rows = Vec::new();
         for label in open {
             let fresh = usage::fresh_rows(input.manifest, &state, label).map_err(|_| Unreserved::NoRule)?;
-            rows.extend(fresh.filter(|found| pressed(found, input.caps).is_none()).map(|found| (label.clone(), found)));
+            rows.extend(fresh.filter(|found| pressed(found, input.caps, models).is_none()).map(|found| (label.clone(), found)));
         }
         let pick = by_key(&rows, models).into_iter().find(|label| !reserved.contains(*label)).map(str::to_owned);
         if target {
@@ -614,8 +629,13 @@ pub fn reserve(input: &Judge<'_>, measured: &mut BTreeSet<String>) -> Result<Opt
 }
 
 /// 先の群の今の口座が逼迫か（設計 §31 形 1）: 記録を読めない群・鮮度の内側の実測を持たない群は偽。鮮度の外は**今の口座だけ**を
-/// `measure` で口座ごとに 1 周 1 回測る。
-fn pressed_now(input: &Judge<'_>, found: &AccountGroup, measured: &mut BTreeSet<String>) -> Result<bool, Unreserved> {
+/// `measure` で口座ごとに 1 周 1 回測る。`models` はその群の役割の model の表示名の集合（呼び手が読む・設計 §33 形 3）。
+fn pressed_now(
+    input: &Judge<'_>,
+    found: &AccountGroup,
+    models: &BTreeSet<&str>,
+    measured: &mut BTreeSet<String>,
+) -> Result<bool, Unreserved> {
     let Ok(current) = current_of(input.state_dir, found) else {
         return Ok(false);
     };
@@ -624,7 +644,7 @@ fn pressed_now(input: &Judge<'_>, found: &AccountGroup, measured: &mut BTreeSet<
     }
     let state = store::read_all(input.state_dir).map(|events| replay(&events)).map_err(|_| Unreserved::Unreadable)?;
     let fresh = usage::fresh_rows(input.manifest, &state, &current.label).map_err(|_| Unreserved::NoRule)?;
-    Ok(fresh.is_some_and(|rows| pressed(&rows, input.caps).is_some()))
+    Ok(fresh.is_some_and(|rows| pressed(&rows, input.caps, models).is_some()))
 }
 
 /// 移動の記録と承認（この順）: 前提（宣言の逐語・起こし直しの刻み・役割の既定の面）が揃わない周と記録を書けない周は 1 つも
@@ -771,9 +791,11 @@ fn line_of(hooked: &Hooked) -> Option<String> {
     if current.source == Source::Record && current.label != account {
         return Some(moving_line(group, &account, &current.label));
     }
+    // 群の役割の model の集合（行が無い周は 0 行・設計 §33 形 3）。
+    let models = role_models(&manifest, group, &state)?;
     match usage::fresh_rows(&manifest, &state, &account).ok()? {
         Some(rows) => {
-            let found = pressed(&rows, caps)?;
+            let found = pressed(&rows, caps, &models)?;
             // 逼迫を読んだ周は移動を頼む記録を置く（§20 形 4・在れば上書きしない・判定と移動は 1 周の群の段が lock の内側で行う）。
             let _ = put_request(&host_groups_dir(hooked.dir), group.name(), &account, found.window);
             Some(seat_line(group, &account, found))
@@ -856,13 +878,57 @@ mod tests {
     #[test]
     fn hook_group_pressed_picks_the_largest_window_over_its_own_cap() {
         let caps = Caps { five: 85, seven: 95, model: 95 };
+        let fable = BTreeSet::from(["Fable"]);
         let rows =
             [measured(WindowKind::FiveHour, 90), measured(WindowKind::SevenDay, 94), measured(WindowKind::SevenDayModel, 97)];
-        assert_eq!(pressed(&rows, caps), Some(Pressed { window: WindowKind::SevenDayModel, used: 97, cap: 95 }));
+        assert_eq!(pressed(&rows, caps, &fable), Some(Pressed { window: WindowKind::SevenDayModel, used: 97, cap: 95 }));
         let tie = [measured(WindowKind::FiveHour, 96), measured(WindowKind::SevenDay, 96)];
-        assert_eq!(pressed(&tie, caps).map(|found| found.window), Some(WindowKind::FiveHour), "同率は先の窓");
+        assert_eq!(pressed(&tie, caps, &fable).map(|found| found.window), Some(WindowKind::FiveHour), "同率は先の窓");
         let under = [measured(WindowKind::FiveHour, 84), measured(WindowKind::SevenDay, 94)];
-        assert_eq!(pressed(&under, caps), None, "どの窓も閾値未満");
+        assert_eq!(pressed(&under, caps, &fable), None, "どの窓も閾値未満");
+    }
+
+    /// モデル別窓の行 1 つ（model の字面を選ぶ）。
+    fn model_row(model: &str, used_pct: u64) -> Allowance {
+        Allowance::Measured(Measured {
+            account: "a1".to_owned(),
+            window: WindowKind::SevenDayModel,
+            model: Some(model.to_owned()),
+            endpoint: "oauth-usage".to_owned(),
+            used_pct,
+            resets_at: None,
+        })
+    }
+
+    /// モデル別窓は集合に表示名が在る model の行だけが逼迫にする（設計 §33 形 1）: Fable の窓 99 は集合 {Opus} では数えず、
+    /// Opus の窓 96 は数える。model の字面は表示名に畳んで比べる（小文字の `opus` も Opus）。
+    #[test]
+    fn hook_group_pressed_counts_only_the_model_windows_in_the_set() {
+        let caps = Caps { five: 85, seven: 95, model: 95 };
+        let opus = BTreeSet::from(["Opus"]);
+        let low = [measured(WindowKind::FiveHour, 10), measured(WindowKind::SevenDay, 10)];
+        let fable_only: Vec<Allowance> = low.iter().cloned().chain([model_row("Fable", 99)]).collect();
+        assert_eq!(pressed(&fable_only, caps, &opus), None, "集合に無い model の窓は数えない");
+        let both: Vec<Allowance> = fable_only.iter().cloned().chain([model_row("opus", 96)]).collect();
+        let want = Some(Pressed { window: WindowKind::SevenDayModel, used: 96, cap: 95 });
+        assert_eq!(pressed(&both, caps, &opus), want, "集合に在る model の窓だけ（Fable の 99 でなく Opus の 96）");
+        let unknown: Vec<Allowance> = low.iter().cloned().chain([model_row("no-such-model", 99)]).collect();
+        assert_eq!(pressed(&unknown, caps, &opus), None, "parse できない model の行は数えない");
+    }
+
+    /// 集合が空ならモデル別窓は数えず、5 時間窓と 7 日窓は集合に依らず数える（設計 §33 形 1）。
+    #[test]
+    fn hook_group_pressed_empty_set_skips_the_model_window_but_not_five_and_seven() {
+        let caps = Caps { five: 85, seven: 95, model: 95 };
+        let (empty, opus) = (BTreeSet::new(), BTreeSet::from(["Opus"]));
+        let model = [measured(WindowKind::FiveHour, 10), measured(WindowKind::SevenDay, 10), model_row("Fable", 99)];
+        assert_eq!(pressed(&model, caps, &empty), None, "集合が空はモデル別窓を数えない");
+        let five = [measured(WindowKind::FiveHour, 90), measured(WindowKind::SevenDay, 10), model_row("Fable", 99)];
+        let seven = [measured(WindowKind::FiveHour, 10), measured(WindowKind::SevenDay, 96), model_row("Fable", 99)];
+        for set in [&empty, &opus] {
+            assert_eq!(pressed(&five, caps, set).map(|found| (found.window, found.used)), Some((WindowKind::FiveHour, 90)), "5h");
+            assert_eq!(pressed(&seven, caps, set).map(|found| (found.window, found.used)), Some((WindowKind::SevenDay, 96)), "7d");
+        }
     }
 
     /// 鍵の歯の口座 1 つの行（5 時間窓・7 日窓〔reset つき〕・model ごとのモデル別窓）。

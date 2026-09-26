@@ -746,18 +746,24 @@ fn acct_register_as(place: &AcctPlace, target: &str, account: &str, launch: &str
 }
 
 /// 口座 1 つの実測行（5 時間窓 = `pct`・7 日窓 = 1）を時刻 `ts` で event log に積む（`fleet usage` が積むのと同じ形）。
+fn acct_measured(state: &Path, label: &str, pct: u64, ts: &str) {
+    use vessel::fleet::WindowKind;
+    acct_measured_rows(state, label, &[(WindowKind::FiveHour, None, pct), (WindowKind::SevenDay, None, 1)], ts);
+}
+
+/// 口座 1 つの実測行を (窓, モデル別窓の model の名, 使用率) の列で時刻 `ts` に積む（モデル別窓の行も置ける形）。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn acct_measured(state: &Path, label: &str, pct: u64, ts: &str) {
-    use vessel::fleet::{Allowance, Event, EventKind, Measured, WindowKind, SCHEMA};
+fn acct_measured_rows(state: &Path, label: &str, rows: &[(vessel::fleet::WindowKind, Option<&str>, u64)], ts: &str) {
+    use vessel::fleet::{Allowance, Event, EventKind, Measured, SCHEMA};
     let policy = vessel::fleet::store::LockPolicy::embedded().expect("lock の規則を読める");
-    for (window, used_pct) in [(WindowKind::FiveHour, pct), (WindowKind::SevenDay, 1)] {
+    for (window, model, used_pct) in rows.iter().copied() {
         let allowance = Allowance::Measured(Measured {
             account: label.to_owned(),
             window,
-            model: None,
+            model: model.map(str::to_owned),
             endpoint: "oauth-usage".to_owned(),
             used_pct,
             resets_at: Some(ACCT_RESET.to_owned()),
@@ -1559,6 +1565,42 @@ fn seat_tick_account_gate_reads_only_fresh_records_without_measuring() {
     assert!(!place.at(TICK_CLIENT).exists(), "偽 client の呼出 0 件");
 }
 
+// ───── 管理 tick の口座の門のモデル別窓は自席の役割の model の窓だけ（account-lifecycle.md §33 形 3・契約表の行 w・接頭辞 `seat_tick_account_gate_model_`・(g) の置き場） ─────
+
+/// (g) と同じ置き場（役割 orchestrator の登録 row・黙った時間・prompt 行の無い pane）に、自席の口座の鮮度の内側の記録（5 時間窓
+/// 10・7 日窓 10・モデル別窓〔Fable〕96）を置き、役割の行 `seat.model.orchestrator` の値を `model` にした `--rules` の写しで
+/// 1 周撃った判定行を返す（偽 client の呼出 0 件を要求）。
+fn tick_account_gate_with_role_model(model: &str) -> String {
+    use vessel::fleet::WindowKind;
+    let place = tick_place(true);
+    tick_silent_for(&place, TICK_STALE + 60);
+    fs::write(place.at(TICK_PANE), "no prompt here\n").ok();
+    let rows = [(WindowKind::FiveHour, None, 10), (WindowKind::SevenDay, None, 10), (WindowKind::SevenDayModel, Some("Fable"), 96)];
+    acct_measured_rows(&place.state, TICK_ACCOUNT, &rows, &acct_now());
+    let role = format!(
+        "\n[[rule]]\nid = \"seat.model.orchestrator\"\nkind = \"RoleModel\"\nvalue = \"{model}\"\nenabled = true\nruling = \"r\"\nruled_at = \"d\"\n"
+    );
+    let rules = fixture(&place.dir, "role.toml", &format!("{}{role}", tick_rules_text("", None)));
+    let out = tick_run(&place, &["--rules", &rules]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "rc 0: {}", stderr_of(&out));
+    assert!(tick_keys(&place).is_empty(), "0 key");
+    assert!(!place.at(TICK_CLIENT).exists(), "偽 client の呼出 0 件");
+    stdout_of(&out)
+}
+
+/// (g1) 役割の行が `opus` の写しは、Fable の窓だけが高い自席の口座で口座の門を通り、次の門の `input-unknown` で止まる（base は
+/// Fable の窓で `account-pressed` ＝ RED）。
+#[test]
+fn seat_tick_account_gate_model_opus_role_passes_with_only_the_fable_window_high() {
+    assert_eq!(tick_account_gate_with_role_model("opus"), tick_noop("input-unknown", "wait:0", "0"));
+}
+
+/// (g2) 役割の行が `fable` の写しは同じ記録で `account-pressed`（自席の役割の集合を空で渡す変異を捕まえる）。
+#[test]
+fn seat_tick_account_gate_model_fable_role_is_pressed_by_the_fable_window() {
+    assert_eq!(tick_account_gate_with_role_model("fable"), tick_noop("account-pressed", "wait:0", "0"));
+}
+
 /// (h) 入力欄に人の文字 → `input-busy`・prompt 行の無い pane → `input-unknown`（どちらも 0 key）・自席の前の合図が残る → Enter
 /// 1 回の後に `input-own-queued`（送ったのは Enter の 1 key だけ・合図の text は 0 key）。どの周も記録は増えない。
 #[test]
@@ -2302,6 +2344,32 @@ fn seat_tick_judge_reserve_missing_role_row_is_an_error_with_zero_keys() {
     assert_eq!(move_keys(&place), Vec::<String>::new(), "0 key");
     assert!(!move_groups_dir(&root).join(format!("{MOVE_GROUP}.account")).exists(), "記録 0");
     assert_eq!((judge_events(&place, EventKind::GroupMoved), judge_events(&place, EventKind::GroupMoveRefused)), (0, 0), "event 0");
+}
+
+// ───────────── tick の判定の逼迫の門は役割の model の窓だけ（account-lifecycle.md §33・契約表の行 w・接頭辞 `seat_tick_judge_model_gate_`・§9 の fixture） ─────────────
+
+/// (d) 役割の行を `opus` にした写しで、群の今の口座 A の本文が Fable の窓 100・5 時間窓 10・7 日窓 50 の周は逼迫でなく移らない
+/// （`judged=stay`・記録 0・承認 event 0・断りの event 0・0 key・base は Fable の窓で逼迫と読み B へ移る ＝ RED）。
+#[test]
+fn seat_tick_judge_model_gate_opus_role_with_only_the_fable_window_high_stays() {
+    use vessel::fleet::EventKind;
+    let root = tmp();
+    let place = judge_place(&root, MOVE_ANCHOR, [10, 10]);
+    let far = "2099-01-01T00:00:00Z";
+    let body = format!(
+        "{{\"five_hour\":{{\"utilization\":10,\"resets_at\":\"{far}\"}},\"seven_day\":{{\"utilization\":50,\"resets_at\":\"{far}\"}},\
+         \"limits\":[{{\"kind\":\"weekly_scoped\",\"percent\":100,\"resets_at\":\"{far}\",\"scope\":{{\"model\":{{\"display_name\":\"Fable\"}}}}}}]}}"
+    );
+    fs::write(place.at(&format!("body-tok-{MOVE_A}")), body).ok();
+    let fable = format!("id = \"{MOVE_ROLE_ROW}\"\nkind = \"RoleModel\"\nvalue = \"fable\"\n");
+    let rules = fs::read_to_string(&place.rules).unwrap_or_default();
+    assert!(rules.contains(&fable), "写しに役割の行が在る");
+    fs::write(&place.rules, rules.replace(&fable, &fable.replace("\"fable\"", "\"opus\""))).ok();
+    let out = move_run(&place);
+    assert_eq!(stdout_of(&out), judge_recent("stay"), "stderr={}", stderr_of(&out));
+    assert!(!move_groups_dir(&root).join(format!("{MOVE_GROUP}.account")).exists(), "記録 0");
+    assert_eq!((judge_events(&place, EventKind::GroupMoved), judge_events(&place, EventKind::GroupMoveRefused)), (0, 0), "event 0");
+    assert_eq!(move_keys(&place), Vec::<String>::new(), "0 key");
 }
 
 // ───────────── pane が shell かの判定は子 process まで見る（seat-heartbeat.md §6・契約表の行 e・`s2-07l.624`・接頭辞 `seat_pane_shell_`） ─────────────

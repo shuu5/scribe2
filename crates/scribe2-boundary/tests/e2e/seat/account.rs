@@ -705,6 +705,24 @@ fn host_group_next_says_no_rule_without_the_role_model_row() {
     fs::remove_dir_all(&place.dir).ok();
 }
 
+/// (e・account-lifecycle.md §33・契約表の行 w・接頭辞 `host_group_next_model_gate_`) `next_rules` の役割の行を `opus` にした写しは、
+/// Fable の窓 100・7 日窓 40 の候補 spare を門に通して `next=spare`（base は Fable の窓で門に落ちて `next=none` ＝ RED）。対: 同じ
+/// 実測で役割の行が `fable` の写しは `next=none`（役割の model の窓は今のまま数える）。
+#[test]
+fn host_group_next_model_gate_opus_role_names_a_candidate_with_only_the_fable_window_high() {
+    let now = vessel::fleet::cli::now_utc();
+    let place = role_doctor_place();
+    let labels = ["acct-1", "spare", "third"];
+    put_groups(&place, &[("Tier1", &["/repo"], &labels)]);
+    put_next_round(&place, &now, "spare", (40, 100));
+    let fable = next_rules(&labels, true);
+    let opus = fable.replace("value = \"fable\"", "value = \"opus\"");
+    assert_ne!(opus, fable, "写しの役割の行を opus に替えた");
+    assert_eq!(group_line(&doctor_rows(&place, &opus), "Tier1"), format!("{NEXT_HEAD} next=spare refused=-"), "役割 opus");
+    assert_eq!(group_line(&doctor_rows(&place, &fable), "Tier1"), format!("{NEXT_HEAD} next=none refused=-"), "役割 fable");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
 // ─── doctor の群の行の `refused=`（account-lifecycle.md §31 形 3・契約表の行 u・接頭辞 `host_group_refused_`） ───
 //
 // `host_group_next_` の置き場に群 Tier1（置き場 `/repo`・候補 [acct-1]）と Tier2（置き場 `/repo/b`・候補 [spare]）を宣言し、

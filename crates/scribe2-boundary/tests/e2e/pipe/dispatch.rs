@@ -4098,6 +4098,55 @@ fn pipe_dispatch_group_reserve_missing_role_row_stops_typed_without_moving() {
     clean(&[&place.repo, &place.state]);
 }
 
+// ───── 逼迫の門のモデル別窓は役割の model の窓だけ（account-lifecycle.md §33・契約表の行 w・接頭辞 `pipe_dispatch_group_model_gate_`・§20 の fixture） ─────
+//
+// 偽 client の本文のモデル別窓の名は Fable。規則の写しの役割の行を `opus` にした写し（[`opus_role_place`]）では、Fable の窓は
+// 門に数わらない（5 時間窓と 7 日窓は今のまま数える）。
+
+/// [`move_place`] の規則の写しの役割の行の値を `opus` に替えた置き場（役割 orchestrator の model が Opus＝本文の Fable の窓は
+/// 役割の窓でない）。
+fn opus_role_place(accounts: &[(&str, u64, u64, u64)], candidates: &[&str]) -> GroupPlace {
+    let place = move_place(accounts, candidates, "a1");
+    let rules = fs::read_to_string(&place.rules).unwrap_or_default();
+    assert!(rules.contains(GROUP_ROLE_ROW), "写しに役割の行が在る");
+    fs::write(&place.rules, rules.replace(GROUP_ROLE_ROW, &GROUP_ROLE_ROW.replace("\"fable\"", "\"opus\""))).unwrap_or_default();
+    place
+}
+
+/// (a) 役割 opus の群の今の口座 a1 が Fable の窓 100・5 時間窓 10・7 日窓 50 の周は逼迫でなく移らない（記録 0・承認 0・断り 0・
+/// base は Fable の窓で逼迫と読み a2 へ移る ＝ RED）。
+#[test]
+fn pipe_dispatch_group_model_gate_opus_role_current_with_only_the_fable_window_high_stays() {
+    let place = opus_role_place(&[("a1", 10, 50, 100), ("a2", 10, 10, 10)], &["a1", "a2"]);
+    let out = group_terminal(&place, "r-group-1");
+    assert_eq!(move_account(&place.state, GROUP), None, "記録は不変（{}）", told(&out));
+    assert_eq!(move_counts(&place.state), (0, 0, 0), "承認 event 0・断りの event 0・保留 0");
+    assert_eq!(group_notices(&place.state), Vec::new(), "逼迫の通知も 0");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (b) 役割 opus の群の今の口座 a1 が 7 日窓 97 で逼迫の周、Fable の窓 100・7 日窓 40 の候補 a2 へ移る（base は Fable の窓で門に
+/// 落ちて移り先なし＝断り ＝ RED）。
+#[test]
+fn pipe_dispatch_group_model_gate_opus_role_moves_to_a_candidate_with_only_the_fable_window_high() {
+    let place = opus_role_place(&[("a1", 10, 97, 10), ("a2", 10, 40, 100)], &["a1", "a2"]);
+    let out = group_terminal(&place, "r-group-1");
+    assert_eq!(move_account(&place.state, GROUP).as_deref(), Some("a2"), "a2 へ移る（{}）", told(&out));
+    assert_eq!(move_counts(&place.state), (1, 0, 0), "承認 event 1・断り 0");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (c) 役割 fable（今の写し）の群は今の口座 a1 の Fable の窓 96 で逼迫のまま a2 へ移り、Fable の窓 100 の候補は門で落ちる
+/// （役割の model の窓は今のまま数える）。
+#[test]
+fn pipe_dispatch_group_model_gate_fable_role_still_counts_the_fable_window() {
+    let place = move_place(&[("a1", 10, 10, 96), ("a2", 10, 40, 100), ("a3", 10, 10, 10)], &["a1", "a2", "a3"], "a1");
+    let out = group_terminal(&place, "r-group-1");
+    assert_eq!(move_account(&place.state, GROUP).as_deref(), Some("a3"), "逼迫で移り、Fable 100 の a2 は飛ばす（{}）", told(&out));
+    assert_eq!(move_counts(&place.state), (1, 0, 0), "承認 event 1");
+    clean(&[&place.repo, &place.state]);
+}
+
 // ───── 退避を器が完結させる（account-lifecycle.md §21 形 1・契約表の行 j・接頭辞 `pipe_dispatch_group_exit_`・§20 の fixture） ─────
 //
 // 2 つ目の置き場の席は退避の合図を受けても shell に戻らない（`spy/stuck-<target>`）。偽 tmux は `/exit` を受けても前面を変えない

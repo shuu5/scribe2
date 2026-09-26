@@ -4907,19 +4907,34 @@ fn group_now() -> String {
     vessel::fleet::cli::format_utc(secs)
 }
 
-/// 口座 1 つの実測の回を `ts` で置く（窓ごとの使用率・モデル別窓の model は Fable）。
+/// 埋め込みの役割 orchestrator の既定の model の表示名（hook は埋め込みの面を読む＝モデル別窓はこの名の窓だけが逼迫を測る・
+/// account-lifecycle.md §33 形 1）。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
+fn group_role_model() -> &'static str {
+    vessel::seat::role::defaults(Role::Orchestrator).expect("埋め込みの役割の既定を読める").model.display()
+}
+
+/// 口座 1 つの実測の回を `ts` で置く（窓ごとの使用率・モデル別窓の model は埋め込みの役割の既定の表示名）。
 fn put_group_round(state: &Path, ts: &str, account: &str, windows: &[(vessel::fleet::WindowKind, u64)]) {
+    put_group_round_as(state, ts, account, windows, group_role_model());
+}
+
+/// [`put_group_round`] のモデル別窓の model の名を `model` にした形。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn put_group_round_as(state: &Path, ts: &str, account: &str, windows: &[(vessel::fleet::WindowKind, u64)], model: &str) {
     use vessel::fleet::{Allowance, Event, EventKind, Measured, WindowKind};
     let policy = vessel::fleet::store::LockPolicy::embedded().expect("lock の規則を読める");
     for (window, used_pct) in windows {
         let measured = Measured {
             account: account.to_owned(),
             window: *window,
-            model: (*window == WindowKind::SevenDayModel).then(|| "Fable".to_owned()),
+            model: (*window == WindowKind::SevenDayModel).then(|| model.to_owned()),
             endpoint: "oauth-usage".to_owned(),
             used_pct: *used_pct,
             resets_at: Some(GROUP_FAR.to_owned()),
@@ -5082,6 +5097,20 @@ fn hook_group_model_window_alone_prints_the_model_window() {
     let path = group_seat(&place, "grpmodel", "a1");
     put_group_round(&place.state, &group_now(), "a1", &group_windows(10, 10, 96));
     assert_eq!(group_prompt_lines(&place, &path), vec![group_line("a1", "model", 96, 95)], "model の 1 行");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// (f・account-lifecycle.md §33・契約表の行 w・接頭辞 `hook_group_model_gate_`) 埋め込みの役割の既定の表示名と**違う** model の
+/// モデル別窓だけが 96（5 時間窓 10・7 日窓 10）の席は、逼迫の 1 行を出さず移動を頼む記録も置かない（base は出す ＝ RED）。
+#[test]
+fn hook_group_model_gate_other_model_window_alone_prints_nothing() {
+    let other = ["Opus", "Fable", "Sonnet", "Haiku"].into_iter().find(|name| *name != group_role_model()).unwrap_or("Haiku");
+    let place = group_role_place();
+    put_group(&place, &place.repo.display().to_string());
+    let path = group_seat(&place, "grpother", "a1");
+    put_group_round_as(&place.state, &group_now(), "a1", &group_windows(10, 10, 96), other);
+    assert_eq!(group_prompt_lines(&place, &path), Vec::<String>::new(), "役割の model でない {other} の窓は数えない");
+    assert_eq!(group_requests(&place), Vec::<String>::new(), "頼みも置かない");
     clean(&[&place.repo, &place.state, &place.sock_dir]);
 }
 
