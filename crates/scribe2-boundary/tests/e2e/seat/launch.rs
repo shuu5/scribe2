@@ -31,9 +31,129 @@ fn launch_defaults_argv(place: &AcctPlace, label: &str) -> String {
     format!("{}\n{}", LAUNCH_DEFAULT_FLAGS.join("\n"), launch_expected_argv(place, label))
 }
 
-/// 期待する送る行（穴を埋める前）: 導出行の `claude` の直後に既定の 4 語（雛形 [`launch_derived`] は旗無しのまま）。
-fn launch_carried(place: &AcctPlace) -> String {
-    launch_derived(place).replacen(" claude ", &format!(" claude {} ", LAUNCH_DEFAULT_FLAGS.join(" ")), 1)
+/// 期待する送る行（穴を埋める前）: 導出行の env 3 語の直後に箱の頭（unit 名 `unit`・`None` は頭無しの素の行）・`claude` の直後に
+/// 既定の 4 語（雛形 [`launch_derived`] は頭も旗も無いまま）。
+fn launch_carried(place: &AcctPlace, unit: Option<&str>) -> String {
+    let head = unit.map(|found| format!("{} ", launch_box_head(found, LAUNCH_BOX_MB))).unwrap_or_default();
+    launch_derived(place).replacen(" claude ", &format!(" {head}claude {} ", LAUNCH_DEFAULT_FLAGS.join(" ")), 1)
+}
+
+// ─────── 席の箱（account-lifecycle.md §30・契約表の行 t・ADR-0072・`s2-07l.627`・起動を撃つ歯は全部 PATH を固定する） ───────
+
+/// 埋め込みの `seat.memory_max_mb` の値（MiB・値は rules の歯 `rules_seat_box_` が pin する）。
+const LAUNCH_BOX_MB: u64 = 32768;
+
+/// 行を実 pane で走らせた周の成立の 1 行の `scope=` の unit 名: 形を測り、道具箱の偽 systemd-run がその名で撃たれた記録を
+/// ちょうど 1 件持ち、記録の argv が頭の語列 → `claude` であることを測って返す（注入した行の頭が実際に走った）。
+fn launch_scope_unit(place: &AcctPlace, line: &str, seat: &str) -> String {
+    let unit = tick_token(line, "scope").unwrap_or_default();
+    assert!(launch_unit_well_formed(&unit, seat), "unit 名の形: {line}");
+    let record = crate::toolbox_record(&place.dir, &format!("{unit}.args"));
+    let head: Vec<String> = launch_box_head(&unit, LAUNCH_BOX_MB).split(' ').skip(1).map(str::to_owned).collect();
+    assert!(record.starts_with(&format!("{}\nclaude\n", head.join("\n"))), "偽 systemd-run の argv は頭 → claude: {record}");
+    unit
+}
+
+/// 行を実 pane で走らせた周の期待する成立の 1 行（`scope=` は [`launch_scope_unit`] が測った unit 名・census (v)）。
+fn launch_done_line(place: &AcctPlace, line: &str, seat: &str, label: &str) -> String {
+    let unit = launch_scope_unit(place, line, seat);
+    format!("seat launch: launched target={seat} account={label}{} scope={unit} trust=unwritable\n", provenance(&place.state, "flag"))
+}
+
+/// 口座 `label` の穴を埋めて anchor への cd を前置した、期待する注入の 1 行（`unit` は [`launch_carried`] と同じ）。
+fn launch_sent_line(place: &AcctPlace, label: &str, unit: Option<&str>) -> String {
+    let dir = place.state.join("accounts").join(label).display().to_string();
+    format!("cd '{}' && {}", launch_anchor(place), launch_carried(place, unit).replace("{account_dir}", &dir))
+}
+
+/// `seat launch --rules F` の写し（役割の既定の 2 行 + `memory` が在れば `seat.memory_max_mb` の行）を置き場の下に書き、path を返す。
+fn launch_rules_copy(place: &AcctPlace, memory: Option<u64>) -> String {
+    let row = |id: &str, kind: &str, value: &str| {
+        format!("\n[[rule]]\nid = \"{id}\"\nkind = \"{kind}\"\nvalue = {value}\nenabled = true\nruling = \"r\"\nruled_at = \"d\"\n")
+    };
+    let mut text = format!("schema = 1\n{}{}", row("seat.model.orchestrator", "RoleModel", "\"fable\""), row("seat.effort.orchestrator", "RoleEffort", "\"high\""));
+    if let Some(mb) = memory {
+        text.push_str(&row("seat.memory_max_mb", "SeatMemoryMaxMb", &mb.to_string()));
+    }
+    let path = place.dir.join("seat-box-rules.toml");
+    fs::write(&path, text).ok();
+    path.display().to_string()
+}
+
+// 席の箱の歯は §20 の群の外の置き場（[`launch_group_place`] の `outside`・偽 tmux が送った行を [`GROUP_LAUNCHED`] へ写す・本物の
+// tmux を立てない）で撃つ: 行は走らないので、偽 systemd-run の記録が 0 件のまま＝器は systemd-run を 1 度も撃たない（probe 無し）。
+
+/// systemd-run の無い host の PATH（偽 tmux の dir + 偽 tmux と器が使う道具だけを test の PATH の実体から symlink で写した dir・
+/// test の PATH の尾を継がない）。
+fn launch_bare_path(place: &AcctPlace) -> String {
+    let dir = place.dir.join("bare-tools");
+    fs::create_dir_all(&dir).ok();
+    let path = std::env::var("PATH").unwrap_or_default();
+    for name in ["sh", "cat", "tr", "mkdir", "date"] {
+        if let Some(real) = path.split(':').map(|found| Path::new(found).join(name)).find(|found| found.is_file()) {
+            std::os::unix::fs::symlink(real, dir.join(name)).ok();
+        }
+    }
+    format!("{}:{}", place.dir.join("group-bin").display(), dir.display())
+}
+
+/// 偽 tmux の周の送った行（[`GROUP_LAUNCHED`] の全文）が `unit` の頭を持つ／持たない 1 行（[`launch_sent_line`]）であること・登録 row の
+/// `launch` が素の導出行のままであること・偽 systemd-run が撃たれていないことを測る。
+fn launch_scope_assert_sent(place: &AcctPlace, unit: Option<&str>, case: &str) {
+    let sent = fs::read_to_string(place.dir.join(GROUP_LAUNCHED)).unwrap_or_default();
+    assert_eq!(sent, format!("{}\n", launch_sent_line(place, "l1", unit)), "{case}: 送りは 1 回");
+    assert!(!sent.contains("CPUWeight"), "{case}: 席の箱は CPUWeight を持たない: {sent}");
+    let rows = acct_rows(&place.state);
+    assert_eq!(rows.iter().map(|row| row.launch.as_str()).collect::<Vec<_>>(), [launch_derived(place).as_str()], "{case}: row の launch は素の導出行");
+    assert!(crate::toolbox_record_names(&place.dir).is_empty(), "{case}: 器は systemd-run を撃たない（probe 無し）");
+}
+
+/// (a) 道具箱を積んだ PATH で起こすと、注入した起動行はちょうど `cd '<anchor>' && <env 3 語> systemd-run --user --scope --quiet
+/// --collect --unit=<NAME>-<潰した target>-seat-0-<pid>-<seq> -p MemoryMax=32768M -p OOMPolicy=continue -- claude …`（`CPUWeight` を
+/// 含まない）で、登録 row の `launch` は素の導出行のまま、起動の 1 行の末尾は `scope=<unit 名>`（base では素の行 ＝ RED）。
+#[test]
+fn seat_launch_scope_wraps_the_injected_line_in_the_seat_box() {
+    let (place, path) = launch_group_place(true, None);
+    let out = launch_group_long(&place, &path, &["--account", "l1"]);
+    let line = stdout_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={}", stderr_of(&out));
+    let unit = launch_group_unit(&place, &line, "gl_seat", "l1");
+    let want = format!("seat launch: launched target=gl_seat account=l1{} scope={unit} trust=unwritable\n", provenance(&place.state, "flag"));
+    assert_eq!(line, want, "末尾は scope=<unit 名>");
+    launch_scope_assert_sent(&place, Some(&unit), "box");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (b) PATH に systemd-run が無い周（[`launch_bare_path`]）は素の行で起こし、末尾は `scope=no-systemd-run`・送りは 1 回のまま・起動は
+/// 止めない（base では末尾に `scope=` が無い ＝ RED）。
+#[test]
+fn seat_launch_scope_without_systemd_run_on_the_path_keeps_the_bare_line() {
+    let (place, _) = launch_group_place(true, None);
+    let out = launch_group_long(&place, &launch_bare_path(&place), &["--account", "l1"]);
+    let line = stdout_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={}", stderr_of(&out));
+    let want = format!("seat launch: launched target=gl_seat account=l1{} scope=no-systemd-run trust=unwritable\n", provenance(&place.state, "flag"));
+    assert_eq!(line, want);
+    launch_scope_assert_sent(&place, None, "no-systemd-run");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (b2) 道具箱を積んだ PATH でも、`seat launch --rules F` の写しの行が 0 の周は素の行で末尾 `scope=off`、行を欠く写しの周は素の行で
+/// 末尾 `scope=no-rules`（道具が在るのに包まない＝行 0 で頭を付ける変異・写しを捨てて埋め込みを読む変異が落ちる）。送りは 1 回の
+/// まま（base では `--rules` が使い方の誤り ＝ RED）。
+#[test]
+fn seat_launch_scope_rules_copy_with_zero_or_without_the_row_keeps_the_bare_line() {
+    for (memory, word) in [(Some(0), "off"), (None, "no-rules")] {
+        let (place, path) = launch_group_place(true, None);
+        let rules = launch_rules_copy(&place, memory);
+        let out = launch_group_long(&place, &path, &["--account", "l1", "--rules", &rules]);
+        let line = stdout_of(&out);
+        assert_eq!(rc_of(&out), i32::from(RC_OK), "{word}: stdout={line} stderr={}", stderr_of(&out));
+        let want = format!("seat launch: launched target=gl_seat account=l1{} scope={word} trust=unwritable\n", provenance(&place.state, "flag"));
+        assert_eq!(line, want, "{word}");
+        launch_scope_assert_sent(&place, None, word);
+        fs::remove_dir_all(&place.dir).ok();
+    }
 }
 
 /// 包みの tmux が写した argv のうち `verb` で始まる呼出しの数（`-S <socket>` の後ろを見る）。
@@ -80,7 +200,7 @@ fn seat_launch_creates_the_window_and_injects_the_derived_line_once() {
 
     let line = stdout_of(&out);
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={}", stderr_of(&out));
-    assert_eq!(line, format!("seat launch: launched target={name}_seat account=l2{} trust=unwritable\n", provenance(&place.state, "flag")));
+    assert_eq!(line, launch_done_line(&place, &line, &format!("{name}_seat"), "l2"));
     assert_eq!(launch_tmux_calls(&place, "new-window"), 1, "window を 1 回作る");
     assert!(
         fs::read_to_string(place.dir.join(LAUNCH_TMUX_ARGS)).unwrap_or_default().lines().any(|found| found.ends_with(&format!("new-window -t ={name}: -n seat"))),
@@ -249,10 +369,11 @@ fn seat_launch_injects_cd_to_the_row_anchor_before_the_line() {
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={} pane={}", stderr_of(&out), capture(&place.socket, &target));
     let l2_dir = place.state.join("accounts").join("l2").display().to_string();
     let sent = acct_sent(&place.state, &format!("{name}_{name}"));
+    let unit = launch_scope_unit(&place, &line, &format!("{name}_{name}"));
     assert_eq!(
         sent,
-        vec![format!("cd '{anchor}' && {}", launch_carried(&place).replace("{account_dir}", &l2_dir))],
-        "起動行は row の anchor への cd → agent view の env → claude の順の 1 行"
+        vec![format!("cd '{anchor}' && {}", launch_carried(&place, Some(&unit)).replace("{account_dir}", &l2_dir))],
+        "起動行は row の anchor への cd → agent view の env → 箱の頭 → claude の順の 1 行"
     );
     assert_eq!(cwd_of(), anchor, "起こした席の cwd は row の anchor（pane の cwd ではない）");
     assert_eq!(fs::read_to_string(place.dir.join("launched")).unwrap_or_default(), launch_defaults_argv(&place, "l2"), "argv に cd は載らない");
@@ -383,7 +504,7 @@ fn seat_launch_short_form_reuses_the_registered_row_target_and_model() {
 
     let line = stdout_of(&out);
     assert_eq!(rc_of(&out), i32::from(RC_OK), "短い形: stdout={line} stderr={} pane={}", stderr_of(&out), capture(&place.socket, &target));
-    assert_eq!(line, format!("seat launch: launched target={name}_seat account=l2{} trust=unwritable\n", provenance(&place.state, "flag")));
+    assert_eq!(line, launch_done_line(&place, &line, &format!("{name}_seat"), "l2"));
     assert_eq!(launch_tmux_calls(&place, "new-window"), 1, "短い形は window を作らない（在る window へ起こす）");
     let injected = launch_inject_rows(&place);
     assert_eq!(injected.len(), 2, "長い形と短い形の kind=launch が 1 行ずつ: {injected:?}");
@@ -614,7 +735,7 @@ fn seat_entry_short_form_defaults_the_role_to_orchestrator() {
 
     let line = stdout_of(&out);
     assert_eq!(rc_of(&out), i32::from(RC_OK), "1 語: stdout={line} stderr={} pane={}", stderr_of(&out), capture(&place.socket, &target));
-    assert_eq!(line, format!("seat launch: launched target={name}_seat account=l2{} trust=unwritable\n", provenance(&place.state, "flag")));
+    assert_eq!(line, launch_done_line(&place, &line, &format!("{name}_seat"), "l2"));
     assert_eq!(launch_tmux_calls(&place, "new-window"), 1, "1 語は window を作らない（row の target の窓へ起こす）");
     let injected = launch_inject_rows(&place);
     assert_eq!(injected.len(), 2, "長い形と 1 語の kind=launch が 1 行ずつ: {injected:?}");
@@ -658,7 +779,7 @@ fn seat_entry_target_defaults_to_the_caller_session_and_role() {
 
     let line = stdout_of(&out);
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={} pane={}", stderr_of(&out), capture(&place.socket, &target));
-    assert_eq!(line, format!("seat launch: launched target={name}_orchestrator account=l2{} trust=unwritable\n", provenance(&place.state, "flag")));
+    assert_eq!(line, launch_done_line(&place, &line, &format!("{name}_orchestrator"), "l2"));
     assert_eq!(launch_tmux_calls(&place, "new-window"), 1, "役割の名の窓を 1 回作る");
     let rows = acct_rows(&place.state);
     assert_eq!(rows.len(), 1, "登録 row は 1 件: {rows:?}");
@@ -820,7 +941,7 @@ fn seat_entry_relabels_the_registered_row_for_another_account() {
 
     let line = stdout_of(&out);
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={} pane={}", stderr_of(&out), capture(&place.socket, &target));
-    assert_eq!(line, format!("seat launch: launched target={name}_seat account=l1{} trust=unwritable\n", provenance(&place.state, "flag")));
+    assert_eq!(line, launch_done_line(&place, &line, &format!("{name}_seat"), "l1"));
     let rows = acct_rows(&place.state);
     assert_eq!(rows.len(), 2, "{rows:?}");
     assert_eq!(
@@ -857,7 +978,7 @@ fn seat_launch_short_form_keeps_known_verbs() {
 
     let line = stdout_of(&out);
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={}", stderr_of(&out));
-    assert_eq!(line, format!("seat launch: launched target={name}_seat account=l2{} trust=unwritable\n", provenance(&place.state, "flag")));
+    assert_eq!(line, launch_done_line(&place, &line, &format!("{name}_seat"), "l2"));
     assert_eq!(launch_tmux_calls(&place, "new-window"), 1, "window を 1 回作る");
     assert_eq!(fs::read_to_string(place.dir.join("launched")).unwrap_or_default(), launch_defaults_argv(&place, "l2"), "導出した行が 1 回だけ届く");
     launch_assert_registered_before_send(&place, &target, "l2");
@@ -973,7 +1094,7 @@ fn seat_defaults_short_form_derives_the_model_without_a_row() {
 
     let line = stdout_of(&out);
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={} pane={}", stderr_of(&out), capture(&place.socket, &target));
-    assert_eq!(line, format!("seat launch: launched target={name}_orchestrator account=l2{} trust=unwritable\n", provenance(&place.state, "flag")));
+    assert_eq!(line, launch_done_line(&place, &line, &format!("{name}_orchestrator"), "l2"));
     assert_eq!(fs::read_to_string(place.dir.join("launched")).unwrap_or_default(), launch_defaults_argv(&place, "l2"), "行の既定を運ぶ");
     let rows = acct_rows(&place.state);
     assert_eq!(
@@ -1006,7 +1127,7 @@ const GROUP_CALLER: &str = "group-caller";
 // flip-check: retroactive s2-07l.647
 
 /// 群の歯の置き場: [`launch_place`] の host の面に群 `Tier1`（置き場 = この置き場の anchor か、`outside` なら別の `/elsewhere`・候補 =
-/// l1 → l2）を足し、偽 tmux だけの PATH を返す。`record` が在れば群の今の口座の記録（host の根の群用 dir の `Tier1.account`）を置く。
+/// l1 → l2）を足し、偽 tmux の dir → 道具箱（[`crate::toolbox_path`]・census (vi) の PATH の固定）の順の PATH を返す。`record` が在れば群の今の口座の記録（host の根の群用 dir の `Tier1.account`）を置く。
 fn launch_group_place(outside: bool, record: Option<&str>) -> (AcctPlace, String) {
     let place = launch_place();
     let anchor = if outside { "/elsewhere".to_owned() } else { launch_anchor(&place) };
@@ -1041,8 +1162,20 @@ fn launch_group_place(outside: bool, record: Option<&str>) -> (AcctPlace, String
     );
     fs::write(bin.join("tmux"), tmux).ok();
     fs::set_permissions(bin.join("tmux"), fs::Permissions::from_mode(0o755)).ok();
-    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default());
+    let path = format!("{}:{}", bin.display(), crate::toolbox_path(&place.dir));
     (place, path)
+}
+
+/// 偽 tmux の周（行を走らせない）の成立の 1 行の `scope=` の unit 名: 形を測り、偽 tmux が受けた最後の起動行が口座 `label` の
+/// env の直後・`claude` の前にその名の頭を持つことを測って返す。
+fn launch_group_unit(place: &AcctPlace, line: &str, seat: &str, label: &str) -> String {
+    let unit = tick_token(line, "scope").unwrap_or_default();
+    assert!(launch_unit_well_formed(&unit, seat), "unit 名の形: {line}");
+    let sent = fs::read_to_string(place.dir.join(GROUP_LAUNCHED)).unwrap_or_default();
+    let dir = place.state.join("accounts").join(label).display().to_string();
+    let want = format!("CLAUDE_CONFIG_DIR={dir} {} claude ", launch_box_head(&unit, LAUNCH_BOX_MB));
+    assert!(sent.lines().last().is_some_and(|found| found.contains(&want)), "頭は env の直後・claude の前: {sent}");
+    unit
 }
 
 /// 偽 tmux だけの PATH で `seat` を 1 回撃つ（`--tmux-socket` は渡さない＝PATH の偽 tmux が答える・anchor は置き場の anchor）。
@@ -1081,7 +1214,8 @@ fn launch_group_tmux_calls(place: &AcctPlace, verb: &str) -> usize {
 fn launch_group_assert_launched(place: &AcctPlace, out: &Output, label: &str, case: &str) {
     let line = stdout_of(out);
     assert_eq!(rc_of(out), i32::from(RC_OK), "{case}: stdout={line} stderr={}", stderr_of(out));
-    assert_eq!(line, format!("seat launch: launched target=gl_seat account={label}{} trust=unwritable\n", provenance(&place.state, "flag")), "{case}");
+    let unit = launch_group_unit(place, &line, "gl_seat", label);
+    assert_eq!(line, format!("seat launch: launched target=gl_seat account={label}{} scope={unit} trust=unwritable\n", provenance(&place.state, "flag")), "{case}");
     let sent = fs::read_to_string(place.dir.join(GROUP_LAUNCHED)).unwrap_or_default();
     let dir = place.state.join("accounts").join(label).display().to_string();
     assert!(sent.lines().last().is_some_and(|found| found.contains(&format!("CLAUDE_CONFIG_DIR={dir} "))), "{case}: {sent}");
@@ -1187,9 +1321,11 @@ impl LaunchTick {
         fs::read_to_string(self.place.dir.join(LAUNCH_TICK_CALLS)).unwrap_or_default().lines().map(str::to_owned).collect()
     }
 
-    /// 成立の行（`tail` は置き場の 2 語の後ろ・空なら表の無い host の行そのもの・末尾は口座の dir が無い周の `trust=` の語）。
-    fn launched(&self, tail: &str) -> String {
-        format!("seat launch: launched target=gl_seat account=l1{}{tail} trust=unwritable\n", provenance(&self.place.state, "flag"))
+    /// 成立の行（`tail` は `scope=` の後ろ・空なら表の無い host の行そのもの・末尾は口座の dir が無い周の `trust=` の語・`scope=` は
+    /// 起動の 1 行 `line` と偽 tmux の受けた行から測った unit 名）。
+    fn launched(&self, line: &str, tail: &str) -> String {
+        let unit = launch_group_unit(&self.place, line, "gl_seat", "l1");
+        format!("seat launch: launched target=gl_seat account=l1{} scope={unit}{tail} trust=unwritable\n", provenance(&self.place.state, "flag"))
     }
 }
 
@@ -1224,7 +1360,7 @@ fn seat_launch_tick_installs_the_derived_pair_and_names_it_at_the_tail() {
     let [service_name, timer_name] = tick.names();
     let out = launch_group_long(&tick.place, &tick.path, &["--account", "l1"]);
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={} stderr={}", stdout_of(&out), stderr_of(&out));
-    assert_eq!(stdout_of(&out), tick.launched(" tick-unit=installed"), "起動の行の末尾に 1 語");
+    assert_eq!(stdout_of(&out), tick.launched(&stdout_of(&out), " tick-unit=installed"), "起動の行の末尾に 1 語");
     assert_eq!(tick.bodies(), tick.expected(), "導出の bytes");
     assert_eq!(tick.calls(), ["--user daemon-reload".to_owned(), format!("--user enable --now {timer_name}")], "reload → enable の順");
     let tick_jsonl = fs::read_to_string(seat_dir_of(&tick.place.state, "gl_seat").join("tick.jsonl")).unwrap_or_default();
@@ -1235,7 +1371,7 @@ fn seat_launch_tick_installs_the_derived_pair_and_names_it_at_the_tail() {
     assert!(before.iter().all(Option::is_some), "2 file が在る: {service_name}");
     let again = launch_group_run(&tick.place, &tick.path, &["seat", "l1"]);
     assert_eq!(rc_of(&again), i32::from(RC_OK), "stdout={} stderr={}", stdout_of(&again), stderr_of(&again));
-    assert_eq!(stdout_of(&again), tick.launched(" tick-unit=unchanged"), "短い形も同じ 1 本");
+    assert_eq!(stdout_of(&again), tick.launched(&stdout_of(&again), " tick-unit=unchanged"), "短い形も同じ 1 本");
     assert_eq!(mtimes(), before, "file は書き直さない");
     assert_eq!(tick.calls().get(2..), Some(&[format!("--user enable --now {timer_name}")][..]), "enable だけ 1 回");
     fs::remove_dir_all(&tick.place.dir).ok();
@@ -1248,7 +1384,7 @@ fn seat_launch_tick_absent_table_leaves_the_line_and_the_units_untouched() {
     for head in [vec!["seat", "launch", "--role", "orchestrator", "--account", "l1"], vec!["seat", "l1"]] {
         let out = launch_group_run(&tick.place, &tick.path, &head);
         assert_eq!(rc_of(&out), i32::from(RC_OK), "{head:?}: stderr={}", stderr_of(&out));
-        assert_eq!(stdout_of(&out), tick.launched(""), "{head:?}: 行は 1 字も変わらない");
+        assert_eq!(stdout_of(&out), tick.launched(&stdout_of(&out), ""), "{head:?}: 行は 1 字も変わらない");
     }
     assert!(!tick.units.exists(), "unit dir を作らない");
     assert!(tick.calls().is_empty(), "systemctl 0 回");
@@ -1284,7 +1420,7 @@ fn seat_launch_tick_failed_enable_is_named_without_changing_the_launch_rc() {
     fs::write(tick.place.dir.join(LAUNCH_TICK_FAIL), "").ok();
     let out = launch_group_long(&tick.place, &tick.path, &["--account", "l1"]);
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={} stderr={}", stdout_of(&out), stderr_of(&out));
-    assert_eq!(stdout_of(&out), tick.launched(" tick-unit=refused:enable-failed"));
+    assert_eq!(stdout_of(&out), tick.launched(&stdout_of(&out), " tick-unit=refused:enable-failed"));
     let timer_name = &tick.names()[1];
     assert_eq!(tick.calls(), ["--user daemon-reload".to_owned(), format!("--user enable --now {timer_name}")], "reload → enable（落ちる）");
     fs::remove_dir_all(&tick.place.dir).ok();
@@ -1543,7 +1679,8 @@ fn launch_default_assert_launched(place: &AcctPlace, out: &Output, target: &str,
     let line = stdout_of(out);
     assert_eq!(rc_of(out), i32::from(RC_OK), "{case}: stdout={line} stderr={}", stderr_of(out));
     let flat = target.replace(':', "_");
-    assert_eq!(line, format!("seat launch: launched target={flat} account=l1{} trust=unwritable\n", provenance(&place.state, source)), "{case}");
+    let unit = launch_group_unit(place, &line, &flat, "l1");
+    assert_eq!(line, format!("seat launch: launched target={flat} account=l1{} scope={unit} trust=unwritable\n", provenance(&place.state, source)), "{case}");
     let rows: Vec<_> = acct_rows(&place.state).into_iter().map(|row| (row.role, row.anchor, row.target, row.account)).collect();
     let want = (vessel::seat::role::Role::Orchestrator, launch_anchor(place), target.to_owned(), "l1".to_owned());
     assert_eq!(rows.last(), Some(&want), "{case}: 登録 row");

@@ -297,9 +297,10 @@ fn seat_inject_subcommand_is_gone_from_the_usage() {
 
 /// 作業記憶の口は**もう無い**（ADR-0045 §2 (2)・`s2-07l.479.2`）: 退避（externalize）・復元（rebrief）・
 /// 消費（consume）は口を持たない第 1 token として断られ（[`assert_gone_mouth`]）、使い方の 1 行にも
-/// その名が出ない。`--rules` を受ける席の口は**管理 tick の 1 つだけ**（この 3 口が消えて 0 になり、`s2-07l.582` で tick が
-/// 歯の seam として受ける＝設計 seat-heartbeat.md §2 形 7）: 使い方で `--rules` を持つ口は tick だけで、他の既知の verb に
-/// `--rules` を渡すと未知の引数として rc 2 で断られる。
+/// その名が出ない。`--rules` を受ける席の口は**管理 tick と起動の 2 つだけ**（この 3 口が消えて 0 になり、`s2-07l.582` で tick が
+/// 歯の seam として受ける＝設計 seat-heartbeat.md §2 形 7・`s2-07l.627` で `seat launch` も同じ seam を受ける＝設計
+/// account-lifecycle.md §30 形 4）: 使い方で `--rules` を持つ口は tick と launch だけで、他の既知の verb に `--rules` を渡すと
+/// 未知の引数として rc 2 で断られる。
 ///
 /// **消えたことを測る歯**である（base では 3 つとも自分の口として動くので RED）。
 #[test]
@@ -313,9 +314,8 @@ fn seat_working_memory_subcommands_are_gone_from_the_usage() {
     assert_tick_mouth(&state, &usage);
     let rules = fixture(&dir, "rules.toml", "schema = 1\n");
     let launch = fixture(&dir, "launch.txt", "claude\n");
-    let verbs: [Vec<&str>; 3] = [
+    let verbs: [Vec<&str>; 2] = [
         vec!["register", "--state-dir", &state, "--target", "s:w", "--role", "orchestrator", "--account", "a1", "--launch", &launch],
-        vec!["launch", "--state-dir", &state, "--role", "orchestrator", "--target", "s:w"],
         vec!["ruling", "ls", "--state-dir", &state],
     ];
     for mut verb in verbs {
@@ -329,7 +329,8 @@ fn seat_working_memory_subcommands_are_gone_from_the_usage() {
     let takers: Vec<&str> = usage.split(['<', '|', '>']).filter(|mouth| mouth.contains("--rules")).collect();
     let unit = |verb: &str| format!("tick {verb} --state-dir S --target S:W --unit-dir U --binary PATH [--rules F]");
     let status = "tick status --state-dir S [--target S:W] [--rules F]".to_owned();
-    assert_eq!(takers, [TICK_USAGE.to_owned(), unit("install"), unit("uninstall"), status], "席の口で `--rules` を受けるのは tick（と unit の口 2 つ・`s2-07l.583`・status の口・`s2-07l.650`）だけ: {usage}");
+    let launch = "launch --state-dir S --role R --target S:W [--account L] [--anchor DIR] [--model M] [--restore CMD] [--rules F]".to_owned();
+    assert_eq!(takers, [launch, TICK_USAGE.to_owned(), unit("install"), unit("uninstall"), status], "席の口で `--rules` を受けるのは起動（`s2-07l.627`）と tick（と unit の口 2 つ・`s2-07l.583`・status の口・`s2-07l.650`）だけ: {usage}");
     for kept in ["register", "launch", "tick"] {
         assert!(usage.contains(&format!("{kept} --")), "{kept} は使い方に在る: {usage}");
     }
@@ -1033,6 +1034,10 @@ fn real_tmux() -> Option<PathBuf> {
 /// [`LAUNCH_TMUX_REFUSE`] の verb を rc 1 で返す口・**`-t` の無い** `display-message` に
 /// [`LAUNCH_CALLER_TARGET`] / [`LAUNCH_CALLER_SESSION`] を返す口（呼び手の pane を器が測る 1 問い・file が無ければ rc 1）。
 /// `-t` を持つ呼出しは 1 つも横取りしない（pane の実物は本物の tmux が答える）。
+///
+/// PATH は起動の歯ごとに固定する（設計 account-lifecycle.md §30 census (vi)）: 道具箱（偽 `systemd-run` が argv を写して `--` の
+/// 後ろを exec する・[`crate::toolbox_path`]）を shim の dir の**前**に積む（席の箱の頭が付く・host の本物の systemd-run は pane に
+/// 届かない＝実 scope を作らない）。systemd-run の無い host の形は本物の tmux を立てない歯（seat/launch.rs の `seat_launch_scope_`）が測る。
 fn launch_shims(place: &AcctPlace, target: &str) -> String {
     let bin = place.dir.join("bin");
     fs::create_dir_all(&bin).ok();
@@ -1074,7 +1079,21 @@ fn launch_shims(place: &AcctPlace, target: &str) -> String {
         fs::write(&path, body).ok();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).ok();
     }
-    format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default())
+    let tools = crate::toolbox_path(&place.dir);
+    let (head, tail) = tools.split_once(':').unwrap_or((tools.as_str(), ""));
+    format!("{head}:{}:{tail}", bin.display())
+}
+
+/// 席の箱の頭の語列（設計 account-lifecycle.md §30 形 2・契約の字面から組む・`CPUWeight` を持たない・`--` で終わる）。
+fn launch_box_head(unit: &str, mb: u64) -> String {
+    format!("systemd-run --user --scope --quiet --collect --unit={unit} -p MemoryMax={mb}M -p OOMPolicy=continue --")
+}
+
+/// unit 名が `<NAME>-<潰した target>-seat-0-<pid>-<seq>` の形か（pid と seq は 10 進の数）。
+fn launch_unit_well_formed(unit: &str, seat: &str) -> bool {
+    unit.strip_prefix(&format!("{NAME}-{seat}-seat-0-"))
+        .and_then(|tail| tail.split_once('-'))
+        .is_some_and(|(pid, seq)| pid.parse::<u32>().is_ok() && seq.parse::<u64>().is_ok())
 }
 
 /// 独立 socket に session `name`（初期 window も `name`・`sh -i`・prompt `$ `・PATH は shim 先頭）を立て、以後の window も同じ
@@ -2465,6 +2484,53 @@ fn seat_tick_wake_does_not_touch_a_window_without_a_row() {
     assert!(move_keys(&place).is_empty(), "0 key");
     assert!(pane_shell_calls(&place, "list-panes").is_empty(), "前面を引かない");
     assert!(!place.at(TICK_CLIENT).exists(), "偽 client は呼ばれない");
+}
+
+/// 起こし直しの席の箱（account-lifecycle.md §30 形 3 / 4・歯 (c) / (c2)）: 置き場の PATH の先頭に道具箱（偽 systemd-run）を積み、
+/// `--rules` の写しに `seat.memory_max_mb` の行を `value` で足す（`None` は足さない＝行を欠く写し）。
+fn wake_box(place: &mut MovePlace, value: Option<u64>) {
+    let tools = crate::toolbox_path(&place.tools);
+    let toolbox = tools.split_once(':').map_or(tools.as_str(), |(head, _)| head);
+    place.path = format!("{toolbox}:{}", place.path);
+    if let Some(mb) = value {
+        let body = fs::read_to_string(&place.rules).unwrap_or_default();
+        let row = tick_rules_body(&[("seat.memory_max_mb", "SeatMemoryMaxMb", mb.to_string())]).replacen("schema = 1\n", "", 1);
+        fs::write(&place.rules, format!("{body}{row}")).ok();
+    }
+}
+
+/// (c) 道具箱を積んだうえで写しの行が 0 の周と行を欠く写しの周は、起こし直しの起動行が素の行（env の直後が `claude`・
+/// `systemd-run` を持たない）で、起こし直しは止まらない（写しを捨てて埋め込み〔32768〕を読む変異は頭が付いて落ちる）。
+#[test]
+fn seat_tick_wake_keeps_the_bare_line_when_the_copy_row_is_zero_or_missing() {
+    for value in [Some(0), None] {
+        let root = tmp();
+        let mut place = wake_place(&root, "/elsewhere", WAKE_SID);
+        wake_box(&mut place, value);
+        let text = wake_assert_launched(&place, MOVE_A, "/elsewhere");
+        assert!(!text.contains("systemd-run"), "{value:?}: 頭は付かない: {text}");
+        assert!(text.contains(&format!("CLAUDE_CONFIG_DIR={} claude ", wake_account_dir(&place, MOVE_A))), "{value:?}: env の直後が claude: {text}");
+        assert!(text.ends_with(&format!(" --resume {WAKE_SID} {}", wake_first_word())), "{value:?}: 末尾は不変: {text}");
+    }
+}
+
+/// (c2) 道具箱を積み写しの行を 4096（埋め込みの 32768 と違う値）にした周は、起こし直しの起動行が env 3 語の直後に箱の頭
+/// （`MemoryMax=4096M`・unit 名は `<NAME>-tk_tk-seat-0-<pid>-<seq>`）を持ち、末尾の `--resume <sid>` と初手は不変（base では頭が
+/// 無い ＝ RED・写しを捨てて埋め込みを読む変異は `MemoryMax=32768M` で落ちる）。登録 row の launch は頭を持たない。
+#[test]
+fn seat_tick_wake_scope_boxes_the_relaunch_with_the_copy_value() {
+    let root = tmp();
+    let mut place = wake_place(&root, "/elsewhere", WAKE_SID);
+    wake_box(&mut place, Some(4096));
+    let text = wake_assert_launched(&place, MOVE_A, "/elsewhere");
+    let unit = text.split(' ').find_map(|word| word.strip_prefix("--unit=")).unwrap_or_default().to_owned();
+    assert!(launch_unit_well_formed(&unit, TICK_SEAT), "unit 名の形: {text}");
+    let want = format!("CLAUDE_CONFIG_DIR={} {} claude ", wake_account_dir(&place, MOVE_A), launch_box_head(&unit, 4096));
+    assert!(text.contains(&want), "env の直後・claude の前に頭: {text}");
+    assert_eq!(text.matches("systemd-run").count(), 1, "頭は 1 つ: {text}");
+    assert!(!text.contains("CPUWeight"), "{text}");
+    assert!(text.ends_with(&format!(" --resume {WAKE_SID} {}", wake_first_word())), "末尾は不変: {text}");
+    assert!(acct_rows(&place.state).iter().all(|row| !row.launch.contains("systemd-run")), "row の launch は頭を持たない");
 }
 
 // ─────────────────── state-stale の再判定（seat-heartbeat.md §7 形 7・契約表の行 h・`s2-07l.629`・接頭辞 `seat_tick_stale_`） ───────────────────

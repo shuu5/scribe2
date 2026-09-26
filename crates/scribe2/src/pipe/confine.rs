@@ -60,6 +60,14 @@ const RESERVE_ROW: &str = "host.reserve_memory_mb";
 /// scope に付ける CPU の重みの rules 行。
 const CPU_WEIGHT_ROW: &str = "gate.cpu_weight";
 
+/// 席の起動を包む箱の memory の上限の rules 行（MiB・設計 account-lifecycle.md §30 形 1・ADR-0072）。
+const SEAT_MEMORY_ROW: &str = "seat.memory_max_mb";
+
+/// 席の箱の行を `manifest`（呼び手の写しか埋め込み）から読む（値 0 は包まない・読めない周の理由は [`RuleRead`]）。
+pub fn seat_box_of(manifest: &Manifest) -> Result<u64, RuleRead> {
+    int_rule_of(manifest, SEAT_MEMORY_ROW)
+}
+
 /// 1 MiB の byte 数（peak の換算）。
 const MIB: u64 = 1024 * 1024;
 
@@ -721,7 +729,7 @@ fn probe(caps: &Caps, host_mb: u64) -> Result<(), Reason> {
     *PROBED.get_or_init(|| {
         let unit = format!("{NAME}-{}-probe", std::process::id());
         let mut cmd = Invocation::new(SYSTEMD_RUN);
-        cmd.args(scope_args(&unit, host_mb, caps));
+        cmd.args(scope_args(&unit, host_mb, Some(caps.cpu_weight)));
         cmd.arg("--").arg(SHELL).arg("-c").arg("exit 0");
         cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
         probe_outcome(cmd.status())
@@ -749,7 +757,7 @@ fn shell(line: &str) -> Invocation {
 /// 中身の起動を `systemd-run --user --scope` で包む。
 fn scope(inner: Invocation, mb: u64, entry: &Wrap<'_>, caps: &Caps) -> Invocation {
     let mut outer = Invocation::new(SYSTEMD_RUN);
-    outer.args(scope_args(entry.unit, mb, caps));
+    outer.args(scope_args(entry.unit, mb, Some(caps.cpu_weight)));
     outer.arg("--");
     outer.arg(inner.get_program());
     outer.args(inner.get_args());
@@ -764,8 +772,11 @@ fn scope(inner: Invocation, mb: u64, entry: &Wrap<'_>, caps: &Caps) -> Invocatio
 ///
 /// `--collect` は終了後の unit を failed の周も含めて unload させる（設計 §25・`s2-07l.421`）——無いと
 /// 正常終了した scope が `failed` で host に残り、同じ host の他の観察を汚す。probe の scope もこれで消える。
-fn scope_args(unit: &str, mb: u64, caps: &Caps) -> Vec<String> {
-    vec![
+///
+/// `cpu_weight` は便だけが持つ（`None` は `CPUWeight` の 2 語を置かない＝席の箱・他の語と順は同じ・設計 account-lifecycle.md
+/// §30 形 2＝対話の席を便より軽くしない）。
+fn scope_args(unit: &str, mb: u64, cpu_weight: Option<u64>) -> Vec<String> {
+    let mut args = vec![
         "--user".to_owned(),
         "--scope".to_owned(),
         "--quiet".to_owned(),
@@ -773,11 +784,30 @@ fn scope_args(unit: &str, mb: u64, caps: &Caps) -> Vec<String> {
         format!("--unit={unit}"),
         "-p".to_owned(),
         format!("MemoryMax={mb}M"),
-        "-p".to_owned(),
-        format!("CPUWeight={}", caps.cpu_weight),
-        "-p".to_owned(),
-        "OOMPolicy=continue".to_owned(),
-    ]
+    ];
+    if let Some(weight) = cpu_weight {
+        args.extend(["-p".to_owned(), format!("CPUWeight={weight}")]);
+    }
+    args.extend(["-p".to_owned(), "OOMPolicy=continue".to_owned()]);
+    args
+}
+
+/// 席の起動行の頭の語列（設計 account-lifecycle.md §30 形 2・ADR-0072）: `systemd-run` → [`scope_args`]（`CPUWeight` 無し）→ `--`。
+/// 起動行の `claude` の前に置く（`--` の後ろの command を exec して自分は残らない）。unit 名は [`unit_name`] が組む。
+pub fn seat_scope_head(unit: &str, mb: u64) -> Vec<String> {
+    let mut words = vec![SYSTEMD_RUN.to_owned()];
+    words.extend(scope_args(unit, mb, None));
+    words.push("--".to_owned());
+    words
+}
+
+/// [`SYSTEMD_RUN`] が PATH の dir に実行可能な file として在るか（設計 §30 形 3）: `sh` が PATH を 1 dir ずつ見るだけで
+/// `systemd-run` は**撃たない**（probe ではない・器は env を読まない C2.2）。`sh` を起こせない周も「無い」側。
+pub fn tool_on_path() -> bool {
+    const LOOK: &str = "set -f; IFS=:; for d in $PATH; do [ -f \"$d/$1\" ] && [ -x \"$d/$1\" ] && exit 0; done; exit 1";
+    let mut cmd = Invocation::new(SHELL);
+    cmd.args(["-c", LOOK, SHELL, SYSTEMD_RUN]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    cmd.status().is_ok_and(|status| status.success())
 }
 
 /// 箱の大きさ（MiB）。**2 種しかない**（設計 §4.2）。読めない / 残らない周は `None`。
@@ -1046,7 +1076,7 @@ mod tests {
     /// （設計 gate-cost.md §25・`s2-07l.421`）。
     #[test]
     fn confine_collect_scope_args_carry_collect_once_in_order() {
-        let args = scope_args("scribe2-probe-unit", 21, &CAPS);
+        let args = scope_args("scribe2-probe-unit", 21, Some(CAPS.cpu_weight));
         assert_eq!(
             args.iter().filter(|arg| *arg == "--collect").count(),
             1,
@@ -1069,6 +1099,26 @@ mod tests {
             ],
             "既存の引数の順序と箱の大きさは不変"
         );
+    }
+
+    /// `scope_args` の 2 形（設計 account-lifecycle.md §30 形 2・歯 (f)）: 便の形（CPUWeight 有り）から `-p CPUWeight=<w>` の 2 語を
+    /// 抜くと席の形（CPUWeight 無し）に一致する＝他の語と順は同じ。席の頭は `systemd-run` → 席の形 → `--` の語列。
+    #[test]
+    fn confine_scope_args_two_forms_differ_only_by_cpu_weight() {
+        let job = scope_args("u1", 4096, Some(CAPS.cpu_weight));
+        let seat = scope_args("u1", 4096, None);
+        let want_seat = ["--user", "--scope", "--quiet", "--collect", "--unit=u1", "-p", "MemoryMax=4096M", "-p", "OOMPolicy=continue"];
+        assert_eq!(seat, want_seat, "席の形に CPUWeight は無い");
+        assert!(!seat.iter().any(|arg| arg.starts_with("CPUWeight")), "{seat:?}");
+        let at = job.iter().position(|arg| arg == "CPUWeight=50").expect("便の形は CPUWeight を持つ");
+        let mut stripped = job.clone();
+        stripped.drain(at.saturating_sub(1)..=at);
+        assert_eq!(stripped, seat, "CPUWeight の 2 語の他は同じ語と順: {job:?}");
+        assert_eq!(job.get(at.saturating_sub(1)).map(String::as_str), Some("-p"), "{job:?}");
+        let head = super::seat_scope_head("u1", 4096);
+        assert_eq!(head.first().map(String::as_str), Some("systemd-run"), "{head:?}");
+        assert_eq!(head.get(1..head.len().saturating_sub(1)), Some(&seat[..]), "頭の中身は席の形: {head:?}");
+        assert_eq!(head.last().map(String::as_str), Some("--"), "{head:?}");
     }
 
     /// 包めなかった周は片付けを撃たない（record も変わらない）。

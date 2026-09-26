@@ -14,7 +14,7 @@ use std::path::Path;
 
 /// `seat` の使い方。
 pub fn usage() -> String {
-    "usage: seat <register --state-dir S --target T --role R --account L --launch FILE [--anchor DIR]|launch --state-dir S --role R --target S:W [--account L] [--anchor DIR] [--model M] [--restore CMD]|ruling add --state-dir S --target T --words W [--bead B] [--rule ID]|ruling ls --state-dir S|tick --state-dir S --target S:W [--rules F]|tick install --state-dir S --target S:W --unit-dir U --binary PATH [--rules F]|tick uninstall --state-dir S --target S:W --unit-dir U --binary PATH [--rules F]|tick status --state-dir S [--target S:W] [--rules F]|retire --state-dir S --target S:W [--reason WORDS]|heartbeat off --state-dir S --target S:W|heartbeat on --state-dir S --target S:W|heartbeat status --state-dir S --target S:W|<label> [--orchestrator] [-c|-r ID] [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]".to_owned()
+    "usage: seat <register --state-dir S --target T --role R --account L --launch FILE [--anchor DIR]|launch --state-dir S --role R --target S:W [--account L] [--anchor DIR] [--model M] [--restore CMD] [--rules F]|ruling add --state-dir S --target T --words W [--bead B] [--rule ID]|ruling ls --state-dir S|tick --state-dir S --target S:W [--rules F]|tick install --state-dir S --target S:W --unit-dir U --binary PATH [--rules F]|tick uninstall --state-dir S --target S:W --unit-dir U --binary PATH [--rules F]|tick status --state-dir S [--target S:W] [--rules F]|retire --state-dir S --target S:W [--reason WORDS]|heartbeat off --state-dir S --target S:W|heartbeat on --state-dir S --target S:W|heartbeat status --state-dir S --target S:W|<label> [--orchestrator] [-c|-r ID] [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]".to_owned()
 }
 
 /// `seat` の既知の verb（閉じた語・宣言順・設計 contract-source.md §17 の形 (vii)）。短い形の第 1 token（口座 label）は
@@ -84,6 +84,7 @@ const ALLOWED_LAUNCH: &[cli_args::Allowed] = &[
     value("--anchor"),
     value("--model"),
     value("--restore"),
+    value("--rules"),
     value("--tmux-socket"),
     value("--capture-file"),
 ];
@@ -394,6 +395,8 @@ struct LaunchFlags<'a> {
     socket: Option<&'a str>,
     /// 注入する起動行の末尾に足す会話の引き継ぎ（短い形の `-c` / `-r ID` だけ・[`short_carry_of`]・長い形は空）。
     carry: &'a [&'a str],
+    /// `--rules F`（長い形だけ・役割の既定の行と席の箱の行の写し・無ければ埋め込み・設計 account-lifecycle.md §30 形 4）。
+    rules: Option<&'a str>,
 }
 
 /// 長い形の引数: 解く前の置き場と anchor の flag（[`launch_place`] が解く）と起動の入力。
@@ -421,8 +424,8 @@ fn target_well_formed(target: &str) -> bool {
 /// `seat launch` の flag を読む（長い形）。値欠け・空文字・未知の `--role`・`S:W` でない `--target` は `None`（使い方で断る）。
 fn launch_flags(args: &[String]) -> Option<LaunchArgs<'_>> {
     let [state_dir, target, role] = ["--state-dir", "--target", "--role"].map(|name| required_nonempty(args, name).ok());
-    let [account, anchor, model, restore, socket] =
-        ["--account", "--anchor", "--model", "--restore", "--tmux-socket"].map(|name| nonempty(args, name).ok());
+    let [account, anchor, model, restore, socket, rules] =
+        ["--account", "--anchor", "--model", "--restore", "--tmux-socket", "--rules"].map(|name| nonempty(args, name).ok());
     let (Some(state_dir), Some(target), Some(role)) = (state_dir, target, role.and_then(role::Role::parse)) else {
         return None;
     };
@@ -440,6 +443,7 @@ fn launch_flags(args: &[String]) -> Option<LaunchArgs<'_>> {
             restore: restore?,
             socket: socket?,
             carry: &[],
+            rules: rules?,
         },
     })
 }
@@ -487,11 +491,14 @@ fn launch_defaults(args: &[String]) -> Outcome {
     let Some(target) = target.filter(|_| missing.is_empty()) else {
         return Outcome::failed_line(RC_REFUSED, render_defaults_unresolved(&missing));
     };
+    let Ok(rules) = nonempty(args, "--rules") else {
+        return refused_usage();
+    };
     let place = match launch_place(state_dir, anchor, Some(&target)) {
         Ok(found) => found,
         Err(refused) => return refused,
     };
-    let flags = LaunchFlags { target: &target, role, account, model, restore, socket, carry: &[] };
+    let flags = LaunchFlags { target: &target, role, account, model, restore, socket, carry: &[], rules };
     launch_with(&flags, &place)
 }
 
@@ -532,7 +539,7 @@ fn short_of(label: &str, args: &[String]) -> Outcome {
         Ok(found) => found,
         Err(refused) => return refused,
     };
-    let flags = LaunchFlags { target: &target, role, account: Some(label), model: Some(&model), restore, socket, carry: &carry };
+    let flags = LaunchFlags { target: &target, role, account: Some(label), model: Some(&model), restore, socket, carry: &carry, rules: None };
     launch_with(&flags, &place)
 }
 
@@ -637,6 +644,16 @@ fn refused_before_launch(reason: &'static str, target: Option<&str>, state: Opti
     Outcome::failed_line(RC_REFUSED, line)
 }
 
+/// 役割の既定の行（model と effort）と席の箱の行を引く manifest（設計 seat-roles.md §20 の約束 7・account-lifecycle.md §30 形 4）:
+/// `--rules F` の写し（tick の口と同じ歯の seam・読めない file は rc 1 の欠陥の行）か、無ければ埋め込み。
+fn launch_rules(flags: &LaunchFlags, state: &super::StateDir) -> Result<crate::rules::manifest::Manifest, Outcome> {
+    let refused = |reason: &'static str| cycle::render_launched(flags.target, &cycle::Launched::Refused(reason), state, None);
+    match flags.rules {
+        None => super::embedded_manifest().map_err(|read| Outcome::failed_line(RC_REFUSED, refused(read.no_rule()))),
+        Some(path) => crate::rules::manifest::Manifest::load(Path::new(path)).map_err(|errors| broken_rules(&errors, vec![refused(cycle::REASON_NO_RULE)])),
+    }
+}
+
 /// 起動の本体（長い形・短い形の同じ 1 本）: manifest（tracked + 置き場の host の面）を 1 回だけ開いて確認の刻みと R-C9-1 の値を
 /// 読み、[`cycle::launch`] へ渡す。
 fn launch_with(flags: &LaunchFlags, place: &LaunchPlace) -> Outcome {
@@ -656,10 +673,9 @@ fn launch_with(flags: &LaunchFlags, place: &LaunchPlace) -> Outcome {
         Ok(found) => found,
         Err(read) => return refused(read.no_rule()),
     };
-    // 役割の既定の行（model と effort）は埋め込み manifest から引く＝起動の口に `--rules` は作らない（設計 seat-roles.md §20 の約束 7）。
-    let rules = match super::embedded_manifest() {
+    let rules = match launch_rules(flags, state) {
         Ok(found) => found,
-        Err(read) => return refused(read.no_rule()),
+        Err(refused) => return refused,
     };
     let result = cycle::launch(&cycle::Launch {
         target: flags.target,
@@ -677,6 +693,7 @@ fn launch_with(flags: &LaunchFlags, place: &LaunchPlace) -> Outcome {
         threshold_pct,
         carry: flags.carry,
         replace_own: true,
+        seat_box: crate::pipe::confine::seat_box_of(&rules),
     });
     // 群の置き場の断りは次の 1 手（群の今の口座）を同じ manifest と anchor から解く（設計 account-lifecycle.md §21 形 3）。
     let line = cycle::render_launched(flags.target, &result, state, Some((&manifest, &place.anchor)));
@@ -690,7 +707,7 @@ fn launch_with(flags: &LaunchFlags, place: &LaunchPlace) -> Outcome {
     };
     // 注入の周は起動の前に置いた trust の印の語を行の末尾に添える（設計 host-init.md §7 形 4）。
     let line = match &result {
-        cycle::Launched::Done(_, _, trust) => format!("{line} trust={}", trust.as_str()),
+        cycle::Launched::Done(_, _, trust, _) => format!("{line} trust={}", trust.as_str()),
         _ => line,
     };
     match result {

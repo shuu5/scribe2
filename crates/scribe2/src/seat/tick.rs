@@ -923,9 +923,11 @@ fn wake(input: &Input, manifest: &Manifest, row: (Role, &str), account: &str, ca
         threshold_pct: 0,
         carry: &carry,
         replace_own: false,
+        // 席の箱の行は `--rules` の写しか埋め込み（自分の manifest・設計 account-lifecycle.md §30 形 4）。
+        seat_box: crate::pipe::confine::seat_box_of(manifest),
     });
     let trust = match &launched {
-        Launched::Done(_, _, trust) => Some(trust.as_str()),
+        Launched::Done(_, _, trust, _) => Some(trust.as_str()),
         Launched::None(_) | Launched::Refused(_) | Launched::Failed(_) => None,
     };
     Verdict { trust, ..Verdict::moved(Move::Launch, None, Some(launched_word(&launched))) }

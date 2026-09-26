@@ -324,6 +324,9 @@ pub enum RuleKind {
     /// 群の移動の退避の猶予（秒・起点は群の記録の ts・設計 seat-heartbeat.md §13 形 1・ADR-0071）。猶予の内側は退避の合図だけを
     /// 送り `/exit` は越えてから送る。0 は猶予なし。読めない周は tick が `no-rule` で断る。
     SeatMoveGraceS,
+    /// 席の起動を包む封じ込めの箱の memory の上限（MiB・設計 account-lifecycle.md §30 形 1・ADR-0072）。0 は包まない・読めない周も
+    /// 包まない（起動は止めない＝縮退）。
+    SeatMemoryMaxMb,
     /// **クラスの語列表**（設計 contract-source.md §48 の 2・ADR-0061）。値は要素「クラスの名 + 語列」の列（読み手は
     /// [`crate::pipe::contract::class_element`] の 1 本）で、契約表の検査が verify 各行に禁じる語列と同じ照合で当て、導出が
     /// 行の `classes` に無い行を断る。id は [`crate::pipe::contract::CLASS_ROW`] の 1 行。
@@ -399,6 +402,7 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::SeatTickStaleS,
     RuleKind::SeatPointerLadderS,
     RuleKind::SeatMoveGraceS,
+    RuleKind::SeatMemoryMaxMb,
     RuleKind::RunnerClassCommands,
 ];
 
@@ -464,8 +468,8 @@ impl RuleKind {
             Self::FlipMarksPerPr => "FlipMarksPerPr",
             Self::LedgerDeniedWrites => "LedgerDeniedWrites",
             Self::HostGuardDeniedCommands => "HostGuardDeniedCommands", Self::HostGuardRmProtected => "HostGuardRmProtected",
-            // 管理 tick の 3 kind も 2 行に畳み、対で読む model と effort の 2 組も 1 行ずつに畳む（同じ上限）。
-            Self::SeatTickIntervalS => "SeatTickIntervalS", Self::SeatTickStaleS => "SeatTickStaleS",
+            // 管理 tick の 3 kind と席の箱も 2 行に畳み、対で読む model と effort の 2 組も 1 行ずつに畳む（同じ上限）。
+            Self::SeatTickIntervalS => "SeatTickIntervalS", Self::SeatTickStaleS => "SeatTickStaleS", Self::SeatMemoryMaxMb => "SeatMemoryMaxMb",
             Self::SeatPointerLadderS => "SeatPointerLadderS", Self::SeatMoveGraceS => "SeatMoveGraceS",
         }
     }
@@ -514,7 +518,7 @@ impl RuleKind {
             | Self::LandTrainMax
             | Self::PipeMaxLive
             | Self::FlipMarksPerPr
-            | Self::SeatTickIntervalS | Self::SeatTickStaleS | Self::SeatMoveGraceS
+            | Self::SeatTickIntervalS | Self::SeatTickStaleS | Self::SeatMoveGraceS | Self::SeatMemoryMaxMb
             | Self::AccountSelection => ValueShape::Int,
             Self::DialogueSurface
             | Self::RunnerModel

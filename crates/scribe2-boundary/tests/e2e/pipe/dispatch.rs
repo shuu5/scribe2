@@ -3640,6 +3640,33 @@ fn pipe_dispatch_group_trust_marks_the_new_account_before_the_launch_line() {
     clean(&[&place.repo, &place.state]);
 }
 
+/// (i・account-lifecycle.md §30 形 3 / 4・接頭辞 `pipe_dispatch_group_scope_`) 群の段の起こし直しが各 target へ送る起動行は、
+/// 移り先の口座の env の直後・`claude` の前に席の箱の頭（埋め込みの `seat.memory_max_mb` = 32768・`CPUWeight` 無し・unit 名は
+/// `<NAME>-<潰した target>-seat-0-<pid>-<seq>` で席ごとに別）を持つ（道具箱は列の fixture が積む・base では頭が無い ＝ RED）。
+#[test]
+fn pipe_dispatch_group_scope_relaunch_lines_carry_the_seat_box_head() {
+    let place = move_place(&[("a1", 90, 10, 10), ("a2", 10, 10, 10)], &["a1", "a2"], "a1");
+    let out = group_terminal(&place, "r-group-scope");
+    let dir = place.state.join("accounts").join("a2").display().to_string();
+    let mut units = Vec::new();
+    for (_, target) in GROUP_ANCHORS {
+        let lines = launched_lines(&place.state, target);
+        assert_eq!(lines.len(), 1, "{target} へ起動行 1 本（{}）: {lines:?}", told(&out));
+        let line = lines.first().cloned().unwrap_or_default();
+        let unit = line.split(' ').find_map(|word| word.strip_prefix("--unit=")).unwrap_or_default().to_owned();
+        let head = format!("{}-{}-seat-0-", vessel::name::NAME, target.replace(':', "_"));
+        let tail = unit.strip_prefix(&head).and_then(|rest| rest.split_once('-'));
+        assert!(tail.is_some_and(|(pid, seq)| pid.parse::<u32>().is_ok() && seq.parse::<u64>().is_ok()), "unit 名の形: {line}");
+        let words = format!("systemd-run --user --scope --quiet --collect --unit={unit} -p MemoryMax=32768M -p OOMPolicy=continue --");
+        assert!(line.contains(&format!("CLAUDE_CONFIG_DIR={dir} {words} claude ")), "頭は env の直後・claude の前: {line}");
+        assert!(!line.contains("CPUWeight"), "席の箱は CPUWeight を持たない: {line}");
+        units.push(unit);
+    }
+    units.dedup();
+    assert_eq!(units.len(), GROUP_ANCHORS.len(), "席ごとに別の unit 名: {units:?}");
+    clean(&[&place.repo, &place.state]);
+}
+
 /// (候補なし) 候補がどれも逼迫（a1 / a2 とも 5 時間窓 90）の群は移らない: 記録 0・断りの event 1・席の pane への行は群の
 /// 置き場ごとに断りの 1 行だけ（全 send の行数 2・§19 の通知の行は 0）・起動行 0。
 #[test]

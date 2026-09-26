@@ -17,6 +17,7 @@ use crate::headless::{ACCOUNT_ENV, AGENT_VIEW_ENV, AGENT_VIEW_OFF, DEFAULT_CLAUD
 use crate::hook::{seat_name, InjectionRecord, SCHEMA};
 use crate::invocation::Invocation;
 use crate::name::PLUGIN_DIR;
+use crate::pipe::confine::{self, Reason};
 use crate::rules::manifest::{LaunchArg, Manifest, PluginDir};
 use crate::seat::role::{Role, RoleDefaults};
 use crate::seat::{inject, role, sanitize_target, state, tmux_ok, RuleRead, StateDir};
@@ -147,15 +148,15 @@ pub fn single_model(line: &str) -> Result<(), &'static str> {
 /// 場所を持たない）。`defaults` が在れば `claude` の直後に運ぶ（[`with_defaults`]・登録 row の雛形は `None`＝旗無し）。器自身の plugin は
 /// anchor（main checkout）の下の生成 dir（[`PLUGIN_DIR`]・`plugin.json` を持つ・consumer-sync.md §17 形 3）を積み、host 固有の plugin dir と起動引数は host の面の宣言（`[[plugin]]` /
 /// `[[launch-arg]]`・宣言順）から写す（C10.2）。雛形 file は読まない・書かない。値の中の空白は解釈しない（shell が読む字面のまま）。
-pub fn derive_launch(anchor: &Path, plugins: &[PluginDir], args: &[LaunchArg], defaults: Option<RoleDefaults>) -> String {
+/// `head`（席の箱の頭・[`confine::seat_scope_head`]・§30 形 3）は env 3 語の直後・`claude` の前に置く（`None` は従来の行のまま）。
+pub fn derive_launch(anchor: &Path, plugins: &[PluginDir], args: &[LaunchArg], defaults: Option<RoleDefaults>, head: Option<&[String]>) -> String {
     let mut words = vec![
         format!("{AGENT_VIEW_ENV}={AGENT_VIEW_OFF}"),
         format!("{FEEDBACK_SURVEY_ENV}={AGENT_VIEW_OFF}"),
         format!("{ACCOUNT_ENV}={HOLE}"),
-        DEFAULT_CLAUDE.to_owned(),
-        "--plugin-dir".to_owned(),
-        anchor.join(PLUGIN_DIR).display().to_string(),
     ];
+    words.extend(head.unwrap_or_default().iter().cloned());
+    words.extend([DEFAULT_CLAUDE.to_owned(), "--plugin-dir".to_owned(), anchor.join(PLUGIN_DIR).display().to_string()]);
     for plugin in plugins {
         words.push("--plugin-dir".to_owned());
         words.push(plugin.dir().to_owned());
@@ -199,6 +200,48 @@ pub struct Launch<'a> {
     /// 呼び手の pane が target そのものの周に自分の process を起動行へ置き換えるか（人の口 `seat launch` / 短い形は `true`・
     /// 1 周の群の段の起こし直しは `false`＝器の process を置き換えず、前面の判定と入力欄の門を通る・設計 account-lifecycle.md §20）。
     pub replace_own: bool,
+    /// 席の箱の行の読み（[`confine::seat_box_of`]・呼び手の manifest から・設計 account-lifecycle.md §30 形 4・0 と読めない周は包まない）。
+    pub seat_box: Result<u64, RuleRead>,
+}
+
+/// 席の起動を箱で包んだか（起動の 1 行の `scope=`・閉じた 4 値・設計 §30 形 5）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SeatScope {
+    /// 包んだ（transient scope の unit 名）。
+    Boxed(String),
+    /// 行の値が 0（包まない）。
+    Off,
+    /// 行を読めない（無い・不発効・整数でない＝便の封じ込めと同じ語）。
+    NoRules,
+    /// `systemd-run` が PATH に無い。
+    NoTool,
+}
+
+impl SeatScope {
+    /// `scope=` の値の字面。
+    pub fn word(&self) -> &str {
+        match self {
+            Self::Boxed(unit) => unit,
+            Self::Off => "off",
+            Self::NoRules => Reason::NoRules.as_str(),
+            Self::NoTool => Reason::NoTool.as_str(),
+        }
+    }
+}
+
+/// 席の箱の頭を決める（設計 §30 形 3）: 行が 0 / 読めない・`systemd-run` が PATH に無い周は頭を付けない（probe は撃たない）。包む周の
+/// unit 名は便と同じ [`confine::unit_name`]（潰した target・段 `seat`・0）。
+fn seat_box(request: &Launch) -> (Option<Vec<String>>, SeatScope) {
+    let mb = match request.seat_box {
+        Ok(0) => return (None, SeatScope::Off),
+        Ok(mb) => mb,
+        Err(_) => return (None, SeatScope::NoRules),
+    };
+    if !confine::tool_on_path() {
+        return (None, SeatScope::NoTool);
+    }
+    let unit = confine::unit_name(&sanitize_target(request.target), "seat", 0);
+    (Some(confine::seat_scope_head(&unit, mb)), SeatScope::Boxed(unit))
 }
 
 /// 群の置き場の席に、群の今の口座と違う口座を名指した（設計 account-lifecycle.md §20 形 3・群の外に席を置かない）。
@@ -209,8 +252,8 @@ pub const REASON_GROUP_RECORD: &str = "group-record-unreadable";
 
 /// 席の起動 1 回の結果。**「送っていない」と「送ったが確かめられない」を分ける**（[`super::Relaunched`] と同じ）。
 pub enum Launched {
-    /// 起動行を注入して立ち上がりを確かめた（選んだ label・`--restore` を送った周はその消費・起動の前に trust の印を置いた結果）。
-    Done(String, Option<inject::Settled>, TrustWrite),
+    /// 起動行を注入して立ち上がりを確かめた（選んだ label・`--restore` を送った周はその消費・起動の前に trust の印を置いた結果・席の箱）。
+    Done(String, Option<inject::Settled>, TrustWrite, SeatScope),
     /// 選べる口座が無い（**1 key も送らず row も書かない**）。
     None(NoCandidate),
     /// **1 key も送っていない**（前提の断りは全部ここで、**row を 1 件も書いていない**＝設計 seat-roles.md §26 の約束 5）。
@@ -238,11 +281,14 @@ pub fn launch(request: &Launch) -> Launched {
         Ok(label) => label,
         Err(refused) => return refused,
     };
-    let derived = derive_launch(request.anchor, request.manifest.plugins(), request.manifest.launch_args(), None);
+    let (plugins, args) = (request.manifest.plugins(), request.manifest.launch_args());
+    let derived = derive_launch(request.anchor, plugins, args, None, None);
     let anchor = request.anchor.display().to_string();
     // 呼び手の窓そのものへ起こす周（約束 7）: 前面の判定も入力欄の門も掛けず、送らずに置き換える（人の口だけ・機械は置き換えない）。
     let same = request.replace_own && crate::seat::target_of_caller(request.socket).as_deref() == Some(request.target);
-    let carried = with_defaults(&derived, Some(defaults));
+    // 注入する行だけが箱の頭を持つ（登録 row の雛形 `derived` は頭無し・unit 名は 1 回きり＝会話の引き継ぎの語と同じ扱い・§30 形 3）。
+    let (head, scope) = seat_box(request);
+    let carried = derive_launch(request.anchor, plugins, args, Some(defaults), head.as_deref());
     let line = match launch_line(request.state_dir, &carried, &label, &anchor).and_then(|line| prepare(request, (&label, defaults.model), derived, same).map(|()| line)) {
         Ok(found) => with_tail(&found, request.carry),
         Err(reason) => return Launched::Refused(reason),
@@ -266,8 +312,8 @@ pub fn launch(request: &Launch) -> Launched {
     let booted = boot(&common, &dir, (&line, WHEN_LAUNCH), || Ok(()));
     record_launch(request, &label, trust, started_at);
     match booted {
-        Booted::Done(Some(inject::Settled::Consumed)) => Launched::Done(label, Some(inject::Settled::Consumed), trust),
-        Booted::Done(None) => Launched::Done(label, None, trust),
+        Booted::Done(Some(inject::Settled::Consumed)) => Launched::Done(label, Some(inject::Settled::Consumed), trust, scope),
+        Booted::Done(None) => Launched::Done(label, None, trust, scope),
         Booted::Done(Some(_)) => Launched::Failed(REASON_RESTORE),
         Booted::Failed(reason) => Launched::Failed(reason),
     }
@@ -418,13 +464,14 @@ fn record_launch(request: &Launch, label: &str, trust: TrustWrite, started: Inst
 /// （path は行末のまま＝出所を偽れない）。その窓には生きた席が在り器は殺さないので、手は人が選ぶ。
 /// [`REASON_GROUP_ACCOUNT`] の断りも同じ位置に `next=seat <群の今の口座> -c` を足す（`grouped` = 開いた manifest と anchor
 /// から [`crate::hook::group::current_of`] で解く・解けない周は足さない・設計 account-lifecycle.md §21 形 3）。他の断りは足さない。
+/// launched の 2 形だけ末尾に `scope=<unit 名|off|no-rules|no-systemd-run>`（[`SeatScope::word`]・§30 形 5）を足す（他の行は不変）。
 pub fn render_launched(target: &str, result: &Launched, state: &StateDir, grouped: Option<(&Manifest, &Path)>) -> String {
     let suffix = state.suffix();
     let target = sanitize_target(target);
     match result {
-        Launched::Done(label, None, _) => format!("seat launch: launched target={target} account={label}{suffix}"),
-        Launched::Done(label, Some(settled), _) => {
-            format!("seat launch: launched target={target} account={label} consumed={}{suffix}", settled.as_str())
+        Launched::Done(label, None, _, scope) => format!("seat launch: launched target={target} account={label}{suffix} scope={}", scope.word()),
+        Launched::Done(label, Some(settled), _, scope) => {
+            format!("seat launch: launched target={target} account={label} consumed={}{suffix} scope={}", settled.as_str(), scope.word())
         }
         Launched::None(found) => {
             format!("seat launch: refused reason={REASON_NO_ACCOUNT} detail={} target={target}{suffix}", found.reason.as_str())
@@ -505,7 +552,7 @@ mod tests {
     fn plugin_payload_first_plugin_dir_is_the_generated_dir_under_the_anchor() {
         let host = "schema = 1\n\n[[plugin]]\ndir = \"/opt/p2\"\n\n[[launch-arg]]\nvalue = \"--permission-mode\"\n";
         let manifest = Manifest::parse(host).unwrap_or_default();
-        let line = derive_launch(Path::new("/repo/main"), manifest.plugins(), manifest.launch_args(), None);
+        let line = derive_launch(Path::new("/repo/main"), manifest.plugins(), manifest.launch_args(), None, None);
         let words: Vec<&str> = line.split(' ').collect();
         let payload = Path::new("/repo/main").join(super::PLUGIN_DIR).display().to_string();
         assert_eq!(
@@ -529,7 +576,7 @@ mod tests {
                     [[plugin]]\ndir = \"/opt/p1\"\n\n[[launch-arg]]\nvalue = \"bypassPermissions\"\n";
         let manifest = Manifest::parse(host).unwrap_or_default();
         assert_eq!(manifest.plugins().len(), 2, "fixture が読める");
-        let line = derive_launch(Path::new("/repo/main"), manifest.plugins(), manifest.launch_args(), None);
+        let line = derive_launch(Path::new("/repo/main"), manifest.plugins(), manifest.launch_args(), None, None);
         assert_eq!(
             line,
             "CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1 CLAUDE_CONFIG_DIR={account_dir} claude --plugin-dir /repo/main/plugin \
@@ -544,12 +591,12 @@ mod tests {
             "穴は既存の fill_launch で埋まる"
         );
         assert_eq!(with_agent_view_off(&line), line, "前置は既に在る（二重にしない）");
-        let bare = derive_launch(Path::new("/repo/main"), &[], &[], None);
+        let bare = derive_launch(Path::new("/repo/main"), &[], &[], None, None);
         assert_eq!(bare, "CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1 CLAUDE_CONFIG_DIR={account_dir} claude --plugin-dir /repo/main/plugin");
         // 既定の対（C10・§20 の約束 1）: `claude` の直後に `--model <別名>` → `--effort <値>` の順で 1 つずつ・None は従来の行と同一・
         // 雛形へ挟むのも同じ位置（`claude` の語が無い雛形は末尾）・旗ごとに 2 つの行だけを旗ごとの理由で断る（約束 2）。
         let pair = RoleDefaults { model: Model::Fable, effort: Effort::High };
-        let fable = derive_launch(Path::new("/repo/main"), &[], &[], Some(pair));
+        let fable = derive_launch(Path::new("/repo/main"), &[], &[], Some(pair), None);
         assert_eq!(
             fable,
             "CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1 CLAUDE_CONFIG_DIR={account_dir} claude --model fable --effort high --plugin-dir /repo/main/plugin"
@@ -569,6 +616,30 @@ mod tests {
         );
         assert_ne!(REASON_MODEL_DUPLICATED, REASON_EFFORT_DUPLICATED, "旗ごとに違う理由");
         assert_eq!((model_of(None), model_of(Some("Fable")), model_of(Some("opus")), model_of(Some("nope"))), (Ok(None), Ok(Some(Model::Fable)), Ok(Some(Model::Opus)), Err(())));
+    }
+
+    /// 席の箱の頭（設計 account-lifecycle.md §30 形 3・歯 (e)）: `None` は頭無しの行と 1 字も変わらず、`Some` は env 3 語の直後・
+    /// `claude` の前に頭の語列をそのまま置く（既定の旗は `claude` の直後のまま・穴は 1 つ）。
+    #[test]
+    fn seat_launch_derive_line_puts_the_box_head_right_after_the_env() {
+        let pair = RoleDefaults { model: Model::Fable, effort: Effort::High };
+        let bare = derive_launch(Path::new("/r"), &[], &[], Some(pair), None);
+        assert_eq!(
+            bare,
+            "CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1 CLAUDE_CONFIG_DIR={account_dir} claude --model fable --effort high --plugin-dir /r/plugin",
+            "None は従来の行"
+        );
+        let head = crate::pipe::confine::seat_scope_head("u-1", 4096);
+        let boxed = derive_launch(Path::new("/r"), &[], &[], Some(pair), Some(&head));
+        assert_eq!(
+            boxed,
+            "CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1 CLAUDE_CONFIG_DIR={account_dir} systemd-run --user --scope --quiet \
+             --collect --unit=u-1 -p MemoryMax=4096M -p OOMPolicy=continue -- claude --model fable --effort high --plugin-dir /r/plugin",
+            "頭は env 3 語の直後・claude の前"
+        );
+        assert_eq!(boxed.replacen(&format!("{} ", head.join(" ")), "", 1), bare, "頭を抜けば None の行");
+        assert_eq!(boxed.matches(HOLE).count(), 1, "穴は 1 つ");
+        assert_eq!(derive_launch(Path::new("/r"), &[], &[], None, Some(&[])), derive_launch(Path::new("/r"), &[], &[], None, None), "空の頭は None と同じ");
     }
 
     /// `[[rule]]` 2 行（役割の既定の対）の manifest。kind / 値 / 発効は引数で崩せる（`None` は行を置かない）。
@@ -614,7 +685,7 @@ mod tests {
         assert_eq!(seat_defaults(&good, role, Some(Model::Fable)), Ok(pair), "一致は通る");
         assert_eq!(seat_defaults(&good, role, Some(Model::Opus)), Err(REASON_MODEL_MISMATCH), "食い違いは断る");
         assert_eq!(
-            seat_defaults(&good, role, None).map(|found| derive_launch(Path::new("/r"), &[], &[], Some(found))).as_deref(),
+            seat_defaults(&good, role, None).map(|found| derive_launch(Path::new("/r"), &[], &[], Some(found), None)).as_deref(),
             Ok("CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1 CLAUDE_CONFIG_DIR={account_dir} claude --model fable --effort high --plugin-dir /r/plugin"),
             "読める周だけ起動行を組む"
         );

@@ -266,6 +266,8 @@ fn relaunch(read: &Read<'_, '_>, group: &AccountGroup, account: &str, mut seats:
                 threshold_pct: 0,
                 carry: &carry,
                 replace_own: false,
+                // 席の箱の行は埋め込み（群の段の manifest・設計 account-lifecycle.md §30 形 4）。
+                seat_box: crate::pipe::confine::seat_box_of(&rules),
             });
             if let Some(reason) = launch_failure(&launched) {
                 failed.push((anchor.clone(), target.clone(), reason));
