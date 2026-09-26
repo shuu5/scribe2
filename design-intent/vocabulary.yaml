@@ -472,10 +472,6 @@ terms:
     domain: consumer
     definition: 器が binary 1 本で仕える Claude Code の event の口 (PreToolUse 等)。
     relationships: [write-set, cap guard]
-  - canonical: heartbeat
-    domain: consumer
-    definition: ADR-0058 での管理 tick の呼び名 (席を促す見回り)。 user の裁定はこの語で管理 tick を指す。 前の器に在った、 席が自分で打つ生存の判子の口と file はこの語で呼ばず、 ADR-0058 では戻さない。
-    relationships: [管理 tick, 打刻の合図, backoff]
   - canonical: backoff
     domain: consumer
     aliases: [合図の backoff]
@@ -532,8 +528,24 @@ terms:
     relationships: [状態の打刻, 起動行, 機械の復帰, 移動の門]
   - canonical: 打刻の合図
     domain: consumer
-    definition: 管理 tick が idle の開発 session に注入する 1 行 (SRS FR27・ADR-0058)。 台帳の現在地から続きを進めるよう促す。 無変化なら backoff で間隔が伸びる。
-    relationships: [管理 tick, 開発 session]
+    aliases: [heartbeat]
+    definition: 管理 tick が idle の開発 session に注入する 1 行 (SRS FR27・ADR-0058)。 台帳の現在地から続きを進めるよう促す。 無変化なら梯子の列の順で間隔が伸びる。 heartbeat はこの合図の呼び名で (ADR-0070・SRS FR78)、 席ごとに止められ (停止の記録 1 つ・seat heartbeat off|on|status)、 止めても管理 tick は止まらない。 前の器に在った、 席が自分で打つ生存の判子の口と file はこの語で呼ばない。
+    relationships: [管理 tick, 開発 session, 梯子の列, 停止の記録, 最後の周の打刻]
+    flagged_ambiguities: [ADR-0058 の本文では heartbeat は管理 tick の呼び名 (frozen・供覧のみ)]
+  - canonical: 停止の記録
+    domain: consumer
+    definition: 席の状態の dir に置く 1 行の file (SRS FR78・ADR-0070)。 在れば管理 tick はその席へ打刻の合図を送らない。 器の口 (seat heartbeat off) だけが置き、 on が消す (可逆)。 在るのに読めない周も止めたと読む。
+    forbidden: [heartbeat-off flag, pause file]
+    relationships: [打刻の合図, 管理 tick, 最後の周の打刻]
+  - canonical: 最後の周の打刻
+    domain: consumer
+    definition: 管理 tick が周ごとに席の状態の dir へ書く 1 行 (時刻・判定・理由・SRS FR78・ADR-0070)。 rc 1 の周も書く。 event log には書かない。 健全かはこれを読む側が判じる。
+    relationships: [管理 tick, 健全, 停止の記録]
+  - canonical: 健全
+    domain: consumer
+    definition: 管理 tick が周期どおり周っていること = 最後の周の打刻の時刻から今までの経過が周期の rules 行の 2 倍以内 (SRS FR78・ADR-0070)。 読み手 (seat tick status・doctor・外の画面) が導き、 管理 tick は判じない。
+    forbidden: [tick の健康, alive]
+    relationships: [最後の周の打刻, 管理 tick, doctor]
   - canonical: 退避の合図
     domain: consumer
     definition: 開発 session に作業記憶の退避を促す 1 行。 管理 tick (ADR-0045 で廃止) が context 使用量の上限で注入した形 (SRS FR29) と、 群の移動の周に dispatch の 1 周が古い席の pane へ注入する形 (ADR-0055・proposed) の 2 つが在り、 後者は台帳と git に残して終えることを促す。 ADR-0066 (proposed) の後も送り手は 2 系統 (便の終端の周の群の段は自分の置き場の席へ・他の置き場の席は各席の管理 tick の移動の門が自席へ) で、 群の移動の判定の 1 本は送らない。
@@ -1041,8 +1053,23 @@ terms:
   - canonical: 群の今の口座
     domain: consumer
     aliases: [group effective account]
-    definition: その群の席がいま実際に使っている口座 (ADR-0049・proposed)。 器が host の根に書く実効値で、 群ごとに高々 1 件。 宣言の候補の列 (人が書く宣言値) とは file も型も別で、 記録が無い周は候補の先頭が種になる (憲法 C10)。 記録が在るのに読めない周は typed に止まる。
-    relationships: [project の群, host の根, 便用の除外, 実効の口座, 実効の記録, 口座選定]
+    definition: その群の席がいま実際に使っている口座 (ADR-0049・proposed)。 器が host の根に書く実効値で、 群ごとに高々 1 件。 宣言の候補の列 (人が書く宣言値) とは file も型も別で、 記録が無い周は種 (宣言順で前の群の種でない最初の候補・ADR-0069) になる (憲法 C10)。 記録が在るのに読めない周は typed に止まる。
+    relationships: [project の群, host の根, 便用の除外, 実効の口座, 実効の記録, 口座選定, 群の予約]
+  - canonical: 群の予約
+    domain: consumer
+    aliases: [group reservation, next]
+    definition: 群ごとに周ごと導出する、 その群が次に移る口座 (ADR-0069・SRS FR38)。 移り先の候補を残量の鍵 (7 日窓と役割の model の 7 日窓の残量の小さい方が大きい順 → 7 日窓の reset が早い順 → 宣言順) で並べ、 群を宣言順に見て、 どの群の今の口座でもなく先の群の予約でもない先頭。 記録せず lock の内側で導出し、 他の群の移動と予約を排他するが便の起動は排他しない。 doctor の群の行の next= の値。
+    forbidden: [reserved file]
+    relationships: [群の今の口座, project の群, 口座選定, 口座残量, 管理 tick, 残量の鍵]
+  - canonical: 残量の鍵
+    domain: consumer
+    definition: 群の移り先の候補を並べる比較の値の組 (SRS FR38・ADR-0069)。 7 日窓と役割の model の 7 日窓の残量 (100 − 使用率) の小さい方が大きい順 → 7 日窓の reset が早い順 → 宣言順。 役割の model の行が無い口座は最後。 5 時間窓は門にだけ効く。 便用の並べ順 (ADR-0042) とは別の関数。
+    forbidden: [並べ鍵, sort key]
+    relationships: [群の予約, 口座残量, 役割の model, 口座選定]
+  - canonical: 役割の model
+    domain: consumer
+    definition: 席の役割ごとに rules 行 seat.model.<役割> が宣言する model (orchestrator は fable)。 残量の鍵はこの model のモデル別 7 日窓を見る。
+    relationships: [残量の鍵, 役割, 口座残量]
   - canonical: 便用の除外
     domain: consumer
     aliases: [run-purpose exclusion]
