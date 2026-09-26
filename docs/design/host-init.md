@@ -182,7 +182,7 @@ README の先頭に「新しい repo を器に載せる」の節を置く: 打�
   - `init` の 2 段目（§4）は雛形の host の面の本文から `[[account-group]]` の表だけを除いて写す＝他の表は本文のまま写る。
 - 形（行 g・1 つずつ歯が測る・done と 1:1）:
   1. **表 `[[device]]`**（host の面にだけ・0 行以上）: 必須の欄は `name`（端末の名・host の面で一意・空白を含まない 1 語）・`ssh`（ssh の宛先・空白を含まない 1 語）・`chrome`（端末の上の Chrome の path・空でない）・`os`（閉じた 3 語 `linux` / `macos` / `windows`）。任意の欄は `display`（画面の番号・空でない）・`ime-env`（`KEY=VALUE` の文字列の配列・KEY は英大文字と数字と `_` で先頭は数字でない・最初の `=` で割り VALUE は空でない・同じ KEY の重複は断る）・`profile-dir`（端末の上の専用の profile の dir・空でない）。未知の key・欠けた必須の欄・形に外れる値・`name` の重複は、行番号つきで 1 件ずつ断る（`host.toml:` の接頭辞・rc 1・他の表と同じ形）。tracked の面に置いた表は `[[tick]]` と同じく 1 表 1 件で断る（端末の値は host 固有で PUBLIC repo に載せない・CON2）。
-  2. **読み手は 1 つ**: 行の組み立てと欄の検査と名の重複の検査は、行 g の write-set の `+` の file（`crates/scribe2/src/rules/mod.rs` が子 module として宣言する兄弟）に置く。`crates/scribe2/src/rules/manifest.rs` に足すのは、section の 1 語（見出し・受ける key と必須の key の列はその兄弟の定数を引く）・受ける 2 腕（host の面は組み立ての呼び・tracked の面は `host_only`）・名の重複の検査の呼び 1 行・`Manifest` の欄と合わせ（`joined`）の 1 行・宣言順の列を返す読み手 1 つだけ（file の上限の余地に収める・growth 18）。
+  2. **読み手は 1 つ**: 行の組み立てと欄の検査と名の重複の検査は、行 g の write-set の `+` の file（`crates/scribe2/src/rules/mod.rs` が子 module として宣言する兄弟）に置く。`crates/scribe2/src/rules/manifest.rs` に足すのは、section の 1 語（見出し・受ける key と必須の key の列はその兄弟の定数を引く）・受ける 2 腕（host の面は組み立ての呼び・tracked の面は `host_only`）・名の重複の検査の呼び 1 行・`Manifest` の欄と合わせ（`joined`）の 1 行・宣言順の列を返す読み手 1 つだけ（file の上限の余地に収める・growth 18・余地は §16 の行 h の純移動が先に作る）。
   3. **doctor**: 表を 1 行以上持つ host だけ、host の面の行の末尾（` tick=declared` の後ろ）に ` devices=<名>,<名>`（宣言順・欄の値は書かない）を 1 項目足す。表の無い host の行は 1 字も変わらない（既存の外形 snapshot は動かない）。`render_host_manifest` は端末の名の列を受け、呼び手 2 つが渡す（外形の一覧は空の列）。
   4. **触らない**: 既存の表の形と検査・rules 行（足さない）・`init` の写し（本文のまま写る＝雛形に在れば `[[device]]` も写る）・席の起動と tick・`validate` の宣言の数の 1 行（表を数えない＝`[[tick]]` と同じ）。器は端末の値を読むだけで使わない。
 - 却下: 消費側の repo の `.vessel.toml` に持つ（端末は host 固有で repo の宣言でない・同じ host の他の project と共有できない）／器の外の file（器の宣言が 2 か所になり、形の検査が無い）／doctor に欄の値を全部出す（path は空白を含みうる・ssh の宛先を doctor の出力へ広げない）／器が端末の値で Chrome を起こす口を持つ（消費側の設計の範囲・器は宣言の形だけを守る）。
@@ -191,6 +191,17 @@ README の先頭に「新しい repo を器に載せる」の節を置く: 打�
   - `crates/scribe2-boundary/tests/e2e/seat/account.rs`（`host_device_doctor_` 接頭辞・host の面を書く fixture）: 表の在る host の doctor の host の面の行の末尾に ` devices=<名>,<名>`（宣言順）／表の無い host の行は 1 字も変わらない（base では面が unreadable ＝ RED）。
   - lib（行 g の write-set の `+` の file の中・`host_device_` 接頭辞）: 1 行の組み立ての round-trip・`ime-env` の形の境界（先頭の数字・`=` の無い字面・空の KEY・空の VALUE・VALUE の中の `=`）。
 - 後続: 消費側が値を読む形（host の面を直に読むか、器に読み出しの口を足すか）は消費側の表示面の便の設計で決める（本行は宣言と検査と doctor だけ）。
+
+## 16. rules/manifest.rs の歯の module を歯の file へ割る — `#[path]` の子 module で module path と歯の名を変えない（契約表の行 h・純移動・行 g の余地を作る）
+
+やさしく言うと: host の面の読み手の本体の file は、書き足すための空きが 4 行しか無く、§15 の行 g を受付が断っている。空きを食っているのは本体ではなく、同じ file の後ろに在る確かめの test の塊なので、その塊だけを名前も中身も変えずに隣の file へそのまま引っ越す。動きは 1 つも変わらない。
+
+- 何が起きているか（実測 2026-09-26・main 43f4a05）: `crates/scribe2/src/rules/manifest.rs` は 1481 行（src 1297 + 行頭の `#[cfg(test)]` から後の歯の module 184・歯 9 本〔接頭辞 rules_host_unit_ 5・host_tick_ 2・class_derive_rules_ 2〕）で、受付の実測で R-C4-2（1500）の余地が 4 行しか無く、行 g（growth 18）を `cap-headroom` で断った。lib の中でこの 3 つの接頭辞を持つ歯は、この module の外に 0 本。
+- 形（[vessel-hook.md](./vessel-hook.md) §13 と同型・向きは「歯だけを外へ」）: 歯の module の**本文**（`// flip-check: retroactive s2-07l.250` の札と説明の comment から最後の歯の閉じ括弧まで・1300〜1480 行）を、行 h の write-set の `+` の file（manifest.rs と同じ dir・名は _tests.rs で終わる形）へ indent を 1 段外して**そのまま**移す。親の歯の区間は `#[cfg(test)]` の単独行と `#[path]` の行と `mod tests;` の 3 行だけになる（module 名は tests のまま・宣言の可視性は private のまま・move_proof の残差の許容形の内）。子は mod の本文そのものなので `use super::{collect, finish, Face, HostManifest, Manifest};` 以下の path は不変。札 `// flip-check: moved <行 h の bead>` は子の file の先頭（module doc の直後・file 全体が歯の区間なので flip-check が数える）に置き、親の宣言の直後にも対で置く。write-set の親の `-` は「増分 0 以下の宣言」で、file の削除ではない（親は src の 1297 行と 3 行の宣言で残る）。
+- 見積: 親 約 1301 行（余地 約 199＝行 g の 18 と後続の余地）・子 約 190 行。
+- 歯: 既存の 9 本（manifest.rs の歯の module 配下）が全部緑で期待を変えない。verify は歯の名の接頭辞 3 語（`rules_host_unit_` / `host_tick_` / `class_derive_rules_`）で撃ち、base = head の本数を実装役が `cargo nextest list` で写す。
+- 後続: 行 g は歯を行 g の write-set の `+` の file（端末の表の兄弟 module）の中に置くので、本便の子の file を write-set に要らない。行 g は台帳の依存と行の depends で本便の Landed を待つ。本便の子の file の `+` は着地の後の docs PR で剥がす（本便の done に書かない＝行自身の field を書き換える便は着地で起こし直される）。
+- 却下: 行 g の growth を 4 以下に書く（section の 1 語と受ける腕と読み手で 4 行に収まらない＝見積の字面だけ変える嘘）／src の群（群の表の組み立てと検査）を兄弟へ割る（歯が引く名と私有の関数の可視性が動く＝items-differ の危険・歯の module は居座り次の表で再発）／歯を `crates/scribe2-boundary/tests/e2e/` へ移す（私有 item を撃つ歯は e2e から撃てない）。
 
 <!-- contracts:begin -->
 schema = 1
@@ -269,5 +280,15 @@ write-set = ["crates/scribe2/src/rules/manifest.rs", "crates/scribe2/src/rules/m
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail host_device_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_host_device_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail host_device_doctor_"]
 size = "M"
 growth = ["crates/scribe2/src/rules/manifest.rs:18", "crates/scribe2/src/rules/mod.rs:2", "crates/scribe2/src/account/mod.rs:10", "crates/scribe2-boundary/src/main.rs:2"]
+depends = ["h"]
 done = "(1) host の面の [[device]]（必須 name・ssh・chrome・os／任意 display・ime-env・profile-dir・0 行以上）を読み手が読んで Manifest が宣言順の列で返し、未知の key・欠けた必須の欄・os の 3 語の外・ime-env の KEY=VALUE の形の外と KEY の重複・name の重複・空白を含む name と ssh を行番号つきで 1 件ずつ断り、tracked の面に置いた表は 1 表 1 件で断る (2) 組み立てと検査は兄弟 module に在り、manifest.rs の増分は section の 1 語・受ける 2 腕・重複の検査の呼び・Manifest の欄と合わせ・読み手だけで file の上限を越えない (3) doctor の host の面の行は表を持つ host だけ末尾に devices=<名>,<名>（宣言順・値は書かない）を足し、表の無い host の行と既存の外形 snapshot は動かない (4) rules_host_device_・host_device_doctor_・lib の host_device_ を測る"
+[[contract]]
+id = "h"
+title = "rules/manifest.rs の歯の module（9 本・184 行）を #[path] の子 module の file へ割る — 純移動・歯の module の path と歯の名は不変・親の src と可視性は不変・札 moved・R-C4-2 の余地を行 g に作る（§16）"
+req = ["FR57"]
+section = "16"
+write-set = ["-crates/scribe2/src/rules/manifest.rs", "+crates/scribe2/src/rules/manifest_tests.rs", "docs/design/host-init.md"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail rules_host_unit_ host_tick_ class_derive_rules_"]
+size = "S"
+done = "歯の module の本文が子の file に在り、親の歯の区間は cfg(test) の単独行と path と mod 宣言の 3 行だけ、module path と歯 9 本の名は不変で base = head、親の src と可視性は不変、札 moved が子の先頭と親の宣言の直後に対で在って flip-check が moved で通り、file-lines で manifest.rs の余地が 150 行以上に増える"
 <!-- contracts:end -->
