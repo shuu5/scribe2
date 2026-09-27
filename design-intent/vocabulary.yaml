@@ -824,8 +824,15 @@ terms:
     relationships: [lens, 便, Stage, gate]
   - canonical: land の終端
     domain: consumer
-    definition: 着地の後に器が続ける 3 手 (remote への push・着地 commit の CI の結果の照合・台帳の close) と、 その typed な記帳 (SRS FR50)。 着地の事実の正本は器の record で、 commit の trailer はそこからの導出面 (ADR-0023 §2.5)。
-    relationships: [land, 便, 台帳 adapter, trailer, Completion]
+    definition: 着地の後に器が続ける 3 手 (公開の字面の走査を通った後の remote への push・push の先端の commit の CI の結果の照合・台帳の close) と、 その typed な記帳 (SRS FR50)。 着地の事実の正本は器の record で、 commit の trailer はそこからの導出面 (ADR-0023 §2.5)。
+    relationships: [land, 便, 台帳 adapter, trailer, Completion, 公開の字面の走査, push の先端]
+  - canonical: push の先端
+    domain: consumer
+    aliases: [push tip]
+    definition: land の終端が push した main の最後の commit (最後に着地した commit)。 候補の木で列の順に着地した便のうち先端でない便は、 自分の着地 commit を含む先端の commit の CI の結果で照合する (SRS FR50)。
+    relationships: [land の終端, 候補の木, 着地の列]
+    forbidden: [列の先端]
+    flagged_ambiguities: [着地の列の「先頭」(最初に着地する便) と逆の端, remote の先端 (FR80 が GitHub に問う push の前の値) とは別]
   - canonical: 台帳 adapter
     domain: consumer
     definition: 器が台帳へ触る唯一の module。 読みは読み取り専用で、 書きは着地した便の close 1 種だけ (SRS FR50 / FR51・ADR-0023 §2.2)。 起票・受入条件・裁定の記帳は席の仕事。
@@ -1276,13 +1283,47 @@ terms:
   - canonical: host-guard
     domain: consumer
     aliases: [host guard]
-    definition: 危ない操作を実行の直前に止める見張りのうち、 口座の設定を読む全 session に効くもの (ADR-0056・proposed)。 器の subcommand host-guard が掛け、 marker の有無に依らず効く。 役割の guard を掛ける hook の入口とは別の口で、 器が起こす session (runner・lens・usage の更新) には届かない。
-    relationships: [guard, command guard, 見張りの種類, host-guard の配線, rules 行, doctor]
+    definition: 危ない操作を実行の直前に止める見張りのうち、 口座の設定を読む全 session に効くもの (ADR-0056・proposed・ADR-0078 で種類が 6 つ)。 器の subcommand host-guard が掛け、 marker の有無に依らず効く。 役割の guard を掛ける hook の入口とは別の口で、 器が起こす session (runner・lens・usage の更新) には届かない。
+    relationships: [guard, command guard, 見張りの種類, host-guard の配線, rules 行, doctor, 公開の字面の走査]
   - canonical: 見張りの種類
     domain: consumer
     aliases: [guard kind]
-    definition: host-guard が止める操作の区分 (ADR-0056・proposed)。 git の履歴破壊・rm の不可逆削除・tmux server の破壊・台帳の破壊と素 write・見張り自身の設定の編集の 5 つに閉じ、 足すときは 1 つの enum に値を 1 つ足す。
-    relationships: [host-guard, rules 行, 裁定 id]
+    definition: host-guard が止める操作の区分 (ADR-0056・proposed・ADR-0078)。 git の履歴破壊・rm の不可逆削除・tmux server の破壊・台帳の破壊と素 write・見張り自身の設定の編集・公開の字面の走査 (publish の種類) の 6 つに閉じ、 足すときは 1 つの enum に値を 1 つ足す。
+    relationships: [host-guard, rules 行, 裁定 id, 公開の字面の走査]
+  - canonical: 公開の字面の走査
+    domain: consumer
+    aliases: [publish scan]
+    definition: host-guard の publish の種類が、 公開の segment の出ていく字面を隣の private repo の識別子の 4 形で走査し、 当たれば実行の前に断ること (SRS FR80・ADR-0078)。 器の着地の push にも land の終端が同じ判定を掛ける (SRS FR50)。
+    relationships: [host-guard, 見張りの種類, 公開の segment, 出ていく字面, 隣の private repo, 識別子の 4 形, 公開先の repo, land の終端]
+  - canonical: 公開の segment
+    domain: consumer
+    aliases: [publish segment]
+    definition: Bash の command を segment に分けたうち、 git の push と gh の公開の動詞 (本文を出す動詞と repo の作成・編集) の部分 (SRS FR80)。 publish の種類はここだけを読む。
+    relationships: [公開の字面の走査, 出ていく字面, 公開先の repo, command guard]
+    flagged_ambiguities: [3 クラスの「出す」とは別。 自 repo への push と PR の作成も含み、 不可逆なのは中身が外から見えることで main の移動ではない]
+  - canonical: 公開先の repo
+    domain: consumer
+    aliases: [publish target repo]
+    definition: 公開の segment が字面を出す先の repo (git の push の行き先・gh の対象の repo・SRS FR80)。
+    relationships: [公開の segment, 隣の private repo]
+    flagged_ambiguities: [席の target (tmux の窓) とは別の語, 「公開」は可視性を含意しない (private の公開先もある)・public の repo とは別]
+  - canonical: 出ていく字面
+    domain: consumer
+    aliases: [outgoing text]
+    definition: 公開の segment が外へ出す文字 — 出ていく commit の message・author と committer の名・patch の追加行と path・押す annotated tag の本文・gh の本文の flag の値と本文の file (SRS FR80)。
+    relationships: [公開の segment, 識別子の 4 形]
+  - canonical: 隣の private repo
+    domain: consumer
+    aliases: [neighbor private repo]
+    definition: host の面の群の宣言が持つ anchor のうち、 実体が在り、 公開先の repo と別の repo で、 public と実測できないもの (可視性を読めない repo を含む・群を宣言しない host では 0・SRS FR80)。
+    relationships: [公開の字面の走査, 識別子の 4 形, host の manifest, anchor, 公開先の repo]
+    flagged_ambiguities: [旧稿の「出所」を置き換えた語。 「隣の project」は断りの言い換え先の字面で語彙ではない]
+  - canonical: 識別子の 4 形
+    domain: consumer
+    aliases: [identifier forms]
+    definition: 隣の private repo を指す閉じた 4 つ — repo の名 (一般語の名も除かない)・object id (隣の object db に在り公開先の repo に無いもの)・tracked path (/ を含み、 隣の tracked な path の後方一致に当たり、 公開先の repo の path に当たらないもの)・台帳 id (隣の台帳に在る issue の id) (SRS FR80)。 publish の種類の rules 行の値が並べる記号。
+    relationships: [隣の private repo, 公開の字面の走査, rules 行]
+    flagged_ambiguities: [起票の門の台帳 write の 4 形とは別, 台帳 id は裁定面の記帳 id とは別]
   - canonical: host-guard の配線
     domain: consumer
     aliases: [wiring]
@@ -1291,7 +1332,7 @@ terms:
   - canonical: 口座の設定を読む session
     domain: consumer
     aliases: [settings-reading session]
-    definition: 口座の設定 dir の settings.json を読んで起きる session の全体 (ADR-0056・SRS FR56 / FR72 / FR74 / FR75 / FR76)。 対話の席・口座の設定 dir を指定した起動・器を積まない session を含み、 host-guard の配線が効く範囲と一致する。 器が起こす session (runner・lens・usage の更新) は口座の設定を読まない起動形 (ADR-0011 §2.1) なので含まない。 口座の設定 dir を指定しない起動は配線先に入れない (既定の設定 dir が口座の実体を指す host では届くが、 配線の約束ではない・ADR-0056 CSQ-N8)。
+    definition: 口座の設定 dir の settings.json を読んで起きる session の全体 (ADR-0056・SRS FR56 / FR72 / FR74 / FR75 / FR76 / FR80)。 対話の席・口座の設定 dir を指定した起動・器を積まない session を含み、 host-guard の配線が効く範囲と一致する。 器が起こす session (runner・lens・usage の更新) は口座の設定を読まない起動形 (ADR-0011 §2.1) なので含まない。 口座の設定 dir を指定しない起動は配線先に入れない (既定の設定 dir が口座の実体を指す host では届くが、 配線の約束ではない・ADR-0056 CSQ-N8)。
     relationships: [host-guard, host-guard の配線, 席, runner, lens, 口座, hook]
   - canonical: 起票の門
     domain: consumer
