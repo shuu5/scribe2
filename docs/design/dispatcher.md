@@ -425,6 +425,19 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
 - 限界: 宣言の予想は本文を持たないので、依存が足す本文に由来する断り（閉包の広がり・歯の置き場の当たり）は宣言の周に見えず、Gated PASS か着地の周に初めて確定として出る（偽陰性の向き・偽の警報は出さない）。祖先の便が Gated PASS の後に追随や衝突の解きで本文を変えた周は、着地で base が動いた周に測り直すまで古い実物で測った値が残る。在り処の「名」は本文の読み手の母集団（今は `.rs`）の file が 1 本でも動けば暫定に倒す粗い弁別で、確定を減らす向きに外す。事前審査と先撃ちの結果は起こす側の周にしか更新されないので、列が 0 本で止まっている間は古いまま（時計の契機を足さない・§5）。
 - 却下: 待ち行に `pipe preflight` を素のまま撃つ（偽の断りで束が埋まり、契約表の段で止まって深い検査に届かない）／依存の live な木（Spawned / Implemented）を base にする（編集の途中・gate を通っていない木で確定を出すと偽の警報になる。Gated PASS の木だけを実物として使う）／複数の依存の木を merge-tree で 1 つにして material を読み直す（live な便の write-set は交わらないので file の重ね合わせで足り、merge の費用と衝突の読みが要らない）／断りの字面を読んで確定と暫定を分ける（自由文を判定の入力にする・C3.3）／結果を event に記帳する（新しい event kind・C17.1。結果は鍵で捨てられる cache）／予想の結果で起こす判定を緩める（予想は外れうる・通行証にしない）／先撃ちの lens を `fire` の中で待つ（終端の周の行と知らせが lens の数分だけ遅れる）／先撃ちの鍵に材料の種類を並べる（材料が増えた版で鍵が追わず、足りない材料で出した判定を写す）。
 
+## 28. 死んだ札の歯の待ちを札の継ぎ替えの間に釣られない形にする — `gone` は札の不在が 500 ミリ秒続くまで待つ（契約表の行 ab・memo `s2-07l.709`）
+
+やさしく言うと: 「札が片付いたか」を見る歯の待ち方が、札の持ち主が入れ替わる一瞬の空白を「片付いた」と読んで落ちることがある。空白は一瞬なので、「無い状態がしばらく続く」まで待つ形に直す。
+
+- 何が起きているか（verified）: main の CI の nextest で、同じ歯 `pipe_dispatch_gated_pass_dead_ticket_is_resumed_regardless_of_verdict` が 2 回落ちた（2026-09-27 の着地 c6c997b と f4d891d・どちらも `crates/scribe2-boundary/tests/e2e/pipe/dispatch/waiting.rs` の :403 の `gone` の assert・0.166 秒と 0.174 秒・`gh run rerun --failed` で緑）。どちらも器は終端の CI の赤で close を撃たず、orchestrator が緑を実測して手で close した。`gone`（`crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs` の :960）は札が在る間 60 秒まで 50 ミリ秒ごとに見て、loop を抜けた後にもう 1 回在るかを見る。60 秒を待たずに偽を返すのは、1 回目の不在の観測の後に札がまた在る周だけである。
+- 根（verified は code・deduced は落ち方との対応）: 札を継ぐ側（`crates/scribe2/src/fleet/store.rs` の `acquire_in`・:462）は、死んだ所有者の札を `reclaim` で外し（:482）、loop の先頭の `create_new`（:467）で自分の札を書く。外してから書くまでの間（同じ process の続く数 syscall）だけ札の path が無い。deduced: `gone` がこの間を不在と読んで loop を抜け、2 回目の観測で継いだ resume 自身の札を読んだ。落ちた時の段の並びが `Gated` 止まり（resume が始まったばかり）で、0.17 秒で落ちたことと合う。
+- 形（番号は done と 1:1）:
+  1. **`gone` を「不在が続いた」で判じる**: 札の path の不在が 500 ミリ秒続いた周に真、60 秒のうちに続かなければ偽（50 ミリ秒ごとに見て、在る観測で数え直す）。継ぎ替えの間は同じ process の続く数 syscall で 500 ミリ秒に届かず、不在が続くのは最後の持ち主が抜けて札を外した後だけである。呼び手 3 本（`waiting.rs` の `pipe_dispatch_gated_pass_dead_ticket_is_resumed_regardless_of_verdict` と `pipe_dispatch_regated_dead_ticket_keeps_three_records_and_resumes_once`・`dispatch.rs` の `pipe_dispatch_drive_revives_a_dead_driver_all_the_way_to_landed`）の assert と期待は変えない。
+  2. **歯を足さない helper の変更に札を置く**: e2e の `dispatch.rs` は歯を足さないので、flip-check の overlay（file ごとに base へ重ねて赤になる歯を探す）は base で緑になる。変えた `gone` の直前に札 `// flip-check: retroactive <本行の bead の id>` を 1 行置く（account-autonomy.md §22・行 s と同じ逃がし・判定行に `retroactive=` で残る）。
+- 触らない: src（`acquire_in` の回収の形・札の本文・`Driver` の Drop）・歯の名と assert・`put_dead_ticket`・`waiting.rs` の本文。
+- 限界: 500 ミリ秒は時間の閾値である。継ぎ替えの間がそれより長くなるのは、継ぐ process が `reclaim` と `create_new` の間で 500 ミリ秒止まった周だけである。
+- 却下: 継いだ resume の pid を札の本文から読み、その process の終わりを待ってから 1 回で判じる（継ぎ替えの後で最初の観測より前に resume が抜けると pid を見られず、別の分岐が要る）／src の回収を rename で原子的にして間を無くす（deduced: 本番の読み手が間に札を Absent と読んで 2 本目の resume を起こしても、その resume は生きた所有者の札を取れずに抜ける。本番の直しは要らず、歯の待ちだけの問題である）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -750,4 +763,13 @@ size = "M"
 growth = ["crates/scribe2/src/pipe/dispatch.rs:8", "crates/scribe2/src/pipe/review.rs:40", "crates/scribe2/src/rules/mod.rs:6"]
 depends = ["x"]
 done = "(1) 事前審査が clean の待ち行だけに、予想の base から Reviewed の段と同じ 1 本で bead ごとの材料の dir を組み、鍵は材料の dir の全 file の sha（材料の種類を列挙しない）で、鍵が前と同じ行は撃たず、1 周の本数は埋め込みの manifest の行 pipe.precheck_lens_per_round（kind PipePrecheckLensPerRound・Int・推奨値 1・裁定 id RULING-PENDING・manifest は gate.lens_count の直後・kind は ALL の GateLensCount の直後）を撃ち中の行を含めて越えず、値 0 は撃たず、行が無い・読めない周は撃たずに [DISPATCH-PRECHECK] の行の末尾に prelens=unset が付き、口座は審査と同じ選定を通る (2) lens は spawn_self と同じ起こし方で裏に起こし、起こした周は終わりを待たず（終端の周の行と知らせと便の起動を遅らせない）、出力は材料の dir の隣の file に落ちて次の起こす側の周が decide と同じ読み手で判定を読み、撃ち中の印は pid と起動時刻の 2 語で lock_owner が生きていると判じる行は撃ち直さず、死んで出力の無い行は印を外して撃ち直す (3) pipe run の Reviewed の段は実物の base で組んだ材料の dir の全 file の sha が先撃ちの鍵と同じ周だけ先撃ちの判定を写して段の detail に写した印を残し、違う周は今どおり lens を撃つ (4) 先撃ちの FAIL と INCONCLUSIVE は理由の型を名にした確定の finding として事前審査の結果に載る 歯: pipe_review_reuse_ が依存が予想どおり着地した周の偽 lens 0 回と、予想の + の file が作られずに着地した周の偽 lens 1 回と、数秒眠る偽 lens を起こした周の rc と行がその終わりより前に出て次の周が結果を読むことと、上限 1 で clean の待ち行 2 本の周に 1 本だけ起こすことと、行の無い写しの周の偽 lens 0 回と ls の行の末尾 prelens=unset を測り、rules_prelens_ が行の形と値と manifest と ALL の位置を測り base で RED、manifest の行数と kind の数の pin と rules_external_form の snapshot が 1 ずつ増える"
+[[contract]]
+id = "ab"
+title = "死んだ札の歯の待ちを札の継ぎ替えの間に釣られない形にする — e2e の gone は札の不在が 500 ミリ秒続いた周に真・呼び手 3 本の assert と src は不変・歯を足さない helper の変更に flip-check の retroactive の札（§28・memo s2-07l.709）"
+req = ["FR68", "FR14"]
+section = "28"
+write-set = ["crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch/waiting.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_gated_pass_dead_ticket_ pipe_dispatch_regated_dead_ticket_ pipe_dispatch_drive_revives_a_dead_driver_"]
+size = "S"
+done = "(1) e2e の gone が、札の path の不在が 500 ミリ秒続いた周に真・60 秒のうちに続かなければ偽を返し（50 ミリ秒ごとに見て在る観測で数え直す）、呼び手 3 本（pipe_dispatch_gated_pass_dead_ticket_is_resumed_regardless_of_verdict・pipe_dispatch_regated_dead_ticket_keeps_three_records_and_resumes_once・pipe_dispatch_drive_revives_a_dead_driver_all_the_way_to_landed）が assert と期待を変えずに緑 (2) 変えた gone の直前に札 // flip-check: retroactive <本行の bead の id> が 1 行在り、flip-check が retroactive で通る (3) src と waiting.rs の本文と put_dead_ticket は 1 byte も変わらない"
 <!-- contracts:end -->
