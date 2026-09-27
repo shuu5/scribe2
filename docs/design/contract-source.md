@@ -926,6 +926,18 @@ size = "L"
 growth = ["crates/scribe2/src/pipe/review.rs:20", "crates/scribe2/src/pipe/review/base.rs:10", "crates/scribe2/src/pipe/closure/names.rs:100", "crates/scribe2/src/pipe/closure.rs:2", "crates/scribe2/src/headless/lens.rs:70"]
 done = "(1) 名指しの在る契約の審査の材料の dir に外の材料の file が 1 本増え、組む側は materials から 1 回だけ呼ばれ、置く側は約束の行と同じく本文が空でない周だけ置き、名指しの無い契約の材料の dir は 4 本のまま (2) 名の照合は names.rs の 1 本の口で、候補の名を backtick の中身の先頭の token の節か、backtick の外に holds_word の語の境界で現れ字面が識別子の形（_ を持つか大文字の山が 2 つ以上）のものに限って拾い、外の素の 1 語は宣言が在っても拾わず、path 形の文字の連なりは / か拡張子を持つものだけを path_matches で tracked の path に解き（拡張子を問わず・同じ末尾の file は全部・素の 1 語は dir に解かない）、候補は base の要約と同じ declared_name と tooth_names が base の .rs から読み、unresolved_names の判定は不変 (3) 名ごとの塊が .rs の item（所在・doc 行・可視性を含む宣言・struct と enum の本体・fn の署名・歯の本体・write-set の中の名は出さず 2 file 以上の名は所在の 1 行）・名指された .rs の要約・data file（行数と byte 数と拡張子ごとの鍵の列と本文に在る鍵を持つ最初の 1 行だけ・全文は渡さない・dir は配下の file ごとの 1 行）・Cargo.toml の依存の表・親 module の mod の行か宣言なし・depends の相手の行の title と + の項目の在否の 6 形で、並びは構造の材料が先 (4) 塊が cap の残りに収まらない名は切り詰めの 1 行、それも収まらない周は落とした名の本数の 1 行が残り、既存 4 材料だけで越える周は claude を呼ばず INCONCLUSIVE のまま・base の段の落とし方は不変・rules 行は足さない (5) 写しが在る周は雛形の末尾の穴が本文で埋まり、無い周は雛形が 1 字も変わらず、本文の中の穴の字面は展開されない (6) diff の審査の雛形・審査の観点 3 つ・理由の型の 6 語・判定の JSON の形・焼き直しの門の物差し・列外の鍵・審査の rc が不変で、歯 pipe_review_outside_ と closure_names_mentioned_ と headless_lens_outside_ が base で 0 本"
 
+[[contract]]
+id = "bd"
+title = "列で着地した便のうち push の先端でない便の終端は CI を照合せず待たずに ci:unmeasurable で止まる — forge の CI は push の先端にだけ run を持つので、先端でない sha の待ちは上限（pipe.ci_wait_s）まで空回りし、同じ列の後続の終端と着地の列を 1 本ごとに止める（close しない極性・先端の便と単独の着地と --terminal-only の終端は不変・memo s2-07l.688）"
+req = ["FR50"]
+section = "52"
+touches = ["crate::pipe::land::finish::land_train", "crate::pipe::land::finish::terminal"]
+write-set = ["crates/scribe2/src/pipe/land/finish.rs", "crates/scribe2/src/pipe/land.rs", "crates/scribe2/src/pipe/cli/step.rs", "crates/scribe2-boundary/tests/e2e/pipe/land/retire.rs", "docs/design/contract-source.md"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_train_terminal_"]
+size = "S"
+growth = ["crates/scribe2/src/pipe/land/finish.rs:30", "crates/scribe2/src/pipe/land.rs:10"]
+done = "(1) land_train が列の最後の便（main を進めた先端の commit を持つ便）の外の便に『push の先端でない』を閉じた 2 値で finish から terminal へ運び、その 1 か所だけが先端を知る (2) 先端でない便の terminal は push を今どおり撃って terminal:push:<remote> を記し、CI の照合（唯一の待ちと ci_now）を 1 回も撃たずに terminal:ci:unmeasurable を記して止まり（close しない・stdout の terminal=ci:unmeasurable）、先端の便・単独の着地・--terminal-only の終端は push → CI → close の今の 3 段のまま (3) 終端の 7 値・event の詞・ci_now の判定・pipe.ci_wait_s と pipe.ci_poll_s の値・列の記帳の順（後続 → 先頭）は変わらない 歯: pipe_train_terminal_ が、偽 remote と常に success を返す偽 CI と偽 bd を持つ 3 本の列の着地で、先端の便の Landed の後ろが push・ci:success・close:ok の 3 件、先端でない 2 本の Landed の後ろが push と ci:unmeasurable の 2 件で close を持たず、偽 CI の呼び出しが 1 回、偽 remote の main が先端の sha を指すことを測り、base では 3 本とも CI を照合して close する（偽 CI の呼び出し 3 回）ので RED"
+
 <!-- contracts:end -->
 
 
@@ -1229,3 +1241,27 @@ done = "(1) 名指しの在る契約の審査の材料の dir に外の材料の
   - base で RED の理由: in-file の 3 接頭辞は base に歯が 0 本（nextest の該当 0 本で rc 4・機能不在）、e2e は材料の dir に外の材料の file が無く落ちる（機能不在）。
 - 限界: 別の設計 doc・設計ノートの節と、state dir など repo の外の file の形は材料に入らない。値の意味（符号の向き・単位）は宣言の doc 行が書いていなければ渡らない。write-set の中の名の可視性は base の要約の列が持たない（§40 / §49 の歯の期待が動くので本行に入れない）。呼び手の在否（逆向きの参照）は渡らない。`#[path]` 属性で置いた module の親は解かない。backtick の外の素の 1 語は、base に宣言が 1 つだけ在っても拾わない（取りこぼしの実測は本 repo で 1 語・隣の project で 5 語）。data file の鍵の値が複数行に跨ぐ（入れ子の object・配列）ときは、鍵の行の先の値は渡らない。本行の着地より前に section-material-missing で止まった便は、焼き直しの門が節の本文の差しか測らないので、節を直さない限り再受付が断られる。
 - 却下: backtick の中だけを読む（隣の project の契約表は backtick を 0 個しか持たず 20 件で拾える名が 0）／契約表の検査の名指しも素の語へ広げる（名指しの実在は解けない名を断りにする検査で、解けた名だけを材料に足す本行と極性が違う・素の語は偽の断りを生む）／名指された file の全文を渡す（fixture の byte で cap を食う・memo `s2-07l.691`）／lens に tool を渡して自分で読ませる（審査の前提「shell も cargo も撃てない」を壊す）／素の語を全部照合する（上の実測で拾う名の 76〜77% が散文の語・35 行のどれも材料が空にならない）／宣言の在る file の本数や名の長さの閾値で素の語を落とす（数の閾値が要る＝rules 行と裁定・構造の規則で足りる）／素の 1 語でも base に宣言が 1 つだけなら拾う（新しい 15 行で 265 名が足され、規則で残る 215 名より多い・大半は `done` `dir` `repo` `commit` など散文の語）／宣言の前後を固定の行数で切る（数の閾値が要る・宣言の閉じ括弧までの構造で足りる）／材料の大きさに rules 行を足す（既存の cap の残りで足りる・C5 の裁定を要らなくする）／台帳を読んで depends の相手を解く（審査が台帳の在否に依存する・同じ doc の depends の欄で足りる）／goal-done-contradiction（done が節に無い数〔窓の時間〕を持つ型・隣の project の便 1 件）を本行で塞ぐ（材料を束ねても節に無い数は現れない＝done の数の出所を測る別の門の型）。
+
+## 52. 列で着地した便のうち push の先端でない便の終端は CI を待たない — 先端でない sha には CI の run が付かず、上限までの空回りが列の後続と着地の列を止める（契約表の行 bd・memo `s2-07l.688`）
+
+- 何が起きているか（実測・verified）:
+  - 本 repo（2026-09-27）: 4 本の便が並んで着地した周に、main に載った commit のうち 434cb5f → 653d576 → 8af5903 の 3 つについて、GitHub の CI は push の先端 8af5903 にだけ走った。653d576 の便の終端は CI の照合を上限（rules 行 `pipe.ci_wait_s` = 900 秒）まで待ち、`ci:unmeasurable` で終わって close しなかった（orchestrator が先端の CI と祖先の関係を測って手で close した）。
+  - 非公開の隣の project（2026-09-27）: 4 本の列の着地の後、先端でない 3 本の終端がそれぞれ 900 秒待って `ci:unmeasurable` で終わった。その間、着地の窓（`pipe land-window`）は busy のままで、列の後ろの 6 本と設計の merge が止まった（止まる長さは先端でない 3 本 × 900 秒＝約 45 分・deduced）。
+- 現物（main・verified）:
+  - `crates/scribe2/src/pipe/land/finish.rs` の `land_train` は、列の便ごとに `commit-tree` で commit を連ねて main を CAS で先端まで進め、主実測を先端の木で 1 回撃った後、便ごとに `finish` を撃つ（後続 → 先頭の順）。`finish` は便ごとに `terminal` を撃ち、`terminal` は `git push <remote> main:main` の後に、その便の sha で CI の照合（`Completion::CiResult` の待ちと `ci_now`）を撃つ。
+  - 最初に撃たれた終端の push が列の全部の commit を 1 回で出す。forge の CI（GitHub Actions の push の event）は push の先端の commit にだけ run を作るので、先端でない sha の照合は run を 1 本も見ず、上限まで待つ。
+  - 同じ process が便ごとに順に終端を撃つので、先端でない便 1 本ごとに上限ぶん後続の終端が遅れ、列の便は終端まで終わらない（窓の列に残る）。
+- 形（番号は done と 1:1）:
+  1. **先端を知るのは `land_train` の 1 か所**: 列の最後の便（main を進めた先端の commit を持つ便）の外の便に「push の先端でない」を閉じた 2 値で運ぶ（`finish` から `terminal` へ・`Landing` の variant か引数かは実装が選ぶ）。単独の着地（`land` の経路）と `--terminal-only`（`pipe/cli/step.rs` の終端だけの再実行）は先端の側を渡す。
+  2. **先端でない便の終端**: push は今どおり撃ち `terminal:push:<remote>` を記す（列の最初の終端が全部を出すので、2 本目以後の push は何も動かさない）。その後、CI の照合を 1 回も撃たず（待ちも `ci_now` も撃たない）、`terminal:ci:unmeasurable` を記して止まる。close はしない（FR50 の「CI の結果が success でなければ close せず失敗を記帳する」のまま）。stdout の `terminal=` は `ci:unmeasurable`。
+  3. 変えないもの: 終端の 7 値・event の詞（`terminal:push:<remote>` / `terminal:ci:unmeasurable` の字面）・`ci_now` の判定・rules 行 `pipe.ci_wait_s` と `pipe.ci_poll_s` の値・列の記帳の順（後続 → 先頭）・先端の便の push → CI → close。
+- 歯（`pipe_train_terminal_` 接頭辞・`crates/scribe2-boundary/tests/e2e/pipe/land/retire.rs`・親の `tests/e2e/pipe/land.rs` の `fake_terminal` と列の helper を `use super::*` で使う・`grep -rn "fn pipe_train_terminal_" crates/` は 0 件・2026-09-28）: 偽 remote と常に success を返す偽 CI と偽 bd を宣言した repo で、3 本の列を先頭の land で着地させる。
+  - 先端の便の `Landed` の後ろが `terminal:push:fake`・`terminal:ci:success`・`terminal:close:ok` の 3 件で、先端でない 2 本の `Landed` の後ろは `terminal:push:fake` と `terminal:ci:unmeasurable` の 2 件で close を持たない。
+  - 偽 CI の呼び出しの回数が 1、偽 remote の main が先端の sha を指す。
+  - base では 3 本とも CI を照合して close する（偽 CI の呼び出し 3 回）ので RED（機能不在）。
+- 限界: 先端でない便は close されず、台帳の close は手のまま（先端の CI が success で、便の sha が先端の祖先であることを測ってから閉じる）。先端の CI の結果を先端でない便の close に使うには、FR50 の「着地 commit の CI の結果を commit id で照合し」を改める要件の改訂が要る（user の `/folio-architect`・本行の外）。
+- 却下:
+  - 先端の CI の結果で先端でない便も close する。FR50 の照合の対象（着地 commit の CI）を変えるので、要件の改訂が先に要る（上の限界）。
+  - 列の便ごとに自分の sha を先端として押し直す。便ごとに CI が走り、列の終端が CI の本数ぶん順に待つ（列で主実測を 1 回に畳んだ意味が減る）。
+  - `pipe.ci_wait_s` を短くする。先端の便の CI も上限で打ち切られる（値は user の裁定）。
+  - 最初の照合で run が無ければ待たない。forge の CLI は走っている run と run が無い周を同じ「未完了」で返す（`ci_now` の `None`）ので、push の直後の先端の便まで待たなくなる。
