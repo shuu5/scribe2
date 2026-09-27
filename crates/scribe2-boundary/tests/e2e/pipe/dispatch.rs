@@ -954,15 +954,28 @@ fn pipe_dispatch_drive_revives_a_dead_driver_all_the_way_to_landed() {
     clean(&[&repo, &state]);
 }
 
-/// path が消えるまで待つ（上限 60s・消えなければ `false`）。
+/// path の不在が 500ms 続くまで待つ（上限 60s・続かなければ `false`）。
 ///
 /// 継いだ子は toy の gate と land を撃つので、負荷の周は 20 秒を越える（設計 dispatcher.md §24・行 u）。
+/// 札を継ぐ側は死んだ札を外してから自分の札を書くので、その間だけ path が無い。1 回の不在の観測で
+/// 判じるとこの間に釣られるため、50ms ごとに見て在る観測で数え直す（設計 dispatcher.md §28・行 ab）。
+// flip-check: retroactive s2-07l.714
 fn gone(path: &Path) -> bool {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
-    while path.exists() && std::time::Instant::now() < deadline {
+    let settle = std::time::Duration::from_millis(500);
+    let mut absent_since: Option<std::time::Instant> = None;
+    while std::time::Instant::now() < deadline {
+        if path.exists() {
+            absent_since = None;
+        } else {
+            let since = *absent_since.get_or_insert_with(std::time::Instant::now);
+            if since.elapsed() >= settle {
+                return true;
+            }
+        }
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
-    !path.exists()
+    false
 }
 
 /// (§5 driver の死亡) **札の無い live 便は触らない**（`pipe intake` + `pipe spawn` で起こした便は driver の
