@@ -736,8 +736,18 @@ terms:
     relationships: [管理 tick, 席, 席の状態]
   - canonical: 席間の連絡
     domain: consumer
-    definition: 開発 session の席どうしの message を届ける経路。 器は持たない (ADR-0045・SRS FR44)。 入力欄への差し込みは席の起動の起動行 (FR59) と管理 tick の打刻の合図 (FR27・ADR-0058) の 2 つだけに使う。
-    relationships: [席, 管理 tick, 開発 session]
+    definition: 開発 session の席どうしの message を届ける経路。 器は持たない (ADR-0045・SRS FR44)。 器から席の入力欄への差し込みの用途の列の正本は SRS FR44 (写さない)。 ADR-0077 の後は裁定の指し示しも列に入る。
+    relationships: [席, 管理 tick, 開発 session, 裁定の指し示し]
+  - canonical: 裁定の指し示し
+    domain: consumer
+    aliases: [ruling pointer, seat deliver]
+    definition: 外の裁定面が裁定を記帳したことを、 裁定の id だけを入れた器の雛形の 1 行で待ちの席へ知らせる差し込み (SRS FR79・ADR-0077)。 口は seat deliver で、 裁定の逐語は運ばず、 送る前の入力欄の確かめは管理 tick と同じ。 ADR-0045 が消した注入の口 (seat inject) とは別で、 注入の口は戻さない。
+    relationships: [裁定面, 裁定 id, 席, 管理 tick, 状態の打刻, 席間の連絡]
+  - canonical: 裁定面
+    domain: consumer
+    aliases: [ruling surface]
+    definition: 消費側の project が持つ、 持ち主が裁定を記帳する画面と server。 器はこの面を持たず、 記帳の後に裁定の指し示しの口が撃たれる (ADR-0077)。
+    relationships: [裁定の指し示し, 裁定 id]
   - canonical: 契約表
     domain: consumer
     definition: tracked な設計 doc が末尾に持つ機械が読む区間の表。 1 行 = 契約 1 本で、 契約の正本 (SRS FR47・ADR-0023 §2.1)。 欄の集合の正本は core の型で、 文書は生成物 contracts/schema.toml を pointer で指す (ADR-0013 §2.1)。 読み手は rules manifest と同じ 1 組の parser (ADR-0010 §2.1)。
