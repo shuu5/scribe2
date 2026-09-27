@@ -183,6 +183,20 @@ C1 / C5（R-C9-1 は行・裁定 id）・C2（`Purpose` / `Selection` / `Stage` 
 - 後続: 行 g（`s2-07l.434`）の write-set には歯の file が要る（行 g は歯を in-file に足す＝歯の file が write-set に無いと実装役の diff が write-set の外に出る）ので、本便が同じ PR で [seat-autonomy.md](./seat-autonomy.md) の行 g の write-set に歯の file を 1 項目足す（§15 の「in-file」の語は歯の file を指すと読む＝本文は変えない）。行 g の焼き直しは本便の Landed 後（planner）。
 - 却下: 行 g を S に落とす（見積が S の 100 を超える＝size の字面だけ変える嘘）／行 g を 3 便に割る（§15 の形 2 / 3 の書き直しと審査 3 周・select.rs の余地は増えない＝次の M で再発）／src の群を子へ割る（src 382 行の全部を出しても余地は 624・歯の module が残る限り 858 行が居座る）／歯を `crates/scribe2-boundary/tests/e2e/` へ移す（私有 item を撃つ歯は e2e からは撃てない・`--lib` の scope が変わる）。
 
+## 22. gate の lens の口座の選定の計測にも鮮度を掛ける — `select_lens_account` は `choose_account` の初回と同じ 1 本の口で測る（契約表の行 s・memo `s2-07l.690`）
+
+やさしく言うと: 審査役（lens）を起こす前の口座の測り方を、便を起こす前と同じ「新しい実測があれば測り直さない」形にする。今は毎回全口座を測り直すので、測り直しが届かない周は、直前の実測が在っても「使える口座が無い」で審査が止まる。
+
+- 何が起きているか（2026-09-27）: gate の lens の起動が「lens の口座の候補が無い（account:none=unmeasured・待たずに測り直す）」で INCONCLUSIVE になった。1 件目は本 repo の便 `s2-07l.687` の gate の 4 回（09:11Z〜09:35Z・verified）。直前の 09:34:15Z に `fleet usage` が 4 口座を実測していた（5 時間窓 0〜18%）が、1 秒後に始まった gate は 6 口座とも unmeasured（reason=http_status）で終わった。2 件目は隣の project の置き場の便の gate の 1 回（14:49:58Z・verify は全部 rc 0・断りの字面は同じ・隣の席が verdict の字面を写して報告）。どちらも口座そのものは使えた（1 件目は間を空けた撃ち直しの gate が 2 口座を実測して PASS）。
+- 現物（main 9bbaa82・verified）: lens の口座の選定は `crates/scribe2/src/pipe/ratelimit.rs` の `select_lens_account`（:277）で、計測は `fleet::usage::run`（:283）＝`crates/scribe2/src/fleet/usage.rs` の `Freshness::Always`（鮮度を見ず全口座を測り、読みに届かなかった口座は Unmeasured を最新の回として積む）。便の起動の選定 `choose_account`（同 file :230）の初回は §18 (1) のとおり `fleet::usage::run_fresh`（:244・`Freshness::Within`・秒は rules 行 `fleet.usage_fresh_s`＝300）を撃つ。§18 の本文は「§15 の lens の口座も同じ関数を通る」と書くが、lens の選定は `choose_account` を通らない別の関数で、`Always` のまま残った。呼び手は `crates/scribe2/src/pipe/gate.rs` の `lens_account`（:592）の 1 つで、宣言 0（`Gate` の `pool` が `None`）の周は選定を撃たない。
+- 形（番号は done と 1:1）:
+  1. **`select_lens_account` の計測を `fleet::usage::run_fresh` に替える**（引数は今の `&pool.args` と置き場のまま・`choose_account` の初回と同じ 1 本の口＝鮮度の規則を 2 か所に持たない・C2）。`fleet.usage_fresh_s` の秒より新しい全部実測の回を持つ口座は測り直さず（子 process も event も無い）、測り直した口座が読みに届かなかった（`HttpStatus` / `Timeout`）周に最新の回が実測なら Unmeasured を積まずその実測を使う（§13 (2) / (3) の既存の挙動）。
+  2. **待たない形は変えない**: 候補なしの周は今のまま lens を起こさず INCONCLUSIVE（`account:none=<理由>`）で、撃ち直しの全口座の計測（§18 (2)）は lens の選定には無い（lens の選定は待ちを持たない）。
+- 触らない: `select_for_run`・純関数 `select`・`Pool` の欄・`LensAccount`・`lens_account` の断りの字面・`choose_account`・`fleet usage` の口（`Always`）・rules 行（新しい行を足さない）。
+- 歯（接頭辞 `pipe_gate_lens_account_fresh_`・`crates/scribe2-boundary/tests/e2e/pipe/gate.rs`・§15 の歯の隣）: 口座 a1 だけを宣言し、鮮度の行を 3600 秒にした rules の写し（`crates/scribe2-boundary/tests/e2e/pipe/ratelimit.rs` の `resume_rules_fresh`・`FRESH_S`）、偽 curl の本文を置かない a1（`put_account` の本文 0 件＝測り直すと読めず Unmeasured）、今の ts の a1 の実測の回（同 file の `put_round`）を置いた置き場で gate を撃つ。rc 0・lens が 1 回起き・argv の末尾に a1 の `--account-dir`・偽 curl の呼出 0・`Gated` の detail が `verdict:PASS,account:a1`。base は全口座を測り直して Unmeasured を積み、候補なしの INCONCLUSIVE（rc は INCONCLUSIVE・lens 0・呼出 1）で RED（機能不在）。歯が使う 3 つ（`put_round`・`resume_rules_fresh`・`FRESH_S`）は `ratelimit.rs` の中で私有なので `pub(super)` にする（`pipe.rs` の `use ratelimit as lifecycle;` を通して gate.rs から呼ぶ・本文は変えない）。既存の §15 の歯 3 本（鮮度の行 0 の写し＝全口座を測る）は期待を変えずに緑。grep の件数: `fn pipe_gate_lens_account_fresh_` は crates/ に 0 件。
+- 限界: 鮮度の内側の実測は最大 300 秒古い。その間に当たった口座を lens に渡すと lens が上限で落ちうるが、その周は lens の出力が読めない側（INCONCLUSIVE）に倒れ、便の起動の選定と同じ許容である（§18）。撃ち直しの口が無い（INCONCLUSIVE の Gated を dispatcher は触らず、`pipe regate` は FAIL だけを戻す）穴は本行の外で、memo `s2-07l.690` の notes に在る。
+- 却下: lens の選定に独自の鮮度（別の rules 行）を持たせる（値の線が 2 本・§18 の却下と同じ）／候補なしの周に lens の選定が reset まで待つ（gate は段の判定で待ちを持たない・§15）／lens を runner と同じ口座に固定する（§15 の却下のまま）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -307,4 +321,14 @@ write-set = ["-crates/scribe2/src/fleet/select.rs", "crates/scribe2/src/fleet/se
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail fleet::select::tests::"]
 size = "S"
 done = "歯の module の本文が子の file に在り、親の歯の区間は cfg(test) と path と mod 宣言の 3 行だけ、module path と歯 30 本の名は不変で base = head、親の src と可視性は不変、札 moved が対で在って flip-check が moved で通り、file-lines で select.rs の余地が 1000 行以上に増え、行 r の + の剥がしと行 g の write-set への歯の file の追加が同じ PR で済む"
+
+[[contract]]
+id = "s"
+title = "gate の lens の口座の選定の計測にも鮮度を掛ける — select_lens_account が choose_account の初回と同じ 1 本の口（fleet::usage::run_fresh）で測り、新しい実測の口座を測り直さない・待たない形と断りの字面は不変"
+req = ["FR36", "FR33"]
+section = "22"
+write-set = ["crates/scribe2/src/pipe/ratelimit.rs", "crates/scribe2-boundary/tests/e2e/pipe/gate.rs", "crates/scribe2-boundary/tests/e2e/pipe/ratelimit.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_gate_lens_account_fresh_"]
+size = "S"
+done = "(1) select_lens_account の計測が fleet::usage::run_fresh の 1 式で、口座 a1 だけを宣言し鮮度の行 3600 秒の rules の写し・偽 curl の本文 0 件の a1・今の ts の a1 の実測の回を置いた置き場の gate が rc 0 で lens を 1 回起こし、argv の末尾に a1 の --account-dir、偽 curl の呼出 0、Gated の detail が verdict:PASS,account:a1（歯 pipe_gate_lens_account_fresh_・base は候補なしの INCONCLUSIVE で RED） (2) 候補なしの周は今のまま lens を起こさず account:none の INCONCLUSIVE で、§15 の既存の歯 3 本（pipe_gate_lens_account_ の is_chosen_and_appended・absent_when_no_declared_accounts・none_is_inconclusive_without_calling_lens）は期待を変えずに緑 (3) 歯の e2e の ratelimit.rs の変更は put_round・resume_rules_fresh・FRESH_S の 3 つを pub(super) にするだけで本文は不変、rules 行は 1 本も足さない"
 <!-- contracts:end -->
