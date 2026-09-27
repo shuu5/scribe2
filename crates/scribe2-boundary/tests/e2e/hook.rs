@@ -1979,6 +1979,10 @@ fn run_stop_hook(place: &RolePlace, path: &str, rules: Option<&str>, line: &str)
 const UNNAMED_STOP_WINDOWS: [&str; 8] =
     ["--all", "", "--run", "--run r-1 --all", "--run=r-1", "--run r-1 --runner x", "--run r-1 --state-dir /s|--run x", "--run $(cat id)"];
 
+/// 停止の窓が降りた周の deny 文の末尾の 1 句（seat-roles.md §29・`role_guard.rs` の `STOP_HINT` の字面）。
+const STOP_HINT: &str =
+    "hint=名指しの停止は --run <id> と置き場・repo・rules の値の対だけの 1 行（前にも後ろにも何も付けない）で stop の権能で通る";
+
 /// 約束 3: 便 1 本を名指す停止（`--run` と値だけ・置き場と repo と rules の flag を足した形も）は orchestrator の席で通り
 /// （rc 0・stdout 0 byte・記録 1 行 `role-allow capability=stop`）、埋め込み manifest（`--rules` 無し）でも同じ判定
 /// ＝裁定の値が binary に在る。
@@ -2006,7 +2010,8 @@ fn hook_role_stop_named_run_passes_in_the_orchestrator_seat() {
 
 /// 約束 4 / 5: `--all`・`--run` 無し・値無し・`--run` と `--all`・`--run=<id>` の 1 語・列の道具の flag・値に pipe・`$(` を
 /// 含む停止と、後ろに別の command が続く行は起動の権能へ降り、行が `stop` を持っていても deny（deny 文は `launch` と
-/// 行 id を名指し `stop` を名指さない・記録は `role-deny capability=launch`）。埋め込み manifest でも同じ。
+/// 行 id を名指し、末尾に通る名指しの形の 1 句 `hint=`〔§29〕を持つ・記録は `role-deny capability=launch`）。埋め込み
+/// manifest でも同じ。窓の無い素の起動の deny 文は `hint=` を持たない。
 #[test]
 fn hook_role_stop_unnamed_forms_fall_to_launch_and_are_denied() {
     let place = role_place();
@@ -2014,16 +2019,21 @@ fn hook_role_stop_unnamed_forms_fall_to_launch_and_are_denied() {
     let me = "rolestopb_rolestopb";
     let trailing = format!("{NAME} pipe stop --run r-1 && ls");
     let lines: Vec<String> = UNNAMED_STOP_WINDOWS.iter().map(|window| format!("{NAME} pipe stop {window}")).chain([trailing]).collect();
+    assert_eq!(lines.len(), 9, "降りる形は 9 つ");
     for line in &lines {
         let before = role_records(&place.state).len();
         let text = assert_role_deny(&run_stop_hook(&place, &path, Some(&place.rules), line), line);
         assert!(text.contains("（launch）") && text.contains("role.orchestrator"), "{line}: launch と行 id を名指す: {text}");
-        assert!(!text.contains("stop"), "{line}: stop は名指さない: {text}");
+        assert!(text.contains("hint=") && text.contains("stop の権能で通る"), "{line}: 通る名指しの形を添える: {text}");
+        assert!(text.contains(STOP_HINT), "{line}: 句の字面: {text}");
         assert_role_record(&place.state, before, "role-deny capability=launch", me);
     }
     let all = format!("{NAME} pipe stop --all");
     let text = assert_role_deny(&run_stop_hook(&place, &path, None, &all), "埋め込み manifest でも --all は deny");
-    assert!(text.contains("（launch）"), "{text}");
+    assert!(text.contains("（launch）") && text.contains(STOP_HINT), "{text}");
+    let run = format!("{NAME} pipe run --run r-1 --repo .");
+    let text = assert_role_deny(&run_stop_hook(&place, &path, Some(&place.rules), &run), "素の起動");
+    assert!(text.contains("（launch）") && !text.contains("hint="), "窓の無い素の起動は句を持たない: {text}");
     clean(&[&place.repo, &place.state, &place.sock_dir]);
 }
 
@@ -2042,6 +2052,7 @@ fn hook_role_stop_is_denied_when_the_row_lacks_stop() {
     let text = assert_role_deny(&run_stop_hook(&place, &path, Some(&rules), &named), "stop の無い行");
     assert!(text.contains("（stop）") && text.contains("role.orchestrator"), "stop と行 id を名指す: {text}");
     assert!(!text.contains("launch"), "名指しの停止は launch を要らない: {text}");
+    assert!(!text.contains("hint="), "名指しの停止は窓が降りていない: {text}");
     assert_role_record(&place.state, before, "role-deny capability=stop", me);
     let all = format!("{NAME} pipe stop --all");
     let text = assert_role_deny(&run_stop_hook(&place, &path, Some(&rules), &all), "stop の無い行の --all");

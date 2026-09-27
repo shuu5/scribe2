@@ -178,11 +178,16 @@ const STOP_FLAGS: [&str; 4] = ["--run", "--state-dir", "--repo", "--rules"];
 /// 名指しの停止の窓の値に許さない字（shell が意味を変える字: 区切り・pipe・括弧・`$`・backtick・引用符・redirect）。
 const SHELL_CHARS: &[char] = &[';', '&', '|', '(', ')', '$', '`', '\'', '"', '<', '>'];
 
+/// 停止の窓が降りた周の deny 文の末尾の 1 句（通る名指しの形・設計 seat-roles.md §29）。
+const STOP_HINT: &str =
+    "hint=名指しの停止は --run <id> と置き場・repo・rules の値の対だけの 1 行（前にも後ろにも何も付けない）で stop の権能で通る";
+
 /// 権能付きの操作の種別（記録の `what` と deny 文に書く）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Subject {
-    /// Bash の command 行が含む権能付き subcommand の権能（宣言順・重複なし・1 行に複数在れば全部）。
-    Capabilities(Vec<Capability>),
+    /// Bash の command 行が含む権能付き subcommand の権能（宣言順・重複なし・1 行に複数在れば全部）と、その行に
+    /// 停止の窓が名指しでなく降りた occurrence が 1 つ以上在ったか（[`stop_demoted`]・§29）。
+    Capabilities(Vec<Capability>, bool),
     /// Edit 系の編集先の種別。`opened` = 契約が印で開いた便の write-set の内側（AC16）。
     Path {
         /// 編集先の種別。
@@ -198,7 +203,7 @@ impl Subject {
     /// 記録の `what` に書く種別（`capability=<名>+<名>` / `path=<名>[ opened]`）。
     pub fn render(&self) -> String {
         match self {
-            Self::Capabilities(found) => {
+            Self::Capabilities(found, _) => {
                 let names: Vec<&str> = found.iter().map(|cap| cap.as_str()).collect();
                 format!("capability={}", names.join("+"))
             }
@@ -252,8 +257,9 @@ pub struct Seat<'a> {
 /// 撃つ・§24）。repo の外の判定は宣言に依らないので、`Outside` の周は不正の理由を載せない。
 pub fn subject(op: &Operation, state_dir: Option<&Path>) -> Option<Subject> {
     if op.tool == BASH {
-        let found = capabilities_of(op.command.unwrap_or_default());
-        return (!found.is_empty()).then_some(Subject::Capabilities(found));
+        let command = op.command.unwrap_or_default();
+        let found = capabilities_of(command);
+        return (!found.is_empty()).then(|| Subject::Capabilities(found, stop_demoted(command)));
     }
     if !GUARDED.contains(&op.tool) {
         return None;
@@ -296,6 +302,20 @@ pub fn capabilities_of(command: &str) -> Vec<Capability> {
         found.extend(listed.map(|cap| if demoted { Capability::Launch } else { cap }));
     }
     crate::seat::role::CAPABILITIES.iter().copied().filter(|cap| found.contains(cap)).collect()
+}
+
+/// command 行に停止の 2 語の窓が名指しでなく降りた occurrence が 1 つ以上在ったか（§29・deny 文の 1 句の条件）。
+///
+/// [`capabilities_of`] と同じ token の並びを読み、判定は [`is_self`] と [`named_stop`] に委ねる（規則を増やさない）。
+fn stop_demoted(command: &str) -> bool {
+    let tokens: Vec<&str> = command.split_whitespace().collect();
+    let word = |at: usize| tokens.get(at).map(|t| t.trim_end_matches(SEPARATORS));
+    tokens.iter().enumerate().any(|(at, token)| {
+        let (Some(sub), Some(sub2)) = (word(at.saturating_add(1)), word(at.saturating_add(2))) else {
+            return false;
+        };
+        is_self(token) && format!("{sub} {sub2}") == STOP_COMMAND && !named_stop(&tokens, at)
+    })
 }
 
 /// `tokens[at]` が器の名で続く 2 語が停止の周に、その呼び出しが便 1 本を名指す停止か（§25 約束 3・allowlist）。
@@ -551,18 +571,20 @@ pub fn judge(subject: &Subject, role: Role, manifest: &Manifest) -> RoleDecision
     let Some(held) = held_by(manifest, role) else {
         return RoleDecision::Deny(refused(subject, RefuseReason::NoRow(role)));
     };
-    let (missing, invalid): (Vec<Capability>, Option<Invalid>) = match subject {
-        Subject::Capabilities(needed) => (needed.iter().copied().filter(|cap| !held.contains(cap)).collect(), None),
-        Subject::Path { opened: true, .. } => (Vec::new(), None),
+    let (missing, invalid, demoted): (Vec<Capability>, Option<Invalid>, bool) = match subject {
+        Subject::Capabilities(needed, demoted) => {
+            (needed.iter().copied().filter(|cap| !held.contains(cap)).collect(), None, *demoted)
+        }
+        Subject::Path { opened: true, .. } => (Vec::new(), None, false),
         Subject::Path { kind, opened: false, invalid } => {
             let cap = kind.capability();
-            (if held.contains(&cap) { Vec::new() } else { vec![cap] }, *invalid)
+            (if held.contains(&cap) { Vec::new() } else { vec![cap] }, *invalid, false)
         }
     };
     if missing.is_empty() {
         RoleDecision::Allow
     } else {
-        RoleDecision::Deny(denied(role, &missing, invalid))
+        RoleDecision::Deny(denied(role, &missing, invalid, demoted))
     }
 }
 
@@ -586,11 +608,15 @@ fn held_by(manifest: &Manifest, role: Role) -> Option<Vec<Capability>> {
 ///
 /// 役割は orchestrator 1 つなので「他の役割が持つ」形は持たない（ADR-0045 §2 (1)）——欠けた権能は
 /// 行に無いということで、行 id を 1 本名指せば直す先が決まる。
-fn denied(role: Role, missing: &[Capability], invalid: Option<Invalid>) -> String {
+///
+/// 欠けた権能に `launch` を含み、かつ停止の窓が降りた行（`demoted`）の周だけ、末尾に通る名指しの形の 1 句
+/// （[`STOP_HINT`]）を足す（§29）。条件が揃わない周の行は変わらない。
+fn denied(role: Role, missing: &[Capability], invalid: Option<Invalid>, demoted: bool) -> String {
     let names: Vec<&str> = missing.iter().map(|cap| cap.as_str()).collect();
     let paths = invalid.map(|reason| format!(" paths={}", PathKinds::Invalid(reason).render())).unwrap_or_default();
+    let hint = if demoted && missing.contains(&Capability::Launch) { format!(" {STOP_HINT}") } else { String::new() };
     format!(
-        "{NAME}: この操作（{}）は席の権能でない（rules 行 {}）＝{} 席では止める{paths}",
+        "{NAME}: この操作（{}）は席の権能でない（rules 行 {}）＝{} 席では止める{paths}{hint}",
         names.join("+"),
         row_id(role),
         role.as_str()
@@ -615,8 +641,8 @@ pub fn unanchored_line(subject: &Subject) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        capabilities_of, is_self, judge, refused, unanchored_line, Invalid, PathKind, PathKinds, RefuseReason,
-        RoleDecision, Subject, CAPABILITY_COMMANDS, DECL_FILE, PATH_KINDS,
+        capabilities_of, is_self, judge, refused, subject, unanchored_line, Invalid, Operation, PathKind, PathKinds,
+        RefuseReason, RoleDecision, Subject, CAPABILITY_COMMANDS, DECL_FILE, PATH_KINDS, STOP_HINT,
     };
     use crate::name::NAME;
     use crate::pipe::declaration::path_kinds::{DeclaredPaths, INVALID_REASONS};
@@ -817,12 +843,19 @@ mod tests {
         }
     }
 
-    /// 約束 3 / 7: 名指しの停止は行が `stop` を持てば Allow・持たなければ deny（deny 文は `stop` と行 id を名指す）。
-    /// 降りた形の停止は行が `stop` を持っていても `launch` を要る（deny 文は `launch` を名指し `stop` を名指さない）。
+    /// Bash 面の入口 [`subject`](super::subject) で command 行を解く（停止の窓が降りたかの欄も入口が計算する）。
+    fn bash(line: &str) -> Subject {
+        let op = Operation { tool: "Bash", command: Some(line), path: None, root: None, cwd: Path::new("/") };
+        subject(&op, None).unwrap_or_else(|| panic!("権能付きの行: {line}"))
+    }
+
+    /// 約束 3 / 7: 名指しの停止は行が `stop` を持てば Allow・持たなければ deny（deny 文は `stop` と行 id を名指し
+    /// `hint=` を持たない）。降りた形の停止は行が `stop` を持っていても `launch` を要り、deny 文は `launch` を名指して
+    /// 末尾に通る名指しの形の 1 句（`hint=`・§29）を持つ。窓の無い素の起動の deny 文は `hint=` を持たない。
     #[test]
     fn role_guard_stop_judge_requires_the_stop_capability_from_the_row() {
-        let named = Subject::Capabilities(capabilities_of(&format!("{NAME} pipe stop --run r")));
-        assert_eq!(named, Subject::Capabilities(vec![Capability::Stop]));
+        let named = bash(&format!("{NAME} pipe stop --run r"));
+        assert_eq!(named, Subject::Capabilities(vec![Capability::Stop], false));
         let with_stop = manifest_with(&[Capability::Answer, Capability::Stop]);
         assert_eq!(judge(&named, Role::Orchestrator, &with_stop), RoleDecision::Allow, "行が stop を持てば通る");
         let without_stop = manifest_with(&[Capability::Answer, Capability::EditTests]);
@@ -830,12 +863,25 @@ mod tests {
             panic!("stop を持たない行では名指しの停止も deny");
         };
         assert!(line.contains("（stop）") && line.contains("role.orchestrator"), "欠けた権能と行 id: {line}");
-        let all = Subject::Capabilities(capabilities_of(&format!("{NAME} pipe stop --all")));
-        assert_eq!(all, Subject::Capabilities(vec![Capability::Launch]));
+        assert!(!line.contains("hint="), "名指しの停止は窓が降りていない: {line}");
+        let all = bash(&format!("{NAME} pipe stop --all"));
+        assert_eq!(all, Subject::Capabilities(vec![Capability::Launch], true));
         let RoleDecision::Deny(line) = judge(&all, Role::Orchestrator, &with_stop) else {
             panic!("--all は stop を持つ行でも deny（launch を要る）");
         };
-        assert!(line.contains("（launch）") && !line.contains("stop"), "launch を名指し stop を名指さない: {line}");
+        assert!(
+            line.contains("（launch）") && line.contains("hint=") && line.contains("stop の権能で通る"),
+            "launch を名指し通る形の 1 句を添える: {line}"
+        );
+        assert_eq!(line.matches("hint=").count(), 1, "句は 1 回: {line}");
+        let head = format!("{NAME}: この操作（launch）は席の権能でない（rules 行 role.orchestrator）＝orchestrator 席では止める");
+        assert_eq!(line, format!("{head} {STOP_HINT}"), "今の行の末尾に半角空白 1 つと句");
+        let run = bash(&format!("{NAME} pipe run --run r --repo ."));
+        assert_eq!(run, Subject::Capabilities(vec![Capability::Launch], false));
+        let RoleDecision::Deny(line) = judge(&run, Role::Orchestrator, &with_stop) else {
+            panic!("素の起動は deny");
+        };
+        assert_eq!(line, head, "窓の無い素の起動の行は変わらない");
     }
 
     /// 約束 5: 名指しの停止の窓は行の末尾までなので、後ろに別の呼び出しが続く行は `Launch` へ降りる（`&&`・`;` の直付け・
@@ -849,8 +895,8 @@ mod tests {
         let split = format!("{NAME} pipe stop; --run r");
         assert_eq!(capabilities_of(&split), vec![Capability::Launch], "2 語目に区切りが直付け");
         let both = format!("{NAME} pipe answer --run r --words x && {NAME} pipe stop --run r");
-        let subject = Subject::Capabilities(capabilities_of(&both));
-        assert_eq!(subject, Subject::Capabilities(vec![Capability::Answer, Capability::Stop]), "前の口と名指しの停止");
+        let subject = bash(&both);
+        assert_eq!(subject, Subject::Capabilities(vec![Capability::Answer, Capability::Stop], false), "前の口と名指しの停止");
         assert_eq!(judge(&subject, Role::Orchestrator, &manifest_with(&[Capability::Answer, Capability::Stop])), RoleDecision::Allow);
         let RoleDecision::Deny(line) = judge(&subject, Role::Orchestrator, &manifest_with(&[Capability::Stop])) else {
             panic!("answer を持たない行は deny");
@@ -867,9 +913,9 @@ mod tests {
     #[test]
     fn role_guard_judge_reads_the_role_row() {
         let manifest = manifest_with(&[Capability::Answer, Capability::EditDesignDoc]);
-        let answer = Subject::Capabilities(vec![Capability::Answer]);
+        let answer = Subject::Capabilities(vec![Capability::Answer], false);
         assert_eq!(judge(&answer, Role::Orchestrator, &manifest), RoleDecision::Allow);
-        let launch = Subject::Capabilities(vec![Capability::Answer, Capability::Launch]);
+        let launch = Subject::Capabilities(vec![Capability::Answer, Capability::Launch], false);
         let RoleDecision::Deny(line) = judge(&launch, Role::Orchestrator, &manifest) else {
             panic!("欠けた権能は deny");
         };
@@ -1047,7 +1093,7 @@ mod tests {
     /// `unanchored_line` は `NoAnchor` の同じ形・`judge` の行なしは `no-row <row>` の同じ形。
     #[test]
     fn hook_role_guard_route_deny_line_ends_with_route() {
-        let subject = Subject::Capabilities(vec![Capability::Answer]);
+        let subject = Subject::Capabilities(vec![Capability::Answer], false);
         for (reason, word) in RefuseReason::ALL.into_iter().zip(REASON_WORDS) {
             let line = refused(&subject, reason);
             assert_eq!(line.lines().count(), 1, "deny 文は 1 行: {line}");
@@ -1075,7 +1121,7 @@ mod tests {
     /// 記録の種別の字面。
     #[test]
     fn role_guard_subject_renders_capability_or_path_kind() {
-        let caps = Subject::Capabilities(vec![Capability::Answer, Capability::Launch]);
+        let caps = Subject::Capabilities(vec![Capability::Answer, Capability::Launch], true);
         assert_eq!(caps.render(), "capability=answer+launch");
         assert_eq!(path(PathKind::Code, false).render(), "path=code");
         assert_eq!(path(PathKind::Code, true).render(), "path=code opened");
@@ -1144,7 +1190,7 @@ mod tests {
         fn prop_role_bash_face_allows_iff_matched_capabilities_are_held(line in armed_command(), extra in capability_set()) {
             let matched = capabilities_of(&line);
             prop_assert!(!matched.is_empty(), "{line}");
-            let subject = Subject::Capabilities(matched.clone());
+            let subject = Subject::Capabilities(matched.clone(), false);
             let mut held = matched.clone();
             held.extend(extra.iter().copied());
             prop_assert_eq!(judge(&subject, Role::Orchestrator, &manifest_with(&held)), RoleDecision::Allow);
