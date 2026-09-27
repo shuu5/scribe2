@@ -74,6 +74,8 @@ const ROW_WINDOW: &str = "pipe.stop_grace_ms";
 pub const ROW_GRACE: &str = "seat.move_grace_s";
 /// heartbeat の段の上げの rules 行（秒・任意の行＝[`Rows::of`] の必須に入れない・設計 §17 形 1）。
 pub const ROW_IDLE_ALARM: &str = "seat.idle_alarm_s";
+/// 事前審査の確定の束の段の上げの rules 行（秒・任意の行・設計 dispatcher.md §27 形 4）。
+pub const ROW_PRECHECK_ALARM: &str = "seat.precheck_alarm_s";
 
 /// 梯子の記録の file 名（席の置き場の直下）。
 pub const LADDER_FILE: &str = "pointer-ladder";
@@ -405,13 +407,21 @@ pub fn signal(step: u32, pace: &Pace) -> String {
 }
 
 /// 段の上げの判定（設計 §17 形 1 / 2）: 行が無い・読めない周は上げず語 `idle-unset`、値が正で live が 0 と測れ 0 本の分数 × 60 が
-/// 値以上の周だけ上げて語 `idle`、他（値 0・測れない・値なし）は上げず語なし。返り値は（上げた周の値, `alarm=` の語）。
-fn idle_alarm(alarm_s: Option<u64>, found: &Facts) -> (Option<u64>, Option<&'static str>) {
-    match (alarm_s, &found.live, &found.idle) {
+/// 値以上の周だけ上げて語 `idle`、他（値 0・測れない・値なし）は上げず語なし。事前審査の本数を持つ周（dispatcher.md §27 形 4）は
+/// 続けて、`seat.precheck_alarm_s` の行が無い・読めない周は上げず語 `precheck-unset`、値が正で最も古い束の初めて見た時刻から
+/// 値の秒数以上経った周は上げて語 `precheck`。返り値は（上げた周の値の小さい方, `alarm=` の語の列〔u の語が先〕）。
+fn idle_alarm(rows: &Rows, found: &Facts, now: u64) -> (Option<u64>, Vec<&'static str>) {
+    let idle = match (rows.idle_alarm_s, &found.live, &found.idle) {
         (None, _, _) => (None, Some("idle-unset")),
         (Some(value), Fact::Value(0), Fact::Value(minutes)) if value > 0 && minutes.saturating_mul(60) >= value => (Some(value), Some("idle")),
         _ => (None, None),
-    }
+    };
+    let precheck = found.precheck.as_ref().map_or((None, None), |tally| match (rows.precheck_alarm_s, tally.oldest) {
+        (None, _) => (None, Some("precheck-unset")),
+        (Some(value), Some(first)) if value > 0 && now.saturating_sub(first) >= value => (Some(value), Some("precheck")),
+        _ => (None, None),
+    });
+    ([idle.0, precheck.0].into_iter().flatten().min(), [idle.1, precheck.1].into_iter().flatten().collect())
 }
 
 /// 段の上げ（pure・設計 §17 形 3 (a)(b)・**1 本**）: 上げた周は（黙りの閾値, 段）を（`seat.tick_stale_s` と値の小さい方, 0）に。
@@ -794,15 +804,18 @@ struct Rows {
     caps: Caps,
     /// 段の上げの閾値（秒・任意の行が無い・読めない周は `None`＝上げず `alarm=idle-unset`・設計 §17 形 1）。
     idle_alarm_s: Option<u64>,
+    /// 事前審査の束の段の上げの閾値（秒・任意の行・読めない周は `None`＝上げず `alarm=precheck-unset`・dispatcher.md §27 形 4）。
+    precheck_alarm_s: Option<u64>,
 }
 
 impl Rows {
-    /// 全部を読む。どれかが読めない周は `Err`（既定値に倒さない・C1）。段の上げの行だけは任意で、読めない周も `Err` にしない。
+    /// 全部を読む。どれかが読めない周は `Err`（既定値に倒さない・C1）。段の上げの 2 行だけは任意で、読めない周も `Err` にしない。
     fn of(manifest: &Manifest) -> Result<Self, String> {
         int_row(manifest, ROW_INTERVAL)?;
         let pace = Pace::of(int_row(manifest, ROW_STALE)?, list_row(manifest, ROW_LADDER)?)?;
         let (window_ms, grace_s) = (int_row(manifest, ROW_WINDOW)?, int_row(manifest, ROW_GRACE)?);
-        Ok(Self { pace, window_ms, grace_s, caps: Caps::of(manifest)?, idle_alarm_s: int_row(manifest, ROW_IDLE_ALARM).ok() })
+        let (idle_alarm_s, precheck_alarm_s) = (int_row(manifest, ROW_IDLE_ALARM).ok(), int_row(manifest, ROW_PRECHECK_ALARM).ok());
+        Ok(Self { pace, window_ms, grace_s, caps: Caps::of(manifest)?, idle_alarm_s, precheck_alarm_s })
     }
 }
 
@@ -864,10 +877,11 @@ fn front(input: &Input) -> Result<Front, Verdict> {
     };
     // 並列の実測（設計 §16・列の結果なし＝`held=` を出さない・台帳も列も撃たない）で段を上げるかを決める（§17 形 2）。
     let measured = facts::facts(&input.state.path, None, now);
-    let (alarm_s, word) = idle_alarm(rows.idle_alarm_s, &measured);
+    let (alarm_s, words) = idle_alarm(&rows, &measured, now);
     let (stale_s, step) = raise(&rows.pace, candidate(record.as_ref(), digest), alarm_s);
     let pointer = pointer_of(&rows.pace, record.map(|found| found.sent_at), step, now);
-    let tail = format!("{}{}", facts::line(&measured), word.map_or_else(String::new, |word| format!(" alarm={word}")));
+    let alarm = if words.is_empty() { String::new() } else { format!(" alarm={}", words.join(",")) };
+    let tail = format!("{}{alarm}", facts::line(&measured));
     Ok(Front { rows, fleet, account, role, anchor, seat, digest, step, pointer, now, off, stale_s, tail })
 }
 

@@ -730,6 +730,18 @@ enabled = true
 ruling = "user 2026-09-27T14:02Z 項 4"
 ruled_at = "2026-09-27"
 
+# 事前審査の確定の束の段の上げ（秒・設計 dispatcher.md §27 形 4・行 y）。最も古い確定の束の初めて見た時刻からこの値以上
+# 経った周は、行 u の段の上げの 1 本で heartbeat の段を上げ、alarm= の列に precheck を足す。0 は上げない。
+# 任意の行: 読めない周は上げず、precheck= を出す周に限り alarm= の列に precheck-unset を足す。
+
+[[rule]]
+id = "seat.precheck_alarm_s"
+kind = "SeatPrecheckAlarmS"
+value = 900
+enabled = true
+ruling = "user 2026-09-27T17:33Z 項 2-1"
+ruled_at = "2026-09-27"
+
 # 口座の宣言（設計 fleet-usage.md §2・account-lifecycle.md §2・ADR-0026 §2.1）は host の manifest（state dir
 # の host.toml）にだけ置く。この file に口座の表は置かない（文法は残る・足す変更は A1 の対話面で聞く・本 repo
 # は PUBLIC・SRS CON2）。器は credential の置き場を走査せず、宣言だけを真実として読む（C3）。

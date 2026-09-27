@@ -275,6 +275,8 @@ fn notices(queue: &Queue<'_>, run: Option<&str>, turn: &queue::Turn) -> Vec<Stri
     // 並列の実測は同じ周の `Turn` と運転手の置き場で 1 回だけ撃つ（設計 dispatcher.md §26 形 4）。
     let facts = queue::facts::facts(&queue.state_dir, Some(turn), crate::seat::state::now_secs());
     payloads.extend(notify::idle_line(turn, &facts));
+    // 直しの束の集合が前に送った集合と違う周だけ 1 行（設計 dispatcher.md §27 形 2・同じ宛先と送達の 1 関数）。
+    payloads.extend(queue::bundle::changed(&queue.state_dir).map(|found| notify::precheck_line(&found)));
     // 送達の記録と消費の証拠は運転手の置き場で測る（設計 dispatcher.md §21 形 1・解決は flag の 1 回だけ）。
     let place = crate::seat::StateDir {
         path: std::path::absolute(&queue.state_dir).unwrap_or_else(|_| queue.state_dir.clone()),

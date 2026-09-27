@@ -790,12 +790,39 @@ fn rules_idle_alarm_row_follows_the_seat_box() {
     assert_eq!(manifest.rows().iter().filter(|found| found.kind == RuleKind::SeatIdleAlarmS).count(), 1, "kind の行は 1 本");
     let at = ALL.iter().position(|kind| *kind == RuleKind::SeatMemoryMaxMb).expect("SeatMemoryMaxMb は ALL に在る");
     let after: Vec<RuleKind> = ALL.iter().skip(at + 1).take(2).copied().collect();
-    assert_eq!(after, [RuleKind::SeatIdleAlarmS, RuleKind::RunnerClassCommands], "kind は SeatMemoryMaxMb の直後で RunnerClassCommands の前");
+    // `.717` が直後に事前審査の束の段の上げの kind を足した（その後ろは RunnerClassCommands のまま）。
+    assert_eq!(after, [RuleKind::SeatIdleAlarmS, RuleKind::SeatPrecheckAlarmS], "kind は SeatMemoryMaxMb の直後で SeatPrecheckAlarmS の前");
     let rows: Vec<&str> = manifest.rows().iter().map(|found| found.id.as_str()).collect();
     let boxed = rows.iter().position(|found| *found == "seat.memory_max_mb").expect("seat.memory_max_mb の行が在る");
     assert_eq!(rows.get(boxed + 1).copied(), Some(id), "行も seat.memory_max_mb の直後（母集団 {} 行）", rows.len());
     assert_eq!(RuleKind::parse("SeatIdleAlarmS"), Some(RuleKind::SeatIdleAlarmS), "字面から引ける");
     let errors = rejected(&one_row(RuleKind::SeatIdleAlarmS, "\"quarter\"")).expect("文字列の値の fixture が受理された");
+    assert!(errors.join("\n").contains("形と合わない"), "形は Int だけ: {errors:?}");
+}
+
+/// 事前審査の確定の束の段の上げの行（設計 dispatcher.md §27 形 4・行 y・`s2-07l.717`）が埋め込み manifest に id / kind / 形 Int /
+/// 値 900 / enabled / 裁定 id / 裁定日で 1 本在り、行は `seat.idle_alarm_s` の直後・kind は `ALL` の `SeatIdleAlarmS` の直後で
+/// `RunnerClassCommands` の前、字面から引け、形は Int だけ（base では行も kind も無い ＝ RED）。
+#[test]
+fn rules_precheck_alarm_row_follows_the_idle_alarm() {
+    let manifest = Manifest::embedded().unwrap_or_else(|errors| panic!("埋め込み manifest が拒まれた: {errors:?}"));
+    let id = "seat.precheck_alarm_s";
+    let row = manifest.get(id).unwrap_or_else(|| panic!("{id} の行が在る"));
+    let kind = RuleKind::parse("SeatPrecheckAlarmS").expect("字面から引ける");
+    assert_eq!((kind.as_str(), kind.shape()), ("SeatPrecheckAlarmS", ValueShape::Int), "kind の字面と形");
+    assert_eq!(row.kind, kind, "{id} の kind");
+    assert_eq!(row.value, RuleValue::Int(900), "{id} の値（15 分）");
+    assert!(row.enabled, "{id} は既定で効く");
+    assert_eq!((row.ruling.as_str(), row.ruled_at.as_str()), ("user 2026-09-27T17:33Z 項 2-1", "2026-09-27"), "{id} の裁定 id と裁定日");
+    assert_eq!(int_row(&manifest, id), Ok(900), "{id} を整数の読み手で引ける");
+    assert_eq!(manifest.rows().iter().filter(|found| found.kind == kind).count(), 1, "kind の行は 1 本");
+    let at = ALL.iter().position(|found| *found == RuleKind::SeatIdleAlarmS).expect("SeatIdleAlarmS は ALL に在る");
+    let after: Vec<RuleKind> = ALL.iter().skip(at + 1).take(2).copied().collect();
+    assert_eq!(after, [kind, RuleKind::RunnerClassCommands], "kind は SeatIdleAlarmS の直後で RunnerClassCommands の前");
+    let rows: Vec<&str> = manifest.rows().iter().map(|found| found.id.as_str()).collect();
+    let idle = rows.iter().position(|found| *found == "seat.idle_alarm_s").expect("seat.idle_alarm_s の行が在る");
+    assert_eq!(rows.get(idle + 1).copied(), Some(id), "行も seat.idle_alarm_s の直後（母集団 {} 行）", rows.len());
+    let errors = rejected(&one_row(kind, "\"quarter\"")).expect("文字列の値の fixture が受理された");
     assert!(errors.join("\n").contains("形と合わない"), "形は Int だけ: {errors:?}");
 }
 

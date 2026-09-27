@@ -1252,3 +1252,90 @@ fn seat_tick_idle_alarm_without_the_row_keeps_the_gate_and_says_unset() {
     assert_eq!(line, tick_inject(0), "打刻の古い周は送る");
     assert_eq!(texts, [tick_facts_want(" live=0 idle=2m alarm=idle-unset")], "末尾は alarm=idle-unset");
 }
+
+/// 行 y（設計 dispatcher.md §27 形 3 / 4）の歯の置き場: 席の置き場の事前審査の dir（`<state>/pipe/precheck`）を作り、`bundle` が
+/// 在れば確定を持つ結果の file 1 つと、初めて見た時刻が `bundle` 秒前の束の file 1 つを置く（無ければ dir だけ）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn tick_precheck_put(place: &TickPlace, bundle: Option<u64>) {
+    let dir = place.state.join("pipe").join("precheck");
+    fs::create_dir_all(&dir).expect("事前審査の dir を作れる");
+    let Some(ago) = bundle else {
+        return;
+    };
+    let (root, id) = ("write-set-item-unresolved at=files:src/nowhere.rs", "0123456789abcdef");
+    let result = format!("key=k\nresult=firm:1,provisional:0\nfinding=firm name={root} new=true reason=r\n");
+    fs::write(dir.join("s2-pre.2"), result).expect("結果の file を書ける");
+    fs::create_dir_all(dir.join("bundle")).expect("束の dir を作れる");
+    let first = unix_now().saturating_sub(ago);
+    let body = format!("id={id}\nroot={root}\nfirst_seen={first}\nrow=s2-pre.2 pointer=docs/design/toy.md#b\n");
+    fs::write(dir.join("bundle").join(id), body).expect("束の file を書ける");
+}
+
+/// `tick_rules_text` の本文の後ろに段の上げの 2 行（`idle` と `precheck` の在る方）を足した写しの path。
+fn tick_precheck_rules(place: &TickPlace, idle: Option<u64>, precheck: Option<u64>) -> String {
+    let mut rows = Vec::new();
+    rows.extend(idle.map(|secs| ("seat.idle_alarm_s", "SeatIdleAlarmS", secs.to_string())));
+    rows.extend(precheck.map(|secs| ("seat.precheck_alarm_s", "SeatPrecheckAlarmS", secs.to_string())));
+    let extra = tick_rules_body(&rows).replacen("schema = 1\n", "", 1);
+    fixture(&place.dir, "precheck-alarm.toml", &format!("{}{extra}", tick_rules_text("", None)))
+}
+
+/// (y-a) 事前審査の dir の在る置き場（束 0）の合図の末尾に ` precheck=0/0:0` が付き、dir の無い置き場は付かない（埋め込みの
+/// manifest・便 0 本・打刻は `seat.tick_stale_s` を越えた周）。
+#[test]
+fn seat_tick_precheck_tail_follows_the_dir() {
+    for (made, tail) in [(true, " live=0 idle=- precheck=0/0:0"), (false, " live=0 idle=-")] {
+        let place = tick_place(true);
+        if made {
+            tick_precheck_put(&place, None);
+        }
+        tick_silent_for(&place, TICK_STALE + 60);
+        let out = tick_run(&place, &[]);
+        assert_eq!(stdout_of(&out), tick_inject(0), "dir {made}: 合図を 1 回送る周: stderr={}", stderr_of(&out));
+        let prefix = format!("send-keys -t {TICK_TARGET} -l ");
+        let texts: Vec<String> = tick_keys(&place).iter().filter_map(|key| key.strip_prefix(&prefix).map(str::to_owned)).collect();
+        assert_eq!(texts, [tick_facts_want(tail)], "dir {made}: 末尾");
+    }
+}
+
+/// (y-b) 値 60 の写しで束の時刻が 120 秒前・席の打刻が 90 秒前（`seat.tick_stale_s` より新しい）の周は黙りの門が 60 秒に縮み、合図が
+/// 1 回出て ` alarm=` の列に `precheck`（base と門を縮めない実装は `stamp-recent` の noop）。値 0 の同じ周は上げない。
+#[test]
+fn seat_tick_precheck_alarm_shortens_the_silence_gate() {
+    let place = tick_place(true);
+    tick_precheck_put(&place, Some(120));
+    tick_silent_for(&place, 90);
+    let (line, texts) = tick_idle_run(&place, &tick_precheck_rules(&place, Some(900), Some(60)));
+    assert_eq!(line, tick_inject(0), "打刻が 90 秒前でも値 60 の門を越えた周は送る");
+    assert_eq!(texts, [tick_facts_want(" live=0 idle=- precheck=1/1:1 alarm=precheck")], "合図 1 回・alarm= の列に precheck");
+    let place = tick_place(true);
+    tick_precheck_put(&place, Some(120));
+    tick_silent_for(&place, 90);
+    let (line, texts) = tick_idle_run(&place, &tick_precheck_rules(&place, Some(900), Some(0)));
+    assert_eq!(line, tick_noop("stamp-recent", "wait:0", "0"), "値 0 は上げない");
+    assert!(texts.is_empty(), "値 0: 0 key: {texts:?}");
+}
+
+/// (y-c) 段の上げの行の無い写しで事前審査の dir の在る置き場: (y-b) と同じ周は門を縮めず `stamp-recent` の noop で、打刻が
+/// `seat.tick_stale_s` を越えた周の合図の ` alarm=` の列は u の語の後ろに `precheck-unset`。
+#[test]
+fn seat_tick_precheck_without_the_row_keeps_the_gate_and_says_unset() {
+    let place = tick_place(true);
+    tick_precheck_put(&place, Some(120));
+    tick_silent_for(&place, 90);
+    let rules = tick_precheck_rules(&place, None, None);
+    let (line, texts) = tick_idle_run(&place, &rules);
+    assert_eq!(line, tick_noop("stamp-recent", "wait:0", "0"), "行の無い写しは門を縮めない");
+    assert!(texts.is_empty(), "0 key: {texts:?}");
+    tick_silent_for(&place, TICK_STALE + 60);
+    let (line, texts) = tick_idle_run(&place, &rules);
+    assert_eq!(line, tick_inject(0), "打刻の古い周は送る");
+    assert_eq!(
+        texts,
+        [tick_facts_want(" live=0 idle=- precheck=1/1:1 alarm=idle-unset,precheck-unset")],
+        "alarm= の列は u の語の後ろに precheck-unset"
+    );
+}

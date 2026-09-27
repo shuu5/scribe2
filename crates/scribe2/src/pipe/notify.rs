@@ -18,7 +18,7 @@ use crate::seat::inject::Request;
 use crate::seat::inject::{deliver_or_confirm, deliver_within, Confirm, Delivery, Sent};
 use crate::seat::role::{registration_of_key, Role};
 use crate::seat::StateDir;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 /// 送達の窓を持つ rules 行（§19 形 4「`pipe.stop_grace_ms` と同じ桁の窓」・値はこの file に焼かない・C1）。
@@ -71,6 +71,13 @@ pub(super) fn idle_line(turn: &Turn, facts: &Facts) -> Option<String> {
     let reason = top.reason.as_ref().map_or_else(|| DASH.to_owned(), WaitReason::render);
     let tail = facts::line(facts);
     Some(format!("{NAME} pipe: idle ready={} launched=0 reason={reason}{tail}", turn.candidates.len()))
+}
+
+/// 直しの束の 1 行（設計 dispatcher.md §27 形 2・行 y）: `precheck bundles=<n> rows=<m>` の後ろに束ごとの ` <束の id>=<束の file の
+/// path>`。載せるのは束の一覧と在り処だけで、作法の散文は載せない（N2）。束が 0 本の周は `bundles=0 rows=0` で終わる。
+pub(super) fn precheck_line((bundles, rows): &(Vec<(String, PathBuf)>, usize)) -> String {
+    let listed: String = bundles.iter().map(|(id, path)| format!(" {id}={}", path.display())).collect();
+    format!("{NAME} pipe: precheck bundles={} rows={rows}{listed}", bundles.len())
 }
 
 /// detail の頭の 1 語（空白と `:` の手前・無ければ [`DASH`]）。値の後ろ（sha・path）は pane に載せない。

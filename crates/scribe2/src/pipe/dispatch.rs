@@ -41,6 +41,9 @@ pub(crate) mod facts;
 /// 依存を待つ行に受付の判定を予想の base で先に撃つ事前審査（設計 §27・契約表の行 x）。
 mod precheck;
 
+/// 事前審査の確定を根で束ねる直しの束（設計 §27・契約表の行 y・終端の周の知らせが集合の変化を読む）。
+pub(crate) mod bundle;
+
 use candidates::{entry_of, is_input, marks_of, settle, tools};
 
 /// `intake:memo` の bead（契約が未確定＝列に載せない・`.beads/PRIME.md` R3）。
@@ -898,11 +901,12 @@ pub fn render(turn: &Turn) -> Outcome {
 }
 
 /// `dispatch ls` の全行（[`render`] の件数の行の前に、依存待ちの候補ごとの事前審査の 1 行を足す・結果の file を読むだけで
-/// 撃たない・設計 §27 形 7）。`[DISPATCH]` と `[DISPATCH-COUNT]` の行の字は [`render`] のまま。
+/// 撃たない・設計 §27 形 7）と、その後ろに直しの束ごとの 1 行（行 y・形 2）を足す。`[DISPATCH]` と `[DISPATCH-COUNT]` の行の字は
+/// [`render`] のまま。
 pub fn listing(input: &Input<'_>, turn: &Turn) -> Outcome {
     let mut outcome = render(turn);
     if let Some(at) = outcome.out.iter().position(|line| line.starts_with(COUNT)) {
-        outcome.out.splice(at..at, precheck::lines(input, turn));
+        outcome.out.splice(at..at, precheck::lines(input, turn).into_iter().chain(bundle::lines(input.state_dir)));
     }
     outcome
 }

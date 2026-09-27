@@ -338,6 +338,9 @@ pub enum RuleKind {
     /// heartbeat の段の上げの閾値（秒・設計 seat-heartbeat.md §17 形 1）。live 0 本の分数 × 60 がこの値以上の周は黙りの門を
     /// 短くし梯子を段 0 に留める。0 は上げない。任意の行で、読めない周は上げず合図に `alarm=idle-unset` を足す。
     SeatIdleAlarmS,
+    /// 事前審査の確定の束の段の上げの閾値（秒・設計 dispatcher.md §27 形 4）。最も古い確定の束の初めて見た時刻からこの値以上
+    /// 経った周は `SeatIdleAlarmS` と同じ段の上げを撃つ。0 は上げない。任意の行で、読めない周は上げず `alarm=precheck-unset`。
+    SeatPrecheckAlarmS,
     /// **クラスの語列表**（設計 contract-source.md §48 の 2・ADR-0061）。値は要素「クラスの名 + 語列」の列（読み手は
     /// [`crate::pipe::contract::class_element`] の 1 本）で、契約表の検査が verify 各行に禁じる語列と同じ照合で当て、導出が
     /// 行の `classes` に無い行を断る。id は [`crate::pipe::contract::CLASS_ROW`] の 1 行。
@@ -417,6 +420,7 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::SeatMoveGraceS,
     RuleKind::SeatMemoryMaxMb,
     RuleKind::SeatIdleAlarmS,
+    RuleKind::SeatPrecheckAlarmS,
     RuleKind::RunnerClassCommands,
 ];
 
@@ -478,12 +482,12 @@ impl RuleKind {
             Self::ReviewSameKindStop => "ReviewSameKindStop",
             Self::LandTrainMax => "LandTrainMax",
             Self::PipeMaxLive => "PipeMaxLive",
-            Self::FlipDocsOnlyFaces => "FlipDocsOnlyFaces",
-            Self::FlipMarksPerPr => "FlipMarksPerPr",
+            Self::FlipDocsOnlyFaces => "FlipDocsOnlyFaces", Self::FlipMarksPerPr => "FlipMarksPerPr",
             Self::LedgerDeniedWrites => "LedgerDeniedWrites", Self::LedgerOpenChildrenMax => "LedgerOpenChildrenMax",
             Self::HostGuardDeniedCommands => "HostGuardDeniedCommands", Self::HostGuardRmProtected => "HostGuardRmProtected",
             // 管理 tick の 3 kind と席の箱も 2 行に畳み、対で読む model と effort の 2 組も 1 行ずつに畳む（同じ上限）。
             Self::SeatTickIntervalS => "SeatTickIntervalS", Self::SeatTickStaleS => "SeatTickStaleS", Self::SeatMemoryMaxMb => "SeatMemoryMaxMb",
+            Self::SeatPrecheckAlarmS => "SeatPrecheckAlarmS",
             Self::SeatPointerLadderS => "SeatPointerLadderS", Self::SeatMoveGraceS => "SeatMoveGraceS", Self::SeatIdleAlarmS => "SeatIdleAlarmS",
         }
     }
@@ -533,7 +537,7 @@ impl RuleKind {
             | Self::PipeMaxLive
             | Self::FlipMarksPerPr | Self::LedgerOpenChildrenMax
             | Self::SeatTickIntervalS | Self::SeatTickStaleS | Self::SeatMoveGraceS | Self::SeatMemoryMaxMb | Self::SeatIdleAlarmS
-            | Self::AccountSelection => ValueShape::Int,
+            | Self::SeatPrecheckAlarmS | Self::AccountSelection => ValueShape::Int,
             Self::DialogueSurface
             | Self::RunnerModel
             | Self::RunnerEffort

@@ -6,7 +6,8 @@
 //! 置く（§19 形 6・`pipe/` 配下の file 数の pin は動かさない）。
 
 use crate::pipe::{
-    bin_cmd, ceiling_rules, clean, embedded_int, intake_bead, repo_with_state, run_pipe, stderr_of, stdout_of, DESIGN_FILE,
+    bin_cmd, ceiling_rules, clean, design_doc_rows, embedded_int, git, intake_bead, repo_with_state, row_fields, run_pipe,
+    stderr_of, stdout_of, write_design, DESIGN_FILE,
 };
 use crate::TOOLBOX_BIN;
 use std::fs;
@@ -464,4 +465,194 @@ fn pipe_notify_foreign_input_sends_no_key_and_is_refused_busy() {
     assert_eq!(round.notify, vec!["notify=refused:busy".to_owned()], "{}", round.told);
     assert_eq!(round.keys, 0, "send-keys は 0 回: {}", round.told);
     assert_eq!(round.ticks.len(), 0, "送っていない周は記録しない: {:?}", round.ticks);
+}
+
+// ───── 直しの束（設計 dispatcher.md §27 形 1〜3・行 y・接頭辞 `pipe_notify_precheck_`） ─────
+//
+// 依存 A（行 a・held）を待つ行 b / c / d が、base にも A の宣言にも無い同じ file を素で持つ＝3 行が同じ根（断りの名
+// write-set-item-unresolved と在り処の file）の確定を持つ。base には束が無い＝束の file も知らせの行も末尾も無い（RED）。
+
+/// 束の歯の依存待ちの行の数。
+const BUNDLED: usize = 3;
+
+/// 束の歯の依存 A の bead（行 a・held）。
+const ANCESTOR: &str = "s2-pre.1";
+
+/// 束の歯の依存待ちの bead（行 b / c / d の順）。
+const WAITING: [(&str, &str); BUNDLED] = [("s2-pre.2", "b"), ("s2-pre.3", "c"), ("s2-pre.4", "d")];
+
+/// 行 a が `+src/fresh.rs` を宣言し、行 b / c / d が `file` を素の path で持つ設計 doc を書いて commit する。
+fn precheck_rows(repo: &Path, file: &str) {
+    let row = |id: &str, item: &str| {
+        let write_set = format!("write-set = [\"{item}\"]");
+        row_fields(id, &["write-set"], &[write_set.as_str()])
+    };
+    let mut rows = vec![row("a", "+src/fresh.rs")];
+    rows.extend(WAITING.iter().map(|(_, id)| row(id, file)));
+    write_design(repo, &design_doc_rows(&rows));
+    git(repo, &["add", "-A"]);
+    git(repo, &["commit", "-q", "-m", "precheck-rows"]);
+}
+
+/// 台帳の 1 件（行 `row` を指す open の bead・依存は blocks の列）。
+fn precheck_issue(id: &str, row: &str, blocks: &[&str]) -> String {
+    let deps: Vec<String> = blocks
+        .iter()
+        .map(|on| format!("{{\"issue_id\":\"{id}\",\"depends_on_id\":\"{on}\",\"type\":\"blocks\"}}"))
+        .collect();
+    format!(
+        "{{\"id\":\"{id}\",\"status\":\"open\",\"priority\":2,\"labels\":[],\
+         \"acceptance_criteria\":\"design = {DESIGN_FILE}#{row}\",\"dependencies\":[{}]}}",
+        deps.join(",")
+    )
+}
+
+/// 束の歯の偽の `bd`（A と A を blocks で待つ 3 行）を置き、その path を返す。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn precheck_bd(state: &Path) -> String {
+    let mut issues = vec![precheck_issue(ANCESTOR, "a", &[])];
+    issues.extend(WAITING.iter().map(|(bead, row)| precheck_issue(bead, row, &[ANCESTOR])));
+    let json = state.join("bd-precheck.json");
+    fs::write(&json, format!("[{}]\n", issues.join(","))).expect("偽の台帳を書ける");
+    let path = state.join("bd-precheck");
+    fs::write(&path, format!("#!/bin/sh\ncat '{}'\n", json.display())).expect("偽の bd を書ける");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("偽の bd に実行権を付ける");
+    path.display().to_string()
+}
+
+/// 束の歯の置き場（登録 row・偽の tmux・行 b / c / d が `src/nowhere.rs` を持つ設計 doc・A の hold）。
+fn precheck_place() -> (PathBuf, PathBuf, String) {
+    let (repo, state) = repo_with_state();
+    fake_tmux(&state);
+    register(&state, &repo);
+    precheck_rows(&repo, "src/nowhere.rs");
+    let bd = precheck_bd(&state);
+    let held = run_pipe(&["dispatch", "hold", ANCESTOR, "--state-dir", &state.display().to_string()]);
+    assert_eq!(held.status.code(), Some(i32::from(RC_OK)), "hold: {}", told(&held));
+    (repo, state, bd)
+}
+
+/// 契約を持たない live な便 `run` を置いて `pipe stop --run` の終端を道具つきで撃ち（列が測り事前審査が撃たれる）、この周に送った
+/// payload の送りの列を返す。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn precheck_stop(repo: &Path, state: &Path, bd: &str, run: &str) -> Vec<String> {
+    let recorded = bin_cmd()
+        .args(["fleet", "record", "--kind", "RunStage", "--run", run, "--bead", &format!("{run}.bead"), "--stage", "Implemented"])
+        .args(["--detail", "implemented"])
+        .arg("--state-dir")
+        .arg(state)
+        .output()
+        .expect("binary を起動できる");
+    assert_eq!(recorded.status.code(), Some(i32::from(RC_OK)), "fleet record: {}", stderr_of(&recorded));
+    let before = sends(state).len();
+    let out = run_pipe(&[
+        "stop", "--run", run,
+        "--state-dir", &state.display().to_string(),
+        "--repo", &repo.display().to_string(),
+        "--rules", &queue_rules(state),
+        "--bd", bd,
+        "--runner", "true",
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "stop は rc 0: {}", told(&out));
+    sends(state).into_iter().skip(before).collect()
+}
+
+/// 送りの列のうち直しの束の行。
+fn bundle_sends(sent: &[String]) -> Vec<String> {
+    sent.iter().filter(|line| line.contains(" pipe: precheck bundles=")).cloned().collect()
+}
+
+/// 置き場の束の dir。
+fn bundle_dir(state: &Path) -> PathBuf {
+    state.join("pipe").join("precheck").join("bundle")
+}
+
+/// 置き場の束の file（名に `.` を持たない file・名の順）。
+fn bundle_files(state: &Path) -> Vec<PathBuf> {
+    let mut found: Vec<PathBuf> = fs::read_dir(bundle_dir(state))
+        .map(|entries| entries.flatten().map(|entry| entry.path()).collect())
+        .unwrap_or_default();
+    found.retain(|path| path.file_name().is_some_and(|name| !name.to_string_lossy().contains('.')));
+    found.sort();
+    found
+}
+
+/// `pipe dispatch ls` の `[DISPATCH-BUNDLE]` の行。
+fn bundle_lines(repo: &Path, state: &Path, bd: &str) -> Vec<String> {
+    let out = run_pipe(&[
+        "dispatch", "ls",
+        "--state-dir", &state.display().to_string(),
+        "--repo", &repo.display().to_string(),
+        "--rules", &queue_rules(state),
+        "--bd", bd,
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "ls は rc 0: {}", told(&out));
+    stdout_of(&out).lines().filter(|line| line.starts_with("[DISPATCH-BUNDLE]")).map(str::to_owned).collect()
+}
+
+/// (1)(2)(3)(d) 同じ根の確定を持つ待ち行 3 本が束 1 つになり、束の file が 3 行の pointer と TOML と節と測り直しの argv を持ち、
+/// 席への 1 行が周ごとに 1 回（束の集合が同じ次の周は送らない）で `precheck bundles=1 rows=3 <束の id>=<束の file の path>` で終わり、
+/// idle の行の末尾が ` precheck=3/3:1`。`dispatch ls` は束ごとに `[DISPATCH-BUNDLE]` の 1 行を出す。
+#[test]
+fn pipe_notify_precheck_same_root_rows_make_one_bundle_sent_once() {
+    let (repo, state, bd) = precheck_place();
+    let sent = precheck_stop(&repo, &state, &bd, "r-pre-1");
+    let files = bundle_files(&state);
+    assert_eq!(files.len(), 1, "同じ根の 3 行は束 1 つ: {files:?} / {sent:?}");
+    let file = files.first().cloned().unwrap_or_default();
+    let id = file.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+    let body = fs::read_to_string(&file).unwrap_or_default();
+    for (bead, row) in WAITING {
+        for want in [
+            format!("row={bead} pointer={DESIGN_FILE}#{row}\n"),
+            format!("remeasure={bead} argv=scribe2 pipe preflight --design {DESIGN_FILE}#{row} --bead {bead} --repo "),
+            format!("== toml {bead}\n[[contract]]\nid = \"{row}\"\n"),
+            format!("== section {bead}\n{DESIGN_FILE}#{row} §1\n"),
+        ] {
+            assert!(body.contains(&want), "束の file に {want:?}: {body}");
+        }
+    }
+    assert!(body.starts_with(&format!("id={id}\nroot=write-set-item-unresolved at=files:src/nowhere.rs\nfirst_seen=")), "{body}");
+    let bundled = bundle_sends(&sent);
+    assert_eq!(bundled.len(), 1, "束の行は周に 1 回: {sent:?}");
+    let want = format!(" pipe: precheck bundles=1 rows={BUNDLED} {id}={}", file.display());
+    assert!(bundled.first().is_some_and(|line| line.ends_with(&want)), "束の行の字面 {want:?}: {bundled:?}");
+    let idle = idle_of(&sent);
+    assert!(idle.ends_with(" precheck=3/3:1"), "idle の末尾に事前審査の本数: {idle} / {sent:?}");
+    assert_eq!(
+        bundle_lines(&repo, &state, &bd),
+        [format!("[DISPATCH-BUNDLE] id={id} rows={BUNDLED} root=write-set-item-unresolved file={}", file.display())],
+        "ls は束ごとに 1 行"
+    );
+    let again = precheck_stop(&repo, &state, &bd, "r-pre-2");
+    assert_eq!(bundle_sends(&again), Vec::<String>::new(), "束の集合が同じ次の周は送らない: {again:?}");
+    assert!(idle_of(&again).ends_with(" precheck=3/3:1"), "次の周も末尾は同じ: {again:?}");
+    assert_eq!(bundle_files(&state), [file], "束の file は同じ id のまま");
+    clean(&[&repo, &state]);
+}
+
+/// (1)(2)(e) fixture の設計を直して 3 行の確定が消えた周に、束の file が置き場から外れ、`[DISPATCH-BUNDLE]` の行が 0 になり、
+/// `precheck bundles=0 rows=0` の 1 行が 1 回だけ送られる（次の周は送らない）。
+#[test]
+fn pipe_notify_precheck_cleared_rows_drop_the_bundle_and_say_zero_once() {
+    let (repo, state, bd) = precheck_place();
+    let first = precheck_stop(&repo, &state, &bd, "r-pre-1");
+    assert_eq!(bundle_files(&state).len(), 1, "直す前は束 1 つ: {first:?}");
+    precheck_rows(&repo, "src/fresh.rs");
+    let cleared = precheck_stop(&repo, &state, &bd, "r-pre-2");
+    assert_eq!(bundle_files(&state), Vec::<PathBuf>::new(), "確定の消えた束の file は外れる");
+    assert_eq!(bundle_lines(&repo, &state, &bd), Vec::<String>::new(), "ls の束の行は 0");
+    let bundled = bundle_sends(&cleared);
+    assert_eq!(bundled.len(), 1, "束が 0 本になった周は 1 回送る: {cleared:?}");
+    assert!(bundled.first().is_some_and(|line| line.ends_with(" pipe: precheck bundles=0 rows=0")), "0 本の行: {bundled:?}");
+    assert!(idle_of(&cleared).ends_with(" precheck=0/3:0"), "確定 0・結果 3・束 0: {cleared:?}");
+    let quiet = precheck_stop(&repo, &state, &bd, "r-pre-3");
+    assert_eq!(bundle_sends(&quiet), Vec::<String>::new(), "次の周は送らない: {quiet:?}");
+    clean(&[&repo, &state]);
 }

@@ -43,7 +43,20 @@ pub(crate) struct Held {
     pub(crate) names: Vec<String>,
 }
 
-/// 並列の実測の 3 つ。
+/// 事前審査の本数（設計 §27 形 3 / 4・行 y・置き場の file だけから数える）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Precheck {
+    /// 確定を持つ行。
+    pub(crate) firm: usize,
+    /// 結果を持つ行。
+    pub(crate) results: usize,
+    /// 直しの束の数。
+    pub(crate) bundles: usize,
+    /// 最も古い束の初めて見た周の時刻（UTC 秒・束が無ければ `None`）。
+    pub(crate) oldest: Option<u64>,
+}
+
+/// 並列の実測の 3 つと事前審査の本数。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Facts {
     /// live な便の本数（1 本でも生死を測れなければ測れない）。
@@ -52,22 +65,24 @@ pub(crate) struct Facts {
     pub(crate) idle: Fact<u64>,
     /// 重なりで待つ便（列の結果の無い呼び手は `None`＝`held=` を出さない）。
     pub(crate) held: Option<Fact<Held>>,
+    /// 事前審査の本数（置き場に事前審査の dir が無ければ `None`＝`precheck=` を出さない）。
+    pub(crate) precheck: Option<Precheck>,
 }
 
 /// 置き場・列の 1 周の結果（無い呼び手は `None`）・今の UTC 秒から並列の実測を作る（設計 §26 形 1）。
 ///
-/// 置き場を読めない周は live も分数も測れない（0 本に読み替えない）。
+/// 置き場を読めない周は live も分数も測れない（0 本に読み替えない）。事前審査の本数は台帳を読まず置き場の file だけから数える。
 pub(crate) fn facts(state_dir: &Path, turn: Option<&Turn>, now: u64) -> Facts {
-    let held = turn.map(held_of);
+    let (held, precheck) = (turn.map(held_of), super::bundle::tally(state_dir));
     let Ok(state) = current(state_dir) else {
-        return Facts { live: Fact::Unmeasured, idle: Fact::Unmeasured, held };
+        return Facts { live: Fact::Unmeasured, idle: Fact::Unmeasured, held, precheck };
     };
     let mut count = 0;
     for (id, run) in &state.runs {
         match live(state_dir, id, run.stage) {
             Some(true) => count += 1,
             Some(false) => {}
-            None => return Facts { live: Fact::Unmeasured, idle: Fact::Unmeasured, held },
+            None => return Facts { live: Fact::Unmeasured, idle: Fact::Unmeasured, held, precheck },
         }
     }
     let idle = if count > 0 || state.runs.is_empty() {
@@ -79,7 +94,7 @@ pub(crate) fn facts(state_dir: &Path, turn: Option<&Turn>, now: u64) -> Facts {
             None => Fact::Unmeasured,
         }
     };
-    Facts { live: Fact::Value(count), idle, held }
+    Facts { live: Fact::Value(count), idle, held, precheck }
 }
 
 /// 列の結果の候補のうち理由が今の `Overlap` の本数と、その交差の file 名。台帳を読めなかった周は測れない。
@@ -107,9 +122,10 @@ fn leaf(path: &str) -> String {
     }
 }
 
-/// 知らせの末尾に足す字面（` live=<n> idle=<m>m held=<k>:<名,名>`・設計 §26 形 2）。
+/// 知らせの末尾に足す字面（` live=<n> idle=<m>m held=<k>:<名,名> precheck=<確定>/<結果>:<束>`・設計 §26 形 2・§27 形 3）。
 ///
-/// 測れない値は `?`、値なしは `-`、重なり 0 は `held=0`（コロンなし）、列の結果の無い呼び手は `held=` を出さない。
+/// 測れない値は `?`、値なしは `-`、重なり 0 は `held=0`（コロンなし）、列の結果の無い呼び手は `held=` を出さない。事前審査の dir の
+/// 無い置き場は `precheck=` を出さない。
 pub(crate) fn line(facts: &Facts) -> String {
     let live = match facts.live {
         Fact::Value(count) => count.to_string(),
@@ -128,5 +144,8 @@ pub(crate) fn line(facts: &Facts) -> String {
         Some(Fact::Absent) => format!(" held={ABSENT}"),
         Some(Fact::Unmeasured) => format!(" held={UNMEASURED}"),
     };
-    format!(" live={live} idle={idle}{held}")
+    let precheck = facts.precheck.as_ref().map_or_else(String::new, |found| {
+        format!(" precheck={}/{}:{}", found.firm, found.results, found.bundles)
+    });
+    format!(" live={live} idle={idle}{held}{precheck}")
 }

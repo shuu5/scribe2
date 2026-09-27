@@ -297,18 +297,18 @@ fn result_word(findings: Option<&[Finding]>) -> String {
     findings.first().map_or_else(|| "clean".to_owned(), |found| format!("unmeasured:{}", found.name))
 }
 
-/// 置き場の結果の file の読み（鍵・結果の語・確定の finding の (名, 在り処)）。
-struct Kept {
+/// 置き場の結果の file の読み（鍵・結果の語・確定の finding の (名, 在り処) と理由）。
+pub(super) struct Kept {
     /// 鍵の字。
     key: String,
     /// 結果の語。
     result: String,
-    /// 確定の finding（new の印の突き合わせ）。
-    firm: BTreeSet<(String, String)>,
+    /// 確定の finding（(名, 在り処) → 理由の 1 行・new の印の突き合わせと直しの束の根・行 y）。
+    pub(super) firm: BTreeMap<(String, String), String>,
 }
 
 /// 結果の file を読む（1 行目 `key=`・2 行目 `result=` の無い file は読めない＝無いと同じ・跨版の約束を持たない cache）。
-fn read(path: &Path) -> Option<Kept> {
+pub(super) fn read(path: &Path) -> Option<Kept> {
     let text = std::fs::read_to_string(path).ok()?;
     let mut lines = text.lines();
     let key = lines.next()?.strip_prefix("key=")?.to_owned();
@@ -316,7 +316,9 @@ fn read(path: &Path) -> Option<Kept> {
     let firm = lines
         .filter_map(|line| {
             let (name, rest) = line.strip_prefix("finding=firm name=")?.split_once(" at=")?;
-            Some((name.to_owned(), rest.split_once(" new=")?.0.to_owned()))
+            let (at, rest) = rest.split_once(" new=")?;
+            let reason = rest.split_once(" reason=").map_or("", |(_, found)| found);
+            Some(((name.to_owned(), at.to_owned()), reason.to_owned()))
         })
         .collect();
     Some(Kept { key, result, firm })
@@ -326,7 +328,7 @@ fn read(path: &Path) -> Option<Kept> {
 fn write(dir: &Path, bead: &str, key: &str, findings: Option<&[Finding]>, previous: Option<&Kept>) {
     let mut body = format!("key={key}\nresult={}\n", result_word(findings));
     for found in findings.unwrap_or_default() {
-        let seen = previous.is_some_and(|kept| kept.firm.contains(&(found.name.clone(), found.at.clone())));
+        let seen = previous.is_some_and(|kept| kept.firm.contains_key(&(found.name.clone(), found.at.clone())));
         let new = found.certainty == Certainty::Firm && !seen;
         let (certainty, name, at, reason) = (found.certainty.as_str(), &found.name, &found.at, &found.reason);
         body.push_str(&format!("finding={certainty} name={name} at={at} new={new} reason={reason}\n"));
@@ -341,7 +343,7 @@ fn write(dir: &Path, bead: &str, key: &str, findings: Option<&[Finding]>, previo
 }
 
 /// 事前審査の dir（`<state_dir>/pipe/precheck`）。
-fn dir_of(state_dir: &Path) -> PathBuf {
+pub(super) fn dir_of(state_dir: &Path) -> PathBuf {
     state_dir.join(DIR).join(PRECHECK_DIR)
 }
 
@@ -378,7 +380,7 @@ pub(super) fn round(input: &Input<'_>, turn: &Turn, issues: &[Issue], base: Opti
     }
     let (rules, ctx) = (rules_word(input), Ctx { input, population: &population, base });
     let mut memo = BTreeMap::new();
-    for bead in waiting {
+    for &bead in &waiting {
         let Some(row) = population.rows.get(bead) else {
             continue;
         };
@@ -395,6 +397,8 @@ pub(super) fn round(input: &Input<'_>, turn: &Turn, issues: &[Issue], base: Opti
         let findings = judged(&ctx, row, &ancestors, &mut memo);
         write(&dir, bead, &key, findings.as_deref(), previous.as_ref());
     }
+    // 周の終わりに確定の finding を根で束ねる（行 y・設計 §27 形 1）。
+    super::bundle::round(input, &dir, &population, &waiting);
 }
 
 /// `dispatch ls` の事前審査の行（依存待ちの候補ごとに 1 行・結果の file を読むだけ・形 7）:
