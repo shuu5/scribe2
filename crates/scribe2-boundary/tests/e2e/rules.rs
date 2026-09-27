@@ -748,6 +748,30 @@ fn rules_seat_box_row_follows_the_move_grace() {
     assert!(errors.join("\n").contains("形と合わない"), "形は Int だけ: {errors:?}");
 }
 
+/// 終端の CI の照合の間隔の行（設計 contract-source.md §50 形 1・`s2-07l.694`）が埋め込み manifest に id / kind / 形 Int /
+/// 値 30 / enabled / 裁定 id / 裁定日で 1 本在り、行は `pipe.ci_wait_s` の直後・kind は `ALL` の `PipeCiWaitS` の直後で字面から
+/// 引け、形は Int だけ（base では行も kind も無い ＝ RED）。
+#[test]
+fn rules_ci_poll_row_follows_the_ci_wait() {
+    let manifest = Manifest::embedded().unwrap_or_else(|errors| panic!("埋め込み manifest が拒まれた: {errors:?}"));
+    let id = "pipe.ci_poll_s";
+    let row = manifest.get(id).unwrap_or_else(|| panic!("{id} の行が在る"));
+    assert_eq!((row.kind, row.kind.shape()), (RuleKind::PipeCiPollS, ValueShape::Int), "{id} の kind と形");
+    assert_eq!(row.value, RuleValue::Int(30), "{id} の値（30 秒）");
+    assert!(row.enabled, "{id} は既定で効く");
+    assert_eq!((row.ruling.as_str(), row.ruled_at.as_str()), ("user 2026-09-27T11:14Z", "2026-09-27"), "{id} の裁定 id と裁定日");
+    assert_eq!(int_row(&manifest, id), Ok(30), "{id} を整数の読み手で引ける");
+    assert_eq!(manifest.rows().iter().filter(|found| found.kind == RuleKind::PipeCiPollS).count(), 1, "kind の行は 1 本");
+    let at = ALL.iter().position(|kind| *kind == RuleKind::PipeCiWaitS).expect("PipeCiWaitS は ALL に在る");
+    assert_eq!(ALL.get(at + 1), Some(&RuleKind::PipeCiPollS), "kind は PipeCiWaitS の直後");
+    let rows: Vec<&str> = manifest.rows().iter().map(|found| found.id.as_str()).collect();
+    let wait = rows.iter().position(|found| *found == "pipe.ci_wait_s").expect("pipe.ci_wait_s の行が在る");
+    assert_eq!(rows.get(wait + 1).copied(), Some(id), "行も pipe.ci_wait_s の直後（母集団 {} 行）", rows.len());
+    assert_eq!(RuleKind::parse("PipeCiPollS"), Some(RuleKind::PipeCiPollS), "字面から引ける");
+    let errors = rejected(&one_row(RuleKind::PipeCiPollS, "\"30\"")).expect("文字列の値の fixture が受理された");
+    assert!(errors.join("\n").contains("形と合わない"), "形は Int だけ: {errors:?}");
+}
+
 /// 重なる語列の移動（設計 vessel-hook.md §11 の形 f 4・user 裁定 2026-09-19T15:28Z）: runner.denied_commands は cargo の
 /// 2 語列だけを持ち、host_guard.git は git の 7 語列を持ち、両方に同じ語列は無い（command guard と intake は ∪ で読むので
 /// 語列が禁じられることは変わらない）。

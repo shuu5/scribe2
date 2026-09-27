@@ -85,6 +85,9 @@ pub enum Completion {
         sha: String,
         /// 判定を読む 1 行（宣言 `ci-cmd` か既定・`{sha}` の穴を持つ）。
         cmd: String,
+        /// 照合を撃つ間隔（rules 行 `pipe.ci_poll_s`・設計 contract-source.md §50）。1 回の照合が forge の API の
+        /// 1 回なので、周期は [`POLL`] でなくこの値で眠る（[`Completion::period`]・0 は [`POLL`] に戻る）。
+        every: Duration,
     },
     /// **着地の列の窓が開くこと**（pipeline 外の merge の待ち口・`pipe land-window`・設計 pipeline.md §19）: 列の PASS の便が
     /// 0 本 ∧ 追随中の便が 0 本 ∧ local main が origin main の祖先（origin の無い周は数えない）。local main を読めない周・
@@ -121,6 +124,24 @@ impl Completion {
         }
     }
 
+    /// [`wait`] が周の間に眠る長さ（**周期は完了条件の性質**・設計 contract-source.md §50）。
+    ///
+    /// [`Self::CiResult`] だけが外の API を撃つので欄 `every` と [`POLL`] の大きい方（0 の行で hot loop にしない）。
+    /// 他の全 variant は pid の生存・meminfo・札の読みで、周期は [`POLL`] のまま。
+    fn period(&self) -> Duration {
+        match self {
+            Self::CiResult { every, .. } => (*every).max(POLL),
+            Self::RunnerExited(_)
+            | Self::SeatGone(_)
+            | Self::SlotFree { .. }
+            | Self::GroupGone(_)
+            | Self::LandTurn { .. }
+            | Self::AccountFree { .. }
+            | Self::LandWindow { .. }
+            | Self::HostCalm { .. } => POLL,
+        }
+    }
+
     /// 満たされたか（1 周分の観測・前回の観測を持たない周）。
     fn is_met(&self) -> bool {
         match self {
@@ -135,7 +156,7 @@ impl Completion {
                 )
             }
             Self::LandTurn { .. } => self.round(None).met,
-            Self::CiResult { repo, sha, cmd } => ci_now(repo, sha, cmd).is_some(),
+            Self::CiResult { repo, sha, cmd, .. } => ci_now(repo, sha, cmd).is_some(),
             Self::LandWindow { state_dir, repo } => crate::pipe::cli::window_now(state_dir, repo).is_open(),
             Self::HostCalm { runnable_per_core, blocked_per_core } => crate::pipe::health::calm_now(
                 crate::pipe::health::PerCore { runnable: *runnable_per_core, blocked: *blocked_per_core },
@@ -379,19 +400,23 @@ const POLL: Duration = Duration::from_millis(20);
 /// process の生存は `/proc/<pid>` の有無で見る（libc を足さないため・NFR3）。受付の枠は
 /// 周ごとに meminfo と札を読み直す（周期はこの [`POLL`] のまま・上限は呼び手の期限）。着地の列は
 /// 前回の観測（[`Glance`]・loop の局所状態）を次の周へ渡し、材料の印が変わらない周は replay を省く。
+///
+/// 周の間に眠る長さは [`Completion::period`] と上限までの残りの小さい方である（最初の評価は眠る前・上限を
+/// 越えて周期ぶん余計に眠らない・設計 contract-source.md §50）。
 pub fn wait(completion: Completion, deadline: Duration) -> Result<(), Timeout> {
     let started = Instant::now();
+    let period = completion.period();
     let mut last = None;
     loop {
         let now = completion.round(last);
         if now.met {
             return Ok(());
         }
-        if started.elapsed() >= deadline {
+        let Some(left) = deadline.checked_sub(started.elapsed()).filter(|left| !left.is_zero()) else {
             return Err(Timeout);
-        }
+        };
         last = Some(now);
-        std::thread::sleep(POLL);
+        std::thread::sleep(period.min(left));
     }
 }
 
@@ -704,6 +729,7 @@ mod tests {
                 repo: std::path::PathBuf::from("repo"),
                 sha: "0".repeat(40),
                 cmd: "true {sha}".to_owned(),
+                every: Duration::ZERO,
             },
             Completion::LandWindow { state_dir: std::path::PathBuf::from("state"), repo: std::path::PathBuf::from("repo") },
             Completion::HostCalm { runnable_per_core: 4, blocked_per_core: 1 },
@@ -729,6 +755,68 @@ mod tests {
         );
     }
 
+    /// 間隔の歯の CI の待ち（repo は実在しない dir・起動は stub が受ける）。
+    fn ci_watch(every: Duration) -> Completion {
+        Completion::CiResult {
+            repo: PathBuf::from("/nonexistent-fleet-wait-ci-interval"),
+            sha: "0".repeat(40),
+            cmd: "ci-interval-stub run list --commit {sha}".to_owned(),
+            every,
+        }
+    }
+
+    /// (§50 形 2) `CiResult` の周期は欄 `every`、`every` が 0（と `POLL` 未満）なら `POLL`、他の全 variant は `POLL`。
+    #[test]
+    fn fleet_wait_ci_interval_period_is_every_only_for_ci_result() {
+        let poll = super::POLL;
+        assert_eq!(ci_watch(Duration::from_secs(30)).period(), Duration::from_secs(30), "CiResult は every");
+        assert_eq!(ci_watch(Duration::ZERO).period(), poll, "every 0 は POLL に戻る");
+        assert_eq!(ci_watch(Duration::from_millis(1)).period(), poll, "POLL 未満は POLL（大きい方）");
+        let others = [
+            Completion::RunnerExited(7),
+            Completion::SeatGone(8),
+            Completion::SlotFree { slots_dir: PathBuf::from("slots"), want: 1, job_mb: 1, reserve_mb: 1, cap: 1, cores: 1 },
+            Completion::GroupGone(9),
+            Completion::LandTurn { state_dir: PathBuf::from("state"), run: "r".to_owned() },
+            Completion::AccountFree {
+                reset_at: "2026-09-13T06:00:00Z".to_owned(),
+                state_dir: PathBuf::from("state"),
+                repo: PathBuf::from("repo"),
+                run: "r".to_owned(),
+                expected: Stage::RateLimited,
+                labels: Vec::new(),
+                model: None,
+                grouped: BTreeSet::new(),
+            },
+            Completion::LandWindow { state_dir: PathBuf::from("state"), repo: PathBuf::from("repo") },
+            Completion::HostCalm { runnable_per_core: 4, blocked_per_core: 1 },
+        ];
+        assert!(others.iter().all(|found| found.period() == poll), "他の全 variant は POLL: {others:?}");
+    }
+
+    /// (§50 形 3) 最初の評価は眠る前: 最初から success の CI は間隔 30 秒でも待たずに満たされ、照会は 1 回。
+    #[test]
+    fn fleet_wait_ci_interval_first_round_is_before_the_sleep() {
+        use crate::pipe::fixture::{exited, Stub};
+        let stub = Stub::install(|_| exited(0, br#"[{"status":"completed","conclusion":"success"}]"#));
+        let started = std::time::Instant::now();
+        assert_eq!(wait(ci_watch(Duration::from_secs(30)), Duration::from_secs(60)), Ok(()), "success は満たされる");
+        assert!(started.elapsed() < Duration::from_secs(10), "眠らずに返る: {:?}", started.elapsed());
+        assert_eq!(stub.calls().len(), 1, "照会は 1 回");
+    }
+
+    /// (§50 形 4) 上限を越えて眠らない: 走り続ける CI・間隔 30 秒・上限 200 ms は 10 秒未満で Timeout、照会は
+    /// 最初と上限の 2 回（20 ms の周期なら 10 回を越える＝RED）。
+    #[test]
+    fn fleet_wait_ci_interval_sleep_is_capped_by_the_deadline() {
+        use crate::pipe::fixture::{exited, Stub};
+        let stub = Stub::install(|_| exited(0, br#"[{"status":"in_progress","conclusion":null}]"#));
+        let started = std::time::Instant::now();
+        assert_eq!(wait(ci_watch(Duration::from_secs(30)), Duration::from_millis(200)), Err(Timeout), "走り続ける");
+        assert!(started.elapsed() < Duration::from_secs(10), "上限の後に周期ぶん眠らない: {:?}", started.elapsed());
+        assert_eq!(stub.calls().len(), 2, "照会は最初と上限の 2 回");
+    }
+
     /// 遮断器の待ち（`HostCalm`・設計 gate-cost.md §32 約束 3）は **pid を見張らない側**で `pid()` が 0 を返し、閾値の
     /// 倍率 2 つを運ぶ。既存の見張らない 4 つ（`SlotFree` / `LandTurn` / `AccountFree` / `CiResult`）と同じ側に並ぶ。
     #[test]
@@ -749,7 +837,12 @@ mod tests {
                 cores: 1,
             },
             Completion::LandTurn { state_dir: std::path::PathBuf::from("state"), run: "r".to_owned() },
-            Completion::CiResult { repo: std::path::PathBuf::from("repo"), sha: "0".repeat(40), cmd: "true".to_owned() },
+            Completion::CiResult {
+                repo: std::path::PathBuf::from("repo"),
+                sha: "0".repeat(40),
+                cmd: "true".to_owned(),
+                every: Duration::ZERO,
+            },
             Completion::HostCalm { runnable_per_core: 0, blocked_per_core: 0 },
         ];
         assert!(unwatched.iter().all(|found| found.pid() == 0), "見張らない側に並ぶ: {unwatched:?}");

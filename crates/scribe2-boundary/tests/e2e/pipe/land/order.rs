@@ -555,3 +555,73 @@ fn pipe_terminal_land_ci_only_scheduled_runs_is_unmeasurable() {
     assert!(!tools.bd_log.exists(), "測れない周は台帳を閉じない");
     clean(&[&repo, &state]);
 }
+
+/// 終端の CI の照合の歯の fixture（偽 CI が `json` を返す便を Gated(PASS) まで進め、CI の 2 行を差し替えた manifest で
+/// land を撃つ）。land の出力・撃ってから返るまでの時間・道具一式を返す。
+fn land_with_ci_poll(json: &str, ci_wait_s: u64, ci_poll_s: u64) -> (Output, std::time::Duration, FakeTerminal, [PathBuf; 2]) {
+    let (repo, state) = repo_with_state();
+    let tools = fake_terminal_json(&repo, &state, json);
+    let design = write_contract(&repo, &[], &[]);
+    let id = gated_pass(&repo, &state, &design, &state.join("lens-ran"));
+    let bd = state.join("fake-bd.sh").display().to_string();
+    let rules = write_rules_ci(&state, ci_wait_s, Some(ci_poll_s));
+    let started = std::time::Instant::now();
+    let out = land_extra(&repo, &state, &id, &["--bd", &bd, "--rules", &rules]);
+    (out, started.elapsed(), tools, [repo, state])
+}
+
+/// 走り続ける CI の JSON（照合は満たされない＝上限まで待つ）。
+const CI_RUNNING: &str = "[{\"status\":\"in_progress\",\"conclusion\":null}]";
+
+/// (§50 形 2) 照合は rules 行 `pipe.ci_poll_s` の間隔で撃つ: 上限 2 秒・間隔 1 秒の周は `terminal=ci:unmeasurable` で、
+/// 偽 CI の呼び出しは 2 回以上 4 回以下（待ちの中の最初・1 秒・上限と、終端の読み直しの 1 回・20 ms の周期なら数十回）。
+#[test]
+fn pipe_terminal_ci_poll_interval_bounds_the_ci_calls() {
+    let (out, _, tools, dirs) = land_with_ci_poll(CI_RUNNING, 2, 1);
+    assert!(stdout_of(&out).contains("terminal=ci:unmeasurable"), "走り続ける CI は測れない: {}", stdout_of(&out));
+    let calls = tools.ci_call_count();
+    assert!((2..=4).contains(&calls), "照合は間隔 1 秒で撃つ（20 ms で撃たない）: {calls} 回");
+    assert!(!tools.bd_log.exists(), "測れない周は台帳を閉じない");
+    clean(&[&dirs[0], &dirs[1]]);
+}
+
+/// (§50 形 3) 最初の評価は眠る前: 最初から success の CI は間隔 30 秒（上限 60 秒）でも待たずに `terminal=closed`
+/// まで 10 秒未満で進み、照合は 1 回。
+#[test]
+fn pipe_terminal_ci_poll_first_check_is_before_the_sleep() {
+    let json = "[{\"status\":\"completed\",\"conclusion\":\"success\"}]";
+    let (out, took, tools, dirs) = land_with_ci_poll(json, 60, 30);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "close まで通った land は rc 0: {}", stderr_of(&out));
+    assert!(stdout_of(&out).contains("terminal=closed"), "終端の token: {}", stdout_of(&out));
+    assert!(took < std::time::Duration::from_secs(10), "間隔ぶん眠ってから照合しない: {took:?}");
+    assert_eq!(tools.ci_call_count(), 2, "待ちの最初の 1 回と終端の読み直しの 1 回");
+    clean(&[&dirs[0], &dirs[1]]);
+}
+
+/// (§50 形 4) 上限を越えて眠らない: 走り続ける CI・上限 1 秒・間隔 30 秒の周は `terminal=ci:unmeasurable` まで 10 秒未満。
+#[test]
+fn pipe_terminal_ci_poll_sleep_never_overruns_the_limit() {
+    let (out, took, tools, dirs) = land_with_ci_poll(CI_RUNNING, 1, 30);
+    assert!(stdout_of(&out).contains("terminal=ci:unmeasurable"), "上限で測れない側: {}", stdout_of(&out));
+    assert!(took < std::time::Duration::from_secs(10), "上限の後に間隔ぶん眠らない: {took:?}");
+    assert!(!tools.bd_log.exists(), "測れない周は台帳を閉じない");
+    clean(&[&dirs[0], &dirs[1]]);
+}
+
+/// (§50 形 1) `pipe.ci_poll_s` の行が無い manifest は `pipe.ci_wait_s` と同じ極性で断る（rc 2・行を名指す・event 0 増・
+/// main 不変）。
+#[test]
+fn pipe_terminal_ci_poll_missing_row_moves_nothing() {
+    let (repo, state) = repo_with_state();
+    let design = write_contract(&repo, &[], &[]);
+    let id = gated_pass(&repo, &state, &design, &state.join("lens-ran"));
+    let rules = write_rules_ci(&state, CI_WAIT_S, None);
+    let main = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let before = event_count(&state);
+    let out = land_extra(&repo, &state, &id, &["--rules", &rules]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "行の欠落は rc 2: {}", stdout_of(&out));
+    assert!(stderr_of(&out).contains("pipe.ci_poll_s が無い"), "行を名指す: {}", stderr_of(&out));
+    assert_eq!(event_count(&state), before, "event を 1 件も書かない");
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), main, "main は動かない");
+    clean(&[&repo, &state]);
+}

@@ -475,6 +475,17 @@ enabled = true
 ruling = "user 2026-09-16T03:31Z"
 ruled_at = "2026-09-16"
 
+# 終端の CI の照合を撃つ間隔（秒・設計 contract-source.md §50）。1 回の照合が forge の API の 1 回なので、
+# 上の上限の内側をこの間隔で撃つ（最初の評価は待たない・上限を越えて眠らない）。0 は唯一の待ちの既定の周期に戻る。
+
+[[rule]]
+id = "pipe.ci_poll_s"
+kind = "PipeCiPollS"
+value = 30
+enabled = true
+ruling = "user 2026-09-27T11:14Z"
+ruled_at = "2026-09-27"
+
 # 席の指示文の台帳の現在値（設計 seat-roles.md §5・ADR-0045 §2 (3)）。台帳の子 process を待つ上限。
 
 [[rule]]

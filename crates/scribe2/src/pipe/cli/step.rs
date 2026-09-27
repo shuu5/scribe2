@@ -34,14 +34,18 @@ const ROW_TRAIN_MAX: &str = "land.train_max";
 /// 終端が CI の判定を待つ上限を宣言する rules 行の id（**値は code に焼かない**・憲法 C5）。
 const ROW_CI_WAIT: &str = "pipe.ci_wait_s";
 
+/// 終端が CI の判定を照合する間隔を宣言する rules 行の id（設計 contract-source.md §50・上の行と同じ極性で読む）。
+const ROW_CI_POLL: &str = "pipe.ci_poll_s";
+
 /// 終端だけを撃ち直す flag（値なし・設計 contract-source.md §5 手順 3）。
 const TERMINAL_ONLY: &str = "--terminal-only";
 
-/// 終端の材料（CI の上限と台帳 client）を引数と規則から解く（**land と `--terminal-only` が共有**）。
-fn terminal_input<'a>(args: &'a [String], manifest: &Manifest) -> Result<(u64, &'a str), Outcome> {
+/// 終端の材料（CI の上限・照合の間隔・台帳 client）を引数と規則から解く（**land と `--terminal-only` が共有**）。
+fn terminal_input<'a>(args: &'a [String], manifest: &Manifest) -> Result<(u64, u64, &'a str), Outcome> {
     let ci_wait_s = int_row(manifest, ROW_CI_WAIT).map_err(broken)?;
+    let ci_poll_s = int_row(manifest, ROW_CI_POLL).map_err(broken)?;
     let bd = flag(args, "--bd").map_err(refused)?.unwrap_or(crate::ledger::DEFAULT_BD);
-    Ok((ci_wait_s, bd))
+    Ok((ci_wait_s, ci_poll_s, bd))
 }
 
 /// `pipe land --run <id> --terminal-only`: **着地をやり直さず終端だけ**を撃つ（冪等）。
@@ -56,7 +60,7 @@ fn terminal_only(args: &[String], id: &str, manifest: &Manifest, policy: LockPol
     let Some(sha) = super::land::landed_sha(&resolved.state_dir, id) else {
         return refused(format!("run {id} の着地した sha を記録から読めない"));
     };
-    let (ci_wait_s, bd) = match terminal_input(args, manifest) {
+    let (ci_wait_s, ci_poll_s, bd) = match terminal_input(args, manifest) {
         Ok(found) => found,
         Err(outcome) => return outcome,
     };
@@ -77,6 +81,7 @@ fn terminal_only(args: &[String], id: &str, manifest: &Manifest, policy: LockPol
         retries: 0,
         land_wait_s: 0,
         ci_wait_s,
+        ci_poll_s,
         bd,
         approved: resolved.approved,
         policy,
@@ -355,7 +360,7 @@ pub(super) fn land_run(args: &[String], id: &str, manifest: &Manifest, policy: L
         Err(reason) => return broken(reason),
     };
     // 終端の材料（CI の上限と台帳 client）は `--terminal-only` と**同じ 1 本**で解く。
-    let (ci_wait_s, bd) = match terminal_input(args, manifest) {
+    let (ci_wait_s, ci_poll_s, bd) = match terminal_input(args, manifest) {
         Ok(found) => found,
         Err(outcome) => return outcome,
     };
@@ -371,7 +376,7 @@ pub(super) fn land_run(args: &[String], id: &str, manifest: &Manifest, policy: L
         runner,
         retries,
         land_wait_s,
-        ci_wait_s,
+        ci_wait_s, ci_poll_s,
         bd,
         approved: resolved.approved,
         policy,

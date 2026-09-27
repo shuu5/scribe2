@@ -720,6 +720,27 @@ fn write_rules_land_wait(dir: &Path, name: &str, land_wait_s: Option<u64>) -> St
     path.display().to_string()
 }
 
+/// [`ceiling_rules`] と同じ値の tmp manifest で、終端の CI の 2 行（`pipe.ci_wait_s` / `pipe.ci_poll_s`）だけを
+/// 差し替えた別の file（`ci_poll_s` が `None` = 間隔の行を落とす・設計 contract-source.md §50）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn write_rules_ci(state: &Path, ci_wait_s: u64, ci_poll_s: Option<u64>) -> String {
+    let path = write_rules(state, "rules-ci.toml", 1, 1_000_000);
+    let text = fs::read_to_string(&path).expect("tmp manifest を読める");
+    let block = |id: &str, kind: &str, value: u64| {
+        format!("[[rule]]\nid = \"{id}\"\nkind = \"{kind}\"\nvalue = {value}\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n")
+    };
+    let (wait, poll) = (block("pipe.ci_wait_s", "PipeCiWaitS", CI_WAIT_S), block("pipe.ci_poll_s", "PipeCiPollS", CI_POLL_S));
+    assert!(text.contains(&wait) && text.contains(&poll), "既定の 2 行が在る（差し替えが空振りしない）: {text}");
+    let replaced = text
+        .replace(&wait, &block("pipe.ci_wait_s", "PipeCiWaitS", ci_wait_s))
+        .replace(&poll, &ci_poll_s.map(|value| block("pipe.ci_poll_s", "PipeCiPollS", value)).unwrap_or_default());
+    fs::write(&path, replaced).expect("tmp manifest を書ける");
+    path.display().to_string()
+}
+
 /// land の stdout の `order=` の値（無ければ空）。
 fn order_token(out: &Output) -> String {
     stdout_of(out)
@@ -2321,6 +2342,15 @@ struct FakeTerminal {
     bd_log: PathBuf,
     /// 偽 CI が argv を書き出す file（`{sha}` の穴に何が入ったかをここで測る）。
     ci_log: PathBuf,
+    /// 偽 CI が呼ばれるたびに 1 行を足す file（照合の回数をここで数える・設計 contract-source.md §50）。
+    ci_calls: PathBuf,
+}
+
+impl FakeTerminal {
+    /// 偽 CI が呼ばれた回数（撃たれなければ 0）。
+    fn ci_call_count(&self) -> usize {
+        fs::read_to_string(&self.ci_calls).map(|text| text.lines().count()).unwrap_or(0)
+    }
 }
 
 /// 実行権つきの `/bin/sh` script を書き、その path を返す。
@@ -2351,11 +2381,16 @@ fn fake_terminal_json(repo: &Path, state: &Path, json: &str) -> FakeTerminal {
     let remote = state.join("remote.git");
     git(state, &["init", "--bare", "-q", &remote.display().to_string()]);
     git(repo, &["remote", "add", "fake", &remote.display().to_string()]);
-    // 偽 CI: **渡された argv を log へ写してから** JSON 1 行を返す（`{sha}` の穴に何が入ったかを測る）。
-    let ci_log = state.join("ci-argv.txt");
+    // 偽 CI: **渡された argv を log へ写し、呼ばれた回数の file に 1 行を足してから** JSON 1 行を返す
+    // （`{sha}` の穴に何が入ったか・照合を何回撃ったかを測る）。
+    let (ci_log, ci_calls) = (state.join("ci-argv.txt"), state.join("ci-calls.txt"));
     let ci = exec_script(
         &state.join("fake-ci.sh"),
-        &format!("printf '%s\\n' \"$@\" > '{}'\ncat <<'JSON'\n{json}\nJSON\n", ci_log.display()),
+        &format!(
+            "printf '%s\\n' \"$@\" > '{}'\necho call >> '{}'\ncat <<'JSON'\n{json}\nJSON\n",
+            ci_log.display(),
+            ci_calls.display()
+        ),
     );
     // 偽 bd: argv をそのまま log へ書いて rc 0（書きは close の 1 種だけ）。
     let bd_log = state.join("bd-argv.txt");
@@ -2365,7 +2400,7 @@ fn fake_terminal_json(repo: &Path, state: &Path, json: &str) -> FakeTerminal {
     fs::write(repo.join(".vessel.toml"), added).expect("宣言を書ける");
     git(repo, &["add", "-f", ".vessel.toml"]);
     git(repo, &["commit", "-q", "-m", "terminal-decl"]);
-    FakeTerminal { remote, bd_log, ci_log }
+    FakeTerminal { remote, bd_log, ci_log, ci_calls }
 }
 
 /// 便の `RunDone stage=Landed` の detail を**宣言順に**並べる（終端は段ごとに 1 件記す）。

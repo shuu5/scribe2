@@ -682,6 +682,11 @@ pub(super) const SLOT_WAIT_S: u64 = 1;
 /// （既存の toy repo は `remote` を宣言しない＝`terminal=undeclared` で待たない）。
 pub(super) const CI_WAIT_S: u64 = 1;
 
+/// tmp manifest の終端が CI を照合する間隔（秒・rules 行 `pipe.ci_poll_s` の fixture 値・設計 contract-source.md §50）。
+///
+/// **0 は唯一の待ちの既定の周期**に戻る＝既存の終端の歯の挙動を変えない（間隔を振る歯だけが差し替える）。
+pub(super) const CI_POLL_S: u64 = 0;
+
 /// tmp manifest の land の順番を待つ上限（秒・rules 行 `pipe.land_wait_s` の fixture 値）。待ちが
 /// 解ける歯だけが [`write_rules_land_wait`] で長い値に振る。
 pub(super) const LAND_WAIT_S: u64 = 1;
@@ -796,7 +801,7 @@ pub(super) fn write_rules_capped(dir: &Path, name: &str, fixture: RulesFixture) 
     // ＝行の無い manifest では受付が rc 2 で断る（`pipe_intake_repeat_` の歯だけが行を落として測る）。同時本数の最大値
     // （`pipe.max_live`・gate-cost.md §24）も埋め込みの値（`pipe_intake_max_live_` の歯だけが値を差し替える）。
     let body = format!(
-        "schema = 1\n\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{ceiling}",
+        "schema = 1\n\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{ceiling}",
         row("gate.lens_count", "GateLensCount", lens_count),
         row("gate.token_cap", "GateTokenCap", cap),
         row("fleet.lock_retry_ms", "LockRetryMs", 5000),
@@ -810,6 +815,7 @@ pub(super) fn write_rules_capped(dir: &Path, name: &str, fixture: RulesFixture) 
         row("host.blocked_per_core", "HostBlockedPerCore", slots.blocked_per_core),
         row("pipe.land_wait_s", "PipeLandWaitS", LAND_WAIT_S),
         row("pipe.ci_wait_s", "PipeCiWaitS", CI_WAIT_S),
+        row("pipe.ci_poll_s", "PipeCiPollS", CI_POLL_S),
         row("R-C4-1", "CoreLines", caps.core_lines),
         row("R-C4-2", "ModuleLines", caps.file_lines),
         row("pipe.size_s_lines", "PipeSizeSLines", embedded_int("pipe.size_s_lines")),

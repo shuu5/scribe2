@@ -236,11 +236,12 @@ pub(in crate::pipe) fn terminal(entry: &Land<'_>, sha: &str) -> Terminal {
         return Terminal::PushFailed("git".to_owned());
     }
     note(entry, &format!("push:{remote}"));
-    // (2) CI の照合。上限まで待ち、**success 以外は close しない**（FailClosed）。
+    // (2) CI の照合。上限まで rules 行の間隔で撃ち（設計 §50）、**success 以外は close しない**（FailClosed）。
     let watch = Completion::CiResult {
         repo: entry.repo.to_path_buf(),
         sha: sha.to_owned(),
         cmd: facts.ci_cmd.clone(),
+        every: std::time::Duration::from_secs(entry.ci_poll_s),
     };
     let _ = crate::fleet::wait(watch, std::time::Duration::from_secs(entry.ci_wait_s));
     match ci_now(entry.repo, sha, &facts.ci_cmd) {
@@ -561,6 +562,7 @@ mod tests {
             retries: 0,
             land_wait_s: 0,
             ci_wait_s: 0,
+            ci_poll_s: 0,
             bd: crate::ledger::DEFAULT_BD,
             approved: false,
             policy,

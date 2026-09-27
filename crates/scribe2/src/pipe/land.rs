@@ -212,6 +212,8 @@ pub struct Land<'a> {
     pub land_wait_s: u64,
     /// 終端が CI の判定を待つ上限（秒・rules 行 `pipe.ci_wait_s`）。超えた周は **close しない**。
     pub ci_wait_s: u64,
+    /// 終端が CI の判定を照合する間隔（秒・rules 行 `pipe.ci_poll_s`・設計 contract-source.md §50）。0 は唯一の待ちの既定の周期。
+    pub ci_poll_s: u64,
     /// 終端が bead を閉じる台帳 client（`--bd` か [`crate::ledger::DEFAULT_BD`]）。
     pub bd: &'a str,
     /// 承認 event が在るか（起こし直しも A1 の関門を通る・replay の導出値）。
