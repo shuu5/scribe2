@@ -1123,3 +1123,148 @@ fn hook_live_row_git_mv_out_of_design_is_denied() {
     assert_live_row_deny(&state, &live_hook(&repo, &bash_payload(&repo, "git commit -m x")), "removed");
     clean(&[&repo, &state]);
 }
+
+// ─────────────── anchor の門（`s2-07l.700`・設計 vessel-hook.md §14 行 h・接頭辞 `hook_anchor_guard_`） ───────────────
+//
+// HEAD が main の tmp repo を器へ紐づけ、揃えなかった anchor（main を別の木の commit へ進め、index と作業の木を着地の前の
+// 中身のまま残す）に行 az の書き手で印を置く。`--project` は anchor。
+
+/// HEAD が `refs/heads/main` の tmp repo と、紐づけた置き場。
+fn anchor_place() -> (TmpDir, TmpDir) {
+    let repo = git_repo();
+    git(&repo, &["branch", "-M", "main"]);
+    let state = linked(&repo);
+    (repo, state)
+}
+
+/// 揃えなかった形の anchor: main を別の木の commit へ進め、index と作業の木を着地の前の中身へ戻し、印を置く。
+/// 返すのは着地の前と後の main。
+#[expect(clippy::expect_used, reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く")]
+fn stale_anchor(repo: &Path) -> (String, String) {
+    let old = git(repo, &["rev-parse", "refs/heads/main"]);
+    fs::write(repo.join("src").join("lib.rs"), "// landed\n").expect("着地の中身を書ける");
+    git(repo, &["commit", "-q", "-am", "landed"]);
+    let new = git(repo, &["rev-parse", "refs/heads/main"]);
+    git(repo, &["read-tree", "-m", "-u", &new, &old]);
+    let marked = vessel::pipe::land::write_mark(repo, &old, &new);
+    assert_eq!(marked, Ok(vessel::pipe::land::Marked::Written), "印を行 az の書き手で置ける");
+    (old, new)
+}
+
+/// 記録のうち anchor の門の行。
+fn anchor_records(state: &Path) -> Vec<String> {
+    inject_lines(state).into_iter().filter(|line| what_of(line).starts_with("anchor-deny")).collect()
+}
+
+/// 断りの外形（rc 2・stdout 0 byte・stderr 1 行）と記録「anchor-deny <動詞>」が 1 行増えることを確かめ、stderr を返す。
+fn assert_anchor_deny(state: &Path, repo: &Path, command: &str, verb: &str) -> String {
+    let before = anchor_records(state).len();
+    let out = live_hook(repo, &bash_payload(repo, command));
+    let text = stderr_text(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "{command}: deny は rc 2: {text}");
+    assert!(out.stdout.is_empty(), "{command}: stdout 0 byte");
+    assert_eq!(stderr_lines(&out), 1, "{command}: stderr 1 行: {text}");
+    assert!(text.starts_with(&format!("{NAME}: deny anchor-guard ")), "{command}: 器が名乗る: {text}");
+    let records = anchor_records(state);
+    assert_eq!(records.len(), before + 1, "{command}: 記録 1 行");
+    assert_eq!(records.last().map(|line| what_of(line)), Some(format!("anchor-deny {verb}")), "{command}");
+    text
+}
+
+/// 揃える 1 行の literal。
+fn sync_literal(repo: &Path) -> String {
+    format!("{NAME} pipe anchor-sync --repo {}", repo.display())
+}
+
+/// (a) 揃えなかった anchor で `git commit -m x` は断られ、stderr の 1 行が揃える literal を持ち、記録が 1 行残る。`git -C`・
+/// `cd && git pull`・`FOO=1 git merge` も同じく断られ、`gh pr merge` は窓の anchor=stale から揃える literal を次の一手に持つ。
+#[test]
+fn hook_anchor_guard_stale_anchor_denies_the_index_verbs_with_the_sync_literal() {
+    let (repo, state) = anchor_place();
+    let (old, _) = stale_anchor(&repo);
+    let text = assert_anchor_deny(&state, &repo, "git commit -m x", "commit");
+    assert!(text.contains("reason=anchor-stale") && text.contains(&format!("from={old}")), "{text}");
+    assert!(text.trim_end().ends_with(&sync_literal(&repo)), "揃える 1 行で終わる: {text}");
+    let at = repo.display();
+    for (command, verb) in [
+        (format!("git -C {at} commit -m x"), "commit"),
+        (format!("cd {at} && git pull"), "pull"),
+        ("FOO=1 git merge x".to_owned(), "merge"),
+    ] {
+        let text = assert_anchor_deny(&state, &repo, &command, verb);
+        assert!(text.contains(&sync_literal(&repo)), "{command}: {text}");
+    }
+    let text = assert_anchor_deny(&state, &repo, "gh pr merge 1", "gh-pr-merge");
+    assert!(text.contains("land-window=busy") && text.contains(" anchor=stale"), "窓の busy の行を写す: {text}");
+    assert!(text.trim_end().ends_with(&sync_literal(&repo)), "窓が anchor=stale なら揃える 1 行: {text}");
+    clean(&[&repo, &state]);
+}
+
+/// (b) 同じ anchor で `git status`・`git add x`・`git log` と Bash 以外の tool は通り、linked worktree の中の `git commit` も通り、
+/// 着地の path を手で揃えた後の `git commit` は印が在るまま通る（空虚さの柵）。
+#[test]
+fn hook_anchor_guard_passes_reads_worktrees_and_a_hand_synced_anchor() {
+    let (repo, state) = anchor_place();
+    let (old, new) = stale_anchor(&repo);
+    for command in ["git status", "git add x", "git log"] {
+        assert_silent(&live_hook(&repo, &bash_payload(&repo, command)), command);
+    }
+    let read = tool_payload(&repo, "Read", &repo.join("src").join("lib.rs").display().to_string());
+    assert_silent(&live_hook(&repo, &read), "Bash 以外の tool");
+    let place = tmp();
+    let worktree = place.join("wt");
+    git(&repo, &["worktree", "add", "-q", &worktree.display().to_string()]);
+    assert_silent(&live_hook(&repo, &bash_payload(&worktree, "git commit -m x")), "linked worktree の中");
+    git(&repo, &["read-tree", "-m", "-u", &old, &new]);
+    assert!(vessel::pipe::land::mark_path(Path::new(&git(&repo, &["rev-parse", "--absolute-git-dir"]))).exists(), "印は残る");
+    assert_silent(&live_hook(&repo, &bash_payload(&repo, "git commit -m x")), "手で揃えた anchor");
+    assert!(anchor_records(&state).is_empty(), "記録 0");
+    git(&repo, &["worktree", "remove", "--force", &worktree.display().to_string()]);
+    clean(&[&repo, &state, &place]);
+}
+
+/// (c) 印の中身を壊した anchor では `git commit` を断り、理由が「読めない」を名指す。
+#[test]
+fn hook_anchor_guard_unreadable_mark_is_denied() {
+    let (repo, state) = anchor_place();
+    stale_anchor(&repo);
+    let mark = vessel::pipe::land::mark_path(Path::new(&git(&repo, &["rev-parse", "--absolute-git-dir"])));
+    fs::write(&mark, "garbage\n").expect("壊した印を置ける");
+    let text = assert_anchor_deny(&state, &repo, "git commit -m x", "commit");
+    assert!(text.contains("reason=anchor-unreadable:mark") && text.contains("読めない"), "{text}");
+    assert!(text.contains(&sync_literal(&repo)), "{text}");
+    clean(&[&repo, &state]);
+}
+
+/// (d) origin の main を local の main の 1 つ前に置いた（未 push の）anchor で、HEAD が main の `git commit` と `gh pr merge 1`
+/// は窓の busy の行と land-window の literal で断られる。HEAD を別 branch に替えた `git commit` は通り、origin を local に
+/// 揃えた後の `gh pr merge 1` は通る。
+#[test]
+fn hook_anchor_guard_closed_window_denies_main_commit_and_pr_merge() {
+    let (repo, state) = anchor_place();
+    fs::write(repo.join("src").join("lib.rs"), "// second\n").expect("2 つ目の中身を書ける");
+    git(&repo, &["commit", "-q", "-am", "second"]);
+    git(&repo, &["update-ref", "refs/remotes/origin/main", "refs/heads/main~1"]);
+    let main = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let window = format!("{NAME} pipe land-window --repo {}", repo.display());
+    for (command, verb) in [("git commit -m x", "commit"), ("gh pr merge 1", "gh-pr-merge")] {
+        let text = assert_anchor_deny(&state, &repo, command, verb);
+        assert!(text.contains(&format!("land-window=busy queue=- following=- unpushed={main}")), "{command}: {text}");
+        assert!(text.trim_end().ends_with(&window), "{command}: 窓を見る 1 行: {text}");
+    }
+    git(&repo, &["checkout", "-q", "-b", "side"]);
+    assert_silent(&live_hook(&repo, &bash_payload(&repo, "git commit -m x")), "HEAD が別 branch");
+    git(&repo, &["update-ref", "refs/remotes/origin/main", "refs/heads/main"]);
+    assert_silent(&live_hook(&repo, &bash_payload(&repo, "gh pr merge 1")), "窓が開いた");
+    clean(&[&repo, &state]);
+}
+
+/// (e) marker の無い repo では、揃えなかった anchor の `git commit` でも 1 byte も出さない（FR24）。
+#[test]
+fn hook_anchor_guard_is_silent_in_a_repo_without_marker() {
+    let repo = git_repo();
+    git(&repo, &["branch", "-M", "main"]);
+    stale_anchor(&repo);
+    assert_silent(&live_hook(&repo, &bash_payload(&repo, "git commit -m x")), "marker の無い repo");
+    clean(&[&repo]);
+}

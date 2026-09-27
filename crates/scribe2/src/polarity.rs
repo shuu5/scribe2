@@ -63,7 +63,7 @@ pub struct Polarity {
     pub on_failure: OnFailure,
 }
 
-/// 行為を止めうる判定を返す境界の全数。**宣言順は行為の流れ**（hook〔起票の門まで〕→ host の見張り → 席の登録 → 権能の執行 → 走っている便の行 → 契約表 → intake → 審査 → spawn〔予算・承認〕→
+/// 行為を止めうる判定を返す境界の全数。**宣言順は行為の流れ**（hook〔起票の門・anchor の門まで〕→ host の見張り → 席の登録 → 権能の執行 → 走っている便の行 → 契約表 → intake → 審査 → spawn〔予算・承認〕→
 /// runner → gate〔器の健康の遮断器・機械検証・純移動・lens〕→ land〔main 実測・anchor 同期・worktree の clean・追随の起こし直し〕→ store → 注入 → cycle → 退避 → 消費）で、順序に意味は無いが C2 の形（[`ALL`] と判別子順 pin）に合わせる。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Guard {
@@ -77,6 +77,9 @@ pub enum Guard {
     /// 起票の門＝memo の create に 4 節の本文を、契約の create に label `intake:memo` の不在を要求する
     /// （[`crate::hook::ledger_guard`]・設計 ledger-form.md §3 の 9）。
     Ledger,
+    /// anchor の門＝揃えなかった anchor で index を載せる git の 7 語と、着地列の窓が閉じている間の main の anchor の commit と
+    /// `gh pr merge` を実行の時点で止める（[`crate::hook::anchor_guard`]・設計 vessel-hook.md §14）。
+    AnchorGuard,
     /// host の破壊防止の見張り＝口座の設定から呼ばれる subcommand `host-guard` が閉じた 5 種類の破壊を行為の時点で止める
     /// （[`crate::hook::host_guard`]・設計 vessel-hook.md §11・ADR-0056）。
     HostGuard,
@@ -138,6 +141,7 @@ pub const ALL: &[Guard] = &[
     Guard::Permission,
     Guard::Command,
     Guard::Ledger,
+    Guard::AnchorGuard,
     Guard::HostGuard,
     Guard::Register,
     Guard::Role,
@@ -195,6 +199,7 @@ impl Guard {
             Self::Permission => crate::hook::permission::POLARITY,
             Self::Command => crate::hook::command::POLARITY,
             Self::Ledger => crate::hook::ledger_guard::POLARITY,
+            Self::AnchorGuard => crate::hook::anchor_guard::POLARITY,
             Self::HostGuard => crate::hook::host_guard::POLARITY,
             Self::Register => crate::seat::role::POLARITY,
             Self::Role => crate::hook::role_guard::POLARITY,
@@ -229,6 +234,7 @@ impl Guard {
             Self::Permission => "hook::permission::PermissionDecision",
             Self::Command => "hook::command::CommandDecision",
             Self::Ledger => "hook::ledger_guard::LedgerDecision",
+            Self::AnchorGuard => "hook::anchor_guard::AnchorDecision",
             Self::HostGuard => "hook::host_guard::HostGuardDecision",
             Self::Register => "seat::role::RegisterRefusal",
             Self::Role => "hook::role_guard::RoleDecision",
@@ -263,6 +269,7 @@ impl Guard {
             Self::Permission => "permission-deny",
             Self::Command => "command-guard",
             Self::Ledger => "ledger-guard",
+            Self::AnchorGuard => "anchor-guard",
             Self::HostGuard => "host-guard",
             Self::Register => "register-refusal",
             Self::Role => "role-guard",
