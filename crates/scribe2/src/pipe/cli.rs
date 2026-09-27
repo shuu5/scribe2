@@ -35,6 +35,8 @@ pub(super) use run::turn_of;
 // 設計 pipeline.md §19）。列の module は `pipe` の外へ見えないので、窓の口だけをここから見せる。
 pub(crate) use super::queue::window_now;
 pub(super) use state::{live, resolve, stage_of};
+// 走っている便の行の門（`hook::live_row`・設計 vessel-hook.md §15 形 2）が live な便の列を読む口（生死の判定は `live` 1 本）。
+pub(crate) use state::{live_runs, LiveRun, Tag};
 use args::{allowed_of, list_row, manifest_of, need, repo_flag, repo_of, REPO_FLAG};
 use resume::{resume, review_then_launch};
 use show::show;

@@ -9,6 +9,7 @@ guard=ledger-guard timing=in-loop on-failure=fail-closed boundary=hook::ledger_g
 guard=host-guard timing=in-loop on-failure=fail-closed boundary=hook::host_guard::HostGuardDecision
 guard=register-refusal timing=in-loop on-failure=fail-closed boundary=seat::role::RegisterRefusal
 guard=role-guard timing=in-loop on-failure=fail-closed boundary=hook::role_guard::RoleDecision
+guard=live-row-guard timing=in-loop on-failure=fail-closed boundary=hook::live_row::LiveRowDecision
 guard=contract-table timing=post-hoc on-failure=fail-closed boundary=pipe::table::TableError
 guard=intake-unfit timing=in-loop on-failure=fail-closed boundary=pipe::declaration::Unfit
 guard=intake-refuse timing=in-loop on-failure=fail-closed boundary=pipe::refuse::Refuse
@@ -29,4 +30,4 @@ guard=store-lock timing=in-loop on-failure=fail-closed boundary=fleet::store::St
 guard=inject-refusal timing=in-loop on-failure=fail-closed boundary=seat::inject::Delivery
 guard=spawn-line timing=in-loop on-failure=fail-closed boundary=pipe::spawn::LineRefusal
 guard=land-terminal timing=post-hoc on-failure=fail-closed boundary=pipe::land::Terminal
-polarity: guards=27 in-loop=21 post-hoc=6 fail-open=4
+polarity: guards=28 in-loop=22 post-hoc=6 fail-open=4

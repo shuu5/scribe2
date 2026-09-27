@@ -16,13 +16,14 @@ pub mod group;
 pub mod guard;
 pub mod host_guard;
 pub mod ledger_guard;
+pub mod live_row;
 pub mod permission;
 pub mod precompact;
 pub mod role_guard;
 pub mod stamp;
 pub mod vessel;
 
-use crate::cli_outcome::{Outcome, RC_BROKEN};
+use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK};
 use crate::fleet::json_lite::{self, Value};
 use crate::fleet::json_tree;
 use crate::fleet::store::{self, LockPolicy, StoreError};
@@ -34,6 +35,7 @@ use crate::seat::state::Event;
 use command::CommandDecision;
 use guard::Decision;
 use ledger_guard::LedgerDecision;
+use live_row::LiveRowDecision;
 use permission::PermissionDecision;
 use role_guard::{Operation, RoleDecision, Seat};
 use std::path::{Path, PathBuf};
@@ -638,6 +640,7 @@ fn brief_refused(reason: &str) -> String {
 /// seat guard は cwd の git dir が要る（cwd が repo の外なら測れない＝従来どおり通す側）が、command guard と
 /// role guard は anchor から解くので cwd に依らず評価する。起票の門（[`ledger_guard`]）は command guard の直後で、
 /// body-file の相対 path を payload の `cwd` から解き、台帳 write の断る形は command guard と同じ rules から読む。
+/// 走っている便の行の門（[`live_row`]）は権能 guard が断らなかった周だけの最後の 1 段。
 fn pre_tool_use(hooked: &Hooked, payload: &str, started: Instant) -> Outcome {
     let (root, cwd) = (hooked.root, hooked.cwd);
     let tool = field(payload, KEY_TOOL).unwrap_or_default();
@@ -659,7 +662,16 @@ fn pre_tool_use(hooked: &Hooked, payload: &str, started: Instant) -> Outcome {
         }
     }
     let op = Operation { tool: &tool, command: command.as_deref(), path: path.as_deref(), root: Some(root), cwd };
-    role_outcome(hooked, &op, started)
+    let role = role_outcome(hooked, &op, started);
+    if role.rc != RC_OK {
+        return role;
+    }
+    // 権能 guard が断らなかった周の後ろの 1 段（走っている便の行の門・設計 vessel-hook.md §15 形 7）。
+    let scene = live_row::Scene { tool: &tool, command: command.as_deref(), payload, cwd, root, state_dir: hooked.dir };
+    match live_row::decide(&scene) {
+        LiveRowDecision::Pass => role,
+        LiveRowDecision::Deny { what, line } => denied(hooked, &format!("live-row-deny {what}"), line, started),
+    }
 }
 
 /// deny の外形（rc 2 + stderr 1 行 + stdout 0 byte・FR20）と記録 1 行。

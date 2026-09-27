@@ -63,7 +63,7 @@ pub struct Polarity {
     pub on_failure: OnFailure,
 }
 
-/// 行為を止めうる判定を返す境界の全数。**宣言順は行為の流れ**（hook〔起票の門まで〕→ host の見張り → 席の登録 → 権能の執行 → 契約表 → intake → 審査 → spawn〔予算・承認〕→
+/// 行為を止めうる判定を返す境界の全数。**宣言順は行為の流れ**（hook〔起票の門まで〕→ host の見張り → 席の登録 → 権能の執行 → 走っている便の行 → 契約表 → intake → 審査 → spawn〔予算・承認〕→
 /// runner → gate〔器の健康の遮断器・機械検証・純移動・lens〕→ land〔main 実測・anchor 同期・worktree の clean・追随の起こし直し〕→ store → 注入 → cycle → 退避 → 消費）で、順序に意味は無いが C2 の形（[`ALL`] と判別子順 pin）に合わせる。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Guard {
@@ -84,6 +84,8 @@ pub enum Guard {
     Register,
     /// 席の権能の執行＝役割の行に無い権能付き subcommand と path 種別の編集を止める（[`crate::hook::role_guard`]）。
     Role,
+    /// 走っている便の契約の行の字を編集と commit の時点で止める門（[`crate::hook::live_row`]・設計 vessel-hook.md §15）。
+    LiveRow,
     /// 契約表の検査＝閉包 ⊄ write-set・区間 / req / section / verify / depends の欠陥（[`crate::pipe::table`]・本便は CI の post-hoc）。
     ContractTable,
     /// intake の断り＝vessel 宣言の verify 行の不適合（[`crate::pipe::declaration`]）。
@@ -139,6 +141,7 @@ pub const ALL: &[Guard] = &[
     Guard::HostGuard,
     Guard::Register,
     Guard::Role,
+    Guard::LiveRow,
     Guard::ContractTable,
     Guard::Intake,
     Guard::IntakeRefuse,
@@ -195,6 +198,7 @@ impl Guard {
             Self::HostGuard => crate::hook::host_guard::POLARITY,
             Self::Register => crate::seat::role::POLARITY,
             Self::Role => crate::hook::role_guard::POLARITY,
+            Self::LiveRow => crate::hook::live_row::POLARITY,
             Self::ContractTable => crate::pipe::table::POLARITY,
             Self::Intake => crate::pipe::declaration::POLARITY,
             Self::IntakeRefuse => crate::pipe::refuse::POLARITY,
@@ -228,6 +232,7 @@ impl Guard {
             Self::HostGuard => "hook::host_guard::HostGuardDecision",
             Self::Register => "seat::role::RegisterRefusal",
             Self::Role => "hook::role_guard::RoleDecision",
+            Self::LiveRow => "hook::live_row::LiveRowDecision",
             Self::ContractTable => "pipe::table::TableError",
             Self::Intake => "pipe::declaration::Unfit",
             Self::IntakeRefuse => "pipe::refuse::Refuse",
@@ -261,6 +266,7 @@ impl Guard {
             Self::HostGuard => "host-guard",
             Self::Register => "register-refusal",
             Self::Role => "role-guard",
+            Self::LiveRow => "live-row-guard",
             Self::ContractTable => "contract-table",
             Self::Intake => "intake-unfit",
             Self::IntakeRefuse => "intake-refuse",

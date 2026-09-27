@@ -13,8 +13,62 @@ use crate::pipe::contract::Contract;
 use crate::pipe::gate::Verdict;
 use crate::pipe::land::verdict_of;
 use crate::pipe::review::ReviewCheck;
-use crate::pipe::{contract_path, current, driver_ticket, Ticket};
-use std::path::Path;
+use crate::pipe::table::{parse_pointer, Pointer};
+use crate::pipe::{contract_path, current, driver_ticket, repo_of_run, worktree_path, Ticket};
+use std::path::{Path, PathBuf};
+
+/// live な便の行の名札（設計 vessel-hook.md §15 形 1・閉じた 3 形）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Tag {
+    /// 写しの design が `<doc>#<行 id>`。
+    Row(Pointer),
+    /// `#` を持たない古い写し（その doc の行が 1 つでも変われば当たり）。
+    Doc(String),
+    /// 写しを読めない（どの doc でも行が 1 つでも変われば当たり・測れないを「関係ない」に倒さない）。
+    Unread,
+}
+
+/// live な便 1 本（run id・段・行の名札・対象 repo と便の worktree の path・設計 vessel-hook.md §15 形 2）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LiveRun {
+    /// run id。
+    pub(crate) id: String,
+    /// 最後の段。
+    pub(crate) stage: Stage,
+    /// 行の名札。
+    pub(crate) tag: Tag,
+    /// 便の対象 repo（書き留めが無ければ `None`）。
+    pub(crate) repo: Option<PathBuf>,
+    /// 便の worktree（repo が無ければ `None`）。
+    pub(crate) worktree: Option<PathBuf>,
+}
+
+/// live な便の列（**生死の判定は [`live`] 1 本**・C2）。replay して全 run に [`live`] を撃ち、`Some(true)` と `None`
+/// （測れない便も live に数える＝受付の交差と同じ向き）の便の写しの design を名札にする。`Landed` は [`live`] が
+/// live に数えないので含まない。event log を読めない周は `Err`（呼び手が fail-closed に倒す）。
+pub(crate) fn live_runs(state_dir: &Path) -> Result<Vec<LiveRun>, Vec<StoreError>> {
+    let state = current(state_dir)?;
+    let alive = state.runs.iter().filter(|(id, run)| live(state_dir, id, run.stage) != Some(false));
+    Ok(alive
+        .map(|(id, run)| {
+            let tag = Contract::load(&contract_path(state_dir, id)).map_or(Tag::Unread, |found| tag_of(&found.design));
+            let repo = repo_of_run(state_dir, id);
+            let worktree = repo.as_deref().map(|found| worktree_path(found, id));
+            LiveRun { id: id.clone(), stage: run.stage, tag, repo, worktree }
+        })
+        .collect())
+}
+
+/// 写しの design を名札にする（`#` を持たない空でない path は doc だけ・pointer として読めない形は読めない）。
+fn tag_of(design: &str) -> Tag {
+    if design.trim().is_empty() {
+        return Tag::Unread;
+    }
+    if !design.contains('#') {
+        return Tag::Doc(design.to_owned());
+    }
+    parse_pointer(design).map_or(Tag::Unread, Tag::Row)
+}
 
 /// 便が live（終端でない）か。**段の網羅 match で書く**（段が増えたら compile で気付く）。
 ///

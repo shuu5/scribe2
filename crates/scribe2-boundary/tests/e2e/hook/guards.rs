@@ -897,3 +897,229 @@ fn hook_ledger_write_fails_closed_without_the_row() {
     assert!(stderr_text(&out).contains("reason=rules-unreadable"), "{}", stderr_text(&out));
     clean(&[&repo, &state]);
 }
+
+// ─────────────── 走っている便の行の門（`s2-07l.698`・設計 vessel-hook.md §15 行 i・接頭辞 `hook_live_row_`） ───────────────
+//
+// tmp の repo に行 a / b / c の表を持つ docs/design/x.md を commit し、`fleet record` の段の記帳と run dir の写し（契約・
+// 判定の file・repo）で live な便を置く。`--project` は anchor（便の worktree から撃つ周も anchor が仕える）。
+
+/// 表の doc の repo 相対 path。
+const LIVE_DOC: &str = "docs/design/x.md";
+
+/// 表の行 1 つ（done は `d-<id>`）。
+fn live_row_text(id: &str) -> String {
+    format!(
+        "[[contract]]\nid = \"{id}\"\ntitle = \"t\"\nreq = [\"FR1\"]\nsection = \"1\"\nverify = [\"cargo test\"]\n\
+         size = \"S\"\ndone = \"d-{id}\"\n"
+    )
+}
+
+/// 行 a / b / c の表と散文を持つ doc の本文。
+fn live_doc_text() -> String {
+    let rows: Vec<String> = ["a", "b", "c"].iter().map(|id| live_row_text(id)).collect();
+    format!("# x\n\nprose line\n\n<!-- contracts:begin -->\nschema = 1\n\n{}<!-- contracts:end -->\n", rows.join("\n"))
+}
+
+/// 表の doc を commit した repo と、紐づけた置き場。
+#[expect(clippy::expect_used, reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く")]
+fn live_place() -> (TmpDir, TmpDir) {
+    let repo = git_repo();
+    fs::create_dir_all(repo.join("docs").join("design")).expect("docs/design を作れる");
+    fs::write(repo.join(LIVE_DOC), live_doc_text()).expect("doc を書ける");
+    git(&repo, &["add", LIVE_DOC]);
+    git(&repo, &["commit", "-q", "-m", "doc"]);
+    let state = linked(&repo);
+    (repo, state)
+}
+
+/// live な便 1 本を置く（段の記帳・写しの契約・判定の file〔`verdict` が在れば Gated の verdict.json と Reviewed の
+/// review.json〕・repo の書き留め）。
+#[expect(clippy::expect_used, reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く")]
+fn live_run(state: &Path, repo: &Path, (run, stage, row): (&str, &str, &str), verdict: Option<&str>) {
+    let out = Command::new(bin())
+        .args(["fleet", "record", "--kind", "RunStage", "--run", run, "--bead", "s2-live", "--stage", stage])
+        .args(["--detail", "e2e", "--state-dir"])
+        .arg(state)
+        .output()
+        .expect("binary を起動できる");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "fleet record: {}", stderr_text(&out));
+    fs::create_dir_all(vessel::pipe::run_dir(state, run)).expect("run dir を作れる");
+    let contract = format!(
+        "goal = \"g\"\ndone = \"d\"\nsize = \"S\"\nowner = \"generated\"\ndisposition = \"A-now\"\n\
+         write-set = [\"{LIVE_DOC}\"]\nverify = [\"cargo test\"]\nreq = [\"FR1\"]\ndesign = \"{LIVE_DOC}#{row}\"\n"
+    );
+    fs::write(vessel::pipe::contract_path(state, run), contract).expect("写しを書ける");
+    fs::write(vessel::pipe::repo_path(state, run), format!("{}\n", repo.display())).expect("repo を書ける");
+    if let Some(found) = verdict {
+        let body = format!("{{\"verdict\":\"{found}\"}}\n");
+        fs::write(vessel::pipe::verdict_path(state, run), &body).expect("verdict.json を書ける");
+        fs::write(vessel::pipe::review::review_path(state, run), &body).expect("review.json を書ける");
+    }
+}
+
+/// `--project <anchor>` 付きで pre-tool-use を撃つ。
+fn live_hook(repo: &Path, payload: &str) -> Output {
+    run_hook_args(&["pre-tool-use", "--project", &repo.display().to_string()], payload)
+}
+
+/// Edit の payload（`file` の `old` を `new` へ・cwd は `cwd`）。
+fn edit_payload(cwd: &Path, file: &Path, old: &str, new: &str) -> String {
+    format!(
+        "{{\"cwd\":\"{}\",\"tool_name\":\"Edit\",\"tool_input\":{{\"file_path\":{},\"old_string\":{},\"new_string\":{}}}}}",
+        cwd.display(),
+        json_lite::quote(&file.display().to_string()),
+        json_lite::quote(old),
+        json_lite::quote(new)
+    )
+}
+
+/// Write の payload（`file` へ `content`）。
+fn write_payload(cwd: &Path, file: &Path, content: &str) -> String {
+    format!(
+        "{{\"cwd\":\"{}\",\"tool_name\":\"Write\",\"tool_input\":{{\"file_path\":{},\"content\":{}}}}}",
+        cwd.display(),
+        json_lite::quote(&file.display().to_string()),
+        json_lite::quote(content)
+    )
+}
+
+/// 記録のうち走っている便の行の門の行。
+fn live_row_records(state: &Path) -> Vec<String> {
+    inject_lines(state).into_iter().filter(|line| what_of(line).starts_with("live-row-deny")).collect()
+}
+
+/// 断りの外形（rc 2・stdout 0 byte・stderr 1 行）と記録の `what` が 1 行増えることを確かめ、stderr を返す。
+fn assert_live_row_deny(state: &Path, out: &Output, what: &str) -> String {
+    let text = stderr_text(out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "{what}: deny は rc 2: {text}");
+    assert!(out.stdout.is_empty(), "{what}: stdout 0 byte");
+    assert_eq!(stderr_lines(out), 1, "{what}: stderr 1 行: {text}");
+    assert_eq!(live_row_records(state).last().map(|line| what_of(line)), Some(format!("live-row-deny {what}")), "{what}");
+    text
+}
+
+/// (1)(2) Questioned の便の行の done を変える Edit は断り（答える口・末尾が止める 1 行）、散文だけの Edit は通す。
+#[test]
+fn hook_live_row_questioned_row_edit_is_denied_and_prose_edit_passes() {
+    let (repo, state) = live_place();
+    live_run(&state, &repo, ("r-q", "Questioned", "a"), None);
+    let doc = repo.join(LIVE_DOC);
+    let out = live_hook(&repo, &edit_payload(&repo, &doc, "done = \"d-a\"", "done = \"e-a\""));
+    let text = assert_live_row_deny(&state, &out, "changed");
+    assert!(text.contains("run=r-q") && text.contains("stage=Questioned"), "{text}");
+    assert!(text.contains(&format!("{NAME} pipe answer --run r-q --words ")), "答える口: {text}");
+    let stop = format!("{NAME} pipe stop --run r-q --state-dir {} --repo {}", state.display(), repo.display());
+    assert!(text.trim_end().ends_with(&stop), "末尾が止める 1 行: {text}");
+    assert_eq!(live_row_records(&state).len(), 1, "記録 1 行");
+    let out = live_hook(&repo, &edit_payload(&repo, &doc, "prose line", "prose line 2"));
+    assert_silent(&out, "散文だけの Edit");
+    clean(&[&repo, &state]);
+}
+
+/// (2)(3) 判定 FAIL の Gated の便の行を変える Write は通し、判定 PASS の Gated と審査 PASS の Reviewed の便の行は断る。
+#[test]
+fn hook_live_row_gated_and_reviewed_rows_follow_the_verdict() {
+    let (repo, state) = live_place();
+    live_run(&state, &repo, ("r-fail", "Gated", "a"), Some("FAIL"));
+    live_run(&state, &repo, ("r-pass", "Gated", "b"), Some("PASS"));
+    live_run(&state, &repo, ("r-rev", "Reviewed", "c"), Some("PASS"));
+    let doc = repo.join(LIVE_DOC);
+    let out = live_hook(&repo, &write_payload(&repo, &doc, &live_doc_text().replace("d-a", "e-a")));
+    assert_silent(&out, "判定 FAIL の Gated は終端");
+    for (id, run) in [("b", "r-pass"), ("c", "r-rev")] {
+        let changed = live_doc_text().replace(&format!("d-{id}"), &format!("e-{id}"));
+        let out = live_hook(&repo, &write_payload(&repo, &doc, &changed));
+        let text = assert_live_row_deny(&state, &out, "changed");
+        assert!(text.contains(&format!("run={run}")) && !text.contains("pipe answer"), "{text}");
+    }
+    clean(&[&repo, &state]);
+}
+
+/// (4) 作業の木の doc を fs で書き換えた後の git commit -am は断り、元へ戻した後は通す。
+#[test]
+fn hook_live_row_commit_of_a_changed_tree_is_denied_until_restored() {
+    let (repo, state) = live_place();
+    live_run(&state, &repo, ("r-q", "Questioned", "a"), None);
+    fs::write(repo.join(LIVE_DOC), live_doc_text().replace("d-a", "e-a")).expect("書き換えられる");
+    let out = live_hook(&repo, &bash_payload(&repo, "git commit -am x"));
+    assert_live_row_deny(&state, &out, "changed");
+    fs::write(repo.join(LIVE_DOC), live_doc_text()).expect("戻せる");
+    assert_silent(&live_hook(&repo, &bash_payload(&repo, "git commit -am x")), "元へ戻した木");
+    clean(&[&repo, &state]);
+}
+
+/// (5) 便の worktree の中の自分の行を変える Edit は通し（記録 0）、同じ worktree から他の live な行を変える Edit と、同じ
+/// 変更を anchor の doc に当てる Edit は断る。
+#[test]
+fn hook_live_row_own_row_in_its_worktree_passes() {
+    let (repo, state) = live_place();
+    live_run(&state, &repo, ("r-own", "Spawned", "a"), None);
+    live_run(&state, &repo, ("r-other", "Spawned", "b"), None);
+    let worktree = vessel::pipe::worktree_path(&repo, "r-own");
+    git(&repo, &["worktree", "add", "-q", &worktree.display().to_string()]);
+    let own = worktree.join(LIVE_DOC);
+    let out = live_hook(&repo, &edit_payload(&worktree, &own, "done = \"d-a\"", "done = \"e-a\""));
+    assert_silent(&out, "自分の worktree の自分の行");
+    assert!(live_row_records(&state).is_empty(), "記録 0");
+    let out = live_hook(&repo, &edit_payload(&worktree, &own, "done = \"d-b\"", "done = \"e-b\""));
+    assert!(assert_live_row_deny(&state, &out, "changed").contains("run=r-other"), "他の live な行は残る");
+    let out = live_hook(&repo, &edit_payload(&repo, &repo.join(LIVE_DOC), "done = \"d-a\"", "done = \"e-a\""));
+    assert!(assert_live_row_deny(&state, &out, "changed").contains("run=r-own"), "anchor の doc では効く");
+    clean(&[&repo, &state]);
+}
+
+/// (6) event log を読めない置き場では、行を変える Edit は state-unreadable で断り、散文だけの Edit と docs/design/ の外の
+/// 区間を持つ `.md` の Edit は通す。
+#[test]
+fn hook_live_row_unreadable_state_denies_only_row_changes() {
+    let (repo, state) = live_place();
+    let events = vessel::fleet::store::events_path(&state);
+    fs::remove_file(&events).ok();
+    fs::create_dir_all(&events).expect("event log の位置に dir を置ける");
+    let doc = repo.join(LIVE_DOC);
+    let out = live_hook(&repo, &edit_payload(&repo, &doc, "done = \"d-a\"", "done = \"e-a\""));
+    assert!(assert_live_row_deny(&state, &out, "state-unreadable").contains("reason=state-unreadable"));
+    assert_silent(&live_hook(&repo, &edit_payload(&repo, &doc, "prose line", "prose 2")), "散文だけ");
+    let outside = repo.join("notes.md");
+    fs::write(&outside, live_doc_text()).expect("docs/design/ の外の doc を書ける");
+    let out = live_hook(&repo, &edit_payload(&repo, &outside, "done = \"d-a\"", "done = \"e-a\""));
+    assert_silent(&out, "docs/design/ の外");
+    clean(&[&repo, &state]);
+}
+
+/// (7) 解けない dir の commit は、live な便が在る置き場では dir-unresolved で断り（git -C の形を示す）、live な便が 0 本の
+/// 置き場では通す。
+#[test]
+fn hook_live_row_unresolved_commit_dir_follows_the_live_count() {
+    let command = "cd \"$X\" && git commit -am x";
+    let (repo, state) = live_place();
+    assert_silent(&live_hook(&repo, &bash_payload(&repo, command)), "live な便が 0 本");
+    live_run(&state, &repo, ("r-q", "Questioned", "a"), None);
+    let out = live_hook(&repo, &bash_payload(&repo, command));
+    let text = assert_live_row_deny(&state, &out, "dir-unresolved");
+    assert!(text.contains("reason=dir-unresolved") && text.contains("run=r-q"), "{text}");
+    assert!(text.contains("git -C <絶対 path> commit"), "dir を literal で書く形: {text}");
+    clean(&[&repo, &state]);
+}
+
+/// (8) live な行を変えた doc を add した後に作業の木を HEAD の本文へ戻した木（index にだけ在る変更）の commit は断る。
+#[test]
+fn hook_live_row_index_only_change_is_denied() {
+    let (repo, state) = live_place();
+    live_run(&state, &repo, ("r-q", "Questioned", "a"), None);
+    fs::write(repo.join(LIVE_DOC), live_doc_text().replace("d-a", "e-a")).expect("書き換えられる");
+    git(&repo, &["add", LIVE_DOC]);
+    fs::write(repo.join(LIVE_DOC), live_doc_text()).expect("作業の木を戻せる");
+    assert_live_row_deny(&state, &live_hook(&repo, &bash_payload(&repo, "git commit -m x")), "changed");
+    clean(&[&repo, &state]);
+}
+
+/// (9) live な行を持つ design doc を git mv で docs/design/ の外へ移した木の commit は断る（旧 path の行の消失）。
+#[test]
+fn hook_live_row_git_mv_out_of_design_is_denied() {
+    let (repo, state) = live_place();
+    live_run(&state, &repo, ("r-q", "Questioned", "a"), None);
+    git(&repo, &["mv", LIVE_DOC, "moved.md"]);
+    assert_live_row_deny(&state, &live_hook(&repo, &bash_payload(&repo, "git commit -m x")), "removed");
+    clean(&[&repo, &state]);
+}
