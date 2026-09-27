@@ -1,0 +1,808 @@
+// flip-check: moved s2-07l.679
+//! session の族の歯（接頭辞 `hook_session_` / `hook_recovery_` / `hook_precompact_`・設計 docs/design/carry-prep.md §9 行 g）。
+
+use super::*;
+
+#[test]
+fn hook_session_start_is_noop_without_marker() {
+    let repo = git_repo();
+    let out = run_hook("session-start", &payload(&repo));
+    assert_silent(&out, "marker が無い repo");
+    clean(&[&repo]);
+}
+
+#[test]
+fn hook_session_start_is_noop_for_other_name() {
+    let repo = git_repo();
+    let other = Marker {
+        name: "other-vessel".to_owned(),
+        version: GENERATION,
+    };
+    fs::write(repo.join(MARKER), other.render()).expect("marker を書ける");
+    let out = run_hook("session-start", &payload(&repo));
+    assert_silent(&out, "別の器が名乗る repo");
+    clean(&[&repo]);
+}
+
+#[test]
+fn hook_session_start_is_noop_without_state_dir() {
+    let repo = git_repo();
+    let mine = Marker {
+        name: NAME.to_owned(),
+        version: GENERATION,
+    };
+    fs::write(repo.join(MARKER), mine.render()).expect("marker を書ける");
+    let out = run_hook("session-start", &payload(&repo));
+    assert_silent(&out, "marker は在るが state dir が紐づいていない repo");
+    clean(&[&repo]);
+}
+
+#[test]
+fn hook_session_start_serves_own_marker() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let out = run_hook("session-start", &payload(&repo));
+
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "仕える周も rc 0");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains(&format!("[{NAME}/SessionStart]")),
+        "名乗りの 1 行が出る: {stdout}"
+    );
+
+    let lines = inject_lines(&state);
+    assert_eq!(lines.len(), 1, "注入の記録は 1 件（母集団 {}）", lines.len());
+    let line = lines.first().map_or_else(String::new, Clone::clone);
+    assert_eq!(
+        value_of(&line, "schema"),
+        Some(json_lite::Value::Num(SCHEMA)),
+        "schema=1: {line}"
+    );
+    let bytes = value_of(&line, "bytes").and_then(|value| value.as_num());
+    assert!(bytes.is_some_and(|found| found > 0), "bytes>0: {line}");
+    assert_eq!(
+        value_of(&line, "tokens"),
+        Some(json_lite::Value::Null),
+        "数えていない token は null で表す: {line}"
+    );
+    clean(&[&repo, &state]);
+}
+
+#[test]
+fn hook_session_start_honors_state_dir_flag() {
+    let repo = git_repo();
+    let linked_state = linked(&repo);
+    let override_state = tmp();
+    let out = run_hook_args(
+        &[
+            "session-start",
+            "--state-dir",
+            &override_state.display().to_string(),
+        ],
+        &payload(&repo),
+    );
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "仕える周は rc 0");
+    assert_eq!(
+        inject_lines(&override_state).len(),
+        1,
+        "--state-dir が置き場を上書きする"
+    );
+    assert!(
+        inject_lines(&linked_state).is_empty(),
+        "git 設定の置き場へは書かない"
+    );
+    clean(&[&repo, &linked_state, &override_state]);
+}
+
+/// (a)(b)(f): in_progress の bead は `[RECENT-WIP]` に全件、直近 24 時間の更新は `[RECENT-BEAD]` に新しい順で上限まで
+/// （上限で切った周は `[RECENT-CUT]` が shown と total を持つ）、窓の外と WIP に出た id は BEAD に出ない。改行入りの題は
+/// 1 行に畳まれて行数が増えない。§5 の 11 行は不変で、記録は `session-start-recent` の 1 行が足される。
+#[test]
+fn hook_session_recent_lists_wip_and_windowed_beads_after_the_brief() {
+    let place = role_place();
+    let path = stub_seat(&place, "recentwip", Some("orchestrator"));
+    let now = vessel::seat::state::now_secs();
+    let mut items = vec![
+        bead_json("w-1", "in_progress", now - 100, "仕掛かり A"),
+        bead_json("w-2", "in_progress", now - 50, "行1\n行2\r\n\t行3"),
+        bead_json("old-1", "open", now - WINDOW_SECS - 3_600, "窓の外"),
+    ];
+    let inside = BEAD_LIMIT + 2;
+    for index in 0..inside {
+        items.push(bead_json(&format!("r-{index}"), "open", now - 60 * (index as u64 + 1), &format!("直近 {index}")));
+    }
+    let bd = fake_bd_in(&place, "ledger-a", &format!("[{}]", items.join(",")));
+    let before = inject_lines(&place.state).len();
+    let (_, recent) = brief_and_recent(&place, &path, &bd);
+    let wip = lines_of(&recent, Kind::Wip);
+    assert_eq!(wip.len(), 2, "in_progress の全件: {recent:?}");
+    assert!(wip[0].starts_with("[RECENT-WIP] w-1 ") && wip[0].ends_with(" 仕掛かり A"), "{}", wip[0]);
+    assert!(wip[1].starts_with("[RECENT-WIP] w-2 ") && wip[1].ends_with(" 行1 行2   行3"), "改行は空白へ: {}", wip[1]);
+    assert!(wip[0].contains(&vessel::fleet::cli::format_utc(now - 100)), "更新時刻: {}", wip[0]);
+    assert_bead_section(&recent, inside);
+    assert!(recent.iter().all(|line| !line.contains("old-1")), "窓の外は出ない: {recent:?}");
+    assert!(marked(&recent, recent::MARKER_NONE, Kind::Wip).is_empty() && marked(&recent, recent::MARKER_NONE, Kind::Bead).is_empty());
+    assert!(marked(&recent, recent::MARKER_UNMEASURED, Kind::Wip).is_empty(), "読めた周に UNMEASURED は無い: {recent:?}");
+    assert_recent_record(&place.state, before, &recent, "recentwip_recentwip");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// (c): 台帳が読めない周（`--bd` が無い file・JSON でない出力）は wip / bead の 2 種類だけ `[RECENT-UNMEASURED]`
+/// （理由 `ledger-unreadable`）で、§5 の 11 行と git の行は出る。席は止めない（rc 0・stderr 0 byte）。
+#[test]
+fn hook_session_recent_marks_ledger_unmeasured_but_keeps_brief_and_git() {
+    let place = role_place();
+    let path = stub_seat(&place, "recentnobd", Some("orchestrator"));
+    let missing = place.sock_dir.join("no-such-bd").display().to_string();
+    let garbage = fake_bd_in(&place, "ledger-garbage", "not json");
+    for bd in [missing.as_str(), garbage.as_str()] {
+        let (brief, recent) = brief_and_recent(&place, &path, bd);
+        assert!(brief.iter().any(|line| line.contains("unknown（台帳を読めない）")), "{brief:?}");
+        for kind in [Kind::Wip, Kind::Bead] {
+            let expected = format!("[RECENT-UNMEASURED] kind={} reason=ledger-unreadable", kind.as_str());
+            assert_eq!(marked(&recent, recent::MARKER_UNMEASURED, kind), vec![&expected], "{bd}: {recent:?}");
+            assert!(marked(&recent, recent::MARKER_NONE, kind).is_empty(), "測れない周に NONE は出ない: {recent:?}");
+        }
+        assert_eq!(lines_of(&recent, Kind::Git).len(), 1, "git の行は出る: {recent:?}");
+        assert!(!lines_of(&recent, Kind::Commit).is_empty(), "commit の行は出る: {recent:?}");
+        assert!(recent.iter().all(|line| !line.contains("git-unavailable") && !line.contains("not-a-repo")), "{recent:?}");
+    }
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// (g): 読めた上で 0 件の種類（in_progress が 0・窓の内の更新が 0・dirty が 0）は `[RECENT-NONE] kind=<種類>` で、
+/// 同じ種類の `[RECENT-UNMEASURED]` は出ない（(c) と対＝0 件と測れないの両側）。
+#[test]
+fn hook_session_recent_none_is_distinct_from_unmeasured() {
+    let place = role_place();
+    let path = stub_seat(&place, "recentnone", Some("orchestrator"));
+    // anchor を clean にする（`vessel init` の marker は untracked なので commit に含める）。
+    git(&place.repo, &["add", "-A"]);
+    git(&place.repo, &["commit", "-q", "-m", "marker"]);
+    let now = vessel::seat::state::now_secs();
+    let stale = bead_json("s-1", "open", now - WINDOW_SECS - 1, "窓の直外");
+    let bd = fake_bd_in(&place, "ledger-empty", &format!("[{stale}]"));
+    let (_, recent) = brief_and_recent(&place, &path, &bd);
+    for kind in [Kind::Wip, Kind::Bead, Kind::Dirty] {
+        let expected = format!("[RECENT-NONE] kind={}", kind.as_str());
+        assert_eq!(marked(&recent, recent::MARKER_NONE, kind), vec![&expected], "{recent:?}");
+        assert!(marked(&recent, recent::MARKER_UNMEASURED, kind).is_empty(), "読めた周に UNMEASURED は出ない: {recent:?}");
+        assert!(lines_of(&recent, kind).is_empty(), "0 件の種類に本体の行は無い: {recent:?}");
+    }
+    assert!(recent.iter().all(|line| !line.contains("s-1")), "窓の直外は出ない: {recent:?}");
+    assert_eq!(lines_of(&recent, Kind::Git).len(), 1, "git の行は 1 行: {recent:?}");
+    assert_eq!(lines_of(&recent, Kind::Commit).len(), 2, "seed + marker の 2 commit: {recent:?}");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// (d): `[RECENT-GIT]` が head（短い sha）・branch・上流との ahead / behind を持ち、`[RECENT-COMMIT]` が直近の commit を
+/// 新しい順に短い sha と subject で持つ（上限を超える周は `[RECENT-CUT] kind=commit`）。dirty な worktree（anchor は `.`・
+/// 追加の worktree は anchor 相対）が `[RECENT-DIRTY]` に出て、clean な worktree は出ない。
+#[test]
+fn hook_session_recent_git_head_commits_and_dirty_worktree() {
+    let place = role_place();
+    let path = stub_seat(&place, "recentgit", Some("orchestrator"));
+    let repo = &place.repo;
+    // 上流: bare の写しを origin にし、追跡 ref を持たせてから手元にだけ commit を積む（network に出ない）。
+    let origin = place.sock_dir.join("origin.git");
+    git(repo, &["clone", "-q", "--bare", &repo.display().to_string(), &origin.display().to_string()]);
+    git(repo, &["remote", "add", "origin", &origin.display().to_string()]);
+    git(repo, &["fetch", "-q", "origin"]);
+    let branch = git(repo, &["rev-parse", "--abbrev-ref", "HEAD"]);
+    git(repo, &["branch", "-q", "-u", &format!("origin/{branch}")]);
+    let extra = COMMIT_LIMIT + 1;
+    for index in 0..extra {
+        fs::write(repo.join("src").join(format!("c{index}.rs")), "// c\n").unwrap_or_else(|err| panic!("write: {err}"));
+        git(repo, &["add", "-A"]);
+        git(repo, &["commit", "-q", "-m", &format!("commit {index}\n\nbody")]);
+    }
+    let head = git(repo, &["rev-parse", "--short", "HEAD"]);
+    // worktree: clean なもの 1 つと dirty なもの 1 つ（anchor の中）。anchor 自身は untracked で dirty。
+    git(repo, &["worktree", "add", "-q", "-b", "wt-clean", &repo.join(".wt").join("clean").display().to_string()]);
+    git(repo, &["worktree", "add", "-q", "-b", "wt-dirty", &repo.join(".wt").join("dirty").display().to_string()]);
+    fs::write(repo.join(".wt").join("dirty").join("stray.txt"), "x\n").unwrap_or_else(|err| panic!("write: {err}"));
+    fs::write(repo.join("untracked.txt"), "x\n").unwrap_or_else(|err| panic!("write: {err}"));
+    let (_, recent) = brief_and_recent(&place, &path, &place.bd);
+    let git_line = lines_of(&recent, Kind::Git);
+    assert_eq!(git_line, vec![&format!("[RECENT-GIT] head={head} branch={branch} ahead={extra} behind=0")], "{recent:?}");
+    let commits = lines_of(&recent, Kind::Commit);
+    assert_eq!(commits.len(), COMMIT_LIMIT, "上限まで: {recent:?}");
+    assert_eq!(commits[0].as_str(), format!("[RECENT-COMMIT] {head} commit {}", extra - 1), "先頭は head の commit");
+    for (index, line) in commits.iter().enumerate() {
+        assert!(line.ends_with(&format!(" commit {}", extra - 1 - index)), "新しい順・subject だけ（body は載らない）: {line}");
+    }
+    let total = extra + 1;
+    assert_eq!(
+        marked(&recent, recent::MARKER_CUT, Kind::Commit),
+        vec![&format!("[RECENT-CUT] kind=commit shown={COMMIT_LIMIT} total={total}")],
+        "{recent:?}"
+    );
+    let dirty: Vec<&str> = lines_of(&recent, Kind::Dirty).iter().map(|line| line.as_str()).collect();
+    assert_eq!(dirty, vec!["[RECENT-DIRTY] .", "[RECENT-DIRTY] .wt/dirty"], "anchor と dirty な worktree だけ: {recent:?}");
+    assert!(marked(&recent, recent::MARKER_NONE, Kind::Dirty).is_empty(), "{recent:?}");
+    // 順序: 種類の宣言順（wip → bead → git → commit → dirty）で並ぶ。
+    let first_of = |kind: Kind| {
+        recent.iter().position(|line| line.starts_with(kind.marker()) || line.contains(&format!(" kind={}", kind.as_str())))
+    };
+    let order: Vec<usize> = recent::KINDS.iter().filter_map(|kind| first_of(*kind)).collect();
+    assert_eq!(order.len(), recent::KINDS.len(), "5 種類が全部出る: {recent:?}");
+    assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "種類の順: {order:?} {recent:?}");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// (e): 登録の無い席（pane は解けるが row が無い）は今と同じく 0 byte（名乗りの 1 行だけ・DATA も出ない・記録も増えない）。
+#[test]
+fn hook_session_recent_is_silent_for_an_unregistered_target() {
+    let place = role_place();
+    let path = stub_seat(&place, "recentghost", None);
+    let before = inject_lines(&place.state).len();
+    let lines = stub_session_lines(&place, &path, &place.bd);
+    assert_eq!(lines, Vec::<String>::new(), "登録の無い席は名乗りの後ろが 0 byte: {lines:?}");
+    let records = inject_lines(&place.state);
+    assert_eq!(records.len(), before + 1, "記録は名乗りの 1 行だけ: {records:?}");
+    assert!(records.iter().skip(before).all(|line| what_of(line) == "session-start-header"), "{records:?}");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// 純関数の面（tmux を立てない）: `updated_at` は offset 付き・小数秒付きの RFC 3339 を UTC 秒に読み、読めない形は
+/// `None`（0 秒に化けない）。題は制御文字を空白へ畳み幅で切る。
+#[test]
+fn hook_session_recent_reads_offsets_and_folds_titles_purely() {
+    let json = concat!(
+        "[{\"id\":\"a\",\"status\":\"open\",\"title\":\"t\",\"updated_at\":\"2026-09-20T09:00:00+09:00\"},",
+        "{\"id\":\"b\",\"status\":\"open\",\"title\":\"t\",\"updated_at\":\"2026-09-20T00:00:00.123456789Z\"},",
+        "{\"id\":\"c\",\"status\":\"open\",\"updated_at\":\"2026-09-20\"},",
+        "{\"id\":\"d\",\"status\":\"open\",\"title\":\"t\",\"updated_at\":\"2026-09-19T23:30:00-00:30\"}]"
+    );
+    let beads = recent::beads_of(json).unwrap_or_else(|| panic!("読める"));
+    let midnight = vessel::fleet::epoch_of("2026-09-20T00:00:00Z").unwrap_or_default();
+    assert_eq!(beads[0].updated, Some(midnight), "+09:00 は UTC へ戻す");
+    assert_eq!(beads[1].updated, Some(midnight), "小数秒は捨てる");
+    assert_eq!(beads[2].updated, None, "日付だけの形は読めない（0 に化けない）");
+    assert_eq!(beads[2].title, "", "題が無ければ空");
+    assert_eq!(beads[3].updated, Some(midnight), "負の offset");
+    assert!(recent::beads_of("[{\"status\":\"open\"}]").is_none(), "id の無い要素は読み飛ばさない（読めた に化けない）");
+    assert!(recent::beads_of("{}").is_none(), "配列でない");
+    // 畳みと幅。
+    let long: String = "あ".repeat(TITLE_WIDTH + 1);
+    assert_eq!(recent::fold(&long).chars().count(), TITLE_WIDTH + 1, "幅で切って … を足す");
+    assert!(recent::fold(&long).ends_with('…'));
+    assert_eq!(recent::fold("  a\x00b\n c \u{7f}"), "a b  c", "制御文字は空白・両端は落とす");
+    assert_eq!(recent::fold("[RECENT-WIP] x"), "[RECENT-WIP] x", "題の偽装は 3 語目以降に留まる（行頭にならない）");
+}
+
+/// 純関数の面（tmux を立てない）: 窓は `now` を呼び手が渡す（境界は両端を含む・未来は出ない）。BEAD は新しい順・
+/// 同時刻は id 順。読めた 0 件は NONE・読めない周は理由付きの UNMEASURED。
+#[test]
+fn hook_session_recent_windows_and_orders_purely() {
+    let midnight = vessel::fleet::epoch_of("2026-09-20T00:00:00Z").unwrap_or_default();
+    let now = midnight + WINDOW_SECS;
+    let beads = vec![
+        recent::Bead { id: "edge".into(), status: "open".into(), title: "端".into(), updated: Some(midnight) },
+        recent::Bead { id: "out".into(), status: "open".into(), title: "外".into(), updated: Some(midnight - 1) },
+        recent::Bead { id: "future".into(), status: "open".into(), title: "未来".into(), updated: Some(now + 1) },
+        recent::Bead { id: "b-now".into(), status: "closed".into(), title: "同時刻 b".into(), updated: Some(now) },
+        recent::Bead { id: "a-now".into(), status: "open".into(), title: "同時刻 a".into(), updated: Some(now) },
+        recent::Bead { id: "wip".into(), status: "in_progress".into(), title: "仕掛かり".into(), updated: None },
+    ];
+    let lines = recent::ledger_lines(Ok(&beads), now);
+    let expected = [
+        "[RECENT-WIP] wip - 仕掛かり",
+        "[RECENT-BEAD] a-now open 2026-09-21T00:00:00Z 同時刻 a",
+        "[RECENT-BEAD] b-now closed 2026-09-21T00:00:00Z 同時刻 b",
+        "[RECENT-BEAD] edge open 2026-09-20T00:00:00Z 端",
+    ];
+    assert_eq!(lines, expected, "窓の両端を含み・未来と外は出ず・新しい順・同時刻は id 順");
+    assert_eq!(recent::ledger_lines(Ok(&[]), now), ["[RECENT-NONE] kind=wip", "[RECENT-NONE] kind=bead"]);
+    assert_eq!(
+        recent::ledger_lines(Err(Unmeasured::LedgerTimeout), now),
+        ["[RECENT-UNMEASURED] kind=wip reason=ledger-timeout", "[RECENT-UNMEASURED] kind=bead reason=ledger-timeout"]
+    );
+}
+
+/// dirty の走査は worktree の上位 `DIRTY_SCAN_LIMIT` 本（anchor が先頭・残りは HEAD の commit が新しい順）に限り、
+/// 上限を超える周は `[RECENT-CUT] kind=dirty shown=<測った本数> total=<worktree の本数>` を末尾に付ける（0 件の
+/// NONE の後ろにも付く）＝便ごとの worktree が数百本溜まった repo で hook の時間予算を食い潰さない。古い HEAD の
+/// dirty な worktree は走査の外に落ち、新しい HEAD の dirty な worktree は出る。
+#[test]
+fn hook_session_recent_dirty_scan_is_cut_to_the_newest_worktrees() {
+    crate::install_spawner();
+    let repo = git_repo();
+    // worktree の置き場 `.wt/` は anchor の untracked に数えない（anchor の dirty は `untracked.txt` で作る）。
+    fs::write(repo.join(".git").join("info").join("exclude"), ".wt/\n").unwrap_or_else(|err| panic!("write: {err}"));
+    let old = add_worktree(&repo, "old");
+    fs::write(old.join("stray.txt"), "x\n").unwrap_or_else(|err| panic!("write: {err}"));
+    // 新しい commit（committer の時刻を 1 日進める＝1 秒解像度の同時刻にしない）。
+    fs::write(repo.join("src").join("b.rs"), "// b\n").unwrap_or_else(|err| panic!("write: {err}"));
+    git(&repo, &["add", "-A"]);
+    let out = Command::new("git")
+        .args(["-C", &repo.display().to_string(), "commit", "-q", "-m", "b"])
+        .env("GIT_COMMITTER_DATE", "2030-01-02T00:00:00Z")
+        .env("GIT_AUTHOR_DATE", "2030-01-02T00:00:00Z")
+        .output()
+        .unwrap_or_else(|err| panic!("git: {err}"));
+    assert!(out.status.success(), "commit b: {}", String::from_utf8_lossy(&out.stderr));
+    let newest: Vec<PathBuf> = (0..DIRTY_SCAN_LIMIT).map(|index| add_worktree(&repo, &format!("b{index}"))).collect();
+    fs::write(newest[0].join("stray.txt"), "x\n").unwrap_or_else(|err| panic!("write: {err}"));
+    fs::write(repo.join("untracked.txt"), "x\n").unwrap_or_else(|err| panic!("write: {err}"));
+    let total = DIRTY_SCAN_LIMIT + 2;
+    let lines = recent::git_lines(&repo);
+    let dirty: Vec<&String> = lines.iter().filter(|line| line.starts_with("[RECENT-DIRTY] ")).collect();
+    assert_eq!(dirty, vec!["[RECENT-DIRTY] .", "[RECENT-DIRTY] .wt/b0"], "anchor と新しい dirty だけ・古い dirty は走査の外: {lines:?}");
+    let cut = format!("[RECENT-CUT] kind=dirty shown={DIRTY_SCAN_LIMIT} total={total}");
+    assert_eq!(lines.last(), Some(&cut), "上限で切った事実が末尾に載る: {lines:?}");
+    assert!(lines.iter().all(|line| !line.contains("kind=dirty reason=")), "測れたので UNMEASURED ではない: {lines:?}");
+    // 走査の上限の内側に dirty が無ければ NONE + CUT の 2 行（0 件と切った事実の両方）。
+    fs::remove_file(newest[0].join("stray.txt")).unwrap_or_else(|err| panic!("rm: {err}"));
+    fs::remove_file(repo.join("untracked.txt")).unwrap_or_else(|err| panic!("rm: {err}"));
+    let lines = recent::git_lines(&repo);
+    let tail: Vec<&String> = lines.iter().rev().take(2).collect();
+    assert_eq!(tail, vec![&cut, &"[RECENT-NONE] kind=dirty".to_owned()], "NONE の後ろに CUT: {lines:?}");
+    clean(&[&repo]);
+}
+
+/// git の 3 種類の UNMEASURED は 1 回の判定で揃って出る（repo でない dir）。
+#[test]
+fn hook_session_recent_git_kinds_are_unmeasured_together_outside_a_repo() {
+    crate::install_spawner();
+    let dir = tmp();
+    assert!(!dir.join(".git").exists(), "tmp dir は repo でない");
+    assert_eq!(
+        recent::git_lines(&dir),
+        [
+            "[RECENT-UNMEASURED] kind=git reason=not-a-repo",
+            "[RECENT-UNMEASURED] kind=commit reason=not-a-repo",
+            "[RECENT-UNMEASURED] kind=dirty reason=not-a-repo"
+        ]
+    );
+    clean(&[&dir]);
+}
+
+/// (a)(b): PreCompact が transcript の末尾から**直近の assistant の text block**（tool_use だけの行と user の行と JSON で
+/// ない行は飛ばす・同じ行の最後の text block）を枠に書き（rc 0・stdout 0 byte・stderr 0 byte・記録 `precompact-slot`）、
+/// 続く `source = compact` の SessionStart が指示文 11 行の直後・DATA の前に `[PRECOMPACT] trigger=auto ts=… lines=2` と
+/// 逐語の 2 行を出して枠を消し（記録 `session-start-precompact`）、同じ SessionStart をもう 1 回撃つと `[PRECOMPACT]` は
+/// 出ない（1 回だけ）。
+#[test]
+fn hook_precompact_writes_the_slot_and_compact_session_start_emits_it_once() {
+    let place = role_place();
+    let path = stub_seat(&place, "precomp", Some("orchestrator"));
+    let latest = "いま .489.2 の枠を書いている途中。\n次は SessionStart の読み側。";
+    let transcript = write_transcript(
+        &place,
+        "t-a",
+        &[
+            user_line("始めて"),
+            assistant_line(&["古い発言"], true),
+            user_line("続けて"),
+            assistant_line(&["途中の text", latest], true),
+            "not json at all".to_owned(),
+            assistant_line(&[], true),
+            user_line("[tool_result] 出力"),
+        ],
+    );
+    let before = precompact_records(&place.state).len();
+    let parsed = assert_slot_written(&place, &path, "precomp", &transcript, latest);
+    let slot = slot_file(&place, "precomp");
+    // 読む側: compact の SessionStart が 1 回だけ出して枠を消す。
+    let lines = session_lines_with(&place, &path, "compact");
+    let section = precompact_section(&lines);
+    assert_eq!(section.len(), 3, "header + 逐語の 2 行: {lines:?}");
+    assert_eq!(section[0], format!("[PRECOMPACT] trigger=auto ts={} lines=2", vessel::fleet::cli::format_utc(parsed.ts)), "{lines:?}");
+    assert_eq!(section[1..], ["いま .489.2 の枠を書いている途中。", "次は SessionStart の読み側。"], "逐語: {lines:?}");
+    assert!(!slot.exists(), "出した後に枠は消える");
+    let records = precompact_records(&place.state);
+    assert_eq!(records.len(), before + 2, "読む側の記録 1 行: {records:?}");
+    assert_eq!(what_of(&records[before + 1]), "session-start-precompact", "{records:?}");
+    let bytes = section.join("\n").len() as u64 + 1;
+    assert_eq!(value_of(&records[before + 1], "bytes"), Some(json_lite::Value::Num(bytes)), "bytes は出した行の byte 数");
+    // (b) もう 1 回: 枠は無いので出ない（指示文と DATA は出る）。
+    let again = session_lines_with(&place, &path, "compact");
+    assert!(precompact_section(&again).is_empty(), "2 回目は出ない: {again:?}");
+    assert_eq!(split_recent(again.clone()).0.len(), 11, "指示文は 11 行のまま: {again:?}");
+    assert!(again.iter().any(|line| line.starts_with("[RECENT-")), "DATA は出る: {again:?}");
+    assert_eq!(precompact_records(&place.state).len(), before + 2, "出さない周は記録も増えない");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// (c): `source = startup`（と `resume` / `clear`）の SessionStart は枠を読まず消さない（`[PRECOMPACT]` を出さず・
+/// 枠は残る）。その後の `compact` で出る。
+#[test]
+fn hook_precompact_startup_neither_emits_nor_removes_the_slot() {
+    let place = role_place();
+    let path = stub_seat(&place, "precompstart", Some("orchestrator"));
+    let transcript = write_transcript(&place, "t-c", &[assistant_line(&["手番の途中"], false)]);
+    run_precompact(&place, &path, &precompact_payload(&place.repo, "manual", Some(&transcript)));
+    let slot = slot_file(&place, "precompstart");
+    assert!(slot.is_file(), "枠が在る");
+    let written = fs::read_to_string(&slot).unwrap_or_default();
+    for source in ["startup", "resume", "clear"] {
+        let lines = session_lines_with(&place, &path, source);
+        assert!(precompact_section(&lines).is_empty(), "{source} では出ない: {lines:?}");
+        assert_eq!(fs::read_to_string(&slot).unwrap_or_default(), written, "{source} では枠を触らない");
+    }
+    // source の無い payload（旧い Claude Code）も同じ。
+    let out = run_stub_hook(&path, &["session-start", "--pane", STUB_PANE, "--rules", &place.rules, "--bd", &place.bd], &stamp_payload(&place.repo, "sid-pc"));
+    assert!(precompact_section(&after_header(&out)).is_empty(), "source 無しでは出ない");
+    assert!(slot.is_file(), "source 無しでは枠を触らない");
+    let lines = session_lines_with(&place, &path, "compact");
+    let section = precompact_section(&lines);
+    assert_eq!(section.len(), 2, "compact で出る: {lines:?}");
+    assert!(section[0].starts_with("[PRECOMPACT] trigger=manual ts="), "{}", section[0]);
+    assert_eq!(section[1], "手番の途中");
+    assert!(!slot.exists(), "compact で消える");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// (d): transcript が無い（path が無い file・payload に key が無い）・assistant の text が 1 つも無い（user の行と
+/// tool_use だけの行・JSON でない行）周は枠を書かず rc 0・stdout 0 byte。読めない周だけ stderr 1 行（失敗を黙って
+/// 消さない）と記録 `precompact-skip transcript-unreadable`・無い周は黙って記録 `precompact-skip no-text` / `no-transcript`。
+/// 続く compact の SessionStart は `[PRECOMPACT]` を出さないだけで指示文と DATA は出す。
+#[test]
+fn hook_precompact_skips_unreadable_and_text_less_transcripts_without_a_slot() {
+    let place = role_place();
+    let path = stub_seat(&place, "precompnone", Some("orchestrator"));
+    let slot = slot_file(&place, "precompnone");
+    let missing = place.sock_dir.join("no-such.jsonl");
+    let textless = write_transcript(
+        &place,
+        "t-d",
+        &[user_line("x"), assistant_line(&[], true), "{\"type\":\"assistant\"".to_owned(), assistant_line(&["   \n"], false)],
+    );
+    let cases: [(&str, Option<&Path>, &str, bool); 3] = [
+        ("無い file", Some(&missing), "transcript-unreadable", true),
+        ("key 無し", None, "no-transcript", false),
+        ("text 無し", Some(&textless), "no-text", false),
+    ];
+    for (why, transcript, reason, surfaces) in cases {
+        let before = precompact_records(&place.state).len();
+        let stderr = run_precompact(&place, &path, &precompact_payload(&place.repo, "auto", transcript));
+        assert!(!slot.exists(), "{why}: 枠を書かない");
+        if surfaces {
+            assert_eq!(stderr.lines().count(), 1, "{why}: stderr 1 行: {stderr}");
+            assert!(stderr.contains(&format!("reason={reason}")), "{why}: {stderr}");
+        } else {
+            assert_eq!(stderr, "", "{why}: 失敗ではない＝黙る");
+        }
+        let records = precompact_records(&place.state);
+        assert_eq!(records.len(), before + 1, "{why}: 記録 1 行: {records:?}");
+        assert_eq!(what_of(&records[before]), format!("precompact-skip {reason}"), "{why}: {records:?}");
+    }
+    let lines = session_lines_with(&place, &path, "compact");
+    assert!(precompact_section(&lines).is_empty(), "枠が無い compact は出さない: {lines:?}");
+    assert_eq!(split_recent(lines.clone()).0.len(), 11, "指示文は出る: {lines:?}");
+    assert!(lines.iter().any(|line| line.starts_with("[RECENT-")), "DATA は出る: {lines:?}");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// (e): 幅（`TEXT_WIDTH` 文字）を超える文は切られ、切った事実が `[PRECOMPACT]` の行に `cut=<shown>/<total>` で出る
+/// （文字で数える＝多 byte を byte で切らない）。幅ちょうどは切らず `cut=` を持たない。
+#[test]
+fn hook_precompact_cuts_long_text_and_names_the_cut_on_the_line() {
+    let place = role_place();
+    let path = stub_seat(&place, "precompcut", Some("orchestrator"));
+    let long: String = "あ".repeat(TEXT_WIDTH + 50);
+    let transcript = write_transcript(&place, "t-e", &[assistant_line(&[&long], false)]);
+    run_precompact(&place, &path, &precompact_payload(&place.repo, "auto", Some(&transcript)));
+    let lines = session_lines_with(&place, &path, "compact");
+    let section = precompact_section(&lines);
+    assert_eq!(section.len(), 2, "{lines:?}");
+    assert!(section[0].ends_with(&format!(" lines=1 cut={TEXT_WIDTH}/{}", TEXT_WIDTH + 50)), "切った事実: {}", section[0]);
+    assert_eq!(section[1].chars().count(), TEXT_WIDTH, "幅で切る（文字）");
+    assert_eq!(section[1], "あ".repeat(TEXT_WIDTH), "先頭から逐語");
+    // 幅ちょうどは切らない。
+    let exact: String = "い".repeat(TEXT_WIDTH);
+    let transcript = write_transcript(&place, "t-e2", &[assistant_line(&[&exact], false)]);
+    run_precompact(&place, &path, &precompact_payload(&place.repo, "auto", Some(&transcript)));
+    let section = precompact_section(&session_lines_with(&place, &path, "compact"));
+    assert!(section[0].ends_with(" lines=1"), "切らない周に cut= は無い: {}", section[0]);
+    assert_eq!(section[1], exact);
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// (f): 登録の無い席（pane は解けるが row が無い）と `--pane` の無い周は枠を書かず（席の dir も作らない）、記録も
+/// 増やさない（rc 0・stdout 0 byte・stderr 0 byte）。
+#[test]
+fn hook_precompact_is_silent_for_an_unregistered_seat() {
+    let place = role_place();
+    let path = stub_seat(&place, "precompghost", None);
+    let transcript = write_transcript(&place, "t-f", &[assistant_line(&["登録の無い席の発言"], false)]);
+    let payload = precompact_payload(&place.repo, "auto", Some(&transcript));
+    let before = inject_lines(&place.state).len();
+    assert_eq!(run_precompact(&place, &path, &payload), "", "stderr 0 byte");
+    assert!(!slot_file(&place, "precompghost").exists(), "登録の無い席は枠を書かない");
+    let out = run_stub_hook(&path, &["pre-compact", "--rules", &place.rules], &payload);
+    assert_silent(&out, "--pane 無し");
+    assert_eq!(inject_lines(&place.state).len(), before, "記録は増えない");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// 純関数の面（1 行の読み）: assistant 以外・text の無い block・JSON でない行・配列でない content は `None`・同じ行の
+/// 最後の text block を取る・空白だけの text は無いと見る。書かない理由は閉じた enum（3 variant・宣言順）。
+#[test]
+fn hook_precompact_reads_the_last_text_block_of_a_line_purely() {
+    assert_eq!(precompact::text_of_line(&assistant_line(&["a", "b"], true)).as_deref(), Some("b"), "最後の text block");
+    assert_eq!(precompact::text_of_line(&assistant_line(&[], true)), None, "tool_use だけ");
+    assert_eq!(precompact::text_of_line(&assistant_line(&[" \n"], false)), None, "空白だけ");
+    assert_eq!(precompact::text_of_line(&user_line("a")), None, "user の行");
+    assert_eq!(precompact::text_of_line("{\"type\":\"assistant\""), None, "JSON でない");
+    assert_eq!(precompact::text_of_line("{\"type\":\"assistant\",\"message\":{\"content\":\"str\"}}"), None, "配列でない content");
+    let skips: Vec<&str> = precompact::SKIPS.iter().map(|skip| skip.as_str()).collect();
+    assert_eq!(skips, ["no-transcript", "transcript-unreadable", "no-text"], "理由の閉じた列（宣言順）");
+    assert!(vessel::order::is_declaration_order(precompact::SKIPS, |skip| skip as usize), "宣言順");
+    assert!(precompact::Skip::Unreadable.surfaces() && !precompact::Skip::NoText.surfaces(), "読めないだけが失敗");
+}
+
+/// 純関数の面（枠の往復）: `to_text` ↔ `parse`（改行入りの逐語・別 schema と壊れた 1 行目は `None`）・trigger の畳み
+/// （空白は `_`・空は `-`）・幅を超えた周の `cut=`。
+#[test]
+fn hook_precompact_round_trips_the_slot_purely() {
+    let slot = Slot::capture("man ual", "1 行目\n2 行目\n", 7);
+    assert_eq!(slot.trigger, "man_ual");
+    assert_eq!((slot.total, slot.shown(), slot.cut()), (10, 10, false));
+    assert_eq!(slot.to_text(), "schema=1 trigger=man_ual ts=7 total=10\n1 行目\n2 行目\n");
+    assert_eq!(Slot::parse(&slot.to_text()), Some(slot.clone()), "往復");
+    assert_eq!(slot.lines(), ["[PRECOMPACT] trigger=man_ual ts=1970-01-01T00:00:07Z lines=2", "1 行目", "2 行目"]);
+    assert_eq!(Slot::capture("", "x", 0).trigger, "-", "空の trigger は -");
+    let cut = Slot::capture("auto", &"x".repeat(TEXT_WIDTH + 1), 0);
+    assert!(cut.cut() && cut.header().ends_with(&format!(" cut={TEXT_WIDTH}/{}", TEXT_WIDTH + 1)), "{}", cut.header());
+    for broken in ["schema=2 trigger=a ts=1 total=1\nx", "schema=1 trigger=a ts=x total=1\nx", "schema=1 trigger=a ts=1 total=1", ""] {
+        assert_eq!(Slot::parse(broken), None, "{broken:?}");
+    }
+}
+
+/// 純関数の面（末尾だけの読み）: `TAIL_BYTES` を超える transcript は全読せず、途中から読んだ周は欠けた先頭の行を
+/// 捨てて末尾の assistant の text を取る。無い file は `Unreadable`・path 無しは `NoTranscript`。
+#[test]
+fn hook_precompact_reads_only_the_tail_of_the_transcript() {
+    let dir = tmp();
+    let file = dir.join("big.jsonl");
+    let filler = user_line(&"f".repeat(4_096));
+    let mut lines: Vec<String> = vec![assistant_line(&["古い"], false)];
+    let count = usize::try_from(precompact::TAIL_BYTES).unwrap_or_default() / filler.len() + 2;
+    lines.extend(std::iter::repeat_n(filler, count));
+    lines.push(assistant_line(&["末尾の発言"], false));
+    fs::write(&file, format!("{}\n", lines.join("\n"))).unwrap_or_else(|err| panic!("write: {err}"));
+    assert_eq!(precompact::last_text(Some(&file)).as_deref(), Ok("末尾の発言"));
+    let tail = precompact::tail_of(&file).unwrap_or_default();
+    assert!(u64::try_from(tail.len()).unwrap_or(u64::MAX) < precompact::TAIL_BYTES, "全読しない: {}", tail.len());
+    assert!(tail.starts_with('{') && !tail.contains("古い"), "欠けた先頭の行を捨てる");
+    assert_eq!(precompact::last_text(Some(&dir.join("none.jsonl"))), Err(precompact::Skip::Unreadable));
+    assert_eq!(precompact::last_text(None), Err(precompact::Skip::NoTranscript));
+    clean(&[&dir]);
+}
+
+/// §23 (1) 台帳の子 process の終わり方: (a) JSON を出した後 rc 非 0 で終わる偽の `bd` は `ledger-unreadable`（出力が読めても
+/// rc を見る・件数の 1 行も `unknown`）／(b) stdout を閉じた後も待ち上限を越えて生き続ける偽の `bd` は `ledger-timeout`
+/// （`ledger-unreadable` と分ける）／(c) stdout を閉じた後、上限の内側で少し遅れて rc 0 で終わる偽の `bd` は測れた側
+/// （`[RECENT-WIP]` と件数の 1 行）に出る。待ち上限は fixture の rules 行で 2 秒に置く。
+#[test]
+fn hook_recovery_edge_ledger_child_exit_code_and_lingering_are_told_apart() {
+    // flip-check: retroactive s2-07l.489.3
+    let place = role_place();
+    let path = stub_seat(&place, "edgeledger", Some("orchestrator"));
+    let rules = rules_with_ledger_timeout(&place, 2);
+    let json = "[{\"id\":\"w-1\",\"status\":\"in_progress\",\"title\":\"wip\"}]";
+    let nonzero = fake_bd_script(&place, "bd-rc", &format!("echo '{json}'\nexit 3\n"));
+    let lingering = fake_bd_script(&place, "bd-linger", &format!("echo '{json}'\nexec 1>&-\nsleep 8\nexit 0\n"));
+    let late = fake_bd_script(&place, "bd-late", &format!("echo '{json}'\nexec 1>&-\nsleep 0.2\nexit 0\n"));
+    let cases = [("JSON の後に rc 3", nonzero.as_str(), "ledger-unreadable"), ("stdout を閉じて上限を越えて生きる", lingering.as_str(), "ledger-timeout")];
+    for (why, bd, reason) in cases {
+        let (brief, recent) = brief_and_recent_with_rules(&place, &path, &rules, bd);
+        assert!(brief.iter().any(|line| line.contains("unknown（台帳を読めない）")), "{why}: 件数も unknown: {brief:?}");
+        for kind in [Kind::Wip, Kind::Bead] {
+            let expected = format!("[RECENT-UNMEASURED] kind={} reason={reason}", kind.as_str());
+            assert_eq!(marked(&recent, recent::MARKER_UNMEASURED, kind), vec![&expected], "{why}: {recent:?}");
+            assert!(marked(&recent, recent::MARKER_NONE, kind).is_empty(), "{why}: 測れない周に NONE は出ない: {recent:?}");
+        }
+        assert!(recent.iter().all(|line| !line.contains("w-1")), "{why}: 出力が読めても採らない: {recent:?}");
+        assert_eq!(lines_of(&recent, Kind::Git).len(), 1, "{why}: git の行は出る: {recent:?}");
+    }
+    let (brief, recent) = brief_and_recent_with_rules(&place, &path, &rules, &late);
+    assert!(brief.iter().any(|line| line.contains("open=0 in_progress=1 blocked=0")), "上限の内側で終わった周は数える: {brief:?}");
+    let wip: Vec<&str> = lines_of(&recent, Kind::Wip).iter().map(|line| line.as_str()).collect();
+    assert_eq!(wip, vec!["[RECENT-WIP] w-1 - wip"], "上限の内側で遅れて rc 0 は測れた側: {recent:?}");
+    assert!(marked(&recent, recent::MARKER_UNMEASURED, Kind::Wip).is_empty(), "{recent:?}");
+    assert!(marked(&recent, recent::MARKER_UNMEASURED, Kind::Bead).is_empty(), "{recent:?}");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// §23 (2) worktree を測る順: 列挙の順（`git worktree list`）と HEAD の commit の新しい順が**食い違う** dirty な worktree 2 本
+/// を作り、`[RECENT-DIRTY]` の行が anchor の後ろに commit の新しい順で並ぶ。commit を 1 つも持たない（未生の HEAD の）
+/// dirty な worktree を混ぜても 2 本の順は変わらず、その worktree は末尾に来る（時刻を引けない側＝列挙の順に落ちない）。
+#[test]
+fn hook_recovery_edge_dirty_worktrees_follow_commit_recency_not_enumeration() {
+    // flip-check: retroactive s2-07l.489.3
+    let place = role_place();
+    let path = stub_seat(&place, "edgeorder", Some("orchestrator"));
+    let repo = &place.repo;
+    let first = add_worktree(repo, "wt-a");
+    let second = add_worktree(repo, "wt-b");
+    // 列挙の順を実測し、先に列挙される方に古い commit・後に列挙される方に新しい commit を置く＝順が食い違う。
+    let listed = listed_worktrees(repo);
+    assert_eq!(listed.len(), 3, "anchor + 2 本: {listed:?}");
+    let first_listed = listed[1].ends_with("/wt-a");
+    let (older, newer) = if first_listed { (&first, &second) } else { (&second, &first) };
+    commit_dated(older, "older", "2020-01-02T00:00:00Z");
+    commit_dated(newer, "newer", "2030-01-02T00:00:00Z");
+    fs::write(older.join("stray.txt"), "x\n").unwrap_or_else(|err| panic!("write: {err}"));
+    fs::write(newer.join("stray.txt"), "x\n").unwrap_or_else(|err| panic!("write: {err}"));
+    let unborn = repo.join(".wt").join("unborn");
+    git(repo, &["worktree", "add", "-q", "--orphan", "-b", "unborn", &unborn.display().to_string()]);
+    fs::write(unborn.join("stray.txt"), "x\n").unwrap_or_else(|err| panic!("write: {err}"));
+    let listed = listed_worktrees(repo);
+    assert_eq!(listed.len(), 4, "anchor + 3 本: {listed:?}");
+    let porcelain = git(repo, &["worktree", "list", "--porcelain"]);
+    assert!(porcelain.contains("HEAD 0000000000000000000000000000000000000000"), "未生の HEAD は全部 0: {porcelain}");
+    let rel = |path: &Path| format!("[RECENT-DIRTY] {}", path.strip_prefix(repo).unwrap_or(path).display());
+    let expected = vec!["[RECENT-DIRTY] .".to_owned(), rel(newer), rel(older), rel(&unborn)];
+    let enumerated: Vec<String> = listed.iter().skip(1).map(|path| rel(Path::new(path))).collect();
+    assert_ne!(enumerated, expected[1..].to_vec(), "前提: 列挙の順は期待の順と食い違う: {listed:?}");
+    let (_, recent) = brief_and_recent(&place, &path, &place.bd);
+    let dirty: Vec<String> = lines_of(&recent, Kind::Dirty).iter().map(|line| (*line).clone()).collect();
+    assert_eq!(dirty, expected, "anchor → 新しい HEAD → 古い HEAD → 未生の HEAD: {recent:?}");
+    assert!(marked(&recent, recent::MARKER_CUT, Kind::Dirty).is_empty(), "上限の内側: {recent:?}");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// §23 (3) 上限とちょうど同じ件数: commit の本数が `COMMIT_LIMIT` とちょうど同じ repo は `[RECENT-CUT] kind=commit` を出さず
+/// 全 commit が出る。worktree の本数が `DIRTY_SCAN_LIMIT` とちょうど同じ repo は `[RECENT-CUT] kind=dirty` を出さない。
+/// 対として 1 本ずつ足すとどちらの CUT も `shown=<上限> total=<上限 + 1>` で出る（境界は「超えた」側だけ）。
+#[test]
+fn hook_recovery_edge_counts_exactly_at_the_limit_are_not_cut() {
+    // flip-check: retroactive s2-07l.489.3
+    let place = role_place();
+    let path = stub_seat(&place, "edgelimit", Some("orchestrator"));
+    let repo = &place.repo;
+    for index in 1..COMMIT_LIMIT {
+        fs::write(repo.join("src").join(format!("c{index}.rs")), "// c\n").unwrap_or_else(|err| panic!("write: {err}"));
+        git(repo, &["add", "-A"]);
+        git(repo, &["commit", "-q", "-m", &format!("commit {index}")]);
+    }
+    assert_eq!(git(repo, &["rev-list", "--count", "HEAD"]), COMMIT_LIMIT.to_string(), "seed + 追加 = 上限ちょうど");
+    for index in 1..DIRTY_SCAN_LIMIT {
+        add_worktree(repo, &format!("w{index}"));
+    }
+    assert_eq!(listed_worktrees(repo).len(), DIRTY_SCAN_LIMIT, "anchor + 追加 = 上限ちょうど");
+    let (_, recent) = brief_and_recent(&place, &path, &place.bd);
+    assert_eq!(lines_of(&recent, Kind::Commit).len(), COMMIT_LIMIT, "全 commit が出る: {recent:?}");
+    assert!(marked(&recent, recent::MARKER_CUT, Kind::Commit).is_empty(), "上限ちょうどは切らない: {recent:?}");
+    let dirty: Vec<&str> = lines_of(&recent, Kind::Dirty).iter().map(|line| line.as_str()).collect();
+    assert_eq!(dirty, vec!["[RECENT-DIRTY] ."], "anchor だけが dirty（worktree は clean）: {recent:?}");
+    assert!(marked(&recent, recent::MARKER_CUT, Kind::Dirty).is_empty(), "上限ちょうどは切らない: {recent:?}");
+    // 対: 1 本ずつ超えるとどちらも切る。
+    fs::write(repo.join("src").join("over.rs"), "// over\n").unwrap_or_else(|err| panic!("write: {err}"));
+    git(repo, &["add", "-A"]);
+    git(repo, &["commit", "-q", "-m", "over"]);
+    add_worktree(repo, "over");
+    let (_, recent) = brief_and_recent(&place, &path, &place.bd);
+    let commit_cut = format!("[RECENT-CUT] kind=commit shown={COMMIT_LIMIT} total={}", COMMIT_LIMIT + 1);
+    assert_eq!(marked(&recent, recent::MARKER_CUT, Kind::Commit), vec![&commit_cut], "{recent:?}");
+    let dirty_cut = format!("[RECENT-CUT] kind=dirty shown={DIRTY_SCAN_LIMIT} total={}", DIRTY_SCAN_LIMIT + 1);
+    assert_eq!(marked(&recent, recent::MARKER_CUT, Kind::Dirty), vec![&dirty_cut], "{recent:?}");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// §23 (4) 時刻の字: 時差の字が 2 桁でない `updated_at`（`+9:00`・`+09:0`）を持つ in_progress の bead は `[RECENT-WIP]` に
+/// 更新時刻の値 `-` で出て（時刻を読めない側・9 時間ずれた時刻に化けない）、同じ字の open の bead は 24 時間の窓に
+/// 入らない。対として同じ時刻を `+09:00` で持つ open の bead は窓に入る（字の桁だけが違う）。
+#[test]
+fn hook_recovery_edge_offset_without_two_digits_is_an_unreadable_time() {
+    // flip-check: retroactive s2-07l.489.3
+    let place = role_place();
+    let path = stub_seat(&place, "edgeoffset", Some("orchestrator"));
+    let now = vessel::seat::state::now_secs();
+    let stamp = vessel::fleet::cli::format_utc(now - 60);
+    assert!(stamp.ends_with('Z'), "{stamp}");
+    let odd_hour = stamp.replace('Z', "+9:00");
+    let odd_minute = stamp.replace('Z', "+09:0");
+    let two_digits = stamp.replace('Z', "+09:00");
+    let bead = |id: &str, status: &str, title: &str, at: &str| {
+        format!("{{\"id\":\"{id}\",\"status\":\"{status}\",\"title\":\"{title}\",\"updated_at\":\"{at}\"}}")
+    };
+    let items = [
+        bead("w-odd", "in_progress", "時差が 1 桁", &odd_hour),
+        bead("o-odd", "open", "同じ字の open", &odd_hour),
+        bead("o-min", "open", "分が 1 桁", &odd_minute),
+        bead("o-ok", "open", "2 桁の対", &two_digits),
+    ];
+    let bd = fake_bd_in(&place, "ledger-offset", &format!("[{}]", items.join(",")));
+    let (brief, recent) = brief_and_recent(&place, &path, &bd);
+    assert!(brief.iter().any(|line| line.contains("open=3 in_progress=1 blocked=0")), "件数は字に依らない: {brief:?}");
+    let wip: Vec<&str> = lines_of(&recent, Kind::Wip).iter().map(|line| line.as_str()).collect();
+    assert_eq!(wip, vec!["[RECENT-WIP] w-odd - 時差が 1 桁"], "読めない時刻は -: {recent:?}");
+    let shifted = vessel::fleet::cli::format_utc(now - 60 - 9 * 3_600);
+    let beads: Vec<&str> = lines_of(&recent, Kind::Bead).iter().map(|line| line.as_str()).collect();
+    assert_eq!(beads, vec![format!("[RECENT-BEAD] o-ok open {shifted} 2 桁の対")], "2 桁の字だけが窓に入る: {recent:?}");
+    assert!(recent.iter().all(|line| !line.contains("o-odd") && !line.contains("o-min")), "2 桁でない字は窓に入らない: {recent:?}");
+    assert!(marked(&recent, recent::MARKER_UNMEASURED, Kind::Bead).is_empty(), "読めた周: {recent:?}");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// §23 (5) 枠が「無い」以外の理由で読めない・消せない周: 席の置き場の枠の名前が dir になっている周の `source = compact` の
+/// SessionStart は `[PRECOMPACT]` を出さず、stderr に読めない理由（`slot-unreadable`）の 1 行と消せない理由の 1 行を出し、
+/// §5 の指示文 11 行と §21 の DATA は出す（rc 0・記録は増えない・dir は残る）。枠が無い普通の周は stderr にどちらの行も
+/// 出さない（読めないと無いを分ける・C10.2）。
+#[test]
+fn hook_recovery_edge_compact_with_a_directory_slot_tells_both_failures_and_keeps_the_rest() {
+    // flip-check: retroactive s2-07l.489.3
+    let place = role_place();
+    let path = stub_seat(&place, "edgeslotdir", Some("orchestrator"));
+    let slot = slot_file(&place, "edgeslotdir");
+    fs::create_dir_all(&slot).unwrap_or_else(|err| panic!("mkdir: {err}"));
+    let before = precompact_records(&place.state).len();
+    let args = ["session-start", "--pane", STUB_PANE, "--rules", &place.rules, "--bd", &place.bd];
+    let out = run_stub_hook(&path, &args, &session_payload(&place.repo, "sid-pc", "compact"));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "席は止めない: {}", stderr_text(&out));
+    let stderr = stderr_text(&out);
+    let errs: Vec<&str> = stderr.lines().collect();
+    assert_eq!(errs.len(), 2, "読めない理由と消せない理由の 2 行: {stderr}");
+    assert!(errs[0].contains("reason=slot-unreadable"), "読めない理由: {}", errs[0]);
+    assert!(errs[1].contains("を消せない") && errs[1].contains(&slot.display().to_string()), "消せない理由: {}", errs[1]);
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    let mut lines = stdout.lines();
+    assert!(lines.next().unwrap_or_default().starts_with(&format!("[{NAME}/SessionStart] served version=")), "{stdout}");
+    let rest: Vec<String> = lines.map(str::to_owned).collect();
+    assert!(precompact_section(&rest).is_empty(), "枠は出ない: {rest:?}");
+    let (brief, recent) = split_recent(rest);
+    assert_eq!(brief.len(), 11, "指示文は出る: {brief:?}");
+    assert!(!recent.is_empty() && recent.iter().all(|line| line.starts_with("[RECENT-")), "DATA は出る: {recent:?}");
+    assert!(slot.is_dir(), "消せない枠は残る");
+    assert_eq!(precompact_records(&place.state).len(), before, "出さない周は記録も増えない");
+    // 枠が無い普通の周: dir を退けて同じ compact を撃つと stderr は 0 byte（どちらの行も出ない）。
+    fs::remove_dir_all(&slot).unwrap_or_else(|err| panic!("rmdir: {err}"));
+    let out = run_stub_hook(&path, &args, &session_payload(&place.repo, "sid-pc", "compact"));
+    let rest = after_header(&out);
+    assert!(precompact_section(&rest).is_empty(), "枠が無い compact は出さない: {rest:?}");
+    assert_eq!(split_recent(rest).0.len(), 11, "指示文は出る");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// §23 (6) socket を渡した周の席の解決: PreCompact の口に `--tmux-socket` を渡した周も登録済みの席として枠を書き（記録
+/// `precompact-slot` が席を名乗る）、続く socket 付きの `source = compact` の SessionStart がその枠を出す。対として
+/// socket を渡さない周は（socket を要る偽 tmux では）席が解けず枠を書かない＝socket が解決に渡った証拠。
+#[test]
+fn hook_recovery_edge_precompact_with_a_socket_resolves_the_registered_seat() {
+    // flip-check: retroactive s2-07l.489.3
+    let place = role_place();
+    let name = "edgesock";
+    let path = socket_stub_tmux_path(&place, name, &place.socket);
+    let stamp = run_stub_hook(&path, &["session-start", "--pane", STUB_PANE, "--tmux-socket", &place.socket], &stamp_payload(&place.repo, "sid-recent"));
+    assert_eq!(stamp.status.code(), Some(i32::from(RC_OK)), "打刻の session-start は rc 0: {}", stderr_text(&stamp));
+    let target = format!("{name}:{name}");
+    let registered = Command::new(bin())
+        .args(["seat", "register", "--state-dir", &place.state.display().to_string(), "--target", &target])
+        .args(["--role", "orchestrator", "--account", "a1", "--launch", &place.launch, "--anchor", &place.repo.display().to_string()])
+        .output()
+        .unwrap_or_else(|err| panic!("binary: {err}"));
+    assert_eq!(registered.status.code(), Some(i32::from(RC_OK)), "seat register は rc 0: {}", stderr_text(&registered));
+    let text = "socket 付きの席の発言";
+    let transcript = write_transcript(&place, "t-sock", &[assistant_line(&[text], false)]);
+    let payload = precompact_payload(&place.repo, "auto", Some(&transcript));
+    let slot = slot_file(&place, name);
+    let with_socket = ["pre-compact", "--pane", STUB_PANE, "--tmux-socket", &place.socket, "--rules", &place.rules];
+    let before = precompact_records(&place.state).len();
+    let out = run_stub_hook(&path, &with_socket, &payload);
+    assert_silent(&out, "socket 付きの pre-compact");
+    let parsed = Slot::parse(&fs::read_to_string(&slot).unwrap_or_default()).unwrap_or_else(|| panic!("枠の形"));
+    assert_eq!(parsed.text, text, "socket を渡した周も登録済みの席として枠を書く");
+    let records = precompact_records(&place.state);
+    assert_eq!(records.len(), before + 1, "記録 1 行: {records:?}");
+    assert_eq!(what_of(&records[before]), "precompact-slot", "{records:?}");
+    assert_attributed(&records[before], Some(&format!("{name}_{name}")), "枠の記録");
+    // 対: socket を渡さない周はこの偽 tmux では席が解けない＝枠を書かず記録も増えない。
+    fs::remove_file(&slot).unwrap_or_else(|err| panic!("rm: {err}"));
+    let out = run_stub_hook(&path, &["pre-compact", "--pane", STUB_PANE, "--rules", &place.rules], &payload);
+    assert_silent(&out, "socket 無しの pre-compact");
+    assert!(!slot.exists(), "socket 無しでは席が解けず枠を書かない");
+    assert_eq!(precompact_records(&place.state).len(), before + 1, "記録も増えない");
+    // 読む側も socket 付きで同じ席を解く。
+    assert_silent(&run_stub_hook(&path, &with_socket, &payload), "socket 付きの pre-compact（2 回目）");
+    let args = ["session-start", "--pane", STUB_PANE, "--tmux-socket", &place.socket, "--rules", &place.rules, "--bd", &place.bd];
+    let lines = after_header(&run_stub_hook(&path, &args, &session_payload(&place.repo, "sid-pc", "compact")));
+    let section = precompact_section(&lines);
+    assert_eq!(section.len(), 2, "header + 逐語の 1 行: {lines:?}");
+    assert_eq!(section[1], text);
+    assert!(!slot.exists(), "出した後に枠は消える");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
