@@ -936,7 +936,7 @@ write-set = ["crates/scribe2/src/pipe/land/finish.rs", "crates/scribe2/src/pipe/
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_train_terminal_"]
 size = "S"
 growth = ["crates/scribe2/src/pipe/land/finish.rs:30", "crates/scribe2/src/pipe/land.rs:10"]
-done = "(1) land_train が列の最後の便（main を進めた先端の commit を持つ便）の外の便に『push の先端でない』を閉じた 2 値で finish から terminal へ運び、その 1 か所だけが先端を知る (2) 先端でない便の terminal は push を今どおり撃って terminal:push:<remote> を記し、CI の照合（唯一の待ちと ci_now）を 1 回も撃たずに terminal:ci:unmeasurable を記して止まり（close しない・stdout の terminal=ci:unmeasurable）、先端の便・単独の着地・--terminal-only の終端は push → CI → close の今の 3 段のまま (3) 終端の 7 値・event の詞・ci_now の判定・pipe.ci_wait_s と pipe.ci_poll_s の値・列の記帳の順（後続 → 先頭）は変わらない 歯: pipe_train_terminal_ が、偽 remote と常に success を返す偽 CI と偽 bd を持つ 3 本の列の着地で、先端の便の Landed の後ろが push・ci:success・close:ok の 3 件、先端でない 2 本の Landed の後ろが push と ci:unmeasurable の 2 件で close を持たず、偽 CI の呼び出しが 1 回、偽 remote の main が先端の sha を指すことを測り、base では 3 本とも CI を照合して close する（偽 CI の呼び出し 3 回）ので RED"
+done = "(1) land_train が列の最後の便（main を進めた先端の commit を持つ便）の外の便に『push の先端でない』を閉じた 2 値で finish から terminal へ運び、その 1 か所だけが先端を知る (2) 先端でない便の terminal は push を今どおり撃って terminal:push:<remote> を記し、CI の照合（唯一の待ちと ci_now）を 1 回も撃たずに terminal:ci:unmeasurable を記して止まり（close しない・stdout の terminal=ci:unmeasurable）、先端の便・単独の着地・--terminal-only の終端は push → CI → close の今の 3 段のまま (3) 終端の 7 値・event の詞・ci_now の判定・pipe.ci_wait_s と pipe.ci_poll_s の値・列の記帳の順（後続 → 先頭）は変わらない 歯: pipe_train_terminal_ が、偽 remote と常に success を返す偽 CI と偽 bd を持つ 3 本の列の着地で、先端の便の Landed の後ろが push・ci:success・close:ok の 3 件、先端でない 2 本の Landed の後ろが push と ci:unmeasurable の 2 件で close を持たず、偽 CI の呼び出し（ci_call_count）が 2 回（先端の便の待ちの最初の 1 回と読み直しの 1 回）、偽 remote の main が先端の sha を指すことを測り、base では 3 本とも CI を照合して close する（偽 CI の呼び出し 6 回）ので RED"
 
 <!-- contracts:end -->
 
@@ -1249,6 +1249,7 @@ done = "(1) land_train が列の最後の便（main を進めた先端の commit
   - 非公開の隣の project（2026-09-27）: 4 本の列の着地の後、先端でない 3 本の終端がそれぞれ 900 秒待って `ci:unmeasurable` で終わった。その間、着地の窓（`pipe land-window`）は busy のままで、列の後ろの 6 本と設計の merge が止まった（止まる長さは先端でない 3 本 × 900 秒＝約 45 分・deduced）。
 - 現物（main・verified）:
   - `crates/scribe2/src/pipe/land/finish.rs` の `land_train` は、列の便ごとに `commit-tree` で commit を連ねて main を CAS で先端まで進め、主実測を先端の木で 1 回撃った後、便ごとに `finish` を撃つ（後続 → 先頭の順）。`finish` は便ごとに `terminal` を撃ち、`terminal` は `git push <remote> main:main` の後に、その便の sha で CI の照合（`Completion::CiResult` の待ちと `ci_now`）を撃つ。
+  - 終端 1 本の CI の行の呼び出しは、success の周で 2 回である: 待ちの完了条件 `Completion::CiResult` の評価（`crates/scribe2/src/fleet/wait.rs` の :159 が `ci_now` を撃つ・最初の評価は眠る前）の 1 回と、待ちの後に `terminal` が結果を読み直す `ci_now` の 1 回。e2e の偽 CI は呼ばれるたびに回数の file へ 1 行を足し、`ci_call_count`（`tests/e2e/pipe/land.rs` の :2548）がその行数を返す（`pipe_terminal_ci_poll_first_check_is_before_the_sleep` が同じ数え方で 2 回を測る）。
   - 最初に撃たれた終端の push が列の全部の commit を 1 回で出す。forge の CI（GitHub Actions の push の event）は push の先端の commit にだけ run を作るので、先端でない sha の照合は run を 1 本も見ず、上限まで待つ。
   - 同じ process が便ごとに順に終端を撃つので、先端でない便 1 本ごとに上限ぶん後続の終端が遅れ、列の便は終端まで終わらない（窓の列に残る）。
 - 形（番号は done と 1:1）:
@@ -1257,8 +1258,8 @@ done = "(1) land_train が列の最後の便（main を進めた先端の commit
   3. 変えないもの: 終端の 7 値・event の詞（`terminal:push:<remote>` / `terminal:ci:unmeasurable` の字面）・`ci_now` の判定・rules 行 `pipe.ci_wait_s` と `pipe.ci_poll_s` の値・列の記帳の順（後続 → 先頭）・先端の便の push → CI → close。
 - 歯（`pipe_train_terminal_` 接頭辞・`crates/scribe2-boundary/tests/e2e/pipe/land/retire.rs`・親の `tests/e2e/pipe/land.rs` の `fake_terminal` と列の helper を `use super::*` で使う・`grep -rn "fn pipe_train_terminal_" crates/` は 0 件・2026-09-28）: 偽 remote と常に success を返す偽 CI と偽 bd を宣言した repo で、3 本の列を先頭の land で着地させる。
   - 先端の便の `Landed` の後ろが `terminal:push:fake`・`terminal:ci:success`・`terminal:close:ok` の 3 件で、先端でない 2 本の `Landed` の後ろは `terminal:push:fake` と `terminal:ci:unmeasurable` の 2 件で close を持たない。
-  - 偽 CI の呼び出しの回数が 1、偽 remote の main が先端の sha を指す。
-  - base では 3 本とも CI を照合して close する（偽 CI の呼び出し 3 回）ので RED（機能不在）。
+  - 偽 CI の呼び出しの回数（`ci_call_count`）が 2（先端の便の待ちの最初の 1 回と読み直しの 1 回だけ）、偽 remote の main が先端の sha を指す。
+  - base では 3 本とも CI を照合して close する（偽 CI の呼び出し 6 回＝3 本 × 2 回）ので RED（機能不在）。
 - 限界: 先端でない便は close されず、台帳の close は手のまま（先端の CI が success で、便の sha が先端の祖先であることを測ってから閉じる）。先端の CI の結果を先端でない便の close に使うには、FR50 の「着地 commit の CI の結果を commit id で照合し」を改める要件の改訂が要る（user の `/folio-architect`・本行の外）。
 - 却下:
   - 先端の CI の結果で先端でない便も close する。FR50 の照合の対象（着地 commit の CI）を変えるので、要件の改訂が先に要る（上の限界）。
