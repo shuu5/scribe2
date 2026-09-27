@@ -227,13 +227,19 @@ fn quoted_date_year(line: &str) -> Option<u32> {
     })
 }
 
-/// e2e の tracked な `.rs` の本数と、reset / 期限の key を持つ行のうち日付の形の字面を持つ行を年で 2 つに割った
-/// 本数を 3 つ組で pin する。年 2099 以上は番兵（時限にならない）・未満は壁時計と比べれば時限になる字面で、
-/// 1 本で 2 本を兼ねないよう別々の欄で持つ。message は母集団の全数と当たった行（file・行番号・年）を出す。
+/// e2e の tracked な `.rs` の集合が `main.rs` と宣言の指す file の集合に等しいことと、reset / 期限の key を持つ
+/// 行のうち日付の形の字面を持つ行を年で 2 つに割った本数を pin する。宣言は各 `.rs` の列 0 の `mod <名>;` の行で、
+/// `main.rs` の宣言は `tests/e2e/<名>.rs` を・`<dir>/<stem>.rs` の宣言は `<dir>/<stem>/<名>.rs` を指す（inline の
+/// `mod <名> {` は数えない・本数は literal で持たない＝file を割る便がこの歯の行を動かさない・設計
+/// docs/design/carry-prep.md §8 行 e・`s2-07l.674`）。食い違いは両向きの差で名指す。年 2099 以上は番兵（時限に
+/// ならない）・未満は壁時計と比べれば時限になる字面で、1 本で 2 本を兼ねないよう別々の欄で持つ。message は
+/// 母集団の全数と当たった行（file・行番号・年）を出す。
 #[test]
 fn e2e_fixture_clock_dated_reset_lines_are_pinned() {
 // flip-check: retroactive s2-07l.469
+// flip-check: retroactive s2-07l.674
     const SENTINEL_YEAR: u32 = 2099;
+    const ROOT: &str = "tests/e2e/main.rs";
     let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let listed = Command::new("git")
         .arg("-C")
@@ -245,9 +251,17 @@ fn e2e_fixture_clock_dated_reset_lines_are_pinned() {
     let tracked: Vec<String> =
         String::from_utf8_lossy(&listed.stdout).lines().filter(|path| path.ends_with(".rs")).map(str::to_owned).collect();
     let mut hits: Vec<(String, usize, u32)> = Vec::new();
+    let mut declared = std::collections::BTreeSet::from([ROOT.to_owned()]);
     for path in &tracked {
         let text = fs::read_to_string(crate_dir.join(path)).unwrap_or_else(|e| panic!("{path} を読める: {e}"));
+        let parent = if path == ROOT { "tests/e2e" } else { path.strip_suffix(".rs").unwrap_or(path) };
         for (at, line) in text.lines().enumerate() {
+            let module = line.strip_prefix("mod ").and_then(|rest| rest.strip_suffix(';'));
+            if let Some(name) = module.filter(|name| {
+                !name.is_empty() && name.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+            }) {
+                declared.insert(format!("{parent}/{name}.rs"));
+            }
             if !CLOCK_KEYS.iter().any(|key| line.contains(key)) {
                 continue;
             }
@@ -256,13 +270,23 @@ fn e2e_fixture_clock_dated_reset_lines_are_pinned() {
             }
         }
     }
+    let tracked_set: std::collections::BTreeSet<String> = tracked.iter().cloned().collect();
+    let undeclared: Vec<&String> = tracked_set.difference(&declared).collect();
+    let missing: Vec<&String> = declared.difference(&tracked_set).collect();
+    assert!(
+        undeclared.is_empty() && missing.is_empty(),
+        "e2e の tracked な .rs と宣言の指す file が食い違う: 宣言の無い tracked な .rs {undeclared:?}・\
+         tracked でない宣言の先 {missing:?}（tracked {} 本・宣言の指す file と main.rs {} 本）",
+        tracked_set.len(),
+        declared.len()
+    );
     let sentinel = hits.iter().filter(|(_, _, year)| *year >= SENTINEL_YEAR).count();
     let dated = hits.len() - sentinel;
     let mut files: Vec<&str> = hits.iter().map(|(path, _, _)| path.as_str()).collect();
     files.dedup();
     assert_eq!(
-        (tracked.len(), sentinel, dated),
-        (29, 7, 5),
+        (sentinel, dated),
+        (7, 5),
         "母集団: e2e の tracked な .rs {} 本・当たった行 {} 行（年 {SENTINEL_YEAR} 以上 {sentinel}・未満 {dated}）・\
          file {files:?}・行 {hits:?}",
         tracked.len(),
