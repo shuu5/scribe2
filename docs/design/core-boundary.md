@@ -271,7 +271,7 @@ title = "core-spawn を deny に・R-C4-5 を足す — core-spawn の母集団�
 req = ["NFR2", "NFR3"]
 section = "9"
 touches = ["crate::rules::RuleKind"]
-write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2-boundary/tests/e2e/rules.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__rules__rules_external_form.snap", "crates/xtask/src/limits.rs", "crates/xtask/src/check_sizes.rs", "crates/xtask/src/check.rs", "crates/xtask/src/check_tests.rs", "docs/design/rules-manifest.md"]
+write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2-boundary/tests/e2e/rules.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__rules__rules_external_form.snap", "crates/xtask/src/limits.rs", "crates/xtask/src/check_sizes.rs", "crates/xtask/src/check.rs", "crates/xtask/src/check_tests.rs", "docs/design/rules-manifest.md", "+crates/scribe2-boundary/tests/e2e/rules/embedded.rs"]
 verify = ["cargo nextest run -p xtask --no-tests=fail sizes_core_spawn_denies_src_body_sites", "cargo nextest run -p xtask --no-tests=fail sizes_boundary_spawn_denies_a_second_holder_file", "cargo nextest run -p xtask --no-tests=fail sizes_boundary_lines_over_the_limit_is_denied", "cargo nextest run -p xtask --no-tests=fail limits_read_carries_the_boundary_lines_row", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_embedded_manifest_declares_boundary_lines_row_with_its_ruling"]
 depends = ["d", "e", "f", "g", "h", "j"]
 size = "S"

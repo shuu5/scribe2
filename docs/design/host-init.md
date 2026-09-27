@@ -278,7 +278,7 @@ id = "g"
 title = "host の面の端末の表 [[device]] — name・ssh・chrome・os（必須）と display・ime-env・profile-dir（任意）を host の面にだけ受け、兄弟 module が行番号つきで検査し、doctor の host の行に devices=<名>,<名> を足す（§15・ADR-0076・s2-07l.658・裁定 2026-09-26T15:16Z）"
 req = ["FR57", "NFR4"]
 section = "15"
-write-set = ["crates/scribe2/src/rules/manifest.rs", "crates/scribe2/src/rules/mod.rs", "+crates/scribe2/src/rules/device.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2-boundary/src/main.rs", "crates/scribe2-boundary/tests/e2e/rules.rs", "crates/scribe2-boundary/tests/e2e/seat/account.rs", "docs/design/host-init.md"]
+write-set = ["crates/scribe2/src/rules/manifest.rs", "crates/scribe2/src/rules/mod.rs", "+crates/scribe2/src/rules/device.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2-boundary/src/main.rs", "crates/scribe2-boundary/tests/e2e/rules.rs", "crates/scribe2-boundary/tests/e2e/seat/account.rs", "docs/design/host-init.md", "+crates/scribe2-boundary/tests/e2e/rules/host.rs"]
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail host_device_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_host_device_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail host_device_doctor_"]
 size = "M"
 growth = ["crates/scribe2/src/rules/manifest.rs:18", "crates/scribe2/src/rules/mod.rs:2", "crates/scribe2/src/account/mod.rs:10", "crates/scribe2-boundary/src/main.rs:2"]
