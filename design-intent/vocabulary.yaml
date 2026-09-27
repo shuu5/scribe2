@@ -759,7 +759,7 @@ terms:
   - canonical: 入力欄の門
     domain: consumer
     aliases: [input gate]
-    definition: 器が席の入力欄へ 1 行を送る前に入力欄を読み、 人の打ちかけや読めない周には 1 key も送らない仕組み (ADR-0058)。 管理 tick の打刻の合図・群の通知・便の終端の周の通知・裁定の指し示しが同じ 1 本を通る。
+    definition: 器が席の入力欄へ 1 行を送る前に入力欄を読み、 人の打ちかけや読めないときには 1 key も送らない仕組み (ADR-0058)。 管理 tick の打刻の合図・群の通知・便の終端の周の通知・裁定の指し示しが同じ 1 本を通る。
     relationships: [管理 tick, 打刻の合図, 裁定の指し示し, 便の終端の周の通知, 状態の打刻]
   - canonical: 注入の口
     domain: consumer
