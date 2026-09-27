@@ -161,6 +161,18 @@ enabled = true
 ruling = "grill U3"
 ruled_at = "2026-09-07"
 
+# 事前審査の先撃ちの lens を 1 周に起こす本数の上限（本・設計 dispatcher.md §27 形 1・行 aa）。周の頭に撃ち中の行を数えて
+# 上限に含める（周をまたいで越えない）。材料の組み直しは上限の外。0 は撃たない。任意の行: 読めない周は撃たず、
+# [DISPATCH-PRECHECK] の行の末尾に prelens=unset を足す。
+
+[[rule]]
+id = "pipe.precheck_lens_per_round"
+kind = "PipePrecheckLensPerRound"
+value = 1
+enabled = true
+ruling = "user 2026-09-27T17:33Z 項 2-2"
+ruled_at = "2026-09-27"
+
 [[rule]]
 id = "gate.token_cap"
 kind = "GateTokenCap"

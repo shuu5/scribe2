@@ -292,13 +292,13 @@ impl Finding {
 
 /// 審査を 1 回通す。
 pub fn review(entry: &Review<'_>) -> Outcome {
-    let material = materials(entry);
-    let contract = match keep(entry, &material) {
+    let (source, dir) = (contract_path(entry.state_dir, entry.run), review_dir(entry.state_dir, entry.run));
+    let (contract, promised) = match stage(entry.repo, (entry.contract, &source), entry.requirements, &dir, "") {
         Ok(found) => found,
         Err(reason) => return broken(reason),
     };
     let (finding, scope, usage) = decide(entry, &contract);
-    let finding = narrow(finding, !material.promises.is_empty());
+    let finding = narrow(finding, promised);
     let verdict = finding.verdict;
     // **審査の lens の消費は判定を書く周に 1 件**（`Reviewed` の前・設計 gate-cost.md §26 形 (2)）。揃わない周は書かず、
     // 書けない周も判定と rc は変えない。
@@ -314,18 +314,35 @@ pub fn review(entry: &Review<'_>) -> Outcome {
     }
 }
 
+/// 審査の材料を `dir` に組む口（**Reviewed の段と先撃ちの 1 つ**・設計 dispatcher.md §27 形 aa 1・組み手を 2 本にしない・C2）:
+/// [`materials`] を `repo` から読み、[`keep`] で `dir` に置き、lens に渡す契約の写しの path と約束の行を持つかを返す。`contract` は
+/// 読み込んだ契約とその file（写しの元）の対。`note` が空でない周は設計の材料の末尾に足す（先撃ちの予想の印）。
+pub(in crate::pipe) fn stage(
+    repo: &Path,
+    contract: (&Contract, &Path),
+    requirements: &str,
+    dir: &Path,
+    note: &str,
+) -> Result<(PathBuf, bool), String> {
+    let mut material = materials(repo, contract.0, requirements);
+    if !note.is_empty() {
+        material.design = format!("{}\n{note}", material.design);
+    }
+    keep(dir, contract.1, &material).map(|path| (path, !material.promises.is_empty()))
+}
+
 /// 材料を base から読む（読めなさは本文の明示の 1 行にする・C10）。
-fn materials(entry: &Review<'_>) -> Material {
-    let design = design_text(entry.repo, &entry.contract.design);
-    let promised = promise_rows(entry.repo, &entry.contract.design);
+fn materials(repo: &Path, contract: &Contract, requirements: &str) -> Material {
+    let design = design_text(repo, &contract.design);
+    let promised = promise_rows(repo, &contract.design);
     // 外の材料の本文は節の本文（導出物の行は goal）・done・約束の行の text（§51 形 2）。
-    let mut bodies = vec![design.as_str(), entry.contract.done.as_str()];
+    let mut bodies = vec![design.as_str(), contract.done.as_str()];
     bodies.extend(promised.iter().map(|promise| promise.text.as_str()));
-    let outside = outside::outside_text(entry.repo, entry.contract, &bodies);
+    let outside = outside::outside_text(repo, contract, &bodies);
     Material {
-        requirements: requirements_text(entry.repo, entry.requirements, &entry.contract.req),
+        requirements: requirements_text(repo, requirements, &contract.req),
         promises: render_promises(&promised.iter().collect::<Vec<&table::PromiseRow>>()),
-        base: base::base_text(entry.repo, &entry.contract.write_set),
+        base: base::base_text(repo, &contract.write_set),
         outside,
         design,
     }
@@ -450,13 +467,12 @@ fn section_number(title: &str) -> Option<String> {
     (!head.is_empty() && head.chars().all(|found| found.is_ascii_digit())).then(|| head.to_owned())
 }
 
-/// 材料を run dir の [`REVIEW_DIR`] へ置き、lens に渡す契約の写しの path を返す。書けない周は `Err`（判定に届かない）。
-fn keep(entry: &Review<'_>, material: &Material) -> Result<PathBuf, String> {
-    let dir = review_dir(entry.state_dir, entry.run);
-    std::fs::create_dir_all(&dir).map_err(|err| format!("{} を作れない: {err}", dir.display()))?;
+/// 材料を `dir`（run dir の [`REVIEW_DIR`] か先撃ちの置き場）へ置き、lens に渡す契約の写しの path を返す。`source` は契約 file。
+/// 書けない周は `Err`（判定に届かない）。
+fn keep(dir: &Path, source: &Path, material: &Material) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(dir).map_err(|err| format!("{} を作れない: {err}", dir.display()))?;
     let contract = dir.join(super::CONTRACT_FILE);
-    std::fs::copy(contract_path(entry.state_dir, entry.run), &contract)
-        .map_err(|err| format!("{} を写せない: {err}", contract.display()))?;
+    std::fs::copy(source, &contract).map_err(|err| format!("{} を写せない: {err}", contract.display()))?;
     for (name, body) in
         [(DESIGN_FILE, &material.design), (REQUIREMENTS_FILE, &material.requirements), (BASE_FILE, &material.base)]
     {
@@ -541,11 +557,22 @@ fn lens_outcome(waited: std::io::Result<std::process::Output>, confinement: &con
             return Finding::inconclusive(format!("lens が scope の中で死んだ（reason={}）", reason.as_str()));
         }
     }
-    if !out.status.success() {
-        let rc = out.status.code().unwrap_or(-1);
-        return Finding::inconclusive(format!("lens が rc {rc} で終わった"));
+    read_outcome(out.status.code(), &text)
+}
+
+/// 終わった lens の rc と stdout から判定を読む（rc → 最後の JSON 行の順・[`lens_outcome`] の後段の 1 本）。
+fn read_outcome(rc: Option<i32>, text: &str) -> Finding {
+    if rc != Some(0) {
+        return Finding::inconclusive(format!("lens が rc {} で終わった", rc.unwrap_or(-1)));
     }
-    parse_lens(&text)
+    parse_lens(text)
+}
+
+/// 先撃ちの lens の判定（設計 dispatcher.md §27 形 aa 2・Reviewed の段と同じ読み手 [`read_outcome`]）: verdict・理由の型
+/// （PASS は `None`）・根拠の 1 行。
+pub(in crate::pipe) fn outcome_of(rc: Option<i32>, text: &str) -> (Verdict, Option<FindingKind>, String) {
+    let found = read_outcome(rc, text);
+    (found.verdict, found.kind, found.evidence)
 }
 
 /// lens の stdout の最後の JSON 行から 3 値と理由の型を読む。読めない周・3 値の外は INCONCLUSIVE（FR9）。

@@ -191,6 +191,9 @@ pub enum RuleKind {
     CompileSeconds,
     /// 1 周の review で回す lens の本数（本）。
     GateLensCount,
+    /// 事前審査の先撃ちの lens を 1 周に起こす本数の上限（本・設計 dispatcher.md §27 形 1）。撃ち中の行を含めて数え、0 は撃たない。
+    /// 任意の行で、読めない周は撃たず `[DISPATCH-PRECHECK]` の行の末尾に `prelens=unset` を足す。
+    PipePrecheckLensPerRound,
     /// 1 周の gate の token 上限（token）。
     GateTokenCap,
     /// 便ごとの token 消費の検出線（token・憲法 C6.2 の R-C6-1・設計 gate-cost.md §43）。便の消費の event の 4 値の和が
@@ -367,6 +370,7 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::CompileShape,
     RuleKind::CompileSeconds,
     RuleKind::GateLensCount,
+    RuleKind::PipePrecheckLensPerRound,
     RuleKind::GateTokenCap,
     RuleKind::RunTokenCeiling,
     RuleKind::HookBudgetMs,
@@ -444,7 +448,7 @@ impl RuleKind {
             Self::CheckDeltaMs => "CheckDeltaMs",
             Self::CompileShape => "CompileShape",
             Self::CompileSeconds => "CompileSeconds",
-            Self::GateLensCount => "GateLensCount",
+            Self::GateLensCount => "GateLensCount", Self::PipePrecheckLensPerRound => "PipePrecheckLensPerRound",
             Self::GateTokenCap => "GateTokenCap", Self::RunTokenCeiling => "RunTokenCeiling",
             Self::HookBudgetMs => "HookBudgetMs",
             Self::StopGraceMs => "StopGraceMs",
@@ -505,7 +509,7 @@ impl RuleKind {
             | Self::DepBudget
             | Self::DepPerPr
             | Self::CheckDeltaMs
-            | Self::GateLensCount
+            | Self::GateLensCount | Self::PipePrecheckLensPerRound
             | Self::GateTokenCap | Self::RunTokenCeiling
             | Self::HookBudgetMs
             | Self::StopGraceMs

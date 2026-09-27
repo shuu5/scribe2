@@ -409,7 +409,7 @@ fn pipe_dispatch_precheck_declared_new_file_makes_the_waiting_row_clean() {
     let at = |prefix: &str| lines.iter().position(|line| line.starts_with(prefix));
     assert_eq!(
         lines.iter().filter(|line| line.starts_with("[DISPATCH-PRECHECK]")).copied().collect::<Vec<&str>>(),
-        ["[DISPATCH-PRECHECK] bead=s2-pre.2 result=clean base=current"],
+        ["[DISPATCH-PRECHECK] bead=s2-pre.2 result=clean base=current prelens=unset"],
         "依存待ちの候補ごとに 1 行（母集団 候補 2・依存待ち 1）: {out}"
     );
     assert!(at("[DISPATCH-PRECHECK]") < at(COUNT) && at(COUNT).is_some(), "件数の行の前: {out}");

@@ -826,6 +826,32 @@ fn rules_precheck_alarm_row_follows_the_idle_alarm() {
     assert!(errors.join("\n").contains("形と合わない"), "形は Int だけ: {errors:?}");
 }
 
+/// 事前審査の先撃ちの 1 周の本数の行（設計 dispatcher.md §27 形 1・行 aa・`s2-07l.718`）が埋め込み manifest に id / kind / 形 Int /
+/// 値 1 / enabled / 裁定 id / 裁定日で 1 本在り、行は `gate.lens_count` の直後・kind は `ALL` の `GateLensCount` の直後で
+/// `GateTokenCap` の前、字面から引け、形は Int だけ（base では行も kind も無い ＝ RED）。
+#[test]
+fn rules_prelens_row_follows_the_lens_count() {
+    let manifest = Manifest::embedded().unwrap_or_else(|errors| panic!("埋め込み manifest が拒まれた: {errors:?}"));
+    let id = "pipe.precheck_lens_per_round";
+    let row = manifest.get(id).unwrap_or_else(|| panic!("{id} の行が在る"));
+    let kind = RuleKind::parse("PipePrecheckLensPerRound").expect("字面から引ける");
+    assert_eq!((kind.as_str(), kind.shape()), ("PipePrecheckLensPerRound", ValueShape::Int), "kind の字面と形");
+    assert_eq!(row.kind, kind, "{id} の kind");
+    assert_eq!(row.value, RuleValue::Int(1), "{id} の値（1 周に 1 本）");
+    assert!(row.enabled, "{id} は既定で効く");
+    assert_eq!((row.ruling.as_str(), row.ruled_at.as_str()), ("user 2026-09-27T17:33Z 項 2-2", "2026-09-27"), "{id} の裁定 id と裁定日");
+    assert_eq!(int_row(&manifest, id), Ok(1), "{id} を整数の読み手で引ける");
+    assert_eq!(manifest.rows().iter().filter(|found| found.kind == kind).count(), 1, "kind の行は 1 本");
+    let at = ALL.iter().position(|found| *found == RuleKind::GateLensCount).expect("GateLensCount は ALL に在る");
+    let after: Vec<RuleKind> = ALL.iter().skip(at + 1).take(2).copied().collect();
+    assert_eq!(after, [kind, RuleKind::GateTokenCap], "kind は GateLensCount の直後で GateTokenCap の前");
+    let rows: Vec<&str> = manifest.rows().iter().map(|found| found.id.as_str()).collect();
+    let lens = rows.iter().position(|found| *found == "gate.lens_count").expect("gate.lens_count の行が在る");
+    assert_eq!(rows.get(lens + 1).copied(), Some(id), "行も gate.lens_count の直後（母集団 {} 行）", rows.len());
+    let errors = rejected(&one_row(kind, "\"one\"")).expect("文字列の値の fixture が受理された");
+    assert!(errors.join("\n").contains("形と合わない"), "形は Int だけ: {errors:?}");
+}
+
 /// 終端の CI の照合の間隔の行（設計 contract-source.md §50 形 1・`s2-07l.694`）が埋め込み manifest に id / kind / 形 Int /
 /// 値 30 / enabled / 裁定 id / 裁定日で 1 本在り、行は `pipe.ci_wait_s` の直後・kind は `ALL` の `PipeCiWaitS` の直後で字面から
 /// 引け、形は Int だけ（base では行も kind も無い ＝ RED）。
