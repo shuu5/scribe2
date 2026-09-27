@@ -9,6 +9,7 @@
 //! 判定も呼び手が持つ。ここが知るのは字面と宛先と送達だけである。
 
 use super::cli::int_row;
+use super::dispatch::facts::{self, Facts};
 use super::dispatch::{Turn, WaitReason};
 use crate::fleet::State;
 use crate::name::NAME;
@@ -61,13 +62,15 @@ pub(super) fn terminal_line(terminal: &Terminal<'_>) -> String {
 /// idle の 1 行（§19 形 3 (b)）。列の結果が「起こした便 0 ∧ 候補 1 本以上」の周だけ `Some`。
 ///
 /// `Turn` から**読むだけ**で組む: 候補の本数 = `candidates` の長さ・先頭の候補の理由 = その `reason` の `render`。
-pub(super) fn idle_line(turn: &Turn) -> Option<String> {
+/// 既存の key と順は変えず、末尾に同じ周の並列の実測の字面（[`facts::line`]・設計 §26 形 4）を足す。
+pub(super) fn idle_line(turn: &Turn, facts: &Facts) -> Option<String> {
     if !turn.launches.is_empty() {
         return None;
     }
     let top = turn.candidates.first()?;
     let reason = top.reason.as_ref().map_or_else(|| DASH.to_owned(), WaitReason::render);
-    Some(format!("{NAME} pipe: idle ready={} launched=0 reason={reason}", turn.candidates.len()))
+    let tail = facts::line(facts);
+    Some(format!("{NAME} pipe: idle ready={} launched=0 reason={reason}{tail}", turn.candidates.len()))
 }
 
 /// detail の頭の 1 語（空白と `:` の手前・無ければ [`DASH`]）。値の後ろ（sha・path）は pane に載せない。

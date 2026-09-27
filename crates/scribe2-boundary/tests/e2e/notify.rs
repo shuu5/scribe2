@@ -5,7 +5,9 @@
 //! dir（PATH の先頭）に置き、登録 row は core の `register` で積む（実 tmux を立てない）。歯の file は `pipe/` の外に
 //! 置く（§19 形 6・`pipe/` 配下の file 数の pin は動かさない）。
 
-use crate::pipe::{bin_cmd, ceiling_rules, clean, embedded_int, repo_with_state, run_pipe, stderr_of, stdout_of, DESIGN_FILE};
+use crate::pipe::{
+    bin_cmd, ceiling_rules, clean, embedded_int, intake_bead, repo_with_state, run_pipe, stderr_of, stdout_of, DESIGN_FILE,
+};
 use crate::TOOLBOX_BIN;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -356,6 +358,59 @@ fn pipe_notify_idle_round_reports_ready_count_and_top_reason() {
     assert_eq!(sent.len(), 1, "候補 0 の周は終端の 1 行だけ: {sent:?}");
     assert!(sent.iter().all(|line| !line.contains(" idle ")), "idle の行を送らない: {sent:?}");
     assert!(sent.iter().all(|line| line.contains("Stopped")), "送ったのは終端の行: {sent:?}");
+}
+
+/// 送った payload の行のうち idle の 1 行（無ければ空）。
+fn idle_of(sent: &[String]) -> String {
+    sent.iter().find(|line| line.contains(" idle ")).cloned().unwrap_or_default()
+}
+
+/// [`idle_round`] の置き場に、候補（行 a・`src/lib.rs`）と 1 file 交差する live な便を足して終端を撃つ。返すのは stdout と
+/// payload の送りの列と、live な便の run id。live な便は契約を持たない終端の便より**先に**起こす（契約の無い便が live の間は
+/// 受付が交差を測れず断る）。
+fn crossing_round() -> (Output, Vec<String>, String) {
+    let (repo, state) = repo_with_state();
+    fake_tmux(&state);
+    register(&state, &repo);
+    let crossed = intake_bead(&repo, &state, &format!("{DESIGN_FILE}#a"), "s2-facts.1");
+    live_run(&state);
+    let bd = fake_bd(&state, "bd-facts", &[QUEUED]);
+    let out = run_pipe(&[
+        "stop", "--run", RUN,
+        "--state-dir", &state.display().to_string(),
+        "--repo", &repo.display().to_string(),
+        "--rules", &queue_rules(&state),
+        "--bd", &bd,
+        "--runner", "true",
+    ]);
+    let sent = sends(&state);
+    clean(&[&repo, &state]);
+    (out, sent, crossed)
+}
+
+/// (§26 歯 (a)) 候補の write-set が live な便 1 本と 1 file 交差する周の終端: idle の行は既存の `reason=overlap:<相手>/1` を
+/// 持ったまま、末尾が ` live=1 idle=- held=1:lib.rs`（live が 1 本以上の周の分数は値なし・file 名は最後の 1 要素）。
+#[test]
+fn pipe_notify_facts_crossing_live_run_reports_one_live_and_the_crossed_file() {
+    let (out, sent, crossed) = crossing_round();
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "stop は rc 0: {}", told(&out));
+    let line = idle_of(&sent);
+    assert!(
+        line.contains(&format!("ready=1 launched=0 reason=overlap:{crossed}/1 ")),
+        "既存の key と順と reason= の字面は不変: {line} / {sent:?}"
+    );
+    assert!(line.ends_with(" live=1 idle=- held=1:lib.rs"), "末尾に並列の実測: {line} / {sent:?}");
+}
+
+/// (§26 歯 (b)) live な便が無く候補が hold の周の終端: idle の行は `ready=1 launched=0 reason=hold` の後に
+/// ` live=0 idle=0m held=0` で終わる（終端の直後なので 0 分・重なりで待つ候補 0 はコロンなし）。
+#[test]
+fn pipe_notify_facts_hold_round_without_live_runs_reports_zero_live_and_zero_minutes() {
+    let (out, sent) = idle_round(&[QUEUED], true);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "stop は rc 0: {}", told(&out));
+    let line = idle_of(&sent);
+    assert!(line.contains("ready=1 launched=0 reason=hold:"), "既存の字面は同じ行に在る: {line} / {sent:?}");
+    assert!(line.ends_with(" live=0 idle=0m held=0"), "末尾に並列の実測: {line} / {sent:?}");
 }
 
 /// settle の 1 歩（`SETTLE_STEP` = 200 ms）を ns で。本文と Enter の間はこれ以上空く（§21 形 3）。

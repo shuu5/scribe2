@@ -35,6 +35,9 @@ mod candidates;
 /// 1 周の群の段（群の逼迫の通知と自動の移動・設計 account-lifecycle.md §19 形 2〜4・§20）。
 mod group;
 
+/// 並列の実測の事実と字面（idle の知らせと heartbeat が共用する 1 関数・設計 §26）。
+pub(crate) mod facts;
+
 use candidates::{entry_of, is_input, marks_of, settle, tools};
 
 /// `intake:memo` の bead（契約が未確定＝列に載せない・`.beads/PRIME.md` R3）。
@@ -88,8 +91,8 @@ pub enum WaitReason {
     Overlap {
         /// 交差した相手の run id（先頭の 1 本）。
         with: String,
-        /// その相手と交差した契約側の file の本数。
-        files: usize,
+        /// その相手と交差した契約側の file の列（契約が書いた字面・`render` は本数を書く・設計 §26 形 3）。
+        files: Vec<String>,
     },
     /// 受付（余地・host の memory）を通らない。
     Admission {
@@ -149,7 +152,7 @@ impl WaitReason {
         let name = self.as_str();
         match *self {
             Self::Dependency { ref on } => format!("{name}:{}", on.join(",")),
-            Self::Overlap { ref with, files } => format!("{name}:{with}/{files}"),
+            Self::Overlap { ref with, ref files } => format!("{name}:{with}/{}", files.len()),
             Self::Admission { reason } => format!("{name}:{reason}"),
             Self::Hold { ref since } | Self::Launched { ref since } => format!("{name}:{since}"),
             Self::Settled { ref sha, stage } => format!("{name}:{sha}/{}", stage.as_str()),
@@ -1209,7 +1212,7 @@ mod tests {
     fn pipe_dispatch_wait_reasons_render_the_name_and_the_value() {
         let listed = vec![
             WaitReason::Dependency { on: vec!["s2-x".to_owned(), "s2-y".to_owned()] },
-            WaitReason::Overlap { with: "r1".to_owned(), files: 2 },
+            WaitReason::Overlap { with: "r1".to_owned(), files: vec!["src/a.rs".to_owned(), "src/b/".to_owned()] },
             WaitReason::Admission { reason: "cap-headroom" },
             WaitReason::HostBusy,
             WaitReason::Hold { since: "t1".to_owned() },

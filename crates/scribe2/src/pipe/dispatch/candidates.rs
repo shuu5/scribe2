@@ -134,13 +134,13 @@ fn blocker(
     for (bead, write_set) in started {
         let crossed = overlaps(&contract.write_set, write_set, tracked);
         if !crossed.is_empty() {
-            return Some(WaitReason::Overlap { with: bead.clone(), files: crossed.len() });
+            return Some(WaitReason::Overlap { with: bead.clone(), files: crossed.into_iter().map(|(mine, _)| mine).collect() });
         }
     }
     match crossings(input.state_dir, contract, tracked) {
         Ok(found) => {
-            if let Some((run, files)) = found.runs.iter().find(|(_, files)| !files.is_empty()) {
-                return Some(WaitReason::Overlap { with: run.clone(), files: files.len() });
+            if let Some((run, files)) = found.runs.into_iter().find(|(_, files)| !files.is_empty()) {
+                return Some(WaitReason::Overlap { with: run, files });
             }
         }
         Err(denial) => return Some(WaitReason::Admission { reason: denial.name }),
