@@ -3,7 +3,7 @@
 //! 子 module: 口の引数と行（[`cli`]）・席の起動（[`cycle`]）・席の役割と登録 row（[`role`]）・席の状態を hook の
 //! 打刻で typed に持つ（[`state`]）・管理 tick（[`tick`]）・tmux pane への注入（[`inject`]）・待ちの席へ
 //! 裁定の指し示しを送る（[`deliver`]）・run 無しの user 裁定（[`ruling`]）・席の指示文（[`brief`]）・台帳の読み
-//! （[`ledger`]）・復帰の DATA（[`recent`]）・席の実口座の記録（[`session_account`]）。この file は子が共有する tmux の呼び出し・入力欄の門・
+//! （[`ledger`]）・復帰の DATA（[`recent`]）。この file は子が共有する tmux の呼び出し・入力欄の門・
 //! 置き場の解決・rules 行の読みを持つ。
 //!
 //! **env も HOME も読まない**（憲法 C2.2）。pane は `--target`（または明示された `--capture-file`）だけを見る。
@@ -22,7 +22,6 @@ pub mod ledger;
 pub mod recent;
 pub mod role;
 pub mod ruling;
-pub mod session_account;
 pub mod state;
 pub mod tick;
 
