@@ -613,7 +613,7 @@ fn inconclusive(reason: String) -> Result<Decided, String> {
     Ok(Decided { judged: unjudged(reason), scope: None, account: None })
 }
 
-/// 便の裁定（質問と planner の回答の対・発生順・[`super::questions_of_run`]）を run dir の
+/// 便の裁定（質問と回答の対・発生順・[`super::questions_of_run`]）を run dir の
 /// [`move_proof::RULINGS_FILE`] へ写す（設計 pipeline-question.md・C3「真実は event log」）。
 ///
 /// 1 対 = `question:` / `about:` / `answer:` の 3 行（無い `about` は `-`）・対の間は空行。対が 0 の周は

@@ -27,7 +27,7 @@
 //! 行が解けない周は cap と同じ極性＝claude を呼ばず rc 2。**effort も同じ manifest の rules 行 `runner.effort`
 //! から読み、毎回渡す**（`s2-07l.322`・読む順は cap → model → effort）。
 //!
-//! **裁定（便の質問と planner の回答の対）は契約の写しの隣の [`RULINGS_FILE`] から読む**（`s2-07l.309`・
+//! **裁定（便の質問と回答の対）は契約の写しの隣の [`RULINGS_FILE`] から読む**（`s2-07l.309`・
 //! 設計 pipeline-question.md）。gate が event log から写す file で、lens は `{contract}` の path の同じ dir
 //! から同じ名で引く（env も flag も足さない＝`lens.cmd` の穴は不変）。無ければ「裁定なし」を prompt に明示し
 //! （C10・空を黙らせない）、在るのに読めない周は claude を呼ばず rc 2——裁定を落として審査すると、回答で

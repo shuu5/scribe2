@@ -1444,7 +1444,7 @@ fn headless_lens_contract_material_over_cap_is_inconclusive_without_calling_clau
 /// lens の prompt に載る裁定の節の見出し（`s2-07l.309`）。
 ///
 /// ★契約 fixture にも diff fixture にも裁定 fixture にも現れない字面（節を消せば回数が 0 に落ちる）。
-const LENS_RULINGS_HEADING: &str = "## 契約への裁定（planner の回答・逐語）";
+const LENS_RULINGS_HEADING: &str = "## 契約への裁定（便の質問への回答・逐語）";
 
 /// 裁定の file の本文（gate が書く形・1 対 = 3 行）。`{diff}` の字面を持たせ、穴が同じ 1 走査で埋まること
 /// （裁定の中の穴は展開されない）も測る。
@@ -1478,7 +1478,7 @@ fn lens_rulings_are_filled_into_the_prompt_from_the_sibling_file() {
     assert!(contract_at < rulings_at, "裁定の節は「## 契約」より後: {prompt}");
     assert!(rulings_at < diff_at, "裁定の節は「## diff」より前: {prompt}");
     // 読み方の 1 行は「審査の材料」の節に在り、裁定の節より前。
-    const RULING_RULE: &str = "裁定の節に在る逸脱（回答で planner が認めた形）は契約の一部として読む。裁定に無い逸脱だけを契約違反と読む。";
+    const RULING_RULE: &str = "裁定の節に在る逸脱（回答で認めた形）は契約の一部として読む。裁定に無い逸脱だけを契約違反と読む。";
     assert_eq!(prompt.matches(RULING_RULE).count(), 1, "読み方の行がちょうど 1 回在る: {prompt}");
     assert!(prompt.find(RULING_RULE) < contract_at, "読み方の行は「## 契約」より前: {prompt}");
     clean(&[&dir]);

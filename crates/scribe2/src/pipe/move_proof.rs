@@ -36,7 +36,7 @@ pub const POLARITY: Polarity = Polarity {
 /// run dir に残す lens の入力の写し（純移動の周だけ・事後に読める・NFR4）。
 pub const LENS_INPUT_FILE: &str = "lens-input.txt";
 
-/// run dir に残す裁定の写し（便の質問と planner の回答の対・発生順・質問の在った周だけ・`s2-07l.309`）。
+/// run dir に残す裁定の写し（便の質問と回答の対・発生順・質問の在った周だけ・`s2-07l.309`）。
 ///
 /// gate が event log から写し、lens は契約の写しの**隣**（同じ dir）から同じ名で読む。無いことが
 /// 「裁定なし」である（C10・空の file を書かない）。
