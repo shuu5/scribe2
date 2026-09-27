@@ -1322,11 +1322,11 @@ fn tick_wait(step: u32) -> Option<u64> {
     usize::try_from(step).ok().and_then(|at| TICK_LADDER.get(at)).copied()
 }
 
-/// 段 `step` の合図の文面（契約の字面・設計 §2 形 3・§10 形 7＝次の待ちは列から引き、最後の段は次が無い）。
+/// 段 `step` の合図の文面（契約の字面・設計 §2 形 3・§10 形 7＝次の待ちは列から引き、最後の段は次が無い・末尾は便 0 本の §16 の字面）。
 fn tick_signal(step: u32) -> String {
     let next = tick_wait(step.saturating_add(1))
         .map_or_else(|| "次の合図は無い・打ち切り".to_owned(), |secs| format!("次の合図は {secs} 秒後"));
-    format!("{NAME} tick: heartbeat step={step} — 台帳の現在地（bd --readonly ready --limit 0）から続きを進める（変化が無ければ{next}）")
+    format!("{NAME} tick: heartbeat step={step} — 台帳の現在地（bd --readonly ready --limit 0）から続きを進める（変化が無ければ{next}） live=0 idle=-")
 }
 
 /// 管理 tick の行 3 本と退避の猶予の行（id・kind・TOML の値の字面・設計 §10 形 5 / 6・§13 形 1）。

@@ -1081,3 +1081,73 @@ fn seat_tick_status_missing_ladder_row_is_no_rule_and_doctor_keeps_its_word() {
     assert_eq!(stderr_of(&out), "seat tick status: refused reason=no-rule\n");
     assert_eq!(status_doctor_at(&place, &rules, 0).as_deref(), Some("healthy"), "doctor は周期の行だけ読む");
 }
+
+/// 行 t（設計 seat-heartbeat.md §16）の歯の 1 周: 置き場の event log に便 1 本の event（`RunCreated` と段 `stage` の
+/// `RunStage`・ts はどちらも `ago` 秒前）を足し（`stage` が `None` なら便 0 本）、黙った席へ 1 回撃って偽 tmux へ送った合図の
+/// text を返す。撃つ前後で event log は 1 byte も変わらない（tick は列の 1 周も起こしも撃たない）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn tick_facts_sent(stage: Option<&str>, ago: u64) -> String {
+    let place = tick_place(true);
+    let log = vessel::fleet::store::events_path(&place.state);
+    if let Some(stage) = stage {
+        let ts = vessel::fleet::cli::format_utc(unix_now().saturating_sub(ago));
+        let mut text = fs::read_to_string(&log).expect("登録 row の event log が在る");
+        for (kind, at) in [("RunCreated", "Intake"), ("RunStage", stage)] {
+            text.push_str(&format!(
+                "{{\"schema\":1,\"ts\":\"{ts}\",\"kind\":\"{kind}\",\"run\":\"r-facts\",\"bead\":\"s2-facts.1\",\"host\":\"h\",\"actor\":\"machine\",\"stage\":\"{at}\"}}\n"
+            ));
+        }
+        fs::write(&log, text).expect("便の event を足せる");
+    }
+    tick_silent_for(&place, TICK_STALE + 60);
+    let before = fs::read(&log).expect("event log を読める");
+    let out = tick_run(&place, &[]);
+    assert_eq!(stdout_of(&out), tick_inject(0), "合図を 1 回送る周: stderr={}", stderr_of(&out));
+    assert_eq!(fs::read(&log).expect("event log を読める"), before, "tick は event log を書かない");
+    assert!(!place.at(TICK_CLIENT).exists(), "偽 client は呼ばれない");
+    let prefix = format!("send-keys -t {TICK_TARGET} -l ");
+    let texts: Vec<String> = tick_keys(&place).iter().filter_map(|key| key.strip_prefix(&prefix).map(str::to_owned)).collect();
+    assert_eq!(texts.len(), 1, "text の送りは 1 回: {texts:?}");
+    texts.into_iter().next().unwrap_or_default()
+}
+
+/// 段 0 の合図の文面（`signal` の返り値）の後ろに並列の実測の字面 `tail` が付いた送り（`held=` は含まない）。
+fn tick_facts_want(tail: &str) -> String {
+    let signal = tick_signal(0);
+    format!("{}{tail}", signal.strip_suffix(" live=0 idle=-").unwrap_or(&signal))
+}
+
+/// (t-a) Landed の便 1 本・最後の event が 7230 秒前 → 合図の末尾が ` live=0 idle=120m`（分は切り捨て）。
+#[test]
+fn seat_tick_facts_landed_run_7230s_ago_ends_live_zero_idle_120m() {
+    let sent = tick_facts_sent(Some("Landed"), 7230);
+    assert_eq!(sent, tick_facts_want(" live=0 idle=120m"));
+    assert!(!sent.contains("held="), "列の結果なし: {sent}");
+}
+
+/// (t-b) Spawned の便 1 本 → ` live=1 idle=-`（live が 1 本以上の周の 0 本の分数は値なし）。
+#[test]
+fn seat_tick_facts_spawned_run_ends_live_one_idle_absent() {
+    let sent = tick_facts_sent(Some("Spawned"), 60);
+    assert_eq!(sent, tick_facts_want(" live=1 idle=-"));
+    assert!(!sent.contains("held="), "列の結果なし: {sent}");
+}
+
+/// (t-c) 便 0 本 → ` live=0 idle=-`（便の無い周の 0 本の分数は値なし）。
+#[test]
+fn seat_tick_facts_no_runs_ends_live_zero_idle_absent() {
+    let sent = tick_facts_sent(None, 0);
+    assert_eq!(sent, tick_facts_want(" live=0 idle=-"));
+    assert!(!sent.contains("held="), "列の結果なし: {sent}");
+}
+
+/// (t-d) verdict の読めない Gated の便 → ` live=? idle=?`（測れないを 0 本に読み替えない）。
+#[test]
+fn seat_tick_facts_gated_run_without_a_verdict_ends_unmeasured() {
+    let sent = tick_facts_sent(Some("Gated"), 7230);
+    assert_eq!(sent, tick_facts_want(" live=? idle=?"));
+    assert!(!sent.contains("held="), "列の結果なし: {sent}");
+}

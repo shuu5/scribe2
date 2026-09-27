@@ -54,6 +54,7 @@ use crate::fleet::usage::{self, fresh_rows};
 use crate::fleet::State;
 use crate::hook::group::{self, current_of, exit_dialog, group_of, pressed, Caps, Judgement, Lock, Refusal, EXIT};
 use crate::name::NAME;
+use crate::pipe::dispatch::facts;
 use crate::rules::manifest::{AccountGroup, Manifest};
 use crate::rules::{int_row, list_row, RuleError};
 use std::collections::BTreeSet;
@@ -992,7 +993,9 @@ fn back(input: &Input, front: &Front) -> Result<Verdict, Verdict> {
     input_gate(input).map_err(at)?;
     let record = Ladder { sent_at: front.now, step: front.step, digest: None };
     write_ladder(&front.seat, &record).map_err(|_| at(NoopReason::RecordUnwritable))?;
-    let payload = signal(front.step, &front.rows.pace);
+    // 末尾に並列の実測（設計 §16・列の結果なし＝`held=` を出さない・台帳も列も撃たない）。
+    let facts = facts::line(&facts::facts(&input.state.path, None, front.now));
+    let payload = format!("{}{facts}", signal(front.step, &front.rows.pace));
     let request = Request { target: input.target, socket: input.socket, payload: &payload, state_dir: Some(input.state) };
     let delivery = deliver_within(&request, Duration::from_millis(front.rows.window_ms));
     Ok(Verdict {
