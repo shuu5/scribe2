@@ -244,15 +244,8 @@ pub fn anchor_of(anchor: Option<&Path>) -> Option<std::path::PathBuf> {
     anchor.map_or_else(cwd_root, |found| std::path::absolute(found).ok())
 }
 
-/// 登録 row の口座を `account` に更新する（account-autonomy.md §5 の立て直し・同じ鍵で `SeatRegistered` 1 件）。
-/// `seat register` を経由せず**打刻の条件は課さない**（`sid` は登録時の証拠であって現在の session の識別子では
-/// ない）: `role` / `anchor` / `target` / `sid` / `launch` / `model` は既存 row から写す。
-pub fn relabel(state_dir: &Path, row: &Registration, account: &str) -> Result<Registration, RegisterRefusal> {
-    register(state_dir, Registration { account: account.to_owned(), ..row.clone() })
-}
-
-/// 登録 row を 1 件積む（**書き手 3 つの同じ 1 関数**・設計 seat-roles.md §2・account-lifecycle.md §4）: `seat register`
-/// （[`register_stamped`]・打刻の条件を先に測り `sid` は `Some`）・tick の口座更新（[`relabel`]）・`seat launch`
+/// 登録 row を 1 件積む（**書き手 2 つの同じ 1 関数**・設計 seat-roles.md §2・account-lifecycle.md §4）: `seat register`
+/// （[`register_stamped`]・打刻の条件を先に測り `sid` は `Some`）・`seat launch`
 /// （[`crate::seat::cycle::launch`]・`sid` は `None`・打刻の条件は掛けない）がここを通る。**`sid` は任意**。
 pub fn register(state_dir: &Path, registration: Registration) -> Result<Registration, RegisterRefusal> {
     let event = Event {

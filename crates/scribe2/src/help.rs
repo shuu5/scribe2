@@ -363,8 +363,8 @@ pub const TABLE: &[Entry] = &[
             ("--tmux-socket PATH", "tmux socket to use instead of the default one."),
         ],
         examples: &[
-            "{NAME} seat launch --state-dir STATE --role planner --target s2:plan",
-            "{NAME} seat tick --state-dir STATE --target s2:plan",
+            "{NAME} seat launch --state-dir STATE --role orchestrator --target s2:orchestrator",
+            "{NAME} seat tick --state-dir STATE --target s2:orchestrator",
         ],
         see: &["docs/design/seat-roles.md", "docs/design/seat-heartbeat.md", "docs/design/account-lifecycle.md"],
     },
@@ -487,6 +487,7 @@ pub fn answer(args: &[String], usage: &str) -> Option<Outcome> {
 #[cfg(test)]
 mod tests {
     use super::{answer, entry, form_line, render_page, FORM_HEAD, HOLE, TABLE};
+    use crate::seat::role::Role;
     use std::collections::BTreeSet;
     use std::path::PathBuf;
 
@@ -552,5 +553,31 @@ mod tests {
         assert!(answer(&args(&["help", "nosuch"]), "u").is_none(), "未知の語は呼び手の経路へ");
         assert!(answer(&args(&["pipe", "show"]), "u").is_none(), "案内の口でない引数は呼び手の経路へ");
         assert!(answer(&args(&["ledger", "--help"]), "u").is_none(), "表に無い口の --help は呼び手の経路へ");
+    }
+
+    /// 全頁の examples に現れる `--role <語>` の語は全部、席の役割の解き手で解ける（設計 carry-prep.md §5 行 a・
+    /// 今は断られる役割の名を案内に残さない）。seat の頁は `--role` の例を 1 つ以上持つ（母集団が空で緑にならない）。
+    #[test]
+    fn help_table_role_examples_parse_as_seat_roles() {
+        let roles_of = |line: &str| -> Vec<String> {
+            let words: Vec<&str> = line.split_whitespace().collect();
+            assert!(words.last() != Some(&"--role"), "--role の語が無い（{line}）");
+            words
+                .windows(2)
+                .filter_map(|pair| match pair {
+                    [flag, role] if *flag == "--role" => Some((*role).to_owned()),
+                    _ => None,
+                })
+                .collect()
+        };
+        for found in TABLE {
+            for line in found.examples {
+                for role in roles_of(line) {
+                    assert!(Role::parse(&role).is_some(), "{}: --role {role} が解けない（{line}）", found.name);
+                }
+            }
+        }
+        let seat = entry("seat").map_or(0, |page| page.examples.iter().map(|line| roles_of(line).len()).sum());
+        assert!(seat >= 1, "seat の頁に --role の例が無い");
     }
 }

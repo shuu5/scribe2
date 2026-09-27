@@ -1,25 +1,10 @@
-//! session を作り直して復元する口（設計 §3・SRS FR28 / FR23・憲法 CON5 / C11 / C10）。
+//! 席の起動の口 `seat launch`（[`launch()`]・設計 account-lifecycle.md §4・ADR-0026 §2.3・SRS FR59）。
 //!
-//! `/clear` は**不可逆**である（会話は戻らない）。ゆえにこの口は 3 つの条件が同時に立つ周
-//! だけ開く: 排他（lock を握れた）・退避済み（自席の未 consumed 退避物が在る）・idle
-//! （hook の打刻の最終行が Idle・[`state`]・憲法 C3.3 / ADR-0015＝pane の字面は判定入力にしない）。
-//! 1 つでも欠けたら **1 key も送らずに断る**——「送ったが失敗した」と「そもそも送っていない」を
-//! [`Cycle`] で分けて持つのはこのためである（bool で持たない）。pane を読むのは送る直前の入力欄の
-//! 門（[`inject::guard_input`]・注入と同じ 1 本）だけで、**作り直しの確認は席の打刻**
-//! （`/clear` の送達 ts 以後に足された `SessionStart`・[`state::evidence_after`]・設計 seat-state.md §6・
-//! `s2-07l.112`）で行う。echo の字面は読まない。
-//!
-//! 隣に**立て直し**（[`relaunch()`]・[`relaunch`] module・設計 account-autonomy.md §5・SRS FR38）を置く: 退避して止まった席を別口座で
-//! 同じ target に起こし直し、復元の command を注入する。同じ lock・同じ cycle-stamp（再注入の back-off）・同じ
-//! 作り直しの確認（`SessionStart` の打刻）を通る。
-//!
-//! さらに**席の起動**（[`launch()`]・[`launch`] module・設計 account-lifecycle.md §4・ADR-0026 §2.3・SRS FR59）を置く: user が席を初めて
-//! 起こす口で、起動行は host の面の宣言から導き（[`derive_launch`]・雛形 file を持たない）、登録 row を**先に**書き、
-//! 立て直しと**同じ 1 本**（[`relaunch::boot`]: shell の入力欄の門 → 起動行 → 立ち上がりの確認 → 復元）で shell へ注入する。
-//! 立て直しとの差は「row を先に書く」「window を作れる」の 2 点だけである。
-//!
-//! 停止（[`stop`] module・[`terminate_group`]）を含む 4 つの題は子 module に分け（`s2-07l.319`・純移動）、この file には
-//! 作り直しと、4 題が共有する定数・型を残す。外から呼ぶ path は再輸出で不変である。
+//! 子 module は 2 つ: [`launch`](mod@launch) は起動行を host の面の宣言から導き（[`derive_launch`]・雛形 file を持たない）、登録 row を
+//! **先に**書く口の本体、[`relaunch`] は起動の 1 本（[`relaunch::boot`]: 起動行 → 立ち上がりの確認 → 復元）と初回の口座の
+//! 選定。この file には 2 つが共有する定数（記録の who / when・理由の字面・rules 行の id）と、確認の刻みの読み
+//! （[`pace_of`]）・立ち上がりの確認（`SessionStart` の打刻・[`state::evidence_after`]・設計 seat-state.md §6）・
+//! 1 行の送り（`send_to`）を置く。外から呼ぶ path は再輸出で持つ。
 
 mod launch;
 mod relaunch;
@@ -40,8 +25,6 @@ use std::time::{Duration, Instant};
 const ID_SETTLE_S: &str = "seat.cycle_settle_s";
 /// 確認を見に行く周期（ミリ秒）を宣言する rules 行の id。
 const ID_POLL_MS: &str = "seat.cycle_poll_ms";
-/// 復元の既定 command。
-pub const DEFAULT_RESTORE: &str = "/rebrief";
 /// 記録の who。
 pub(super) const WHO: &str = "seat-cycle";
 /// 席の起動（`seat launch`）の記録の when。
@@ -60,20 +43,8 @@ pub(super) const MODEL_FLAG: &str = "--model";
 /// claude CLI の effort の flag（起動行が役割の既定の effort を運ぶ語・値は [`crate::headless::Effort::alias`]・設計 seat-roles.md §20）。
 pub(super) const EFFORT_FLAG: &str = "--effort";
 
-/// 他の cycle が走っている。
-pub const REASON_LOCK_HELD: &str = "lock-held";
-/// 自席の未 consumed 退避物が無い（CON5: 退避物なしで撃たない）。
-pub const REASON_WM_MISSING: &str = "wm-missing";
-/// 退避物の dir を読めない（**0 件と読み替えない**）。
-pub const REASON_WM_UNREADABLE: &str = "wm-unreadable";
 /// 席の最終の打刻が Busy（turn が走っている）。
 pub const REASON_BUSY: &str = "busy";
-/// 打刻 file が無い（hook が載っていない席）。**idle と読み替えない**。
-pub const REASON_STATE_MISSING: &str = "state-missing";
-/// 打刻 file が読めない・最終行が壊れている。
-pub const REASON_STATE_UNREADABLE: &str = "state-unreadable";
-/// 最終の Busy が `seat.tick_stale_s` より古い（hook が死んだ疑い）。
-pub const REASON_STATE_STALE: &str = "state-stale";
 /// pane を読めない（入力欄の門を通せない席へ送らない）。
 pub const REASON_PANE_MISSING: &str = "pane-missing";
 /// 入力欄が非空（打ちかけと 1 行に merge する事故を送る直前で塞ぐ・注入と同じ門）。
@@ -88,10 +59,6 @@ pub const REASON_INPUT_OWN_QUEUED: &str = "input-own-queued";
 pub const REASON_NO_RULE: &str = "no-rule";
 /// 置き場を解けない。
 pub const REASON_STATE_DIR: &str = "state-dir";
-/// cycle-stamp を書けない＝`/clear` を送る前に断る（書けないまま送ると次の周も送りうる・N1）。
-pub const REASON_STAMP: &str = "cycle-stamp-unwritable";
-/// `/clear` は送ったが作り直しを確認できない（送達 ts 以後の `SessionStart` の打刻が窓の内に来ない）。
-pub const REASON_CLEAR: &str = "clear-unconfirmed";
 /// 復元 command は送ったが消費を確認できない（送達 ts 以後の `UserPromptSubmit` の打刻が来ない）。
 pub const REASON_RESTORE: &str = "restore-unconfirmed";
 /// 立て直しの起動 command は送ったが、立ち上がりを確認できない（送達 ts 以後の `SessionStart` の打刻が窓の内に来ない）。

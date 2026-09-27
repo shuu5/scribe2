@@ -54,7 +54,7 @@ pub(super) fn launch_line(state_dir: &StateDir, template: &str, label: &str, anc
     fill_launch(template, &account_dir.display().to_string()).map(|found| with_anchor_cd(&with_agent_view_off(&found), anchor)).map_err(Holes::as_str)
 }
 
-/// 起動の注入の共通の入力（立て直し [`Relaunch`] と席の起動 [`super::launch::Launch`] が同じ 1 本 [`boot`] に渡す）。
+/// 起動の注入の共通の入力（席の起動 [`super::launch::Launch`] が 1 本 [`boot`] に渡す）。
 pub(super) struct Boot<'a> {
     /// tmux target（前面が shell の pane）。
     pub(super) target: &'a str,
@@ -70,7 +70,7 @@ pub(super) struct Boot<'a> {
     pub(super) step: Duration,
 }
 
-/// 起動の 1 本の結果（**「届いた」と「送ったが確かめられない」を分ける**・[`Relaunched`] と同じ極性）。
+/// 起動の 1 本の結果（**「届いた」と「送ったが確かめられない」を分ける**）。
 ///
 /// 「**1 key も送っていない**」側は持たない: 門を [`boot`] から [`input_gate`] へ切り出した後は、送る前の断りは
 /// 全部 [`super::launch::prepare`] が登録 row の前で返す（設計 seat-roles.md §26 の約束 5）。
@@ -127,7 +127,7 @@ pub(super) fn boot(common: &Boot, dir: &Path, (line, when): (&str, &str), betwee
     }
 }
 
-/// 復元 command を注入する（FR28・立て直しの既定は [`DEFAULT_RESTORE`]）。立ち上がった直後の席は入力欄を描き終える前が
+/// 復元 command（`seat launch` の `--restore` の値）を注入する。立ち上がった直後の席は入力欄を描き終える前が
 /// あり、入力欄の門は **1 key も送らずに断る**ので、窓（`settle`）の内は刻み（`step`）ごとに送り直す（断りは送って
 /// いない＝二重投函にならない）。送達した周の消費を返し、窓の内に送達できない周は `None`。
 fn restore_when_ready(common: &Boot, payload: &str) -> Option<inject::Settled> {
