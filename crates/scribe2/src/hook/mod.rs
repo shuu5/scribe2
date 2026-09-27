@@ -26,7 +26,7 @@ use crate::cli_outcome::{Outcome, RC_BROKEN};
 use crate::fleet::json_lite::{self, Value};
 use crate::fleet::json_tree;
 use crate::fleet::store::{self, LockPolicy, StoreError};
-use crate::name::NAME;
+use crate::name::{BUILD_COMMIT, NAME};
 use crate::rules::manifest::Manifest;
 use crate::seat::ledger::LedgerError;
 use crate::seat::recent;
@@ -304,7 +304,7 @@ fn plugin_record(args: &[String], payload: &str, state_dir: &Path) -> Vec<String
     };
     let sid = field(payload, KEY_SESSION_ID).unwrap_or_default();
     let seat_dir = crate::seat::seat_dir(state_dir, &target);
-    match vessel::digest::write(&seat_dir, Path::new(root), &sid, env!("SCRIBE2_BUILD_COMMIT")) {
+    match vessel::digest::write(&seat_dir, Path::new(root), &sid, BUILD_COMMIT) {
         Ok(()) => Vec::new(),
         Err(reason) => vec![format!("{NAME}: 読み込み元の記録を書けない reason={reason}")],
     }

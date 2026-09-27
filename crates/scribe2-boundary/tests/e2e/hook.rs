@@ -16,7 +16,7 @@ use vessel::hook::vessel::digest::{self, PluginRecord};
 use vessel::hook::precompact::{self, Slot, TEXT_WIDTH};
 use vessel::hook::vessel::{Marker, GENERATION, MARKER};
 use vessel::hook::{guard, inject_path, SCHEMA};
-use vessel::name::{NAME, PLUGIN_DIR};
+use vessel::name::{BUILD_COMMIT, NAME, PLUGIN_DIR};
 use vessel::pipe::declaration::DECL_FILE;
 use vessel::seat::brief;
 use vessel::seat::recent::{self, Kind, Unmeasured, BEAD_LIMIT, COMMIT_LIMIT, DIRTY_SCAN_LIMIT, TITLE_WIDTH, WINDOW_SECS};
@@ -2269,7 +2269,7 @@ fn hook_plugin_record_is_written_with_the_digest_of_hooks_json() {
     };
     assert_eq!(found_root, root_s, "root は渡した path");
     assert_eq!(hooks.as_deref(), Some(want.as_str()), "hooks は hooks.json の FNV-1a 64: {text}");
-    assert_eq!(binary, env!("SCRIBE2_BUILD_COMMIT"), "binary は build 元 commit: {text}");
+    assert_eq!(binary, BUILD_COMMIT,"binary は build 元 commit: {text}");
     assert_eq!(sid, "sid-plug");
     assert!(ts > 1_700_000_000, "ts は 1970 年からの秒: {text}");
     assert_eq!(digest::hooks_digest(&root).as_deref(), Some(want.as_str()), "読み手も同じ digest");

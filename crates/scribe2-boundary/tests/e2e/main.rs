@@ -27,7 +27,7 @@ use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 use vessel::fleet::Registration;
 use vessel::hook::vessel::digest::{self, PluginRecord};
-use vessel::name::{NAME, PLUGIN_DIR};
+use vessel::name::{BUILD_COMMIT, NAME, PLUGIN_DIR};
 use vessel::seat::ledger::DEFAULT_BD;
 use vessel::seat::role::Role;
 
@@ -636,7 +636,7 @@ fn doctor_consumer_lines_name_each_drift_word() {
             LedgerRow { project: "/c/dual", scope: Some("project"), install: Some(&cache_s), sha: Some(head) },
         ],
     );
-    let build = env!("SCRIBE2_BUILD_COMMIT");
+    let build = BUILD_COMMIT;
     let other = "f".repeat(16);
     let checkout_payload = place.vessel.join(PLUGIN_DIR);
     for (anchor, target, root, hooks, binary) in [
@@ -721,7 +721,7 @@ fn plugin_payload_doctor_consumer_reads_the_generated_dir_under_the_checkout() {
             LedgerRow { project: "/p/old", scope: Some("project"), install: None, sha: Some(head) },
         ],
     );
-    let build = env!("SCRIBE2_BUILD_COMMIT");
+    let build = BUILD_COMMIT;
     register_anchor(&place, "/p/new", "pn:pn");
     write_record(&place, "pn:pn", &payload, Some(&digest), build);
     register_anchor(&place, "/p/old", "po:po");
@@ -771,9 +771,9 @@ fn doctor_consumer_head_is_undeclared_without_vessel_row() {
     let stale = "2".repeat(40);
     write_ledger(&place, "acc-a", &[LedgerRow { project: "/h/one", scope: Some("project"), install: None, sha: Some(&stale) }]);
     register_anchor(&place, "/h/one", "h:one");
-    write_record(&place, "h:one", &place.root, Some(&place.digest), env!("SCRIBE2_BUILD_COMMIT"));
+    write_record(&place, "h:one", &place.root, Some(&place.digest), BUILD_COMMIT);
     let plugin = format!("{}:{}", place.root.display(), place.digest);
-    let build = env!("SCRIBE2_BUILD_COMMIT");
+    let build = BUILD_COMMIT;
     let line = |head: &str, behind: &str| {
         format!("consumer=/h/one source=launch+install scope=project binary={build} plugin={plugin} ledger={stale} cache=absent head={head} behind={behind} drift=none")
     };

@@ -3,10 +3,9 @@ name = "scribe2-boundary"
 version = "0.1.0"
 edition = "2021"
 # 境界 crate（設計 core-boundary.md §3・ADR-0033）: 子 process を撃つ面と binary を持つ。core は依存の向きで
-# この crate を知らない。build 元 commit は core と同じ build script で焼く（e2e の歯と bin が同じ値を読む）。
+# この crate を知らない。
 license = "MIT OR Apache-2.0"
 publish = false
-build = "../scribe2/build.rs"
 
 [[bin]]
 name = "scribe2"

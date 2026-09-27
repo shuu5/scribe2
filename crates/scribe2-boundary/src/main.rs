@@ -11,7 +11,7 @@
 use std::path::Path;
 use std::process::ExitCode;
 use vessel::cli_outcome::{Outcome, RC_REFUSED};
-use vessel::name::NAME;
+use vessel::name::{BUILD_COMMIT, NAME};
 
 /// 出力層。stdout へ書くのはこの関数だけである。
 #[expect(
@@ -41,10 +41,10 @@ fn render_name() -> String {
 
 /// `--version` が出力する行を組み立てる（`<NAME> <version> (<build 元 commit>)`・設計 consumer-sync.md §2）。
 ///
-/// 括弧の中身は `build.rs` が compile time に焼いた `SCRIBE2_BUILD_COMMIT`（`<sha12>` / `<sha12>+dirty` /
+/// 括弧の中身は core の `build.rs` が compile time に焼いた [`BUILD_COMMIT`]（`<sha12>` / `<sha12>+dirty` /
 /// 測れない周は `unknown`・C10）。実行時に env を読まない（C2.2）。doctor の 2 行目も同じ関数（FR51・FR61）。
 fn render_version() -> String {
-    format!("{NAME} {} ({})", env!("CARGO_PKG_VERSION"), env!("SCRIBE2_BUILD_COMMIT"))
+    format!("{NAME} {} ({})", env!("CARGO_PKG_VERSION"), BUILD_COMMIT)
 }
 
 /// `doctor` が出力する行を組み立てる（骨格の stub: NAME と version を 1 行ずつ）。
@@ -204,7 +204,7 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     // flip-check: moved s2-07l.198.2
-    use super::{render_doctor, render_name, render_usage, render_version, NAME};
+    use super::{render_doctor, render_name, render_usage, render_version, BUILD_COMMIT, NAME};
     use std::ffi::OsStr;
     use std::path::PathBuf;
     use vessel::account::consumers::{drift_of, render_consumer, Consumer, Head, Source};
@@ -289,7 +289,7 @@ mod tests {
     /// （記録の無い launch+install の形・帳簿は HEAD と食い違う・consumer-sync.md §4）→ usage → version で、
     /// 区切り文字は LF ただ 1 種である。版番号は assert の前に `[version]` へ、build 元 commit（build ごとに変わる）は
     /// `[commit]` へ置換する 2 段の mask（`default-features = false` では `Settings::add_filter` が無いので `filters`
-    /// feature に頼らない・regex も足さない＝`env!` の実値を置換する）。
+    /// feature に頼らない・regex も足さない＝`BUILD_COMMIT` の実値を置換する）。
     #[test]
     fn doctor_external_form() {
         let mut lines = render_doctor();
@@ -319,7 +319,7 @@ mod tests {
         let masked = lines
             .join("\n")
             .replace(env!("CARGO_PKG_VERSION"), "[version]")
-            .replace(&format!("({})", env!("SCRIBE2_BUILD_COMMIT")), "([commit])");
+            .replace(&format!("({BUILD_COMMIT})"), "([commit])");
         insta::assert_snapshot!(masked);
     }
 
@@ -352,7 +352,7 @@ mod tests {
         let masked = lines
             .join("\n")
             .replace(env!("CARGO_PKG_VERSION"), "[version]")
-            .replace(&format!("({})", env!("SCRIBE2_BUILD_COMMIT")), "([commit])");
+            .replace(&format!("({BUILD_COMMIT})"), "([commit])");
         insta::assert_snapshot!(masked);
     }
 
@@ -388,7 +388,7 @@ mod tests {
         let masked = lines
             .join("\n")
             .replace(env!("CARGO_PKG_VERSION"), "[version]")
-            .replace(&format!("({})", env!("SCRIBE2_BUILD_COMMIT")), "([commit])");
+            .replace(&format!("({BUILD_COMMIT})"), "([commit])");
         insta::assert_snapshot!(masked);
     }
 

@@ -30,7 +30,7 @@ use crate::cli_outcome::{Outcome, RC_OK};
 use crate::fleet::json_lite::{self, Value};
 use crate::fleet::store::{self, append_line};
 use crate::fleet::{ci_now, cli::now_utc, CiRun, Completion, EventKind, Stage, SCHEMA};
-use crate::name::NAME;
+use crate::name::{BUILD_COMMIT, NAME};
 use std::path::{Path, PathBuf};
 
 /// squash commit の件名に載せる要旨の長さ（**char 単位**・byte でない・`s2-07l.130`）。
@@ -184,7 +184,7 @@ fn gist_of(goal: &str) -> String {
 /// この binary の build 元 commit（`build.rs` が compile time に焼く・設計 consumer-sync.md §2）。
 ///
 /// `--version` の括弧の中身と**同じ 1 つの値**である（3 形: `<sha12>` / `<sha12>+dirty` / `unknown`）。
-const GENERATION: &str = env!("SCRIBE2_BUILD_COMMIT");
+const GENERATION: &str = BUILD_COMMIT;
 
 /// 台帳の close に書く理由の書き出し（`landed <sha> ci=success`）。
 const CLOSE_REASON: &str = "landed";

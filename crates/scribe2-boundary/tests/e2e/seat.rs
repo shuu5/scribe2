@@ -28,7 +28,7 @@ use std::process::{Command, Output};
 use std::thread::sleep;
 use std::time::{Duration, Instant, SystemTime};
 use vessel::cli_outcome::{RC_OK, RC_REFUSED};
-use vessel::name::{NAME, PLUGIN_DIR};
+use vessel::name::{BUILD_COMMIT, NAME, PLUGIN_DIR};
 
 /// binary の path。
 fn bin() -> &'static str {
@@ -577,14 +577,14 @@ fn mutant_e2e_doctor_reconciles_against_the_given_tmux_socket_and_refuses_a_dupl
 ///
 /// .192 の検出線で生き残った変異 `dispatch` の `Some("--version")` arm の削除は、bin crate の in-module 歯
 /// （`render_version` の戻り値を見る）からは binary を撃てないので捕まらない。e2e 側で binary の外形を pin する
-/// （ADR-0013）。現物の挙動を pin する歯なので base でも通る（retroactive）。括弧の中身は同じ package の
-/// `build.rs` が焼いた `SCRIBE2_BUILD_COMMIT`（e2e の target にも同じ値が渡る・consumer-sync.md §2・`s2-07l.302`）。
+/// （ADR-0013）。現物の挙動を pin する歯なので base でも通る（retroactive）。括弧の中身は core の
+/// `build.rs` が焼いた `BUILD_COMMIT`（e2e は依存の core の同じ const を読む・consumer-sync.md §2・`s2-07l.302`）。
 // flip-check: retroactive s2-07l.196
 #[test]
 fn mutant_e2e_version_flag_prints_name_and_version_on_the_binary() {
     let out = Command::new(bin()).arg("--version").output().ok();
     assert_eq!(out.as_ref().map(rc_of), Some(i32::from(RC_OK)), "{out:?}");
-    let expected = format!("{NAME} {} ({})\n", env!("CARGO_PKG_VERSION"), env!("SCRIBE2_BUILD_COMMIT"));
+    let expected = format!("{NAME} {} ({})\n", env!("CARGO_PKG_VERSION"), BUILD_COMMIT);
     assert_eq!(out.as_ref().map(stdout_of), Some(expected.clone()), "NAME + version + (build 元 commit) の 1 行");
     assert_eq!(out.as_ref().map(stderr_of).as_deref(), Some(""), "stderr は空");
     assert!(!expected.starts_with("usage: "), "使い方でない");

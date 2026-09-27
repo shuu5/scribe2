@@ -11,7 +11,7 @@ use crate::fleet::{account_dir, effective_accounts, replay, store, State};
 use crate::hook::vessel::digest::{self, PluginRecord};
 use crate::hook::vessel::{upstream, Upstream, DEFAULT_BRANCH, DEFAULT_REMOTE};
 use crate::invocation::Invocation;
-use crate::name::{NAME, PLUGIN_DIR};
+use crate::name::{BUILD_COMMIT, NAME, PLUGIN_DIR};
 use crate::rules::manifest::Manifest;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -259,7 +259,7 @@ fn holds(word: Drift, consumer: &Consumer, head: &Head, vessel: Option<&Path>) -
         PluginRecord::Absent | PluginRecord::Unreadable => None,
     };
     match word {
-        Drift::Binary => recorded.is_some_and(|(_, _, binary)| binary != env!("SCRIBE2_BUILD_COMMIT")),
+        Drift::Binary => recorded.is_some_and(|(_, _, binary)| binary != BUILD_COMMIT),
         Drift::Plugin => recorded.is_some_and(|(root, hooks, _)| *hooks != digest::hooks_digest(Path::new(root))),
         Drift::Ledger => matches!((head, &consumer.ledger), (Head::Sha(sha), Some(ledger)) if sha != ledger),
         Drift::Dual => {
