@@ -79,6 +79,14 @@ mod finish;
 use finish::{finish, open_pr, squash};
 pub(in crate::pipe) use finish::{land_train, landed_sha, terminal, Car};
 
+/// 着地が anchor を揃えなかった周の印（設計 §57・行 az）。書き手は境界 crate の歯からも呼べ、古さの判定は crate の中
+/// （land-window と行 h の hook）から呼べる。
+mod anchor;
+
+pub use anchor::{mark_path, write_mark, Marked};
+pub(crate) use anchor::{stale, Staleness};
+pub(in crate::pipe) use anchor::anchor_sync;
+
 /// 着地後の検出の口（`pipe land --detection-only`・設計 gate-cost.md §44 行 ak）。
 pub(in crate::pipe) mod detection;
 
@@ -441,13 +449,16 @@ fn attempt(entry: &Land<'_>, worktree: &Path, turned: &Turned, lines: &mut Vec<S
         Landing::Fresh(_) => new,
         Landing::AlreadyLanded(_) => old.as_str(),
     };
-    let anchor = sync_anchor(entry.repo, &plan, &old, synced_to);
+    // 揃えなかった周は印を残す（main の実測の前・設計 §57 形 1）。書けない周も rc は変えず stderr に 1 行。
+    let anchor = anchor::record(entry.repo, sync_anchor(entry.repo, &plan, &old, synced_to), &old, synced_to);
     let check = verify_main(entry, new);
-    Attempt::Settled(match check {
+    let mut outcome = match check {
         MainCheck::Green => finish(entry, worktree, &landing, &anchor, turned),
-        MainCheck::Red(reason) => main_red(entry, &reason, &anchor),
-        MainCheck::Unmeasurable(reason) => main_unmeasured(entry, &reason, &anchor),
-    })
+        MainCheck::Red(reason) => main_red(entry, &reason, &anchor.sync),
+        MainCheck::Unmeasurable(reason) => main_unmeasured(entry, &reason, &anchor.sync),
+    };
+    outcome.err.extend(anchor.err);
+    Attempt::Settled(outcome)
 }
 
 /// anchor（`--repo` の checkout）を land の後に新 main へ揃えるかの見立て（`s2-07l.120`）。

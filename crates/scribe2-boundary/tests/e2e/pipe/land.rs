@@ -2025,6 +2025,203 @@ fn pipe_land_anchor_before_verify_records_clean_anchor_during_main_check() {
     clean(&[&repo, &state]);
 }
 
+// ───── 揃えなかった周の印（設計 pipeline.md §57・行 az・接頭辞 `pipe_land_anchor_mark_` / `pipe_anchor_sync_`） ─────
+
+/// anchor に置く局所の変更（便と別の tracked な file の中身）。
+const LOCAL_EDIT: &str = "# local edit\n";
+
+/// anchor の印の path（`<git-dir>/<NAME>/` の下・器の書き手と同じ 1 本で解く）。
+fn mark_of(repo: &Path) -> PathBuf {
+    land::mark_path(Path::new(&git(repo, &["rev-parse", "--absolute-git-dir"])))
+}
+
+/// 便と別の tracked な file（[`REQS_FILE`]）に局所の変更を置いた anchor へ `write-set` の便を 1 本着地させる
+/// （`anchor=skipped:dirty`）。返すのは着地前の main・着地後の main・便 id。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn landed_on_dirty_anchor(repo: &Path, state: &Path, write_set: &str, runner: &str) -> (String, String, String) {
+    let path = write_contract(repo, &["write-set"], &[write_set]);
+    let id = intake(repo, state, &path);
+    spawn_and_gate(repo, state, &id, runner);
+    let old = git(repo, &["rev-parse", "refs/heads/main"]);
+    fs::write(repo.join(REQS_FILE), LOCAL_EDIT).expect("局所の変更を置ける");
+    let out = land_once(repo, state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land は rc 0: {}", stderr_of(&out));
+    assert!(stdout_of(&out).contains(" anchor=skipped:dirty"), "{}", stdout_of(&out));
+    (old, git(repo, &["rev-parse", "refs/heads/main"]), id)
+}
+
+/// 便を `runner` で実装させ、PASS の gate まで通す（lens の marker は便ごと）。
+fn spawn_and_gate(repo: &Path, state: &Path, id: &str, runner: &str) {
+    let spawned = run_pipe(&[
+        "spawn", "--run", id, "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(), "--runner", runner,
+    ]);
+    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "spawn は rc 0: {}", stderr_of(&spawned));
+    let lens = fake_lens(&state.join(format!("lens-ran-{id}")), &lens_verdict("PASS"));
+    let gated = gate_once(repo, state, id, Some(&lens));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "PASS の gate は rc 0: {}", stderr_of(&gated));
+}
+
+/// 既定の便の runner（`src/lib.rs` に 1 行足す）。
+const LIB_RUNNER: &str = "echo x >> src/lib.rs && git add -A && git commit -q -m runner";
+
+/// 既定の便を汚れた anchor へ着地させる。
+fn lib_landed_on_dirty_anchor(repo: &Path, state: &Path) -> (String, String, String) {
+    landed_on_dirty_anchor(repo, state, r#"write-set = ["src/lib.rs"]"#, LIB_RUNNER)
+}
+
+/// `pipe anchor-sync --repo R` を 1 回撃つ。
+fn anchor_sync_once(repo: &Path) -> Output {
+    run_pipe(&["anchor-sync", "--repo", &repo.display().to_string()])
+}
+
+/// (a) 便と別の file に局所の変更を置いた anchor で land すると、`Landed` の detail が `anchor=skipped:dirty` で終わり、印が
+/// 着地前の main の 1 行を持ち、`pipe land-window` が rc 1 の busy で `anchor=stale` を unpushed の欄の後ろに持つ。
+#[test]
+fn pipe_land_anchor_mark_dirty_landing_records_the_token_and_closes_the_window() {
+    let (repo, state) = repo_with_state();
+    let (old, _, id) = lib_landed_on_dirty_anchor(&repo, &state);
+    let details = landed_details(&state, &id);
+    let landed = details.iter().find(|detail| detail.starts_with("sha:")).expect("Landed の detail が在る");
+    assert!(landed.ends_with(" anchor=skipped:dirty"), "detail の末尾に判定行と同じ token: {landed}");
+    assert_eq!(fs::read_to_string(mark_of(&repo)).ok(), Some(format!("{old}\n")), "印は着地前の main の 1 行");
+    let out = land_window_once(&repo, &state);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "古い anchor は窓を閉じる: {}", stderr_of(&out));
+    assert_eq!(stdout_of(&out).trim(), "land-window=busy queue=- following=- unpushed=- anchor=stale remote=none");
+    clean(&[&repo, &state]);
+}
+
+/// (b) 同じ anchor で着地の path を手で `git read-tree -m -u <old> <new>` に揃えると、印が在るまま land-window は開き、
+/// 行は `anchor=` を持たない（手で揃えた周は新しい）。
+#[test]
+fn pipe_land_anchor_mark_hand_synced_anchor_opens_the_window_with_the_mark_in_place() {
+    let (repo, state) = repo_with_state();
+    let (old, new, _) = lib_landed_on_dirty_anchor(&repo, &state);
+    git(&repo, &["read-tree", "-m", "-u", &old, &new]);
+    assert!(mark_of(&repo).exists(), "印は残っている");
+    let out = land_window_once(&repo, &state);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "手で揃えた anchor は窓を閉じない: {}", stdout_of(&out));
+    assert_eq!(stdout_of(&out).trim(), "land-window=clear remote=none", "行は 1 字も変わらない");
+    clean(&[&repo, &state]);
+}
+
+/// (c) 次の便が clean な anchor に synced で着地すると印が消え、その `Landed` の detail は anchor の token を持たない。
+#[test]
+fn pipe_land_anchor_mark_next_synced_landing_clears_the_mark_and_keeps_the_detail() {
+    let (repo, state) = repo_with_state();
+    let (old, new, _) = lib_landed_on_dirty_anchor(&repo, &state);
+    git(&repo, &["read-tree", "-m", "-u", &old, &new]);
+    git(&repo, &["checkout", "--", REQS_FILE]);
+    assert_eq!(git(&repo, &["status", "--porcelain", "--untracked-files=no"]), "", "anchor は clean");
+    assert!(mark_of(&repo).exists(), "1 本目の着地が残した印が在る（消えるのは 2 本目の synced の周）");
+    // 2 本目は別の bead で起こす（run id は bead と秒で決まる＝同じ bead を同じ秒に起こすと断られる）。
+    let id = intake_bead(&repo, &state, &design_pointer(), "s2-3ax");
+    spawn_and_gate(&repo, &state, &id, LIB_RUNNER);
+    let out = land_once(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land は rc 0: {}", stderr_of(&out));
+    assert!(stdout_of(&out).contains(" anchor=synced"), "{}", stdout_of(&out));
+    assert!(!mark_of(&repo).exists(), "synced の周は印を消す");
+    let details = landed_details(&state, &id);
+    let landed = details.iter().find(|detail| detail.starts_with("sha:")).expect("Landed の detail が在る");
+    assert!(!landed.contains("anchor="), "synced の周の detail は token を持たない: {landed}");
+    clean(&[&repo, &state]);
+}
+
+/// (d) (a) の anchor で `pipe anchor-sync` は rc 0 の `anchor-sync=synced paths=1` を返し、index と HEAD の差分が空になり、
+/// 局所の変更は残り、印が消え、land-window が clear になる。
+#[test]
+fn pipe_anchor_sync_restores_landed_paths_and_keeps_the_local_edit() {
+    let (repo, state) = repo_with_state();
+    lib_landed_on_dirty_anchor(&repo, &state);
+    let out = anchor_sync_once(&repo);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "rc 0: {}", stderr_of(&out));
+    assert_eq!(stdout_of(&out).trim(), "anchor-sync=synced paths=1");
+    assert_eq!(git(&repo, &["diff", "--cached", "--name-only", "HEAD"]), "", "index は HEAD に揃う");
+    assert_eq!(fs::read_to_string(repo.join(REQS_FILE)).ok().as_deref(), Some(LOCAL_EDIT), "局所の変更は残る");
+    let lib = fs::read_to_string(repo.join("src").join("lib.rs")).unwrap_or_default();
+    assert!(lib.lines().any(|line| line == "x"), "着地の変更が作業の木に在る: {lib:?}");
+    assert!(!mark_of(&repo).exists(), "印を外す");
+    let window = land_window_once(&repo, &state);
+    assert_eq!(stdout_of(&window).trim(), "land-window=clear remote=none", "窓が開く");
+    clean(&[&repo, &state]);
+}
+
+/// (e) 着地の path の作業の木を書き換えた anchor では rc 1 でその path を mixed に名指し、中身は変わらず印も残る。
+#[test]
+fn pipe_anchor_sync_refuses_a_landed_path_the_user_edited() {
+    let (repo, state) = repo_with_state();
+    lib_landed_on_dirty_anchor(&repo, &state);
+    fs::write(repo.join("src").join("lib.rs"), "// user edit\n").expect("利用者の編集を置ける");
+    let out = anchor_sync_once(&repo);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "rc 1: {}", stderr_of(&out));
+    assert_eq!(stdout_of(&out).trim(), "anchor-sync=refused mixed=src/lib.rs");
+    assert_eq!(fs::read_to_string(repo.join("src").join("lib.rs")).ok().as_deref(), Some("// user edit\n"), "編集は触らない");
+    assert!(mark_of(&repo).exists(), "印は残す");
+    clean(&[&repo, &state]);
+}
+
+/// (f) 足された path に untracked の file を置いた anchor では rc 1 でその path を名指し、その file の中身は変わらない
+/// （戻せる path は戻す・印は残す）。
+#[test]
+fn pipe_anchor_sync_refuses_an_added_path_occupied_by_an_untracked_file() {
+    let (repo, state) = repo_with_state();
+    landed_on_dirty_anchor(
+        &repo,
+        &state,
+        r#"write-set = ["src/lib.rs", "+src/new.rs"]"#,
+        "echo n > src/new.rs && echo x >> src/lib.rs && git add -A && git commit -q -m runner",
+    );
+    fs::write(repo.join("src").join("new.rs"), "// mine\n").expect("untracked の file を置ける");
+    let out = anchor_sync_once(&repo);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "rc 1: {}", stderr_of(&out));
+    assert_eq!(stdout_of(&out).trim(), "anchor-sync=refused mixed=src/new.rs");
+    assert_eq!(fs::read_to_string(repo.join("src").join("new.rs")).ok().as_deref(), Some("// mine\n"), "file は触らない");
+    assert_eq!(git(&repo, &["diff", "--cached", "--name-only", "HEAD", "--", "src/lib.rs"]), "", "戻せる path は戻す");
+    assert!(mark_of(&repo).exists(), "印は残す");
+    clean(&[&repo, &state]);
+}
+
+/// (g) 印の無い repo は rc 0 の `none`。古い path の無い印と、中身を壊した印でも tracked の変更が無い anchor は rc 0 の
+/// `already` で印が消える。壊した印で tracked の変更が在れば rc 1 の `unreadable` で、land-window は `anchor=unreadable`。
+#[test]
+fn pipe_anchor_sync_none_already_and_unreadable_marks() {
+    let (repo, state) = repo_with_state();
+    let out = anchor_sync_once(&repo);
+    assert_eq!((out.status.code(), stdout_of(&out).trim().to_owned()), (Some(i32::from(RC_OK)), "anchor-sync=none".to_owned()));
+    let head = git(&repo, &["rev-parse", "HEAD"]);
+    assert_eq!(land::write_mark(&repo, &head, &"f".repeat(40)), Ok(land::Marked::Written), "境界 crate からも印を置ける");
+    let out = anchor_sync_once(&repo);
+    assert_eq!((out.status.code(), stdout_of(&out).trim().to_owned()), (Some(i32::from(RC_OK)), "anchor-sync=already".to_owned()));
+    assert!(!mark_of(&repo).exists(), "古い path の無い印は消す");
+    let mark = mark_of(&repo);
+    fs::create_dir_all(mark.parent().expect("印の dir が在る")).expect("印の dir を作れる");
+    fs::write(&mark, "garbage\n").expect("壊した印を置ける");
+    let out = anchor_sync_once(&repo);
+    assert_eq!((out.status.code(), stdout_of(&out).trim().to_owned()), (Some(i32::from(RC_OK)), "anchor-sync=already".to_owned()));
+    assert!(!mark.exists(), "tracked の変更が無ければ壊した印も消す");
+    fs::write(&mark, "garbage\n").expect("壊した印を置ける");
+    fs::write(repo.join(REQS_FILE), LOCAL_EDIT).expect("局所の変更を置ける");
+    let out = anchor_sync_once(&repo);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "rc 1: {}", stderr_of(&out));
+    assert_eq!(stdout_of(&out).trim(), "anchor-sync=refused unreadable:mark");
+    assert!(mark.exists(), "読めない印は残す");
+    let window = land_window_once(&repo, &state);
+    assert_eq!(window.status.code(), Some(i32::from(RC_REFUSED)), "読めない印は窓を閉じる（fail-closed）");
+    assert_eq!(stdout_of(&window).trim(), "land-window=busy queue=- following=- unpushed=- anchor=unreadable remote=none");
+    clean(&[&repo, &state]);
+}
+
+/// (h) `help pipe` の SUBCOMMANDS に anchor-sync の 1 行が在る。
+#[test]
+fn pipe_anchor_sync_is_listed_in_help_pipe() {
+    let out = bin_cmd().args(["help", "pipe"]).output().expect("binary を起動できる");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "help は rc 0: {}", stderr_of(&out));
+    let page = stdout_of(&out);
+    assert!(page.lines().any(|line| line.trim_start().starts_with("anchor-sync ")), "SUBCOMMANDS に 1 行: {page}");
+}
+
 /// 偽 runner（実行 file）の runner cmd。
 ///
 /// turn 1 は契約の実装（`src/lib.rs` の末尾へ `x` を足して commit）で、turn 2 以降は `second` の

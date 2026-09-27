@@ -4,7 +4,7 @@
 //! `pub use` が元の path のまま外へ見せる。
 
 use super::gate::Verdict;
-use super::land::{verdict_of, Land, MAIN_REF};
+use super::land::{stale, verdict_of, Land, Staleness, MAIN_REF};
 use super::{driver_ticket, emit, git_line, git_ok, worktree_path, Emit, Ticket};
 use crate::fleet::store;
 use crate::fleet::{replay, Completion, Event, EventKind, Run, Stage, State, Timeout};
@@ -264,16 +264,19 @@ pub(crate) struct Window {
     runs: Option<(Vec<String>, Vec<String>)>,
     /// (c) の読み。
     main: MainRead,
+    /// `--repo` の checkout の古さ（設計 pipeline.md §57 形 4・古い周と読めない周は閉じる＝fail-closed）。
+    anchor: Staleness,
 }
 
 impl Window {
-    /// 窓が開いているか: (a)(b) が 0 本 ∧ (c) が数えない周か祖先の周。
+    /// 窓が開いているか: (a)(b) が 0 本 ∧ (c) が数えない周か祖先の周 ∧ anchor が新しい。
     pub(crate) fn is_open(&self) -> bool {
         let quiet = self.runs.as_ref().is_some_and(|(queued, following)| queued.is_empty() && following.is_empty());
-        quiet && matches!(self.main, MainRead::NoRemote | MainRead::Pushed)
+        quiet && matches!(self.main, MainRead::NoRemote | MainRead::Pushed) && self.anchor == Staleness::Fresh
     }
 
     /// stdout の 1 行（`land-window=clear` か、列の便と `unpushed=<sha|unreadable|->` を名指す `land-window=busy`）。
+    /// anchor が古い / 読めない周だけ busy の unpushed の欄の後ろに `anchor=stale` / `anchor=unreadable`。
     pub(crate) fn line(&self) -> String {
         let remote = match self.main {
             MainRead::NoRemote => " remote=none",
@@ -292,8 +295,9 @@ impl Window {
             MainRead::Unreadable => "unreadable",
             MainRead::NoRemote | MainRead::Pushed => "-",
         };
+        let anchor = self.anchor.token().map(|token| format!(" {token}")).unwrap_or_default();
         format!(
-            "land-window=busy queue={} following={} unpushed={unpushed}{remote}",
+            "land-window=busy queue={} following={} unpushed={unpushed}{anchor}{remote}",
             names(self.runs.as_ref().map(|(queued, _)| queued)),
             names(self.runs.as_ref().map(|(_, following)| following)),
         )
@@ -317,7 +321,7 @@ pub(crate) fn window_now(state_dir: &Path, repo: &Path) -> Window {
             .collect();
         Some((queued, following_of(&events, &state.runs)))
     });
-    Window { runs, main: main_read(repo) }
+    Window { runs, main: main_read(repo), anchor: stale(repo) }
 }
 
 /// 追随中の便（**pure**・設計 pipeline.md §47 が §19 約束 2 (b) を supersede）: 最新の `RunStage` が `Implemented`

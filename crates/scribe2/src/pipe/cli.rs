@@ -101,6 +101,8 @@ pub enum PipeCommand {
     Regate,
     /// `pipe follow`。
     Follow,
+    /// `pipe anchor-sync`。
+    AnchorSync,
 }
 
 /// [`PipeCommand`] の全部（宣言順）。
@@ -122,6 +124,7 @@ pub const PIPE_COMMANDS: &[PipeCommand] = &[
     PipeCommand::Report,
     PipeCommand::Regate,
     PipeCommand::Follow,
+    PipeCommand::AnchorSync,
 ];
 
 impl PipeCommand {
@@ -145,6 +148,7 @@ impl PipeCommand {
             Self::Report => "report",
             Self::Regate => "regate",
             Self::Follow => "follow",
+            Self::AnchorSync => "anchor-sync",
         }
     }
 
@@ -157,7 +161,7 @@ impl PipeCommand {
 /// `pipe` の使い方。
 pub fn usage() -> String {
     format!(
-        "usage: {NAME} pipe <intake|preflight|spawn|approve|answer|gate|land|retire|run|show|resume|stop|report|dispatch> [--state-dir D] [--repo R（cwd は読まない＝--state-dir の無い周と便の写し面の無い周は要る）] [--rules PATH] [stop: --all [{REASON_FLAG} WORDS（live な便が 2 本以上の周は要る）]|--run ID] [dispatch: (1 周)|ls|first|hold|release BEAD] [run|resume: --drive] [land: --terminal-only|--detection-only] [--runner CMD] [flags]\nusage: {NAME} pipe land-window [--state-dir D] --repo R [{WINDOW_WAIT_FLAG} N]（pipeline 外の merge の前置: 開けば rc 0 の clear・待ちが切れれば rc 1 の busy）\nusage: {NAME} pipe regate --run ID {REASON_FLAG} WORDS [--state-dir D] [--repo R]（判定 FAIL の Gated を裁定の逐語つきで同じ worktree の Implemented へ 1 段戻す・最新の Gated につき 1 回）\nusage: {NAME} pipe follow --run ID [--state-dir D] [--repo R]（終端でない便の木だけを main の先端へ載せ替えて段を Implemented へ戻す・gate は撃たない・衝突は木を戻して断る）"
+        "usage: {NAME} pipe <intake|preflight|spawn|approve|answer|gate|land|retire|run|show|resume|stop|report|dispatch> [--state-dir D] [--repo R（cwd は読まない＝--state-dir の無い周と便の写し面の無い周は要る）] [--rules PATH] [stop: --all [{REASON_FLAG} WORDS（live な便が 2 本以上の周は要る）]|--run ID] [dispatch: (1 周)|ls|first|hold|release BEAD] [run|resume: --drive] [land: --terminal-only|--detection-only] [--runner CMD] [flags]\nusage: {NAME} pipe land-window [--state-dir D] --repo R [{WINDOW_WAIT_FLAG} N]（pipeline 外の merge の前置: 開けば rc 0 の clear・待ちが切れれば rc 1 の busy）\nusage: {NAME} pipe regate --run ID {REASON_FLAG} WORDS [--state-dir D] [--repo R]（判定 FAIL の Gated を裁定の逐語つきで同じ worktree の Implemented へ 1 段戻す・最新の Gated につき 1 回）\nusage: {NAME} pipe follow --run ID [--state-dir D] [--repo R]（終端でない便の木だけを main の先端へ載せ替えて段を Implemented へ戻す・gate は撃たない・衝突は木を戻して断る）\nusage: {NAME} pipe anchor-sync --repo R [--state-dir D] [--rules PATH]（着地が揃えなかった anchor の index と作業の木のうち着地前の中身のままの path だけを main の先端へ戻して印を外す・利用者の編集は触らない）"
     )
 }
 
@@ -438,6 +442,11 @@ fn subcommand(
             Ok(state_dir) => super::follow_step::follow(&state_dir, id, policy),
             Err(reason) => refused(reason),
         }),
+        // 着地が揃えなかった anchor の古い中身だけを main の先端へ戻して印を外す（設計 pipeline.md §57 形 5）。
+        Some(PipeCommand::AnchorSync) => match repo_of(args) {
+            Ok(repo) => land::anchor_sync(&repo),
+            Err(reason) => refused(reason),
+        },
         None => Outcome::failed(RC_REFUSED, vec![usage()]),
     }
 }

@@ -20,12 +20,10 @@ use super::super::dispatch::spawn_self;
 use super::super::gate::{LandedMark, Unfired, Verdict};
 use super::super::queue::{Order, Turned};
 use super::super::{emit, git_bytes, git_line, git_ok, size, verdict_path, vessel_path, Emit};
+use super::anchor::Anchored;
 use super::detection::{unfired, Detect, DETAIL_HEAD, SPAWNED, UNSPAWNED};
 use super::verify::{main_red, main_unmeasured, measure_main, verify_train_main, MAIN_UNKNOWN};
-use super::{
-    broken, refused, retire_worktree, verdicts_path, AnchorSync, Land, Landing, MainCheck, Terminal, MAIN_REF,
-    RUN_TRAILER,
-};
+use super::{broken, refused, retire_worktree, verdicts_path, Land, Landing, MainCheck, Terminal, MAIN_REF, RUN_TRAILER};
 use crate::cli_outcome::{Outcome, RC_OK};
 use crate::fleet::json_lite::{self, Value};
 use crate::fleet::store::{self, append_line};
@@ -300,7 +298,9 @@ fn note(entry: &Land<'_>, detail: &str) {
 ///
 /// `turned` は番待ちの結果（設計 pipeline.md §36）: 札が死んでいて列から外した便が在る周は stdout の `order=` の値の
 /// 直後に `skipped-dead=<n>`、面 5 の行に `skipped_dead` を足す（0 本の周は書かない）。
-pub(super) fn finish(entry: &Land<'_>, worktree: &Path, landing: &Landing, anchor: &AnchorSync, turned: &Turned) -> Outcome {
+/// `anchor` は揃えた結果と印（設計 §57 形 2）: 印を置いた周だけ detail の末尾に ` anchor=skipped:<理由>`（synced と not-main
+/// は空）。印の stderr の行は呼び手が 1 度だけ足す（列の便ごとに重ねない）。
+pub(super) fn finish(entry: &Land<'_>, worktree: &Path, landing: &Landing, anchor: &Anchored, turned: &Turned) -> Outcome {
     let new = landing.sha();
     let order = turned.order;
     let (measured, mut err) = measure_main(entry.repo);
@@ -316,7 +316,7 @@ pub(super) fn finish(entry: &Land<'_>, worktree: &Path, landing: &Landing, ancho
             stage: Some(Stage::Landed),
             seat: None,
             pid: None,
-            detail: Some(format!("{SHA_PREFIX}{new} main:{measured}{}", landing.detail_suffix())),
+            detail: Some(format!("{SHA_PREFIX}{new} main:{measured}{}{}", landing.detail_suffix(), anchor.detail)),
         },
         entry.policy,
     );
@@ -327,7 +327,7 @@ pub(super) fn finish(entry: &Land<'_>, worktree: &Path, landing: &Landing, ancho
     err.extend(spawn_detection(entry, new));
     // 後始末の失敗は land を取り消さない（**rc 0 のまま stderr 1 行**）。anchor の warning も同じ列。
     err.extend(retire_worktree(entry.repo, entry.run, worktree));
-    err.extend(anchor.warning());
+    err.extend(anchor.sync.warning());
     // **終端**（設計 contract-source.md §5）: push → CI の照合 → 台帳の close。着地は既に成立している
     // ので、終端が止まっても取り消さない——止まった事実を typed な event と token で残し rc を 1 にする。
     let terminal = terminal(entry, new);
@@ -339,7 +339,7 @@ pub(super) fn finish(entry: &Land<'_>, worktree: &Path, landing: &Landing, ancho
         out: vec![format!(
             "run={} landed={new} main={measured} {} order={}{skipped}{} terminal={}",
             entry.run,
-            anchor.token(),
+            anchor.sync.token(),
             order.as_value(),
             landing.stdout_suffix(),
             terminal.as_token()
@@ -448,7 +448,7 @@ pub(in crate::pipe) fn land_train(cars: &[Car<'_>], old: &str) -> Result<Outcome
     if !git_ok(repo, &["update-ref", MAIN_REF, &parent, old]) {
         return Err(format!("{MAIN_REF} を付け替えられない（CAS が外れた）"));
     }
-    let anchor = super::sync_anchor(repo, &plan, old, &parent);
+    let anchor = super::anchor::record(repo, super::sync_anchor(repo, &plan, old, &parent), old, &parent);
     // 主実測の write-set 照合は `old..先端` を列の write-set の和で測る（契約 verify は先頭の分・従来どおり）。
     let mut joined = head.entry.contract.clone();
     for item in cars.iter().skip(1).flat_map(|car| &car.entry.contract.write_set) {
@@ -468,8 +468,8 @@ pub(in crate::pipe) fn land_train(cars: &[Car<'_>], old: &str) -> Result<Outcome
                 let turned = Turned { order: car.order, skipped_dead: Vec::new() };
                 finish(&car.entry, &car.worktree, &Landing::Fresh(sha.clone()), &anchor, &turned)
             }
-            MainCheck::Red(reason) => main_red(&car.entry, reason, &anchor),
-            MainCheck::Unmeasurable(reason) => main_unmeasured(&car.entry, reason, &anchor),
+            MainCheck::Red(reason) => main_red(&car.entry, reason, &anchor.sync),
+            MainCheck::Unmeasurable(reason) => main_unmeasured(&car.entry, reason, &anchor.sync),
         };
         if let Some(slot) = outcomes.get_mut(index) {
             *slot = Some(outcome);
@@ -481,6 +481,7 @@ pub(in crate::pipe) fn land_train(cars: &[Car<'_>], old: &str) -> Result<Outcome
         merged.err.extend(outcome.err);
         merged.rc = merged.rc.max(outcome.rc);
     }
+    merged.err.extend(anchor.err);
     Ok(merged)
 }
 

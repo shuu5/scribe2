@@ -266,6 +266,7 @@ pub const TABLE: &[Entry] = &[
             ("land-window", "Wait until nothing is landing, before a merge outside the pipeline."),
             ("regate", "Send a failed gated run back one stage, with the ruling words."),
             ("follow", "Move a live run onto the tip of main without gating it."),
+            ("anchor-sync", "Bring the paths a landing left stale in the repo checkout up to main."),
         ],
         flags: &[
             ("--state-dir D", "Host state dir."),

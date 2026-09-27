@@ -202,6 +202,8 @@ pub(super) const fn allowed_of(command: PipeCommand) -> &'static [Allowed] {
         PipeCommand::Report => ALLOWED_REPORT,
         PipeCommand::Regate => ALLOWED_REGATE,
         PipeCommand::Follow => ALLOWED_FOLLOW,
+        // `pipe anchor-sync`（設計 pipeline.md §57 形 5・flag は `pipe report` と同じ 3 つ）。
+        PipeCommand::AnchorSync => ALLOWED_REPORT,
     }
 }
 
