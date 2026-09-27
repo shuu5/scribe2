@@ -306,11 +306,25 @@ fn digest(dir: &Path) -> Result<String, String> {
     Ok(fnv1a_64(&bytes))
 }
 
+/// 終わった lens の rc と stdout（`out` が無い周は `None`）。
+fn ended(place: &Path) -> Option<(Option<i32>, String)> {
+    let text = std::fs::read_to_string(place.join(OUT)).ok()?;
+    Some((line_of(place, RC, 0).and_then(|found| found.trim().parse().ok()), text))
+}
+
+/// Reviewed の段の使い回しの読み口（形 ac 1）: 実物の base で組んだ材料の dir `dir` の鍵が置き場の `fired` と同じで、判定が
+/// 測れて（`unparsed` でない）、置き場の `lens` の字が便の lens の `cmd` と同じ周だけ、先撃ちの lens の rc と stdout を返す。
+pub(in crate::pipe) fn reusable(state_dir: &Path, bead: &str, dir: &Path, cmd: &str) -> Option<(Option<i32>, String)> {
+    let place = dir_of(state_dir).join(LENS_DIR).join(bead);
+    let same = digest(dir).ok().is_some_and(|found| line_of(&place, FIRED, 0) == Some(found))
+        && std::fs::read_to_string(place.join(LENS)).is_ok_and(|found| found == cmd);
+    (same && verdict(&place).is_some_and(|found| found.is_ok())).then(|| ended(&place)).flatten()
+}
+
 /// 終わった lens の判定（`out` が無い周は `None`）: `Ok(Some)` は FAIL / INCONCLUSIVE で理由の型を持つ確定・`Ok(None)` は PASS・
 /// `Err(())` は測れない（rc が 0 でない・JSON を読めない・理由の型が無い＝`unparsed`）。
 fn verdict(place: &Path) -> Option<Result<Option<(FindingKind, String)>, ()>> {
-    let text = std::fs::read_to_string(place.join(OUT)).ok()?;
-    let rc = line_of(place, RC, 0).and_then(|found| found.trim().parse().ok());
+    let (rc, text) = ended(place)?;
     Some(match review::outcome_of(rc, &text) {
         (Verdict::Pass, ..) => Ok(None),
         (_, Some(kind), evidence) if kind != FindingKind::Unparsed => Ok(Some((kind, evidence))),

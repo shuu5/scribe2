@@ -1123,3 +1123,151 @@ fn pipe_prelens_leftover_tree_and_registration_are_removed_at_the_round_head() {
         prelens_clean(&place, &[]);
     }
 }
+
+// ───── Reviewed の段の使い回し（設計 dispatcher.md §27 形 ac・行 ac・接頭辞 `pipe_review_reuse_`） ─────
+//
+// 祖先 A（行 a・`+docs/g.md`）を待つ行 b（`docs/g.md` を素で持つ）へ先撃ちし、A を着地させて起こす側の周を 1 回撃った後に B の審査
+// （`pipe intake` の Reviewed）を撃つ。偽 lens は先撃ちと審査で同じ回数の file に 1 行を足す。base には使い回しが無い＝審査は必ず
+// 偽 lens を撃つ（(a) が RED）。
+
+/// 6 値を運ぶ PASS の判定の行（lens を撃った審査は消費の event を 1 件書く）。
+fn reuse_pass() -> String {
+    let usage = r#""usage":"in:7,out:8,cache_read:9,cache_create:10","turns":2,"wall_ms":300"#;
+    format!("{},{usage}}}", lens_verdict("PASS").trim_end_matches('}'))
+}
+
+/// 行 a（`+docs/g.md`）と a を blocks で待つ行 b（`docs/g.md`）の置き場（A と B を hold する＝列は起こさない）。
+fn reuse_place() -> Prelens {
+    let rows = [prelens_row("a", r#"["+docs/g.md"]"#, &[]), prelens_row("b", r#"["docs/g.md"]"#, &[])];
+    let (repo, state) = prelens_repo(&design_doc_rows(&rows), &[]);
+    let bd = prelens_ledger(&state, &[prelens_issue(PRELENS_A, "open", "a", &[]), prelens_issue(PRELENS_B, "open", "b", &[PRELENS_A])]);
+    prelens_hold(&state, &[PRELENS_A, PRELENS_B]);
+    Prelens { rules: prelens_rules(&state, Some(1)), repo, state, bd }
+}
+
+/// 先撃ちを 1 回撃ち、終わるまで待つ（偽 lens の回数 1）。
+fn reuse_fire(place: &Prelens, lens: &str) {
+    prelens_turn(place, lens);
+    assert!(prelens_out(&place.state, PRELENS_B), "先撃ちの偽 lens が終わる");
+    assert_eq!(prelens_settle(&place.state, 1), 1, "先撃ちは 1 回: {}", prelens_result(&place.state, PRELENS_B));
+}
+
+/// A を Gated PASS にし（A の木が G に 2 行を書く）、B へ `body` を撃つ偽 lens で先撃ちする。(置き場, A の便, 偽 lens) を返す。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn reuse_gated(body: &str) -> (Prelens, String, String) {
+    let place = reuse_place();
+    let id = intake_bead(&place.repo, &place.state, &format!("{DESIGN_FILE}#a"), PRELENS_A);
+    let runner = "printf 'one\\ntwo\\n' > docs/g.md && git add -A && git commit -q -m runner";
+    let spawned = spawn_with(&place.repo, &place.state, &id, runner);
+    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "spawn は rc 0: {}", stderr_of(&spawned));
+    let gate_lens = fake_lens(&place.state.join("reuse-gate-lens"), &lens_verdict("PASS"));
+    let gated = gate_once(&place.repo, &place.state, &id, Some(&gate_lens));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "gate は PASS: {}", stderr_of(&gated));
+    fs::write(place.state.join("pipe").join(&id).join("driver"), "not-a-pid\n").expect("札を書ける");
+    let lens = prelens_lens(&place.state, body);
+    reuse_fire(&place, &lens);
+    (place, id, lens)
+}
+
+/// A を着地させる: `body` が `None` なら A の木の HEAD へ main を早送りし、`Some` なら G をその本文で main に commit する。A の便を
+/// 外し（`run` が在れば）、台帳の A を閉じ、起こす側の周を 1 回撃つ。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn reuse_land(place: &Prelens, run: Option<&str>, body: Option<&str>, lens: &str) {
+    match (run, body) {
+        (Some(id), None) => {
+            let head = git(&worktree_of(&place.repo, id), &["rev-parse", "HEAD"]);
+            git(&place.repo, &["merge", "-q", "--ff-only", head.trim()]);
+        }
+        (_, text) => {
+            fs::write(place.repo.join("docs").join("g.md"), text.unwrap_or_default()).expect("G を書ける");
+            git(&place.repo, &["add", "-A"]);
+            git(&place.repo, &["commit", "-q", "-m", "landed"]);
+        }
+    }
+    if let Some(id) = run {
+        stop_run_ok(&place.state, id);
+    }
+    prelens_ledger(&place.state, &[prelens_issue(PRELENS_A, "closed", "a", &[]), prelens_issue(PRELENS_B, "open", "b", &[PRELENS_A])]);
+    prelens_turn(place, lens);
+}
+
+/// B の審査を `lens` で 1 回撃ち、(Reviewed の detail, 審査の消費の event の増分) を返す。
+fn reuse_review(place: &Prelens, lens: &str) -> (String, usize) {
+    let costs = || events(&place.state).iter().filter(|event| event.kind == EventKind::RunCost).count();
+    let before = costs();
+    let out = run_pipe(&[
+        "intake", "--design", &format!("{DESIGN_FILE}#b"), "--bead", PRELENS_B, "--repo", &place.repo.display().to_string(),
+        "--state-dir", &place.state.display().to_string(), "--rules", &place.rules, "--lens", lens,
+    ]);
+    let id = run_id_of(&out);
+    assert!(!id.is_empty(), "審査まで届く: {} / {}", stdout_of(&out), stderr_of(&out));
+    (reviewed_detail(&place.state, &id), costs().saturating_sub(before))
+}
+
+/// (a) A が Gated の木のまま着地し、起こす側の周を 1 回撃った後の B の審査は、材料の鍵・判定・lens の字が先撃ちと同じなので偽 lens を
+/// 撃たず（回数 1 のまま）判定を写し、detail が ` prelens:reused` で終わり、審査の消費の event を書かない。
+#[test]
+fn pipe_review_reuse_same_material_and_lens_copies_the_verdict_without_firing() {
+    let (place, id, lens) = reuse_gated(&format!("echo '{}'", reuse_pass()));
+    reuse_land(&place, Some(&id), None, &lens);
+    let (detail, costs) = reuse_review(&place, &lens);
+    assert_eq!(prelens_count(&place.state), 1, "審査は偽 lens を撃たない: {detail}");
+    assert_eq!(detail, "verdict:PASS prelens:reused", "先撃ちの判定を写し末尾に語");
+    assert_eq!(costs, 0, "使い回した審査は消費の event を書かない");
+    prelens_clean(&place, &[]);
+}
+
+/// (b) G が Gated の木（2 行）と違う 3 行で着地した周の審査は材料の鍵が外れて偽 lens を撃ち（回数 2）、detail に語が無く、撃った
+/// 審査の消費の event を 1 件書く（(a) の 0 件の対）。
+#[test]
+fn pipe_review_reuse_landed_body_unlike_the_gated_tree_fires_the_lens() {
+    let (place, id, lens) = reuse_gated(&format!("echo '{}'", reuse_pass()));
+    stop_run_ok(&place.state, &id);
+    reuse_land(&place, None, Some("one\ntwo\nthree\n"), &lens);
+    let (detail, costs) = reuse_review(&place, &lens);
+    assert_eq!(prelens_count(&place.state), 2, "審査は偽 lens を撃つ: {detail}");
+    assert_eq!(detail, "verdict:PASS", "語は無い");
+    assert_eq!(costs, 1, "撃った審査は消費の event を 1 件書く");
+    prelens_clean(&place, &[]);
+}
+
+/// (c) 宣言だけの祖先を持つ行（予想の印を持つ）は、祖先が宣言どおり空の G で着地した後の審査でも偽 lens を撃つ。
+#[test]
+fn pipe_review_reuse_forecast_mark_never_matches_the_landed_base() {
+    let place = reuse_place();
+    let lens = prelens_lens(&place.state, &format!("echo '{}'", reuse_pass()));
+    reuse_fire(&place, &lens);
+    reuse_land(&place, None, Some(""), &lens);
+    let (detail, _) = reuse_review(&place, &lens);
+    assert_eq!(prelens_count(&place.state), 2, "予想の印を持つ材料は使い回さない: {detail}");
+    assert!(!detail.contains("prelens:reused"), "{detail}");
+    prelens_clean(&place, &[]);
+}
+
+/// (d) 先撃ちが rc 1（`unparsed`）で終わった行は、材料と lens の字が同じでも審査で偽 lens を撃つ。
+#[test]
+fn pipe_review_reuse_unparsed_prelens_verdict_fires_the_lens() {
+    let (place, id, lens) = reuse_gated(&format!("echo '{}'; exit 1", reuse_pass()));
+    reuse_land(&place, Some(&id), None, &lens);
+    let (detail, _) = reuse_review(&place, &lens);
+    assert_eq!(prelens_count(&place.state), 2, "測れなかった判定は使い回さない: {detail}");
+    assert!(!detail.contains("prelens:reused"), "{detail}");
+    prelens_clean(&place, &[]);
+}
+
+/// (e) 起こす側の lens の cmd の字と便の lens の cmd の字が違う周（末尾の空白 1 つ）の審査は偽 lens を撃つ。
+#[test]
+fn pipe_review_reuse_other_lens_cmd_fires_the_lens() {
+    let (place, id, lens) = reuse_gated(&format!("echo '{}'", reuse_pass()));
+    reuse_land(&place, Some(&id), None, &lens);
+    let (detail, _) = reuse_review(&place, &format!("{lens} "));
+    assert_eq!(prelens_count(&place.state), 2, "lens の字が違えば使い回さない: {detail}");
+    assert!(!detail.contains("prelens:reused"), "{detail}");
+    prelens_clean(&place, &[]);
+}

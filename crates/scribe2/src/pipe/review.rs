@@ -217,6 +217,9 @@ const KIND_HEAD: &str = "kind:";
 /// event の detail の `verdict:` の頭。
 const VERDICT_HEAD: &str = "verdict:";
 
+/// 先撃ちの判定を使い回した周の detail の末尾の語（[`read_detail`] は語で読むので `pipe report` は変わらない・形 ac 1）。
+const REUSED: &str = " prelens:reused";
+
 /// `RunStage stage=Reviewed` の detail の字面: `verdict:<V>`（PASS）か `verdict:<V> kind:<k>`（PASS でない）。
 /// **`at` は載せない**——`,` 区切りの語の列を空白区切りの detail に置くと [`read_detail`] の token の読みと衝突する。
 fn detail_of(verdict: Verdict, kind: Option<FindingKind>) -> String {
@@ -297,14 +300,22 @@ pub fn review(entry: &Review<'_>) -> Outcome {
         Ok(found) => found,
         Err(reason) => return broken(reason),
     };
-    let (finding, scope, usage) = decide(entry, &contract);
+    // 先撃ちの判定を使い回せる周（材料の鍵・判定・lens の字が同じ・設計 dispatcher.md §27 形 ac 1）は lens を撃たない。
+    let reused = match entry.lens {
+        LensSource::Cmd(cmd) => super::dispatch::prelens::reusable(entry.state_dir, entry.bead, &dir, cmd),
+        LensSource::Absent | LensSource::Unreadable { .. } => None,
+    };
+    let (finding, scope, usage) = match &reused {
+        Some((rc, text)) => (read_outcome(*rc, text), None, None),
+        None => decide(entry, &contract),
+    };
     let finding = narrow(finding, promised);
     let verdict = finding.verdict;
     // **審査の lens の消費は判定を書く周に 1 件**（`Reviewed` の前・設計 gate-cost.md §26 形 (2)）。揃わない周は書かず、
-    // 書けない周も判定と rc は変えない。
+    // 書けない周も判定と rc は変えない。使い回した周は lens を撃っていないので書かない（形 ac 2）。
     let cost = usage.map(|found| Cost { source: CostSource::Review, usage: found });
     let noted = record_cost(entry.state_dir, (entry.run, entry.bead), cost, entry.policy);
-    match settle(entry, &finding, scope) {
+    match settle(entry, &finding, scope, reused.is_some()) {
         Err(reason) => broken(reason),
         Ok(()) => Outcome {
             out: vec![format!("run={} stage={} verdict={}", entry.run, Stage::Reviewed.as_str(), verdict.as_str())],
@@ -602,8 +613,8 @@ fn parse_lens(text: &str) -> Finding {
 }
 
 /// 判定を `review.json` へ atomic に書き、`Reviewed` を 1 件追記する。`kind` と `at` は任意 field（schema 1 のまま・
-/// 古い読み手は無視・PASS の周は無い）。
-fn settle(entry: &Review<'_>, finding: &Finding, scope: Option<confine::Released>) -> Result<(), String> {
+/// 古い読み手は無視・PASS の周は無い）。先撃ちを使い回した周は detail の末尾に [`REUSED`] を足す。
+fn settle(entry: &Review<'_>, finding: &Finding, scope: Option<confine::Released>, reused: bool) -> Result<(), String> {
     let mut fields = vec![
         ("schema", Value::Num(SCHEMA)),
         ("run", Value::Str(entry.run.to_owned())),
@@ -631,7 +642,7 @@ fn settle(entry: &Review<'_>, finding: &Finding, scope: Option<confine::Released
             stage: Some(Stage::Reviewed),
             seat: None,
             pid: None,
-            detail: Some(detail_of(finding.verdict, finding.kind)),
+            detail: Some(format!("{}{}", detail_of(finding.verdict, finding.kind), if reused { REUSED } else { "" })),
         },
         entry.policy,
     )
