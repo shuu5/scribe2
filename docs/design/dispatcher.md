@@ -613,7 +613,7 @@ id = "t"
 title = "regate で Implemented へ戻された便を列が起こし直す — 起こし直しの候補に「段が Implemented ∧ 最新の Gated より後ろに regate の記帳 ∧ 札が無いか所有者が死んでいる」を 1 枝足し（読み手は regate の口と同じ 1 本・既存の枝は不変・段を前へ進めた driver の周だけ）、AC47 の不足 3 点を regate の in-file の歯に足す"
 req = ["FR68", "FR77"]
 section = "23"
-write-set = ["crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/regate.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs"]
+write-set = ["crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/regate.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "+crates/scribe2-boundary/tests/e2e/pipe/dispatch/waiting.rs"]
 growth = ["crates/scribe2/src/pipe/dispatch.rs:40", "crates/scribe2/src/pipe/regate.rs:130"]
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_regated_", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_regate_forms_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_gated_pass_ pipe_dispatch_driver_ pipe_dispatch_waiting_gate_"]
 size = "M"
@@ -633,7 +633,7 @@ id = "v"
 title = "追随の起こし直しの後に driver が抜けた便を列が起こし直す — revivals の 4 枝目（Implemented ∧ 最新の Gated より後ろに rebase: / rebase-conflict: の記帳 ∧ 札 Absent | Dead）・argv は既存の resume --drive（§25・s2-07l.633）"
 req = ["FR68", "FR77", "NFR4"]
 section = "25"
-write-set = ["crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/regate.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "docs/design/dispatcher.md"]
+write-set = ["crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/regate.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "docs/design/dispatcher.md", "+crates/scribe2-boundary/tests/e2e/pipe/dispatch/waiting.rs"]
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail followed_since_gate_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_revive_followed_"]
 size = "S"
 growth = ["crates/scribe2/src/pipe/dispatch.rs:20", "crates/scribe2/src/pipe/regate.rs:30"]
