@@ -903,6 +903,17 @@ verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail pipe_review_base_p
 size = "S"
 done = "(1) declared_name が pub(in <path>) を閉じ括弧までの 1 まとまりとして飛ばし、pub(in crate::pipe) struct Materials が struct Materials として宣言の列に載り、閉じ括弧の無い行は宣言と読まない (2) pub(crate) / pub(super) / pub 無し / 修飾語 / const fn の既存の読みと既存の歯 pipe_review_base_rs_lists_declarations_and_teeth_in_separate_columns の期待は 1 字も変わらない (3) 歯 pipe_review_base_pub_in_ が (1) の正例 3 形（struct / fn / const）と負例 1 形（閉じ括弧の無い行）を fixture の逐語で測り、base で 0 本"
 
+[[contract]]
+id = "bb"
+title = "終端の CI の照合は rules 行 pipe.ci_poll_s（30 秒・裁定 user 2026-09-27T11:14Z）の間隔で撃つ — 唯一の待ちの周期を完了条件ごとの 1 関数で返し CiResult だけが欄 every を持つ（0 は POLL に戻る）・最初の評価は眠る前・上限を越えて眠らない（他の完了条件の周期と終端の 7 値は不変）"
+req = ["FR50"]
+section = "50"
+touches = ["crate::rules::RuleKind", "crate::pipe::land::Land"]
+write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/src/fleet/wait.rs", "crates/scribe2/src/pipe/land.rs", "crates/scribe2/src/pipe/land/finish.rs", "crates/scribe2/src/pipe/cli/step.rs", "crates/scribe2/src/pipe/queue.rs", "crates/scribe2/src/pipe/train.rs", "crates/scribe2-boundary/tests/e2e/pipe.rs", "crates/scribe2-boundary/tests/e2e/pipe/land.rs", "crates/scribe2-boundary/tests/e2e/pipe/land/order.rs", "crates/scribe2-boundary/tests/e2e/rules.rs", "crates/scribe2-boundary/tests/e2e/rules/embedded.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__rules__rules_external_form.snap"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_terminal_ci_poll_", "cargo nextest run -p scribe2 --lib --no-tests=fail fleet_wait_ci_interval_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_ci_poll_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_external_form", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_embedded_manifest_is_valid_and_covers_all_kinds", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_embedded_manifest_declares_one_capability_row_per_role"]
+size = "M"
+done = "(1) 埋め込みの manifest に行 pipe.ci_poll_s（kind PipeCiPollS・Int・値 30・enabled・裁定 id user 2026-09-27T11:14Z・裁定日 2026-09-27）が pipe.ci_wait_s の直後に 1 本在り、kind は ALL の PipeCiWaitS の直後で字面から引け、終端の材料の読み手が pipe.ci_wait_s と同じ int_row で読んで Land の欄 ci_poll_s で運び、行の無い manifest は pipe.ci_wait_s と同じ極性で断られる (2) Completion の周期を返す 1 関数（網羅の match）が CiResult には欄 every と POLL の大きい方、他の全 variant には POLL を返し、wait がその周期で眠り、every 0 は POLL に戻る (3) 最初の評価は眠る前で、最初から success の偽 CI と間隔 30 秒の周は 10 秒未満で terminal=closed (4) 眠る長さは周期と上限までの残りの小さい方で、上限 1 秒・間隔 30 秒の周は 10 秒未満で terminal=ci:unmeasurable、上限 2 秒・間隔 1 秒の周は偽 CI の呼び出しが 2 回以上 4 回以下 (5) 終端の 7 値・3 段・ci_now の判定・ci-cmd の形・pipe.ci_wait_s の値は変わらず、既存の終端の歯は fixture の行の値 0 で緑のまま、埋め込みの manifest の行数と kind の数の pin と rules_external_form の snapshot が 1 ずつ増える"
+
 <!-- contracts:end -->
 
 
@@ -1157,3 +1168,20 @@ done = "(1) declared_name が pub(in <path>) を閉じ括弧までの 1 まと�
 - 効き: 宣言が材料から落ちると lens が「宣言 file が閉包の外」と読み、正しい write-set の契約が審査 FAIL で止まる。`.601` は行 az の sha を動かして N+1 し、本行の着地を `depends` に持つ（材料が直る前に同じ lens に当てない）。
 - 形（番号は done と 1:1）: 1. 括弧つきの可視性は閉じ括弧までを 1 まとまりとして飛ばす（「pub」に開き括弧が続く語から閉じ括弧を含む語まで・閉じ括弧の無い行は宣言と読まない＝fail-closed）。 2. 既存の読み（pub(crate) / pub(super) / 修飾語 / `const fn`）と既存の歯の期待は 1 字も変わらない。 3. 歯は base.rs の in-file（接頭辞 `pipe_review_base_pub_in_`・base で 0 本＝機能不在の RED）。
 - 却下: lens の指示文に「pub(in の宣言は見えない」と書く（材料の欠けを散文で埋める・N2）／intake.rs の可視性を pub(crate) に変える（読み手の穴を書き手で避ける・行 az の write-set の外の変更）／`declared_name` を Rust の parser に差し替える（依存の増・A3・語の切りで足りる）。
+
+## 50. 終端の CI の照合は rules 行の間隔で撃つ — 唯一の待ちの周期を完了条件ごとに持ち、CI の照合だけを秒の間隔にする（契約表の行 bb・memo `s2-07l.689`・user 裁定 2026-09-27T11:14Z）
+
+- 何が起きているか（実測 2026-09-27・verified）: 09:25Z 以後、この host の GitHub の user の API 呼び出しが「HTTP 403: API rate limit exceeded」で断られ、窓の reset（10:26Z）まで全 project の gh が止まった。直前の 1 時間に scribe2 の便 8 本と別の器の repo の便 4 本が着地し、それぞれの終端が CI の完了まで数分の間、API を呼び続けていた。
+- 現物（main 9b2dc4b・verified）: 唯一の待ちの実装 `crates/scribe2/src/fleet/wait.rs` の `wait` は、どの完了条件も const `POLL`（20 ms）ごとに評価する。§5 手順 2 の `Completion::CiResult` は評価のたびに `ci_now` で CI の 1 行（既定は `gh run list --commit {sha} …`）を子 process で撃つ。1 回が forge の API の 1 回である。20 ms は pid の生存や meminfo の読みの周期で、外の API の周期ではない。
+- 形（番号は done と 1:1）:
+  1. **rules 行を 1 本足す**: id `pipe.ci_poll_s`・kind `PipeCiPollS`（Int・秒）・値 30・裁定 id `user 2026-09-27T11:14Z`・裁定日 2026-09-27。manifest の行は `pipe.ci_wait_s` の直後に置き、kind は `ALL` の `PipeCiWaitS` の直後に置く。終端の材料の読み手（`pipe/cli/step.rs` の `terminal_input`・land と `--terminal-only` が共有）が `pipe.ci_wait_s` と同じ `int_row` で読み、`Land` の欄 `ci_poll_s` で終端へ運ぶ。行が無い・読めない周は `pipe.ci_wait_s` と同じ極性で断る（値を code に焼かない・C5）。
+  2. **待ちの周期は完了条件ごと**: `Completion::CiResult` にデータの欄 `every`（`Duration`）を足す。`Completion` の 1 関数（周期を返す・網羅の match）が、`CiResult` には `every` と `POLL` の大きい方、他の全 variant には `POLL` を返す。`wait` はこの周期で眠る。0 秒の行は `POLL` に戻る（外の API を 20 ms で撃つ既存の挙動と同じ・hot loop にしない）。他の完了条件の周期と評価の中身は 1 字も変わらない。
+  3. **最初の評価は眠る前**（今と同じ）: push の直後に 1 回撃ち、解けていなければ周期だけ眠る。success が最初の評価で読める周は待たずに close へ進む。
+  4. **上限を越えて眠らない**: 眠る長さは周期と「上限までの残り」の小さい方。`pipe.ci_wait_s` より短い間隔で最後の評価を撃ち、上限の後に周期ぶん余計に待たない。
+  5. 終端の 7 値・3 段（push → CI → close）・`ci_now` の判定（落ちた run を先に見る・schedule の run を数えない）・`.vessel.toml` の `ci-cmd` の形・`pipe.ci_wait_s` の値は変えない。
+- 歯（番号は形の番号）:
+  - e2e（`pipe_terminal_ci_poll_` 接頭辞・`crates/scribe2-boundary/tests/e2e/pipe/land/order.rs`・既存の偽 CI の helper を、呼ばれた回数を数えられる形で使う）: (a) 偽 CI が走り続ける JSON を返し、fixture の manifest が `pipe.ci_wait_s` = 2・`pipe.ci_poll_s` = 1 の周は `terminal=ci:unmeasurable` で、偽 CI の呼び出しが 2 回以上 4 回以下（20 ms の周期なら数十回＝RED）。(b) 偽 CI が最初から success を返し、`pipe.ci_poll_s` = 30 の周は `terminal=closed` まで 10 秒未満（最初の評価が眠る前であることの pin）。(c) 偽 CI が走り続け、`pipe.ci_wait_s` = 1・`pipe.ci_poll_s` = 30 の周は `terminal=ci:unmeasurable` まで 10 秒未満（上限を越えて眠らないことの pin）。base では manifest が kind `PipeCiPollS` を知らずに断るので 3 本とも RED（機能不在）。
+  - lib（`fleet_wait_ci_interval_` 接頭辞・`crates/scribe2/src/fleet/wait.rs` の歯の区間）: `CiResult` の周期は `every`、`every` が 0 なら `POLL`、他の全 variant は `POLL`。
+  - rules（`rules_ci_poll_` 接頭辞・`crates/scribe2-boundary/tests/e2e/rules.rs`）: 埋め込みの manifest に行が 1 本在り、id / kind / 形 Int / 値 30 / enabled / 裁定 id / 裁定日が上の 1 のとおりで、行は `pipe.ci_wait_s` の直後・kind は `PipeCiWaitS` の直後。文字列の値は形の違いで断られる。
+  - 既存の歯の数の pin: 埋め込みの manifest の行数と kind の数（`rules/embedded.rs` の 2 か所）と `rules_external_form` の snapshot が 1 ずつ増える。e2e の共有の fixture manifest（`tests/e2e/pipe.rs` の `write_rules`）に行を 1 本足し、値は 0（既存の終端の歯の挙動を変えない）。
+- 却下: 断られた周（403・rate limit）だけ間隔を延ばす backoff（断られるまで 20 ms で撃つ形が残る・断りの字面を読む読み手が要る）／CI の 1 行を `gh run watch` に替える（`ci-cmd` の宣言は repo ごとの任意の 1 行で、forge の CLI の待ちの口に依存させない・判定の形〔落ちた run を先に見る〕が CLI の側へ移る）／`POLL` そのものを延ばす（pid・meminfo・札の待ちまで遅くなる・周期は完了条件の性質）。
