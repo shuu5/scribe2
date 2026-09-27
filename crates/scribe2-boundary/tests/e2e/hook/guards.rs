@@ -849,6 +849,29 @@ fn hook_ledger_write_passes_the_near_misses() {
     clean(&[&repo, &state]);
 }
 
+/// 埋め込みの rules で `bdw q x` が create-bypass・`bdw dep add a b --type parent-child` が parent-edge として断られ
+/// （rc 2・stdout 0 byte・stderr 1 行・記録 1 行）、断り文は次の一手（create の `--parent`・update の `--parent`）を持つ。
+/// 当たらない隣（`bdw todo list`・`bdw dep add a b`・`bdw link a b`）は 0 byte・rc 0・記録 0 で通る。
+#[test]
+fn hook_ledger_edge_denies_bypass_and_parent_edge_from_bash() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    for (command, reason, next) in [
+        ("bdw q x", "create-bypass", "bdw create <題> --parent <epic>"),
+        ("bdw dep add a b --type parent-child", "parent-edge", "bdw update <子> --parent <親>"),
+    ] {
+        let before = ledger_records(&state).len();
+        let out = run_hook("pre-tool-use", &bash_payload(&repo, command));
+        assert_write_deny(&state, &out, command, reason);
+        assert!(stderr_text(&out).contains(next), "{command}: 次の一手: {}", stderr_text(&out));
+        assert_eq!(ledger_records(&state).len(), before + 1, "{command}: 記録は 1 行増える");
+    }
+    for command in ["bdw todo list", "bdw dep add a b", "bdw link a b", "bdw dep remove a b --type parent-child"] {
+        assert_ledger_pass(&state, &repo, command);
+    }
+    clean(&[&repo, &state]);
+}
+
 /// (c) rules の行が無い fixture では bd / bdw を断り（`no-row`・FailClosed）、bd / bdw の無い command は通す。壊れた
 /// rules は command guard が先に断る（判定の順は動かない）。
 #[test]

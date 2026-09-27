@@ -308,7 +308,8 @@ pub enum RuleKind {
     /// `s2-07l.170`）。超えた便は `too-many-marks` で落ちる。読み手は xtask 側（core は値を消費しない）。
     FlipMarksPerPr,
     /// 起票の門が断る台帳 write の形（設計 vessel-hook.md §10・`s2-07l.169`）。値は形の 1 語の閉じた列
-    /// （`notes-replace` / `memory-subcommand` / `create-without-parent` / `bd-outside-bdw`）で、判定そのものは
+    /// （`notes-replace` / `memory-subcommand` / `create-without-parent` / `bd-outside-bdw` / `create-bypass` /
+    /// `parent-edge`・後ろの 2 語は設計 ledger-form.md §11）で、判定そのものは
     /// [`crate::hook::ledger_guard`] が持つ。列に載る形だけを断る。
     LedgerDeniedWrites,
     /// host の破壊防止の見張りの語列（設計 vessel-hook.md §11 行 b・ADR-0056）。値は [`Self::RunnerDeniedCommands`] と

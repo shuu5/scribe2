@@ -600,16 +600,18 @@ ruled_at = "2026-09-22"
 
 # 起票の門（hook の pre-tool-use・Bash）が断る台帳 write の形（設計 vessel-hook.md §10・`s2-07l.169`）。値は形の 1 語の
 # 閉じた列で、列に載る形だけを断る: notes-replace（--notes の置換）/ memory-subcommand（remember / recall / memories）/
-# create-without-parent（--parent を持たない create）/ bd-outside-bdw（台帳の script を経ない bd の書き込み）。判定は
+# create-without-parent（--parent を持たない create）/ bd-outside-bdw（台帳の script を経ない bd の書き込み）/
+# create-bypass（親を運べない起票の口: q / todo add / batch / create-form）/ parent-edge（parent-child の辺を横から張る書き:
+# dep add と link の parent-child・dep add の --file・create の --deps の parent-child:・設計 ledger-form.md §11）。判定は
 # core の hook::ledger_guard の 1 関数が持つ。行が無い・読めない・不発効の周は bd / bdw の command を通さない（fail-closed）。
 
 [[rule]]
 id = "ledger.denied_writes"
 kind = "LedgerDeniedWrites"
-value = ["notes-replace", "memory-subcommand", "create-without-parent", "bd-outside-bdw"]
+value = ["notes-replace", "memory-subcommand", "create-without-parent", "bd-outside-bdw", "create-bypass", "parent-edge"]
 enabled = true
-ruling = "user 2026-09-22T08:44Z"
-ruled_at = "2026-09-22"
+ruling = "user 2026-09-27T14:02Z 項 5"
+ruled_at = "2026-09-27"
 
 # host の破壊防止の見張り（subcommand host-guard・設計 vessel-hook.md §11・ADR-0056）が読む種類ごとの行。語列の 3 行
 # （git の履歴破壊 / tmux server の破壊 / 台帳の破壊）は runner.denied_commands と同じ照合（先頭語一致 + 残りの語の包含）で、

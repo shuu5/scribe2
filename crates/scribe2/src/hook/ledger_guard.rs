@@ -11,7 +11,8 @@
 //! （`'…'` / `"…"`）と `\` を解いて語に分け、`;` / `&&` / `||` / `|` / 改行で segment に分ける。変数展開・command 置換は
 //! 解かない（字面のまま読む＝body-file の path が解けなければ開けない側＝deny に倒れる）。
 //!
-//! memo の判定で止まらなかった `bd` / `bdw` の segment は、台帳 write の 4 形（[`FORMS`]・設計 vessel-hook.md §10）に
+//! memo の判定で止まらなかった `bd` / `bdw` の segment は、台帳 write の 6 形（[`FORMS`]・設計 vessel-hook.md §10・
+//! ledger-form.md §11）に
 //! 掛ける。断る形の閉じた列は rules 行 [`ROW`] の値が持ち（裁定 id つき）、判定は [`judge_write`] 1 本が持つ。rules が
 //! 読めない・行が無い・不発効・値が列でない周は `bd` / `bdw` を通さない（FailClosed・`bd` / `bdw` の無い command は
 //! rules を読まずに通す）。
@@ -57,9 +58,42 @@ const NOTES: &str = "--notes";
 /// 親の flag。
 const PARENT: &str = "--parent";
 
-/// 台帳 write の 4 形（判定の順＝1 segment で 2 形に当たる周は先の形の理由）。
-pub const FORMS: [Refusal; 4] =
-    [Refusal::NotesReplace, Refusal::MemorySubcommand, Refusal::CreateWithoutParent, Refusal::BdOutsideBdw];
+/// 親を運べない起票の subcommand（`create-bypass`・道具の語彙・設計 ledger-form.md §11 の 2）。
+const BYPASS: [&str; 3] = ["q", "create-form", "batch"];
+
+/// 次の語が [`ADD`] のとき親を運べない起票になる subcommand。
+const TODO: &str = "todo";
+
+/// 辺を足す語（`todo add` / `dep add`）。
+const ADD: &str = "add";
+
+/// 辺の subcommand（次の語が [`ADD`] のとき辺を張る）。
+const DEP: &str = "dep";
+
+/// 辺を張る subcommand（既定の型は blocks）。
+const LINK: &str = "link";
+
+/// 辺の型の flag（綴り 2 つ）。
+const EDGE_TYPE: [&str; 2] = ["--type", "-t"];
+
+/// 親子の辺の型。
+const PARENT_CHILD: &str = "parent-child";
+
+/// `dep add` の辺を file から読む flag（中身は読まない＝fail-closed）。
+const EDGE_FILE: &str = "--file";
+
+/// create の辺の flag（値は `<型>:<id>` の `,` 区切り）。
+const DEPS: &str = "--deps";
+
+/// 台帳 write の 6 形（判定の順＝1 segment で 2 形に当たる周は先の形の理由）。
+pub const FORMS: [Refusal; 6] = [
+    Refusal::NotesReplace,
+    Refusal::MemorySubcommand,
+    Refusal::CreateWithoutParent,
+    Refusal::BdOutsideBdw,
+    Refusal::CreateBypass,
+    Refusal::ParentEdge,
+];
 
 /// memo を名乗る title の頭。
 const MEMO_TITLE: &str = "[memo]";
@@ -99,6 +133,11 @@ pub enum Refusal {
     CreateWithoutParent,
     /// 先頭語の末尾が `bd` で、subcommand が書き込みの列（[`WRITES`]）に在る。
     BdOutsideBdw,
+    /// 親を運べない起票の口（subcommand が [`BYPASS`] のどれかか、`todo` の次の語が `add`）。
+    CreateBypass,
+    /// parent-child の辺を横から張る書き（`dep add` / `link` の型が parent-child・`dep add --file`・create の `--deps` の
+    /// 値に `parent-child:`）。
+    ParentEdge,
     /// rules を読めない（断る形を解けない＝FailClosed）。
     RulesUnreadable,
     /// rules 行 [`ROW`] が無い・不発効・値が列でない（FailClosed）。
@@ -106,13 +145,15 @@ pub enum Refusal {
 }
 
 impl Refusal {
-    /// 記録と deny 文に出す理由の 1 語（4 形は rules 行 [`ROW`] の値の語と同じ字面）。
+    /// 記録と deny 文に出す理由の 1 語（6 形は rules 行 [`ROW`] の値の語と同じ字面）。
     pub fn as_str(self) -> &'static str {
         match self {
             Self::NotesReplace => "notes-replace",
             Self::MemorySubcommand => "memory-subcommand",
             Self::CreateWithoutParent => "create-without-parent",
             Self::BdOutsideBdw => "bd-outside-bdw",
+            Self::CreateBypass => "create-bypass",
+            Self::ParentEdge => "parent-edge",
             Self::RulesUnreadable => "rules-unreadable",
             Self::NoRow => "no-row",
             Self::MemoOnContract => "memo-on-contract",
@@ -146,6 +187,12 @@ impl Refusal {
                 "親を持たない create は台帳に孤児を作る — {PARENT} で親の id を名指す（通す周は rules 行 {ROW} の値から語を外す）"
             ),
             Self::BdOutsideBdw => "bd の書き込みは台帳の script を経る — 同じ引数で bdw を撃つ".to_owned(),
+            Self::CreateBypass => format!(
+                "q / todo add / batch / create-form は親を運べない起票の口 — bdw create <題> {PARENT} <epic> で撃つ"
+            ),
+            Self::ParentEdge => format!(
+                "parent-child の辺を横から張ると親が 2 つや親の輪を作る — 親は bdw update <子> {PARENT} <親> で付け替える（1 本に置き換わる）"
+            ),
             Self::RulesUnreadable => format!("rules 行 {ROW} を読めない — 断る形を解けない周は bd / bdw を通さない"),
             Self::NoRow => format!("rules 行 {ROW} が無い・不発効 — 断る形を解けない周は bd / bdw を通さない"),
         }
@@ -197,7 +244,7 @@ impl Create {
 }
 
 /// command 行を捌く（cwd は body-file の相対 path を解く起点・rules は `--rules` の差し替えか埋め込み）。memo の判定が
-/// 先で、止まらなければ `bd` / `bdw` の segment を台帳 write の 4 形に掛ける。当たる segment が無ければ Allow。
+/// 先で、止まらなければ `bd` / `bdw` の segment を台帳 write の 6 形に掛ける。当たる segment が無ければ Allow。
 pub fn decide(command: &str, cwd: &Path, rules: Option<&Path>) -> LedgerDecision {
     let all = segments(command);
     let memo = all
@@ -254,7 +301,7 @@ pub fn create_of(words: &[String]) -> Option<Create> {
     (rest.get(at).map(|word| word.as_str()) == Some(CREATE)).then(|| flags_of(rest.get(at.saturating_add(1)..).unwrap_or_default()))
 }
 
-/// `bd` / `bdw` の segment 1 つから 4 形の判定が読む分。
+/// `bd` / `bdw` の segment 1 つから 6 形の判定が読む分。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Write {
     /// 先頭語の path の末尾（`bd` か `bdw`）。
@@ -263,9 +310,30 @@ pub struct Write {
     pub subcommand: String,
     /// flag の名（`--flag=value` は `=` の前・flag でない語は含めない）。
     pub flags: Vec<String>,
+    /// flag でない語（出てきた順・subcommand と、flag の後ろに離れて置かれた値も含む）。
+    pub words: Vec<String>,
+    /// flag の名と値（`--flag=value` は `=` の後ろ・`--flag value` は次の語が flag でなければその語）。
+    pub values: Vec<(String, String)>,
 }
 
-/// segment の語が `bd` / `bdw` の command なら、4 形の判定が読む分を返す（それ以外は `None`）。
+impl Write {
+    /// subcommand の次の flag でない語（無ければ空）。
+    fn second(&self) -> &str {
+        self.words.get(1).map_or("", String::as_str)
+    }
+
+    /// flag を持つか（名で照合する）。
+    fn has(&self, flag: &str) -> bool {
+        self.flags.iter().any(|found| found == flag)
+    }
+
+    /// `flags` のどれかの値の列。
+    fn values_of<'a>(&'a self, flags: &'a [&str]) -> impl Iterator<Item = &'a str> + 'a {
+        self.values.iter().filter(|(flag, _)| flags.contains(&flag.as_str())).map(|(_, value)| value.as_str())
+    }
+}
+
+/// segment の語が `bd` / `bdw` の command なら、6 形の判定が読む分を返す（それ以外は `None`・[`Write`] の唯一の構築点）。
 pub fn write_of(words: &[String]) -> Option<Write> {
     let mut rest = words.iter().skip_while(|word| is_assignment(word));
     let client = rest.next()?.rsplit('/').next().unwrap_or_default();
@@ -279,7 +347,20 @@ pub fn write_of(words: &[String]) -> Option<Write> {
         .filter(|word| word.starts_with('-'))
         .map(|word| word.split_once('=').map_or(word.as_str(), |(flag, _)| flag).to_owned())
         .collect();
-    Some(Write { client: client.to_owned(), subcommand, flags })
+    let bare = rest.iter().filter(|word| !word.starts_with('-')).map(|word| (*word).clone()).collect();
+    let values = rest
+        .iter()
+        .enumerate()
+        .filter(|(_, word)| word.starts_with('-'))
+        .filter_map(|(at, word)| match word.split_once('=') {
+            Some((flag, value)) => Some((flag.to_owned(), value.to_owned())),
+            None => rest
+                .get(at.saturating_add(1))
+                .filter(|next| !next.starts_with('-'))
+                .map(|next| ((*word).clone(), (*next).clone())),
+        })
+        .collect();
+    Some(Write { client: client.to_owned(), subcommand, flags, words: bare, values })
 }
 
 /// rules 行 [`ROW`] の値から、断る形を判定の順（[`FORMS`]）で返す。行が無い・不発効・値が列でない周は
@@ -292,17 +373,31 @@ pub fn forms_of(manifest: &Manifest) -> Result<Vec<Refusal>, Refusal> {
     Ok(FORMS.iter().copied().filter(|form| words.iter().any(|word| word == form.as_str())).collect())
 }
 
-/// segment 1 つを台帳 write の形に掛ける（**4 形の唯一の判定**・pure）。`forms` の順で最初に当たった形を返す。
+/// segment 1 つを台帳 write の形に掛ける（**6 形の唯一の判定**・pure）。`forms` の順で最初に当たった形を返す。
 pub fn judge_write(write: &Write, forms: &[Refusal]) -> Option<Refusal> {
-    let has = |flag: &str| write.flags.iter().any(|found| found == flag);
+    let has = |flag: &str| write.has(flag);
     let sub = write.subcommand.as_str();
     forms.iter().copied().find(|form| match form {
         Refusal::NotesReplace => has(NOTES),
         Refusal::MemorySubcommand => MEMORY.contains(&sub),
         Refusal::CreateWithoutParent => sub == CREATE && !has(PARENT),
         Refusal::BdOutsideBdw => write.client == RAW_CLIENT && WRITES.contains(&sub),
+        Refusal::CreateBypass => BYPASS.contains(&sub) || (sub == TODO && write.second() == ADD),
+        Refusal::ParentEdge => parent_edge(write),
         _ => false,
     })
+}
+
+/// parent-child の辺を横から張る書きか: `dep add` / `link` の型が parent-child・`dep add` が `--file` を持つ・create の
+/// `--deps` の値に `parent-child:` が在る。
+fn parent_edge(write: &Write) -> bool {
+    let sub = write.subcommand.as_str();
+    let dep_add = sub == DEP && write.second() == ADD;
+    let typed = write.values_of(&EDGE_TYPE).any(|value| value == PARENT_CHILD);
+    let prefix = format!("{PARENT_CHILD}:");
+    ((dep_add || sub == LINK) && typed)
+        || (dep_add && write.has(EDGE_FILE))
+        || (sub == CREATE && write.values_of(&[DEPS]).any(|value| value.contains(&prefix)))
 }
 
 /// `NAME=value` の env の前置きか（host-guard も語列の照合の前に読み飛ばす・設計 vessel-hook.md §11 の形 b 4）。
@@ -524,7 +619,7 @@ mod tests {
             ))
             .unwrap_or_else(|errors| panic!("fixture の manifest を読める: {errors:?}"))
         };
-        let full = "[\"bd-outside-bdw\", \"notes-replace\", \"memory-subcommand\", \"create-without-parent\"]";
+        let full = "[\"parent-edge\", \"bd-outside-bdw\", \"create-bypass\", \"notes-replace\", \"memory-subcommand\", \"create-without-parent\"]";
         assert_eq!(forms_of(&manifest(full, true)), Ok(FORMS.to_vec()), "判定の順は FORMS（値の並びに依らない）");
         let one = forms_of(&manifest("[\"notes-replace\", \"unknown\"]", true));
         assert_eq!(one, Ok(vec![Refusal::NotesReplace]), "列に載る形だけ");
@@ -534,7 +629,115 @@ mod tests {
         let empty = Manifest::parse("schema = 1\n").unwrap_or_else(|errors| panic!("{errors:?}"));
         assert_eq!(forms_of(&empty), Err(Refusal::NoRow), "行が無い");
         let embedded = Manifest::embedded().unwrap_or_else(|errors| panic!("{errors:?}"));
-        assert_eq!(forms_of(&embedded), Ok(FORMS.to_vec()), "埋め込みの行は 4 形を全部断る");
+        assert_eq!(forms_of(&embedded), Ok(FORMS.to_vec()), "埋め込みの行は 6 形を全部断る");
+    }
+
+    /// 6 形は既存の 4 形の後ろに create-bypass → parent-edge の順で並び、埋め込みの行はその 6 語を全部断る。
+    #[test]
+    fn hook_ledger_edge_forms_are_six_in_order() {
+        let want = [
+            Refusal::NotesReplace,
+            Refusal::MemorySubcommand,
+            Refusal::CreateWithoutParent,
+            Refusal::BdOutsideBdw,
+            Refusal::CreateBypass,
+            Refusal::ParentEdge,
+        ];
+        assert_eq!(FORMS, want, "判定の順");
+        let words: Vec<&str> = FORMS.iter().map(|form| form.as_str()).collect();
+        let names = ["notes-replace", "memory-subcommand", "create-without-parent", "bd-outside-bdw", "create-bypass", "parent-edge"];
+        assert_eq!(words, names, "記録と rules の語");
+        let embedded = Manifest::embedded().unwrap_or_else(|errors| panic!("{errors:?}"));
+        assert_eq!(forms_of(&embedded), Ok(FORMS.to_vec()), "埋め込みの行は 6 形を全部断る");
+        assert_eq!(formed("bdw create x --deps parent-child:y"), Some(Some(Refusal::CreateWithoutParent)), "既存の形が先");
+        assert_eq!(formed("bd dep add a b --type parent-child"), Some(Some(Refusal::BdOutsideBdw)), "既存の形が先");
+    }
+
+    /// Write は flag でない語（subcommand を含む・出てきた順）と flag の値（`=` の形と離れた形）を運ぶ。
+    #[test]
+    fn hook_ledger_edge_write_carries_words_and_values() {
+        let words = segments("X=1 scripts/bdw dep add a b --type parent-child --json -t=blocks").into_iter().next().unwrap_or_default();
+        let Some(write) = write_of(&words) else {
+            panic!("bdw を読む");
+        };
+        assert_eq!(write.client, "bdw");
+        assert_eq!(write.subcommand, "dep");
+        assert_eq!(write.flags, ["--type", "--json", "-t"]);
+        assert_eq!(write.words, ["dep", "add", "a", "b", "parent-child"]);
+        let values = vec![("--type".to_owned(), "parent-child".to_owned()), ("-t".to_owned(), "blocks".to_owned())];
+        assert_eq!(write.values, values, "値を持たない flag（--json の次は flag）は載らない");
+    }
+
+    /// create-bypass: bd と bdw のどちらでも q・create-form・batch と、次の語が add の todo が当たり、todo list と todo done
+    /// と todo だけは当たらない。
+    #[test]
+    fn hook_ledger_edge_create_bypass_hits_the_intake_mouths() {
+        for client in ["bd", "bdw", "scripts/bdw"] {
+            for rest in ["q x", "q --type task x", "create-form", "batch", "batch --file f", "todo add x", "todo add"] {
+                let line = format!("{client} {rest}");
+                assert_eq!(formed(&line), Some(Some(Refusal::CreateBypass)), "{line}");
+            }
+            for rest in ["todo list", "todo done x", "todo", "show q", "list --json"] {
+                let line = format!("{client} {rest}");
+                assert_eq!(formed(&line), Some(None), "{line}");
+            }
+        }
+    }
+
+    /// parent-edge: dep add と link の --type・-t・--type= の値 parent-child・dep add の --file・create の --deps の値の
+    /// parent-child: が当たり、dep add の blocks・link の既定・dep remove は当たらない。
+    #[test]
+    fn hook_ledger_edge_parent_edge_hits_the_side_edges() {
+        for line in [
+            "bdw dep add a b --type parent-child",
+            "bdw dep add a b -t parent-child",
+            "bdw dep add a b --type=parent-child",
+            "bdw dep add --type parent-child a b",
+            "bdw link a b --type parent-child",
+            "bdw link a b -t=parent-child",
+            "bd link a b --type=parent-child",
+            "bdw dep add --file edges.jsonl",
+            "bdw dep add --file=edges.jsonl",
+            "bdw create x --parent e --deps parent-child:y",
+            "bdw create x --parent=e --deps=blocks:a,parent-child:b",
+        ] {
+            assert_eq!(formed(line), Some(Some(Refusal::ParentEdge)), "{line}");
+        }
+        for line in [
+            "bdw dep add a b",
+            "bdw dep add a b --type blocks",
+            "bdw dep add a b -t=related",
+            "bdw link a b",
+            "bd link a b",
+            "bdw link a b --type blocks",
+            "bdw dep remove a b",
+            "bdw dep remove a b --type parent-child",
+            "bdw dep list a --type parent-child",
+            "bdw create x --parent e --deps blocks:y",
+            "bdw update a --parent b",
+            "bdw show a --type parent-child",
+        ] {
+            assert_eq!(formed(line), Some(None), "{line}");
+        }
+    }
+
+    /// 断り文は既存の形で、create-bypass は create の --parent を、parent-edge は update の --parent を次の一手に持つ。
+    #[test]
+    fn hook_ledger_edge_deny_lines_name_the_next_move() {
+        let cwd = std::path::Path::new("/nonexistent-ledger-guard-cwd");
+        for (line, what, next) in [
+            ("bdw q x", "create-bypass", "bdw create <題> --parent <epic>"),
+            ("bdw dep add a b --type parent-child", "parent-edge", "bdw update <子> --parent <親>"),
+        ] {
+            let LedgerDecision::Deny { what: found, line: text } = decide(line, cwd, None) else {
+                panic!("{line}: 断る");
+            };
+            assert_eq!(found, what, "{line}");
+            assert_eq!(text.lines().count(), 1, "{line}: 1 行");
+            assert!(text.contains(&format!("deny 台帳の write は起票の門が止める reason={what}（")), "{text}");
+            let after = text.split_once(" — ").map_or("", |(_, after)| after);
+            assert!(after.contains(next), "{line}: 次の一手: {text}");
+        }
     }
 
     /// decide: memo の理由が先・rules が読めない / 行が無い周は bd / bdw だけを断り、bd / bdw の無い command は通す。

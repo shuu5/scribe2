@@ -680,17 +680,19 @@ fn rules_flip_marks_per_pr_row_is_declared_on_five_faces() {
     assert!(errors.join("\n").contains("形と合わない"), "形は Int だけ: {errors:?}");
 }
 
-/// 台帳 write の断る形の行（`ledger.denied_writes`・設計 vessel-hook.md §10・`s2-07l.169`）が kind・値の 4 語・enabled・
-/// 裁定 id の 4 面で引ける。**値は manifest が持つ**（C1 / C5）。形は List だけで、kind の綴り違いは未知として読めない。
+/// 台帳 write の断る形の行（`ledger.denied_writes`・設計 vessel-hook.md §10・`s2-07l.169`・ledger-form.md §11）が kind・
+/// 値の 6 語・enabled・裁定 id の 4 面で引ける。**値は manifest が持つ**（C1 / C5）。形は List だけで、kind の綴り違いは
+/// 未知として読めない。
 #[test]
 fn rules_ledger_denied_writes_row_is_declared_on_four_faces() {
     let manifest = Manifest::embedded().unwrap_or_else(|errors| panic!("埋め込み manifest が拒まれた: {errors:?}"));
     let row = manifest.get("ledger.denied_writes").expect("台帳 write の断る形の行が在る");
-    let forms = ["notes-replace", "memory-subcommand", "create-without-parent", "bd-outside-bdw"];
-    assert_eq!(row.value, RuleValue::List(forms.iter().map(|form| (*form).to_owned()).collect()), "裁定の値（閉じた 4 語）");
+    let forms =
+        ["notes-replace", "memory-subcommand", "create-without-parent", "bd-outside-bdw", "create-bypass", "parent-edge"];
+    assert_eq!(row.value, RuleValue::List(forms.iter().map(|form| (*form).to_owned()).collect()), "裁定の値（閉じた 6 語）");
     assert_eq!((row.kind, row.kind.shape()), (RuleKind::LedgerDeniedWrites, ValueShape::List), "kind と形");
     assert!(row.enabled, "既定で効く");
-    assert_eq!((row.ruling.as_str(), row.ruled_at.as_str()), ("user 2026-09-22T08:44Z", "2026-09-22"), "裁定 id と裁定日");
+    assert_eq!((row.ruling.as_str(), row.ruled_at.as_str()), ("user 2026-09-27T14:02Z 項 5", "2026-09-27"), "裁定 id と裁定日");
     assert!(ALL.contains(&RuleKind::LedgerDeniedWrites), "ALL に在る");
     assert_eq!(RuleKind::parse("LedgerDeniedWrites"), Some(RuleKind::LedgerDeniedWrites), "kind を字面から引ける");
     let errors = rejected(&one_row_raw("LedgerDeniedWrite", "[\"notes-replace\"]")).expect("未知の kind の fixture が受理された");
