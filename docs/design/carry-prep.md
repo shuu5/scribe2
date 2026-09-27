@@ -107,7 +107,7 @@
 
 - 行 e（準備）: 引っ越しの邪魔になる「file の数を数字で固定した歯」を、宣言から数える形に直す。
 - 行 f（試し）: 1 file（headless.rs）で割ってみる。
-- 残る 8 file の行: 行 f の着地で分かったことを足して書く。`tests/e2e/` 直下の 4 file は §9（行 g〜j）、`pipe/` の下の 4 file は §9 の着地の後に別の節で書く。
+- 残る 8 file の行: 行 f の着地で分かったことを足して書く。`tests/e2e/` 直下の 4 file は §9（行 g〜j）、`pipe/` の下の 4 file は §10（行 k〜o）。
 
 - 出所: 持ち主の裁定 2026-09-27（第 2 段の範囲は e2e の分割だけ・UTC の分は台帳 `s2-07l.669`）と、§6 の census。
 - census（verified・main c01a456）:
@@ -128,7 +128,7 @@
     e2e は file の大きさの門の外にある（R-C4-2 は `crates/*/src` だけを数える）。
   - file の並びを固定するものは 4 つある。それぞれ割り方に次のように効く。
     1. `crates/scribe2-boundary/tests/e2e/main.rs` の歯 `e2e_fixture_clock_dated_reset_lines_are_pinned` が、tracked な e2e の `.rs` の本数を literal の 29 で固定する（ほかに、日付の字面を持つ行の数 7 と 5 も固定する）。file を 1 つ足すたびにこの歯の中の行が動くので、分割の便が純移動でなくなる。→ 行 e で、宣言から導く形に直す。
-    2. `crates/scribe2-boundary/tests/e2e/pipe.rs` の歯 `pipe_hermetic_sites_stay_one` は、`pipe/` の下の tracked な file の数を、同じ file の列 0 の `mod` 行の数 + 1 と比べる（既に導出の形）。pipe の 4 file の子は `pipe/` の下の兄弟に置き、`pipe.rs` で宣言する（入れ子の dir は作らない）。行 f には当たらない。
+    2. `crates/scribe2-boundary/tests/e2e/pipe.rs` の歯 `pipe_hermetic_sites_stay_one` は、`pipe/` の下の tracked な file の数を、同じ file の列 0 の `mod` 行の数 + 1 と比べる（既に導出の形）。pipe の 4 file の子は `pipe/` の下の兄弟に置き、`pipe.rs` で宣言する（入れ子の dir は作らない）。行 f には当たらない。（この案は §10 で改めた: 行 k でこの比べを外し、pipe の 4 file も入れ子の子へ割る。）
     3. `.config/nextest.toml` の tmux の群の名の列が、module path 付きの名を 53 本持つ（`cargo xtask check` の nextest-tmux-group が両向きで照合する）。tmux を起こす歯を子へ移すときは、同じ PR で名を直す。headless.rs の歯はこの列に 0 本なので、行 f には当たらない。
     4. `crates/scribe2-boundary/tests/e2e/pipe/intake.rs` の `SUBCOMMAND_FILES` が、`seat.rs` と `pipe.rs` の本文を埋め込む。動詞の数を固定する歯は、その親 file に残す。行 f には当たらない。
   - snapshot の名は module path を含み、既定の置き場は source の file の隣である。snapshot を撮る歯を子へ移すと、snapshot の file の名と置き場が変わる。→ snapshot の歯は親に残す。
@@ -221,6 +221,67 @@
   - hook_role_ の族の tmux でない 12 本だけを子へ移す: 1 つの族が 2 file に割れ、`.config/nextest.toml` の名は動かさずに済むが、族を探す場所が 2 つになる。
   - fleet.rs の `super::` を持つ族を子へ移す: 入れ子の子では `super::` の指す先が変わり、本文を書き換えることになる（純移動でなくなる）。
   - seat.rs の isolated seat の fixture（非 test の約 2,000 行）を子へ移す: fixture は歯の族ではなく、他の module（hook.rs・seat の子）が seat の module の path で直に読む。移すには再 export の `use` と可視性の見直しが要り、「helper は親に残す」形（上の 2）から外れる。
+
+## 10. 行 k〜o — pipe/ の下の 4 file（land.rs・gate.rs・dispatch.rs・spawn.rs）も入れ子の子へ割る（準備の 1 本と本番の 4 本）
+
+やさしく言うと: §9 と同じ引っ越しを、`pipe/` の下の大きな 4 file に当てる。邪魔をしているのは、`pipe/` の下の file の数を宣言の数と比べる歯だけである。行 k でその比べを外してから（同じことは行 e の歯が e2e の全体で測っている）、4 file を §9 と同じ入れ子の形で割る。
+
+- 出所: 持ち主の裁定 2026-09-27（第 2 段の範囲は e2e の分割だけ・UTC の分は台帳 `s2-07l.669`）と、§9 の着地（行 g〜j・4 本とも 1 周で PASS）。
+- 行 k の形（準備・歯 1 本の手直し）:
+  1. 歯 `pipe_hermetic_sites_stay_one`（`crates/scribe2-boundary/tests/e2e/pipe.rs`）は今 2 つを測る。(a) pipe.rs と `pipe/` の下の tracked な file の数が、pipe.rs の列 0 の `mod` 宣言の数 + 1 に等しい。(b) それらの file で binary を起こす字面 2 形の出現の合計が 1 である。(a) は入れ子の子（`pipe/<親>/<子>.rs`）を数えるのに、pipe.rs の宣言しか数えない。そのため、入れ子にすると必ず赤になる（使い捨ての木で実測: file 24 本・宣言 11 本）。
+  2. (a) を歯から外し、(b) だけを残す。母集団（読んだ file の数・site の数・base の 41）は message に出し続ける。
+  3. (a) が守っていた「tracked な file がどれも宣言されている」ことは、行 e の歯 `e2e_fixture_clock_dated_reset_lines_are_pinned`（`crates/scribe2-boundary/tests/e2e/main.rs`）が測る。この歯は e2e の全体を、入れ子の宣言まで辿って測る（§9 の入れ子の 4 行はこの歯が GREEN のまま着地した）。
+  4. 歯の doc comment から (a) の説明を外し、宣言との一致は行 e の歯が測ると書く。
+  5. 歯は base でも GREEN なので、この便の bead id で新しい `// flip-check: retroactive` の札を歯の区間に置く。base から持ち越した札（`s2-07l.547`）は効かないので、その行と置き換える。変異の証明は、着地の確認で orchestrator が bead の notes に写す（site を 1 つ足すと RED・宣言の無い入れ子の file を足すと行 e の歯が RED）。
+- 行 l〜o の形: §9 の形 1〜6 と同じ（入れ子の子・`use super::*;` だけの頭・helper は親に残す・札・write-set は親の `-` と子の `+` だけ・過去の行へ `+` の先宣言）。加えて次の 2 つを守る。
+  1. 本文に `super::` を持つ歯: 入れ子の子の `super::` は親の module を指す。親の file が頭で `use super::*;` を持つなら、`super::<名>` は親の glob を通って base と同じ item に解ける。ただし、親の file が同じ名の item を自前で持たないことが条件である。
+     - land.rs（子 follow の 5 site・`super::gate::`）と gate.rs（子 detection の 2 site・`super::land`）は、親が `use super::*;` を持ち、同じ名の item を持たない（実測）。よって子へ移す。gate.rs の子 pure_move の 3 site は、fixture の文字列と doc comment の中の字面で、path ではない。
+     - dispatch.rs は頭で `use super::{…}` の名指しの import しか持たない。そのため、`super::` を持つ歯 6 本は子へ移すと解けない（使い捨ての木で compile error を実測）。この 6 本は親に残す。
+  2. 子の名: land.rs は use の行で core の land の名を持つので、子の名に land を使わない。他の子の名は、親の use の名と重ならない（compile で実測）。
+- census（verified・main 8af5903・歯の数え = `#[test]` の fn・行数は直前の doc と属性を含む）:
+
+  | 行 | 親 | 行数（前 → 後） | 子（歯の本数・約の行数） | 親に残す歯 |
+  |---|---|---|---|---|
+  | l | pipe/land.rs | 5307 → 約 2845 | follow（27・765）・retire（20・617）・order（20・533）・rebase（16・470） | 53 本（pipe_land_ の族の残り 44 本ほか） |
+  | m | pipe/gate.rs | 4987 → 約 3604 | confine（23・642）・detection（15・328）・pure_move（25・355） | 65 本（snapshot 2 本・pipe_gate_ の族の残り 46 本ほか） |
+  | n | pipe/dispatch.rs | 4604 → 約 2710 | group（60・884）・waiting（35・628）・terminal（7・285） | 44 本（`super::` を持つ歯 6 本・他 38 本） |
+  | o | pipe/spawn.rs | 2824 → 約 1877 | question（18・504）・approval（14・415） | 37 本（pipe_spawn_ の族 25 本ほか） |
+
+  - 子の族（名の接頭辞）:
+    - 行 l: follow = `pipe_follow_`／retire = `pipe_retire_`・`pipe_train_`／order = `pipe_terminal_`・`pipe_order_`／rebase = `pipe_land_rebase_`・`pipe_land_onto_`。
+    - 行 m: confine = `pipe_confine_`・`pipe_slots_`／detection = `pipe_detection_`・`pipe_landed_`／pure_move = `pipe_gate_move_`・`pipe_gate_elide_`（snapshot の歯 `pipe_gate_move_summary_external_form` は親に残す）。
+    - 行 n: group = `pipe_dispatch_group_`／waiting = `pipe_dispatch_waiting_`・`pipe_dispatch_release_`・`pipe_dispatch_gated_`・`pipe_dispatch_regated_`・`pipe_dispatch_revive_`／terminal = `pipe_terminal_`（どの子も `super::` を持つ歯を除く）。
+    - 行 o: question = `pipe_question_`・`pipe_resume_`／approval = `pipe_approval_`・`run_cost_`・`pipe_report_`。
+  - 4 file とも、snapshot の歯のほかに tmux の群の歯と macro_rules! は 0 である。
+- 過去の行への `+` の先宣言（25 行・どれも bead は close 済み・子の path ごとの行数は dispatch/group 18・gate/detection 4・dispatch/waiting 2・spawn/approval 1）:
+
+  | doc | 行 |
+  |---|---|
+  | account-lifecycle.md | h・i・j・k・m・p・q・r・s・t・u・w |
+  | gate-cost.md | aj・ak・am・an・ao |
+  | seat-heartbeat.md | g・i・j・q・r |
+  | dispatcher.md | t・v |
+  | host-init.md | e |
+
+- 事前の実測（使い捨ての detached worktree で 4 file を割り、行 k の手直しを足した木・verified）:
+  - `cargo clippy -p scribe2-boundary --all-targets -- -D warnings` が rc 0。
+  - `cargo nextest list` の e2e が main = 割った木 = 1556 本で、名の末尾の多重集合が一致。
+  - 歯 `pipe_hermetic_sites_stay_one`（手直し後・site 1）と行 e の歯が GREEN。
+  - `cargo xtask check` が ok。
+  - `scribe2 contracts check` は、先宣言の無い doc で findings=25（= 上の 25 行）、先宣言の有る doc で findings=0。
+  - `cargo xtask flip-check`: 行 k の木は main を base に rc 0（retroactive=1）。行 m（札が最も多い file）の木は行 k の木を base に rc 0（moved=4）。行ごとの札は l 5・m 9・n 5・o 3 で、どれも 16 以下である。
+- 歯（行 l〜o は既存の歯が全部 GREEN のまま・期待を変えない）:
+  - 行 k: 手直しした歯そのもの（retroactive）。
+  - 行 l〜o の verify は、行の親にだけ在る名の接頭辞を子ごとに 1 語撃つ（`#[test]` の fn 名に substring として含む file が crates の中で行の親だけであることを実測）。
+    - 行 l: `pipe_follow_main_`（follow）・`pipe_retire_`（retire）・`pipe_order_three_runs_`（order）・`pipe_land_rebase_`（rebase）。
+    - 行 m: `pipe_slots_`（confine）・`pipe_landed_`（detection）・`pipe_gate_elide_`（pure_move）。
+    - 行 n: `pipe_dispatch_group_`（group）・`pipe_dispatch_gated_`（waiting）・`pipe_terminal_dispatch_manual_turn_`（terminal）。
+    - 行 o: `pipe_resume_`（question）・`pipe_approval_`（approval）。
+- 行どうしの関係: 行 l〜o は行 k に depends を持つ（行 k の前に入れ子にすると、手直し前の歯が赤）。行 l〜o の write-set は互いに交わらず、行 k とも交わらない（行 k は pipe.rs だけを触る）。
+- 却下:
+  - 子を `pipe/` の下の兄弟に置く（行 k が要らない形）: 兄弟の子は親の私有の helper と親の use の名を見られない。見せるには、helper の頭を `pub(super)` に上げ、子ごとに use の行を足すことになる。純移動の判定は通るが、行ごとに形がばらつく。
+  - 歯 (a) を、入れ子の宣言まで辿る形に書き直して残す: 行 e の歯と同じことを 2 本の歯で測ることになる（増殖）。
+  - dispatch.rs の `super::` を持つ歯 6 本を子へ移し、本文の `super::` を書き換える: 純移動でなくなる。
 
 <!-- contracts:begin -->
 schema = 1
@@ -323,5 +384,59 @@ write-set = ["-crates/scribe2-boundary/tests/e2e/rules.rs", "+crates/scribe2-bou
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_embedded_manifest_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail host_group_tier_"]
 size = "S"
 done = "(1) 子 rules/embedded.rs に名が rules_embedded_・rules_manifest_ で始まる歯 45 本、子 rules/host.rs に rules_host_・host_group_ で始まる歯 27 本が在る。2 つの子は rules.rs の mod 宣言で宣言され、頭が use super::*; である (2) 親 rules.rs には snapshot の歯 1 本・他の歯・helper と const と use の行の全部が残り、可視性は不変 (3) 移した歯の本文（直前の doc と属性の行を含む）は base と 1 byte も違わず、親と子で増減した行は空行・use の行・mod <名>;・comment・札だけで、move_proof が純移動と判定する (4) この便の bead id の flip-check: moved の札が各子の先頭と親の mod の宣言の直後に在り、flip-check が moved で通る (5) e2e の歯の本数は base = head で、snapshot と .config/nextest.toml と行 e の歯は GREEN のまま不変 (6) write-set の rules.rs の - は縮む面（file は残り、約 1,590 行が減る）で、diff は親の M と子 2 つの A だけ（この doc を含まない）"
+
+[[contract]]
+id = "k"
+title = "pipe の置き場の歯から file 数と宣言の比べを外す — pipe_hermetic_sites_stay_one は binary を起こす字面の合計 1 だけを測り、tracked と宣言の一致は行 e の歯に任せる（入れ子の子の準備・札 retroactive・§10 行 k）"
+req = ["FR33", "FR36"]
+section = "10"
+write-set = ["crates/scribe2-boundary/tests/e2e/pipe.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_hermetic_sites_stay_one"]
+size = "S"
+done = "(1) 歯 pipe_hermetic_sites_stay_one は pipe.rs と pipe/ の下の tracked な file（入れ子を含む）で binary を起こす字面 2 形の出現の合計が 1 であることだけを測り、file の数を pipe.rs の mod 宣言の数と比べない。message は読んだ file の数・site の数・base の 41 を出す (2) 歯の doc comment は、tracked な file と宣言の一致を行 e の歯 e2e_fixture_clock_dated_reset_lines_are_pinned が e2e の全体で測ると書き、file 数と宣言の比べの説明を持たない (3) この便の bead id の flip-check: retroactive の札が歯の区間に在り、base から持ち越した s2-07l.547 の札の行は無い (4) pipe.rs の他の歯と宣言と helper、e2e の他の file は不変"
+
+[[contract]]
+id = "l"
+title = "e2e の pipe/land.rs を族ごとの子 module へ割る — follow・retire と train・terminal と order・rebase と onto の族を子 pipe/land/follow.rs・retire.rs・order.rs・rebase.rs へ純移動し、他の族と helper は親に残す・札 moved（§10 行 l）"
+req = ["NFR1", "FR7"]
+section = "10"
+depends = ["k"]
+write-set = ["-crates/scribe2-boundary/tests/e2e/pipe/land.rs", "+crates/scribe2-boundary/tests/e2e/pipe/land/follow.rs", "+crates/scribe2-boundary/tests/e2e/pipe/land/retire.rs", "+crates/scribe2-boundary/tests/e2e/pipe/land/order.rs", "+crates/scribe2-boundary/tests/e2e/pipe/land/rebase.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_follow_main_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_retire_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_order_three_runs_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_land_rebase_"]
+size = "M"
+done = "(1) 子 pipe/land/follow.rs に名が pipe_follow_ で始まる歯 27 本、子 pipe/land/retire.rs に pipe_retire_・pipe_train_ で始まる歯 20 本、子 pipe/land/order.rs に pipe_terminal_・pipe_order_ で始まる歯 20 本、子 pipe/land/rebase.rs に pipe_land_rebase_・pipe_land_onto_ で始まる歯 16 本が在る。4 つの子は land.rs の mod 宣言で宣言され、頭が use super::*; である (2) 親 land.rs には他の歯 53 本・helper と const と use の行の全部が残り、可視性は不変 (3) 移した歯の本文（直前の doc と属性の行を含む）は base と 1 byte も違わず、親と子で増減した行は空行・use の行・mod <名>;・comment・札だけで、move_proof が純移動と判定する (4) この便の bead id の flip-check: moved の札が各子の先頭と親の mod の宣言の直後に在り、flip-check が moved で通る (5) e2e の歯の本数は base = head で、行 e の歯と pipe_hermetic_sites_stay_one は GREEN のまま不変 (6) write-set の land.rs の - は縮む面（file は残り、約 2,460 行が減る）で、diff は親の M と子 4 つの A だけ（この doc を含まない）"
+
+[[contract]]
+id = "m"
+title = "e2e の pipe/gate.rs を族ごとの子 module へ割る — confine と slots・detection と landed・move と elide の族を子 pipe/gate/confine.rs・detection.rs・pure_move.rs へ純移動し、snapshot の歯と他の族と helper は親に残す・札 moved（§10 行 m）"
+req = ["NFR1", "FR7"]
+section = "10"
+depends = ["k"]
+write-set = ["-crates/scribe2-boundary/tests/e2e/pipe/gate.rs", "+crates/scribe2-boundary/tests/e2e/pipe/gate/confine.rs", "+crates/scribe2-boundary/tests/e2e/pipe/gate/detection.rs", "+crates/scribe2-boundary/tests/e2e/pipe/gate/pure_move.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_slots_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_landed_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_gate_elide_"]
+size = "M"
+done = "(1) 子 pipe/gate/confine.rs に名が pipe_confine_・pipe_slots_ で始まる歯 23 本、子 pipe/gate/detection.rs に pipe_detection_・pipe_landed_ で始まる歯 15 本、子 pipe/gate/pure_move.rs に pipe_gate_move_・pipe_gate_elide_ で始まる歯 25 本（snapshot の歯 pipe_gate_move_summary_external_form を除く）が在る。3 つの子は gate.rs の mod 宣言で宣言され、頭が use super::*; である (2) 親 gate.rs には snapshot の歯 2 本・他の歯・helper と const と use の行の全部が残り、可視性は不変 (3) 移した歯の本文（直前の doc と属性の行を含む）は base と 1 byte も違わず、親と子で増減した行は空行・use の行・mod <名>;・comment・札だけで、move_proof が純移動と判定する (4) この便の bead id の flip-check: moved の札が各子の先頭と親の mod の宣言の直後に在り、flip-check が moved で通る (5) e2e の歯の本数は base = head で、snapshot と行 e の歯と pipe_hermetic_sites_stay_one は GREEN のまま不変 (6) write-set の gate.rs の - は縮む面（file は残り、約 1,380 行が減る）で、diff は親の M と子 3 つの A だけ（この doc を含まない）"
+
+[[contract]]
+id = "n"
+title = "e2e の pipe/dispatch.rs を族ごとの子 module へ割る — group・waiting と release と gated・terminal の族を子 pipe/dispatch/group.rs・waiting.rs・terminal.rs へ純移動し、super:: を持つ歯 6 本と他の族と helper は親に残す・札 moved（§10 行 n）"
+req = ["NFR1", "FR7"]
+section = "10"
+depends = ["k"]
+write-set = ["-crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "+crates/scribe2-boundary/tests/e2e/pipe/dispatch/group.rs", "+crates/scribe2-boundary/tests/e2e/pipe/dispatch/waiting.rs", "+crates/scribe2-boundary/tests/e2e/pipe/dispatch/terminal.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_group_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_gated_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_terminal_dispatch_manual_turn_"]
+size = "M"
+done = "(1) 子 pipe/dispatch/group.rs に名が pipe_dispatch_group_ で始まる歯 60 本、子 pipe/dispatch/waiting.rs に pipe_dispatch_waiting_・pipe_dispatch_release_・pipe_dispatch_gated_・pipe_dispatch_regated_・pipe_dispatch_revive_ で始まる歯 35 本、子 pipe/dispatch/terminal.rs に pipe_terminal_ で始まる歯 7 本が在る（どの子も本文に super:: を持つ歯を含まない）。3 つの子は dispatch.rs の mod 宣言で宣言され、頭が use super::*; である (2) 親 dispatch.rs には本文に super:: を持つ歯 6 本・他の歯 38 本・helper と const と use の行の全部が残り、可視性は不変 (3) 移した歯の本文（直前の doc と属性の行を含む）は base と 1 byte も違わず、親と子で増減した行は空行・use の行・mod <名>;・comment・札だけで、move_proof が純移動と判定する (4) この便の bead id の flip-check: moved の札が各子の先頭と親の mod の宣言の直後に在り、flip-check が moved で通る (5) e2e の歯の本数は base = head で、行 e の歯と pipe_hermetic_sites_stay_one は GREEN のまま不変 (6) write-set の dispatch.rs の - は縮む面（file は残り、約 1,890 行が減る）で、diff は親の M と子 3 つの A だけ（この doc を含まない）"
+
+[[contract]]
+id = "o"
+title = "e2e の pipe/spawn.rs を族ごとの子 module へ割る — question と resume・approval と run_cost と report の族を子 pipe/spawn/question.rs・approval.rs へ純移動し、他の族と helper は親に残す・札 moved（§10 行 o）"
+req = ["NFR1", "FR7"]
+section = "10"
+depends = ["k"]
+write-set = ["-crates/scribe2-boundary/tests/e2e/pipe/spawn.rs", "+crates/scribe2-boundary/tests/e2e/pipe/spawn/question.rs", "+crates/scribe2-boundary/tests/e2e/pipe/spawn/approval.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_resume_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_approval_"]
+size = "S"
+done = "(1) 子 pipe/spawn/question.rs に名が pipe_question_・pipe_resume_ で始まる歯 18 本、子 pipe/spawn/approval.rs に pipe_approval_・run_cost_・pipe_report_ で始まる歯 14 本が在る。2 つの子は spawn.rs の mod 宣言で宣言され、頭が use super::*; である (2) 親 spawn.rs には他の歯 37 本・helper と const と use の行の全部が残り、可視性は不変 (3) 移した歯の本文（直前の doc と属性の行を含む）は base と 1 byte も違わず、親と子で増減した行は空行・use の行・mod <名>;・comment・札だけで、move_proof が純移動と判定する (4) この便の bead id の flip-check: moved の札が各子の先頭と親の mod の宣言の直後に在り、flip-check が moved で通る (5) e2e の歯の本数は base = head で、行 e の歯と pipe_hermetic_sites_stay_one は GREEN のまま不変 (6) write-set の spawn.rs の - は縮む面（file は残り、約 950 行が減る）で、diff は親の M と子 2 つの A だけ（この doc を含まない）"
 
 <!-- contracts:end -->
