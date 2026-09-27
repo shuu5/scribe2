@@ -2,6 +2,16 @@
 //! gate の歯: `pipe_gate_` / `pipe_detection_`（検出線）/ `pipe_confine_`（封じ込め）/ `pipe_slots_`（受付札）。
 //!
 //! 共有 helper は親（`tests/e2e/pipe.rs`）に在り `use super::*` で引く（歯の本文は移しただけ・`s2-07l.264`）。
+//!
+//! 歯の一部は族ごとの子 module に置く（設計 docs/design/carry-prep.md §10 行 m・`s2-07l.685`）: `confine`（接頭辞
+//! `pipe_confine_` / `pipe_slots_`）・`detection`（接頭辞 `pipe_detection_` / `pipe_landed_`）・`pure_move`（接頭辞
+//! `pipe_gate_move_` / `pipe_gate_elide_`）。この file には共有の helper と const・外形 snapshot の歯（snapshot 名が
+//! module path を含むので動かさない）・他の族の歯だけを残す。
+
+mod confine;
+mod detection;
+mod pure_move;
+// flip-check: moved s2-07l.685
 
 use super::*;
 use vessel::pipe::run_dir;
@@ -1371,281 +1381,6 @@ fn confined_run(repo: &Path, state: &Path, path: &str, lens: &str) -> (String, O
     (id, gated)
 }
 
-/// **`{jobs}` を持つ行は実効値へ置換され、job の箱で撃たれる**（設計 §3.3 / §4.2）。
-///
-/// base の gate はこの宣言を intake で断る（`{jobs}` は置けない穴）ので、この歯は base で
-/// 落ちる＝flip の RED である。
-#[test]
-fn pipe_confine_fills_the_jobs_hole_and_uses_the_job_box() {
-    let (repo, state) = repo_with_state();
-    commit_vessel(&repo, VESSEL_ALLOWED, r#"["sh verify-jobs.sh {jobs}"]"#);
-    let path = systemd_stub(&state);
-    let marker = state.join("lens-ran");
-    let (id, gated) = confined_run(&repo, &state, &path, &fake_lens(&marker, &lens_verdict("PASS")));
-    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "gate: {}", stderr_of(&gated));
-
-    // **撃たれた側**が受け取った値（record の cmd だけでは置換したことを測れない）。
-    // 値は受付の実測で決まる（host 依存）ので、record の `jobs=` と突き合わせる。
-    let rows = verify_rows(&state, &id);
-    let jobs = row_value(&rows, 2, "jobs");
-    let count: u64 = jobs.parse().unwrap_or(0);
-    assert!(
-        (1..=embedded_int("gate.mutants_jobs")).contains(&count),
-        "実効 jobs は 1 以上・上限以下: {jobs}"
-    );
-    let git_dir = git(&worktree_of(&repo, &id), &["rev-parse", "--absolute-git-dir"]);
-    assert_eq!(
-        fs::read_to_string(Path::new(&git_dir).join("jobs-seen")).unwrap_or_default(),
-        jobs,
-        "撃たれた側は record と同じ実効 jobs を受け取る"
-    );
-    assert_eq!(row_value(&rows, 2, "cmd"), format!("sh verify-jobs.sh {jobs}"), "record の cmd も置換後である");
-    assert_eq!(row_value(&rows, 2, "confined"), "true", "包めている");
-
-    // 箱は `実効 jobs × gate.job_memory_mb`・重みは rules 行そのもの（値は manifest が持つ・C1）。
-    let record = scope_record(&state, "-common-2-");
-    assert_eq!(
-        scope_prop(&record, "MemoryMax"),
-        format!("{}M", count * embedded_int("gate.job_memory_mb")),
-        "job の箱: {record}"
-    );
-    assert_eq!(
-        scope_prop(&record, "CPUWeight"),
-        embedded_int("gate.cpu_weight").to_string(),
-        "CPU の重み: {record}"
-    );
-    assert!(!record.contains("MemoryHigh"), "MemoryHigh は付けない（設計 §4.2）: {record}");
-    clean(&[&repo, &state]);
-}
-
-/// **箱は 2 種で、同じ gate の中で互いに違う値になる**（設計 §4.2）。
-///
-/// 1 本ずつ別の unit の記録を読む——`{jobs}` 行と非 `{jobs}` 行の記録を混ぜると、
-/// `limit_of` を片方へ潰した実装でも両方の assert が通る（fixture 衝突）。
-#[test]
-fn pipe_confine_uses_two_distinct_boxes_in_one_gate() {
-    let (repo, state) = repo_with_state();
-    commit_vessel(
-        &repo,
-        VESSEL_ALLOWED,
-        r#"["sh verify-jobs.sh {jobs}", "sh verify-ok.sh"]"#,
-    );
-    let path = systemd_stub(&state);
-    let marker = state.join("lens-ran");
-    let (id, gated) = confined_run(&repo, &state, &path, &fake_lens(&marker, &lens_verdict("PASS")));
-    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "gate: {}", stderr_of(&gated));
-
-    let jobs: u64 = row_value(&verify_rows(&state, &id), 2, "jobs").parse().unwrap_or(0);
-    let job_box = scope_prop(&scope_record(&state, "-common-2-"), "MemoryMax");
-    let host_box = scope_prop(&scope_record(&state, "-common-3-"), "MemoryMax");
-    assert_eq!(
-        job_box,
-        format!("{}M", jobs * embedded_int("gate.job_memory_mb")),
-        "{{jobs}} を持つ行は job の箱（実効 jobs {jobs}）"
-    );
-    let want_host = vessel::pipe::confine::mem_total_mb(&fs::read_to_string("/proc/meminfo").unwrap_or_default())
-        .and_then(|total| total.checked_sub(embedded_int("host.reserve_memory_mb")))
-        .filter(|mb| *mb > 0);
-    assert_eq!(
-        Some(host_box.clone()),
-        want_host.map(|mb| format!("{mb}M")),
-        "{{jobs}} を持たない行は host の箱（MemTotal − reserve）"
-    );
-    assert_ne!(job_box, host_box, "2 つの箱は互いに違う値である");
-    for unit in ["-common-2-", "-common-3-"] {
-        let record = scope_record(&state, unit);
-        assert!(
-            record.lines().any(|line| line == "OOMPolicy=continue"),
-            "{unit} の包みを systemd の OOM 停止から外す: {record}"
-        );
-    }
-    clean(&[&repo, &state]);
-}
-
-/// **包めない host では素の `sh -c` で撃ち、record に理由を残す**（止めない・設計 §4.2）。
-#[test]
-fn pipe_confine_falls_back_to_the_plain_shell_without_the_tool() {
-    let (repo, state) = repo_with_state();
-    let path = lean_path(&state);
-    let marker = state.join("lens-ran");
-    let (id, gated) = confined_run(&repo, &state, &path, &fake_lens(&marker, &lens_verdict("PASS")));
-    assert_eq!(
-        gated.status.code(),
-        Some(i32::from(RC_OK)),
-        "systemd-run の無い host でも便は流れる: {}",
-        stderr_of(&gated)
-    );
-    let rows = verify_rows(&state, &id);
-    assert_eq!(row_value(&rows, 3, "confined"), "false", "包めていない");
-    assert_eq!(row_value(&rows, 3, "reason"), "no-systemd-run", "理由は閉じた enum の名");
-    assert_eq!(row_value(&rows, 3, "peak_mb"), "-", "測れない peak は 0 と書かない");
-    assert_eq!(row_value(&rows, 3, "rc"), "0", "行そのものは撃たれている");
-    clean(&[&repo, &state]);
-}
-
-/// **peak は包みの終端行から読む**（設計 §4.3）。終端行の無い行は `-` である。
-#[test]
-fn pipe_confine_reads_the_peak_from_the_trailing_line() {
-    let (repo, state) = repo_with_state();
-    let path = systemd_stub(&state);
-    let design = write_contract(
-        &repo,
-        &["verify"],
-        &[r#"verify = ["sh verify-peak.sh", "sh verify-ok.sh"]"#],
-    );
-    let id = intake(&repo, &state, &design);
-    let spawned = run_pipe_with_path(
-        &path,
-        &["spawn", "--run", &id, "--repo", &repo.display().to_string(),
-          "--state-dir", &state.display().to_string(), "--runner", TOY_COMMIT],
-    );
-    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "spawn: {}", stderr_of(&spawned));
-    let marker = state.join("lens-ran");
-    let gated = run_pipe_with_path(
-        &path,
-        &["gate", "--run", &id, "--repo", &repo.display().to_string(),
-          "--state-dir", &state.display().to_string(),
-          "--lens", &fake_lens(&marker, &lens_verdict("PASS"))],
-    );
-    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "gate: {}", stderr_of(&gated));
-    let rows = verify_rows(&state, &id);
-    assert_eq!(row_value(&rows, 3, "peak_mb"), "3", "3145728 byte は 3 MiB");
-    assert_eq!(row_value(&rows, 4, "peak_mb"), "-", "終端行の無い行は不明（0 ではない）");
-    clean(&[&repo, &state]);
-}
-
-/// **runner と lens の起動も同じ包みを通る**（設計 §4.1 の 2 つ目と 3 つ目）。
-#[test]
-fn pipe_confine_wraps_the_runner_and_the_lens() {
-    let (repo, state) = repo_with_state();
-    let path = systemd_stub(&state);
-    let marker = state.join("lens-ran");
-    let (_id, gated) = confined_run(&repo, &state, &path, &fake_lens(&marker, &lens_verdict("PASS")));
-    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "gate: {}", stderr_of(&gated));
-    assert!(marker.exists(), "lens は実際に撃たれている（包みは行を殺さない）");
-    for stage in ["-runner-1-", "-lens-1-"] {
-        let record = scope_record(&state, stage);
-        assert!(record.lines().any(|line| line == "--scope"), "{stage} は scope である: {record}");
-        assert!(
-            record.lines().any(|line| line == "OOMPolicy=continue"),
-            "{stage} も OOM 停止から外す: {record}"
-        );
-    }
-    clean(&[&repo, &state]);
-}
-
-/// **gate の lens の箱は 1 × `gate.job_memory_mb`・同じ gate の `{jobs}` を持たない verify 行は host の箱のまま**
-/// （設計 §12・行 c・裁定 id user 2026-09-15T18:2xZ）。両方向を 1 本で撃つ——lens だけを見る歯は全部を
-/// job の箱へ潰す実装でも生き残り、verify 行だけを見る歯は lens を host の箱に残す実装で生き残る。
-#[test]
-fn pipe_confine_lens_box_is_one_job_and_the_plain_line_keeps_the_host_box() {
-    let (repo, state) = repo_with_state();
-    commit_vessel(&repo, VESSEL_ALLOWED, r#"["sh verify-jobs.sh {jobs}", "sh verify-ok.sh"]"#);
-    let path = systemd_stub(&state);
-    let marker = state.join("lens-ran");
-    let (_id, gated) = confined_run(&repo, &state, &path, &fake_lens(&marker, &lens_verdict("PASS")));
-    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "gate: {}", stderr_of(&gated));
-    assert!(marker.exists(), "lens は実際に撃たれている");
-
-    let one_job = format!("{}M", embedded_int("gate.job_memory_mb"));
-    let lens = scope_record(&state, "-lens-1-");
-    assert_eq!(scope_prop(&lens, "MemoryMax"), one_job, "lens の箱は 1 × gate.job_memory_mb: {lens}");
-
-    let want_host = vessel::pipe::confine::mem_total_mb(&fs::read_to_string("/proc/meminfo").unwrap_or_default())
-        .and_then(|total| total.checked_sub(embedded_int("host.reserve_memory_mb")))
-        .filter(|mb| *mb > 0)
-        .map(|mb| format!("{mb}M"));
-    let plain = scope_record(&state, "-common-3-");
-    assert_eq!(
-        Some(scope_prop(&plain, "MemoryMax")),
-        want_host,
-        "{{jobs}} を持たない verify 行は host の箱（MemTotal − reserve）のまま: {plain}"
-    );
-    assert_ne!(Some(one_job), want_host, "前提: 2 つの箱は互いに違う値である");
-    clean(&[&repo, &state]);
-}
-
-/// **箱の中で殺された verify 行は赤ではなく「測れなかった」**（設計 §4.2）。
-///
-/// rc は 0 のままの fixture で撃つ＝根拠が rc ではなく終端行の `oom_kill` であることを測る。
-#[test]
-fn pipe_confine_oom_verify_line_is_inconclusive() {
-    let (repo, state) = repo_with_state();
-    let path = systemd_stub(&state);
-    let design = write_contract(&repo, &["verify"], &[r#"verify = ["sh verify-oom.sh"]"#]);
-    let id = intake(&repo, &state, &design);
-    let spawned = run_pipe_with_path(
-        &path,
-        &["spawn", "--run", &id, "--repo", &repo.display().to_string(),
-          "--state-dir", &state.display().to_string(), "--runner", TOY_COMMIT],
-    );
-    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "spawn: {}", stderr_of(&spawned));
-    let marker = state.join("lens-ran");
-    let gated = run_pipe_with_path(
-        &path,
-        &["gate", "--run", &id, "--repo", &repo.display().to_string(),
-          "--state-dir", &state.display().to_string(),
-          "--lens", &fake_lens(&marker, &lens_verdict("PASS"))],
-    );
-    assert_eq!(gated.status.code(), Some(i32::from(RC_INCONCLUSIVE)), "{}", stdout_of(&gated));
-    assert!(stdout_of(&gated).contains("verdict=INCONCLUSIVE"), "{}", stdout_of(&gated));
-    let rows = verify_rows(&state, &id);
-    assert_eq!(row_value(&rows, 3, "rc"), "0", "rc は 0 のまま（rc では見ていない）");
-    assert_eq!(row_value(&rows, 3, "reason"), "oom-kill", "外からの kill と弁別する");
-    assert_eq!(value_of(&verdict_pairs(&state, &id), "verify_red"), "0", "赤には数えない");
-    assert!(!marker.exists(), "測れなかった周は lens を起動しない");
-    clean(&[&repo, &state]);
-}
-
-/// **runner の箱が溢れた便は `Failed detail=oom-kill` で終端する**（設計 §4.2・理由 1 つ）。
-#[test]
-fn pipe_confine_oom_runner_fails_the_run() {
-    let (repo, state) = repo_with_state();
-    let path = systemd_stub(&state);
-    let design = write_contract(&repo, &[], &[]);
-    let id = intake(&repo, &state, &design);
-    let runner = format!("{TOY_COMMIT}\nprintf 'confine-usage peak_bytes=9437184 oom_kill=1\\n'");
-    let out = run_pipe_with_path(
-        &path,
-        &["spawn", "--run", &id, "--repo", &repo.display().to_string(),
-          "--state-dir", &state.display().to_string(), "--runner", &runner],
-    );
-    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "記帳は通る: {}", stderr_of(&out));
-    let seen = trail(&state, &id);
-    assert!(
-        seen.contains(&(EventKind::RunStage, Some(Stage::Failed), Some("oom-kill".to_owned()))),
-        "閉じた理由 1 つで終端する: {seen:?}"
-    );
-    clean(&[&repo, &state]);
-}
-
-/// **lens の箱が溢れた周は INCONCLUSIVE**（FR9 の既存極性のまま・便は終端しない・設計 §4.2）。
-#[test]
-fn pipe_confine_oom_lens_is_inconclusive() {
-    let (repo, state) = repo_with_state();
-    let path = systemd_stub(&state);
-    let marker = state.join("lens-ran");
-    let body = lens_verdict("PASS");
-    let lens = format!(
-        "{}; printf 'confine-usage peak_bytes=9437184 oom_kill=1\\n'",
-        fake_lens(&marker, &body)
-    );
-    let (id, gated) = confined_run(&repo, &state, &path, &lens);
-    assert_eq!(gated.status.code(), Some(i32::from(RC_INCONCLUSIVE)), "{}", stdout_of(&gated));
-    assert!(marker.exists(), "lens は起動されている（判定だけが届かない）");
-    assert!(
-        value_of(&verdict_pairs(&state, &id), "evidence").contains("oom-kill"),
-        "理由が verdict に残る: {:?}",
-        verdict_pairs(&state, &id)
-    );
-    assert!(
-        show_line(&repo, &state, &id).contains("stage=Gated"),
-        "便は終端しない（測り直せる）: {}",
-        show_line(&repo, &state, &id)
-    );
-    clean(&[&repo, &state]);
-}
-
 // ---- 行の終端の scope の片付け（設計 gate-cost.md §4.4 errata・s2-07l.234）------------------
 
 /// 偽 `systemctl` が撃たれた argv を 1 行 1 呼出で追記する file 名。
@@ -1703,190 +1438,6 @@ fn release_sequence(unit: &str) -> Vec<String> {
         format!("--user kill --signal=SIGKILL {unit}.scope"),
         format!("--user reset-failed {unit}.scope"),
     ]
-}
-
-/// (a) **verify 行の終端で `kill --signal=SIGKILL <unit>.scope` が 1 回撃たれ**、unit は
-/// `systemd-run` が受けた名と一致する。base では systemctl が撃たれず落ちる（機能不在）。
-#[test]
-fn pipe_confine_release_kills_the_verify_scope_once_by_its_unit() {
-    let (repo, state) = repo_with_state();
-    let path = systemd_stub(&state);
-    systemctl_stub(&state, SYSTEMCTL_KILLED);
-    let marker = state.join("lens-ran");
-    let (_id, gated) = confined_run(&repo, &state, &path, &fake_lens(&marker, &lens_verdict("PASS")));
-    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "gate: {}", stderr_of(&gated));
-    let unit = scope_unit(&state, "-contract-3-");
-    assert_eq!(
-        release_calls(&state, &unit),
-        release_sequence(&unit),
-        "終端で 1 回だけ、包んだ名の scope を SIGKILL で片付ける（後に reset-failed が 1 回）"
-    );
-    clean(&[&repo, &state]);
-}
-
-/// `s2-07l.421`: 包んだ scope の引数に `--collect` が**ちょうど 1 回**在り、終端の片付けは `kill` の**後に**
-/// `reset-failed` を 1 回撃つ（同じ unit 名・順序つき）。行の record は `scope=killed` のまま（Released の語彙は不変）。
-/// base は `--collect` も `reset-failed` も撃たないので RED。
-#[test]
-fn pipe_confine_collect_release_resets_failed_after_kill() {
-    let (repo, state) = repo_with_state();
-    let path = systemd_stub(&state);
-    systemctl_stub(&state, SYSTEMCTL_KILLED);
-    let marker = state.join("lens-ran");
-    let (id, gated) = confined_run(&repo, &state, &path, &fake_lens(&marker, &lens_verdict("PASS")));
-    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "gate: {}", stderr_of(&gated));
-    let unit = scope_unit(&state, "-contract-3-");
-    let record = scope_record(&state, "-contract-3-");
-    assert_eq!(
-        record.lines().filter(|line| *line == "--collect").count(),
-        1,
-        "--collect は 1 回: {record}"
-    );
-    let calls = release_calls(&state, &unit);
-    assert_eq!(calls, release_sequence(&unit), "kill の後に reset-failed が 1 回");
-    assert_eq!(
-        calls.iter().filter(|call| call.contains(" reset-failed ")).count(),
-        1,
-        "reset-failed は 1 回（母集団 {} 本）",
-        calls.len()
-    );
-    let rows = verify_rows(&state, &id);
-    assert_eq!(row_value(&rows, 3, "scope"), "killed", "record の語彙は不変");
-    assert_eq!(row_value(&rows, 3, "rc"), "0", "行の rc は不変");
-    clean(&[&repo, &state]);
-}
-
-/// `s2-07l.421`: unit が無い周（`kill` も `reset-failed` も「not loaded」で断る）も `Gone` のまま＝record に
-/// `scope=` を書かず、行の rc と判定は変わらない（reset の rc を record に写さない）。
-#[test]
-fn pipe_confine_collect_gone_unit_keeps_the_record() {
-    let (repo, state) = repo_with_state();
-    let path = systemd_stub(&state);
-    systemctl_stub(&state, SYSTEMCTL_GONE);
-    let marker = state.join("lens-ran");
-    let (id, gated) = confined_run(&repo, &state, &path, &fake_lens(&marker, &lens_verdict("PASS")));
-    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "gate: {}", stderr_of(&gated));
-    let unit = scope_unit(&state, "-contract-3-");
-    assert_eq!(release_calls(&state, &unit), release_sequence(&unit), "無い unit にも kill → reset-failed");
-    let rows = verify_rows(&state, &id);
-    assert_eq!(row_value(&rows, 3, "confined"), "true", "包めている");
-    assert!(!row_has(&rows, 3, "scope"), "Gone は書かない: {:?}", rows.get(2));
-    assert_eq!(row_value(&rows, 3, "rc"), "0", "行の rc は不変");
-    assert_eq!(value_of(&verdict_pairs(&state, &id), "verdict"), "PASS", "判定は不変");
-    clean(&[&repo, &state]);
-}
-
-/// (b) 偽 systemctl が rc 0 → record に `scope=killed`（判定は変えない）。
-#[test]
-fn pipe_confine_release_killed_is_recorded_on_the_row() {
-    let (repo, state) = repo_with_state();
-    let path = systemd_stub(&state);
-    systemctl_stub(&state, SYSTEMCTL_KILLED);
-    let marker = state.join("lens-ran");
-    let (id, gated) = confined_run(&repo, &state, &path, &fake_lens(&marker, &lens_verdict("PASS")));
-    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "判定は変えない: {}", stderr_of(&gated));
-    let rows = verify_rows(&state, &id);
-    assert_eq!(row_value(&rows, 3, "confined"), "true", "包めている");
-    assert_eq!(row_value(&rows, 3, "scope"), "killed", "残りを殺した周は record に残す");
-    assert!(!row_has(&rows, 1, "scope"), "撃つ process を持たない段①は片付けない");
-    clean(&[&repo, &state]);
-}
-
-/// (c) unit が既に無い（not loaded）→ record に `scope=` が無い（正常は書かない）。
-#[test]
-fn pipe_confine_release_gone_leaves_no_scope_field() {
-    let (repo, state) = repo_with_state();
-    let path = systemd_stub(&state);
-    systemctl_stub(&state, SYSTEMCTL_GONE);
-    let marker = state.join("lens-ran");
-    let (id, gated) = confined_run(&repo, &state, &path, &fake_lens(&marker, &lens_verdict("PASS")));
-    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "gate: {}", stderr_of(&gated));
-    let unit = scope_unit(&state, "-contract-3-");
-    assert_eq!(release_calls(&state, &unit), release_sequence(&unit), "片付けは撃たれている（不在は撃たなかったせいではない）");
-    let rows = verify_rows(&state, &id);
-    assert!(!row_has(&rows, 3, "scope"), "Gone は書かない: {:?}", rows.get(2));
-    assert!(!row_has(&verify_rows(&state, &id), 2, "scope"), "Gone は書かない（共通 verify の行）");
-    clean(&[&repo, &state]);
-}
-
-/// (d) `systemctl` の無い host → `scope=no-tool`・行の verdict は不変（縮退・C11.2）。
-#[test]
-fn pipe_confine_release_without_systemctl_is_no_tool_and_keeps_the_verdict() {
-    let (repo, state) = repo_with_state();
-    systemd_stub(&state);
-    let path = format!("{}:{}", state.join(SYSTEMD_BIN).display(), lean_path(&state));
-    let marker = state.join("lens-ran");
-    let (id, gated) = confined_run(&repo, &state, &path, &fake_lens(&marker, &lens_verdict("PASS")));
-    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "片付けの失敗で赤にしない: {}", stderr_of(&gated));
-    let rows = verify_rows(&state, &id);
-    assert_eq!(row_value(&rows, 3, "confined"), "true", "systemd-run は在る＝包めている");
-    assert_eq!(row_value(&rows, 3, "scope"), "no-tool", "道具が無い周の名");
-    assert_eq!(row_value(&rows, 3, "rc"), "0", "行の rc は不変");
-    assert_eq!(value_of(&verdict_pairs(&state, &id), "verdict"), "PASS", "判定は不変");
-    clean(&[&repo, &state]);
-}
-
-/// (e) land の追随の再 gate は 1 周目の gate と**別 process** で撃たれ、偽 `systemd-run` が同名の 2 本目を断る
-/// 形でも起動できる（unit 名は場所 + 段 + pid + 通し番号）。再 gate が判定した木をそのまま land するので
-/// **主実測は撃たない**（設計 gate-cost.md §27・`s2-07l.464`＝同じ process が 2 周撃つ経路はここで消えた。
-/// 通し番号で別名になる性質は in-file の `confine_unit_name_differs_for_the_same_arguments` /
-/// `confine_seq_increases_monotonically` が持つ）。
-///
-/// 別便が動かす面は検出線の面の内（`crates/other.txt`）＝追随が従来どおり再 gate を撃つ形（設計 §33）。
-// flip-check: retroactive s2-07l.416
-#[test]
-fn pipe_confine_release_regate_in_one_process_uses_distinct_unit_names() {
-    let (repo, state) = repo_with_state();
-    let path = systemd_stub(&state);
-    systemctl_stub(&state, SYSTEMCTL_GONE);
-    let marker = state.join("lens-ran");
-    let (id, gated) = confined_run(&repo, &state, &path, &fake_lens(&marker, &lens_verdict("PASS")));
-    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "1 周目の gate: {}", stderr_of(&gated));
-    // 別便は **面の内**（`crates/` 配下）を動かす——面の外だけが動いた周の追随は再 gate を撃たずに
-    // 前周の判定を引き継ぐ（設計 §33）ので、2 周が別名で撃たれたことを測れない。
-    fs::create_dir_all(repo.join("crates")).expect("面の内の dir を作れる");
-    fs::write(repo.join("crates").join("other.txt"), "other\n").expect("別便の変更を書ける");
-    git(&repo, &["add", "-A"]);
-    git(&repo, &["commit", "-q", "-m", "other"]);
-    // land の process が撃つ名だけを数える（1 周目の gate は別 process の記録）。
-    let records = state.join(SCOPE_RECORDS);
-    fs::remove_dir_all(&records).expect("記録を空にできる");
-    fs::create_dir_all(&records).expect("記録の dir を作り直せる");
-    let lens = fake_lens(&marker, &lens_verdict("PASS"));
-    let landed = run_pipe_with_path(
-        &path,
-        &["land", "--run", &id, "--repo", &repo.display().to_string(),
-          "--state-dir", &state.display().to_string(), "--lens", &lens],
-    );
-    assert_eq!(landed.status.code(), Some(i32::from(RC_OK)), "追随して載る: {}", stderr_of(&landed));
-    assert!(stdout_of(&landed).contains("rebase="), "追随の再 gate を通った: {}", stdout_of(&landed));
-    let names = dir_names(&records);
-    let contract: Vec<&String> = names.iter().filter(|name| name.contains("-contract-3-")).collect();
-    assert_eq!(contract.len(), 1, "land の process が撃つ契約 verify は再 gate の 1 周だけ（主実測は撃たない）: {names:?}");
-    assert_eq!(kinds(&main_rows(&state, &id)), ["main"], "主実測は再 gate と同じ木＝skip record 1 本");
-    clean(&[&repo, &state]);
-}
-
-/// (f) **runner と lens の scope も終端で片付ける**（1 起動に 1 回・lens の結果は verdict に残る）。
-#[test]
-fn pipe_confine_release_runner_and_lens_scopes_are_released() {
-    let (repo, state) = repo_with_state();
-    let path = systemd_stub(&state);
-    systemctl_stub(&state, SYSTEMCTL_KILLED);
-    let marker = state.join("lens-ran");
-    let (id, gated) = confined_run(&repo, &state, &path, &fake_lens(&marker, &lens_verdict("PASS")));
-    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "gate: {}", stderr_of(&gated));
-    for stage in ["-runner-1-", "-lens-1-"] {
-        let unit = scope_unit(&state, stage);
-        assert_eq!(
-            release_calls(&state, &unit),
-            release_sequence(&unit),
-            "{stage} の scope も終端で 1 回片付ける"
-        );
-    }
-    assert_eq!(value_of(&verdict_pairs(&state, &id), "scope"), "killed", "lens の片付けは verdict に残る");
-    assert_eq!(value_of(&verdict_pairs(&state, &id), "verdict"), "PASS", "判定は不変");
-    clean(&[&repo, &state]);
 }
 
 /// (g) 止める口の終端で、作り手の process が死んだ scope だけを畳む（設計 gate-cost.md §38 形 4 / 5・`s2-07l.452`）。
@@ -2110,220 +1661,14 @@ fn assert_reclaimed_one(slot: &str, why: &str) {
     );
 }
 
-/// **project 2 つの gate が同じ host の slot dir を見て、死んだ札を回収する**（設計 §3.2・歯 (1) (3)）。
-///
-/// 札は置き場ごとではなく `<state_dir の親>` から導く＝同じ tmp root の 2 つの置き場で、片方の
-/// gate が回収した後にもう片方の gate が**同じ dir に置き直した**札を回収する。
-#[test]
-fn pipe_slots_two_projects_share_one_dir_and_reclaim_dead_tickets() {
-    let root = tmp();
-    let (repo_a, state_a) = repo_with_state_in(&root.join("state-a"));
-    let (repo_b, state_b) = repo_with_state_in(&root.join("state-b"));
-    assert_eq!(host_slots(&state_a), host_slots(&state_b), "2 つの置き場の親は同じ");
-
-    let dead = plant_ticket(&state_a, DEAD_PID, 1);
-    let (id_a, gated_a) = slot_gate(&repo_a, &state_a);
-    assert_eq!(gated_a.status.code(), Some(i32::from(RC_OK)), "gate a: {}", stderr_of(&gated_a));
-    assert_reclaimed_one(&value_of(&slot_row(&verify_rows(&state_a, &id_a)), "slot"), "a が回収した");
-    assert!(!dead.exists(), "死んだ札は削除された");
-
-    // **b の置き場からは札を置かない**（a の親に置いた札を b の gate が拾う＝親が一致する）。
-    let again = plant_ticket(&state_a, DEAD_PID, 1);
-    let (id_b, gated_b) = slot_gate(&repo_b, &state_b);
-    assert_eq!(gated_b.status.code(), Some(i32::from(RC_OK)), "gate b: {}", stderr_of(&gated_b));
-    assert_reclaimed_one(&value_of(&slot_row(&verify_rows(&state_b, &id_b)), "slot"), "b も同じ dir を回収した");
-    assert!(!again.exists(), "置き直した札も削除された");
-    clean(&[&repo_a, &repo_b, &root]);
-}
-
-/// **生きている札が枠を食い尽くすと待ち、上限を超えたら並列度 1 で進む**（歯 (2)）。
-///
-/// 札の pid はこの歯の process（gate の間ずっと生きている）で、jobs を host の総量より大きく
-/// 置いて `by_token` を 0 にする。待ちの上限は rules fixture の `slot_wait_s = 1`。
-#[test]
-fn pipe_slots_live_ticket_waits_then_degrades_to_one_job() {
-    let (repo, state) = repo_with_state();
-    let live = plant_ticket(&state, u64::from(std::process::id()), 1_000_000);
-    let started = std::time::Instant::now();
-    let (id, gated) = slot_gate(&repo, &state);
-    let took = started.elapsed();
-    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "縮退しても便は流れる: {}", stderr_of(&gated));
-    let row = slot_row(&verify_rows(&state, &id));
-    assert_eq!(value_of(&row, "slot"), "degraded", "上限を超えた: {row:?}");
-    assert_eq!(value_of(&row, "jobs"), "1", "並列度 1 で進む（0 で走らせない）");
-    assert_eq!(value_of(&row, "cmd"), "sh verify-slot.sh 1", "置換後の cmd に 1 が載る");
-    assert!(took >= std::time::Duration::from_secs(SLOT_WAIT_S), "待った: {took:?}");
-    assert!(live.exists(), "生きている札は回収しない");
-    clean(&[&repo, &state]);
-}
-
 /// 待ちが解ける歯の待ちの上限（秒）。歯が札を消すまでの時間より十分に長く置く。
 const SLOT_WAIT_LONG_S: u64 = 60;
-
-/// **待ちの途中で塞いでいた札が消えると、上限を待たずに枠を配って進む**（歯 (9)）。
-///
-/// - 容量の 2 線を fixture で最小（job 1 MiB・reserve 0）にし、枠を配れるかを host の空き memory に
-///   依らせない（設計 §7）。塞ぐのは自 pid の札（jobs を host の総量より大きく置く）。
-/// - 待ちの始まりは**先に置いた死んだ札が 1 周目の受付で回収される**ことで知る（壁時計に頼らない）。
-/// - 待ちの間に死んだ札をもう 1 枚置き、**回収されずに残る**ことを測る（待ちの観測は lock も回収も
-///   持たない＝観測を常に「空いた」と読む実装は受付を回し続けて札を回収する）。
-/// - 観測を常に「空かない」と読む実装は上限まで待って `degraded` になる。
-#[test]
-fn pipe_slots_wait_ends_early_when_the_blocking_ticket_goes() {
-    use std::process::Stdio;
-    use std::time::{Duration, Instant};
-
-    let (repo, state) = repo_with_state();
-    commit_slot_vessel(&repo, &state);
-    let path = systemd_stub(&state);
-    let marker = state.join("lens-ran");
-    let lens = fake_lens(&marker, &lens_verdict("PASS"));
-    let slots = SlotFixture { job_mb: 1, reserve_mb: 0, wait_s: SLOT_WAIT_LONG_S, ..default_slots() };
-    let rules = write_rules_full(&state, "rules-slot-long.toml", (1, 1_000_000), FOLLOW_RETRIES, slots);
-    let design = write_contract(&repo, &[], &[]);
-    let id = intake(&repo, &state, &design);
-    let spawned = run_pipe_with_path(
-        &path,
-        &["spawn", "--run", &id, "--repo", &repo.display().to_string(),
-          "--state-dir", &state.display().to_string(), "--runner", TOY_COMMIT],
-    );
-    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "spawn: {}", stderr_of(&spawned));
-
-    let first_dead = plant_ticket(&state, DEAD_PID, 1);
-    let live = plant_ticket(&state, u64::from(std::process::id()), 1_000_000_000_000);
-    let mut child = bin_cmd()
-        .arg("pipe")
-        .args(["gate", "--run", &id, "--repo", &repo.display().to_string(),
-               "--state-dir", &state.display().to_string(), "--lens", &lens,
-               "--rules", &rules.display().to_string()])
-        .env("PATH", &path)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("binary を起動できる");
-
-    // 1 周目の受付が死んだ札を回収した＝枠が 0 で待ちに入った（塞ぐ札は生きている）。
-    let begun = Instant::now();
-    while first_dead.exists() {
-        assert!(child.try_wait().ok().flatten().is_none(), "gate が受付の前に終わった");
-        assert!(begun.elapsed() < Duration::from_secs(120), "1 周目の受付が来ない");
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    let second_dead = plant_ticket(&state, DEAD_PID, 1);
-    std::thread::sleep(Duration::from_millis(500));
-    assert!(second_dead.exists(), "待ちの間は札を回収しない（観測は受付を回さない）");
-    fs::remove_file(&second_dead).expect("札を消せる");
-
-    let freed = Instant::now();
-    fs::remove_file(&live).expect("塞いでいた札を消せる");
-    let out = child.wait_with_output().expect("gate を待てる");
-    let took = freed.elapsed();
-    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "gate: {}", stderr_of(&out));
-    let row = slot_row(&verify_rows(&state, &id));
-    // Granted の字面（回収 1 枚＝1 周目の死んだ札・`slot_detail` の合成）。
-    assert_eq!(value_of(&row, "slot"), "reclaimed:1", "上限を待たずに枠を配った: {row:?}");
-    assert!(took < Duration::from_secs(SLOT_WAIT_LONG_S / 2), "上限を待っていない: {took:?}");
-    assert!(slot_names(&state).is_empty(), "終了で札が消える: {:?}", slot_names(&state));
-    clean(&[&repo, &state]);
-}
-
-/// **`{jobs}` の行だけが札を置き、終了で消し、置換後の cmd に実効 jobs が載る**（歯 (4) (5) (6)）。
-#[test]
-fn pipe_slots_ticket_lives_only_during_the_jobs_line() {
-    let (repo, state) = repo_with_state();
-    let (id, gated) = slot_gate(&repo, &state);
-    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "gate: {}", stderr_of(&gated));
-    let rows = verify_rows(&state, &id);
-    let row = slot_row(&rows);
-    assert_ne!(value_of(&row, "slot"), "unmeasured", "meminfo の在る host では測れる: {row:?}");
-    let jobs = value_of(&row, "jobs");
-    let count: u64 = jobs.parse().unwrap_or(0);
-    assert!((1..=embedded_int("gate.mutants_jobs")).contains(&count), "実効 jobs は 1..=上限: {jobs}");
-    assert_eq!(value_of(&row, "cmd"), format!("sh verify-slot.sh {jobs}"), "(6) record の cmd は置換後");
-
-    let git_dir = PathBuf::from(git(&worktree_of(&repo, &id), &["rev-parse", "--absolute-git-dir"]));
-    let read = |name: &str| fs::read_to_string(git_dir.join(name)).unwrap_or_default();
-    assert_eq!(read("jobs-seen"), jobs, "(6) 撃たれた側も同じ実効 jobs");
-    // (4) `{jobs}` の無い行の間は札が無い（先に撃つ行・札を置く前）。
-    assert!(!read("slots-plain").contains(".slot"), "(4) {{jobs}} の無い行は札を作らない: {}", read("slots-plain"));
-    // (5) `{jobs}` の行の間は自便の札がちょうど 1 枚在り、本文の jobs が実効 jobs と一致する。
-    let during: Vec<String> = read("slots-during")
-        .lines()
-        .filter(|name| name.ends_with(".slot"))
-        .map(str::to_owned)
-        .collect();
-    assert_eq!(during.len(), 1, "(5) 行の間は札 1 枚: {during:?}");
-    assert!(during.iter().all(|name| name.ends_with(&format!("-{id}.slot"))), "札の名は <pid>-<run>.slot: {during:?}");
-    let body = vessel::fleet::json_lite::parse_object(read("slots-body").trim()).unwrap_or_default();
-    assert_eq!(value_of(&body, "jobs"), jobs, "札の jobs は実効 jobs: {}", read("slots-body"));
-    assert_eq!(value_of(&body, "run"), id, "札の run は便 id");
-    // (5) 終了で札は消える。
-    assert!(slot_names(&state).is_empty(), "(5) 終了で札が消える: {:?}", slot_names(&state));
-    clean(&[&repo, &state]);
-}
 
 /// この歯の host の core 数（gate の binary が同じ host で測る値と同じ口・読めない周は `None`）。
 fn host_cores() -> Option<u64> {
     std::thread::available_parallelism()
         .ok()
         .and_then(|found| u64::try_from(found.get()).ok())
-}
-
-/// **3 つの穴を持つ行の置換後の `cmd` に実効 jobs と実効 thread が両方載る**（設計 gate-cost.md §31 約束 4 / 6）。
-///
-/// thread の値は受付が決める: 枠を配れた周は `max(1, floor(cores / gate.mutants_jobs))`（cores はこの歯が同じ
-/// host で測る）、縮退の周は 1（枠の可否は host の memory に依るので、record の `slot=` で読み分ける）。
-/// 撃たれた側（`$2`）も同じ値を受け取る＝record の字面だけの置換ではない。
-#[test]
-fn pipe_slots_threads_cmd_carries_effective_jobs_and_threads() {
-    let (repo, state) = repo_with_state();
-    let (id, gated) = slot_gate_line(&repo, &state, SLOT_THREADS_LINE);
-    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "gate: {}", stderr_of(&gated));
-    let row = slot_row(&verify_rows(&state, &id));
-    let slot = value_of(&row, "slot");
-    assert_ne!(slot, "unmeasured", "meminfo と cores の在る host では測れる: {row:?}");
-    let jobs = value_of(&row, "jobs");
-    let cmd = value_of(&row, "cmd");
-    let (head, threads) = cmd.rsplit_once(' ').unwrap_or_default();
-    assert_eq!(head, format!("sh verify-slot.sh {jobs}"), "置換後の cmd は jobs の後ろに thread を持つ: {cmd}");
-    let count: u64 = threads.parse().unwrap_or(0);
-    let cap = embedded_int("gate.mutants_jobs");
-    let price = host_cores().map_or(1, |cores| (cores / cap.max(1)).max(1));
-    if slot.starts_with("degraded") {
-        assert_eq!(count, 1, "縮退の周は thread も 1: {cmd}");
-        assert_eq!(jobs, "1", "縮退の周は jobs 1: {row:?}");
-    } else {
-        assert_eq!(count, price, "枠を配れた周の thread は値段 max(1, cores / cap): {cmd}");
-    }
-    assert!(count >= 1, "thread は 1 以上（0 と書かない）: {cmd}");
-    let git_dir = PathBuf::from(git(&worktree_of(&repo, &id), &["rev-parse", "--absolute-git-dir"]));
-    let read = |name: &str| fs::read_to_string(git_dir.join(name)).unwrap_or_default();
-    assert_eq!(read("jobs-seen"), jobs, "撃たれた側も同じ実効 jobs");
-    assert_eq!(read("threads-seen"), threads, "撃たれた側も同じ実効 thread");
-    clean(&[&repo, &state]);
-}
-
-/// **待ちの上限を超えた周の `cmd` は jobs も thread も 1**（設計 gate-cost.md §31 約束 4・`slot=degraded` と対）。
-///
-/// 塞ぐ札は自 pid（gate の間ずっと生きている）で jobs を host の総量より大きく置く＝memory の `by_token` も
-/// CPU の `by_cpu` も 0 になる。待ちの上限は rules fixture の `slot_wait_s = 1`。thread を `cores / 1` で導く
-/// 実装は縮退の周に core 数ぶんの thread を許す（2026-09-20 の事故の出所）ので、ここで 1 を pin する。
-#[test]
-fn pipe_slots_threads_degraded_run_gets_one_job_and_one_thread() {
-    let (repo, state) = repo_with_state();
-    let live = plant_ticket(&state, u64::from(std::process::id()), 1_000_000_000_000);
-    let (id, gated) = slot_gate_line(&repo, &state, SLOT_THREADS_LINE);
-    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "縮退しても便は流れる: {}", stderr_of(&gated));
-    let row = slot_row(&verify_rows(&state, &id));
-    assert_eq!(value_of(&row, "slot"), "degraded", "上限を超えた: {row:?}");
-    assert_eq!(value_of(&row, "jobs"), "1", "並列度 1 で進む");
-    assert_eq!(value_of(&row, "cmd"), "sh verify-slot.sh 1 1", "置換後の cmd は jobs 1・thread 1");
-    let git_dir = PathBuf::from(git(&worktree_of(&repo, &id), &["rev-parse", "--absolute-git-dir"]));
-    let read = |name: &str| fs::read_to_string(git_dir.join(name)).unwrap_or_default();
-    assert_eq!(read("jobs-seen"), "1", "撃たれた側の jobs も 1");
-    assert_eq!(read("threads-seen"), "1", "撃たれた側の thread も 1（core 数ぶんではない）");
-    assert!(live.exists(), "生きている札は回収しない");
-    clean(&[&repo, &state]);
 }
 
 /// 検出線の stub の行（`{base}` を印に埋める＝置換されたことを撃たれた側で読める）。
@@ -2483,55 +1828,6 @@ fn detection_marks(calls: &[String]) -> Vec<&String> {
     calls.iter().filter(|call| call.starts_with("detection-")).collect()
 }
 
-/// (j) 検出線を宣言した便の gate は stub を 1 回も呼ばず（印は ②④ だけ）、`verify.jsonl` は ①②④ の 3 本で
-/// `kind=detection` を持たず、写しの置き場を作らず、gate の後の `pipe show` は段の 1 行だけ（判定行が無い）。
-#[test]
-fn pipe_detection_off_gate_declared_run_fires_no_detection_and_shows_no_line() {
-    let (repo, state, design) = detection_repo(DETECTION_COUNT);
-    let id = gated_pass(&repo, &state, &design, &state.join("lens-ran"));
-    let calls = detection_calls(&repo);
-    assert_eq!(calls, ["common".to_owned(), "contract".to_owned()], "gate が撃つのは ②④ だけ: {calls:?}");
-    assert!(detection_marks(&calls).is_empty(), "検出線の stub は 1 回も呼ばれない: {calls:?}");
-    let rows = verify_rows(&state, &id);
-    assert_eq!(kinds(&rows), ["write-set", "common", "contract"], "gate の段は ①②④: {rows:?}");
-    assert!(rows.iter().all(|row| value_of(row, "kind") != "detection"), "kind=detection の record は無い: {rows:?}");
-    assert!(!run_dir(&state, &id).join(COPY_DIR).exists(), "写しの置き場を作らない");
-    let shown = show_line(&repo, &state, &id);
-    assert_eq!(shown.lines().count(), 1, "gate の後の `pipe show` は段の 1 行だけ: {shown}");
-    assert!(shown.contains("stage=Gated"), "1 行目は便の段: {shown}");
-    assert!(!shown.contains("mutants-diff") && !shown.contains(COPY_ABSENT_LINE), "判定行は無い: {shown}");
-    clean(&[&repo, &state]);
-}
-
-/// (n) main が `crates/`（検出線の面の内）に触れて動いた便の追随の再 gate も stub を呼ばない: 再 gate は撃たれる
-/// （`verify.jsonl` は 1 度目 3 本 + 再 gate 3 本・引き継ぎの skip record は無い）が、どちらの周も ③ を撃たない。
-/// 主実測は同じ木で撃たず、着地後の検出の子は面の外の着地で撃たない＝呼出は再 gate の ②④ だけ。
-#[test]
-fn pipe_detection_off_gate_regate_after_crates_moved_fires_no_detection() {
-    let (repo, state, design) = detection_repo(DETECTION_COUNT);
-    let base = git(&repo, &["rev-parse", "refs/heads/main"]);
-    let id = gated_pass(&repo, &state, &design, &state.join("lens-ran"));
-    let before = detection_calls(&repo).len();
-    let moved = super::land::advance_main_with(&repo, "crates/toy/src/other.rs");
-    let out = land_once(&repo, &state, &id);
-    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land は rc 0: {}", stderr_of(&out));
-    assert!(stdout_of(&out).contains(&format!("rebase={base}..{moved}")), "追随は済む: {}", stdout_of(&out));
-    await_detection_child(&state, &id);
-    let calls = detection_calls(&repo);
-    assert!(detection_marks(&calls).is_empty(), "どの周も検出線の stub を呼ばない: {calls:?}");
-    let added = calls.get(before..).unwrap_or_default().to_vec();
-    assert_eq!(added, ["common".to_owned(), "contract".to_owned()], "再 gate は ②④ を撃つ: {added:?}");
-    let rows = verify_rows(&state, &id);
-    assert_eq!(
-        kinds(&rows),
-        ["write-set", "common", "contract", "write-set", "common", "contract"],
-        "1 度目 3 本 + 再 gate 3 本（③ も引き継ぎの skip record も無い）: {rows:?}"
-    );
-    assert!(skip_rows(&rows).is_empty(), "skip record は無い（再 gate は撃った）: {rows:?}");
-    assert!(show_line(&repo, &state, &id).contains("stage=Landed"), "段は Landed");
-    clean(&[&repo, &state]);
-}
-
 // ---- 主実測の省略（設計 gate-cost.md §27・ADR-0043 §2.1・`s2-07l.464`・接頭辞 `pipe_main_same_tree_`）----------
 //
 // gate が判定した木と着地の木が同じ周は、主実測は同じ木を同じ verify で撃ち直すだけ＝1 本も撃たず、
@@ -2645,30 +1941,6 @@ fn pipe_main_same_tree_unwritable_record_is_unmeasurable() {
     assert!(log.contains("\"detail\":\"main-unmeasured\""), "main-unmeasured の event: {log}");
     assert!(!log.contains("\"stage\":\"Landed\""), "Landed は無い: {log}");
     clean(&[&repo, &state]);
-}
-
-// ---- 検出線は主実測で撃たない（設計 gate-cost.md §44 形 (9)(13)・契約表の行 ao・接頭辞 `pipe_detection_off_main_`）----
-//
-// 主実測の段は ①②④ で、③ は着地後の検出の口だけが撃つ。検出線を宣言した便を land まで通すと、木が違う周も
-// `verify-main.jsonl` の主実測の分（`landed` を持たない）は ①②④ の 3 本で `kind=detection` を持たない（撃った record も
-// `skipped=detection` の record も無い）。候補の木の後続の側は `land.rs` の歯（同じ接頭辞）が持つ。
-// base は ③ を撃つか（木を比べられない周）`skipped=detection` を書く（面の外の周）＝RED。
-
-/// (p) 木が違う周の主実測は ①②④ だけ: 木を比べられない形（実在しない木＝base は ③ を撃つ）と、木は違うが差分が面の外の
-/// 形（便の base の木＝base は ③ の位置に `skipped=detection` を書く）の 2 つ。どちらも stub は主実測から呼ばれず
-/// （呼出は ②④）、主実測の record に `landed` の無い `kind=detection` は 0 本。
-#[test]
-fn pipe_detection_off_main_tree_differs_fires_only_three_stages() {
-    let broken: fn(&str, &str, &str) -> String =
-        |text, tree, _| text.replace(&format!("\"tree\":\"{tree}\""), &format!("\"tree\":\"{}\"", "0".repeat(40)));
-    for (name, edit) in [("unreadable", broken), ("outside-scope", verdict_tree_to_base as fn(&str, &str, &str) -> String)] {
-        let landed = detection_land(edit);
-        let gated = value_of(&verdict_pairs(&landed.state, &landed.id), "tree");
-        assert_ne!(gated, git(&landed.repo, &["rev-parse", "refs/heads/main^{tree}"]), "{name}: fixture は木が違う");
-        assert!(detection_marks(&landed.added).is_empty(), "{name}: 主実測は stub を呼ばない: {:?}", landed.added);
-        assert_main_three_stages(&landed);
-        clean(&[&landed.repo, &landed.state]);
-    }
 }
 
 // ---- 着地後の検出の口（設計 gate-cost.md §44 行 ak・ADR-0060・接頭辞 `pipe_landed_detection_`）----------------
@@ -2932,58 +2204,6 @@ fn assert_fired_on_the_parent(run: &LandedRun, before: &LandedBefore) {
     assert_eq!(detection_calls(&run.repo).len(), before.common, "共通 verify は撃たない");
 }
 
-/// (a) 測った周: rc 0・`detection=measured`・`landed` 付きの record +1（`line=` は stub の判定行）・stub の `--base` は
-/// 着地した commit の親（gate の base と異なる）で `--teeth` は契約の語・共通 verify は撃たない・event 1 件・show の行
-/// （判定行 + `secs=`）+1・台帳の見張り 0 件。
-#[test]
-fn pipe_landed_detection_measured_round_records_the_landed_commit() {
-    let run = landed_run(&landed_crates_case());
-    let before = landed_before(&run);
-    let shown_before = shown_copies(&run);
-    let out = detection_only(&run, None);
-    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "口は rc 0: {}", stderr_of(&out));
-    assert_eq!(stdout_of(&out), format!("run={} detection=measured\n", run.id), "stdout は 1 行");
-    let row = added_landed_row(&run, &before);
-    assert_eq!(value_of(&row, "line"), LANDED_LINE, "line= は stub の判定行: {row:?}");
-    assert_eq!(value_of(&row, "rc"), "0", "{row:?}");
-    assert_fired_on_the_parent(&run, &before);
-    assert_eq!(added_details(&run, &before), ["detection:measured"], "event は 1 件");
-    let round = added_round(&run, &before);
-    assert_eq!(read_copy(&run.state, &run.id, round, COPY_LINE), format!("{LANDED_LINE}\n"), "写しの判定行");
-    assert!(!copy_path(&run.state, &run.id, round, "reason").exists(), "測れた周は理由の file を置かない");
-    let shown = shown_copies(&run);
-    assert_eq!(shown.len(), shown_before.len() + 1, "show の行 +1: {shown:?}");
-    let last = shown.last().cloned().unwrap_or_default();
-    assert!(last.starts_with(&format!("{LANDED_LINE} secs=")), "判定行と secs=: {last}");
-    assert!(crate::toolbox_ledger_record_names(&run.state).is_empty(), "台帳 client を起こさない");
-    assert!(show_line(&run.repo, &run.state, &run.id).contains("stage=Landed"), "段は Landed のまま");
-    clean(&[&run.repo, &run.state]);
-}
-
-/// (b) 面の外: 着地した diff が docs だけの便は stub を呼ばず、`reason=outside-scope` の skip record・理由の file・
-/// `detection:skipped`・show の行は `detection-line: absent skipped=outside-scope`。
-#[test]
-fn pipe_landed_detection_outside_scope_writes_a_skip_record() {
-    let mut case = landed_crates_case();
-    case.runner = "echo x >> docs/landed.md && git add -A && git commit -q -m runner".to_owned();
-    case.contract = vec![format!("write-set = [\"{LANDED_LIB}\", \"docs/landed.md\"]"), landed_verify()];
-    let run = landed_run(&case);
-    let before = landed_before(&run);
-    let out = detection_only(&run, None);
-    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "口は rc 0: {}", stderr_of(&out));
-    assert_eq!(stdout_of(&out), format!("run={} detection=skipped\n", run.id), "stdout は 1 行");
-    assert_eq!(landed_calls(&run.repo).len(), before.calls, "stub は呼ばれない");
-    let row = added_landed_row(&run, &before);
-    assert_eq!(value_of(&row, "skipped"), "detection", "skip record: {row:?}");
-    assert_eq!(value_of(&row, "reason"), "outside-scope", "理由は面の外: {row:?}");
-    let round = added_round(&run, &before);
-    assert_eq!(read_copy(&run.state, &run.id, round, "reason"), "skipped=outside-scope\n", "理由の file");
-    assert_eq!(added_details(&run, &before), ["detection:skipped"], "event は 1 件");
-    let shown = shown_copies(&run);
-    assert_eq!(shown.last().cloned().unwrap_or_default(), format!("{COPY_ABSENT_LINE} skipped=outside-scope"), "{shown:?}");
-    clean(&[&run.repo, &run.state]);
-}
-
 /// 測れなかった周の共通 assert: rc 0・`detection=unmeasured`・`landed` 付きの record +1・理由の file と show の行の末尾が
 /// `unmeasured=<理由>`・event は `detection:unmeasured` 1 件・段は `Landed` のまま・main の sha は動かない（record を返す）。
 fn assert_landed_unmeasured(
@@ -3005,83 +2225,6 @@ fn assert_landed_unmeasured(
     row
 }
 
-/// (c) 測れなかった周: stub が rc 2 の便は stub が 1 回だけ呼ばれ（撃ち直さない）、record の rc が 2・`unmeasured=rc-2`。
-#[test]
-fn pipe_landed_detection_rc2_is_unmeasured_and_fired_once() {
-    let run = landed_run(&landed_crates_case());
-    write_landed_stub(&run.repo, 2);
-    let before = landed_before(&run);
-    let out = detection_only(&run, None);
-    assert_eq!(landed_calls(&run.repo).len(), before.calls + 1, "stub は 1 回だけ呼ばれる");
-    let row = assert_landed_unmeasured(&run, &before, &out, "rc-2");
-    assert_eq!(value_of(&row, "rc"), "2", "record の rc は 2: {row:?}");
-    clean(&[&run.repo, &run.state]);
-}
-
-/// (d) 遮断器: 倍率 0 の `--rules`（§32 の歯と同じ形）で撃つと stub は呼ばれず `unmeasured=host-closed` の record 1 本。
-#[test]
-fn pipe_landed_detection_closed_breaker_fires_nothing() {
-    let run = landed_run(&landed_crates_case());
-    let slots = SlotFixture { runnable_per_core: 0, blocked_per_core: 0, ..default_slots() };
-    let rules = write_rules_full(&run.state, "rules-landed-busy.toml", (1, 1_000_000), FOLLOW_RETRIES, slots);
-    let before = landed_before(&run);
-    let out = detection_only(&run, Some(&rules));
-    assert_eq!(landed_calls(&run.repo).len(), before.calls, "stub は呼ばれない");
-    let row = assert_landed_unmeasured(&run, &before, &out, "host-closed");
-    assert_eq!(value_of(&row, "unmeasured"), "host-closed", "record は理由を持つ: {row:?}");
-    clean(&[&run.repo, &run.state]);
-}
-
-/// (d2) 出せない周: 置き場の別名の path に普通の file を置くと stub は呼ばれず `unmeasured=unprepared` の record 1 本。
-#[test]
-fn pipe_landed_detection_unprepared_worktree_is_unmeasured() {
-    let run = landed_run(&landed_crates_case());
-    let place = run.repo.join(".worktrees").join("scribe2").join("verify").join(format!("{}-detection", run.id));
-    fs::create_dir_all(place.parent().unwrap_or(&run.repo)).ok();
-    fs::write(&place, "occupied\n").expect("置き場の別名を file で塞げる");
-    let before = landed_before(&run);
-    let out = detection_only(&run, None);
-    assert_eq!(landed_calls(&run.repo).len(), before.calls, "stub は呼ばれない");
-    let row = assert_landed_unmeasured(&run, &before, &out, "unprepared");
-    assert_eq!(value_of(&row, "unmeasured"), "unprepared", "record は理由を持つ: {row:?}");
-    assert_eq!(fs::read_to_string(&place).unwrap_or_default(), "occupied\n", "塞いだ file に触れない");
-    clean(&[&run.repo, &run.state]);
-}
-
-/// (e) 的と純移動: 契約が的を持つ便は stub の argv に `--targets <run dir の的の file>`、純移動と証明された便は
-/// `--diff <run dir の母集団の file>` が載る（gate と同じ付け足し）。
-#[test]
-fn pipe_landed_detection_appends_targets_and_the_pure_move_population() {
-    let mut aimed = landed_crates_case();
-    aimed.contract.push(r#"targets = ["crates/toy/src/lib.rs:1:replace landed with ()"]"#.to_owned());
-    let run = landed_run(&aimed);
-    let out = detection_only(&run, None);
-    assert_eq!(stdout_of(&out), format!("run={} detection=measured\n", run.id), "{}", stderr_of(&out));
-    let file = run_dir(&run.state, &run.id).join("targets");
-    let call = landed_calls(&run.repo).last().cloned().unwrap_or_default();
-    assert!(call.ends_with(&format!(" --targets {}", file.display())), "的の file: {call}");
-    clean(&[&run.repo, &run.state]);
-
-    let moved = LandedCase {
-        base: vec![(LANDED_LIB, POP_BASE_LIB.to_owned())],
-        runner: "cp '{}'/*.rs crates/toy/src/ && git add -A && git commit -q -m runner".to_owned(),
-        contract: vec![
-            format!("write-set = [\"{LANDED_LIB}\", \"crates/toy/src/alpha.rs\"]"),
-            r#"verify = ["sh verify-ok.sh"]"#.to_owned(),
-        ],
-    };
-    let run = landed_pure_move(moved);
-    let before = landed_before(&run);
-    let out = detection_only(&run, None);
-    assert_eq!(stdout_of(&out), format!("run={} detection=measured\n", run.id), "{}", stderr_of(&out));
-    let file = run_dir(&run.state, &run.id).join("population.diff");
-    let call = landed_calls(&run.repo).last().cloned().unwrap_or_default();
-    assert!(call.ends_with(&format!(" --diff {}", file.display())), "母集団の file: {call}");
-    let row = added_landed_row(&run, &before);
-    assert_eq!(value_of(&row, "pure-move"), "3", "落とした `+` 行の本数: {row:?}");
-    clean(&[&run.repo, &run.state]);
-}
-
 /// 純移動の便（`fn two` を `alpha.rs` へ移す）: runner の `{}` を HEAD の写しの dir に置き換えて着地させる。
 #[expect(
     clippy::expect_used,
@@ -3094,32 +2237,6 @@ fn landed_pure_move(mut case: LandedCase) -> LandedRun {
     fs::write(staged.join("alpha.rs"), "fn two() -> u8 {\n    2\n}\n").expect("HEAD の file を書ける");
     case.runner = case.runner.replace("{}", &staged.display().to_string());
     landed_run(&case)
-}
-
-/// (f) 断り: 段が `Gated` の便と、宣言に検出線の行が無い便は rc 1 で、record・写し・event がどれも増えない。
-#[test]
-fn pipe_landed_detection_refuses_gated_and_undeclared_runs() {
-    let gated = landed_gated(&landed_crates_case());
-    let before = landed_before(&gated);
-    let out = detection_only(&gated, None);
-    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "Gated は rc 1: {}", stderr_of(&out));
-    assert!(stderr_of(&out).contains("Gated"), "段を名指す: {}", stderr_of(&out));
-    assert_landed_untouched(&gated, &before);
-    clean(&[&gated.repo, &gated.state]);
-
-    let (repo, state) = repo_with_state();
-    let design = write_contract(&repo, &[], &[]);
-    let id = gated_pass(&repo, &state, &design, &state.join("lens-ran"));
-    let landed = land_once(&repo, &state, &id);
-    assert_eq!(landed.status.code(), Some(i32::from(RC_OK)), "land: {}", stderr_of(&landed));
-    let sha = git(&repo, &["rev-parse", "refs/heads/main"]);
-    let bare = LandedRun { repo, state, id, sha, gate_base: String::new() };
-    let before = landed_before(&bare);
-    let out = detection_only(&bare, None);
-    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "検出線の無い便は rc 1: {}", stderr_of(&out));
-    assert!(stderr_of(&out).contains("検出線の行が無い"), "理由: {}", stderr_of(&out));
-    assert_landed_untouched(&bare, &before);
-    clean(&[&bare.repo, &bare.state]);
 }
 
 /// 断った周の共通 assert: record・写し・event がどれも増えず、stdout は空。
@@ -3147,30 +2264,6 @@ fn write_blocking_stub(repo: &Path) {
     fs::write(repo.join(".git").join(LANDED_STUB), body).ok();
 }
 
-/// (k) land は stub が終わる前に rc 0 で `Landed` を返し、返った時点で `detection:spawned` 1 件・終えた語 0 件。解放の後に
-/// 子の終わりを待つと `detection:measured` 1 件と `landed` を持つ record 1 本（`line=` は stub の判定行・stub の `--base` は
-/// 着地した commit の親）。gate は ③ を撃たない（`verify.jsonl` に `kind=detection` は無い・行 an）・台帳の見張り 0 件。
-#[test]
-fn pipe_detection_after_landing_land_returns_before_the_child_finishes() {
-    let mut run = landed_gated(&landed_crates_case());
-    write_blocking_stub(&run.repo);
-    let out = land_after_docs_move(&run);
-    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land は rc 0: {} / {}", stdout_of(&out), stderr_of(&out));
-    run.sha = git(&run.repo, &["rev-parse", "refs/heads/main"]);
-    assert!(stdout_of(&out).contains(&format!("landed={}", run.sha)), "着地を返す: {}", stdout_of(&out));
-    assert!(show_line(&run.repo, &run.state, &run.id).contains("stage=Landed"), "段は Landed");
-    assert_eq!(detection_details(&run.state, &run.id), [SPAWNED_DETAIL], "返った時点: spawned 1 件・終えた語 0 件");
-    fs::write(run.repo.join(".git").join(LANDED_RELEASE), "").expect("解放の file を置ける");
-    await_detection_child(&run.state, &run.id);
-    assert_eq!(
-        detection_details(&run.state, &run.id),
-        [SPAWNED_DETAIL, "detection:measured"],
-        "解放の後: 子が measured を 1 件記す"
-    );
-    assert_child_measured_the_landed_commit(&run);
-    clean(&[&run.repo, &run.state]);
-}
-
 /// (k) の解放の後の面: `landed` を持つ record 1 本（stub の判定行・rc 0）・stub は子の 1 回だけで子の `--base` は
 /// 着地した commit の親・gate の ③ の record は無い（gate は ③ を撃たない・設計 gate-cost.md §44 形 (9)）・台帳の見張り 0 件。
 fn assert_child_measured_the_landed_commit(run: &LandedRun) {
@@ -3189,78 +2282,6 @@ fn assert_child_measured_the_landed_commit(run: &LandedRun) {
     assert!(crate::toolbox_ledger_record_names(&run.state).is_empty(), "台帳 client を起こさない");
 }
 
-/// (k) の対: land が受けた `--rules` は子へ同じ値で渡る。遮断器を閉じる `--rules`（行 ak の (d) と同じ形）で land すると、
-/// 主実測は同じ木で 1 本も撃たずに着地し、子は stub を呼ばず `unmeasured=host-closed` の record 1 本を残す（渡さない変異は
-/// 埋め込みの規則で撃って measured になる）。
-#[test]
-fn pipe_detection_after_landing_child_reads_the_rules_land_received() {
-    let run = landed_gated(&landed_crates_case());
-    let slots = SlotFixture { runnable_per_core: 0, blocked_per_core: 0, ..default_slots() };
-    let rules = write_rules_full(&run.state, "rules-landed-busy.toml", (1, 1_000_000), FOLLOW_RETRIES, slots);
-    let (repo_arg, state_arg, rules_arg) =
-        (run.repo.display().to_string(), run.state.display().to_string(), rules.display().to_string());
-    let out = run_pipe_with_path(
-        &landed_path(&run.state),
-        &["land", "--run", &run.id, "--repo", &repo_arg, "--state-dir", &state_arg, "--rules", &rules_arg],
-    );
-    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land は rc 0: {} / {}", stdout_of(&out), stderr_of(&out));
-    await_detection_child(&run.state, &run.id);
-    assert_eq!(
-        detection_details(&run.state, &run.id),
-        [SPAWNED_DETAIL, "detection:unmeasured"],
-        "子は同じ規則の遮断器で測れない"
-    );
-    assert!(landed_calls(&run.repo).is_empty(), "stub は 1 回も呼ばれない（gate は ③ を撃たず・子は遮断器で撃たない）");
-    let (_, after) = split_landed(main_rows(&run.state, &run.id));
-    assert_eq!(after.len(), 1, "landed を持つ record は 1 本: {after:?}");
-    let row = after.first().cloned().unwrap_or_default();
-    assert_eq!(value_of(&row, "unmeasured"), "host-closed", "記録は遮断器の理由: {row:?}");
-    clean(&[&run.repo, &run.state]);
-}
-
-/// (l) 検出線を宣言しない便の land は `detection:` で始まる detail を 1 件も書かない（Landed の detail は着地そのものの行
-/// だけの従来の並び）。
-#[test]
-fn pipe_detection_after_landing_undeclared_run_writes_no_detection_detail() {
-    let (repo, state) = repo_with_state();
-    let design = write_contract(&repo, &[], &[]);
-    let id = gated_pass(&repo, &state, &design, &state.join("lens-ran"));
-    let out = land_once(&repo, &state, &id);
-    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "land は rc 0: {}", stderr_of(&out));
-    assert!(detection_details(&state, &id).is_empty(), "detection の detail は無い: {:?}", trail(&state, &id));
-    let sha = git(&repo, &["rev-parse", "refs/heads/main"]);
-    let landed: Vec<String> = trail(&state, &id)
-        .into_iter()
-        .filter(|(kind, stage, _)| *kind == EventKind::RunDone && *stage == Some(Stage::Landed))
-        .filter_map(|(_, _, detail)| detail)
-        .collect();
-    assert_eq!(landed, [format!("sha:{sha} main:{sha}")], "Landed の detail は着地の 1 件だけ");
-    assert!(split_landed(main_rows(&state, &id)).1.is_empty(), "landed を持つ record は無い");
-    clean(&[&repo, &state]);
-}
-
-/// (m) main-red で終えた便は `finish` に届かない＝`detection:spawned` を持たず、`landed` を持つ record も無い。
-#[test]
-fn pipe_detection_after_landing_main_red_run_spawns_nothing() {
-    let (repo, state) = repo_with_state();
-    commit_detection_vessel(&repo, DETECTION_COUNT);
-    // 1 回目（gate）は緑・2 回目（主実測）は赤の契約 verify。主実測を撃つ周にするため verdict の木を main の木へ差し替える。
-    let design = write_contract(&repo, &["verify"], &[r#"verify = ["sh verify-once.sh"]"#]);
-    let id = gated_pass(&repo, &state, &design, &state.join("lens-ran"));
-    super::land::make_tree_differ(&repo, &state, &id, "refs/heads/main");
-    let out = land_once(&repo, &state, &id);
-    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "main が赤い land は rc 1: {}", stderr_of(&out));
-    assert_eq!(
-        stages(&state, &id).last().cloned(),
-        Some((Some(Stage::Failed), Some("main-red".to_owned()))),
-        "終端の理由は main-red: {:?}",
-        stages(&state, &id)
-    );
-    assert!(detection_details(&state, &id).is_empty(), "spawned を持たない: {:?}", trail(&state, &id));
-    assert!(split_landed(main_rows(&state, &id)).1.is_empty(), "landed を持つ record は無い");
-    clean(&[&repo, &state]);
-}
-
 /// 便の `Gated` event の detail の並び（測り直しの履歴）。
 fn gated_details(state: &Path, id: &str) -> Vec<String> {
     events(state)
@@ -3268,32 +2289,6 @@ fn gated_details(state: &Path, id: &str) -> Vec<String> {
         .filter(|event| event.run == id && event.stage == Some(Stage::Gated))
         .filter_map(|event| event.detail)
         .collect()
-}
-
-/// (7) `detection-verify` の行にも共通 verify と**同じ検査**を掛け、同じ理由の字面で rc 1 に断る。
-#[test]
-fn pipe_detection_intake_refuses_unfit_lines() {
-    let (repo, state) = repo_with_state();
-    let path = write_contract(&repo, &[], &[]);
-    for (detection, want) in [
-        // `cargo` は上限には在るが、この repo の宣言の allowlist には無い。
-        (r#"["cargo xtask mutants-diff --base {base}"]"#.to_owned(), "先頭 command cargo が"),
-        ("[\"git --version\u{7}\"]".to_owned(), "制御文字"),
-        (r#"["git rev-parse --git-dir ../../../etc"]"#.to_owned(), "repo の外"),
-    ] {
-        commit_detection_vessel(&repo, &detection);
-        let out = intake_raw(&repo, &state, &path, "b");
-        let err = stderr_of(&out);
-        assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{detection} は rc 1: {err}");
-        assert!(err.contains(want), "{detection} の理由は共通 verify と同じ字面 {want}: {err}");
-        assert!(err.contains("detection-verify"), "どの key の行かを名指す: {err}");
-    }
-    assert_eq!(event_count(&state), 0, "断った周は event を書かない");
-    // 弁別: 検査を通る行なら同じ宣言の形で便が起きる（key そのものを断っているのではない）。
-    commit_detection_vessel(&repo, DETECTION_COUNT);
-    let ok = intake_raw(&repo, &state, &path, "b");
-    assert_eq!(ok.status.code(), Some(i32::from(RC_OK)), "検査を通る検出線は読める: {}", stderr_of(&ok));
-    clean(&[&repo, &state]);
 }
 
 // ---- 判定行の記録（設計 gate-cost.md §5.1・`s2-07l.206`・接頭辞 `pipe_record_`）--------------------
@@ -3722,35 +2717,6 @@ fn raw_diff_len(repo: &Path, id: &str) -> usize {
         .len()
 }
 
-/// (i) 純移動の便は lens の入力が**要約**になる: 判定行 `lens-input=summary bytes=<要約の byte>`・`lens-input.txt` が
-/// 在り先頭行が名乗る・fake lens が読んだ stdin は残した本文そのもの・verdict が読める・`diff_bytes` は diff の byte
-/// のまま・stderr に理由の行は出ない。
-#[test]
-fn pipe_gate_move_proof_pure_move_sends_summary() {
-    let (repo, state, id) = move_run(&[("lib.rs", MOVE_BASE_LIB)], &move_head());
-    let seen = state.join("lens-stdin");
-    let out = gate_once(&repo, &state, &id, Some(&recording_lens(&seen)));
-    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "PASS: {}", stderr_of(&out));
-    let line = stdout_of(&out);
-    assert_eq!(token_of(&line, "lens-input="), "summary", "判定行: {line}");
-    let kept = fs::read_to_string(lens_input_path(&state, &id)).expect("lens-input.txt が在る");
-    assert_eq!(kept.lines().next(), Some(SUMMARY_HEADLINE), "先頭行が名乗る: {kept}");
-    let received = fs::read_to_string(&seen).expect("lens が読んだ stdin を読める");
-    assert_eq!(received, kept, "lens が読んだ stdin は残した本文そのもの");
-    assert_eq!(received.lines().next(), Some(SUMMARY_HEADLINE), "stdin の先頭行も名乗る");
-    assert_eq!(token_of(&line, "bytes="), kept.len().to_string(), "bytes= は要約の byte: {line}");
-    let pairs = verdict_pairs(&state, &id);
-    assert_eq!(value_of(&pairs, "verdict"), "PASS", "verdict が読める");
-    assert_eq!(value_of(&pairs, "evidence"), "fake", "lens の evidence を写す");
-    assert_eq!(value_of(&pairs, "diff_bytes"), raw_diff_len(&repo, &id).to_string(), "diff_bytes は diff の byte のまま");
-    assert_ne!(value_of(&pairs, "diff_bytes"), kept.len().to_string(), "要約の byte ではない");
-    assert_eq!(stderr_of(&out), "", "純移動の周は理由の行を出さない");
-    assert_summary_moves(&kept);
-    assert_summary_residual(&kept);
-    assert!(!kept.contains("carried markers"), "持ち越した札 0 の周は行を出さない: {kept}");
-    clean(&[&repo, &state]);
-}
-
 /// 要約の中身 (1): 移動元 → 先と本数・動いた item の名・可視性の変化（残った item も動いた item も）。
 fn assert_summary_moves(kept: &str) {
     assert!(kept.contains("src/lib.rs -> src/alpha.rs: items=2 lines="), "移動元 → 先: {kept}");
@@ -3799,37 +2765,6 @@ fn assert_sends_diff_from(base: &[(&str, &str)], head: &[(&str, &str)], reason: 
     clean(&[&repo, &state]);
 }
 
-/// (ii) 本文を 1 行変えた fixture は純移動でなく diff が渡る（`items-differ`）。
-#[test]
-fn pipe_gate_move_proof_body_change_sends_diff() {
-    let changed = MOVE_HEAD_BETA.replace("    3\n", "    4\n");
-    assert_ne!(changed, MOVE_HEAD_BETA, "fixture は本文が 1 行違う");
-    assert_sends_diff(&[("lib.rs", MOVE_HEAD_LIB), ("alpha.rs", MOVE_HEAD_ALPHA), ("beta.rs", &changed)], "items-differ");
-}
-
-/// (iii) 宣言と札とコメント以外の行が残差分に残る fixture も diff（`residual-line`）。
-#[test]
-fn pipe_gate_move_proof_residual_line_sends_diff() {
-    let noisy = MOVE_HEAD_LIB.replace("mod alpha;\n", "#![allow(dead_code)]\nmod alpha;\n");
-    assert_ne!(noisy, MOVE_HEAD_LIB, "fixture は宣言でない行を 1 つ持つ");
-    assert_sends_diff(&[("lib.rs", &noisy), ("alpha.rs", MOVE_HEAD_ALPHA), ("beta.rs", MOVE_HEAD_BETA)], "residual-line");
-}
-
-/// (iv) 宣言だけの fixture（item は 1 つも動かない）は純移動でない（`nothing-moved`）。
-#[test]
-fn pipe_gate_move_proof_zero_moved_items_sends_diff() {
-    let declared = format!("mod alpha;\nmod beta;\n\n{MOVE_BASE_LIB}");
-    assert_sends_diff(&[("lib.rs", &declared), ("alpha.rs", "//! alpha.\n"), ("beta.rs", "//! beta.\n")], "nothing-moved");
-}
-
-/// (v) `// flip-check: retroactive` の札が残差分に在る fixture は diff（lens v2 medium・`foreign-marker`）。
-#[test]
-fn pipe_gate_move_proof_retroactive_marker_sends_diff() {
-    let marked = MOVE_HEAD_BETA.replace("//! beta.\n\n", "//! beta.\n\n// flip-check: retroactive s2-07l.261\n");
-    assert_ne!(marked, MOVE_HEAD_BETA, "fixture は retroactive の札を持つ");
-    assert_sends_diff(&[("lib.rs", MOVE_HEAD_LIB), ("alpha.rs", MOVE_HEAD_ALPHA), ("beta.rs", &marked)], "foreign-marker");
-}
-
 /// 大きい本文を持つ fn（移動すると diff は本文を 2 度運び、要約は名だけを運ぶ）。
 fn big_fn(visibility: &str) -> String {
     let mut body = format!("{visibility}fn big() -> u32 {{\n");
@@ -3838,37 +2773,6 @@ fn big_fn(visibility: &str) -> String {
     }
     body.push_str("    0\n}\n");
     body
-}
-
-/// (vi) 予算の照合は lens に渡す本文の byte で行う: 要約は cap 内・diff は cap 超の fixture が PASS/FAIL の判定へ
-/// 進み INCONCLUSIVE にならず、`verdict.json` の `diff_bytes` は diff の byte（cap 超）のまま。
-#[test]
-fn pipe_gate_move_proof_budget_uses_summary_bytes() {
-    let base_lib = format!("//! big.\n\n{}", big_fn(""));
-    let head_lib = "//! big.\n\nmod alpha;\n".to_owned();
-    let head_alpha = format!("//! alpha.\n\n{}", big_fn("pub(super) "));
-    let (repo, state, id) = move_run(&[("lib.rs", &base_lib)], &[("lib.rs", &head_lib), ("alpha.rs", &head_alpha), ("beta.rs", "//! beta.\n")]);
-    let cap = 4_000;
-    let diff_len = raw_diff_len(&repo, &id);
-    assert!(diff_len > cap, "前提: diff は cap 超（{diff_len} byte）");
-    let rules = write_rules(&repo, "summary-cap.toml", 1, cap as u64);
-    let marker = state.join("lens-ran");
-    let out = gate_with_rules(&repo, &state, &id, &rules, &fake_lens(&marker, &lens_verdict("PASS")));
-    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "判定へ進む: {}", stderr_of(&out));
-    let line = stdout_of(&out);
-    assert_eq!(token_of(&line, "verdict="), "PASS", "{line}");
-    assert_eq!(token_of(&line, "lens-input="), "summary", "{line}");
-    let bytes: usize = token_of(&line, "bytes=").parse().unwrap_or(usize::MAX);
-    assert!(bytes <= cap, "要約は cap 内: {line}");
-    assert!(marker.exists(), "lens を起動した");
-    let pairs = verdict_pairs(&state, &id);
-    assert_eq!(value_of(&pairs, "verdict"), "PASS", "INCONCLUSIVE にならない");
-    assert!(!value_of(&pairs, "evidence").contains("cap"), "cap の理由が無い: {}", value_of(&pairs, "evidence"));
-    assert_eq!(value_of(&pairs, "diff_bytes"), diff_len.to_string(), "diff_bytes は diff の byte のまま");
-    let kept = fs::read_to_string(lens_input_path(&state, &id)).expect("lens-input.txt が在る");
-    assert_eq!(kept.len(), bytes, "bytes= は残した要約の byte");
-    assert!(kept.contains("src/lib.rs -> src/alpha.rs: items=1 lines=123\n  fn big\n"), "{kept}");
-    clean(&[&repo, &state]);
 }
 
 /// (vii) 要約の外形（fixture (i) の `lens-input.txt` の全文・置き場は親の `snapshots/`）。
@@ -3893,48 +2797,6 @@ fn linked(text: &str, path: &str) -> String {
     linked
 }
 
-/// (viii) 移した item の doc コメントの link path だけを書き換えた便（`[`super::one`]` → `[`crate::one`]`）は
-/// 純移動: 判定行 `lens-input=summary`・要約に「コメント行の差」の節（該当 item の名と行数の直後に base 側 `-` /
-/// head 側 `+` の逐語・設計 §25・`s2-07l.377`）・他の面（移動・可視性・stderr）は (i) と同じ。
-#[test]
-fn pipe_gate_move_proof_comment_only_diff_inside_items_sends_summary() {
-    let (base, alpha) = (linked(MOVE_BASE_LIB, "super::one"), linked(MOVE_HEAD_ALPHA, "crate::one"));
-    let (repo, state, id) = move_run(&[("lib.rs", &base)], &[("lib.rs", MOVE_HEAD_LIB), ("alpha.rs", &alpha), ("beta.rs", MOVE_HEAD_BETA)]);
-    let seen = state.join("lens-stdin");
-    let out = gate_once(&repo, &state, &id, Some(&recording_lens(&seen)));
-    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "PASS: {}", stderr_of(&out));
-    let line = stdout_of(&out);
-    assert_eq!(token_of(&line, "lens-input="), "summary", "判定行: {line}");
-    let kept = fs::read_to_string(lens_input_path(&state, &id)).expect("lens-input.txt が在る");
-    assert_eq!(fs::read_to_string(&seen).unwrap_or_default(), kept, "lens が読んだ stdin は残した本文そのもの");
-    assert!(
-        kept.contains("\n## コメント行の差（名: 行数）\nsrc/alpha.rs fn two: 1\n-/// helper two (see [`super::one`]).\n+/// helper two (see [`crate::one`]).\n## 残差分（逐語）\n"),
-        "件数の行の直後に base 側 - / head 側 + の逐語: {kept}"
-    );
-    assert_eq!(kept.matches("helper two").count(), 2, "コメントの字面は - / + の 2 行だけに載る: {kept}");
-    assert_eq!(stderr_of(&out), "", "純移動の周は理由の行を出さない");
-    assert_summary_moves(&kept);
-    assert_summary_residual(&kept);
-    clean(&[&repo, &state]);
-}
-
-/// (ix) 移した item の中に `// flip-check: retroactive` の札を足した便は diff（`foreign-marker`）＝コメント行の除外が
-/// 札まで緩めていない対（(v) の札は残差分・本 fixture の札は fn の本文の中）。
-#[test]
-fn pipe_gate_move_proof_comment_marker_inside_item_sends_diff() {
-    let marked = MOVE_HEAD_ALPHA.replace("    2\n", "    // flip-check: retroactive s2-07l.294\n    2\n");
-    assert_ne!(marked, MOVE_HEAD_ALPHA, "fixture は item の中に retroactive の札を持つ");
-    assert_sends_diff(&[("lib.rs", MOVE_HEAD_LIB), ("alpha.rs", &marked), ("beta.rs", MOVE_HEAD_BETA)], "foreign-marker");
-}
-
-/// (x) コメント行の書き換え + 本文 1 行の書き換えは diff（`items-differ`）＝除外はコメント行だけに閉じる。
-#[test]
-fn pipe_gate_move_proof_comment_and_body_change_sends_diff() {
-    let changed = linked(MOVE_HEAD_ALPHA, "crate::one").replace("    2\n", "    3\n");
-    assert!(changed.contains("    3\n"), "fixture は本文も 1 行違う");
-    assert_sends_diff(&[("lib.rs", MOVE_HEAD_LIB), ("alpha.rs", &changed), ("beta.rs", MOVE_HEAD_BETA)], "items-differ");
-}
-
 // ---- 持ち越しの札（`s2-07l.362`・.361 run 2 = base に元から在る `retroactive` の札が item ごと移り新規と読まれた型）----
 
 /// `two` の本文の中に `// flip-check: retroactive <id>` の札を持つ形（base と HEAD の両側に同じ字面で置く）。
@@ -3942,44 +2804,6 @@ fn carried(text: &str, id: &str) -> String {
     let marked = text.replace("    2\n", &format!("    // flip-check: retroactive {id}\n    2\n"));
     assert_ne!(marked, text, "fixture は two の本文を持つ");
     marked
-}
-
-/// (xi) base の item に元から在る `retroactive` の札を、その item ごと別 file へ移した便は純移動: 判定行
-/// `lens-input=summary`・要約が持ち越した札の本数を 1 行で名乗る（判定行の直前）・札の字面は残差分に載らない
-/// （item の中の行）・他の面（移動・可視性・stderr）は (i) と同じ。
-#[test]
-fn pipe_gate_move_proof_carried_retroactive_marker_sends_summary() {
-    let (base, alpha) = (carried(MOVE_BASE_LIB, "s2-07l.1"), carried(MOVE_HEAD_ALPHA, "s2-07l.1"));
-    let (repo, state, id) = move_run(&[("lib.rs", &base)], &[("lib.rs", MOVE_HEAD_LIB), ("alpha.rs", &alpha), ("beta.rs", MOVE_HEAD_BETA)]);
-    let seen = state.join("lens-stdin");
-    let out = gate_once(&repo, &state, &id, Some(&recording_lens(&seen)));
-    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "PASS: {}", stderr_of(&out));
-    let line = stdout_of(&out);
-    assert_eq!(token_of(&line, "lens-input="), "summary", "判定行: {line}");
-    let kept = fs::read_to_string(lens_input_path(&state, &id)).expect("lens-input.txt が在る");
-    assert_eq!(fs::read_to_string(&seen).unwrap_or_default(), kept, "lens が読んだ stdin は残した本文そのもの");
-    assert!(kept.contains("\ncarried markers: 1\n判定: 名 + 本文の多重集合が一致 "), "持ち越した札の本数を判定行の直前で名乗る: {kept}");
-    assert_eq!(kept.matches("carried markers").count(), 1, "1 行だけ: {kept}");
-    assert!(!kept.contains("retroactive"), "item の中の札の字面は要約に載らない: {kept}");
-    assert_eq!(stderr_of(&out), "", "純移動の周は理由の行を出さない");
-    assert_summary_moves(&kept);
-    assert_summary_residual(&kept);
-    clean(&[&repo, &state]);
-}
-
-/// (xii) 同じ base で HEAD 側の札の id だけを変えた便は diff（`foreign-marker`）＝対は id まで含む字面で取る
-/// （持ち越しを装って別の id の札を足す形を通さない・退行の pin）。
-#[test]
-fn pipe_gate_move_proof_carried_marker_with_a_different_id_sends_diff() {
-    let (base, alpha) = (carried(MOVE_BASE_LIB, "s2-07l.1"), carried(MOVE_HEAD_ALPHA, "s2-07l.2"));
-    assert_sends_diff_from(&[("lib.rs", &base)], &[("lib.rs", MOVE_HEAD_LIB), ("alpha.rs", &alpha), ("beta.rs", MOVE_HEAD_BETA)], "foreign-marker");
-}
-
-/// (xiii) base に在る札を HEAD で落とした便は diff（`foreign-marker`）＝消えた札も対が無い（札を消す変更は純移動でない）。
-#[test]
-fn pipe_gate_move_proof_carried_dropped_marker_sends_diff() {
-    let base = carried(MOVE_BASE_LIB, "s2-07l.1");
-    assert_sends_diff_from(&[("lib.rs", &base)], &move_head(), "foreign-marker");
 }
 
 // ───── lens の口座も器が選ぶ（`s2-07l.412`・設計 account-autonomy.md §15・SRS FR36 / FR33・接頭辞 `pipe_gate_lens_account_`） ─────
@@ -4675,147 +3499,6 @@ fn assert_elide_verbatim(gated: &ElideGate, kept: &str, why: &str) {
     clean(&[&gated.repo, &gated.state]);
 }
 
-/// (a) rename 1 本 + その旧 path を名指す `docs/design/` の md の row 1 行の置換 → lens の stdin に印が在り置換後の row が
-/// 無く、header は残り、通知に `elided=1/2`、`bytes=` は畳んだ本文の byte で生 diff より小さく、`diff_bytes` は生 diff のまま。
-#[test]
-fn pipe_gate_elide_replacement_only_docs_hunk_is_folded() {
-    let base = format!("# notes\n\n{}\n", elide_row(ELIDE_OLD));
-    let head = format!("# notes\n\n{}\n", elide_row(ELIDE_NEW));
-    let gated = elide_gate(&[(ELIDE_NOTES, &base)], &[(ELIDE_NOTES, &head)], true);
-    let added = format!("\n+{}\n", elide_row(ELIDE_NEW));
-    assert!(gated.raw.contains(&added), "前提: 生 diff は置換後の row を持つ: {}", gated.raw);
-    assert!(
-        gated.stdin.contains("\n~ rename の置換だけの hunk（-1/+1 行）を省いた\n"),
-        "hunk の本文は印 1 行: {}",
-        gated.stdin
-    );
-    assert!(!gated.stdin.contains(&added), "置換後の row は lens に渡らない: {}", gated.stdin);
-    assert!(gated.stdin.contains(&format!("+++ b/{ELIDE_NOTES}\n@@ ")), "header は残る: {}", gated.stdin);
-    assert!(gated.stdin.contains(&format!("rename to {ELIDE_NEW}\n")), "rename の header も残る: {}", gated.stdin);
-    assert_eq!(gated.notices.len(), 1, "通知は 1 行: {:?}", gated.notices);
-    assert!(
-        gated.notices.iter().all(|line| line.starts_with("# lens-input=diff reason=") && line.ends_with(" elided=1/2")),
-        "通知に elided=<hunk 数>/<行数>: {:?}",
-        gated.notices
-    );
-    let bytes = token_of(&gated.line, "bytes=");
-    assert_eq!(bytes, gated.stdin.len().to_string(), "bytes= は lens に渡した本文の byte: {}", gated.line);
-    assert!(gated.stdin.len() < gated.raw.len(), "畳んだ本文は生 diff より小さい");
-    let pairs = verdict_pairs(&gated.state, &gated.id);
-    assert_eq!(value_of(&pairs, "diff_bytes"), gated.raw.len().to_string(), "diff_bytes は生 diff の byte のまま");
-    assert_eq!(value_of(&pairs, "verdict"), "PASS", "lens の verdict");
-    clean(&[&gated.repo, &gated.state]);
-}
-
-/// (b) 同じ hunk に path 以外の 1 語の差も在る → 逐語のまま・通知に `elided=` が無い（置換後の一致の歯）。
-#[test]
-fn pipe_gate_elide_one_extra_word_keeps_the_hunk_verbatim() {
-    let base = format!("# notes\n\n{}\n", elide_row(ELIDE_OLD));
-    let worded = elide_row(ELIDE_NEW).replace("the table", "a table");
-    let head = format!("# notes\n\n{worded}\n");
-    let gated = elide_gate(&[(ELIDE_NOTES, &base)], &[(ELIDE_NOTES, &head)], true);
-    assert_elide_verbatim(&gated, &format!("\n+{worded}\n"), "1 語の差");
-}
-
-/// (c) 同じ置換が `.rs` の hunk と `docs/design/` の外の `.md` の hunk に在る → どちらも逐語のまま（path の絞りの歯）。
-#[test]
-fn pipe_gate_elide_code_and_outside_docs_keep_the_hunk_verbatim() {
-    let code = |path: &str| format!("// uses {path}\n");
-    let guide = |path: &str| format!("# guide\n\n{}\n", elide_row(path));
-    let (code_old, code_new) = (code(ELIDE_OLD), code(ELIDE_NEW));
-    let (guide_old, guide_new) = (guide(ELIDE_OLD), guide(ELIDE_NEW));
-    let gated = elide_gate(
-        &[("src/user.rs", &code_old), ("docs/guide.md", &guide_old)],
-        &[("src/user.rs", &code_new), ("docs/guide.md", &guide_new)],
-        true,
-    );
-    assert!(gated.stdin.contains(&format!("\n+// uses {ELIDE_NEW}\n")), ".rs の hunk は逐語: {}", gated.stdin);
-    assert_elide_verbatim(&gated, &format!("\n+{}\n", elide_row(ELIDE_NEW)), "畳みの面の外");
-}
-
-/// (d) rename の header が無い diff → 置換に見える docs の hunk も逐語で、通知と `bytes=` は従来の字面のまま（回帰の歯）。
-#[test]
-fn pipe_gate_elide_without_rename_keeps_the_former_form() {
-    let base = format!("# notes\n\n{}\n", elide_row(ELIDE_OLD));
-    let head = format!("# notes\n\n{}\n", elide_row(ELIDE_NEW));
-    let gated = elide_gate(&[(ELIDE_NOTES, &base)], &[(ELIDE_NOTES, &head)], false);
-    assert_elide_verbatim(&gated, &format!("\n+{}\n", elide_row(ELIDE_NEW)), "rename 無し");
-}
-
-/// (e) 生 diff は cap 超・畳んだ本文は cap 内 → INCONCLUSIVE でなく lens が呼ばれ verdict は lens の値
-/// （本節の出所の形）・`diff_bytes` は生 diff の byte（cap 超）のまま。
-#[test]
-fn pipe_gate_elide_folded_body_within_cap_calls_the_lens() {
-    let rows = |path: &str| -> String {
-        (0..80)
-            .map(|number| format!("| row {number:02} names `{path}` and carries enough words to weigh on the cap |\n"))
-            .collect()
-    };
-    let (base, head) = (rows(ELIDE_OLD), rows(ELIDE_NEW));
-    let (repo, state, id) = elide_run(&[(ELIDE_NOTES, &base)], &[(ELIDE_NOTES, &head)], true);
-    let cap = 4_000;
-    let raw = raw_diff(&repo, &id);
-    assert!(raw.len() > cap, "前提: 生 diff は cap 超（{} byte）", raw.len());
-    let rules = write_rules(&repo, "elide-cap.toml", 1, cap as u64);
-    let seen = state.join("lens-stdin");
-    let out = gate_with_rules(&repo, &state, &id, &rules, &recording_lens(&seen));
-    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "判定へ進む: {}", stderr_of(&out));
-    let line = stdout_of(&out);
-    assert_eq!(token_of(&line, "verdict="), "PASS", "{line}");
-    let bytes: usize = token_of(&line, "bytes=").parse().unwrap_or(usize::MAX);
-    assert!(bytes <= cap, "畳んだ本文は cap 内: {line}");
-    let received = fs::read_to_string(&seen).unwrap_or_default();
-    assert_eq!(received.len(), bytes, "lens を起動し、畳んだ本文を渡した");
-    assert!(received.contains("（-80/+80 行）を省いた\n"), "80 row の hunk を畳んだ: {received}");
-    let pairs = verdict_pairs(&state, &id);
-    assert_eq!(value_of(&pairs, "verdict"), "PASS", "INCONCLUSIVE にならない");
-    assert!(!value_of(&pairs, "evidence").contains("cap"), "cap の理由が無い: {}", value_of(&pairs, "evidence"));
-    assert_eq!(value_of(&pairs, "diff_bytes"), raw.len().to_string(), "diff_bytes は生 diff の byte のまま");
-    clean(&[&repo, &state]);
-}
-
-/// (f) rename を含む diff で docs の md の hunk が行の並べ替えだけ（`-X` / context / `+X`・置換が効かない）→ 逐語
-/// （便 161614Z の finding の形・効きと 1 塊の両方を外して初めて落ちる回帰の歯）。
-#[test]
-fn pipe_gate_elide_reorder_only_hunk_is_verbatim() {
-    let base = "X plain line\nC context line\n";
-    let head = "C context line\nX plain line\n";
-    let gated = elide_gate(&[(ELIDE_NOTES, base)], &[(ELIDE_NOTES, head)], true);
-    assert!(
-        gated.raw.contains("\n-X plain line\n C context line\n+X plain line\n"),
-        "前提: 並べ替えの hunk の形: {}",
-        gated.raw
-    );
-    assert_elide_verbatim(&gated, "\n+X plain line\n", "並べ替え");
-}
-
-/// (g) 置換が効く行と効かない行が同じ 1 塊に混在（`-row(旧)` `-X` / `+row(新)` `+X`・X は末尾の改行の有無だけが違う）
-/// → 逐語（各行の置換の効きの歯）。
-#[test]
-fn pipe_gate_elide_mixed_effect_hunk_is_verbatim() {
-    let base = format!("{}\nX tail line", elide_row(ELIDE_OLD));
-    let head = format!("{}\nX tail line\n", elide_row(ELIDE_NEW));
-    let gated = elide_gate(&[(ELIDE_NOTES, &base)], &[(ELIDE_NOTES, &head)], true);
-    let shape = format!(
-        "\n-{}\n-X tail line\n\\ No newline at end of file\n+{}\n+X tail line\n",
-        elide_row(ELIDE_OLD),
-        elide_row(ELIDE_NEW)
-    );
-    assert!(gated.raw.contains(&shape), "前提: 効く行と効かない行の 1 塊: {}", gated.raw);
-    assert_elide_verbatim(&gated, "\n+X tail line\n", "効きの混在");
-}
-
-/// (h) `-` の各行は置換で変わるが `-` と `+` の間に context が在る（置換を伴う行の移動）→ 逐語（1 塊の歯）。
-#[test]
-fn pipe_gate_elide_context_between_minus_and_plus_is_verbatim() {
-    let base = format!("{}\nC context line\n", elide_row(ELIDE_OLD));
-    let head = format!("C context line\n{}\n", elide_row(ELIDE_NEW));
-    let gated = elide_gate(&[(ELIDE_NOTES, &base)], &[(ELIDE_NOTES, &head)], true);
-    let shape = format!("\n-{}\n C context line\n+{}\n", elide_row(ELIDE_OLD), elide_row(ELIDE_NEW));
-    assert!(gated.raw.contains(&shape), "前提: - と + の間に context: {}", gated.raw);
-    assert_elide_verbatim(&gated, &format!("\n+{}\n", elide_row(ELIDE_NEW)), "context を挟む移動");
-}
-
 // ───── 段ごとの対と移動で空になった dir の対（設計 gate-cost.md §42・行 ai・接頭辞 `pipe_gate_elide_` のまま） ─────
 
 /// path を名指す 2 本目の row（[`elide_row`] と字面が違う・改行なし）。
@@ -4843,34 +3526,6 @@ fn assert_elide_folded(gated: &ElideGate, kept: &str, mark: &str, notice: &str) 
     assert_eq!(token_of(&gated.line, "bytes="), gated.stdin.len().to_string(), "bytes= は畳んだ本文の byte");
     assert_eq!(value_of(&verdict_pairs(&gated.state, &gated.id), "diff_bytes"), gated.raw.len().to_string());
     clean(&[&gated.repo, &gated.state]);
-}
-
-/// (i) 2 段の hunk（`-A` / `+A'` / context / `-B` / `+B'`・どちらの段も置換だけ）→ 畳む・通知に `elided=1/4`（段の切り分けの歯）。
-#[test]
-fn pipe_gate_elide_two_stage_hunk_is_folded() {
-    let doc = |path: &str| format!("{}\nC context line\n{}\n", elide_row(path), elide_next_row(path));
-    let gated = elide_gate(&[(ELIDE_NOTES, &doc(ELIDE_OLD))], &[(ELIDE_NOTES, &doc(ELIDE_NEW))], true);
-    let shape = format!(
-        "\n-{}\n+{}\n C context line\n-{}\n+{}\n",
-        elide_row(ELIDE_OLD),
-        elide_row(ELIDE_NEW),
-        elide_next_row(ELIDE_OLD),
-        elide_next_row(ELIDE_NEW)
-    );
-    assert!(gated.raw.contains(&shape), "前提: 1 つの hunk に 2 段: {}", gated.raw);
-    let kept = format!("\n+{}\n", elide_next_row(ELIDE_NEW));
-    assert_elide_folded(&gated, &kept, "-2/+2", " elided=1/4");
-}
-
-/// (j) 段の本数が違う（`-A` / `-B` / `+A'`・どちらの `-` も置換で変わる）→ 逐語（列の相等で落ちることを固定する回帰の歯）。
-#[test]
-fn pipe_gate_elide_stage_count_mismatch_is_verbatim() {
-    let base = format!("{}\n{}\n", elide_row(ELIDE_OLD), elide_next_row(ELIDE_OLD));
-    let head = format!("{}\n", elide_row(ELIDE_NEW));
-    let gated = elide_gate(&[(ELIDE_NOTES, &base)], &[(ELIDE_NOTES, &head)], true);
-    let shape = format!("\n-{}\n-{}\n+{}\n", elide_row(ELIDE_OLD), elide_next_row(ELIDE_OLD), elide_row(ELIDE_NEW));
-    assert!(gated.raw.contains(&shape), "前提: -2/+1 の段: {}", gated.raw);
-    assert_elide_verbatim(&gated, &format!("\n+{}\n", elide_row(ELIDE_NEW)), "段の本数の違い");
 }
 
 /// 移動の歯の便を Implemented まで通す: base の file 群と `moves` の旧 path（中身は file ごとに違う）を commit し、runner は
@@ -4945,43 +3600,3 @@ fn elide_moves_gate(base: &[(&str, &str)], head: &[(&str, &str)], moves: &[(&str
 
 /// 移動の歯の rename: `tests/` 配下の file 1 本を boundary 側の同じ相対 path へ。
 const ELIDE_TESTS_MOVE: (&str, &str) = ("tests/gate.rs", "boundary/tests/gate.rs");
-
-/// (k) HEAD に `tests/` 配下の path が無く、docs の行が `tests/` の dir だけを名指す置換 → 畳む（dir の対の導出の歯）。
-#[test]
-fn pipe_gate_elide_emptied_dir_replacement_is_folded() {
-    let (base, head) = (format!("{}\n", elide_dir_row("tests")), format!("{}\n", elide_dir_row("boundary/tests")));
-    let gated = elide_moves_gate(&[(ELIDE_NOTES, &base)], &[(ELIDE_NOTES, &head)], &[ELIDE_TESTS_MOVE]);
-    let listed = git(&worktree_of(&gated.repo, &gated.id), &["ls-tree", "-r", "--name-only", "HEAD", "tests"]);
-    assert_eq!(listed, "", "前提: HEAD の tests/ 配下に path が無い");
-    let kept = format!("\n+{}\n", elide_dir_row("boundary/tests"));
-    assert_elide_folded(&gated, &kept, "-1/+1", " elided=1/2");
-}
-
-/// (l) (k) と同じで HEAD に `tests/` 配下の path が 1 つ残る → 逐語（空の条件の歯・dir の対を足さない）。
-#[test]
-fn pipe_gate_elide_dir_with_a_remaining_path_is_verbatim() {
-    let (base, head) = (format!("{}\n", elide_dir_row("tests")), format!("{}\n", elide_dir_row("boundary/tests")));
-    let gated = elide_moves_gate(
-        &[(ELIDE_NOTES, &base), ("tests/keep.rs", "// stays under tests\n")],
-        &[(ELIDE_NOTES, &head)],
-        &[ELIDE_TESTS_MOVE],
-    );
-    let listed = git(&worktree_of(&gated.repo, &gated.id), &["ls-tree", "-r", "--name-only", "HEAD", "tests"]);
-    assert_eq!(listed, "tests/keep.rs", "前提: HEAD の tests/ 配下に 1 本残る");
-    assert_elide_verbatim(&gated, &format!("\n+{}\n", elide_dir_row("boundary/tests")), "配下に path が残る dir");
-}
-
-/// (m) (k) と同じで `tests/` 配下のもう 1 本の rename が別の dir へ行く → 逐語（一貫の条件の歯）。もう 1 本は file 名も
-/// 変える（それ自身から `tests` の対が導かれない＝一貫の条件だけが `tests` の対を塞ぐ形）。
-#[test]
-fn pipe_gate_elide_dir_whose_renames_diverge_is_verbatim() {
-    let (base, head) = (format!("{}\n", elide_dir_row("tests")), format!("{}\n", elide_dir_row("boundary/tests")));
-    let gated = elide_moves_gate(
-        &[(ELIDE_NOTES, &base)],
-        &[(ELIDE_NOTES, &head)],
-        &[ELIDE_TESTS_MOVE, ("tests/other.rs", "elsewhere/renamed.rs")],
-    );
-    let listed = git(&worktree_of(&gated.repo, &gated.id), &["ls-tree", "-r", "--name-only", "HEAD", "tests"]);
-    assert_eq!(listed, "", "前提: HEAD の tests/ 配下に path が無い（空の条件は満たす）");
-    assert_elide_verbatim(&gated, &format!("\n+{}\n", elide_dir_row("boundary/tests")), "配下の rename が別の dir へ行く");
-}
