@@ -11,7 +11,7 @@
   - 行き先の無い doc link が `crates/scribe2/src/seat/mod.rs` に 6 本（消えた `meter` / `externalize` / `consume` を指す）。
   - 今は断られる案内: `crates/scribe2/src/help.rs` の seat の頁の examples が `--role planner`（役割は orchestrator 1 つだけ・`crates/scribe2/src/seat/role.rs`）。
   - 消えた役割の名が lens の prompt に残る: `crates/scribe2/src/headless/lens.txt` の裁定の節の見出しと本文が「planner の回答」（外形の snapshot と e2e の定数が同じ字面を持つ）。
-  - 名を迂回する字面: build 元 commit の compile 時の env の名 `SCRIBE2_BUILD_COMMIT` が core と境界 crate と e2e の 12 site に literal で在る（憲法 C2.2 は env の接頭辞を NAME から導くと定める・`crates/scribe2/build.rs` の doc が literal を限界として認めている）。
+  - 名を迂回する字面: build 元 commit の compile 時の env の名 `SCRIBE2_BUILD_COMMIT` が core と境界 crate と e2e の `env!` 13 site に literal で在る（憲法 C2.2 は env の接頭辞を NAME から導くと定める・`crates/scribe2/build.rs` の doc が literal を限界として認めている）。
 
 ## 2. 形（契約表の行 a〜c・1 つずつ歯が測る・done と 1:1）
 
@@ -26,6 +26,9 @@
    - 残すもの: 起動・立て直し・停止が共有する `REASON_` の残り・`WHO_LAUNCH`・`HOLE`・rules 行 `seat.cycle_*`。
 2. **行 b — lens の prompt から消えた役割の名を外す**: 裁定の節の見出しを「便の質問への回答」の語に、本文の「回答で planner が認めた形」を「回答で認めた形」に替える。節の位置・中身（裁定の対の逐語）・無いときの「（裁定なし）」は不変。doc comment の同じ語も揃える。
 3. **行 c — build 元 commit を名の無い形で焼く**: build script は値を compile 時の env ではなく build の出力 dir の 1 file に書き、core が `include_str!` で 1 つの pub const に読む。core・境界 crate・e2e の全 site はその const を読み、env の名の literal は repo から消える。値の形（`<sha12>` / `<sha12>+dirty` / `unknown`）と測り方（HEAD と作業木の汚れ・再走の母集団）は不変。境界 crate は build script を持たなくなる（値は core の const を読む）。
+   - census（verified・main 4f60266・`git grep -w SCRIBE2_BUILD_COMMIT` を crates の全 file に comment 込みで撃った・17 行）: `env!` で読む site は 13 で、core の src に 3（`crates/scribe2/src/account/consumers.rs` 1・`crates/scribe2/src/hook/mod.rs` 1・`crates/scribe2/src/pipe/land/finish.rs` 1）、境界 crate の src に 4（`crates/scribe2-boundary/src/main.rs` の version の行 1 と歯の置換 3）、e2e に 6（`crates/scribe2-boundary/tests/e2e/main.rs` 4・`crates/scribe2-boundary/tests/e2e/seat.rs` 1・`crates/scribe2-boundary/tests/e2e/hook.rs` 1）。残る 4 行は `crates/scribe2/build.rs` の名の定数 `ENV_NAME` と module の doc の 1 行、`crates/scribe2-boundary/src/main.rs` と `crates/scribe2-boundary/tests/e2e/seat.rs` の doc の各 1 行。字面を持つ file はこの 8 つで、const の置き場 `crates/scribe2/src/name.rs` と build script の宣言の `crates/scribe2-boundary/Cargo.toml` を足した 10 file が行 c の write-set の 10 項目（docs を除く）と一致する。字面は write-set の外に 0 件。
+   - 境界 crate の build script の宣言の今の形: `crates/scribe2-boundary/Cargo.toml` の `[package]` の `build = "../scribe2/build.rs"` が core の build script を共有で指す（境界 crate の下に自前の build script は無い）。同じ file の頭の comment もこの共有を説明する。行 c はこの `build =` の行と comment の共有の説明を消し、境界 crate の下に自前の build script も作らない。e2e（境界 crate の integration test）は依存の core の `pub const` を読む。
+   - 再走の母集団が 1 本の build script で不変な理由: 列挙の `crates/scribe2/build/rerun.rs` は repo root（`rev-parse --show-toplevel`）で `git ls-files` を撃つので、core の build script だけで境界 crate の tracked file も母集団に入る。汚れの測り方（`git status --porcelain --untracked-files=no`）も作業木の全体を見る。build script が再走すると core が作り直され、依存する境界 crate も作り直される。
 
 ## 3. 触らない
 
@@ -47,7 +50,7 @@
 
 - 行 a（`crates/scribe2/src/help.rs` の歯の module・`help_table_role_` 接頭辞）: help の全頁の examples に現れる `--role <語>` の語が全部、席の役割の解き手で解ける（base の seat の頁は planner で解けない＝RED）。消した item の不在は lens が diff で確かめる（字面の pin は書かない）。
 - 行 b（e2e `crates/scribe2-boundary/tests/e2e/headless.rs` の `lens_rulings_` と外形 snapshot `lens_prompt_external_form`）: 裁定の節の見出しが新しい語で 1 回だけ在り、裁定の対の逐語がその直後に在り、裁定が無い周は「（裁定なし）」が続く（base の見出しは planner の語＝RED）。
-- 行 c（`crates/scribe2/src/name.rs` の歯の module・`build_commit_` 接頭辞）: core の const が `<sha12>` / `<sha12>+dirty` / `unknown` のどれかの形である（base に const は無い＝RED）。既存の e2e（version の行・binary の世代の記録・consumer の drift）は同じ const を読んで GREEN のまま。
+- 行 c（`crates/scribe2/src/name.rs` の歯の module・`build_commit_` 接頭辞）: core の const が `<sha12>` / `<sha12>+dirty` / `unknown` のどれかの形である（base に const は無い＝RED）。既存の e2e（version の行・binary の世代の記録・consumer の drift）は同じ const を読んで GREEN のまま。env の名の字面が crates の下に残らないことと境界 crate の `build =` の行の不在は、lens が diff と §2 の census の 13 site で確かめる（`build_commit_` は値の形だけを測り、旧い `env!` の形でも GREEN になりうるので、字面の pin の代わりに census を材料にする）。
 
 ## 6. 後続（行は本設計の着地の後に同じ doc へ足す）
 
@@ -86,5 +89,5 @@ section = "2"
 write-set = ["crates/scribe2/build.rs", "crates/scribe2/src/name.rs", "crates/scribe2/src/account/consumers.rs", "crates/scribe2/src/hook/mod.rs", "crates/scribe2/src/pipe/land/finish.rs", "crates/scribe2-boundary/Cargo.toml", "crates/scribe2-boundary/src/main.rs", "crates/scribe2-boundary/tests/e2e/main.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "crates/scribe2-boundary/tests/e2e/hook.rs", "docs/design/carry-prep.md"]
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail build_commit_"]
 size = "S"
-done = "(1) build script は値（<sha12> / <sha12>+dirty / unknown・測り方と再走の母集団は不変）を cargo の出力 dir の 1 file に書き、compile 時の env を出さない (2) core の name.rs に pub const BUILD_COMMIT が在り include_str! でその file を読み、歯 build_commit_ が値の 3 つの形のどれかであることを測る (3) core・境界 crate の src・e2e の全 site が BUILD_COMMIT を読み、SCRIBE2_BUILD_COMMIT の字面が crates の下に 0 件 (4) 境界 crate の Cargo.toml は build script を持たない (5) version の行・binary の世代の記録・consumer の drift の既存の歯は同じ値で GREEN のまま"
+done = "(1) build script は値（<sha12> / <sha12>+dirty / unknown・測り方と再走の母集団は不変）を cargo の出力 dir の 1 file に書き、compile 時の env を出さない (2) core の name.rs に pub const BUILD_COMMIT が在り include_str! でその file を読み、歯 build_commit_ が値の 3 つの形のどれかであることを測る (3) core の src 3 site（account/consumers.rs・hook/mod.rs・pipe/land/finish.rs）・境界 crate の src/main.rs 4 site・e2e 6 site（main.rs 4・seat.rs 1・hook.rs 1）の計 13 site が BUILD_COMMIT を読み、build.rs の名の定数と doc を含めて SCRIBE2_BUILD_COMMIT の字面が crates の下に 0 件 (4) 境界 crate の Cargo.toml は core の build script を共有で指す build = の行と、その共有を説明する comment を持たず、境界 crate の下に自前の build script も無い (5) version の行・binary の世代の記録・consumer の drift の既存の歯は同じ値で GREEN のまま"
 <!-- contracts:end -->
