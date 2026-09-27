@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="generator" content="folio ADR-pack assembler (folio-bwc / instance#2) — deterministic structure, prose slots unfilled">
-<title>待ちの席へ裁定の指し示しを送る狭い口を開ける — seat deliver は裁定の id 1 つだけを受け、 器の雛形の 1 行を管理 tick と同じ門で待ちの席へ送り、 任意の文字列は運ばない (ADR-0045 の注入の口の削除を部分 supersede)</title>
+<title>待ちの席へ裁定の指し示しを送る狭い口を開ける — seat deliver は裁定面の記帳 id 1 つだけを受け、 指し示しの雛形の 1 行を管理 tick と同じ門で待ちの席へ送り、 送る行に入る外からの値は記帳 id だけにする (ADR-0045 の注入の口の削除を部分 supersede)</title>
 <style>
 /* ===========================================================================
    folio human-layer design system — core.css (S3 / folio-8oc プロトタイプ)
@@ -447,7 +447,7 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 .ss-row{margin:3px 0}.ss-row .ss-k{font-weight:700;color:var(--ink-soft);font-size:12px;margin-right:6px}
 
 </style>
-<meta name="folio-version" content="0.1.0">
+<meta name="folio-version" content="0.2.0">
 <script type="application/ld+json">
 {
   "@context": {
@@ -462,8 +462,8 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
       "@id": "./README.html"
     }
   ],
-  "dc:title": "待ちの席へ裁定の指し示しを送る狭い口を開ける — seat deliver は裁定の id 1 つだけを受け、 器の雛形の 1 行を管理 tick と同じ門で待ちの席へ送り、 任意の文字列は運ばない (ADR-0045 の注入の口の削除を部分 supersede)",
-  "folio:version": "0.1.0",
+  "dc:title": "待ちの席へ裁定の指し示しを送る狭い口を開ける — seat deliver は裁定面の記帳 id 1 つだけを受け、 指し示しの雛形の 1 行を管理 tick と同じ門で待ちの席へ送り、 送る行に入る外からの値は記帳 id だけにする (ADR-0045 の注入の口の削除を部分 supersede)",
+  "folio:version": "0.2.0",
   "folio:stakeholders": [
     "Developer",
     "AI Agent",
@@ -507,74 +507,75 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 <div class="page" data-component="requirement-type-color-tokens">
 <header data-component="doc-cover-band">
 <p class="cover-eyebrow"><span class="doc-type">設計判断記録 (ADR)</span> <span>scribe2 — 裁定の指し示しの口</span></p>
-<h1>待ちの席へ裁定の指し示しを送る狭い口を開ける — seat deliver は裁定の id 1 つだけを受け、 器の雛形の 1 行を管理 tick と同じ門で待ちの席へ送り、 任意の文字列は運ばない (ADR-0045 の注入の口の削除を部分 supersede)</h1>
-<p class="cover-sub">別の project の裁定面が持ち主の裁定を記帳しても、 待っている席は次の管理 tick の合図まで気づかない。 ADR-0045 は席の入力欄へ任意の文を送る口 (seat inject) を消した。 本 ADR は、 裁定の id だけを受けて器の雛形の 1 行を送る狭い口を開け、 席どうしの連絡の経路にはしない形を決める。</p>
-<div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">この記録で「器」は scribe2 の本体、 「席」は人と AI が話す 1 つの session、 「裁定面」は別の project が持つ、 持ち主が裁定を書き込む画面と server です。 持ち主が裁定を書き込んでも、 待っている席は次の定期の合図まで気づきません。 器は以前、 席の入力欄へ好きな文を送る口 (seat inject) を消し、 席どうしが連絡し合う経路を断ちました。 この記録は、 裁定の番号 (id) を 1 つだけ受けて「裁定が届いた」の決まった形の 1 行を送る狭い口 (seat deliver) を開け、 好きな文は運ばない形を決めます。 送る前の確かめは定期の合図と同じで、 考え中の席には送りません。 持ち主は 2026-09-27 に口を開けることを裁定しました。</p></div></div>
-<div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">accepted</span></span><span class="m"><span class="k">選択肢</span><span class="v">4件 (OPT1–OPT4)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 3 / トレードオフ 3</span></span><span class="m"><span class="k">版</span><span class="v">v0.1.0 / 2026-09-27</span></span></div>
+<h1>待ちの席へ裁定の指し示しを送る狭い口を開ける — seat deliver は裁定面の記帳 id 1 つだけを受け、 指し示しの雛形の 1 行を管理 tick と同じ門で待ちの席へ送り、 送る行に入る外からの値は記帳 id だけにする (ADR-0045 の注入の口の削除を部分 supersede)</h1>
+<p class="cover-sub">別の project の裁定面が持ち主の裁定を書き込んでも、 待っている席は次の管理 tick の合図まで気づかない。 ADR-0045 は席の入力欄へ任意の文を送る口 (seat inject) を消した。 本 ADR は、 裁定面の記帳 id 1 つだけを受けて指し示しの雛形の 1 行を送る狭い口を開け、 席どうしの連絡の経路にはしない形を決める。</p>
+<div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">この記録で「器」は scribe2 の本体、 「席」は人と AI が話す 1 つの session、 「裁定面」は別の project が持つ、 持ち主が裁定を書き込む画面と server です。 持ち主が裁定を書き込んでも、 待っている席は次の定期の合図まで気づきません。 器は以前、 席の入力欄へ好きな文を送る口 (seat inject) を消し、 席どうしが連絡し合う経路を断ちました。 この記録は、 裁定面が裁定に付けた識別子 (裁定面の記帳 id) を 1 つだけ受けて「裁定が届いた」の決まった形の 1 行を送る狭い口 (seat deliver) を開け、 送る行に入る外からの値をその 1 語だけにする形を決めます。 送る前の確かめは定期の合図と同じで、 考え中の席には送りません。 この記録は要件 FR79 (裁定の指し示し) の根拠になり、 FR44 (席間の連絡の廃止) の差し込みの列に 1 つ足しても連絡の経路にならないことを主張し、 ADR-0045 の注入の口の削除を一部だけ置き換えます。 持ち主は 2026-09-27 に口を開けることを裁定しました。</p></div></div>
+<div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">accepted</span></span><span class="m"><span class="k">選択肢</span><span class="v">4件 (OPT1–OPT4)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 3 / トレードオフ 4</span></span><span class="m"><span class="k">版</span><span class="v">v0.2.0 / 2026-09-27</span></span></div>
 <div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>FR79・FR44</b></div>
 <div data-component="approval-block">
 <div class="sign"><span class="role">裁定 (user)</span><span class="who">user</span><span class="when">裁定 id user 2026-09-26T15:16Z (口の形 = 入力欄の門を通す送達の薄い包み・席が考え中なら断る) と user 2026-09-27T00:51Z (口を開ける・用途は裁定が届いたことの 1 行の指し示しだけ)。 逐語は台帳にだけ在る</span><span class="stamp self">裁定済</span></div>
-<div class="sign"><span class="role">設計 (orchestrator)</span><span class="who">orchestrator</span><span class="when">2026-09-27 草稿 v1 (消した注入の口と不在の歯と要件の限定句を現物で読み、 口を id だけに絞る形を決めた。 拘束する constitution の版 0.5.0)</span><span class="stamp self">作成</span></div>
+<div class="sign"><span class="role">設計 (orchestrator)</span><span class="who">orchestrator</span><span class="when">2026-09-27 草稿 v2 (消した注入の口と不在の歯と要件の限定句を現物で読み、 送る行に入る外からの値を閉じた文字種の 1 語に絞る形を決めた。 拘束する constitution の版 0.5.0)</span><span class="stamp self">作成</span></div>
 </div>
 <div class="reader-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 想定読者: scribe2 の開発 session と user — 器の内部と Rust の専門知識は不要 (専門語はやさしい言葉を併記)</div>
 </header>
 <!-- folio:chrome-toc -->
 <!-- /folio:chrome-toc -->
-<section data-component="chapter-deck-band" class="tint-info"><span class="num">01</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v6m0 0L9 5m3 3l3-3"/><circle cx="12" cy="14" r="6"/></svg> 背景 / なぜこの判断が要るか</span><h2>いま何が問題か (確定方式を決める力学)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-01">なぜこの判断が要るのかを、 経緯 (好きな文を送る口は以前に消した)・事象 (待っている席は裁定の書き込みに気づかない)・機序 (好きな文を運ぶ口は席どうしの連絡の経路になる)・憲法と既存の決定の向き・この判断の範囲の 5 つから説明します。 送る仕組みそのもの (入力欄の確かめ・送達の窓) は消えずに残っていて、 席の起動と定期の合図と群の通知が使っています。</p></section>
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">01</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v6m0 0L9 5m3 3l3-3"/><circle cx="12" cy="14" r="6"/></svg> 背景 / なぜこの判断が要るか</span><h2>いま何が問題か (確定方式を決める力学)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-01">なぜこの判断が要るのかを、 経緯 (好きな文を送る口は以前に消した)・事象 (待っている席は裁定の書き込みに気づかない)・機序 (好きな文を運ぶ口は席どうしの連絡の経路になる)・憲法と既存の決定の向き・この判断の範囲の 5 つから説明します。 送る仕組みそのもの (入力欄の確かめ・送達の窓) は消えずに残っていて、 定期の合図・席の起動・群の通知・便の終わりの通知が使っています。</p></section>
 <div class="chapbody">
 <div data-component="adr-context-list">
-<div data-component="adr-context-row"><span class="cxid">CTX1</span><div class="cxbody"><p class="cxh">経緯 — ADR-0045 は席の入力欄へ任意の文を送る口を消した</p><p class="cxd">ADR-0045 は席の役割を orchestrator の 1 つにし、 席が自分を保つために積んだ機構を消した。 消えたものの列に注入の口<span class="term" data-component="plain-language-term-inline" data-term="注入の口">任意の文を送る口</span> (seat inject・任意の文を席の入力欄へ送る subcommand) が在り、 不在は歯が測る。 送達の機構そのもの (入力欄の門・送達の窓・Enter の再送) は残り、 席の起動と管理 tick<span class="term" data-component="plain-language-term-inline" data-term="管理 tick">席を周期で見る仕組み</span> と群の通知が内側で使う。 要件 FR44 は、 器から席の入力欄への差し込みを起動行・打刻の合図・群の通知と退避の合図に限る。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX2</span><div class="cxbody"><p class="cxh">事象 — 待っている席は裁定の記帳に気づかない</p><p class="cxd">消費側の project は、 持ち主が裁定を記帳する画面と server (裁定面<span class="term" data-component="plain-language-term-inline" data-term="裁定面">裁定を書く画面</span>) を持つ。 記帳の後、 席が待っているなら「裁定が届いた」と 1 行知らせたい。 今は外から撃てる口が無く、 席は次の管理 tick の合図 (最短でも黙りの初段) まで気づかない。 席が考え中なら、 席の停止の hook が未読を拾う経路で足りる (消費側の設計)。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX3</span><div class="cxbody"><p class="cxh">機序 — 任意の文を運ぶ口は席どうしの連絡の経路になる</p><p class="cxd">任意の文を受ける口は、 別の席の process からも撃てるので、 ADR-0045 が消した席間の連絡の経路を名前だけ変えて戻すことになる。 逆に、 運べるものが裁定の id 1 つと器の雛形の 1 行だけなら、 席が受け取るのは「どこを読めばよいか」の指し示しで、 内容は運ばれない。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX4</span><div class="cxbody"><p class="cxh">憲法と既存の決定の向き (本 ADR の解釈)</p><p class="cxd">C17 (決定はしご) から、 送達は既に在る 1 本 (入力欄の門・送達の窓) を使い、 門を二重に持たない。 N2 (散文にしか無い規則を規則として扱わない) から、 「id だけを運ぶ」は口の引数の閉じた列と id の形の検査で構造として守り、 注意書きに頼らない。 ADR-0058 の管理 tick と同じ門 (打刻<span class="term" data-component="plain-language-term-inline" data-term="打刻">席の状態の記録</span>の最終行が idle・入力欄が空) を通すので、 考え中の席の turn を割らない。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX5</span><div class="cxbody"><p class="cxh">射程 — 動かすのは口 1 つと要件の限定句だけ</p><p class="cxd">動かすのは (1) seat の subcommand に裁定の指し示し<span class="term" data-component="plain-language-term-inline" data-term="裁定の指し示し">裁定が届いた知らせ</span>の口を 1 つ足すこと、 (2) 要件 FR44 の差し込みの列に裁定の指し示しを 1 つ足し、 新しい要件 FR79 と受入基準 AC49 を置くこと。 動かさないのは、 注入の口 seat inject の不在 (戻さない)・送達の機構・管理 tick と群の通知の差し込み・席の起動・裁定の逐語の置き場 (消費側)。 同じ要件の改訂で FR44 の列に既存の便の段の通知 (dispatcher が便の終端の周に席へ送る 1 行) も足して現物に合わせるが、 それは本 ADR の決定ではない (持ち主の裁定 2026-09-27T00:59Z)。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX1</span><div class="cxbody"><p class="cxh">経緯 — ADR-0045 は席の入力欄へ任意の文を送る口を消した</p><p class="cxd">ADR-0045 は席の役割を orchestrator の 1 つにし、 席が自分を保つために積んだ機構を消した。 消えたものの列の inject 系統には注入の口<span class="term" data-component="plain-language-term-inline" data-term="注入の口">任意の文を送る口</span> (seat inject・任意の文を席の入力欄へ送る subcommand) が在り、 不在は歯が測る。 送達の機構そのもの (入力欄の門・送達の窓・Enter の再送) は残り、 ADR-0058 が戻した管理 tick<span class="term" data-component="plain-language-term-inline" data-term="管理 tick">席を周期で見る仕組み</span> と、 席の起動と群の通知と便の終端の周の通知が内側で使う。 要件 FR44 は、 器から席の入力欄への差し込みを列に挙げた用途に限る。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX2</span><div class="cxbody"><p class="cxh">事象 — 待っている席は裁定の書き込みに気づかない</p><p class="cxd">消費側の project は、 持ち主が裁定を書き込む画面と server (裁定面<span class="term" data-component="plain-language-term-inline" data-term="裁定面">裁定を書く画面</span>) を持つ。 書き込みの後、 席が待っているなら「裁定が届いた」と 1 行知らせたい。 今は外から撃てる口が無く、 待っている席は多くは管理 tick の黙りの初段 (既定 30 分) まで気づかず、 梯子の列が尽きた席には合図が来ない。 席が考え中なら、 席の停止の hook が未読を拾う経路で足りる (消費側の設計)。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX3</span><div class="cxbody"><p class="cxh">機序 — 任意の文を運ぶ口は席どうしの連絡の経路になる</p><p class="cxd">任意の文を受ける口は、 別の席の process からも撃てるので、 ADR-0045 が消した席間の連絡の経路を名前だけ変えて戻すことになる。 送る行に入る外からの値が閉じた文字種の 1 語 (裁定面の記帳 id) だけなら、 運べるのは短い識別子までで、 席が受け取るのは「どこを読めばよいか」の指し示しになる。 それでも識別子の形の中の短い語は運べ、 口は別の席の process からも撃てる。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX4</span><div class="cxbody"><p class="cxh">憲法と既存の決定の向き (本 ADR の解釈)</p><p class="cxd">C17 (決定はしご) から、 送達は既に在る 1 本 (入力欄の門・送達の窓) を使い、 門を二重に持たない。 N2 (散文にしか無い規則を規則として扱わない) から、 「記帳 id だけを送る行に入れる」は口の引数の閉じた列と記帳 id の文字種の検査で構造として守り、 注意書きに頼らない。 ADR-0058 の管理 tick と同じ門 (打刻の最終行が idle・入力欄が空) を通すので、 考え中の席の turn を割らない。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX5</span><div class="cxbody"><p class="cxh">射程 — 動かすのは口 1 つと要件の限定句だけ</p><p class="cxd">動かすのは (1) seat の subcommand に裁定の指し示し<span class="term" data-component="plain-language-term-inline" data-term="裁定の指し示し">裁定が届いた知らせ</span>の口を 1 つ足すこと、 (2) 要件 FR44 の差し込みの用途の列に裁定の指し示しを 1 つ足し、 新しい要件 FR79 と受入基準 AC49 を置くこと。 雛形は届いたことの指し示しだけで続きの指示を持たないので、 FR44 の「台帳の現在地から続きを進めるよう促す差し込みは打刻の合図だけ」は保つ。 動かさないのは、 注入の口 seat inject の不在 (戻さない)・送達の機構・管理 tick と群の通知の差し込み・席の起動・裁定の逐語の置き場 (消費側)。 同じ要件の改訂で FR44 の列に既存の便の終端の周の通知も足すが、 それは本 ADR の決定ではない (持ち主の裁定 2026-09-27T00:59Z)。</p></div></div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-brand"><span class="num">02</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v18"/><path d="M5 7l-3 6h6z"/><path d="M19 7l-3 6h6z"/><path d="M3 21h18"/></svg> 判断を縛る力 / 評価の軸</span><h2>選択肢を測るものさし (安全・速さ)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-02">この判断を評価する 4 本のものさしです。 待っている席が書き込みの直後に知ること。 席どうしの連絡の経路を戻さないこと (運べるものを口の形で絞る)。 考え中の席の作業を割らないこと (定期の合図と同じ確かめを通す)。 足すものを最小にすること (既に在る送達の 1 本を使い、 確かめを二重に持たない)。</p></section>
+<section data-component="chapter-deck-band" class="tint-brand"><span class="num">02</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v18"/><path d="M5 7l-3 6h6z"/><path d="M19 7l-3 6h6z"/><path d="M3 21h18"/></svg> 判断を縛る力 / 評価の軸</span><h2>選択肢を測るものさし (安全・速さ)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-02">この判断を評価する 4 本のものさしです。 待っている席が書き込みの直後に知ること。 席どうしの連絡の経路を戻さないこと (送る行に入る外からの値を口の形で絞る)。 考え中の席の作業を割らないこと (定期の合図と同じ確かめを通す)。 足すものを最小にすること (既に在る送達の 1 本を使い、 確かめを二重に持たない)。</p></section>
 <div class="chapbody">
 <table data-component="adr-driver-table"><tbody>
-<tr data-component="adr-driver-row"><td class="drid">DR1</td><td>待っている席は記帳の直後に知る — 次の合図まで待たせない <span class="drg">CTX2</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR2</td><td>席どうしの連絡の経路を戻さない — 運べるものを構造で絞る (N2) <span class="drg">CTX1・CTX3</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR1</td><td>待っている席は書き込みの直後に知る — 次の合図まで待たせない <span class="drg">CTX2</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR2</td><td>席どうしの連絡の経路を戻さない — 送る行に入る外からの値を構造で絞る (N2) <span class="drg">CTX1・CTX3</span></td></tr>
 <tr data-component="adr-driver-row"><td class="drid">DR3</td><td>考え中の turn を割らない — 管理 tick と同じ門を通す <span class="drg">CTX2・CTX4</span></td></tr>
 <tr data-component="adr-driver-row"><td class="drid">DR4</td><td>足すものを最小にする — 既に在る送達の 1 本を使い、 門を二重に持たない (C17) <span class="drg">CTX4・CTX5</span></td></tr>
 </tbody></table>
 </div>
-<section data-component="chapter-deck-band" class="tint-violet"><span class="num">03</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5"/></svg> 検討した選択肢 / 3 つの確定方式</span><h2>それぞれの利点と欠点を並べる</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-03">候補を 4 つ並べます。 裁定の id だけを受ける狭い口 (選んだ案)、 好きな 1 行を送る口 (消した口を戻す案)、 口を持たず定期の合図で拾う案、 裁定面の server が画面の送り込みを直に撃つ案です。 選ばなかった 3 つは、 席どうしの連絡の経路が戻る・待ちが長い・確かめを二重に持ち考え中の作業を割る事故を器が防げない、 という理由で退けました。</p></section>
+<section data-component="chapter-deck-band" class="tint-violet"><span class="num">03</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5"/></svg> 検討した選択肢 / 3 つの確定方式</span><h2>それぞれの利点と欠点を並べる</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-03">候補を 4 つ並べます。 裁定面の記帳 id だけを受ける狭い口 (選んだ案)、 好きな 1 行を送る口 (消した口を戻す案)、 口を持たず定期の合図で拾う案、 裁定面の server が画面の送り込みを直に撃つ案です。 選ばなかった 3 つは、 席どうしの連絡の経路が戻る・待ちが長い・確かめを二重に持ち考え中の作業を割る事故を器が防げない、 という理由で退けました。</p></section>
 <div class="chapbody">
 <div class="opt-grid">
 <div data-component="adr-option-card" class="chosen">
-<div class="opt-head"><span class="opt-id">OPT1</span><span class="opt-name">裁定の id だけを受ける狭い口</span><span class="opt-verdict chosen">採用</span></div>
-<p class="opt-sum">seat deliver は宛先の席と裁定の id 1 つだけを受け、 器の雛形に id を入れた 1 行を、 登録 row が在り打刻の最終行が idle で入力欄が空の席へ既存の送達の 1 本で送る。 id の形の外・登録の無い宛先・考え中の席・入力欄に文字の在る席は 0 key で断る。 決め手は持ち主の裁定 (2026-09-27T00:51Z)。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT1">裁定の id を 1 つだけ受ける口を開ける案です。 口は id を決まった形の 1 行に入れ、 登録が在り、 状態の記録の最後が待ちで、 入力欄が空いている席にだけ、 既に在る送達の 1 本で送ります。 形の外の id・登録の無い宛先・考え中の席・入力欄に文字の在る席は 1 文字も送らずに断ります。 待っている席が書き込みの直後に知り、 好きな文を運ぶ引数が無いので席どうしの連絡の経路にならず、 定期の合図と同じ確かめを通ります。 代わりに、 要件書の改訂が先に要り、 裁定の中身を席へ届けるのは消費側の仕組みの読みに任せます。 持ち主の裁定で選びました。</span>
+<div class="opt-head"><span class="opt-id">OPT1</span><span class="opt-name">裁定面の記帳 id だけを受ける狭い口</span><span class="opt-verdict chosen">採用</span></div>
+<p class="opt-sum">seat deliver は置き場・宛先の席・裁定面の記帳 id 1 つ (ASCII の英数字と 4 つの記号だけの 1 語) を受け、 送る行には記帳 id だけを入れ、 指し示しの雛形の 1 行を、 登録 row が在り打刻の最終行が idle で入力欄が空の席へ既存の送達の 1 本で送る。 形の外の記帳 id・登録の無い宛先・考え中の席・入力欄に文字の在る席は 0 key で断る。 決め手は持ち主の裁定 (2026-09-27T00:51Z)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT1">裁定面の記帳 id を 1 つだけ受ける口を開ける案です。 記帳 id は ASCII の英数字と 4 つの記号だけの 1 語で、 送る行に入る外からの値はこれだけです。 口は記帳 id を決まった形の 1 行に入れ、 登録が在り、 状態の記録の最後が待ちで、 入力欄が空いている席にだけ、 既に在る送達の 1 本で送ります。 形の外の記帳 id・登録の無い宛先・考え中の席・入力欄に文字の在る席は 1 文字も送らずに断ります。 待っている席が書き込みの直後に知り、 好きな文は運べず、 定期の合図と同じ確かめを通ります。 代わりに、 要件書の改訂が先に要り、 裁定の中身を席へ届けるのは消費側の仕組みの読みに任せ、 記帳 id の形の中の短い語は運べて別の席の process からも撃てます。 持ち主の裁定で選びました。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>待っている席は記帳の直後に 1 行で知る (DR1)</li>
-<li>運べるのは id と器の雛形だけで、 任意の文を運ぶ引数が無い (DR2)</li>
+<li>待っている席は書き込みの直後に 1 行で知る (DR1)</li>
+<li>送る行に入る外からの値は閉じた文字種の記帳 id 1 語だけで、 任意の文を運ぶ引数が無い (DR2)</li>
 <li>管理 tick と同じ門を通り、 考え中の席には送らない (DR3)</li>
-<li>送達の機構は既に在る 1 本で、 足すのは口と id の検査だけ (DR4)</li>
+<li>送達の機構は既に在る 1 本で、 足すのは口と記帳 id の検査だけ (DR4)</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
 <li>要件 FR44 の限定句を改めるので、 要件の改訂 (持ち主の手) が先に要る</li>
 <li>裁定の逐語を席へ届けるのは消費側の hook の読みで、 器は内容を確かめない</li>
+<li>記帳 id の形の中の短い語は運べ、 口は別の席の process からも撃てる (絞るのは運べる量で、 撃ち手は絞らない)</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
 <div class="opt-head"><span class="opt-id">OPT2</span><span class="opt-name">任意の 1 行を送る口 (消した注入の口を戻す)</span><span class="opt-verdict rejected">不採用</span></div>
 <p class="opt-sum">宛先と任意の文を受けて送る口を足す。 決め手は分析 (席間の連絡の経路が戻る)。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT2">宛先と好きな文を受けて送る口を足す案で、 以前に消した口を戻す形です。 消費側が文を自由に選べる点で勝ります。 けれども、 別の席の process からも好きな文を送れるので、 以前に断った席どうしの連絡の経路が戻ります。 消えたことを測る歯と要件の趣旨を、 名前だけ変えて迂回する形にもなります。 退けました。</span>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT2">宛先と好きな文を受けて送る口を足す案で、 以前に消した口を戻す形です。 消費側が文を自由に選べる点で勝ります。 けれども、 別の席の process から好きな文を送れるので、 以前に断った席どうしの連絡の経路が戻ります (撃てる相手は選んだ案と同じで、 違いは運べる量です)。 消えたことを測る歯と要件の趣旨を、 名前だけ変えて迂回する形にもなります。 退けました。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
 <li>消費側が文を自由に選べる</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>別の席の process からも任意の文を送れ、 ADR-0045 が消した席間の連絡の経路が戻る (DR2)</li>
+<li>別の席の process から任意の文を送れ、 ADR-0045 が消した席間の連絡の経路が戻る (撃てる相手は OPT1 と同じで、 違いは運べる量) (DR2)</li>
 <li>不在の歯と要件の趣旨を名前だけ変えて迂回する形になる (DR2)</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
 <div class="opt-head"><span class="opt-id">OPT3</span><span class="opt-name">口を持たず、 管理 tick の合図で拾う</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">器は何も足さず、 待っている席は次の打刻の合図で台帳と記帳を読み直す。 決め手は分析 (待ちが長い)。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT3">器は何も足さず、 待っている席は次の定期の合図で書き込みを読み直す案です。 器にも要件にも足すものが無い点で勝ります。 けれども、 最短でも最初の待ち (既定 30 分) の間は気づかず、 持ち主との対話が止まります。 退けました。</span>
+<p class="opt-sum">器は何も足さず、 待っている席は次の打刻の合図で台帳と書き込みを読み直す。 決め手は分析 (待ちが長い)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT3">器は何も足さず、 待っている席は次の定期の合図で書き込みを読み直す案です。 器にも要件にも足すものが無い点で勝ります。 けれども、 多くは黙ったと判じる長さ (既定 30 分) まで気づかず、 合図を送り尽くした席には合図が来ないので、 持ち主との対話が止まります。 退けました。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
 <li>器にも要件にも足すものが無い</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>最短でも黙りの初段 (既定 30 分) は気づかず、 持ち主との対話が止まる (DR1)</li>
+<li>多くは黙りの初段 (既定 30 分) まで気づかず、 梯子の列が尽きた席には合図が来ないので、 持ち主との対話が止まる (DR1)</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
@@ -590,53 +591,54 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 </div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの方式を選ぶか</span><h2>選んだ方式と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、 それが要件書のどの要件を支えるかを示します。 口が受けるのは置き場・宛先の席・裁定の id 1 つだけで、 好きな文を運ぶ引数はありません。 登録が在り、 状態の記録の最後が待ちで、 入力欄が空いている席にだけ、 決まった形の 1 行を 1 回送ります。 形の外の id・登録の無い宛先・考え中の席・入力欄に文字の在る席は、 1 文字も送らずに理由の語で断ります。 支えるのは FR79 (裁定の指し示し) の根拠と、 FR44 (席間の連絡の廃止) への主張です。</p></section>
+<section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの方式を選ぶか</span><h2>選んだ方式と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、 それが要件書のどの要件を支えるかを示します。 口が受けるのは置き場・宛先の席・裁定面の記帳 id 1 つ (と歯のための道具の差し替え) だけで、 送る行に入る外からの値は記帳 id だけです。 記帳 id は ASCII の英数字と 4 つの記号だけの 1 語に閉じます。 登録が在り、 状態の記録の最後が待ちで、 入力欄が空いている席にだけ、 決まった形の 1 行を 1 回送ります。 条件に合わないときは 1 文字も送らずに理由の語で断ります。 支えるのは FR79 (裁定の指し示し) の根拠と、 FR44 (席間の連絡の廃止) への主張です。</p></section>
 <div class="chapbody">
 <div data-component="adr-decision-panel" id="decision">
 <p class="dec-kick">採用 — OPT1</p>
-<p class="dec-state">器 SHALL seat の subcommand に裁定の指し示しの口を 1 つ持ち、 口の引数は置き場・宛先の席・裁定の id 1 つ (と歯のための tmux の差し替え) の閉じた列とし、 任意の文を運ぶ引数を持たない。 口 SHALL 宛先に登録 row が在り、 席の状態の打刻の最終行が idle で入力欄が空いている周にだけ、 id を器の雛形に入れた 1 行 (裁定が届いた旨の指し示し・逐語は運ばない) を、 管理 tick と同じ入力欄の門<span class="term" data-component="plain-language-term-inline" data-term="入力欄の門">送る前の確かめ</span>を通して 1 回送り、 結果 (送れた・断った理由) を 1 行で返す。 口 SHALL id の形の外 (空・空白や制御文字を含む・長さの上限を越える)・登録 row の無い宛先・打刻の最終行が idle でない席 (考え中・打刻が無い・読めない)・入力欄に文字が在る席を 1 key も送らずに typed な理由の語で断る。 注入の口 seat inject は戻さず、 その不在の歯は残す。 本 ADR は ADR-0045 の「消えるもの」の列の注入の口の削除を、 裁定の id だけを運ぶ口に限って置き換え、 要件は FR44 の差し込みの列に裁定の指し示しを足し FR79 と AC49 を置く (SRS v0.26)。</p>
-<span class="dec-plain" data-prose-slot="plain" data-slot-id="decision-plain">器は席の口の 1 つとして、 裁定の指し示しの口を持ちます。 口が受けるのは置き場・宛先の席・裁定の id 1 つ (と、 歯のために画面の道具を差し替える引数) だけで、 好きな文を運ぶ引数は持ちません。 口は、 宛先に登録が在り、 席の状態の記録の最後が待ちで、 入力欄が空いている周にだけ、 id を決まった形に入れた 1 行 (裁定が届いたことの指し示し・裁定の文そのものは運ばない) を、 定期の合図と同じ入力欄の確かめを通して 1 回送り、 結果 (送れた・断った理由) を 1 行で返します。 id の形の外 (空・空白や制御文字を含む・長さの上限を越える)・登録の無い宛先・状態の記録の最後が待ちでない席 (考え中・記録が無い・読めない)・入力欄に文字の在る席は、 1 文字も送らずに理由の語で断ります。 以前に消した好きな文を送る口は戻さず、 それが消えたことを測る歯も残します。 要件書は、 席の入力欄への差し込みの列に裁定の指し示しを足し、 新しい要件 FR79 と受入基準 AC49 を置きます。</span>
-<span class="dec-why" data-prose-slot="rationale" data-slot-id="decision-rationale">持ち主の裁定は、 送る前の確かめを通す薄い包みの形 (2026-09-26) と、 口を開けて用途を「裁定が届いた」の 1 行の指し示しだけに限ること (2026-09-27) でした。 待っている席は、 放っておくと次の定期の合図まで裁定に気づかず、 持ち主との対話が止まります。 好きな文を運ぶ口は別の席からも撃てるので、 以前に断った席どうしの連絡の経路を名前だけ変えて戻すことになります。 そこで口の引数を閉じた列にして id の形を検査し、 運べるものを構造で絞ります。 注意書きに頼らないのは、 散文にしか無い規則を規則として扱わない、 という憲法の条に沿うためです。 送達は既に在る 1 本を使い、 定期の合図と同じ確かめを通すので、 確かめを二重に持たず、 考え中の席の作業を割りません。</span>
+<p class="dec-state">器 SHALL seat の subcommand に裁定の指し示しの口を 1 つ持つ。 口の引数は置き場・宛先の席・裁定面の記帳 id 1 つ (と歯のための道具の差し替え) の閉じた列で、 送る行に入る外からの値は記帳 id だけとし (ほかの引数は送る行に入らない)、 記帳 id は ASCII の英数字と 4 つの記号 (ピリオド・ハイフン・下線・コロン) だけの、 長さの上限の中の 1 語に閉じる。 口 SHALL 管理 tick と同じ入力欄の門<span class="term" data-component="plain-language-term-inline" data-term="入力欄の門">送る前の確かめ</span>と待ちの条件 (登録 row が在り、 打刻の最終行が idle で、 入力欄が空) を通った時にだけ、 記帳 id を指し示しの雛形に入れた 1 行 (裁定が届いた旨の指し示し・裁定の逐語と続きの指示は持たない) を 1 回送って結果を 1 行で返し、 条件の外は 1 key も送らず typed な理由の語で断る (断りの形の列の正本は FR79)。 器は撃ち手・裁定面の書き込みの有無・裁定の中身を確かめない。 注入の口 seat inject は戻さず、 その不在の歯は残す。 本 ADR は ADR-0045 の「消えるもの」の列の inject 系統のうち口 (subcommand) の削除を、 記帳 id だけを送る行へ入れる口に限って置き換え、 要件は FR44 の差し込みの用途の列に裁定の指し示しを足し FR79 と AC49 を置く (SRS v0.26)。</p>
+<span class="dec-plain" data-prose-slot="plain" data-slot-id="decision-plain">器は席の口の 1 つとして、 裁定の指し示しの口を持ちます。 口が受けるのは置き場・宛先の席・裁定面の記帳 id 1 つ (と、 歯のために画面の道具を差し替える引数) だけで、 送る行に入る外からの値は記帳 id だけです。 記帳 id は ASCII の英数字と 4 つの記号 (ピリオド・ハイフン・下線・コロン) だけの、 長さに上限のある 1 語に閉じます。 口は、 定期の合図と同じ入力欄の確かめと待ちの条件 (登録が在り、 状態の記録の最後が待ちで、 入力欄が空) を通った時にだけ、 記帳 id を決まった形に入れた 1 行 (裁定が届いたことの指し示し・裁定の文そのものと続きの指示は持たない) を 1 回送り、 結果を 1 行で返します。 条件の外は 1 文字も送らずに理由の語で断り、 断る形の一覧は要件 FR79 が持ちます。 器は、 誰が撃ったか・裁定が本当に書かれたか・裁定の中身を確かめません。 以前に消した好きな文を送る口は戻さず、 それが消えたことを測る歯も残します。 要件書は、 席の入力欄への差し込みの列に裁定の指し示しを足し、 新しい要件 FR79 と受入基準 AC49 を置きます。</span>
+<span class="dec-why" data-prose-slot="rationale" data-slot-id="decision-rationale">持ち主の裁定は、 送る前の確かめを通す薄い包みの形 (2026-09-26) と、 口を開けて用途を「裁定が届いた」の 1 行の指し示しだけに限ること (2026-09-27) でした。 待っている席は、 放っておくと次の定期の合図まで裁定に気づかず、 持ち主との対話が止まります。 好きな文を運ぶ口は別の席からも撃てるので、 以前に断った席どうしの連絡の経路を名前だけ変えて戻すことになります。 そこで口の引数を閉じた列にし、 送る行に入る外からの値を閉じた文字種の記帳 id 1 語に絞ります。 撃ち手は絞らないので、 運べる量を 1 語にすることがこの口の守りです。 注意書きに頼らないのは、 散文にしか無い規則を規則として扱わない、 という憲法の条に沿うためです。 送達は既に在る 1 本を使い、 定期の合図と同じ確かめを通すので、 確かめを二重に持たず、 考え中の席の作業を割りません。</span>
 <div class="justify-box"><p class="jh">この判断が正当化する要件 (cross-doc 照会 → SRS-SCRIBE2-MVP)</p>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR79" data-justifies-req="FR79" data-justifies-role="rationale">FR79</a><span class="justify-role">rationale</span><span class="justify-note">FR79 (裁定の指し示し) の根拠を与える。 待っている席に記帳の直後に知らせること、 運べるものを id と器の雛形に絞って席どうしの連絡の経路にしないこと、 管理 tick と同じ門を通すこと (裁定 2026-09-27T00:51Z)。</span></div>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR44" data-justifies-req="FR44" data-justifies-role="claim">FR44</a><span class="justify-role">claim</span><span class="justify-note">FR44 (席間の連絡の廃止) の差し込みの列に裁定の指し示しを 1 つ足しても、 任意の文を運ぶ口が無いので席間の連絡の経路は持たないと主張する。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR79" data-justifies-req="FR79" data-justifies-role="rationale">FR79</a><span class="justify-role">rationale</span><span class="justify-note">FR79 (裁定の指し示し) の根拠を与える。 待っている席に書き込みの直後に知らせること、 送る行に入る外からの値を閉じた文字種の記帳 id に絞って席どうしの連絡の経路にしないこと、 管理 tick と同じ門を通すこと (裁定 2026-09-27T00:51Z)。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR44" data-justifies-req="FR44" data-justifies-role="claim">FR44</a><span class="justify-role">claim</span><span class="justify-note">FR44 (席間の連絡の廃止) の差し込みの用途の列に裁定の指し示しを 1 つ足しても、 送る行に入る外からの値は閉じた文字種の記帳 id 1 語だけで任意の文を運ばず、 雛形は届いたことの指し示しだけで続きの指示を持たないので「台帳の現在地から続きを進めるよう促す差し込み」にも当たらない、 と主張する。 絞るのは運べる量で、 撃ち手は絞らない。</span></div>
 <p class="justify-tgt">照会先: SRS-SCRIBE2-MVP — SRS: 設計 → 契約 → 実装 → 検証 → land を、 人の手を借りずに 1 本通す器（MVP）</p>
 </div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-warn"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> 結果 / 良い面とトレードオフ</span><h2>この判断で何が良くなり、 何を引き受けるか</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">この判断で良くなること 3 つと、 代わりに引き受けること 3 つです。 良くなるのは、 待っている席が書き込みの直後に知ること、 運べるものが id と決まった形だけで席どうしの連絡の経路が戻らないこと、 考え中の席の作業を割らないことです。 引き受けるのは、 口の実装の前に要件書の改訂が要ること、 器が裁定の中身を確かめないこと、 考え中の席への知らせは消費側の仕組みに頼ることです。</p></section>
+<section data-component="chapter-deck-band" class="tint-warn"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> 結果 / 良い面とトレードオフ</span><h2>この判断で何が良くなり、 何を引き受けるか</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">この判断で良くなること 3 つと、 代わりに引き受けること 4 つです。 良くなるのは、 待っている席が書き込みの直後に知ること、 送る行に入る外からの値が記帳 id 1 語だけで好きな文を運ぶ経路が戻らないこと、 考え中の席の作業を割らないことです。 引き受けるのは、 口の実装の前に要件書の改訂が要ること、 器が裁定の中身も記帳 id の実在も確かめないこと、 考え中の席への知らせは消費側の仕組みに頼ること、 記帳 id の形の中の短い語は運べて別の席からも撃てることです。</p></section>
 <div class="chapbody">
 <div data-component="scope-summary-panel"><div class="scol in"><h3>✓ 良い結果</h3><ul>
-<li data-component="adr-consequence-pos"><span class="b">●</span>待っている席は、 裁定面の記帳の直後に「裁定が届いた」の 1 行を受け、 次の合図まで待たない</li>
-<li data-component="adr-consequence-pos"><span class="b">●</span>口が運べるのは id と器の雛形だけで、 席どうしの連絡の経路は戻らない。 注入の口の不在の歯も残る</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>待っている席は、 裁定面の書き込みの直後に「裁定が届いた」の 1 行を受け、 次の合図まで待たない</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>送る行に入る外からの値は閉じた文字種の記帳 id 1 語だけで、 任意の文を運ぶ経路は戻らない。 注入の口の不在の歯も残る</li>
 <li data-component="adr-consequence-pos"><span class="b">●</span>送達は管理 tick と同じ 1 本で、 考え中の席の turn を割らない</li>
 </ul></div><div class="scol out"><h3>⚖ トレードオフ・代償</h3><ul>
 <li data-component="adr-consequence-neg"><span class="b">●</span>要件の改訂 (持ち主の /folio-architect) が口の実装の前に要る</li>
-<li data-component="adr-consequence-neg"><span class="b">●</span>器は裁定の内容を確かめず、 逐語を席へ届けるのは消費側の hook の読みに任せる</li>
-<li data-component="adr-consequence-neg"><span class="b">●</span>考え中の席には送らないので、 その周の知らせは消費側の停止の hook の経路に頼る</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>器は裁定の中身も記帳 id の実在も確かめず、 逐語を席へ届けるのは消費側の hook の読みに任せる</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>考え中の席には送らないので、 その時の知らせは消費側の停止の hook の経路に頼る</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>記帳 id の形の中の短い語は運べ、 口は別の席の process からも撃てる (撃ち手は確かめない)</li>
 </ul></div></div>
 </div>
-<section data-component="chapter-deck-band" class="tint-info"><span class="num">06</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> 改訂関係と原則 / この判断の位置づけ</span><h2>版の系譜と、 行き着く原則 (照会終端)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-06">この記録が版の系譜のどこに在るかと、 判断が最後に行き着く原則です。 この記録は ADR-0045 の一部を置き換えます。 置き換えるのは「消えるもの」の列の注入の口の削除だけで、 それを裁定の id だけを運ぶ狭い口に限って改めます。 好きな文を運ぶ注入の口は戻さず、 ADR-0045 の他の決まりと ADR-0058 の定期の合図はそのまま保ちます。 行き着く原則は「席には、 どこを読めばよいかだけを知らせ、 中身は運ばない」です。</p></section>
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">06</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> 改訂関係と原則 / この判断の位置づけ</span><h2>版の系譜と、 行き着く原則 (照会終端)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-06">この記録が版の系譜のどこに在るかと、 判断が最後に行き着く原則です。 この記録は ADR-0045 の一部を置き換えます。 置き換えるのは「消えるもの」の列の inject 系統のうち口の削除だけで、 それを記帳 id だけを送る行へ入れる口に限って改めます。 好きな文を運ぶ注入の口は戻しません。 ADR-0045 の席の役割と席間の連絡の作法の削除、 ADR-0045 の削除のうち ADR-0058 が戻さなかった分、 ADR-0058 の定期の合図はそのまま保ちます。 行き着く原則は「席には、 どこを読めばよいかだけを知らせ、 中身は運ばない」です。</p></section>
 <div class="chapbody">
 <div data-component="adr-supersession">
 <p class="ss-row"><span class="ss-k">改訂状態</span>current</p>
 <p class="ss-row"><span class="ss-k">置き換える ADR</span>ADR-0045</p>
 <p class="ss-row"><span class="ss-k">置き換えられた</span>なし (現行)</p>
-<p class="ss-row">部分 supersede で、 置き換えるのは 1 つ — ADR-0045 の「消えるもの」の列に在る注入の口 (inject) の削除 — を、 裁定の id だけを運ぶ狭い口に限って改める。 任意の文を運ぶ注入の口は戻さない。 保つのは、 ADR-0045 の席の役割 (orchestrator の 1 つ)・席間の連絡の作法の削除・他の機構の削除の全部と、 ADR-0058 の管理 tick の門と合図の全部。</p>
+<p class="ss-row">部分 supersede で、 置き換えるのは 1 つ — ADR-0045 の「消えるもの」の列の inject 系統のうち口 (subcommand) の削除 — を、 記帳 id だけを送る行へ入れる口に限って改める。 任意の文を運ぶ注入の口は戻さない。 保つのは、 ADR-0045 の席の役割 (orchestrator の 1 つ)・§2 (2) の席間の連絡の作法の削除・§2 (2) の削除のうち ADR-0058 が戻さなかった分の全部と、 ADR-0058 の管理 tick の門と合図の全部。</p>
 </div>
 <div data-component="adr-principle">
 <p class="prin-id">照会終端 — PRIN-POINT-DO-NOT-CARRY</p>
 <p class="prin-text">席には、 どこを読めばよいかだけを知らせ、 中身は運ばない。</p>
-<p class="prin-note">本 ADR が「任意の 1 行の口」「tick を待つ」「server が tmux を直に撃つ」を退け、 口を裁定の id と器の雛形の 1 行に絞ったのはこの原則に行き着く (これ以上は遡らない照会終端)。</p>
+<p class="prin-note">本 ADR が「任意の 1 行の口」「tick を待つ」「server が tmux を直に撃つ」を退け、 送る行に入る外からの値を記帳 id 1 語に絞ったのはこの原則に行き着く (これ以上は遡らない照会終端)。</p>
 </div>
 </div>
 <section data-component="chapter-deck-band" class="tint-brand"><span class="num">07</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg> 用語集 / この文書で使う専門語</span><h2>本文に出てくる専門語のやさしい説明</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-07">本文に出てくる専門語 6 個を、 やさしい言葉で説明します。</p></section>
 <div class="chapbody">
 <div data-component="glossary-term-table">
-<div class="grow"><div class="gword">裁定の指し示し<span class="en">ruling pointer</span></div><div class="gdef">外の裁定面が裁定を記帳したことを、 裁定の id だけを入れた器の雛形の 1 行で待ちの席へ知らせる差し込み。 逐語は運ばない (FR79)。</div></div>
-<div class="grow"><div class="gword">裁定面<span class="en">ruling surface</span></div><div class="gdef">消費側の project が持つ、 持ち主が裁定を記帳する画面と server。 記帳の後に器の口を撃つ。 器はこの面を持たない。</div></div>
-<div class="grow"><div class="gword">入力欄の門<span class="en">input gate</span></div><div class="gdef">送る前に席の入力欄を読み、 人の打ちかけや特定できない周は 1 key も送らない器の仕組み。 管理 tick・群の通知・本 ADR の口が同じ 1 本を使う。</div></div>
-<div class="grow"><div class="gword">打刻<span class="en">state stamp</span></div><div class="gdef">席の hook が書く状態の行 (考え中 Busy / 待ち Idle)。 最終行が Idle の席だけが待ちの席で、 本 ADR の口はそこへだけ送る。</div></div>
+<div class="grow"><div class="gword">裁定の指し示し<span class="en">ruling pointer</span></div><div class="gdef">外の裁定面が裁定を書いたことを、 裁定面の記帳 id だけを入れた指し示しの雛形の 1 行で待ちの席へ知らせる差し込み。 逐語と続きの指示は運ばない (FR79)。</div></div>
+<div class="grow"><div class="gword">裁定面<span class="en">ruling surface</span></div><div class="gdef">消費側の project が持つ、 持ち主が裁定を書き込む画面と server (器の外の置き場)。 書き込みの後に器の口を撃ち、 面が裁定に付けた識別子 (裁定面の記帳 id) を渡す。 記帳 id は器の裁定 id (裁定 event の時刻) とは別で、 器はこの面を持たない。</div></div>
+<div class="grow"><div class="gword">入力欄の門<span class="en">input gate</span></div><div class="gdef">送る前に席の入力欄を読み、 人の打ちかけや読めない時は 1 key も送らない器の仕組み。 管理 tick・群の通知・便の終端の周の通知・本 ADR の口が同じ 1 本を使う。</div></div>
+<div class="grow"><div class="gword">状態の打刻<span class="en">state stamp</span></div><div class="gdef">席の hook が書く状態の行 (考え中 Busy / 待ち Idle)。 最終行が Idle の席だけが待ちの席で、 本 ADR の口はそこへだけ送る。</div></div>
 <div class="grow"><div class="gword">注入の口<span class="en">inject mouth</span></div><div class="gdef">ADR-0045 が消した seat inject (任意の文を席の入力欄へ送る subcommand)。 本 ADR でも戻さず、 不在は歯が測る。</div></div>
 <div class="grow"><div class="gword">管理 tick<span class="en">management tick</span></div><div class="gdef">席の外から周期で回り、 黙った待ちの席に打刻の合図を送り、 死んだ席を起こし直す仕組み (ADR-0058)。</div></div>
 </div>
@@ -644,7 +646,7 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 </div>
 <footer class="foot" data-component="fidelity-sync-meta"><div class="ft-grid">
 <div class="ft-plain">このページは、大もとの機械データ (正本) から自動で組み立てられています。構造は機械が自動で検査し、内容が元データに忠実かは独立のレビューで確かめます。</div>
-<div data-audience="machine">機械SSoT: <b>ADR-0077-a-narrow-mouth-points-waiting-seats-to-recorded-rulings.adr.yaml</b> &middot; 生成: <b>2026-09-27 01:04</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
+<div data-audience="machine">機械SSoT: <b>ADR-0077-a-narrow-mouth-points-waiting-seats-to-recorded-rulings.adr.yaml</b> &middot; 生成: <b>2026-09-27 01:18</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
 <div class="tags" data-audience="machine"><span>folio design system</span><span>ADR-pack</span><span>folio engine B1 (instance#2)</span><span>cross-doc 照会</span></div>
 </div></footer>
 <!-- folio:chrome-bottom -->
