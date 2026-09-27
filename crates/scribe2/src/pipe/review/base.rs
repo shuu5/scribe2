@@ -21,10 +21,10 @@ use crate::pipe::table;
 use std::path::{Component, Path};
 
 /// 行数の幅を持つ rules 行（受付の上限の余地が数える行数と同じ式にする・rules-manifest.md §4）。
-const ROW_LINE_WIDTH: &str = "R-C4.line-width";
+pub(super) const ROW_LINE_WIDTH: &str = "R-C4.line-width";
 
-/// 要約の 1 項目の書き出し（[`base_block`] が落とした本数をこの頭の行で数える）。
-const ITEM_HEAD: &str = "- ";
+/// 要約の 1 項目の書き出し（[`base_block`] が落とした本数をこの頭の行で数える・外の材料〔§51〕の塊の頭も同じ字面）。
+pub(super) const ITEM_HEAD: &str = "- ";
 
 /// 宣言の語（本体の区間でこの語から始まる行が宣言・`impl` / `use` / `let` は名を持つ宣言として数えない）。
 const DECL_KEYWORDS: &[&str] = &["fn", "struct", "enum", "union", "trait", "type", "const", "static", "mod"];
@@ -55,8 +55,8 @@ fn summary(repo: &Path, write_set: &[String], width: u64) -> String {
     write_set.iter().map(|item| item_text(repo, item, width)).collect::<Vec<String>>().join("\n")
 }
 
-/// 1 項目の要約（行の頭は [`ITEM_HEAD`] と契約の字面のままの項目）。
-fn item_text(repo: &Path, item: &str, width: u64) -> String {
+/// 1 項目の要約（行の頭は [`ITEM_HEAD`] と契約の字面のままの項目）。外の材料（§51 形 3 (b)）の名指された `.rs` も同じ 1 本。
+pub(super) fn item_text(repo: &Path, item: &str, width: u64) -> String {
     if item.starts_with(NEW_FILE) {
         return format!("{ITEM_HEAD}{item}: 新設（base に無い）");
     }
@@ -98,8 +98,8 @@ fn listed<T: AsRef<str>>(names: &[T]) -> String {
 
 /// 宣言の行の `<語> <名>`（修飾の語を飛ばした最初の語が [`DECL_KEYWORDS`] で、次の語が識別子の行だけ）。`const fn` は
 /// `fn` として読む。括弧つきの可視性（`pub(crate)` / `pub(in crate::pipe)`）は閉じ括弧を含む語までを 1 まとまりとして
-/// 飛ばし、閉じ括弧の無い行は宣言と読まない（§49）。
-fn declared_name(line: &str) -> Option<String> {
+/// 飛ばし、閉じ括弧の無い行は宣言と読まない（§49）。外の材料（§51）の候補の名と所在もこの 1 本で読む。
+pub(super) fn declared_name(line: &str) -> Option<String> {
     let mut kept = Vec::new();
     let mut raw = line.split_whitespace();
     while let Some(word) = raw.next() {
@@ -132,8 +132,8 @@ fn declared_name(line: &str) -> Option<String> {
     (!name.is_empty()).then(|| format!("{word} {name}"))
 }
 
-/// 歯の区間の `#[test]` の直下の `fn` の名（属性行・doc・空行は跨ぐ・他の行が先に来れば歯ではない）。
-fn tooth_names(region: &str) -> Vec<String> {
+/// 歯の区間の `#[test]` の直下の `fn` の名（属性行・doc・空行は跨ぐ・他の行が先に来れば歯ではない・§51 の候補も同じ 1 本）。
+pub(super) fn tooth_names(region: &str) -> Vec<String> {
     let mut found = Vec::new();
     let mut pending = false;
     for line in region.lines() {

@@ -54,9 +54,10 @@ mod derive;
 mod names;
 
 pub use derive::{check_drift, derive_promised, derive_write_set, promised_inputs, weighted_lines, Base, Fields, Promised};
-pub use names::{symbols_in_base, unresolved_names};
+pub use names::{mentioned_names, symbols_in_base, unresolved_names, Mentioned};
 pub(crate) use derive::{declared_teeth, nextest_line, teeth_places, teeth_words};
-use names::{declares_fn, holds_word};
+pub(crate) use names::holds_word;
+use names::declares_fn;
 
 /// nextest の行の書き出し（この後ろの語から crate と filter 語を読む）。
 const NEXTEST_HEAD: &[&str] = &["cargo", "nextest", "run"];

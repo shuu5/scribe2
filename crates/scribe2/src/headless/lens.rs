@@ -49,6 +49,11 @@
 //! 在れば `{base}` の穴に埋め、無ければ穴は空文字＝雛形は 1 字も変わらない。在るのに読めない周は rc 2。cap は新しい閾値を
 //! 作らない: 既存の 4 材料だけで越える周は従来どおり claude を呼ばず INCONCLUSIVE、要約を足すと越える周は要約の段だけを
 //! 落として落とした項目の本数の 1 行を残す（[`base_block`]）。
+//!
+//! **write-set の外の材料（設計 contract-source.md §51 行 bc）も隣の file で受ける**。[`OUTSIDE_FILE`] が在れば雛形の末尾の
+//! `{outside}` の穴に埋め、無ければ空文字＝雛形は 1 字も変わらない。在るのに読めない周は rc 2。残りは base の段を足した後で
+//! 測り、名ごとに収める（[`outside_block`]・収まらない名は切り詰めの 1 行・落とした名は本数の 1 行）。既存の 4 材料だけで
+//! 越える周の INCONCLUSIVE と base の段の落とし方は不変。
 
 use super::runner::{has_top_level_key, is_result_record, result_usage, scope_line, top_level_string};
 use super::{
@@ -62,7 +67,8 @@ use crate::fleet::Usage;
 use crate::pipe::confine;
 use crate::pipe::contract::Contract;
 use crate::pipe::move_proof::RULINGS_FILE;
-use crate::pipe::review::{base_block, BASE_FILE, DESIGN_FILE, FINDING_KINDS, PROMISES_FILE, REQUIREMENTS_FILE};
+use crate::pipe::review::{base_block, outside_block, BASE_FILE, DESIGN_FILE, FINDING_KINDS, OUTSIDE_FILE, PROMISES_FILE};
+use crate::pipe::review::REQUIREMENTS_FILE;
 use crate::rules::int_row;
 use std::io::{ErrorKind, Read};
 use std::path::Path;
@@ -234,13 +240,18 @@ fn prompt_of(contract: &Path, stated: &str, rulings: &str, cap: u64) -> Result<S
                 .map_err(|reason| Outcome::failed_line(RC_BROKEN, format!("lens: 約束の行を読めない: {reason}")))?;
             let summary = beside(contract, BASE_FILE)
                 .map_err(|reason| Outcome::failed_line(RC_BROKEN, format!("lens: base の要約を読めない: {reason}")))?;
+            let copy = beside(contract, OUTSIDE_FILE)
+                .map_err(|reason| Outcome::failed_line(RC_BROKEN, format!("lens: 外の材料を読めない: {reason}")))?;
             let bytes = stated.len().saturating_add(design.len()).saturating_add(requirements.len());
             let bytes = bytes.saturating_add(promises.len());
             if over(bytes) {
                 return Err(Outcome::ok_line(inconclusive("contract material exceeds cap")));
             }
             // 要約は**最後に**足す: 既存の 4 材料の残りに収まらなければ段ごと落とす（新しい閾値を作らない）。
-            let base = base_block(&summary, cap.saturating_sub(u64::try_from(bytes).unwrap_or(u64::MAX)));
+            let room = cap.saturating_sub(u64::try_from(bytes).unwrap_or(u64::MAX));
+            let base = base_block(&summary, room);
+            // 外の材料は base の段を足した**後**の残りで名ごとに収める（§51 形 4）。
+            let outside = outside_block(&copy, room.saturating_sub(u64::try_from(base.len()).unwrap_or(u64::MAX)));
             Ok(fill(
                 CONTRACT_TEMPLATE,
                 &[
@@ -249,13 +260,14 @@ fn prompt_of(contract: &Path, stated: &str, rulings: &str, cap: u64) -> Result<S
                     ("{requirements}", &requirements),
                     ("{promises}", &promises),
                     ("{base}", &base),
+                    ("{outside}", &outside),
                 ],
             ))
         }
     }
 }
 
-/// 契約の写しの隣の任意の材料（[`PROMISES_FILE`]〔Promised の行だけ `pipe::review` が置く〕と [`BASE_FILE`]）。無ければ
+/// 契約の写しの隣の任意の材料（[`PROMISES_FILE`]〔Promised の行だけ `pipe::review` が置く〕と [`BASE_FILE`] と [`OUTSIDE_FILE`]）。無ければ
 /// 空・在るのに読めない周は `Err`。
 fn beside(contract: &Path, name: &str) -> Result<String, String> {
     let path = contract.with_file_name(name);
@@ -447,7 +459,7 @@ fn with_usage(verdict: &str, usage: Option<&Usage>) -> String {
 #[cfg(test)]
 mod tests {
     use super::{prompt_of, CONTRACT_TEMPLATE};
-    use crate::pipe::review::{BASE_FILE, DESIGN_FILE, REQUIREMENTS_FILE};
+    use crate::pipe::review::{BASE_FILE, DESIGN_FILE, OUTSIDE_FILE, REQUIREMENTS_FILE};
     use std::path::PathBuf;
 
     /// 契約の写しの隣に設計の節と要件（と `base` が在れば base の要約）を置いた tmp dir と写しの path。
@@ -473,7 +485,7 @@ mod tests {
     /// 本文のまま）、契約の本文の中の `{base}` はどちらの周も展開されない（1 走査）。
     #[test]
     fn headless_lens_base_fills_the_hole_only_when_the_copy_exists_in_one_pass() {
-        assert!(CONTRACT_TEMPLATE.contains("{requirements}{promises}{base}\n"), "穴は雛形の末尾に 1 つ");
+        assert!(CONTRACT_TEMPLATE.contains("{requirements}{promises}{base}{outside}\n"), "穴は雛形の末尾に並ぶ");
         let (contract, dir) = materials("with", Some(SUMMARY));
         let filled = prompt_of(&contract, STATED, "（裁定なし）", u64::MAX).unwrap_or_default();
         assert!(filled.contains(SUMMARY.trim_end()), "要約の本文が埋まる: {filled}");
@@ -489,8 +501,61 @@ mod tests {
         let expected = CONTRACT_TEMPLATE
             .replacen("{contract}", STATED, 1)
             .replacen("{design}", "節の本文\n", 1)
-            .replacen("{requirements}{promises}{base}", "FR1: 要件の本文\n", 1);
+            .replacen("{requirements}{promises}{base}{outside}", "FR1: 要件の本文\n", 1);
         assert_eq!(bare, expected, "写しが無い周の prompt は穴を足す前の雛形と同じ");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 外の材料の写し（契約・材料・雛形のどれにも現れない字面の塊 2 本・本文に穴の字面 `{outside}` / `{base}` を持つ）。
+    const OUTSIDE: &str = "- ZqOuter: src/zq_outer.rs:3\n  pub struct ZqOuter {\n      pub zq_field: u8,\n  }\n- data/zq.json: 行数 2 / byte 20\n  穴の字面 {outside} と {base}\n";
+
+    /// [`materials`] の dir に外の材料の写しを足す。
+    fn with_outside(name: &str, base: Option<&str>, outside: &str) -> (PathBuf, PathBuf) {
+        let (contract, dir) = materials(name, base);
+        let _ = std::fs::write(dir.join(OUTSIDE_FILE), outside);
+        (contract, dir)
+    }
+
+    /// 写しが在れば雛形の末尾の `{outside}` の穴が見出しと塊で埋まり（base の要約の後ろ）、無ければ雛形は 1 字も変わらず、
+    /// 契約の本文と写しの本文の中の穴の字面は展開されない（1 走査）。
+    #[test]
+    fn headless_lens_outside_fills_the_last_hole_only_when_the_copy_exists() {
+        let stated = "goal: 穴の字面 {outside} を持つ契約\ndone: d";
+        let (contract, dir) = with_outside("outside-with", Some(SUMMARY), OUTSIDE);
+        let filled = prompt_of(&contract, stated, "（裁定なし）", u64::MAX).unwrap_or_default();
+        assert!(filled.ends_with(&format!("{}\n", OUTSIDE.trim_end())), "塊が末尾に埋まる: {filled}");
+        assert!(filled.contains("\n## write-set の外の材料"), "見出しを持つ: {filled}");
+        let (base_at, outside_at) = (filled.find("src/zq.rs"), filled.find("ZqOuter"));
+        assert!(base_at.is_some() && base_at < outside_at, "base の要約の後ろ: {filled}");
+        assert!(filled.contains("穴の字面 {outside} を持つ契約") && filled.contains("穴の字面 {outside} と {base}"), "展開しない: {filled}");
+        assert_eq!(filled.matches("ZqOuter {").count(), 1, "1 回だけ埋まる");
+        let _ = std::fs::remove_dir_all(&dir);
+        let (contract, dir) = materials("outside-without", Some(SUMMARY));
+        let bare = prompt_of(&contract, stated, "（裁定なし）", u64::MAX).unwrap_or_default();
+        assert!(!bare.contains("write-set の外の材料") && !bare.contains("ZqOuter"), "{bare}");
+        let with_base = CONTRACT_TEMPLATE.replacen("{outside}", "", 1);
+        assert!(bare.ends_with(&format!("{}\n", SUMMARY.trim_end())), "穴は空文字＝末尾は base の要約: {bare:?}");
+        assert!(with_base.ends_with("{base}\n"), "穴を空にした雛形は base の穴で終わる");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 残りは base の段を足した**後**で測る: base の要約と外の材料の全部がちょうど収まる cap では両方が全部入り、base の段の
+    /// byte を数えずに外の材料だけが収まる cap では外の材料は名ごとの切り詰めの行になる（base の段は全部のまま）。既存の 4 材料
+    /// だけで越える周は外の材料が在っても INCONCLUSIVE のまま。
+    #[test]
+    fn headless_lens_outside_room_is_measured_after_the_base_stage() {
+        let long = format!("{OUTSIDE}  {}\n", "z".repeat(600));
+        let (contract, dir) = with_outside("outside-room", Some(SUMMARY), &long);
+        let four = u64::try_from([STATED, "節の本文\n", "FR1: 要件の本文\n"].iter().map(|text| text.len()).sum::<usize>()).unwrap_or(u64::MAX);
+        let base = u64::try_from(crate::pipe::review::base_block(SUMMARY, u64::MAX).len()).unwrap_or(u64::MAX);
+        let outside = u64::try_from(super::outside_block(&long, u64::MAX).len()).unwrap_or(u64::MAX);
+        let both = prompt_of(&contract, STATED, "（裁定なし）", four + base + outside).unwrap_or_default();
+        assert!(both.contains(SUMMARY.trim_end()) && both.contains(&"z".repeat(600)), "両方が全部入る: {both}");
+        let squeezed = prompt_of(&contract, STATED, "（裁定なし）", four + outside).unwrap_or_default();
+        assert!(squeezed.contains(SUMMARY.trim_end()), "base の段は全部のまま: {squeezed}");
+        assert!(!squeezed.contains(&"z".repeat(600)) && squeezed.contains("切り詰めた"), "外の材料は切り詰め: {squeezed}");
+        let over = prompt_of(&contract, STATED, "（裁定なし）", four.saturating_sub(1)).map_err(|outcome| outcome.out);
+        assert_eq!(over, Err(vec![r#"{"verdict":"INCONCLUSIVE","evidence":"contract material exceeds cap"}"#.to_owned()]));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -6,11 +6,15 @@
 //! `pub use` を通るので import は不変である。
 //!
 //! 親の私有 item（[`super::texts_of`] / [`super::heads`] / [`super::is_ident`] / [`super::is_ident_char`] と const 群）は
-//! 子孫として `super::` でそのまま引く（可視性を上げない）。逆向きに、親の 4 形の判定が使う [`holds_word`] /
-//! [`declares_fn`] と、`closure::derive` が引く [`backticked`] / [`closed_type`] は `pub(super)`（＝`pipe::closure` の中だけ）に留める。
+//! 子孫として `super::` でそのまま引く（可視性を上げない）。逆向きに、親の 4 形の判定が使う [`holds_word`]（審査の外の
+//! 材料も引くので `pub(crate)`）/ [`declares_fn`] と、`closure::derive` が引く [`backticked`] / [`closed_type`] は `pub(super)`（＝`pipe::closure` の中だけ）に留める。
+//!
+//! 審査の材料の名指し（設計 §51 形 2・行 bc）は同じ読み手の 2 本目の口 [`mentioned_names`] で、backtick の中身の先頭の
+//! token と、backtick の外の識別子の形の語と、`/` か拡張子を持つ path 形の連なりを拾う（[`unresolved_names`] の判定は不変）。
 
 use super::{declares_type, heads, in_module, is_ident, is_ident_char, texts_of, touched, ClosureError, Source};
 use super::{IMPL_HEAD, KEYWORDS, PATH_CHARS, RS};
+use std::collections::BTreeSet;
 
 /// 名指しの実在（§3）: `texts` の各 (在り処, 本文) の backtick の中身のうち **path 形 / 型の path 形 / fn 形**だけを
 /// 名指しと読み、base に解けないものを (名, 在り処) で**全件**返す（書かれていた順）。
@@ -53,6 +57,94 @@ pub fn symbols_in_base(names: &[&str], tracked: &[String], sources: &[Source]) -
     let bodies = texts_of(sources)?;
     let paths: Vec<&str> = tracked.iter().map(String::as_str).collect();
     Ok(names.iter().map(|name| resolved(name, &[], &paths, &bodies)).collect())
+}
+
+/// 審査の材料の名指し（§51 形 2・[`mentioned_names`] が返す）。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Mentioned {
+    /// 候補の名のうち本文が名指すもの（辞書順・重複なし）。
+    pub names: Vec<String>,
+    /// path 形の連なりが解けた tracked の file（辞書順・重複なし・同じ末尾の file は全部）。
+    pub files: Vec<String>,
+    /// file に解けず tracked の dir に解けた連なりの dir（末尾 `/` 無し・辞書順・重複なし）。
+    pub dirs: Vec<String>,
+}
+
+/// 審査の材料の名の照合の口（§51 形 2・名指しの読み手の 1 本）。候補の名は (a) backtick の中身の先頭の token
+/// （[`head_of`]）の `::` の節のどれかに等しいか、(b) backtick の外に語の境界（[`holds_word`]）で現れ字面が識別子の形
+/// （[`shaped`]）のものだけを拾う。path 形の文字（[`PATH_CHARS`]）の連なりは `/` か拡張子を持つものだけを
+/// [`path_matches`] で tracked の file（拡張子を問わない）に、file に解けなければ tracked の dir に解く。backtick の外の
+/// 素の 1 語は、候補に在っても tracked の dir と同じ名でも読まない（数の閾値を持たない構造の規則）。
+pub fn mentioned_names(texts: &[&str], candidates: &[&str], tracked: &[String]) -> Mentioned {
+    let mut segments: BTreeSet<&str> = BTreeSet::new();
+    let mut outside = String::new();
+    for text in texts {
+        segments.extend(backticked(text).into_iter().flat_map(|name| head_of(name).0.split("::")));
+        outside.push_str(&unticked(text));
+        outside.push('\n');
+    }
+    let names: BTreeSet<String> = candidates
+        .iter()
+        .filter(|name| segments.contains(**name) || (shaped(name) && holds_word(&outside, name)))
+        .map(|name| (*name).to_owned())
+        .collect();
+    let (mut files, mut dirs) = (BTreeSet::new(), BTreeSet::new());
+    for run in texts.iter().flat_map(|text| path_runs(text)) {
+        let hit: Vec<&String> = tracked.iter().filter(|path| path_matches(path, run)).collect();
+        if hit.is_empty() {
+            dirs.extend(tracked.iter().filter_map(|path| dir_of(path, run)).map(str::to_owned));
+        }
+        files.extend(hit.into_iter().cloned());
+    }
+    Mentioned { names: names.into_iter().collect(), files: files.into_iter().collect(), dirs: dirs.into_iter().collect() }
+}
+
+/// 本文の backtick の外（対になった backtick の中身を空白に替えた字面・対にならない末尾の backtick の後ろは外）。
+fn unticked(text: &str) -> String {
+    let lines = text.lines().map(|line| {
+        let pieces: Vec<&str> = line.split('`').collect();
+        let paired = if pieces.len().is_multiple_of(2) { pieces.len().saturating_sub(1) } else { pieces.len() };
+        let kept = pieces.iter().enumerate().filter(|(at, _)| at.is_multiple_of(2) || *at >= paired).map(|(_, piece)| *piece);
+        kept.collect::<Vec<&str>>().join(" ")
+    });
+    lines.collect::<Vec<String>>().join("\n")
+}
+
+/// 字面が識別子の形か（語の中に `_` を持つか、大文字で始まる山〔先頭か小文字・数字の直後の大文字〕が 2 つ以上）。
+fn shaped(name: &str) -> bool {
+    let mut humps = 0_usize;
+    let mut prev: Option<char> = None;
+    for found in name.chars() {
+        if found.is_ascii_uppercase() && prev.is_none_or(|before| before.is_ascii_lowercase() || before.is_ascii_digit()) {
+            humps = humps.saturating_add(1);
+        }
+        prev = Some(found);
+    }
+    name.contains('_') || humps >= 2
+}
+
+/// 本文の path 形の連なりのうち `/` か拡張子（末尾の `.` と英字）を持つもの（前の `-` と後ろの `.` `-` は文の区切り
+/// として剥がし、末尾の `/` は照合の前に剥がす）。
+fn path_runs(text: &str) -> Vec<&str> {
+    text.split(|found: char| !(found.is_ascii_alphanumeric() || PATH_CHARS.contains(&found)))
+        .map(|run| run.trim_start_matches('-').trim_end_matches(['.', '-']))
+        .filter(|run| run.contains('/') || has_extension(run))
+        .map(|run| run.trim_end_matches('/'))
+        .filter(|run| !run.is_empty())
+        .collect()
+}
+
+/// 最後の段が拡張子（末尾の `.` の後ろが 1 字以上の英字だけ）を持つか。
+fn has_extension(run: &str) -> bool {
+    run.rsplit('/')
+        .next()
+        .and_then(|last| last.rsplit_once('.'))
+        .is_some_and(|(_, ext)| !ext.is_empty() && ext.chars().all(|found| found.is_ascii_alphabetic()))
+}
+
+/// tracked の path の `/` 区切りの頭のうち、連なりに [`path_matches`] で解ける最初の dir。
+fn dir_of<'p>(path: &'p str, run: &str) -> Option<&'p str> {
+    path.match_indices('/').filter_map(|(at, _)| path.get(..at)).find(|head| path_matches(head, run))
 }
 
 /// 名指し 1 つが base に解けるか（path 形は `paths` の path・型の path 形は [`resolves_type`]・fn 形は宣言）。名指しの
@@ -168,8 +260,9 @@ fn path_matches(path: &str, name: &str) -> bool {
     path == name || path.strip_suffix(name).is_some_and(|head| head.ends_with('/'))
 }
 
-/// 本文が `word`（`型::項目`）を語の境界で持つか（前が識別子の文字でなく・後ろも識別子の文字でない）。
-pub(super) fn holds_word(body: &str, word: &str) -> bool {
+/// 本文が `word`（`型::項目`）を語の境界で持つか（前が識別子の文字でなく・後ろも識別子の文字でない）。審査の外の材料
+/// （§51 形 3 (c) の data file の鍵）も同じ 1 本で測るので `pub(crate)`。
+pub(crate) fn holds_word(body: &str, word: &str) -> bool {
     heads(body, word)
         .into_iter()
         .any(|at| !body.get(at.saturating_add(word.len())..).unwrap_or_default().starts_with(is_ident_char))
@@ -360,5 +453,50 @@ mod tests {
         ];
         let want: Vec<Option<bool>> = names.iter().map(|_| None).collect();
         assert_eq!(super::symbols_in_base(&names, &[], &sources), Ok(want));
+    }
+
+    /// 文字列の列。
+    fn owned(items: &[&str]) -> Vec<String> {
+        items.iter().map(|item| (*item).to_owned()).collect()
+    }
+
+    /// §51 形 2 の名: backtick の中身の先頭の token の節（`overlaps(` の `overlaps`・`crate::pipe::review::Material` の各節）と、
+    /// backtick の外の `_` を持つ名・山 2 つの CamelCase の名を拾い、外の素の 1 語（`shape` / `Shape` / `parse`）は候補に在っても
+    /// 拾わない。長い名の途中に在る短い名（`ZqShapeKindWide` の `ShapeKind`・`zq_wide_max` の `zq_wide`）も拾わない。同じ素の語を
+    /// backtick に入れると拾う（母集団 = 候補 10 個を同じ assert で数える）。
+    #[test]
+    fn closure_names_mentioned_picks_backticked_heads_and_shaped_words_but_not_bare_words() {
+        let candidates = ["ZqShape", "zq_width", "Shape", "shape", "overlaps", "parse", "Material", "review", "ShapeKind", "zq_wide"];
+        let text = "節は ZqShape と zq_width を読む。shape と Shape と parse は素の語・`overlaps(` と `crate::pipe::review::Material` を名指す・ZqShapeKindWide と zq_wide_max";
+        let found = super::mentioned_names(&[text], &candidates, &[]);
+        assert_eq!(candidates.len(), 10, "母集団");
+        assert_eq!(found.names, owned(&["Material", "ZqShape", "overlaps", "review", "zq_width"]), "{found:?}");
+        let ticked = super::mentioned_names(&["`shape` と `Shape::Dot { x: 1 }` と parse"], &candidates, &[]);
+        assert_eq!(ticked.names, owned(&["Shape", "shape"]), "backtick の中なら素の語も拾う: {ticked:?}");
+        assert!(found.files.is_empty() && found.dirs.is_empty(), "path は無い: {found:?}");
+    }
+
+    /// §51 形 2 の path: `/` か拡張子を持つ連なりだけが解け（素の 1 語 `pipe` / `fixtures` は tracked の dir と同じ名でも解けない）、
+    /// 等しいか `/` 区切りの末尾一致で解け、同じ末尾が 2 file に在れば両方を返し、`.rs` でない path（json・md）も解け、file に
+    /// 解けない連なりは dir に解ける。
+    #[test]
+    fn closure_names_mentioned_resolves_path_runs_with_a_slash_or_an_extension_only() {
+        let tracked = owned(&[
+            "crates/a/src/pipe/review.rs",
+            "crates/b/src/pipe/review.rs",
+            "crates/a/fixtures/data.json",
+            "crates/a/fixtures/deep/b.yaml",
+            "docs/a.md",
+        ]);
+        let text = "pipe/review.rs と data.json と `fixtures/` と docs/a.md を読む。pipe と fixtures は素の語・none/x.json は無い。";
+        let found = super::mentioned_names(&[text], &[], &tracked);
+        assert_eq!(
+            found.files,
+            owned(&["crates/a/fixtures/data.json", "crates/a/src/pipe/review.rs", "crates/b/src/pipe/review.rs", "docs/a.md"]),
+            "{found:?}"
+        );
+        assert_eq!(found.dirs, owned(&["crates/a/fixtures"]), "{found:?}");
+        let bare = super::mentioned_names(&["pipe と fixtures と review"], &[], &tracked);
+        assert_eq!((bare.files.len(), bare.dirs.len()), (0, 0), "素の 1 語は path にも dir にも解けない: {bare:?}");
     }
 }

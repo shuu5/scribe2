@@ -38,11 +38,17 @@
 //! 2 面・本体の宣言の名・歯の名）を子 module `base` が組み、材料の [`BASE_FILE`] として既存の 3 本と同じ [`keep`] の
 //! loop で置く。lens は `{base}` の穴を埋め、要約を足すと cap を越える周は段ごと落とす（[`base_block`]）。観点・理由の
 //! 型・既存の 3 材料は不変。
+//!
+//! **write-set の外の材料**（設計 contract-source.md §51 行 bc）: 契約の本文が名指す write-set の外の物（`.rs` の item・要約・
+//! data file の鍵の行・依存の表・親 module の宣言・depends の相手の行）を子 module `outside` が組み、本文が空でない周だけ
+//! [`OUTSIDE_FILE`] として置く（約束の行と同じ形）。lens は `{outside}` の穴を名ごとに cap の残りで埋める（[`outside_block`]）。
 
 mod base;
 mod judgement;
+mod outside;
 mod requirements;
 pub use base::base_block;
+pub use outside::outside_block;
 pub use judgement::{judgement_of, review_dir, review_path, unaddressed, verdict_of};
 pub use judgement::{Judgement, Rework, ROW_SAME_KIND_STOP};
 use requirements::requirements_text;
@@ -75,6 +81,9 @@ pub const PROMISES_FILE: &str = "promises.txt";
 
 /// `{base}` の穴の本文（write-set の各項目の base の要約・契約の写しの隣・lens が読む・§40）。
 pub const BASE_FILE: &str = "base.txt";
+
+/// `{outside}` の穴の本文（契約が名指す write-set の外の物・名指しの在る周だけ契約の写しの隣に置く・§51）。
+pub const OUTSIDE_FILE: &str = "outside.txt";
 
 /// lens の scope の unit 名に載せる段の名。
 const REVIEW_STAGE: &str = "review";
@@ -253,10 +262,12 @@ struct Material {
     design: String,
     /// `req` の各 id の要件本文（読めない周は明示の 1 行）。
     requirements: String,
-    /// 約束の行の写し（[`promises_text`]・Promised でない行は空）。
+    /// 約束の行の写し（[`promise_rows`] を [`render_promises`] で組む・Promised でない行は空）。
     promises: String,
     /// write-set の各項目の base の要約（読めない項目は明示の 1 行・§40）。
     base: String,
+    /// 契約が名指す write-set の外の物（名指しの無い契約は空・§51）。
+    outside: String,
 }
 
 /// 審査の判定 1 件（verdict と根拠と、PASS でない周の理由の型と場所）。
@@ -305,26 +316,33 @@ pub fn review(entry: &Review<'_>) -> Outcome {
 
 /// 材料を base から読む（読めなさは本文の明示の 1 行にする・C10）。
 fn materials(entry: &Review<'_>) -> Material {
+    let design = design_text(entry.repo, &entry.contract.design);
+    let promised = promise_rows(entry.repo, &entry.contract.design);
+    // 外の材料の本文は節の本文（導出物の行は goal）・done・約束の行の text（§51 形 2）。
+    let mut bodies = vec![design.as_str(), entry.contract.done.as_str()];
+    bodies.extend(promised.iter().map(|promise| promise.text.as_str()));
+    let outside = outside::outside_text(entry.repo, entry.contract, &bodies);
     Material {
-        design: design_text(entry.repo, &entry.contract.design),
         requirements: requirements_text(entry.repo, entry.requirements, &entry.contract.req),
-        promises: promises_text(entry.repo, &entry.contract.design),
+        promises: render_promises(&promised.iter().collect::<Vec<&table::PromiseRow>>()),
         base: base::base_text(entry.repo, &entry.contract.write_set),
+        outside,
+        design,
     }
 }
 
-/// 契約の `design` が設計 pointer なら、設計 doc の契約表からその行の約束の行を読み写しに組む（受付と同じ読み手
+/// 契約の `design` が設計 pointer なら、設計 doc の契約表からその行の約束の行を読む（受付と同じ読み手
 /// `read_table` → `promises_of`）。pointer でない・読めない・約束の行を持たない周は空（読めなさは [`design_text`] が
 /// `{design}` の本文に明示する）。
-fn promises_text(repo: &Path, design: &str) -> String {
+fn promise_rows(repo: &Path, design: &str) -> Vec<table::PromiseRow> {
     let Ok(pointer) = table::parse_pointer(design) else {
-        return String::new();
+        return Vec::new();
     };
     let Ok(text) = table::read(repo, &pointer.path) else {
-        return String::new();
+        return Vec::new();
     };
     let (_, promises) = table::read_table(&pointer.path, &text).unwrap_or_default();
-    render_promises(&table::promises_of(&promises, &pointer.id))
+    table::promises_of(&promises, &pointer.id).into_iter().cloned().collect()
 }
 
 /// 約束の行の写し: `n` の順に 1 行ずつ `n` / `text` / `fixture` / `expect` の 4 欄（約束の行が無ければ空）。
@@ -445,11 +463,13 @@ fn keep(entry: &Review<'_>, material: &Material) -> Result<PathBuf, String> {
         let path = dir.join(name);
         std::fs::write(&path, material_file(body)).map_err(|err| format!("{} を書けない: {err}", path.display()))?;
     }
-    // 約束の行の写しは Promised の行だけ置く（無い file ＝ lens の雛形は 1 字も変わらない）。
-    if !material.promises.is_empty() {
-        let path = dir.join(PROMISES_FILE);
-        std::fs::write(&path, material_file(&material.promises))
-            .map_err(|err| format!("{} を書けない: {err}", path.display()))?;
+    // 約束の行の写しは Promised の行だけ・外の材料は名指しの在る契約だけ置く（無い file ＝ lens の雛形は 1 字も変わらない）。
+    for (name, body) in [(PROMISES_FILE, &material.promises), (OUTSIDE_FILE, &material.outside)] {
+        if body.is_empty() {
+            continue;
+        }
+        let path = dir.join(name);
+        std::fs::write(&path, material_file(body)).map_err(|err| format!("{} を書けない: {err}", path.display()))?;
     }
     Ok(contract)
 }
