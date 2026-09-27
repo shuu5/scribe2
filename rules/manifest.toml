@@ -706,6 +706,18 @@ enabled = true
 ruling = "user 2026-09-26T08:28Z"
 ruled_at = "2026-09-26"
 
+# heartbeat の段の上げ（秒・設計 seat-heartbeat.md §17 形 1〜3）。live が 0 本と測れ、0 本の分数 × 60 がこの値以上の周は、
+# 黙りの門の閾値を seat.tick_stale_s と値の小さい方にし、梯子を段 0 に留め、合図の末尾に alarm=idle を足す。0 は上げない。
+# 任意の行: 読めない周は上げず、合図の末尾に alarm=idle-unset を足す（tick は no-rule で断らない）。
+
+[[rule]]
+id = "seat.idle_alarm_s"
+kind = "SeatIdleAlarmS"
+value = 900
+enabled = true
+ruling = "user 2026-09-27T14:02Z 項 4"
+ruled_at = "2026-09-27"
+
 # 口座の宣言（設計 fleet-usage.md §2・account-lifecycle.md §2・ADR-0026 §2.1）は host の manifest（state dir
 # の host.toml）にだけ置く。この file に口座の表は置かない（文法は残る・足す変更は A1 の対話面で聞く・本 repo
 # は PUBLIC・SRS CON2）。器は credential の置き場を走査せず、宣言だけを真実として読む（C3）。

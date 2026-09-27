@@ -54,7 +54,7 @@ use crate::fleet::usage::{self, fresh_rows};
 use crate::fleet::State;
 use crate::hook::group::{self, current_of, exit_dialog, group_of, pressed, Caps, Judgement, Lock, Refusal, EXIT};
 use crate::name::NAME;
-use crate::pipe::dispatch::facts;
+use crate::pipe::dispatch::facts::{self, Fact, Facts};
 use crate::rules::manifest::{AccountGroup, Manifest};
 use crate::rules::{int_row, list_row, RuleError};
 use std::collections::BTreeSet;
@@ -72,6 +72,8 @@ pub const ROW_LADDER: &str = "seat.pointer_ladder_s";
 const ROW_WINDOW: &str = "pipe.stop_grace_ms";
 /// 群の移動の退避の猶予の rules 行（秒・起点は群の記録の ts・設計 §13 形 1）。
 pub const ROW_GRACE: &str = "seat.move_grace_s";
+/// heartbeat の段の上げの rules 行（秒・任意の行＝[`Rows::of`] の必須に入れない・設計 §17 形 1）。
+pub const ROW_IDLE_ALARM: &str = "seat.idle_alarm_s";
 
 /// 梯子の記録の file 名（席の置き場の直下）。
 pub const LADDER_FILE: &str = "pointer-ladder";
@@ -400,6 +402,21 @@ pub fn pointer_of(pace: &Pace, sent_at: Option<u64>, step: u32, now: u64) -> Poi
 pub fn signal(step: u32, pace: &Pace) -> String {
     let next = pace.wait_of(step.saturating_add(1)).map_or_else(|| "次の合図は無い・打ち切り".to_owned(), |wait| format!("次の合図は {wait} 秒後"));
     format!("{NAME} tick: heartbeat step={step} — 台帳の現在地（bd --readonly ready --limit 0）から続きを進める（変化が無ければ{next}）")
+}
+
+/// 段の上げの判定（設計 §17 形 1 / 2）: 行が無い・読めない周は上げず語 `idle-unset`、値が正で live が 0 と測れ 0 本の分数 × 60 が
+/// 値以上の周だけ上げて語 `idle`、他（値 0・測れない・値なし）は上げず語なし。返り値は（上げた周の値, `alarm=` の語）。
+fn idle_alarm(alarm_s: Option<u64>, found: &Facts) -> (Option<u64>, Option<&'static str>) {
+    match (alarm_s, &found.live, &found.idle) {
+        (None, _, _) => (None, Some("idle-unset")),
+        (Some(value), Fact::Value(0), Fact::Value(minutes)) if value > 0 && minutes.saturating_mul(60) >= value => (Some(value), Some("idle")),
+        _ => (None, None),
+    }
+}
+
+/// 段の上げ（pure・設計 §17 形 3 (a)(b)・**1 本**）: 上げた周は（黙りの閾値, 段）を（`seat.tick_stale_s` と値の小さい方, 0）に。
+pub fn raise(pace: &Pace, step: u32, alarm_s: Option<u64>) -> (u64, u32) {
+    alarm_s.map_or((pace.stale_s, step), |value| (pace.stale_s.min(value), 0))
 }
 
 /// 起こし直しの初手の文面（**正本はこの 1 関数**・設計 §10 形 2・先頭の `<NAME> seat: relaunch` が器自身の目印）。起動行の末尾に
@@ -775,15 +792,17 @@ struct Rows {
     grace_s: u64,
     /// 口座の門の閾値。
     caps: Caps,
+    /// 段の上げの閾値（秒・任意の行が無い・読めない周は `None`＝上げず `alarm=idle-unset`・設計 §17 形 1）。
+    idle_alarm_s: Option<u64>,
 }
 
 impl Rows {
-    /// 全部を読む。どれかが読めない周は `Err`（既定値に倒さない・C1）。
+    /// 全部を読む。どれかが読めない周は `Err`（既定値に倒さない・C1）。段の上げの行だけは任意で、読めない周も `Err` にしない。
     fn of(manifest: &Manifest) -> Result<Self, String> {
         int_row(manifest, ROW_INTERVAL)?;
         let pace = Pace::of(int_row(manifest, ROW_STALE)?, list_row(manifest, ROW_LADDER)?)?;
         let (window_ms, grace_s) = (int_row(manifest, ROW_WINDOW)?, int_row(manifest, ROW_GRACE)?);
-        Ok(Self { pace, window_ms, grace_s, caps: Caps::of(manifest)? })
+        Ok(Self { pace, window_ms, grace_s, caps: Caps::of(manifest)?, idle_alarm_s: int_row(manifest, ROW_IDLE_ALARM).ok() })
     }
 }
 
@@ -811,6 +830,10 @@ struct Front {
     now: u64,
     /// 停止の記録が在る（梯子の記録を読まない周・`back` の頭で止まる）。
     off: bool,
+    /// 黙りの門の閾値（段を上げた周は短い・[`raise`]）。
+    stale_s: u64,
+    /// 合図の末尾（§16 の並列の実測と §17 の ` alarm=` の列・列が空の周は key を出さない）。
+    tail: String,
 }
 
 /// 形 1 の 1〜3（登録 row → 窓が shell か〔§7 形 1〕→ 移動の周か〔§10 形 8〕→ 状態の打刻 → digest の比較）。窓が shell の周は
@@ -839,9 +862,13 @@ fn front(input: &Input) -> Result<Front, Verdict> {
         Some(found) => Some(settled(&seat, found, &stamps, digest, (now, rows.pace.stale_s))?),
         None => None,
     };
-    let step = candidate(record.as_ref(), digest);
+    // 並列の実測（設計 §16・列の結果なし＝`held=` を出さない・台帳も列も撃たない）で段を上げるかを決める（§17 形 2）。
+    let measured = facts::facts(&input.state.path, None, now);
+    let (alarm_s, word) = idle_alarm(rows.idle_alarm_s, &measured);
+    let (stale_s, step) = raise(&rows.pace, candidate(record.as_ref(), digest), alarm_s);
     let pointer = pointer_of(&rows.pace, record.map(|found| found.sent_at), step, now);
-    Ok(Front { rows, fleet, account, role, anchor, seat, digest, step, pointer, now, off })
+    let tail = format!("{}{}", facts::line(&measured), word.map_or_else(String::new, |word| format!(" alarm={word}")));
+    Ok(Front { rows, fleet, account, role, anchor, seat, digest, step, pointer, now, off, stale_s, tail })
 }
 
 /// 窓が shell の周（設計 §7 形 1〜3）: 打刻と梯子を読まず、同じ target に席を起こす（[`wake`]）。口座は anchor が群に属せば群の
@@ -979,7 +1006,7 @@ fn back(input: &Input, front: &Front) -> Result<Verdict, Verdict> {
         return Err(Verdict::noop(NoopReason::HeartbeatOff));
     }
     let at = |reason| Verdict::noop_at(reason, front.pointer, front.step);
-    if !aged(front.digest, front.now, front.rows.pace.stale_s) {
+    if !aged(front.digest, front.now, front.stale_s) {
         return Err(at(NoopReason::StampRecent));
     }
     match front.pointer {
@@ -993,9 +1020,7 @@ fn back(input: &Input, front: &Front) -> Result<Verdict, Verdict> {
     input_gate(input).map_err(at)?;
     let record = Ladder { sent_at: front.now, step: front.step, digest: None };
     write_ladder(&front.seat, &record).map_err(|_| at(NoopReason::RecordUnwritable))?;
-    // 末尾に並列の実測（設計 §16・列の結果なし＝`held=` を出さない・台帳も列も撃たない）。
-    let facts = facts::line(&facts::facts(&input.state.path, None, front.now));
-    let payload = format!("{}{facts}", signal(front.step, &front.rows.pace));
+    let payload = format!("{}{}", signal(front.step, &front.rows.pace), front.tail);
     let request = Request { target: input.target, socket: input.socket, payload: &payload, state_dir: Some(input.state) };
     let delivery = deliver_within(&request, Duration::from_millis(front.rows.window_ms));
     Ok(Verdict {

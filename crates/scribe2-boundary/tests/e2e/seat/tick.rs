@@ -100,7 +100,9 @@ fn seat_tick_ladder_climbs_six_signals_then_stops() {
     assert_eq!(tick_keys(&place).len(), keys, "段 6 は 0 key");
     assert_eq!(tick_ladder(&place), Some((sent, 5, Some(sent + 2))), "記録は段 5 のまま（基準だけが入る）");
     let texts: Vec<String> = tick_keys(&place).into_iter().filter(|key| key.contains(" -l ")).collect();
-    assert_eq!(texts, (0..=5).map(tick_text_key).collect::<Vec<_>>(), "合図は段 0〜5 の 6 本（列の長さ・段 5 は次が無い）");
+    // 写しは段の上げの行（設計 §17 形 1）を持たないので、送った合図の末尾に ` alarm=idle-unset` が付く。
+    let want: Vec<String> = (0..=5).map(|step| format!("{} alarm=idle-unset", tick_text_key(step))).collect();
+    assert_eq!(texts, want, "合図は段 0〜5 の 6 本（列の長さ・段 5 は次が無い）");
     assert_eq!(tick_injections(&place).len(), 6, "注入の記録 6 行");
 }
 
@@ -1120,11 +1122,12 @@ fn tick_facts_want(tail: &str) -> String {
     format!("{}{tail}", signal.strip_suffix(" live=0 idle=-").unwrap_or(&signal))
 }
 
-/// (t-a) Landed の便 1 本・最後の event が 7230 秒前 → 合図の末尾が ` live=0 idle=120m`（分は切り捨て）。
+/// (t-a) Landed の便 1 本・最後の event が 7230 秒前 → 合図の末尾が ` live=0 idle=120m`（分は切り捨て）。埋め込みの
+/// `seat.idle_alarm_s` = 900 で 120 分 × 60 ≥ 900 の周は段が上がり、末尾に ` alarm=idle` が続く（設計 §17 形 3 (c)）。
 #[test]
 fn seat_tick_facts_landed_run_7230s_ago_ends_live_zero_idle_120m() {
     let sent = tick_facts_sent(Some("Landed"), 7230);
-    assert_eq!(sent, tick_facts_want(" live=0 idle=120m"));
+    assert_eq!(sent, tick_facts_want(" live=0 idle=120m alarm=idle"));
     assert!(!sent.contains("held="), "列の結果なし: {sent}");
 }
 
@@ -1150,4 +1153,102 @@ fn seat_tick_facts_gated_run_without_a_verdict_ends_unmeasured() {
     let sent = tick_facts_sent(Some("Gated"), 7230);
     assert_eq!(sent, tick_facts_want(" live=? idle=?"));
     assert!(!sent.contains("held="), "列の結果なし: {sent}");
+}
+
+/// 行 u（設計 seat-heartbeat.md §17）の歯の置き場: 置き場の event log に便 1 本の event（`RunCreated` と段 `stage` の
+/// `RunStage`・ts はどちらも `ago` 秒前）を足し、席の打刻を `silent` 秒前の Idle の Stop にする。rules の写し（`tick_rules_text`
+/// の本文・`alarm` が在ればその後ろに `seat.idle_alarm_s` の行）の path を対で返す。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn tick_idle_place(stage: &str, ago: u64, silent: u64, alarm: Option<u64>) -> (TickPlace, String) {
+    let place = tick_place(true);
+    let log = vessel::fleet::store::events_path(&place.state);
+    let ts = vessel::fleet::cli::format_utc(unix_now().saturating_sub(ago));
+    let mut text = fs::read_to_string(&log).expect("登録 row の event log が在る");
+    for (kind, at) in [("RunCreated", "Intake"), ("RunStage", stage)] {
+        text.push_str(&format!(
+            "{{\"schema\":1,\"ts\":\"{ts}\",\"kind\":\"{kind}\",\"run\":\"r-idle\",\"bead\":\"s2-idle.1\",\"host\":\"h\",\"actor\":\"machine\",\"stage\":\"{at}\"}}\n"
+        ));
+    }
+    fs::write(&log, text).expect("便の event を足せる");
+    tick_silent_for(&place, silent);
+    let row = alarm.map_or_else(String::new, |secs| {
+        tick_rules_body(&[("seat.idle_alarm_s", "SeatIdleAlarmS", secs.to_string())]).replacen("schema = 1\n", "", 1)
+    });
+    let rules = fixture(&place.dir, "idle-alarm.toml", &format!("{}{row}", tick_rules_text("", None)));
+    (place, rules)
+}
+
+/// 写しで 1 回撃ち、判定行と偽 tmux へ送った合図の text の列（`-l` の呼出の行）を返す。
+fn tick_idle_run(place: &TickPlace, rules: &str) -> (String, Vec<String>) {
+    let out = tick_run(place, &["--rules", rules]);
+    let prefix = format!("send-keys -t {TICK_TARGET} -l ");
+    let texts = tick_keys(place).iter().filter_map(|key| key.strip_prefix(&prefix).map(str::to_owned)).collect();
+    (stdout_of(&out), texts)
+}
+
+/// (u-a) 値 60・Landed の便 1 本の最後の event が 120 秒前（2 分 × 60 ≥ 60）・席の打刻が 90 秒前（`seat.tick_stale_s` より新しい）
+/// の周は黙りの門が 60 秒に縮み、合図が 1 回出て末尾が ` alarm=idle`（base と門を縮めない実装は `stamp-recent` の noop）。
+#[test]
+fn seat_tick_idle_alarm_shortens_the_silence_gate_and_ends_with_alarm_idle() {
+    let (place, rules) = tick_idle_place("Landed", 120, 90, Some(60));
+    let (line, texts) = tick_idle_run(&place, &rules);
+    assert_eq!(line, tick_inject(0), "打刻が 90 秒前でも値 60 の門を越えた周は送る");
+    assert_eq!(texts, [tick_facts_want(" live=0 idle=2m alarm=idle")], "合図 1 回・末尾は alarm=idle");
+}
+
+/// (u-b) 同じ周で梯子の記録が段 2・基準が今の digest・`sent_at` が列の最初の待ちより前で段 3 の待ちより後 → 段を 0 に留めて
+/// 合図は `step=0`・記録の段は 0（段を留めない実装は段 3 の床で `wait` の noop）。
+#[test]
+fn seat_tick_idle_alarm_holds_the_ladder_at_step_zero() {
+    let (place, rules) = tick_idle_place("Landed", 120, 90, Some(60));
+    let now = unix_now();
+    tick_stamps(&place, &[("idle", "Stop", now - 90)]);
+    tick_ladder_put(&place, now - TICK_STALE - 100, 2, Some(now - 90));
+    let (line, texts) = tick_idle_run(&place, &rules);
+    assert_eq!(line, tick_inject(0), "段の候補 3 を段 0 に留め、列の最初の待ちを越えた床で送る");
+    assert_eq!(texts, [tick_facts_want(" live=0 idle=2m alarm=idle")], "合図は step=0");
+    assert_eq!(tick_ladder(&place).map(|(_, step, digest)| (step, digest)), Some((0, None)), "記録の段は 0（段を上らせない）");
+}
+
+/// (u-c) 値 0 の周と live 1 本（Spawned）の周は段を上げず、打刻 90 秒前の周は `stamp-recent` の noop（値 0 は語も足さない）。
+#[test]
+fn seat_tick_idle_alarm_zero_value_or_a_live_run_stays_quiet() {
+    for (stage, alarm) in [("Landed", 0), ("Spawned", 60)] {
+        let (place, rules) = tick_idle_place(stage, 120, 90, Some(alarm));
+        let (line, texts) = tick_idle_run(&place, &rules);
+        assert_eq!(line, tick_noop("stamp-recent", "wait:0", "0"), "{stage} 値 {alarm} は上げない");
+        assert!(texts.is_empty(), "{stage} 値 {alarm}: 0 key: {texts:?}");
+        assert_eq!(tick_ladder(&place), None, "{stage} 値 {alarm}: 記録は書かない");
+    }
+}
+
+/// (u-d) 席の打刻が 150 秒前・最後の event が 170 秒前（2 分・切り捨て）の周: 値 120 は 2 × 60 ≥ 120 で上げて合図が出、値 121 は
+/// 上げず `stamp-recent` の noop（秒のまま 170 ≥ 121 と比べる実装は 121 でも上げる）。
+#[test]
+fn seat_tick_idle_alarm_compares_whole_minutes_with_the_seconds() {
+    let (place, rules) = tick_idle_place("Landed", 170, 150, Some(121));
+    let (line, texts) = tick_idle_run(&place, &rules);
+    assert_eq!(line, tick_noop("stamp-recent", "wait:0", "0"), "2 分 × 60 = 120 < 121 は上げない");
+    assert!(texts.is_empty(), "値 121: 0 key: {texts:?}");
+    let (place, rules) = tick_idle_place("Landed", 170, 150, Some(120));
+    let (line, texts) = tick_idle_run(&place, &rules);
+    assert_eq!(line, tick_inject(0), "2 分 × 60 ≥ 120 は上げて送る");
+    assert_eq!(texts, [tick_facts_want(" live=0 idle=2m alarm=idle")], "値 120: 末尾は alarm=idle");
+}
+
+/// (u-e) 段の上げの行が無い写し: (u-a) と同じ周は門を縮めず `stamp-recent` の noop で、打刻が `seat.tick_stale_s` を越えた周の
+/// 合図の末尾は ` alarm=idle-unset`（決めた値が無いことを黙って「上げない」に畳まない）。
+#[test]
+fn seat_tick_idle_alarm_without_the_row_keeps_the_gate_and_says_unset() {
+    let (place, rules) = tick_idle_place("Landed", 120, 90, None);
+    let (line, texts) = tick_idle_run(&place, &rules);
+    assert_eq!(line, tick_noop("stamp-recent", "wait:0", "0"), "行の無い写しは門を縮めない");
+    assert!(texts.is_empty(), "0 key: {texts:?}");
+    tick_silent_for(&place, TICK_STALE + 60);
+    let (line, texts) = tick_idle_run(&place, &rules);
+    assert_eq!(line, tick_inject(0), "打刻の古い周は送る");
+    assert_eq!(texts, [tick_facts_want(" live=0 idle=2m alarm=idle-unset")], "末尾は alarm=idle-unset");
 }

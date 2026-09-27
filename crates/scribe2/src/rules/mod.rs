@@ -332,6 +332,9 @@ pub enum RuleKind {
     /// 席の起動を包む封じ込めの箱の memory の上限（MiB・設計 account-lifecycle.md §30 形 1・ADR-0072）。0 は包まない・読めない周も
     /// 包まない（起動は止めない＝縮退）。
     SeatMemoryMaxMb,
+    /// heartbeat の段の上げの閾値（秒・設計 seat-heartbeat.md §17 形 1）。live 0 本の分数 × 60 がこの値以上の周は黙りの門を
+    /// 短くし梯子を段 0 に留める。0 は上げない。任意の行で、読めない周は上げず合図に `alarm=idle-unset` を足す。
+    SeatIdleAlarmS,
     /// **クラスの語列表**（設計 contract-source.md §48 の 2・ADR-0061）。値は要素「クラスの名 + 語列」の列（読み手は
     /// [`crate::pipe::contract::class_element`] の 1 本）で、契約表の検査が verify 各行に禁じる語列と同じ照合で当て、導出が
     /// 行の `classes` に無い行を断る。id は [`crate::pipe::contract::CLASS_ROW`] の 1 行。
@@ -409,6 +412,7 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::SeatPointerLadderS,
     RuleKind::SeatMoveGraceS,
     RuleKind::SeatMemoryMaxMb,
+    RuleKind::SeatIdleAlarmS,
     RuleKind::RunnerClassCommands,
 ];
 
@@ -476,7 +480,7 @@ impl RuleKind {
             Self::HostGuardDeniedCommands => "HostGuardDeniedCommands", Self::HostGuardRmProtected => "HostGuardRmProtected",
             // 管理 tick の 3 kind と席の箱も 2 行に畳み、対で読む model と effort の 2 組も 1 行ずつに畳む（同じ上限）。
             Self::SeatTickIntervalS => "SeatTickIntervalS", Self::SeatTickStaleS => "SeatTickStaleS", Self::SeatMemoryMaxMb => "SeatMemoryMaxMb",
-            Self::SeatPointerLadderS => "SeatPointerLadderS", Self::SeatMoveGraceS => "SeatMoveGraceS",
+            Self::SeatPointerLadderS => "SeatPointerLadderS", Self::SeatMoveGraceS => "SeatMoveGraceS", Self::SeatIdleAlarmS => "SeatIdleAlarmS",
         }
     }
 
@@ -524,7 +528,7 @@ impl RuleKind {
             | Self::LandTrainMax
             | Self::PipeMaxLive
             | Self::FlipMarksPerPr
-            | Self::SeatTickIntervalS | Self::SeatTickStaleS | Self::SeatMoveGraceS | Self::SeatMemoryMaxMb
+            | Self::SeatTickIntervalS | Self::SeatTickStaleS | Self::SeatMoveGraceS | Self::SeatMemoryMaxMb | Self::SeatIdleAlarmS
             | Self::AccountSelection => ValueShape::Int,
             Self::DialogueSurface
             | Self::RunnerModel
