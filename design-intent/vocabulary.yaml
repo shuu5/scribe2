@@ -736,8 +736,42 @@ terms:
     relationships: [管理 tick, 席, 席の状態]
   - canonical: 席間の連絡
     domain: consumer
-    definition: 開発 session の席どうしの message を届ける経路。 器は持たない (ADR-0045・SRS FR44)。 入力欄への差し込みは席の起動の起動行 (FR59) と管理 tick の打刻の合図 (FR27・ADR-0058) の 2 つだけに使う。
-    relationships: [席, 管理 tick, 開発 session]
+    definition: 開発 session の席どうしの message を届ける経路。 器は持たない (ADR-0045・SRS FR44)。 器から席の入力欄への差し込みの用途の列の正本は SRS FR44 (写さない)。
+    relationships: [席, 管理 tick, 開発 session, 裁定の指し示し, 注入の口]
+  - canonical: 裁定の指し示し
+    domain: consumer
+    aliases: [ruling pointer]
+    definition: 器の口 seat deliver が、 裁定面の記帳 id 1 つだけを入れた指し示しの雛形の 1 行を待ちの席へ差し込むこと (SRS FR79・ADR-0077)。 裁定の逐語と続きの指示は持たず、 送る前の確かめは管理 tick と同じ入力欄の門。 任意の文を運ぶ注入の口 (seat inject) とは別の口で、 注入の口は器に無い (ADR-0045)。
+    relationships: [裁定面, 裁定面の記帳 id, 席, 管理 tick, 状態の打刻, 入力欄の門, 席間の連絡, 注入の口]
+    flagged_ambiguities: [口の名 seat deliver はこの口 1 つを指し、 管理 tick・起こし直し・便の終端の周の通知が共用する code の送達の関数の全体ではない]
+  - canonical: 裁定面
+    domain: consumer
+    aliases: [ruling surface]
+    definition: 消費側の project が持つ、 user が裁定を書き込む画面と server (器の外の置き場)。 器はこの面を持たず、 面が自分の置き場に裁定を書いた後に裁定の指し示しの口を撃つ (ADR-0077)。
+    relationships: [裁定の指し示し, 裁定面の記帳 id, 対話面, 消費側]
+    flagged_ambiguities: [面への書き込みは器の外の置き場への書き込みで、 器の裁定 event・承認 event ではない。 器が承認と裁定を受ける面は対話面 1 つのまま]
+  - canonical: 裁定面の記帳 id
+    domain: consumer
+    aliases: [記帳 id]
+    definition: 裁定面が自分の置き場で裁定に付けた識別子。 裁定の指し示しの口が受けて送る行に入れる外からの値はこれ 1 つで、 形の規範は SRS FR79 (写さない)。
+    relationships: [裁定面, 裁定の指し示し, 裁定 id]
+    flagged_ambiguities: [器の裁定 id (器が打った裁定 event の時刻) とは別の entity で、 器は記帳 id の実在も中身も確かめない]
+  - canonical: 入力欄の門
+    domain: consumer
+    aliases: [input gate]
+    definition: 器が席の入力欄へ 1 行を送る前に入力欄を読み、 人の打ちかけや読めないときには 1 key も送らない仕組み (ADR-0058)。 管理 tick の打刻の合図・群の通知・便の終端の周の通知・裁定の指し示しが同じ 1 本を通る。
+    relationships: [管理 tick, 打刻の合図, 裁定の指し示し, 便の終端の周の通知, 状態の打刻]
+  - canonical: 注入の口
+    domain: consumer
+    aliases: [seat inject]
+    definition: 席の入力欄へ任意の文を送る subcommand。 器に無い (ADR-0045 で廃止・不在は歯が測る)。 裁定の指し示しの口とは別。
+    relationships: [席間の連絡, 裁定の指し示し]
+  - canonical: 便の終端の周の通知
+    domain: consumer
+    aliases: [pipe notify]
+    definition: 器の dispatcher が便の終端の周に orchestrator の席の入力欄へ送る 1 行 (落ちた便の段か、 起こした便 0 で候補の在る周の idle)。 形と契機は設計 dispatcher.md §19 / §21 が持ち、 SRS FR44 の差し込みの用途の列の 1 つ。
+    relationships: [便の終端の周, dispatcher, 入力欄の門, 席間の連絡]
+    flagged_ambiguities: [pipeline の設計の段の通知 (段ごとに stderr と record へ残す行) とは別]
   - canonical: 契約表
     domain: consumer
     definition: tracked な設計 doc が末尾に持つ機械が読む区間の表。 1 行 = 契約 1 本で、 契約の正本 (SRS FR47・ADR-0023 §2.1)。 欄の集合の正本は core の型で、 文書は生成物 contracts/schema.toml を pointer で指す (ADR-0013 §2.1)。 読み手は rules manifest と同じ 1 組の parser (ADR-0010 §2.1)。
