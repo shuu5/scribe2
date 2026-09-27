@@ -1,0 +1,5 @@
+---
+source: crates/scribe2-boundary/tests/e2e/seat.rs
+expression: body
+---
+scribe2 seat: 裁定 rl-2026.09.27_0100:a が届いた（在りかは裁定面の記帳）

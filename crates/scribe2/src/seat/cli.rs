@@ -14,7 +14,7 @@ use std::path::Path;
 
 /// `seat` の使い方。
 pub fn usage() -> String {
-    "usage: seat <register --state-dir S --target T --role R --account L --launch FILE [--anchor DIR]|launch --state-dir S --role R --target S:W [--account L] [--anchor DIR] [--model M] [--restore CMD] [--rules F]|ruling add --state-dir S --target T --words W [--bead B] [--rule ID]|ruling ls --state-dir S|tick --state-dir S --target S:W [--rules F]|tick install --state-dir S --target S:W --unit-dir U --binary PATH [--rules F]|tick uninstall --state-dir S --target S:W --unit-dir U --binary PATH [--rules F]|tick status --state-dir S [--target S:W] [--rules F]|retire --state-dir S --target S:W [--reason WORDS]|heartbeat off --state-dir S --target S:W|heartbeat on --state-dir S --target S:W|heartbeat status --state-dir S --target S:W|<label> [--orchestrator] [-c|-r ID] [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]".to_owned()
+    "usage: seat <register --state-dir S --target T --role R --account L --launch FILE [--anchor DIR]|launch --state-dir S --role R --target S:W [--account L] [--anchor DIR] [--model M] [--restore CMD] [--rules F]|ruling add --state-dir S --target T --words W [--bead B] [--rule ID]|ruling ls --state-dir S|tick --state-dir S --target S:W [--rules F]|tick install --state-dir S --target S:W --unit-dir U --binary PATH [--rules F]|tick uninstall --state-dir S --target S:W --unit-dir U --binary PATH [--rules F]|tick status --state-dir S [--target S:W] [--rules F]|retire --state-dir S --target S:W [--reason WORDS]|heartbeat off --state-dir S --target S:W|heartbeat on --state-dir S --target S:W|heartbeat status --state-dir S --target S:W|deliver --state-dir S --target S:W --ruling ID|<label> [--orchestrator] [-c|-r ID] [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]".to_owned()
 }
 
 /// `seat` の既知の verb（閉じた語・宣言順・設計 contract-source.md §17 の形 (vii)）。短い形の第 1 token（口座 label）は
@@ -33,10 +33,20 @@ pub enum SeatCommand {
     Retire,
     /// `seat heartbeat off|on|status`（席ごとの合図の停止の記録・設計 seat-heartbeat.md §12）。
     Heartbeat,
+    /// `seat deliver`（待ちの席へ裁定の指し示しを 1 行送る・設計 seat-heartbeat.md §15）。
+    Deliver,
 }
 
 /// [`SeatCommand`] の全部（宣言順・件数は既知の verb の本数で dispatch の腕の本数ではない）。
-pub const SEAT_COMMANDS: &[SeatCommand] = &[SeatCommand::Register, SeatCommand::Launch, SeatCommand::Ruling, SeatCommand::Tick, SeatCommand::Retire, SeatCommand::Heartbeat];
+pub const SEAT_COMMANDS: &[SeatCommand] = &[
+    SeatCommand::Register,
+    SeatCommand::Launch,
+    SeatCommand::Ruling,
+    SeatCommand::Tick,
+    SeatCommand::Retire,
+    SeatCommand::Heartbeat,
+    SeatCommand::Deliver,
+];
 
 impl SeatCommand {
     /// 引数の字面。
@@ -48,6 +58,7 @@ impl SeatCommand {
             Self::Tick => "tick",
             Self::Retire => "retire",
             Self::Heartbeat => "heartbeat",
+            Self::Deliver => "deliver",
         }
     }
 
@@ -120,6 +131,8 @@ const TICK_STATUS: &str = "status";
 const ALLOWED_RETIRE: &[cli_args::Allowed] = &[value("--state-dir"), value("--target"), value("--reason")];
 /// `seat heartbeat`（`off` / `on` / `status` の 3 語は positional・設計 seat-heartbeat.md §12 形 2・pane を読まないので tmux の flag は受けない）。
 const ALLOWED_HEARTBEAT: &[cli_args::Allowed] = &[value("--state-dir"), value("--target")];
+/// `seat deliver`（設計 seat-heartbeat.md §15 形 1・窓は埋め込みの manifest・pane は tmux から読む＝`--rules` / `--capture-file` は受けない）。
+const ALLOWED_DELIVER: &[cli_args::Allowed] = &[value("--state-dir"), value("--target"), value("--ruling"), value("--tmux-socket")];
 
 /// [`SeatCommand`] が受ける flag の集合（[`dispatch`] が verb を選んだ直後に [`crate::cli_args::parse`] へ渡す・`rest` は verb の後ろ）。
 fn allowed_of(command: SeatCommand, rest: &[String]) -> &'static [Allowed] {
@@ -132,6 +145,7 @@ fn allowed_of(command: SeatCommand, rest: &[String]) -> &'static [Allowed] {
         SeatCommand::Tick => ALLOWED_TICK,
         SeatCommand::Retire => ALLOWED_RETIRE,
         SeatCommand::Heartbeat => ALLOWED_HEARTBEAT,
+        SeatCommand::Deliver => ALLOWED_DELIVER,
     }
 }
 
@@ -162,6 +176,7 @@ pub fn dispatch(args: &[String]) -> Outcome {
         (Some(SeatCommand::Tick), _) => tick_of(args.get(1..).unwrap_or_default()),
         (Some(SeatCommand::Retire), _) => retire_of(args.get(1..).unwrap_or_default()),
         (Some(SeatCommand::Heartbeat), _) => heartbeat_of(args.get(1..).unwrap_or_default()),
+        (Some(SeatCommand::Deliver), _) => deliver_of(args.get(1..).unwrap_or_default()),
         // 既知の verb でなく `--` で始まらない第 1 token は口座 label（短い形・account-lifecycle.md §14）。label は閉じた語を
         // 持たない＝[`SeatCommand`] の subcommand ではないので閉包の検査の外（消えた口の名もこの腕で従来どおり断る）。
         (None, Some(label)) if !label.starts_with("--") && !label.trim().is_empty() => short_of(label, args.get(1..).unwrap_or_default()),
@@ -344,6 +359,20 @@ fn heartbeat_of(args: &[String]) -> Outcome {
         return refused_usage();
     }
     super::tick::heartbeat(switch, state_dir, target)
+}
+
+/// `seat deliver`（設計 seat-heartbeat.md §15 形 1）: `--state-dir` と `S:W` の `--target` は必須で値欠けと空文字は使い方の誤り
+/// （`--tmux-socket` も同じ）。`--ruling` は必須で値欠けは使い方の誤り・空文字は形 2 の `id-empty` が名乗る（`seat ruling add` の
+/// `--words` と同じ受け方）。門と送りは [`super::deliver::run`] が持つ。
+fn deliver_of(args: &[String]) -> Outcome {
+    let [state_dir, target] = ["--state-dir", "--target"].map(|name| required_nonempty(args, name));
+    let (Ok(state_dir), Ok(target), Ok(Some(ruling)), Ok(socket)) = (state_dir, target, optional(args, "--ruling"), nonempty(args, "--tmux-socket")) else {
+        return refused_usage();
+    };
+    if !target_well_formed(target) {
+        return refused_usage();
+    }
+    super::deliver::run(&super::deliver::Flags { state_dir, target, ruling, socket })
 }
 
 /// `seat tick install|uninstall`（設計 seat-heartbeat.md §3）: `--state-dir` / `S:W` の `--target` / `--unit-dir` / `--binary` は必須で、

@@ -278,6 +278,7 @@ fn seat_autonomy_subcommands_are_gone_from_the_usage() {
 /// 送達の機構そのものは残る（`seat launch` の復元が使う・ADR-0045 §2 (4) の不変の面）ので、
 /// **消えたのは口だけ**である＝残る口 2 つは従来どおり使い方に在る。管理 tick（`s2-07l.582`）は同じ送達の機構を
 /// 呼ぶ在る側の口で（[`assert_tick_mouth`]）、`seat inject` の口は戻らない（ADR-0058・C17.2）。
+/// 裁定の指し示しの口 seat deliver は記帳 id だけを受ける別の口（ADR-0077）。
 ///
 /// **消えたことを測る歯**である（base では `seat inject --target s:w --text x` が自分の口として動くので RED）。
 #[test]
@@ -384,10 +385,10 @@ fn seat_args_unknown_flag_is_refused_with_rc_2_on_every_verb() {
 #[test]
 fn seat_command_all_known_verbs_round_trip_and_unknown_tokens_are_none() {
     use vessel::seat::cli::{SeatCommand, SEAT_COMMANDS};
-    assert_eq!(vessel::seat::cli::SEAT_COMMANDS.len(), 6, "記録時点の既知の verb（`.582` で +1〔管理 tick〕・`.620` で +1〔登録 row の退役〕・`.646` で +1〔合図の停止の記録〕）: {SEAT_COMMANDS:?}");
+    assert_eq!(vessel::seat::cli::SEAT_COMMANDS.len(), 7, "記録時点の既知の verb（`.582` で +1〔管理 tick〕・`.620` で +1〔登録 row の退役〕・`.646` で +1〔合図の停止の記録〕・`.659` で +1〔裁定の指し示し〕）: {SEAT_COMMANDS:?}");
     assert!(vessel::order::is_declaration_order(SEAT_COMMANDS, |command| command as usize), "宣言順: {SEAT_COMMANDS:?}");
     let words: Vec<&str> = SEAT_COMMANDS.iter().map(|command| command.as_str()).collect();
-    assert_eq!(words, ["register", "launch", "ruling", "tick", "retire", "heartbeat"], "字面の閉じた列（宣言順）");
+    assert_eq!(words, ["register", "launch", "ruling", "tick", "retire", "heartbeat", "deliver"], "字面の閉じた列（宣言順）");
     let usage = vessel::seat::cli::usage();
     for command in SEAT_COMMANDS {
         assert_eq!(SeatCommand::parse(command.as_str()), Some(*command), "as_str ↔ parse の往復: {command:?}");
@@ -3906,4 +3907,205 @@ fn seat_doctor_run_accounts_absent_or_unreadable_face_adds_no_field() {
     assert!(lines.contains(&"host-manifest=unreadable".to_owned()), "{lines:?}");
     assert!(!lines.iter().any(|line| line.contains("run-accounts=")), "{lines:?}");
     fs::remove_dir_all(&place.dir).ok();
+}
+
+// ───── 裁定の指し示し（seat-heartbeat.md §15・契約表の行 s・ADR-0077・`s2-07l.659`・接頭辞 `seat_deliver_`） ─────
+//
+// §2 の tick の fixture（[`tick_place`]〔偽 tmux・登録 row・最終行 Idle の打刻・空の入力欄〕）で `seat deliver` を撃つ。雛形と行の
+// 字面は契約から組む（実装の関数を使わない）。偽 tmux は消費の打刻を打たない＝送った周は queue の `consumed=false`。
+
+/// 使い方の 1 行の deliver の口（設計 §15 形 1）。
+const DELIVER_USAGE: &str = "deliver --state-dir S --target S:W --ruling ID";
+
+/// 指し示しの雛形の展開（契約の字面・設計 §15 形 6）。
+fn deliver_body(id: &str) -> String {
+    format!("{NAME} seat: 裁定 {id} が届いた（在りかは裁定面の記帳）")
+}
+
+/// `seat deliver` を偽の PATH で [`TICK_TARGET`] へ 1 回撃つ（置き場は `state`）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn deliver_run(place: &TickPlace, state: &str, id: &str, extra: &[&str]) -> Output {
+    Command::new(bin())
+        .args(["seat", "deliver", "--state-dir", state, "--target", TICK_TARGET, "--ruling", id])
+        .args(extra)
+        .env("PATH", &place.path)
+        .output()
+        .expect("binary を起動できる")
+}
+
+/// 置き場の event の件数（読めない周は `None`）。
+fn deliver_events(place: &TickPlace) -> Option<usize> {
+    vessel::fleet::store::read_all(&place.state).ok().map(|events| events.len())
+}
+
+/// 送った text（偽 tmux の `-l` の呼出の本文・`-S` の前置も読む）。
+fn deliver_texts(place: &TickPlace) -> Vec<String> {
+    fs::read_to_string(place.at(TICK_CALLS))
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| line.contains("send-keys"))
+        .filter_map(|line| line.split_once(" -l ").map(|(_, text)| text.to_owned()))
+        .collect()
+}
+
+/// 待ちの席へ撃って rc 0・stdout の delivered の 1 行・key は雛形の text 1 回 + Enter 1 回を測る。
+fn deliver_assert_delivered(place: &TickPlace, id: &str) {
+    let state = place.state.display().to_string();
+    let out = deliver_run(place, &state, id, &[]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "{id}: rc 0: {}", stderr_of(&out));
+    assert_eq!(stdout_of(&out), format!("seat deliver: delivered target={TICK_TARGET} ruling={id} consumed=false\n"), "{id}: 1 行");
+    assert!(stderr_of(&out).is_empty(), "{id}: stderr 0 byte");
+    let want = [format!("send-keys -t {TICK_TARGET} -l {}", deliver_body(id)), format!("send-keys -t {TICK_TARGET} Enter")];
+    assert_eq!(tick_keys(place), want, "{id}: text 1 回 + Enter 1 回");
+}
+
+/// 撃って rc 1・stdout 0 byte・stderr が `reason` の断りの 1 行・`send-keys` の呼出 0 を測る。
+fn deliver_assert_refused(place: &TickPlace, state: &str, id: &str, reason: &str) {
+    let out = deliver_run(place, state, id, &[]);
+    assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "{reason}: rc 1: {}", stderr_of(&out));
+    assert!(stdout_of(&out).is_empty(), "{reason}: stdout 0 byte");
+    assert_eq!(stderr_of(&out), format!("seat deliver: refused reason={reason} target={TICK_TARGET}\n"), "{reason}: 断りの 1 行");
+    assert!(tick_keys(place).is_empty(), "{reason}: 0 key");
+    assert!(tick_injections(place).is_empty(), "{reason}: 注入の記録 0");
+}
+
+/// (a) 待ちの席（登録 row・最終行 Idle・入力欄が空）へ雛形の 1 行を送り、rc 0・stdout の 1 行が delivered。送った周の記録は既存の
+/// 注入の経路（`who`=`seat-inject`）が 1 行書き、event log は 1 件も増えず、梯子の記録と停止の記録は作らない（base では verb が
+/// 無い ＝ RED）。
+#[test]
+fn seat_deliver_sends_one_pointer_line_to_a_waiting_seat() {
+    let place = tick_place(true);
+    let events = deliver_events(&place);
+    deliver_assert_delivered(&place, "rl-1");
+    let pane = fs::read_to_string(place.at(TICK_PANE)).unwrap_or_default();
+    assert_eq!(pane.matches(&deliver_body("rl-1")).count(), 1, "pane に指し示し 1 行: {pane}");
+    let injections = tick_injections(&place);
+    assert_eq!(injections.len(), 1, "送った周の記録 1 行: {injections:?}");
+    let line = injections.first().map(String::as_str).unwrap_or_default();
+    assert_eq!(acct_text(line, "who").as_deref(), Some("seat-inject"), "既存の注入の経路の who: {line}");
+    assert_eq!(deliver_events(&place), events, "event log に書かない");
+    assert!(!tick_ladder_path(&place).exists(), "梯子の記録を作らない");
+    assert!(!heartbeat_record(&place.state).exists(), "停止の記録を作らない");
+    assert!(!place.at(TICK_CLIENT).exists(), "偽 client は呼ばれない");
+}
+
+/// (b) 送った 1 行の本文（4 つの記号を全部含む記帳 id の展開）を snapshot に固定する（C12.5）。
+#[test]
+fn seat_deliver_line_external_form() {
+    let place = tick_place(true);
+    let state = place.state.display().to_string();
+    let out = deliver_run(&place, &state, "rl-2026.09.27_0100:a", &[]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "rc 0: {}", stderr_of(&out));
+    let texts = deliver_texts(&place);
+    assert_eq!(texts.len(), 1, "text 1 回: {texts:?}");
+    let body = texts.first().cloned().unwrap_or_default();
+    insta::assert_snapshot!(body);
+}
+
+/// (c) 境界の送達: 4 つの記号を全部含む id と 64 byte ちょうどの id も送られる（2 本）。
+#[test]
+fn seat_deliver_boundary_ids_are_delivered() {
+    let long = "z".repeat(64);
+    for id in ["a.b-c_d:e", long.as_str()] {
+        let place = tick_place(true);
+        deliver_assert_delivered(&place, id);
+    }
+}
+
+/// (d-1) 席の側の断り 5 形（最終行が Busy・打刻 file が無い・打刻が dir・入力欄に他の文字・登録 row の無い target）はどれも rc 1・
+/// stderr の語・`send-keys` の呼出 0。
+#[test]
+fn seat_deliver_seat_side_refusals_send_no_key() {
+    let busy = tick_place(true);
+    tick_stamps(&busy, &[("idle", "Stop", unix_now().saturating_sub(10)), ("busy", "UserPromptSubmit", unix_now())]);
+    let missing = tick_place(true);
+    fs::remove_file(state_file(&missing.seat())).ok();
+    let unreadable = tick_place(true);
+    fs::remove_file(state_file(&unreadable.seat())).ok();
+    fs::create_dir_all(state_file(&unreadable.seat())).ok();
+    let typed = tick_place(true);
+    fs::write(typed.at(TICK_PANE), "old output\n\u{276f} typing").ok();
+    let bare = tick_place(false);
+    for (place, reason) in [(&busy, "busy"), (&missing, "state-missing"), (&unreadable, "state-unreadable"), (&typed, "input-busy"), (&bare, "no-row")] {
+        deliver_assert_refused(place, &place.state.display().to_string(), "rl-1", reason);
+    }
+}
+
+/// (d-2) 記帳 id の断り 6 形（空・空白・制御文字・`;`・ASCII の外・65 byte）はどれも rc 1・stderr の語で、tmux の呼出も置き場の読みも
+/// 0（置き場に file を渡しても `store` / `no-row` にならない＝何も読む前に判じる）。
+#[test]
+fn seat_deliver_bad_ids_are_refused_before_reading_anything() {
+    let place = tick_place(true);
+    let not_a_dir = fixture(&place.dir, "not-a-dir", "x\n");
+    let long = "a".repeat(65);
+    let cases = [("", "id-empty"), ("a b", "id-shape"), ("a\u{7}b", "id-shape"), ("a;b", "id-shape"), ("裁定1", "id-shape"), (long.as_str(), "id-long")];
+    for (id, reason) in cases {
+        deliver_assert_refused(&place, &not_a_dir, id, reason);
+        assert!(!place.at(TICK_CALLS).exists(), "{id:?}: tmux の呼出 0");
+    }
+}
+
+/// (e) 口の flag（使い方の 1 行の deliver の区間と tmux の flag）ごとに見分けのつく値を渡して撃つと、送った本文に入る外からの値は
+/// 記帳 id だけ（1 回）で、置き場・target・tmux の socket の字面は本文に 0 回。
+#[test]
+fn seat_deliver_body_carries_only_the_ruling_id() {
+    let usage = stderr_of(&run_seat(&[]));
+    assert!(usage.contains(&format!("|{DELIVER_USAGE}|")), "deliver は使い方に在る: {usage}");
+    assert!(usage.contains("[--tmux-socket PATH]"), "tmux の flag: {usage}");
+    let mut flags: Vec<&str> = DELIVER_USAGE.split_whitespace().filter(|word| word.starts_with("--")).collect();
+    flags.push("--tmux-socket");
+    let place = tick_place(true);
+    let state = place.state.display().to_string();
+    let socket = place.at("qsock-zz").display().to_string();
+    let id = "qruling-77";
+    let values: Vec<(&str, &str)> = flags
+        .iter()
+        .map(|flag| match *flag {
+            "--state-dir" => (*flag, state.as_str()),
+            "--target" => (*flag, TICK_TARGET),
+            "--ruling" => (*flag, id),
+            _ => (*flag, socket.as_str()),
+        })
+        .collect();
+    let out = deliver_run(&place, &state, id, &["--tmux-socket", &socket]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "rc 0: {}", stderr_of(&out));
+    let texts = deliver_texts(&place);
+    assert_eq!(texts, [deliver_body(id)], "送った text は雛形の展開 1 回");
+    let body = texts.first().cloned().unwrap_or_default();
+    let carried: Vec<&str> = values.iter().filter(|(_, value)| body.contains(value)).map(|(flag, _)| *flag).collect();
+    assert_eq!(carried, ["--ruling"], "本文に入る外からの値は 1/{}（記帳 id だけ）: {body}", values.len());
+    assert_eq!(body.matches(id).count(), 1, "記帳 id は 1 回");
+    for part in TICK_TARGET.split(':') {
+        assert!(!body.contains(part), "target の {part} は本文に無い: {body}");
+    }
+}
+
+/// 形 1 の使い方の誤り（`--ruling` の値欠け・空の `--state-dir`・`S:W` でない target）は rc 1 で使い方を stderr へ出し、受けない flag
+/// （`--rules` / `--capture-file`）は未知の引数として rc 2。どれも tmux を撃たない。
+#[test]
+fn seat_deliver_usage_errors_send_nothing() {
+    let place = tick_place(true);
+    let state = place.state.display().to_string();
+    let usage = vessel::seat::cli::usage();
+    let run = |args: &[&str]| Command::new(bin()).arg("seat").args(args).env("PATH", &place.path).output().expect("binary を起動できる");
+    let cases: [Vec<&str>; 4] = [
+        vec!["deliver", "--state-dir", &state, "--target", TICK_TARGET],
+        vec!["deliver", "--state-dir", &state, "--target", TICK_TARGET, "--ruling"],
+        vec!["deliver", "--state-dir", "", "--target", TICK_TARGET, "--ruling", "rl-1"],
+        vec!["deliver", "--state-dir", &state, "--target", "tk", "--ruling", "rl-1"],
+    ];
+    for args in cases {
+        let out = run(&args);
+        assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "{args:?}: rc 1");
+        assert_eq!(stderr_of(&out), format!("{usage}\n"), "{args:?}: 使い方");
+    }
+    for flag in ["--rules", "--capture-file"] {
+        let out = run(&["deliver", "--state-dir", &state, "--target", TICK_TARGET, "--ruling", "rl-1", flag, "x"]);
+        assert_eq!(rc_of(&out), 2, "{flag}: rc 2: {}", stderr_of(&out));
+        assert!(stderr_of(&out).starts_with(&format!("seat: 未知の引数 {flag}\n")), "{flag}: {}", stderr_of(&out));
+    }
+    assert!(!place.at(TICK_CALLS).exists(), "tmux の呼出 0");
 }

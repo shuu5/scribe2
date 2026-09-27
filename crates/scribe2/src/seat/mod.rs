@@ -14,6 +14,7 @@
 pub mod brief;
 pub mod cli;
 pub mod cycle;
+pub mod deliver;
 pub mod inject;
 pub mod ledger;
 pub mod recent;
