@@ -356,7 +356,7 @@ title = "管理 tick を戻す — seat tick の判定の列（登録 row → �
 req = ["FR27", "FR43", "FR44", "FR38", "FR40", "AC18", "NFR4"]
 section = "2"
 touches = ["crate::rules::RuleKind"]
-write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "+crates/scribe2/src/seat/tick.rs", "crates/scribe2/src/seat/mod.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "crates/scribe2-boundary/tests/e2e/rules.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__seat__seat_usage_external_form.snap", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__rules__rules_external_form.snap", "docs/design/seat-heartbeat.md"]
+write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "+crates/scribe2/src/seat/tick.rs", "crates/scribe2/src/seat/mod.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "crates/scribe2-boundary/tests/e2e/rules.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__seat__seat_usage_external_form.snap", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__rules__rules_external_form.snap", "docs/design/seat-heartbeat.md", "+crates/scribe2-boundary/tests/e2e/seat/tick.rs", "+crates/scribe2-boundary/tests/e2e/rules/embedded.rs"]
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail seat_tick_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_embedded_manifest_declares_tick_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_usage_external_form", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail gone_from_the_usage", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_external_form", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_embedded_manifest_declares_host_guard_kinds_at_the_tail_of_all", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_embedded_manifest_declares_one_capability_row_per_role", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_embedded_manifest_is_valid_and_covers_all_kinds", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_review_same_kind_stop_kind_is_last_in_declaration_order_and_paired_with_the_row"]
 size = "L"
 growth = ["crates/scribe2/src/rules/mod.rs:60", "crates/scribe2/src/seat/mod.rs:10", "crates/scribe2/src/seat/cli.rs:120"]
@@ -378,7 +378,7 @@ id = "c"
 title = "tick が群の移動の続きを撃つ — 判定の列の front の直後に移動の門（自席の登録 row の口座 ≠ 群の記録の口座）を足し、群の段と同じ lock の内側で、pane が shell なら同じ target に記録の口座の席を起こし、shell でなければ入力欄の門を通して /exit（dialog の既定の行なら Enter）を 1 手・移動の周は heartbeat を送らず梯子を触らない（§4・ADR-0058 §2・ADR-0055 OPT1・s2-07l.616）"
 req = ["FR38", "FR27", "FR36", "NFR4"]
 section = "4"
-write-set = ["crates/scribe2/src/seat/tick.rs", "crates/scribe2/src/hook/group.rs", "crates/scribe2/src/pipe/dispatch/group.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "docs/design/seat-heartbeat.md"]
+write-set = ["crates/scribe2/src/seat/tick.rs", "crates/scribe2/src/hook/group.rs", "crates/scribe2/src/pipe/dispatch/group.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "docs/design/seat-heartbeat.md", "+crates/scribe2-boundary/tests/e2e/seat/tick.rs"]
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail seat_tick_move_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_move_"]
 size = "M"
 depends = ["a"]
@@ -389,7 +389,7 @@ id = "d"
 title = "席の起動が tick の unit を入れる — host の面の表 [[tick]]（unit-dir / binary・0 か 1 行）を loader が読み、launch が Done の周に §3 の install の 1 本を面の値で撃って行の末尾に tick-unit=<installed|unchanged|refused:<語>> を足し、doctor は flag が無ければ面の値を既定にして表の在る host の行に tick=declared を足す・表の無い host は 1 字も変わらない（§5・ADR-0064・s2-07l.616）"
 req = ["FR64", "FR59", "FR61", "FR40", "NFR4"]
 section = "5"
-write-set = ["crates/scribe2/src/rules/manifest.rs", "crates/scribe2/src/seat/cycle/launch.rs", "crates/scribe2/src/seat/tick/install.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/seat/role.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2-boundary/src/main.rs", "crates/scribe2-boundary/tests/e2e/rules.rs", "crates/scribe2-boundary/tests/e2e/seat/launch.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "docs/design/seat-heartbeat.md"]
+write-set = ["crates/scribe2/src/rules/manifest.rs", "crates/scribe2/src/seat/cycle/launch.rs", "crates/scribe2/src/seat/tick/install.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/seat/role.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2-boundary/src/main.rs", "crates/scribe2-boundary/tests/e2e/rules.rs", "crates/scribe2-boundary/tests/e2e/seat/launch.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "docs/design/seat-heartbeat.md", "+crates/scribe2-boundary/tests/e2e/rules/host.rs"]
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail host_tick_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_host_tick_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_launch_tick_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_doctor_tick_"]
 size = "M"
 depends = ["b"]
@@ -411,7 +411,7 @@ id = "f"
 title = "tick が死んだ席を起こし、移動の門を打刻の前に置き、起こし直しは打刻の sid を --resume で運ぶ — front は row の直後に窓が shell かを見て、shell なら群の記録か row の口座で launch（§7 形 1〜6・s2-07l.626 / .628 / .629）"
 req = ["FR59", "FR38", "FR40", "NFR4"]
 section = "7"
-write-set = ["crates/scribe2/src/seat/tick.rs", "crates/scribe2/src/seat/state.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "docs/design/seat-heartbeat.md"]
+write-set = ["crates/scribe2/src/seat/tick.rs", "crates/scribe2/src/seat/state.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "docs/design/seat-heartbeat.md", "+crates/scribe2-boundary/tests/e2e/seat/tick.rs"]
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_wake_", "cargo nextest run -p scribe2 --lib --no-tests=fail stamp_sid_"]
 size = "M"
 growth = ["crates/scribe2/src/seat/tick.rs:120", "crates/scribe2/src/seat/state.rs:30"]
@@ -435,7 +435,7 @@ id = "h"
 title = "state-stale の再判定 — Busy が seat.tick_stale_s の 2 倍より古く窓が claude で入力欄が空なら Busy を無視して列の先へ進み、字が在れば state-stale のまま（§7 形 7・s2-07l.629 候補 3）"
 req = ["FR38", "FR43", "NFR4"]
 section = "7"
-write-set = ["crates/scribe2/src/seat/tick.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "docs/design/seat-heartbeat.md"]
+write-set = ["crates/scribe2/src/seat/tick.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "docs/design/seat-heartbeat.md", "+crates/scribe2-boundary/tests/e2e/seat/tick.rs"]
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_stale_"]
 size = "S"
 growth = ["crates/scribe2/src/seat/tick.rs:40"]
@@ -446,7 +446,7 @@ id = "i"
 title = "tick が群の移動の判定を撃つ — 群の段の判定（測る集合 → 鮮度の外の計測 → 判定 → 記録と承認 event）を hook/group.rs の 1 本に移して dispatch の周と tick が同じ 1 本を呼び、tick は群ごとに usage_fresh_s に 1 回・lock の内側で撃つ（§9・ADR-0066）"
 req = ["FR38", "FR27", "NFR4"]
 section = "9"
-write-set = ["crates/scribe2/src/seat/tick.rs", "crates/scribe2/src/hook/group.rs", "crates/scribe2/src/pipe/dispatch/group.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "docs/design/seat-heartbeat.md"]
+write-set = ["crates/scribe2/src/seat/tick.rs", "crates/scribe2/src/hook/group.rs", "crates/scribe2/src/pipe/dispatch/group.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "docs/design/seat-heartbeat.md", "+crates/scribe2-boundary/tests/e2e/seat/tick.rs"]
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_judge_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_group_"]
 size = "L"
 growth = ["crates/scribe2/src/seat/tick.rs:100", "crates/scribe2/src/hook/group.rs:180", "crates/scribe2/src/pipe/dispatch/group.rs:0"]
@@ -457,7 +457,7 @@ id = "j"
 title = "起こし直しの起動行に初手の合図を積む — carry の 1 本が --resume <sid>（在れば）の後ろに単引用の 1 語（<NAME> seat: relaunch …）を足し、tick の wake と群の段の relaunch が同じ 1 本を呼ぶ（§10 形 1〜4・s2-07l.635）"
 req = ["FR59", "FR38", "FR27", "NFR4"]
 section = "10"
-write-set = ["crates/scribe2/src/seat/state.rs", "crates/scribe2/src/seat/tick.rs", "crates/scribe2/src/pipe/dispatch/group.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "docs/design/seat-heartbeat.md"]
+write-set = ["crates/scribe2/src/seat/state.rs", "crates/scribe2/src/seat/tick.rs", "crates/scribe2/src/pipe/dispatch/group.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "docs/design/seat-heartbeat.md", "+crates/scribe2-boundary/tests/e2e/seat/tick.rs"]
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail relaunch_carry_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_wake_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_group_carry_"]
 size = "S"
 growth = ["crates/scribe2/src/seat/state.rs:25", "crates/scribe2/src/seat/tick.rs:15", "crates/scribe2/src/pipe/dispatch/group.rs:5"]
@@ -470,7 +470,7 @@ title = "梯子の列と周期 — rules 行 seat.pointer_ladder_s（秒の文�
 req = ["FR27", "FR43", "FR44", "AC18", "NFR4"]
 section = "10"
 touches = ["crate::rules::RuleKind"]
-write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/src/seat/tick.rs", "crates/scribe2-boundary/tests/e2e/rules.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__rules__rules_external_form.snap", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__seat__seat_unit_external_form.snap", "crates/scribe2-boundary/tests/e2e/seat/launch.rs", "docs/design/seat-heartbeat.md"]
+write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/src/seat/tick.rs", "crates/scribe2-boundary/tests/e2e/rules.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__rules__rules_external_form.snap", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__seat__seat_unit_external_form.snap", "crates/scribe2-boundary/tests/e2e/seat/launch.rs", "docs/design/seat-heartbeat.md", "+crates/scribe2-boundary/tests/e2e/seat/tick.rs", "+crates/scribe2-boundary/tests/e2e/rules/embedded.rs"]
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail seat_tick_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_ladder_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_change_returns_to_step_zero", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_missing_rule_rows", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_embedded_manifest_declares_tick_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_external_form", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_embedded_manifest_is_valid_and_covers_all_kinds", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_embedded_manifest_declares_one_capability_row_per_role", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_embedded_manifest_declares_host_guard_kinds_at_the_tail_of_all"]
 size = "M"
 growth = ["crates/scribe2/src/rules/mod.rs:10", "crates/scribe2/src/seat/tick.rs:30"]
@@ -482,7 +482,7 @@ id = "m"
 title = "移動の周の退避は打刻に依らない — front が登録 row → 窓が shell か → 移動の周か の順で見て、移動の周 ∧ 窓が claude は打刻と梯子を読まずに移動の門へ進み /exit を周期ごとに送る（§10 形 8〜10・s2-07l.635 候補 (a)）"
 req = ["FR38", "FR27", "FR43", "NFR4"]
 section = "10"
-write-set = ["crates/scribe2/src/seat/tick.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "docs/design/seat-heartbeat.md"]
+write-set = ["crates/scribe2/src/seat/tick.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "docs/design/seat-heartbeat.md", "+crates/scribe2-boundary/tests/e2e/seat/tick.rs"]
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_evacuate_"]
 size = "S"
 growth = ["crates/scribe2/src/seat/tick.rs:30"]
@@ -505,7 +505,7 @@ title = "heartbeat を席ごとに止める — seat heartbeat off|on|status（�
 req = ["FR78", "FR27", "FR59", "FR38", "AC48", "NFR4"]
 section = "12"
 touches = ["crate::seat::tick::NoopReason", "crate::seat::cli::SeatCommand"]
-write-set = ["crates/scribe2/src/seat/tick.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/help.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__seat__seat_usage_external_form.snap", "docs/design/seat-heartbeat.md"]
+write-set = ["crates/scribe2/src/seat/tick.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/help.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__seat__seat_usage_external_form.snap", "docs/design/seat-heartbeat.md", "+crates/scribe2-boundary/tests/e2e/seat/tick.rs"]
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_heartbeat_", "cargo nextest run -p scribe2 --lib --no-tests=fail seat_tick_tail_reasons_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_usage_external_form", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_"]
 size = "M"
 growth = ["crates/scribe2/src/seat/tick.rs:140", "crates/scribe2/src/seat/cli.rs:60", "crates/scribe2/src/help.rs:6"]
@@ -516,7 +516,7 @@ id = "p"
 title = "管理 tick の最後の周の打刻と健全 — tick-last（ts / decision / reason・rc 1 の周も）・seat tick status の 6 項目・doctor の席の行の heartbeat= / tick=（判じるのは読み手・§12・ADR-0070）"
 req = ["FR78", "FR27", "FR40", "AC48", "NFR4"]
 section = "12"
-write-set = ["crates/scribe2/src/seat/tick.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/help.rs", "crates/scribe2/src/seat/role.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "crates/scribe2-boundary/tests/e2e/seat/register.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__seat__seat_doctor_external_form.snap", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__seat__seat_usage_external_form.snap", "docs/design/seat-heartbeat.md"]
+write-set = ["crates/scribe2/src/seat/tick.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/help.rs", "crates/scribe2/src/seat/role.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "crates/scribe2-boundary/tests/e2e/seat/register.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__seat__seat_doctor_external_form.snap", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__seat__seat_usage_external_form.snap", "docs/design/seat-heartbeat.md", "+crates/scribe2-boundary/tests/e2e/seat/tick.rs"]
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_status_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_doctor_external_form", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_usage_external_form"]
 size = "M"
 depends = ["o"]
@@ -528,7 +528,7 @@ title = "群の移動の退避は合図が先で /exit は猶予の後 — rules
 req = ["FR38", "FR27", "AC41", "NFR4"]
 section = "13"
 touches = ["crate::rules::RuleKind", "crate::seat::tick::Move", "crate::hook::group::Current"]
-write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/src/seat/tick.rs", "crates/scribe2/src/hook/group.rs", "crates/scribe2/src/pipe/dispatch/group.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "crates/scribe2-boundary/tests/e2e/rules.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__rules__rules_external_form.snap", "docs/design/seat-heartbeat.md"]
+write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "crates/scribe2/src/seat/tick.rs", "crates/scribe2/src/hook/group.rs", "crates/scribe2/src/pipe/dispatch/group.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "crates/scribe2-boundary/tests/e2e/rules.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__rules__rules_external_form.snap", "docs/design/seat-heartbeat.md", "+crates/scribe2-boundary/tests/e2e/seat/tick.rs", "+crates/scribe2-boundary/tests/e2e/rules/embedded.rs"]
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_grace_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_move_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_missing_rule_rows", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_group_grace_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_group_exit_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_embedded_manifest_declares_tick_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_external_form", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_embedded_manifest_is_valid_and_covers_all_kinds", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_embedded_manifest_declares_host_guard_kinds_at_the_tail_of_all", "cargo nextest run -p scribe2 --lib --no-tests=fail seat_tick_tail_reasons_"]
 size = "M"
 growth = ["crates/scribe2/src/rules/mod.rs:8", "crates/scribe2/src/seat/tick.rs:70", "crates/scribe2/src/hook/group.rs:60", "crates/scribe2/src/pipe/dispatch/group.rs:15"]
@@ -539,7 +539,7 @@ title = "退避の猶予の起点は合図の記録 — 合図の記録 move-sig
 req = ["FR38", "FR27", "AC41", "NFR4"]
 section = "14"
 touches = ["crate::hook::group::Current"]
-write-set = ["crates/scribe2/src/seat/tick.rs", "crates/scribe2/src/hook/group.rs", "crates/scribe2/src/pipe/dispatch/group.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "docs/design/seat-heartbeat.md"]
+write-set = ["crates/scribe2/src/seat/tick.rs", "crates/scribe2/src/hook/group.rs", "crates/scribe2/src/pipe/dispatch/group.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "docs/design/seat-heartbeat.md", "+crates/scribe2-boundary/tests/e2e/seat/tick.rs"]
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_grace_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_move_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_group_grace_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_group_exit_", "cargo nextest run -p scribe2 --lib --no-tests=fail group_signal_"]
 size = "M"
 growth = ["crates/scribe2/src/seat/tick.rs:20", "crates/scribe2/src/hook/group.rs:50", "crates/scribe2/src/pipe/dispatch/group.rs:15"]

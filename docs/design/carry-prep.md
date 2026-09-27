@@ -107,7 +107,7 @@
 
 - 行 e（準備）: 引っ越しの邪魔になる「file の数を数字で固定した歯」を、宣言から数える形に直す。
 - 行 f（試し）: 1 file（headless.rs）で割ってみる。
-- 残る 8 file の行: 行 f の着地で分かったことを足してから書く。
+- 残る 8 file の行: 行 f の着地で分かったことを足して書く。`tests/e2e/` 直下の 4 file は §9（行 g〜j）、`pipe/` の下の 4 file は §9 の着地の後に別の節で書く。
 
 - 出所: 持ち主の裁定 2026-09-27（第 2 段の範囲は e2e の分割だけ・UTC の分は台帳 `s2-07l.669`）と、§6 の census。
 - census（verified・main c01a456）:
@@ -163,6 +163,64 @@
   - `include!` で子の本文を親の module へ貼る: module path と snapshot の名は変わらないが、`include!` の行は move_proof の残差の許容形に無い。加えて `pipe/` の下では `pipe_hermetic_sites_stay_one` の数えが合わない。
   - `#[path]` の子 module: module path はどのみち変わるので、得が無い。
   - 分割の便ごとに literal の 29 を上げる: 毎便が `main.rs` の歯の中の行を動かし、純移動の証明が通らなくなる。そうなると、審査役が引っ越しの diff の全部を読むことになる。
+
+## 9. 行 g〜j — 入れ子の子へ割る 4 file（hook.rs・fleet.rs・seat.rs・rules.rs・行 f の形の本番）
+
+やさしく言うと: 行 f（headless.rs）で確かめた引っ越しの形を、残る 8 file のうち `tests/e2e/` 直下の 4 file に当てる。どれも子の file を同じ名の dir の下に置く（入れ子）。`pipe/` の下の 4 file は、子を兄弟に置き親の私有の helper を見せる手当てが要るので、この節の着地の後に別の節で書く。
+
+- 出所: 持ち主の裁定 2026-09-27（第 2 段の範囲は e2e の分割だけ・UTC の分は台帳 `s2-07l.669`）と、§8 の行 f の 2 周（1 周目の run 072459Z の Gated FAIL の 2 因・2 周目の run 074505Z の PASS）。
+- 行 f から持ち込む形（どの行も同じ）:
+  1. 子は親の file と同じ dir の、親と同じ名の dir の下に置き、親の頭で `mod <子>;` と宣言する。子の頭は純移動の札・`//!` の 1 行・`use super::*;` だけにする。
+  2. 移す歯の本文（直前の doc と属性の行を含む）は 1 byte も変えない。親と子で増減してよい行は、move_proof の残差の許容形（空行・`use` の行・`mod <名>;`・`//` の comment・純移動の札）だけである。helper と const は全部親に残す（子は `use super::*;` で読む・可視性は変えない）。
+  3. 純移動の札: 行の bead id で `// flip-check: moved` の札を、各子の file の先頭と、親の `mod` の宣言の直後に置く。
+  4. 親に残す歯: snapshot の歯（名が module path を含むので動かさない）と、`.config/nextest.toml` の tmux の群の名の列に在る歯（名を直すと `.toml` の行が動き、純移動でなくなる）。
+  5. 行の write-set は、親の `-`（縮む面・file は残る）と子の `+` だけにする。この doc は入れない（§8 の形 5）。本数の実測（base = head）は orchestrator が着地の確認で bead の notes に写す（§8 の歯の節）。
+  6. 移す歯を verify に持つ過去の行には、この節と同じ docs PR で子の path を `+` で足す（§8 の形 7）。当たった行は 33 本で、どれも bead が close 済みである（下の表）。
+- census（verified・main 754b958・歯の数え = `#[test]` の fn・行数は直前の doc と属性を含む）:
+
+  | 行 | 親 | 行数（前 → 後） | 子（歯の本数・約の行数） | 親に残す歯 |
+  |---|---|---|---|---|
+  | g | hook.rs | 5134 → 約 2855 | guards（46・826）・session（28・776）・group（18・356）・vessel_cli（10・225） | 46 本（hook_role_ の族 22 本は 10 本が tmux の群に在るので族ごと残す・snapshot 2 本・tmux の群の他の 14 本・他 8 本） |
+  | h | fleet.rs | 5101 → 約 3080 | usage（35・1022）・account（17・417）・json（27・508） | 65 本（fleet_select_ の族 19 本と host_group_ の族 8 本は本文に `super::` を持つ＝入れ子にすると指す先が変わるので残す・snapshot 1 本） |
+  | i | seat.rs | 4112 → 約 3039 | tick（65・1010） | 51 本（snapshot 4 本・tmux の群 2 本・動詞の数を固定する歯 `seat_command_all_known_verbs_round_trip_and_unknown_tokens_are_none`〔§8 の census の 4〕） |
+  | j | rules.rs | 2835 → 約 1243 | embedded（45・935）・host（27・589） | 44 本（snapshot 1 本） |
+
+  - 子の族（名の接頭辞）:
+    - 行 g: guards = `host_guard_`・`hook_guard_`・`hook_command_`・`hook_memo_`・`hook_ledger_`／session = `hook_session_`・`hook_recovery_`・`hook_precompact_`／group = `hook_group_`・`hook_permission_`／vessel_cli = `vessel_init_`・`vessel_update_`・`vessel_check_`・`vessel_args_`・`vessel_marker_`。
+    - 行 h: usage = `fleet_usage_`・`fleet_allowance_`／account = `account_cmd_`／json = `fleet_json_`・`fleet_read_`・`fleet_record_`・`fleet_replay_`・`fleet_export_`。
+    - 行 i: tick = `seat_tick_`。
+    - 行 j: embedded = `rules_embedded_`・`rules_manifest_`／host = `rules_host_`・`host_group_`。
+  - 子の名の制約: hook.rs は、use の行で読み込んだ guard の名と、core の crate の名 vessel を既に持つ。子を `guard` / `vessel` と名付けると名が衝突して compile が通らない。そこで guards / vessel_cli と名付ける。他の 3 file の子の名は、親の `use` の名と重ならない（実測）。
+  - 移す歯の本文に `super::` は 0 site、macro_rules! は 4 file とも 0 個（子の深さで意味が変わる字面は無い）。
+- 過去の行への `+` の先宣言（33 行・子の path ごとの行数は seat/tick 17・rules/embedded 10・rules/host 6・hook/group 5・hook/guards 4・fleet の 3 子が各 1）:
+
+  | doc | 行 |
+  |---|---|
+  | account-lifecycle.md | h・i・j・l・m・q・r・s・t・u・w |
+  | seat-heartbeat.md | a・c・d・f・h・i・j・k・m・o・p・q・r |
+  | vessel-hook.md | b・c・d・e・f |
+  | core-boundary.md | i |
+  | gate-cost.md | aj |
+  | host-init.md | g |
+  | seat-roles.md | v |
+
+- 事前の実測（使い捨ての detached worktree で 4 file を機械的に割った木・verified）:
+  - `cargo clippy -p scribe2-boundary --all-targets -- -D warnings` が rc 0（親の `use` の行は 1 行も変えずに通る）。
+  - `cargo nextest list` の e2e が base = 割った木 = 1556 本で、名の末尾の多重集合が一致。行 e の歯 `e2e_fixture_clock_dated_reset_lines_are_pinned` が GREEN（入れ子の宣言から導いた集合が一致）。
+  - `cargo xtask check` が ok（nextest-tmux-group=ok）。
+  - `scribe2 contracts check` は、先宣言の無い doc で findings=33（= 上の 33 行）、先宣言の有る doc で findings=0。
+  - `cargo xtask flip-check --base 754b958` は hook.rs 単独・fleet.rs 単独の木で rc 0（moved=5・4）。4 file を 1 つの木にまとめると札が 29 で上限 16 を越える。札が多いのは、移す歯の本文が既存の `retroactive` の札の行を運ぶからである（hook.rs 7 行・fleet.rs 8 行）。行ごとの札は g 12・h 12・i 2・j 3 で、どれも 16 以下になる。1 行 = 1 PR を守れば上限に当たらない。
+- 歯（どの行も既存の歯が全部 GREEN のまま・期待を変えない）: verify は、行の親にだけ在る名の接頭辞を子ごとに 1 語撃つ（`#[test]` の fn 名に substring として含む file が crates の中で行の親だけであることを実測）。
+  - 行 g: `hook_guard_`（guards）・`hook_precompact_`（session）・`hook_permission_`（group）・`vessel_init_`（vessel_cli）。
+  - 行 h: `fleet_allowance_`（usage）・`account_cmd_add_`（account）・`fleet_replay_`（json）。
+  - 行 i: `seat_tick_judge_`・`seat_tick_grace_`（tick）。
+  - 行 j: `rules_embedded_manifest_`（embedded）・`host_group_tier_`（host）。
+- 行どうしの関係: 4 行の write-set は交わらない（親も子も別の file）。どの順に着地してもよく、depends は持たない。
+- 却下:
+  - 4 file を 1 行にまとめる: 札が 29 で flip-check の上限 16 を越える。審査の単位も大きくなる。
+  - hook_role_ の族の tmux でない 12 本だけを子へ移す: 1 つの族が 2 file に割れ、`.config/nextest.toml` の名は動かさずに済むが、族を探す場所が 2 つになる。
+  - fleet.rs の `super::` を持つ族を子へ移す: 入れ子の子では `super::` の指す先が変わり、本文を書き換えることになる（純移動でなくなる）。
+  - seat.rs の isolated seat の fixture（非 test の約 2,000 行）を子へ移す: fixture は歯の族ではなく、他の module（hook.rs・seat の子）が seat の module の path で直に読む。移すには再 export の `use` と可視性の見直しが要り、「helper は親に残す」形（上の 2）から外れる。
 
 <!-- contracts:begin -->
 schema = 1
@@ -226,4 +284,44 @@ write-set = ["-crates/scribe2-boundary/tests/e2e/headless.rs", "+crates/scribe2-
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail headless_runner_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail runner_rate_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail lens_rulings_"]
 size = "M"
 done = "(1) 子 headless/runner.rs に、名が headless_runner_・runner_question_・runner_rate_・runner_prompt_ で始まる歯 55 本（snapshot の歯 headless_runner_prompt_external_form を除く）が在り、子 headless/lens.rs に、名が headless_lens_・lens_rulings_ で始まる歯 28 本（snapshot の歯 3 本を除く）が在る。2 つの子は headless.rs の mod lens; と mod runner; で宣言され、頭が use super::*; である (2) 親 headless.rs には snapshot の歯 5 本・他の族の歯 20 本・helper と const の全部が残り、可視性は不変 (3) 移した歯の本文（直前の doc と属性の行を含む）は base と 1 byte も違わず、親と子で増減した行は空行・use の行・mod <名>;・comment・札だけで、move_proof が純移動と判定する (4) この便の bead id の flip-check: moved の札が、各子の先頭と親の mod の宣言の直後に在り、flip-check が moved で通る (5) e2e の歯の本数は base = head（108 本が module path だけ変わって在る）で、snapshot と .config/nextest.toml と行 e の歯（宣言から導いた集合の一致）は GREEN のまま不変 (6) write-set の headless.rs の - は縮む面（file は残り、約 2,130 行が減る）で、diff は親の M と子 2 つの A の 3 面だけ（この doc を含まない）"
+[[contract]]
+id = "g"
+title = "e2e の hook.rs を族ごとの子 module へ割る — guard の族 46 本を子 hook/guards.rs へ、session の族 28 本を子 hook/session.rs へ、group の族 18 本を子 hook/group.rs へ、vessel の口の族 10 本を子 hook/vessel_cli.rs へ純移動し、snapshot と tmux の群の歯と helper は親に残す・札 moved（§9 行 g）"
+req = ["NFR1", "FR7"]
+section = "9"
+write-set = ["-crates/scribe2-boundary/tests/e2e/hook.rs", "+crates/scribe2-boundary/tests/e2e/hook/guards.rs", "+crates/scribe2-boundary/tests/e2e/hook/session.rs", "+crates/scribe2-boundary/tests/e2e/hook/group.rs", "+crates/scribe2-boundary/tests/e2e/hook/vessel_cli.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail hook_guard_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail hook_precompact_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail hook_permission_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail vessel_init_"]
+size = "M"
+done = "(1) 子 hook/guards.rs に名が host_guard_・hook_guard_・hook_command_・hook_memo_・hook_ledger_ で始まる歯 46 本、子 hook/session.rs に hook_session_・hook_recovery_・hook_precompact_ で始まる歯 28 本、子 hook/group.rs に hook_group_・hook_permission_ で始まる歯 18 本、子 hook/vessel_cli.rs に vessel_init_・vessel_update_・vessel_check_・vessel_args_・vessel_marker_ で始まる歯 10 本が在る。4 つの子は hook.rs の mod 宣言で宣言され、頭が use super::*; である (2) 親 hook.rs には snapshot の歯 2 本・.config/nextest.toml の tmux の群の名の列に在る歯 24 本（hook_role_ の族 22 本は族ごと）・他の歯・helper と const と use の行の全部が残り、可視性は不変 (3) 移した歯の本文（直前の doc と属性の行を含む）は base と 1 byte も違わず、親と子で増減した行は空行・use の行・mod <名>;・comment・札だけで、move_proof が純移動と判定する (4) この便の bead id の flip-check: moved の札が各子の先頭と親の mod の宣言の直後に在り、flip-check が moved で通る (5) e2e の歯の本数は base = head で、snapshot と .config/nextest.toml と行 e の歯は GREEN のまま不変 (6) write-set の hook.rs の - は縮む面（file は残り、約 2,280 行が減る）で、diff は親の M と子 4 つの A だけ（この doc を含まない）"
+
+[[contract]]
+id = "h"
+title = "e2e の fleet.rs を族ごとの子 module へ割る — usage と allowance の族 35 本を子 fleet/usage.rs へ、account_cmd の族 17 本を子 fleet/account.rs へ、json と記録の族 27 本を子 fleet/json.rs へ純移動し、super:: を持つ族と snapshot の歯と helper は親に残す・札 moved（§9 行 h）"
+req = ["NFR1", "FR7"]
+section = "9"
+write-set = ["-crates/scribe2-boundary/tests/e2e/fleet.rs", "+crates/scribe2-boundary/tests/e2e/fleet/usage.rs", "+crates/scribe2-boundary/tests/e2e/fleet/account.rs", "+crates/scribe2-boundary/tests/e2e/fleet/json.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail fleet_allowance_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail account_cmd_add_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail fleet_replay_"]
+size = "M"
+done = "(1) 子 fleet/usage.rs に名が fleet_usage_・fleet_allowance_ で始まる歯 35 本、子 fleet/account.rs に account_cmd_ で始まる歯 17 本、子 fleet/json.rs に fleet_json_・fleet_read_・fleet_record_・fleet_replay_・fleet_export_ で始まる歯 27 本が在る。3 つの子は fleet.rs の mod 宣言で宣言され、頭が use super::*; である (2) 親 fleet.rs には fleet_select_ と host_group_ の族（本文に super:: を持つ）・snapshot の歯 1 本・他の歯・helper と const と use の行の全部が残り、可視性は不変 (3) 移した歯の本文（直前の doc と属性の行を含む）は base と 1 byte も違わず、親と子で増減した行は空行・use の行・mod <名>;・comment・札だけで、move_proof が純移動と判定する (4) この便の bead id の flip-check: moved の札が各子の先頭と親の mod の宣言の直後に在り、flip-check が moved で通る (5) e2e の歯の本数は base = head で、snapshot と .config/nextest.toml と行 e の歯は GREEN のまま不変 (6) write-set の fleet.rs の - は縮む面（file は残り、約 2,020 行が減る）で、diff は親の M と子 3 つの A だけ（この doc を含まない）"
+
+[[contract]]
+id = "i"
+title = "e2e の seat.rs を族ごとの子 module へ割る — tick の族 65 本を子 seat/tick.rs へ純移動し、snapshot と tmux の群の歯と動詞の数の歯と fixture は親に残す・札 moved（§9 行 i）"
+req = ["NFR1", "FR7"]
+section = "9"
+write-set = ["-crates/scribe2-boundary/tests/e2e/seat.rs", "+crates/scribe2-boundary/tests/e2e/seat/tick.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_judge_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_grace_"]
+size = "S"
+done = "(1) 子 seat/tick.rs に名が seat_tick_ で始まる歯 65 本が在り、seat.rs の mod 宣言の並びに mod tick; が足され、子の頭が use super::*; である (2) 親 seat.rs には snapshot の歯 4 本・tmux の群の歯 2 本・動詞の数を固定する歯・isolated seat の fixture・他の歯・helper と const と use の行の全部が残り、可視性は不変 (3) 移した歯の本文（直前の doc と属性の行を含む）は base と 1 byte も違わず、親と子で増減した行は空行・use の行・mod <名>;・comment・札だけで、move_proof が純移動と判定する (4) この便の bead id の flip-check: moved の札が子の先頭と親の mod の宣言の直後に在り、flip-check が moved で通る (5) e2e の歯の本数は base = head で、snapshot と .config/nextest.toml と行 e の歯は GREEN のまま不変 (6) write-set の seat.rs の - は縮む面（file は残り、約 1,070 行が減る）で、diff は親の M と子 1 つの A だけ（この doc を含まない）"
+
+[[contract]]
+id = "j"
+title = "e2e の rules.rs を族ごとの子 module へ割る — embedded と manifest の族 45 本を子 rules/embedded.rs へ、host と host_group の族 27 本を子 rules/host.rs へ純移動し、snapshot の歯と helper は親に残す・札 moved（§9 行 j）"
+req = ["NFR1", "FR7"]
+section = "9"
+write-set = ["-crates/scribe2-boundary/tests/e2e/rules.rs", "+crates/scribe2-boundary/tests/e2e/rules/embedded.rs", "+crates/scribe2-boundary/tests/e2e/rules/host.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_embedded_manifest_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail host_group_tier_"]
+size = "S"
+done = "(1) 子 rules/embedded.rs に名が rules_embedded_・rules_manifest_ で始まる歯 45 本、子 rules/host.rs に rules_host_・host_group_ で始まる歯 27 本が在る。2 つの子は rules.rs の mod 宣言で宣言され、頭が use super::*; である (2) 親 rules.rs には snapshot の歯 1 本・他の歯・helper と const と use の行の全部が残り、可視性は不変 (3) 移した歯の本文（直前の doc と属性の行を含む）は base と 1 byte も違わず、親と子で増減した行は空行・use の行・mod <名>;・comment・札だけで、move_proof が純移動と判定する (4) この便の bead id の flip-check: moved の札が各子の先頭と親の mod の宣言の直後に在り、flip-check が moved で通る (5) e2e の歯の本数は base = head で、snapshot と .config/nextest.toml と行 e の歯は GREEN のまま不変 (6) write-set の rules.rs の - は縮む面（file は残り、約 1,590 行が減る）で、diff は親の M と子 2 つの A だけ（この doc を含まない）"
+
 <!-- contracts:end -->
