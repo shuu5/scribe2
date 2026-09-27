@@ -411,6 +411,10 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
     - heartbeat の合図（`crates/scribe2/src/seat/tick.rs` の :870・その後ろに行 u の ` alarm=`）
   - 段の上げの語は tick.rs の `idle_alarm`（:409）が `Facts` から決める。`Facts` を作るのは facts.rs の中の 3 か所（:63・:70・:82）だけである。
   - 席への送達は notify.rs の `send`（:91・`pub(super)`＝pipe の子孫から呼べる）で、idle の知らせは `crates/scribe2/src/pipe/cli.rs` の同じ周がこの 1 本で送る。
+  - 束の file に写す節の本文と行の TOML（形 1）の読み手は、どちらも既に在る 1 本を呼ぶ（便 s2-07l.717 の 2 回目の審査 INCONCLUSIVE の根）。
+    - 節の本文: `crates/scribe2/src/pipe/review.rs` の `design_material`（:387・`pub(in crate::pipe)`・引数は repo と設計 pointer の字）。審査の材料の dir に置かれる設計の file と同じ形（1 行目が pointer と節の番号、2 行目から本文）を返す。review は pipe の :30 の `pub mod review;` で、束の module（pipe の子孫）から呼べる。節の読み（`section_text`・私有）と契約表の検査の節の読み（`section_lines`・table/check.rs の私有）は呼ばない（読み手を 2 本にしない・C2）。
+    - 行の TOML: `find_row`（`crates/scribe2/src/pipe/table/parse.rs` の :358・`pub`・table.rs の :39 の再輸出で table の直下に出る）が返す行の `line`（行の頭の `[[contract]]` の行番号・contracts check の行番号と同じ）から、次の `[[contract]]` か区間の終わりの前までの字を、そのまま写す（TOML を組み直さない）。
+    - どちらも行 y の write-set の外の file を 1 語も変えずに届く。
   - ⇒ 行 y の write-set に、事前審査の file と実測の file（`crates/scribe2/src/pipe/dispatch/facts.rs`）の 2 つを足す。
     - 事前審査の file: `read` と `Kept` と `dir_of` を `pub(super)` に上げ、`Kept` に確定の finding の理由を持たせる。`round` の終わりには、束を作る 1 関数を呼ぶ 1 行を足す。
     - 束の file の読み書きと `[DISPATCH-BUNDLE]` の行は、行 y の `+` の file に置く。結果の file の読み手は `read` の 1 本のままにする（2 本にしない）。
