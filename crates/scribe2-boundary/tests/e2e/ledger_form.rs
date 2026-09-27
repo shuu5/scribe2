@@ -63,12 +63,20 @@ struct Bead<'a> {
     description: &'a str,
     notes: &'a str,
     from: Option<&'a str>,
+    /// parent-child の辺の先（順のまま・最初の 1 本が親）。
+    parents: &'a [&'a str],
 }
 
 impl<'a> Bead<'a> {
     /// open の task（label・pointer・本文・edge 無し）。
     fn task(id: &'a str) -> Self {
-        Self { id, status: "open", kind: "task", memo: false, pointer: None, description: "", notes: "", from: None }
+        let (description, notes) = ("", "");
+        Self { id, status: "open", kind: "task", memo: false, pointer: None, description, notes, from: None, parents: &[] }
+    }
+
+    /// `status` と `kind` を持ち `parents` の下に付く bead（台帳のグラフの fixture）。
+    fn node(id: &'a str, status: &'a str, kind: &'a str, parents: &'a [&'a str]) -> Self {
+        Self { status, kind, parents, ..Self::task(id) }
     }
 
     /// 4 節を `description` で持つ open の memo。
@@ -85,9 +93,12 @@ impl<'a> Bead<'a> {
     fn json(&self) -> String {
         let labels = if self.memo { "[\"intake:memo\",\"doc:toy\"]" } else { "[\"doc:toy\"]" };
         let acceptance = self.pointer.map_or_else(String::new, |found| format!("design = docs/design/toy.md#{found}"));
-        let deps = self.from.map_or_else(String::new, |memo| {
-            format!("{{\"issue_id\":{},\"depends_on_id\":{},\"type\":\"discovered-from\"}}", quoted(self.id), quoted(memo))
-        });
+        let edge = |on: &str, kind: &str| {
+            format!("{{\"issue_id\":{},\"depends_on_id\":{},\"type\":{}}}", quoted(self.id), quoted(on), quoted(kind))
+        };
+        let mut deps: Vec<String> = self.from.iter().map(|memo| edge(memo, "discovered-from")).collect();
+        deps.extend(self.parents.iter().map(|parent| edge(parent, "parent-child")));
+        let deps = deps.join(",");
         format!(
             "{{\"id\":{},\"title\":\"t\",\"status\":{},\"issue_type\":{},\"labels\":{labels},\"acceptance_criteria\":{},\"description\":{},\"notes\":{},\"dependencies\":[{deps}]}}",
             quoted(self.id),
@@ -125,19 +136,23 @@ fn serve(place: &Place, beads: &[Bead<'_>]) {
     write_client(place, &format!("cat '{}'", json.display()));
 }
 
-/// `doctor --repo` を `path` の PATH で撃ち、rc 0 を確かめて `ledger-form:` の行（ちょうど 1 本）を返す。
+/// `doctor --repo`（`rules` が在れば `--rules` も）を `path` の PATH で撃ち、rc 0 を確かめて stdout を返す。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn line_with(place: &Place, path: &str) -> String {
-    let out = Command::new(env!("CARGO_BIN_EXE_scribe2"))
-        .args(["doctor", "--repo", &place.repo.display().to_string()])
-        .env("PATH", path)
-        .output()
-        .expect("binary を起動できる");
+fn doctor(place: &Place, path: &str, rules: Option<&Path>) -> String {
+    let mut args = vec!["doctor".to_owned(), "--repo".to_owned(), place.repo.display().to_string()];
+    args.extend(rules.map(|found| ["--rules".to_owned(), found.display().to_string()]).into_iter().flatten());
+    let out = Command::new(env!("CARGO_BIN_EXE_scribe2")).args(&args).env("PATH", path).output().expect("binary を起動できる");
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     assert_eq!(out.status.code(), Some(0), "doctor は判定しない（rc 0）: {stdout}");
+    stdout
+}
+
+/// `doctor --repo` を `path` の PATH で撃ち、rc 0 を確かめて `ledger-form:` の行（ちょうど 1 本）を返す。
+fn line_with(place: &Place, path: &str) -> String {
+    let stdout = doctor(place, path, None);
     let lines: Vec<&str> = stdout.lines().filter(|line| line.starts_with("ledger-form:")).collect();
     assert_eq!(lines.len(), 1, "台帳の形の行はちょうど 1 本: {stdout}");
     assert_eq!(stdout.lines().last(), lines.first().copied(), "台帳の形の行は doctor の末尾: {stdout}");
@@ -230,5 +245,158 @@ fn ledger_form_unreadable_ledger_is_not_zero() {
         assert_eq!(found, "ledger-form: unreadable reason=ledger-unreadable", "{case}");
         assert!(!found.contains("=0"), "{case}: 件数 0 に倒さない: {found}");
     }
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+// ─── 台帳のグラフの形（設計 ledger-form.md §10・契約表の行 f・接頭辞 `ledger_graph_`） ───
+
+/// 埋め込みの manifest の字面（`--rules` に渡す写しの元）。
+const EMBEDDED: &str = include_str!("../../../../rules/manifest.toml");
+
+/// 埋め込みの manifest の上限の行（写しで値を替える・行ごと除く）。
+const MAX_ROW: &str = "[[rule]]\nid = \"ledger.open_children_max\"\nkind = \"LedgerOpenChildrenMax\"\nvalue = 15\nenabled = true\n\
+ruling = \"user 2026-09-27T17:33Z 項 2-3\"\nruled_at = \"2026-09-27\"\n";
+
+/// 違反が 1 つ以上の周に行の末尾へ 1 回付く直す形。
+const FIX: &str = " — top は bdw update <top> --parent <epic> か --type epic・親 2 つと親の輪は bdw update <子> --parent <epic> \
+で 1 本に置き換える・溢れは bdw create <題> --type epic --parent <親> の子 epic へ付け替える・close-eligible は bdw close <epic>";
+
+/// 埋め込みの manifest の写しの上限の行を `row` に替えて置き場に書き、その path を返す。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn rules_with(place: &Place, row: &str) -> PathBuf {
+    let text = EMBEDDED.replace(MAX_ROW, row);
+    assert_ne!(text, EMBEDDED, "写しは上限の行を替えた（字面が manifest と揃っている）");
+    let path = place.dir.join("rules.toml");
+    fs::write(&path, text).expect("rules の写しを書ける");
+    path
+}
+
+/// 偽の client を先頭に積んだ PATH で `doctor --repo`（`rules` が在れば `--rules` も）を撃ち、台帳のグラフの行（ちょうど
+/// 1 本）を返す。行は台帳 lint の行の直後・台帳の形の行（doctor の末尾）の直前に在る。
+fn graph_line(place: &Place, rules: Option<&Path>) -> String {
+    let stdout = doctor(place, &format!("{}:{}", place.bin.display(), std::env::var("PATH").unwrap_or_default()), rules);
+    let lines: Vec<&str> = stdout.lines().collect();
+    let found: Vec<usize> = (0..lines.len()).filter(|at| lines.get(*at).is_some_and(|l| l.starts_with("ledger-graph:"))).collect();
+    assert_eq!(found.len(), 1, "台帳のグラフの行はちょうど 1 本: {stdout}");
+    let at = found.first().copied().unwrap_or_default();
+    assert!(lines.get(at.wrapping_sub(1)).is_some_and(|l| l.starts_with("ledger:")), "台帳 lint の行の直後: {stdout}");
+    assert!(lines.get(at + 1).is_some_and(|l| l.starts_with("ledger-form:")), "台帳の形の行の直前: {stdout}");
+    assert_eq!(at + 2, lines.len(), "台帳の形の行が doctor の末尾のまま: {stdout}");
+    lines.get(at).map(|line| (*line).to_owned()).unwrap_or_default()
+}
+
+/// (a)(e) 根の epic 1・その子 3（open 2・closed 1）・親を持たない open の task 1 と closed の task 1・feature の top の下の
+/// open 2・親 2 つの task 1・親の輪 2 本・子が全部 closed の open な epic 1 で、各欄の件数と id と末尾の直す形が出て、
+/// 台帳は `--readonly` で 1 回だけ読まれる（台帳の形の行は doctor の末尾のまま）。
+#[test]
+fn ledger_graph_counts_each_break_with_ids_and_the_fix() {
+    let place = place().unwrap_or_else(|| panic!("置き場を作れる"));
+    let beads = [
+        Bead::node("s2-g.r", "open", "epic", &[]),
+        Bead::node("s2-g.r1", "open", "task", &["s2-g.r"]),
+        Bead::node("s2-g.r2", "open", "task", &["s2-g.r"]),
+        Bead::node("s2-g.r3", "closed", "task", &["s2-g.r"]),
+        Bead::node("s2-g.t1", "open", "task", &[]),
+        Bead::node("s2-g.t2", "closed", "task", &[]),
+        Bead::node("s2-g.f", "open", "feature", &[]),
+        Bead::node("s2-g.f1", "open", "task", &["s2-g.f"]),
+        Bead::node("s2-g.f2", "open", "task", &["s2-g.f"]),
+        Bead::node("s2-g.d", "open", "task", &["s2-g.r", "s2-g.f"]),
+        Bead::node("s2-g.l1", "open", "task", &["s2-g.l2"]),
+        Bead::node("s2-g.l2", "open", "task", &["s2-g.l1"]),
+        Bead::node("s2-g.e", "open", "epic", &["s2-g.r"]),
+        Bead::node("s2-g.e1", "closed", "task", &["s2-g.e"]),
+    ];
+    serve(&place, &beads);
+    let want = format!(
+        "ledger-graph: beads=14 open=11 max=15 unrooted=6 unrooted-closed=1 tops=2:s2-g.f,s2-g.t1 tops-closed=1 \
+         two-parents=1:s2-g.d parent-loops=2:s2-g.l1,s2-g.l2 over=0 close-eligible=1:s2-g.e{FIX}"
+    );
+    assert_eq!(graph_line(&place, None), want, "各欄の件数と id と直す形");
+    assert_eq!(calls(&place), ["--readonly list --all --limit 0 --json"], "台帳は readonly で 1 回だけ読む");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (b) 上限 2 の写しで、直下の open の子 3 本の親だけが over に `<id>/3` で出て、2 本の親（closed と pinned の子は数えない）は
+/// 出ない。
+#[test]
+fn ledger_graph_over_names_only_the_parent_past_the_max() {
+    let place = place().unwrap_or_else(|| panic!("置き場を作れる"));
+    let rules = rules_with(&place, &MAX_ROW.replace("value = 15", "value = 2"));
+    serve(&place, &over_beads());
+    let line = graph_line(&place, Some(&rules));
+    assert!(line.contains(" max=2 "), "上限は写しの値: {line}");
+    assert!(line.contains(" over=1:s2-o.p/3 "), "N+1 本の親だけ: {line}");
+    assert!(line.ends_with(FIX), "違反が在る周は直す形: {line}");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (b)(f) の fixture: 根の epic `s2-o.r` の下に open の子 3 本の親 `s2-o.p` と、open の子 2 本（ほかに closed と pinned が
+/// 1 本ずつ）の親 `s2-o.q`。
+fn over_beads() -> [Bead<'static>; 10] {
+    [
+        Bead::node("s2-o.r", "open", "epic", &[]),
+        Bead::node("s2-o.p", "open", "epic", &["s2-o.r"]),
+        Bead::node("s2-o.p1", "open", "task", &["s2-o.p"]),
+        Bead::node("s2-o.p2", "open", "task", &["s2-o.p"]),
+        Bead::node("s2-o.p3", "in_progress", "task", &["s2-o.p"]),
+        Bead::node("s2-o.q", "open", "epic", &["s2-o.r"]),
+        Bead::node("s2-o.q1", "open", "task", &["s2-o.q"]),
+        Bead::node("s2-o.q2", "open", "task", &["s2-o.q"]),
+        Bead::node("s2-o.q3", "closed", "task", &["s2-o.q"]),
+        Bead::node("s2-o.q4", "pinned", "task", &["s2-o.q"]),
+    ]
+}
+
+/// (f) 上限の値だけを 0 にした写しでは over を数えず `-` を出し、N+1 本の子を持つ親も over に載らない。
+#[test]
+fn ledger_graph_zero_max_prints_a_dash_for_over() {
+    let place = place().unwrap_or_else(|| panic!("置き場を作れる"));
+    let rules = rules_with(&place, &MAX_ROW.replace("value = 15", "value = 0"));
+    serve(&place, &over_beads());
+    let line = graph_line(&place, Some(&rules));
+    assert!(line.contains(" max=0 ") && line.contains(" over=- "), "over は数えない: {line}");
+    assert!(!line.contains("s2-o.p/"), "溢れた親も載らない: {line}");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (c) 違反 0 の周も行が出て、末尾の直す形が無い。
+#[test]
+fn ledger_graph_clean_ledger_keeps_the_line_without_the_fix() {
+    let place = place().unwrap_or_else(|| panic!("置き場を作れる"));
+    serve(&place, &[Bead::node("s2-c.r", "open", "epic", &[]), Bead::node("s2-c.r1", "open", "task", &["s2-c.r"])]);
+    let want = "ledger-graph: beads=2 open=2 max=15 unrooted=0 unrooted-closed=0 tops=0 tops-closed=0 two-parents=0 \
+                parent-loops=0 over=0 close-eligible=0";
+    assert_eq!(graph_line(&place, None), want, "0 の欄だけで直す形が無い");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (d) 台帳を読めない周（rc ≠ 0・壊れた出力）は unreadable reason=ledger-unreadable で件数を 1 つも出さない。
+#[test]
+fn ledger_graph_unreadable_ledger_is_not_zero() {
+    let place = place().unwrap_or_else(|| panic!("置き場を作れる"));
+    serve(&place, &[Bead::node("s2-u.r", "open", "epic", &[])]);
+    assert!(graph_line(&place, None).contains(" beads=1 "), "同じ置き場で読める周は数える（否定の枝の対照）");
+    write_client(&place, "cat /dev/null\nexit 3");
+    let refused = graph_line(&place, None);
+    write_client(&place, "printf '[{\"id\":'");
+    let broken = graph_line(&place, None);
+    for (case, found) in [("rc ≠ 0", &refused), ("壊れた出力", &broken)] {
+        assert_eq!(found, "ledger-graph: unreadable reason=ledger-unreadable", "{case}");
+    }
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (g) 上限の行を除いた写しでは台帳のグラフの行が unreadable reason=no-rule で件数を 1 つも出さない（台帳は読める）。
+#[test]
+fn ledger_graph_missing_rule_is_unreadable_no_rule() {
+    let place = place().unwrap_or_else(|| panic!("置き場を作れる"));
+    let rules = rules_with(&place, "");
+    serve(&place, &over_beads());
+    assert!(graph_line(&place, None).contains(" beads=10 "), "埋め込みの rules では数える（否定の枝の対照）");
+    assert_eq!(graph_line(&place, Some(&rules)), "ledger-graph: unreadable reason=no-rule", "行の無い rules");
     fs::remove_dir_all(&place.dir).ok();
 }

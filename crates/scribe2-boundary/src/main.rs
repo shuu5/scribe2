@@ -392,6 +392,50 @@ mod tests {
         insta::assert_snapshot!(masked);
     }
 
+    /// doctor の台帳のグラフの 1 行（ledger-form.md §10 形 3）の外形: doctor の 2 行 → 測れた周の 1 行（全欄 1 件以上・
+    /// 上限 2・末尾に直す形）→ 測れない周の 1 行 → usage → version。台帳は `bd list --json` の形の fixture を席の reader
+    /// （`issues_of`）で読む。
+    #[test]
+    fn ledger_graph_doctor_external_form() {
+        use vessel::ledger::graph::{judge, render, render_unreadable};
+        let child = |parents: &[&str]| {
+            let deps: Vec<String> =
+                parents.iter().map(|parent| format!("{{\"depends_on_id\":\"{parent}\",\"type\":\"parent-child\"}}")).collect();
+            format!("[{}]", deps.join(","))
+        };
+        let beads = [
+            ("s2-r", "open", "epic", child(&[])),
+            ("s2-r.1", "open", "task", child(&["s2-r"])),
+            ("s2-r.2", "open", "task", child(&["s2-r"])),
+            ("s2-r.3", "open", "task", child(&["s2-r"])),
+            ("s2-e", "open", "epic", child(&["s2-r"])),
+            ("s2-e.1", "closed", "task", child(&["s2-e"])),
+            ("s2-t", "open", "task", child(&[])),
+            ("s2-k", "closed", "task", child(&[])),
+            ("s2-d", "open", "task", child(&["s2-r", "s2-t"])),
+            ("s2-l.1", "open", "task", child(&["s2-l.2"])),
+            ("s2-l.2", "open", "task", child(&["s2-l.1"])),
+        ];
+        let items: Vec<String> = beads
+            .iter()
+            .map(|(id, status, kind, deps)| {
+                format!("{{\"id\":\"{id}\",\"status\":\"{status}\",\"issue_type\":\"{kind}\",\"dependencies\":{deps}}}")
+            })
+            .collect();
+        let issues = vessel::seat::ledger::issues_of(&format!("[{}]", items.join(","))).unwrap_or_default();
+        assert_eq!(issues.len(), 11, "fixture を読める");
+        let mut lines = render_doctor();
+        lines.push(render(&judge(&issues, 2)));
+        lines.push(render_unreadable("ledger-unreadable"));
+        lines.push(render_usage());
+        lines.push(render_version());
+        let masked = lines
+            .join("\n")
+            .replace(env!("CARGO_PKG_VERSION"), "[version]")
+            .replace(&format!("({BUILD_COMMIT})"), "([commit])");
+        insta::assert_snapshot!(masked);
+    }
+
     /// insta の force 系 env が立っていない（未設定・空・`0` のいずれか）。
     fn force_flag_is_off(value: Option<&OsStr>) -> bool {
         match value {

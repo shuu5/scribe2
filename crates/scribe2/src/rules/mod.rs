@@ -312,6 +312,9 @@ pub enum RuleKind {
     /// `parent-edge`・後ろの 2 語は設計 ledger-form.md §11）で、判定そのものは
     /// [`crate::hook::ledger_guard`] が持つ。列に載る形だけを断る。
     LedgerDeniedWrites,
+    /// 台帳のグラフの直下の open の子の上限（本・設計 ledger-form.md §10 形 4）。doctor の台帳のグラフの行
+    /// （[`crate::ledger::graph`]）が id で引いて整数だけを読み、越えた親を over に名指す。0 は over を数えない。
+    LedgerOpenChildrenMax,
     /// host の破壊防止の見張りの語列（設計 vessel-hook.md §11 行 b・ADR-0056）。値は [`Self::RunnerDeniedCommands`] と
     /// 同じ形の語列の配列で、**1 kind で行が 3 つ**（id は [`crate::hook::host_guard::WORD_ROWS`]・種類ごとに 1 行）。
     HostGuardDeniedCommands,
@@ -405,6 +408,7 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::FlipDocsOnlyFaces,
     RuleKind::FlipMarksPerPr,
     RuleKind::LedgerDeniedWrites,
+    RuleKind::LedgerOpenChildrenMax,
     RuleKind::HostGuardDeniedCommands,
     RuleKind::HostGuardRmProtected,
     RuleKind::SeatTickIntervalS,
@@ -476,7 +480,7 @@ impl RuleKind {
             Self::PipeMaxLive => "PipeMaxLive",
             Self::FlipDocsOnlyFaces => "FlipDocsOnlyFaces",
             Self::FlipMarksPerPr => "FlipMarksPerPr",
-            Self::LedgerDeniedWrites => "LedgerDeniedWrites",
+            Self::LedgerDeniedWrites => "LedgerDeniedWrites", Self::LedgerOpenChildrenMax => "LedgerOpenChildrenMax",
             Self::HostGuardDeniedCommands => "HostGuardDeniedCommands", Self::HostGuardRmProtected => "HostGuardRmProtected",
             // 管理 tick の 3 kind と席の箱も 2 行に畳み、対で読む model と effort の 2 組も 1 行ずつに畳む（同じ上限）。
             Self::SeatTickIntervalS => "SeatTickIntervalS", Self::SeatTickStaleS => "SeatTickStaleS", Self::SeatMemoryMaxMb => "SeatMemoryMaxMb",
@@ -527,7 +531,7 @@ impl RuleKind {
             | Self::ReviewSameKindStop
             | Self::LandTrainMax
             | Self::PipeMaxLive
-            | Self::FlipMarksPerPr
+            | Self::FlipMarksPerPr | Self::LedgerOpenChildrenMax
             | Self::SeatTickIntervalS | Self::SeatTickStaleS | Self::SeatMoveGraceS | Self::SeatMemoryMaxMb | Self::SeatIdleAlarmS
             | Self::AccountSelection => ValueShape::Int,
             Self::DialogueSurface

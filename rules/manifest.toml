@@ -613,6 +613,18 @@ enabled = true
 ruling = "user 2026-09-27T14:02Z 項 5"
 ruled_at = "2026-09-27"
 
+# 台帳のグラフの直下の open の子（closed でも pinned でもない子）の上限（本・設計 ledger-form.md §10 形 4）。doctor の
+# 台帳のグラフの行（core の ledger::graph）が id で引いて整数だけを読み、越えた親を over に <id>/<子の数> で名指す。0 は
+# over を数えない（-）。行が無い・不発効・整数でない周は台帳のグラフの行を測れない形（reason=no-rule）で出す。
+
+[[rule]]
+id = "ledger.open_children_max"
+kind = "LedgerOpenChildrenMax"
+value = 15
+enabled = true
+ruling = "user 2026-09-27T17:33Z 項 2-3"
+ruled_at = "2026-09-27"
+
 # host の破壊防止の見張り（subcommand host-guard・設計 vessel-hook.md §11・ADR-0056）が読む種類ごとの行。語列の 3 行
 # （git の履歴破壊 / tmux server の破壊 / 台帳の破壊）は runner.denied_commands と同じ照合（先頭語一致 + 残りの語の包含）で、
 # enabled = false は host-guard の口だけを切る（command guard は 3 行を enabled に関わらず読む）。host_guard.git は

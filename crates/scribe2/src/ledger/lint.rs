@@ -122,9 +122,11 @@ pub fn render_unreadable(reason: &str) -> String {
     format!("{PREFIX} unreadable reason={reason}")
 }
 
-/// doctor の台帳の 2 行（本行 → [`super::form`] の行）。台帳は**1 回だけ**読み、2 行が同じ出力を分けて読む。
+/// doctor の台帳の 3 行（本行 → [`super::graph`] の行 → [`super::form`] の行＝台帳の形の行が末尾）。台帳は**1 回だけ**
+/// 読み、3 行が同じ出力を分けて読む。
 pub fn doctor_lines(repo: &Path, rules: Option<&str>) -> Vec<String> {
-    ledger::one_read(|| vec![doctor_line(repo, rules), super::form::doctor_line(repo, rules)])
+    use super::{form, graph};
+    ledger::one_read(|| vec![doctor_line(repo, rules), graph::doctor_line(repo, rules), form::doctor_line(repo, rules)])
 }
 
 /// doctor の項目 1 行（`--repo R` の台帳と設計 doc を読み、[`judge`] を撃つ）。`rules` は待ち上限を読む manifest

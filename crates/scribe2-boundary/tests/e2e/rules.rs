@@ -701,6 +701,30 @@ fn rules_ledger_denied_writes_row_is_declared_on_four_faces() {
     assert!(errors.join("\n").contains("形と合わない"), "形は List だけ: {errors:?}");
 }
 
+/// 台帳のグラフの直下の open の子の上限の行（設計 ledger-form.md §10 形 4・`s2-07l.719`）が埋め込み manifest に id / kind /
+/// 形 Int / 値 15 / enabled / 裁定 id / 裁定日で 1 本在り、行は `ledger.denied_writes` の直後・kind は `ALL` の
+/// `LedgerDeniedWrites` の直後で字面から引け、形は Int だけ（base では行も kind も無い ＝ RED）。
+#[test]
+fn rules_open_children_max_row_follows_the_denied_writes() {
+    let manifest = Manifest::embedded().unwrap_or_else(|errors| panic!("埋め込み manifest が拒まれた: {errors:?}"));
+    let id = "ledger.open_children_max";
+    let row = manifest.get(id).unwrap_or_else(|| panic!("{id} の行が在る"));
+    assert_eq!((row.kind, row.kind.shape()), (RuleKind::LedgerOpenChildrenMax, ValueShape::Int), "{id} の kind と形");
+    assert_eq!(row.value, RuleValue::Int(15), "{id} の値（本）");
+    assert!(row.enabled, "{id} は既定で効く");
+    assert_eq!((row.ruling.as_str(), row.ruled_at.as_str()), ("user 2026-09-27T17:33Z 項 2-3", "2026-09-27"), "{id} の裁定 id と裁定日");
+    assert_eq!(int_row(&manifest, id), Ok(15), "{id} を整数の読み手で引ける");
+    assert_eq!(manifest.rows().iter().filter(|found| found.kind == RuleKind::LedgerOpenChildrenMax).count(), 1, "kind の行は 1 本");
+    let at = ALL.iter().position(|kind| *kind == RuleKind::LedgerDeniedWrites).expect("LedgerDeniedWrites は ALL に在る");
+    assert_eq!(ALL.get(at + 1), Some(&RuleKind::LedgerOpenChildrenMax), "kind は LedgerDeniedWrites の直後");
+    let rows: Vec<&str> = manifest.rows().iter().map(|found| found.id.as_str()).collect();
+    let denied = rows.iter().position(|found| *found == "ledger.denied_writes").expect("ledger.denied_writes の行が在る");
+    assert_eq!(rows.get(denied + 1).copied(), Some(id), "行も ledger.denied_writes の直後（母集団 {} 行）", rows.len());
+    assert_eq!(RuleKind::parse("LedgerOpenChildrenMax"), Some(RuleKind::LedgerOpenChildrenMax), "字面から引ける");
+    let errors = rejected(&one_row(RuleKind::LedgerOpenChildrenMax, "\"fifteen\"")).expect("文字列の値の fixture が受理された");
+    assert!(errors.join("\n").contains("形と合わない"), "形は Int だけ: {errors:?}");
+}
+
 // ─── host の破壊防止の見張りの種類ごとの行（設計 vessel-hook.md §11 行 b・ADR-0056・`s2-07l.574`・接頭辞
 // `rules_embedded_manifest_declares_host_guard_`） ───
 

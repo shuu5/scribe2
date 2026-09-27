@@ -1,0 +1,10 @@
+---
+source: crates/scribe2-boundary/src/main.rs
+expression: masked
+---
+scribe2
+scribe2 [version] ([commit])
+ledger-graph: beads=11 open=9 max=2 unrooted=3 unrooted-closed=1 tops=1:s2-t tops-closed=1 two-parents=1:s2-d parent-loops=2:s2-l.1,s2-l.2 over=1:s2-r/5 close-eligible=1:s2-e — top は bdw update <top> --parent <epic> か --type epic・親 2 つと親の輪は bdw update <子> --parent <epic> で 1 本に置き換える・溢れは bdw create <題> --type epic --parent <親> の子 epic へ付け替える・close-eligible は bdw close <epic>
+ledger-graph: unreadable reason=ledger-unreadable
+usage: scribe2 <name|--version|doctor|account|rules|fleet|vessel|hook|host-guard|pipe|runner|lens|seat|polarity|contracts>
+scribe2 [version] ([commit])
