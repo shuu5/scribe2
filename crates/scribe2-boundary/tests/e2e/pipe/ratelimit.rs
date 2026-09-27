@@ -268,7 +268,8 @@ fn resume_rules_with_model(state: &Path, labels: &[&str], model: &str) -> String
 }
 
 /// [`resume_rules`] の鮮度の行を `fresh` 秒にした形（`pipe_ratelimit_fresh_` の歯だけが振る）。
-fn resume_rules_fresh(state: &Path, labels: &[&str], fresh: u64) -> String {
+// flip-check: retroactive s2-07l.712
+pub(super) fn resume_rules_fresh(state: &Path, labels: &[&str], fresh: u64) -> String {
     resume_rules_full(state, labels, RUNNER_MODEL, fresh)
 }
 
@@ -883,7 +884,7 @@ fn pipe_ratelimit_refuses_unknown_runner_model_value() {
 // ───── 便の起動の前計測の鮮度（`s2-07l.359`・設計 account-autonomy.md §18・SRS FR36 / FR33・接頭辞 `pipe_ratelimit_fresh_`） ─────
 
 /// 鮮度の歯の `fleet.usage_fresh_s`（秒）。歯の壁時計より十分に長い＝「いま」測った・置いた実測は境より新しい。
-const FRESH_S: u64 = 3600;
+pub(super) const FRESH_S: u64 = 3600;
 
 /// 鮮度の歯の「古い」実測の ts（[`FRESH_S`] より古い・reset は 2099 なので選定は古いと読まない）。
 const STALE_TS: &str = "2026-09-12T02:00:00Z";
@@ -894,7 +895,7 @@ const STALE_TS: &str = "2026-09-12T02:00:00Z";
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn put_round(state: &Path, ts: &str, label: &str) {
+pub(super) fn put_round(state: &Path, ts: &str, label: &str) {
     use vessel::fleet::{Allowance, Measured, WindowKind};
     crate::install_spawner();
     let policy = vessel::fleet::store::LockPolicy::embedded().expect("埋め込みの lock 行を読める");

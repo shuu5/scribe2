@@ -2943,6 +2943,38 @@ fn pipe_gate_lens_account_none_is_inconclusive_without_calling_lens() {
     clean(&[&repo, &state]);
 }
 
+/// (d) lens の選定の計測も鮮度つきの 1 本の口（`s2-07l.712`・設計 account-autonomy.md §22 (1)）: 新しい実測の口座は
+/// 測り直さず、その実測で選ぶ。
+///
+/// a1 の偽 curl は本文を持たない（測り直すと読めず Unmeasured）が、今の ts の実測の回が置き場に在り、鮮度の行は
+/// [`lifecycle::FRESH_S`]。base（`select_lens_account` が `fleet usage` の口＝`Always` で撃つ）は a1 を測り直して
+/// Unmeasured を積み、候補なしの INCONCLUSIVE（lens 0・呼出 1）→ RED。
+#[test]
+fn pipe_gate_lens_account_fresh_measured_account_is_not_remeasured() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &path);
+    let rules = lifecycle::resume_rules_fresh(&state, &["a1"], lifecycle::FRESH_S);
+    lifecycle::put_account(&state, "a1", &[]);
+    lifecycle::put_round(&state, &vessel::fleet::cli::now_utc(), "a1");
+    let out = gate_with_accounts(&repo, &state, &id, &rules, &argv_lens(&state, "PASS"));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{} / {}", stdout_of(&out), stderr_of(&out));
+    assert_eq!(lens_calls(&state), 1, "lens は 1 回起きる");
+    assert_eq!(
+        lifecycle::argv_account_dir(&lens_argv(&state)),
+        Some(state.join("accounts").join("a1").display().to_string()),
+        "lens の argv の末尾に新しい実測の口座の credential dir: {:?}",
+        lens_argv(&state)
+    );
+    assert_eq!(lifecycle::curl_calls(&state), 0, "新しい実測の口座は測り直さない");
+    assert_eq!(
+        gated_details(&state, &id),
+        vec!["verdict:PASS,account:a1".to_owned()],
+        "記帳は判定と起こした口座を対で運ぶ"
+    );
+    clean(&[&repo, &state]);
+}
+
 // ── lens の出力の形が読めなかった周の撃ち直し（設計 gate-cost.md §29・`s2-07l.495`）──────
 
 /// stderr に写る撃ち直しの行の頭（1 回目の理由が `reason=` の後に続く）。

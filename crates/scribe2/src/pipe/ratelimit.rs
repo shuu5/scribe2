@@ -280,7 +280,9 @@ pub(super) fn select_lens_account(
     repo: &Path,
     notes: &mut Vec<String>,
 ) -> Result<LensAccount, String> {
-    let measured = fleet::usage::run(&pool.args, state_dir);
+    // 計測は [`choose_account`] の初回と同じ鮮度つきの 1 本の口（新しい実測の口座は測り直さない・設計
+    // account-autonomy.md §22 (1)）。待ちが無いので撃ち直しの全口座の計測（§18 (2)）はここに無い。
+    let measured = fleet::usage::run_fresh(&pool.args, state_dir);
     if measured.rc != RC_OK {
         let lines: Vec<String> = measured.out.into_iter().chain(measured.err).collect();
         return Err(format!("計測が rc {} で終わった（{}）", measured.rc, lines.join(" / ")));
