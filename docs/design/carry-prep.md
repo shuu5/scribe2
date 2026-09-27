@@ -57,7 +57,7 @@
 - 境界の整理: JSON の道具（`crates/scribe2/src/fleet/json_lite.rs`・`crates/scribe2/src/fleet/json_tree.rs`）を fleet から leaf module へ純移動する・`StateDir` と vessel の marker の置き場を leaf へ出して top-level module の輪を切る・`seat::cycle` を中身どおりの名へ改める。file を移す便は、その path を素の項目で名指す過去の契約表の行を同じ PR で新しい path へ直す（境界 crate の新設の便と同じ扱い）。
 - e2e の大きさ: 2500 行を越える e2e の 9 file を族ごとの子 module へ割る。前提は e2e の file 数を literal で pin する歯（`crates/scribe2-boundary/tests/e2e/main.rs` の `e2e_fixture_clock_dated_reset_lines_are_pinned`）を宣言から導く形へ直すこと。
 - 契約の型の leaf module 化は v3 の面の契約の設計（serde を持つ crate と憲法 C13.2 の derive の置き場）が決まってから。
-- 第 2 段の census（verified・main d2d82a7・2026-09-27・数えと出所は台帳 `s2-07l.669` の notes）で、上の見立てと違う事実が 4 つ出た。どこまでを v2 で行うかは持ち主の裁定を待つ。
+- 第 2 段の census（verified・main d2d82a7・2026-09-27・数えと出所は台帳 `s2-07l.669` の notes）で、上の見立てと違う事実が 4 つ出た。持ち主の裁定 2026-09-27（UTC の分は台帳 `s2-07l.669`）で範囲を決めた。境界の整理の 3 つ（JSON の道具の移動・輪を切る・`seat::cycle` の改名）は v2 では行わず、v3 へ送る（v3 の引き継ぎ文書に census の数を写した）。e2e の分割だけを v2 で行う（§8）。
   - top-level module の輪: core の 16 module のうち 9 つ（account・fleet・headless・hook・ledger・pipe・polarity・rules・seat）が 1 つの強連結成分を成す。`StateDir` と vessel の marker を leaf へ出しても、辺は 1 本も消えない（動く参照は 27）。輪を切るのに要る最小の切断は、item の参照で 151 以上。
   - JSON の道具の移動: 極性の登録簿（`crates/scribe2/src/polarity.rs` の `NOT_A_GUARD`）が site の path を file の path から導くので、同じ PR で書き換えが要る。その結果、純移動の証明が通らない。path を名指す行は 46 file の 97 行と、契約表の 3 行（host-init e・rules-manifest e・vessel-hook d）。
   - `seat::cycle` の改名: 外からの参照は 12 file の 44 行、契約表では 15 行の 21 項目。`seat::launch` への改名は子の `launch` と重なり、clippy の `module_inception` に当たる。rules 行の id `seat.cycle_*` と記録の字面 `seat-cycle` は残す約束なので、名は揃いきらない。
@@ -98,6 +98,68 @@
 - 却下:
   - 記録を残して FR71 を改める: 読み手が無い。SRS の改訂は、持ち主が /folio-architect を起こす手番を要するうえ、得る物が無い。
   - 読み手（account-lifecycle §16 の行 e）を作る: ADR-0045 が食い違いの判定ごと廃止した。
+
+## 8. 行 e・f — 大きな e2e の file を族ごとの子 module へ割る（第 2 段・準備の 1 本と試しの 1 本）
+
+やさしく言うと: 外から binary を動かして確かめる大きなテスト（e2e）の file が 9 本あり、どれも 2500 行を越えている（最大は 5307 行）。便はテストを 1 か所直すたびにこの大きな file を読み、審査役にも同じ大きさの材料が渡る。そこで、テストの中身を 1 byte も変えずに、族ごとの小さな file へ引っ越す。
+
+行は 3 段で進める。
+
+- 行 e（準備）: 引っ越しの邪魔になる「file の数を数字で固定した歯」を、宣言から数える形に直す。
+- 行 f（試し）: 1 file（headless.rs）で割ってみる。
+- 残る 8 file の行: 行 f の着地で分かったことを足してから書く。
+
+- 出所: 持ち主の裁定 2026-09-27（第 2 段の範囲は e2e の分割だけ・UTC の分は台帳 `s2-07l.669`）と、§6 の census。
+- census（verified・main c01a456）:
+  - 2500 行を越える e2e は 9 file（行数）:
+
+    | file | 行数 |
+    |---|---:|
+    | pipe/land.rs | 5307 |
+    | hook.rs | 5133 |
+    | fleet.rs | 5100 |
+    | pipe/gate.rs | 4987 |
+    | pipe/dispatch.rs | 4604 |
+    | seat.rs | 4111 |
+    | headless.rs | 3709 |
+    | rules.rs | 2834 |
+    | pipe/spawn.rs | 2824 |
+
+    e2e は file の大きさの門の外にある（R-C4-2 は `crates/*/src` だけを数える）。
+  - file の並びを固定するものは 4 つある。それぞれ割り方に次のように効く。
+    1. `crates/scribe2-boundary/tests/e2e/main.rs` の歯 `e2e_fixture_clock_dated_reset_lines_are_pinned` が、tracked な e2e の `.rs` の本数を literal の 29 で固定する（ほかに、日付の字面を持つ行の数 7 と 5 も固定する）。file を 1 つ足すたびにこの歯の中の行が動くので、分割の便が純移動でなくなる。→ 行 e で、宣言から導く形に直す。
+    2. `crates/scribe2-boundary/tests/e2e/pipe.rs` の歯 `pipe_hermetic_sites_stay_one` は、`pipe/` の下の tracked な file の数を、同じ file の列 0 の `mod` 行の数 + 1 と比べる（既に導出の形）。pipe の 4 file の子は `pipe/` の下の兄弟に置き、`pipe.rs` で宣言する（入れ子の dir は作らない）。行 f には当たらない。
+    3. `.config/nextest.toml` の tmux の群の名の列が、module path 付きの名を 53 本持つ（`cargo xtask check` の nextest-tmux-group が両向きで照合する）。tmux を起こす歯を子へ移すときは、同じ PR で名を直す。headless.rs の歯はこの列に 0 本なので、行 f には当たらない。
+    4. `crates/scribe2-boundary/tests/e2e/pipe/intake.rs` の `SUBCOMMAND_FILES` が、`seat.rs` と `pipe.rs` の本文を埋め込む。動詞の数を固定する歯は、その親 file に残す。行 f には当たらない。
+  - snapshot の名は module path を含み、既定の置き場は source の file の隣である。snapshot を撮る歯を子へ移すと、snapshot の file の名と置き場が変わる。→ snapshot の歯は親に残す。
+- 行 e の形:
+  1. 歯 `e2e_fixture_clock_dated_reset_lines_are_pinned` は、2 つの集合が等しいことを測る。
+     - 左: tracked な e2e の `.rs` の集合
+     - 右: `main.rs` と、各 `.rs` の列 0 の `mod <名>;` の行（file の module の宣言）が指す file の集合。宣言の指す file は、`main.rs` の宣言なら `tests/e2e/<名>.rs`、`<dir>/<stem>.rs` の宣言なら `<dir>/<stem>/<名>.rs` である。inline の module（`mod <名> {`）は数えない。
+
+     食い違いは、両向きの差を message に名指す。日付の字面を持つ行の数（7 と 5）の pin は不変で、literal の 29 は消える。
+  2. 歯は base でも GREEN である（今の 29 file は全部が宣言されている）。そこで、この便の bead id で新しい `// flip-check: retroactive` の札を歯の区間に足す。そして変異の証明を bead の notes に書く（宣言の無い tracked な e2e の `.rs` を 1 つ足すと RED になる・宣言の `mod` 行を 1 つ消すと RED になる）。歯に既に在る札（`s2-07l.469`）は base から持ち越した札なので、効かない。
+- 行 f の形（headless.rs・試しの 1 本）:
+  1. `crates/scribe2-boundary/tests/e2e/headless.rs` の歯 108 本のうち、次の族を 2 つの子の file へ移す。子は headless.rs の頭で `mod lens;` と `mod runner;` によって宣言し、子の頭は `use super::*;` にする（先例: `crates/scribe2-boundary/tests/e2e/pipe/gate.rs` ほか pipe の子）。
+     - 子 runner.rs（headless.rs と同じ dir の `headless/` の下）: 名が `headless_runner_`・`runner_question_`・`runner_rate_`・`runner_prompt_` で始まる歯。snapshot の歯 `headless_runner_prompt_external_form` は除く。55 本・約 1,420 行。
+     - 子 lens.rs（同じ `headless/` の下）: 名が `headless_lens_`・`lens_rulings_` で始まる歯。snapshot の歯 `headless_lens_prompt_external_form`・`headless_lens_contract_prompt_external_form`・`headless_lens_promise_prompt_external_form` は除く。28 本・約 720 行。
+  2. 親に残すもの:
+     - snapshot の歯 5 本（上の 4 本と `headless_external_form`）
+     - ほかの族の歯 20 本（名は `run_cost_`・`headless_claude_`・`headless_plugin_`・`headless_flag_`・`headless_effort_`・`headless_args_`・`headless_agent_`・`pipe_unreachable_`・`e2e_toolbox_` で始まる）
+     - helper と const の全部
+
+     子は親の helper を `use super::*;` で読む（可視性は変えない）。
+  3. 移す歯の本文（直前の doc と属性の行を含む）は 1 byte も変えない。親と子で増減してよい行は、`crates/scribe2/src/pipe/move_proof.rs` の残差の許容形（空行・`use` の行・`mod <名>;`・`//` の comment・純移動の札）だけである。親で使われなくなった import は、`use` の行だけで直す。
+  4. 純移動の札: この便の bead id で `// flip-check: moved` の札を、各子の file の先頭と、親の `mod` の宣言の直後に置く（先例: host-init.md §16 の行 h）。
+  5. write-set の headless.rs の項目に付けた `-` の接頭辞は、file を消す宣言ではない。縮む面（file は残り、約 2,130 行が減る）の宣言である。diff は親の M と子 2 つの A と、この doc の M の 4 面になる。
+  6. 見積: 親 約 1,580 行・子 runner.rs 約 1,430 行・子 lens.rs 約 730 行。
+- 歯:
+  - 行 e: 上の歯 1 本（retroactive）。
+  - 行 f: 既存の歯が全部 GREEN のまま、期待を変えない。verify は、headless.rs にだけ在る名の接頭辞 3 語（`headless_runner_`・`runner_rate_`・`lens_rulings_`。`#[test]` の fn 名に substring として含む file は crates の中で headless.rs だけであることを実測）を 1 行ずつ撃つ。e2e の歯の本数が base = head（108 本が module path だけ変わって在る）であることを、実装役が `cargo nextest list` で写す。
+- 却下:
+  - `include!` で子の本文を親の module へ貼る: module path と snapshot の名は変わらないが、`include!` の行は move_proof の残差の許容形に無い。加えて `pipe/` の下では `pipe_hermetic_sites_stay_one` の数えが合わない。
+  - `#[path]` の子 module: module path はどのみち変わるので、得が無い。
+  - 分割の便ごとに literal の 29 を上げる: 毎便が `main.rs` の歯の中の行を動かし、純移動の証明が通らなくなる。そうなると、審査役が引っ越しの diff の全部を読むことになる。
 
 <!-- contracts:begin -->
 schema = 1
@@ -141,4 +203,24 @@ write-set = ["~crates/scribe2/src/seat/session_account.rs", "crates/scribe2/src/
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail session_start_leaves_no_account_record"]
 size = "S"
 done = "(1) crates/scribe2/src/seat/session_account.rs が無く、seat/mod.rs にその module の宣言と記録を説明する doc の行が無い (2) hook/mod.rs の SessionStart は実口座の記録を書かず、その fn が無い。名乗り・打刻・読み込み元の記録の順と中身は不変 (3) 歯 session_start_leaves_no_account_record が、pane を解ける周に accounts の下の transcript を持つ SessionStart を撃ち、同じ席の dir に読み込み元の記録が在り account の file が無いことを測る（base は label を書く＝RED） (4) e2e hook.rs の seat_account_mismatch_record_ の 4 本とそれらだけが使う helper が消え、.config/nextest.toml の tmux の群の名の列から 4 本の名が外れて新しい歯の名が入り、cargo xtask check が GREEN (5) ACCOUNTS_DIR・登録 row・打刻・読み込み元の記録・席の指示文・account-lifecycle.md・既存の置き場の account の file は不変"
+
+[[contract]]
+id = "e"
+title = "e2e の file 数の pin を宣言から導く — 歯 e2e_fixture_clock_dated_reset_lines_are_pinned が tracked な e2e の .rs の集合を main.rs と列 0 の mod 行が指す file の集合と照らし、literal の 29 を消す（§8 行 e）"
+req = ["FR33", "FR36"]
+section = "8"
+write-set = ["crates/scribe2-boundary/tests/e2e/main.rs", "docs/design/carry-prep.md"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail e2e_fixture_clock_dated_reset_lines_are_pinned"]
+size = "S"
+done = "(1) 歯 e2e_fixture_clock_dated_reset_lines_are_pinned は、tracked な e2e の .rs の集合と、main.rs に各 .rs の列 0 の mod <名>; の行が指す file を足した集合が等しいことを測り、食い違いを両向きの差で名指す。宣言の指す file は、main.rs の宣言なら tests/e2e/<名>.rs、<dir>/<stem>.rs の宣言なら <dir>/<stem>/<名>.rs。inline の mod <名> { は数えない (2) 日付の字面を持つ行の数 7 と 5 の pin は不変で、literal の 29 は歯に無い (3) この便の bead id の flip-check: retroactive の札が歯の区間に在り、変異の証明（宣言の無い tracked な e2e の .rs を足すと RED・mod 行を 1 つ消すと RED）が bead の notes に在る (4) main.rs の他の歯と宣言、e2e の他の file は不変"
+
+[[contract]]
+id = "f"
+title = "e2e の headless.rs を族ごとの子 module へ割る（試しの 1 本）— runner の族 55 本を子 headless/runner.rs へ、lens の族 28 本を子 headless/lens.rs へ純移動し、snapshot の歯 5 本と他の族の歯と helper は親に残す・札 moved（§8 行 f）"
+req = ["NFR1", "FR7"]
+section = "8"
+write-set = ["-crates/scribe2-boundary/tests/e2e/headless.rs", "+crates/scribe2-boundary/tests/e2e/headless/runner.rs", "+crates/scribe2-boundary/tests/e2e/headless/lens.rs", "docs/design/carry-prep.md"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail headless_runner_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail runner_rate_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail lens_rulings_"]
+size = "M"
+done = "(1) 子 headless/runner.rs に、名が headless_runner_・runner_question_・runner_rate_・runner_prompt_ で始まる歯 55 本（snapshot の歯 headless_runner_prompt_external_form を除く）が在り、子 headless/lens.rs に、名が headless_lens_・lens_rulings_ で始まる歯 28 本（snapshot の歯 3 本を除く）が在る。2 つの子は headless.rs の mod lens; と mod runner; で宣言され、頭が use super::*; である (2) 親 headless.rs には snapshot の歯 5 本・他の族の歯 20 本・helper と const の全部が残り、可視性は不変 (3) 移した歯の本文（直前の doc と属性の行を含む）は base と 1 byte も違わず、親と子で増減した行は空行・use の行・mod <名>;・comment・札だけで、move_proof が純移動と判定する (4) この便の bead id の flip-check: moved の札が、各子の先頭と親の mod の宣言の直後に在り、flip-check が moved で通る (5) e2e の歯の本数は base = head（108 本が module path だけ変わって在る）で、snapshot と .config/nextest.toml と行 e の歯（宣言から導いた集合の一致）は GREEN のまま不変 (6) write-set の headless.rs の - は縮む面（file は残り、約 2,130 行が減る）"
 <!-- contracts:end -->
