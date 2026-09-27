@@ -77,7 +77,7 @@ use verify::{main_red, main_unmeasured, verify_main};
 mod finish;
 
 use finish::{finish, open_pr, squash};
-pub(in crate::pipe) use finish::{land_train, landed_sha, terminal, Car};
+pub(in crate::pipe) use finish::{land_train, landed_sha, terminal, Car, PushTip};
 
 /// 着地が anchor を揃えなかった周の印（設計 §57・行 az）。書き手は境界 crate の歯からも呼べ、古さの判定は crate の中
 /// （land-window と行 h の hook）から呼べる。
@@ -261,6 +261,8 @@ enum Rebased {
 enum Landing {
     /// この land が squash を作り CAS で main を進めた（従来の形・stdout と detail は不変）。
     Fresh(String),
+    /// 列で `Fresh` と同じく載せた便のうち push の先端でない便（stdout と detail は `Fresh` と同じ・設計 contract-source.md §52）。
+    Behind(String),
     /// squash は前の周が既に main に載せていた（見つけた sha）。この land は主実測と終端だけを通した。
     AlreadyLanded(String),
 }
@@ -272,14 +274,14 @@ impl Landing {
     /// main に載った squash の sha（`landed=` / `sha:` / 面 5 の `sha` の宣言値）。
     fn sha(&self) -> &str {
         match self {
-            Self::Fresh(sha) | Self::AlreadyLanded(sha) => sha,
+            Self::Fresh(sha) | Self::Behind(sha) | Self::AlreadyLanded(sha) => sha,
         }
     }
 
     /// stdout の 1 行の末尾に後置する token（`Fresh` は何も足さない）。
     fn stdout_suffix(&self) -> String {
         match self {
-            Self::Fresh(_) => String::new(),
+            Self::Fresh(_) | Self::Behind(_) => String::new(),
             Self::AlreadyLanded(_) => format!(" {ALREADY_LANDED}=1"),
         }
     }
@@ -287,7 +289,7 @@ impl Landing {
     /// `RunDone stage=Landed` の detail の末尾（`main:<実測>` の後ろ・空白区切り・`Fresh` は何も足さない）。
     fn detail_suffix(&self) -> String {
         match self {
-            Self::Fresh(_) => String::new(),
+            Self::Fresh(_) | Self::Behind(_) => String::new(),
             Self::AlreadyLanded(_) => format!(" {ALREADY_LANDED}"),
         }
     }
@@ -446,7 +448,7 @@ fn attempt(entry: &Land<'_>, worktree: &Path, turned: &Turned, lines: &mut Vec<S
     // 同期が `Skipped(SyncFailed)` の周も実測は続ける（ref は既に進んでいる＝同期の失敗で land を
     // 止めない・極性は不変）。結果は従来どおり [`finish`] / [`main_red`] / [`main_unmeasured`] へ渡す。
     let synced_to = match &landing {
-        Landing::Fresh(_) => new,
+        Landing::Fresh(_) | Landing::Behind(_) => new,
         Landing::AlreadyLanded(_) => old.as_str(),
     };
     // 揃えなかった周は印を残す（main の実測の前・設計 §57 形 1）。書けない周も rc は変えず stderr に 1 行。

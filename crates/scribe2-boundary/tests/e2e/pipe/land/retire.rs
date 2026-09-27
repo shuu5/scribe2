@@ -615,6 +615,53 @@ fn pipe_train_limit_one_and_absent_row_land_only_the_front() {
     }
 }
 
+/// 列の終端（設計 contract-source.md §52・行 bd）: 常に success の偽 CI を持つ 3 本の列の着地で、先端の便（c）だけが
+/// push → CI → close の 3 段を通し、先端でない 2 本（a / b）は push の後に CI を照合せず `ci:unmeasurable` で止まる
+/// （close しない）。偽 CI の呼び出しは先端の便の 2 回だけ（base は 3 本 × 2 回＝6 回で 3 本とも close する＝RED）。
+#[test]
+fn pipe_train_terminal_only_the_tip_checks_ci_and_closes() {
+    let (repo, state) = repo_with_state();
+    let tools = fake_terminal(&repo, &state, "success");
+    let marker = state.join("lens-ran");
+    let [id_a, id_b, id_c] = train_runs(&repo, &state, &marker, [ALL_GREEN, ALL_GREEN, ALL_GREEN]);
+    let rules = write_rules_train(&state, "rules-train.toml", Some(3));
+    let bd = state.join("fake-bd.sh").display().to_string();
+    let out = land_extra(&repo, &state, &id_a, &["--bd", &bd, "--rules", &rules]);
+    assert!(stdout_of(&out).contains(&format!("run={id_a} train=3")), "列で着地した: {} / {}", stdout_of(&out), stderr_of(&out));
+    // 終端の行（`terminal:`）が `Landed` の後ろに並ぶので、`sha:` は着地そのものを記した行から読む。
+    let tip_sha = landed_details(&state, &id_c)
+        .iter()
+        .find_map(|detail| detail.split_whitespace().find_map(|word| word.strip_prefix("sha:")).map(str::to_owned))
+        .unwrap_or_default();
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), tip_sha, "main の先端は c");
+    let tail = |id: &str| landed_details(&state, id).into_iter().filter(|detail| detail.starts_with("terminal:")).collect::<Vec<String>>();
+    assert_eq!(
+        tail(&id_c),
+        ["terminal:push:fake", "terminal:ci:success", "terminal:close:ok"],
+        "先端の便は push → CI → close: {:?}",
+        landed_details(&state, &id_c)
+    );
+    for id in [&id_a, &id_b] {
+        assert_eq!(
+            tail(id),
+            ["terminal:push:fake", "terminal:ci:unmeasurable"],
+            "先端でない便は CI を照合せず止まり close しない: {id} {:?}",
+            landed_details(&state, id)
+        );
+    }
+    assert_eq!(tools.ci_call_count(), 2, "偽 CI は先端の便の待ちの最初の 1 回と読み直しの 1 回だけ");
+    assert_eq!(git(&tools.remote, &["rev-parse", "refs/heads/main"]), tip_sha, "偽 remote の main は先端の sha");
+    for (id, token) in [(&id_a, "ci:unmeasurable"), (&id_b, "ci:unmeasurable"), (&id_c, "closed")] {
+        let line = stdout_of(&out).lines().find(|line| line.starts_with(&format!("run={id} landed="))).map(str::to_owned);
+        assert!(
+            line.as_deref().is_some_and(|found| found.ends_with(&format!("terminal={token}"))),
+            "stdout の terminal= は {token}: {id} {}",
+            stdout_of(&out)
+        );
+    }
+    clean(&[&repo, &state]);
+}
+
 /// (g) 先端の木の主実測が赤の周は列の便すべてが `Failed detail=main-red` で `Landed` 0 件・main は 3 本ぶん進んだまま
 /// （巻き戻さない・既存の極性・どの便が赤かは帰属しない）。
 #[test]

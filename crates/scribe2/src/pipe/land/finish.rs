@@ -209,11 +209,24 @@ pub(in crate::pipe) fn landed_sha(state_dir: &Path, run: &str) -> Option<String>
         .map(str::to_owned)
 }
 
+/// 便の sha が push の先端かどうか（**閉じた 2 値**・設計 contract-source.md §52・行 bd）。
+///
+/// 先端を知るのは [`land_train`] の 1 か所だけで、列の最後の便の外に [`Self::Behind`] を渡す。単独の着地と
+/// `--terminal-only` は [`Self::Tip`]（従来の push → CI → close）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::pipe) enum PushTip {
+    /// push の先端の commit（forge の CI が run を作る側）。
+    Tip,
+    /// 先端でない commit（CI の run が付かない＝照合を撃たずに `ci:unmeasurable` で止まる）。
+    Behind,
+}
+
 /// land の終端（設計 contract-source.md §5）: push → CI の照合 → 台帳の close。
 ///
 /// **各段が typed な event を 1 件ずつ記す**（`RunDone` の detail で弁別）＝通った周は `Landed` の後ろに
 /// 3 件並ぶ。止まった段から先は撃たず、記録もそこで終わる（起きていない段の event を積まない）。
-pub(in crate::pipe) fn terminal(entry: &Land<'_>, sha: &str) -> Terminal {
+/// `tip` が [`PushTip::Behind`] の周は push の後に CI の照合（待ちも `ci_now` も）を撃たず `ci:unmeasurable` で止まる（§52）。
+pub(in crate::pipe) fn terminal(entry: &Land<'_>, sha: &str, tip: PushTip) -> Terminal {
     let facts = match super::declaration::terminal_facts(entry.repo) {
         Ok(found) => found,
         // **push を 1 度も撃っていない**ので「push が失敗した」に畳まない（C10）。押す先が在るかを
@@ -234,6 +247,11 @@ pub(in crate::pipe) fn terminal(entry: &Land<'_>, sha: &str) -> Terminal {
         return Terminal::PushFailed("git".to_owned());
     }
     note(entry, &format!("push:{remote}"));
+    // 先端でない sha には forge の CI の run が付かない＝上限まで空回りする待ちを撃たない（close しない極性）。
+    if tip == PushTip::Behind {
+        note(entry, "ci:unmeasurable");
+        return Terminal::CiUnmeasurable;
+    }
     // (2) CI の照合。上限まで rules 行の間隔で撃ち（設計 §50）、**success 以外は close しない**（FailClosed）。
     let watch = Completion::CiResult {
         repo: entry.repo.to_path_buf(),
@@ -299,7 +317,8 @@ fn note(entry: &Land<'_>, detail: &str) {
 /// `turned` は番待ちの結果（設計 pipeline.md §36）: 札が死んでいて列から外した便が在る周は stdout の `order=` の値の
 /// 直後に `skipped-dead=<n>`、面 5 の行に `skipped_dead` を足す（0 本の周は書かない）。
 /// `anchor` は揃えた結果と印（設計 §57 形 2）: 印を置いた周だけ detail の末尾に ` anchor=skipped:<理由>`（synced と not-main
-/// は空）。印の stderr の行は呼び手が 1 度だけ足す（列の便ごとに重ねない）。
+/// は空）。印の stderr の行は呼び手が 1 度だけ足す（列の便ごとに重ねない）。[`Landing::Behind`] の周だけ [`terminal`] へ
+/// [`PushTip::Behind`] を運ぶ（設計 contract-source.md §52）。
 pub(super) fn finish(entry: &Land<'_>, worktree: &Path, landing: &Landing, anchor: &Anchored, turned: &Turned) -> Outcome {
     let new = landing.sha();
     let order = turned.order;
@@ -330,7 +349,11 @@ pub(super) fn finish(entry: &Land<'_>, worktree: &Path, landing: &Landing, ancho
     err.extend(anchor.sync.warning());
     // **終端**（設計 contract-source.md §5）: push → CI の照合 → 台帳の close。着地は既に成立している
     // ので、終端が止まっても取り消さない——止まった事実を typed な event と token で残し rc を 1 にする。
-    let terminal = terminal(entry, new);
+    let tip = match landing {
+        Landing::Behind(_) => PushTip::Behind,
+        Landing::Fresh(_) | Landing::AlreadyLanded(_) => PushTip::Tip,
+    };
+    let terminal = terminal(entry, new, tip);
     let skipped = match turned.skipped_dead.len() {
         0 => String::new(),
         count => format!(" skipped-dead={count}"),
@@ -466,7 +489,9 @@ pub(in crate::pipe) fn land_train(cars: &[Car<'_>], old: &str) -> Result<Outcome
         let outcome = match &check {
             MainCheck::Green => {
                 let turned = Turned { order: car.order, skipped_dead: Vec::new() };
-                finish(&car.entry, &car.worktree, &Landing::Fresh(sha.clone()), &anchor, &turned)
+                // 先端（main を進めた最後の commit）を知るのはここだけ（設計 contract-source.md §52）。
+                let landing = if index + 1 == cars.len() { Landing::Fresh(sha.clone()) } else { Landing::Behind(sha.clone()) };
+                finish(&car.entry, &car.worktree, &landing, &anchor, &turned)
             }
             MainCheck::Red(reason) => main_red(&car.entry, reason, &anchor.sync),
             MainCheck::Unmeasurable(reason) => main_unmeasured(&car.entry, reason, &anchor.sync),

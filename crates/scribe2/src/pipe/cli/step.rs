@@ -88,7 +88,8 @@ fn terminal_only(args: &[String], id: &str, manifest: &Manifest, policy: LockPol
         train_max: 1,
         rules: None,
     };
-    let terminal = super::land::terminal(&entry, &sha);
+    // 終端だけの再実行は先端の側（従来の push → CI → close・設計 contract-source.md §52）。
+    let terminal = super::land::terminal(&entry, &sha, super::land::PushTip::Tip);
     Outcome {
         out: vec![format!("run={id} terminal={}", terminal.as_token())],
         err: Vec::new(),
