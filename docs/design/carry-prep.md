@@ -15,7 +15,15 @@
 
 ## 2. 形（契約表の行 a〜c・1 つずつ歯が測る・done と 1:1）
 
-1. **行 a — 消えた機構の残りを消し、seat の案内を今の形に直す**: 上の 13 個と、それらからだけ参照される item を消す。module の doc は今在る子 module と口だけを書き、消えた item への link を持たない。help の seat の頁の examples は orchestrator の役割と `s2:orchestrator` の target で書く。消すのは参照 0 を git grep で確かめた item だけで、生きている定数（起動・立て直し・停止が共有する `REASON_` の残り・`WHO_LAUNCH`・`HOLE`）と rules 行 `seat.cycle_*` は残す。
+1. **行 a — 消えた機構の残りを消し、seat の案内を今の形に直す**: 消す item は次の 4 塊で全部である（どれも定義の外の code から参照 0・下の census）。
+   - `crates/scribe2/src/seat/mod.rs` の作業記憶の数え: `WM_PREFIX`・`WM_SUFFIX`・`WM_CONSUMED`・`FRONTMATTER`・`FRONTMATTER_CAP`・`SEAT_KEY`・`WmScan`・`scan_wm`・`is_unconsumed_name`・`seat_of`（この file の `pub fn seat_of`。`crates/scribe2/src/hook/mod.rs` の同名の private fn は別物で残す）。
+   - 同じ file の statusline の探索: `search_region`・`tail_nonempty`・`TAIL_LINES`。
+   - `crates/scribe2/src/seat/cycle.rs` の定数 9 つ: `DEFAULT_RESTORE`・`REASON_LOCK_HELD`・`REASON_WM_MISSING`・`REASON_WM_UNREADABLE`・`REASON_STATE_MISSING`・`REASON_STATE_UNREADABLE`・`REASON_STATE_STALE`・`REASON_STAMP`・`REASON_CLEAR`。
+   - `crates/scribe2/src/seat/role.rs` の `relabel` と `crates/scribe2/src/headless/mod.rs` の `INCONCLUSIVE_HEAD`。
+   - census（verified・main 2d1a996・`git grep -w` を crates の全 file に comment 込みで撃った）: 上の名の出現は定義の塊の中と、次の doc の行にしか無い＝`crates/scribe2/src/seat/cycle/relaunch.rs` の立て直しの doc の `DEFAULT_RESTORE` への link 1 本・`crates/scribe2/src/seat/role.rs` の `register` の doc の `relabel` への link 1 本。`crates/scribe2/src/seat/cycle/launch.rs` ほか write-set の外の file と外形 snapshot には 0 件。行き先の無い doc link（消えた `meter`・`externalize`・`consume` を指す）は `crates/scribe2/src/seat/mod.rs` の module の doc・塊の doc・`REASON_NO_RULE` の説明の中の 6 本だけ。
+   - module の doc（`crates/scribe2/src/seat/mod.rs` と `crates/scribe2/src/seat/cycle.rs` の頭）は今在る子 module と口だけを書き、`/clear` の作り直し・context の計測・statusline の説明を持たない。`register` と立て直しの doc は消した item を名指さない。
+   - help の seat の頁の examples は orchestrator の役割と `s2:orchestrator` の target で書く。
+   - 残すもの: 起動・立て直し・停止が共有する `REASON_` の残り・`WHO_LAUNCH`・`HOLE`・rules 行 `seat.cycle_*`。
 2. **行 b — lens の prompt から消えた役割の名を外す**: 裁定の節の見出しを「便の質問への回答」の語に、本文の「回答で planner が認めた形」を「回答で認めた形」に替える。節の位置・中身（裁定の対の逐語）・無いときの「（裁定なし）」は不変。doc comment の同じ語も揃える。
 3. **行 c — build 元 commit を名の無い形で焼く**: build script は値を compile 時の env ではなく build の出力 dir の 1 file に書き、core が `include_str!` で 1 つの pub const に読む。core・境界 crate・e2e の全 site はその const を読み、env の名の literal は repo から消える。値の形（`<sha12>` / `<sha12>+dirty` / `unknown`）と測り方（HEAD と作業木の汚れ・再走の母集団）は不変。境界 crate は build script を持たなくなる（値は core の const を読む）。
 
@@ -58,7 +66,7 @@ section = "2"
 write-set = ["crates/scribe2/src/seat/mod.rs", "crates/scribe2/src/seat/cycle.rs", "crates/scribe2/src/seat/cycle/relaunch.rs", "crates/scribe2/src/seat/role.rs", "crates/scribe2/src/headless/mod.rs", "crates/scribe2/src/help.rs", "docs/design/carry-prep.md"]
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail help_table_role_"]
 size = "M"
-done = "(1) seat/mod.rs から作業記憶の数え（scan_wm と WmScan とそれらからだけ参照される定数・関数）と statusline の探索（search_region・tail_nonempty・TAIL_LINES）が消え、seat/cycle.rs から DEFAULT_RESTORE・REASON_LOCK_HELD・REASON_WM_MISSING・REASON_WM_UNREADABLE・REASON_STATE_MISSING・REASON_STATE_UNREADABLE・REASON_STATE_STALE・REASON_STAMP・REASON_CLEAR が消え、seat::role::relabel と headless::INCONCLUSIVE_HEAD が消える (2) seat/mod.rs と seat/cycle.rs の module の doc は今在る子 module と口だけを書き、seat/mod.rs・seat/cycle.rs・seat/cycle/relaunch.rs の doc に消えた item（meter・externalize・consume・DEFAULT_RESTORE）への link が無い (3) help の seat の頁の examples は --role orchestrator と --target s2:orchestrator の形で、help の全頁の examples の --role の語が全部 seat::role::Role::parse で解けることを歯 help_table_role_ が測る (4) 生きている定数（起動・立て直し・停止が共有する REASON_ の残り・WHO_LAUNCH・HOLE）・rules 行・使い方の 1 行・doctor・極性一覧・外形 snapshot は不変"
+done = "(1) seat/mod.rs から作業記憶の数え（WM_PREFIX・WM_SUFFIX・WM_CONSUMED・FRONTMATTER・FRONTMATTER_CAP・SEAT_KEY・WmScan・scan_wm・is_unconsumed_name・seat_of）と statusline の探索（search_region・tail_nonempty・TAIL_LINES）が消え、seat/cycle.rs から DEFAULT_RESTORE・REASON_LOCK_HELD・REASON_WM_MISSING・REASON_WM_UNREADABLE・REASON_STATE_MISSING・REASON_STATE_UNREADABLE・REASON_STATE_STALE・REASON_STAMP・REASON_CLEAR が消え、seat::role::relabel と headless::INCONCLUSIVE_HEAD が消える (2) seat/mod.rs と seat/cycle.rs の module の doc は今在る子 module と口だけを書き、seat/mod.rs・seat/cycle.rs・seat/cycle/relaunch.rs・seat/role.rs の doc に消えた item（meter・externalize・consume・DEFAULT_RESTORE・relabel）への link が無い (3) help の seat の頁の examples は --role orchestrator と --target s2:orchestrator の形で、help の全頁の examples の --role の語が全部 seat::role::Role::parse で解けることを歯 help_table_role_ が測る (4) 生きている定数（起動・立て直し・停止が共有する REASON_ の残り・WHO_LAUNCH・HOLE）・rules 行・使い方の 1 行・doctor・極性一覧・外形 snapshot は不変"
 
 [[contract]]
 id = "b"
