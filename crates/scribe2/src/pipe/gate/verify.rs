@@ -4,13 +4,14 @@
 use super::record::{excerpt_of, Failed, USAGE_HEAD};
 use super::{UNADMITTED_JOBS, WRITE_SET_CMD};
 use crate::pipe::admission::{self, Grant};
-use crate::pipe::closure;
+use crate::pipe::closure::{self, ClosureError, Source};
 use crate::pipe::confine::{self, Confinement, Reason, Released, Usage};
 use crate::pipe::contract::Contract;
 use crate::pipe::declaration::{BASE_HOLE, JOBS_HOLE, TEETH_HOLE, THREADS_HOLE};
 use crate::pipe::git_bytes;
 use crate::pipe::health;
-use crate::pipe::refuse;
+use crate::pipe::refuse::{self, DELETE_FILE, NEW_FILE};
+use crate::pipe::table;
 use crate::seat::RuleRead;
 use std::path::Path;
 
@@ -388,10 +389,14 @@ fn admitted(
     Some(grant)
 }
 
-/// diff の path が契約の write-set に収まっているか（ADR-0009 §2.4）。
+/// diff の path が契約の write-set に収まっているか（ADR-0009 §2.4）と、契約の約束が便の HEAD の木に在るか（設計
+/// pipeline.md §58）。
 ///
 /// hook の guard とは**面が違う**: あちらは編集時に実体（symlink）まで解いて 1 件ずつ止める
 /// backstop で、こちらは便が終わった後に git が出した名前を数える gate である。
+///
+/// 約束の外れ（[`broken_promises`]）は diff の外れと**同じ段・同じ極性**（rc 1）で名指す（段・理由の型・verdict を足さない・
+/// §58 形 3）。木か約束の材料を読めない周は diff を読めない周と同じ rc -1（[`is_unreadable`]）。
 fn check_write_set(checks: &Checks<'_>) -> Step {
     let cmd = WRITE_SET_CMD.to_owned();
     let range = format!("{}..HEAD", checks.base);
@@ -405,14 +410,133 @@ fn check_write_set(checks: &Checks<'_>) -> Step {
         .split('\0')
         .filter(|path| !path.is_empty() && !listed(path, &checks.contract.write_set))
         .collect();
-    if outside.is_empty() {
-        return unwrapped(cmd, 0, String::new());
+    let broken = match head_tree(checks) {
+        Ok(tree) => {
+            let names: Vec<&str> = tree.names.iter().map(String::as_str).collect();
+            broken_promises(&tree.paths, &checks.contract.write_set, &names, &tree.sources)
+                .map_err(|error| error.reason())
+        }
+        Err(reason) => Err(reason),
+    };
+    let broken = match broken {
+        Ok(found) => found,
+        Err(reason) => return unwrapped(cmd, -1, reason),
+    };
+    let mut lines: Vec<String> = Vec::new();
+    if !outside.is_empty() {
+        lines.push(format!("契約の write-set の外へ出た path:\n{}", outside.join("\n")));
     }
-    unwrapped(
-        cmd,
-        1,
-        format!("契約の write-set の外へ出た path:\n{}", outside.join("\n")),
-    )
+    lines.extend(broken.sections());
+    let rc = i32::from(!lines.is_empty());
+    lines.extend(broken.note.map(str::to_owned));
+    unwrapped(cmd, rc, lines.join("\n"))
+}
+
+/// 段 ① の約束の測りが読む便の HEAD の木の材料（設計 pipeline.md §58）。
+struct HeadTree {
+    /// 便の HEAD の木の path（`git ls-tree` の 1 回の読み）。
+    paths: Vec<String>,
+    /// 設計 pointer の行の約束の行の `symbols` の `+` の名（`+` を剥がした字面・約束の行の無い行は空）。
+    names: Vec<String>,
+    /// 木の `.rs` の本文（名が空の周は読まない）。
+    sources: Vec<Source>,
+}
+
+/// 便の HEAD の木の path と、約束の行の `+` の名と、名を解く `.rs` の本文を読む（読めない周は理由）。
+///
+/// 約束の行は**便の base** の設計 doc から引く（受付が読んだ行と同じ commit の行・[`table::read_table`] と
+/// [`table::promises_of`] の読み手）。本文は木の path のうち `.rs` を作業木から読む（段 ① は verify 行より先に撃つので
+/// clean な HEAD の字面・受付の材料と同じ [`table::read_all`]）。
+fn head_tree(checks: &Checks<'_>) -> Result<HeadTree, String> {
+    let listed = git_bytes(checks.worktree, &["ls-tree", "-r", "-z", "--name-only", "HEAD"])
+        .ok_or_else(|| "便の HEAD の木を読めない".to_owned())?;
+    let paths: Vec<String> =
+        String::from_utf8_lossy(&listed).split('\0').filter(|path| !path.is_empty()).map(str::to_owned).collect();
+    let names = promised_names(checks)?;
+    let sources = if names.is_empty() { Vec::new() } else { table::read_all(checks.worktree, &paths, RS) };
+    Ok(HeadTree { paths, names, sources })
+}
+
+/// 設計 pointer の行の約束の行の `symbols` の `+` の名（`design` が pointer でない契約・約束の行の無い行は空）。
+fn promised_names(checks: &Checks<'_>) -> Result<Vec<String>, String> {
+    let Ok(pointer) = table::parse_pointer(&checks.contract.design) else {
+        return Ok(Vec::new());
+    };
+    let shown = git_bytes(checks.worktree, &["show", &format!("{}:{}", checks.base, pointer.path)])
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .ok_or_else(|| format!("{} を便の base から読めない", pointer.path))?;
+    let (_, promises) = table::read_table(&pointer.path, &shown).unwrap_or_default();
+    Ok(table::promises_of(&promises, &pointer.id)
+        .iter()
+        .flat_map(|promise| promise.symbols.iter())
+        .filter_map(|name| name.strip_prefix(NEW_FILE))
+        .map(str::to_owned)
+        .collect())
+}
+
+/// 約束の名を解く本文の読み手の母集団の拡張子（[`closure::symbols_in_base`] が読む `.rs`）。
+const RS: &str = ".rs";
+
+/// 名を測らなかった周の注記（木が読み手の母集団の file を 1 本も持たない・rc は変えない・§58 形 2）。
+const NO_SOURCES: &str = "約束の行の + の名を測らない: 便の木に .rs が 1 本も無い（名の読み手の母集団の外）";
+
+/// 約束の外れ（設計 pipeline.md §58 形 1 / 2・[`broken_promises`] の値）。
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Broken {
+    /// write-set の `+` の項目で便の木に無い path（write-set の順・接頭辞を剥がした字面）。
+    absent: Vec<String>,
+    /// write-set の `~` の項目で便の木に在る path。
+    present: Vec<String>,
+    /// 約束の行の `+` の名で便の木の `.rs` に解けない名（書かれた順）。
+    unresolved: Vec<String>,
+    /// 名を測らなかった周の注記（[`NO_SOURCES`]・測った周は `None`）。
+    note: Option<&'static str>,
+}
+
+impl Broken {
+    /// 外れの見出しつきの列（外れの無い種類は出さない・注記は含まない）。
+    fn sections(&self) -> Vec<String> {
+        [
+            ("契約の write-set の + の file が便の木に無い", &self.absent),
+            ("契約の write-set の ~ の file が便の木に在る", &self.present),
+            ("約束の行の + の名が便の木で解けない", &self.unresolved),
+        ]
+        .into_iter()
+        .filter(|(_, items)| !items.is_empty())
+        .map(|(head, items)| format!("{head}:\n{}", items.join("\n")))
+        .collect()
+    }
+}
+
+/// 約束の外れを返す pure な 1 本（入力は木の path・write-set・約束の `+` の名・木の `.rs` の本文・§58 形 1 / 2）。
+///
+/// `+` の項目は木に在り、`~` の項目は木に無いこと（接頭辞を剥がした path・dir 項目は配下の path の有無）。接頭辞の無い
+/// 項目と `-` / `=` の項目は測らない。名は [`closure::symbols_in_base`] と同じ読み手で解き、`Some(false)` だけを外れに
+/// 数える（名指しの形でない字面は測れない＝下界）。`sources` が空の周（`.rs` を持たない木）は名を測らず注記を返す。
+fn broken_promises(tree: &[String], write_set: &[String], names: &[&str], sources: &[Source]) -> Result<Broken, ClosureError> {
+    let plain = |prefix: char| {
+        write_set.iter().filter(move |item| item.starts_with(prefix)).map(|item| refuse::normalize(item))
+    };
+    let absent = plain(NEW_FILE).filter(|path| !in_tree(tree, path)).collect();
+    let present = plain(DELETE_FILE).filter(|path| in_tree(tree, path)).collect();
+    let mut broken = Broken { absent, present, ..Broken::default() };
+    if names.is_empty() {
+        return Ok(broken);
+    }
+    if sources.is_empty() {
+        broken.note = Some(NO_SOURCES);
+        return Ok(broken);
+    }
+    let found = closure::symbols_in_base(names, tree, sources)?;
+    broken.unresolved =
+        names.iter().zip(found).filter(|(_, solved)| *solved == Some(false)).map(|(name, _)| (*name).to_owned()).collect();
+    Ok(broken)
+}
+
+/// 項目の path が木に在るか（file の一致 か dir 項目〔末尾 `/`〕の配下の path・[`listed`] と同じ segment 境界）。
+fn in_tree(tree: &[String], path: &str) -> bool {
+    let trimmed = path.trim_end_matches('/');
+    tree.iter().any(|found| found == trimmed || found.starts_with(&format!("{trimmed}/")))
 }
 
 /// path が write-set のいずれか（file の一致 か dir の prefix）に含まれるか。
@@ -565,8 +689,8 @@ pub(crate) mod tests {
     // flip-check: moved s2-07l.286
     use super::super::record::USAGE_HEAD;
     use super::{
-        fill_holes, gate_checks, last_line, listed, run_line_captured, teeth_of, unwrapped, Check, NO_TEETH, TEETH_HOLE,
-        WRITE_SET_CMD,
+        broken_promises, fill_holes, gate_checks, last_line, listed, run_line_captured, teeth_of, unwrapped, Broken, Check,
+        Source, NO_SOURCES, NO_TEETH, TEETH_HOLE, WRITE_SET_CMD,
     };
     use crate::pipe::confine::{read_usage, Limit, Reason, Wrap};
     use crate::seat::RuleRead;
@@ -583,6 +707,89 @@ pub(crate) mod tests {
         assert!(!listed("dir.rs", &set(&["dir/"])), "dir 項目は segment 境界で外れる");
         assert!(!listed("+x", &set(&["+x"])), "接頭辞は path の一部ではない");
         assert!(!listed("y", &set(&["+x", "-x", "dir/"])), "剥がしても外の path は外");
+    }
+
+    /// 文字列の列（歯の fixture）。
+    fn owned(items: &[&str]) -> Vec<String> {
+        items.iter().map(|item| (*item).to_owned()).collect()
+    }
+
+    /// 約束の測りの fixture の木（`.rs` 2 本と非 `.rs` 1 本・dir `src/pipe/` の配下を持つ）。
+    fn promised_tree() -> Vec<String> {
+        owned(&["src/lib.rs", "src/pipe/fresh.rs", "docs/a.md"])
+    }
+
+    /// 約束の測りの fixture の `.rs` の本文（`fn fresh_helper` を宣言する 1 本）。
+    fn promised_sources() -> Vec<Source> {
+        vec![
+            Source { path: "src/lib.rs".to_owned(), body: Ok("// seed\n".to_owned()) },
+            Source { path: "src/pipe/fresh.rs".to_owned(), body: Ok("pub fn fresh_helper() -> u8 {\n    1\n}\n".to_owned()) },
+        ]
+    }
+
+    /// (a) `+` の file（と dir 項目）が木に在れば外れ無し、無ければ接頭辞を剥がした path を write-set の順に名指す。
+    #[test]
+    fn pipe_gate_promised_plus_items_must_be_in_the_tree() {
+        let tree = promised_tree();
+        let held = broken_promises(&tree, &owned(&["+src/pipe/fresh.rs", "+src/pipe/"]), &[], &[]);
+        assert_eq!(held, Ok(Broken::default()), "在る `+` は外れ無し");
+        let found = broken_promises(&tree, &owned(&["+src/none.rs", "+src/pipe/fresh.rs", "+gone/", "+src/lib"]), &[], &[]);
+        let want = Broken { absent: owned(&["src/none.rs", "gone/", "src/lib"]), ..Broken::default() };
+        assert_eq!(found, Ok(want), "無い `+` を全部名指す（`src/lib` は segment 境界で `src/lib.rs` に当たらない）");
+        let sections = broken_promises(&tree, &owned(&["+src/none.rs"]), &[], &[]).map(|broken| broken.sections());
+        assert_eq!(sections, Ok(owned(&["契約の write-set の + の file が便の木に無い:\nsrc/none.rs"])), "見出しつきの列");
+    }
+
+    /// (b) `~` の file が木に在れば名指し、無ければ外れ無し。
+    #[test]
+    fn pipe_gate_promised_tilde_items_must_be_gone_from_the_tree() {
+        let tree = promised_tree();
+        assert_eq!(broken_promises(&tree, &owned(&["~src/old.rs"]), &[], &[]), Ok(Broken::default()), "無い `~` は外れ無し");
+        let found = broken_promises(&tree, &owned(&["~src/old.rs", "~docs/a.md", "~src/pipe/"]), &[], &[]);
+        let want = Broken { present: owned(&["docs/a.md", "src/pipe/"]), ..Broken::default() };
+        assert_eq!(found, Ok(want), "在る `~` を名指す");
+        let sections = broken_promises(&tree, &owned(&["~docs/a.md"]), &[], &[]).map(|broken| broken.sections());
+        assert_eq!(sections, Ok(owned(&["契約の write-set の ~ の file が便の木に在る:\ndocs/a.md"])), "見出しつきの列");
+    }
+
+    /// (c) 接頭辞の無い項目と `-` / `=` の項目は測らない（木に無くても在っても外れ無し）。
+    #[test]
+    fn pipe_gate_promised_unprefixed_items_are_not_measured() {
+        let tree = promised_tree();
+        let items = owned(&["src/none.rs", "src/lib.rs", "-src/none.rs", "=src/none.rs", "-docs/a.md"]);
+        assert_eq!(broken_promises(&tree, &items, &[], &[]), Ok(Broken::default()));
+    }
+
+    /// (d) 約束の `+` の名は `.rs` の本文に宣言が在れば解け、無ければ書かれた順に名指す（名指しの形でない字面は測らない）。
+    #[test]
+    fn pipe_gate_promised_new_names_resolve_in_the_tree_sources() {
+        let (tree, sources) = (promised_tree(), promised_sources());
+        assert_eq!(broken_promises(&tree, &[], &["fresh_helper("], &sources), Ok(Broken::default()), "宣言の在る名は解ける");
+        let found = broken_promises(&tree, &[], &["stale_helper(", "fresh_helper(", "Tide::Ebb", "src/pipe/none.rs", "散文"], &sources);
+        let want = Broken { unresolved: owned(&["stale_helper(", "Tide::Ebb", "src/pipe/none.rs"]), ..Broken::default() };
+        assert_eq!(found, Ok(want), "解けない名を全部名指す");
+        let sections = broken_promises(&tree, &[], &["stale_helper("], &sources).map(|broken| broken.sections());
+        assert_eq!(sections, Ok(owned(&["約束の行の + の名が便の木で解けない:\nstale_helper("])), "見出しつきの列");
+        let mut unreadable = sources.clone();
+        unreadable.push(Source { path: "src/bad.rs".to_owned(), body: Err("bad".to_owned()) });
+        assert!(broken_promises(&tree, &[], &["fresh_helper("], &unreadable).is_err(), "本文を読めない周は外れでなく Err");
+    }
+
+    /// (e) `.rs` を 1 本も持たない木では名を測らず外れ 0 と注記の 1 行を返し、同じ木の `+` / `~` の照合は続ける。名の無い周は
+    /// 注記を出さない。
+    #[test]
+    fn pipe_gate_promised_tree_without_sources_notes_and_keeps_path_checks() {
+        let tree = owned(&["docs/a.md"]);
+        let found = broken_promises(&tree, &owned(&["+docs/none.md", "~docs/a.md"]), &["stale_helper("], &[]);
+        let want = Broken {
+            absent: owned(&["docs/none.md"]),
+            present: owned(&["docs/a.md"]),
+            unresolved: Vec::new(),
+            note: Some(NO_SOURCES),
+        };
+        assert_eq!(found, Ok(want), "名は測らず注記・path の照合は続く");
+        assert_eq!(NO_SOURCES.lines().count(), 1, "注記は 1 行");
+        assert_eq!(broken_promises(&tree, &[], &[], &[]), Ok(Broken::default()), "名の無い周は注記しない");
     }
 
     /// record の `line=` は stdout の**末尾の非空 1 行**（設計 gate-cost.md §5.1）: 空 / 空白だけ → `None`・

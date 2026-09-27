@@ -10,6 +10,7 @@
 
 mod confine;
 mod detection;
+mod promised;
 mod pure_move;
 // flip-check: moved s2-07l.685
 
@@ -3408,7 +3409,10 @@ fn elide_row(path: &str) -> String {
 }
 
 /// 畳みの歯の便を Implemented まで通す: base の file 群（と [`ELIDE_OLD`]）を commit し、runner は `rename` の周だけ
-/// [`ELIDE_OLD`] を [`ELIDE_NEW`] へ `git mv` し、HEAD の file 群を写して commit する（write-set は対と base の file 群）。
+/// [`ELIDE_OLD`] を [`ELIDE_NEW`] へ `git mv` し、HEAD の file 群を写して commit する（write-set は [`ELIDE_OLD`] と base の
+/// file 群・`+` の [`ELIDE_NEW`] は作る周〔`rename`〕だけ宣言する＝段 ① は `+` の file が便の木に在ることを測る・設計
+/// pipeline.md §58）。
+// flip-check: retroactive s2-07l.697
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
@@ -3434,8 +3438,12 @@ fn elide_run(base: &[(&str, &str)], head: &[(&str, &str)], rename: bool) -> (Pat
     }
     steps.push("git add -A".to_owned());
     steps.push("git commit -q -m runner".to_owned());
-    let listed: Vec<String> = base.iter().map(|(path, _)| format!("\"{path}\"")).collect();
-    let write_set = format!("write-set = [\"{ELIDE_OLD}\", \"+{ELIDE_NEW}\", {}]", listed.join(", "));
+    let mut listed: Vec<String> = vec![format!("\"{ELIDE_OLD}\"")];
+    if rename {
+        listed.push(format!("\"+{ELIDE_NEW}\""));
+    }
+    listed.extend(base.iter().map(|(path, _)| format!("\"{path}\"")));
+    let write_set = format!("write-set = [{}]", listed.join(", "));
     let design = write_contract(&repo, &["write-set"], &[&write_set]);
     let id = intake(&repo, &state, &design);
     let out = spawn_with(&repo, &state, &id, &steps.join(" && "));
