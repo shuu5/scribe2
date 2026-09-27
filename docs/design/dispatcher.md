@@ -720,7 +720,7 @@ title = "idle の知らせの末尾に並列の実測（live の本数・0 本�
 req = ["FR68", "FR44", "NFR4"]
 section = "26"
 touches = ["crate::pipe::dispatch::WaitReason"]
-write-set = ["+crates/scribe2/src/pipe/dispatch/facts.rs", "crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/dispatch/candidates.rs", "crates/scribe2/src/pipe/notify.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2-boundary/tests/e2e/notify.rs", "docs/design/dispatcher.md"]
+write-set = ["+crates/scribe2/src/pipe/dispatch/precheck.rs", "+crates/scribe2/src/pipe/dispatch/facts.rs", "crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/dispatch/candidates.rs", "crates/scribe2/src/pipe/notify.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2-boundary/tests/e2e/notify.rs", "docs/design/dispatcher.md"]
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_notify_facts_"]
 size = "M"
 growth = ["crates/scribe2/src/pipe/dispatch.rs:4", "crates/scribe2/src/pipe/notify.rs:8", "crates/scribe2/src/pipe/cli.rs:6"]
