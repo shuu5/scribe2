@@ -334,6 +334,34 @@ impl Refuse {
         }
     }
 
+    /// 証拠の在り処（**網羅の match 1 本**・設計 docs/design/dispatcher.md §27 形 3）。契約表の欠陥は理由の側が持つ
+    /// （[`TableError::evidence`]）。variant が増えた便は compile が止めて、その断りが何に依るかを決めさせる。
+    pub(crate) fn evidence(&self) -> Evidence {
+        match *self {
+            Self::AlsoNamesRust { .. } | Self::HandWrittenContract { .. } | Self::PromisedFieldWritten { .. } => Evidence::Row,
+            Self::WriteSetDirWithoutSlash { path: ref file }
+            | Self::WriteSetItemUnresolved { item: ref file }
+            | Self::CapHeadroom { ref file, .. }
+            | Self::TestsNotATeethFile { item: ref file } => Evidence::Files(vec![file.clone()]),
+            Self::WriteSetIncomplete { .. }
+            | Self::NameUnresolved { .. }
+            | Self::WriteSetDrift { .. }
+            | Self::TeethPlaceUnresolved { .. }
+            | Self::FnUndeclared { .. }
+            | Self::TeethOutsideWriteSet { .. }
+            | Self::PromiseSymbolUnresolved { .. } => Evidence::Name,
+            Self::NotARepo { .. }
+            | Self::DuplicateRun { .. }
+            | Self::WriteSetOverlap { .. }
+            | Self::WriteSetUnreadable { .. }
+            | Self::SameKindRepeated { .. }
+            | Self::FindingUnaddressed { .. }
+            | Self::MaxLive { .. }
+            | Self::EntranceNotRed { .. } => Evidence::Place,
+            Self::ContractTable(ref found) => found.evidence(),
+        }
+    }
+
     /// **rc は variant が持つ**。読めない周だけが「壊れた store」の rc 2 で、
     /// 残りは前提違反の rc 1 である（NFR4）。契約表の欠陥は理由の側が持つ（読めない表だけ rc 2）。
     pub(crate) fn rc(&self) -> u8 {
@@ -362,6 +390,84 @@ impl Refuse {
             Self::WriteSetUnreadable { .. } => RC_BROKEN,
             Self::ContractTable(ref found) => found.rc(),
         }
+    }
+}
+
+/// 断りの証拠の在り処（**閉じた 4 値**・設計 docs/design/dispatcher.md §27 形 3）: 予想の base（未着地の依存を重ねた木）で
+/// 撃った断りが、依存の着地で消えうるかを [`discern`] が動く file と突き合わせて決める材料である。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Evidence {
+    /// 行の字と規則だけで決まる（base の木に依らない）。
+    Row,
+    /// 名指した file の列（base の tracked に在るか・行数で決まる）。
+    Files(Vec<String>),
+    /// 本文の読み手（`.rs` / `.snap` の閉包・歯の置き場・名指し）が解く名。
+    Name,
+    /// 置き場と host（live な便・便の履歴・base の木の実走・読めない面）。
+    Place,
+}
+
+impl Evidence {
+    /// 在り処の名（`row` / `files` / `name` / `place`）。
+    pub(crate) fn as_str(&self) -> &'static str {
+        match *self {
+            Self::Row => "row",
+            Self::Files(_) => "files",
+            Self::Name => "name",
+            Self::Place => "place",
+        }
+    }
+
+    /// 結果の file の finding の行に書く字面（file の列は `files:<a>,<b>`・他は名だけ）。
+    pub(crate) fn render(&self) -> String {
+        match *self {
+            Self::Files(ref files) => format!("{}:{}", self.as_str(), files.join(",")),
+            Self::Row | Self::Name | Self::Place => self.as_str().to_owned(),
+        }
+    }
+}
+
+/// 予想の base で撃った断りの確からしさ（**閉じた 3 値**・§27 形 3）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Certainty {
+    /// 依存が着地しても消えない（確定）。
+    Firm,
+    /// 依存の着地で消えうる（暫定）。
+    Provisional,
+    /// 予想の base では測れない（型を持たない断り・置き場と host に依る断り）。
+    Unmeasured,
+}
+
+impl Certainty {
+    /// 結果の file に書く語。
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Firm => "firm",
+            Self::Provisional => "provisional",
+            Self::Unmeasured => "unmeasured",
+        }
+    }
+}
+
+/// 本文の読み手が読む file の拡張子（受付の材料の `.rs` と `.snap`）。
+const BODY_READS: [&str; 2] = [".rs", ".snap"];
+
+/// 在り処と動く file（宣言で重ねた祖先の write-set の file・接頭辞を剥がし dir は展開済み）から確からしさを決める
+/// （**弁別の 1 関数**・pure・§27 形 3）: 行 → 確定、file の列 → 動く file と交わらなければ確定・交われば暫定、名 → 動く file に
+/// 本文の読み手が読む file が 1 本も無ければ確定・在れば暫定、置き場と host → 測れない。
+pub(crate) fn discern(evidence: &Evidence, moving: &[String]) -> Certainty {
+    let crossed = match *evidence {
+        Evidence::Row => false,
+        Evidence::Files(ref files) => files
+            .iter()
+            .any(|file| covered(moving, file) || moving.iter().any(|found| covered(std::slice::from_ref(file), found))),
+        Evidence::Name => moving.iter().any(|found| BODY_READS.iter().any(|ext| found.ends_with(ext))),
+        Evidence::Place => return Certainty::Unmeasured,
+    };
+    if crossed {
+        Certainty::Provisional
+    } else {
+        Certainty::Firm
     }
 }
 
@@ -475,7 +581,7 @@ fn covers(left: &str, right: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{covered, normalize, overlaps, ClosureError, FindingKind, Refuse, REFUSALS};
+    use super::{covered, discern, normalize, overlaps, Certainty, ClosureError, Evidence, FindingKind, Refuse, REFUSALS};
     use crate::cli_outcome::{RC_BROKEN, RC_REFUSED};
     use crate::pipe::table::TableError;
     use proptest::prelude::*;
@@ -662,6 +768,67 @@ mod tests {
         let bare = Refuse::PromiseSymbolUnresolved { of: "ag".to_owned(), n: 1, name: "Nope".to_owned() }.reason();
         assert!(bare.contains("Nope が base に無い"), "+ 無しは不在を名乗る: {bare}");
         assert!(found.iter().skip(19).all(|refuse| refuse.rc() == RC_REFUSED && !refuse.reason().contains('\n')), "rc 1・1 行");
+    }
+
+    /// 在り処は `REFUSALS` の 23 語の母集団で 1 語に 1 つずつ決まる（設計 dispatcher.md §27 形 3・宣言順）: 行の字だけで
+    /// 決まる 3 語・名指した file の 4 語（file は payload の字面）・本文の読み手の 7 語・置き場と host の 8 語・契約表の
+    /// 欠陥は理由の側（samples の `section-missing` は行）。
+    #[test]
+    fn pipe_refuse_evidence_is_decided_once_for_each_of_the_23_words() {
+        let found: Vec<(&str, String)> = samples().iter().map(|refuse| (refuse.as_str(), refuse.evidence().render())).collect();
+        let want = [
+            ("not-a-repo", "place"),
+            ("duplicate-run", "place"),
+            ("write-set-overlap", "place"),
+            ("write-set-unreadable", "place"),
+            ("write-set-incomplete", "name"),
+            ("write-set-dir-without-slash", "files:src"),
+            ("contract-table", "row"),
+            ("write-set-item-unresolved", "files:src/none.rs"),
+            ("cap-headroom", "files:src/big.rs"),
+            ("name-unresolved", "name"),
+            ("write-set-drift", "name"),
+            ("teeth-place-unresolved", "name"),
+            ("also-names-rust", "row"),
+            ("tests-not-a-teeth-file", "files:src/a.rs"),
+            ("fn-undeclared", "name"),
+            ("teeth-outside-write-set", "name"),
+            ("hand-written-contract", "row"),
+            ("same-kind-repeated", "place"),
+            ("finding-unaddressed", "place"),
+            ("promised-field-written", "row"),
+            ("promise-symbol-unresolved", "name"),
+            ("max-live", "place"),
+            ("entrance-not-red", "place"),
+        ];
+        let want: Vec<(&str, String)> = want.iter().map(|(name, at)| (*name, (*at).to_owned())).collect();
+        assert_eq!(found, want, "母集団 {} 語の在り処", REFUSALS.len());
+        assert_eq!(found.len(), REFUSALS.len(), "23 語すべてに 1 つ");
+        let unreadable = Refuse::ContractTable(crate::pipe::table::TableError::Unreadable { line: 0, reason: "r".to_owned() });
+        assert_eq!(unreadable.evidence(), Evidence::Place, "契約表の欠陥は理由の側が決める（読めない表は測れない）");
+    }
+
+    /// 弁別の 1 関数は 3 値を返す（§27 形 3）: 在り処 4 値 × 動く file の有無（無い・交わる `.rs`・交わらない `.md`）。
+    #[test]
+    fn pipe_refuse_evidence_discern_returns_three_values_over_four_places() {
+        let (none, rust, prose) = (Vec::new(), vec!["src/a.rs".to_owned()], vec!["docs/x.md".to_owned()]);
+        let files = Evidence::Files(vec!["src/a.rs".to_owned()]);
+        let (firm, provisional, unmeasured) = (Certainty::Firm, Certainty::Provisional, Certainty::Unmeasured);
+        for (evidence, want) in [
+            (Evidence::Row, [firm, firm, firm]),
+            (files, [firm, provisional, firm]),
+            (Evidence::Name, [firm, provisional, firm]),
+            (Evidence::Place, [unmeasured, unmeasured, unmeasured]),
+        ] {
+            let got = [&none, &rust, &prose].map(|moving| discern(&evidence, moving));
+            assert_eq!(got, want, "{} × 動く file（無い / 交わる .rs / 交わらない .md）", evidence.as_str());
+        }
+        let dir = Evidence::Files(vec!["src/".to_owned()]);
+        assert_eq!(discern(&dir, &rust), provisional, "dir の項目は配下の動く file と交わる");
+        let snap = vec!["tests/snapshots/x.snap".to_owned()];
+        assert_eq!(discern(&Evidence::Name, &snap), provisional, "本文の読み手は .snap も読む");
+        let words: Vec<&str> = [firm, provisional, unmeasured].iter().map(|found| found.as_str()).collect();
+        assert_eq!(words, ["firm", "provisional", "unmeasured"], "結果の file の語");
     }
 
     /// **rc は variant が持つ**: 読めない周だけ rc 2 で、残りは rc 1。理由は run / path を名乗る。

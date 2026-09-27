@@ -26,7 +26,7 @@
 
 use super::closure::{ClosureError, Source};
 use super::contract::{Class, CLASS_ROW};
-use super::refuse::Refuse;
+use super::refuse::{Evidence, Refuse};
 use crate::cli_outcome::{RC_BROKEN, RC_REFUSED};
 use crate::name::NAME;
 use crate::polarity::{OnFailure, Polarity, Timing};
@@ -468,6 +468,30 @@ impl TableError {
             _ => RC_REFUSED,
         }
     }
+
+    /// 証拠の在り処（**網羅の match 1 本**・設計 docs/design/dispatcher.md §27 形 3）: 表の区間・欄の形・id・節・要件・verify の形・
+    /// 依存・約束の行・的・見込み・クラスは行の字と規則だけで決まり、外形の名と歯の置き場は本文の読み手が解き、読めない周は
+    /// 測れない（置き場と同じ側に倒す）。
+    pub(crate) fn evidence(&self) -> Evidence {
+        match *self {
+            Self::SurfaceUnknown { .. } | Self::TeethOutsideWriteSet { .. } => Evidence::Name,
+            Self::Unreadable { .. } => Evidence::Place,
+            Self::RegionMissing { .. }
+            | Self::RegionDuplicate { .. }
+            | Self::DuplicateId { .. }
+            | Self::RowMissing { .. }
+            | Self::SectionMissing { .. }
+            | Self::RequirementMissing { .. }
+            | Self::VerifyForm { .. }
+            | Self::DependsUnresolved { .. }
+            | Self::DependsCycle { .. }
+            | Self::PromiseOrphan { .. }
+            | Self::PromiseNumber { .. }
+            | Self::TargetForm { .. }
+            | Self::GrowthForm { .. }
+            | Self::ClassUndeclared { .. } => Evidence::Row,
+        }
+    }
 }
 
 /// 読めない 1 件。
@@ -499,6 +523,11 @@ impl Finding {
     /// rc（読めない周は 2・残りは 1）。
     pub fn rc(&self) -> u8 {
         self.refuse.rc()
+    }
+
+    /// 型の断り（受付が findings を [`crate::pipe::cli::Denial`] の型の断りの列に写す口・設計 dispatcher.md §27 形 3）。
+    pub(crate) fn refuse(&self) -> &Refuse {
+        &self.refuse
     }
 
     /// write-set の項目の未解決（`write-set-item-unresolved`）ならその項目の字面、他の理由は `None`（設計 pipeline.md
@@ -643,6 +672,23 @@ mod tests {
         assert!(twice.contains("行 a の約束の n 1 が重複する"), "重複は欠番と別の字面: {twice}");
         let target = found.get(13).map(TableError::reason).unwrap_or_default();
         assert!(target.contains("\"src/a.rs\"") && target.ends_with(": r"), "的の字面と理由を名乗る: {target}");
+    }
+
+    /// 在り処は 17 variant の母集団で 1 つずつ決まり（設計 dispatcher.md §27 形 3・宣言順）、契約表の欠陥の断りは同じ値を
+    /// 受付の側（`Refuse::ContractTable`）へ渡す。本文の読み手が解くのは外形の名と歯の置き場の 2 つ・読めない周は測れない。
+    #[test]
+    fn pipe_table_evidence_is_decided_once_for_each_of_the_17_variants() {
+        use crate::pipe::refuse::Refuse;
+        let found: Vec<&str> = samples().iter().map(|error| error.evidence().as_str()).collect();
+        let want = [
+            "row", "row", "place", "row", "row", "row", "row", "row", "row", "row", "name", "row", "row", "row", "name", "row",
+            "row",
+        ];
+        assert_eq!(found, want, "母集団 {} variant の在り処（宣言順）", TABLE_ERRORS.len());
+        assert_eq!(found.len(), TABLE_ERRORS.len(), "17 variant すべてに 1 つ");
+        for error in samples() {
+            assert_eq!(Refuse::ContractTable(error.clone()).evidence(), error.evidence(), "{} は受付の側も同じ値", error.as_str());
+        }
     }
 
     /// 全欄を持つ `.toml` の 1 行（`over` の欄だけ値を差し替える）。

@@ -486,8 +486,9 @@ fn queued(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Outcome {
     };
     match args.get(1).map(String::as_str) {
         // **観測は起こさない**（設計 §6）: `ls` は [`queue::turn`] を撃ち、[`queue::fire`] は撃たない。
+        // 依存待ちの候補の事前審査の行は結果の file を読むだけ（設計 dispatcher.md §27 形 7・撃たない）。
         Some("ls") => match queue_of(args, manifest, None, None) {
-            Some(queue) => queue::render(&queue::turn(&queue.borrow())),
+            Some(queue) => queue::listing(&queue.borrow(), &queue::turn(&queue.borrow())),
             None => refused("列の材料（置き場・repo・台帳 client）を解けない".to_owned()),
         },
         Some(name) if !name.starts_with("--") => match (Mark::parse(name), args.get(2)) {

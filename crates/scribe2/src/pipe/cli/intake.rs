@@ -238,6 +238,7 @@ impl Rows {
 /// 変わらない**。受付は 1 便で 1 回読むだけだが、列（[`crate::pipe::dispatch`]）は候補の数だけ [`generated`] と
 /// [`judge`] を撃つので、読み直すと 1 周が候補数に比例して伸びる（`s2-07l.345` の実測: 候補 1 件あたり 0.2 秒）。
 /// **判定の関数は不変で、材料を受け取る引数だけを足す**（C2）。
+#[derive(Clone)]
 pub(in crate::pipe) struct Materials {
     /// base の tracked file の repo 相対 path。
     tracked: Vec<String>,
@@ -285,6 +286,20 @@ impl Materials {
     /// base の tracked file（交差の dir の展開が読む・**2 本目の走査を作らない**ための借り）。
     pub(in crate::pipe) fn tracked(&self) -> &[String] {
         &self.tracked
+    }
+
+    /// 予想の base の写し（**口は 1 つ**・設計 dispatcher.md §27 形 2）: tracked に `add` を足して `remove` を除き、`bodies` の
+    /// `.rs` / `.snap` の本文で置き換える（消した file と置き換えた file の元の本文は落とす）。判定の関数は不変。
+    pub(in crate::pipe) fn forecast(&self, add: &[String], remove: &[String], bodies: &[Source]) -> Self {
+        let dropped = |path: &str| remove.iter().chain(bodies.iter().map(|found| &found.path)).any(|gone| gone == path);
+        let swap = |list: &[Source], ext: &str| -> Vec<Source> {
+            let kept = list.iter().filter(|found| !dropped(&found.path));
+            kept.chain(bodies.iter().filter(|found| found.path.ends_with(ext))).cloned().collect()
+        };
+        let mut tracked: Vec<String> = self.tracked.iter().filter(|path| !remove.contains(path)).chain(add).cloned().collect();
+        tracked.sort();
+        tracked.dedup();
+        Self { tracked, sources: swap(&self.sources, ".rs"), snapshots: swap(&self.snapshots, ".snap"), ..self.clone() }
     }
 
     /// 閉包を測る base（`.rs` / `.snap` / tracked の 3 面を 1 つに束ねた借り）。
@@ -381,7 +396,8 @@ pub(in crate::pipe) fn generated(
         let name = Refuse::ContractTable(TableError::RowMissing { line: 0, id: String::new() }).as_str();
         let rc = findings.iter().map(table::Finding::rc).fold(RC_REFUSED, u8::max);
         let lines = findings.iter().map(|finding| finding.render(&pointer.path)).collect();
-        return Err(denied(name, Outcome::failed(rc, lines)));
+        let refusals = findings.iter().map(|finding| finding.refuse().clone()).collect();
+        return Err(Denial { refusals, ..denied(name, Outcome::failed(rc, lines)) });
     }
     let design = format!("{}#{}", pointer.path, pointer.id);
     // 行が `write-set` を持たない周（Derived の行・§3「write-set の導出」）は**導出値**を写しに書く。
@@ -558,6 +574,9 @@ pub(in crate::pipe) struct Denial {
     pub(in crate::pipe) name: &'static str,
     /// 従来の断り（rc は理由が持つ・stderr の行）。
     pub(super) outcome: Outcome,
+    /// 型の断りの列（[`Refuse`] の値・契約表の段は finding ごと・型を持たない断りは空＝事前審査は測れないに倒す・設計
+    /// dispatcher.md §27 形 3）。
+    pub(in crate::pipe) refusals: Vec<Refuse>,
 }
 
 /// 宣言の写し（`freeze`）が外れた周の名（[`Refuse`] の variant を持たない断り）。
@@ -574,7 +593,7 @@ const DENIAL_STORE: &str = "store";
 
 /// [`Refuse`] を持たない断りを [`Denial`] に写す（名は材料の側・rc と行は `outcome` のまま）。
 fn denied(name: &'static str, outcome: Outcome) -> Denial {
-    Denial { name, outcome }
+    Denial { name, outcome, refusals: Vec::new() }
 }
 
 /// judge が読む材料（run を作らずに揃う値・intake と preflight が同じ 1 本を撃つ・C2）。
@@ -1265,7 +1284,7 @@ fn size_row(size: &str) -> Result<&'static str, String> {
 fn refuse(found: &Refuse, extra: &[String]) -> Denial {
     let mut err = vec![format!("pipe: {}", found.reason())];
     err.extend(extra.iter().cloned());
-    Denial { name: found.as_str(), outcome: Outcome::failed(found.rc(), err) }
+    Denial { name: found.as_str(), outcome: Outcome::failed(found.rc(), err), refusals: vec![found.clone()] }
 }
 
 /// 対象 repo の HEAD から vessel 宣言を読み、器の上限と突き合わせて有効値にする。

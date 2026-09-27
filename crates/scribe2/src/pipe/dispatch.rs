@@ -38,6 +38,9 @@ mod group;
 /// 並列の実測の事実と字面（idle の知らせと heartbeat が共用する 1 関数・設計 §26）。
 pub(crate) mod facts;
 
+/// 依存を待つ行に受付の判定を予想の base で先に撃つ事前審査（設計 §27・契約表の行 x）。
+mod precheck;
+
 use candidates::{entry_of, is_input, marks_of, settle, tools};
 
 /// `intake:memo` の bead（契約が未確定＝列に載せない・`.beads/PRIME.md` R3）。
@@ -500,14 +503,27 @@ pub struct Input<'a> {
 ///
 /// 台帳を読めない周は [`Unmeasured`] を持って返り、1 本も起こさない（fail-closed・設計 §7）。
 pub fn turn(input: &Input<'_>) -> Turn {
+    measure(input).0
+}
+
+/// 1 周の読み（台帳の全件と材料・起こす側の事前審査が同じ 1 回を借りる・設計 §27 形 4）。
+struct Read {
+    /// 台帳の全件。
+    issues: Vec<ledger::Issue>,
+    /// 1 周ぶんの repo の材料（読めない周は断り）。
+    materials: Result<Materials, Denial>,
+}
+
+/// 列を 1 周して読みも返す（[`turn`] の本体・台帳を読めない周は読みが `None`）。
+fn measure(input: &Input<'_>) -> (Turn, Option<Read>) {
     let Some(timeout) = ledger::timeout_of(input.manifest) else {
-        return unmeasured(Unmeasured::NoRule);
+        return (unmeasured(Unmeasured::NoRule), None);
     };
     // 台帳の子 process は **`--repo` の中で**撃つ（設計 §14）: 台帳 client は cwd から台帳を解くので、
     // process の cwd を継がせると設計 doc と契約表は `--repo`・台帳は cwd 側という食い違った 1 周になる。
     // `--repo` が dir でない周は spawn が落ちて `Unreadable`＝`unmeasured reason=ledger`（0 件と融合しない・C10）。
     let Ok(issues) = ledger::read_ledger(input.bd, input.repo, timeout) else {
-        return unmeasured(Unmeasured::Ledger);
+        return (unmeasured(Unmeasured::Ledger), None);
     };
     // 1 周ぶん固定な材料は**ここで 1 回だけ**解く（候補ごとに rules 行と台帳を読み直さない）。
     // event log を読めない周は起こした事実の印を測れない＝`launched` を `None` に持ち、起こせる候補を
@@ -516,28 +532,30 @@ pub fn turn(input: &Input<'_>) -> Turn {
     let unreadable = read.is_err();
     let events = read.unwrap_or_default();
     let marks = marks_of(&events);
-    let ledger = Ledger {
-        marks: marks.order,
-        launched: (!unreadable).then_some(marks.launched),
-        events,
-        closed: issues.iter().filter(|issue| issue.status == CLOSED).map(|issue| issue.id.as_str()).collect(),
-        materials: Materials::of(input.repo, input.manifest),
-    };
-    let mut ready: BTreeMap<String, (Pointer, Contract)> = BTreeMap::new();
-    let mut candidates: Vec<Candidate> = Vec::new();
-    for issue in issues.iter().filter(|issue| is_input(issue)) {
-        let (candidate, found) = entry_of(input, issue, &ledger);
-        if let Some(entry) = found {
-            ready.insert(candidate.bead.clone(), entry);
+    let (mut turn, materials) = {
+        let ledger = Ledger {
+            marks: marks.order,
+            launched: (!unreadable).then_some(marks.launched),
+            events,
+            closed: issues.iter().filter(|issue| issue.status == CLOSED).map(|issue| issue.id.as_str()).collect(),
+            materials: Materials::of(input.repo, input.manifest),
+        };
+        let mut ready: BTreeMap<String, (Pointer, Contract)> = BTreeMap::new();
+        let mut candidates: Vec<Candidate> = Vec::new();
+        for issue in issues.iter().filter(|issue| is_input(issue)) {
+            let (candidate, found) = entry_of(input, issue, &ledger);
+            if let Some(entry) = found {
+                ready.insert(candidate.bead.clone(), entry);
+            }
+            candidates.push(candidate);
         }
-        candidates.push(candidate);
-    }
-    // **順序は [`order`] の 1 本だけが決める**（生産経路も歯も同じ関数を通る・C2）。
-    let mut turn = settle(input, order(candidates), &ready, ledger.materials.as_ref().ok());
+        // **順序は [`order`] の 1 本だけが決める**（生産経路も歯も同じ関数を通る・C2）。
+        (settle(input, order(candidates), &ready, ledger.materials.as_ref().ok()), ledger.materials)
+    };
     if !turn.launches.is_empty() && host_busy(input.manifest) {
         hold_for_host(&mut turn);
     }
-    turn
+    (turn, Some(Read { issues, materials }))
 }
 
 /// 器の健康の遮断器が「待つ」を返すか（**gate と同じ 1 関数**・設計 §18・C2）。
@@ -593,7 +611,7 @@ pub fn fire(input: &Input<'_>) -> Turn {
     if input.runner.is_none() {
         return unmeasured(Unmeasured::NoRunner);
     }
-    let mut turn = turn(input);
+    let (mut turn, read) = measure(input);
     // **測れなかった周は 1 つも動かさない**（起こすのも起こし直すのも同じ 1 周の中の手・fail-closed）。
     // 起こし直しは台帳を読まないが、列を 1 周として成立させられない周に片方だけ動かすと、
     // `dispatch=unmeasured` の行が「何もしなかった」を意味しなくなる（C10）。
@@ -630,6 +648,10 @@ pub fn fire(input: &Input<'_>) -> Turn {
         if let Some(&reason) = failed.get(&candidate.bead) {
             candidate.reason = Some(WaitReason::Admission { reason });
         }
+    }
+    // **事前審査は起こし終えた後**（設計 §27 形 4・起こす便を遅らせない）: 同じ周の台帳と材料を借りる（2 度読まない）。
+    if let Some(found) = read.as_ref() {
+        precheck::round(input, &turn, &found.issues, found.materials.as_ref().ok());
     }
     // **終端の周の軸は起こし終えた後に 1 回**（設計 consumer-sync.md §15 形 2）: この周に起こした便・起こし直した便が
     // 在れば live は 0 でない（子の `RunCreated` を待たずに数える＝走り出した便の下で binary を入れ替えない）。
@@ -873,6 +895,16 @@ pub fn render(turn: &Turn) -> Outcome {
     let mut out: Vec<String> = turn.candidates.iter().map(line_of).collect();
     out.push(format!("{COUNT} total={} ready={}", turn.candidates.len(), turn.launches.len()));
     Outcome::ok(out)
+}
+
+/// `dispatch ls` の全行（[`render`] の件数の行の前に、依存待ちの候補ごとの事前審査の 1 行を足す・結果の file を読むだけで
+/// 撃たない・設計 §27 形 7）。`[DISPATCH]` と `[DISPATCH-COUNT]` の行の字は [`render`] のまま。
+pub fn listing(input: &Input<'_>, turn: &Turn) -> Outcome {
+    let mut outcome = render(turn);
+    if let Some(at) = outcome.out.iter().position(|line| line.starts_with(COUNT)) {
+        outcome.out.splice(at..at, precheck::lines(input, turn));
+    }
+    outcome
 }
 
 /// 列の 1 件の行。

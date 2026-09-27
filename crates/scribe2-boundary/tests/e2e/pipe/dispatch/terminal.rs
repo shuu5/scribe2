@@ -295,3 +295,249 @@ fn pipe_terminal_dispatch_marks_fire_without_children() {
     assert_eq!(kind_count(&state, &live, vessel::fleet::EventKind::RunCreated), 1, "live な便は元の 1 件のまま");
     clean(&[&repo, &state]);
 }
+
+// ───── 事前審査（設計 docs/design/dispatcher.md §27・行 x・接頭辞 `pipe_dispatch_precheck_`） ─────
+//
+// 依存を待つ行に受付の判定を予想の base（未着地の祖先の宣言か Gated PASS の実物）で先に撃ち、結果を置き場の
+// `pipe/precheck/<bead>` に残す。base には事前審査が無い＝結果の file も `[DISPATCH-PRECHECK]` の行も無い（RED）。
+
+/// 事前審査の toy repo の宣言（`cargo` を許す＝行の verify に nextest の行を書ける）。
+const PRECHECK_VESSEL: &str =
+    "schema = 1\nallowed-commands = [\"git\", \"sh\", \"cargo\"]\ncommon-verify = [\"git rev-parse --verify {base}\"]\nrequirements = \"reqs.md\"\n";
+
+/// 行 `id` の欄（write-set と verify だけ差し替える・`verify` が空なら既定の `sh verify-ok.sh`）。
+fn precheck_row(id: &str, write_set: &str, verify: &str) -> Vec<String> {
+    let mut add = vec![format!("write-set = {write_set}")];
+    if !verify.is_empty() {
+        add.push(format!("verify = [\"{verify}\"]"));
+    }
+    let borrowed: Vec<&str> = add.iter().map(String::as_str).collect();
+    let drop: &[&str] = if verify.is_empty() { &["write-set"] } else { &["write-set", "verify"] };
+    row_fields(id, drop, &borrowed)
+}
+
+/// 行と file を**そのまま** 1 回 commit した toy repo（行の素の項目を seed しない＝base に無い file を行が名指せる）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn precheck_repo(rows: &[Vec<String>], files: &[(&str, String)]) -> (std::path::PathBuf, std::path::PathBuf) {
+    let (repo, state) = repo_with_state();
+    write_design(&repo, &design_doc_rows(rows));
+    let vessel = [(".vessel.toml", PRECHECK_VESSEL.to_owned())];
+    for (path, body) in vessel.iter().chain(files) {
+        let target = repo.join(path);
+        fs::create_dir_all(target.parent().expect("親 dir が在る")).expect("dir を作れる");
+        fs::write(&target, body).expect("file を書ける");
+    }
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "precheck-rows"]);
+    (repo, state)
+}
+
+/// 台帳の 1 件（行 `row` を指す open の bead・依存は (依存先, 種別) の列）。
+fn waiting_on(id: &str, row: &str, deps: &[(&str, &str)]) -> String {
+    listed(id, "open", 2, &format!("design = {DESIGN_FILE}#{row}"), deps)
+}
+
+/// 介入 `hold` を打つ（依存を持たない祖先を列が起こさないように・`hold` は 1 周を撃たない）。
+fn hold(state: &Path, beads: &[&str]) {
+    for &bead in beads {
+        let out = run_pipe(&["dispatch", "hold", bead, "--state-dir", &state.display().to_string()]);
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "hold は rc 0（{}）", told(&out));
+    }
+}
+
+/// 起こす側の手動の 1 周（道具つき・runner は偽の 1 行）。
+fn precheck_turn(repo: &Path, state: &Path, bd: &str) -> Output {
+    let out = run_pipe(&[
+        "dispatch",
+        "--state-dir", &state.display().to_string(),
+        "--repo", &repo.display().to_string(),
+        "--rules", &dispatch_rules(state),
+        "--bd", bd,
+        "--lens", &review_lens_pass(state),
+        "--runner", "true",
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "1 周は rc 0（{}）", told(&out));
+    out
+}
+
+/// 置き場の事前審査の結果の file。
+fn precheck_file(state: &Path, bead: &str) -> std::path::PathBuf {
+    state.join("pipe").join("precheck").join(bead)
+}
+
+/// 結果の file の本文（無ければ空）。
+fn precheck_of(state: &Path, bead: &str) -> String {
+    fs::read_to_string(precheck_file(state, bead)).unwrap_or_default()
+}
+
+/// 結果の file の `result=` の値（無ければ空）。
+fn result_of(state: &Path, bead: &str) -> String {
+    precheck_of(state, bead).lines().find_map(|line| line.strip_prefix("result=")).unwrap_or_default().to_owned()
+}
+
+/// (a) (e) 終端の 1 周: open な依存 A が `+` で宣言した file を素の path で持つ待ち行 B は予想の base で clean。`dispatch ls` は
+/// 件数の行の前に `[DISPATCH-PRECHECK]` の 1 行を出し、`[DISPATCH]` の行の reason は依存のまま（予想は通行証でない）。
+#[test]
+fn pipe_dispatch_precheck_declared_new_file_makes_the_waiting_row_clean() {
+    let rows = [
+        precheck_row("a", r#"["+src/fresh.rs"]"#, ""),
+        precheck_row("b", r#"["src/fresh.rs"]"#, ""),
+        precheck_row("z", r#"["src/lib.rs"]"#, ""),
+    ];
+    let (repo, state) = precheck_repo(&rows, &[]);
+    let bd = fake_bd(&state, &[waiting_on("s2-pre.1", "a", &[]), waiting_on("s2-pre.2", "b", &[("s2-pre.1", "blocks")])]);
+    hold(&state, &["s2-pre.1"]);
+    // 終端の 1 周（台帳に居ない便を止める）が事前審査を撃つ。
+    let live = intake_bead(&repo, &state, &format!("{DESIGN_FILE}#z"), "s2-pre.z");
+    let stopped = run_pipe(&[
+        "stop", "--run", &live,
+        "--state-dir", &state.display().to_string(),
+        "--repo", &repo.display().to_string(),
+        "--rules", &dispatch_rules(&state),
+        "--bd", &bd,
+        "--lens", &review_lens_pass(&state),
+        "--runner", "true",
+    ]);
+    assert_eq!(stopped.status.code(), Some(i32::from(RC_OK)), "stop は rc 0（{}）", told(&stopped));
+    assert_eq!(result_of(&state, "s2-pre.2"), "clean", "宣言の + を素で持つ行は clean: {}", precheck_of(&state, "s2-pre.2"));
+    let listed = ls(&repo, &state, &bd);
+    let out = stdout_of(&listed);
+    let lines: Vec<&str> = out.lines().collect();
+    let at = |prefix: &str| lines.iter().position(|line| line.starts_with(prefix));
+    assert_eq!(
+        lines.iter().filter(|line| line.starts_with("[DISPATCH-PRECHECK]")).copied().collect::<Vec<&str>>(),
+        ["[DISPATCH-PRECHECK] bead=s2-pre.2 result=clean base=current"],
+        "依存待ちの候補ごとに 1 行（母集団 候補 2・依存待ち 1）: {out}"
+    );
+    assert!(at("[DISPATCH-PRECHECK]") < at(COUNT) && at(COUNT).is_some(), "件数の行の前: {out}");
+    assert_eq!(reason_of(&listed, "s2-pre.2"), "dependency:s2-pre.1", "reason は依存のまま: {out}");
+    assert_eq!(count_of(&listed), format!("{COUNT} total=2 ready=0"), "件数の行の字は変わらない: {out}");
+    clean(&[&repo, &state]);
+}
+
+/// (b) (c) base にも依存の宣言にも無い file を素で持つ行は firm:1（write-set-item-unresolved）・依存の write-set と交わる file の
+/// 上限の余地が足りない行は provisional:1（cap-headroom・動く file と交わる file の列）。
+#[test]
+fn pipe_dispatch_precheck_splits_firm_and_provisional() {
+    let rows = [
+        precheck_row("a", r#"["+src/fresh.rs", "crates/toy/src/big.rs"]"#, ""),
+        precheck_row("b", r#"["src/nowhere.rs"]"#, ""),
+        precheck_row("c", r#"["crates/toy/src/big.rs"]"#, ""),
+    ];
+    let full = "x\n".repeat(usize::try_from(super::super::embedded_int("R-C4-2")).unwrap_or_default());
+    let (repo, state) = precheck_repo(&rows, &[("crates/toy/src/big.rs", full)]);
+    let blocks = [("s2-pre.1", "blocks")];
+    let bd = fake_bd(
+        &state,
+        &[waiting_on("s2-pre.1", "a", &[]), waiting_on("s2-pre.2", "b", &blocks), waiting_on("s2-pre.3", "c", &blocks)],
+    );
+    hold(&state, &["s2-pre.1"]);
+    precheck_turn(&repo, &state, &bd);
+    let firm = precheck_of(&state, "s2-pre.2");
+    assert_eq!(result_of(&state, "s2-pre.2"), "firm:1,provisional:0", "どこにも無い file は確定: {firm}");
+    let line = firm.lines().find(|line| line.starts_with("finding=")).unwrap_or_default();
+    assert!(line.starts_with("finding=firm name=write-set-item-unresolved at=files:src/nowhere.rs new=true"), "{firm}");
+    let short = precheck_of(&state, "s2-pre.3");
+    assert_eq!(result_of(&state, "s2-pre.3"), "firm:0,provisional:1", "依存と交わる file の余地不足は暫定: {short}");
+    assert!(short.contains("finding=provisional name=cap-headroom at=files:crates/toy/src/big.rs new=false"), "{short}");
+    clean(&[&repo, &state]);
+}
+
+/// (d) 同じ鍵の 2 周目は結果の file を書き直さず、依存の便を Gated PASS にした周は撃ち直され、依存の木で足した fn 名が待ち行の
+/// filter 語に当たる teeth-outside-write-set が確定と new で出る（宣言だけの予想では見えない食い違い）。
+#[test]
+fn pipe_dispatch_precheck_same_key_is_kept_and_gated_pass_refires() {
+    let verify = "cargo nextest run -p toy --no-tests=fail pre_b_";
+    let rows = [
+        precheck_row("a", r#"["+crates/toy/tests/a.rs"]"#, ""),
+        precheck_row("b", r#"["crates/toy/tests/b.rs"]"#, verify),
+    ];
+    let (repo, state) = precheck_repo(&rows, &[("crates/toy/tests/b.rs", "#[test]\nfn pre_b_one() {}\n".to_owned())]);
+    let bd = fake_bd(&state, &[waiting_on("s2-pre.1", "a", &[]), waiting_on("s2-pre.2", "b", &[("s2-pre.1", "blocks")])]);
+    hold(&state, &["s2-pre.1"]);
+    precheck_turn(&repo, &state, &bd);
+    assert_eq!(result_of(&state, "s2-pre.2"), "clean", "宣言の予想は本文を持たない: {}", precheck_of(&state, "s2-pre.2"));
+    // 同じ鍵の 2 周目は書き直さない（足した行が残る）。
+    let probe = format!("{}probe\n", precheck_of(&state, "s2-pre.2"));
+    fs::write(precheck_file(&state, "s2-pre.2"), &probe).expect("結果の file に印を足せる");
+    precheck_turn(&repo, &state, &bd);
+    assert_eq!(precheck_of(&state, "s2-pre.2"), probe, "同じ鍵の周は書き直さない");
+    // 依存の便を Gated PASS にする（木で pre_b_ の歯を足す）。札は読めない形にして列に起こし直させない。
+    let id = intake_bead(&repo, &state, &format!("{DESIGN_FILE}#a"), "s2-pre.1");
+    let runner = "printf '#[test]\\nfn pre_b_two() {}\\n' > crates/toy/tests/a.rs && git add -A && git commit -q -m runner";
+    let spawned = super::super::spawn_with(&repo, &state, &id, runner);
+    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "spawn は rc 0（{}）", told(&spawned));
+    let gated = gate_once(&repo, &state, &id, Some(&fake_lens(&state.join("pre-gate-lens"), &lens_verdict("PASS"))));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "gate は PASS（{}）", told(&gated));
+    fs::write(state.join("pipe").join(&id).join("driver"), "not-a-pid\n").expect("札を書ける");
+    precheck_turn(&repo, &state, &bd);
+    let refired = precheck_of(&state, "s2-pre.2");
+    assert!(!refired.contains("probe"), "鍵が動いた周は撃ち直す: {refired}");
+    let keyed = refired.lines().any(|line| line.starts_with("key=head:") && line.contains(&format!("s2-pre.1=tree:{id}@")));
+    assert!(keyed, "鍵の祖先の語は実物（tree:<便>@<sha>）: {refired}");
+    assert_eq!(result_of(&state, "s2-pre.2"), "firm:1,provisional:0", "実物の歯は確定: {refired}");
+    let found = refired.lines().find(|line| line.contains("teeth-outside-write-set")).unwrap_or_default();
+    assert!(found.starts_with("finding=firm ") && found.contains(" new=true ") && found.contains("crates/toy/tests/a.rs"), "{refired}");
+    clean(&[&repo, &state]);
+}
+
+/// (f) 予想で clean の行も、依存が `+` の file を作らずに閉じた周は実物の main の受付で断られて待つ（予想は通行証でない）。
+/// 依存待ちに居なくなった bead の結果の file は同じ周に外れる。
+#[test]
+fn pipe_dispatch_precheck_is_not_a_pass_after_the_dependency_closes_without_the_file() {
+    let rows = [precheck_row("a", r#"["+src/fresh.rs"]"#, ""), precheck_row("b", r#"["src/fresh.rs"]"#, "")];
+    let (repo, state) = precheck_repo(&rows, &[]);
+    let waiting = waiting_on("s2-pre.2", "b", &[("s2-pre.1", "blocks")]);
+    let bd = fake_bd(&state, &[waiting_on("s2-pre.1", "a", &[]), waiting.clone()]);
+    hold(&state, &["s2-pre.1"]);
+    precheck_turn(&repo, &state, &bd);
+    assert_eq!(result_of(&state, "s2-pre.2"), "clean", "予想では clean: {}", precheck_of(&state, "s2-pre.2"));
+    let closed = fake_bd(&state, &[listed("s2-pre.1", "closed", 2, &format!("design = {DESIGN_FILE}#a"), &[]), waiting]);
+    let listed_out = ls(&repo, &state, &closed);
+    assert_eq!(reason_of(&listed_out, "s2-pre.2"), "admission:contract-table", "実物の受付で断られる（{}）", told(&listed_out));
+    let after = precheck_turn(&repo, &state, &closed);
+    assert!(stdout_of(&after).contains("started:0"), "起こさない（{}）", told(&after));
+    assert!(!precheck_file(&state, "s2-pre.2").exists(), "依存待ちに居ない bead の file は外れる");
+    clean(&[&repo, &state]);
+}
+
+/// (g) 推移の祖先: A → C → B の blocks で C が宣言する `+` の file を B が素で持つと clean。`parent-child` だけで繋がる bead の
+/// 宣言と closed の bead の宣言は予想に入らず、その file を素で持つ行はそれぞれ firm:1。
+#[test]
+fn pipe_dispatch_precheck_follows_blocks_transitively_but_not_parents_or_closed() {
+    let rows = [
+        precheck_row("a", r#"["src/lib.rs"]"#, ""),
+        precheck_row("c", r#"["+src/chain.rs"]"#, ""),
+        precheck_row("b", r#"["src/chain.rs"]"#, ""),
+        precheck_row("p", r#"["+src/parent.rs"]"#, ""),
+        precheck_row("q", r#"["+src/closed.rs"]"#, ""),
+        precheck_row("d", r#"["src/parent.rs"]"#, ""),
+        precheck_row("e", r#"["src/closed.rs"]"#, ""),
+    ];
+    let (repo, state) = precheck_repo(&rows, &[]);
+    let on_c = ("s2-pre.3", "blocks");
+    let bd = fake_bd(
+        &state,
+        &[
+            waiting_on("s2-pre.1", "a", &[]),
+            waiting_on("s2-pre.3", "c", &[("s2-pre.1", "blocks")]),
+            waiting_on("s2-pre.4", "b", &[on_c]),
+            waiting_on("s2-pre.5", "p", &[]),
+            listed("s2-pre.6", "closed", 2, &format!("design = {DESIGN_FILE}#q"), &[]),
+            waiting_on("s2-pre.7", "d", &[on_c, ("s2-pre.5", "parent-child")]),
+            waiting_on("s2-pre.8", "e", &[on_c, ("s2-pre.6", "blocks")]),
+        ],
+    );
+    hold(&state, &["s2-pre.1", "s2-pre.5"]);
+    precheck_turn(&repo, &state, &bd);
+    assert_eq!(result_of(&state, "s2-pre.4"), "clean", "推移の祖先 C の宣言が入る: {}", precheck_of(&state, "s2-pre.4"));
+    for (bead, file) in [("s2-pre.7", "src/parent.rs"), ("s2-pre.8", "src/closed.rs")] {
+        let text = precheck_of(&state, bead);
+        assert_eq!(result_of(&state, bead), "firm:1,provisional:0", "{bead} の祖先の外の宣言は入らない: {text}");
+        assert!(text.contains(&format!("name=write-set-item-unresolved at=files:{file} ")), "{text}");
+    }
+    clean(&[&repo, &state]);
+}

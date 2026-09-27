@@ -209,12 +209,12 @@ pub(super) fn tools(input: &Input<'_>) -> Vec<String> {
 ///
 /// 依存の要素は status を持たない（`seat::ledger::Dep`）ので、**同じ一覧の中の依存先**で閉じたかを引く。
 /// 一覧（`--all`＝closed も含む）に依存先が居ない周は閉じたと読まない（測れないを「通った」に倒さない・C10）。
-fn is_blocking(dep: &Dep, closed: &BTreeSet<&str>) -> bool {
+pub(super) fn is_blocking(dep: &Dep, closed: &BTreeSet<&str>) -> bool {
     dep.kind == BLOCKS && !closed.contains(dep.on.as_str())
 }
 
 /// acceptance の `design = <doc>#<id>` の行から設計 pointer を引く（受付の `--design` と同じ字面・同じ parse）。
-fn pointer_of(acceptance: &str) -> Option<Pointer> {
+pub(super) fn pointer_of(acceptance: &str) -> Option<Pointer> {
     let line = acceptance.lines().map(str::trim).find_map(|line| line.strip_prefix(DESIGN_KEY))?;
     table::parse_pointer(line.trim()).ok()
 }
