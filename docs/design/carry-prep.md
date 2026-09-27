@@ -151,11 +151,14 @@
      子は親の helper を `use super::*;` で読む（可視性は変えない）。
   3. 移す歯の本文（直前の doc と属性の行を含む）は 1 byte も変えない。親と子で増減してよい行は、`crates/scribe2/src/pipe/move_proof.rs` の残差の許容形（空行・`use` の行・`mod <名>;`・`//` の comment・純移動の札）だけである。親で使われなくなった import は、`use` の行だけで直す。
   4. 純移動の札: この便の bead id で `// flip-check: moved` の札を、各子の file の先頭と、親の `mod` の宣言の直後に置く（先例: host-init.md §16 の行 h）。
-  5. write-set の headless.rs の項目に付けた `-` の接頭辞は、file を消す宣言ではない。縮む面（file は残り、約 2,130 行が減る）の宣言である。diff は親の M と子 2 つの A と、この doc の M の 4 面になる。
+  5. write-set の headless.rs の項目に付けた `-` の接頭辞は、file を消す宣言ではない。縮む面（file は残り、約 2,130 行が減る）の宣言である。diff は親の M と子 2 つの A の 3 面で、この doc は触らない。doc の行が 1 行でも動くと、move_proof は純移動と判定しない（`.md` は item を持たないので、動いた行が全部残差になる）。すると審査役に diff の全部（約 30 万 byte）が渡り、token の上限を越えて審査が INCONCLUSIVE になる（1 周目の run 072459Z）。
   6. 見積: 親 約 1,580 行・子 runner.rs 約 1,430 行・子 lens.rs 約 730 行。
+  7. 移す歯を verify に持つ過去の行が 2 つある。本 doc の行 b（`lens_rulings_`）と、gate-cost.md の行 am（`headless_runner_box_claude_is_one_job_and_the_prompt_names_the_detector`）である。歯の file が子へ移ると、この 2 行は `contracts check` の teeth-outside-write-set に当たる（実 repo の契約表を測る歯 2 本が赤になった・1 周目の run 072459Z）。そこで、本便の前の docs PR で 2 行の write-set に子の path を `+` で足す（行 b に `headless/lens.rs`・行 am に `headless/runner.rs`）。
+     - 2 行の bead（`s2-07l.671`・`s2-07l.589`）は close 済みで、受付をもう通らない。`+` を読むのは CI の `contracts check` だけで、子の file の着地の前も後も通る。
+     - 素の path は着地の前に解けないので使えない。
 - 歯:
   - 行 e: 上の歯 1 本（retroactive）。
-  - 行 f: 既存の歯が全部 GREEN のまま、期待を変えない。verify は、headless.rs にだけ在る名の接頭辞 3 語（`headless_runner_`・`runner_rate_`・`lens_rulings_`。`#[test]` の fn 名に substring として含む file は crates の中で headless.rs だけであることを実測）を 1 行ずつ撃つ。e2e の歯の本数が base = head（108 本が module path だけ変わって在る）であることを、実装役が `cargo nextest list` で写す。
+  - 行 f: 既存の歯が全部 GREEN のまま、期待を変えない。verify は、headless.rs にだけ在る名の接頭辞 3 語（`headless_runner_`・`runner_rate_`・`lens_rulings_`。`#[test]` の fn 名に substring として含む file は crates の中で headless.rs だけであることを実測）を 1 行ずつ撃つ。e2e の歯の本数が base = head（108 本が module path だけ変わって在る）であることは、move_proof の純移動の判定（消えた item と足された item の本文が同じ）が含む。本数は orchestrator が着地の確認で `cargo nextest list` で数え、bead の notes に写す。実装役の道具は cargo と git だけで、notes を書けない。この doc に書くと上の形 5 に当たる。
 - 却下:
   - `include!` で子の本文を親の module へ貼る: module path と snapshot の名は変わらないが、`include!` の行は move_proof の残差の許容形に無い。加えて `pipe/` の下では `pipe_hermetic_sites_stay_one` の数えが合わない。
   - `#[path]` の子 module: module path はどのみち変わるので、得が無い。
@@ -179,7 +182,7 @@ id = "b"
 title = "lens の prompt から消えた役割の名を外す — 裁定の節の見出しを「便の質問への回答」の語に、本文の「回答で planner が認めた形」を「回答で認めた形」に替え、doc comment の同じ語を揃える（§2 の 2）"
 req = ["FR9", "FR32"]
 section = "2"
-write-set = ["crates/scribe2/src/headless/lens.txt", "crates/scribe2/src/headless/lens.rs", "crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/move_proof.rs", "crates/scribe2-boundary/tests/e2e/headless.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__headless__lens_prompt_external_form.snap", "docs/design/carry-prep.md"]
+write-set = ["crates/scribe2/src/headless/lens.txt", "crates/scribe2/src/headless/lens.rs", "crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/pipe/move_proof.rs", "crates/scribe2-boundary/tests/e2e/headless.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__headless__lens_prompt_external_form.snap", "docs/design/carry-prep.md", "+crates/scribe2-boundary/tests/e2e/headless/lens.rs"]
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail lens_rulings_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail lens_prompt_external_form"]
 size = "S"
 done = "(1) lens の prompt の裁定の節の見出しが「## 契約への裁定（便の質問への回答・逐語）」で 1 回だけ在り、裁定の対の逐語がその直後に在り、裁定が無い周は「（裁定なし）」が続く (2) 審査の材料の節の文が「裁定の節に在る逸脱（回答で認めた形）は契約の一部として読む」になる (3) headless/lens.rs・pipe/gate.rs・pipe/move_proof.rs の doc comment の「planner の回答」が「回答」の語に揃う (4) 節の位置・材料の読み方・外形 snapshot の他の行は不変で、歯 lens_rulings_ と lens_prompt_external_form が新しい語で GREEN"
@@ -219,8 +222,8 @@ id = "f"
 title = "e2e の headless.rs を族ごとの子 module へ割る（試しの 1 本）— runner の族 55 本を子 headless/runner.rs へ、lens の族 28 本を子 headless/lens.rs へ純移動し、snapshot の歯 5 本と他の族の歯と helper は親に残す・札 moved（§8 行 f）"
 req = ["NFR1", "FR7"]
 section = "8"
-write-set = ["-crates/scribe2-boundary/tests/e2e/headless.rs", "+crates/scribe2-boundary/tests/e2e/headless/runner.rs", "+crates/scribe2-boundary/tests/e2e/headless/lens.rs", "docs/design/carry-prep.md"]
+write-set = ["-crates/scribe2-boundary/tests/e2e/headless.rs", "+crates/scribe2-boundary/tests/e2e/headless/runner.rs", "+crates/scribe2-boundary/tests/e2e/headless/lens.rs"]
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail headless_runner_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail runner_rate_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail lens_rulings_"]
 size = "M"
-done = "(1) 子 headless/runner.rs に、名が headless_runner_・runner_question_・runner_rate_・runner_prompt_ で始まる歯 55 本（snapshot の歯 headless_runner_prompt_external_form を除く）が在り、子 headless/lens.rs に、名が headless_lens_・lens_rulings_ で始まる歯 28 本（snapshot の歯 3 本を除く）が在る。2 つの子は headless.rs の mod lens; と mod runner; で宣言され、頭が use super::*; である (2) 親 headless.rs には snapshot の歯 5 本・他の族の歯 20 本・helper と const の全部が残り、可視性は不変 (3) 移した歯の本文（直前の doc と属性の行を含む）は base と 1 byte も違わず、親と子で増減した行は空行・use の行・mod <名>;・comment・札だけで、move_proof が純移動と判定する (4) この便の bead id の flip-check: moved の札が、各子の先頭と親の mod の宣言の直後に在り、flip-check が moved で通る (5) e2e の歯の本数は base = head（108 本が module path だけ変わって在る）で、snapshot と .config/nextest.toml と行 e の歯（宣言から導いた集合の一致）は GREEN のまま不変 (6) write-set の headless.rs の - は縮む面（file は残り、約 2,130 行が減る）"
+done = "(1) 子 headless/runner.rs に、名が headless_runner_・runner_question_・runner_rate_・runner_prompt_ で始まる歯 55 本（snapshot の歯 headless_runner_prompt_external_form を除く）が在り、子 headless/lens.rs に、名が headless_lens_・lens_rulings_ で始まる歯 28 本（snapshot の歯 3 本を除く）が在る。2 つの子は headless.rs の mod lens; と mod runner; で宣言され、頭が use super::*; である (2) 親 headless.rs には snapshot の歯 5 本・他の族の歯 20 本・helper と const の全部が残り、可視性は不変 (3) 移した歯の本文（直前の doc と属性の行を含む）は base と 1 byte も違わず、親と子で増減した行は空行・use の行・mod <名>;・comment・札だけで、move_proof が純移動と判定する (4) この便の bead id の flip-check: moved の札が、各子の先頭と親の mod の宣言の直後に在り、flip-check が moved で通る (5) e2e の歯の本数は base = head（108 本が module path だけ変わって在る）で、snapshot と .config/nextest.toml と行 e の歯（宣言から導いた集合の一致）は GREEN のまま不変 (6) write-set の headless.rs の - は縮む面（file は残り、約 2,130 行が減る）で、diff は親の M と子 2 つの A の 3 面だけ（この doc を含まない）"
 <!-- contracts:end -->
