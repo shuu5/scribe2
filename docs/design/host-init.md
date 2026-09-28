@@ -209,7 +209,7 @@ README の先頭に「新しい repo を器に載せる」の節を置く: 打�
 
 やさしく言うと: §15 の端末の表は画面を「画面の番号」の 1 つの値で書くが、これは X の画面しか表せない。Wayland の画面の端末は、窓を開くのに環境変数 2 つ（画面の名と実行時の dir）の組が要る。端末の表の行に、画面を開くための環境変数の組を書く任意の欄 display-env を足し、日本語入力の設定の欄と同じ検査で受ける。1 つの行の画面の宣言は 1 つの欄だけにし、画面の番号と両方を書いた行は断る（X の画面の DISPLAY も display-env に書ける）。器は今どおり値を使わず、形を守るだけ。
 
-- 出所: 台帳 `s2-07l.726`（隣の project の席との相談・表示面の最初の実物の端末が Wayland）。決定は ADR-0080（ADR-0076 の閉じた 7 つの key を 8 つへ・部分 supersede）。推奨は memo のまま（常設の裁定 user 2026-09-28T00:54Z）。
+- 出所: 台帳 `s2-07l.726`（隣の project の席との相談・表示面の最初の実物の端末が Wayland）。決定は ADR-0080（ADR-0076 の閉じた 7 つの key を 8 つへ・部分 supersede）。任意の欄 display-env は memo の推奨のまま、両方の欄を持つ行を断る形は memo の当初の推奨（両方を許し消費側が display-env を使う）を分析で改めたもの（どちらも常設の裁定 user 2026-09-28T00:54Z の範囲）。
 - 現物（verified・main 6f6038c）:
   - `crates/scribe2/src/rules/device.rs`（270 行）の `KEYS`（:14・閉じた 7 つ）を読み手の key の検査（`crates/scribe2/src/rules/manifest.rs` の `check_keys`）が引き、未知の key を行番号つきで断る。
   - `build`（:106）は `ime-env` を `list_field` で取り、`env_pairs`（:162）が要素ごとに `env_pair`（:178・最初の `=` で割る・KEY の字種・空の VALUE）を当てて、形の外と KEY の重複を `ime-env` の行で 1 件ずつ断る。断りの文は `ime-env の要素 … が KEY=VALUE の形でない（…）` と `ime-env の KEY … が重複する` の 2 つで、欄の名が字面に焼いてある。
