@@ -250,6 +250,22 @@ xtask 側の drift 歯（最小形）: `crates/xtask/src/limits.rs` の `#[cfg(t
 - 却下: memo の (a)（条文が動いた便に ADR を要求する）を同じ便に畳む——`--base` の経路が要り flip-check と材料を共有するので M に収まらず、「ADR が在る」の判定が条文の解釈に触れる（A2 の面）。／memo の (c)（要件面の生成物と source の id 一致）——source 側の yaml を読む 2 本目の読み手が要り、生成器は外部の道具である。／外部の道具を CI に積む（`s2-07l.63` が不採用にした形・道具は PATH に無く共通 verify の許す command にも無い）。／索引の JSON-LD の側も測る——JSON の読み手が 1 本増える。生成器の領分として本行は link の列だけを測る。／違反（rc 1）にする——裁定が要る面を裁定なしで立てることになる（C5）。
 - 歯（接頭辞 `decisions_index_`・`crates/` 全体の fn 名の substring に 0 件＝衝突なし）: 置き場は `crates/xtask/src/check_tests.rs`（既存の measure の歯と同じ file）。(a) tmp の木に決定 file 3 本・索引の link 2 本・語彙の参照 1 個を置いて、file 側だけ 1 本・索引側だけ 0 本・語彙の未解決 0 個・母集団 3/2/1 を fact の全文で測る。(b) 実在しない file を指す link を 1 本足すと索引側だけが 1 本になり、実在しない決定 id を語彙に 1 個足すと語彙の未解決が 1 個になる（片側ずつ動かす＝1 つの欄が 2 つを兼ねない）。(c) 決定 dir の無い木は `n/a` の 1 語で違反 0・索引 file を読めない木は `?` + 違反 1 件（0 と融合しない）。(d) `SUMMARY_PIN` に本 tag の token が在り、現物の repo で撃った判定行がその形に一致する（既存の `rules_parity_token_is_in_summary_pin` と同じ形）。
 
+## 18. 受付の core の余地を gate の core-lines と同じ切り方にする — 名で test の file の本体を 0 行と数える（契約表の行 o・§16 の後続）
+
+- 出所: 便 `s2-07l.736.4`（contract-source の行 bi）の事前審査が `cap-headroom`（core の余地 330 行に見込み 331 行）で断った周（2026-09-28・orchestrator の実測）。
+- 何が起きているか（main 91b51b6・verified）: `cargo xtask check` の core-lines は 57107（上限 R-C4-1 = 60000・余地 2893）なのに、受付の core の合計は 59670（余地 330）。差の 2563 行は、名が tests.rs か _tests.rs で終わる file（`#[path]` で外出しした歯の file）の本体で、xtask は §16 の述語で 0 行と数え、受付の `FileLines::of`（`crates/scribe2/src/pipe/declaration/write_set.rs`）は行頭 `#[cfg(test)]` の印だけで切るので全行を本体に数える。受付は gate より 2563 行厳しく、gate が通す契約を断る（§4 の 1 文は「gate より厳しい側」と書いて寄せを後続に置いていた）。
+- 形（done と 1:1）:
+  1. `FileLines::of` は、path の file 名が tests.rs か _tests.rs で終わる周だけ本体を 0 行と数える（全体の行数は変えない＝R-C4-2 の file の余地は file 全体のまま）。名の述語は core の側に 1 本（crate は互いに依存しないので xtask の述語と式は 2 か所・同じ fixture の歯が一致を守る＝既存の `pipe_intake_core_headroom_src_side_matches_the_xtask_split_fixture` と同じ守り方）。
+  2. 受付の core の合計は xtask の core-lines と同じ値になる（main 91b51b6 で 57107）。
+  3. `src_region` とその他の読み手（審査の材料の宣言の列・外の材料の要約）は変えない。
+  4. §4 の「名の弁別は持たない＝gate より厳しい側」の 1 文を、同じ切り方になった形に写す（本 doc が write-set に在る理由はこれだけ・file 名の tail は backtick で書かない）。
+- 触らない: `rules/manifest.toml` の R-C4 の行（値・kind・enabled・裁定 id）／xtask の述語と core-lines の式／`weighted_lines` の式と幅／file の余地（R-C4-2）の母集団（file 全体）／受付の断りの字面。
+- 却下: R-C4-1 の値を上げる（A2 の裁定が要り、受付と gate の食い違いは残る）／core の crate を割って余地を作る（食い違いが原因で、core-lines はまだ 2893 行の余地を持つ）／受付を xtask の述語に依存させる（crate の依存の向きを変える・C13）。
+- 歯（行 o が持つ・置き場は write_set.rs の in-file の歯・接頭辞 `intake_core_room_named_tests_`）:
+  - `intake_core_room_named_tests_count_zero_src_like_the_xtask_split`: 行頭 `#[cfg(test)]` を持たない同じ本文を、名が _tests.rs の file と tests.rs の file と素の .rs の file（名に tests を含むが tail が違う file を 1 つ・例 contests.rs）で持ち、前 2 つが (全体, 本体) = (全体, 0)・後の 2 つが (全体, 全体)（base は 4 つとも本体 = 全体＝RED）。
+  - `intake_core_room_named_tests_do_not_eat_the_core_headroom`: 本体 1000 の素の file と、本体の印を持たない 400 行の _tests.rs の file を持つ base で、上限 1450 の core の余地は 450（base は 50＝S の新規 1 本〔100〕を断る＝RED）。
+- base で RED の理由: 2 本とも base の `FileLines::of` と既存の余地の関数だけを呼ぶ（compile は通る）。base は名を見ないので本体を全行に数え、assert が落ちる（機能不在）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -396,4 +412,15 @@ write-set = ["crates/xtask/src/check.rs", "crates/xtask/src/main.rs", "+crates/x
 verify = ["cargo nextest run -p xtask --no-tests=fail decisions_index_"]
 size = "M"
 done = "(1) xtask check の measure の列に push が 1 行増え、判定行に新しい tag の fact が 1 つ増える (2) 決定 dir 直下の ADR- で始まる .html の集合と README の a 要素の href の列を両方向に突合し、片側にしか無い file 名を出現順の列で名乗る（HTML の読み手は既存の tag 読み 4 本を呼び、2 本目の parser を作らない） (3) 語彙 file の本文の決定 id を distinct に集め、決定 file の集合に解けない id を列で名乗る (4) 極性は検出線で、両方向の差が 1 本以上でも違反を立てず cargo xtask check の rc が変わらない (5) 決定 dir の無い木は n/a の 1 語・索引か語彙を読めない周は ? + 違反 1 件・片側 0 本の列は - (6) SUMMARY_PIN に本 tag の token が在り ids= を持つ token の頭の列に 3 つの頭が加わり、現物の repo の判定行がその形に一致する"
+
+[[contract]]
+id = "o"
+title = "受付の core の余地が名で test の file（tests.rs か _tests.rs で終わる file）の本体を 0 行と数え、gate の core-lines と同じ合計になる — 閾値は動かさない（§16 の後続）"
+req = ["FR68", "FR17"]
+section = "18"
+write-set = ["crates/scribe2/src/pipe/declaration/write_set.rs", "docs/design/rules-manifest.md"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail intake_core_room_named_tests_", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_intake_core_headroom_"]
+size = "S"
+growth = ["crates/scribe2/src/pipe/declaration/write_set.rs:40"]
+done = "(1) FileLines::of が、path の file 名が tests.rs か _tests.rs で終わる周だけ本体を 0 行と数え、全体の行数は変えない（名の述語は core の側に 1 本・名に tests を含むが tail の違う file は素の file のまま） (2) 受付の core の合計が xtask check の core-lines と同じ切り方になる（名で test の file の本体を数えない） (3) src_region と審査の材料の読み手と file の余地（R-C4-2）の母集団は変えず、既存の pipe_intake_core_headroom_ の歯は期待を変えずに緑 (4) rules-manifest.md §4 の「名の弁別は持たない＝gate より厳しい側」の 1 文を同じ切り方になった形に写す（file 名の tail は backtick で書かない） 歯: intake_core_room_named_tests_count_zero_src_like_the_xtask_split（_tests.rs と tests.rs は本体 0・contests.rs と素の file は本体 = 全体）・intake_core_room_named_tests_do_not_eat_the_core_headroom（本体 1000 と印の無い 400 行の _tests.rs の base で上限 1450 の余地が 450・base は 50 で S の新規 1 本を断る）"
 <!-- contracts:end -->
