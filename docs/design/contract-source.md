@@ -434,7 +434,7 @@ title = "write-set の導出 — touches の閉包 + verify の歯の置き場�
 req = ["FR48", "FR39", "FR47"]
 section = "3"
 touches = ["crate::pipe::refuse::Refuse", "crate::pipe::closure::ClosureError", "crate::pipe::table::ContractRow"]
-write-set = ["+crates/scribe2/src/hook/live_row.rs", "crates/scribe2/src/pipe/closure.rs", "crates/scribe2/src/pipe/refuse.rs", "crates/scribe2/src/pipe/table.rs", "crates/scribe2/src/pipe/table/parse.rs", "crates/scribe2/src/pipe/table/check.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/src/pipe/contract.rs", "contracts/schema.toml", "crates/scribe2-boundary/tests/e2e/pipe/intake.rs", "crates/scribe2-boundary/tests/e2e/pipe.rs", "crates/scribe2/src/pipe/closure/derive.rs", "crates/scribe2/src/pipe/closure/names.rs"]
+write-set = ["+crates/scribe2/src/pipe/table/check/collide.rs", "+crates/scribe2/src/hook/live_row.rs", "crates/scribe2/src/pipe/closure.rs", "crates/scribe2/src/pipe/refuse.rs", "crates/scribe2/src/pipe/table.rs", "crates/scribe2/src/pipe/table/parse.rs", "crates/scribe2/src/pipe/table/check.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/src/pipe/contract.rs", "contracts/schema.toml", "crates/scribe2-boundary/tests/e2e/pipe/intake.rs", "crates/scribe2-boundary/tests/e2e/pipe.rs", "crates/scribe2/src/pipe/closure/derive.rs", "crates/scribe2/src/pipe/closure/names.rs"]
 verify = ["cargo nextest run -p scribe2 --no-tests=fail contract_derive_"]
 size = "M"
 done = "write-set 無しの fixture 行が導出値で intake を通り契約 file に導出値が載る・手書きが導出値とずれた fixture 行は missing / extra を名指して断られる・also の .rs / tests の非歯 file / 解けない filter は typed に断られる・schema.toml に creates / tests / also が載り write-set が任意・現物の契約表の intake 済みの行は断られない（受付だけ・CI は従来の閉包）"
