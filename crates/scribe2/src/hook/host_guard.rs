@@ -3,7 +3,7 @@
 //!
 //! 口座の設定から PreToolUse で呼ばれる器の 1 つの口で、**marker と anchor に依らず**判定する（hook の入口の沈黙
 //! 〔FR24〕は持ち込まない＝`.vessel` の無い repo・他の name の marker・git repo でない cwd でも同じ判定）。種類は閉じた
-//! 5 値 [`Kind`] で、判定は宣言順に 1 種類 1 関数、**先に当たった 1 つだけ**を断る（1 周に deny 1 行）。何を止めるかは
+//! 6 値 [`Kind`] で、判定は宣言順に 1 種類 1 関数、**先に当たった 1 つだけ**を断る（1 周に deny 1 行）。何を止めるかは
 //! 種類ごとの rules 行（[`WORD_ROWS`] と [`RM_ROW`]・裁定 id つき）が持ち、見張り自身の設定の種類は行を持たない。
 //!
 //! 語列の 3 種類（git / tmux / 台帳）は、command 行を起票の門の分割（[`segments`]・引用符と `\` を解く）で切り、
@@ -50,6 +50,10 @@ pub const TMUX_ROW: &str = "host_guard.tmux";
 pub const LEDGER_ROW: &str = "host_guard.ledger";
 /// rm の守る集合の行。
 pub const RM_ROW: &str = "host_guard.rm";
+/// 公開の見張りの行（識別子の形の記号と除外の digest・設計 vessel-hook.md §16）。
+pub const PUBLISH_ROW: &str = "host_guard.publish";
+
+pub mod publish;
 
 /// 語列の行の閉じた列（宣言順・command guard も enabled を見ずに読む）。
 pub const WORD_ROWS: [&str; 3] = [GIT_ROW, TMUX_ROW, LEDGER_ROW];
@@ -160,7 +164,7 @@ pub struct Scene<'a> {
     pub accounts: &'a [AccountLabel],
 }
 
-/// 止める種類（閉じた 5 値・宣言順が判定の順）。
+/// 止める種類（閉じた 6 値・宣言順が判定の順）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     /// git の履歴破壊。
@@ -173,10 +177,12 @@ pub enum Kind {
     Ledger,
     /// 見張り自身の設定の編集（行 e・行を持たない・語は self）。
     Settings,
+    /// 隣の repo の識別子の公開（行 j・§16・本行は行が無い周の公開の segment だけを断る）。
+    Publish,
 }
 
 /// [`Kind`] の全 variant（宣言順）。
-pub const KINDS: &[Kind] = &[Kind::Git, Kind::Rm, Kind::Tmux, Kind::Ledger, Kind::Settings];
+pub const KINDS: &[Kind] = &[Kind::Git, Kind::Rm, Kind::Tmux, Kind::Ledger, Kind::Settings, Kind::Publish];
 
 impl Kind {
     /// 断りの行と記録に出す種類の語。
@@ -187,6 +193,7 @@ impl Kind {
             Self::Tmux => "tmux",
             Self::Ledger => "ledger",
             Self::Settings => "self",
+            Self::Publish => "publish",
         }
     }
 
@@ -198,6 +205,7 @@ impl Kind {
             Self::Tmux => Some(TMUX_ROW),
             Self::Ledger => Some(LEDGER_ROW),
             Self::Settings => None,
+            Self::Publish => Some(PUBLISH_ROW),
         }
     }
 
@@ -209,6 +217,7 @@ impl Kind {
             Self::Tmux => "自席の window だけを操作する（server と他の session は壊さない）",
             Self::Ledger => "台帳は bdw と --append-notes で書く",
             Self::Settings => "見張り自身の設定は user が編集する",
+            Self::Publish => "publish の行を裁定を添えて置く（器の manifest の host_guard.publish）",
         }
     }
 }
@@ -308,6 +317,8 @@ struct Subject<'a> {
     tool: &'a str,
     /// segment の語（起票の門の分割・`NAME=value` の前置きを剥いだ後・空は捨てる）。
     segments: Vec<Vec<String>>,
+    /// Bash の command 行の原文（編集系の道具は空・publish は原文から segment を読み直す）。
+    command: &'a str,
     /// 編集系の道具の編集先の path（Bash と、path の無い payload は `None`）。
     edited: Option<&'a str>,
     /// 判定の場。
@@ -404,7 +415,8 @@ pub fn judge(tool: &str, command: &str, manifest: &Manifest, scene: &Scene) -> H
         _ => Vec::new(),
     };
     let edited = (tool != BASH && !command.is_empty()).then_some(command);
-    let subject = Subject { tool, segments, edited, scene };
+    let line = if tool == BASH { command } else { "" };
+    let subject = Subject { tool, segments, command: line, edited, scene };
     match KINDS.iter().find_map(|kind| judge_kind(*kind, &subject, manifest)) {
         Some(found) => found.decision(),
         None => HostGuardDecision::Allow,
@@ -418,6 +430,7 @@ fn judge_kind(kind: Kind, subject: &Subject, manifest: &Manifest) -> Option<Refu
         Kind::Ledger => sequences(kind, subject, manifest).or_else(|| writes(kind, subject, manifest)),
         Kind::Rm => removals(kind, subject, manifest),
         Kind::Settings => own_settings(kind, subject),
+        Kind::Publish => publish::judge(kind, subject, manifest),
     }
 }
 

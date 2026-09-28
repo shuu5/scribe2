@@ -49,6 +49,8 @@ fn manifest_with(tmux_enabled: bool, drop: Option<&str>, extra: &str) -> Manifes
             text.push_str(&row(id, "HostGuardDeniedCommands", value, enabled));
         }
     }
+    let forms = ["form repo-name", "form object-id", "form tracked-path", "form ledger-id"];
+    text.push_str(&row(super::PUBLISH_ROW, "HostGuardPublish", &forms, true));
     text.push_str(extra);
     Manifest::parse(&text).unwrap_or_else(|errors| panic!("fixture の manifest を読める: {errors:?}"))
 }
@@ -76,14 +78,14 @@ fn bash(command: &str) -> String {
     format!("{{\"cwd\":\"/tmp\",\"tool_name\":\"Bash\",\"tool_input\":{{\"command\":{}}}}}", crate::fleet::json_lite::quote(command))
 }
 
-/// 種類は閉じた 5 値で、const slice は宣言順に 5 本（git → rm → tmux → 台帳 → 自身の設定）。行を持たないのは自身の設定だけ。
+/// 種類は閉じた 6 値で、const slice は宣言順に 6 本（git → rm → tmux → 台帳 → 自身の設定 → 公開）。行を持たないのは自身の設定だけ。
 #[test]
-fn host_guard_kind_slice_is_the_five_kinds_in_declaration_order() {
+fn host_guard_kind_slice_is_the_six_kinds_in_declaration_order() {
     assert!(is_declaration_order(KINDS, |kind| kind as usize), "KINDS は宣言順: {KINDS:?}");
     let words: Vec<&str> = KINDS.iter().map(|kind| kind.as_str()).collect();
-    assert_eq!(words, ["git", "rm", "tmux", "ledger", "self"], "5 値の語");
+    assert_eq!(words, ["git", "rm", "tmux", "ledger", "self", "publish"], "6 値の語");
     let rows: Vec<Option<&str>> = KINDS.iter().map(|kind| kind.row()).collect();
-    assert_eq!(rows, [Some(super::GIT_ROW), Some(RM_ROW), Some(TMUX_ROW), Some(LEDGER_ROW), None], "行 id");
+    assert_eq!(rows, [Some(super::GIT_ROW), Some(RM_ROW), Some(TMUX_ROW), Some(LEDGER_ROW), None, Some(super::PUBLISH_ROW)], "行 id");
     assert!(!is_declaration_order(&[Kind::Rm, Kind::Git], |kind| kind as usize), "述語は並べ替えを落とす");
 }
 

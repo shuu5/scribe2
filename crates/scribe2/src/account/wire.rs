@@ -31,8 +31,8 @@ pub const TIMEOUT_S: u64 = 10;
 const SUBCOMMAND: &str = "host-guard";
 /// doctor の行の頭。
 const HEAD: &str = "host-guard:";
-/// doctor の欄に出す種類（欄の順・4 つとも rules 行を持つ）。見張り自身の設定の種類は行を持たず `self=on` で固定。
-const ROW_KINDS: [Kind; 4] = [Kind::Git, Kind::Tmux, Kind::Ledger, Kind::Rm];
+/// doctor の欄に出す種類（欄の順・5 つとも rules 行を持つ）。見張り自身の設定の種類は行を持たず `self=on` で固定。
+const ROW_KINDS: [Kind; 5] = [Kind::Git, Kind::Tmux, Kind::Ledger, Kind::Rm, Kind::Publish];
 /// 設定の key（hook の event の束・PreToolUse の配列・要素の hook の配列・hook の command）。
 const KEY_HOOKS: &str = "hooks";
 /// PreToolUse の配列の key。
@@ -264,7 +264,7 @@ pub fn resolve(bin: &Path, version: &str) -> Binary {
     }
 }
 
-/// doctor の 1 行（`--state-dir` の周・導入先の行の後ろ）: `host-guard: git= tmux= ledger= rm= self=on rows=<発効>/4
+/// doctor の 1 行（`--state-dir` の周・導入先の行の後ろ）: `host-guard: git= tmux= ledger= rm= publish= self=on rows=<発効>/5
 /// wired=<配線を持つ口座>/<口座> entities=<実体> [unreadable=<読めない口座>] binary=<ok|missing|other>`。宣言（`rules` = `--rules`
 /// か埋め込み + host の面）を読めない周は `host-guard: rules=unreadable`。実体が割れても一覧は出さない（1 行の外形を保つ）。
 pub fn doctor_line(state_dir: &Path, rules: Option<&str>, version: &str, bin: &Path) -> String {

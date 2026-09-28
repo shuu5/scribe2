@@ -677,6 +677,21 @@ enabled = true
 ruling = "user 2026-09-19T15:28Z"
 ruled_at = "2026-09-19"
 
+# host-guard の 6 つ目の種類 publish（設計 vessel-hook.md §16 行 j・ADR-0078・FR80 / AC50・s2-07l.696）の行。値の要素は札つきの
+# 2 形だけ: `form <記号>`（公開の前に走査する識別子の形・閉じた 4 記号 repo-name / object-id / tracked-path / ledger-id・各 1 回）と
+# `exclude <digest>`（無害と裁定した字句の sha256 の 16 進 64 字・小文字・重複なし・足すには裁定が要る）。字句を平文で書かない
+# （PUBLIC な repo の tracked file に書くと公開そのもの）。行が無い・列でない周は公開の segment（git push と gh の公開の動詞）
+# だけを断る。裁定 3 本: user 2026-09-27T17:39Z（器の仕組みで止める）・22:21Z（GitHub への問いと着地の push の走査）・
+# 23:55Z（repo の名は区切った成分で照合し除外の一覧だけを除く）。
+
+[[rule]]
+id = "host_guard.publish"
+kind = "HostGuardPublish"
+value = ["form repo-name", "form object-id", "form tracked-path", "form ledger-id"]
+enabled = true
+ruling = "user 2026-09-27T23:55Z"
+ruled_at = "2026-09-27"
+
 # 管理 tick（seat tick・設計 seat-heartbeat.md §2 形 5 / §10 形 5〜7・ADR-0058 §2・ADR-0068）の 3 行。tick_interval_s は
 # timer の周期（秒・unit を書く口が読む）、tick_stale_s は黙りの閾値（settle の基準）・Busy の古さの 2 役（秒）、
 # pointer_ladder_s は合図の梯子の列（秒の文字列・非空・狭義に昇順・段 n の待ちは列の n 番目・列を越えた段は送らない）。

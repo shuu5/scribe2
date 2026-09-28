@@ -949,7 +949,7 @@ pub(super) const HOST_GUARD_HEAD: &str = "host-guard: ";
 
 /// 種類の行を持たない manifest（[`NO_ACCOUNT_RULES`]）・口座 0 の host・`--bin` が歯の binary の周の host-guard の 1 行。
 pub(super) const HOST_GUARD_BARE: &str =
-    "host-guard: git=no-row tmux=no-row ledger=no-row rm=no-row self=on rows=0/4 wired=0/0 entities=0 binary=ok";
+    "host-guard: git=no-row tmux=no-row ledger=no-row rm=no-row publish=no-row self=on rows=0/5 wired=0/0 entities=0 binary=ok";
 
 /// `[[account]]` を `labels` の順に宣言した manifest の本文。
 fn account_rules(labels: &[&str]) -> String {

@@ -161,7 +161,7 @@ pub(crate) fn exclude_own(hits: Vec<Hit>, root: &Path) -> Vec<Hit> {
     hits.into_iter().filter(|hit| !(hit.own && hit.worktree.as_deref() == Some(root))).collect()
 }
 
-/// git の segment 1 つの読み（動詞・対象の dir・解けたか）。
+/// git の segment 1 つの読み（動詞・対象の dir・解けたか・動詞の後ろの語）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GitSegment {
     /// 大域の option を読み飛ばした最初の語（git の動詞）。
@@ -170,31 +170,56 @@ pub(crate) struct GitSegment {
     pub(crate) dir: PathBuf,
     /// 対象を字面で解けたか。
     pub(crate) resolved: bool,
+    /// 動詞の後ろの語（push の引数・設計 §16 形 4）。
+    pub(crate) rest: Vec<String>,
 }
 
-/// git の segment の読み手（**1 本**・設計 §15 形 4・行 h も同じ 1 本を呼ぶ）: command 行を [`segments`] で切り、
-/// [`verb_of`] で launcher を剥いで、動詞が git の segment ごとに（git の動詞・対象の dir・解けたか）を返す。作業 dir の
-/// 始まりは payload の `cwd` で、literal な `cd` / `pushd` の先へ替わる。解けない対象は `root` に倒して印を立てる。
-pub(crate) fn git_segments(command: &str, cwd: &Path, root: &Path) -> Vec<GitSegment> {
+/// segment 1 つの辿り（前置きの `NAME=value`・launcher を剥いだ先頭の語〔basename〕から後ろの語・作業 dir・解けたか）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Walked {
+    /// 前置きの `NAME=value` の語。
+    pub(crate) lead: Vec<String>,
+    /// 先頭の語（launcher を剥いだ basename）と後ろの語。
+    pub(crate) words: Vec<String>,
+    /// この segment の作業 dir（前の literal な `cd` / `pushd` の先）。
+    pub(crate) dir: PathBuf,
+    /// 作業 dir を字面で解けたか。
+    pub(crate) resolved: bool,
+}
+
+/// segment の読み手（**1 本**・設計 §15 形 4 / §16 形 4）: command 行を [`segments`] で切り、[`verb_of`] で launcher を
+/// 剥いで segment ごとの辿りを返す。作業 dir の始まりは payload の `cwd` で、literal な `cd` / `pushd` の先へ替わる。
+pub(crate) fn walked(command: &str, cwd: &Path) -> Vec<Walked> {
     let (mut dir, mut resolved) = (cwd.to_path_buf(), true);
     let mut found = Vec::new();
     for words in segments(command) {
         let lead = words.iter().take_while(|word| is_assignment(word)).count();
-        let tail = words.get(lead..).unwrap_or_default();
-        let redirected = words.iter().take(lead).any(|word| TARGET_ENV.iter().any(|env| word.starts_with(env)));
-        match verb_of(tail) {
-            Some((verb, rest)) if CD.contains(&verb) => (dir, resolved) = moved(&dir, resolved, rest),
-            Some(("git", rest)) => {
-                if let Some((verb, target, ok)) = git_verb(rest, &dir) {
-                    let ok = ok && resolved && !redirected;
-                    let dir = if ok { target } else { root.to_path_buf() };
-                    found.push(GitSegment { verb, dir, resolved: ok });
-                }
-            }
-            _ => {}
+        let Some((verb, rest)) = verb_of(words.get(lead..).unwrap_or_default()) else {
+            continue;
+        };
+        let head = std::iter::once(verb.to_owned()).chain(rest.iter().cloned()).collect();
+        found.push(Walked { lead: words.iter().take(lead).cloned().collect(), words: head, dir: dir.clone(), resolved });
+        if CD.contains(&verb) {
+            (dir, resolved) = moved(&dir, resolved, rest);
         }
     }
     found
+}
+
+/// git の segment の読み手（**1 本**・設計 §15 形 4・行 h も同じ 1 本を呼ぶ）: [`walked`] の上で、先頭の語が git の segment
+/// ごとに（git の動詞・対象の dir・解けたか・動詞の後ろの語）を返す。解けない対象は `root` に倒して印を立てる。
+pub(crate) fn git_segments(command: &str, cwd: &Path, root: &Path) -> Vec<GitSegment> {
+    walked(command, cwd).iter().filter_map(|seg| git_segment(seg, root)).collect()
+}
+
+/// 辿った segment 1 つを git の segment として読む（先頭の語が git でない・動詞が無い周は `None`）。
+pub(crate) fn git_segment(seg: &Walked, root: &Path) -> Option<GitSegment> {
+    let rest = seg.words.split_first().filter(|(head, _)| *head == "git")?.1;
+    let redirected = seg.lead.iter().any(|word| TARGET_ENV.iter().any(|env| word.starts_with(env)));
+    let (verb, target, ok, after) = git_verb(rest, &seg.dir)?;
+    let ok = ok && seg.resolved && !redirected;
+    let dir = if ok { target } else { root.to_path_buf() };
+    Some(GitSegment { verb, dir, resolved: ok, rest: after })
 }
 
 /// `cd` / `pushd` の後ろの作業 dir（引数が literal なら前の dir から解き、でなければ解けなくする）。
@@ -214,8 +239,9 @@ fn literal(word: &str) -> bool {
     !word.is_empty() && !word.starts_with('~') && !word.contains(NOT_LITERAL)
 }
 
-/// git の後ろの語から大域の option を読み飛ばし、（動詞・`-C` を連鎖で足した dir・解けたか）を返す。動詞が無ければ `None`。
-fn git_verb(rest: &[String], dir: &Path) -> Option<(String, PathBuf, bool)> {
+/// git の後ろの語から大域の option を読み飛ばし、（動詞・`-C` を連鎖で足した dir・解けたか・動詞の後ろの語）を返す。動詞が
+/// 無ければ `None`。
+fn git_verb(rest: &[String], dir: &Path) -> Option<(String, PathBuf, bool, Vec<String>)> {
     let (mut at, mut dir, mut ok) = (0_usize, dir.to_path_buf(), true);
     loop {
         let word = rest.get(at)?.as_str();
@@ -238,7 +264,7 @@ fn git_verb(rest: &[String], dir: &Path) -> Option<(String, PathBuf, bool)> {
                 1
             }
             flag if flag.starts_with('-') => 1,
-            verb => return Some((verb.to_owned(), dir, ok)),
+            verb => return Some((verb.to_owned(), dir, ok, rest.get(at.saturating_add(1)..).unwrap_or_default().to_vec())),
         };
         at = at.saturating_add(step);
     }

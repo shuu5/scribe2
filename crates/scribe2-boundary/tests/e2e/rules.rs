@@ -89,7 +89,8 @@ fn one_row(kind: RuleKind, value: &str) -> String {
 
 /// 種類の形に合う値の字面。**閉じた名の集合を指す kind** は名を core の enum から取る（対話面は `Role` の名・
 /// 権能の行は `Capability` の名・`s2-07l.201`／役割の既定は `Model` と `Effort` の字面・`s2-07l.433`／rm の守る集合は
-/// `Protected` の記号・`s2-07l.575`／クラスの語列表は `Class` の名 + 語列・`s2-07l.601`）。
+/// `Protected` の記号・`s2-07l.575`／クラスの語列表は `Class` の名 + 語列・`s2-07l.601`／公開の見張りは札つきの
+/// `form` の記号・`s2-07l.696`）。
 fn sample_value(kind: RuleKind) -> String {
     match kind {
         RuleKind::DialogueSurface => format!("\"{}\"", Role::Orchestrator.as_str()),
@@ -98,6 +99,7 @@ fn sample_value(kind: RuleKind) -> String {
         RuleKind::RoleEffort => format!("\"{}\"", Effort::High.alias()),
         RuleKind::HostGuardRmProtected => format!("[\"{}\"]", Protected::StateDir.as_str()),
         RuleKind::RunnerClassCommands => format!("[\"{} sample\"]", Class::Publish.as_str()),
+        RuleKind::HostGuardPublish => "[\"form repo-name\"]".to_owned(),
         _ => match kind.shape() {
             ValueShape::Int => "1".to_owned(),
             ValueShape::Str | ValueShape::Policy => "\"sample\"".to_owned(),
@@ -1015,7 +1017,7 @@ const STOP_RULED_AT: &str = "2026-09-20";
 
 /// クラスの語列表の行（`runner.class_commands`・`RuleKind::RunnerClassCommands`・設計 contract-source.md §48 の 2・ADR-0061・
 /// `s2-07l.601`）: **値は manifest が持つ**（C1 / C5）＝裁定の 3 要素をこの順で持ち（consume は要素なし）、行の裁定 id と裁定日は
-/// 裁定の値。kind は `ALL` の末尾・形は List。各要素は崩れ (a)〜(d) に当たらない（要素の読み手 1 本で名 + 語列に分かれ、語列の
+/// 裁定の値。kind は `ALL` の末尾の 1 つ前（末尾は `.696` の `HostGuardPublish`）・形は List。各要素は崩れ (a)〜(d) に当たらない（要素の読み手 1 本で名 + 語列に分かれ、語列の
 /// 先頭語は上限の行の値に在り、語列は受付が読む禁じる語列の和集合のどれも含まない）。
 #[test]
 fn class_derive_embedded_row_carries_the_ruled_three_elements_and_ruling_id() {
@@ -1027,7 +1029,8 @@ fn class_derive_embedded_row_carries_the_ruled_three_elements_and_ruling_id() {
     assert_eq!((row.ruling.as_str(), row.ruled_at.as_str()), ("user 2026-09-24T00:13Z", "2026-09-24"), "裁定 id と裁定日");
     assert!(row.enabled, "既定で効く");
     assert_eq!((row.kind, row.kind.shape()), (RuleKind::RunnerClassCommands, ValueShape::List), "kind と形");
-    assert_eq!(ALL.last(), Some(&RuleKind::RunnerClassCommands), "kind は ALL の末尾");
+    // `.696` が末尾に公開の見張りの kind を足した（その直前が RunnerClassCommands）。
+    assert_eq!(ALL.iter().rev().take(2).collect::<Vec<_>>(), [&RuleKind::HostGuardPublish, &RuleKind::RunnerClassCommands], "kind は ALL の末尾の 1 つ前");
     assert_eq!(RuleKind::parse("RunnerClassCommands"), Some(RuleKind::RunnerClassCommands), "kind を字面から引ける");
     let allowed = match manifest.get("runner.allowed_commands").map(|found| &found.value) {
         Some(RuleValue::List(commands)) => commands.clone(),

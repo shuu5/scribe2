@@ -14,7 +14,7 @@ pub mod manifest;
 
 use crate::fleet::select::{Model, MODELS};
 use crate::headless::{Effort, EFFORTS};
-use crate::hook::host_guard::{Protected, PROTECTED};
+use crate::hook::host_guard::{publish, Protected, PROTECTED};
 use crate::pipe::contract::{class_element, ClassElement, CLASSES};
 use crate::seat::role::{Capability, Role, ALL as ROLES, CAPABILITIES};
 use manifest::{HostManifest, Manifest};
@@ -348,6 +348,9 @@ pub enum RuleKind {
     /// [`crate::pipe::contract::class_element`] の 1 本）で、契約表の検査が verify 各行に禁じる語列と同じ照合で当て、導出が
     /// 行の `classes` に無い行を断る。id は [`crate::pipe::contract::CLASS_ROW`] の 1 行。
     RunnerClassCommands,
+    /// host-guard の公開の見張りの行（設計 vessel-hook.md §16 形 6・ADR-0078）。値は札つきの要素 `form <記号>` と
+    /// `exclude <digest>` の列（読み手は [`publish::elements`] の 1 本）。
+    HostGuardPublish,
 }
 
 /// [`RuleKind`] の全 variant。parity test の母集団である。
@@ -426,6 +429,7 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::SeatIdleAlarmS,
     RuleKind::SeatPrecheckAlarmS,
     RuleKind::RunnerClassCommands,
+    RuleKind::HostGuardPublish,
 ];
 
 impl RuleKind {
@@ -488,7 +492,7 @@ impl RuleKind {
             Self::PipeMaxLive => "PipeMaxLive",
             Self::FlipDocsOnlyFaces => "FlipDocsOnlyFaces", Self::FlipMarksPerPr => "FlipMarksPerPr",
             Self::LedgerDeniedWrites => "LedgerDeniedWrites", Self::LedgerOpenChildrenMax => "LedgerOpenChildrenMax",
-            Self::HostGuardDeniedCommands => "HostGuardDeniedCommands", Self::HostGuardRmProtected => "HostGuardRmProtected",
+            Self::HostGuardDeniedCommands => "HostGuardDeniedCommands", Self::HostGuardRmProtected => "HostGuardRmProtected", Self::HostGuardPublish => "HostGuardPublish",
             // 管理 tick の 3 kind と席の箱も 2 行に畳み、対で読む model と effort の 2 組も 1 行ずつに畳む（同じ上限）。
             Self::SeatTickIntervalS => "SeatTickIntervalS", Self::SeatTickStaleS => "SeatTickStaleS", Self::SeatMemoryMaxMb => "SeatMemoryMaxMb",
             Self::SeatPrecheckAlarmS => "SeatPrecheckAlarmS",
@@ -555,7 +559,7 @@ impl RuleKind {
             | Self::RunnerDeniedCommands | Self::RunnerClassCommands
             | Self::RepoNonRustExecAllow
             | Self::RoleCapabilities
-            | Self::FlipDocsOnlyFaces
+            | Self::FlipDocsOnlyFaces | Self::HostGuardPublish
             | Self::LedgerDeniedWrites | Self::HostGuardDeniedCommands | Self::HostGuardRmProtected | Self::SeatPointerLadderS => ValueShape::List,
         }
     }
@@ -712,6 +716,7 @@ impl RuleRow {
                 }
             }
             (RuleKind::RunnerClassCommands, RuleValue::List(elements)) => self.class_elements_are_read(elements),
+            (RuleKind::HostGuardPublish, RuleValue::List(found)) => publish::elements(found).map(drop).map_err(|why| RuleError::new(self.line, format!("{} の value の{why}", self.id))),
             _ => Ok(()),
         }
     }

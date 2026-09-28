@@ -719,6 +719,30 @@ fn host_guard_self_bash_writes_removals_and_moves_are_denied_and_copies_out_pass
     clean(&[&state, &shared, &repo, &spare]);
 }
 
+/// publish の行を持たない `--rules`（語列の行だけ）で、公開の segment `git push origin main` は rc 2・stdout 0 byte・stderr 1 行
+/// （kind=publish・hit=no-row・row=host_guard.publish・ruling=-・publish の経路）で断られ `inject.jsonl` に what=`host-guard-deny
+/// publish` の 1 行を残し、同じ `--rules` で公開の segment の無い `ls` と `git status && gh pr list` は rc 0・0 byte（§16 形 5）。
+#[test]
+fn host_guard_publish_without_the_row_denies_push_and_passes_the_rest() {
+    use vessel::hook::host_guard::Kind;
+    let repo = git_repo();
+    let state = tmp();
+    let rules = state.join("rules.toml");
+    fs::write(&rules, format!("schema = 1\n{}", denied_rows_text(true))).expect("rules を書ける");
+    let rules = rules.display().to_string();
+    let args = ["--state-dir", &state.display().to_string(), "--rules", &rules];
+    let text = assert_host_guard_deny(&run_host_guard(&args, &bash_payload(&repo, "git push origin main")), "行の無い push");
+    let want = format!("{NAME}: host-guard deny kind=publish hit=no-row row=host_guard.publish ruling=- — {}", Kind::Publish.route());
+    assert_eq!(text.trim_end(), want, "5 欄の 1 行");
+    let lines = host_guard_records(&state);
+    assert_eq!(lines.iter().map(|line| what_of(line)).collect::<Vec<_>>(), ["host-guard-deny publish"], "記録 1 行: {lines:?}");
+    for command in ["ls", "git status && gh pr list"] {
+        assert_silent(&run_host_guard(&args, &bash_payload(&repo, command)), command);
+    }
+    assert_eq!(host_guard_records(&state).len(), 1, "通す周は記録を残さない");
+    clean(&[&repo, &state]);
+}
+
 /// (a) `[memo]` の title か `intake:memo` の label を持つ create は、body-file の本文に 4 節が全部在れば通り、1 つでも
 /// 欠ければ閉じた理由 1 つ（宣言順で最初の欠け）で止まる。相対 path は payload の `cwd` から解き、`scripts/bdw` も
 /// 連結の後ろの segment も読む。

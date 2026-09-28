@@ -265,7 +265,7 @@ fn doctor_accounts_writes_nothing_into_the_account_dirs() {
 // ─── doctor の host-guard の 1 行（vessel-hook.md §12 行 d 形 5 / 6・ADR-0056 §2・接頭辞 `host_guard_doctor_`） ───
 
 /// 種類の行を持たない manifest の host-guard の行の頭（`wired=` より前）。
-const GUARD_NO_ROWS: &str = "host-guard: git=no-row tmux=no-row ledger=no-row rm=no-row self=on rows=0/4";
+const GUARD_NO_ROWS: &str = "host-guard: git=no-row tmux=no-row ledger=no-row rm=no-row publish=no-row self=on rows=0/5";
 
 /// 行の列の末尾の host-guard の 1 行（無ければ空）と、host-guard の行の本数。
 fn guard_line(lines: &[String]) -> (String, usize) {
@@ -273,18 +273,19 @@ fn guard_line(lines: &[String]) -> (String, usize) {
     (last, lines.iter().filter(|line| line.starts_with(HOST_GUARD_HEAD)).count())
 }
 
-/// 種類の 4 行（git の行は `git` が `None` なら欠き、`Some(enabled)` ならその発効で置く）と `labels` の口座を持つ manifest。
+/// 種類の 5 行（git の行は `git` が `None` なら欠き、`Some(enabled)` ならその発効で置く）と `labels` の口座を持つ manifest。
 fn guard_rules(git: Option<bool>, labels: &[&str]) -> String {
     let row = |id: &str, kind: &str, value: &str, enabled: bool| {
         format!("\n[[rule]]\nid = \"{id}\"\nkind = \"{kind}\"\nvalue = [\"{value}\"]\nenabled = {enabled}\nruling = \"r\"\nruled_at = \"d\"\n")
     };
     let git = git.map(|enabled| row("host_guard.git", "HostGuardDeniedCommands", "git push --force", enabled)).unwrap_or_default();
     format!(
-        "{}{git}{}{}{}",
+        "{}{git}{}{}{}{}",
         account_rules(labels),
         row("host_guard.tmux", "HostGuardDeniedCommands", "tmux kill-server", true),
         row("host_guard.ledger", "HostGuardDeniedCommands", "bd delete", true),
-        row("host_guard.rm", "HostGuardRmProtected", "state-dir", true)
+        row("host_guard.rm", "HostGuardRmProtected", "state-dir", true),
+        row("host_guard.publish", "HostGuardPublish", "form repo-name", true)
     )
 }
 
@@ -316,15 +317,15 @@ fn host_guard_doctor_counts_wired_accounts_and_entities_in_one_line() {
     fs::remove_dir_all(&place.dir).ok();
 }
 
-/// (6) 種類ごとの欄は行の `enabled` を読む: 4 行とも発効で `on` と `rows=4/4`、`--rules` で host_guard.git を `enabled = false`
-/// にすると `git=off`、行を欠くと `git=no-row`（どちらも rows=3/4）。口座 0 の host は `wired=0/0 entities=0`。
+/// (6) 種類ごとの欄は行の `enabled` を読む: 5 行とも発効で `on` と `rows=5/5`、`--rules` で host_guard.git を `enabled = false`
+/// にすると `git=off`、行を欠くと `git=no-row`（どちらも rows=4/5）。口座 0 の host は `wired=0/0 entities=0`。
 #[test]
 fn host_guard_doctor_names_each_kind_on_off_or_no_row() {
     let place = role_doctor_place();
     for (git, want) in [
-        (Some(true), "git=on tmux=on ledger=on rm=on self=on rows=4/4"),
-        (Some(false), "git=off tmux=on ledger=on rm=on self=on rows=3/4"),
-        (None, "git=no-row tmux=on ledger=on rm=on self=on rows=3/4"),
+        (Some(true), "git=on tmux=on ledger=on rm=on publish=on self=on rows=5/5"),
+        (Some(false), "git=off tmux=on ledger=on rm=on publish=on self=on rows=4/5"),
+        (None, "git=no-row tmux=on ledger=on rm=on publish=on self=on rows=4/5"),
     ] {
         let lines = doctor_rows(&place, &guard_rules(git, &[]));
         assert_eq!(guard_line(&lines), (format!("host-guard: {want} wired=0/0 entities=0 binary=ok"), 1), "{git:?}: {lines:?}");
@@ -332,7 +333,7 @@ fn host_guard_doctor_names_each_kind_on_off_or_no_row() {
     // 列でない値の行（id は host_guard.git・kind は閾値）は発効でも `no-row`。
     let not_list = "\n[[rule]]\nid = \"host_guard.git\"\nkind = \"CoreLines\"\nvalue = 1\nenabled = true\nruling = \"r\"\nruled_at = \"d\"\n";
     let lines = doctor_rows(&place, &format!("{}{not_list}", guard_rules(None, &[])));
-    let want = "host-guard: git=no-row tmux=on ledger=on rm=on self=on rows=3/4 wired=0/0 entities=0 binary=ok";
+    let want = "host-guard: git=no-row tmux=on ledger=on rm=on publish=on self=on rows=4/5 wired=0/0 entities=0 binary=ok";
     assert_eq!(guard_line(&lines), (want.to_owned(), 1), "列でない行: {lines:?}");
     fs::remove_dir_all(&place.dir).ok();
 }
