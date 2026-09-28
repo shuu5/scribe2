@@ -743,6 +743,27 @@ fn host_guard_publish_without_the_row_denies_push_and_passes_the_rest() {
     clean(&[&repo, &state]);
 }
 
+/// 埋め込みの manifest（publish の行は enabled）で、包みの `(git push)` と env の付け替えの push は rc 2・stdout 0 byte・stderr 1 行
+/// （hit=unresolved:<印の語>・unresolved の経路）と記録 1 行ずつ、解ける push と cd の後ろの ls は rc 0・記録なし（§17 行 k）。
+#[test]
+fn publish_marks_are_denied_through_the_binary() {
+    let (repo, state) = (git_repo(), tmp());
+    let route = "解ける形で書き直す（git / gh を包まずに頭の語に置く・ref と remote と dir と -R と可視性の欄は literal・本文は file〔--body-file か api の -F k=@file〕か区切りを引用した heredoc で渡す）";
+    for (at, (command, mark)) in [("(git push)", "wrapped"), ("env GIT_DIR=../p/.git git push origin main", "redirect")].into_iter().enumerate() {
+        let text = assert_host_guard_deny(&run_host_guard_in(&state, &bash_payload(&repo, command)), command);
+        let want = format!("{NAME}: host-guard deny kind=publish hit=unresolved:{mark} row=host_guard.publish ruling=user 2026-09-27T23:55Z — {route}");
+        assert_eq!(text.trim_end(), want, "{command}");
+        let lines = host_guard_records(&state);
+        assert_eq!(lines.len(), at + 1, "記録 1 行ずつ: {lines:?}");
+        assert_eq!(what_of(&lines.last().cloned().unwrap_or_default()), "host-guard-deny publish", "{command}");
+    }
+    for command in ["git push origin main", "cd \"$D\" && ls"] {
+        assert_silent(&run_host_guard_in(&state, &bash_payload(&repo, command)), command);
+    }
+    assert_eq!(host_guard_records(&state).len(), 2, "通す周は記録を残さない");
+    clean(&[&repo, &state]);
+}
+
 /// (a) `[memo]` の title か `intake:memo` の label を持つ create は、body-file の本文に 4 節が全部在れば通り、1 つでも
 /// 欠ければ閉じた理由 1 つ（宣言順で最初の欠け）で止まる。相対 path は payload の `cwd` から解き、`scripts/bdw` も
 /// 連結の後ろの segment も読む。
