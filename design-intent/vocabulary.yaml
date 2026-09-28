@@ -1300,7 +1300,7 @@ terms:
     aliases: [publish segment]
     definition: Bash の command を segment に分けたうち、 git の push と gh の公開の動詞 (本文を出す動詞と repo の作成・編集) の部分 (SRS FR80)。 publish の種類はここだけを読む。
     relationships: [公開の字面の走査, 出ていく字面, 公開先の repo, command guard]
-    flagged_ambiguities: [3 クラスの「出す」とは別。 自 repo への push と PR の作成も含み、 不可逆なのは中身が外から見えることで main の移動ではない]
+    flagged_ambiguities: [3 クラスの「出す」とは別。 自 repo への push と PR の作成も含む]
   - canonical: 公開先の repo
     domain: consumer
     aliases: [publish target repo]
@@ -1321,7 +1321,7 @@ terms:
   - canonical: 識別子の 4 形
     domain: consumer
     aliases: [identifier forms]
-    definition: 隣の private repo を指す閉じた 4 つ — repo の名 (出ていく字面と名をともに ASCII の英数字と _ の外の字 〔- と . と / を含む〕 で区切った成分の並びで、 大文字と小文字を区別せずに照合し、 一般語の名も除かず、 除外の一覧に在る字句の中の当たりだけを数えない・除外の一覧に足すには裁定が要る)・object id (隣の object db に在り公開先の repo に無いもの)・tracked path (/ を含み、 隣の tracked な path の後方一致に当たり、 公開先の repo の path に当たらないもの)・台帳 id (隣の台帳に在る issue の id) (SRS FR80)。 publish の種類の rules 行の値が並べる記号 (除外の一覧も同じ行が持つ)。
+    definition: 隣の private repo を指す閉じた 4 つ — repo の名 (出ていく字面と名をともに ASCII の英数字と _ の外の字 〔- と . と / を含む〕 で区切った成分の並びで、 大文字と小文字を区別せずに照合し、 一般語の名も除かず、 除外の一覧に在る字句の中の当たりだけを数えない・除外の一覧に足すには裁定が要る)・object id (隣の object db に在り公開先の repo に無いもの)・tracked path (/ を含む語が、 隣の tracked な path を / の境界で切った末尾と一致し、 公開先の repo の tracked な path に無いもの)・台帳 id (隣の台帳に在る issue の id) (SRS FR80)。 publish の種類の rules 行の値が並べる記号 (除外の一覧も同じ行が持つ)。
     relationships: [隣の private repo, 公開の字面の走査, rules 行]
     flagged_ambiguities: [起票の門の台帳 write の 4 形とは別, 台帳 id は裁定面の記帳 id とは別]
   - canonical: host-guard の配線
