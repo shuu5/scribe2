@@ -567,6 +567,35 @@ mod tests {
         assert_eq!(line.matches(&format!("/{}", super::PLUGIN_DIR)).count(), 1, "生成 dir を足すのは 1 つ目の語だけ: {line}");
     }
 
+    /// (a・形 1・consumer-sync.md §19・ADR-0082) 消費側の anchor（生成 dir の下に名の違う plugin.json と hooks.json）でも 1 つ目の
+    /// `--plugin-dir` はその anchor の下の生成 dir で、そこから読んだ `name` は器の名と違い（枠の中身で差し替えない）、workspace の器の
+    /// 生成 dir は行に現れず、2 つ目以降は `[[plugin]]` の dir の宣言順のままで `--plugin-dir` は 1 + 宣言数だけ在る。
+    // flip-check: retroactive s2-07l.723
+    #[test]
+    fn consumer_slot_first_plugin_dir_is_the_consumer_anchor_plugin() {
+        let anchor = std::env::temp_dir().join(format!("seat-launch-consumer-slot-{}", std::process::id()));
+        let payload = anchor.join(super::PLUGIN_DIR);
+        for (rel, body) in [(".claude-plugin/plugin.json", "{\"name\": \"toy-consumer\"}\n"), ("hooks/hooks.json", "{\"hooks\": {}}\n")] {
+            std::fs::create_dir_all(payload.join(rel).parent().unwrap()).unwrap();
+            std::fs::write(payload.join(rel), body).unwrap();
+        }
+        let manifest = Manifest::parse("schema = 1\n\n[[plugin]]\ndir = \"/opt/p2\"\n\n[[plugin]]\ndir = \"/opt/p1\"\n").unwrap_or_default();
+        let line = derive_launch(&anchor, manifest.plugins(), &[], None, None);
+        let dirs: Vec<&str> = line.split(' ').collect::<Vec<_>>().windows(2).filter(|pair| pair[0] == "--plugin-dir").map(|pair| pair[1]).collect();
+        assert_eq!(dirs.len(), 1 + manifest.plugins().len(), "--plugin-dir は 1 + 宣言数（宣言 2）: {line}");
+        assert_eq!(dirs.first().copied(), Some(payload.display().to_string().as_str()), "1 つ目は消費側の anchor の下の生成 dir: {line}");
+        let read = |dir: &str| std::fs::read_to_string(Path::new(dir).join(".claude-plugin/plugin.json")).ok();
+        let name = dirs.first().and_then(|dir| read(dir)).and_then(|body| crate::headless::runner::top_level_string(&body, "name"));
+        assert_eq!(name.as_deref(), Some("toy-consumer"), "1 つ目の枠から読んだ名: {line}");
+        assert_ne!(name.as_deref(), Some(crate::name::NAME), "器の名ではない（枠の中身で差し替えない）: {line}");
+        let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(super::PLUGIN_DIR);
+        let real = workspace.canonicalize().unwrap_or_else(|_| workspace.clone());
+        assert!(read(&real.display().to_string()).is_some(), "母集団: workspace の器の生成 dir が在る: {}", real.display());
+        assert!([&workspace, &real].iter().all(|form| !line.contains(&form.display().to_string())), "workspace の器の生成 dir は行に現れない（{}）: {line}", real.display());
+        assert_eq!(dirs.get(1..), Some(&["/opt/p2", "/opt/p1"][..]), "2 つ目以降は宣言順のまま: {line}");
+        let _ = std::fs::remove_dir_all(&anchor);
+    }
+
     /// 起動行の導出（契約 (6f)・account-lifecycle.md §4）: 穴は `{account_dir}` の 1 つ（[`fill_launch`] がそのまま埋める）・
     /// 順序は agent view off → 口座の env → `claude` → anchor の下の生成 dir の `--plugin-dir` → `[[plugin]]` の dir（宣言順）→
     /// `[[launch-arg]]` の value（宣言順）。plugin 0 件・引数 0 件は anchor の `--plugin-dir` だけで終わる。後半は model の運び（`s2-07l.313`）。

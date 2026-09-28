@@ -336,8 +336,8 @@ fn pipe_spawn_copies_plugin_outside_worktree_and_substitutes_plugin_dir() {
     let names = dir_names(&consumer);
     assert_eq!(
         names,
-        vec![".claude-plugin".to_owned(), "hooks".to_owned()],
-        "写しは plugin の 2 dir だけ（母集団 {} entry）",
+        vec![".claude-plugin".to_owned(), "hooks".to_owned(), runner_mark()],
+        "写しは plugin の 2 dir と印だけ（母集団 {} entry）",
         names.len()
     );
     // 古い写し（`stale.json`）は root を先に空にしたので残らない。
@@ -556,7 +556,7 @@ fn plugin_payload_consumer_is_read_from_the_dir_and_old_path_is_not_a_consumer()
     assert_eq!(dir_names(&plugin), vec![CONSUMER.to_owned(), NAME.to_owned()], "root は consumer と器");
     assert_vessel_plugin(&plugin);
     let consumer = plugin.join(CONSUMER);
-    assert_eq!(dir_names(&consumer), vec![".claude-plugin".to_owned(), "hooks".to_owned()], "写し先は consumer/ の直下");
+    assert_eq!(dir_names(&consumer), vec![".claude-plugin".to_owned(), "hooks".to_owned(), runner_mark()], "写し先は consumer/ の直下");
     for (dir, name, body) in [(".claude-plugin", "plugin.json", PLUGIN_JSON), ("hooks", "hooks.json", HOOKS_JSON)] {
         let copied = fs::read(consumer.join(dir).join(name)).unwrap_or_default();
         assert_eq!(copied, body.as_bytes(), "{dir}/{name} は生成 dir の下の本文（旧 path の本文ではない）");
@@ -586,6 +586,47 @@ fn pipe_spawn_plugin_rerun_drops_stale_consumer() {
     let (plugin, _) = spawn_showing_plugin_dir(&repo, &state, &id);
     assert!(!plugin.join(CONSUMER).exists(), "古い consumer/ を残さない");
     assert_eq!(dir_names(&plugin), vec![NAME.to_owned()], "root は器の 1 本だけ");
+    clean(&[&repo, &state]);
+}
+
+/// runner の写しの印の名（[`NAME`] + `-runner`・consumer-sync.md §19 形 3・ADR-0082）。src の const を引かず、跨版の名を
+/// 歯が独立に pin する。
+fn runner_mark() -> String {
+    format!("{NAME}-runner")
+}
+
+/// (b・形 3 / 形 4・consumer-sync.md §19) 名の違う plugin を持つ repo の便は、写しの `consumer/` の直下に印の名の空の file
+/// （link でない）を持ち、器の plugin の写しは tracked と同じ 2 dir のまま、anchor の下の生成 dir と便の worktree の生成 dir には
+/// 印が無い（器が書かない）。続けて撃つ gate の lens の行は `{worktree}` だけが埋まり、`{plugin_dir}` は置換されない字面のまま
+/// （lens は plugin の root を受けない）。base は印が無い＝最初の assert で RED。
+#[test]
+fn runner_mark_is_only_in_the_consumer_copy_and_lens_gets_no_plugin_root() {
+    let (repo, state) = repo_with_plugin();
+    let path = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &path);
+    let plugin = state.join("pipe").join(&id).join("plugin");
+    let mark = plugin.join(CONSUMER).join(runner_mark());
+    let meta = fs::symlink_metadata(&mark);
+    assert!(meta.as_ref().is_ok_and(fs::Metadata::is_file), "consumer の直下に印の file が link でなく在る: {}", mark.display());
+    assert_eq!(meta.map(|meta| meta.len()).ok(), Some(0), "印の中身は空");
+    assert_vessel_plugin(&plugin);
+    for payload in [repo.join(PLUGIN_DIR), worktree_of(&repo, &id).join(PLUGIN_DIR)] {
+        // 母集団: 生成 dir に plugin が在る（dir が無いと「印が無い」が空虚に通る）。
+        assert!(payload.join(".claude-plugin").join("plugin.json").is_file(), "生成 dir に plugin が在る: {}", payload.display());
+        let names = dir_names(&payload);
+        assert!(fs::symlink_metadata(payload.join(runner_mark())).is_err(), "器は生成 dir に印を書かない: {names:?}");
+    }
+    let seen = state.join("lens-holes");
+    let lens = format!("cat >/dev/null; printf '%s\\n%s\\n' '{{worktree}}' '{{plugin_dir}}' > '{}'; echo '{}'", seen.display(), lens_verdict("PASS"));
+    let out = run_pipe(&[
+        "gate", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--lens", &lens,
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "PASS: {}", stderr_of(&out));
+    let holes = fs::read_to_string(&seen).expect("lens の穴の写しを読める");
+    let lines: Vec<&str> = holes.lines().collect();
+    assert!(lines.first().is_some_and(|line| line.ends_with(id.as_str())), "{{worktree}} は便の id で終わる: {holes}");
+    assert_eq!(lines.get(1).copied(), Some("{plugin_dir}"), "{{plugin_dir}} は lens の行で置換されない: {holes}");
     clean(&[&repo, &state]);
 }
 

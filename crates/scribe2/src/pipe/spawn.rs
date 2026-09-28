@@ -51,6 +51,10 @@ const EMBEDDED_PLUGIN: [(&str, &str, &str); 2] = [
 /// consumer の plugin を写す root 配下の subdir 名。
 const CONSUMER_DIR: &str = "consumer";
 
+/// runner の写しの印の file の名の尾（名は [`NAME`] + この尾・中身は空・器は読まない・consumer-sync.md §19 形 3・
+/// ADR-0082）。消費側の hook は `$CLAUDE_PLUGIN_ROOT` の下にこの名の file が在るかで runner の写しかを判じる。
+const RUNNER_MARK_SUFFIX: &str = "-runner";
+
 /// 起動 1 回の材料。
 pub struct Launch<'a> {
     /// 便 id。
@@ -690,7 +694,7 @@ fn substitute(
 ///   plugin を持たない consumer repo の便にも hook の in-loop guard が載る（憲法 C16.2・
 ///   `s2-07l.149` 裁定 (A)）。
 /// - `consumer/`: worktree が**別名の** plugin を持つ周だけ（[`consumer_plugin`]）、その
-///   [`PLUGIN_DIRS`] を写す。
+///   [`PLUGIN_DIRS`] を写し、直下に空の印の file（[`NAME`] + [`RUNNER_MARK_SUFFIX`]）を 1 つ書く。
 ///
 /// Claude Code は**読み込んだ plugin dir の配下**を acceptEdits の自動承認から外す
 /// （sensitive）。便の worktree は `<repo>/.worktrees/<NAME>/<run>` ＝ repo を
@@ -727,6 +731,10 @@ fn copy_plugin(worktree: &Path, state_dir: &Path, run: &str) -> Result<PathBuf, 
                 copy_tree(&from, &consumer.join(name))?;
             }
         }
+        // **印は consumer の直下にだけ書く**（§19 形 3 / 形 4）: 器の plugin の写し・anchor と便の worktree の
+        // 生成 dir には書かない。中身は空で、host の値も便の値も載せない。
+        let mark = consumer.join(format!("{NAME}{RUNNER_MARK_SUFFIX}"));
+        std::fs::write(&mark, "").map_err(|err| format!("{} を書けない: {err}", mark.display()))?;
     }
     Ok(dest)
 }
