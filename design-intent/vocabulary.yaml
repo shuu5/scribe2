@@ -187,12 +187,12 @@ terms:
   - canonical: 端末の表
     domain: consumer
     aliases: [device table, "[[device]]"]
-    definition: host の manifest の表で、 持ち主の端末 1 つにつき 1 行 (ADR-0076・ADR-0080)。 必須の欄は name (host の面で一意)・ssh (ssh の宛先)・chrome (端末の上の Chrome の path)・os (linux / macos / windows)、 任意の欄は display (X の画面の番号)・ime-env (KEY=VALUE の列)・profile-dir (専用の profile の dir)・display-env (画面を開くための KEY=VALUE の列・ime-env と同じ検査・両方在る行は消費側が display-env を使う)。 host の面にだけ置け、 読み手が形を行番号つきで検査し、 doctor は host の行に名の列だけを出す。 器は値を使わない (消費側の表示面が使う)。
+    definition: host の manifest の表で、 持ち主の端末 1 つにつき 1 行 (ADR-0076・ADR-0080)。 必須の欄は name (host の面で一意)・ssh (ssh の宛先)・chrome (端末の上の Chrome の path)・os (linux / macos / windows)、 任意の欄は display (X の画面の番号)・ime-env (KEY=VALUE の列)・profile-dir (専用の profile の dir)・display-env (画面を開くための KEY=VALUE の列・ime-env と同じ検査・display と同じ行には書けない)。 host の面にだけ置け、 読み手が形を行番号つきで検査し、 doctor は host の行に名の列だけを出す。 器は値を使わない (消費側の表示面が使う)。
     relationships: [host の manifest, doctor, state dir, 画面の env]
   - canonical: 画面の env
     domain: consumer
     aliases: [display env, display-env]
-    definition: 端末の表の任意の欄 display-env の値で、 端末の上で Chrome の窓を画面に出すための環境変数の組 (例: Wayland の WAYLAND_DISPLAY と XDG_RUNTIME_DIR・ADR-0080)。 KEY=VALUE の文字列の列で、 ime-env と同じ 1 つの関数が形を検査する。 X の画面の番号 1 つを持つ欄 display とは別の欄で、 両方在る行は消費側が display-env を使う。 器は値を使わない。
+    definition: 端末の表の任意の欄 display-env の値で、 端末の上で Chrome の窓を画面に出すための環境変数の組 (例: Wayland の WAYLAND_DISPLAY と XDG_RUNTIME_DIR・ADR-0080)。 KEY=VALUE の文字列の列で、 ime-env と同じ 1 つの関数が形を検査する。 X の画面の番号 1 つを持つ欄 display とは別の欄で、 同じ行に両方は書けない (X の DISPLAY も display-env に書ける)。 器は値を使わない。
     forbidden: [画面の番号の列]
     relationships: [端末の表, host の manifest]
   - canonical: 口座の登録

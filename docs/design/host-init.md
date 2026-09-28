@@ -205,9 +205,9 @@ README の先頭に「新しい repo を器に載せる」の節を置く: 打�
 - 後続: 行 g は歯を行 g の write-set の `+` の file（端末の表の兄弟 module）の中に置くので、本便の子の file を write-set に要らない。行 g は台帳の依存と行の depends で本便の Landed を待つ。本便の子の file の `+` は着地の後の docs PR で剥がす（本便の done に書かない＝行自身の field を書き換える便は着地で起こし直される）。
 - 却下: 行 g の growth を 4 以下に書く（section の 1 語と受ける腕と読み手で 4 行に収まらない＝見積の字面だけ変える嘘）／src の群（群の表の組み立てと検査）を兄弟へ割る（歯が引く名と私有の関数の可視性が動く＝items-differ の危険・歯の module は居座り次の表で再発）／歯を `crates/scribe2-boundary/tests/e2e/` へ移す（私有 item を撃つ歯は e2e から撃てない）。
 
-## 17. 端末の表の行に任意の欄 display-env — KEY=VALUE の列を IME の env と同じ 1 関数で検査し、断りの文は欄の名を名指す（契約表の行 i・[ADR-0080](../../design-intent/decisions/ADR-0080-device-rows-carry-display-env.html)・FR57・`s2-07l.726`）
+## 17. 端末の表の行に任意の欄 display-env — KEY=VALUE の列を IME の env と同じ 1 関数で検査し、断りの文は欄の名を名指し、display と同じ行には書けない（契約表の行 i・[ADR-0080](../../design-intent/decisions/ADR-0080-device-rows-carry-display-env.html)・FR57・`s2-07l.726`）
 
-やさしく言うと: §15 の端末の表は画面を「画面の番号」の 1 つの値で書くが、これは X の画面しか表せない。Wayland の画面の端末は、窓を開くのに環境変数 2 つ（画面の名と実行時の dir）の組が要る。端末の表の行に、画面を開くための環境変数の組を書く任意の欄 display-env を足し、日本語入力の設定の欄と同じ検査で受ける。器は今どおり値を使わず、形を守るだけ。
+やさしく言うと: §15 の端末の表は画面を「画面の番号」の 1 つの値で書くが、これは X の画面しか表せない。Wayland の画面の端末は、窓を開くのに環境変数 2 つ（画面の名と実行時の dir）の組が要る。端末の表の行に、画面を開くための環境変数の組を書く任意の欄 display-env を足し、日本語入力の設定の欄と同じ検査で受ける。1 つの行の画面の宣言は 1 つの欄だけにし、画面の番号と両方を書いた行は断る（X の画面の DISPLAY も display-env に書ける）。器は今どおり値を使わず、形を守るだけ。
 
 - 出所: 台帳 `s2-07l.726`（隣の project の席との相談・表示面の最初の実物の端末が Wayland）。決定は ADR-0080（ADR-0076 の閉じた 7 つの key を 8 つへ・部分 supersede）。推奨は memo のまま（常設の裁定 user 2026-09-28T00:54Z）。
 - 現物（verified・main 6f6038c）:
@@ -217,10 +217,10 @@ README の先頭に「新しい repo を器に載せる」の節を置く: 打�
 - 形（番号は done と 1:1）:
   1. **欄**: `KEYS` の末尾に `display-env` を足す（閉じた 8 つ・必須の列は不変）。値は文字列の配列で、`Device` に KEY と VALUE の組の列の欄と、それを宣言順で返す読み口（`ime_env` と同じ形）を足す。無い行は空の列。
   2. **検査は 1 関数**: `env_pairs` に欄の名の引数を足し、`ime-env` と `display-env` の両方がそれを呼ぶ。断りの文は欄の名を頭に置く同じ 2 つの形（`<欄> の要素 … が KEY=VALUE の形でない（…）`・`<欄> の KEY … が重複する`）で、その欄の行番号で 1 件ずつ出す（`ime-env` の断りの文は 1 字も変わらない）。
-  3. **両方の欄**: `display` と `display-env` を両方持つ行も断らない（両方在る行は消費側が `display-env` を使う・器は値を使わない）。
+  3. **両方の欄は断る**: `display` と `display-env` を両方持つ行は、`display-env` の行番号で `display と display-env は同じ行に書けない（DISPLAY は display-env に書く）` の 1 件で断る（どちらを使うかの読み順を散文に残さない・器は値を使わない）。`display-env` を持たない行の `display` は跨版で今どおり。
   4. **触らない**: 他の欄の形と検査・`display` の欄（跨版で保つ）・表を host の面にだけ置く決まり・doctor の host の行（名の列だけ）・tracked の面の断り・既存の歯（`host_device_one_row_round_trips_every_field` の 7 欄の round-trip は 8 つ目の欄が無い行としてそのまま通る）。
-- 却下: IME の env の欄に画面の変数も書く（欄の意味が外れる）／画面の番号の値の形で X と Wayland を読み分ける（散文にしか無い規則・実行時の dir を表せない・N2）／画面の番号の欄を列に変える（既存の面が型違いで読めなくなる）／汎用の env の欄（IME の env と役目が重なる）。詳細は ADR-0080。
-- 歯（lib・`crates/scribe2/src/rules/device.rs` の歯の区間・接頭辞 `host_device_display_env_`・`crates/` 全体で 0 件＝実測）: (a) `display = ":1"` と `display-env = ["WAYLAND_DISPLAY=wayland-1", "XDG_RUNTIME_DIR=/run/user/1000"]` を持つ行が読め、`display-env` の読み口が宣言順の 2 組・`display` の読み口も `:1` を返し、`display-env` の無い行の読み口は空 (b) `display-env = ["A=1", "9B=2", "A=3"]` の面は、`display-env の要素 "9B=2" が KEY=VALUE の形でない（KEY の先頭が数字である）` と `display-env の KEY A が重複する` を `display-env` の行で 1 件ずつ断る（形の良い要素は数えない）。
+- 却下: 両方の欄を許し両方在る行は消費側が `display-env` を使う（読み順が散文にしか無い規則になる・N2）／IME の env の欄に画面の変数も書く（欄の意味が外れる）／画面の番号の値の形で X と Wayland を読み分ける（散文にしか無い規則・実行時の dir を表せない・N2）／画面の番号の欄を列に変える（既存の面が型違いで読めなくなる）／汎用の env の欄（IME の env と役目が重なる）。詳細は ADR-0080。
+- 歯（lib・`crates/scribe2/src/rules/device.rs` の歯の区間・接頭辞 `host_device_display_env_`・`crates/` 全体で 0 件＝実測）: (a) `display-env = ["WAYLAND_DISPLAY=wayland-1", "XDG_RUNTIME_DIR=/run/user/1000"]` を持つ行（`display` なし）が読め、`display-env` の読み口が宣言順の 2 組・`display` の読み口は `None` を返し、`display-env` の無い行の読み口は空 (b) `display-env = ["A=1", "9B=2", "A=3"]` の面は、`display-env の要素 "9B=2" が KEY=VALUE の形でない（KEY の先頭が数字である）` と `display-env の KEY A が重複する` を `display-env` の行で 1 件ずつ断る（形の良い要素は数えない） (c) `display = ":0"` と形の良い `display-env` を両方持つ行は `display と display-env は同じ行に書けない（DISPLAY は display-env に書く）` を `display-env` の行で 1 件断り、同じ面から `display` を消すと読める。
 - base で RED の理由: 歯が 0 本（filter の該当 0 本＝nextest の rc 4）。実装の前の読み手は `display-env` を未知の key として断る（機能不在）。
 
 <!-- contracts:begin -->
@@ -314,12 +314,12 @@ done = "歯の module の本文が子の file に在り、親の歯の区間は 
 
 [[contract]]
 id = "i"
-title = "端末の表の行に任意の欄 display-env（KEY=VALUE の列）— KEYS は閉じた 8 つ・ime-env と同じ 1 関数で検査し断りの文は欄の名を名指す・display と両方持つ行も断らない（§17・ADR-0080・s2-07l.726）"
+title = "端末の表の行に任意の欄 display-env（KEY=VALUE の列）— KEYS は閉じた 8 つ・ime-env と同じ 1 関数で検査し断りの文は欄の名を名指す・display と両方持つ行は断る（§17・ADR-0080・s2-07l.726）"
 req = ["FR57", "NFR4"]
 section = "17"
 write-set = ["crates/scribe2/src/rules/device.rs", "docs/design/host-init.md"]
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail host_device_display_env_", "cargo nextest run -p scribe2 --lib --no-tests=fail host_device_"]
 size = "S"
 growth = ["crates/scribe2/src/rules/device.rs:45"]
-done = "(1) device.rs の KEYS の末尾に display-env（閉じた 8 つ・必須は不変）・Device が KEY と VALUE の組の列を持ち宣言順で返す読み口がある（無い行は空） (2) env_pairs が欄の名を引数に取り ime-env と display-env の両方が呼び、断りの文は <欄> の要素 … が KEY=VALUE の形でない（…）と <欄> の KEY … が重複する の 2 形でその欄の行番号に 1 件ずつ・ime-env の断りの文は不変 (3) display と display-env を両方持つ行も断らない (4) 他の欄・display・doctor・tracked の面の断り・既存の host_device_ の歯は不変で GREEN 歯: lib の host_device_display_env_ の (a) round-trip と (b) 断りの 2 形"
+done = "(1) device.rs の KEYS の末尾に display-env（閉じた 8 つ・必須は不変）・Device が KEY と VALUE の組の列を持ち宣言順で返す読み口がある（無い行は空） (2) env_pairs が欄の名を引数に取り ime-env と display-env の両方が呼び、断りの文は <欄> の要素 … が KEY=VALUE の形でない（…）と <欄> の KEY … が重複する の 2 形でその欄の行番号に 1 件ずつ・ime-env の断りの文は不変 (3) display と display-env を両方持つ行は display-env の行番号で「display と display-env は同じ行に書けない（DISPLAY は display-env に書く）」の 1 件で断り、display-env の無い行の display は不変 (4) 他の欄・display・doctor・tracked の面の断り・既存の host_device_ の歯は不変で GREEN 歯: lib の host_device_display_env_ の (a) round-trip と (b) 断りの 2 形と (c) 両方の欄の断り"
 <!-- contracts:end -->

@@ -505,9 +505,9 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 <header data-component="doc-cover-band">
 <p class="cover-eyebrow"><span class="doc-type">設計判断記録 (ADR)</span> <span>scribe2 — 端末の表の画面の env</span></p>
 <h1>端末の表の行は画面の env の欄 display-env を持てる — Wayland の端末は画面の番号 1 つでは表せないので、 KEY=VALUE の列を IME の env と同じ検査で受ける (ADR-0076 の閉じた 7 つの key を部分 supersede)</h1>
-<p class="cover-sub">ADR-0076 は host の面に端末の表を足し、 画面は「画面の番号」の 1 値で宣言すると決めた。 これは X の画面しか表せず、 Wayland の端末は 2 つの環境変数の組が要る。 本 ADR は端末の表の行に任意の欄 display-env (KEY=VALUE の列) を足し、 IME の env と同じ 1 つの検査で受ける。</p>
-<div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">この記録で「器」は scribe2 の本体、 「host の面」は machine ごとの宣言を持つ file (host.toml)、 「端末の表」は持ち主の端末 1 つにつき 1 行の一覧です。 端末の表は画面を「画面の番号」の 1 つの値で宣言しますが、 これは X の画面しか表せません。 Wayland の画面の端末は、 窓を開くのに環境変数 2 つの組が要ります。 本 ADR は端末の表の行に任意の欄 display-env (KEY=VALUE の列) を足し、 日本語入力の設定の欄と同じ検査で受けます。</p></div></div>
-<div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">accepted</span></span><span class="m"><span class="k">選択肢</span><span class="v">5件 (OPT1–OPT5)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 3 / トレードオフ 3</span></span><span class="m"><span class="k">版</span><span class="v">v0.1.0 / 2026-09-28</span></span></div>
+<p class="cover-sub">ADR-0076 は host の面に端末の表を足し、 画面は「画面の番号」の 1 値で宣言すると決めた。 これは X の画面しか表せず、 Wayland の端末は 2 つの環境変数の組が要る。 本 ADR は端末の表の行に任意の欄 display-env (KEY=VALUE の列) を足し、 IME の env と同じ検査で受け、 画面の番号の欄と同じ行には書けないようにする。</p>
+<div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">この記録で「器」は scribe2 の本体、 「host の面」は machine ごとの宣言を持つ file (host.toml)、 「端末の表」は持ち主の端末 1 つにつき 1 行の一覧です。 端末の表は画面を「画面の番号」の 1 つの値で宣言しますが、 これは X の画面しか表せません。 Wayland の画面の端末は、 窓を開くのに環境変数 2 つの組が要ります。 本 ADR は端末の表の行に任意の欄 display-env (KEY=VALUE の列) を足し、 日本語入力の設定の欄と同じ検査で受け、 画面の番号の欄と同じ行には書けないようにします (要件 FR57 を支え、 ADR-0076 の閉じた 7 つの key を 8 つに改めます)。</p></div></div>
+<div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">accepted</span></span><span class="m"><span class="k">選択肢</span><span class="v">6件 (OPT1–OPT6)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 3 / トレードオフ 3</span></span><span class="m"><span class="k">版</span><span class="v">v0.1.0 / 2026-09-28</span></span></div>
 <div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>FR57</b></div>
 <div data-component="approval-block">
 <div class="sign"><span class="role">裁定 (user)</span><span class="who">user</span><span class="when">裁定 id user 2026-09-28T00:54Z (決めてほしいことは推奨で進める、 の常設の指示。 本 ADR の推奨 = 任意の欄 display-env は台帳の memo に書いた推奨のまま)。 逐語は台帳にだけ在る</span><span class="stamp self">裁定済</span></div>
@@ -522,9 +522,9 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 <div data-component="adr-context-list">
 <div data-component="adr-context-row"><span class="cxid">CTX1</span><div class="cxbody"><p class="cxh">経緯 — 端末の表<span class="term" data-component="plain-language-term-inline" data-term="端末の表">持ち主の端末の一覧</span>の key は閉じた 7 つで、 画面は番号の 1 値 (ADR-0076)</p><p class="cxd">ADR-0076 は host の面<span class="term" data-component="plain-language-term-inline" data-term="host の面">machine ごとの宣言</span> (host.toml) に端末の表を足し、 行の key を閉じた 7 つにした。 必須は名・ssh の宛先・Chrome の path・OS、 任意は画面の番号・IME の env (KEY=VALUE の文字列の列)・専用の profile の dir である。 読み手は未知の key を行番号つきで断る。 器は値を検査するだけで使わず、 表示面を持つ隣の project の席が値を読んで、 端末の Chrome を ssh 経由で起こす。</p></div></div>
 <div data-component="adr-context-row"><span class="cxid">CTX2</span><div class="cxbody"><p class="cxh">事象 — Wayland<span class="term" data-component="plain-language-term-inline" data-term="Wayland">新しい型の画面の仕組み</span> の端末は環境変数 2 つの組が要る</p><p class="cxd">隣の project が 2026-09-25 に試した端末は Wayland の画面で、 窓を開くのに WAYLAND_DISPLAY と XDG_RUNTIME_DIR の両方が要った。 画面の番号<span class="term" data-component="plain-language-term-inline" data-term="画面の番号">X の画面の番号</span>の欄は 1 つの値で、 X の画面の DISPLAY しか表せない。 隣の project の表示面の最初の実物の端末がこの Wayland の端末なので、 その端末の宣言は本 ADR の着地を待っている。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX3</span><div class="cxbody"><p class="cxh">機序 — IME の env<span class="term" data-component="plain-language-term-inline" data-term="IME の env">日本語入力の設定</span> の欄は既に KEY=VALUE の列の形の検査を持つ</p><p class="cxd">IME の env の欄は KEY=VALUE の文字列の列で、 読み手は 1 つの関数で各要素を最初の = で割り、 KEY の字種 (英大文字と数字と下線で先頭は数字でない)・VALUE が空でないこと・KEY の重複を行番号つきで 1 件ずつ断る。 同じ形の欄を足すなら、 この関数を欄の名だけ変えて呼べる。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX3</span><div class="cxbody"><p class="cxh">機序 — IME の env<span class="term" data-component="plain-language-term-inline" data-term="IME の env">日本語入力の設定</span> の欄は既に KEY=VALUE の列の形の検査を持つ</p><p class="cxd">IME の env の欄は KEY=VALUE の文字列の列で、 読み手は 1 つの関数で各要素を最初の = で割り、 KEY の字種 (英大文字と数字と下線で先頭は数字でない)・VALUE が空でないこと・KEY の重複を行番号つきで 1 件ずつ断る。 断りの文は欄の名 ime-env を字面に持つので、 同じ形の欄を足すなら、 この関数に欄の名の引数を足して両方の欄から呼べる。</p></div></div>
 <div data-component="adr-context-row"><span class="cxid">CTX4</span><div class="cxbody"><p class="cxh">憲法と既存の決定の向き (本 ADR の解釈)</p><p class="cxd">N3 (host 固有の値で code を分岐させない) から、 画面の env<span class="term" data-component="plain-language-term-inline" data-term="画面の env">画面を開くための環境変数</span> も code に焼かず宣言にする。 N2 (散文にしか無い規則は規則として扱わない) から、 画面の番号の値の形で X と Wayland を読み分ける規則は宣言の形に無いので採らない。 C2 (同じ事実の読みは 1 本) から、 KEY=VALUE の列の検査は IME の env と共有する。 C17 (決定はしご) から、 既に在る検査の関数と表の読み手で足り、 口を足さない。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX5</span><div class="cxbody"><p class="cxh">射程 — 動かすのは端末の表の key の列と、 KEY=VALUE の検査の欄の名だけ</p><p class="cxd">動かすのは (1) 端末の表の行が受ける key に任意の display-env を 1 つ足すこと (閉じた 8 つ)、 (2) KEY=VALUE の列の検査の関数が断りの文に欄の名を載せること (IME の env の断りの文は 1 字も変えない) だけである。 動かさないのは、 画面の番号の欄 (跨版で保つ)・他の欄の形と検査・doctor の行 (名の列だけ)・表を host の面にだけ置く決まり・器が値を使わないこと・要件書である。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX5</span><div class="cxbody"><p class="cxh">射程 — 動かすのは端末の表の key の列と、 KEY=VALUE の検査の欄の名だけ</p><p class="cxd">動かすのは (1) 端末の表の行が受ける key に任意の display-env を 1 つ足すこと (閉じた 8 つ)、 (2) KEY=VALUE の列の検査の関数が断りの文に欄の名を載せること (IME の env の断りの文は 1 字も変えない)、 (3) 画面の番号の欄と display-env を同じ行に書いた行を断ること だけである。 動かさないのは、 画面の番号の欄 (display-env を持たない行では跨版で保つ)・他の欄の形と検査・doctor の行 (名の列だけ)・表を host の面にだけ置く決まり・器が値を使わないこと・要件書である。</p></div></div>
 </div>
 </div>
 <section data-component="chapter-deck-band" class="tint-brand"><span class="num">02</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v18"/><path d="M5 7l-3 6h6z"/><path d="M19 7l-3 6h6z"/><path d="M3 21h18"/></svg> 判断を縛る力 / 評価の軸</span><h2>選択肢を測るものさし (安全・速さ)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-02">この判断を評価する 4 本のものさしです。 Wayland の端末を宣言で表せること。 1 つの欄に 1 つの意味だけを持たせること。 既存の host の面を壊さないこと。 足すものを最小にすること。</p></section>
@@ -536,20 +536,21 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 <tr data-component="adr-driver-row"><td class="drid">DR4</td><td>足すものを最小にする — 既に在る検査の関数を使い、 口を増やさない (C2・C17) <span class="drg">CTX3・CTX4</span></td></tr>
 </tbody></table>
 </div>
-<section data-component="chapter-deck-band" class="tint-violet"><span class="num">03</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5"/></svg> 検討した選択肢 / 3 つの確定方式</span><h2>それぞれの利点と欠点を並べる</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-03">候補を 5 つ並べます。 画面の env の欄を足して日本語入力の設定と同じ検査で受ける案 (選んだ案)、 日本語入力の設定の欄に画面の変数も書く案、 画面の番号の値の形で読み分ける案、 画面の番号の欄を列に変える案、 汎用の env の欄 1 つにまとめる案です。</p></section>
+<section data-component="chapter-deck-band" class="tint-violet"><span class="num">03</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5"/></svg> 検討した選択肢 / 3 つの確定方式</span><h2>それぞれの利点と欠点を並べる</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-03">候補を 6 つ並べます。 画面の env の欄を足して日本語入力の設定と同じ検査で受け、 画面の番号の欄と同じ行には書けなくする案 (選んだ案)、 日本語入力の設定の欄に画面の変数も書く案、 画面の番号の値の形で読み分ける案、 画面の番号の欄を列に変える案、 汎用の env の欄 1 つにまとめる案、 両方の欄を許して読み順を決める案です。</p></section>
 <div class="chapbody">
 <div class="opt-grid">
 <div data-component="adr-option-card" class="chosen">
 <div class="opt-head"><span class="opt-id">OPT1</span><span class="opt-name">任意の欄 display-env (KEY=VALUE の列) を足し、 IME の env と同じ検査で受ける</span><span class="opt-verdict chosen">採用</span></div>
-<p class="opt-sum">端末の表の行に任意の欄 display-env を足す。 値は KEY=VALUE の文字列の列で、 IME の env と同じ 1 つの関数で形を検査し、 断りの文には欄の名を載せる。 画面の番号の欄は跨版で保ち、 両方を持つ行は消費側が display-env を使う。 決め手は台帳の memo の推奨 (常設の裁定 2026-09-28T00:54Z)。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT1">端末の表の行に、 画面を開くための環境変数の組を書く欄 display-env を足す案です。 値は KEY=VALUE の文字列の列で、 日本語入力の設定の欄と同じ関数で形を検査し、 断りの文には欄の名を載せます。 画面の番号の欄は保ち、 両方を書いた行は表示面を持つ側が display-env を使います。 Wayland の端末を 1 行で宣言でき、 欄の意味も混ざりません。 代わりに、 画面の欄が 2 つ書けることと、 変数の名を器が閉じないことを引き受けます。</span>
+<p class="opt-sum">端末の表の行に任意の欄 display-env を足す。 値は KEY=VALUE の文字列の列で、 IME の env と同じ 1 つの関数で形を検査し、 断りの文には欄の名を載せる。 画面の番号の欄は跨版で保ち、 同じ行に画面の番号の欄と display-env を両方書いた行は断る (X の画面の DISPLAY も display-env に書ける)。 決め手は台帳の memo の推奨 (常設の裁定 2026-09-28T00:54Z)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT1">端末の表の行に、 画面を開くための環境変数の組を書く欄 display-env を足す案です。 値は KEY=VALUE の文字列の列で、 日本語入力の設定の欄と同じ関数で形を検査し、 断りの文には欄の名を載せます。 画面の番号の欄は保ちますが、 同じ行に両方を書いた行は断ります (X の画面の DISPLAY も display-env に書けます)。 Wayland の端末を 1 行で宣言でき、 1 つの行の画面の宣言は 1 つの欄だけになります。 代わりに、 画面の番号の行を書き換えるときに古い欄を消す手間と、 変数の名を器が閉じないことを引き受けます。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
 <li>Wayland の端末の WAYLAND_DISPLAY と XDG_RUNTIME_DIR を 1 行の宣言で表せる (DR1)</li>
 <li>画面の env と IME の env が別の欄に分かれ、 欄の意味が混ざらない (DR2)</li>
 <li>画面の番号だけを持つ既存の行はそのまま読める (DR3)</li>
-<li>形の検査は既存の 1 関数を欄の名だけ変えて呼び、 口も rules 行も増えない (DR4)</li>
+<li>1 つの行の画面の宣言は 1 つの欄だけになり、 どちらを使うかの決まりが要らない (DR2)</li>
+<li>形の検査は既存の 1 関数に欄の名の引数を足して両方の欄から呼び、 口も rules 行も増えない (DR4)</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>画面の番号と display-env を両方持つ行が書け、 どちらを使うかは消費側の決まりに頼る</li>
+<li>画面の宣言の欄が 2 つ在り (X だけの端末は画面の番号・それ以外は display-env)、 画面の番号の行を display-env へ書き換えるときは画面の番号の欄を消す手間が出る</li>
 <li>display-env の KEY の集合は閉じない (画面に要る変数の名を器は決めない) ので、 画面と関係の無い変数も書ける</li>
 <li>端末の表の key の列は跨版の約束で、 足すには ADR が要る (本 ADR)</li>
 </ul></div></div>
@@ -557,12 +558,11 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 <div data-component="adr-option-card" class="rejected">
 <div class="opt-head"><span class="opt-id">OPT2</span><span class="opt-name">IME の env の欄に画面の変数も書く</span><span class="opt-verdict rejected">不採用</span></div>
 <p class="opt-sum">IME の env の列に WAYLAND_DISPLAY と XDG_RUNTIME_DIR も並べる。 決め手は分析 (欄の意味が外れる)。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT2">日本語入力の設定の欄に、 画面の変数も並べて書く案です。 器の読み手を変えない点で勝ります。 けれども、 欄の名と中身の意味がずれ、 読み手も表示面を持つ側も意味で分けられません。 画面の番号と画面の変数が別々の欄に割れるので退けました。</span>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT2">日本語入力の設定の欄に、 画面の変数も並べて書く案です。 器の読み手を変えない点で勝ります。 けれども、 欄の名と中身の意味がずれ、 読み手も表示面を持つ側も意味で分けられないので退けました。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
 <li>器の読み手を変えない (DR4)</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
 <li>欄の名が「日本語入力の設定」なのに画面の変数を持ち、 読み手も消費側も意味で分けられない (DR2)</li>
-<li>画面の番号の欄と画面の変数が 2 つの欄に割れる (DR2)</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
@@ -581,7 +581,7 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 <p class="opt-sum">画面の番号の欄の値を文字列から KEY=VALUE の列へ変える。 決め手は分析 (跨版で既存の面が読めなくなる)。</p>
 <span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT4">画面の番号の欄の値を、 1 つの文字列から KEY=VALUE の列に変える案です。 画面の欄が 1 つで済む点で勝ります。 けれども、 画面の番号を文字列で書いた既存の host の面が型の違いで丸ごと読めなくなるので退けました。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>画面の欄が 1 つで済む (DR2)</li>
+<li>画面の宣言の欄が 1 つで済む</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
 <li>画面の番号を文字列で書いた既存の host の面が、 型違いで面ごと読めなくなる (DR3)</li>
 </ul></div></div>
@@ -589,37 +589,47 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 <div data-component="adr-option-card" class="rejected">
 <div class="opt-head"><span class="opt-id">OPT5</span><span class="opt-name">汎用の env の欄 1 つに画面と IME の変数を全部書く</span><span class="opt-verdict rejected">不採用</span></div>
 <p class="opt-sum">端末の表に任意の欄 env を足し、 画面と IME の変数をまとめて持つ。 決め手は分析 (意味が広すぎる)。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT5">端末の表に汎用の env の欄を 1 つ足し、 画面と日本語入力の変数をまとめて書く案です。 次に別の用途の変数が要っても key を足さずに済む点で勝ります。 けれども、 日本語入力の設定の欄と役目が重なり、 何のための変数かを宣言が語らなくなるので退けました。</span>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT5">端末の表に汎用の env の欄を 1 つ足し、 画面と日本語入力の変数をまとめて書く案です。 次に別の用途の変数が要っても key を足さずに済む点で勝ります。 けれども、 日本語入力の設定の欄と役目が重なり、 1 つの欄が画面と日本語入力の 2 つの意味を持つので退けました。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
 <li>次に別の用途の変数が要っても key を足さずに済む</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>IME の env の欄と重なり、 どちらに書くかの決まりが要る (DR2)</li>
-<li>何のための変数かを宣言が語らず、 消費側が窓の起こし方ごとに選び分けられない (DR2)</li>
+<li>IME の env の欄と役目が重なり、 1 つの欄が画面と日本語入力の 2 つの意味を持つ (DR2)</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT6</span><span class="opt-name">両方の欄を許し、 両方在る行は消費側が display-env を使う</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">画面の番号の欄と display-env を同じ行に書いても断らず、 両方在る行は消費側が display-env を先に使う。 決め手は分析 (読み順が散文にしか無い規則になる)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT6">画面の番号の欄と display-env を同じ行に書くのを許し、 両方在る行は表示面を持つ側が display-env を先に使う案です。 画面の番号の行に display-env を足すだけで移れる点で勝ります。 けれども、 どちらを使うかの順が宣言の形に無く文章にしか残らないうえ、 値の読み方は表示面を持つ側の領分で、 前の記録 (ADR-0076) が決めなかったところに踏み込むので退けました。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>画面の番号の行に display-env を足すだけで移れ、 画面の番号の欄を消す手間が無い (DR3)</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>どちらを使うかの読み順は宣言の形に無く、 器も強めず、 散文にしか無い規則になる (N2・DR2)</li>
+<li>読み順を決めるのは消費側の領分で、 ADR-0076 が決めなかった値の読み方に踏み込む (DR2)</li>
 </ul></div></div>
 </div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの方式を選ぶか</span><h2>選んだ方式と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、 それが要件書のどの要件を支えるかを示します。 端末の表の行は任意の欄 display-env を持て、 key の列は閉じた 8 つになります。 形の検査は日本語入力の設定と同じ 1 つの関数で行い、 画面の番号の欄は保ちます。</p></section>
+<section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの方式を選ぶか</span><h2>選んだ方式と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、 それが要件書のどの要件を支えるかを示します。 端末の表の行は任意の欄 display-env を持て、 key の列は閉じた 8 つになります。 形の検査は日本語入力の設定と同じ 1 つの関数で行い、 画面の番号の欄は保ちますが、 同じ行に両方は書けません。</p></section>
 <div class="chapbody">
 <div data-component="adr-decision-panel" id="decision">
 <p class="dec-kick">採用 — OPT1</p>
-<p class="dec-state">端末の表の行 SHALL 任意の欄 display-env を持てる。 値は KEY=VALUE の文字列の配列で、 KEY は英大文字と数字と下線で先頭は数字でない・最初の = で割り VALUE は空でない・同じ KEY は重複しない (IME の env と同じ形)。 行の key の列 SHALL 閉じた 8 つ (必須の name・ssh・chrome・os と任意の display・ime-env・profile-dir・display-env) とし、 読み手は未知の key を今どおり行番号つきで断る。 KEY=VALUE の列の検査 SHALL IME の env と同じ 1 つの関数で行い、 断りの文は欄の名を名指して、 その欄の行番号で 1 件ずつ出す (IME の env の断りの文は変えない)。 画面の番号の欄 display SHALL 跨版で保ち、 display と display-env を両方持つ行も断らない (両方在る行は消費側が display-env を使う・器は値を使わない)。 doctor の host の行・表を host の面にだけ置く決まり・他の欄の形と検査・要件書は変えない。</p>
-<span class="dec-plain" data-prose-slot="plain" data-slot-id="decision-plain">端末の表の行は、 任意の欄 display-env を持てます。 値は KEY=VALUE の文字列の列で、 KEY は英大文字と数字と下線 (先頭は数字でない)、 最初の = で割って VALUE は空でなく、 同じ KEY は重ねません。 行の key は閉じた 8 つになり、 未知の key は今どおり行番号つきで断ります。 形の検査は日本語入力の設定と同じ 1 つの関数で行い、 断りの文は欄の名と行番号を名指します (日本語入力の設定の断りの文は変えません)。 画面の番号の欄は保ち、 両方を持つ行も断りません。 doctor の行・表を host の面にだけ置く決まり・他の欄・要件書は変えません。</span>
-<span class="dec-why" data-prose-slot="rationale" data-slot-id="decision-rationale">Wayland の端末は、 窓を開くのに画面の名と実行時の dir の 2 つの環境変数が要り、 画面の番号の 1 つの値では表せません。 表示面を持つ隣の project の最初の実物の端末がこの形なので、 宣言の形を足す必要があります。 日本語入力の設定の欄が既に KEY=VALUE の列を同じ形で検査しているので、 その関数を欄の名だけ変えて呼べば、 口も rules 行も増えません。 値の形で読み分ける決まりは文章にしか残らず、 欄を列に変えると既存の面が読めなくなるので、 別の欄として足しました。 台帳の memo のこの推奨は、 決めることを推奨で進める持ち主の常設の指示に沿います。</span>
+<p class="dec-state">端末の表の行 SHALL 任意の欄 display-env を持てる。 値は KEY=VALUE の文字列の配列で、 KEY は英大文字と数字と下線で先頭は数字でない・最初の = で割り VALUE は空でない・同じ KEY は重複しない (IME の env と同じ形)。 行の key の列 SHALL 閉じた 8 つ (必須の name・ssh・chrome・os と任意の display・ime-env・profile-dir・display-env) とし、 読み手は未知の key を今どおり行番号つきで断る。 KEY=VALUE の列の検査 SHALL IME の env と同じ 1 つの関数で行い、 断りの文は欄の名を名指して、 その欄の行番号で 1 件ずつ出す (IME の env の断りの文は変えない)。 画面の番号の欄 display SHALL display-env を持たない行では跨版で保ち、 display と display-env を両方持つ行 SHALL display-env の行番号で 1 件断る (X の画面の DISPLAY も display-env に書ける)。 器 SHALL 値を使わない。 doctor の host の行・表を host の面にだけ置く決まり・他の欄の形と検査・要件書は変えない。</p>
+<span class="dec-plain" data-prose-slot="plain" data-slot-id="decision-plain">端末の表の行は、 任意の欄 display-env を持てます。 値は KEY=VALUE の文字列の列で、 KEY は英大文字と数字と下線 (先頭は数字でない)、 最初の = で割って VALUE は空でなく、 同じ KEY は重ねません。 行の key は閉じた 8 つになり、 未知の key は今どおり行番号つきで断ります。 形の検査は日本語入力の設定と同じ 1 つの関数で行い、 断りの文は欄の名と行番号を名指します (日本語入力の設定の断りの文は変えません)。 画面の番号の欄は display-env を持たない行では保ち、 両方を持つ行は display-env の行番号で断ります (X の画面の DISPLAY も display-env に書けます)。 器は値を使いません。 doctor の行・表を host の面にだけ置く決まり・他の欄・要件書は変えません。</span>
+<span class="dec-why" data-prose-slot="rationale" data-slot-id="decision-rationale">Wayland の端末は、 窓を開くのに画面の名と実行時の dir の 2 つの環境変数が要り、 画面の番号の 1 つの値では表せません。 表示面を持つ隣の project の最初の実物の端末がこの形なので、 宣言の形を足す必要があります。 日本語入力の設定の欄が既に KEY=VALUE の列を同じ形で検査しているので、 その関数に欄の名の引数を足して両方の欄から呼べば、 口も rules 行も増えません。 日本語入力の設定の欄や汎用の env の欄に混ぜると 1 つの欄が 2 つの意味を持ち、 値の形で読み分ける決まりは文章にしか残らず、 欄を列に変えると既存の面が読めなくなるので、 画面の env は専用の欄として足しました。 両方の欄を同じ行に許すと、 どちらを使うかの順が文章にしか残らないので、 両方を持つ行は断ります。 台帳の memo のこの推奨は、 決めることを推奨で進める持ち主の常設の指示に沿います。</span>
 <div class="justify-box"><p class="jh">この判断が正当化する要件 (cross-doc 照会 → SRS-SCRIBE2-MVP)</p>
 <div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR57" data-justifies-req="FR57" data-justifies-role="claim">FR57</a><span class="justify-role">claim</span><span class="justify-note">FR57 (host 固有の宣言値は host の面 1 file だけから読み、 tracked の manifest と同じ読み手と同じ断り方で検査する) の宣言値のうち端末の表の欄を 1 つ足し、 同じ読み手と同じ断り方で検査すると主張する。</span></div>
 <p class="justify-tgt">照会先: SRS-SCRIBE2-MVP — SRS: 設計 → 契約 → 実装 → 検証 → land を、 人の手を借りずに 1 本通す器（MVP）</p>
 </div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-warn"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> 結果 / 良い面とトレードオフ</span><h2>この判断で何が良くなり、 何を引き受けるか</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">この判断で良くなること 3 つと、 代わりに引き受けること 3 つです。 良くなるのは、 Wayland の端末を宣言でき、 欄の意味が混ざらず、 既存の行がそのまま読めることです。 引き受けるのは、 画面の欄が 2 つ書けること、 変数の名を器が閉じないこと、 key の列が跨版の約束になることです。</p></section>
+<section data-component="chapter-deck-band" class="tint-warn"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> 結果 / 良い面とトレードオフ</span><h2>この判断で何が良くなり、 何を引き受けるか</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">この判断で良くなること 3 つと、 代わりに引き受けること 3 つです。 良くなるのは、 Wayland の端末を宣言でき、 欄の意味が混ざらず、 既存の行がそのまま読めることです。 引き受けるのは、 画面の番号の行を書き換えるときに古い欄を消す手間、 変数の名を器が閉じないこと、 key の列が跨版の約束になることです。</p></section>
 <div class="chapbody">
 <div data-component="scope-summary-panel"><div class="scol in"><h3>✓ 良い結果</h3><ul>
 <li data-component="adr-consequence-pos"><span class="b">●</span>Wayland の端末の画面の変数を host の面に宣言でき、 隣の project の表示面が席の手で値を持たずに端末を起こせる</li>
 <li data-component="adr-consequence-pos"><span class="b">●</span>画面の変数と日本語入力の変数が別の欄に分かれ、 どちらの欄の書き損じも欄の名と行番号つきで名指される</li>
 <li data-component="adr-consequence-pos"><span class="b">●</span>画面の番号だけを持つ既存の行はそのまま読め、 器に口も rules 行も増えない</li>
 </ul></div><div class="scol out"><h3>⚖ トレードオフ・代償</h3><ul>
-<li data-component="adr-consequence-neg"><span class="b">●</span>画面の番号と display-env を両方持つ行が書け、 どちらを使うかは消費側の決まり (display-env を先に使う) に頼る</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>画面の番号の欄を持つ行を Wayland の端末へ書き換えるときは、 画面の番号の欄を消して DISPLAY を含む変数を display-env へ移す手間が出る</li>
 <li data-component="adr-consequence-neg"><span class="b">●</span>display-env の KEY の名は閉じず、 画面と関係の無い変数を書いても器は断らない</li>
 <li data-component="adr-consequence-neg"><span class="b">●</span>端末の表の key の列は閉じた 8 つの跨版の約束になり、 また足すときは新しい ADR が要る</li>
 </ul></div></div>
@@ -630,20 +640,20 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 <p class="ss-row"><span class="ss-k">改訂状態</span>current</p>
 <p class="ss-row"><span class="ss-k">置き換える ADR</span>ADR-0076</p>
 <p class="ss-row"><span class="ss-k">置き換えられた</span>なし (現行)</p>
-<p class="ss-row">部分 supersede で、 置き換えるのは 1 条 — ADR-0076 の「端末の表の行の key は閉じた 7 つ (任意の欄は display・ime-env・profile-dir)」を「閉じた 8 つ (任意の欄に display-env を足す)」に改める。 ADR-0076 のそれ以外 (表を host の面にだけ置く・読み手の断り方・doctor の名の列・器は値を使わない・画面の番号の欄の形) はそのまま保つ。</p>
+<p class="ss-row">部分 supersede で、 置き換えるのは 1 条 — ADR-0076 の「端末の表の行の key は閉じた 7 つ (任意の欄は display・ime-env・profile-dir)」を「閉じた 8 つ (任意の欄に display-env を足し、 display と display-env は同じ行に書けない)」に改める。 ADR-0076 のそれ以外 (表を host の面にだけ置く・読み手の断り方・doctor の名の列・器は値を使わず消費側の読み方を決めない・画面の番号の欄の形) はそのまま保つ。</p>
 </div>
 <div data-component="adr-principle">
 <p class="prin-id">照会終端 — PRIN-ONE-FIELD-ONE-MEANING</p>
 <p class="prin-text">1 つの欄には 1 つの意味だけを持たせ、 値の形で意味を読み分けない。</p>
-<p class="prin-note">本 ADR が「IME の env に混ぜる」「画面の番号の値の形で読み分ける」「汎用の env の欄」を退け、 画面の env を別の欄として同じ検査で受けたのはこの原則に行き着く (これ以上は遡らない照会終端)。</p>
+<p class="prin-note">本 ADR が「IME の env に混ぜる」「画面の番号の値の形で読み分ける」「汎用の env の欄」「両方の欄を許して読み順を決める」を退け、 画面の env を別の欄として同じ検査で受け、 1 つの行の画面の宣言を 1 つの欄に限ったのはこの原則に行き着く (これ以上は遡らない照会終端)。</p>
 </div>
 </div>
 <section data-component="chapter-deck-band" class="tint-brand"><span class="num">07</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg> 用語集 / この文書で使う専門語</span><h2>本文に出てくる専門語のやさしい説明</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-07">本文に出てくる専門語 6 個を、 やさしい言葉で説明します。</p></section>
 <div class="chapbody">
 <div data-component="glossary-term-table">
-<div class="grow"><div class="gword">端末の表<span class="en">device table</span></div><div class="gdef">host の面の表で、 端末 1 つにつき 1 行 (ADR-0076)。 必須の欄は名・ssh の宛先・Chrome の path・OS、 任意の欄は画面の番号・IME の env・専用の profile の dir と、 本 ADR の画面の env。 器は形を検査するだけで値を使わない。</div></div>
-<div class="grow"><div class="gword">画面の env<span class="en">display env</span></div><div class="gdef">端末の上で Chrome の窓を画面に出すための環境変数の組 (例: Wayland の WAYLAND_DISPLAY と XDG_RUNTIME_DIR)。 端末の表の欄 display-env が KEY=VALUE の文字列の列で持つ。</div></div>
-<div class="grow"><div class="gword">画面の番号<span class="en">display</span></div><div class="gdef">端末の表の任意の欄 display の値 (例: :0)。 X の画面の DISPLAY を表す 1 つの値で、 Wayland の画面は表せない。 本 ADR で跨版で保つ。</div></div>
+<div class="grow"><div class="gword">端末の表<span class="en">device table</span></div><div class="gdef">host の面の表で、 端末 1 つにつき 1 行 (ADR-0076)。 必須の欄は名・ssh の宛先・Chrome の path・OS、 任意の欄は画面の番号・IME の env・専用の profile の dir と、 本 ADR の画面の env (画面の番号とは同じ行に書けない)。 器は形を検査するだけで値を使わない。</div></div>
+<div class="grow"><div class="gword">画面の env<span class="en">display env</span></div><div class="gdef">端末の上で Chrome の窓を画面に出すための環境変数の組 (例: Wayland の WAYLAND_DISPLAY と XDG_RUNTIME_DIR)。 端末の表の欄 display-env が KEY=VALUE の文字列の列で持ち、 X の画面の DISPLAY も書ける。 画面の番号の欄と同じ行には書けない。</div></div>
+<div class="grow"><div class="gword">画面の番号<span class="en">display</span></div><div class="gdef">端末の表の任意の欄 display の値 (例: :0)。 X の画面の DISPLAY を表す 1 つの値で、 Wayland の画面は表せない。 本 ADR で display-env を持たない行では跨版で保つ。</div></div>
 <div class="grow"><div class="gword">IME の env<span class="en">IME env</span></div><div class="gdef">日本語入力を Chrome の窓で効かせるための環境変数の組。 端末の表の欄 ime-env が KEY=VALUE の文字列の列で持ち、 本 ADR の画面の env と同じ 1 つの関数で形を検査する。</div></div>
 <div class="grow"><div class="gword">Wayland<span class="en">Wayland</span></div><div class="gdef">Linux の画面の仕組みの 1 つで、 X の後継。 窓を開くには画面の名 (WAYLAND_DISPLAY) と実行時の dir (XDG_RUNTIME_DIR) の組が要り、 X の画面の番号 1 つでは足りない。</div></div>
 <div class="grow"><div class="gword">host の面<span class="en">host face</span></div><div class="gdef">state dir の host.toml。 host 固有の宣言値 (口座・plugin の場所・起動引数・群・tick の unit・端末) を持ち、 tracked の manifest と同じ読み手で検査される (FR57・ADR-0026)。</div></div>
@@ -652,7 +662,7 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 </div>
 <footer class="foot" data-component="fidelity-sync-meta"><div class="ft-grid">
 <div class="ft-plain">このページは、大もとの機械データ (正本) から自動で組み立てられています。構造は機械が自動で検査し、内容が元データに忠実かは独立のレビューで確かめます。</div>
-<div data-audience="machine">機械SSoT: <b>ADR-0080-device-rows-carry-display-env.adr.yaml</b> &middot; 生成: <b>2026-09-28 03:23</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
+<div data-audience="machine">機械SSoT: <b>ADR-0080-device-rows-carry-display-env.adr.yaml</b> &middot; 生成: <b>2026-09-28 03:36</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
 <div class="tags" data-audience="machine"><span>folio design system</span><span>ADR-pack</span><span>folio engine B1 (instance#2)</span><span>cross-doc 照会</span></div>
 </div></footer>
 <!-- folio:chrome-bottom -->
