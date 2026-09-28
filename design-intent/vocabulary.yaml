@@ -136,13 +136,13 @@ terms:
     relationships: [manifest, 裁定 id, 検出線]
   - canonical: 裁定 id
     domain: consumer
-    definition: user 裁定を一意に指す id。 閉じた 3 形 (器の口 seat ruling bind が発行する問い id の形・消費側の台帳が自分の経路で書く batch:… と policy:… で始まる形) を持ち、 台帳の問いの notes の裁定の行が持つ (SRS FR82・ADR-0083)。 追跡された file の引用はこの 3 形で数え (問い id の形は問いの部分が repo の台帳の接頭辞で始まるものだけ・batch:… と policy:… の形と opt-in の線の後の時刻の形は vessel 宣言の ruling-fixtures の一覧に同じ字面が在れば数えない)、 batch:… と policy:… の形は台帳の裁定の行の裁定 id の欄か束の欄に解け、 opt-in の線より前の時刻の形 (user と UTC の分・ADR-0037 の裁定 event の ts) は数えるだけにする (SRS FR83・ADR-0083)。 rules 行の変更 (C5)、 閾値変更 (A2)、 憲法改訂 (N4) が要求する。 裁定面の記帳 id とは別。
-    relationships: [rules 行, 対話面, 承認 event, 裁定 event, 裁定の行, 問い id の形, 時刻の形, opt-in の線, 判断の欄]
+    definition: user 裁定を一意に指す id。 閉じた 3 形 (器の口 (seat ruling bind と答えの口) が発行する問い id の形・消費側の台帳が自分の経路で書く batch:… と policy:… で始まる形) を持ち、 台帳の問いの notes の裁定の行が持つ (SRS FR82・ADR-0083・ADR-0087)。 追跡された file の引用はこの 3 形で数え (問い id の形は問いの部分が repo の台帳の接頭辞で始まるものだけ・batch:… と policy:… の形と opt-in の線の後の時刻の形は vessel 宣言の ruling-fixtures の一覧に同じ字面が在れば数えない)、 batch:… と policy:… の形は台帳の裁定の行の裁定 id の欄か束の欄に解け、 opt-in の線より前の時刻の形 (user と UTC の分・ADR-0037 の裁定 event の ts) は数えるだけにする (SRS FR83・ADR-0083)。 rules 行の変更 (C5)、 閾値変更 (A2)、 憲法改訂 (N4) が要求する。 裁定面の記帳 id とは別。
+    relationships: [rules 行, 対話面, 承認 event, 裁定 event, 裁定の行, 問い id の形, 時刻の形, opt-in の線, 判断の欄, 答えの口]
   - canonical: 裁定 event
     domain: consumer
     aliases: [RulingReceived]
-    definition: 器の口 seat ruling bind が台帳の問いと発話 event を結んだときに 1 件記帳する event の kind (actor = human・SRS FR82・ADR-0083)。 席が逐語を打って記帳する口 (ADR-0037 の seat ruling add) は持たない (ADR-0083 が ADR-0037 を部分 supersede)。 便の不可逆操作の承認 (承認 event・ApprovalReceived) とは別の kind で、 到達点の計測では承認と同じ側に数える (SRS FR22)。
-    relationships: [裁定 id, 承認 event, 発話 event, 裁定の行, 台帳の問い, 対話面, rules 行]
+    definition: 器の口 seat ruling bind か答えの口が台帳の問いと発話 event を結んだときに 1 件記帳する event の kind (actor = human・欄は SRS FR82・機械の key の名の正本は ADR-0087・ADR-0083)。 席の道具の呼び出しが逐語を渡して記帳する口 (ADR-0037 の seat ruling add) は持たない (ADR-0083 が ADR-0037 を部分 supersede・ADR-0087)。 便の不可逆操作の承認 (承認 event・ApprovalReceived) とは別の kind で、 到達点の計測では承認と同じ側に発話の経路ごとに数える (SRS FR22)。
+    relationships: [裁定 id, 承認 event, 発話 event, 裁定の行, 台帳の問い, 対話面, rules 行, 答えの口, 発話の経路, asked]
   - canonical: RuleKind
     domain: consumer
     definition: 規則の種類を閉じた列挙で表す enum。 網羅 match 必須で、 未実装は compile error (C1)。
@@ -222,7 +222,8 @@ terms:
     domain: consumer
     definition: 本 repo 以外で器の plugin (hook の配線) と binary を積む project とその worktree (SRS FR61)。 母集団は口座の設定 dir の install 帳簿と席の登録 row の anchor から導く。 帳簿と cache は読むだけで書かない (ADR-0028 §2.3)。
     forbidden: [consumer project, 利用側 repo]
-    relationships: [doctor, 読み込み元, build 元 commit, 席の登録]
+    relationships: [doctor, 読み込み元, build 元 commit, 席の登録, install 帳簿, plugin の読み込み元, anchor]
+    flagged_ambiguities: [folio の domain tag consumer は語彙の所有者の印であって導入先ではない]
   - canonical: build 元 commit
     domain: consumer
     definition: binary が build 時に焼いた source の HEAD の sha (12 桁・tracked の変更が在れば +dirty・測れなければ unknown)。 --version と doctor が名乗り、 SessionStart の記録と doctor の導入先の行が比べる (SRS FR61・ADR-0028 §2.1)。
@@ -258,8 +259,9 @@ terms:
     relationships: [orchestrator, 対話面, 席]
   - canonical: 対話面
     domain: consumer
-    definition: user と機械が承認や裁定をやり取りする面。 ちょうど 1 つ (C7)。 どの席かは rules 行 R-C7-1 の値で決まり、 値は役割 orchestrator の登録 row を持つ席 (ADR-0022 §2.5・ADR-0045)。 承認・回答・go の記帳はその席からだけ受理される。
-    relationships: [orchestrator, 開発 session, 承認 event, rules 行]
+    definition: user と機械が承認をやり取りする面。 ちょうど 1 つ (C7)。 どの席かは rules 行 R-C7-1 の値で決まり、 値は役割 orchestrator の登録 row を持つ席 (ADR-0022 §2.5・ADR-0045)。 承認・回答・go の記帳はその席からだけ受理される。 台帳の問いへの裁定は、 対話の session の発話 event か、 裁定面が答えの口へ渡した発話 event と結んで受ける (SRS FR82・ADR-0087)。
+    relationships: [orchestrator, 開発 session, 承認 event, rules 行, 裁定面, 答えの口, 発話の経路]
+    flagged_ambiguities: [対話面 (承認を受けるただ 1 つの面・C7) と裁定面 (消費側の画面・答えの口で台帳の問いへの答えだけを渡し承認 event を書かない・ADR-0087) は別の面]
   - canonical: relay 印
     domain: consumer
     definition: 改訂前の憲法 (C7・A1) で planner が user の承認を機械へ伝えていた印。 ADR-0003 以後、 承認の記帳は承認 event が担う (歴史的な語)。
@@ -504,8 +506,8 @@ terms:
     relationships: [管理 tick, 席, 打刻の合図, 開発 session]
   - canonical: 管理 tick
     domain: consumer
-    definition: 開発 session が黙っていないかを周期で見て、 条件が揃ったときだけ続きを促す打刻の合図を 1 行注入する仕組み (SRS FR27・ADR-0058)。 無変化の席には backoff で合図の間隔を伸ばし、 24 時間で止める。 退避の合図と cycle は ADR-0045 で廃止のまま。 ADR-0066 の後は、 自席の anchor が群に属する周に群の移動の判定を群ごとに鮮度の窓 (fleet.usage_fresh_s) に 1 回まで host の lock の内側で撃ち (lock を取れない周は撃たず今の列へ)、 判定の周だけ計測を起こしてよい (退避と起こし直しは自席の移動の門のまま)。
-    relationships: [開発 session, 打刻の合図, backoff, 変化の digest, tick の unit, 群の移動の判定, 判定の打刻, 移動の門]
+    definition: 開発 session が黙っていないかを周期で見て、 条件が揃ったときだけ続きを促す打刻の合図を 1 行注入する仕組み (SRS FR27・ADR-0058)。 無変化の席には backoff で合図の間隔を伸ばし、 24 時間で止める。 退避の合図と cycle は ADR-0045 で廃止のまま。 ADR-0066 の後は、 自席の anchor が群に属する周に群の移動の判定を群ごとに鮮度の窓 (fleet.usage_fresh_s) に 1 回まで host の lock の内側で撃ち (lock を取れない周は撃たず今の列へ)、 判定の周だけ計測を起こしてよい (退避と起こし直しは自席の移動の門のまま)。 管理 tick の周は局面の出力の部分の書き直しの契機でもある (SRS FR27 / FR90・ADR-0088)。
+    relationships: [開発 session, 打刻の合図, backoff, 変化の digest, tick の unit, 群の移動の判定, 判定の打刻, 移動の門, 局面の出力, alarm]
   - canonical: statusline
     domain: consumer
     definition: 開発 session の画面の下に Claude Code が描く 1 行。 器の口 (seat statusline) が stdin の payload だけから組み、 管理 tick の context 計測が pane から読む入力でもある (SRS FR25 / FR29・ADR-0029 §2.1 / §2.2)。 描く形と読む形は同じ 1 つの規則で、 口座の設定の statusLine は器の口座の口が書く (ADR-0029 §2.3)。
@@ -526,7 +528,7 @@ terms:
   - canonical: 状態の打刻
     domain: consumer
     definition: 席の中で hook が state.jsonl へ append する 1 行 (state / event / ts / sid)。 target は生成 hooks.json の shell 行が渡す pane id から解く (ADR-0015 §2.2)。 無い・読めない・古い周は注入しない (ADR-0015 §2.3)。
-    relationships: [席の状態, hook, 管理 tick]
+    relationships: [席の状態, hook, 管理 tick, turn の終わりの止め]
   - canonical: 席の起こし直し
     domain: consumer
     aliases: [seat relaunch]
@@ -537,6 +539,7 @@ terms:
     aliases: [conversation id, session id, sid]
     definition: claude が 1 つの会話 (session) に付ける id (UUID の形)。 席の hook が状態の打刻の各行に残し、 席の起こし直し (群の段・管理 tick) は最終行の値を起動行の末尾に --resume で運ぶ (ADR-0067・SRS FR38 / FR59)。 器は対話の記録の file を読まず、 形が UUID でない周は運ばない。
     relationships: [状態の打刻, 起動行, 機械の復帰, 移動の門]
+    flagged_ambiguities: [会話 id (claude の session の id) と、 仕分けの 3 つの形の 1 つの会話 (台帳を変えずに仕分け済みにする形・SRS FR88) は別]
   - canonical: 打刻の合図
     domain: consumer
     aliases: [heartbeat]
@@ -723,11 +726,6 @@ terms:
     domain: consumer
     definition: manifest の口座と実測の口座残量から 1 本の純関数が口座を選ぶこと (SRS FR36・ADR-0020 §2.2)。 便用 (使い切る側・7 日窓の reset が最も近い口座から・同点は走行中の便が少ない口座・1 口座あたりの便数で候補を絞らない・ADR-0027 §2.1 / §2.2・1 つ目の鍵は ADR-0042) と session 用 (余裕を残す側) の 2 規則を持ち、 値は rules 行 R-C9-1。
     relationships: [口座, 口座残量, rules 行, 上限停止, 便用の並べ鍵]
-  - canonical: 導入先
-    domain: consumer
-    definition: scribe2 の plugin を install した利用側の repo と worktree（install 帳簿が指す場所）と、 席の登録 row の anchor（SRS FR61）。 folio の語彙 schema の domain tag consumer（scribe2 所有の語の印）とは別物。
-    relationships: [install 帳簿, plugin の読み込み元, doctor, anchor]
-    flagged_ambiguities: [folio の domain tag consumer は語彙の所有者の印であって導入先ではない]
   - canonical: install 帳簿
     domain: consumer
     definition: 開発 session の harness が plugin の install を記録する帳簿（記録 sha・install 先・scope）。 台帳（beads）でも event log でもない外部の記録で、 器は読むだけで書かない（SRS FR61）。
@@ -769,9 +767,9 @@ terms:
   - canonical: 裁定面
     domain: consumer
     aliases: [ruling surface]
-    definition: 消費側の project が持つ、 user が裁定を書き込む画面と server (器の外の置き場)。 器はこの面を持たず、 面が自分の置き場に裁定を書いた後に裁定の指し示しの口を撃つ (ADR-0077)。
-    relationships: [裁定の指し示し, 裁定面の記帳 id, 対話面, 消費側]
-    flagged_ambiguities: [面への書き込みは器の外の置き場への書き込みで、 器の裁定 event・承認 event ではない。 器が承認と裁定を受ける面は対話面 1 つのまま]
+    definition: 消費側の project が持つ、 user が裁定を書き込む画面と server (器の外の置き場)。 器はこの面を持たず、 面が自分の置き場に裁定を書いた後に裁定の指し示しの口を撃つ (ADR-0077)。 台帳の問いへの答えは、 面が器の答えの口を撃って裁定の行と裁定 event (発話の経路は裁定面) にし、 承認 event にはしない (SRS FR82・ADR-0087)。
+    relationships: [裁定の指し示し, 裁定面の記帳 id, 対話面, 消費側, 答えの口, 発話の経路, 裁定 event]
+    flagged_ambiguities: [面への書き込みは器の外の置き場への書き込みで、 器の裁定 event・承認 event ではない。 ただし台帳の問いへの答えを答えの口へ渡した分は器の裁定 event (発話の経路は裁定面) になる (ADR-0087)。 承認 event はどの分も受けず、 器が承認を受ける面は対話面 1 つのまま]
   - canonical: 裁定面の記帳 id
     domain: consumer
     aliases: [記帳 id]
@@ -792,7 +790,7 @@ terms:
     domain: consumer
     aliases: [pipe notify]
     definition: 器の dispatcher が便の終端の周に orchestrator の席の入力欄へ送る 1 行 (落ちた便の段か、 起こした便 0 で候補の在る周の idle)。 形と契機は設計 dispatcher.md §19 / §21 が持ち、 SRS FR44 の差し込みの用途の列の 1 つ。
-    relationships: [便の終端の周, dispatcher, 入力欄の門, 席間の連絡]
+    relationships: [便の終端の周, dispatcher, 入力欄の門, 席間の連絡, 局面の出力, 処置の待ち]
     flagged_ambiguities: [pipeline の設計の段の通知 (段ごとに stderr と record へ残す行) とは別]
   - canonical: 契約表
     domain: consumer
@@ -830,8 +828,8 @@ terms:
     relationships: [台帳, 契約, 設計 pointer, memo の 4 節, memo, 台帳の問い]
   - canonical: memo の 4 節
     domain: consumer
-    definition: memo の本文が必ず持つ 4 つの見出し — 出所 (run id・PR・裁定 id・user 逐語の在り処)・観測 (実測の事実)・候補 (0 個以上・却下も書く)・昇格条件 (要件 id か 要 ADR か 要 裁定・機械が判じる引き金の行を 1 つ以上持つ・SRS FR87)。 欠けは台帳 lint が数える (ADR-0051 §4・SRS FR51)。
-    relationships: [台帳, 4 象限, 引き金, memo]
+    definition: memo の本文が必ず持つ 4 つの見出し — 出所 (run id・PR・裁定 id・user 逐語の在り処)・観測 (実測の事実)・候補 (0 個以上・却下も書く)・昇格条件 (要件 id か 要 ADR か 要 裁定・機械が判じる引き金の行を 1 つ以上持つ・SRS FR87)。 欠けは台帳 lint が数える (ADR-0051 §4・SRS FR51)。 出所の節の発話は人が読む写しで、 発話からの発端の結びの正本は仕分けの event (SRS FR88・ADR-0087)。
+    relationships: [台帳, 4 象限, 引き金, memo, 発端, 仕分けの event]
   - canonical: 台帳の plan
     domain: consumer
     definition: 全設計 doc の契約表の未着地の行から xtask が出す bd の graph の JSON (ADR-0051 §4)。 title・受入条件の pointer 行・親の epic・label・depends の edge・出所の memo への edge を行から写す。 撃つのは席の手番で、 器は台帳へ書かない (ADR-0045 §2)。
@@ -846,8 +844,9 @@ terms:
     relationships: [lens, 便, Stage, gate]
   - canonical: land の終端
     domain: consumer
-    definition: 着地の後に器が続ける 3 手 (公開の字面の走査を通った後の remote への push・push の先端の commit の CI の結果の照合・台帳の close) と、 その typed な記帳 (SRS FR50)。 着地の事実の正本は器の record で、 commit の trailer はそこからの導出面 (ADR-0023 §2.5)。
-    relationships: [land, 便, 台帳 adapter, trailer, Completion, 公開の字面の走査, push の先端]
+    aliases: [着地の終端]
+    definition: 着地の後に器が続ける 3 手 (公開の字面の走査を通った後の remote への push・push の先端の commit の CI の結果の照合・台帳の close) と、 その typed な記帳 (SRS FR50)。 着地の事実の正本は器の record で、 commit の trailer はそこからの導出面 (ADR-0023 §2.5)。 台帳へ書くのは便の close (close の理由は着地の形) と memo の自動の close (SRS FR93) だけで、 着地の形の close を書くのは land の終端だけ (SRS FR81 (d))。 台帳の問いの裁定の行と close は bind と答えの口の書き (SRS FR82・ADR-0089)。
+    relationships: [land, 便, 台帳 adapter, trailer, Completion, 公開の字面の走査, push の先端, 着地の形]
   - canonical: push の先端
     domain: consumer
     aliases: [push tip]
@@ -857,8 +856,8 @@ terms:
     flagged_ambiguities: [着地の列の「先頭」(最初に着地する便) と逆の端, remote の先端 (FR80 が GitHub に問う push の前の値) とは別, "main の先端 (SRS FR85 の床の検査が撃つ main の最新の commit・push の前後を問わない) とは別"]
   - canonical: 台帳 adapter
     domain: consumer
-    definition: 器が台帳へ触る唯一の module。 読みは読み取り専用で、 書きは着地した便の close 1 種だけ (SRS FR50 / FR51・ADR-0023 §2.2)。 起票・受入条件・裁定の記帳は席の仕事。
-    relationships: [台帳, bd, land の終端, doctor]
+    definition: 器が台帳へ触る唯一の module。 読みは読み取り専用で、 書きは land の終端の便の close と memo の自動の close (SRS FR50 / FR93)、 bind と答えの口の裁定の行と問いの close (SRS FR82) だけ (ADR-0023 §2.2・ADR-0083・ADR-0089)。 起票・受入条件の記帳は席の仕事。
+    relationships: [台帳, bd, land の終端, doctor, 裁定の行, 答えの口, memo]
   - canonical: 散文の門
     domain: consumer
     definition: tracked な設計 doc の、 規範の印を持つ文が pointer を持ち数 + 単位を持たないことを CI が確かめる検査 (SRS FR52)。
@@ -873,11 +872,11 @@ terms:
     relationships: [契約表, 設計 pointer, trailer, 台帳]
   - canonical: trailer
     domain: consumer
-    definition: squash commit の message の末尾に器が書く行 (契約 id と要件 id の 2 行を、 既存の便 id の行と 1 組にしたもの)。 着地の事実の record からの導出面で、 外部の道具が読む唯一の口 (ADR-0023 §2.5)。 trailer を持たない commit は「まだ分からない」と読む。
-    relationships: [land の終端, 契約 id, 便, event log]
+    definition: commit の message の末尾の機械が読む行。 器の便の squash commit は契約 id と要件 id の 2 行を既存の便 id の行と 1 組で書き、 着地の事実の record からの導出面で外部の道具が読む唯一の口 (ADR-0023 §2.5)。 器の便でない commit は発端の trailer を 1 行以上持つ (SRS FR92・ADR-0088)。 trailer を持たない既存の commit は「まだ分からない」と読む。
+    relationships: [land の終端, 契約 id, 便, event log, 発端の trailer, merge の門]
   - canonical: 直命の表
     domain: consumer
-    definition: user が対話面で言った発言を器が 1 件ずつ持つ記録 (event log の DirectiveIssued / DirectiveClosed・ADR-0031 §2.1)。 ADR-0045 §2 (2) で廃止し、 器は持たない (SRS FR65)。 発話 event と裁定の行 (SRS FR82) は裁定の行の写し元と計測の分類にだけ使い、 席の指示文にも復元にも運ばないので、 この表の復活ではない (線引きは ADR-0083)。
+    definition: user が対話面で言った発言を器が 1 件ずつ持つ記録 (event log の DirectiveIssued / DirectiveClosed・ADR-0031 §2.1)。 ADR-0045 §2 (2) で廃止し、 器は持たない (SRS FR65)。 発話 event は SRS FR65 の使い道 (裁定の行の写し元・計測の分類・仕分け済みかの判定・問いの起票との前後の比べ・局面の出力の発話の部品・席が名指す 1 件の読み) にだけ使い、 状態の欄を持たず、 仕分け済みかは別の event から導き、 席の指示文にも復元にも運ばないので、 この表の復活ではない (線引きは ADR-0083 と ADR-0087)。
     relationships: [event log, 出所 pointer, 作業記憶, 対話面, 直命, 決定記録, 発話 event]
   - canonical: 直命
     domain: consumer
@@ -922,7 +921,7 @@ terms:
     domain: consumer
     aliases: [contract intake]
     definition: 契約 file を便にする前に器が撃つ検査の段。 必須 field・verify の形・allowlist・write-set の余地・host の memory の枠・同時走行の最大値 (SRS FR68) を通った契約だけが便になる (交差の排他は SRS FR39)。 変異検査の並列の枠 (SRS NFR6) とは別。 上限の読み・材料の読み・契約表の検査・宣言と上限の突き合わせ (freeze) は入口の lock の前に 1 周 1 回撃ち、 lock の中の判定はその突き合わせの結果 (有効値と名乗りの語) を借りて宣言を読み直さない (ADR-0059・accepted)。 detect か deny を名乗った宣言の契約では、 lock の前に nextest の検証行を base の木で撃って base で緑の行の本数を残し、 deny の契約は base で緑か測れない行が在れば断る (ADR-0059・accepted)。 preflight は同じ判定を便を作らずに撃つ口。
-    relationships: [dispatcher, 並列の枠, write-set, 便, base で緑の行, 名乗りの語, 契約の検証行]
+    relationships: [dispatcher, 並列の枠, write-set, 便, base で緑の行, 名乗りの語, 契約の検証行, 受付の断りの event]
   - canonical: priority
     domain: consumer
     aliases: [契約の priority]
@@ -1170,8 +1169,8 @@ terms:
   - canonical: 機械の復帰
     domain: consumer
     aliases: [mechanical resumption]
-    definition: 席を起こし直した周に、 台帳の行と git の現在地と圧縮の直前の 1 枠だけから直前の流れを組んで session の開始で出す道 (ADR-0049)。 対話の記録の file は運ばない (複写しない・器は読まない)。 ADR-0067 の後は、 起こし直しが状態の打刻の最終行の会話 id を起動行の末尾に --resume で運ぶが、 復帰の道はこの 1 本のまま (--resume は claude が会話を開く口)。 圧縮・群の移動・異常終了の 3 つが同じ 1 本を通る。
-    relationships: [席の指示文, 台帳, project の群, 席の起動]
+    definition: 席を起こし直した周に、 台帳の行と git の現在地と圧縮の直前の 1 枠だけから直前の流れを組んで session の開始で出す道 (ADR-0049)。 対話の記録の file は運ばない (複写しない・器は読まない)。 ADR-0067 の後は、 起こし直しが状態の打刻の最終行の会話 id を起動行の末尾に --resume で運ぶが、 復帰の道はこの 1 本のまま (--resume は claude が会話を開く口)。 圧縮・群の移動・異常終了の 3 つが同じ 1 本を通る。 ADR-0088 の後は、 局面の出力が持つ席の手番の閾値越えの件数と最古の 1 件も直近の流れの事実行に加わる (SRS FR42)。
+    relationships: [席の指示文, 台帳, project の群, 席の起動, 局面の出力]
   - canonical: 硬い資源
     domain: consumer
     aliases: [hard resource]
@@ -1361,8 +1360,9 @@ terms:
   - canonical: 起票の門
     domain: consumer
     aliases: [ledger write gate, 素 write の門]
-    definition: 器の plugin を積む席の hook の入口が、 席自身の道具の呼び出しとして撃たれる bd / bdw の command に掛ける門 (ADR-0056 CTX2・設計 docs/design/vessel-hook.md §10)。 台帳 write の 4 形 (素 write = notes の置換・記憶の subcommand・親を欠く create・台帳の script を経ない書き込み) を rules 行 ledger.denied_writes の値で断り、 memo の 4 節の判定も持つ。 ほかに形の欠けた台帳の問いの create・notes に足す裁定の行・引き金の行を持たない memo の書きの 3 形 (SRS FR81・ADR-0083) も断り、 この 3 形は器の plugin の門だけが断る (host-guard は掛けない)。 席が起こした子 process の書きは道具の呼び出しでないので門の外。 host-guard の台帳の種類 (SRS FR76) は台帳 write の 4 形の判定を共有して口座の設定を読む session に掛ける。
-    relationships: [hook, rules 行, 台帳, host-guard, 見張りの種類, 口座の設定を読む session, 台帳の問い, 裁定の行, 引き金]
+    definition: 器の plugin を積む席の hook の入口が、 席自身の道具の呼び出しとして撃たれる bd / bdw の command に掛ける門 (ADR-0056 CTX2・設計 docs/design/vessel-hook.md §10)。 台帳 write の 4 形 (素 write = notes の置換・記憶の subcommand・親を欠く create・台帳の script を経ない書き込み) を rules 行 ledger.denied_writes の値で断り、 memo の 4 節の判定も持つ。 ほかに形の欠けた台帳の問いの create (asked の欠けと値の外・label intake:memo の併せ持ち・親の label を継がない指定の無い親の名指しを含む・ADR-0087)・notes に足す裁定の行・引き金の行を持たない memo の書き・close の理由の文法の外の close (理由の無い close を含む) と着地の形の close (着地の形は land の終端だけが書く・ADR-0089) の 4 つの断り (SRS FR81・ADR-0083) も持ち、 この 4 つの断りは器の plugin の門だけが持つ (host-guard は掛けない)。 席の道具の呼び出しの台帳の書きを通した周は局面の出力に古さの印を付ける (SRS FR90・ADR-0088)。 席が起こした子 process の書きは道具の呼び出しでないので門の外。 host-guard の台帳の種類 (SRS FR76) は台帳 write の 4 形の判定を共有して口座の設定を読む session に掛ける。
+    relationships: [hook, rules 行, 台帳, host-guard, 見張りの種類, 口座の設定を読む session, 台帳の問い, 裁定の行, 引き金, asked, close の理由の文法, 古さの印, 着地の形]
+    flagged_ambiguities: [答えの口の command の撃ちを断るのは器の hook の入口の別の判定で、 起票の門ではない (SRS FR82・ADR-0087)]
   - canonical: 起動の記述
     domain: consumer
     aliases: [invocation]
@@ -1396,8 +1396,8 @@ terms:
   - canonical: 台帳の問い
     domain: consumer
     aliases: [ledger question]
-    definition: 席から user への問いを記録する台帳の bead (label intake:question・issue の型は問わない)。 本文の 4 つの行 (概要・技術・理由・推奨) と metadata の effect を持ち、 形は起票の門が検査する (SRS FR81・ADR-0083)。 器が問いとして読む記録はこの label の bead だけで、 4 象限にも起動の列にも入らない (SRS FR51 / FR68)。 答えは発話 event と結んで裁定の行になる (SRS FR82)。 runner の質問 record とは別。
-    relationships: [台帳, 起票の門, effect, 発話 event, 裁定の行, 4 象限, 起動の列, 質問 record]
+    definition: 席から user への問いを記録する台帳の bead (label intake:question・issue の型は問わない)。 本文の 4 つの行 (概要・技術・理由・推奨) と metadata の effect と asked を持ち、 label intake:memo を併せ持たず、 親を名指す create は親の label を継がない指定を持つ。 形は起票の門が検査する (SRS FR81・ADR-0083・ADR-0087)。 器が問いとして読む記録はこの label の bead だけで、 4 象限にも起動の列にも入らない (SRS FR51 / FR68)。 答えは対話の session か裁定面の発話 event と結んで裁定の行になる (SRS FR82)。 runner の質問 record とは別。
+    relationships: [台帳, 起票の門, effect, 発話 event, 裁定の行, 4 象限, 起動の列, 質問 record, asked, 後付けの結び, 答えの口, 案件]
   - canonical: effect
     domain: consumer
     definition: 台帳の問いの metadata の key。 答えを文書へ写すべき問い (document) か、 答えが操作で済む問い (operation) かの閉じた 2 値 (SRS FR81)。 未反映の裁定は document の問いだけを数える (SRS FR84)。
@@ -1405,19 +1405,19 @@ terms:
   - canonical: 発話 event
     domain: consumer
     aliases: [utterance event]
-    definition: user が器を導入した repo の対話の session へ打った prompt を、 model に読まれる前に逐語のまま残す event (actor = human・発話を指す値は ts・SRS FR82・ADR-0083)。 記録の範囲は開いた問いの有無に依らない全 prompt (裁定 2026-09-28T09:04Z)。 器が入力欄へ差し込んだ行 (雛形の合図) と message の包みは残さない。 裁定の行の逐語の写し元と到達点の計測の分類にだけ使い、 人由来の event の数えには入れない (SRS FR22)。 席の指示文にも復元にも運ばない。
-    relationships: [裁定 event, 裁定の行, 台帳の問い, 雛形の合図, message の包み, 直命の表, 対話面]
+    definition: user が器を導入した repo の対話の session へ打った prompt を model に読まれる前に逐語のまま残す event、 または裁定面の答えを答えの口が受けて残す event (kind UtteranceReceived・actor = human・発話を指す値は器が発話ごとに一意に振る ts で同じ秒の発話は秒より下の桁で分ける・発話の経路を全部が持ち、 対話の session の行は session も持つ・SRS FR82・ADR-0083・ADR-0087)。 記録の範囲は開いた問いの有無に依らない全 prompt (裁定 2026-09-28T09:04Z)。 器が入力欄へ差し込んだ行 (雛形の合図) と message の包みは残さない。 使い道と逐語を運ばない先は SRS FR65 が持ち (裁定の行の写し元・計測の分類・仕分け済みかの判定・問いの起票との前後の比べ・局面の出力の発話の部品・席が ts を名指して 1 件を読む口)、 人由来の event の数えには入れない (SRS FR22)。 状態の欄を持たず、 席の指示文にも復元にも運ばない。
+    relationships: [裁定 event, 裁定の行, 台帳の問い, 雛形の合図, message の包み, 直命の表, 対話面, 仕分け, 仕分けの event, 未仕分けの発話, 発話の経路, 答えの口]
     flagged_ambiguities: ["発話 (発話 event・SRS FR82) と発言 (直命・直命の表の語・ADR-0045 で廃止した表の中身) は別。 発話 event は直命の表の復活ではない (SRS FR65・ADR-0083)"]
   - canonical: 裁定の行
     domain: consumer
     aliases: [ruling line]
-    definition: 台帳の問いの notes に器の口 seat ruling bind だけが書く 1 行 (裁定 id・問い・発話の ts・逐語の順の 4 欄・逐語は発話 event から写して最後の欄に置く・SRS FR82)。 席が notes に裁定の行を足す書きは起票の門が断る (SRS FR81)。 器を導入した別の repo の台帳は同じ形の行を自分の経路で書き (batch:… と policy:… の形の裁定 id を持ちうる)、 裁定 id の欄と別の束の欄を持ちうる。 batch:… と policy:… の形の引用は裁定 id の欄か束の欄に解け、 問い id の形は裁定 id の欄だけに解ける (SRS FR83・ADR-0083)。 bind が書く行は束の欄を持たない。
-    relationships: [台帳の問い, 裁定 id, 発話 event, 起票の門, 裁定 event]
+    definition: 台帳の問いの notes に器の口 (seat ruling bind と答えの口) だけが書く 1 行 (裁定 id・問い・発話の ts・発話の経路・逐語の順の 5 欄・逐語は発話 event から写して最後の欄に置く・SRS FR82・ADR-0087)。 4 欄の既存の行は発話の経路を対話の session と読む。 席が notes に裁定の行を足す書きは起票の門が断る (SRS FR81)。 器を導入した別の repo の台帳は同じ形の行を自分の経路で書き (batch:… と policy:… の形の裁定 id を持ちうる)、 裁定 id の欄と別の束の欄を持ちうる。 batch:… と policy:… の形の引用は裁定 id の欄か束の欄に解け、 問い id の形は裁定 id の欄だけに解ける (SRS FR83・ADR-0083)。 器の口が書く行は束の欄を持たない。
+    relationships: [台帳の問い, 裁定 id, 発話 event, 起票の門, 裁定 event, 答えの口, 発話の経路]
     flagged_ambiguities: ["裁定の行 (台帳の notes の 1 行) と判断の欄 (rules 行の ruling 欄・ADR の approval の裁定の欄・設計の節の裁定の欄) は別"]
   - canonical: 問い id の形
     domain: consumer
-    definition: 裁定 id の閉じた 3 形の 1 つで、 器の口 seat ruling bind が発行する形 (問いの bead の id・コロン・UTC の年月日と時分・ハイフン・通し番号。 bind が発行する通し番号は 1・SRS FR82)。 通し番号の欄は消費側の台帳の行の形と揃えるために持つ。 引用に数えるのは問いの部分が repo の台帳の id の接頭辞で始まるものだけで、 ほかの接頭辞の同じ形の字面 (test の見本など) は数えも断りもしない。 判断の欄はこの形の数える id を要る (SRS FR83)。
-    relationships: [裁定 id, 台帳の問い, 判断の欄]
+    definition: 裁定 id の閉じた 3 形の 1 つで、 器の口 (seat ruling bind と答えの口) が発行する形 (問いの bead の id・コロン・UTC の年月日と時分・ハイフン・通し番号。 器の口が発行する通し番号は 1・SRS FR82・ADR-0087)。 通し番号の欄は消費側の台帳の行の形と揃えるために持つ。 引用に数えるのは問いの部分が repo の台帳の id の接頭辞で始まるものだけで、 ほかの接頭辞の同じ形の字面 (test の見本など) は数えも断りもしない。 判断の欄はこの形の数える id を要る (SRS FR83)。
+    relationships: [裁定 id, 台帳の問い, 判断の欄, 答えの口]
   - canonical: 時刻の形
     domain: consumer
     definition: 裁定を user と UTC の時刻だけで指す引用の形 (台帳の問いに結べない)。 opt-in の線より前の引用は数えるだけにし、 線の後に足された引用は、 vessel 宣言の ruling-fixtures の一覧に同じ字面が在るものを除き、 受付と着地で断る (SRS FR83)。
@@ -1443,8 +1443,8 @@ terms:
     flagged_ambiguities: ["床: 床の検査 (main の最低限の検査・SRS FR85) と、 管理 tick の段の床 (ADR-0058・設計 seat-heartbeat の段) と、 thread 本数の下限 (1 の床) は別義。 SRS は裸の「床」を書かず「床の検査」と書く"]
   - canonical: alarm
     domain: consumer
-    definition: 管理 tick の打刻の合図の末尾に足す閉じた語 (unreflected・floor)。 置き場の file だけを読んで決め、 台帳も git も撃たない (SRS FR27)。 合図を送らない周の席には届かず、 doctor の行だけが知らせる。
-    relationships: [管理 tick, 打刻の合図, 未反映の裁定, 床の検査, doctor]
+    definition: 管理 tick の打刻の合図の末尾に足す閉じた語 (unreflected・floor・unsorted・owned)。 置き場の file だけを読んで決め、 台帳も git も撃たない (SRS FR27)。 unsorted は局面の出力に未仕分けの発話 (SRS FR88) が 1 つ以上在る周、 owned は局面の出力が持つ席の手番の閾値越え (SRS FR90) の件数が 1 以上の周で、 どちらも局面の出力の値を読むだけで、 局面の出力が古さの印を持つ周は unsorted と owned の語に閉じた 1 語 stale を添える (SRS FR27 / FR94・ADR-0087・ADR-0088)。 合図を送らない周の席には届かず、 doctor の行だけが知らせる。
+    relationships: [管理 tick, 打刻の合図, 未反映の裁定, 床の検査, doctor, 局面の出力, 未仕分けの発話, 席の手番の閾値越え, 古さの印]
   - canonical: 雛形の合図
     domain: consumer
     definition: 器が席の入力欄へ差し込む行の総称 (SRS FR44 の閉じた一覧 = 起動行・打刻の合図・群の逼迫の通知と移動の通知と退避の合図・便の終端の周の通知・裁定の指し示し)。 発話 event はこれを記帳しない (SRS FR82)。
@@ -1457,25 +1457,27 @@ terms:
   - canonical: 引き金
     domain: consumer
     aliases: [trigger line]
-    definition: memo の昇格条件の節に置く、 機械が判じる 1 行。 形は閉じた 5 つ (再発・同梱・依存・期日・着地)、 1 つでも満ちた memo は昇格の待ちになる (SRS FR87・ADR-0085)。 引き金の行を持たない memo の create と、 昇格条件の節を引き金の行の無い本文へ書き換える update は起票の門が断る (SRS FR81)。 字面の文法は設計 doc (ledger-form) が持つ。
-    relationships: [memo, memo の 4 節, 昇格の待ち, 起票の門]
+    definition: memo の昇格条件の節に置く、 機械が判じる 1 行。 形は閉じた 5 つ (再発・同梱・依存・期日・着地)、 1 つでも満ちた memo (昇格の行が全部の memo は判じない) は引き金の満ちた memo になり、 keep の記帳の無いものは memo の局面で処置の待ち (memo-actionable) に出る (SRS FR87 / FR91・ADR-0085・ADR-0089)。 読める引き金の行を持たず memo-promoting にも memo-asking にも当たらない memo は misfit (memo-actionable より先に判じる)。 引き金の行を持たない memo の create と、 昇格条件の節を引き金の行の無い本文へ書き換える update は起票の門が断る (SRS FR81)。 字面の文法は設計 doc (ledger-form) が持つ。
+    relationships: [memo, memo の 4 節, 引き金の満ちた memo, 起票の門, 処置の待ち, memo の局面]
   - canonical: memo
     domain: consumer
-    definition: 台帳の bead のうち label intake:memo を持ち、 受入条件の設計 pointer を持たない覚え書き (契約にする前の段・4 象限)。 本文に memo の 4 節を持ち、 起動の列に入らず (SRS FR68)、 昇格条件の節に引き金の行を持つ (SRS FR87)。
-    relationships: [4 象限, memo の 4 節, 引き金, 昇格, 台帳]
+    definition: 台帳の bead のうち label intake:memo を持ち、 受入条件の設計 pointer を持たない覚え書き (契約にする前の段・4 象限)。 本文に memo の 4 節を持ち、 起動の列に入らず (SRS FR68)、 昇格条件の節に引き金の行を持つ (SRS FR87)。 開いた memo は memo の局面の 4 語のどれかにいて (当たらない memo は misfit)、 close の理由は close の理由の文法の memo の 3 形 (昇格済み・まとめた・見送り) に限る (SRS FR91・ADR-0089)。
+    relationships: [4 象限, memo の 4 節, 引き金, 昇格, 台帳, memo の局面, 処置の待ち, 昇格の行, close の理由の文法, 発端, 案件]
   - canonical: 昇格
     domain: consumer
-    aliases: [promote]
-    definition: memo を、 acceptance に設計 pointer を持つ契約へ書き直す処置 (memo の審査の判定の値は promote)。 器は自分では行わない (SRS FR87)。
-    relationships: [memo, 昇格の待ち, 処置, memo の審査, 契約]
-  - canonical: 昇格の待ち
+    aliases: [promote, promotion]
+    definition: memo を契約へ上げる処置 (memo の審査の判定の値は promote)。 memo の acceptance に設計 pointer を書いて契約にする形と、 memo を残して契約を分け、 notes に昇格の行を足して分けた契約から discovered-from を張る形の 2 つ (SRS FR91・ADR-0089)。 器は自分では行わず、 処置の待ちの memo を知らせる (SRS FR87 / FR91)。
+    relationships: [memo, 引き金の満ちた memo, 処置, memo の審査, 契約, 昇格の行, discovered-from, 処置の待ち]
+  - canonical: 引き金の満ちた memo
     domain: consumer
-    definition: 引き金が 1 つでも満ちた memo の状態 (SRS FR87)。 処置が付くまで起こす便が 0 の周の便の終端の周の通知が知らせ直し、 台帳の lint が処置の付かない本数と最古の年齢を出す (SRS FR51)。
-    relationships: [memo, 引き金, 処置, 便の終端の周の通知, doctor]
+    aliases: [昇格の待ち]
+    definition: 引き金の行が 1 つでも満ちた memo (SRS FR87・ADR-0085 の呼び名は昇格の待ち)。 昇格の行が全部の memo は判じない (SRS FR87・ADR-0089)。 keep の記帳の無いものは memo の局面で処置の待ち (memo-actionable) にいて、 処置が付くまで起こす便が 0 の周の便の終端の周の通知が知らせ直し、 知らせと台帳の lint が数えるのは局面が memo-actionable の memo (SRS FR87 / FR51 / FR91)。
+    relationships: [memo, 引き金, 処置, 便の終端の周の通知, doctor, 処置の待ち, memo の局面]
+    flagged_ambiguities: [引き金の満ちた memo (SRS FR87) と処置の待ち (memo-actionable・SRS FR91) は別。 満ちた引き金に keep の記帳が付いた memo は memo-waiting で、 処置の待ちは処置の無い昇格か close の審査の判定を持つ memo と、 昇格の行を持ち辿れる開いた契約が無く自動の close の条件を満たさない memo も含む, 昇格の待ちは ADR-0085 (frozen) の呼び名で、 SRS は使わない]
   - canonical: 処置
     domain: consumer
-    definition: 昇格の待ちの memo に orchestrator の席が付ける始末の閉じた 4 種 (昇格・close・引き金の書き直し・keep の記帳)。 付くまで器は周ごとに知らせ直す (SRS FR87)。
-    relationships: [昇格の待ち, 昇格, memo, orchestrator]
+    definition: 処置の待ちの memo (memo-actionable) に orchestrator の席が付ける始末の閉じた 4 種 (昇格・close・引き金の書き直し・keep の記帳)。 付くまで器は周ごとに知らせ直す (SRS FR87)。 昇格は 2 つの形で、 close の理由は memo の 3 つの形 (昇格済み・まとめた・見送り) に限る (SRS FR91・ADR-0089)。
+    relationships: [引き金の満ちた memo, 昇格, memo, orchestrator, 処置の待ち, close の理由の文法]
   - canonical: memo の審査
     domain: consumer
     definition: 引き金の満ちない memo のうち間隔 (rules 行 memo.triage_interval_h) の過ぎたものを、 起こす便が 0 の周に本数 (rules 行 memo.triage_per_round) まで読むだけの lens に掛ける段 (SRS FR87・ADR-0085)。 判定は promote / close / keep で、 器は判定で memo を close せず台帳に書かない。 口座は便用の規則で選び、 封じ込めの内側で撃つ。
@@ -1505,3 +1507,159 @@ terms:
     aliases: [no-candidate reason, NoCandidateReason]
     definition: 口座選定が候補を返さない周の閉じた型の 4 語 (over-threshold・all-limited・unmeasured・excluded の宣言順・excluded は SRS FR36 の session 用の除外集合に当たる口座)。 選定は口座ごとに 1 つを付け、 外れた口座の語のうち宣言順で前の 1 つに畳む。 口座が 0 の周は unmeasured。 席の起動の断りの行に載る (SRS FR36 / FR69・ADR-0086・憲法 C2)。
     relationships: [口座選定, 席の起動, 妥協の起動]
+  # ---------------------------------------------------------------- 案件の一生: 発話の仕分けと席の問い・局面の出力と継ぎ目・memo の局面と処置 (SRS v0.29・ADR-0087〜0089)
+  - canonical: 仕分け
+    domain: consumer
+    aliases: [sorting, 発話の仕分け]
+    definition: user の発話の行き先を決める閉じた 3 つの形 (SRS FR88・ADR-0087)。 要望 (開いた memo へ発端として結ぶ・仕分けの event の sorting は request)・答え (台帳の問いへ結んで裁定にする・裁定 event)・会話 (台帳を変えずに仕分け済みにする・仕分けの event の sorting は chat・3 クラスの承認と runner への回答と go に使った発話も会話で、 承認 event と回答 event には結ばない)。 要望と会話で器は台帳を書かず、 仕分けが正しいかは器が判じない。
+    forbidden: [発話の閉じ方]
+    relationships: [発話 event, 仕分けの口, 仕分けの event, 未仕分けの発話, 裁定 event, memo, 発端]
+    flagged_ambiguities: [仕分け (発話の行き先・SRS FR88) と処置 (memo に付ける始末・SRS FR87) は別, 仕分けの会話 (台帳を変えずに仕分け済みにする形) と会話 id (claude の session の id) は別, ADR-0087 の glossary は未仕分けの発話との部分文字列を避けて発話の仕分けと書く (同じ語)]
+  - canonical: 仕分けの口
+    domain: consumer
+    aliases: [utterance sort]
+    definition: 発話の ts と、 要望なら開いた memo の id を受けて、 要望か会話の仕分けを記帳する器の口 (SRS FR88・ADR-0087)。 発話 event が無い周・名指した memo が開いた memo でない周・要望か答えの仕分けを持つ発話に会話を付ける周は何も書かずに理由を名指して断り、 台帳を書かない。
+    relationships: [仕分け, 仕分けの event, 発話 event, memo, turn の終わりの止め]
+  - canonical: 仕分けの event
+    domain: consumer
+    aliases: [UtteranceSorted]
+    definition: 仕分けの口が要望か会話の仕分けを 1 件記帳する event の kind (actor = machine・key は utterance〔発話の ts〕・sorting〔request か chat〕・bead〔request のときだけ・memo の id〕・ADR-0087)。 発端の結びの正本で (SRS FR88)、 1 つの発話から複数の memo へは複数件。 人由来の event の数えには入らない (SRS FR22)。
+    relationships: [仕分け, 仕分けの口, 発話 event, 発端, memo, event log]
+  - canonical: 未仕分けの発話
+    domain: consumer
+    aliases: [unsorted utterance]
+    definition: 発話 event のうち、 仕分けの event も裁定 event の結びも持たないもの (SRS FR88・ADR-0087)。 判定は event だけを読む 1 つの関数で、 turn の終わりの判定と局面の出力が同じ入力に同じ結果を出し、 doctor の行と管理 tick の alarm の語 unsorted は局面の出力の判定の結果を読む (SRS FR94)。
+    relationships: [発話 event, 仕分け, turn の終わりの止め, 局面の出力, alarm, doctor]
+  - canonical: turn の終わりの止め
+    domain: consumer
+    aliases: [turn-end stop]
+    definition: 器が発話 event を記帳する対話の session (runner と lens を除く) で turn が終わる周に、 その session の未仕分けの発話のうち止めでまだ告げていないものが 1 つ以上在れば、 turn の終わりの判定の hook が 1 度だけ終わりを止め、 その session の未仕分けの発話の ts を全部並べて仕分けの口を告げること (SRS FR88・ADR-0087)。 止めた周は、 登録された席の session なら状態の打刻を idle にしない。 告げ済みの未仕分けの発話だけの周は止めず、 判定の入力を読めない周は止めずに読めないことを event に記帳する (fail-open)。 逐語は運ばない (SRS FR65)。
+    relationships: [未仕分けの発話, 仕分けの口, hook, 状態の打刻]
+    flagged_ambiguities: [止めの理由は器から席の入力欄への差し込み (SRS FR44 の閉じた一覧) ではない]
+  - canonical: 発話の経路
+    domain: consumer
+    aliases: [utterance channel]
+    definition: 発話 event・裁定 event・裁定の行が持つ、 字が来た道の閉じた 2 値 (対話の session と裁定面・機械の値は chat と gui・SRS FR82・ADR-0087)。 対話の session は発話の記帳の hook が prompt の入口で記帳した字、 裁定面は答えの口が command の字面の外 (標準入力) で受けた字。 計測は裁定 event を経路ごとに数え (SRS FR22)、 4 欄の既存の裁定の行は対話の session と読む。
+    relationships: [発話 event, 裁定 event, 裁定の行, 対話面, 裁定面, 答えの口]
+    flagged_ambiguities: [発話の経路 (字が来た道・SRS FR82) と問いの経路 (選択式の問いを止めた周に告げる道・ADR-0084) は別, 発話の経路の値 chat と仕分けの event の sorting の値 chat は同じ字で別の欄]
+  - canonical: 答えの口
+    domain: consumer
+    aliases: [answer mouth, seat ruling answer]
+    definition: 裁定面が台帳の問いへの答えを器に渡す器の口 (SRS FR82・ADR-0087)。 問いの bead の id を受け、 逐語を command の字面の外 (標準入力) で受ける。 空白だけの逐語・閉じた問い・台帳の問いでない bead の周は発話 event も書かずに理由を名指して断り、 通る周は発話の経路が裁定面の発話 event と、 bind と同じ書き (裁定 id の発行・裁定の行・close・裁定 event) を 1 周で行って裁定 id を 1 行返す。 承認の受理面でなく承認 event を記帳しない (C7)。 席の道具の呼び出しがこの口の command を撃とうとするときは器の hook の入口が実行の前に断り (起票の門とは別の判定)、 席が起こした子 process の撃ちは門の外。
+    relationships: [裁定面, 発話 event, 裁定 event, 裁定の行, 裁定 id, 発話の経路, hook, 承認 event]
+    flagged_ambiguities: [答えの口 (裁定を受け承認 event を書かない) と便の承認の口 (承認 event を受ける・SRS FR16) は別]
+  - canonical: asked
+    domain: consumer
+    definition: 台帳の問いの metadata の key で、 問いのきっかけの閉じた 2 値 (SRS FR89・ADR-0087)。 seat は席が user の判断を求めた問い、 user は user の先立つ指示や方針を受けるために席が起こした問い。 create の欠けと値の外は起票の門が断り (SRS FR81)、 asked を持たない問いの結びは doctor の行が asked 無しとして別に数える。 値の正しさは器が判じない。
+    relationships: [台帳の問い, 起票の門, 後付けの結び, 裁定 event, effect]
+  - canonical: 後付けの結び
+    domain: consumer
+    aliases: [late-raised binding]
+    definition: 台帳の問いが、 結んだ発話より後に起票された結び (SRS FR89・ADR-0087)。 doctor が asked の値ごとの件数と裁定 id で出す。 asked が seat の分は、 席が対話の session だけで問うてから問いを起こした形。
+    relationships: [asked, 台帳の問い, 裁定 event, doctor]
+  - canonical: 案件
+    domain: consumer
+    aliases: [case]
+    definition: 根の部品 1 つ (memo か台帳の問い) と、 そこから結び (SRS FR90) で辿れる部品と結びの束 (ADR-0088)。 1 つの発話は複数の案件の根へ仕分けられる。
+    relationships: [部品, 局面, 手番, 発端, memo, 台帳の問い]
+    flagged_ambiguities: [案件 (部品の束) と issue (台帳の bead 1 本) は別の語]
+  - canonical: 部品
+    domain: consumer
+    aliases: [part]
+    definition: 局面の出力 (SRS FR90) が局面と手番を導く単位で、 閉じた 9 種 (発話・台帳の問い・memo・契約・開いた契約の最新の便・契約表の行・要件・epic・器の便でない着地の commit・ADR-0088)。 発話の部品は ts・session・行き先だけを持ち逐語を持たない (ADR-0087)。
+    relationships: [案件, 局面, 手番, 局面の出力, 発端]
+  - canonical: 局面
+    domain: consumer
+    aliases: [lifecycle position]
+    definition: 部品が一生のどこにいるかを表す閉じた語 (SRS FR90・ADR-0088)。 優先の順は enum の宣言順 (C2)。 語の一覧と優先の順・局面と理由から手番への対応・misfit の理由の語の一覧は設計 doc の 1 節が正本で、 memo の局面の語と順は SRS FR91 が持つ。 どの局面にも当たらない部品と SRS FR91・FR92 が定める部品は misfit。
+    relationships: [部品, 案件, 手番, 局面の出力, misfit, 便の段, memo の局面]
+    flagged_ambiguities: [局面 (部品の位置・SRS FR90) と便の段 (便の進み) と Stage (C2 の選定の enum) は別の語。 便の段の値は便の部品の局面へ写るが、 便の段を局面と呼ばない]
+  - canonical: 便の段
+    domain: consumer
+    definition: 便が一周のどこにいるかを表す閉じた段 (終端の段は Landed・Failed・Stopped・SRS FR68)。 全ての値は便の部品の局面へ漏れなく写り、 局面の理由は便の段と終端の語をそのまま使う (SRS FR90・ADR-0088)。
+    relationships: [便, 局面, Blocked, Questioned, Reviewed, 局面の出力]
+    flagged_ambiguities: [便の段 (便の進み) と局面 (部品の位置・SRS FR90) と Stage (C2 の選定の enum) と群の段 (群の移動の周の段) は別]
+  - canonical: 手番
+    domain: consumer
+    aliases: [next mover]
+    definition: 局面ごとに次に動く番が誰にあるかを表す閉じた 6 値 (user・seat・vessel・runner・ci・none・SRS FR90・ADR-0088)。 局面と理由から手番への対応は設計 doc の 1 節が正本。 手番が seat のまま年齢の閾値を越えた部品 (要件の部品を除く) は席の手番の閾値越え。
+    forbidden: [手番を無駄]
+    relationships: [局面, 部品, 席の手番の閾値越え, 局面の出力]
+    flagged_ambiguities: [手番 (次に動く番・SRS FR90) は量を指さない。 frozen の ADR-0058 の「1 手番を消費」は席の turn の量 (token と手間) の意味の別義で、 局面の出力の手番ではない]
+  - canonical: 席の手番の閾値越え
+    domain: consumer
+    definition: 要件の部品を除き、 手番が seat の部品のうち局面ごとの年齢の閾値 (rules 行 lifecycle.age_h・値は user 裁定 id 付き) を越えたもの (SRS FR90・ADR-0088)。 局面の出力がその件数と最古の 1 件を持ち、 管理 tick の周の部分の書き直しが年齢とともに書き直す。 doctor の行・直近の流れの事実行・alarm の語 owned は出力の値を読むだけ (SRS FR94 / FR42 / FR27)。
+    relationships: [手番, 局面の出力, alarm, doctor, 管理 tick]
+  - canonical: 局面の出力
+    domain: consumer
+    definition: 局面の関数の出力で、 state dir の下の fleet/lifecycle.json と同じ dir の古さの印 lifecycle.stale の組 (ADR-0088 が ADR-0004 §2.2 の面 2 を部分 supersede)。 lifecycle.json は版の欄・局面の語の一覧・入力の印・生成の時刻・席の手番の閾値越えの件数と最古の 1 件と、 部品ごとの局面・手番・since・理由・結びを持ち、 一時 file からの rename で丸ごと入れ替わる導出物で、 逐語を載せず、 消えても全部の書き直しで戻る (SRS FR90)。 close した部品を載せる窓は表示にだけ掛け、 局面が終わりでない閉じた部品には掛けない。 読み手は同じ判定の結果を使って自前の判定を持たず、 古い出力を古いと示し、 出力が無いか読めない周は読めないことを示す (SRS FR94)。 器は同じ中身を text で出す口と全部を書き直す口を持つ。
+    relationships: [局面, 部品, 手番, 入力の印, 古さの印, 書き直しの契機, 席の手番の閾値越え, event log, state dir]
+    flagged_ambiguities: [局面の出力 (lifecycle.json と lifecycle.stale の組・SRS FR90) と lifecycle.json (その本体の 1 file・ADR-0088 の glossary の語) は範囲が違う。 lifecycle.json を局面の出力の別名にしない]
+  - canonical: 入力の印
+    domain: consumer
+    aliases: [input mark]
+    definition: 局面の出力と古さの印が持つ、 書き直しが読んだ台帳・event log・main の状態の目印 (SRS FR90・ADR-0088 の値は台帳の印・event log の長さ・main の sha)。 書き手は印が今の file より古い書きを捨て、 読み手は出力の印を自分が読める今の印と比べて古い出力を古いと示す (SRS FR94・比べる組は読み手ごとに設計 doc の 1 節)。
+    relationships: [局面の出力, 古さの印]
+  - canonical: 古さの印
+    domain: consumer
+    aliases: [stale mark, lifecycle.stale]
+    definition: 局面の出力に付く印で、 本体と同じ dir の file lifecycle.stale (SRS FR90・ADR-0088)。 起票の門が席の道具の呼び出しの台帳の書きを通したときと、 merge の門が器の便でない merge の command を通したときに、 書き直さずに時刻と付けた時点の入力の印を書き、 印を付けた後に始まり、 印の種類に対応する入力の印 (起票の門の印は台帳の印・merge の門の印は main の印) が印の持つ値より新しい全部の書き直しだけが消す (部分の書き直しは消さず、 書きが落ちた周の印は次にその入力が動くまで残る)。 書き直しが入力を読めない周も書き直さずに印を付ける。 読み手はこの印で古い出力を古いと示し (SRS FR94)、 管理 tick は alarm の語に stale を添える (SRS FR27)。 書き直しの契機ではない。
+    relationships: [局面の出力, 入力の印, 起票の門, merge の門, 書き直しの契機, alarm]
+  - canonical: 書き直しの契機
+    domain: consumer
+    aliases: [rewrite triggers]
+    definition: 局面の出力を書き直す時の 2 層 (SRS FR90・ADR-0088)。 全部の書き直しは dispatch の周・器が台帳を書いた直後 (bind・答えの口・land の終端の close・memo の自動の close)・全部を書き直す口の周で、 event log と時刻で決まる部分 (発話・仕分けで結んだ発端・便の局面・年齢と席の手番の閾値越え・期日の引き金の満ち) だけの書き直しは管理 tick の周と発話 event か仕分けの event の記帳の直後 (台帳も git も撃たず event log の大きさに依らない読み・SRS NFR5)。 席の台帳の書きと器の便でない merge は書き直さず古さの印を置くだけ。
+    relationships: [局面の出力, 古さの印, 管理 tick, dispatcher, land の終端, 答えの口]
+  - canonical: misfit
+    domain: consumer
+    definition: 局面の出力で、 どの局面にも当たらない部品と、 SRS FR91・FR92 が定める形 (読める引き金の無い memo・閉じの誤り・台帳に無い発端・event log に無い便を名指す器の便の trailer など) の部品に付ける局面の値 (SRS FR90・ADR-0088・ADR-0089)。 閉じた理由の語 (一覧と字面は設計 doc の 1 節) を添え、 手番は seat。 判定はこの版の land (切り替えの線) より後の閉じ・問いの create・着地の commit だけに掛け、 線の前の記録は数えない (SRS FR90)。
+    relationships: [局面, 部品, 発端, close の理由の文法, memo の局面]
+    flagged_ambiguities: [切り替えの線 (misfit の判定の境・SRS FR90) と opt-in の線 (裁定 id の引用の数えの境・SRS FR83) は別]
+  - canonical: 発端
+    domain: consumer
+    aliases: [origin]
+    definition: 部品を生んだ上流 (SRS FR88 / FR92)。 memo なら生んだ発話で、 その結びの正本は仕分けの event で memo の出所の節は人が読む写し (ADR-0087)。 器の便でない着地の commit なら発端の trailer が名指す台帳の bead (ADR-0088)。
+    relationships: [部品, 案件, 仕分けの event, memo, 発端の trailer, merge の門]
+  - canonical: 発端の trailer
+    domain: consumer
+    definition: 器の便でない commit の本文が持つ、 台帳の bead の id を 1 本以上名指す trailer の行 (SRS FR92・ADR-0088)。 名は既存の trailer と同じく NAME から導き (NAME の頭を大文字にした語に -Source・本 repo では Scribe2-Source)、 merge の門が merge の前に、 CI の main の検査が main の先端で形だけを確かめる。 台帳に無い発端は局面の出力が misfit で数える。
+    relationships: [trailer, 発端, merge の門, 部品, NAME 定数]
+  - canonical: merge の門
+    domain: consumer
+    aliases: [merge gate]
+    definition: 器の hook の入口が、 席の道具の呼び出しの PR の merge の command を実行の前に読み、 渡す commit の本文が発端の trailer か器の便の trailer を持たなければ欠けを名指して断る段 (SRS FR92・ADR-0088)。 trailer の形だけを見て台帳を読まない。 器の便でない merge を通したときは書き直さずに古さの印を置く (SRS FR90)。 事後の検出は CI の main の検査。
+    relationships: [発端の trailer, trailer, 古さの印, 着地の列, hook]
+  - canonical: 受付の断りの event
+    domain: consumer
+    aliases: [IntakeRefused]
+    definition: 起動の列の周に受付が断った契約ごとに受付が記帳する event の kind (key は bead と refuse・SRS FR68・ADR-0088)。 局面の関数は入力として読むだけ (SRS FR90)。
+    relationships: [受付, 起動の列, event log, 局面の出力]
+  - canonical: memo の局面
+    domain: consumer
+    definition: 開いた memo の居場所の閉じた 4 語 (宣言順に memo-promoting＝昇格の途中・memo-asking＝問いの返事待ち・memo-actionable＝処置の待ち・memo-waiting＝引き金待ち・SRS FR91・ADR-0089)。 読める引き金の行を持たず memo-promoting にも memo-asking にも当たらない memo (memo-actionable より先に判じる) と、 どれにも当たらない memo は局面の出力で misfit。 優先は列挙の宣言順だけ。
+    relationships: [memo, 局面, 処置の待ち, 引き金の満ちた memo, 引き金, misfit]
+    flagged_ambiguities: [memo-actionable (局面の値) と、 前の器が消した棚卸しの印 MEMO-DUE (ADR-0085) は別物]
+  - canonical: 処置の待ち
+    domain: consumer
+    aliases: [memo-actionable]
+    definition: memo の局面 memo-actionable の中身 (SRS FR91・ADR-0089)。 引き金が満ちて keep の記帳 (SRS FR87) の無い memo・処置の無い昇格か close の審査の判定を持つ memo・昇格の行を持ち辿れる開いた契約が無く自動の close の条件 (SRS FR93) を満たさない memo (辿れる契約が 0 本を含む) で、 keep の判定を持つ memo と満ちた引き金に keep の記帳が付いた memo は含まない (memo-waiting)。 手番は seat。 便の終端の周の通知・台帳の lint・memo の判定の通知は局面の出力の判定の結果で数える (SRS FR87 / FR51 / FR94)。
+    relationships: [memo の局面, 引き金の満ちた memo, 処置, memo の審査, 局面の出力]
+  - canonical: 昇格の行
+    domain: consumer
+    aliases: [promotion line]
+    definition: memo を残して契約を分ける昇格で memo の notes に足す閉じた文法の 1 行 (頭の語 昇格 に全部か一部と契約 id の列を続ける形・全部の行はその memo から分けた契約の全部を並べる・字面の正本は ADR-0089・SRS FR91)。 複数在れば最後の行で判じる。 全部の行の memo は引き金の判定と審査から外れ (SRS FR87)、 最後の行が全部で、 行の契約 id の列と discovered-from で辿れる契約の列が一致して 1 本以上在り、 全部が着地の形で閉じ、 子の開いた台帳の問いと処置の無い昇格か close の審査の判定を持たない memo を器が昇格済みの形で閉じる (SRS FR93)。
+    relationships: [memo, 昇格, 処置, discovered-from, 着地の形, memo の局面]
+  - canonical: close の理由の文法
+    domain: consumer
+    aliases: [closed-reason grammar]
+    definition: bead の close の理由を種類ごとの閉じた形の和に限る決まり (SRS FR91 は形の名だけ・字面の正本は ADR-0089)。 契約は着地 (landed と着地 commit id)・重複・後継・取り下げ、 台帳の問いと decision の型の bead は裁定 (裁定 id)、 memo は昇格済み (契約 id の列)・まとめた・見送り (裁定 id)、 epic は完了と取り下げの形。 和の外 (理由の無い close を含む) と land の終端の外の着地の形の close は起票の門が字面で断り (SRS FR81 (d))、 種類との食い違い・解けない id・自分の裁定の行にも裁定 event にも無い裁定 id・memo の子の問いの裁定でない見送り・まとめ先が開いた memo でないまとめたは局面の出力が misfit で数える。
+    relationships: [起票の門, 着地の形, 処置, memo, 契約, 台帳の問い, 裁定 id, misfit]
+  - canonical: 着地の形
+    domain: consumer
+    aliases: [landed form]
+    definition: close の理由が landed と着地 commit id で始まる閉じ (SRS FR50・字面の正本は ADR-0089)。 land の終端だけが CI の結果と共に書き、 席の道具の呼び出しのこの形の close は起票の門が断る (SRS FR81 (d))。 昇格の行が全部の memo は、 辿れる契約が全部この形で閉じたときだけ器が閉じる (SRS FR93)。
+    relationships: [land の終端, close の理由の文法, 昇格の行, 起票の門]
+  - canonical: discovered-from
+    domain: consumer
+    definition: 台帳の依存の辺の種類の 1 つで、 memo を残して契約を分ける昇格で分けた契約から memo へ張る辺 (SRS FR91・ADR-0089)。 memo から辿れる開いた契約が在れば memo は memo-promoting で、 辿れる契約の列が最後の昇格の行の列と一致しない memo は自動の close をされない (SRS FR93)。
+    relationships: [昇格, 昇格の行, memo の局面, 台帳]
