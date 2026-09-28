@@ -11,6 +11,10 @@
 //!
 //! cap は新しい閾値を作らない: lens が [`outside_block`] で既存の `gate.token_cap` の残り（既存 4 材料と base の段の後）に
 //! 名ごとに収め、収まらない名は切り詰めの 1 行、それも収まらない名は最後に落とした本数の 1 行に数える（黙って落とさない）。
+//!
+//! 本文が指す別の設計の § の本文（§55・行 bg）は子 module `linked` が既存の塊の後ろに束ねる。
+
+mod linked;
 
 use super::base::{declared_name, item_text, tooth_names, ITEM_HEAD, ROW_LINE_WIDTH};
 use crate::pipe::closure::{holds_word, mentioned_names, src_region, test_region, Mentioned, Source};
@@ -24,7 +28,7 @@ use std::path::Path;
 const HEADING: &str = "\n## write-set の外の材料（契約が名指す物を器が base から束ねた事実）\n";
 
 /// 見出しの下の説明の 1 行。
-const PREAMBLE: &str = "契約の本文（節・done・約束の行）が名指す write-set の外の物を、名ごとの塊（行頭の `- ` と名）で depends の相手の行・crate の依存の表・親 module の宣言・`.rs` の item・`.rs` の要約・data file の鍵の行の順に並べる。data file は全文でなく、行数と byte 数と鍵の列と、本文に在る鍵を持つ最初の 1 行だけ。";
+const PREAMBLE: &str = "契約の本文（節・done・約束の行）が名指す write-set の外の物を、名ごとの塊（行頭の `- ` と名）で depends の相手の行・crate の依存の表・親 module の宣言・`.rs` の item・`.rs` の要約・data file の鍵の行の順に並べる。data file は全文でなく、行数と byte 数と鍵の列と、本文に在る鍵を持つ最初の 1 行だけ。その後ろに、本文が指す別の設計の § のうち解けない参照の 1 塊、解けた § の塊（指された順・§ の見出しの次の行から次の見出しの前まで・行を指せばその行の done つき）、束ねた § の本文だけが名指す名の塊（1 段だけ・§ の中の参照は辿らない）の順に並べる。data file と dir の配下の file の行数は改行で数えた生の行（wc -l と同じ）、`.rs` の要約の行数は base の要約と同じ幅で畳んだ数。";
 
 /// crate の manifest の file 名。
 const MANIFEST: &str = "Cargo.toml";
@@ -103,11 +107,11 @@ pub(super) fn outside_text(repo: &Path, contract: &Contract, bodies: &[&str]) ->
     bundle(&Tree { repo, tracked, sources, write_set }, &contract.design, bodies)
 }
 
-/// 木と本文から塊を (f) → (d) → (e) → (a) → (b) → (c) の順に並べる。
+/// 木と本文から塊を (f) → (d) → (e) → (a) → (b) → (c) の順に並べ、別の設計の § の (g) → (h) → (i) を後ろに足す（§55）。
 fn bundle(tree: &Tree<'_>, design: &str, bodies: &[&str]) -> String {
     let decls: Vec<Decl> = tree.sources.iter().flat_map(declarations).collect();
-    let candidates: BTreeSet<&str> = decls.iter().map(|decl| decl.name.as_str()).collect();
-    let found = mentioned_names(bodies, &candidates.into_iter().collect::<Vec<&str>>(), &tree.tracked);
+    let candidates: Vec<&str> = decls.iter().map(|decl| decl.name.as_str()).collect::<BTreeSet<&str>>().into_iter().collect();
+    let found = mentioned_names(bodies, &candidates, &tree.tracked);
     let doc = table::parse_pointer(design).ok().map(|pointer| pointer.path);
     let mut chunks = depends_chunks(tree, design);
     chunks.extend(manifest_chunks(tree, &found));
@@ -115,6 +119,7 @@ fn bundle(tree: &Tree<'_>, design: &str, bodies: &[&str]) -> String {
     chunks.extend(found.names.iter().filter_map(|name| item_chunk(tree, &decls, name)));
     chunks.extend(rs_chunks(tree, &found));
     chunks.extend(data_chunks(tree, &found, doc.as_deref(), &bodies.join("\n")));
+    chunks.extend(linked::linked_chunks(tree, (&decls, &candidates), &found, design, bodies));
     chunks.join("\n")
 }
 
@@ -696,6 +701,117 @@ mod tests {
         let bare: Vec<String> = tracked.iter().filter(|path| !path.ends_with("Cargo.toml")).cloned().collect();
         let text = text_of(&repo, &bare, &["crates/toy/src/lib.rs"], "docs/design/t.md#g", &["inner と shape と area だけを読む"]);
         assert_eq!(text, "", "名指しが無ければ空");
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// §55 の長い § の本文（§ 4 の 1 行）。
+    fn long_line() -> String {
+        "x".repeat(2000)
+    }
+
+    /// §55 の toy の木: 既存の木に設計 doc 2 本（自分の doc s.md に § 4 つと行 p〔§1＝自分の §〕・q〔§3〕、別の doc o.md に
+    /// § 2 つと行 r〔§1〕）を足す。s.md §2 は `ZqShape` と `ZqTwin` と o.md §2 を、o.md §2 は `zq_area` を名指す。
+    fn linked_scratch(name: &str) -> (PathBuf, Vec<String>) {
+        let (repo, mut tracked) = scratch(name);
+        let row = |id: &str, section: &str| {
+            format!("\n[[contract]]\nid = \"{id}\"\ntitle = \"t{id}\"\nreq = [\"FR1\"]\nsection = \"{section}\"\nwrite-set = [\"crates/toy/src/lib.rs\"]\nverify = [\"git status\"]\nsize = \"S\"\ndone = \"{id} の done\"\n")
+        };
+        let table = |rows: String| format!("<!-- contracts:begin -->\nschema = 1\n{rows}<!-- contracts:end -->\n");
+        let own = format!(
+            "# s\n\n## 1. 自分の節\n\n自分の本文。\n\n## 2. 二の節\n\n- 二の本文は `ZqShape` と `ZqTwin` と o.md §2 を名指す。\n  二の 2 行目。\n\n## 3. 三の節\n\n三の本文。\n\n## 4. 四の節\n\n{}\n\n{}",
+            long_line(),
+            table(format!("{}{}", row("p", "1"), row("q", "3")))
+        );
+        let other = format!("# o\n\n## 1. 一の節\n\n一の本文。\n\n## 2. 二の節\n\n他の二は `zq_area` を名指す。\n\n{}", table(row("r", "1")));
+        for (path, body) in [("docs/design/s.md", own), ("docs/design/o.md", other)] {
+            let _ = std::fs::write(repo.join(path), body);
+            tracked.push(path.to_owned());
+        }
+        (repo, tracked)
+    }
+
+    /// § の塊の頭（`- <doc の path> §N` の 1 行だけの頭）の列。
+    fn section_heads(text: &str) -> Vec<String> {
+        chunks(text).iter().filter_map(|chunk| chunk.lines().next()).filter(|head| head.contains(".md §") && !head.contains(':')).map(str::to_owned).collect()
+    }
+
+    /// §55 (a) 5 形の全部を持つ本文で § の塊が指された順に 4 本（母集団 = 塊の頭を同じ assert で数える）・2 字下げの本文・
+    /// 行ごとの done の行。自分の § と、同じ § の 2 形と、`ADR-0001 §4` と `§4.1` は塊を作らず、節の本文の先頭の 1 行と
+    /// 自分の § だけを指す本文は外の材料を 1 字も変えない。
+    #[test]
+    fn linked_section_material_five_forms_bundle_sections_in_pointed_order() {
+        let (repo, tracked) = linked_scratch("linked-forms");
+        let ws = ["crates/toy/src/inner.rs"];
+        let body = "docs/design/s.md#p §1\n本文は §2 と o.md §2 と [他](o.md) §2 と s.md#q と 行 q と o.md の行 r と [o.md §1](o.md) を指し、§1 と 行 p と s.md 行 p と ADR-0001 §4 と §4.1 も書く。";
+        let text = text_of(&repo, &tracked, &ws, "docs/design/s.md#p", &[body]);
+        assert_eq!(
+            section_heads(&text),
+            ["- docs/design/s.md §2", "- docs/design/o.md §2", "- docs/design/s.md §3", "- docs/design/o.md §1"],
+            "{text}"
+        );
+        assert_eq!(
+            chunk_of(&text, "docs/design/s.md §2"),
+            "- docs/design/s.md §2\n  - 二の本文は `ZqShape` と `ZqTwin` と o.md §2 を名指す。\n    二の 2 行目。",
+            "{text}"
+        );
+        assert_eq!(chunk_of(&text, "docs/design/s.md §3"), "- docs/design/s.md §3\n  三の本文。\n  行 q の done: q の done", "{text}");
+        assert_eq!(chunk_of(&text, "docs/design/o.md §1"), "- docs/design/o.md §1\n  一の本文。\n  行 r の done: r の done", "{text}");
+        assert!(!text.contains("解けない参照") && !text.contains(&long_line()), "{text}");
+        let own = text_of(&repo, &tracked, &ws, "docs/design/s.md#p", &["docs/design/s.md#p §1\n本文は §1 と 行 p だけを指す。"]);
+        assert_eq!(own, text_of(&repo, &tracked, &ws, "docs/design/s.md#p", &[]), "自分の § だけなら不変");
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// §55 (b) tracked に無い doc の §・無い §・表に無い行 id（同じ doc と別の doc）は、正規化した字面を現れた順に重複なく
+    /// 並べた 1 塊になり、既存の塊の後ろ・§ の塊の前に置かれる。
+    #[test]
+    fn linked_section_material_unresolved_references_form_one_chunk_before_sections() {
+        let (repo, tracked) = linked_scratch("linked-unresolved");
+        let ws = ["crates/toy/src/inner.rs"];
+        let body = "x.md §1 と §9 と 行 zz と o.md 行 yy と §9 と o.md §1 を指す。";
+        let text = text_of(&repo, &tracked, &ws, "docs/design/s.md#p", &[body]);
+        let base = text_of(&repo, &tracked, &ws, "docs/design/s.md#p", &["o.md"]);
+        assert_eq!(text, format!("{base}\n- 解けない参照: x.md §1, §9, 行 zz, o.md 行 yy\n- docs/design/o.md §1\n  一の本文。"), "{text}");
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// §55 (c) 1 段: 束ねた § だけが名指す名（`ZqShape`）の塊は § の塊の後ろ、契約の本文も名指す `ZqTwin` の塊は既存の
+    /// 位置に 1 本だけで、束ねた § が指す別の doc の §2 の塊とその本文だけが名指す `zq_area` の塊は無い。
+    #[test]
+    fn linked_section_material_names_in_bundled_sections_go_one_level_deep() {
+        let (repo, tracked) = linked_scratch("linked-names");
+        let text = text_of(&repo, &tracked, &["crates/toy/src/inner.rs"], "docs/design/s.md#p", &["docs/design/s.md#p §1\n本文は §2 を指し ZqTwin を読む。"]);
+        let heads: Vec<String> = chunks(&text).iter().map(|chunk| chunk.lines().next().unwrap_or_default().to_owned()).collect();
+        let at = |head: &str| heads.iter().position(|found| found.starts_with(head)).unwrap_or(usize::MAX);
+        let section = at("- docs/design/s.md §2");
+        assert!(section < heads.len() && section < at("- ZqShape: crates/other/src/shape.rs:5"), "{heads:?}");
+        assert!(at("- ZqShape") < heads.len(), "{heads:?}");
+        assert_eq!(heads.iter().filter(|head| head.starts_with("- ZqTwin")).count(), 1, "{heads:?}");
+        assert!(at("- ZqTwin") < section, "{heads:?}");
+        assert!(at("- docs/design/o.md §2") == usize::MAX && at("- zq_area") == usize::MAX, "{heads:?}");
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// §55 (d) 残りが足りない周は長い § の塊が切り詰めの 1 行になり、解けない参照の塊と小さい § の塊は残り、並びは
+    /// 解けない参照 → 切り詰めの行 → 小さい § の塊。説明の 1 行が (g) → (h) → (i) の並びを名乗る。
+    #[test]
+    fn linked_section_material_long_section_is_truncated_while_small_chunks_stay() {
+        let (repo, tracked) = linked_scratch("linked-cap");
+        let text = text_of(&repo, &tracked, &["crates/toy/src/inner.rs"], "docs/design/s.md#p", &["x.md §1 と §4 と o.md §1 を指す。"]);
+        let long = chunk_of(&text, "docs/design/s.md §4");
+        assert!(long.contains(&long_line()), "{text}");
+        let full = outside_block(&text, u64::MAX);
+        let room = u64::try_from(full.len()).unwrap_or(u64::MAX).saturating_sub(1000);
+        let block = outside_block(&text, room);
+        let lines: Vec<&str> = block.lines().collect();
+        let at = |head: &str| lines.iter().position(|line| line.starts_with(head)).unwrap_or(usize::MAX);
+        let short = format!("- docs/design/s.md §4: 切り詰めた（塊 {} byte が cap の残りに収まらない）", long.len());
+        assert!(block.contains(&short) && block.contains(&chunk_of(&text, "docs/design/o.md §1")), "{block}");
+        assert!(at("- 解けない参照: x.md §1") < at(&short) && at(&short) < at("- docs/design/o.md §1"), "{block}");
+        assert!(at("- docs/design/o.md §1") < lines.len() && !block.contains(&long_line()) && !block.contains("落とした名"), "{block}");
+        assert_eq!(lines.get(2), Some(&PREAMBLE), "{block}");
+        let order: Vec<usize> = ["解けない参照の 1 塊", "解けた § の塊", "名指す名の塊"].iter().filter_map(|word| PREAMBLE.find(word)).collect();
+        assert!(order.len() == 3 && order.windows(2).all(|pair| pair.first() < pair.get(1)), "{PREAMBLE}");
         let _ = std::fs::remove_dir_all(&repo);
     }
 }

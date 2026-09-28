@@ -40,7 +40,7 @@ const HEADING: &str = "\n## write-set の base の要約（器が base から測
 
 /// 見出しの下の説明の 1 行（段を落とさない周だけ）。
 const PREAMBLE: &str =
-    "契約の write-set の各項目について、base の行数（全体 / 本体＝最初の行頭 `#[cfg(test)]` より前）と、`.rs` は本体の区間の宣言の名と歯の区間の `#[test]` の fn の名を別の列で並べる。`+` の項目は base に無い新設の file。";
+    "write-set の各項目の base の行数（全体 / 本体＝最初の行頭 `#[cfg(test)]` より前）と、`.rs` は本体の宣言の名と歯の `#[test]` の fn の名を別の列で並べる（`+` は新設）。行数は字数 ÷ 幅の切り上げ（最小 1・受付の上限の余地と同じ）で、生の行と違う file は括弧に生の行。";
 
 /// 材料の本文を組む（`materials` から 1 回だけ呼ぶ）。幅の rules 行を読めない周は理由の 1 行（C10）。
 pub(super) fn base_text(repo: &Path, write_set: &[String]) -> String {
@@ -70,7 +70,11 @@ pub(super) fn item_text(repo: &Path, item: &str, width: u64) -> String {
         Err(reason) => return format!("{ITEM_HEAD}{item}: 読めない（{reason}）"),
     };
     let lines = FileLines::of(&path, &text, width);
-    let mut head = format!("{ITEM_HEAD}{item}: 行数 全体 {} / 本体 {}", lines.total, lines.src);
+    // 畳んだ数と生の行が違う file だけ生の行を括弧で添える（等しい file の見出しは不変・§55 形 8）。
+    let raw = text.lines().count();
+    let folded = if u64::try_from(raw).ok() == Some(lines.total) { String::new() } else { format!("（幅 {width} で畳んだ数・生の行 {raw}）") };
+    let space = if folded.is_empty() { " " } else { "" };
+    let mut head = format!("{ITEM_HEAD}{item}: 行数 全体 {}{folded}{space}/ 本体 {}", lines.total, lines.src);
     if item.starts_with(PLACE_ONLY_FILE) {
         head.push_str(PLACE_ONLY_NOTE);
     }
@@ -320,5 +324,28 @@ mod tests {
         assert!(!dropped.contains("src/a.rs") && !dropped.contains("宣言"), "要約の本文は残らない: {dropped}");
         assert_eq!(dropped.lines().filter(|line| !line.is_empty()).count(), 2, "見出しと本数の 1 行: {dropped}");
         assert_eq!(base_block("\n", u64::MAX), "", "空の写しは空文字");
+    }
+
+    /// §55 形 7 / 8: 幅 120 を越える 250 字の行を持つ `.rs` の見出しは全体の畳んだ数の直後に幅と生の行の括弧を持ち、
+    /// 越えない `.rs` の見出しは不変（母集団 = 2 項目の見出しを同じ assert で数える）。base の説明の 1 行は畳む式と括弧の
+    /// 意味を、外の材料の説明の 1 行は生の行を名乗る。
+    #[test]
+    fn review_base_lines_folded_count_names_the_raw_lines_only_when_they_differ() {
+        let repo = scratch("lines");
+        let _ = std::fs::write(repo.join("src/a.rs"), FIXTURE);
+        let _ = std::fs::write(repo.join("src/w.rs"), format!("//! w\n// {}\npub fn wide() {{}}\n", "y".repeat(247)));
+        let text = summary(&repo, &["src/w.rs".to_owned(), "src/a.rs".to_owned()], 120);
+        let heads: Vec<&str> = text.lines().filter(|line| line.starts_with("- ")).collect();
+        assert_eq!(
+            heads,
+            ["- src/w.rs: 行数 全体 5（幅 120 で畳んだ数・生の行 3）/ 本体 5", "- src/a.rs: 行数 全体 35 / 本体 23"],
+            "{text}"
+        );
+        let preamble = |block: String| block.lines().find(|line| !line.is_empty() && !line.starts_with("## ")).map(str::to_owned);
+        let base = preamble(base_block(&text, u64::MAX)).unwrap_or_default();
+        assert!(base.contains("字数 ÷ 幅の切り上げ（最小 1・受付の上限の余地と同じ）") && base.contains("生の行と違う file は括弧に生の行"), "{base}");
+        let outside = preamble(super::super::outside::outside_block("- x.json: 行数 1 / byte 2", u64::MAX)).unwrap_or_default();
+        assert!(outside.contains("生の行（wc -l と同じ）") && outside.contains("幅で畳んだ数"), "{outside}");
+        let _ = std::fs::remove_dir_all(&repo);
     }
 }
