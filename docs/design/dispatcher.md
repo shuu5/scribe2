@@ -481,7 +481,7 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
   1. **未処置の終端を数える**: `notices` が、同じ周の列の結果の候補のうち理由が `Settled` のものについて、置き場の replay からその bead の最新の便（run id の昇順の最後）を引き、`alarm_word` が `Some` を返すものを未処置とする。判じ手は `alarm_word` の 1 本のまま（2 本目を書かない・C2）。台帳で開いた bead だけが候補に並ぶので、閉じた bead は数えない。周ごとに導き直し、記録を持たない（C10）。
   2. **idle の 1 行の末尾に足す**: idle の 1 行の今の末尾（§26 形 2 の並列の実測・§27 形 3 の事前審査）の後ろに ` pending=<k>:<bead>/<段>=<語>,…`（候補の並びの順・段は `as_str` の字面・語は `alarm_word` の返り値）。未処置が 0 本の周は key を出さない（既存の idle の行の字面は 1 字も変わらない）。
   3. **契機は変えない**: 送るのは今どおり §19 形 1 (b) の周（運転手の終端の周で、起こした便 0 ∧ 候補 1 本以上）。未処置の bead は `Settled` の候補として必ず列に載るので、終端の周が来るたびに同じ行が送られる（処置＝close・release・行の直しが付くまで）。
-  4. **送達の結果を stderr にも写す**: `notices` が返す `notify=` の行を、stdout に加えて stderr にも同じ字面で出す。列が起こした運転手の周は launch.log に残る（event も tick.jsonl の schema も変えない）。
+  4. **送達の結果を stderr にも写す**: `notices` が返す `notify=` の行を、stdout に加えて stderr にも同じ字面で出す。列が起こした運転手の周は launch.log に残る（event も tick.jsonl の schema も変えない）。置き場に席の無い周も `notify=no-seat` を写す（誰にも届かなかった事実こそ残す）。終端の stderr を完全一致で照合する既存の歯は e2e の `pipe/land/retire.rs` の `pipe_retire_reviewed_unreadable_refused_and_names_the_verdict` の 1 本で（2026-09-28・本行の実装の木で e2e 1662 本を撃ち、落ちたのはこの 1 本・verified）、`notify=` で始まる行を除いた stderr で断りの 1 行を照合する形に直す（断りの字面は変えない・この file は verify の filter に当たらない歯の外の file）。
   5. `notify.rs` は段の閉じた型の variant を名指さない（§19 形 5）: 未処置の段と語は `notices` が字面で渡す。
 - 触らない: 終端の 1 行（§19 形 3 (a)）・送る宛先と窓と送達の 1 関数・`alarm_word` の判定・`WaitReason` の variant と `render` の字面（`dispatch ls` の `reason=`）・列の判定・event の kind・heartbeat（[seat-heartbeat.md](./seat-heartbeat.md) §16）の行。
 - 歯（接頭辞 `pipe_notify_pending_`・`crates/scribe2-boundary/tests/e2e/notify.rs`・`pipe/` の外＝§19 形 6・既存の `intake_bead` と `idle_round` の型・`grep -rn "pipe_notify_pending" crates/` は 0 件・2026-09-28）:
@@ -874,11 +874,11 @@ id = "ad"
 title = "未処置の終端を idle の知らせに毎周載せ、送達の結果を stderr にも残す — 列の候補のうち Settled の bead の最新の便を alarm_word で判じて idle の行の末尾に pending= を足し、notify= の行を stderr にも写して列が起こした運転手の周も launch.log に残す（契機・宛先・終端の 1 行は不変・memo s2-07l.732）"
 req = ["FR30", "FR68"]
 section = "29"
-write-set = ["crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/notify.rs", "crates/scribe2-boundary/tests/e2e/notify.rs"]
+write-set = ["crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/notify.rs", "crates/scribe2-boundary/tests/e2e/notify.rs", "crates/scribe2-boundary/tests/e2e/pipe/land/retire.rs"]
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_notify_pending_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_notify_facts_"]
 size = "S"
 growth = ["crates/scribe2/src/pipe/cli.rs:25", "crates/scribe2/src/pipe/notify.rs:20"]
-done = "(1) notices が同じ周の列の結果の候補のうち理由が Settled のものについて置き場の replay からその bead の最新の便を引き、alarm_word が Some を返すものを未処置とし、判じ手は alarm_word の 1 本のまま周ごとに導き直す (2) idle の 1 行の今の末尾の後ろに pending=<k>:<bead>/<段>=<語>,… を候補の順で足し、0 本の周は key を出さない (3) 送る契機は §19 形 1 (b) のまま (4) notify= の行を stdout に加えて stderr にも同じ字面で出す (5) notify.rs は段の閉じた型の variant を名指さない 歯: pipe_notify_pending_ の (a) 審査の判定 FAIL で終端に着いた便の bead が ready のまま Settled の候補になる置き場で別の live な便の終端を撃つと idle の行が pending=1:<bead>/Reviewed=<語> で終わる (b) 同じ周の終端の stderr が stdout の notify= の行と同じ行を持つ・既存の pipe_notify_facts_ の 2 本が不変で GREEN・base は (a) の key と (b) の stderr の行が無いので RED"
+done = "(1) notices が同じ周の列の結果の候補のうち理由が Settled のものについて置き場の replay からその bead の最新の便を引き、alarm_word が Some を返すものを未処置とし、判じ手は alarm_word の 1 本のまま周ごとに導き直す (2) idle の 1 行の今の末尾の後ろに pending=<k>:<bead>/<段>=<語>,… を候補の順で足し、0 本の周は key を出さない (3) 送る契機は §19 形 1 (b) のまま (4) notify= の行を stdout に加えて stderr にも同じ字面で出し、終端の stderr を完全一致で照合する既存の歯 pipe_retire_reviewed_unreadable_refused_and_names_the_verdict（retire.rs）は notify= で始まる行を除いた stderr で断りの 1 行を照合する（断りの字面は不変） (5) notify.rs は段の閉じた型の variant を名指さない 歯: pipe_notify_pending_ の (a) 審査の判定 FAIL で終端に着いた便の bead が ready のまま Settled の候補になる置き場で別の live な便の終端を撃つと idle の行が pending=1:<bead>/Reviewed=<語> で終わる (b) 同じ周の終端の stderr が stdout の notify= の行と同じ行を持つ・既存の pipe_notify_facts_ の 2 本が不変で GREEN・base は (a) の key と (b) の stderr の行が無いので RED"
 
 [[contract]]
 id = "ae"
