@@ -829,7 +829,7 @@ terms:
   - canonical: push の先端
     domain: consumer
     aliases: [push tip]
-    definition: land の終端が push した main の最後の commit (最後に着地した commit)。 候補の木で列の順に着地した便のうち先端でない便は、 自分の着地 commit を含む先端の commit の CI の結果で照合する (SRS FR50)。
+    definition: land の終端が push した main の最後の commit (最後に着地した commit)。 候補の木に並べた順に着地した便のうち先端でない便は、 自分の着地 commit を含む先端の commit の CI の結果で照合する (SRS FR50)。
     relationships: [land の終端, 候補の木, 着地の列]
     forbidden: [列の先端]
     flagged_ambiguities: [着地の列の「先頭」(最初に着地する便) と逆の端, remote の先端 (FR80 が GitHub に問う push の前の値) とは別]
@@ -1321,7 +1321,7 @@ terms:
   - canonical: 識別子の 4 形
     domain: consumer
     aliases: [identifier forms]
-    definition: 隣の private repo を指す閉じた 4 つ — repo の名 (一般語の名も除かない)・object id (隣の object db に在り公開先の repo に無いもの)・tracked path (/ を含み、 隣の tracked な path の後方一致に当たり、 公開先の repo の path に当たらないもの)・台帳 id (隣の台帳に在る issue の id) (SRS FR80)。 publish の種類の rules 行の値が並べる記号。
+    definition: 隣の private repo を指す閉じた 4 つ — repo の名 (出ていく字面と名をともに ASCII の英数字と _ の外の字 〔- と . と / を含む〕 で区切った成分の並びで、 大文字と小文字を区別せずに照合し、 一般語の名も除かず、 除外の一覧に在る字句の中の当たりだけを数えない・除外の一覧に足すには裁定が要る)・object id (隣の object db に在り公開先の repo に無いもの)・tracked path (/ を含み、 隣の tracked な path の後方一致に当たり、 公開先の repo の path に当たらないもの)・台帳 id (隣の台帳に在る issue の id) (SRS FR80)。 publish の種類の rules 行の値が並べる記号 (除外の一覧も同じ行が持つ)。
     relationships: [隣の private repo, 公開の字面の走査, rules 行]
     flagged_ambiguities: [起票の門の台帳 write の 4 形とは別, 台帳 id は裁定面の記帳 id とは別]
   - canonical: host-guard の配線
