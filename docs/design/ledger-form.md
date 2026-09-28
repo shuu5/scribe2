@@ -165,6 +165,16 @@ memo か契約かを「label が在るか」と「受入条件に設計の 1 行
 - 限界: 読みは hook の予算の内側だが、host の負荷で 2 秒を越えた周は ledger-timeout で断る（席は撃ち直す）。create が作る bead の id は台帳の採番で写しに無いので、同じ行の後の segment がその id を名指すと (a) で断る（撃ち分ければ通る）。delete（A1 で user に聞く書き）は掛けない（溢れと孤児は §10 の doctor が後から名指す）。host の見張りだけの session（席でない session）は本 § の門を持たない（§11 の形は持つ）。plugin の hook が 10 秒で切れた周の扱いは harness の側（未実測）。pinned にした子は数えから外れる（外したことは `bd list --status pinned` に見える）。
 - 却下: 読みを狭める（--id と --parent の 2 回で親と子を引く＝起動が 2 回で予算を越える・実測）／門を dispatcher の周や管理 tick の合図で撃つ（書いた後に知らせるだけで止められない）／違反の総数を基準値と比べて増えた書きを断る（基準値の置き場と毎回の全件の数え直しが要る＝書き 1 つの差分で足りる）／memo と方針の bead を数えから外す（scribe2 の根の直下の open は全部 memo で流入の主が素通りし、例外の列の置き場が要る）／closed の子も数える（子が全部 closed の epic が永久に溢れ、直し方が close でなく分割になる）／根に着かない親への create を通して doctor だけで数える（folio2 の形が増え続ける）／1 行に書きを 1 つだけ許す（移し替えの `&&` の連ねまで断る・効きを写しに足せば同じ穴を塞げる）。
 
+## 13. 台帳の問い（label intake:question）を 4 象限の母集団から外す（契約表の行 i・FR51・ADR-0083）
+
+やさしく言うと: 台帳の問いは、席から user への問いを残す記録で、契約でも memo でもない。いまの台帳の形の行は、型が epic と decision の bead だけを 4 象限（memo か設計 pointer か）の数えから外しているので、開いている問いが「どちらの印も無い」（neither）に数えられ、答えが出るまで doctor の行の違反に名指され続ける。問いも epic と裁定の bead と同じく数えから外す。
+
+- 何が起きているか（verified・main 4d3ba2ca）: 台帳の形の判定 `judge`（`crates/scribe2/src/ledger/form.rs`）は、4 象限の母集団を open の bead から型が epic か decision のもの（型の除外の定数）を除いて作り、neither はその母集団のうち memo の label も設計 pointer も持たない bead である。台帳の問いは型 task で起票される（器を導入した repo の問いも同じ）ので母集団に入り、開いている間 neither に名指される。台帳の形の行を写す消費側の面も、その間ずっと問いを違反として出す。
+- 出所: SRS v0.28 の FR51（「label intake:question の bead（台帳の問い・FR81）は、epic と decision の型の bead と同じく契約にも memo にも数えず名指さない」）と ADR-0083（器が問いとして読む記録は label intake:question の bead だけで、型は問わない）。消費側の席の指摘（2026-09-28・doctor の行が開いた問いを neither に数える）で、要件の文と判定の食い違いが分かった。
+- 形: 4 象限の母集団から、型が epic か decision の bead に加えて label intake:question を持つ bead を外す。label で外し型では外さない（問いは型 task で起票されるため・ADR-0083）。label の字は 1 つの定数に置き、起票の門（FR81）の実装は同じ定数を引く。doctor の台帳の形の行の key と順は変えない: open= は closed でない bead の全部の件数のまま、shaped= と both= と neither= だけが母集団から外れた問いの分だけ変わる。台帳の lint（`crates/scribe2/src/ledger/lint.rs`）は、契約を設計 pointer を持つ bead、memo を label intake:memo を持つ bead で数えるので、問いは既にどちらにも入らない（変えない）。
+- 歯: `quadrant_exempts_question_`（form.rs の既存の歯の区間に 1 本）が、open の問い 1（label intake:question・型 task・設計 pointer なし）と open の memo 1 と設計 pointer を持つ open の契約 1 と印の無い open の task 1 の台帳で、open が 4、shaped が 3、neither が印の無い task の id だけを名指し、問いの id がどの欄にも出ないことを測る。base の judge は問いを neither に数えるので RED（機能不在）。
+- 限界: label intake:question を持つ bead は、memo の label か設計 pointer を併せて持っても数えから外す（問いの label を先に見る）。そうした混ざった形を起票の時点で断るかは起票の門（FR81）の設計が決め、本行は数えだけを変える。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -251,4 +261,14 @@ verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail hook
 growth = ["crates/scribe2/src/hook/mod.rs:10", "crates/scribe2/src/hook/ledger_guard.rs:40", "crates/scribe2-boundary/tests/e2e/hook/guards.rs:200"]
 size = "L"
 done = "(1) 判定は兄弟 module に在り、起票の門の形で止まらなかった Bash の command だけを掛けて起票の門の判定の enum で返し、記録は ledger-deny と語で、極性一覧の行数は変わらない (2) 掛かる書きは create の --parent・create の --graph の file の node・update の --parent（空も）・update の --type と -t・dep remove と dep rm・reopen と update の --status と -s と --claim（closed でも pinned でもない状態へ）の 6 つで、どれも無い command と、hook の root が .beads の dir を持たない repo の command は台帳を 1 回も読まない (3) 掛かる segment が在る周は台帳を 1 回だけ読み（client は --bd か既定・待ち上限は rules 行 hook.budget_ms）、読めない周は ledger-unreadable・待ち上限を越えた周は ledger-timeout で断り、1 行の segment は通った segment の効きを足した写しで順に判定され、update A --parent B && update B --parent A の 2 つ目は parent-loop で断られる (4) 付け先が根に着かない書き（create と graph の parent_id と、今は根に着く X の update の付け先・update の空の付け先は除く）は parent-unrooted で top の id を、直下の open の子に epic でない open の bead を足すか数えに戻すと rules 行 ledger.open_children_max を越える書きは parent-full で親と子の数と上限を、update の付け先が自身か子孫なら parent-loop を、X / A が epic でない周の親を外す update と唯一の親の dep remove と、根の epic の型を epic 以外にする update は unrooting を（epic の親外しは通す）、parent_key をたどって parent_id を持つ node にも親の無い epic の node にも着かない plan の node（知らない key・輪を含む）は plan-orphan を、読めない plan の file は plan-unreadable を理由に断り、上限の行か hook.budget_ms の行が無い周は no-rule (5) closed と pinned の子は数えず、epic の create と epic の付け替えは溢れで断らず、根に着かない bead を根に着く親へ付け替える書きと型を epic にする書きは通る (6) 断り文は直す 1 行を持ち、parent-full は --type epic --parent <親> の子 epic の作り方を名指す (7) Create は --parent・--type・--graph の値を運び構築点は flags_of の 1 か所で、既存の起票の門の歯（.beads の無い toy repo）は変わらず緑"
+[[contract]]
+id = "i"
+title = "台帳の形の 4 象限の母集団から label intake:question の bead（台帳の問い）を epic と decision の型と同じく外す — doctor の行の key と順は変えず、開いた問いを neither に名指さない（FR51・ADR-0083）"
+req = ["FR51"]
+section = "13"
+write-set = ["crates/scribe2/src/ledger/form.rs"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail quadrant_exempts_question_"]
+growth = ["crates/scribe2/src/ledger/form.rs:30"]
+size = "S"
+done = "(1) form.rs の judge が 4 象限の母集団（shaped）を作るとき、型が epic か decision の bead に加えて label intake:question を持つ bead を外し、label の字は 1 つの定数に置く (2) doctor の台帳の形の行の key と順は変わらず、open= は closed でない bead の全部の件数のまま、shaped= と both= と neither= だけが問いの分だけ変わる (3) 台帳の lint（lint.rs）は変えない 歯: quadrant_exempts_question_（form.rs の既存の歯の区間に 1 本）が、open の問い 1（label intake:question・型 task・設計 pointer なし）・open の memo 1・設計 pointer を持つ open の契約 1・印の無い open の task 1 の台帳で open 4・shaped 3・neither が印の無い task の id だけ・問いの id がどの欄にも出ないことを測る。base の judge は問いを neither に数えるので RED（機能不在）"
 <!-- contracts:end -->
