@@ -348,6 +348,131 @@ fn contract_check_place_verbose_names_the_outside_row_only_with_the_flag() {
     clean(&[&repo, &state]);
 }
 
+// ─────── 新しい歯の接頭辞の衝突の予想（設計 docs/design/contract-source.md §54・行 bf・`s2-07l.708`・接頭辞 `contracts_prefix_collision_`） ───────
+
+/// 予想の toy の file: 既存の歯 `dial_ok` を歯の区間に持つ `src/dial.rs`。
+const COLLISION_DIAL: (&str, &str) =
+    ("crates/toy/src/dial.rs", "pub fn dial() {}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn dial_ok() {}\n}\n");
+
+/// crate `toy` の nextest 行 1 本の verify（`scope` は `--lib` か `--test e2e`・filter 語は `words` を空白で並べる）。
+fn collision_verify(scope: &str, words: &str) -> String {
+    format!("[\"cargo nextest run -p toy {scope} --no-tests=fail {words}\"]")
+}
+
+/// Declared 行（`write-set` と verify）。
+fn collision_row(id: &str, write_set: &str, verify: &str) -> String {
+    table_row(id, &[("write-set", write_set), ("verify", verify)])
+}
+
+/// `contracts check` の 1 周（rc と stdout の全行）。
+type CheckRun = (Option<i32>, Vec<String>);
+
+/// 当たる側の doc（`docs/design/toy.md` の `toy` の行）と新しい語の行の doc（`docs/design/fresh.md` の `fresh` の行）と
+/// `files` の toy repo で `contracts check` を旗の無い周・`--verbose` の周の順に撃ち、toy.md の本文と 2 周の
+/// (rc, stdout の全行) を返す。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn collision_check(toy: &[String], fresh: &[String], files: &[(&str, &str)]) -> (String, [CheckRun; 2]) {
+    let (doc, fresh_doc) = (table_doc(&table_region(toy)), table_doc(&table_region(fresh)));
+    let mut seeded = vec![("docs/design/fresh.md", fresh_doc.as_str())];
+    seeded.extend_from_slice(files);
+    let (repo, state) = derive_repo_with(&doc, &seeded);
+    let rules = ceiling_rules(&state);
+    let check = |extra: &[&str]| {
+        let args = ["contracts", "check", "--rules", rules.as_str(), "--repo"];
+        let out = bin_cmd().args(args).arg(&repo).args(extra).output().expect("binary を起動できる");
+        let run: CheckRun = (out.status.code(), stdout_of(&out).lines().map(str::to_owned).collect());
+        run
+    };
+    let runs = [check(&[]), check(&["--verbose"])];
+    clean(&[&repo, &state]);
+    (doc, runs)
+}
+
+/// 当たった行の finding の 1 行（toy.md の行 `id` の見出しの行番号・file の列）。
+fn collision_finding(doc: &str, id: &str, files: &str) -> String {
+    let line = table_line(doc, id);
+    format!("contracts: docs/design/toy.md:{line} contract-table:teeth-outside-write-set: 行 {id} の歯の file が write-set の外: {files}")
+}
+
+/// (a) 新しい語 `dial_knob_` の行 `n`（別の doc・write-set に `+` の src/dial/knob.rs と既存の src/dial.rs と src/other.rs）の
+/// 候補は module の path の語で knob.rs に絞られ、filter `dial_`（`--lib`）で write-set が src/dial.rs だけの行 `lib` が knob.rs
+/// を持つ 1 件になる。既知の語 `dial_ok` を先・`dial_knob_` を最後に並べた 2 語の行 `n2` も `dial_knob_` だけで当て、同じ行の
+/// 当たりは 1 件に併さる。同じ `+` を write-set に持つ行 `same`・scope が `--test e2e` の行 `e2e`・`+` の file を持たない行
+/// `plain` の新しい語 `dial_plain_` は当たらない（当たらない 3 行と絞りを外す変異は、どれも当たりの行か file を増やす）。
+/// `--verbose` の行の末尾は予想の出所（doc・行 id・語）と直し方を持つ。base は予想を持たず findings=0 の判定行だけ（RED）。
+#[test]
+fn contracts_prefix_collision_new_word_narrows_to_the_module_file_and_names_the_row_that_leaves_it_outside() {
+    let knob = "\"+crates/toy/src/dial/knob.rs\", \"crates/toy/src/dial.rs\", \"crates/toy/src/other.rs\"";
+    let lib = collision_verify("--lib", "dial_");
+    let toy = [
+        collision_row("lib", "[\"crates/toy/src/dial.rs\"]", &lib),
+        collision_row("same", "[\"crates/toy/src/dial.rs\", \"+crates/toy/src/dial/knob.rs\"]", &lib),
+        collision_row("e2e", "[\"crates/toy/src/dial.rs\"]", &collision_verify("--test e2e", "dial_")),
+        collision_row("plain", "[\"crates/toy/src/other.rs\"]", &collision_verify("--lib", "dial_plain_")),
+    ];
+    let fresh = [
+        collision_row("n", &format!("[{knob}]"), &collision_verify("--lib", "dial_knob_")),
+        collision_row("n2", &format!("[{knob}]"), &collision_verify("--lib", "dial_ok dial_knob_")),
+    ];
+    let (doc, [quiet, loud]) = collision_check(&toy, &fresh, &[COLLISION_DIAL]);
+    let finding = collision_finding(&doc, "lib", "crates/toy/src/dial/knob.rs");
+    let judgement = "contracts check: docs=2 rows=6 untracked=0 findings=1 place-out=1/6".to_owned();
+    assert_eq!(quiet, (Some(i32::from(RC_REFUSED)), vec![finding.clone(), judgement.clone()]), "旗の無い周は行 lib の 1 件と判定行");
+    let origin = |id: &str| {
+        format!(
+            " — 予想: docs/design/fresh.md 行 {id} の新しい語 dial_knob_・直し方: 行 lib の write-set に +crates/toy/src/dial/knob.rs を足すか、語を dial_ を含まない語に変える"
+        )
+    };
+    let hit = format!("contracts place-out: docs/design/toy.md 行 lib の歯の file が write-set の外: crates/toy/src/dial/knob.rs{}{}", origin("n"), origin("n2"));
+    assert_eq!(loud, (Some(i32::from(RC_REFUSED)), vec![finding, hit, judgement]), "旗の周は予想の出所と直し方を末尾に持つ 1 行が増える");
+}
+
+/// (b) module の path の語に一致しない語 `dial_turn_`（候補は `+` の src/wheel.rs と src/other.rs）は候補の 2 つとも外に解ける
+/// 行 `far` だけに当たり、候補の 1 つ（other.rs）を write-set に持つ行 `near` は当たらない。歯の区間の印を持たない file
+/// （`#[path]` の子 module の gear_tests.rs）に在る名 `dial_gear_ok` を語 `dial_gear_` にした行 `g` は新しい語と読まれない
+/// （読めば `far` と `near` に `+` の spoke.rs で当たる）。`tests` 欄を持つ導出の行 `d` は tests の file（tests/e2e.rs）を
+/// 置き場とし、`--test e2e` の行 `e2e` に当たる。base は予想を持たず findings=0 の判定行だけ（RED）。
+#[test]
+fn contracts_prefix_collision_unmatched_word_hits_only_when_every_candidate_is_outside() {
+    let lib = collision_verify("--lib", "dial_");
+    let toy = [
+        collision_row("far", "[\"crates/toy/src/dial.rs\"]", &lib),
+        collision_row("near", "[\"crates/toy/src/dial.rs\", \"crates/toy/src/other.rs\"]", &lib),
+        collision_row("e2e", "[\"crates/toy/src/dial.rs\"]", &collision_verify("--test e2e", "dial_")),
+    ];
+    let wire = collision_verify("--test e2e", "dial_wire_");
+    let fresh = [
+        collision_row("t", "[\"+crates/toy/src/wheel.rs\", \"crates/toy/src/other.rs\"]", &collision_verify("--lib", "dial_turn_")),
+        collision_row("g", "[\"+crates/toy/src/spoke.rs\"]", &collision_verify("--lib", "dial_gear_")),
+        derive_row("d", &[("creates", "[\"crates/toy/src/wire.rs\"]"), ("tests", "[\"crates/toy/tests/e2e.rs\"]"), ("verify", &wire)]),
+    ];
+    let files = [
+        COLLISION_DIAL,
+        ("crates/toy/src/gear.rs", "pub fn gear() {}\n\n#[cfg(test)]\n#[path = \"gear_tests.rs\"]\nmod tests;\n"),
+        ("crates/toy/src/gear_tests.rs", "#[test]\nfn dial_gear_ok() {}\n"),
+    ];
+    let (doc, [quiet, loud]) = collision_check(&toy, &fresh, &files);
+    let far_files = "crates/toy/src/other.rs, crates/toy/src/wheel.rs";
+    let findings = [collision_finding(&doc, "far", far_files), collision_finding(&doc, "e2e", "crates/toy/tests/e2e.rs")];
+    let judgement = "contracts check: docs=2 rows=6 untracked=0 findings=2 place-out=2/5".to_owned();
+    let mut want = findings.to_vec();
+    want.push(judgement.clone());
+    assert_eq!(quiet, (Some(i32::from(RC_REFUSED)), want), "旗の無い周は行 far と行 e2e の 2 件と判定行");
+    let hits = [
+        format!(
+            "contracts place-out: docs/design/toy.md 行 far の歯の file が write-set の外: {far_files} — 予想: docs/design/fresh.md 行 t の新しい語 dial_turn_・直し方: 行 far の write-set に crates/toy/src/other.rs, +crates/toy/src/wheel.rs を足すか、語を dial_ を含まない語に変える"
+        ),
+        "contracts place-out: docs/design/toy.md 行 e2e の歯の file が write-set の外: crates/toy/tests/e2e.rs — 予想: docs/design/fresh.md 行 d の新しい語 dial_wire_・直し方: 行 e2e の write-set に crates/toy/tests/e2e.rs を足すか、語を dial_ を含まない語に変える".to_owned(),
+    ];
+    let mut want = findings.to_vec();
+    want.extend(hits);
+    want.push(judgement);
+    assert_eq!(loud, (Some(i32::from(RC_REFUSED)), want), "旗の周は当たった 2 行が予想の出所と直し方を持つ");
+}
+
 // ─────── 閉包の拡張（設計 docs/design/contract-source.md §3 の 4 点・§9・契約 (g)・`s2-07l.249`・接頭辞 `contract_closure_ext_`） ───────
 
 /// (1) `surfaces`（第 5 形）: snapshot の名を宣言した行は snapshot の file とその名を持つ歯が write-set に無いと

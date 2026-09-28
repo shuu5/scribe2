@@ -22,6 +22,8 @@ use crate::name::NAME;
 use std::collections::BTreeSet;
 use std::path::Path;
 
+mod collide;
+
 /// 表の全行を検査する（**全件・行番号の順**・同じ行の中は検査の順）。intake（契約 (b)）は同じ関数を 1 行に撃つ。
 ///
 /// `ids` は `depends` の解決の母集団＝**同じ doc の全行の id**（§30・行 ad）。`contracts check` は `rows` と同じ
@@ -407,7 +409,8 @@ fn is_requirement(text: &str) -> bool {
 /// 未追跡の設計 doc は判定行の前に 1 件 1 行で知らせ、判定行の `untracked=` に本数を出す（findings にも rc にも
 /// 数えない検出線・設計 §43 (3) / 行 at）。Declared 行の歯の置き場は判定行の末尾の `place-out=<行数>/<Declared 行数>`
 /// に出し、当たった行は `verbose` の周だけ判定行の前に 1 行ずつ出す（§45・行 av）。当たった行は findings の
-/// `teeth-outside-write-set` の 1 件ずつでもある（rc 1・欄の行数と findings の件数は一致する・§45 行 aw）。
+/// `teeth-outside-write-set` の 1 件ずつでもある（rc 1・欄の行数と findings の件数は一致する・§45 行 aw）。新しい歯の
+/// 接頭辞の衝突の予想（§54・行 bf）も同じ行の 1 件に併せ、`verbose` の行の末尾に予想の出所と直し方を足す。
 pub(crate) fn check_repo(repo: &Path, ceiling: &Ceiling<'_>, verbose: bool) -> Outcome {
     let judged = match judge_repo(repo, ceiling) {
         Ok(found) => found,
@@ -441,7 +444,9 @@ fn place_notices(places: &Places) -> (Vec<String>, String) {
         Some(ref hits) => {
             let notices = hits
                 .iter()
-                .map(|hit| format!("contracts place-out: {} 行 {} の歯の file が write-set の外: {}", hit.doc, hit.id, hit.files.join(", ")))
+                .map(|hit| {
+                    format!("contracts place-out: {} 行 {} の歯の file が write-set の外: {}{}", hit.doc, hit.id, hit.files.join(", "), hit.tail)
+                })
                 .collect();
             (notices, format!("{}/{}", hits.len(), places.declared))
         }
@@ -454,6 +459,8 @@ struct Places {
     declared: usize,
     /// 当たった行（doc 順・doc の中は行の順）。閉包の入力を読めない周は `None`（測れないを 0 行に読み替えない）。
     outside: Option<Vec<PlaceHit>>,
+    /// 新しい歯の接頭辞の衝突の予想（§54・行 bf・[`collide::predict`] が全 doc から 1 回だけ組む）。
+    predicted: Vec<collide::Predicted>,
 }
 
 /// 置き場の検出線に当たった 1 行。
@@ -462,8 +469,10 @@ struct PlaceHit {
     doc: String,
     /// 行 id。
     id: String,
-    /// write-set の外の歯の file（辞書順）。
+    /// write-set の外の歯の file（辞書順・base の歯と予想の候補を併せる）。
     files: Vec<String>,
+    /// 知らせの行の末尾（予想の出所と直し方・予想の当たりが無い行は空）。
+    tail: String,
 }
 
 impl Places {
@@ -485,10 +494,12 @@ impl Places {
         let base = Base { sources: ctx.sources, snapshots: ctx.snapshots, tracked: ctx.tracked, core_crate: NAME };
         let mut found = Vec::new();
         for row in declared {
-            let files = teeth_outside(row, &base, &texts);
+            let mut outside: BTreeSet<String> = teeth_outside(row, &base, &texts).into_iter().collect();
+            let tail = collide::merge(&self.predicted, doc, row.line, &mut outside);
+            let files: Vec<String> = outside.into_iter().collect();
             if !files.is_empty() {
                 found.push(TableError::TeethOutsideWriteSet { line: row.line, id: row.id.clone(), files: files.clone() });
-                hits.push(PlaceHit { doc: doc.to_owned(), id: row.id.clone(), files });
+                hits.push(PlaceHit { doc: doc.to_owned(), id: row.id.clone(), files, tail });
             }
         }
         found
@@ -606,7 +617,8 @@ fn judge_repo(repo: &Path, ceiling: &Ceiling<'_>) -> Result<Judged, Outcome> {
     };
     let docs = design_docs(&tracked);
     let (mut rows, mut found) = (0_usize, Vec::new());
-    let mut places = Places { declared: 0, outside: Some(Vec::new()) };
+    let predicted = collide::predict(repo, &docs, &ctx);
+    let mut places = Places { declared: 0, outside: Some(Vec::new()), predicted };
     for doc in &docs {
         let (count, judged) = judge_doc(repo, doc, &ctx, &mut places);
         rows = rows.saturating_add(count);
