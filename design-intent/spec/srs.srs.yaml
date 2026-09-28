@@ -11,14 +11,14 @@ meta:
   eyebrow_left: 要件定義書 (SRS)
   eyebrow_right: scribe2 — MVP
   subtitle: 契約は小さく・検証は機械が先・止まるときは記帳して止まる
-  version: "0.28"
+  version: "0.29"
   date: "2026-09-28"
   reader: この器で開発する人と AI（Claude Code の session）。 専門語には必ずやさしい言い換えを併記する
 
 approval:
   - role: 承認 (user)
     who: user
-    when: 2026-09-28（版 0.28。 版ごとの裁定 id は台帳が持つ）
+    when: 2026-09-28（版 0.29。 版ごとの裁定 id は台帳が持つ）
     stamp: 裁定済
   - role: レビュー (folio review lens)
     who: spec-review 5 軸 + SRS ceiling 3 lens
@@ -84,6 +84,11 @@ scope:
     - 床の検査
     - 選択式の問いの遮断
     - memo の昇格条件と審査
+    - 発話の仕分け
+    - 席の問いの台帳化
+    - 局面の出力
+    - memo の処置
+    - 器の便でない着地の発端
   out:
     - 席の自律機能（管理 tick の外）
     - interpreter 経路の中身の解析（v3）
@@ -151,12 +156,17 @@ acceptance:
   - { id: AC49, criterion: "seat deliver の fixture（偽 tmux・登録 row・状態の打刻・裁定面の置き場は持たない）で、 待ちの席（打刻の最終行が idle・入力欄が空）へは指し示しの雛形の 1 行が 1 回送られて rc 0 で送達の行を返し、 送られた行は雛形の展開と一致し（snapshot）、 4 つの記号を全部含む id と長さの上限ちょうどの id も送られ、 考え中の席・打刻の無い席・打刻を読めない席・入力欄に文字の在る席・登録 row の無い宛先・空の id・空白を含む id・制御文字を含む id・4 つの記号の外の ASCII 記号を含む id・ASCII の外の文字を含む id・長さの上限を越える id の 11 形はどれも 0 key で typed な理由の語で断られ、 口の引数ごとに見分けのつく値を渡して撃った回で送られた行に入る外からの値が記帳 id の 1 つだけである（口の引数の数を口の定義から数えて母集団として出す）ことを歯が nextest で確かめる", metric_v: "待ちの席への送達 1/1 + 雛形の一致 1/1 + 境界の送達 2/2 + 断りの 0 key 11/11 + 行に入る外からの値 1/N（記帳 id だけ）", metric_l: "裁定の指し示し", links: [FR79, FR44] }
   - { id: AC50, criterion: 隣の private repo 2 つと、 公開先の repo 自身と、 偽の gh が public と返す repo 1 つを群の anchor に持つ tmp の host の面と、 群を宣言しない tmp の host の面と、 anchor が公開先の repo 自身と偽の gh が public と返す repo だけの tmp の host の面と、 git が実際に押す先の path が <owner>/<name> で終わる tmp の置き場の remote と、 可視性を返し受けた引数と呼ばれた回数を記録する偽の gh と、 除外の一覧に字句 1 つの digest を持つ publish の種類の rules 行で、 次の 34 本が host-guard で rc 2 で deny される — (a) 識別子の 4 形（一般語の repo の名・object id・tracked path・台帳 id）が少なくとも 1 度ずつ、 出ていく字面の 7 箇所（commit の message・author の名・committer の名・patch の追加行・patch の path・押す annotated tag の本文・押す ref の名）にも少なくとも 1 度ずつ現れる git push 9 本（うち 1 本は識別子を 6 つ持つ）、 (b) 隣の private repo の名を、 後ろに - と語を続けた字句・大文字と小文字だけ違う字句・owner/<名> の字句・- を持つ名を . で書いた字句で持つ git push 4 本と、 隣の object id を 7 桁に縮めた字句を持つ git push 1 本、 (c) 本文の flag か本文の file に隣の private repo の名を持つ gh の本文を出す動詞 2 本、 (d) 偽の gh が対象を private と返す repo の可視性を public へ変える gh repo edit と public の repo を作る gh repo create を隣の private repo が 2 つの host と群を宣言しない host で撃つ 4 本と、 可視性を public へ変える gh api の書き 1 本、 (e) 解けない形 4 つ（変数の ref・--mirror・標準入力の本文・可視性の欄を file で渡す gh api の書き）と群を宣言しない host の解けない形 1 本、 (f) 読む上限を越える字面 1 本と、 30 秒眠る偽の gh の周 1 本と、 1 回ごとは締め切りの内でも合計が締め切りを越える偽の gh の周 1 本と、 群を宣言しない host で締め切りを越えて返る偽の gh の周の gh の本文を出す動詞 1 本、 (g) 可視性を読めない偽の gh の周の識別子を持つ push 1 本と、 GitHub の外の host の URL を持つ remote への識別子を持つ push 1 本と、 設定の url を private の repo・押す先を public の repo にした remote への識別子を持つ push 1 本と、 隣と同じ path の file を足す push 1 本。 断りは (a)(b)(c)(g) で当たった識別子の形と語と repo の先頭 5 件と件数（6 つ持つ push は先頭 5 件と件数 6）と言い換えの経路を、 (d) で全履歴を出す command の種別と user が行う経路を、 (e) で解けない形と書き直す経路を、 (f) で越えた上限の名とその経路を持ち、 (f) の締め切りの 3 本は締め切りに 1 秒を足した時間の内に返り、 (d) の 5 本と (e) の gh api の 1 本は偽の gh を 0 回撃つ。 次の 16 本は通る — 識別子を持たない push・群を宣言しない host の push（偽の gh を 0 回撃つ）・anchor が公開先の repo 自身と public の repo だけの host の push・隣の識別子を持つ private と実測した公開先の repo への push・可視性を読めない周の識別子を持たない push・可視性を読めない周に公開先の repo 自身の名を持つ push・public と返る anchor の名を持つ push・除外の一覧の字句の中に隣の private repo の名を持つ push・隣の private repo の名を英数字の続く語の中に持つ push・隣の private repo の名の後ろに _ で語を続けた字句を持つ push・公開先と共有する object id を持つ push・公開先にも在る path を持つ push・隣の object id の先頭 6 桁だけを持つ push・群を宣言しない host の、 GitHub の外の host の URL を持つ remote への push・/ を含まない隣の path を持つ push・公開の segment でも rm でもない command（git と gh を 0 回撃つ）。 偽の gh が受けた引数の repo の識別は owner/name だけで、 publish の種類の rules 行が無い周は fail-closed で断り、 enabled が false の周は識別子を持つ push と全履歴を出す command が偽の gh を 0 回撃って通る, metric_v: deny 34/34 + 通過 16/16 + 締め切りの内の断り 3/3（wall time）+ 全履歴の周と off の周と群の無い host の push の周の gh 0 回 + 公開でない周の子 process 0 回 + gh の引数の owner/name の外 0 + 行の無い周の deny 1/1 + off の通過 2/2, metric_l: 公開の字面の走査, links: [FR80, NFR4, NFR5] }
   - { id: AC51, criterion: "器の plugin を積む席の fixture で、 (a) label intake:question を持つ bead の create のうち 4 つの行（概要・技術・理由・推奨）のどれか 1 つを欠く 4 形・metadata の effect を欠く 1 形・effect が閉じた 2 値（document・operation）の外である 1 形、 (b) notes に裁定の行を足す 1 形、 (c) 引き金の行を持たない memo の create 1 形と昇格条件の節を引き金の行の無い本文へ書き換える update 1 形、 の 9 形を、 bd の直の command（rules 行 ledger.denied_writes から台帳の script を経ない書きの断りを外した fixture）と bdw の command の 2 経路で撃ち、 18 本がどれも起票の門で deny されて断り文に形ごとの理由が出て台帳が変わらず、 4 つの行と effect の揃った問いの create と引き金の行を持つ memo の create は通り、 label intake:question を持たない bead の create 1 本は (a) の検査に掛からず、 席の子 process（Bash から起こした常駐の process）が撃つ (a) の欠けた create 1 本は道具の呼び出しでないので判じられず、 通った台帳の問いの bead は台帳の lint の違反にも起動の列の待ちにも出ないことを歯が nextest で確かめる（撃った書きの数を母集団として出す）", metric_v: "deny 18/18（9 形 × bd・bdw の 2 経路） + 揃った書きの通過 2/2 + label の無い書きの非対象 1/1 + 子 process の書きの非対象 1/1 + 台帳の問いの lint と列の非対象 2/2", metric_l: "起票の門の 3 形", links: [FR81, FR51, FR68] }
-  - { id: AC52, criterion: "偽の台帳と tmp の state dir で、 marker が器の NAME を言う repo の対話の session に打った prompt が、 開いた台帳の問いの在る時と無い時の 2 本とも、 model に読まれる前に逐語のまま発話 event 1 件ずつに記帳され、 FR44 の閉じた一覧の差し込みの全種（管理 tick の打刻の合図を含む・種の数を一覧から数えて母集団として出す）と別の session からの message の包みと runner と lens の session の prompt は記帳されず、 marker の無い repo と別の NAME を言う repo の prompt も記帳されず、 到達点の計測の人由来の数えに発話 event が入らず、 結ばれない発話の本数が計測の出力の別の欄に出て、 bind は結ばれていない発話と開いた問いの組（先に在った問いと、 発話の後に起こした問いの 2 形）で 1 回ずつ通って、 それぞれ問いの notes に裁定の行（裁定 id・問い・発話の ts・逐語の順・逐語は発話 event と一致）が 1 行書かれ、 問いが close_reason「裁定 <裁定 id>」で close され、 裁定 event が 1 件記帳され、 発行された裁定 id が問い id の形（n は 1）に合い、 発話が無い・発話が結び済み・問いが閉じている・問いでない bead の 4 形は何も書かずに理由付きで断られ、 器の使い方の行に席が逐語を打って裁定を記帳する口（seat ruling add）が無く（使い方の行数を母集団として出す）、 発話 event の逐語が席の起動行・圧縮の直前の 1 枠・合図・通知のどれにも現れない（FR65）ことを歯が nextest で確かめる", metric_v: "記帳 2/2（問いの在る時と無い時） + 差し込みと包みと runner・lens の非記帳 0/(K+3)（K = FR44 の一覧の種の数） + marker の外の非記帳 0/2（marker の無い repo・別の NAME） + 人由来の数えの外と結ばれない発話の欄 2/2 + bind の通過 6/6（2 回 × 裁定の行・close・裁定 event） + id の形 2/2 + 断り 4/4 + 逐語を打つ口 0/N（N = 使い方の行数） + 逐語の運び出し 0/4（起動行・圧縮の直前の 1 枠・合図・通知）", metric_l: "発話の記帳と裁定の結び", links: [FR82, FR22, FR65] }
+  - { id: AC52, criterion: "偽の台帳と tmp の state dir で、 marker が器の NAME を言う repo の対話の session に打った prompt が、 開いた台帳の問いの在る時と無い時の 2 本とも、 model に読まれる前に逐語のまま発話 event 1 件ずつに記帳され、 FR44 の閉じた一覧の差し込みの全種（管理 tick の打刻の合図を含む・種の数を一覧から数えて母集団として出す）と別の session からの message の包みと runner と lens の session の prompt は記帳されず、 marker の無い repo と別の NAME を言う repo の prompt も記帳されず、 到達点の計測の人由来の数えに発話 event が入らず、 閉じていない発話の本数が計測の出力の別の欄に出て（FR88）、 bind は結ばれていない発話と開いた問いの組（先に在った問いと、 発話の後に起こした問いの 2 形）で 1 回ずつ通って、 それぞれ問いの notes に裁定の行（裁定 id・問い・発話の ts・逐語の順・逐語は発話 event と一致）が 1 行書かれ、 問いが close_reason「裁定 <裁定 id>」で close され、 裁定 event が 1 件記帳され、 発行された裁定 id が問い id の形（n は 1）に合い、 発話が無い・発話がその問いへ結び済み・問いが閉じている・問いでない bead の 4 形は何も書かずに理由付きで断られ、 器の使い方の行に席が逐語を打って裁定を記帳する口（seat ruling add）が無く（使い方の行数を母集団として出す・消費側の面の答えの口と席の道具の呼び出しの断りは AC58 が確かめる）、 発話 event の逐語が席の起動行・圧縮の直前の 1 枠・合図・通知のどれにも現れない（FR65）ことを歯が nextest で確かめる", metric_v: "記帳 2/2（問いの在る時と無い時） + 差し込みと包みと runner・lens の非記帳 0/(K+3)（K = FR44 の一覧の種の数） + marker の外の非記帳 0/2（marker の無い repo・別の NAME） + 人由来の数えの外と閉じていない発話の欄 2/2 + bind の通過 6/6（2 回 × 裁定の行・close・裁定 event） + id の形 2/2 + 断り 4/4 + 逐語を打つ口 0/N（N = 使い方の行数） + 逐語の運び出し 0/4（起動行・圧縮の直前の 1 枠・合図・通知）", metric_l: "発話の記帳と裁定の結び", links: [FR82, FR22, FR65] }
   - { id: AC53, criterion: "vessel 宣言に ruling-check = true と ruling-fixtures の一覧を持つ toy repo と偽の台帳（器を導入した別の repo の経路で batch: と policy: の形の裁定の行を書き、 裁定 id の欄と違う batch: の形の id を束の欄に持つ行を含む fixture）で、 閉じた台帳の問いの裁定の行に解ける問い id の形の id と、 台帳の裁定の行の裁定 id の欄に解ける batch: と policy: の形の id の 3 形と、 束の欄にだけ一致する batch: の形の id を引く契約は受付を通って着地し、 問いの部分が台帳の接頭辞と違う問い id の形の字面を持つ契約は数えられず断られずに受付と着地を通って doctor の件数にも入らず、 ruling-fixtures の一覧に載せた、 台帳に無い batch: の形の字面と線の後の時刻の形の字面を持つ契約は受付を通って着地し、 解けない id・開いた問いの id・opt-in の線の後に足した時刻の形の引用の 3 形を設計の節に持つ契約と契約表の行に持つ契約と、 台帳に無い batch: と policy: の形の id を持つ契約と、 一覧に載せて通ったのと同じ batch: の字面を、 その字面を ruling-fixtures に載せない 2 つ目の toy repo で持つ契約と、 一覧に無い batch: の形の字面を backtick で囲んだ契約と、 台帳の接頭辞の問い id の形で束の欄にだけ在る id を持つ契約は、 受付で理由と id を名指して断られ、 同じ 3 形を差分が足す便と、 判断の欄の 3 種（rules 行の ruling 欄・ADR の approval の裁定の欄・設計の節の裁定の欄）を台帳の bead の id だけで足す便と、 判断の欄をほかの接頭辞の問い id の形の字面だけで足す便と、 問い id の形の id を足さずに ruling-check を true から外す便は、 着地で main に載らず Gated に留まり、 当たった id か欄を名指す理由の event が便ごとに 1 件だけ記帳されて次の周に増えず、 opt-in の線の前から在る時刻の形の引用は受付も着地も通って doctor の行が件数に数え、 doctor の行が解けない引用の件数と id を出し、 ruling-check を持たない repo では同じ形も数えられず断られずに通って doctor の行がその旨を出すことを歯が nextest で確かめる", metric_v: "解ける形の通過 4/4（問い id の形・裁定 id の欄の batch: と policy:・束の欄にだけ一致する batch:） + ほかの接頭辞の問い id の形の通過と数えの外 3/3（受付・着地・doctor の件数） + 一覧に載せた字面の通過 2/2（台帳に無い batch:・線の後の時刻の形） + 受付の断り 11/11（設計の節 3・契約表の行 3・台帳に無い batch: と policy: 2・一覧に載せない同じ batch: の字面 1・backtick で囲んだ一覧に無い字面 1・束の欄にだけ在る問い id の形 1） + 着地の Gated 8/8（差分の 3 形・判断の欄 3 種・ほかの接頭辞の問い id の形だけの判断の欄・ruling-check を外す差分） + 理由の event の便ごと 1 件 1/1 + 線の前の引用の通過と数え 1/1 + doctor の件数と id 1/1 + key の無い repo の通過と doctor の行 2/2", metric_l: "裁定 id の実在", links: [FR83, FR10] }
   - { id: AC54, criterion: "偽の台帳と toy repo で、 effect が document の閉じた台帳の問いの裁定 id を main の追跡された file が 1 つも引かない fixture で、 置き場の file にその id の列が書かれ、 doctor の行に件数 1 と id が出て管理 tick の打刻の合図の末尾の alarm に unreflected が出て、 その id を acceptance で引く契約と notes で引く契約と問いに blocks される契約の 3 本が起動の列で理由 unreflected-ruling:<id> を持って待ち、 関わらない契約は同じ周に起こされ、 着地の周にその id を引く便が Gated に留まり、 留めの周を撃ち直しの上限の回数より多く回しても Failed にならず、 器の便でない commit で引用が main に載った次の周に待ちが解け、 置き場の file の列が空になって doctor の行と alarm の語が消え、 effect が operation の裁定は未反映に数えられず、 vessel 宣言に ruling-check を持たない repo でも同じに数えられることを歯が nextest で確かめる（撃った周の数を母集団として出す）", metric_v: "置き場の file の id の列 1/1 + doctor と alarm 2/2 + 関わる契約の待ち 3/3（acceptance・notes・blocks） + 関わらない契約の起動 1/1 + 着地の Gated と上限での非 Failed 2/2 + 器の便でない引用の後の解除と 0 件の消失 3/3（待ち・doctor・alarm） + operation の非計上 1/1 + key の無い repo の計上 1/1", metric_l: "未反映の裁定", links: [FR84, FR68, FR27, FR10] }
   - { id: AC55, criterion: "偽の floor-check の command と toy repo で、 floor-check を持たない repo では撃たれず列が待たず、 rc 0 を返す周は便が起き、 rc 1・rc 2・時間の上限を越える・撃てない（PATH に無い頭の語）の 4 形の周は first の印を持たない起動の列の全部の契約が理由 floor:1・floor:2・floor:timeout・floor:unfireable で待ち、 同じ不合格の周に first の印を持つ契約は floor で待たずに起き、 2 行の形・禁じる語列に当たる行・shell の記号を持つ行の 3 形の floor-check は撃たれずに断られてその周が floor:unfireable で待ち、 撃った command が封じ込めの内側で動き、 同じ main の sha の 2 周目は rc の結果を持つ sha では撃ち直されず、 時間を越えた sha と撃てない sha は次の周に撃ち直され（撃った回数を母集団として出す）、 main が進んだ周に撃ち直され、 不合格の後に main を直す commit を載せて手動の 1 周を撃つとその周に撃ち直されて待ちが解け、 doctor の行に結果が出て管理 tick の打刻の合図の末尾の alarm に floor が出ることを歯が nextest で確かめる", metric_v: "key の無い repo の非発火 1/1 + rc 0 の起動 1/1 + first の印の無い全部の契約の待ちと理由の語 4/4（rc 1・rc 2・時間切れ・撃てない） + first の印を持つ契約は不合格の間も起きる 1/1 + 行の検査の断り 3/3（形・禁じる語列・shell の記号） + 封じ込めの内側 1/1 + 同じ sha の撃ち直し 0 + 時間切れと撃てない sha の撃ち直し 2/2 + 進んだ main の撃ち直し 1/1 + 手動の 1 周での解除 1/1 + doctor と alarm 2/2", metric_l: "床の検査", links: [FR85, FR68, FR27] }
   - { id: AC56, criterion: "器の plugin の hook の入口を fixture の payload で撃ち、 marker が器の NAME を言う repo で、 登録 row を持つ orchestrator の席の session・登録 row の無い session・runner の session・user が skill を起動した直後の周・例外の印を置いた fixture の 5 形の AskUserQuestion がどれも deny され、 断り文が問いの経路を持ち、 vessel 宣言に question-route を持つ repo ではその 1 行も持ち、 marker が別の NAME を言う repo では同じ payload が deny されず（FR24 の沈黙）、 Bash と Edit の payload の判定が hook の対象から AskUserQuestion を除いた fixture での判定と一致することを歯が nextest で確かめる", metric_v: "deny 5/5（席・登録 row の無い session・runner・skill の直後・例外の印） + 断り文の経路と宣言の 1 行 2/2 + 別の NAME の repo の非 deny 1/1 + 他の道具の判定の一致 2/2", metric_l: "選択式の問いの遮断", links: [FR86] }
   - { id: AC57, criterion: "偽の台帳と偽の lens と tmp の state dir で、 引き金の 5 形（再発・同梱・依存・期日・着地）がそれぞれ満ちる fixture と満ちない fixture の 10 本で昇格（promote）の待ちの判定が分かれ、 起こす便が 0 の周に引き金の満ちない memo へ lens が rules 行 memo.triage_per_round の本数まで撃たれて判定の file と event が残り、 前の判定から rules 行 memo.triage_interval_h が過ぎていない memo には lens が撃たれず、 起こす便が在る周は lens が 0 本で、 lens が close を返した memo も open のまま台帳が変わらず、 pipe dispatch ls の memo の行と起こす便が 0 の周の通知の memo の要約が出て、 doctor の台帳の lint の行に処置の付かない昇格の待ちの本数と最古の年齢が出て、 処置（close）の後の周に memo の行が消えることを歯が nextest で確かめる", metric_v: "引き金の満ちと満たず 10/10 + 起こす便が 0 の周の lens と判定の file と event 1/1 + 間隔の中の lens 0 + 起こす周の lens 0 + close の判定での台帳の不変 1/1 + dispatch ls と通知の memo の要約 2/2 + doctor の行 1/1 + 処置の後の消失 1/1", metric_l: "memo の引き金と審査", links: [FR87, FR44, FR51] }
+  - { id: AC58, criterion: "偽の台帳と tmp の state dir と偽の hook の入力で、 要望・答え・会話の 3 つの仕分けでそれぞれ発話が閉じ、 1 つの発話が 2 つの memo と 3 つの台帳の問いへ閉じ、 同じ発話と同じ問いの bind と他の閉じを持つ発話への会話と開いた memo でない名指しが断られ、 会話の後の要望で会話の閉じが外れ、 閉じていない発話を持つ session の turn の終わりが 1 度だけ止まって 2 度目は止まらず、 止めた周に状態の打刻が idle にならず、 10 MB の event log の fixture で turn の終わりの判定が 2.0 秒以内に台帳を読まずに決まり、 doctor の行と管理 tick の alarm の語 unsorted が出て、 ts を名指した 1 件の読みが逐語を返し、 器が入力欄へ差し込んだ行と別の session の message は発話に数えられず、 消費側の面の答えの口が経路つきの発話 event と裁定を記帳して裁定 id を返し、 席の道具の呼び出しとしてのその口の撃ちが断られ、 計測の出力に閉じていない発話と会話の 2 欄が出ることを歯が nextest で確かめる", metric_v: "3 仕分け 3/3 + 1 発話から 2 memo 1/1 と 3 問 3/3 + 断り 3/3 + 会話の外し 1/1 + turn の終わりの止め 1/1 と 2 度目の通過 1/1 + idle の不在 1/1 + 2.0 秒以内かつ台帳の読み 0 回 1/1 + doctor と alarm 2/2 + 1 件の読み 1/1 + 差し込みと message の除外 2/2 + 面の口 1/1 と断り 1/1 + 計測の 2 欄 1/1", metric_l: "発話の仕分け", links: [FR88, FR82, FR65, FR22, FR27, FR44] }
+  - { id: AC59, criterion: "偽の台帳と tmp の state dir で、 asked が seat の問いを発話の前に起こした bind と asked が user の問いを発話の後に起こした bind は数えられず、 asked が seat の問いを発話の後に起こした bind が doctor の行に件数と裁定 id で数えられ、 裁定 event が asked と起票の時刻と発話の ts を持ち、 asked の欠けと値の外と label intake:memo を併せ持つ問いの create が起票の門に断られることを歯が nextest で確かめる", metric_v: "数えない 2/2 + 数える 1/1 + 裁定 event の欄 1/1 + 門の断り 3/3", metric_l: "席の問いの台帳化", links: [FR89, FR81, FR82] }
+  - { id: AC60, criterion: "偽の台帳・偽の event log・toy repo の契約表と SRS と commit の trailer で、 局面の語の一覧の各語を作る fixture で局面と手番が 1 対 1 に出て、 便の段の全ての値が局面へ写り、 窓より古く閉じた契約の行が行の局面の待ちにならず、 窓より古い未反映の裁定が残り、 書き直しで置き場の file が丸ごと入れ替わって読み手が途中の file を見ず、 入力の印が古い書きが捨てられ、 管理 tick の周の書き直しが台帳も git も撃たず、 便の終端の通知の語と doctor と alarm が局面の関数の語を使い、 どの局面にも当たらない部品が misfit と理由の語 3 種で出て、 年齢の閾値を越えた席の手番で alarm の語 owned と session の開始の事実行が出て、 受付の断りが event に記帳され、 閉じた発話の行き先が結びに出ることを歯が nextest で確かめる", metric_v: "局面の語の全部 + 便の段の全値 + 窓の外の行 1/1 + 窓の外の未反映 1/1 + 丸ごとの入れ替え 1/1 + 古い書きの捨て 1/1 + tick の台帳と git の読み 0 回 1/1 + 語の共有 3/3 + misfit 3/3 + owned と事実行 2/2 + 断りの event 1/1 + 行き先 1/1", metric_l: "局面の出力", links: [FR90, FR27, FR42, FR68] }
+  - { id: AC61, criterion: "偽の台帳と tmp の state dir で、 開いた memo の 4 つの局面が各 1 つの fixture で宣言順どおりに決まり、 昇格の行が全部で辿れる契約が全部着地の close で閉じた memo が昇格済みで close され、 一部の memo と着地の close の外の閉じを含む memo と処置の無い審査の判定を持つ memo が閉じずに memo-due になり、 memo に設計 pointer を書く昇格が従来どおり通り、 閉じた理由の文法の 3 形の memo の close が通って和の外の理由の close が台帳を読まずに断られ、 種類と理由の形の食い違いの閉じが misfit で数えられ、 notes の byte が上限を越えた memo を台帳の lint が名指すことを歯が nextest で確かめる", metric_v: "4 局面 4/4 + 自動の close 1/1 + 閉じない 3/3 + その場の昇格 1/1 + 3 形 3/3 と断り 1/1 + 食い違いの misfit 1/1 + notes の上限 1/1", metric_l: "memo の局面と処置", links: [FR91, FR81, FR87, FR51] }
+  - { id: AC62, criterion: "tmp の repo と偽の gh で、 発端の trailer か器の便の trailer を持つ本文を渡す merge の command が通り、 本文を渡さない command と形の外の id の trailer を持つ command が実行の前に断られ、 CI の main の検査が発端の trailer の無い器の便でない commit を名指して非 0 で止まり、 台帳に無い発端が局面の出力で misfit になることを歯が nextest で確かめる", metric_v: "通過 1/1 + 断り 2/2 + main の検査 1/1 + misfit 1/1", metric_l: "器の便でない着地の発端", links: [FR92, FR90] }
 requirements:
   - id: FR1
     type: FR
@@ -395,11 +405,11 @@ requirements:
     priority: must
     vmethod: T
     rationale_source: N-1
-    trace: { backward: [N-1], acceptance: [AC1, AC2, AC10, AC23, AC52] }
+    trace: { backward: [N-1], acceptance: [AC1, AC2, AC10, AC23, AC52, AC58] }
     ears:
       pattern: ubiquitous
       condition: 常時
-      response: "到達点の計測では人由来の event を数え、 承認の側（approval.received〔FR16〕と裁定 event〔FR82〕）の外が 0 件であることを機械で示す。 発話 event（FR82）は人由来の event の数えに入れず、 結んだ発話は裁定 event として承認の側に数え、 結ばれない発話の本数は計測の出力に別の欄で出す（隠さない）"
+      response: "到達点の計測では人由来の event を数え、 承認の側（approval.received〔FR16〕と裁定 event〔FR82〕）の外が 0 件であることを機械で示す。 発話 event（FR82）は人由来の event の数えに入れず、 結んだ発話は裁定 event として承認の側に数え、 閉じていない発話（FR88）の本数と会話として閉じた発話の本数は計測の出力に別の 2 欄で出し（隠さない）、 裁定 event は発話の経路（対話の session か消費側の面か・FR82）ごとに数える"
   - id: FR23
     type: FR
     label: 開発 session の作業記憶（廃止）
@@ -451,11 +461,11 @@ requirements:
     priority: must
     vmethod: T
     rationale_source: N-1
-    trace: { backward: [N-1, N-2, N-3], acceptance: [AC18, AC48, AC54, AC55] }
+    trace: { backward: [N-1, N-2, N-3], acceptance: [AC18, AC48, AC54, AC55, AC58, AC60] }
     ears:
       pattern: ubiquitous
       condition: 常時
-      response: "器は開発 session（orchestrator の席）が黙っていないかを周期で見て、 登録 row（FR40）を持ち状態の打刻の最終行が idle で入力欄が空いている席にだけ、 台帳の現在地から続きを進めるよう促す打刻の合図（heartbeat）1 行を注入する管理 tick を持つ（ADR-0058・heartbeat を席ごとに止める口と管理 tick の最後の周の打刻は FR78・ADR-0070）。 打刻の合図の末尾には alarm（閉じた語 unreflected〔FR84 の置き場の file が id を 1 つ以上持つ周〕と floor〔FR85 の床の検査が不合格の周〕）を足し、 alarm は置き場の file だけを読んで決め（台帳も git も撃たない）、 合図を送らない周の席（FR78 で止めた席・梯子の列が尽きた席など）には alarm も届かず、 doctor の行（FR84 / FR85）だけが知らせる。 送るのは席が最後の打刻から黙りの初段（rules 行 1 本・既定 30 分）以上黙り、 最後の合図から今の段の待ち（段 n の待ちは梯子の列の n 番目・列を越えた段は送らない）が経ち、 口座の門（群の逼迫〔FR38〕の閾値の rules 行のいずれか以上の口座の席には送らず、 計測〔FR33〕の記録の最新値だけを読んで計測は起こさず、 記録が無い・古い周は通す）を通った周だけで、 条件の列と順は ADR-0058 が正本で、 梯子の列と打ち切りの段は ADR-0068 が正本。 合図の間隔は席に変化が無ければ梯子の列（rules 行 1 本が持つ空でない昇順の秒の列・既定は 30 分 → 1 時間 → 3 時間 → 6 時間 → 12 時間 → 24 時間）の順で伸ばし（backoff）、 梯子の列が尽きた段では送らず（合図は梯子の列の長さまで・既定 6 本）、 席に変化（状態の打刻の最終行の時刻 = 変化の digest が動く。 比べる基準は合図の後に席が idle へ戻った周に取る）があれば梯子の列の先頭へ戻す。 周期・黙りの初段・梯子の列は rules 行 3 本（user 裁定 id つき）が持ち、 係数と上限の行は持たない。 梯子の記録（最後に送った時刻・何本目か・変化の digest）は席の置き場の file 1 つで、 記録が読めない・書けない周は送らず理由を判定行に出す（fail-closed）。 自席の置き場が群に属する周は、 群の移動の判定（FR38・1 本の関数）を群ごとに鮮度の窓に 1 回まで host の lock の内側で撃ち、 その周だけ計測（FR33）を起こしてよく、 他の周は測らない（ADR-0066）。 登録 row を持ち窓が shell に戻った席（再起動・退避の後）は、 黙りと変化の判定（打刻の最終行の状態と梯子）を経ずに口座（群なら群の今の口座・群の外なら row の口座）を決めて席の起動（FR59）で席の起こし直しを撃つ（FR28）。 便の起動の契機は FR68 が持つ"
+      response: "器は開発 session（orchestrator の席）が黙っていないかを周期で見て、 登録 row（FR40）を持ち状態の打刻の最終行が idle で入力欄が空いている席にだけ、 台帳の現在地から続きを進めるよう促す打刻の合図（heartbeat）1 行を注入する管理 tick を持つ（ADR-0058・heartbeat を席ごとに止める口と管理 tick の最後の周の打刻は FR78・ADR-0070）。 打刻の合図の末尾には alarm（閉じた語 unreflected〔FR84 の置き場の file が id を 1 つ以上持つ周〕・floor〔FR85 の床の検査が不合格の周〕・unsorted〔閉じていない発話〔FR88〕が 1 つ以上在る周〕・owned〔局面の出力〔FR90〕で手番が席の部品のうち年齢の閾値を越えたものが在る周〕）を足し、 alarm は置き場の file だけを読んで決め（台帳も git も撃たない）、 合図を送らない周の席（FR78 で止めた席・梯子の列が尽きた席など）には alarm も届かず、 doctor の行（FR84 / FR85）だけが知らせる。 送るのは席が最後の打刻から黙りの初段（rules 行 1 本・既定 30 分）以上黙り、 最後の合図から今の段の待ち（段 n の待ちは梯子の列の n 番目・列を越えた段は送らない）が経ち、 口座の門（群の逼迫〔FR38〕の閾値の rules 行のいずれか以上の口座の席には送らず、 計測〔FR33〕の記録の最新値だけを読んで計測は起こさず、 記録が無い・古い周は通す）を通った周だけで、 条件の列と順は ADR-0058 が正本で、 梯子の列と打ち切りの段は ADR-0068 が正本。 合図の間隔は席に変化が無ければ梯子の列（rules 行 1 本が持つ空でない昇順の秒の列・既定は 30 分 → 1 時間 → 3 時間 → 6 時間 → 12 時間 → 24 時間）の順で伸ばし（backoff）、 梯子の列が尽きた段では送らず（合図は梯子の列の長さまで・既定 6 本）、 席に変化（状態の打刻の最終行の時刻 = 変化の digest が動く。 比べる基準は合図の後に席が idle へ戻った周に取る）があれば梯子の列の先頭へ戻す。 周期・黙りの初段・梯子の列は rules 行 3 本（user 裁定 id つき）が持ち、 係数と上限の行は持たない。 梯子の記録（最後に送った時刻・何本目か・変化の digest）は席の置き場の file 1 つで、 記録が読めない・書けない周は送らず理由を判定行に出す（fail-closed）。 自席の置き場が群に属する周は、 群の移動の判定（FR38・1 本の関数）を群ごとに鮮度の窓に 1 回まで host の lock の内側で撃ち、 その周だけ計測（FR33）を起こしてよく、 他の周は測らない（ADR-0066）。 登録 row を持ち窓が shell に戻った席（再起動・退避の後）は、 黙りと変化の判定（打刻の最終行の状態と梯子）を経ずに口座（群なら群の今の口座・群の外なら row の口座）を決めて席の起動（FR59）で席の起こし直しを撃つ（FR28）。 管理 tick の周は、 局面の出力（FR90）のうち event log と時刻で決まる部分を書き直す（台帳も git も撃たない）。 便の起動の契機は FR68 が持つ"
   - id: FR28
     type: FR
     label: cycle（廃止）
@@ -619,11 +629,11 @@ requirements:
     priority: must
     vmethod: T
     rationale_source: N-3
-    trace: { backward: [N-3], acceptance: [AC17] }
+    trace: { backward: [N-3], acceptance: [AC17, AC60] }
     ears:
       pattern: event
       condition: 開発 session の席で session が開始されるとき（/compact の後を含む）、 または圧縮（/compact と自動圧縮）が始まる直前
-      response: session の開始では、 器は、 その席に役割の記録が在ればその役割の manifest 行と役割ごとの雛形から生成した短い指示文（席の同一性・憲法の効く部分の pointer・役割の特性・台帳の現在地の 4 群からなり、 行の構成と行数の上限は ADR-0045 が正本）を session の開始で文脈へ注入し（入力欄を経由しない）、 役割の記録が無ければ注入せず、 runner には憲法の散文を 1 行も注入しない。 生成した指示文は行が持つ権能をすべて名指し、 C 条文の規範文を持たず、 雛形の外に手書きの規範文を含まない（両向きの drift は CI が検査する・FR18）。 役割の記録が在る席の session の開始では、 器は指示文の後ろに、 台帳と git から機械で導いた直近の流れの事実行（仕掛かり中の契約・直近に更新された契約・直近の commit・未 commit の変更。 規範文を持たず指示文の行数に数えない）を出し、 圧縮の後の開始で圧縮の直前の 1 枠が在れば、 その 1 枠を 1 回だけ出して消す。 圧縮が始まる直前では、 器は役割の記録が在る席の直前の発言を逐語で圧縮の直前の 1 枠（state dir の席ごとの置き場・repo の外）に書き、 圧縮を止めない（役割の記録が無い席では書かない）
+      response: session の開始では、 器は、 その席に役割の記録が在ればその役割の manifest 行と役割ごとの雛形から生成した短い指示文（席の同一性・憲法の効く部分の pointer・役割の特性・台帳の現在地の 4 群からなり、 行の構成と行数の上限は ADR-0045 が正本）を session の開始で文脈へ注入し（入力欄を経由しない）、 役割の記録が無ければ注入せず、 runner には憲法の散文を 1 行も注入しない。 生成した指示文は行が持つ権能をすべて名指し、 C 条文の規範文を持たず、 雛形の外に手書きの規範文を含まない（両向きの drift は CI が検査する・FR18）。 役割の記録が在る席の session の開始では、 器は指示文の後ろに、 台帳と git から機械で導いた直近の流れの事実行（仕掛かり中の契約・直近に更新された契約・直近の commit・未 commit の変更・局面の出力〔FR90〕で手番が席の部品の件数と最古の 1 件。 規範文を持たず指示文の行数に数えない）を出し、 圧縮の後の開始で圧縮の直前の 1 枠が在れば、 その 1 枠を 1 回だけ出して消す。 圧縮が始まる直前では、 器は役割の記録が在る席の直前の発言を逐語で圧縮の直前の 1 枠（state dir の席ごとの置き場・repo の外）に書き、 圧縮を止めない（役割の記録が無い席では書かない）
   - id: FR43
     type: FR
     label: 席の継続
@@ -641,11 +651,11 @@ requirements:
     priority: must
     vmethod: T
     rationale_source: N-3
-    trace: { backward: [N-3], acceptance: [AC19, AC49, AC57] }
+    trace: { backward: [N-3], acceptance: [AC19, AC49, AC57, AC58] }
     ears:
       pattern: ubiquitous
       condition: 常時
-      response: "1 つの anchor の席は orchestrator の 1 席（FR40）であり、 器は席間の連絡の経路を持たない（ADR-0045 §2 (2) で廃止・ADR-0058）。 器から席の入力欄への差し込みは席の起動（FR59）の起動行・管理 tick（FR27）の打刻の合図・群の逼迫の通知と移動（FR38）の通知と退避の合図・便の終端の周の通知（器の dispatcher〔FR68〕が便の終端の周に orchestrator の席へ送る 1 行・形は dispatcher の設計が持つ。 起こす便が 0 の周の 1 行は memo の要約〔FR87〕も持つ）・裁定の指し示し（FR79・送る行に入る外からの値は裁定面の記帳 id だけ・ADR-0077）にだけ使い、 台帳の現在地から続きを進めるよう促す差し込みは打刻の合図だけで、 便の終端の周の通知は便の出来事と次の 1 手の在りか（起こす便が 0 の周は memo の要約も）を、 裁定の指し示しは裁定が届いたことだけを知らせる 1 行である。 経路の不在は不在を測る歯が確かめる"
+      response: "1 つの anchor の席は orchestrator の 1 席（FR40）であり、 器は席間の連絡の経路を持たない（ADR-0045 §2 (2) で廃止・ADR-0058）。 器から席の入力欄への差し込みは席の起動（FR59）の起動行・管理 tick（FR27）の打刻の合図・群の逼迫の通知と移動（FR38）の通知と退避の合図・便の終端の周の通知（器の dispatcher〔FR68〕が便の終端の周に orchestrator の席へ送る 1 行・形は dispatcher の設計が持つ。 起こす便が 0 の周の 1 行は memo の要約〔FR87〕も持つ）・裁定の指し示し（FR79・送る行に入る外からの値は裁定面の記帳 id だけ・ADR-0077）にだけ使い、 台帳の現在地から続きを進めるよう促す差し込みは打刻の合図だけで、 便の終端の周の通知は便の出来事と次の 1 手の在りか（起こす便が 0 の周は memo の要約も）を、 裁定の指し示しは裁定が届いたことだけを知らせる 1 行である。 席の turn の終わりを止める hook の理由（FR88）は入力欄への差し込みでなく、 仕分けを求める 1 回だけの理由である。 経路の不在は不在を測る歯が確かめる"
   - id: FR45
     type: FR
     label: 権能の執行
@@ -719,11 +729,11 @@ requirements:
     priority: must
     vmethod: T
     rationale_source: N-3
-    trace: { backward: [N-3], acceptance: [AC24, AC51, AC57] }
+    trace: { backward: [N-3], acceptance: [AC24, AC51, AC57, AC61] }
     ears:
       pattern: ubiquitous
       condition: 常時
-      response: "器は doctor の 1 項目として台帳の lint を提供し、 読み取り専用の台帳 adapter で台帳を読み、 解決できる設計 pointer（設計 doc の path と契約 id）を持たない open な契約と、 tracked な設計 doc か research への pointer 無しに設計の中身を持つ open な memo を名指す。 label intake:question の bead（台帳の問い・FR81）は、 epic と decision の型の bead と同じく契約にも memo にも数えず名指さない。 同じ項目は、 処置の付かない昇格（promote）の待ちの memo（FR87）の本数と最古の年齢も出す"
+      response: "器は doctor の 1 項目として台帳の lint を提供し、 読み取り専用の台帳 adapter で台帳を読み、 解決できる設計 pointer（設計 doc の path と契約 id）を持たない open な契約と、 tracked な設計 doc か research への pointer 無しに設計の中身を持つ open な memo を名指す。 label intake:question の bead（台帳の問い・FR81）は、 epic と decision の型の bead と同じく契約にも memo にも数えず名指さない。 同じ項目は、 処置の付かない昇格（promote）の待ちの memo（FR87）の本数と最古の年齢も出し、 notes の byte が rules 行 memo.notes_max_bytes（値は user 裁定 id 付き）を越えた open な memo（作業の記録を memo に積んだ形）も名指す"
   - id: FR52
     type: FR
     label: 設計 doc の散文の門
@@ -883,11 +893,11 @@ requirements:
     priority: must
     vmethod: T
     rationale_source: N-3
-    trace: { backward: [N-1, N-3], acceptance: [AC8, AC52] }
+    trace: { backward: [N-1, N-3], acceptance: [AC8, AC52, AC58] }
     ears:
       pattern: ubiquitous
       condition: 常時
-      response: "器は user の発言を直命の表として持たず（席の指示文や復元へ運ぶ直命の記録を持たない）、 復元の DATA を出さない（ADR-0045 §2 (2) で廃止）。 user の逐語は承認 event（FR16）・発話 event と裁定の行（FR82）にだけ載り、 発話 event は裁定の行の写し元と到達点の計測の分類（FR22）にだけ使って席の指示文にも復元にも運ばず（直命の表との線引きは ADR-0083）、 裁定は台帳の notes が持つ。 不在は不在を測る歯が確かめる"
+      response: "器は user の発言を直命の表として持たず（席の指示文や復元へ運ぶ直命の記録を持たない）、 復元の DATA を出さない（ADR-0045 §2 (2) で廃止）。 user の逐語は承認 event（FR16）・発話 event と裁定の行（FR82）にだけ載り、 発話 event は裁定の行の写し元・到達点の計測の分類（FR22）・閉じの有無の判定（FR88・閉じたかと ts と session だけを読む）・席が ts を名指して 1 件を読む口（FR88）にだけ使い、 席の指示文・復元・合図・通知・一覧へ逐語を運ばず（直命の表との線引きは ADR-0083 と ADR-0087）、 裁定は台帳の notes が持つ。 不在は不在を測る歯が確かめる"
 
   - id: FR66
     type: FR
@@ -918,7 +928,7 @@ requirements:
     priority: must
     vmethod: T
     rationale_source: N-1
-    trace: { backward: [N-1, N-3], acceptance: [AC22, AC38, AC54, AC55, AC51] }
+    trace: { backward: [N-1, N-3], acceptance: [AC22, AC38, AC54, AC55, AC51, AC60] }
     ears:
       pattern: event
       condition: 便が終端の段（Landed / Failed / Stopped）に達したとき、 便を運ぶ器の process が退役したとき、 手動の 1 周が要求されたとき、 介入の印が記録された直後、 または回答 event（FR32）か approval.received（FR16）が記帳された直後
@@ -1060,26 +1070,26 @@ requirements:
 
   - id: FR81
     type: FR
-    label: "起票の門の 3 形"
+    label: "起票の門の 4 形"
     priority: must
     vmethod: T
     rationale_source: N-3
-    trace: { backward: [N-3, N-1], acceptance: [AC51] }
+    trace: { backward: [N-3, N-1], acceptance: [AC51, AC59, AC61] }
     ears:
       pattern: unwanted
-      condition: "器の plugin を積む席の session が、 自分の道具の呼び出しとして台帳の書き（bd / bdw の command の字面）で次の 3 形のどれかを撃とうとするとき（席が起こした子 process の書き〔Bash から起こした常駐の server など〕は道具の呼び出しでないので門の外）＝(a) label intake:question を持つ bead の create のうち、 本文が 4 つの行（概要・技術・理由・推奨で始まる行）のどれかを欠くか、 metadata の effect を欠くか、 effect の値が閉じた 2 値（document＝答えを文書へ写すべき問い・operation＝答えが操作で済む問い）の外である書き、 (b) notes に裁定の行（裁定 id の欄を持つ行・FR82）を足す書き、 (c) 引き金の行（FR87）を持たない memo の create と、 昇格条件の節を引き金の行の無い本文へ書き換える update"
-      response: "器の起票の門は実行の前に deny し、 断る理由に形ごとの中身（(a) は欠けた欄か外れた値、 (b) は裁定の行を書くのは器の口 seat ruling bind〔FR82〕だけであること、 (c) は引き金の 5 形）を告げ、 台帳を変えない。 器が問いとして読む記録は label intake:question の bead だけで、 この label を持たない bead の create には (a) の検査を掛けない"
+      condition: "器の plugin を積む席の session が、 自分の道具の呼び出しとして台帳の書き（bd / bdw の command の字面）で次の 4 形のどれかを撃とうとするとき（席が起こした子 process の書き〔Bash から起こした常駐の server など〕は道具の呼び出しでないので門の外）＝(a) label intake:question を持つ bead の create のうち、 本文が 4 つの行（概要・技術・理由・推奨で始まる行）のどれかを欠くか、 metadata の effect を欠くか、 effect の値が閉じた 2 値（document＝答えを文書へ写すべき問い・operation＝答えが操作で済む問い）の外である書き、 metadata の asked（FR89）を欠くか値が閉じた 2 値（seat・user）の外である書き、 または label intake:memo を併せ持つ書き、 (b) notes に裁定の行（裁定 id の欄を持つ行・FR82）を足す書き、 (c) 引き金の行（FR87）を持たない memo の create と、 昇格条件の節を引き金の行の無い本文へ書き換える update、 (d) bead の close のうち close_reason が閉じた理由の文法（FR91）の外である書き"
+      response: "器の起票の門は実行の前に deny し、 断る理由に形ごとの中身（(a) は欠けた欄か外れた値、 (b) は裁定の行を書くのは器の口 seat ruling bind〔FR82〕だけであること、 (c) は引き金の 5 形、 (d) は閉じた理由の文法）を告げ、 台帳を変えない。 器が問いとして読む記録は label intake:question の bead だけで、 この label を持たない bead の create には (a) の検査を掛けない"
   - id: FR82
     type: FR
     label: 発話の記帳と裁定の結び
     priority: must
     vmethod: T
     rationale_source: N-3
-    trace: { backward: [N-3, N-1], acceptance: [AC52] }
+    trace: { backward: [N-3, N-1], acceptance: [AC52, AC58, AC59] }
     ears:
       pattern: event
-      condition: "user が、 marker が器の NAME を言う repo（FR19 / FR24）で器の plugin を積む対話の session（runner と lens を除く）へ prompt を打ったとき、 または器の口 seat ruling bind（問いの bead の id と発話の ts を受ける）が撃たれたとき"
-      response: "prompt が打たれたときは、 器は、 prompt が model に読まれる前に、 打たれた prompt を、 開いた台帳の問いの有無に依らず、 逐語のまま発話 event（actor が human・発話を指す値は発話の ts）として fleet の event log に 1 件記帳し、 器が入力欄へ差し込んだ行（FR44 の閉じた一覧の全種・管理 tick の打刻の合図を含む）と別の session から届いた message の包みは記帳しない。 bind が撃たれたときは、 名指した発話 event が在ってまだどの裁定にも結ばれておらず、 名指した bead が開いた台帳の問いである周だけ（問いは発話の後に起こしたものでもよい）、 器が裁定 id（<問い id>:<YYYYMMDDTHHMMZ>-<n>・bind が発行する id の n は 1 で、 形の -<n> は消費側の台帳の行の形と揃えるために持つ）を発行し、 問いの notes に裁定の行（裁定 id・問い・発話の ts・逐語の順の 4 欄を持つ 1 行・逐語は発話 event から写して最後の欄に置く）を書き、 問いを close_reason「裁定 <裁定 id>」で close し、 裁定 event を記帳する。 発話が無い・発話が結び済み・問いが閉じている・bead が台帳の問いでない周は何も書かずに理由を名指して断る。 席が notes に裁定の行を書く書きは FR81 が断り、 器は席が逐語を打って裁定 event を記帳する口を持たない"
+      condition: "user が、 marker が器の NAME を言う repo（FR19 / FR24）で器の plugin を積む対話の session（runner と lens を除く）へ prompt を打ったとき、 または器の口 seat ruling bind（問いの bead の id と発話の ts を受ける）が撃たれたとき、 または消費側の面の答えの口（問いの bead の id を受け、 逐語を標準入力で受ける）が撃たれたとき"
+      response: "prompt が打たれたときは、 器は、 prompt が model に読まれる前に、 打たれた prompt を、 開いた台帳の問いの有無に依らず、 逐語のまま発話 event（actor が human・発話を指す値は発話の ts・session と経路〔対話の session〕を持つ）として fleet の event log に 1 件記帳し、 器が入力欄へ差し込んだ行（FR44 の閉じた一覧の全種・管理 tick の打刻の合図を含む）と別の session から届いた message の包みは記帳しない。 bind が撃たれたときは、 名指した発話 event が在って名指した問いへまだ結ばれておらず（1 つの発話は複数の問いへ結べる）、 名指した bead が開いた台帳の問いである周だけ（問いは発話の後に起こしたものでもよい）、 器が裁定 id（<問い id>:<YYYYMMDDTHHMMZ>-<n>・bind が発行する id の n は 1 で、 形の -<n> は消費側の台帳の行の形と揃えるために持つ）を発行し、 問いの notes に裁定の行（裁定 id・問い・発話の ts・逐語の順の 4 欄を持つ 1 行・逐語は発話 event から写して最後の欄に置く）を書き、 問いを close_reason「裁定 <裁定 id>」で close し、 裁定 event（問いの asked と起票の時刻と発話の ts と経路を持つ・FR89）を記帳する。 消費側の面の答えの口が撃たれたときは、 空白だけの逐語を断り、 逐語を経路が消費側の面の発話 event として記帳し、 同じ周に bind と同じ条件と書き（裁定 id の発行・裁定の行・close・裁定 event）を行い、 裁定 id を標準出力の 1 行に返す。 席の道具の呼び出しとしてこの口を撃つ command は器の hook の入口が実行の前に断る（席が起こした子 process の撃ちは門の外）。 発話が無い・発話がその問いへ結び済み・問いが閉じている・bead が台帳の問いでない周は何も書かずに理由を名指して断る。 席が notes に裁定の行を書く書きは FR81 が断り、 器は、 席の道具の呼び出しが逐語を渡して裁定 event を記帳する口を持たない（ADR-0087）"
   - id: FR83
     type: FR
     label: 裁定 id の実在
@@ -1130,11 +1140,66 @@ requirements:
     priority: must
     vmethod: T
     rationale_source: N-3
-    trace: { backward: [N-3, N-2], acceptance: [AC57] }
+    trace: { backward: [N-3, N-2], acceptance: [AC57, AC61] }
     ears:
       pattern: event
       condition: "dispatch の周（FR68 の契機の周）が回ったとき"
-      response: "器は、 周ごとに open な memo の全部について、 昇格条件の節の引き金の行を閉じた 5 形（再発＝notes の再発の行が値の数以上・同梱＝閉じていない契約の行の write-set が値の path を持つ・依存＝値の bead が closed・期日＝値の UTC の年月日と時分を過ぎた・着地＝値の設計 doc の行が着地した。 行の字面の文法は設計 doc が持つ）で判じ、 1 つでも満ちた memo を昇格（promote）の待ちとする。 引き金の満ちない memo のうち前の判定から rules 行 memo.triage_interval_h（時間・値は user 裁定 id 付き）が過ぎたものを、 起こす便が 0 の周に限り、 rules 行 memo.triage_per_round（本数・値は user 裁定 id 付き）の本数まで、 読むだけの memo の審査の lens（口座は FR36 の便用の規則で選び、 封じ込めは NFR6）に掛け、 判定（昇格〔promote〕/ close / keep・証拠・昇格なら設計のスケッチ）を置き場の file に、 event を 1 行残す（器は判定で memo を close せず台帳に書かない）。 周は timer を持たないので、 審査も FR68 の契機の周にだけ回る。 pipe dispatch ls に memo の行（引き金の成否・lens の判定・年齢・前の判定の時刻）を出し、 起こす便が 0 の周の便の終端の周の通知（FR44）で open な memo の数・昇格の待ちの数・次の 1 本とその判定を名指し（通知の字面は dispatcher の設計 doc が持つ）、 処置（昇格〔acceptance の設計 pointer〕・close・引き金の書き直し・keep の記帳）が付くまで周ごとに知らせ直す。 処置の付かない昇格の待ちは台帳の lint（FR51）が数え、 引き金の行を持たない memo の書きは FR81 が断る"
+      response: "器は、 周ごとに open な memo の全部について、 昇格条件の節の引き金の行を閉じた 5 形（再発＝notes の再発の行が値の数以上・同梱＝閉じていない契約の行の write-set が値の path を持つ・依存＝値の bead が closed・期日＝値の UTC の年月日と時分を過ぎた・着地＝値の設計 doc の行が着地した。 行の字面の文法は設計 doc が持つ）で判じ、 1 つでも満ちた memo を昇格（promote）の待ちとする。 引き金の満ちない memo のうち前の判定から rules 行 memo.triage_interval_h（時間・値は user 裁定 id 付き）が過ぎたものを、 起こす便が 0 の周に限り、 rules 行 memo.triage_per_round（本数・値は user 裁定 id 付き）の本数まで、 読むだけの memo の審査の lens（口座は FR36 の便用の規則で選び、 封じ込めは NFR6）に掛け、 判定（昇格〔promote〕/ close / keep・証拠・昇格なら設計のスケッチ）を置き場の file に、 event を 1 行残す（器は判定で memo を close せず台帳に書かない）。 周は timer を持たないので、 審査も FR68 の契機の周にだけ回る。 pipe dispatch ls に memo の行（引き金の成否・lens の判定・年齢・前の判定の時刻）を出し、 起こす便が 0 の周の便の終端の周の通知（FR44）で open な memo の数・昇格の待ちの数・次の 1 本とその判定を名指し（通知の字面は dispatcher の設計 doc が持つ）、 処置（昇格〔memo に設計 pointer を書く形か、 契約を分けて昇格の行を足す形・FR91〕・close〔閉じた理由の文法・FR91〕・引き金の書き直し・keep の記帳）が付くまで周ごとに知らせ直す。 処置の付かない昇格の待ちは台帳の lint（FR51）が数え、 引き金の行を持たない memo の書きは FR81 が断る"
+  - id: FR88
+    type: FR
+    label: "発話の仕分け"
+    priority: must
+    vmethod: T
+    rationale_source: N-3
+    trace: { backward: [N-3, N-1], acceptance: [AC58] }
+    ears:
+      pattern: event
+      condition: "器が発話 event（FR82）を記帳した対話の session で席の turn が終わろうとするとき、 または仕分けの口（発話の ts と、 要望なら開いた memo の id を受ける）が撃たれたとき"
+      response: "器は、 発話を閉じた 3 つの仕分け（要望＝仕分けの口が名指した開いた memo〔label intake:memo〕へ発端として結ぶ・答え＝bind〔FR82〕で台帳の問いへ結ぶ・会話＝台帳を変えずに閉じる）のどれかで閉じ、 要望と会話の閉じは仕分けの event を 1 件記帳するだけで台帳を書かない（発端の結びの正本は仕分けの event）。 1 つの発話は複数の memo と複数の問いへ閉じてよく、 会話は要望か答えの閉じを持つ発話には付けずに理由を名指して断り、 会話の後に要望か答えを足した発話は会話の閉じを外す。 仕分けの口は、 発話 event が無い・名指した memo が開いた memo でない周も何も書かずに理由を名指して断る。 閉じの有無の判定は 1 つの関数で、 turn の終わりの判定・doctor・管理 tick の alarm・局面の出力（FR90）が同じ関数を呼ぶ。 席の turn が終わろうとする周に、 その session の閉じていない発話が在れば、 器は発話ごとに 1 度だけ turn の終わりを止め、 閉じていない発話の ts の列と仕分けの口を告げ（逐語を運ばない）、 止めた周は状態の打刻を idle にせず、 2 度目の終わりは止めない。 turn の終わりの判定は台帳を読まず、 event log の大きさに依らない読み（NFR5）で決める。 席は ts を名指した発話 1 件の逐語を読む口を持つ（前の session の発話を仕分けるため）。 doctor の 1 行は閉じていない発話の件数と最古の ts と会話で閉じた件数を出し、 閉じていない発話が 1 つ以上在る周は管理 tick（FR27）の alarm に語 unsorted を出す"
+  - id: FR89
+    type: FR
+    label: "席の問いの台帳化"
+    priority: must
+    vmethod: T
+    rationale_source: N-3
+    trace: { backward: [N-3, N-1], acceptance: [AC59] }
+    ears:
+      pattern: event
+      condition: "bind か消費側の面の答えの口（FR82）が台帳の問いと発話を結ぶとき、 または label intake:question の bead の create が撃たれようとするとき"
+      response: "器は、 結ぶ周の裁定 event に、 問いの metadata の asked（閉じた 2 値の seat＝席が user の判断を求めた問い・user＝user の先立つ指示や方針を受けるために席が起こした問い）と問いの起票の時刻と発話の ts を記帳し、 asked が seat で問いの起票が発話より後の結び（席が平文で問うて後から問いを起こした形）を doctor の 1 行に件数と裁定 id で数える。 問いの create は起票の門（FR81 (a)）が asked の欠けと値の外と、 label intake:memo を併せ持つ書きを断る。 平文の返答の中の問いを字面で探す判定は持たず、 後から数える検出の線とする"
+  - id: FR90
+    type: FR
+    label: "局面の出力"
+    priority: must
+    vmethod: T
+    rationale_source: N-3
+    trace: { backward: [N-3, N-1], acceptance: [AC60, AC62] }
+    ears:
+      pattern: event
+      condition: "dispatch の周（FR68 の契機の周）が回ったとき、 器が台帳を書いた直後（bind・消費側の面の答えの口・着地の終端の close・memo の閉じ〔FR91〕）、 席の道具の呼び出しが台帳を書いた後（契機の形は設計 doc が持つ）、 管理 tick の周、 または発話 event の記帳の直後"
+      response: "器は、 1 つの関数で、 案件の部品（発話・台帳の問い・memo・契約・開いた契約の最新の便・契約表の行・要件・epic）ごとに、 局面（閉じた語の一覧・優先の順は語の宣言順・一覧は設計 doc が持つ）・手番（user・seat・vessel・runner・ci・none の閉じた 6 値）・局面に入った時刻・理由（起動の列の待ちの理由・受付の断りの名・便の段と終端の語をそのまま使う）・結び（発端・子の問い・昇格した契約・便・着地の commit・閉じた発話の行き先）を導き、 state dir の置き場の 1 file（版の欄・局面の語の一覧・入力の印・生成の時刻を持つ）を丸ごと入れ替えて書く（書き手は 1 つずつで、 入力の印が今の file より古い書きは捨てる）。 判定の入力は台帳の全部・event log・main の設計 doc の契約表と SRS・main の commit の trailer で、 閉じた部品を出力に載せる窓（rules 行 lifecycle.closed_window_h・値は user 裁定 id 付き）は表示にだけ掛ける。 管理 tick の周と発話 event の記帳の直後は、 台帳も git も撃たずに、 event log と時刻で決まる部分（発話・便の局面・年齢・前の書きが残した期日の引き金の満ち）だけを書き直す。 局面の関数は起動の列の関数を呼び（起動の列は局面の関数を呼ばない）、 便の終端の周の通知（FR44）の語・doctor・管理 tick の alarm・session の開始の事実行（FR42）は局面の語をこの関数から得て写しの判定を持たない。 どの局面にも当たらない部品は局面 misfit と閉じた理由の語（昇格の行と discovered-from の食い違い・閉じた理由の形と bead の種類の食い違い・台帳に無い発端〔FR92〕ほか）で出す。 手番が seat の部品のうち、 局面ごとの rules 行 lifecycle.age_h（値は user 裁定 id 付き）を越えたものが在る周は、 管理 tick（FR27）の alarm に語 owned を出す。 受付が契約を断った周は、 断りの名と bead を event 1 件に記帳する。 器は同じ中身を text で出す口と書き直しの口を持ち、 読み手は入力の印で出力の古さを判じる"
+  - id: FR91
+    type: FR
+    label: "memo の局面と処置"
+    priority: must
+    vmethod: T
+    rationale_source: N-3
+    trace: { backward: [N-3, N-2], acceptance: [AC61] }
+    ears:
+      pattern: event
+      condition: "着地の終端が契約を close したとき、 dispatch の周（FR68 の契機の周）が回ったとき、 または席の道具の呼び出しが bead の close を撃とうとするとき"
+      response: "器は、 開いた memo を閉じた 4 つの局面（宣言順に memo-promoting＝discovered-from で辿れる開いた契約が在る・memo-asking＝子の開いた台帳の問いが在る・memo-due＝引き金が満ちたか、 処置の無い審査の判定〔FR87〕が在るか、 辿れる契約が全部閉じたが昇格の行が全部でないか着地の close の外の閉じを含む・memo-waiting＝読める引き金が満ちない）のどれかに置き、 どれにも当たらない memo は局面 misfit（FR90）にする。 昇格は 2 形（memo の bead に設計 pointer を書いて契約にする形・memo を残して契約を分け、 notes に閉じた文法の昇格の行〔全部か一部と契約 id の列〕を足し、 分けた契約から discovered-from を張る形）とする。 着地の終端と dispatch の周は、 昇格の行が全部で、 辿れる契約が全部着地の close（close_reason が landed <sha> で始まる）で閉じた memo を close_reason「昇格済み <契約 id の列>」で close する。 bead の close_reason は種類ごとの閉じた形の和（契約の着地の形・台帳の問いの「裁定 <裁定 id>」・memo の「昇格済み <契約 id の列>」と「まとめた <memo id>」と「見送り <裁定 id>」・epic の閉じの形。 文法は設計 doc が持つ）に限り、 起票の門（FR81 (d)）は席の道具の呼び出しの close のうち和の外の理由を持つ書きを、 台帳を読まずに字面で断る。 bead の種類と理由の形の食い違いと、 見送りの裁定 id が解けない（FR83 と同じ解け方）閉じは、 局面の出力（FR90）が misfit で数える"
+  - id: FR92
+    type: FR
+    label: "器の便でない着地の発端"
+    priority: must
+    vmethod: T
+    rationale_source: N-3
+    trace: { backward: [N-3, N-1], acceptance: [AC62] }
+    ears:
+      pattern: unwanted
+      condition: "席の道具の呼び出しが PR を main へ入れる merge の command を撃とうとし、 その command が発端の trailer（Scribe2-Source: と台帳の bead の id・1 本以上）か器の便の trailer（run:）を持つ commit の本文を渡さないとき、 または main の先端に入った器の便でない commit が発端の trailer を持たないとき"
+      response: "器の hook の入口は merge の command を実行の前に deny して欠けを名指し、 CI の main の検査（main-provenance）は発端の trailer の無い器の便でない commit を名指して非 0 で止める。 どちらも trailer の形だけを確かめ（CI は台帳に届かない）、 台帳に無い発端は局面の出力（FR90）が misfit で数える"
 
 nfr:
   - { id: NFR1, type: NFR, label: lens 予算,   category: 性能, target: 1 lens は 0.15M token 以内（目標値）,                                measure: lens 起動時の diff byte と cap の照合を verdict に記録,        vmethod: T, trace: { backward: [N-2], acceptance: [AC3] }, hero: { cat: 予算, big: "0.15", unit: M token, qual: lens 1 本あたりの上限 } }
@@ -1213,7 +1278,7 @@ glossary:
   - { term: 台帳 adapter,   en: ledger adapter,         plain_short: 台帳への唯一の口,         def: 器が台帳を読む口（読み取り専用）と close を書く口。 台帳へ触る module はこれ 1 つ（FR50 / FR51）。 }
   - { term: 禁じる語列,     en: forbidden token sequence, plain_short: 撃ってはいけない語の並び, def: command のうち撃ってはいけない語の並び。 値は manifest の rules 行だけが持ち（並びの例は行を見る）、 器が実行の前に止め、 intake が verify 行に同じ判定を掛ける（FR56）。 }
   - { term: host-guard,     en: host guard,             plain_short: 戻せない操作を止める見張り, def: 不可逆な操作を実行の直前に止める器の subcommand（見張りの種類の閉じた一覧は ADR-0078〔ADR-0056 の 5 つの末尾に publish の種類を足した 6 つ〕。 SRS が要件を持つのは禁じる語列・見張り自身の設定・rm・台帳の破壊と素 write・公開の字面の走査の 5 つ＝FR56 / FR72 / FR74 / FR76 / FR80・git の履歴破壊と tmux server の破壊の 2 種は FR56 の禁じる語列）。 口座の settings.json の hook 行（配線は FR75・健康診断は FR73）から呼ばれ、 口座の設定を読む全 session に marker の有無に依らず効く。 器が起こす session（runner・lens・usage の更新）には届かない。 }
-  - { term: 起票の門, en: ledger write gate, plain_short: "台帳の書き込みを止める門", def: "器の plugin を積む席の hook の入口が bd / bdw の command に掛ける門。 台帳 write の 4 形（素 write＝notes の置換・記憶の subcommand・親を欠く create・台帳の script を経ない書き込み）を rules 行 ledger.denied_writes の値で断る（ADR-0056 CTX2）。 ほかに、 形の欠けた台帳の問いの create・notes に足す裁定の行・引き金の行を持たない memo の書きの 3 形（FR81）も断り、 この 3 形は器の plugin の門だけが断る（host-guard は掛けない）。 host-guard の台帳の種類（FR76）は台帳 write の 4 形の判定を口座の設定を読む session に掛ける。" }
+  - { term: 起票の門, en: ledger write gate, plain_short: "台帳の書き込みを止める門", def: "器の plugin を積む席の hook の入口が bd / bdw の command に掛ける門。 台帳 write の 4 形（素 write＝notes の置換・記憶の subcommand・親を欠く create・台帳の script を経ない書き込み）を rules 行 ledger.denied_writes の値で断る（ADR-0056 CTX2）。 ほかに、 形の欠けた台帳の問いの create・notes に足す裁定の行・引き金の行を持たない memo の書き・閉じた理由の文法の外の closeの 4 形（FR81）も断り、 この 4 形は器の plugin の門だけが断る（host-guard は掛けない）。 host-guard の台帳の種類（FR76）は台帳 write の 4 形の判定を口座の設定を読む session に掛ける。" }
   - { term: 口座の設定を読む session, en: settings-reading session, plain_short: 口座の設定で起きる session, def: 口座の設定 dir の settings.json を読んで起きる session の全体（対話の席・口座の設定 dir を指定した起動・器を積まない session）。 host-guard の配線（FR75）が効く範囲と一致し、 器が起こす session（runner・lens・usage の更新）は含まず、 口座の設定 dir を指定しない起動は配線先に入れない（既定の設定 dir が口座の実体を指す host では届くが、 それは配線の約束ではない・FR56 / FR72 / FR74 / FR76 / FR80・ADR-0056）。 }
   - { term: 公開の segment, en: publish segment, plain_short: 外へ出す命令の部分, def: Bash の command を segment に分けたうち、 git の push と gh の公開の動詞（本文を出す動詞〔pr・issue・release・gist・label と api の書き〕と repo の作成・編集）の部分（FR80）。 host-guard の publish の種類はここだけを読む。 3 クラスの「出す」とは別で、 自 repo への push と PR の作成も含む。 }
   - { term: 公開先の repo, en: publish target repo, plain_short: 出す先の repo, def: 公開の segment が字面を出す先の repo（git の push の行き先・gh の対象の repo・FR80）。 owner/name は、 git が実際に押す URL（pushurl と insteadOf を当てた後）か gh が解いた repo の、 host が gh の既定の host である URL の path の末尾 2 成分として導き、 群の anchor の owner/name も同じ規則で導く（導けない repo の可視性は読めない可視性）。 同じ repo かは owner/name の一致で判じる。 席の target（tmux の窓）とは別。 }
@@ -1240,13 +1305,18 @@ glossary:
   - { term: 残量の鍵, en: headroom key, plain_short: "残りの量で候補を並べる決まり", def: "群の移り先の候補を並べる比較の値の組（FR38・ADR-0069）。 7 日窓と役割の model の 7 日窓の残量（100 − 使用率）の小さい方が大きい順 → 7 日窓の reset が早い順 → 宣言順。 役割の model の行が無い口座は最後。 5 時間窓は門にだけ効く。 便用の口座選定の並べ順（reset が早い順）とは別。" }
   - { term: 裁定の指し示し, en: ruling pointer, plain_short: "裁定が届いた知らせ", def: "器の口（seat deliver）が、 裁定面の記帳 id 1 つだけを入れた指し示しの雛形の 1 行を待ちの席へ差し込むこと（FR79・ADR-0077）。 裁定の逐語と続きの指示は持たず、 送る行に入る外からの値は記帳 id だけ。 記帳 id は裁定面が自分の置き場で裁定に付けた識別子で、 器の裁定 id（FR82）とは別。" }
   - { term: 裁定面, en: ruling surface, plain_short: "裁定を書く画面", def: "消費側の project が持つ、 user が裁定を書き込む画面と server（器の外の置き場）。 器が承認と裁定を受ける対話面とは別で、 器はこの面を持たず、 面が自分の置き場に裁定を書いた後に裁定の指し示しの口（FR79）を撃つ。" }
-  - { term: 台帳の問い, en: ledger question, plain_short: "台帳に立てる問い", def: "席から user への問いを記録する台帳の bead（label intake:question）。 本文に概要・技術・理由・推奨の 4 つの行を、 metadata に effect（答えを文書へ写すべきかの閉じた 2 値 document / operation）を持ち、 形は器の plugin を積む席の session の起票の門が検査する（FR81）。 器が問いとして読むのはこの label の bead だけで、 契約にも memo にも数えず起動の列にも入れない（FR51 / FR68）。 答えは発話 event と結んで裁定の行になる（FR82）。 runner の質問 record とは別。" }
-  - { term: 発話 event, en: utterance event, plain_short: "人が打った字の記録", def: "user が、 器を導入した repo の対話の session へ打った prompt を、 model に読まれる前に逐語のまま残す event（actor は human・発話を指す値は ts・FR82）。 器が入力欄へ差し込んだ行と別の session からの message の包みは残さない。 裁定の行の逐語の写し元と到達点の計測の分類（FR22）にだけ使い（1 つの発話を結ぶ裁定は高々 1 つ）、 人由来の event の数えには入れない。 直命の表（FR65）とは別で、 席の指示文にも復元にも運ばない。" }
-  - { term: 裁定 id, en: ruling id, plain_short: "裁定を指す番号", def: "user の裁定を一意に指す id。 閉じた 3 形（器の口 seat ruling bind が発行する問い id の形〔<問い id>:<UTC の年月日と時分>-<n>・形の正本は FR82〕と、 消費側の台帳が自分の経路で書く batch: と policy: で始まる形）を持ち、 台帳の問いの notes の裁定の行が持つ（FR82）。 追跡された file の引用はこの 3 形と時刻の形（user <UTC の時刻>）で数え（問い id の形は問いの部分が repo の台帳の接頭辞で始まるものだけ・batch: と policy: の形と線の後の時刻の形は vessel 宣言の ruling-fixtures の一覧に同じ字面が在れば数えない）、 batch: と policy: の形は台帳の裁定の行の裁定 id の欄か束の欄（消費側の台帳の行が持ちうる欄で、 器の bind が書く行は持たない）に解け、 opt-in の線より前の時刻の形は数えるだけにする（FR83）。 裁定面の記帳 id とは別。" }
+  - { term: 台帳の問い, en: ledger question, plain_short: "台帳に立てる問い", def: "席から user への問いを記録する台帳の bead（label intake:question）。 本文に概要・技術・理由・推奨の 4 つの行を、 metadata に effect（答えを文書へ写すべきかの閉じた 2 値 document / operation）と asked（誰が起こした問いかの閉じた 2 値 seat / user・FR89）を持ち、 形は器の plugin を積む席の session の起票の門が検査する（FR81）。 器が問いとして読むのはこの label の bead だけで、 契約にも memo にも数えず起動の列にも入れない（FR51 / FR68）。 答えは発話 event（対話の session か消費側の面）と結んで裁定の行になる（FR82）。 runner の質問 record とは別。" }
+  - { term: 発話 event, en: utterance event, plain_short: "人が打った字の記録", def: "user が、 器を導入した repo の対話の session へ打った prompt を、 model に読まれる前に逐語のまま残す event（actor は human・発話を指す値は ts・session と経路を持つ・FR82）。 器が入力欄へ差し込んだ行と別の session からの message の包みは残さず、 消費側の面の答えの口の逐語は経路を消費側の面として残す。 裁定の行の逐語の写し元・到達点の計測の分類（FR22）・閉じの判定と ts を名指す読み（FR88）にだけ使い（1 つの発話は複数の問いへ結べる）、 人由来の event の数えには入れない。 直命の表（FR65）とは別で、 席の指示文にも復元にも運ばない。" }
+  - { term: 裁定 id, en: ruling id, plain_short: "裁定を指す番号", def: "user の裁定を一意に指す id。 閉じた 3 形（器の口（seat ruling bind と消費側の面の答えの口）が発行する問い id の形〔<問い id>:<UTC の年月日と時分>-<n>・形の正本は FR82〕と、 消費側の台帳が自分の経路で書く batch: と policy: で始まる形）を持ち、 台帳の問いの notes の裁定の行が持つ（FR82）。 追跡された file の引用はこの 3 形と時刻の形（user <UTC の時刻>）で数え（問い id の形は問いの部分が repo の台帳の接頭辞で始まるものだけ・batch: と policy: の形と線の後の時刻の形は vessel 宣言の ruling-fixtures の一覧に同じ字面が在れば数えない）、 batch: と policy: の形は台帳の裁定の行の裁定 id の欄か束の欄（消費側の台帳の行が持ちうる欄で、 器の bind が書く行は持たない）に解け、 opt-in の線より前の時刻の形は数えるだけにする（FR83）。 裁定面の記帳 id とは別。" }
   - { term: 未反映の裁定, en: unreflected ruling, plain_short: "文書が引いていない裁定", def: "effect が document の閉じた台帳の問いの裁定 id のうち、 main の追跡された file が 1 つも引かないもの（FR84）。 経過時間では判じず、 effect が operation の裁定は数えない。 その裁定を引く契約と問いに blocks される契約だけを待たせ、 着地ではその便を Gated に留める（FR10）。" }
   - { term: 床の検査, en: floor check, plain_short: "main の最低限の検査", def: "main がこれだけは通るべきと repo が決めた最低限の検査の 1 行（vessel 宣言の任意 key floor-check）を、 dispatch の周に main の先端の commit ごとに 1 回撃つ検査（FR85）。 終了コード（rc）0 だけが合格で、 不合格の間は、 介入 first の印を持つ契約（直す便かは判じない）のほかは起動の列の全部の契約が待つ。 便ごとの gate とは別。" }
   - { term: vessel 宣言, en: vessel declaration, plain_short: "repo が器に名乗る file", def: "repo が器に、 許す command・共通の verify・任意の確かめなどを名乗る設定 file（marker の隣に置く tracked な .vessel.toml）。 受付が manifest の上限と突き合わせる（ADR-0010）。 任意 key の ruling-check と ruling-fixtures（引用に数えない見本の字面の閉じた一覧・FR83）・floor-check（FR85）・question-route（FR86）を持てる。 ruling-check を持たない repo では器は裁定 id の引用を数えも断りもせず doctor の行がその旨を出し（未反映の裁定の数え〔FR84〕は key に依らない）、 floor-check を持たない repo では床の検査を撃たず列も待たせない。 marker（.vessel）とは別の file。" }
   - { term: 引き金, en: trigger line, plain_short: "契約へ上げる条件の行", def: "memo の昇格条件の節に置く、 機械が判じる 1 行。 形は閉じた 5 つ（再発・同梱・依存・期日・着地）で、 1 つでも満ちた memo は昇格の待ちになる（FR87）。 引き金の行を持たない memo の create と、 昇格条件の節を引き金の行の無い本文へ書き換える update は起票の門が断る（FR81）。 行の字面の文法は設計 doc が持つ。" }
-  - { term: 裁定 event, en: ruling event, plain_short: "裁定を結んだ記録", def: "器の口 seat ruling bind が問いと発話を結んだときに 1 件記帳する event（FR82）。 到達点の計測では承認の側に数える（FR22）。 席が逐語を打って記帳する口は無い。" }
-  - { term: memo, en: memo, plain_short: "契約の前の覚え書き", def: "台帳の bead のうち label intake:memo を持ち、 受入条件の設計 pointer を持たない覚え書き（契約にする前の段）。 本文に決まった 4 つの節を持ち、 起動の列に入らず（FR68）、 昇格条件の節に引き金の行を持つ（FR87）。 設計の中身を持つなら tracked な設計 doc への pointer を要る（FR51）。" }
-  - { term: 昇格, en: promotion, plain_short: "memo を契約へ上げること", def: "memo を、 acceptance に設計 pointer を持つ契約へ書き直す処置（判定の値は promote）。 器は自分では行わず、 引き金が満ちた memo を昇格の待ちとして知らせる（FR87）。" }
+  - { term: 裁定 event, en: ruling event, plain_short: "裁定を結んだ記録", def: "器の口 seat ruling bind か消費側の面の答えの口が問いと発話を結んだときに 1 件記帳する event（FR82・問いの asked と起票の時刻と発話の ts と経路を持つ・FR89）。 到達点の計測では承認の側に数える（FR22）。 席の道具の呼び出しが逐語を渡して記帳する口は無い。" }
+  - { term: memo, en: memo, plain_short: "契約の前の覚え書き", def: "台帳の bead のうち label intake:memo を持ち、 受入条件の設計 pointer を持たない覚え書き（契約にする前の段）。 本文に決まった 4 つの節を持ち、 起動の列に入らず（FR68）、 昇格条件の節に引き金の行を持つ（FR87）。 設計の中身を持つなら tracked な設計 doc への pointer を要る（FR51）。 開いた memo は閉じた 4 つの局面のどれかにいて、 閉じる理由は 3 つの処置の形に限る（FR91）。" }
+  - { term: 昇格, en: promotion, plain_short: "memo を契約へ上げること", def: "memo を契約へ上げる処置（判定の値は promote）。 memo に設計 pointer を書いて契約にする形と、 memo を残して契約を分け notes に昇格の行（全部か一部）を足す形の 2 つ（FR91）。 器は自分では行わず、 引き金が満ちた memo を昇格の待ちとして知らせる（FR87）。" }
+  - { term: 案件, en: case, plain_short: "1 件の一生の束", def: "発端の bead（memo か台帳の問い）と、 その子の問い・昇格した契約・便・着地の commit をひとまとめにした単位（FR90）。 台帳の bead 1 本（issue）とは別の語で、 持ち主の発言 1 つから close と画面への反映までの一生を追う単位。" }
+  - { term: 局面, en: lifecycle position, plain_short: "一生のいまの位置", def: "案件の部品が一生のどこにいるかを表す閉じた語（FR90）。 便の段（Stage）とは別の語で、 便の段の値は便の部品の局面へそのまま写る。 どの局面にも当たらない部品は misfit。 語の一覧と優先の順は設計 doc が持つ。" }
+  - { term: 手番, en: next mover, plain_short: "次に動くべき者", def: "局面ごとに次に動くべき者の閉じた 6 値（user・seat・vessel・runner・ci・none・FR90）。 手番が席の部品が年齢の閾値を越えると、 管理 tick が alarm の語 owned で知らせる。" }
+  - { term: 発端, en: origin, plain_short: "memo を生んだ発言か便", def: "memo を生んだ持ち主の発言か便。 発言からの発端の結びの正本は仕分けの event（FR88）で、 memo の本文の 4 つの節の 1 つ目は人が読む写し。 器の便でない着地の commit は発端の trailer で台帳の bead を名指す（FR92）。" }
+  - { term: 仕分け, en: sorting, plain_short: "発言の閉じ方", def: "持ち主の発言を閉じる閉じた 3 つの形（要望＝開いた memo へ発端として結ぶ・答え＝台帳の問いへ結んで裁定にする・会話＝台帳を変えずに閉じる・FR88）。 閉じていない発言が残る turn の終わりは、 器が 1 度だけ止める。" }
