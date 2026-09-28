@@ -615,50 +615,102 @@ fn pipe_train_limit_one_and_absent_row_land_only_the_front() {
     }
 }
 
-/// 列の終端（設計 contract-source.md §52・行 bd）: 常に success の偽 CI を持つ 3 本の列の着地で、先端の便（c）だけが
-/// push → CI → close の 3 段を通し、先端でない 2 本（a / b）は push の後に CI を照合せず `ci:unmeasurable` で止まる
-/// （close しない）。偽 CI の呼び出しは先端の便の 2 回だけ（base は 3 本 × 2 回＝6 回で 3 本とも close する＝RED）。
-#[test]
-fn pipe_train_terminal_only_the_tip_checks_ci_and_closes() {
-    let (repo, state) = repo_with_state();
-    let tools = fake_terminal(&repo, &state, "success");
+/// 列の 3 本を常に `conclusion` の偽 CI・偽 remote・偽 bd を宣言した repo で先頭の land から着地させ、(道具, stdout,
+/// 列の便 id, 先端の sha) を返す（先端の sha は `sha:` を持つ `Landed` の行から読む＝終端の行を飛ばす）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn land_train_with_terminal(repo: &Path, state: &Path, conclusion: &str) -> (FakeTerminal, String, [String; 3], String) {
+    let tools = fake_terminal(repo, state, conclusion);
     let marker = state.join("lens-ran");
-    let [id_a, id_b, id_c] = train_runs(&repo, &state, &marker, [ALL_GREEN, ALL_GREEN, ALL_GREEN]);
-    let rules = write_rules_train(&state, "rules-train.toml", Some(3));
+    let ids = train_runs(repo, state, &marker, [ALL_GREEN, ALL_GREEN, ALL_GREEN]);
+    let rules = write_rules_train(state, "rules-train.toml", Some(3));
     let bd = state.join("fake-bd.sh").display().to_string();
-    let out = land_extra(&repo, &state, &id_a, &["--bd", &bd, "--rules", &rules]);
-    assert!(stdout_of(&out).contains(&format!("run={id_a} train=3")), "列で着地した: {} / {}", stdout_of(&out), stderr_of(&out));
-    // 終端の行（`terminal:`）が `Landed` の後ろに並ぶので、`sha:` は着地そのものを記した行から読む。
-    let tip_sha = landed_details(&state, &id_c)
+    let out = land_extra(repo, state, &ids[0], &["--bd", &bd, "--rules", &rules]);
+    let stdout = stdout_of(&out);
+    assert!(stdout.contains(&format!("run={} train=3", ids[0])), "列で着地した: {stdout} / {}", stderr_of(&out));
+    let tip_sha = sha_of_landing(state, &ids[2]).expect("先端の便の sha を読める");
+    (tools, stdout, ids, tip_sha)
+}
+
+/// 便の着地そのものを記した `Landed` の行の `sha:`（終端の行 `terminal:` は `sha:` を持たないので飛ばす）。
+fn sha_of_landing(state: &Path, id: &str) -> Option<String> {
+    landed_details(state, id)
         .iter()
         .find_map(|detail| detail.split_whitespace().find_map(|word| word.strip_prefix("sha:")).map(str::to_owned))
-        .unwrap_or_default();
+}
+
+/// 便の `Landed` の後ろに並ぶ終端の行（`terminal:`）。
+fn terminal_tail(state: &Path, id: &str) -> Vec<String> {
+    landed_details(state, id).into_iter().filter(|detail| detail.starts_with("terminal:")).collect()
+}
+
+/// 列の終端（設計 contract-source.md §53・行 be）: 常に success の偽 CI を持つ 3 本の列の着地で、先端でない 2 本（a / b）
+/// も自分を祖先に持つ先端の CI で照合し、3 本とも push → CI → close の 3 段を通す。偽 CI の呼び出しは 3 本 × 2 回＝6 回で、
+/// 最後に渡った sha は先端の sha（最後に終端する便は先頭の a＝先端でない便も先端の sha で照合した）。base は先端でない
+/// 便が CI を照合せず `ci:unmeasurable` で止まる（呼び出し 2 回・close 1 本）＝RED。
+#[test]
+fn pipe_train_terminal_every_run_checks_the_tip_ci_and_closes() {
+    let (repo, state) = repo_with_state();
+    let (tools, stdout, [id_a, id_b, id_c], tip_sha) = land_train_with_terminal(&repo, &state, "success");
     assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), tip_sha, "main の先端は c");
-    let tail = |id: &str| landed_details(&state, id).into_iter().filter(|detail| detail.starts_with("terminal:")).collect::<Vec<String>>();
-    assert_eq!(
-        tail(&id_c),
-        ["terminal:push:fake", "terminal:ci:success", "terminal:close:ok"],
-        "先端の便は push → CI → close: {:?}",
-        landed_details(&state, &id_c)
-    );
-    for id in [&id_a, &id_b] {
+    for id in [&id_a, &id_b, &id_c] {
         assert_eq!(
-            tail(id),
-            ["terminal:push:fake", "terminal:ci:unmeasurable"],
-            "先端でない便は CI を照合せず止まり close しない: {id} {:?}",
+            terminal_tail(&state, id),
+            ["terminal:push:fake", "terminal:ci:success", "terminal:close:ok"],
+            "列の便は push → CI → close: {id} {:?}",
             landed_details(&state, id)
         );
-    }
-    assert_eq!(tools.ci_call_count(), 2, "偽 CI は先端の便の待ちの最初の 1 回と読み直しの 1 回だけ");
-    assert_eq!(git(&tools.remote, &["rev-parse", "refs/heads/main"]), tip_sha, "偽 remote の main は先端の sha");
-    for (id, token) in [(&id_a, "ci:unmeasurable"), (&id_b, "ci:unmeasurable"), (&id_c, "closed")] {
-        let line = stdout_of(&out).lines().find(|line| line.starts_with(&format!("run={id} landed="))).map(str::to_owned);
+        let line = stdout.lines().find(|line| line.starts_with(&format!("run={id} landed="))).map(str::to_owned);
         assert!(
-            line.as_deref().is_some_and(|found| found.ends_with(&format!("terminal={token}"))),
-            "stdout の terminal= は {token}: {id} {}",
-            stdout_of(&out)
+            line.as_deref().is_some_and(|found| found.ends_with("terminal=closed")),
+            "stdout の terminal= は closed: {id} {stdout}"
         );
     }
+    assert_eq!(tools.ci_call_count(), 6, "偽 CI は 3 本 × （待ちの最初の 1 回と読み直しの 1 回）");
+    let ci_argv = fs::read_to_string(&tools.ci_log).expect("偽 CI が撃たれた");
+    assert_eq!(ci_argv.lines().collect::<Vec<&str>>(), [tip_sha.as_str()], "最後に渡った sha は先端の sha");
+    assert_eq!(git(&tools.remote, &["rev-parse", "refs/heads/main"]), tip_sha, "偽 remote の main は先端の sha");
+    clean(&[&repo, &state]);
+}
+
+/// 先端の CI で照合した close（設計 contract-source.md §53・行 be）: 1 周目は常に success の偽 CI の列の着地で、偽 bd の
+/// 最後の close（最後に終端する列の先頭の便 a）の reason が `landed <a の sha> ci=success tip=<先端の sha>`。2 周目は偽 CI が
+/// failure を返す列の着地で、3 本とも `ci:failure` で止まり台帳を 1 度も閉じない。base は a が close せず止まる＝RED。
+#[test]
+fn pipe_train_tip_close_reason_names_the_tip_and_failure_closes_none() {
+    let (repo, state) = repo_with_state();
+    let (tools, _, [id_a, _, _], tip_sha) = land_train_with_terminal(&repo, &state, "success");
+    let sha_a = sha_of_landing(&state, &id_a).expect("先頭の便の sha を読める");
+    assert_ne!(sha_a, tip_sha, "前提: 先頭の便は先端でない");
+    let argv = fs::read_to_string(&tools.bd_log).expect("偽 bd が撃たれた");
+    let words: Vec<&str> = argv.lines().collect();
+    assert_eq!(
+        words.get(..3),
+        Some(["close", "s2-2e5", "--reason"].as_slice()),
+        "最後の close は先頭の便の bead（train_runs の a）: {words:?}"
+    );
+    assert_eq!(
+        words.get(3).copied(),
+        Some(format!("landed {sha_a} ci=success tip={tip_sha}").as_str()),
+        "reason は先端の id を持つ: {words:?}"
+    );
+    clean(&[&repo, &state]);
+
+    let (repo, state) = repo_with_state();
+    let (tools, stdout, ids, _) = land_train_with_terminal(&repo, &state, "failure");
+    for id in &ids {
+        assert_eq!(
+            terminal_tail(&state, id),
+            ["terminal:push:fake", "terminal:ci:failure"],
+            "failure は close しない: {id} {:?}",
+            landed_details(&state, id)
+        );
+        let line = stdout.lines().find(|line| line.starts_with(&format!("run={id} landed="))).map(str::to_owned);
+        assert!(line.as_deref().is_some_and(|found| found.ends_with("terminal=ci:failure")), "stdout: {id} {stdout}");
+    }
+    assert!(!tools.bd_log.exists(), "台帳は 1 度も閉じない");
     clean(&[&repo, &state]);
 }
 
