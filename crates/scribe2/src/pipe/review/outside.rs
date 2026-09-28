@@ -16,7 +16,7 @@
 
 mod linked;
 
-use super::base::{declared_name, item_text, tooth_names, ITEM_HEAD, ROW_LINE_WIDTH};
+use super::base::{block_end, declared_name, item_text, tooth_names, ITEM_HEAD, ROW_LINE_WIDTH};
 use crate::pipe::closure::{holds_word, mentioned_names, src_region, test_region, Mentioned, Source};
 use crate::pipe::contract::Contract;
 use crate::pipe::refuse::{normalize, NEW_FILE};
@@ -313,21 +313,6 @@ fn item_lines(tree: &Tree<'_>, decl: &Decl) -> Vec<String> {
         decl.line
     };
     lines.get(start..=end).unwrap_or_default().iter().map(|line| format!("  {}", line.trim_end())).collect()
-}
-
-/// 宣言の行から本体の閉じ括弧の行まで（括弧を開かず `;` で終わる行はその行・閉じなければ file の末尾）。
-fn block_end(lines: &[&str], at: usize) -> usize {
-    let mut depth = 0_usize;
-    let mut opened = false;
-    for (index, line) in lines.iter().enumerate().skip(at) {
-        let opens = line.matches('{').count();
-        depth = depth.saturating_add(opens).saturating_sub(line.matches('}').count());
-        opened = opened || opens > 0;
-        if (opened && depth == 0) || (!opened && line.trim_end().ends_with(';')) {
-            return index;
-        }
-    }
-    lines.len().saturating_sub(1)
 }
 
 /// (b) 名指された `.rs`（write-set の外）: base の要約と同じ 1 項目。
@@ -889,5 +874,115 @@ mod tests {
         let from_md = text_of(&repo, &tracked, &ws, "docs/design/nh.md#na", &["本文は nt.toml#nd を指す。"]);
         assert_eq!(chunk_of(&from_md, "docs/design/nt.toml §3"), "- docs/design/nt.toml §3\n  丙の goal。\n  行 nd の done: nd の done", "{from_md}");
         let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// §56 行 bh の fixture の `.rs` 1 本を tmp の dir に書き、base の要約（`item_text`）の宣言の列と要約の全文を返す。
+    fn declared_row(name: &str, lines: &[&str]) -> (String, String) {
+        let dir = std::env::temp_dir().join(format!("pipe-review-outside-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::create_dir_all(dir.join("src"));
+        let _ = std::fs::write(dir.join("src/v.rs"), format!("{}\n", lines.join("\n")));
+        let text = super::super::base::item_text(&dir, "src/v.rs", 120);
+        let _ = std::fs::remove_dir_all(&dir);
+        (text.lines().find_map(|line| line.strip_prefix("  宣言: ")).unwrap_or_default().to_owned(), text)
+    }
+
+    /// §56 行 bh (a) 可視性 5 形の fn・名前つきの欄の pub の struct（pub と pub(crate) と私有の欄・doc 行と属性行つき）・tuple の
+    /// pub の struct・欄の無い pub の struct・欄を持つ私有の struct・variant を持つ pub の enum・impl の中の pub の fn が
+    /// `<可視性> <語> <名>` で並び、私有の struct と pub の enum は括弧を持たない（母集団 = 列を `, ` で割った本数）。
+    #[test]
+    fn summary_visibility_declarations_carry_the_visibility_and_public_struct_fields() {
+        let (column, text) = declared_row(
+            "visibility-forms",
+            &[
+                "pub fn zq_open() {}",
+                "pub(crate) fn zq_crate() {}",
+                "pub(super) fn zq_super() {}",
+                "pub(in crate::x) fn zq_in() {}",
+                "fn zq_own() {}",
+                "/// 名前つきの欄。",
+                "#[derive(Debug)]",
+                "pub struct ZqNamed {",
+                "    /// 公開の欄。",
+                "    pub zq_a: u8,",
+                "    #[doc(hidden)]",
+                "    pub(crate) zq_b: u8,",
+                "    zq_c: u8,",
+                "}",
+                "pub struct ZqPair(pub u8, u16);",
+                "pub struct ZqUnit;",
+                "struct ZqHidden {",
+                "    zq_d: u8,",
+                "}",
+                "pub enum ZqTone {",
+                "    ZqRed,",
+                "    ZqBlue(u8),",
+                "}",
+                "impl ZqNamed {",
+                "    pub fn zq_dot() {}",
+                "}",
+            ],
+        );
+        let expected = [
+            "pub fn zq_open",
+            "pub(crate) fn zq_crate",
+            "pub(super) fn zq_super",
+            "pub(in crate::x) fn zq_in",
+            "fn zq_own",
+            "pub struct ZqNamed { pub zq_a; pub(crate) zq_b; zq_c }",
+            "pub struct ZqPair(pub 0; 1)",
+            "pub struct ZqUnit",
+            "struct ZqHidden",
+            "pub enum ZqTone",
+            "pub fn zq_dot",
+        ];
+        assert_eq!(column.split(", ").collect::<Vec<&str>>(), expected, "宣言 11 本: {text}");
+    }
+
+    /// §56 行 bh (b) 1 行に並ぶ欄・型に `,` を含む欄・行末の `//` 注釈に `,` を含む欄・generic の中に `Fn(u8, u8)` の括弧を持つ欄・
+    /// 型に `->` を持つ欄の後ろの欄・名の直後の generic が `->` を持つ tuple の struct の欄が名と可視性だけで読まれ（偽の欄も
+    /// tuple の読みも出ない）、base の説明の 1 行が私有と欄の区切りと trait の impl の読みを名乗る。
+    #[test]
+    fn summary_visibility_fields_are_read_through_generics_arrows_and_comments() {
+        let (column, text) = declared_row(
+            "visibility-fields",
+            &[
+                "pub struct ZqLine { pub zq_a: u8, zq_b: u8 }",
+                "pub(crate) struct ZqMap {",
+                "    pub zq_map: HashMap<u8, Vec<u8>>,",
+                "    zq_tail: u8,",
+                "}",
+                "pub struct ZqNote {",
+                "    pub zq_first: u8, // 注釈, 偽の欄",
+                "    zq_second: u8,",
+                "}",
+                "pub struct ZqCall {",
+                "    pub zq_call: Box<dyn Fn(u8, u8)>,",
+                "    zq_after: u8,",
+                "}",
+                "pub struct ZqArrow {",
+                "    pub zq_arrow: Box<dyn Fn(u8) -> u8>,",
+                "    zq_behind: u8,",
+                "}",
+                "pub struct ZqWrap<F: Fn(u8) -> u8>(pub F, u8);",
+            ],
+        );
+        let expected = [
+            "pub struct ZqLine { pub zq_a; zq_b }",
+            "pub(crate) struct ZqMap { pub zq_map; zq_tail }",
+            "pub struct ZqNote { pub zq_first; zq_second }",
+            "pub struct ZqCall { pub zq_call; zq_after }",
+            "pub struct ZqArrow { pub zq_arrow; zq_behind }",
+            "pub struct ZqWrap(pub 0; 1)",
+        ];
+        assert_eq!(column.split(", ").collect::<Vec<&str>>(), expected, "宣言 6 本: {text}");
+        let block = crate::pipe::review::base_block(&text, u64::MAX);
+        let preamble = block.lines().find(|line| !line.is_empty() && !line.starts_with("## ")).unwrap_or_default();
+        assert!(
+            preamble.contains("字の無い宣言と欄は私有（その module と子孫から見える）")
+                && preamble.contains("欄の可視性と名を `; ` で区切って並べ")
+                && preamble.contains("trait の impl の中の fn は字を持たず trait に従う"),
+            "{preamble}"
+        );
     }
 }

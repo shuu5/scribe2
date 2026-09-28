@@ -542,12 +542,13 @@ mod tests {
     /// 残りは base の段を足した**後**で測る: base の要約と外の材料の全部がちょうど収まる cap では両方が全部入り、base の段の
     /// byte を数えずに外の材料だけが収まる cap では外の材料は名ごとの切り詰めの行になる（base の段は全部のまま）。既存の 4 材料
     /// だけで越える周は外の材料が在っても INCONCLUSIVE のまま。
+    // flip-check: retroactive s2-07l.736.3
     #[test]
     fn headless_lens_outside_room_is_measured_after_the_base_stage() {
-        let long = format!("{OUTSIDE}  {}\n", "z".repeat(600));
+        let base = u64::try_from(crate::pipe::review::base_block(SUMMARY, u64::MAX).len()).unwrap_or(u64::MAX);
+        let long = format!("{OUTSIDE}  {}\n", "z".repeat(usize::try_from(base).unwrap_or(0).saturating_add(600)));
         let (contract, dir) = with_outside("outside-room", Some(SUMMARY), &long);
         let four = u64::try_from([STATED, "節の本文\n", "FR1: 要件の本文\n"].iter().map(|text| text.len()).sum::<usize>()).unwrap_or(u64::MAX);
-        let base = u64::try_from(crate::pipe::review::base_block(SUMMARY, u64::MAX).len()).unwrap_or(u64::MAX);
         let outside = u64::try_from(super::outside_block(&long, u64::MAX).len()).unwrap_or(u64::MAX);
         let both = prompt_of(&contract, STATED, "（裁定なし）", four + base + outside).unwrap_or_default();
         assert!(both.contains(SUMMARY.trim_end()) && both.contains(&"z".repeat(600)), "両方が全部入る: {both}");

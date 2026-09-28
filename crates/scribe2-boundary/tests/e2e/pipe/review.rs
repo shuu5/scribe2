@@ -205,7 +205,7 @@ fn pipe_review_base_place_only_item_is_read_in_base_txt() {
     let at = lines.iter().position(|line| line.starts_with("- =src/zq_place.rs: ")).unwrap_or(lines.len());
     assert_eq!(
         lines.get(at..at.saturating_add(3)),
-        Some(&["- =src/zq_place.rs: 行数 全体 7 / 本体 2・置き場だけ（中身は変えない）", "  宣言: fn placed", "  歯: zq_tooth"][..]),
+        Some(&["- =src/zq_place.rs: 行数 全体 7 / 本体 2・置き場だけ（中身は変えない）", "  宣言: pub fn placed", "  歯: zq_tooth"][..]),
         "{summary}"
     );
     clean(&[&repo, &state]);
