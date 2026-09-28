@@ -219,20 +219,26 @@ pub struct FileLines {
     pub path: String,
     /// file 全体の行数（xtask の file-lines と同じ式・R-C4-2 の余地の分母）。
     pub total: u64,
-    /// 本体の行数（最初の行頭 `#[cfg(test)]` より前・[`crate::pipe::closure::src_region`]・xtask の core-lines と
-    /// 同じ式＝in-file の歯は R-C4-3 が数える側で core の合計に入れない）。
+    /// 本体の行数（最初の行頭 `#[cfg(test)]` より前・[`crate::pipe::closure::src_region`]・名で test の file
+    /// 〔[`is_named_test_file`]〕は 0・xtask の core-lines と同じ式＝in-file の歯は R-C4-3 が数える側で core の合計に
+    /// 入れない）。
     pub src: u64,
 }
 
 impl FileLines {
     /// 本文から 2 面を数える（式はここ 1 か所・xtask と crate は互いに依存しないので同じ fixture の歯が一致を守る）。
+    /// 名で test の file は本体 0（全体は変えない＝R-C4-2 の余地は file 全体のまま・設計 rules-manifest.md §18）。
     pub fn of(path: &str, text: &str, width: u64) -> Self {
-        Self {
-            path: path.to_owned(),
-            total: line_count(text, width),
-            src: line_count(crate::pipe::closure::src_region(text), width),
-        }
+        let src = if is_named_test_file(path) { 0 } else { line_count(crate::pipe::closure::src_region(text), width) };
+        Self { path: path.to_owned(), total: line_count(text, width), src }
     }
+}
+
+/// file 名が `tests.rs` か `_tests.rs` で終わるか（`#[path]` で外出しした歯の file・xtask の `is_named_test_file`
+/// と同じ述語・crate は互いに依存しないので同じ fixture の歯が一致を守る）。
+fn is_named_test_file(path: &str) -> bool {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    name == "tests.rs" || name.ends_with("_tests.rs")
 }
 
 /// 上限の余地を測る（**受付だけが撃つ**・pure・I/O は呼び手）。
@@ -353,6 +359,42 @@ mod tests {
             headroom_shortfalls(&same, &lines, &[], caps(300, 40_000)),
             vec![Headroom { file: "crates/toy/src/a.rs".to_owned(), headroom: 101, estimate: 300 }],
             "file の余地は全体 1399 から（本体なら 500 で M が通る）"
+        );
+    }
+
+    /// 名で test の file（tests.rs / _tests.rs で終わる）は行頭 `#[cfg(test)]` を持たなくても本体 0・全体は不変
+    /// （xtask の split の名の弁別と同じ切り方・設計 rules-manifest.md §18）。名に tests を含むが tail の違う file と
+    /// 素の file は本体 = 全体。
+    #[test]
+    fn intake_core_room_named_tests_count_zero_src_like_the_xtask_split() {
+        let sides = |path: &str| {
+            let found = FileLines::of(path, BARE_FIXTURE, 10);
+            (found.total, found.src)
+        };
+        assert_eq!(sides("crates/toy/src/a/select_tests.rs"), (3, 0), "_tests.rs は本体 0");
+        assert_eq!(sides("crates/toy/src/a/tests.rs"), (3, 0), "tests.rs は本体 0");
+        assert_eq!(sides("crates/toy/src/a/contests.rs"), (3, 3), "tail の違う file は素の file");
+        assert_eq!(sides("crates/toy/src/a/plain.rs"), (3, 3), "素の file は本体 = 全体");
+    }
+
+    /// 名で test の file の本体は core の合計を食わない: 本体 1000 の素の file と印の無い 400 行の _tests.rs の base で、
+    /// 上限 1450 の core の余地は 450（名を見なければ 50＝S の新規 1 本を断る）。
+    #[test]
+    fn intake_core_room_named_tests_do_not_eat_the_core_headroom() {
+        let teeth = "x\n".repeat(400);
+        let lines = vec![
+            FileLines::of("crates/toy/src/a.rs", &"y\n".repeat(1_000), 120),
+            FileLines::of("crates/toy/src/a_tests.rs", &teeth, 120),
+        ];
+        assert_eq!(lines.get(1).map(|found| (found.total, found.src)), Some((400, 0)), "全体 400・本体 0");
+        let fresh =
+            read_write_set(&strings(&["+crates/toy/src/new.rs"]), &base(), NewFilePolicy::MustBeAbsent).unwrap_or_default();
+        let caps = |size_lines: u64| Caps { file_lines: 1_500, core_lines: 1_450, size_lines };
+        assert!(headroom_shortfalls(&fresh, &lines, &[], caps(100)).is_empty(), "余地 450 に S の 1 本は入る");
+        assert_eq!(
+            headroom_shortfalls(&fresh, &lines, &[], caps(451)),
+            vec![Headroom { file: CORE.to_owned(), headroom: 450, estimate: 451 }],
+            "余地は 450（_tests.rs の 400 を数えれば 50）"
         );
     }
 
