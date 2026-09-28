@@ -40,7 +40,6 @@
   - `ledger` の食い違い = 帳簿の `gitCommitSha` ≠ vessel repo の HEAD（`source=install` の行だけ・帳簿が古い＝`claude plugin install` の打ち直しが要る周を名指す・器は帳簿を書かない）。`source=launch` だけの行は `ledger=-` で、この語は出ない。
   - `dual` = 記録の `root` が checkout で、かつ同じ path の帳簿にも器が在る（hook が二重に走る）。
   - `drift=` は該当する語を `+` で繋ぐ（閉じた列・宣言順）。記録が無い consumer は `unrecorded` で「none」に潰さない。
-  - `statusline=<vessel|other|absent|unreadable>`（ADR-0029 §2.3・台帳 `s2-07l.320`）= consumer の project scope の `.claude/settings.json` の `statusLine.command` が器の行と一致するか。口座行の同名の語と同じ 1 関数で読む（`vessel` 以外は口座の設定を上書きしている印・判定はしない）。行の末尾に足す。
 - **vessel repo**: `head=` と §5 の更新は器自身の checkout を要る。host 固有の path なので **host の manifest**（[account-lifecycle.md](./account-lifecycle.md) §2 の `host.toml`）に array-of-tables を 1 種足す: `[[vessel]] repo = "<dir>"`（最大 1 行・2 行目は重複として拒む・同じ loader・同じ拒否形）。無い周は `head=undeclared`（doctor は止めない）。
 - **判定しない**: doctor は行を出すだけ（C10.2・verified の手書きは無い）。何をすべきかは `drift=` の語が名指し、更新は §5 の口が行う。
 
@@ -117,13 +116,10 @@ C1（rules 行を足さない・閾値は無い）・C2 / C2.2（`EventKind` / `
 
 `claude plugin install` の打ち直しを器が撃つ形（帳簿は他人のもの＝当面は doctor が名指すだけ）／consumer 側の state dir の一覧を host の manifest に宣言する形（今は口座の帳簿と登録 row から導く）／`vessel update` が消費者の席へ結果を報せる形（通知でなく tick が測る側に倒したので当面は無し）／binary の食い違いだけの席を軽く直す形（今は次の hook の起動に任せる）。
 
-## 14. doctor の consumer 行に statusline= を足す（契約表の行 f・`s2-07l.325`）
+## 14. doctor の consumer 行に statusline= を足す（契約表の行 f・`s2-07l.325`）— **超過**（SRS FR63・ADR-0045 §2 (2)）
 
-- 何が起きているか: ADR-0029 §2.3（doctor の導入先の行に `statusline=<vessel|other|absent|unreadable>`）と本 doc §4 の行の末尾の語仕様を承け、`.320`（`StatusLine` の enum と口座行の語）から切り出した便。現物（verified）: consumer 行は `crates/scribe2/src/account/consumers.rs` の 2 形（記録あり・unrecorded）で組まれ in-file の歯が近くに在るが、`statusline=` の語は src に 0 件。
-- 形: consumer 行（2 形とも）の末尾に `statusline=<vessel|other|absent|unreadable>` を足す。値は consumer の project scope の `.claude/settings.json` の `statusLine.command` を、口座行と**同じ 1 関数**（seat/statusline.rs の読み・`.320` が新設）で読む。`unrecorded` の行でも settings.json は読めるので語は出す。
-- 触らない: `drift=` の語の列（`statusline` は drift の語ではない・判定しない）・口座行・`.320` の関数の中身・`docs/`。
-- 依存: `.320` Landed が前提（seat/statusline.rs は本便の受付時点でまだ着地していない＝行の write-set では + で名指し、.320 Landed 後に素の path へ焼き直す）。
-- 却下案: consumer 行で settings.json を独自に読む（口座行と 2 実装になる・C2）／`statusline` を `drift=` の語に入れる（上書きの有無は判定でなく事実の名指し・C10.2・設計 §4「判定しない」）。
+- 行 f は着地しなかった。前提の `.320`（器が statusline を描く口）ごと ADR-0045 §2 (2) で廃止され（FR63: 器は開発 session の statusline を描く subcommand を持たない）、比べる相手の器の行が無い。
+- 行 f は契約表から落とした。本文は git の履歴に在る。
 
 ## 15. vessel repo の checkout が上流の既定 branch から behind の周に、終端の周が §5 の口を撃つ — 更新の運用を列の 1 周の構造で強制し、doctor の consumer 行に `behind=` を足す（契約表の行 g・`s2-07l.408`）
 
@@ -207,16 +203,6 @@ write-set = ["crates/scribe2/src/hook/vessel.rs", "crates/scribe2/src/fleet/mod.
 verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail vessel_update_", "cargo nextest run -p scribe2 --test e2e --no-tests=fail fleet_kinds_follow_declaration_order", "cargo nextest run -p scribe2 --test e2e --no-tests=fail vessel_external_form", "cargo nextest run -p scribe2 --test e2e --no-tests=fail fleet_external_form"]
 size = "M"
 done = "偽 git と偽 cargo で status → fetch → merge --ff-only → cargo install の順序の argv が写って InstallRecorded が 1 件（sha12 と host と path）記され stdout が 1 行出て、宣言なし / dirty / not-fast-forward / install の失敗の 4 形はその段より後の argv を 1 本も撃たず event 0 で典型の語を出し、fleet record はこの kind を手で渡されると拒み、KINDS の宣言順の pin と vessel の外形 snapshot と fleet の外形 snapshot が更新されて緑である"
-
-[[contract]]
-id = "f"
-title = "doctor の consumer 行に statusline=<vessel|other|absent|unreadable> を足す — 口座行と同じ 1 関数で読む"
-req = ["FR61", "FR63"]
-section = "14"
-write-set = ["crates/scribe2/src/account/consumers.rs", "+crates/scribe2/src/seat/statusline.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__seat__seat_doctor_external_form.snap"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail doctor_consumer_statusline_"]
-size = "S"
-done = "doctor の consumer 行が statusline= を 4 値で出し、口座行と同じ関数を通る"
 
 [[contract]]
 id = "g"

@@ -31,7 +31,7 @@
 ## 3. 口座の口（ADR-0026 §2.2・subcommand `<NAME> account …`・`--state-dir S` 必須）
 
 - **`account add <label> [--anchor DIR] [--target T]`**: (1) label を manifest の規則で検査し、宣言済み（退役中を含む）なら typed に断る（`exists`）。(2) `<state_dir>/accounts/<label>/` を dir として作る（既に dir か link が在れば `dir-exists`・中身は読まない）。(3) 直下に `settings.json` を書く（内容は器が起こす席の前提だけ = agent view を切る 1 項目・[account-autonomy.md](./account-autonomy.md) §5 (4) と、statusline を器の口で描く 1 項目 `statusLine = {type: command, command: "<NAME> seat statusline"}`・ADR-0029 §2.3・`command` の語は NAME 定数から導き `refreshInterval` は書かない。user が置いた既存 dir には書かない＝(2) で断るので到達しない。既存の口座 dir は `account statusline <label>` が `statusLine` の key 1 つだけを置換し、読めない設定は断って上書きしない）。(4) `host.toml` に `[[account]]` 行を 1 つ足す（読み → 検査 → 一時 file → rename・部分書きを残さない）。(5) login は **user の手番**（器は credential に触れない・代筆しない・ADR-0017 §2.3）: `--target T` が在れば、起動行 `CLAUDE_CONFIG_DIR=<dir> <claude>`（`--anchor` を cwd として・trust の dialog を同じ session で通すため）を T の shell へ §5 の門を通して注入し、無ければ同じ行を stdout に出す（`account: prepared <label> next=<行>`）。login の完了は器が待たない（`account ls` / doctor の `credential=` が示す）。
-- **`account ls`**: doctor の口座行（`s2-07l.233` の形・label ごとに 1 行・`dir` / `credential` / `config` / `agentview` / `statusline` / `trust`・`statusline=<vessel|other|absent|unreadable>` は `statusLine.command` が器の行と一致するか（ADR-0029 §2.3・`absent` に潰さない）と**同じ関数**で行を作り、`retired=<yes|no>` と最新の実測行の要約（`five_hour=<pct|unmeasured> seven_day=<pct|unmeasured>`・event log を読むだけ・計測は撃たない）を足す。judgement を持たない（C10.2）。
+- **`account ls`**: doctor の口座行（`s2-07l.233` の形・label ごとに 1 行・`dir` / `credential` / `config` / `agentview` / `trust`）と**同じ関数**で行を作り、`retired=<yes|no>` と最新の実測行の要約（`five_hour=<pct|unmeasured> seven_day=<pct|unmeasured>`・event log を読むだけ・計測は撃たない）を足す。judgement を持たない（C10.2）。
 - **`account retire <label>`**: (1) 宣言済みで未退役であること（`unknown` / `already-retired`）。(2) 登録 row（[seat-roles.md](./seat-roles.md) §2）のどれかがその label を持つ周は断る（`in-use`・席が使っている口座を外さない）。(3) `<state_dir>/accounts/<label>` を `<state_dir>/accounts/.retired/<label>.<ts>` へ **mv**（link は link のまま動かす・N1.2）。(4) fleet の event log に `AccountRetired { label }` を 1 件（`EventKind` の新 variant・宣言順の末尾・schema 1 のまま）。`host.toml` の行は消さない（宣言は残り、有効な口座の集合 = 宣言 − 退役 を replay が導く・C3「退役は DB」）。
 - **`account restore <label>`**: 退役中であること（`not-retired`）・`.retired/<label>.<ts>` の最新を元の場所へ mv・`AccountRestored { label }` を 1 件。
 - **有効な口座の集合**（1 関数・`fleet` の replay）: 宣言（tracked + host）から退役中（最後の `AccountRetired` の後に `AccountRestored` が無い label）を除いたもの。計測（`fleet usage`）・選定（`fleet select`）・tick の逼迫度・doctor・`account ls` の `retired=` はこの 1 関数を読む（退役中の口座は測らず選ばない）。
@@ -132,17 +132,11 @@ user-scope MCP 設定の同期・別口座への `--resume` の混線 fence・pr
 - 歯（`account_credential_dead_` / `seat_tick_account_dead_` 接頭辞・`tests/e2e/seat/account.rs` と 管理 tick の歯の file〔削除済み〕）: 墓標の credential を置いた口座の `account ls` が `credential=dead`／`accessToken` が無いだけの credential は `present`／偽 usage で `unmeasured reason=tombstone` の口座を持つ席の tick が `account-dead` を記録し、N 周目に対話面の target へ NEEDS-USER の 1 行を注入（N-1 周では注入 0）、N+1〜2N-1 周は注入せず 2N 周目に再び 1 行／429 の unmeasured は従来どおり `account-unmeasured`（呼び鈴 0）／rules 行は kind 件数の pin と外形の歯。
 - 却下: 期限切れ時刻の警報（false alarm）／tick が自分で re-login を試みる（人間の操作・器の外）／口座の軸の「測れない」〔管理 tick ごと削除済み〕 に理由の String を持たせる（閉じた enum の理由を文字で運ぶ・C3.3）／毎周鳴らす（planner の入力欄を埋める・§10 の型の事故）。
 
-## 16. 席の実口座を SessionStart が測って記録し、登録 row との照合を指示文で見せる（契約表の行 d / e・`s2-07l.438`）
+## 16. 席の実口座を SessionStart が測って記録し、登録 row との照合を指示文で見せる（契約表の行 d / e・`s2-07l.438`）— **超過**（SRS FR71・ADR-0045 §2 (2)）
 
-- 何が起きているか（別 repo の planner 席からの relay 2026-09-17・出所と記録の字面は台帳 `s2-07l.438`）: 席を credential dir だけ替えて手で起こし直すと、実 session は口座 A で動くのに登録 row（`SeatRegistered` の account）は口座 B のまま残る。当時の現物（main 3f1eec8）では管理 tick の口座の軸が **row の口座**の逼迫度だけを読み、B が閾値以上の周に context 14% の席へ `origin=account` の退避の合図を注入した（誤発火）。その軸・退避の合図・席の立て直しは ADR-0045 §2 (2) で消えた（FR27 / FR38 は恒常の不在・歯が不在を確かめる）ので誤発火は再発しないが、穴の残り 2 つは今も在る: 実口座を測って残す書き手が無く（SessionStart は row を書かず、打刻 dir にも口座は無い）、SessionStart の指示文（`seat/brief/`）は row の値だけを出して食い違いを名指す面が 1 つも無い（doctor の席の行も row の口座を写すだけ・2026-09-21 の口座移動で registered=3 live=1 missing=2 のまま旧口座を出した）。
-- 形 (1) **実口座の記録（行 d）**: SessionStart hook は入力 JSON の `transcript_path`（`hook/mod.rs` が既に `KEY_TRANSCRIPT` で読む key・transcript は credential dir の下に置かれる）から実口座を導く。path が字面で `<state_dir>/accounts/<label>/` の下に在り、`<label>` が 1 要素で `.` 始まりでない周だけ label を得る（それ以外・key が無い周は unknown）。**env は読まない・hooks.json の shell 行も足さない**（C2.2＝既存の入力 JSON の内側で閉じる）。`--pane` から target を解けた周に、席の打刻 dir（sid の打刻・読み込み元の記録 `plugin` と同じ置き場）へ 1 file 1 行の記録を**毎 SessionStart に上書き**する（schema・口座 label か unknown・sid・ts。unknown も書く＝前の session の値を残さない）。読む側は「記録が在る / 無い / 読めない」を型で分ける（`hook/vessel/digest.rs` の `PluginRecord` と同型・C10: 測った値・出所 = hook）。書けない周は席を止めず stderr に 1 行（読み込み元の記録と同じ）。
-- 形 (2) **row は上書きしない・記録を読んで席を止めない（行 d）**: row の account は宣言から導いた実効値の写し（[seat-roles.md](./seat-roles.md) §15 (5)）で、実測で書き換えない（C10）。記録の読み手は形 (3) の指示文だけで、記録を読んで合図を撃つ・席を止める・立て直す経路は置かない（ADR-0045 §2 (2) が消した機構＝FR27 / FR38 の恒常の不在を破らない）。記録が無い・unknown・読めない周は指示文が「unrecorded / unknown / unreadable」と出すだけで、旧 session・hook の載らない席をどの段も止めない。
-- 形 (3) **見える化（行 e）**: 指示文の雛形（planner / admin）に出所 pointer 付きの 1 行を足し、穴 3 つ（row の口座・実測の口座〔label / unknown / unrecorded / unreadable〕・照合〔match / mismatch / unknown の閉じた字面〕）を `HOLES` に足す（4 → 7・xtask の `BRIEF_HOLES` も同じ列）。行は直し方の pointer（`seat launch --account`＝row も更新する正規の口）を持つ。hook は記録を書いた**後**に指示文を組む。出す面は指示文の 1 つだけである（復元の DATA の `[SEAT]` 行に同じ値を足す案は、その DATA ごと超過した・ADR-0045 §2 (2)・`s2-07l.479.2`）。
-- 触らない: 登録 row の schema と書き手（`seat register` / `seat launch` / 立て直し）・口座の選定（FR36）・役割の口座（seat-roles §15〜§18）・`state.jsonl` の schema（打刻の行に口座を足さない）・doctor の席の行・生成 hooks.json・rules 行。
-- 歯（`seat_account_mismatch_` 接頭辞）: 行 d = `tests/e2e/hook.rs` に `seat_account_mismatch_record_`（偽の `transcript_path` が置き場の accounts の下 → label を記録／外 → unknown を記録して前の値を消す／`.` 始まり・key 無し → unknown／pane 無し → 書かない／記録の file は `plugin` の記録と同じ席の打刻 dir に在り、row と `state.jsonl` は 1 byte も変わらない）。行 d に tick・合図・立て直しの歯は無い（撃つ相手が不在）。行 e = `seat_account_mismatch_shown_`（指示文に 3 つの値が出る・食い違う周は mismatch）・in-file の `seat_brief_holes_`・xtask の `seat_brief_`・指示文の snapshot。
-- 却下: row を実測で追記更新する（memo の案 (a)・宣言から導いた値を測定で上書きする形＝C10 と seat-roles §15 (5) に反し、手起動 1 回で役割の口座の宣言とも食い違う row が出来る）／記録を読んで合図を撃つ・席を止める・立て直す経路を足す（ADR-0045 §2 (2) が消した管理 tick の口座の軸の再導入＝FR27 / FR38 の恒常の不在を破る・`.533` run 1 の審査 FAIL literal-mismatch の根）／hooks.json の shell 行に credential dir の env を渡す flag を足す（入力 JSON で取れる値に新しい口を足さない・C2.2）／`accounts/` を走査して実体の path で照合する（§11 の却下と同じ・字面で当たらない手起動は unknown に倒れて従来どおり）／`state.jsonl` の行に口座を足す（on-disk の schema 変更・毎 turn の行に不変の値を運ぶ）。
-- 依存: 行 d に先行は無い（行 c `s2-07l.420` は着地済み・交差していた管理 tick の module は削除済み・行 d は `tests/e2e/seat/account.rs` を触らない）。行 e は行 d の Landed 後（記録の読み手を使う・`hook/mod.rs` で交差）。
-- 後続: 食い違いが続く周の呼び鈴（§15 (3) と同じ型・閾値は rules 行＝裁定 id 要）／字面で当たらない credential dir（link 越しの手起動）の照合。
+- 行 d（実口座の記録）は `s2-07l.533` で着地した。FR71（器は session の開始で実測した口座を記録しない）と食い違うので、[carry-prep.md](./carry-prep.md) §7 の行 d（`s2-07l.673`）が書き手ごと消した。不在は `session_start_leaves_no_account_record` の歯が確かめる。
+- 行 e（見える化）は着地せず、目的（食い違いの判定）ごと ADR-0045 §2 (2) で廃止された。
+- 2 行とも契約表から落とした。本文は git の履歴に在る。
 
 ## 17. 席の口座を持つ単位は project の群 — host の面に群の宣言を 1 表足し、doctor が群ごとに 1 行を出し、便用の選定が群の候補の口座を host 全体で外す（契約表の行 f・[ADR-0049](../../design-intent/decisions/ADR-0049-seat-accounts-are-owned-by-project-groups.html)・`s2-07l.491`）
 
@@ -184,7 +178,7 @@ user-scope MCP 設定の同期・別口座への `--resume` の混線 fence・pr
 - 形（短い形だけ・長い形 `seat launch` は触らない）:
   1. **flag 2 つ**: `-c`（別名 `--continue`）は直前の会話を、`-r <id>`（別名 `--resume <id>`）は名指した会話を引き継ぐ。どちらも**注入する起動行の末尾**に claude の同名の flag（`--continue` / `--resume <id>`）を足すだけ。**登録 row の `launch` と置き場の `.launch` は旗無しのまま**（row は雛形・会話の id は 1 回きりの値・§14 の「row の `launch` = 導出した行」を変えない）。
   2. **使い方の誤り**（rc 1・key を 1 つも送らず row も書かない・§14 と同じ極性）: `-c` と `-r` の両方／`-r` に値が無い・空／同じ flag の重複／**`-r` の値が会話 id の形でない**。会話 id の形は claude の session id（UUID・16 進小文字と `-` だけ・36 字）で、それ以外の字（空白・`$`・引用符・`;`・`-` 始まり等）を 1 字でも含む値は使い方の誤りとして断る。注入する起動行は pane の shell が読むので、値を引用符で包むのでなく**値の字の集合を絞る**（2026-09-21 の便 1 本目の gate で lens が指摘: 空と `-` 始まりだけを断り、`-r 'a b'` が `--resume a b`、`-r '$(x)'` が pane で実行される形だった）。
-  3. **`-c` の先は器が確かめない**: 直前の会話は claude が口座 dir の `projects/<cwd>` から選ぶ。別口座へ移る周に `projects` が共有されていなければ別の会話（か新規）が開く＝人が SessionStart の brief で会話の id を見る（§16 の照合の 1 行と同じ面・器に会話の一覧を読ませない）。
+  3. **`-c` の先は器が確かめない**: 直前の会話は claude が口座 dir の `projects/<cwd>` から選ぶ。別口座へ移る周に `projects` が共有されていなければ別の会話（か新規）が開く＝人が SessionStart の brief で会話の id を見る（器に会話の一覧を読ませない）。
   4. **役割の flag は今のまま省略可**（0 個 = orchestrator・`Role` の variant は 1 つ）。役割が増えても既定は変えない（増えた役割は flag で名指す）。
   5. `--restore CMD` との併用は可（起動後に 1 回送る手順は不変）。同じ窓の周の `--restore` の断り（§14 の約束 8）も不変。
 - 触らない: `derive_launch` の雛形・登録 row の schema・`seat launch`（長い形）・`account shell`・`.launch` file の中身・置き場の解き方。
@@ -202,7 +196,7 @@ user-scope MCP 設定の同期・別口座への `--resume` の混線 fence・pr
   - 使用率の計測は `crates/scribe2/src/fleet/usage.rs` の `measure` の 1 本（usage API・実測は event `AllowanceMeasured`・field は `used_pct`）。event の種類は `crates/scribe2/src/fleet/mod.rs` の閉じた列挙 `EventKind`（全 variant を並べる const `KINDS`・enum-slices の門）が持ち、網羅 match は `crates/scribe2/src/fleet/event.rs` と `crates/scribe2/src/fleet/replay.rs` に在る＝通知の event の variant を足す便はこの 3 file を触る。`KINDS` の本数と末尾の順は `crates/scribe2-boundary/tests/e2e/fleet.rs` の歯 2 本（`fleet_kinds_follow_declaration_order`・`account_cmd_kinds_are_fifteen_with_retire_and_restore_last`）が pin し（本数 19・末尾 3 種）、`crates/scribe2-boundary/tests/e2e/pipe/gate.rs` の歯 2 本も `STAGES` と対で `KINDS` の本数 19 を pin する（tests 全体の走査で pin はこの 2 file の 4 本だけ・verified）＝variant を足す便は同じ diff でこれらの pin を新しい本数と順へ動かす（2 file とも行 h の write-set に在る）。鮮度は `run_fresh`（rules 行 `fleet.usage_fresh_s`・[account-autonomy.md](./account-autonomy.md) §13）。窓は `WindowKind` の 3 値（`FiveHour` / `SevenDay` / `SevenDayModel`・`crates/scribe2/src/fleet/mod.rs`）。計測の CLI の口は `fleet usage`（`crates/scribe2/src/fleet/cli.rs`・方針は鮮度なし）。
   - 群の宣言は `AccountGroup`（`crates/scribe2/src/rules/manifest.rs`・`name` / `anchors` / `accounts`・`Manifest::groups`）。群の置き場の席の登録 row の口座を導く読みは doctor の `render_group`（`crates/scribe2/src/account/mod.rs`）が既に持つ。
   - rules 行の形は `rules/manifest.toml`（id / kind / value / enabled / ruling / ruled_at）で、kind は `RuleKind`（`crates/scribe2/src/rules/mod.rs`・閉じた列・56 variant）。群の閾値の行は無い。既存の `R-C9-1`（`AccountSelection`）は session 用の選定の閾値 1 値で窓を区別しない＝群の判定には使わず、触らない。
-  - hook は `crates/scribe2/src/hook/mod.rs` の `dispatch` の match: SessionStart は `session_start`（§16 の `account_record` が席の実口座を測って記録する）・UserPromptSubmit は `stamped`（打刻だけ）。hook の timeout は rules 行 `hook.timeout_s`（10 秒）を写して生成される（`crates/xtask/src/genmanifest.rs`）。計測の上限 `fleet.usage_timeout_s` は 30 秒＝hook の中で同期に撃つと timeout を越えうる。
+  - hook は `crates/scribe2/src/hook/mod.rs` の `dispatch` の match: SessionStart は `session_start`・UserPromptSubmit は `stamped`（打刻だけ）。hook の timeout は rules 行 `hook.timeout_s`（10 秒）を写して生成される（`crates/xtask/src/genmanifest.rs`）。計測の上限 `fleet.usage_timeout_s` は 30 秒＝hook の中で同期に撃つと timeout を越えうる。
   - 器は自分を子として起こす口を持つ（1 周の `spawn_self`・待たない）。`fleet usage` の口は鮮度なし（`Freshness::Always`・宣言の全口座・旗は `--show` / `--table` / `--model` と `--rules` / `--curl` / `--claude`）で、鮮度つき（`Freshness::Within`・秒は rules 行 `fleet.usage_fresh_s`）は `fleet select` の前計測 `run_fresh` だけが持ち、口座を 1 つに絞る旗は無い。既存の歯 `fleet_select_fresh_usage_mouth_measures_every_account_regardless_of_freshness` が旗の無い `fleet usage` の鮮度なしを pin する（動かさない）。
 - 形（1 つずつ歯が測る・行 h の done と 1:1）:
   1. **閾値の rules 行 3 本**: id は fleet.group_pressure_5h_pct / fleet.group_pressure_7d_pct / fleet.group_pressure_model_pct、kind は GroupPressure5hPct / GroupPressure7dPct / GroupPressureModelPct（Int・百分率）。値と裁定は user の要求そのもの（裁定 id = `user 2026-09-19T12:12Z`・裁定日 = 2026-09-19・C5・逐語は台帳）。規範の値を持つのは manifest だけで、ADR-0055 に写した 85 / 95 / 95 は裁定の写しである。行と variant は対で足す（`fleet.usage_fresh_s` と同型・§13 (2)）。読み手は約束 2 と約束 5 の 2 つ（`rules_wired` の門を通る）。
@@ -237,7 +231,7 @@ user-scope MCP 設定の同期・別口座への `--resume` の混線 fence・pr
   3. **群の置き場の席は群の今の口座で起きる**: `seat launch` と短い形は、anchor が群に属する周は session 用の選定を撃たず解決値で起き、`--account` / `<label>` が解決値と違う周は使い方の誤りで断る（rc 1・row 0・群の外に席を置かない）。群に属さない anchor は今のまま。
   4. **移動を頼む記録**: §19 の hook が逼迫を読んだ周に、群用 dir に群ごとに高々 1 file（ts・口座・窓）を置く（在れば上書きしない）。1 周の群の段はこれが在れば鮮度に依らず計測を撃ち、判定の後に履歴の側へ move する。
   5. **移動の判定は lock の内側で 1 回**: 群の今の口座が逼迫（§19 の判定）なら、移り先 = 宣言の候補の順で、今の口座でなく ∧ 他の群の今の口座でなく ∧ 退役中でなく ∧ 3 窓とも閾値未満の実測（鮮度の内側）を持つ、最初の label（§27 形 1 の改めの後の形: 稼働中の便が使う口座は候補から外さず、新規の便は §23 の記録で止まる）。「他の群の今の口座」は**同じ周で先に移った群の移り先を含む**（周の中で更新する＝周の頭の記録だけで判じない・2 群が同じ周に同じ label へ移らない）。無ければ移らず、断りの event を 1 件記して席へ 1 行 `<NAME> group: move-refused group=<名> reason=no-candidate`（妥協の移動を作らない・ADR-0020 §2.4）。**断った周は §19 の通知を送らない**（断りの 1 行が代わる・席への行は群の置き場ごとに高々 1 行）。
-  6. **移動の執行**（同じ lock の内側・この順）: 記録を書く（約束 1）→ 承認 event を 1 件（kind は本行が足す移動の variant・account = 移り先・detail = 群の宣言の行の逐語〔host の面の行番号つき〕= 常設の承認・A1・actor は machine で run / bead を持たない）→ 群の置き場ごとに orchestrator の登録 row が在る席へ退避の合図 1 行 `<NAME> group: evacuate group=<名> to=<label> — 作業記憶を台帳と git に残して /exit` を注入 → 席の pane が shell に戻るのを起動と同じ窓（`seat.cycle_settle_s`）で待ち、戻った置き場から順に `launch` の 1 本で新しい口座の席を**同じ target** に起こす（登録 row は起動が書き直す・会話は運ばない・復帰は SessionStart の brief と §16）。窓の内に戻らない席は保留の event を記し、次の 1 周が記録（新しい口座）と登録 row（古い口座）の食い違いから同じ手を続ける（冪等・判定はやり直さない）。移動した周は §19 の通知を送らない（退避の合図が代わる）。
+  6. **移動の執行**（同じ lock の内側・この順）: 記録を書く（約束 1）→ 承認 event を 1 件（kind は本行が足す移動の variant・account = 移り先・detail = 群の宣言の行の逐語〔host の面の行番号つき〕= 常設の承認・A1・actor は machine で run / bead を持たない）→ 群の置き場ごとに orchestrator の登録 row が在る席へ退避の合図 1 行 `<NAME> group: evacuate group=<名> to=<label> — 作業記憶を台帳と git に残して /exit` を注入 → 席の pane が shell に戻るのを起動と同じ窓（`seat.cycle_settle_s`）で待ち、戻った置き場から順に `launch` の 1 本で新しい口座の席を**同じ target** に起こす（登録 row は起動が書き直す・会話は運ばない・復帰は SessionStart の brief）。窓の内に戻らない席は保留の event を記し、次の 1 周が記録（新しい口座）と登録 row（古い口座）の食い違いから同じ手を続ける（冪等・判定はやり直さない）。移動した周は §19 の通知を送らない（退避の合図が代わる）。
   7. **周の中の順序**: 群の段（通知 → 移動）は便の列の前に走り、群の段の失敗は便の列の rc を変えない（§5 の終端の 1 周と同型）。
   8. **群 0 の host は 1 語も変わらない**。
 - 触らない: 宣言の表 `[[account-group]]`（人が書く宣言と器が書く現状を分ける・ADR-0049）・便用の除外（§17）・選定の純関数・`R-C9-1`・hooks.json・§18 の `-c` / `-r`（機械の復帰は会話を運ばない・ADR-0049）。
@@ -524,26 +518,6 @@ write-set = ["crates/scribe2/src/account/mod.rs", "crates/scribe2/src/fleet/usag
 verify = ["cargo nextest run -p scribe2 --no-tests=fail account_credential_dead_", "cargo nextest run -p scribe2 --no-tests=fail seat_tick_account_dead_"]
 size = "M"
 done = "墓標の credential の口座が account ls / doctor で credential=dead と出て、その口座の席の tick が account-dead を記録し N 周目に planner の席へ NEEDS-USER の 1 行を注入し、429 の unmeasured は従来どおり鳴らず、rules 行が裁定 id 付きで 1 本増える"
-
-[[contract]]
-id = "d"
-title = "席の実口座の記録 — SessionStart hook が入力 JSON の transcript_path から実口座（当たらない周は unknown）を測って席の打刻 dir に 1 file 1 行で毎回上書きし、row も state.jsonl も書かない"
-req = ["FR42", "FR40"]
-section = "16"
-write-set = ["crates/scribe2/src/hook/mod.rs", "+crates/scribe2/src/seat/session_account.rs", "crates/scribe2/src/seat/mod.rs", "crates/scribe2-boundary/tests/e2e/hook.rs", ".config/nextest.toml"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_account_mismatch_record_"]
-size = "S"
-done = "偽の transcript_path で SessionStart が実口座（置き場の accounts の外・. 始まり・key 無しは unknown）を席の打刻 dir に上書きで記録して前の値を残さず、pane を解けない周は書かず、登録 row と state.jsonl と指示文は 1 byte も変わらず、記録を読んで合図を撃つ・席を止める経路は無い"
-
-[[contract]]
-id = "e"
-title = "席の実口座の見える化 — SessionStart の指示文に row の口座・実測の口座・照合の 1 行を出す"
-req = ["FR42", "FR40"]
-section = "16"
-write-set = ["crates/scribe2/src/hook/mod.rs", "crates/scribe2/src/seat/brief/mod.rs", "crates/scribe2/src/seat/brief/orchestrator.txt", "crates/xtask/src/seat_brief.rs", "crates/scribe2-boundary/tests/e2e/hook.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__hook__hook_brief_orchestrator.snap", ".config/nextest.toml"]
-verify = ["cargo nextest run -p scribe2 --no-tests=fail seat_account_mismatch_shown_", "cargo nextest run -p scribe2 --no-tests=fail hook_brief_", "cargo nextest run -p scribe2 --lib --no-tests=fail seat_brief_holes_", "cargo nextest run -p xtask --no-tests=fail seat_brief_"]
-size = "S"
-done = "登録 row の在る席の SessionStart の指示文に row の口座・実測の口座・照合（match / mismatch / unknown）の 1 行が直し方の pointer 付きで出て、雛形の穴は core と xtask で同じ数に揃う"
 
 [[contract]]
 id = "f"

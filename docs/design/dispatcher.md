@@ -468,6 +468,35 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
 - 限界: 500 ミリ秒は時間の閾値である。継ぎ替えの間がそれより長くなるのは、継ぐ process が `reclaim` と `create_new` の間で 500 ミリ秒止まった周だけである。
 - 却下: 継いだ resume の pid を札の本文から読み、その process の終わりを待ってから 1 回で判じる（継ぎ替えの後で最初の観測より前に resume が抜けると pid を見られず、別の分岐が要る）／src の回収を rename で原子的にして間を無くす（deduced: 本番の読み手が間に札を Absent と読んで 2 本目の resume を起こしても、その resume は生きた所有者の札を取れずに抜ける。本番の直しは要らず、歯の待ちだけの問題である）。
 
+## 29. 未処置の終端を idle の知らせに毎周載せ、送達の結果を stderr にも残す（契約表の行 ad・memo `s2-07l.732`）
+
+やさしく言うと: 便が落ちた知らせは 1 回きりで、席が turn の途中だと届かずに消える。台帳で開いたまま処置の付いていない落ちた便を、列の idle の知らせに毎周載せて、届くまで言い続ける。送れたかどうかも記録に残す。
+
+- 何が起きているか（2026-09-28）:
+  - verified: 終端の知らせ（§19 形 3 (a)）は運転手の終端の周に 1 回だけ撃たれる。送達の窓は rules 行 `pipe.stop_grace_ms`（2000 ミリ秒）で、席が turn の途中だと届かない。2026-09-28T04:04Z の本 repo の Gated FAIL と、04:16Z の非公開の隣の project の Reviewed FAIL の 2 件で、知らせが席に届かず、席は `dispatch ls` を撃つまで気付かなかった。
+  - verified: 送達の結果（`notify=` の行）は運転手の stdout にだけ書かれる。列が起こした運転手の stdout は捨てられ（`crates/scribe2/src/pipe/dispatch.rs` の `spawn_self` の `Stdio::null`）、stderr だけが置き場の launch.log に残る。届いたか・断られたかは、どこにも残らない。
+  - verified: 2026-09-27T00:00Z 以後の終端（Reviewed / Gated の FAIL と INCONCLUSIVE・Failed・Questioned）のうち、席への注入の記録が無いものは本 repo で 34 件中 3 件、隣の project で 109 件中 20 件（Gated の再試行の途中の判定を含む上限値）。
+- 現物（main・verified）: `crates/scribe2/src/pipe/cli.rs` の `notices` が、自分の便の終端の 1 行（`alarm_word` が知らせる終端を判じる・段の網羅 match）と idle の 1 行（`crates/scribe2/src/pipe/notify.rs` の `idle_line`・列の結果が「起こした便 0 ∧ 候補 1 本以上」の周だけ）を組み、`notify.rs` の `send` の結果の行を stdout に返す。列の候補の理由の `Settled` は、直前の便が同じ契約 file の sha で終端に着いた bead を列外にする（段を持つ・run id は持たない）。台帳で閉じた bead は候補に並ばない。
+- 形（番号は done と 1:1）:
+  1. **未処置の終端を数える**: `notices` が、同じ周の列の結果の候補のうち理由が `Settled` のものについて、置き場の replay からその bead の最新の便（run id の昇順の最後）を引き、`alarm_word` が `Some` を返すものを未処置とする。判じ手は `alarm_word` の 1 本のまま（2 本目を書かない・C2）。台帳で開いた bead だけが候補に並ぶので、閉じた bead は数えない。周ごとに導き直し、記録を持たない（C10）。
+  2. **idle の 1 行の末尾に足す**: idle の 1 行の今の末尾（§26 形 2 の並列の実測・§27 形 3 の事前審査）の後ろに ` pending=<k>:<bead>/<段>=<語>,…`（候補の並びの順・段は `as_str` の字面・語は `alarm_word` の返り値）。未処置が 0 本の周は key を出さない（既存の idle の行の字面は 1 字も変わらない）。
+  3. **契機は変えない**: 送るのは今どおり §19 形 1 (b) の周（運転手の終端の周で、起こした便 0 ∧ 候補 1 本以上）。未処置の bead は `Settled` の候補として必ず列に載るので、終端の周が来るたびに同じ行が送られる（処置＝close・release・行の直しが付くまで）。
+  4. **送達の結果を stderr にも写す**: `notices` が返す `notify=` の行を、stdout に加えて stderr にも同じ字面で出す。列が起こした運転手の周は launch.log に残る（event も tick.jsonl の schema も変えない）。
+  5. `notify.rs` は段の閉じた型の variant を名指さない（§19 形 5）: 未処置の段と語は `notices` が字面で渡す。
+- 触らない: 終端の 1 行（§19 形 3 (a)）・送る宛先と窓と送達の 1 関数・`alarm_word` の判定・`WaitReason` の variant と `render` の字面（`dispatch ls` の `reason=`）・列の判定・event の kind・heartbeat（[seat-heartbeat.md](./seat-heartbeat.md) §16）の行。
+- 歯（接頭辞 `pipe_notify_pending_`・`crates/scribe2-boundary/tests/e2e/notify.rs`・`pipe/` の外＝§19 形 6・既存の `intake_bead` と `idle_round` の型・`grep -rn "pipe_notify_pending" crates/` は 0 件・2026-09-28）:
+  - (a) 審査の判定 FAIL で終端に着いた便の bead が台帳で ready のまま `Settled` の候補になる置き場で、別の live な便の終端（`pipe stop --run`）を撃つと、idle の 1 行が ` pending=1:<その bead>/Reviewed=<語>` で終わる。base は key が無いので RED（機能不在）。
+  - (b) 同じ周の終端の stderr が、stdout の `notify=` の行と同じ行を持つ。base は stderr に無いので RED。
+  - 未処置が 0 本の周に key を出さないことは、既存の `pipe_notify_facts_hold_round_without_live_runs_reports_zero_live_and_zero_minutes`（末尾が ` held=0` で終わる）が不変で GREEN のまま pin する。
+- 限界:
+  - 知らせ直しは運転手の終端の周にだけ起きる。走っている便が 1 本も無く終端の周が来ない間は、知らせ直さない。時計で撃つ heartbeat は台帳を読まないので、未処置を数えられない。
+  - 列が便を起こした周（起こした便が 1 本以上）は idle の行を送らないので、その周は知らせ直さない。
+  - 着地したのに close できなかった便（`Landed` のまま台帳で開いた bead）は `alarm_word` が知らせない段なので、未処置に数えない。
+- 却下:
+  - 終端の 1 行を送れなかった周に、運転手が窓を延ばして再送する。運転手は席の turn の終わりを待てず、同じ穴が残る。
+  - 未処置を event log だけから数える。閉じた bead の古い便が残り、本 repo の置き場で 12 本中 11 本が雑音になった（台帳を読まない数え方）。
+  - 送達の結果を event に記帳する。通知は副作用で、event を足すと replay と schema の面が増える（§19 の「記帳しない」）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -813,4 +842,15 @@ write-set = ["crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "crates/scrib
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_gated_pass_dead_ticket_ pipe_dispatch_regated_dead_ticket_ pipe_dispatch_drive_revives_a_dead_driver_"]
 size = "S"
 done = "(1) e2e の gone が、札の path の不在が 500 ミリ秒続いた周に真・60 秒のうちに続かなければ偽を返し（50 ミリ秒ごとに見て在る観測で数え直す）、呼び手 3 本（pipe_dispatch_gated_pass_dead_ticket_is_resumed_regardless_of_verdict・pipe_dispatch_regated_dead_ticket_keeps_three_records_and_resumes_once・pipe_dispatch_drive_revives_a_dead_driver_all_the_way_to_landed）が assert と期待を変えずに緑 (2) 変えた gone の直前に札 // flip-check: retroactive <本行の bead の id> が 1 行在り、flip-check が retroactive で通る (3) src と waiting.rs の本文と put_dead_ticket は 1 byte も変わらない"
+
+[[contract]]
+id = "ad"
+title = "未処置の終端を idle の知らせに毎周載せ、送達の結果を stderr にも残す — 列の候補のうち Settled の bead の最新の便を alarm_word で判じて idle の行の末尾に pending= を足し、notify= の行を stderr にも写して列が起こした運転手の周も launch.log に残す（契機・宛先・終端の 1 行は不変・memo s2-07l.732）"
+req = ["FR30", "FR68"]
+section = "29"
+write-set = ["crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/notify.rs", "crates/scribe2-boundary/tests/e2e/notify.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_notify_pending_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_notify_facts_"]
+size = "S"
+growth = ["crates/scribe2/src/pipe/cli.rs:25", "crates/scribe2/src/pipe/notify.rs:20"]
+done = "(1) notices が同じ周の列の結果の候補のうち理由が Settled のものについて置き場の replay からその bead の最新の便を引き、alarm_word が Some を返すものを未処置とし、判じ手は alarm_word の 1 本のまま周ごとに導き直す (2) idle の 1 行の今の末尾の後ろに pending=<k>:<bead>/<段>=<語>,… を候補の順で足し、0 本の周は key を出さない (3) 送る契機は §19 形 1 (b) のまま (4) notify= の行を stdout に加えて stderr にも同じ字面で出す (5) notify.rs は段の閉じた型の variant を名指さない 歯: pipe_notify_pending_ の (a) 審査の判定 FAIL で終端に着いた便の bead が ready のまま Settled の候補になる置き場で別の live な便の終端を撃つと idle の行が pending=1:<bead>/Reviewed=<語> で終わる (b) 同じ周の終端の stderr が stdout の notify= の行と同じ行を持つ・既存の pipe_notify_facts_ の 2 本が不変で GREEN・base は (a) の key と (b) の stderr の行が無いので RED"
 <!-- contracts:end -->
