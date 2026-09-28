@@ -2157,6 +2157,9 @@ fn groups_place(accounts: &[(&str, u64, u64, u64)], groups: &[GroupDecl<'_>]) ->
 /// prompt 行の代わりにその字面を返し、その席へ届いた Enter は画面を消して前面を shell に戻す（dialog の既定の行の確定）。
 /// `spy/dialog-<target>` の在る席は、入力欄が `/exit` の周に届いた Enter で本文を pane へ移さず（echo も打刻も無い＝送達は
 /// 未確認）その字面を `screen-<target>` へ写す（`/exit` の確認 dialog が出た席）。
+///
+/// seat-heartbeat.md §18 の歯のために、`spy/slow-<target>` の在る席は退避の合図の Enter で Busy の打刻を足した**後**に 2 秒眠る
+/// （送達の確認が打刻の秒より後に終わる＝送達の後に取った時刻は Busy より後になる）。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
@@ -2180,7 +2183,7 @@ fn group_tmux(state: &Path) {
     script(
         &bin.join("tmux"),
         &format!(
-            "printf '%s\\n' \"$*\" >> '{calls}'\nt=''; p=''\nfor a in \"$@\"; do [ \"$p\" = '-t' ] && t=\"$a\"; p=\"$a\"; done\n\
+            "printf '%s\\n' \"$*\" >> '{calls}'\nt=''; p=''; e=''\nfor a in \"$@\"; do [ \"$p\" = '-t' ] && t=\"$a\"; p=\"$a\"; done\n\
              f=$(printf '%s' \"$t\" | tr ':' '_')\nfront='{spy}/front-'\"$f\"\nshell=$(cat \"$front\" 2>/dev/null)\n\
              case \"$1\" in\n\
              list-panes) if [ \"$shell\" = bash ]; then echo bash; else echo claude; fi;;\n\
@@ -2197,13 +2200,14 @@ fn group_tmux(state: &Path) {
              elif [ \"$4\" = \"Enter\" ] && [ -f '{spy}/dialog-'\"$f\" ] && [ \"$(cat '{input}')\" = /exit ]; then \
              cp '{spy}/dialog-'\"$f\" '{spy}/screen-'\"$f\"; : > '{input}'\n\
              elif [ \"$4\" = \"Enter\" ]; then\n\
-             if grep -q 'group: evacuate' '{input}'; then date +%s%N > '{spy}/evacuate-at-'\"$f\"\n\
+             if grep -q 'group: evacuate' '{input}'; then e=1; date +%s%N > '{spy}/evacuate-at-'\"$f\"\n\
              grep -c '\"kind\":\"GroupMoved\"' '{events}' > '{spy}/moved-at-evacuate-'\"$f\"\n\
              if [ -f '{record}' ]; then echo 1 > '{spy}/record-at-evacuate-'\"$f\"; fi\n\
              if [ ! -f '{spy}/stuck-'\"$f\" ]; then echo bash > \"$front\"; fi; fi\n\
              cat '{input}' >> '{pane}'; printf '\\n' >> '{pane}'; : > '{input}'\n\
              printf '{{\"schema\":1,\"state\":\"busy\",\"event\":\"UserPromptSubmit\",\"ts\":%s,\"sid\":\"\"}}\\n' \"$(date +%s)\" \
-             >> '{seats}/'\"$f\"'/state.jsonl'; fi;;\n\
+             >> '{seats}/'\"$f\"'/state.jsonl'\n\
+             if [ -n \"$e\" ] && [ -f '{spy}/slow-'\"$f\" ]; then sleep 2; fi; fi;;\n\
              esac\nexit 0\n"
         ),
     );
@@ -2440,11 +2444,12 @@ fn evacuate_payload(group: &str, to: &str) -> String {
     evacuate_line(group, to, GROUP_GRACE_S)
 }
 
-/// 退避の合図の 1 行（残り `left` 秒・器の字面を借りない・seat-heartbeat.md §13 形 4）。
+/// 退避の合図の 1 行（残り `left` 秒・器の字面を借りない・seat-heartbeat.md §18 形 5）。
 fn evacuate_line(group: &str, to: &str, left: u64) -> String {
     format!(
-        "{} group: evacuate group={group} to={to} — 新しい subagent を起こさず今の作業に区切りをつけ、作業記憶を台帳と git に\
-         残す（{left} 秒の後に器が /exit を送る）",
+        "{} group: evacuate group={group} to={to} — 新しい subagent を起こさず、走っている subagent は /exit で落ちる前提で依頼の\
+         要旨と出力 file の path を台帳の notes に書き、作業記憶を台帳と git に残して turn を終える（turn が終わると器が /exit を送る・\
+         遅くとも {left} 秒の後）",
         vessel::name::NAME
     )
 }
