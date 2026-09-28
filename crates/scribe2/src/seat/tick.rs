@@ -429,10 +429,12 @@ pub fn raise(pace: &Pace, step: u32, alarm_s: Option<u64>) -> (u64, u32) {
     alarm_s.map_or((pace.stale_s, step), |value| (pace.stale_s.min(value), 0))
 }
 
-/// 起こし直しの初手の文面（**正本はこの 1 関数**・設計 §10 形 2・先頭の `<NAME> seat: relaunch` が器自身の目印）。起動行の末尾に
-/// 単引用で括った 1 語として積まれる（[`state::resume_carry`]）ので、字面に単引用と改行を持たない。梯子の段には数えない。
+/// 起こし直しの初手の文面（**正本はこの 1 関数**・設計 §10 形 2・§18 形 6・先頭の `<NAME> seat: relaunch` が器自身の目印）。起動行の
+/// 末尾に単引用で括った 1 語として積まれる（[`state::resume_carry`]）ので、字面に単引用と改行を持たない。梯子の段には数えない。
 pub fn relaunch_signal() -> String {
-    format!("{NAME} seat: relaunch — 台帳の現在地（bd --readonly ready --limit 0）から続きを進める（会話は直前から続く・合図の梯子は段 0 から）")
+    format!(
+        "{NAME} seat: relaunch — 台帳の現在地（bd --readonly ready --limit 0）から続きを進める（会話は直前から続く・移動で落ちた subagent は台帳に書いた要旨と path から起こし直す・合図の梯子は段 0 から）"
+    )
 }
 
 /// 送達の結果（判定行の `consumed=` の材料・落ちても送ったと数える）。
@@ -911,10 +913,10 @@ fn awake(input: &Input, account: &str, role: Role, anchor: &str, seat: &Path) ->
 /// 読めない周と host の面が読めない周は `group-unreadable`（種に読み替えない・C10）。移動の周は群の段と同じ lock の内側で退避の
 /// 1 手（[`evacuate`]）を撃つ（窓が shell の周は `front` の [`awake`] が先に起こす）。lock を取れない周は `group-locked`。
 /// 呼ぶ場所は `front` の中（打刻の前・§10 形 8）と、群の判定（[`judged`]）で移った周の後（§9 形 3）の 2 つで、関数は 1 本。
-/// 移動の周は 3 分岐（設計 §14 形 3）: 猶予 0 なら今の形（lock → `/exit`）、席の置き場に同じ移動の合図の記録
-/// （[`group::signalled`]）が在れば残り（[`group::grace_left`]・起点は合図の `at`）が正で `move=wait`（0 key・lock を取らない・
-/// file を書かない）・`None` で lock → `/exit`、記録が無い・別の移動・読めない周は退避の合図の 1 行を同じ門で送り、送れた周だけ
-/// `at` = 今の記録を書く（[`group::write_signal`]）。群の記録の ts の古さと種は分岐に入らない。
+/// 移動の周は 3 分岐（設計 §14 形 3・§18 形 2）: 猶予 0 なら今の形（lock → `/exit`）、`/exit` の判定（[`group::exit_due`]＝同じ
+/// 移動の合図の記録が在り、残りが `None` か合図に応え終えた印が真）が真なら lock → `/exit`、偽で記録（[`group::signalled`]）が
+/// 在れば `move=wait`（0 key・lock を取らない・file を書かない）、記録が無い・別の移動・読めない周は退避の合図の 1 行を同じ門で
+/// 送り、送れた周だけ `at` = 周の始めの今（送る前）の記録を書く（[`group::write_signal`]）。群の記録の ts の古さと種は分岐に入らない。
 fn moving(input: &Input, (anchor, account): (&str, &str), seat: &Path, (rows, now): (&Rows, u64)) -> Option<Verdict> {
     let Ok(manifest) = crate::rules::with_state_dir(input.manifest.clone(), Some(&input.state.path)) else {
         return Some(Verdict::noop(NoopReason::GroupUnreadable));
@@ -927,14 +929,13 @@ fn moving(input: &Input, (anchor, account): (&str, &str), seat: &Path, (rows, no
         return None;
     }
     let key = group::signal_key(&current);
-    let signalled = group::signalled(seat, key);
-    if rows.grace_s == 0 || signalled.is_some_and(|at| group::grace_left(at, now, rows.grace_s).is_none()) {
+    if rows.grace_s == 0 || group::exit_due(seat, key, now, rows.grace_s) {
         let Ok(_lock) = Lock::take(&host_groups_dir(&input.state.path)) else {
             return Some(Verdict::noop(NoopReason::GroupLocked));
         };
         return Some(evacuate(input, (EXIT, Move::Exit), rows.window_ms).0);
     }
-    if signalled.is_some() {
+    if group::signalled(seat, key).is_some() {
         return Some(Verdict::moved(Move::Wait, None, None));
     }
     let payload = group::evacuate_line(group.name(), &current.label, rows.grace_s);

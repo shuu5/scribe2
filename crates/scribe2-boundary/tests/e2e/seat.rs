@@ -2016,8 +2016,8 @@ fn evacuate_assert_exit(place: &MovePlace) {
 // 合図の記録を 3 field で置く helper 1 つ（[`grace_signal_put`]）を足す。猶予の起点は合図の `at`（群の記録の ts は鍵にだけ使う）。
 // 合図の字面・合図の記録の path と形は契約から組む（器の helper を借りない）。
 
-/// 写しの退避の猶予（秒・埋め込み manifest の値と同じ 1800＝値は rules の歯が pin する）。
-const GRACE_S: u64 = 1800;
+/// 写しの退避の猶予（秒・埋め込み manifest の値と同じ 300＝値は rules の歯が pin する・seat-heartbeat.md §18 形 4）。
+const GRACE_S: u64 = 300;
 
 /// 写しの `seat.move_grace_s` の値を `secs` に書き換える。
 fn grace_put(place: &MovePlace, secs: u64) {
@@ -2043,12 +2043,35 @@ fn move_signal_past(place: &MovePlace) {
     grace_signal_put(place, (MOVE_B, MOVE_TS), unix_now() - GRACE_S - 1);
 }
 
-/// 退避の合図の 1 行（残り `left` 秒・契約の字面）。
+/// 退避の合図の 1 行（残り `left` 秒・契約の字面・seat-heartbeat.md §18 形 5）。
 fn grace_line(left: u64) -> String {
     format!(
-        "{NAME} group: evacuate group={MOVE_GROUP} to={MOVE_B} — 新しい subagent を起こさず今の作業に区切りをつけ、作業記憶を台帳と git に\
-         残す（{left} 秒の後に器が /exit を送る）"
+        "{NAME} group: evacuate group={MOVE_GROUP} to={MOVE_B} — 新しい subagent を起こさず、走っている subagent は /exit で落ちる前提で\
+         依頼の要旨と出力 file の path を台帳の notes に書き、作業記憶を台帳と git に残して turn を終える（turn が終わると器が /exit を\
+         送る・遅くとも {left} 秒の後）"
     )
+}
+
+// ─────── 合図の turn が終わったら猶予を待たずに /exit（seat-heartbeat.md §18・契約表の行 v・`s2-07l.729`・接頭辞 `seat_tick_saved_`） ───────
+//
+// §14 の fixture（[`move_place`]・[`move_record`]・[`grace_signal_put`]）の打刻 file を、合図の `at` からの相対の秒で書いた行に
+// 置き換える（契約の字面から組む）。
+
+/// 同じ移動（口座 B・[`MOVE_TS`]）の合図の記録を `at` = 今 − `ago` で置き、席の打刻 file を `(state, event, at からの秒)` の行で
+/// 置き換えた置き場（`None` は打刻 file を消す）。
+fn saved_place(root: &Path, ago: u64, lines: Option<&[(&str, &str, i64)]>) -> MovePlace {
+    let place = move_place(root, "state", MOVE_ANCHOR);
+    move_record(root, MOVE_B);
+    let at = unix_now() - ago;
+    grace_signal_put(&place, (MOVE_B, MOVE_TS), at);
+    let path = state_file(&seat_dir_of(&place.state, TICK_SEAT));
+    let Some(lines) = lines else {
+        fs::remove_file(path).ok();
+        return place;
+    };
+    let line = |(state, event, off): &(&str, &str, i64)| stamp_line(state, event, at.saturating_add_signed(*off), "sid-move") + "\n";
+    fs::write(path, lines.iter().map(line).collect::<String>()).ok();
+    place
 }
 
 /// 1 周撃ち、判定行が `move=signal` で合図の text 1 回 + Enter 1 回だけが増え（`/exit` 0・残りの秒は猶予の値）、席の記録が

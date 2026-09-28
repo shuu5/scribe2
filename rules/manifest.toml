@@ -706,17 +706,18 @@ enabled = true
 ruling = "user 2026-09-25T14:39Z"
 ruled_at = "2026-09-25"
 
-# 群の移動の退避の猶予（秒・設計 seat-heartbeat.md §13 形 1・ADR-0071）。起点は群の記録の ts で、猶予の内側は退避の合図の
-# 1 行だけを送り、/exit は猶予を越えてから送る（席の裏の subagent を落とさない）。0 は猶予なし（記録の直後に /exit）。
+# 群の移動の退避の猶予の上限（秒・設計 seat-heartbeat.md §13 形 1 / §14 / §18 形 4・ADR-0071 / ADR-0073 / ADR-0079）。起点は
+# 合図の記録の at で、猶予の内側は退避の合図の 1 行だけを送り、合図の turn が終わった（at 以後の Busy と最終行の Stop の Idle）
+# 席には猶予を待たずに /exit を送る。終わりが確かめられない席は猶予を越えてから送る。0 は猶予なし（記録の直後に /exit）。
 # 読めない周は tick が no-rule で断る（既定値に倒さない）。
 
 [[rule]]
 id = "seat.move_grace_s"
 kind = "SeatMoveGraceS"
-value = 1800
+value = 300
 enabled = true
-ruling = "user 2026-09-26T06:29Z"
-ruled_at = "2026-09-26"
+ruling = "user 2026-09-28T01:44Z"
+ruled_at = "2026-09-28"
 
 # 席の起動を包む封じ込めの箱の memory の上限（MiB・設計 account-lifecycle.md §30 形 1・ADR-0072）。席の起動行の頭に
 # systemd-run --scope（MemoryMax=<値>M・OOMPolicy=continue）を付ける。0 は包まない。読めない周も包まず素の行で起こす

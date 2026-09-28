@@ -37,6 +37,7 @@ use crate::rules::manifest::{AccountGroup, Manifest};
 use crate::rules::RuleValue;
 use crate::seat::inject::Confirm;
 use crate::seat::role::Role;
+use crate::seat::state::{Event as StampEvent, SeatState, Stamp};
 use crate::seat::{host_groups_dir, sanitize_target};
 use std::cmp::Reverse;
 use std::collections::BTreeSet;
@@ -235,7 +236,7 @@ pub fn current_of(state_dir: &Path, group: &AccountGroup) -> Result<Current, Rec
 }
 
 /// 猶予の残りの秒（**1 関数**・設計 seat-heartbeat.md §14 形 2）: 合図の `at` + `grace_s` − `now` が正ならその秒。猶予 0・越えた
-/// 周は `None`（猶予なし＝`/exit` を送ってよい）。群の記録の ts は入らない。呼び手は tick の移動の周と群の段の続きの周の 2 つ。
+/// 周は `None`（猶予なし＝`/exit` を送ってよい）。群の記録の ts は入らない。呼び手は `/exit` の判定の 1 関数（[`exit_due`]）。
 pub fn grace_left(at: u64, now: u64, grace_s: u64) -> Option<u64> {
     Some(at.saturating_add(grace_s).saturating_sub(now)).filter(|left| *left > 0)
 }
@@ -248,7 +249,7 @@ pub fn signal_key(current: &Current) -> (&str, &str) {
     (current.label.as_str(), current.ts.as_deref().unwrap_or("seed"))
 }
 
-/// 合図の記録（鍵 + 合図を書いた epoch 秒）。
+/// 合図の記録（鍵 + 合図を送る前に取った epoch 秒・seat-heartbeat.md §18 形 7）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Signal {
     /// 移り先の口座。
@@ -286,10 +287,31 @@ pub fn write_signal(seat: &Path, (to, ts): (&str, &str), now: u64) -> std::io::R
     fs::rename(&temporary, seat.join(SIGNAL_FILE))
 }
 
-/// 退避の合図の 1 行（**字面はこの 1 関数**・群の段と tick が同じ字面を送る・設計 seat-heartbeat.md §13 形 4）。
+/// 合図に応え終えた印（**1 関数**・設計 seat-heartbeat.md §18 形 1）: 席の置き場 `seat` の打刻（`state.jsonl`）の読めた行のうち
+/// `ts` ≥ `at` の Busy が 1 つ以上在り、読めた行の最終行が event `Stop` の Idle なら真。file が無い・読めない・読めた行が 0・最終行が
+/// Busy・最終行が `SessionStart` の Idle（turn の途中の圧縮でも打たれる）の周は偽。形の外の行は読み飛ばす。`at` は合図を送る前の
+/// 時刻なので、合図の前から走っていた turn の Busy は数えない。
+pub fn answered(seat: &Path, at: u64) -> bool {
+    let Ok(text) = fs::read_to_string(crate::seat::state::path(seat)) else {
+        return false;
+    };
+    let stamps: Vec<Stamp> = text.lines().filter_map(|line| Stamp::from_line(line).ok()).collect();
+    stamps.iter().any(|stamp| stamp.state == SeatState::Busy && stamp.ts >= at)
+        && stamps.last().is_some_and(|last| last.event == StampEvent::Stop)
+}
+
+/// 退避の `/exit` を送ってよいか（**判定の式はこの 1 関数**・設計 seat-heartbeat.md §18 形 2 / 3）: 席の置き場 `seat` に鍵が `key` の
+/// 同じ移動の合図の記録が在り、残り（[`grace_left`]）が `None` か応え終えた印（[`answered`]）が真なら真。記録が無い・別の移動・
+/// 読めない周は偽。打刻は `/exit` を早めるためにだけ読む（印が偽の席も猶予の上限で真になる）。呼び手は tick の移動の周と群の段の
+/// 続きの周の 2 つ。
+pub fn exit_due(seat: &Path, key: (&str, &str), now: u64, grace_s: u64) -> bool {
+    signalled(seat, key).is_some_and(|at| grace_left(at, now, grace_s).is_none() || answered(seat, at))
+}
+
+/// 退避の合図の 1 行（**字面はこの 1 関数**・群の段と tick が同じ字面を送る・設計 seat-heartbeat.md §18 形 5）。
 pub fn evacuate_line(group: &str, to: &str, left: u64) -> String {
     format!(
-        "{NAME} group: evacuate group={group} to={to} — 新しい subagent を起こさず今の作業に区切りをつけ、作業記憶を台帳と git に残す（{left} 秒の後に器が /exit を送る）"
+        "{NAME} group: evacuate group={group} to={to} — 新しい subagent を起こさず、走っている subagent は /exit で落ちる前提で依頼の要旨と出力 file の path を台帳の notes に書き、作業記憶を台帳と git に残して turn を終える（turn が終わると器が /exit を送る・遅くとも {left} 秒の後）"
     )
 }
 
@@ -821,7 +843,9 @@ fn measure_later(state_dir: &Path, account: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{by_key, grace_left, measure_later, pressed, refused_mark, refused_ts, Caps, Pressed, Signal};
+    use super::{
+        answered, by_key, exit_due, grace_left, measure_later, pressed, refused_mark, refused_ts, write_signal, Caps, Pressed, Signal,
+    };
     use crate::fleet::{Allowance, Measured, WindowKind};
     use std::collections::BTreeSet;
 
@@ -860,6 +884,74 @@ mod tests {
     fn group_signal_grace_left_counts_from_the_signal_at() {
         let found = [(1100, 1800), (2799, 1800), (2800, 1800), (2801, 1800), (1000, 0)].map(|(now, grace)| grace_left(1000, now, grace));
         assert_eq!(found, [Some(1700), Some(1), None, None, None], "内側・越える 1 秒前・ちょうど・越えた・猶予 0");
+    }
+
+    /// 打刻の 1 行（契約の字面から組む・seat-state.md §2）。
+    fn stamp(state: &str, event: &str, ts: u64) -> String {
+        format!(r#"{{"schema":1,"state":"{state}","event":"{event}","ts":{ts},"sid":""}}"#)
+    }
+
+    /// 席の置き場を 1 つ作り直し、打刻 file に `lines` を書く（`None` は file を置かない）。
+    fn turn_seat(name: &str, lines: Option<&[String]>) -> std::path::PathBuf {
+        let seat = std::env::temp_dir().join(format!("group-turn-saved-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&seat);
+        let _ = std::fs::create_dir_all(&seat);
+        if let Some(lines) = lines {
+            let _ = std::fs::write(seat.join("state.jsonl"), lines.iter().map(|line| format!("{line}\n")).collect::<String>());
+        }
+        seat
+    }
+
+    /// (j) 応え終えた印の真理表（seat-heartbeat.md §18 形 1・合図の `at` = 1000）: `at` 以後の Busy が在り最終行が Stop の Idle は真
+    /// （Busy の ts が `at` ちょうど・形の外の行を挟む・末尾に置くも真）。最終行が Busy・`at` 以後の Busy なし（合図の前から走っていた
+    /// turn の終わり・Stop だけ）・最終行が SessionStart の Idle・file なし・読めた行 0 は偽。
+    #[test]
+    fn group_turn_saved_answered_truth_table() {
+        let busy = |ts| stamp("busy", "UserPromptSubmit", ts);
+        let (stop, start) = (|ts| stamp("idle", "Stop", ts), |ts| stamp("idle", "SessionStart", ts));
+        let junk = "not json".to_owned();
+        let cases: [(&str, Option<Vec<String>>, bool); 11] = [
+            ("answered", Some(vec![start(900), busy(1002), stop(1050)]), true),
+            ("busy-at-the-at", Some(vec![busy(1000), stop(1000)]), true),
+            ("junk-between", Some(vec![busy(1002), junk.clone(), stop(1050)]), true),
+            ("junk-after", Some(vec![busy(1002), stop(1050), junk.clone()]), true),
+            ("last-busy", Some(vec![busy(1002)]), false),
+            ("busy-before-at", Some(vec![busy(995), stop(1020)]), false),
+            ("stop-only", Some(vec![stop(990)]), false),
+            ("last-session-start", Some(vec![busy(1002), start(1050)]), false),
+            ("no-file", None, false),
+            ("empty", Some(Vec::new()), false),
+            ("junk-only", Some(vec![junk.clone(), junk]), false),
+        ];
+        for (name, lines, want) in cases {
+            let seat = turn_seat(name, lines.as_deref());
+            assert_eq!(answered(&seat, 1000), want, "{name}");
+            let _ = std::fs::remove_dir_all(&seat);
+        }
+    }
+
+    /// (j) `/exit` の判定の 4 形（seat-heartbeat.md §18 形 2）: 記録なし（印が真でも）は偽・残り `None`（打刻なし）は真・残りが在り印が
+    /// 真は真・残りが在り印が偽は偽。別の移動の記録は記録なしと同じ。
+    #[test]
+    fn group_turn_saved_exit_due_four_forms() {
+        let (key, grace) = (("a2", "2026-09-28T01:28:18Z"), 300);
+        let done = [stamp("busy", "UserPromptSubmit", 1002), stamp("idle", "Stop", 1050)];
+        let seat = turn_seat("no-record", Some(&done));
+        assert!(!exit_due(&seat, key, 1100, grace), "記録なしは偽（印が真でも）");
+        let _ = write_signal(&seat, ("a1", key.1), 1000);
+        assert!(!exit_due(&seat, key, 1100, grace), "別の移動の記録は偽");
+        let _ = write_signal(&seat, key, 1000);
+        assert!(exit_due(&seat, key, 1100, grace), "残りが在り印が真は真");
+        let _ = std::fs::remove_dir_all(&seat);
+        let seat = turn_seat("grace-over", None);
+        let _ = write_signal(&seat, key, 1000);
+        assert!(exit_due(&seat, key, 1300, grace), "残り None は打刻なしでも真");
+        assert!(!exit_due(&seat, key, 1299, grace), "残りが在り印が偽（打刻なし）は偽");
+        let _ = std::fs::remove_dir_all(&seat);
+        let seat = turn_seat("not-answered", Some(&[stamp("busy", "UserPromptSubmit", 1002)]));
+        let _ = write_signal(&seat, key, 1000);
+        assert!(!exit_due(&seat, key, 1100, grace), "残りが在り印が偽（最終行 Busy）は偽");
+        let _ = std::fs::remove_dir_all(&seat);
     }
 
     /// 実測の行 1 つ。
