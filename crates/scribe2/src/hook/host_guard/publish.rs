@@ -1,7 +1,8 @@
 //! host-guard の 6 つ目の種類 publish の土台（設計 docs/design/vessel-hook.md §16 行 j・ADR-0078・SRS FR80 / AC50 / NFR4）。
 //!
 //! 公開の segment の読み（[`read`]・pure な 1 関数）と、rules 行 host_guard.publish の要素の読み手（[`elements`]）と、字面で
-//! 読めない segment の印の読み（[`marked`]・§17 行 k）と、読めた segment の解けない形（[`Hole`]・§17 行 k2）と、判定
+//! 読めない segment の印の読み（[`marked`]・§17 行 k）と、読めた segment の解けない形（[`Hole`]・§17 行 k2・行 k3 が全ての
+//! 語へ広げる）と、判定
 //! （[`judge`]: 行が無い・列でない周は no-row、enabled の行で印か形を持つ segment は unresolved）を持つ。全履歴・照合・配線は
 //! 後続の行が足す。本 module は子 process を撃たない。
 
@@ -66,8 +67,10 @@ const BODY_FILE: [&str; 3] = ["--body-file", "--notes-file", "-F"];
 const EITHER: [&str; 3] = ["-d", "-c", "--comment"];
 /// gist の create の値を取る flag（値は file の語に数えない）。
 const GIST_VALUED: [&str; 4] = ["-d", "--desc", "-f", "--filename"];
-/// 標準入力の形（本文の file の flag・`--input`・api の `-F` の `@`・gist の file の語の 4 か所が引く 1 つの表）。
-const STDIN: [&str; 4] = ["-", "/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"];
+/// api でない gh の editor の flag（editor が本文を書く・行 k3）。
+const EDITOR: [&str; 2] = ["-e", "--editor"];
+/// `--mirror`（`--m` 以上の長さの接頭辞も・git は long option の一意な接頭辞を受ける・行 k3）。
+const MIRROR: &str = "--mirror";
 /// gh が埋める api の対象の placeholder の成分。
 const PLACEHOLDERS: [&str; 3] = ["{owner}", "{repo}", "{branch}"];
 /// 読める heredoc の語を細かい語の割りから外す頭の語（どれも引数を command として撃たない）。
@@ -296,15 +299,18 @@ impl Api {
         (repo || parts == [GRAPHQL]) && self.writes() && (self.input.is_some() || self.fields.iter().any(|field| filed(field) || loose(field)))
     }
 
-    /// 書きか: graphql は `query` の欄が語 mutation を持つか、`-F` の `query` の値が `@` で始まるか、`--input` を持つ周だけ。
-    /// 他の対象は method が書きの 4 つか、method が無く欄か `--input` を持つ周（gh が POST にする形）。
+    /// 書きか: graphql は `query` の欄が語 mutation を持つか、`-F` の `query` の値が `@` で始まるか、`--input` を持つ周と、欄の
+    /// key が解けない字を持つか `query` の値が `$` か `` ` `` を持つ（読める heredoc を除く）周（行 k3）。他の対象は method が
+    /// 書きの 4 つか、method が無く欄か `--input` を持つ周（gh が POST にする形）。
     fn writes(&self) -> bool {
         if self.target.as_deref() == Some(GRAPHQL) {
             let query = |(flag, key, value): &(String, String, String)| {
                 key == "query" && (value.split(|found: char| !found.is_ascii_alphanumeric()).any(|word| word == "mutation")
-                    || (flag == "-F" && value.starts_with('@')))
+                    || (flag == "-F" && value.starts_with('@'))
+                    || (value.contains(['$', '`']) && !readable(value)))
             };
-            return self.input.is_some() || self.fields.iter().any(query);
+            let loose = |(_, key, _): &(String, String, String)| key.contains(UNRESOLVED);
+            return self.input.is_some() || self.fields.iter().any(|field| query(field) || loose(field));
         }
         match self.method.as_deref() {
             Some(method) => WRITE_METHODS.contains(&method),
@@ -471,6 +477,41 @@ impl Words {
             self.counted.push(word.to_owned());
         }
     }
+
+    /// 本文と題の値を除く動詞の後ろの全ての語の字（数える語とその `--flag=` と続け書きの値・本文の file の値・行 k3）。
+    fn spread(&self) -> impl Iterator<Item = &str> {
+        let inline = self.counted.iter().filter_map(|word| flag_of(word).and_then(|(_, value)| value));
+        self.counted.iter().map(String::as_str).chain(inline).chain(self.files.iter().map(String::as_str))
+    }
+
+    /// editor の flag を持つか。
+    fn edited(&self) -> bool {
+        self.counted.iter().any(|word| flag_of(word).is_some_and(|(name, _)| EDITOR.contains(&name)))
+    }
+}
+
+/// 標準入力の形（**1 つの読み**・行 k3）: `-` と、`//` と `/./` を `/` に畳んだ path が `/dev/` か `/proc/` で始まるもの。
+fn is_stdin(path: &str) -> bool {
+    let mut folded = path.to_owned();
+    loop {
+        let next = folded.replace("//", "/").replace("/./", "/");
+        if next == folded {
+            break;
+        }
+        folded = next;
+    }
+    path == "-" || folded.starts_with("/dev/") || folded.starts_with("/proc/")
+}
+
+/// 字面で読めない path か: `$` か `` ` `` を持つか、`<(` / `>(` を含む（bash は語の途中も展開する・行 k3）。
+fn is_loose_path(path: &str) -> bool {
+    path.contains(['$', '`']) || path.contains("<(") || path.contains(">(")
+}
+
+/// git push の後ろの語が `--mirror` か、`--m` 以上の長さのその接頭辞か。
+fn is_mirror(word: &str) -> bool {
+    let word = trimmed(word);
+    word.len() >= "--m".len() && MIRROR.starts_with(word)
 }
 
 /// api でない gh の segment の動詞の後ろの語を読む（値は `--flag 値`・`--flag=値`・続け書きを [`flag_of`] で同じに読む）。
@@ -513,24 +554,23 @@ fn holes_of(found: &Published) -> Vec<Hole> {
 
 /// segment 1 つが解けない形を持つか（1 形 1 arm）。
 fn has_hole(hole: Hole, found: &Published, words: &Words) -> bool {
-    let stdin = |path: &str| STDIN.contains(&path);
     match (hole, found.api.as_ref()) {
         (Hole::VariableRef, api) => variable_ref(found, api, words),
-        (Hole::Mirror, _) => found.sort == Sort::Git && found.rest.iter().any(|word| trimmed(word) == "--mirror"),
-        (Hole::StdinBody, Some(api)) => api.input.as_deref().is_some_and(stdin) || api.files().any(stdin),
-        (Hole::StdinBody, None) => words.files.iter().any(|file| stdin(file)) || words.gist == Some(0),
+        (Hole::Mirror, _) => found.sort == Sort::Git && found.rest.iter().any(|word| is_mirror(word)),
+        (Hole::StdinBody, Some(api)) => api.input.as_deref().is_some_and(is_stdin) || api.files().any(is_stdin),
+        (Hole::StdinBody, None) => words.spread().any(is_stdin) || words.gist == Some(0),
         (Hole::ApiVisibilityFile, api) => api.is_some_and(Api::visibility_file),
         (Hole::UnreadableBody, api) => unreadable_body(api, words),
     }
 }
 
-/// variable-ref: push の後ろの flag でない語と `--repo=` の値・動詞の前の `-R`・前置きの `GH_REPO=` / `GH_HOST=`・api でない
+/// variable-ref: push の後ろの全ての語（flag の語を含む・行 k3）・動詞の前の `-R`・前置きの `GH_REPO=` / `GH_HOST=`・api でない
 /// gh の数える語・api の対象の成分（placeholder を除く）と `--hostname` が解けない字を持つ。
 fn variable_ref(found: &Published, api: Option<&Api>, words: &Words) -> bool {
     let loose = |word: &String| word.contains(UNRESOLVED);
     let part = |part: &str| !PLACEHOLDERS.contains(&part) && part.contains(UNRESOLVED);
     let target = api.and_then(|api| api.target.as_deref()).is_some_and(|target| target.split('/').any(part));
-    let pushed = found.sort == Sort::Git && found.rest.iter().any(|word| (!word.starts_with('-') || word.starts_with("--repo=")) && loose(word));
+    let pushed = found.sort == Sort::Git && found.rest.iter().any(loose);
     [&found.repo, &found.gh_repo, &found.gh_host].into_iter().flatten().any(loose)
         || api.is_some_and(|api| api.hostname.iter().any(loose))
         || target
@@ -538,14 +578,18 @@ fn variable_ref(found: &Published, api: Option<&Api>, words: &Words) -> bool {
         || words.counted.iter().any(loose)
 }
 
-/// unreadable-body: 本文・題の値と api の欄の値が `$` か `` ` `` を持つ（読める heredoc を除く）か、本文の file の path が `$`
-/// か `` ` `` を持つか `<(` / `>(` で始まる。
+/// unreadable-body: 本文・題の値と api の欄の語の全体（key と値）が `$` か `` ` `` を持つ（読める heredoc の値を除く）か、本文の
+/// file の path が字面で読めない（[`is_loose_path`]）か、api でない gh の動詞の後ろの本文と題の値を除く語が `<(` / `>(` を含むか
+/// editor の flag を持つ（行 k3）。
 fn unreadable_body(api: Option<&Api>, words: &Words) -> bool {
     let text = |value: &String| value.contains(['$', '`']) && !readable(value);
-    let path = |path: &str| path.contains(['$', '`']) || path.starts_with("<(") || path.starts_with(">(");
+    let field = |(_, key, value): &(String, String, String)| key.contains(['$', '`']) || text(value);
     match api {
-        Some(api) => api.fields.iter().any(|(_, _, value)| text(value)) || api.input.as_deref().is_some_and(path) || api.files().any(path),
-        None => words.bodies.iter().any(text) || words.files.iter().any(|file| path(file)),
+        Some(api) => api.fields.iter().any(field) || api.input.as_deref().is_some_and(is_loose_path) || api.files().any(is_loose_path),
+        None => {
+            let process = |word: &str| word.contains("<(") || word.contains(">(");
+            words.bodies.iter().any(text) || words.files.iter().any(|file| is_loose_path(file)) || words.spread().any(process) || words.edited()
+        }
     }
 }
 
@@ -1154,5 +1198,53 @@ mod tests {
             let line = format!("{head} {}", quoted("git push --mirror origin"));
             assert_eq!(hit(&line, true).as_deref(), Some("unresolved:wrapped"), "{line}");
         }
+    }
+
+    /// 行 k3 (a) 広げた読み: 5 値の形が push と gh の動詞の後ろの全ての語に当たり、行 k2 の当たらない形の隣は読めた segment 1 つで
+    /// 形を持たない。
+    #[test]
+    fn publish_widened_forms_reach_every_word_after_the_verb() {
+        let table: [(&str, &[&str]); 5] = [
+            ("variable-ref", &["git push --rep=$R main", "git push --force-with-lease=main:$S origin main"]),
+            ("mirror", &["git push --m origin", "git push --mirr origin"]),
+            ("stdin-body", &[
+                "gh gist edit abc -", "gh gist edit abc /dev/stdin", "gh gist edit abc -a /dev/stdin", "gh release upload v1 /dev/stdin",
+                "gh pr create --body-file /dev/./stdin", "gh issue comment 1 -F //dev/stdin", "gh api -X POST repos/o/n/issues -F body=@/proc/thread-self/fd/0",
+            ]),
+            ("api-visibility-file", &["gh api graphql -f \"$K=mutation{x}\""]),
+            ("unreadable-body", &[
+                "gh api graphql -f query=\"$(cat q.graphql)\"", "gh api graphql -f query=\"$Q\"", "gh release upload v1 <(cmd)",
+                "gh pr create --body-file /<(cmd)", "gh issue comment 1 -e", "gh pr comment 1 --editor", "gh api repos/o/n/issues -f \"$KV\"",
+                "gh api repos/o/n/issues -F \"$KV\"",
+            ]),
+        ];
+        for (want, lines) in table {
+            for line in lines {
+                assert_eq!(holes(line).into_iter().find_map(|seg| seg.first().copied()), Some(want), "{line}: {:?}", holes(line));
+            }
+        }
+        for line in [
+            "git push --force-with-lease origin main", "git push -u origin feat/x", "gh pr create --body - --title x", "gh release upload v1 dist/a.tgz",
+            "gh gist edit abc a.txt", "gh api graphql -f query=mutation{x}",
+        ] {
+            assert_eq!(holes(line), [Vec::<&str>::new()], "読めた segment 1 つで形を持たない: {line}");
+        }
+    }
+
+    /// 行 k3 (b) graphql の書き: 変数の query と解けない key は `read` の列に api の書きとして加わり、読みの query と区切りを引用した
+    /// heredoc の query は加わらず、行の無い manifest で変数の query は hit no-row。
+    #[test]
+    fn publish_widened_graphql_writes_with_unreadable_query_join_the_read() {
+        use super::Sort;
+        for line in ["gh api graphql -f query=\"$Q\"", "gh api graphql -f \"$K=x\""] {
+            assert_eq!(published(line).iter().map(|seg| seg.sort).collect::<Vec<_>>(), [Sort::Api], "{line}");
+        }
+        let quoted = format!("gh api graphql -f query={}", heredoc("cat <<'EOF'", "{viewer{login}}", ""));
+        for line in ["gh api graphql -f query={viewer{login}}", quoted.as_str()] {
+            assert!(published(line).is_empty(), "書きでない: {line}: {:?}", shape(line));
+        }
+        let bare = denied("gh api graphql -f query=\"$Q\"", &manifest("")).map(|(_, text)| text);
+        let want = format!("{NAME}: host-guard deny kind=publish hit=no-row row=host_guard.publish ruling=- — {}", Kind::Publish.route());
+        assert_eq!(bare, Some(want), "行の無い manifest");
     }
 }
