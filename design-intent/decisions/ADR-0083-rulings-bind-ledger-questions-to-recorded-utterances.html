@@ -1,0 +1,856 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="folio ADR-pack assembler (folio-bwc / instance#2) — deterministic structure, prose slots unfilled">
+<title>席から持ち主への問いは台帳の問いに立て、 裁定は器が記帳した持ち主の発話に結ぶ — 発話 event と seat ruling bind・裁定 id の実在の門 (ruling-check の opt-in)・未反映の裁定は関わる契約だけを待たせる (ADR-0037 の書き手の口・時刻の id・doctor の突合と、 ADR-0016 §2.3 の逐語の置き場を部分 supersede)</title>
+<style>
+/* ===========================================================================
+   folio human-layer design system — core.css (S3 / folio-8oc プロトタイプ)
+   要件定義書 (SRS) ビジュアル design system の中核 register。
+   視覚言語 = deck帯 × B2高密度 (ADR-0041)。テーマ = 環境追従 prefers-color-scheme。
+   styling は意味クラス、taxonomy 識別は [data-component] 属性 (floor gate A)。
+   taxonomy = design-intent/research/srs-component-taxonomy.html
+   =========================================================================== */
+
+/* ---- requirement-type-color-tokens (meta / 全 register が共有・両テーマ定義) ---- */
+:root{
+  --ink:#08131a; --ink-soft:#3a4a55; --ink-faint:#5b6671;
+  --paper:#ffffff; --paper-2:#f5f8fa; --paper-3:#eef3f7;
+  --line:#dbe4ea; --line-soft:#eef3f7;
+  --brand:#2a4d6e; --brand-deep:#15324a; --brand-tint:#e8f0f7;
+  --ok:#1e7b65; --ok-tint:#e6f6f2; --ok-line:#9fd9cb;
+  --bad:#b22323; --bad-tint:#fdf3f3; --bad-line:#eab3b3;
+  --warn:#916626; --warn-tint:#fefbea; --warn-line:#e4cf8f;
+  --info:#2a5d9e; --info-tint:#eaf1fb; --info-line:#a8c4e8;
+  --violet:#5b3e8e; --violet-tint:#f0eafa; --violet-line:#cdb8ec;
+  --shadow:0 1px 2px rgba(8,19,26,.06),0 8px 24px rgba(8,19,26,.07);
+  --shadow-lg:0 2px 6px rgba(8,19,26,.08),0 18px 50px rgba(8,19,26,.12);
+  /* 要件型カラートークン (FR/NFR/CON/ASM) */
+  --fr:var(--brand); --nfr:var(--violet); --con:var(--warn); --asm:var(--info);
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --ink:#e8eef2; --ink-soft:#a9b7c1; --ink-faint:#8a99a4; /* ink-faint: 全 dark bg で contrast ≥4.85 = WCAG AA (≥4.5) 充足・最小は ok-tint/warn-tint (gate F・folio-vuf) */
+    --paper:#0d171e; --paper-2:#15222b; --paper-3:#1b2c37;
+    --line:#273947; --line-soft:#1b2c37;
+    --brand:#7db8e8; --brand-deep:#1d3a54; --brand-tint:#16293a;
+    --ok:#5ac8b8; --ok-tint:#10302b; --ok-line:#2e6258;
+    --bad:#ef7a7a; --bad-tint:#341c1c; --bad-line:#6e3636;
+    --warn:#d6a94e; --warn-tint:#312a13; --warn-line:#5e4e23;
+    --info:#7da9e8; --info-tint:#16263c; --info-line:#33507c;
+    --violet:#b89be0; --violet-tint:#241a36; --violet-line:#473a64;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.5);
+    --shadow-lg:0 2px 6px rgba(0,0,0,.5),0 18px 50px rgba(0,0,0,.6);
+  }
+}
+*{box-sizing:border-box;}
+html{scroll-behavior:smooth;}
+body{
+  margin:0; background:var(--paper-2); color:var(--ink);
+  font-family:"Noto Sans CJK JP","Noto Sans JP",system-ui,-apple-system,"Hiragino Kaku Gothic ProN",Meiryo,sans-serif;
+  font-feature-settings:"palt" 1; line-height:1.7; letter-spacing:.01em;
+  -webkit-font-smoothing:antialiased;
+}
+.page{max-width:1280px; margin:0 auto; background:var(--paper); box-shadow:var(--shadow-lg);}
+svg{display:block;} .ico{width:1em; height:1em;}
+
+/* ---- plain-language-term-inline (glossary 派生ビュー / 専門語のやさしい併記) ---- */
+.term{
+  /* font-size 下限 (folio-276 #5)。 .72em は em 連鎖 (例 .actor .role=11px 内) で 7.9px<8px へ縮み
+     判読不能化する。 max() で 10.5px を下限に据え、 広文脈では従来比率を保つ。 */
+  display:inline-block; font-size:max(10.5px,.72em); font-weight:700; line-height:1;
+  padding:.18em .5em; border-radius:999px; margin-left:.3em; vertical-align:.08em;
+  background:var(--paper-3); color:var(--ink-soft); border:1px solid var(--line);
+  letter-spacing:.02em; white-space:nowrap;
+}
+.term.en{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;}
+
+/* ===================== doc-cover-band (deck-band / 表紙) ===================== */
+[data-component="doc-cover-band"]{
+  position:relative; overflow:hidden; color:#fff;
+  /* deeper navy にして白文字 (小サイズ含む) を WCAG AA 維持 (gate F worst-case-stop が最明合成でも
+     ≥4.5 を要求)。 highlight radial は薄め、 linear の最明端 (旧 #33658f) を暗色化。 */
+  background:
+    radial-gradient(1200px 500px at 88% -10%, rgba(255,255,255,.07), transparent 60%),
+    linear-gradient(135deg,#0c1f30 0%,#143049 48%,#173a57 100%);
+  padding:54px 56px 46px;
+}
+.cover-eyebrow{font-size:12.5px; font-weight:700; letter-spacing:.22em; text-transform:uppercase; opacity:.86; margin:0 0 14px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;}
+.cover-eyebrow .doc-type{background:rgba(255,255,255,.16); padding:3px 10px; border-radius:6px; letter-spacing:.16em; border:1px solid rgba(255,255,255,.22);}
+[data-component="doc-cover-band"] h1{font-size:42px; line-height:1.14; margin:0 0 8px; font-weight:800; text-wrap:balance;}
+.cover-sub{font-size:17px; opacity:.9; margin:0 0 22px; font-weight:500;}
+.summary-card{background:rgba(255,255,255,.1); border:1px solid rgba(255,255,255,.2); border-radius:14px; padding:18px 22px; display:flex; gap:18px; align-items:flex-start; max-width:880px;}
+.summary-card .lab{font-size:11px; font-weight:700; letter-spacing:.16em; opacity:.8; margin:0 0 4px;}
+.summary-card .txt{font-size:17.5px; line-height:1.6; font-weight:600; margin:0;}
+.summary-card .txt b{color:#ffe8a8;}
+.cover-meta{display:flex; flex-wrap:wrap; gap:10px 26px; margin-top:24px; font-size:13px;}
+.cover-meta .m{display:flex; gap:8px; align-items:center; opacity:.92;}
+.cover-meta .m .k{opacity:.62; font-weight:600;} .cover-meta .m .v{font-weight:700;}
+.reader-chip{display:inline-flex; gap:8px; align-items:center; margin-top:18px; background:#ffce6e; color:#3a2c05; font-weight:700; font-size:13.5px; padding:8px 14px; border-radius:10px; box-shadow:0 3px 10px rgba(0,0,0,.2);}
+a{color:var(--brand);} /* anchor 既定色 — UA 既定 #0000ee は dark bg で 1.72 (skip-link/domain 目次等の素 anchor で 3 例目の同型欠陥・型 selector ゆえ class 付きリンクは specificity で不変・gate F WCAG AA 両テーマ ≥7.6) */
+
+/* ===================== approval-block (deck-band / 承認証跡) ★critic補填 ===== */
+[data-component="approval-block"]{display:flex; flex-wrap:wrap; gap:14px; align-items:stretch; margin-top:22px;}
+.sign{flex:1 1 200px; background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.22); border-radius:12px; padding:13px 16px; display:flex; flex-direction:column; gap:3px; min-width:0;}
+.sign .role{font-size:10.5px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; opacity:.7;}
+.sign .who{font-size:15px; font-weight:800;}
+.sign .when{font-size:11.5px; opacity:.72; font-weight:600;}
+.sign .stamp{align-self:flex-start; margin-top:4px; font-size:10px; font-weight:800; letter-spacing:.08em; padding:2px 8px; border-radius:6px; background:#ffce6e; color:#3a2c05;}
+.sign .stamp.self{background:rgba(255,255,255,.18); color:#fff; border:1px solid rgba(255,255,255,.3);}
+
+/* ===================== chapter-deck-band (deck-band / 章開き) =============== */
+[data-component="chapter-deck-band"]{position:relative; padding:34px 56px 12px;}
+[data-component="chapter-deck-band"] .num{position:absolute; top:-6px; right:34px; font-size:138px; font-weight:900; line-height:1; opacity:.06; letter-spacing:-.04em; user-select:none; pointer-events:none; font-family:ui-monospace,monospace;}
+.kicker{display:inline-flex; align-items:center; gap:9px; font-size:12px; font-weight:800; letter-spacing:.14em; text-transform:uppercase; padding:5px 12px; border-radius:8px; margin-bottom:10px;}
+[data-component="chapter-deck-band"] h2{font-size:27px; margin:0 0 6px; font-weight:800; line-height:1.2;}
+.lead{font-size:15px; color:var(--ink-soft); margin:0; max-width:920px; line-height:1.65;}
+.tint-brand{background:var(--brand-tint);} .tint-ok{background:var(--ok-tint);} .tint-bad{background:var(--bad-tint);}
+.tint-warn{background:var(--warn-tint);} .tint-info{background:var(--info-tint);} .tint-violet{background:var(--violet-tint);}
+.tint-brand .kicker{background:var(--brand); color:#fff;} .tint-ok .kicker{background:var(--ok); color:#fff;}
+.tint-bad .kicker{background:var(--bad); color:#fff;} .tint-warn .kicker{background:var(--warn); color:#fff;}
+.tint-info .kicker{background:var(--info); color:#fff;} .tint-violet .kicker{background:var(--violet); color:#fff;}
+.chapbody{padding:22px 56px 40px; background:var(--paper);}
+
+/* ===================== section-lead-callout (callout / 章導入) ============= */
+[data-component="section-lead-callout"]{display:grid; grid-template-columns:repeat(3,1fr); gap:16px;}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:14px; padding:18px 18px 16px; box-shadow:var(--shadow); position:relative; overflow:hidden;}
+.card.accent::before{content:""; position:absolute; left:0; top:0; bottom:0; width:5px; background:var(--brand);}
+.card .cid{font-size:11.5px; font-weight:800; letter-spacing:.12em; color:var(--brand); margin-bottom:8px; display:flex; align-items:center; gap:8px;}
+.card .ct{font-size:16.5px; font-weight:800; line-height:1.4; margin:0 0 6px;}
+.card .cd{font-size:13px; color:var(--ink-soft); margin:0;}
+
+/* ===================== scope-summary-panel (dense-list / 範囲) ============= */
+[data-component="scope-summary-panel"]{display:grid; grid-template-columns:1fr 1fr; gap:20px;}
+.scol{border-radius:14px; padding:18px 20px; box-shadow:var(--shadow);}
+.scol.in{background:var(--ok-tint); border:1px solid var(--ok-line);}
+.scol.out{background:var(--bad-tint); border:1px solid var(--bad-line);}
+.scol h3{margin:0 0 12px; font-size:15px; font-weight:800; display:flex; align-items:center; gap:9px;}
+.scol.in h3{color:var(--ok);} .scol.out h3{color:var(--bad);}
+.scol ul{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:9px;}
+.scol li{display:flex; gap:10px; align-items:flex-start; font-size:13.5px; line-height:1.5;}
+.scol li .b{flex:0 0 auto; margin-top:3px;}
+
+/* ===================== actor-stakeholder-table (dense-table / 主体) ======== */
+[data-component="actor-stakeholder-table"]{display:flex; flex-wrap:wrap; gap:12px;}
+.actor{display:flex; align-items:center; gap:11px; background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:11px 15px 11px 12px; box-shadow:var(--shadow); min-width:0;}
+.actor .av{flex:0 0 auto; width:38px; height:38px; border-radius:10px; display:grid; place-items:center; color:#fff;}
+.actor .nm{font-size:14px; font-weight:700; line-height:1.25;}
+.actor .role{font-size:11px; color:var(--ink-faint); font-weight:600;}
+.ext-badge{font-size:9.5px; font-weight:800; letter-spacing:.08em; background:var(--warn-tint); color:var(--warn); border:1px solid var(--warn-line); padding:1px 6px; border-radius:5px; margin-left:6px;}
+
+/* ===================== source-trace-origin (dense-table / 上位ニーズ) ★補填 = */
+[data-component="source-trace-origin"]{width:100%; min-width:440px; border-collapse:separate; border-spacing:0; font-size:13.5px;}
+[data-component="source-trace-origin"] thead th{background:var(--info); color:#fff; text-align:left; font-size:11.5px; font-weight:800; letter-spacing:.06em; padding:11px 14px;}
+[data-component="source-trace-origin"] thead th:first-child{border-top-left-radius:12px;} [data-component="source-trace-origin"] thead th:last-child{border-top-right-radius:12px;}
+[data-component="source-trace-origin"] tbody td{padding:12px 14px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.5;}
+[data-component="source-trace-origin"] tbody tr:nth-child(even) td{background:var(--paper-2);}
+[data-component="source-trace-origin"] .nid{font-weight:800; font-family:ui-monospace,monospace; color:var(--info); white-space:nowrap;}
+[data-component="source-trace-origin"] .origin{font-size:11.5px; color:var(--ink-faint); font-weight:700;}
+
+/* ===================== requirement-matrix-table (dense-table / 要件本体) === */
+[data-component="requirement-matrix-table"]{width:100%; min-width:620px; border-collapse:separate; border-spacing:0; font-size:13.5px;}
+[data-component="requirement-matrix-table"] thead th{background:var(--brand-deep); color:#fff; text-align:left; font-size:11.5px; font-weight:800; letter-spacing:.06em; padding:11px 14px;}
+[data-component="requirement-matrix-table"] thead th:first-child{border-top-left-radius:12px;} [data-component="requirement-matrix-table"] thead th:last-child{border-top-right-radius:12px;}
+[data-component="requirement-matrix-table"] tbody td{padding:12px 14px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.5;}
+[data-component="requirement-matrix-table"] tbody tr:nth-child(even) td{background:var(--paper-2);}
+[data-component="requirement-matrix-table"] tbody tr:hover td{background:var(--brand-tint);}
+.fid{font-weight:800; font-family:ui-monospace,monospace; font-size:13px; white-space:nowrap; color:var(--brand);}
+td.cond{color:var(--ink-soft); font-size:13px; width:22%;}
+td.resp{font-size:13.5px; width:40%;}
+/* ears-requirement-row: 根拠 Rationale を必須スロットとして明示 (critic #3 格上げ) */
+td.resp .why{display:block; margin-top:5px; font-size:11.5px; color:var(--ink-faint); padding-left:62px; position:relative;}
+td.resp .why::before{content:"↳ なぜ要る"; position:absolute; left:0; font-weight:700; color:var(--ink-faint);}
+td.resp .plain{display:block; margin-top:5px; font-size:12.5px; color:var(--ink-soft);}
+td.resp .plain::before{content:"やさしく言うと "; font-weight:700; font-size:10px; color:var(--brand);}
+/* dense-table を clip せず狭幅で内部横スクロールへ倒す (folio-276 #1)。 旧 overflow:hidden は
+   375-390px で列を 1 文字/行へ潰し判読不能にした上 scroll も封じていた (gate F 盲点=#2 で捕捉)。
+   overflow-x:auto + table 側 min-width = rtm-grid と同じ「狭幅は横スクロール」方針へ統一する。 */
+.tbl-wrap{border:1px solid var(--line); border-radius:12px; overflow-x:auto; box-shadow:var(--shadow);}
+
+/* ---- priority-badge + EARS chip (badge) ---- */
+.ears{display:inline-flex; align-items:center; gap:5px; font-size:10.5px; font-weight:800; letter-spacing:.04em; padding:3px 9px; border-radius:7px; white-space:nowrap; border:1px solid;}
+.ears.always{background:var(--info-tint); color:var(--info); border-color:var(--info-line);}
+.ears.trigger{background:var(--brand-tint); color:var(--brand); border-color:var(--brand);}
+.ears.state{background:var(--violet-tint); color:var(--violet); border-color:var(--violet-line);}
+.ears.forbid{background:var(--bad-tint); color:var(--bad); border-color:var(--bad-line);}
+.ears.option{background:var(--warn-tint); color:var(--warn); border-color:var(--warn-line);}
+.ears .en{opacity:.7; font-weight:600; font-family:ui-monospace,monospace; font-size:9px;}
+.prio{display:inline-flex; align-items:center; gap:4px; font-size:10px; font-weight:800; letter-spacing:.04em; padding:2px 8px; border-radius:6px; white-space:nowrap;}
+.prio.must{background:var(--bad); color:#fff;} .prio.should{background:var(--warn); color:#fff;} .prio.may{background:var(--paper-3); color:var(--ink-soft); border:1px solid var(--line);}
+.vmeth{font-size:10px; font-weight:800; font-family:ui-monospace,monospace; padding:2px 6px; border-radius:5px; background:var(--ok-tint); color:var(--ok); border:1px solid var(--ok-line);}
+.ears-legend{display:flex; flex-wrap:wrap; gap:10px; margin-bottom:14px; align-items:center;}
+.ears-legend .lt{font-size:12px; font-weight:700; color:var(--ink-soft); margin-right:4px;}
+/* ears-requirement-row = requirement-matrix-table の各 <tr>。行 styling は table を継承し、
+   data-component で floor gate A 識別 + 根拠 (td.resp .why) を空不可スロットに保つ */
+tr[data-component="ears-requirement-row"] td.resp .why:empty::after{content:"⚠ 根拠 未記入"; color:var(--bad); font-weight:700;}
+
+/* ===================== nfr-hero-metrics + nfr-metrics-table =============== */
+[data-component="nfr-hero-metrics"]{display:grid; grid-template-columns:repeat(4,1fr); gap:16px; margin-bottom:24px;}
+.nfr-hero{border-radius:16px; padding:20px 18px 18px; box-shadow:var(--shadow); position:relative; overflow:hidden; border:1px solid var(--line); background:var(--paper);}
+.nfr-hero .cat{font-size:11px; font-weight:800; letter-spacing:.1em; text-transform:uppercase; margin-bottom:8px; display:flex; align-items:center; gap:7px;}
+.nfr-hero .big{font-size:38px; font-weight:900; line-height:1; letter-spacing:-.02em; display:flex; align-items:baseline; gap:4px;}
+.nfr-hero .big .u{font-size:16px; font-weight:800; opacity:.7;}
+.nfr-hero .qual{font-size:12.5px; font-weight:600; color:var(--ink-soft); margin-top:8px; line-height:1.45;}
+.nfr-hero.c1{background:linear-gradient(160deg,var(--info-tint),var(--paper));} .nfr-hero.c1 .cat,.nfr-hero.c1 .big{color:var(--info);}
+.nfr-hero.c2{background:linear-gradient(160deg,var(--ok-tint),var(--paper));} .nfr-hero.c2 .cat,.nfr-hero.c2 .big{color:var(--ok);}
+.nfr-hero.c3{background:linear-gradient(160deg,var(--brand-tint),var(--paper));} .nfr-hero.c3 .cat,.nfr-hero.c3 .big{color:var(--brand);}
+.nfr-hero.c4{background:linear-gradient(160deg,var(--violet-tint),var(--paper));} .nfr-hero.c4 .cat,.nfr-hero.c4 .big{color:var(--violet);}
+[data-component="nfr-metrics-table"]{width:100%; min-width:480px; border-collapse:separate; border-spacing:0; font-size:13px;}
+[data-component="nfr-metrics-table"] th{background:var(--paper-3); text-align:left; font-size:11px; font-weight:800; letter-spacing:.05em; color:var(--ink-soft); padding:10px 14px; text-transform:uppercase;}
+[data-component="nfr-metrics-table"] td{padding:11px 14px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.55;}
+[data-component="nfr-metrics-table"] tbody tr:last-child td{border-bottom:none;}
+.nid{font-weight:800; font-family:ui-monospace,monospace; color:var(--brand); white-space:nowrap;}
+.tgt{font-weight:800; color:var(--ink); white-space:nowrap;}
+.meas{color:var(--ink-soft); font-size:12.5px;}
+
+/* ===================== rtm-grid (rtm-grid / 双方向トレース + 孤立検出) ===== */
+[data-component="rtm-grid"]{overflow-x:auto; border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow);}
+.rtm{border-collapse:separate; border-spacing:0; font-size:12.5px; width:100%; min-width:760px;}
+.rtm th,.rtm td{padding:11px 12px; text-align:center; border-bottom:1px solid var(--line); border-right:1px solid var(--line-soft);}
+.rtm th{background:var(--brand-deep); color:#fff; font-size:11px; font-weight:800; letter-spacing:.04em;}
+.rtm thead th:first-child{text-align:left;}
+.rtm .grp{background:var(--paper-3); color:var(--ink-soft); font-weight:800; font-size:10.5px; letter-spacing:.06em; text-transform:uppercase;}
+.rtm tbody th{background:var(--paper-2); text-align:left; font-weight:800; color:var(--brand); font-family:ui-monospace,monospace; white-space:nowrap; font-size:12px;}
+.rtm tbody th .lbl{display:block; font-family:inherit; font-weight:600; color:var(--ink-soft); font-size:10.5px; margin-top:2px;}
+.rtm td.hit{background:var(--ok-tint);}
+.rtm td .dot{display:inline-grid; place-items:center; width:22px; height:22px; border-radius:50%; background:var(--ok); color:#fff;}
+.rtm td .dot.ac{display:inline-flex; align-items:center; width:auto; min-width:0; height:auto; border-radius:6px; padding:2px 7px; font-size:10px; font-weight:700; line-height:1.2; margin:1px;}
+.rtm td.gap{background:var(--bad-tint);} .rtm td.gap .x{color:var(--bad); font-weight:900;}
+.rtm tbody tr:last-child td,.rtm tbody tr:last-child th{border-bottom:none;}
+
+/* ===================== rtm-collapse (折りたたみ RTM の fold affordance / folio-276 #4) ====
+   生成 SRS は核心 RTM を <details data-component="rtm-collapse"> で既定折りたたむ。 素の details は
+   marker が小さく「開けるUI」と気付けず要旨が素通りした (ceiling 第2層)。 summary を panel ヘッダ化し
+   ▶ caret + 「クリックで開閉」ヒントで開閉可能性を明示する。 折りたたみ機構自体は assembler が所有。 */
+[data-component="rtm-collapse"]{border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow); background:var(--paper); overflow:hidden;}
+[data-component="rtm-collapse"]>summary{cursor:pointer; list-style:none; user-select:none; display:flex; align-items:center; gap:11px; padding:15px 20px; font-size:14.5px; font-weight:800; color:var(--brand); background:var(--brand-tint);}
+[data-component="rtm-collapse"]>summary::-webkit-details-marker{display:none;}
+[data-component="rtm-collapse"]>summary::before{content:""; flex:0 0 auto; width:0; height:0; border-left:7px solid currentColor; border-top:5px solid transparent; border-bottom:5px solid transparent; transition:transform .15s ease;}
+[data-component="rtm-collapse"][open]>summary::before{transform:rotate(90deg);}
+[data-component="rtm-collapse"]>summary::after{content:"クリックで開閉"; margin-left:auto; font-size:10.5px; font-weight:700; letter-spacing:.04em; color:var(--ink-faint); background:var(--paper); border:1px solid var(--line); border-radius:6px; padding:2px 9px;}
+[data-component="rtm-collapse"][open]>summary{border-bottom:1px solid var(--line);}
+[data-component="rtm-collapse"]>.rtm-summary-derived,[data-component="rtm-collapse"]>[data-prose-slot="rtm-summary"]{margin:0; padding:13px 20px 0; font-size:13px; color:var(--ink-soft); line-height:1.6;}
+[data-component="rtm-collapse"]>[data-component="rtm-grid"]{margin:16px 20px 18px;}
+
+/* ===================== acceptance-criteria-checklist (dense-list) ========= */
+[data-component="acceptance-criteria-checklist"]{display:grid; grid-template-columns:repeat(3,1fr); gap:16px;}
+.ac{background:var(--paper); border:1px solid var(--ok-line); border-radius:14px; padding:17px 18px; box-shadow:var(--shadow); position:relative; display:flex; flex-direction:column; gap:8px;}
+.ac::before{content:""; position:absolute; left:0; top:0; bottom:0; width:5px; background:var(--ok); border-radius:14px 0 0 14px;}
+.ac .aid{font-size:11.5px; font-weight:800; color:var(--ok); letter-spacing:.1em; display:flex; align-items:center; gap:8px;}
+.ac .at{font-size:14.5px; font-weight:700; line-height:1.5; margin:0;}
+.ac .at b{color:var(--ok); font-weight:800;}
+.ac .metric{display:flex; align-items:baseline; gap:6px; margin-top:auto; padding-top:6px;}
+.ac .metric .v{font-size:26px; font-weight:900; color:var(--ok); line-height:1;}
+.ac .metric .l{font-size:11.5px; color:var(--ink-faint); font-weight:600;}
+
+/* ===================== constraint-callout (callout / 制約・規制) =========== */
+[data-component="constraint-callout"]{width:100%; border-collapse:separate; border-spacing:0; font-size:13.5px;}
+[data-component="constraint-callout"] td{padding:13px 16px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.55;}
+[data-component="constraint-callout"] tbody tr:last-child td{border-bottom:none;}
+.cid2{font-weight:800; font-family:ui-monospace,monospace; color:var(--warn); white-space:nowrap; width:60px;}
+.cl{font-weight:700; white-space:nowrap; width:170px; color:var(--ink);}
+.reg-badge{font-size:9.5px; font-weight:800; letter-spacing:.06em; background:var(--bad-tint); color:var(--bad); border:1px solid var(--bad-line); padding:1px 7px; border-radius:5px; margin-left:6px;}
+
+/* ===================== glossary-term-table (glossary / 用語 SSoT) ========= */
+[data-component="glossary-term-table"]{display:grid; grid-template-columns:1fr 1fr; gap:0 28px; border:1px solid var(--line); border-radius:14px; overflow:hidden; box-shadow:var(--shadow);}
+.grow{display:flex; gap:16px; padding:15px 20px; border-bottom:1px solid var(--line-soft); align-items:flex-start;}
+.grow:nth-child(odd){background:var(--paper);} .grow:nth-child(even){background:var(--paper-2);}
+.gword{flex:0 0 142px; font-size:14.5px; font-weight:800; color:var(--brand); line-height:1.3;}
+.gword .en{display:block; font-size:11px; font-weight:700; color:var(--ink-faint); font-family:ui-monospace,monospace; margin-top:2px;}
+.gdef{font-size:13px; color:var(--ink-soft); line-height:1.55;}
+
+/* ===================== fidelity-sync-meta + footer (meta) ================= */
+.foot{padding:26px 56px 40px; background:var(--brand-deep); color:rgba(255,255,255,.78); font-size:12px;}
+.foot .ft-grid{display:flex; flex-wrap:wrap; gap:14px 40px; justify-content:space-between; align-items:center;}
+.foot b{color:#fff;}
+.foot .tags{display:flex; flex-wrap:wrap; gap:8px;}
+.foot .tags span{background:rgba(255,255,255,.1); border:1px solid rgba(255,255,255,.18); padding:4px 10px; border-radius:7px; font-size:11px; font-weight:600;}
+/* i6f9: 読者向け平易行は常時可視の第 1 行 (flex-basis:100%)、 dev メタ行は font-size のみ控えめ化
+   (色/opacity は据置 = contrast 不変で gate F に新規 risk を持ち込まない)。 */
+.foot .ft-plain{flex-basis:100%; font-size:13px; color:rgba(255,255,255,.92); font-weight:500;}
+.foot .ft-grid>[data-audience="machine"]{font-size:10.5px;}
+
+/* ===========================================================================
+   残り register (taxonomy 全 37 部品の被覆) — 多くは中核 register を再利用
+   =========================================================================== */
+
+/* ---- dense-table family: interface / data / revision-history ---- */
+[data-component="interface-spec-table"],
+[data-component="data-requirements-block"],
+[data-component="revision-history-table"]{width:100%; border-collapse:separate; border-spacing:0; font-size:13px;}
+[data-component="interface-spec-table"] th,
+[data-component="data-requirements-block"] th,
+[data-component="revision-history-table"] th{background:var(--paper-3); text-align:left; font-size:11px; font-weight:800; letter-spacing:.05em; color:var(--ink-soft); padding:10px 14px; text-transform:uppercase;}
+[data-component="interface-spec-table"] td,
+[data-component="data-requirements-block"] td,
+[data-component="revision-history-table"] td{padding:11px 14px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.55;}
+[data-component="interface-spec-table"] tbody tr:last-child td,
+[data-component="data-requirements-block"] tbody tr:last-child td,
+[data-component="revision-history-table"] tbody tr:last-child td{border-bottom:none;}
+.iid{font-weight:800; font-family:ui-monospace,monospace; color:var(--info); white-space:nowrap;}
+.dir{font-size:10px; font-weight:800; padding:2px 7px; border-radius:5px; background:var(--info-tint); color:var(--info); border:1px solid var(--info-line);}
+
+/* ---- dense-list family: ui / functions / use-case / references / toc / appendix ---- */
+[data-component="ui-spec-block"],
+[data-component="product-functions-list"],
+[data-component="use-case-card"],
+[data-component="references-list"],
+[data-component="toc-navigator"],
+[data-component="assumptions-constraints-list"],
+[data-component="supporting-info-appendix"]{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:9px;}
+[data-component="ui-spec-block"] li,
+[data-component="product-functions-list"] li,
+[data-component="references-list"] li,
+[data-component="toc-navigator"] li,
+[data-component="assumptions-constraints-list"] li,
+[data-component="supporting-info-appendix"] li{display:flex; gap:11px; align-items:flex-start; background:var(--paper); border:1px solid var(--line); border-radius:11px; padding:11px 15px; box-shadow:var(--shadow); font-size:13.5px; line-height:1.5;}
+[data-component="assumptions-constraints-list"] li{border-left:5px solid var(--warn);}
+.li-tag{font-size:10px; font-weight:800; padding:2px 7px; border-radius:5px; background:var(--warn-tint); color:var(--warn); border:1px solid var(--warn-line); flex:0 0 auto;}
+[data-component="toc-navigator"]{display:grid; grid-template-columns:repeat(2,1fr); gap:9px 18px;}
+[data-component="toc-navigator"] li{box-shadow:none; border-color:var(--line-soft);}
+[data-component="toc-navigator"] .tn{font-weight:800; font-family:ui-monospace,monospace; color:var(--brand); flex:0 0 auto;}
+[data-component="references-list"] .ref-n{font-weight:800; font-family:ui-monospace,monospace; color:var(--ink-faint); flex:0 0 auto;}
+.li-key{font-weight:800; color:var(--brand); flex:0 0 auto;}
+
+/* use-case-card: precondition/flow/postcondition の枠 */
+[data-component="use-case-card"] li{flex-direction:column; gap:7px; border-left:5px solid var(--info); padding:14px 17px;}
+.uc-id{font-size:11.5px; font-weight:800; color:var(--info); letter-spacing:.08em;}
+.uc-flow{display:flex; flex-wrap:wrap; gap:6px; align-items:center; font-size:12.5px;}
+.uc-flow .stp{background:var(--paper-2); border:1px solid var(--line); border-radius:7px; padding:3px 9px; font-weight:600;}
+.uc-flow .ar{color:var(--ink-faint); font-weight:800;}
+
+/* ---- rtm-grid family: verification-method-grid / requirement-attributes-rtm ---- */
+[data-component="verification-method-grid"],
+[data-component="requirement-attributes-rtm"]{overflow-x:auto; border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow);}
+[data-component="verification-method-grid"] table,
+[data-component="requirement-attributes-rtm"] table{border-collapse:separate; border-spacing:0; font-size:12.5px; width:100%; min-width:680px;}
+[data-component="verification-method-grid"] th,
+[data-component="requirement-attributes-rtm"] th{background:var(--brand-deep); color:#fff; font-size:11px; font-weight:800; padding:10px 12px; text-align:left;}
+[data-component="verification-method-grid"] td,
+[data-component="requirement-attributes-rtm"] td{padding:10px 12px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.5;}
+[data-component="verification-method-grid"] tbody tr:nth-child(even) td,
+[data-component="requirement-attributes-rtm"] tbody tr:nth-child(even) td{background:var(--paper-2);}
+
+/* ---- callout family: quality-checklist / audience-toggle ---- */
+[data-component="quality-checklist-callout"]{background:var(--paper-2); border:1px solid var(--line); border-left:5px solid var(--ok); border-radius:12px; padding:16px 20px; box-shadow:var(--shadow);}
+[data-component="quality-checklist-callout"] .qt{font-size:13px; font-weight:800; color:var(--ok); margin:0 0 10px; display:flex; align-items:center; gap:8px;}
+[data-component="quality-checklist-callout"] ul{list-style:none; margin:0; padding:0; display:grid; grid-template-columns:repeat(3,1fr); gap:7px 16px;}
+[data-component="quality-checklist-callout"] li{font-size:12.5px; display:flex; gap:7px; color:var(--ink-soft);}
+[data-component="quality-checklist-callout"] li .ck{color:var(--ok); font-weight:900; flex:0 0 auto;}
+[data-component="audience-toggle"]{display:inline-flex; gap:0; border:1px solid var(--line); border-radius:10px; overflow:hidden; box-shadow:var(--shadow);}
+[data-component="audience-toggle"] button{border:none; background:var(--paper); color:var(--ink-soft); font:inherit; font-size:12.5px; font-weight:700; padding:8px 16px; cursor:pointer; border-right:1px solid var(--line);}
+[data-component="audience-toggle"] button:last-child{border-right:none;}
+[data-component="audience-toggle"] button[aria-pressed="true"]{background:var(--brand); color:#fff;}
+
+/* ---- diagram family: context / use-case-flow / state-machine ---- */
+[data-component="context-diagram"],
+[data-component="use-case-flow-diagram"],
+[data-component="state-machine-diagram"]{background:var(--paper); border:1px solid var(--line); border-radius:14px; padding:20px; box-shadow:var(--shadow); overflow-x:auto;}
+[data-component="context-diagram"] figcaption,
+[data-component="use-case-flow-diagram"] figcaption,
+[data-component="state-machine-diagram"] figcaption{font-size:11.5px; color:var(--ink-faint); font-weight:600; margin-top:10px; text-align:center;}
+/* use-case flow steps (横並びステップ) */
+.uc-basic{display:flex; align-items:stretch; gap:0; flex-wrap:wrap;}
+.uc-step{flex:1 1 0; min-width:140px; background:var(--paper); border:1px solid var(--brand); border-radius:13px; padding:14px; box-shadow:var(--shadow); display:flex; flex-direction:column; gap:5px;}
+.uc-arrow{flex:0 0 30px; display:grid; place-items:center; color:var(--brand); font-weight:800;}
+.uc-step .sn{font-size:11px; font-weight:800; color:var(--brand); letter-spacing:.06em;}
+.uc-step .st{font-size:14px; font-weight:800; line-height:1.3;}
+.uc-step .sd{font-size:11.5px; color:var(--ink-faint); line-height:1.45;}
+
+/* ---- badge: informative-normative-label ---- */
+.io-label{display:inline-flex; align-items:center; gap:5px; font-size:10px; font-weight:800; letter-spacing:.06em; padding:2px 9px; border-radius:6px; text-transform:uppercase;}
+.io-label.normative{background:var(--brand); color:#fff;}
+.io-label.informative{background:var(--paper-3); color:var(--ink-soft); border:1px solid var(--line);}
+
+/* ---- responsive ---- */
+@media (max-width:1080px){
+  [data-component="section-lead-callout"],[data-component="nfr-hero-metrics"],[data-component="acceptance-criteria-checklist"]{grid-template-columns:1fr 1fr;}
+  [data-component="scope-summary-panel"],[data-component="glossary-term-table"]{grid-template-columns:1fr;}
+}
+@media (max-width:720px){
+  [data-component="chapter-deck-band"],.chapbody,[data-component="doc-cover-band"],.foot{padding-left:22px; padding-right:22px;}
+  [data-component="section-lead-callout"],[data-component="nfr-hero-metrics"],[data-component="acceptance-criteria-checklist"]{grid-template-columns:1fr;}
+  [data-component="doc-cover-band"] h1{font-size:31px;}
+  [data-component="chapter-deck-band"] .num{font-size:92px;}
+}
+
+/* ============================================================================
+   dark accent コントラスト補正 — ★このブロックはファイル末尾に置くこと (source-order)。
+   dark では accent トークン (--brand/--info/--warn/--ok/--bad/--violet) が明色へ反転するため、
+   それを塗りに使い白文字を載せる小要素 (kicker / priority-badge / actor avatar / dot 等) は
+   WCAG AA が崩れる (gate F low-contrast で実検出)。 文字を暗色へ切替えて contrast を確保する。
+   基底の `color:#fff` ルールと同 specificity ゆえ、 source-order で後勝ちさせるには本ブロックが
+   それら全ての後 (= ファイル末尾) に来る必要がある。 前方へ移すと基底ルールに負け無効化する。
+   構造ヘッダ/フッタ (--brand-deep 塗り) は dark でも暗色維持ゆえ白文字のままで可読。
+   ============================================================================ */
+@media (prefers-color-scheme: dark){
+  .tint-brand .kicker, .tint-ok .kicker, .tint-bad .kicker,
+  .tint-warn .kicker, .tint-info .kicker, .tint-violet .kicker,
+  [data-component="source-trace-origin"] thead th,
+  .prio.must, .prio.should,
+  .rtm td .dot,
+  .actor .av,
+  [data-component="audience-toggle"] button[aria-pressed="true"],
+  .io-label.normative{ color:#08131a; }
+}
+/* ===== ADR-pack 固有部品 (folio-bwc / instance#2)。 srs.css の token を流用 ===== */
+[data-component="adr-context-row"]{display:flex;gap:12px;align-items:flex-start;padding:13px 16px;border:1px solid var(--line);border-left:3px solid var(--info);border-radius:10px;background:var(--paper-2);margin:10px 0}
+[data-component="adr-context-row"] .cxid{flex:0 0 auto;font-weight:700;font-size:12px;color:var(--info);background:var(--info-tint);border:1px solid var(--info-line);border-radius:6px;padding:2px 8px;letter-spacing:.02em}
+[data-component="adr-context-row"] .cxbody .cxh{font-weight:700;margin:0 0 3px;font-size:14.5px}
+[data-component="adr-context-row"] .cxbody .cxd{margin:0;color:var(--ink-soft);font-size:13.5px;line-height:1.7}
+table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;margin:8px 0;font-size:13.5px}
+[data-component="adr-driver-row"] td{border:1px solid var(--line);padding:9px 12px;vertical-align:top}
+[data-component="adr-driver-row"] .drid{font-weight:700;color:var(--brand);white-space:nowrap}
+[data-component="adr-driver-row"] .drg{display:inline-block;margin-left:6px;font-size:11px;color:var(--ink-soft);background:var(--paper-3);border:1px solid var(--line);border-radius:5px;padding:1px 6px}
+.opt-grid{display:flex;flex-direction:column;gap:12px;margin:10px 0}
+[data-component="adr-option-card"]{border:1px solid var(--line);border-radius:12px;padding:14px 16px;background:var(--paper);box-shadow:var(--shadow)}
+[data-component="adr-option-card"].chosen{border:2px solid var(--ok);background:var(--ok-tint)}
+[data-component="adr-option-card"].rejected{opacity:.92}
+.opt-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:4px}
+.opt-head .opt-id{font-weight:700;font-size:12px;color:var(--ink-soft)}
+.opt-head .opt-name{font-weight:800;font-size:15px}
+.opt-verdict{font-size:11.5px;font-weight:700;border-radius:999px;padding:2px 11px;border:1px solid}
+.opt-verdict.chosen{color:var(--ok);background:var(--ok-tint);border-color:var(--ok-line)}
+.opt-verdict.rejected{color:var(--bad);background:var(--bad-tint);border-color:var(--bad-line)}
+.opt-verdict.deferred{color:var(--warn);background:var(--warn-tint);border-color:var(--warn-line)}
+[data-component="adr-option-card"] .opt-sum{margin:2px 0 8px;color:var(--ink-soft);font-size:13.5px;line-height:1.7}
+[data-component="adr-option-card"] .opt-plain{display:block;margin:0 0 9px;font-size:13px;color:var(--ink-soft);background:var(--brand-tint);border-radius:7px;padding:6px 10px}
+.opt-pc{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media(max-width:640px){.opt-pc{grid-template-columns:1fr}}
+.opt-pc ul{margin:3px 0 0;padding-left:2px;list-style:none}
+.opt-pc li{font-size:12.5px;line-height:1.65;padding-left:18px;position:relative;margin:3px 0;color:var(--ink-soft)}
+.opt-pc .pros h4,.opt-pc .cons h4{margin:0;font-size:11.5px;letter-spacing:.04em}
+.opt-pc .pros h4{color:var(--ok)} .opt-pc .cons h4{color:var(--bad)}
+.opt-pc .pros li::before{content:"+";position:absolute;left:2px;color:var(--ok);font-weight:800}
+.opt-pc .cons li::before{content:"\2212";position:absolute;left:2px;color:var(--bad);font-weight:800}
+[data-component="adr-decision-panel"]{border:2px solid var(--ok);border-radius:14px;padding:16px 18px;background:var(--ok-tint);margin:8px 0}
+[data-component="adr-decision-panel"] .dec-kick{font-size:11.5px;font-weight:700;letter-spacing:.05em;color:var(--ok);text-transform:uppercase}
+[data-component="adr-decision-panel"] .dec-state{font-size:15.5px;font-weight:700;line-height:1.7;margin:5px 0 4px}
+[data-component="adr-decision-panel"] .dec-plain{display:block;font-size:13.5px;color:var(--ink-soft);line-height:1.7;margin:0 0 8px}
+[data-component="adr-decision-panel"] .dec-why{display:block;font-size:13px;color:var(--ink);background:var(--paper);border:1px solid var(--ok-line);border-radius:8px;padding:8px 11px;line-height:1.75;margin:0 0 10px}
+.justify-box{background:var(--paper);border:1px solid var(--line);border-radius:9px;padding:10px 12px}
+.justify-box .jh{font-size:12px;font-weight:700;color:var(--ink-faint);margin:0 0 6px}
+.justify-row{display:flex;gap:9px;align-items:baseline;padding:5px 0;border-top:1px dashed var(--line)}
+.justify-row:first-of-type{border-top:0}
+.justify-req{flex:0 0 auto;font-weight:800;font-size:12.5px;color:var(--ok);background:var(--ok-tint);border:1px solid var(--ok-line);border-radius:6px;padding:1px 9px}
+.justify-role{flex:0 0 auto;font-size:10.5px;color:var(--violet);background:var(--violet-tint);border:1px solid var(--violet-line);border-radius:999px;padding:1px 8px}
+.justify-note{flex:1 1 auto;font-size:12.5px;color:var(--ink-soft);line-height:1.6}
+.justify-tgt{font-size:11.5px;color:var(--ink-faint);margin:8px 0 0}
+[data-component="adr-supersession"],[data-component="adr-principle"]{border:1px solid var(--line);border-radius:10px;padding:12px 15px;margin:10px 0;font-size:13.5px;line-height:1.7}
+[data-component="adr-supersession"]{background:var(--paper-2)}
+[data-component="adr-principle"]{background:var(--violet-tint);border-color:var(--violet-line)}
+[data-component="adr-principle"] .prin-id{font-weight:700;color:var(--violet);font-size:12px;letter-spacing:.02em}
+[data-component="adr-principle"] .prin-text{font-weight:700;margin:4px 0 2px;color:var(--ink)}
+[data-component="adr-principle"] .prin-note{color:var(--ink-soft);font-size:12.5px}
+.ss-row{margin:3px 0}.ss-row .ss-k{font-weight:700;color:var(--ink-soft);font-size:12px;margin-right:6px}
+
+</style>
+<meta name="folio-version" content="0.1.0">
+<script type="application/ld+json">
+{
+  "@context": {
+    "dc": "http://purl.org/dc/terms/",
+    "schema": "https://schema.org/",
+    "folio": "https://folio.dev/spec/v1/"
+  },
+  "@id": "./ADR-0083-rulings-bind-ledger-questions-to-recorded-utterances.html",
+  "@type": "schema:TechArticle",
+  "dc:isPartOf": [
+    {
+      "@id": "./README.html"
+    }
+  ],
+  "dc:title": "席から持ち主への問いは台帳の問いに立て、 裁定は器が記帳した持ち主の発話に結ぶ — 発話 event と seat ruling bind・裁定 id の実在の門 (ruling-check の opt-in)・未反映の裁定は関わる契約だけを待たせる (ADR-0037 の書き手の口・時刻の id・doctor の突合と、 ADR-0016 §2.3 の逐語の置き場を部分 supersede)",
+  "folio:version": "0.1.0",
+  "folio:stakeholders": [
+    "Developer",
+    "AI Agent",
+    "External Reviewer"
+  ],
+  "dc:references": [
+    {
+      "@id": "../spec/constitution.html#c1"
+    },
+    {
+      "@id": "../spec/constitution.html#c3"
+    },
+    {
+      "@id": "../spec/constitution.html#c5"
+    },
+    {
+      "@id": "../spec/constitution.html#c7"
+    },
+    {
+      "@id": "../spec/constitution.html#c14"
+    },
+    {
+      "@id": "../spec/constitution.html#c15"
+    },
+    {
+      "@id": "../spec/constitution.html#c17"
+    },
+    {
+      "@id": "../spec/constitution.html#n1"
+    },
+    {
+      "@id": "../spec/constitution.html#n2"
+    },
+    {
+      "@id": "../spec/srs.html#FR81"
+    },
+    {
+      "@id": "../spec/srs.html#FR82"
+    },
+    {
+      "@id": "../spec/srs.html#FR83"
+    },
+    {
+      "@id": "../spec/srs.html#FR84"
+    },
+    {
+      "@id": "../spec/srs.html#FR22"
+    },
+    {
+      "@id": "../spec/srs.html#FR65"
+    },
+    {
+      "@id": "../spec/srs.html#FR68"
+    },
+    {
+      "@id": "../spec/srs.html#FR10"
+    },
+    {
+      "@id": "../spec/srs.html#FR27"
+    },
+    {
+      "@id": "../spec/srs.html#FR51"
+    },
+    {
+      "@id": "../spec/srs.html#FR41"
+    },
+    {
+      "@id": "./ADR-0037-rulings-without-a-run-are-approval-events.html"
+    },
+    {
+      "@id": "./ADR-0016-default-delivery-structure-and-typed-question-record.html"
+    },
+    {
+      "@id": "./ADR-0045-seat-role-is-one-orchestrator-and-dispatcher-lands-runs.html"
+    },
+    {
+      "@id": "./ADR-0031-working-memory-is-held-by-the-vessel-directives-status-and-hooks.html"
+    },
+    {
+      "@id": "./ADR-0056-destructive-guards-are-one-vessel-subcommand-wired-from-account-settings.html"
+    },
+    {
+      "@id": "./ADR-0010-vessel-declaration-holds-allowlist-and-common-verify.html"
+    },
+    {
+      "@id": "./ADR-0054-entrance-flip-may-be-declared-unmeasured-in-the-vessel-declaration.html"
+    },
+    {
+      "@id": "./ADR-0077-a-narrow-mouth-points-waiting-seats-to-recorded-rulings.html"
+    },
+    {
+      "@id": "./ADR-0004-mvp-persistence-and-cross-version-formats.html"
+    }
+  ]
+}
+</script>
+</head>
+<body>
+<!-- folio:chrome-top -->
+<a class="skip-link" href="#cover-summary">本文へスキップ</a>
+<nav class="breadcrumb" aria-label="パンくず"><ol>
+  <li><a href="../index.html">design-intent</a></li>
+  <li><a href="./README.html">decisions</a></li>
+  <li aria-current="page">ADR-0083</li>
+</ol></nav>
+<!-- /folio:chrome-top -->
+<div class="page" data-component="requirement-type-color-tokens">
+<header data-component="doc-cover-band">
+<p class="cover-eyebrow"><span class="doc-type">設計判断記録 (ADR)</span> <span>scribe2 — 問いと裁定の記録</span></p>
+<h1>席から持ち主への問いは台帳の問いに立て、 裁定は器が記帳した持ち主の発話に結ぶ — 発話 event と seat ruling bind・裁定 id の実在の門 (ruling-check の opt-in)・未反映の裁定は関わる契約だけを待たせる (ADR-0037 の書き手の口・時刻の id・doctor の突合と、 ADR-0016 §2.3 の逐語の置き場を部分 supersede)</h1>
+<p class="cover-sub">ADR-0037 は便の無い裁定を、 席が逐語を打つ口で記録し、 器が打った時刻を裁定 id にした。 その字が持ち主のものか、 引かれた id が本当の裁定を指すか、 決めたことが文書に写されたかを、 器は確かめられない。 本 ADR は、 問いを台帳の問いの形に閉じ、 持ち主の打った字を器が全部記帳し、 席は問いと発話を結ぶだけにし、 引用の実在と未反映を字の数えで判じる形を決める。</p>
+<div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">この記録で「器」は scribe2 の本体、 「席」は器が立てる対話の AI の session、 「持ち主」は器を使って決める人 (user)、 「台帳」は仕事と裁定を記録する beads です。 これまで持ち主の決め (裁定) は、 席が持ち主の言葉を自分で打ち直して記録していたので、 本当に持ち主の字か、 文書が引く裁定の番号が本当に在るか、 決めたことが文書に写されたかを、 器は確かめられませんでした。 本 ADR は、 席から持ち主への問いを台帳の決まった形 (台帳の問い) に立てること、 器の名を書いた目印を持つ repo で、 持ち主が器の plugin を積む対話の session に打った文を器が一字一句そのまま全部記録すること (発話 event・器が差し込んだ行と別の session から届いた文は除く)、 席は問いとその記録を結ぶだけで言葉を打てないこと、 宣言で選んだ repo では文書が引く裁定の番号が本当に在るかを、 どの repo でも文書へ写していない裁定を、 器が文字を数えて確かめることを決めます。 台帳の問いは、 台帳の点検にも便を起こす列にも数えません。 結びの口は承認を受ける口ではなく、 便の承認とその言葉は今のままです。 要件 FR81〜FR84 を支え、 FR22・FR65 の改訂の理由を持ち、 FR10・FR27・FR51・FR68 の改訂に実装の形を与え、 ADR-0037 と ADR-0016 の一部を置き換えます。 記録する範囲は持ち主が裁定 (2026-09-28T09:04Z) で全部と決め、 記録は文を打つたびに伸びます。</p></div></div>
+<div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">accepted</span></span><span class="m"><span class="k">選択肢</span><span class="v">7件 (OPT1–OPT7)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 4 / トレードオフ 9</span></span><span class="m"><span class="k">版</span><span class="v">v0.1.0 / 2026-09-28</span></span></div>
+<div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>FR81・FR82・FR83・FR84・FR22・FR65・FR10・FR27・FR68・FR51</b></div>
+<div data-component="approval-block">
+<div class="sign"><span class="role">裁定 (user)</span><span class="who">user</span><span class="when">裁定 id user 2026-09-28T00:05Z (文書運用の強制を案 A で進める) と user 2026-09-28T00:54Z (決めてほしいことは推奨で進める、 の常設の指示)。 逐語は台帳にだけ在る</span><span class="stamp self">裁定済</span></div>
+<div class="sign"><span class="role">裁定 (user・発話を記帳する範囲)</span><span class="who">user</span><span class="when">裁定 id user 2026-09-28T09:04Z (全 prompt を記録する推奨を採る)。 逐語は台帳にだけ在る</span><span class="stamp self">裁定済</span></div>
+<div class="sign"><span class="role">設計 (orchestrator)</span><span class="who">orchestrator</span><span class="when">2026-09-28 草稿 v6 (SRS 版 0.28 の最終文の FR81〜FR84 と FR10・FR22・FR27・FR51・FR65・FR68 の改訂を受け、 裁定の口・EventKind・hook の UserPromptSubmit・起票の門・起動の列の待ち理由・rules 行の裁定の欄の形を現物で読んだ。 見本の数え方 (台帳の接頭辞・ruling-fixtures・束の欄) と A2 と C7 の経路の読みは、 持ち主の常設の指示 00:54Z の下の orchestrator の決定。 拘束する constitution の版 0.5.0)</span><span class="stamp self">作成</span></div>
+</div>
+<div class="reader-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 想定読者: scribe2 の開発 session と user — 器の内部と Rust の専門知識は不要 (専門語はやさしい言葉を併記)</div>
+</header>
+<!-- folio:chrome-toc -->
+<!-- /folio:chrome-toc -->
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">01</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v6m0 0L9 5m3 3l3-3"/><circle cx="12" cy="14" r="6"/></svg> 背景 / なぜこの判断が要るか</span><h2>いま何が問題か (確定方式を決める力学)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-01">なぜこの判断が要るのかを 7 つで示します。 経緯 (裁定は、 席が言葉を打つ口と時刻の番号で記録してきた)・事象 (字が持ち主のものか、 番号が本当に在るか、 文書に写されたかを確かめていない)・現物 (持ち主の文は器の hook を通り、 台帳の書き込みは門を通り、 列と着地には待たせる形がある)・隣の形 (別の project は自分の画面と server で同じ役を持つ)・前の器の直命の表との線・憲法の向き (逐語と裁定の番号と承認を受ける面の読み方、 検査を選ぶ印の置き場の読み方)・射程 (動かすものと動かさないもの) です。</p></section>
+<div class="chapbody">
+<div data-component="adr-context-list">
+<div data-component="adr-context-row"><span class="cxid">CTX1</span><div class="cxbody"><p class="cxh">経緯 — 裁定は ADR-0037 で「席が逐語を打つ口」と「器が打つ時刻の id」になり、 席から持ち主への問いは記録の形を持たない</p><p class="cxd">ADR-0037 は便の無い裁定を event kind RulingReceived (actor が human・便を持たない) として持ち、 書き手を対話面の席の口 seat ruling add 1 つに限り、 裁定 id<span class="term" data-component="plain-language-term-inline" data-term="裁定 id">裁定を指す番号</span> をその event の ts とし、 doctor が rules 行の裁定の欄 (user &lt;分までの時刻&gt;) ごとに同じ分の event の有無を読む形を決めた。 逐語はこの口の引数で、 席が打つ。 ADR-0016 §2.3 は user の逐語を承認 event にだけ載せると定めた。 席から持ち主への問いを記録する形は器に無く (EventKind の 24 値にも台帳の label にも無い)、 裁定が「どの問いへの答えか」を指す欄も無い。 runner の質問 record (ADR-0016 §2.2) は便の中の問いで、 持ち主への問いではない。 現物の実測 (main d6d9513・2026-09-28): rules manifest の 77 行のうち裁定の欄が時刻の形の行は 60 行 (分まで在る 54 行・分の 1 桁が x の 6 行)、 別の番号の形 12 行、 そのほか 5 行で、 分まで在る 54 行のうち同じ分の RulingReceived を持つのは 2 行だけ (この host の event log)。 追跡された file 423 本のうち時刻の形の引用を持つものは 70 本で、 うち 32 本は凍った決定記録 (書き換えず、 改訂は supersede する新しい記録で行う) である。 同じ main の .rs の行のうち policy: の字を含むものは 74 行で、 どれも code の名前付きの引数か型注釈である。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX2</span><div class="cxbody"><p class="cxh">事象 — 裁定の字が持ち主の字か、 引かれた id が本当の裁定か、 決めたことが文書に写されたかを、 器は確かめない</p><p class="cxd">器の検査は、 rules 行の裁定の欄が空でないこと、 値を変えて裁定の字が同じ行を断ること (rules-diff)、 doctor の同じ分の突合 (数えるだけ) の 3 つで、 引かれた裁定 id が実在の裁定を指すかを確かめる検査は 0 である。 seat ruling add の逐語は席が打つ字なので、 持ち主の言い換え・記憶違い・会話で聞いた気がする判断も同じ形で記録される。 消費側の project の 1 つの実測では、 台帳の bead の id に「席の判断」を添えた字が裁定の欄として形の検査を通った。 持ち主が決めたことが文書に写されたかを数える面も無く、 写し忘れは、 次の設計と契約が古い文書を正として読むまで見えない。 持ち主は問われる前に指示を出すことも多い。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX3</span><div class="cxbody"><p class="cxh">現物 — 持ち主の prompt は器の hook を通り、 台帳の書きは起票の門<span class="term" data-component="plain-language-term-inline" data-term="起票の門">台帳の書き込みを止める門</span>を通り、 列と tick と着地には待たせる型が在る</p><p class="cxd">器の plugin の hooks.json は UserPromptSubmit で器の hook を撃つ (今は席の状態の打刻と群の合図の行だけ)。 hook は prompt の経路で走るので、 台帳も git も読まない形が要る (台帳の読み 1 回は約 0.35 秒・ADR-0045 の実測)。 器が席の入力欄へ差し込む行は閉じた一覧 (FR44: 起動行・管理 tick の打刻の合図・群の通知と合図・便の終端の周の通知・裁定の指し示し) で、 どれも器の雛形の形を持つ。 起票の門 (ADR-0056) は席の道具の呼び出しの bd / bdw の書きに掛かり (席が Bash から起こした子 process の書きは見ない)、 memo の 4 節の判定を持つ。 起動の列は memo を label で外し、 台帳の lint は epic と decision の型を契約に数えない。 vessel 宣言<span class="term" data-component="plain-language-term-inline" data-term="vessel 宣言">repo の宣言</span> (.vessel.toml・ADR-0010) は任意 key を持て、 検査を測らないと repo が名乗る key の前例が在る (ADR-0054)。 起動の列の待ち理由は閉じた 8 値、 受付の断りは閉じた 23 値で、 列の全部を待たせる先例 HostBusy が在る。 着地の前提 (FR10) には push の走査が着地を止める間 (FR50) の留めが在り、 SRS 版 0.28 はこの留めを、 便を Gated に留めて理由の event を便ごとに 1 件だけ記帳し (同じ理由が続く周は記帳し直さない)、 撃ち直しの上限 (FR11) に数えず Failed にしない形に書く (FR50 の留めの code は main に未着地)。 dispatch の周が置き場へ file を書き、 管理 tick は台帳も git も撃たずにそれを数えるだけ、 という型が事前審査に在る。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX4</span><div class="cxbody"><p class="cxh">隣の形 — 消費側の project の 1 つは、 自分の台帳と自分の裁定面の server で同じ役を持つ</p><p class="cxd">消費側の project の 1 つは、 型 task で label intake:question の bead・notes の裁定の行<span class="term" data-component="plain-language-term-inline" data-term="裁定の行">問いに書く答えの 1 行</span> (裁定 id・問い・逐語の欄をこの順に持ち、 裁定 id は &lt;問い&gt;:&lt;UTC の年月日と時分&gt;-&lt;n&gt; の形)・close_reason「裁定 &lt;裁定 id&gt;」を使い、 id は自分の裁定面の server だけが発行して、 自分の経路で台帳へ書く (その server は席が Bash から起こす常駐の process として走りうる)。 その台帳は batch: と policy: で始まる id の形も使い、 裁定の行に裁定 id の欄と別の束の欄 (batch: の形の id を持つ) を持つこともある。 その repo の決まった done の文は、 台帳に解けない batch: などの形の字面を fixture として持ち、 scribe2 自身の FR82 と FR83 の歯 (未着地) も、 台帳に無い裁定 id の形を fixture に持つことになる。 scribe2 の持ち主は端末の対話の session で答え、 その server を通らない。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX5</span><div class="cxbody"><p class="cxh">直命の表<span class="term" data-component="plain-language-term-inline" data-term="直命の表">持ち主の発言の旧い表</span>との線 — 前の器は持ち主の発言を 1 件ずつ状態付きで持って席へ運び、 ADR-0045 がそれを消した</p><p class="cxd">ADR-0031 の直命の表は、 持ち主が対話面で言った発言のうち席の行動を拘束するものを 1 件ずつ event (DirectiveIssued / DirectiveClosed) に持ち、 状態と前提 pointer を typed に持ち、 復元の DATA が有効な直命を逐語で並べて席へ運んだ。 ADR-0045 §2 (2) はこれを席の自律機能と共に消し (状態の置き場を増やす・C3 / C2.2)、 SRS の FR65 は「器は user の発言を event log に持たない」と書いていた。 持ち主の打った字を全部記帳する形は、 字面だけ見ればこの表の復活に見える。 違いを決めるのは、 記録が席へ運ばれるか (起動行・圧縮の直前の枠・合図・通知・一覧) と、 記録が状態 (有効か・閉じたか) を持つかである。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX6</span><div class="cxbody"><p class="cxh">憲法の向き — C7.2 の「逐語」・C5 と A2 の「裁定 id」と C7 の経路の読み、 C1 の下での opt-in の key の置き場の読みが要る</p><p class="cxd">C7 は承認をちょうど 1 つの対話面 (rules 行 R-C7-1・値は orchestrator) で受け、 C7.2 は受けた承認をすべて user の逐語を運ぶ承認 event として記録する。 C7 の人の層は「会話の記憶を承認の根拠にしない」と書く。 ADR-0037 は C7.2 の「承認」に裁定を含めて読み、 裁定の記帳も R-C7-1 の席の権能 (SRS FR41 の「承認の記帳」) に数えて、 書き手の口で席の役割を確かめた。 ADR-0016 §2.3 も承認の対話面を R-C7-1 のままとし、 対話面を増やさないと決めている。 C5 は裁定 id の無い rules 行の変更を CI が落とすと定め、 C14.2 は裁定 id を正本の側 (原則と裁定は文書の版・規則は manifest の行) に付け、 C15 / C15.2 は台帳を task と裁定に限り、 規則を変える PR と台帳の項目が裁定 id を引くことを求める。 CI は private な台帳に届かない。 C1 は規則の値 (有効 / 無効の旗を含む) を manifest 1 つに置く。 ADR-0010 は、 repo が自分について名乗る値を vessel 宣言に置き manifest は上限を持つ、 と C1 を適用した。 C3 は状態を 1 つの DB (event log) に置く。 N1 は不可逆な削除をしない。 C17.2 は走査・記録・rules 行・仕組みを足すなら先に消すものを名指させる。 N2 は散文にしか無い規則を規則と認めない。 本 ADR は、 裁定の行についての C7.2 の逐語と C5 の裁定 id の読み、 C7 の受理面の読み (結びの口 seat ruling bind は台帳の問い<span class="term" data-component="plain-language-term-inline" data-term="台帳の問い">台帳に立てる問い</span>に裁定の行を書く口で、 承認の受理面ではない。 承認は便の承認 pipe approve が受け、 FR41 の承認の記帳の権能と役割の確かめもそこに残る)、 ruling-check の置き場の読みを決める (ADR を書く条件 1)。 便の承認の逐語は本 ADR の読みの外に置き、 変えない。 A2 と C7 の経路の読み (orchestrator の読み・持ち主の常設の指示 2026-09-28T00:54Z の下・持ち主が異を唱えれば改める): 憲法の規範文は、 A1・A3・A4.2 では承認を C7 の対話面を通して取ると書き、 A2 では裁定 id を伴う user 裁定を取ると書く (A2 の機構は rules 行の diff と裁定 id・C5 が CI で強制)。 C7 の機構の欄の「A1 / A2 / A3 / A4 の承認はすべてこの経路を通る」と §2.2 の「確認の経路は C7 が定める 1 つの対話面だけ」(どちらも出所は SPEC §2・ADR-0003) は、 承認 (relay 印と承認 event) の受理面を 1 つに保つ文と読み、 A2 の裁定 id を発行する口を縛る文とは読まない。 よって結びの口 seat ruling bind は A2 の型の裁定と裁定の行の裁定 id を発行し、 C7 の単一の受理面 (pipe approve が記帳する承認 event) は変えない。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX7</span><div class="cxbody"><p class="cxh">射程 — 動かすのは門の形・発話の記帳・結びの口・引用の数え・未反映の待ちの 5 つ</p><p class="cxd">動かすのは、 (1) 起票の門の断りの形 (台帳の問いの形・席が書く裁定の行) と、 台帳の問いを台帳の lint と起動の列から外すこと、 (2) 発話 event<span class="term" data-component="plain-language-term-inline" data-term="発話 event">人が打った字の記録</span> の kind と記帳と計測での数え方、 (3) 結びの口 seat ruling bind と裁定 id の形と裁定の行、 seat ruling add と doctor の同じ分の突合の退役、 (4) vessel 宣言の任意 key ruling-check と ruling-fixtures と引用の実在の判定 (受付・着地・doctor)、 (5) 未反映の裁定<span class="term" data-component="plain-language-term-inline" data-term="未反映の裁定">文書が引いていない裁定</span>の判定と待ち (置き場の file・doctor・tick の alarm・起動の列・着地) の 5 つで、 要件は SRS 版 0.28 の FR81〜FR84 と FR10・FR22・FR27・FR51・FR65・FR68 の改訂が持つ。 動かさないのは、 R-C7-1 の値、 便の承認 (pipe approve の逐語と役割の確かめ・FR15 / FR16 / FR41)、 裁定の指し示しの口 (ADR-0077) と裁定面の記帳 id、 RulingReceived の kind と到達点の計測での承認の側、 event log の schema 版、 memo の引き金の形と審査・床の検査・選択式の問いの遮断 (どれも別の決定記録) である。 ADR を書く条件のうち 1 (C7.2・C5・C1 の読み)・3 (event の kind と key・notes の裁定の行の形・vessel 宣言の key は版を跨ぐ形)・4 (却下案を残す価値のある分岐) に当たる。</p></div></div>
+</div>
+</div>
+<section data-component="chapter-deck-band" class="tint-brand"><span class="num">02</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v18"/><path d="M5 7l-3 6h6z"/><path d="M19 7l-3 6h6z"/><path d="M3 21h18"/></svg> 判断を縛る力 / 評価の軸</span><h2>選択肢を測るものさし (安全・速さ)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-02">この判断を測る 7 本のものさしです。 裁定の字は持ち主が打った字だけで、 席は打てないこと。 問われる前の指示も後から結べること。 引かれた番号が本当に在るかを器の門が確かめ、 文書の意味は読まないこと。 決めたことが文書に写されるまで関わる契約は進まず、 関わらない契約は止めないこと。 前の器の直命の表を戻さないこと。 持ち主の文の経路を軽く保ち、 器の外の server や道具に依らず、 問い・結び・実在・未反映の段の順に着地できること。 足すものを最小にし、 消すものを名指すことです。</p></section>
+<div class="chapbody">
+<table data-component="adr-driver-table"><tbody>
+<tr data-component="adr-driver-row"><td class="drid">DR1</td><td>裁定の字は持ち主が打った字だけで、 席はその字を打てない (C7.2・FR82) <span class="drg">CTX1・CTX2・CTX6</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR2</td><td>問われる前に出た指示も、 後から問いを起こして結べる <span class="drg">CTX2</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR3</td><td>引かれた裁定 id の実在を席の注意でなく器の門が確かめ、 器は文書の意味を読まない (C5・C15.2・FR83) <span class="drg">CTX2・CTX6</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR4</td><td>決めたことが文書に写される前に、 それに関わる契約は進まないが、 関わらない契約は止めない (FR84) <span class="drg">CTX2・CTX3</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR5</td><td>直命の表を戻さない — 記録を席へ運ばず、 状態を持たせない (FR65・ADR-0045 §2 (2)) <span class="drg">CTX5</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR6</td><td>prompt の経路を軽く保ち、 器の外の server や道具の書き出しに依らず、 段の順 (問い → 結び → 実在 → 未反映) に着地できる <span class="drg">CTX3・CTX4</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR7</td><td>足すものを最小にし、 消すものを名指す (C17.2) <span class="drg">CTX6・CTX7</span></td></tr>
+</tbody></table>
+</div>
+<section data-component="chapter-deck-band" class="tint-violet"><span class="num">03</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5"/></svg> 検討した選択肢 / 3 つの確定方式</span><h2>それぞれの利点と欠点を並べる</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-03">候補を 7 つ並べます。 台帳の問いと持ち主の全部の文の記録と結びの口を置き、 引用を文字で数える案 (選んだ案)、 席が言葉を打つ今の口を残して引用の確かめだけを足す案、 別の project の裁定の画面の server だけが番号を出す案、 文書の道具が書き出す引用の一覧を読む案、 写していない裁定がある間は全部の便を止める案、 問いが開いている間だけ持ち主の文を記録する案 (持ち主は裁定で全部を記録する案を採りました)、 写し先の種類を 5 つに分ける案です。</p></section>
+<div class="chapbody">
+<div class="opt-grid">
+<div data-component="adr-option-card" class="chosen">
+<div class="opt-head"><span class="opt-id">OPT1</span><span class="opt-name">台帳の問いと、 持ち主の全 prompt の発話 event と、 結びの口を置き、 引用の実在と未反映を字の数えで判じる</span><span class="opt-verdict chosen">採用</span></div>
+<p class="opt-sum">器が問いとして読む記録を label intake:question の台帳の問い (4 行と effect の 2 値) に閉じ、 台帳の lint と起動の列はこの label の bead を契約にも memo にも数えない。 起票の門は席の道具の呼び出しの 3 形を断り、 席が起こした子 process の書きは門の外で通す。 器の hook が持ち主の prompt を問いの有無に依らず発話 event に記帳し、 その turn に発話の ts だけを返す。 席は seat ruling bind で問いと発話を結び、 器が裁定 id を発行して裁定の行・close・裁定 event を書く。 席が逐語を打つ口 seat ruling add は消す。 ruling-check を宣言した repo では、 FR83 と FR84 が共有する閉じた規則が追跡された file の字から裁定 id の形を数え (問い id の形は台帳の接頭辞のものだけ・batch: と policy: の形と線の後の時刻の形は ruling-fixtures の一覧に在る字面を外す・batch: と policy: の形は束の欄にも解ける)、 受付で断り、 着地では FR10 の留めに掛ける。 未反映の裁定は、 それを引く契約と問いに blocks される契約だけを待たせる。 決め手は分析 (OPT2〜OPT7 の欠点) と裁定 00:05Z・00:54Z、 記録の範囲は裁定 09:04Z (全 prompt を記録する推奨を採る)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT1">選んだ案です。 席から持ち主への問いは、 台帳に決まった形 (概要・技術・理由・推奨の 4 行と、 答えを文書へ写すべきかの印) で立てます。 器の名を書いた目印を持つ repo で、 持ち主が器の plugin を積む対話の session に打った文は、 問いの有無に依らず、 AI が読む前に器が一字一句そのまま記録し (器が自分で差し込んだ行・別の session から届いた文・実装役と審査役の AI の文は除きます)、 席にはその記録の番号だけを返します。 席は結びの口で問いと記録を結び、 器が裁定の番号を出して、 問いに答えの 1 行 (持ち主の言葉は記録から写す) を書き、 問いを閉じます。 席が言葉を打つ今の口は消します。 問いの印を持つ記録は、 台帳の点検にも便を起こす列にも数えません。 選んだ repo では、 文書が引く裁定の番号を器が文字の形で数えて台帳に本当に在るかを確かめ、 文書へ写していない裁定は関わる契約だけを待たせます。 数えるのは、 この repo の台帳の番号の頭 (接頭辞) で始まる問いの番号と、 宣言の見本の一覧 (ruling-fixtures) に無い batch: と policy: の形と、 同じ一覧に無い、 選んだ後に足した時刻の形だけで、 batch: と policy: の形は台帳の答えの行の束の欄にも解けます。 良い点は、 裁定の字が器の記録した持ち主の字からだけ写って席の手順に字を打つ口が無く、 問われる前の指示も結べ、 ほかの便を止めず、 test の見本は断られず、 持ち主の文の経路で台帳も git も読まないことです。 代わりに、 持ち主の文が全部手元の記録に残って打つたびに伸び (消す口は無い)、 打つたびに記録の鍵を取るので鍵の待ちが長い host では遅れうり、 結ばれない文の数は会話の量を映すだけで、 版を跨ぐ約束が増え、 席が記録へ偽の発話を直に書き足すか器の hook を偽の入力で撃てば偽の発話を作れ、 席が起こした別の process からの書き込み (台帳の書き込みの門の外) も塞がず、 文字の数えは意味を読まず (番号を引くだけで写したことになり、 形の偶然の一致も数える)、 結びの口は撃つ人の役割を見ず、 便の承認の言葉は席が打つまま残り、 同じ秒の文は結べず、 器の便でない変更が足す裁定の欄は doctor の数えでしか見えず、 止めた便は解く手が来るまで待ち続け、 見本の字を一覧に並べる手が要り (古い項目が残るとその字はいつまでも数えられない)、 一覧へ足すのに裁定は要らないので一覧は裁定なしに開く抜け道でもあり (歯止めは足した差分が見えることと一字違わない一致だけ)、 頭を打ち違えた番号も数えずに通ることを引き受けます。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>裁定の逐語は hook が記録した持ち主の字からだけ写り、 席の手順の中に字を打つ口が無い (DR1)</li>
+<li>問われる前の指示も発話として残り、 問いを後から起こして結べる (DR2)</li>
+<li>引用の実在を受付と着地が確かめ、 bead の id だけの判断の欄<span class="term" data-component="plain-language-term-inline" data-term="判断の欄">裁定を書く欄</span>や opt-in の線<span class="term" data-component="plain-language-term-inline" data-term="opt-in の線">検査を始めた commit</span>の後の時刻の形を通さない。 数えは id の形だけを見るので文書の書式に依らない (DR3)</li>
+<li>未反映は関わる契約だけを待たせ、 写す変更 (器の便でない変更) は止めない (DR4)</li>
+<li>発話の記録は状態を持たず、 逐語を席へ運ぶ読み手を持たない。 席へ返すのは発話の ts だけ (DR5)</li>
+<li>hook は台帳も git も読まず event を 1 行足すだけで、 器の外の server にも道具の書き出しにも依らず、 段の順に着地できる (DR6)</li>
+<li>消すもの (席が逐語を打つ口・新しい裁定の時刻の id・doctor の同じ分の突合) を名指して足す (DR7)</li>
+<li>test の code の見本と決まった done の文の見本は、 ほかの接頭辞の問い id の形か ruling-fixtures の一覧で外れて門に断られず、 束の欄にも解くので消費側の台帳の束の欄の id も引ける (DR3・DR6)</li>
+<li>台帳の問いは型でなく label で lint と起動の列から外すので、 問いを型 task で立てる消費側の台帳でも、 問いが設計 pointer の無い契約として名指されも待たされもしない (DR6)</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>持ち主の prompt が全部、 長さに依らず手元の event log に逐語で残り (雑談や誤って打った秘密の字も)、 log は prompt のたびに 1 件ずつ伸びる。 log は host の置き場に在り、 追跡も公開もしないが、 記録を消す口は器に無い (N1)</li>
+<li>prompt のたびに hook が event log の lock を取って 1 行足すので、 lock の待ちが長い host では prompt が遅れうる (hook の時間の予算は無い)</li>
+<li>結ばれない発話が大半になり、 計測の別の欄の本数は会話の量を映すだけで、 指示の量とは読めない</li>
+<li>event の kind 1 つ・裁定 event の key 2 つ・vessel 宣言の key 2 つ (ruling-check と ruling-fixtures)・起動の列の待ち理由 1 つ・受付の断りが増え、 跨版の面が広がる。 古い版の読み手は未知の kind と key を読めない (ADR-0037 と同じ代償)</li>
+<li>席が event log を直に書くか、 hook の口を偽の入力で撃てば、 偽の発話を作れる。 器はこの経路を塞がず、 塞ぐのは手順の中の口 (字を打つ口の不在と起票の門) だけである。 起票の門は席の道具の呼び出しにだけ掛かり、 席が Bash から起こした子 process の書き (消費側の裁定面の server など) は門の外で通るので、 子 process を通した裁定の行も塞がない</li>
+<li>字の数えは意味を読まないので、 id を引くだけで未反映は解け、 引用が本当に裁定を写したかは確かめない。 形の偶然の一致も数える</li>
+<li>ruling-check を選んだ repo (器自身も) は batch: と policy: の形と線の後の時刻の形の見本を ruling-fixtures に並べる手が要り、 一覧に古い項目が残るとその字面はいつまでも数えられない。 一覧に項目を足す差分は裁定を要らないので、 一覧は裁定なしに開く免除の口で、 載せた字面は台帳に解けなくても受付と着地を抜ける。 歯止めは、 足した項目が差分として着地の審査に見えることと、 載せた字面が一字違わない完全一致でしか外れないことの 2 つだけである (どの版の宣言を読むか・差分が自ら足した項目で自分を外せるかは設計 § が決める)。 自分の接頭辞の問い id の形の見本は一覧で外せず、 ほかの接頭辞の問い id の形は、 接頭辞を打ち違えた引用でも数えずに通る</li>
+<li>結びの口は承認の受理面でないので撃ち手の役割を確かめない (証拠は発話で、 断りは 4 形に閉じる。 R-C7-1 の役割の確かめは便の承認 pipe approve にだけ残る)。 登録 row の無い、 持ち主が自分で開いた session の発話も裁定になる</li>
+<li>便の承認 (pipe approve) の逐語は席が打つ形のまま残り、 同じ秒に 2 つの session で打たれた発話は id で一意に指せず結べない</li>
+<li>器の便でない変更は着地の判定を通らないので、 そこで足した判断の欄の引用は doctor の数えでしか見えない</li>
+<li>着地の留めは撃ち直しの上限に数えないので、 解く手 (裁定を結ぶ・文書へ写す) が来るまで便は Gated に留まり続ける (理由の event は便ごとに 1 件で増えない)</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT2</span><span class="opt-name">席が逐語を打つ今の口 (seat ruling add) を残し、 引用の実在の検査だけを足す</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">seat ruling add と時刻の id をそのまま使い、 追跡された file の引用が RulingReceived に解けるかだけを確かめる。 決め手は分析 (字が持ち主のものかを確かめられない)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT2">席が持ち主の言葉を打つ今の口を残し、 文書が引く番号が記録に在るかだけを足して確かめる案です。 器の変更が小さく、 持ち主の文を全部は記録せず、 口を撃てる席を対話の席に限る確かめも残る点で勝ります。 けれども、 言葉は席が打つので、 言い換えや記憶違いも同じ形で通り、 字が持ち主のものかは確かめられません。 答えが何の問いへのものかも残らず、 写し忘れを数えられず、 時刻の番号は同じ分の裁定を区別できないので退けました。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>器の変更が小さい。 hook に記帳を足さず、 口・歯・doctor の突合をそのまま使う</li>
+<li>持ち主の prompt を全部は記録しないので、 手元の log に持ち主の字が溜まらない</li>
+<li>口の撃ち手を対話面の席に限る確かめ (R-C7-1) が残る</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>逐語は席が打つ字で、 言い換え・記憶違い・聞いた気がする判断も同じ形で通る。 実在の検査は「その event が在るか」までで、 字が持ち主のものかは確かめない (DR1)</li>
+<li>裁定が何への答えかが残らず、 文書へ写すべきかも分からないので、 未反映を数えられない (DR4)</li>
+<li>時刻の id は分までで、 同じ分の裁定を一意に指せない (ADR-0037 の代償のまま)</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT3</span><span class="opt-name">裁定面の server だけが裁定 id を発行する (消費側の project の形に加わる)</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">持ち主は裁定面の画面に答えを書き、 その server が id を発行して台帳へ書く。 器は発話を記録しない。 決め手は分析 (scribe2 の持ち主はその面を通らず、 器の門が器の外の server に依る)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT3">別の project が既に使う形に加わり、 持ち主が裁定の画面に答えを書くと、 その server だけが番号を出して台帳へ書く案です。 席は字を打てず、 番号を出す所が 1 つに閉じ、 器は持ち主の文を記録せず hook に記帳も足さず、 答える場所が会話と分かれて明快な点で勝ります。 けれども、 その画面と server は器の外の別の project のもので、 scribe2 の持ち主は端末の対話で答えるので加われません。 器の門の働きが外の server の有無に依り、 server の無い repo では記録できず、 会話の中で出た指示は画面へ書き直さない限り結べないので退けました。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>消費側の project の 1 つが既に使う形で、 持ち主が画面に書いた字を server が記録するので、 席は字を打てない</li>
+<li>id の発行が 1 か所に閉じ、 器は hook に記帳を足さない</li>
+<li>答えを書く面が会話から分かれ、 何に答えたかが画面で明快</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>裁定面は消費側の project が持つ器の外の server で、 scribe2 の持ち主は端末の対話の session で答える。 scribe2 はその面に加われない (DR6)</li>
+<li>器の門の働きが器の外の server の在否に依り、 server を持たない repo では裁定を記録できない (DR6)</li>
+<li>会話の中で出た指示は画面へ写し直さない限り記録されず、 問われる前の指示を結べない (DR2)</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT4</span><span class="opt-name">引かれた id の集合を、 文書の道具の側 (隣の project) の書き出しから読む</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">字の数えを器に置かず、 文書を生成する道具が引用の集合を書き出し、 器はそれを読む。 決め手は分析 (書き出しの着地を待つと段の順が崩れる)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT4">文書が引く番号を器が文字で数えるのでなく、 文書を作る道具 (隣の project) が引用の一覧を書き出し、 器はそれを読む案です。 文書の構造を知る読み手が拾うので偶然の一致を数えず、 読み手が 1 つに揃って器は字を数える仕組みを持たずに済み、 どの欄の引用かまで分かる点で勝ります。 けれども、 書き出しが出来上がるのを待つので、 確かめと未反映の段の着地が後ろへずれて順が崩れ、 器が隣の project の版に依り、 その道具を使わない repo や、 規則の表と code の中の番号を数えられないので退けました。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>文書の構造を知る読み手が引用を拾うので、 形の偶然の一致を数えない</li>
+<li>文書の読み手が 1 つに揃い、 器は字を数える関数を持たない</li>
+<li>引用がどの節のどの欄に在るかまで分かる</li>
+<li>文書の構造で見本と引用を分けるので、 見本の一覧も接頭辞の限りも要らない</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>書き出しの着地が先に要り、 実在と未反映の段の着地がその後になる (段の順が崩れる) (DR6)</li>
+<li>書き出しの形式が器の跨版の約束に加わり、 器が隣の project の版に依る (DR6)</li>
+<li>その道具を使わない repo の引用と、 rules manifest や code の中の字は数えられない (DR3)</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT5</span><span class="opt-name">未反映の裁定が在る間は起動の列の全部を待たせる</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">床の検査と同じく、 未反映が 1 件でも在れば列の全部を待たせる。 決め手は分析 (関わらない契約まで止まる)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT5">文書へ写していない裁定が 1 つでも在る間は、 起こす便を全部待たせる案です。 写す手が最優先になり、 判定が単純で、 全部を待たせる前例と同じ形の点で勝ります。 けれども、 その裁定に関わらない契約まで止まり、 写す手 1 つの遅れが全部の便を止めます。 写す変更の多くは器の便でないので、 便を止めても写す手は速くならないので退けました。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>写す手が最優先になり、 未反映が長く残らない</li>
+<li>判定が単純で、 引く bead や blocks の辿りが要らない</li>
+<li>列の全部を待たせる先例 (HostBusy) と同じ型</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>裁定に関わらない契約まで止まり、 写す手 1 つの遅れが host の全部の便を止める (DR4)</li>
+<li>写す変更の多くは器の便でないので、 列を止めても写す手は速くならない (DR4)</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT6</span><span class="opt-name">発話を、 開いた台帳の問いが在る周だけ記録する (grill の推奨)</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">hook が prompt ごとに開いた問いが在るかを見て、 在る周だけ発話を記録する。 grill の論点 6 の推奨で、 00:54Z の常設の指示が承けていた形。 問われる前の指示は、 問いを起こした後に持ち主が言い直せば結べる。 決め手は分析 (問われる前の指示を言い直さずには結べず、 開いた問いを prompt の経路で知る手が要る) と裁定 09:04Z (持ち主は全 prompt を記録する推奨を採った)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT6">持ち主の文を、 台帳の問いが開いている間だけ記録する案です。 議論の中で最初に推された形です。 手元に残る持ち主の文が少なく (雑談や誤って打った秘密の字が残りにくい)、 記録の多くが答えの候補になり、 「問いへの答えだけを記録する」と目的が明快で、 発言を全部持った前の器の直命の表との違いが誰にも分かり、 問われる前の指示も、 問いを立てた後に言い直せば結べる点で勝ります。 けれども、 持ち主は問われる前に指示を出すことが多く、 結ぶには言い直してもらう手が要ります。 また、 問いが開いているかを知るには、 文を打つたびに台帳を読む (1 回約 0.35 秒かかる) か、 便を起こす周に器が書く一覧を読む (問いを立てた直後の答えが次の周まで記録されない) かのどちらかになり、 結果が問いの立て方の順に依ります。 持ち主は裁定 (2026-09-28T09:04Z) で全部を記録する推奨を採ったので退けました。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>記録が問いの在る周に限られ、 手元の event log に残る持ち主の字が少ない (雑談や誤って打った秘密の字が残りにくい)</li>
+<li>記録した発話の多くが答えの候補になり、 結ばれない発話の本数が小さく、 計測の別の欄が読みやすい</li>
+<li>「問いへの答えだけを記録する」と目的が字面で明快で、 発言を全部持った直命の表との違いが誰にも分かる</li>
+<li>問われる前の指示も、 問いを起こした後に持ち主が言い直せば結べる</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>持ち主は問われる前に指示を出すことが多く、 その字は残らず、 結ぶには持ち主に言い直してもらう手が要る (DR2)</li>
+<li>hook が開いた問いを知るには、 prompt ごとに台帳を読む (1 回約 0.35 秒が prompt の経路に入る) か、 dispatch の周が書く置き場の file を読む (問いを起こした直後の答えが次の周まで記録されない) かのどちらかになる (DR6)</li>
+<li>答えが問いを開く前か後かで扱いが分かれ、 結果が席の問いの起こし方の順に依る (DR2)</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT7</span><span class="opt-name">effect を 5 値 (srs / rules / adr / note / none) にする</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">問いの時点で答えを写す置き場の種類を名指す。 決め手は分析 (器の判定に要るのは写すべきかだけ)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT7">問いの時点で、 答えを写す先の種類を 5 つ (要件書・規則の表・決定記録・メモ・写さない) から選ぶ案です。 写す先が早く分かり、 置き場ごとに数えられ、 写さない理由を分けて持てる点で勝ります。 けれども、 器は main の文字を数えて写したかを判じるので、 写す先の種類は判定を変えません。 要るのは写すべきかどうかの 2 つだけで、 値が増えると門と test が増え、 1 つの答えを複数の場所へ写す問いに合わず、 選ぶ時の迷いも増えるので退けました。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>写す先の種類が問いの時点で分かり、 写す手が迷わない</li>
+<li>置き場ごとに件数が見え、 写しの確かめを置き場に絞れる</li>
+<li>写さない理由 (note・none) を分けて持てる</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>未反映は main の追跡された file の字で判じるので、 置き場の種類は判定を変えない。 器に要るのは「文書へ写すべきか」の 2 値だけ (DR7)</li>
+<li>閉じた値と起票の門の歯が増え、 1 つの答えを複数の置き場へ写す問いに合わない</li>
+<li>note と none と operation の違いが曖昧になり、 起票の時点の迷いが増える</li>
+</ul></div></div>
+</div>
+</div>
+</div>
+<section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの方式を選ぶか</span><h2>選んだ方式と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、 それが支える要件です。 問いは台帳の問いの形に閉じ、 問いの印を持つ記録は台帳の点検にも便を起こす列にも数えません。 台帳の書き込みの門は、 席が自分の道具で撃つ書き込みだけを見ます。 持ち主の文は問いの有無に依らず器が一字一句記録し、 席にはその記録の番号だけを返します。 席は結びの口で問いと記録を結び、 器が裁定の番号を出して問いに答えの 1 行を書き、 問いを閉じます。 この記録は前の器の直命の表ではなく、 席へは運びません。 結びの口は承認を受ける口ではなく、 便の承認の言葉は席が打つ今の形のまま変えません。 選んだ repo では文書が引く裁定の番号が本当に在るかを器が確かめ (test などの見本は、 ほかの頭の番号か宣言の一覧で外します)、 確かめられない変更の着地は止めて待たせ、 文書へ写していない裁定は、 それに関わる契約だけを待たせます。</p></section>
+<div class="chapbody">
+<div data-component="adr-decision-panel" id="decision">
+<p class="dec-kick">採用 — OPT1</p>
+<p class="dec-state">本 ADR は裁定の行について C7.2 の「user の逐語」を器の hook が prompt の入口で記録した字と読み (席の打ち直しは逐語でない・pipe approve の逐語は読みの外)、 C5 の「裁定 id」を ruling-check の repo では閉じた台帳の問いの裁定の行に解ける id と読む。 (1) 起票の門 SHALL 席の道具の呼び出しの 3 形を実行の前に断る: label intake:question の create が 4 行か effect の 2 値を欠くか外れる書き・notes に裁定の行を足す書き・引き金の行の無い memo の書き (形は別の決定記録)。 席が起こした子 process の書きは門の外。 この label の bead は台帳の lint と起動の列が契約にも memo にも数えない。 (2) marker が器の名を言う repo で、 器の hook SHALL user が器の plugin を積む対話の session に打った prompt を、 model が読む前に、 問いの有無に依らず逐語のまま event kind UtteranceReceived (actor が human) に 1 件記帳し、 その turn へ発話の ts だけの 1 行を返す。 器が入力欄へ差し込んだ行 (FR44 の全種)・別の session からの包み・runner と lens は記帳しない。 (3) 口 seat ruling bind SHALL 問いの id と発話の ts を受け、 その ts の発話がちょうど 1 つ在って未だ結ばれず、 問いが開いた台帳の問いである周だけ (問いは発話の後でよい)、 裁定 id &lt;問い id&gt;:&lt;YYYYMMDDTHHMMZ&gt;-1 (時分は発話の分) を発行し、 問いの notes に裁定の行 (4 欄・逐語は発話 event から写して最後の欄) を書き、 close_reason「裁定 &lt;裁定 id&gt;」で閉じ、 裁定 event<span class="term" data-component="plain-language-term-inline" data-term="裁定 event">裁定を結んだ記録</span> (RulingReceived に key ruling と utterance) を記帳する。 ほかの周は何も書かずに断る。 seat ruling add SHALL 消える。 (4) 発話 event SHALL 直命の表でない: 状態を持たず、 使い道は bind の写し元と到達点の計測の分類だけで、 逐語を起動行・圧縮の直前の枠・合図・通知・一覧へ運ばない。 (5) main (着地では便の base) の vessel 宣言が ruling-check = true の repo で、 器 SHALL 追跡された file の字から閉じた 3 形 (問いの部分が台帳の接頭辞で始まる問い id の形・batch: と policy: で始まる形) と時刻の形を FR84 と同じ閉じた規則で数え (意味は読まない・ほかの接頭辞の問い id の形は数えない)、 batch: と policy: の形と opt-in の線の後の時刻の形は key ruling-fixtures (字面の閉じた一覧・完全一致だけ・書式は何も外さない) に在れば数えない。 batch: と policy: の形は裁定の行の裁定 id の欄か束の欄に解ける。 受付は設計の節と契約表の行が引く解けない id と線の後に足した時刻の形を名指して断る。 着地は、 それらを足す差分と、 数える問い id の形の id を持たずに判断の欄を足すか変えるか ruling-check を true から外す差分を FR10 の留めに掛け (Gated・理由の event は便ごとに 1 件)、 当たった id か欄を名指す。 bead の id だけの欄は数えず、 線の前の引用は doctor が数えるだけ。 (6) effect が document の閉じた問いの裁定 id を main の追跡された file が 1 つも引かない間 (未反映の裁定・ruling-check に依らない)、 器 SHALL 周ごとに置き場の file・doctor の行・tick の alarm unreflected に出し、 その id を acceptance か notes で引く契約と問いに blocks される契約だけを待ち理由 unreflected-ruling:&lt;id&gt; で待たせ、 その便の着地も FR10 の留めに掛ける。 器の便でない変更は止めず、 経過時間を使わず、 operation は数えない。</p>
+<span class="dec-plain" data-prose-slot="plain" data-slot-id="decision-plain">決めたことを 6 つにまとめます。 まず読み方として、 裁定の行については、 持ち主の言葉とは器が記録した字のことで、 席が打ち直した字は言葉と数えません (便の承認の言葉はこの読みの外で今のまま)。 1 つ目、 席から持ち主への問いは、 台帳に「問い」の印を付け、 概要・技術・理由・推奨の 4 行と、 答えを文書へ写すべきか (document) 操作で済むか (operation) の印を持つ形で立てます。 台帳の書き込みの門は、 形の欠けた問い・席が自分で書く答えの行・引き金の行の無いメモの 3 つを止めます (メモの形は別の決定記録が持ちます)。 門が見るのは席が自分の道具で撃つ書き込みだけで、 席が起こした別の process (別の project の裁定の画面の server など) の書き込みは通します。 問いの印を持つ記録は、 台帳の点検にも便を起こす列にも数えません。 2 つ目、 器の名を書いた目印 (.vessel) を持つ repo では、 持ち主が対話の session に打った文を、 問いの有無に依らず、 AI が読む前に器が一字一句記録し、 席にはその記録の番号だけを返します。 器が自分で差し込んだ行・別の session から届いた文・実装役と審査役の AI の文は記録しません。 3 つ目、 席は結びの口で問いと記録を結び、 器が裁定の番号 (問いの番号・持ち主が打った時分・末尾の 1) を出し、 問いに答えの 1 行を書いて閉じ、 裁定の記録を残します。 1 つの記録は 1 つの裁定にだけ使い、 席が言葉を打つ旧い口は消します。 4 つ目、 この記録は前の器の直命の表ではなく、 状態を持たず、 席へは運びません。 人の手の数えには入れず、 結んだものは承認の側に、 結ばれない数は別の欄に出します。 5 つ目、 宣言の file で ruling-check を選んだ repo では、 文書が引く裁定の番号を器が文字の形で数え、 台帳に無い番号や、 選んだ後に足した旧い時刻の形を受付で断り、 着地でも止めます (止めた便はそのまま待たせ、 理由を 1 回だけ記録し、 撃ち直しの回数には数えません。 ruling-check を外す変更にも裁定の番号が要ります)。 規則の表・決定記録の承認・設計の節の裁定の欄を足すか変える変更も、 この repo の台帳の頭で始まる問いの形の裁定の番号を 1 つ以上持たないと着地で止め (ほかの頭の番号だけの欄は持たないのと同じ)、 台帳の記録の番号だけの欄は数えません。 選ぶ前から在る時刻の形は doctor が数えるだけです。 数えるのは、 この repo の台帳の番号の頭 (接頭辞) で始まる問いの番号だけで、 ほかの頭の番号は引用に数えず、 設計の節などに在っても断りません。 batch: と policy: の形と選んだ後の時刻の形は、 宣言の file の ruling-fixtures (見本の字をそのまま並べた決まった一覧) に一字違わず在れば数えず、 backtick などで囲んでも外れません。 batch: と policy: の形は、 消費側の台帳の答えの行の裁定の番号の欄か束の欄に一致すれば解けます。 6 つ目、 文書へ写すべき裁定を main のどの file も引いていない間は、 それを引く契約と問いを待つ契約だけを待たせ、 doctor と tick の合図で知らせます。 器の便でない写す変更は止めず、 経った時間では判じません。</span>
+<span class="dec-why" data-prose-slot="rationale" data-slot-id="decision-rationale">裁定の証拠を持ち主が打った字だけにしたのは、 憲法 C7.2 が承認に持ち主の逐語を求め、 その人の層が会話の記憶を承認の根拠にしないと書くのに、 今の口では席が打ち直した言い換えや記憶違いも同じ形で通るからです。 器が prompt の入口で字を記録し、 席には結ぶ手だけを渡せば、 裁定の字は席の注意に頼らず器が記録した持ち主の字からだけ写ります (記録へ直に書き足すか hook を偽の入力で撃つ偽造は代償として残ります)。 この読みは裁定の行に絞り、 便の承認の逐語は変えません。 結びの口が撃つ席の役割を確かめないのは、 憲法が C7 の対話面を通すと書くのは A1・A3・A4.2 の承認で、 A2 が求めるのは裁定 id を伴う裁定だと読むからです (C7 の機構の欄の「A1〜A4 の承認はすべてこの経路」は承認の受理面を 1 つに保つ文と読み、 承認と役割の確かめは便の承認 pipe approve に残ります。 この読みは orchestrator の読みで、 持ち主が異を唱えれば改めます)。 裁定の証拠は、 席の役割でなく持ち主が打った字の記録です。 記録を問いの有無に依らず全部にしたのは、 持ち主が裁定 09:04Z で全 prompt を記録する推奨を採ったからで、 持ち主は問われる前に指示を出すことが多く、 問いの開閉を見るには文ごとに台帳を読むか古い一覧を読むしかないからです。 代わりに event log は prompt のたびに伸び、 手元に残る字の重さは代償として引き受けます。 前の器の直命の表との違いは、 記録が状態を持たず、 席へ運ぶ読み手を持たないことで、 席へ返すのは番号だけです。 人の手の数えから発話を外したのは、 会話と指示が混ざり機械では分けられないからで、 結ばれない数は隠さず別に出します。 番号の実在を文字の形で数えるのは、 数えは番号の形だけを見るので文書の書式に依らず、 文書の道具の書き出しを待たずに段の順に着地できるからで、 数えるだけで意味は読まず、 形の偶然の一致も数えることは代償として引き受けます。 消費側の台帳が自分の経路で書く答えの行も同じ数えで解けます。 判断の欄に問いの形の番号を求め、 台帳の記録の番号だけを数えないのは、 台帳の記録の番号に席の判断を添えた字が、 裁定の欄として形の検査を通った実測があるからです。 選んだ時点より前の時刻の形を数えるだけにするのは、 引用を持つ 70 本の file のうち 32 本が書き換えない凍った決定記録だからで、 ruling-check を外す変更に裁定を求めるのは、 裁定なしに門を外せないようにするためです。 ruling-check は規則の表の値でなく、 ADR-0010 の置き場の読みどおり repo が自分について名乗る宣言として読みます。 検査を測らないと名乗る ADR-0054 の key と逆に検査を強める向きなので、 manifest に上限の行を置かず、 外すときに裁定を求めます。 数えを自分の台帳の頭の番号に絞り、 見本の字を宣言の閉じた一覧で外すのは、 test の code の見本や決まった done の文の見本まで断ると、 器自身の歯と消費側の repo の見本が通らなくなるからです (orchestrator の決定・持ち主の常設の指示 00:54Z の下)。 外れるのは一覧に一字違わず書いた字だけで、 書式や型では外れません。 ただし一覧へ項目を足す差分に裁定は要らないので、 一覧は裁定なしに開く免除の口で、 歯止めは、 足した項目が差分として着地の審査に見えることと、 一字違わない一致の 2 つだけです。 項目ごとに持ち主の裁定を求めないのは、 見本の字を並べるだけの是認の問いになり、 そうした問いは出さない決まり (要件カタログ R-F7) だからです。 代わりに、 見本を一覧に並べる手と、 裁定なしに足せる免除の口と、 古い項目が残る間その字が数えられないことと、 頭を打ち違えた番号が数えずに通ることは引き受けます。 batch: と policy: の形を束の欄にも解くのは、 消費側の台帳がその欄にも同じ形の id を書くからで、 結びの口が書く行は束の欄を持たないので本 repo の数えは変わりません。 問いの印を型でなく label で見るのは、 消費側の台帳が問いを型 task で立てるからです。 門を席の道具の呼び出しにだけ掛けるのは、 消費側の裁定面の server のように席が起こした別の process が自分の経路で答えの行を書くのを止めないためで、 その経路の偽造は代償として引き受けます。 未反映で関わる契約だけを待たせ、 着地の留めを撃ち直しの回数に数えないのは、 解く手 (裁定を結ぶ・文書へ写す) の多くは便の外に在り、 撃ち直すだけでは解けないからで、 理由は便ごとに 1 回だけ記録して周ごとに増やしません。 経った時間を使わないのは、 時間は写したかどうかと関係が無いからです。</span>
+<div class="justify-box"><p class="jh">この判断が正当化する要件 (cross-doc 照会 → SRS-SCRIBE2-MVP)</p>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR81" data-justifies-req="FR81" data-justifies-role="claim">FR81</a><span class="justify-role">claim</span><span class="justify-note">FR81 (起票の門の 3 形) のうち、 形の欠けた台帳の問いの create と notes に裁定の行を足す書きの 2 形の根拠と、 門が席の道具の呼び出しにだけ掛かり子 process の書きを通す根拠と、 器が問いとして読む記録を label intake:question の bead に閉じ、 この label を持たない create に形の検査を掛けない根拠。 引き金の行を持たない memo の形は別の決定記録が持つ。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR82" data-justifies-req="FR82" data-justifies-role="claim">FR82</a><span class="justify-role">claim</span><span class="justify-note">FR82 (発話の記帳と裁定の結び) の、 全 prompt の発話 event (裁定 09:04Z)・除く行 (器が差し込んだ行の全種と包み)・marker の repo の範囲・seat ruling bind・裁定 id の形 (bind は -1)・裁定の行・close_reason・裁定 event・4 つの断り・seat ruling add の退役の根拠。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR83" data-justifies-req="FR83" data-justifies-role="claim">FR83</a><span class="justify-role">claim</span><span class="justify-note">FR83 (裁定 id の実在) の、 ruling-check の opt-in と線 (main の宣言で、 着地では便の base の宣言で判じる)・閉じた 3 形と時刻の形の数え (問い id の形は台帳の接頭辞のものだけ・ruling-fixtures の一覧の字面を外す)・batch と policy の解け先 (裁定 id の欄か束の欄)・受付の断りと着地の FR10 の留め・判断の欄・問い id の形の id を足さずに ruling-check を true から外す差分の留め・doctor の行の根拠。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR84" data-justifies-req="FR84" data-justifies-role="claim">FR84</a><span class="justify-role">claim</span><span class="justify-note">FR84 (未反映の裁定) の、 未反映の定義と、 関わる契約だけを待たせ着地の周はその便を FR10 の留めに掛けて器の便でない変更を止めない範囲・0 件の周の空の列と doctor の行と alarm の消失・経過時間を使わないこと・operation を数えないこと・ruling-check に依らないことの根拠。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR22" data-justifies-req="FR22" data-justifies-role="claim">FR22</a><span class="justify-role">claim</span><span class="justify-note">FR22 (人手 0 の計測) の改訂の根拠。 発話 event を人由来の数えに入れず、 結んだ発話は裁定 event として承認の側に数え、 結ばれない発話の本数を別の欄に出す。 発話は会話と指示が混ざり機械で分けられないので、 混ぜずに別に見せる。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR65" data-justifies-req="FR65" data-justifies-role="claim">FR65</a><span class="justify-role">claim</span><span class="justify-note">FR65 (直命の表・廃止) の改訂の根拠。 user の逐語が載る記録を承認 event (FR16) と発話 event と裁定の行 (FR82) にし、 発話 event を裁定の行の写し元と到達点の計測の分類 (FR22) にだけ使い、 状態を持たせず席の指示文にも復元にも運ばない、 という直命の表との線を引く (ADR-0045 §2 (2) の削除は保つ)。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR10" data-justifies-req="FR10" data-justifies-role="implementation">FR10</a><span class="justify-role">implementation</span><span class="justify-note">FR10 (land の前提) に FR83 と FR84 の着地の留めを足す実装側。 FR50 の留めと同じく、 便を Gated に留めて理由の event を便ごとに 1 件だけ記帳し (同じ理由が続く周は記帳し直さない)、 撃ち直しの上限 (FR11) に数えず Failed にしない (AC23・AC53・AC54)。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR27" data-justifies-req="FR27" data-justifies-role="implementation">FR27</a><span class="justify-role">implementation</span><span class="justify-note">FR27 (管理 tick) の打刻の合図の末尾の alarm (閉じた語 unreflected と floor) に語 unreflected を足す実装側。 alarm は置き場の file だけを読んで決め (台帳も git も撃たない)、 合図を送らない周の席 (FR78 で止めた席・梯子の列が尽きた席) には doctor の行だけが知らせる。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR68" data-justifies-req="FR68" data-justifies-role="implementation">FR68</a><span class="justify-role">implementation</span><span class="justify-note">FR68 (便の自動起動) の起動の列から台帳の問い (label intake:question) を外し、 待ち理由に unreflected-ruling を足す改訂の実装側。 待つのは未反映の裁定を acceptance か notes で引く契約と、 問いに blocks される契約だけ。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR51" data-justifies-req="FR51" data-justifies-role="implementation">FR51</a><span class="justify-role">implementation</span><span class="justify-note">FR51 (台帳の lint) で、 label intake:question の bead を epic と decision の型の bead と同じく契約にも memo にも数えず名指さない実装側。 型でなく label で外すのは、 消費側の台帳が問いを型 task で立てるから。</span></div>
+<p class="justify-tgt">照会先: SRS-SCRIBE2-MVP — SRS: 設計 → 契約 → 実装 → 検証 → land を、 人の手を借りずに 1 本通す器（MVP）</p>
+</div>
+</div>
+</div>
+<section data-component="chapter-deck-band" class="tint-warn"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> 結果 / 良い面とトレードオフ</span><h2>この判断で何が良くなり、 何を引き受けるか</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">この判断で良くなること 4 つと、 代わりに引き受けること 9 つです。 良くなるのは、 裁定の字が器の記録した持ち主の字からだけ写り、 席の手順に字を打つ口が無いこと、 問いと答えと写すべきかが台帳に残り写し忘れを器が数えること、 選んだ repo で確かめられない引用が成果に入らず、 test などの見本は断られないこと、 直命の表を戻さずに言葉を結べ、 結ばれない文の数も見えることです。 引き受けるのは、 持ち主の文が全部手元に残って打つたびに記録が伸び、 消す口が無いこと、 版を跨ぐ約束が増えること、 席が記録へ偽の発話を直に書き足すか器の hook を偽の入力で撃てば偽の発話を作れ、 席が起こした別の process からの書き込みも塞がないこと、 文字の数えは意味を読まず、 裁定を実装する契約は文書が先に番号を引くまで待つこと、 結びの口は承認を受ける口でなく撃つ人の役割を見ないこと、 便の承認や同じ秒の文などの穴が残り、 止めた便は解く手が来るまで待ち続けること、 旧い突き合わせが消え、 一度選ぶと裁定なしには外せないこと、 旧い口を使う test と設計を先に書き換える要があること、 見本の字を宣言の一覧に並べる手が要り、 その一覧へは裁定なしに足せ (歯止めは差分が見えることと一字違わない一致だけ)、 古い項目や頭を打ち違えた番号は数えずに通ることです。</p></section>
+<div class="chapbody">
+<div data-component="scope-summary-panel"><div class="scol in"><h3>✓ 良い結果</h3><ul>
+<li data-component="adr-consequence-pos"><span class="b">●</span>裁定の字は hook が記録した持ち主の字からだけ写り、 席の手順に字を打つ口が無い (偽造の経路は CSQ-N3)</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>問いと答えの組と、 答えを文書へ写すべきかが台帳に残り、 写し忘れを器が数え、 関わる契約だけを待たせる</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>ruling-check を選んだ repo では、 解けない引用・bead の id だけの判断の欄・opt-in の線の後の時刻の形が便の成果に入らず、 test の code と決まった done の文の見本 (ほかの接頭辞の問い id の形と ruling-fixtures の一覧の字面) は断られない</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>直命の表を戻さずに裁定の言葉を持ち主の字に結び、 結ばれない発話の本数も計測に見える (隠さない)</li>
+</ul></div><div class="scol out"><h3>⚖ トレードオフ・代償</h3><ul>
+<li data-component="adr-consequence-neg"><span class="b">●</span>持ち主の prompt が全部、 手元の event log に逐語で残って prompt のたびに伸び (lock の待ちが長い host では prompt も遅れうる)、 記録を消す口は器に無い</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>跨版の面が増える (kind 1・裁定 event の key 2・vessel 宣言の key 2 〔ruling-check・ruling-fixtures〕・待ち理由 1・受付の断り)。 古い版の読み手は未知の kind と key を読めない</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>偽の発話は event log の直の書きか hook の口の偽の入力で作れ、 器はそこを塞がない。 起票の門は席の道具の呼び出しにだけ掛かるので、 席が起こした子 process の書く裁定の行も通る</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>字の数えは意味を読まないので、 id を引くだけで未反映は解け、 形の偶然の一致も数える。 裁定を実装する契約がその id を引くと、 設計の節など器の便でない変更が先に id を main に載せるまで待つ (設計 → 契約の順を拘束する)。 batch: と policy: の形の字句は設計 § が閉じ、 code の名前付きの引数と型注釈 (main の .rs に 74 行) を拾わないようにする</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>結びの口は承認の受理面でなく撃ち手の役割を確かめない (R-C7-1 の役割の確かめは便の承認 pipe approve にだけ残る) ので、 持ち主が自分で開いた登録 row の無い session の発話も裁定になる</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>便の承認の逐語は席が打つ形のまま残り、 同じ秒の 2 つの発話は結べず、 器の便でない変更が足す判断の欄は doctor でしか見えない。 留めの便は解く手が来るまで Gated に留まる</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>doctor の同じ分の突合は消え、 ruling-check を持たない repo では裁定の引用を数えない。 一度選んだ repo は、 問い id の形の裁定なしに門を外せない</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>seat ruling add を使う歯・使い方の行・外形の snapshot と、 設計 dialogue-surface.md §4 の作法の行・fleet-event-log.md §9 を、 bind の実装より先に書き換える要がある</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>ruling-check を選んだ repo (器自身も) は batch: と policy: の形と線の後の時刻の形の見本を ruling-fixtures に並べる手が要り、 一覧に古い項目が残るとその字面はいつまでも数えられない。 一覧に項目を足す差分は裁定を要らないので、 一覧は裁定なしに開く免除の口で、 載せた字面は台帳に解けなくても受付と着地を抜ける。 歯止めは、 足した項目が差分として着地の審査に見えることと、 載せた字面が一字違わない完全一致でしか外れないことの 2 つだけである (どの版の宣言を読むか・差分が自ら足した項目で自分を外せるかは設計 § が決める)。 自分の接頭辞の問い id の形の見本は一覧で外せず、 ほかの接頭辞の問い id の形は、 接頭辞を打ち違えた引用でも数えずに通る</li>
+</ul></div></div>
+</div>
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">06</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> 改訂関係と原則 / この判断の位置づけ</span><h2>版の系譜と、 行き着く原則 (照会終端)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-06">この記録が版の系譜のどこに在るかと、 行き着く原則です。 ADR-0037 のうち、 席が言葉を打つ口 (とその席の確かめ)・時刻の番号・doctor の突き合わせの 3 点と、 ADR-0016 の「逐語は承認の記録にだけ」の規則を置き換えます。 ADR-0045 が消した直命の表は戻しません。 原則は、 持ち主の答えの証拠は持ち主が打った字の記録だけにし、 席はそれを指して結ぶだけ、 というものです。</p></section>
+<div class="chapbody">
+<div data-component="adr-supersession">
+<p class="ss-row"><span class="ss-k">改訂状態</span>current</p>
+<p class="ss-row"><span class="ss-k">置き換える ADR</span>ADR-0037, ADR-0016</p>
+<p class="ss-row"><span class="ss-k">置き換えられた</span>なし (現行)</p>
+<p class="ss-row">部分 supersede で、 ADR-0037 から置き換えるのは 3 点 — (a) 書き手の口 seat ruling add --words (席が逐語を打つ口と、 その対話面の席の確かめ・planner の雛形の「裁定を受けた turn で撃つ」の 1 行・この口に掛けた FR41 と FR67 の claim の edge) を、 発話を証拠に取る結びの口 seat ruling bind に (bind は承認の受理面でなく、 承認の記帳の権能 FR41 は便の承認 pipe approve に残る)、 (b) 裁定 id を器が打つ event の ts とする形を、 問い id の形に、 (c) doctor が rules 行の user &lt;時刻&gt; の欄ごとに同じ分の裁定 event を読む突合を、 ruling-check の repo の引用の実在の数え (FR83 の doctor の行) に。 保つのは RulingReceived の kind (actor が human・便を持たない・detail が逐語・到達点の計測で承認の側)・seat ruling ls・pipe report の rulings の数え。 設計 dialogue-surface.md §4 (orchestrator の作法の 5 本目の行が seat ruling add を撃たせる) と fleet-event-log.md §9 は、 FR82 の実装より先に着地する設計の行で書き直す。 ADR-0016 から置き換えるのは §2.3 の逐語の置き場の規則 (見出しの「user の言葉は承認 event でしか記帳しない」・規範文「user の逐語 SHALL 承認 event にだけ載る」・§4 の同じ句) で、 逐語は承認 event に加えて発話 event と裁定の行にも載る。 §2.3 の回答の口と経路は変えない。 ADR-0045 §2 (2) の直命の表の削除は保ち、 発話 event はその復活でない (決定 (4))。 ADR-0056 の起票の門と ADR-0010 の vessel 宣言は、 断りと key を足すだけで置き換えない。 ADR-0077 の裁定の指し示しの口には触れない (差し込む行を発話として記帳しないだけ)。</p>
+</div>
+<div data-component="adr-principle">
+<p class="prin-id">照会終端 — PRIN-THE-OWNER-TYPES-THE-RULING</p>
+<p class="prin-text">持ち主の答えの証拠は、 持ち主が打った字を器が記録したものだけにし、 席はその字を指して結ぶだけにする。 記録は裁定の写し元であって、 席へ運ぶ指示ではない。</p>
+<p class="prin-note">本 ADR が、 席が逐語を打つ口・器の外の server・問いの在る周だけの記録を退け、 発話を全部記録しつつ席へは id だけを返す形を採ったのはこの原則に行き着く (これ以上は遡らない照会終端)。 射程は裁定の証拠で、 便の承認 (pipe approve) の逐語には本 ADR では当てない。</p>
+</div>
+</div>
+<section data-component="chapter-deck-band" class="tint-brand"><span class="num">07</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg> 用語集 / この文書で使う専門語</span><h2>本文に出てくる専門語のやさしい説明</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-07">本文に出てくる専門語 11 個を、 やさしい言葉で説明します。</p></section>
+<div class="chapbody">
+<div data-component="glossary-term-table">
+<div class="grow"><div class="gword">台帳の問い<span class="en">ledger question</span></div><div class="gdef">席から持ち主 (user) への問いを記録する台帳の bead (label intake:question)。 本文に概要・技術・理由・推奨で始まる 4 行を、 metadata に effect (document = 答えを文書へ写すべき問い・operation = 答えが操作で済む問い) を持つ。 台帳の lint と起動の列は、 型でなく label でこの bead を外す。 runner の質問 record (ADR-0016) とは別。</div></div>
+<div class="grow"><div class="gword">発話 event<span class="en">utterance event</span></div><div class="gdef">持ち主が器の plugin を積む対話の session に打った prompt を、 model が読む前に器が逐語のまま残す event (kind UtteranceReceived・actor は human・発話を指す値は ts)。 器が入力欄へ差し込んだ行・別の session からの包み・runner と lens は残さない。 人由来の数えに入れず、 結んだものは裁定 event として承認の側に数える。</div></div>
+<div class="grow"><div class="gword">裁定 id<span class="en">ruling id</span></div><div class="gdef">持ち主の裁定を一意に指す id。 結びの口が発行する問い id の形 (問いの id・発話の UTC の年月日と時分・消費側の台帳の形に揃えた通し番号 1 を並べた形) で、 台帳の問いの裁定の行が持つ。 batch: と policy: で始まる形は、 消費側の台帳が自分の経路で書く裁定の行の裁定 id の欄か束の欄に解ける。 引用に数えるのは、 問いの部分が台帳の接頭辞で始まる問い id の形と、 ruling-fixtures の一覧に無い batch: と policy: の形と時刻の形で、 ほかの接頭辞の問い id の形は数えない。 ADR-0037 の時刻の形は、 opt-in の線の前の引用は数えるだけにし、 線の後に足した引用は一覧に無ければ断る。</div></div>
+<div class="grow"><div class="gword">裁定の行<span class="en">ruling line</span></div><div class="gdef">台帳の問いの notes に書く 1 行。 裁定 id の欄で始まり、 裁定 id・問い・発話の ts・逐語の 4 欄をこの順に持ち (SRS FR82 と同じ順)、 逐語の改行は \n の 2 字に写す。 逐語を最後に置くのは持ち主の字の中の「・」で欄が割れないため。 消費側の台帳の行は束の欄も持ちうり、 FR83 は batch: と policy: の形をこの欄にも解く (問い id の形は裁定 id の欄だけ)。 本 repo では結びの口だけが書き (束の欄は無い)、 席の道具の呼び出しが足す書きは起票の門が断る。 消費側の台帳は自分の経路で書く。</div></div>
+<div class="grow"><div class="gword">裁定 event<span class="en">ruling event</span></div><div class="gdef">裁定を逐語付きで残す event の kind RulingReceived (ADR-0037)。 本 ADR 以後は結びの口だけが書き、 問いの id・裁定 id・発話の ts を持つ。 到達点の計測では承認と同じ側に数える。</div></div>
+<div class="grow"><div class="gword">opt-in の線<span class="en">opt-in line</span></div><div class="gdef">vessel 宣言の ruling-check が main の履歴で初めて true になった commit。 これより前から在る時刻の形の引用は数えるだけにし、 後に足された時刻の形は、 ruling-fixtures の一覧に在るものを除き断る。</div></div>
+<div class="grow"><div class="gword">判断の欄<span class="en">judgement field</span></div><div class="gdef">rules 行の ruling 欄・ADR の approval の裁定の欄・設計の節の裁定の欄の閉じた 3 つ。 着地の差分がこれを足すか変えるときは、 問いの部分が台帳の接頭辞で始まる問い id の形の裁定 id を 1 つ以上持つ。 bead の id だけの欄は数えない。 ruling-check を true から外す差分も、 問い id の形の裁定 id を足さなければ着地で止まる。</div></div>
+<div class="grow"><div class="gword">未反映の裁定<span class="en">unreflected ruling</span></div><div class="gdef">effect が document の閉じた台帳の問いの裁定 id のうち、 main の追跡された file が 1 つも引かないもの (引用は FR83 と同じ規則で数える)。 経過時間では判じず、 operation は数えない。 引く契約と問いに blocks される契約だけを待たせ、 着地ではその便を Gated に留める (FR10)。</div></div>
+<div class="grow"><div class="gword">直命の表<span class="en">directive table</span></div><div class="gdef">前の器が持ち主の発言を 1 件ずつ状態付きで持ち、 復元で席へ運んだ記録 (ADR-0031)。 ADR-0045 §2 (2) で消えた。 発話 event は状態を持たず席へ運ばないので、 これの復活でない。</div></div>
+<div class="grow"><div class="gword">起票の門<span class="en">ledger write gate</span></div><div class="gdef">器の plugin を積む席の hook が bd / bdw の書きに掛ける門 (ADR-0056)。 本 ADR で 3 つの書きの形 (形の欠けた台帳の問い・notes に足す裁定の行・引き金の行の無い memo) を断る。 見るのは席の道具の呼び出しだけで、 席が起こした子 process の書きは門の外。 この 3 形は plugin の門だけが断り、 host-guard は掛けない。</div></div>
+<div class="grow"><div class="gword">vessel 宣言<span class="en">vessel declaration</span></div><div class="gdef">repo が器に自分について名乗る設定 file .vessel.toml (tracked・ADR-0010)。 本 ADR で任意 key ruling-check と ruling-fixtures (引用に数えない見本の字面の閉じた一覧・完全一致だけで書式は何も外さない・ruling-check と同じく版を跨ぐ形) を持てる。 この key は規則の表の値でなく repo が名乗る opt-in として、 ほかの key と同じく読む (C1・ADR-0010)。 検査をゆるめる名乗り (ADR-0054) と逆に検査を強める向きなので manifest に上限の行を置かず、 代わりに外す差分に裁定を求める。 true の repo だけが裁定 id の実在を確かめ (main の宣言で、 着地では便の base の宣言で判じる)、 key の無い repo は数えも断りもせず doctor の行がその旨を出す。 true から外す差分は問い id の形の裁定 id を要る。</div></div>
+</div>
+</div>
+</div>
+<footer class="foot" data-component="fidelity-sync-meta"><div class="ft-grid">
+<div class="ft-plain">このページは、大もとの機械データ (正本) から自動で組み立てられています。構造は機械が自動で検査し、内容が元データに忠実かは独立のレビューで確かめます。</div>
+<div data-audience="machine">機械SSoT: <b>ADR-0083.adr.yaml</b> &middot; 生成: <b>2026-09-28 11:16</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
+<div class="tags" data-audience="machine"><span>folio design system</span><span>ADR-pack</span><span>folio engine B1 (instance#2)</span><span>cross-doc 照会</span></div>
+</div></footer>
+<!-- folio:chrome-bottom -->
+<nav class="prevnext" aria-label="前後の文書">
+  <a class="prevnext__prev" href="ADR-0082-consumer-plugin-slot-and-runner-mark-are-cross-version.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">席の起動行の 1 つ目の plugin の枠は anchor の plugin で、 runner に写す消費側の plugin には器が印の file を置く — 消費側の席と便の plugin の置き場と、 席と runner を見分ける印を跨版の面にする (ADR-0038 の 1 つ目の枠の読みを消費側の anchor へ広げる)</span></a>
+  <a class="prevnext__next" href="ADR-0084-dispatch-waits-on-a-failing-floor-and-choice-questions-are-denied.html"><span class="prevnext__dir">次 &rarr;</span><span class="prevnext__title">便は main が床の検査に落ちている間は介入 first の印を持つ便だけを起こし、 選択式の問いの道具は器の hook が例外なく止める — vessel 宣言に floor-check と question-route の 2 key を足し、 plugin の hook の対象に AskUserQuestion を足す (床の検査の不合格は first の印の無い契約を全部待たせ、 止める範囲は marker が器を名乗る repo・ADR-0045 の runner の guard の列を部分 supersede)</span></a>
+</nav>
+<script>
+(function () {
+  var openedForPrint = [];
+  window.addEventListener('beforeprint', function () {
+    openedForPrint = [];
+    var ds = document.querySelectorAll('details:not([open])');
+    for (var i = 0; i < ds.length; i++) { ds[i].setAttribute('open', ''); openedForPrint.push(ds[i]); }
+  });
+  window.addEventListener('afterprint', function () {
+    for (var i = 0; i < openedForPrint.length; i++) openedForPrint[i].removeAttribute('open');
+    openedForPrint = [];
+  });
+  if (!document.querySelector('[data-audience]')) return;
+  /* 既定 = 人間プレゼン型 (ADR-0040 / rules §11.3): script 経由で初期 class を付与するため
+     no-JS では付かず全文可視に graceful degrade する。 static DOM は全文を保持 (AI/検索/印刷は不変)。 */
+  document.body.classList.add('audience-human');
+  var bar = document.createElement('nav');
+  bar.className = 'audience-toggle';
+  bar.setAttribute('aria-label', '表示対象の切替');
+  var states = [['both', '両方'], ['human', '人間向け'], ['machine', '機械向け']];
+  for (var s = 0; s < states.length; s++) {
+    (function (mode, label) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.setAttribute('aria-pressed', mode === 'human' ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        document.body.classList.remove('audience-human', 'audience-machine');
+        if (mode !== 'both') document.body.classList.add('audience-' + mode);
+        var bs = bar.querySelectorAll('button');
+        for (var j = 0; j < bs.length; j++) bs[j].setAttribute('aria-pressed', bs[j] === b ? 'true' : 'false');
+      });
+      bar.appendChild(b);
+    })(states[s][0], states[s][1]);
+  }
+  var bc = document.querySelector('nav.breadcrumb');
+  if (bc && bc.parentNode) { bc.parentNode.insertBefore(bar, bc.nextSibling); }
+  else { document.body.insertBefore(bar, document.body.firstChild); }
+})();
+</script>
+<!-- /folio:chrome-bottom -->
+</body>
+</html>
