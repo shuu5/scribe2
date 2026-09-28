@@ -1298,19 +1298,19 @@ terms:
   - canonical: 公開の segment
     domain: consumer
     aliases: [publish segment]
-    definition: Bash の command を segment に分けたうち、 git の push と gh の公開の動詞 (本文を出す動詞と repo の作成・編集) の部分 (SRS FR80)。 publish の種類はここだけを読む。
+    definition: Bash の command を segment に分けたうち、 git の push と gh の公開の動詞 (本文を出す動詞 〔pr・issue・release・gist・label と api の書き〕 と repo の作成・編集) の部分 (SRS FR80)。 publish の種類はここだけを読む。
     relationships: [公開の字面の走査, 出ていく字面, 公開先の repo, command guard]
     flagged_ambiguities: [3 クラスの「出す」とは別。 自 repo への push と PR の作成も含む]
   - canonical: 公開先の repo
     domain: consumer
     aliases: [publish target repo]
-    definition: 公開の segment が字面を出す先の repo (git の push の行き先・gh の対象の repo・SRS FR80)。
+    definition: 公開の segment が字面を出す先の repo (git の push の行き先・gh の対象の repo・SRS FR80)。 owner/name は git が実際に押す URL (pushurl と insteadOf を当てた後) か gh が解いた repo の、 host が gh の既定の host である URL の path の末尾 2 成分として導き、 同じ repo かは owner/name の一致で判じる。
     relationships: [公開の segment, 隣の private repo]
     flagged_ambiguities: [席の target (tmux の窓) とは別の語, 「公開」は可視性を含意しない (private の公開先もある)・public の repo とは別]
   - canonical: 出ていく字面
     domain: consumer
     aliases: [outgoing text]
-    definition: 公開の segment が外へ出す文字 — 出ていく commit の message・author と committer の名・patch の追加行と path・押す annotated tag の本文・gh の本文の flag の値と本文の file (SRS FR80)。
+    definition: 公開の segment が外へ出す文字 — 出ていく commit の message・author と committer の名・patch の追加行と path・押す annotated tag の本文・押す ref の名・gh の本文の flag の値と本文の file (SRS FR80)。
     relationships: [公開の segment, 識別子の 4 形]
   - canonical: 隣の private repo
     domain: consumer
@@ -1321,7 +1321,7 @@ terms:
   - canonical: 識別子の 4 形
     domain: consumer
     aliases: [identifier forms]
-    definition: 隣の private repo を指す閉じた 4 つ — repo の名 (出ていく字面と名をともに ASCII の英数字と _ の外の字 〔- と . と / を含む〕 で区切った成分の並びで、 大文字と小文字を区別せずに照合し、 一般語の名も除かず、 除外の一覧に在る字句の中の当たりだけを数えない・除外の一覧に足すには裁定が要る)・object id (隣の object db に在り公開先の repo に無いもの)・tracked path (/ を含む語が、 隣の tracked な path を / の境界で切った末尾と一致し、 公開先の repo の tracked な path に無いもの)・台帳 id (隣の台帳に在る issue の id) (SRS FR80)。 publish の種類の rules 行の値が並べる記号 (除外の一覧も同じ行が持つ)。
+    definition: 隣の private repo を指す閉じた 4 つ — repo の名 (出ていく字面と名をともに ASCII の英数字と _ の外の字 〔- と . と / を含む〕 で区切った成分の並びで、 大文字と小文字を区別せずに照合し、 一般語の名も除かず、 除外の一覧に digest が在る字句の中の当たりだけを数えない・除外の一覧は字句の sha256 の digest の列で、 足すには裁定が要る)・object id (隣の object db に在り、 公開先の repo の remote の先端から辿れないもの)・tracked path (/ を含む語が、 隣の tracked な path を / の境界で切った末尾と一致し、 公開先の repo の remote の先端の tracked な path に無いもの)・台帳 id (隣の台帳に在る issue の id) (SRS FR80)。 publish の種類の rules 行の値が並べる記号 (除外の一覧も同じ行が持つ)。
     relationships: [隣の private repo, 公開の字面の走査, rules 行]
     flagged_ambiguities: [起票の門の台帳 write の 4 形とは別, 台帳 id は裁定面の記帳 id とは別]
   - canonical: host-guard の配線
