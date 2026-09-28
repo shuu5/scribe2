@@ -136,13 +136,13 @@ terms:
     relationships: [manifest, 裁定 id, 検出線]
   - canonical: 裁定 id
     domain: consumer
-    definition: user 裁定を一意に指す id。 器が打った裁定 event (RulingReceived) の ts (UTC・ADR-0037) で、 rules 行の ruling 欄が user <ts> の形で指し、 doctor が同じ分の event の有無を読む。 rules 行の変更 (C5)、 閾値変更 (A2)、 憲法改訂 (N4) が要求する。
-    relationships: [rules 行, 対話面, 承認 event, 裁定 event]
+    definition: user 裁定を一意に指す id。 閉じた 3 形 (器の口 seat ruling bind が発行する問い id の形・消費側の台帳が自分の経路で書く batch:… と policy:… で始まる形) を持ち、 台帳の問いの notes の裁定の行が持つ (SRS FR82・ADR-0083)。 追跡された file の引用はこの 3 形で数え (問い id の形は問いの部分が repo の台帳の接頭辞で始まるものだけ・batch:… と policy:… の形と opt-in の線の後の時刻の形は vessel 宣言の ruling-fixtures の一覧に同じ字面が在れば数えない)、 batch:… と policy:… の形は台帳の裁定の行の裁定 id の欄か束の欄に解け、 opt-in の線より前の時刻の形 (user と UTC の分・ADR-0037 の裁定 event の ts) は数えるだけにする (SRS FR83・ADR-0083)。 rules 行の変更 (C5)、 閾値変更 (A2)、 憲法改訂 (N4) が要求する。 裁定面の記帳 id とは別。
+    relationships: [rules 行, 対話面, 承認 event, 裁定 event, 裁定の行, 問い id の形, 時刻の形, opt-in の線, 判断の欄]
   - canonical: 裁定 event
     domain: consumer
     aliases: [RulingReceived]
-    definition: 便 (run) を持たない裁定 (rules 行の値・閾値・方針) を逐語付きで残す event の kind (actor = human・bead と rules 行 id は任意)。 対話面の席の口 seat ruling add だけが書く (ADR-0037・設計 docs/design/fleet-event-log.md §9)。 便の不可逆操作の承認 (承認 event・ApprovalReceived) とは別の kind で、 到達点の計測では承認と同じ側に数える。
-    relationships: [裁定 id, 承認 event, 対話面, 直命の表, rules 行]
+    definition: 器の口 seat ruling bind が台帳の問いと発話 event を結んだときに 1 件記帳する event の kind (actor = human・SRS FR82・ADR-0083)。 席が逐語を打って記帳する口 (ADR-0037 の seat ruling add) は持たない (ADR-0083 が ADR-0037 を部分 supersede)。 便の不可逆操作の承認 (承認 event・ApprovalReceived) とは別の kind で、 到達点の計測では承認と同じ側に数える (SRS FR22)。
+    relationships: [裁定 id, 承認 event, 発話 event, 裁定の行, 台帳の問い, 対話面, rules 行]
   - canonical: RuleKind
     domain: consumer
     definition: 規則の種類を閉じた列挙で表す enum。 網羅 match 必須で、 未実装は compile error (C1)。
@@ -324,8 +324,8 @@ terms:
     relationships: [runner, vessel 宣言, manifest, rules 行, hook, command guard]
   - canonical: 禁じる語列
     domain: consumer
-    definition: 許す command の内側で撃ってはいけない語の並び (例 cargo mutants・git push --force)。 値は manifest の rules 行 runner.denied_commands だけが持ち (ADR-0025 §2.1)、 command guard が実行の前に止め、 intake が verify 行に同じ判定を掛ける (SRS FR56)。
-    relationships: [command guard, allowlist, rules 行, manifest]
+    definition: 許す command の内側で撃ってはいけない語の並び (例 cargo mutants・git push --force)。 値は manifest の rules 行 runner.denied_commands だけが持ち (ADR-0025 §2.1)、 command guard が実行の前に止め、 intake が verify 行に、 dispatcher が vessel 宣言の floor-check の行に同じ判定を掛ける (SRS FR56・FR85・ADR-0084)。
+    relationships: [command guard, allowlist, rules 行, manifest, 床の検査]
   - canonical: command guard
     domain: consumer
     definition: hook の PreToolUse が Bash の command を shell の区切りごとに語に分け、 rules 行 runner.denied_commands の語列に当たる segment を実行の前に deny する guard (ADR-0025 §2.2)。 全席共通の in-loop guard で、 極性一覧に InLoop / FailClosed として載る。 intake は同じ関数を verify 行に掛ける (ADR-0025 §2.3)。
@@ -356,8 +356,8 @@ terms:
     relationships: [器, NAME 定数, vessel 宣言]
   - canonical: vessel 宣言
     domain: consumer
-    definition: 対象 repo の root に marker の隣として置く tracked file .vessel.toml。 その repo の allowlist と共通 verify を repo 自身が名乗る宣言値で、 intake が manifest の上限と突合して便ごとに写しへ凍結する (C10・ADR-0010)。 marker そのものは変えない。
-    relationships: [".vessel", allowlist, 共通 verify, manifest, intake]
+    definition: repo が器に、 許す command・共通 verify・任意の確かめを名乗る設定 file (marker の隣に置く tracked file .vessel.toml)。 intake が manifest の上限と突合して便ごとに写しへ凍結する (C10・ADR-0010)。 任意 key に ruling-check (裁定 id の実在・SRS FR83)・ruling-fixtures (裁定 id の引用に数えない見本の字面の閉じた一覧・完全一致だけで書式は何も外さない・ruling-check と同じく版を跨ぐ形・SRS FR83・ADR-0083)・floor-check (床の検査・SRS FR85)・question-route (選択式の問いの断り文の 1 行・SRS FR86) を持てる。 ruling-check を持たない repo では器は裁定 id の引用を数えも断りもせず doctor の行がその旨を出し (未反映の裁定の数えは key に依らない)、 floor-check を持たない repo では床の検査を撃たない。 marker そのものは変えない。
+    relationships: [".vessel", allowlist, 共通 verify, manifest, intake, opt-in の線, 床の検査, 裁定 id]
   - canonical: Budget
     domain: consumer
     definition: 起動に必要な予算の型。 Precheck の実測を消費してしか作れず、 唯一の起動口 spawn が要求する (C6)。
@@ -826,12 +826,12 @@ terms:
     relationships: [約束の行, 契約表, write-set の閉包]
   - canonical: 4 象限
     domain: consumer
-    definition: 台帳の bead の label intake:memo の有無と受入条件の設計 pointer の有無の組み合わせ (ADR-0051 §4)。 label だけが memo、 pointer だけが契約、 両方在る形と両方無い形 (epic と裁定の bead を除く) は違反で、 台帳 lint が名指す (SRS FR51)。
-    relationships: [台帳, 契約, 設計 pointer, memo の 4 節]
+    definition: 台帳の bead の label intake:memo の有無と受入条件の設計 pointer の有無の組み合わせ (ADR-0051 §4)。 label だけが memo、 pointer だけが契約、 両方在る形と両方無い形は違反で、 台帳 lint が名指す (SRS FR51)。 epic と decision の型の bead と、 label intake:question の台帳の問いは母集団の外 (SRS FR51・ADR-0083)。
+    relationships: [台帳, 契約, 設計 pointer, memo の 4 節, memo, 台帳の問い]
   - canonical: memo の 4 節
     domain: consumer
-    definition: memo の本文が必ず持つ 4 つの見出し — 出所 (run id・PR・裁定 id・user 逐語の在り処)・観測 (実測の事実)・候補 (0 個以上・却下も書く)・昇格条件 (要件 id か 要 ADR か 要 裁定)。 欠けは台帳 lint が数える (ADR-0051 §4・SRS FR51)。
-    relationships: [台帳, 4 象限]
+    definition: memo の本文が必ず持つ 4 つの見出し — 出所 (run id・PR・裁定 id・user 逐語の在り処)・観測 (実測の事実)・候補 (0 個以上・却下も書く)・昇格条件 (要件 id か 要 ADR か 要 裁定・機械が判じる引き金の行を 1 つ以上持つ・SRS FR87)。 欠けは台帳 lint が数える (ADR-0051 §4・SRS FR51)。
+    relationships: [台帳, 4 象限, 引き金, memo]
   - canonical: 台帳の plan
     domain: consumer
     definition: 全設計 doc の契約表の未着地の行から xtask が出す bd の graph の JSON (ADR-0051 §4)。 title・受入条件の pointer 行・親の epic・label・depends の edge・出所の memo への edge を行から写す。 撃つのは席の手番で、 器は台帳へ書かない (ADR-0045 §2)。
@@ -854,7 +854,7 @@ terms:
     definition: land の終端が push した main の最後の commit (最後に着地した commit)。 候補の木に並べた順に着地した便のうち先端でない便は、 自分の着地 commit を含む先端の commit の CI の結果で照合する (SRS FR50)。
     relationships: [land の終端, 候補の木, 着地の列]
     forbidden: [列の先端]
-    flagged_ambiguities: [着地の列の「先頭」(最初に着地する便) と逆の端, remote の先端 (FR80 が GitHub に問う push の前の値) とは別]
+    flagged_ambiguities: [着地の列の「先頭」(最初に着地する便) と逆の端, remote の先端 (FR80 が GitHub に問う push の前の値) とは別, "main の先端 (SRS FR85 の床の検査が撃つ main の最新の commit・push の前後を問わない) とは別"]
   - canonical: 台帳 adapter
     domain: consumer
     definition: 器が台帳へ触る唯一の module。 読みは読み取り専用で、 書きは着地した便の close 1 種だけ (SRS FR50 / FR51・ADR-0023 §2.2)。 起票・受入条件・裁定の記帳は席の仕事。
@@ -877,12 +877,13 @@ terms:
     relationships: [land の終端, 契約 id, 便, event log]
   - canonical: 直命の表
     domain: consumer
-    definition: user が対話面で言った発言を器が 1 件ずつ持つ記録 (event log の DirectiveIssued / DirectiveClosed・発令時刻は器が打つ・前提 pointer と状態を typed に持つ・ADR-0031 §2.1)。 復元の DATA が有効な直命を逐語で並べ、 理由の語 (経過 / 前提の終端 / 前提の置換) 付きで確認候補を印す。 閉じる記録は結果 (完了 / 撤回 / 失効) と裁定 id を伴う。
-    relationships: [event log, 出所 pointer, 作業記憶, 対話面, 直命, 決定記録]
+    definition: user が対話面で言った発言を器が 1 件ずつ持つ記録 (event log の DirectiveIssued / DirectiveClosed・ADR-0031 §2.1)。 ADR-0045 §2 (2) で廃止し、 器は持たない (SRS FR65)。 発話 event と裁定の行 (SRS FR82) は裁定の行の写し元と計測の分類にだけ使い、 席の指示文にも復元にも運ばないので、 この表の復活ではない (線引きは ADR-0083)。
+    relationships: [event log, 出所 pointer, 作業記憶, 対話面, 直命, 決定記録, 発話 event]
   - canonical: 直命
     domain: consumer
-    definition: user が対話面 (orchestrator の席) で言った発言のうち、 席の行動を拘束するもの。 器が直命の表に 1 件ずつ typed に持ち、 逐語は書き換えない (SRS FR65)。 続くかどうかの判定は器でなく user が行う。
-    relationships: [直命の表, 対話面, 承認 event]
+    definition: user が対話面 (orchestrator の席) で言った発言のうち、 席の行動を拘束するもの。 器は直命の表を持たず (ADR-0045 §2 (2)・SRS FR65)、 続くかどうかの判定は user が行う。 発話 event (SRS FR82) は直命の記録ではない。
+    relationships: [直命の表, 対話面, 承認 event, 発話 event]
+    flagged_ambiguities: ["発言 (直命の語) と発話 (発話 event・SRS FR82) は別"]
   - canonical: 決定記録
     domain: consumer
     aliases: [ADR]
@@ -934,8 +935,8 @@ terms:
   - canonical: 介入
     domain: consumer
     aliases: [orchestrator intervention, planner intervention]
-    definition: orchestrator が起動の列の順番を動かす typed な印。 first (最優先へ)・hold (止める)・release (戻す) の 3 つで、 台帳の priority は書き換えず、 起動の列の記録として残り、 記録の直後に dispatcher の 1 周を起こす (ADR-0034 §2・ADR-0045・SRS FR68)。
-    relationships: [dispatcher, 起動の列, orchestrator]
+    definition: orchestrator が起動の列の順番を動かす typed な印。 first (最優先へ)・hold (止める)・release (戻す) の 3 つで、 台帳の priority は書き換えず、 起動の列の記録として残り、 記録の直後に dispatcher の 1 周を起こす (ADR-0034 §2・ADR-0045・SRS FR68)。 first を持つ契約は床の検査の不合格の間も待たない (器は直す便かを判じない・SRS FR85・ADR-0084)。
+    relationships: [dispatcher, 起動の列, orchestrator, 床の検査]
   - canonical: plugin の実体
     domain: consumer
     aliases: [plugin payload]
@@ -1021,19 +1022,19 @@ terms:
   - canonical: 役割の口座
     domain: consumer
     aliases: [role account]
-    definition: host の根の宣言 file (roles.toml) が役割ごとに高々 1 つ持つ口座 label (宣言値)。 席の起動と立て直しが使う口座は実効の口座の解決が決め (実効の記録が無い周の種がこの宣言値・ADR-0041 が ADR-0036 の解決順を supersede)、 便用の選定は host 全体で候補から外す。 書き換えは器の口 account reassign (ADR-0036・設計 docs/design/seat-roles.md §15 / §16)。 ADR-0049 が宣言の単位を役割から project の群へ置き換え、 宣言の置き場も host の面の表 1 つへ移す (proposed・code には 1 行も入っていない)。
-    relationships: [役割, host の根, host の manifest, 席の登録 row, 口座選定, 立て直し, project の群]
+    definition: host の根の宣言 file (roles.toml) が役割ごとに高々 1 つ持つ口座 label (宣言値・ADR-0036)。 器は持たず、 ADR-0049 が宣言の単位を project の群へ、 置き場を host の面の表 1 つへ置き換えた (ADR-0036 を全部 supersede)。 便用の選定の除外は群の今の口座 (SRS FR36)。
+    relationships: [役割, host の根, host の manifest, 口座選定, project の群, 群の今の口座]
   - canonical: host の根
     domain: consumer
     aliases: [host root]
-    definition: state dir の親の下の host 用 dir (<親>/<NAME>-host/)。 同じ host の全 project が共有する置き場で、 受付札 (並列の枠・ADR-0021 §2.3) と役割の口座の宣言 (ADR-0036) がここに在る。 群の今の口座の記録も ADR-0049 でここに置く (proposed)。 env を読まず state dir から導く。 state の真実は置かない (憲法 C3)。
-    relationships: [役割の口座, 並列の枠, 受付札, host の manifest, 群の今の口座]
+    definition: state dir の親の下の host 用 dir (NAME-host)。 同じ host の全 project が共有する置き場で、 受付札 (並列の枠・ADR-0021 §2.3) と群の置き場 (群の今の口座の記録・移動を頼む記録・群の段の lock と履歴・ADR-0049) がここに在る。 env を読まず state dir から導く。 state の真実は置かない (憲法 C3)。
+    relationships: [並列の枠, 受付札, host の manifest, 群の今の口座]
   - canonical: 実効の口座
     domain: consumer
     aliases: [effective role account]
-    definition: その周に役割の席が実際に使う口座。 実効の記録の口座 (使える間は居続ける)、 宣言の口座 (記録が無い周の種)、 役割単位で 1 回だけ session 用の順序 (余裕が最大) で選び直した口座の順に 1 関数で解く。 席の起動 (SRS FR59) と便用の除外 (SRS FR36) が同じ解き方を読む (ADR-0041・設計 docs/design/seat-roles.md §17)。 役割の口座 (宣言値) とは別で、 登録 row の口座はこの値の写し。 ADR-0049 が解く単位を役割から project の群へ置き換える (proposed・後継の語は群の今の口座)。
-    relationships: [役割の口座, 実効の記録, 妥協の起動, 口座選定, 席の登録 row, 席の起動, 群の今の口座]
-    flagged_ambiguities: ["実効: 実効の口座 (役割の席が使う口座) と実効 jobs (変異検査の並列度) は別義", "実測の口座と 1 字差: 実効 = 器が解いた口座 / 実測 = session の開始時に測った現物の口座"]
+    definition: 役割の席が使うと器が役割ごとに解く口座 (ADR-0041)。 器は持たず、 群の今の口座に置き換わった (ADR-0049)。 席の口座は群の今の口座か口座の引数か session 用の口座選定 (SRS FR36) で決まり (SRS FR59)、 便用の除外は便の repo を anchor に持つ席の登録 row の口座と各群の今の口座 (SRS FR36)。
+    relationships: [役割の口座, 実効の記録, 口座選定, 席の登録 row, 席の起動, 群の今の口座]
+    flagged_ambiguities: ["実効: 実効の口座 (役割の席が使う口座・器に無い) と実効 jobs (変異検査の並列度) は別義", "実測の口座と 1 字差: 実効 = 器が解く口座 / 実測 = session の開始時に測った現物の口座"]
   - canonical: 実測の口座
     domain: consumer
     aliases: [measured account, 実口座]
@@ -1042,18 +1043,19 @@ terms:
   - canonical: 実効の記録
     domain: consumer
     aliases: [effective role record]
-    definition: 役割の実効の口座を器が host の根に書く記録 (役割ごとに高々 1 件・role と口座 label と ts と妥協の理由)。 宣言 file (人が書く宣言値) とは file も型も別で、 席を起こす口だけが lock の下で一時 file → rename で書き、 先に書いた席が勝って同じ役割の後続の席は読むだけ。 書き換える周と宣言の書き換えの口 (account reassign) の周は、 前の記録を消さずに履歴の側へ move する (憲法 N1.2・ADR-0041)。 ADR-0049 が記録の単位を役割から project の群へ置き換える (proposed・後継の語は群の今の口座)。
-    relationships: [実効の口座, 役割の口座, host の根, 退役, 口座選定, 群の今の口座]
+    definition: 役割の実効の口座を器が host の根に役割ごとに高々 1 件書く記録 (role と口座 label と ts・ADR-0041)。 器は持たず、 群の今の口座の記録に置き換わった (ADR-0049)。 SRS の glossary も同じ扱い (FR36 / FR59 は読まない)。
+    relationships: [実効の口座, 役割の口座, host の根, 群の今の口座]
   - canonical: 妥協の起動
     domain: consumer
     aliases: [compromise launch]
-    definition: 役割の口座を選び直す周に閾値未満の候補が無いとき、 断らずに席を立てること。 段は 2 つ = 閾値以上でも当たっていない口座の中で逼迫度が最小 (over-threshold)、 それも無ければ他の役割の口座との同居も入れて逼迫度が最小 (shared-with-role)。 理由は実効の記録・launch / relaunch の記録の行・SessionStart の席の指示文に出て、 席は作業を止めて対話面で user の裁定を待つ。 既に立っている席が閾値以上で選び直しの候補が無い周は、 管理 tick が退避の合図の代わりに妥協の通知を同じ口座・同じ窓につき 1 回だけ注入する。 当たっていない測れた口座が 1 つも無い周だけは断る。 妥協でない周の同居は不可 (ADR-0041・設計 docs/design/seat-roles.md §18)。 ADR-0049 は席の起動のこの扱いを決め直さず、 群の移動に妥協を作らないことだけを決める (proposed)。
-    relationships: [実効の口座, 実効の記録, 口座選定, 席の指示文, 対話面, 妥協の通知]
+    definition: 閾値未満の口座の候補が無い周に、 上限に当たっていない測れた口座のうち閾値以上の口座、 それも無ければ他の役割の口座との同居も入れた口座で席を起こすこと (ADR-0041 の 2 段・設計 docs/design/seat-roles.md §18)。 器は持たず、 席の起動は理由の語 no-account と候補が無い理由の閉じた 4 語で断る (SRS FR69・ADR-0086 が ADR-0041 のこの部分を supersede・裁定 2026-09-28T09:04Z)。 群の移動も妥協しない (ADR-0049)。
+    relationships: [実効の口座, 実効の記録, 口座選定, 席の起動, 妥協の通知, 候補なしの理由]
+    flagged_ambiguities: ["over-threshold: ADR-0041 の妥協の段の名 (閾値以上でも当たっていない口座で起こす段) と、 SRS FR69 の断りの理由の語 (閾値以上の実測だけで候補が無い) は同じ字で別義。 前者は器に無い"]
   - canonical: 妥協の通知
     domain: consumer
     aliases: [compromise notice]
-    definition: 既に立っている席の口座が閾値以上で、 選び直しの候補が無い周に、 管理 tick が退避の合図の代わりに同じ口座・同じ窓につき 1 回だけ席の入力欄へ注入する合図。 行は作業を止めて対話面で user の裁定を待つ旨を運ぶ (ADR-0041・設計 docs/design/seat-roles.md §18)。
-    relationships: [管理 tick, 退避の合図, 妥協の起動, 対話面]
+    definition: 既に立っている席の口座が閾値以上で選び直しの候補が無い周に、 管理 tick が同じ口座・同じ窓につき 1 回だけ注入する合図 (ADR-0041・設計 docs/design/seat-roles.md §18)。 器は持たない (役割の選び直しは ADR-0049 で群の移動に置き換わり、 群の移動は候補が無い周に移らず通知する・SRS FR38)。
+    relationships: [管理 tick, 妥協の起動, 群の今の口座]
   - canonical: 強制 cycle
     domain: consumer
     aliases: [forced cycle, 強制サイクル]
@@ -1359,8 +1361,8 @@ terms:
   - canonical: 起票の門
     domain: consumer
     aliases: [ledger write gate, 素 write の門]
-    definition: 器の plugin を積む席の hook の入口が bd / bdw の command に掛ける門 (ADR-0056 CTX2・設計 docs/design/vessel-hook.md §10)。 台帳 write の 4 形 (素 write = notes の置換・記憶の subcommand・親を欠く create・台帳の script を経ない書き込み) を rules 行 ledger.denied_writes の値で断り、 memo の 4 節の判定も持つ。 host-guard の台帳の種類 (SRS FR76) は 4 形の判定を共有して口座の設定を読む session に掛ける。
-    relationships: [hook, rules 行, 台帳, host-guard, 見張りの種類, 口座の設定を読む session]
+    definition: 器の plugin を積む席の hook の入口が、 席自身の道具の呼び出しとして撃たれる bd / bdw の command に掛ける門 (ADR-0056 CTX2・設計 docs/design/vessel-hook.md §10)。 台帳 write の 4 形 (素 write = notes の置換・記憶の subcommand・親を欠く create・台帳の script を経ない書き込み) を rules 行 ledger.denied_writes の値で断り、 memo の 4 節の判定も持つ。 ほかに形の欠けた台帳の問いの create・notes に足す裁定の行・引き金の行を持たない memo の書きの 3 形 (SRS FR81・ADR-0083) も断り、 この 3 形は器の plugin の門だけが断る (host-guard は掛けない)。 席が起こした子 process の書きは道具の呼び出しでないので門の外。 host-guard の台帳の種類 (SRS FR76) は台帳 write の 4 形の判定を共有して口座の設定を読む session に掛ける。
+    relationships: [hook, rules 行, 台帳, host-guard, 見張りの種類, 口座の設定を読む session, 台帳の問い, 裁定の行, 引き金]
   - canonical: 起動の記述
     domain: consumer
     aliases: [invocation]
@@ -1390,3 +1392,116 @@ terms:
     domain: consumer
     definition: repo ごとに 1 回撃つ器の subcommand (ADR-0063・proposed)。 置き場・host の面・口座・marker と local 設定・vessel 宣言・群・commit・tmux と席の段を順に通し、 在る段は skip し、 段ごとに 1 行と次の 1 手を出す。 marker だけを書く vessel init とは別の口。
     relationships: [雛形の置き場, host-template, state dir, host の manifest, ".vessel", vessel 宣言, project の群, 席の起動, doctor]
+  # ---------------------------------------------------------------- 台帳の問いと裁定・床の検査・選択式の問い・memo の引き金・候補なしの断り (SRS v0.28・ADR-0083〜0086)
+  - canonical: 台帳の問い
+    domain: consumer
+    aliases: [ledger question]
+    definition: 席から user への問いを記録する台帳の bead (label intake:question・issue の型は問わない)。 本文の 4 つの行 (概要・技術・理由・推奨) と metadata の effect を持ち、 形は起票の門が検査する (SRS FR81・ADR-0083)。 器が問いとして読む記録はこの label の bead だけで、 4 象限にも起動の列にも入らない (SRS FR51 / FR68)。 答えは発話 event と結んで裁定の行になる (SRS FR82)。 runner の質問 record とは別。
+    relationships: [台帳, 起票の門, effect, 発話 event, 裁定の行, 4 象限, 起動の列, 質問 record]
+  - canonical: effect
+    domain: consumer
+    definition: 台帳の問いの metadata の key。 答えを文書へ写すべき問い (document) か、 答えが操作で済む問い (operation) かの閉じた 2 値 (SRS FR81)。 未反映の裁定は document の問いだけを数える (SRS FR84)。
+    relationships: [台帳の問い, 未反映の裁定]
+  - canonical: 発話 event
+    domain: consumer
+    aliases: [utterance event]
+    definition: user が器を導入した repo の対話の session へ打った prompt を、 model に読まれる前に逐語のまま残す event (actor = human・発話を指す値は ts・SRS FR82・ADR-0083)。 記録の範囲は開いた問いの有無に依らない全 prompt (裁定 2026-09-28T09:04Z)。 器が入力欄へ差し込んだ行 (雛形の合図) と message の包みは残さない。 裁定の行の逐語の写し元と到達点の計測の分類にだけ使い、 人由来の event の数えには入れない (SRS FR22)。 席の指示文にも復元にも運ばない。
+    relationships: [裁定 event, 裁定の行, 台帳の問い, 雛形の合図, message の包み, 直命の表, 対話面]
+    flagged_ambiguities: ["発話 (発話 event・SRS FR82) と発言 (直命・直命の表の語・ADR-0045 で廃止した表の中身) は別。 発話 event は直命の表の復活ではない (SRS FR65・ADR-0083)"]
+  - canonical: 裁定の行
+    domain: consumer
+    aliases: [ruling line]
+    definition: 台帳の問いの notes に器の口 seat ruling bind だけが書く 1 行 (裁定 id・問い・発話の ts・逐語の順の 4 欄・逐語は発話 event から写して最後の欄に置く・SRS FR82)。 席が notes に裁定の行を足す書きは起票の門が断る (SRS FR81)。 器を導入した別の repo の台帳は同じ形の行を自分の経路で書き (batch:… と policy:… の形の裁定 id を持ちうる)、 裁定 id の欄と別の束の欄を持ちうる。 batch:… と policy:… の形の引用は裁定 id の欄か束の欄に解け、 問い id の形は裁定 id の欄だけに解ける (SRS FR83・ADR-0083)。 bind が書く行は束の欄を持たない。
+    relationships: [台帳の問い, 裁定 id, 発話 event, 起票の門, 裁定 event]
+    flagged_ambiguities: ["裁定の行 (台帳の notes の 1 行) と判断の欄 (rules 行の ruling 欄・ADR の approval の裁定の欄・設計の節の裁定の欄) は別"]
+  - canonical: 問い id の形
+    domain: consumer
+    definition: 裁定 id の閉じた 3 形の 1 つで、 器の口 seat ruling bind が発行する形 (問いの bead の id・コロン・UTC の年月日と時分・ハイフン・通し番号。 bind が発行する通し番号は 1・SRS FR82)。 通し番号の欄は消費側の台帳の行の形と揃えるために持つ。 引用に数えるのは問いの部分が repo の台帳の id の接頭辞で始まるものだけで、 ほかの接頭辞の同じ形の字面 (test の見本など) は数えも断りもしない。 判断の欄はこの形の数える id を要る (SRS FR83)。
+    relationships: [裁定 id, 台帳の問い, 判断の欄]
+  - canonical: 時刻の形
+    domain: consumer
+    definition: 裁定を user と UTC の時刻だけで指す引用の形 (台帳の問いに結べない)。 opt-in の線より前の引用は数えるだけにし、 線の後に足された引用は、 vessel 宣言の ruling-fixtures の一覧に同じ字面が在るものを除き、 受付と着地で断る (SRS FR83)。
+    relationships: [裁定 id, opt-in の線]
+  - canonical: opt-in の線
+    domain: consumer
+    definition: vessel 宣言の ruling-check が main の履歴で初めて true になった commit (SRS FR83)。 線より前から在る時刻の形の引用は数えるだけにする。
+    relationships: [vessel 宣言, 時刻の形, 裁定 id]
+  - canonical: 判断の欄
+    domain: consumer
+    definition: 裁定を引くべき欄の閉じた 3 種 (rules 行の ruling 欄・ADR の approval の裁定の欄・設計の節の裁定の欄)。 着地の差分が足すか変える判断の欄は、 問いの部分が台帳の接頭辞で始まる問い id の形の裁定 id を要り、 台帳の bead の id だけの引用は数えない (SRS FR83)。 vessel 宣言の ruling-check を true から外す差分も同じく裁定 id を要る。
+    relationships: [裁定 id, 問い id の形, rules 行, 決定記録, 設計 doc]
+  - canonical: 未反映の裁定
+    domain: consumer
+    aliases: [unreflected ruling]
+    definition: effect が document の閉じた台帳の問いの裁定 id のうち、 main の追跡された file が 1 つも引かないもの (SRS FR84・ADR-0083)。 経過時間では判じず、 vessel 宣言の ruling-check に依らず数える。 その id を引く契約と問いに blocks される契約だけを起動の列で待たせ、 着地の留めに掛ける (SRS FR10)。
+    relationships: [台帳の問い, effect, 裁定 id, 起動の列, alarm, doctor]
+  - canonical: 床の検査
+    domain: consumer
+    aliases: [floor check]
+    definition: vessel 宣言の任意 key floor-check が名乗る、 main がこれだけは通るべきと repo が決めた最低限の検査の 1 行を、 dispatch の周に main の最新の commit ごとに 1 回撃つ検査 (SRS FR85・ADR-0084)。 rc 0 だけが合格で、 不合格の間は介入 first の印を持つ契約 (直す便かは判じない) のほかは起動の列の全部の契約が待つ。 時間の上限は rules 行 floor.timeout_s が持つ。 便ごとの gate とは別。
+    relationships: [vessel 宣言, 起動の列, 封じ込め, 禁じる語列, alarm, doctor, gate]
+    flagged_ambiguities: ["床: 床の検査 (main の最低限の検査・SRS FR85) と、 管理 tick の段の床 (ADR-0058・設計 seat-heartbeat の段) と、 thread 本数の下限 (1 の床) は別義。 SRS は裸の「床」を書かず「床の検査」と書く"]
+  - canonical: alarm
+    domain: consumer
+    definition: 管理 tick の打刻の合図の末尾に足す閉じた語 (unreflected・floor)。 置き場の file だけを読んで決め、 台帳も git も撃たない (SRS FR27)。 合図を送らない周の席には届かず、 doctor の行だけが知らせる。
+    relationships: [管理 tick, 打刻の合図, 未反映の裁定, 床の検査, doctor]
+  - canonical: 雛形の合図
+    domain: consumer
+    definition: 器が席の入力欄へ差し込む行の総称 (SRS FR44 の閉じた一覧 = 起動行・打刻の合図・群の逼迫の通知と移動の通知と退避の合図・便の終端の周の通知・裁定の指し示し)。 発話 event はこれを記帳しない (SRS FR82)。
+    relationships: [打刻の合図, 便の終端の周の通知, 裁定の指し示し, 発話 event]
+  - canonical: message の包み
+    domain: consumer
+    aliases: [cross-session-message]
+    definition: 別の session から届いた message を入力欄へ渡すときの包み。 発話 event はこれを記帳しない (SRS FR82)。
+    relationships: [発話 event]
+  - canonical: 引き金
+    domain: consumer
+    aliases: [trigger line]
+    definition: memo の昇格条件の節に置く、 機械が判じる 1 行。 形は閉じた 5 つ (再発・同梱・依存・期日・着地)、 1 つでも満ちた memo は昇格の待ちになる (SRS FR87・ADR-0085)。 引き金の行を持たない memo の create と、 昇格条件の節を引き金の行の無い本文へ書き換える update は起票の門が断る (SRS FR81)。 字面の文法は設計 doc (ledger-form) が持つ。
+    relationships: [memo, memo の 4 節, 昇格の待ち, 起票の門]
+  - canonical: memo
+    domain: consumer
+    definition: 台帳の bead のうち label intake:memo を持ち、 受入条件の設計 pointer を持たない覚え書き (契約にする前の段・4 象限)。 本文に memo の 4 節を持ち、 起動の列に入らず (SRS FR68)、 昇格条件の節に引き金の行を持つ (SRS FR87)。
+    relationships: [4 象限, memo の 4 節, 引き金, 昇格, 台帳]
+  - canonical: 昇格
+    domain: consumer
+    aliases: [promote]
+    definition: memo を、 acceptance に設計 pointer を持つ契約へ書き直す処置 (memo の審査の判定の値は promote)。 器は自分では行わない (SRS FR87)。
+    relationships: [memo, 昇格の待ち, 処置, memo の審査, 契約]
+  - canonical: 昇格の待ち
+    domain: consumer
+    definition: 引き金が 1 つでも満ちた memo の状態 (SRS FR87)。 処置が付くまで起こす便が 0 の周の便の終端の周の通知が知らせ直し、 台帳の lint が処置の付かない本数と最古の年齢を出す (SRS FR51)。
+    relationships: [memo, 引き金, 処置, 便の終端の周の通知, doctor]
+  - canonical: 処置
+    domain: consumer
+    definition: 昇格の待ちの memo に orchestrator の席が付ける始末の閉じた 4 種 (昇格・close・引き金の書き直し・keep の記帳)。 付くまで器は周ごとに知らせ直す (SRS FR87)。
+    relationships: [昇格の待ち, 昇格, memo, orchestrator]
+  - canonical: memo の審査
+    domain: consumer
+    definition: 引き金の満ちない memo のうち間隔 (rules 行 memo.triage_interval_h) の過ぎたものを、 起こす便が 0 の周に本数 (rules 行 memo.triage_per_round) まで読むだけの lens に掛ける段 (SRS FR87・ADR-0085)。 判定は promote / close / keep で、 器は判定で memo を close せず台帳に書かない。 口座は便用の規則で選び、 封じ込めの内側で撃つ。
+    relationships: [memo, lens, 昇格, 封じ込め, 口座選定, dispatcher]
+    flagged_ambiguities: ["memo の審査 (memo を読む lens・SRS FR87) と、 契約の審査 (intake の直後に契約を読む lens・SRS FR49) と、 事前審査 (起動の列の待ちの行に受付の断りを予想する段) は別の段"]
+  - canonical: 事前審査
+    domain: consumer
+    definition: dispatcher が起動の列の待ちの行に先に掛け、 受付が断りうる理由を予想して置き場の file に残す段 (設計 dispatcher)。 結果は待ちの理由・起こす判定・受付のどれも読まない (予想は通行証にしない)。
+    relationships: [dispatcher, 起動の列, 受付]
+    flagged_ambiguities: ["事前審査 (予想・lens を撃たない) と契約の審査 (SRS FR49・lens の判定) は別"]
+  - canonical: 選択式の問いの遮断
+    domain: consumer
+    aliases: [choice question block]
+    definition: 器の plugin の hook の入口が、 marker が器の NAME を言う repo で AskUserQuestion を実行の前に deny し、 問いの経路を告げること (SRS FR86・ADR-0084)。 通す値も切る rules 行も例外の印も持たない。
+    relationships: [hook, 問いの経路, 台帳の問い, marker, 極性一覧]
+  - canonical: 問いの経路
+    domain: consumer
+    aliases: [question route]
+    definition: 選択式の問いを止めた周に器が告げる道 (SRS FR86・ADR-0084)。 平文の返答で問うことと、 user の裁定が要る問いを台帳の問い (SRS FR81) として立てることに、 vessel 宣言の任意 key question-route の 1 行が加わる。
+    relationships: [選択式の問いの遮断, 台帳の問い, vessel 宣言]
+  - canonical: 常設の memo
+    domain: consumer
+    definition: 昇格しない控え (裁定の控え・方針の一覧) としての memo の型。 器は持たない (SRS FR87・ADR-0085・裁定 2026-09-28T07:47Z)。 方針は ADR と設計 doc に、 裁定は台帳の問いに置き、 状態 pinned も memo を判定から外さない。
+    relationships: [memo, 台帳の問い]
+  - canonical: 候補なしの理由
+    domain: consumer
+    aliases: [no-candidate reason, NoCandidateReason]
+    definition: 口座選定が候補を返さない周の閉じた型の 4 語 (over-threshold・all-limited・unmeasured・excluded の宣言順・excluded は SRS FR36 の session 用の除外集合に当たる口座)。 選定は口座ごとに 1 つを付け、 外れた口座の語のうち宣言順で前の 1 つに畳む。 口座が 0 の周は unmeasured。 席の起動の断りの行に載る (SRS FR36 / FR69・ADR-0086・憲法 C2)。
+    relationships: [口座選定, 席の起動, 妥協の起動]
