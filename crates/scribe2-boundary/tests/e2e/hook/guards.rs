@@ -764,6 +764,32 @@ fn publish_marks_are_denied_through_the_binary() {
     clean(&[&repo, &state]);
 }
 
+/// 埋め込みの manifest と群を宣言しない置き場（host.toml 無し）で、AC50 (e) の解けない形 4 つは rc 2・stdout 0 byte・stderr 1 行
+/// （hit=unresolved:<形の語>・unresolved の経路）と記録 1 行ずつ、区切りを引用した heredoc の本文の gh pr create は rc 0・記録なし
+/// （§17 行 k2・偽の gh / git の回数は数えない）。
+#[test]
+fn publish_unresolved_forms_are_denied_before_any_scan() {
+    let (repo, state) = (git_repo(), tmp());
+    assert!(!state.join("host.toml").exists(), "群を宣言しない置き場");
+    let route = "解ける形で書き直す（git / gh を包まずに頭の語に置く・ref と remote と dir と -R と可視性の欄は literal・本文は file〔--body-file か api の -F k=@file〕か区切りを引用した heredoc で渡す）";
+    let forms = [
+        ("git push origin $B", "variable-ref"), ("git push --mirror", "mirror"), ("gh pr create --body-file -", "stdin-body"),
+        ("gh api -X PATCH repos/o/n -F visibility=@v", "api-visibility-file"),
+    ];
+    for (at, (command, form)) in forms.into_iter().enumerate() {
+        let text = assert_host_guard_deny(&run_host_guard_in(&state, &bash_payload(&repo, command)), command);
+        let want = format!("{NAME}: host-guard deny kind=publish hit=unresolved:{form} row=host_guard.publish ruling=user 2026-09-27T23:55Z — {route}");
+        assert_eq!(text.trim_end(), want, "{command}");
+        let lines = host_guard_records(&state);
+        assert_eq!(lines.len(), at + 1, "記録 1 行ずつ: {lines:?}");
+        assert_eq!(what_of(&lines.last().cloned().unwrap_or_default()), "host-guard-deny publish", "{command}");
+    }
+    let body = "gh pr create --title x --body \"$(cat <<'EOF'\n## 要約\n$HOME も字\nEOF\n)\"";
+    assert_silent(&run_host_guard_in(&state, &bash_payload(&repo, body)), "区切りを引用した heredoc の本文");
+    assert_eq!(host_guard_records(&state).len(), forms.len(), "通す周は記録を残さない");
+    clean(&[&repo, &state]);
+}
+
 /// (a) `[memo]` の title か `intake:memo` の label を持つ create は、body-file の本文に 4 節が全部在れば通り、1 つでも
 /// 欠ければ閉じた理由 1 つ（宣言順で最初の欠け）で止まる。相対 path は payload の `cwd` から解き、`scripts/bdw` も
 /// 連結の後ろの segment も読む。
