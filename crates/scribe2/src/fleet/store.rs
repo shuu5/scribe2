@@ -15,7 +15,7 @@ use super::{Event, Stage};
 use crate::rules::manifest::Manifest;
 use crate::rules::RuleValue;
 use std::fs::{self, OpenOptions};
-use std::io::{ErrorKind, Write};
+use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -372,16 +372,44 @@ fn append_line_when(
     Ok(warnings)
 }
 
-/// 1 行を追記して flush する。
+/// 1 行を追記して flush する（設計 fleet-event-log.md §10）。
+///
+/// 本文と改行は 1 つの buffer に詰めて **`write_all` を 1 回だけ**撃つ（fmt の adapter は本文と改行を別の
+/// write に分けうる）。file の末尾が改行で終わらない周（死んだ書き手が残した末尾）は、記録の前に改行を 1 つ
+/// 足して切り離す（同じ 1 回の write の頭）。途中で切れた記録は単独の malformed の行として残る。
 fn write_line(path: &Path, line: &str) -> Result<(), StoreError> {
     let mut file = OpenOptions::new()
         .create(true)
+        .read(true)
         .append(true)
         .open(path)
         .map_err(|err| StoreError::Io(format!("追記 file を開けない: {err}")))?;
-    writeln!(file, "{line}").map_err(|err| StoreError::Io(format!("書けない: {err}")))?;
+    let mut record = Vec::with_capacity(line.len() + 2);
+    if ends_unterminated(&mut file)? {
+        record.push(b'\n');
+    }
+    record.extend_from_slice(line.as_bytes());
+    record.push(b'\n');
+    file.write_all(&record)
+        .map_err(|err| StoreError::Io(format!("書けない: {err}")))?;
     file.flush()
         .map_err(|err| StoreError::Io(format!("flush できない: {err}")))
+}
+
+/// file が空でなく、末尾の 1 byte が改行でないか（呼ぶのは lock を握った [`write_line`] の中だけ）。
+fn ends_unterminated(file: &mut fs::File) -> Result<bool, StoreError> {
+    let len = file
+        .metadata()
+        .map_err(|err| StoreError::Io(format!("追記 file の長さを読めない: {err}")))?
+        .len();
+    if len == 0 {
+        return Ok(false);
+    }
+    let mut last = [0u8; 1];
+    file.seek(SeekFrom::End(-1))
+        .and_then(|_| file.read_exact(&mut last))
+        .map_err(|err| StoreError::Io(format!("追記 file の末尾を読めない: {err}")))?;
+    Ok(last[0] != b'\n')
 }
 
 /// 古い lock を外してよいか（**閉じた 2 値**・`s2-07l.482`）。
@@ -680,6 +708,56 @@ mod tests {
         std::fs::write(events_path(&dir), "こわれ\n").expect("壊れた行を書ける");
         assert!(matches!(append_if(&dir, &other, policy, Condition::NotStopped { run: "other" }), Err(StoreError::Malformed { .. })));
         assert_eq!(std::fs::read_to_string(events_path(&dir)).unwrap_or_default(), "こわれ\n", "読めない周は書かない");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// (a) 改行の無い完全な記録で終わる log に 1 件足すと、末尾を切り離して 2 件を `Ok` で読める（設計
+    /// fleet-event-log.md §10・行 d）。続けて 1 件足すと 3 件で、改行で終わる log には改行を余分に足さない
+    /// （空の行を持たない）。base は 1 行に 2 件が並び line=1 の `Malformed` になる。
+    #[test]
+    fn fleet_torn_line_complete_record_without_newline_is_split_off() {
+        use super::{append, events_path, read_all};
+        use crate::fleet::{EventKind, Stage};
+        use crate::pipe::fixture::event;
+        let dir = scratch("torn-complete");
+        let policy = LockPolicy { retry_ms: 30, stale_ms: 600_000 };
+        let left = event("left", EventKind::RunStage, Some(Stage::Gated), None, None);
+        std::fs::create_dir_all(events_path(&dir).parent().expect("親 dir")).expect("dir を作れる");
+        std::fs::write(events_path(&dir), left.to_line()).expect("改行の無い記録を書ける");
+        let next = event("next", EventKind::RunStage, Some(Stage::Gated), None, None);
+        append(&dir, &next, policy).expect("足せる");
+        assert_eq!(read_all(&dir).map(|events| events.len()), Ok(2), "末尾が切り離されて 2 件");
+        append(&dir, &next, policy).expect("もう 1 件足せる");
+        assert_eq!(read_all(&dir).map(|events| events.len()), Ok(3), "3 件");
+        let text = std::fs::read_to_string(events_path(&dir)).unwrap_or_default();
+        assert_eq!(text.lines().filter(|line| line.is_empty()).count(), 0, "空の行を持たない: {text:?}");
+        assert_eq!(text.lines().count(), 3, "行数は 3");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// (b) 途中で切れた記録で終わる log に 1 件足すと、切れた記録は単独の malformed の行として残る（行数 2・
+    /// `read_all` の Err は line=1 の 1 件だけ）。base は 1 行に並んで行数 1 になる。
+    #[test]
+    fn fleet_torn_line_cut_record_stays_a_lone_malformed_line() {
+        use super::{append, events_path, read_all};
+        use crate::fleet::{EventKind, Stage};
+        use crate::pipe::fixture::event;
+        let dir = scratch("torn-cut");
+        let policy = LockPolicy { retry_ms: 30, stale_ms: 600_000 };
+        let whole = event("left", EventKind::RunStage, Some(Stage::Gated), None, None).to_line();
+        let cut = &whole[..whole.len() / 2];
+        std::fs::create_dir_all(events_path(&dir).parent().expect("親 dir")).expect("dir を作れる");
+        std::fs::write(events_path(&dir), cut).expect("切れた記録を書ける");
+        append(&dir, &event("next", EventKind::RunStage, Some(Stage::Gated), None, None), policy).expect("足せる");
+        let text = std::fs::read_to_string(events_path(&dir)).unwrap_or_default();
+        assert_eq!(text.lines().count(), 2, "切れた記録と足した記録が別の行: {text:?}");
+        match read_all(&dir) {
+            Err(errors) => {
+                assert_eq!(errors.len(), 1, "Err は 1 件だけ: {errors:?}");
+                assert!(matches!(errors[0], StoreError::Malformed { line: 1, .. }), "line=1: {errors:?}");
+            }
+            Ok(events) => panic!("切れた記録は malformed のまま: {events:?}"),
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
