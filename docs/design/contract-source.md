@@ -950,6 +950,28 @@ size = "S"
 growth = ["crates/scribe2/src/pipe/land/finish.rs:35", "crates/scribe2/src/pipe/land.rs:5"]
 done = "(1) PushTip::Behind が先端の commit の sha を持ち、先端を知るのは land_train の 1 か所のまま (2) 先端でない便の終端は push の後に自分の sha が先端の祖先かを測り、祖先でない周と測れない周は CI を照合せず terminal:ci:unmeasurable で止まり（close しない）、祖先の周は CI の照合（待ちと ci_now）を先端の sha で撃つ (3) success の周は close し reason が landed <sha> ci=success tip=<先端>、failure と unmeasurable は close しない (4) 終端の 7 値・event の詞・ci_now の判定・pipe.ci_wait_s と pipe.ci_poll_s の値・列の記帳の順・先端の便と単独の着地の close の reason・--terminal-only の終端は変わらない 歯: 既存の pipe_train_terminal_only_the_tip_checks_ci_and_closes を接頭辞 pipe_train_terminal_ のまま名と期待を書き直し、常に success の偽 CI の 3 本の列の着地で 3 本とも Landed の後ろが push・ci:success・close:ok の 3 件、偽 CI の呼び出しが 6 回で最後に渡った sha が先端の sha であることを測る・pipe_train_tip_close_ の 1 本の fn の 1 周目が偽 bd の最後の close の reason に tip=<先端の sha> を、2 周目が偽 CI の failure で 3 本とも close しないことを測る・base は先端でない便が close せず止まるので RED"
 
+[[contract]]
+id = "bf"
+title = "契約表の検査が、着地の前の行の新しい歯の接頭辞が他の Declared 行の verify の filter 語を含み、予想の置き場の候補の全部がその行の write-set の外に解ける衝突を、既存の teeth-outside-write-set で docs の時点に出す — 候補は tests 欄か歯を置ける .rs を module の path の語で絞り、--verbose の行に予想の出所と直し方を足す（TableError の variant は足さない・memo s2-07l.708）"
+req = ["FR55", "FR48"]
+section = "54"
+write-set = ["crates/scribe2/src/pipe/table/check.rs", "+crates/scribe2/src/pipe/table/check/collide.rs", "crates/scribe2-boundary/tests/e2e/pipe/contracts.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail contracts_prefix_collision_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail contract_check_place_", "cargo nextest run -p scribe2 --lib --no-tests=fail contract_check_place_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail contract_closure_ext_real_table_has_zero_findings", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail contract_names_declared_real_table_has_zero_findings"]
+size = "M"
+growth = ["crates/scribe2/src/pipe/table/check.rs:30"]
+done = "(1) 着地の前の行（write-set の + の項目か creates のうち base の tracked に無い path を 1 つ以上持つ行・Declared か導出かを問わない）の verify の nextest 行ごとに、filter 語が識別子の形で、その行の scope の base の .rs の本文の全体（歯の区間の印の前も含む＝#[path] の子 module の歯の file の既存の歯も数える）に語を含む #[test] の fn が 0 本の語だけを新しい語と読み、読みは teeth_places を各 file の本文の前に歯の区間の印を置いた写しで撃つ (2) 置き場の候補は、行の tests 欄が在ればその項目、無ければ write-set（- の項目を除く）と creates の .rs のうち base に無い新規 file か base の歯の区間が空でない file で、語の verify 行の scope に入るもの（各候補に語の名の歯 1 本を置いた仮の本文を teeth_places に渡して解く） (3) tests 欄でない候補は、module の path（crates/<crate>/src/ か tests/ より後ろの段・mod / lib / main の段は数えない）の末尾の段の連なりを _ で繋いだ字面が語と等しいか語の先頭に _ の境で一致する file が在れば、一致の段数が最も多い file だけに絞り、一致が無ければ全部を残す (4) 他の Declared 行（doc を跨ぐ・自分の行を除く）ごとに、残った候補 1 つずつに語の名の歯 1 本だけを持つ仮の本文を teeth_outside に渡し、全部の候補がその行の write-set の外に解けた周だけ当たりとし、候補が 0 本の語は数えない (5) 当たった行は既存の teeth-outside-write-set の 1 件（その行の見出しの行番号・行 id・候補の file）と判定行の place-out= の 1 行に数えられ（findings の件数と欄の行数の一致は不変）、同じ行の当たりは 1 件に file を併せ、--verbose の知らせの行の末尾に予想の出所（新しい語の行の doc・行 id・語）と直し方（当たった行の write-set に file を足す〔base に無い file は +〕か、語を当たった filter 語を含まない語に変える）が付き、当たりの無い repo の出力は 1 字も変わらず、TableError の variant と TABLE_ERRORS は変わらない (6) 予想を組む 1 本は + の file（check.rs の子 module）に在って judge_repo が全 doc の行から 1 回だけ組み、check_repo と repo_findings の両方に効き、teeth_places と teeth_outside の本体・declared_teeth・受付と preflight・判定行の字面・契約表の schema・rules 行は変わらず、現物の契約表の歯 2 本（contract_closure_ext_real_table_has_zero_findings / contract_names_declared_real_table_has_zero_findings）と既存の置き場の歯 contract_check_place_（lib と e2e）が緑 歯: contracts_prefix_collision_ の e2e 2 本（crates/scribe2-boundary/tests/e2e/pipe/contracts.rs・toy の repo で contracts check を旗の有無の 2 周撃ち、出力の全行を測る）が、(a) 新しい語 dial_knob_ の行（別の doc・write-set に + の src/dial/knob.rs と既存の src/dial.rs と src/other.rs）の候補が module の path の語で knob.rs に絞られ、filter dial_（--lib）で write-set が src/dial.rs だけの行が knob.rs を持つ 1 件になり、同じ + を write-set に持つ行・scope が --test e2e の行・+ の file を持たない行の新しい語は当たらず、--verbose の行が予想の出所と直し方を持つこと (b) module の path の語に一致しない語 dial_turn_（候補は + の src/wheel.rs と src/other.rs）は候補の 2 つとも外に解ける行だけに当たって候補の 1 つを write-set に持つ行は当たらず、歯の区間の印を持たない file に在る名を語にした行は新しい語と読まれず、tests 欄を持つ導出の行は tests の file を置き場とすること を測り、base は予想を持たず findings=0 の判定行だけを出すので 2 本とも RED（機能不在）"
+
+[[contract]]
+id = "bg"
+title = "審査の材料に契約の節と done が指す別の設計の § の本文を束ねる — 閉じた 5 形の参照を拾って行 id は契約表の section で § に解き、自分の § を除く § ごとの 1 塊（行を指せば done つき）と解けない参照の 1 行を外の材料の既存の塊の後ろに足し、束ねた本文の名は 1 段だけ名の照合に渡す（cap と材料の file の数は不変）。base の要約の行数は幅で畳んだ数を名乗り、生の行と違う file は生の行を添える（memo s2-07l.710 / s2-07l.728）"
+req = ["FR49", "NFR1"]
+section = "55"
+write-set = ["crates/scribe2/src/pipe/review/outside.rs", "+crates/scribe2/src/pipe/review/outside/linked.rs", "crates/scribe2/src/pipe/review/base.rs"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail linked_section_material_", "cargo nextest run -p scribe2 --lib --no-tests=fail review_base_lines_", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_review_outside_", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_review_base_"]
+size = "M"
+growth = ["crates/scribe2/src/pipe/review/outside.rs:180", "crates/scribe2/src/pipe/review/outside/linked.rs:240", "crates/scribe2/src/pipe/review/base.rs:40"]
+done = "(1) 本文（節の本文〔導出物の行は goal〕・done・約束の行の text）から閉じた 5 形（<doc>.md §N とリンクの字の中の [<doc>.md §N](…)・行き先が .md のリンクの直後の §N・<doc>.md#<id>・<doc>.md 行 <id> と <doc>.md の行 <id>・doc の字を前に持たない同じ doc の §N と 行 <id>）を本文に現れた順に拾い、直後が . と数字の §N と、直前の path の字の連なりが .md で終わらず英数字を持つ §N（ADR-0045 §2 など）は拾わず、<doc> は basename を契約の設計 doc と同じ dir の tracked の file に解く (2) 行 <id> と #<id> はその doc の契約表の行の section で § に解き、§ の本文は review.rs の私有の section_text を outside の子 module から可視性を変えずに呼んで読み（2 本目の節の読み手を書かない）、自分の § に解けた参照は捨て、同じ § は 1 塊に畳み、design が設計 pointer でない周は参照を拾わない (3) 解けた § ごとに頭の行 - <doc の path> §N と § の本文の各行を 2 字下げた行の 1 塊で、行を指した参照があれば塊の末尾に行ごとに 行 <id> の done: <done> の 1 行が付き、解けない参照は正規化した字面（<doc>.md §N・<doc>.md 行 <id>・§N・行 <id>）を本文に現れた順に重複なく並べた - 解けない参照: の 1 塊になる (4) 塊は outside.txt の既存の塊の後ろに解けない参照の塊、§ の塊（指された順）の順で足され、材料の file は 5 本のまま、参照を持たない契約と参照が全部自分の § と行に解ける契約（材料の節の本文の先頭の <doc>#<id> §N を含む）の外の材料は 1 字も変わらず、名指しも参照も無い契約は外の材料の file を置かない (5) § の塊の本文を mentioned_names に 1 回渡し、契約の本文が既に名指した名・file・dir を除いた残りを § の塊の後ろに §51 形 3 の (a) → (b) → (c) の形で足し、束ねた § の中の § の参照は辿らない (6) lens の残りの測り方と outside_block は変わらず、収まらない § の塊と名の塊は塊ごとの切り詰めの 1 行、それも収まらなければ落とした本数の 1 行になり、rules 行は足さない (7) outside.rs の PREAMBLE が解けない参照と § の塊と 1 段の名の塊が既存の塊の後ろに並ぶことと、data file と dir の配下の file の行数が改行で数えた生の行（wc -l と同じ）、.rs の要約の行数が幅で畳んだ数であることを書く (8) item_text の見出しは幅で畳んだ全体の数と生の行の数が違う file だけ全体の数の直後に（幅 <W> で畳んだ数・生の行 <n>）を添え、本体の数は畳んだ数のまま、2 つが等しい file の見出しは 1 字も変わらず、base.rs の PREAMBLE が畳む式（字数 ÷ 幅の切り上げ・最小 1・受付の上限の余地と同じ）と括弧の意味を書き、外の材料の名指された .rs の要約も同じ見出しになる (9) 材料の file の数と名・既存の塊の中身と並び・outside_block と base_block・lens の雛形と穴・diff の審査・design.txt と列外の鍵と焼き直しの門の物差し・mentioned_names と section_text の本文と可視性・FileLines と受付の上限の余地の式・data file と dir の行数の式・審査の観点と理由の型と rc は変わらない 歯: linked_section_material_（outside.rs の既存の歯の区間に 4 本・既存の helper で bundle を通す）が (a) 5 形の全部を持つ本文の § の塊 4 本の頭と並び（母集団を同じ assert で数える）・2 字下げの本文・行ごとの done の行と、自分の § と同じ § の 2 形と ADR-0001 §4 と §4.1 が塊を作らないこと、節の本文の先頭の 1 行と自分の § だけを指す本文が塊を作らないこと (b) 解けない参照の塊 1 本の字面と並びと位置 (c) 束ねた § だけが名指す名の塊が § の塊の後ろに在り、契約の本文も名指す名の塊は既存の位置に 1 本だけで、束ねた § が指す別の § の塊とその名の塊は無いこと (d) 残りが足りない周の § の塊の切り詰めの 1 行と、小さい § の塊と解けない参照の塊の残りと、説明の 1 行の並びを測り、review_base_lines_（base.rs の既存の歯の区間に 1 本）が幅 120 を越える行を持つ .rs の見出しの括弧と越えない .rs の見出しの不変（母集団 2 項目）と base_block と outside_block の説明の 1 行を測る。base の bundle は § の塊も解けない参照の塊も作らず、base の item_text の見出しは括弧を持たないので 5 本とも RED（歯は base に在る関数だけを呼び overlay の上で compile は通る）、既存の pipe_review_outside_ と pipe_review_base_ の in-file の歯は期待を変えずに緑"
+
 <!-- contracts:end -->
 
 
@@ -1298,3 +1320,154 @@ done = "(1) PushTip::Behind が先端の commit の sha を持ち、先端を知
 - 却下:
   - 先端を先に終端させ、その結果を先端でない便へ写す。列の記帳の順（後続 → 先頭）を変え、終端の失敗の帰属が便ごとに取れなくなる。
   - 便ごとに自分の sha を先端として押し直す。便ごとに CI が走り、列の終端が CI の本数ぶん順に待つ。
+
+## 54. 行の新しい歯の接頭辞が着地済みの行の verify の filter 語を含み、その行の歯の置き場を write-set の外へ広げる衝突を、契約表の検査が docs の時点で予想して出す（契約表の行 bf・memo `s2-07l.708`）
+
+- 何が起きているか:
+  - verified（1 件目・2026-09-27）: 行 bc は新しい子 module の in-file の歯に接頭辞 `pipe_review_outside_` を使った。この語は着地済みの行 c（`-p scribe2` の旗なし）と行 ah（`--lib`）の filter 語 `pipe_review_` を含む。そのため便の木では、c と ah の歯の置き場が行 bc の `+` の file まで広がり、現物の契約表の歯 2 本が `teeth-outside-write-set` で赤になった。直しは、c と ah の write-set に同じ file を `+` で先に宣言する docs の PR（#755）だった。
+  - verified（2 件目・予測）: ledger-form 行 h の新しい接頭辞 `hook_ledger_graph_` は、着地済みの行 f の filter 語 `ledger_graph_`（`--test e2e`）を含む。行 h の e2e の歯の置き場 `crates/scribe2-boundary/tests/e2e/hook/guards.rs` は、行 f の write-set に無い。main 0c0dfc7 の写しで guards.rs にこの接頭辞の歯を 1 本足して `contracts check` を撃つと、findings が 1 件（`docs/design/ledger-form.md:219` の行 f）出る。足す前は 0 件。本 § と同じ docs の PR で、行 h の接頭辞を `hook_graph_guard_` に変えて外した。
+  - verified: 起票の前の preflight と docs の PR の `contracts check` は、2 件ともに 0 件だった。新しい file も新しい名の歯も base に無いので、他の行の歯の置き場を base で解いても当たらない。
+  - verified（器の読みを scratch の走査で模した値・母集団は main の first-parent の 624 commit〔2026-09-20 〜 0c0dfc7〕の表と木）: 本 § の形で当たる組（新しい語の行・語・当たる行）は 15 組だった。
+    - 11 組は、新しい語の行が着地した commit で、当たる行の filter 語が新しい歯の file を write-set の外に解いた。11 組とも、行 aw（§45）が findings に上げる 2026-09-23 より前である。
+    - 2 組は 1 件目、1 組は 2 件目である。
+    - 残る 1 組は、着地の前に語が改名されたので判定できない。
+    - 形 1 の本文の全体と形 3 の絞りを外し、形 4 を「候補のどれか 1 つで当たる」に換えると、45 組になる（棚卸しの報告の形に近い）。
+    - binary で撃って一致を確かめたのは、0c0dfc7 の 1 組（2 件目）だけである。
+  - deduced: 新しい語・置き場の候補・他の行の filter 語と write-set は、どれも docs の時点で契約表の字面と base の木から決まる。
+- 現物（main 0c0dfc7・verified）:
+  - `crates/scribe2/src/pipe/table/check.rs` の `judge_repo`（:584）は doc ごとに `judge_doc`（:649）を撃つ。置き場の検出線 `Places` の `measure`（:473）は、その doc の Declared 行（`is_declared`・:499＝`creates` / `tests` / `also` を持たず write-set を持つ行）ごとに `teeth_outside`（:505）を撃つ。
+  - `teeth_outside` は verify の行ごとに `teeth_places`（`crates/scribe2/src/pipe/closure/derive.rs` の :163）を base の `.rs` の本文で解き、write-set の外の file を集める。解けない行（base で 0 本の語＝`TeethPlaceUnresolved`）は数えない。
+  - `teeth_places` は、nextest の行の最後の filter 語だけを読む（`nextest_read`・:245）。そのうえで、行の scope（`in_scope`・:305）の file の歯の区間を見て、`#[test]` の直下の fn の名が語を含む file を返す。歯の区間は `crates/scribe2/src/pipe/closure.rs` の `test_region`（:349）が決める。tests の dir の下は file の全体で、src は行頭の `#[cfg(test)]` から末尾までである。
+  - このため新しい語は、どちらの側からも見えない。新しい語の行の側は解けないので数えない。他の行の側は、新しい file も新しい名の歯も base に無いので当たらない。
+  - `#[path]` で子 module に置いた歯の file は、歯の区間の印を持たない。`crates/scribe2/src/hook/host_guard_tests.rs` は `#[cfg(test)]` の行を持たない（親の `crates/scribe2/src/hook/host_guard.rs` の :906〜:908 が `#[cfg(test)]`・`#[path]`・`mod tests;` を持つ）。そのため、この file に在る `host_guard_kind_` の歯 12 本は `teeth_places` に見えない。
+  - 当たった行は `TableError` の `TeethOutsideWriteSet`（`crates/scribe2/src/pipe/table.rs` の :345・行番号・行 id・file）の 1 件になる。`--verbose` の周だけ、`place_notices`（:438）が `contracts place-out: <doc> 行 <id> の歯の file が write-set の外: <file>` の 1 行を出す。
+  - 大きさ: check.rs は 1357 行（幅で畳んで 1389）で、R-C4-2 の上限 1500 までの余地は 111 行しかない。e2e の `crates/scribe2-boundary/tests/e2e/pipe/contracts.rs` には、置き場の検出線の歯（`contract_check_place_verbose_names_the_outside_row_only_with_the_flag`・:320）と toy の repo の helper（`derive_repo_with`・`declared_teeth_row`・`ceiling_rules`）が在る。
+- 形（番号は done と 1:1）:
+  1. **対象の行と新しい語**:
+     - 対象の行は、write-set の `+` の項目か `creates` のうち、base の tracked に無い path を 1 つ以上持つ行（着地の前の行）とする。Declared か導出の行かは問わない。
+     - 新しい語は、その行の verify の nextest 行ごとの filter 語（`teeth_places` と同じ読み）のうち、次の 2 つを満たす語とする。
+       - 識別子の形である。
+       - その行の scope の base の `.rs` の本文の**全体**で、`#[test]` の直下の fn の名に語を含むものが 0 本である。
+     - 本文の全体で数えるのは、`#[path]` の子 module に置いた歯の file の既存の歯を、新しい語と読まないためである。
+     - 読みは `teeth_places` を、各 file の本文の前に歯の区間の印を置いた写しで撃つ（読み手を増やさない）。
+  2. **置き場の候補**:
+     - 行の `tests` 欄が在れば、その項目を候補とする。
+     - `tests` 欄が無ければ、write-set（`-` の項目を除く・印は剥がす）と `creates` の `.rs` のうち、歯を置ける file を候補とする。歯を置ける file とは、base に無い新規 file か、base の歯の区間が空でない file である（`declared_teeth` が置き場と読む下界と同じ弁別）。
+     - そのうち語の verify 行の scope に入るものを残す。scope の判定は、各候補に語の名の歯を 1 本だけ置いた仮の本文を `teeth_places` に渡して解く（scope の読み手を増やさない）。
+  3. **module の path の語で絞る**: `tests` 欄でない候補は、次の規則で絞る。repo の歯の接頭辞は module の path の語で始める慣例に合わせる（`pipe_review_outside_` は `crates/scribe2/src/pipe/review/outside.rs`、`closure_names_mentioned_` は `crates/scribe2/src/pipe/closure/names.rs`）。
+     - module の path は、`crates/<crate>/src/` か `crates/<crate>/tests/` より後ろの段とする。末尾の `.rs` は落とし、`mod` / `lib` / `main` の段は数えない。
+     - その path の末尾の段の連なりを `_` で繋いだ字面が、語と等しいか、語の先頭に `_` の境で一致する候補を探す。
+     - そういう候補が在れば、一致した段の数が最も多い file だけを残す。1 つも無ければ、候補の全部を残す。
+  4. **当たり（候補の全部で当たる周だけ）**:
+     - 他の Declared 行（doc を跨ぐ・自分の行は除く）ごとに、残った候補を 1 つずつ測る。その候補に語の名の歯 1 本だけを持つ仮の本文を `teeth_outside` に渡す。
+     - 全部の候補がその行の write-set の外に解けた周だけを、当たりとする（どこに置いても当たる衝突だけを出す）。
+     - 候補が 0 本の語は数えない。
+  5. **出し方**:
+     - 当たった行は、既存の `teeth-outside-write-set` の 1 件になる（その行の見出しの行番号・行 id・候補の file）。判定行の `place-out=` にも 1 行として数え、findings の件数と欄の行数の一致は保つ。同じ行が base の歯でも外に解ける周や、2 つの語から当たる周は、1 件に file を併せる。
+     - `--verbose` の知らせの行の末尾に、予想の出所（新しい語の行の doc・行 id・語）と直し方を足す。直し方は次のどちらかである。
+       - 当たった行の write-set に file を足す（base に無い file は `+` を付ける）。
+       - 語を、当たった filter 語を含まない語に変える。
+     - 当たりの無い repo の出力は 1 字も変えない。`TableError` に variant は足さない（TableError と RuleKind の閉包を広げない）。
+  6. **置き場と変えないもの**:
+     - 予想を組む 1 本は、行 bf の write-set の `+` の file（`check.rs` の子 module）に置く。`judge_repo` が全 doc の行から 1 回だけ組み、置き場の検出線に渡す。`check_repo` と `repo_findings` は同じ `judge_repo` を通るので、両方に効く。
+     - 変えないもの: `teeth_places` と `teeth_outside` の本体・`declared_teeth`・受付と preflight（`check_table` の 1 行の検査は置き場を撃たない）・判定行の字面・`TABLE_ERRORS` の pin・契約表の schema・rules 行。
+- 歯（接頭辞 `contracts_prefix_collision_`・e2e の `crates/scribe2-boundary/tests/e2e/pipe/contracts.rs` に 2 本）:
+  - 接頭辞の実測（2026-09-28）: `grep -rn "fn contracts_prefix_collision_" crates/` は 0 件。全 doc の verify の filter 語のうち、この接頭辞の名の部分に含まれる語も 0 件。置き場の file は行 bf の write-set と verify 行の scope（`--test e2e`）の中に在る。
+  - 2 本とも toy の repo（`derive_repo_with` に file を足す）で `contracts check` を撃ち、旗の有無の 2 周で出力の全行を測る。
+  - (a) crate `toy` の src/dial.rs（歯の区間に `dial_ok`）を置く。新しい語 `dial_knob_` の行は write-set に `+` の src/dial/knob.rs と既存の src/dial.rs と src/other.rs を持ち、候補は module の path の語で knob.rs に絞られる。
+    - 当たる: filter `dial_`（`--lib`）で write-set が src/dial.rs だけの行が、knob.rs を持つ 1 件になる。
+    - 当たらない: 同じ `+` を write-set に持つ行・scope が `--test e2e` の行・`+` の file を持たない行の新しい語。
+    - `--verbose` の知らせの行は、予想の出所（doc・行 id・語）と直し方を持つ。新しい語の行は別の doc に置き、doc を跨いで当たることも測る。
+  - (b) 一致の無い語と、読まない語を測る。
+    - module の path の語に一致しない語 `dial_turn_`（候補は `+` の src/wheel.rs と src/other.rs）は、候補の 2 つとも外に解ける行だけに当たる。候補の 1 つを write-set に持つ行は当たらない。
+    - 歯の区間の印を持たない file（`#[path]` の型）に在る名を語にした行は、新しい語と読まない。この行の候補は、新しい語と読めば当たる形に置く。
+    - `tests` 欄を持つ導出の行は、`tests` の file を置き場とする。
+  - 負の側はどれも、その条件を外す変異で当たりが増える形に置き、当たらない行の本数を同じ assert で数える。
+  - base で RED の理由: base は予想を持たないので、2 本とも findings=0 の判定行だけが出る（機能不在）。
+  - 現物の契約表の歯 2 本（`contract_closure_ext_real_table_has_zero_findings` / `contract_names_declared_real_table_has_zero_findings`）は、本行を足した表で緑のままである（本 § の形を模した走査で、行 h の接頭辞を直した後の表は 0 組・deduced）。
+- 限界:
+  - 着地の前かどうかは、`+` の項目か `creates` の base に無い path で読む。新しい file を持たない行（既存の file だけに歯を足す行）の新しい語は予想しない。
+  - 置き場は予想である。module の path の語で絞れない語は候補の全部で当たる周だけを出すので、候補の一部だけが外に在る衝突は今と同じく gate の現物の契約表の歯まで残る。
+  - verify の 1 行に filter 語を 2 つ以上並べた行は、最後の語だけを読む（`teeth_places` と同じ・nextest は全部の語で当てる）。
+  - 識別子の形でない語（`::` を含む module path の filter）は数えない。`--exact` の行は、等しい名だけが当たる。
+  - 閉包の形（新しい file の本文が他の行の `touches` の型を match する・memo の notes の 2 件目と 3 件目）は file の本文で決まるので、docs の時点の字面では拾えない。
+- 却下:
+  - 設計の書き方の注意として散文で残す。規律を散文で渡す形で、N2 に当たる。
+  - 絞らずに、候補のどれか 1 つで当たれば出す。模した走査で 45 組（本 § の形は 15 組）になり、歯を置かない file で当てる。例は vessel-hook 行 j の 2 組で、`host_guard_kind_` の 2 語が行 b に当たり、`rules_embedded_manifest_declares_publish_guard_` が carry-prep 行 j に当たる。
+  - 語が `_` で終わるなら `+` の file だけに置く。行 bc の `closure_names_mentioned_` が、行 ac（filter `closure_names_`）に偽で当たる。実際の歯は、行 ac の write-set の中の `crates/scribe2/src/pipe/closure/names.rs` に置かれた。
+  - 歯の区間だけで新しい語を数える。`#[path]` の歯の file の既存の歯を新しい語と読む。例は vessel-hook 行 j の `host_guard_kind_each_word_kind_names_its_own_row` で、この歯は host_guard_tests.rs の :123 に在る。模した走査では、pipeline 行 am の 3 語の偽の当たりが増える。
+  - 仮の名を base の本文の列に重ね、`teeth_outside` を 1 回だけ撃つ。base の歯と混ざるので、どの行のどの語が当てたかを名指せず、候補の全部で当たるかも測れない。
+  - `TableError` に variant を足す。直す手は既存の語と同じ（当たった行の write-set か、語）なので、言い分ける意味が無い。語の一覧の pin も動く。
+  - 着地済みかを台帳で判じる。契約表の検査が台帳の在否に依存する。
+  - 受付と preflight で撃つ。衝突の相手は着地済みの行で、直すには docs の PR でどちらかの行を書き換える。docs の PR の CI（現物の契約表の歯）で止めるのが最も早い。
+
+## 55. 審査の材料に、契約の節と done が指す別の設計の § の本文を束ね、base の要約の行数に式を名乗らせる（契約表の行 bg・memo `s2-07l.710` / `s2-07l.728`）
+
+- 何が起きているか:
+  - verified（本 repo の置き場の審査の記録）: 行 bc（§51）の着地（f2ab774・2026-09-27T15:59Z）から 2026-09-28T04:18Z までに審査は 36 回あり、PASS でない周は 14 回、そのうち `section-material-missing` は 8 回だった。8 回のうち 2 回は同じ型である。契約の節と done が別の § を `<doc>.md §N`・`<doc>.md 行 <id>`・`行 <id>` の形で指すだけで、指した先の本文も、そこに書かれた名も材料に無い（memo `s2-07l.710`）。
+    - 便 `s2-07l.703`（seat-heartbeat.md §16 行 t・16:07Z・INCONCLUSIVE）: lens の evidence は 2 つ。「dispatcher.md §26 の形 1 / 形 2 と行 w の done が材料に無い」と「mod facts の可視性を判じられない」。done は呼ぶ関数を「dispatcher.md §26 の 1 関数（行 w が pub(crate) で開く事実と字面の関数）」とだけ書き、識別子で名指さない。材料の outside.txt は dispatcher.md を「行数 752 / byte 220200」の 1 行（§51 形 3 (c) の data file の行）でだけ持つ。
+    - 便 `s2-07l.700`（vessel-hook.md §14 行 h・18:02Z・INCONCLUSIVE）: `at` は live_row.rs・pipeline.md §57・行 az・歯の接頭辞の 4 つである。evidence は、行 i の読み手の関数名と可視性、行 az の判定と印の書き手が材料に無いことを挙げる。行 i は同じ doc の §15 の行、行 az は pipeline.md §57 の行である。outside.txt は pipeline.md を「行数 1499 / byte 496004」の 1 行でだけ持ち、§57 が書く名（stale・write_mark・git_segments）は 0 件だった。
+    - 2 便とも、指した先の事実を自分の § に写す docs の直し（9bbaa82〔#756〕・1079f35）の後、2 回目の審査は PASS だった。§51 の限界の「別の設計 doc の節は材料に入らない」が、設計どおりの穴として出た。残りの 6 回（write-set の外の関数の可視性・節が決めていない経路・歯の欠け）は、別の § を指す型ではない。
+  - verified（code）と memo の記録: 審査の材料で、base.txt の行数は幅で畳んだ数、outside.txt の data file と dir の配下の file の行数は改行で数えた生の行である。2 つが同じ「行数」の字で並ぶ（下の現物）。非公開の隣の project の審査の 1 回（2026-09-28）では、同じ file が base.txt で「行数 全体 989 / 本体 989」、outside.txt で「行数 985」と並び、lens がそれを根拠の 1 つにして INCONCLUSIVE を返した（memo `s2-07l.728`・席間の知らせの記録）。本 repo の置き場で evidence に「行数」を含む審査は 5 回あり、食い違いを根拠にした回は 0 回だった。
+- 現物（main 0c0dfc7・verified）:
+  - 組み手: `crates/scribe2/src/pipe/review.rs` の `materials`（:346）が、節の本文・done・約束の行の text を本文の列にする。節の本文は `design_text`（:421）が作り、先頭に `<doc>#<id> §N` の 1 行を持つ。`crates/scribe2/src/pipe/review/outside.rs` の `outside_text`（:97）から呼ぶ `bundle`（:107）が、塊を (f) → (d) → (e) → (a) → (b) → (c) の順に並べる。本文の中の `dispatcher.md` のような字は、§51 形 2 の path の連なりとして tracked の file に解ける。だが (c) の data file の 1 行（`.md` は鍵の列を持たない）になるだけで、§ の本文は読まれない。
+  - 節の読み手: review.rs の私有の `section_text`（:447）は、`## N.` の見出しの次の行から次の `## ` の前までを読む（契約表の区間と fence の中の `## ` は数えない）。review.rs の本体で呼ぶのは `design_text` だけである。Rust の私有の item は、定義した module とその子孫から見える。孫の module から親の親の私有の関数を呼ぶ最小の crate を、2026-09-28 に rustc の edition 2021 で build して確かめた。したがって `outside` の子 module から、可視性を変えずに同じ 1 本を呼べる。行 id を行に解く読み手は `crates/scribe2/src/pipe/table/parse.rs` の `find_row` で、outside.rs の `depends_chunks`（:145）が同じ設計 doc の表で使っている。
+  - 名の照合は `crates/scribe2/src/pipe/closure/names.rs` の `mentioned_names`（:78）の 1 本の口である。本文の列を受けて `Mentioned`（名・file・dir）を返す。
+  - cap: `crates/scribe2/src/headless/lens.rs` の `prompt_of`（:222）が、既存 4 材料と base の段を足した後の残りを outside.rs の `outside_block`（:460）に渡す。`outside_block` は行頭の `- ` で始まる塊ごとに収め、収まらない塊は切り詰めの 1 行にする。それも収まらなければ、落とした本数の 1 行を残す（§51 形 4）。`gate.token_cap` は 150,000 byte。2026-09-27 の 2 便で、既存の外の材料を置いた後の残りは約 101,000 byte（行 h）と約 77,000 byte（行 t）だった（deduced・材料の file の byte から見積もった）。
+  - 材料の鍵: 先撃ちの使い回し（dispatcher.md §27 行 aa / ac）の鍵は、材料の dir の全 file の名と本文の digest である（`crates/scribe2/src/pipe/dispatch/prelens.rs` の `digest`・:295）。先撃ち（同 file の `stage`・:270）も Reviewed の段も、review.rs の同じ `stage` で材料を組む。列外の鍵（review.rs の `design_material`・:415）は design.txt だけを見る。焼き直しの門で `section-material-missing` を測る物差し（`crates/scribe2/src/pipe/review/judgement.rs` の `section_unaddressed`・:156）も、design.txt の差だけを測る。
+  - 行数の 2 つの式（.728）: `crates/scribe2/src/pipe/review/base.rs` の `item_text`（:59）は、`crates/scribe2/src/pipe/declaration/write_set.rs` の `FileLines`（`of`・:229）が数えた値を「行数 全体 N / 本体 M」（:73）と書く。この値は幅（rules 行 `R-C4.line-width` = 120）で畳んだ数である。1 行を「字数 ÷ 幅」の切り上げ（最小 1）と数える `weighted_lines` の式で、受付の上限の余地と xtask の file-lines も同じ式を使う。outside.rs の `file_chunk`（:352）と `dir_chunk`（:450）は、改行で数えた生の行（`str` の `lines` の本数）を同じ「行数」の字で書く。外の材料の名指された `.rs`（§51 形 3 (b)）は `item_text` を通るので、畳んだ数になる。説明の 1 行（base.rs の `PREAMBLE`・:42 と outside.rs の `PREAMBLE`・:27）は、どちらも式を書かない。
+- 形（番号は done と 1:1）:
+  1. **参照を拾う形は閉じた 5 つ**: 本文（§51 形 2 と同じ列＝節の本文〔導出物の行は goal〕・done・約束の行の text）から、次の形（参照の形 (A)〜(E)）を本文に現れた順に拾う。
+     - (A) `<doc>.md §N`（リンクの字の中の `[<doc>.md §N](…)` を含む）
+     - (B) `[…](<path>.md) §N`（行き先が `.md` のリンクの直後の §N・行き先の `#` から後ろは捨てる）
+     - (C) `<doc>.md#<id>`（設計 pointer の形。材料の節の本文の先頭の 1 行もこの形）
+     - (D) `<doc>.md 行 <id>` と `<doc>.md の行 <id>`
+     - (E) doc の字を前に持たない同じ doc の `§N` と `行 <id>`
+
+     `N` は数字の列である。`§` の直前（空白 1 つまでを飛ばす）が `)` なら、先に (B) の行き先を見る。直後が `.` と数字の §N（`§2.8` のような小節の形）は拾わない。それ以外で、`§` の直前（空白 1 つまでを飛ばす）にある path の字（英数字と `_ . / - #`）の連なりが、`.md` でも `.md#<id>` でも終わらず英数字を持つとき（`ADR-0045 §2` のような別の種類の文書）は、参照と読まない。`<id>` は英小文字で始まり、英小文字・数字・`-` が続く連なりである。`<doc>` は basename で、契約の設計 doc と同じ dir の tracked の file に解く。
+  2. **§ に解く読み手は既存の 2 本**: `行 <id>` と `#<id>` は、その doc の契約表の行（`find_row`）の `section` で § に解く。§ の本文は、行 bg の write-set の `+` の file（`outside` の子 module）から review.rs の私有の `section_text` を呼んで読む（2 本目の節の読み手を書かない・可視性を変えない）。契約の自分の §（設計 doc が同じで、行の `section` と同じ番号）に解けた参照は捨てる。同じ § に解けた参照は 1 塊に畳む。契約の `design` が設計 pointer でない周は参照を拾わない（設計の材料が理由の 1 行を既に持つ）。
+  3. **塊の形**（§51 形 3 の (a)〜(f) に続けて (g)〜(i) と呼ぶ）:
+     - (h) § の塊: 解けた § ごとに 1 塊。頭の行は `- <doc の path> §N`、続きの行は § の本文の各行を 2 字下げたもの（本文の行頭の `- ` を塊の頭と読ませない）。行を指した参照（(C)・(D)・(E) の `行 <id>`）があれば、塊の末尾に行ごとに `  行 <id> の done: <done>` を 1 行足す。
+     - (g) 解けない参照の塊: doc が tracked に無い・§ が無いか空・行 id が表に無い・表を読めない参照を、1 塊 `- 解けない参照: <字面>, …` にまとめる。字面は正規化した形（`<doc>.md §N`・`<doc>.md 行 <id>`・`§N`・`行 <id>`）で、本文に現れた順に重複なく並べる（黙って落とさない・C10）。
+  4. **置き場は既存の塊の後ろで、file は 1 本のまま**: 塊は outside.txt の既存の (f) → (d) → (e) → (a) → (b) → (c) の後ろへ、(g) → (h)（指された順）の順で足す。大きい塊を後ろに置くのは、§51 の「小さい構造の材料が先」に合わせるためである。材料の file は 5 本のまま（`crates/scribe2-boundary/tests/e2e/pipe/review.rs` の :230 の列は変わらない）。参照を持たない契約と、参照が全部自分の § と行に解ける契約（材料の節の本文の先頭の `<doc>#<id> §N` はこれに当たる）の外の材料は、1 字も変わらない。名指しも参照も無い契約は、今どおり外の材料の file を置かない。
+  5. **名は 1 段だけ**: (h) の塊の本文（§ の本文と done の行）を、既存の `mentioned_names` に 1 回渡す（照合の規則は §51 形 2 のまま・同じ 1 本の口）。契約の本文が既に名指した名・file・dir を除いた残りを、(i) として (h) の後ろに §51 形 3 の (a) → (b) → (c) の形で足す。(h) の本文の中の § の参照は辿らない（再帰しない）。
+  6. **cap は新しい閾値を作らない**: lens の残りの測り方と `outside_block` は変えない。(g)〜(i) の塊も、収まらなければ塊ごとの切り詰めの 1 行（(h) の頭は `- <doc の path> §N`）になり、それも収まらなければ落とした本数の 1 行に数える（§51 形 4 のまま・rules 行を足さない）。
+  7. **外の材料の説明の 1 行**: outside.rs の `PREAMBLE` に 2 つを書く。(g)〜(i) が既存の塊の後ろに並ぶこと（§ の塊は見出しの次の行から次の見出しの前まで・行を指せばその行の done つき）。data file と dir の配下の file の行数は改行で数えた生の行（wc -l と同じ）、`.rs` の要約の行数は base の要約と同じ幅で畳んだ数であること。
+  8. **base の要約の行数が式を名乗る（.728）**: `item_text` の見出しは、幅で畳んだ全体の数と改行で数えた生の行の数が違う file に限り、全体の数の直後に `（幅 <W> で畳んだ数・生の行 <n>）` を添える（例: `行数 全体 989（幅 120 で畳んだ数・生の行 985）/ 本体 989`）。本体の数は畳んだ数のまま。2 つが等しい file の見出しは 1 字も変わらない。base.rs の `PREAMBLE` には、行数は 1 行を「字数 ÷ 幅（rules 行 `R-C4.line-width`）」の切り上げ（最小 1）と数えた数（受付の上限の余地と同じ式）であることと、生の行と違う file だけ生の行を括弧で添えることを書く。外の材料の名指された `.rs` の要約（§51 形 3 (b)）も同じ `item_text` を通るので、同じ見出しになる。
+  9. 変えないもの: 材料の file の数と名・既存の塊の中身と並び・`outside_block` と `base_block`・lens の雛形と穴・diff の審査・design.txt（列外の鍵と焼き直しの門の物差しの入力）・`mentioned_names` と `section_text` の本文と可視性・`FileLines` と受付の上限の余地の式・data file と dir の行数の式・審査の観点と理由の型と rc。
+- 見込み（deduced・今の木〔main 0c0dfc7 と同じ波の docs〕の設計 doc 26 本・契約表の行 332 本で、形 1〜5 の規則を Python で模した。各便の base の木とは差がありうる）:
+  - § に解ける参照を 1 つ以上持つ行は 296（89%）で、1 行の (h) の塊は中央値 3・最大 22。束ねる § の本文の byte は中央値 20,282・p90 66,990・最大 187,737（gate-cost.md の 5 行・19 §）で、100,000 を越える行は 10。同じ doc の § だけなら中央値 15,566・p90 47,608。別の doc の § は 146 行が持ち、p90 は 27,301。
+  - (i) で足される名（契約の本文が名指さず、束ねた § の本文だけが名指す base の宣言の名）は、中央値 34・p90 102・最大 222。backtick の中だけに限っても中央値 33・p90 100・最大 222 で、ほぼ変わらない。
+  - 解けない参照を持つ行は 103（計 174 件）。多いのは散文の「行 id」と、前の文の doc を受ける `§N`（同じ doc の無い節に解ける）である。
+  - 2026-09-27 の 2 便を今の木で模すと、行 h（.700）は pipeline.md §57（行 az の done つき）・vessel-hook.md §10 / §15（行 i の done つき）・contract-source.md §30 の 4 塊で計 52,747 byte、行 t（.703）は dispatcher.md §5 / §26（行 w の done つき）・seat-heartbeat.md §2 / §3 / §10 / §17 の 6 塊で計 67,005 byte になる。どちらも上の残り（約 101,000・約 77,000 byte）に収まる。lens が欠けていると名指した「行 w の done」「§26 の形 1 / 形 2」「行 az の判定と書き手」「行 i の読み手」は、どれも束ねた § と done の行に入る。
+- 歯（接頭辞 2 つ。どちらも `crates/` 全体で `fn <接頭辞>` が 0 件。契約表の nextest の verify 行 874 本の filter 語 644 語のどれも、この接頭辞で始まる名と、その module の path を含む名の substring にならない〔実測 2026-09-28〕）:
+  - `linked_section_material_`（`crates/scribe2/src/pipe/review/outside.rs` の既存の歯の区間に 4 本）: 既存の helper（`scratch`・`text_of`・`chunk_of`）で `bundle` を通す。行 bg の write-set の `+` の file には歯を置かない（flip-check は新しい src file の in-file の歯を base へ写さない）。fixture は toy の木に設計 doc を 2 本足す（自分の doc に § 4 つと行 2 本、別の doc に § 2 つと行 1 本）。
+    - (a) 5 形の全部を持つ本文で、(h) の塊が指された順に 4 本並ぶ（母集団 = 塊の頭の数を同じ assert で数える）。塊の本文は見出しの次の行から次の見出しの前までを 2 字下げた行で、行を指した塊の末尾には行ごとに `  行 <id> の done: …` が 1 行ある。自分の § の塊は無い。同じ § を 2 つの形で指しても 1 塊である。`ADR-0001 §4` と `§4.1` だけが指す § 4 は、塊にも解けない参照にもならない。材料の節の本文の先頭の 1 行と自分の § だけを指す本文は、(g) も (h) も作らない。
+    - (b) tracked に無い doc の §・無い §・表に無い行 id（同じ doc と別の doc）を指す本文で、(g) の塊が 1 本だけある。正規化した字面を本文に現れた順に重複なく並べ、既存の塊の後ろ・(h) の前に置かれる。
+    - (c) 1 段: 自分の本文が参照としては同じ doc の §2 だけを持って `ZqTwin` を名指し、§2 の本文が backtick で `ZqShape` と `ZqTwin` と別の doc の §2 を名指す周を測る。`ZqShape` の宣言の塊は (h) の後ろにある。自分の本文も名指す `ZqTwin` の塊は既存の位置に 1 本だけある。別の doc の §2 の塊と、その本文だけが名指す名の塊は無い（再帰しない）。
+    - (d) cap: 本文の長い § を束ねた写しを `outside_block` に渡す。残りが足りない周は `- <doc の path> §N: 切り詰めた（塊 … byte が cap の残りに収まらない）` の 1 行になり、小さい (h) の塊と (g) は残る。説明の 1 行が (g)〜(i) の並びを名乗る。
+  - `review_base_lines_`（`crates/scribe2/src/pipe/review/base.rs` の既存の歯の区間に 1 本）: 幅 120 を越える 250 字の行を持つ `.rs` と、越えない `.rs` の 2 項目を要約する。前者の見出しは `行数 全体 <畳んだ数>（幅 120 で畳んだ数・生の行 <生の行>）/ 本体 <畳んだ数>` の字面で、後者は `行数 全体 35 / 本体 23` のまま（母集団 = 2 項目の見出しを同じ assert で数える）。`base_block` の説明の 1 行は畳む式と括弧の意味を持ち、`outside_block` の説明の 1 行は生の行を名乗る。
+  - base で RED の理由: base の `bundle` は (g) も (h) も (i) の位置の塊も作らず、base の `item_text` の見出しは括弧を持たない。5 本とも assert が落ちる（機能不在。歯は base に在る関数〔`bundle`・`outside_block`・`base_block` と base.rs の `summary`〕だけを呼ぶので、overlay の上で compile は通る）。
+  - 既存の歯は期待を変えない: `pipe_review_outside_`（in-file 7 本と e2e 1 本）・`pipe_review_base_`（in-file 8 本と e2e 2 本）・`headless_lens_outside_`（2 本）がそのままで緑。`pipe_prelens_` の e2e の `行数 全体 0 / ` と `行数 全体 2 / ` の部分一致も同じ。どの fixture も幅 120 を越える行と参照を持たないので、見出しも外の材料も変わらない。e2e は足さない（材料の file の数と置き方が変わらず、`materials` から `outside_text` への道は `bundle` の前で不変）。
+- 限界（§51 の限界の更新）: 本行で「別の設計 doc の節」は材料に入る。残るのは次のとおり。
+  - 拾うのは閉じた 5 形だけである。`§` と `行` を使わない指し方（「上の節」「その行」）と、doc を `.md` なしで書く形（`gate-cost §26`）は拾わない。「同 §26」は同じ doc の §26 と読むので、前の文の doc を受ける字面は、同じ doc の別の § に解けるか、解けない参照の 1 行に載る。
+  - doc の字を前に持たない `行 <id>` は、同じ doc の行と読む。別の doc の行を doc の字なしで指し、同じ doc に同じ id の行が在れば、同じ doc の行の § を束ねる（材料が増えるだけで、判定は lens が持つ）。
+  - 設計ノート（folio2 の YAML）・ADR・SRS の節と、`## N.` の見出しを持たない doc の節は束ねない（ADR の `§N` は参照と読まない。要件は既存の要件の材料が持つ）。
+  - 束ねた § の中の参照は辿らない（1 段）。(i) の名も §51 形 2 の規則のままで、backtick の外の素の 1 語は拾わない。
+  - cap は既存の残りのままである。束ねる本文が残りを越える行（見込みで 332 行のうち 100,000 byte を越える 10 行）は、後ろの塊から切り詰めの 1 行になる。§ の並びは指された順で、重みづけはしない。
+  - 焼き直しの門と列外の鍵は design.txt だけを測る。指した先の § だけを直して受付し直す周は、自分の § と契約の字が同じなので断られる（FR49 / FR68 の同じ中身の判定）。直しは今どおり、自分の § にも要点を 1 項足す形になる（.700 / .703 の直しと同じ）。
+  - 材料の鍵（dispatcher.md §27 行 aa / ac）: (g)〜(i) は外の材料の file に入るので、指した先の doc の § を変える commit でも先撃ちの鍵が動き、判定の使い回しが外れる。撃ち直しが 1 回増えるだけで、偽の使い回しにはならない。本行の着地の直後は、参照を持つ行の鍵が一斉に変わる。
+  - .728: 生の行を並べるのは base の要約の全体の数だけで、本体の数は畳んだ数のままである。data file と dir の行数は生の行のまま（wc -l と同じ）。
+- 却下:
+  - 契約表の検査が、「§N の 1 関数」のような識別子なしの指し方を finding にする（memo の候補 2）。名指しを強いる門で、指した先の形や done の本文の欠けは埋まらない。「識別子なし」は散文の判定で、数の閾値か偽の断りが要る。
+  - 設計を書く側の注意として残す（memo の候補 3・N2）。
+  - 別の doc の全文を渡す。pipeline.md 1 本で 496,004 byte あり、cap の 150,000 を越える。
+  - 束ねた § の中の参照を辿る（再帰）。2 便とも 1 段で届く見込みで、辿ると広がりに上限が無く、大きい塊で cap を使い切る。
+  - 別の doc だけを束ね、同じ doc の参照を除く。.700 の lens が求めた材料の 1 つは同じ doc の §15（行 i）で、除くと 2 件のうち 1 件に届かない。
+  - (h) を depends の相手の行の直後（既存の塊の前）に置く。参照を持つ契約で既存の塊の並びと cap の配分が変わり、大きい塊が先に残りを食う（§51 の「小さい構造の材料を先」と逆）。
+  - 新しい材料の file を足す。lens の雛形の穴・cap の配分・`keep` の置き方・材料の dir の本数の歯（e2e の :230）が動く。外の材料の file の塊として足せば、どれも変わらない。
+  - backtick の中だけを抜いて名の照合に渡す。見込みで足される名はほぼ同じ（中央値 33 と 34・p90 100 と 102）なのに、抜くには names.rs の `backticked` の 2 本目を書くか、その可視性を広げる（write-set が 2 file 増える）。
+  - `section_text` の可視性を広げる・節の読み手をもう 1 本書く。私有のまま子孫の module から呼べる（C2）。
+  - 束ねる § に新しい上限（本数・byte）を足す。数の閾値で rules 行と裁定が要る。既存の cap の残りで足りる。
+  - （.728）差の無い file にも括弧を付ける。既存の歯の期待が 7 本動く（base.rs の in-file 4 本・e2e の `pipe_review_base_place_only_item_is_read_in_base_txt`・`pipe_prelens_` の e2e 2 本の部分一致）。差の無い file では、読み手が食い違いを見ない。
+  - （.728）外の材料の data file の行数を畳んだ数へ揃える。data file の行数の意味（wc -l と同じ）を変える（memo が却下した形）。
