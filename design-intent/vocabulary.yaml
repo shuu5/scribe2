@@ -671,7 +671,12 @@ terms:
   - canonical: live な便
     domain: consumer
     definition: 終端でない run。 終端 = 段が Landed / Failed / Stopped のいずれか、 または Gated で verdict が FAIL、 または Reviewed で verdict が PASS でない (契約の審査)。 intake の排他が照合する母集団で、 同時走行の最大値が数える母集団でもあり、 pipe stop --run で 1 本だけ終端に倒せる (ADR-0019 §2.1・ADR-0035)。
-    relationships: [便, write-set の交差, 契約, 同時走行の最大値]
+    relationships: [便, write-set の交差, 契約, 同時走行の最大値, 中間生成物]
+  - canonical: 中間生成物
+    domain: consumer
+    aliases: [build output, intermediates]
+    definition: build や test や依存の取り込みが便の worktree の中に作る dir のうち、 器が対応する言語の決まった名を持つもの (target・node_modules・.venv・__pycache__・.mypy_cache・.pytest_cache・.ruff_cache・.expo の閉じた 8 つ)。 commit した木と toolchain と lock file から作り直せる。 器は運転手の終端の周ごとに、 live でない便の worktree (元の場所か退役先) から、 この名の dir で git が追う file を持たないものを消す (ADR-0081・dispatcher.md §30)。 無視の規則が無視する file 全部ではない (鍵や local の設定は含まない)。
+    relationships: [live な便, 退役]
   - canonical: 起こし直し
     domain: consumer
     definition: land の追随が衝突した run で、 同じ worktree と契約に「追随」節を添えて runner をもう 1 回 spawn すること。 回数は rules 行 pipe.follow_retries が上限で、 その判定は guard (ADR-0019 §2.2 / §2.4)。
