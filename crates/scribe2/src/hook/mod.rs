@@ -13,6 +13,7 @@
 
 pub mod anchor_guard;
 pub mod command;
+pub mod graph_guard;
 pub mod group;
 pub mod guard;
 pub mod host_guard;
@@ -661,6 +662,11 @@ fn pre_tool_use(hooked: &Hooked, payload: &str, started: Instant) -> Outcome {
         }
         let rules = hooked.rules.map(Path::new);
         if let LedgerDecision::Deny { what, line } = ledger_guard::decide(command.as_deref().unwrap_or_default(), cwd, rules) {
+            return denied(hooked, &format!("ledger-deny {what}"), line, started);
+        }
+        // 起票の門で止まらなかった書きの台帳の形（ledger-form.md §12・同じ enum と記録の語）。
+        let scene = graph_guard::Scene { command: command.as_deref().unwrap_or_default(), root, cwd, bd: hooked.bd, rules };
+        if let LedgerDecision::Deny { what, line } = graph_guard::decide(&scene) {
             return denied(hooked, &format!("ledger-deny {what}"), line, started);
         }
         let anchored = anchor_guard::decide(command.as_deref().unwrap_or_default(), cwd, root, hooked.dir);

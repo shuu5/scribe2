@@ -922,6 +922,173 @@ fn hook_ledger_write_fails_closed_without_the_row() {
     clean(&[&repo, &state]);
 }
 
+// ─────────────── 台帳の形の門（`s2-07l.733`・設計 ledger-form.md §12 行 h・接頭辞 `hook_graph_guard_`） ───────────────
+//
+// toy repo の root に `.beads` の dir を置き、`--bd` に偽の client（fixture の JSON を返し argv を 1 行ずつ記録する・読めない
+// 形は rc 1）を渡して `pre-tool-use` を撃つ。上限 N は埋め込みの rules 行の値。
+
+/// 置き場（toy repo・置き場・偽の client・client の argv の記録）。
+struct GraphPlace {
+    /// toy repo。
+    repo: TmpDir,
+    /// 置き場。
+    state: TmpDir,
+    /// 偽の client の path。
+    bd: String,
+    /// client の argv の記録。
+    log: PathBuf,
+}
+
+/// 台帳の 1 件（`parent` が空でなければ parent-child の辺 1 本）。
+fn graph_bead(id: &str, status: &str, kind: &str, parent: &str) -> String {
+    let deps = if parent.is_empty() {
+        String::new()
+    } else {
+        format!("{{\"issue_id\":\"{id}\",\"depends_on_id\":\"{parent}\",\"type\":\"parent-child\"}}")
+    };
+    format!("{{\"id\":\"{id}\",\"status\":\"{status}\",\"issue_type\":\"{kind}\",\"dependencies\":[{deps}]}}")
+}
+
+/// 埋め込みの上限 N。
+#[expect(clippy::expect_used, reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く")]
+fn graph_max() -> u64 {
+    let manifest = vessel::rules::manifest::Manifest::embedded().expect("埋め込みの rules を読める");
+    vessel::rules::int_row(&manifest, vessel::ledger::graph::ROW).expect("上限の行を読める")
+}
+
+/// 根の epic E（open の子は E.1〜E.<N-1> と子 epic E.e の N 本・closed の E.c）・E.1 の子 E.1.1・feature の top F と
+/// その子 F.1・親の無い task O。
+fn graph_ledger() -> String {
+    let mut beads: Vec<String> = (1..graph_max()).map(|at| graph_bead(&format!("E.{at}"), "open", "task", "E")).collect();
+    beads.extend([
+        graph_bead("E", "open", "epic", ""),
+        graph_bead("E.e", "open", "epic", "E"),
+        graph_bead("E.c", "closed", "task", "E"),
+        graph_bead("E.1.1", "open", "task", "E.1"),
+        graph_bead("F", "open", "feature", ""),
+        graph_bead("F.1", "open", "task", "F"),
+        graph_bead("O", "open", "task", ""),
+    ]);
+    format!("[{}]", beads.join(","))
+}
+
+/// 置き場を作る（`readable` が偽なら client は rc 1・`beads` が偽なら root に `.beads` を置かない）。
+#[expect(clippy::expect_used, reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く")]
+fn graph_place(readable: bool, beads: bool) -> GraphPlace {
+    use std::os::unix::fs::PermissionsExt;
+    let repo = git_repo();
+    let state = linked(&repo);
+    if beads {
+        fs::create_dir_all(repo.join(".beads")).expect(".beads を作れる");
+    }
+    let json = state.join("ledger.json");
+    fs::write(&json, graph_ledger()).expect("台帳の fixture を書ける");
+    let log = state.join("bd.log");
+    let tail = if readable { format!("cat '{}'", json.display()) } else { "exit 1".to_owned() };
+    let bd = state.join("bd");
+    fs::write(&bd, format!("#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\n{tail}\n", log.display())).expect("偽の bd を書ける");
+    fs::set_permissions(&bd, fs::Permissions::from_mode(0o755)).expect("偽の bd を実行可能にできる");
+    GraphPlace { repo, state, bd: bd.display().to_string(), log }
+}
+
+/// 偽の client が記録した argv（起きた回数）。
+fn graph_reads(place: &GraphPlace) -> Vec<String> {
+    fs::read_to_string(&place.log).map(|text| text.lines().map(str::to_owned).collect()).unwrap_or_default()
+}
+
+/// `--bd` に偽の client を渡して撃つ（埋め込みの rules）。
+fn graph_hook(place: &GraphPlace, command: &str) -> Output {
+    run_hook_args(&["pre-tool-use", "--bd", &place.bd], &bash_payload(&place.repo, command))
+}
+
+/// 断る周（rc 2・stdout 0 byte・stderr 1 行・記録 1 行・台帳の読みはちょうど 1 回）の stderr。
+fn assert_graph_deny(place: &GraphPlace, command: &str, reason: &str) -> String {
+    let (records, reads) = (ledger_records(&place.state).len(), graph_reads(place).len());
+    let out = graph_hook(place, command);
+    assert_write_deny(&place.state, &out, command, reason);
+    assert_eq!(ledger_records(&place.state).len(), records + 1, "{command}: 記録は 1 行増える");
+    assert_eq!(graph_reads(place).len(), reads + 1, "{command}: 台帳は 1 回だけ読む");
+    stderr_text(&out)
+}
+
+/// 通る周（0 byte・rc 0・記録なし）。
+fn assert_graph_pass(place: &GraphPlace, command: &str) {
+    let before = inject_lines(&place.state).len();
+    assert_silent(&graph_hook(place, command), command);
+    assert_eq!(inject_lines(&place.state).len(), before, "{command}: 記録を残さない");
+}
+
+/// (a) 溢れた根の epic E への create は parent-full で子 epic の作り方を名指し、同じ E への epic の create は通る (b) feature
+/// の top の下への create は parent-unrooted で top を名指す。台帳の読みは `--readonly list --all` の 1 回。
+#[test]
+fn hook_graph_guard_create_denies_full_and_unrooted_parents() {
+    let place = graph_place(true, true);
+    let max = graph_max();
+    let text = assert_graph_deny(&place, "bdw create x --parent E", "parent-full");
+    assert!(text.contains("--type epic --parent E"), "子 epic の作り方: {text}");
+    assert!(text.contains(&format!("{max} 本で上限 {max}")), "子の数と上限: {text}");
+    assert_eq!(graph_reads(&place), ["--readonly list --all --limit 0 --json"], "client の argv");
+    assert_graph_pass(&place, "bdw create x --parent E --type epic");
+    let text = assert_graph_deny(&place, "bdw create x --parent F.1", "parent-unrooted");
+    assert!(text.contains("鎖の終わり F）") && text.contains("bdw update F --type epic"), "top を名指す: {text}");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (c) 子への付け替えは parent-loop (d) 親の空の update と唯一の親の dep remove は unrooting で、epic の親外しは通る (f) 根に
+/// 着かない O を根に着く親へ付け替える update と top の型を epic にする update は通る (k) 1 行に並べた付け替えの 2 つ目は
+/// 1 つ目の後の形で parent-loop（読みは 1 回）。
+#[test]
+fn hook_graph_guard_update_and_dep_remove_follow_the_ratchet() {
+    let place = graph_place(true, true);
+    assert_graph_deny(&place, "bdw update E.1 --parent E.1.1", "parent-loop");
+    assert_graph_deny(&place, "bdw update E.1 --parent \"\"", "unrooting");
+    let text = assert_graph_deny(&place, "bdw dep remove E.1 E", "unrooting");
+    assert!(text.contains("bdw update E.1 --parent <epic>"), "付け替えを名指す: {text}");
+    assert_graph_pass(&place, "bdw update E.e --parent \"\"");
+    assert_graph_pass(&place, "bdw update O --parent E.e");
+    assert_graph_pass(&place, "bdw update F --type epic");
+    assert_graph_deny(&place, "bdw update E.1 --parent E.2 && bdw update E.2 --parent E.1", "parent-loop");
+    assert_graph_pass(&place, "bdw update E.2 --parent E.1");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (e) plan の node に親が無ければ plan-orphan・parent_id が溢れた E なら parent-full・file が無ければ plan-unreadable
+/// (j) 溢れた E の closed の子の reopen と --status open は parent-full で、--status closed は通る。
+#[test]
+fn hook_graph_guard_plan_and_reopen_count_against_the_parent() {
+    let place = graph_place(true, true);
+    let plan = |name: &str, node: &str| {
+        fs::write(place.repo.join(name), format!("{{\"nodes\":[{{\"key\":\"a\",\"title\":\"x\",\"type\":\"task\"{node}}}],\"edges\":[]}}"))
+            .unwrap_or_else(|error| panic!("plan を書ける: {error}"));
+    };
+    plan("orphan.json", "");
+    plan("full.json", ",\"parent_id\":\"E\"");
+    assert_graph_deny(&place, "bdw create --graph orphan.json --parent E", "plan-orphan");
+    assert_graph_deny(&place, "bdw create --graph full.json --parent E", "parent-full");
+    assert_graph_deny(&place, "bdw create --graph gone.json --parent E", "plan-unreadable");
+    assert_graph_deny(&place, "bdw reopen E.c", "parent-full");
+    assert_graph_deny(&place, "bdw update E.c --status open", "parent-full");
+    assert_graph_pass(&place, "bdw update E.1 --status closed");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (g) 読めない client は ledger-unreadable で断る (h) 掛からない command（close・append-notes・show・--status closed）は
+/// client を 1 回も起こさない (i) `.beads` の無い repo では同じ create を読まずに通す（どちらも読めば断られる client で撃つ）。
+#[test]
+fn hook_graph_guard_reads_only_for_the_six_writes_in_a_ledger_repo() {
+    let place = graph_place(false, true);
+    for command in ["bdw close E.1", "bdw update E.1 --append-notes x", "bdw show E.1", "bdw update E.1 --status closed"] {
+        assert_graph_pass(&place, command);
+    }
+    assert!(graph_reads(&place).is_empty(), "掛からない command は読まない: {:?}", graph_reads(&place));
+    assert_graph_deny(&place, "bdw create x --parent E", "ledger-unreadable");
+    let bare = graph_place(false, false);
+    assert_graph_pass(&bare, "bdw create x --parent E");
+    assert_graph_pass(&bare, "bdw update E.1 --parent \"\"");
+    assert!(graph_reads(&bare).is_empty(), ".beads の無い repo は読まない");
+    clean(&[&place.repo, &place.state, &bare.repo, &bare.state]);
+}
+
 // ─────────────── 走っている便の行の門（`s2-07l.698`・設計 vessel-hook.md §15 行 i・接頭辞 `hook_live_row_`） ───────────────
 //
 // tmp の repo に行 a / b / c の表を持つ docs/design/x.md を commit し、`fleet record` の段の記帳と run dir の写し（契約・

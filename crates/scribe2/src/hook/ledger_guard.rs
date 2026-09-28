@@ -73,7 +73,7 @@ const DEP: &str = "dep";
 /// 辺を張る subcommand（既定の型は blocks）。
 const LINK: &str = "link";
 
-/// 辺の型の flag（綴り 2 つ）。
+/// 辺の型の flag（綴り 2 つ・create の型の flag と同じ綴り）。
 const EDGE_TYPE: [&str; 2] = ["--type", "-t"];
 
 /// 親子の辺の型。
@@ -113,6 +113,8 @@ const LABELS: [&str; 3] = ["--labels", "--label", "-l"];
 const BODY_FILE: &str = "--body-file";
 /// acceptance の flag。
 const ACCEPTANCE: &str = "--acceptance";
+/// plan の file の flag（`create --graph`）。
+const GRAPH: &str = "--graph";
 
 /// 止める閉じた理由（1 周に 1 つ・先に当たったもの）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -224,6 +226,12 @@ pub struct Create {
     pub body_file: Option<String>,
     /// `--acceptance` の値（連ねた字面）。
     pub acceptance: String,
+    /// `--parent` の値（最後の 1 つ・空の値も運ぶ・台帳の形の門 [`super::graph_guard`] が読む）。
+    pub parent: Option<String>,
+    /// `--type` / `-t` の値（最後の 1 つ）。
+    pub kind: Option<String>,
+    /// `--graph` の plan の file（最後の 1 つ）。
+    pub graph: Option<String>,
 }
 
 impl Create {
@@ -446,6 +454,12 @@ fn apply(create: &mut Create, flag: &str, value: String) {
     } else if flag == ACCEPTANCE {
         create.acceptance.push_str(&value);
         create.acceptance.push('\n');
+    } else if flag == PARENT {
+        create.parent = Some(value);
+    } else if EDGE_TYPE.contains(&flag) {
+        create.kind = Some(value);
+    } else if flag == GRAPH {
+        create.graph = Some(value);
     }
 }
 
