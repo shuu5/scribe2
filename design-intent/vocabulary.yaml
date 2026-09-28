@@ -211,7 +211,7 @@ terms:
     relationships: [席, 席の登録, 起動行の導出, 口座]
   - canonical: 起動行の導出
     domain: consumer
-    definition: 席の起動行を pure な関数 1 本が組むこと: 口座の設定 dir と agent view を切る env・器自身の plugin (anchor)・host の manifest の plugin dir と起動引数。 穴は口座の dir 1 つで、 雛形 file は読まない (ADR-0026 §2.3)。 役割なしの起動 (SRS FR60・ADR-0028 §2.5) は同じ関数から役割・席の登録・権能の 3 要素を除いた形。
+    definition: 席の起動行を pure な関数 1 本が組むこと: 口座の設定 dir と agent view を切る env・器自身の plugin (anchor)・host の manifest の plugin dir と起動引数。 穴は口座の dir 1 つで、 雛形 file は読まない (ADR-0026 §2.3)。 役割なしの起動 (SRS FR60・ADR-0028 §2.5) は同じ関数から役割・席の登録・権能の 3 要素を除いた形。 1 つ目の plugin の枠は anchor の下の生成 dir で、 消費側の anchor ではその project の plugin の置き場になり、 版を跨いで保つ (ADR-0082)。
     relationships: [席の起動, host の manifest, 役割なしの起動]
   - canonical: 役割なしの起動
     domain: consumer
@@ -677,6 +677,11 @@ terms:
     aliases: [build output, intermediates]
     definition: build や test や依存の取り込みが便の worktree の中に作る dir のうち、 器が対応する言語の決まった名を持つもの (target・node_modules・.venv・__pycache__・.mypy_cache・.pytest_cache・.ruff_cache・.expo の閉じた 8 つ)。 commit した木と toolchain と lock file から作り直せる。 器は運転手の終端の周ごとに、 live でない便の worktree (元の場所か退役先) から、 この名の dir で git が追う file を持たないものを消す (ADR-0081・dispatcher.md §30)。 無視の規則が無視する file 全部ではない (鍵や local の設定は含まない)。
     relationships: [live な便, 退役]
+  - canonical: runner の印
+    domain: consumer
+    aliases: [印の file, runner mark]
+    definition: 器が便ごとに runner へ写す消費側の plugin の写しの root に書く、 中身の空の file 1 つ。 名は NAME に -runner を付けた語。 消費側の hook は自分の plugin の置き場にこの file が在るかで runner の中かを判じる。 器は書くだけで読まず、 器自身の plugin の写し・anchor の生成 dir・便の worktree には書かない (ADR-0082・consumer-sync.md §19)。 環境変数ではない。
+    relationships: [runner, 起動行の導出, hook, 消費側]
   - canonical: 起こし直し
     domain: consumer
     definition: land の追随が衝突した run で、 同じ worktree と契約に「追随」節を添えて runner をもう 1 回 spawn すること。 回数は rules 行 pipe.follow_retries が上限で、 その判定は guard (ADR-0019 §2.2 / §2.4)。

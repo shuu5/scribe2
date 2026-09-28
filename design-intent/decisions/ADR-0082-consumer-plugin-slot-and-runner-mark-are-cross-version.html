@@ -1,0 +1,768 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="folio ADR-pack assembler (folio-bwc / instance#2) — deterministic structure, prose slots unfilled">
+<title>席の起動行の 1 つ目の plugin の枠は anchor の plugin で、 runner に写す消費側の plugin には器が印の file を置く — 消費側の席と便の plugin の置き場と、 席と runner を見分ける印を跨版の面にする (ADR-0038 の 1 つ目の枠の読みを消費側の anchor へ広げる)</title>
+<style>
+/* ===========================================================================
+   folio human-layer design system — core.css (S3 / folio-8oc プロトタイプ)
+   要件定義書 (SRS) ビジュアル design system の中核 register。
+   視覚言語 = deck帯 × B2高密度 (ADR-0041)。テーマ = 環境追従 prefers-color-scheme。
+   styling は意味クラス、taxonomy 識別は [data-component] 属性 (floor gate A)。
+   taxonomy = design-intent/research/srs-component-taxonomy.html
+   =========================================================================== */
+
+/* ---- requirement-type-color-tokens (meta / 全 register が共有・両テーマ定義) ---- */
+:root{
+  --ink:#08131a; --ink-soft:#3a4a55; --ink-faint:#5b6671;
+  --paper:#ffffff; --paper-2:#f5f8fa; --paper-3:#eef3f7;
+  --line:#dbe4ea; --line-soft:#eef3f7;
+  --brand:#2a4d6e; --brand-deep:#15324a; --brand-tint:#e8f0f7;
+  --ok:#1e7b65; --ok-tint:#e6f6f2; --ok-line:#9fd9cb;
+  --bad:#b22323; --bad-tint:#fdf3f3; --bad-line:#eab3b3;
+  --warn:#916626; --warn-tint:#fefbea; --warn-line:#e4cf8f;
+  --info:#2a5d9e; --info-tint:#eaf1fb; --info-line:#a8c4e8;
+  --violet:#5b3e8e; --violet-tint:#f0eafa; --violet-line:#cdb8ec;
+  --shadow:0 1px 2px rgba(8,19,26,.06),0 8px 24px rgba(8,19,26,.07);
+  --shadow-lg:0 2px 6px rgba(8,19,26,.08),0 18px 50px rgba(8,19,26,.12);
+  /* 要件型カラートークン (FR/NFR/CON/ASM) */
+  --fr:var(--brand); --nfr:var(--violet); --con:var(--warn); --asm:var(--info);
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --ink:#e8eef2; --ink-soft:#a9b7c1; --ink-faint:#8a99a4; /* ink-faint: 全 dark bg で contrast ≥4.85 = WCAG AA (≥4.5) 充足・最小は ok-tint/warn-tint (gate F・folio-vuf) */
+    --paper:#0d171e; --paper-2:#15222b; --paper-3:#1b2c37;
+    --line:#273947; --line-soft:#1b2c37;
+    --brand:#7db8e8; --brand-deep:#1d3a54; --brand-tint:#16293a;
+    --ok:#5ac8b8; --ok-tint:#10302b; --ok-line:#2e6258;
+    --bad:#ef7a7a; --bad-tint:#341c1c; --bad-line:#6e3636;
+    --warn:#d6a94e; --warn-tint:#312a13; --warn-line:#5e4e23;
+    --info:#7da9e8; --info-tint:#16263c; --info-line:#33507c;
+    --violet:#b89be0; --violet-tint:#241a36; --violet-line:#473a64;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.5);
+    --shadow-lg:0 2px 6px rgba(0,0,0,.5),0 18px 50px rgba(0,0,0,.6);
+  }
+}
+*{box-sizing:border-box;}
+html{scroll-behavior:smooth;}
+body{
+  margin:0; background:var(--paper-2); color:var(--ink);
+  font-family:"Noto Sans CJK JP","Noto Sans JP",system-ui,-apple-system,"Hiragino Kaku Gothic ProN",Meiryo,sans-serif;
+  font-feature-settings:"palt" 1; line-height:1.7; letter-spacing:.01em;
+  -webkit-font-smoothing:antialiased;
+}
+.page{max-width:1280px; margin:0 auto; background:var(--paper); box-shadow:var(--shadow-lg);}
+svg{display:block;} .ico{width:1em; height:1em;}
+
+/* ---- plain-language-term-inline (glossary 派生ビュー / 専門語のやさしい併記) ---- */
+.term{
+  /* font-size 下限 (folio-276 #5)。 .72em は em 連鎖 (例 .actor .role=11px 内) で 7.9px<8px へ縮み
+     判読不能化する。 max() で 10.5px を下限に据え、 広文脈では従来比率を保つ。 */
+  display:inline-block; font-size:max(10.5px,.72em); font-weight:700; line-height:1;
+  padding:.18em .5em; border-radius:999px; margin-left:.3em; vertical-align:.08em;
+  background:var(--paper-3); color:var(--ink-soft); border:1px solid var(--line);
+  letter-spacing:.02em; white-space:nowrap;
+}
+.term.en{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;}
+
+/* ===================== doc-cover-band (deck-band / 表紙) ===================== */
+[data-component="doc-cover-band"]{
+  position:relative; overflow:hidden; color:#fff;
+  /* deeper navy にして白文字 (小サイズ含む) を WCAG AA 維持 (gate F worst-case-stop が最明合成でも
+     ≥4.5 を要求)。 highlight radial は薄め、 linear の最明端 (旧 #33658f) を暗色化。 */
+  background:
+    radial-gradient(1200px 500px at 88% -10%, rgba(255,255,255,.07), transparent 60%),
+    linear-gradient(135deg,#0c1f30 0%,#143049 48%,#173a57 100%);
+  padding:54px 56px 46px;
+}
+.cover-eyebrow{font-size:12.5px; font-weight:700; letter-spacing:.22em; text-transform:uppercase; opacity:.86; margin:0 0 14px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;}
+.cover-eyebrow .doc-type{background:rgba(255,255,255,.16); padding:3px 10px; border-radius:6px; letter-spacing:.16em; border:1px solid rgba(255,255,255,.22);}
+[data-component="doc-cover-band"] h1{font-size:42px; line-height:1.14; margin:0 0 8px; font-weight:800; text-wrap:balance;}
+.cover-sub{font-size:17px; opacity:.9; margin:0 0 22px; font-weight:500;}
+.summary-card{background:rgba(255,255,255,.1); border:1px solid rgba(255,255,255,.2); border-radius:14px; padding:18px 22px; display:flex; gap:18px; align-items:flex-start; max-width:880px;}
+.summary-card .lab{font-size:11px; font-weight:700; letter-spacing:.16em; opacity:.8; margin:0 0 4px;}
+.summary-card .txt{font-size:17.5px; line-height:1.6; font-weight:600; margin:0;}
+.summary-card .txt b{color:#ffe8a8;}
+.cover-meta{display:flex; flex-wrap:wrap; gap:10px 26px; margin-top:24px; font-size:13px;}
+.cover-meta .m{display:flex; gap:8px; align-items:center; opacity:.92;}
+.cover-meta .m .k{opacity:.62; font-weight:600;} .cover-meta .m .v{font-weight:700;}
+.reader-chip{display:inline-flex; gap:8px; align-items:center; margin-top:18px; background:#ffce6e; color:#3a2c05; font-weight:700; font-size:13.5px; padding:8px 14px; border-radius:10px; box-shadow:0 3px 10px rgba(0,0,0,.2);}
+a{color:var(--brand);} /* anchor 既定色 — UA 既定 #0000ee は dark bg で 1.72 (skip-link/domain 目次等の素 anchor で 3 例目の同型欠陥・型 selector ゆえ class 付きリンクは specificity で不変・gate F WCAG AA 両テーマ ≥7.6) */
+
+/* ===================== approval-block (deck-band / 承認証跡) ★critic補填 ===== */
+[data-component="approval-block"]{display:flex; flex-wrap:wrap; gap:14px; align-items:stretch; margin-top:22px;}
+.sign{flex:1 1 200px; background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.22); border-radius:12px; padding:13px 16px; display:flex; flex-direction:column; gap:3px; min-width:0;}
+.sign .role{font-size:10.5px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; opacity:.7;}
+.sign .who{font-size:15px; font-weight:800;}
+.sign .when{font-size:11.5px; opacity:.72; font-weight:600;}
+.sign .stamp{align-self:flex-start; margin-top:4px; font-size:10px; font-weight:800; letter-spacing:.08em; padding:2px 8px; border-radius:6px; background:#ffce6e; color:#3a2c05;}
+.sign .stamp.self{background:rgba(255,255,255,.18); color:#fff; border:1px solid rgba(255,255,255,.3);}
+
+/* ===================== chapter-deck-band (deck-band / 章開き) =============== */
+[data-component="chapter-deck-band"]{position:relative; padding:34px 56px 12px;}
+[data-component="chapter-deck-band"] .num{position:absolute; top:-6px; right:34px; font-size:138px; font-weight:900; line-height:1; opacity:.06; letter-spacing:-.04em; user-select:none; pointer-events:none; font-family:ui-monospace,monospace;}
+.kicker{display:inline-flex; align-items:center; gap:9px; font-size:12px; font-weight:800; letter-spacing:.14em; text-transform:uppercase; padding:5px 12px; border-radius:8px; margin-bottom:10px;}
+[data-component="chapter-deck-band"] h2{font-size:27px; margin:0 0 6px; font-weight:800; line-height:1.2;}
+.lead{font-size:15px; color:var(--ink-soft); margin:0; max-width:920px; line-height:1.65;}
+.tint-brand{background:var(--brand-tint);} .tint-ok{background:var(--ok-tint);} .tint-bad{background:var(--bad-tint);}
+.tint-warn{background:var(--warn-tint);} .tint-info{background:var(--info-tint);} .tint-violet{background:var(--violet-tint);}
+.tint-brand .kicker{background:var(--brand); color:#fff;} .tint-ok .kicker{background:var(--ok); color:#fff;}
+.tint-bad .kicker{background:var(--bad); color:#fff;} .tint-warn .kicker{background:var(--warn); color:#fff;}
+.tint-info .kicker{background:var(--info); color:#fff;} .tint-violet .kicker{background:var(--violet); color:#fff;}
+.chapbody{padding:22px 56px 40px; background:var(--paper);}
+
+/* ===================== section-lead-callout (callout / 章導入) ============= */
+[data-component="section-lead-callout"]{display:grid; grid-template-columns:repeat(3,1fr); gap:16px;}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:14px; padding:18px 18px 16px; box-shadow:var(--shadow); position:relative; overflow:hidden;}
+.card.accent::before{content:""; position:absolute; left:0; top:0; bottom:0; width:5px; background:var(--brand);}
+.card .cid{font-size:11.5px; font-weight:800; letter-spacing:.12em; color:var(--brand); margin-bottom:8px; display:flex; align-items:center; gap:8px;}
+.card .ct{font-size:16.5px; font-weight:800; line-height:1.4; margin:0 0 6px;}
+.card .cd{font-size:13px; color:var(--ink-soft); margin:0;}
+
+/* ===================== scope-summary-panel (dense-list / 範囲) ============= */
+[data-component="scope-summary-panel"]{display:grid; grid-template-columns:1fr 1fr; gap:20px;}
+.scol{border-radius:14px; padding:18px 20px; box-shadow:var(--shadow);}
+.scol.in{background:var(--ok-tint); border:1px solid var(--ok-line);}
+.scol.out{background:var(--bad-tint); border:1px solid var(--bad-line);}
+.scol h3{margin:0 0 12px; font-size:15px; font-weight:800; display:flex; align-items:center; gap:9px;}
+.scol.in h3{color:var(--ok);} .scol.out h3{color:var(--bad);}
+.scol ul{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:9px;}
+.scol li{display:flex; gap:10px; align-items:flex-start; font-size:13.5px; line-height:1.5;}
+.scol li .b{flex:0 0 auto; margin-top:3px;}
+
+/* ===================== actor-stakeholder-table (dense-table / 主体) ======== */
+[data-component="actor-stakeholder-table"]{display:flex; flex-wrap:wrap; gap:12px;}
+.actor{display:flex; align-items:center; gap:11px; background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:11px 15px 11px 12px; box-shadow:var(--shadow); min-width:0;}
+.actor .av{flex:0 0 auto; width:38px; height:38px; border-radius:10px; display:grid; place-items:center; color:#fff;}
+.actor .nm{font-size:14px; font-weight:700; line-height:1.25;}
+.actor .role{font-size:11px; color:var(--ink-faint); font-weight:600;}
+.ext-badge{font-size:9.5px; font-weight:800; letter-spacing:.08em; background:var(--warn-tint); color:var(--warn); border:1px solid var(--warn-line); padding:1px 6px; border-radius:5px; margin-left:6px;}
+
+/* ===================== source-trace-origin (dense-table / 上位ニーズ) ★補填 = */
+[data-component="source-trace-origin"]{width:100%; min-width:440px; border-collapse:separate; border-spacing:0; font-size:13.5px;}
+[data-component="source-trace-origin"] thead th{background:var(--info); color:#fff; text-align:left; font-size:11.5px; font-weight:800; letter-spacing:.06em; padding:11px 14px;}
+[data-component="source-trace-origin"] thead th:first-child{border-top-left-radius:12px;} [data-component="source-trace-origin"] thead th:last-child{border-top-right-radius:12px;}
+[data-component="source-trace-origin"] tbody td{padding:12px 14px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.5;}
+[data-component="source-trace-origin"] tbody tr:nth-child(even) td{background:var(--paper-2);}
+[data-component="source-trace-origin"] .nid{font-weight:800; font-family:ui-monospace,monospace; color:var(--info); white-space:nowrap;}
+[data-component="source-trace-origin"] .origin{font-size:11.5px; color:var(--ink-faint); font-weight:700;}
+
+/* ===================== requirement-matrix-table (dense-table / 要件本体) === */
+[data-component="requirement-matrix-table"]{width:100%; min-width:620px; border-collapse:separate; border-spacing:0; font-size:13.5px;}
+[data-component="requirement-matrix-table"] thead th{background:var(--brand-deep); color:#fff; text-align:left; font-size:11.5px; font-weight:800; letter-spacing:.06em; padding:11px 14px;}
+[data-component="requirement-matrix-table"] thead th:first-child{border-top-left-radius:12px;} [data-component="requirement-matrix-table"] thead th:last-child{border-top-right-radius:12px;}
+[data-component="requirement-matrix-table"] tbody td{padding:12px 14px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.5;}
+[data-component="requirement-matrix-table"] tbody tr:nth-child(even) td{background:var(--paper-2);}
+[data-component="requirement-matrix-table"] tbody tr:hover td{background:var(--brand-tint);}
+.fid{font-weight:800; font-family:ui-monospace,monospace; font-size:13px; white-space:nowrap; color:var(--brand);}
+td.cond{color:var(--ink-soft); font-size:13px; width:22%;}
+td.resp{font-size:13.5px; width:40%;}
+/* ears-requirement-row: 根拠 Rationale を必須スロットとして明示 (critic #3 格上げ) */
+td.resp .why{display:block; margin-top:5px; font-size:11.5px; color:var(--ink-faint); padding-left:62px; position:relative;}
+td.resp .why::before{content:"↳ なぜ要る"; position:absolute; left:0; font-weight:700; color:var(--ink-faint);}
+td.resp .plain{display:block; margin-top:5px; font-size:12.5px; color:var(--ink-soft);}
+td.resp .plain::before{content:"やさしく言うと "; font-weight:700; font-size:10px; color:var(--brand);}
+/* dense-table を clip せず狭幅で内部横スクロールへ倒す (folio-276 #1)。 旧 overflow:hidden は
+   375-390px で列を 1 文字/行へ潰し判読不能にした上 scroll も封じていた (gate F 盲点=#2 で捕捉)。
+   overflow-x:auto + table 側 min-width = rtm-grid と同じ「狭幅は横スクロール」方針へ統一する。 */
+.tbl-wrap{border:1px solid var(--line); border-radius:12px; overflow-x:auto; box-shadow:var(--shadow);}
+
+/* ---- priority-badge + EARS chip (badge) ---- */
+.ears{display:inline-flex; align-items:center; gap:5px; font-size:10.5px; font-weight:800; letter-spacing:.04em; padding:3px 9px; border-radius:7px; white-space:nowrap; border:1px solid;}
+.ears.always{background:var(--info-tint); color:var(--info); border-color:var(--info-line);}
+.ears.trigger{background:var(--brand-tint); color:var(--brand); border-color:var(--brand);}
+.ears.state{background:var(--violet-tint); color:var(--violet); border-color:var(--violet-line);}
+.ears.forbid{background:var(--bad-tint); color:var(--bad); border-color:var(--bad-line);}
+.ears.option{background:var(--warn-tint); color:var(--warn); border-color:var(--warn-line);}
+.ears .en{opacity:.7; font-weight:600; font-family:ui-monospace,monospace; font-size:9px;}
+.prio{display:inline-flex; align-items:center; gap:4px; font-size:10px; font-weight:800; letter-spacing:.04em; padding:2px 8px; border-radius:6px; white-space:nowrap;}
+.prio.must{background:var(--bad); color:#fff;} .prio.should{background:var(--warn); color:#fff;} .prio.may{background:var(--paper-3); color:var(--ink-soft); border:1px solid var(--line);}
+.vmeth{font-size:10px; font-weight:800; font-family:ui-monospace,monospace; padding:2px 6px; border-radius:5px; background:var(--ok-tint); color:var(--ok); border:1px solid var(--ok-line);}
+.ears-legend{display:flex; flex-wrap:wrap; gap:10px; margin-bottom:14px; align-items:center;}
+.ears-legend .lt{font-size:12px; font-weight:700; color:var(--ink-soft); margin-right:4px;}
+/* ears-requirement-row = requirement-matrix-table の各 <tr>。行 styling は table を継承し、
+   data-component で floor gate A 識別 + 根拠 (td.resp .why) を空不可スロットに保つ */
+tr[data-component="ears-requirement-row"] td.resp .why:empty::after{content:"⚠ 根拠 未記入"; color:var(--bad); font-weight:700;}
+
+/* ===================== nfr-hero-metrics + nfr-metrics-table =============== */
+[data-component="nfr-hero-metrics"]{display:grid; grid-template-columns:repeat(4,1fr); gap:16px; margin-bottom:24px;}
+.nfr-hero{border-radius:16px; padding:20px 18px 18px; box-shadow:var(--shadow); position:relative; overflow:hidden; border:1px solid var(--line); background:var(--paper);}
+.nfr-hero .cat{font-size:11px; font-weight:800; letter-spacing:.1em; text-transform:uppercase; margin-bottom:8px; display:flex; align-items:center; gap:7px;}
+.nfr-hero .big{font-size:38px; font-weight:900; line-height:1; letter-spacing:-.02em; display:flex; align-items:baseline; gap:4px;}
+.nfr-hero .big .u{font-size:16px; font-weight:800; opacity:.7;}
+.nfr-hero .qual{font-size:12.5px; font-weight:600; color:var(--ink-soft); margin-top:8px; line-height:1.45;}
+.nfr-hero.c1{background:linear-gradient(160deg,var(--info-tint),var(--paper));} .nfr-hero.c1 .cat,.nfr-hero.c1 .big{color:var(--info);}
+.nfr-hero.c2{background:linear-gradient(160deg,var(--ok-tint),var(--paper));} .nfr-hero.c2 .cat,.nfr-hero.c2 .big{color:var(--ok);}
+.nfr-hero.c3{background:linear-gradient(160deg,var(--brand-tint),var(--paper));} .nfr-hero.c3 .cat,.nfr-hero.c3 .big{color:var(--brand);}
+.nfr-hero.c4{background:linear-gradient(160deg,var(--violet-tint),var(--paper));} .nfr-hero.c4 .cat,.nfr-hero.c4 .big{color:var(--violet);}
+[data-component="nfr-metrics-table"]{width:100%; min-width:480px; border-collapse:separate; border-spacing:0; font-size:13px;}
+[data-component="nfr-metrics-table"] th{background:var(--paper-3); text-align:left; font-size:11px; font-weight:800; letter-spacing:.05em; color:var(--ink-soft); padding:10px 14px; text-transform:uppercase;}
+[data-component="nfr-metrics-table"] td{padding:11px 14px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.55;}
+[data-component="nfr-metrics-table"] tbody tr:last-child td{border-bottom:none;}
+.nid{font-weight:800; font-family:ui-monospace,monospace; color:var(--brand); white-space:nowrap;}
+.tgt{font-weight:800; color:var(--ink); white-space:nowrap;}
+.meas{color:var(--ink-soft); font-size:12.5px;}
+
+/* ===================== rtm-grid (rtm-grid / 双方向トレース + 孤立検出) ===== */
+[data-component="rtm-grid"]{overflow-x:auto; border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow);}
+.rtm{border-collapse:separate; border-spacing:0; font-size:12.5px; width:100%; min-width:760px;}
+.rtm th,.rtm td{padding:11px 12px; text-align:center; border-bottom:1px solid var(--line); border-right:1px solid var(--line-soft);}
+.rtm th{background:var(--brand-deep); color:#fff; font-size:11px; font-weight:800; letter-spacing:.04em;}
+.rtm thead th:first-child{text-align:left;}
+.rtm .grp{background:var(--paper-3); color:var(--ink-soft); font-weight:800; font-size:10.5px; letter-spacing:.06em; text-transform:uppercase;}
+.rtm tbody th{background:var(--paper-2); text-align:left; font-weight:800; color:var(--brand); font-family:ui-monospace,monospace; white-space:nowrap; font-size:12px;}
+.rtm tbody th .lbl{display:block; font-family:inherit; font-weight:600; color:var(--ink-soft); font-size:10.5px; margin-top:2px;}
+.rtm td.hit{background:var(--ok-tint);}
+.rtm td .dot{display:inline-grid; place-items:center; width:22px; height:22px; border-radius:50%; background:var(--ok); color:#fff;}
+.rtm td .dot.ac{display:inline-flex; align-items:center; width:auto; min-width:0; height:auto; border-radius:6px; padding:2px 7px; font-size:10px; font-weight:700; line-height:1.2; margin:1px;}
+.rtm td.gap{background:var(--bad-tint);} .rtm td.gap .x{color:var(--bad); font-weight:900;}
+.rtm tbody tr:last-child td,.rtm tbody tr:last-child th{border-bottom:none;}
+
+/* ===================== rtm-collapse (折りたたみ RTM の fold affordance / folio-276 #4) ====
+   生成 SRS は核心 RTM を <details data-component="rtm-collapse"> で既定折りたたむ。 素の details は
+   marker が小さく「開けるUI」と気付けず要旨が素通りした (ceiling 第2層)。 summary を panel ヘッダ化し
+   ▶ caret + 「クリックで開閉」ヒントで開閉可能性を明示する。 折りたたみ機構自体は assembler が所有。 */
+[data-component="rtm-collapse"]{border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow); background:var(--paper); overflow:hidden;}
+[data-component="rtm-collapse"]>summary{cursor:pointer; list-style:none; user-select:none; display:flex; align-items:center; gap:11px; padding:15px 20px; font-size:14.5px; font-weight:800; color:var(--brand); background:var(--brand-tint);}
+[data-component="rtm-collapse"]>summary::-webkit-details-marker{display:none;}
+[data-component="rtm-collapse"]>summary::before{content:""; flex:0 0 auto; width:0; height:0; border-left:7px solid currentColor; border-top:5px solid transparent; border-bottom:5px solid transparent; transition:transform .15s ease;}
+[data-component="rtm-collapse"][open]>summary::before{transform:rotate(90deg);}
+[data-component="rtm-collapse"]>summary::after{content:"クリックで開閉"; margin-left:auto; font-size:10.5px; font-weight:700; letter-spacing:.04em; color:var(--ink-faint); background:var(--paper); border:1px solid var(--line); border-radius:6px; padding:2px 9px;}
+[data-component="rtm-collapse"][open]>summary{border-bottom:1px solid var(--line);}
+[data-component="rtm-collapse"]>.rtm-summary-derived,[data-component="rtm-collapse"]>[data-prose-slot="rtm-summary"]{margin:0; padding:13px 20px 0; font-size:13px; color:var(--ink-soft); line-height:1.6;}
+[data-component="rtm-collapse"]>[data-component="rtm-grid"]{margin:16px 20px 18px;}
+
+/* ===================== acceptance-criteria-checklist (dense-list) ========= */
+[data-component="acceptance-criteria-checklist"]{display:grid; grid-template-columns:repeat(3,1fr); gap:16px;}
+.ac{background:var(--paper); border:1px solid var(--ok-line); border-radius:14px; padding:17px 18px; box-shadow:var(--shadow); position:relative; display:flex; flex-direction:column; gap:8px;}
+.ac::before{content:""; position:absolute; left:0; top:0; bottom:0; width:5px; background:var(--ok); border-radius:14px 0 0 14px;}
+.ac .aid{font-size:11.5px; font-weight:800; color:var(--ok); letter-spacing:.1em; display:flex; align-items:center; gap:8px;}
+.ac .at{font-size:14.5px; font-weight:700; line-height:1.5; margin:0;}
+.ac .at b{color:var(--ok); font-weight:800;}
+.ac .metric{display:flex; align-items:baseline; gap:6px; margin-top:auto; padding-top:6px;}
+.ac .metric .v{font-size:26px; font-weight:900; color:var(--ok); line-height:1;}
+.ac .metric .l{font-size:11.5px; color:var(--ink-faint); font-weight:600;}
+
+/* ===================== constraint-callout (callout / 制約・規制) =========== */
+[data-component="constraint-callout"]{width:100%; border-collapse:separate; border-spacing:0; font-size:13.5px;}
+[data-component="constraint-callout"] td{padding:13px 16px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.55;}
+[data-component="constraint-callout"] tbody tr:last-child td{border-bottom:none;}
+.cid2{font-weight:800; font-family:ui-monospace,monospace; color:var(--warn); white-space:nowrap; width:60px;}
+.cl{font-weight:700; white-space:nowrap; width:170px; color:var(--ink);}
+.reg-badge{font-size:9.5px; font-weight:800; letter-spacing:.06em; background:var(--bad-tint); color:var(--bad); border:1px solid var(--bad-line); padding:1px 7px; border-radius:5px; margin-left:6px;}
+
+/* ===================== glossary-term-table (glossary / 用語 SSoT) ========= */
+[data-component="glossary-term-table"]{display:grid; grid-template-columns:1fr 1fr; gap:0 28px; border:1px solid var(--line); border-radius:14px; overflow:hidden; box-shadow:var(--shadow);}
+.grow{display:flex; gap:16px; padding:15px 20px; border-bottom:1px solid var(--line-soft); align-items:flex-start;}
+.grow:nth-child(odd){background:var(--paper);} .grow:nth-child(even){background:var(--paper-2);}
+.gword{flex:0 0 142px; font-size:14.5px; font-weight:800; color:var(--brand); line-height:1.3;}
+.gword .en{display:block; font-size:11px; font-weight:700; color:var(--ink-faint); font-family:ui-monospace,monospace; margin-top:2px;}
+.gdef{font-size:13px; color:var(--ink-soft); line-height:1.55;}
+
+/* ===================== fidelity-sync-meta + footer (meta) ================= */
+.foot{padding:26px 56px 40px; background:var(--brand-deep); color:rgba(255,255,255,.78); font-size:12px;}
+.foot .ft-grid{display:flex; flex-wrap:wrap; gap:14px 40px; justify-content:space-between; align-items:center;}
+.foot b{color:#fff;}
+.foot .tags{display:flex; flex-wrap:wrap; gap:8px;}
+.foot .tags span{background:rgba(255,255,255,.1); border:1px solid rgba(255,255,255,.18); padding:4px 10px; border-radius:7px; font-size:11px; font-weight:600;}
+/* i6f9: 読者向け平易行は常時可視の第 1 行 (flex-basis:100%)、 dev メタ行は font-size のみ控えめ化
+   (色/opacity は据置 = contrast 不変で gate F に新規 risk を持ち込まない)。 */
+.foot .ft-plain{flex-basis:100%; font-size:13px; color:rgba(255,255,255,.92); font-weight:500;}
+.foot .ft-grid>[data-audience="machine"]{font-size:10.5px;}
+
+/* ===========================================================================
+   残り register (taxonomy 全 37 部品の被覆) — 多くは中核 register を再利用
+   =========================================================================== */
+
+/* ---- dense-table family: interface / data / revision-history ---- */
+[data-component="interface-spec-table"],
+[data-component="data-requirements-block"],
+[data-component="revision-history-table"]{width:100%; border-collapse:separate; border-spacing:0; font-size:13px;}
+[data-component="interface-spec-table"] th,
+[data-component="data-requirements-block"] th,
+[data-component="revision-history-table"] th{background:var(--paper-3); text-align:left; font-size:11px; font-weight:800; letter-spacing:.05em; color:var(--ink-soft); padding:10px 14px; text-transform:uppercase;}
+[data-component="interface-spec-table"] td,
+[data-component="data-requirements-block"] td,
+[data-component="revision-history-table"] td{padding:11px 14px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.55;}
+[data-component="interface-spec-table"] tbody tr:last-child td,
+[data-component="data-requirements-block"] tbody tr:last-child td,
+[data-component="revision-history-table"] tbody tr:last-child td{border-bottom:none;}
+.iid{font-weight:800; font-family:ui-monospace,monospace; color:var(--info); white-space:nowrap;}
+.dir{font-size:10px; font-weight:800; padding:2px 7px; border-radius:5px; background:var(--info-tint); color:var(--info); border:1px solid var(--info-line);}
+
+/* ---- dense-list family: ui / functions / use-case / references / toc / appendix ---- */
+[data-component="ui-spec-block"],
+[data-component="product-functions-list"],
+[data-component="use-case-card"],
+[data-component="references-list"],
+[data-component="toc-navigator"],
+[data-component="assumptions-constraints-list"],
+[data-component="supporting-info-appendix"]{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:9px;}
+[data-component="ui-spec-block"] li,
+[data-component="product-functions-list"] li,
+[data-component="references-list"] li,
+[data-component="toc-navigator"] li,
+[data-component="assumptions-constraints-list"] li,
+[data-component="supporting-info-appendix"] li{display:flex; gap:11px; align-items:flex-start; background:var(--paper); border:1px solid var(--line); border-radius:11px; padding:11px 15px; box-shadow:var(--shadow); font-size:13.5px; line-height:1.5;}
+[data-component="assumptions-constraints-list"] li{border-left:5px solid var(--warn);}
+.li-tag{font-size:10px; font-weight:800; padding:2px 7px; border-radius:5px; background:var(--warn-tint); color:var(--warn); border:1px solid var(--warn-line); flex:0 0 auto;}
+[data-component="toc-navigator"]{display:grid; grid-template-columns:repeat(2,1fr); gap:9px 18px;}
+[data-component="toc-navigator"] li{box-shadow:none; border-color:var(--line-soft);}
+[data-component="toc-navigator"] .tn{font-weight:800; font-family:ui-monospace,monospace; color:var(--brand); flex:0 0 auto;}
+[data-component="references-list"] .ref-n{font-weight:800; font-family:ui-monospace,monospace; color:var(--ink-faint); flex:0 0 auto;}
+.li-key{font-weight:800; color:var(--brand); flex:0 0 auto;}
+
+/* use-case-card: precondition/flow/postcondition の枠 */
+[data-component="use-case-card"] li{flex-direction:column; gap:7px; border-left:5px solid var(--info); padding:14px 17px;}
+.uc-id{font-size:11.5px; font-weight:800; color:var(--info); letter-spacing:.08em;}
+.uc-flow{display:flex; flex-wrap:wrap; gap:6px; align-items:center; font-size:12.5px;}
+.uc-flow .stp{background:var(--paper-2); border:1px solid var(--line); border-radius:7px; padding:3px 9px; font-weight:600;}
+.uc-flow .ar{color:var(--ink-faint); font-weight:800;}
+
+/* ---- rtm-grid family: verification-method-grid / requirement-attributes-rtm ---- */
+[data-component="verification-method-grid"],
+[data-component="requirement-attributes-rtm"]{overflow-x:auto; border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow);}
+[data-component="verification-method-grid"] table,
+[data-component="requirement-attributes-rtm"] table{border-collapse:separate; border-spacing:0; font-size:12.5px; width:100%; min-width:680px;}
+[data-component="verification-method-grid"] th,
+[data-component="requirement-attributes-rtm"] th{background:var(--brand-deep); color:#fff; font-size:11px; font-weight:800; padding:10px 12px; text-align:left;}
+[data-component="verification-method-grid"] td,
+[data-component="requirement-attributes-rtm"] td{padding:10px 12px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.5;}
+[data-component="verification-method-grid"] tbody tr:nth-child(even) td,
+[data-component="requirement-attributes-rtm"] tbody tr:nth-child(even) td{background:var(--paper-2);}
+
+/* ---- callout family: quality-checklist / audience-toggle ---- */
+[data-component="quality-checklist-callout"]{background:var(--paper-2); border:1px solid var(--line); border-left:5px solid var(--ok); border-radius:12px; padding:16px 20px; box-shadow:var(--shadow);}
+[data-component="quality-checklist-callout"] .qt{font-size:13px; font-weight:800; color:var(--ok); margin:0 0 10px; display:flex; align-items:center; gap:8px;}
+[data-component="quality-checklist-callout"] ul{list-style:none; margin:0; padding:0; display:grid; grid-template-columns:repeat(3,1fr); gap:7px 16px;}
+[data-component="quality-checklist-callout"] li{font-size:12.5px; display:flex; gap:7px; color:var(--ink-soft);}
+[data-component="quality-checklist-callout"] li .ck{color:var(--ok); font-weight:900; flex:0 0 auto;}
+[data-component="audience-toggle"]{display:inline-flex; gap:0; border:1px solid var(--line); border-radius:10px; overflow:hidden; box-shadow:var(--shadow);}
+[data-component="audience-toggle"] button{border:none; background:var(--paper); color:var(--ink-soft); font:inherit; font-size:12.5px; font-weight:700; padding:8px 16px; cursor:pointer; border-right:1px solid var(--line);}
+[data-component="audience-toggle"] button:last-child{border-right:none;}
+[data-component="audience-toggle"] button[aria-pressed="true"]{background:var(--brand); color:#fff;}
+
+/* ---- diagram family: context / use-case-flow / state-machine ---- */
+[data-component="context-diagram"],
+[data-component="use-case-flow-diagram"],
+[data-component="state-machine-diagram"]{background:var(--paper); border:1px solid var(--line); border-radius:14px; padding:20px; box-shadow:var(--shadow); overflow-x:auto;}
+[data-component="context-diagram"] figcaption,
+[data-component="use-case-flow-diagram"] figcaption,
+[data-component="state-machine-diagram"] figcaption{font-size:11.5px; color:var(--ink-faint); font-weight:600; margin-top:10px; text-align:center;}
+/* use-case flow steps (横並びステップ) */
+.uc-basic{display:flex; align-items:stretch; gap:0; flex-wrap:wrap;}
+.uc-step{flex:1 1 0; min-width:140px; background:var(--paper); border:1px solid var(--brand); border-radius:13px; padding:14px; box-shadow:var(--shadow); display:flex; flex-direction:column; gap:5px;}
+.uc-arrow{flex:0 0 30px; display:grid; place-items:center; color:var(--brand); font-weight:800;}
+.uc-step .sn{font-size:11px; font-weight:800; color:var(--brand); letter-spacing:.06em;}
+.uc-step .st{font-size:14px; font-weight:800; line-height:1.3;}
+.uc-step .sd{font-size:11.5px; color:var(--ink-faint); line-height:1.45;}
+
+/* ---- badge: informative-normative-label ---- */
+.io-label{display:inline-flex; align-items:center; gap:5px; font-size:10px; font-weight:800; letter-spacing:.06em; padding:2px 9px; border-radius:6px; text-transform:uppercase;}
+.io-label.normative{background:var(--brand); color:#fff;}
+.io-label.informative{background:var(--paper-3); color:var(--ink-soft); border:1px solid var(--line);}
+
+/* ---- responsive ---- */
+@media (max-width:1080px){
+  [data-component="section-lead-callout"],[data-component="nfr-hero-metrics"],[data-component="acceptance-criteria-checklist"]{grid-template-columns:1fr 1fr;}
+  [data-component="scope-summary-panel"],[data-component="glossary-term-table"]{grid-template-columns:1fr;}
+}
+@media (max-width:720px){
+  [data-component="chapter-deck-band"],.chapbody,[data-component="doc-cover-band"],.foot{padding-left:22px; padding-right:22px;}
+  [data-component="section-lead-callout"],[data-component="nfr-hero-metrics"],[data-component="acceptance-criteria-checklist"]{grid-template-columns:1fr;}
+  [data-component="doc-cover-band"] h1{font-size:31px;}
+  [data-component="chapter-deck-band"] .num{font-size:92px;}
+}
+
+/* ============================================================================
+   dark accent コントラスト補正 — ★このブロックはファイル末尾に置くこと (source-order)。
+   dark では accent トークン (--brand/--info/--warn/--ok/--bad/--violet) が明色へ反転するため、
+   それを塗りに使い白文字を載せる小要素 (kicker / priority-badge / actor avatar / dot 等) は
+   WCAG AA が崩れる (gate F low-contrast で実検出)。 文字を暗色へ切替えて contrast を確保する。
+   基底の `color:#fff` ルールと同 specificity ゆえ、 source-order で後勝ちさせるには本ブロックが
+   それら全ての後 (= ファイル末尾) に来る必要がある。 前方へ移すと基底ルールに負け無効化する。
+   構造ヘッダ/フッタ (--brand-deep 塗り) は dark でも暗色維持ゆえ白文字のままで可読。
+   ============================================================================ */
+@media (prefers-color-scheme: dark){
+  .tint-brand .kicker, .tint-ok .kicker, .tint-bad .kicker,
+  .tint-warn .kicker, .tint-info .kicker, .tint-violet .kicker,
+  [data-component="source-trace-origin"] thead th,
+  .prio.must, .prio.should,
+  .rtm td .dot,
+  .actor .av,
+  [data-component="audience-toggle"] button[aria-pressed="true"],
+  .io-label.normative{ color:#08131a; }
+}
+/* ===== ADR-pack 固有部品 (folio-bwc / instance#2)。 srs.css の token を流用 ===== */
+[data-component="adr-context-row"]{display:flex;gap:12px;align-items:flex-start;padding:13px 16px;border:1px solid var(--line);border-left:3px solid var(--info);border-radius:10px;background:var(--paper-2);margin:10px 0}
+[data-component="adr-context-row"] .cxid{flex:0 0 auto;font-weight:700;font-size:12px;color:var(--info);background:var(--info-tint);border:1px solid var(--info-line);border-radius:6px;padding:2px 8px;letter-spacing:.02em}
+[data-component="adr-context-row"] .cxbody .cxh{font-weight:700;margin:0 0 3px;font-size:14.5px}
+[data-component="adr-context-row"] .cxbody .cxd{margin:0;color:var(--ink-soft);font-size:13.5px;line-height:1.7}
+table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;margin:8px 0;font-size:13.5px}
+[data-component="adr-driver-row"] td{border:1px solid var(--line);padding:9px 12px;vertical-align:top}
+[data-component="adr-driver-row"] .drid{font-weight:700;color:var(--brand);white-space:nowrap}
+[data-component="adr-driver-row"] .drg{display:inline-block;margin-left:6px;font-size:11px;color:var(--ink-soft);background:var(--paper-3);border:1px solid var(--line);border-radius:5px;padding:1px 6px}
+.opt-grid{display:flex;flex-direction:column;gap:12px;margin:10px 0}
+[data-component="adr-option-card"]{border:1px solid var(--line);border-radius:12px;padding:14px 16px;background:var(--paper);box-shadow:var(--shadow)}
+[data-component="adr-option-card"].chosen{border:2px solid var(--ok);background:var(--ok-tint)}
+[data-component="adr-option-card"].rejected{opacity:.92}
+.opt-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:4px}
+.opt-head .opt-id{font-weight:700;font-size:12px;color:var(--ink-soft)}
+.opt-head .opt-name{font-weight:800;font-size:15px}
+.opt-verdict{font-size:11.5px;font-weight:700;border-radius:999px;padding:2px 11px;border:1px solid}
+.opt-verdict.chosen{color:var(--ok);background:var(--ok-tint);border-color:var(--ok-line)}
+.opt-verdict.rejected{color:var(--bad);background:var(--bad-tint);border-color:var(--bad-line)}
+.opt-verdict.deferred{color:var(--warn);background:var(--warn-tint);border-color:var(--warn-line)}
+[data-component="adr-option-card"] .opt-sum{margin:2px 0 8px;color:var(--ink-soft);font-size:13.5px;line-height:1.7}
+[data-component="adr-option-card"] .opt-plain{display:block;margin:0 0 9px;font-size:13px;color:var(--ink-soft);background:var(--brand-tint);border-radius:7px;padding:6px 10px}
+.opt-pc{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media(max-width:640px){.opt-pc{grid-template-columns:1fr}}
+.opt-pc ul{margin:3px 0 0;padding-left:2px;list-style:none}
+.opt-pc li{font-size:12.5px;line-height:1.65;padding-left:18px;position:relative;margin:3px 0;color:var(--ink-soft)}
+.opt-pc .pros h4,.opt-pc .cons h4{margin:0;font-size:11.5px;letter-spacing:.04em}
+.opt-pc .pros h4{color:var(--ok)} .opt-pc .cons h4{color:var(--bad)}
+.opt-pc .pros li::before{content:"+";position:absolute;left:2px;color:var(--ok);font-weight:800}
+.opt-pc .cons li::before{content:"\2212";position:absolute;left:2px;color:var(--bad);font-weight:800}
+[data-component="adr-decision-panel"]{border:2px solid var(--ok);border-radius:14px;padding:16px 18px;background:var(--ok-tint);margin:8px 0}
+[data-component="adr-decision-panel"] .dec-kick{font-size:11.5px;font-weight:700;letter-spacing:.05em;color:var(--ok);text-transform:uppercase}
+[data-component="adr-decision-panel"] .dec-state{font-size:15.5px;font-weight:700;line-height:1.7;margin:5px 0 4px}
+[data-component="adr-decision-panel"] .dec-plain{display:block;font-size:13.5px;color:var(--ink-soft);line-height:1.7;margin:0 0 8px}
+[data-component="adr-decision-panel"] .dec-why{display:block;font-size:13px;color:var(--ink);background:var(--paper);border:1px solid var(--ok-line);border-radius:8px;padding:8px 11px;line-height:1.75;margin:0 0 10px}
+.justify-box{background:var(--paper);border:1px solid var(--line);border-radius:9px;padding:10px 12px}
+.justify-box .jh{font-size:12px;font-weight:700;color:var(--ink-faint);margin:0 0 6px}
+.justify-row{display:flex;gap:9px;align-items:baseline;padding:5px 0;border-top:1px dashed var(--line)}
+.justify-row:first-of-type{border-top:0}
+.justify-req{flex:0 0 auto;font-weight:800;font-size:12.5px;color:var(--ok);background:var(--ok-tint);border:1px solid var(--ok-line);border-radius:6px;padding:1px 9px}
+.justify-role{flex:0 0 auto;font-size:10.5px;color:var(--violet);background:var(--violet-tint);border:1px solid var(--violet-line);border-radius:999px;padding:1px 8px}
+.justify-note{flex:1 1 auto;font-size:12.5px;color:var(--ink-soft);line-height:1.6}
+.justify-tgt{font-size:11.5px;color:var(--ink-faint);margin:8px 0 0}
+[data-component="adr-supersession"],[data-component="adr-principle"]{border:1px solid var(--line);border-radius:10px;padding:12px 15px;margin:10px 0;font-size:13.5px;line-height:1.7}
+[data-component="adr-supersession"]{background:var(--paper-2)}
+[data-component="adr-principle"]{background:var(--violet-tint);border-color:var(--violet-line)}
+[data-component="adr-principle"] .prin-id{font-weight:700;color:var(--violet);font-size:12px;letter-spacing:.02em}
+[data-component="adr-principle"] .prin-text{font-weight:700;margin:4px 0 2px;color:var(--ink)}
+[data-component="adr-principle"] .prin-note{color:var(--ink-soft);font-size:12.5px}
+.ss-row{margin:3px 0}.ss-row .ss-k{font-weight:700;color:var(--ink-soft);font-size:12px;margin-right:6px}
+
+</style>
+<meta name="folio-version" content="0.1.0">
+<script type="application/ld+json">
+{
+  "@context": {
+    "dc": "http://purl.org/dc/terms/",
+    "schema": "https://schema.org/",
+    "folio": "https://folio.dev/spec/v1/"
+  },
+  "@id": "./ADR-0082-consumer-plugin-slot-and-runner-mark-are-cross-version.html",
+  "@type": "schema:TechArticle",
+  "dc:isPartOf": [
+    {
+      "@id": "./README.html"
+    }
+  ],
+  "dc:title": "席の起動行の 1 つ目の plugin の枠は anchor の plugin で、 runner に写す消費側の plugin には器が印の file を置く — 消費側の席と便の plugin の置き場と、 席と runner を見分ける印を跨版の面にする (ADR-0038 の 1 つ目の枠の読みを消費側の anchor へ広げる)",
+  "folio:version": "0.1.0",
+  "folio:stakeholders": [
+    "Developer",
+    "AI Agent",
+    "External Reviewer"
+  ],
+  "dc:references": [
+    {
+      "@id": "../spec/constitution.html#c2"
+    },
+    {
+      "@id": "../spec/constitution.html#c17"
+    },
+    {
+      "@id": "../spec/constitution.html#n2"
+    },
+    {
+      "@id": "../spec/constitution.html#n3"
+    },
+    {
+      "@id": "../spec/srs.html#FR59"
+    },
+    {
+      "@id": "../spec/srs.html#FR4"
+    },
+    {
+      "@id": "./ADR-0038-plugin-payload-lives-in-a-generated-dir.html"
+    },
+    {
+      "@id": "./ADR-0004-mvp-persistence-and-cross-version-formats.html"
+    },
+    {
+      "@id": "./ADR-0022-seat-roles-are-typed-and-enforced-by-hooks.html"
+    }
+  ]
+}
+</script>
+</head>
+<body>
+<!-- folio:chrome-top -->
+<a class="skip-link" href="#cover-summary">本文へスキップ</a>
+<nav class="breadcrumb" aria-label="パンくず"><ol>
+  <li><a href="../index.html">design-intent</a></li>
+  <li><a href="./README.html">decisions</a></li>
+  <li aria-current="page">ADR-0082</li>
+</ol></nav>
+<!-- /folio:chrome-top -->
+<div class="page" data-component="requirement-type-color-tokens">
+<header data-component="doc-cover-band">
+<p class="cover-eyebrow"><span class="doc-type">設計判断記録 (ADR)</span> <span>scribe2 — 消費側の plugin の枠と runner の印</span></p>
+<h1>席の起動行の 1 つ目の plugin の枠は anchor の plugin で、 runner に写す消費側の plugin には器が印の file を置く — 消費側の席と便の plugin の置き場と、 席と runner を見分ける印を跨版の面にする (ADR-0038 の 1 つ目の枠の読みを消費側の anchor へ広げる)</h1>
+<p class="cover-sub">ADR-0038 は席の起動行の 1 つ目の plugin の枠を anchor の下の生成 dir と決めたが、 器自身の repo を前提にしていた。 消費側の project が自分の plugin をそこに置き、 同じ plugin が runner にも写って積まれることが分かった。 本 ADR はこの枠と runner の写しを版を跨いで保つ約束にし、 runner に写した消費側の plugin の置き場にだけ器が空の印の file を 1 つ置く。 環境変数は足さない。</p>
+<div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">この記録で「器」は scribe2 の本体、 「席」は器が立てる対話の AI の session、 「runner」は契約 1 本を実装する使い捨ての AI、 「消費側」は器を使う別の project です。 席を立てる 1 行は、 最初に積む plugin の置き場を anchor (席の repo の置き場) の下の plugin/ にしています。 消費側の project が自分の plugin をそこに置くと、 その plugin の名札と hook が runner にも写って積まれます (写るのはその 2 つだけで、 中身は便の作業場所のその時の版なので、 席の今の版とずれることがあります)。 本 ADR は、 この置き場・runner への写し方・写しに置く印の file の 3 つを、 版を跨いで保つ約束にします。 印は runner に写した消費側の plugin の置き場にだけ器が置く空の file で、 消費側の hook はこれが在るかで runner の中かを判じます。 環境変数は足しません (要件 FR59 と FR4 を支え、 ADR-0038 の読みを消費側へ広げます)。</p></div></div>
+<div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">accepted</span></span><span class="m"><span class="k">選択肢</span><span class="v">8件 (OPT1–OPT8)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 3 / トレードオフ 7</span></span><span class="m"><span class="k">版</span><span class="v">v0.1.0 / 2026-09-28</span></span></div>
+<div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>FR59・FR4</b></div>
+<div data-component="approval-block">
+<div class="sign"><span class="role">裁定 (user)</span><span class="who">user</span><span class="when">裁定 id user 2026-09-28T00:54Z (決めてほしいことは推奨で進める、 の常設の指示)。 memo の昇格と置き場の宣言は台帳の棚卸しの推奨のまま。 見分けの形を環境変数から印の file へ替えたのは、 審査が挙げた憲法 C2.2 と ADR-0004 §2.4 の線を踏まえて orchestrator が決めた (環境変数を足さないので、 条の解釈も改訂の裁定も要らない)。 逐語は台帳にだけ在る</span><span class="stamp self">裁定済</span></div>
+<div class="sign"><span class="role">設計 (orchestrator)</span><span class="who">orchestrator</span><span class="when">2026-09-28 草稿 v2 (起動行の導出・便の plugin の写し・gate の lens の行の穴・lens の口の flag を現物で読み、 印の名と置き場を決め、 scratch の clone で実装と歯を試した。 拘束する constitution の版 0.5.0)</span><span class="stamp self">作成</span></div>
+</div>
+<div class="reader-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 想定読者: scribe2 の開発 session と user — 器の内部と Rust の専門知識は不要 (専門語はやさしい言葉を併記)</div>
+</header>
+<!-- folio:chrome-toc -->
+<!-- /folio:chrome-toc -->
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">01</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v6m0 0L9 5m3 3l3-3"/><circle cx="12" cy="14" r="6"/></svg> 背景 / なぜこの判断が要るか</span><h2>いま何が問題か (確定方式を決める力学)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-01">なぜこの判断が要るのかを、 経緯 (最初に積む plugin の置き場は決まっていたが、 消費側での意味は書かれていない)・事象 (消費側の plugin が席と runner の両方に積まれ、 両者を見分ける値を器が渡していない)・機序 (器は runner の plugin を便の置き場へ写し、 AI は hook に読み込んだ plugin の置き場を渡す。 runner の側は 2 つの実測から導く)・憲法と既存の決定の向き (環境変数を足さない線)・射程の 5 つで示します。</p></section>
+<div class="chapbody">
+<div data-component="adr-context-list">
+<div data-component="adr-context-row"><span class="cxid">CTX1</span><div class="cxbody"><p class="cxh">経緯 — 1 つ目の枠<span class="term" data-component="plain-language-term-inline" data-term="1 つ目の枠">最初に積む plugin</span>は ADR-0038 で anchor<span class="term" data-component="plain-language-term-inline" data-term="anchor">席の repo の置き場</span> の下の生成 dir と決まったが、 消費側<span class="term" data-component="plain-language-term-inline" data-term="消費側">器を使う別の project</span>の anchor での意味は書かれていない</p><p class="cxd">席の起動行<span class="term" data-component="plain-language-term-inline" data-term="席の起動行">席を立てる命令の 1 行</span>は pure な 1 関数が組み、 1 つ目の plugin の枠に anchor の下の生成 dir (名は core の定数 1 つ・今は plugin) を置き、 2 つ目以降に host の面の plugin の dir を宣言順に並べる。 ADR-0038 はこの枠を器自身の plugin の置き場として決め、 設計の § も「器自身の生成 dir」とだけ書く。 消費側の anchor では、 この枠はその project の plugin/ を指す (在れば積まれ、 無くても行には載る)。 これは器の実装の細部で、 跨版の約束ではない。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX2</span><div class="cxbody"><p class="cxh">事象 — 消費側の plugin が席と runner<span class="term" data-component="plain-language-term-inline" data-term="runner">実装する使い捨て AI</span> の両方に積まれ、 両者を見分ける値を器が渡していない</p><p class="cxd">消費側の project 1 つが anchor の下の plugin/ に hook<span class="term" data-component="plain-language-term-inline" data-term="hook">道具や turn で走る命令</span> を持つ plugin を置いた。 席は 1 つ目の枠でその plugin を積み、 runner は便ごとの写しで同じ plugin の名札と hook を積む (runner に写すのは .claude-plugin と hooks の 2 dir だけで、 plugin.json と hooks.json の両方が在り名が器と違う周に限る。 lens<span class="term" data-component="plain-language-term-inline" data-term="lens">審査する使い捨て AI</span> は plugin を 1 つも積まない)。 runner に写るのは spawn の各周の時点の便の worktree の中身 (初回は便の出発点の commit、 再開の周は runner の変更や追随を含みうる) で、 席が積むのは anchor の作業木の今の中身である。 消費側の hook が席でだけ働くには runner の中かを知る必要があるが、 器は正の値を渡していない。 消費側は作業木の形などから推すしかなく、 粗く推すと worktree で作業する席を runner と誤読しうる (推定)。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX3</span><div class="cxbody"><p class="cxh">機序 — 器は runner の plugin を便の置き場へ写し、 claude は hook に読み込んだ plugin の置き場を渡す</p><p class="cxd">便ごとの plugin の root は器が state dir の便の dir に spawn の周ごとに書き直し、 器の plugin を必ず置き、 名の違う消費側の plugin を consumer という dir へ写す (repo の外へ写すのは、 読み込んだ plugin の dir の下が自動承認から外れるため)。 root は runner の行の plugin_dir の穴で runner に渡る。 claude は hook に、 読み込んだ plugin の dir を CLAUDE_PLUGIN_ROOT という値で渡し、 器自身の hooks.json もこの値を使う。 席ではこの値が anchor の下の plugin/ になり、 runner に積まれた消費側の hook ではこの値が写しの dir になる、 と 2 つの実測 (2026-09-28) から導く。 (a) 対話の席では、 器の hook が CLAUDE_PLUGIN_ROOT を席の読み込み元の記録に書く。 --plugin-dir に anchor の下の plugin/ を渡して立てた席の記録は、 その path そのままだった (cache の写しではない)。 (b) headless の runner では、 走行中の便の claude が逐次の出力の初めの record に並べる plugin の path が、 --plugin-dir に渡した便の写しの dir (器の plugin の写し) と同じだった。 残る隙間は、 runner の中の hook が受け取る CLAUDE_PLUGIN_ROOT を直に記録した実測が無いことである (runner は pane を持たず、 読み込み元の記録は pane の無い周に書かない)。 lens は plugin を 1 つも積まない (器の lens の口の flag に plugin の dir が無く、 gate が lens の行に置く穴は契約と worktree の 2 つだけ)。 runner の claude の環境変数は、 構築点が口座と agent view の 2 つを置き tmux の pane の変数を外すだけで、 runner を名乗る値は無い。 器自身の hook は pane の変数の無い session を席でないと読む。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX4</span><div class="cxbody"><p class="cxh">憲法と既存の決定の向き</p><p class="cxd">C2.2 は、 器は環境変数を直接読まず、 環境変数の継ぎ目 (seam) を新設せず、 環境変数の接頭辞を NAME から導く、 と定める。 ADR-0004 §2.4 (D-4) はこの条を適用し、 器が外へ渡す置き場と方針を、 引数・worktree の git の私有 dir の file・runner の行の穴の 3 つに限った (閉じた列挙で、 file 一般を認めてはいない)。 その出所は、 前の器で器の接頭辞の環境変数が 533 種に増えて改名できなくなった実測である。 設計 gate-cost.md §3.3 も同じ条の精神で、 実効 jobs を環境変数で渡さない (折り返しの裏口を作らない)。 役割は窓名や環境変数の慣習では決めない (ADR-0022)。 N2 から跨版の約束は散文だけで持たず歯で pin し、 N3 から印の値は host に依らない。 C17 から既存の写しの手順を使う。 C17.2 は、 走査・記録・rules 行・仕組みのどれかを足すなら先に消すものを名指す、 と定める。 本 ADR が足すのは器の中に読み手を持たない file 1 つで、 走査・記録・rules 行は足さず、 器の中に仕組み (読む・判じる・止める) も足さないと読む (解釈)。 消費側が読む跨版の合図は 1 つ増える。 消すものとしては、 消費側に推させている今の暗黙の面 (作業場所の形) を、 約束の印に置き換える。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX5</span><div class="cxbody"><p class="cxh">射程 — 動かすのは宣言 3 点と写しの手順の file 1 つだけ</p><p class="cxd">動かすのは、 (1) 1 つ目の枠を anchor の下の生成 dir とする約束を消費側の anchor まで広げること、 (2) runner の写しの形 (名の違う plugin だけを便の root の consumer という dir へ写す・lens は積まない) を約束にすること、 (3) その写しの root に空の印の file<span class="term" data-component="plain-language-term-inline" data-term="印の file">runner の写しの目印</span> を 1 つ書くこと、 だけである。 動かさないのは、 2 つ目以降の枠の順・写しの判定と写し先と写す 2 dir・runner の root の配下の並べ方・lens の起動・席の起動行の外形と環境変数・headless の構築点・便を起こす層の環境変数・状態の打刻・rules 行・要件書である。 写しの中の並びを 2 dir に pin した既存の歯 2 本は、 印の分だけ期待が動く。</p></div></div>
+</div>
+</div>
+<section data-component="chapter-deck-band" class="tint-brand"><span class="num">02</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v18"/><path d="M5 7l-3 6h6z"/><path d="M19 7l-3 6h6z"/><path d="M3 21h18"/></svg> 判断を縛る力 / 評価の軸</span><h2>選択肢を測るものさし (安全・速さ)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-02">この判断を評価する 5 本のものさしです。 消費側の plugin の置き場が版を跨いで動かないこと。 消費側の hook が、 器の置く正の印 1 つで (無いことや形から推さずに) runner の中かを判じられること。 器は環境変数を読まず、 環境変数の継ぎ目を新しく作らず、 名を器の名から導き、 役割の語と混ぜないこと。 足すものを最小にすること。 既存の約束と器の内部の配置を壊さないこと。</p></section>
+<div class="chapbody">
+<table data-component="adr-driver-table"><tbody>
+<tr data-component="adr-driver-row"><td class="drid">DR1</td><td>消費側の plugin の置き場が版を跨いで動かない — 置いた plugin を器の版上げが黙って外さない <span class="drg">CTX1・CTX2</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR2</td><td>消費側の hook が、 器の置く正の印 1 つで runner の中かを判じられる (無いことや形から推さない) <span class="drg">CTX2・CTX3</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR3</td><td>C2.2 と ADR-0004 §2.4 の線の内側に留まる — 環境変数を読まず、 環境変数の継ぎ目を新設せず、 名は NAME から導き、 役割の語と混ぜない <span class="drg">CTX4</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR4</td><td>足すものを最小にする — 既存の写しの手順と置き場を使い、 読み手を足さない (C17) <span class="drg">CTX3・CTX4</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR5</td><td>既存の約束を壊さない — 席の起動行の外形・便を起こす層の環境変数・lens の plugin 無し・写しの判定・器の内部の配置 <span class="drg">CTX3・CTX5</span></td></tr>
+</tbody></table>
+</div>
+<section data-component="chapter-deck-band" class="tint-violet"><span class="num">03</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5"/></svg> 検討した選択肢 / 3 つの確定方式</span><h2>それぞれの利点と欠点を並べる</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-03">候補を 8 つ並べます。 置き場と写し方を約束にし写しに印の file を置く案 (選んだ案)、 何も足さず消費側に推させる今のままの案、 tmux の pane の変数が無いことを約束にする案、 plugin の置き場の path で見分ける案、 runner に消費側の plugin を積まない案、 席の側で環境変数を名乗る案、 runner の AI に環境変数を名乗らせる案、 印を作業場所の git の私有の dir に置く案です。</p></section>
+<div class="chapbody">
+<div class="opt-grid">
+<div data-component="adr-option-card" class="chosen">
+<div class="opt-head"><span class="opt-id">OPT1</span><span class="opt-name">3 点を跨版の面<span class="term" data-component="plain-language-term-inline" data-term="跨版の面">版を跨いで保つ約束</span>にし、 runner に写す消費側の plugin の root に器が空の印の file を置く</span><span class="opt-verdict chosen">採用</span></div>
+<p class="opt-sum">1 つ目の枠が anchor の下の生成 dir であること (消費側の anchor ではその project の plugin)、 runner の写しの形、 写しの root の印の file を、 版を跨いで保つ約束にする。 印の名は NAME に -runner を付けた語、 中身は空で、 host の値も便の値も載せない。 消費側の hook は CLAUDE_PLUGIN_ROOT の下に印が在るかで判じ、 器は印を読まない。 D-4 との関係は、 印を置く plugin の root は D-4 の 3 つのうち runner の行の穴で runner に渡っており、 印はその root の下の file 1 つである (D-4 が列挙した私有 dir の file そのものではない)。 決め手は、 環境変数を使わずに正の印を plugin の読み込みに付けられること (OPT7・OPT8 の欠点の分析)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT1">3 つを版を跨いで保つ約束にする案です。 席を立てる 1 行で最初に積む plugin は anchor の下の plugin/ (消費側ではその project の plugin) であること、 runner には名の違う消費側の plugin の名札と hook だけを便の置き場へ写して積むこと、 そしてその写しの置き場に器が空の印の file を 1 つ置くことです。 印の名は器の名に -runner を付けた語で、 中身は空、 器はこれを書くだけで読みません。 消費側の hook は、 AI から受け取る自分の plugin の置き場に印が在るかで判じます。 器は席の置き場に印を書かず、 環境変数のように runner の中の器自身の process へ引き継がれず、 shell の値では偽装されず、 環境変数を足さないので憲法の条の解釈も要りません。 代わりに、 印の名と置き場が版を跨ぐ約束になり (器の名を変えると印の名も変わる)、 runner 以外は印が無いことで判じ (器の外で起こした AI も runner でないと読む)、 印を見られるのは写しを積んだ hook だけで、 写しの形を固めた既存の歯 2 本の期待が動きます。 anchor の plugin/ に同じ名の file を置けば席も runner と読まれ (環境変数の偽装と同じ型で、 手間が file 1 つに変わるだけ)、 runner の中の hook が受け取る置き場を直に測ってはいない (席の記録と runner の起動の record の 2 つの実測から導いている) であることも引き受けます。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>1 つ目の枠と写しの形と印が歯で pin され、 消費側の plugin の置き場が黙って動かない (DR1)</li>
+<li>正の印で判じられ、 器は席の枠 (anchor の下の plugin/) に印を書かない。 印は plugin の読み込みごとに決まり、 cwd に依らない (DR2)</li>
+<li>環境変数を足さないので C2.2 の解釈を要さない。 印は D-4 の runner の行の穴で渡る plugin の root の下の file で、 環境変数のように runner の中の器自身の process へ引き継がれず、 shell の値では偽装されない (偽装するには anchor の plugin/ に同じ名の file を置く必要があり、 git の状態に見える) (DR3)</li>
+<li>既存の写しの手順が file を 1 つ書くだけで、 読み手も呼び出しの欄も足さない (DR4)</li>
+<li>席の起動行の外形も、 headless の構築点も、 便を起こす層の環境変数も動かない (DR5)</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>印の名 (NAME から導く) と置き場 (写しの root) が跨版の面になり、 NAME を改名すると印の名も変わる (ADR-0004 が防いだ改名の費用が 1 つ分残る)</li>
+<li>runner 以外は印が無いことで判じる。 器の外で起こした headless や人が起こした claude は写しを積まないので、 runner でないと読む</li>
+<li>印を見られるのは写しを積んだ claude の hook だけで、 hook でない process (道具が撃つ子) は印を知らない</li>
+<li>写しの中の並びが 2 dir から「2 dir と印」になり、 写しの形を pin した既存の歯 2 本の期待が動く</li>
+<li>anchor の plugin/ に同じ名の file を人か席の AI が置くと、 席も runner と読まれ、 器はそれを止めない (OPT7 の shell での偽装と同じ型で、 手間が repo の中の file 1 つに変わるだけ)</li>
+<li>runner の中の hook が受け取る CLAUDE_PLUGIN_ROOT が写しの dir を指すことは、 2 つの実測 (席の読み込み元の記録・runner の初めの record の plugin の path) から導いたもので、 runner の中の hook の値そのものは直に記録していない。 外れると消費側の hook は runner の中でも印を見つけられない (小さく残るリスク)</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT2</span><span class="opt-name">何も足さない (今のまま) — 消費側の hook が作業木の形などから推す</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">1 つ目の枠も写しも実装の細部のままにし、 印も環境変数も足さない。 消費側の hook は runner の作業場所の形などから推す。 決め手は分析 (推し方は、 誤読するか、 器の内部の配置を凍らせるかのどちらか)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT2">何も足さず、 今のままにする案です。 器の変更が無く、 約束も増えず、 環境変数も足さない点で勝ります。 けれども、 最初に積む plugin の置き場は実装の細部のままで将来の版が黙って動かしうるうえ、 推し方の精度が器の内部の配置に依ります。 作業場所の形で粗く推すと worktree で作業する席を runner と誤読しうる (推定) 一方、 runner の作業場所の形まで精確に推すと器の内部の配置を消費側の約束に凍らせるので退けました。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>器の変更が 0 で、 跨版の約束が増えない</li>
+<li>環境変数を足さず、 C2.2 の解釈を要さない</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>1 つ目の枠の意味が実装の細部のままで、 将来の版が黙って動かしうる (DR1)</li>
+<li>推し方の精度は器の内部の配置に依る。 作業木の形で粗く推すと worktree で作業する席を runner と誤読し (推定)、 runner の作業場所の形まで精確に推すと器の内部の配置を消費側の約束に凍らせる (DR2・DR5)</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT3</span><span class="opt-name">pane の変数の不在を跨版の面にする — runner は tmux の pane の変数を持たない</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">runner の子から tmux の pane の変数を外す今の形を約束にし、 消費側の hook は pane の変数が無い周を runner と読む。 器自身の hook と同じ読みを消費側にも渡す形。 決め手は分析 (無いことからの推論で runner 以外も含む)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT3">runner の AI からは tmux の pane の変数が外されている今の形を約束にし、 消費側はその変数が無い周を runner と読む案です。 器の code を変えず、 器自身の hook と同じ読み方で済み、 環境変数も足さない点で勝ります。 けれども、 変数が無いことから推すので、 tmux の外で動く session (人が素の端末で起こした AI など) も runner と読んでしまいます。 また、 変数を外すのは runner の hook が席の記録へ書かないための別の目的の形で、 その細部を消費側の約束に凍らせるので退けました。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>器の code の変更が 0 で、 外す形は既存の歯が既に pin している</li>
+<li>器自身の hook と同じ読みで、 環境変数を足さず C2.2 の解釈も要さない</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>無いことからの推論で、 tmux の外で動く session (人が素の端末で起こした claude など) も runner と読む (DR2)</li>
+<li>pane の変数を外すのは runner の hook が席の記録へ書かないための形で、 別の目的の細部を消費側の約束に凍らせる (DR5)</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT4</span><span class="opt-name">消費側の hook が plugin の root の path で見分ける</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">器は何も足さず、 runner の写し先の path の形 (便の置き場の下) を約束にする。 消費側の hook は plugin の root が anchor の下の plugin/ でない周を runner と読む。 決め手は分析 (器の置き場の内部を凍らせ、 否定の推論になる)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT4">器は何も足さず、 消費側の hook が自分の plugin の置き場の path を見て、 anchor の下でなければ runner と読む案です。 環境変数も file も足さず、 値は AI が既に hook に渡している点で勝ります。 けれども、 器の作業場所の中の配置を版を跨ぐ約束に凍らせるうえ、 「anchor の下でなければ runner」という推し方なので、 別の経路で入れた消費側の plugin も runner と読むので退けました。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>環境変数も file も足さず、 値は claude が既に hook に渡している。 C2.2 の解釈も要さない</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>器の置き場 (state dir の便の dir) の内部の配置を跨版の約束に凍らせる (DR5)</li>
+<li>「anchor の下でなければ runner」という否定の推論で、 別の経路で入れた消費側の plugin も runner と読む (DR2)</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT5</span><span class="opt-name">runner に消費側の plugin を積まない (写しを止める)</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">便の root へ消費側の plugin を写すのをやめ、 消費側の hook を席だけで撃たせる。 決め手は分析 (runner の中で撃ちたい消費側の hook を失う)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT5">runner に消費側の plugin を積むのをやめ、 消費側の hook を席だけで撃たせる案です。 見分ける必要そのものが消え、 約束も 1 つ減る点で勝ります。 けれども、 消費側が runner の中で撃ちたい hook を失い、 名の違う plugin を写す既存の約束を壊し、 runner でも撃つ hook と席だけの hook を分けられなくなるので退けました。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>見分ける必要そのものが消え、 跨版の面も 1 つ減る。 C2.2 の解釈も要さない</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>消費側が runner の中で撃つ hook を失い、 名の違う plugin を写す既存の約束を壊す (DR5)</li>
+<li>runner でも撃ちたい hook と席だけで撃つ hook を消費側が分けられない (DR2)</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT6</span><span class="opt-name">席の起動行に席の名乗りの環境変数を置く</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">runner でなく席の側で名乗り、 消費側の hook は席の名乗りが在る周だけ働く。 決め手は分析 (起動行の外形が動き、 環境変数を足し、 起動行を通らない session を区別できない)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT6">runner でなく席の側に名乗りの環境変数を置き、 消費側の hook は席の名乗りが在る周だけ働く案です。 消費側が席を正の値で知れ、 runner の側を触らない点で勝ります。 けれども、 席を立てる 1 行の形が変わって外形の歯が動き、 器の 1 行を通らずに起こした session は名乗りを持たず runner と区別できず、 環境変数を足すので憲法の条と ADR-0004 の線に触れ、 席の種類を環境変数で表す形にも近づくので退けました。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>消費側の hook が席を正の値で知り、 runner の側を触らない</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>席の起動行の外形 (起動行の構成は決定記録が正本) が動き、 外形の歯が動く (DR5)</li>
+<li>器の起動行を通らない session (人が手で起こした claude など) は名乗りを持たず、 名乗りの無いことからは runner と区別できない (DR2)</li>
+<li>環境変数を足すので C2.2 と ADR-0004 §2.4 の線に触れ、 席の種類を環境変数で表す形 (ADR-0022 が退けた慣習) に近づく (DR3)</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT7</span><span class="opt-name">runner の claude に名乗りの環境変数を置く (名は NAME の大文字に _HEADLESS、 または _ROLE)</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">headless の唯一の構築点が、 plugin を積む呼び出し (今は runner だけ) の子に環境変数を 1 つ置く。 草稿 v1 の採用案で、 名を役割の語にする形も含む。 決め手は審査と分析 (条の解釈を要し、 ADR-0004 と gate-cost.md の前例に逆らう)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT7">runner の AI を起こす唯一の場所で、 plugin を積む呼び出しの子に名乗りの環境変数を 1 つ置く案です (名は器の名の大文字に _HEADLESS、 または役割の語の _ROLE)。 この記録の最初の草稿が選んでいた案です。 runner の中の全ての process が値を読め、 数行で済む点で勝ります。 けれども、 憲法 C2.2 は環境変数の継ぎ目を新しく作ることを禁じ、 ADR-0004 はその適用として器の外への受け渡しから環境変数を外しました (前の器で器の環境変数が 533 種に増え、 名を変えられなくなったのが出所です)。 この案は「子へ書くだけなら継ぎ目でない」という条の解釈を要し、 実効 jobs を環境変数で渡さないとした gate-cost.md §3.3 の前例にも逆らい、 名乗りは器自身の process にも引き継がれます。 席の shell に人が同じ名を置くと席が runner と読まれ、 役割の語を使うと席の種類の語と混ざるので退けました。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>runner の中の全 process (hook でない子も) が値を読める</li>
+<li>構築点の数行で済み、 呼び出しの欄を足さない</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>環境変数の継ぎ目を新設しない (C2.2) の線に触れ、 「子へ書くだけの環境変数は継ぎ目でない」という条の解釈を要する。 ADR-0004 §2.4 はこの条を適用して器の外への受け渡しから環境変数を外しており、 出所は前の器で器の接頭辞の環境変数が 533 種に増えて改名できなくなった実測である (DR3)</li>
+<li>gate-cost.md §3.3 は同じ条の精神で実効 jobs を環境変数で渡さない (折り返しの裏口を作らない)。 名乗りは runner の中の器自身の process にも継承され、 同じ懸念が当たる (DR3)</li>
+<li>席の shell に人が同じ名を置くと席が runner と読まれ、 runner 以外は名乗りの無いことで判じる (DR2)</li>
+<li>名を役割の語 (_ROLE) にすると、 runner は席でないのに席の種類の語と混ざり、 器の歯がその名を読まない値の見本に使っている (DR3)</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT8</span><span class="opt-name">印の file を便の worktree の git の私有 dir に置く (ADR-0004 の列挙した経路)</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">印を写しの root でなく、 ADR-0004 §2.4 が器の受け渡しに挙げた worktree の git の私有 dir に置き、 消費側の hook は git で私有 dir を引いて在否を見る。 決め手は分析 (印が plugin の読み込みでなく worktree に付く)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT8">印の file を、 写しの置き場でなく、 ADR-0004 が器の受け渡しに挙げた作業場所の git の私有の dir に置く案です。 ADR-0004 が列挙した経路そのもので、 環境変数も足さず、 正の印で判じられる点で勝ります。 けれども、 印が plugin の読み込みでなく作業場所に付くので、 便の作業場所へ移って作業する席も runner と読んでしまいます。 消費側の hook は git を撃って私有の dir を引く必要があり、 器の私有の dir の配置を消費側の約束に凍らせるので退けました。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>ADR-0004 §2.4 が列挙した経路そのもので、 環境変数を足さず C2.2 の解釈も要さない</li>
+<li>正の印で判じられる</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>印が plugin の読み込みでなく worktree に付くので、 便の worktree へ移って作業する席 (人が cd した session) も runner と読む (DR2)</li>
+<li>消費側の hook は git を撃って私有 dir を引く必要がある (hook の読みが重い) (DR4)</li>
+<li>器の私有 dir の配置 (runner の触ってよい file の一覧の隣) を消費側の約束に凍らせる (DR5)</li>
+</ul></div></div>
+</div>
+</div>
+</div>
+<section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの方式を選ぶか</span><h2>選んだ方式と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、 それが要件書のどの要件を支えるかを示します。 席を立てる 1 行で最初に積む plugin は anchor の下の plugin/ で、 消費側ではその project の plugin です。 runner への写し方と、 写しの置き場にだけ器が置く空の印の file (名は器の名に -runner を付けた語) を、 版を跨いで保ちます。 環境変数は足しません。</p></section>
+<div class="chapbody">
+<div data-component="adr-decision-panel" id="decision">
+<p class="dec-kick">採用 — OPT1</p>
+<p class="dec-state">席の起動行の 1 つ目の --plugin-dir SHALL anchor の下の生成 dir (名は core の定数 1 つ) とし、 器の repo の anchor では器の plugin、 消費側の anchor ではその project の plugin を指す。 器 SHALL この枠の中身を読まず、 plugin.json の名で差し替えも除外もしない。 2 つ目以降の枠 (host の面の plugin の dir・宣言順) と起動引数の順 SHALL 変えない。 便の plugin の root SHALL 器の plugin を必ず持ち、 worktree の生成 dir が plugin.json と hooks.json の両方を持ち名が器と違う周だけ、 その 2 つの dir を root の下の consumer という dir へ写す (写すのは spawn の各周の時点の便の worktree の中身で、 初回は便の出発点の commit、 再開の周は runner の変更や追随を含みうる。 anchor の今の中身ではない)。 器 SHALL その写しの root に印の file を 1 つ書く。 印の名は NAME に -runner を付けた語、 中身は空で、 host の値も便の値も載せない。 器 SHALL 器の plugin の写し・anchor の下の生成 dir・便の worktree の生成 dir に印を書かない。 lens は今の形のまま plugin を積まない (器の lens の口は plugin の dir を受けず、 gate は lens の行へ plugin の root を渡さない。 これは跨版の 3 点の外で、 今の形を書き留めるだけ)。 器 SHALL 印を読まず、 役割の判定にも使わない。 器 SHALL この見分けのために環境変数を足さない。 以上の 3 点 (1 つ目の枠・runner の写し・印の名と置き場と空の中身) SHALL 跨版の面とし、 変えるときは新しい ADR を要する。 席の起動行の外形と環境変数・headless の構築点・便を起こす層の環境変数・状態の打刻・要件書は変えない。</p>
+<span class="dec-plain" data-prose-slot="plain" data-slot-id="decision-plain">席を立てる 1 行で最初に積む plugin は anchor の下の plugin/ で、 器の repo では器の plugin、 消費側ではその project の plugin です。 器はこの中身を読まず、 名で差し替えも除外もしません。 2 つ目以降の並びは変えません。 runner の plugin の置き場には器の plugin を必ず置き、 消費側の plugin は名札の file (plugin.json) と hook の一覧の file (hooks.json) の両方を持ち名が器と違うときだけ、 その 2 つの dir を写します。 写すのは起こす周ごとの便の作業場所の中身で (初回は作業を始めた時点の commit、 再開の周は runner の変更を含みうる)、 anchor の今の中身ではありません。 器はその写しの置き場にだけ空の印の file を 1 つ書き、 名は器の名に -runner を付けた語です。 器の plugin の写し・anchor の plugin/・作業場所の plugin/ には書きません。 審査の AI は今の形のまま plugin を積みません (これは約束の外)。 器は印を読まず、 役割の判定にも使わず、 環境変数も足しません。 席を立てる 1 行と AI を起こす場所と状態の記録は変えません。 置き場・写し方・印の 3 点を版を跨いで保ち、 変えるときは新しい ADR を書きます。</span>
+<span class="dec-why" data-prose-slot="rationale" data-slot-id="decision-rationale">消費側の project が自分の plugin を最初に積む置き場に置き、 その名札と hook が runner にも写って積まれることが分かりました。 置き場が実装の細部のままだと将来の版が黙って動かしうるので、 歯で保つ約束にしました。 消費側の hook が席でだけ働くには runner の中かを知る値が要ります。 推し方 (作業場所の形・pane の変数が無いこと・置き場の path) は、 別の session を runner と読むか、 器の内部の配置を凍らせるので、 器が正の印を 1 つ渡します。 消費側が知りたいのは runner の中かなので、 正の印は runner の側に置きます。 席の側に置くと runner の方が無いことからの推論になり、 環境変数で名乗るなら席を立てる 1 行の形も動きます。 どちらの側に置いても器の外で起こした session は印の無い側に数えられ、 runner の側に置くとそれは席として読まれます。 渡し方を環境変数でなく写しの中の file にしたのは、 憲法 C2.2 が環境変数の継ぎ目を新しく作ることを禁じ、 ADR-0004 §2.4 がその適用として器の外への受け渡しを 3 つの経路に限っているからです。 印を置く置き場はその 1 つの runner の行の穴で渡っており、 印はその中の file なので、 環境変数を使わずに済み、 器自身の process へ引き継がれることも shell の値での偽装もありません。 置き場を作業場所の git の私有の dir でなく写しの中にしたのは、 印を plugin の読み込みに付けて、 作業場所へ移った席を runner と読まないためです。 引き受ける代償のうち、 印の名が器の名に連なることと既存の歯の期待が動くことは、 消費側の書き換えか歯の直しで済みます。 印の無いことで runner 以外を判じること・印を見られるのが hook だけであること・anchor に同じ名の file を置けば席も runner と読まれること・runner の中の hook が受け取る置き場を直に測っていないことは、 限界として残します。 環境変数を足さないので、 C2.2 の解釈も改訂の裁定も要りません。</span>
+<div class="justify-box"><p class="jh">この判断が正当化する要件 (cross-doc 照会 → SRS-SCRIBE2-MVP)</p>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR59" data-justifies-req="FR59" data-justifies-role="claim">FR59</a><span class="justify-role">claim</span><span class="justify-note">FR59 (席の起動・起動行の構成は決定記録が正本) の起動行のうち 1 つ目の plugin の枠の意味を、 消費側の anchor ではその project の plugin と決め、 跨版の約束にすると主張する。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR4" data-justifies-req="FR4" data-justifies-role="implementation">FR4</a><span class="justify-role">implementation</span><span class="justify-note">FR4 (runner の起動・spawn が worktree を切り runner を起こす) の spawn の実装 (runner の plugin の写し) を広げ、 写しに印の file を 1 つ書き足す。 FR4 が求めたものではなく、 起動の形 (FR5 の headless の 1 形) は変えない。</span></div>
+<p class="justify-tgt">照会先: SRS-SCRIBE2-MVP — SRS: 設計 → 契約 → 実装 → 検証 → land を、 人の手を借りずに 1 本通す器（MVP）</p>
+</div>
+</div>
+</div>
+<section data-component="chapter-deck-band" class="tint-warn"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> 結果 / 良い面とトレードオフ</span><h2>この判断で何が良くなり、 何を引き受けるか</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">この判断で良くなること 3 つと、 代わりに引き受けること 7 つです。 良くなるのは、 消費側の plugin の置き場が黙って動かず、 消費側の hook が印 1 つで runner の写しかを判じられ、 器の変更が小さく環境変数も足さないことです。 引き受けるのは、 置き場の dir の名が約束になること、 印の名が器の名に連なること、 席と runner で plugin の版がずれうること、 印を見られるのは写しを積んだ hook だけで器の外で起こした AI は runner でないと読まれること、 写しの形を固めた既存の歯 2 本の期待が動くこと、 runner に届くのは名札と hook の 2 つだけであること、 anchor に同じ名の file を置くと席も runner と読まれることです。</p></section>
+<div class="chapbody">
+<div data-component="scope-summary-panel"><div class="scol in"><h3>✓ 良い結果</h3><ul>
+<li data-component="adr-consequence-pos"><span class="b">●</span>消費側は anchor の下の plugin/ に置いた plugin が席に積まれ続けると頼れ、 置き場や印が動くときは新しい ADR で知らされる</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>消費側の hook は自分の plugin の置き場に印が在るかで runner の写しかを判じられ、 印は環境変数の継承や shell の値では偽装されない</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>器の変更は写しの手順の数行と歯で、 環境変数も呼び出しの欄も席の起動行の外形も動かず、 C2.2 の解釈を要さない</li>
+</ul></div><div class="scol out"><h3>⚖ トレードオフ・代償</h3><ul>
+<li data-component="adr-consequence-neg"><span class="b">●</span>生成 dir の名が消費側の置き場の約束になり、 変えると消費側の plugin が席から外れる (変えるには新しい ADR)</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>印の名は NAME から導くので、 NAME を改名すると印の名も変わり、 消費側の hook の書き換えが要る</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>席と runner で plugin の版がずれうる。 runner には spawn の各周の時点の便の worktree の中身が写り、 席は anchor の作業木の今の中身を積む。 anchor にあって便の worktree に無い変更 (未 commit の変更や、 便を切った後に入った commit) は席にだけ効き、 便の worktree で runner が変えた plugin は再開の周の runner にだけ効く</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>印を見られるのは写しを積んだ claude の hook だけで、 器の外で起こした headless や手で起こした claude は runner でないと読まれる</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>写しの中の並びを 2 dir に pin した既存の歯 2 本の期待が、 印の分だけ動く</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>runner に写るのは消費側の plugin の 2 dir (.claude-plugin と hooks) と印だけで、 skills や hook が呼ぶ他の dir の file は runner に届かない。 この部分集合も跨版の約束になる</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>anchor の plugin/ に同じ名の file を人か席の AI が置くと席も runner と読まれ、 器はそれを止めない</li>
+</ul></div></div>
+</div>
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">06</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> 改訂関係と原則 / この判断の位置づけ</span><h2>版の系譜と、 行き着く原則 (照会終端)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-06">この記録が版の系譜のどこに在るかと、 判断が最後に行き着く原則です。 この記録は他の ADR を置き換えず、 ADR-0038 の決めた置き場の読みを消費側の project まで広げ、 環境変数を外した ADR-0004 の線に従います。</p></section>
+<div class="chapbody">
+<div data-component="adr-supersession">
+<p class="ss-row"><span class="ss-k">改訂状態</span>current</p>
+<p class="ss-row"><span class="ss-k">置き換える ADR</span>なし (新規)</p>
+<p class="ss-row"><span class="ss-k">置き換えられた</span>なし (現行)</p>
+<p class="ss-row">置き換える ADR は無い。 ADR-0038 の「席の起動行の --plugin-dir は anchor の下の生成 dir」の読みを、 器の plugin の置き場から、 その anchor の project の plugin の置き場へ広げる (ADR-0038 の決定は 1 字も変えない)。 runner の写しは既存の形をそのまま跨版の約束として宣言し、 写しの root の印の file は新しく足す。 ADR-0004 §2.4 (環境変数を足さない) には従い、 変えない。</p>
+</div>
+<div data-component="adr-principle">
+<p class="prin-id">照会終端 — PRIN-THE-COPY-CARRIES-THE-MARK</p>
+<p class="prin-text">器が消費側の plugin を写して積ませる process には、 その写しの中に器が印を置き、 写しを積んだ hook が自分の置き場から読めるようにする。 印は書くだけで、 器自身は読まない。</p>
+<p class="prin-note">本 ADR が推させる形・pane の変数の不在・plugin の root の path・環境変数の名乗り・worktree の私有 dir の印を退け、 写しに file を置く形を採ったのはこの原則に行き着く (これ以上は遡らない照会終端)。 射程は器が消費側の plugin を写して積ませる process (今は runner) の、 その消費側の写しだけで、 器自身の plugin の写し・plugin を積まない process (lens・使用量の計測)・席には印を置かない。</p>
+</div>
+</div>
+<section data-component="chapter-deck-band" class="tint-brand"><span class="num">07</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg> 用語集 / この文書で使う専門語</span><h2>本文に出てくる専門語のやさしい説明</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-07">本文に出てくる専門語 9 個を、 やさしい言葉で説明します。</p></section>
+<div class="chapbody">
+<div data-component="glossary-term-table">
+<div class="grow"><div class="gword">席の起動行<span class="en">seat launch line</span></div><div class="gdef">器が席 (対話する AI の session) を立てるときに tmux の窓へ差し込む 1 行。 環境変数と claude と plugin の枠を並べ、 pure な 1 関数が組む (ADR-0026)。 1 つ目の枠は anchor の下の生成 dir、 2 つ目以降は host の面の宣言。</div></div>
+<div class="grow"><div class="gword">1 つ目の枠<span class="en">first plugin slot</span></div><div class="gdef">席の起動行で 1 つ目に積む plugin の dir。 anchor の下の生成 dir (名は core の定数 1 つ・今は plugin) を指す (ADR-0038)。 器の repo では器の plugin、 消費側ではその project の plugin で、 本 ADR で跨版の約束になる。</div></div>
+<div class="grow"><div class="gword">消費側<span class="en">consumer project</span></div><div class="gdef">本 repo 以外で、 器の binary を入れて自分の契約で便を回す repo (ADR-0054)。 自分の plugin を anchor の下の plugin/ に置くと席に積まれ、 その名札と hook の 2 dir は runner にも写って積まれる。</div></div>
+<div class="grow"><div class="gword">anchor<span class="en">anchor</span></div><div class="gdef">席の登録 row が持つ repo の checkout の path。 席の起動行はここへ cd し、 1 つ目の枠はここの下の生成 dir を指す。</div></div>
+<div class="grow"><div class="gword">runner<span class="en">runner</span></div><div class="gdef">契約 1 本を worktree で実装する headless の Claude process (SRS FR4 / FR5)。 席ではなく使い捨て。 便ごとの plugin の写しから器の plugin と、 名の違う消費側の plugin を積む。</div></div>
+<div class="grow"><div class="gword">lens<span class="en">lens</span></div><div class="gdef">diff を読んで判定を返す headless の Claude process (SRS FR9)。 plugin を 1 つも積まない。</div></div>
+<div class="grow"><div class="gword">hook<span class="en">hook</span></div><div class="gdef">Claude Code が道具の呼び出しや turn の終わりなどの節目に撃つ command。 plugin の hooks.json が宣言し、 読み込んだ plugin の置き場を受け取る。 器の hook と消費側の hook が同じ session に並んで積まれうる。</div></div>
+<div class="grow"><div class="gword">印の file<span class="en">runner mark</span></div><div class="gdef">器が runner の plugin の写しの root に書く、 中身の空の file 1 つ。 名は NAME に -runner を付けた語。 消費側の hook は自分の plugin の置き場にこれが在るかで runner の中かを判じる。 器は書くだけで読まない。</div></div>
+<div class="grow"><div class="gword">跨版の面<span class="en">cross-version surface</span></div><div class="gdef">器の版が上がっても外から読まれる形を変えない約束。 変えるときは新しい ADR を要し、 歯が pin する。 本 ADR では 1 つ目の枠・runner の写し・印の file の名と置き場と空の中身の 3 点。</div></div>
+</div>
+</div>
+</div>
+<footer class="foot" data-component="fidelity-sync-meta"><div class="ft-grid">
+<div class="ft-plain">このページは、大もとの機械データ (正本) から自動で組み立てられています。構造は機械が自動で検査し、内容が元データに忠実かは独立のレビューで確かめます。</div>
+<div data-audience="machine">機械SSoT: <b>ADR-0082.adr.yaml</b> &middot; 生成: <b>2026-09-28 06:07</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
+<div class="tags" data-audience="machine"><span>folio design system</span><span>ADR-pack</span><span>folio engine B1 (instance#2)</span><span>cross-doc 照会</span></div>
+</div></footer>
+<!-- folio:chrome-bottom -->
+<nav class="prevnext" aria-label="前後の文書">
+  <a class="prevnext__prev" href="ADR-0081-run-worktree-intermediates-are-swept-when-runs-stop-being-live.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">便の worktree の build と依存の置き場を、 便が live でなくなった周に器が消す — 名が閉じた列に在り追跡されている file を持たない dir だけを消し、 慣行として作り直せる置き場なので憲法 N1 の「戻せない削除」に当たらないと読む</span></a>
+</nav>
+<script>
+(function () {
+  var openedForPrint = [];
+  window.addEventListener('beforeprint', function () {
+    openedForPrint = [];
+    var ds = document.querySelectorAll('details:not([open])');
+    for (var i = 0; i < ds.length; i++) { ds[i].setAttribute('open', ''); openedForPrint.push(ds[i]); }
+  });
+  window.addEventListener('afterprint', function () {
+    for (var i = 0; i < openedForPrint.length; i++) openedForPrint[i].removeAttribute('open');
+    openedForPrint = [];
+  });
+  if (!document.querySelector('[data-audience]')) return;
+  /* 既定 = 人間プレゼン型 (ADR-0040 / rules §11.3): script 経由で初期 class を付与するため
+     no-JS では付かず全文可視に graceful degrade する。 static DOM は全文を保持 (AI/検索/印刷は不変)。 */
+  document.body.classList.add('audience-human');
+  var bar = document.createElement('nav');
+  bar.className = 'audience-toggle';
+  bar.setAttribute('aria-label', '表示対象の切替');
+  var states = [['both', '両方'], ['human', '人間向け'], ['machine', '機械向け']];
+  for (var s = 0; s < states.length; s++) {
+    (function (mode, label) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.setAttribute('aria-pressed', mode === 'human' ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        document.body.classList.remove('audience-human', 'audience-machine');
+        if (mode !== 'both') document.body.classList.add('audience-' + mode);
+        var bs = bar.querySelectorAll('button');
+        for (var j = 0; j < bs.length; j++) bs[j].setAttribute('aria-pressed', bs[j] === b ? 'true' : 'false');
+      });
+      bar.appendChild(b);
+    })(states[s][0], states[s][1]);
+  }
+  var bc = document.querySelector('nav.breadcrumb');
+  if (bc && bc.parentNode) { bc.parentNode.insertBefore(bar, bc.nextSibling); }
+  else { document.body.insertBefore(bar, document.body.firstChild); }
+})();
+</script>
+<!-- /folio:chrome-bottom -->
+</body>
+</html>
