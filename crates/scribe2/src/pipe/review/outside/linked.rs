@@ -5,15 +5,23 @@
 //! `section` で § に解く（行の読み手は `find_row`・§ の本文の読み手は review.rs の私有の `section_text` の 1 本）。
 //! 自分の § に解けた参照は捨て、同じ § は 1 塊に畳む。並びは (g) 解けない参照の 1 塊 → (h) § の塊（指された順）→
 //! (i) 束ねた § の本文だけが名指す名の塊（`mentioned_names` に 1 回だけ渡す・§ の中の参照は辿らない）。
+//!
+//! doc の字なしの `行 <id>` が自分の doc の表に無ければ、同じ dir の直下の tracked の契約表の置き場（`.md` の区間と
+//! `.toml` の全文）を引き、ちょうど 1 置き場に在ればその行に解く（2 つ以上は数を添えた解けない参照）。`.toml` の置き場の
+//! 塊は § の本文の代わりに行の goal を本文にする（§56・行 bj・memo `s2-07l.736.1` の型 7）。
 
 use super::super::base::ITEM_HEAD;
 use super::super::section_text;
 use super::{data_chunks, item_chunk, rs_chunks, Decl, Tree};
 use crate::pipe::closure::{mentioned_names, Mentioned};
-use crate::pipe::table;
+use crate::pipe::table::{self, ContractRow, Form};
+use std::cell::OnceCell;
 
-/// 参照が指す doc の拡張子（設計 doc は markdown だけ）。
+/// 参照が指す設計 doc の拡張子（`§N` の doc の字はこれだけ）。
 const MD: &str = ".md";
+
+/// 行を指す参照が doc の字として読む導出物の置き場の拡張子（`#<id>` と `行 <id>` の形だけ）。
+const TOML: &str = ".toml";
 
 /// 参照の行き先（§ の番号か契約表の行 id）。
 enum Target {
@@ -25,7 +33,7 @@ enum Target {
 
 /// 本文の中の参照 1 つ（`doc` は書かれた basename・`None` は契約と同じ doc）。
 struct Reference {
-    /// `<doc>.md` の basename。
+    /// `<doc>.md` / `<file>.toml` の basename。
     doc: Option<String>,
     /// 行き先。
     target: Target,
@@ -60,8 +68,58 @@ enum Resolved {
     Own,
     /// 解けた §（行を指せば `rows` にその行の 1 つ）。
     Found(Group),
-    /// 解けない（doc が tracked に無い・§ が無いか空・行 id が表に無い・表を読めない）。
-    Unresolved,
+    /// 解けない（doc が tracked に無い・§ が無いか空・行 id が表に無い・表を読めない・goal が空）。字面の後ろに添える字
+    /// （doc の字なしの行 id が同じ dir の 2 置き場以上に在れば `（同じ dir の <n> 置き場に在る）`・他は空）を持つ。
+    Unresolved(String),
+}
+
+/// 同じ dir の別の契約表の置き場 1 つ（path・本文・読めた行）。
+struct Place {
+    /// 置き場の repo 相対 path。
+    path: String,
+    /// 置き場の本文。
+    text: String,
+    /// 置き場の契約の行。
+    rows: Vec<ContractRow>,
+}
+
+/// 参照を解く場: 契約の設計 doc の path と自分の行の section・設計 doc の dir・同じ dir の別の置き場（初めて要る時に 1 回読む）。
+struct Scope<'s> {
+    /// 束ねる base の木。
+    tree: &'s Tree<'s>,
+    /// 契約の設計 doc の path。
+    path: String,
+    /// 契約の自分の行の section。
+    section: Option<String>,
+    /// 設計 doc の dir（repo の直下なら空）。
+    dir: String,
+    /// 同じ dir の直下の tracked の契約表の置き場（自分の doc を除く）。
+    places: OnceCell<Vec<Place>>,
+}
+
+impl Scope<'_> {
+    /// doc の字なしの行 id を同じ dir の別の置き場で引く: ちょうど 1 置き場に在れば (path, 本文, 行)、他は在る置き場の数。
+    fn elsewhere(&self, id: &str) -> Result<(String, String, ContractRow), usize> {
+        let places = self.places.get_or_init(|| self.read_places());
+        let holding: Vec<(&Place, &ContractRow)> =
+            places.iter().filter_map(|place| place.rows.iter().find(|row| row.id == id).map(|row| (place, row))).collect();
+        match holding.as_slice() {
+            [(place, row)] => Ok((place.path.clone(), place.text.clone(), (*row).clone())),
+            _ => Err(holding.len()),
+        }
+    }
+
+    /// 同じ dir の直下の tracked の置き場（`form_of` が読む 2 形・自分の doc を除く・読めない置き場は数えない）。
+    fn read_places(&self) -> Vec<Place> {
+        let candidates = self.tree.tracked.iter().filter(|path| **path != self.path && dir_of(path) == self.dir && table::form_of(path).is_ok());
+        candidates
+            .filter_map(|path| {
+                let text = table::read(self.tree.repo, path).ok()?;
+                let rows = table::read_rows(path, &text).ok()?;
+                Some(Place { path: path.clone(), text, rows })
+            })
+            .collect()
+    }
 }
 
 /// (g) → (h) → (i) の塊。`found` は契約の本文が既に名指した物（(i) から除く）。design が設計 pointer でない周は空。
@@ -70,14 +128,15 @@ pub(super) fn linked_chunks(tree: &Tree<'_>, names: (&[Decl], &[&str]), found: &
         return Vec::new();
     };
     let own = table::read(tree.repo, &pointer.path).ok().and_then(|text| table::find_row(&pointer.path, &text, &pointer.id).ok()).map(|row| row.section);
-    let dir = pointer.path.rsplit_once('/').map_or("", |(dir, _)| dir);
+    let dir = dir_of(&pointer.path).to_owned();
+    let scope = Scope { tree, path: pointer.path.clone(), section: own, dir, places: OnceCell::new() };
     let mut groups: Vec<Group> = Vec::new();
     let mut unresolved: Vec<String> = Vec::new();
     for reference in bodies.iter().flat_map(|body| references(body)) {
-        match resolve(tree, (&pointer.path, own.as_deref()), dir, &reference) {
+        match resolve(&scope, &reference) {
             Resolved::Own => {}
-            Resolved::Unresolved => {
-                let shown = reference.shown();
+            Resolved::Unresolved(note) => {
+                let shown = format!("{}{note}", reference.shown());
                 if !unresolved.contains(&shown) {
                     unresolved.push(shown);
                 }
@@ -126,31 +185,54 @@ fn named_chunks(tree: &Tree<'_>, names: (&[Decl], &[&str]), found: &Mentioned, d
     chunks
 }
 
-/// 参照 1 つを § に解く（`own` は契約の設計 doc の path と自分の行の section・`dir` は設計 doc の dir）。
-fn resolve(tree: &Tree<'_>, own: (&str, Option<&str>), dir: &str, reference: &Reference) -> Resolved {
+/// 参照 1 つを § に解く。doc の字なしの行 id が自分の doc の表に無ければ同じ dir の別の置き場を引く。`.toml` の置き場は
+/// 行を指せばその行の goal、`§N` なら section が N の最初の行の goal を本文にする（見出しを持たない）。
+fn resolve(scope: &Scope<'_>, reference: &Reference) -> Resolved {
     let path = match &reference.doc {
-        None => own.0.to_owned(),
-        Some(base) if dir.is_empty() => base.clone(),
-        Some(base) => format!("{dir}/{base}"),
+        None => scope.path.clone(),
+        Some(base) if scope.dir.is_empty() => base.clone(),
+        Some(base) => format!("{}/{base}", scope.dir),
     };
-    let Some(text) = tree.tracked.contains(&path).then(|| table::read(tree.repo, &path).ok()).flatten() else {
-        return Resolved::Unresolved;
-    };
-    let (section, rows) = match &reference.target {
-        Target::Section(number) => (number.clone(), Vec::new()),
-        Target::Row(id) => match table::find_row(&path, &text, id) {
-            Ok(found) => (found.section, vec![(id.clone(), found.done)]),
-            Err(_) => return Resolved::Unresolved,
+    let text = scope.tree.tracked.contains(&path).then(|| table::read(scope.tree.repo, &path).ok()).flatten();
+    let (path, text, section, row) = match &reference.target {
+        Target::Section(number) => match text {
+            Some(text) => (path, text, number.clone(), None),
+            None => return Resolved::Unresolved(String::new()),
+        },
+        Target::Row(id) => match text.and_then(|text| table::find_row(&path, &text, id).ok().map(|row| (text, row))) {
+            Some((text, row)) => (path, text, row.section.clone(), Some(row)),
+            None if reference.doc.is_some() => return Resolved::Unresolved(String::new()),
+            None => match scope.elsewhere(id) {
+                Ok((path, text, row)) => (path, text, row.section.clone(), Some(row)),
+                Err(0) => return Resolved::Unresolved(String::new()),
+                Err(count) => return Resolved::Unresolved(format!("（同じ dir の {count} 置き場に在る）")),
+            },
         },
     };
-    if path == own.0 && own.1 == Some(section.as_str()) {
+    if path == scope.path && scope.section.as_deref() == Some(section.as_str()) {
         return Resolved::Own;
     }
-    let body = section_text(&text, &section);
+    let body = match (table::form_of(&path), &row) {
+        (Ok(Form::Whole), Some(row)) => row.goal.clone(),
+        (Ok(Form::Whole), None) => first_goal(&path, &text, &section),
+        _ => section_text(&text, &section),
+    };
     if body.trim().is_empty() {
-        return Resolved::Unresolved;
+        return Resolved::Unresolved(String::new());
     }
+    let rows = row.map(|row| vec![(row.id, row.done)]).unwrap_or_default();
     Resolved::Found(Group { path, section, body, rows })
+}
+
+/// `.toml` の置き場で section が `section` の最初の行の goal（行が無いか表を読めなければ空）。
+fn first_goal(path: &str, text: &str, section: &str) -> String {
+    let rows = table::read_rows(path, text).unwrap_or_default();
+    rows.into_iter().find(|row| row.section == section).map(|row| row.goal).unwrap_or_default()
+}
+
+/// path の dir（repo の直下なら空）。
+fn dir_of(path: &str) -> &str {
+    path.rsplit_once('/').map_or("", |(dir, _)| dir)
 }
 
 /// 本文から閉じた 5 形の参照を現れた順に拾う（`§` / `行` / `#` の字ごとに形を見る）。
@@ -184,14 +266,14 @@ fn section_at(before: &str, after: &str) -> Option<Reference> {
     (!run.chars().any(|letter| letter.is_ascii_alphanumeric())).then_some(Reference { doc: None, target })
 }
 
-/// (D) `<doc>.md 行 <id>` / `<doc>.md の行 <id>`・(E) `行 <id>`。
+/// (D) `<doc>.md 行 <id>` / `<doc>.md の行 <id>`（`.toml` も）・(E) `行 <id>`。
 fn row_at(before: &str, after: &str) -> Option<Reference> {
     let id = row_id(after.strip_prefix(' ')?)?;
     let prior = before.strip_suffix('の').unwrap_or(before);
     Some(Reference { doc: basename(path_run(prior.strip_suffix(' ').unwrap_or(prior))), target: Target::Row(id) })
 }
 
-/// (C) `<doc>.md#<id>`。
+/// (C) `<doc>.md#<id>` / `<file>.toml#<id>`。
 fn pointer_at(before: &str, after: &str) -> Option<Reference> {
     Some(Reference { doc: Some(basename(path_run(before))?), target: Target::Row(row_id(after)?) })
 }
@@ -217,8 +299,8 @@ fn path_run(text: &str) -> &str {
     text.get(head.len()..).unwrap_or_default()
 }
 
-/// path の basename（`.md` の前に字を持つものだけ）。
+/// path の basename（`.md` か `.toml` の前に字を持つものだけ・`§N` の doc の字は呼び手が `.md` に限る）。
 fn basename(path: &str) -> Option<String> {
     let base = path.rsplit('/').next().unwrap_or(path);
-    (base.len() > MD.len() && base.ends_with(MD)).then(|| base.to_owned())
+    [MD, TOML].iter().any(|ext| base.len() > ext.len() && base.ends_with(ext)).then(|| base.to_owned())
 }

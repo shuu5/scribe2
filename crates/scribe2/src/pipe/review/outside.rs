@@ -814,4 +814,80 @@ mod tests {
         assert!(order.len() == 3 && order.windows(2).all(|pair| pair.first() < pair.get(1)), "{PREAMBLE}");
         let _ = std::fs::remove_dir_all(&repo);
     }
+
+    /// §56 行 bj の toy の木: §55 の木に同じ dir の置き場を足す。自分の doc nh.md（行 na〔§1〕・nb〔§2〕）、`.md` の置き場
+    /// nf.md（行 nc〔§1・同じ dir でここだけ〕・nd〔§2〕・nb〔§1・自分の doc と同じ id の囮〕）、`.toml` の置き場 nt.toml
+    /// （行 nd〔§3〕・ne と ng〔§4・同じ goal〕・nz〔§5・goal なし〕・ns〔§6〕・nv〔§7〕）。囮は別の dir の置き場
+    /// docs/other/nf.md と disk だけに在る docs/design/nu.md（どちらも行 nc を持つ）。
+    fn note_scratch(name: &str) -> (PathBuf, Vec<String>) {
+        let (repo, mut tracked) = linked_scratch(name);
+        let row = |id: &str, section: &str, goal: &str| {
+            let goal = if goal.is_empty() { String::new() } else { format!("goal = \"{goal}\"\n") };
+            format!("\n[[contract]]\nid = \"{id}\"\ntitle = \"t{id}\"\nreq = [\"FR1\"]\nsection = \"{section}\"\nwrite-set = [\"crates/toy/src/lib.rs\"]\nverify = [\"git status\"]\nsize = \"S\"\ndone = \"{id} の done\"\n{goal}")
+        };
+        let table = |rows: &[String]| format!("<!-- contracts:begin -->\nschema = 1\n{}<!-- contracts:end -->\n", rows.concat());
+        let own = format!("# nh\n\n## 1. 自分の節\n\n自分の本文。\n\n## 2. 家の二\n\n家の二の本文。\n\n{}", table(&[row("na", "1", ""), row("nb", "2", "")]));
+        let place = format!(
+            "# nf\n\n## 1. 外の一\n\n外の一の本文。\n\n## 2. 外の二\n\n外の二の本文。\n\n{}",
+            table(&[row("nc", "1", ""), row("nd", "2", ""), row("nb", "1", "")])
+        );
+        let whole = format!(
+            "schema = 1\n{}",
+            [row("nd", "3", "丙の goal。"), row("ne", "4", "丁の goal。"), row("ng", "4", "丁の goal。"), row("nz", "5", ""), row("ns", "6", "自分の goal。"), row("nv", "7", "戊の goal。")].concat()
+        );
+        let decoy = format!("# x\n\n## 1. 囮の節\n\n囮の本文。\n\n{}", table(&[row("nc", "1", "")]));
+        let _ = std::fs::create_dir_all(repo.join("docs/other"));
+        for (path, body, tracks) in [
+            ("docs/design/nh.md", own, true),
+            ("docs/design/nf.md", place, true),
+            ("docs/design/nt.toml", whole, true),
+            ("docs/other/nf.md", decoy.clone(), true),
+            ("docs/design/nu.md", decoy, false),
+        ] {
+            let _ = std::fs::write(repo.join(path), body);
+            if tracks {
+                tracked.push(path.to_owned());
+            }
+        }
+        (repo, tracked)
+    }
+
+    /// §56 行 bj (a) 自分の doc に無く同じ dir の別の 1 置き場に在る `行 nc` はその置き場の § の塊（done つき・別の dir と
+    /// tracked でない置き場は数えない）、2 置き場に在る `行 nd` は数を添えた解けない参照、どこにも無い `行 nq` は今の字面、
+    /// 自分の doc と別の置き場の両方に在る `行 nb` は自分の doc の §（母集団 = § の塊の頭を同じ assert で数える）。
+    #[test]
+    fn note_row_lookup_resolves_a_row_held_by_exactly_one_placement_in_the_same_dir() {
+        let (repo, tracked) = note_scratch("note-rows");
+        let text = text_of(&repo, &tracked, &["crates/toy/src/inner.rs"], "docs/design/nh.md#na", &["本文は 行 nc と 行 nd と 行 nq と 行 nb を指す。"]);
+        assert_eq!(section_heads(&text), ["- docs/design/nf.md §1", "- docs/design/nh.md §2"], "{text}");
+        assert_eq!(chunk_of(&text, "docs/design/nf.md §1"), "- docs/design/nf.md §1\n  外の一の本文。\n  行 nc の done: nc の done", "{text}");
+        assert_eq!(chunk_of(&text, "docs/design/nh.md §2"), "- docs/design/nh.md §2\n  家の二の本文。\n  行 nb の done: nb の done", "{text}");
+        assert_eq!(chunk_of(&text, "解けない参照"), "- 解けない参照: 行 nd（同じ dir の 2 置き場に在る）, 行 nq", "{text}");
+        assert!(!text.contains("囮の本文"), "{text}");
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// §56 行 bj (b) `.toml` の pointer の形と `行` の形と、契約の置き場が `.toml` のときの doc の字なしの `§N` が goal を本文に
+    /// した塊になり、同じ section の 2 行を指す参照は 1 塊（goal 1 つ・done の行 2 つ）、goal の空の行と空の section は解けない
+    /// 参照、自分の § は捨てる。`.md` の契約から `.toml` の pointer を指しても goal の塊になる。
+    #[test]
+    fn note_row_lookup_toml_placement_uses_the_row_goal_as_the_body() {
+        let (repo, tracked) = note_scratch("note-toml");
+        let ws = ["crates/toy/src/inner.rs"];
+        let body = "本文は nt.toml#ne と nt.toml 行 ng と §7 と nt.toml の行 nz と §5 と §6 を指す。";
+        let text = text_of(&repo, &tracked, &ws, "docs/design/nt.toml#ns", &[body]);
+        let linked: Vec<String> = chunks(&text).into_iter().filter(|chunk| chunk.starts_with("- 解けない参照") || chunk.starts_with("- docs/design/nt.toml §")).collect();
+        assert_eq!(
+            linked,
+            [
+                "- 解けない参照: nt.toml 行 nz, §5",
+                "- docs/design/nt.toml §4\n  丁の goal。\n  行 ne の done: ne の done\n  行 ng の done: ng の done",
+                "- docs/design/nt.toml §7\n  戊の goal。",
+            ],
+            "{text}"
+        );
+        let from_md = text_of(&repo, &tracked, &ws, "docs/design/nh.md#na", &["本文は nt.toml#nd を指す。"]);
+        assert_eq!(chunk_of(&from_md, "docs/design/nt.toml §3"), "- docs/design/nt.toml §3\n  丙の goal。\n  行 nd の done: nd の done", "{from_md}");
+        let _ = std::fs::remove_dir_all(&repo);
+    }
 }
