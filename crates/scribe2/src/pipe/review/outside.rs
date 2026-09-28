@@ -12,8 +12,10 @@
 //! cap は新しい閾値を作らない: lens が [`outside_block`] で既存の `gate.token_cap` の残り（既存 4 材料と base の段の後）に
 //! 名ごとに収め、収まらない名は切り詰めの 1 行、それも収まらない名は最後に落とした本数の 1 行に数える（黙って落とさない）。
 //!
-//! 本文が指す別の設計の § の本文（§55・行 bg）は子 module `linked` が既存の塊の後ろに束ねる。
+//! 本文が名指しの 3 形で指す write-set の中の item の本文（§56・行 bi）は子 module `bodies` が既存の塊の後ろに、本文が指す
+//! 別の設計の § の本文（§55・行 bg）は子 module `linked` がその後ろに束ねる。
 
+mod bodies;
 mod linked;
 
 use super::base::{block_end, declared_name, item_text, tooth_names, ITEM_HEAD, ROW_LINE_WIDTH};
@@ -28,7 +30,7 @@ use std::path::Path;
 const HEADING: &str = "\n## write-set の外の材料（契約が名指す物を器が base から束ねた事実）\n";
 
 /// 見出しの下の説明の 1 行。
-const PREAMBLE: &str = "契約の本文（節・done・約束の行）が名指す write-set の外の物を、名ごとの塊（行頭の `- ` と名）で depends の相手の行・crate の依存の表・親 module の宣言・`.rs` の item・`.rs` の要約・data file の鍵の行の順に並べる。data file は全文でなく、行数と byte 数と鍵の列と、本文に在る鍵を持つ最初の 1 行だけ。その後ろに、本文が指す別の設計の § のうち解けない参照の 1 塊、解けた § の塊（指された順・§ の見出しの次の行から次の見出しの前まで・行を指せばその行の done つき）、束ねた § の本文だけが名指す名の塊（1 段だけ・§ の中の参照は辿らない）の順に並べる。data file と dir の配下の file の行数は改行で数えた生の行（wc -l と同じ）、`.rs` の要約の行数は base の要約と同じ幅で畳んだ数。";
+const PREAMBLE: &str = "契約の本文（節・done・約束の行）が名指す write-set の外の物を、名ごとの塊（行頭の `- ` と名）で depends の相手の行・crate の依存の表・親 module の宣言・`.rs` の item・`.rs` の要約・data file の鍵の行の順に並べる。data file は全文でなく、行数と byte 数と鍵の列と、本文に在る鍵を持つ最初の 1 行だけ。その後ろに、本文が名指しの 3 形（`<path>.rs#<名>`・`<path>.rs` の直後の `<語> <名>`・backtick の中の fn 形）で指す write-set の中の宣言の本文の塊（頭は `- <path>#<名>:` と所在・直上の doc 行と属性行から閉じ括弧か `;` まで）を名指しの順に並べ、write-set の 2 file 以上に在る名は所在の 1 行だけにする。続けて、本文が指す別の設計の § のうち解けない参照の 1 塊、解けた § の塊（指された順・§ の見出しの次の行から次の見出しの前まで・行を指せばその行の done つき）、束ねた § の本文だけが名指す名の塊（1 段だけ・§ の中の参照は辿らない）の順に並べる。data file と dir の配下の file の行数は改行で数えた生の行（wc -l と同じ）、`.rs` の要約の行数は base の要約と同じ幅で畳んだ数。";
 
 /// crate の manifest の file 名。
 const MANIFEST: &str = "Cargo.toml";
@@ -107,7 +109,8 @@ pub(super) fn outside_text(repo: &Path, contract: &Contract, bodies: &[&str]) ->
     bundle(&Tree { repo, tracked, sources, write_set }, &contract.design, bodies)
 }
 
-/// 木と本文から塊を (f) → (d) → (e) → (a) → (b) → (c) の順に並べ、別の設計の § の (g) → (h) → (i) を後ろに足す（§55）。
+/// 木と本文から塊を (f) → (d) → (e) → (a) → (b) → (c) の順に並べ、名指しの item の本文 (j)（§56）と別の設計の § の
+/// (g) → (h) → (i)（§55）を後ろに足す。
 fn bundle(tree: &Tree<'_>, design: &str, bodies: &[&str]) -> String {
     let decls: Vec<Decl> = tree.sources.iter().flat_map(declarations).collect();
     let candidates: Vec<&str> = decls.iter().map(|decl| decl.name.as_str()).collect::<BTreeSet<&str>>().into_iter().collect();
@@ -119,6 +122,7 @@ fn bundle(tree: &Tree<'_>, design: &str, bodies: &[&str]) -> String {
     chunks.extend(found.names.iter().filter_map(|name| item_chunk(tree, &decls, name)));
     chunks.extend(rs_chunks(tree, &found));
     chunks.extend(data_chunks(tree, &found, doc.as_deref(), &bodies.join("\n")));
+    chunks.extend(bodies::item_bodies(tree, bodies));
     chunks.extend(linked::linked_chunks(tree, (&decls, &candidates), &found, design, bodies));
     chunks.join("\n")
 }
@@ -298,13 +302,7 @@ fn item_lines(tree: &Tree<'_>, decl: &Decl) -> Vec<String> {
         return Vec::new();
     };
     let lines: Vec<&str> = text.lines().collect();
-    let mut start = decl.line;
-    while let Some(above) = start.checked_sub(1).and_then(|at| lines.get(at)).map(|line| line.trim_start()) {
-        if !(above.starts_with("///") || above.starts_with("#[")) {
-            break;
-        }
-        start = start.saturating_sub(1);
-    }
+    let start = doc_start(&lines, decl.line);
     let end = if decl.tooth || BLOCK_KINDS.contains(&decl.kind.as_str()) {
         block_end(&lines, decl.line)
     } else if decl.kind == "fn" {
@@ -313,6 +311,18 @@ fn item_lines(tree: &Tree<'_>, decl: &Decl) -> Vec<String> {
         decl.line
     };
     lines.get(start..=end).unwrap_or_default().iter().map(|line| format!("  {}", line.trim_end())).collect()
+}
+
+/// 宣言の行の直上に続く doc 行と属性行の最初の行（無ければ宣言の行・(a) と (j) の本文の頭は同じ 1 本で数える）。
+fn doc_start(lines: &[&str], at: usize) -> usize {
+    let mut start = at;
+    while let Some(above) = start.checked_sub(1).and_then(|at| lines.get(at)).map(|line| line.trim_start()) {
+        if !(above.starts_with("///") || above.starts_with("#[")) {
+            break;
+        }
+        start = start.saturating_sub(1);
+    }
+    start
 }
 
 /// (b) 名指された `.rs`（write-set の外）: base の要約と同じ 1 項目。
@@ -796,6 +806,90 @@ mod tests {
         assert!(at("- docs/design/o.md §1") < lines.len() && !block.contains(&long_line()) && !block.contains("落とした名"), "{block}");
         assert_eq!(lines.get(2), Some(&PREAMBLE), "{block}");
         let order: Vec<usize> = ["解けない参照の 1 塊", "解けた § の塊", "名指す名の塊"].iter().filter_map(|word| PREAMBLE.find(word)).collect();
+        assert!(order.len() == 3 && order.windows(2).all(|pair| pair.first() < pair.get(1)), "{PREAMBLE}");
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// §56 行 bi の write-set の fixture の `.rs`: doc 行と属性行つきの fn・複数行の const・struct・impl・大文字始まりの fn
+    /// `ZqWrap`・もう 1 本の file にも在る fn `zq_dual`（行の番号は歯の期待と 1:1）。
+    const BODY_RS: &str = "//! 本文の fixture。\n\n/// 幅を返す。\n#[inline]\npub fn zq_span(x: u8) -> u8 {\n    x + 1\n}\n\n/// 上限。\npub const ZQ_LIMIT: &[u8] = &[\n    1,\n];\n\n/// 箱。\n#[derive(Debug)]\npub struct ZqBox {\n    pub zq_w: u8,\n}\n\npub struct ZqLeaf;\n\nimpl ZqLeaf {\n    pub fn zq_grow(&self) -> u8 {\n        1\n    }\n}\n\npub fn ZqWrap() {}\n\npub fn zq_dual() -> u8 {\n    1\n}\n";
+
+    /// §56 行 bi の toy の木: §55 の木に write-set に置く fixture の `.rs` 2 本（zq_body.rs と zq_pair.rs）を足す。
+    fn body_scratch(name: &str) -> (PathBuf, Vec<String>) {
+        let (repo, mut tracked) = linked_scratch(name);
+        for (path, body) in [("crates/toy/src/zq_body.rs", BODY_RS), ("crates/toy/src/zq_pair.rs", "pub fn zq_dual() -> u8 {\n    2\n}\n")] {
+            let _ = std::fs::write(repo.join(path), body);
+            tracked.push(path.to_owned());
+        }
+        (repo, tracked)
+    }
+
+    /// (j) の塊の頭（`.rs#` を持つ頭の行）の列。
+    fn body_heads(text: &str) -> Vec<String> {
+        chunks(text).iter().filter_map(|chunk| chunk.lines().next()).filter(|head| head.contains(".rs#")).map(str::to_owned).collect()
+    }
+
+    /// §56 行 bi (a) write-set の中の fn・const・struct・impl を (P)(F)(N) の 3 形で名指すと、(j) の塊が名指しの順に既存の塊の
+    /// 後ろ・§ の塊の前に並び（母集団 = 塊の頭を同じ assert で数える）、本文は doc 行と属性行から fn は本体の閉じ括弧まで・
+    /// const は `;` まで・impl は閉じ括弧まで。
+    #[test]
+    fn named_item_body_three_forms_bundle_declarations_in_named_order() {
+        let (repo, tracked) = body_scratch("named-body-forms");
+        let ws = ["crates/toy/src/zq_body.rs", "crates/toy/src/zq_pair.rs"];
+        let body = "本文は `crates/toy/src/zq_body.rs#zq_span` と zq_body.rs の `const ZQ_LIMIT` と zq_body.rs の struct ZqBox と `zq_grow()` と `zq_body.rs` の impl ZqLeaf を名指し、ZqShape と data.json と o.md §1 も書く。";
+        let text = text_of(&repo, &tracked, &ws, "docs/design/s.md#p", &[body]);
+        let file = "crates/toy/src/zq_body.rs";
+        assert_eq!(
+            body_heads(&text),
+            [
+                format!("- {file}#zq_span: {file}:5"),
+                format!("- {file}#ZQ_LIMIT: {file}:10"),
+                format!("- {file}#ZqBox: {file}:16"),
+                format!("- {file}#zq_grow: {file}:23"),
+                format!("- {file}#ZqLeaf: {file}:22"),
+            ],
+            "{text}"
+        );
+        let heads: Vec<String> = chunks(&text).iter().map(|chunk| chunk.lines().next().unwrap_or_default().to_owned()).collect();
+        let at = |head: &str| heads.iter().position(|found| found.starts_with(head)).unwrap_or(usize::MAX);
+        assert!(at("- ZqShape") < at("- crates/toy/fixtures/data.json") && at("- crates/toy/fixtures/data.json") < at(&format!("- {file}#zq_span")), "{heads:?}");
+        assert!(at(&format!("- {file}#ZqLeaf")) < at("- docs/design/o.md §1") && at("- docs/design/o.md §1") < heads.len(), "{heads:?}");
+        assert_eq!(chunk_of(&text, &format!("{file}#zq_span")), format!("- {file}#zq_span: {file}:5\n  /// 幅を返す。\n  #[inline]\n  pub fn zq_span(x: u8) -> u8 {{\n      x + 1\n  }}"));
+        assert_eq!(chunk_of(&text, &format!("{file}#ZQ_LIMIT")), format!("- {file}#ZQ_LIMIT: {file}:10\n  /// 上限。\n  pub const ZQ_LIMIT: &[u8] = &[\n      1,\n  ];"));
+        assert_eq!(chunk_of(&text, &format!("{file}#zq_grow")), format!("- {file}#zq_grow: {file}:23\n      pub fn zq_grow(&self) -> u8 {{\n          1\n      }}"));
+        assert_eq!(
+            chunk_of(&text, &format!("{file}#ZqLeaf")),
+            format!("- {file}#ZqLeaf: {file}:22\n  impl ZqLeaf {{\n      pub fn zq_grow(&self) -> u8 {{\n          1\n      }}\n  }}")
+        );
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// §56 行 bi (b) 宣言を持つ tracked の file を指す write-set の外の path（shape.rs の `zq_area`）・宣言の無い名・大文字始まりの
+    /// tuple variant の字面（`ZqWrap(1)`・write-set に `fn ZqWrap` が在る）は塊を作らず、write-set の 2 file に在る (N) の名は所在の 1 行だけ。
+    #[test]
+    fn named_item_body_unresolved_mentions_add_nothing_and_twin_names_are_one_line() {
+        let (repo, tracked) = body_scratch("named-body-none");
+        let ws = ["crates/toy/src/zq_body.rs", "crates/toy/src/zq_pair.rs"];
+        let body = "本文は `crates/other/src/shape.rs#zq_area` と `zq_none()` と `ZqWrap(1)` と `zq_dual()` を名指す。";
+        let text = text_of(&repo, &tracked, &ws, "docs/design/s.md#p", &[body]);
+        assert_eq!(body_heads(&text), Vec::<String>::new(), "{text}");
+        assert_eq!(chunk_of(&text, "zq_dual"), "- zq_dual: 宣言 2 か所（crates/toy/src/zq_body.rs:30, crates/toy/src/zq_pair.rs:1）", "{text}");
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// §56 行 bi (c) 残りが足りない周は (j) の塊が切り詰めの 1 行になり、説明の 1 行が (j) を § の塊の前に名乗る。
+    #[test]
+    fn named_item_body_is_truncated_to_one_line_when_the_room_is_short() {
+        let (repo, tracked) = body_scratch("named-body-cap");
+        let text = text_of(&repo, &tracked, &["crates/toy/src/zq_body.rs"], "docs/design/t.md#g", &["`crates/toy/src/zq_body.rs#zq_span` を読む。"]);
+        let chunk = chunk_of(&text, "crates/toy/src/zq_body.rs#zq_span");
+        assert!(chunk.contains("x + 1") && chunks(&text).last() == Some(&chunk), "{text}");
+        let full = outside_block(&text, u64::MAX);
+        let block = outside_block(&text, u64::try_from(full.len()).unwrap_or(u64::MAX).saturating_sub(1));
+        let short = format!("- crates/toy/src/zq_body.rs#zq_span: 切り詰めた（塊 {} byte が cap の残りに収まらない）", chunk.len());
+        assert!(block.ends_with(&short) && !block.contains("x + 1") && !block.contains("落とした名"), "{block}");
+        assert_eq!(block.lines().nth(2), Some(PREAMBLE), "{block}");
+        let order: Vec<usize> = ["名指しの 3 形", "所在の 1 行", "解けない参照の 1 塊"].iter().filter_map(|word| PREAMBLE.find(word)).collect();
         assert!(order.len() == 3 && order.windows(2).all(|pair| pair.first() < pair.get(1)), "{PREAMBLE}");
         let _ = std::fs::remove_dir_all(&repo);
     }

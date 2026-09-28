@@ -11,6 +11,7 @@
 //!
 //! 審査の材料の名指し（設計 §51 形 2・行 bc）は同じ読み手の 2 本目の口 [`mentioned_names`] で、backtick の中身の先頭の
 //! token と、backtick の外の識別子の形の語と、`/` か拡張子を持つ path 形の連なりを拾う（[`unresolved_names`] の判定は不変）。
+//! 本文の塊を渡す名指しの 3 形（§56・行 bi）は 3 本目の口 [`named_items`] で、impl は [`impl_line`] で読む。
 
 use super::{declares_type, heads, in_module, is_ident, is_ident_char, texts_of, touched, ClosureError, Source};
 use super::{IMPL_HEAD, KEYWORDS, PATH_CHARS, RS};
@@ -97,6 +98,49 @@ pub fn mentioned_names(texts: &[&str], candidates: &[&str], tracked: &[String]) 
         files.extend(hit.into_iter().cloned());
     }
     Mentioned { names: names.into_iter().collect(), files: files.into_iter().collect(), dirs: dirs.into_iter().collect() }
+}
+
+/// 本文の塊を求める名指し 1 つ（§56 行 bi・[`named_items`] が返す）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Named {
+    /// (P)(F) は探し先に解けた path・(N) は `None`（探し先の全部を探す）。
+    pub path: Option<String>,
+    /// 宣言の語（(F) の語・(N) は `fn`・(P) は `None`＝語を問わない）。
+    pub kind: Option<String>,
+    /// 名。
+    pub name: String,
+}
+
+/// 本文の塊を渡す名指しの 3 形の口（§56 行 bi・審査の外の材料の (j)）: (P) `<path>.rs#<名>`（backtick の内外を問わない）・
+/// (F) `<path>.rs` の直後（backtick・空白・`の` を飛ばす）の `<語> <名>`・(N) backtick の中身の fn 形（[`form_of`]）。(P)(F) の
+/// path は探し先 `paths` に [`path_matches`] で解いた最初の path（解けない名指しは返さない）。並びは本文の順・1 本の中は現れた順。
+pub fn named_items(texts: &[&str], paths: &[String]) -> Vec<Named> {
+    let spots = |text: &str| -> Vec<(usize, Named)> {
+        let offset = |name: &str| name.as_ptr().addr().saturating_sub(text.as_ptr().addr());
+        let fns = backticked(text).into_iter().filter_map(|name| match form_of(name, &[]) {
+            Form::Fn(ident) => Some((offset(name), Named { path: None, kind: Some("fn".to_owned()), name: ident })),
+            _ => None,
+        });
+        let mut hits: Vec<(usize, Named)> = text.match_indices(RS).filter_map(|(at, _)| Some((at, rs_named(text, at, paths)?))).chain(fns).collect();
+        hits.sort_by_key(|(at, _)| *at);
+        hits
+    };
+    texts.iter().flat_map(|text| spots(text)).map(|(_, named)| named).collect()
+}
+
+/// `at` の `.rs` で終わる path の連なりの (P) か (F) の名指し（path が探し先に解けなければ `None`・(F) の語は宣言の語か impl）。
+fn rs_named(text: &str, at: usize, paths: &[String]) -> Option<Named> {
+    let path_char = |found: char| found.is_ascii_alphanumeric() || PATH_CHARS.contains(&found);
+    let (head, rest) = text.split_at_checked(at.saturating_add(RS.len()))?;
+    let run = head.get(head.get(..at)?.trim_end_matches(path_char).len()..)?.trim_start_matches('-');
+    let path = paths.iter().find(|path| path_matches(path, run))?.clone();
+    let ident = |tail: &str| Some(tail.split(|found: char| !is_ident_char(found)).next()?.to_owned()).filter(|name| is_ident(name));
+    if let Some(tail) = rest.strip_prefix('#') {
+        return Some(Named { path: Some(path), kind: None, name: ident(tail)? });
+    }
+    let (word, tail) = rest.trim_start_matches(|found: char| found == '`' || found == 'の' || found.is_whitespace()).split_once(char::is_whitespace)?;
+    let name = ident(tail.trim_start()).filter(|_| !rest.starts_with(path_char) && ["fn", "struct", "enum", "union", "trait", "type", "const", "static", "mod", IMPL_HEAD].contains(&word))?;
+    Some(Named { path: Some(path), kind: Some(word.to_owned()), name })
 }
 
 /// 本文の backtick の外（対になった backtick の中身を空白に替えた字面・対にならない末尾の backtick の後ろは外）。
@@ -201,9 +245,12 @@ fn resolves_type(bodies: &[(&str, &str)], ty: &str, item: &str) -> bool {
 /// 本文が `ty` を語に持つ impl 行を持つか（行頭〔`trim_start` 後〕が `impl`・素の impl `impl Ty {`・generic impl
 /// `impl<T> Ty<T> {`・trait impl `impl Tr for Ty {` を同じ照合で拾う）。
 fn impls_type(body: &str, ty: &str) -> bool {
-    body.lines()
-        .filter(|line| line.trim_start().strip_prefix(IMPL_HEAD).is_some_and(|rest| !rest.starts_with(is_ident_char)))
-        .any(|line| holds_word(line, ty))
+    body.lines().any(|line| impl_line(line, ty))
+}
+
+/// 1 行が `ty` を語に持つ impl 行か（[`impls_type`] の照合の行 1 本・審査の外の材料の (j) の impl も同じ 1 本で読む）。
+pub fn impl_line(line: &str, ty: &str) -> bool {
+    line.trim_start().strip_prefix(IMPL_HEAD).is_some_and(|rest| !rest.starts_with(is_ident_char)) && holds_word(line, ty)
 }
 
 /// backtick の中身を 3 形に分ける（`touched` の型の variant は散文扱い）。path 形は中身全体で、型の path 形と

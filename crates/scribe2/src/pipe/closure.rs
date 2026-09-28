@@ -54,7 +54,7 @@ mod derive;
 mod names;
 
 pub use derive::{check_drift, derive_promised, derive_write_set, promised_inputs, weighted_lines, Base, Fields, Promised};
-pub use names::{mentioned_names, symbols_in_base, unresolved_names, Mentioned};
+pub use names::{impl_line, mentioned_names, named_items, symbols_in_base, unresolved_names, Mentioned, Named};
 pub(crate) use derive::{declared_teeth, nextest_line, teeth_places, teeth_words};
 pub(crate) use names::holds_word;
 use names::declares_fn;
