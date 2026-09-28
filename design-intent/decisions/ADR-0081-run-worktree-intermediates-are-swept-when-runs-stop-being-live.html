@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="generator" content="folio ADR-pack assembler (folio-bwc / instance#2) — deterministic structure, prose slots unfilled">
-<title>便の worktree の中間生成物 (git が無視する file) は、 便が live でなくなった周に器が消す — 木と toolchain から作り直せるので憲法 N1 の「戻せない削除」に当たらない</title>
+<title>便の worktree の build と依存の置き場を、 便が live でなくなった周に器が消す — 名が閉じた列に在り追跡されている file を持たない dir だけを消し、 作り直せるので憲法 N1 の「戻せない削除」に当たらない</title>
 <style>
 /* ===========================================================================
    folio human-layer design system — core.css (S3 / folio-8oc プロトタイプ)
@@ -462,7 +462,7 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
       "@id": "./README.html"
     }
   ],
-  "dc:title": "便の worktree の中間生成物 (git が無視する file) は、 便が live でなくなった周に器が消す — 木と toolchain から作り直せるので憲法 N1 の「戻せない削除」に当たらない",
+  "dc:title": "便の worktree の build と依存の置き場を、 便が live でなくなった周に器が消す — 名が閉じた列に在り追跡されている file を持たない dir だけを消し、 作り直せるので憲法 N1 の「戻せない削除」に当たらない",
   "folio:version": "0.1.0",
   "folio:stakeholders": [
     "Developer",
@@ -487,6 +487,9 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
     },
     {
       "@id": "../spec/constitution.html#c17"
+    },
+    {
+      "@id": "../spec/srs.html#FR30"
     },
     {
       "@id": "../spec/srs.html#FR56"
@@ -528,70 +531,72 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 <div class="page" data-component="requirement-type-color-tokens">
 <header data-component="doc-cover-band">
 <p class="cover-eyebrow"><span class="doc-type">設計判断記録 (ADR)</span> <span>scribe2 — 便の worktree の掃除</span></p>
-<h1>便の worktree の中間生成物 (git が無視する file) は、 便が live でなくなった周に器が消す — 木と toolchain から作り直せるので憲法 N1 の「戻せない削除」に当たらない</h1>
-<p class="cover-sub">器は便ごとに worktree を切り、 着地した便の worktree を退役の置き場へ可逆に move するが、 build の中間生成物を消す手を持たず、 host の disk が尽きて便が落ちた。 本 ADR は便の終端の周ごとに、 live でない便の worktree で git が無視する file だけを消すと決め、 それが N1 の戻せない削除に当たらないと読む。</p>
-<div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">この記録で「器」は scribe2 の本体、 「便」は契約 1 本を実装して着地させる 1 往復、 「worktree」は便ごとに git が切る別の作業 dir です。 器は着地した便の worktree を消さずに退役の置き場へ移しますが、 中の build の産物 (Rust の target/ など) を消す手を持たず、 2026-09-28 に host の disk が尽きて 3 つの project の便が落ちました。 本 ADR は、 便の終端の周ごとに、 まだ終わっていない便を除いた各便の worktree で、 git が無視する file だけを消すと決めます。 それらは commit した木と道具から作り直せるので、 憲法 N1 の「戻せない削除」には当たらないと読みます。 席の手が撃つ git clean -f を断る門はそのまま残します (要件 NFR6・FR56・FR68・FR77 に結びます)。</p></div></div>
-<div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">accepted</span></span><span class="m"><span class="k">選択肢</span><span class="v">6件 (OPT1–OPT6)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 5 / トレードオフ 7</span></span><span class="m"><span class="k">版</span><span class="v">v0.1.0 / 2026-09-28</span></span></div>
-<div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>NFR6・FR68・FR56・FR77</b></div>
+<h1>便の worktree の build と依存の置き場を、 便が live でなくなった周に器が消す — 名が閉じた列に在り追跡されている file を持たない dir だけを消し、 作り直せるので憲法 N1 の「戻せない削除」に当たらない</h1>
+<p class="cover-sub">器は便ごとに worktree を切り、 着地や畳みの後の worktree を退役の置き場へ可逆に move するが、 build と依存の置き場を消す手を持たず、 host の disk が尽きて便が落ちた。 本 ADR は運転手の終端の周ごとに、 live でないと測れた便の木から、 名が閉じた 8 つの列に在り追跡されている file を持たない dir だけを消すと決める。 無視の規則は読まず、 git clean も撃たない。</p>
+<div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">この記録で「器」は scribe2 の本体、 「便」は契約 1 本を実装して着地させる 1 往復、 「worktree」は便ごとに git が切る別の作業 dir です。 器は着地や畳みの後の worktree を消さずに退役の置き場へ移しますが、 中の build の産物と依存の取り込み (Rust の target など) を消す手を持たず、 2026-09-28 に host の disk が尽きて 3 つの project の便が落ちました。 本 ADR は、 運転手の終端の周ごとに、 終わったと測れた便の worktree だけで (生死を測れない便は残して)、 名が閉じた 8 つの列に在り追跡されている file を持たない dir だけを消すと決めます。 無視の規則は読まず git clean も撃たないので、 鍵や local の設定のような作り直せない file は消えません。 消す dir は作り直せるので憲法 N1 の戻せない削除に当たらないと読み、 消す操作の承認 (A1) は裁定 user 2026-09-28T04:46Z をこの種類への常設の承認と読みます。 席と runner の手が撃つ git clean -f を断る門はそのまま残します (要件 FR68・FR30 に結び、 NFR6・FR56・FR77 を壊さないことを示します)。</p></div></div>
+<div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">accepted</span></span><span class="m"><span class="k">選択肢</span><span class="v">8件 (OPT1–OPT8)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 6 / トレードオフ 6</span></span><span class="m"><span class="k">版</span><span class="v">v0.1.0 / 2026-09-28</span></span></div>
+<div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>FR68・FR30・NFR6・FR56・FR77</b></div>
 <div data-component="approval-block">
-<div class="sign"><span class="role">裁定 (user)</span><span class="who">user</span><span class="when">裁定 id user 2026-09-28T04:45Z (退役した worktree の中の build dir を手で消すことの承認) と user 2026-09-28T04:46Z (器で直すことを最優先にする指示)。 逐語は台帳にだけ在る</span><span class="stamp self">裁定済</span></div>
-<div class="sign"><span class="role">設計 (orchestrator)</span><span class="who">orchestrator</span><span class="when">2026-09-28 草稿 v1 (便の生死の判定と退役の move を現物で読み、 disk の実測から掃除の形を決めた。 拘束する constitution の版 0.5.0)</span><span class="stamp self">作成</span></div>
+<div class="sign"><span class="role">裁定 (user)</span><span class="who">user</span><span class="when">裁定 id user 2026-09-28T04:45Z (退役した worktree の build の置き場を手で 1 回消すことの承認) と user 2026-09-28T04:46Z (掃除しながら進める器の直しを最優先で入れる指示。 本 ADR はこれを、 閉じた列の dir を live でない便の木から終端の周ごとに消すことへの憲法 A1 の常設の承認と読む)。 逐語は RulingReceived の event と台帳にだけ在る</span><span class="stamp self">裁定済</span></div>
+<div class="sign"><span class="role">設計 (orchestrator)</span><span class="who">orchestrator</span><span class="when">2026-09-28 草稿 v3 (便の生死の判定・退役の move・host_guard.git を現物で読み、 fidelity-adr の 20 件を受けて git clean を撃たない閉じた列の形へ決定を改めた。 拘束する constitution の版 0.5.0)</span><span class="stamp self">作成</span></div>
 </div>
 <div class="reader-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 想定読者: scribe2 の開発 session と user — 器の内部と Rust の専門知識は不要 (専門語はやさしい言葉を併記)</div>
 </header>
 <!-- folio:chrome-toc -->
 <!-- /folio:chrome-toc -->
-<section data-component="chapter-deck-band" class="tint-info"><span class="num">01</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v6m0 0L9 5m3 3l3-3"/><circle cx="12" cy="14" r="6"/></svg> 背景 / なぜこの判断が要るか</span><h2>いま何が問題か (確定方式を決める力学)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-01">なぜこの判断が要るのかを、 経緯 (worktree は可逆に移すが中の産物を消す手が無い)・事象 (disk が尽きて便が落ちた)・機序 (何を消してよいかは無視の規則が既に宣言し、 便の生死は器が既に測る)・憲法の向き・射程・既存の門 (席の手の git clean -f は断られ続ける) の 6 つで示します。</p></section>
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">01</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v6m0 0L9 5m3 3l3-3"/><circle cx="12" cy="14" r="6"/></svg> 背景 / なぜこの判断が要るか</span><h2>いま何が問題か (確定方式を決める力学)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-01">なぜこの判断が要るのかを、 経緯 (worktree は可逆に移すが中の置き場を消す手が無い)・事象 (disk が尽きて便が落ちた)・機序 (無視の規則は「作り直せる」の宣言ではなく、 作り直せる置き場は名で分かる)・憲法の向き (N1・A4.2 と A1 を分けて読む)・射程・既存の門 (席の手の git clean -f は断られ続ける) の 6 つで示します。</p></section>
 <div class="chapbody">
 <div data-component="adr-context-list">
-<div data-component="adr-context-row"><span class="cxid">CTX1</span><div class="cxbody"><p class="cxh">経緯 — 器は便ごとに worktree<span class="term" data-component="plain-language-term-inline" data-term="worktree">便ごとの作業場所</span> を切り、 着地した便の worktree を可逆に move するが、 中間生成物<span class="term" data-component="plain-language-term-inline" data-term="中間生成物">作り直せる途中の産物</span>を消す手は無い</p><p class="cxd">器は便 1 本ごとに対象 repo の .worktrees/&lt;NAME&gt;/&lt;run&gt; に git の worktree を切り (FR4)、 着地した便や畳んだ便の worktree は .worktrees/&lt;NAME&gt;/retired/&lt;run&gt; へ git worktree move で寄せる (N1.2 の可逆な move)。 move は中身ごと運ぶので、 build の中間生成物 (Rust の target/ など) は退役<span class="term" data-component="plain-language-term-inline" data-term="退役">戻せる形で外すこと</span>した worktree に残り続け、 それを消す手は器にも手順にも無い。 同時に走る便は rules 行 pipe.max_live で最大 16 本 (ADR-0035)。 ADR-0038 は退役の worktree が 174 GB に達していたことを却下案の利点として記したが、 消す手は決めなかった。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX2</span><div class="cxbody"><p class="cxh">事象 — 2026-09-28、 host の disk が尽き、 3 つの project の便が落ちた</p><p class="cxd">2026-09-28、 host の root の filesystem (1.8 TB) の空きがほぼ 0 になった。 非公開の隣の project では便の worktree 140 本が 597 GB を持ち、 うち 540 GB は退役した 117 本の build dir だった。 本 repo の worktree も 80 GB を持っていた。 3 つの project の便が ENOSPC<span class="term" data-component="plain-language-term-inline" data-term="ENOSPC">disk の空き切れ</span> で落ち、 本 repo の便 s2-07l.731 は test が一時 dir を作れなかっただけで Gated FAIL になった (契約の赤ではない)。 持ち主は退役した worktree の中の build dir を手で消すことを承認し (裁定 user 2026-09-28T04:45Z)、 続けて器で直すことを最優先に指示した (裁定 user 2026-09-28T04:46Z)。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX3</span><div class="cxbody"><p class="cxh">機序 — 何が中間生成物かは無視の規則<span class="term" data-component="plain-language-term-inline" data-term="無視の規則">git が見ない物の宣言</span>が既に宣言し、 便の生死は器が既に 1 関数で測る</p><p class="cxd">各 project の無視の規則 (.gitignore) は、 どの file が commit しない生成物かを既に宣言している (Rust の target/・node_modules/・.venv/ など)。 git clean -d -X は無視された file と dir だけを消し、 tracked の file と無視されない untracked の file には触れず、 -f が 1 つなら入れ子の git repo も残す (中身の在る repo は飛ばし、 空の .git の dir しか持たない dir は repo と見なされず消える・orchestrator が dry run で確かめた)。 器は便が live か (終端でないか) を、 段と判定と運転手の札から 1 関数で測り、 判定や札を読めない便は「測れない」と返す。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX4</span><div class="cxbody"><p class="cxh">憲法の向き (本 ADR の解釈)</p><p class="cxd">N1 は器の管理する物を戻せない形で消す操作を断れと言い、 N1.2 は退役を可逆な move に限る。 本 ADR は、 無視される file は commit した木と toolchain から build や test の実行で作り直せるので、 それを消すのは戻せない削除に当たらないと読む。 便の情報 (branch の commit・木・state dir の log と判定) は残り、 退役そのものは move のまま。 A1 と A4.2 (消す操作・不可逆な操作の前に user に聞く) には同じ読みを当て、 掃除の 1 手を器に持たせること自体は裁定 user 2026-09-28T04:46Z が指示した。 C17.2 に沿い、 足す 1 手が消すものは、 満杯のたびに人が撃つ手の掃除である。 C2 (同じ事実の読みは 1 本) から、 生死は既存の 1 関数で測り、 中間生成物の宣言は無視の規則 1 つに置く。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX5</span><div class="cxbody"><p class="cxh">射程 — 動かすのは便の終端の周<span class="term" data-component="plain-language-term-inline" data-term="便の終端の周">便が止まった直後の 1 周</span>の 1 手だけ</p><p class="cxd">動かすのは、 便の終端の周 (pipe の run・resume・land・stop・retire が段を記帳した後) に、 live でない便の worktree で無視された file を消す 1 手を足すことだけである。 動かさないのは、 退役の move・worktree と branch の置き場・tracked の file と commit・無視されない untracked の file・stdout と event の形・rules 行 (host_guard.git を含む)・要件書である。 設計 dispatcher.md §30 (契約表の行 ae) が実装する。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX6</span><div class="cxbody"><p class="cxh">既存の門 — host-guard<span class="term" data-component="plain-language-term-inline" data-term="host-guard">session の手の門</span> は session の手が撃つ git clean -f を断り、 今後も断る</p><p class="cxd">rules 行 host_guard.git は禁じる語列に git clean -f を持ち、 session と runner の Bash が撃つ git clean -f を実行の前に断る (口座の設定を読む session には host-guard、 席と runner には器の plugin の command guard も同じ語列で掛かる・FR56・ADR-0025・ADR-0056・N1・C16)。 席の手は消す対象を絞れず、 素の -f は無視されない untracked の仕事も消し、 それは戻せない。 器の掃除は別の狭い操作である — -X で無視された file だけを消し、 live でないと測れた便の worktree だけで、 器自身の子 process だけが撃つ。 ゆえに rules 行は変えず、 session への断りも緩めない。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX1</span><div class="cxbody"><p class="cxh">経緯 — 器<span class="term" data-component="plain-language-term-inline" data-term="器">scribe2 の本体</span>は便ごとに worktree<span class="term" data-component="plain-language-term-inline" data-term="worktree">便ごとの作業場所</span> を切り、 着地や畳みの後は可逆に move するが、 build と依存の置き場を消す手は無い</p><p class="cxd">器は便 1 本ごとに対象 repo の .worktrees/&lt;NAME&gt;/&lt;run&gt; に git の worktree を切り (FR4)、 着地した便や畳んだ便の worktree は .worktrees/&lt;NAME&gt;/retired/&lt;run&gt; へ git worktree move で寄せる (N1.2 の可逆な move)。 move は中身ごと運ぶので、 build の産物と依存の取り込み (Rust の target など) は退役<span class="term" data-component="plain-language-term-inline" data-term="退役">戻せる形で外すこと</span>した worktree に残り続け、 それを消す手は器にも手順にも無い。 同時に走る便は rules 行 pipe.max_live<span class="term" data-component="plain-language-term-inline" data-term="live">まだ終わっていない</span> で最大 16 本 (ADR-0035)。 ADR-0038 は退役の worktree が 174 GB に達していたことを却下案の利点として記したが、 消す手は決めなかった。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX2</span><div class="cxbody"><p class="cxh">事象 — 2026-09-28、 host の disk が尽き、 3 つの project の便が落ちた</p><p class="cxd">2026-09-28、 host の root の filesystem (1.8 TB) の空きがほぼ 0 になった。 非公開の隣の project では便の worktree 140 本が 597 GB を持ち、 うち 540 GB は退役した 117 本の build の置き場で、 退役していない 23 本も 58 GB を持っていた。 本 repo の worktree も 80 GB を持っていた。 3 つの project の便が ENOSPC<span class="term" data-component="plain-language-term-inline" data-term="ENOSPC">disk の空き切れ</span> で落ち、 本 repo の便 s2-07l.731 は test が一時 dir を作れなかっただけで Gated FAIL になった (契約の赤ではない)。 持ち主の承認 (裁定 user 2026-09-28T04:45Z) で退役した worktree の build の置き場を手で消すと、 空きは 401 GB に戻った。 続けて持ち主は、 掃除しながら進める器の直しを最優先で入れるよう指示した (裁定 user 2026-09-28T04:46Z)。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX3</span><div class="cxbody"><p class="cxh">機序 — 無視の規則<span class="term" data-component="plain-language-term-inline" data-term="無視の規則">git が見ない物の宣言</span>は「作り直せる」の宣言ではない。 作り直せる置き場は名で分かる</p><p class="cxd">無視の規則 (.gitignore) が宣言するのは「commit しない」で、 「作り直せる」ではない。 本 repo の .gitignore も鍵 (.beads-credential-key)・手書きの local の script (*.local.sh)・session の作業記憶 (/.claude-session/)・local の設定 (.claude/*) を無視する。 さらに git clean -X は project の .gitignore に加えて repo の info/exclude と host の個人設定の除外も読むので、 消す集合が host ごとに変わる (orchestrator と review が scratch の repo で実測)。 一方、 器が対応する言語 (Rust、 TypeScript、 Python、 React Native + Expo) の build と依存の置き場は名が決まっていて、 commit した木と toolchain と lock file から作り直せる。 器は便が live か (終端でないか) を段と判定と運転手の札から 1 関数で測り、 判定や札を読めない便は「測れない」と返す。 置き場 (state dir) ごとの lock は既存の 1 実装 (acquire_with) が在る。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX4</span><div class="cxbody"><p class="cxh">憲法の向き (本 ADR の解釈)</p><p class="cxd">N1 は器の管理する物を戻せない形で消す操作を断れと言い、 A4.2 は不可逆な操作の前に user に聞けと言う。 本 ADR が消すのは閉じた列<span class="term" data-component="plain-language-term-inline" data-term="閉じた列">器が消す dir の名</span>の build と依存の置き場だけで、 commit した木と toolchain と lock file から作り直せるので、 N1 の戻せない削除にも A4.2 の不可逆にも当たらないと読む。 便の情報 (branch の commit・木・追跡されている file・state dir の log と判定) は残り、 退役は N1.2 の可逆な move のまま。 A1 は戻せるかどうかを問わず「消す」という種類に掛かる。 本 ADR は、 裁定 user 2026-09-28T04:46Z (逐語は RulingReceived の event) を、 まさにこの狭めた種類 — 閉じた列の dir を、 live でない便の worktree から、 終端の周ごとに消すこと — への A1 の常設の承認と読む。 その前の裁定 user 2026-09-28T04:45Z は手で 1 回消すことの承認で、 器の掃除の承認ではない。 C17.2 に沿い、 足す 1 手が消すものは、 満杯のたびに人が撃つ手の掃除である。 C2 から、 生死は既存の 1 関数で測る。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX5</span><div class="cxbody"><p class="cxh">射程 — 動かすのは運転手の終端の周<span class="term" data-component="plain-language-term-inline" data-term="運転手の終端の周">運転手の一区切りの後</span>の 1 手だけ</p><p class="cxd">動かすのは、 運転手の終端の周 (pipe の run・resume・land・stop・retire が段を記帳した後・列の 1 周の前) に、 live でない便の木から閉じた列の dir を消す 1 手を足すことだけである。 動かさないのは、 退役の move・worktree の clean の判定・live の判定・列の判定と起こす契機・worktree と branch の置き場・追跡されている file と commit・stdout と event と rc・rules 行 (host_guard.git を含む)・event の kind・要件書である。 設計 dispatcher.md §30 (契約表の行 ae) が実装する。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX6</span><div class="cxbody"><p class="cxh">既存の門 — host-guard<span class="term" data-component="plain-language-term-inline" data-term="host-guard">session の手の門</span> は session の手が撃つ git clean -f を断り、 今後も断る</p><p class="cxd">rules 行 host_guard.git は禁じる語列に git clean -f を持ち、 session と runner の Bash が撃つ git clean -f を実行の前に断る (口座の設定を読む session には host-guard、 席と runner には器の plugin の command guard も同じ語列で掛かる・FR56・ADR-0025・ADR-0056・N1・C16)。 席の手は消す対象を絞れず、 素の -f は無視されない untracked の仕事も消し、 それは戻せない。 器の掃除は git clean を撃たない別の狭い操作で、 閉じた列の dir だけを、 live でないと測れた便の木だけで、 運転手の process の中だけで消す。 ゆえに rules 行は変えず、 session への断りも緩めない。 v2 までの草稿の git clean -X が host の個人設定の除外を読む問題は、 除外を読まない本 ADR の形では起きない。</p></div></div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-brand"><span class="num">02</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v18"/><path d="M5 7l-3 6h6z"/><path d="M19 7l-3 6h6z"/><path d="M3 21h18"/></svg> 判断を縛る力 / 評価の軸</span><h2>選択肢を測るものさし (安全・速さ)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-02">この判断を評価する 6 本のものさしです。 disk を器が自分で取り戻すこと。 便の情報を失わないこと。 言語に依らないこと。 足すものを最小にすること。 並列の便を遅くしないこと。 席の手に掛かる門を緩めないこと。</p></section>
+<section data-component="chapter-deck-band" class="tint-brand"><span class="num">02</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v18"/><path d="M5 7l-3 6h6z"/><path d="M19 7l-3 6h6z"/><path d="M3 21h18"/></svg> 判断を縛る力 / 評価の軸</span><h2>選択肢を測るものさし (安全・速さ)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-02">この判断を評価する 7 本のものさしです。 disk を器が自分で取り戻すこと。 作り直せない物を消さないこと。 器が対応する言語の全部に 1 つの仕組みで効くこと。 足すものを最小にすること。 並列の便を遅くしないこと。 席の手に掛かる門を緩めないこと。 消す操作を承認の範囲に閉じること。</p></section>
 <div class="chapbody">
 <table data-component="adr-driver-table"><tbody>
 <tr data-component="adr-driver-row"><td class="drid">DR1</td><td>disk を器が自分で取り戻す — 満杯を人の気付きに頼らず、 便を ENOSPC で落とさない <span class="drg">CTX1・CTX2</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR2</td><td>便の情報を失わない — 退役は可逆な move のまま、 作り直せない物は消さない (N1・N1.2) <span class="drg">CTX3・CTX4</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR3</td><td>言語に依らない — 何が中間生成物かを器が言語ごとに決めない <span class="drg">CTX3</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR4</td><td>足すものを最小にする — 口・rules 行・跨版の key を足さず、 既に在る宣言と判定を使う (C2・C17) <span class="drg">CTX3・CTX4</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR2</td><td>作り直せない物を消さない — 消すのは作り直せると分かっている置き場だけ、 退役は可逆な move のまま (N1・N1.2・A4.2) <span class="drg">CTX3・CTX4</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR3</td><td>器が対応する言語の全部に 1 つの仕組みで効く — 言語ごとの設定や build の手順を器が持たない <span class="drg">CTX3</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR4</td><td>足すものを最小にする — 口・rules 行・跨版の key を足さず、 既存の生死の判定と lock を使う (C2・C17) <span class="drg">CTX3・CTX4</span></td></tr>
 <tr data-component="adr-driver-row"><td class="drid">DR5</td><td>並列の便を遅くしない — 最大 16 本の便が互いの build を待たない <span class="drg">CTX1</span></td></tr>
 <tr data-component="adr-driver-row"><td class="drid">DR6</td><td>session の手の門を緩めない — host-guard が git clean -f を断る行はそのまま (N1・C16) <span class="drg">CTX6</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR7</td><td>消す操作は承認の範囲に閉じる — A1 の常設の承認が名指す種類の外を消さない (A1) <span class="drg">CTX2・CTX4</span></td></tr>
 </tbody></table>
 </div>
-<section data-component="chapter-deck-band" class="tint-violet"><span class="num">03</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5"/></svg> 検討した選択肢 / 3 つの確定方式</span><h2>それぞれの利点と欠点を並べる</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-03">候補を 6 つ並べます。 終わった便の worktree で git が無視する file を消す案 (選んだ案)、 今のまま人が手で消す案、 build の出力先を repo ごとに 1 つ共有する案、 退役した worktree を丸ごと消す案、 disk の空きが少ないと便の起動を断る門の案、 消してよい dir を宣言 file に書かせる案です。</p></section>
+<section data-component="chapter-deck-band" class="tint-violet"><span class="num">03</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5"/></svg> 検討した選択肢 / 3 つの確定方式</span><h2>それぞれの利点と欠点を並べる</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-03">候補を 8 つ並べます。 名が閉じた列の dir を終わった便の木から消す案 (選んだ案)、 今のまま人が手で消す案、 git clean で無視された file を全部消す案、 退役した worktree だけを掃除する案、 build の出力先を repo ごとに 1 つ共有する案、 退役した worktree を丸ごと消す案、 disk の空きが少ないと便の起動を断る門の案、 消してよい dir を宣言 file に書かせる案です。</p></section>
 <div class="chapbody">
 <div class="opt-grid">
 <div data-component="adr-option-card" class="chosen">
-<div class="opt-head"><span class="opt-id">OPT1</span><span class="opt-name">便の終端の周ごとに、 live でない便の worktree で git clean -d -X -f を撃つ</span><span class="opt-verdict chosen">採用</span></div>
-<p class="opt-sum">便の終端の周 (pipe の run・resume・land・stop・retire が段を記帳した後) ごとに、 state dir の便のうち live でないと測れた便の worktree (元の場所か退役の置き場のうち在る方) で git clean -d -X -f を撃つ。 消すのは無視の規則が無視と宣言する file だけで、 生死を測れない便は飛ばす。 決め手は裁定 user 2026-09-28T04:46Z (器で直す) と分析。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT1">便が 1 本止まるたびに撃たれる器の 1 周で、 もう終わった便の worktree ごとに、 git が無視すると宣言された file と dir だけを消す案です。 何を消してよいかは各 project の無視の規則が決めるので、 Rust の target/ も node_modules/ も .venv/ も同じ手で消え、 tracked の file と commit には触れず、 生死を測れない便は飛ばします。 何度撃っても同じ結果になるので、 最初の周で既に溜まった分も取り戻し、 退役は可逆な移動のまま残ります。 代わりに、 落ちた便を regate したり後で調べたりするときは build を 0 からやり直す時間が掛かり、 無視の規則に書かれない dir や入れ子の repo は残り、 周ごとに小さな費用が掛かることを引き受けます。 掃除は器自身の子 process だけが撃つ狭い操作なので、 席の手の git clean -f を断る門 (rules 行 host_guard.git) は変えません。</span>
+<div class="opt-head"><span class="opt-id">OPT1</span><span class="opt-name">名が閉じた列に在り追跡されている file を持たない dir を、 live でない便の木から消す</span><span class="opt-verdict chosen">採用</span></div>
+<p class="opt-sum">運転手の終端の周ごとに、 置き場の全便のうち live でないと測れた便の木 (元の場所か退役先の在る方) を .git に降りずに歩き、 名が閉じた 8 つの列に在り追跡されている file を持たない dir を std の remove_dir_all で消す。 無視の規則は読まず git clean は撃たない。 決め手は裁定 user 2026-09-28T04:46Z (器で直す・A1 の常設の承認) と、 fidelity-adr の review を受けた分析。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT1">運転手が一区切りするたびに、 もう終わったと測れた便の worktree を歩き、 名が決まった 8 つの dir (Rust の target、 TypeScript の node_modules、 Python の仮想環境 .venv と cache 4 つ、 Expo の .expo) のうち、 追跡されている file を 1 つも持たないものだけを消す案です。 無視の規則は読まず git clean も撃たないので、 鍵や local の設定のような作り直せない file は消えず、 消す物は裁定 04:46Z の常設の承認の種類にちょうど収まります。 置き場の全便を毎周見るので、 最初の周で既に溜まった分も取り戻し、 退役は可逆な移動のまま残ります。 代わりに、 起こし直す便は build をやり直す時間が掛かり、 列に無い置き場は残り、 列の名の dir は中に人が置いた物ごと消え、 周ごとに小さな費用が掛かることを引き受けます。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>disk を実際に取り戻す — 非公開の隣の project では退役した 117 本の build dir だけで 540 GB だった (DR1)</li>
-<li>冪等で、 着地後の最初の周が既に溜まった worktree の分も取り戻す (DR1)</li>
-<li>退役は可逆な move のまま、 branch の commit・木・state dir の記録は残る (DR2)</li>
-<li>何が中間生成物かは project の無視の規則が決め、 Rust の target/ も node_modules/ も .venv/ も同じ 1 手で消える (DR3)</li>
-<li>口・rules 行・跨版の key を足さず、 既存の生死の判定を使う (DR4)</li>
+<li>disk を実際に取り戻す — 非公開の隣の project では退役した 117 本の build の置き場だけで 540 GB だった (DR1)</li>
+<li>置き場の全便を毎周見るので、 器の入れ替えの後の最初の周が既に溜まった分も取り戻す (DR1)</li>
+<li>消すのは作り直せると名で分かる置き場だけで、 鍵・手書きの script・local の設定のような無視された file は消えない (DR2)</li>
+<li>退役は可逆な move のまま、 branch の commit・木・追跡されている file・state dir の記録は残る (DR2)</li>
+<li>列が器の対応する言語の全部を覆い、 言語ごとの設定を器が持たない (DR3)</li>
+<li>口・rules 行・跨版の key を足さず、 既存の生死の判定と lock を使う (DR4)</li>
 <li>便ごとの worktree は分かれたままで、 並列の便は互いの build を待たない (DR5)</li>
-<li>掃除は器自身の子 process だけが撃つ狭い操作で、 rules 行 host_guard.git は変えず、 session と runner の git clean -f は今どおり断られる (DR6)</li>
+<li>git clean を撃たないので rules 行 host_guard.git は変わらず、 session と runner の git clean -f は今どおり断られる (DR6)</li>
+<li>消す物が裁定 04:46Z の常設の承認の種類にちょうど収まる (DR7)</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>Gated FAIL の便を regate すると build を 0 からやり直す (数分かかるが正しさは変わらない)</li>
-<li>落ちた便の worktree を後で調べるには build し直しが要る</li>
-<li>build dir を無視の規則に書かない project では何も取り戻せない</li>
-<li>無視される dir の下の入れ子の git repo (test の fixture など) は残り、 その分は取り戻せない</li>
-<li>便の終端の周ごとに数十本の worktree へ git clean を撃つ小さな固定の費用が掛かる</li>
+<li>Gated FAIL の便を regate で撃ち直す周や Stopped の便を resume で起こし直す周は、 build と依存の取り込みを最初からやり直す (数分・正しさは変わらない)</li>
+<li>列に無い build の置き場 (dist や build のような汎い名・言語の外の道具の cache) は消えず、 言語を足す便は同じ型の ADR で列を足す</li>
+<li>列の名の dir は、 中に人が置いた未追跡の file や入れ子の git repo ごと消える</li>
+<li>木ごとに git ls-files 1 回と木の走査の小さな固定の費用が掛かる</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
 <div class="opt-head"><span class="opt-id">OPT2</span><span class="opt-name">今のまま — disk が満ちたら人が手で消す</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">器には消す手を足さず、 disk が満ちたら持ち主や席が手で build dir を消す。 決め手は分析 (満杯まで誰も気付かず便が落ちる)。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT2">器には何も足さず、 disk が満ちたら持ち主や席が手で build の産物を消す案です。 器に消す手を足さないので憲法 N1 の読みを決めずに済み、 何を消すかを人が毎回見て決められる点で勝ります。 けれども、 満杯になるまで誰も気付かず 3 つの project の便が落ち、 手の掃除は文章にしか無い手順で満杯のたびに繰り返し、 席の手の git clean -f は門が断るうえ、 断りを緩めれば無視されない仕事まで消せる手を席に渡すことになるので退けました。</span>
+<p class="opt-sum">器には消す手を足さず、 disk が満ちたら持ち主や席が手で build の置き場を消す。 決め手は分析 (満杯まで誰も気付かず便が落ちる)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT2">器には何も足さず、 disk が満ちたら持ち主や席が手で build の置き場を消す案です。 器に消す手を足さないので憲法の読みを決めずに済み、 何を消すかを人が毎回見て決められる点で勝ります。 けれども、 満杯になるまで誰も気付かず 3 つの project の便が落ち、 手の掃除は文章にしか無い手順で満杯のたびに繰り返し、 席の手の git clean -f は門が断るうえ、 断りを緩めれば無視されない仕事まで消せる手を席に渡すことになるので退けました。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>器に消す手を足さないので、 N1 の読みを決める必要が無い</li>
+<li>器に消す手を足さないので、 N1 と A1 の読みを決める必要が無い</li>
 <li>何を消すかを人が毎回見て決められる</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
 <li>満杯になるまで誰も気付かず、 3 つの project の便が ENOSPC で落ちた (DR1)</li>
@@ -600,121 +605,149 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT3</span><span class="opt-name">repo ごとに便を跨いで build dir を 1 つ共有する</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">便ごとの worktree の build の出力先を repo ごとに 1 つの dir へ向ける (cargo の target dir の指定など)。 決め手は分析 (言語に依り、 並列の便が直列になる)。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT3">便ごとの build の出力先を、 repo ごとに 1 つの dir へ向けて共有する案です。 build を使い回せるので disk も時間も大きく減り、 産物が 1 か所にまとまる点で勝ります。 けれども、 出力先の指定は言語ごとに違い (cargo の指定は Rust 専用)、 cargo はその dir に鍵を掛けるので最大 16 本の並列の便の build が 1 本ずつになり、 test の一時 dir などは各 worktree に溜まり続けるので退けました。</span>
+<div class="opt-head"><span class="opt-id">OPT3</span><span class="opt-name">git clean -d -X -f で無視された file を全部消す</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">live でない便の木で git clean -d -X -f を撃ち、 無視の規則が無視と宣言する file と dir を全部消す (v2 までの草稿の形)。 決め手は fidelity-adr の review の再現と分析 (無視の規則は作り直せない物も持ち、 host の個人設定の除外も読む)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT3">終わった便の木で git clean -d -X -f を撃ち、 無視の規則が無視と宣言する file と dir を全部消す案で、 この記録の前の草稿の形です。 列を持たず、 dist や build のような汎い名の置き場も消せ、 言語を足すときに器の列を足さずに済む点で勝ります。 けれども、 無視の規則は鍵・手書きの local の script・local の設定・session の作業記憶のような作り直せない物も持ち、 git clean は host の個人設定の除外まで読むので消す物が host ごとに変わり、 承認の種類も越えるので退けました。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>build の再利用で disk も build の時間も大きく減る</li>
-<li>中間生成物が 1 か所にまとまり、 量を測りやすい</li>
+<li>列を持たず、 どの言語の project でも無視の規則に書かれた build の置き場を消せる (dist や build のような汎い名も含む)</li>
+<li>git の 1 命令で済み、 言語を足すときに器の列を足す便が要らない</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>出力先の指定は言語ごとに違い (cargo の target dir は Rust 専用)、 器が言語ごとの手を持つことになる (DR3)</li>
-<li>cargo は build dir に lock を取るので、 最大 16 本の並列の便の build が直列になる (DR5)</li>
-<li>test の一時 dir などは各 worktree に溜まり続ける (DR1)</li>
+<li>無視の規則は鍵・手書きの local の script・local の設定・session の作業記憶のような作り直せない物も持ち、 それも消える (DR2)</li>
+<li>git clean -X は repo の info/exclude と host の個人設定の除外も読み、 消す集合が host ごとに変わる (DR2)</li>
+<li>消す物が作り直せる物に閉じないので、 A1 の常設の承認の種類を越える (DR7)</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT4</span><span class="opt-name">退役した worktree を git worktree remove で丸ごと消す</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">着地や畳みの後、 退役の置き場へ move する代わりに (または move の後で) worktree を丸ごと消す。 決め手は分析 (N1.2 の可逆な退役を破る)。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT4">着地や畳みの後、 退役した worktree を git worktree remove で丸ごと消す案です。 取り戻す量が最大で、 実装も 1 手で単純な点で勝ります。 けれども、 退役を可逆な移動に限る憲法 N1.2 を破り、 後で調べるための便の木も失うので退けました。</span>
+<div class="opt-head"><span class="opt-id">OPT4</span><span class="opt-name">退役した worktree だけを掃除する</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">掃除の対象を退役先の木に限り、 退役していない終端の便 (Failed・Stopped・Gated の FAIL) の木には触れない。 決め手は分析 (退役しない終端の木が溜まり続ける)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT4">掃除の対象を退役した worktree に限り、 退役していない終わった便の木には触れない案です。 起こし直す便の build のやり直しが無く、 取り戻す量の約 9 割を得られ、 持ち主が手で消した範囲と同じ形で読みやすい点で勝ります。 けれども、 退役しない終わった便の木は溜まり続け (非公開の隣の project では退役していない 23 本が 58 GB)、 その分は人の手の掃除に戻るので退けました。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>取り戻す量が最大になる (中間生成物に加えて木も消える)</li>
+<li>regate や resume で起こし直す便の木に触れないので、 build のやり直しの手戻りが無い</li>
+<li>取り戻す量の約 9 割を得る (非公開の隣の project で 597 GB のうち 540 GB が退役した木の分)</li>
+<li>裁定 04:45Z が手で消した範囲 (退役した worktree) と同じ形で読みやすい</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>退役しない終端の木は溜まり続ける — 非公開の隣の project では退役していない 23 本が 58 GB を持っていた (DR1)</li>
+<li>畳まれずに残る便の木ほど長く残り、 その分は人の手の掃除に戻る (DR1)</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT5</span><span class="opt-name">repo ごとに便を跨いで build の置き場を 1 つ共有する</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">便ごとの worktree の build の出力先を repo ごとに 1 つの dir へ向ける (cargo の target dir の指定など)。 決め手は分析 (言語に依り、 並列の便が直列になる)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT5">便ごとの build の出力先を、 repo ごとに 1 つの dir へ向けて共有する案です。 build を使い回せるので disk も時間も大きく減り、 置き場が 1 か所にまとまる点で勝ります。 けれども、 出力先の指定は言語ごとに違い (cargo の指定は Rust 専用)、 cargo はその dir に鍵を掛けるので最大 16 本の並列の便の build が 1 本ずつになり、 test の一時 dir や依存の取り込みは各 worktree に溜まり続けるので退けました。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>build の再利用で disk も build の時間も大きく減る</li>
+<li>置き場が 1 か所にまとまり、 量を測りやすい</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>出力先の指定は言語ごとに違い (cargo の target dir は Rust 専用)、 器が言語ごとの手を持つことになる (DR3)</li>
+<li>cargo は build の置き場に lock を取るので、 最大 16 本の並列の便の build が 1 本ずつになる (DR5)</li>
+<li>test の一時 dir や依存の取り込みは各 worktree に溜まり続ける (DR1)</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT6</span><span class="opt-name">退役した worktree を git worktree remove で丸ごと消す</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">着地や畳みの後、 退役の置き場へ move する代わりに (または move の後で) worktree を丸ごと消す。 決め手は分析 (N1.2 の可逆な退役を破る)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT6">着地や畳みの後、 退役した worktree を git worktree remove で丸ごと消す案です。 取り戻す量が最大で、 実装も 1 手で単純な点で勝ります。 けれども、 退役を可逆な移動に限る憲法 N1.2 を破り、 後で調べるための便の木と追跡されない仕事も失うので退けました。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>取り戻す量が最大になる (build の置き場に加えて木も消える)</li>
 <li>実装が 1 手で単純</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
 <li>退役を可逆な move に限る N1.2 を破る (DR2)</li>
-<li>後で調べるための便の木を失う (DR2)</li>
+<li>後で調べるための便の木と、 追跡されない仕事を失う (DR2・DR7)</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT5</span><span class="opt-name">disk の空きが閾値を下回ったら便の起動を断る門</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">受付で disk の空きを測り、 閾値を下回る周は便を起こさない。 決め手は分析 (何も取り戻さない・閾値は新しい rules 行で user 裁定が要る)。 後続の候補として残す。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT5">便を起こす前に disk の空きを測り、 閾値を下回る周は起こさない門の案です。 便が次々落ちる連鎖を防ぎ、 何も消さないので憲法 N1 の読みが要らない点で勝ります。 けれども、 それだけでは空きを 1 byte も取り戻さず、 閾値は新しい rules 行の値として持ち主の裁定が要るので、 この判断では退け、 後続の候補として残します。</span>
+<div class="opt-head"><span class="opt-id">OPT7</span><span class="opt-name">disk の空きが閾値を下回ったら便の起動を断る門</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">起こす前に disk の空きを測り、 閾値を下回る周は便を起こさない。 決め手は分析 (何も取り戻さない・閾値は新しい rules 行で user 裁定が要る)。 後続の候補として残す。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT7">便を起こす前に disk の空きを測り、 閾値を下回る周は起こさない門の案です。 便が次々落ちる連鎖を防ぎ、 何も消さないので憲法の読みが要らない点で勝ります。 けれども、 それだけでは空きを 1 byte も取り戻さず、 閾値は新しい rules 行の値として持ち主の裁定が要るので、 この判断では退け、 後続の候補として残します。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
 <li>ENOSPC で便が次々落ちる連鎖を防ぐ</li>
-<li>何も消さないので N1 の読みが要らない</li>
+<li>何も消さないので N1 と A1 の読みが要らない</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
 <li>何も取り戻さず、 空きを作るのは人の手の掃除のまま (DR1)</li>
 <li>閾値は新しい rules 行の値で、 user 裁定が要る (C5・DR4)</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT6</span><span class="opt-name">project ごとに .vessel.toml で生成物の dir を宣言する</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">器の宣言 file .vessel.toml に消してよい dir の列を足し、 器はその dir だけを消す。 決め手は分析 (跨版の新しい key・無視の規則と二重)。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT6">器の宣言 file .vessel.toml に、 消してよい dir の列を project ごとに書かせる案です。 消す dir を器がはっきり知り、 無視の規則に無い dir も対象にでき、 何を消すかが宣言として読める点で勝ります。 けれども、 版を跨ぐ新しい key になり全ての導入先が書くまで取り戻せず、 無視の規則が既に同じことを宣言しているので同じ事実の宣言が 2 つになるため退けました。</span>
+<div class="opt-head"><span class="opt-id">OPT8</span><span class="opt-name">project ごとに .vessel.toml で消す dir を宣言する</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">器の宣言 file .vessel.toml に消してよい dir の列を project ごとに書かせ、 器はその dir だけを消す (器の列を既定にして宣言で足す形も含む)。 決め手は分析 (跨版の新しい key と読み手が要り、 対応する言語の置き場は器の列で既に覆える)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT8">器の宣言 file .vessel.toml に、 消してよい dir の列を project ごとに書かせる案です (器の列を既定にして宣言で足す形も含みます)。 dist や build のような汎い名も対象にでき、 何を消すかが project の宣言として読め、 書いた project から順に効く点で勝ります。 けれども、 版を跨ぐ新しい key と読み手が要り、 書かない project では効かず、 器が対応する言語の置き場は器の列が宣言なしで既に覆えるので退けました。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>消す dir を器が明示に知り、 無視の規則に無い dir も対象にできる</li>
-<li>何を消すかが宣言として読める</li>
+<li>project ごとに dist や build のような汎い名も対象にでき、 器の列を足す便が要らない</li>
+<li>何を消すかが project の宣言として読め、 宣言を書いた project から順に効く</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>跨版の新しい key になり、 全ての消費側が宣言を書くまで取り戻せない (DR4)</li>
-<li>無視の規則が既に同じことを宣言しており、 同じ事実の宣言が 2 つになる (C2・DR4)</li>
+<li>跨版の新しい key と読み手が要り、 足すには ADR と消費側への告知が要る (DR4)</li>
+<li>宣言を書かない project では効かない (採用案の列に無い置き場が残るのと同じ形の欠点で、 採用案は対応する言語の置き場を宣言なしで覆う) (DR1・DR3)</li>
 </ul></div></div>
 </div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの方式を選ぶか</span><h2>選んだ方式と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、 それが要件書のどの要件を支えるかを示します。 便の終端の周ごとに、 まだ終わっていない便と生死を測れない便を除いた便の worktree で、 git が無視する file と dir だけを消します。 退役は可逆な移動のままで、 席の手の git clean -f を断る門も変えません。</p></section>
+<section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの方式を選ぶか</span><h2>選んだ方式と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、 それが要件書のどの要件に結ぶかを示します。 運転手の終端の周ごとに、 終わったと測れた便の木から、 名が閉じた 8 つの列に在り追跡されている file を持たない dir だけを消します。 生きている便と生死を測れない便は触らず、 置き場ごとに lock を取り、 残すのは stderr の 1 行だけです。 退役は可逆な移動のままで、 席の手の git clean -f を断る門も変えません。</p></section>
 <div class="chapbody">
 <div data-component="adr-decision-panel" id="decision">
 <p class="dec-kick">採用 — OPT1</p>
-<p class="dec-state">器 SHALL 便の終端の周 (pipe の run・resume・land・stop・retire が段を記帳した後) ごとに、 state dir の各便の生死を既存の 1 関数で測り、 live でないと測れた便の worktree (元の場所か退役の置き場のうち在る方) で git clean -d -X -f を撃つ。 -f は 1 つだけとし、 入れ子の git repo は残す。 消すのは対象 project の無視の規則が無視と宣言する file と dir (中間生成物) だけで、 器 SHALL tracked の file・commit・無視されない untracked の file に触れない。 生死を測れない便 SHALL 飛ばす (残す側へ倒す)。 掃除は冪等で、 着地後の最初の周が既に溜まった worktree の分も取り戻す。 退役 SHALL 今どおり可逆な move のままとし、 worktree そのものは消さない。 何かを消した周だけ stderr に 1 行を出し、 stdout と event の形は変えない。 本 ADR は憲法 N1 を、 無視される file は commit した木と toolchain から作り直せるので、 それを消すのは戻せない削除に当たらない (便の情報〔branch の commit・木・state dir の log と判定〕は残る) と読む。 掃除は器自身の子 process だけが撃ち、 rules 行 host_guard.git (session と runner が撃つ git clean -f の断り) SHALL 変えず、 session への断りを緩めない。 口・rules 行・跨版の key・要件書は変えない。 実装は設計 dispatcher.md §30 (契約表の行 ae)。</p>
-<span class="dec-plain" data-prose-slot="plain" data-slot-id="decision-plain">便の終端の周 (pipe の run・resume・land・stop・retire が段を記帳した後) ごとに、 器は state dir の各便の生死を既存の 1 関数で測り、 終わったと測れた便の worktree (元の場所か退役の置き場の在る方) で git clean -d -X -f を撃ちます。 -f は 1 つだけなので入れ子の git repo は残ります。 消すのは無視の規則が無視と宣言する file と dir だけで、 tracked の file・commit・無視されない untracked の file には触れません。 生死を測れない便は飛ばします。 退役は可逆な移動のままで、 worktree そのものは消しません。 何かを消した周だけ stderr に 1 行を出します。 掃除は器自身の子 process だけが撃ち、 席と runner の手が撃つ git clean -f を断る rules 行 host_guard.git は変えません。 stdout と event の形・口・rules 行・要件書も変えません。</span>
-<span class="dec-why" data-prose-slot="rationale" data-slot-id="decision-rationale">disk を尽かせたのは、 着地した便の worktree に残り続けた build の産物でした (非公開の隣の project で退役した 117 本の分だけで 540 GB)。 それらは commit した木と道具から作り直せるので、 消しても便の情報 (branch の commit・木・state dir の記録) は失われず、 憲法 N1 の戻せない削除には当たらないと読みました。 何を消してよいかは各 project の無視の規則が既に宣言し、 便が終わったかは器が既に 1 関数で測るので、 新しい口も rules 行も宣言の key も足さずに済みます。 worktree を丸ごと消す案は可逆な退役 (N1.2) を破り、 build の出力先を共有する案は言語に依り並列の便を 1 本ずつにし、 宣言 file に書かせる案は無視の規則と二重になり、 disk の空きの門は何も取り戻さないので退けました (門は後続の候補)。 席の手が撃つ素の git clean -f は消す対象を絞れず無視されない仕事まで戻せない形で消すので、 それを断る門は緩めず、 狭い -X の掃除を器の中にだけ置きました。 器で直すこと自体は持ち主の裁定 (user 2026-09-28T04:46Z) の指示です。</span>
+<p class="dec-state">器 SHALL 運転手の終端の周 (pipe の run・resume・land・stop・retire が段を記帳した後・列の 1 周の前・--repo の無い周も) ごとに 1 回、 置き場の replay の全便のうち live が Some(false) と測れた便について、 置き場の記録から repo を解き、 元の場所と退役先のうち在る方の木を .git に降りずに歩く。 名が閉じた列 (宣言順に target (Rust)、 node_modules (TypeScript)、 .venv、 __pycache__、 .mypy_cache、 .pytest_cache、 .ruff_cache (Python)、 .expo (React Native + Expo)) に在り、 追跡されている file を 1 つも持たない dir (その木の git ls-files の 1 回で判じる) を std の remove_dir_all で消し、 その下へは降りない。 live が Some(true) か None の便・repo を解けない便・木が無い便 SHALL 撃たない。 git ls-files を撃てない木 SHALL 消さずに失敗に数える。 無視の規則と host の除外は読まず、 git clean は撃たない。 置き場の掃除の lock を acquire_with で取り、 取れない周 SHALL 撃たずに stderr に sweep: skipped=lock を 1 行出す。 dir を消した周か失敗した木が在る周だけ stderr に sweep: removed=&lt;n&gt; runs=&lt;k&gt; failed=&lt;m&gt;[:&lt;便 id&gt;,…] を 1 行出す。 stdout・event・rc は変えない。 退役の move・live の判定・列の判定・rules 行 (host_guard.git を含む)・event の kind は変えない。 本 ADR は、 列の dir は commit した木と toolchain と lock file から作り直せるので N1 の戻せない削除にも A4.2 の不可逆にも当たらないと読み、 A1 の承認は裁定 user 2026-09-28T04:46Z をこの種類への常設の承認と読む。 器が対応する言語を足すときは、 同じ型の ADR で列を足す。 実装は設計 dispatcher.md §30 (契約表の行 ae)。</p>
+<span class="dec-plain" data-prose-slot="plain" data-slot-id="decision-plain">運転手の終端の周 (pipe の run・resume・land・stop・retire が段を記帳した後・列の 1 周の前) ごとに 1 回、 器は置き場の全便の生死を既存の 1 関数で測り、 終わったと測れた便の木 (元の場所か退役先の在る方) を .git に降りずに歩きます。 名が target、 node_modules、 .venv、 __pycache__、 .mypy_cache、 .pytest_cache、 .ruff_cache、 .expo のどれかで、 追跡されている file を 1 つも持たない dir (木ごとに git ls-files 1 回で判じる) を丸ごと消し、 その下へは降りません。 生きている便・生死を測れない便・repo や木が見つからない便は触らず、 git ls-files を撃てない木は消さずに失敗に数えます。 置き場ごとに lock を取り、 取れない周は撃たずに stderr に 1 行を残します。 dir を消した周か失敗が在る周だけ stderr に件数の 1 行を出し、 stdout・event・rc は変えません。 無視の規則は読まず git clean も撃たないので、 席と runner の手の git clean -f を断る rules 行 host_guard.git は変えません。 消す dir は作り直せるので憲法 N1 の戻せない削除に当たらないと読み、 何度撃っても害はありません。</span>
+<span class="dec-why" data-prose-slot="rationale" data-slot-id="decision-rationale">非公開の隣の project では退役した 117 本の build の置き場だけで 540 GB を占め、 持ち主の承認でそれを手で消すと空きは 401 GB に戻りました。 今のまま人が消す案は満杯まで気付けず便が落ちたので退けました。 前の草稿の git clean で無視された file を全部消す案は、 無視の規則が鍵や local の設定のような作り直せない物も持ち、 host の個人設定の除外まで読むと review で再現されたので退け、 器が対応する言語の build と依存の置き場を名の閉じた列で持つ形に改めました。 その dir は commit した木と toolchain と lock file から作り直せるので、 憲法 N1 と A4.2 には当たらないと読みます。 A1 は戻せるかどうかを問わず消す種類に掛かるので、 裁定 user 2026-09-28T04:46Z をこの狭めた種類 (閉じた列の dir を、 終わった便の木から、 終端の周ごとに) への常設の承認と読み、 その前の 04:45Z は手で 1 回消す承認として分けました。 退役した木だけの案は起こし直しの手戻りが無い点で惜しいものの、 退役しない終わった便の木が溜まり続けるので退けました。 丸ごと消す案は可逆な退役 (N1.2) を破り、 出力先の共有は言語に依り並列の便を 1 本ずつにし、 宣言の案は跨版の key が要り、 空きの門は何も取り戻さないので退けました。 代わりに、 起こし直す便の build のやり直しと、 周と周の間の満杯は防げないことを引き受けます。</span>
 <div class="justify-box"><p class="jh">この判断が正当化する要件 (cross-doc 照会 → SRS-SCRIBE2-MVP)</p>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#NFR6" data-justifies-req="NFR6" data-justifies-role="claim">NFR6</a><span class="justify-role">claim</span><span class="justify-note">NFR6 (host の資源) は封じ込めの外で走る器の子 process 0 本と並列度を目標にする。 本 ADR は host の資源のうち disk を、 便の終端の周ごとに中間生成物を取り戻して守ると主張する (目標の文は変えない)。</span></div>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR68" data-justifies-req="FR68" data-justifies-role="rationale">FR68</a><span class="justify-role">rationale</span><span class="justify-note">FR68 (便の自動起動) は便が終端の段に達した周に dispatcher が次の便を起こす。 disk が尽きると起こした便が ENOSPC で落ちるので、 本 ADR はその終端の周に掃除の 1 手を置く根拠を与える。</span></div>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR56" data-justifies-req="FR56" data-justifies-role="claim">FR56</a><span class="justify-role">claim</span><span class="justify-note">FR56 (禁じる語列の command の拒否) は session と runner の Bash が撃つ禁じる語列を実行の前に断る。 本 ADR は rules 行 host_guard.git の git clean -f を変えず、 session と runner の手には今どおり断ると主張する。 器の掃除は器自身の子 process が撃つ -X の狭い操作で、 FR56 の対象の外である。</span></div>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR77" data-justifies-req="FR77" data-justifies-role="claim">FR77</a><span class="justify-role">claim</span><span class="justify-note">FR77 (regate) は worktree・commit・判定の記録に触れず、 戻した便を同じ worktree で再開する。 本 ADR の掃除は無視された file だけを消し tracked の file と commit を残すので、 regate した便は同じ worktree で再開でき、 失うのは build をやり直す時間だけだと主張する。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR68" data-justifies-req="FR68" data-justifies-role="claim">FR68</a><span class="justify-role">claim</span><span class="justify-note">FR68 (便の自動起動) は終端の subcommand の周に列の 1 周を撃つ。 本 ADR は同じ周の、 段の記帳の後・列の 1 周の前に掃除を撃ち、 空きを作ってから次の便を起こすと主張する。 FR68 の列・順序・契機は変えない。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR30" data-justifies-req="FR30" data-justifies-role="claim">FR30</a><span class="justify-role">claim</span><span class="justify-note">FR30 (配送構造) は便の起動・着地を席でなく器の dispatcher が行うと決める。 本 ADR は掃除も席の手でなく器の運転手の周に置き、 席に掃除の手順を渡さないと主張する。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#NFR6" data-justifies-req="NFR6" data-justifies-role="rationale">NFR6</a><span class="justify-role">rationale</span><span class="justify-note">NFR6 (host の資源) の目標は封じ込めの外で走る器の子 process 0 本と並列度で、 disk は数えない。 本 ADR は label の趣旨 (host の資源を守る) に disk の側から理由を与えるだけで、 目標の文は変えない。 足す仕事は運転手の process の中の git ls-files の子 (木ごとに 1 回) と std の fs の削除で、 land や retire が既に撃つ git と同じ種類の短い子である。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR56" data-justifies-req="FR56" data-justifies-role="rationale">FR56</a><span class="justify-role">rationale</span><span class="justify-note">非退行の読み。 FR56 (禁じる語列の command の拒否) は session と runner の Bash が撃つ禁じる語列を断る。 本 ADR は rules 行 host_guard.git の git clean -f を変えず、 掃除は git clean を撃たない。 session は終端の subcommand を撃てば掃除を間接に起こせるが、 対象は live でない便の木の閉じた列の dir に閉じる。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR77" data-justifies-req="FR77" data-justifies-role="rationale">FR77</a><span class="justify-role">rationale</span><span class="justify-note">非退行の読み。 FR77 (regate) は worktree・commit・判定の記録に触れず、 戻した便を同じ worktree で再開する。 本 ADR の掃除は追跡されている file と commit を残すので同じ worktree で再開でき、 消えた列の dir (build と依存の取り込み) はやり直しになる。 判定の後に regate や resume で live に戻った便とは排他でなく、 戻った便は消えた置き場を作り直す。</span></div>
 <p class="justify-tgt">照会先: SRS-SCRIBE2-MVP — SRS: 設計 → 契約 → 実装 → 検証 → land を、 人の手を借りずに 1 本通す器（MVP）</p>
 </div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-warn"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> 結果 / 良い面とトレードオフ</span><h2>この判断で何が良くなり、 何を引き受けるか</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">この判断で良くなること 5 つと、 代わりに引き受けること 7 つです。 良くなるのは、 disk を人の気付きに頼らず取り戻せ、 既に溜まった分も取り戻し、 便の記録は残り、 言語に依らず、 席の手に掛かる門も変わらないことです。 引き受けるのは、 build のやり直しの時間、 落ちた便を調べるときの build し直し、 無視の規則に書かれない dir と入れ子の repo は残ること、 周ごとの小さな費用、 disk の空きの門をまだ持たないこと、 そして同じ掃除を器は撃てて席の手は撃てない非対称です。</p></section>
+<section data-component="chapter-deck-band" class="tint-warn"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> 結果 / 良い面とトレードオフ</span><h2>この判断で何が良くなり、 何を引き受けるか</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">この判断で良くなること 6 つと、 代わりに引き受けること 6 つです。 良くなるのは、 disk を人の気付きに頼らず取り戻せ、 既に溜まった分も取り戻し、 便の記録は残り、 作り直せない無視された file は消えず、 席の手に掛かる門も口も増減しないことです。 引き受けるのは、 起こし直す便の build のやり直し、 列に無い置き場は残ること、 列の名の dir は中身ごと消えること、 判定と掃除の間に便が生き返る競合、 周ごとの小さな費用、 そして周と周の間に並列の便が disk を満たせばなお ENOSPC で落ちうることです (空きの門は後続の候補)。</p></section>
 <div class="chapbody">
 <div data-component="scope-summary-panel"><div class="scol in"><h3>✓ 良い結果</h3><ul>
-<li data-component="adr-consequence-pos"><span class="b">●</span>disk の満杯を人の気付きに頼らず、 便の終端の周ごとに器が中間生成物の分を取り戻す</li>
-<li data-component="adr-consequence-pos"><span class="b">●</span>冪等なので、 着地後の最初の周で既に溜まった退役の worktree の分も取り戻す</li>
-<li data-component="adr-consequence-pos"><span class="b">●</span>退役は可逆な move のままで、 便の branch の commit・木・state dir の記録は残る</li>
-<li data-component="adr-consequence-pos"><span class="b">●</span>何が中間生成物かは project の無視の規則だけが決め、 言語に依らず、 口・rules 行・跨版の key は増えない</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>disk の満杯を人の気付きに頼らず、 運転手の終端の周ごとに器が build と依存の置き場の分を取り戻す</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>置き場の全便を毎周見るので、 器の入れ替えの後の最初の周が既に溜まった退役の worktree の分も取り戻す (何度撃っても害は無い)</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>退役は可逆な move のままで、 便の branch の commit・木・追跡されている file・state dir の記録は残る</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>無視の規則と host の除外を読まないので、 鍵・local の設定・手書きの script のような作り直せない無視された file は消えない</li>
 <li data-component="adr-consequence-pos"><span class="b">●</span>rules 行 host_guard.git は変わらず、 session と runner が撃つ git clean -f は今どおり断られる</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>口・rules 行・跨版の key・event の kind は増えない</li>
 </ul></div><div class="scol out"><h3>⚖ トレードオフ・代償</h3><ul>
-<li data-component="adr-consequence-neg"><span class="b">●</span>Gated FAIL の便を regate すると build を 0 からやり直す (数分かかるが正しさは変わらない)</li>
-<li data-component="adr-consequence-neg"><span class="b">●</span>落ちた便の worktree を後で調べるには build し直しが要る</li>
-<li data-component="adr-consequence-neg"><span class="b">●</span>build dir を無視の規則に書かない project では何も取り戻せない</li>
-<li data-component="adr-consequence-neg"><span class="b">●</span>無視される dir の下の入れ子の git repo (test の fixture など) は残り、 その分は取り戻せない</li>
-<li data-component="adr-consequence-neg"><span class="b">●</span>便の終端の周ごとに数十本の worktree へ git clean を撃つ小さな固定の費用が掛かる</li>
-<li data-component="adr-consequence-neg"><span class="b">●</span>disk の空きの門は持たないので、 周と周の間に並列の便が一度に disk を満たす場合は防げない (門は後続の候補)</li>
-<li data-component="adr-consequence-neg"><span class="b">●</span>同じ git clean を器は撃てて席の手は断られる非対称が残り、 席が同じ掃除を手で撃つ道は無い</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>Gated FAIL の便の regate と Stopped の便の resume、 落ちた便の木で歯を撃ち直して調べる周は、 build と依存の取り込みを最初からやり直す (数分・正しさは変わらない)</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>列に無い build の置き場 (dist や build のような汎い名・言語の外の道具の cache) は消えず、 器が言語を足すたびに同じ型の ADR で列を足す手間が出る</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>列の名の dir は、 中に人が置いた未追跡の file や入れ子の git repo ごと消える</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>live の判定と掃除の間に同じ便が regate や起こし直しで live に戻る競合は排他でなく、 戻った便は消えた置き場を作り直す</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>木ごとに git ls-files 1 回と木の走査の小さな固定の費用が、 終端の周ごとに掛かる</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>disk の空きの門は持たないので、 周と周の間に並列の便が disk を満たせば、 なお ENOSPC で落ちうる (門は後続の候補)</li>
 </ul></div></div>
 </div>
-<section data-component="chapter-deck-band" class="tint-info"><span class="num">06</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> 改訂関係と原則 / この判断の位置づけ</span><h2>版の系譜と、 行き着く原則 (照会終端)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-06">この記録が版の系譜のどこに在るかと、 判断が最後に行き着く原則です。 この記録は既存の ADR を置き換えず、 便の終端の周に掃除の 1 手を足すだけです。</p></section>
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">06</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> 改訂関係と原則 / この判断の位置づけ</span><h2>版の系譜と、 行き着く原則 (照会終端)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-06">この記録が版の系譜のどこに在るかと、 判断が最後に行き着く原則です。 この記録は既存の ADR を置き換えず、 運転手の終端の周に掃除の 1 手を足すだけです。</p></section>
 <div class="chapbody">
 <div data-component="adr-supersession">
 <p class="ss-row"><span class="ss-k">改訂状態</span>current</p>
 <p class="ss-row"><span class="ss-k">置き換える ADR</span>なし (新規)</p>
 <p class="ss-row"><span class="ss-k">置き換えられた</span>なし (現行)</p>
-<p class="ss-row">supersede は無い。 ADR-0035 の同時走行の最大値、 ADR-0038 の器の作業物の置き場 (worktree と退役の退避先を動かさない) はそのまま保ち、 便の終端の周に掃除の 1 手を足すだけである。</p>
+<p class="ss-row">supersede は無い。 ADR-0035 の同時走行の最大値、 ADR-0038 の器の作業物の置き場 (worktree と退役の退避先を動かさない)、 ADR-0025 と ADR-0056 の host-guard の禁じる語列 (git clean -f を含む) はそのまま保ち、 運転手の終端の周に掃除の 1 手を足すだけである。</p>
 </div>
 <div data-component="adr-principle">
-<p class="prin-id">照会終端 — PRIN-REBUILDABLE-IS-NOT-LOSS</p>
-<p class="prin-text">器が戻せない形で失ってはならないのは作り直せない情報で、 作り直せる物の嵩は器が取り戻してよい。</p>
-<p class="prin-note">本 ADR が worktree を丸ごと消す案を退け (N1.2)、 git が無視する file だけを消すと決めたのはこの原則に行き着く (これ以上は遡らない照会終端)。</p>
+<p class="prin-id">照会終端 — PRIN-DELETE-ONLY-WHAT-IS-KNOWN-REBUILDABLE</p>
+<p class="prin-text">器が承認の下で自分で消してよいのは、 作り直せると名で分かっている物だけで、 別の目的の宣言から消す物を推さない。</p>
+<p class="prin-note">本 ADR が無視の規則で消す案 (git clean -X) を退けて閉じた名の列を採り、 worktree を丸ごと消す案を退けたのはこの原則に行き着く (これ以上は遡らない照会終端)。</p>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-brand"><span class="num">07</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg> 用語集 / この文書で使う専門語</span><h2>本文に出てくる専門語のやさしい説明</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-07">本文に出てくる専門語 8 個を、 やさしい言葉で説明します。</p></section>
+<section data-component="chapter-deck-band" class="tint-brand"><span class="num">07</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg> 用語集 / この文書で使う専門語</span><h2>本文に出てくる専門語のやさしい説明</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-07">本文に出てくる専門語 9 個を、 やさしい言葉で説明します。</p></section>
 <div class="chapbody">
 <div data-component="glossary-term-table">
-<div class="grow"><div class="gword">中間生成物<span class="en">build output</span></div><div class="gdef">build や test の実行が worktree の中に作る file と dir (Rust の build の dir、 node の module の dir、 Python の仮想環境の dir など)。 commit した木と toolchain から作り直せる。 本 ADR では、 対象 project の無視の規則が無視と宣言する file と dir を指す。</div></div>
-<div class="grow"><div class="gword">無視の規則<span class="en">ignore rules</span></div><div class="gdef">project の .gitignore などが持つ、 git が追わない file の宣言。 git clean -d -X はこの宣言に当たる file と dir だけを消す。</div></div>
+<div class="grow"><div class="gword">閉じた列<span class="en">closed sweep list</span></div><div class="gdef">器が live でない便の木から消す dir の名の閉じた列 (宣言順): target (Rust)、 node_modules (TypeScript)、 .venv、 __pycache__、 .mypy_cache、 .pytest_cache、 .ruff_cache (Python)、 .expo (React Native + Expo)。 どれも器が対応する言語の build と依存の置き場で、 commit した木と toolchain と lock file から作り直せる。 追跡されている file を持つ dir は消さない。</div></div>
+<div class="grow"><div class="gword">無視の規則<span class="en">ignore rules</span></div><div class="gdef">project の .gitignore などが持つ、 git が追わない file の宣言。 「commit しない」を言うだけで「作り直せる」は言わない。 本 ADR の掃除はこれを読まない。</div></div>
 <div class="grow"><div class="gword">worktree<span class="en">worktree</span></div><div class="gdef">git が 1 つの repo から切る別の作業 dir。 器は便 1 本ごとに対象 repo の .worktrees の下に切り (FR4)、 着地や畳みの後はその下の retired の dir へ move する。</div></div>
-<div class="grow"><div class="gword">退役<span class="en">retirement</span></div><div class="gdef">host・席・口座・便の worktree を運用から外す操作。 可逆な move で行う (N1.2)。 本 ADR の後も便の worktree の退役は git worktree move のまま。</div></div>
-<div class="grow"><div class="gword">live な便<span class="en">live run</span></div><div class="gdef">終端でない便。 終端 = 段が Landed / Failed / Stopped、 または Gated で判定が FAIL、 または Reviewed で判定が PASS でない、 または Intake で運転手の札が無いか所有者が死んでいる。 判定や札を読めない便は測れない便で、 本 ADR の掃除は飛ばす。</div></div>
-<div class="grow"><div class="gword">便の終端の周<span class="en">run-end round</span></div><div class="gdef">便を運ぶ器の process (運転手) が pipe の run・resume・land・stop・retire で段を記帳した後に撃つ dispatch の 1 周 (設計 dispatcher.md §5)。 時計では撃たれない。 本 ADR はこの周に掃除の 1 手を足す。</div></div>
+<div class="grow"><div class="gword">退役<span class="en">retirement</span></div><div class="gdef">host、 席、 口座、 便の worktree を運用から外す操作。 可逆な move で行う (N1.2)。 本 ADR の後も便の worktree の退役は git worktree move のまま。</div></div>
+<div class="grow"><div class="gword">live<span class="en">live</span></div><div class="gdef">便が終端でないこと。 終端 = 段が Landed / Failed / Stopped、 または Gated で判定が FAIL、 または Reviewed で判定が PASS でない、 または Intake で運転手の札が無いか所有者が死んでいる。 器は 1 関数で Some(true) / Some(false) / None (測れない) を返し、 本 ADR の掃除は Some(false) の便だけを触る。</div></div>
+<div class="grow"><div class="gword">運転手の終端の周<span class="en">driver terminal round</span></div><div class="gdef">便を段から段へ運ぶ器の process (運転手) が、 pipe の run、 resume、 land、 stop、 retire の subcommand を終えて段を記帳した後の 1 周 (設計 dispatcher.md §5)。 便の段は終端とは限らない。 時計では撃たれない。 本 ADR は列の 1 周の前に掃除を撃つ。</div></div>
 <div class="grow"><div class="gword">host-guard<span class="en">host-guard</span></div><div class="gdef">口座の設定を読む session が撃つ Bash の command を、 実行の前に rules 行の禁じる語列と照らして断る器の口 (FR56・ADR-0056)。 席と runner には器の plugin の command guard も同じ語列で掛かる。 rules 行 host_guard.git は git clean -f を持ち、 本 ADR の後も変わらない。</div></div>
 <div class="grow"><div class="gword">ENOSPC<span class="en">ENOSPC</span></div><div class="gdef">file を書こうとして disk に空きが無いときに OS が返す error。 2026-09-28 に 3 つの project の便がこれで落ちた。</div></div>
+<div class="grow"><div class="gword">器<span class="en">vessel</span></div><div class="gdef">scribe2 の実行基盤 (plugin と binary と席の運用) の 1 世代。 便を運び、 本 ADR の掃除も持つ。</div></div>
 </div>
 </div>
 </div>
 <footer class="foot" data-component="fidelity-sync-meta"><div class="ft-grid">
 <div class="ft-plain">このページは、大もとの機械データ (正本) から自動で組み立てられています。構造は機械が自動で検査し、内容が元データに忠実かは独立のレビューで確かめます。</div>
-<div data-audience="machine">機械SSoT: <b>ADR-0081-run-worktree-intermediates-are-swept-when-runs-stop-being-live.adr.yaml</b> &middot; 生成: <b>2026-09-28 04:57</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
+<div data-audience="machine">機械SSoT: <b>ADR-0081-run-worktree-intermediates-are-swept-when-runs-stop-being-live.adr.yaml</b> &middot; 生成: <b>2026-09-28 05:15</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
 <div class="tags" data-audience="machine"><span>folio design system</span><span>ADR-pack</span><span>folio engine B1 (instance#2)</span><span>cross-doc 照会</span></div>
 </div></footer>
 <!-- folio:chrome-bottom -->

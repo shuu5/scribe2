@@ -497,30 +497,31 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
   - 未処置を event log だけから数える。閉じた bead の古い便が残り、本 repo の置き場で 12 本中 11 本が雑音になった（台帳を読まない数え方）。
   - 送達の結果を event に記帳する。通知は副作用で、event を足すと replay と schema の面が増える（§19 の「記帳しない」）。
 
-## 30. 便の worktree の中間生成物を、便が live でなくなった周に器が消す — 運転手の終端の周ごとに、live でない便の worktree で git が無視する file を掃除する（契約表の行 ae・[ADR-0081](../../design-intent/decisions/ADR-0081-run-worktree-intermediates-are-swept-when-runs-stop-being-live.html)・裁定 user 2026-09-28T04:45Z / 04:46Z）
+## 30. 便の worktree の build と依存の置き場を、便が live でなくなった周に器が消す — 運転手の終端の周ごとに、live でない便の木から、名が閉じた列に在り追跡されている file を持たない dir を消す（契約表の行 ae・[ADR-0081](../../design-intent/decisions/ADR-0081-run-worktree-intermediates-are-swept-when-runs-stop-being-live.html)・裁定 user 2026-09-28T04:45Z / 04:46Z）
 
-やさしく言うと: 器は便ごとに作業用の木を作り、着地したら退役の置き場へ移すが、build の中間生成物は誰も消さなかった。持ち主の disk が満杯になり、3 つの project の便が落ちた。便が終わった木から、git が無視している file（作り直せる物）だけを器が消す。
+やさしく言うと: 器は便ごとに作業用の木を作り、着地したら退役の置き場へ移すが、build の産物と依存の置き場は誰も消さなかった。持ち主の disk が満杯になり、3 つの project の便が落ちた。便が終わった木から、器が対応する言語の build と依存の置き場（作り直せる物）だけを器が消す。
 
 - 何が起きているか（2026-09-28・verified）:
   - host の root の file system（1.8 TB）が満杯になり、空きが 0 に落ちた。本 repo の `s2-07l.731` の便は、歯が一時 dir を作れず（No space left on device）Gated FAIL になった。非公開の隣の project 2 つでも便が同じ理由で落ちた。
-  - 便の worktree は 1 本 2 GB 前後の build の中間生成物を持つ。退役（設計 [pipeline.md](./pipeline.md) §5.4・可逆な move）は木ごと退役先へ移すだけで、中間生成物は残り続ける。非公開の隣の project で 140 本・597 GB（うち退役済み 117 本の build の dir が 540 GB）、本 repo で 80 GB だった。
-  - 持ち主の承認（裁定 user 2026-09-28T04:45Z）で、退役済みの worktree の build の dir を手で消し、空きは 401 GB に戻った。続けて、中間生成物を掃除しながら進める器の直しを最優先で入れる指示（裁定 user 2026-09-28T04:46Z）。
+  - 便の worktree は 1 本 2 GB 前後の build の置き場を持つ。退役（設計 [pipeline.md](./pipeline.md) §5.4・可逆な move）は木ごと退役先へ移すだけで、build の置き場は残り続ける。非公開の隣の project で 140 本・597 GB（うち退役済み 117 本の build の置き場が 540 GB）、本 repo で 80 GB だった。
+  - 持ち主の承認（裁定 user 2026-09-28T04:45Z）で、退役済みの worktree の build の置き場を手で消し、空きは 401 GB に戻った。続けて、中間生成物を掃除しながら進める器の直しを最優先で入れる指示（裁定 user 2026-09-28T04:46Z）。この指示が、形 1 の閉じた列の dir を器が消すことへの常設の承認（憲法 A1・逐語は `RulingReceived`）である。
 - 現物（main・verified）: `crates/scribe2/src/pipe/cli.rs` の `dispatch` が、終端の subcommand（`TERMINALS`＝run / resume / land / stop / retire）の後に列の 1 周を撃つ。便が live かは `crates/scribe2/src/pipe/cli/state.rs` の `live` の 1 本で判じる（測れない周は `None`）。便の repo は置き場の記録（`crates/scribe2/src/pipe/mod.rs` の `repo_of_run`）から、木の場所は同じ file の `worktree_path` と `crates/scribe2/src/pipe/retire.rs` の `retired_path` から解ける。置き場ごとの lock は `crates/scribe2/src/fleet/store.rs` の `acquire_with` の 1 実装を使える。
 - 形（番号は done と 1:1）:
-  1. **掃除の 1 関数**（行 ae の write-set の `+` の file）: 置き場の replay の全便のうち、`live` が `Some(false)` の便について、置き場の記録から repo を解き、元の場所と退役先のうち在る方の木で `git clean -d -X -f` を撃つ。消すのは git が無視する file だけ（何が中間生成物かは project の無視の規則が決める＝言語に依らない）。追跡されている file・commit・無視されていない未追跡の file は触らない。`-f` は 1 つだけで、無視された dir の下の入れ子の git の repo は残す。`live` が `Some(true)` の便・測れない便（`None`）・repo を解けない便・木が無い便は撃たない（残す側に倒す）。
-  2. **撃つ周**: `cli.rs` の `dispatch` が、終端の subcommand の周に、段の記帳の後・列の 1 周（§5）の前に 1 回撃つ（空きを作ってから次の便を起こす）。要るのは `--state-dir` だけで、`--repo` の無い周も撃つ。冪等なので、最初の終端の周が古い木の溜まりも片付ける。
-  3. **置き場ごとに 1 本**: 置き場の pipe の dir の掃除の lock を `acquire_with` で取ってから撃ち、取れない周（別の運転手が掃除している）は撃たずに stderr に 1 行を残す。第 2 の lock の実装は作らない（C6.3）。
-  4. **残すのは stderr の 1 行だけ**: 1 つ以上の木から 1 つ以上の file を消した周か、git が断った木が在る周だけ、stderr に `sweep: cleaned=<木の本数> failed=<本数>[:<便 id>,…]` を 1 行出す。stdout・event・rc は変えない（掃除の失敗で終端の rc を変えない）。
-  5. 変えないもの: 退役の move（N1.2）・`WorktreeCheck` の判定・`live` の判定・列の判定と起こす契機・rules 行・event の kind。席の手が打つ `git clean -f` を断る rules 行 `host_guard.git` も変えない（席の手は対象を絞れず、無視されていない未追跡の仕事も消す。器の掃除は無視された file と live でない便の木に閉じた、器の子 process の中の操作である）。
-- 歯（接頭辞 `pipe_sweep_`・`crates/scribe2-boundary/tests/e2e/pipe/stop.rs`・`grep -rn "pipe_sweep" crates/` は 0 件・2026-09-28）: toy repo に無視の規則（`out/`）を commit し、置き場に記録した便ごとに木を作って `out/` の下に file を置き、`pipe stop` の終端を撃つ。
-  - (a) `Stopped` の便の元の場所の木から `out/` が消え、追跡されている file と無視されていない未追跡の file は残り、stderr が `sweep: cleaned=` で始まる 1 行を持つ。終端の後も live のままの便（`Implemented`）の木の `out/` は残る。base は `out/` が残るので RED（機能不在）。
-  - (b) `Landed` の便の退役先の木から `out/` の file が消え、`out/` の下の入れ子の git の repo は残る。base は残るので RED。
+  1. **消す dir の閉じた列**（器が対応する言語の build と依存の置き場・宣言順・const の slice）: `target`（Rust）・`node_modules`（TypeScript）・`.venv`・`__pycache__`・`.mypy_cache`・`.pytest_cache`・`.ruff_cache`（Python）・`.expo`（React Native + Expo）。どれも commit した木と toolchain（と lock file）から作り直せる。列に無い dir と file・無視の規則・host の個人設定の除外は読まない（`git clean` は撃たない）。
+  2. **掃除の 1 関数**（行 ae の write-set の `+` の file）: 置き場の replay の全便のうち、`live` が `Some(false)` の便について、置き場の記録から repo を解き、元の場所と退役先のうち在る方の木を歩く（`.git` には降りない）。名が形 1 の列に在る dir のうち、追跡されている file を 1 つも持たないもの（その木の `git ls-files` の 1 回で判じる）を std の `remove_dir_all` で消し、その下へは降りない。`live` が `Some(true)` の便・測れない便（`None`）・repo を解けない便・木が無い便は撃たない（残す側に倒す）。`git ls-files` を撃てない木は消さずに失敗に数える。
+  3. **撃つ周**: `cli.rs` の `dispatch` が、終端の subcommand の周に、段の記帳の後・列の 1 周（§5）の前に 1 回撃つ（空きを作ってから次の便を起こす）。要るのは `--state-dir` だけで、`--repo` の無い周も撃つ。冪等で、終端の周ごとに置き場の全便を見るので、器の入れ替えの後の最初の終端の周が古い木の溜まりも片付ける。
+  4. **置き場ごとに 1 本**: 置き場の pipe の dir の掃除の lock を `acquire_with` で取ってから撃ち、取れない周（別の運転手が掃除している）は撃たずに stderr に 1 行を残す。第 2 の lock の実装は作らない（C6.3）。
+  5. **残すのは stderr の 1 行だけ**: 1 つ以上の dir を消した周か、失敗した木が在る周か、lock を取れない周だけ、stderr に `sweep: removed=<消した dir の数> runs=<dir を消した木の数> failed=<本数>[:<便 id>,…]`（lock の周は `sweep: skipped=lock`）を 1 行出す。stdout・event・rc は変えない（掃除の失敗で終端の rc を変えない）。
+  6. 変えないもの: 退役の move（N1.2）・`WorktreeCheck` の判定・`live` の判定・列の判定と起こす契機・rules 行・event の kind。席の手が打つ `git clean -f` を断る rules 行 `host_guard.git` も変えない（掃除は `git clean` を撃たない）。
+- 歯（接頭辞 `pipe_sweep_`・`crates/scribe2-boundary/tests/e2e/pipe/stop.rs`・`grep -rn "pipe_sweep" crates/` は 0 件・2026-09-28）: toy repo の置き場に記録した便ごとに木を作り、`pipe stop` の終端を撃つ。
+  - (a) `Stopped` の便の元の場所の木から、追跡されていない `target/` と `node_modules/` が消える。追跡されている file を持つ `target` の名の dir（例 `docs/target/keep.md`）・列に無い未追跡の dir（`out/`）・無視の規則に当たる列に無い file は残り、stderr が `sweep: removed=2 runs=1` で始まる行を持つ。終端の後も live のままの便（`Implemented`）の木の `target/` は残る。base は消えないので RED（機能不在）。
+  - (b) `Landed` の便の退役先の木の `target/` が、下に入れ子の `.git` を持っていても消える。base は残るので RED。
 - 限界:
-  - 無視の規則に build の dir を書いていない project は、何も消えない。
-  - Gated の FAIL の便を regate で撃ち直す周は、build を最初からやり直す（数分・正しさは変わらない）。落ちた便の木で歯を撃ち直して調べる周も同じ。
-  - 無視された dir の下の入れ子の git の repo（歯の fixture 等）は残る。
+  - 列に無い build の置き場（`dist`・`build` のような汎い名、言語の外の道具の cache）は消さない。器が対応する言語を足す便は、同じ ADR の型で列を足す。
+  - Gated の FAIL の便を regate で撃ち直す周と、`Stopped` の便を resume で起こし直す周は、build と依存の取り込みを最初からやり直す（数分・正しさは変わらない）。落ちた便の木で歯を撃ち直して調べる周も同じ。
+  - live の判定と掃除の間に、同じ便が regate や起こし直しで live に戻る競合は、lock の外の操作（regate・resume）とは排他でない。戻った便は消えた置き場を作り直す。
   - 空きが少ない周に起こすのを止める遮断器（§18 の健康の遮断器に disk の空きを足す形）は持たない。閾値の rules 行は持ち主の裁定が要るので、次の行の候補にする。
-- 却下（[ADR-0081](../../design-intent/decisions/ADR-0081-run-worktree-intermediates-are-swept-when-runs-stop-being-live.html) の比較と同じ）: 今のまま人が片付ける／repo ごとに build の dir を 1 つ共有する（言語に依り、並んだ便の build が 1 つの lock で順に待つ）／退役先の木ごと消す（N1.2 の可逆な退役を破る）／project ごとに消す dir を宣言に書く（跨版の新しい key・無視の規則が既に宣言している）。
+- 却下（[ADR-0081](../../design-intent/decisions/ADR-0081-run-worktree-intermediates-are-swept-when-runs-stop-being-live.html) の比較と同じ）: 今のまま人が片付ける／`git clean -d -X -f` で無視された file を全部消す（無視の規則は鍵・手書きの script・local の設定のような作り直せない物も持ち、host の個人設定の除外も読む）／退役先の木だけを掃除する（regate の手戻りは無いが、退役しない終端の木が溜まり続ける）／repo ごとに build の置き場を 1 つ共有する（言語に依り、並んだ便の build が 1 つの lock で順に待つ）／退役先の木ごと消す（N1.2 の可逆な退役を破る）／project ごとに消す dir を宣言に書く（跨版の新しい key・書かない project では効かない）。
 
 <!-- contracts:begin -->
 schema = 1
@@ -881,12 +882,13 @@ done = "(1) notices が同じ周の列の結果の候補のうち理由が Settl
 
 [[contract]]
 id = "ae"
-title = "便の worktree の中間生成物を、便が live でなくなった周に器が消す — 運転手の終端の周ごとに、置き場の全便のうち live でない便の木（元の場所か退役先）で git clean -d -X -f を撃ち、git が無視する file だけを消す（追跡・無視されない未追跡・入れ子の repo・live な便は触らない・置き場ごとの lock・stderr に 1 行・ADR-0081・裁定 user 2026-09-28T04:45Z / 04:46Z）"
+title = "便の worktree の build と依存の置き場を、便が live でなくなった周に器が消す — 運転手の終端の周ごとに、置き場の全便のうち live でない便の木（元の場所か退役先）を歩き、名が閉じた 8 つの列（target・node_modules・.venv・__pycache__・.mypy_cache・.pytest_cache・.ruff_cache・.expo）に在り追跡されている file を持たない dir を remove_dir_all で消す（git clean は撃たない・live と測れない便は触らない・置き場ごとの lock・stderr に 1 行・ADR-0081・裁定 user 2026-09-28T04:45Z / 04:46Z）"
 req = ["FR68", "FR30"]
 section = "30"
 write-set = ["+crates/scribe2/src/pipe/sweep.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2-boundary/tests/e2e/pipe/stop.rs"]
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_sweep_"]
 size = "S"
-growth = ["crates/scribe2/src/pipe/sweep.rs:110", "crates/scribe2/src/pipe/mod.rs:2", "crates/scribe2/src/pipe/cli.rs:6"]
-done = "(1) 掃除の 1 関数が置き場の replay の全便のうち live が Some(false) の便について置き場の記録から repo を解き、元の場所と退役先のうち在る方の木で git clean -d -X -f を撃ち、live が Some(true) か None の便・repo を解けない便・木が無い便は撃たない (2) cli.rs の dispatch が終端の subcommand の周に段の記帳の後・列の 1 周の前に 1 回撃ち、--repo の無い周も撃つ (3) 置き場の pipe の dir の掃除の lock を acquire_with で取り、取れない周は撃たずに stderr に 1 行 (4) 1 つ以上の木から file を消した周か git が断った木が在る周だけ stderr に sweep: cleaned=<n> failed=<m>[:<便 id>,…] を 1 行出し、stdout・event・rc は変えない (5) 退役の move・WorktreeCheck・live の判定・列の判定・rules 行・event の kind は変わらない 歯: pipe_sweep_ の (a) 無視の規則 out/ を持つ toy repo で Stopped の便の元の場所の木の out/ が pipe stop の終端の後に消え、追跡されている file と無視されない未追跡の file は残り、stderr が sweep: cleaned= で始まる 1 行を持ち、終端の後も live のままの便の木の out/ は残る (b) Landed の便の退役先の木の out/ の file が消え、out/ の下の入れ子の git の repo は残る・base は out/ が残るので RED"
+growth = ["crates/scribe2/src/pipe/sweep.rs:140", "crates/scribe2/src/pipe/mod.rs:2", "crates/scribe2/src/pipe/cli.rs:6"]
+done = "(1) 消す dir の名は target・node_modules・.venv・__pycache__・.mypy_cache・.pytest_cache・.ruff_cache・.expo の閉じた 8 つの const の slice で、無視の規則と host の除外は読まず git clean は撃たない (2) 掃除の 1 関数が置き場の replay の全便のうち live が Some(false) の便について置き場の記録から repo を解き、元の場所と退役先のうち在る方の木を .git に降りずに歩き、名が列に在り追跡されている file を持たない dir（その木の git ls-files の 1 回で判じる）を remove_dir_all で消してその下へ降りず、live が Some(true) か None の便・repo を解けない便・木が無い便は撃たず、git ls-files を撃てない木は消さずに失敗に数える (3) cli.rs の dispatch が終端の subcommand の周に段の記帳の後・列の 1 周の前に 1 回撃ち、--repo の無い周も撃つ (4) 置き場の pipe の dir の掃除の lock を acquire_with で取り、取れない周は撃たない (5) dir を消した周・失敗した木が在る周・lock を取れない周だけ stderr に sweep: removed=<n> runs=<k> failed=<m>[:<便 id>,…] か sweep: skipped=lock を 1 行出し、stdout・event・rc は変えない (6) 退役の move・WorktreeCheck・live の判定・列の判定・rules 行・event の kind・host_guard.git は変わらない 歯: pipe_sweep_ の (a) Stopped の便の元の場所の木から追跡されていない target/ と node_modules/ が pipe stop の終端の後に消え、追跡されている file を持つ target の名の dir・列に無い未追跡の dir・無視の規則に当たる列に無い file は残り、stderr が sweep: removed=2 runs=1 で始まる行を持ち、終端の後も live のままの便の木の target/ は残る (b) Landed の便の退役先の木の target/ が下に入れ子の .git を持っていても消える・base は消えないので RED"
+
 <!-- contracts:end -->
