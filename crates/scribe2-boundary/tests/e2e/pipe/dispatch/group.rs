@@ -778,7 +778,54 @@ fn pipe_dispatch_group_grace_continuation_round_reads_each_seat_record() {
     clean(&[&place.repo, &place.state]);
 }
 
-/// (a) 起こす席の打刻の最終行に会話 id が在る → 起動行の末尾が `--resume <sid> '<NAME> seat: relaunch …'`（1 つずつ・a2 の口座の
+/// 席 `target` の打刻 file の末尾に Stop の Idle を 1 行足す（ts は今・契約の字面から組む＝合図の turn が終わった席）。
+fn saved_stop(place: &GroupPlace, target: &str) {
+    let path = place.state.join("seat").join(target.replace(':', "_")).join("state.jsonl");
+    let line = format!("{{\"schema\":1,\"state\":\"idle\",\"event\":\"Stop\",\"ts\":{},\"sid\":\"\"}}\n", grace_now());
+    let body = fs::read_to_string(&path).unwrap_or_default();
+    fs::write(&path, body + &line).unwrap_or_default();
+}
+
+/// (h) 続きの周は合図に応え終えた席にだけ猶予を待たずに `/exit`（seat-heartbeat.md §18 形 2）: 同じ周の 2 席に `at` = 今 − 100 の
+/// 記録を置き、合図の Busy の後に Stop の Idle を足した席へ `/exit` 1・最終行が Busy の席へ 0（base ではどちらも 0 ＝ RED）。どちらも
+/// 起こさず保留を重ねない。
+#[test]
+fn pipe_dispatch_group_saved_continuation_round_exits_only_the_seat_whose_turn_ended() {
+    let place = grace_place(&[0, 1]);
+    let ((_, one), (_, two)) = (GROUP_ANCHORS[0], GROUP_ANCHORS[1]);
+    let (ts, now) = (grace_ts(&place), grace_now());
+    grace_signal_put(&place, one, ("a2", &ts), now - 100);
+    grace_signal_put(&place, two, ("a2", &ts), now - 100);
+    saved_stop(&place, one);
+    let out = group_terminal(&place, "r-group-2");
+    let sends = (exit_sends(&place.state, one), exit_sends(&place.state, two));
+    assert_eq!(sends, (1, 0), "応え終えた席は 1・走っている席は 0（{}）: {:?}", told(&out), group_sends(&place.state));
+    assert_eq!(launched_lines(&place.state, one).len() + launched_lines(&place.state, two).len(), 0, "起こさない");
+    assert_eq!(move_counts(&place.state), (1, 0, 2), "保留 2 のまま・判定を繰り返さない");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (i) 群の段の合図の記録の `at` は送る前の時刻（seat-heartbeat.md §18 形 7）: 合図の Enter で Busy を打った後に 2 秒眠る席（`slow`）
+/// が shell に戻らず（`stuck`）保留になった後、歯が Stop の Idle を足して続きの周を撃つと、その席へ `/exit` 1（猶予 1800 の内側・
+/// base では印の関数が無いので 0 ＝ RED・送達の後の時刻で書くと `at` が Busy より後になり 0）。
+#[test]
+fn pipe_dispatch_group_saved_signal_at_is_taken_before_the_send() {
+    let place = move_place(&[("a1", 90, 10, 10), ("a2", 10, 10, 10)], &["a1", "a2"], "a1");
+    grace_put(&place, GROUP_GRACE_S, 1800);
+    let (_, two) = GROUP_ANCHORS[1];
+    put_spy(&place.state, "stuck", two, "");
+    put_spy(&place.state, "slow", two, "");
+    let out = group_terminal(&place, "r-group-1");
+    assert_eq!(move_counts(&place.state), (1, 0, 1), "移動の周は承認 1・保留 1（{}）", told(&out));
+    assert_eq!(exit_sends(&place.state, two), 0, "移動の周は /exit 0");
+    saved_stop(&place, two);
+    let out = group_terminal(&place, "r-group-2");
+    assert_eq!(exit_sends(&place.state, two), 1, "応え終えた席へ /exit 1（{}）: {:?}", told(&out), group_sends(&place.state));
+    assert_eq!(launched_lines(&place.state, two).len(), 0, "起こさない");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (a) 起こす席の打刻の最終行に会話 id が在る →起動行の末尾が `--resume <sid> '<NAME> seat: relaunch …'`（1 つずつ・a2 の口座の
 /// まま）。base は末尾が `--resume <sid>` で初手が無い（RED）。
 #[test]
 fn pipe_dispatch_group_carry_relaunch_resumes_the_stamped_session() {

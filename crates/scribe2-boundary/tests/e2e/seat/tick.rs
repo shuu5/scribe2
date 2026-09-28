@@ -918,6 +918,85 @@ fn seat_tick_grace_missing_row_is_no_rule() {
     assert!(tick_keys(&place).is_empty(), "0 key");
 }
 
+/// 合図の Busy（`at` + 2）。
+const SAVED_BUSY: (&str, &str, i64) = ("busy", "UserPromptSubmit", 2);
+/// 合図の turn の終わり（`at` + 50 の Stop の Idle）。
+const SAVED_STOP: (&str, &str, i64) = ("idle", "Stop", 50);
+
+/// (a) 同じ移動の記録で `at` = 今 − 100・打刻が Busy（at + 2）と Stop の Idle（at + 50）→ 猶予の内側でも `move=exit`・`/exit` 1 回・
+/// 合図の記録は不変（base では `move=wait` ＝ RED）。
+#[test]
+fn seat_tick_saved_turn_end_after_the_signal_sends_the_exit_early() {
+    let root = tmp();
+    let place = saved_place(&root, 100, Some(&[SAVED_BUSY, SAVED_STOP]));
+    let body = fs::read_to_string(grace_signal(&place)).ok();
+    evacuate_assert_exit(&place);
+    assert_eq!(fs::read_to_string(grace_signal(&place)).ok(), body, "合図の記録は書き換えない");
+    assert!(!move_groups_dir(&root).join("lock").exists(), "lock は残らない");
+}
+
+/// (b) 最終行が Busy（at + 2 の Busy だけ＝合図の turn が走っている）→ `move=wait`・0 key。
+#[test]
+fn seat_tick_saved_busy_last_line_waits() {
+    let root = tmp();
+    let place = saved_place(&root, 100, Some(&[SAVED_BUSY]));
+    move_assert_quiet(&place, &move_line("wait", "-", "-"));
+}
+
+/// (c) 打刻が `at` より前の Stop の Idle だけ（合図に応えていない）→ `move=wait`・0 key。
+#[test]
+fn seat_tick_saved_stop_before_the_signal_waits() {
+    let root = tmp();
+    let place = saved_place(&root, 100, Some(&[("idle", "Stop", -10)]));
+    move_assert_quiet(&place, &move_line("wait", "-", "-"));
+}
+
+/// (d) `at` − 5 の Busy と `at` + 20 の Stop の Idle（合図の前から走っていた turn の終わり）→ `move=wait`・0 key。
+#[test]
+fn seat_tick_saved_turn_started_before_the_signal_waits() {
+    let root = tmp();
+    let place = saved_place(&root, 100, Some(&[("busy", "UserPromptSubmit", -5), ("idle", "Stop", 20)]));
+    move_assert_quiet(&place, &move_line("wait", "-", "-"));
+}
+
+/// (e) `at` + 2 の Busy と `at` + 50 の SessionStart の Idle（turn の途中の圧縮）→ `move=wait`・0 key。
+#[test]
+fn seat_tick_saved_session_start_last_line_waits() {
+    let root = tmp();
+    let place = saved_place(&root, 100, Some(&[SAVED_BUSY, ("idle", "SessionStart", 50)]));
+    move_assert_quiet(&place, &move_line("wait", "-", "-"));
+}
+
+/// (f) 打刻の file が無い席は猶予の上限で `/exit`: `at` = 今 − 301 は `move=exit`・`at` = 今 − 100 は `move=wait`（打刻は `/exit` を
+/// 早めるためにだけ読む・消費は打刻が無いので `unknown:state-missing`）。
+#[test]
+fn seat_tick_saved_missing_stamps_fall_back_to_the_grace_cap() {
+    let root = tmp();
+    let place = saved_place(&root, GRACE_S + 1, None);
+    let out = move_run(&place);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(stdout_of(&out), move_line("exit", "unknown:state-missing", "-"), "上限を越えた周は move=exit");
+    assert_eq!(move_keys(&place), [format!("send-keys -t {TICK_TARGET} -l /exit"), format!("send-keys -t {TICK_TARGET} Enter")], "/exit 1 行");
+    let root = tmp();
+    let place = saved_place(&root, 100, None);
+    move_assert_quiet(&place, &move_line("wait", "-", "-"));
+}
+
+/// (g) 記録の無い席へ送る合図の text は形 5 の字面（残り 300 秒）。
+#[test]
+fn seat_tick_saved_signal_text_names_the_turn_end_and_the_cap() {
+    let root = tmp();
+    let place = move_place(&root, "state", MOVE_ANCHOR);
+    move_record(&root, MOVE_B);
+    grace_assert_signal(&place, MOVE_TS);
+    let want = format!(
+        "send-keys -t {TICK_TARGET} -l {NAME} group: evacuate group={MOVE_GROUP} to={MOVE_B} — 新しい subagent を起こさず、走っている \
+         subagent は /exit で落ちる前提で依頼の要旨と出力 file の path を台帳の notes に書き、作業記憶を台帳と git に残して turn を\
+         終える（turn が終わると器が /exit を送る・遅くとも 300 秒の後）"
+    );
+    assert!(move_keys(&place).contains(&want), "形 5 の字面・残り 300 秒: {:?}", move_keys(&place));
+}
+
 /// (h) tick の 1 周の後に `tick-last` が 1 行在り、ts は撃った時刻・decision / reason は判定行と同じ（noop と inject の 2 周）
 /// （base では file 無し ＝ RED）。
 #[test]

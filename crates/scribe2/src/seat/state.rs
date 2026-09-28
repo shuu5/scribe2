@@ -389,4 +389,12 @@ mod tests {
         assert!(body.starts_with(&format!("{} seat: relaunch", crate::name::NAME)), "先頭の目印: {body}");
         assert!(!body.contains('\'') && !body.contains('\n') && !body.contains('\r'), "単引用と改行が無い: {body}");
     }
+
+    /// (k) 初手の文面は移動で落ちた subagent の起こし直しを名指し、単引用と改行を持たない（seat-heartbeat.md §18 形 6）。
+    #[test]
+    fn seat_relaunch_names_dropped_subagents() {
+        let body = crate::seat::tick::relaunch_signal();
+        assert!(body.contains("移動で落ちた subagent は台帳に書いた要旨と path から起こし直す"), "落ちた subagent の起こし直し: {body}");
+        assert!(!body.contains('\'') && !body.contains('\n') && !body.contains('\r'), "単引用と改行が無い: {body}");
+    }
 }

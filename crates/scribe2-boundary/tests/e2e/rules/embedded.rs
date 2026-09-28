@@ -519,8 +519,8 @@ fn rules_embedded_manifest_declares_tick_kinds_in_all_with_int_and_list_shapes()
     }
 }
 
-/// 退避の猶予の行（設計 seat-heartbeat.md §13 形 1・ADR-0071・`s2-07l.651`）が埋め込み manifest に id / kind / 形 Int / 値 1800 /
-/// enabled / 裁定 id / 裁定日で 1 本在り、kind は `ALL` の `SeatPointerLadderS` の直後で字面から引け、形は Int だけ（base では
+/// 退避の猶予の行（設計 seat-heartbeat.md §13 形 1 / §18 形 4・ADR-0071 / ADR-0079・`s2-07l.651` / `s2-07l.729`）が埋め込み
+/// manifest に id / kind / 形 Int / 値 300 / enabled / 裁定 id / 裁定日で 1 本在り、kind は `ALL` の `SeatPointerLadderS` の直後で字面から引け、形は Int だけ（base では
 /// 行も kind も無い ＝ RED）。
 #[test]
 fn rules_embedded_manifest_declares_tick_move_grace_row_after_the_ladder() {
@@ -528,10 +528,10 @@ fn rules_embedded_manifest_declares_tick_move_grace_row_after_the_ladder() {
     let id = "seat.move_grace_s";
     let row = manifest.get(id).unwrap_or_else(|| panic!("{id} の行が在る"));
     assert_eq!((row.kind, row.kind.shape()), (RuleKind::SeatMoveGraceS, ValueShape::Int), "{id} の kind と形");
-    assert_eq!(row.value, RuleValue::Int(1800), "{id} の値（30 分）");
+    assert_eq!(row.value, RuleValue::Int(300), "{id} の値（上限 5 分・seat-heartbeat.md §18 形 4）");
     assert!(row.enabled, "{id} は既定で効く");
-    assert_eq!((row.ruling.as_str(), row.ruled_at.as_str()), ("user 2026-09-26T06:29Z", "2026-09-26"), "{id} の裁定 id と裁定日");
-    assert_eq!(int_row(&manifest, id), Ok(1800), "{id} を整数の読み手で引ける");
+    assert_eq!((row.ruling.as_str(), row.ruled_at.as_str()), ("user 2026-09-28T01:44Z", "2026-09-28"), "{id} の裁定 id と裁定日");
+    assert_eq!(int_row(&manifest, id), Ok(300), "{id} を整数の読み手で引ける");
     assert_eq!(manifest.rows().iter().filter(|found| found.kind == RuleKind::SeatMoveGraceS).count(), 1, "kind の行は 1 本");
     let at = ALL.iter().position(|kind| *kind == RuleKind::SeatPointerLadderS).expect("SeatPointerLadderS は ALL に在る");
     assert_eq!(ALL.get(at + 1), Some(&RuleKind::SeatMoveGraceS), "kind は SeatPointerLadderS の直後");
