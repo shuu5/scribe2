@@ -938,6 +938,18 @@ size = "S"
 growth = ["crates/scribe2/src/pipe/land/finish.rs:30", "crates/scribe2/src/pipe/land.rs:10"]
 done = "(1) land_train が列の最後の便（main を進めた先端の commit を持つ便）の外の便に『push の先端でない』を閉じた 2 値で finish から terminal へ運び、その 1 か所だけが先端を知る (2) 先端でない便の terminal は push を今どおり撃って terminal:push:<remote> を記し、CI の照合（唯一の待ちと ci_now）を 1 回も撃たずに terminal:ci:unmeasurable を記して止まり（close しない・stdout の terminal=ci:unmeasurable）、先端の便・単独の着地・--terminal-only の終端は push → CI → close の今の 3 段のまま (3) 終端の 7 値・event の詞・ci_now の判定・pipe.ci_wait_s と pipe.ci_poll_s の値・列の記帳の順（後続 → 先頭）は変わらない 歯: pipe_train_terminal_ が、偽 remote と常に success を返す偽 CI と偽 bd を持つ 3 本の列の着地で、先端の便の Landed の後ろが push・ci:success・close:ok の 3 件、先端でない 2 本の Landed の後ろが push と ci:unmeasurable の 2 件で close を持たず、偽 CI の呼び出し（ci_call_count）が 2 回（先端の便の待ちの最初の 1 回と読み直しの 1 回）、偽 remote の main が先端の sha を指すことを測り、base では 3 本とも CI を照合して close する（偽 CI の呼び出し 6 回）ので RED"
 
+[[contract]]
+id = "be"
+title = "列で着地した便のうち push の先端でない便は、自分の commit を祖先に持つ先端の commit の CI の結果で照合して close する — PushTip::Behind が先端の sha を持ち、祖先の周だけ先端の sha で CI を照合し、close の reason に tip= を持つ（FR50・祖先でない周と --terminal-only は不変・memo s2-07l.688）"
+req = ["FR50"]
+section = "53"
+touches = ["crate::pipe::land::finish::land_train", "crate::pipe::land::finish::terminal"]
+write-set = ["crates/scribe2/src/pipe/land/finish.rs", "crates/scribe2/src/pipe/land.rs", "crates/scribe2-boundary/tests/e2e/pipe/land/retire.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_train_tip_close_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_train_terminal_"]
+size = "S"
+growth = ["crates/scribe2/src/pipe/land/finish.rs:35", "crates/scribe2/src/pipe/land.rs:5"]
+done = "(1) PushTip::Behind が先端の commit の sha を持ち、先端を知るのは land_train の 1 か所のまま (2) 先端でない便の終端は push の後に自分の sha が先端の祖先かを測り、祖先でない周と測れない周は CI を照合せず terminal:ci:unmeasurable で止まり（close しない）、祖先の周は CI の照合（待ちと ci_now）を先端の sha で撃つ (3) success の周は close し reason が landed <sha> ci=success tip=<先端>、failure と unmeasurable は close しない (4) 終端の 7 値・event の詞・ci_now の判定・pipe.ci_wait_s と pipe.ci_poll_s の値・列の記帳の順・先端の便と単独の着地の close の reason・--terminal-only の終端は変わらない 歯: 既存の pipe_train_terminal_only_the_tip_checks_ci_and_closes を接頭辞 pipe_train_terminal_ のまま名と期待を書き直し、常に success の偽 CI の 3 本の列の着地で 3 本とも Landed の後ろが push・ci:success・close:ok の 3 件、偽 CI の呼び出しが 6 回で最後に渡った sha が先端の sha であることを測る・pipe_train_tip_close_ の 1 本の fn の 1 周目が偽 bd の最後の close の reason に tip=<先端の sha> を、2 周目が偽 CI の failure で 3 本とも close しないことを測る・base は先端でない便が close せず止まるので RED"
+
 <!-- contracts:end -->
 
 
@@ -1260,9 +1272,29 @@ done = "(1) land_train が列の最後の便（main を進めた先端の commit
   - 先端の便の `Landed` の後ろが `terminal:push:fake`・`terminal:ci:success`・`terminal:close:ok` の 3 件で、先端でない 2 本の `Landed` の後ろは `terminal:push:fake` と `terminal:ci:unmeasurable` の 2 件で close を持たない。
   - 偽 CI の呼び出しの回数（`ci_call_count`）が 2（先端の便の待ちの最初の 1 回と読み直しの 1 回だけ）、偽 remote の main が先端の sha を指す。
   - base では 3 本とも CI を照合して close する（偽 CI の呼び出し 6 回＝3 本 × 2 回）ので RED（機能不在）。
-- 限界: 先端でない便は close されず、台帳の close は手のまま（先端の CI が success で、便の sha が先端の祖先であることを測ってから閉じる）。先端の CI の結果を先端でない便の close に使うには、FR50 の「着地 commit の CI の結果を commit id で照合し」を改める要件の改訂が要る（user の `/folio-architect`・本行の外）。
+- 限界: 先端でない便は close されず、台帳の close は手のまま（先端の CI が success で、便の sha が先端の祖先であることを測ってから閉じる）。先端の CI の結果を先端でない便の close に使う形は、FR50 の改訂の後に §53（行 be）が持つ。
 - 却下:
-  - 先端の CI の結果で先端でない便も close する。FR50 の照合の対象（着地 commit の CI）を変えるので、要件の改訂が先に要る（上の限界）。
+  - 先端の CI の結果で先端でない便も close する。当時の FR50 の照合の対象（着地 commit の CI）を変えるので、要件の改訂が先に要った（改訂の後の形は §53）。
   - 列の便ごとに自分の sha を先端として押し直す。便ごとに CI が走り、列の終端が CI の本数ぶん順に待つ（列で主実測を 1 回に畳んだ意味が減る）。
   - `pipe.ci_wait_s` を短くする。先端の便の CI も上限で打ち切られる（値は user の裁定）。
   - 最初の照合で run が無ければ待たない。forge の CLI は走っている run と run が無い周を同じ「未完了」で返す（`ci_now` の `None`）ので、push の直後の先端の便まで待たなくなる。
+
+## 53. 列で着地した便のうち push の先端でない便は、自分の commit を祖先に持つ先端の commit の CI の結果で照合して close する（FR50・契約表の行 be・memo `s2-07l.688`）
+
+- 何が起きているか（2026-09-28）:
+  - verified: §52（行 bd）の着地の後、先端でない便は CI を照合せず `terminal:ci:unmeasurable` で止まり、close は手で撃たれている。非公開の隣の project で 2026-09-27T21:30Z 以後に 16 件あり、16 件とも「着地の commit は押した先端の祖先」を確かめてから手で閉じた（本 repo は 0 件）。
+  - verified: FR50 は「候補の木に並べた順に着地し push の先端でない便は、自分の着地 commit を含む push の先端の commit の CI の結果で照合し、note に先端の commit id も持つ」を持つ（§52 の限界が求めた要件の改訂）。
+- 現物（main・verified）: `crates/scribe2/src/pipe/land/finish.rs` の `PushTip` は `Tip` / `Behind` の 2 値で、`Behind` は先端の sha を持たない。先端を知るのは `land_train` の 1 か所（列の最後の便の外に `Landing::Behind` を作る周）。`--terminal-only`（`crates/scribe2/src/pipe/cli/step.rs`）は常に `Tip` を渡す。
+- 形（番号は done と 1:1）:
+  1. `PushTip::Behind` が先端の commit の sha を持つ。先端を知るのは今どおり `land_train` の 1 か所。
+  2. 先端でない便の終端は、push の後に自分の sha が先端の祖先か（`git merge-base --is-ancestor <sha> <先端>`）を測る。祖先でない周と測れない周は今どおり CI を照合せず `terminal:ci:unmeasurable` で止まる（close しない・fail-closed）。祖先の周は、CI の照合（待ちと `ci_now`）を先端の sha で撃つ。
+  3. success の周は close し、reason は `landed <sha> ci=success tip=<先端>`（note に先端の id を持つ・FR50）。failure と unmeasurable は今どおり close しない。
+  4. 変えないもの: 終端の 7 値・event の詞・`ci_now` の判定・rules 行 `pipe.ci_wait_s` と `pipe.ci_poll_s` の値・列の記帳の順（後続 → 先頭）・先端の便と単独の着地の close の reason（`ci=success` で終わる）・`--terminal-only` の終端（`Tip` のまま）。
+- 歯（`crates/scribe2-boundary/tests/e2e/pipe/land/retire.rs`・親の `fake_terminal` と列の helper を使う・`grep -rn "pipe_train_tip_close" crates/` は 0 件・2026-09-28）:
+  - 既存の `pipe_train_terminal_only_the_tip_checks_ci_and_closes` は期待が反転する。同じ PR で、接頭辞 `pipe_train_terminal_` のまま名と期待を書き直す（行 bd の verify 行を空にしない）: 常に success を返す偽 CI の 3 本の列の着地で、3 本とも `Landed` の後ろが `terminal:push:fake`・`terminal:ci:success`・`terminal:close:ok` の 3 件、偽 CI の呼び出しは 6 回で、最後に渡った sha が先端の sha。
+  - `pipe_train_tip_close_`（1 本の fn の 2 周）: 1 周目は常に success の偽 CI の列の着地で、偽 bd の最後の close（列の先頭の便）の reason が `tip=<先端の sha>` を持つ。2 周目は偽 CI が failure を返す列の着地で、3 本とも close しない。
+  - base では先端でない便が close せずに止まるので RED（機能不在）。
+- 限界: `--terminal-only` で先端でない便の終端を手で撃ち直す周は、今どおり自分の sha で照合する（上限まで待って `ci:unmeasurable`）。手の撃ち直しも先端で照合するには、anchor の main を先端とする判定が要る（次の行の候補）。
+- 却下:
+  - 先端を先に終端させ、その結果を先端でない便へ写す。列の記帳の順（後続 → 先頭）を変え、終端の失敗の帰属が便ごとに取れなくなる。
+  - 便ごとに自分の sha を先端として押し直す。便ごとに CI が走り、列の終端が CI の本数ぶん順に待つ。

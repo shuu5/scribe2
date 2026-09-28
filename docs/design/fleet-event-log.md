@@ -94,6 +94,26 @@ C3 は「1 つの DB file（host 列）」と言う。MVP はそれを **append-
 - 歯（`fleet_ruling_` 接頭辞・`tests/e2e/fleet.rs` と `tests/e2e/seat/ruling.rs`〔新規〕・`prop.rs` の生成器は variant を足すだけ）: 対話面の役割の登録 row を持つ target で `seat ruling add` が `RulingReceived` を 1 件（`actor=human`・`run` 無し・逐語が detail に逐語で）書く／逐語が空なら書かず rc 1／登録 row の役割が R-C7-1 の値でない target は `not-dialogue-surface` で書かない／`fleet record --kind RulingReceived` は断る／`pipe report` の `rulings=` が数え `human_events_other_than_approval` が増えない／doctor が manifest の `user <ts>` 行に対して同じ分の event の有無で matched / unmatched を出す／外形 snapshot（seat usage・doctor・pipe）が更新される。
 - 却下: ADR-0037 §3（写しは持たない）。
 
+## 10. 追記は 1 記録を 1 回の write で撃ち、改行で終わらない末尾を先に切り離す（契約表の行 d・memo `s2-07l.711`）
+
+- 何が起きているか（2026-09-28）:
+  - verified: `crates/scribe2/src/fleet/store.rs` の `write_line` は `writeln!` で書く。fmt の adapter は本文と改行を別の write に分けうる。本文の後・改行の前に書き手が死ぬと、file は改行の無い完全な記録で終わり、次の書き手の記録が同じ行に続く。その 1 行は 2 つの記録を持つ malformed になり、`read_all` は Err を返す（NFR4・fail-closed）。置き場の replay の全部が止まり、人が手で直すまで戻らない。
+  - verified: 追記の lock は `Reclaim::Stale` で回収され（rules 行 `fleet.lock_stale_ms` = 30000）、30 秒を越えた lock は持ち主が生きていても外される。deduced: 本文と改行のあいだに別の書き手が入る経路は、書き手が死んだ周に限らない。
+  - verified: 再発は 0 件。本 repo と隣の project の置き場 9 つの event log で、1 行に 2 つの記録を持つ行は 0 件（本 repo の置き場は 31532 行）。
+- 形（番号は done と 1:1）:
+  1. `write_line` は本文と改行を 1 つの buffer に詰め、`write_all` を 1 回だけ撃つ（fmt の adapter を通さない）。
+  2. lock の中で、書く前に file の末尾の 1 byte を読む。file が空でなく末尾が改行でない周は、記録の前に改行を 1 つ足す（同じ 1 回の write の頭に置く）。死んだ書き手が残した改行の無い完全な記録は、次の記録から切り離されて単独の行として読める。途中で切れた記録は単独の malformed の行として残り、`read_all` は今どおり Err を返す（直すのは人）。
+  3. 効く範囲は `append_line` を通る全部の file（event log・着地と gate の記録・席の打刻）。lock の実装は 1 本のまま（C6.3）で、第 2 の writer を作らない。
+  4. 変えないもの: schema・1 行 1 event・lock と回収・rules 行・`Warning` の値（改行を足しても何も消えないので warning は足さない）・`read_all` の判定。
+- 歯（`fleet_torn_line_` 接頭辞・`crates/scribe2/src/fleet/store.rs` の `mod tests`・`grep -rn "fleet_torn_line" crates/` は 0 件・2026-09-28）:
+  - (a) 改行の無い完全な記録で終わる event log に `append` で 1 件足すと、`read_all` が 2 件を Ok で返す。続けてもう 1 件足すと 3 件で、file は空の行を持たない（改行で終わる log には改行を余分に足さない）。base は 1 行に 2 件が並び、line=1 の Malformed の Err になる（RED・機能不在）。
+  - (b) 途中で切れた記録で終わる event log に 1 件足すと、file の行数が 2 で、`read_all` の Err は line=1 の 1 件だけ。base は行数 1（RED）。
+- 限界: 切れた記録そのものは直さない（fail-closed のまま人が直す）。1 記録を 1 回の write で撃つこと（形 1）は歯で数えない（書き手を差し替えられる形に変えないと数えられない・code の読みで確かめる）。
+- 却下:
+  - 読み手が 1 行に並んだ 2 つの記録を割って読む。1 行 1 event（§3）を読み手の側で崩し、切れた記録と並んだ記録を見分ける読みが要る。
+  - 書き手が切れた末尾を消してから書く。消した記録は戻らない（N1）。
+  - 1 回の write の原子性だけに頼り、形 2 を持たない。死んだ書き手が残した末尾は、それでも改行を持たない。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -126,4 +146,14 @@ write-set = ["crates/scribe2/src/fleet/store.rs", "crates/scribe2-boundary/tests
 verify = ["cargo nextest run -p scribe2 --no-tests=fail fleet_lock_reclaim_"]
 size = "S"
 done = "同じ死んだ lock を観測した 2 本のうち reclaim で外せるのは 1 本（逐次 2 回で true, false）、stale の回収も同じ 1 手を通り、生きている所有者の lock は Stale でも DeadOnly でも retry_ms まで待ち、追記の lock の既存の warning の歯は不変"
+[[contract]]
+id = "d"
+title = "追記は 1 記録を 1 回の write で撃ち、改行で終わらない末尾を先に切り離す — 死んだ書き手が残した改行の無い完全な記録が次の記録と 1 行に並び、置き場の replay の全部を止める穴を塞ぐ（append_line を通る全部の file・lock と schema は不変・memo s2-07l.711）"
+req = ["FR3", "FR68", "NFR4"]
+section = "10"
+write-set = ["crates/scribe2/src/fleet/store.rs"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail fleet_torn_line_"]
+size = "S"
+growth = ["crates/scribe2/src/fleet/store.rs:50"]
+done = "(1) write_line が本文と改行を 1 つの buffer に詰めて write_all を 1 回だけ撃つ (2) lock の中で file の末尾の 1 byte を読み、空でなく改行でもない周だけ記録の前に改行を 1 つ足し（同じ 1 回の write）、途中で切れた記録は単独の malformed の行として残って read_all は Err のまま (3) append_line を通る全部の file に効き、lock の実装は 1 本のまま (4) schema・1 行 1 event・lock と回収・rules 行・Warning の値・read_all の判定は変わらない 歯: fleet_torn_line_ の (a) 改行の無い完全な記録で終わる log に append で 1 件足すと read_all が 2 件を Ok で返し、続けて 1 件足すと 3 件で file は空の行を持たない (b) 途中で切れた記録で終わる log に 1 件足すと行数が 2 で read_all の Err は line=1 の 1 件だけ・base は (a) が line=1 の Malformed の Err・(b) が行数 1 で RED"
 <!-- contracts:end -->
