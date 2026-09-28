@@ -16,7 +16,7 @@
 
 mod linked;
 
-use super::base::{declared_name, item_text, tooth_names, ITEM_HEAD, ROW_LINE_WIDTH};
+use super::base::{block_end, declared_name, item_text, tooth_names, ITEM_HEAD, ROW_LINE_WIDTH};
 use crate::pipe::closure::{holds_word, mentioned_names, src_region, test_region, Mentioned, Source};
 use crate::pipe::contract::Contract;
 use crate::pipe::refuse::{normalize, NEW_FILE};
@@ -313,21 +313,6 @@ fn item_lines(tree: &Tree<'_>, decl: &Decl) -> Vec<String> {
         decl.line
     };
     lines.get(start..=end).unwrap_or_default().iter().map(|line| format!("  {}", line.trim_end())).collect()
-}
-
-/// 宣言の行から本体の閉じ括弧の行まで（括弧を開かず `;` で終わる行はその行・閉じなければ file の末尾）。
-fn block_end(lines: &[&str], at: usize) -> usize {
-    let mut depth = 0_usize;
-    let mut opened = false;
-    for (index, line) in lines.iter().enumerate().skip(at) {
-        let opens = line.matches('{').count();
-        depth = depth.saturating_add(opens).saturating_sub(line.matches('}').count());
-        opened = opened || opens > 0;
-        if (opened && depth == 0) || (!opened && line.trim_end().ends_with(';')) {
-            return index;
-        }
-    }
-    lines.len().saturating_sub(1)
 }
 
 /// (b) 名指された `.rs`（write-set の外）: base の要約と同じ 1 項目。
@@ -813,5 +798,191 @@ mod tests {
         let order: Vec<usize> = ["解けない参照の 1 塊", "解けた § の塊", "名指す名の塊"].iter().filter_map(|word| PREAMBLE.find(word)).collect();
         assert!(order.len() == 3 && order.windows(2).all(|pair| pair.first() < pair.get(1)), "{PREAMBLE}");
         let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// §56 行 bj の toy の木: §55 の木に同じ dir の置き場を足す。自分の doc nh.md（行 na〔§1〕・nb〔§2〕）、`.md` の置き場
+    /// nf.md（行 nc〔§1・同じ dir でここだけ〕・nd〔§2〕・nb〔§1・自分の doc と同じ id の囮〕）、`.toml` の置き場 nt.toml
+    /// （行 nd〔§3〕・ne と ng〔§4・同じ goal〕・nz〔§5・goal なし〕・ns〔§6〕・nv〔§7〕）。囮は別の dir の置き場
+    /// docs/other/nf.md と disk だけに在る docs/design/nu.md（どちらも行 nc を持つ）。
+    fn note_scratch(name: &str) -> (PathBuf, Vec<String>) {
+        let (repo, mut tracked) = linked_scratch(name);
+        let row = |id: &str, section: &str, goal: &str| {
+            let goal = if goal.is_empty() { String::new() } else { format!("goal = \"{goal}\"\n") };
+            format!("\n[[contract]]\nid = \"{id}\"\ntitle = \"t{id}\"\nreq = [\"FR1\"]\nsection = \"{section}\"\nwrite-set = [\"crates/toy/src/lib.rs\"]\nverify = [\"git status\"]\nsize = \"S\"\ndone = \"{id} の done\"\n{goal}")
+        };
+        let table = |rows: &[String]| format!("<!-- contracts:begin -->\nschema = 1\n{}<!-- contracts:end -->\n", rows.concat());
+        let own = format!("# nh\n\n## 1. 自分の節\n\n自分の本文。\n\n## 2. 家の二\n\n家の二の本文。\n\n{}", table(&[row("na", "1", ""), row("nb", "2", "")]));
+        let place = format!(
+            "# nf\n\n## 1. 外の一\n\n外の一の本文。\n\n## 2. 外の二\n\n外の二の本文。\n\n{}",
+            table(&[row("nc", "1", ""), row("nd", "2", ""), row("nb", "1", "")])
+        );
+        let whole = format!(
+            "schema = 1\n{}",
+            [row("nd", "3", "丙の goal。"), row("ne", "4", "丁の goal。"), row("ng", "4", "丁の goal。"), row("nz", "5", ""), row("ns", "6", "自分の goal。"), row("nv", "7", "戊の goal。")].concat()
+        );
+        let decoy = format!("# x\n\n## 1. 囮の節\n\n囮の本文。\n\n{}", table(&[row("nc", "1", "")]));
+        let _ = std::fs::create_dir_all(repo.join("docs/other"));
+        for (path, body, tracks) in [
+            ("docs/design/nh.md", own, true),
+            ("docs/design/nf.md", place, true),
+            ("docs/design/nt.toml", whole, true),
+            ("docs/other/nf.md", decoy.clone(), true),
+            ("docs/design/nu.md", decoy, false),
+        ] {
+            let _ = std::fs::write(repo.join(path), body);
+            if tracks {
+                tracked.push(path.to_owned());
+            }
+        }
+        (repo, tracked)
+    }
+
+    /// §56 行 bj (a) 自分の doc に無く同じ dir の別の 1 置き場に在る `行 nc` はその置き場の § の塊（done つき・別の dir と
+    /// tracked でない置き場は数えない）、2 置き場に在る `行 nd` は数を添えた解けない参照、どこにも無い `行 nq` は今の字面、
+    /// 自分の doc と別の置き場の両方に在る `行 nb` は自分の doc の §（母集団 = § の塊の頭を同じ assert で数える）。
+    #[test]
+    fn note_row_lookup_resolves_a_row_held_by_exactly_one_placement_in_the_same_dir() {
+        let (repo, tracked) = note_scratch("note-rows");
+        let text = text_of(&repo, &tracked, &["crates/toy/src/inner.rs"], "docs/design/nh.md#na", &["本文は 行 nc と 行 nd と 行 nq と 行 nb を指す。"]);
+        assert_eq!(section_heads(&text), ["- docs/design/nf.md §1", "- docs/design/nh.md §2"], "{text}");
+        assert_eq!(chunk_of(&text, "docs/design/nf.md §1"), "- docs/design/nf.md §1\n  外の一の本文。\n  行 nc の done: nc の done", "{text}");
+        assert_eq!(chunk_of(&text, "docs/design/nh.md §2"), "- docs/design/nh.md §2\n  家の二の本文。\n  行 nb の done: nb の done", "{text}");
+        assert_eq!(chunk_of(&text, "解けない参照"), "- 解けない参照: 行 nd（同じ dir の 2 置き場に在る）, 行 nq", "{text}");
+        assert!(!text.contains("囮の本文"), "{text}");
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// §56 行 bj (b) `.toml` の pointer の形と `行` の形と、契約の置き場が `.toml` のときの doc の字なしの `§N` が goal を本文に
+    /// した塊になり、同じ section の 2 行を指す参照は 1 塊（goal 1 つ・done の行 2 つ）、goal の空の行と空の section は解けない
+    /// 参照、自分の § は捨てる。`.md` の契約から `.toml` の pointer を指しても goal の塊になる。
+    #[test]
+    fn note_row_lookup_toml_placement_uses_the_row_goal_as_the_body() {
+        let (repo, tracked) = note_scratch("note-toml");
+        let ws = ["crates/toy/src/inner.rs"];
+        let body = "本文は nt.toml#ne と nt.toml 行 ng と §7 と nt.toml の行 nz と §5 と §6 を指す。";
+        let text = text_of(&repo, &tracked, &ws, "docs/design/nt.toml#ns", &[body]);
+        let linked: Vec<String> = chunks(&text).into_iter().filter(|chunk| chunk.starts_with("- 解けない参照") || chunk.starts_with("- docs/design/nt.toml §")).collect();
+        assert_eq!(
+            linked,
+            [
+                "- 解けない参照: nt.toml 行 nz, §5",
+                "- docs/design/nt.toml §4\n  丁の goal。\n  行 ne の done: ne の done\n  行 ng の done: ng の done",
+                "- docs/design/nt.toml §7\n  戊の goal。",
+            ],
+            "{text}"
+        );
+        let from_md = text_of(&repo, &tracked, &ws, "docs/design/nh.md#na", &["本文は nt.toml#nd を指す。"]);
+        assert_eq!(chunk_of(&from_md, "docs/design/nt.toml §3"), "- docs/design/nt.toml §3\n  丙の goal。\n  行 nd の done: nd の done", "{from_md}");
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    /// §56 行 bh の fixture の `.rs` 1 本を tmp の dir に書き、base の要約（`item_text`）の宣言の列と要約の全文を返す。
+    fn declared_row(name: &str, lines: &[&str]) -> (String, String) {
+        let dir = std::env::temp_dir().join(format!("pipe-review-outside-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::create_dir_all(dir.join("src"));
+        let _ = std::fs::write(dir.join("src/v.rs"), format!("{}\n", lines.join("\n")));
+        let text = super::super::base::item_text(&dir, "src/v.rs", 120);
+        let _ = std::fs::remove_dir_all(&dir);
+        (text.lines().find_map(|line| line.strip_prefix("  宣言: ")).unwrap_or_default().to_owned(), text)
+    }
+
+    /// §56 行 bh (a) 可視性 5 形の fn・名前つきの欄の pub の struct（pub と pub(crate) と私有の欄・doc 行と属性行つき）・tuple の
+    /// pub の struct・欄の無い pub の struct・欄を持つ私有の struct・variant を持つ pub の enum・impl の中の pub の fn が
+    /// `<可視性> <語> <名>` で並び、私有の struct と pub の enum は括弧を持たない（母集団 = 列を `, ` で割った本数）。
+    #[test]
+    fn summary_visibility_declarations_carry_the_visibility_and_public_struct_fields() {
+        let (column, text) = declared_row(
+            "visibility-forms",
+            &[
+                "pub fn zq_open() {}",
+                "pub(crate) fn zq_crate() {}",
+                "pub(super) fn zq_super() {}",
+                "pub(in crate::x) fn zq_in() {}",
+                "fn zq_own() {}",
+                "/// 名前つきの欄。",
+                "#[derive(Debug)]",
+                "pub struct ZqNamed {",
+                "    /// 公開の欄。",
+                "    pub zq_a: u8,",
+                "    #[doc(hidden)]",
+                "    pub(crate) zq_b: u8,",
+                "    zq_c: u8,",
+                "}",
+                "pub struct ZqPair(pub u8, u16);",
+                "pub struct ZqUnit;",
+                "struct ZqHidden {",
+                "    zq_d: u8,",
+                "}",
+                "pub enum ZqTone {",
+                "    ZqRed,",
+                "    ZqBlue(u8),",
+                "}",
+                "impl ZqNamed {",
+                "    pub fn zq_dot() {}",
+                "}",
+            ],
+        );
+        let expected = [
+            "pub fn zq_open",
+            "pub(crate) fn zq_crate",
+            "pub(super) fn zq_super",
+            "pub(in crate::x) fn zq_in",
+            "fn zq_own",
+            "pub struct ZqNamed { pub zq_a; pub(crate) zq_b; zq_c }",
+            "pub struct ZqPair(pub 0; 1)",
+            "pub struct ZqUnit",
+            "struct ZqHidden",
+            "pub enum ZqTone",
+            "pub fn zq_dot",
+        ];
+        assert_eq!(column.split(", ").collect::<Vec<&str>>(), expected, "宣言 11 本: {text}");
+    }
+
+    /// §56 行 bh (b) 1 行に並ぶ欄・型に `,` を含む欄・行末の `//` 注釈に `,` を含む欄・generic の中に `Fn(u8, u8)` の括弧を持つ欄・
+    /// 型に `->` を持つ欄の後ろの欄・名の直後の generic が `->` を持つ tuple の struct の欄が名と可視性だけで読まれ（偽の欄も
+    /// tuple の読みも出ない）、base の説明の 1 行が私有と欄の区切りと trait の impl の読みを名乗る。
+    #[test]
+    fn summary_visibility_fields_are_read_through_generics_arrows_and_comments() {
+        let (column, text) = declared_row(
+            "visibility-fields",
+            &[
+                "pub struct ZqLine { pub zq_a: u8, zq_b: u8 }",
+                "pub(crate) struct ZqMap {",
+                "    pub zq_map: HashMap<u8, Vec<u8>>,",
+                "    zq_tail: u8,",
+                "}",
+                "pub struct ZqNote {",
+                "    pub zq_first: u8, // 注釈, 偽の欄",
+                "    zq_second: u8,",
+                "}",
+                "pub struct ZqCall {",
+                "    pub zq_call: Box<dyn Fn(u8, u8)>,",
+                "    zq_after: u8,",
+                "}",
+                "pub struct ZqArrow {",
+                "    pub zq_arrow: Box<dyn Fn(u8) -> u8>,",
+                "    zq_behind: u8,",
+                "}",
+                "pub struct ZqWrap<F: Fn(u8) -> u8>(pub F, u8);",
+            ],
+        );
+        let expected = [
+            "pub struct ZqLine { pub zq_a; zq_b }",
+            "pub(crate) struct ZqMap { pub zq_map; zq_tail }",
+            "pub struct ZqNote { pub zq_first; zq_second }",
+            "pub struct ZqCall { pub zq_call; zq_after }",
+            "pub struct ZqArrow { pub zq_arrow; zq_behind }",
+            "pub struct ZqWrap(pub 0; 1)",
+        ];
+        assert_eq!(column.split(", ").collect::<Vec<&str>>(), expected, "宣言 6 本: {text}");
+        let block = crate::pipe::review::base_block(&text, u64::MAX);
+        let preamble = block.lines().find(|line| !line.is_empty() && !line.starts_with("## ")).unwrap_or_default();
+        assert!(
+            preamble.contains("字の無い宣言と欄は私有（その module と子孫から見える）")
+                && preamble.contains("欄の可視性と名を `; ` で区切って並べ")
+                && preamble.contains("trait の impl の中の fn は字を持たず trait に従う"),
+            "{preamble}"
+        );
     }
 }

@@ -177,7 +177,7 @@ pub enum Kind {
     Ledger,
     /// 見張り自身の設定の編集（行 e・行を持たない・語は self）。
     Settings,
-    /// 隣の repo の識別子の公開（行 j・§16・本行は行が無い周の公開の segment だけを断る）。
+    /// 隣の repo の識別子の公開（行 j / k・§16 / §17・行が無い周と、字面で読めない印を持つ公開の segment を断る）。
     Publish,
 }
 
@@ -289,12 +289,14 @@ struct Refusal {
     row: &'static str,
     /// 裁定 id（行が読めない周は `-`）。
     ruling: String,
+    /// 代わりの経路（断りの行の末尾・publish は理由ごと・他の種類は [`Kind::route`]）。
+    route: &'static str,
 }
 
 impl Refusal {
     /// 種類の行が無い・列でない周（FailClosed）。
     fn no_row(kind: Kind, row: &'static str) -> Self {
-        Self { kind, hit: "no-row".to_owned(), row, ruling: "-".to_owned() }
+        Self { kind, hit: "no-row".to_owned(), row, ruling: "-".to_owned(), route: kind.route() }
     }
 
     /// 判定へ写す。
@@ -305,7 +307,7 @@ impl Refusal {
             self.hit,
             self.row,
             self.ruling,
-            self.kind.route()
+            self.route
         );
         HostGuardDecision::Deny { what: format!("host-guard-deny {}", self.kind.as_str()), line }
     }
@@ -447,7 +449,7 @@ fn sequences(kind: Kind, subject: &Subject, manifest: &Manifest) -> Option<Refus
     let RuleValue::List(ref denied) = row.value else {
         return Some(Refusal::no_row(kind, id));
     };
-    matched(&subject.segments, denied).map(|hit| Refusal { kind, hit: hit.sequence, row: id, ruling: row.ruling.clone() })
+    matched(&subject.segments, denied).map(|hit| Refusal { kind, hit: hit.sequence, row: id, ruling: row.ruling.clone(), route: kind.route() })
 }
 
 /// 台帳の形の判定（語列の後ろ）: bd / bdw の segment を起票の門と同じ 3 関数に掛ける。掛かるのは payload の cwd の repo の
@@ -468,7 +470,7 @@ fn writes(kind: Kind, subject: &Subject, manifest: &Manifest) -> Option<Refusal>
         Ok(forms) => {
             let ruling = manifest.get(ledger_guard::ROW).map_or_else(|| "-".to_owned(), |row| row.ruling.clone());
             let form = found.iter().find_map(|write| judge_write(write, &forms))?;
-            Some(Refusal { kind, hit: form.as_str().to_owned(), row: ledger_guard::ROW, ruling })
+            Some(Refusal { kind, hit: form.as_str().to_owned(), row: ledger_guard::ROW, ruling, route: kind.route() })
         }
         Err(_) => found
             .iter()
@@ -492,7 +494,7 @@ fn removals(kind: Kind, subject: &Subject, manifest: &Manifest) -> Option<Refusa
     };
     let guarded = guarded(values, subject.scene);
     let hit = words.iter().find_map(|(word, after_cd)| hit_of(word, *after_cd, subject.scene.cwd, &guarded))?;
-    Some(Refusal { kind, hit, row: RM_ROW, ruling: row.ruling.clone() })
+    Some(Refusal { kind, hit, row: RM_ROW, ruling: row.ruling.clone(), route: kind.route() })
 }
 
 /// 透過の launcher を剥いだ動詞の basename と、その後ろの語（rm の同定と行 e の動詞の同定が同じ 1 関数）。
@@ -692,7 +694,7 @@ fn own_settings(kind: Kind, subject: &Subject) -> Option<Refusal> {
         None => targets.iter().find_map(|(word, after_cd)| own_word(word, *after_cd, cwd, &own)),
     }?;
     let hit = format!("self:{}", found.paths.last().map(|path| path.display().to_string()).unwrap_or_default());
-    Some(Refusal { kind, hit, row: "-", ruling: "-".to_owned() })
+    Some(Refusal { kind, hit, row: "-", ruling: "-".to_owned(), route: kind.route() })
 }
 
 /// 見張り自身の設定の守る file 1 つ。

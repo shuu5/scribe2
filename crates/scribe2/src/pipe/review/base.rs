@@ -40,7 +40,7 @@ const HEADING: &str = "\n## write-set の base の要約（器が base から測
 
 /// 見出しの下の説明の 1 行（段を落とさない周だけ）。
 const PREAMBLE: &str =
-    "write-set の各項目の base の行数（全体 / 本体＝最初の行頭 `#[cfg(test)]` より前）と、`.rs` は本体の宣言の名と歯の `#[test]` の fn の名を別の列で並べる（`+` は新設）。行数は字数 ÷ 幅の切り上げ（最小 1・受付の上限の余地と同じ）で、生の行と違う file は括弧に生の行。";
+    "write-set の各項目の base の行数（全体 / 本体＝最初の行頭 `#[cfg(test)]` より前）と、`.rs` は本体の宣言の名と歯の `#[test]` の fn の名を別の列で並べる（`+` は新設）。行数は字数 ÷ 幅の切り上げ（最小 1・受付の上限の余地と同じ）で、生の行と違う file は括弧に生の行。宣言は可視性の字（`pub` / `pub(crate)` / `pub(super)` / `pub(in …)`）を前に持ち、字の無い宣言と欄は私有（その module と子孫から見える）。私有でない struct は名の後ろの括弧の中に欄の可視性と名を `; ` で区切って並べ（tuple の欄の名は位置の番号・型は渡さない）、trait の impl の中の fn は字を持たず trait に従う。";
 
 /// 材料の本文を組む（`materials` から 1 回だけ呼ぶ）。幅の rules 行を読めない周は理由の 1 行（C10）。
 pub(super) fn base_text(repo: &Path, write_set: &[String]) -> String {
@@ -81,7 +81,8 @@ pub(super) fn item_text(repo: &Path, item: &str, width: u64) -> String {
     if !path.ends_with(".rs") {
         return head;
     }
-    let decls: Vec<String> = src_region(&text).lines().filter_map(declared_name).collect();
+    let src: Vec<&str> = src_region(&text).lines().collect();
+    let decls: Vec<String> = src.iter().enumerate().filter_map(|(at, line)| listed_item(&src, at, line)).collect();
     let teeth = tooth_names(test_region(&path, &text));
     format!("{head}\n  宣言: {}\n  歯: {}", listed(&decls), listed(&teeth))
 }
@@ -104,17 +105,34 @@ fn listed<T: AsRef<str>>(names: &[T]) -> String {
 /// `fn` として読む。括弧つきの可視性（`pub(crate)` / `pub(in crate::pipe)`）は閉じ括弧を含む語までを 1 まとまりとして
 /// 飛ばし、閉じ括弧の無い行は宣言と読まない（§49）。外の材料（§51）の候補の名と所在もこの 1 本で読む。
 pub(super) fn declared_name(line: &str) -> Option<String> {
+    declared(line).map(|(_, decl)| decl)
+}
+
+/// 宣言の行の可視性の字面（行頭の `pub` / `pub(…)`・無ければ空）と [`declared_name`] の `<語> <名>`（宣言の語の切りは
+/// この 1 本・§56）。
+fn declared(line: &str) -> Option<(String, String)> {
     let mut kept = Vec::new();
+    let mut visibility = String::new();
     let mut raw = line.split_whitespace();
+    let mut first = true;
     while let Some(word) = raw.next() {
         if word.starts_with("pub(") {
+            let mut group = vec![word];
             let mut closing = word;
             while !closing.contains(')') {
                 closing = raw.next()?;
+                group.push(closing);
+            }
+            if first {
+                visibility = group.join(" ");
             }
         } else {
+            if first && word == "pub" {
+                visibility = word.to_owned();
+            }
             kept.push(word);
         }
+        first = false;
     }
     let mut words = kept.into_iter();
     let mut word = words.next()?;
@@ -133,7 +151,110 @@ pub(super) fn declared_name(line: &str) -> Option<String> {
         next = words.next()?;
     }
     let name = next.split(|found: char| !(found.is_alphanumeric() || found == '_')).next()?;
-    (!name.is_empty()).then(|| format!("{word} {name}"))
+    (!name.is_empty()).then(|| (visibility, format!("{word} {name}")))
+}
+
+/// 宣言の列の 1 項目（`<可視性> <語> <名>`・私有は字なし・私有でない struct は名の後ろに [`fields`] の列）。
+fn listed_item(lines: &[&str], at: usize, line: &str) -> Option<String> {
+    let (visibility, decl) = declared(line)?;
+    if visibility.is_empty() {
+        return Some(decl);
+    }
+    let fields = if decl.starts_with("struct ") { fields(lines, at) } else { String::new() };
+    Some(format!("{visibility} {decl}{fields}"))
+}
+
+/// struct の欄の列（名前つきは ` { <可視性> <欄の名>; … }`・tuple は `(<可視性> 0; …)`・欄が無ければ空・型は渡さない）。
+/// 宣言の行から [`block_end`] までの doc 行・注釈・属性の行を除き、各行の行末の `//` から後ろを落として繋いで読む。名の
+/// 直後（generic の `<…>` は飛ばす）が `(` なら tuple、そうでなければ最初の `{` の中（`{` より先に `;` が来れば欄なし）。
+fn fields(lines: &[&str], at: usize) -> String {
+    let kept: Vec<&str> = lines
+        .get(at..=block_end(lines, at))
+        .unwrap_or_default()
+        .iter()
+        .map(|line| line.trim())
+        .filter(|line| !(line.starts_with("//") || line.starts_with("#[")))
+        .map(|line| line.split("//").next().unwrap_or_default())
+        .collect();
+    let joined = kept.join(" ");
+    let after = joined.split_once("struct ").map_or("", |(_, after)| after);
+    let mut rest = after.trim_start().trim_start_matches(|found: char| found.is_alphanumeric() || found == '_').trim_start();
+    if let Some(generic) = rest.strip_prefix('<') {
+        rest = generic.get(group(generic).1.saturating_add(1)..).unwrap_or_default().trim_start();
+    }
+    let (tuple, pieces) = if let Some(inner) = rest.strip_prefix('(') {
+        (true, group(inner).0)
+    } else {
+        match (rest.find('{'), rest.find(';')) {
+            (Some(brace), semi) if semi.is_none_or(|end| brace < end) => (false, group(rest.get(brace.saturating_add(1)..).unwrap_or_default()).0),
+            _ => return String::new(),
+        }
+    };
+    let named: Vec<String> =
+        pieces.iter().map(|piece| piece.trim()).filter(|piece| !piece.is_empty()).enumerate().map(|(index, piece)| field(piece, index, tuple)).collect();
+    match (named.is_empty(), tuple) {
+        (true, _) => String::new(),
+        (false, true) => format!("({})", named.join("; ")),
+        (false, false) => format!(" {{ {} }}", named.join("; ")),
+    }
+}
+
+/// 欄 1 つの `<可視性> <欄の名>`（私有は名だけ・tuple の名は位置の番号）。
+fn field(piece: &str, index: usize, tuple: bool) -> String {
+    let (visibility, rest) = match piece.find(')').filter(|_| piece.starts_with("pub(")) {
+        Some(end) => piece.split_at_checked(end.saturating_add(1)).unwrap_or((piece, "")),
+        None => piece.strip_prefix("pub ").map_or(("", piece), |rest| ("pub", rest)),
+    };
+    let name = if tuple { index.to_string() } else { rest.split(':').next().unwrap_or_default().trim().to_owned() };
+    if visibility.is_empty() {
+        name
+    } else {
+        format!("{visibility} {name}")
+    }
+}
+
+/// 開き括弧の直後からの字面を、同じ深さの閉じ括弧の前まで深さ 0 の `,` で割る（`(` `[` `{` `<` で深く・閉じで浅く・
+/// `->` の `>` は数えない）。返すのは割った欄と閉じ括弧の byte 位置（閉じなければ末尾）。
+fn group(text: &str) -> (Vec<&str>, usize) {
+    let mut depth = 0_usize;
+    let mut pieces = Vec::new();
+    let mut start = 0_usize;
+    let mut previous = ' ';
+    for (at, letter) in text.char_indices() {
+        match letter {
+            '(' | '[' | '{' | '<' => depth = depth.saturating_add(1),
+            '>' if previous == '-' => {}
+            ')' | ']' | '}' | '>' if depth == 0 => {
+                pieces.push(text.get(start..at).unwrap_or_default());
+                return (pieces, at);
+            }
+            ')' | ']' | '}' | '>' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                pieces.push(text.get(start..at).unwrap_or_default());
+                start = at.saturating_add(1);
+            }
+            _ => {}
+        }
+        previous = letter;
+    }
+    pieces.push(text.get(start..).unwrap_or_default());
+    (pieces, text.len())
+}
+
+/// 宣言の行から本体の閉じ括弧の行まで（括弧を開かず `;` で終わる行はその行・閉じなければ file の末尾）。外の材料の item
+/// の行（§51）も同じ 1 本で数える。
+pub(super) fn block_end(lines: &[&str], at: usize) -> usize {
+    let mut depth = 0_usize;
+    let mut opened = false;
+    for (index, line) in lines.iter().enumerate().skip(at) {
+        let opens = line.matches('{').count();
+        depth = depth.saturating_add(opens).saturating_sub(line.matches('}').count());
+        opened = opened || opens > 0;
+        if (opened && depth == 0) || (!opened && line.trim_end().ends_with(';')) {
+            return index;
+        }
+    }
+    lines.len().saturating_sub(1)
 }
 
 /// 歯の区間の `#[test]` の直下の `fn` の名（属性行・doc・空行は跨ぐ・他の行が先に来れば歯ではない・§51 の候補も同じ 1 本）。
@@ -204,7 +325,7 @@ mod tests {
             (5, 2, 3),
             "宣言 5 本・歯 2 本・行は項目 + 2 列: {text}"
         );
-        assert_eq!(decls, ["fn width", "struct Shape", "enum Tone", "fn dot", "const LIMIT"], "本体の区間だけ");
+        assert_eq!(decls, ["pub(crate) fn width", "pub struct Shape { x }", "enum Tone", "pub fn dot", "const LIMIT"], "本体の区間だけ");
         assert_eq!(teeth, ["shape_one", "shape_two"], "helper と mod は歯でない");
         let _ = std::fs::remove_dir_all(&repo);
     }
@@ -223,14 +344,17 @@ mod tests {
     #[test]
     fn pipe_review_base_pub_in_path_visibility_declarations_are_listed() {
         let body = "pub(in crate::pipe) struct Materials {\n    x: u8,\n}\n\npub(in crate::pipe) fn design_material() -> u8 {\n    1\n}\n\npub(in super::super) const EDGE: u8 = 2;\n";
-        assert_eq!(declared_column("pub-in-yes", body), "struct Materials, fn design_material, const EDGE");
+        assert_eq!(
+            declared_column("pub-in-yes", body),
+            "pub(in crate::pipe) struct Materials { x }, pub(in crate::pipe) fn design_material, pub(in super::super) const EDGE"
+        );
     }
 
     /// §49 (1) 負例: 閉じ括弧の無い `pub(in` の行は宣言と読まない（次の 2 語目で切り上げない・後続の正しい行は載る）。
     #[test]
     fn pipe_review_base_pub_in_without_closing_paren_is_not_a_declaration() {
         let body = "pub(in crate::pipe struct Broken {\n}\n\npub(in crate::pipe) struct Kept;\n";
-        assert_eq!(declared_column("pub-in-no", body), "struct Kept");
+        assert_eq!(declared_column("pub-in-no", body), "pub(in crate::pipe) struct Kept");
     }
 
     /// (b) `.rs` でない項目は path と行数だけ（宣言と歯の列を持たない）。
@@ -273,7 +397,7 @@ mod tests {
             ["+src/fresh.rs", "-src/a.rs", "~src/a.rs", "=src/a.rs"].iter().map(|item| (*item).to_owned()).collect();
         let text = summary(&repo, &items, 120);
         let lines: Vec<&str> = text.lines().collect();
-        let decls = "  宣言: fn width, struct Shape, enum Tone, fn dot, const LIMIT";
+        let decls = "  宣言: pub(crate) fn width, pub struct Shape { x }, enum Tone, pub fn dot, const LIMIT";
         let teeth = "  歯: shape_one, shape_two";
         assert_eq!(
             lines,
