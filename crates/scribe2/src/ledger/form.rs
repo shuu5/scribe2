@@ -7,7 +7,7 @@
 //! 辿れる契約が全部 closed の open な memo。
 //!
 //! 判定は [`judge`] の**純関数**で、読むのは [`Issue`] の label / acceptance / description / notes / dependencies と、
-//! 型（epic と裁定を 4 象限の母集団から外す）と、[`Docs`]（pointer の先の § の本文・契約表の行・tracked な file の
+//! 型（epic と裁定を 4 象限の母集団から外す・問いは label [`QUESTION_LABEL`] で外す）と、[`Docs`]（pointer の先の § の本文・契約表の行・tracked な file の
 //! 集合）だけである。読みの口は席の側の 1 本（[`crate::seat::ledger::read_ledger`]）を借り、**台帳の書きの口は
 //! 増えない**（書きは親 module の `close` の 1 種のまま・C15）。読めない周は件数 0 に倒さず測れていない形の行を
 //! 出す（[`render_unreadable`]・C10 / NFR4）。極性は増やさない（doctor は読むだけで判定しない）。
@@ -32,6 +32,9 @@ const MISSING_WORDS: [&str; 4] = ["no-source", "no-observation", "no-candidate",
 
 /// 4 象限の母集団から外す型（epic と裁定）。
 const EXEMPT_KINDS: [&str; 2] = ["epic", "decision"];
+
+/// 台帳の問いの識別の label（型は問わない・4 象限の母集団から外す・§13・ADR-0083）。
+pub const QUESTION_LABEL: &str = "intake:question";
 
 /// acceptance の設計 pointer 行の頭（行 e と同じ字面）。
 const DESIGN_KEY: &str = "design =";
@@ -73,7 +76,7 @@ pub struct Report {
     pub memos: usize,
     /// (iv) 4 節ごとの、その節を持たない memo の id（[`MEMO_SECTIONS`] の順）。
     pub missing: [Vec<String>; 4],
-    /// 4 象限の母集団（closed でない bead から epic と裁定を外した件数）。
+    /// 4 象限の母集団（closed でない bead から epic と裁定と問いを外した件数）。
     pub shaped: usize,
     /// (v) label と pointer 行の両方を持つ bead。
     pub both: Vec<String>,
@@ -181,7 +184,8 @@ pub fn judge(issues: &[Issue], docs: &Docs) -> Report {
     let open: Vec<&Issue> = issues.iter().filter(|issue| issue.status != CLOSED).collect();
     let memos: Vec<&Issue> = open.iter().copied().filter(|issue| is_memo(issue)).collect();
     let memo_ids: Vec<&str> = issues.iter().filter(|issue| is_memo(issue)).map(|issue| issue.id.as_str()).collect();
-    let shaped: Vec<&Issue> = open.iter().copied().filter(|issue| !EXEMPT_KINDS.contains(&issue.kind.as_str())).collect();
+    let exempt = |issue: &Issue| EXEMPT_KINDS.contains(&issue.kind.as_str()) || issue.labels.iter().any(|label| label == QUESTION_LABEL);
+    let shaped: Vec<&Issue> = open.iter().copied().filter(|issue| !exempt(issue)).collect();
     let contracts: Vec<&Issue> = open.iter().copied().filter(|issue| is_contract(issue)).collect();
     let unlanded: Vec<&Row> = docs.rows.iter().filter(|row| is_unlanded(row, &docs.tracked)).collect();
     let mut drift: Vec<String> = unlanded
@@ -330,7 +334,26 @@ fn section_number(title: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{names, section_text};
+    use super::{judge, names, section_text, Docs, Issue, MEMO_LABEL, QUESTION_LABEL};
+
+    /// 型 task の open の bead（label と acceptance だけを与える）。
+    fn open_task(id: &str, labels: &[&str], acceptance: &str) -> Issue {
+        let (labels, kind) = (labels.iter().map(|label| (*label).to_owned()).collect(), "task".to_owned());
+        let (id, status, acceptance) = (id.to_owned(), "open".to_owned(), acceptance.to_owned());
+        Issue { id, status, priority: None, labels, acceptance, deps: Vec::new(), kind, description: String::new(), notes: String::new() }
+    }
+
+    /// 台帳の問い（label intake:question・型 task）は 4 象限の母集団から外れ、どの欄にも名指されない（§13）。
+    #[test]
+    fn quadrant_exempts_question_from_the_shaped_population() {
+        let question = open_task("q-question", &[QUESTION_LABEL], "");
+        let issues = [question, open_task("q-memo", &[MEMO_LABEL], ""), open_task("q-contract", &[], "design = docs/design/x.md#a"), open_task("q-bare", &[], "")];
+        let report = judge(&issues, &Docs::default());
+        assert_eq!((report.open, report.shaped, report.neither.clone()), (4, 3, vec!["q-bare".to_owned()]));
+        let fields = [&report.both, &report.neither, &report.undiscovered, &report.drift, &report.settled];
+        let named: Vec<&String> = report.missing.iter().chain(fields).flatten().collect();
+        assert!(!named.iter().any(|id| id.as_str() == "q-question"), "問いの id が欄に出た: {named:?}");
+    }
 
     /// 名指しは id の字面の境界で測る（`s2-x.7` は `s2-x.70` にも `s2-x.7.1` にも当たらず、文末の `.` には当たる）。
     #[test]
