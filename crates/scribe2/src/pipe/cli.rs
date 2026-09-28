@@ -246,10 +246,12 @@ pub fn dispatch(args: &[String]) -> Outcome {
             let turn = queue::fire(&queue.borrow());
             // **終端の周だけ席の pane へ知らせる**（設計 dispatcher.md §19）: 落ちた便の 1 行と、列が idle の 1 行。
             // 送れたかは stdout の `notify=` の行で残し、rc は変えない（通知は副作用）。列の行より前に置く
-            // （自走の周の最後の行は列の 1 行のまま）。
+            // （自走の周の最後の行は列の 1 行のまま）。同じ字面を stderr にも写す（列が起こした運転手の周も launch.log に残る・§29 形 4）。
             if terminal {
                 let run = drove.as_deref().or_else(|| flag(args, "--run").ok().flatten());
-                outcome.out.extend(notices(&queue, run, &turn));
+                let told = notices(&queue, run, &turn);
+                outcome.err.extend(told.iter().cloned());
+                outcome.out.extend(told);
             }
             // 軸を評価した周だけ `vessel=` の 1 行（設計 consumer-sync.md §15 形 3・列の行より前＝最後の行は列の行のまま）。
             outcome.out.extend(queue::vessel_line(&turn));
@@ -278,7 +280,18 @@ fn notices(queue: &Queue<'_>, run: Option<&str>, turn: &queue::Turn) -> Vec<Stri
     }
     // 並列の実測は同じ周の `Turn` と運転手の置き場で 1 回だけ撃つ（設計 dispatcher.md §26 形 4）。
     let facts = queue::facts::facts(&queue.state_dir, Some(turn), crate::seat::state::now_secs());
-    payloads.extend(notify::idle_line(turn, &facts));
+    // 未処置の終端: `Settled` の候補ごとにその bead の最新の便（run id の昇順の最後）を同じ `alarm_word` で判じる（設計 §29 形 1）。
+    let pending: Vec<notify::Terminal<'_>> = turn
+        .candidates
+        .iter()
+        .filter(|found| matches!(found.reason, Some(queue::WaitReason::Settled { .. })))
+        .filter_map(|found| state.runs.values().rfind(|run| run.bead == found.bead))
+        .filter_map(|last| {
+            let word = alarm_word(&queue.state_dir, &last.id, last.stage, last.detail.as_deref())?;
+            Some(notify::Terminal { bead: &last.bead, run: &last.id, stage: last.stage.as_str(), word })
+        })
+        .collect();
+    payloads.extend(notify::idle_line(turn, &facts, &pending));
     // 直しの束の集合が前に送った集合と違う周だけ 1 行（設計 dispatcher.md §27 形 2・同じ宛先と送達の 1 関数）。
     payloads.extend(queue::bundle::changed(&queue.state_dir).map(|found| notify::precheck_line(&found)));
     // 送達の記録と消費の証拠は運転手の置き場で測る（設計 dispatcher.md §21 形 1・解決は flag の 1 回だけ）。

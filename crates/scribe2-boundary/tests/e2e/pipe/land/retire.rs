@@ -456,6 +456,12 @@ fn pipe_retire_reviewed_pass_refused_and_names_the_verdict() {
     clean(&[&other, &other_state]);
 }
 
+/// 断りの照合に使う stderr（終端の周が写す `notify=` の行を除いた本文・設計 dispatcher.md §29 形 4）。
+fn refusal_of(out: &Output) -> String {
+    stderr_of(out).lines().filter(|line| !line.starts_with("notify=")).collect::<Vec<_>>().join("\n").trim().to_owned()
+}
+
+// flip-check: retroactive s2-07l.732
 /// 負例 (2): 判定を**読めない**便も畳まない（fail-closed・読めない判定を終端に読み替えない）。母集団は
 /// 「JSON でない本文」と「3 値の外」の 2 つで、どちらも同じ 1 行（括弧の語は `Unreadable` の `読めない`）。
 #[test]
@@ -468,7 +474,7 @@ fn pipe_retire_reviewed_unreadable_refused_and_names_the_verdict() {
 
     let out = retire_once(&repo, &state, &id);
     assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "読めない判定は rc 1: {}", stdout_of(&out));
-    assert_eq!(stderr_of(&out).trim(), reason, "断りは「読めない」を名乗る");
+    assert_eq!(refusal_of(&out), reason, "断りは「読めない」を名乗る");
     assert!(live.exists(), "断った周は worktree を動かさない");
     assert!(
         !repo.join(".worktrees").join("scribe2").join("retired").join(&id).exists(),
@@ -479,7 +485,7 @@ fn pipe_retire_reviewed_unreadable_refused_and_names_the_verdict() {
     write_review_verdict(&state, &id, &review_body("MAYBE"));
     let outside = retire_once(&repo, &state, &id);
     assert_eq!(outside.status.code(), Some(i32::from(RC_REFUSED)), "3 値の外も rc 1: {}", stdout_of(&outside));
-    assert_eq!(stderr_of(&outside).trim(), reason, "3 値の外も「読めない」");
+    assert_eq!(refusal_of(&outside), reason, "3 値の外も「読めない」");
     assert_eq!(event_count(&state), before, "event を 1 件も書かない");
     // 判定を読める終端へ直すと同じ便が通る＝上の rc 1 は**判定の読めなさ**を理由にしている（段ではない）。
     write_review_verdict(&state, &id, &review_body("INCONCLUSIVE"));

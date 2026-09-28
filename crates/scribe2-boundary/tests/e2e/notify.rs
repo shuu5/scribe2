@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use std::process::Output;
 use vessel::cli_outcome::RC_OK;
 use vessel::fleet::Registration;
+use vessel::pipe::review::REVIEW_FILE;
 use vessel::seat::role::Role;
 
 /// 偽の pane の名（登録 row の target）。
@@ -412,6 +413,60 @@ fn pipe_notify_facts_hold_round_without_live_runs_reports_zero_live_and_zero_min
     let line = idle_of(&sent);
     assert!(line.contains("ready=1 launched=0 reason=hold:"), "既存の字面は同じ行に在る: {line} / {sent:?}");
     assert!(line.ends_with(" live=0 idle=0m held=0"), "末尾に並列の実測: {line} / {sent:?}");
+}
+
+// ───── 未処置の終端（設計 dispatcher.md §29・行 ad・接頭辞 `pipe_notify_pending_`） ─────
+
+/// 審査の判定 FAIL で終端に着く便の bead（行 a・台帳で ready のまま）。
+const PENDING: &str = "s2-pending.1";
+
+/// 行 a の便を審査 FAIL の `Reviewed` の終端に着け（台帳では ready のまま＝`Settled` の候補）、契約を持たない live な便の
+/// `pipe stop --run` の終端を道具つきで撃つ。返すのは stdout / stderr と送った payload の列。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn pending_round() -> (Output, Vec<String>) {
+    let (repo, state) = repo_with_state();
+    fake_tmux(&state);
+    register(&state, &repo);
+    let failed = intake_bead(&repo, &state, &format!("{DESIGN_FILE}#a"), PENDING);
+    fs::write(state.join("pipe").join(&failed).join(REVIEW_FILE), "{\"verdict\":\"FAIL\"}\n").expect("審査の判定を書ける");
+    live_run(&state);
+    let bd = fake_bd(&state, "bd-pending", &[PENDING]);
+    let out = run_pipe(&[
+        "stop", "--run", RUN,
+        "--state-dir", &state.display().to_string(),
+        "--repo", &repo.display().to_string(),
+        "--rules", &queue_rules(&state),
+        "--bd", &bd,
+        "--runner", "true",
+    ]);
+    let sent = sends(&state);
+    clean(&[&repo, &state]);
+    (out, sent)
+}
+
+/// (§29 歯 (a)) 審査 FAIL の終端の bead が `Settled` の候補に並ぶ周の終端: idle の行は既存の `reason=settled:` を持ったまま
+/// ` pending=1:<bead>/Reviewed=FAIL` で終わる。base は key が無い（RED）。
+#[test]
+fn pipe_notify_pending_reviewed_fail_rides_the_idle_line() {
+    let (out, sent) = pending_round();
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "stop は rc 0: {}", told(&out));
+    let line = idle_of(&sent);
+    assert!(line.contains("ready=1 launched=0 reason=settled:"), "既存の字面は同じ行に在る: {line} / {sent:?}");
+    assert!(line.ends_with(&format!(" pending=1:{PENDING}/Reviewed=FAIL")), "末尾に未処置の終端: {line} / {sent:?}");
+}
+
+/// (§29 歯 (b)) 同じ周の終端の stderr が stdout の `notify=` の行と同じ行を同じ順で持つ（base は stderr に無い＝RED）。
+#[test]
+fn pipe_notify_pending_terminal_stderr_carries_the_notify_lines() {
+    let (out, _) = pending_round();
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "stop は rc 0: {}", told(&out));
+    let stdout = notify_lines(&out);
+    assert!(!stdout.is_empty(), "stdout に notify= の行が在る: {}", told(&out));
+    let stderr: Vec<String> = stderr_of(&out).lines().filter(|line| line.starts_with("notify=")).map(str::to_owned).collect();
+    assert_eq!(stderr, stdout, "stderr に同じ字面: {}", told(&out));
 }
 
 /// settle の 1 歩（`SETTLE_STEP` = 200 ms）を ns で。本文と Enter の間はこれ以上空く（§21 形 3）。
