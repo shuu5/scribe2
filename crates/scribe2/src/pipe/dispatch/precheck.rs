@@ -89,8 +89,9 @@ fn live_of(state_dir: &Path, state: &State, bead: &str) -> Option<(String, Stage
     Some((id.clone(), run.stage, write_set))
 }
 
-/// 祖先 1 つの重ね方（形 1）。
-enum Layer {
+/// 祖先 1 つの重ね方（形 1・先撃ちの実体化も同じ層を当てる・行 aa）。
+#[derive(Clone)]
+pub(super) enum Layer {
     /// 宣言の予想: write-set の `+` を tracked に足し `~` を除く（本文は持たない）。項目は動く file に入る。
     Declared(Vec<String>),
     /// Gated PASS の便の実物: worktree の base..HEAD の差分で tracked を足し引きし、本文を置き換える（動く file に入れない）。
@@ -101,6 +102,8 @@ enum Layer {
         remove: Vec<String>,
         /// 本文の読み手が読む拡張子の file の本文（A の木の HEAD から）。
         bodies: Vec<Source>,
+        /// A の木の HEAD の sha（先撃ちが `add` の file を写す元）。
+        head: String,
     },
 }
 
@@ -197,7 +200,7 @@ fn tree_of(input: &Input<'_>, run: &str) -> Option<Layer> {
         }
         add.push(kept);
     }
-    Some(Layer::Tree { add, remove, bodies })
+    Some(Layer::Tree { add, remove, bodies, head })
 }
 
 /// 祖先を base に重ねた予想の材料と動く file（宣言で重ねた祖先の write-set の全項目・接頭辞を剥がし dir は base の tracked に展開）。
@@ -221,7 +224,7 @@ fn overlay(base: &Materials, layers: &[&Layer]) -> (Materials, Vec<String>) {
                     }
                 }
             }
-            Layer::Tree { add: ref added, remove: ref removed, bodies: ref read } => {
+            Layer::Tree { add: ref added, remove: ref removed, bodies: ref read, .. } => {
                 add.extend(added.iter().cloned());
                 remove.extend(removed.iter().cloned());
                 bodies.extend(read.iter().cloned());
@@ -231,16 +234,28 @@ fn overlay(base: &Materials, layers: &[&Layer]) -> (Materials, Vec<String>) {
     (base.forecast(&add, &remove, &bodies), moving)
 }
 
-/// finding 1 つ（確からしさ・断りの名・在り処の字面・理由の 1 行）。
-struct Finding {
+/// finding 1 つ（確からしさ・断りの名・在り処の字面・理由の 1 行・先撃ちの確定も同じ形・行 aa）。
+pub(super) struct Finding {
     /// 確定 / 暫定 / 測れない。
-    certainty: Certainty,
-    /// 断りの名（型の断りは `Refuse::label`・型を持たない断りは材料の名）。
-    name: String,
-    /// 在り処の字面（型を持たない断りは `-`）。
-    at: String,
+    pub(super) certainty: Certainty,
+    /// 断りの名（型の断りは `Refuse::label`・型を持たない断りは材料の名・先撃ちは lens の理由の型）。
+    pub(super) name: String,
+    /// 在り処の字面（型を持たない断りは `-`・先撃ちは [`super::prelens::AT`]）。
+    pub(super) at: String,
     /// 理由の 1 行。
-    reason: String,
+    pub(super) reason: String,
+}
+
+/// 先撃ちの予想の口（行 aa・設計 §27 形 aa 1・層の読み手を 2 本にしない・C2）: 待ち行の祖先の層（依存の順・[`resolve`] と同じ
+/// memo）と、予想の base で [`generated`] を撃った契約。祖先の層か生成が決まらない周は `None`。
+fn forecast(ctx: &Ctx<'_, '_>, bead: &str, memo: &mut BTreeMap<String, Option<Layer>>) -> Option<super::prelens::Forecast> {
+    let (row, ancestors) = (ctx.population.rows.get(bead)?, ancestors_of(ctx.population, bead));
+    for id in &ancestors {
+        resolve(ctx, id, memo);
+    }
+    let found = layers(&ancestors, memo)?;
+    let (contract, body) = generated(ctx.input.repo, &row.pointer, &overlay(ctx.base, &found).0).ok()?;
+    Some(super::prelens::Forecast { layers: found.into_iter().cloned().collect(), contract, body })
 }
 
 /// 待ち行 1 つを予想の base で撃つ（形 2）: 祖先の重ね方が 1 つでも決まらなければ `None`（`unmeasured:forecast`）。
@@ -300,11 +315,13 @@ fn result_word(findings: Option<&[Finding]>) -> String {
 /// 置き場の結果の file の読み（鍵・結果の語・確定の finding の (名, 在り処) と理由）。
 pub(super) struct Kept {
     /// 鍵の字。
-    key: String,
+    pub(super) key: String,
     /// 結果の語。
     result: String,
     /// 確定の finding（(名, 在り処) → 理由の 1 行・new の印の突き合わせと直しの束の根・行 y）。
     pub(super) firm: BTreeMap<(String, String), String>,
+    /// 事前審査の判定が clean か（finding が先撃ちの在り処の行だけ・測れない結果でない・先撃ちを撃つ行・行 aa）。
+    pub(super) clean: bool,
 }
 
 /// 結果の file を読む（1 行目 `key=`・2 行目 `result=` の無い file は読めない＝無いと同じ・跨版の約束を持たない cache）。
@@ -313,7 +330,11 @@ pub(super) fn read(path: &Path) -> Option<Kept> {
     let mut lines = text.lines();
     let key = lines.next()?.strip_prefix("key=")?.to_owned();
     let result = lines.next()?.strip_prefix("result=")?.to_owned();
-    let firm = lines
+    let rest: Vec<&str> = lines.collect();
+    let prelens = format!(" at={} ", super::prelens::AT);
+    let clean = !result.starts_with("unmeasured") && rest.iter().all(|line| line.contains(&prelens));
+    let firm = rest
+        .into_iter()
         .filter_map(|line| {
             let (name, rest) = line.strip_prefix("finding=firm name=")?.split_once(" at=")?;
             let (at, rest) = rest.split_once(" new=")?;
@@ -321,11 +342,11 @@ pub(super) fn read(path: &Path) -> Option<Kept> {
             Some(((name.to_owned(), at.to_owned()), reason.to_owned()))
         })
         .collect();
-    Some(Kept { key, result, firm })
+    Some(Kept { key, result, firm, clean })
 }
 
 /// 結果を書く（一時 file → rename・前の結果に無かった確定に `new=true`・書けない周は黙る＝次の周に撃ち直す）。
-fn write(dir: &Path, bead: &str, key: &str, findings: Option<&[Finding]>, previous: Option<&Kept>) {
+pub(super) fn write(dir: &Path, bead: &str, key: &str, findings: Option<&[Finding]>, previous: Option<&Kept>) {
     let mut body = format!("key={key}\nresult={}\n", result_word(findings));
     for found in findings.unwrap_or_default() {
         let seen = previous.is_some_and(|kept| kept.firm.contains_key(&(found.name.clone(), found.at.clone())));
@@ -379,7 +400,7 @@ pub(super) fn round(input: &Input<'_>, turn: &Turn, issues: &[Issue], base: Opti
         }
     }
     let (rules, ctx) = (rules_word(input), Ctx { input, population: &population, base });
-    let mut memo = BTreeMap::new();
+    let (mut memo, mut before) = (BTreeMap::new(), BTreeMap::new());
     for &bead in &waiting {
         let Some(row) = population.rows.get(bead) else {
             continue;
@@ -396,13 +417,18 @@ pub(super) fn round(input: &Input<'_>, turn: &Turn, issues: &[Issue], base: Opti
         }
         let findings = judged(&ctx, row, &ancestors, &mut memo);
         write(&dir, bead, &key, findings.as_deref(), previous.as_ref());
+        before.insert(bead, previous);
     }
+    // 先撃ち（行 aa・設計 §27 形 aa）は書き直した後・束ねる前（書き直す前の結果を前の結果として判定を同じ周に写し直す・形 aa 4）。
+    let sweep = super::prelens::Sweep { input, dir: &dir, population: &population, waiting: &waiting, before };
+    super::prelens::round(&sweep, &mut |bead| forecast(&ctx, bead, &mut memo));
     // 周の終わりに確定の finding を根で束ねる（行 y・設計 §27 形 1）。
     super::bundle::round(input, &dir, &population, &waiting);
 }
 
 /// `dispatch ls` の事前審査の行（依存待ちの候補ごとに 1 行・結果の file を読むだけ・形 7）:
-/// `[DISPATCH-PRECHECK] bead=<id> result=<結果の語か -> base=<current|moved>`（鍵の HEAD が今の base と同じ周だけ `current`）。
+/// `[DISPATCH-PRECHECK] bead=<id> result=<結果の語か -> base=<current|moved>`（鍵の HEAD が今の base と同じ周だけ `current`）と、
+/// 先撃ちの状態の末尾の語（[`super::prelens::word`]・行 aa）。
 pub(super) fn lines(input: &Input<'_>, turn: &Turn) -> Vec<String> {
     let (dir, head) = (dir_of(input.state_dir), head_of(input.repo));
     waiting_of(turn)
@@ -412,7 +438,7 @@ pub(super) fn lines(input: &Input<'_>, turn: &Turn) -> Vec<String> {
             let result = kept.as_ref().map_or(DASH, |found| found.result.as_str());
             let at = kept.as_ref().and_then(|found| found.key.strip_prefix("head:")?.split_whitespace().next());
             let base = if head.is_some() && at == head.as_deref() { "current" } else { "moved" };
-            format!("{LINE} bead={bead} result={result} base={base}")
+            format!("{LINE} bead={bead} result={result} base={base}{}", super::prelens::word(input, bead))
         })
         .collect()
 }

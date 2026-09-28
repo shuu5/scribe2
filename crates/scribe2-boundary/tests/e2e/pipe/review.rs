@@ -1,5 +1,6 @@
 // flip-check: moved s2-07l.351
-//! 審査の段の歯: `pipe_review_`（契約の審査の段・審査の理由の閉じた型・要件の読み）。
+//! 審査の段の歯: `pipe_review_`（契約の審査の段・審査の理由の閉じた型・要件の読み）と、同じ組み手で事前審査の待ち行に
+//! lens を先に撃つ先撃ちの歯 `pipe_prelens_`（設計 dispatcher.md §27 形 aa・行 aa）。
 //!
 //! 共有 helper は親（`tests/e2e/pipe.rs`）に在り `use super::*` で引き、受付の口の歯と共有する helper は
 //! `use super::intake::{…}` で引く（歯の本文は `intake.rs` から移しただけ・`s2-07l.351`）。
@@ -508,4 +509,765 @@ fn pipe_review_resume_from_intake_reviews_before_spawning() {
         assert_eq!(value_of(&review_pairs(&state, id), "verdict"), verdict);
     }
     clean(&[&repo, &state]);
+}
+
+// ───── 事前審査の先撃ち（設計 dispatcher.md §27 形 aa・行 aa・`s2-07l.718`・接頭辞 `pipe_prelens_`） ─────
+//
+// 依存 A（行 a・held）を blocks で待つ clean な行 b / c に、起こす側の周（`pipe dispatch`）が lens を裏で先に撃つ。偽 lens は起動の
+// たびに回数の file へ 1 行を足す。base には先撃ちが無い＝偽 lens は 1 回も起きず置き場も無い（RED）。
+
+/// 先撃ちの toy repo の宣言（`cargo` を許す・要件面は reqs.md）。
+const PRELENS_VESSEL: &str =
+    "schema = 1\nallowed-commands = [\"git\", \"sh\", \"cargo\"]\ncommon-verify = [\"git rev-parse --verify {base}\"]\nrequirements = \"reqs.md\"\n";
+
+/// 祖先 A の bead（行 a・held）。
+const PRELENS_A: &str = "s2-pre.1";
+
+/// 待ち行 B の bead（行 b）。
+const PRELENS_B: &str = "s2-pre.2";
+
+/// 待ち行 C の bead（行 c）。
+const PRELENS_C: &str = "s2-pre.3";
+
+/// 30 秒眠る偽 lens の本文（撃ち中を作る）。
+const PRELENS_SLEEP: &str = "sleep 30";
+
+/// 先撃ちの 1 つの置き場（toy repo・置き場・偽の台帳・列の manifest の写し）。
+struct Prelens {
+    /// toy repo。
+    repo: PathBuf,
+    /// 置き場。
+    state: PathBuf,
+    /// 偽の `bd`。
+    bd: String,
+    /// 列の manifest の写し。
+    rules: String,
+}
+
+/// 行 `id` の欄（write-set を差し替え、`extra` の欄を足す）。
+fn prelens_row(id: &str, write_set: &str, extra: &[&str]) -> Vec<String> {
+    let set = format!("write-set = {write_set}");
+    let mut add = vec![set.as_str()];
+    add.extend(extra.iter().copied());
+    row_fields(id, &["write-set"], &add)
+}
+
+/// 設計 doc と file を**そのまま** 1 回 commit した toy repo（行の素の項目を seed しない）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn prelens_repo(doc: &str, files: &[(&str, &str)]) -> (PathBuf, PathBuf) {
+    let (repo, state) = repo_with_state();
+    write_design(&repo, doc);
+    for (path, body) in [(".vessel.toml", PRELENS_VESSEL)].iter().chain(files) {
+        let target = repo.join(path);
+        fs::create_dir_all(target.parent().expect("親 dir が在る")).expect("dir を作れる");
+        fs::write(&target, body).expect("file を書ける");
+    }
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "prelens-rows"]);
+    (repo, state)
+}
+
+/// 台帳の 1 件（行 `row` を指す bead・blocks の依存の列）。
+fn prelens_issue(id: &str, status: &str, row: &str, blocks: &[&str]) -> String {
+    let deps: Vec<String> =
+        blocks.iter().map(|on| format!("{{\"issue_id\":\"{id}\",\"depends_on_id\":\"{on}\",\"type\":\"blocks\"}}")).collect();
+    format!(
+        "{{\"id\":\"{id}\",\"status\":\"{status}\",\"priority\":2,\"labels\":[],\
+         \"acceptance_criteria\":\"design = {DESIGN_FILE}#{row}\",\"dependencies\":[{}]}}",
+        deps.join(",")
+    )
+}
+
+/// 偽の `bd` の台帳を書き換える（script は 1 本・JSON だけを差し替える）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn prelens_ledger(state: &Path, issues: &[String]) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let json = state.join("bd-prelens.json");
+    fs::write(&json, format!("[{}]\n", issues.join(","))).expect("偽の台帳を書ける");
+    let path = state.join("bd-prelens");
+    fs::write(&path, format!("#!/bin/sh\ncat '{}'\n", json.display())).expect("偽の bd を書ける");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("偽の bd に実行権を付ける");
+    path.display().to_string()
+}
+
+/// 列の manifest の写し（受付の上限に台帳の待ち上限・終端の猶予・先撃ちの上限の行を足す・`None` は上限の行を持たない）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn prelens_rules(state: &Path, limit: Option<u64>) -> String {
+    let base = fs::read_to_string(ceiling_rules(state)).expect("受付の写しを読める");
+    let row = |id: &str, kind: &str, value: u64| {
+        format!("[[rule]]\nid = \"{id}\"\nkind = \"{kind}\"\nvalue = {value}\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n")
+    };
+    let mut rows = vec![
+        row("seat.ledger_timeout_s", "LedgerTimeoutS", 60),
+        row("pipe.stop_grace_ms", "StopGraceMs", embedded_int("pipe.stop_grace_ms")),
+    ];
+    rows.extend(limit.map(|value| row("pipe.precheck_lens_per_round", "PipePrecheckLensPerRound", value)));
+    let path = state.join("rules-prelens.toml");
+    fs::write(&path, format!("{base}\n{}", rows.join("\n"))).expect("列の写しを書ける");
+    path.display().to_string()
+}
+
+/// 行 a（`+src/fresh.rs`）と、a を blocks で待つ行 b（base の `src/b.rs`）/ c（base の `src/c.rs`）の置き場。`waiting` の bead
+/// だけを台帳に載せ、A を hold する（依存を持たない A を列が起こさない）。
+fn prelens_place(limit: Option<u64>, waiting: &[&str]) -> Prelens {
+    let rows = [
+        prelens_row("a", r#"["+src/fresh.rs"]"#, &[]),
+        prelens_row("b", r#"["src/b.rs"]"#, &[]),
+        prelens_row("c", r#"["src/c.rs"]"#, &[]),
+    ];
+    let files = [("src/b.rs", "pub fn b() {}\n"), ("src/c.rs", "pub fn c() {}\n")];
+    let (repo, state) = prelens_repo(&design_doc_rows(&rows), &files);
+    let mut issues = vec![prelens_issue(PRELENS_A, "open", "a", &[])];
+    for (bead, row) in [(PRELENS_B, "b"), (PRELENS_C, "c")] {
+        if waiting.contains(&bead) {
+            issues.push(prelens_issue(bead, "open", row, &[PRELENS_A]));
+        }
+    }
+    let bd = prelens_ledger(&state, &issues);
+    prelens_hold(&state, &[PRELENS_A]);
+    let rules = prelens_rules(&state, limit);
+    Prelens { repo, state, bd, rules }
+}
+
+/// 介入 `hold` を打つ（`hold` は 1 周を撃たない）。
+fn prelens_hold(state: &Path, beads: &[&str]) {
+    for &bead in beads {
+        let out = run_pipe(&["dispatch", "hold", bead, "--state-dir", &state.display().to_string()]);
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "hold は rc 0: {}", stderr_of(&out));
+    }
+}
+
+/// 起こす側の手動の 1 周の argv（道具つき・runner は偽の 1 行・`lens` が `None` の周は `--lens` を持たない）。
+fn prelens_args(place: &Prelens, lens: Option<&str>) -> Vec<String> {
+    let mut args = [
+        "dispatch", "--state-dir", &place.state.display().to_string(), "--repo", &place.repo.display().to_string(),
+        "--rules", &place.rules, "--bd", &place.bd, "--runner", "true",
+    ]
+    .map(str::to_owned)
+    .to_vec();
+    args.extend(lens.into_iter().flat_map(|found| ["--lens".to_owned(), found.to_owned()]));
+    args
+}
+
+/// 起こす側の手動の 1 周（rc 0 を要求する・`lens` が `None` の周は `--lens` 無し）。
+fn prelens_round(place: &Prelens, lens: Option<&str>) -> Output {
+    let args = prelens_args(place, lens);
+    let out = run_pipe(&args.iter().map(String::as_str).collect::<Vec<&str>>());
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "1 周は rc 0: {} / {}", stdout_of(&out), stderr_of(&out));
+    out
+}
+
+/// 起こす側の手動の 1 周（`--lens` つき）。
+fn prelens_turn(place: &Prelens, lens: &str) -> Output {
+    prelens_round(place, Some(lens))
+}
+
+/// `dispatch ls`（`--lens` を持たない）の `[DISPATCH-PRECHECK]` の行のうち `bead` の行。
+fn prelens_line(place: &Prelens, bead: &str) -> String {
+    let out = run_pipe(&[
+        "dispatch", "ls", "--state-dir", &place.state.display().to_string(), "--repo", &place.repo.display().to_string(),
+        "--rules", &place.rules, "--bd", &place.bd,
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "ls は rc 0: {}", stderr_of(&out));
+    let want = format!("[DISPATCH-PRECHECK] bead={bead} ");
+    stdout_of(&out).lines().find(|line| line.starts_with(&want)).unwrap_or_default().to_owned()
+}
+
+/// `dispatch ls` の `[DISPATCH-BUNDLE]` の行。
+fn prelens_bundles(place: &Prelens) -> Vec<String> {
+    let out = run_pipe(&[
+        "dispatch", "ls", "--state-dir", &place.state.display().to_string(), "--repo", &place.repo.display().to_string(),
+        "--rules", &place.rules, "--bd", &place.bd,
+    ]);
+    stdout_of(&out).lines().filter(|line| line.starts_with("[DISPATCH-BUNDLE]")).map(str::to_owned).collect()
+}
+
+/// 起動のたびに回数の file へ 1 行を足し、`body` を撃つ偽 lens の 1 行。
+fn prelens_lens(state: &Path, body: &str) -> String {
+    format!("printf 'x\\n' >> '{}'; {body}", state.join("prelens-count").display())
+}
+
+/// 偽 lens の起動の回数。
+fn prelens_count(state: &Path) -> usize {
+    fs::read_to_string(state.join("prelens-count")).map(|text| text.lines().count()).unwrap_or_default()
+}
+
+/// 回数が `want` に届くまで待ち（上限 20 秒）、さらに少し待ってから数える（遅れて来た起動を「起こしていない」と読み違えない）。
+fn prelens_settle(state: &Path, want: usize) -> usize {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while prelens_count(state) < want && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    std::thread::sleep(Duration::from_millis(800));
+    prelens_count(state)
+}
+
+/// bead の置き場（事前審査の dir の下の `lens/<bead>`）。
+fn prelens_dir(state: &Path, bead: &str) -> PathBuf {
+    state.join("pipe").join("precheck").join("lens").join(bead)
+}
+
+/// 置き場の `out` が在るまで待つ（上限 20 秒）。
+fn prelens_out(state: &Path, bead: &str) -> bool {
+    let out = prelens_dir(state, bead).join("out");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !out.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    out.exists()
+}
+
+/// 事前審査の結果の file の本文（無ければ空）。
+fn prelens_result(state: &Path, bead: &str) -> String {
+    fs::read_to_string(state.join("pipe").join("precheck").join(bead)).unwrap_or_default()
+}
+
+/// 結果の file の `result=` の値。
+fn prelens_word(state: &Path, bead: &str) -> String {
+    prelens_result(state, bead).lines().find_map(|line| line.strip_prefix("result=")).unwrap_or_default().to_owned()
+}
+
+/// 撃ち中の印の本文。
+fn prelens_mark(state: &Path, bead: &str) -> String {
+    fs::read_to_string(prelens_dir(state, bead).join("pid")).unwrap_or_default()
+}
+
+/// 印の pid（1 語目）。
+fn prelens_pid(state: &Path, bead: &str) -> Option<u32> {
+    prelens_mark(state, bead).split_whitespace().next()?.parse().ok()
+}
+
+/// 印の group を SIGKILL で殺し、pid が消えるまで待つ（上限 5 秒）。
+fn prelens_kill(pid: u32) {
+    Command::new("kill").args(["-KILL", "--", &format!("-{pid}")]).output().ok();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while proc_alive(pid) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// 置き場の印の group を全部殺して片付ける。
+fn prelens_clean(place: &Prelens, pids: &[u32]) {
+    for bead in [PRELENS_B, PRELENS_C] {
+        if let Some(pid) = prelens_pid(&place.state, bead) {
+            prelens_kill(pid);
+        }
+    }
+    for &pid in pids {
+        prelens_kill(pid);
+    }
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (a) 形 aa 1 の上限: 上限 1 で clean の待ち行 2 本の 1 周目は 1 本だけ起こし、その lens が生きている間の 2 周目も残りを起こさず
+/// （撃ち中を上限に数える）、印の group を殺した後の 3 周目に 1 本だけ起こす。値 0 の周は 1 本も起こさない。
+#[test]
+fn pipe_prelens_limit_counts_the_flying_lens_and_zero_fires_nothing() {
+    let place = prelens_place(Some(1), &[PRELENS_B, PRELENS_C]);
+    let lens = prelens_lens(&place.state, PRELENS_SLEEP);
+    prelens_turn(&place, &lens);
+    assert_eq!(prelens_settle(&place.state, 1), 1, "1 周目は 1 本だけ（{}）", prelens_result(&place.state, PRELENS_B));
+    prelens_turn(&place, &lens);
+    assert_eq!(prelens_settle(&place.state, 1), 1, "撃ち中の間の 2 周目は起こさない");
+    let pid = prelens_pid(&place.state, PRELENS_B).unwrap_or_default();
+    assert!(pid > 0 && proc_alive(pid), "列の先頭の行の印が生きている: {:?}", prelens_mark(&place.state, PRELENS_B));
+    prelens_kill(pid);
+    prelens_turn(&place, &lens);
+    assert_eq!(prelens_settle(&place.state, 2), 2, "group を殺した後の 3 周目は 1 本だけ");
+    prelens_clean(&place, &[pid]);
+    let zero = prelens_place(Some(0), &[PRELENS_B, PRELENS_C]);
+    prelens_turn(&zero, &prelens_lens(&zero.state, PRELENS_SLEEP));
+    assert_eq!(prelens_settle(&zero.state, 0), 0, "値 0 の周は 1 本も起こさない");
+    prelens_clean(&zero, &[]);
+}
+
+/// (b) 行の無い写しの周は 1 本も起こさず、`--lens` を持たない `dispatch ls` の `[DISPATCH-PRECHECK]` の行が ` prelens=unset` で終わる。
+#[test]
+fn pipe_prelens_without_the_row_fires_nothing_and_ls_says_unset() {
+    let place = prelens_place(None, &[PRELENS_B]);
+    prelens_turn(&place, &prelens_lens(&place.state, PRELENS_SLEEP));
+    assert_eq!(prelens_settle(&place.state, 0), 0, "行の無い周は撃たない");
+    assert_eq!(prelens_word(&place.state, PRELENS_B), "clean", "事前審査は clean: {}", prelens_result(&place.state, PRELENS_B));
+    let line = prelens_line(&place, PRELENS_B);
+    assert!(line.ends_with(" base=current prelens=unset"), "ls の行の末尾: {line}");
+    prelens_clean(&place, &[]);
+}
+
+/// (c) 口座は選ばず起こす側の環境を継承し、席の pane の変数だけを外す。
+#[test]
+fn pipe_prelens_lens_inherits_the_env_but_not_the_pane() {
+    let place = prelens_place(Some(1), &[PRELENS_B]);
+    let seen = place.state.join("prelens-env");
+    let body = format!("printf '%s %s\\n' \"${{TMUX_PANE-unset}}\" \"${{PRELENS_PROBE-unset}}\" > '{}'", seen.display());
+    let lens = prelens_lens(&place.state, &body);
+    let args = prelens_args(&place, Some(&lens));
+    let out = pipe_cmd(&args.iter().map(String::as_str).collect::<Vec<&str>>())
+        .env("TMUX_PANE", "%97")
+        .env("PRELENS_PROBE", "inherited")
+        .output()
+        .expect("binary を起動できる");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "1 周は rc 0: {}", stderr_of(&out));
+    assert_eq!(prelens_settle(&place.state, 1), 1, "1 本起こす");
+    assert_eq!(fs::read_to_string(&seen).unwrap_or_default(), "unset inherited\n", "TMUX_PANE だけを外し他は継承する");
+    prelens_clean(&place, &[]);
+}
+
+/// 偽 lens が受けた材料の dir を `seen` へ写す本文（その後に PASS を返す）。
+fn prelens_copy(seen: &Path) -> String {
+    format!("cp -r \"$(dirname '{{contract}}')\" '{}'; echo '{}'", seen.display(), lens_verdict("PASS"))
+}
+
+/// (d) 実体化（宣言）: 宣言だけの祖先 A の `+` の F を素で持ち、設計の節が F を backtick で名指す待ち行 B の先撃ちで、偽 lens が受けた
+/// 設計の材料の末尾に予想の base の 1 行と F の path が在り、base の要約の F が `行数 全体 0`、外の材料の depends の相手の行の F が
+/// base に在り（空の F が tracked）、一時の worktree は置き場にも `git worktree list` にも残らない。
+#[test]
+fn pipe_prelens_declared_ancestor_places_empty_files_in_a_temporary_tree() {
+    let rows = [prelens_row("a", r#"["+src/fresh.rs"]"#, &[]), prelens_row("b", r#"["src/fresh.rs"]"#, &[r#"depends = ["a"]"#])];
+    let doc = design_doc_rows(&rows).replace("節の本文。", "節の本文。`src/fresh.rs` を読む。");
+    let (repo, state) = prelens_repo(&doc, &[]);
+    let bd = prelens_ledger(&state, &[prelens_issue(PRELENS_A, "open", "a", &[]), prelens_issue(PRELENS_B, "open", "b", &[PRELENS_A])]);
+    prelens_hold(&state, &[PRELENS_A]);
+    let place = Prelens { rules: prelens_rules(&state, Some(1)), repo, state, bd };
+    let seen = place.state.join("prelens-seen");
+    prelens_turn(&place, &prelens_lens(&place.state, &prelens_copy(&seen)));
+    assert_eq!(prelens_word(&place.state, PRELENS_B), "clean", "{}", prelens_result(&place.state, PRELENS_B));
+    assert!(prelens_out(&place.state, PRELENS_B), "偽 lens が終わる");
+    let design = fs::read_to_string(seen.join("design.txt")).unwrap_or_default();
+    let note = "予想の base: 次の file は未着地の祖先の宣言で、本文を空で置いた\n- src/fresh.rs\n";
+    assert!(design.ends_with(note), "設計の材料の末尾に予想の 1 行と F: {design}");
+    let base = fs::read_to_string(seen.join("base.txt")).unwrap_or_default();
+    assert!(base.contains("- src/fresh.rs: 行数 全体 0 / "), "空の F: {base}");
+    let outside = fs::read_to_string(seen.join("outside.txt")).unwrap_or_default();
+    assert!(outside.contains("  +src/fresh.rs: base に在る"), "空の F が tracked: {outside}");
+    assert!(!prelens_dir(&place.state, PRELENS_B).join("tree").exists(), "worktree は置き場に残らない");
+    assert_eq!(git(&place.repo, &["worktree", "list"]).lines().count(), 1, "git worktree list は anchor だけ");
+    prelens_clean(&place, &[]);
+}
+
+/// (e) 実体化（実物の木）: 祖先 A が Gated PASS で A の木が `.md` の G に 2 行を書いた周に、G を素で持つ待ち行 B の先撃ちの base の
+/// 要約の G が `行数 全体 2` で、設計の材料に予想の印が無い。
+#[test]
+fn pipe_prelens_gated_ancestor_copies_the_tree_file_whatever_its_extension() {
+    let rows = [prelens_row("a", r#"["+docs/g.md"]"#, &[]), prelens_row("b", r#"["docs/g.md"]"#, &[])];
+    let (repo, state) = prelens_repo(&design_doc_rows(&rows), &[]);
+    let bd = prelens_ledger(&state, &[prelens_issue(PRELENS_A, "open", "a", &[]), prelens_issue(PRELENS_B, "open", "b", &[PRELENS_A])]);
+    prelens_hold(&state, &[PRELENS_A]);
+    let id = intake_bead(&repo, &state, &format!("{DESIGN_FILE}#a"), PRELENS_A);
+    let runner = "printf 'one\\ntwo\\n' > docs/g.md && git add -A && git commit -q -m runner";
+    let spawned = spawn_with(&repo, &state, &id, runner);
+    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "spawn は rc 0: {}", stderr_of(&spawned));
+    let gated = gate_once(&repo, &state, &id, Some(&fake_lens(&state.join("prelens-gate-lens"), &lens_verdict("PASS"))));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "gate は PASS: {}", stderr_of(&gated));
+    fs::write(state.join("pipe").join(&id).join("driver"), "not-a-pid\n").expect("札を書ける");
+    let place = Prelens { rules: prelens_rules(&state, Some(1)), repo, state, bd };
+    let seen = place.state.join("prelens-seen");
+    prelens_turn(&place, &prelens_lens(&place.state, &prelens_copy(&seen)));
+    assert_eq!(prelens_word(&place.state, PRELENS_B), "clean", "{}", prelens_result(&place.state, PRELENS_B));
+    assert!(prelens_out(&place.state, PRELENS_B), "偽 lens が終わる");
+    let base = fs::read_to_string(seen.join("base.txt")).unwrap_or_default();
+    assert!(base.contains("- docs/g.md: 行数 全体 2 / "), "A の木の G の 2 行: {base}");
+    let design = fs::read_to_string(seen.join("design.txt")).unwrap_or_default();
+    assert!(!design.is_empty() && !design.contains("予想の base"), "実物の木に予想の印は無い: {design}");
+    prelens_clean(&place, &[]);
+}
+
+/// (f) 組めない周: 置き場の `tree` の path に file が在って worktree を作れない周は撃たず、ls の行が ` prelens=unbuilt` で終わる。
+/// その file を外した次の周は撃ち、` prelens=unbuilt` は消える。
+#[test]
+fn pipe_prelens_unbuilt_tree_is_named_and_refired_after_it_clears() {
+    let place = prelens_place(Some(1), &[PRELENS_B]);
+    let blocker = prelens_dir(&place.state, PRELENS_B).join("tree");
+    fs::create_dir_all(prelens_dir(&place.state, PRELENS_B)).expect("置き場を作れる");
+    fs::write(&blocker, "not a tree\n").expect("tree の path に file を置ける");
+    let lens = prelens_lens(&place.state, &format!("echo '{}'", lens_verdict("PASS")));
+    prelens_turn(&place, &lens);
+    assert_eq!(prelens_settle(&place.state, 0), 0, "組めない周は撃たない");
+    let line = prelens_line(&place, PRELENS_B);
+    assert!(line.ends_with(" prelens=unbuilt"), "ls の行の末尾: {line}");
+    fs::remove_file(&blocker).expect("file を外せる");
+    prelens_turn(&place, &lens);
+    assert_eq!(prelens_settle(&place.state, 1), 1, "組めた周に撃つ");
+    let line = prelens_line(&place, PRELENS_B);
+    assert!(line.ends_with(" base=current"), "unbuilt の語は消える: {line}");
+    prelens_clean(&place, &[]);
+}
+
+/// (g) 起こした周は待たない: 30 秒眠る偽 lens を起こした周が返った時に、置き場に `out` が無く、印の本文が 2 語で、印の pid が生きている。
+#[test]
+fn pipe_prelens_fired_round_returns_without_waiting() {
+    let place = prelens_place(Some(1), &[PRELENS_B]);
+    let started = Instant::now();
+    prelens_turn(&place, &prelens_lens(&place.state, PRELENS_SLEEP));
+    assert!(started.elapsed() < Duration::from_secs(25), "周は lens の終わりを待たない: {:?}", started.elapsed());
+    assert!(!prelens_dir(&place.state, PRELENS_B).join("out").exists(), "out は無い");
+    let mark = prelens_mark(&place.state, PRELENS_B);
+    let words: Vec<&str> = mark.split_whitespace().collect();
+    assert!(words.len() == 2 && words.iter().all(|word| word.bytes().all(|byte| byte.is_ascii_digit())), "印は 2 語: {mark:?}");
+    let pid = prelens_pid(&place.state, PRELENS_B).unwrap_or_default();
+    assert!(proc_alive(pid), "印の pid が生きている: {mark:?}");
+    prelens_clean(&place, &[]);
+}
+
+/// (h) 印の弁別: 2 語目を別の数に書き換えた印（pid は生きている）は死んだと判じて撃ち直し、数でない字に壊した印（読めない）は
+/// 撃ち中に数えて撃ち直さない。
+#[test]
+fn pipe_prelens_mark_with_a_foreign_start_refires_but_an_unreadable_one_does_not() {
+    let place = prelens_place(Some(1), &[PRELENS_B]);
+    let lens = prelens_lens(&place.state, PRELENS_SLEEP);
+    prelens_turn(&place, &lens);
+    assert_eq!(prelens_settle(&place.state, 1), 1, "1 周目に 1 本");
+    let first = prelens_pid(&place.state, PRELENS_B).unwrap_or_default();
+    let mark = prelens_dir(&place.state, PRELENS_B).join("pid");
+    fs::write(&mark, format!("{first} 1\n")).expect("印を書き換えられる");
+    prelens_turn(&place, &lens);
+    assert_eq!(prelens_settle(&place.state, 2), 2, "起動時刻の違う印は死んだと判じて撃ち直す");
+    let second = prelens_pid(&place.state, PRELENS_B).unwrap_or_default();
+    fs::write(&mark, "not-a-pid\n").expect("印を壊せる");
+    prelens_turn(&place, &lens);
+    assert_eq!(prelens_settle(&place.state, 2), 2, "読めない印は撃ち中に数えて撃ち直さない");
+    prelens_clean(&place, &[first, second]);
+}
+
+/// 1 行 `bead` に `judgement` を返す偽 lens を撃ち、終わった後の次の周までを回す（上限 1・待ち行 B だけ）。
+fn prelens_judged(judgement: &str) -> Prelens {
+    let place = prelens_place(Some(1), &[PRELENS_B]);
+    let lens = prelens_lens(&place.state, judgement);
+    prelens_turn(&place, &lens);
+    assert!(prelens_out(&place.state, PRELENS_B), "偽 lens が終わる");
+    prelens_turn(&place, &lens);
+    place
+}
+
+/// (i) 形 aa 4 の確定: FAIL（vacuous-assert）と INCONCLUSIVE（section-material-missing）の次の周に事前審査の結果が
+/// `firm:1,provisional:0` で、束の行の根が理由の型、finding の在り処が `prelens`。rc 1 で終わる偽 lens の周は clean のまま。
+#[test]
+fn pipe_prelens_fail_and_inconclusive_become_firm_findings_but_rc_one_does_not() {
+    for (verdict, kind) in [("FAIL", "vacuous-assert"), ("INCONCLUSIVE", "section-material-missing")] {
+        let place = prelens_judged(&format!("echo '{}'", lens_finding(verdict, Some(kind), None)));
+        let result = prelens_result(&place.state, PRELENS_B);
+        assert_eq!(prelens_word(&place.state, PRELENS_B), "firm:1,provisional:0", "{verdict}: {result}");
+        let line = prelens_line(&place, PRELENS_B);
+        assert!(line.contains(" result=firm:1,provisional:0 "), "{verdict}: ls の行: {line}");
+        let bundles = prelens_bundles(&place);
+        assert!(bundles.len() == 1 && bundles.iter().all(|found| found.contains(&format!(" root={kind} "))), "{verdict}: {bundles:?}");
+        let finding = result.lines().find(|found| found.starts_with("finding=")).unwrap_or_default();
+        assert!(finding.starts_with(&format!("finding=firm name={kind} at=prelens new=true ")), "{verdict}: {result}");
+        prelens_clean(&place, &[]);
+    }
+    let place = prelens_judged("exit 1");
+    assert_eq!(prelens_word(&place.state, PRELENS_B), "clean", "rc 1 は写さない: {}", prelens_result(&place.state, PRELENS_B));
+    prelens_clean(&place, &[]);
+}
+
+/// (j)(k) の置き場: 上限 1 で、待ち行 B は FAIL の判定を写し終え、待ち行 C は 30 秒眠る偽 lens が撃ち中（2 周を回した後）。
+fn prelens_crossing() -> (Prelens, String) {
+    let place = prelens_place(Some(1), &[PRELENS_B, PRELENS_C]);
+    let fail = lens_finding("FAIL", Some("vacuous-assert"), None);
+    let lens = prelens_lens(&place.state, &format!("case '{{contract}}' in *{PRELENS_C}*) {PRELENS_SLEEP};; esac; echo '{fail}'"));
+    prelens_turn(&place, &lens);
+    assert!(prelens_out(&place.state, PRELENS_B), "B の偽 lens が終わる");
+    prelens_turn(&place, &lens);
+    assert_eq!(prelens_settle(&place.state, 2), 2, "2 周目に C を起こす");
+    assert_eq!(prelens_word(&place.state, PRELENS_B), "firm:1,provisional:0", "{}", prelens_result(&place.state, PRELENS_B));
+    assert!(proc_alive(prelens_pid(&place.state, PRELENS_C).unwrap_or_default()), "C は撃ち中");
+    (place, lens)
+}
+
+/// 材料に入らない file `name` を main に 1 つ commit する（事前審査の鍵の HEAD が動く）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn prelens_unrelated(repo: &Path, name: &str) {
+    fs::write(repo.join(name), "x\n").expect("file を書ける");
+    git(repo, &["add", "-A"]);
+    git(repo, &["commit", "-q", "-m", name]);
+}
+
+/// (j) 周またぎ（材料が同じ）: 別の行の lens が撃ち中の周に材料に入らない file を main に commit した次の周も、B は
+/// `firm:1,provisional:0` のままで finding は `new=false`、`[DISPATCH-BUNDLE]` の行は commit の前と同じ。`--lens` 無しで撃った周と
+/// 値 0 の写しで撃った周も同じ（撃たない周も写し直す）。
+#[test]
+fn pipe_prelens_same_material_keeps_the_finding_across_a_main_move() {
+    let (place, lens) = prelens_crossing();
+    let before = prelens_bundles(&place);
+    let rounds: [(&str, &dyn Fn()); 3] = [
+        ("--lens の周", &|| {
+            prelens_turn(&place, &lens);
+        }),
+        ("--lens 無しの周", &|| {
+            prelens_round(&place, None);
+        }),
+        ("値 0 の周", &|| {
+            prelens_rules(&place.state, Some(0));
+            prelens_turn(&place, &lens);
+        }),
+    ];
+    for (index, (label, round)) in rounds.iter().enumerate() {
+        prelens_unrelated(&place.repo, &format!("unrelated-{index}.txt"));
+        round();
+        let result = prelens_result(&place.state, PRELENS_B);
+        assert_eq!(prelens_word(&place.state, PRELENS_B), "firm:1,provisional:0", "{label}: {result}");
+        assert!(prelens_line(&place, PRELENS_B).contains(" base=current"), "{label}: 事前審査は main の動きで書き直された");
+        let finding = result.lines().find(|found| found.starts_with("finding=")).unwrap_or_default();
+        assert!(finding.contains(" at=prelens new=false "), "{label}: 前の結果に在った finding は new=false: {result}");
+        assert_eq!(prelens_bundles(&place), before, "{label}: 束の行は変わらない");
+    }
+    prelens_clean(&place, &[]);
+}
+
+/// 材料の dir の file の (名, 本文) の列（名の順）。
+fn prelens_material(state: &Path, bead: &str) -> Vec<(String, String)> {
+    let dir = prelens_dir(state, bead).join("review");
+    let mut found: Vec<(String, String)> = fs::read_dir(&dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| (entry.file_name().to_string_lossy().into_owned(), fs::read_to_string(entry.path()).unwrap_or_default()))
+                .collect()
+        })
+        .unwrap_or_default();
+    found.sort();
+    found
+}
+
+/// (k) 周またぎ（材料が変わる）: B の write-set の素の path の file の本文を main で変えた次の周に、B の結果は clean で置き場に
+/// `out` と `fired` が無く、撃ち中の C の材料の dir は変わらない。
+#[test]
+fn pipe_prelens_changed_material_drops_the_verdict_and_keeps_the_flying_material() {
+    let (place, lens) = prelens_crossing();
+    let flying = prelens_material(&place.state, PRELENS_C);
+    assert!(!flying.is_empty(), "C の材料が在る");
+    fs::write(place.repo.join("src").join("b.rs"), "pub fn b() {}\n\npub fn b2() {}\n").expect("file を書ける");
+    git(&place.repo, &["add", "-A"]);
+    git(&place.repo, &["commit", "-q", "-m", "b-changed"]);
+    prelens_turn(&place, &lens);
+    assert_eq!(prelens_word(&place.state, PRELENS_B), "clean", "{}", prelens_result(&place.state, PRELENS_B));
+    let dir = prelens_dir(&place.state, PRELENS_B);
+    assert!(!dir.join("out").exists() && !dir.join("fired").exists(), "別の材料の判定を写さない");
+    assert_eq!(prelens_material(&place.state, PRELENS_C), flying, "撃ち中の行の材料は組み直さない");
+    prelens_clean(&place, &[]);
+}
+
+/// (l) 置き場の寿命: 依存を閉じて依存待ちを抜けた B の置き場は残り（母集団に居る）、B の bead を閉じた周の頭に消える。
+#[test]
+fn pipe_prelens_place_lives_while_the_row_is_open() {
+    let place = prelens_place(Some(1), &[PRELENS_B]);
+    prelens_hold(&place.state, &[PRELENS_B]);
+    let lens = prelens_lens(&place.state, &format!("echo '{}'", lens_verdict("PASS")));
+    prelens_turn(&place, &lens);
+    assert!(prelens_out(&place.state, PRELENS_B), "偽 lens が終わる");
+    let a_closed = prelens_issue(PRELENS_A, "closed", "a", &[]);
+    prelens_ledger(&place.state, &[a_closed.clone(), prelens_issue(PRELENS_B, "open", "b", &[PRELENS_A])]);
+    prelens_turn(&place, &lens);
+    assert!(prelens_dir(&place.state, PRELENS_B).is_dir(), "依存待ちを抜けても母集団に居る間は残る");
+    prelens_ledger(&place.state, &[a_closed, prelens_issue(PRELENS_B, "closed", "b", &[PRELENS_A])]);
+    prelens_turn(&place, &lens);
+    assert!(!prelens_dir(&place.state, PRELENS_B).exists(), "閉じた周の頭に外れる");
+    prelens_clean(&place, &[]);
+}
+
+/// (m) 測れなかった判定の撃ち直し: JSON の行の無い stdout（`unparsed`）を返した先撃ちの後、main を動かさない周は撃ち直さず結果は
+/// clean のまま。材料に入らない file を main に commit した後の 2 周のうちに 1 度だけ撃ち直し、main を動かさない次の周も撃ち直さない。
+#[test]
+fn pipe_prelens_unparsed_verdict_refires_once_after_main_moves() {
+    let place = prelens_place(Some(1), &[PRELENS_B]);
+    let lens = prelens_lens(&place.state, "echo not-json");
+    prelens_turn(&place, &lens);
+    assert!(prelens_out(&place.state, PRELENS_B), "偽 lens が終わる");
+    prelens_turn(&place, &lens);
+    assert_eq!(prelens_settle(&place.state, 1), 1, "main の動かない周は撃ち直さない");
+    assert_eq!(prelens_word(&place.state, PRELENS_B), "clean", "unparsed は写さない: {}", prelens_result(&place.state, PRELENS_B));
+    prelens_unrelated(&place.repo, "unrelated.txt");
+    for _ in 0..2 {
+        prelens_turn(&place, &lens);
+        prelens_settle(&place.state, 2);
+    }
+    assert_eq!(prelens_count(&place.state), 2, "main が動いた後の 2 周のうちに撃ち直す");
+    assert!(prelens_out(&place.state, PRELENS_B), "撃ち直した偽 lens が終わる");
+    prelens_turn(&place, &lens);
+    assert_eq!(prelens_settle(&place.state, 2), 2, "main の動かない次の周は撃ち直さない");
+    assert_eq!(prelens_word(&place.state, PRELENS_B), "clean", "{}", prelens_result(&place.state, PRELENS_B));
+    prelens_clean(&place, &[]);
+}
+
+/// (n) 残りの片付け: 置き場の `tree` に一時の worktree を残した置き場と、`tree` の dir を消して登録だけを残した置き場のそれぞれの
+/// 周は ` prelens=unbuilt` で終わらずに偽 lens を 1 回起こし、周の後の `git worktree list --porcelain` がその path を持たない。
+#[test]
+fn pipe_prelens_leftover_tree_and_registration_are_removed_at_the_round_head() {
+    for (label, registered_only) in [("worktree の残り", false), ("登録だけの残り", true)] {
+        let place = prelens_place(Some(1), &[PRELENS_B]);
+        let tree = prelens_dir(&place.state, PRELENS_B).join("tree");
+        fs::create_dir_all(prelens_dir(&place.state, PRELENS_B)).expect("置き場を作れる");
+        git(&place.repo, &["worktree", "add", "-q", "--detach", &tree.display().to_string(), "HEAD"]);
+        if registered_only {
+            fs::remove_dir_all(&tree).expect("tree の dir を消せる");
+        }
+        let suffix = format!("precheck/lens/{PRELENS_B}/tree");
+        assert!(git(&place.repo, &["worktree", "list", "--porcelain"]).contains(&suffix), "{label}: 周の前は登録が在る");
+        prelens_turn(&place, &prelens_lens(&place.state, &format!("echo '{}'", lens_verdict("PASS"))));
+        assert_eq!(prelens_settle(&place.state, 1), 1, "{label}: 残りを外して撃つ");
+        let line = prelens_line(&place, PRELENS_B);
+        assert!(!line.ends_with(" prelens=unbuilt"), "{label}: ls の行: {line}");
+        let list = git(&place.repo, &["worktree", "list", "--porcelain"]);
+        assert!(!list.contains(&suffix), "{label}: 周の後に残りは無い: {list}");
+        prelens_clean(&place, &[]);
+    }
+}
+
+// ───── Reviewed の段の使い回し（設計 dispatcher.md §27 形 ac・行 ac・接頭辞 `pipe_review_reuse_`） ─────
+//
+// 祖先 A（行 a・`+docs/g.md`）を待つ行 b（`docs/g.md` を素で持つ）へ先撃ちし、A を着地させて起こす側の周を 1 回撃った後に B の審査
+// （`pipe intake` の Reviewed）を撃つ。偽 lens は先撃ちと審査で同じ回数の file に 1 行を足す。base には使い回しが無い＝審査は必ず
+// 偽 lens を撃つ（(a) が RED）。
+
+/// 6 値を運ぶ PASS の判定の行（lens を撃った審査は消費の event を 1 件書く）。
+fn reuse_pass() -> String {
+    let usage = r#""usage":"in:7,out:8,cache_read:9,cache_create:10","turns":2,"wall_ms":300"#;
+    format!("{},{usage}}}", lens_verdict("PASS").trim_end_matches('}'))
+}
+
+/// 行 a（`+docs/g.md`）と a を blocks で待つ行 b（`docs/g.md`）の置き場（A と B を hold する＝列は起こさない）。
+fn reuse_place() -> Prelens {
+    let rows = [prelens_row("a", r#"["+docs/g.md"]"#, &[]), prelens_row("b", r#"["docs/g.md"]"#, &[])];
+    let (repo, state) = prelens_repo(&design_doc_rows(&rows), &[]);
+    let bd = prelens_ledger(&state, &[prelens_issue(PRELENS_A, "open", "a", &[]), prelens_issue(PRELENS_B, "open", "b", &[PRELENS_A])]);
+    prelens_hold(&state, &[PRELENS_A, PRELENS_B]);
+    Prelens { rules: prelens_rules(&state, Some(1)), repo, state, bd }
+}
+
+/// 先撃ちを 1 回撃ち、終わるまで待つ（偽 lens の回数 1）。
+fn reuse_fire(place: &Prelens, lens: &str) {
+    prelens_turn(place, lens);
+    assert!(prelens_out(&place.state, PRELENS_B), "先撃ちの偽 lens が終わる");
+    assert_eq!(prelens_settle(&place.state, 1), 1, "先撃ちは 1 回: {}", prelens_result(&place.state, PRELENS_B));
+}
+
+/// A を Gated PASS にし（A の木が G に 2 行を書く）、B へ `body` を撃つ偽 lens で先撃ちする。(置き場, A の便, 偽 lens) を返す。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn reuse_gated(body: &str) -> (Prelens, String, String) {
+    let place = reuse_place();
+    let id = intake_bead(&place.repo, &place.state, &format!("{DESIGN_FILE}#a"), PRELENS_A);
+    let runner = "printf 'one\\ntwo\\n' > docs/g.md && git add -A && git commit -q -m runner";
+    let spawned = spawn_with(&place.repo, &place.state, &id, runner);
+    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "spawn は rc 0: {}", stderr_of(&spawned));
+    let gate_lens = fake_lens(&place.state.join("reuse-gate-lens"), &lens_verdict("PASS"));
+    let gated = gate_once(&place.repo, &place.state, &id, Some(&gate_lens));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "gate は PASS: {}", stderr_of(&gated));
+    fs::write(place.state.join("pipe").join(&id).join("driver"), "not-a-pid\n").expect("札を書ける");
+    let lens = prelens_lens(&place.state, body);
+    reuse_fire(&place, &lens);
+    (place, id, lens)
+}
+
+/// A を着地させる: `body` が `None` なら A の木の HEAD へ main を早送りし、`Some` なら G をその本文で main に commit する。A の便を
+/// 外し（`run` が在れば）、台帳の A を閉じ、起こす側の周を 1 回撃つ。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn reuse_land(place: &Prelens, run: Option<&str>, body: Option<&str>, lens: &str) {
+    match (run, body) {
+        (Some(id), None) => {
+            let head = git(&worktree_of(&place.repo, id), &["rev-parse", "HEAD"]);
+            git(&place.repo, &["merge", "-q", "--ff-only", head.trim()]);
+        }
+        (_, text) => {
+            fs::write(place.repo.join("docs").join("g.md"), text.unwrap_or_default()).expect("G を書ける");
+            git(&place.repo, &["add", "-A"]);
+            git(&place.repo, &["commit", "-q", "-m", "landed"]);
+        }
+    }
+    if let Some(id) = run {
+        stop_run_ok(&place.state, id);
+    }
+    prelens_ledger(&place.state, &[prelens_issue(PRELENS_A, "closed", "a", &[]), prelens_issue(PRELENS_B, "open", "b", &[PRELENS_A])]);
+    prelens_turn(place, lens);
+}
+
+/// B の審査を `lens` で 1 回撃ち、(Reviewed の detail, 審査の消費の event の増分) を返す。
+fn reuse_review(place: &Prelens, lens: &str) -> (String, usize) {
+    let costs = || events(&place.state).iter().filter(|event| event.kind == EventKind::RunCost).count();
+    let before = costs();
+    let out = run_pipe(&[
+        "intake", "--design", &format!("{DESIGN_FILE}#b"), "--bead", PRELENS_B, "--repo", &place.repo.display().to_string(),
+        "--state-dir", &place.state.display().to_string(), "--rules", &place.rules, "--lens", lens,
+    ]);
+    let id = run_id_of(&out);
+    assert!(!id.is_empty(), "審査まで届く: {} / {}", stdout_of(&out), stderr_of(&out));
+    (reviewed_detail(&place.state, &id), costs().saturating_sub(before))
+}
+
+/// (a) A が Gated の木のまま着地し、起こす側の周を 1 回撃った後の B の審査は、材料の鍵・判定・lens の字が先撃ちと同じなので偽 lens を
+/// 撃たず（回数 1 のまま）判定を写し、detail が ` prelens:reused` で終わり、審査の消費の event を書かない。
+#[test]
+fn pipe_review_reuse_same_material_and_lens_copies_the_verdict_without_firing() {
+    let (place, id, lens) = reuse_gated(&format!("echo '{}'", reuse_pass()));
+    reuse_land(&place, Some(&id), None, &lens);
+    let (detail, costs) = reuse_review(&place, &lens);
+    assert_eq!(prelens_count(&place.state), 1, "審査は偽 lens を撃たない: {detail}");
+    assert_eq!(detail, "verdict:PASS prelens:reused", "先撃ちの判定を写し末尾に語");
+    assert_eq!(costs, 0, "使い回した審査は消費の event を書かない");
+    prelens_clean(&place, &[]);
+}
+
+/// (b) G が Gated の木（2 行）と違う 3 行で着地した周の審査は材料の鍵が外れて偽 lens を撃ち（回数 2）、detail に語が無く、撃った
+/// 審査の消費の event を 1 件書く（(a) の 0 件の対）。
+#[test]
+fn pipe_review_reuse_landed_body_unlike_the_gated_tree_fires_the_lens() {
+    let (place, id, lens) = reuse_gated(&format!("echo '{}'", reuse_pass()));
+    stop_run_ok(&place.state, &id);
+    reuse_land(&place, None, Some("one\ntwo\nthree\n"), &lens);
+    let (detail, costs) = reuse_review(&place, &lens);
+    assert_eq!(prelens_count(&place.state), 2, "審査は偽 lens を撃つ: {detail}");
+    assert_eq!(detail, "verdict:PASS", "語は無い");
+    assert_eq!(costs, 1, "撃った審査は消費の event を 1 件書く");
+    prelens_clean(&place, &[]);
+}
+
+/// (c) 宣言だけの祖先を持つ行（予想の印を持つ）は、祖先が宣言どおり空の G で着地した後の審査でも偽 lens を撃つ。
+#[test]
+fn pipe_review_reuse_forecast_mark_never_matches_the_landed_base() {
+    let place = reuse_place();
+    let lens = prelens_lens(&place.state, &format!("echo '{}'", reuse_pass()));
+    reuse_fire(&place, &lens);
+    reuse_land(&place, None, Some(""), &lens);
+    let (detail, _) = reuse_review(&place, &lens);
+    assert_eq!(prelens_count(&place.state), 2, "予想の印を持つ材料は使い回さない: {detail}");
+    assert!(!detail.contains("prelens:reused"), "{detail}");
+    prelens_clean(&place, &[]);
+}
+
+/// (d) 先撃ちが rc 1（`unparsed`）で終わった行は、材料と lens の字が同じでも審査で偽 lens を撃つ。
+#[test]
+fn pipe_review_reuse_unparsed_prelens_verdict_fires_the_lens() {
+    let (place, id, lens) = reuse_gated(&format!("echo '{}'; exit 1", reuse_pass()));
+    reuse_land(&place, Some(&id), None, &lens);
+    let (detail, _) = reuse_review(&place, &lens);
+    assert_eq!(prelens_count(&place.state), 2, "測れなかった判定は使い回さない: {detail}");
+    assert!(!detail.contains("prelens:reused"), "{detail}");
+    prelens_clean(&place, &[]);
+}
+
+/// (e) 起こす側の lens の cmd の字と便の lens の cmd の字が違う周（末尾の空白 1 つ）の審査は偽 lens を撃つ。
+#[test]
+fn pipe_review_reuse_other_lens_cmd_fires_the_lens() {
+    let (place, id, lens) = reuse_gated(&format!("echo '{}'", reuse_pass()));
+    reuse_land(&place, Some(&id), None, &lens);
+    let (detail, _) = reuse_review(&place, &format!("{lens} "));
+    assert_eq!(prelens_count(&place.state), 2, "lens の字が違えば使い回さない: {detail}");
+    assert!(!detail.contains("prelens:reused"), "{detail}");
+    prelens_clean(&place, &[]);
 }
