@@ -903,3 +903,79 @@ fn pipe_review_kind_lens_killed_in_scope_is_unparsed() {
     assert_eq!(intake::reviewed_detail(&state, &id), "verdict:INCONCLUSIVE kind:unparsed");
     clean(&[&repo, &state]);
 }
+
+// ───── 便の worktree の build と依存の置き場の掃除（`s2-07l.735`・設計 dispatcher.md §30・接頭辞 `pipe_sweep_`） ─────
+
+/// file を 1 本置く（親の dir ごと作る）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn put_file(path: &Path, body: &str) {
+    fs::create_dir_all(path.parent().expect("親の dir を解ける")).expect("親の dir を作れる");
+    fs::write(path, body).expect("file を書ける");
+}
+
+/// 便の repo の記録を置き場へ書き、`tree` に anchor の HEAD の worktree を切る（木の path を返す）。
+fn sweep_tree(repo: &Path, state: &Path, run: &str, tree: &Path) -> PathBuf {
+    put_file(&state.join("pipe").join(run).join("repo"), &format!("{}\n", repo.display()));
+    git(repo, &["worktree", "add", "-q", "--detach", &tree.display().to_string(), "HEAD"]);
+    tree.to_path_buf()
+}
+
+/// stderr の `sweep:` の行（無ければ空）。
+fn sweep_line(out: &std::process::Output) -> String {
+    stderr_of(out).lines().find(|line| line.starts_with("sweep:")).unwrap_or_default().to_owned()
+}
+
+/// (a) `Stopped` の便の元の場所の木から、追跡されていない `target/` と `node_modules/` が `pipe stop` の終端（`--repo` の
+/// 無い周）の後に消え、追跡されている file を持つ `target` の名の dir・列に無い未追跡の dir・無視の規則に当たる列に無い
+/// file は残る。stderr は `sweep: removed=2 runs=1` の行を持ち、終端の後も live のままの便の木の `target/` は残る。
+#[test]
+fn pipe_sweep_stopped_run_loses_untracked_build_dirs_and_live_run_keeps_its_target() {
+    let (repo, state) = repo_with_state();
+    put_file(&repo.join("docs").join("target").join("keep.md"), "tracked\n");
+    git(&repo, &["add", "docs/target/keep.md"]);
+    git(&repo, &["commit", "-q", "-m", "tracked target"]);
+    live_run(&state, "r-sweep");
+    live_run(&state, "r-live");
+    let tree = sweep_tree(&repo, &state, "r-sweep", &vessel::pipe::worktree_path(&repo, "r-sweep"));
+    let other = sweep_tree(&repo, &state, "r-live", &vessel::pipe::worktree_path(&repo, "r-live"));
+    for rel in ["target/debug/app.o", "node_modules/pkg/index.js", "docs/target/build.o", "out/bundle.txt", "local.env"] {
+        put_file(&tree.join(rel), "x\n");
+    }
+    put_file(&tree.join(".gitignore"), "local.env\nout/\n");
+    put_file(&other.join("target").join("debug").join("app.o"), "x\n");
+
+    let out = run_pipe(&["stop", "--run", "r-sweep", "--state-dir", &state.display().to_string()]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "終端の rc は変わらない: {}", stderr_of(&out));
+    assert!(!tree.join("target").exists(), "未追跡の target/ は消える");
+    assert!(!tree.join("node_modules").exists(), "未追跡の node_modules/ は消える");
+    for kept in ["docs/target/keep.md", "docs/target/build.o", "out/bundle.txt", "local.env", "src/lib.rs"] {
+        assert!(tree.join(kept).is_file(), "{kept} は残る");
+    }
+    assert!(other.join("target").join("debug").join("app.o").is_file(), "live のままの便の target/ は残る");
+    assert_eq!(sweep_line(&out), "sweep: removed=2 runs=1 failed=0", "stderr: {}", stderr_of(&out));
+    assert!(!stdout_of(&out).contains("sweep:"), "stdout には出さない: {}", stdout_of(&out));
+    clean(&[&repo, &state]);
+}
+
+/// (b) `Landed` の便の退役先の木の `target/` は、下に入れ子の `.git` を持っていても消える（別の便の終端の周）。
+#[test]
+fn pipe_sweep_landed_run_retired_target_with_nested_git_is_removed() {
+    let (repo, state) = repo_with_state();
+    live_run(&state, "r-end");
+    record_event(&state, &["--kind", "RunStage", "--run", "r-done", "--bead", "b", "--stage", "Landed", "--detail", "x"]);
+    let retired = vessel::pipe::worktrees_dir(&repo).join("retired").join("r-done");
+    let tree = sweep_tree(&repo, &state, "r-done", &retired);
+    put_file(&tree.join("target").join("debug").join("app.o"), "x\n");
+    git(&tree, &["init", "-q", &tree.join("target").join("nested").display().to_string()]);
+    assert!(tree.join("target").join("nested").join(".git").is_dir(), "前提: 入れ子の .git が在る");
+
+    let out = run_pipe(&["stop", "--run", "r-end", "--state-dir", &state.display().to_string()]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    assert!(!tree.join("target").exists(), "退役先の target/ は消える");
+    assert!(tree.join("src").join("lib.rs").is_file(), "追跡されている file は残る");
+    assert_eq!(sweep_line(&out), "sweep: removed=1 runs=1 failed=0", "stderr: {}", stderr_of(&out));
+    clean(&[&repo, &state]);
+}

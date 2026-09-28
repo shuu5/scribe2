@@ -37,6 +37,7 @@ mod queue;
 mod regate;
 mod follow_step;
 mod retire;
+mod sweep;
 mod train;
 
 use crate::polarity::{OnFailure, Polarity, Timing};
