@@ -222,6 +222,7 @@ README の先頭に「新しい repo を器に載せる」の節を置く: 打�
 - 却下: 両方の欄を許し両方在る行は消費側が `display-env` を使う（読み順が散文にしか無い規則になる・N2）／IME の env の欄に画面の変数も書く（欄の意味が外れる）／画面の番号の値の形で X と Wayland を読み分ける（散文にしか無い規則・実行時の dir を表せない・N2）／画面の番号の欄を列に変える（既存の面が型違いで読めなくなる）／汎用の env の欄（IME の env と役目が重なる）。詳細は ADR-0080。
 - 歯（lib・`crates/scribe2/src/rules/device.rs` の歯の区間・接頭辞 `host_device_display_env_`・`crates/` 全体で 0 件＝実測）: (a) `display-env = ["WAYLAND_DISPLAY=wayland-1", "XDG_RUNTIME_DIR=/run/user/1000"]` を持つ行（`display` なし）が読め、`display-env` の読み口が宣言順の 2 組・`display` の読み口は `None` を返し、`display-env` の無い行の読み口は空 (b) `display-env = ["A=1", "9B=2", "A=3"]` の面は、`display-env の要素 "9B=2" が KEY=VALUE の形でない（KEY の先頭が数字である）` と `display-env の KEY A が重複する` を `display-env` の行で 1 件ずつ断る（形の良い要素は数えない） (c) `display = ":0"` と形の良い `display-env` を両方持つ行は `display と display-env は同じ行に書けない（DISPLAY は display-env に書く）` を `display-env` の行で 1 件断り、同じ面から `display` を消すと読める。
 - base で RED の理由: 歯が 0 本（filter の該当 0 本＝nextest の rc 4）。実装の前の読み手は `display-env` を未知の key として断る（機能不在）。
+- 実装の決め（行 i・base 5ec8c4e）: `display-env` の読み口は `display_env` で、`ime_env` と同じ (KEY, VALUE) の組の列の slice を返す。両方の欄の断りは要素の検査の前に積む（両方在り要素も形に外れる行は、両方の欄の 1 件と要素の断りを並べて出す）。`display` が空の行は空の断りと両方の欄の断りの 2 件。歯は (a)〜(c) を 1 本ずつ（(a) は `display-env` の無い行として `display = ":0"` の行を同じ面に置き、`display` の読み口が今どおり返ることも測る）。device.rs は 270 → 330 行。
 
 <!-- contracts:begin -->
 schema = 1

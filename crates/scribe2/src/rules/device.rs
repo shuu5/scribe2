@@ -10,8 +10,8 @@ use super::RuleError;
 /// 表の見出しの字面。
 pub(super) const HEADER: &str = "[[device]]";
 
-/// 1 行が持てる key の全体（必須 4 つ・任意 3 つ）。
-pub(super) const KEYS: &[&str] = &["name", "ssh", "chrome", "os", "display", "ime-env", "profile-dir"];
+/// 1 行が持てる key の全体（必須 4 つ・任意 4 つ）。
+pub(super) const KEYS: &[&str] = &["name", "ssh", "chrome", "os", "display", "ime-env", "profile-dir", "display-env"];
 
 /// 1 行に必ず要る key。
 pub(super) const REQUIRED: &[&str] = &["name", "ssh", "chrome", "os"];
@@ -56,6 +56,7 @@ pub struct Device {
     display: Option<String>,
     ime_env: Vec<(String, String)>,
     profile_dir: Option<String>,
+    display_env: Vec<(String, String)>,
     line: u64,
 }
 
@@ -95,6 +96,11 @@ impl Device {
         self.profile_dir.as_deref()
     }
 
+    /// 画面を開く env の (KEY, VALUE) の列を**宣言順**で（任意・無ければ空・`display` と同じ行には書けない）。
+    pub fn display_env(&self) -> &[(String, String)] {
+        &self.display_env
+    }
+
     /// manifest の中でこの行が始まる物理行番号。
     pub fn line(&self) -> u64 {
         self.line
@@ -116,6 +122,7 @@ pub(super) fn build(raw: &RawRow, errors: &mut Vec<RuleError>) -> Option<Device>
     let display = text_field(raw, "display", errors);
     let profile_dir = text_field(raw, "profile-dir", errors);
     let ime_env = list_field(raw, "ime-env", errors).unwrap_or_default();
+    let display_env = list_field(raw, "display-env", errors);
     let (Some(name), Some(ssh), Some(chrome), Some(os)) = (name, ssh, chrome, os) else {
         return None;
     };
@@ -137,9 +144,16 @@ pub(super) fn build(raw: &RawRow, errors: &mut Vec<RuleError>) -> Option<Device>
         let words: Vec<&str> = OSES.iter().map(|found| found.as_str()).collect();
         errors.push(RuleError::new(line_of(raw, "os"), format!("os {os:?} が {} のどれでもない", words.join(" / "))));
     }
-    let ime_env = env_pairs(&ime_env, line_of(raw, "ime-env"), errors);
+    let ime_env = env_pairs("ime-env", &ime_env, line_of(raw, "ime-env"), errors);
+    if display.is_some() && display_env.is_some() {
+        errors.push(RuleError::new(
+            line_of(raw, "display-env"),
+            "display と display-env は同じ行に書けない（DISPLAY は display-env に書く）".to_owned(),
+        ));
+    }
+    let display_env = env_pairs("display-env", &display_env.unwrap_or_default(), line_of(raw, "display-env"), errors);
     let os = parsed?;
-    (errors.len() == before).then_some(Device { name, ssh, chrome, os, display, ime_env, profile_dir, line: raw.line })
+    (errors.len() == before).then_some(Device { name, ssh, chrome, os, display, ime_env, profile_dir, display_env, line: raw.line })
 }
 
 /// 空白を含まない 1 語でない理由（空・空白を含む）。1 語なら `None`。
@@ -158,14 +172,15 @@ fn line_of(raw: &RawRow, key: &str) -> u64 {
     raw.fields.iter().find(|(found, _, _)| found == key).map_or(raw.line, |(_, _, line)| *line)
 }
 
-/// `ime-env` の要素を (KEY, VALUE) へ割る。形に外れる要素と、前の要素と同じ KEY は `line`（`ime-env` の行）で 1 件ずつ断る。
-fn env_pairs(items: &[String], line: u64, errors: &mut Vec<RuleError>) -> Vec<(String, String)> {
+/// env の欄 `field`（`ime-env` / `display-env`）の要素を (KEY, VALUE) へ割る。形に外れる要素と、前の要素と同じ KEY は `line`
+/// （その欄の行）で欄の名を頭に置いて 1 件ずつ断る。
+fn env_pairs(field: &str, items: &[String], line: u64, errors: &mut Vec<RuleError>) -> Vec<(String, String)> {
     let mut pairs: Vec<(String, String)> = Vec::new();
     for item in items {
         match env_pair(item) {
-            Err(reason) => errors.push(RuleError::new(line, format!("ime-env の要素 {item:?} が KEY=VALUE の形でない（{reason}）"))),
+            Err(reason) => errors.push(RuleError::new(line, format!("{field} の要素 {item:?} が KEY=VALUE の形でない（{reason}）"))),
             Ok((key, _)) if pairs.iter().any(|(found, _)| *found == key) => {
-                errors.push(RuleError::new(line, format!("ime-env の KEY {key} が重複する")));
+                errors.push(RuleError::new(line, format!("{field} の KEY {key} が重複する")));
             }
             Ok(pair) => pairs.push(pair),
         }
@@ -266,5 +281,50 @@ mod tests {
                 "rules: host.toml: ime-env の KEY A が重複する line=8",
             ]
         );
+    }
+
+    /// (a) `display-env` の round-trip: 書いた組が宣言順で返り（`display` は `None`）、`display-env` の無い行の読み口は空。
+    #[test]
+    fn host_device_display_env_round_trips_in_declared_order() {
+        let body = "schema = 1\n\n[[device]]\nname = \"way-1\"\nssh = \"me@way\"\nchrome = \"/c\"\nos = \"linux\"\ndisplay-env = [\"WAYLAND_DISPLAY=wayland-1\", \"XDG_RUNTIME_DIR=/run/user/1000\"]\n\n[[device]]\nname = \"x-1\"\nssh = \"me@x\"\nchrome = \"/c\"\nos = \"linux\"\ndisplay = \":0\"\n";
+        let devices = read_face("display-env-round-trip", body).expect("2 行の面が読める");
+        let [wayland, x] = devices.as_slice() else { panic!("2 行: {devices:?}") };
+        let env: Vec<(&str, &str)> = wayland.display_env().iter().map(|(key, value)| (key.as_str(), value.as_str())).collect();
+        assert_eq!(env, [("WAYLAND_DISPLAY", "wayland-1"), ("XDG_RUNTIME_DIR", "/run/user/1000")]);
+        assert_eq!(wayland.display(), None);
+        assert!(wayland.ime_env().is_empty(), "{wayland:?}");
+        assert!(x.display_env().is_empty(), "{x:?}");
+        assert_eq!(x.display(), Some(":0"), "display-env の無い行の display は今どおり");
+    }
+
+    /// (b) 面を通した `display-env` の断り: 形の外の要素と KEY の重複は欄の名を頭に置き `display-env` の行で 1 件ずつ。
+    #[test]
+    fn host_device_display_env_defects_name_the_field_one_each() {
+        let body = "schema = 1\n\n[[device]]\nname = \"a\"\nssh = \"a\"\nchrome = \"/c\"\nos = \"linux\"\nime-env = [\"GTK_IM_MODULE=fcitx\"]\ndisplay-env = [\"A=1\", \"9B=2\", \"A=3\"]\n";
+        let errors = read_face("display-env-defects", body).expect_err("断る");
+        assert_eq!(
+            errors,
+            [
+                "rules: host.toml: display-env の要素 \"9B=2\" が KEY=VALUE の形でない（KEY の先頭が数字である） line=9",
+                "rules: host.toml: display-env の KEY A が重複する line=9",
+            ]
+        );
+    }
+
+    /// (c) `display` と `display-env` を両方持つ行は `display-env` の行で 1 件断り、同じ面から `display` を消すと読める。
+    #[test]
+    fn host_device_display_env_with_display_is_refused_once() {
+        let head = "schema = 1\n\n[[device]]\nname = \"a\"\nssh = \"a\"\nchrome = \"/c\"\nos = \"linux\"\n";
+        let env = "display-env = [\"DISPLAY=:0\"]\n";
+        let both = format!("{head}display = \":0\"\n{env}");
+        let errors = read_face("display-env-both", &both).expect_err("断る");
+        assert_eq!(
+            errors,
+            ["rules: host.toml: display と display-env は同じ行に書けない（DISPLAY は display-env に書く） line=9"]
+        );
+        let devices = read_face("display-env-only", &format!("{head}{env}")).expect("display を消すと読める");
+        let env: Vec<(&str, &str)> =
+            devices.iter().flat_map(|device| device.display_env()).map(|(key, value)| (key.as_str(), value.as_str())).collect();
+        assert_eq!(env, [("DISPLAY", ":0")]);
     }
 }
