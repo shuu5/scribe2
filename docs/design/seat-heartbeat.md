@@ -447,6 +447,151 @@
 - 却下: 文面と alarm と段の上げの 3 関数（`signal` / `idle_alarm` / `raise`・正規化 31 行）だけを移す（親の余地が 約 39 で size S の見積 100 に届かず、growth を書かない S の行が変わらず断られる。3 関数とも `Pace` を使い、`Pace` は `pointer_of` とも共有）／子を私有にして親は素の `use` だけ（制約 1 の rc 101・`to_line` の signature を直すのは純移動でない）／子を `pub mod` で公開する（clippy は通るが外から見える path が変わる・`pub use` なら 1 字も変わらない）／歯も子へ移す（制約 2）／`Pointer` を移す（制約 3）／`Rows` を移す（判定の列の 5 関数が使う rules の束が割れる）／停止の記録の群（`Switch` / `heartbeat` / `switch_word` ほか・約 96 行）を代わりに出す（閉じているが alarm の語の受け皿にならない）／子の名を alarm にする（群の 4 分の 3 は梯子の形と記録と段で、alarm は 1 関数）。
 - 依存: 無い（この doc の他の行に依らない）。alarm の語と局面の出力の部分の書き直しを足す後の行は、台帳の blocks でこの行の後に並ぶ。
 
+## 20. seat tick status に器の判定の 3 欄 reopens= / move= / grace_left= を足し（契約表の行 x）、doctor の群の行に今の逼迫 pressure= を足す（行 y）— 消費側の面が判定を写さずに読む（FR78 / FR36 / FR38・`s2-07l.737.1`）
+
+やさしく言うと: 別 project の画面（消費側）は、次の 3 つを出したい。
+- 使用量の上限で止まった席は、いつ再開できるか。
+- 群の移動で、席がいつ /exit されるか。
+- 群がいま逼迫しているか。
+
+今の器はこれを出していないので、消費側は自前の読みで代わりを作ろうとしていた。その読みは器の判定と食い違う。そこで器が自分の判定の 1 本をそのまま呼び、答えを text の欄として出す。判定の写しはどこにも書かない。
+
+- 出所: 台帳 `s2-07l.737.1`（消費側の席の問い 2026-09-28・notes の候補 2 / 3・2026-09-29 の消費側の待ち 2 本）。
+- 行の割り: status の側（形 1〜4・6）は行 x、doctor の側（形 5）は行 y にする。
+  - 消費側の 1 本目の待ち（開き直る時刻）を先に解くためである。
+  - 行 y は、既存の歯 13 本の書き換えを伴う。
+  - どちらもこの doc を write-set に持つので、同時には走らない。
+- 何が起きているか（main 7c4ab0a1・verified・2026-09-29）:
+  - status の行:
+    - `crates/scribe2/src/seat/tick.rs` の `status` が、登録 row の席ごとに `status_line` を呼ぶ。出すのは `seat tick status: target= last= age= healthy= heartbeat= step= next=` の 7 key（FR78 の 6 項目 + target）。
+    - 読む rules 行は `seat.tick_interval_s` と `seat.pointer_ladder_s` の 2 本で、どちらかを読めない周は rc 1 `no-rule`。
+    - host の面も口座の実測も読まない。
+  - 行の読み手:
+    - e2e の helper `status_line`（`crates/scribe2-boundary/tests/e2e/seat.rs`）が行の全体を組む。
+    - `crates/scribe2-boundary/tests/e2e/seat/tick.rs` の歯 2 本が、4 か所で行の全体を `assert_eq` する。別の 2 本は `tick_token` で key を読む。
+    - status の行を pin する snapshot は 0 本。
+    - 器の外の読み手は消費側の面 1 つで、key の名で値を読む。
+    - text の出力は、跨版の 5 面（ADR-0004 §2.2）の外である。
+  - 開き直る時刻の判定:
+    - 経路は `crates/scribe2/src/fleet/select.rs` の `select` → `standing` → `reading`。
+    - 「当たっている」は、数える窓（5 時間窓・7 日窓・与えた model のモデル別窓）の古くない実測の使用率が `LIMIT_PCT`（100）以上であること。
+    - 開き直る時刻は、当たっている窓の reset の遅い方。reset を過ぎた窓は落とす。
+    - `select` の結果の `NoCandidate` は、`limited` / `unmeasured` の列と `earliest_reset` を持つ。
+    - 席ごとの判定を出す面は無い。
+    - 消費側の代わりの読みは、2 点で器と食い違う: 上限の代わりに閾値の rules 行を使う・席の model でない model の窓も数える。
+  - 群の移動の待ち:
+    - tick の `moving` が次の順で判じる: 面を合わせた manifest → `group_of` → `current_of`（記録 > 種）→ 登録 row の口座と比べる → `signal_key` → 猶予 0 か `exit_due` なら `/exit`・`signalled` が在れば待つ・無ければ合図。
+    - 読み手は全部 `crates/scribe2/src/hook/group.rs` に在る（`current_of`・`grace_left`・`signal_key`・`signalled`・`exit_due`）。
+    - この組み立ては `moving` の中にしか無く、status からは呼べない。
+  - doctor の群の行:
+    - `crates/scribe2/src/account/mod.rs` の `render_group` が `group= accounts= anchors= seat-accounts= current= next= refused=` を出す。
+    - 行を pin する歯は `crates/scribe2-boundary/tests/e2e/seat/account.rs` の 13 本（接頭辞 `host_group_doctor_` / `host_group_record_` / `host_group_next_` / `host_group_refused_`）の 18 か所。
+  - 逼迫の判定:
+    - 群の段の門の判定は、`crates/scribe2/src/hook/group.rs` の `pressed`（純）である。
+    - 材料（閾値の `Caps`・群の席の役割の model `role_models`・鮮度の内側の実測・群の今の口座 `current_of`）は、どれも doctor が自分の置き場と host の根の群の記録から読める（先の群を測らずに判じる `pressed_now` と同じ読み）。
+    - 群の段の知らせの event `GroupPressureNotified` は、群の段を撃った置き場の event log にだけ在る。写すには置き場を跨いで読むことになるので、使わない。
+  - 余地（幅 120 で正規化・R-C4-2 = 1500）: tick.rs 1362（余地 138）・group.rs 1138（362）・account/mod.rs 1055（445）。
+- 形（番号は done と 1:1）:
+  1. **reopens=（開き直る時刻）は選定の 1 本を呼ぶ（行 x）**:
+     - status は席ごとに `select` を 1 回撃つ。
+     - 入力: 登録 row の口座 label 1 つ・replay の `allowance`・用途は席用（session）・model は登録 row の `model`（無い旧 row は `None`＝全部の model の窓を数える保守側）・除外なし・走行中の便数なし・閾値 `LIMIT_PCT`・今の UTC・留まる口座なし。
+       - 閾値の分岐は当たりの分岐の後ろに在るので届かない。用途に依らず同じ答えになる。
+     - 値は結果から写すだけ:
+       - `NoCandidate` の `limited` が空でない周は `earliest_reset`（`YYYY-MM-DDTHH:MM:SSZ`）。時刻が無ければ `unknown`。
+       - `unmeasured` が空でない周は `unmeasured`。
+       - 候補に選ばれた周は `-`。
+     - 当たっているかと時刻を status の側で計算しない。`crates/scribe2/src/fleet/select.rs` は 1 字も変えない。
+  2. **移動の見立てと次の手は group.rs の 2 本にし、tick の移動の周と status が同じものを呼ぶ（行 x）**:
+     - (a) 移動の見立ての 1 関数（入力: 群の面を合わせた manifest・置き場・登録 row の anchor と口座）:
+       - anchor が群の外・群 0 の host・群の今の口座が row の口座と同じ周は「無し」。
+       - 記録が在るのに読めない周は「読めない」。
+       - 食い違う周は、群と群の今の口座（`current_of` の返り値）。
+     - (b) 移動の周の次の手の 1 関数（入力: 席の置き場・移動の鍵・今・猶予の秒）は、閉じた 3 値を返す:
+       - 猶予 0 か `exit_due` が真なら exit。
+       - 同じ移動の合図の記録の残り（`signalled` と `grace_left`）が在れば wait（残りの秒つき）。
+       - 無ければ signal。
+     - `moving` はこの 2 本を呼ぶ形に置き換わる。判定行・送る key・記録・lock の順・`Move` の語は 1 字も変わらない。
+  3. **move= と grace_left= は形 2 の 2 本の答えを写すだけ（行 x）**:
+     - move=:
+       - 見立てが無しなら `-`。
+       - 読めない（面を合わせられない周を含む）なら `unreadable`。
+       - 食い違いなら群の今の口座の label（doctor の群の行の `current=` と同じ字面・種でも label）。
+     - grace_left=:
+       - move= が `-` なら `-`、`unreadable` なら `unreadable`。
+       - move= が label の周は、次の手が exit なら `0`・wait なら残りの秒（1 以上の整数）・signal なら `-`（合図がまだ届いていない＝猶予が始まっていない）。
+     - status は pane を読まない。窓が shell の席の区別はせず、row と群の食い違いだけを言う。
+  4. **行の形（行 x）**:
+     - status は `seat.move_grace_s` を、周期・梯子の行と同じ場所で読む。3 本のどれかを読めない周は、今と同じ rc 1 `no-rule`・stdout 0 行。
+     - 新しい 3 key は `next=` の後ろに reopens / move / grace_left の順で、毎行必ず出す（省かない・空にしない）。
+     - 既存の 7 key の名・順・値、rc、断りの語（`no-row` / `no-rule` / `store` / state dir）、`--target` の絞りは変えない。
+  5. **doctor の群の行の末尾（`refused=` の後ろ）に pressure= を 1 つ足す（行 y）**:
+     - 値は、群の段の門の判定をそのまま呼ぶ:
+       - `current_of` か event log を読めない周は `unreadable`。
+       - 閾値・役割の model・鮮度の rules 行を読めない周は `no-rule`。
+       - 群の今の口座に鮮度の内側の実測が無い周は `unmeasured`。
+       - `pressed` が返す窓が在れば `<窓>:<使用率>/<閾値>`、無ければ `-`。窓の字面は `WindowKind` の `short`（`5h` / `7d` / `model`）で、群の段の知らせと hook の 1 行と同じ語。
+     - 測らない・記録を書かない・lock を取らない・他の置き場の event log を読まない。読むのは、自分の置き場の log と host の根の群の記録だけ（`current=` と同じ）。
+     - 群を宣言しない host の行は 0 本のまま。
+     - 閾値未満の使用率は出さない（群の段の判定は、越えた窓しか返さない）。
+  6. **読みの費用**:
+     - status が足す読み: host の面 1 回・席ごとに群の記録 1 file・`move-signal` 1 file・合図が在って猶予の内の周だけ `state.jsonl` 1 file（`exit_due` の応え終えた印）。
+     - event log の読みは、今と同じ 1 回。
+     - doctor が足す読みは、形 5 のとおり。
+     - 計測の子・tmux・lock・書き込みは、どちらも 0。
+- 消費側へ渡す key の表（値に空白は無い）:
+
+  | 行 | key | 値 | 意味 |
+  |---|---|---|---|
+  | seat tick status | `reopens` | `YYYY-MM-DDTHH:MM:SSZ` / `-` / `unmeasured` / `unknown` | 開き直る時刻（器の選定の読みで、席の口座が席の model の窓を含む数える窓で上限 100% に当たっている周・当たっている窓の reset の遅い方）／当たっていない／測れていない／当たっているが時刻が無い |
+  | seat tick status | `move` | 口座 label / `-` / `unreadable` | 群の今の口座が席の登録 row の口座と違う＝器が席を移す先／移動なし／群の記録か面を読めない |
+  | seat tick status | `grace_left` | 1 以上の整数（秒）/ `0` / `-` / `unreadable` | 退避の合図の後の猶予の残り／次の tick の周で `/exit`／移動なし・合図がまだ届いていない（`move` が label の周）／`move` と同じ |
+  | doctor の群の行 | `pressure` | `<5h\|7d\|model>:<使用率>/<閾値>` / `-` / `unmeasured` / `unreadable` / `no-rule` | 群の今の口座が群の段の閾値を越えた窓のうち使用率が最大の 1 つ／閾値未満／鮮度の内側の実測が無い／記録か log を読めない／rules 行が無い |
+
+- 触らない:
+  - `crates/scribe2/src/fleet/select.rs`（呼ぶだけ）。
+  - `pressed` / `Caps` / `role_models` / `current_of` / `exit_due` / `signalled` / `grace_left` の本体。
+  - 群の段（`crates/scribe2/src/pipe/dispatch/group.rs`）。
+  - tick の判定行の字面と `Move` の語・`tick-last`・doctor の席の行・`seat heartbeat status`・使い方の 1 行と help の頁・rules（行を足さない）・event log の形・SRS。
+- 却下:
+  - 消費側が、rules 行の閾値以上の窓の reset の遅い方で代わりに読む（器と 2 点で食い違い、判定の写しを器の外に作る）。
+  - 開き直る時刻を、tick の口座の門（閾値の rules 行）で判じる（上限でなく閾値なので、止まった席の再開の時刻にならない）。
+  - `crates/scribe2/src/fleet/select.rs` に 1 口座用の pub の関数を足す（`select` を 1 口座で撃てば同じ `standing` → `reading` を通る）。
+  - reopens を時刻と `-` の 2 値にする（測れない周と時刻の無い当たりを「当たっていない」に潰す＝C10・NFR4 に反する）。
+  - move= を判定行と同じ `Move` の語にする（status は pane を読まず launch を言えない・移り先が消える）。
+  - status が `moving` と同じ手順を自前で組む（2 本目の組み立て＝C2）。
+  - doctor の逼迫を `GroupPressureNotified` から写す（群の段の置き場の log にだけ在り、置き場を跨いで読むことになる）。
+  - pressure= に閾値未満の使用率も出す（群の段の判定の外の新しい関数が要る）。
+  - 3 欄の本体を tick.rs に置く（§19 の余地は後の行が使う。tick.rs は呼び出しと欄の組み立てだけにする）。
+  - status に JSON の口を足す（key の text で足り、口を増やさない）。
+- 歯（base で RED・接頭辞は `crates/` と `docs/` に 0 件・e2e の名簿にも 0 件・2026-09-29）:
+  - 行 x・`crates/scribe2-boundary/tests/e2e/seat/tick.rs` の接頭辞 `seat_tick_reopens_`（2 本）:
+    - (a) 実測と値:
+      - 5 時間窓 100（reset R1）+ 7 日窓 40 → `reopens=R1`。
+      - 5 時間窓 100（R1）+ 7 日窓 100（R2）→ `R2`（遅い方）。
+      - 前者に、席の model でないモデル別窓 100 を足す → `R1`（数えない）。
+      - 席の model のモデル別窓 100（R3）を足す → `R3`。
+    - (b) 5 時間窓 99 → `-`（行の全体を helper で pin）・実測なし → `unmeasured`・reset の無い 100 の行 → `unknown`。
+  - 行 x・同じ file の接頭辞 `seat_tick_pending_`（4 本）:
+    - (c) 群の記録が口座 B で、合図の記録が同じ移動・at = 今 − 100 → `move=<B> grace_left=` が猶予 − 100 前後。合図の記録なし → `grace_left=-`。別の移動の記録 → `-`。
+    - (c2) 猶予の外の合図 → `0`。猶予の内で、合図の at 以後の Busy と最終行 Stop の Idle → `0`。猶予 0 の写しで合図なし → `0`。
+    - (d) 群の無い置き場 → `move=- grace_left=-`（行の全体）。群の記録が無く row が種と同じ → `-` / `-`。形でない記録 → `unreadable` / `unreadable` で、rc 0・他の欄は不変。
+    - (e) `seat.move_grace_s` を欠く写し → rc 1・`seat tick status: refused reason=no-rule`・stdout 0 行。
+  - 行 x・回帰:
+    - `seat_tick_status_` は e2e helper の既定の末尾 ` reopens=unmeasured move=- grace_left=-` だけで、本文不変のまま緑。
+    - `seat_tick_grace_` / `seat_tick_saved_` / `seat_tick_move_` は不変で緑。
+  - 行 y・`crates/scribe2-boundary/tests/e2e/seat/account.rs` の接頭辞 `host_group_pressure_`（4 本・閾値 85 / 95 / 95）:
+    - (p1) 5 時間窓 90 → `pressure=5h:90/85`。7 日窓 96 → `7d:96/95`。両方 → `7d:96/95`（使用率の最大）。役割の model の窓 96 → `model:96/95`。同じ実測で役割が別の model → `-`。
+    - (p2) 記録が別の口座（閾値未満）→ `-`（種でなく今の口座を読む）。
+    - (p3) 閾値未満 → `-`・実測なし → `unmeasured`・鮮度の外の実測だけ → `unmeasured`（測らない）。
+    - (p4) 形でない記録 → `unreadable`・壊れた event log → `unreadable`・役割の行を欠く写し → `no-rule`。
+  - 行 y・既存の歯の書き換え: `host_group_doctor_` / `host_group_record_` / `host_group_next_` / `host_group_refused_` の 13 本・18 か所の群の行の assert に ` pressure=<語>` を足す（base では欄が無く赤）。
+- base で RED の理由: 機能不在。
+  - base の status の行は `next=` で終わる（`tick_token` が 3 key とも None）。猶予の行を欠く写しでも rc 0 で 6 項目を出す。
+  - doctor の群の行は `refused=` で終わる。
+  - 道具不在・環境ではない。
+- 依存: 行 w（着地済み・tick.rs の余地）。この doc の他の行には依らない。
+- § を merge したら、key の表を消費側の席へ渡す（memo の約束）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -701,4 +846,26 @@ verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail seat_tick_wait_fol
 size = "M"
 growth = ["crates/scribe2/src/seat/tick/signal.rs:146"]
 done = "(1) 11 item（LADDER_SCHEMA・Pace とその impl・Ladder とその impl・candidate・settle・pointer_of・signal・idle_alarm・raise）が名・本文・順序・doc comment を変えずに + の file へ移り、純移動の証明が pure と判じる（items-differ / residual-line 0 件）・子の頭は module doc と札と use 5 行だけで行頭の #[cfg(test)] を持たない (2) 親に増えるのは mod signal の 1 行・pub use の 1 行（candidate / pointer_of / raise / settle / signal / Ladder / Pace の 7 名）・素の use の 1 行（idle_alarm）の 3 行だけで、孤立した import（json の読み書きの use の 1 行・Event・Fact・Facts）を削り、#[cfg(test)] 付きの use は足さず、親の本体の item は 1 字も変わらない (3) 子側の可視性の変化は idle_alarm の private から pub(super) の 1 件だけで、Pointer・Rows とその欄・親側の可視性は不変 (4) 親の mod tests の本文と use super::{…} が 1 byte も変わらず、e2e の file は diff 0 行 (5) 札 flip-check: moved が親の mod tests { の直後と子の module doc の直後に 1 行ずつ在り、flip-check が moved=1 で通る (6) 名指しの既存の歯（lib 7 本・e2e 9 本）が名・本数・本文不変で緑、tick の外から見える名と path は不変で、clippy -D warnings が通常と test の両方の build で rc 0、file-lines で tick.rs の余地が base の 10 から 100 以上へ増える"
+
+[[contract]]
+id = "x"
+title = "seat tick status の行の末尾に器の判定の 3 欄 reopens= / move= / grace_left= を足す — 開き直る時刻は選定の select を 1 口座で呼び、移動の見立てと次の手は hook/group.rs の 2 本を tick の移動の周と status が共に呼ぶ（写しを書かない・§20・s2-07l.737.1）"
+req = ["FR78", "FR36", "FR38", "FR27", "AC48", "NFR4"]
+section = "20"
+write-set = ["crates/scribe2/src/seat/tick.rs", "crates/scribe2/src/hook/group.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "crates/scribe2-boundary/tests/e2e/seat/tick.rs", "docs/design/seat-heartbeat.md", "=crates/scribe2/src/fleet/select.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_reopens_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_pending_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_status_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_grace_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_saved_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_move_"]
+size = "M"
+growth = ["crates/scribe2/src/seat/tick.rs:40", "crates/scribe2/src/hook/group.rs:45"]
+done = "(1) status の行に reopens= が付き、値は select.rs の select を登録 row の口座 1 つ・replay の allowance・席用・登録 row の model・除外なし・走行中の便数なし・閾値 LIMIT_PCT・status の今の秒の UTC・留まる口座なしで 1 回撃った結果の写しだけ（NoCandidate の limited が非空なら earliest_reset か無ければ unknown・unmeasured が非空なら unmeasured・選ばれたら -）で、select.rs は 1 字も変わらない (2) hook/group.rs に移動の見立ての 1 関数（面を合わせた manifest・置き場・anchor と口座 → 無し / 読めない / 群と current_of の今の口座）と次の手の 1 関数（閉じた 3 値 exit / wait〔残りの秒〕/ signal・猶予 0 か exit_due なら exit・同じ移動の signalled の grace_left が在れば wait・無ければ signal）が在り、tick の moving がこの 2 本を呼び、判定行・送る key・記録・lock の順・Move の語は不変 (3) move= は無しで -・読めない（面を合わせられない周を含む）で unreadable・食い違いで群の今の口座の label、grace_left= は move= が - なら -・unreadable なら unreadable・label の周は exit で 0・wait で残りの秒・signal で - (4) status は seat.move_grace_s を周期・梯子の行と同じ場所で読み、読めない周は rc 1 no-rule・stdout 0 行で、新しい 3 key は next= の後ろに reopens / move / grace_left の順で毎行出て、既存の 7 key・rc・断りの語・--target は不変 (5) status が足す読みは host の面・群の記録・move-signal・state.jsonl だけで計測の子・tmux・lock・書き込みは 0 歯: seat_tick_reopens_（上限の窓の reset の遅い方・席の model でない窓を数えない・- / unmeasured / unknown）と seat_tick_pending_（猶予の残り・合図前の -・猶予切れと応え終えた印と猶予 0 の 0・移動なしの -・形でない記録の unreadable・猶予の行を欠く写しの no-rule）が base で RED、seat_tick_status_ は e2e helper の既定の末尾だけで本文不変のまま緑、seat_tick_grace_ / seat_tick_saved_ / seat_tick_move_ は不変で緑"
+
+[[contract]]
+id = "y"
+title = "doctor の群の行の末尾に今の逼迫 pressure= を足す — 群の段の門の pressed を測らずに呼び、越えた窓のうち使用率が最大の 1 つを <窓>:<使用率>/<閾値> で出す（写しを書かない・置き場を跨がない・§20・s2-07l.737.1）"
+req = ["FR38", "FR78", "AC41", "NFR4"]
+section = "20"
+write-set = ["crates/scribe2/src/account/mod.rs", "crates/scribe2-boundary/tests/e2e/seat/account.rs", "docs/design/seat-heartbeat.md", "=crates/scribe2/src/hook/group.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail host_group_pressure_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail host_group_doctor_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail host_group_record_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail host_group_next_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail host_group_refused_"]
+size = "M"
+growth = ["crates/scribe2/src/account/mod.rs:30"]
+done = "(1) doctor の群の行の refused= の後ろに pressure= が付き、current_of か event log を読めない周は unreadable・Caps / role_models / 鮮度の rules 行を読めない周は no-rule・鮮度の内側の実測が無い周は unmeasured・pressed が Some なら <WindowKind の short>:<used>/<cap>・None なら - (2) 計測・記録・lock・他の置き場の log の読みは 0 で、読むのは自分の置き場の log と host の根の群の記録だけ・群 0 の host の行は 0 本のまま (3) hook/group.rs の pressed / Caps / role_models / current_of の本体は変わらない 歯: host_group_pressure_（窓ごとの 3 形と最大・役割の model・今の口座の読み・閾値未満の -・unmeasured・unreadable・no-rule）が base で RED、host_group_doctor_ / host_group_record_ / host_group_next_ / host_group_refused_ の群の行の assert 18 か所に pressure= を足した書き換えが base で RED・HEAD で緑"
 <!-- contracts:end -->
