@@ -381,8 +381,8 @@ const GROUP_UNREADABLE: &str = "unreadable";
 ///
 /// 出すのは宣言値 3 つ（名・候補の label の列・置き場の数）と導出値 2 つ（その群の置き場を anchor に持つ席の登録 row の
 /// 口座 label・重複は畳み辞書順・1 つも無ければ [`GROUP_NONE`]・`state` が `None`〔log を読めない〕周は [`GROUP_UNREADABLE`]
-/// ／群の今の口座 `current=`＝[`render_current`]・§20 形 2 ／群の予約 `next=`＝[`render_next`]・§29 形 5）。記録は 1 件も書かない
-/// （読むだけ）。
+/// ／群の今の口座 `current=`＝[`render_current`]・§20 形 2 ／群の予約 `next=`＝[`render_next`]・§29 形 5 ／断りの印 `refused=`／今の
+/// 逼迫 `pressure=`＝[`render_pressure`]・seat-heartbeat.md §20 形 5）。記録は 1 件も書かない（読むだけ）。
 fn render_group(state_dir: &Path, manifest: &Manifest, group: &AccountGroup, state: Option<&State>) -> String {
     let seats = match state {
         None => GROUP_UNREADABLE.to_owned(),
@@ -396,14 +396,35 @@ fn render_group(state_dir: &Path, manifest: &Manifest, group: &AccountGroup, sta
         }
     };
     format!(
-        "group={} accounts={} anchors={} seat-accounts={seats} current={} next={} refused={}",
+        "group={} accounts={} anchors={} seat-accounts={seats} current={} next={} refused={} pressure={}",
         group.name(),
         group.accounts().join(","),
         group.anchors().len(),
         render_current(state_dir, group),
         render_next(state_dir, manifest, group),
-        render_refused(state_dir, group)
+        render_refused(state_dir, group),
+        render_pressure(state_dir, manifest, group, state)
     )
+}
+
+/// 群の行の `pressure=` の値（群の段の門の判定 [`crate::hook::group::pressed`] を**測らずに**呼ぶ・seat-heartbeat.md §20 形 5）:
+/// 群の今の口座（記録 > 種）の鮮度の内側の実測が越えた窓のうち使用率が最大の 1 つを `<窓>:<使用率>/<閾値>`・越えた窓が無ければ
+/// `-`。記録か event log を読めなければ [`GROUP_UNREADABLE`]・閾値 / 役割の model / 鮮度の rules 行が無ければ [`NEXT_NO_RULE`]・
+/// 鮮度の内側の実測が無ければ [`UNMEASURED`]（どれにも潰さない・C10）。読むのは自分の置き場の log と host の根の群の記録だけ。
+fn render_pressure(state_dir: &Path, manifest: &Manifest, group: &AccountGroup, state: Option<&State>) -> String {
+    use crate::hook::group::{current_of, pressed, role_models, Caps};
+    let (Ok(current), Some(state)) = (current_of(state_dir, group), state) else {
+        return GROUP_UNREADABLE.to_owned();
+    };
+    let (Ok(caps), Some(models)) = (Caps::of(manifest), role_models(manifest, group, state)) else {
+        return NEXT_NO_RULE.to_owned();
+    };
+    match crate::fleet::usage::fresh_rows(manifest, state, &current.label) {
+        Ok(Some(rows)) => pressed(&rows, caps, &models)
+            .map_or_else(|| "-".to_owned(), |found| format!("{}:{}/{}", found.window.short(), found.used, found.cap)),
+        Ok(None) => UNMEASURED.to_owned(),
+        Err(_) => NEXT_NO_RULE.to_owned(),
+    }
 }
 
 /// 群の行の `refused=` の値（断りの印・account-lifecycle.md §31 形 3）: 印の ts・無ければ `-`・在るのに形でない・読めなければ
