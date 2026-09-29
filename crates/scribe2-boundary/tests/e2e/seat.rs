@@ -1097,9 +1097,28 @@ fn launch_shims(place: &AcctPlace, target: &str) -> String {
     format!("{head}:{}:{tail}", bin.display())
 }
 
-/// 席の箱の頭の語列（設計 account-lifecycle.md §30 形 2・契約の字面から組む・`CPUWeight` を持たない・`--` で終わる）。
-fn launch_box_head(unit: &str, mb: u64) -> String {
-    format!("systemd-run --user --scope --quiet --collect --unit={unit} -p MemoryMax={mb}M -p OOMPolicy=continue --")
+/// 席の箱の CPU の上限（%・設計 account-lifecycle.md §37 形 1）: 1 job の値段 × 100。core 数は歯が `/proc/self/status` の
+/// `Cpus_allowed_list` から数え（席の起動は歯の子で同じ affinity）、`gate.mutants_jobs` は埋め込みの値。core 数を読めない周は `None`。
+fn launch_box_quota() -> Option<u64> {
+    let status = fs::read_to_string("/proc/self/status").ok()?;
+    let list = status.lines().find_map(|line| line.strip_prefix("Cpus_allowed_list:"))?.trim();
+    let cores = list
+        .split(',')
+        .map(|range| {
+            let (from, to) = range.split_once('-').unwrap_or((range, range));
+            to.parse::<u64>().ok()?.checked_sub(from.parse::<u64>().ok()?)?.checked_add(1)
+        })
+        .try_fold(0_u64, |sum, count| sum.checked_add(count?))
+        .filter(|cores| *cores > 0)?;
+    Some((cores / crate::pipe::embedded_int("gate.mutants_jobs").max(1)).max(1) * 100)
+}
+
+/// 席の箱の頭の語列（設計 account-lifecycle.md §30 形 2・§37 形 1・契約の字面から組む・`CPUWeight` を持たない・`--` で終わる・
+/// `CPUQuota` は `MemoryMax` と `OOMPolicy` の間・[`launch_box_quota`] が読めない周は語が無い）。
+// flip-check: retroactive s2-07l.737.15
+pub(crate) fn launch_box_head(unit: &str, mb: u64) -> String {
+    let quota = launch_box_quota().map_or_else(String::new, |percent| format!(" -p CPUQuota={percent}%"));
+    format!("systemd-run --user --scope --quiet --collect --unit={unit} -p MemoryMax={mb}M{quota} -p OOMPolicy=continue --")
 }
 
 /// unit 名が `<NAME>-<潰した target>-seat-0-<pid>-<seq>` の形か（pid と seq は 10 進の数）。

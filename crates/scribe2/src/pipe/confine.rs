@@ -36,6 +36,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 
 mod cpu;
+pub use cpu::seat_quota;
 
 /// scope を作る道具。**PATH で解決する**（絶対 path を焼かない・env も読まない）。
 const SYSTEMD_RUN: &str = "systemd-run";
@@ -822,9 +823,9 @@ fn scope_args(unit: &str, mb: u64, cpu_weight: Option<u64>, cpu_quota: Option<u6
 
 /// 席の起動行の頭の語列（設計 account-lifecycle.md §30 形 2・ADR-0072）: `systemd-run` → [`scope_args`]（`CPUWeight` 無し）→ `--`。
 /// 起動行の `claude` の前に置く（`--` の後ろの command を exec して自分は残らない）。unit 名は [`unit_name`] が組む。
-pub fn seat_scope_head(unit: &str, mb: u64) -> Vec<String> {
+pub fn seat_scope_head(unit: &str, mb: u64, cpu_quota: Option<u64>) -> Vec<String> {
     let mut words = vec![SYSTEMD_RUN.to_owned()];
-    words.extend(scope_args(unit, mb, None, None));
+    words.extend(scope_args(unit, mb, None, cpu_quota));
     words.push("--".to_owned());
     words
 }
@@ -1147,24 +1148,24 @@ mod tests {
         );
     }
 
-    /// `scope_args` の 2 形（設計 account-lifecycle.md §30 形 2・歯 (f)）: 便の形（CPUWeight と CPUQuota 有り）から
-    /// `-p CPUWeight=<w>` と `-p CPUQuota=<q>%` の 4 語を抜くと席の形に一致する＝他の語と順は同じ。席の頭は `systemd-run` →
-    /// 席の形 → `--` の語列。
+    /// `scope_args` の 2 形（設計 account-lifecycle.md §30 形 2・§37 歯 (f)）: 席の形は `CPUQuota` の 2 語を持ち `CPUWeight` は無い。
+    /// 便の形（CPUWeight と CPUQuota 有り）から `-p CPUWeight=<w>` の 2 語を抜くと席の形に一致する＝他の語と順は同じ。席の頭は
+    /// `systemd-run` → 席の形 → `--` の語列。
     #[test]
     fn confine_scope_args_two_forms_differ_only_by_cpu_weight() {
         let job = scope_args("u1", 4096, Some(CAPS.cpu_weight), Some(800));
-        let seat = scope_args("u1", 4096, None, None);
-        let want_seat = ["--user", "--scope", "--quiet", "--collect", "--unit=u1", "-p", "MemoryMax=4096M", "-p", "OOMPolicy=continue"];
+        let seat = scope_args("u1", 4096, None, Some(800));
+        let want_seat = ["--user", "--scope", "--quiet", "--collect", "--unit=u1", "-p", "MemoryMax=4096M", "-p", "CPUQuota=800%", "-p", "OOMPolicy=continue"];
         assert_eq!(seat, want_seat, "席の形に CPUWeight は無い");
         assert!(!seat.iter().any(|arg| arg.starts_with("CPUWeight")), "{seat:?}");
         let at = job.iter().position(|arg| arg == "CPUWeight=50").expect("便の形は CPUWeight を持つ");
         let mut stripped = job.clone();
-        stripped.drain(at.saturating_sub(1)..=at.saturating_add(2));
-        assert_eq!(stripped, seat, "CPUWeight と CPUQuota の 4 語の他は同じ語と順: {job:?}");
+        stripped.drain(at.saturating_sub(1)..=at);
+        assert_eq!(stripped, seat, "CPUWeight の 2 語の他は同じ語と順: {job:?}");
         assert_eq!(job.get(at.saturating_sub(1)).map(String::as_str), Some("-p"), "{job:?}");
         assert_eq!(job.get(at.saturating_add(1)).map(String::as_str), Some("-p"), "{job:?}");
         assert_eq!(job.get(at.saturating_add(2)).map(String::as_str), Some("CPUQuota=800%"), "{job:?}");
-        let head = super::seat_scope_head("u1", 4096);
+        let head = super::seat_scope_head("u1", 4096, Some(800));
         assert_eq!(head.first().map(String::as_str), Some("systemd-run"), "{head:?}");
         assert_eq!(head.get(1..head.len().saturating_sub(1)), Some(&seat[..]), "頭の中身は席の形: {head:?}");
         assert_eq!(head.last().map(String::as_str), Some("--"), "{head:?}");

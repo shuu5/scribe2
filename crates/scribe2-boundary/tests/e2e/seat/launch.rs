@@ -124,6 +124,27 @@ fn seat_launch_scope_wraps_the_injected_line_in_the_seat_box() {
     fs::remove_dir_all(&place.dir).ok();
 }
 
+/// (§37 歯 (b)) 注入した起動行の頭の `CPUQuota` は `MemoryMax` と `OOMPolicy` の間で、値は歯が `Cpus_allowed_list` と埋め込みの
+/// `gate.mutants_jobs` から組んだ 1 job の値段 × 100%（core 数を読めない周は語が無い）。`CPUWeight` は持たない（base は語が無い ＝ RED）。
+#[test]
+fn seat_cpu_quota_injected_head_carries_the_one_job_price_between_memory_and_oom() {
+    let (place, path) = launch_group_place(true, None);
+    let out = launch_group_long(&place, &path, &["--account", "l1"]);
+    let line = stdout_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stdout={line} stderr={}", stderr_of(&out));
+    let unit = launch_group_unit(&place, &line, "gl_seat", "l1");
+    let sent = fs::read_to_string(place.dir.join(GROUP_LAUNCHED)).unwrap_or_default();
+    let memory = format!("--unit={unit} -p MemoryMax={LAUNCH_BOX_MB}M");
+    let want = match launch_box_quota() {
+        Some(percent) => format!("{memory} -p CPUQuota={percent}% -p OOMPolicy=continue -- claude "),
+        None => format!("{memory} -p OOMPolicy=continue -- claude "),
+    };
+    assert!(sent.contains(&want), "頭の CPUQuota は MemoryMax と OOMPolicy の間: {sent}");
+    assert_eq!(sent.matches("CPUQuota=").count(), usize::from(launch_box_quota().is_some()), "上限は 1 回だけ: {sent}");
+    assert!(!sent.contains("CPUWeight"), "席の箱は CPUWeight を持たない: {sent}");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
 /// (b) PATH に systemd-run が無い周（[`launch_bare_path`]）は素の行で起こし、末尾は `scope=no-systemd-run`・送りは 1 回のまま・起動は
 /// 止めない（base では末尾に `scope=` が無い ＝ RED）。
 #[test]

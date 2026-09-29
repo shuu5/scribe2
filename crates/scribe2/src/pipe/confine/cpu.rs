@@ -27,6 +27,12 @@ pub(super) fn quota_of(width: Option<u64>, caps: &Caps) -> Option<u64> {
     quota_percent(width, health::host_cores(), caps.mutants_jobs)
 }
 
+/// 席の箱の上限（%）の読み口: 埋め込みの [`Caps`] から [`quota_of`] へ幅 `None`（1 job の値段）を渡す。`Caps` か core 数を
+/// 読めない周は `None`＝`CPUQuota` の 2 語を置かない（起動は止めない）。
+pub fn seat_quota() -> Option<u64> {
+    quota_of(None, &Caps::embedded().ok()?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::{scope_args, seat_scope_head};
@@ -47,7 +53,7 @@ mod tests {
         assert_eq!(scope_args("u1", 4096, Some(50), None), form(&[&weight]), "重みだけ");
         assert_eq!(scope_args("u1", 4096, None, Some(800)), form(&[&quota]), "上限だけ");
         assert_eq!(scope_args("u1", 4096, None, None), form(&[]), "どちらも無い");
-        let seat = seat_scope_head("u1", 4096);
+        let seat = seat_scope_head("u1", 4096, None);
         assert_eq!(seat.get(1..seat.len().saturating_sub(1)), Some(&form(&[])[..]), "席の頭は両方 None の形: {seat:?}");
     }
 

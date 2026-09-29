@@ -241,7 +241,7 @@ fn seat_box(request: &Launch) -> (Option<Vec<String>>, SeatScope) {
         return (None, SeatScope::NoTool);
     }
     let unit = confine::unit_name(&sanitize_target(request.target), "seat", 0);
-    (Some(confine::seat_scope_head(&unit, mb)), SeatScope::Boxed(unit))
+    (Some(confine::seat_scope_head(&unit, mb, confine::seat_quota())), SeatScope::Boxed(unit))
 }
 
 /// 群の置き場の席に、群の今の口座と違う口座を名指した（設計 account-lifecycle.md §20 形 3・群の外に席を置かない）。
@@ -669,17 +669,40 @@ mod tests {
             "CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1 CLAUDE_CONFIG_DIR={account_dir} claude --model fable --effort high --plugin-dir /r/plugin",
             "None は従来の行"
         );
-        let head = crate::pipe::confine::seat_scope_head("u-1", 4096);
+        let head = crate::pipe::confine::seat_scope_head("u-1", 4096, Some(800));
         let boxed = derive_launch(Path::new("/r"), &[], &[], Some(pair), Some(&head));
         assert_eq!(
             boxed,
             "CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1 CLAUDE_CONFIG_DIR={account_dir} systemd-run --user --scope --quiet \
-             --collect --unit=u-1 -p MemoryMax=4096M -p OOMPolicy=continue -- claude --model fable --effort high --plugin-dir /r/plugin",
+             --collect --unit=u-1 -p MemoryMax=4096M -p CPUQuota=800% -p OOMPolicy=continue -- claude --model fable --effort high --plugin-dir /r/plugin",
             "頭は env 3 語の直後・claude の前"
         );
         assert_eq!(boxed.replacen(&format!("{} ", head.join(" ")), "", 1), bare, "頭を抜けば None の行");
         assert_eq!(boxed.matches(HOLE).count(), 1, "穴は 1 つ");
         assert_eq!(derive_launch(Path::new("/r"), &[], &[], None, Some(&[])), derive_launch(Path::new("/r"), &[], &[], None, None), "空の頭は None と同じ");
+    }
+
+    /// 席の箱の頭の CPU の上限（設計 account-lifecycle.md §37 形 1・歯 (a)）: 上限の在る周は `MemoryMax` と `OOMPolicy` の間に
+    /// `-p CPUQuota=<pct>%`・無い周は今の語列と等しく、どちらも `CPUWeight` を持たない。読み口 `seat_quota` は 100 の倍数（≥ 100）か無し。
+    #[test]
+    fn seat_cpu_quota_head_carries_the_quota_between_memory_and_oom_without_weight() {
+        let with = crate::pipe::confine::seat_scope_head("u-1", 4096, Some(800));
+        assert_eq!(
+            with.join(" "),
+            "systemd-run --user --scope --quiet --collect --unit=u-1 -p MemoryMax=4096M -p CPUQuota=800% -p OOMPolicy=continue --",
+            "上限の在る頭"
+        );
+        let without = crate::pipe::confine::seat_scope_head("u-1", 4096, None);
+        assert_eq!(
+            without.join(" "),
+            "systemd-run --user --scope --quiet --collect --unit=u-1 -p MemoryMax=4096M -p OOMPolicy=continue --",
+            "上限の無い頭は今の語列"
+        );
+        for head in [&with, &without] {
+            assert!(!head.iter().any(|word| word.contains("CPUWeight")), "重みは付けない: {head:?}");
+        }
+        let read = crate::pipe::confine::seat_quota();
+        assert!(read.is_none_or(|percent| percent >= 100 && percent % 100 == 0), "1 job の値段 × 100: {read:?}");
     }
 
     /// `[[rule]]` 2 行（役割の既定の対）の manifest。kind / 値 / 発効は引数で崩せる（`None` は行を置かない）。

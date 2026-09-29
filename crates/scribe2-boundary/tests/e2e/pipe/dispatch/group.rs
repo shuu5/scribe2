@@ -237,6 +237,8 @@ fn pipe_dispatch_group_trust_marks_the_new_account_before_the_launch_line() {
 /// (i・account-lifecycle.md §30 形 3 / 4・接頭辞 `pipe_dispatch_group_scope_`) 群の段の起こし直しが各 target へ送る起動行は、
 /// 移り先の口座の env の直後・`claude` の前に席の箱の頭（埋め込みの `seat.memory_max_mb` = 32768・`CPUWeight` 無し・unit 名は
 /// `<NAME>-<潰した target>-seat-0-<pid>-<seq>` で席ごとに別）を持つ（道具箱は列の fixture が積む・base では頭が無い ＝ RED）。
+/// `CPUQuota` は `MemoryMax` と `OOMPolicy` の間に 1 job の値段 × 100%（core 数を読めない周は語が無い・§37 形 1）。
+// flip-check: retroactive s2-07l.737.15
 #[test]
 fn pipe_dispatch_group_scope_relaunch_lines_carry_the_seat_box_head() {
     let place = move_place(&[("a1", 90, 10, 10), ("a2", 10, 10, 10)], &["a1", "a2"], "a1");
@@ -251,7 +253,7 @@ fn pipe_dispatch_group_scope_relaunch_lines_carry_the_seat_box_head() {
         let head = format!("{}-{}-seat-0-", vessel::name::NAME, target.replace(':', "_"));
         let tail = unit.strip_prefix(&head).and_then(|rest| rest.split_once('-'));
         assert!(tail.is_some_and(|(pid, seq)| pid.parse::<u32>().is_ok() && seq.parse::<u64>().is_ok()), "unit 名の形: {line}");
-        let words = format!("systemd-run --user --scope --quiet --collect --unit={unit} -p MemoryMax=32768M -p OOMPolicy=continue --");
+        let words = crate::seat::launch_box_head(&unit, 32768);
         assert!(line.contains(&format!("CLAUDE_CONFIG_DIR={dir} {words} claude ")), "頭は env の直後・claude の前: {line}");
         assert!(!line.contains("CPUWeight"), "席の箱は CPUWeight を持たない: {line}");
         units.push(unit);
