@@ -111,7 +111,7 @@ pub fn int_row(manifest: &Manifest, id: &str) -> Result<u64, String> {
 
 /// 文字列の行の値。行が無い / 不発効 / 文字列でない周は 3 理由の `Err`（[`int_row`] と同じ極性）。
 ///
-/// 読み手は headless（runner / lens の `runner.model`）と `pipe::ratelimit`（便用の選定の model）の **1 本**。
+/// 読み手は headless（runner / lens の model の 3 行）と `pipe::ratelimit`（便用の選定の model）の **1 本**。
 pub fn str_row<'a>(manifest: &'a Manifest, id: &str) -> Result<&'a str, String> {
     match &enabled_row(manifest, id)?.value {
         RuleValue::Str(found) => Ok(found),
@@ -280,12 +280,18 @@ pub enum RuleKind {
     PipeSizeMLines,
     /// 契約の `size` = L の 1 file あたりの増分の見積（行）。
     PipeSizeLLines,
-    /// runner / lens が claude に**毎回**渡す model（設計 pipeline.md §6・`s2-07l.297`）。値は claude CLI の別名
+    /// runner が claude に**毎回**渡す model（設計 pipeline.md §6 / §61・`s2-07l.297`）。値は claude CLI の別名
     /// （閉じた表は [`crate::fleet::select::Model`]）。便用の口座選定はこの model のモデル別窓だけを数える。
     RunnerModel,
     /// runner / lens が claude に**毎回**渡す effort（設計 pipeline.md §6・`s2-07l.322`）。値は claude CLI の字面
     /// （閉じた表は [`crate::headless::Effort`]）。省くと口座の設定 dir の `settings.json` の値で決まる。
     RunnerEffort,
+    /// `--stage` を持たない lens（契約の審査と gate の審査）が claude に**毎回**渡す model（設計 pipeline.md §61）。
+    /// 値は [`Self::RunnerModel`] と同じ語彙。
+    LensModel,
+    /// `--stage prelens` の lens（事前審査の先撃ち）が claude に**毎回**渡す model（設計 pipeline.md §61）。
+    /// [`Self::LensModel`] と同じ model に解ける周だけ、先撃ちの判定を契約の審査に使い回す（dispatcher.md §27 形 ac 1）。
+    PipePrecheckLensModel,
     /// 役割ごとの既定の model（設計 seat-roles.md §19・`s2-07l.433`）。値は claude CLI の別名か表示名
     /// （閉じた表は [`crate::fleet::select::Model`]・表に無い字面は読み込みで拒む）。**1 kind で行は役割ごとに
     /// 1 つ**（id は `seat.model.<役割名>`）で、[`Self::RoleEffort`] と対で読む。
@@ -410,6 +416,8 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::PipeSizeLLines,
     RuleKind::RunnerModel,
     RuleKind::RunnerEffort,
+    RuleKind::LensModel,
+    RuleKind::PipePrecheckLensModel,
     RuleKind::RoleModel,
     RuleKind::RoleEffort,
     RuleKind::ReviewSameKindStop,
@@ -439,9 +447,7 @@ impl RuleKind {
             Self::CoreLines => "CoreLines",
             Self::ModuleLines => "ModuleLines",
             Self::TestSrcRatioPct => "TestSrcRatioPct",
-            Self::FnLines => "FnLines",
-            Self::FnComplexity => "FnComplexity",
-            Self::FnArgs => "FnArgs",
+            Self::FnLines => "FnLines", Self::FnComplexity => "FnComplexity", Self::FnArgs => "FnArgs",
             Self::LineWidth => "LineWidth", Self::BoundaryLines => "BoundaryLines",
             Self::DialogueSurface => "DialogueSurface",
             Self::MaturityCondition => "MaturityCondition",
@@ -485,7 +491,8 @@ impl RuleKind {
             Self::RoleCapabilities => "RoleCapabilities",
             Self::PipeSizeSLines => "PipeSizeSLines", Self::PipeSizeMLines => "PipeSizeMLines",
             Self::PipeSizeLLines => "PipeSizeLLines",
-            Self::RunnerModel => "RunnerModel", Self::RunnerEffort => "RunnerEffort",
+            Self::RunnerModel => "RunnerModel", Self::RunnerEffort => "RunnerEffort", Self::LensModel => "LensModel",
+            Self::PipePrecheckLensModel => "PipePrecheckLensModel",
             Self::RoleModel => "RoleModel", Self::RoleEffort => "RoleEffort",
             Self::ReviewSameKindStop => "ReviewSameKindStop",
             Self::LandTrainMax => "LandTrainMax",
@@ -548,7 +555,7 @@ impl RuleKind {
             | Self::SeatPrecheckAlarmS | Self::AccountSelection => ValueShape::Int,
             Self::DialogueSurface
             | Self::RunnerModel
-            | Self::RunnerEffort
+            | Self::RunnerEffort | Self::LensModel | Self::PipePrecheckLensModel
             | Self::RoleModel
             | Self::RoleEffort => ValueShape::Str,
             Self::MaturityCondition

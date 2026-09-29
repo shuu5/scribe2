@@ -22,10 +22,11 @@
 //! 埋め込み（`pipe::cli` と同じ規約）。`--cap` は**未知の引数として断る**（黙って読み飛ばすと、
 //! 手書きの数が残った launcher が「効いている」ように見える）。
 //!
-//! **model も同じ manifest の rules 行 `runner.model` から読み、claude に毎回渡す**（`s2-07l.297`・
-//! 設計 pipeline.md §6）。読み口は [`super::rules_of`] / [`super::runner_model`]（runner と共通）で、
-//! 行が解けない周は cap と同じ極性＝claude を呼ばず rc 2。**effort も同じ manifest の rules 行 `runner.effort`
-//! から読み、毎回渡す**（`s2-07l.322`・読む順は cap → model → effort）。
+//! **model も同じ manifest の rules 行から読み、claude に毎回渡す**（`s2-07l.297`・設計 pipeline.md §6 / §61）。
+//! `--stage` の無い lens（契約の審査と gate の審査）は `lens.model`、`--stage prelens` の lens（事前審査の先撃ち）は
+//! `pipe.precheck_lens_model` を読む（[`STAGE_PRELENS`]・他の値と値の欠けは未知の引数と同じ断り）。読み口は
+//! [`super::rules_of`] / [`super::model_row`]（runner と共通）で、行が解けない周は cap と同じ極性＝claude を呼ばず rc 2。
+//! **effort も同じ manifest の rules 行 `runner.effort` から読み、毎回渡す**（`s2-07l.322`・読む順は cap → model → effort）。
 //!
 //! **裁定（便の質問と回答の対）は契約の写しの隣の [`RULINGS_FILE`] から読む**（`s2-07l.309`・
 //! 設計 pipeline-question.md）。gate が event log から写す file で、lens は `{contract}` の path の同じ dir
@@ -57,9 +58,10 @@
 
 use super::runner::{has_top_level_key, is_result_record, result_usage, scope_line, top_level_string};
 use super::{
-    build, feed, fill, flag, need, read_stdin_bytes, rules_of, runner_effort, runner_model, Call, Effort, Format,
-    DEFAULT_CLAUDE,
+    build, feed, fill, flag, model_row, need, read_stdin_bytes, rules_of, runner_effort, Call, Effort, Format,
+    DEFAULT_CLAUDE, ROW_LENS_MODEL, ROW_PRELENS_MODEL,
 };
+use crate::cli_args::{refusal, ArgsError};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
 use crate::fleet::json_lite;
 use crate::fleet::select::Model;
@@ -91,8 +93,14 @@ const JSON_HEAD: char = '{';
 const ROW_CAP: &str = "gate.token_cap";
 
 /// lens が受ける flag の全部（この外は未知の引数として断る）。
-const KNOWN_FLAGS: [&str; 7] =
-    ["--contract", "--worktree", "--permission-mode", "--rules", "--account-dir", "--claude", "--cgroup-root"];
+const KNOWN_FLAGS: [&str; 8] =
+    ["--contract", "--worktree", "--permission-mode", "--rules", "--account-dir", "--claude", "--cgroup-root", "--stage"];
+
+/// 段の flag（値は [`STAGE_PRELENS`] だけ・設計 pipeline.md §61）。
+const STAGE_FLAG: &str = "--stage";
+
+/// `--stage` が取る唯一の値（事前審査の先撃ちの lens・`pipe::dispatch::prelens` が lens の行の末尾に足す）。
+pub const STAGE_PRELENS: &str = "prelens";
 
 /// claude の終了を待つ poll の間隔（各周で scope の `memory.peak` を 1 回読む・設計 gate-cost.md §13）。
 /// async は使わない（C13.3）。
@@ -101,7 +109,7 @@ const POLL: Duration = Duration::from_secs(1);
 /// 使い方の 1 行。
 pub fn usage() -> String {
     format!(
-        "usage: {} lens --contract F --worktree D --permission-mode M [--rules PATH] [--account-dir D] [--claude PATH] [--cgroup-root DIR] < diff",
+        "usage: {} lens --contract F --worktree D --permission-mode M [--rules PATH] [--account-dir D] [--claude PATH] [--cgroup-root DIR] [--stage prelens] < diff",
         crate::name::NAME
     )
 }
@@ -129,22 +137,40 @@ fn unknown_arg(args: &[String]) -> Option<&str> {
     None
 }
 
-/// lens が rules 行から読む 3 つ: cap（byte・`gate.token_cap`）と model（`runner.model`）と effort（`runner.effort`）。
+/// lens が model を読む rules 行（`--stage` の値で選ぶ・設計 pipeline.md §61）: 無ければ `lens.model`・[`STAGE_PRELENS`] は
+/// `pipe.precheck_lens_model`。他の値は [`ArgsError::Unknown`]（字面 `--stage <値>`）・値の欠けは [`ArgsError::Missing`]＝
+/// 未知の引数と同じ断り（[`refusal`]）で claude を呼ばない。
+fn model_row_id(args: &[String]) -> Result<&'static str, ArgsError> {
+    let Some(at) = args.iter().position(|arg| arg == STAGE_FLAG) else {
+        return Ok(ROW_LENS_MODEL);
+    };
+    match args.get(at + 1).map(String::as_str) {
+        Some(STAGE_PRELENS) => Ok(ROW_PRELENS_MODEL),
+        Some(value) if !value.starts_with("--") => Err(ArgsError::Unknown(format!("{STAGE_FLAG} {value}"))),
+        _ => Err(ArgsError::Missing(STAGE_FLAG.to_owned())),
+    }
+}
+
+/// lens が rules 行から読む 3 つ: cap（byte・`gate.token_cap`）と model（`row`＝[`model_row_id`]）と effort（`runner.effort`）。
 /// manifest は `--rules PATH` が在ればそれ・無ければ埋め込み（[`rules_of`]・runner と同じ読み口）。
 ///
 /// cap の行が無い / 不発効 / 整数でない周は `pipe::cli::int_row` と同じ 3 理由で `Err`（[`int_row`]）。
-/// model と effort の行も同じ極性で、閉じた表に無い値も `Err`（[`runner_model`] / [`runner_effort`]）。順は
+/// model と effort の行も同じ極性で、閉じた表に無い値も `Err`（[`model_row`] / [`runner_effort`]）。順は
 /// cap → model → effort（先に落ちた理由 1 つだけを出す＝cap と model の字面は不変）。
-fn rows_of(args: &[String]) -> Result<(u64, Model, Effort), String> {
+fn rows_of(args: &[String], row: &str) -> Result<(u64, Model, Effort), String> {
     let manifest = rules_of(args)?;
     let cap = int_row(&manifest, ROW_CAP)?;
-    let model = runner_model(&manifest)?;
+    let model = model_row(&manifest, row)?;
     let effort = runner_effort(&manifest)?;
     Ok((cap, model, effort))
 }
 
 /// `lens` を 1 回。diff は stdin から byte で読む。
 pub fn dispatch(args: &[String]) -> Outcome {
+    let row = match model_row_id(args) {
+        Ok(found) => found,
+        Err(error) => return refusal("lens", &error, usage()),
+    };
     let parsed = (|| {
         if let Some(found) = unknown_arg(args) {
             return Err(format!("未知の引数 {found}"));
@@ -182,7 +208,7 @@ pub fn dispatch(args: &[String]) -> Outcome {
     };
     // **cap が解けない周も claude を起こさない**（上限なしで走らせない＝C6）。model も同じ極性（版の既定へ
     // 黙って倒れない）。
-    let (cap, model, effort) = match rows_of(args) {
+    let (cap, model, effort) = match rows_of(args, row) {
         Ok(found) => found,
         Err(reason) => return Outcome::failed_line(RC_BROKEN, format!("lens: {reason}")),
     };

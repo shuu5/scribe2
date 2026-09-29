@@ -596,21 +596,32 @@ fn prelens_ledger(state: &Path, issues: &[String]) -> String {
     path.display().to_string()
 }
 
-/// 列の manifest の写し（受付の上限に台帳の待ち上限・終端の猶予・先撃ちの上限の行を足す・`None` は上限の行を持たない）。
+/// 列の manifest の写し（受付の上限に台帳の待ち上限・終端の猶予・先撃ちの上限の行を足す・`None` は上限の行を持たない）。審査と
+/// 先撃ちの lens の model の 2 行（`lens.model` / `pipe.precheck_lens_model`）は同じ値で持つ（使い回しの既存の歯の前提・§61 形 5）。
+fn prelens_rules(state: &Path, limit: Option<u64>) -> String {
+    prelens_rules_with(state, limit, (Some("opus"), Some("opus")))
+}
+
+/// [`prelens_rules`] の model の 2 行（審査の `lens.model`・先撃ちの `pipe.precheck_lens_model`・`None` は行を持たない）を選ぶ形。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn prelens_rules(state: &Path, limit: Option<u64>) -> String {
+fn prelens_rules_with(state: &Path, limit: Option<u64>, models: (Option<&str>, Option<&str>)) -> String {
     let base = fs::read_to_string(ceiling_rules(state)).expect("受付の写しを読める");
     let row = |id: &str, kind: &str, value: u64| {
         format!("[[rule]]\nid = \"{id}\"\nkind = \"{kind}\"\nvalue = {value}\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n")
+    };
+    let model = |id: &str, kind: &str, value: &str| {
+        format!("[[rule]]\nid = \"{id}\"\nkind = \"{kind}\"\nvalue = \"{value}\"\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n")
     };
     let mut rows = vec![
         row("seat.ledger_timeout_s", "LedgerTimeoutS", 60),
         row("pipe.stop_grace_ms", "StopGraceMs", embedded_int("pipe.stop_grace_ms")),
     ];
     rows.extend(limit.map(|value| row("pipe.precheck_lens_per_round", "PipePrecheckLensPerRound", value)));
+    rows.extend(models.0.map(|value| model("lens.model", "LensModel", value)));
+    rows.extend(models.1.map(|value| model("pipe.precheck_lens_model", "PipePrecheckLensModel", value)));
     let path = state.join("rules-prelens.toml");
     fs::write(&path, format!("{base}\n{}", rows.join("\n"))).expect("列の写しを書ける");
     path.display().to_string()
@@ -691,9 +702,10 @@ fn prelens_bundles(place: &Prelens) -> Vec<String> {
     stdout_of(&out).lines().filter(|line| line.starts_with("[DISPATCH-BUNDLE]")).map(str::to_owned).collect()
 }
 
-/// 起動のたびに回数の file へ 1 行を足し、`body` を撃つ偽 lens の 1 行。
+/// 起動のたびに回数の file へ 1 行を足し、`body` を撃つ偽 lens の 1 行。末尾の `:` は器が先撃ちの行の末尾に足す `--stage prelens`
+/// （設計 pipeline.md §61 形 4）を引数ごと捨てる（`body` の最後の command の引数に化けない・[`fake_lens`] と同じ形）。
 fn prelens_lens(state: &Path, body: &str) -> String {
-    format!("printf 'x\\n' >> '{}'; {body}", state.join("prelens-count").display())
+    format!("printf 'x\\n' >> '{}'; {body}; :", state.join("prelens-count").display())
 }
 
 /// 偽 lens の起動の回数。
@@ -1270,4 +1282,56 @@ fn pipe_review_reuse_other_lens_cmd_fires_the_lens() {
     assert_eq!(prelens_count(&place.state), 2, "lens の字が違えば使い回さない: {detail}");
     assert!(!detail.contains("prelens:reused"), "{detail}");
     prelens_clean(&place, &[]);
+}
+
+// ───── lens の model の分け（設計 pipeline.md §61・契約表の行 bd・接頭辞 `model_split_`） ─────
+
+/// (h) 先撃ちは穴を埋めた lens の行の末尾に `--stage prelens` を足して起こす（§61 形 4）: 引数を写す偽 lens の argv の末尾 2 語が
+/// `--stage prelens` で、先頭は穴を埋めた `--contract <材料の契約>`。置き場の `lens` の字は穴を埋める前の cmd のまま（足した flag を
+/// 含まない）。base は flag を足さないので末尾が `--worktree` の値になり RED。
+#[test]
+fn model_split_prelens_fires_the_lens_with_the_stage_as_the_last_two_words() {
+    use std::os::unix::fs::PermissionsExt;
+    let place = prelens_place(Some(1), &[PRELENS_B]);
+    let (argv, script) = (place.state.join("prelens-argv"), place.state.join("prelens-argv-lens"));
+    let body = format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\necho '{}'\n", argv.display(), lens_verdict("PASS"));
+    fs::write(&script, body).expect("偽 lens を書ける");
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).expect("偽 lens に実行権を付ける");
+    let lens = format!("'{}' --contract '{{contract}}' --worktree '{{worktree}}'", script.display());
+    prelens_turn(&place, &lens);
+    assert!(prelens_out(&place.state, PRELENS_B), "先撃ちの偽 lens が終わる: {}", prelens_result(&place.state, PRELENS_B));
+    let text = fs::read_to_string(&argv).unwrap_or_default();
+    let words: Vec<&str> = text.lines().collect();
+    assert_eq!(words.len(), 6, "argv は --contract / --worktree の 2 対と段の 2 語: {words:?}");
+    assert_eq!(words.get(4..), Some(&["--stage", "prelens"][..]), "末尾 2 語は段の flag: {words:?}");
+    assert_eq!(words.first(), Some(&"--contract"), "{words:?}");
+    assert!(words.get(1).is_some_and(|path| path.ends_with("contract.toml") && !path.contains('{')), "穴は埋まる: {words:?}");
+    let kept = fs::read_to_string(prelens_dir(&place.state, PRELENS_B).join("lens")).unwrap_or_default();
+    assert_eq!(kept, lens, "置き場の lens の字は穴を埋める前の cmd のまま");
+    prelens_clean(&place, &[]);
+}
+
+/// (i) 形 ac 1 の使い回しは審査が読む manifest の `lens.model` と `pipe.precheck_lens_model` が両方読めて同じ `Model` に解ける周だけ
+/// （§61 形 5）: 2 行が違う manifest と片方の行が無い manifest では、材料・判定・lens の字が同じでも Reviewed の段が偽 lens を撃ち
+/// （回数 2）detail に ` prelens:reused` が無い。字面は違っても同じ model に解ける 2 行（`sonnet` と表示名 `Sonnet`）は今どおり使い回す
+/// （回数 1）。base は model を比べず全部の周で使い回すので RED。
+#[test]
+fn model_split_review_reuses_only_when_both_model_rows_resolve_to_one_model() {
+    let cases = [
+        ((Some("opus"), Some("sonnet")), false),
+        ((Some("opus"), None), false),
+        ((None, Some("opus")), false),
+        ((Some("sonnet"), Some("Sonnet")), true),
+    ];
+    for (models, reused) in cases {
+        let (place, id, lens) = reuse_gated(&format!("echo '{}'", reuse_pass()));
+        reuse_land(&place, Some(&id), None, &lens);
+        prelens_rules_with(&place.state, Some(1), models);
+        let (detail, costs) = reuse_review(&place, &lens);
+        let (count, want) = if reused { (1, "verdict:PASS prelens:reused") } else { (2, "verdict:PASS") };
+        assert_eq!(prelens_count(&place.state), count, "{models:?}: 審査の偽 lens の回数: {detail}");
+        assert_eq!(detail, want, "{models:?}: detail");
+        assert_eq!(costs, count - 1, "{models:?}: 撃った審査だけが消費の event を書く");
+        prelens_clean(&place, &[]);
+    }
 }

@@ -93,7 +93,7 @@ fn headless_runner_no_longer_stops_on_nested_rate_limit_error() {
 /// (a) runner は rules 行 `runner.model` の model を claude に**毎回**渡す（`s2-07l.297`・設計 pipeline.md §6・FR5）:
 /// `--rules` の manifest の値が `opus` なら argv に `--model opus` の対・値を `sonnet` に変えると対の値も変わる
 /// （値は行から来る＝定数ではない）・表示名 `Opus` で書いた行も CLI の別名 `opus` で渡る（[`Model::parse`] →
-/// `alias`）・`--rules` 無しは埋め込みの行（`opus`）。base は `--model` を渡さないので RED。
+/// `alias`）・`--rules` 無しは埋め込みの行（`sonnet`・`.736.19`）。base は `--model` を渡さないので RED。
 #[test]
 fn headless_runner_passes_model_from_rules_row() {
     let dir = tmp();
@@ -117,6 +117,23 @@ fn headless_runner_passes_model_from_rules_row() {
     let out = run_runner(&call, b"goal = \"x\"\n");
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
     assert_eq!(model_arg(&dir), Some(RUNNER_MODEL.to_owned()), "埋め込みの行: {}", slurp(&dir.join("args")));
+    clean(&[&dir, &worktree]);
+}
+
+/// (f) `--rules` の無い runner は埋め込みの `runner.model` の値 sonnet を `--model` に渡し、lens の model の行（`lens.model` = opus）を
+/// 読まない（設計 pipeline.md §61 形 1・裁定 user 2026-09-29T07:44Z）。base の埋め込みの値は opus なので RED。
+#[test]
+fn model_split_runner_passes_the_embedded_sonnet() {
+    let dir = tmp();
+    let worktree = tmp();
+    let claude = fake_claude(&dir, "", false, 0);
+    let write_set = dir.join("write-set.txt");
+    let vessel = write_vessel_copy(&dir, r#"["cargo", "git"]"#);
+    fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
+    let call = RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "plan", account: None };
+    let out = run_runner(&call, b"goal = \"x\"\n");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    assert_eq!(model_arg(&dir), Some("sonnet".to_owned()), "埋め込みの runner.model: {}", slurp(&dir.join("args")));
     clean(&[&dir, &worktree]);
 }
 

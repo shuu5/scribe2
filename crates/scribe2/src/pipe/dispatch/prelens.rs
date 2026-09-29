@@ -357,6 +357,8 @@ fn ready(place: &Path, key: &str) -> bool {
 
 /// lens を裏で起こす（`spawn_self` と同じ起こし方＝process group を分け stdin を閉じる・箱で包まない・終わりを待たない・形 aa 2）。
 /// `fired` と `lens` を起こす時に写し、起こせたら印 `<pid> <起動時刻>` を置く。起こせない周は `unbuilt` を置いて `false`。
+/// 穴を埋めた行の末尾に `--stage prelens` を足す（先撃ちの model の行を読ませる・設計 pipeline.md §61 形 4）。`lens` に写す字は
+/// 穴を埋める前の cmd のまま（足した flag を含まない＝Reviewed の段の lens の cmd と比べる字）。
 fn fire(input: &Input<'_>, place: &Path, cmd: &str) -> bool {
     let Some(digest) = line_of(place, KEY, 1) else {
         return false;
@@ -364,7 +366,8 @@ fn fire(input: &Input<'_>, place: &Path, cmd: &str) -> bool {
     let _ = std::fs::remove_file(place.join(PID));
     let marked = std::fs::write(place.join(FIRED), format!("{digest}\n")).and_then(|()| std::fs::write(place.join(LENS), cmd));
     let contract = place.join(REVIEW_DIR).join(CONTRACT_FILE).display().to_string();
-    let line = crate::headless::fill(cmd, &[("{contract}", &contract), ("{worktree}", &input.repo.display().to_string())]);
+    let filled = crate::headless::fill(cmd, &[("{contract}", &contract), ("{worktree}", &input.repo.display().to_string())]);
+    let line = format!("{filled} --stage {}", crate::headless::lens::STAGE_PRELENS);
     let spawned = marked.and_then(|()| {
         Invocation::new("sh")
             .args(["-c", WRAP, line.as_str()])

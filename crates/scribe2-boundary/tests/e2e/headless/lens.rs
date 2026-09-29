@@ -171,15 +171,15 @@ fn headless_lens_refuses_unreadable_cap_row() {
     clean(&[&dir]);
 }
 
-/// (b) lens も同じ行の model を claude に毎回渡す（runner と同じ構築点 `build`）: `--rules` の manifest の値ごとに
-/// `--model` の対が変わり、`--rules` 無しは埋め込みの行。base は渡さないので RED。
+/// (b) lens も rules 行の model を claude に毎回渡す（runner と同じ構築点 `build`・行は `lens.model`・設計 pipeline.md §61）:
+/// `--rules` の manifest の値ごとに `--model` の対が変わり、`--rules` 無しは埋め込みの行。base は渡さないので RED。
 #[test]
 fn headless_lens_passes_model_from_rules_row() {
     let dir = tmp();
     let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"model の歯\"}\n", false, 0);
     let contract = contract_in(&dir);
     for (value, want) in [("opus", "opus"), ("haiku", "haiku"), ("Sonnet", "sonnet")] {
-        let rules = rules_with_rows(&dir, &format!("rules-model-{value}.toml"), &[cap_row(4096), model_row(value), effort_row(RUNNER_EFFORT)]);
+        let rules = rules_with_rows(&dir, &format!("rules-model-{value}.toml"), &[cap_row(4096), lens_model_row(value), effort_row(RUNNER_EFFORT)]);
         let out = run_bin_owned(&dir, &lens_args(&contract, &dir, &["--rules", &rules.display().to_string()], &claude), b"--- a\n+++ b\n");
         assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{value}: {}", stderr_of(&out));
         assert_eq!(stdout_of(&out).trim(), r#"{"verdict":"PASS","evidence":"model の歯"}"#, "{value}: 判定は claude の行");
@@ -188,23 +188,23 @@ fn headless_lens_passes_model_from_rules_row() {
     }
     let out = run_bin_owned(&dir, &lens_args(&contract, &dir, &[], &claude), b"--- a\n+++ b\n");
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
-    assert_eq!(model_arg(&dir), Some(RUNNER_MODEL.to_owned()), "埋め込みの行: {}", slurp(&dir.join("args")));
+    assert_eq!(model_arg(&dir), Some(LENS_MODEL.to_owned()), "埋め込みの行: {}", slurp(&dir.join("args")));
     clean(&[&dir]);
 }
 
-/// lens の `runner.model` の行も同じ極性（claude を呼ばず rc 2・理由 1 行）。cap の行が解けない周は cap の理由が先
+/// lens の `lens.model` の行も同じ極性（claude を呼ばず rc 2・理由 1 行）。cap の行が解けない周は cap の理由が先
 /// （[`headless_lens_refuses_unreadable_cap_row`] の字面は不変）。
 #[test]
 fn headless_lens_refuses_when_model_row_is_missing() {
     let dir = tmp();
     let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"呼ばれてはならない\"}\n", false, 0);
     let contract = contract_in(&dir);
-    let absent = rules_with_rows(&dir, "absent.toml", &[cap_row(4096)]);
-    let unknown = rules_with_rows(&dir, "unknown.toml", &[cap_row(4096), model_row("Opus 5")]);
+    let absent = rules_with_rows(&dir, "absent.toml", &[cap_row(4096), model_row(RUNNER_MODEL)]);
+    let unknown = rules_with_rows(&dir, "unknown.toml", &[cap_row(4096), lens_model_row("Opus 5")]);
     let both_missing = rules_with_row(&dir, "both.toml", "id = \"gate.lens_count\"\nkind = \"GateLensCount\"\nvalue = 1\nenabled = true\n");
     for (rules, want) in [
-        (&absent, "runner.model が無い"),
-        (&unknown, "runner.model の値 Opus 5 は未知の model"),
+        (&absent, "lens.model が無い"),
+        (&unknown, "lens.model の値 Opus 5 は未知の model"),
         (&both_missing, "gate.token_cap が無い"),
     ] {
         let out = run_bin_owned(&dir, &lens_args(&contract, &dir, &["--rules", &rules.display().to_string()], &claude), b"--- a\n+++ b\n");
@@ -226,7 +226,7 @@ fn headless_lens_passes_effort_from_rules_row() {
     let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"effort の歯\"}\n", false, 0);
     let contract = contract_in(&dir);
     for value in ["high", "medium", "xhigh"] {
-        let rules = rules_with_rows(&dir, &format!("rules-effort-{value}.toml"), &[cap_row(4096), model_row(RUNNER_MODEL), effort_row(value)]);
+        let rules = rules_with_rows(&dir, &format!("rules-effort-{value}.toml"), &[cap_row(4096), lens_model_row(LENS_MODEL), effort_row(value)]);
         let out = run_bin_owned(&dir, &lens_args(&contract, &dir, &["--rules", &rules.display().to_string()], &claude), b"--- a\n+++ b\n");
         assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{value}: {}", stderr_of(&out));
         assert_eq!(stdout_of(&out).trim(), r#"{"verdict":"PASS","evidence":"effort の歯"}"#, "{value}: 判定は claude の行");
@@ -236,6 +236,82 @@ fn headless_lens_passes_effort_from_rules_row() {
     let out = run_bin_owned(&dir, &lens_args(&contract, &dir, &[], &claude), b"--- a\n+++ b\n");
     assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
     assert_eq!(effort_arg(&dir), Some(RUNNER_EFFORT.to_owned()), "埋め込みの行: {}", slurp(&dir.join("args")));
+    clean(&[&dir]);
+}
+
+/// 先撃ちの lens の段の flag の 2 語（設計 pipeline.md §61 形 3）。
+const PRELENS_STAGE: [&str; 2] = ["--stage", "prelens"];
+
+/// (a) (b) (e) lens は `--stage` の有無で model の行を選ぶ（設計 pipeline.md §61 形 3）: `--stage` の無い lens は `lens.model`・
+/// `--stage prelens` の lens は `pipe.precheck_lens_model` の値を `--model` に渡す（3 行を別の値に置いた fixture で弁別＝
+/// `runner.model` を読む変異も、行を取り違える変異も落ちる）。`--rules` の無い lens は埋め込みの値で、`--stage` 無しは opus・
+/// `--stage prelens` は sonnet。base は `lens.model` を読まず `--stage` を未知の引数として断るので RED。
+#[test]
+fn model_split_lens_reads_its_model_row_by_stage() {
+    let dir = tmp();
+    let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"段の歯\"}\n", false, 0);
+    let contract = contract_in(&dir);
+    let rows = [cap_row(4096), model_row("opus"), lens_model_row("fable"), prelens_model_row("haiku"), effort_row(RUNNER_EFFORT)];
+    let rules = rules_with_rows(&dir, "rules-split.toml", &rows);
+    let path = rules.display().to_string();
+    let with_rules = ["--rules", path.as_str()];
+    let prelens_rules = ["--rules", path.as_str(), PRELENS_STAGE[0], PRELENS_STAGE[1]];
+    for (extra, want) in [(&with_rules[..], "fable"), (&prelens_rules[..], "haiku"), (&[][..], "opus"), (&PRELENS_STAGE[..], "sonnet")] {
+        let _ = fs::remove_file(dir.join("args"));
+        let out = run_bin_owned(&dir, &lens_args(&contract, &dir, extra, &claude), b"--- a\n+++ b\n");
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{extra:?}: {}", stderr_of(&out));
+        assert_eq!(stdout_of(&out).trim(), r#"{"verdict":"PASS","evidence":"段の歯"}"#, "{extra:?}: 判定は claude の行");
+        assert_eq!(model_arg(&dir), Some(want.to_owned()), "{extra:?}: 段の行の値を渡す: {}", slurp(&dir.join("args")));
+        assert!(!has_arg(&slurp(&dir.join("args")), "--stage"), "{extra:?}: --stage は claude へ渡らない");
+    }
+    clean(&[&dir]);
+}
+
+/// (c) `--stage` は `prelens` だけを取る（設計 pipeline.md §61 形 3）: 他の値（`gate` / `Prelens`）と値の欠けは未知の引数と同じ断り
+/// （`lens: <理由>` の 1 行と usage・rc 2）で、偽 claude の呼び出しは 0。base は `--stage` を未知の引数として断るが、字面が
+/// `未知の引数 --stage` で値を名指さないので RED。
+#[test]
+fn model_split_lens_refuses_other_stage_values_like_unknown_args() {
+    let dir = tmp();
+    let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"呼ばれてはならない\"}\n", false, 0);
+    let contract = contract_in(&dir);
+    let usage = vessel::headless::lens::usage();
+    for (extra, reason) in [
+        (&["--stage", "gate"][..], "未知の引数 --stage gate"),
+        (&["--stage", "Prelens"][..], "未知の引数 --stage Prelens"),
+        (&["--stage"][..], "--stage に値が無い"),
+    ] {
+        let out = run_bin_owned(&dir, &lens_args(&contract, &dir, extra, &claude), b"--- a\n+++ b\n");
+        assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "{extra:?}: rc 2 / {}", stderr_of(&out));
+        assert_eq!(stderr_of(&out), format!("lens: {reason}\n{usage}\n"), "{extra:?}: 未知の引数と同じ断りの形");
+        assert!(stdout_of(&out).is_empty(), "{extra:?}: 判定の面には何も出さない");
+        assert!(!dir.join("called").exists(), "{extra:?}: claude を 1 度も起動しない");
+    }
+    assert!(usage.contains(" [--stage prelens] "), "usage は段の flag を写す: {usage}");
+    clean(&[&dir]);
+}
+
+/// (d) 段が読む行が無い manifest は claude を呼ばず rc 2 で理由 1 行（`lens.model` の無い manifest の `--stage` の無い lens と、
+/// `pipe.precheck_lens_model` の無い manifest の `--stage prelens` の lens・もう片方の行は在る）。base は `runner.model` を読んで
+/// claude を起こすか `--stage` を断るので RED。
+#[test]
+fn model_split_lens_refuses_when_its_stage_row_is_missing() {
+    let dir = tmp();
+    let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"呼ばれてはならない\"}\n", false, 0);
+    let contract = contract_in(&dir);
+    let no_lens = rules_with_rows(&dir, "no-lens.toml", &[cap_row(4096), model_row("opus"), prelens_model_row("sonnet"), effort_row(RUNNER_EFFORT)]);
+    let no_prelens = rules_with_rows(&dir, "no-prelens.toml", &[cap_row(4096), model_row("sonnet"), lens_model_row("opus"), effort_row(RUNNER_EFFORT)]);
+    let (no_lens, no_prelens) = (no_lens.display().to_string(), no_prelens.display().to_string());
+    for (extra, want) in [
+        (vec!["--rules", no_lens.as_str()], "lens.model が無い"),
+        (vec!["--rules", no_prelens.as_str(), PRELENS_STAGE[0], PRELENS_STAGE[1]], "pipe.precheck_lens_model が無い"),
+    ] {
+        let out = run_bin_owned(&dir, &lens_args(&contract, &dir, &extra, &claude), b"--- a\n+++ b\n");
+        assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "{want}: rc 2 / {}", stderr_of(&out));
+        assert!(!dir.join("called").exists(), "{want}: claude を 1 度も起動しない");
+        assert_eq!(stderr_of(&out), format!("lens: {want}\n"), "{want}: 理由の 1 行だけ");
+        assert!(stdout_of(&out).is_empty(), "{want}: 判定の面には何も出さない");
+    }
     clean(&[&dir]);
 }
 

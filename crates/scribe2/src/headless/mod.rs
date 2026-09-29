@@ -42,7 +42,7 @@ pub mod lens {
     use crate::cli_args;
     use crate::cli_outcome::Outcome;
 
-    /// lens が受ける flag（本体の `KNOWN_FLAGS` と同じ 7 つ・宣言順）。
+    /// lens が受ける flag（本体の `KNOWN_FLAGS` と同じ 8 つ・宣言順・`--stage` の値は本体が裁く）。
     const ALLOWED: &[cli_args::Allowed] = &[
         value("--contract"),
         value("--worktree"),
@@ -51,6 +51,7 @@ pub mod lens {
         value("--account-dir"),
         value("--claude"),
         value("--cgroup-root"),
+        value("--stage"),
     ];
 
     /// `lens` を 1 回。
@@ -208,8 +209,14 @@ pub fn need<'a>(args: &'a [String], name: &str) -> Result<&'a str, String> {
     flag(args, name)?.ok_or(format!("{name} が要る"))
 }
 
-/// runner / lens が claude に毎回渡す model を持つ rules 行（設計 pipeline.md §6・`s2-07l.297`）。
+/// runner が claude に毎回渡す model を持つ rules 行（設計 pipeline.md §6・`s2-07l.297`）。
 pub const ROW_MODEL: &str = "runner.model";
+
+/// `--stage` を持たない lens（契約の審査と gate の審査）の model を持つ rules 行（設計 pipeline.md §61）。
+pub const ROW_LENS_MODEL: &str = "lens.model";
+
+/// `--stage prelens` の lens（事前審査の先撃ち）の model を持つ rules 行（設計 pipeline.md §61）。
+pub const ROW_PRELENS_MODEL: &str = "pipe.precheck_lens_model";
 
 /// 同じく effort を持つ rules 行（設計 pipeline.md §6・`s2-07l.322`）。
 pub const ROW_EFFORT: &str = "runner.effort";
@@ -266,17 +273,23 @@ pub fn rules_of(args: &[String]) -> Result<Manifest, String> {
     })
 }
 
-/// rules 行 [`ROW_MODEL`] の model。行が無い / 不発効 / 文字列でない / 閉じた表（[`Model::parse`]）に無い周は
-/// 理由つきで `Err`＝呼び手は claude を呼ばず rc 2（cap と同じ極性・版の既定へ黙って倒れない）。
-pub fn runner_model(manifest: &Manifest) -> Result<Model, String> {
-    let text = str_row(manifest, ROW_MODEL)?;
+/// rules 行 `row` の model（**model の行の読み口はこの 1 本**・[`ROW_MODEL`] / [`ROW_LENS_MODEL`] / [`ROW_PRELENS_MODEL`]・
+/// 設計 pipeline.md §61）。行が無い / 不発効 / 文字列でない / 閉じた表（[`Model::parse`]）に無い周は理由つきで `Err`＝呼び手は
+/// claude を呼ばず rc 2（cap と同じ極性・版の既定へ黙って倒れない）。
+pub fn model_row(manifest: &Manifest, row: &str) -> Result<Model, String> {
+    let text = str_row(manifest, row)?;
     Model::parse(text).ok_or_else(|| {
         let taken: Vec<&str> = MODELS.iter().map(|model| model.alias()).collect();
-        format!("{ROW_MODEL} の値 {text} は未知の model（取るのは {}）", taken.join(" / "))
+        format!("{row} の値 {text} は未知の model（取るのは {}）", taken.join(" / "))
     })
 }
 
-/// rules 行 [`ROW_EFFORT`] の effort。4 理由の `Err` は [`runner_model`] と同じ極性＝呼び手は claude を呼ばず rc 2。
+/// rules 行 [`ROW_MODEL`] の model（runner の読み口・[`model_row`] に行の id を渡すだけ）。
+pub fn runner_model(manifest: &Manifest) -> Result<Model, String> {
+    model_row(manifest, ROW_MODEL)
+}
+
+/// rules 行 [`ROW_EFFORT`] の effort。4 理由の `Err` は [`model_row`] と同じ極性＝呼び手は claude を呼ばず rc 2。
 pub fn runner_effort(manifest: &Manifest) -> Result<Effort, String> {
     let text = str_row(manifest, ROW_EFFORT)?;
     Effort::parse(text).ok_or_else(|| {

@@ -242,6 +242,10 @@ pub(super) fn review_run(args: &[String], id: &str, manifest: &Manifest, policy:
         Ok(found) => found,
         Err(reason) => return broken(reason),
     };
+    // 先撃ちの使い回しは 2 行が両方読めて同じ model に解ける周だけ（読めない側は撃つ側へ倒す・設計 pipeline.md §61 形 5）。
+    let lens_model = |row| crate::headless::model_row(manifest, row).ok();
+    let reviewed = lens_model(crate::headless::ROW_LENS_MODEL);
+    let same_model = reviewed.is_some() && reviewed == lens_model(crate::headless::ROW_PRELENS_MODEL);
     review(&Review {
         run: id,
         bead: &resolved.bead,
@@ -250,6 +254,7 @@ pub(super) fn review_run(args: &[String], id: &str, manifest: &Manifest, policy:
         contract: &resolved.contract,
         requirements: &requirements,
         lens: &lens,
+        same_model,
         policy,
     })
 }

@@ -239,8 +239,21 @@ fn model_row(value: &str) -> String {
     format!("id = \"runner.model\"\nkind = \"RunnerModel\"\nvalue = \"{value}\"\nenabled = true\n")
 }
 
-/// 埋め込み manifest と同じ `runner.model` の値（claude CLI の別名・裁定 id `user 2026-09-14T21:59Z`）。
-const RUNNER_MODEL: &str = "opus";
+/// `lens.model` の行（`--stage` の無い lens が読む・値は文字列 `value`・発効・設計 pipeline.md §61）。
+fn lens_model_row(value: &str) -> String {
+    format!("id = \"lens.model\"\nkind = \"LensModel\"\nvalue = \"{value}\"\nenabled = true\n")
+}
+
+/// `pipe.precheck_lens_model` の行（`--stage prelens` の lens が読む・値は文字列 `value`・発効）。
+fn prelens_model_row(value: &str) -> String {
+    format!("id = \"pipe.precheck_lens_model\"\nkind = \"PipePrecheckLensModel\"\nvalue = \"{value}\"\nenabled = true\n")
+}
+
+/// 埋め込み manifest と同じ `runner.model` の値（claude CLI の別名・裁定 id `user 2026-09-29T07:44Z`）。
+const RUNNER_MODEL: &str = "sonnet";
+
+/// 埋め込み manifest と同じ `lens.model` の値（同じ裁定）。
+const LENS_MODEL: &str = "opus";
 
 /// `runner.effort` の行（値は文字列 `value`・発効・`s2-07l.322`）。
 fn effort_row(value: &str) -> String {
@@ -251,13 +264,13 @@ fn effort_row(value: &str) -> String {
 const RUNNER_EFFORT: &str = "high";
 
 /// `gate.token_cap` を `cap` byte にした manifest（file 名に値を含む＝同じ dir で cap を変えて撃ち直せる）。
-/// `runner.model` / `runner.effort` は埋め込みと同じ値で載せる（lens は cap と model と effort の 3 行を
+/// `runner.model` / `lens.model` / `runner.effort` は埋め込みと同じ値で載せる（lens は cap と model と effort の 3 行を
 /// 同じ manifest から読む）。
 fn rules_with_cap(dir: &Path, cap: u64) -> PathBuf {
     rules_with_rows(
         dir,
         &format!("rules-cap-{cap}.toml"),
-        &[cap_row(cap), model_row(RUNNER_MODEL), effort_row(RUNNER_EFFORT)],
+        &[cap_row(cap), model_row(RUNNER_MODEL), lens_model_row(LENS_MODEL), effort_row(RUNNER_EFFORT)],
     )
 }
 
@@ -573,7 +586,7 @@ fn headless_effort_row_refuses_unknown_value() {
     // lens も同じ極性（cap と model は解ける manifest で effort だけが表に無い）。
     let contract = contract_in(&dir);
     let lens_claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"呼ばれてはならない\"}\n", false, 0);
-    let rules = rules_with_rows(&dir, "lens-bad-effort.toml", &[cap_row(4096), model_row(RUNNER_MODEL), effort_row("max")]);
+    let rules = rules_with_rows(&dir, "lens-bad-effort.toml", &[cap_row(4096), lens_model_row(LENS_MODEL), effort_row("max")]);
     let out = run_bin_owned(&dir, &lens_args(&contract, &dir, &["--rules", &rules.display().to_string()], &lens_claude), b"--- a\n+++ b\n");
     assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "lens: rc 2 / {}", stderr_of(&out));
     assert!(!dir.join("called").exists(), "lens: claude を 1 度も起動しない");

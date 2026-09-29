@@ -255,6 +255,9 @@ pub struct Review<'a> {
     pub requirements: &'a str,
     /// lens のコマンドの出所（`--lens`・無い / 読めないは別の値＝どちらも INCONCLUSIVE・[`super::lens_record`]）。
     pub lens: &'a LensSource,
+    /// 先撃ちの lens と審査の lens が同じ model か（manifest の `lens.model` と `pipe.precheck_lens_model` が両方読めて同じ
+    /// `Model` に解ける周だけ真・設計 pipeline.md §61 形 5）。偽の周は先撃ちの判定を使い回さず lens を撃つ。
+    pub same_model: bool,
     /// lock の待ち方。
     pub policy: LockPolicy,
 }
@@ -300,10 +303,11 @@ pub fn review(entry: &Review<'_>) -> Outcome {
         Ok(found) => found,
         Err(reason) => return broken(reason),
     };
-    // 先撃ちの判定を使い回せる周（材料の鍵・判定・lens の字が同じ・設計 dispatcher.md §27 形 ac 1）は lens を撃たない。
+    // 先撃ちの判定を使い回せる周（材料の鍵・判定・lens の字・model の行が同じ・設計 dispatcher.md §27 形 ac 1・pipeline.md §61
+    // 形 5）は lens を撃たない。
     let reused = match entry.lens {
-        LensSource::Cmd(cmd) => super::dispatch::prelens::reusable(entry.state_dir, entry.bead, &dir, cmd),
-        LensSource::Absent | LensSource::Unreadable { .. } => None,
+        LensSource::Cmd(cmd) if entry.same_model => super::dispatch::prelens::reusable(entry.state_dir, entry.bead, &dir, cmd),
+        LensSource::Cmd(_) | LensSource::Absent | LensSource::Unreadable { .. } => None,
     };
     let (finding, scope, usage) = match &reused {
         Some((rc, text)) => (read_outcome(*rc, text), None, None),

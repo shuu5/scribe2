@@ -329,18 +329,18 @@ enabled = true
 ruling = "user 2026-09-24T00:13Z"
 ruled_at = "2026-09-24"
 
-# runner / lens が claude に毎回渡す model（設計 pipeline.md §6・account-autonomy.md §3・`s2-07l.297`）。値は claude CLI の
-# 別名（`opus` …・閉じた表は crates 側の fleet::select::Model）。便用の口座選定はこの model のモデル別 7 日窓だけを
-# 数える（他の model の窓が 100 でも便の候補から外さない）。初期値は実測の既定（`--model` 無しの runner / lens は
-# Opus 5 で走っていた）＝挙動は変えずに選定の窓だけを合わせる。
+# runner が claude に毎回渡す model（設計 pipeline.md §6 / §61・account-autonomy.md §3・`s2-07l.297`）。値は claude CLI の
+# 別名（`sonnet` …・閉じた表は crates 側の fleet::select::Model）。便用の口座選定はこの model のモデル別 7 日窓だけを
+# 数える（他の model の窓が 100 でも便の候補から外さない）。lens の model は `lens.model` と
+# `pipe.precheck_lens_model` の 2 行に分けた（§61・契約表の行 bd）。
 
 [[rule]]
 id = "runner.model"
 kind = "RunnerModel"
-value = "opus"
+value = "sonnet"
 enabled = true
-ruling = "user 2026-09-14T21:59Z runner/lens model pin (measured default Opus 5; run selection counts this model window only)"
-ruled_at = "2026-09-14"
+ruling = "user 2026-09-29T07:44Z runner and pre-fired lens on Sonnet, contract review and gate lens on Opus (effort stays high)"
+ruled_at = "2026-09-29"
 
 # runner / lens が claude に毎回渡す effort（設計 pipeline.md §6・`s2-07l.322`）。値は claude CLI の字面
 # （`low` / `medium` / `high` / `xhigh`・閉じた表は crates 側の headless::Effort）。省くと口座の設定 dir の
@@ -354,6 +354,27 @@ value = "high"
 enabled = true
 ruling = "user 2026-09-15T03:52Z runner/lens effort pin (high; model stays runner.model)"
 ruled_at = "2026-09-15"
+
+# `--stage` を持たない lens（契約の審査と gate の審査）が claude に毎回渡す model（設計 pipeline.md §61・契約表の行 bd）。
+
+[[rule]]
+id = "lens.model"
+kind = "LensModel"
+value = "opus"
+enabled = true
+ruling = "user 2026-09-29T07:44Z runner and pre-fired lens on Sonnet, contract review and gate lens on Opus (effort stays high)"
+ruled_at = "2026-09-29"
+
+# `--stage prelens` の lens（事前審査の先撃ち）が claude に毎回渡す model（設計 pipeline.md §61）。先撃ちの判定を
+# 契約の審査に使い回すのは、この行と `lens.model` が同じ model に解ける周だけ（dispatcher.md §27 形 ac 1）。
+
+[[rule]]
+id = "pipe.precheck_lens_model"
+kind = "PipePrecheckLensModel"
+value = "sonnet"
+enabled = true
+ruling = "user 2026-09-29T07:44Z runner and pre-fired lens on Sonnet, contract review and gate lens on Opus (effort stays high)"
+ruled_at = "2026-09-29"
 
 [[rule]]
 id = "repo.non_rust_exec_allow"
