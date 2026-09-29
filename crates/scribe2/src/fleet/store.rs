@@ -421,15 +421,16 @@ fn ends_unterminated(file: &mut fs::File) -> Result<bool, StoreError> {
 pub enum Reclaim {
     /// 所有者が死んだ lock と、`stale_ms` を超えた lock を外す。
     Stale,
-    /// **所有者が死んだ lock だけ**を外す（生きている所有者は `retry_ms` まで待つ）。
+    /// **所有者が死んだ lock だけ**を外す（生きている所有者は `retry_ms` まで待つ）。本文の読めない lock は
+    /// `stale_ms` を超えた周に外す（生きた所有者が本文の無い lock を握るのは本文を書く前の μs だけ）。
     DeadOnly,
 }
 
 /// [`Reclaim`] の全 variant（宣言順・`enum-slices` が集合完全性を測る）。
 pub const RECLAIMS: &[Reclaim] = &[Reclaim::Stale, Reclaim::DeadOnly];
 
-/// lock を取る。所有者の死んだ lock と（[`Reclaim::Stale`] の周は）古い lock を外して警告に載せる
-/// （黙って消さない）。
+/// lock を取る。所有者の死んだ lock と（[`Reclaim::Stale`] の周か本文の読めない lock は）古い lock を外して
+/// 警告に載せる（黙って消さない）。
 ///
 /// 取れた lock には**自分の pid と起動時刻を 10 進 2 語 1 行**で書く（`create_new` で開いた handle に
 /// そのまま書く・第 2 の writer を作らない・自分の起動時刻を読めない周は pid 1 語）。書けない周は lock を
@@ -511,7 +512,9 @@ fn acquire_in(root: &Path, lock: &Path, policy: LockPolicy, policy_reclaim: Recl
             warnings.push(Warning::DeadOwnerLockRemoved);
             continue;
         }
-        if policy_reclaim == Reclaim::Stale && is_stale(lock, policy.stale_ms) && reclaim(lock, &observed) {
+        // 本文が 2 形のどちらでもない（空を含む）lock は Reclaim に依らず stale の線に従う（行 e・memo s2-07l.736.8）。
+        let unparsed = owner_words(&observed).is_none();
+        if (policy_reclaim == Reclaim::Stale || unparsed) && is_stale(lock, policy.stale_ms) && reclaim(lock, &observed) {
             warnings.push(Warning::StaleLockRemoved);
             continue;
         }
@@ -652,6 +655,42 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(5));
         let stale = acquire_with(&lock, policy, Reclaim::Stale).expect("Stale は古い lock を回収して取れる");
         assert_eq!(stale, vec![Warning::StaleLockRemoved], "回収の warning は従来どおり 1 件");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **本文の読めない古い lock は `DeadOnly` の周でも外す**（設計 fleet-event-log.md §11・行 e）: 空と、2 形の
+    /// どちらでもない本文の lock を `stale_ms` より古くした周に、`DeadOnly` で取れて warning は
+    /// `StaleLockRemoved` の 1 件。
+    #[test]
+    fn fleet_lock_unparsed_stale_body_is_reclaimed_under_dead_only() {
+        let dir = scratch("unparsed-stale");
+        let lock = dir.join("events.jsonl.lock");
+        let policy = LockPolicy { retry_ms: 30, stale_ms: 1 };
+        for body in ["", "abc\n"] {
+            std::fs::write(&lock, body).expect("lock を書ける");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            let outcome = acquire_with(&lock, policy, Reclaim::DeadOnly);
+            assert_eq!(outcome, Ok(vec![Warning::StaleLockRemoved]), "本文 {body:?} の古い lock は DeadOnly で取れる");
+            let owner = std::fs::read_to_string(&lock).unwrap_or_default();
+            assert!(owner.starts_with(&std::process::id().to_string()), "取り直した lock は自分の本文: {owner:?}");
+            std::fs::remove_file(&lock).expect("lock を外せる");
+        }
+        assert!(!reclaim_token(&lock).exists(), "token は寿命 μs で必ず外れる");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 同じ 2 つの本文でも**古くない周は `DeadOnly` で取れず lock は残る**（上の歯の非空虚の対）。
+    #[test]
+    fn fleet_lock_unparsed_fresh_body_waits_under_dead_only() {
+        let dir = scratch("unparsed-fresh");
+        let lock = dir.join("events.jsonl.lock");
+        let policy = LockPolicy { retry_ms: 30, stale_ms: 600_000 };
+        for body in ["", "abc\n"] {
+            std::fs::write(&lock, body).expect("lock を書ける");
+            let outcome = acquire_with(&lock, policy, Reclaim::DeadOnly);
+            assert!(matches!(outcome, Err(StoreError::Lock(_))), "本文 {body:?} の新しい lock は奪わない: {outcome:?}");
+            assert_eq!(std::fs::read_to_string(&lock).unwrap_or_default(), body, "lock は本文ごと残る");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
