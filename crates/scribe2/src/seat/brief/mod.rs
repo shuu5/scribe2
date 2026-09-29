@@ -6,8 +6,8 @@
 //! C 条文は CI の門と guard が執行するので注入しない・ADR-0046）・役割の特性 3 行。
 //!
 //! 雛形の行は「穴」か「出所 pointer を持つ行」だけである（憲法 C1.2・規範文の定義 = pointer を持たない行・typed）。
-//! pointer の形は [`PointerKind`]（行末の `→ SSOT:` の後ろを [`pointer::references`] が切り
-//! [`pointer::classify`] が分類する・字面の語彙で判定しない）。行の分類（[`classify_line`]）は in-file の歯が読み、
+//! pointer の形は [`PointerKind`]（行末の `→ 器の SSOT:` の後ろを [`pointer::references`] が切り
+//! [`pointer::classify`] が 1 本残らず分類する・字面の語彙で判定しない・ADR-0090）。行の分類（[`classify_line`]）は in-file の歯が読み、
 //! xtask の drift 検査（C14.2・AC17）は同じ規律を雛形 file に対して測る。**env を読まない**（C2.2）: 穴の値は
 //! 登録 row と rules 行 `role.<役割>` から来る。
 
@@ -75,8 +75,10 @@ pub enum LineKind {
     Pointed(PointerKind),
     /// 定義に無い穴を持つ行（字面）。
     UnknownHole(String),
-    /// 穴でも pointer 行でもない＝規範文（違反）。
+    /// 穴でも pointer 行でもない＝参照を 1 本も持たない規範文（違反）。
     Bare,
+    /// 印の後ろに分類できない参照を 1 本でも持つ行（最初の 1 本の字・違反・ADR-0090）。
+    Unclassified(String),
 }
 
 /// 行の中の `{…}` の字面（出現順・閉じの無い `{` は数えない）。
@@ -96,7 +98,8 @@ pub fn braces(line: &str) -> Vec<&str> {
     found
 }
 
-/// 行を分類する（pure）。未知の穴は pointer の有無より先に見る（穴の列は閉じている）。台帳 prefix は渡さない
+/// 行を分類する（pure）。未知の穴は pointer の有無より先に見る（穴の列は閉じている）。印の後ろの参照は 1 本残らず
+/// 分類し、1 本でも分類できなければ [`LineKind::Unclassified`] にする（黙って飛ばさない・ADR-0090）。台帳 prefix は渡さない
 /// （雛形は台帳の id を pointer にしない＝憲法・ADR・設計 doc・rules 行の形だけ）。
 pub fn classify_line(line: &str) -> LineKind {
     if line.trim().is_empty() {
@@ -110,7 +113,11 @@ pub fn classify_line(line: &str) -> LineKind {
     if without_holes.trim().is_empty() {
         return LineKind::Holes;
     }
-    pointer::references(line)
+    let references = pointer::references(line);
+    if let Some(unclassified) = references.iter().find(|reference| pointer::classify(reference, &[]).is_none()) {
+        return LineKind::Unclassified(unclassified.clone());
+    }
+    references
         .iter()
         .filter_map(|reference| pointer::classify(reference, &[]))
         .min()
@@ -124,7 +131,7 @@ pub fn violations(template: &str) -> Vec<(usize, LineKind)> {
         .enumerate()
         .filter_map(|(at, line)| match classify_line(line) {
             LineKind::Blank | LineKind::Holes | LineKind::Pointed(_) => None,
-            found @ (LineKind::UnknownHole(_) | LineKind::Bare) => Some((at.saturating_add(1), found)),
+            found @ (LineKind::UnknownHole(_) | LineKind::Bare | LineKind::Unclassified(_)) => Some((at.saturating_add(1), found)),
         })
         .collect()
 }
@@ -196,25 +203,51 @@ mod tests {
         assert_eq!(braces("a {x} b {y"), vec!["{x}"], "閉じの無い `{{` は数えない");
     }
 
-    /// 行の分類は 5 値で融合しない: 空行 / 穴だけ / pointer 行（最も強い kind）/ 未知の穴 / 規範文。
+    /// 行の分類は 6 値で融合しない: 空行 / 穴だけ / pointer 行（最も強い kind）/ 未知の穴 / 規範文 / 分類できない参照。
     #[test]
     fn seat_brief_classify_line_separates_holes_pointers_and_bare_prose() {
         assert_eq!(classify_line("   "), LineKind::Blank);
         assert_eq!(classify_line("{capabilities}"), LineKind::Holes);
         assert_eq!(classify_line("{role} {target} {anchor}"), LineKind::Holes, "穴が複数でも穴だけ");
-        assert_eq!(classify_line("x → SSOT: ADR-0022 §2.4"), LineKind::Pointed(PointerKind::Adr));
+        assert_eq!(classify_line("x → 器の SSOT: ADR-0022 §2.4"), LineKind::Pointed(PointerKind::Adr));
         assert_eq!(
-            classify_line("x → SSOT: ADR-0022 §2.4 / 憲法 C1.2"),
+            classify_line("x → 器の SSOT: ADR-0022 §2.4 / 憲法 C1.2"),
             LineKind::Pointed(PointerKind::Constitution),
             "最も強い kind（宣言順で最小）"
         );
-        assert_eq!(classify_line("{role} の権能 → SSOT: rules 行 role.orchestrator"), LineKind::Pointed(PointerKind::Manifest));
-        assert_eq!(classify_line("{unknown} → SSOT: N2"), LineKind::UnknownHole("{unknown}".to_owned()), "未知の穴は pointer より先");
+        assert_eq!(classify_line("{role} の権能 → 器の SSOT: rules 行 role.orchestrator"), LineKind::Pointed(PointerKind::Manifest));
+        assert_eq!(classify_line("{unknown} → 器の SSOT: N2"), LineKind::UnknownHole("{unknown}".to_owned()), "未知の穴は pointer より先");
         assert_eq!(classify_line("席は lock を確保する"), LineKind::Bare, "pointer 無し");
-        assert_eq!(classify_line("席は lock を確保する → SSOT: user 裁定 2026-09-14"), LineKind::Bare, "分類できない参照だけ");
+        assert_eq!(
+            classify_line("席は lock を確保する → 器の SSOT: user 裁定 2026-09-14"),
+            LineKind::Unclassified("user 裁定 2026-09-14".to_owned()),
+            "分類できない参照だけ"
+        );
         assert_eq!(classify_line("C1 を読む"), LineKind::Bare, "区切りの無い字面は pointer にしない");
-        assert_eq!(classify_line("x → SSOT: s2-07l.248"), LineKind::Bare, "台帳の id は雛形の pointer にしない");
-        assert_eq!(violations("a → SSOT: N2\n\nb\n{bad}\n"), vec![(3, LineKind::Bare), (4, LineKind::UnknownHole("{bad}".to_owned()))]);
+        assert_eq!(classify_line("x → 器の SSOT: s2-07l.248"), LineKind::Unclassified("s2-07l.248".to_owned()), "台帳の id は雛形の pointer にしない");
+        assert_eq!(violations("a → 器の SSOT: N2\n\nb\n{bad}\n"), vec![(3, LineKind::Bare), (4, LineKind::UnknownHole("{bad}".to_owned()))]);
+    }
+
+    /// 印は `→ 器の SSOT:` で、旧い印 `→ SSOT:` だけの行は参照 0 本＝pointer を持たない行（ADR-0090 形 1）。
+    #[test]
+    fn seat_brief_vessel_ssot_marks_vessel_documents_and_the_bare_mark_is_no_pointer() {
+        assert_eq!(classify_line("x → 器の SSOT: 憲法 N3"), LineKind::Pointed(PointerKind::Constitution));
+        assert_eq!(classify_line("x → SSOT: 憲法 N3"), LineKind::Bare, "旧い印は pointer にしない");
+        assert_eq!(pointer::references("x → 器の SSOT: 憲法 N3"), vec!["憲法 N3".to_owned()]);
+        assert_eq!(pointer::references("x → SSOT: 憲法 N3"), Vec::<String>::new());
+    }
+
+    /// 分類できない参照が先頭・中・末尾のどこに在っても行は Unclassified（最初の 1 本の字）で、全部分類できる行だけが
+    /// Pointed のまま。`violations()` は Unclassified の行を行番号つきで返す（ADR-0090 形 2）。
+    #[test]
+    fn seat_brief_vessel_ssot_rejects_a_line_with_any_unclassified_reference() {
+        let unclassified = |text: &str| LineKind::Unclassified(text.to_owned());
+        assert_eq!(classify_line("x → 器の SSOT: 憲法 N-7 / ADR-0044"), unclassified("憲法 N-7"), "先頭");
+        assert_eq!(classify_line("x → 器の SSOT: ADR-0044 / rules 行 Role.X / 憲法 N3"), unclassified("rules 行 Role.X"), "中");
+        assert_eq!(classify_line("x → 器の SSOT: ADR-0044 / 器の憲法 N3"), unclassified("器の憲法 N3"), "末尾");
+        assert_eq!(classify_line("x → 器の SSOT: ADR-0044 / 憲法 N3"), LineKind::Pointed(PointerKind::Constitution), "全部分類できる");
+        let template = "a → 器の SSOT: ADR-0044 / 憲法 N3\nb → 器の SSOT: ADR-0044 / 器の憲法 N3\n";
+        assert_eq!(violations(template), vec![(2, unclassified("器の憲法 N3"))]);
     }
 
     /// 現物の雛形 2 枚は違反 0（穴か pointer 行だけ）で、pointer はすべて repo の現物に実在する（憲法 / ADR / 設計 doc /
@@ -233,7 +266,7 @@ mod tests {
             for line in text.lines().filter(|line| !line.trim().is_empty()) {
                 for reference in pointer::references(line) {
                     let Some(kind) = pointer::classify(&reference, &[]) else {
-                        continue;
+                        panic!("{}: 分類できない参照 {reference}", role.as_str());
                     };
                     assert_eq!(anchor.resolve(kind, &reference), Resolution::Resolved, "{}: {reference}", role.as_str());
                 }
