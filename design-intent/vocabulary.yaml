@@ -656,8 +656,8 @@ terms:
     relationships: [作業記憶, cycle, 管理 tick]
   - canonical: 出所 pointer
     domain: consumer
-    definition: 作業記憶の命令行が本文末に持つ、 実在を照合できる carrier 参照。 器は形を閉じた enum (PointerKind) で分類し、 宣言順を優先順位とする (ADR-0018 §2.2)。 形の列挙は機械側 (PointerKind::ALL と外形 snapshot) が正本で、 本 file は写さない。 持たない行・分類できない行は暫定行。
-    relationships: [作業記憶, 暫定行, 宣言順]
+    definition: 席の指示文の雛形の行が行末の出所の印 (→ 器の SSOT:) の後ろに持つ、 実在を照合できる器の repo の文書への参照 (ADR-0022 §2.4・ADR-0090)。 器は形を閉じた enum (PointerKind) で分類し、 宣言順を優先順位とする (ADR-0018 §2.2)。 形の列挙は機械側 (PointerKind::ALL と外形 snapshot) が正本で、 本 file は写さない。 印の後ろの参照が 1 本でも分類できない行と、 参照を 1 本も持たない行は pointer 行でない (ADR-0090)。 もとは作業記憶の命令行が本文末に持つ参照 (ADR-0018 §2.2) で、 作業記憶は ADR-0045 §2 (2) で廃止。
+    relationships: [席の指示文, 出所の印, 分類できない参照, 宣言順, 作業記憶, 暫定行]
   # ---------------------------------------------------------------- ADR-0019 (並列の便の受付と衝突)
   - canonical: 追随
     domain: consumer
@@ -1663,3 +1663,12 @@ terms:
     domain: consumer
     definition: 台帳の依存の辺の種類の 1 つで、 memo を残して契約を分ける昇格で分けた契約から memo へ張る辺 (SRS FR91・ADR-0089)。 memo から辿れる開いた契約が在れば memo は memo-promoting で、 辿れる契約の列が最後の昇格の行の列と一致しない memo は自動の close をされない (SRS FR93)。
     relationships: [昇格, 昇格の行, memo の局面, 台帳]
+  # ---------------------------------------------------------------- 席の指示文の出所の印 (ADR-0090)
+  - canonical: 出所の印
+    domain: consumer
+    definition: 席の指示文の雛形の各行の末尾に置き、 その後ろが器の repo の文書への出所 pointer だと示す字 (→ 器の SSOT:・ADR-0090)。 前の版の字 (→ SSOT:) だけを持つ行は pointer を持たない行と読む。 字の正本は器の中の定数 1 つで、 xtask が同じ字の写しを持つ。
+    relationships: [出所 pointer, 席の指示文, 分類できない参照]
+  - canonical: 分類できない参照
+    domain: consumer
+    definition: 出所の印の後ろに在るが PointerKind のどの形にも当たらない参照 (ADR-0090)。 1 本でも持つ行は雛形の違反で、 行の分類は最初の 1 本の字を持つ値を返す。
+    relationships: [出所の印, 出所 pointer, 席の指示文]

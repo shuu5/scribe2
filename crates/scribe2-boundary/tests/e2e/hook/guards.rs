@@ -990,6 +990,124 @@ fn hook_ledger_write_fails_closed_without_the_row() {
     clean(&[&repo, &state]);
 }
 
+// ─────────────── 台帳の問いの create の形（`s2-07l.738.11`・設計 ledger-form.md §14 行 j・接頭辞 `hook_question_form_`） ───────────────
+//
+// `.beads` の無い toy repo で撃つ。rules は埋め込みの manifest の写しで `ledger.denied_writes` から bd-outside-bdw を外す
+// （`bd create` の揃った問いが 6 形に当たらず通る）。
+
+/// 埋め込みの manifest の字面（`--rules` に渡す写しの元）。
+const QUESTION_EMBEDDED: &str = include_str!("../../../../../rules/manifest.toml");
+
+/// 揃った問いの本文（4 行）。
+const QUESTION_BODY: &str = "概要 = 何を決めるか\n- 技術: 器の門\n理由：台帳の形\n推奨 = 断る\n";
+
+/// 揃った metadata。
+const QUESTION_META: &str = "{\"effect\":\"document\",\"asked\":\"seat\"}";
+
+/// 写しの rules を置き場に書き、path を返す。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn question_rules(state: &Path) -> String {
+    let text = QUESTION_EMBEDDED.replace("\"bd-outside-bdw\", ", "");
+    assert_ne!(text, QUESTION_EMBEDDED, "写しは bd-outside-bdw を外した（字面が manifest と揃っている）");
+    let path = state.join("question-rules.toml");
+    fs::write(&path, text).expect("rules の写しを書ける");
+    path.display().to_string()
+}
+
+/// 問いの create の command（label・親の flag・本文の `-d`・metadata の字）。
+fn question_create(client: &str, labels: &str, parent: &str, body: &str, meta: &str) -> String {
+    format!("{client} create 問い --labels {labels} {parent} -d '{body}' --metadata '{meta}'")
+}
+
+/// 写しの rules で撃ち、問いの段の deny の外形（rc 2・stdout 0 byte・stderr 1 行・語と §14）と記録 1 行を確かめ、stderr を返す。
+fn assert_question_deny(state: &Path, repo: &Path, rules: &str, command: &str, reason: &str) -> String {
+    let before = ledger_records(state).len();
+    let out = run_hook_args(&["pre-tool-use", "--rules", rules], &bash_payload(repo, command));
+    let text = stderr_text(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "{command}: deny は rc 2: {text}");
+    assert!(out.stdout.is_empty(), "{command}: deny でも stdout は 0 byte");
+    assert_eq!(stderr_lines(&out), 1, "{command}: stderr は 1 行: {text}");
+    let head = format!("{NAME}: deny bd create は起票の門が止める reason={reason}（");
+    assert!(text.starts_with(&head) && text.contains("・ledger-form.md §14）"), "{command}: {text}");
+    let lines = ledger_records(state);
+    assert_eq!(lines.len(), before + 1, "{command}: 記録は 1 行増える: {lines:?}");
+    assert_eq!(what_of(&lines.last().cloned().unwrap_or_default()), format!("ledger-deny {reason}"), "{command}");
+    text
+}
+
+/// 写しの rules で撃ち、rc 0・0 byte・記録なしで通ることを確かめる。
+fn assert_question_pass(state: &Path, repo: &Path, rules: &str, command: &str) {
+    let before = inject_lines(state).len();
+    assert_silent(&run_hook_args(&["pre-tool-use", "--rules", rules], &bash_payload(repo, command)), command);
+    assert_eq!(inject_lines(state).len(), before, "{command}: 通す周は記録を残さない");
+}
+
+/// (a) 10 形（4 行の欠け 4・effect の欠けと値の外・asked の欠けと値の外・intake:memo の併せ持ち・継がない指定の欠け）×
+/// bd と bdw の 20 本がどれも断られ、断り文は欠けた行・外れた値・併せ持つ label・継ぐ親の id を名指す。(c) label
+/// intake:question を持たない create と (d) 問いの create を中で撃つ script を起こす command は問いの語で断られない。
+#[test]
+fn hook_question_form_denies_each_missing_part_from_bd_and_bdw() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let rules = question_rules(&state);
+    let (question, keep) = ("intake:question", "--parent s2-1 --no-inherit-labels");
+    let without = |word: &str| QUESTION_BODY.lines().filter(|line| !line.contains(word)).collect::<Vec<_>>().join("\n");
+    let forms = [
+        ("question-no-summary", question, keep, without("概要"), QUESTION_META, "本文に 概要 の行が無い"),
+        ("question-no-technical", question, keep, without("技術"), QUESTION_META, "本文に 技術 の行が無い"),
+        ("question-no-reason", question, keep, without("理由"), QUESTION_META, "本文に 理由 の行が無い"),
+        ("question-no-recommendation", question, keep, without("推奨"), QUESTION_META, "本文に 推奨 の行が無い"),
+        ("question-no-effect", question, keep, QUESTION_BODY.to_owned(), "{\"asked\":\"seat\"}", "metadata に effect が無い"),
+        ("question-bad-effect", question, keep, QUESTION_BODY.to_owned(), "{\"effect\":\"docs\",\"asked\":\"seat\"}", "effect が docs"),
+        ("question-no-asked", question, keep, QUESTION_BODY.to_owned(), "{\"effect\":\"operation\"}", "metadata に asked が無い"),
+        ("question-bad-asked", question, keep, QUESTION_BODY.to_owned(), "{\"effect\":\"document\",\"asked\":\"planner\"}", "asked が planner"),
+        ("question-memo-label", "intake:question,intake:memo", keep, QUESTION_BODY.to_owned(), QUESTION_META, "label intake:memo を併せ持てない"),
+        ("question-inherits-labels", question, "--parent s2-1", QUESTION_BODY.to_owned(), QUESTION_META, "親 s2-1 の label を継ぐ"),
+    ];
+    for (reason, labels, parent, body, meta, named) in &forms {
+        for client in ["bd", "bdw"] {
+            let command = question_create(client, labels, parent, body, meta);
+            let text = assert_question_deny(&state, &repo, &rules, &command, reason);
+            assert!(text.contains(named), "{command}: {named} を名指す: {text}");
+        }
+    }
+    assert_eq!(ledger_records(&state).len(), 20, "20 本 × 記録 1 行");
+    for client in ["bd", "bdw"] {
+        assert_question_pass(&state, &repo, &rules, &format!("{client} create x --parent s2-1 --labels doc:toy -d '無い 4 行'"));
+    }
+    fs::write(repo.join("ask.sh"), "bdw create q --labels intake:question -d 'x'\n").expect("script を書ける");
+    assert_question_pass(&state, &repo, &rules, "sh ask.sh");
+    clean(&[&repo, &state]);
+}
+
+/// (b) 揃った問いの create（本文が body-file・`-d`・metadata が `@meta.json` の 3 形）は rc 0 で記録を残さず、(e) `--stdin`
+/// と `--body-file -` の問いは question-body-unreadable で断られる。
+#[test]
+fn hook_question_form_passes_complete_questions_and_denies_stdin_bodies() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let rules = question_rules(&state);
+    fs::write(repo.join("body.md"), QUESTION_BODY).expect("本文を書ける");
+    fs::write(repo.join("meta.json"), QUESTION_META).expect("metadata を書ける");
+    let keep = "--parent s2-1 --no-inherit-labels";
+    for command in [
+        format!("bdw create 問い --labels intake:question {keep} --body-file body.md --metadata @meta.json"),
+        question_create("bd", "doc:toy,intake:question", keep, QUESTION_BODY, QUESTION_META),
+        format!("scripts/bdw create --title=問い -l intake:question --parent=s2-1 --no-inherit-labels=true --body-file=body.md --metadata='{QUESTION_META}'"),
+    ] {
+        assert_question_pass(&state, &repo, &rules, &command);
+    }
+    for (client, body) in [("bd", "--stdin"), ("bdw", "--body-file -"), ("bdw", "--stdin --body-file body.md")] {
+        let command = format!("{client} create 問い --labels intake:question {keep} {body} --metadata @meta.json");
+        let text = assert_question_deny(&state, &repo, &rules, &command, "question-body-unreadable");
+        assert!(text.contains("--stdin"), "{command}: 読めない形を名指す: {text}");
+    }
+    clean(&[&repo, &state]);
+}
+
 // ─────────────── 台帳の形の門（`s2-07l.733`・設計 ledger-form.md §12 行 h・接頭辞 `hook_graph_guard_`） ───────────────
 //
 // toy repo の root に `.beads` の dir を置き、`--bd` に偽の client（fixture の JSON を返し argv を 1 行ずつ記録する・読めない

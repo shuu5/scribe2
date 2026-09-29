@@ -211,8 +211,8 @@ pub(in crate::pipe) fn landed_sha(state_dir: &Path, run: &str) -> Option<String>
 
 /// 便の sha が push の先端かどうか（**閉じた 2 値**・設計 contract-source.md §52・§53・行 bd / be）。
 ///
-/// 先端を知るのは [`land_train`] の 1 か所だけで、列の最後の便の外に [`Self::Behind`] を先端の sha つきで渡す。
-/// 単独の着地と `--terminal-only` は [`Self::Tip`]（従来の push → CI → close）。
+/// 着地の周で先端を知るのは [`land_train`] の 1 か所だけで、列の最後の便の外に [`Self::Behind`] を先端の sha つきで渡す。
+/// 単独の着地は [`Self::Tip`]、`--terminal-only` は anchor の main の今の先端で側を選ぶ（設計 contract-source.md §58）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::pipe) enum PushTip<'a> {
     /// push の先端の commit（forge の CI が run を作る側）。
