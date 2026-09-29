@@ -256,7 +256,7 @@ fn assert_tick_mouth(state: &str, usage: &str) {
 /// 席の自律機能の口のうち、作り直しの cycle・打刻の heartbeat・context の計測 meter は**もう無い**（ADR-0045 §2 (2)・
 /// `s2-07l.479.1`）: 口を持たない第 1 token として断られ（[`assert_gone_mouth`]）、使い方の 1 行にもその名が出ない。
 /// 管理 tick は backoff つきで**戻った**（ADR-0058・`s2-07l.582`）＝在る側（[`assert_tick_mouth`]）。`heartbeat` の語は打刻の口
-/// としては戻らず、席ごとの合図の停止の記録の口（`off` / `on` / `status` の 3 語・ADR-0070・`s2-07l.646`）として使い方に在る。
+/// としては戻らず、席ごとの合図の明示の記録の口（`off` / `on` / `default` / `status` の 4 語・ADR-0070 / ADR-0092・`s2-07l.646`）として使い方に在る。
 /// 残る口（register / launch）は従来どおり使い方に在る。
 ///
 /// **消えたことと戻ったことを測る歯**である（base では tick が消えた口として断られるので RED）。
@@ -268,8 +268,8 @@ fn seat_autonomy_subcommands_are_gone_from_the_usage() {
         assert_gone_mouth(&state, gone, &[]);
         assert!(!usage.contains(&format!("|{gone} ")), "{gone} は使い方に出ない: {usage}");
     }
-    for switch in ["off", "on", "status"] {
-        assert!(usage.contains(&format!("|heartbeat {switch} --state-dir S --target S:W|")), "heartbeat {switch} は停止の記録の口: {usage}");
+    for switch in ["off", "on", "default", "status"] {
+        assert!(usage.contains(&format!("|heartbeat {switch} --state-dir S --target S:W|")), "heartbeat {switch} は明示の記録の口: {usage}");
     }
     assert_tick_mouth(&state, &usage);
     for kept in ["register", "launch", "tick"] {
@@ -2145,14 +2145,15 @@ fn heartbeat_assert(state: &Path, switch: &str, want: &str) {
     assert!(stderr_of(&out).is_empty(), "heartbeat {switch}: stderr 0 byte");
 }
 
-/// off / on の 1 行（契約の字面）。
+/// off / on / default の 1 行（契約の字面・決まり方は off / on が explicit、default が default＝群の行の無い置き場）。
 fn heartbeat_line(switch: &str, word: &str) -> String {
-    format!("seat heartbeat {switch}: target={TICK_TARGET} heartbeat={word}\n")
+    let by = if switch == "default" { "default" } else { "explicit" };
+    format!("seat heartbeat {switch}: target={TICK_TARGET} heartbeat={word} heartbeat_by={by}\n")
 }
 
 /// status の 1 行（行 p の前は `last=` 以下の 3 欄が `-`・契約の字面）。
-fn heartbeat_status(word: &str) -> String {
-    format!("seat heartbeat status: target={TICK_TARGET} heartbeat={word} last=- decision=- reason=-\n")
+fn heartbeat_status(word: &str, by: &str) -> String {
+    format!("seat heartbeat status: target={TICK_TARGET} heartbeat={word} heartbeat_by={by} last=- decision=- reason=-\n")
 }
 
 /// (a) off が停止の記録（1 行 `ts=<UTC 秒>`）を置き、黙った席への tick は `noop heartbeat-off pointer=- step=-`・0 key・梯子の記録 0。
@@ -2261,15 +2262,18 @@ fn seat_heartbeat_without_a_row_is_refused_and_writes_nothing() {
     assert!(!heartbeat_record(&place.state).exists(), "停止の記録 0");
 }
 
-/// (i) status の 1 行が停止の記録の有無を映す（記録なしで `heartbeat=on`・off の後で `heartbeat=off`・行 p の前は 3 欄とも `-`）。
+/// (i) status の 1 行が実効の値と決まり方を映す（記録なしで `on` / `default`・off の後で `off` / `explicit`・on の後で `on` /
+/// `explicit`・default の後で `on` / `default`・行 p の前は 3 欄とも `-`）。
 #[test]
 fn seat_heartbeat_status_prints_one_line_for_the_record() {
     let place = tick_place(true);
-    heartbeat_assert(&place.state, "status", &heartbeat_status("on"));
+    heartbeat_assert(&place.state, "status", &heartbeat_status("on", "default"));
     heartbeat_assert(&place.state, "off", &heartbeat_line("off", "off"));
-    heartbeat_assert(&place.state, "status", &heartbeat_status("off"));
+    heartbeat_assert(&place.state, "status", &heartbeat_status("off", "explicit"));
     heartbeat_assert(&place.state, "on", &heartbeat_line("on", "on"));
-    heartbeat_assert(&place.state, "status", &heartbeat_status("on"));
+    heartbeat_assert(&place.state, "status", &heartbeat_status("on", "explicit"));
+    heartbeat_assert(&place.state, "default", &heartbeat_line("default", "on"));
+    heartbeat_assert(&place.state, "status", &heartbeat_status("on", "default"));
 }
 
 /// (j) off を 2 度撃つと 2 度目は記録の `ts=` の行を 1 byte も変えず rc 0（fixture の ts を先に書き、2 度目の後に同じ bytes を読む）。
@@ -2289,6 +2293,84 @@ fn seat_heartbeat_on_without_a_record_is_a_no_op() {
     let place = tick_place(true);
     heartbeat_assert(&place.state, "on", &heartbeat_line("on", "on"));
     assert!(!heartbeat_record(&place.state).exists(), "file 無しのまま");
+}
+
+// ───────── heartbeat の実効の値（seat-heartbeat.md §22・契約表の行 aa・ADR-0092・接頭辞 `seat_heartbeat_mode_`） ─────────
+//
+// 口は明示の記録 2 file（`heartbeat-off` / `heartbeat-on`・席の置き場の直下）だけを置き消し、出力は実効の値と決まり方。
+
+/// 明示 on の path（席の置き場の直下の `heartbeat-on`・契約の字面から組む）。
+fn heartbeat_on_record(state: &Path) -> PathBuf {
+    seat_dir_of(state, TICK_SEAT).join("heartbeat-on")
+}
+
+/// 明示の記録の残り（`(明示 off が在る, 明示 on が在る)`）。
+fn heartbeat_records(state: &Path) -> (bool, bool) {
+    (heartbeat_record(state).exists(), heartbeat_on_record(state).exists())
+}
+
+/// 置き場の host の面に区画 Tier9（置き場 `/repo`・口座 1 つ）を `key` の行つきで書く。
+fn heartbeat_lot(place: &TickPlace, key: &str) {
+    let host = format!(
+        "schema = 1\n\n[[account]]\nlabel = \"{TICK_ACCOUNT}\"\n\n[[account-group]]\nname = \"Tier9\"\nanchors = [\"/repo\"]\naccounts = [\"{TICK_ACCOUNT}\"]\n{key}"
+    );
+    fs::write(place.state.join("host.toml"), host).ok();
+}
+
+/// (e) on は明示 off を消して明示 on を置き（在れば ts を書き換えない）、off は明示 off を置いて明示 on を消し（在れば触らない）、
+/// default は両方を消す（無ければ何もしない）。各出力の 1 行は契約の字面（決まり方は on / off が explicit・default が default）。
+#[test]
+fn seat_heartbeat_mode_switches_leave_only_the_records_they_name() {
+    let place = tick_place(true);
+    let state = &place.state;
+    heartbeat_assert(state, "off", &heartbeat_line("off", "off"));
+    heartbeat_assert(state, "on", &heartbeat_line("on", "on"));
+    assert_eq!(heartbeat_records(state), (false, true), "on: 明示 off を消し明示 on を置く");
+    let on_text = fs::read_to_string(heartbeat_on_record(state)).unwrap_or_default();
+    assert!(on_text.starts_with("ts=") && on_text.ends_with('\n') && on_text.lines().count() == 1, "1 行 ts=<UTC 秒>: {on_text:?}");
+    let fixed = "ts=1000\n";
+    fs::write(heartbeat_on_record(state), fixed).ok();
+    heartbeat_assert(state, "on", &heartbeat_line("on", "on"));
+    assert_eq!(fs::read_to_string(heartbeat_on_record(state)).unwrap_or_default(), fixed, "在る明示 on の ts は書き換えない");
+    heartbeat_assert(state, "off", &heartbeat_line("off", "off"));
+    assert_eq!(heartbeat_records(state), (true, false), "off: 明示 off を置き明示 on を消す");
+    heartbeat_assert(state, "default", &heartbeat_line("default", "on"));
+    assert_eq!(heartbeat_records(state), (false, false), "default: 両方を消す");
+    heartbeat_assert(state, "default", &heartbeat_line("default", "on"));
+    assert_eq!(heartbeat_records(state), (false, false), "無ければ何もしない");
+}
+
+/// (f) status の 3 項目（実効の値・決まり方・最後の周の打刻）は host の面の区画の行の key も読む（`--rules` を足さない）:
+/// key の無い区画は off・default、`"on"` の区画は on・group、明示 on は explicit。doctor の席の行は実効の値だけで決まり方を足さない。
+#[test]
+fn seat_heartbeat_mode_status_reads_the_host_face_and_doctor_shows_the_value_only() {
+    let place = tick_place(true);
+    heartbeat_lot(&place, "");
+    heartbeat_assert(&place.state, "status", &heartbeat_status("off", "default"));
+    let rules = status_rules(&place, "");
+    let row = status_doctor_row(&place, &rules);
+    assert_eq!(tick_token(&row, "heartbeat").as_deref(), Some("off"), "doctor は実効の値: {row}");
+    assert!(!row.contains("heartbeat_by"), "doctor は決まり方を足さない: {row}");
+    heartbeat_lot(&place, "heartbeat = \"on\"\n");
+    heartbeat_assert(&place.state, "status", &heartbeat_status("on", "group"));
+    assert_eq!(tick_token(&status_doctor_row(&place, &rules), "heartbeat").as_deref(), Some("on"), "doctor");
+    heartbeat_assert(&place.state, "off", &heartbeat_line("off", "off"));
+    heartbeat_assert(&place.state, "status", &heartbeat_status("off", "explicit"));
+    heartbeat_assert(&place.state, "default", &heartbeat_line("default", "on").replace("heartbeat=on heartbeat_by=default", "heartbeat=on heartbeat_by=group"));
+}
+
+/// (g) 前の形の停止の記録（`heartbeat-off` だけ）を持つ席は off・explicit（既に在る記録がそのまま明示 off）。status と `seat tick status` と
+/// doctor が同じ値を言う。
+#[test]
+fn seat_heartbeat_mode_a_legacy_off_record_reads_off_explicit() {
+    let place = tick_place(true);
+    fs::write(heartbeat_record(&place.state), "ts=1000\n").ok();
+    heartbeat_assert(&place.state, "status", &heartbeat_status("off", "explicit"));
+    let rules = status_rules(&place, "");
+    let out = status_run(&place, &["--rules", &rules]);
+    let text = stdout_of(&out);
+    assert_eq!((tick_token(&text, "heartbeat").as_deref(), tick_token(&text, "heartbeat_by").as_deref()), (Some("off"), Some("explicit")), "{text}");
+    assert_eq!(tick_token(&status_doctor_row(&place, &rules), "heartbeat").as_deref(), Some("off"), "doctor");
 }
 
 // ───── 最後の周の打刻と健全（seat-heartbeat.md §12・契約表の行 p・ADR-0070・`s2-07l.650`・接頭辞 `seat_tick_status_`） ─────
@@ -2322,10 +2404,10 @@ fn status_run(place: &TickPlace, extra: &[&str]) -> Output {
 /// status の行の末尾 3 欄の既定（実測なしの `reopens=unmeasured`・群の無い置き場の `move=- grace_left=-`・seat-heartbeat.md §20 形 4）。
 const STATUS_TAIL: &str = " reopens=unmeasured move=- grace_left=-";
 
-/// status の 1 行（契約の字面・末尾は既定の 3 欄 [`STATUS_TAIL`]）。
+/// status の 1 行（契約の字面・`heartbeat_by=` は明示の記録も群の表の key も無い置き場の `default`・末尾は既定の 3 欄 [`STATUS_TAIL`]）。
 fn status_line(last: &str, age: &str, healthy: &str, heartbeat: &str, ladder: (&str, &str)) -> String {
     let (step, next) = ladder;
-    format!("seat tick status: target={TICK_TARGET} last={last} age={age} healthy={healthy} heartbeat={heartbeat} step={step} next={next}{STATUS_TAIL}\n")
+    format!("seat tick status: target={TICK_TARGET} last={last} age={age} healthy={healthy} heartbeat={heartbeat} heartbeat_by=default step={step} next={next}{STATUS_TAIL}\n")
 }
 
 /// 経過 `ago` 秒の打刻を置いて status を撃ち（`--rules` は `rules`）、打刻の ts と stdout を返す。秒を跨いで経過がずれた周は

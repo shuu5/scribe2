@@ -1124,7 +1124,7 @@ fn seat_tick_status_heartbeat_status_carries_the_tick_last() {
     let text = fs::read_to_string(status_last_path(&place)).unwrap_or_default();
     let ts = tick_token(&text, "ts").unwrap_or_default();
     assert!(!ts.is_empty(), "打刻が在る: {text:?}");
-    let want = format!("seat heartbeat status: target={TICK_TARGET} heartbeat=on last={ts} decision=noop reason=stamp-recent\n");
+    let want = format!("seat heartbeat status: target={TICK_TARGET} heartbeat=on heartbeat_by=default last={ts} decision=noop reason=stamp-recent\n");
     heartbeat_assert(&place.state, "status", &want);
 }
 
@@ -1647,13 +1647,18 @@ const PARK_THRESHOLD: u64 = 80;
 /// 鮮度の外の実測の ts（写しの鮮度 300 秒より十分古い）。
 const PARK_STALE_TS: &str = "2020-01-01T00:00:00Z";
 
-/// 区画の置き場を作る。`threshold` が `None` なら写しに R-C9-1 を足さない。席の row は口座 p・anchor は `anchor`。
+/// 区画の行の key `heartbeat = "on"`（区画の既定は合図を送らない＝off なので、区画の判定の歯は行の key で on にして黙りの門以降の列を
+/// 今のまま測る・設計 §22 形 3）。
+const PARK_KEY_ON: &str = "heartbeat = \"on\"\n";
+
+/// 区画の置き場を作る。`threshold` が `None` なら写しに R-C9-1 を足さない。席の row は口座 p・anchor は `anchor`。区画の行は
+/// [`PARK_KEY_ON`] を持つ。
 fn park_place(root: &Path, anchor: &str, threshold: Option<u64>) -> MovePlace {
     let place = move_place(root, "state", anchor);
     fs::remove_file(judge_stamp(root)).ok();
     let host = format!(
         "schema = 1\n\n[[account]]\nlabel = \"{MOVE_A}\"\n\n[[account]]\nlabel = \"{MOVE_B}\"\n\n[[account]]\nlabel = \"{PARK_R}\"\n\n\
-         [[account-group]]\nname = \"{PARK_GROUP}\"\nanchors = [\"{PARK_ANCHOR}\"]\naccounts = [\"{MOVE_A}\", \"{MOVE_B}\", \"{PARK_R}\"]\n"
+         [[account-group]]\nname = \"{PARK_GROUP}\"\nanchors = [\"{PARK_ANCHOR}\"]\naccounts = [\"{MOVE_A}\", \"{MOVE_B}\", \"{PARK_R}\"]\n{PARK_KEY_ON}"
     );
     fs::write(place.state.join("host.toml"), host).ok();
     if let Some(value) = threshold {
@@ -1928,4 +1933,193 @@ fn seat_tick_park_outside_the_lot_and_the_groups_is_unjudged() {
     let place = park_place(&root, "/elsewhere", Some(PARK_THRESHOLD));
     park_measure(&place, &[(MOVE_A, 96), (MOVE_B, 10)]);
     move_assert_quiet(&place, &judge_recent("-"));
+}
+
+// ───── heartbeat の実効の値（seat-heartbeat.md §22・契約表の行 aa・FR78・ADR-0092・接頭辞 `seat_heartbeat_mode_`） ─────
+//
+// §4 の移動の fixture（[`move_place`]）の host の面を置き場の種類 5 形（[`beat_shapes`]）に書き換え、黙った席（最終行 Idle が黙りの
+// 閾値の外）へ `seat tick` と `seat tick status` を撃つ。明示の記録は `seat heartbeat on|off` の口で置く。字面は契約から組む。
+
+/// 置き場の種類 5 形: 名・host の面の行・明示の記録が無い周の（実効の値, 決まり方）。席の anchor は [`MOVE_ANCHOR`]。
+fn beat_shapes() -> Vec<(&'static str, String, (&'static str, &'static str))> {
+    let row = |name: &str, anchor: &str, key: &str| {
+        format!("\n[[account-group]]\nname = \"{name}\"\nanchors = [\"{anchor}\"]\naccounts = [\"{MOVE_A}\", \"{MOVE_B}\"]\n{key}")
+    };
+    vec![
+        ("group", row(MOVE_GROUP, MOVE_ANCHOR, ""), ("on", "default")),
+        ("group-off", row(MOVE_GROUP, MOVE_ANCHOR, "heartbeat = \"off\"\n"), ("off", "group")),
+        ("lot", row(PARK_GROUP, MOVE_ANCHOR, ""), ("off", "default")),
+        ("lot-on", row(PARK_GROUP, MOVE_ANCHOR, "heartbeat = \"on\"\n"), ("on", "group")),
+        ("outside", row(MOVE_GROUP, MOVE_ANCHOR_TWO, ""), ("on", "default")),
+    ]
+}
+
+/// 置き場を作る: 移動の fixture の host の面を `host_row`（口座 A / B の宣言に続ける）で書き換え、打刻を黙りの閾値の外の Idle にし、
+/// `explicit` が在れば明示の記録を口で置く（口の 1 行も測る）。
+fn beat_place(root: &Path, host_row: &str, explicit: Option<&str>) -> MovePlace {
+    let place = move_place(root, "state", MOVE_ANCHOR);
+    let host = format!("schema = 1\n\n[[account]]\nlabel = \"{MOVE_A}\"\n\n[[account]]\nlabel = \"{MOVE_B}\"\n{host_row}");
+    fs::write(place.state.join("host.toml"), host).ok();
+    let seat = seat_dir_of(&place.state, TICK_SEAT);
+    fs::write(state_file(&seat), format!("{}\n", stamp_line("idle", "Stop", unix_now().saturating_sub(TICK_STALE + 60), "sid-move"))).ok();
+    if let Some(switch) = explicit {
+        heartbeat_assert(&place.state, switch, &heartbeat_line(switch, switch));
+    }
+    place
+}
+
+/// 置き場の host の面の末尾（群か区画の行の最後）に key の行を足す。
+fn beat_key(place: &MovePlace, value: &str) {
+    let path = place.state.join("host.toml");
+    let text = fs::read_to_string(&path).unwrap_or_default();
+    fs::write(&path, format!("{text}heartbeat = \"{value}\"\n")).ok();
+}
+
+/// `seat tick status --state-dir S --rules F` の 1 行。
+fn beat_status(place: &MovePlace) -> String {
+    let state = place.state.display().to_string();
+    stdout_of(&run_seat(&["tick", "status", "--state-dir", &state, "--rules", &place.rules]))
+}
+
+/// status の `heartbeat=` / `heartbeat_by=` が `want` で、tick の 1 周が on なら合図を注入・off なら `heartbeat-off` で 1 key も送らない。
+fn beat_assert(place: &MovePlace, want: (&str, &str), label: &str) {
+    let status = beat_status(place);
+    let got = (tick_token(&status, "heartbeat"), tick_token(&status, "heartbeat_by"));
+    assert_eq!((got.0.as_deref(), got.1.as_deref()), (Some(want.0), Some(want.1)), "{label}: status: {status}");
+    let ladder = place.state.join("seat").join(TICK_SEAT).join("pointer-ladder");
+    let (keys, record) = (move_keys(place).len(), fs::read(&ladder).ok());
+    let out = move_run(place);
+    let line = stdout_of(&out);
+    if want.0 == "on" {
+        assert!(line.starts_with("decision=inject "), "{label}: on は合図を送る: {line} stderr={}", stderr_of(&out));
+    } else {
+        assert!(line.starts_with("decision=noop ") && line.contains(" reason=heartbeat-off "), "{label}: off は送らない: {line}");
+        assert_eq!(move_keys(place).len(), keys, "{label}: 0 key");
+        assert_eq!(fs::read(&ladder).ok(), record, "{label}: 梯子の記録は動かない");
+    }
+}
+
+/// (a-1) 明示 on は置き場の種類に依らず on・explicit（区画の既定 off も群の key の off も上書きする）。
+#[test]
+fn seat_heartbeat_mode_explicit_on_wins_over_every_shape() {
+    for (name, row, _) in beat_shapes() {
+        let root = tmp();
+        beat_assert(&beat_place(&root, &row, Some("on")), ("on", "explicit"), name);
+    }
+}
+
+/// (a-2) 明示 off は置き場の種類に依らず off・explicit。
+#[test]
+fn seat_heartbeat_mode_explicit_off_wins_over_every_shape() {
+    for (name, row, _) in beat_shapes() {
+        let root = tmp();
+        beat_assert(&beat_place(&root, &row, Some("off")), ("off", "explicit"), name);
+    }
+}
+
+/// (a-3) 明示の記録が無い周は群の表の行の key（group）→ 種類の既定（default）の順: key の無い群は on・default、`"off"` の群は
+/// off・group、key の無い区画は off・default、`"on"` の区画は on・group、どの行にも無い置き場は on・default。
+#[test]
+fn seat_heartbeat_mode_without_a_record_follows_the_table_key_then_the_kind_default() {
+    for (name, row, want) in beat_shapes() {
+        let root = tmp();
+        beat_assert(&beat_place(&root, &row, None), want, name);
+    }
+}
+
+/// (b) 明示 off と明示 on の両方が在る周・明示 on が dir（在るのに読めない）の周は off・explicit（合図は正の証拠でだけ送る）。
+/// 対照: 明示 on だけが読める file の周は on・explicit。
+#[test]
+fn seat_heartbeat_mode_both_records_and_an_unreadable_on_read_off_explicit() {
+    let root = tmp();
+    let place = beat_place(&root, "", None);
+    let seat = seat_dir_of(&place.state, TICK_SEAT);
+    fs::write(seat.join("heartbeat-on"), "ts=2\n").ok();
+    beat_assert(&place, ("on", "explicit"), "明示 on だけ");
+    fs::write(seat.join("heartbeat-off"), "ts=1\n").ok();
+    beat_assert(&place, ("off", "explicit"), "両方在る");
+    fs::remove_file(seat.join("heartbeat-off")).ok();
+    fs::remove_file(seat.join("heartbeat-on")).ok();
+    fs::create_dir_all(seat.join("heartbeat-on")).ok();
+    beat_assert(&place, ("off", "explicit"), "明示 on が dir");
+}
+
+/// (c-1) 群の行の key が off の席でも、起こし直し（`--resume` と初手の合図）・退避（`/exit` の text 1 回 + Enter 1 回）・群の判定
+/// （計測と `judged=stay`）は on の席と同じに撃つ（止めるのは黙りの門以降の合図だけ）。
+#[test]
+fn seat_heartbeat_mode_group_key_off_still_relaunches_evacuates_and_judges() {
+    let root = tmp();
+    let place = wake_place(&root, MOVE_ANCHOR, WAKE_SID);
+    beat_key(&place, "off");
+    let text = wake_assert_launched(&place, MOVE_B, MOVE_ANCHOR);
+    assert!(text.ends_with(&format!(" --resume {WAKE_SID} {}", wake_first_word())), "起こし直しは会話 id と初手を運ぶ: {text}");
+    let root = tmp();
+    let place = move_place(&root, "state", MOVE_ANCHOR);
+    move_record(&root, MOVE_B);
+    move_signal_past(&place);
+    beat_key(&place, "off");
+    let out = move_run(&place);
+    assert_eq!(stdout_of(&out), move_line("exit", "false", "-"), "退避の判定行: stderr={}", stderr_of(&out));
+    assert_eq!(
+        move_keys(&place),
+        [format!("send-keys -t {TICK_TARGET} -l /exit"), format!("send-keys -t {TICK_TARGET} Enter")],
+        "/exit の text 1 回 + Enter 1 回"
+    );
+    let root = tmp();
+    let place = judge_place(&root, MOVE_ANCHOR, [10, 10]);
+    beat_key(&place, "off");
+    let out = move_run(&place);
+    let want = format!("decision=noop target={TICK_SEAT} reason=heartbeat-off pointer=- step=- consumed=- move=- launched=- judged=stay\n");
+    assert_eq!(stdout_of(&out), want, "判定は撃ち合図は止まる: stderr={}", stderr_of(&out));
+    assert!(judge_calls(&place) > 0 && move_keys(&place).is_empty(), "群の判定は計測し・0 key");
+}
+
+/// 区画の行から key を外す（区画の既定の off を測る歯の置き場）。
+fn park_default_lot(place: &MovePlace) {
+    let path = place.state.join("host.toml");
+    let text = fs::read_to_string(&path).unwrap_or_default();
+    fs::write(&path, text.replace(PARK_KEY_ON, "")).ok();
+}
+
+/// (c-2) 区画の既定が off の席（key の無い区画の行）でも、区画の移り先の判定は撃ち（退避の合図と `judged=park:q`・窓が shell なら q で
+/// 起こし直し）、黙りの門以降の合図だけを止める。
+#[test]
+fn seat_heartbeat_mode_lot_default_off_still_judges_signals_and_relaunches() {
+    let root = tmp();
+    let place = park_place(&root, PARK_ANCHOR, Some(PARK_THRESHOLD));
+    park_default_lot(&place);
+    park_measure(&place, &[(MOVE_A, 90), (MOVE_B, 10), (PARK_R, 20)]);
+    let out = move_run(&place);
+    assert_eq!(stdout_of(&out), park_line("signal", "false", "-", &format!("park:{MOVE_B}")), "退避の合図と移り先の判定: {}", stderr_of(&out));
+    let root = tmp();
+    let place = park_place(&root, PARK_ANCHOR, Some(PARK_THRESHOLD));
+    park_default_lot(&place);
+    park_measure(&place, &[(MOVE_A, 90), (MOVE_B, 10), (PARK_R, 20)]);
+    park_shell(&place);
+    let out = move_run(&place);
+    assert_eq!(stdout_of(&out), park_line("launch", "-", "launch-unconfirmed", &format!("park:{MOVE_B}")), "q で起こし直す: {}", stderr_of(&out));
+    let root = tmp();
+    let place = park_place(&root, PARK_ANCHOR, Some(PARK_THRESHOLD));
+    park_default_lot(&place);
+    park_measure(&place, &[(MOVE_A, 10)]);
+    let out = move_run(&place);
+    let want = "decision=noop target=tk_tk reason=heartbeat-off pointer=- step=- consumed=- move=- launched=- judged=stay\n";
+    assert_eq!(stdout_of(&out), want, "移らない周は黙りの門以降が止まる: {}", stderr_of(&out));
+}
+
+/// (d) 同じ fixture の群の行の `heartbeat` を値ごとに書き換えて 2 周撃つ: `"on"` の面は管理 tick が `group-unreadable` で止まらず
+/// （正例・先に撃つ＝base は `heartbeat` を未知の key で断るのでここで落ちる）、`"maybe"` の面は `noop reason=group-unreadable` で止まる（負例）。
+#[test]
+fn seat_heartbeat_mode_group_key_value_is_read_by_the_tick_and_a_bad_value_stops_it() {
+    let group = |key: &str| {
+        format!("\n[[account-group]]\nname = \"{MOVE_GROUP}\"\nanchors = [\"{MOVE_ANCHOR}\"]\naccounts = [\"{MOVE_A}\", \"{MOVE_B}\"]\nheartbeat = \"{key}\"\n")
+    };
+    let root = tmp();
+    let place = beat_place(&root, &group("on"), None);
+    let line = stdout_of(&move_run(&place));
+    assert!(line.starts_with("decision=inject ") && !line.contains("group-unreadable"), "on の面は止まらず合図を送る: {line}");
+    let host = format!("schema = 1\n\n[[account]]\nlabel = \"{MOVE_A}\"\n\n[[account]]\nlabel = \"{MOVE_B}\"\n{}", group("maybe"));
+    fs::write(place.state.join("host.toml"), host).ok();
+    let out = move_run(&place);
+    assert!(stdout_of(&out).contains(" reason=group-unreadable "), "maybe の面は group-unreadable で止まる: {} stderr={}", stdout_of(&out), stderr_of(&out));
 }

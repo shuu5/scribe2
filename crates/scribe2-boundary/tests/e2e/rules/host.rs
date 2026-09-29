@@ -796,3 +796,31 @@ fn rules_publish_guard_element_misspelled_form_and_short_digest_are_refused() {
         assert_eq!(text.contains("[[publish-exclusion]]"), bad.starts_with("exclude"), "{bad:?}: exclude の要素だけが host の面の表を名指す: {errors:?}");
     }
 }
+
+/// (h) 群の表の行の任意 key `heartbeat`（設計 seat-heartbeat.md §22 形 1・接頭辞 `host_group_heartbeat_key_`）: `"maybe"` と
+/// `true` の群の行は key の行番号つきの欠陥 1 件ずつで断られ、`"off"` の群の行と `"on"` の区画の行は通って読み口が値を返す
+/// （key の無い行は `None`・base は `heartbeat` を未知の key で断るので通る側が RED）。
+#[test]
+fn host_group_heartbeat_key_is_on_or_off_and_any_other_value_is_refused_on_the_key_line() {
+    use vessel::rules::manifest::Heartbeat;
+    let dir = host_state_dir(None).expect("tmp の state dir を作れる");
+    let row = |name: &str, anchor: &str, key: &str| format!("{}{key}", seed_group(name, anchor, "[\"g1\"]"));
+    for (key, reason) in [("heartbeat = \"maybe\"\n", "heartbeat の値 \"maybe\" が on でも off でもない"), ("heartbeat = true\n", "heartbeat は文字列でなければならない")] {
+        let outcome = group_validate(dir.as_path(), &format!("{GROUP_HEAD}{}", row("Tier1", "/repo/a", key)));
+        assert_eq!(outcome.rc, RC_REFUSED, "{key}: {outcome:?}");
+        assert!(outcome.out.is_empty(), "{key}: stdout へは書かない");
+        assert_eq!(outcome.err.len(), 1, "{key}: 欠陥 1 件: {:?}", outcome.err);
+        let got = outcome.err.first().map(String::as_str).unwrap_or_default();
+        assert!(got.starts_with("rules: host.toml: ") && got.contains(reason) && got.ends_with(" line=16"), "{key}: key の行番号つき: {got}");
+    }
+    let body = format!("{GROUP_HEAD}{}{}", row("Tier1", "/repo/a", "heartbeat = \"off\"\n"), row("Tier9", "/repo/b", "heartbeat = \"on\"\n"));
+    let outcome = group_validate(dir.as_path(), &body);
+    assert_eq!((outcome.rc, outcome.err.is_empty()), (RC_OK, true), "通る: {outcome:?}");
+    let manifest = joined_manifest(&dir);
+    assert_eq!(manifest.groups().first().map(|group| group.heartbeat()), Some(Some(Heartbeat::Off)), "群の行の値は off");
+    assert_eq!(manifest.park().map(|lot| lot.heartbeat()), Some(Some(Heartbeat::On)), "区画の行の値は on");
+    let bare = format!("{GROUP_HEAD}{}", seed_group("Tier1", "/repo/a", "[\"g1\"]"));
+    assert_eq!(group_validate(dir.as_path(), &bare).rc, RC_OK, "key の無い行は通る（必須は 3 つのまま）");
+    assert_eq!(joined_manifest(&dir).groups().first().map(|group| group.heartbeat()), Some(None), "key の無い行は None");
+    std::fs::remove_dir_all(&dir).ok();
+}

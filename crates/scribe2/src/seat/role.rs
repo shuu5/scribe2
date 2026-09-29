@@ -11,6 +11,7 @@ use crate::rules::manifest::{HostManifest, Manifest};
 use crate::rules::RuleValue;
 use std::path::Path;
 
+use super::tick::beat;
 use super::tick::install::{doctor_word, Probe};
 use super::tick::{self, ROW_INTERVAL};
 use super::RuleRead;
@@ -397,9 +398,11 @@ pub fn doctor_lines(state_dir: &Path, socket: Option<&str>, rules: Option<&str>,
     let panes = super::tmux_stdout(socket, &["list-panes", "-a", "-F", "#{session_name}:#{window_name}"]);
     let live: Option<Vec<String>> = panes.map(|out| out.lines().map(str::to_owned).collect());
     let manifest = super::manifest_read(rules.map_or_else(Manifest::embedded, |path| Manifest::load(Path::new(path))));
-    let declared = match HostManifest::read(&crate::rules::host_manifest_path(state_dir)) {
-        HostManifest::Present(face) => face.tick().cloned(),
-        HostManifest::Absent | HostManifest::Unreadable(_) => None,
+    let host = HostManifest::read(&crate::rules::host_manifest_path(state_dir));
+    let (declared, table) = match &host {
+        HostManifest::Present(face) => (face.tick().cloned(), beat::Table::Read(face)),
+        HostManifest::Absent => (None, beat::Table::Absent),
+        HostManifest::Unreadable(_) => (None, beat::Table::Unreadable),
     };
     let face = declared.as_ref().map(|tick| Probe {
         unit_dir: Path::new(tick.unit_dir()),
@@ -408,7 +411,7 @@ pub fn doctor_lines(state_dir: &Path, socket: Option<&str>, rules: Option<&str>,
     });
     let units = units.or(face.as_ref());
     let rows = |found: &State| {
-        let beats = found.registrations.values().map(|latest| tick_words(state_dir, &latest.registration.target, &manifest));
+        let beats = found.registrations.values().map(|latest| tick_words(state_dir, &latest.registration, (&manifest, table)));
         let lines: Vec<String> = doctor_rows(found, &manifest).into_iter().zip(beats).map(|(line, words)| format!("{line} {words}")).collect();
         let Some(probe) = units else {
             return lines;
@@ -421,14 +424,14 @@ pub fn doctor_lines(state_dir: &Path, socket: Option<&str>, rules: Option<&str>,
     lines
 }
 
-/// doctor の席の行の 2 項目 `heartbeat=on|off tick=<語>`（設計 seat-heartbeat.md §12 行 p 形 3）: `tick=` は `seat tick status` と
-/// 同じ健全の 1 関数（[`crate::seat::tick::health`]）の語で、周期の行を読めない周は `tick-unit=` と同じ no-rule の語（rc は変えない）。
-/// 梯子の行は読まない。
-fn tick_words(state_dir: &Path, target: &str, manifest: &Result<Manifest, RuleRead>) -> String {
-    let seat = super::seat_dir(state_dir, target);
+/// doctor の席の行の 2 項目 `heartbeat=on|off|unreadable tick=<語>`（設計 seat-heartbeat.md §12 行 p 形 3・§22 形 7）: `heartbeat=` は
+/// 実効の値（[`beat::resolve`]・決まり方は足さない）、`tick=` は `seat tick status` と同じ健全の 1 関数（[`crate::seat::tick::health`]）の
+/// 語で、周期の行を読めない周は `tick-unit=` と同じ no-rule の語（rc は変えない）。梯子の行は読まない。
+fn tick_words(state_dir: &Path, row: &Registration, (manifest, table): (&Result<Manifest, RuleRead>, beat::Table)) -> String {
+    let seat = super::seat_dir(state_dir, &row.target);
     let interval = manifest.as_ref().map_err(|failed| *failed).and_then(|found| super::int_rule_of(found, ROW_INTERVAL));
     let tick = interval.map_or_else(RuleRead::no_rule, |secs| tick::health(&seat, secs).as_str());
-    format!("heartbeat={} tick={tick}", tick::switch_word(&seat))
+    format!("heartbeat={} tick={tick}", beat::resolve(&seat, &row.anchor, table).value.as_str())
 }
 
 #[cfg(test)]

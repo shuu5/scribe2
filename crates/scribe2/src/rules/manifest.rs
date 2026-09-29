@@ -24,6 +24,7 @@
 //! 持てる表は `[[contract]]` 1 種だけで（key 集合は `pipe::table::FIELDS`）、rules manifest と host の面は
 //! `[[contract]]` を置けない。値の受理集合と**空の配列の拒否**は他の面と同じ（空の列は key の省略で表す）。
 
+pub use super::groups::Heartbeat;
 use super::{device::Device, exclusion::PublishExclusion, Rule, RuleError, RuleKind, RuleRow, RuleValue, ValueShape, HOST_MANIFEST};
 use crate::hook::command::{denied_in, denied_of};
 use crate::pipe::contract::{class_element, ClassElement};
@@ -59,11 +60,14 @@ const LAUNCH_ARG_KEYS: &[&str] = &["value"];
 /// **最大 1 行**・設計 consumer-sync.md §4）。
 const VESSEL_KEYS: &[&str] = &["repo"];
 
-/// `[[account-group]]` 1 行が持てる key の全体（**必須もこれと同じ 3 つ**・設計 account-lifecycle.md §17 の約束 1）。
+/// `[[account-group]]` 1 行に必ず要る key（**この 3 つ**・設計 account-lifecycle.md §17 の約束 1）。
 ///
 /// `name` は host で一意な群の名、`anchors` は群に属する置き場（席の登録 row の anchor）の列、`accounts` は
 /// 候補の口座 label の列で**宣言順が候補の順**である。どちらの列も空は受けない（空の列は [`list`] が断る）。
 const GROUP_KEYS: &[&str] = &["name", "anchors", "accounts"];
+
+/// `[[account-group]]` 1 行が持てる key の全体（必須の 3 つに任意の `heartbeat` を足す・設計 seat-heartbeat.md §22 形 1）。
+const GROUP_KNOWN_KEYS: &[&str] = &["name", "anchors", "accounts", "heartbeat"];
 
 /// `[[tick]]` 行が持てる key の全体（**必須もこれと同じ 2 つ**・設計 seat-heartbeat.md §5 形 1）。`unit-dir` は tick の unit を置く
 /// dir・`binary` は unit が撃つ器（どちらも絶対 path・host 固有・host の面にだけ・**最大 1 行**）。
@@ -185,7 +189,7 @@ impl Section {
             Self::LaunchArg => LAUNCH_ARG_KEYS.to_vec(),
             Self::Contract => FIELDS.iter().map(|field| field.name).chain([DERIVED_GOAL]).collect(),
             Self::Vessel => VESSEL_KEYS.to_vec(),
-            Self::AccountGroup => GROUP_KEYS.to_vec(),
+            Self::AccountGroup => GROUP_KNOWN_KEYS.to_vec(),
             Self::Tick => TICK_KEYS.to_vec(),
             Self::Device => super::device::KEYS.to_vec(),
             Self::PublishExclusion => super::exclusion::KEYS.to_vec(),
@@ -312,6 +316,7 @@ pub struct AccountGroup {
     anchors: Vec<String>,
     accounts: Vec<String>,
     seed: String,
+    heartbeat: Option<Heartbeat>,
     line: u64,
 }
 
@@ -334,6 +339,11 @@ impl AccountGroup {
     /// 種（記録の無い周の今の口座）: 宣言順で前の群の種でない最初の候補（面の読みが埋める・設計 account-lifecycle.md §28）。
     pub fn seed(&self) -> &str {
         &self.seed
+    }
+
+    /// 行の任意 key `heartbeat` の値（無い行は `None`・設計 seat-heartbeat.md §22 形 1）。
+    pub fn heartbeat(&self) -> Option<Heartbeat> {
+        self.heartbeat
     }
 
     /// manifest の中でこの行が始まる物理行番号。
@@ -1043,6 +1053,7 @@ fn build_group(raw: &RawRow, errors: &mut Vec<RuleError>) -> Option<AccountGroup
     let name = text_field(raw, "name", errors);
     let anchors = list_field(raw, "anchors", errors);
     let accounts = list_field(raw, "accounts", errors);
+    let heartbeat = super::groups::heartbeat_of(raw, errors);
     let (Some(name), Some(anchors), Some(accounts)) = (name, anchors, accounts) else {
         return None;
     };
@@ -1053,7 +1064,7 @@ fn build_group(raw: &RawRow, errors: &mut Vec<RuleError>) -> Option<AccountGroup
         errors.push(RuleError::new(raw.line, "name が空である".to_owned()));
         return None;
     }
-    Some(AccountGroup { name, anchors, accounts, seed: String::new(), line: raw.line })
+    Some(AccountGroup { name, anchors, accounts, seed: String::new(), heartbeat, line: raw.line })
 }
 
 /// `[[tick]]` 1 行を組む（設計 seat-heartbeat.md §5 形 1）。欠けや未知 key は全件 `errors` へ積み、[`build_single`] と同じ形で

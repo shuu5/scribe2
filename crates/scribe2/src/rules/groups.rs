@@ -4,7 +4,7 @@
 //! 群の表の名は Tier1〜Tier9 で、数字 10 以上の名を断る（§34 の行 x）。`Tier9` は群でなく park の区画で、検査の後に群の列から分ける（§35 の行 y）。
 //! 数字は宣言順の検査にだけ使い、並べ替えには使わない（優先は宣言順のまま・食い違う面は黙って通さず断る）。
 
-use super::manifest::AccountGroup;
+use super::manifest::{text_field, AccountGroup, RawRow};
 use super::RuleError;
 use std::cmp::Ordering;
 
@@ -67,6 +67,31 @@ fn outside_table(name: &str, digits: &str) -> Option<String> {
 pub(super) fn split_park(groups: &mut Vec<AccountGroup>) -> Option<AccountGroup> {
     let at = groups.iter().position(|group| group.name() == PARK)?;
     Some(groups.remove(at))
+}
+
+/// 群の表の行の任意 key `heartbeat` の値（**閉じた 2 値**・字面は口の語 `on` / `off` と同じ・設計 seat-heartbeat.md §22 形 1）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Heartbeat {
+    /// 合図を送る。
+    On,
+    /// 合図を送らない。
+    Off,
+}
+
+/// 行の `heartbeat` の値を判じる 1 関数（key が無い周は `None`・型違いと `on` / `off` 以外の文字列は key の行番号つきの欠陥で
+/// `errors` へ積んで `None`・群の行と区画の行の両方が同じ 1 本を通る）。
+pub(super) fn heartbeat_of(raw: &RawRow, errors: &mut Vec<RuleError>) -> Option<Heartbeat> {
+    let text = text_field(raw, "heartbeat", errors)?;
+    let found = match text.as_str() {
+        "on" => Some(Heartbeat::On),
+        "off" => Some(Heartbeat::Off),
+        _ => None,
+    };
+    if found.is_none() {
+        let line = raw.fields.iter().find(|(key, _, _)| key == "heartbeat").map_or(raw.line, |(_, _, line)| *line);
+        errors.push(RuleError::new(line, format!("heartbeat の値 {text:?} が on でも off でもない")));
+    }
+    found
 }
 
 /// 先頭の 0 を持たない 10 進の字面を**数値で**比べる（桁数 → 同じ桁数なら字面・桁あふれしない）。

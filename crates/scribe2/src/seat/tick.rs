@@ -35,15 +35,17 @@
 //! park の区画の席も移す（設計 §21・契約表の行 z）: 群の移動の門の後に区画の判定（[`park`]・読むだけ＝計測・lock・記録の書き換え
 //! は 0）を周ごとに 1 回撃ち、移り先の周は群と同じ退避の合図と起こし直しで区画の行の口座へ移る（鍵は row の口座と登録の seq）。
 //!
-//! 合図は席ごとに止められる（設計 §12・契約表の行 o・ADR-0070）: 席の置き場の直下の停止の記録（[`HEARTBEAT_OFF_FILE`]・書き手は
-//! [`heartbeat`] の口 1 本）が在る周は `back` の頭（黙りの門の前）で `heartbeat-off` の noop に止まり、梯子の記録を読まず書かない。
-//! 起こし直し（[`awake`]）・退避（[`moving`]）・群の判定（[`judged`]）は記録を読まず、off の席でも撃つ。
+//! 合図は席ごとに止められる（設計 §12・契約表の行 o・ADR-0070）: 実効の値（[`beat::resolve`]・明示の記録 → 群の表の行の key →
+//! 種類の既定・設計 §22・書き手は [`heartbeat`] の口 1 本）が off か unreadable の周は `back` の頭（黙りの門の前）で
+//! `heartbeat-off` の noop に止まり、梯子の記録を読まず書かない。起こし直し（[`awake`]）・退避（[`moving`]）・群の判定
+//! （[`judged`]）は値を読まず、off の席でも撃つ。
 //!
 //! 毎周の判定の後に最後の周の打刻（[`TICK_LAST_FILE`]）を書き、健全は読み手（[`status`]・doctor）が [`Health`] で判じる（行 p）。
 //!
 //! 移動の周の `/exit` は猶予（`seat.move_grace_s`・起点は席に合図を書いた時刻）を越えてから送り、合図の記録が無ければ先に退避の
 //! 合図の 1 行を 1 度だけ送る（設計 §13 / §14・契約表の行 q / 行 r・ADR-0071 / ADR-0073＝席の裏の subagent を `/exit` で落とさない）。
 
+pub mod beat;
 pub mod install;
 mod park;
 mod signal;
@@ -62,7 +64,7 @@ use crate::fleet::{Registration, RegistrationLatest, State};
 use crate::hook::group::{self, current_of, exit_dialog, group_of, pressed, Caps, Judgement, Lock, Pending, Refusal, Step, EXIT};
 use crate::name::NAME;
 use crate::pipe::dispatch::facts;
-use crate::rules::manifest::{AccountGroup, Manifest};
+use crate::rules::manifest::{AccountGroup, HostManifest, Manifest};
 use crate::rules::{int_row, list_row, RuleError};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -86,8 +88,6 @@ pub const ROW_PRECHECK_ALARM: &str = "seat.precheck_alarm_s";
 
 /// 梯子の記録の file 名（席の置き場の直下）。
 pub const LADDER_FILE: &str = "pointer-ladder";
-/// 停止の記録の file 名（席の置き場の直下・1 行 `ts=<UTC 秒>`・書き手は [`heartbeat`] の口 1 本・設計 §12 形 1）。
-pub const HEARTBEAT_OFF_FILE: &str = "heartbeat-off";
 /// 最後の周の打刻の file 名（席の置き場の直下・1 行 `ts=<UTC 秒> decision=<語> reason=<語>`・書き手は [`run`] 1 本・設計 §12 行 p 形 1）。
 pub const TICK_LAST_FILE: &str = "tick-last";
 /// 健全の係数（経過 ≤ `seat.tick_interval_s` × 係数・rules 行を足さない＝係数は歯が pin する・設計 §12 行 p 形 2）。
@@ -597,7 +597,8 @@ pub fn status(state_dir: &str, target: Option<&str>, manifest: Result<Manifest, 
     let line = |row: &Registration| {
         let seat = seat_dir(&state.path, &row.target);
         let tail = status_tail(&seat, (&state.path, manifest.as_ref(), &fleet), row, (clock.0, &clock.1), grace_s);
-        format!("{}{tail}", status_line(&seat, &row.target, (interval_s, &pace), now))
+        let beat = beat::resolve(&seat, &row.anchor, manifest.as_ref().map_or(beat::Table::Unreadable, beat::Table::Read));
+        format!("{}{tail}", status_line(&seat, &row.target, (interval_s, &pace), (now, beat)))
     };
     Outcome::ok(seats.into_iter().map(line).collect())
 }
@@ -632,7 +633,7 @@ fn status_tail(seat: &Path, read: (&Path, Option<&Manifest>, &State), row: &Regi
 }
 
 /// status の 1 行: `next=` は次の段（記録の段 + 1）の待ちの残り（判定行の `pointer=` と同じ [`pointer_of`]・列を越える段は `stopped`）。
-fn status_line(seat: &Path, target: &str, (interval_s, pace): (u64, &Pace), now: u64) -> String {
+fn status_line(seat: &Path, target: &str, (interval_s, pace): (u64, &Pace), (now, beat): (u64, beat::Beat)) -> String {
     let last = read_last(seat);
     let healthy = if health_of(&last, interval_s, now) == Health::Healthy { "yes" } else { "no" };
     let (ts, age) = match &last {
@@ -648,7 +649,8 @@ fn status_line(seat: &Path, target: &str, (interval_s, pace): (u64, &Pace), now:
         Ok(None) => (DASH.to_owned(), DASH.to_owned()),
         Err(_) => (UNREADABLE.to_owned(), UNREADABLE.to_owned()),
     };
-    format!("seat tick status: target={target} last={ts} age={age} healthy={healthy} heartbeat={} step={step} next={next}", switch_word(seat))
+    let (value, by) = (beat.value.as_str(), beat.by.as_str());
+    format!("seat tick status: target={target} last={ts} age={age} healthy={healthy} heartbeat={value} heartbeat_by={by} step={step} next={next}")
 }
 
 /// 判定の入力。
@@ -786,7 +788,7 @@ struct Front {
     pointer: Pointer,
     /// 判定の時刻（UTC 秒）。
     now: u64,
-    /// 停止の記録が在る（梯子の記録を読まない周・`back` の頭で止まる）。
+    /// 実効の値が off か unreadable（梯子の記録を読まない周・`back` の頭で止まる・設計 §22 形 4）。
     off: bool,
     /// 黙りの門の閾値（段を上げた周は短い・[`raise`]）。
     stale_s: u64,
@@ -817,7 +819,8 @@ fn front(input: &Input, judged: &mut Judged) -> Result<Front, Verdict> {
     }
     let stamps = stamps_of(&seat, rows.pace.stale_s, now, || input_gate(input).is_ok()).map_err(Verdict::noop)?;
     let digest = stamps.last().map_or(0, |stamp| stamp.ts);
-    let off = heartbeat_off(&seat);
+    let merged = crate::rules::with_state_dir(input.manifest.clone(), Some(&input.state.path));
+    let off = beat::resolve(&seat, &anchor, merged.as_ref().map_or(beat::Table::Unreadable, beat::Table::Read)).silent();
     let record = if off { None } else { read_ladder(&seat).map_err(Verdict::noop)? };
     let record = match record {
         Some(found) => Some(settled(&seat, found, &stamps, digest, (now, rows.pace.stale_s))?),
@@ -1070,19 +1073,21 @@ fn write_ladder(seat: &Path, record: &Ladder) -> std::io::Result<()> {
     fs::rename(&temporary, &path)
 }
 
-/// `seat heartbeat` の後ろの語（**閉じた 3 値**・設計 §12 形 2・positional）。
+/// `seat heartbeat` の後ろの語（**閉じた 4 値**・設計 §12 形 2・§22 形 5・positional）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Switch {
-    /// 停止の記録を置く（既に在れば触らない）。
+    /// 明示 off を置いて明示 on を消す。
     Off,
-    /// 停止の記録を消す（無ければ何もしない）。
+    /// 明示 off を消して明示 on を置く。
     On,
-    /// 停止の記録の有無を 1 行で出す。
+    /// 明示の記録を両方消す（群の表の行の key と種類の既定に戻す）。
+    Default,
+    /// 実効の値と決まり方と最後の周の打刻を 1 行で出す。
     Status,
 }
 
 /// [`Switch`] の全部（宣言順）。
-pub const SWITCHES: &[Switch] = &[Switch::Off, Switch::On, Switch::Status];
+pub const SWITCHES: &[Switch] = &[Switch::Off, Switch::On, Switch::Default, Switch::Status];
 
 impl Switch {
     /// 引数の字面。
@@ -1090,29 +1095,20 @@ impl Switch {
         match self {
             Self::Off => "off",
             Self::On => "on",
+            Self::Default => "default",
             Self::Status => "status",
         }
     }
 
-    /// 字面から読む（3 語でなければ `None`）。
+    /// 字面から読む（4 語でなければ `None`）。
     pub fn parse(token: &str) -> Option<Self> {
         SWITCHES.iter().copied().find(|switch| switch.as_str() == token)
     }
 }
 
-/// 停止の記録の path。
-pub fn heartbeat_off_path(seat: &Path) -> PathBuf {
-    seat.join(HEARTBEAT_OFF_FILE)
-}
-
-/// 停止の記録が在るか。無い周だけ偽で、在るのに読めない周（dir・読めない）も真（合図は正の証拠でだけ送る）。
-fn heartbeat_off(seat: &Path) -> bool {
-    !matches!(fs::symlink_metadata(heartbeat_off_path(seat)), Err(err) if err.kind() == std::io::ErrorKind::NotFound)
-}
-
-/// `seat heartbeat off|on|status`（設計 §12 形 2）: 登録 row の無い target は `no-row`（rc 1・席の置き場を作らない＝FR40）。off は
-/// 停止の記録を置き（一時 file → rename・既に在れば ts を書き換えない）、on は消し（無ければ何もしない）、status は有無を 1 行で
-/// 出す（`last=` 以下は最後の周の打刻〔[`read_last`]〕・無い / 読めない周は `-`）。event log には書かない。
+/// `seat heartbeat off|on|default|status`（設計 §12 形 2・§22 形 5）: 登録 row の無い target は `no-row`（rc 1・席の置き場を作らない
+/// ＝FR40）。off / on / default は明示の記録を書き換え（[`beat`]）、status は書かない。出力は実効の値と決まり方（host の面は state dir の
+/// host の面の file から読む）で、status は後ろに最後の周の打刻（[`read_last`]・無い / 読めない周は `-`）。event log には書かない。
 pub fn heartbeat(switch: Switch, state_dir: &str, target: &str) -> Outcome {
     let head = format!("seat heartbeat {}:", switch.as_str());
     let refused = |rc, reason: &str| Outcome::failed_line(rc, format!("{head} refused reason={reason} target={target}"));
@@ -1122,48 +1118,33 @@ pub fn heartbeat(switch: Switch, state_dir: &str, target: &str) -> Outcome {
     let Ok(events) = crate::fleet::store::read_all(&state.path) else {
         return refused(RC_BROKEN, TickError::Store.as_str());
     };
-    if super::role::registration_of_target(&crate::fleet::replay(&events), target).is_none() {
+    let fleet = crate::fleet::replay(&events);
+    let Some(row) = super::role::registration_of_target(&fleet, target) else {
         return refused(RC_REFUSED, NoopReason::NoRow.as_str());
-    }
+    };
     let seat = seat_dir(&state.path, target);
     let written = match switch {
-        Switch::Off => switch_off(&seat),
-        Switch::On => switch_on(&seat),
+        Switch::Off => beat::set_off(&seat),
+        Switch::On => beat::set_on(&seat),
+        Switch::Default => beat::set_default(&seat),
         Switch::Status => Ok(()),
     };
     if written.is_err() {
         return refused(RC_BROKEN, NoopReason::RecordUnwritable.as_str());
     }
+    let host = HostManifest::read(&crate::rules::host_manifest_path(&state.path));
+    let table = match &host {
+        HostManifest::Present(face) => beat::Table::Read(face),
+        HostManifest::Absent => beat::Table::Absent,
+        HostManifest::Unreadable(_) => beat::Table::Unreadable,
+    };
+    let found = beat::resolve(&seat, &row.anchor, table);
     let tail = match (switch, read_last(&seat)) {
         (Switch::Status, Ok(Some((ts, decision, reason)))) => format!(" last={ts} decision={decision} reason={reason}"),
         (Switch::Status, _) => format!(" last={DASH} decision={DASH} reason={DASH}"),
-        (Switch::Off | Switch::On, _) => String::new(),
+        (Switch::Off | Switch::On | Switch::Default, _) => String::new(),
     };
-    Outcome::ok_line(format!("{head} target={target} heartbeat={}{tail}", switch_word(&seat)))
-}
-
-/// 停止の記録の有無の語（`off` / `on`・heartbeat の口・status・doctor の同じ 1 本）。
-pub fn switch_word(seat: &Path) -> &'static str {
-    if heartbeat_off(seat) { Switch::Off } else { Switch::On }.as_str()
-}
-
-/// 停止の記録を置く（既に在る周は触らない・席の置き場は登録 row の在る席にだけ作る・一時 file → rename）。
-fn switch_off(seat: &Path) -> std::io::Result<()> {
-    if heartbeat_off(seat) {
-        return Ok(());
-    }
-    fs::create_dir_all(seat)?;
-    let temporary = seat.join(format!("{HEARTBEAT_OFF_FILE}.tmp"));
-    fs::write(&temporary, format!("ts={}\n", state::now_secs()))?;
-    fs::rename(&temporary, heartbeat_off_path(seat))
-}
-
-/// 停止の記録を消す（無い周は何もしない）。
-fn switch_on(seat: &Path) -> std::io::Result<()> {
-    match fs::remove_file(heartbeat_off_path(seat)) {
-        Err(err) if err.kind() != std::io::ErrorKind::NotFound => Err(err),
-        _ => Ok(()),
-    }
+    Outcome::ok_line(format!("{head} target={target} heartbeat={} heartbeat_by={}{tail}", found.value.as_str(), found.by.as_str()))
 }
 
 /// 基準の無い記録に settle を試み、確定した基準を書いた記録を返す（基準の在る記録はそのまま）。確定できない周は
