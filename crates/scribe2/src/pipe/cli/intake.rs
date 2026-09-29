@@ -39,8 +39,8 @@ use crate::hook::host_guard::WORD_ROWS;
 use crate::name::NAME;
 use crate::pipe::closure::{self, ClosureError, Source};
 use crate::pipe::contract::{Contract, ContractError, CLASS_ROW};
-use crate::pipe::declaration::{self, Ceiling, Effective, EntranceFlip, NewFilePolicy, WriteSetItem, CEILING_ROW, DENIED_ROW};
-use crate::pipe::refuse::{overlaps, Refuse, DELETE_FILE, NEW_FILE, PLACE_ONLY_FILE, SHRINK_FILE};
+use crate::pipe::declaration::{self, Ceiling, Effective, EntranceFlip, CEILING_ROW, DENIED_ROW};
+use crate::pipe::refuse::{overlaps, Refuse, NEW_FILE};
 use crate::pipe::review::{self, FindingKind, Judgement, ROW_SAME_KIND_STOP};
 use crate::pipe::table::{self, ContractRow, TableError};
 use crate::pipe::{contract_path, current, emit, run_dir, run_id, vessel_path, Emit, CONTRACT_FILE};
@@ -49,26 +49,13 @@ use crate::rules::RuleValue;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-/// 1 file の行数の上限を持つ rules 行（上限の余地の分子・設計 contract-source.md §3・値は読むだけ・C4）。
-const ROW_FILE_LINES: &str = "R-C4-2";
-
-/// core の総行数の上限を持つ rules 行（上限の余地・値は読むだけ・C4）。
-const ROW_CORE_LINES: &str = "R-C4-1";
-
-/// 行の数え方の幅を持つ rules 行（上限の余地の行数を xtask check と同じ式で数える・kind `LineWidth`）。
-const ROW_LINE_WIDTH: &str = "R-C4.line-width";
+/// 断りの組み立てと上限の余地の群（契約表の行 bl・純移動）。
+mod refusal;
+use refusal::{denied, exclude_cap_shortfall, not_a_repo, refuse, refuse_of};
+use refusal::{DENIAL_ARGS, DENIAL_DECLARATION, DENIAL_GENERATED, DENIAL_RULES, DENIAL_STORE};
 
 /// host で同時に走る便（live な便）の本数の最大値を持つ rules 行（設計 gate-cost.md §24・値は読むだけ・C1）。
 const ROW_MAX_LIVE: &str = "pipe.max_live";
-
-/// 契約の `size` = S の 1 file あたりの増分の見積（行）を持つ rules 行。
-const ROW_SIZE_S: &str = "pipe.size_s_lines";
-
-/// 契約の `size` = M の見積を持つ rules 行。
-const ROW_SIZE_M: &str = "pipe.size_m_lines";
-
-/// 契約の `size` = L の見積を持つ rules 行。
-const ROW_SIZE_L: &str = "pipe.size_l_lines";
 
 /// 契約の write-set の出所（設計 contract-source.md §3 / §33・C10「導出値と宣言値を型で分ける」）。**閉じた 3 値**で、
 /// 契約表の行の欄と約束の行の有無だけで決まる（散文の免除を持たない）。
@@ -366,9 +353,6 @@ pub(super) fn read_args(args: &[String]) -> Result<(table::Pointer, String, Path
 /// 廃止した手書きの契約 file の flag（字面だけ残して断る側に使う・契約 (b)）。
 const FLAG_CONTRACT: &str = "--contract";
 
-/// 引数の形が読めない周の名（[`Refuse`] を持たない断り）。
-const DENIAL_ARGS: &str = "args";
-
 /// base の設計 pointer から契約を組む（契約 (b)・設計 contract-source.md §2「生成」）。
 ///
 /// 読む先は**作業木でなく base（`HEAD`）**である（[`crate::pipe::show_head`]）: 記録する base と同じ commit の
@@ -452,9 +436,6 @@ pub(super) fn regenerated(
     let (_, body) = generated(repo, &pointer, &materials).map_err(refused_as)?;
     Ok(Some(body))
 }
-
-/// 生成した写しを器自身が読めない周の名（生成の不備＝壊れた器・rc 2）。
-const DENIAL_GENERATED: &str = "generated";
 
 /// 行から導いた write-set（[`settle_write_set`] と同じ [`closure::derive_write_set`] を撃つ）。
 fn derived_write_set(row: &ContractRow, materials: &Materials) -> Result<Vec<String>, Denial> {
@@ -561,11 +542,6 @@ pub(super) fn unloadable(errors: Vec<ContractError>) -> Outcome {
     Outcome::failed(RC_BROKEN, errors.iter().map(ToString::to_string).collect())
 }
 
-/// 対象が git repo でない断り。
-fn not_a_repo(repo: &Path) -> Denial {
-    refuse(&Refuse::NotARepo { repo: repo.display().to_string() }, &[])
-}
-
 /// 判定関数 1 本の断り（**先頭の 1 件が理由**・後続行は stderr に並ぶ・§21）。intake は [`Self::outcome`] で従来どおりの
 /// rc と stderr で断り、preflight は [`Self::name`] と理由を `refuse=` の行に写す。
 #[derive(Clone)]
@@ -577,23 +553,6 @@ pub(in crate::pipe) struct Denial {
     /// 型の断りの列（[`Refuse`] の値・契約表の段は finding ごと・型を持たない断りは空＝事前審査は測れないに倒す・設計
     /// dispatcher.md §27 形 3）。
     pub(in crate::pipe) refusals: Vec<Refuse>,
-}
-
-/// 宣言の写し（`freeze`）が外れた周の名（[`Refuse`] の variant を持たない断り）。
-const DENIAL_DECLARATION: &str = "declaration";
-
-/// rules 行が読めない周の名。
-const DENIAL_RULES: &str = "rules";
-
-/// 契約の `size` が S / M / L のどれでもない周の名。
-const DENIAL_SIZE: &str = "size";
-
-/// 置き場の store が読めない周の名。
-const DENIAL_STORE: &str = "store";
-
-/// [`Refuse`] を持たない断りを [`Denial`] に写す（名は材料の側・rc と行は `outcome` のまま）。
-fn denied(name: &'static str, outcome: Outcome) -> Denial {
-    Denial { name, outcome, refusals: Vec::new() }
 }
 
 /// judge が読む材料（run を作らずに揃う値・intake と preflight が同じ 1 本を撃つ・C2）。
@@ -891,23 +850,6 @@ fn settle_write_set(repo: &Path, contract: &Contract, materials: &Materials) -> 
     Ok(Some(Settled { kind: WriteSet::Derived, replaced: None, files }))
 }
 
-/// 導出の理由を契約単位の拒否へ写す（理由は 1 対 1・型の形と読めなさは契約表の欠陥として行番号を持つ）。
-fn refuse_of(error: ClosureError, row: &ContractRow) -> Refuse {
-    match error {
-        ClosureError::TypeForm { .. } | ClosureError::Unreadable { .. } => {
-            Refuse::ContractTable(TableError::Unreadable { line: row.line, reason: error.reason() })
-        }
-        ClosureError::SurfaceUnknown { name } => Refuse::ContractTable(TableError::SurfaceUnknown { line: row.line, name }),
-        ClosureError::WriteSetDrift { missing, extra } => Refuse::WriteSetDrift { missing, extra },
-        ClosureError::TeethPlaceUnresolved { filter } => Refuse::TeethPlaceUnresolved { filter },
-        ClosureError::AlsoNamesRust { item } => Refuse::AlsoNamesRust { item },
-        ClosureError::TestsNotATeethFile { item } => Refuse::TestsNotATeethFile { item },
-        ClosureError::ItemUnresolved { item } => Refuse::WriteSetItemUnresolved { item },
-        ClosureError::FnUndeclared { module, name } => Refuse::FnUndeclared { module, name },
-        ClosureError::TeethOutsideWriteSet { files } => Refuse::TeethOutsideWriteSet { files },
-    }
-}
-
 /// 同じ bead の直前までの便 1 つ（新しい順の列の要素・§23）。
 struct Past {
     /// 便 id。
@@ -1169,124 +1111,6 @@ impl Headrooms {
     }
 }
 
-/// [`Headrooms`] を組む（[`exclude_cap_shortfall`] が余地を測る同じ `items` / `lines` / `growth` / `caps` から・判定は
-/// しない・file の余地は全体の行数から）。
-fn headrooms_of(
-    items: &[WriteSetItem],
-    lines: &[declaration::FileLines],
-    growth: Vec<(String, u64)>,
-    caps: declaration::Caps,
-) -> Headrooms {
-    let lines_of = |path: &str| lines.iter().find(|found| found.path == path).map_or(0, |found| found.total);
-    let mut rooms: Vec<(String, u64)> = items
-        .iter()
-        .flat_map(|item| match *item {
-            WriteSetItem::File(ref path) | WriteSetItem::New(ref path) => vec![path.clone()],
-            WriteSetItem::Dir(ref under) => under.clone(),
-            WriteSetItem::Shrink(_) | WriteSetItem::Delete(_) | WriteSetItem::PlaceOnly(_) => Vec::new(),
-        })
-        .filter(|path| path.ends_with(".rs"))
-        .map(|path| {
-            let room = caps.file_lines.saturating_sub(lines_of(&path));
-            (path, room)
-        })
-        .collect();
-    rooms.sort_by(|left, right| left.1.cmp(&right.1).then_with(|| left.0.cmp(&right.0)));
-    Headrooms { rooms, caps, growth }
-}
-
-/// 上限の余地（設計 contract-source.md §3・受付だけ）: write-set の各 `.rs` の base の行数と R-C4-2 の差、core の
-/// 合計と R-C4-1 の差に、契約の `size` の見積（rules 行 `pipe.size_<s|m|l>_lines`・数は manifest が持つ・C1）を
-/// 当て、入らない file を名指して断る（file と core の 2 形・先頭の 1 件が理由の 1 行・残りは stderr に並ぶ）。
-/// core の合計は各 file の**本体**（行頭 `#[cfg(test)]` より前）だけ＝xtask check の core-lines と同じ母集団
-/// （[`declaration::FileLines`]・設計 core-boundary.md §2）で、file の余地は全体の行数から。
-///
-/// dir 項目は base の配下に展開し、`+` の新規 file は 0 行として数え、`-` の縮む面と `~` の消える file は余地も
-/// 本数も数えない（弁別は [`declaration::headroom_shortfalls`] の中）。base に無い項目は数えない（項目の実在は
-/// 契約表の行の検査〔`contracts check` / 設計 pointer の intake〕が名指す）——ただし **接頭辞付きで解けない項目は
-/// 受付で断る**（`write-set-item-unresolved`）: `-` / `~` の先が base に無い項目を落として測ると「余地を求めない」
-/// 宣言が静かに消え、無い file を減らす / 消す便が通る（`~` は §24）。`+` の先が base に在る項目
-/// （[`NewFilePolicy::MustBeAbsent`]）も同じ＝契約表の検査は
-/// land 済みの `+` を実在 file と読む（`MayBeLanded`・`s2-07l.346`）ので、入口で止めないと満杯の file を `+` で
-/// 書いた便が余地を測られずに通る。通った周は file ごとの余地を [`Headrooms`] で返す（§21 の `headroom=` の材料）。
-fn exclude_cap_shortfall(manifest: &Manifest, contract: &Contract, materials: &Materials) -> Result<Headrooms, Denial> {
-    let (tracked, sources) = (materials.tracked.as_slice(), materials.sources.as_slice());
-    let rules = |id: &str| int_row(manifest, id).map_err(|reason| denied(DENIAL_RULES, broken(reason)));
-    let caps = declaration::Caps {
-        file_lines: rules(ROW_FILE_LINES)?,
-        core_lines: rules(ROW_CORE_LINES)?,
-        size_lines: rules(size_row(&contract.size).map_err(|reason| denied(DENIAL_SIZE, refused(reason)))?)?,
-    };
-    let items = match declaration::read_write_set(&contract.write_set, tracked, NewFilePolicy::MustBeAbsent) {
-        Ok(found) => found,
-        Err(unresolved) => {
-            if let Some(item) =
-                unresolved.iter().find(|item| item.starts_with([NEW_FILE, SHRINK_FILE, DELETE_FILE, PLACE_ONLY_FILE]))
-            {
-                return Err(refuse(&Refuse::WriteSetItemUnresolved { item: item.clone() }, &[]));
-            }
-            let resolvable: Vec<String> =
-                contract.write_set.iter().filter(|item| !unresolved.contains(item)).cloned().collect();
-            declaration::read_write_set(&resolvable, tracked, NewFilePolicy::MustBeAbsent).unwrap_or_default()
-        }
-    };
-    // 行数は幅で正規化して数える（1 行に詰め込んでも余地は増えない・rules-manifest.md §4）。読めない file は 0 行。
-    let width = rules(ROW_LINE_WIDTH)?;
-    let lines: Vec<declaration::FileLines> = sources
-        .iter()
-        .map(|source| declaration::FileLines::of(&source.path, source.body.as_deref().unwrap_or_default(), width))
-        .collect();
-    // file ごとの見込み（§46）は契約表の検査と同じ読み手で読む。表の検査を通った行の写しは崩れを持たないが、読めない
-    // 周は `size` へ黙って戻さず表の検査と同じ語で断る（fail-closed・C10）。
-    let growth = match WriteSetItem::read_growth(&contract.growth, &contract.write_set) {
-        Ok(found) => found,
-        Err(unfit) => {
-            let named: Vec<Refuse> = unfit
-                .into_iter()
-                .map(|(item, reason)| Refuse::ContractTable(TableError::GrowthForm { line: 0, item, reason }))
-                .collect();
-            let rest = |rest: &[Refuse]| rest.iter().map(|found| format!("pipe: {}", found.reason())).collect::<Vec<String>>();
-            return Err(named.split_first().map_or_else(
-                || refuse(&Refuse::ContractTable(TableError::Unreadable { line: 0, reason: "growth を読めない".to_owned() }), &[]),
-                |(first, others)| refuse(first, &rest(others)),
-            ));
-        }
-    };
-    let short: Vec<Refuse> = declaration::headroom_shortfalls(&items, &lines, &growth, caps)
-        .into_iter()
-        .map(|found| Refuse::CapHeadroom {
-            file: found.file,
-            headroom: found.headroom,
-            size: contract.size.clone(),
-            estimate: found.estimate,
-        })
-        .collect();
-    match short.split_first() {
-        None => Ok(headrooms_of(&items, &lines, growth, caps)),
-        Some((first, rest)) => {
-            let lines: Vec<String> = rest.iter().map(|found| format!("pipe: {}", found.reason())).collect();
-            Err(refuse(first, &lines))
-        }
-    }
-}
-
-/// 契約の `size` に対応する rules 行の id（S / M / L の 3 段だけ・他は見積を持たない）。
-fn size_row(size: &str) -> Result<&'static str, String> {
-    match size {
-        "S" => Ok(ROW_SIZE_S),
-        "M" => Ok(ROW_SIZE_M),
-        "L" => Ok(ROW_SIZE_L),
-        other => Err(format!("size {other:?} は S / M / L のどれでもない（上限の余地の見積を持てない）")),
-    }
-}
-
-/// 契約単位の拒否（**rc は理由の variant が持つ**・名は [`Refuse::as_str`]）。`extra` は理由の後ろに並べる行。
-fn refuse(found: &Refuse, extra: &[String]) -> Denial {
-    let mut err = vec![format!("pipe: {}", found.reason())];
-    err.extend(extra.iter().cloned());
-    Denial { name: found.as_str(), outcome: Outcome::failed(found.rc(), err), refusals: vec![found.clone()] }
-}
-
 /// 対象 repo の HEAD から vessel 宣言を読み、器の上限と突き合わせて有効値にする。
 ///
 /// **外れは rc 1**（前提違反）で、宣言が読めない周も同じ極性である——「宣言が無い」と
@@ -1351,7 +1175,10 @@ fn with_write_set(text: &str, files: &[String]) -> String {
 }
 
 #[cfg(test)]
+use refusal::{ROW_FILE_LINES, ROW_SIZE_S};
+#[cfg(test)]
 mod tests {
+    // flip-check: moved s2-07l.736.12
     use super::{
         exclude_cap_shortfall, int_row, with_write_set, Entrance, Materials, WriteSet, ENTRANCE_LOCK, ROW_FILE_LINES,
         ROW_SIZE_S, WRITE_SETS,
