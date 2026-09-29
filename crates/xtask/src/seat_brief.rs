@@ -16,7 +16,7 @@ const BRIEF_DIR: &str = "seat/brief";
 /// 権能の穴（rules 行の値の列で埋める）。
 const BRIEF_CAPABILITIES: &str = "{capabilities}";
 /// 雛形の定義済みの穴（core の `seat::brief::HOLES` と同じ列＝自 workspace の check が drift を捕まえる）。
-const BRIEF_HOLES: &[&str] = &[BRIEF_CAPABILITIES, "{target}", "{anchor}", "{role}", "{ledger}"];
+const BRIEF_HOLES: &[&str] = &[BRIEF_CAPABILITIES, "{target}", "{anchor}", "{role}", "{ledger}", "{drafts}"];
 /// 雛形の行の出所 pointer の区切り（core の `seat::brief::pointer` の印と同じ字面・器の文書を指す・ADR-0090・
 /// この後ろの参照だけを pointer と読む＝旧い印 `→ SSOT:` だけの行は no-pointer）。
 const BRIEF_SSOT: &str = "→ 器の SSOT:";
@@ -100,6 +100,16 @@ mod tests {
     // flip-check: moved s2-07l.257
     use crate::check::tests::{assert_single, brief_rel, check_fixture, summary_fixture, write_at};
     use std::fs;
+
+    /// 起草の置き場の穴 `{drafts}`（ADR-0096・設計 seat-roles.md §31）は定義済みの穴で、pointer 行に持たせても seat-brief=ok
+    /// （base は unknown-hole で落ちる）。
+    #[test]
+    fn seat_brief_drafts_hole_is_a_known_hole_on_a_pointer_line() {
+        let drafts = check_fixture(|dir| write_at(dir, &brief_rel(), "{capabilities}\n写しは {drafts} の下に置く → 器の SSOT: ADR-0022 §2.4\n"));
+        assert!(drafts.iter().all(|line| !line.contains("unknown-hole")), "穴 drafts は unknown-hole にならない: {drafts:?}");
+        let ok = summary_fixture(|dir| write_at(dir, &brief_rel(), "{capabilities}\n写しは {drafts} の下に置く → 器の SSOT: ADR-0022 §2.4\n"));
+        assert!(ok.contains(" seat-brief=ok"), "{ok}");
+    }
 
     /// 雛形の 3 違反（AC17・C14.2・`s2-07l.248`）: pointer の無い行・未知の穴・権能を消した雛形はそれぞれ seat-brief
     /// だけで落ち、行の違反は file:line を名指す。雛形を消すと行の無い役割 + 雛形 0 枚の 2 件。健全な木は `seat-brief=ok`。

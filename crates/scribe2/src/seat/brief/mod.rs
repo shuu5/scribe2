@@ -2,8 +2,8 @@
 //! （`orchestrator.txt`・`include_str!` で埋め込む・`headless/runner.txt` と同じ形）の穴を登録 row と rules 行の値と
 //! 台帳の現在値で埋めるだけの生成（[`render`]・行の追加も削除もしない）。読み手は SessionStart の hook（`hook/mod.rs`）。
 //!
-//! 行は 11 行（ADR-0045 §2 (3)）: 席の同一性 3 行・憲法の効く部分 5 行（順位 / A1 / A4.2 / A2 と A3 / N1〜N3・
-//! C 条文は CI の門と guard が執行するので注入しない・ADR-0046）・役割の特性 3 行。
+//! 行は 12 行（ADR-0045 §2 (3)・12 行目は ADR-0096）: 席の同一性 3 行・憲法の効く部分 5 行（順位 / A1 / A4.2 / A2 と A3 /
+//! N1〜N3・C 条文は CI の門と guard が執行するので注入しない・ADR-0046）・役割の特性 4 行（末尾が起草の置き場）。
 //!
 //! 雛形の行は「穴」か「出所 pointer を持つ行」だけである（憲法 C1.2・規範文の定義 = pointer を持たない行・typed）。
 //! pointer の形は [`PointerKind`]（行末の `→ 器の SSOT:` の後ろを [`pointer::references`] が切り
@@ -36,10 +36,12 @@ pub enum Hole {
     Role,
     /// 台帳の現在値（`bd --readonly list` の数え・読めない周は呼び側の `unknown`）。
     Ledger,
+    /// 席の起草の置き場の絶対 path（`<state_dir>/seat/<潰した target>/drafts`・hook が解く・器は dir を作らない・ADR-0096）。
+    Drafts,
 }
 
 /// [`Hole`] の全 variant（宣言順）。
-pub const HOLES: &[Hole] = &[Hole::Capabilities, Hole::Target, Hole::Anchor, Hole::Role, Hole::Ledger];
+pub const HOLES: &[Hole] = &[Hole::Capabilities, Hole::Target, Hole::Anchor, Hole::Role, Hole::Ledger, Hole::Drafts];
 
 impl Hole {
     /// 雛形の中の字面。
@@ -50,6 +52,7 @@ impl Hole {
             Self::Anchor => "{anchor}",
             Self::Role => "{role}",
             Self::Ledger => "{ledger}",
+            Self::Drafts => "{drafts}",
         }
     }
 }
@@ -151,7 +154,8 @@ pub fn capabilities_of(manifest: &Manifest, role: Role) -> Option<Vec<Capability
 /// 穴は **1 走査**で埋める（[`fill`]・runner / lens と同じ）: 重ねて replace すると、先に埋めた target や anchor の中の
 /// `{role}` が次の走査で展開される。`role` は雛形の選択と `{role}` の値で、`registration` からは target と anchor だけを読む。
 /// `ledger` は台帳の現在値の字面で、読めなかった周の字面（`unknown`）も呼び側が決める（測れなかったを数に化けさせない・C10）。
-pub fn render(role: Role, registration: &Registration, capabilities: &[Capability], ledger: &str) -> String {
+/// `drafts` は席の起草の置き場の絶対 path の字面で、呼び側の hook が解く（ADR-0096）。
+pub fn render(role: Role, registration: &Registration, capabilities: &[Capability], ledger: &str, drafts: &str) -> String {
     let names: Vec<&str> = capabilities.iter().map(|cap| cap.as_str()).collect();
     let listed = names.join(CAPABILITY_SEPARATOR);
     fill(
@@ -162,6 +166,7 @@ pub fn render(role: Role, registration: &Registration, capabilities: &[Capabilit
             (Hole::Anchor.as_str(), &registration.anchor),
             (Hole::Role.as_str(), role.as_str()),
             (Hole::Ledger.as_str(), ledger),
+            (Hole::Drafts.as_str(), drafts),
         ],
     )
 }
@@ -193,7 +198,7 @@ mod tests {
     #[test]
     fn seat_brief_holes_are_declared_in_order_with_distinct_braced_names() {
         assert!(is_declaration_order(HOLES, |hole| hole as usize), "HOLES は宣言順");
-        assert_eq!(HOLES.len(), 5, "設計 §5 の穴は 5 つ（台帳の現在値を含む・ADR-0045 §2 (3)）");
+        assert_eq!(HOLES.len(), 6, "設計 §5 の穴は 6 つ（台帳の現在値と起草の置き場を含む・ADR-0045 §2 (3)・ADR-0096）");
         for hole in HOLES.iter().copied() {
             let text = hole.as_str();
             assert!(text.starts_with('{') && text.ends_with('}'), "{text}");
@@ -278,24 +283,49 @@ mod tests {
     #[test]
     fn seat_brief_render_fills_holes_in_one_pass_without_adding_lines() {
         const LEDGER: &str = "open=7 in_progress=1 blocked=2";
+        const DRAFTS: &str = "/srv/state/seat/fixture_seat/drafts";
         let role = Role::Orchestrator;
         let caps = [Capability::Answer, Capability::EditTests];
-        let text = render(role, &registration(role), &caps, LEDGER);
+        let text = render(role, &registration(role), &caps, LEDGER, DRAFTS);
         assert_eq!(text.lines().count(), template(role).lines().count(), "行の追加も削除もしない");
         assert!(HOLES.iter().all(|hole| !text.contains(hole.as_str())), "穴が残らない: {text}");
         assert!(text.contains("役割 = orchestrator・target = fixture:seat・anchor = /srv/anchor"), "穴の値: {text}");
         assert!(text.contains("権能 = answer・edit-tests（"), "権能の名の列: {text}");
         assert!(text.contains(&format!("台帳の現在値 = {LEDGER} ")), "台帳の現在値: {text}");
+        assert!(text.contains(&format!("{DRAFTS} の下")), "起草の置き場: {text}");
         // 値の中の穴の字面は展開しない（1 走査）。
         let mut braced = registration(role);
         braced.target = "sess:{role}".to_owned();
-        let text = render(role, &braced, &caps, LEDGER);
+        let text = render(role, &braced, &caps, LEDGER, DRAFTS);
         assert!(
             text.contains("役割 = orchestrator・target = sess:{role}・anchor = /srv/anchor"),
             "target の中の穴は展開しない: {text}"
         );
-        let all = render(role, &registration(role), CAPABILITIES, LEDGER);
+        let all = render(role, &registration(role), CAPABILITIES, LEDGER, DRAFTS);
         assert!(CAPABILITIES.iter().all(|cap| all.contains(cap.as_str())), "権能の名がすべて現れる: {all}");
+    }
+
+    /// 起草の置き場の穴（ADR-0096・設計 seat-roles.md §31）: `HOLES` は 6 つで末尾が `{drafts}`・`render` は値の中の穴の字を
+    /// 展開せず 1 走査で埋め・雛形は 12 行で 12 行目だけがその穴を 1 回持ち rules 行 `seat.drafts_stale_h` を名指す。
+    #[test]
+    fn seat_brief_drafts_hole_is_last_and_only_the_twelfth_line_carries_it() {
+        assert_eq!(HOLES.len(), 6, "穴は 6 つ");
+        assert_eq!(HOLES.last().map(|hole| hole.as_str()), Some("{drafts}"), "末尾は起草の置き場の穴");
+        let role = Role::Orchestrator;
+        let text = template(role);
+        assert_eq!(text.lines().count(), 12, "雛形は 12 行");
+        let holed: Vec<usize> = text
+            .lines()
+            .enumerate()
+            .filter(|(_, line)| line.contains(Hole::Drafts.as_str()))
+            .map(|(at, _)| at.saturating_add(1))
+            .collect();
+        assert_eq!(holed, vec![12], "12 行目だけが穴を持つ");
+        assert_eq!(text.matches(Hole::Drafts.as_str()).count(), 1, "穴は 1 回");
+        assert!(text.lines().nth(11).is_some_and(|line| line.contains("seat.drafts_stale_h")), "12 行目は rules 行を名指す");
+        let braced = render(role, &registration(role), &[Capability::Answer], "unknown", "/d/{role}/drafts");
+        assert!(braced.contains("/d/{role}/drafts の下"), "値の中の {{role}} は展開しない: {braced}");
+        assert_eq!(braced.lines().count(), 12, "行の追加も削除もしない");
     }
 
     /// 権能は rules 行 `role.<役割>` から読む: 行が無い・不発効・列でない周は `None`。

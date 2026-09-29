@@ -1162,6 +1162,15 @@ const LEDGER_JSON: &str = "[{\"id\":\"x-1\",\"status\":\"open\"},{\"id\":\"x-2\"
 /// [`LEDGER_JSON`] を数えた 1 行（席の指示文の `{ledger}` の値）。
 const LEDGER_LINE: &str = "open=2 in_progress=1 blocked=0";
 
+/// 外形 snapshot の起草の置き場の穴の値（固定・席の指示文の `{drafts}`）。
+const BRIEF_DRAFTS: &str = "/srv/state/seat/fixture_orchestrator/drafts";
+
+/// 席の起草の置き場の絶対 path（`<state_dir>/seat/<潰した target>/drafts`・hook が指示文の `{drafts}` へ渡す値と同じ）。
+fn brief_drafts_of(place: &RolePlace, target: &str) -> String {
+    let dir = vessel::seat::drafts_dir(&place.state, target);
+    std::path::absolute(&dir).unwrap_or(dir).display().to_string()
+}
+
 /// 禁じる語列の fixture（rules 行 `runner.denied_commands`・埋め込みと同じ cargo の 2 語列＝git の語列は host_guard.git へ
 /// 移した・設計 vessel-hook.md §11 の形 f 4）。
 const DENIED_SEQUENCES: &[&str] = &["cargo mutants", "cargo publish"];
@@ -2144,7 +2153,7 @@ fn brief_lines(place: &RolePlace, pane: &str, extra: &[&str]) -> Vec<String> {
 
 /// (a) 登録済みの target の SessionStart で生成文が名乗りの後ろに出て、権能の名がすべて含まれる。生成文は
 /// `render`（雛形の穴に登録 row の target / anchor と fixture の rules 行の値と台帳の現在値）と**同じ字面**で、
-/// 行は 11 行（ADR-0045 §2 (3)）、記録は名乗り + 指示文の 2 行（指示文の `bytes` は生成文の byte 数・席を名乗る）。
+/// 行は 12 行（ADR-0045 §2 (3)・ADR-0096）、記録は名乗り + 指示文の 2 行（指示文の `bytes` は生成文の byte 数・席を名乗る）。
 /// `--rules` 無し（埋め込み manifest）でも同じ経路で出る＝裁定の値が binary に在る。
 #[test]
 fn hook_brief_session_start_emits_the_role_brief_with_every_capability() {
@@ -2156,9 +2165,10 @@ fn hook_brief_session_start_emits_the_role_brief_with_every_capability() {
     let registration = brief_registration(role, &target, &place.repo.display().to_string());
     let before = inject_lines(&place.state).len();
     let body = brief_lines(&place, &pane, &["--rules", &place.rules]);
-    let expected = brief::render(role, &registration, &brief_caps(caps), LEDGER_LINE);
+    let drafts = brief_drafts_of(&place, &target);
+    let expected = brief::render(role, &registration, &brief_caps(caps), LEDGER_LINE, &drafts);
     assert_eq!(format!("{}\n", body.join("\n")), expected, "生成文は render と同じ字面");
-    assert_eq!(body.len(), 11, "注入は 11 行（ADR-0045 §2 (3)）: {body:?}");
+    assert_eq!(body.len(), 12, "注入は 12 行（ADR-0045 §2 (3)・ADR-0096）: {body:?}");
     for cap in caps {
         assert!(body.iter().any(|line| line.contains(cap)), "権能 {cap} の名が生成文に現れる: {body:?}");
     }
@@ -2180,13 +2190,13 @@ fn hook_brief_session_start_emits_the_role_brief_with_every_capability() {
     // 埋め込み manifest（`--rules` 無し）でも同じ経路。
     let held = brief::capabilities_of(&embedded, role).unwrap_or_else(|| panic!("埋め込みに行が在る"));
     let body = brief_lines(&place, &pane, &[]);
-    assert_eq!(format!("{}\n", body.join("\n")), brief::render(role, &registration, &held, LEDGER_LINE), "埋め込みの行の値");
+    assert_eq!(format!("{}\n", body.join("\n")), brief::render(role, &registration, &held, LEDGER_LINE, &drafts), "埋め込みの行の値");
     drop(seat);
     clean(&[&place.repo, &place.state, &place.sock_dir]);
 }
 
 /// 台帳を読めない周の `{ledger}` は `unknown`（**数に化けさせない**・憲法 C10）。`--bd` が無い file を指す周も
-/// 席は止まらず（rc 0・stderr 0 byte）、行数は 11 行のままである。
+/// 席は止まらず（rc 0・stderr 0 byte）、行数は 12 行のままである。
 #[test]
 fn hook_brief_ledger_is_unknown_when_the_client_is_unreadable() {
     let place = role_place();
@@ -2198,7 +2208,7 @@ fn hook_brief_ledger_is_unknown_when_the_client_is_unreadable() {
     assert_eq!(stderr_text(&out), "", "断りも出さない");
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
     let (body, _) = split_recent(stdout.lines().skip(1).map(str::to_owned).collect());
-    assert_eq!(body.len(), 11, "指示文の行数は変わらない: {body:?}");
+    assert_eq!(body.len(), 12, "指示文の行数は変わらない: {body:?}");
     assert!(body.iter().any(|line| line.contains("台帳の現在値 = unknown（台帳を読めない）")), "{body:?}");
     assert!(body.iter().all(|line| !line.contains("open=")), "数に化けない: {body:?}");
     drop(seat);
@@ -2259,19 +2269,19 @@ fn hook_brief_orchestrator_external_form() {
     let registration = brief_registration(Role::Orchestrator, "fixture:orchestrator", "/srv/anchor");
     insta::assert_snapshot!(
         "hook_brief_orchestrator",
-        brief::render(Role::Orchestrator, &registration, &brief_caps(ORCHESTRATOR_CAPS), LEDGER_LINE)
+        brief::render(Role::Orchestrator, &registration, &brief_caps(ORCHESTRATOR_CAPS), LEDGER_LINE, BRIEF_DRAFTS)
     );
 }
 
-/// (d) 注入の中身（ADR-0045 §2 (3)・ADR-0046 §2）: 生成文は **11 行**で、席の同一性 3 行（役割 / 権能 / 台帳の
-/// 現在値）・憲法の効く部分 5 行（順位・A1・A4.2・A2 と A3・N1〜N3）・役割の特性 3 行（対話面の作法と信頼度・
-/// 実装を自分で行わない・決定はしご）から成る。**C 条文は 1 行も注入しない**（CI の門と guard が執行する）。
+/// (d) 注入の中身（ADR-0045 §2 (3)・ADR-0046 §2・ADR-0096）: 生成文は **12 行**で、席の同一性 3 行（役割 / 権能 / 台帳の
+/// 現在値）・憲法の効く部分 5 行（順位・A1・A4.2・A2 と A3・N1〜N3）・役割の特性 4 行（対話面の作法と信頼度・
+/// 実装を自分で行わない・決定はしご・起草の置き場）から成る。**C 条文は 1 行も注入しない**（CI の門と guard が執行する）。
 #[test]
 fn hook_brief_carries_the_ask_first_and_role_lines_without_c_articles() {
     let place = role_place();
     let (seat, pane) = role_seat(&place, "briefsurface", Some("orchestrator"));
     let body = brief_lines(&place, &pane, &["--rules", &place.rules]);
-    assert_eq!(body.len(), 11, "注入は 11 行: {body:?}");
+    assert_eq!(body.len(), 12, "注入は 12 行: {body:?}");
     assert!(
         body.iter().all(|line| line.contains("→ 器の SSOT:") && !line.contains("→ SSOT:")),
         "行はすべて器の文書を指す出所 pointer を持ち、旧い印を持たない: {body:?}"
@@ -2290,8 +2300,28 @@ fn hook_brief_carries_the_ask_first_and_role_lines_without_c_articles() {
     clean(&[&place.repo, &place.state, &place.sock_dir]);
 }
 
+/// (e) 起草の置き場の行（ADR-0096・設計 seat-roles.md §31 行 y）: 登録した席の SessionStart の指示文は 12 行で、最後の行が
+/// `<state_dir>/seat/<潰した target>/drafts` の絶対 path と rules 行 `seat.drafts_stale_h` を持ち、器はその dir を作らない。
+#[test]
+fn hook_brief_drafts_last_line_carries_the_absolute_drafts_path_without_creating_it() {
+    let place = role_place();
+    let (seat, pane) = role_seat(&place, "briefcopy", Some("orchestrator"));
+    let body = brief_lines(&place, &pane, &["--rules", &place.rules]);
+    assert_eq!(body.len(), 12, "指示文は 12 行: {body:?}");
+    let drafts = brief_drafts_of(&place, "briefcopy:briefcopy");
+    assert!(Path::new(&drafts).is_absolute(), "絶対 path: {drafts}");
+    assert!(drafts.ends_with("/seat/briefcopy_briefcopy/drafts"), "潰した target の置き場: {drafts}");
+    let last = body.last().cloned().unwrap_or_default();
+    assert!(last.contains(&format!("{drafts} の下")), "最後の行が置き場の path を持つ: {last}");
+    assert!(last.contains("seat.drafts_stale_h"), "rules 行を名指す: {last}");
+    assert!(body.iter().take(11).all(|line| !line.contains("drafts")), "置き場は最後の行だけ: {body:?}");
+    assert!(!Path::new(&drafts).exists(), "器は起草の置き場の dir を作らない: {drafts}");
+    drop(seat);
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
 // ---- 復帰の DATA（設計 seat-roles.md §21・FR42 / FR19・`s2-07l.489`・接頭辞 `hook_session_recent_`）----
-// 登録済みの席の SessionStart は §5 の指示文（11 行・不変）の後ろに、台帳と git から機械で導いた事実の行を出す。
+// 登録済みの席の SessionStart は §5 の指示文（12 行・不変）の後ろに、台帳と git から機械で導いた事実の行を出す。
 // 0 件（`[RECENT-NONE]`）と測れない（`[RECENT-UNMEASURED]`）を分ける。登録の無い席は今と同じく 0 byte。
 // 席は**偽 tmux**（設計 §7「偽 tmux で pane → target を返す stub」＝PATH の先頭の script）で解く: tmux を立てないので
 // nextest の tmux group の外で走り、`--pane` の値は偽 tmux が読まない固定値。
@@ -2405,10 +2435,10 @@ fn assert_bead_section(recent: &[String], total: usize) {
     assert!(beads.iter().all(|line| !line.contains(" w-1 ") && !line.contains(" w-2 ")), "WIP の id は BEAD に出ない: {beads:?}");
 }
 
-/// 偽 tmux の席で session-start を撃ち、名乗りの後ろを指示文（11 行を表明）と復帰の DATA に割って返す。
+/// 偽 tmux の席で session-start を撃ち、名乗りの後ろを指示文（12 行を表明）と復帰の DATA に割って返す。
 fn brief_and_recent(place: &RolePlace, path: &str, bd: &str) -> (Vec<String>, Vec<String>) {
     let (brief, recent) = split_recent(stub_session_lines(place, path, bd));
-    assert_eq!(brief.len(), 11, "§5 の指示文は 11 行のまま: {brief:?}");
+    assert_eq!(brief.len(), 12, "§5 の指示文は 12 行のまま: {brief:?}");
     assert!(
         brief.iter().all(|line| line.contains("→ 器の SSOT:") && !line.contains("→ SSOT:")),
         "指示文の行は器の文書を指す pointer を持ち、旧い印を持たない: {brief:?}"
@@ -2497,7 +2527,7 @@ fn session_lines_with(place: &RolePlace, path: &str, source: &str) -> Vec<String
     after_header(&run_stub_hook(path, &args, &session_payload(&place.repo, "sid-pc", source)))
 }
 
-/// 名乗りの後ろの行から `[PRECOMPACT]` の区間（header と抜いた文）を切り出す: 指示文 11 行の**直後**に始まり、最初の
+/// 名乗りの後ろの行から `[PRECOMPACT]` の区間（header と抜いた文）を切り出す: 指示文 12 行の**直後**に始まり、最初の
 /// `[RECENT-` の**直前**で終わる。区間が無ければ空。
 fn precompact_section(lines: &[String]) -> Vec<String> {
     let (brief, rest) = split_recent(lines.to_vec());
@@ -2506,7 +2536,7 @@ fn precompact_section(lines: &[String]) -> Vec<String> {
     match at {
         None => Vec::new(),
         Some(at) => {
-            assert_eq!(at, 11, "枠は §5 の指示文 11 行の直後: {lines:?}");
+            assert_eq!(at, 12, "枠は §5 の指示文 12 行の直後: {lines:?}");
             brief.get(at..).map(<[String]>::to_vec).unwrap_or_default()
         }
     }
@@ -2577,12 +2607,12 @@ fn rules_with_ledger_timeout(place: &RolePlace, secs: u64) -> String {
     path.display().to_string()
 }
 
-/// 偽 tmux の席で `rules` を差し替えて session-start を撃ち、名乗りの後ろを指示文（11 行を表明）と復帰の DATA に割って返す。
+/// 偽 tmux の席で `rules` を差し替えて session-start を撃ち、名乗りの後ろを指示文（12 行を表明）と復帰の DATA に割って返す。
 fn brief_and_recent_with_rules(place: &RolePlace, path: &str, rules: &str, bd: &str) -> (Vec<String>, Vec<String>) {
     let args = ["session-start", "--pane", STUB_PANE, "--rules", rules, "--bd", bd];
     let lines = after_header(&run_stub_hook(path, &args, &stamp_payload(&place.repo, "sid-recent")));
     let (brief, recent) = split_recent(lines);
-    assert_eq!(brief.len(), 11, "§5 の指示文は 11 行のまま: {brief:?}");
+    assert_eq!(brief.len(), 12, "§5 の指示文は 12 行のまま: {brief:?}");
     assert!(recent.iter().all(|line| line.starts_with("[RECENT-")), "DATA の行は行頭の marker で始まる: {recent:?}");
     (brief, recent)
 }

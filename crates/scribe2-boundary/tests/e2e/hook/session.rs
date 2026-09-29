@@ -96,7 +96,7 @@ fn hook_session_start_honors_state_dir_flag() {
 
 /// (a)(b)(f): in_progress の bead は `[RECENT-WIP]` に全件、直近 24 時間の更新は `[RECENT-BEAD]` に新しい順で上限まで
 /// （上限で切った周は `[RECENT-CUT]` が shown と total を持つ）、窓の外と WIP に出た id は BEAD に出ない。改行入りの題は
-/// 1 行に畳まれて行数が増えない。§5 の 11 行は不変で、記録は `session-start-recent` の 1 行が足される。
+/// 1 行に畳まれて行数が増えない。§5 の 12 行は不変で、記録は `session-start-recent` の 1 行が足される。
 #[test]
 fn hook_session_recent_lists_wip_and_windowed_beads_after_the_brief() {
     let place = role_place();
@@ -128,7 +128,7 @@ fn hook_session_recent_lists_wip_and_windowed_beads_after_the_brief() {
 }
 
 /// (c): 台帳が読めない周（`--bd` が無い file・JSON でない出力）は wip / bead の 2 種類だけ `[RECENT-UNMEASURED]`
-/// （理由 `ledger-unreadable`）で、§5 の 11 行と git の行は出る。席は止めない（rc 0・stderr 0 byte）。
+/// （理由 `ledger-unreadable`）で、§5 の 12 行と git の行は出る。席は止めない（rc 0・stderr 0 byte）。
 #[test]
 fn hook_session_recent_marks_ledger_unmeasured_but_keeps_brief_and_git() {
     let place = role_place();
@@ -360,7 +360,7 @@ fn hook_session_recent_git_kinds_are_unmeasured_together_outside_a_repo() {
 
 /// (a)(b): PreCompact が transcript の末尾から**直近の assistant の text block**（tool_use だけの行と user の行と JSON で
 /// ない行は飛ばす・同じ行の最後の text block）を枠に書き（rc 0・stdout 0 byte・stderr 0 byte・記録 `precompact-slot`）、
-/// 続く `source = compact` の SessionStart が指示文 11 行の直後・DATA の前に `[PRECOMPACT] trigger=auto ts=… lines=2` と
+/// 続く `source = compact` の SessionStart が指示文 12 行の直後・DATA の前に `[PRECOMPACT] trigger=auto ts=… lines=2` と
 /// 逐語の 2 行を出して枠を消し（記録 `session-start-precompact`）、同じ SessionStart をもう 1 回撃つと `[PRECOMPACT]` は
 /// 出ない（1 回だけ）。
 #[test]
@@ -399,7 +399,7 @@ fn hook_precompact_writes_the_slot_and_compact_session_start_emits_it_once() {
     // (b) もう 1 回: 枠は無いので出ない（指示文と DATA は出る）。
     let again = session_lines_with(&place, &path, "compact");
     assert!(precompact_section(&again).is_empty(), "2 回目は出ない: {again:?}");
-    assert_eq!(split_recent(again.clone()).0.len(), 11, "指示文は 11 行のまま: {again:?}");
+    assert_eq!(split_recent(again.clone()).0.len(), 12, "指示文は 12 行のまま: {again:?}");
     assert!(again.iter().any(|line| line.starts_with("[RECENT-")), "DATA は出る: {again:?}");
     assert_eq!(precompact_records(&place.state).len(), before + 2, "出さない周は記録も増えない");
     clean(&[&place.repo, &place.state, &place.sock_dir]);
@@ -470,7 +470,7 @@ fn hook_precompact_skips_unreadable_and_text_less_transcripts_without_a_slot() {
     }
     let lines = session_lines_with(&place, &path, "compact");
     assert!(precompact_section(&lines).is_empty(), "枠が無い compact は出さない: {lines:?}");
-    assert_eq!(split_recent(lines.clone()).0.len(), 11, "指示文は出る: {lines:?}");
+    assert_eq!(split_recent(lines.clone()).0.len(), 12, "指示文は出る: {lines:?}");
     assert!(lines.iter().any(|line| line.starts_with("[RECENT-")), "DATA は出る: {lines:?}");
     clean(&[&place.repo, &place.state, &place.sock_dir]);
 }
@@ -721,7 +721,7 @@ fn hook_recovery_edge_offset_without_two_digits_is_an_unreadable_time() {
 
 /// §23 (5) 枠が「無い」以外の理由で読めない・消せない周: 席の置き場の枠の名前が dir になっている周の `source = compact` の
 /// SessionStart は `[PRECOMPACT]` を出さず、stderr に読めない理由（`slot-unreadable`）の 1 行と消せない理由の 1 行を出し、
-/// §5 の指示文 11 行と §21 の DATA は出す（rc 0・記録は増えない・dir は残る）。枠が無い普通の周は stderr にどちらの行も
+/// §5 の指示文 12 行と §21 の DATA は出す（rc 0・記録は増えない・dir は残る）。枠が無い普通の周は stderr にどちらの行も
 /// 出さない（読めないと無いを分ける・C10.2）。
 #[test]
 fn hook_recovery_edge_compact_with_a_directory_slot_tells_both_failures_and_keeps_the_rest() {
@@ -745,7 +745,7 @@ fn hook_recovery_edge_compact_with_a_directory_slot_tells_both_failures_and_keep
     let rest: Vec<String> = lines.map(str::to_owned).collect();
     assert!(precompact_section(&rest).is_empty(), "枠は出ない: {rest:?}");
     let (brief, recent) = split_recent(rest);
-    assert_eq!(brief.len(), 11, "指示文は出る: {brief:?}");
+    assert_eq!(brief.len(), 12, "指示文は出る: {brief:?}");
     assert!(!recent.is_empty() && recent.iter().all(|line| line.starts_with("[RECENT-")), "DATA は出る: {recent:?}");
     assert!(slot.is_dir(), "消せない枠は残る");
     assert_eq!(precompact_records(&place.state).len(), before, "出さない周は記録も増えない");
@@ -754,7 +754,7 @@ fn hook_recovery_edge_compact_with_a_directory_slot_tells_both_failures_and_keep
     let out = run_stub_hook(&path, &args, &session_payload(&place.repo, "sid-pc", "compact"));
     let rest = after_header(&out);
     assert!(precompact_section(&rest).is_empty(), "枠が無い compact は出さない: {rest:?}");
-    assert_eq!(split_recent(rest).0.len(), 11, "指示文は出る");
+    assert_eq!(split_recent(rest).0.len(), 12, "指示文は出る");
     clean(&[&place.repo, &place.state, &place.sock_dir]);
 }
 

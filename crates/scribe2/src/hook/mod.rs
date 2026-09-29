@@ -529,7 +529,10 @@ fn brief(hooked: &Hooked, outcome: &mut Outcome, payload: &str, started: Instant
         .ok()
         .and_then(crate::seat::ledger::counts_of)
         .unwrap_or_else(|| LEDGER_UNKNOWN.to_owned());
-    let text = crate::seat::brief::render(row.role, row, &capabilities, &ledger);
+    // 起草の置き場は解くだけで dir を作らない（席の git が写しを作るときに作る・ADR-0096・設計 seat-roles.md §31）。
+    let drafts_dir = crate::seat::drafts_dir(hooked.dir, &target);
+    let drafts = std::path::absolute(&drafts_dir).unwrap_or(drafts_dir);
+    let text = crate::seat::brief::render(row.role, row, &capabilities, &ledger, &drafts.to_string_lossy());
     let emit = Emit { who: EVENT_SESSION_START, what: WHAT_BRIEF, when: "SessionStart", line: text.trim_end_matches('\n') };
     outcome.err.extend(record_lines(hooked.dir, &record(&emit, hooked, started)));
     outcome.out.extend(text.lines().map(str::to_owned));
