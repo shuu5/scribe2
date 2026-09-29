@@ -726,6 +726,26 @@ enabled = true
 ruling = "user 2026-09-27T23:55Z"
 ruled_at = "2026-09-27"
 
+# publish の配線（設計 vessel-hook.md §22 行 n・ADR-0078・SRS FR80 / NFR5）の上限の 2 行。deadline_ms は publish の segment の周で撃つ
+# git と gh の問いの全体の締め切り（NFR5 の 6 秒・配線の timeout 未満に限る）、read_bytes は出ていく字面と子の出力を読む上限
+# （NFR5 の 8 MB）。越えた周は断る（締め切りは撃ち直す・上限は分けて出す）。読めない周は行が無いのと同じに扱う。
+
+[[rule]]
+id = "host_guard.publish_deadline_ms"
+kind = "HostGuardPublishDeadlineMs"
+value = 6000
+enabled = true
+ruling = "user 2026-09-29T04:37Z"
+ruled_at = "2026-09-29"
+
+[[rule]]
+id = "host_guard.publish_read_bytes"
+kind = "HostGuardPublishReadBytes"
+value = 8388608
+enabled = true
+ruling = "user 2026-09-29T04:37Z"
+ruled_at = "2026-09-29"
+
 # 管理 tick（seat tick・設計 seat-heartbeat.md §2 形 5 / §10 形 5〜7・ADR-0058 §2・ADR-0068）の 3 行。tick_interval_s は
 # timer の周期（秒・unit を書く口が読む）、tick_stale_s は黙りの閾値（settle の基準）・Busy の古さの 2 役（秒）、
 # pointer_ladder_s は合図の梯子の列（秒の文字列・非空・狭義に昇順・段 n の待ちは列の n 番目・列を越えた段は送らない）。

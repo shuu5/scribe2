@@ -14,6 +14,7 @@ use crate::rules::RuleValue;
 use std::path::{Path, PathBuf};
 
 pub mod history;
+pub mod probe;
 pub mod scan;
 
 /// 識別子の形の要素の札。
@@ -79,7 +80,14 @@ const HEREDOC_HEADS: [&str; 4] = ["git", "gh", "bd", "bdw"];
 /// 解けない segment の経路。
 const REWRITE: &str = "解ける形で書き直す（git / gh を包まずに頭の語に置く・ref と remote と dir と -R と可視性の欄は literal・本文は file〔--body-file か api の -F k=@file〕か区切りを引用した heredoc で渡す）";
 
-/// 断りの理由（閉じた 3 値・宣言順・設計 §17 形 1・§18 形 5）。
+/// 締め切りを越えた断りの経路。
+const RETRY: &str = "撃ち直す（公開の前の問いが締め切りを越えたので断る・同じ command をもう 1 度撃つ）";
+/// 読む上限を越えた断りの経路。
+const SPLIT: &str = "分けて出す（出ていく字面が読む上限を越えたので断る・push を小さな単位に分けて出す）";
+/// 隣の識別子を持つ断りの経路。
+const REDACT: &str = "識別子を消し「隣の project」と件数に言い換えて出し直す（出ていく字面に隣の private repo の識別子が在るので断る・本文と message と path から消す）";
+
+/// 断りの理由（閉じた 6 値・宣言順・設計 §17 形 1・§18 形 5・§22 行 n 形 4）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Reason {
     /// 行が無い・列でない。
@@ -88,10 +96,16 @@ pub enum Reason {
     FullHistory,
     /// 字面で解けない（hit は `unresolved:<印の語>`）。
     Unresolved,
+    /// 締め切りを越えた（hit は `deadline`・[`probe`]）。
+    Deadline,
+    /// 読む上限を越えた（hit は `oversize`・[`probe`]）。
+    Oversize,
+    /// 隣の識別子が出ていく（hit は `identifier`）。
+    Identifier,
 }
 
 /// [`Reason`] の全 variant（宣言順）。
-pub const REASONS: &[Reason] = &[Reason::NoRow, Reason::FullHistory, Reason::Unresolved];
+pub const REASONS: &[Reason] = &[Reason::NoRow, Reason::FullHistory, Reason::Unresolved, Reason::Deadline, Reason::Oversize, Reason::Identifier];
 
 impl Reason {
     /// hit の頭の語と経路。
@@ -100,6 +114,9 @@ impl Reason {
             Self::NoRow => ("no-row", Kind::Publish.route()),
             Self::FullHistory => ("full-history", history::ROUTE),
             Self::Unresolved => ("unresolved", REWRITE),
+            Self::Deadline => ("deadline", RETRY),
+            Self::Oversize => ("oversize", SPLIT),
+            Self::Identifier => ("identifier", REDACT),
         }
     }
 }
@@ -876,6 +893,7 @@ fn refused(kind: Kind, reason: Reason, word: Option<&str>, ruling: String) -> Re
 mod tests {
     // flip-check: retroactive s2-07l.738.16
     use super::super::{judge, HostGuardDecision, Kind, Scene};
+    use super::probe::{budget, DEADLINE_ROW, READ_ROW};
     use super::{elements, marked, read, Form, Published, Reason, FORMS, MARKS, REASONS};
     use crate::name::NAME;
     use crate::rules::manifest::Manifest;
@@ -1095,12 +1113,46 @@ mod tests {
     /// 行 k (c) 理由と印の閉じた列と、理由ごとの経路（no-row は publish の種類の経路・unresolved は書き直しの経路）。
     #[test]
     fn publish_marks_routes_are_one_per_reason() {
-        assert_eq!(REASONS.iter().map(|reason| reason.parts().0).collect::<Vec<_>>(), ["no-row", "full-history", "unresolved"], "理由の宣言順");
+        let heads = ["no-row", "full-history", "unresolved", "deadline", "oversize", "identifier"];
+        assert_eq!(REASONS.iter().map(|reason| reason.parts().0).collect::<Vec<_>>(), heads, "理由の宣言順");
+        let routes: Vec<&str> = REASONS.iter().map(|reason| reason.parts().1).collect();
+        assert!(routes.iter().enumerate().all(|(at, route)| routes.iter().skip(at.saturating_add(1)).all(|other| other != route)), "経路は互いに違う");
+        for (reason, lead) in [(Reason::Deadline, "撃ち直す（"), (Reason::Oversize, "分けて出す（"), (Reason::Identifier, "識別子を消し「隣の project」と件数に言い換えて出し直す（")] {
+            assert!(reason.parts().1.starts_with(lead), "{reason:?}: {}", reason.parts().1);
+        }
         assert_eq!(MARKS.iter().map(|mark| mark.as_str()).collect::<Vec<_>>(), ["wrapped", "verb", "shape", "dir", "redirect"], "印の宣言順");
         let (no_row, unresolved) = (Reason::NoRow.parts().1, Reason::Unresolved.parts().1);
         assert_eq!(no_row, Kind::Publish.route(), "no-row は種類の経路");
         assert_ne!(no_row, unresolved, "経路は理由ごと");
         assert!(unresolved.starts_with("解ける形で書き直す（"), "{unresolved}");
+    }
+
+    /// 行 n (e) 予算の読み: 埋め込みの 2 行で 6000 ms と 8388608 byte・行が無い / 不発効 / 整数でない / 0 / 10000 以上の締め切りは
+    /// その行の id の `Err`（読む上限の行の不良は上限の行の id）。
+    #[test]
+    fn publish_limits_budget_reads_the_two_rows() {
+        let embedded = Manifest::embedded().unwrap_or_else(|errors| panic!("埋め込み manifest を読める: {errors:?}"));
+        assert_eq!(budget(&embedded), Ok((6000, 8_388_608)), "埋め込みの 2 行");
+        let int = |id: &str, kind: &str, value: &str, enabled: bool| {
+            format!("\n[[rule]]\nid = \"{id}\"\nkind = \"{kind}\"\nvalue = {value}\nenabled = {enabled}\nruling = \"r\"\nruled_at = \"d\"\n")
+        };
+        let deadline = |value: &str, enabled: bool| int(DEADLINE_ROW, "HostGuardPublishDeadlineMs", value, enabled);
+        let bytes = |value: &str, enabled: bool| int(READ_ROW, "HostGuardPublishReadBytes", value, enabled);
+        let (deadline_row, bytes_row) = (DEADLINE_ROW, READ_ROW);
+        for (rows, want) in [
+            (bytes("4096", true), Err(deadline_row)),
+            (deadline("6000", true), Err(bytes_row)),
+            (deadline("6000", false) + &bytes("4096", true), Err(deadline_row)),
+            (deadline("6000", true) + &bytes("4096", false), Err(bytes_row)),
+            (deadline("0", true) + &bytes("4096", true), Err(deadline_row)),
+            (deadline("10000", true) + &bytes("4096", true), Err(deadline_row)),
+            (deadline("9999", true) + &bytes("0", true), Err(bytes_row)),
+            (deadline("9999", true) + &bytes("4096", true), Ok((9999, 4096))),
+        ] {
+            assert_eq!(budget(&manifest(&rows)), want, "{rows}");
+        }
+        let listed = row(DEADLINE_ROW, "HostGuardPublishDeadlineMs", "\"6000\"", true);
+        assert!(Manifest::parse(&format!("schema = 1\n{listed}")).is_err(), "kind の形は Int（列の値は読み込みで拒む）");
     }
 
     /// 公開の segment ごとの解けない形の語（cwd `/w`・root `/root`）。

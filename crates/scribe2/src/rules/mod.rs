@@ -215,6 +215,10 @@ pub enum RuleKind {
     RunTokenCeiling,
     /// hook 1 回の実行予算（ミリ秒）。
     HookBudgetMs,
+    /// publish の配線が子を撃つ段の締め切り（ミリ秒・NFR5）。配線の timeout 未満に限る。
+    HostGuardPublishDeadlineMs,
+    /// publish の配線が子の出力を読む上限（byte・NFR5）。
+    HostGuardPublishReadBytes,
     /// pipeline の停止猶予（ミリ秒）。
     StopGraceMs,
     /// fleet の lock 再取得間隔（ミリ秒）。
@@ -401,6 +405,8 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::GateTokenCap,
     RuleKind::RunTokenCeiling,
     RuleKind::HookBudgetMs,
+    RuleKind::HostGuardPublishDeadlineMs,
+    RuleKind::HostGuardPublishReadBytes,
     RuleKind::StopGraceMs,
     RuleKind::LockRetryMs,
     RuleKind::LockStaleMs,
@@ -479,7 +485,7 @@ impl RuleKind {
             Self::CompileSeconds => "CompileSeconds",
             Self::GateLensCount => "GateLensCount", Self::PipePrecheckLensPerRound => "PipePrecheckLensPerRound",
             Self::GateTokenCap => "GateTokenCap", Self::RunTokenCeiling => "RunTokenCeiling",
-            Self::HookBudgetMs => "HookBudgetMs",
+            Self::HookBudgetMs => "HookBudgetMs", Self::HostGuardPublishDeadlineMs => "HostGuardPublishDeadlineMs", Self::HostGuardPublishReadBytes => "HostGuardPublishReadBytes",
             Self::StopGraceMs => "StopGraceMs",
             Self::LockRetryMs => "LockRetryMs",
             Self::LockStaleMs => "LockStaleMs",
@@ -542,7 +548,7 @@ impl RuleKind {
             | Self::CheckDeltaMs
             | Self::GateLensCount | Self::PipePrecheckLensPerRound
             | Self::GateTokenCap | Self::RunTokenCeiling
-            | Self::HookBudgetMs
+            | Self::HookBudgetMs | Self::HostGuardPublishDeadlineMs | Self::HostGuardPublishReadBytes
             | Self::StopGraceMs
             | Self::LockRetryMs
             | Self::LockStaleMs
