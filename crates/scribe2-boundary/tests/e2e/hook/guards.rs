@@ -792,6 +792,31 @@ fn publish_push_target_is_unresolved_without_a_remote_and_silent_with_a_bare_ori
     clean(&[&repo, &pushable, &origin, &state]);
 }
 
+/// 埋め込みの manifest で、UTF-8 でない author の名を持つ commit の push と、無い file を `--body-file` に名指す gh pr create は rc 2・
+/// stdout 0 byte・stderr 1 行（hit=unresolved:text・unresolved の経路）と記録 1 行ずつ、普通の author の commit の push は rc 0・記録
+/// なし（§22 行 n3）。
+#[test]
+fn publish_texts_unreadable_author_and_missing_body_file_are_unresolved() {
+    use vessel::hook::host_guard::publish::Reason;
+    let ((repo, origin), state) = (pushable_repo(), tmp());
+    assert_silent(&run_host_guard_in(&state, &bash_payload(&repo, "git push origin feat/x")), "普通の author の commit の push");
+    let (tree, parent) = (git(&repo, &["rev-parse", "HEAD^{tree}"]), git(&repo, &["rev-parse", "HEAD"]));
+    let object = [b"tree ".as_slice(), tree.as_bytes(), b"\nparent ", parent.as_bytes(), b"\nauthor bad\xffname <a@e.invalid> 0 +0000\ncommitter c <c@e.invalid> 0 +0000\n\nbad author\n"].concat();
+    let mut child = Command::new("git").arg("-C").arg(&*repo).args(["hash-object", "-t", "commit", "-w", "--literally", "--stdin"]).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().expect("git を起動できる");
+    child.stdin.take().expect("stdin を開ける").write_all(&object).expect("commit を書ける");
+    let made = child.wait_with_output().expect("終了を待てる");
+    git(&repo, &["update-ref", "refs/heads/main", String::from_utf8_lossy(&made.stdout).trim()]);
+    let want = format!("{NAME}: host-guard deny kind=publish hit=unresolved:text row=host_guard.publish ruling=user 2026-09-27T23:55Z — {}", Reason::Unresolved.parts().1);
+    for (at, (dir, command)) in [(&repo, "git push origin main"), (&repo, "gh pr create --title x --body-file missing.md")].into_iter().enumerate() {
+        let text = assert_host_guard_deny(&run_host_guard_in(&state, &bash_payload(dir, command)), command);
+        assert_eq!(text.trim_end(), want, "{command}");
+        let lines = host_guard_records(&state);
+        assert_eq!(lines.len(), at + 1, "記録 1 行ずつ: {lines:?}");
+        assert_eq!(what_of(&lines.last().cloned().unwrap_or_default()), "host-guard-deny publish", "{command}");
+    }
+    clean(&[&repo, &origin, &state]);
+}
+
 /// 埋め込みの manifest と群を宣言しない置き場（host.toml 無し）で、AC50 (e) の解けない形 4 つは rc 2・stdout 0 byte・stderr 1 行
 /// （hit=unresolved:<形の語>・unresolved の経路）と記録 1 行ずつ、区切りを引用した heredoc の本文の gh pr create は rc 0・記録なし
 /// （§17 行 k2・偽の gh / git の回数は数えない）。

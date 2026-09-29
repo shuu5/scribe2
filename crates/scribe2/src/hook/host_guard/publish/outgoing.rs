@@ -6,6 +6,7 @@
 //! [`probe::run`] で撃ち、締め切りの時刻は [`stage`] が 1 度だけ決める。字面の読み・gh の対象・可視性・走査は後続の行が足す。
 
 use super::probe::{budget, run, Bound, Ran, Stop, DEADLINE_ROW};
+use super::texts::{of_gh, of_push, Budget, Texts};
 use super::{Marked, Published, Reason, Sort};
 use crate::hook::host_guard::PUBLISH_ROW;
 use crate::rules::manifest::Manifest;
@@ -360,7 +361,8 @@ pub(super) struct Denial {
 }
 
 /// 段の入口（**1 関数**・設計 §22 行 n2 形 3）: 上限の 2 行を読み（読めない周は no-row:<行 id>）、締め切りの時刻を 1 度だけ決めて公開の
-/// segment を command 行の順に解く。解けない git push で unresolved:target、締め切りの越えで deadline。解けた周は `None`。
+/// segment を command 行の順に解き、字面を読む（[`walk`]）。解けない git push で unresolved:target、読めない字面で unresolved:text、
+/// 締め切りの越えで deadline。解けた周は `None`。
 pub(super) fn stage(found: &[Marked], manifest: &Manifest, program: &Path, ruling: &str) -> Option<Denial> {
     let (deadline, limit) = match budget(manifest) {
         Ok(read) => read,
@@ -369,18 +371,39 @@ pub(super) fn stage(found: &[Marked], manifest: &Manifest, program: &Path, rulin
             return Some(Denial { reason: Reason::NoRow, word: id, row: id, ruling: "-".to_owned(), route: Some(route) });
         }
     };
-    let ruling_of = |id: &str| manifest.get(id).map_or_else(|| "-".to_owned(), |row| row.ruling.clone());
+    let deadline_ruling = manifest.get(DEADLINE_ROW).map_or_else(|| "-".to_owned(), |row| row.ruling.clone());
     let bound = Bound { deadline: Instant::now() + Duration::from_millis(deadline), limit };
-    for seg in found.iter().filter_map(|seg| seg.read.as_ref()).filter(|seg| seg.sort == Sort::Git) {
-        match solve(seg, &seg.dir, program, bound) {
-            Ok(_) => {}
-            Err(Halt::Gap(gap)) => return Some(Denial { reason: Reason::Unresolved, word: gap.as_str(), row: PUBLISH_ROW, ruling: ruling.to_owned(), route: None }),
-            Err(Halt::Deadline) => {
-                return Some(Denial { reason: Reason::Deadline, word: DEADLINE_ROW, row: DEADLINE_ROW, ruling: ruling_of(DEADLINE_ROW), route: None });
-            }
-        }
+    walk(found, &Walk { program, bound, ruling, deadline_ruling }).err()
+}
+
+/// 段が 1 度だけ決めたもの（子を撃つ program・締め切りと読む上限・断りの裁定 id）。
+struct Walk<'a> {
+    /// git の program。
+    program: &'a Path,
+    /// 締め切りと読む上限。
+    bound: Bound,
+    /// publish の行の裁定 id。
+    ruling: &'a str,
+    /// 締め切りの行の裁定 id。
+    deadline_ruling: String,
+}
+
+/// 公開の segment を command 行の順に解いて字面を読む（設計 §22 行 n3 形 6）: git push は行き先の解きの後に字面を読み（解けない行き先の
+/// 周は log を撃たない）、gh は本文と本文の file を読む。字面は出ていく字面の合計を 1 つの計数で数え、segment ごとに本文の列を持つ。
+fn walk(found: &[Marked], plan: &Walk) -> Result<Vec<Texts>, Denial> {
+    let (bound, program, mut budget) = (plan.bound, plan.program, Budget { left: plan.bound.limit });
+    let mut all = Vec::new();
+    for seg in found.iter().filter_map(|seg| seg.read.as_ref()) {
+        let read = match seg.sort {
+            Sort::Git => solve(seg, &seg.dir, program, bound).and_then(|push| of_push(seg, &push, program, bound, &mut budget)),
+            Sort::Gh | Sort::Api => of_gh(seg, &mut budget),
+        };
+        all.push(read.map_err(|halt| match halt {
+            Halt::Gap(gap) => Denial { reason: Reason::Unresolved, word: gap.as_str(), row: PUBLISH_ROW, ruling: plan.ruling.to_owned(), route: None },
+            Halt::Deadline => Denial { reason: Reason::Deadline, word: DEADLINE_ROW, row: DEADLINE_ROW, ruling: plan.deadline_ruling.clone(), route: None },
+        })?);
     }
-    None
+    Ok(all)
 }
 
 #[cfg(test)]
@@ -485,6 +508,41 @@ mod tests {
         assert_eq!((feat.commits.len(), feat.refs.len(), feat.refs.first().and_then(|found| found.old.clone())), (0, 1, None), "新しい branch は server に在る commit だけ");
         assert_eq!(solved(&push(&["nowhere", "main"]), &work), Err(Halt::Gap(Gap::Target)), "無い remote は解けない");
         let _ = std::fs::remove_dir_all(work.parent().unwrap_or(&work));
+    }
+
+    /// 行 n3 (e) 段の入口は行き先の解きの後に字面を読む: 呼出しを file に数える偽の git で、解けない行き先の周は `log` を撃たず（unresolved:target）、
+    /// 解けた周は `log` を 1 回撃って commit の message を本文に持つ。
+    #[test]
+    fn publish_texts_stage_reads_the_text_only_after_the_target_resolves() {
+        use super::{walk, Denial, Walk};
+        use crate::hook::host_guard::publish::scan::Source;
+        use crate::hook::host_guard::publish::{Marked, Reason};
+        use std::os::unix::fs::PermissionsExt;
+        let work = place("texts-stage");
+        git(&work, &["commit", "-q", "--allow-empty", "-m", "one"]);
+        let root = work.parent().unwrap_or(&work).to_path_buf();
+        let calls = root.join("calls.log");
+        let fake = |name: &str, tail: &str| {
+            let path = root.join(name);
+            std::fs::write(&path, format!("#!/bin/sh\necho \"$@\" >> {}\n{tail}\n", calls.display())).unwrap_or_else(|why| panic!("偽の git を書ける: {why}"));
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap_or_else(|why| panic!("偽の git を実行可能にできる: {why}"));
+            path
+        };
+        let found = [Marked { read: Some(Published { dir: work.clone(), resolved: true, ..push(&["origin", "main"]) }), marks: Vec::new(), holes: Vec::new() }];
+        fn plan(program: &Path) -> Walk<'_> {
+            Walk { program, bound: Bound { deadline: Instant::now() + Duration::from_secs(20), limit: 1 << 20 }, ruling: "r", deadline_ruling: "d".to_owned() }
+        }
+        let seen = || std::fs::read_to_string(&calls).unwrap_or_default();
+        let denied = walk(&found, &plan(&fake("deny", "exit 1")));
+        let want = Denial { reason: Reason::Unresolved, word: "target", row: "host_guard.publish", ruling: "r".to_owned(), route: None };
+        assert_eq!(denied.err(), Some(want), "解けない行き先");
+        assert!(!seen().is_empty() && !seen().contains("log --no-walk"), "log を撃たない: {}", seen());
+        let _ = std::fs::remove_file(&calls);
+        let texts = walk(&found, &plan(&fake("wrap", "exec git \"$@\""))).unwrap_or_else(|why| panic!("解ける: {why:?}"));
+        assert_eq!(seen().lines().filter(|line| line.contains("log --no-walk=unsorted")).count(), 1, "log は 1 回: {}", seen());
+        let messages: Vec<&str> = texts.iter().flat_map(|found| found.bodies.iter()).filter(|body| body.source == Source::CommitMessage).map(|body| body.body.trim()).collect();
+        assert_eq!(messages, ["one"], "解けた周は字面を読む");
+        let _ = std::fs::remove_dir_all(root);
     }
 
     /// 行 n2 (d) 行き先は git が決める: pushurl を持つ remote・pushInsteadOf・語の無い push の remote（branch の pushRemote → remote.pushDefault

@@ -17,6 +17,7 @@ pub mod history;
 pub mod outgoing;
 pub mod probe;
 pub mod scan;
+pub mod texts;
 
 /// 識別子の形の要素の札。
 const FORM: &str = "form";
