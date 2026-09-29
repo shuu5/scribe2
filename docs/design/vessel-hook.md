@@ -803,7 +803,8 @@ xtask 側: `crates/xtask/src/genmanifest.rs` の `#[cfg(test)]` に、render の
 1. **置き場**: 行 n5 の `+` の file（publish の module の `pub` な子）。段の入口が可視性の段の後に呼ぶ。
 2. **材料**: 隣ごとの `Neighbor` は、名札 = dir の basename、名の列 = basename と導けた name（重複なし）、object・path・台帳の欄は空（行 n6 が埋める）。`Public` の名の列 = 対象の name と `PUBLIC` の anchor の name。`Phrases` = host の面の `publish_exclusions` の字句を宣言順に（裁定 id は渡さない）。`Elements` = `host_guard.publish` の値を `elements` で読んだもの。出ていく字面 = 行 n3 の本文の列（`Text` の借用）。
 3. **順**: 越えの印（出ていく字面か出ていく commit の列）が立った segment は、照合せずに hit oversize:host_guard.publish_read_bytes（row は読む上限の行・ruling はその行の裁定 id）で断る。そうでなければ `scan` を 1 回呼び、返りが在れば hit identifier:<件数>:<先頭 5 件>（row `host_guard.publish`・その行の裁定 id・識別子の経路）で断る。無ければ通す。segment の順に最初の断りで止まる。
-4. **行 n5 は足さない**: object id・tracked path・台帳 id の材料（行 n6）。
+4. **段への繋ぎ**: 段の入口は、segment ごとの読み（`Found`）に対象の owner/name の列（git は push の URL ごと・gh は 1 つ・導けないものは空）を持たせて走査の段へ渡す。段の断りの hit の語は identifier の件数つきの字面を持つので `Denial` の語は `String`。
+5. **行 n5 は足さない**: object id・tracked path・台帳 id の材料（行 n6）。
 
 ### 形（行 n6・残り 3 形の材料・行 n6 の done と 1:1）
 1. **候補**: 隣が在る segment ごとに `candidates` を 1 回呼び、候補の在る形だけを問う。

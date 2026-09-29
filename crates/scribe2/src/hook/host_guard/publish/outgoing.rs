@@ -4,8 +4,9 @@
 //! と `ls-remote` と `cat-file` と `rev-list` で答えさせる（[`solve`]）。段の入口（[`stage`]）は公開の segment を command 行の順に
 //! 解き、解けない周を unresolved:target・締め切りの越えを deadline で断る部品を [`Denial`] で返す。子は全て
 //! [`probe::run`] で撃ち、締め切りの時刻は [`stage`] が 1 度だけ決める。字面の読みは行 n3、gh の対象と可視性の 1 回の問い（行 n4・
-//! [`visibility`]）は段の最後に足され、走査は後続の行が足す。
+//! [`visibility`]）の後に、走査の段（行 n5・[`check`]）が名の当たりと読む上限の越えを断る。
 
+use super::material::check;
 use super::probe::{budget, run, Bound, Ran, Stop, DEADLINE_ROW};
 use super::texts::{of_gh, of_push, Budget, Texts};
 use super::visibility::{gh_target, repo_of, sight, Sighted};
@@ -352,8 +353,8 @@ pub fn solve(found: &Published, dir: &Path, program: &Path, bound: Bound) -> Res
 pub(super) struct Denial {
     /// 理由。
     pub reason: Reason,
-    /// hit の理由の後ろの語。
-    pub word: &'static str,
+    /// hit の理由の後ろの語（identifier は `<件数>:<先頭 5 件>`）。
+    pub word: String,
     /// 行 id。
     pub row: &'static str,
     /// 裁定 id。
@@ -370,12 +371,15 @@ pub(super) fn stage(found: &[Marked], manifest: &Manifest, scene: &Scene, ruling
         Ok(read) => read,
         Err(id) => {
             let route = if id == DEADLINE_ROW { NO_DEADLINE } else { NO_READ };
-            return Some(Denial { reason: Reason::NoRow, word: id, row: id, ruling: "-".to_owned(), route: Some(route) });
+            return Some(Denial { reason: Reason::NoRow, word: id.to_owned(), row: id, ruling: "-".to_owned(), route: Some(route) });
         }
     };
     let deadline_ruling = manifest.get(DEADLINE_ROW).map_or_else(|| "-".to_owned(), |row| row.ruling.clone());
     let bound = Bound { deadline: Instant::now() + Duration::from_millis(deadline), limit };
-    walk(found, &Walk { scene, bound, ruling, deadline_ruling }).err()
+    match walk(found, &Walk { scene, bound, ruling, deadline_ruling }) {
+        Ok(read) => check(&read, manifest, scene.host, ruling),
+        Err(stop) => Some(stop),
+    }
 }
 
 /// 段が 1 度だけ決めたもの（判定の場〔git と gh の program・host の面〕・締め切りと読む上限・断りの裁定 id）。
@@ -397,13 +401,15 @@ pub struct Found {
     pub texts: Texts,
     /// 可視性の読み。
     pub sighted: Sighted,
+    /// 対象の owner/name（git は push の URL ごと・gh は 1 つ・導けないものは `None`）。
+    pub own: Vec<Option<String>>,
 }
 
 /// 解きの止まりを段の断りにする。
 fn denial(halt: Halt, plan: &Walk) -> Denial {
     match halt {
-        Halt::Gap(gap) => Denial { reason: Reason::Unresolved, word: gap.as_str(), row: PUBLISH_ROW, ruling: plan.ruling.to_owned(), route: None },
-        Halt::Deadline => Denial { reason: Reason::Deadline, word: DEADLINE_ROW, row: DEADLINE_ROW, ruling: plan.deadline_ruling.clone(), route: None },
+        Halt::Gap(gap) => Denial { reason: Reason::Unresolved, word: gap.as_str().to_owned(), row: PUBLISH_ROW, ruling: plan.ruling.to_owned(), route: None },
+        Halt::Deadline => Denial { reason: Reason::Deadline, word: DEADLINE_ROW.to_owned(), row: DEADLINE_ROW, ruling: plan.deadline_ruling.clone(), route: None },
     }
 }
 
@@ -430,7 +436,7 @@ fn walk(found: &[Marked], plan: &Walk) -> Result<Vec<Found>, Denial> {
         targets.push(target);
     }
     let sighted = sight(&targets, plan.scene, plan.bound).map_err(|halt| denial(halt, plan))?;
-    Ok(texts.into_iter().zip(sighted).map(|(texts, sighted)| Found { texts, sighted }).collect())
+    Ok(texts.into_iter().zip(sighted).zip(targets).map(|((texts, sighted), own)| Found { texts, sighted, own }).collect())
 }
 
 #[cfg(test)]
@@ -554,7 +560,7 @@ mod tests {
         let found = [Marked { read: Some(Published { dir: work.clone(), resolved: true, ..push(&["origin", "main"]) }), marks: Vec::new(), holes: Vec::new() }];
         let seen = || std::fs::read_to_string(&calls).unwrap_or_default();
         let denied = walk(&found, &plan(&scene(&work, &deny, Path::new("gh"), &Manifest::default())));
-        let want = Denial { reason: Reason::Unresolved, word: "target", row: "host_guard.publish", ruling: "r".to_owned(), route: None };
+        let want = Denial { reason: Reason::Unresolved, word: "target".to_owned(), row: "host_guard.publish", ruling: "r".to_owned(), route: None };
         assert_eq!(denied.err(), Some(want), "解けない行き先");
         assert!(!seen().is_empty() && !seen().contains("log --no-walk"), "log を撃たない: {}", seen());
         let _ = std::fs::remove_file(&calls);
@@ -630,6 +636,41 @@ mod tests {
         assert_eq!((sighted(&face(&[&mine]), answer), count()), (vec![Sighted::default()], 0), "anchor が対象だけ");
         let private = r#"{"data":{"r0":{"visibility":"PRIVATE"},"r1":{"visibility":"PRIVATE"}}}"#;
         assert_eq!((sighted(&face(&[&mine, &other]), private), count()), (vec![Sighted { private: true, ..Sighted::default() }], 1), "対象が private");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// 行 n5 (c) 段の入口は可視性の後に走査を呼ぶ: github.com の origin への push（偽の ssh が tmp の bare へ届ける）で、隣の anchor（basename
+    /// `proj-alpha`・acme/alpha）の name を message に持つ commit は identifier の断り（`<件数>:<先頭 5 件>`・row は publish の行・裁定 id は渡した id・
+    /// 経路の差し替えなし）、名を持たない commit は通す。
+    #[test]
+    fn publish_scan_stage_denies_the_neighbor_name_after_the_visibility_step() {
+        use super::stage;
+        use crate::hook::host_guard::publish::{Marked, Reason};
+        use crate::rules::manifest::HostManifest;
+        let work = place("scan-stage");
+        git(&work, &["commit", "-q", "--allow-empty", "-m", "see alpha"]);
+        let root = work.parent().unwrap_or(&work).to_path_buf();
+        let serve = format!("for last; do :; done\nservice=${{last%% *}}\nexec git \"${{service#git-}}\" {}", root.join("origin.git").display());
+        let ssh = script(&root, "ssh", &root.join("ssh.log"), &serve);
+        git(&work, &["config", "remote.origin.url", "git@github.com:acme/pub.git"]);
+        git(&work, &["config", "core.sshCommand", &ssh.display().to_string()]);
+        let anchor = root.join("proj-alpha");
+        git(&root, &["init", "-q", &anchor.display().to_string()]);
+        git(&anchor, &["config", "remote.origin.url", "git@github.com:acme/alpha.git"]);
+        std::fs::write(root.join("host.toml"), format!("schema = 1\n\n[[account]]\nlabel = \"x\"\n\n[[account-group]]\nname = \"Tier1\"\nanchors = [\"{}\"]\naccounts = [\"x\"]\n", anchor.display()))
+            .unwrap_or_else(|why| panic!("面を書ける: {why}"));
+        let HostManifest::Present(face) = HostManifest::read(&root.join("host.toml")) else { panic!("面を読める") };
+        let row = |id: &str, kind: &str, value: &str| format!("\n[[rule]]\nid = \"{id}\"\nkind = \"{kind}\"\nvalue = {value}\nenabled = true\nruling = \"r\"\nruled_at = \"d\"\n");
+        let text = row("host_guard.publish", "HostGuardPublish", "[\"form repo-name\"]") + &row("host_guard.publish_deadline_ms", "HostGuardPublishDeadlineMs", "6000");
+        let rules = Manifest::parse(&format!("schema = 1\n{text}{}", row("host_guard.publish_read_bytes", "HostGuardPublishReadBytes", "1048576")))
+            .unwrap_or_else(|errors| panic!("manifest を読める: {errors:?}"));
+        let gh = script(&root, "gh", &root.join("gh.log"), "echo '{\"data\":{\"r0\":{\"visibility\":\"PUBLIC\"},\"r1\":{\"visibility\":\"PRIVATE\"}}}'");
+        let found = [Marked { read: Some(Published { dir: work.clone(), resolved: true, ..push(&["origin", "main"]) }), marks: Vec::new(), holes: Vec::new() }];
+        let denied = stage(&found, &rules, &scene(&work, Path::new("git"), &gh, &face), "rr").unwrap_or_else(|| panic!("隣の名は断る"));
+        let got = (denied.reason, denied.word.as_str(), denied.row, denied.ruling.as_str(), denied.route);
+        assert_eq!(got, (Reason::Identifier, "1:repo-name=alpha@proj-alpha", "host_guard.publish", "rr", None));
+        git(&work, &["commit", "-q", "--amend", "--allow-empty", "-m", "see nothing"]);
+        assert_eq!(stage(&found, &rules, &scene(&work, Path::new("git"), &gh, &face), "rr"), None, "名を持たない commit は通す");
         let _ = std::fs::remove_dir_all(root);
     }
 

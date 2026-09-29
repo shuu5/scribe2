@@ -980,6 +980,131 @@ fn publish_visibility_a_slow_gh_is_stopped_by_the_deadline_within_two_and_a_half
     clean(&[&repo, &bare, &state, &open]);
 }
 
+/// 偽の gh の tail: `repo view` は acme/pub、`api graphql` は問いの alias ごとに、名が pub と open-mate の repo は PUBLIC・他は PRIVATE と答える。
+const GH_BY_NAME: &str = r#"case "$1 $2" in
+"repo view") echo '{"nameWithOwner":"acme/pub","url":"https://github.com/acme/pub"}';;
+*) echo "$*" | grep -o 'r[0-9]*:repository([^)]*)' | { printf '{"data":{'; sep=; while read -r line; do case "$line" in *'name:"pub"'*|*'name:"open-mate"'*) seen=PUBLIC;; *) seen=PRIVATE;; esac; printf '%s"%s":{"visibility":"%s"}' "$sep" "${line%%:*}" "$seen"; sep=,; done; echo '}}'; };;
+esac"#;
+
+/// `nest` の下の anchor（basename が `name`・origin が github.com の acme/<name>）。
+#[expect(clippy::expect_used, reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く")]
+fn named_anchor(nest: &Path, name: &str) -> PathBuf {
+    let dir = nest.join(name);
+    fs::create_dir_all(&dir).expect("anchor の dir を作れる");
+    git(&dir, &["init", "-q"]);
+    git(&dir, &["remote", "add", "origin", &format!("git@github.com:acme/{name}.git")]);
+    dir
+}
+
+/// main から枝を切り、出ていく字面の 1 箇所（`place`: message / author / committer / patch〔追加行〕/ path / tag / ref）に `text` を持つ 1 commit を足し、
+/// その push の command を返す（`at` は枝の名の通し番号）。
+#[expect(clippy::expect_used, reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く")]
+fn leak_push(repo: &Path, (at, place, text): (usize, &str, &str)) -> String {
+    let branch = if place == "ref" { text.to_owned() } else { format!("leak-{at}") };
+    git(repo, &["switch", "-q", "-C", &branch, "main"]);
+    let (file, body) = match place {
+        "path" => (format!("{text}.txt"), "x\n".to_owned()),
+        "patch" => ("note.txt".to_owned(), format!("{text}\n")),
+        _ => ("plain.txt".to_owned(), "x\n".to_owned()),
+    };
+    fs::write(repo.join(&file), body).expect("file を書ける");
+    git(repo, &["add", "--", &file]);
+    let message = if place == "message" { text } else { "x" };
+    let author = if place == "author" { format!("{text} <a@e.invalid>") } else { "e2e <e2e@example.invalid>".to_owned() };
+    let committer = format!("user.name={}", if place == "committer" { text } else { "e2e" });
+    git(repo, &["-c", &committer, "commit", "-q", "-m", message, "--author", &author]);
+    if place == "tag" {
+        git(repo, &["tag", "-a", &format!("v{at}"), "-m", text]);
+        return format!("git push origin v{at}");
+    }
+    format!("git push origin {branch}")
+}
+
+/// AC50 の隣 2 つ（nbr-alpha・nbr-beta は偽の gh が private と返す）・公開先の repo 自身・public の anchor（open-mate）・除外の行 1 つ（`nbr-alpha guide`）の
+/// 面で、隣の名を出ていく字面の 7 箇所と名の 4 形と除外の字句の順を入れ替えた字句と gh の本文の 2 本と可視性を読めない周と GitHub の外の remote と url / pushurl の
+/// 割れた remote に持つ 17 本は rc 2（stderr 1 行・hit=identifier:<件数>:<先頭 5 件>・row は publish の行・識別子の経路）、読む上限を越える 1 本は oversize で
+/// rc 2、どれも記録 1 行ずつ。名を持たない push・群の無い host の push（gh 0 回）・private の対象・可視性を読めない周・public の anchor の名・除外の字句の中の名・
+/// 名を語の中に持つ push の 10 本は rc 0・記録なし（§22 行 n5・AC50 (a)(b)(c)(f)(g)）。
+#[test]
+fn publish_scan_neighbor_names_are_denied_in_every_place_and_the_rest_pass() {
+    use vessel::hook::host_guard::publish::Reason;
+    let ((repo, bare), (state, nest)) = (github_repo(), (tmp(), tmp()));
+    let [alpha, beta, mate] = ["nbr-alpha", "nbr-beta", "open-mate"].map(|name| named_anchor(&nest, name));
+    put_anchors(&state, &[&repo, &alpha, &beta, &mate]);
+    let face = state.join("host.toml");
+    let body = fs::read_to_string(&face).expect("面を読める") + "\n[[publish-exclusion]]\nphrase = \"nbr-alpha guide\"\nruling = \"user 2026-09-29T05:46Z\"\n";
+    fs::write(&face, body).expect("除外の行を足せる");
+    let (named, unread) = (Fakes::new(GH_BY_NAME, &bare), Fakes::new("echo '{}'", &bare));
+    let deny = |out: &Output, hit: &str, word: &str| {
+        let want = format!("{NAME}: host-guard deny kind=publish hit={hit}:{word} row=host_guard.publish ruling=user 2026-09-27T23:55Z — {}", Reason::Identifier.parts().1);
+        assert_eq!(assert_host_guard_deny(out, word).trim_end(), want, "{word}");
+    };
+    let pushes = [
+        ("message", "see nbr-alpha", "nbr-alpha"), ("author", "nbr-alpha", "nbr-alpha"), ("committer", "nbr-alpha", "nbr-alpha"), ("patch", "see nbr-alpha", "nbr-alpha"),
+        ("path", "nbr-alpha", "nbr-alpha"), ("tag", "nbr-alpha", "nbr-alpha"), ("ref", "nbr-alpha-fix", "nbr-alpha"), ("message", "nbr-alpha-next", "nbr-alpha"),
+        ("message", "NBR-ALPHA", "NBR-ALPHA"), ("message", "acme/nbr-alpha", "nbr-alpha"), ("message", "nbr.alpha", "nbr.alpha"), ("message", "guide nbr-alpha", "nbr-alpha"),
+    ];
+    for (at, (place, text, word)) in pushes.into_iter().enumerate() {
+        let command = leak_push(&repo, (at, place, text));
+        deny(&named.run(&state, &[], &bash_payload(&repo, &command)), "identifier", &format!("1:repo-name={word}@nbr-alpha"));
+    }
+    let note = nest.join("note.md");
+    fs::write(&note, "see nbr-alpha\n").expect("本文の file を書ける");
+    for command in ["gh pr comment 1 --body \"see nbr-alpha\"".to_owned(), format!("gh pr comment 1 --body-file {}", note.display())] {
+        deny(&named.run(&state, &[], &bash_payload(&repo, &command)), "identifier", "1:repo-name=nbr-alpha@nbr-alpha");
+    }
+    let leak = |dir: &Path, at: usize| bash_payload(dir, &leak_push(dir, (at, "message", "see nbr-alpha")));
+    deny(&unread.run(&state, &[], &leak(&repo, 20)), "identifier", "1:repo-name=nbr-alpha@nbr-alpha");
+    let (outside, origin) = pushable_repo();
+    deny(&named.run(&state, &[], &leak(&outside, 21)), "identifier", "1:repo-name=nbr-alpha@nbr-alpha");
+    git(&repo, &["remote", "set-url", "origin", "git@github.com:acme/priv.git"]);
+    git(&repo, &["config", "remote.origin.pushurl", "git@github.com:acme/pub.git"]);
+    deny(&named.run(&state, &[], &leak(&repo, 22)), "identifier", "1:repo-name=nbr-alpha@nbr-alpha");
+    git(&repo, &["config", "--unset", "remote.origin.pushurl"]);
+    git(&repo, &["remote", "set-url", "origin", "git@github.com:acme/pub.git"]);
+    assert_eq!(host_guard_records(&state).len(), 17, "断りは記録 1 行ずつ");
+    let rules = publish_rules(&state, true, 6000);
+    fs::write(&rules, fs::read_to_string(&rules).expect("rules を読める").replace("8388608", "3000")).expect("読む上限を縮められる");
+    let big = leak_push(&repo, (30, "patch", &"y".repeat(50_000)));
+    let text = assert_host_guard_deny(&named.run(&state, &["--rules", &rules], &bash_payload(&repo, &big)), "上限越え");
+    let want = format!("{NAME}: host-guard deny kind=publish hit=oversize:host_guard.publish_read_bytes row=host_guard.publish_read_bytes ruling=r — {}", Reason::Oversize.parts().1);
+    assert_eq!(text.trim_end(), want, "読む上限を越える字面は照合せず断る");
+    assert_eq!(host_guard_records(&state).len(), 18, "上限越えも記録 1 行");
+    let private = Fakes::new(&GH_BY_NAME.replace("*'name:\"pub\"'*|", ""), &bare);
+    let (bare_state, quiet) = (tmp(), Fakes::new(GH_BY_NAME, &bare));
+    let passes = [
+        (&named, &state, "nothing to see"), (&quiet, &bare_state, "see nbr-alpha"), (&private, &state, "see nbr-alpha"), (&unread, &state, "nothing to see"),
+        (&unread, &state, "about pub"), (&named, &state, "with open-mate"), (&named, &state, "the nbr-alpha guide"), (&named, &state, "THE NBR-ALPHA GUIDE"),
+        (&named, &state, "nbr-alphabet"), (&named, &state, "nbr-alpha_x"),
+    ];
+    for (at, (fakes, dir, text)) in passes.into_iter().enumerate() {
+        let command = leak_push(&repo, (40 + at, "message", text));
+        assert_silent(&fakes.run(dir, &[], &bash_payload(&repo, &command)), text);
+    }
+    assert!(quiet.calls("gh").is_empty(), "群の無い host は gh を撃たない: {:?}", quiet.calls("gh"));
+    assert_eq!(host_guard_records(&state).len(), 18, "通す周は記録を残さない");
+    clean(&[&repo, &bare, &state, &nest, &outside, &origin, &bare_state]);
+}
+
+/// park の区画（Tier9）だけが隣の private repo を anchor に持つ面で、その repo の名を持つ git push は rc 2（hit=identifier:1:repo-name=nbr-alpha@nbr-alpha）で断られ、
+/// 名を持たない push は rc 0（§22 行 n5・AC63 (e)）。
+#[test]
+fn publish_scan_a_neighbor_only_in_the_park_lot_is_named_by_its_push() {
+    use vessel::hook::host_guard::publish::Reason;
+    let ((repo, bare), (state, nest)) = (github_repo(), (tmp(), tmp()));
+    let lot = named_anchor(&nest, "nbr-alpha");
+    let face = format!("schema = 1\n\n[[account]]\nlabel = \"a1\"\n\n[[account-group]]\nname = \"Tier9\"\nanchors = [\"{}\"]\naccounts = [\"a1\"]\n", lot.display());
+    fs::write(state.join("host.toml"), face).expect("host の面を書ける");
+    let fakes = Fakes::new(GH_BY_NAME, &bare);
+    let payload = |at: usize, text: &str| bash_payload(&repo, &leak_push(&repo, (at, "message", text)));
+    let text = assert_host_guard_deny(&fakes.run(&state, &[], &payload(0, "see nbr-alpha")), "park の区画の隣");
+    let want = format!("{NAME}: host-guard deny kind=publish hit=identifier:1:repo-name=nbr-alpha@nbr-alpha row=host_guard.publish ruling=user 2026-09-27T23:55Z — {}", Reason::Identifier.parts().1);
+    assert_eq!(text.trim_end(), want);
+    assert_silent(&fakes.run(&state, &[], &payload(1, "nothing to see")), "名を持たない push");
+    assert_eq!(host_guard_records(&state).len(), 1, "断りだけが記録 1 行");
+    clean(&[&repo, &bare, &state, &nest]);
+}
+
 /// 埋め込みの manifest と群を宣言しない置き場（host.toml 無し）で、AC50 (e) の解けない形 4 つは rc 2・stdout 0 byte・stderr 1 行
 /// （hit=unresolved:<形の語>・unresolved の経路）と記録 1 行ずつ、区切りを引用した heredoc の本文の gh pr create は rc 0・記録なし
 /// （§17 行 k2・偽の gh / git の回数は数えない）。

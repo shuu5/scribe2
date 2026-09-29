@@ -4,7 +4,7 @@
 //! 読めない segment の印の読み（[`marked`]・§17 行 k）と、読めた segment の解けない形（[`Hole`]・§17 行 k2・行 k3 が全ての
 //! 語へ広げる）と、判定
 //! （[`judge`]: 行が無い・列でない周は no-row、enabled の行で印か形を持つ segment は unresolved）を持つ。子 process を撃つのは
-//! 段の入口（[`outgoing`]・§22 行 n2）だけで、照合は後続の行が足す。
+//! 段の入口（[`outgoing`]・§22 行 n2）だけで、照合の核を呼んで名の当たりと読む上限の越えを断るのは走査の段（[`material`]・行 n5）。
 
 use super::{root_of, verb_of, Kind, Refusal, Subject, PUBLISH_ROW, UNRESOLVED};
 use crate::hook::ledger_guard::{is_assignment, segments};
@@ -14,6 +14,7 @@ use crate::rules::RuleValue;
 use std::path::{Path, PathBuf};
 
 pub mod history;
+pub mod material;
 pub mod outgoing;
 pub mod probe;
 pub mod scan;
@@ -865,7 +866,7 @@ fn target_of(word: &str) -> String {
 /// 判定（設計 §17 形 3）: 公開の segment（[`marked`]）が 0 の周は行を読まずに通し、行が無い・列でない周は no-row、
 /// `enabled = false` の周は通し、全履歴の段は segment の順に [`history::kind_of`] の先に当たった 1 つで断り（前の segment の印や形より
 /// 先・§18）、解けない段は segment の順に各 segment の印 → 形（どちらも宣言順）の先に当たった 1 つで断る。印も形も無ければ
-/// 段の入口（[`outgoing::stage`]・§22 行 n2）が上限の 2 行を読み git push の行き先を git に解かせる（走査の断りは後続の行）。
+/// 段の入口（[`outgoing::stage`]・§22 行 n2）が上限の 2 行を読み git push の行き先を git に解かせ、走査の段（行 n5）が名の当たりと読む上限の越えを断る。
 pub(super) fn judge(kind: Kind, subject: &Subject, manifest: &Manifest) -> Option<Refusal> {
     let cwd = subject.scene.cwd;
     let root = root_of(cwd).unwrap_or_else(|| cwd.to_path_buf());
@@ -887,7 +888,7 @@ pub(super) fn judge(kind: Kind, subject: &Subject, manifest: &Manifest) -> Optio
         return Some(refused(kind, Reason::Unresolved, Some(word), PUBLISH_ROW, row.ruling.clone()));
     }
     let stop = outgoing::stage(&found, manifest, subject.scene, &row.ruling)?;
-    let refusal = refused(kind, stop.reason, Some(stop.word), stop.row, stop.ruling);
+    let refusal = refused(kind, stop.reason, Some(&stop.word), stop.row, stop.ruling);
     Some(Refusal { route: stop.route.unwrap_or(refusal.route), ..refusal })
 }
 
