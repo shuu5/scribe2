@@ -21,7 +21,7 @@
 ## 2. 費用の原則（設計の向き）
 
 - **memory だけが硬い資源**。CPU は溢れても遅くなるだけなので上限を持たず、重み（席 > 便）だけを付ける。memory は溢れると kernel が process を殺すので、合計を受付で守り、個々を封じ込めで守る。
-- **硬い資源は 3 つ**（[ADR-0050](../../design-intent/decisions/ADR-0050-cores-and-scope-creation-are-hard-resources.html) が上の 1 行を置き換えた・2026-09-20 の事故 `s2-07l.504`）: memory に加えて CPU の core と、器が host に頼む scope の作成も、枯渇すれば host を止める。core は受付の枠（§31）と器の健康の遮断器（§32）が守り、scope の作成の rate は歯の道具箱（§30）が下げる。封じ込めの箱に CPU の上限を付けない形と重みだけを付ける形は不変である。
+- **硬い資源は 3 つ**（[ADR-0050](../../design-intent/decisions/ADR-0050-cores-and-scope-creation-are-hard-resources.html) が上の 1 行を置き換えた・2026-09-20 の事故 `s2-07l.504`）: memory に加えて CPU の core と、器が host に頼む scope の作成も、枯渇すれば host を止める。core は受付の枠（§31）と器の健康の遮断器（§32）が守り、scope の作成の rate は歯の道具箱（§30）が下げる。封じ込めの箱に CPU の上限を付けない形と重みだけを付ける形は不変である（この 1 文は [ADR-0095](../../design-intent/decisions/ADR-0095-cpu-width-of-boxes-is-one-admission-job.html) が置き換えた: 箱の CPU の上限は受付が配った幅か job 1 つの値段・§45）。
 - **宣言 → 測定 → 実効**（C10）: 並列度の上限（rules 行）は宣言値、host の空き memory と core 数は測定値、実際に渡す jobs は両者から導く実効値。宣言値をそのまま渡さない。
 - **止めない、縮退する**: 資源が足りない周は便を断らず、並列度を 1 まで下げて進む（1 は常に許される＝従来と同じ費用）。封じ込めが使えない host でも便は流れる（並列度 1）。
 - **同じ木を 2 度測らない**: 木の hash が一致する周の検出線（C12.4）は撃ち直さない。deny する行（nextest / clippy / check / deny）は撃ち直す（gate は run の worktree〔untracked を含む〕で撃ち、main 実測は tracked だけの木で撃つ＝環境が違う）。
@@ -65,13 +65,13 @@ manifest に行が載るまでは ADR-0021 の予定行（C14.2 の相互参照�
 - **`Completion::SlotFree { slots_dir, want, job_mb, reserve_mb, cap }`**（§3.2 の分担の宿題の決着）。variant はデータだけを運び、meminfo と札の読み手は wait の内側（`admission::has_room`）が持つ。待ちの間の観測は lock を取らず札も消さない（回収と記録は lock の内側の受付だけ）。`pid()` は pid を見張らない本 variant で 0 を返す（`/proc/0` は無い）。
 - **`slot=` の値**: `granted` / `degraded` / `unmeasured`、回収が在った周は `reclaimed:<n>`（枠を配れた周）か `<degraded|unmeasured>,reclaimed:<n>`（縮退と重なった周）。測れなかった理由は閉じた enum で `slot_why=<slots-dir|lock|meminfo|cores>` に残す（`cores` は行 w・§31.1）。meminfo が読めない周は札を回収しない（回収の数を残す前に縮退するため）。縮退（`degraded`）の周も 1 枠の札を置く。
 - **包めない周（`Unconfined`）は 1 枠だけを取りにいく**（札は置く）。箱の無い行に並列度を上げると、溢れたときに殺されるのが席の側になる。
-- **受付を通るのは gate の共通 verify の `{jobs}` 行だけ**。land の main 実測（`run_checks`・land.rs）は受付を持たず `jobs = 1` のまま撃つ（gate.rs `UNADMITTED_JOBS`・§3.3 の errata の `EFFECTIVE_JOBS` の改名）。main 実測の検出線は (c) で撃たなくなる。
+- **受付を通るのは gate の共通 verify の `{jobs}` 行だけ**。land の main 実測（`run_checks`・land.rs）は受付を持たず `jobs = 1` のまま撃つ（gate.rs `UNADMITTED_JOBS`・§3.3 の errata の `EFFECTIVE_JOBS` の改名）。main 実測の検出線は (c) で撃たなくなる。（受付を通る行は §45 形 2 で gate の共通 verify・検出線・契約の verify の全部の行に広がる・ADR-0095）
 - **受付の 4 行（`gate.mutants_jobs` / `gate.job_memory_mb` / `host.reserve_memory_mb` / `gate.slot_wait_s`）は `--rules` の manifest から読む**（pipe/cli.rs `limits_of`）。封じ込めの 3 線（§4.4・埋め込みだけ）と読み面が違うのは、待ちの上限を振る歯の fixture が gate へ届く口がここだけだからである。
 
 ### 3.3 実効 jobs の渡し方
 
 - 宣言 file の共通 verify と検出線の穴を `{base}` と **`{jobs}`** の 2 つにする（declaration.rs `Holes::Base` → 穴の列挙を「宣言の行に置ける穴」の閉じた集合にする・ADR-0010 §2.1 の部分 supersede）。scribe2 自身の宣言は `cargo xtask mutants-diff --base {base} --jobs {jobs}`。
-- gate は受付で得た jobs を `{jobs}` に置換して撃つ。`{jobs}` を持たない行は受付を通らない（枠を取らない＝mutants を持たない consumer は費用を払わない）。
+- gate は受付で得た jobs を `{jobs}` に置換して撃つ。`{jobs}` を持たない行は受付を通らない（枠を取らない＝mutants を持たない consumer は費用を払わない）。（§45 形 2 が置き換える: gate の `{jobs}` を持たない行も job 1 つの札を取る・ADR-0095）
 - xtask `mutants-diff` は `--jobs N` を cargo-mutants の `--jobs` にそのまま渡す（値は持たない）。
 - env で渡さない（C2.2 の精神・折り返しの裏口を作らない）。
 - errata（s2-07l.157 の現物）: 置ける穴は declaration.rs の**閉じた集合**（`BASE_HOLES` = `{base}` `{jobs}`・行 w で `{threads}` が 3 つ目に加わった・§31.1）1 本が持ち、`unfit` の判定と gate の置換が同じ列を読む（片側だけに足すと、intake を通った行が穴のまま撃たれる）。受付が入るまでの実効 jobs は gate.rs の `EFFECTIVE_JOBS = 1`（§9 (a)）で、xtask 側の既定も 1（`--jobs` 無し・読めない字面・0 は 1 へ落とす＝道具に「速い既定」を持たせない）。
