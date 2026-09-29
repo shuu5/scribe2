@@ -1,0 +1,91 @@
+# 発端の trailer の見本（設計 docs/design/pipeline.md §60 形 3・vessel-hook.md §21 形 2）。
+# 読み手は 2 つ（xtask の main-provenance・core の merge の門）で、見本はこの 1 file だけ。
+# 形: 行頭 # は注、行 === が塊の区切り、塊の 1 行目が期待の語（source / run / none）、
+# 2 行目から区切りの前までが本文（件名は含めない）。key は本 repo の字。
+# 行末の CR・半角空白・tab を持つ本文（§60 の塊 4・18 と CR LF の行）は、file の改行と整形の道具
+# （行末を落とす）に依らないよう置かず、両方の歯が本文を組んで測る。
+===
+source
+Scribe2-Source: s2-07l.739
+===
+source
+Scribe2-Source: s2-07l.739 s2-07l.722
+===
+source
+要旨の段落。
+
+Co-Authored-By: someone <someone@example.com>
+Scribe2-Source: s2-a.1
+===
+source
+Scribe2-Source: s2-a.1
+Scribe2-Source: s2-b.2
+===
+source
+Scribe2-Source: s2-a.1 s2-b.2 s2-c.3
+===
+run
+run: s2-07l.351-20260922T061245Z
+Scribe2-Contract: docs/design/pipeline.md#b
+===
+run
+run: s2-07l.351-20260922T061245Z
+Scribe2-Source: s2-a.1
+===
+none
+===
+none
+Scribe2-Source:
+===
+none
+Scribe2-Source: TODO
+===
+none
+Scribe2-Source: s2-a.1  s2-b.2
+===
+none
+Scribe2-Source: s2-a.1,s2-b.2
+===
+none
+Scribe2-Source:s2-a.1
+===
+none
+  Scribe2-Source: s2-a.1
+===
+none
+scribe2-source: s2-a.1
+===
+none
+Scribe2-Source: s2-a.1
+Scribe2-Source: s2-07l..3
+===
+none
+run: s2-07l.351-20260922T061245Z
+Scribe2-Source: TODO
+===
+none
+Scribe2-Source: S2-A.1
+===
+none
+Scribe2-Source:	s2-a.1
+===
+none
+Scribe2-Source: s2-a.1	s2-b.2
+===
+none
+Scribe2-Source: s2-a.1、
+===
+none
+Scribe2-Source: 12345
+===
+none
+Scribe2-Source: s2-a.1 TODO
+===
+none
+要旨の途中に Scribe2-Source: s2-a.1 の字を持つ行
+===
+none
+run: TODO
+===
+none
+Scribe2-Source-Extra: s2-a.1

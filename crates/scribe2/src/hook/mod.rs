@@ -12,6 +12,7 @@
 //! （[`store::append_line`]）を通す。
 
 pub mod anchor_guard;
+pub mod choice_question;
 pub mod command;
 pub mod graph_guard;
 pub mod group;
@@ -19,6 +20,7 @@ pub mod guard;
 pub mod host_guard;
 pub mod ledger_guard;
 pub mod live_row;
+pub mod merge_gate;
 pub mod permission;
 pub mod precompact;
 pub mod role_guard;
@@ -35,10 +37,12 @@ use crate::seat::ledger::LedgerError;
 use crate::seat::recent;
 use crate::seat::state::Event;
 use anchor_guard::AnchorDecision;
+use choice_question::ChoiceQuestionDecision;
 use command::CommandDecision;
 use guard::Decision;
 use ledger_guard::LedgerDecision;
 use live_row::LiveRowDecision;
+use merge_gate::MergeDecision;
 use permission::PermissionDecision;
 use role_guard::{Operation, RoleDecision, Seat};
 use std::path::{Path, PathBuf};
@@ -643,11 +647,15 @@ fn brief_refused(reason: &str) -> String {
 /// seat guard は cwd の git dir が要る（cwd が repo の外なら測れない＝従来どおり通す側）が、command guard と
 /// role guard は anchor から解くので cwd に依らず評価する。起票の門（[`ledger_guard`]）は command guard の直後で、
 /// body-file の相対 path を payload の `cwd` から解き、台帳 write の断る形は command guard と同じ rules から読む。
-/// anchor の門（[`anchor_guard`]）は起票の門の直後・権能 guard の前で、7 語の git と `gh pr merge` の周だけ git を撃つ。
+/// anchor の門（[`anchor_guard`]）は起票の門の直後・権能 guard の前で、7 語の git と `gh pr merge` の周だけ git を撃ち、その直後が merge の門（[`merge_gate`]）。
 /// 走っている便の行の門（[`live_row`]）は権能 guard が断らなかった周だけの最後の 1 段。
 fn pre_tool_use(hooked: &Hooked, payload: &str, started: Instant) -> Outcome {
     let (root, cwd) = (hooked.root, hooked.cwd);
     let tool = field(payload, KEY_TOOL).unwrap_or_default();
+    // 選択式の問いの道具は全部の門の前で止める（§20・宣言は AskUserQuestion の周だけ読む）。
+    if let ChoiceQuestionDecision::Deny(line) = choice_question::decide(&tool, || crate::pipe::declaration::question_route(root)) {
+        return denied(hooked, choice_question::WHAT, line, started);
+    }
     let path = field(payload, KEY_FILE).or_else(|| field(payload, KEY_NOTEBOOK));
     if let Some(git_dir) = vessel::git_dir(cwd) {
         if let Decision::Deny(line) = guard::decide(root, cwd, &git_dir, &tool, path.as_deref()) {
@@ -672,6 +680,10 @@ fn pre_tool_use(hooked: &Hooked, payload: &str, started: Instant) -> Outcome {
         let anchored = anchor_guard::decide(command.as_deref().unwrap_or_default(), cwd, root, hooked.dir);
         if let AnchorDecision::Deny { what, line } = anchored {
             return denied(hooked, &format!("anchor-deny {what}"), line, started);
+        }
+        // merge の門は anchor の門の直後（窓が閉じている周は待つのが先・vessel-hook.md §21 形 1）。
+        if let MergeDecision::Deny(reason, line) = merge_gate::decide(command.as_deref().unwrap_or_default(), cwd) {
+            return denied(hooked, &format!("merge-deny {}", reason.as_str()), line, started);
         }
     }
     let op = Operation { tool: &tool, command: command.as_deref(), path: path.as_deref(), root: Some(root), cwd };

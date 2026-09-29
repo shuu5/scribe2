@@ -145,6 +145,14 @@ pub(super) const CONTRACT_TRAILER: &str = "Contract";
 /// 要件を名指す trailer の語幹。
 pub(super) const REQUIREMENTS_TRAILER: &str = "Requirements";
 
+/// 発端の trailer の語幹（設計 vessel-hook.md §21 形 2 (b)・器の便でない merge の本文が持つ）。
+const SOURCE_TRAILER: &str = "Source";
+
+/// 発端の trailer の key（`<Name>-Source: `・merge の門が引く 1 本＝門は NAME から key を組み直さない・§21 形 7）。
+pub(crate) fn source_key() -> String {
+    trailer_key(SOURCE_TRAILER)
+}
+
 /// trailer の key（**器の名から導く**・C2.2＝名を 2 か所に焼かない）。
 ///
 /// 先頭を大文字にした器の名を前置するので、他の道具の trailer（`Co-Authored-By` 等）と衝突しない。

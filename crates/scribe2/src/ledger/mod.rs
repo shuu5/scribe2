@@ -17,6 +17,7 @@ pub mod graph;
 pub mod lint;
 pub mod memo;
 pub mod question;
+pub mod trigger;
 
 use crate::cli_outcome::{Outcome, RC_REFUSED};
 use crate::invocation::Invocation;

@@ -1,14 +1,23 @@
-//! `cargo xtask main-provenance [--rev <rev>]` の本体（設計 docs/design/pipeline.md §7 約束 3・`s2-07l.170`）。
+//! `cargo xtask main-provenance [--rev <rev>]` の本体（設計 docs/design/pipeline.md §7 約束 3・§60・`s2-07l.170`）。
 //!
-//! push(main) の CI が撃つ門で、main の HEAD が**入口を通った commit か**を message の字面で測る。入口は 2 つ:
-//! PR の squash（件名の末尾が `(#N)`）と `pipe land` の trailer（本文の 1 行 `run: <run id>`）。どちらも持たない
-//! commit は PR の flip-check も便の gate も通っていない＝入口の flip の免除経路の最後の 1 本（直接の push）である。
+//! push(main) の CI が撃つ門で、main の HEAD が**入口を通った commit か**を message の字面で測る。本文（2 行目から
+//! 後ろ）を `run` / `source` / `none` の 3 語に分け、件名の末尾の ` (#N)` と組む。入口は 3 形:
+//! - 器の便の land（本文の 1 行 `run: <run id>`）→ `main-provenance: ok via=land run=<run id> sha=<sha>`（件名に依らない）。
+//! - PR の squash（件名の末尾 `(#N)`）で本文が発端の trailer を持つ → `main-provenance: ok via=pr number=<N>
+//!   source=<id>[,<id>…] sha=<sha>`。発端の行を持たない (#N) の commit は `FAIL reason=no-source number=<N>`（rc 1）。
+//! - どちらでもない commit（直接の push）は発端の行を持っていても `FAIL reason=no-provenance sha=<sha>`（rc 1）。
 //!
-//! 判定行は stdout へ 1 行: `main-provenance: ok via=pr number=<N> sha=<sha>` / `main-provenance: ok via=land
-//! run=<run id> sha=<sha>`（rc 0）・`main-provenance: FAIL reason=no-provenance sha=<sha>`（rc 1）。git を撃てない・
-//! rev が解けない周は判定行を出さず stderr へ理由を出して rc 2（測れなかったを通過にも赤にも化けさせない）。
+//! 発端の行の読み（正本は docs/design/vessel-hook.md §21 形 2・見本は `source_trailer_cases.txt`）: key は NAME の
+//! 先頭を大文字にして `-Source:` を足した字。本文の各行から末尾の CR・半角空白・tab を落とし、**行頭から key で
+//! 始まる行**を発端の行と読む（字下げと大小の違う行は発端の行でない）。形に合うのは「key・半角空白 1 つ・bead id
+//! を半角空白 1 つで区切って 1 本以上」だけ。形の外の発端の行を 1 本でも持つ本文は `none`、そうでなく `run:` の
+//! 行を持てば `run`、そうでなく発端の行を持てば `source`（id は出てきた順）、どれでもなければ `none`。
+//!
+//! git を撃てない・rev が解けない・workspace の NAME を読めない周は判定行を出さず stderr へ理由を出して rc 2
+//! （測れなかったを通過にも赤にも化けさせない）。
 
 use crate::flipcheck::is_bead_id;
+use crate::workspace::Layout;
 use crate::{emit, emit_err};
 use std::path::Path;
 use std::process::{Command, ExitCode};
@@ -19,26 +28,71 @@ const DEFAULT_REV: &str = "HEAD";
 /// land の trailer の頭（`pipe land` が squash の本文へ書く 1 行 `run: <run id>`）。
 const RUN_TRAILER: &str = "run: ";
 
+/// 発端の trailer の key の語幹（key は NAME から導く・C2.2）。
+const SOURCE_STEM: &str = "Source";
+
 /// commit の出所（入口の 2 形）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Provenance {
-    /// PR の squash（件名の末尾 `(#N)`）。
-    Pr(u64),
+    /// PR の squash（件名の末尾 `(#N)`）と発端の行の id の列。
+    Pr(u64, Vec<String>),
     /// `pipe land` の trailer（`run: <run id>`）。
     Land(String),
 }
 
-/// commit message から出所を読む。件名（1 行目）の `(#N)` を先に見て、無ければ本文（2 行目以降）の trailer を見る。
-pub(crate) fn provenance_of(message: &str) -> Option<Provenance> {
-    let mut lines = message.lines();
-    let subject = lines.next().unwrap_or_default();
-    if let Some(number) = pr_number(subject) {
-        return Some(Provenance::Pr(number));
+/// 本文の分け方の 3 語。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Body {
+    /// `is_run_id` の形の `run:` の行を持つ。
+    Run(String),
+    /// 形に合う発端の行を 1 本以上持つ（id は出てきた順）。
+    Source(Vec<String>),
+    /// どちらでもない・形の外の発端の行を持つ。
+    Unsourced,
+}
+
+/// 発端の trailer の key（NAME の先頭を大文字にして `-Source:` を足す・core の `trailer_key` と同じ導き）。
+pub(crate) fn source_key(name: &str) -> String {
+    let mut chars = name.chars();
+    let head: String = chars.next().map(|first| first.to_uppercase().to_string()).unwrap_or_default();
+    format!("{head}{}-{SOURCE_STEM}:", chars.as_str())
+}
+
+/// 本文（2 行目から後ろ）を `run` / `source` / `none` に分ける。
+pub(crate) fn classify_body(body: &str, key: &str) -> Body {
+    let mut run = None;
+    let mut ids = Vec::new();
+    for raw in body.lines() {
+        let line = raw.trim_end_matches(['\r', ' ', '\t']);
+        if let Some(rest) = line.strip_prefix(key) {
+            match rest.strip_prefix(' ').filter(|list| list.split(' ').all(is_bead_id)) {
+                Some(list) => ids.extend(list.split(' ').map(str::to_owned)),
+                None => return Body::Unsourced,
+            }
+        } else if run.is_none() {
+            run = raw.trim_end().strip_prefix(RUN_TRAILER).filter(|id| is_run_id(id));
+        }
     }
-    lines
-        .filter_map(|line| line.trim_end().strip_prefix(RUN_TRAILER))
-        .find(|run| is_run_id(run))
-        .map(|run| Provenance::Land(run.to_owned()))
+    match run {
+        Some(run) => Body::Run(run.to_owned()),
+        None if !ids.is_empty() => Body::Source(ids),
+        None => Body::Unsourced,
+    }
+}
+
+/// 件名（1 行目）と本文（2 行目から後ろ）。
+fn split_message(message: &str) -> (&str, &str) {
+    message.split_once('\n').unwrap_or((message, ""))
+}
+
+/// commit message から出所を読む。本文が `run` なら land、`source` で件名が (#N) で終わるなら PR。
+pub(crate) fn provenance_of(message: &str, key: &str) -> Option<Provenance> {
+    let (subject, body) = split_message(message);
+    match classify_body(body, key) {
+        Body::Run(run) => Some(Provenance::Land(run)),
+        Body::Source(ids) => pr_number(subject).map(|number| Provenance::Pr(number, ids)),
+        Body::Unsourced => None,
+    }
 }
 
 /// 件名の末尾 ` (#N)` の N（N は 1 桁以上の数字だけ・前に空白が要る）。
@@ -65,11 +119,17 @@ fn is_run_id(run: &str) -> bool {
 }
 
 /// 判定 1 行と rc。
-pub(crate) fn verdict(sha: &str, message: &str) -> (String, ExitCode) {
-    match provenance_of(message) {
-        Some(Provenance::Pr(number)) => (format!("main-provenance: ok via=pr number={number} sha={sha}"), ExitCode::SUCCESS),
+pub(crate) fn verdict(sha: &str, message: &str, key: &str) -> (String, ExitCode) {
+    match provenance_of(message, key) {
+        Some(Provenance::Pr(number, ids)) => (
+            format!("main-provenance: ok via=pr number={number} source={} sha={sha}", ids.join(",")),
+            ExitCode::SUCCESS,
+        ),
         Some(Provenance::Land(run)) => (format!("main-provenance: ok via=land run={run} sha={sha}"), ExitCode::SUCCESS),
-        None => (format!("main-provenance: FAIL reason=no-provenance sha={sha}"), ExitCode::FAILURE),
+        None => match pr_number(split_message(message).0) {
+            Some(number) => (format!("main-provenance: FAIL reason=no-source number={number} sha={sha}"), ExitCode::FAILURE),
+            None => (format!("main-provenance: FAIL reason=no-provenance sha={sha}"), ExitCode::FAILURE),
+        },
     }
 }
 
@@ -103,15 +163,16 @@ fn commit_of(workdir: &Path, rev: &str) -> Result<(String, String), String> {
     Ok((sha.trim().to_owned(), message.to_owned()))
 }
 
-/// CLI 面。判定行を stdout へ 1 行だけ出し rc を返す（測れなかった周だけが rc 2）。
+/// CLI 面。判定行を stdout へ 1 行だけ出し rc を返す（測れなかった周だけが rc 2）。NAME を読むのはここだけ。
 pub fn run(args: &[String]) -> ExitCode {
     let measured = parse_rev(args).and_then(|rev| {
         let workdir = std::env::current_dir().map_err(|err| format!("main-provenance: cwd を解決できない: {err}"))?;
-        commit_of(&workdir, &rev)
+        let layout = Layout::discover(&workdir).map_err(|err| format!("main-provenance: NAME を読めない: {err}"))?;
+        commit_of(&workdir, &rev).map(|(sha, message)| (sha, message, source_key(&layout.name)))
     });
     match measured {
-        Ok((sha, message)) => {
-            let (line, code) = verdict(&sha, &message);
+        Ok((sha, message, key)) => {
+            let (line, code) = verdict(&sha, &message, &key);
             emit(&line);
             code
         }
@@ -124,25 +185,110 @@ pub fn run(args: &[String]) -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_rev, provenance_of, verdict, Provenance};
+    use super::{classify_body, parse_rev, provenance_of, source_key, verdict, Body, Provenance};
+    use crate::workspace::Layout;
+    use std::path::PathBuf;
     use std::process::ExitCode;
 
-    /// PR の squash の件名（末尾 `(#N)`）は `via=pr` で通り、N を読む。
+    /// 見本 file（xtask と core の 2 つの読み手が読む 1 本）。
+    const CASES: &str = include_str!("source_trailer_cases.txt");
+
+    /// 本 repo の workspace の NAME から組んだ key（歯の source に NAME の字面を置かない・name-literal）。
+    fn repo_key() -> String {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+        source_key(&Layout::discover(&root).expect("自 workspace は読める").name)
+    }
+
+    /// 見本 file の期待の語。
+    fn word(body: &Body) -> &'static str {
+        match body {
+            Body::Run(_) => "run",
+            Body::Source(_) => "source",
+            Body::Unsourced => "none",
+        }
+    }
+
+    /// 見本 file の塊（期待の語・本文）の列。行頭 `#` は注、行 `===` が区切り、空の塊（先頭の区切りの前）は数えない。
+    fn sample_cases() -> Vec<(String, String)> {
+        let mut blocks: Vec<Vec<&str>> = vec![Vec::new()];
+        for line in CASES.lines().filter(|line| !line.starts_with('#')) {
+            match line {
+                "===" => blocks.push(Vec::new()),
+                _ => blocks.last_mut().expect("列は空でない").push(line),
+            }
+        }
+        blocks
+            .into_iter()
+            .filter_map(|block| block.split_first().map(|(word, body)| ((*word).to_owned(), body.join("\n"))))
+            .collect()
+    }
+
+    /// (a) 見本の全塊を分けた語が期待と一致する。塊は 24 以上で 3 語が全部出る。行末の CR・半角空白・tab を持つ本文は
+    /// file に置かず、ここで組んで `source` と読む。
     #[test]
-    fn main_provenance_accepts_squash_subject_with_pr_number() {
+    fn main_provenance_source_sample_cases_match_expected_words() {
+        let key = repo_key();
+        let cases = sample_cases();
+        for (expected, body) in &cases {
+            assert_eq!(word(&classify_body(body, &key)), expected, "{body:?}");
+        }
+        assert!(cases.len() >= 24, "塊が 24 以上: {}", cases.len());
+        for word in ["source", "run", "none"] {
+            assert!(cases.iter().any(|(expected, _)| expected == word), "{word} の塊が在る");
+        }
+        for tail in ["\r", " ", "\t", " \r"] {
+            let body = format!("要旨\n{key} s2-a.1{tail}\nCo-Authored-By: someone\r\n");
+            assert_eq!(classify_body(&body, &key), Body::Source(vec!["s2-a.1".to_owned()]), "{body:?}");
+        }
+    }
+
+    /// (b) 件名が (#N) で終わり発端の行の無い commit は `no-source` で N を名指して rc 1。
+    #[test]
+    fn main_provenance_source_refuses_pr_number_without_source() {
         let message = "docs(design): pipeline §7 の改訂 (#542)\n\n本文。\n\nCo-authored-by: someone\n";
-        assert_eq!(provenance_of(message), Some(Provenance::Pr(542)));
-        let (line, code) = verdict("abc123", message);
-        assert_eq!(line, "main-provenance: ok via=pr number=542 sha=abc123");
-        assert_eq!(code, ExitCode::SUCCESS);
+        assert_eq!(provenance_of(message, &repo_key()), None);
+        let (line, code) = verdict("abc123", message, &repo_key());
+        assert_eq!(line, "main-provenance: FAIL reason=no-source number=542 sha=abc123");
+        assert_eq!(code, ExitCode::FAILURE);
+    }
+
+    /// (c) (#N) と発端の行を持つ commit は `via=pr` で通り、id を出てきた順に `,` で並べる。
+    #[test]
+    fn main_provenance_source_accepts_pr_number_with_source_ids() {
+        let key = repo_key();
+        for (ids, listed) in [("s2-07l.739", "s2-07l.739"), ("s2-07l.739 s2-07l.722", "s2-07l.739,s2-07l.722")] {
+            let message = format!("docs(design): 行 bc (#810)\n\n要旨\n\n{key} {ids}\n");
+            let (line, code) = verdict("0ff1ce", &message, &key);
+            assert_eq!(line, format!("main-provenance: ok via=pr number=810 source={listed} sha=0ff1ce"));
+            assert_eq!(code, ExitCode::SUCCESS);
+        }
+    }
+
+    /// (d) 件名に (#N) が無ければ、形に合う発端の行を持っていても `no-provenance`（直接の push）。
+    #[test]
+    fn main_provenance_source_refuses_source_without_pr_number() {
+        let key = repo_key();
+        let message = format!("fix: direct push\n\n{key} s2-07l.739\n");
+        let (line, code) = verdict("0ff1ce", &message, &key);
+        assert_eq!(line, "main-provenance: FAIL reason=no-provenance sha=0ff1ce");
+        assert_eq!(code, ExitCode::FAILURE);
+    }
+
+    /// (e) key は名から導く: 別の名で組んだ key では、その key の行だけが発端の行で、本 repo の key の行は読まない。
+    #[test]
+    fn main_provenance_source_key_derives_from_name() {
+        let key = source_key("fixturename");
+        assert_eq!(key, "Fixturename-Source:");
+        assert_eq!(classify_body("Fixturename-Source: s2-a.1", &key), Body::Source(vec!["s2-a.1".to_owned()]));
+        assert_eq!(classify_body(&format!("{} s2-a.1", repo_key()), &key), Body::Unsourced);
     }
 
     /// `pipe land` の trailer（本文の `run: <run id>`）は `via=land` で通り、run id を名指す。
     #[test]
     fn main_provenance_accepts_land_trailer_run_id() {
         let message = "s2-07l.351: 受付の e2e の hub を割る\n\n要旨\n\nrun: s2-07l.351-20260922T061245Z\nScribe2-Contract: docs/design/pipeline.md#b\n";
-        assert_eq!(provenance_of(message), Some(Provenance::Land("s2-07l.351-20260922T061245Z".to_owned())));
-        let (line, code) = verdict("def456", message);
+        assert_eq!(provenance_of(message, &repo_key()), Some(Provenance::Land("s2-07l.351-20260922T061245Z".to_owned())));
+        let (line, code) = verdict("def456", message, &repo_key());
         assert_eq!(line, "main-provenance: ok via=land run=s2-07l.351-20260922T061245Z sha=def456");
         assert_eq!(code, ExitCode::SUCCESS);
     }
@@ -164,8 +310,8 @@ mod tests {
             "fix: x\n\n  run: s2-07l.351-20260922T061245Z\n",
             "",
         ] {
-            assert_eq!(provenance_of(message), None, "{message:?}");
-            let (line, code) = verdict("0ff1ce", message);
+            assert_eq!(provenance_of(message, &repo_key()), None, "{message:?}");
+            let (line, code) = verdict("0ff1ce", message, &repo_key());
             assert_eq!(line, "main-provenance: FAIL reason=no-provenance sha=0ff1ce", "{message:?}");
             assert_eq!(code, ExitCode::FAILURE, "{message:?}");
         }

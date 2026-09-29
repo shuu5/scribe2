@@ -47,6 +47,9 @@ pub(crate) mod bundle;
 /// 事前審査が clean の待ち行に lens を裏で先に撃つ先撃ち（設計 §27・契約表の行 aa・Reviewed の段の使い回しの読み口は行 ac）。
 pub(in crate::pipe) mod prelens;
 
+/// 起こす側の周が受付の断りを契約ごとに `IntakeRefused` へ記帳する書き手（設計 §32・契約表の行 ag）。
+mod refused;
+
 use candidates::{entry_of, is_input, marks_of, settle, tools};
 
 /// 台帳の閉じた status の字面（依存が閉じたかの判定が読む）。
@@ -516,6 +519,8 @@ struct Read {
     issues: Vec<ledger::Issue>,
     /// 1 周ぶんの repo の材料（読めない周は断り）。
     materials: Result<Materials, Denial>,
+    /// 周が読んだ event の列（event log を読めない周は `None`・断りの記帳が同じ 1 回を借りる・設計 §32）。
+    events: Option<Vec<Event>>,
 }
 
 /// 列を 1 周して読みも返す（[`turn`] の本体・台帳を読めない周は読みが `None`）。
@@ -536,7 +541,7 @@ fn measure(input: &Input<'_>) -> (Turn, Option<Read>) {
     let unreadable = read.is_err();
     let events = read.unwrap_or_default();
     let marks = marks_of(&events);
-    let (mut turn, materials) = {
+    let (mut turn, materials, events) = {
         let ledger = Ledger {
             marks: marks.order,
             launched: (!unreadable).then_some(marks.launched),
@@ -554,12 +559,12 @@ fn measure(input: &Input<'_>) -> (Turn, Option<Read>) {
             candidates.push(candidate);
         }
         // **順序は [`order`] の 1 本だけが決める**（生産経路も歯も同じ関数を通る・C2）。
-        (settle(input, order(candidates), &ready, ledger.materials.as_ref().ok()), ledger.materials)
+        (settle(input, order(candidates), &ready, ledger.materials.as_ref().ok()), ledger.materials, ledger.events)
     };
     if !turn.launches.is_empty() && host_busy(input.manifest) {
         hold_for_host(&mut turn);
     }
-    (turn, Some(Read { issues, materials }))
+    (turn, Some(Read { issues, materials, events: (!unreadable).then_some(events) }))
 }
 
 /// 器の健康の遮断器が「待つ」を返すか（**gate と同じ 1 関数**・設計 §18・C2）。
@@ -653,6 +658,8 @@ pub fn fire(input: &Input<'_>) -> Turn {
             candidate.reason = Some(WaitReason::Admission { reason });
         }
     }
+    // **受付の断りの記帳は上書きの後・事前審査の前**（設計 §32）: 同じ周が読んだ event の列を借りる（2 度読まない）。
+    refused::record(input, &turn.candidates, read.as_ref().and_then(|found| found.events.as_deref()));
     // **事前審査は起こし終えた後**（設計 §27 形 4・起こす便を遅らせない）: 同じ周の台帳と材料を借りる（2 度読まない）。
     if let Some(found) = read.as_ref() {
         precheck::round(input, &turn, &found.issues, found.materials.as_ref().ok());

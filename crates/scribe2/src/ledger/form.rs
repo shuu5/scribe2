@@ -109,6 +109,15 @@ pub fn is_question(issue: &Issue) -> bool {
     issue.labels.iter().any(|label| label == QUESTION_LABEL)
 }
 
+/// 同じ台帳の bead id の形か（台帳の接頭辞・`-`・ASCII の英数字の段を `.` で繋いだ字・§15 の依存の値の形の唯一の判定）。
+pub fn is_bead_id(text: &str, prefix: &str) -> bool {
+    let rest = text.strip_prefix(prefix).and_then(|rest| rest.strip_prefix('-'));
+    !prefix.is_empty()
+        && rest.is_some_and(|rest| {
+            rest.split('.').all(|step| !step.is_empty() && step.chars().all(|found| found.is_ascii_alphanumeric()))
+        })
+}
+
 /// 契約か（label を持たず pointer 行を持つ＝4 象限の契約）。
 fn is_contract(issue: &Issue) -> bool {
     !is_memo(issue) && pointer_text(&issue.acceptance).is_some()
