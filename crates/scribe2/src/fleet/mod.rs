@@ -90,6 +90,17 @@ pub enum EventKind {
     /// 理由・actor は human）。replay は同じ鍵（role, anchor）の row を `registrations` から外し、後の `SeatRegistered` が復活させる。
     /// **便に紐づかない**。書き手は `seat retire` だけ（`fleet record` は断る）。
     SeatRetired,
+    /// user の発話を受け取った（設計 fleet-event-log.md §12・ADR-0087 / ADR-0083・[`Shape::Case`]）。本体は
+    /// [`Case::Utterance`]（経路と session）・`detail` = 発話の逐語・actor は `human`。**便に紐づかない**。
+    UtteranceReceived,
+    /// 発話を仕分けた（§12・ADR-0087・[`Case::Sorted`]・request の行は `bead` に開いた memo の id）。**便に紐づかない**。
+    UtteranceSorted,
+    /// turn の終わりを判じられなかった（§12・ADR-0087・[`Case::TurnEnd`]）。**便に紐づかない**。
+    TurnEndUnjudged,
+    /// 受付が契約を断った（§12・ADR-0088・[`Case::Refused`]・`bead` = 契約の id）。**便に紐づかない**。
+    IntakeRefused,
+    /// 切り替えの線を引いた（§12・ADR-0088・[`Case::Cutover`]）。**便に紐づかない**。
+    LifecycleCutover,
 }
 
 /// [`EventKind`] の全 variant。
@@ -118,6 +129,11 @@ pub const KINDS: &[EventKind] = &[
     EventKind::GroupMoveRefused,
     EventKind::GroupMovePending,
     EventKind::SeatRetired,
+    EventKind::UtteranceReceived,
+    EventKind::UtteranceSorted,
+    EventKind::TurnEndUnjudged,
+    EventKind::IntakeRefused,
+    EventKind::LifecycleCutover,
 ];
 
 impl EventKind {
@@ -148,6 +164,11 @@ impl EventKind {
             Self::GroupMoveRefused => "GroupMoveRefused",
             Self::GroupMovePending => "GroupMovePending",
             Self::SeatRetired => "SeatRetired",
+            Self::UtteranceReceived => "UtteranceReceived",
+            Self::UtteranceSorted => "UtteranceSorted",
+            Self::TurnEndUnjudged => "TurnEndUnjudged",
+            Self::IntakeRefused => "IntakeRefused",
+            Self::LifecycleCutover => "LifecycleCutover",
         }
     }
 
@@ -156,11 +177,11 @@ impl EventKind {
         KINDS.iter().copied().find(|kind| kind.as_str() == text)
     }
 
-    /// 既定の actor。人由来は承認の受理と run 無しの裁定と席の登録 row の退役の 3 つである（FR22 の計測面・設計
-    /// fleet-event-log.md §9・account-lifecycle.md §24）。
+    /// 既定の actor。人由来は承認の受理と run 無しの裁定と席の登録 row の退役と発話の 4 つである（FR22 の計測面・設計
+    /// fleet-event-log.md §9 / §12・account-lifecycle.md §24・発話は `pipe report` が人由来に数えない）。
     pub fn default_actor(self) -> &'static str {
         match self {
-            Self::ApprovalReceived | Self::RulingReceived | Self::SeatRetired => ACTOR_HUMAN,
+            Self::ApprovalReceived | Self::RulingReceived | Self::SeatRetired | Self::UtteranceReceived => ACTOR_HUMAN,
             Self::RunCreated
             | Self::RunStage
             | Self::RunDone
@@ -181,7 +202,11 @@ impl EventKind {
             | Self::GroupPressureNotified
             | Self::GroupMoved
             | Self::GroupMoveRefused
-            | Self::GroupMovePending => ACTOR_MACHINE,
+            | Self::GroupMovePending
+            | Self::UtteranceSorted
+            | Self::TurnEndUnjudged
+            | Self::IntakeRefused
+            | Self::LifecycleCutover => ACTOR_MACHINE,
         }
     }
 
@@ -213,6 +238,11 @@ impl EventKind {
             Self::RulingReceived => Shape::Ruling,
             Self::GroupPressureNotified => Shape::Pressure,
             Self::GroupMoved | Self::GroupMoveRefused | Self::GroupMovePending => Shape::Group,
+            Self::UtteranceReceived
+            | Self::UtteranceSorted
+            | Self::TurnEndUnjudged
+            | Self::IntakeRefused
+            | Self::LifecycleCutover => Shape::Case,
         }
     }
 
@@ -254,6 +284,9 @@ pub enum Shape {
     /// 群の移動の承認・断り・保留（`account` = 口座 label と `detail` = 空でない 1 行が必須・`run` / `bead` / `stage` / `seat` /
     /// `pid` を持たない・設計 account-lifecycle.md §20 形 5 / 6）。
     Group,
+    /// 案件の一生の 5 kind（本体は [`Case`]・`run` / `stage` / `seat` / `pid` を持たない・`bead` は kind ごと・設計
+    /// fleet-event-log.md §12）。5 つを形では見分けない（見分けは kind で行う）。
+    Case,
 }
 
 /// [`Shape`] の全 variant（宣言順・`enum-slices` が集合完全性を測る）。
@@ -268,7 +301,98 @@ pub const SHAPES: &[Shape] = &[
     Shape::Ruling,
     Shape::Pressure,
     Shape::Group,
+    Shape::Case,
 ];
+
+/// 発話の経路（**閉じた 2 値**・設計 fleet-event-log.md §12・ADR-0087）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Channel {
+    /// 対話面の席の chat（session を持つ）。
+    Chat,
+    /// GUI の面（session を持たない）。
+    Gui,
+}
+
+/// [`Channel`] の全 variant（宣言順・`enum-slices` が集合完全性を測る）。
+pub const CHANNELS: &[Channel] = &[Channel::Chat, Channel::Gui];
+
+impl Channel {
+    /// JSON の `channel` に書く字面。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Chat => "chat",
+            Self::Gui => "gui",
+        }
+    }
+
+    /// 字面から引く。未知なら `None`。
+    pub fn parse(text: &str) -> Option<Self> {
+        CHANNELS.iter().copied().find(|found| found.as_str() == text)
+    }
+}
+
+/// 発話の仕分け（**閉じた 2 値**・設計 fleet-event-log.md §12・ADR-0087）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sorting {
+    /// 依頼（memo を開く・行の `bead` = memo の id）。
+    Request,
+    /// 雑談（`bead` を持たない）。
+    Chat,
+}
+
+/// [`Sorting`] の全 variant（宣言順・`enum-slices` が集合完全性を測る）。
+pub const SORTINGS: &[Sorting] = &[Sorting::Request, Sorting::Chat];
+
+impl Sorting {
+    /// JSON の `sorting` に書く字面。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Request => "request",
+            Self::Chat => "chat",
+        }
+    }
+
+    /// 字面から引く。未知なら `None`。
+    pub fn parse(text: &str) -> Option<Self> {
+        SORTINGS.iter().copied().find(|found| found.as_str() == text)
+    }
+}
+
+/// 案件の一生の 5 kind（[`Shape::Case`]）の本体（設計 fleet-event-log.md §12 の表）。memo と契約の id は行の `bead` が持つ。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Case {
+    /// [`EventKind::UtteranceReceived`]: 経路と、chat の行だけが持つ session。
+    Utterance { channel: Channel, session: Option<String> },
+    /// [`EventKind::UtteranceSorted`]: 仕分けた発話の ts の字面と仕分け。
+    Sorted { utterance: String, sorting: Sorting },
+    /// [`EventKind::TurnEndUnjudged`]: 任意の session と理由の語。
+    TurnEnd { session: Option<String>, reason: String },
+    /// [`EventKind::IntakeRefused`]: 受付の断りの名。
+    Refused { refuse: String },
+    /// [`EventKind::LifecycleCutover`]: 線を引いた器の版と main の sha（小文字の 16 進）。
+    Cutover { version: String, main: String },
+}
+
+impl Case {
+    /// 行へ書く本体の key/value（§12 の表の並び・`bead` は行の field の値・空なら key ごと書かない）。
+    pub fn pairs(&self, bead: &str) -> Vec<(&'static str, Value)> {
+        let text = |key: &'static str, value: &str| (key, Value::Str(value.to_owned()));
+        let bead = Some(bead).filter(|found| !found.is_empty()).map(|found| text("bead", found));
+        match self {
+            Self::Utterance { channel, session } => {
+                [Some(text("channel", channel.as_str())), session.as_deref().map(|found| text("session", found))].into_iter().flatten().collect()
+            }
+            Self::Sorted { utterance, sorting } => {
+                [Some(text("utterance", utterance)), Some(text("sorting", sorting.as_str())), bead].into_iter().flatten().collect()
+            }
+            Self::TurnEnd { session, reason } => {
+                [session.as_deref().map(|found| text("session", found)), Some(text("reason", reason))].into_iter().flatten().collect()
+            }
+            Self::Refused { refuse } => [bead, Some(text("refuse", refuse))].into_iter().flatten().collect(),
+            Self::Cutover { version, main } => vec![text("version", version), text("main", main)],
+        }
+    }
+}
 
 /// 消費の 1 件の出所（**閉じた 3 値**・設計 gate-cost.md §26 形 (2)）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

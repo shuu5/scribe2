@@ -674,6 +674,7 @@ pub fn emit(state_dir: &Path, entry: &Emit<'_>, policy: LockPolicy) -> Result<()
         account: None,
         cost: None,
         rule: None,
+        case: None,
     };
     let advances = matches!(entry.kind, EventKind::RunStage | EventKind::RunDone | EventKind::SeatSpawned)
         && entry.stage != Some(Stage::Stopped);
@@ -708,6 +709,7 @@ pub fn emit_mark(state_dir: &Path, bead: &str, mark: Mark, policy: LockPolicy) -
         account: None,
         cost: None,
         rule: None,
+        case: None,
     };
     store::append(state_dir, &event, policy).map(|_| ())
 }
@@ -736,6 +738,7 @@ pub fn emit_cost(state_dir: &Path, run: &str, bead: &str, cost: Cost, policy: Lo
         account: None,
         cost: Some(cost),
         rule: None,
+        case: None,
     };
     store::append(state_dir, &event, policy).map(|_| ())
 }
@@ -821,6 +824,7 @@ pub(crate) mod fixture {
             account: None,
             cost: None,
             rule: None,
+            case: None,
         }
     }
 

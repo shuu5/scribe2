@@ -638,6 +638,7 @@ fn put_next_round(place: &RolePlace, ts: &str, account: &str, (seven, model): (u
             account: None,
             cost: None,
             rule: None,
+            case: None,
         };
         vessel::fleet::store::append(&place.state, &event, policy).expect("実測を置ける");
     }

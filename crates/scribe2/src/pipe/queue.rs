@@ -802,6 +802,7 @@ mod tests {
             account: None,
             cost: None,
             rule: None,
+            case: None,
         }
     }
 

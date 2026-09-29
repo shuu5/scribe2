@@ -1,5 +1,5 @@
 // flip-check: moved s2-07l.680
-//! json と記録の族の歯（接頭辞 `fleet_json_` / `fleet_read_` / `fleet_record_` / `fleet_replay_` / `fleet_export_`・設計 docs/design/carry-prep.md §9 行 h・親 `tests/e2e/fleet.rs` の helper を `use super::*` で使う）。
+//! json と記録の族の歯（接頭辞 `fleet_json_` / `fleet_read_` / `fleet_record_` / `fleet_replay_` / `fleet_export_` / `fleet_case_kind_`・設計 docs/design/carry-prep.md §9 行 h・fleet-event-log.md §12・親 `tests/e2e/fleet.rs` の helper を `use super::*` で使う）。
 
 use super::*;
 
@@ -423,13 +423,14 @@ fn fleet_replay_seat_retired_then_registered_resolves_the_last_row() {
     assert_eq!(before.registrations.len(), 1, "登録より前の退役は後の登録を消さない");
 }
 
-/// 形 4: `SeatRetired` は `Shape::Registration`・既定の actor は human・`KINDS` の末尾（24 種目）で、`fleet record` からは書けない
-/// （書き手は `seat retire` だけ・rc 1・log を作らない）。
+/// 形 4: `SeatRetired` は `Shape::Registration`・既定の actor は human・`KINDS` の 24 種目（29 種の末尾は案件の一生の
+/// `LifecycleCutover`・fleet-event-log.md §12）で、`fleet record` からは書けない（書き手は `seat retire` だけ・rc 1・log を作らない）。
 #[test]
 fn fleet_replay_seat_retired_kind_is_a_registration_shape_and_record_refuses_it() {
     use vessel::fleet::Shape;
-    assert_eq!(KINDS.len(), 24, "母集団");
-    assert_eq!(KINDS.last(), Some(&EventKind::SeatRetired), "宣言順の末尾");
+    assert_eq!(KINDS.len(), 29, "母集団");
+    assert_eq!(KINDS.get(23), Some(&EventKind::SeatRetired), "宣言順の 24 種目");
+    assert_eq!(KINDS.last(), Some(&EventKind::LifecycleCutover), "宣言順の末尾");
     assert_eq!(EventKind::SeatRetired.shape(), Shape::Registration);
     assert_eq!(EventKind::SeatRetired.default_actor(), "human", "退役は人由来");
     assert_eq!(EventKind::parse("SeatRetired"), Some(EventKind::SeatRetired), "as_str ↔ parse の往復");
@@ -536,4 +537,150 @@ fn fleet_record_seat_spawned_carries_account() {
     assert_eq!(events.get(1).and_then(|found| found.account.clone()), None, "field の無い行は None");
     assert_eq!(replay(&events).inflight_by_account(), BTreeMap::from([("x".to_owned(), 1)]));
     fs::remove_dir_all(&dir).ok();
+}
+
+/// 案件の一生の 5 kind の名（設計 fleet-event-log.md §12・宣言順・base でも compile できるよう字面で持つ）。
+const CASE_KIND_NAMES: [&str; 5] = ["UtteranceReceived", "UtteranceSorted", "TurnEndUnjudged", "IntakeRefused", "LifecycleCutover"];
+
+/// §12 の見本 7 行（秒より下の桁の ts を含む・key の並びは表のとおり）。
+const CASE_KIND_LINES: [&str; 7] = [
+    r#"{"schema":1,"ts":"2026-09-29T01:02:03.004Z","kind":"UtteranceReceived","channel":"chat","session":"s-1","host":"h","actor":"human","detail":"進めて"}"#,
+    r#"{"schema":1,"ts":"2026-09-29T01:02:04Z","kind":"UtteranceReceived","channel":"gui","host":"h","actor":"human","detail":"A で"}"#,
+    r#"{"schema":1,"ts":"2026-09-29T01:03:00Z","kind":"UtteranceSorted","utterance":"2026-09-29T01:02:03.004Z","sorting":"request","bead":"s2-m1","host":"h","actor":"machine"}"#,
+    r#"{"schema":1,"ts":"2026-09-29T01:03:01Z","kind":"UtteranceSorted","utterance":"2026-09-29T01:02:04Z","sorting":"chat","host":"h","actor":"machine"}"#,
+    r#"{"schema":1,"ts":"2026-09-29T01:04:00Z","kind":"TurnEndUnjudged","session":"s-1","reason":"log-unreadable","host":"h","actor":"machine"}"#,
+    r#"{"schema":1,"ts":"2026-09-29T01:05:00Z","kind":"IntakeRefused","bead":"s2-c1","refuse":"cap-headroom","host":"h","actor":"machine"}"#,
+    r#"{"schema":1,"ts":"2026-09-29T01:06:00Z","kind":"LifecycleCutover","version":"0.1.0","main":"0123456789abcdef0123456789abcdef01234567","host":"h","actor":"machine"}"#,
+];
+
+/// 見本 7 行を読む（読めない行は理由つきで落とす）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn case_kind_events() -> Vec<Event> {
+    let read: Result<Vec<Event>, String> = CASE_KIND_LINES.iter().map(|line| Event::from_line(line)).collect();
+    read.expect("見本の 7 行が読める")
+}
+
+/// §12 歯 1: 見本 7 行はどれも読めて、書き直すと同じ字面に戻る。5 つの名は `EventKind::parse` で引ける。7 行を `append` で書くと
+/// `read_all` が 7 件を同じ値で返す（log の往復）。base は 5 kind が「未知の kind」で読めず RED。
+#[test]
+fn fleet_case_kind_lines_round_trip_through_the_log() {
+    for name in CASE_KIND_NAMES {
+        assert_eq!(EventKind::parse(name).map(EventKind::as_str), Some(name), "{name} を引ける");
+    }
+    let events = case_kind_events();
+    for (event, line) in events.iter().zip(CASE_KIND_LINES) {
+        assert_eq!(event.to_line(), line, "読んで書き直すと同じ字面");
+    }
+    let dir = state_dir();
+    let policy = LockPolicy::embedded().expect("rules 行を引ける");
+    for event in &events {
+        store::append(&dir, event, policy).expect("追記できる");
+    }
+    let read = store::read_all(&dir).expect("全行を読める");
+    assert_eq!(read.len(), 7, "7 件");
+    assert_eq!(read, events, "log の往復で同じ値");
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// §12 歯 2: 必須の欠け・閉じた値の外・空の値・経路と session の食い違い・仕分けと bead の食い違い・他の kind の key は、key を
+/// 名指す Err になる。末尾 2 つ（`RunStage` の channel・`RulingReceived` の version）は base でも緑の非空虚の対。
+#[test]
+fn fleet_case_kind_rows_name_the_bad_key() {
+    let head = r#"{"schema":1,"ts":"2026-09-29T01:00:00Z","#;
+    let tail = r#""host":"h","actor":"machine"}"#;
+    let cases = [
+        (r#""kind":"UtteranceReceived","session":"s-1","detail":"x","#, "channel"),
+        (r#""kind":"UtteranceReceived","channel":"voice","session":"s-1","detail":"x","#, "channel"),
+        (r#""kind":"UtteranceReceived","channel":"chat","detail":"x","#, "session"),
+        (r#""kind":"UtteranceReceived","channel":"gui","session":"s-1","detail":"x","#, "session"),
+        (r#""kind":"UtteranceReceived","run":"r1","channel":"gui","detail":"x","#, "run"),
+        (r#""kind":"UtteranceSorted","utterance":"t","sorting":"request","#, "bead"),
+        (r#""kind":"UtteranceSorted","utterance":"t","sorting":"chat","bead":"s2-m1","#, "bead"),
+        (r#""kind":"UtteranceSorted","utterance":"t","sorting":"maybe","#, "sorting"),
+        (r#""kind":"UtteranceSorted","sorting":"chat","#, "utterance"),
+        (r#""kind":"TurnEndUnjudged","session":"s-1","#, "reason"),
+        (r#""kind":"TurnEndUnjudged","reason":"log-unreadable","seat":"s1","#, "seat"),
+        (r#""kind":"IntakeRefused","bead":"s2-c1","refuse":"","#, "refuse"),
+        (r#""kind":"LifecycleCutover","main":"0123abcd","#, "version"),
+        (r#""kind":"LifecycleCutover","version":"0.1.0","main":"XYZ","#, "main"),
+        (r#""kind":"RunStage","run":"r1","bead":"b1","channel":"chat","#, "channel"),
+        (r#""kind":"RulingReceived","version":"0.1.0","detail":"x","#, "version"),
+    ];
+    for (body, key) in cases {
+        let line = format!("{head}{body}{tail}");
+        let reason = Event::from_line(&line).expect_err("malformed で読む");
+        assert!(reason.contains(key), "理由は {key} を名指す: {reason}（{line}）");
+        assert!(!reason.starts_with("kind "), "kind は既知: {reason}（{line}）");
+    }
+}
+
+/// §12 歯 3: Run の形でない `KINDS` の全部と 5 つの名を `fleet record` で撃つと、どれも rc 1 で「record では書けない」と断り、
+/// log を作らない。base は 5 つの名が「未知」で、`DispatchMark` と群の移動の 3 kind が rc 0 で通るので RED。
+#[test]
+fn fleet_case_kind_record_refuses_every_non_run_shape() {
+    use vessel::fleet::Shape;
+    let others = KINDS.iter().filter(|kind| kind.shape() != Shape::Run).map(|kind| kind.as_str());
+    let names: BTreeSet<&str> = others.chain(CASE_KIND_NAMES).collect();
+    assert!(names.contains("DispatchMark") && names.contains("GroupMoved"), "母集団: {names:?}");
+    for name in names {
+        let dir = state_dir();
+        let path = dir.display().to_string();
+        let out = run_fleet(&["record", "--kind", name, "--run", "r1", "--bead", "b1", "--state-dir", &path]);
+        assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{name}: {out:?}");
+        assert!(String::from_utf8_lossy(&out.stderr).contains("record では書けない"), "{name}: {out:?}");
+        assert!(!store::events_path(&dir).exists(), "{name}: 行を残さない");
+        fs::remove_dir_all(&dir).ok();
+    }
+}
+
+/// §12 歯 4: `RunCreated` 1 行と見本 7 行の log で、replay の便は 1・席 0・登録 row 0・退役 0、`fleet export` の 1 行目は runs 1・
+/// seats 0。
+#[test]
+fn fleet_case_kind_replay_makes_no_run_or_seat() {
+    let mut events = vec![event(EventKind::RunCreated, "r1", "2026-09-29T01:00:00Z")];
+    events.extend(case_kind_events());
+    let state = replay(&events);
+    assert_eq!(state.runs.len(), 1, "便は RunCreated の 1 つ");
+    assert!(state.seats.is_empty() && state.registrations.is_empty() && state.retired.is_empty(), "{state:?}");
+    let dir = state_dir();
+    let policy = LockPolicy::embedded().expect("rules 行を引ける");
+    for found in &events {
+        store::append(&dir, found, policy).expect("追記できる");
+    }
+    let out = run_fleet(&["export", "--state-dir", &dir.display().to_string()]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let first = stdout.lines().next().unwrap_or_default();
+    assert!(first.contains(r#""runs":1"#) && first.contains(r#""seats":0"#), "{first}");
+    fs::remove_dir_all(&dir).ok();
+}
+
+/// §12 歯 5: UtteranceReceived（actor human）1 行と逐語つきの `ApprovalReceived` 1 行で、`human_events` は 1・
+/// `human_events_other_than_approval` は 0（発話は人由来に数えない・FR22）。
+#[test]
+fn fleet_case_kind_utterance_is_not_counted_as_human() {
+    let utterance = case_kind_events().into_iter().next().expect("見本の 1 行目");
+    assert_eq!(utterance.actor, "human", "発話の actor は human");
+    let approval = Event { detail: Some("進めてよい".to_owned()), ..event(EventKind::ApprovalReceived, "r1", "2026-09-29T01:07:00Z") };
+    let counted = vessel::pipe::report::count(&[utterance, approval]);
+    assert_eq!((counted.human_events, counted.human_events_other_than_approval), (1, 0), "{counted:?}");
+    assert_eq!(counted.rulings, 0, "裁定の数えは変わらない");
+}
+
+/// §12 歯 6: `KINDS` は 29 種で、25 番目から後ろの字面が 5 つの名の順。既定の actor は 1 つ目だけ human。5 つとも `Shape` が
+/// Run でなく、互いに同じ値。base は 24 種で RED。
+#[test]
+fn fleet_case_kind_kinds_are_appended_in_order() {
+    use vessel::fleet::Shape;
+    assert_eq!(KINDS.len(), 29, "母集団");
+    let tail: Vec<EventKind> = KINDS.iter().copied().skip(24).collect();
+    assert_eq!(tail.iter().map(|kind| kind.as_str()).collect::<Vec<_>>(), CASE_KIND_NAMES, "末尾 5 つの字面");
+    let actors: Vec<&str> = tail.iter().map(|kind| kind.default_actor()).collect();
+    assert_eq!(actors, ["human", "machine", "machine", "machine", "machine"], "既定の actor");
+    let shapes: BTreeSet<String> = tail.iter().map(|kind| format!("{:?}", kind.shape())).collect();
+    assert_eq!(shapes.len(), 1, "5 つは 1 つの形を共有する: {shapes:?}");
+    assert!(tail.iter().all(|kind| kind.shape() != Shape::Run), "Run の形でない");
 }

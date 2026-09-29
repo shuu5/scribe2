@@ -762,6 +762,7 @@ pub fn append(state_dir: &Path, manifest: &Manifest, kind: EventKind, account: &
         account: Some(account.to_owned()),
         cost: None,
         rule: None,
+        case: None,
     };
     let _ = store::append(state_dir, &event, policy);
 }

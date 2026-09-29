@@ -2798,6 +2798,7 @@ fn put_group_round_as(state: &Path, ts: &str, account: &str, windows: &[(vessel:
             account: None,
             cost: None,
             rule: None,
+            case: None,
         };
         vessel::fleet::store::append(state, &event, policy).expect("実測を置ける");
     }

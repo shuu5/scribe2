@@ -792,6 +792,7 @@ fn acct_measured_rows(state: &Path, label: &str, rows: &[(vessel::fleet::WindowK
             account: None,
             cost: None,
             rule: None,
+            case: None,
         };
         vessel::fleet::store::append(state, &event, policy).expect("実測行を積める");
     }

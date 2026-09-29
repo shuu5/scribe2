@@ -103,6 +103,7 @@ pub(in crate::pipe) fn regate(state_dir: &Path, id: &str, reason: &str, policy: 
         account: None,
         cost: None,
         rule: None,
+        case: None,
     };
     // 段を進める記帳と同じ門を通す（止めた便へ書かない・設計 §39）。
     match store::append_if(state_dir, &event, policy, Condition::NotStopped { run: id }) {

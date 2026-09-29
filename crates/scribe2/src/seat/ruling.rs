@@ -90,6 +90,7 @@ pub fn add(state_dir: &Path, draft: &Draft<'_>) -> Result<Event, RulingRefusal> 
         account: None,
         cost: None,
         rule: draft.rule.map(str::to_owned),
+        case: None,
     };
     let store_err = |err: store::StoreError| RulingRefusal::Store(err.to_string());
     store::append(state_dir, &event, LockPolicy::embedded().map_err(store_err)?).map_err(store_err)?;
@@ -261,6 +262,7 @@ mod tests {
             account: None,
             cost: None,
             rule: None,
+            case: None,
         };
         crate::fleet::replay(&[event])
     }
@@ -285,6 +287,7 @@ mod tests {
             account: None,
             cost: None,
             rule: None,
+            case: None,
         }
     }
 

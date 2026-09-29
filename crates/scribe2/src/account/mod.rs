@@ -839,6 +839,7 @@ fn record(state_dir: &Path, kind: EventKind, label: &str, ts: &str) -> Result<()
         account: Some(label.to_owned()),
         cost: None,
         rule: None,
+        case: None,
     };
     let policy = LockPolicy::embedded().map_err(|_| AccountError::WriteFailed)?;
     store::append(state_dir, &event, policy).map(|_| ()).map_err(|_| AccountError::WriteFailed)

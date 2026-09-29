@@ -171,6 +171,7 @@ mod fleet {
                 account: None,
                 cost: None,
                 rule: None,
+                case: None,
             })
     }
 
@@ -223,6 +224,7 @@ mod fleet {
                 account: None,
                 cost: None,
                 rule: None,
+                case: None,
             })
     }
 
@@ -273,6 +275,7 @@ mod fleet {
                 account: None,
                 cost: None,
                 rule: None,
+                case: None,
             })
     }
 
@@ -303,6 +306,7 @@ mod fleet {
                 account: None,
                 cost: None,
                 rule,
+                case: None,
             })
     }
 

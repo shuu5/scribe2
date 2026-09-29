@@ -582,6 +582,7 @@ fn record_install(state_dir: &Path, install: &crate::fleet::Install) -> Result<(
         account: None,
         cost: None,
         rule: None,
+        case: None,
     };
     let policy = store::LockPolicy::embedded().map_err(|err| err.to_string())?;
     store::append(state_dir, &event, policy).map(|_| ()).map_err(|err| err.to_string())

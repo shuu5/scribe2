@@ -5,8 +5,8 @@
 
 use super::json_lite::{self, Value};
 use super::{
-    parse_actor, Allowance, Cost, CostSource, EventKind, Install, Mark, Measured, Pressure, Registration, Shape, Stage,
-    Unmeasured, UnmeasuredReason, Usage, WindowKind, SCHEMA,
+    parse_actor, Allowance, Case, Channel, Cost, CostSource, EventKind, Install, Mark, Measured, Pressure, Registration,
+    Shape, Sorting, Stage, Unmeasured, UnmeasuredReason, Usage, WindowKind, SCHEMA,
 };
 use crate::seat::role::Role;
 
@@ -18,10 +18,15 @@ const KNOWN_KEYS: &[&str] = &[
     "schema", "ts", "kind", "run", "bead", "host", "actor", "stage", "seat", "pid", "detail",
     "account", "window", "model", "endpoint", "used_pct", "resets_at", "reason", "role", "anchor", "target", "sid", "launch",
     "mark", "source", "usage", "turns", "wall_ms", "rule",
+    "channel", "session", "utterance", "sorting", "refuse", "version", "main",
 ];
 
 /// run 無しの裁定の kind（[`Shape::Ruling`]）だけが持てる key（他の kind の行に在れば malformed・設計 §9）。
 const RULING_KEYS: &[&str] = &["rule"];
+
+/// 案件の一生の kind（[`Shape::Case`]）だけが持てる key（他の kind の行に在れば malformed・kind ごとの内訳は
+/// [`Body::case`] の `own`・設計 §12）。
+const CASE_KEYS: &[&str] = &["channel", "session", "utterance", "sorting", "refuse", "version", "main"];
 
 /// 口座残量の kind だけが持てる key（設計 fleet-usage.md §4）。
 ///
@@ -89,6 +94,8 @@ pub struct Event {
     pub cost: Option<Cost>,
     /// 裁定が指す rules 行の id（[`EventKind::RulingReceived`] でだけ任意に `Some`・他の kind に在れば malformed・設計 §9）。
     pub rule: Option<String>,
+    /// 案件の一生の 5 kind の本体（[`Shape::Case`] の kind でだけ `Some`＝必須・他の kind に在れば malformed・設計 §12）。
+    pub case: Option<Case>,
 }
 
 impl Event {
@@ -118,6 +125,7 @@ impl Event {
                 pairs.extend(Some(&self.bead).filter(|bead| !bead.is_empty()).map(|bead| ("bead", Value::Str(bead.clone()))));
                 pairs.extend(self.rule.iter().map(|rule| ("rule", Value::Str(rule.clone()))));
             }
+            Shape::Case => pairs.extend(self.case.iter().flat_map(|case| case.pairs(&self.bead))),
             Shape::Allowance | Shape::Registration | Shape::Account | Shape::Install | Shape::Pressure | Shape::Group => {}
         }
         pairs.extend(self.account.iter().map(|label| ("account", Value::Str(label.clone()))));
@@ -195,6 +203,7 @@ impl Event {
             account: body.account,
             cost: body.cost,
             rule: body.rule,
+            case: body.case,
         })
     }
 }
@@ -218,6 +227,8 @@ struct Body {
     cost: Option<Cost>,
     /// 裁定が指す rules 行の id。
     rule: Option<String>,
+    /// 案件の一生の kind の本体。
+    case: Option<Case>,
 }
 
 impl Body {
@@ -231,6 +242,9 @@ impl Body {
         }
         if kind.shape() != Shape::Ruling {
             forbid(pairs, RULING_KEYS)?;
+        }
+        if kind.shape() != Shape::Case {
+            forbid(pairs, CASE_KEYS)?;
         }
         match kind {
             EventKind::AllowanceMeasured => {
@@ -249,6 +263,11 @@ impl Body {
             EventKind::RulingReceived => Self::ruling(pairs),
             EventKind::GroupPressureNotified => Self::pressure(pairs),
             EventKind::GroupMoved | EventKind::GroupMoveRefused | EventKind::GroupMovePending => Self::group(pairs),
+            EventKind::UtteranceReceived => Self::case(pairs, &["channel", "session"], utterance_of),
+            EventKind::UtteranceSorted => Self::case(pairs, &["utterance", "sorting", "bead"], sorted_of),
+            EventKind::TurnEndUnjudged => Self::case(pairs, &["session", "reason"], turn_end_of),
+            EventKind::IntakeRefused => Self::case(pairs, &["bead", "refuse"], refused_of),
+            EventKind::LifecycleCutover => Self::case(pairs, &["version", "main"], cutover_of),
             EventKind::RunCreated
             | EventKind::RunStage
             | EventKind::RunDone
@@ -401,6 +420,86 @@ impl Body {
         }
         Ok(Self { account: Some(text_of(field(pairs, "account"), "account")?), ..Self::default() })
     }
+
+    /// 案件の一生の kind の行の本体（設計 §12 の表）: `own` はこの kind が持てる本体の key（`bead` と、TurnEndUnjudged の
+    /// `reason` を含む）で、`read` が本体と `bead` を読む。`run` / `stage` / `seat` / `pid`・`own` の外の [`CASE_KEYS`]・口座残量・
+    /// 登録・列の印の key は**持たない**（在れば malformed）。`detail` は任意（発話の逐語の必須は `read` が見る）。
+    fn case(pairs: &[(String, Value)], own: &[&str], read: CaseReader) -> Result<Self, String> {
+        let keys = ["run", "bead", "stage", "seat", "pid"].iter().chain(CASE_KEYS).chain(ALLOWANCE_KEYS);
+        forbid(pairs, keys.chain(REGISTRATION_KEYS).chain(MARK_KEYS).filter(|key| !own.contains(key)))?;
+        let (case, bead) = read(pairs)?;
+        Ok(Self { bead: bead.unwrap_or_default(), case: Some(case), ..Self::default() })
+    }
+}
+
+/// 案件の一生の kind の本体の読み手（本体と、在れば `bead`）。
+type CaseReader = fn(&[(String, Value)]) -> Result<(Case, Option<String>), String>;
+
+/// UtteranceReceived: `channel` の 2 値と、chat の行だけが持つ `session`・`detail`（逐語）は必須。
+fn utterance_of(pairs: &[(String, Value)]) -> Result<(Case, Option<String>), String> {
+    let text = word_of(pairs, "channel")?;
+    let channel = Channel::parse(&text).ok_or(format!("channel {text} は chat / gui でない"))?;
+    let session = optional_word(pairs, "session")?;
+    match (channel, &session) {
+        (Channel::Chat, None) => return Err("channel chat の行に session が無い".to_owned()),
+        (Channel::Gui, Some(_)) => return Err("channel gui の行は session を持たない".to_owned()),
+        (Channel::Chat, Some(_)) | (Channel::Gui, None) => {}
+    }
+    text_of(field(pairs, "detail"), "detail")?;
+    Ok((Case::Utterance { channel, session }, None))
+}
+
+/// UtteranceSorted: `utterance` と `sorting` の 2 値・request の行だけが持つ `bead`（開いた memo の id）。
+fn sorted_of(pairs: &[(String, Value)]) -> Result<(Case, Option<String>), String> {
+    let utterance = word_of(pairs, "utterance")?;
+    let text = word_of(pairs, "sorting")?;
+    let sorting = Sorting::parse(&text).ok_or(format!("sorting {text} は request / chat でない"))?;
+    let bead = optional_word(pairs, "bead")?;
+    match (sorting, &bead) {
+        (Sorting::Request, None) => return Err("sorting request の行に bead が無い".to_owned()),
+        (Sorting::Chat, Some(_)) => return Err("sorting chat の行は bead を持たない".to_owned()),
+        (Sorting::Request, Some(_)) | (Sorting::Chat, None) => {}
+    }
+    Ok((Case::Sorted { utterance, sorting }, bead))
+}
+
+/// TurnEndUnjudged: `reason` は必須・`session` は任意。
+fn turn_end_of(pairs: &[(String, Value)]) -> Result<(Case, Option<String>), String> {
+    let session = optional_word(pairs, "session")?;
+    Ok((Case::TurnEnd { session, reason: word_of(pairs, "reason")? }, None))
+}
+
+/// IntakeRefused: `bead`（契約の id）と `refuse`（受付の断りの名）が必須。
+fn refused_of(pairs: &[(String, Value)]) -> Result<(Case, Option<String>), String> {
+    let bead = word_of(pairs, "bead")?;
+    Ok((Case::Refused { refuse: word_of(pairs, "refuse")? }, Some(bead)))
+}
+
+/// LifecycleCutover: `version` と `main`（小文字の 16 進）が必須。
+fn cutover_of(pairs: &[(String, Value)]) -> Result<(Case, Option<String>), String> {
+    let version = word_of(pairs, "version")?;
+    let main = word_of(pairs, "main")?;
+    if !main.chars().all(|ch| matches!(ch, '0'..='9' | 'a'..='f')) {
+        return Err(format!("main {main} は小文字の 16 進でない"));
+    }
+    Ok((Case::Cutover { version, main }, None))
+}
+
+/// 必須の空でない文字列 field（空は key を名指して `Err`）。
+fn word_of(pairs: &[(String, Value)], key: &str) -> Result<String, String> {
+    let text = text_of(field(pairs, key), key)?;
+    if text.is_empty() {
+        return Err(format!("{key} が空"));
+    }
+    Ok(text)
+}
+
+/// 任意の空でない文字列 field（key が在って文字列でないか空なら `Err`）。
+fn optional_word(pairs: &[(String, Value)], key: &str) -> Result<Option<String>, String> {
+    match field(pairs, key) {
+        None => Ok(None),
+        Some(_) => word_of(pairs, key).map(Some),
+    }
 }
 
 impl Event {
@@ -416,7 +515,8 @@ impl Event {
             | Shape::Cost
             | Shape::Ruling
             | Shape::Pressure
-            | Shape::Group => None,
+            | Shape::Group
+            | Shape::Case => None,
         }
     }
 
@@ -432,7 +532,8 @@ impl Event {
             | Shape::Install
             | Shape::Cost
             | Shape::Ruling
-            | Shape::Group => None,
+            | Shape::Group
+            | Shape::Case => None,
         }
     }
 }

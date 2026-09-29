@@ -2313,6 +2313,7 @@ fn put_rows(state: &Path, ts: &str, account: &str, rows: &[(Option<&str>, u64, &
             account: None,
             cost: None,
             rule: None,
+            case: None,
         };
         vessel::fleet::store::append(state, &event, policy).expect("実測を置ける");
     }

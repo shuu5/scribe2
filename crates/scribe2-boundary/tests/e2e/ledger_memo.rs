@@ -59,6 +59,7 @@ fn push(place: &Place, run: &str, (kind, stage): (EventKind, Option<Stage>), det
         account: None,
         cost: None,
         rule: None,
+        case: None,
     };
     let policy = vessel::fleet::store::LockPolicy::embedded().expect("埋め込みの lock 行を読める");
     vessel::fleet::store::append(&place.state, &event, policy).expect("event を積める");

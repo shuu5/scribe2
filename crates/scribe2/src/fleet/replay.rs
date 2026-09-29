@@ -240,7 +240,12 @@ fn apply_account(state: &mut State, event: &Event) {
         | EventKind::GroupMoved
         | EventKind::GroupMoveRefused
         | EventKind::GroupMovePending
-        | EventKind::SeatRetired => {}
+        | EventKind::SeatRetired
+        | EventKind::UtteranceReceived
+        | EventKind::UtteranceSorted
+        | EventKind::TurnEndUnjudged
+        | EventKind::IntakeRefused
+        | EventKind::LifecycleCutover => {}
     }
 }
 
@@ -328,6 +333,11 @@ fn apply_seat(state: &mut State, event: &Event) {
         | EventKind::GroupMoved
         | EventKind::GroupMoveRefused
         | EventKind::GroupMovePending
-        | EventKind::SeatRetired => {}
+        | EventKind::SeatRetired
+        | EventKind::UtteranceReceived
+        | EventKind::UtteranceSorted
+        | EventKind::TurnEndUnjudged
+        | EventKind::IntakeRefused
+        | EventKind::LifecycleCutover => {}
     }
 }

@@ -13,7 +13,7 @@ use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
 use crate::rules::manifest::Manifest;
 use crate::rules::{RuleError, RuleValue};
 use crate::seat::StateDir;
-use super::{json_lite, replay, Event, EventKind, Stage, State, SCHEMA};
+use super::{json_lite, replay, Event, EventKind, Shape, Stage, State, SCHEMA};
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -339,29 +339,12 @@ fn record(args: &[String], dir: &Path) -> Outcome {
 fn build_event(args: &[String]) -> Result<Event, String> {
     let kind_text = required(args, "--kind")?;
     let kind = EventKind::parse(kind_text).ok_or(format!("kind {kind_text} は未知である"))?;
-    // 口座残量の行は**この口から書けない**。`record` は `--run` / `--bead` を要る形なので、
-    // 口座の行をここで許すと便に紐づかない行に便 id が付き、必須 field も揃わない
-    // （書き手は `fleet usage` の 1 本だけである・設計 fleet-usage.md §5）。
-    // 席の登録の行も同じ（書き手は打刻の条件付きの `seat register` だけ）。口座の退役・戻しの行も同じ
-    // （書き手は mv と対の `account retire` / `restore` だけ・dir を動かさずに状態だけを書く口を作らない）。install の行も
-    // 同じ（書き手は install の成功の後の `vessel update` だけ・「撃った」と「入った」を融合しない・consumer-sync.md §5）。
-    // 消費の行も同じ（書き手は claude の result record を読んだ pipe の 3 か所だけ・6 値をこの口は持たない・gate-cost.md §26）。
-    // run 無しの裁定の行も同じ（書き手は対話面の席を確かめる `seat ruling add` だけ・この口は `run` を要る・§9）。
-    // 群の逼迫の通知の行も同じ（書き手は注入と対の dispatch の 1 周の群の段だけ・account-lifecycle.md §19 形 3）。
-    // 席の登録 row の退役の行も同じ（書き手は row を引いて写す `seat retire` だけ・account-lifecycle.md §24）。
-    if kind.is_allowance()
-        || matches!(
-            kind,
-            EventKind::SeatRegistered
-                | EventKind::SeatRetired
-                | EventKind::AccountRetired
-                | EventKind::AccountRestored
-                | EventKind::InstallRecorded
-                | EventKind::RunCost
-                | EventKind::RulingReceived
-                | EventKind::GroupPressureNotified
-        )
-    {
+    // この口が書けるのは本体が便の形（[`Shape::Run`]＝`run` + `bead`）の kind だけで、ほかの形の kind は**全部断る**
+    // （設計 fleet-event-log.md §12 形 5）。この口は本体（口座残量・登録・列の印・消費・案件の一生の key 等）を持たないので、
+    // 通すと読み手が malformed と読む行が append-only の log に残り、置き場の replay が止まる。各形の書き手は専用の口
+    // （`fleet usage`・`seat register` / `seat retire`・`account retire` / `restore`・`vessel update`・pipe の口・`seat ruling add`
+    // 等）だけで、断りは手書きの列でなく形から導く（kind を足した周に列を直す手を要らない・C2）。
+    if kind.shape() != Shape::Run {
         return Err(format!("kind {kind_text} は record では書けない"));
     }
     let stage = match optional(args, "--stage")? {
@@ -401,6 +384,7 @@ fn build_event(args: &[String]) -> Result<Event, String> {
         account,
         cost: None,
         rule: None,
+        case: None,
     })
 }
 

@@ -82,12 +82,13 @@ impl Counted {
 ///
 /// 承認だけを人の手として許す判定は **kind で行う**（actor の字面ではない）——`actor` は
 /// 「誰が起こしたか」、`kind` は「何が起きたか」で、到達点が言う例外は後者だからである。承認の kind は
-/// [`is_approval`] の 2 つ（run 無しの裁定も承認 event・ADR-0037）。
+/// [`is_approval`] の 2 つ（run 無しの裁定も承認 event・ADR-0037）。発話（`UtteranceReceived`）は actor が human でも
+/// 人由来に数えない（人の手が器を動かした印ではない・FR22・設計 fleet-event-log.md §12 形 6）。
 pub fn count(events: &[Event]) -> Counted {
     let state = replay(events);
     let human: Vec<&Event> = events
         .iter()
-        .filter(|event| event.actor == ACTOR_HUMAN)
+        .filter(|event| event.actor == ACTOR_HUMAN && event.kind != EventKind::UtteranceReceived)
         .collect();
     let mut by_kind = [0_usize; FINDING_KINDS.len()];
     for kind in events.iter().filter_map(review_failure) {

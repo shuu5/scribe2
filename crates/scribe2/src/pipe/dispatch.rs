@@ -387,6 +387,7 @@ fn launched(input: &Input<'_>, launch: &Launch) -> bool {
         account: None,
         cost: None,
         rule: None,
+        case: None,
     };
     store::append(input.state_dir, &event, policy).is_ok()
 }
@@ -972,6 +973,7 @@ mod tests {
             account: None,
             cost: None,
             rule: None,
+            case: None,
         }
     }
 
@@ -995,6 +997,7 @@ mod tests {
             account: None,
             cost: None,
             rule: None,
+            case: None,
         }
     }
 
