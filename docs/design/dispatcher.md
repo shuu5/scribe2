@@ -523,6 +523,43 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
   - 空きが少ない周に起こすのを止める遮断器（§18 の健康の遮断器に disk の空きを足す形）は持たない。閾値の rules 行は持ち主の裁定が要るので、次の行の候補にする。
 - 却下（[ADR-0081](../../design-intent/decisions/ADR-0081-run-worktree-intermediates-are-swept-when-runs-stop-being-live.html) の比較と同じ）: 今のまま人が片付ける／`git clean -d -X -f` で無視された file を全部消す（無視の規則は鍵・手書きの script・local の設定のような作り直せない物も持ち、host の個人設定の除外も読む）／退役先の木だけを掃除する（regate の手戻りは無いが、退役しない終端の木が溜まり続ける）／repo ごとに build の置き場を 1 つ共有する（言語に依り、並んだ便の build が 1 つの lock で順に待つ）／退役先の木ごと消す（N1.2 の可逆な退役を破る）／project ごとに消す dir を宣言に書く（跨版の新しい key・書かない project では効かない）。
 
+## 31. 台帳の問い（label intake:question）を起動の列の入力と事前審査の母集団から memo と同じく外し、memo と問いの label の字の定義を 1 か所に寄せる（契約表の行 af・FR68・FR51・ADR-0083・ADR-0088）
+
+やさしく言うと: 台帳の問い（席から user への問いを残す bead）は契約ではない。ところが列は memo の印しか見ていないので、問いに受入条件の文が入っていると、列はそれを契約として起こしてしまう。列が memo と同じく問いも外すようにし、あわせて 4 か所に散った memo の印の字を 1 か所にまとめる。
+
+- 何が起きているか（main 24f6ef1e・verified）:
+  - 列の入力の判定 `is_input`（`crates/scribe2/src/pipe/dispatch/candidates.rs` の :33）は「status が open ∧ acceptance が空でない ∧ label `intake:memo` が無い」の 3 つだけを見て、label `intake:question` を見ない。いま問いが列に並ばないのは、問いがたまたま acceptance を持たないからである。acceptance を持つ問いは列の候補に並び、設計 pointer の行を持てば起こせる側（`dispatch ls` の reason が `-`）に立つ。起票の門は問いの acceptance を断らない（FR81 (a) の欄に acceptance は無く、席の子 process の書きは門の外）。
+  - 事前審査（§27）の母集団と到達の関数 `population`（`crates/scribe2/src/pipe/dispatch/precheck.rs` の :50）も「closed でない ∧ label `intake:memo` が無い ∧ 設計 pointer が解ける」bead を契約の行に数え（:54）、問いを外さない。設計 pointer を持つ問いが待ち行の blocks の祖先に居ると、その問いの宣言が予想の base に入る。
+  - 要件は外すと言う: SRS FR68 の起動の列は「memo でなく ∧ 台帳の問い（label intake:question・FR81）でなく」、ADR-0083 の決定 (1) は「この label の bead は台帳の lint と起動の列が契約にも memo にも数えない」。台帳の形の lint の側は [ledger-form.md](./ledger-form.md) §13（行 i）で着地済みで、列の側だけが残っている。
+  - 印の字の定義: `intake:memo` は 4 つ在る。`crates/scribe2/src/ledger/form.rs` の :25（公開の const `MEMO_LABEL`）・`crates/scribe2/src/ledger/lint.rs` の :23（公開の const `MEMO_LABEL`）・`crates/scribe2/src/pipe/dispatch.rs` の :53（私有の const `MEMO_LABEL`・子の candidates.rs と precheck.rs が `super::` で引く）・`crates/scribe2/src/ledger/memo.rs` の :22（公開の const・memo の plan の引数に書く）。起票の門（`crates/scribe2/src/hook/ledger_guard.rs` の :20）は form.rs の const を借りるので、定義には数えない。`intake:question` は form.rs の :37（`QUESTION_LABEL`）の 1 つだけ。lint.rs と memo.rs の const に外の呼び手は 0 本。
+  - 台帳の bead の label を自分で比べる判定は 5 か所: form.rs の is_memo（:103）と問いの除外（:187）・lint.rs の is_memo（:60）・candidates.rs の :36・precheck.rs の :54。起票の門は台帳の書きの command の label を比べる（:245・台帳の bead ではない）。
+  - [ADR-0088](../../design-intent/decisions/ADR-0088-case-positions-are-computed-once-by-the-vessel-and-read-from-one-file.html) の代償の 1 項が「label intake:memo の定数を局面の関数が 5 つ目の読み手にしないよう、実装の行で 1 か所へ寄せる手も要る」と言う。
+  - 本 repo の台帳（2026-09-29・読むだけ）: bead 810 件のうち問い 3 件（全部 closed・acceptance を持つもの 0）・memo 133 件（acceptance を持つもの 0）。この repo で誤って起こされた問いは今は無い。穴は、問いが acceptance を持った周に開く。
+- 形（番号は done と 1:1）:
+  1. **印の字の定義を form.rs に寄せる**: `intake:memo` の字を定義するのは form.rs の `MEMO_LABEL` の 1 つだけにする。lint.rs・memo.rs・dispatch.rs の const は消し、form.rs の const か形 2 の述語を引く。`intake:question` は form.rs の `QUESTION_LABEL` のまま。器の src で 2 つの印の字を定義する所は form.rs の 2 つの const だけになる。memo の plan の引数（`arg: --labels=intake:memo`）・doctor の台帳の 2 行・起票の門の断り文の字は 1 字も変えない。lint.rs・memo.rs・dispatch.rs は行が減るだけである。
+  2. **判定の述語を form.rs に 2 つ置く**: form.rs の is_memo を公開にし、同じ形で「label `intake:question` を持つか」を判じる公開の述語 is_question を足す。form.rs の 4 象限の問いの除外・lint.rs の memo の数え・列の入力・事前審査の母集団は、この 2 つを引いて label を自分で比べない（C2）。後の行が作る局面の関数も同じ 2 つを引く（5 つ目の読み手を作らない）。起票の門は台帳の bead でなく書きの command の label を見るので、今どおり form.rs の const を引く。
+  3. **列の入力から問いを外す**: `is_input` が、label `intake:question` を持つ bead を memo と同じく外す（acceptance の有無に依らない）。外れた bead は memo と同じく `dispatch ls` にも出ない（§2「ここで落ちた bead は ls にも出ない」）。`WaitReason` の値・`dispatch ls` の行の形・`order` は変えない。
+  4. **事前審査の母集団から問いを外す**: `population` が契約の行を数えるとき、memo と同じく問いも外す。blocks の到達には問いも今どおり残る（到達は契約の行でない bead も含む・§27 形 1）。問いは祖先の重ね方に入らなくなるだけである。
+- 触らない: 起票の門の判定と断り文（問いの欄の検査〔FR81 (a)〕は後の行）・台帳の lint（lint.rs）の数え方（設計 pointer を持つ問いを契約に数えるのは [ledger-form.md](./ledger-form.md) §13 の「変えない」のまま・本行は定義の置き場だけを動かす）・form.rs の `judge` の結果・memo の plan の出力・event の kind・列の待ちの理由と起こす契機・§27 の可視性の段落（`MEMO_LABEL` を dispatch.rs の私有の const と書いた main be51991 の時点の記述として残す）・`crates/scribe2/src/seat/ledger.rs` の台帳の 1 件の型。
+- 歯（接頭辞 `pipe_dispatch_intake_label_` と `precheck_intake_label_`・`grep -rn "intake_label" crates/` は 0 件・2026-09-29）:
+  - (a) e2e（`crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs`・既存の 2 行の repo と偽の台帳）: 行 a を指す契約 1 件と、label `intake:question` と行 b を指す設計 pointer の acceptance を持つ問い 1 件の台帳で `dispatch ls` を撃つ。契約の reason が `-`（台帳を読めて判定に届いた対照）、問いの bead の `[DISPATCH]` 行が無く、件数の行が `total=1 ready=1`。
+  - (b) e2e（回帰の歯・base でも緑）: (a) の問いの代わりに label `intake:memo` と同じ acceptance を持つ bead を置くと、その行が無く `total=1 ready=1`。列の memo の除外を測る歯は今まで 1 本も無かった（e2e の列の台帳の fixture は label が全部空）。
+  - (c) in-file（`crates/scribe2/src/pipe/dispatch/precheck.rs` の末尾に歯の区間を新設）: 設計 pointer を持つ契約 c（問い q に blocks される）・label `intake:question` と設計 pointer を持つ問い q・label の無い同じ pointer の bead p の 3 件で `population` を撃つ。契約の行が c と p だけ（p は pointer が解ける対照）で、c の到達が q を持つ。
+  - (d) in-file（回帰の歯・base でも緑）: (c) の q の label を `intake:memo` に替えると、行が c と p だけ。
+  - 歯は e2e の台帳の 1 件を組む既存の helper と偽の台帳の helper の本文を変えない（label を持つ 1 件は、空の label の列を置き換える新しい小さな helper で組む）。(c)(d) は form.rs の既存の 2 つの const を引き、形 2 の新しい述語を呼ばない（base でも compile が通り、赤は判定の差で出る）。(a)(b) は印の字を自分で書く（器の字を借りない）。
+  - 寄せた定義の字を外から測る既存の歯（本文は変えない・verify に載せる・どれも base でも緑）: lint.rs の in-file の `ledger_lint_judge_counts_each_defect_apart`（台帳の JSON の字で memo を数える）・form.rs の in-file の `quadrant_exempts_question_from_the_shaped_population`・e2e の `ledger_memo_plan_carries_label_parent_and_relates_to`（plan の引数の `arg: --labels=intake:memo`）。最後の歯の file は本行で中身を変えないので、write-set に置き場だけの印 `=` で載せる。
+  - 判定の順と変異（条件 1 つに歯 1 本）: 列の入力は status → acceptance → memo → 問いの順に見る。問いの判定を外す変異は (a) を、memo の判定を外す変異は (b) を落とす。母集団は status → memo → 問い → pointer の順で、問いを外す変異は (c) を、memo を外す変異は (d) を落とす。問いの述語を常に偽にする変異は (a)(c) と `quadrant_exempts_question_from_the_shaped_population` を落とす。`QUESTION_LABEL` の字を打ち違える変異は (a) だけが落とす（(c) と form.rs の歯は同じ const を引くので落ちない）。`MEMO_LABEL` の字を打ち違える変異は (b) と lint.rs の歯と memo の plan の歯が落とす。
+- base で RED の理由: (a) は base の `is_input` が label `intake:question` を見ないので、問いが reason `-` で候補に並ぶ（件数の行が `total=2`・機能不在）。(c) は base の `population` が問いを契約の行に数える（機能不在）。(b)(d) は回帰の歯で base でも緑である。flip-check は file ごとに撃つので、同じ file の (a) か (c) が赤なら file は赤になる。
+- 限界:
+  - 問いの印と memo の印を併せ持つ bead と、設計 pointer を持つ問いは、列から外れるだけで doctor も名指さない。形を断るのは起票の門（FR81 (a)・ADR-0087 の併せ持ちの断り）を実装する後の行である。
+  - 列から外れた問いは `dispatch ls` に出ない（memo と同じ）。問いに誤って契約の acceptance を書いた周に、planner は列からは気付けない。
+- 却下:
+  - 問いを列に載せて、待ちの理由で見せる。`WaitReason` の閉じた型に値が増え、SRS FR68 の閉じた理由の列にも無い。問いは契約でないので、memo と同じく列の母集団に入れない。
+  - bead の型（`issue_type`）で外す。問いは型 task で起票され、器が問いとして読むのは label だけである（ADR-0083）。
+  - dispatch.rs に問いの印の const をもう 1 つ置く。定義が 5 つ目になり、ADR-0088 の代償の項と C2 に反する。
+  - 契約かの判定を form.rs の 1 関数にまとめて列も使う。列は設計 pointer の無い bead を `NoDesignPointer` で見せる約束（§2）を持ち、form.rs の契約の数え（pointer 行を持つ bead）と母集団が違う。
+  - 事前審査の母集団は変えず、列の入力だけ直す。問いが待ち行の祖先に居ると問いの宣言が予想の base に入り、§27 形 1 の「閉じていない契約の行」と食い違う。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -891,4 +928,14 @@ size = "S"
 growth = ["crates/scribe2/src/pipe/sweep.rs:140", "crates/scribe2/src/pipe/mod.rs:2", "crates/scribe2/src/pipe/cli.rs:6"]
 done = "(1) 消す dir の名は target・node_modules・.venv・__pycache__・.mypy_cache・.pytest_cache・.ruff_cache・.expo の閉じた 8 つの const の slice で、無視の規則と host の除外は読まず git clean は撃たない (2) 掃除の 1 関数が置き場の replay の全便のうち live が Some(false) の便について置き場の記録から repo を解き、元の場所と退役先のうち在る方の木を .git に降りずに歩き、名が列に在り追跡されている file を持たない dir（その木の git ls-files の 1 回で判じる）を remove_dir_all で消してその下へ降りず、live が Some(true) か None の便・repo を解けない便・木が無い便は撃たず、git ls-files を撃てない木は消さずに失敗に数える (3) cli.rs の dispatch が終端の subcommand の周に段の記帳の後・列の 1 周の前に 1 回撃ち、--repo の無い周も撃つ (4) 置き場の pipe の dir の掃除の lock を acquire_with で取り、取れない周は撃たない (5) dir を消した周・失敗した木が在る周・lock を取れない周だけ stderr に sweep: removed=<n> runs=<k> failed=<m>[:<便 id>,…] か sweep: skipped=lock を 1 行出し、stdout・event・rc は変えない (6) 退役の move・WorktreeCheck・live の判定・列の判定・rules 行・event の kind・host_guard.git は変わらない 歯: pipe_sweep_ の (a) Stopped の便の元の場所の木から追跡されていない target/ と node_modules/ が pipe stop の終端の後に消え、追跡されている file を持つ target の名の dir・列に無い未追跡の dir・無視の規則に当たる列に無い file は残り、stderr が sweep: removed=2 runs=1 で始まる行を持ち、終端の後も live のままの便の木の target/ は残る (b) Landed の便の退役先の木の target/ が下に入れ子の .git を持っていても消える・base は消えないので RED"
 
+[[contract]]
+id = "af"
+title = "台帳の問い（label intake:question）を起動の列の入力と事前審査の母集団から memo と同じく外し、memo と問いの label の字の定義を ledger/form.rs の const 2 つに、判定を同じ file の公開の述語 2 つに寄せる — 列の待ちの理由・dispatch ls の字・doctor の行・memo の plan の字・起票の門は不変（FR68・FR51・ADR-0083・ADR-0088 の代償の項）"
+req = ["FR68", "FR51"]
+section = "31"
+write-set = ["crates/scribe2/src/ledger/form.rs", "crates/scribe2/src/ledger/lint.rs", "crates/scribe2/src/ledger/memo.rs", "crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/dispatch/candidates.rs", "crates/scribe2/src/pipe/dispatch/precheck.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "=crates/scribe2-boundary/tests/e2e/ledger_memo.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_intake_label_", "cargo nextest run -p scribe2 --lib --no-tests=fail precheck_intake_label_", "cargo nextest run -p scribe2 --lib --no-tests=fail ledger_lint_judge_counts_each_defect_apart", "cargo nextest run -p scribe2 --lib --no-tests=fail quadrant_exempts_question_from_the_shaped_population", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail ledger_memo_plan_carries_label_parent_and_relates_to"]
+size = "S"
+growth = ["crates/scribe2/src/ledger/form.rs:8", "crates/scribe2/src/ledger/lint.rs:0", "crates/scribe2/src/ledger/memo.rs:0", "crates/scribe2/src/pipe/dispatch.rs:0", "crates/scribe2/src/pipe/dispatch/candidates.rs:4", "crates/scribe2/src/pipe/dispatch/precheck.rs:40"]
+done = "(1) intake:memo の字を定義するのは form.rs の MEMO_LABEL だけになり、lint.rs・memo.rs・dispatch.rs の const は消えて form.rs の const か (2) の述語を引き、intake:question は form.rs の QUESTION_LABEL のままで、memo の plan の引数 arg: --labels=intake:memo と doctor の台帳の 2 行と起票の門の断り文の字は変わらない (2) form.rs が memo か（is_memo を公開にする）と問いか（is_question を足す）の公開の述語 2 つを持ち、form.rs の 4 象限の問いの除外・lint.rs の memo の数え・列の入力・事前審査の母集団はこの述語を引いて label を自分で比べず、起票の門は今どおり form.rs の const を引く (3) 列の入力の判定が label intake:question を持つ bead を acceptance の有無に依らず外し、その bead は dispatch ls にも出ず、WaitReason の値と dispatch ls の行の形と順序は変わらない (4) 事前審査の母集団の関数が問いを契約の行に数えず、blocks の到達には今どおり残る 歯: pipe_dispatch_intake_label_ の (a) 行 a を指す契約 1 件と label intake:question と行 b を指す設計 pointer の acceptance を持つ問い 1 件の台帳で dispatch ls の契約の reason が - で問いの行が無く件数の行が total=1 ready=1（base は問いも候補に並び件数の行が total=2 なので RED）(b) 問いの代わりに label intake:memo の bead を置いた台帳で同じく行が無く total=1 ready=1（回帰の歯・base でも緑）、precheck_intake_label_ の (c) 問い q（label intake:question・設計 pointer）に blocks される契約 c と label の無い同じ pointer の bead p の 3 件で母集団の契約の行が c と p だけで c の到達が q を持つ（base は q も行に数えるので RED・歯は form.rs の既存の const を引き新しい述語を呼ばない）(d) q の label を intake:memo に替えても行が c と p だけ（回帰の歯・base でも緑）、e2e の台帳の 1 件を組む既存の helper と偽の台帳の helper の本文は変わらず、既存の歯 ledger_lint_judge_counts_each_defect_apart・quadrant_exempts_question_from_the_shaped_population・ledger_memo_plan_carries_label_parent_and_relates_to は本文を変えずに緑"
 <!-- contracts:end -->

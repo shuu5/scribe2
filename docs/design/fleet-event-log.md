@@ -29,10 +29,10 @@ C3 は「1 つの DB file（host 列）」と言う。MVP はそれを **append-
 | `schema` | u64 | 必須 | 1。非互換な変更は版を上げる（ADR-0004 §2.5） |
 | `ts` | string | 必須 | UTC `YYYY-MM-DDTHH:MM:SSZ` |
 | `kind` | string | 必須 | `EventKind` の variant 名 |
-| `run` | string | kind ごと | run id（`<bead>-<UTC stamp>`）。便の kind では必須・run を持たない kind（口座残量 2・`SeatRegistered`・`AccountRetired` / `AccountRestored`・`RulingReceived`〔§9〕）では在れば malformed |
-| `bead` | string | kind ごと | 契約の bead id（台帳は読まない・文字列として持つだけ）。便の kind では必須・run を持たない kind では禁止（`RulingReceived` だけ任意） |
+| `run` | string | kind ごと | run id（`<bead>-<UTC stamp>`）。便の kind では必須・run を持たない kind（口座残量 2・`SeatRegistered`・`AccountRetired` / `AccountRestored`・`RulingReceived`〔§9〕・§12 の 5 kind）では在れば malformed |
+| `bead` | string | kind ごと | 契約の bead id（台帳は読まない・文字列として持つだけ）。便の kind では必須・run を持たない kind では禁止（`RulingReceived` だけ任意・§12 の UtteranceSorted は sorting が request の行だけ必須・IntakeRefused は必須） |
 | `host` | string | 必須 | host 名（C3 の host 列）。`/etc/hostname` → `hostname` コマンド → `"unknown"` の順。env は読まない |
-| `actor` | string | 必須 | `"machine"` / `"human"`。人由来 event を数える面（FR22）。`human` は `ApprovalReceived` と `RulingReceived`（§9）の 2 kind |
+| `actor` | string | 必須 | `"machine"` / `"human"`。人由来 event を数える面（FR22）。`human` は `ApprovalReceived`・`RulingReceived`（§9）・`SeatRetired`・UtteranceReceived（§12）の 4 kind |
 | `stage` | string | 任意 | `Stage` の variant 名 |
 | `seat` | string | 任意 | 席 id（MVP は run id と同じ） |
 | `pid` | u64 | 任意 | runner の pid |
@@ -57,7 +57,7 @@ C3 は「1 つの DB file（host 列）」と言う。MVP はそれを **append-
 
 ## 5. CLI（`<NAME> fleet …`・`--state-dir D` 必須・出力は `emit` / `emit_err` 経由のみ）
 
-- `fleet record --kind <k> --run <id> --bead <b> [--stage <s>] [--seat <id>] [--pid <n>] [--actor machine|human] [--detail <text>]` → rc 0・stdout 1 行 `fleet: recorded <kind> run=<id>`。
+- `fleet record --kind <k> --run <id> --bead <b> [--stage <s>] [--seat <id>] [--pid <n>] [--actor machine|human] [--detail <text>]` → rc 0・stdout 1 行 `fleet: recorded <kind> run=<id>`。書けるのは本体の形が便の形の kind だけで、ほかの kind は断る（§12 形 5）。
 - `fleet show --run <id>` → 1 行 `run=<id> bead=<b> stage=<s> approved=<bool> updated=<ts>`。無ければ `fleet: no such run` + rc 1。store が読めなければ rc 2。
 - `fleet export`（**跨版 面 2**）: stdout 1 行目 = `{"schema":1,"kind":"export","host":"<host>","runs":<N>,"seats":<N>}`、以降 run 1 件 1 行・seat 1 件 1 行。**read-only**（store の file を 1 byte も変えない・lock も取らない）。malformed なら error 行 + rc 2。
   - run 行 = `{"kind":"run","id":"<run id>","bead":"<bead>","stage":"<Stage>","approved":<bool>,"updated":"<ts>"}`（key はこの並び）。
@@ -132,6 +132,77 @@ C3 は「1 つの DB file（host 列）」と言う。MVP はそれを **append-
   - `fleet_lock_unparsed_fresh_body_waits_under_dead_only`: 同じ 2 つの本文でも古くない周（`stale_ms` を大きく）は DeadOnly で取れず、lock は残る（base でも緑・非空虚の対）。
 - base で RED の理由: 1 本目は、base の `acquire_in` が DeadOnly の周に古さを見ないので取れない（機能不在）。
 
+## 12. 案件の一生の event の kind 5 つを読み書きの両側で先に足す — 書き手の行より前に閉じた型の閉包を 1 回で広げる（契約表の行 f・[ADR-0087](../../design-intent/decisions/ADR-0087-user-utterances-are-sorted-three-ways-and-seat-questions-go-to-the-ledger.html)・[ADR-0088](../../design-intent/decisions/ADR-0088-case-positions-are-computed-once-by-the-vessel-and-read-from-one-file.html)）
+
+やさしく言うと: 後の行が書く 5 種類の記録（発話・仕分け・turn の終わりの読めない周・受付の断り・切り替えの線）を、先に「読める・書ける」ようにしておく。記録の種類の一覧を 1 回だけ広げ、書き手の行ごとに一覧を触らなくて済むようにする。
+
+- 要件: [FR82](../../design-intent/spec/srs.html#FR82)（発話 event）/ [FR88](../../design-intent/spec/srs.html#FR88)（仕分けの event・turn の終わりの読めない周）/ [FR90](../../design-intent/spec/srs.html#FR90)（切り替えの線）/ [FR68](../../design-intent/spec/srs.html#FR68)（受付の断りの event）/ [FR22](../../design-intent/spec/srs.html#FR22)（発話は人由来に数えない）。kind と key の名は ADR-0087（発話・仕分け・turn の終わり）・ADR-0088（受付の断り・切り替えの線）・[ADR-0083](../../design-intent/decisions/ADR-0083-rulings-bind-ledger-questions-to-recorded-utterances.html)（発話の kind と actor）が決めた。kind は閉じた型の末尾に足し、key を足すだけなので schema 版は 1 のまま（ADR-0004 §2.5）。
+- 何が起きているか（main 24f6ef1e・verified）:
+  - `EventKind` は 24 値で、`KINDS` の末尾は `SeatRetired`。5 つの kind の名も 7 つの新しい key（channel・session・utterance・sorting・refuse・version・main）も crates の中に 0 件。今の器は 5 kind の行を 1 行でも読むと `read_all` が「未知の kind」の Err を返し、その置き場の replay の全部が止まる（NFR4・fail-closed）。
+  - `EventKind` の網羅 match は 6 か所: `crates/scribe2/src/fleet/mod.rs` の `as_str`・`default_actor`・`shape`、`crates/scribe2/src/fleet/event.rs` の `read`、`crates/scribe2/src/fleet/replay.rs` の `apply_account` と `apply_seat`。`Shape` の網羅 match は `crates/scribe2/src/fleet/event.rs` の 3 か所（`to_line`・`install`・`pressure`）。`KINDS` の件数と末尾の pin は 4 file・5 か所（`crates/scribe2-boundary/tests/e2e/fleet.rs` の `fleet_kinds_follow_declaration_order`・`crates/scribe2-boundary/tests/e2e/fleet/account.rs` の `account_cmd_kinds_are_fifteen_with_retire_and_restore_last`・`crates/scribe2-boundary/tests/e2e/fleet/json.rs` の `fleet_replay_seat_retired_kind_is_a_registration_shape_and_record_refuses_it`・`crates/scribe2-boundary/tests/e2e/pipe/gate.rs` の `pipe_regate_returns_gated_fail_to_implemented_on_the_same_worktree` と `pipe_follow_step_moves_gated_tree_onto_main_and_returns_to_implemented`）。
+  - `Event` の literal 構築点（field を全部並べる形）は 19 file・34 か所（src 11 file・19 か所、歯 8 file・15 か所・一覧は行 f の write-set）と、`crates/scribe2/src/fleet/event.rs` の `from_line` の 1 か所。`..` の struct update の構築点（`crates/scribe2/src/pipe/stop.rs` ほか）は field を足しても直さなくてよい。
+  - `fleet record` の断りは `crates/scribe2/src/fleet/cli.rs` の `build_event` の手書きの列（口座残量と 8 kind）で、`DispatchMark` と `GroupMoved` / `GroupMoveRefused` / `GroupMovePending` を通す。通した行は本体（列の印・口座 label と detail）を持たないので読み手が malformed と読み、次の `fleet show` から rc 2 になる（PATH の binary で置き場を別に作って撃った実測: `DispatchMark` は rc 0 の後に `mark が無いか文字列でない line=1`、`GroupMoved` は `detail が無いか文字列でない line=1`）。
+  - `crates/scribe2/src/pipe/report.rs` の `count` は actor が human の行を全部数える。UtteranceReceived の既定の actor は human（ADR-0083）なので、書き手の行が着地すると発話 1 つごとに `human_events_other_than_approval` が 1 増える（FR22 は発話を人由来に数えないと言う）。
+  - insta の snapshot で kind の一覧を pin するものは 0 件。`fleet_external_form` の snapshot は `fleet record` の断りの 1 行（`InstallRecorded` の断りの字面）を pin する。
+- 形（番号は done と 1:1）:
+  1. `EventKind` の末尾に 5 variant を UtteranceReceived → UtteranceSorted → TurnEndUnjudged → IntakeRefused → LifecycleCutover の順で足し、`KINDS` も同じ順（29 種）。既定の actor は UtteranceReceived だけ human、ほかの 4 つは machine。5 kind は `Shape` の新しい値 1 つ（`SHAPES` の末尾）を共有する。replay は 5 kind の行で便も席も登録 row も口座の退役も作らない（`apply_run` は Run の形の外の行を今の枝で捨て、`apply_account` と `apply_seat` の網羅 match には何もしない arm を足す）。
+  2. `Event` に field を 1 つ足し、5 kind の本体を閉じた enum 1 つ（5 variant）で持つ。発話の経路（chat / gui）と仕分け（request / chat）は、全 variant の const slice を持つ閉じた enum にする（`enum-slices` の検査が測る形）。仕分けの memo と受付の断りの契約の id は、今の `bead` の field に持つ。
+  3. 行の読み書きは下の表のとおりにする。`KNOWN_KEYS` に 7 key を足し、7 key は、その key を持つ kind の外の行に在れば malformed（`COST_KEYS` / `RULING_KEYS` と同じ置き方）。TurnEndUnjudged の reason は、口座残量と共有する key（`ALLOWANCE_KEYS`）のうち reason だけを開ける。必須の欠け・閉じた値の外・空の値・経路と session の食い違い・仕分けと bead の食い違いは、key を名指す理由つきの Err にする。書き手は表の並びで書き、読んだ行を書き直すと同じ字面になる。`to_line` は今 52 行で上限 60 行に近いので、本体の key の並びは本体の enum の側の関数 1 つに置く。
+  4. `ts` は今のまま文字列で読む（秒より下の桁の字面も読める）。発話の ts の字面と、一意にする手は、書き手の行 lc-a4 が決める。schema 版は 1 のまま。
+  5. `fleet record` は、`Shape` が Run でない kind を全部断る（rc 1・stderr は今の `kind <k> は record では書けない`・log を作らない）。断りの手書きの列は消して、形から導く（C2）。5 kind に加えて、今は通って読めない行を残す `DispatchMark` と群の移動の 3 kind も、断る側へ移る。
+  6. `pipe report` の人由来の数え（`human_events` と `human_events_other_than_approval`）は UtteranceReceived を数えない（FR22）。行の字面と rulings の数えは変えない。`crates/scribe2/src/pipe/report.rs` には `EventKind` の match の arm を書かない（`EventKind` を touches に持つ dispatcher の行 a の閉包を広げない）。
+  7. `KINDS` の件数と末尾を pin する既存の歯 5 か所を、29 種と新しい末尾に書き換える。`Event` の literal 構築点 34 か所に、新しい field の空の値を 1 行ずつ足す。`fleet_external_form` の snapshot は変わらない（断りの字面が同じ）。
+
+  kind と key の表（行の key の並びは schema・ts・kind・下の「本体の key」・host・actor・detail の順）:
+
+  | kind | actor | 本体の key（この順） | 必須 | 任意 | 値の形 |
+  |---|---|---|---|---|---|
+  | UtteranceReceived（発話 event） | human | channel・session | channel・detail（逐語）・channel が chat の行の session | — | channel は chat / gui の 2 値。gui の行は session を持たない。session は空でない文字列。detail の空を断るのは書き手 |
+  | UtteranceSorted（仕分けの event） | machine | utterance・sorting・bead | utterance・sorting・sorting が request の行の bead | detail | utterance は発話の ts の字面（空でない）。sorting は request / chat の 2 値。chat の行は bead を持たない。bead は開いた memo の id |
+  | TurnEndUnjudged（turn の終わりの読めない周） | machine | session・reason | reason | session・detail | reason は空でない語（語の一覧は行 lc-e1b）。session は空でない文字列 |
+  | IntakeRefused（受付の断りの event） | machine | bead・refuse | bead・refuse | detail | refuse は受付の断りの名（空でない・語の一覧は受付の側が持つ） |
+  | LifecycleCutover（切り替えの線） | machine | version・main | version・main | detail | version は線を引いた器の版（空でない）。main は小文字の 16 進 |
+
+  5 kind とも run・stage・seat・pid・account・口座残量・登録・列の印・消費・rule の key を持たない（在れば malformed）。bead は表で必須か任意と書いた行のほかでは持たない。
+
+- 構築点の母集団と測り方: `grep -rn --include=*.rs -E '(^|[^A-Za-z_:])Event \{' crates/` と、`crates/scribe2-boundary/tests/e2e/prop.rs` の別名の構築。数えないのは、戻り型（`-> Event {`）、宣言（`crates/scribe2/src/fleet/event.rs`）、別の型の `Event`（`crates/scribe2/src/seat/state.rs`）、`..` の struct update。他の便の着地で増えるので、release の前に今の main で測り直し、差があれば docs PR で一覧と行の write-set を同時に直す。
+- 触らない:
+  - 書き手は書かない: 発話の記帳（行 lc-a4）・仕分けの口（lc-e1a）・turn の終わりの hook（lc-e1b）・受付の断りの記帳（lc-e3f）・切り替えの線（lc-e3c）。この行の後も、log に 5 kind の行は 0 件のまま。
+  - `RulingReceived` の key の追加（ruling・utterance・asked・question_ts・channel）は行 lc-a5。この行は channel を UtteranceReceived にだけ開き、lc-a5 が `RulingReceived` へ広げる。
+  - 既存の kind の読み方と並び・events.jsonl の path と lock・`fleet export` と `fleet show` の形・`pipe report` の行の字面（3 欄は行 lc-e22）・`DispatchMark` と群の移動の kind の書き手（pipe の口）。
+- 却下:
+  - kind を書き手の行ごとに足す。閉じた型の match の閉包が行ごとに広がって、別 doc の行と交差し、5 行が直列になる。
+  - 5 kind の本体を field 5 つで持つ（口座残量・登録と同じ形）。literal 構築点 34 か所に 5 行ずつ（170 行）足すことになる。閉じた enum の field 1 つなら 1 行ずつで済む。
+  - 本体を detail の 1 行に詰める（`InstallRecorded` と同じ形）。ADR-0087 と ADR-0088 は key の名を行の key として決めた。detail の字面を判定に読むのは C3.3 の typed payload に反する。
+  - `fleet record` の断りの列に 5 kind を足すだけにする。手書きの列は `DispatchMark` と群の移動の 3 kind を漏らして、読めない行を残している（実測）。形から導けば、kind を足した周に列を直す手が要らない。
+  - 5 kind に `Shape` の値を 1 つずつ持たせる。`Shape` の網羅 match 3 か所に 5 arm ずつ増えるのに、どの読み手も 5 つを形では見分けない（見分けは kind で行う）。
+  - IntakeRefused の refuse を、受付の断りの名の閉じた列で読む。fleet は pipe に依存しない（層の向き）。断りの名は受付の側で増えるので、fleet で閉じると、断りを足す便ごとに fleet の読み手が動く。
+- 歯（`crates/scribe2-boundary/tests/e2e/fleet/json.rs` に置き、接頭辞は fleet_case_kind_。`grep -rn fleet_case_kind crates/` は 0 件・2026-09-29。e2e の新しい file は作らない。json.rs の module doc の接頭辞の列に 1 つ足す）:
+  - fleet_case_kind_lines_round_trip_through_the_log: 下の見本 7 行が、どれも `from_line` で Ok になり、`to_line` で同じ字面に戻る。`EventKind` の `parse` が 5 つの名を引ける。7 行を `append` で書き、`read_all` で 7 件が同じ値で戻る。
+  - fleet_case_kind_rows_name_the_bad_key: 次の行は、どれも key か値を名指す Err になる。channel の欠け・channel が chat / gui の外・chat の行の session の欠け・gui の行の session・run を持つ発話・request の行の bead の欠け・chat の仕分けの bead・sorting が 2 値の外・utterance の欠け・reason の欠け・seat を持つ TurnEndUnjudged・refuse の空・version の欠け・main が 16 進でない。さらに `RunStage` の行の channel と `RulingReceived` の行の version も、key を名指す Err になる（こちらは base でも緑・非空虚の対）。
+  - fleet_case_kind_record_refuses_every_non_run_shape: Run の形でない `KINDS` の全部と 5 つの名を `fleet record --run r1 --bead b1` で撃つと、どれも rc 1 で、stderr に「record では書けない」が出て、log の file を作らない。
+  - fleet_case_kind_replay_makes_no_run_or_seat: `RunCreated` 1 行と見本 7 行の log で、replay の便は 1 つ・席 0・登録 row 0・退役 0。`fleet export` の 1 行目が runs 1・seats 0。
+  - fleet_case_kind_utterance_is_not_counted_as_human: UtteranceReceived（actor human）1 行と、逐語つきの `ApprovalReceived` 1 行の列で、`count` の `human_events` が 1、`human_events_other_than_approval` が 0。
+  - fleet_case_kind_kinds_are_appended_in_order: `KINDS` が 29 種で、24 番目から後ろの字面が 5 つの名の順。既定の actor は 1 つ目だけ human。5 つとも `Shape` が Run でなく、互いに同じ値。
+  - 書き換える既存の歯（5 か所・上の一覧）は、29 種と新しい末尾を測る。
+
+  見本 7 行（秒より下の桁の ts は、読み手が読めることを測るだけ。字面の決めは lc-a4）:
+
+  ```
+  {"schema":1,"ts":"2026-09-29T01:02:03.004Z","kind":"UtteranceReceived","channel":"chat","session":"s-1","host":"h","actor":"human","detail":"進めて"}
+  {"schema":1,"ts":"2026-09-29T01:02:04Z","kind":"UtteranceReceived","channel":"gui","host":"h","actor":"human","detail":"A で"}
+  {"schema":1,"ts":"2026-09-29T01:03:00Z","kind":"UtteranceSorted","utterance":"2026-09-29T01:02:03.004Z","sorting":"request","bead":"s2-m1","host":"h","actor":"machine"}
+  {"schema":1,"ts":"2026-09-29T01:03:01Z","kind":"UtteranceSorted","utterance":"2026-09-29T01:02:04Z","sorting":"chat","host":"h","actor":"machine"}
+  {"schema":1,"ts":"2026-09-29T01:04:00Z","kind":"TurnEndUnjudged","session":"s-1","reason":"log-unreadable","host":"h","actor":"machine"}
+  {"schema":1,"ts":"2026-09-29T01:05:00Z","kind":"IntakeRefused","bead":"s2-c1","refuse":"cap-headroom","host":"h","actor":"machine"}
+  {"schema":1,"ts":"2026-09-29T01:06:00Z","kind":"LifecycleCutover","version":"0.1.0","main":"0123456789abcdef0123456789abcdef01234567","host":"h","actor":"machine"}
+  ```
+
+- base で RED の理由:
+  - 新しい歯（json.rs）は、base でも compile が通る形で書く（5 つの名は字面で持つ）。そのうえで、assert で落ちる（機能不在）: 5 kind の行は「未知の kind」で読めない。`fleet record` の断りの字面は「未知である」で「record では書けない」でない。`DispatchMark` と群の移動の 3 kind は rc 0 で通る。`KINDS` は 24 種。
+  - 書き換える既存の pin: account.rs と gate.rs は、24 種の base で assert が落ちる。fleet.rs は、構築点に新しい field を足した helper が base で compile できずに落ちる（flip-check は overlay 後の compile error を RED と数える）。
+  - 構築点だけを直す file（prop.rs・hook.rs・ledger_memo.rs・e2e の pipe/dispatch.rs・ratelimit.rs・seat.rs・seat/account.rs・src の in-file の helper）は、動く行が `#[test]` の fn の外だけなので、歯の本体として単独では撃たれない。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -184,4 +255,14 @@ verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail fleet_lock_unparse
 size = "S"
 growth = ["crates/scribe2/src/fleet/store.rs:60"]
 done = "(1) acquire_in が、観測した本文が 2 形のどちらでもない（空を含む）lock を、Reclaim の値に依らず mtime が stale_ms より古い周に回収の 1 手で外し、warning StaleLockRemoved を積む (2) 本文が読める lock は今までどおり（生きている所有者は DeadOnly の周に古くても奪わない・probe が読めない周は DeadOnly で外さない・死んだ所有者は外す）で、既存の fleet_lock_reclaim_ の歯は期待を変えずに緑 (3) 本文の書き方・lock の path・reclaim の 1 手・token・LockPolicy・rules 行 fleet.lock_stale_ms は変えない 歯: fleet_lock_unparsed_stale_body_is_reclaimed_under_dead_only（空と abc の本文の古い lock が DeadOnly で取れ warning が 1 件・base は error で RED）・fleet_lock_unparsed_fresh_body_waits_under_dead_only（古くない周は取れず lock は残る）"
+[[contract]]
+id = "f"
+title = "案件の一生の event の kind 5 つ（UtteranceReceived・UtteranceSorted・TurnEndUnjudged・IntakeRefused・LifecycleCutover）と key を読み書きの両側で先に足す — 書き手の行の前に閉じた型の閉包を 1 回で広げ、fleet record は Run の形でない kind を全部断り、pipe report は発話を人由来に数えない（ADR-0087・ADR-0088）"
+req = ["FR82", "FR88", "FR90", "FR68", "FR22"]
+section = "12"
+write-set = ["crates/scribe2/src/fleet/mod.rs", "crates/scribe2/src/fleet/event.rs", "crates/scribe2/src/fleet/replay.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/src/pipe/report.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2/src/fleet/usage.rs", "crates/scribe2/src/hook/group.rs", "crates/scribe2/src/hook/vessel.rs", "crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/queue.rs", "crates/scribe2/src/pipe/regate.rs", "crates/scribe2/src/seat/role.rs", "crates/scribe2/src/seat/ruling.rs", "crates/scribe2-boundary/tests/e2e/fleet.rs", "crates/scribe2-boundary/tests/e2e/fleet/json.rs", "crates/scribe2-boundary/tests/e2e/fleet/account.rs", "crates/scribe2-boundary/tests/e2e/pipe/gate.rs", "crates/scribe2-boundary/tests/e2e/prop.rs", "crates/scribe2-boundary/tests/e2e/hook.rs", "crates/scribe2-boundary/tests/e2e/ledger_memo.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "crates/scribe2-boundary/tests/e2e/pipe/ratelimit.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "crates/scribe2-boundary/tests/e2e/seat/account.rs", "=crates/scribe2-boundary/tests/e2e/snapshots/e2e__fleet__fleet_external_form.snap"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail fleet_case_kind_"]
+size = "M"
+growth = ["crates/scribe2/src/fleet/mod.rs:160", "crates/scribe2/src/fleet/event.rs:130", "crates/scribe2/src/fleet/replay.rs:12", "crates/scribe2/src/fleet/cli.rs:10", "crates/scribe2/src/pipe/report.rs:10", "crates/scribe2/src/account/mod.rs:1", "crates/scribe2/src/fleet/usage.rs:1", "crates/scribe2/src/hook/group.rs:1", "crates/scribe2/src/hook/vessel.rs:1", "crates/scribe2/src/pipe/dispatch.rs:3", "crates/scribe2/src/pipe/mod.rs:4", "crates/scribe2/src/pipe/queue.rs:1", "crates/scribe2/src/pipe/regate.rs:1", "crates/scribe2/src/seat/role.rs:2", "crates/scribe2/src/seat/ruling.rs:3"]
+done = "(1) EventKind の末尾に UtteranceReceived・UtteranceSorted・TurnEndUnjudged・IntakeRefused・LifecycleCutover をこの順で足し、KINDS も同じ順の 29 種で、既定の actor は UtteranceReceived だけ human、5 つは Shape の新しい値 1 つを共有し、replay は 5 kind の行で便も席も登録 row も口座の退役も作らない (2) Event に 5 kind の本体を持つ閉じた enum の field を 1 つ足し、発話の経路 chat / gui と仕分け request / chat は全 variant の const slice を持つ閉じた enum で、memo と契約の id は既存の bead の field に持つ (3) 読み手は §12 の表のとおりに 7 つの新しい key を 5 kind の行でだけ受け、必須の欠け・閉じた値の外・空の値・経路と session の食い違い・仕分けと bead の食い違い・他の kind の key を key を名指す malformed にし、書き手は表の並びで書いて、読んだ行を書き直すと同じ字面になる (4) ts は文字列のまま読み（秒より下の桁も読める）、schema 版は 1 のまま (5) fleet record は Shape が Run でない kind を全部 rc 1 で断り（字面は今の record では書けない・log を作らない）、断りの手書きの列は消える (6) pipe report の human_events と human_events_other_than_approval は UtteranceReceived を数えず、行の字面と rulings の数えは変わらない (7) KINDS の件数と末尾を pin する既存の歯 5 か所を 29 種と新しい末尾に書き換え、Event の literal 構築点 34 か所に新しい field を足し、fleet_external_form の snapshot は変わらない 歯: fleet_case_kind_ の歯が、5 kind の見本 7 行が読んで書き直すと同じ字面になり log の往復でも 7 件が同じ値で戻ること、欠け・食い違い・他の kind の key の行が key を名指す malformed になること、Run の形でない kind を fleet record が全部断ること、5 kind の行で replay の便が 1・席が 0 のままのこと、発話が人由来に数えられないこと、KINDS が 29 種で末尾 5 つの字面と actor が表のとおりであることを測る。base は、5 kind が未知の kind で読めず、DispatchMark と群の移動が record を通り、KINDS が 24 種なので RED"
 <!-- contracts:end -->
