@@ -699,9 +699,10 @@ ruling = "user 2026-09-19T15:28Z"
 ruled_at = "2026-09-19"
 
 # host-guard の 6 つ目の種類 publish（設計 vessel-hook.md §16 行 j・ADR-0078・FR80 / AC50・s2-07l.696）の行。値の要素は札つきの
-# 2 形だけ: `form <記号>`（公開の前に走査する識別子の形・閉じた 4 記号 repo-name / object-id / tracked-path / ledger-id・各 1 回）と
-# `exclude <digest>`（無害と裁定した字句の sha256 の 16 進 64 字・小文字・重複なし・足すには裁定が要る）。字句を平文で書かない
-# （PUBLIC な repo の tracked file に書くと公開そのもの）。行が無い・列でない周は公開の segment（git push と gh の公開の動詞）
+# `form <記号>` だけ（公開の前に走査する識別子の形・閉じた 4 記号 repo-name / object-id / tracked-path / ledger-id・各 1 回）。
+# 頭の語が `exclude` の要素は置けない（読みが断る）: 無害と裁定した字句の除外は host の面（host.toml）の表 `[[publish-exclusion]]`
+# に字句と裁定 id のまま置く（ADR-0093・字句を tracked な file に書かない＝PUBLIC な repo に書くと公開そのもの）。
+# 行が無い・列でない周は公開の segment（git push と gh の公開の動詞）
 # だけを断る。裁定 3 本: user 2026-09-27T17:39Z（器の仕組みで止める）・22:21Z（GitHub への問いと着地の push の走査）・
 # 23:55Z（repo の名は区切った成分で照合し除外の一覧だけを除く）。
 

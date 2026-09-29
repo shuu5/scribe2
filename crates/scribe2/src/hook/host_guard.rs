@@ -251,8 +251,9 @@ pub enum Unreadable {
     NoCommand,
     /// rules を読めない。
     RulesUnreadable,
-    /// host の面（`<state_dir>/host.toml`）が在るのに読めない・壊れている（口座の守る file を解けない）。
-    HostUnreadable,
+    /// host の面（`<state_dir>/host.toml`）が在るのに読めない・壊れている（口座の守る file を解けない）。値は最初の欠陥の
+    /// 行番号（file を読めない周は 0）。
+    HostUnreadable(u64),
 }
 
 impl Unreadable {
@@ -265,16 +266,17 @@ impl Unreadable {
             Self::NoToolName => "no-tool-name",
             Self::NoCommand => "no-command",
             Self::RulesUnreadable => "rules-unreadable",
-            Self::HostUnreadable => "host-unreadable",
+            Self::HostUnreadable(_) => "host-unreadable",
         }
     }
 
-    /// 断りの 1 行（種類は解けていない＝`kind=-`）。
+    /// 断りの 1 行（種類は解けていない＝`kind=-`）。host の面の周は当たりに欠陥の行番号を添え、経路をその行の直しにする。
     fn line(self) -> String {
-        format!(
-            "{NAME}: host-guard deny kind=- hit={} row=- ruling=- — 読めない周は通さない（fail-closed）: 配線の引数・payload・rules・host の面を直す",
-            self.as_str()
-        )
+        let (hit, route) = match self {
+            Self::HostUnreadable(line) => (format!("{}:{line}", self.as_str()), format!("host の面（host.toml）の {line} 行目を直す")),
+            _ => (self.as_str().to_owned(), "配線の引数・payload・rules・host の面を直す".to_owned()),
+        };
+        format!("{NAME}: host-guard deny kind=- hit={hit} row=- ruling=- — 読めない周は通さない（fail-closed）: {route}")
     }
 }
 
@@ -374,7 +376,7 @@ fn args_of(args: &[String]) -> Option<(Option<&str>, Option<&str>)> {
 
 /// payload と rules（`--rules` の差し替えか埋め込み）と記録の置き場から判定する。読めない周は理由を `Err` で返す
 /// （FailClosed）。cwd は payload の `cwd`（無ければ process の cwd）。口座は `<state_dir>/host.toml` の `[[account]]`（面が
-/// 無い周は 0 口座・在るのに読めない周は [`Unreadable::HostUnreadable`]）。
+/// 無い周は 0 口座・在るのに読めない周は [`Unreadable::HostUnreadable`]・最初の欠陥の行番号つき）。
 pub fn decide(payload: &str, rules: Option<&str>, state_dir: &Path) -> Result<HostGuardDecision, Unreadable> {
     let tree = json_tree::parse(payload).map_err(|_| Unreadable::PayloadUnreadable)?;
     let tool = tree.get(KEY_TOOL).and_then(Tree::as_str).ok_or(Unreadable::NoToolName)?;
@@ -395,7 +397,7 @@ pub fn decide(payload: &str, rules: Option<&str>, state_dir: &Path) -> Result<Ho
     let host = match HostManifest::read(&host_manifest_path(state_dir)) {
         HostManifest::Absent => Manifest::default(),
         HostManifest::Present(face) => face,
-        HostManifest::Unreadable(_) => return Err(Unreadable::HostUnreadable),
+        HostManifest::Unreadable(errors) => return Err(Unreadable::HostUnreadable(errors.first().map_or(0, |found| found.line))),
     };
     let cwd = match tree.get(KEY_CWD).and_then(Tree::as_str) {
         Some(found) => PathBuf::from(found),

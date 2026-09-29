@@ -403,8 +403,10 @@ pub fn toolbox_ledger_records(dir: &Path) -> PathBuf {
 
 /// 道具箱に台帳 client の既定名（[`DEFAULT_BD`]）の見張りを 1 本置く（設計 §37 形 1）。
 ///
-/// 呼ばれた argv を `records` の下へ**1 起動 1 file**（mktemp の一意な名）で写してから、台帳を解けない host と
-/// 同じ形で断る（標準出力は空・rc は非 0）。rc 0 の空の台帳として答えさせないのは、列の 1 周が「0 件を読めた」へ
+/// 呼ばれた argv を `records` の下へ**1 起動 1 file**（mktemp の一意な名）で写してから、**1 語目が `close` の呼び出しだけ**
+/// rc 0 で返し、ほかは台帳を解けない host と同じ形で断る（標準出力は空・rc は非 0）。close を受けるのは、remote を持たない
+/// repo の便の着地が push も CI の照合も撃たずに台帳を閉じる（FR50・経路 (2)）ので、見張りが rc 127 で断ると歯の toy の
+/// 着地が rc 1 で終わるからである。ほかの呼び出しを rc 0 の空の台帳として答えさせないのは、列の 1 周が「0 件を読めた」へ
 /// 倒れて unmeasured reason=ledger の枝が測られなくなるからである（§37 却下）。`--bd` に絶対 path を渡す起動は
 /// PATH を通らないので、ここへは届かない。
 #[expect(
@@ -417,6 +419,7 @@ fn write_ledger_tripwire(bin_dir: &Path, records: &Path) {
         "#!/bin/sh\n\
          __f=$(mktemp '{0}'/call.XXXXXXXX) || exit 127\n\
          printf '%s\\n' \"$@\" > \"$__f\"\n\
+         if [ \"$1\" = close ]; then exit 0; fi\n\
          exit 127\n",
         records.display()
     );

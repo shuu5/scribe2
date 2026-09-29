@@ -1328,12 +1328,13 @@ const SYSTEMD_BIN: &str = "systemd-bin";
 /// 本体は `crate::write_systemd_run_stub` の 1 つの生成関数から出る（設計 gate-cost.md §30 約束 3）——
 /// argv を写してから `--` の後ろを exec し、記録は **`<unit>.args` の 1 起動 1 file**、同じ名の 2 本目は
 /// 実 systemd と同じ字面で断る。記録の dir 名（[`SCOPE_RECORDS`]）と [`scope_record`] の読みは不変で、
-/// 既存の歯の母集団は動かない。
+/// 既存の歯の母集団は動かない。後ろには host の PATH でなく道具箱（[`crate::toolbox_path`]）を積む＝この口の周も台帳 client の
+/// 見張りを通り、着地が台帳を閉じても host の `bd` を起こさない。
 // flip-check: retroactive s2-07l.504
 fn systemd_stub(state: &Path) -> String {
     let bin_dir = state.join(SYSTEMD_BIN);
     crate::write_systemd_run_stub(&bin_dir, &state.join(SCOPE_RECORDS));
-    format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap_or_default())
+    format!("{}:{}", bin_dir.display(), crate::toolbox_path(state))
 }
 
 /// `needle` を名に含む scope 記録の**ちょうど 1 件**の本文（1 行 1 引数）。
@@ -1836,14 +1837,15 @@ fn detection_marks(calls: &[String]) -> Vec<&String> {
 // `verify-main.jsonl` に主実測の skip record 1 本（`kind=main skipped=main tree=<land した木> reason=same-tree`）を
 // 書いて緑。木が違う周と `tree` の無い周は ①②④ を撃つ（③ は撃たない・設計 gate-cost.md §44 形 (9)）。
 
-/// 便の `RunDone stage=Landed` の detail のうち着地そのものの行（無ければ空・着地後の検出の `detection:` は読み飛ばす）。
+/// 便の `RunDone stage=Landed` の detail のうち着地そのものの行（無ければ空・着地後の検出の `detection:` と終端の
+/// `terminal:` は読み飛ばす）。
 fn landed_done_detail(state: &Path, id: &str) -> String {
     trail(state, id)
         .into_iter()
         .rev()
         .filter(|(kind, stage, _)| *kind == EventKind::RunDone && *stage == Some(Stage::Landed))
         .filter_map(|(_, _, detail)| detail)
-        .find(|detail| !detail.starts_with("detection:"))
+        .find(|detail| !detail.starts_with("detection:") && !detail.starts_with("terminal:"))
         .unwrap_or_default()
 }
 
@@ -2267,7 +2269,7 @@ fn write_blocking_stub(repo: &Path) {
 }
 
 /// (k) の解放の後の面: `landed` を持つ record 1 本（stub の判定行・rc 0）・stub は子の 1 回だけで子の `--base` は
-/// 着地した commit の親・gate の ③ の record は無い（gate は ③ を撃たない・設計 gate-cost.md §44 形 (9)）・台帳の見張り 0 件。
+/// 着地した commit の親・gate の ③ の record は無い（gate は ③ を撃たない・設計 gate-cost.md §44 形 (9)）・台帳の見張りは着地の close の 1 件だけ。
 fn assert_child_measured_the_landed_commit(run: &LandedRun) {
     let (_, after) = split_landed(main_rows(&run.state, &run.id));
     assert_eq!(after.len(), 1, "landed を持つ record は 1 本: {after:?}");
@@ -2281,7 +2283,8 @@ fn assert_child_measured_the_landed_commit(run: &LandedRun) {
     assert_eq!(calls, [format!("--base {parent} --teeth {LANDED_WORD}")], "stub は着地後の 1 回だけで子は着地した commit の親");
     let gated: Vec<_> = verify_rows(&run.state, &run.id).into_iter().filter(|row| value_of(row, "kind") == "detection").collect();
     assert!(gated.is_empty(), "gate の ③ の record は無い: {gated:?}");
-    assert!(crate::toolbox_ledger_record_names(&run.state).is_empty(), "台帳 client を起こさない");
+    let calls = crate::toolbox_ledger_record_names(&run.state);
+    assert_eq!(calls.len(), 1, "台帳 client を起こしたのは着地の close の 1 回だけ: {calls:?}");
 }
 
 /// 便の `Gated` event の detail の並び（測り直しの履歴）。

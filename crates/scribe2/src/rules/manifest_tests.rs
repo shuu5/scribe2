@@ -131,6 +131,70 @@ fn host_tick_refuses_a_second_row_relative_paths_and_missing_fields_with_line_nu
     );
 }
 
+// ─── host の面の `[[publish-exclusion]]`（設計 vessel-hook.md §19 行 m・ADR-0093・接頭辞 `publish_exclusion_`） ───
+
+/// (a) host の面の 2 行の表は、accessor が宣言順に字句（大小と区切り字をそのまま・空の字句も）・裁定 id・行番号を返し、
+/// `Manifest::joined` の後も同じ列を返す。表の無い面は空。
+#[test]
+fn publish_exclusion_host_rows_keep_the_phrase_and_the_ruling() {
+    let body = "schema = 1\n\n[[publish-exclusion]]\nphrase = \"--Proj-Accent\"\nruling = \"user 2026-09-29T05:46Z\"\n\n[[publish-exclusion]]\nruling = \" r2 \"\nphrase = \"\"\n";
+    let face = finish(collect(body, Face::Host)).unwrap_or_default();
+    let read = |found: &Manifest| -> Vec<(String, String, u64)> {
+        found.publish_exclusions().iter().map(|row| (row.phrase().to_owned(), row.ruling().to_owned(), row.line())).collect()
+    };
+    let want = vec![("--Proj-Accent".to_owned(), "user 2026-09-29T05:46Z".to_owned(), 3), (String::new(), " r2 ".to_owned(), 7)];
+    assert_eq!(read(&face), want, "宣言順・字句は字のまま・空の字句は断らない");
+    let joined = Manifest::default().joined(HostManifest::Present(face)).unwrap_or_default();
+    assert_eq!(read(&joined), want, "面を合わせても同じ列");
+    let bare = finish(collect("schema = 1\n\n[[account]]\nlabel = \"h1\"\n", Face::Host)).unwrap_or_default();
+    assert!(bare.publish_exclusions().is_empty(), "表の無い面は空");
+}
+
+/// (b) 拒む行を持つ面は面ごと `Unreadable` になり、欠陥がその行の行番号を持つ（同じ面の `[[account]]` も読まれない）。5 つの面:
+/// ruling の欄の無い行（見出しの行）・ruling が空の行（ruling の行）・空白だけの ruling・未知の key・phrase が文字列でない行。
+#[test]
+fn publish_exclusion_rows_without_a_ruling_make_the_face_unreadable() {
+    let head = "schema = 1\n\n[[account]]\nlabel = \"h1\"\n\n[[publish-exclusion]]\n";
+    let cases: [(&str, &str, u64); 5] = [
+        ("欄の無い行", "phrase = \"a\"\n", 6),
+        ("空の ruling", "phrase = \"a\"\nruling = \"\"\n", 8),
+        ("空白だけの ruling", "phrase = \"a\"\nruling = \"  \"\n", 8),
+        ("未知の key", "phrase = \"a\"\nruling = \"r\"\nnote = \"x\"\n", 9),
+        ("字句が文字列でない", "phrase = 1\nruling = \"r\"\n", 7),
+    ];
+    for (index, (name, row, line)) in cases.into_iter().enumerate() {
+        let read = read_face(index, &format!("{head}{row}"));
+        let HostManifest::Unreadable(errors) = read else {
+            panic!("{name}: 面ごと読めない: {read:?}");
+        };
+        assert_eq!(errors.first().map(|error| error.line), Some(line), "{name}: {errors:?}");
+    }
+    let ok = read_face(cases.len(), &format!("{head}phrase = \"a\"\nruling = \"r\"\n"));
+    assert_eq!(ok.as_str(), "present", "対: 裁定 id を書いた面は読める");
+    let empty = host_defects(&format!("{head}phrase = \"a\"\nruling = \"\"\n"));
+    assert_eq!(empty, vec![(8, "ruling \"\" が空である（裁定 id が要る・ADR-0093）".to_owned())], "1 件・ruling の行");
+}
+
+/// host の面の本文を tmp の file（名は process と `tag` で一意）に書き、`HostManifest::read` で読んで file を消す。
+fn read_face(tag: usize, body: &str) -> HostManifest {
+    let dir = std::env::temp_dir().join(format!("scribe2-publish-exclusion-{}-{tag}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("host.toml");
+    let _ = std::fs::write(&path, body);
+    let read = HostManifest::read(&path);
+    let _ = std::fs::remove_dir_all(&dir);
+    read
+}
+
+/// (c) tracked の面に表を置くと、`Manifest::parse` が表 1 つにつき 1 件で断る（行の中身は検査しない）。
+#[test]
+fn publish_exclusion_table_is_refused_on_the_tracked_face() {
+    let body = "schema = 1\n\n[[publish-exclusion]]\nphrase = \"a\"\n\n[[publish-exclusion]]\n";
+    let shown: Vec<(u64, String)> = Manifest::parse(body).expect_err("tracked の面は断る").into_iter().map(|error| (error.line, error.message)).collect();
+    let want = |line| (line, "[[publish-exclusion]] は tracked の manifest に置けない（除外の字句は host の面だけ）".to_owned());
+    assert_eq!(shown, vec![want(3), want(6)], "1 表 1 件");
+}
+
 // ─── クラスの語列表の読み（設計 contract-source.md §48 の 3・接頭辞 `class_derive_`） ───
 
 /// 語列表の行（見出しは 3 行目・値は `value`）と、上限の行・禁じる語列の 4 行のうち `drop` の id でない行を持つ本文。

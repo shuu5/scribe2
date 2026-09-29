@@ -696,17 +696,19 @@ fn rules_host_guard_rm_symbol_misspelled_is_refused_and_the_three_are_accepted()
     }
 }
 
-/// host_guard.publish の要素（設計 vessel-hook.md §16 形 6）: 綴り違いの記号と 63 字の digest は読み込みで拒み（要素を名指す）、
-/// 4 記号の `form` と 64 字小文字の `exclude` は受理される。
+/// host_guard.publish の要素（設計 vessel-hook.md §16 形 6・§19 行 m）: 4 記号の `form` だけが受理され、綴り違いの記号と
+/// exclude の要素（digest の長さに依らず）は読み込みで拒み（要素を名指し、exclude は `[[publish-exclusion]]` を名指す）。
 #[test]
 fn rules_publish_guard_element_misspelled_form_and_short_digest_are_refused() {
     let digest = "0123456789abcdef".repeat(4);
-    let good = format!("[\"form repo-name\", \"form object-id\", \"form tracked-path\", \"form ledger-id\", \"exclude {digest}\"]");
-    let manifest = parsed(&one_row(RuleKind::HostGuardPublish, &good)).unwrap_or_else(|errors| panic!("受理される: {errors}"));
-    assert!(matches!(manifest.get("probe").map(|row| &row.value), Some(RuleValue::List(items)) if items.len() == 5), "5 要素");
-    for bad in ["form repo_name".to_owned(), format!("exclude {}", digest.get(1..).unwrap_or_default())] {
+    let good = "[\"form repo-name\", \"form object-id\", \"form tracked-path\", \"form ledger-id\"]";
+    let manifest = parsed(&one_row(RuleKind::HostGuardPublish, good)).unwrap_or_else(|errors| panic!("受理される: {errors}"));
+    assert!(matches!(manifest.get("probe").map(|row| &row.value), Some(RuleValue::List(items)) if items.len() == 4), "4 要素");
+    for bad in ["form repo_name".to_owned(), format!("exclude {digest}"), format!("exclude {}", digest.get(1..).unwrap_or_default())] {
         let errors = rejected(&one_row(RuleKind::HostGuardPublish, &format!("[\"{bad}\"]")))
             .unwrap_or_else(|rows| panic!("{bad:?} が受理された（{rows} 行）"));
-        assert!(errors.join("\n").contains(&format!("要素 {bad:?} の")), "{bad:?}: {errors:?}");
+        let text = errors.join("\n");
+        assert!(text.contains(&format!("要素 {bad:?} の")), "{bad:?}: {errors:?}");
+        assert_eq!(text.contains("[[publish-exclusion]]"), bad.starts_with("exclude"), "{bad:?}: exclude の要素だけが host の面の表を名指す: {errors:?}");
     }
 }

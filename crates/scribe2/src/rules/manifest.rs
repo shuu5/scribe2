@@ -11,7 +11,8 @@
 //! **host の面**（`<state_dir>/host.toml`・設計 account-lifecycle.md §2・ADR-0026 §2.1）も同じ reader で読む:
 //! 持てる表は `[[account]]` / `[[plugin]]` / `[[launch-arg]]` / `[[vessel]]`（器自身の checkout・最大 1 行・
 //! 設計 consumer-sync.md §4）/ `[[account-group]]`（席の口座を持つ project の群・設計 account-lifecycle.md §17・
-//! ADR-0049）/ `[[tick]]` / `[[device]]`（端末の表・兄弟 [`super::device`]・設計 host-init.md §15）の 7 種だけで、
+//! ADR-0049）/ `[[tick]]` / `[[device]]`（端末の表・兄弟 [`super::device`]・設計 host-init.md §15）/ `[[publish-exclusion]]`
+//! （公開の除外の字句と裁定 id・兄弟 [`super::exclusion`]・設計 vessel-hook.md §19・ADR-0093）の 8 種だけで、
 //! `[[rule]]` は置けない（規則の行は tracked の面だけ・C1）。無い周は
 //! 0 宣言（縮退）・在るが読めない周は欠陥の全件（FailClosed）。
 //!
@@ -23,7 +24,7 @@
 //! 持てる表は `[[contract]]` 1 種だけで（key 集合は `pipe::table::FIELDS`）、rules manifest と host の面は
 //! `[[contract]]` を置けない。値の受理集合と**空の配列の拒否**は他の面と同じ（空の列は key の省略で表す）。
 
-use super::{device::Device, Rule, RuleError, RuleKind, RuleRow, RuleValue, ValueShape, HOST_MANIFEST};
+use super::{device::Device, exclusion::PublishExclusion, Rule, RuleError, RuleKind, RuleRow, RuleValue, ValueShape, HOST_MANIFEST};
 use crate::hook::command::{denied_in, denied_of};
 use crate::pipe::contract::{class_element, ClassElement};
 use crate::pipe::declaration::CEILING_ROW;
@@ -134,6 +135,8 @@ enum Section {
     Tick,
     /// 端末 1 台の宣言（**host の面にだけ**・組み立てと検査は兄弟 [`super::device`]・設計 host-init.md §15・ADR-0076）。
     Device,
+    /// 公開の除外の字句 1 つの宣言（**host の面にだけ**・組み立てと検査は兄弟 [`super::exclusion`]・設計 vessel-hook.md §19・ADR-0093）。
+    PublishExclusion,
 }
 
 /// [`Section`] の全 variant（宣言順）。
@@ -147,6 +150,7 @@ const SECTIONS: &[Section] = &[
     Section::AccountGroup,
     Section::Tick,
     Section::Device,
+    Section::PublishExclusion,
 ];
 
 impl Section {
@@ -162,6 +166,7 @@ impl Section {
             Self::AccountGroup => "[[account-group]]",
             Self::Tick => "[[tick]]",
             Self::Device => super::device::HEADER,
+            Self::PublishExclusion => super::exclusion::HEADER,
         }
     }
 
@@ -183,6 +188,7 @@ impl Section {
             Self::AccountGroup => GROUP_KEYS.to_vec(),
             Self::Tick => TICK_KEYS.to_vec(),
             Self::Device => super::device::KEYS.to_vec(),
+            Self::PublishExclusion => super::exclusion::KEYS.to_vec(),
         }
     }
 
@@ -198,6 +204,7 @@ impl Section {
             Self::AccountGroup => GROUP_KEYS.to_vec(),
             Self::Tick => TICK_KEYS.to_vec(),
             Self::Device => super::device::REQUIRED.to_vec(),
+            Self::PublishExclusion => super::exclusion::REQUIRED.to_vec(),
         }
     }
 }
@@ -369,11 +376,12 @@ pub struct Manifest {
     plugins: Vec<PluginDir>,
     launch_args: Vec<LaunchArg>,
     contracts: Vec<TableRow>,
-    vessel: Option<VesselRepo>,
+    vessel: Option<Box<VesselRepo>>,
     groups: Vec<AccountGroup>,
     // Box は `HostManifest::Present` の大きさを抑えるため（clippy large_enum_variant）。
     tick: Option<Box<TickUnit>>,
     devices: Vec<Device>,
+    publish_exclusions: Vec<PublishExclusion>,
 }
 
 /// `[[contract]]` 1 行の値（key 集合は検査済み・値の形の検査は欄の形を持つ `pipe::table` が行う）。
@@ -570,6 +578,7 @@ impl Manifest {
         self.launch_args.extend(face.launch_args);
         self.groups.extend(face.groups);
         self.devices.extend(face.devices);
+        self.publish_exclusions.extend(face.publish_exclusions);
         self.vessel = self.vessel.take().or(face.vessel);
         // `[[tick]]` は host の面にだけ在る（tracked の面は `collect` が断る）＝面をまたぐ重複は起きない。
         self.tick = face.tick;
@@ -619,7 +628,7 @@ impl Manifest {
 
     /// 宣言した器自身の checkout（host の面・最大 1 行・無ければ `None`＝doctor は `head=undeclared`・設計 consumer-sync.md §4）。
     pub fn vessel(&self) -> Option<&VesselRepo> {
-        self.vessel.as_ref()
+        self.vessel.as_deref()
     }
 
     /// 宣言した群を**宣言順**で返す（host の面・群を宣言しない host は空・設計 account-lifecycle.md §17）。
@@ -636,6 +645,11 @@ impl Manifest {
     /// 宣言した端末を**宣言順**で返す（host の面・無ければ空・設計 host-init.md §15）。
     pub fn devices(&self) -> &[Device] {
         &self.devices
+    }
+
+    /// 宣言した公開の除外（字句と裁定 id）を**宣言順**で返す（host の面・無ければ空・設計 vessel-hook.md §19 行 m）。
+    pub fn publish_exclusions(&self) -> &[PublishExclusion] {
+        &self.publish_exclusions
     }
 }
 
@@ -681,6 +695,9 @@ fn collect(text: &str, face: Face) -> (Manifest, Vec<RuleError>) {
             (Section::Device, Face::Host) => found.devices.extend(super::device::build(raw, &mut errors)),
             // 端末の値は host 固有（tracked の面は PUBLIC repo に載る＝CON2）。行の中身は検査しない（1 表 1 件）。
             (Section::Device, Face::Tracked) => errors.push(host_only(raw, "端末の値は host の面だけ")),
+            (Section::PublishExclusion, Face::Host) => found.publish_exclusions.extend(super::exclusion::build(raw, &mut errors)),
+            // 除外の字句は tracked な file に書かない（PUBLIC な repo に書くと公開そのもの・ADR-0093）。行の中身は検査しない（1 表 1 件）。
+            (Section::PublishExclusion, Face::Tracked) => errors.push(host_only(raw, "除外の字句は host の面だけ")),
             (Section::Account, _) => found.accounts.extend(
                 build_single(raw, "label", &mut errors).map(|(label, line)| AccountLabel { label, line }),
             ),
@@ -697,18 +714,23 @@ fn collect(text: &str, face: Face) -> (Manifest, Vec<RuleError>) {
             )),
             (Section::Vessel, _) => {
                 vessel_rows = vessel_rows.saturating_add(1);
-                found.vessel = build_single(raw, "repo", &mut errors).map(|(repo, line)| VesselRepo { repo, line });
+                found.vessel = build_single(raw, "repo", &mut errors).map(|(repo, line)| Box::new(VesselRepo { repo, line }));
             }
         }
     }
-    check_duplicate_ids(&found.rows, &mut errors);
-    check_class_commands(&found, &mut errors);
-    check_duplicate_labels(&found.accounts, &mut errors);
-    check_duplicate_groups(&found.groups, &mut errors);
-    super::groups::check_tiers(&found.groups, &mut errors);
-    super::device::check_names(&found.devices, &mut errors);
-    seed_groups(&mut found.groups, &mut errors);
+    check_declared(&mut found, &mut errors);
     (found, errors)
+}
+
+/// 組めた宣言の全体にかかる検査（行 id・label・群・端末の名の重複と群の tier・クラスの語列）を全件 `errors` へ積む。
+fn check_declared(found: &mut Manifest, errors: &mut Vec<RuleError>) {
+    check_duplicate_ids(&found.rows, errors);
+    check_class_commands(found, errors);
+    check_duplicate_labels(&found.accounts, errors);
+    check_duplicate_groups(&found.groups, errors);
+    super::groups::check_tiers(&found.groups, errors);
+    super::device::check_names(&found.devices, errors);
+    seed_groups(&mut found.groups, errors);
 }
 
 /// host の面にだけ在る表（`[[account-group]]` / `[[tick]]`）を tracked の面に置いた周の 1 件（見出しの行番号・`why` は置き場の理由）。

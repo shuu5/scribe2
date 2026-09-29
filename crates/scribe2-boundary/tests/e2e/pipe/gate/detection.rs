@@ -81,7 +81,7 @@ fn pipe_detection_off_main_tree_differs_fires_only_three_stages() {
 
 /// (a) 測った周: rc 0・`detection=measured`・`landed` 付きの record +1（`line=` は stub の判定行）・stub の `--base` は
 /// 着地した commit の親（gate の base と異なる）で `--teeth` は契約の語・共通 verify は撃たない・event 1 件・show の行
-/// （判定行 + `secs=`）+1・台帳の見張り 0 件。
+/// （判定行 + `secs=`）+1・台帳の見張りは着地の close の 1 件だけ。
 #[test]
 fn pipe_landed_detection_measured_round_records_the_landed_commit() {
     let run = landed_run(&landed_crates_case());
@@ -102,7 +102,8 @@ fn pipe_landed_detection_measured_round_records_the_landed_commit() {
     assert_eq!(shown.len(), shown_before.len() + 1, "show の行 +1: {shown:?}");
     let last = shown.last().cloned().unwrap_or_default();
     assert!(last.starts_with(&format!("{LANDED_LINE} secs=")), "判定行と secs=: {last}");
-    assert!(crate::toolbox_ledger_record_names(&run.state).is_empty(), "台帳 client を起こさない");
+    let calls = crate::toolbox_ledger_record_names(&run.state);
+    assert_eq!(calls.len(), 1, "台帳 client を起こしたのは着地の close の 1 回だけ（口は起こさない）: {calls:?}");
     assert!(show_line(&run.repo, &run.state, &run.id).contains("stage=Landed"), "段は Landed のまま");
     clean(&[&run.repo, &run.state]);
 }
@@ -288,7 +289,7 @@ fn pipe_detection_after_landing_child_reads_the_rules_land_received() {
 }
 
 /// (l) 検出線を宣言しない便の land は `detection:` で始まる detail を 1 件も書かない（Landed の detail は着地そのものの行
-/// だけの従来の並び）。
+/// だけの従来の並び・終端の `terminal:` の行は除いて比べる）。
 #[test]
 fn pipe_detection_after_landing_undeclared_run_writes_no_detection_detail() {
     let (repo, state) = repo_with_state();
@@ -302,6 +303,7 @@ fn pipe_detection_after_landing_undeclared_run_writes_no_detection_detail() {
         .into_iter()
         .filter(|(kind, stage, _)| *kind == EventKind::RunDone && *stage == Some(Stage::Landed))
         .filter_map(|(_, _, detail)| detail)
+        .filter(|detail| !detail.starts_with("terminal:"))
         .collect();
     assert_eq!(landed, [format!("sha:{sha} main:{sha}")], "Landed の detail は着地の 1 件だけ");
     assert!(split_landed(main_rows(&state, &id)).1.is_empty(), "landed を持つ record は無い");

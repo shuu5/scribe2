@@ -1159,15 +1159,37 @@ fn host_guard_self_unreadable_host_face_fails_closed() {
     let home = Home::new("host-broken");
     let _ = fs::write(home.state.join("host.toml"), "schema = 1\n[[account]]\nlabel = \n");
     let write = edit_payload(&home.plain, "Write", "file_path", &home.plain.join("notes.json"));
-    assert_eq!(decide(&write, None, &home.state), Err(Unreadable::HostUnreadable), "Write");
-    assert_eq!(decide(&bash("ls"), None, &home.state), Err(Unreadable::HostUnreadable), "Bash");
+    assert_eq!(decide(&write, None, &home.state), Err(Unreadable::HostUnreadable(3)), "Write");
+    assert_eq!(decide(&bash("ls"), None, &home.state), Err(Unreadable::HostUnreadable(3)), "Bash");
     let read = "{\"tool_name\":\"Read\"}";
     assert_eq!(decide(read, None, &home.state), Ok(HostGuardDecision::Allow), "判定に載らない tool");
     let state = home.state.display().to_string();
     let outcome = super::dispatch(&["--state-dir".to_owned(), state.clone()], &write);
     let rules = super::dispatch(&["--state-dir".to_owned(), state, "--rules".to_owned(), "/nonexistent/rules.toml".to_owned()], &write);
     assert_eq!(outcome.rc, rules.rc, "rules-unreadable と同じ rc");
-    assert_eq!(outcome.err, [format!("{NAME}: host-guard deny kind=- hit=host-unreadable row=- ruling=- — 読めない周は通さない（fail-closed）: 配線の引数・payload・rules・host の面を直す")]);
+    assert_eq!(outcome.err, [format!("{NAME}: host-guard deny kind=- hit=host-unreadable:3 row=- ruling=- — 読めない周は通さない（fail-closed）: host の面（host.toml）の 3 行目を直す")]);
+    home.clean();
+}
+
+/// 行 m (e): ruling の空の行を 5 行目に持つ host の面で、`decide` が行番号 5 の `HostUnreadable` を返し、断りの 1 行が
+/// `hit=host-unreadable:5` と「5 行目を直す」を持ち、記録の理由の 1 語は host-unreadable のまま。file を読めない周は 0 行目。
+#[test]
+fn publish_exclusion_unreadable_host_face_names_the_line() {
+    let home = Home::new("host-exclusion");
+    let _ = fs::write(home.state.join("host.toml"), "schema = 1\n\n[[publish-exclusion]]\nphrase = \"a\"\nruling = \"\"\n");
+    assert_eq!(decide(&bash("ls"), None, &home.state), Err(Unreadable::HostUnreadable(5)));
+    assert_eq!(Unreadable::HostUnreadable(5).as_str(), "host-unreadable", "記録の理由の 1 語は行番号を持たない");
+    let outcome = super::dispatch(&["--state-dir".to_owned(), home.state.display().to_string()], &bash("ls"));
+    assert_eq!(
+        outcome.err,
+        [format!("{NAME}: host-guard deny kind=- hit=host-unreadable:5 row=- ruling=- — 読めない周は通さない（fail-closed）: host の面（host.toml）の 5 行目を直す")]
+    );
+    let _ = fs::remove_file(home.state.join("host.toml"));
+    let _ = fs::create_dir(home.state.join("host.toml"));
+    assert_eq!(decide(&bash("ls"), None, &home.state), Err(Unreadable::HostUnreadable(0)), "読めない file は 0 行目");
+    let _ = fs::remove_dir(home.state.join("host.toml"));
+    let other = Unreadable::RulesUnreadable.line();
+    assert!(other.contains("hit=rules-unreadable row=") && other.ends_with("配線の引数・payload・rules・host の面を直す"), "{other}");
     home.clean();
 }
 
