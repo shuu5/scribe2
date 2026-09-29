@@ -27,6 +27,7 @@
 use crate::fleet::json_lite::{self, Value};
 use crate::fleet::store::{acquire, started_ms, LockPolicy};
 use crate::fleet::{self, Completion, SCHEMA};
+use crate::pipe::health;
 use crate::seat::{host_slots_dir, sanitize_target};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -107,7 +108,7 @@ fn field_mb(meminfo: &str, key: &str) -> Option<u64> {
 /// `price = 1` で表さない（0 と「測れない」を混ぜない）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Cpu {
-    /// host の core 数（`available_parallelism` の実測）。
+    /// host の core 数（[`health::host_cores`] の実測）。
     pub cores: u64,
     /// job 1 つの thread の値段 = `max(1, floor(cores / gate.mutants_jobs))`。
     pub price: u64,
@@ -126,13 +127,6 @@ impl Cpu {
 /// cores の読みから CPU の材料を組む（pure）。**cores 不明は `None`**＝cap 0 の周（値段 = cores）と弁別する。
 pub fn cpu_of(cores: Option<u64>, cap: u64) -> Option<Cpu> {
     cores.map(|cores| Cpu::priced(cores, cap))
-}
-
-/// host の core 数（測定値）。読めない周は `None`。env は読まない（C2.2・host の面を読む口）。
-fn host_cores() -> Option<u64> {
-    std::thread::available_parallelism()
-        .ok()
-        .and_then(|found| u64::try_from(found.get()).ok())
 }
 
 /// CPU で配れる枠 = `floor(cores / price) − Σ 生きている札の jobs`（引き算は 0 の床・pure・設計 §31 約束 2）。
@@ -447,7 +441,7 @@ pub fn admit(state_dir: &Path, run: &str, want: u64, rules: &Rules) -> Grant {
     let want = want.clamp(1, rules.cap.max(1));
     // core 数は **1 受付で 1 回だけ測る**（待ちの観測も同じ値を運ぶ・meminfo と違い受付の間に動かない）。
     // 読めない周は札を置かず縮退する（設計 §31 約束 5・回収の数を残す前なので回収もしない）。
-    let Some(cpu) = cpu_of(host_cores(), rules.cap) else {
+    let Some(cpu) = cpu_of(health::host_cores(), rules.cap) else {
         return unmeasured(Unreadable::Cores, 0);
     };
     let started = Instant::now();

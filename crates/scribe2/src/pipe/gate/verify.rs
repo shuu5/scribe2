@@ -200,8 +200,8 @@ pub fn run_checks(checks: &Checks<'_>) -> Vec<Step> {
 
 /// `stages` の段を**順序どおり**に撃つ（受付を持つ形）。[`run_checks`] はこれの受付なしの形である。
 ///
-/// `stages` は gate の列（[`gate_checks`]・③ を除く）。`admit` が在る周だけ、`{jobs}` を持つ共通 verify の
-/// 行が host の受付を通る（設計 gate-cost.md §3.2・§3.3）。行を撃つ実装はこの 1 本のままである。
+/// `stages` は gate の列（[`gate_checks`]・③ を除く）。`admit` が在る周だけ、共通 verify と契約の verify の行が
+/// 全部 host の受付を通る（設計 gate-cost.md §3.2・§3.3・§45 形 2）。行を撃つ実装はこの 1 本のままである。
 ///
 /// どの行も 1 回だけ撃つ——検出線の rc 2 も撃ち直さない（設計 gate-cost.md §44 形 (6)・撃ち直すのは人が
 /// 着地後の検出の口を撃つ形）。
@@ -312,8 +312,7 @@ struct Fire<'a> {
 
 /// 1 行を scope に包んで撃ち、結果を組む。
 ///
-/// `{jobs}` を持つ共通 verify の行は、**撃つ前に受付で枠を取り、撃った後に返す**
-/// （設計 §3.2）。実効 jobs = `min(gate.mutants_jobs, 受け付けた枠)`。実効 thread は受付が jobs と
+/// 受付が在る周の行は、**撃つ前に受付で枠を取り、撃った後に返す**（設計 §3.2・§45 形 2）。実効 jobs = `min(gate.mutants_jobs, 受け付けた枠)`。実効 thread は受付が jobs と
 /// 対で決めた値（[`Grant::threads`]・設計 §31 約束 4）で、受付を通らない行は jobs と同じく 1 を埋める。
 fn fire(entry: &Fire<'_>, caps: Result<confine::Caps, RuleRead>, admit: Option<&Admit<'_>>) -> Step {
     let place = entry
@@ -336,6 +335,8 @@ fn fire(entry: &Fire<'_>, caps: Result<confine::Caps, RuleRead>, admit: Option<&
         unit: &unit,
         limit: confine::limit_of(entry.raw, jobs),
         caps,
+        // 受付が配った幅（縮退と測れない周の Grant は 1 × 1）。受付を通らない周は `None`＝1 job の値段（設計 §45 形 4）。
+        width: grant.as_ref().map(|_| jobs.saturating_mul(threads)),
     };
     let fired = run_line_captured(entry.checks.worktree, &cmd, &wrap);
     let (confined, reason, peak_mb) =
@@ -365,11 +366,12 @@ fn fire(entry: &Fire<'_>, caps: Result<confine::Caps, RuleRead>, admit: Option<&
     }
 }
 
-/// 行が受付を通るなら枠を取る（通らない行は `None`）。
+/// 受付が在る周は行を全部受付に通し、枠を取る（受付の無い周は `None`・設計 §45 形 2）。
 ///
-/// 通るのは **`{jobs}` を持つ宣言の行**（共通 verify・検出線）だけである（`{jobs}` を持たない行は枠を取らない
-/// ＝mutants を持たない consumer は費用を払わない・設計 §3.3）。**包めない周は 1 枠だけを
-/// 取りにいく**——箱の無い行に並列度を上げると、溢れたときに殺されるのが席の側になる。
+/// **`{jobs}` を持つ宣言の行**（共通 verify・検出線）は上限までの枠を求める。**`{jobs}` を持たない行**（共通 verify・
+/// 契約の verify）は包めるかに依らず 1 枠（1 job）を求める——並列度を受け取らない行が host の core を全部取りにいく
+/// 形を、同時の本数の勘定で塞ぐ。**包めない周は 1 枠だけを取りにいく**——箱の無い行に並列度を上げると、溢れたときに
+/// 殺されるのが席の側になる。
 fn admitted(
     entry: &Fire<'_>,
     caps: Result<confine::Caps, RuleRead>,
@@ -377,13 +379,14 @@ fn admitted(
     admit: Option<&Admit<'_>>,
 ) -> Option<Grant> {
     let admit = admit?;
-    if !entry.holes || !entry.raw.contains(JOBS_HOLE) {
-        return None;
-    }
-    // 包めるかは箱の大きさ（jobs ≥ 1）に依らない。撃つ前に同じ判定を 1 度だけ引く。
-    let probe = confine::Wrap { unit, limit: confine::limit_of(entry.raw, UNADMITTED_JOBS), caps };
-    let (_, confinement) = confine::wrap_line(entry.raw, &probe);
-    let want = if confinement.confined() { admit.rules.cap } else { UNADMITTED_JOBS };
+    let want = if entry.holes && entry.raw.contains(JOBS_HOLE) {
+        // 包めるかは箱の大きさ（jobs ≥ 1）に依らない。撃つ前に同じ判定を 1 度だけ引く。
+        let probe = confine::Wrap { unit, limit: confine::limit_of(entry.raw, UNADMITTED_JOBS), caps, width: None };
+        let (_, confinement) = confine::wrap_line(entry.raw, &probe);
+        if confinement.confined() { admit.rules.cap } else { UNADMITTED_JOBS }
+    } else {
+        UNADMITTED_JOBS
+    };
     let mut grant = admission::admit(admit.state_dir, admit.run, want, &admit.rules);
     grant.jobs = admit.rules.cap.min(grant.jobs).max(UNADMITTED_JOBS);
     Some(grant)
@@ -831,7 +834,7 @@ pub(crate) mod tests {
     #[test]
     fn mutant_in_pipe_run_line_captured_unspawnable_line_is_minus_one() {
         let root = scratch("unspawnable");
-        let wrap = Wrap { unit: "scribe2-mutant-unit", limit: Limit::HostReserve, caps: Err(RuleRead::Missing) };
+        let wrap = Wrap { unit: "scribe2-mutant-unit", limit: Limit::HostReserve, caps: Err(RuleRead::Missing), width: None };
         let fired = run_line_captured(&root.join("absent-worktree"), "true", &wrap);
         assert_eq!(fired.rc, -1, "起動できない周は -1");
         assert_eq!(fired.stderr, "", "器の外に stderr は無い");
@@ -852,7 +855,7 @@ pub(crate) mod tests {
     #[test]
     fn gate_secs_fired_measures_the_wall_clock_of_the_process() {
         let root = scratch("secs");
-        let wrap = Wrap { unit: "scribe2-secs-unit", limit: Limit::HostReserve, caps: Err(RuleRead::Missing) };
+        let wrap = Wrap { unit: "scribe2-secs-unit", limit: Limit::HostReserve, caps: Err(RuleRead::Missing), width: None };
         let slept = run_line_captured(&root, "sleep 1", &wrap);
         assert_eq!(slept.rc, 0, "行は完走した");
         assert!(slept.secs >= 1, "1 秒眠った行の壁時計は 1 以上: {}", slept.secs);

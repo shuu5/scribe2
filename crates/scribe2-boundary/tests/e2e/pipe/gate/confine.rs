@@ -579,7 +579,7 @@ fn pipe_slots_wait_ends_early_when_the_blocking_ticket_goes() {
     clean(&[&repo, &state]);
 }
 
-/// **`{jobs}` の行だけが札を置き、終了で消し、置換後の cmd に実効 jobs が載る**（歯 (4) (5) (6)）。
+/// **全部の行が札を置き（`{jobs}` の無い行は jobs 1）、終了で消し、置換後の cmd に実効 jobs が載る**（歯 (4) (5) (6)）。
 #[test]
 fn pipe_slots_ticket_lives_only_during_the_jobs_line() {
     let (repo, state) = repo_with_state();
@@ -596,8 +596,14 @@ fn pipe_slots_ticket_lives_only_during_the_jobs_line() {
     let git_dir = PathBuf::from(git(&worktree_of(&repo, &id), &["rev-parse", "--absolute-git-dir"]));
     let read = |name: &str| fs::read_to_string(git_dir.join(name)).unwrap_or_default();
     assert_eq!(read("jobs-seen"), jobs, "(6) 撃たれた側も同じ実効 jobs");
-    // (4) `{jobs}` の無い行の間は札が無い（先に撃つ行・札を置く前）。
-    assert!(!read("slots-plain").contains(".slot"), "(4) {{jobs}} の無い行は札を作らない: {}", read("slots-plain"));
+    // (4) `{jobs}` の無い行の間も自便の札がちょうど 1 枚在り、本文の jobs は 1（全部の行が受付を通る・設計 gate-cost.md §45）。
+    let plain: Vec<String> =
+        read("slots-plain").lines().filter(|name| name.ends_with(".slot")).map(str::to_owned).collect();
+    assert_eq!(plain.len(), 1, "(4) {{jobs}} の無い行の間も札 1 枚: {plain:?}");
+    assert!(plain.iter().all(|name| name.ends_with(&format!("-{id}.slot"))), "(4) 札の名は <pid>-<run>.slot: {plain:?}");
+    let plain_body = vessel::fleet::json_lite::parse_object(read("slots-plain-body").trim()).unwrap_or_default();
+    assert_eq!(value_of(&plain_body, "jobs"), "1", "(4) {{jobs}} の無い行の札の jobs は 1: {}", read("slots-plain-body"));
+    assert_eq!(value_of(&plain_body, "run"), id, "(4) 札の run は便 id");
     // (5) `{jobs}` の行の間は自便の札がちょうど 1 枚在り、本文の jobs が実効 jobs と一致する。
     let during: Vec<String> = read("slots-during")
         .lines()
@@ -668,5 +674,131 @@ fn pipe_slots_threads_degraded_run_gets_one_job_and_one_thread() {
     assert_eq!(read("jobs-seen"), "1", "撃たれた側の jobs も 1");
     assert_eq!(read("threads-seen"), "1", "撃たれた側の thread も 1（core 数ぶんではない）");
     assert!(live.exists(), "生きている札は回収しない");
+    clean(&[&repo, &state]);
+}
+
+// ---- 箱の CPU の幅（設計 docs/design/gate-cost.md §45・ADR-0095・接頭辞 `cpu_width_`）------------------------
+//
+// 偽 systemd-run の記録（`scope_record` / `scope_prop`）の `CPUQuota` を読む。受付が配った行の箱は `jobs × threads × 100%`
+// （縮退と測れない周は 100%）、配らない箱は 1 job の値段 × 100%（core 数は歯が `Cpus_allowed_list` から数え、`gate.mutants_jobs`
+// は埋め込みの値）。枠を配れたかは host の空き memory に依る（設計 §7）ので、行の record の `slot=` で読み分ける。
+
+/// 1 job の値段 × 100（%・core 数を読めない周は空＝`CPUQuota` の語が無い）。
+fn one_job_quota() -> String {
+    let cap = embedded_int("gate.mutants_jobs").max(1);
+    host_cores().map_or_else(String::new, |cores| format!("{}%", (cores / cap).max(1) * 100))
+}
+
+/// 受付が配った周の便の箱の上限（`slot` が縮退か測れない周は 100%・配れた周は 1 job の値段）。
+fn granted_quota(slot: &str) -> String {
+    if slot.starts_with("degraded") || slot.starts_with("unmeasured") {
+        "100%".to_owned()
+    } else {
+        one_job_quota()
+    }
+}
+
+/// `needle` を名に含む scope の `CPUQuota`（記録がちょうど 1 件・語が無ければ空）。
+fn quota_of(state: &Path, needle: &str) -> String {
+    scope_prop(&scope_record(state, needle), "CPUQuota")
+}
+
+/// (d) `{jobs}` を持たない共通 verify と契約の verify の行は受付を通り（record が `slot=` を持ち・jobs は 1）、箱の `CPUQuota` は
+/// 1 job の値段 × 100%（縮退した周は 100%）。base は受付を通らず（`slot=` が無い）箱に `CPUQuota` が無い。
+#[test]
+fn cpu_width_lines_without_jobs_pass_admission_and_get_the_one_job_price() {
+    let (repo, state) = repo_with_state();
+    let (id, gated) = slot_gate(&repo, &state);
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "gate: {}", stderr_of(&gated));
+    let rows = verify_rows(&state, &id);
+    assert_eq!(kinds(&rows), ["write-set", "common", "common", "contract"], "母集団 4 record: {rows:?}");
+    for (n, needle) in [(3, "-common-3-"), (4, "-contract-4-")] {
+        assert!(row_has(&rows, n, "slot"), "{n} 番目（{{jobs}} を持たない行）も受付を通る: {rows:?}");
+        assert_eq!(row_value(&rows, n, "jobs"), "1", "{{jobs}} を持たない行は 1 job（{n} 番目）");
+        let slot = row_value(&rows, n, "slot");
+        assert_ne!(slot, "unmeasured", "meminfo と cores の在る host では測れる: {rows:?}");
+        assert_eq!(quota_of(&state, needle), granted_quota(&slot), "{needle} の箱は 1 job の値段（slot={slot}）");
+    }
+    assert!(!row_has(&rows, 1, "slot"), "撃つ process を持たない段①は受付を通らない");
+    clean(&[&repo, &state]);
+}
+
+/// (e) `{jobs}` を持つ共通 verify の行の箱の `CPUQuota` は置換された jobs × threads × 100%（record の cmd の実値から組む）。
+#[test]
+fn cpu_width_jobs_line_box_is_the_substituted_jobs_times_threads() {
+    let (repo, state) = repo_with_state();
+    let (id, gated) = slot_gate_line(&repo, &state, SLOT_THREADS_LINE);
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "gate: {}", stderr_of(&gated));
+    let row = slot_row(&verify_rows(&state, &id));
+    let jobs: u64 = value_of(&row, "jobs").parse().unwrap_or(0);
+    let cmd = value_of(&row, "cmd");
+    let threads: u64 = cmd.rsplit_once(' ').and_then(|(_, tail)| tail.parse().ok()).unwrap_or(0);
+    assert!(jobs >= 1 && threads >= 1, "置換された実値は 1 以上: {cmd}");
+    assert_eq!(quota_of(&state, "-common-2-"), format!("{}%", jobs * threads * 100), "jobs × threads × 100%: {cmd}");
+    clean(&[&repo, &state]);
+}
+
+/// (f) land の主実測の行は札を取らず（record に `slot=` が無い）、箱は 1 job の値段 × 100%（受付が配った幅を持たない箱）。
+/// 主実測を撃つ周にするため verdict の木を差し替える（同じ木の周は主実測ごと省く・設計 §27）。
+#[test]
+fn cpu_width_land_main_run_takes_no_ticket_and_gets_the_one_job_price() {
+    let (repo, state) = repo_with_state();
+    commit_vessel(&repo, VESSEL_ALLOWED, r#"["sh verify-ok.sh"]"#);
+    let path = systemd_stub(&state);
+    let marker = state.join("lens-ran");
+    let (id, gated) = confined_run(&repo, &state, &path, &fake_lens(&marker, &lens_verdict("PASS")));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "gate: {}", stderr_of(&gated));
+    super::super::land::make_tree_differ(&repo, &state, &id, "refs/heads/main");
+    // land の process が撃つ箱だけを読む（gate の記録と同じ段の名が並ぶ）。
+    let records = state.join(SCOPE_RECORDS);
+    fs::remove_dir_all(&records).expect("記録を空にできる");
+    fs::create_dir_all(&records).expect("記録の dir を作り直せる");
+    let landed = run_pipe_with_path(
+        &path,
+        &["land", "--run", &id, "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string()],
+    );
+    assert_eq!(landed.status.code(), Some(i32::from(RC_OK)), "land: {}", stderr_of(&landed));
+    await_detection_child(&state, &id);
+    let (main, _) = split_landed(main_rows(&state, &id));
+    assert_eq!(kinds(&main), ["write-set", "common", "contract"], "主実測の母集団（①②④）: {main:?}");
+    assert!(main.iter().all(|row| !row.iter().any(|(key, _)| key == "slot")), "主実測は札を取らない: {main:?}");
+    for needle in ["-common-2-", "-contract-3-"] {
+        assert_eq!(quota_of(&state, needle), one_job_quota(), "{needle} の箱は 1 job の値段");
+    }
+    clean(&[&repo, &state]);
+}
+
+/// (g) 受付が縮退した周（生きている札で枠を埋め・待ちの上限は fixture の 1 秒）の行の箱は `CPUQuota=100%`——`{jobs}` を持つ行も
+/// `{jobs}` を持たない行も契約の行も同じ（縮退の Grant は jobs 1 × thread 1）。
+#[test]
+fn cpu_width_degraded_run_boxes_are_one_thread() {
+    let (repo, state) = repo_with_state();
+    let live = plant_ticket(&state, u64::from(std::process::id()), 1_000_000_000_000);
+    let (id, gated) = slot_gate_line(&repo, &state, SLOT_THREADS_LINE);
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "縮退しても便は流れる: {}", stderr_of(&gated));
+    let rows = verify_rows(&state, &id);
+    for n in [2, 3, 4] {
+        assert_eq!(row_value(&rows, n, "slot"), "degraded", "{n} 番目も縮退した: {rows:?}");
+    }
+    for needle in ["-common-2-", "-common-3-", "-contract-4-"] {
+        assert_eq!(quota_of(&state, needle), "100%", "{needle} の箱は縮退の 100%");
+    }
+    assert!(live.exists(), "生きている札は回収しない");
+    clean(&[&repo, &state]);
+}
+
+/// (h) runner と lens の包みの箱は 1 job の値段 × 100% の `CPUQuota` と `CPUWeight`（受付を通らない箱）。
+#[test]
+fn cpu_width_runner_and_lens_boxes_get_the_one_job_price() {
+    let (repo, state) = repo_with_state();
+    let path = systemd_stub(&state);
+    let marker = state.join("lens-ran");
+    let (_id, gated) = confined_run(&repo, &state, &path, &fake_lens(&marker, &lens_verdict("PASS")));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "gate: {}", stderr_of(&gated));
+    for needle in ["-runner-1-", "-lens-1-"] {
+        let record = scope_record(&state, needle);
+        assert_eq!(scope_prop(&record, "CPUQuota"), one_job_quota(), "{needle} の箱は 1 job の値段: {record}");
+        assert_eq!(scope_prop(&record, "CPUWeight"), embedded_int("gate.cpu_weight").to_string(), "重みは付けたまま: {record}");
+    }
     clean(&[&repo, &state]);
 }

@@ -327,7 +327,7 @@ pub(super) fn run(repo: &Path, state_dir: Option<&Path>, sha: &str, lines: &[Str
             return Shot::Closed;
         };
         let unit = confine::unit_name(&place, STAGE, n);
-        let wrap = confine::Wrap { unit: &unit, limit: confine::limit_of(line, UNADMITTED_JOBS), caps };
+        let wrap = confine::Wrap { unit: &unit, limit: confine::limit_of(line, UNADMITTED_JOBS), caps, width: None };
         let fired = gate::run_line_captured(&tree, line, &wrap);
         Shot::Fired { rc: fired.rc, oom_kill: fired.usage.oom_kill, secs: fired.secs }
     });

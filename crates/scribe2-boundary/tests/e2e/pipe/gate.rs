@@ -13,6 +13,7 @@ mod detection;
 mod promised;
 mod pure_move;
 // flip-check: moved s2-07l.685
+// flip-check: retroactive s2-07l.736.23
 
 use super::*;
 use vessel::pipe::run_dir;
@@ -1581,10 +1582,12 @@ fn plant_ticket(state: &Path, pid: u64, jobs: u64) -> PathBuf {
     path
 }
 
-/// 受付の歯の宣言: `{jobs}` の無い行 → `{jobs}` の行の順に、**撃たれた側で** slot dir を写す。
+/// 受付の歯の宣言: `{jobs}` の行 → `{jobs}` の無い行の順に、**撃たれた側で** slot dir を写す。
 ///
 /// 札は行の終了で消えるので、外から gate の後に見ても「在った」ことは測れない。行の中から
-/// dir の中身と札の本文を git の dir へ写す（script の本文は宣言の検査の外）。
+/// dir の中身と札の本文を git の dir へ写す（script の本文は宣言の検査の外）。受付の待ちと死んだ札の回収は**先に撃たれる行**の
+/// 受付が持つ（次の行の受付の時には回収する札が無く、塞ぐ札が消えた後は待たない・設計 gate-cost.md §45）ので、待ちと回収と縮退を測る
+/// 歯が読む record（[`slot_row`]）は先に撃たれる `{jobs}` の行の側に置く。
 fn commit_slot_vessel(repo: &Path, state: &Path) {
     commit_slot_vessel_line(repo, state, SLOT_JOBS_LINE);
 }
@@ -1605,7 +1608,10 @@ fn commit_slot_vessel_line(repo: &Path, state: &Path, jobs_line: &str) {
     let slots = host_slots(state);
     let dir = slots.display();
     let seen = "\"$(git rev-parse --absolute-git-dir)\"";
-    let plain = format!("ls -A '{dir}' > {seen}/slots-plain 2>/dev/null\nexit 0\n");
+    let plain = format!(
+        "ls -A '{dir}' > {seen}/slots-plain 2>/dev/null\n\
+         cat '{dir}'/*.slot > {seen}/slots-plain-body 2>/dev/null\nexit 0\n"
+    );
     let jobs = format!(
         "printf '%s' \"$1\" > {seen}/jobs-seen\nprintf '%s' \"$2\" > {seen}/threads-seen\n\
          ls -A '{dir}' > {seen}/slots-during 2>/dev/null\n\
@@ -1614,7 +1620,7 @@ fn commit_slot_vessel_line(repo: &Path, state: &Path, jobs_line: &str) {
     fs::write(repo.join("verify-slot-plain.sh"), plain).expect("script を書ける");
     fs::write(repo.join("verify-slot.sh"), jobs).expect("script を書ける");
     git(repo, &["add", "verify-slot-plain.sh", "verify-slot.sh"]);
-    commit_vessel(repo, VESSEL_ALLOWED, &format!(r#"["sh verify-slot-plain.sh", "{jobs_line}"]"#));
+    commit_vessel(repo, VESSEL_ALLOWED, &format!(r#"["{jobs_line}", "sh verify-slot-plain.sh"]"#));
 }
 
 /// 受付の歯の 1 便（stub の `systemd-run` で包める host を作り、`--rules` の fixture で gate）。
@@ -1630,13 +1636,16 @@ fn slot_gate_line(repo: &Path, state: &Path, jobs_line: &str) -> (String, Output
     confined_run(repo, state, &path, &fake_lens(&marker, &lens_verdict("PASS")))
 }
 
-/// `slot=` を持つ record（**ちょうど 1 件**・母集団を確かめてから読む）。
+/// 受付の歯の `{jobs}` の行の record（**`cmd` で選んでちょうど 1 件**・母集団を確かめてから読む）。
+///
+/// 全部の行が受付を通る（設計 gate-cost.md §45）ので `slot=` の有無では選べない。`{jobs}` の無い行の
+/// `sh verify-slot-plain.sh` と字面が違う `sh verify-slot.sh` の頭で選ぶ。
 fn slot_row(
     rows: &[Vec<(String, vessel::fleet::json_lite::Value)>],
 ) -> Vec<(String, vessel::fleet::json_lite::Value)> {
     let hits: Vec<&Vec<(String, vessel::fleet::json_lite::Value)>> =
-        rows.iter().filter(|row| row.iter().any(|(key, _)| key == "slot")).collect();
-    assert_eq!(hits.len(), 1, "受付を通った record はちょうど 1 件: {rows:?}");
+        rows.iter().filter(|row| value_of(row, "cmd").starts_with("sh verify-slot.sh")).collect();
+    assert_eq!(hits.len(), 1, "{{jobs}} の行の record はちょうど 1 件: {rows:?}");
     hits.first().map(|row| (*row).clone()).unwrap_or_default()
 }
 
@@ -1667,11 +1676,20 @@ fn assert_reclaimed_one(slot: &str, why: &str) {
 /// 待ちが解ける歯の待ちの上限（秒）。歯が札を消すまでの時間より十分に長く置く。
 const SLOT_WAIT_LONG_S: u64 = 60;
 
-/// この歯の host の core 数（gate の binary が同じ host で測る値と同じ口・読めない周は `None`）。
+/// この歯の host の core 数（gate の binary が同じ host で測る値と同じ読み・読めない周は `None`）。
+///
+/// `/proc/self/status` の `Cpus_allowed_list`（`0,2,4-7` の形）の区間を数える。`available_parallelism` は cgroup の上限で縮むので、
+/// 便の箱の上限の中で走る歯は器と同じ数を読めない（設計 gate-cost.md §45 形 1）。器の読みとは別に、この歯が字面から数える。
 fn host_cores() -> Option<u64> {
-    std::thread::available_parallelism()
-        .ok()
-        .and_then(|found| u64::try_from(found.get()).ok())
+    let status = fs::read_to_string("/proc/self/status").ok()?;
+    let list = status.lines().find_map(|line| line.strip_prefix("Cpus_allowed_list:"))?.trim();
+    list.split(',')
+        .map(|range| {
+            let (from, to) = range.split_once('-').unwrap_or((range, range));
+            to.parse::<u64>().ok()?.checked_sub(from.parse::<u64>().ok()?)?.checked_add(1)
+        })
+        .try_fold(0_u64, |sum, count| sum.checked_add(count?))
+        .filter(|cores| *cores > 0)
 }
 
 /// 検出線の stub の行（`{base}` を印に埋める＝置換されたことを撃たれた側で読める）。

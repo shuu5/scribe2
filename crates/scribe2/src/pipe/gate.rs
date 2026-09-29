@@ -579,6 +579,7 @@ fn ask_lens_attempt(
         // lens の箱は 1 × `gate.job_memory_mb`（設計 gate-cost.md §12・裁定 id user 2026-09-15T18:2xZ）。
         limit: confine::Limit::PerJob(1),
         caps: confine::Caps::embedded(),
+        width: None,
     };
     ask_lens(line, worktree, body, &wrap)
 }

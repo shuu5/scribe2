@@ -35,6 +35,8 @@ use std::process::{Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 
+mod cpu;
+
 /// scope を作る道具。**PATH で解決する**（絶対 path を焼かない・env も読まない）。
 const SYSTEMD_RUN: &str = "systemd-run";
 
@@ -59,6 +61,9 @@ const RESERVE_ROW: &str = "host.reserve_memory_mb";
 
 /// scope に付ける CPU の重みの rules 行。
 const CPU_WEIGHT_ROW: &str = "gate.cpu_weight";
+
+/// 1 job の値段の分母の rules 行（受付と同じ行・上限の導出が [`cpu`] で読む）。
+const MUTANTS_JOBS_ROW: &str = "gate.mutants_jobs";
 
 /// 席の起動を包む箱の memory の上限の rules 行（MiB・設計 account-lifecycle.md §30 形 1・ADR-0072）。
 const SEAT_MEMORY_ROW: &str = "seat.memory_max_mb";
@@ -198,6 +203,8 @@ pub struct Caps {
     pub reserve_memory_mb: u64,
     /// 便の scope に付ける CPU の重み（rules 行 `gate.cpu_weight`）。
     pub cpu_weight: u64,
+    /// 1 job の値段の分母（rules 行 `gate.mutants_jobs`・埋め込みから読む＝`--rules` は効かない）。
+    pub mutants_jobs: u64,
 }
 
 impl Caps {
@@ -221,6 +228,7 @@ impl Caps {
             job_memory_mb: int_rule_of(&manifest, JOB_MEMORY_ROW)?,
             reserve_memory_mb: int_rule_of(&manifest, RESERVE_ROW)?,
             cpu_weight: int_rule_of(&manifest, CPU_WEIGHT_ROW)?,
+            mutants_jobs: int_rule_of(&manifest, MUTANTS_JOBS_ROW)?,
         })
     }
 }
@@ -233,6 +241,8 @@ pub struct Wrap<'a> {
     pub limit: Limit,
     /// 封じ込めの 3 線（読めない周は理由付きの Err・[`Caps::embedded`] の結果をそのまま渡す）。
     pub caps: Result<Caps, RuleRead>,
+    /// 受付が配った幅の thread 数（`jobs × threads`・配らない箱は `None`＝1 job の値段・[`cpu`]）。
+    pub width: Option<u64>,
 }
 
 /// 便の 1 起動の unit 名（`<NAME>-<場所>-<段>-<n>-<pid>-<seq>`）。
@@ -743,7 +753,7 @@ fn probe(caps: &Caps, host_mb: u64) -> Result<(), Reason> {
     *PROBED.get_or_init(|| {
         let unit = format!("{NAME}-{}-probe", std::process::id());
         let mut cmd = Invocation::new(SYSTEMD_RUN);
-        cmd.args(scope_args(&unit, host_mb, Some(caps.cpu_weight)));
+        cmd.args(scope_args(&unit, host_mb, Some(caps.cpu_weight), cpu::quota_of(None, caps)));
         cmd.arg("--").arg(SHELL).arg("-c").arg("exit 0");
         cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
         probe_outcome(cmd.status())
@@ -771,7 +781,7 @@ fn shell(line: &str) -> Invocation {
 /// 中身の起動を `systemd-run --user --scope` で包む。
 fn scope(inner: Invocation, mb: u64, entry: &Wrap<'_>, caps: &Caps) -> Invocation {
     let mut outer = Invocation::new(SYSTEMD_RUN);
-    outer.args(scope_args(entry.unit, mb, Some(caps.cpu_weight)));
+    outer.args(scope_args(entry.unit, mb, Some(caps.cpu_weight), cpu::quota_of(entry.width, caps)));
     outer.arg("--");
     outer.arg(inner.get_program());
     outer.args(inner.get_args());
@@ -788,8 +798,9 @@ fn scope(inner: Invocation, mb: u64, entry: &Wrap<'_>, caps: &Caps) -> Invocatio
 /// 正常終了した scope が `failed` で host に残り、同じ host の他の観察を汚す。probe の scope もこれで消える。
 ///
 /// `cpu_weight` は便だけが持つ（`None` は `CPUWeight` の 2 語を置かない＝席の箱・他の語と順は同じ・設計 account-lifecycle.md
-/// §30 形 2＝対話の席を便より軽くしない）。
-fn scope_args(unit: &str, mb: u64, cpu_weight: Option<u64>) -> Vec<String> {
+/// §30 形 2＝対話の席を便より軽くしない）。`cpu_quota` は上限の % で、`None` は `CPUQuota` の 2 語を置かない（語の順は
+/// `MemoryMax` → `CPUWeight` → `CPUQuota` → `OOMPolicy`・設計 gate-cost.md §45 形 4）。
+fn scope_args(unit: &str, mb: u64, cpu_weight: Option<u64>, cpu_quota: Option<u64>) -> Vec<String> {
     let mut args = vec![
         "--user".to_owned(),
         "--scope".to_owned(),
@@ -802,6 +813,9 @@ fn scope_args(unit: &str, mb: u64, cpu_weight: Option<u64>) -> Vec<String> {
     if let Some(weight) = cpu_weight {
         args.extend(["-p".to_owned(), format!("CPUWeight={weight}")]);
     }
+    if let Some(percent) = cpu_quota {
+        args.extend(["-p".to_owned(), format!("CPUQuota={percent}%")]);
+    }
     args.extend(["-p".to_owned(), "OOMPolicy=continue".to_owned()]);
     args
 }
@@ -810,7 +824,7 @@ fn scope_args(unit: &str, mb: u64, cpu_weight: Option<u64>) -> Vec<String> {
 /// 起動行の `claude` の前に置く（`--` の後ろの command を exec して自分は残らない）。unit 名は [`unit_name`] が組む。
 pub fn seat_scope_head(unit: &str, mb: u64) -> Vec<String> {
     let mut words = vec![SYSTEMD_RUN.to_owned()];
-    words.extend(scope_args(unit, mb, None));
+    words.extend(scope_args(unit, mb, None, None));
     words.push("--".to_owned());
     words
 }
@@ -1106,7 +1120,7 @@ mod tests {
     /// （設計 gate-cost.md §25・`s2-07l.421`）。
     #[test]
     fn confine_collect_scope_args_carry_collect_once_in_order() {
-        let args = scope_args("scribe2-probe-unit", 21, Some(CAPS.cpu_weight));
+        let args = scope_args("scribe2-probe-unit", 21, Some(CAPS.cpu_weight), Some(800));
         assert_eq!(
             args.iter().filter(|arg| *arg == "--collect").count(),
             1,
@@ -1125,26 +1139,31 @@ mod tests {
                 "-p",
                 "CPUWeight=50",
                 "-p",
+                "CPUQuota=800%",
+                "-p",
                 "OOMPolicy=continue",
             ],
             "既存の引数の順序と箱の大きさは不変"
         );
     }
 
-    /// `scope_args` の 2 形（設計 account-lifecycle.md §30 形 2・歯 (f)）: 便の形（CPUWeight 有り）から `-p CPUWeight=<w>` の 2 語を
-    /// 抜くと席の形（CPUWeight 無し）に一致する＝他の語と順は同じ。席の頭は `systemd-run` → 席の形 → `--` の語列。
+    /// `scope_args` の 2 形（設計 account-lifecycle.md §30 形 2・歯 (f)）: 便の形（CPUWeight と CPUQuota 有り）から
+    /// `-p CPUWeight=<w>` と `-p CPUQuota=<q>%` の 4 語を抜くと席の形に一致する＝他の語と順は同じ。席の頭は `systemd-run` →
+    /// 席の形 → `--` の語列。
     #[test]
     fn confine_scope_args_two_forms_differ_only_by_cpu_weight() {
-        let job = scope_args("u1", 4096, Some(CAPS.cpu_weight));
-        let seat = scope_args("u1", 4096, None);
+        let job = scope_args("u1", 4096, Some(CAPS.cpu_weight), Some(800));
+        let seat = scope_args("u1", 4096, None, None);
         let want_seat = ["--user", "--scope", "--quiet", "--collect", "--unit=u1", "-p", "MemoryMax=4096M", "-p", "OOMPolicy=continue"];
         assert_eq!(seat, want_seat, "席の形に CPUWeight は無い");
         assert!(!seat.iter().any(|arg| arg.starts_with("CPUWeight")), "{seat:?}");
         let at = job.iter().position(|arg| arg == "CPUWeight=50").expect("便の形は CPUWeight を持つ");
         let mut stripped = job.clone();
-        stripped.drain(at.saturating_sub(1)..=at);
-        assert_eq!(stripped, seat, "CPUWeight の 2 語の他は同じ語と順: {job:?}");
+        stripped.drain(at.saturating_sub(1)..=at.saturating_add(2));
+        assert_eq!(stripped, seat, "CPUWeight と CPUQuota の 4 語の他は同じ語と順: {job:?}");
         assert_eq!(job.get(at.saturating_sub(1)).map(String::as_str), Some("-p"), "{job:?}");
+        assert_eq!(job.get(at.saturating_add(1)).map(String::as_str), Some("-p"), "{job:?}");
+        assert_eq!(job.get(at.saturating_add(2)).map(String::as_str), Some("CPUQuota=800%"), "{job:?}");
         let head = super::seat_scope_head("u1", 4096);
         assert_eq!(head.first().map(String::as_str), Some("systemd-run"), "{head:?}");
         assert_eq!(head.get(1..head.len().saturating_sub(1)), Some(&seat[..]), "頭の中身は席の形: {head:?}");
@@ -1249,7 +1268,7 @@ mod tests {
     /// lens の 2 経路を撃ち、ここは関数そのものの指定を pin する。
     #[test]
     fn pipe_spawn_drops_tmux_pane_in_wrap_line() {
-        let entry = Wrap { unit: "scribe2-probe-unit", limit: Limit::HostReserve, caps: Err(RuleRead::Missing) };
+        let entry = Wrap { unit: "scribe2-probe-unit", limit: Limit::HostReserve, caps: Err(RuleRead::Missing), width: None };
         let (cmd, confinement) = wrap_line("true", &entry);
         assert_eq!(confinement.reason(), Some(Reason::NoRules), "rules の無い周は素のまま撃つ");
         let envs: Vec<(&OsStr, Option<&OsStr>)> = cmd.get_envs().collect();
@@ -1265,18 +1284,14 @@ mod tests {
     /// ほかの env を足さない（`wrap_line` と同じ 1 点・設計 seat-roles.md §4 行 c）。base は空で RED。
     #[test]
     fn pipe_spawn_drops_tmux_pane_in_wrap_command() {
-        let entry = Wrap { unit: "scribe2-probe-unit", limit: Limit::HostReserve, caps: Err(RuleRead::Missing) };
+        let entry = Wrap { unit: "scribe2-probe-unit", limit: Limit::HostReserve, caps: Err(RuleRead::Missing), width: None };
         let (cmd, _) = wrap_command(Invocation::new("true"), &entry);
         let envs: Vec<(&OsStr, Option<&OsStr>)> = cmd.get_envs().collect();
         assert_eq!(envs, vec![(OsStr::new(PANE_ENV), None)], "外すのは TMUX_PANE だけで、足す env は無い");
     }
 
     /// 歯の fixture の 3 線（tracked manifest の値を写さない＝値が動いても歯は動かない）。
-    const CAPS: Caps = Caps {
-        job_memory_mb: 7,
-        reserve_memory_mb: 11,
-        cpu_weight: 50,
-    };
+    const CAPS: Caps = Caps { job_memory_mb: 7, reserve_memory_mb: 11, cpu_weight: 50, mutants_jobs: 4 };
 
     /// `/proc/meminfo` の頭（MemTotal は 64 MiB ちょうど）。
     ///
@@ -1426,7 +1441,7 @@ mod tests {
     fn rule_read_confine_unreadable_manifest_is_named_in_the_reason() {
         let broken = Caps::of(manifest_read(Manifest::parse("schema = 1\n\n[[rule]]\nid = \"x\"\n")));
         assert_eq!(broken, Err(RuleRead::ManifestUnreadable), "parse の Err は 1 語に畳む");
-        let entry = Wrap { unit: "scribe2-probe-unit", limit: Limit::HostReserve, caps: broken };
+        let entry = Wrap { unit: "scribe2-probe-unit", limit: Limit::HostReserve, caps: broken, width: None };
         let (cmd, confinement) = wrap_line("true", &entry);
         assert!(!confinement.confined(), "読めない周は包まない（止めない）");
         assert_eq!(confinement.reason(), Some(Reason::ManifestUnreadable), "理由は manifest-unreadable");
@@ -1437,15 +1452,15 @@ mod tests {
         // 行が欠ける（読めた manifest に 3 線が無い）周は `no-rules` のまま。
         let absent = Caps::of(manifest_read(Manifest::parse("schema = 1\n")));
         assert_eq!(absent, Err(RuleRead::Missing), "行が無い");
-        let entry = Wrap { unit: "scribe2-probe-unit", limit: Limit::HostReserve, caps: absent };
+        let entry = Wrap { unit: "scribe2-probe-unit", limit: Limit::HostReserve, caps: absent, width: None };
         assert_eq!(wrap_line("true", &entry).1.reason(), Some(Reason::NoRules), "行が無い周は no-rules");
         for read in [RuleRead::Disabled, RuleRead::NotInt, RuleRead::NotStr, RuleRead::NotInTable] {
-            let entry = Wrap { unit: "scribe2-probe-unit", limit: Limit::HostReserve, caps: Err(read) };
+            let entry = Wrap { unit: "scribe2-probe-unit", limit: Limit::HostReserve, caps: Err(read), width: None };
             assert_eq!(wrap_line("true", &entry).1.reason(), Some(Reason::NoRules), "{read:?} は no-rules");
         }
     }
 
-    /// 3 線の揃った manifest は `Caps` になり、1 行でも欠ければその行の variant で Err（3 線の全部を読む）。
+    /// 4 線の揃った manifest は `Caps` になり、1 行でも欠ければその行の variant で Err（4 線の全部を読む）。
     #[test]
     fn rule_read_confine_caps_of_reads_all_three_rows() {
         let row = |id: &str, kind: &str, value: u64| {
@@ -1456,9 +1471,12 @@ mod tests {
         let job = row("gate.job_memory_mb", "GateJobMemoryMb", 7);
         let reserve = row("host.reserve_memory_mb", "HostReserveMemoryMb", 11);
         let weight = row("gate.cpu_weight", "GateCpuWeight", 50);
-        let full = format!("schema = 1\n\n{job}{reserve}{weight}");
-        assert_eq!(Caps::of(manifest_read(Manifest::parse(&full))), Ok(CAPS), "3 線が揃う");
-        let short = format!("schema = 1\n\n{job}{reserve}");
+        let jobs = row("gate.mutants_jobs", "GateMutantsJobs", 4);
+        let full = format!("schema = 1\n\n{job}{reserve}{weight}{jobs}");
+        assert_eq!(Caps::of(manifest_read(Manifest::parse(&full))), Ok(CAPS), "4 線が揃う");
+        let short = format!("schema = 1\n\n{job}{reserve}{jobs}");
         assert_eq!(Caps::of(manifest_read(Manifest::parse(&short))), Err(RuleRead::Missing), "cpu_weight が無い");
+        let short = format!("schema = 1\n\n{job}{reserve}{weight}");
+        assert_eq!(Caps::of(manifest_read(Manifest::parse(&short))), Err(RuleRead::Missing), "mutants_jobs が無い");
     }
 }

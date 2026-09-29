@@ -121,11 +121,33 @@ pub fn act(health: Health) -> (Action, Option<Mark>) {
     }
 }
 
-/// host の core 数（測定値・env は読まない）。読めない周は `None`。
-fn host_cores() -> Option<u64> {
-    std::thread::available_parallelism()
-        .ok()
-        .and_then(|found| u64::try_from(found.get()).ok())
+/// core 数を運ぶ面（`Cpus_allowed_list` の行を読む・設計 gate-cost.md §45 形 1）。
+const STATUS: &str = "/proc/self/status";
+
+/// `/proc/self/status` の core の行の見出し（**語の完全一致**＝16 進の `Cpus_allowed:` の欄に釣られない）。
+const CPUS_KEY: &str = "Cpus_allowed_list:";
+
+/// host の core 数の読み口（**受付も遮断器もこの 1 本**・設計 gate-cost.md §45 形 1）。
+///
+/// `available_parallelism` は cgroup の `cpu.max` で縮む＝上限つきの席の箱の中の driver が席の幅を host の core 数と
+/// 読む。`Cpus_allowed_list` は affinity と cpuset を数え `cpu.max` は数えない。env は読まない（C2.2）。
+/// 読めない・形が違う周は `None`。
+pub fn host_cores() -> Option<u64> {
+    cores_of(&std::fs::read_to_string(STATUS).ok()?)
+}
+
+/// `status` の本文から `Cpus_allowed_list` の区間の列（`0,2,4-7`）の core 数を数える（pure）。
+///
+/// 欄が無い・区間が数でない・`a-` や逆順・空の区間・0 本は `None`（0 と「読めない」を混ぜない）。
+fn cores_of(status: &str) -> Option<u64> {
+    let list = status.lines().find_map(|line| line.strip_prefix(CPUS_KEY))?.trim();
+    let mut total: u64 = 0;
+    for part in list.split(',') {
+        let (from, to) = part.split_once('-').unwrap_or((part, part));
+        let (from, to): (u64, u64) = (from.parse().ok()?, to.parse().ok()?);
+        total = total.checked_add(to.checked_sub(from)?.checked_add(1)?)?;
+    }
+    Some(total).filter(|found| *found > 0)
 }
 
 /// host の面を今読んで判じる（**host を読む口はこの 1 本**・読めない面は空の字面＝測れない）。
@@ -177,7 +199,7 @@ pub fn calm_now(per_core: PerCore) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{act, judge, Action, Health, Mark, PerCore};
+    use super::{act, cores_of, judge, Action, Health, Mark, PerCore};
 
     /// 倍率（走行可能 4・待ち 1）と core 数 8 の fixture＝閾値は走行可能 32・待ち 8。
     const PER_CORE: PerCore = PerCore { runnable: 4, blocked: 1 };
@@ -246,6 +268,23 @@ mod tests {
             assert_eq!(judge(&load, &text, CORES, PER_CORE), Health::Unmeasured, "{why}");
         }
         assert_eq!(judge(&good.0, &good.1, None, PER_CORE), Health::Unmeasured, "core 数を読めない");
+    }
+
+    /// (a) `Cpus_allowed_list` の読み（設計 gate-cost.md §45 歯 (a)）: 区間の列の core 数を数える。欄の無い本文・壊れた区間・
+    /// 空の値は `None`（0 に潰さない）。16 進の `Cpus_allowed:` の欄が同じ本文に在っても `Cpus_allowed_list` だけを読む。
+    #[test]
+    fn cpu_width_reads_the_cpus_allowed_list_ranges() {
+        let status = |list: &str| format!("Name:\tx\nCpus_allowed:\tffff\nCpus_allowed_list:\t{list}\nMems_allowed:\t1\n");
+        for (list, want) in [("0-31", Some(32)), ("0-5", Some(6)), ("0,2,4-7", Some(6)), ("3", Some(1)), ("1-1", Some(1))] {
+            assert_eq!(cores_of(&status(list)), want, "{list}");
+        }
+        for list in ["", "0-", "-5", "a-b", "7-3", "0,", ",0", "x", "0-2-4", "0 2"] {
+            assert_eq!(cores_of(&status(list)), None, "壊れた値 {list:?}");
+        }
+        assert_eq!(cores_of("Name:\tx\nCpus_allowed:\tffff\n"), None, "16 進の欄だけでは読まない");
+        assert_eq!(cores_of("Name:\tx\n"), None, "欄が無い");
+        assert_eq!(cores_of(""), None, "空の本文");
+        assert_eq!(cores_of(&status("0-18446744073709551615")), None, "数え上げが溢れる区間は読めない");
     }
 
     /// (f) 行動と record の字面: 混んでいるだけが待ち、空いている周と測れない周は撃つ。字面は測れない周だけに載り、

@@ -208,11 +208,7 @@ fn launch_runner(launch: &Launch<'_>, worktree: &Path, cmd: &str, base: &str) ->
     // 1 × `gate.job_memory_mb`（同 §12・裁定 id user 2026-09-15T18:2xZ）で、包めない host では
     // 素のまま撃つ（止めない・縮退する）。
     let unit = confine::unit_name(launch.run, RUNNER_STAGE, 1);
-    let wrap = confine::Wrap {
-        unit: &unit,
-        limit: confine::Limit::PerJob(1),
-        caps: confine::Caps::embedded(),
-    };
+    let wrap = confine::Wrap { unit: &unit, limit: confine::Limit::PerJob(1), caps: confine::Caps::embedded(), width: None };
     let (mut command, confinement) = confine::wrap_line(cmd, &wrap);
     // **env を 1 つも足さない**: `.env()` / `.envs()` を呼ばず親の env をそのまま継承する（`TMUX_PANE` だけは外す＝confine）。
     // stdout は捕らえる（質問 record の読み面・`gate.rs::ask_lens` と同じ形）。stderr も同じ形で捕らえる

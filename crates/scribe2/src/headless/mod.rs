@@ -437,6 +437,7 @@ pub fn build(call: &Call<'_>) -> (Invocation, confine::Confinement) {
         unit: &unit,
         limit: confine::Limit::PerJob(1),
         caps: confine::Caps::embedded(),
+        width: None,
     };
     let (mut cmd, confinement) = confine::wrap_command(inner, &wrap);
     if let Some(dir) = call.cwd {
