@@ -34,8 +34,8 @@
 5. **台帳は契約表から生成する**: xtask の口が全設計 doc の契約表を読み、**未着地の行**（write-set の `+` の file が tracked に無い行・§33 の `symbols` の `+` も同じ読み）ごとに bead の plan（title = 行の title・parent_id = 口の引数 1 つで渡す epic id〔本 repo は program の epic 1 本・doc ごとの対応表は持たない〕・edge = 行の `depends` → `blocks`（to_key）・§ の本文が名指す bead の id（台帳の id の字面・memo か否かは問わない＝xtask は台帳を読まない）→ `discovered-from`（to_id）・label = doc 名の `doc:` と size の `size:`）を `bd create --graph` の JSON で標準出力の 1 行目に出す。acceptance = pointer 行は graph schema に無いので、JSON の次の行から「plan の key TAB pointer 行」の対応表で同じ標準出力に出し（node と同じ本数・§9）、席が create の出す「key -> id」と突き合わせて acceptance を追い書きする。closed の bead が指す行は `--skip <契約 id>` で plan から外す（plan に無い id は rc 1）。**apply は席の手番**（bdw で撃つ・器は台帳を書かない）。xtask は台帳を読まない（CI は台帳に届かない・plan は行だけから出す）。台帳側の drift は doctor の lint の (vii)（上の 4）が測る。id は bd の採番なので、行 ↔ bead の対応は acceptance の pointer 行で引く（新しい key を作らない）。
 6. **棚上げは `--defer`**（label や notes の「棚上げ」の語を規則にしない）。`bd ready` が隠すので列の観測（dispatcher.md §6）と整合する。
 7. **見積は `--estimate`（分）**を size から写す（S / M / L の分の値は便の実測の中央値で、値の正本は rules 行〔後続・C5〕）。Jev の較正の材料（見積と実測の差）はここから取る。
-8. **memo の入口は器の口 1 つ**（これから起きる memo の形を起票の時点で決める・回り続ける周のため）: 器の read-only の口が memo の plan（bd の create の引数と本文の 4 節）を標準出力に出し、席が bdw で撃つ。出所は 2 つの形だけ: (a) **便の終端から**（`--run <id>`）— 便の終端の event（gate / 審査の FAIL・INCONCLUSIVE・Failed・Questioned）を読み、`### 出所` に run id と段と kind を、`### 観測` に**終端の種類ごとの原本**を器が写す（人が写さない・C10）。原本は 4 形で閉じる: gate の FAIL・INCONCLUSIVE = run dir の `verdict.json` の evidence と at／審査の FAIL・INCONCLUSIVE = run dir の `review.json` の evidence と at／Questioned = event log の質問の逐語と `about`（既存の読み手 `crates/scribe2/src/pipe/mod.rs` の `Question`・FR31・run dir に file は無い）／Failed = event log の `RunStage(Failed)` の detail（閉じた理由の字面）と ts（verdict は無い）。どの形にも当たらない終端（detail が空・log を読めない）は写さず閉じた理由で断る（fail-closed）。`### 候補` と `### 昇格条件` は空の見出しで出し、席が埋める。(b) **user の要望から**（`--from user`）— `### 出所` に「user 逐語は本 bead の notes」の 1 行と日付を置き、席が逐語を notes に写す。label `intake:memo`・parent の epic（引数）・関連 bead（引数の列 → `relates-to`）も plan に載る。器は台帳へ書かない（ADR-0045 §2）。
-9. **起票の門は guard**（in-loop・fail-closed・極性一覧に 1 つ増える〔ADR-0014 §2.1〕）: PreToolUse の hook が `bd create` / bdw の create の command を読み、label に `intake:memo` を持つか title に `[memo]` を持つ周は、`--body-file` の本文に memo の 4 節の見出しが全部在ることを要求し、無ければ閉じた理由 1 つで止める（散文の免除なし）。契約の bead（acceptance に pointer 行）の create は label `intake:memo` を持たないことを要求する（4 象限の違反 2 形の 1 つを起票の時点で塞ぐ）。読めない command（body-file が無い・開けない）は止める側に倒す。
+8. **memo の入口は器の口 1 つ**（これから起きる memo の形を起票の時点で決める・回り続ける周のため）: 器の read-only の口が memo の plan（bd の create の引数と本文の 4 節）を標準出力に出し、席が bdw で撃つ。出所は 2 つの形だけ: (a) **便の終端から**（`--run <id>`）— 便の終端の event（gate / 審査の FAIL・INCONCLUSIVE・Failed・Questioned）を読み、`### 出所` に run id と段と kind を、`### 観測` に**終端の種類ごとの原本**を器が写す（人が写さない・C10）。原本は 4 形で閉じる: gate の FAIL・INCONCLUSIVE = run dir の `verdict.json` の evidence と at／審査の FAIL・INCONCLUSIVE = run dir の `review.json` の evidence と at／Questioned = event log の質問の逐語と `about`（既存の読み手 `crates/scribe2/src/pipe/mod.rs` の `Question`・FR31・run dir に file は無い）／Failed = event log の `RunStage(Failed)` の detail（閉じた理由の字面）と ts（verdict は無い）。どの形にも当たらない終端（detail が空・log を読めない）は写さず閉じた理由で断る（fail-closed）。`### 候補` と `### 昇格条件` は空の見出しで出し、席が埋める（昇格条件には読める引き金の行〔§15〕を 1 行以上書いてから撃つ。空のままの create は起票の門が no-trigger で断る）。(b) **user の要望から**（`--from user`）— `### 出所` に「user 逐語は本 bead の notes」の 1 行と日付を置き、席が逐語を notes に写す。label `intake:memo`・parent の epic（引数）・関連 bead（引数の列 → `relates-to`）も plan に載る。器は台帳へ書かない（ADR-0045 §2）。
+9. **起票の門は guard**（in-loop・fail-closed・極性一覧に 1 つ増える〔ADR-0014 §2.1〕）: PreToolUse の hook が `bd create` / bdw の create の command を読み、label に `intake:memo` を持つか title に `[memo]` を持つ周は、`--body-file` の本文に memo の 4 節の見出しが全部在ることを要求し、無ければ閉じた理由 1 つで止める（散文の免除なし）。契約の bead（acceptance に pointer 行）の create は label `intake:memo` を持たないことを要求する（4 象限の違反 2 形の 1 つを起票の時点で塞ぐ）。読めない command（body-file が無い・開けない）は止める側に倒す。label intake:question の create の形（§14）・memo の引き金の行（§15）も同じ門が台帳を読まずに断る。
 10. **memo の close は器の着地の終端が行う**（書きの口は既存の close の 1 種・増えない）: 便が Landed で契約を close した周、その契約から `discovered-from` で辿れる memo のうち、辿れる契約が全部 closed になった memo を同じ終端が close する（理由の字面は着地の sha を持つ）。辿れない周・台帳が読めない周は close せず、台帳 lint の (viii)「辿れる契約が全部 closed の open な memo」が名指す（fail-closed・close は写しの操作ではないので器が持てる）。
 
 ## 4. やさしく言うと
@@ -175,6 +175,73 @@ memo か契約かを「label が在るか」と「受入条件に設計の 1 行
 - 歯: `quadrant_exempts_question_`（form.rs の既存の歯の区間に 1 本）が、open の問い 1（label intake:question・型 task・設計 pointer なし）と open の memo 1 と設計 pointer を持つ open の契約 1 と印の無い open の task 1 の台帳で、open が 4、shaped が 3、neither が印の無い task の id だけを名指し、問いの id がどの欄にも出ないことを測る。base の judge は問いを neither に数えるので RED（機能不在）。
 - 限界: label intake:question を持つ bead は、memo の label か設計 pointer を併せて持っても数えから外す（問いの label を先に見る）。そうした混ざった形を起票の時点で断るかは起票の門（FR81）の設計が決め、本行は数えだけを変える。
 
+## 14. 台帳の問い（label intake:question）の create の形を起票の門が断る — 本文の 4 行・metadata の effect と asked・label intake:memo の併せ持ち・親の label を継がない指定（契約表の行 j・FR81 (a)・FR89・ADR-0083・ADR-0087）
+
+やさしく言うと: 席が user に聞くときは台帳に「問い」の bead を立てる。問いは 概要・技術・理由・推奨 の 4 行と、答えを文書へ写すか（effect）・誰のきっかけの問いか（asked）の印を持つ。形の欠けた問いを起票の時点で止め、memo の印を併せ持つ問いと、親の memo の印を黙って継いでしまう起票も止める。門は台帳を読まない。
+
+- 何が起きているか（main 7c4ab0a1・verified）:
+  - 起票の門 `crates/scribe2/src/hook/ledger_guard.rs` の `decide` は memo の判定（`judge`）→ 台帳 write の 6 形（`judge_write`）の順で、label intake:question を見ない。create の読み `create_of` / `Create` は title・label・body-file・acceptance・parent・type・graph だけを運び、`-d` / `--description` と `--metadata` は値を取る flag の列 `VALUED` で値を捨て、`--stdin` と `--no-inherit-labels` は読まない。
+  - 問いの label の字は `crates/scribe2/src/ledger/form.rs` の `QUESTION_LABEL`（§13）。
+  - bd 1.1.0（`bd help create`）: `--metadata` は JSON の字か `@file.json`・`--stdin` は `--body-file -` の別名・`--no-inherit-labels` は親の label を継がない・`-d` / `--description` は本文。親の label は既定で継がれる（`.beads/PRIME.md` の R2）ので、memo の子に立てた問いは印を付けないと intake:memo を併せ持つ。
+  - 台帳の問い 3 本（2026-09-29・全部 closed）: 本文は 3 本とも `概要 = …` / `技術 = …` / `理由 = …` / `推奨 = …` の 4 行。metadata は 1 本が effect と asked を持ち、2 本は持たない。
+- 形（番号は done と 1:1）:
+  1. **読み手は行 j の write-set の + の file の純関数**（本文の字・metadata の字・label の列だけを読み、台帳も file も読まない）: (i) 4 行 — 行頭の空白と任意の `- ` を除いた行が 概要・技術・理由・推奨 の語で始まり、語の直後が行末・空白・`=`・`:`・`：` のどれか（`技術的…` は技術の行でない）。順は問わず、宣言順で最初の欠けを返す (ii) metadata — JSON の object で、key effect の値が文字列 document か operation、key asked の値が文字列 seat か user（ほかの key は読まない）。JSON の object でない字は読めない (iii) label intake:memo の併せ持ち。JSON は `crates/scribe2/src/fleet/json_tree.rs` の `parse` で読む（依存を足さない）。
+  2. **門の段**: label intake:question を持つ create の segment は memo の判定の代わりに問いの段に掛かる（title が `[memo]` で始まっても memo の判定を掛けない＝問いの label が先）。順は 併せ持ち → 継がない指定（`--parent` の値が空でなく、`--no-inherit-labels` も `--no-inherit-labels=true` も無い）→ 本文を読めるか → 4 行 → metadata を読めるか → effect → asked で、最初の欠けで止める。6 形はこの段の後（今の順のまま）。
+  3. **読む字**: 本文は `--body-file` の file（payload の cwd から解く・memo の判定と同じ）の字と、`-d` / `--description` の最後の値を行の列として合わせたもの。どちらも無い周は空の本文（4 行の最初の欠け）。`--stdin`・値が `-` か値の無い `--body-file`・開けない file・`$` か backtick を含む `-d` の値は読めない。metadata は `--metadata` の最後の値で、`@<path>` は同じ cwd から読み、無い周は effect と asked の欠け。
+  4. **断りの語**（記録は `ledger-deny <語>`・閉じた 12 語）: question-memo-label・question-inherits-labels・question-body-unreadable・question-no-summary・question-no-technical・question-no-reason・question-no-recommendation・question-metadata-unreadable・question-no-effect・question-bad-effect・question-no-asked・question-bad-asked。断り文は既存の形 `deny bd create は起票の門が止める reason=<語>（<説明と次の一手>・ledger-form.md §14）` の 1 行で、欠けた行の語・外れた値の字・併せ持つ label・継ぐ親の id（台帳を読まないので親の label の字でなく「親 <id> の label を継ぐ」）を名指し、次の一手（`概要 = …` の 4 行・`--metadata '{"effect":"document","asked":"seat"}'`・`--no-inherit-labels`）を持つ。
+  5. **`Create` に field を足す**: `-d` / `--description` の値・`--metadata` の値・`--stdin` と `--no-inherit-labels` の有無。構築は `flags_of` の 1 か所のまま。
+  6. label intake:question を持たない create は問いの段に掛からない（memo の判定と 6 形は今のまま）。席が起こした子 process の書きは道具の呼び出しでないので門の外（hook は道具の呼び出しの command の字だけを読む）。
+- 触らない: memo の判定と字面（`judge` と memo の 4 理由）・6 形（`FORMS`）と rules 行 `ledger.denied_writes`・`Refusal`（変種を足さない）・極性一覧（同じ guard の中の段）・`crates/scribe2/src/hook/mod.rs`・台帳の読み（NFR5）。閉包: 行 j の + の file は `Create` と `Write` と `Refusal` を名指さず、`Create` の字面の構築（中括弧の literal）をどの file にも足さない（行 g・h の閉包を広げない・§ の歯の fixture も `create_of` で組む）。
+- 却下: `--metadata @file` を断る（決めたこと 4）／`--stdin` の本文を heredoc から読む（決めたこと 6）／4 行を `<語> =` の形に限る（要件の「で始まる行」より狭い）／rules 行の語に載せて効かせる（決めたこと 15）／`create --graph` と `create -f` の file の node を読んで問いの形を判じる（今の memo の判定も読まない・ledger-plan の出力は問いの label を持たない・読み方がもう 1 つ増える＝限界に残す）。
+- 限界: 問いの metadata と label を後から書き換える update（`--set-metadata`・`--add-label intake:memo` 等）は (a) の外（FR81 (a) は create の形）。`create --graph` / `create -f` で起こした問いは判じない。`-d` の値の `$` は単引用符の中の字でも読めない側に倒れる（字の出どころを分けない）。
+- 歯（接頭辞 hook_question_form_ と ledger_question_form_・`grep -rn` はどちらも 0 件・2026-09-29）:
+  - e2e（`crates/scribe2-boundary/tests/e2e/hook/guards.rs`・新しい e2e の file は作らない）: `.beads` の無い toy repo で `hook pre-tool-use` を撃つ。rules は埋め込みの manifest の写しで `ledger.denied_writes` の値から bd-outside-bdw を外した file を `--rules` で渡す。(a) 10 形（4 行の欠け 4・effect の欠け・effect の値の外・asked の欠け・asked の値の外・intake:memo の併せ持ち・継がない指定の欠け）を、狙った欄のほかを揃え `--parent s2-1 --no-inherit-labels` を持つ形（継がない指定の欠けの形だけは持たない）で、`bd create` と `bdw create` の 2 経路で撃ち、20 本がどれも rc 2・stderr 1 行（形ごとの語と中身）・stdout 0 byte・記録 1 行 (b) 揃った問いの create（本文が body-file・`-d`・metadata が `@meta.json` の 3 形）が rc 0 で記録を残さない (c) label intake:question を持たない create（4 行を欠く本文）は問いの語で断られない (d) 4 行を欠く問いの create を中で撃つ toy repo の script を起こす command（bd / bdw の segment を持たない）は rc 0 (e) `--stdin` と `--body-file -` の問いは question-body-unreadable。(c)(d) は base でも緑なので (a) と同じ歯の中に置く（単独の歯にしない）。
+  - lib（行 j の + の file の in-file・ledger_question_form_）: 語の直後の字（`=`・`:`・`：`・空白・行末は当たり・`技術的` は当たらない）・`- ` の行頭・object でない JSON・文字列でない effect・宣言順の最初の欠け。
+  - lib（`crates/scribe2/src/hook/ledger_guard.rs` の in-file・hook_question_form_）: `create_of` が `-d` と `--description=`・`--metadata`・`--stdin`・`--no-inherit-labels` と `=false` を読む・段の順（併せ持ちが 4 行より先）。
+  - 通った問いが台帳の lint と起動の列に出ないことは着地済みの歯（`crates/scribe2/src/ledger/form.rs` の `quadrant_exempts_question_from_the_shaped_population` と `crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs` の `pipe_dispatch_intake_label_question_is_not_a_candidate`）が持つ（本行は足さない）。
+- base で RED の理由: base の門は label intake:question を見ないので、(a) の 20 本と (e) が rc 0 で通る（機能不在）。行 j の + の file の in-file の歯は flip-check が base へ写さないので、flip の証拠は e2e が持つ。
+- 着地の後: PATH の binary を入れ替える（門は PATH の binary が撃つ・入れ替えは走行中の運転手が無い周に入れ替えの script で）。binary は同じ host の消費側の席と共有なので、入れ替えの前に消費側へ知らせる。
+
+## 15. memo の引き金の行の文法と読み手 1 本 — 読める引き金の無い memo の create と、昇格条件を読める引き金の無い本文へ書き換える update を起票の門が断る（契約表の行 k・FR81 (c)・FR87・ADR-0085）
+
+やさしく言うと: memo の「昇格条件」に、器が数えて判じられる 1 行（引き金）を書く決まりにする。行の書き方をここに全部決め、読むのは 1 つの関数だけにする。起票の門・便を起こす周・一覧・局面の関数がみな同じ関数で読むので、門が通した行は周でも読める。引き金の無い memo は書く時点で止める。
+
+- 何が起きているか（main 7c4ab0a1・verified）:
+  - memo の判定（`crates/scribe2/src/hook/ledger_guard.rs` の `judge`）は `--body-file` の本文に 4 節の見出し（`crates/scribe2/src/ledger/form.rs` の `MEMO_SECTIONS`）が在るかだけを見る。`### 昇格条件` の中身は読まない。update は memo の判定に掛からない。引き金の行の読み手は repo に無い（「引き金」の hit は build の注釈だけ）。
+  - 開いた memo 27 本（2026-09-29）のうち、昇格条件に「引き金」の行を持つのは 9 本・9 行。下の文法で読めるのは 1 行（`- 引き金: 期日 2026-09-30T12:00Z`）だけで、`再発 3（…` と `再発 1（…` は値の語に括弧が続くので読めず、残り 6 行は散文。
+  - 台帳の接頭辞を解く読み手は `crates/scribe2/src/seat/brief/pointer.rs` の `Anchor`（`.beads/config.yaml` の issue-prefix、無ければ `.beads/metadata.json` の dolt_database）。設計 pointer の読み手は `crates/scribe2/src/pipe/table/parse.rs` の `parse_pointer`（`.md` と `.toml` の 2 形）。UTC の字の読み手は `crates/scribe2/src/fleet/wait.rs` の `epoch_of`（秒までの形）。
+- 文法（本 § が字面の正本・ADR-0085 が本 doc の改稿に委ねた）:
+  - **置き場**: description の `### 昇格条件` の見出しの行（trim が完全一致）から、次の見出しの行（行頭の空白を除いて `#` が 1〜3 個と空白で始まる行）の前まで。見出しが複数在れば全部の節を読む。節の外の行と notes は引き金として読まない。
+  - **行の字面**: 行頭の空白を除き、任意の `- ` の後に `引き金:`（ASCII の colon）で始まる行が引き金の行。残りを空白（Unicode の空白）で語に割り、1 語目が形・2 語目が値・3 語目より後は読まない。語が 2 つ無い・形が 5 つの外・値が形の値の形に合わない行は**読めない引き金**（行の字と理由を返す）。`引き金：`（全角）や `* ` の行頭は引き金の行でない。
+  - **5 形**（満ちる条件の判定は dispatch の周の後の行が持つ・定義はここ）:
+
+    | 形 | 読める値の形 | 満ちる条件 |
+    |---|---|---|
+    | 再発 | ASCII の数字だけの 1 以上の整数 | notes の再発の行（下）の本数が値以上 |
+    | 同梱 | repo 相対の path（頭が `/`・`+`・`-`・`=`・`~` でない・`#` を持たない・`..` の段を持たない）。末尾 `/` は dir | 開いた契約（設計 pointer を持ち closed でない bead）が指す契約表の行の write-set の項目から頭の印と `#<名>` の尾を外した字が値と完全一致（値が `/` で終われば前方一致） |
+    | 依存 | 同じ台帳の bead id（台帳の接頭辞・`-`・ASCII の英数字の段を `.` で繋いだ字） | その bead が closed（台帳に無い id は満ちず、無いと名指す） |
+    | 期日 | `YYYY-MM-DDTHH:MMZ`（UTC・分まで・例 `2026-09-30T12:00Z`） | 周の時刻が値の時刻以後 |
+    | 着地 | 便の --design が受ける設計 pointer の字（`parse_pointer` が通す `<path>.md#<行 id>` か `<path>.toml#<行 id>`） | acceptance の設計 pointer の字が値と完全一致する bead が 1 本以上 closed |
+
+  - **notes の行頭**: 行頭の空白を除いて `[再発]` で始まる行が再発の行、`[keep]` で始まる行が keep の記帳（ADR-0085）。読むのは notes だけ。
+  - 値に括弧や句点を続けない（`再発 3（…）` は読めない。`再発 3 （…）` と空白で区切る）。
+- 形（番号は done と 1:1）:
+  1. **読み手は行 k の write-set の + の file の純関数 1 本**: 入力は description の字・notes の字・台帳の接頭辞（無い周も渡せる）だけで、I/O も時計も持たない。上の文法で、節が在るか・行ごとの読める引き金（形と値）か読めない引き金（行の字と理由）・再発の行の本数・keep の記帳の行を返す。期日は `epoch_of` に秒 `:00` を足した字で UNIX 秒へ、着地は `parse_pointer` で読む。起票の門（本行）・dispatch の周の引き金の判定と `pipe dispatch ls` の memo の行（dispatcher の後の行）・局面の関数（案件の局面の設計 doc の後の行）が同じ読み手を引き、自前の読みを持たない（C2）。
+  2. **bead id の形の判定は `crates/scribe2/src/ledger/form.rs` の 1 関数**（接頭辞を引数に取る・後の close の理由の行も同じ関数を引く）。門は payload の cwd から上へ辿った最初の `.beads` の dir を持つ dir で `Anchor` を開いて接頭辞を読む（bd が台帳を探す向きと同じ・台帳の client は起こさない）。解けない周は依存の値が読めない。
+  3. **memo の create**: 4 節が揃い memo の判定で止まらない create は、昇格条件の節に読める引き金の行が 1 本も無ければ no-trigger で断る。断り文は 5 形の字面（`引き金: 再発 <n>` / `同梱 <path>` / `依存 <id>` / `期日 YYYY-MM-DDTHH:MMZ` / `着地 <pointer>`）と、在れば最初の読めない行の字（先頭 40 字）を名指す。
+  4. **update**: bd / bdw の update が `--body-file` か `-d` / `--description` で書く本文が `### 昇格条件` の見出しを持ち、その節に読める引き金の行が無ければ update-no-trigger で断る。見出しを持たない本文は通す（門は台帳を読まないので、書く先が memo かを知らない）。`--stdin`・値が `-` か値の無い `--body-file`・開けない file・`$` か backtick を含む `-d` の値は update-body-unreadable（本文を書く update は bead の種類に依らず掛かる・fail-closed）。
+  5. **断りの語**（記録は `ledger-deny <語>`）: no-trigger・update-no-trigger・update-body-unreadable。断り文は既存の形（`deny bd create`・`deny bd update` の頭・`ledger-form.md §15`）。段の位置: no-trigger は memo の判定の直後、update の 2 語は 6 形の後。
+- 触らない: memo の判定の字面と 4 理由・`MEMO_SECTIONS`・6 形・`Refusal`（変種を足さない）・`crates/scribe2/src/seat/brief/pointer.rs`（`Anchor` を呼ぶだけ）・memo の plan の口（`crates/scribe2/src/ledger/memo.rs`・昇格条件は空の見出しのまま出す＝席が埋める・§3 の 8）・既存の open な memo（書き換えない限り門は掛からない）・台帳の読み（NFR5）。
+- 却下: 全角の括弧で値を切る（決めたこと 7）／同梱の値を write-set の印つきの字で書かせる（行の宣言の字と照合の字が 2 通りになる）／依存に別の台帳の id を許す（満ちるかを判じられず、読める引き金を持つのに永久に満ちない memo が黙って残る＝読めない側に倒して misfit に出す）／update の門で台帳を読んで書く先が memo かを確かめる（NFR5・台帳の読みは 1 秒前後で負荷の下では予算を越える・memo s2-07l.738.3）／期日に日付だけ・秒つき・時差つきの形を許す（読み手が形ごとに分かれる）。
+- 限界: update の本文が昇格条件の見出しごと消す書き換えは判じない（書く先が memo かを知らない・4 節の欠けは台帳の lint の (iv) が名指す）。`create --graph` / `create -f` の memo は判じない（今の memo の判定と同じ）。`epoch_of` は月の日数を確かめない（`2026-02-31` は読める）。今の open な memo のうち読める引き金を持たない 26 本は局面の出力で misfit に出る（ADR-0089 CSQ-N4・書き足しは局面の行の前）。
+- 既存の歯の直し（同じ便）: `crates/scribe2-boundary/tests/e2e/hook.rs` の `MEMO_BODY`（memo の create の e2e の本文）の昇格条件に `- 引き金: 再発 1` を 1 行足す（通る歯が緑のまま・歯の外の行）。
+- 歯（接頭辞 hook_memo_trigger_ と ledger_trigger_・`grep -rn` はどちらも 0 件・2026-09-29）:
+  - e2e（`crates/scribe2-boundary/tests/e2e/hook/guards.rs`）: rules は §14 と同じ写し。(a) 4 節が揃い昇格条件が散文だけ（`- 引き金: 再発 3（…）` を含む）の memo の create と、昇格条件の節を引き金の無い本文へ書き換える update（`--body-file`）の 2 形を bd と bdw の 2 経路で撃ち、4 本がどれも rc 2・stderr 1 行（no-trigger / update-no-trigger と 5 形の字面）・stdout 0 byte・記録 1 行 (b) `- 引き金: 再発 1` を持つ memo の create と見出しを持たない本文の update が rc 0 (c) `bdw update s2-1 --stdin` は update-body-unreadable (d) `.beads/config.yaml` に接頭辞を持つ toy repo（graph の門の歯と同じ偽の client と根の epic E・`--parent E`）で、その接頭辞の依存の行を持つ memo は通り、別の接頭辞の依存の行だけの memo は no-trigger。
+  - lib（行 k の + の file の in-file・ledger_trigger_）: 5 形 × 読める値と読めない値・節の境（`####` は節の中・`##` で終わる）・`- ` の行頭・全角の colon・3 語目の無視・notes の `[再発]` と `[keep]` の数え・接頭辞の無い周の依存。
+  - lib（`crates/scribe2/src/hook/ledger_guard.rs` の in-file・hook_memo_trigger_）: update の本文の出どころ（`--body-file`・`--body-file=`・`-d`・`--stdin`・値の無い `--body-file`）と、cwd から上へ辿る `.beads` の解き方。
+- base で RED の理由: base の門は昇格条件の中身も update も見ないので、(a) の 4 本・(c)・(d) の後半が rc 0 で通る（機能不在）。
+- 着地の後: §14 と同じく PATH の binary を入れ替え、入れ替えの前に消費側へ文法を知らせる。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -271,4 +338,28 @@ verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail quadrant_exempts_q
 growth = ["crates/scribe2/src/ledger/form.rs:30"]
 size = "S"
 done = "(1) form.rs の judge が 4 象限の母集団（shaped）を作るとき、型が epic か decision の bead に加えて label intake:question を持つ bead を外し、label の字は 1 つの定数に置く (2) doctor の台帳の形の行の key と順は変わらず、open= は closed でない bead の全部の件数のまま、shaped= と both= と neither= だけが問いの分だけ変わる (3) 台帳の lint（lint.rs）は変えない 歯: quadrant_exempts_question_（form.rs の既存の歯の区間に 1 本）が、open の問い 1（label intake:question・型 task・設計 pointer なし）・open の memo 1・設計 pointer を持つ open の契約 1・印の無い open の task 1 の台帳で open 4・shaped 3・neither が印の無い task の id だけ・問いの id がどの欄にも出ないことを測る。base の judge は問いを neither に数えるので RED（機能不在）"
+
+[[contract]]
+id = "j"
+title = "台帳の問い（label intake:question）の create の形を起票の門が断る — 本文の 4 行・metadata の effect と asked の閉じた 2 値・label intake:memo の併せ持ち・--parent を名指して --no-inherit-labels の無い書き（判定は ledger/ の純関数・台帳を読まない）"
+req = ["FR81", "FR89"]
+section = "14"
+touches = ["crate::hook::ledger_guard::Create"]
+write-set = ["+crates/scribe2/src/ledger/question.rs", "crates/scribe2/src/ledger/mod.rs", "crates/scribe2/src/hook/ledger_guard.rs", "crates/scribe2-boundary/tests/e2e/hook/guards.rs", "=crates/scribe2/src/ledger/form.rs", "=crates/scribe2/src/fleet/json_tree.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail hook_question_form_", "cargo nextest run -p scribe2 --lib --no-tests=fail hook_question_form_", "cargo nextest run -p scribe2 --lib --no-tests=fail ledger_question_form_"]
+growth = ["crates/scribe2/src/ledger/question.rs:230", "crates/scribe2/src/ledger/mod.rs:1", "crates/scribe2/src/hook/ledger_guard.rs:90", "crates/scribe2-boundary/tests/e2e/hook/guards.rs:170"]
+size = "L"
+done = "(1) 判定は ledger/ の新しい file の純関数で、本文の字と metadata の字と label の列だけを読み、4 行（行頭の空白と - を除いて 概要・技術・理由・推奨 の語で始まり語の直後が行末・空白・= ・:・： の行）・effect（文字列 document か operation）・asked（文字列 seat か user）・label intake:memo の併せ持ちを判じて宣言順で最初の欠けを返す (2) label intake:question を持つ bd / bdw の create は memo の判定の代わりに問いの段に掛かり、併せ持ち → 継がない指定（--parent の値が空でなく --no-inherit-labels も =true も無い）→ 本文を読めるか → 4 行 → metadata を読めるか → effect → asked の順で、question-memo-label・question-inherits-labels・question-body-unreadable・question-no-summary・question-no-technical・question-no-reason・question-no-recommendation・question-metadata-unreadable・question-no-effect・question-bad-effect・question-no-asked・question-bad-asked の 1 語で deny し、断り文は欠けた行・外れた値・併せ持つ label・継ぐ親の id を名指す (3) 本文は --body-file の file（payload の cwd から解く）と -d / --description の最後の値を合わせて読み、--stdin・値が - か無い --body-file・開けない file・$ か backtick を含む -d の値は読めず、metadata は --metadata の最後の値で @<path> は同じ cwd から読み、JSON の object でない・開けない周は question-metadata-unreadable (4) e2e: 埋め込みの manifest の写しで ledger.denied_writes から bd-outside-bdw を外した rules で、10 形（4 行の欠け 4・effect の欠けと値の外・asked の欠けと値の外・intake:memo の併せ持ち・継がない指定の欠け）× bd と bdw の 20 本がどれも rc 2・stderr 1 行・stdout 0 byte・記録 1 行（ledger-deny と語）で、揃った問いの create（本文が body-file と -d・metadata が @file の 3 形・--parent と --no-inherit-labels つき）は rc 0 で記録を残さず、label intake:question を持たない create と bd / bdw の segment を持たない command（中で create を撃つ script）は問いの語で断られない (5) Create は本文と metadata の値と --stdin・--no-inherit-labels の有無を運び、構築点は flags_of の 1 か所のまま、memo の判定と 6 形と極性一覧は変わらず既存の歯が緑 (6) 通った問いが台帳の lint と起動の列に出ないことは着地済みの歯 quadrant_exempts_question_from_the_shaped_population と pipe_dispatch_intake_label_question_is_not_a_candidate が緑のまま持つ"
+
+[[contract]]
+id = "k"
+title = "memo の引き金の行の読み手 1 本（§15 の文法・純関数・起票の門と dispatch の周と dispatch ls と局面の関数が引く）と、読める引き金の無い memo の create と昇格条件を引き金の無い本文へ書き換える update を起票の門が断る（台帳を読まない）"
+req = ["FR81", "FR87"]
+section = "15"
+depends = ["j"]
+write-set = ["+crates/scribe2/src/ledger/trigger.rs", "crates/scribe2/src/ledger/mod.rs", "crates/scribe2/src/ledger/form.rs", "crates/scribe2/src/hook/ledger_guard.rs", "crates/scribe2-boundary/tests/e2e/hook.rs", "crates/scribe2-boundary/tests/e2e/hook/guards.rs", "=crates/scribe2/src/seat/brief/pointer.rs", "=crates/scribe2/src/pipe/table/parse.rs", "=crates/scribe2/src/fleet/wait.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail hook_memo_trigger_", "cargo nextest run -p scribe2 --lib --no-tests=fail hook_memo_trigger_", "cargo nextest run -p scribe2 --lib --no-tests=fail ledger_trigger_"]
+growth = ["crates/scribe2/src/ledger/trigger.rs:330", "crates/scribe2/src/ledger/mod.rs:1", "crates/scribe2/src/ledger/form.rs:20", "crates/scribe2/src/hook/ledger_guard.rs:80", "crates/scribe2-boundary/tests/e2e/hook.rs:1", "crates/scribe2-boundary/tests/e2e/hook/guards.rs:170"]
+size = "L"
+done = "(1) 引き金の行の読み手は ledger/ の新しい file の純関数 1 本で、入力は description と notes と台帳の接頭辞だけ（I/O と時計を持たない）、§15 の文法（### 昇格条件 の節の中だけ・行頭の - を許す 引き金: の行・空白で割った 1 語目が形で 2 語目が値で後ろは読まない・5 形の値の形・notes の [再発] と [keep] の行頭）で、行ごとに読める引き金（形と値）か読めない引き金（行の字と理由）と再発の行の本数と keep の記帳を返す (2) 同じ台帳の bead id の形の判定は ledger/form.rs の 1 関数で、門は payload の cwd から上へ辿った最初の .beads の dir を持つ dir の設定から接頭辞を解き、解けない周は依存の値が読めない (3) 4 節が揃い memo の判定で止まらない memo の create は、昇格条件の節に読める引き金の行が 1 本も無ければ no-trigger で deny され、断り文は 5 形の字面と最初の読めない行を名指す (4) bd / bdw の update が --body-file か -d / --description で書く本文が ### 昇格条件 の見出しを持ち読める引き金の行が無ければ update-no-trigger、--stdin・値が - か無い --body-file・開けない file・$ か backtick を含む -d の値は update-body-unreadable で deny され、見出しを持たない本文の update は通る (5) e2e: j と同じ写しの rules で、引き金の行が散文だけの memo の create と引き金の無い昇格条件へ書き換える update の 2 形 × bd と bdw の 4 本がどれも rc 2・stderr 1 行・stdout 0 byte・記録 1 行で、再発 1 の引き金を持つ memo の create と見出しの無い本文の update は rc 0、.beads の設定の接頭辞の依存は読めて別の接頭辞の依存だけの memo は no-trigger (6) 既存の memo の create の e2e の本文（tests/e2e/hook.rs の MEMO_BODY）が引き金の行を 1 本持ち、hook_memo_guard_ の歯が緑のまま、台帳を 1 度も読まない"
 <!-- contracts:end -->
