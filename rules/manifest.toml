@@ -11,10 +11,10 @@ schema = 1
 [[rule]]
 id = "R-C4-1"
 kind = "CoreLines"
-value = 60000
+value = 66000
 enabled = true
-ruling = "user 2026-09-15T11:2xZ"
-ruled_at = "2026-09-15"
+ruling = "user 2026-09-29T00:59Z"
+ruled_at = "2026-09-29"
 
 [[rule]]
 id = "R-C4-2"
