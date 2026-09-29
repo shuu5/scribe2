@@ -19,13 +19,18 @@
 //! 掛ける。断る形の閉じた列は rules 行 [`ROW`] の値が持ち（裁定 id つき）、判定は [`judge_write`] 1 本が持つ。rules が
 //! 読めない・行が無い・不発効・値が列でない周は `bd` / `bdw` を通さない（FailClosed・`bd` / `bdw` の無い command は
 //! rules を読まずに通す）。
+//!
+//! 引き金の段（ledger-form.md §15）: memo の判定で止まらない memo の create と 6 形で止まらない本文を書く update は、昇格条件
+//! の節に読める引き金の行（[`trigger::read`]）が無ければ止める。台帳は読まず、接頭辞は cwd から上の `.beads` の設定から解く。
 
 use crate::ledger::form::{pointer_text, MEMO_LABEL, MEMO_SECTIONS, QUESTION_LABEL};
 use crate::ledger::question::{self, Gap, Metadata};
+use crate::ledger::trigger;
 use crate::name::NAME;
 use crate::polarity::{OnFailure, Polarity, Timing};
 use crate::rules::manifest::Manifest;
 use crate::rules::RuleValue;
+use crate::seat::brief::pointer::Anchor;
 use std::path::Path;
 
 /// この境界の極性: 起票の時点で止め、memo の本文を読めない周は create を通さない。
@@ -39,6 +44,12 @@ const CLIENTS: [&str; 2] = ["bd", "bdw"];
 
 /// memo の判定に載る subcommand。
 const CREATE: &str = "create";
+
+/// 引き金の段に載る本文を書く subcommand。
+const UPDATE: &str = "update";
+
+/// 台帳の dir（接頭辞を解く root の印）。
+const BEADS: &str = ".beads";
 
 /// 断る形の閉じた列を持つ rules 行の id。
 pub const ROW: &str = "ledger.denied_writes";
@@ -286,7 +297,8 @@ pub fn decide(command: &str, cwd: &Path, rules: Option<&Path>) -> LedgerDecision
         if create.has_question_label() {
             return question_gap(&create, read).map(|gap| deny(gap.as_str(), question_line(&gap)));
         }
-        judge(&create, read).map(|found| deny(found.as_str(), denied_line(found)))
+        let found = judge(&create, read).map(|found| deny(found.as_str(), denied_line(found)));
+        found.or_else(|| memo_untriggered(&create, read, cwd).map(Untriggered::decision))
     });
     if let Some(found) = created {
         return found;
@@ -300,7 +312,72 @@ pub fn decide(command: &str, cwd: &Path, rules: Option<&Path>) -> LedgerDecision
         Ok(forms) => writes.iter().find_map(|write| judge_write(write, &forms)),
         Err(found) => Some(found),
     };
-    refusal.map_or(LedgerDecision::Allow, |found| deny(found.as_str(), denied_line(found)))
+    if let Some(found) = refusal {
+        return deny(found.as_str(), denied_line(found));
+    }
+    let mut updates = all.iter().filter_map(|words| command_of(words, UPDATE));
+    updates.find_map(|update| update_untriggered(&update, read, cwd)).map_or(LedgerDecision::Allow, Untriggered::decision)
+}
+
+/// 引き金の段の断り（ledger-form.md §15・[`Refusal`] に変種を足さない）。値は最初の読めない行（先頭 40 字と理由）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Untriggered {
+    /// memo の create の昇格条件に読める引き金の行が無い。
+    Create(Option<String>),
+    /// update が書く本文の昇格条件に読める引き金の行が無い。
+    Update(Option<String>),
+    /// 本文を書く update の本文を読めない。
+    UpdateUnreadable,
+}
+
+impl Untriggered {
+    /// 記録の語と `deny bd <create|update>` の頭の 1 行。
+    fn decision(self) -> LedgerDecision {
+        let (verb, what) = match self {
+            Self::Create(_) => (CREATE, "no-trigger"),
+            Self::Update(_) => (UPDATE, "update-no-trigger"),
+            Self::UpdateUnreadable => (UPDATE, "update-body-unreadable"),
+        };
+        let why = match self {
+            Self::Create(first) | Self::Update(first) => format!(
+                "昇格条件の節に読める引き金の行が無い{} — {} のどれかを 1 行置く",
+                first.map(|text| format!("（最初の読めない行: {text}）")).unwrap_or_default(),
+                trigger::shapes()
+            ),
+            Self::UpdateUnreadable => "本文を書く update の本文を読めない（--stdin・--body-file の - か値なし・開けない file・$ か backtick を含む -d） — 本文を file に書いて --body-file で名指す".to_owned(),
+        };
+        deny(what, format!("{NAME}: deny bd {verb} は起票の門が止める reason={what}（{why}・ledger-form.md §15）"))
+    }
+}
+
+/// memo の判定で止まらなかった memo の create の引き金の段（非 memo と memo の判定が断った create は掛からない）。
+fn memo_untriggered(create: &Create, read: impl Fn(&str) -> Option<String>, cwd: &Path) -> Option<Untriggered> {
+    let body = create.is_memo().then(|| create.body_file.as_deref().and_then(read)).flatten()?;
+    untriggered(&body, cwd).map(Untriggered::Create)
+}
+
+/// update の引き金の段（本文を書かない update は掛からない・読めない本文は bead の種類に依らず断る＝fail-closed）。
+fn update_untriggered(update: &Create, read: impl Fn(&str) -> Option<String>, cwd: &Path) -> Option<Untriggered> {
+    if !update.stdin && update.body_file.is_none() && update.description.is_none() {
+        return None;
+    }
+    let Some(body) = body_text(update, &read) else {
+        return Some(Untriggered::UpdateUnreadable);
+    };
+    untriggered(&body, cwd).map(Untriggered::Update)
+}
+
+/// 本文が昇格条件の節を持ち読める引き金の行が無ければ `Some`（中身は最初の読めない行）。節の無い本文は `None`。
+fn untriggered(body: &str, cwd: &Path) -> Option<Option<String>> {
+    let reading = trigger::read(body, "", ledger_prefix(cwd).as_deref());
+    let first = || reading.first_unreadable().map(|(text, why)| format!("{}・{}", text.chars().take(40).collect::<String>(), why.describe()));
+    (reading.section && reading.readable().next().is_none()).then(first)
+}
+
+/// cwd から上へ辿った最初の `.beads` の dir を持つ dir の台帳の接頭辞（bd が台帳を探す向き・解けない周は `None`）。
+fn ledger_prefix(cwd: &Path) -> Option<String> {
+    let root = cwd.ancestors().find(|dir| dir.join(BEADS).is_dir())?;
+    Anchor::open(root)?.prefixes().first().cloned()
 }
 
 /// 止める判定 1 つ。
@@ -311,7 +388,7 @@ fn deny(what: &str, line: String) -> LedgerDecision {
 /// 問いの create 1 つを問いの段に掛ける（pure の判定へ渡す字を読む・`read` は cwd から解いた file の字）。通すなら `None`。
 fn question_gap(create: &Create, read: impl Fn(&str) -> Option<String>) -> Option<Gap> {
     let inherits = create.parent.as_deref().filter(|parent| !parent.trim().is_empty() && !create.no_inherit_labels);
-    let body = question_body(create, &read);
+    let body = body_text(create, &read);
     let file: Option<String>;
     let metadata = match create.metadata.as_deref() {
         None => Metadata::Absent,
@@ -326,9 +403,9 @@ fn question_gap(create: &Create, read: impl Fn(&str) -> Option<String>) -> Optio
     question::judge(&create.labels, inherits, body.as_deref(), metadata)
 }
 
-/// 問いの本文（body-file の字と `-d` の最後の値を行の列として合わせる）。`--stdin`・値が `-` か無い `--body-file`・
+/// 問いと update の本文（body-file の字と `-d` の最後の値を行の列として合わせる）。`--stdin`・値が `-` か無い `--body-file`・
 /// 開けない file・`$` か backtick を含む `-d` の値は読めない（`None`）。
-fn question_body(create: &Create, read: &impl Fn(&str) -> Option<String>) -> Option<String> {
+fn body_text(create: &Create, read: &impl Fn(&str) -> Option<String>) -> Option<String> {
     let file = match create.body_file.as_deref().map(str::trim) {
         _ if create.stdin => return None,
         None => String::new(),
@@ -361,6 +438,11 @@ pub fn judge(create: &Create, read: impl Fn(&str) -> Option<String>) -> Option<R
 
 /// segment の語が `bd` / `bdw` の `create` なら、門が読む分を返す（それ以外は `None`）。
 pub fn create_of(words: &[String]) -> Option<Create> {
+    command_of(words, CREATE)
+}
+
+/// segment の語が `bd` / `bdw` の `sub` なら flag を読んだ分を返す（create と update が同じ読み [`flags_of`] を引く）。
+fn command_of(words: &[String], sub: &str) -> Option<Create> {
     let mut rest = words.iter().skip_while(|word| is_assignment(word));
     let client = rest.next()?;
     let name = client.rsplit('/').next().unwrap_or_default();
@@ -369,7 +451,7 @@ pub fn create_of(words: &[String]) -> Option<Create> {
     }
     let rest: Vec<&String> = rest.collect();
     let at = rest.iter().position(|word| !word.starts_with('-'))?;
-    (rest.get(at).map(|word| word.as_str()) == Some(CREATE)).then(|| flags_of(rest.get(at.saturating_add(1)..).unwrap_or_default()))
+    (rest.get(at).map(|word| word.as_str()) == Some(sub)).then(|| flags_of(rest.get(at.saturating_add(1)..).unwrap_or_default()))
 }
 
 /// `bd` / `bdw` の segment 1 つから 6 形の判定が読む分。
@@ -893,5 +975,57 @@ mod tests {
         assert_eq!(what(&format!("{base} --parent s2-1 --no-inherit-labels {full}")), "question-no-effect");
         assert_eq!(what(&format!("{base} --parent s2-1 --no-inherit-labels {full} {meta}")), "");
         assert_eq!(what(&format!("{base} --parent '' {full} {meta}")), "", "空の親は継がない");
+    }
+
+    /// cwd で撃ち、断れば 1 行と §15 の出所を確かめて語を返す（通れば空）。
+    fn triggered(line: &str, cwd: &std::path::Path) -> String {
+        match decide(line, cwd, None) {
+            LedgerDecision::Deny { what, line } => {
+                assert!(line.lines().count() == 1 && line.ends_with("・ledger-form.md §15）"), "{line}");
+                what
+            }
+            LedgerDecision::Allow => String::new(),
+        }
+    }
+
+    /// update の本文の出どころ: `--body-file`・`--body-file=`・`-d` を読み、`--stdin`・値の無い `--body-file`・`-`・開けない
+    /// file・`$` の `-d` は読めない。本文を書かない update と見出しの無い本文と読める引き金の本文は通る。
+    #[test]
+    fn hook_memo_trigger_update_reads_each_body_source() {
+        let dir = crate::pipe::fixture::scratch("memo-trigger-update");
+        for (name, body) in [("bare.md", "### 昇格条件\n- 散文\n"), ("ok.md", "### 昇格条件\n- 引き金: 再発 1\n"), ("plain.md", "本文\n")] {
+            std::fs::write(dir.join(name), body).unwrap_or_else(|error| panic!("{name}: {error}"));
+        }
+        for body in ["--body-file bare.md", "--body-file=bare.md", "-d '### 昇格条件\n引き金: 再発 3（x）'", "-d '### 昇格条件'"] {
+            assert_eq!(triggered(&format!("bdw update s2-1 {body}"), &dir), "update-no-trigger", "{body}");
+        }
+        for body in ["--stdin", "--body-file", "--body-file -", "--body-file gone.md", "-d '$X'", "--body-file ok.md --stdin"] {
+            assert_eq!(triggered(&format!("bdw update s2-1 {body}"), &dir), "update-body-unreadable", "{body}");
+        }
+        for body in ["--body-file ok.md", "--body-file plain.md", "-d 本文", "--status open", "--stdin=false", "--append-notes '### 昇格条件'"] {
+            assert_eq!(triggered(&format!("bdw update s2-1 {body}"), &dir), "", "{body}");
+        }
+        let _ =std::fs::remove_dir_all(&dir);
+    }
+
+    /// 接頭辞は cwd から上へ辿った最初の `.beads` の dir を持つ dir の設定から解く（外側の台帳より内側が先）。
+    #[test]
+    fn hook_memo_trigger_resolves_the_prefix_upward_from_cwd() {
+        let dir = crate::pipe::fixture::scratch("memo-trigger-prefix");
+        let (outer, inner) = (dir.join("outer"), dir.join("outer").join("repo"));
+        for (root, config) in [(&outer, "issue-prefix: far\n"), (&inner, "issue-prefix: \"toy\"\n")] {
+            std::fs::create_dir_all(root.join(".beads").join("x")).unwrap_or_else(|error| panic!("{error}"));
+            std::fs::write(root.join(".beads").join("config.yaml"), config).unwrap_or_else(|error| panic!("{error}"));
+        }
+        let deep = inner.join("a").join("b");
+        std::fs::create_dir_all(&deep).unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!((super::ledger_prefix(&deep), super::ledger_prefix(&outer)), (Some("toy".to_owned()), Some("far".to_owned())));
+        assert_eq!(super::ledger_prefix(&dir.join("gone")), None, ".beads の無い木");
+        let body = "### 出所\n### 観測\n### 候補\n### 昇格条件\n";
+        for (dep, want) in [("toy-1.2", ""), ("far-1", "no-trigger")] {
+            std::fs::write(deep.join("m.md"), format!("{body}- 引き金: 依存 {dep}\n")).unwrap_or_else(|error| panic!("{error}"));
+            assert_eq!(triggered("bdw create '[memo] x' --parent s2-1 --body-file m.md", &deep), want, "{dep}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

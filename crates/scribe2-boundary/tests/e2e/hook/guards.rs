@@ -1108,6 +1108,104 @@ fn hook_question_form_passes_complete_questions_and_denies_stdin_bodies() {
     clean(&[&repo, &state]);
 }
 
+// ─────────────── memo の引き金の行（`s2-07l.738.12`・設計 ledger-form.md §15 行 k・接頭辞 `hook_memo_trigger_`） ───────────────
+//
+// rules は §14 と同じ写し（[`question_rules`]）。`.beads` の無い toy repo で撃ち、接頭辞の歯だけ `.beads/config.yaml` を置いた
+// repo で撃つ（形の門が読む偽の client は根の epic E の 1 件を返し argv を 1 行ずつ記録する）。
+
+/// 4 節が揃い、昇格条件が散文だけ（値に括弧が続く引き金の行を含む）の memo の本文。
+const PROSE_MEMO: &str = "## memo\n### 出所\n- run: r\n### 観測\n- x\n### 候補\n### 昇格条件\n- 引き金: 再発 3（同じ落ち方）\n- 同じ落ち方が続いたら\n";
+
+/// 断り文が名指す 5 形の字面。
+const TRIGGER_SHAPES: &str = "引き金: 再発 <n> / 同梱 <path> / 依存 <id> / 期日 YYYY-MM-DDTHH:MMZ / 着地 <pointer>";
+
+/// `pre-tool-use` に `args` を足して撃つ。
+fn trigger_hook(repo: &Path, args: &[&str], command: &str) -> Output {
+    let all: Vec<&str> = ["pre-tool-use"].into_iter().chain(args.iter().copied()).collect();
+    run_hook_args(&all, &bash_payload(repo, command))
+}
+
+/// 引き金の段の deny の外形（rc 2・stdout 0 byte・stderr 1 行・`deny bd <verb>` の頭と語と §15）と記録 1 行を確かめ、stderr を返す。
+fn assert_trigger_deny(state: &Path, repo: &Path, args: &[&str], command: &str, (verb, reason): (&str, &str)) -> String {
+    let before = ledger_records(state).len();
+    let out = trigger_hook(repo, args, command);
+    let text = stderr_text(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "{command}: deny は rc 2: {text}");
+    assert!(out.stdout.is_empty(), "{command}: deny でも stdout は 0 byte");
+    assert_eq!(stderr_lines(&out), 1, "{command}: stderr は 1 行: {text}");
+    let head = format!("{NAME}: deny bd {verb} は起票の門が止める reason={reason}（");
+    assert!(text.starts_with(&head) && text.trim_end().ends_with("・ledger-form.md §15）"), "{command}: {text}");
+    let lines = ledger_records(state);
+    assert_eq!(lines.len(), before + 1, "{command}: 記録は 1 行増える: {lines:?}");
+    assert_eq!(what_of(&lines.last().cloned().unwrap_or_default()), format!("ledger-deny {reason}"), "{command}");
+    text
+}
+
+/// rc 0・0 byte・記録なしで通ることを確かめる。
+fn assert_trigger_pass(state: &Path, repo: &Path, args: &[&str], command: &str) {
+    let before = inject_lines(state).len();
+    assert_silent(&trigger_hook(repo, args, command), command);
+    assert_eq!(inject_lines(state).len(), before, "{command}: 通す周は記録を残さない");
+}
+
+/// (a) 昇格条件が散文だけの memo の create と、昇格条件を引き金の無い本文へ書き換える update（`--body-file`）の 2 形 × bd と bdw
+/// の 4 本がどれも断られ、断り文は 5 形の字面（create は最初の読めない行も）を名指す (b) 再発 1 の引き金を持つ memo の create と
+/// 見出しの無い本文の update は通る (c) `bdw update s2-1 --stdin` は update-body-unreadable。
+#[test]
+fn hook_memo_trigger_denies_prose_memos_and_untriggered_updates_from_bd_and_bdw() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let rules = question_rules(&state);
+    let args = ["--rules", rules.as_str()];
+    for (name, body) in [("prose.md", PROSE_MEMO), ("rewrite.md", "### 昇格条件\n- 散文だけの条件\n"), ("memo.md", MEMO_BODY), ("plain.md", "本文だけ\n")] {
+        fs::write(repo.join(name), body).expect("本文を書ける");
+    }
+    for client in ["bd", "bdw"] {
+        let create = format!("{client} create \"[memo] 観測の件\" --parent s2-1 --labels intake:memo --body-file prose.md");
+        let text = assert_trigger_deny(&state, &repo, &args, &create, ("create", "no-trigger"));
+        assert!(text.contains(TRIGGER_SHAPES), "{create}: 5 形の字面: {text}");
+        assert!(text.contains("最初の読めない行: - 引き金: 再発 3（同じ落ち方）"), "{create}: 読めない行: {text}");
+        let update = format!("{client} update s2-1 --body-file rewrite.md");
+        let text = assert_trigger_deny(&state, &repo, &args, &update, ("update", "update-no-trigger"));
+        assert!(text.contains(TRIGGER_SHAPES), "{update}: 5 形の字面: {text}");
+    }
+    assert_eq!(ledger_records(&state).len(), 4, "4 本 × 記録 1 行");
+    for client in ["bd", "bdw"] {
+        assert_trigger_pass(&state, &repo, &args, &format!("{client} create \"[memo] x\" --parent s2-1 --body-file memo.md"));
+        assert_trigger_pass(&state, &repo, &args, &format!("{client} update s2-1 --body-file plain.md"));
+    }
+    let text = assert_trigger_deny(&state, &repo, &args, "bdw update s2-1 --stdin", ("update", "update-body-unreadable"));
+    assert!(text.contains("--stdin"), "読めない形を名指す: {text}");
+    clean(&[&repo, &state]);
+}
+
+/// (d) `.beads/config.yaml` に接頭辞 toy を持つ repo で、toy の依存の行を持つ memo は通り（形の門が台帳を 1 回読む）、別の接頭辞
+/// の依存の行だけの memo は no-trigger で、引き金の段は台帳を 1 度も読まない。
+#[test]
+fn hook_memo_trigger_reads_dependencies_with_the_ledger_prefix() {
+    use std::os::unix::fs::PermissionsExt;
+    let repo = git_repo();
+    let state = linked(&repo);
+    fs::create_dir_all(repo.join(".beads")).expect(".beads を作れる");
+    fs::write(repo.join(".beads").join("config.yaml"), "issue-prefix: toy\n").expect("台帳の設定を書ける");
+    let (bd, log) = (state.join("bd"), state.join("bd.log"));
+    let ledger = graph_bead("E", "open", "epic", "");
+    fs::write(&bd, format!("#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nprintf '%s' '[{ledger}]'\n", log.display())).expect("偽の bd を書ける");
+    fs::set_permissions(&bd, fs::Permissions::from_mode(0o755)).expect("偽の bd を実行可能にできる");
+    let (rules, bd) = (question_rules(&state), bd.display().to_string());
+    let args = ["--rules", rules.as_str(), "--bd", bd.as_str()];
+    let reads = || fs::read_to_string(&log).map(|text| text.lines().count()).unwrap_or_default();
+    let command = "bdw create \"[memo] x\" --parent E --labels intake:memo --body-file dep.md";
+    fs::write(repo.join("dep.md"), MEMO_BODY.replace("- 引き金: 再発 1", "- 引き金: 依存 s2-7")).expect("本文を書ける");
+    let text = assert_trigger_deny(&state, &repo, &args, command, ("create", "no-trigger"));
+    assert!(text.contains("依存 s2-7"), "読めない依存の行を名指す: {text}");
+    assert_eq!(reads(), 0, "引き金の段は台帳を読まない");
+    fs::write(repo.join("dep.md"), MEMO_BODY.replace("- 引き金: 再発 1", "- 引き金: 依存 toy-7.1")).expect("本文を書ける");
+    assert_trigger_pass(&state, &repo, &args, command);
+    assert_eq!(reads(), 1, "通った create は形の門が 1 回だけ読む");
+    clean(&[&repo, &state]);
+}
+
 // ─────────────── 台帳の形の門（`s2-07l.733`・設計 ledger-form.md §12 行 h・接頭辞 `hook_graph_guard_`） ───────────────
 //
 // toy repo の root に `.beads` の dir を置き、`--bd` に偽の client（fixture の JSON を返し argv を 1 行ずつ記録する・読めない

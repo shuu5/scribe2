@@ -342,7 +342,7 @@ fn self_state() -> (TmpDir, TmpDir, PathBuf) {
 // 席の弁別はしない（`--pane` 無しでも同じ判定）ので、偽 tmux は要らない。
 
 /// memo の 4 節が揃った本文。
-const MEMO_BODY: &str = "## memo\n### 出所\n- run: r\n### 観測\n- x\n### 候補\n### 昇格条件\n";
+const MEMO_BODY: &str = "## memo\n### 出所\n- run: r\n### 観測\n- x\n### 候補\n### 昇格条件\n- 引き金: 再発 1\n";
 
 /// 記録のうち起票の門の行（`what` が `ledger-deny` で始まる）。
 fn ledger_records(state: &Path) -> Vec<String> {
