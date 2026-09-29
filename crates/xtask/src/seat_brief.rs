@@ -17,8 +17,9 @@ const BRIEF_DIR: &str = "seat/brief";
 const BRIEF_CAPABILITIES: &str = "{capabilities}";
 /// 雛形の定義済みの穴（core の `seat::brief::HOLES` と同じ列＝自 workspace の check が drift を捕まえる）。
 const BRIEF_HOLES: &[&str] = &[BRIEF_CAPABILITIES, "{target}", "{anchor}", "{role}", "{ledger}"];
-/// 雛形の行の出所 pointer の区切り（退避物の命令行と同じ字面・この後ろの参照だけを pointer と読む）。
-const BRIEF_SSOT: &str = "→ SSOT:";
+/// 雛形の行の出所 pointer の区切り（core の `seat::brief::pointer` の印と同じ字面・器の文書を指す・ADR-0090・
+/// この後ろの参照だけを pointer と読む＝旧い印 `→ SSOT:` だけの行は no-pointer）。
+const BRIEF_SSOT: &str = "→ 器の SSOT:";
 /// 役割の rules 行 id の前置き（`role.<役割名>`）。
 const ROLE_ROW: &str = "role.";
 
@@ -107,10 +108,13 @@ mod tests {
         let bare = check_fixture(|dir| write_at(dir, &brief_rel(), "{capabilities}\n席は lock を確保する\n"));
         assert_single(&bare, "seat-brief");
         assert!(bare.first().is_some_and(|line| line.contains(&format!("{}:2: no-pointer", brief_rel()))), "file:line 付き: {bare:?}");
-        let unknown = check_fixture(|dir| write_at(dir, &brief_rel(), "{capabilities} {model} → SSOT: N2\n"));
+        let old_mark = check_fixture(|dir| write_at(dir, &brief_rel(), "{capabilities}\n席は lock を確保する → SSOT: N2\n"));
+        assert_single(&old_mark, "seat-brief");
+        assert!(old_mark.first().is_some_and(|line| line.contains(":2: no-pointer")), "旧い印だけの行: {old_mark:?}");
+        let unknown = check_fixture(|dir| write_at(dir, &brief_rel(), "{capabilities} {model} → 器の SSOT: N2\n"));
         assert_single(&unknown, "seat-brief");
         assert!(unknown.first().is_some_and(|line| line.contains(":1: unknown-hole {model}")), "{unknown:?}");
-        let dropped = check_fixture(|dir| write_at(dir, &brief_rel(), "権能は answer だけ → SSOT: ADR-0022 §2.2\n"));
+        let dropped = check_fixture(|dir| write_at(dir, &brief_rel(), "権能は answer だけ → 器の SSOT: ADR-0022 §2.2\n"));
         assert_single(&dropped, "seat-brief");
         assert!(dropped.first().is_some_and(|line| line.contains("権能 merge が生成文に無い")), "{dropped:?}");
         let orphan = check_fixture(|dir| drop(fs::remove_file(dir.join(brief_rel()))));
