@@ -731,6 +731,154 @@ xtask 側: `crates/xtask/src/genmanifest.rs` の `#[cfg(test)]` に、render の
 - base で RED の理由: lib は歯が 0 本（rc 4）。e2e は base の binary が本文の無い merge を窓の開いた anchor で rc 0 で通し（機能不在）、一覧に merge-gate の行が無く、数と隣接の pin が base の値で落ちる。
 - 着地の後: hook の判定を変えるので PATH の binary を入れ替える（入れ替えの瞬間から全部の席の merge に効く）。入れ替えの前に、消費側へ形 2 の文法と手順を知らせる。この repo の席の手順は行 bc の着地から既に同じなので、入れ替えで変わるのは断られる時機（merge の前）だけである。
 
+## 22. publish の配線 — 締め切りと読む上限の rules 行と子を縛る部品（行 n）、git push の行き先と出ていく commit を git に解かせる段（行 n2）、出ていく字面の読み（行 n3）、gh の対象の解きと可視性の 1 回の問いと偽の gh の seam（行 n4）、照合の核を呼んで名の当たりと読む上限の越えを断る段（行 n5）、残り 3 形の材料（行 n6）、doctor の群の外の anchor の件数（行 n7）（契約表の行 n〜n7・[ADR-0078](../../design-intent/decisions/ADR-0078-host-guard-stops-neighbor-identifiers-before-publish.html)・[ADR-0093](../../design-intent/decisions/ADR-0093-publish-exclusions-sit-verbatim-in-the-host-face.html)・FR80 / FR73 / NFR5 / AC50 / AC63・`s2-07l.696`・裁定 user 2026-09-27T17:39Z / 22:21Z / 23:55Z・user 2026-09-29T04:37Z / 05:46Z）
+
+やさしく言うと: §16〜§19 で、公開の命令を見分ける読み・字面だけで断る形・全履歴の断り・隣の private repo の手がかりを探す部品がそろった。けれども、実際の push や gh の送信の前にその部品を呼ぶ「配線」がまだ無い。本 § はそれを足す。git には「どこへ何を送るか」を試し撃ち（`--dry-run`）で答えさせ、送る commit の文字を読み、GitHub には repo が公開か非公開かを 1 回だけ問い、公開先へ隣の private repo の手がかりが出ていくなら止める。どの段も合計 6 秒で打ち切り、読む文字は 8 MB までにする（数は rules 行が持つ）。大きいので 7 本の行に割る。
+
+- 出所:
+  - FR80 の判定の順（rules 行 → host の面の読み → 全履歴 → 解き → 可視性 → 走査）・断りの理由と経路の対（締め切りは撃ち直す・上限は分けて出す・識別子は消して「隣の project」と件数に言い換える）・「公開の segment でない周は git と gh を撃たない」・「群の表の行に公開先の repo の外の anchor が無い host は可視性を問わない」・読めない可視性の倒し方（公開先は public・anchor は private）。
+  - NFR5（公開の segment の周だけ、git と gh の問いを数で縛らず、出ていく字面を 8 MB まで読み、全体を締め切り 6 秒で縛る）。
+  - ADR-0078 の決定 (3)（行き先・server の先端・出ていく commit は git に同じ語の dry-run と ls-remote で問い、gh の対象は gh に問う）と (4)（可視性の問いは 1 回・公開先の外の anchor が無い host は問わない）。
+  - SRS の glossary「公開先の repo」「隣の private repo」「識別子の 4 形」・AC50（偽の gh が受けた引数と回数・締め切りに 1 秒を足した時間の内の断り）・AC63 (e) (f)・FR73（doctor の host-guard の行の群の外の anchor の件数）。
+  - 裁定: 22:21Z（GitHub への問いは A1 の内・一般語の名も除かない・着地の push も走査する）・23:55Z（名は成分で照合し除外だけを除く）・04:37Z（公開情報の件は推奨で進める）・05:46Z（除外は host の面に字句のまま・ADR-0093）。§19 の「配線の行が照合の核へ渡すもの」1〜6 を本 § が実装する。
+- 現物（main 2e3df476・verified・2026-09-30）:
+  - 判定 `judge`（`crates/scribe2/src/hook/host_guard/publish.rs` 847〜866 行）は、公開の segment が 0 の周は通す → 行が無い・列でない周は no-row → `enabled = false` は通す → 全履歴（`history.rs` の `kind_of`）→ 解けない段（印 → 形）の順で、**解けない段で当たらなければ通す**（864 行の `?`）。子 process を 1 つも撃たない。照合の核の `scan`・`candidates`・`gh_texts`（`crates/scribe2/src/hook/host_guard/publish/scan.rs` 281 / 341 / 396 行）の呼び手は歯だけ（crates の grep）。
+  - `Reason`（84 行）は閉じた 3 値、`refused`（869 行）は行を常に `host_guard.publish` で名乗る。`Published`（317 行）は git の大域の語（動詞より前の `-c` など）を持たない（`pushed` 738 行が `git_segment` の後ろの語と dir だけを写す）。
+  - 入口 `decide`（`crates/scribe2/src/hook/host_guard.rs` 379〜408 行）は host の面を全ての種類の判定の前に読み（397〜401 行・読めない面は host-unreadable）、`Scene`（156 行）に口座の列だけを渡す（群・park の区画・除外の表は渡らない）。`Scene` の git の欄は歯が偽の git を差す seam で、gh の欄は無い。`Scene` の struct literal は 9 か所（host_guard.rs 406 行・`crates/scribe2/src/hook/host_guard_tests.rs` 65 / 308 / 591 / 646 / 699 / 741 / 855 行・publish.rs 901 行）。module doc（17〜20 行）は「git の子は rm の `git ls-files` 1 回だけ」と書く。
+  - 締め切りつきで子を読む前例は `crates/scribe2/src/seat/ledger.rs` の spawn → stdout を別 thread → `try_wait` の周回（`POLL` 10 ms）→ 越えたら kill。process group ごと止める前例は `crates/scribe2/src/pipe/stop.rs` の `signal`。子は `Invocation` だけで撃ち（`process_group` を持つ）、core は `Command` を持たない。
+  - 上限の rules 行は無い（前例は `hook.budget_ms`・`rules/manifest.toml` 194 行）。`host_guard.publish` は 721〜727 行（form の 4 記号・裁定 23:55Z）。埋め込みは rows=80 kinds=78。
+  - doctor の行（`crates/scribe2/src/account/wire.rs` の `doctor_line` 270〜296 行）は群の外の anchor の件数を持たない。
+  - 行数（幅 120 で畳んだ数・上限 1500）: publish.rs 1362（余地 138）・host_guard_tests.rs 1452（48）・host_guard.rs 936・scan.rs 643・wire.rs 443。core の src の本体 60888 / 66000（R-C4-1）。census の全表は草稿の census.md。
+- 大きさと割り: 全部で約 2600 行（src 約 1100・lib の歯 約 700・e2e 約 700・既存の歯の直し 約 60）。NFR2 の 1 行 550 に収めるため 7 行に割る: 行 n 約 300（M）・行 n2 約 440（L）・行 n3 約 340（L）・行 n4 約 470（L）・行 n5 約 340（L）・行 n6 約 380（L）・行 n7 約 90（S）。
+
+### 形（行 n・上限の 2 行と子を縛る部品・行 n の done と 1:1）
+1. **上限の 2 行**: rules 行 host_guard.publish_deadline_ms（整数 6000）と host_guard.publish_read_bytes（整数 8388608）を `host_guard.publish` の後ろに置く（enabled・裁定 id user 2026-09-29T04:37Z・裁定日 2026-09-29・注は NFR5 の 6 秒と 8 MB と FR80 の越えた周の扱いを名指す）。kind 2 値は `ALL` の `HookBudgetMs` の直後に置き（末尾の並びを測る 2 本の歯を動かさない）、名と形（Int）の arm は既存の行に畳む。埋め込みの外形は rows=82 kinds=80。
+2. **予算の読み**: 行 n の `+` の file（publish の module の `pub` な子）の 1 関数が、manifest から 2 行を `int_row` で読んで（締め切り・読む上限）を返す。行が無い・`enabled = false`・整数でない・0 以下・締め切りが配線の timeout（`crates/scribe2/src/account/wire.rs` の `TIMEOUT_S` の 10 秒）の千倍以上のどれかの周は、その行の id を `Err` で返す（harness が hook を先に殺すと断りが出ない＝通ってしまうので、配線の timeout 以上の締め切りは行が無いのと同じに扱う）。
+3. **子の撃ち方**: 同じ file の 1 関数が、program・引数・cwd・stdin の byte・締め切りの時刻・読む上限を受ける。`Invocation` で子を自分の process group に起こし、stdin を別 thread で書き、stdout を別 thread で上限 + 1 byte まで読み、stderr は捨てる。`try_wait` を `POLL` と同じ 10 ms で周回し、締め切りの時刻を越えるか上限を越えて読んだら group ごと kill して wait する（`signal` と同じ撃ち方）。全ての子に env `GIT_TERMINAL_PROMPT=0`・`GH_PROMPT_DISABLED=1`・`GH_NO_UPDATE_NOTIFIER=1`・`LC_ALL=C` を渡す。返りは（rc・読んだ byte・越えたか）か、閉じた 2 値の止まり（起こせない / 締め切り）。
+4. **理由と経路**: `Reason` に deadline・oversize・identifier の 3 値を unresolved の後ろに足す（`REASONS` の宣言順は no-row / full-history / unresolved / deadline / oversize / identifier）。hit の頭の語は deadline / oversize / identifier、経路は「撃ち直す（…）」「分けて出す（…）」「識別子を消し「隣の project」と件数に言い換えて出し直す（…）」の 3 文（publish.rs の const・FR80 の経路）。既存の 3 値の hit と経路は 1 字も変えない。
+5. **行 n は足さない**: judge から子を撃つ段（行 n2 以後）。judge と `refused` は変えない。
+
+### 形（行 n2・git push の行き先と出ていく commit・行 n2 の done と 1:1）
+1. **置き場**: 行 n2 の `+` の file（publish の module の `pub` な子・配線の段の入口を持つ）。publish.rs の差は、子の宣言・`Published` の欄 1 つ・judge の段の呼出し・`refused` が行 id と裁定 id を受ける形・歯。`crates/scribe2/src/hook/live_row.rs` は触らない。
+2. **大域の語**: `pushed` は、git の segment の語のうち動詞より前の語から `-C <dir>` の対を落とした列（`-c k=v` など）を `Published` の新しい欄に写す。行き先の子はこの列を動詞の前に置いて撃つ（`-c remote.origin.pushurl=…` の push も同じ行き先に解ける）。
+3. **段の入口**: judge は解けない段の後（今 `None` を返す所）で、行 n の予算を読む。読めない周は hit no-row:<行 id>・row はその行 id・ruling `-`・経路は「その行を裁定を添えて置く（器の manifest の <行 id>）」で断る。読めた周は締め切りの時刻を 1 度だけ決め、公開の segment を command 行の順に解く。解けない segment が在れば hit unresolved:target、締め切りを越えたら hit deadline:host_guard.publish_deadline_ms（row は締め切りの行・ruling はその行の裁定 id）で断る。解けた周は通す（後ろの段は行 n3 以後）。解けない語は閉じた 3 値 target / text / neighbor（行 n2 の `+` の file の enum・全 variant の const slice・語は unresolved の後ろに付く）で、§17 の印と形の語と重ならない。
+4. **行き先の解き**（git push の segment 1 つ・子は `Scene` の git・dir は `Published` の dir）:
+   - a. `git <大域の語> config --list -z` を 1 回撃つ。後ろの語の最初の flag でない語（`--repo=<値>` を含む）が、設定に在る remote の名なら remote、そうでなければ URL の語とする。語が無い周は、HEAD の branch（`git symbolic-ref -q --short HEAD` を 1 回）の pushRemote → remote.pushDefault → branch の remote → origin の順に remote の名を解く（pure な 1 関数）。
+   - b. push の URL の列は git に解かせる: remote なら `git <大域の語> remote get-url --push --all <名>`（pushurl・pushInsteadOf・insteadOf の書き換えは git が当てる）、URL の語なら `git <大域の語> ls-remote --get-url <語>`。
+   - c. `git <大域の語> push --dry-run --porcelain --no-verify <後ろの語から -q と --quiet を落とした列>` を撃つ（`--no-verify` は試し撃ちで pre-push hook を撃たないため）。`To <URL>` の塊ごとに ref の行（flag・from・to）を読む。rc が 0 でない・`To` が 0・`To` の数が b の URL の数と違う・b の URL から利用者の部分（`<user>@`）を落とした字面が `To` と順に一致しない、のどれかの周は解けない（git は `To` に利用者の部分を出さないので、ls-remote は b の URL で撃つ）。
+   - d. 出ていく ref は flag が空白・`+`・`*` の行。削除（`-`）は to の名だけが出ていく。`=`（最新）と `!`（断られる）は出ていかない。
+   - e. URL ごとに `git ls-remote <URL> HEAD refs/heads/* refs/tags/*` を撃ち、server の先端（名 → sha）を読む。rc が 0 でない周は解けない。
+   - f. from の名を `git cat-file --batch-check` 1 回で sha と型に解き（missing は解けない）、出ていく commit の列を `git rev-list --ignore-missing --stdin`（出ていく from の sha・`--not`・server の先端の sha）1 回で得る。
+   - g. 子の出力は行 n の読む上限で縛る。a〜c と e の越えは解けない。f の越え（出ていく commit が多すぎる）は越えの印を立てる（断るのは行 n5 の走査の段・隣が 0 の周は通す）。
+   - h. segment ごとに、push の URL の列・server の先端・出ていく ref（from の sha と型・to の名・変更前の server の sha）・出ていく commit の列・越えの印を持つ（行 n3〜n6 が読む）。入口は `Published` 1 つと dir から呼べる形にする（着地の push の行が `git push <remote> main:main` の語で同じ入口を呼ぶ）。
+5. **動く既存の期待**（census §13）: `manifest_with`（host_guard_tests.rs）と publish.rs の fixture `manifest` に上限の 2 行を足し、cwd の無い場の push を通すと pin する 4 か所（host_guard_tests.rs 140 行・publish.rs 994 / 1089 / 1190 行）を unresolved:target の断りに直す。e2e の通す周 3 か所（`crates/scribe2-boundary/tests/e2e/hook/guards.rs` の 459 行・749 行の `git push origin main`・845 行の 2 つの push）は、tmp の置き場の bare な origin と main の branch（459 行は feat/x も）を持つ repo で撃つように直し、862 行の `rules_with` にも上限の 2 行を足す。
+6. **module doc**: host_guard.rs の module doc の子 process の段落を「publish の segment の周は git と gh の問いを数で縛らず、締め切りと読む上限の 2 行で縛る（NFR5）」に直す。
+7. **行 n2 は足さない**: 出ていく字面の読み（行 n3）・gh の対象と可視性（行 n4）・走査（行 n5 / n6）。
+
+### 形（行 n3・出ていく字面の読み・行 n3 の done と 1:1）
+1. **置き場**: 行 n3 の `+` の file（publish の module の `pub` な子）。段の入口（行 n2 の file）が行き先の解きの後に呼ぶ。
+2. **commit の字面**: 出ていく commit の列を stdin に渡し、`git -c core.quotePath=false log --no-walk=unsorted --stdin --format=%x1e%H%x1f%an%x1f%cn%x1f%B%x1f --patch-with-raw -M --no-color --no-textconv --no-ext-diff --src-prefix=a/ --dst-prefix=b/ --no-relative --diff-merges=first-parent` を 1 回撃つ。commit ごとに、message・author の名・committer の名・patch の追加行（`@@` の後の hunk の中の `+` の行）・patch の path（raw の行の path と rename / copy の両側・引用された path は C の引用を解く）を、`Source` の出所つきの本文に並べる。
+   - author と committer の名が UTF-8 でない commit は解けない（hit unresolved:text・§19 の読み）。
+   - message と patch は UTF-8 でない byte を置き換えて読む（成分は ASCII の英数字と `_` だけなので失わない）。binary の patch は中身を入れず path だけを入れる。
+3. **tag と ref**: 出ていく ref のうち from の型が tag のものは、`git cat-file --batch` 1 回で本文（header の後の空行から）を読む。出ていく ref の to の名（削除を含む）は押す ref の名の本文にする。
+4. **gh の本文**: gh の segment は、`gh_texts` の本文と、それが返す path の file の中身（`Published` の dir から解く）を本文にする。読めない file は hit unresolved:text で断る。
+5. **読む上限**: 出ていく字面の byte の合計を 1 つの計数で数える。log の子には残りの上限で読ませ、越えた周は読みを止めて越えの印を立てる（断るのは行 n5 の走査の段）。
+6. **段**: 段の入口は行き先の解きの後に字面を読み、解けない:text で断る。字面は segment ごとに持つ（行 n5 が照合の核へ渡す）。
+7. **行 n3 は足さない**: 可視性（行 n4）・走査（行 n5 / n6）。
+
+### 形（行 n4・gh の対象と可視性の問い・行 n4 の done と 1:1）
+1. **場**: `Scene` の口座の列の欄を host の面（`Manifest` の参照 1 つ）に替え、gh の program の欄を足す（歯が偽の gh で引数と回数を数える seam・git の欄と同じ形）。`decide` は読んだ host の面と `gh` を渡し、`own_files` は面の `accounts` を読む。struct literal 9 か所を直す（census §2）。
+2. **owner/name の導き**（pure な 1 関数）: URL の形 4 つ（`https://`・`ssh://`・`git://`・scp 形の `<user>@<host>:<path>`）から host と path を取り、host が `github.com`（大小を畳む）で、path の末尾の `/` と `.git` を落とした末尾 2 成分の字が owner は英数字と `-`、name は英数字と `.` `_` `-` だけのとき owner/name を返す。それ以外（local の path・GitHub の外の host・字の外）は導けない。
+3. **gh の対象**（segment ごと）: `-R` / `--repo`（`HOST/OWNER/REPO` の形は host が github.com のときだけ）→ 前置きの `GH_REPO=` → repo の群の位置引数 `<owner>/<name>` → api の対象の `repos/<o>/<n>`（placeholder は下へ）→ どれも無い周は dir で `gh repo view --json nameWithOwner,url` を 1 回撃ち、url の host が github.com のときの nameWithOwner。gist と、前置きの `GH_HOST=` が github.com でない segment は導けない（gh を撃たない）。gh の失敗・読めない出力は導けない（FR80: owner/name を導けないことは解けないに含まない＝public 側）。締め切りの越えは deadline で断る。群の表の行の有無に依らず撃つ（AC50 (f) の群の無い host の gh の本文の動詞）。
+4. **git push の対象**: 行 n2 の push の URL の列の各 URL から 2 の規則で導く。
+5. **anchor**: host の面の `groups` と `park` の anchor を宣言順に、実体の在る dir だけ取る。anchor ごとに `git -C <anchor> config --list -z` を 1 回撃ち、remote.pushDefault（無ければ origin）の pushurl（無ければ url）から 2 の規則で導く（書き換えは insteadOf の最長一致だけを当てる）。導けない anchor は private の隣とし、名は dir の basename だけにする。
+6. **問うかの判定**: 全ての segment の対象の外の anchor（owner/name が対象と一致しない anchor・導けない anchor を含む）が 1 つも無い周は、GitHub に問わずに通す（群の表の行の無い host を含む）。
+7. **可視性の問い**: 導けた対象と導けた anchor の owner/name を重複なく並べ（対象を segment の順・anchor を宣言順）、`gh api graphql --hostname github.com -f query=query{r0:repository(owner:"<o>",name:"<n>"){visibility} r1:…}` を 1 回撃つ（引数の repo の識別は owner/name だけ・字は 2 の字種に限る）。導けた owner/name が 0 の周は撃たない。rc に依らず stdout の JSON を読み、`PRIVATE` / `PUBLIC` / `INTERNAL` の外・null・読めない値は、対象なら public、anchor なら private と読む。
+8. **判定**: 対象が `PRIVATE` の segment は通す。それ以外の segment は、対象と別の anchor のうち `PUBLIC` でないものを隣、`PUBLIC` の anchor の name を既に公開の名にする。隣が 0 の segment は通す。隣が在る segment は走査の段（行 n5）へ渡す（行 n4 の間は通す）。
+9. **行 n4 は足さない**: 材料と照合（行 n5 / n6）。
+
+### 形（行 n5・照合の核を呼ぶ段と名の当たり・行 n5 の done と 1:1）
+1. **置き場**: 行 n5 の `+` の file（publish の module の `pub` な子）。段の入口が可視性の段の後に呼ぶ。
+2. **材料**: 隣ごとの `Neighbor` は、名札 = dir の basename、名の列 = basename と導けた name（重複なし）、object・path・台帳の欄は空（行 n6 が埋める）。`Public` の名の列 = 対象の name と `PUBLIC` の anchor の name。`Phrases` = host の面の `publish_exclusions` の字句を宣言順に（裁定 id は渡さない）。`Elements` = `host_guard.publish` の値を `elements` で読んだもの。出ていく字面 = 行 n3 の本文の列（`Text` の借用）。
+3. **順**: 越えの印（出ていく字面か出ていく commit の列）が立った segment は、照合せずに hit oversize:host_guard.publish_read_bytes（row は読む上限の行・ruling はその行の裁定 id）で断る。そうでなければ `scan` を 1 回呼び、返りが在れば hit identifier:<件数>:<先頭 5 件>（row `host_guard.publish`・その行の裁定 id・識別子の経路）で断る。無ければ通す。segment の順に最初の断りで止まる。
+4. **行 n5 は足さない**: object id・tracked path・台帳 id の材料（行 n6）。
+
+### 形（行 n6・残り 3 形の材料・行 n6 の done と 1:1）
+1. **候補**: 隣が在る segment ごとに `candidates` を 1 回呼び、候補の在る形だけを問う。
+2. **隣の材料**（隣ごと・子は `git -C <anchor>`）: object id は `cat-file --batch-check` 1 回（候補を stdin・`missing` でない行を在るとし、`ambiguous` も接頭辞として在る）。tracked path は `ls-files -z` 1 回（repo からの相対の列）。台帳 id は `<anchor>/.beads/issues.jsonl` の各行の `id`（file が無い隣は空・読めない行が在れば解けない）。子の失敗と読めない台帳は hit unresolved:neighbor で断る。
+3. **公開先の材料**（押す repo で）: object id は候補を `cat-file --batch-check` 1 回で解き、commit の候補だけを `git rev-list --stdin <候補> --not <server の先端>` 1 回に渡して、出力に無い候補を辿れる側とする（commit でない object・手元に無い候補は辿れない側＝§19 の倒し方）。tracked path は server の先端のうち、出ていく ref の変更前の sha と HEAD の sha で手元に在るものを `git ls-tree -r --name-only -z` で読む（読めない先端は空）。gh の segment は、dir の remote のうち導いた owner/name が対象と同じ 1 つの URL に ls-remote を撃って先端を得る（無ければ空）。
+4. **上限**: 隣と公開先の材料は出ていく字面でないので読む上限の外で、締め切りだけが縛る（大きい隣の tracked path の列で断らない）。
+5. **当たり**: `scan` の object・path・台帳の形が効く（行 m3 の集合の演算のまま）。
+6. **行 n6 は足さない**: 他の段の変更。
+
+### 形（行 n7・doctor の群の外の anchor の件数・行 n7 の done と 1:1）
+1. `doctor_line` の末尾に `ungrouped=<数>` を足す。数は、event log の今の登録 row（`crates/scribe2/src/account/mod.rs` の `seat_accounts` と同じ `current` の登録の読み）の anchor のうち、host の面の `groups` と `park` のどの anchor にも無いものの異なる数。event log を読めない周は `ungrouped=unreadable`。判定せず rc を変えない（FR73）。
+2. 外形の pin を同じ字に直す: `crates/scribe2-boundary/tests/e2e/seat.rs` の `HOST_GUARD_BARE`（952 行）・`crates/scribe2-boundary/tests/e2e/seat/account.rs` の `GUARD_NO_ROWS`（268 行）と `binary=` を末尾に組む 300 / 387 行・`crates/scribe2-boundary/tests/e2e/snapshots/e2e__seat__seat_doctor_external_form.snap` の 9 行目。登録 row を持ち群を宣言しない fixture で `HOST_GUARD_BARE` を丸ごと比べる `crates/scribe2-boundary/tests/e2e/seat/register.rs`（244 / 264 / 526 行）は件数が 0 でなくなるので、その字を同じ便で直す（`crates/scribe2-boundary/tests/e2e/seat/rules.rs` 25 行は登録の有無を着手の時に測る）。
+3. 行 n7 は publish の判定を触らない。
+
+- 触らない: 字面の段（印・形・全履歴）とその経路・`words_of` と `readable` の外形・照合の核の pure な関数の本体（`scan`・`candidates`・`gh_texts` は呼ぶだけ）・`host_guard.publish` の値と裁定・他の種類の判定・配線の hook 行（`TIMEOUT_S` と matcher）・`HostManifest` の読み・`crates/scribe2/src/hook/live_row.rs`。
+- 着地の push（FR50）と載せる段（FR11）: SRS v0.30 の FR50 と FR11 は、着地の push の前と main に載せる前に「FR80 と同じ判定と rules 行・読む上限と締め切り」を既に求める（AC23）。限界にすると要件の未達を黙って残すので、本 § の外の**別の行**（land の終端の設計 doc の行・行 n6 の着地の後）とする。その行は `crates/scribe2/src/pipe/land/finish.rs` の push の前で、行 n2 の入口を `git push <remote> main:main` の語で呼び、断りを便の Failed / Gated に写す（AC23 の形）。本 § の行はその入口を `Published` と dir から呼べる形に保つ（行 n2 形 4 h）。
+- 却下:
+  - 行き先と出ていく ref を refspec の読みで自前に解く（dry-run を撃たない）— push.default・remote の push の設定・glob・`:`・matching を git と同じに書き直すことになり、ずれた周は黙って通す（ADR-0078 (3)）。
+  - `To` の URL で ls-remote を撃つ — git は `To` から利用者の部分を落とす（git 2.43 の実測: `git@github.com:o/pub.git` が `To github.com:o/pub.git`）ので、ssh の口座を失う。
+  - server の先端を remote の追跡 ref（`refs/remotes/…`）で代える — fetch の後に古び、server に無い commit を在ると読んで出ていく字面を取りこぼす。
+  - commit ごとに `git show` を撃つ — commit の数だけ子が要り締め切りを越える。
+  - 上限の値を const で持つ — 閾値は rules 行（憲法 C1）。締め切りを子ごとに 6 秒にする — NFR5 は全体を 6 秒。
+  - 可視性を repo ごとに `gh repo view` で問う — 網の回数が anchor の数だけ増える（ADR-0078 (4) の 1 回）。
+  - gh の対象を導けない周を解けない形で断る — FR80 は owner/name を導けないことを解けないに含めない。
+  - 群の表の行の無い host で解きを飛ばす — FR80 は解けない周を隣が 0 の host でも断る（旧い草稿の「出所 0 なら通す」は SRS v0.30 の順に置き換わった）。
+  - 隣の tracked path の列を読む上限で断る — 大きい隣が 1 つ在るだけで全ての push が断られる（上限は出ていく字面の縛り）。
+  - `Scene` に口座の列と host の面を並べて持つ — 同じ面の 2 つの写し。
+  - 歯を新しい e2e の file に置く — e2e の file 数の pin と flip-check の偽 GREEN（既存の guards.rs に足す）。
+  - 1 行か 3 行で全部（約 2600 行）— NFR2 の 550 を越える。
+- 限界（射程の外として残す）:
+  - 網に届かない周は git push が全部解けない（断る側）。push ごとに dry-run と ls-remote の往復が足される。
+  - submodule の push（`--recurse-submodules`）は submodule の字面を走査しない。`-q` を束ねた短い flag（`-uq`）は落とせず `To` が出ないので解けない側。
+  - 前置きの env（印の無いもの）は子に写さない。URL の語の push は pushInsteadOf を git に当てさせられず、`To` と違えば解けない側。
+  - gh が git から作る本文（`--fill` など）・release の asset・gh が内部で撃つ push は走査しない。gh の既定の host は github.com だけ。
+  - anchor の push 先は remote.pushDefault か origin だけ（branch ごとの pushRemote・pushInsteadOf は読まない）。
+  - 公開先の辿れる object は commit だけ測る。公開先の tracked path は手元に在る先端だけ読む（どちらも断る側に倒れる）。
+  - 押す repo 自身が群の表の行の anchor で GitHub の外の remote へ押す周は、自分の名が隣の名として当たる（同じ repo かは owner/name の一致で判じる glossary の規則）。
+  - 隣の台帳は `.beads/issues.jsonl` だけを読む。
+  - 締め切りの行の値は配線の timeout 未満に限る（越える値は行が無いのと同じ）。
+  - 言い換えた散文・alias・`sh -c` の中・Claude の外・runner の session は §16 と §17 のまま。
+- 歯（接頭辞は行 n `publish_limits_` と e2e の rules の `rules_embedded_manifest_declares_publish_bounds_`・行 n2 `publish_push_`・行 n3 `publish_texts_`・行 n4 `publish_visibility_`・行 n5 `publish_scan_`・行 n6 `publish_material_`・行 n7 `doctor_ungrouped_`。どれも crates と docs で 0 件〔main 2e3df476・2026-09-30〕、互いに部分文字列でなく、契約表の nextest の verify 行の filter 語 757 のうち新しい歯の名の部分文字列になるのは `rules_embedded_manifest_` だけ〔同じ file の既存の歯と同じ〕）:
+  - 行 n・lib（行 n の `+` の file の歯の区間・sh の偽の program）: (a) 入力をそのまま返して rc 3 で終わる子の出力と rc (b) 30 秒眠る孫を持つ子が締め切り 300 ms で締め切りの止まりになり、締め切りに 1 秒を足した内に返り、孫も止まる (c) 10000 byte を出す子が上限 4096 で 4096 byte と越えの印 (d) 無い program が起こせない止まり。
+  - 行 n・lib（publish.rs の歯の区間）: (e) 予算の読み: 埋め込みの 2 行で 6000 ms と 8388608・行が無い / `enabled = false` / 0 / 10000 以上の締め切りでその行の id の `Err`。直す既存の歯: `publish_marks_routes_are_one_per_reason`（理由の宣言順を 6 値に・経路が互いに違う）。
+  - 行 n・e2e（`crates/scribe2-boundary/tests/e2e/rules/embedded.rs`）: (f) 2 行の kind・値・enabled・裁定 id と、`ALL` の `HookBudgetMs` の直後の 2 値。直す既存の歯: `rules_embedded_manifest_is_valid_and_covers_all_kinds`（80 → 82）・`rules_embedded_manifest_declares_one_capability_row_per_role`（78 → 80）・`rules_external_form` の snapshot の 2 行。
+  - 行 n2・lib（行 n2 の `+` の file）: (a) porcelain の 2 つの `To` の塊と flag ごとの出ていく ref（`=` と `!` は出ていかない・削除は to の名だけ・`To` が無い出力は解けない） (b) 利用者の部分を落とした照合（scp 形と `ssh://` の形・違う URL は解けない） (c) tmp の bare な origin に 1 commit・手元に 2 commit で `git push origin main` の出ていく commit が 2 つ、server に在る commit を指す新しい branch は 0 (d) pushurl を持つ remote・pushInsteadOf・語の無い push の remote の順を git から読む。
+  - 行 n2・lib（publish.rs の歯の区間）: (e) cwd の無い場の `git push origin main` が unresolved:target・上限の行の無い manifest で no-row:<行 id>・`Scene` の git に 5 秒眠る偽の git と締め切り 300 ms で deadline:host_guard.publish_deadline_ms（row と裁定 id は締め切りの行）が 1.3 秒の内。直す既存の歯は形 5 の 4 か所（base は通すので直した歯は base で落ちる）。
+  - 行 n2・e2e（guards.rs）: (f) remote の無い repo の push が rc 2 で unresolved:target、bare な origin への push が rc 0（記録なし）。直す既存の歯は形 5 の e2e の 3 本（同じ file の (f) が base で赤いので札は要らない）。
+  - 行 n3・lib（行 n3 の `+` の file）: (a) 1 本の log の出力から 7 つの出所（message・author・committer・追加行・path〔rename の両側と binary の path〕・tag の本文・ref の名）を順に取る (b) UTF-8 でない author の名が解けない・UTF-8 でない message は置き換えて読む (c) gh の本文の file を dir から読み、読めない file は解けない (d) 上限を越える log で越えの印。
+  - 行 n3・lib（行 n2 の `+` の file の歯の区間）: (e) 段の入口が行き先の解きの後に字面を読む（解けない行き先の周は log を撃たない）。
+  - 行 n3・e2e（guards.rs）: (f) UTF-8 でない author の commit の push と、無い file の `--body-file` の gh pr create が rc 2 で unresolved:text。
+  - 行 n4・lib（行 n4 の `+` の file）: (a) owner/name の表（https・ssh・scp 形・git・利用者の部分・`.git`・大小・GitHub の外・local の path・字の外） (b) 問いの引数が owner/name と固定の字だけ・alias の順 (c) 読めない答え（null・知らない値・JSON でない・rc 1 の部分の答え）が対象で public・anchor で private。
+  - 行 n4・lib（行 n2 の `+` の file の歯の区間・`Scene` の gh に呼出しを file に数える偽の gh）: (d) 群の無い面の push は gh 0 回・対象の外の anchor が在る面で 1 回・anchor が対象だけの面で 0 回・対象が private の push は通す。
+  - 行 n4・e2e（guards.rs・PATH の先頭に偽の gh と偽の ssh の fixture を置く起こし口を `crates/scribe2-boundary/tests/e2e/hook.rs` の `run_host_guard` の隣に 1 本・`GIT_CONFIG_GLOBAL` と `GIT_CONFIG_NOSYSTEM` で利用者の設定を切る）: (e) 群の無い host の push で偽の gh 0 回・anchor が対象と public の repo だけの host で 1 回・gh の受けた引数の repo の識別が owner/name だけ・全履歴と `enabled = false` の周で 0 回・`git status && ls` の周に PATH の偽の git と偽の gh の呼出しが 0 回（AC50 の公開でない周） (f) 30 秒眠る偽の gh・1 回ごとは内で合計が越える偽の gh（repo view と graphql）・群の無い host の gh の本文の動詞と締め切りを越えて返る偽の gh の 3 本が、`--rules` の締め切り 1500 ms で rc 2 の deadline と 2.5 秒の内。直す既存の歯: `publish_unresolved_forms_are_denied_before_any_scan` の heredoc の gh pr create を同じ起こし口で撃つ（実の gh と網に依らない）。
+  - 行 n5・lib（行 n5 の `+` の file）: (a) 隣が `PUBLIC` でない anchor で名札が basename・既に公開の名が対象と public の anchor (b) 越えの印の segment は照合せず oversize。
+  - 行 n5・lib（行 n2 の `+` の file の歯の区間）: (c) 隣の名を持つ push の断りの 1 行が identifier:<件数>:<先頭 5 件>・row `host_guard.publish`・識別子の経路。
+  - 行 n5・e2e（guards.rs）: (d) AC50 の隣 2 つ・公開先自身・public の anchor 1 つ・除外の行 1 つの面で、(b) の名の 4 本と除外の順を入れ替えた字句の 1 本・(a) の名の push と 7 箇所の名の出所・(c) の gh の本文の 2 本・(g) の可視性を読めない周と GitHub の外の remote と url / pushurl の割れた remote の 3 本・(f) の上限越え 1 本が rc 2、AC50 の通る周のうち名と可視性と群の無い host に関わる 10 本が rc 0 (e) park の区画だけが隣を anchor に持つ面で、その名を持つ push が identifier で断られる（AC63 (e)）。
+  - 行 n6・lib（行 n5 の `+` の file）: (a) 形ごとに候補の在る周だけ 1 回問う・`ambiguous` は在る・台帳の file の無い隣は空・読めない行は解けない (b) commit でない object と手元に無い候補は辿れない側。
+  - 行 n6・e2e（guards.rs）: (c) AC50 (a) の object id・tracked path・台帳 id の push と 6 つ持つ push（先頭 5 件と件数 6）・(b) の 7 桁の object id・(g) の隣と同じ path の file を足す push が rc 2、公開先と共有する object id・公開先にも在る path・6 桁の object id・`/` を含まない隣の path の push が rc 0。
+  - 行 n7・e2e（`crates/scribe2-boundary/tests/e2e/seat/account.rs`）: (a) Tier1 と Tier9 の面で、Tier9 の anchor の登録 row 1 つと群の表のどの行にも無い anchor の登録 row 1 つの置き場の doctor が `ungrouped=1`（2 でない）で rc 0。直す既存の歯: 外形の pin 2 つと snapshot 1 行。
+- base で RED の理由:
+  - 行 n: (a)〜(d) は新しい module の歯で base の filter の該当が 0 本（nextest の rc 4）。flip-check は、publish.rs の (e) が base に無い子の module を引く compile error で、直した `publish_marks_routes_are_one_per_reason` は base に無い `Reason` の値を引く compile error で RED。e2e の (f) は base に 2 行が無く、直した 2 本は数が違い、snapshot は行数が違うので RED。
+  - 行 n2: lib の (a)〜(d) は新しい module（rc 4）、(e) と直した 4 か所は base が push を通すので RED。e2e の (f) は base が remote の無い push を通すので RED。
+  - 行 n3: (a)〜(d) は新しい module（rc 4）、(e) は base（行 n2 の着地の後）に無い字面の段を引く compile error、e2e の (f) は base が解けない字面の push を通すので RED。
+  - 行 n4: (a)〜(c) は新しい module（rc 4）、(d) は base の `Scene` に gh の欄が無い compile error、e2e の (e)(f) は base が gh を撃たず締め切りの断りを出さないので RED。
+  - 行 n5: (a)(b) は新しい module（rc 4）、(c) は base に無い段を引く compile error、e2e は base が識別子の push を通すので RED。
+  - 行 n6: (a)(b) は base（行 n5 の着地の後）に無い材料の関数を引く compile error、e2e は base が 3 形の当たりを持たない（材料が空）ので RED。
+  - 行 n7: 外形に `ungrouped=` が無いので (a) と直した pin が RED。
+- 順:
+  - 行 n → 行 n2 → 行 n3 → 行 n4 → 行 n5 → 行 n6 の鎖（どの行も publish.rs か前の行の `+` の file を write-set に持ち、受付の write-set-overlap が 1 本ずつにする）。行 n7 はどれにも依らない（群と park の区画の読みは着地済み）。
+  - 行 n2 以後の行は、前の行の `+` の file を素の path の write-set に持つので、前の行の着地の後に契約表へ足す（§19 の行 m3 と同じ）。§ 22 の本文は最初の docs PR で全部置く。
+  - 余地: publish.rs の 138 を行 n（約 +25）・行 n2（約 +20）・行 n4（約 +2）・行 n5（約 +3）が使う。host_guard_tests.rs の 48 を行 n2（約 +8）・行 n4（約 +10）が使う。core の src の本体は約 +1100（60888 → 約 62000 / 66000）。
+  - 着地の push の行（FR50 / FR11）は行 n6 の着地の後に land の設計 doc で起こす。
+- 着地の後:
+  - 行 n は rules の外形だけを変え、判定は変えない（入れ替えは任意）。行 n2〜n6 は binary の判定を変えるので、着地のたびに PATH の binary を `swap-binary.sh` で入れ替える。
+  - 行 n2 の後、消費側の席へ「publish の segment の周は git push の前に試し撃ちと remote の先端の問いを撃ち、行き先を解けない push は unresolved:target で断る」と 1 行知らせる。行 n5 の後、「隣の private repo の名を持つ push と gh の本文は identifier で断る（直し方は言い換えか host の面の除外の行）」と 1 行知らせる。
+  - 行 n7 は doctor の key を 1 つ足すので、doctor の字を読む消費側の面へ 1 行知らせる。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -949,4 +1097,27 @@ verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail publish_sets_", "c
 size = "M"
 growth = ["crates/scribe2/src/hook/host_guard/publish/scan.rs:200", "crates/scribe2/src/hook/host_guard/publish.rs:4"]
 done = "(1) 照合の核の隣の材料が object id の候補のうち隣の object db に在るものの集合・隣の tracked な path の列・隣の台帳の id の集合を、公開先の材料が候補のうち公開先の remote の先端から辿れるものの集合・公開先の remote の先端の tracked な path の列を持つ（どれも受け取るだけで I/O を持たない・publish.rs の歯の区間の Neighbor の struct literal も欄を足すだけ直し、publish.rs の test 区間の行頭に flip-check: retroactive の札を置く） (2) 候補を切る pure な 1 関数が行の form に在る形だけの候補を返し、object id は成分のうち 7 字以上で全部が 16 進の数字のもの（小文字に畳む・6 字以下は候補でない）、tracked path は path の語から先頭の ./ と / と末尾の . を落とし / を含むもの（出所が patch の path の本文は全体も候補）、台帳 id は成分の字と - . の連なりから末尾の . を落とし - を含むもの (3) 当たりは object id が隣の在る集合に在り公開先の辿れる集合に無いもの・tracked path が隣の path を / の境界で切った末尾の集合に在り公開先の同じ集合に無いもの（集合は path の列ごとに 1 度だけ作る）・台帳 id が隣の台帳の id の集合に在るもの（大小を区別）で、行 m2 の順と畳み（件数と先頭 5 件）に同じ形で載る (4) gh の本文の読みが pure な 1 関数で、入力は Published、api でない gh は words_of が読む本文・題・説明・comment の値を本文とし本文の file の値と gist の create の file の語を読む path の列に返し、api は -f / -F の key=値 を本文とし（-F の値が @ で始まる欄を除く）-F の @ の後ろと --input の値を読む path の列に返し、readable が読める heredoc の形は区切りの行の間の行を字面のまま本文にする (5) 配線（隣と公開先に問う・file を読む・読む上限と締め切り・断りと経路）・Reason と REASONS と judge・words_of と readable の外形を足さず変えない 歯: lib の publish_sets_candidates_cut_the_three_forms・publish_sets_are_set_operations_on_the_given_sets・publish_sets_gh_texts_read_heredoc_bodies_and_list_body_files（照合の核の file の歯の区間・base に無い候補と gh の本文の読みを引く compile error で RED）・不変の publish_names_ と host_guard_publish_（publish.rs の歯の区間の (f) と host-guard の歯は全件の nextest で緑）"
+
+[[contract]]
+id = "n"
+title = "publish の配線の上限 — rules 行 host_guard.publish_deadline_ms（6000）と host_guard.publish_read_bytes（8388608）・予算を読む 1 関数（無い / 不発効 / 0 以下 / 配線の timeout 以上の締め切りは行の id の Err）・子を自分の process group に起こし締め切りと読む上限で group ごと止める 1 関数・Reason の deadline / oversize / identifier と経路（§22 行 n・ADR-0078・FR80 / NFR5・s2-07l.696）"
+req = ["FR80", "NFR5", "AC50", "NFR4"]
+section = "22"
+touches = ["crate::rules::RuleKind"]
+write-set = ["rules/manifest.toml", "crates/scribe2/src/rules/mod.rs", "+crates/scribe2/src/hook/host_guard/publish/probe.rs", "crates/scribe2/src/hook/host_guard/publish.rs", "crates/scribe2-boundary/tests/e2e/rules.rs", "crates/scribe2-boundary/tests/e2e/rules/embedded.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__rules__rules_external_form.snap", "docs/design/vessel-hook.md"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail publish_limits_", "cargo nextest run -p scribe2 --lib --no-tests=fail publish_marks_", "cargo nextest run -p scribe2 --lib --no-tests=fail host_guard_publish_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_embedded_manifest_declares_publish_bounds_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_embedded_manifest_is_valid_and_covers_all_kinds", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_embedded_manifest_declares_one_capability_row_per_role", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_embedded_manifest_declares_host_guard_kinds_at_the_tail_of_all", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail class_derive_embedded_row_carries_the_ruled_three_elements_and_ruling_id", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_kind_parity_every_kind_has_sample", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_external_form"]
+size = "M"
+growth = ["crates/scribe2/src/hook/host_guard/publish/probe.rs:240", "crates/scribe2/src/hook/host_guard/publish.rs:25", "crates/scribe2/src/rules/mod.rs:10", "crates/scribe2-boundary/tests/e2e/rules/embedded.rs:30"]
+done = "(1) 埋め込み manifest が host_guard.publish の後ろに host_guard.publish_deadline_ms（kind HostGuardPublishDeadlineMs・整数 6000）と host_guard.publish_read_bytes（kind HostGuardPublishReadBytes・整数 8388608）を持ち（enabled・裁定 id user 2026-09-29T04:37Z・裁定日 2026-09-29・注は NFR5 の 6 秒と 8 MB を名指す）、kind 2 値が ALL の HookBudgetMs の直後に在り、名と形（Int）の arm は既存の行に畳み、rules の外形が rows=82 kinds=80 (2) 行 n の + の file（publish の module の pub な子）の 1 関数が 2 行を int_row で読んで（締め切り・読む上限）を返し、行が無い・enabled = false・整数でない・0 以下・締め切りが wire.rs の TIMEOUT_S の千倍以上の周はその行の id を Err で返す (3) 同じ file の 1 関数が program・引数・cwd・stdin の byte・締め切りの時刻・読む上限を受け、Invocation で子を自分の process group に起こし、stdin を別 thread で書き、stdout を別 thread で上限 + 1 byte まで読み、stderr を捨て、try_wait を 10 ms で周回し、締め切りの越えか上限の越えで group ごと kill して wait し、全ての子に GIT_TERMINAL_PROMPT=0・GH_PROMPT_DISABLED=1・GH_NO_UPDATE_NOTIFIER=1・LC_ALL=C を渡し、（rc・読んだ byte・越えたか）か閉じた 2 値の止まり（起こせない / 締め切り）を返す (4) Reason が unresolved の後ろに deadline・oversize・identifier を持ち REASONS の宣言順が no-row / full-history / unresolved / deadline / oversize / identifier、hit の頭の語が deadline / oversize / identifier、経路が「撃ち直す（」「分けて出す（」「識別子を消し「隣の project」と件数に言い換えて出し直す（」で始まる 3 文（publish.rs の const）で、既存の 3 値の hit と経路は 1 字も変わらない (5) judge と refused は変わらず、どの判定も子を撃たない 歯: lib の publish_limits_（行 n の + の file の 4 本〔入力を返して rc 3・孫を持つ子が締め切り 300 ms で止まり 1.3 秒の内に返り孫も止まる・10000 byte が上限 4096 で越えの印・無い program は起こせない〕と publish.rs の歯の区間の予算の読み 1 本〔埋め込みの 2 行で 6000 ms と 8388608・無い / 不発効 / 0 / 10000 以上の締め切りで行の id の Err〕）と直した publish_marks_routes_are_one_per_reason（6 値の宣言順と互いに違う経路）が base で RED、e2e の rules_embedded_manifest_declares_publish_bounds_ の 1 本（2 行の kind・値・enabled・裁定 id と ALL の HookBudgetMs の直後の 2 値）と直した rules_embedded_manifest_is_valid_and_covers_all_kinds（82）・rules_embedded_manifest_declares_one_capability_row_per_role（80）・rules_external_form の snapshot（rows=82 kinds=80 の 2 行）が base で RED、rules_embedded_manifest_declares_host_guard_kinds_at_the_tail_of_all・class_derive_embedded_row_carries_the_ruled_three_elements_and_ruling_id・rules_kind_parity_every_kind_has_sample・host_guard_publish_（lib）は不変で緑"
+
+[[contract]]
+id = "n7"
+title = "doctor の host-guard の行の末尾に ungrouped=<数>（今の登録 row の anchor のうち host の面の群と park の区画のどの anchor にも無いものの異なる数・event log を読めない周は unreadable・判定せず rc を変えない）を足す（§22 行 n7・FR73 / AC63 (f)・s2-07l.696）"
+req = ["FR73", "AC63", "FR80"]
+section = "22"
+write-set = ["crates/scribe2/src/account/wire.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "crates/scribe2-boundary/tests/e2e/seat/account.rs", "crates/scribe2-boundary/tests/e2e/seat/register.rs", "crates/scribe2-boundary/tests/e2e/seat/rules.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__seat__seat_doctor_external_form.snap", "docs/design/vessel-hook.md"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail doctor_ungrouped_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail host_guard_doctor_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_doctor_external_form"]
+size = "S"
+growth = ["crates/scribe2/src/account/wire.rs:25", "crates/scribe2-boundary/tests/e2e/seat/account.rs:45"]
+done = "(1) doctor_line の出力が binary= の後ろに ungrouped=<数> を持ち、数は event log の今の登録 row（account/mod.rs の seat_accounts と同じ current の登録の読み）の anchor のうち host の面の groups と park のどの anchor にも無いものの異なる数で、event log を読めない周は ungrouped=unreadable、どの周も判定せず rc を変えない (2) HOST_GUARD_BARE・GUARD_NO_ROWS と binary= を末尾に組む行・seat_doctor_external_form の snapshot の 9 行目・登録 row を持ち群を宣言しない register.rs の比べる字が同じ外形 (3) publish の判定を触らない 歯: e2e の doctor_ungrouped_ の 1 本（Tier1 と Tier9 の面で、Tier9 の anchor の登録 row 1 つと群の表のどの行にも無い anchor の登録 row 1 つの置き場の doctor が ungrouped=1〔2 でない〕で rc 0）と (2) の直した pin と snapshot が base で RED、host_guard_doctor_ と seat_doctor_external_form は直した字で緑"
 <!-- contracts:end -->
