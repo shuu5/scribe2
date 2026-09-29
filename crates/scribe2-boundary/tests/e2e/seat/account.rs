@@ -297,7 +297,7 @@ fn host_guard_doctor_counts_wired_accounts_and_entities_in_one_line() {
     let place = role_doctor_place();
     let rules = account_rules(&["a1", "a2"]);
     let a1 = account_fixture(&place, "a1", &[("settings.json", "{}")]);
-    let line = |want: &str| format!("{GUARD_NO_ROWS} {want} binary=ok");
+    let line = |want: &str| format!("{GUARD_NO_ROWS} {want} binary=ok ungrouped=1");
     let (bare, count) = guard_line(&doctor_rows(&place, &rules));
     assert_eq!((bare, count), (line("wired=0/2 entities=1"), 1), "配線の無い口座 2 つ");
     let state = place.state.display().to_string();
@@ -328,12 +328,12 @@ fn host_guard_doctor_names_each_kind_on_off_or_no_row() {
         (None, "git=no-row tmux=on ledger=on rm=on publish=on self=on rows=4/5"),
     ] {
         let lines = doctor_rows(&place, &guard_rules(git, &[]));
-        assert_eq!(guard_line(&lines), (format!("host-guard: {want} wired=0/0 entities=0 binary=ok"), 1), "{git:?}: {lines:?}");
+        assert_eq!(guard_line(&lines), (format!("host-guard: {want} wired=0/0 entities=0 binary=ok ungrouped=1"), 1), "{git:?}: {lines:?}");
     }
     // 列でない値の行（id は host_guard.git・kind は閾値）は発効でも `no-row`。
     let not_list = "\n[[rule]]\nid = \"host_guard.git\"\nkind = \"CoreLines\"\nvalue = 1\nenabled = true\nruling = \"r\"\nruled_at = \"d\"\n";
     let lines = doctor_rows(&place, &format!("{}{not_list}", guard_rules(None, &[])));
-    let want = "host-guard: git=no-row tmux=on ledger=on rm=on publish=on self=on rows=4/5 wired=0/0 entities=0 binary=ok";
+    let want = "host-guard: git=no-row tmux=on ledger=on rm=on publish=on self=on rows=4/5 wired=0/0 entities=0 binary=ok ungrouped=1";
     assert_eq!(guard_line(&lines), (want.to_owned(), 1), "列でない行: {lines:?}");
     fs::remove_dir_all(&place.dir).ok();
 }
@@ -384,7 +384,7 @@ fn host_guard_doctor_binary_is_missing_ok_or_other_by_the_child() {
         assert_eq!(rc_of(&out), i32::from(RC_OK), "判定しない: {}", stderr_of(&out));
         guard_line(&stdout_of(&out).lines().map(str::to_owned).collect::<Vec<String>>()).0
     };
-    let line = |binary: &str| format!("{GUARD_NO_ROWS} wired=0/0 entities=0 binary={binary}");
+    let line = |binary: &str| format!("{GUARD_NO_ROWS} wired=0/0 entities=0 binary={binary} ungrouped=1");
     assert_eq!(run(&[], Some(&empty)), line("missing"), "PATH に <NAME> が無い");
     assert_eq!(run(&["--bin", bin()], Some(&empty)), line("ok"), "歯の binary 自身");
     assert_eq!(run(&["--bin", &other.display().to_string()], None), line("other"), "1 行目が違う");
@@ -940,6 +940,24 @@ fn host_park_lot_doctor_line_is_marked_and_reads_the_seat_row_pressure() {
         "group=Tier9 kind=park accounts=acct-1,spare,third anchors=1 seat-accounts=none current=- next=- refused=- pressure=-",
         "席の row が無い区画: {lines:?}"
     );
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// 行 n7（vessel-hook.md §22）: doctor の host-guard の行の末尾 `ungrouped=` は、今の登録 row の anchor のうち群の表と区画の
+/// どの置き場にも無いものの異なる数。Tier9 の置き場の row 1 つと表のどこにも無い置き場の row 1 つは 1（2 でない）で rc 0
+/// （`doctor_rows` が rc 0 を確かめる）。event log を読めない周は `unreadable`。
+#[test]
+fn doctor_ungrouped_counts_registered_anchors_outside_groups_and_park() {
+    let place = role_doctor_place();
+    role_register_extra(&place, "park:park", "/repo/park");
+    put_groups(&place, &[("Tier1", &["/repo/elsewhere"], &PARK_LABELS), ("Tier9", &["/repo/park"], &PARK_LABELS)]);
+    let rules = next_rules(&PARK_LABELS, true);
+    let (line, count) = guard_line(&doctor_rows(&place, &rules));
+    assert_eq!(count, 1, "host-guard の行は 1 本");
+    assert!(line.ends_with(" binary=ok ungrouped=1"), "区画の置き場の row は数えない・群の外の row 1 つ: {line}");
+    fs::write(vessel::fleet::store::events_path(&place.state), "not an event\n").expect("log を壊せる");
+    let (line, _) = guard_line(&doctor_rows(&place, &rules));
+    assert!(line.ends_with(" binary=ok ungrouped=unreadable"), "読めない周は判定せず unreadable: {line}");
     fs::remove_dir_all(&place.dir).ok();
 }
 

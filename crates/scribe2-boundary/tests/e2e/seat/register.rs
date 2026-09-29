@@ -238,10 +238,12 @@ fn seat_role_doctor_reconciles_rows_with_live_targets() {
     assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
     let tail = |out: &Output| stdout_of(out).lines().rev().take(5).map(str::to_owned).collect::<Vec<String>>();
     let consumer_gone = CONSUMER_REPO.replace("consumer=/repo ", "consumer=/repo/gone ");
+    // 群を宣言しない置き場の登録 row 2 つ（anchor が 2 つ）＝群の外の anchor は 2。
+    let guard = HOST_GUARD_BARE.replace("ungrouped=1", "ungrouped=2");
     assert_eq!(
         tail(&out),
         [
-            HOST_GUARD_BARE,
+            guard.as_str(),
             consumer_gone.as_str(),
             CONSUMER_REPO,
             HOST_ABSENT,
@@ -261,7 +263,7 @@ fn seat_role_doctor_reconciles_rows_with_live_targets() {
     assert_eq!(lines.len(), 11, "2 行 + host-template 1 行 + init 1 行 + 登録 row 2 行 + 突合 1 行 + host の面 1 行 + 導入先 2 行 + host-guard 1 行: {lines:?}");
     assert_eq!(
         tail(&out),
-        [HOST_GUARD_BARE, consumer_gone.as_str(), CONSUMER_REPO, HOST_ABSENT, "seats: registered=2 live=1 missing=1"]
+        [guard.as_str(), consumer_gone.as_str(), CONSUMER_REPO, HOST_ABSENT, "seats: registered=2 live=1 missing=1"]
     );
     let doctor = |args: &[&str]| Command::new(bin()).arg("doctor").args(args).output().ok();
     let bare = doctor(&[]).map(|out| stdout_of(&out)).unwrap_or_default();
@@ -523,7 +525,7 @@ fn seat_register_model_shows_in_the_doctor_rows_with_dash_for_none() {
             HOST_ABSENT.to_owned(),
             consumer_line_of("/repo/a"),
             consumer_line_of("/repo/b"),
-            HOST_GUARD_BARE.to_owned(),
+            HOST_GUARD_BARE.replace("ungrouped=1", "ungrouped=2"),
         ][..]),
         "{lines:?}"
     );

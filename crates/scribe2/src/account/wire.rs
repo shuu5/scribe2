@@ -265,7 +265,7 @@ pub fn resolve(bin: &Path, version: &str) -> Binary {
 }
 
 /// doctor の 1 行（`--state-dir` の周・導入先の行の後ろ）: `host-guard: git= tmux= ledger= rm= publish= self=on rows=<発効>/5
-/// wired=<配線を持つ口座>/<口座> entities=<実体> [unreadable=<読めない口座>] binary=<ok|missing|other>`。宣言（`rules` = `--rules`
+/// wired=<配線を持つ口座>/<口座> entities=<実体> [unreadable=<読めない口座>] binary=<ok|missing|other> ungrouped=<数|unreadable>`。宣言（`rules` = `--rules`
 /// か埋め込み + host の面）を読めない周は `host-guard: rules=unreadable`。実体が割れても一覧は出さない（1 行の外形を保つ）。
 pub fn doctor_line(state_dir: &Path, rules: Option<&str>, version: &str, bin: &Path) -> String {
     let Ok(manifest) = crate::rules::read(rules.map(Path::new), Some(state_dir)) else {
@@ -286,13 +286,31 @@ pub fn doctor_line(state_dir: &Path, rules: Option<&str>, version: &str, bin: &P
     let entities: BTreeSet<&PathBuf> = accounts.iter().flatten().collect();
     let unreadable = if unreadable > 0 { format!(" unreadable={unreadable}") } else { String::new() };
     format!(
-        "{HEAD} {} self=on rows={on}/{} wired={wired}/{} entities={}{unreadable} binary={}",
+        "{HEAD} {} self=on rows={on}/{} wired={wired}/{} entities={}{unreadable} binary={} ungrouped={}",
         cells.join(" "),
         ROW_KINDS.len(),
         accounts.len(),
         entities.len(),
-        resolve(bin, version).as_str()
+        resolve(bin, version).as_str(),
+        ungrouped(state_dir, &manifest)
     )
+}
+
+/// `ungrouped=` の値（判定しない・設計 vessel-hook.md §22 行 n7）: event log の今の登録 row（`seat_accounts` と同じ `current` の
+/// 読み）の anchor のうち、host の面の群と park の区画のどの anchor にも無いものの異なる数。log を読めない周は `unreadable`。
+fn ungrouped(state_dir: &Path, manifest: &Manifest) -> String {
+    let Some(state) = super::read_state(state_dir) else {
+        return "unreadable".to_owned();
+    };
+    let grouped: BTreeSet<&str> =
+        manifest.groups().iter().chain(manifest.park()).flat_map(|group| group.anchors().iter().map(String::as_str)).collect();
+    let anchors: BTreeSet<&str> = state
+        .registrations
+        .values()
+        .map(|latest| latest.registration.anchor.as_str())
+        .filter(|anchor| !grouped.contains(anchor))
+        .collect();
+    anchors.len().to_string()
 }
 
 #[cfg(test)]
