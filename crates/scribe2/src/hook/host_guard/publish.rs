@@ -3,8 +3,8 @@
 //! 公開の segment の読み（[`read`]・pure な 1 関数）と、rules 行 host_guard.publish の要素の読み手（[`elements`]）と、字面で
 //! 読めない segment の印の読み（[`marked`]・§17 行 k）と、読めた segment の解けない形（[`Hole`]・§17 行 k2・行 k3 が全ての
 //! 語へ広げる）と、判定
-//! （[`judge`]: 行が無い・列でない周は no-row、enabled の行で印か形を持つ segment は unresolved）を持つ。全履歴・照合・配線は
-//! 後続の行が足す。本 module は子 process を撃たない。
+//! （[`judge`]: 行が無い・列でない周は no-row、enabled の行で印か形を持つ segment は unresolved）を持つ。子 process を撃つのは
+//! 段の入口（[`outgoing`]・§22 行 n2）だけで、照合は後続の行が足す。
 
 use super::{root_of, verb_of, Kind, Refusal, Subject, PUBLISH_ROW, UNRESOLVED};
 use crate::hook::ledger_guard::{is_assignment, segments};
@@ -14,6 +14,7 @@ use crate::rules::RuleValue;
 use std::path::{Path, PathBuf};
 
 pub mod history;
+pub mod outgoing;
 pub mod probe;
 pub mod scan;
 
@@ -340,6 +341,8 @@ pub struct Published {
     pub verb: Option<String>,
     /// 動詞の後ろの語（api は `api` の後ろの語）。
     pub rest: Vec<String>,
+    /// git の動詞より前の語から `-C <dir>` の対を落とした列（git だけ・行き先の子が動詞の前に置く）。
+    pub globals: Vec<String>,
     /// 対象の dir（解けない周は repo の root）。
     pub dir: PathBuf,
     /// 対象の dir を字面で解けたか。
@@ -755,7 +758,7 @@ fn base(sort: Sort, seg: &Walked, root: &Path) -> Published {
 fn pushed(seg: &Walked, root: &Path) -> Option<Published> {
     let git = git_segment(seg, root).filter(|git| trimmed(&git.verb) == PUSH)?;
     let found = base(Sort::Git, seg, root);
-    Some(Published { verb: Some(PUSH.to_owned()), rest: git.rest, dir: git.dir, resolved: git.resolved, ..found })
+    Some(Published { verb: Some(PUSH.to_owned()), rest: git.rest, globals: outgoing::globals(&seg.words), dir: git.dir, resolved: git.resolved, ..found })
 }
 
 /// gh の segment の読み: 群と動詞が公開の表に在るか、知らない flag を持ち群を読めた周、api は書きか知らない flag を持つ周。
@@ -859,8 +862,8 @@ fn target_of(word: &str) -> String {
 
 /// 判定（設計 §17 形 3）: 公開の segment（[`marked`]）が 0 の周は行を読まずに通し、行が無い・列でない周は no-row、
 /// `enabled = false` の周は通し、全履歴の段は segment の順に [`history::kind_of`] の先に当たった 1 つで断り（前の segment の印や形より
-/// 先・§18）、解けない段は segment の順に各 segment の印 → 形（どちらも宣言順）の先に当たった 1 つで断る。印も形も無ければ通す
-/// （走査の断りは後続の行）。子 process は撃たない。
+/// 先・§18）、解けない段は segment の順に各 segment の印 → 形（どちらも宣言順）の先に当たった 1 つで断る。印も形も無ければ
+/// 段の入口（[`outgoing::stage`]・§22 行 n2）が上限の 2 行を読み git push の行き先を git に解かせる（走査の断りは後続の行）。
 pub(super) fn judge(kind: Kind, subject: &Subject, manifest: &Manifest) -> Option<Refusal> {
     let cwd = subject.scene.cwd;
     let root = root_of(cwd).unwrap_or_else(|| cwd.to_path_buf());
@@ -869,24 +872,28 @@ pub(super) fn judge(kind: Kind, subject: &Subject, manifest: &Manifest) -> Optio
         return None;
     }
     let Some(row) = manifest.get(PUBLISH_ROW).filter(|row| matches!(row.value, RuleValue::List(_))) else {
-        return Some(refused(kind, Reason::NoRow, None, "-".to_owned()));
+        return Some(refused(kind, Reason::NoRow, None, PUBLISH_ROW, "-".to_owned()));
     };
     if !row.enabled {
         return None;
     }
     if let Some(found) = found.iter().filter_map(|seg| seg.read.as_ref()).find_map(history::kind_of) {
-        return Some(refused(kind, Reason::FullHistory, Some(found.as_str()), row.ruling.clone()));
+        return Some(refused(kind, Reason::FullHistory, Some(found.as_str()), PUBLISH_ROW, row.ruling.clone()));
     }
     let first = |seg: &Marked| seg.marks.first().map(|mark| mark.as_str()).or_else(|| seg.holes.first().map(|hole| hole.as_str()));
-    let word = found.iter().find_map(first)?;
-    Some(refused(kind, Reason::Unresolved, Some(word), row.ruling.clone()))
+    if let Some(word) = found.iter().find_map(first) {
+        return Some(refused(kind, Reason::Unresolved, Some(word), PUBLISH_ROW, row.ruling.clone()));
+    }
+    let stop = outgoing::stage(&found, manifest, subject.scene.git, &row.ruling)?;
+    let refusal = refused(kind, stop.reason, Some(stop.word), stop.row, stop.ruling);
+    Some(Refusal { route: stop.route.unwrap_or(refusal.route), ..refusal })
 }
 
-/// 理由の断り（hit は理由の頭の語か `<頭の語>:<印か形の語>`・経路は理由ごと）。
-fn refused(kind: Kind, reason: Reason, word: Option<&str>, ruling: String) -> Refusal {
+/// 理由の断り（hit は理由の頭の語か `<頭の語>:<印か形の語>`・経路は理由ごと・行 id と裁定 id は段が名指す）。
+fn refused(kind: Kind, reason: Reason, word: Option<&str>, row: &'static str, ruling: String) -> Refusal {
     let (head, route) = reason.parts();
     let hit = word.map_or_else(|| head.to_owned(), |word| format!("{head}:{word}"));
-    Refusal { kind, hit, row: PUBLISH_ROW, ruling, route }
+    Refusal { kind, hit, row, ruling, route }
 }
 
 #[cfg(test)]
@@ -904,14 +911,25 @@ mod tests {
         format!("\n[[rule]]\nid = \"{id}\"\nkind = \"{kind}\"\nvalue = [{value}]\nenabled = {enabled}\nruling = \"r\"\nruled_at = \"d\"\n")
     }
 
-    /// 語列の 3 行と `extra` の本文を持つ manifest（publish の行は `extra` だけが持つ）。
-    fn manifest(extra: &str) -> Manifest {
+    /// 語列の 3 行と `extra` の本文を持つ manifest（publish の行は `extra` だけが持つ・上限の 2 行は `limits`）。
+    fn parsed(extra: &str) -> Manifest {
         let mut text = "schema = 1\n".to_owned();
         for (id, value) in [("host_guard.git", "\"git push --force\""), ("host_guard.tmux", "\"tmux kill-server\""), ("host_guard.ledger", "\"bd delete\"")] {
             text.push_str(&row(id, "HostGuardDeniedCommands", value, true));
         }
         text.push_str(extra);
         Manifest::parse(&text).unwrap_or_else(|errors| panic!("fixture の manifest を読める: {errors:?}"))
+    }
+
+    /// 上限の 2 行（締め切りは `ms` ミリ秒・読む上限は 1 MB）。
+    fn limits(ms: u64) -> String {
+        let int = |id: &str, kind: &str, value: u64| format!("\n[[rule]]\nid = \"{id}\"\nkind = \"{kind}\"\nvalue = {value}\nenabled = true\nruling = \"r\"\nruled_at = \"d\"\n");
+        int(DEADLINE_ROW, "HostGuardPublishDeadlineMs", ms) + &int(READ_ROW, "HostGuardPublishReadBytes", 1 << 20)
+    }
+
+    /// 語列の 3 行と上限の 2 行と `extra` の本文を持つ manifest。
+    fn manifest(extra: &str) -> Manifest {
+        parsed(&(limits(6000) + extra))
     }
 
     /// Bash の判定の (what, line)。Allow なら `None`。
@@ -1009,7 +1027,8 @@ mod tests {
         }
         for enabled in [true, false] {
             let with = manifest(&row("host_guard.publish", "HostGuardPublish", "\"form repo-name\"", enabled));
-            assert_eq!(denied("git push origin main", &with), None, "enabled={enabled}");
+            let target = denied("git push origin main", &with).map(|(_, text)| text.contains(" hit=unresolved:target "));
+            assert_eq!(target, enabled.then_some(true), "cwd の無い場の push は解けない・enabled={enabled}");
         }
     }
 
@@ -1104,7 +1123,7 @@ mod tests {
             }
         }
         let with = manifest(&row("host_guard.publish", "HostGuardPublish", "\"form repo-name\"", true));
-        assert_eq!(denied("git push origin main", &with), None, "解ける push は通す");
+        assert_eq!(hit("git push origin main", true).as_deref(), Some("unresolved:target"), "cwd の無い場の push は解けない");
         let force = denied("git push --force origin main", &with).map(|(_, text)| text);
         let want = format!("{NAME}: host-guard deny kind=git hit=git push --force row=host_guard.git ruling=r — {}", Kind::Git.route());
         assert_eq!(force, Some(want), "git の種類の経路は不変");
@@ -1149,10 +1168,35 @@ mod tests {
             (deadline("9999", true) + &bytes("0", true), Err(bytes_row)),
             (deadline("9999", true) + &bytes("4096", true), Ok((9999, 4096))),
         ] {
-            assert_eq!(budget(&manifest(&rows)), want, "{rows}");
+            assert_eq!(budget(&parsed(&rows)), want, "{rows}");
         }
         let listed = row(DEADLINE_ROW, "HostGuardPublishDeadlineMs", "\"6000\"", true);
         assert!(Manifest::parse(&format!("schema = 1\n{listed}")).is_err(), "kind の形は Int（列の値は読み込みで拒む）");
+    }
+
+    /// 行 n2 (e) cwd の無い場の push は unresolved:target・上限の行の無い manifest は no-row:<行 id>（row はその行・ruling `-`・経路はその行を
+    /// 置く文）・5 秒眠る偽の git と締め切り 300 ms は deadline:<締め切りの行>（row と裁定 id は締め切りの行）が 1.3 秒の内。
+    #[test]
+    fn publish_push_stage_denies_unresolved_target_no_row_and_deadline() {
+        use std::os::unix::fs::PermissionsExt;
+        let publish = row("host_guard.publish", "HostGuardPublish", "\"form repo-name\"", true);
+        assert_eq!(hit("git push origin main", true).as_deref(), Some("unresolved:target"));
+        let line = |hit: &str, row: &str, ruling: &str, route: &str| format!("{NAME}: host-guard deny kind=publish hit={hit} row={row} ruling={ruling} — {route}");
+        let route = format!("その行を裁定を添えて置く（器の manifest の {DEADLINE_ROW}）");
+        let bare = denied("git push origin main", &parsed(&publish)).map(|(_, text)| text);
+        assert_eq!(bare, Some(line(&format!("no-row:{DEADLINE_ROW}"), DEADLINE_ROW, "-", &route)), "上限の行の無い manifest");
+        let dir = std::env::temp_dir().join(format!("scribe2-publish-push-stage-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap_or_else(|why| panic!("dir を作れる: {why}"));
+        let fake = dir.join("git");
+        std::fs::write(&fake, "#!/bin/sh\nsleep 5\n").unwrap_or_else(|why| panic!("偽の git を書ける: {why}"));
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap_or_else(|why| panic!("偽の git を実行可能にできる: {why}"));
+        let scene = Scene { cwd: &dir, state_dir: &dir, git: &fake, accounts: &[] };
+        let started = std::time::Instant::now();
+        let slow = judge("Bash", "git push origin main", &parsed(&(limits(300) + &publish)), &scene);
+        assert!(started.elapsed() < std::time::Duration::from_millis(1300), "締め切りに 1 秒を足した内: {:?}", started.elapsed());
+        let want = HostGuardDecision::Deny { what: "host-guard-deny publish".to_owned(), line: line(&format!("deadline:{DEADLINE_ROW}"), DEADLINE_ROW, "r", Reason::Deadline.parts().1) };
+        assert_eq!(slow, want, "5 秒眠る偽の git");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 公開の segment ごとの解けない形の語（cwd `/w`・root `/root`）。
@@ -1239,7 +1283,7 @@ mod tests {
             assert!(marks(&line).is_empty(), "台帳の notes は印を持たない: {line}: {:?}", marks(&line));
         }
         let commit = format!("git commit -m {} && git push origin main", quoted("fix: cd sub"));
-        assert!(marks(&commit).iter().all(Vec::is_empty) && hit(&commit, true).is_none(), "{commit}: {:?}", marks(&commit));
+        assert!(marks(&commit).iter().all(Vec::is_empty) && hit(&commit, true).as_deref() == Some("unresolved:target"), "{commit}: {:?}", marks(&commit));
         for body in [
             heredoc("cat <<EOF", "x", ""), heredoc("cat <<-EOF", "x", ""), heredoc("cat <<'EOF'", "x", "x"), heredoc("cat <<'EOF'", "x\nEOF\nls", ""),
             heredoc("cat <<\"EOF\"", "x", ""), heredoc("sh <<'EOF'", "x", ""), heredoc("bash <<'EOF'", "x", ""), "\"$X\"".to_owned(),

@@ -17,7 +17,8 @@
 //! payload が JSON でない・`tool_name` が無い・`Bash` なのに command が無い・`--state-dir` が無い・rules が読めない・host の面が
 //! 在るのに読めない周は **deny**（FailClosed・[`POLARITY`]）。Bash / 編集系でない tool は 1 byte も書かず rc 0。断る周だけ `inject.jsonl` に
 //! 1 行を残す（tmux は撃たない・席は null）。env も HOME も読まない（C2.2）。git の子 process は rm の segment が在り
-//! repo の root が解けた周の `git ls-files` 1 回だけ（NFR5）。
+//! repo の root が解けた周の `git ls-files` 1 回と、publish の segment の周は git と gh の問いを数で縛らず、締め切りと読む
+//! 上限の 2 行で縛る（NFR5・[`publish::outgoing`]）。
 
 use super::command::{matched, BASH};
 use super::ledger_guard::{self, is_assignment, judge_write, segments, write_of, Write, WRITES};

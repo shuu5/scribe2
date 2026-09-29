@@ -457,14 +457,24 @@ fn host_guard_kind_denies_the_same_under_other_marker_and_outside_git() {
 /// `--force-with-lease` の push と、Bash / 編集系でない tool（Read）は 0 byte・rc 0・記録 0。
 #[test]
 fn host_guard_kind_passes_force_with_lease_and_other_tools_silently() {
-    let repo = git_repo();
+    let (repo, origin) = pushable_repo();
     let state = tmp();
     let out = run_host_guard_in(&state, &bash_payload(&repo, "git push --force-with-lease origin feat/x"));
     assert_silent(&out, "--force-with-lease は通す");
     let out = run_host_guard_in(&state, &tool_payload(&repo, "Read", "src/lib.rs"));
     assert_silent(&out, "Read は判定に載らない");
     assert!(inject_lines(&state).is_empty(), "通す周は記録を残さない");
-    clean(&[&repo, &state]);
+    clean(&[&repo, &origin, &state]);
+}
+
+/// bare な origin と main・feat/x の branch を持つ repo（publish が push の行き先を git に解かせられる形・§22 行 n2）と origin の置き場。
+fn pushable_repo() -> (TmpDir, TmpDir) {
+    let (repo, origin) = (git_repo(), tmp());
+    git(&origin, &["init", "-q", "--bare"]);
+    git(&repo, &["branch", "-M", "main"]);
+    git(&repo, &["branch", "feat/x"]);
+    git(&repo, &["remote", "add", "origin", &origin.display().to_string()]);
+    (repo, origin)
 }
 
 /// payload が JSON でない周は rc 2・stderr 1 行（fail-closed）。
@@ -747,7 +757,7 @@ fn host_guard_publish_without_the_row_denies_push_and_passes_the_rest() {
 /// （hit=unresolved:<印の語>・unresolved の経路）と記録 1 行ずつ、解ける push と cd の後ろの ls は rc 0・記録なし（§17 行 k）。
 #[test]
 fn publish_marks_are_denied_through_the_binary() {
-    let (repo, state) = (git_repo(), tmp());
+    let ((repo, origin), state) = (pushable_repo(), tmp());
     let route = "解ける形で書き直す（git / gh を包まずに頭の語に置く・ref と remote と dir と -R と可視性の欄は literal・本文は file〔--body-file か api の -F k=@file〕か区切りを引用した heredoc で渡す）";
     for (at, (command, mark)) in [("(git push)", "wrapped"), ("env GIT_DIR=../p/.git git push origin main", "redirect")].into_iter().enumerate() {
         let text = assert_host_guard_deny(&run_host_guard_in(&state, &bash_payload(&repo, command)), command);
@@ -761,7 +771,25 @@ fn publish_marks_are_denied_through_the_binary() {
         assert_silent(&run_host_guard_in(&state, &bash_payload(&repo, command)), command);
     }
     assert_eq!(host_guard_records(&state).len(), 2, "通す周は記録を残さない");
-    clean(&[&repo, &state]);
+    clean(&[&repo, &origin, &state]);
+}
+
+/// 埋め込みの manifest で、remote の無い repo の push は rc 2・stdout 0 byte・stderr 1 行（hit=unresolved:target・unresolved の経路）と
+/// 記録 1 行、bare な origin への push は rc 0・記録なし（§22 行 n2）。
+#[test]
+fn publish_push_target_is_unresolved_without_a_remote_and_silent_with_a_bare_origin() {
+    use vessel::hook::host_guard::publish::Reason;
+    let (repo, state) = (git_repo(), tmp());
+    let text = assert_host_guard_deny(&run_host_guard_in(&state, &bash_payload(&repo, "git push origin main")), "remote の無い repo");
+    let want = format!("{NAME}: host-guard deny kind=publish hit=unresolved:target row=host_guard.publish ruling=user 2026-09-27T23:55Z — {}", Reason::Unresolved.parts().1);
+    assert_eq!(text.trim_end(), want, "remote の無い push");
+    let lines = host_guard_records(&state);
+    assert_eq!(lines.iter().map(|line| what_of(line)).collect::<Vec<_>>(), ["host-guard-deny publish"], "記録 1 行: {lines:?}");
+    let (pushable, origin) = pushable_repo();
+    assert_silent(&run_host_guard_in(&state, &bash_payload(&pushable, "git push origin main")), "bare な origin への push");
+    assert_silent(&run_host_guard_in(&state, &bash_payload(&pushable, "git push -q origin feat/x 2>&1")), "-q と redirect を持つ push");
+    assert_eq!(host_guard_records(&state).len(), 1, "通す周は記録を残さない");
+    clean(&[&repo, &pushable, &origin, &state]);
 }
 
 /// 埋め込みの manifest と群を宣言しない置き場（host.toml 無し）で、AC50 (e) の解けない形 4 つは rc 2・stdout 0 byte・stderr 1 行
@@ -843,7 +871,7 @@ fn publish_history_commands_are_denied_through_the_binary() {
 /// 行であることの対）。`exclude` の要素を持つ publish の行の `--rules` では rules-unreadable で断られ、要素を消すと通る（§19 行 m）。
 #[test]
 fn publish_exclusion_host_face_rows_gate_even_an_identifier_free_push() {
-    let (repo, state) = (git_repo(), tmp());
+    let ((repo, origin), state) = (pushable_repo(), tmp());
     let push = bash_payload(&repo, "git push origin main");
     let face = |row: &str| fs::write(state.join("host.toml"), format!("schema = 1\n\n[[publish-exclusion]]\n{row}")).expect("host の面を書ける");
     for (at, (row, line)) in [("phrase = \"a\"\nruling = \"\"\n", 5), ("phrase = \"a\"\n", 3)].into_iter().enumerate() {
@@ -861,7 +889,9 @@ fn publish_exclusion_host_face_rows_gate_even_an_identifier_free_push() {
     let rules = state.join("rules.toml");
     let rules_with = |value: &str| {
         let row = format!("\n[[rule]]\nid = \"host_guard.publish\"\nkind = \"HostGuardPublish\"\nvalue = [{value}]\nenabled = true\nruling = \"r\"\nruled_at = \"2026-09-29\"\n");
-        fs::write(&rules, format!("schema = 1\n{}{row}", denied_rows_text(true))).expect("rules を書ける");
+        let int = |id: &str, kind: &str, value: u64| format!("\n[[rule]]\nid = \"{id}\"\nkind = \"{kind}\"\nvalue = {value}\nenabled = true\nruling = \"r\"\nruled_at = \"2026-09-29\"\n");
+        let limits = int("host_guard.publish_deadline_ms", "HostGuardPublishDeadlineMs", 6000) + &int("host_guard.publish_read_bytes", "HostGuardPublishReadBytes", 8_388_608);
+        fs::write(&rules, format!("schema = 1\n{}{row}{limits}", denied_rows_text(true))).expect("rules を書ける");
     };
     let args = ["--state-dir", &state.display().to_string(), "--rules", &rules.display().to_string()];
     rules_with("\"form repo-name\", \"exclude 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"");
@@ -869,7 +899,7 @@ fn publish_exclusion_host_face_rows_gate_even_an_identifier_free_push() {
     assert!(text.contains("hit=rules-unreadable "), "{text}");
     rules_with("\"form repo-name\"");
     assert_silent(&run_host_guard(&args, &push), "要素を消した manifest");
-    clean(&[&repo, &state]);
+    clean(&[&repo, &origin, &state]);
 }
 
 /// (a) `[memo]` の title か `intake:memo` の label を持つ create は、body-file の本文に 4 節が全部在れば通り、1 つでも

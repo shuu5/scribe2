@@ -51,6 +51,9 @@ fn manifest_with(tmux_enabled: bool, drop: Option<&str>, extra: &str) -> Manifes
     }
     let forms = ["form repo-name", "form object-id", "form tracked-path", "form ledger-id"];
     text.push_str(&row(super::PUBLISH_ROW, "HostGuardPublish", &forms, true));
+    for (id, kind, value) in [("host_guard.publish_deadline_ms", "HostGuardPublishDeadlineMs", 6000), ("host_guard.publish_read_bytes", "HostGuardPublishReadBytes", 8_388_608)] {
+        text.push_str(&format!("\n[[rule]]\nid = \"{id}\"\nkind = \"{kind}\"\nvalue = {value}\nenabled = true\nruling = \"{RULING}\"\nruled_at = \"2026-09-19\"\n"));
+    }
     text.push_str(extra);
     Manifest::parse(&text).unwrap_or_else(|errors| panic!("fixture の manifest を読める: {errors:?}"))
 }
@@ -137,7 +140,8 @@ fn host_guard_kind_each_word_kind_names_its_own_row() {
         assert!(line.contains(&format!(" ruling={RULING} — ")) && line.ends_with(kind.route()), "{line}");
         assert_eq!(line.lines().count(), 1, "1 行: {line}");
     }
-    assert_eq!(denied("git push --force-with-lease origin x", &manifest), None, "語が違う flag は通す");
+    let lease = denied("git push --force-with-lease origin x", &manifest).map(|(what, line)| (what, line.contains(" hit=unresolved:target ")));
+    assert_eq!(lease, Some(("host-guard-deny publish".to_owned(), true)), "語が違う flag は git の種類を通り、cwd の無い場の push は publish が解けない");
 }
 
 /// host_guard.tmux の `enabled = false` で、その行にだけ在る語列を host-guard は通す（他の種類は動く・同じ manifest で
