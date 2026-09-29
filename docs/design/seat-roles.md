@@ -44,8 +44,8 @@
 ## 5. 注入（ADR-0022 §2.4）
 
 - SessionStart の hook（[vessel-hook.md](./vessel-hook.md)）が pane → target → 登録 row で役割を解き、役割ごとの **tracked な雛形 1 枚**（`headless/runner.txt` と同じ形・binary に埋め込む・`seat/brief/<役割名>.txt`）から生成した指示文を stdout で注入する。登録の無い席は 0 byte（断りも出さない）。
-- **雛形の行の規律**: 行は「穴」か「出所 pointer を持つ行」に限る。穴 = `{capabilities}`（権能の行の値の列）/ `{target}` / `{anchor}` / `{role}` / `{ledger}`（台帳の現在値・読めない周は `unknown`＝数に化けさせない・C10。読みは `bd --readonly list --json` の子 process 1 回で、待ち上限は rules 行 `seat.ledger_timeout_s`。置き場は席の子 module 1 枚＝`s2-07l.479.2` の純移動で復元の DATA と共用していた `seat/rebrief.rs` から移した）。pointer の形は `PointerKind`（憲法の id・ADR の節・SRS の要件 id・rules 行の id）で、分類と anchor での解決は指示文の子 module が持つ（`s2-07l.479.2` の純移動: 退避物の命令行と共用していた `seat/wm.rs` から、読み手の残る側だけを指示文の隣へ移した）。**規範文の定義 = pointer を持たない行**（typed・字面の語彙で判定しない）。
-- **雛形が持つもの**（[ADR-0045](../../design-intent/decisions/ADR-0045-seat-role-is-one-orchestrator-and-dispatcher-lands-runs.html) §2 (3)・全部で 11 行）: 席の同一性 3 行（役割 / 権能の行の値 / 台帳の現在値）・憲法の効く部分 5 行（順位・A1・A4.2・A2 と A3・N1〜N3）・役割の特性 3 行（対話面の作法と信頼度・実装を自分で行わない・決定はしご）。**C 条文は注入しない**（CI の門と PreToolUse の guard が執行する・[ADR-0046](../../design-intent/decisions/ADR-0046-constitution-is-enforced-by-gates-and-only-ask-first-and-never-are-injected.html) §2）。§4 で塞ぐ事項（回答・承認・go・merge・code の Edit）は書かない（二重化しない）。
+- **雛形の行の規律**: 行は「穴」か「出所 pointer を持つ行」に限る。穴 = `{capabilities}`（権能の行の値の列）/ `{target}` / `{anchor}` / `{role}` / `{ledger}`（台帳の現在値・読めない周は `unknown`＝数に化けさせない・C10。読みは `bd --readonly list --json` の子 process 1 回で、待ち上限は rules 行 `seat.ledger_timeout_s`。置き場は席の子 module 1 枚＝`s2-07l.479.2` の純移動で復元の DATA と共用していた `seat/rebrief.rs` から移した）/ 起草の置き場（§31・dispatcher.md §33）。pointer の形は `PointerKind`（憲法の id・ADR の節・SRS の要件 id・rules 行の id）で、分類と anchor での解決は指示文の子 module が持つ（`s2-07l.479.2` の純移動: 退避物の命令行と共用していた `seat/wm.rs` から、読み手の残る側だけを指示文の隣へ移した）。**規範文の定義 = pointer を持たない行**（typed・字面の語彙で判定しない）。
+- **雛形が持つもの**（[ADR-0045](../../design-intent/decisions/ADR-0045-seat-role-is-one-orchestrator-and-dispatcher-lands-runs.html) §2 (3)・[ADR-0096](../../design-intent/decisions/ADR-0096-seat-drafts-are-vessel-owned-and-swept-after-writes-stop.html)・全部で 12 行）: 席の同一性 3 行（役割 / 権能の行の値 / 台帳の現在値）・憲法の効く部分 5 行（順位・A1・A4.2・A2 と A3・N1〜N3）・役割の特性 4 行（対話面の作法と信頼度・実装を自分で行わない・決定はしご・起草の置き場〔§31〕）。**C 条文は注入しない**（CI の門と PreToolUse の guard が執行する・[ADR-0046](../../design-intent/decisions/ADR-0046-constitution-is-enforced-by-gates-and-only-ask-first-and-never-are-injected.html) §2）。§4 で塞ぐ事項（回答・承認・go・merge・code の Edit）は書かない（二重化しない）。
 - **席間の連絡の行**（FR44・AC19）: 席が 1 つになったので雛形は席間の連絡の行を持たない（[ADR-0045](../../design-intent/decisions/ADR-0045-seat-role-is-one-orchestrator-and-dispatcher-lands-runs.html) §2 (3)）。器はこの経路を持たない（FR44 の経路設計は ADR-0022 §2.8 の射程外＝道具の機能をそのまま使う）。
 - **xtask の検査**（C14.2・AC17・`cargo xtask check` の 1 項目）: 雛形の穴 ⊆ 定義済みの穴・pointer を持たない行 0・行に在って文に無い権能 0（生成文に権能の名がすべて現れる）。生成文は外形 snapshot（C12.5）。
 - 器は consumer の repo に file を書かない（CLAUDE.md の生成区間を持たない・1 経路）。
@@ -435,6 +435,39 @@ C1 / C5（権能の値は行・裁定 id）・C1.2（生成文に手書きの規
     - どの turn の RED も本体の歯で立つ（同梱される `check_tests.rs` の fixture に頼らない）。これを便の報告に、落ちた歯の名で示す。
   - 変異の対（便の報告に載せる）: 定数 SSOT を旧い字へ戻す → 雛形の歯と歯 1 が赤／`classify_line()` を min だけへ戻す → 歯 2 が赤／先頭の参照だけを見る → 末尾の行が赤／`violations()` の match から Unclassified を外す → `violations()` の assert が赤／xtask の BRIEF_SSOT を戻す → xtask の歯と、現物の雛形に撃つ `cargo xtask check` が赤。
 
+## 31. 席の指示文に起草の置き場の 1 行と穴を 1 つ足す — 12 行目が、器が解いた席の起草の置き場の path を穴で受けて「起草の写しはそこに git の worktree か clone で置く」と告げる（契約表の行 y・[ADR-0096](../../design-intent/decisions/ADR-0096-seat-drafts-are-vessel-owned-and-swept-after-writes-stop.html)・FR42・裁定 user 2026-09-29T11:43Z・memo `s2-07l.737.14`）
+
+やさしく言うと: 器は席の試作の写しを置く場所（起草の置き場・dispatcher.md §33）を持つが、席がそれを知らなければ写しは今までどおり session の一時 dir に溜まる。席が session を始めるたびに器が渡す案内（席の指示文）に 1 行を足し、その席の置き場の path を器が埋めて渡す。席は path を自分で組み立てない。
+
+- 出所: memo `s2-07l.737.14` の候補 1（置き場の持ち主を器にし、器が雛形と rules 行から作る指示文に「起草の写しはそこに置く」を 1 行足す）と、裁定 user 2026-09-29T11:43Z（逐語は台帳）。
+- 現物（main c14588cd・verified）:
+  - 雛形 `crates/scribe2/src/seat/brief/orchestrator.txt` は 11 行（同一性 3・憲法 5・役割の特性 3・全行が `→ 器の SSOT:` の pointer 行）。
+  - `crates/scribe2/src/seat/brief/mod.rs`: 穴は `Hole` の 5 variant と `HOLES`（:27-54）、`render` は 4 引数で `fill` の 1 走査（:154-167）、歯 `seat_brief_holes_are_declared_in_order_with_distinct_braced_names` が穴の数 5 を pin し（:196）、`seat_brief_templates_hold_only_holes_and_resolvable_pointers` が雛形の全 pointer の解決を要る（ADR は file の実在・rules 行は manifest の行の実在・設計 doc は file の実在）。
+  - 読み手は `crates/scribe2/src/hook/mod.rs` の `brief`（:495-536・:532 で `render`）。置き場は hook が解いた state dir（`hooked.dir`）で、`precompact_out`（:547-）が同じ置き場で `seat_dir` を引く前例。記録は bytes だけで本文を持たない（:428-449）。
+  - xtask の写し `crates/xtask/src/seat_brief.rs` の `BRIEF_HOLES`（:19）が穴の字の 5 つを持ち、未知の穴を `unknown-hole` で落とす。
+  - 行数 11 の pin は e2e に 10 か所: `crates/scribe2-boundary/tests/e2e/hook.rs` の歯 3 本（:2161・:2201・:2274）と helper 3 本（`brief_and_recent` :2411・`precompact_section` :2509・`brief_and_recent_with_rules` :2585）、`crates/scribe2-boundary/tests/e2e/hook/session.rs` の歯 3 本（:402・:473・:748 と :757）。外形 snapshot `e2e__hook__hook_brief_orchestrator.snap` は 11 行。
+- 形（番号は行 y の done と 1:1）:
+  1. **穴**: `Hole` の末尾に起草の置き場の variant を 1 つ足し（字は波括弧の drafts）、`HOLES` の末尾に足す（6 つ・宣言順）。値は「その席の起草の置き場の絶対 path」（dispatcher.md §33 形 1 の関数と hook の state dir から・`std::path::absolute`）。
+  2. **生成**: `render` は引数を 1 つ足して（5・R-C4-4.args の上限の内側）穴を同じ 1 走査で埋める（値の中の穴の字は展開しない）。行の追加も削除もしない。
+  3. **雛形の 12 行目**（役割の特性の 4 行目・末尾に足す・前の 11 行は 1 字も変えない）: 「起草の写し（試作の repo の写し）は {drafts} の下に git の worktree か clone で置く（書きが rules 行 seat.drafts_stale_h の時間無い build と依存の置き場は器が消し、木と追跡される file は消さない） → 器の SSOT: ADR-0096 / rules 行 seat.drafts_stale_h / docs/design/dispatcher.md §33」。値（6 時間）は書かない（C1・値は rules 行）。
+  4. **読み手**: hook の `brief` が穴の値を解いて `render` へ渡す。dir は作らない（席の git が作る・在るかを見ない）。解けない周は無い（state dir と target は注入の前に解けている）。
+  5. **xtask の写し**: `BRIEF_HOLES` の末尾に同じ字を足す（core の `HOLES` と同じ 6 つ）。
+  6. **行数**: module doc と歯の行数を 12 に（ADR-0045 §2 (3) を ADR-0096 が部分 supersede）。
+- 触らない: `PointerKind` と解決・`classify_line` と `violations`・前の 11 行の字と順・hook の出す順（指示文 → 圧縮の直前の 1 枠 → 復帰の DATA）と記録の what と bytes の数え方・権能の行・`seat register` / `seat launch`（置き場を作らない）。
+- 却下: path を字で説明して穴を足さない（席が潰し方と state dir の解決を自分で行う・潰し方を誤れば別の dir に置き掃かれない）／置き場を返す subcommand を足す（口が増える・席がそれを撃つ作法が散文になる）／指示文でなく CLAUDE.md や skill に書く（器は消費側の repo に file を書かない・§5）／置き場を hook が作る（SessionStart に fs の書きを足す・作らなくても git が作る）。
+- 限界:
+  - 1 行は案内で門ではない。席が一時 dir や anchor の `.worktrees/` に写しを置くことは止めない（器で塞ぐ案は別 memo）。
+  - 新しい行は PATH の binary を入れ替えた後に起こし直した席（か圧縮・clear の後）から届く。
+  - 消費側の席も同じ行を受け取り、pointer は器の文書を指す（ADR-0090 の印）。
+- 歯（接頭辞 seat_brief_drafts_ と hook_brief_drafts_・`grep -rn` は crates / docs で 0 件・2026-09-29）:
+  - lib（`crates/scribe2/src/seat/brief/mod.rs` の歯の区間）: (a) `HOLES` が 6 つで末尾が起草の置き場の穴、その字が波括弧の drafts・`render` が穴を値で 1 走査で埋め（値に `{role}` を持たせても展開しない）、雛形の行数が 12 で、12 行目だけがその穴を 1 回持ち rules 行 seat.drafts_stale_h を名指す。
+  - xtask（`crates/xtask/src/seat_brief.rs` の歯の区間）: (b) 穴 drafts を持つ pointer 行の雛形の fixture で seat-brief が ok（base は unknown-hole で落ちる）。
+  - e2e（`crates/scribe2-boundary/tests/e2e/hook.rs`・`hook_brief_carries_the_ask_first_and_role_lines_without_c_articles` の後ろ）: (c) 登録した席の SessionStart で指示文が 12 行、最後の行が `<state_dir>/seat/<潰した target>/drafts` の絶対 path と rules 行 seat.drafts_stale_h を持ち、その dir は作られていない。
+  - 直す既存の歯（同じ便）: lib の `seat_brief_holes_are_declared_in_order_with_distinct_braced_names`（5 → 6）と `seat_brief_render_fills_holes_in_one_pass_without_adding_lines`（`render` の引数）、e2e の 11 の pin 10 か所を 12 に（歯 6 本と helper 3 本）・`render` を字で呼ぶ 3 か所に穴の値を渡す・外形 snapshot に 12 行目。直した歯は base で落ちる（base の雛形は 11 行・`render` は 4 引数で overlay が compile できない）ので retroactive の札は要らない。
+- base で RED の理由: (a) は base に穴の variant が無く compile できない（写した後の compile error は RED）、(b) は base の `BRIEF_HOLES` が drafts を知らず unknown-hole、(c) は base の指示文が 11 行で置き場の行を持たない。
+- 順: 行 ah の着地の後（雛形の pointer が名指す rules 行 seat.drafts_stale_h が manifest に在ることを `seat_brief_templates_hold_only_holes_and_resolvable_pointers` が要る）。
+- 着地の後: PATH の binary を入れ替え、席を起こし直すか圧縮の後から新しい行が届く。消費側の席へ「起草の写しは指示文の 12 行目の置き場に置く（書きが 6 時間無い build の置き場は器が消す）」を 1 行知らせる。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -601,4 +634,16 @@ verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail seat_brief_vessel_
 size = "S"
 growth = ["crates/scribe2/src/seat/brief/mod.rs:45", "crates/scribe2/src/seat/brief/pointer.rs:3", "crates/xtask/src/seat_brief.rs:8"]
 done = "(1) 雛形 11 行の行末の印が → 器の SSOT: で、印より前の字と参照の列と行の数と順は 1 字も変わらず、core の pointer.rs の印の定数と xtask の seat_brief.rs の BRIEF_SSOT が同じ字で、旧い印 → SSOT: だけの行は pointer を持たない行（Bare）になる (2) classify_line は印の後ろの参照を 1 本残らず分類し、1 本でも分類できない参照が在る行は LineKind の新しい値 Unclassified（最初の 1 本の字）になって violations が行番号つきで返し、参照 0 本の行は Bare・全部分類できる行は最も強い kind の Pointed のまま (3) 雛形の歯は分類できない参照を黙って飛ばさず役割と字を名指して落ち、分類できた参照は今までどおり Resolved を要る (4) e2e の歯 1 本と helper 1 本が全行に → 器の SSOT: が在り → SSOT: が無いことを字で見て、外形 snapshot が新しい印で更新される (5) xtask の seat-brief の fixture 3 か所が新しい印で、旧い印だけの行が no-pointer で落ちる fixture が 1 つ増える、の 5 つを seat_brief_vessel_ssot_ の in-file の歯 2 本と既存の歯（seat_brief_classify_line_separates_holes_pointers_and_bare_prose・seat_brief_templates_hold_only_holes_and_resolvable_pointers・hook_brief_ の e2e・hook_session_recent_lists_wip_and_windowed_beads_after_the_brief・xtask の seat_brief_rejects_bare_lines_unknown_holes_and_dropped_capabilities）が測り、PointerKind の列と形・Anchor の解決・穴の列・行数 11・hook の出す順と記録の what・rules 行は 1 字も変わらず、base では in-file が Unclassified の不在で compile できず、e2e と xtask が新しい印の不在で RED"
+
+[[contract]]
+id = "y"
+title = "席の指示文に起草の置き場の 1 行と穴を 1 つ足す — 12 行目（役割の特性の 4 行目・末尾）が、hook が解いた席の起草の置き場の絶対 path を新しい穴で受けて、起草の写しをそこに git の worktree か clone で置くことと、書きが rules 行 seat.drafts_stale_h の時間無い build と依存の置き場は器が消し木は消さないことを告げる（穴は core と xtask の写しの 2 面で 6 つ・render は引数 5・前の 11 行と pointer の分類は不変・ADR-0096・FR42）"
+req = ["FR42"]
+section = "31"
+touches = ["crate::seat::brief::Hole"]
+write-set = ["crates/scribe2/src/seat/brief/orchestrator.txt", "crates/scribe2/src/seat/brief/mod.rs", "crates/scribe2/src/hook/mod.rs", "crates/xtask/src/seat_brief.rs", "crates/scribe2-boundary/tests/e2e/hook.rs", "crates/scribe2-boundary/tests/e2e/hook/session.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__hook__hook_brief_orchestrator.snap"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail seat_brief_", "cargo nextest run -p xtask --no-tests=fail seat_brief_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail hook_brief_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail hook_precompact_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail hook_session_recent_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail hook_recovery_edge_"]
+size = "S"
+growth = ["crates/scribe2/src/seat/brief/mod.rs:40", "crates/scribe2/src/hook/mod.rs:4", "crates/xtask/src/seat_brief.rs:14"]
+done = "(1) Hole の末尾に起草の置き場の variant が在り、字は波括弧の drafts で、HOLES は宣言順の 6 つで末尾がそれ (2) render が引数を 1 つ足して（5）穴を同じ 1 走査で埋め、値の中の穴の字を展開せず、行の追加も削除もしない (3) 雛形の 12 行目（末尾）が穴を 1 回持ち、起草の写しをその下に git の worktree か clone で置くことと、書きが rules 行 seat.drafts_stale_h の時間無い build と依存の置き場は器が消し木と追跡される file は消さないことを述べ、pointer は ADR-0096 / rules 行 seat.drafts_stale_h / docs/design/dispatcher.md §33 で、値の 6 は書かず、前の 11 行は 1 字も変わらない (4) hook の brief が注入の置き場の state dir と target から起草の置き場の絶対 path（行 ah の seat/mod.rs の関数と std の path の absolute）を解いて render へ渡し、dir は作らない (5) xtask の BRIEF_HOLES の末尾に同じ字が在り、core の HOLES と同じ 6 つ (6) module doc と歯の行数が 12 で、PointerKind と解決・classify_line と violations・hook の出す順（指示文 → 圧縮の直前の 1 枠 → 復帰の DATA）と記録の what と bytes の数え方・権能の行・seat register と seat launch は変わらない 歯: seat_brief_drafts_ の lib 1 本（brief/mod.rs の歯の区間）の (a) HOLES が 6 つで末尾が起草の置き場の穴・render が穴を 1 走査で埋め値に {role} を持たせても展開しない・雛形が 12 行で 12 行目だけがその穴を 1 回持ち rules 行 seat.drafts_stale_h を名指す、xtask の seat_brief_drafts_ の 1 本（seat_brief.rs の歯の区間）の (b) 穴 drafts を持つ pointer 行の雛形の fixture で seat-brief=ok、hook_brief_drafts_ の e2e 1 本（hook.rs の hook_brief_carries_the_ask_first_and_role_lines_without_c_articles の後ろ）の (c) 登録した席の SessionStart で指示文が 12 行・最後の行が state dir の seat/<潰した target>/drafts の絶対 path と rules 行 seat.drafts_stale_h を持ち・その dir は作られていない、直す既存の歯 seat_brief_holes_are_declared_in_order_with_distinct_braced_names（6）と seat_brief_render_fills_holes_in_one_pass_without_adding_lines（引数）と e2e の行数の pin 10 か所（hook.rs の歯 3 本と helper 3 本・session.rs の歯 3 本〔:748 と :757 は同じ歯〕）が 12 で、render を字で呼ぶ 3 か所が穴の値を渡し、外形 snapshot hook_brief_orchestrator が 12 行目を持ち、直した歯は base の 11 行と 4 引数の render で RED なので retroactive の札は要らない・base は (a) が穴の variant の不在で compile できず (b) が unknown-hole で (c) が 11 行なので RED"
 <!-- contracts:end -->
