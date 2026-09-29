@@ -382,6 +382,59 @@ C1 / C5（権能の値は行・裁定 id）・C1.2（生成文に手書きの規
 - 限界: 1 句が出るのは「`missing` が `Launch` を含み、かつ窓が降りた」周だけ。停止の前後に他の権能付きの口が並ぶ行（約束 5・`role_guard_stop_window_runs_to_the_end_of_the_line`）でも `Launch` が欠ければ出る（他の欠けた権能と同時に名指されても句は 1 回だけ）。`refused`（行が無い・登録が無い・anchor が無い等）の断りは対象外＝停止の窓を読む前に落ちる周（`--pane` が無い等）には出ない。
 - 却下: SessionStart の権能の行（§5）に同じ句を常設する（memo 候補 2）— 全 session の指示文が伸び、実際に窓が降りた周だけを狙えず、事実と無関係に散文が肥大する。何もしない（memo 候補 3）— 同型の誤読が同日に 2 席で起きており、2 例目の昇格条件（別便）を待つ間も同じ手戻りが起きうる。`missing` の判定そのものを変えて降りた窓も `stop` のまま通す — ADR-0048 の allowlist を緩め、fail-closed の意図（窓の外は起動の権能）を壊す。
 
+## 30. 席の指示文の出所の印を「→ 器の SSOT:」にし、分類できない参照を 1 本でも持つ行を落とす（契約表の行 x・[ADR-0090](../../design-intent/decisions/ADR-0090-seat-brief-marks-the-vessel-ssot-and-every-reference-classifies.html)・memo `s2-07l.739`）
+
+やさしく言うと: 器は SessionStart で、登録された全ての席（器の repo の席も、別の repo＝消費側の席も）へ同じ 11 行の指示文を渡す。各行の末尾の「→ SSOT: 憲法 N3」は器の repo の文書を指すが、字からはそれが分からない。消費側の repo も自分の憲法や ADR や設計 doc を持っている。字の近い条や同じ名の文書が在れば、席は自分の repo の文書と読み違える（実測 1 件）。そこで印そのものを「→ 器の SSOT:」に替え、どの行を 1 行だけ抜き出しても器の文書だと読めるようにする。あわせて、印の後ろに器が分類できない参照（例「憲法 N-7」「器の憲法 N3」）が 1 本でも在る行を、雛形の歯が黙って通していた穴を塞ぐ。
+
+- 出所: 消費側の席の報告（2026-09-29）と、写しの表の突き合わせ（memo `s2-07l.739`・要旨・逐語は台帳）。その repo の憲法にも器の条と字の近い id の条（中身は別）が在り、席が指示文の「憲法 N3」を自分の repo の条と読みうる、という指摘。同じ害は ADR の番号と docs/design の path にも及ぶ（消費側の repo に同じ名の別文書が在れば）。印 `→ SSOT:` は器の前の版の作業記憶の命令行の印（ADR-0018 §2.2）で、消費側の repo の文書にもその repo 自身の文書を指す印として残りうる。つまり印の字そのものが「自分の repo の SSOT」と読まれる。
+- 現物（main 7c887a3f・verified）:
+  - 雛形 `crates/scribe2/src/seat/brief/orchestrator.txt` の 11 行はすべて行末に `→ SSOT:` を持つ（:8 が 憲法 N1 / N2 / N3・:11 が 憲法 C17 / ADR-0044・:9 と :10 が docs/design の path・:4 が docs/constitution.md）。hook の `brief()`（`crates/scribe2/src/hook/mod.rs` :491-535）は `render()` の結果を字のまま stdout へ出す（:528・:531）＝pointer は解かない。
+  - 印の字は `crates/scribe2/src/seat/brief/pointer.rs` の定数 SSOT（:13）で、`references()`（:350-361）が最後の印の後ろを ` / ` などで切る。xtask の seat-brief の測り（`crates/xtask/src/seat_brief.rs`）は同じ字の写し BRIEF_SSOT（:21）を持ち、印の後ろに pointer の字が 1 つでも在れば行を通す（:78・:81）。
+  - 分類の穴: `classify_line()`（`crates/scribe2/src/seat/brief/mod.rs` :101-118）は分類できた参照のうち最も強い kind を取る（:113-117 の filter_map と min）。参照のうち 1 本でも分類できれば行は通る。雛形の歯 `seat_brief_templates_hold_only_holes_and_resolvable_pointers`（:222-242）は分類できない参照を `continue` で飛ばす（:235-237）。`is_constitution_id()`（`pointer.rs` :145-160）が受けるのは `C<n>[.<m>]` / `A<d>[.<d>]` / `N<d>[.<d>]` の形だけなので、「憲法 N-7」「器の憲法 N3」は分類されない。同じ行に分類できる参照が 1 本在れば検査の外に出る（違反 0 のまま）。
+  - 印を字で持つ .rs の行は 5 file に 16 行: `pointer.rs` 2・`mod.rs` 8（doc 1・歯の fixture 7）・xtask の `seat_brief.rs` 3・`check_tests.rs` 1・e2e の `crates/scribe2-boundary/tests/e2e/hook.rs` 2（歯 `hook_brief_carries_the_ask_first_and_role_lines_without_c_articles` の :2275 と helper `brief_and_recent()` の :2409）。ほかに外形 snapshot `e2e__hook__hook_brief_orchestrator.snap` の 11 行。印の字を決めているのは ADR-0018 §2.2。ADR-0022 §2.4 がそれを「同じ検査」として受け、ADR-0046 の用語「pointer 行」が字で定義する（ADR-0090 が一部 supersede）。
+  - 生成文を字で読むのは器の中の歯だけで、器の外に指示文の行を読む道具は見つからない（実測）。
+- 形（1 つずつ歯が測る・行 x の done と 1:1）:
+  1. **印を替える**: 雛形 11 行の行末の印を `→ 器の SSOT:` に替える（印より前の字・参照の列・行の数と順は 1 字も変えない）。`pointer.rs` の定数 SSOT と、xtask の `seat_brief.rs` の定数 BRIEF_SSOT を同じ字にする。2 つは写しなので、片方だけ替えると現物の雛形で `cargo xtask check` の seat-brief が 11 行とも no-pointer になり、既存の門がずれを捕まえる。旧い印 `→ SSOT:` だけの行は pointer を持たない行（LineKind の Bare・規範文）になる。
+  2. **分類できない参照を 1 本でも持つ行を落とす**: `classify_line()` は印の後ろの参照を 1 本残らず `pointer::classify` に掛ける。1 本でも分類できない参照が在れば、LineKind の 6 つ目の値 Unclassified（最初の 1 本の字を持つ）を返し、`violations()` はそれを違反に数える。参照が 0 本（印が無い・印の後ろが空）の行は今までどおり Bare、全部分類できた行は今までどおり最も強い kind の Pointed。台帳の id（雛形は台帳の prefix を渡さない）と「user 裁定 …」のような参照も Unclassified になる（今までも違反・値だけが Bare から変わる）。
+  3. **雛形の歯は黙って飛ばさない**: `seat_brief_templates_hold_only_holes_and_resolvable_pointers` の `continue` を、役割と参照の字を名指す失敗に替える。形 2 で `violations()` が先に落とすので現物では届かない、防御の 2 段目。分類できた参照は今までどおり Resolved を要る。
+  4. **e2e と外形**: e2e の 2 か所（:2275・:2409）は「全行が `→ 器の SSOT:` を持ち、`→ SSOT:` を持たない」を字で見る。定数を読まずに字を書く（base の生成文と比べて赤になるように）。外形 snapshot は新しい印で更新する。
+  5. **xtask の fixture**: seat-brief の fixture 3 か所（`check_tests.rs` :149・`seat_brief.rs` :110・:113）を新しい印に替える。旧い印だけの行が `no-pointer` で落ちる fixture を 1 つ足す。
+- 触らない:
+  - PointerKind の列・形・宣言順（前置き語の表と `is_constitution_id()`、e2e の proptest 2 本 `prop_brief_pointer_` は不変）
+  - Anchor の解決・穴の列（5 つ）・生成文の行数 11・hook の出す順と記録の what・rules 行
+  - xtask の seat-brief の判定の形（印の後ろに pointer の字が 1 つ在れば通す・限界へ）
+  - 過去の § が引いた旧い印の行（dialogue-surface.md §4 と同じ doc の契約表の done・履歴）
+- 順: ADR-0090（印の字・「pointer を持つ行」の読み・却下）と本 § と行 x を同じ docs PR で land → 行 x の便。land の後も、PATH の binary を入れ替えるまで既存の席の指示文は旧い印のまま。入れ替えた後に起こし直された席から新しい印になる。
+- 限界:
+  - 印が言うのは「どの repo の文書か」だけ。消費側の repo から器の文書を開く道（器の repo の置き場）は与えない（絶対 path は tracked な file に書かない）。
+  - 「器」の語が席に通じるかは、指示文の 1 行目（器が雛形と rules 行から生成した）と名乗りの行 `[<NAME>/SessionStart]` に頼る。
+  - xtask の seat-brief は印の後ろに pointer の字が 1 つ在る行を通したままで、全参照の分類は core の歯（nextest）だけが測る。
+  - 消費側の repo が自分の文書に使う `→ SSOT:` は器の射程の外（器は消費側の repo に file を書かない・§5）。
+- 却下:
+  - (a) 各参照の頭に「器の」を付ける（「器の憲法 N3」）: 21 参照に同じ語が並ぶ。解き手の前置き語の表に 2 段の前置きを足すことになり、kind ごとに形が 2 通りになる（互いに素の性質を測り直す）。
+  - (b) binary の名を字で書く: 名の字は 1 か所だけに置く（name-literal）。穴を足すと、閉じた穴の列（core と xtask の写し・件数の pin）が 5 → 6 になる。
+  - (c) 指示文の冒頭に「以下の SSOT は器の文書」の 1 行を足す: 行は 1 行ずつ抜き出して読まれる。行数 11 の決まり（ADR-0045 §2 (3)）も動く。
+  - (d) 印を残し、直後に持ち主の語を置く（「→ SSOT: 器の 憲法 N3」）: 語が ` / ` の後ろの参照にも掛かるかが字から読めない。消費側の repo が自分の文書に使う印とも字が同じまま。
+  - (e) 参照を html の anchor 付きの path で書く: repo 相対の path は消費側の repo にも同じ名で在りうるので、曖昧さが残る。
+  - (f) 歯の `continue` だけを失敗に替える（src を触らない）: 今の雛形には分類できない参照が無いので base でも HEAD でも緑。min へ戻す変異も捕まえない＝空虚な歯。
+  - (g) 前置き語を持つ参照だけを赤にする: private な前置き語の表を外へ出す口が要る。前置き語の無い字を印の後ろに置けば散文の逃げ道が残る（C1.2）。
+  - (h) 何もしない: 消費側の読み違えが実測で 1 件ある。
+- 歯: in-file（`crates/scribe2/src/seat/brief/mod.rs`）に新しい接頭辞 `seat_brief_vessel_ssot_` の歯を 2 本足す。接頭辞は crates/ と docs/ で 0 件、契約表の検証行の filter の語と部分文字列でも衝突しない。
+  1. `seat_brief_vessel_ssot_marks_vessel_documents_and_the_bare_mark_is_no_pointer`: 「x → 器の SSOT: 憲法 N3」が Pointed(Constitution)、「x → SSOT: 憲法 N3」が Bare。`references()` は前者で 1 本、後者で 0 本を返す（形 1）。
+  2. `seat_brief_vessel_ssot_rejects_a_line_with_any_unclassified_reference`: 分類できない参照が先頭（「憲法 N-7 / ADR-0044」）・中（「ADR-0044 / rules 行 Role.X / 憲法 N3」）・末尾（「ADR-0044 / 器の憲法 N3」）に在る 3 行が、それぞれ Unclassified(その字)。全部分類できる行（「ADR-0044 / 憲法 N3」）は Pointed(Constitution)。`violations()` は Unclassified の行を行番号つきで返す（形 2）。
+  - 既存の歯の手入れ:
+    - `seat_brief_classify_line_separates_holes_pointers_and_bare_prose`: fixture 7 か所を新しい印へ。分類できない参照だけの 2 行（user 裁定・台帳の id）は期待を Bare から Unclassified へ、印の無い 2 行は Bare のまま。
+    - `seat_brief_templates_hold_only_holes_and_resolvable_pointers`（形 3）
+    - e2e の `hook_brief_carries_the_ask_first_and_role_lines_without_c_articles` と helper `brief_and_recent()`（形 4・helper は `hook_session_recent_lists_wip_and_windowed_beads_after_the_brief` が撃つ。この歯の file `crates/scribe2-boundary/tests/e2e/hook/session.rs` は本行で中身を変えないので、write-set に置き場だけの印 `=` で載せる）
+    - `hook_brief_orchestrator_external_form`（snapshot）
+    - xtask の `seat_brief_rejects_bare_lines_unknown_holes_and_dropped_capabilities`（形 5）
+  - base で RED の理由（機能不在）:
+    - in-file: Unclassified が base に無いので overlay が compile できない（flip-check は overlay 後の compile error を RED と数える）。新しい印の fixture も base は Bare と読む。
+    - e2e: base の生成文が `→ 器の SSOT:` を持たない。
+    - xtask: base の BRIEF_SSOT が新しい印を知らないので、健全な木の fixture が no-pointer になり、旧い印だけの fixture も落ちない。
+    - どの turn の RED も本体の歯で立つ（同梱される `check_tests.rs` の fixture に頼らない）。これを便の報告に、落ちた歯の名で示す。
+  - 変異の対（便の報告に載せる）: 定数 SSOT を旧い字へ戻す → 雛形の歯と歯 1 が赤／`classify_line()` を min だけへ戻す → 歯 2 が赤／先頭の参照だけを見る → 末尾の行が赤／`violations()` の match から Unclassified を外す → `violations()` の assert が赤／xtask の BRIEF_SSOT を戻す → xtask の歯と、現物の雛形に撃つ `cargo xtask check` が赤。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -536,4 +589,16 @@ write-set = ["crates/scribe2/src/hook/role_guard.rs", "crates/scribe2-boundary/t
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail role_guard_stop_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail hook_role_stop_"]
 size = "S"
 done = "(1) Subject::Capabilities が第 2 欄（bool）を持ち、その値は command 行に停止の窓が名指しでなく降りた occurrence が 1 つ以上在ったかを、is_self と named_stop を呼ぶだけの新しい pure な fn が計算し、Subject::Path の 2 枝は常に偽 (2) judge の missing / invalid を組む match が第 3 の要素としてその bool を運び、denied の引数に足される (3) denied は missing が Capability::Launch を含みかつ運ばれた bool が真の周だけ、今の行の末尾に「hint=名指しの停止は --run <id> と置き場・repo・rules の値の対だけの 1 行（前にも後ろにも何も付けない）で stop の権能で通る」を足し、条件が揃わない断り文（stop を持たない行での名指しの停止・窓が降りていない素の起動を含む missing）は 1 字も変わらない (4) subject は Bash 面で command を 1 度だけ束ねて capabilities_of と新しい fn の両方へ渡し、capabilities_of の戻り値の型と named_stop / stop_window_is_named / STOP_FLAGS / SHELL_CHARS / CAPABILITY_COMMANDS / refused（§13 の route=）/ role.orchestrator の rules 行の値は 1 字も変わらず、rules 行を 1 本も足さない、の 4 つを role_guard_stop_judge_requires_the_stop_capability_from_the_row（in-file・既存の assert を反転）と hook_role_stop_unnamed_forms_fall_to_launch_and_are_denied（e2e・既存の assert を反転・UNNAMED_STOP_WINDOWS の 8 形と trailing の計 9 形で測る）が測り、base では両方の反転した assert が hint= を持たない現状の行に対して RED"
+
+[[contract]]
+id = "x"
+title = "席の指示文の出所の印を → 器の SSOT: に替えて消費側の repo の同名の文書と字で分け、印の後ろに分類できない参照を 1 本でも持つ行を雛形の違反にする（参照の形と解決・行の本文と数は不変・ADR-0090）"
+req = ["FR42", "NFR4"]
+section = "30"
+touches = ["crate::seat::brief::LineKind"]
+write-set = ["crates/scribe2/src/seat/brief/orchestrator.txt", "crates/scribe2/src/seat/brief/pointer.rs", "crates/scribe2/src/seat/brief/mod.rs", "crates/xtask/src/seat_brief.rs", "crates/xtask/src/check_tests.rs", "crates/scribe2-boundary/tests/e2e/hook.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__hook__hook_brief_orchestrator.snap", "=crates/scribe2-boundary/tests/e2e/hook/session.rs"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail seat_brief_vessel_ssot_", "cargo nextest run -p scribe2 --lib --no-tests=fail seat_brief_classify_line_separates_holes_pointers_and_bare_prose", "cargo nextest run -p scribe2 --lib --no-tests=fail seat_brief_templates_hold_only_holes_and_resolvable_pointers", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail hook_brief_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail hook_session_recent_lists_wip_and_windowed_beads_after_the_brief", "cargo nextest run -p xtask --no-tests=fail seat_brief_rejects_bare_lines_unknown_holes_and_dropped_capabilities"]
+size = "S"
+growth = ["crates/scribe2/src/seat/brief/mod.rs:45", "crates/scribe2/src/seat/brief/pointer.rs:3", "crates/xtask/src/seat_brief.rs:8"]
+done = "(1) 雛形 11 行の行末の印が → 器の SSOT: で、印より前の字と参照の列と行の数と順は 1 字も変わらず、core の pointer.rs の印の定数と xtask の seat_brief.rs の BRIEF_SSOT が同じ字で、旧い印 → SSOT: だけの行は pointer を持たない行（Bare）になる (2) classify_line は印の後ろの参照を 1 本残らず分類し、1 本でも分類できない参照が在る行は LineKind の新しい値 Unclassified（最初の 1 本の字）になって violations が行番号つきで返し、参照 0 本の行は Bare・全部分類できる行は最も強い kind の Pointed のまま (3) 雛形の歯は分類できない参照を黙って飛ばさず役割と字を名指して落ち、分類できた参照は今までどおり Resolved を要る (4) e2e の歯 1 本と helper 1 本が全行に → 器の SSOT: が在り → SSOT: が無いことを字で見て、外形 snapshot が新しい印で更新される (5) xtask の seat-brief の fixture 3 か所が新しい印で、旧い印だけの行が no-pointer で落ちる fixture が 1 つ増える、の 5 つを seat_brief_vessel_ssot_ の in-file の歯 2 本と既存の歯（seat_brief_classify_line_separates_holes_pointers_and_bare_prose・seat_brief_templates_hold_only_holes_and_resolvable_pointers・hook_brief_ の e2e・hook_session_recent_lists_wip_and_windowed_beads_after_the_brief・xtask の seat_brief_rejects_bare_lines_unknown_holes_and_dropped_capabilities）が測り、PointerKind の列と形・Anchor の解決・穴の列・行数 11・hook の出す順と記録の what・rules 行は 1 字も変わらず、base では in-file が Unclassified の不在で compile できず、e2e と xtask が新しい印の不在で RED"
 <!-- contracts:end -->
