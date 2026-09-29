@@ -443,6 +443,79 @@ xtask 側: `crates/xtask/src/genmanifest.rs` の `#[cfg(test)]` に、render の
   - 不変で GREEN（検証行に載せる）: 行 j の `host_guard_publish_`（lib と e2e・読みと no-row の 1 行・両行）と `host_guard_kind_denies_force_push_in_a_repo_without_marker`（git の種類の断りの 1 行・行 k）。行 k の歯は行 k2 の後も GREEN のまま（done の workspace の nextest が測る）で、行 k2 の検証行には載せない（行 k の接頭辞を行 k2 の filter 語にすると、行 k の歯の名が他の行の filter 語を持つ形になる）。行 k2 の歯も同じ理由で、行 k3 の後も GREEN のまま（done の workspace の nextest が測る）で、行 k3 の検証行には載せない。
   - base で RED の理由: 行 k の lib は印の型と関数を呼ぶ（main に無い＝写した後の compile error は RED・flip-check の規則）・e2e は main の publish が行の在る周を全部通す（2 本が rc 0）。行 k2 の lib は形の型と heredoc の関数を呼ぶ（行 k の着地の後の base に無い＝compile error）・e2e は行 k の base で 4 形が印を持たず rc 0（機能不在）・heredoc の台帳の notes は行 k の base で wrapped に当たる。行 k3 の lib は行 k2 の形の関数を呼ぶ（行 k2 の着地の後の base で compile し、広げた読みの当たりが外れる＝機能不在）・e2e は行 k2 の base で `gh api graphql -f query="$Q"` が書きでなく、`git push --m origin` と `gh gist edit abc -` が形を持たず rc 0。
 
+## 19. publish の照合の核 — 出ていく字面を隣の private repo の識別子の 4 形で照合する pure な部品: SHA-256 を std だけで書く（行 m）、repo の名を成分の並びで大小を畳んで当て、除外の digest の字句の中を落とし、当たりを件数と先頭 5 件に畳む（行 m2）、object id と tracked path と台帳 id の候補の切り出しと集合の演算、gh の本文の読み（行 m3）（契約表の行 m / m2 / m3・[ADR-0078](../../design-intent/decisions/ADR-0078-host-guard-stops-neighbor-identifiers-before-publish.html)・FR80 / AC50・`s2-07l.696`・裁定 user 2026-09-27T22:21Z / 23:55Z）
+
+やさしく言うと: 公開の repo へ出ていく文字の中から、同じ machine の隣の private repo を指す 4 種類の手がかり（repo の名・git の object id・file の path・台帳の id）を探す部品を、git も gh も撃たない純粋な部品として作る。repo の名は、大文字と小文字を区別せず、`-` や `.` や `/` や空白で区切った部品の並びで比べる。持ち主が「無害」と裁定した字句（その字句の指紋＝SHA-256 だけを規則の行に置く）の中の当たりは数えない。材料（隣の repo の名や object の一覧）を git と gh に問うて集め、断りの文を出す配線は、後の行（行 n 以後）が持つ。
+
+- 何が起きているか（main 7c4ab0a1・verified）: 行 j / k / k2 / k3 は、公開の segment を読み、規則の行が無い周と字面で解けない周を断る。解けた公開の segment は、隣の private repo の名を持っていても全部通る（§17 の限界「解けた公開の segment は本 § では通る」）。照合の材料は揃っている: 形の記号と除外の digest の読み手 `elements`（`crates/scribe2/src/hook/host_guard/publish.rs` :209・`Elements` :200・`Form` :167）、区切りを引用した heredoc の判定 `readable`（:435）、gh の本文と本文の file の値の読み `words_of`（:518）。照合そのものは無い。SHA-256 は `crates/` に無く（hash は `crates/scribe2/src/hook/vessel/digest.rs` の FNV-1a 64 だけ）、core の crate の実行時の依存は 0（NFR3）。
+- 出所: 持ち主の裁定 2026-09-27T22:21Z（一般語の repo の名も除かない）と 23:55Z（repo の名は区切った成分ごとに照合し、無害と裁定した字句の除外の一覧だけを除く・一覧に足すには裁定が要る）。照合の単位は SRS の glossary「識別子の 4 形」が正本で、本 § はその字面の切り方と、照合の核が受ける材料の形を決める。行 k2 の形 2 が「行 m の走査が読む」とした heredoc の本文の読みも本 § が持つ。
+- 現物（verified・main 7c4ab0a1・行数は幅 120 で畳んだ数）:
+  - publish.rs は 1327 行（src 895・歯 432）で、上限 1500 の余地は 173。core の src の本体は 57907 / 66000。
+  - 埋め込みの行 host_guard.publish の値は `form` の 4 記号だけで、`exclude` は 0 件（`rules/manifest.toml` :688〜:693）。
+  - flip-check は base に無い src の file を base へ写さない。写せる差が 1 つも無い便は not-flippable で落ちる（`crates/xtask/src/flipcheck.rs` の overlay と not_flippable）。
+  - clippy は `indexing_slicing` と `unwrap_used` を deny、関数は 60 行と引数 5 つまで（workspace の lints と clippy.toml）。
+- 大きさ: 試作（repo の外・2026-09-29）で測ると、行 m が約 93 行、行 m2 が約 309 行、行 m3 が約 197 行（歯を含む・幅で畳む）。1 行にすると NFR2 の 550 を越え、2 行でも 1 本目が 300 を越えるので 3 つに割る。
+- 形（行 m・sha256・行 m の done と 1:1）:
+  1. **置き場**: 行 m の write-set の `+` の file（publish の module の子・`pub`）。publish の module は子の宣言を 1 行足すだけ。I/O と子 process を持たない。
+  2. **1 関数**: bytes を受けて、FIPS 180-4 の SHA-256 を小文字の 16 進 64 字で返す（padding・64 回の圧縮・加算は wrapping・添字を使わない）。返す字面は `elements` が受ける `exclude <digest>` の形（16 進 64 字の小文字）と同じ。
+  3. **行 m は足さない**: 字面の切り方・照合・当たり（行 m2）。
+- 形（行 m2・名の照合と畳み・行 m2 の done と 1:1）:
+  1. **置き場**: 照合の核は行 m2 の write-set の `+` の file（publish の module の子・`pub`）。publish の module は子の宣言を 1 行足すだけ。pure（引数と戻りだけ・I/O と子 process を持たず、git も gh も撃たない）。
+  2. **出ていく字面の単位**: 出ていく字面は（出所の種別・本文）の列。出所の種別は閉じた 9 値の enum で、全 variant の const slice を持つ。宣言順は、commit の message・author の名・committer の名・patch の追加行・patch の path・押す annotated tag の本文・押す ref の名・gh の本文の flag の値（api の欄を含む）・gh の本文の file の中身。照合は本文 1 つの中だけで行い、本文を跨がない。
+  3. **切り方**: 成分 = ASCII の英数字と `_` の空でない連なり。それ以外の字（`-` `.` `/`・空白・改行・ASCII の外の字）で切る。字句 = 成分の字と `-` `.` の連なりから、末尾の `.` を落としたもの（除外の digest を引く単位・例: CSS の変数を読む字面の字句は、括弧と `;` を除いた `--x-accent`）。
+  4. **材料**（集めるのは配線の行）: 隣の材料は、名札（当たりの `@` の後ろに出す）と照合する repo の名の列。公開先の材料は、既に公開の名の列（公開先の repo の名と、public と実測した anchor の名）。
+  5. **repo の名**: 名を成分の列に切って大小を畳み、本文の成分の列（大小を畳む）に連続して現れる所を当たりとする。当たりの語は本文の字面。名の成分の列が既に公開の名のどれかと等しい名は照合しない（その字面は既に公開されている）。成分を持たない名は、本文の字面の部分一致で当てる（黙って外さない・NFR4）。行の `form` に repo-name が無い周は照合しない。当たる例: `proj-x`（`-` の後ろに語）・`PROJ`・`owner/proj`・`隣のprojを`・名 `proj-a` を `.` で書いた `Proj.A`・空白を挟む `proj a`。当たらない例: `projx`（英数字が続く）・`proj_x`（`_` は成分の中）。
+  6. **除外**: 当たりの範囲が 1 つの字句に収まり、その字句の UTF-8 の bytes の SHA-256（行 m）が行の `exclude` の列（`Elements` の excludes）に在る当たりだけを落とす。字句の bytes の大小は畳まない。同じ本文の別の字句の当たりは残る。
+  7. **畳み**: 当たり（形・語・名札）を、本文の列の順、本文の中の位置の順に並べ、同じ（形・語・名札）を 1 つに畳む。断りの hit の後ろ半分は `<件数>:` の後ろに先頭 5 件の `<形>=<語>@<名札>` を `,` で並べたもの（件数は畳んだ後の全件・0 件は返さない）。語と名札の空白・制御字・`,` は `_` に置く（改行を跨ぐ当たりでも断りは 1 行）。hit の頭の語 `identifier:` と、理由の enum の variant と経路は配線の行が足す（`Reason` と `REASONS` は本行で触らない）。
+  8. **行 m2 は足さない**: 他の 3 形と gh の本文の読み（行 m3）・配線（行 n 以後）。
+- 形（行 m3・残り 3 形と gh の本文・行 m3 の done と 1:1）:
+  1. **材料を足す**: 隣の材料に、object id の候補のうち隣の object db に在るもの・隣の tracked な path の列・隣の台帳の id の集合を足す。公開先の材料に、候補のうち公開先の remote の先端から辿れるもの・公開先の remote の先端の tracked な path の列を足す。
+  2. **候補**（pure な 1 関数・行の `form` に在る形だけ・配線の行は候補が在る形だけを隣と公開先に問う）: object id は、成分のうち 7 字以上で全ての字が 16 進の数字のもの（小文字に畳む・6 字以下は候補にならない）。tracked path は、path の語（字句の字と `/` の連なり）から先頭の `./` と `/`・末尾の `.` を落としたもののうち `/` を含むもの（出所が patch の path の本文は、全体も候補）。台帳 id は、末尾の `.` を落とした字句のうち `-` を含むもの。
+  3. **当たり**（行 m2 の照合に形を足す・順と畳みは行 m2 のまま）: object id は、候補が隣の在る集合に在り、公開先の辿れる集合に無いもの。tracked path は、候補が「隣の path を `/` の境界で切った末尾（path そのものを含む）」の集合に在り、公開先の path の同じ集合に無いもの（集合は path の列ごとに 1 度だけ作る）。台帳 id は、候補が隣の台帳の id の集合に在るもの（大小を区別する）。
+  4. **gh の本文の読み**（pure な 1 関数・入力は `Published`）: api でない gh は、`words_of` が読む本文・題・説明・comment の値を gh の本文とし、本文の file の値と gist の create の file の語を「読む path の列」として返す。api は欄（`-f` / `-F`）の `key=値` を gh の本文とし（`-F` の値が `@` で始まる欄を除く）、`-F` の `@` の後ろと `--input` の値を読む path の列として返す。値が読める heredoc の形（`readable`）なら、区切りの行の間の行を本文とする（区切りを引用した heredoc は展開しないので、行の中の `$` と backtick も字面）。
+  5. **行 m3 は足さない**: 配線（隣と公開先に問う・file を読む・読む上限 8 MB と締め切り 6 秒・断りと経路）。
+- 隣の名の集合（配線の行が作る・照合の核は受け取るだけ）:
+  - 今の導き方（ADR-0078・SRS の glossary「隣の private repo」のまま）: `--state-dir` の host の面（host.toml）の全ての `[[account-group]]` の anchors（`crates/scribe2/src/rules/manifest.rs` の `AccountGroup`）の和から、実体の無いもの・公開先の repo と同じもの（owner/name が等しい）・public と実測したもの（1 本の問い）を除いた列。各 anchor の名は、dir の basename と、origin の push の URL から導いた owner/name の name（導けたときだけ）の 2 つ。名札は basename。
+  - 別の host-local の名の一覧は、今の器に無い（host.toml の表は account・plugin・launch-arg・vessel・account-group・tick で、名の一覧を持たない）。除外は tracked な rules 行の digest だけが持つ。
+  - 穴は 2 形ある。(i) 群に属さず、席だけを持つ private の repo（席の登録 row＝`crates/scribe2/src/fleet/mod.rs` の `Registration` の anchor には在るが、どの群の anchors にも無い）。(ii) 群にも属さず、席も置き場も持たない private の repo（host に checkout は在るが、器のどの記録にも無い）。どちらも隣に入らず、名も識別子も照合されない。
+  - 推奨（配線の後の行・ADR と SRS の改訂が先）: 隣の anchor の出所を次の 3 つの和にし、そこから今と同じ 3 つ（実体の無いもの・公開先と同じもの・public と実測したもの）を除く。
+    1. 群の anchors（今の導き方）。park の群（`s2-07l.730`・未実装）が着地すれば、群から外した repo はここに入る。
+    2. 全ての置き場の登録 row の anchor。穴 (i) を拾う。「全ての置き場」は `--state-dir` と同じ親の下で host.toml を持つ dir（`crates/scribe2/src/init.rs` の 6 段目が群の行を写す先と同じ読み）。登録 row は各置き場の event log を読み直して得る（`crates/scribe2/src/fleet/replay.rs`）。log の大きさで読む量が増えるので、締め切り 6 秒の内に収まるかを配線の行が測る。
+    3. host の local の宣言の行。host.toml に群と別の表を置き、tracked には書かない。1 行は dir（4 形の全部を当てる）か名だけ（repo の名の形だけを当てる・可視性は読めない側＝隣）を持つ。穴 (ii) を拾い、群にも席にも依らずに名を足せる口になる。全ての置き場の host.toml に同じ行を置く手間は群の行と同じで、6 段目の写し方を使える。読めない宣言は断る（NFR4）。
+  - 要るもの: (2) と (3) は「隣の private repo」を群の anchors の外へ広げる。SRS の FR80 と glossary の改訂と、ADR-0078 の隣の集合の節を部分 supersede する ADR（host.toml の表を足す＝on-disk 形式）が要る。配線の行は (1) だけで着地させてよい。ただし隣の anchor の出所を 1 関数にし、(2) と (3) を 1 arm ずつ足せる形にする。
+  - 採らない形:
+    - 穴の repo を群に入れる — 群は候補の口座と席の移動を持ち、見張りのためにその席の口座の扱いを変える（park の群が着地した後は、口座を占有しない群として (1) で拾える）。
+    - host の file system を探して private の repo を拾う — 宣言でなく推測で、読む範囲が決まらない。
+    - (2) だけで足りるとする — 穴 (ii) を拾えず、席を退いた repo が黙って外れる（fail-open）。
+- 配線の行（行 n 以後）が照合の核へ渡すもの:
+  1. 出ていく字面の列（出所の種別つき・順は集めた順）。git push は、出ていく commit ごとの message・author の名・committer の名（UTF-8 でない名は解けない側）・patch の追加行と path（binary の patch は入れない）、押す annotated tag の本文、押す ref の名。gh は、行 m3 の gh の本文の読みが返す本文と、それが返す path の file の中身（出所は gh の本文の file・読めない file は解けない側）。
+  2. 行の要素: 埋め込みか `--rules` の行 host_guard.publish の値を `elements` で読んだもの。
+  3. 隣の材料（隣ごと・隣の anchor の出所は上の 1 関数）: 名札（basename・名だけの宣言は名）・名の列（上の 2 つか宣言の名）・object id の候補（行 m3 の候補）のうち隣の object db に在るもの（候補をまとめて 1 回で問う）・tracked path の候補が在る周だけ隣の tracked な path の列（repo からの相対）・台帳 id の候補が在る周だけ隣の台帳の id の集合（読めない台帳は解けない側）。
+  4. 公開先の材料: 既に公開の名（公開先の owner/name の name と、public と実測した anchor の name）・object id の候補のうち公開先の remote の先端から辿れるもの（辿れるかを測れない候補は辿れない側）・tracked path の候補が在る周だけ、公開先の remote の先端の tracked な path の列。
+  5. 返りの使い方: 当たりの畳み（`<件数>:<先頭 5 件>`）が在れば、理由の enum に識別子の variant を足して hit `identifier:<件数>:<先頭 5 件>` と経路（識別子を消し「隣の project」と件数に言い換えて出し直す）で断る。
+- 触らない: 判定 `judge` と断り `refused` と `Reason` / `REASONS`（配線の行）・行 j / k / k2 / k3 の読みと印と形と経路・`elements` と行の値・`words_of` と `readable` の外形（行 m3 は呼ぶだけ）・`crates/scribe2/src/hook/host_guard.rs`・配線の hook 行・doctor の欄。3 行とも binary の振る舞いを変えない（照合の核は判定から呼ばれない）ので、PATH の binary の入れ替えは要らない。
+- 順: 行 m → 行 m2 → 行 m3（`depends`）。行 m3 の行は、行 m2 の着地の後に契約表へ足す（行 m2 の `+` の file を素の path の write-set に持つため・§16 形 8 と同じ）。行 m と行 m2 は publish.rs を write-set に持ち、全履歴の行 l と配線の行と交わる（受付の write-set-overlap が待たせる）。照合の核が使う publish.rs の余地は 2 行で約 32。残る約 141 を全履歴の行と配線の行が分ける。
+- 限界（射程の外として残す）:
+  - 成分の照合は、空白や改行を挟んでも続く（名 `a-b` に `a b` も当たる・断る側へ倒す）。語の意味（コードの識別子か散文か）は見ない。
+  - tracked path は、file の path の末尾だけを当てる（dir の path と path の途中は当てない）。ASCII の外の字や `+` `@` を持つ path は path の語が割れる（patch の path だけは本文の全体も候補）。
+  - object id は、英字や `_` に続く 16 進（`abc1234_x`）を候補にしない（成分が割れない）。
+  - 出ていく字面は SRS の定義の 9 か所だけ。gh の tag の名・label の名・branch の名・`--label` などの値、api の対象の字面と header、author と committer の mail は走査しない。
+- 却下:
+  - SHA-256 に crate を足す — 実行時の依存が増える（NFR3・A3）。
+  - 除外の単位を空白で切った語にする — CSS や JSON の区切り字（`(` `)` `:` `;` `,` `"`）が語に付き、同じ名の除外が区切り字の組み合わせの数だけ要る。
+  - 字句に `/` を入れる — 同じ無害な字句でも、置かれた path ごとに digest が要る。
+  - 除外を正規表現で持つ — 裁定の単位が曖昧になり、行に字句の形が漏れる（digest の列だけにする・ADR-0078）。
+  - object id を 40 字だけにする — 7 字の短縮 id が素通りする（AC50 (b)）。
+  - tracked path を候補 × path の総当たりで照合する — 8 MB の字面では締め切りを越える。
+  - 当たりの語を名そのものにする — 本文のどこを直すかが読めない（空白を `_` に置く形で 1 行を保つ）。
+  - 1 行で全部（試作で約 600 行）・2 行（1 本目が約 380 行）— NFR2 の 550 と M の 300 を越える。
+  - 歯を新しい test の file（`#[path]` の子）だけに置く — base に宣言が無く、flip-check が測れない。
+- 歯（接頭辞は行 m `publish_sha256_`・行 m2 `publish_names_`・行 m3 `publish_sets_`。どれも `crates/` と `docs/` で 0 件＝実測 2026-09-29。互いに部分文字列でなく、どの行の検証行の filter 語も部分文字列に持たない＝実測）:
+  - 行 m・lib: (a) `publish_sha256_matches_the_fips_vectors`（sha256 の file の歯の区間）: 空・`abc`・448 bit の 2 block の文・`a` の 100 万字の 4 本が FIPS 180-4 の値と一致する (b) `publish_sha256_digest_is_accepted_as_a_row_exclude`（publish.rs の歯の区間）: 字句の digest を `exclude <digest>` にした要素を `elements` が受けて excludes に持ち、大文字にした digest は拒む。
+  - 行 m2・lib（照合の核の file の歯の区間）: (a) `publish_names_sources_are_the_closed_nine`: 出所の 9 値の宣言順 (b) `publish_names_match_a_run_of_components_case_folded`: 形 5 の当たる例と当たらない例、本文を跨がないこと（名 `proj-a` と本文 `proj` / `a`）、連続でない並び（`proj-b a`）、成分を持たない名の部分一致 (c) `publish_names_exclude_drops_only_hits_inside_the_ruled_token`: `--proj-accent` の digest を除外に置くと、括弧に包まれた `--proj-accent` の当たりは落ち、同じ本文の `proj-a.` は残り、大小の違う字句は落ちず、末尾の `.` を持つ字句は落ちる (d) `publish_names_skip_public_names_and_rows_without_the_form`: 既に公開の名と成分の列が同じ隣の名と、`form` に repo-name の無い行は当たらない (e) `publish_names_fold_to_the_count_and_the_first_five`: 同じ語 3 回は 1 件・6 件の当たりが件数 6 と位置の順の先頭 5 件・本文の順が先・改行を跨ぐ当たりが `_` の 1 行・0 件は無し。publish.rs の歯の区間: (f) `publish_names_follow_the_row_elements`: `elements` で読んだ要素（`form repo-name` と `exclude <digest>`）で当たりと除外が効き、`form object-id` だけの要素では名が当たらない。
+  - 行 m3・lib（照合の核の file の歯の区間）: (a) `publish_sets_candidates_cut_the_three_forms`: 7 字の 16 進は小文字の候補で 6 字は候補でない・`./docs/a.md.` は `docs/a.md`・`/` の無い語は path の候補でない・patch の path の空白を持つ本文は全体も候補・台帳 id は末尾の `.` を落とす・`form` に無い形は候補を作らない (b) `publish_sets_are_set_operations_on_the_given_sets`: 隣に在り公開先で辿れない object id だけ・公開先の末尾に在る path と `/` の無い path は当たらない・隣の台帳に在る id だけ (c) `publish_sets_gh_texts_read_heredoc_bodies_and_list_body_files`: 区切りを引用した heredoc の値は間の行が本文、api の `-f` の欄は本文、`-F k=@f` と `--input` は読む path の列。
+  - base で RED の理由: 行 m と行 m2 は新しい module の歯なので base で filter の該当が 0 本（nextest の rc 4）。flip-check は、publish.rs の歯の区間の歯（行 m の (b)・行 m2 の (f)）が base に無い子の module を引く compile error で RED。行 m3 は、行 m2 の着地の後の base で、照合の核の file の歯の区間が base に無い候補と gh の本文の読みを引く compile error で RED。
+
 ## 20. 選択式の問いの道具 AskUserQuestion を、器を名乗る repo で例外なく止める — plugin の PreToolUse の matcher に 1 語足し、pane・登録 row・役割を解く前の 1 関数で deny して、問いの経路と vessel 宣言の question-route の 1 行を告げる（契約表の行 ca・[ADR-0084](../../design-intent/decisions/ADR-0084-dispatch-waits-on-a-failing-floor-and-choice-questions-are-denied.html)・FR86 / AC56・裁定 user 2026-09-28T00:49Z）
 
 やさしく言うと: 選択肢を並べて user の操作を待つ窓（AskUserQuestion）は、無人の席を止め、選んだ答えは user が打った字として残らないので裁定に結べない。この § は、器の hook がその道具の呼び出しを、席か runner か・誰が開いた session か・skill の文が求めたかに関係なく止め、「平文で問う・裁定が要る問いは台帳の問いにする」と告げる形を決める。器に加わっていない repo では今までどおり黙る。
@@ -712,4 +785,27 @@ size = "L"
 growth = ["crates/scribe2/src/hook/merge_gate.rs:390", "crates/scribe2/src/hook/mod.rs:6", "crates/scribe2/src/hook/anchor_guard.rs:1", "crates/scribe2/src/hook/host_guard/publish.rs:3", "crates/scribe2/src/pipe/land/finish.rs:8", "crates/scribe2/src/pipe/land.rs:1", "crates/scribe2/src/polarity.rs:8", "crates/scribe2-boundary/tests/e2e/hook/guards.rs:170"]
 done = "(1) hook の子 module の 1 関数を pre_tool_use が Bash の周に anchor の門の直後・権能 guard の前で撃ち、merge の command の見分けは anchor_guard.rs の is_pr_merge（pub(crate) にした 1 本）で、当たる segment の無い Bash は何も読まずに通し、断りは rc 2・stderr 1 行・stdout 0 byte・記録の what が merge-deny と理由の 1 語で、台帳・git・event log・置き場を読まない (2) §21 形 2 の文法（本文の行は末尾の CR と半角空白と tab を落とした字・行頭の <Name>-Source: の行が Source の行・形の内は key と半角空白 1 つと半角空白 1 つで区切った 1 本以上の bead id の形だけの行・run: と半角空白 1 つと run id の形の行が run の行・形の外の Source の行が 1 行でも在れば他の行に依らず bad-source・run の行か形の内の Source の行が在れば通す・どちらも無ければ no-trailer）を 1 関数が当て、pipeline の行 bc の見本 file の全塊が期待どおり（source と run は通過・none は Source の行を持てば bad-source・持たなければ no-trailer）で、CR LF の行の本文も通る (3) 本文の源は --body / -b / --body-file / -F の全部で、語の名と値は publish.rs の flag_of（pub(crate)）で分け、-- の後ろは読まず、源が 2 つ以上なら全部が通ることを求める (4) --body の値が $ か backtick を持つ周、--body-file の値が標準入力の形（is_stdin）・字面で読めない形（is_loose_path）・~ 始まり・無い・通常の file でない・UTF-8 でない周は body-unreadable で、payload の cwd からの相対 path の通常の file は読む (5) --rebase（false の形を除く）・-r・名が -s / -m / -d で続きに r を持つ束ねた語は rebase で断り、--squash・--merge・方式の flag の無い command は本文で判じる (6) 理由は閉じた 5 語（宣言順 rebase / no-body / body-unreadable / bad-source / no-trailer・const slice）で、1 行は <NAME>: deny merge-gate reason=<語> で始まり、欠けの名指しと NAME から導いた key の字と run: の形と次の一手の literal（gh pr merge <PR> --squash --body-file <絶対 path>）を持ち、bad-source は形の外の Source の行を全部持つ (7) key は finish.rs の trailer_key を呼ぶ pub(crate) の 1 関数（語幹 Source）を land.rs が再輸出したものを使い、bead id と run id の形の述語は + の file に 1 本ずつ (8) 極性一覧に merge-gate の in-loop / fail-closed の 1 行が anchor-guard の直後・host-guard の直前に載り、集計が guards=31 in-loop=25 post-hoc=6 fail-open=4 で、数の pin 6 本と隣接の pin 3 本と外形 snapshot が同じ便で動く (9) 既存の anchor の歯は窓が開いた後の gh pr merge 1 の 1 行だけが発端の trailer の本文を持ち、他の期待は不変で hook_anchor_guard_ と hook_anchor_verb_ が緑 歯: lib の hook_merge_trailer_ (a)〜(e)・e2e の hook_merge_gate_ (1) 通る 3 形 (2) 断る 2 形 (3) 形の周り (4) 管轄の外・polarity_lists_merge_gate_ と数と隣接の pin 9 本"
 depends = ["ca"]
+
+[[contract]]
+id = "m"
+title = "publish の照合の核の 1 — SHA-256（FIPS 180-4）を std だけで書く 1 関数を publish の module の子に置く（bytes → 小文字の 16 進 64 字＝rules 行 host_guard.publish の exclude の digest と同じ形・依存を足さない）（§19・ADR-0078・s2-07l.696）"
+req = ["FR80", "AC50", "NFR3"]
+section = "19"
+write-set = ["crates/scribe2/src/hook/host_guard/publish.rs", "+crates/scribe2/src/hook/host_guard/publish/sha256.rs", "docs/design/vessel-hook.md"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail publish_sha256_", "cargo nextest run -p scribe2 --lib --no-tests=fail host_guard_publish_"]
+size = "S"
+growth = ["crates/scribe2/src/hook/host_guard/publish.rs:16", "crates/scribe2/src/hook/host_guard/publish/sha256.rs:80"]
+done = "(1) SHA-256 の 1 関数が publish の module の pub な子の module に在り、I/O と子 process を持たず、publish の module の差は子の宣言 1 行と歯の区間の歯 1 本だけ (2) bytes を受けて FIPS 180-4 の SHA-256 を小文字の 16 進 64 字で返し（添字を使わない・加算は wrapping）、返す字面を elements が exclude <digest> の要素として受ける (3) 字面の切り方・照合・当たりを足さない 歯: lib の publish_sha256_matches_the_fips_vectors（空・abc・448 bit の 2 block の文・a の 100 万字の 4 本）・publish_sha256_digest_is_accepted_as_a_row_exclude（publish.rs の歯の区間・字句の digest を elements が受けて excludes に持ち、大文字の digest は拒む）・不変の host_guard_publish_（lib）"
+
+[[contract]]
+id = "m2"
+title = "publish の照合の核の 2 — 出ていく字面（出所の閉じた 9 値と本文）を ASCII の英数字と _ の成分に切り、隣の repo の名を成分の連続した並びで大小を畳んで当て（既に公開の名と同じ名は照合しない・成分を持たない名は字面の部分一致）、当たりが 1 つの字句に収まりその sha256 が行の exclude に在る当たりを落とし、当たりを本文と位置の順に並べて（形・語・名札）で畳み件数と先頭 5 件の 1 行にする pure な module（§19・ADR-0078・s2-07l.696）"
+req = ["FR80", "AC50", "NFR4"]
+section = "19"
+depends = ["m"]
+write-set = ["crates/scribe2/src/hook/host_guard/publish.rs", "+crates/scribe2/src/hook/host_guard/publish/scan.rs", "docs/design/vessel-hook.md"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail publish_names_", "cargo nextest run -p scribe2 --lib --no-tests=fail host_guard_publish_"]
+size = "M"
+growth = ["crates/scribe2/src/hook/host_guard/publish.rs:16", "crates/scribe2/src/hook/host_guard/publish/scan.rs:300"]
+done = "(1) 照合の核が publish の module の pub な子の module に在り、pure（I/O と子 process を持たず git も gh も撃たない）で、publish の module の差は子の宣言 1 行と歯の区間の歯 1 本だけ (2) 出ていく字面が（出所の種別・本文）の列で、出所の種別が閉じた 9 値の enum（宣言順 commit の message・author の名・committer の名・patch の追加行・patch の path・押す annotated tag の本文・押す ref の名・gh の本文の flag の値・gh の本文の file の中身）と全 variant の const slice を持ち、照合は本文を跨がない (3) 成分は ASCII の英数字と _ の連なり、字句は成分の字と - . の連なりから末尾の . を落としたもの (4) 隣の材料が名札と名の列を、公開先の材料が既に公開の名の列を持つ (5) repo の名は成分の列（大小を畳む）の連続した出現で当て、当たりの語は本文の字面、既に公開の名と成分の列が等しい名は照合せず、成分を持たない名は字面の部分一致で当て、行の form に repo-name が無ければ照合しない (6) 当たりの範囲が 1 つの字句に収まりその UTF-8 の bytes の sha256（行 m）が行の exclude に在る当たりだけを落とす (7) 当たりを本文の順と位置の順に並べて（形・語・名札）で畳み、件数と先頭 5 件の <形>=<語>@<名札> を , で並べた 1 つの字面を返し（0 件は無し・語と名札の空白と制御字と , は _）、Reason と REASONS と judge を触らない (8) 他の 3 形・gh の本文の読み・配線を足さない 歯: lib の publish_names_sources_are_the_closed_nine・publish_names_match_a_run_of_components_case_folded（当たる 6 形と当たらない 2 形・本文を跨がない・連続でない・成分を持たない名）・publish_names_exclude_drops_only_hits_inside_the_ruled_token（除外の字句の中だけ落ち、別の字句と大小違いは残り、末尾の . は落として引く）・publish_names_skip_public_names_and_rows_without_the_form・publish_names_fold_to_the_count_and_the_first_five（3 回は 1 件・6 件で件数 6 と先頭 5 件・本文の順・改行を跨ぐ当たりの 1 行・0 件）・publish_names_follow_the_row_elements（publish.rs の歯の区間・elements で読んだ要素が当たりと除外を決める）・不変の host_guard_publish_（lib）"
 <!-- contracts:end -->
