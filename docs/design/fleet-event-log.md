@@ -114,6 +114,24 @@ C3 は「1 つの DB file（host 列）」と言う。MVP はそれを **append-
   - 書き手が切れた末尾を消してから書く。消した記録は戻らない（N1）。
   - 1 回の write の原子性だけに頼り、形 2 を持たない。死んだ書き手が残した末尾は、それでも改行を持たない。
 
+## 11. 本文の読めない古い lock は DeadOnly の周でも外す（契約表の行 e・memo `s2-07l.736.8`）
+
+やさしく言うと: lock の中身（持ち主の番号）が空のまま残ると、器は「持ち主が生きているかもしれない」と読んで、永久に待っていた。中身が読めず十分に古い lock は、持ち主が居ないものとして外す。
+
+- 何が起きているか（2026-09-29・verified）: 隣の project の置き場で、掃除の lock（[dispatcher.md](./dispatcher.md) §30）が本文 0 byte のまま 2026-09-28T10:16Z から残った。掃除は 65 回続けて `sweep: skipped=lock` で撃たれず、退役した便の build の置き場が 54 本・約 589 GB 溜まり、host の disk が 98% になった。所有者の process は生きていない。orchestrator が lock を同じ dir の別名へ移して（可逆）掃除を再開させた。
+- 現物（main 1862abd0・verified）: `crates/scribe2/src/fleet/store.rs` の `acquire_in` は、create_new で開いた後に本文を書く。その間で process が死ぬと、本文の無い lock が残る。`lock_owner` は 2 形のどちらでもない本文（空を含む）を読めないと判じ、その doc は「stale の線に従う」と書く。ところが DeadOnly の周は stale の線を見ない。DeadOnly を使うのは掃除の lock（`crates/scribe2/src/pipe/sweep.rs`）と driver の札（`crates/scribe2/src/pipe/mod.rs` の `hold`）の 2 つで、どちらも本文の読めない lock が 1 つ残ると永久に取れない。
+- 形（done と 1:1）:
+  1. `acquire_in` の古い lock の枝: 観測した本文が 2 形のどちらでもない（空を含む）周は、Reclaim の値に依らず、mtime が `stale_ms` より古ければ回収の 1 手（`reclaim`）で外し、warning `StaleLockRemoved` を積む。
+  2. 本文が読める lock の扱いは変えない: 生きている所有者の lock は DeadOnly の周に古くても奪わない。probe が読めない周も DeadOnly では外さない（fail-closed）。死んだ所有者の lock は今までどおり外す。
+  3. 本文の書き方・lock の path・`reclaim` の 1 手・token の扱い・`LockPolicy` と rules 行 `fleet.lock_stale_ms` は変えない。
+- なぜ安全か: 本文の読めない lock を生きている所有者が握るのは、create_new と本文の書きの間の μs の窓だけで、そのとき mtime は新しい（`stale_ms` より古くならない）。本文を書けない周は `acquire_in` が lock を消して error を返すので、本文の無い lock を握り続ける生きた所有者は居ない。
+- 却下: (a) 本文を一時 file に書いてから hard link で lock の path に置く（空の lock は生まれなくなるが、既に在る空の lock と壊れた本文を回収できず、読みの側の直しが結局要る・C17 の最小の段）。(b) 掃除の lock だけを Stale の回収に変える（生きている長い掃除の lock を古さで奪う・§30 の決め）。(c) 空の lock を器の起動時に消す（所有者の判定を 2 か所に持つ）。
+- 残り（memo に残す）: 掃除が `sweep: skipped=lock` を続けても、doctor と管理 tick に出ない（気づく口が無い）。生きている所有者が掃除の途中で止まった周も同じく気づけない。
+- 歯（in-file・`crates/scribe2/src/fleet/store.rs` の `mod tests`・接頭辞 `fleet_lock_unparsed_`・`grep -rn fleet_lock_unparsed crates/` は 0 件・2026-09-29）:
+  - `fleet_lock_unparsed_stale_body_is_reclaimed_under_dead_only`: 本文が空の lock と、2 形のどちらでもない本文（例 abc）の lock を `stale_ms` より古くした周に、DeadOnly で取れて warning が `StaleLockRemoved` の 1 件（base は `retry_ms` の後に error＝RED）。
+  - `fleet_lock_unparsed_fresh_body_waits_under_dead_only`: 同じ 2 つの本文でも古くない周（`stale_ms` を大きく）は DeadOnly で取れず、lock は残る（base でも緑・非空虚の対）。
+- base で RED の理由: 1 本目は、base の `acquire_in` が DeadOnly の周に古さを見ないので取れない（機能不在）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -156,4 +174,14 @@ verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail fleet_torn_line_"]
 size = "S"
 growth = ["crates/scribe2/src/fleet/store.rs:50"]
 done = "(1) write_line が本文と改行を 1 つの buffer に詰めて write_all を 1 回だけ撃つ (2) lock の中で file の末尾の 1 byte を読み、空でなく改行でもない周だけ記録の前に改行を 1 つ足し（同じ 1 回の write）、途中で切れた記録は単独の malformed の行として残って read_all は Err のまま (3) append_line を通る全部の file に効き、lock の実装は 1 本のまま (4) schema・1 行 1 event・lock と回収・rules 行・Warning の値・read_all の判定は変わらない 歯: fleet_torn_line_ の (a) 改行の無い完全な記録で終わる log に append で 1 件足すと read_all が 2 件を Ok で返し、続けて 1 件足すと 3 件で file は空の行を持たない (b) 途中で切れた記録で終わる log に 1 件足すと行数が 2 で read_all の Err は line=1 の 1 件だけ・base は (a) が line=1 の Malformed の Err・(b) が行数 1 で RED"
+[[contract]]
+id = "e"
+title = "本文の読めない古い lock を DeadOnly の周でも外す — 空の掃除の lock が永久に残り掃除が止まった穴を塞ぐ（本文の読める lock の扱い・本文の書き方・rules 行は不変・memo s2-07l.736.8）"
+req = ["FR68", "FR30"]
+section = "11"
+write-set = ["crates/scribe2/src/fleet/store.rs"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail fleet_lock_unparsed_"]
+size = "S"
+growth = ["crates/scribe2/src/fleet/store.rs:60"]
+done = "(1) acquire_in が、観測した本文が 2 形のどちらでもない（空を含む）lock を、Reclaim の値に依らず mtime が stale_ms より古い周に回収の 1 手で外し、warning StaleLockRemoved を積む (2) 本文が読める lock は今までどおり（生きている所有者は DeadOnly の周に古くても奪わない・probe が読めない周は DeadOnly で外さない・死んだ所有者は外す）で、既存の fleet_lock_reclaim_ の歯は期待を変えずに緑 (3) 本文の書き方・lock の path・reclaim の 1 手・token・LockPolicy・rules 行 fleet.lock_stale_ms は変えない 歯: fleet_lock_unparsed_stale_body_is_reclaimed_under_dead_only（空と abc の本文の古い lock が DeadOnly で取れ warning が 1 件・base は error で RED）・fleet_lock_unparsed_fresh_body_waits_under_dead_only（古くない周は取れず lock は残る）"
 <!-- contracts:end -->
