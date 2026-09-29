@@ -18,6 +18,7 @@ pub mod outgoing;
 pub mod probe;
 pub mod scan;
 pub mod texts;
+pub mod visibility;
 
 /// 識別子の形の要素の札。
 const FORM: &str = "form";
@@ -885,7 +886,7 @@ pub(super) fn judge(kind: Kind, subject: &Subject, manifest: &Manifest) -> Optio
     if let Some(word) = found.iter().find_map(first) {
         return Some(refused(kind, Reason::Unresolved, Some(word), PUBLISH_ROW, row.ruling.clone()));
     }
-    let stop = outgoing::stage(&found, manifest, subject.scene.git, &row.ruling)?;
+    let stop = outgoing::stage(&found, manifest, subject.scene, &row.ruling)?;
     let refusal = refused(kind, stop.reason, Some(stop.word), stop.row, stop.ruling);
     Some(Refusal { route: stop.route.unwrap_or(refusal.route), ..refusal })
 }
@@ -935,7 +936,7 @@ mod tests {
 
     /// Bash の判定の (what, line)。Allow なら `None`。
     fn denied(command: &str, manifest: &Manifest) -> Option<(String, String)> {
-        let scene = Scene { cwd: Path::new("/nonexistent"), state_dir: Path::new("/nonexistent/s"), git: Path::new("git"), accounts: &[] };
+        let scene = Scene { cwd: Path::new("/nonexistent"), state_dir: Path::new("/nonexistent/s"), git: Path::new("git"), gh: Path::new("gh"), host: &Manifest::default() };
         match judge("Bash", command, manifest, &scene) {
             HostGuardDecision::Deny { what, line } => Some((what, line)),
             HostGuardDecision::Allow => None,
@@ -1191,7 +1192,7 @@ mod tests {
         let fake = dir.join("git");
         std::fs::write(&fake, "#!/bin/sh\nsleep 5\n").unwrap_or_else(|why| panic!("偽の git を書ける: {why}"));
         std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap_or_else(|why| panic!("偽の git を実行可能にできる: {why}"));
-        let scene = Scene { cwd: &dir, state_dir: &dir, git: &fake, accounts: &[] };
+        let scene = Scene { cwd: &dir, state_dir: &dir, git: &fake, gh: Path::new("gh"), host: &Manifest::default() };
         let started = std::time::Instant::now();
         let slow = judge("Bash", "git push origin main", &parsed(&(limits(300) + &publish)), &scene);
         assert!(started.elapsed() < std::time::Duration::from_millis(1300), "締め切りに 1 秒を足した内: {:?}", started.elapsed());

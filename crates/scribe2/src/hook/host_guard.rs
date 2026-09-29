@@ -29,7 +29,7 @@ use crate::fleet::json_tree::{self, Tree};
 use crate::invocation::Invocation;
 use crate::name::NAME;
 use crate::polarity::{OnFailure, Polarity, Timing};
-use crate::rules::manifest::{AccountLabel, HostManifest, Manifest};
+use crate::rules::manifest::{HostManifest, Manifest};
 use crate::rules::{host_manifest_path, RuleValue};
 use std::ffi::OsStr;
 use std::fs;
@@ -153,7 +153,7 @@ impl Protected {
     }
 }
 
-/// 判定の場: payload の cwd・`--state-dir`・git の program（歯が偽の git で呼出回数を数える seam）・host の面の口座。
+/// 判定の場: payload の cwd・`--state-dir`・git と gh の program（歯が偽の git / gh で引数と呼出回数を数える seam）・host の面。
 pub struct Scene<'a> {
     /// payload の `cwd`（無ければ process の cwd）。
     pub cwd: &'a Path,
@@ -161,8 +161,10 @@ pub struct Scene<'a> {
     pub state_dir: &'a Path,
     /// `git ls-files` を撃つ program。
     pub git: &'a Path,
-    /// host の面（`<state_dir>/host.toml`）の `[[account]]` の label（面が無い周は空）。
-    pub accounts: &'a [AccountLabel],
+    /// publish の可視性の問いと対象の導きを撃つ gh の program。
+    pub gh: &'a Path,
+    /// host の面（`<state_dir>/host.toml`・面が無い周は空）: `[[account]]` の label と群・park の anchor。
+    pub host: &'a Manifest,
 }
 
 /// 止める種類（閉じた 6 値・宣言順が判定の順）。
@@ -404,7 +406,7 @@ pub fn decide(payload: &str, rules: Option<&str>, state_dir: &Path) -> Result<Ho
         Some(found) => PathBuf::from(found),
         None => std::env::current_dir().unwrap_or_default(),
     };
-    let scene = Scene { cwd: &cwd, state_dir, git: Path::new("git"), accounts: host.accounts() };
+    let scene = Scene { cwd: &cwd, state_dir, git: Path::new("git"), gh: Path::new("gh"), host: &host };
     Ok(judge(tool, &command, &manifest, &scene))
 }
 
@@ -730,7 +732,7 @@ impl Own {
 /// 守る file の集合（code の定数・rules 行を持たない）: host の面の口座ごとの `settings.json`（実体の無い口座は入れない）と、
 /// payload の cwd の repo の root（行 c と同じ fs の辿り・外なら cwd）の [`PROJECT_SETTINGS`]（実体が無くても字句で畳んだ path）。
 fn own_files(scene: &Scene) -> Vec<Own> {
-    let accounts = scene.accounts.iter().map(|account| account_dir(scene.state_dir, account.label()).join(SETTINGS));
+    let accounts = scene.host.accounts().iter().map(|account| account_dir(scene.state_dir, account.label()).join(SETTINGS));
     let root = root_of(scene.cwd).unwrap_or_else(|| scene.cwd.to_path_buf());
     let project = PROJECT_SETTINGS.iter().map(|name| fold(&root, name));
     accounts

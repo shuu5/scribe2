@@ -817,6 +817,169 @@ fn publish_texts_unreadable_author_and_missing_body_file_are_unresolved() {
     clean(&[&repo, &origin, &state]);
 }
 
+/// PATH の先頭に置く偽の command（gh・ssh・git）の置き場（§22 行 n4）。呼出しの引数は `<command>.log` に 1 行ずつ残る。
+struct Fakes {
+    dir: TmpDir,
+}
+
+/// PATH の最初の `command` の実体。
+#[expect(clippy::expect_used, reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く")]
+fn on_path(command: &str) -> PathBuf {
+    let path = std::env::var("PATH").expect("PATH を読める");
+    path.split(':').map(|dir| Path::new(dir).join(command)).find(|found| found.is_file()).expect("command が PATH に在る")
+}
+
+impl Fakes {
+    /// gh は `gh_tail` を走らせ、ssh は github.com への接続を tmp の `bare` へ届け、git は本物へ渡す（3 つとも呼出しを数える）。
+    #[expect(clippy::expect_used, reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く")]
+    fn new(gh_tail: &str, bare: &Path) -> Self {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, git) = (tmp(), on_path("git").display().to_string());
+        let serve = format!("for last; do :; done\nservice=${{last%% *}}\nexec {git} \"${{service#git-}}\" {}", bare.display());
+        for (name, tail) in [("gh", gh_tail.to_owned()), ("ssh", serve), ("git", format!("exec {git} \"$@\""))] {
+            let path = dir.join(name);
+            fs::write(&path, format!("#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}.log\n{tail}\n", path.display())).expect("偽の command を書ける");
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("偽の command を実行可能にできる");
+        }
+        Self { dir }
+    }
+
+    /// `command` の呼出しの引数（1 回 1 行）。
+    fn calls(&self, command: &str) -> Vec<String> {
+        fs::read_to_string(self.dir.join(format!("{command}.log"))).unwrap_or_default().lines().map(str::to_owned).collect()
+    }
+
+    /// `host-guard` を偽の command を PATH の先頭に置いて撃つ**起こし口**（`GIT_CONFIG_GLOBAL` と `GIT_CONFIG_NOSYSTEM` で利用者の git の設定を切る）。
+    #[expect(clippy::expect_used, reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く")]
+    fn run(&self, state: &Path, extra: &[&str], payload: &str) -> Output {
+        let path = format!("{}:{}", self.dir.display(), std::env::var("PATH").unwrap_or_default());
+        let mut child = Command::new(bin())
+            .arg("host-guard")
+            .arg("--state-dir")
+            .arg(state)
+            .args(extra)
+            .env("PATH", path)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env_remove("GIT_SSH_COMMAND")
+            .env_remove("GIT_SSH")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("binary を起動できる");
+        child.stdin.as_mut().expect("stdin を開ける").write_all(payload.as_bytes()).expect("payload を書ける");
+        child.wait_with_output().expect("終了を待てる")
+    }
+}
+
+/// origin が github.com の scp 形の URL（偽の ssh が tmp の bare へ届ける）で main の branch を持つ repo と bare。
+fn github_repo() -> (TmpDir, TmpDir) {
+    let (repo, bare) = (git_repo(), tmp());
+    git(&bare, &["init", "-q", "--bare"]);
+    git(&repo, &["branch", "-M", "main"]);
+    git(&repo, &["remote", "add", "origin", "git@github.com:acme/pub.git"]);
+    (repo, bare)
+}
+
+/// origin の URL が `url` の git repo（群の anchor に使う）。
+fn anchor_repo(url: &str) -> TmpDir {
+    let dir = tmp();
+    git(&dir, &["init", "-q"]);
+    git(&dir, &["remote", "add", "origin", url]);
+    dir
+}
+
+/// host の面に群 1 つ（anchor の列）を書く。
+#[expect(clippy::expect_used, reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く")]
+fn put_anchors(state: &Path, anchors: &[&Path]) {
+    let list = anchors.iter().map(|dir| format!("\"{}\"", dir.display())).collect::<Vec<_>>().join(", ");
+    let body = format!("schema = 1\n\n[[account]]\nlabel = \"a1\"\n\n[[account-group]]\nname = \"Tier1\"\nanchors = [{list}]\naccounts = [\"a1\"]\n");
+    fs::write(state.join("host.toml"), body).expect("host の面を書ける");
+}
+
+/// publish の行（enabled は引数）と上限の 2 行（締め切りは `deadline` ミリ秒）を持つ `--rules` の file の path。
+#[expect(clippy::expect_used, reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く")]
+fn publish_rules(state: &Path, enabled: bool, deadline: u64) -> String {
+    let int = |id: &str, kind: &str, value: u64| format!("\n[[rule]]\nid = \"{id}\"\nkind = \"{kind}\"\nvalue = {value}\nenabled = true\nruling = \"r\"\nruled_at = \"2026-09-29\"\n");
+    let row = format!("\n[[rule]]\nid = \"host_guard.publish\"\nkind = \"HostGuardPublish\"\nvalue = [\"form repo-name\"]\nenabled = {enabled}\nruling = \"r\"\nruled_at = \"2026-09-29\"\n");
+    let limits = int("host_guard.publish_deadline_ms", "HostGuardPublishDeadlineMs", deadline) + &int("host_guard.publish_read_bytes", "HostGuardPublishReadBytes", 8_388_608);
+    let path = state.join("rules.toml");
+    fs::write(&path, format!("schema = 1\n{}{row}{limits}", denied_rows_text(true))).expect("rules を書ける");
+    path.display().to_string()
+}
+
+/// gh が `repo view` に acme/pub を答え、`api graphql` に全ての alias の PUBLIC を答える tail。
+const GH_PUBLIC: &str = "case \"$1 $2\" in\n\"repo view\") echo '{\"nameWithOwner\":\"acme/pub\",\"url\":\"https://github.com/acme/pub\"}';;\n*) echo '{\"data\":{\"r0\":{\"visibility\":\"PUBLIC\"},\"r1\":{\"visibility\":\"PUBLIC\"}}}';;\nesac";
+
+/// 偽の gh と偽の ssh（PATH の先頭）・利用者の git の設定を切った起こし口で、github.com の origin への push は、群の無い host で gh 0 回・anchor が
+/// 対象と public の repo（と origin を持たない anchor）の host で gh 1 回（引数の repo の識別は owner/name だけ）で rc 0・記録なし、全履歴の
+/// command と `enabled = false` の周と `git status && ls` の周は gh 0 回（`git status && ls` は偽の git も 0 回・AC50 の公開でない周）（§22 行 n4）。
+#[test]
+fn publish_visibility_asks_github_once_only_beside_an_outside_anchor() {
+    let ((repo, bare), (state, open)) = (github_repo(), (tmp(), anchor_repo("git@github.com:acme/open.git")));
+    let fakes = Fakes::new(GH_PUBLIC, &bare);
+    let push = bash_payload(&repo, "git push origin main");
+    assert_silent(&fakes.run(&state, &[], &push), "群の無い host の push");
+    assert!(fakes.calls("gh").is_empty(), "群の無い host は gh を撃たない: {:?}", fakes.calls("gh"));
+    let lonely = state.join("lonely-anchor");
+    fs::create_dir_all(&lonely).expect("anchor の dir を作れる");
+    git(&lonely, &["init", "-q"]);
+    put_anchors(&state, &[&repo, &open, &lonely]);
+    assert_silent(&fakes.run(&state, &[], &push), "anchor が対象と public の repo の host の push");
+    let query = "query{r0:repository(owner:\"acme\",name:\"pub\"){visibility} r1:repository(owner:\"acme\",name:\"open\"){visibility}}";
+    assert_eq!(fakes.calls("gh"), [format!("api graphql --hostname github.com -f query={query}")], "gh は 1 回・repo の識別は owner/name だけ");
+    assert!(host_guard_records(&state).is_empty(), "通す周は記録を残さない");
+    let quiet = |command: &str, extra: &[&str]| {
+        let fakes = Fakes::new(GH_PUBLIC, &bare);
+        let out = fakes.run(&state, extra, &bash_payload(&repo, command));
+        (out, fakes.calls("gh"), fakes.calls("git"))
+    };
+    let (out, gh, _) = quiet("gh repo edit acme/pub --visibility public", &[]);
+    assert!(assert_host_guard_deny(&out, "全履歴").contains("hit=full-history:repo-edit-public "), "全履歴の断り");
+    assert!(gh.is_empty(), "全履歴の command は gh を撃たない: {gh:?}");
+    let off = publish_rules(&state, false, 6000);
+    let (out, gh, _) = quiet("git push origin main", &["--rules", &off]);
+    assert_silent(&out, "enabled = false の行");
+    assert!(gh.is_empty(), "enabled = false は gh を撃たない: {gh:?}");
+    let (out, gh, git_calls) = quiet("git status && ls", &[]);
+    assert_silent(&out, "公開の segment の無い周");
+    assert!((gh.is_empty(), git_calls.is_empty()) == (true, true), "偽の gh {gh:?} と偽の git {git_calls:?} は 0 回");
+    clean(&[&repo, &bare, &state, &open]);
+}
+
+/// `--rules` の締め切り 1500 ms で、30 秒眠る偽の gh・1 回ごとは内（1 秒）で合計が越える偽の gh（repo view と graphql）・群の無い host の gh の本文の動詞
+/// （`gh issue comment`）と締め切りを越えて返る偽の gh の 3 本が rc 2・stdout 0 byte・stderr 1 行（hit=deadline:host_guard.publish_deadline_ms・締め切りの
+/// 行の裁定 id と経路）と 2.5 秒の内、記録 1 行ずつ（§22 行 n4）。
+#[test]
+fn publish_visibility_a_slow_gh_is_stopped_by_the_deadline_within_two_and_a_half_seconds() {
+    use vessel::hook::host_guard::publish::Reason;
+    let ((repo, bare), (state, open)) = (github_repo(), (tmp(), anchor_repo("git@github.com:acme/open.git")));
+    let rules = publish_rules(&state, true, 1500);
+    let want = format!(
+        "{NAME}: host-guard deny kind=publish hit=deadline:host_guard.publish_deadline_ms row=host_guard.publish_deadline_ms ruling=r — {}",
+        Reason::Deadline.parts().1
+    );
+    let view = "case \"$1 $2\" in\n\"repo view\") echo '{\"nameWithOwner\":\"acme/pub\",\"url\":\"https://github.com/acme/pub\"}';;\n*) echo '{}';;\nesac";
+    let cases = [
+        ("sleep 30".to_owned(), false, "gh pr comment 1 --body hi"), ("sleep 2\necho '{}'".to_owned(), false, "gh issue comment 1 --body hi"),
+        (format!("sleep 1\n{view}"), true, "gh pr create --title x --body y"),
+    ];
+    for (at, (tail, anchored, command)) in cases.into_iter().enumerate() {
+        if anchored {
+            put_anchors(&state, &[&open]);
+        }
+        let fakes = Fakes::new(&tail, &bare);
+        let started = std::time::Instant::now();
+        let out = fakes.run(&state, &["--rules", &rules], &bash_payload(&repo, command));
+        let took = started.elapsed();
+        assert_eq!(assert_host_guard_deny(&out, command).trim_end(), want, "{command}");
+        assert!(took < std::time::Duration::from_millis(2500), "締め切り 1500 ms の内: {command} {took:?}");
+        assert_eq!(host_guard_records(&state).len(), at + 1, "記録 1 行ずつ: {command}");
+    }
+    clean(&[&repo, &bare, &state, &open]);
+}
+
 /// 埋め込みの manifest と群を宣言しない置き場（host.toml 無し）で、AC50 (e) の解けない形 4 つは rc 2・stdout 0 byte・stderr 1 行
 /// （hit=unresolved:<形の語>・unresolved の経路）と記録 1 行ずつ、区切りを引用した heredoc の本文の gh pr create は rc 0・記録なし
 /// （§17 行 k2・偽の gh / git の回数は数えない）。
@@ -838,7 +1001,8 @@ fn publish_unresolved_forms_are_denied_before_any_scan() {
         assert_eq!(what_of(&lines.last().cloned().unwrap_or_default()), "host-guard-deny publish", "{command}");
     }
     let body = "gh pr create --title x --body \"$(cat <<'EOF'\n## 要約\n$HOME も字\nEOF\n)\"";
-    assert_silent(&run_host_guard_in(&state, &bash_payload(&repo, body)), "区切りを引用した heredoc の本文");
+    let fakes = Fakes::new("exit 1", &state);
+    assert_silent(&fakes.run(&state, &[], &bash_payload(&repo, body)), "区切りを引用した heredoc の本文");
     assert_eq!(host_guard_records(&state).len(), forms.len(), "通す周は記録を残さない");
     clean(&[&repo, &state]);
 }

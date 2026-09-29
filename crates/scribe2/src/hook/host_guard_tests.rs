@@ -63,9 +63,12 @@ fn manifest(tmux_enabled: bool, drop: Option<&str>) -> Manifest {
     manifest_with(tmux_enabled, drop, "")
 }
 
+/// 群も口座も宣言しない host の面。
+static NO_HOST: std::sync::LazyLock<Manifest> = std::sync::LazyLock::new(Manifest::default);
+
 /// 語列の判定の場（rm の segment を持たない command には効かない）。
 fn nowhere() -> Scene<'static> {
-    Scene { cwd: Path::new("/nonexistent"), state_dir: Path::new("/nonexistent/state"), git: Path::new("git"), accounts: &[] }
+    Scene { cwd: Path::new("/nonexistent"), state_dir: Path::new("/nonexistent/state"), git: Path::new("git"), gh: Path::new("gh"), host: &NO_HOST }
 }
 
 /// Bash の判定の (what, line)。Allow なら `None`。
@@ -309,7 +312,7 @@ impl Place {
 
     /// manifest と git の program を指定して判定する。
     fn hit_in(&self, command: &str, cwd: &Path, manifest: &Manifest, git: &Path) -> Option<String> {
-        let scene = Scene { cwd, state_dir: &self.state, git, accounts: &[] };
+        let scene = Scene { cwd, state_dir: &self.state, git, gh: Path::new("gh"), host: &NO_HOST };
         match judge("Bash", command, manifest, &scene) {
             HostGuardDecision::Deny { line, .. } => Some(line.split(" hit=").nth(1)?.split(" row=").next()?.to_owned()),
             HostGuardDecision::Allow => None,
@@ -592,7 +595,7 @@ fn host_guard_rm_symlink_is_judged_by_the_link_itself() {
     assert_eq!(place.hit("rm st", &place.other), None, "dir の link そのもの");
     assert!(place.hit("rm -rf st/", &place.other).is_some(), "末尾 / は link の先");
     let link = place.other.join("st");
-    let scene = Scene { cwd: &place.other, state_dir: &link, git: Path::new("git"), accounts: &[] };
+    let scene = Scene { cwd: &place.other, state_dir: &link, git: Path::new("git"), gh: Path::new("gh"), host: &NO_HOST };
     let command = format!("rm {}", place.state.join("host.toml").display());
     let found = judge("Bash", &command, &rm_manifest(), &scene);
     assert!(matches!(found, HostGuardDecision::Deny { .. }), "link で渡した state dir も実体で守る: {found:?}");
@@ -647,7 +650,7 @@ fn host_guard_rm_missing_row_fails_closed_and_disabled_row_passes() {
     let target = format!("rm {}", place.state.join("host.toml").display());
     let not_list = "\n[[rule]]\nid = \"host_guard.rm\"\nkind = \"CoreLines\"\nvalue = 1\nenabled = true\nruling = \"r\"\nruled_at = \"d\"\n";
     for fixture in [manifest(true, None), manifest_with(true, None, not_list)] {
-        let scene = Scene { cwd: &place.other, state_dir: &place.state, git: Path::new("git"), accounts: &[] };
+        let scene = Scene { cwd: &place.other, state_dir: &place.state, git: Path::new("git"), gh: Path::new("gh"), host: &NO_HOST };
         let HostGuardDecision::Deny { what, line } = judge("Bash", "rm nope", &fixture, &scene) else {
             panic!("行が読めない周は rm を断る");
         };
@@ -700,7 +703,7 @@ fn ledger_root(name: &str, beads: bool, bdw: bool) -> PathBuf {
 
 /// root の下の dir を cwd にして判定し、断る周の (what, hit) を返す。通す周は `None`。
 fn ledger_hit(command: &str, root: &Path, manifest: &Manifest) -> Option<(String, String)> {
-    let scene = Scene { cwd: root, state_dir: Path::new("/nonexistent/state"), git: Path::new("git"), accounts: &[] };
+    let scene = Scene { cwd: root, state_dir: Path::new("/nonexistent/state"), git: Path::new("git"), gh: Path::new("gh"), host: &NO_HOST };
     match judge("Bash", command, manifest, &scene) {
         HostGuardDecision::Deny { what, line } => Some((what, line.split(" hit=").nth(1)?.split(" row=").next()?.to_owned())),
         HostGuardDecision::Allow => None,
@@ -742,7 +745,7 @@ fn host_guard_ledger_four_forms_hit_with_the_gate_words() {
         assert_eq!(found, Some(("host-guard-deny ledger".to_owned(), hit.to_owned())), "{command}");
         assert_eq!(ledger_guard::FORMS.iter().filter(|form| form.as_str() == hit).count(), 1, "起票の門の語: {hit}");
     }
-    let scene = Scene { cwd: &root, state_dir: Path::new("/nonexistent/state"), git: Path::new("git"), accounts: &[] };
+    let scene = Scene { cwd: &root, state_dir: Path::new("/nonexistent/state"), git: Path::new("git"), gh: Path::new("gh"), host: &NO_HOST };
     let HostGuardDecision::Deny { line, .. } = judge("Bash", "bd close s2-1", &manifest, &scene) else {
         panic!("bd の書き込みは断る");
     };
@@ -856,7 +859,7 @@ impl Home {
         let HostManifest::Present(face) = host else {
             panic!("fixture の host.toml を読める: {host:?}");
         };
-        let scene = Scene { cwd, state_dir: &self.state, git: Path::new("git"), accounts: face.accounts() };
+        let scene = Scene { cwd, state_dir: &self.state, git: Path::new("git"), gh: Path::new("gh"), host: &face };
         match judge(tool, command, &self_manifest(), &scene) {
             HostGuardDecision::Deny { what, line } => {
                 assert_eq!(what, "host-guard-deny self", "自身の設定の種類が断る: {line}");
