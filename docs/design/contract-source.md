@@ -1028,6 +1028,43 @@ verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe
 size = "S"
 growth = ["crates/scribe2/src/pipe/cli/step.rs:10", "crates/scribe2/src/pipe/land/finish.rs:2", "crates/scribe2-boundary/tests/e2e/pipe/land/order.rs:90"]
 done = "(1) 終端だけの撃ち直しは記録の sha を読んだ後に anchor の refs/heads/main の今の sha を読み、読めない周は event を 1 件も書かず push も CI も close も撃たずに stderr 1 行（pipe: refs/heads/main を読めない）の rc 1 で断る (2) 着地した sha が先端の sha と等しい周は先端の側を渡し、自分の sha の CI で照合して reason landed <sha> ci=success で close する (3) 等しくない周は先端の sha つきの Behind を渡し、終端は push の後に祖先を測って、祖先の周は先端の sha で CI を照合し success なら reason landed <sha> ci=success tip=<先端> で close し、祖先でない周は CI を撃たず terminal:ci:unmeasurable を記して close しない（rc 1） (4) finish.rs は PushTip の doc comment だけが変わり、終端の本体・PushTip の 2 値・land_train・finish は変わらない (5) 終端の 7 値・event の詞・ci_now の判定・pipe.ci_wait_s と pipe.ci_poll_s の値・着地の周の先端の読み・close の reason の 2 形・撃ち直しの前提の段と記録の sha の読み・usage と help の字面は変わらない 歯: pipe_replay_tip_ の 3 本（order.rs）が (a) 既存の撃ち直しの歯を名と期待を書き直し、CI が failure の着地の後に別の commit が main を進めた撃ち直しで、CI の argv が main の今の sha を持ち着地した sha を持たず、reason が landed <着地した sha> ci=success tip=<今の sha> と等しいこと (b) 1 本の fn の撃ち直し 2 周で、main と偽 remote の main を着地した commit を祖先に持たない commit へ動かした周が rc 1・terminal=ci:unmeasurable で偽 CI も偽 bd も撃たず、着地した commit へ戻した周が自分の sha の CI で照合して reason landed <sha> ci=success（tip= なし）で close すること (c) refs/heads/main を消した撃ち直しが rc 1 で断りの 1 行を出し event を 1 件も書かないことを測り、base は (a) で着地した sha を照合し (b) の 1 周目で close し (c) で terminal:unreadable を記すので RED"
+
+[[contract]]
+id = "bn"
+title = "remote を持たない repo の便は走査も push も CI の照合も撃たずに landed <着地 commit id> ci=none で close する — 終端の 7 値の Undeclared を ClosedWithoutCi（closed:no-ci・rc 0）に替え、close の理由の尾の書き手を 1 関数に寄せ、歯の道具箱の台帳の見張りが close を rc 0 で受け、host の PATH を積む 2 つの口を道具箱の上に積む（FR50・ADR-0094 の経路 (2)）"
+req = ["FR50", "AC65"]
+section = "59"
+touches = ["crate::pipe::land::Terminal"]
+write-set = ["crates/scribe2/src/pipe/land.rs", "crates/scribe2/src/pipe/land/finish.rs", "crates/scribe2-boundary/tests/e2e/main.rs", "crates/scribe2-boundary/tests/e2e/pipe.rs", "crates/scribe2-boundary/tests/e2e/pipe/land.rs", "crates/scribe2-boundary/tests/e2e/pipe/gate.rs", "crates/scribe2-boundary/tests/e2e/pipe/gate/detection.rs"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail pipe_terminal_no_remote_", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_terminal_land_outcomes_are_the_closed_seven", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_terminal_no_remote_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail e2e_ledger_tripwire_helper_run_to_landed_never_reaches_the_ledger"]
+size = "M"
+growth = ["crates/scribe2/src/pipe/land.rs:30", "crates/scribe2/src/pipe/land/finish.rs:30", "crates/scribe2-boundary/tests/e2e/main.rs:4", "crates/scribe2-boundary/tests/e2e/pipe.rs:12", "crates/scribe2-boundary/tests/e2e/pipe/land.rs:160", "crates/scribe2-boundary/tests/e2e/pipe/gate.rs:10", "crates/scribe2-boundary/tests/e2e/pipe/gate/detection.rs:8"]
+done = "(1) Terminal は 7 値のまま 2 つ目の Undeclared を ClosedWithoutCi（字面 closed:no-ci・rc 0）に替え、TERMINAL_TOKENS の 2 つ目も同じ字面で、doc comment を remote を持たない repo の便を CI の照合なしで close した値に直す (2) terminal は宣言を読めて remote が無い周に push と CI を撃たずに台帳の close を撃ち、理由は landed <着地した sha> ci=none（Behind の周も tip= なし）、通れば terminal:close:ok を 1 件記して ClosedWithoutCi、落ちれば今の CloseFailed で、走らなかった段の event を積まず、宣言を読めない周は今のまま close しない (3) close の理由を組む 1 関数が finish.rs に在り（land.rs が再輸出）、尾の閉じた 2 値（CI が success で先端を任意に持つ・CI の照合なし）から landed <sha> ci=success と landed <sha> ci=success tip=<先端> と landed <sha> ci=none の 3 形を返し、経路 (1) の 2 か所の format! もこの関数を呼ぶ（字面は不変） (4) --terminal-only は変えず、remote を持たない repo の便の撃ち直しが close して run=<id> terminal=closed:no-ci を出す (5) 歯の道具箱の台帳の見張りは 1 語目が close の呼び出しだけ argv を記録して rc 0 で返し（ほかは今のまま rc 127）、pipe/gate.rs の systemd_stub と pipe.rs の shim_path は host の PATH の代わりに crate::toolbox_path を自分の bin dir の後ろに積む (6) 着地が close を撃つようになって動く歯を直す: 見張りの記録 0 件の 3 か所（pipe.rs の e2e_ledger_tripwire_helper_run_to_landed_never_reaches_the_ledger・gate.rs の assert_child_measured_the_landed_commit・detection.rs の pipe_landed_detection_measured_round_records_the_landed_commit）は着地の close の 1 件だけ、landed_detail と landed_done_detail は terminal: の detail も飛ばし、already-landed の helper は末尾の terminal: の行を除いた最後の event を読み、detection.rs の Landed の detail の全件の比べは terminal: の行を除き、pipe.rs の注は terminal=closed:no-ci (7) 経路 (1) の段と字面と event・Unreadable と残る 5 値・landed_sha・open_pr・台帳の close・TERMINAL_POLARITY・usage と help は変わらない 歯: lib の pipe_terminal_no_remote_reason_tails_come_from_one_writer（land.rs の歯の区間・3 形の字面と ci=none の周に tip= が無いこと）と既存の pipe_terminal_land_outcomes_are_the_closed_seven の書き直し（rc 0 は closed と closed:no-ci）・e2e の pipe_terminal_no_remote_land_closes_with_ci_none（見張りの記録がちょうど 1 件で理由 landed <sha> ci=none・偽 CI 0 回・remote 0・Landed の着地の後ろは terminal:close:ok の 1 件）・pipe_terminal_no_remote_train_closes_each_run_with_its_own_sha（2 本の列で記録 2 件・各自の sha・tip= なし）・pipe_terminal_no_remote_unreadable_declaration_closes_nothing_until_refired（show HEAD:.vessel.toml を落とす偽 git で rc 1・記録 0・terminal:unreadable 1、偽 git を外した --terminal-only で rc 0・記録 1）・pipe_terminal_no_remote_pr_landed_run_writes_nothing（fake_terminal の repo の --pr-cmd の着地と --terminal-only の撃ちで偽 remote の ref・偽 CI・偽 bd・見張りがどれも 0）で、base は remote の無い周に close を撃たないので lib は compile error、e2e の (b)(c)(d) と直す 3 か所は assert で RED"
+
+[[contract]]
+id = "bo"
+title = "land の終端と pipe retire が共有する問いの部品 — CI の結果を 4 値（success・failure・pending・unmeasured）で読む ci_read と、それの写しにした ci_now・PR の merge の commit を gh pr view <branch> --json state,mergeCommit で問う pr_merge（merged・not-merged・unmeasured）・台帳の 1 件の close_reason（FR96・ADR-0094 の経路 (3) の部品）"
+req = ["FR96", "AC65"]
+section = "60"
+touches = ["crate::seat::ledger::Issue"]
+write-set = ["crates/scribe2/src/fleet/wait.rs", "crates/scribe2/src/fleet/mod.rs", "crates/scribe2/src/seat/ledger.rs", "crates/scribe2/src/hook/graph_guard.rs", "crates/scribe2/src/ledger/form.rs", "crates/scribe2/src/pipe/dispatch/precheck.rs"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail retire_parts_", "cargo nextest run -p scribe2 --lib --no-tests=fail invocation_fleet_ci_query_names_the_program_and_cwd"]
+size = "M"
+growth = ["crates/scribe2/src/fleet/wait.rs:120", "crates/scribe2/src/fleet/mod.rs:1", "crates/scribe2/src/seat/ledger.rs:20", "crates/scribe2/src/hook/graph_guard.rs:1", "crates/scribe2/src/ledger/form.rs:1", "crates/scribe2/src/pipe/dispatch/precheck.rs:1"]
+done = "(1) wait.rs に ci_read（ci_now と同じ引数・子 process 1 回）と閉じた 4 値（success・failure・pending〔run が 0 本か、落ちた run が無く走っている run が在る〕・unmeasured〔行を撃てない・rc が 0 でない・JSON を読めない〕）が在り、判定の順は ci_now と同じで、ci_now は ci_read の写し（success と failure は今の 2 形・残る 2 値は None）で外形と呼び手が変わらず、fleet の再輸出に 2 名が足される (2) wait.rs に pr_merge（repo と branch の名・子 process 1 回・起動の記述を通る）と閉じた 3 値（merged〔merge の commit id〕・not-merged・unmeasured）が在り、撃つのは gh pr view <branch> --json state,mergeCommit（cwd は repo・shell を通さない・--repo を渡さない）で、state が MERGED で mergeCommit.oid が 40 桁の 16 進なら merged、他の state は not-merged、起動の失敗・rc が 0 でない・JSON を読めない・MERGED で oid が無いか形が違う周は unmeasured (3) Issue が close_reason（文字列・欄が無ければ空）を持ち issues_of が読み、構築点の 3 か所は空で足す (4) ci_now の外形と 3 形・land の終端の CI の待ちと照合・CiRun・BD_ARGS と待ち上限・issues_of の必須 2 key は変わらない 歯: lib の retire_parts_ci_read_splits_pending_from_unmeasured（wait.rs・Stub で 7 つの答えが 4 値に分かれ ci_now は Some(Success)・Some(Failure)・None×5）・retire_parts_pr_merge_reads_the_state_and_the_merge_commit（wait.rs・MERGED と 40 桁は merged・OPEN と CLOSED は not-merged・null と 39 桁と rc 1 と JSON でないは unmeasured・呼び出し 1 回で program gh・引数 pr view <branch> --json state,mergeCommit・cwd は repo）・retire_parts_issue_reads_the_close_reason（seat/ledger.rs）・不変の invocation_fleet_ci_query_names_the_program_and_cwd で、base に無い関数と欄を引く compile error で RED"
+
+[[contract]]
+id = "bp"
+title = "PR で着地した便を pipe retire が照合してから close し worktree を畳む — worktree の確かめ・--fold-only・閉じ済みの契約・宣言の remote・forge の merge の commit・remote の main の先端の祖先・先端の CI の順に問い、通れば landed <merge> ci=success [tip=<先端>] で close してから可逆に畳み、通らない周は閉じた 6 語の 1 行と rc 1 で何も書かない（FR96・AC65 (c)〜(e)・ADR-0094 の経路 (3)）"
+req = ["FR96", "AC65"]
+section = "61"
+depends = ["bn", "bo"]
+touches = ["crate::pipe::retire::Retire"]
+write-set = ["crates/scribe2/src/pipe/retire.rs", "crates/scribe2/src/pipe/cli/step.rs", "crates/scribe2/src/pipe/cli/args.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2-boundary/tests/e2e/pipe/land/retire.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pr_retire_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_retire_"]
+size = "L"
+growth = ["crates/scribe2/src/pipe/retire.rs:200", "crates/scribe2/src/pipe/cli/step.rs:25", "crates/scribe2/src/pipe/cli/args.rs:2", "crates/scribe2/src/pipe/cli.rs:2", "crates/scribe2-boundary/tests/e2e/pipe/land/retire.rs:340"]
+done = "(1) 段が Landed でその RunDone の detail が pr の便だけが経路 (3) を通り、他の対象は今のまま畳むだけで forge に問わず台帳に書かない (2) worktree が無いか clean でない周は worktree-unready（git と forge と台帳に問わない） (3) --fold-only（値なし・ALLOWED_RETIRE に足す）の周は照合も close もせず可逆な move で畳み契約を開いたまま残す (4) --bd の台帳を 1 回読み（待ち上限は rules 行 seat.ledger_timeout_s）、便の bead が closed で close_reason の頭の語が landed なら照合も close もせずに畳み、読めない周と待ち上限の行が無い周は unmeasured (5) terminal_facts が読めないか remote が無い周は unmeasured（forge に問わない） (6) pr_merge を branch_name の名で撃ち、not-merged は not-merged、unmeasured は unmeasured (7) git ls-remote <remote> refs/heads/main で先端を読み git fetch --no-tags --no-write-fetch-head <remote> refs/heads/main で object を取り、落ちた周と先端の object が無い周は unmeasured、merge の object が無い周と merge-base --is-ancestor が rc 1 の周は not-ancestor、他の rc は unmeasured (8) ci_read を先端と宣言の ci-cmd で 1 回だけ撃ち（待たない）、failure と pending は ci-not-success、unmeasured は unmeasured (9) 理由を §59 の 1 関数で組んで（merge の commit id・CI が success・先端が merge と違う周だけ tip=<先端>）close し、落ちた周は unwritten で畳まず、通った周は RunDone stage=Landed detail=terminal:close:ok を 1 件記す (10) close の後に retire_worktree で move して detail=retired を 1 件記し（段は Landed のまま）、move が落ちた周は worktree-unready で close は残る (11) 通らない周は stdout 1 行 run=<id> retire=<語>・rc 1・event と台帳の書き 0（close の後の move の失敗だけ形 9 の 1 件が残る）で、語は閉じた 6 語（宣言順 worktree-unready・not-merged・not-ancestor・ci-not-success・unmeasured・unwritten）の enum と const slice、close して畳んだ周の stdout は run=<id> retired=<畳んだ先> close=ok、畳むだけの周は今の run=<id> retired=<畳んだ先> (12) retire_run が manifest を受け（cli.rs の 1 か所）--bd と --fold-only を Retire に運び、usage と help の字面は変わらない (13) e2e の PR の便の既存の 2 本（pipe_retire_moves_pr_landed_worktree_and_keeps_branch・pipe_retire_refuses_unless_landed_and_clean）は撃ちに --fold-only を付け、期待は変わらない 歯: e2e（land/retire.rs・偽 remote と ci-cmd の偽 CI と PATH の偽 gh と --bd の偽 client の fixture）の pr_retire_closes_then_folds_when_the_merge_is_under_a_green_tip（先端そのものと先端でない 2 周・close 1 回で理由 landed <merge> ci=success と tip=<先端>・retired へ移り branch は残る・Landed の後ろは terminal:close:ok と retired・偽 gh と偽 CI の argv）・pr_retire_refuses_with_one_closed_word_and_writes_nothing（9 つの fixture が閉じた 6 語・rc 1・stdout 1 行・worktree 残る・event と偽の台帳が不変・worktree-unready と remote の無い周は偽 gh 0 回・worktree-unready の撃ち直しが success で close）・pr_retire_fold_only_and_closed_contracts_fold_without_checks（--fold-only が not-merged で畳み close 0 と偽 gh 0・retired/<id> の先置きで close の後の move が落ちて worktree-unready・退けた撃ち直しが close も偽 gh も増やさずに畳む）で、base は PR の便を forge に問わず畳み --fold-only を断るので assert で RED"
 <!-- contracts:end -->
 
 
@@ -1690,3 +1727,120 @@ done = "(1) 終端だけの撃ち直しは記録の sha を読んだ後に ancho
   - (c) CI が failure の着地の後に `refs/heads/main` を消して撃ち直す。rc 1・stdout が空・stderr が `refs/heads/main を読めない` を持ち、event の数が変わらず、偽 bd が撃たれない。
   - 変異の A/B（判定の順・条件 1 つに歯 1 本）: 形 1 の断りを外して先端の側に倒す → (c) が落ちる（終端が `terminal:unreadable` を記す）。形 2 / 3 の選びを常に先端の側にする（base の形）→ (a)（照合が着地した sha）と (b) の 1 周目（close する）が落ちる。常に `Behind` を渡す → (b) の 2 周目が落ちる（reason に `tip=`）。記録の sha の代わりに main の今の sha を着地した sha として渡す → (a)（reason が着地した sha を名指さない）と (b) の 1 周目（close する）が落ちる。
   - base で RED の理由: 3 本とも base に在る helper だけを使い、overlay の上で compile は通って assert が落ちる（機能不在）。base は (a) で着地した sha を照合し、(b) の 1 周目で close し、(c) で `terminal:unreadable` を記す。(a) は期待が動く既存の歯なので base で赤い普通の flip で、札は置かない。order.rs は 1 file で flip-check は 1 turn（1 行目の base から持ち越した純移動の札は効かず、stale-marker の 1 行が出るだけ）。
+
+## 59. remote を持たない repo の便は、走査も push も CI の照合も撃たずに「landed <着地 commit id> ci=none」で close する — 終端の 7 値の `Undeclared` を close する値に替え、close の理由の尾を 1 つの書き手に寄せる（契約表の行 bn・FR50・[ADR-0094](../../design-intent/decisions/ADR-0094-the-land-terminal-closes-landed-runs-by-three-routes.html) の経路 (2)・裁定 user 2026-09-29T05:46Z）
+
+やさしく言うと: 押す先（remote）を宣言していない repo では、今は main に着地しても台帳の契約が開いたまま残り、人が閉じるしかない。着地した時点で「CI の確かめは無し」と書いて器が閉じる。宣言が読めない周は閉じずに失敗を残し、直した後に終端だけを撃ち直せば閉じる。
+
+- 何が起きているか（main e6ca3e19・verified）:
+  - 終端 `terminal`（`crates/scribe2/src/pipe/land/finish.rs` 238 行）は、宣言の事実（`terminal_facts`）が読めない周を `terminal:unreadable` 1 件と `Terminal::Unreadable` で返し（241〜246 行）、`remote` の無い周を event 0 件の `Terminal::Undeclared` で返す（250〜252 行）。close は `remote` が在る周の push と CI の後ろにしか無い（294 行）。
+  - close の理由は 2 形を 2 か所の `format!` で組む（290〜293 行・`landed <sha> ci=success` と `... tip=<先端>`）。書き出しは `CLOSE_REASON`（196 行）。
+  - 終端の結末は閉じた 7 値で（`crates/scribe2/src/pipe/land.rs` 838 行）、字面の列 `TERMINAL_TOKENS`（865 行）の 2 つ目が `undeclared`、rc 0 は `Closed` と `Undeclared` の 2 値（894 行）。in-file の歯 `pipe_terminal_land_outcomes_are_the_closed_seven`（1103 行）が 7 値と rc 0 の 2 値を pin する。
+  - 終端だけの撃ち直し（`--terminal-only`・§58）は同じ `terminal` を呼ぶので、経路は撃った時点の宣言で選ばれる（`crates/scribe2/src/pipe/cli/step.rs` 59〜106 行）。PR で着地した便は `Landed` の detail が `pr` で `sha:` を持たず（finish.rs 92 行）、撃ち直しは記録の sha を読めずに断る（step.rs 64〜66 行）＝経路 (2) は PR の便に掛からない。
+  - 歯の道具箱の台帳 client の見張り（`crates/scribe2-boundary/tests/e2e/main.rs` 414〜424 行・gate-cost.md §37）は、呼ばれた argv を記録して rc 127 で断る。§37 は「終端の close は押す先を宣言した repo の後ろに在るので、実台帳へ届いている歯は 0 本」を前提にしている。本 § でその前提が崩れ、remote を持たない toy repo の着地が全部 close を撃つ。
+- 着地が close を撃つようになって動く歯（2026-09-29 の grep による census・deduced）:
+  1. 見張りの記録が 0 件であることを測る 3 か所: `crates/scribe2-boundary/tests/e2e/pipe.rs` 1535 行（`e2e_ledger_tripwire_helper_run_to_landed_never_reaches_the_ledger`）・`crates/scribe2-boundary/tests/e2e/pipe/gate.rs` 2284 行（helper `assert_child_measured_the_landed_commit`）・`crates/scribe2-boundary/tests/e2e/pipe/gate/detection.rs` 105 行。
+  2. `Landed` の最後の detail を着地の `sha:` と読む helper と歯: pipe/land.rs の `landed_detail`（819 行・`detection:` だけを飛ばす）・pipe/gate.rs の `landed_done_detail`（1840 行）・pipe/land.rs 609 行（`assert_already_landed_terminal` の `.pop()`）・detection.rs 306 行（`Landed` の detail の全件が着地の 1 件）。
+  3. 道具箱を持たない PATH で着地まで撃つ口: pipe/gate.rs の `systemd_stub`（1333 行・host の PATH を後ろに積む）を使う `crates/scribe2-boundary/tests/e2e/pipe/gate/confine.rs` 432 行の land（rc 0 を期待）。この口の close は host の台帳 client（PATH の `bd`）へ届く。pipe.rs の `shim_path`（1052 行）も host の PATH を積むが、今それで着地まで届く歯は無い（land/rebase.rs 148 行・land.rs 1296 / 1344 行・follow.rs はどれも着地の前で止まる）。`landed_path`（gate.rs 2021 行）は既に道具箱を積んでいる。
+- 形（番号は done と 1:1）:
+  1. **7 値のまま 1 値を替える**: `Terminal::Undeclared` を `Terminal::ClosedWithoutCi` に替える（宣言順の 2 つ目・字面 `closed:no-ci`・rc 0）。`TERMINAL_TOKENS` の 2 つ目も同じ字面にする。doc comment は「remote を持たない repo の便を CI の照合なしで close した」に直す。
+  2. **経路 (2)**: `terminal` は宣言を読めた周に `remote` が無ければ、push と CI を撃たずに台帳の close を撃ち、理由は `landed <着地した sha> ci=none` とする（`tip` が `Behind` の周も `tip=` を付けない）。close が通れば `terminal:close:ok` を 1 件記して `ClosedWithoutCi`、落ちれば今の `CloseFailed`（`terminal:<close:failed:…>` 1 件・rc 1）。走らなかった push と CI の段の event は積まない。宣言を読めない周は今のまま（`terminal:unreadable`・close しない・rc 1）。
+  3. **理由の尾の書き手は 1 本**: close の理由を組む 1 関数を finish.rs に置く（`pub(in crate::pipe)`・land.rs が `landed_sha` と同じく再輸出）。尾は閉じた 2 値で受ける: CI が success（先端の commit id を任意で持つ）と、CI の照合なし。字面は `landed <sha> ci=success`・`landed <sha> ci=success tip=<先端>`・`landed <sha> ci=none` の 3 形で、経路 (1) の 2 か所の `format!` もこの関数に替える（字面は変わらない）。経路 (3)（§61）も同じ関数を呼ぶ。
+  4. **撃ち直し**: `--terminal-only` は変えない。remote を持たない repo の便の撃ち直しは経路 (2) で close し、stdout は `run=<id> terminal=closed:no-ci`。
+  5. **歯の道具箱**:
+     - 見張りは `close` を 1 語目に持つ呼び出しだけ、argv を記録してから rc 0 で返す（ほかの呼び出しは今のまま rc 127・列の 1 周の `unmeasured reason=ledger` の枝は動かない）。
+     - pipe/gate.rs の `systemd_stub` は、host の PATH の代わりに道具箱の PATH（`crate::toolbox_path`）を自分の bin dir の後ろに積む（`landed_path` と同じ形）。pipe.rs の `shim_path` も同じ形にする（着地まで届く歯を後から足した周に host の client へ届かないため）。どちらも自分の bin dir が先頭なので、偽 git と偽 systemd-run の解決は変わらない。
+  6. **動く歯を直す**（census の 1〜3）: 見張りの 0 件の 3 か所は「着地の close の 1 件だけ」（argv が `close <bead> --reason landed <sha> ci=none`）に直す。`landed_detail` と `landed_done_detail` は `terminal:` で始まる detail も飛ばす。609 行は末尾の `terminal:` の行を除いた最後の event を読む。306 行は `terminal:` の行を除いた全件を比べる。pipe.rs 682 行の注は `terminal=closed:no-ci` に直す。
+  7. **変えないもの**: 経路 (1) の段と字面と event（push・CI・close）・`Unreadable` と残る 5 値の字面と rc・`landed_sha`・`open_pr`（PR の便は終端を撃たない）・台帳の close（`crates/scribe2/src/ledger/mod.rs`）・`--terminal-only` の段の確かめと記録の sha の読み・終端の極性（`TERMINAL_POLARITY`）・usage と help。
+- 触らない: finish.rs の `finish` と `land_train` と `PushTip`・`crates/scribe2/src/pipe/cli/step.rs`・vessel 宣言の読み（`terminal_facts`）・FR93（memo の自動の close）と FR90（局面の出力の書き直し）の契機（本 § の close が契機になるが、その側は未実装で、束 `s2-07l.739` の行が持つ）。
+- 限界:
+  - 経路 (2) の close は CI を見ない（`ci=none` の尾がそのことを記録に残す）。main が赤くなっていても close する。着地の前の主実測（main の verify）は今のまま撃つ。
+  - remote の宣言を後から足した repo で、それより前に `ci=none` で閉じた契約は閉じたまま（撃ち直しで経路 (1) へ移らない）。
+  - FR50 の push の前の走査（経路 (1)）は本 § の外（vessel-hook.md の publish の配線の行が持つ）。
+- 却下:
+  - `Undeclared` の字面のまま close する — `terminal=undeclared` が「閉じた」を名乗らず、記録から close の有無を読めない（C10）。
+  - 8 つ目の値を足す — 「宣言を読めた上で remote が無い」周は 1 つしか無く、`Undeclared` を残すと到達しない値になる。
+  - 経路 (2) で CI の行（`ci-cmd`）を撃つ — remote を持たない repo の commit に forge の CI の run は付かない。
+  - 見張りを全ての呼び出しで rc 0 にする — 列の 1 周が「0 件を読めた」へ倒れ、`unmeasured reason=ledger` の枝が測れなくなる（§37 却下）。
+  - host の PATH を積む口の側で個々の歯に `--bd` を足す — 口が同じ形のまま残り、後から足す歯が同じ穴を踏む。
+- 歯（接頭辞 `pipe_terminal_no_remote_`・`grep -rn pipe_terminal_no_remote_ crates/ docs/` は 0 件〔main e6ca3e19・2026-09-29〕・契約表の nextest の verify 行の filter 語のどれも、この接頭辞で始まる名の部分文字列にならない〔実測〕）:
+  - lib（`crates/scribe2/src/pipe/land.rs` の歯の区間）: (a) `pipe_terminal_no_remote_reason_tails_come_from_one_writer`: 理由の関数が 3 形の字面を返し、`ci=none` の形は先端を受けても `tip=` を持たない。既存の `pipe_terminal_land_outcomes_are_the_closed_seven` は、2 つ目を `ClosedWithoutCi` に、rc 0 の 2 値を `closed` と `closed:no-ci` に直す（名は変えない）。
+  - e2e（`crates/scribe2-boundary/tests/e2e/pipe/land.rs`・親の helper を使う）:
+    - (b) `pipe_terminal_no_remote_land_closes_with_ci_none`: remote を持たず `ci-cmd` に回数を数える偽 CI を宣言した toy repo の着地が rc 0・stdout の末尾が `terminal=closed:no-ci`・見張りの記録がちょうど 1 件で argv が `close` / bead / `--reason` / `landed <着地した sha> ci=none`・偽 CI の呼び出し 0・repo の remote 0・`Landed` の着地の detail の後ろが `terminal:close:ok` の 1 件だけ。
+    - (c) `pipe_terminal_no_remote_train_closes_each_run_with_its_own_sha`: remote を持たない repo の列の着地（2 本）で、見張りの記録が 2 件、各 argv の理由が自分の着地 commit の `landed <sha> ci=none` で `tip=` を持たない。
+    - (d) `pipe_terminal_no_remote_unreadable_declaration_closes_nothing_until_refired`: `show HEAD:.vessel.toml` だけを落とす偽 git（`land_once_with_git_shim`）の着地が rc 1・stdout に `terminal=unreadable`・見張りの記録 0 件・`terminal:unreadable` 1 件。偽 git を外して `pipe land --terminal-only` を撃つと rc 0・stdout が `run=<id> terminal=closed:no-ci`・見張りの記録がちょうど 1 件で理由が `landed <sha> ci=none`。
+    - (e) `pipe_terminal_no_remote_pr_landed_run_writes_nothing`: remote と偽 CI と偽 bd を宣言した repo（`fake_terminal`）で `--pr-cmd` の着地が rc 0・偽 remote の ref 0・偽 CI の呼び出し 0・偽 bd の log 無し・見張りの記録 0 件。同じ便への `--terminal-only` は rc 1 で断られ、書きは 0 のまま（AC65 (b)・base でも緑・同じ file の (b)〜(d) が base で赤い）。
+  - 変異の A/B（条件 1 つに歯 1 本）: remote の無い周を今の早期 return に戻す → (b)(c)(d の 2 周目) が落ちる。remote の無い周も push を撃つ → (b) が落ちる（`terminal:push:failed:git`）。`ci=none` の周に `Behind` の `tip=` を付ける → (c) が落ちる。宣言を読めない周を remote の無い周と同じに読む → (d) の 1 周目が落ちる。PR の便にも終端を撃つ → (e) が落ちる。
+  - base で RED の理由: (a) は base に無い理由の関数と `ClosedWithoutCi` を引く compile error（land.rs は base に在る file の歯の区間）。(b)(c)(d) は base が remote の無い周に close を撃たない（見張りの記録 0 件・`terminal=undeclared`）ので assert で RED（機能不在）。census の 1 の 3 か所も同じ理由で base で赤い。census の 2 の helper の直しは base の記録（`terminal:` の行が無い）でも同じ値を返す。
+
+## 60. land の終端と pipe retire が共有する問いの部品 — CI の結果を 4 値で読む・PR の merge の commit を forge に問う・台帳の 1 件が close の理由を持つ（契約表の行 bo・FR96・ADR-0094 の経路 (3) の部品）
+
+やさしく言うと: PR で着地した便を閉じる口（§61）が要る「問い」を先に揃える。CI の結果は「成功・失敗・まだ無い・測れない」の 4 つに分け、PR が merge されたかとその commit を forge に 1 回で問い、台帳の読みが「どういう理由で閉じたか」も持つ。どれも今の振る舞いは変えない。
+
+- 何が起きているか（main e6ca3e19・verified）:
+  - CI の読み `ci_now`（`crates/scribe2/src/fleet/wait.rs` 237 行）は 3 形を返す: `Some(Failure)`・`Some(Success)`・`None`。`None` は run が 0 本・まだ走っている・行を撃てない・JSON を読めない の 4 つを 1 つに畳む（228〜236 行の doc）。land の終端はそれで足りる（`None` は上限まで待った後の `ci:unmeasurable`）。FR96 は「結果がまだ無い周（ci-not-success）」と「問いを撃てない周（unmeasured）」を分けるので、`None` のままでは足りない。
+  - forge へ PR を問う口は src に無い（`gh pr` の起動は `crates/` の src に 0 件・PR を作る seam は `--pr-cmd` の 1 行だけ〔finish.rs 57 行〕）。起動の記述（`crate::invocation::Invocation`）と lib の歯の stub（`crates/scribe2/src/pipe/mod.rs` の fixture の module の `Stub`）は在り、`ci_now` の歯（wait.rs 984 行）が同じ形を使う。
+  - 台帳の 1 件 `Issue`（`crates/scribe2/src/seat/ledger.rs` 69 行）は close の理由を持たない。台帳の JSON（`bd list --all --json`）の要素は `close_reason` を持つ（2026-09-29 に閉じた bead 1 件で実測: `landed <40 桁の sha> ci=success`）。構築点は 4 か所（seat/ledger.rs 113 行・`crates/scribe2/src/hook/graph_guard.rs` 572 行・`crates/scribe2/src/ledger/form.rs` 357 行〔歯〕・`crates/scribe2/src/pipe/dispatch/precheck.rs` 458 行〔歯〕・2026-09-29 の grep）。
+- 形（番号は done と 1:1）:
+  1. **CI の 4 値**: wait.rs に `ci_read`（同じ引数・子 process 1 回）と閉じた 4 値（success・failure・pending〔run が 0 本か、落ちた run が無く走っている run が在る〕・unmeasured〔行を撃てない・rc が 0 でない・JSON を読めない〕）を置く。判定の順は `ci_now` と同じ（schedule の run を外す → 落ちた run を先に見る → 全部完了なら success）。`ci_now` は `ci_read` の写し（success → `Some(Success)`・failure → `Some(Failure)`・残る 2 値 → `None`）にして、外形と呼び手は変えない。fleet の module の再輸出に 2 名を足す。
+  2. **PR の merge の問い**: wait.rs に `pr_merge`（repo と branch の名を受ける・子 process 1 回）と閉じた 3 値（merged〔merge の commit id〕・not-merged・unmeasured）を置く。撃つ行は `gh pr view <branch> --json state,mergeCommit`（cwd は repo・shell を通さない・`ci_now` と同じ起動の記述）。`state` が `MERGED` で `mergeCommit.oid` が 40 桁の 16 進なら merged、`state` が他の文字列なら not-merged、起動の失敗・rc が 0 でない・JSON を読めない・`MERGED` なのに oid が無いか形が違う周は unmeasured。forge の既定の repo の選び方は gh に任せる（`--pr-cmd` の gh と同じ解き方・`--repo` を渡さない）。
+  3. **close の理由**: `Issue` に `close_reason`（文字列・欄が無ければ空）を足し、`issues_of` が読む。構築点の 3 か所は空で足す。
+  4. **変えないもの**: `ci_now` の外形と 3 形・land の終端の CI の待ちと照合・`CiRun`・台帳の読みの引数（`BD_ARGS`）と待ち上限・`issues_of` の必須 2 key。
+- 触らない: land の終端（§59）・pipe retire（§61 が呼ぶ）・rules 行。
+- 限界: `pr_merge` は forge の CLI が gh であることを前提にする（`ci-cmd` のように宣言で替えられない）。forge の key を vessel 宣言に足すには新しい ADR が要る（ADR-0094 は問う字面を設計へ委ねた）。merge の commit を持たない merge（forge の設定による）は unmeasured になる。
+- 却下:
+  - `ci_now` の `None` を割って外形を変える — 呼び手（`Completion::CiResult` の待ちと終端）が全部動く。
+  - PR の問いを `--repo <owner>/<name>` で撃つ — 宣言の remote の URL から owner/name を導く読み手が要り、`--pr-cmd` の gh と違う repo を問いうる。宣言と別の remote へ出した PR は、git の祖先の照合が not-ancestor で閉じない（ADR-0094）。
+  - 台帳の 1 件を `bd show` で読む — 読みの口が 2 本になる（`read_ledger` の 1 本に寄せる）。
+- 歯（接頭辞 `retire_parts_`・`grep -rn retire_parts_ crates/ docs/` は 0 件〔main e6ca3e19・2026-09-29〕・filter 語の衝突 0〔実測〕）:
+  - lib（wait.rs の歯の区間・`Stub` で子 process を撃たない）:
+    - (a) `retire_parts_ci_read_splits_pending_from_unmeasured`: 完了の success・failure・走っている run・空の配列・schedule だけ・rc 1・JSON でない の 7 つが success・failure・pending・pending・pending・unmeasured・unmeasured で、`ci_now` は同じ 7 つに `Some(Success)`・`Some(Failure)`・`None`×5 を返す。
+    - (b) `retire_parts_pr_merge_reads_the_state_and_the_merge_commit`: `MERGED` と 40 桁の oid は merged、`OPEN` と `CLOSED` は not-merged、`MERGED` で `mergeCommit` が null・oid が 39 桁・rc 1・JSON でない の 4 つは unmeasured。stub の呼び出しは 1 回で、program は `gh`・引数は `pr view <branch> --json state,mergeCommit`・cwd は repo。
+  - lib（seat/ledger.rs の歯の区間）: (c) `retire_parts_issue_reads_the_close_reason`: `close_reason` を持つ要素はその字面、持たない要素は空。
+  - base で RED の理由: 3 本とも base に無い関数と欄を引く compile error（wait.rs と seat/ledger.rs は base に在る file の歯の区間）。
+
+## 61. PR で着地した便を pipe retire が照合してから close し、worktree を畳む — worktree の確かめ・畳むだけの指定・閉じ済みの契約・merge の commit・remote の main の先端の祖先・先端の CI の順に問い、閉じた 6 語で断る（契約表の行 bp・FR96・AC65 (c)〜(e)・ADR-0094 の経路 (3)）
+
+やさしく言うと: PR で着地した便は、今は merge の後に人が worktree を畳み（`pipe retire`）、台帳は手で閉じている。畳む口が forge と git に「merge されたか・その commit が remote の main に載ったか・main の CI が緑か」を問い、全部通った時だけ台帳を閉じてから畳む。通らない周は何も書かずに理由の 1 語を出し、同じ口で撃ち直せる。merge されずに閉じた PR などは「畳むだけ」の指定で出口を持つ。
+
+- 何が起きているか（main e6ca3e19・verified）:
+  - `retire`（`crates/scribe2/src/pipe/retire.rs` 56 行）は worktree が在ること（58〜61 行）と clean なこと（62〜65 行）を確かめ、`retire_worktree` で可逆に move し（66〜70 行・move の失敗は rc 2）、段を動かさずに `detail=retired` を 1 件記す（71〜84 行）。doc comment（42〜55 行）は「`detail=pr` を前提にしない」「merge 済みかは人が確かめる（forge へ問い合わせない）」と書く。pipeline.md §5.4 も同じ読み。
+  - 入口 `retire_run`（`crates/scribe2/src/pipe/cli/step.rs` 417 行）は段 Landed・Failed・Gated・Stopped・Reviewed を受け、manifest を受け取らない（`crates/scribe2/src/pipe/cli.rs` 445 行）。受ける flag は置き場の 3 つと `--run` と道具の 4 つ（`crates/scribe2/src/pipe/cli/args.rs` 154 行・`--bd` を含む）。
+  - PR の便は `Landed` の `RunDone` の detail が `pr` の 1 件だけを持つ（finish.rs 92 行）。PR の branch の名は `branch_name`（`crates/scribe2/src/pipe/mod.rs` 302 行・`--pr-cmd` の `{branch}` の穴と同じ 1 本）。
+  - 台帳の読みは `read_ledger`（seat/ledger.rs 152 行・待ち上限は rules 行 `seat.ledger_timeout_s` を `timeout_of` で読む）、close は `crate::ledger::close`（`crates/scribe2/src/ledger/mod.rs` 88 行）。
+  - PR の便の retire の e2e は 2 本（`crates/scribe2-boundary/tests/e2e/pipe/land/retire.rs` 7 行と 47 行）で、toy repo は remote を持たない。本 § の後は経路 (3) で unmeasured になるので、畳むだけの指定を付けた撃ちに書き直す。
+- 判定の順（PR の便の周）: 経路の選び → worktree → 畳むだけの指定 → 台帳（閉じ済み）→ 宣言の remote → forge（merge の commit）→ git（先端・祖先）→ 先端の CI → close → 畳み。
+- 形（番号は done と 1:1）:
+  1. **経路の選び**: 便の段が `Landed` で、その `Landed` の `RunDone` の detail が `pr` の便だけが経路 (3) を通る。他の対象（squash の形で着地して move だけが落ちた便・Failed・Gated の FAIL・Stopped・Reviewed の FAIL）は今のまま畳むだけで、forge に問わず台帳に書かない（断りの字面と rc も今のまま）。
+  2. **worktree**: worktree が無いか clean でない周は `worktree-unready`（git と forge にも台帳にも問わない）。
+  3. **畳むだけの指定**: `--fold-only`（値なし・`ALLOWED_RETIRE` に足す）を付けた周は、照合も close もせずに可逆な move で畳み、契約は開いたまま残す。PR の便でない対象では何も変えない。
+  4. **閉じ済みの契約**: `--bd`（無ければ既定名）で台帳を 1 回読み（待ち上限は rules 行）、便の bead が closed で `close_reason` の頭の語が `landed`（`CLOSE_REASON`）なら、照合も close も撃たずに畳む。読めない周・待ち上限の行が無い周は `unmeasured`。
+  5. **宣言の remote**: `terminal_facts` が読めない周と `remote` が無い周は `unmeasured`（forge に問わない）。
+  6. **forge**: `pr_merge`（§60）を便の branch の名で撃つ。not-merged は `not-merged`、unmeasured は `unmeasured`、merged なら merge の commit id を持って進む。
+  7. **git**: `git ls-remote <remote> refs/heads/main` で先端の commit id を読み、`git fetch --no-tags --no-write-fetch-head <remote> refs/heads/main` で object を取る。どちらかが落ちた周・先端の object が無い周は `unmeasured`。merge の commit の object が無い周と、`git merge-base --is-ancestor <merge> <先端>` が rc 1 の周は `not-ancestor`、それ以外の rc は `unmeasured`。
+  8. **先端の CI**: `ci_read`（§60）を先端の commit id と宣言の `ci-cmd` で 1 回だけ撃つ（待たない）。failure と pending は `ci-not-success`、unmeasured は `unmeasured`。
+  9. **close**: 理由は §59 形 3 の 1 関数で組む（merge の commit id・CI が success・先端が merge の commit と違う周だけ先端の commit id）。close が落ちた周は `unwritten`（畳まない）。通った周は `RunDone stage=Landed detail=terminal:close:ok` を 1 件記す。
+  10. **畳み**: close の後に `retire_worktree` で move し、`detail=retired` を 1 件記す（段は `Landed` のまま）。move が落ちた周は `worktree-unready`（close は残り、撃ち直しは形 4 で畳むだけ）。
+  11. **出力**: 通らない周は stdout の 1 行 `run=<id> retire=<語>`・rc 1・event も台帳の書きも 0（close の後の move の失敗だけは形 9 の 1 件が残る）。語は閉じた 6 語（宣言順 worktree-unready・not-merged・not-ancestor・ci-not-success・unmeasured・unwritten）の enum と const slice で持つ。close して畳んだ周の stdout は `run=<id> retired=<畳んだ先> close=ok`、畳むだけの周（形 3・形 4）は今の `run=<id> retired=<畳んだ先>`。
+  12. **入口**: `retire_run` は manifest を受け（cli.rs の 1 か所）、`--bd` と `--fold-only` を `Retire` に運ぶ。usage と help の字面は変えない（verb ごとの flag を列挙しない形のまま）。
+  13. **既存の歯の書き直し**: retire.rs（e2e）7 行と 47 行の 2 本の PR の便の撃ちに `--fold-only` を付ける（期待は変えない）。
+- 触らない: 他の対象の畳み方と断り・`retire_worktree`・`land` の `--pr-cmd`（PR の便は終端を撃たない）・起票の門（席の道具の呼び出しの着地の形の close は今のまま断る・器の子 process の close は門を通らない）・polarity の一覧（retire の 6 語は close を止める判定だが、畳む口の結末として一覧に行を足さない＝限界）・role の権能（`pipe retire` は launch のまま）。
+- 限界:
+  - FR96 の「close した周に memo の自動の close（FR93）を撃つ」と、ADR-0094 の「局面の出力の書き直し（FR90）の契機」は本 § に無い。FR93 と FR90 の設計と実装は束 `s2-07l.739` の行が持ち、その行が経路 (2) と (3) の close の後ろに契機を足す。
+  - 台帳を読めない周の `unmeasured` は、FR96 の unmeasured の定義（git か forge の問いを撃てない周・key remote を持たないか読めない周）の外の周を同じ語に入れている（SRS の字面の見直しの候補）。
+  - forge の既定の repo は gh が選ぶ。remote が複数在り gh の既定が決まっていない repo は、gh が断って `unmeasured`。宣言と別の remote へ出した PR は、merge されていても `not-ancestor`（出口は `--fold-only`）。
+  - `--pr-cmd` が `{branch}` と別の名の branch を PR の head にした便は、PR が見つからず `unmeasured`（出口は `--fold-only`）。
+  - 本 § の前に畳まれた PR の便は射程の外（ADR-0094 CSQ-N8）。
+- 却下:
+  - 経路 (3) を land の撃ち直し（`--terminal-only`）に置く — land は PR の便の記録の sha を持たず、畳みと close の順（close の後に畳む）を 1 つの口で持てない。
+  - CI を上限まで待つ — 撃ち直せる口で待つと、手の撃ちが上限の分だけ止まる（結果がまだ無い周は `ci-not-success` で撃ち直す）。
+  - 台帳の閉じ済みを event log（`terminal:close:ok`）で判じる — 別の口で閉じた契約（同じ bead の別の便など）を二度閉じる。
+  - 失敗の周に event を記す — FR96 は通らない周の書きを 0 にする（撃ち直しの記録は stdout の 1 行と rc）。
+- 見積: retire.rs 104 → 約 290・step.rs 431 → 約 450・args.rs と cli.rs は 1 行ずつ・e2e の retire.rs 746 → 約 1080。diff は歯込みで約 540 行（L）。
+- 歯（接頭辞 `pr_retire_`・`grep -rn pr_retire_ crates/ docs/` は 0 件〔main e6ca3e19・2026-09-29〕・filter 語の衝突 0〔実測・既存の filter 語 `pipe_retire_` は `pr_retire_` の部分文字列でない〕・`crates/scribe2-boundary/tests/e2e/pipe/land/retire.rs` に置き、親の helper を使う）:
+  - fixture: PR の便（`landed_pr`）・偽 remote（bare repo・宣言の `remote`）と宣言の `ci-cmd` の偽 CI（答えの JSON を file で替える）・PATH の先頭の偽 gh（`pr view` の argv を記録し、答えの JSON と rc を file で替える・道具箱の PATH を後ろに積む）・`--bd` の偽 client（`close` は argv を記録して rc を file で替え、通った周は偽の台帳の JSON を「closed・close_reason」に書き換える／ほかは偽の台帳の JSON を返す）。merge の commit は repo で便の branch と main から作り、偽 remote の main へ path の URL で押す（先端でない fixture はその上に 1 commit 足して押す）。
+  - (a) `pr_retire_closes_then_folds_when_the_merge_is_under_a_green_tip`: merge の commit が先端そのものの fixture と先端でない fixture の 2 周。rc 0・stdout が `run=<id> retired=<畳んだ先> close=ok`・偽 client の close がちょうど 1 回で理由が `landed <merge> ci=success`（先端でない周は ` tip=<先端>` を持つ）・worktree が `retired/<id>` へ移り branch は残る・`Landed` の後ろが `terminal:close:ok` と `retired` の 2 件・偽 gh の argv が `pr view <branch> --json state,mergeCommit`・偽 CI の argv が先端の commit id。
+  - (b) `pr_retire_refuses_with_one_closed_word_and_writes_nothing`: 9 つの fixture（worktree が clean でない・not-merged・祖先でない・CI が failure・CI の結果が空・宣言に remote が無い・偽 gh が rc 1・close が rc 3・偽の台帳が rc 1）が順に `worktree-unready`・`not-merged`・`not-ancestor`・`ci-not-success`・`ci-not-success`・`unmeasured`・`unmeasured`・`unwritten`・`unmeasured`。各周で rc 1・stdout がちょうど `run=<id> retire=<語>`・worktree が元の場所に在る・event の数が変わらない・偽の台帳の JSON が変わらない。worktree-unready と remote の無い周は偽 gh の呼び出し 0。worktree-unready の fixture を clean に戻して success の答えにした撃ち直しが rc 0 で close する。
+  - (c) `pr_retire_fold_only_and_closed_contracts_fold_without_checks`: not-merged の fixture に `--fold-only` を付けた撃ちが rc 0・畳む・close 0・偽 gh の呼び出し 0。`retired/<id>` に先に dir を置いた success の fixture の撃ちが rc 1 の `worktree-unready`・close 1 回（偽の台帳が closed・landed）・worktree が元の場所に在る。dir を退けて撃ち直すと rc 0 で畳み、close も偽 gh も増えない。
+  - 変異の A/B（判定の順・条件 1 つに歯 1 本）: worktree の確かめを forge の後ろへ移す → (b) の worktree-unready の周で偽 gh が撃たれる。閉じ済みの確かめを外す → (c) の撃ち直しで close が 2 回。祖先の照合を外す → (b) の not-ancestor の周で close する。pending を success に倒す → (b) の空の結果の周で close する。先端の違いを見ずに `tip=` を付けない → (a) の 2 周目が落ちる。close の前に畳む → (b) の unwritten の周で worktree が消える。
+  - base で RED の理由: (a)(c) は base の retire が forge に問わず close を撃たず `--fold-only` を未知の flag として断るので assert で RED、(b) は base が PR の便を畳んで rc 0 を返すので RED（機能不在）。書き直す既存の 2 本は `--fold-only` を base が断るので base で赤い。
