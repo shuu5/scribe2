@@ -362,8 +362,8 @@ terms:
     relationships: [器, NAME 定数, vessel 宣言]
   - canonical: vessel 宣言
     domain: consumer
-    definition: repo が器に、 許す command・共通 verify・任意の確かめを名乗る設定 file (marker の隣に置く tracked file .vessel.toml)。 intake が manifest の上限と突合して便ごとに写しへ凍結する (C10・ADR-0010)。 任意 key に ruling-check (裁定 id の実在・SRS FR83)・ruling-fixtures (裁定 id の引用に数えない見本の字面の閉じた一覧・完全一致だけで書式は何も外さない・ruling-check と同じく版を跨ぐ形・SRS FR83・ADR-0083)・floor-check (床の検査・SRS FR85)・question-route (選択式の問いの断り文の 1 行・SRS FR86)・remote (押す先・持たない repo の便は push も CI の照合もせずに閉じる・SRS FR50) を持てる。 ruling-check を持たない repo では器は裁定 id の引用を数えも断りもせず doctor の行がその旨を出し (未反映の裁定の数えは key に依らない)、 floor-check を持たない repo では床の検査を撃たない。 marker そのものは変えない。
-    relationships: [".vessel", allowlist, 共通 verify, manifest, intake, opt-in の線, 床の検査, 裁定 id]
+    definition: repo が器に、 許す command・共通 verify・任意の確かめを名乗る設定 file (marker の隣に置く tracked file .vessel.toml)。 intake が manifest の上限と突合して便ごとに写しへ凍結する (C10・ADR-0010)。 任意 key に ruling-check (裁定 id の実在・SRS FR83)・ruling-fixtures (裁定 id の引用に数えない見本の字面の閉じた一覧・完全一致だけで書式は何も外さない・ruling-check と同じく版を跨ぐ形・SRS FR83・ADR-0083)・floor-check (床の検査・SRS FR85)・question-route (選択式の問いの断り文の 1 行・SRS FR86)・remote (押す先・持たない repo の便は push も CI の照合もせずに閉じる・SRS FR50)・close-check (起票の門の close の段への加わり・ADR-0097) を持てる。 ruling-check を持たない repo では器は裁定 id の引用を数えも断りもせず doctor の行がその旨を出し (未反映の裁定の数えは key に依らない)、 floor-check を持たない repo では床の検査を撃たない。 marker そのものは変えない。 close-check を持たない repo では起票の門は close の理由を見ない。
+    relationships: [".vessel", allowlist, 共通 verify, manifest, intake, opt-in の線, 床の検査, 裁定 id, close-check]
   - canonical: Budget
     domain: consumer
     definition: 起動に必要な予算の型。 Precheck の実測を消費してしか作れず、 唯一の起動口 spawn が要求する (C6)。
@@ -1133,13 +1133,29 @@ terms:
   - canonical: 起動の権能
     domain: consumer
     aliases: [launch]
-    definition: 便を起こす側の口 (受付・起動・再開・退役) に結ばれた権能。 ADR-0045 §2 (1) の後は席の rules 行に無く dispatcher の口ゆえ、 どの席からも撃てない。 便 1 本を終端へ倒す口は ADR-0048 で停止の権能へ移る (proposed)。
+    definition: 便を起こす側の口 (受付・起動・再開・退役) (退役は名指しでない形・名指しの退役は ADR-0097 で決着の権能へ移る) に結ばれた権能。 ADR-0045 §2 (1) の後は席の rules 行に無く dispatcher の口ゆえ、 どの席からも撃てない。 便 1 本を終端へ倒す口は ADR-0048 で停止の権能へ移る (proposed)。
     relationships: [権能, dispatcher, 便, orchestrator]
   - canonical: 停止の権能
     domain: consumer
     aliases: [stop]
     definition: 走っている便 1 本を終端 Stopped へ倒す操作の権能 (ADR-0048・proposed)。 rules 行 role.orchestrator が持ち、 席が撃てるのは便を名指す形だけで、 生きている席を全部止める形と名指しを読めない呼び出しは起動の権能のまま (fail-closed) ＝どの席からも撃てない。
-    relationships: [権能, 起動の権能, live な便, orchestrator, guard]
+    relationships: [権能, 起動の権能, live な便, orchestrator, guard, 決着の権能, 名指しの窓]
+  - canonical: 決着の権能
+    domain: consumer
+    aliases: [settle]
+    definition: 止まった終端を閉じる 2 つの口 (終端だけの撃ち直し pipe land --terminal-only と pipe retire) を、 便 1 本を名指す窓の形に限って結んだ権能 (ADR-0097)。 rules 行 role.orchestrator が持つ。 窓から外れた呼び出しは、 撃ち直しの口は merge、 退役の口は launch を要る。
+    relationships: [権能, 停止の権能, 起動の権能, 名指しの窓, 止まった終端, orchestrator]
+    flagged_ambiguities: [dispatch の列外の理由 settled (終端に着いた便の契約を列に戻さない印) とは別。 settled は便の状態、 決着の権能は席の許可]
+  - canonical: 名指しの窓
+    domain: consumer
+    aliases: [named window]
+    definition: 権能 guard が器の口の 2 語の後ろから command 行の末尾までを読む範囲のうち、 --run・--state-dir・--repo・--rules とその値の対だけから成り --run がちょうど 1 回で、 値が - で始まらず shell の字を含まない形 (ADR-0048・ADR-0097)。 終端だけの撃ち直しの窓は加えて --terminal-only をちょうど 1 回持ち、 退役の窓は畳むだけの指定 --fold-only を 0 か 1 回持てる。 決着の権能の窓は --rules を持たず、 --state-dir と --repo の値は hook が解いた置き場と anchor と同じ字に限る。 停止の権能と決着の権能はこの形の呼び出しにだけ結ぶ。
+    relationships: [停止の権能, 決着の権能, guard]
+  - canonical: 止まった終端
+    domain: consumer
+    aliases: [stalled terminal]
+    definition: 着地は済んだのに land の終端が契約を閉じられずに止まった便の終わり (CI の失敗・CI の結果が無い・push の失敗・close の失敗・宣言を読めない) と、 PR で着地して merge の後の照合を待つ便 (ADR-0097)。 終端だけの撃ち直しか退役の口で閉じる。
+    relationships: [land の終端, PR で着地した便, 決着の権能, 着地の形]
   - canonical: project の群
     domain: consumer
     aliases: [project group, 群, かたまり]
@@ -1369,8 +1385,8 @@ terms:
   - canonical: 起票の門
     domain: consumer
     aliases: [ledger write gate, 素 write の門]
-    definition: 器の plugin を積む席の hook の入口が、 席自身の道具の呼び出しとして撃たれる bd / bdw の command に掛ける門 (ADR-0056 CTX2・設計 docs/design/vessel-hook.md §10)。 台帳 write の 4 形 (素 write = notes の置換・記憶の subcommand・親を欠く create・台帳の script を経ない書き込み) を rules 行 ledger.denied_writes の値で断り、 memo の 4 節の判定も持つ。 ほかに形の欠けた台帳の問いの create (asked の欠けと値の外・label intake:memo の併せ持ち・親の label を継がない指定の無い親の名指しを含む・ADR-0087)・notes に足す裁定の行・引き金の行を持たない memo の書き・close の理由の文法の外の close (理由の無い close を含む) と着地の形の close (着地の形は land の終端だけが書く・ADR-0089) の 4 つの断り (SRS FR81・ADR-0083) も持ち、 この 4 つの断りは器の plugin の門だけが持つ (host-guard は掛けない)。 席の道具の呼び出しの台帳の書きを通した周は局面の出力に古さの印を付ける (SRS FR90・ADR-0088)。 席が起こした子 process の書きは道具の呼び出しでないので門の外。 host-guard の台帳の種類 (SRS FR76) は台帳 write の 4 形の判定を共有して口座の設定を読む session に掛ける。
-    relationships: [hook, rules 行, 台帳, host-guard, 見張りの種類, 口座の設定を読む session, 台帳の問い, 裁定の行, 引き金, asked, close の理由の文法, 古さの印, 着地の形]
+    definition: 器の plugin を積む席の hook の入口が、 席自身の道具の呼び出しとして撃たれる bd / bdw の command に掛ける門 (ADR-0056 CTX2・設計 docs/design/vessel-hook.md §10)。 台帳 write の 4 形 (素 write = notes の置換・記憶の subcommand・親を欠く create・台帳の script を経ない書き込み) を rules 行 ledger.denied_writes の値で断り、 memo の 4 節の判定も持つ。 ほかに形の欠けた台帳の問いの create (asked の欠けと値の外・label intake:memo の併せ持ち・親の label を継がない指定の無い親の名指しを含む・ADR-0087)・notes に足す裁定の行・引き金の行を持たない memo の書き・close の理由の文法の外の close (理由の無い close を含む) と着地の形の close (着地の形は land の終端だけが書く・ADR-0089) (この 1 つは vessel 宣言が close-check を true で持つ repo と宣言を読めない repo にだけ掛かる・ADR-0097) の 4 つの断り (SRS FR81・ADR-0083) も持ち、 この 4 つの断りは器の plugin の門だけが持つ (host-guard は掛けない)。 席の道具の呼び出しの台帳の書きを通した周は局面の出力に古さの印を付ける (SRS FR90・ADR-0088)。 席が起こした子 process の書きは道具の呼び出しでないので門の外。 host-guard の台帳の種類 (SRS FR76) は台帳 write の 4 形の判定を共有して口座の設定を読む session に掛ける。
+    relationships: [hook, rules 行, 台帳, host-guard, 見張りの種類, 口座の設定を読む session, 台帳の問い, 裁定の行, 引き金, asked, close の理由の文法, 古さの印, 着地の形, close-check]
     flagged_ambiguities: [答えの口の command の撃ちを断るのは器の hook の入口の別の判定で、 起票の門ではない (SRS FR82・ADR-0087)]
   - canonical: 起動の記述
     domain: consumer
@@ -1435,6 +1451,11 @@ terms:
     domain: consumer
     definition: vessel 宣言の ruling-check が main の履歴で初めて true になった commit (SRS FR83)。 線より前から在る時刻の形の引用は数えるだけにする。
     relationships: [vessel 宣言, 時刻の形, 裁定 id]
+  - canonical: close-check
+    domain: consumer
+    aliases: [閉じの門への加わり]
+    definition: vessel 宣言の任意 key で、 値は真偽だけ (ADR-0097)。 true を持つ repo の席の close に、 起票の門の close の段 (理由の無い close・close の理由の文法の外・席の着地の形・理由を渡せない口を断る) が掛かる。 false・key が無い・宣言 file が HEAD に無い repo には掛からず、 宣言が在って読めない repo には同じ判定が掛かる。 key を知らない古い binary は key を持つ宣言を丸ごと読めない。
+    relationships: [vessel 宣言, 任意 key, 起票の門, close の理由の文法]
   - canonical: 判断の欄
     domain: consumer
     definition: 裁定を引くべき欄の閉じた 3 種 (rules 行の ruling 欄・ADR の approval の裁定の欄・設計の節の裁定の欄)。 着地の差分が足すか変える判断の欄は、 問いの部分が台帳の接頭辞で始まる問い id の形の裁定 id を要り、 台帳の bead の id だけの引用は数えない (SRS FR83)。 vessel 宣言の ruling-check を true から外す差分も同じく裁定 id を要る。
@@ -1661,12 +1682,12 @@ terms:
   - canonical: close の理由の文法
     domain: consumer
     aliases: [closed-reason grammar]
-    definition: bead の close の理由を種類ごとの閉じた形の和に限る決まり (SRS FR91 は形の名だけ・字面の正本は ADR-0089)。 契約は着地 (landed と着地 commit id)・重複・後継・取り下げ、 台帳の問いと decision の型の bead は裁定 (裁定 id)、 memo は昇格済み (契約 id の列)・まとめた・見送り (裁定 id)、 epic は完了と取り下げの形。 和の外 (理由の無い close を含む) と land の終端の外の着地の形の close は起票の門が字面で断り (SRS FR81 (d))、 種類との食い違い・解けない id・自分の裁定の行にも裁定 event にも無い裁定 id・memo の子の問いの裁定でない見送り・まとめ先が開いた memo でないまとめたは局面の出力が misfit で数える。
-    relationships: [起票の門, 着地の形, 処置, memo, 契約, 台帳の問い, 裁定 id, misfit]
+    definition: bead の close の理由を種類ごとの閉じた形の和に限る決まり (SRS FR91 は形の名だけ・頭の字面の正本は ADR-0089・着地の形の尾は ADR-0094・値の形と語の切り方の正本は設計 docs/design/ledger-form.md §16)。 契約は着地 (landed と着地 commit id)・重複・後継・取り下げ、 台帳の問いと decision の型の bead は裁定 (裁定 id)、 memo は昇格済み (契約 id の列)・まとめた・見送り (裁定 id)、 epic は完了と取り下げの形。 和の外 (理由の無い close を含む) と land の終端の外の着地の形の close は起票の門が字面で断り (SRS FR81 (d)・close-check を宣言した repo と宣言を読めない repo・ADR-0097)、 種類との食い違い・解けない id・自分の裁定の行にも裁定 event にも無い裁定 id・memo の子の問いの裁定でない見送り・まとめ先が開いた memo でないまとめたは局面の出力が misfit で数える。
+    relationships: [起票の門, 着地の形, 処置, memo, 契約, 台帳の問い, 裁定 id, misfit, close-check]
   - canonical: 着地の形
     domain: consumer
     aliases: [landed form]
-    definition: close の理由が landed と着地 commit id で始まる閉じ (SRS FR50・字面の正本は ADR-0089)。 land の終端だけが書き (CI の結果か CI の照合なしの note と共に・SRS FR50・FR96)、 席の道具の呼び出しのこの形の close は起票の門が断る (SRS FR81 (d))。 昇格の行が全部の memo は、 辿れる契約が全部この形で閉じたときだけ器が閉じる (SRS FR93)。
+    definition: close の理由が landed と着地 commit id で始まる閉じ (SRS FR50・字面の正本は ADR-0089)。 land の終端だけが書き (CI の結果か CI の照合なしの note と共に・SRS FR50・FR96)、 席の道具の呼び出しのこの形の close は起票の門が断る (SRS FR81 (d)) (close-check を宣言した repo・ADR-0097)。 昇格の行が全部の memo は、 辿れる契約が全部この形で閉じたときだけ器が閉じる (SRS FR93)。
     relationships: [land の終端, close の理由の文法, 昇格の行, 起票の門]
   - canonical: discovered-from
     domain: consumer
@@ -1709,7 +1730,7 @@ terms:
   - canonical: PR で着地した便
     domain: consumer
     aliases: [PR-landed run]
-    definition: --pr-cmd の形で Landed に達し、 main を動かさず自 repo への PR を作った便 (SRS FR96・ADR-0094)。 land の終端の push の経路 (SRS FR50) の外に置く。 台帳の close は PR の merge の後に器の口 pipe retire (launch の権能の口・ADR-0048) が、 merge の commit が remote の main の先端の祖先であることと先端の CI の success を照合してから着地の形で撃ち、 畳むだけの指定 (--fold-only) は照合も close もせずに畳む。
+    definition: --pr-cmd の形で Landed に達し、 main を動かさず自 repo への PR を作った便 (SRS FR96・ADR-0094)。 land の終端の push の経路 (SRS FR50) の外に置く。 台帳の close は PR の merge の後に器の口 pipe retire (便 1 本を名指す形は席の決着の権能・それ以外は launch の権能の口・ADR-0097) が、 merge の commit が remote の main の先端の祖先であることと先端の CI の success を照合してから着地の形で撃ち、 畳むだけの指定 (--fold-only) は照合も close もせずに畳む。
     relationships: [自 repo への PR, land の終端, 着地の形, 便]
   - canonical: heartbeat の実効の値
     domain: consumer
