@@ -6,7 +6,7 @@
 
 やさしく言うと: 今は新しい repo を器に載せるのに人が 7 手（置き場の dir・口座の配線・host の面の写し・git の設定・marker・宣言・tmux と席の長い起動）を打ち、1 つ抜けると席は黙って動かない。裁定は「`init` これで終わり」の簡便さと「人が打つ command は最小限」と「人間向けの説明」の 3 点。本設計は人が打つのを **`host init`（host に 1 回）→ `init`（repo ごとに 1 回）→ 困ったら `doctor`** の 3 語に閉じ、残りは器が行う。
 
-- 出所（verified・2026-09-24）: scribe3 の立ち上げは手作業 7 手で、`vessel init` と `.vessel.toml` が抜けた。抜けた状態では plugin の SessionStart hook が「仕えない repo」として 0 byte で黙り、席に指示文が入らず、`seat launch` は `launch-unconfirmed` で保留になる（memo `s2-07l.604` の実地試験でも同じ）。project-k / paper の移行も散文の runbook（repo の外）を人が辿った（memo `s2-07l.491` の notes・15 段）。doctor はこの欠落を名指さない。
+- 出所（verified・2026-09-24）: scribe3 の立ち上げは手作業 7 手で、`vessel init` と `.vessel.toml` が抜けた。抜けた状態では plugin の SessionStart hook が「仕えない repo」として 0 byte で黙り、席に指示文が入らず、`seat launch` は `launch-unconfirmed` で保留になる（memo `s2-07l.604` の実地試験でも同じ）。消費側 2 つの移行も散文の runbook（repo の外）を人が辿った（memo `s2-07l.491` の notes・15 段）。doctor はこの欠落を名指さない。
 - 要件: [FR58](../../design-intent/spec/srs.html#FR58)（口座の登録は設定 dir を state dir の下に作り credential は読まず書かない）・[FR59](../../design-intent/spec/srs.html#FR59)（席の起動は役割を必須に受け、群の置き場は群の今の口座で起きる）・[FR61](../../design-intent/spec/srs.html#FR61)（doctor は導入先ごとに実測を名指す）・[FR73](../../design-intent/spec/srs.html#FR73)（doctor の行は実測を並べ判定せず rc を変えない・行 d の `init=` の行の要件）。
 
 ## 2. 現物（verified・main 0b6af26）

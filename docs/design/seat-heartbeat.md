@@ -254,7 +254,7 @@
 
 ## 11. 席の起動行が feedback の調査を切る — `CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1` を agent view の env の隣に前置し、/exit の後の調査の dialog を出させない（契約表の行 n・§4 形 4 の前提・`s2-07l.634`）
 
-やさしく言うと: /exit を送ると claude が「使用感の調査」の dialog を出すことがあり、器が読める dialog は「Exit and stop tasks」の 1 形だけなので、tick は `input-unknown` で 40 分止まった（2026-09-25 の soap-copilot）。dialog を読む形を増やすより、出させない設定が在るならそれを起動行に書く（決定はしごの「既に在るか」）。claude の binary の strings に `CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY` が在る（verified 2026-09-25・値の意味は公式 doc に無いので `=1` で切れるかは host で実測して台帳の notes に残す）。
+やさしく言うと: /exit を送ると claude が「使用感の調査」の dialog を出すことがあり、器が読める dialog は「Exit and stop tasks」の 1 形だけなので、tick は `input-unknown` で 40 分止まった（2026-09-25・消費側の席）。dialog を読む形を増やすより、出させない設定が在るならそれを起動行に書く（決定はしごの「既に在るか」）。claude の binary の strings に `CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY` が在る（verified 2026-09-25・値の意味は公式 doc に無いので `=1` で切れるかは host で実測して台帳の notes に残す）。
 
 - 出所: 台帳 `s2-07l.634`（候補 2）。
 - 現物（verified・main dae3b91）: 起動行の前置は `crates/scribe2/src/seat/cycle/launch.rs` の `with_agent_view_off`（`CLAUDE_CODE_DISABLE_AGENT_VIEW=1 ` を先頭に・二重にしない・空は空）で、env の名は `crates/scribe2/src/headless/mod.rs` の `AGENT_VIEW_ENV`。起動行の形は `cd '<anchor>' && CLAUDE_CODE_DISABLE_AGENT_VIEW=1 CLAUDE_CONFIG_DIR={account_dir} claude …`。歯は `crates/scribe2-boundary/tests/e2e/seat.rs` と `seat/launch.rs` が先頭 3 語を pin する。
@@ -317,7 +317,7 @@
 
 - 出所: 台帳 `s2-07l.654`（2026-09-26T09:40Z の群の再編〔host の面の `[[account-group]]` の anchors の編集〕で観測）・ADR-0073・SRS FR38 / AC41 / FR27。
 - 現物（verified・main 489f14b）: 猶予の残りは `crates/scribe2/src/hook/group.rs` の `grace_left`（入力 = `Current`・今・猶予の秒 → 記録の ts + 猶予 − 今 が正ならその秒・種と猶予 0 と越えた周は `None`）。合図の記録は同 file の `SIGNAL_FILE`（席の置き場の `move-signal`・1 行 `ts=<群の記録の ts>`）・`signalled`（字面の等値）・`write_signal`（一時 file → rename）。`crates/scribe2/src/seat/tick.rs` の `moving` は「残りが `None` か記録の ts が無い → lock → `/exit`」を先に判じ、次に `signalled` なら `move=wait`、残りは合図を送って送れた周だけ記録を書く。`crates/scribe2/src/pipe/dispatch/group.rs` の `step` は群の記録 1 つで `grace_left` を読み Hold（猶予の内側・送らない）か `Wait::Once`（`/exit` を 1 回）を群の全席に一括で選び、`evacuate` は送達を確認した席ごとに記録の ts で `write_signal` する。`Wait` は同 file の private な 3 値（Settle / Once / Hold）。
-- 穴（verified・§13 の外側）: (1) 記録の ts が猶予より古い群へ席が入る周は、合図の記録が無くても `grace_left` が `None` を返し、tick は合図を送らずに `/exit` を送る（09:42Z に t3 と soap-copilot の 2 席・tick-last は `decision=move` が 2 周で exit → relaunch・合図の記録は前の群の ts のまま）。種の群（記録なし）へ席が入る周も同じ（§13 形 5 (a)・歯 (f)）。(2) 起点が記録の ts なので、席が `input-busy` / dialog で合図を受け取れなかった周の分だけ猶予が削られる（合図が 20 分遅れれば残りは 10 分）＝合図の字面の「<秒> 秒の後」が席の側では守られない。
+- 穴（verified・§13 の外側）: (1) 記録の ts が猶予より古い群へ席が入る周は、合図の記録が無くても `grace_left` が `None` を返し、tick は合図を送らずに `/exit` を送る（09:42Z に消費側の 2 席・tick-last は `decision=move` が 2 周で exit → relaunch・合図の記録は前の群の ts のまま）。種の群（記録なし）へ席が入る周も同じ（§13 形 5 (a)・歯 (f)）。(2) 起点が記録の ts なので、席が `input-busy` / dialog で合図を受け取れなかった周の分だけ猶予が削られる（合図が 20 分遅れれば残りは 10 分）＝合図の字面の「<秒> 秒の後」が席の側では守られない。
 - 形（行 r・1 つずつ歯が測る・done と 1:1）:
   1. **合図の記録は 3 field**: `move-signal` の 1 行を `to=<移り先の口座> ts=<群の記録の ts か seed> at=<合図を書いた epoch 秒>` に改める。書き手は同じ 1 関数（入力 = 席の置き場・鍵〔移り先・記録の ts か `seed`〕・今の秒）。読み手は hook/group.rs の parse 1 関数（`Signal` = 鍵 + at）で、3 field が揃わない・`at` が整数でない・前の版の `ts=` だけの 1 行は「記録なし」（送り直す・害なし＝移行の周に合図が 1 回重なるだけ）。「同じ移動」= `to` と `ts` が等しい（口座が同じでも記録が別なら別の移動）。
   2. **残りの秒は 1 関数のまま入力を変える**: `grace_left`（入力 = 合図の `at`・今・猶予の秒 → at + 猶予 − 今 が正ならその秒・猶予 0 と越えた周は `None`）。`Current` の `ts` は残す（鍵の一部・種は `None` → 鍵の字面 `seed`）。記録の ts は残りの秒に入らない。
