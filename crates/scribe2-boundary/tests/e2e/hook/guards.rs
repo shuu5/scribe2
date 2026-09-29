@@ -1,5 +1,5 @@
 // flip-check: moved s2-07l.679
-//! guard の族の歯（接頭辞 `host_guard_` / `hook_guard_` / `hook_command_` / `hook_memo_` / `hook_ledger_`・設計 docs/design/carry-prep.md §9 行 g）。
+//! guard の族の歯（接頭辞 `host_guard_` / `hook_guard_` / `hook_command_` / `hook_memo_` / `hook_ledger_` / `hook_choice_question_`・設計 docs/design/carry-prep.md §9 行 g）。
 
 use super::*;
 
@@ -1742,4 +1742,151 @@ fn hook_anchor_guard_is_silent_in_a_repo_without_marker() {
     stale_anchor(&repo);
     assert_silent(&live_hook(&repo, &bash_payload(&repo, "git commit -m x")), "marker の無い repo");
     clean(&[&repo]);
+}
+
+// ─────────────── 選択式の問いの門（設計 vessel-hook.md §20 行 ca・ADR-0084・接頭辞 `hook_choice_question_`） ───────────────
+//
+// AskUserQuestion の呼び出しを、席か runner か・誰が開いた session か・skill の直後か・例外の印が在るかに依らず全部の門の前で
+// 止める。器を名乗らない repo では 1 byte も出さない。
+
+/// AskUserQuestion の payload（同じ session_id と prompt_id・`extra` は先頭に足す欄〔`,` 始まり〕）。
+fn ask_payload(cwd: &Path, extra: &str) -> String {
+    format!(
+        "{{\"session_id\":\"sid-ask\",\"prompt_id\":\"p-ask\"{extra},\"cwd\":\"{}\",\"tool_name\":\"AskUserQuestion\",\
+         \"tool_input\":{{\"questions\":[{{\"question\":\"どれにする?\",\"options\":[{{\"label\":\"a\"}},{{\"label\":\"b\"}}]}}]}}}}",
+        cwd.display()
+    )
+}
+
+/// 記録のうち選択式の問いの門の行。
+fn choice_records(state: &Path) -> Vec<String> {
+    inject_lines(state).into_iter().filter(|line| what_of(line) == "choice-question-deny").collect()
+}
+
+/// 断りの外形（rc 2・stdout 0 byte・stderr 1 行・器の名乗り）と記録が 1 行増えることを確かめ、stderr を返す。
+fn assert_choice_deny(state: &Path, why: &str, run: impl FnOnce() -> Output) -> String {
+    let before = choice_records(state).len();
+    let out = run();
+    let text = stderr_text(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "{why}: deny は rc 2: {text}");
+    assert!(out.stdout.is_empty(), "{why}: stdout 0 byte");
+    assert_eq!(stderr_lines(&out), 1, "{why}: stderr 1 行: {text}");
+    assert!(text.starts_with(&format!("{NAME}: deny choice-question tool=AskUserQuestion ")), "{why}: {text}");
+    assert_eq!(choice_records(state).len(), before + 1, "{why}: 記録 1 行");
+    text
+}
+
+/// 宣言の必須 key だけの本文（3 行）。
+const ASK_DECL: &str = "schema = 1\nallowed-commands = [\"git\"]\ncommon-verify = [\"git diff --quiet\"]\n";
+
+/// `ASK_DECL` に `extra` を足した宣言を commit した repo と、紐づけた置き場。
+#[expect(clippy::expect_used, reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く")]
+fn ask_place(extra: &str) -> (TmpDir, TmpDir) {
+    let repo = git_repo();
+    fs::write(repo.join(DECL_FILE), format!("{ASK_DECL}{extra}")).expect("宣言を書ける");
+    git(&repo, &["add", DECL_FILE]);
+    git(&repo, &["commit", "-q", "-m", "decl"]);
+    let state = linked(&repo);
+    (repo, state)
+}
+
+/// (1) 5 形の AskUserQuestion がどれも断られ、1 形 1 行ずつ記録が増える: 登録 row を持つ orchestrator の席・pane の無い session・
+/// runner の形（`.vessel` を commit した repo の linked worktree を `--project` にし pane が無い）・skill の直後・例外の印。
+#[test]
+fn hook_choice_question_denies_every_form_of_session() {
+    let place = role_place();
+    let (seat, pane) = role_seat(&place, "askseat", Some("orchestrator"));
+    let state: &Path = &place.state;
+    let ask = ask_payload(&place.repo, "");
+    assert_choice_deny(state, "登録 row を持つ席", || run_role_hook(&place, &pane, &[], &ask));
+    assert_choice_deny(state, "pane の無い session", || run_hook_args(&["pre-tool-use"], &ask));
+
+    git(&place.repo, &["add", MARKER]);
+    git(&place.repo, &["commit", "-q", "-m", "marker"]);
+    let runner = tmp();
+    let worktree = runner.join("wt");
+    git(&place.repo, &["worktree", "add", "-q", &worktree.display().to_string()]);
+    let project = worktree.display().to_string();
+    assert_choice_deny(state, "runner の形", || run_hook_args(&["pre-tool-use", "--project", &project], &ask_payload(&worktree, "")));
+
+    let skill = format!(
+        "{{\"session_id\":\"sid-ask\",\"prompt_id\":\"p-ask\",\"cwd\":\"{}\",\"hook_event_name\":\"UserPromptSubmit\",\"prompt\":\"/grill-me 設計を詰める\"}}",
+        place.repo.display()
+    );
+    let submitted = run_hook_args(&["user-prompt-submit"], &skill);
+    assert_eq!(submitted.status.code(), Some(i32::from(RC_OK)), "skill の起動の行: {}", stderr_text(&submitted));
+    assert_choice_deny(state, "skill の直後", || run_hook_args(&["pre-tool-use"], &ask));
+
+    fs::write(state.join("grill-exception"), "").expect("v1 草稿の印の名の空 file を置ける");
+    let role_only = place.sock_dir.join("role-only.toml");
+    fs::write(&role_only, format!("schema = 1\n{}", role_rows_text(ORCHESTRATOR_CAPS))).expect("役割の行だけの manifest を書ける");
+    let marked = ask_payload(&place.repo, ",\"permission_mode\":\"bypassPermissions\"");
+    let args = ["pre-tool-use", "--pane", &pane, "--tmux-socket", &place.socket, "--rules", &role_only.display().to_string()];
+    assert_choice_deny(state, "例外の印", || run_hook_args(&args, &marked));
+    assert_eq!(choice_records(state).len(), 5, "1 形 1 行");
+    git(&place.repo, &["worktree", "remove", "--force", &project]);
+    drop(seat);
+    clean(&[&place.repo, &place.state, &place.sock_dir, &runner]);
+}
+
+/// (2) HEAD の宣言が question-route を持つ repo は stderr がその値を持ち、key の無い宣言の repo は持たず、不備の宣言（未知の key）
+/// の repo は「読めない」を持つ。どれも rc 2。
+#[test]
+fn hook_choice_question_names_the_declared_route() {
+    let (routed, routed_state) = ask_place("question-route = \"台帳の問いは bd で立てる\"\n");
+    let text = assert_choice_deny(&routed_state, "宣言した経路", || run_hook("pre-tool-use", &ask_payload(&routed, "")));
+    assert!(text.trim_end().ends_with("この repo の問いの経路: 台帳の問いは bd で立てる"), "{text}");
+    let (plain, plain_state) = ask_place("");
+    let text = assert_choice_deny(&plain_state, "key の無い宣言", || run_hook("pre-tool-use", &ask_payload(&plain, "")));
+    assert!(!text.contains("問いの経路") && !text.contains("読めない"), "{text}");
+    let (broken, broken_state) = ask_place("unknown-key = \"x\"\n");
+    let text = assert_choice_deny(&broken_state, "不備の宣言", || run_hook("pre-tool-use", &ask_payload(&broken, "")));
+    assert!(text.contains("vessel 宣言を読めない"), "{text}");
+    clean(&[&routed, &routed_state, &plain, &plain_state, &broken, &broken_state]);
+}
+
+/// (3) marker が別の NAME を言う repo と marker の無い repo では、`--pane` の有無の両方で同じ payload が 0 byte・rc 0・記録なし。
+#[test]
+fn hook_choice_question_is_silent_outside_the_vessel() {
+    let other = git_repo();
+    let marker = Marker { name: "other-vessel".to_owned(), version: GENERATION };
+    fs::write(other.join(MARKER), marker.render()).expect("marker を書ける");
+    let bare = git_repo();
+    let state = tmp();
+    let dir = state.display().to_string();
+    for (repo, why) in [(&other, "他の name の marker"), (&bare, "marker の無い repo")] {
+        let ask = ask_payload(repo, "");
+        assert_silent(&run_hook_args(&["pre-tool-use", "--state-dir", &dir], &ask), &format!("{why}・pane 無し"));
+        assert_silent(&run_hook_args(&["pre-tool-use", "--pane", "%999", "--state-dir", &dir], &ask), &format!("{why}・pane 在り"));
+    }
+    assert!(inject_lines(&state).is_empty(), "記録なし");
+    clean(&[&other, &bare, &state]);
+}
+
+/// (4) question-route を持つ repo と持たない repo で、禁じた語列の Bash と write-set の外への Edit の rc・stdout・stderr が一致して
+/// 既存の断りの字面のままで、選択式の問いの門の記録は 0 行。
+#[test]
+fn hook_choice_question_leaves_other_tools_unchanged() {
+    let (routed, routed_state) = ask_place("question-route = \"route-x\"\n");
+    let (plain, plain_state) = ask_place("");
+    let outs: Vec<(Output, Output)> = [&routed, &plain]
+        .iter()
+        .map(|repo| {
+            write_policy(repo, "src/lib.rs\n");
+            let bash = run_hook("pre-tool-use", &bash_payload(repo, "git push --force origin main"));
+            (bash, run_hook("pre-tool-use", &tool_payload(repo, "Edit", "docs/other.md")))
+        })
+        .collect();
+    let [(routed_bash, routed_edit), (plain_bash, plain_edit)] = outs.as_slice() else {
+        panic!("2 repo の出力");
+    };
+    for (left, right, why) in [(routed_bash, plain_bash, "Bash"), (routed_edit, plain_edit, "Edit")] {
+        assert_eq!(left.status.code(), Some(i32::from(RC_BROKEN)), "{why}: 既存の門が断る");
+        assert_eq!((left.status.code(), &left.stdout, &left.stderr), (right.status.code(), &right.stdout, &right.stderr), "{why}");
+        assert!(!stderr_text(left).contains("choice-question") && !stderr_text(left).contains("route-x"), "{why}");
+    }
+    assert!(stderr_text(routed_bash).contains("host_guard.git"), "command guard の字面: {}", stderr_text(routed_bash));
+    assert_eq!(stderr_text(routed_edit).trim_end(), format!("{NAME}: deny docs/other.md は契約 write-set の外（C16）"));
+    assert!(choice_records(&routed_state).is_empty() && choice_records(&plain_state).is_empty(), "記録 0 行");
+    clean(&[&routed, &routed_state, &plain, &plain_state]);
 }

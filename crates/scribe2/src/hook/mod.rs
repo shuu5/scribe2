@@ -12,6 +12,7 @@
 //! （[`store::append_line`]）を通す。
 
 pub mod anchor_guard;
+pub mod choice_question;
 pub mod command;
 pub mod graph_guard;
 pub mod group;
@@ -35,6 +36,7 @@ use crate::seat::ledger::LedgerError;
 use crate::seat::recent;
 use crate::seat::state::Event;
 use anchor_guard::AnchorDecision;
+use choice_question::ChoiceQuestionDecision;
 use command::CommandDecision;
 use guard::Decision;
 use ledger_guard::LedgerDecision;
@@ -648,6 +650,10 @@ fn brief_refused(reason: &str) -> String {
 fn pre_tool_use(hooked: &Hooked, payload: &str, started: Instant) -> Outcome {
     let (root, cwd) = (hooked.root, hooked.cwd);
     let tool = field(payload, KEY_TOOL).unwrap_or_default();
+    // 選択式の問いの道具は全部の門の前で止める（§20・宣言は AskUserQuestion の周だけ読む）。
+    if let ChoiceQuestionDecision::Deny(line) = choice_question::decide(&tool, || crate::pipe::declaration::question_route(root)) {
+        return denied(hooked, choice_question::WHAT, line, started);
+    }
     let path = field(payload, KEY_FILE).or_else(|| field(payload, KEY_NOTEBOOK));
     if let Some(git_dir) = vessel::git_dir(cwd) {
         if let Decision::Deny(line) = guard::decide(root, cwd, &git_dir, &tool, path.as_deref()) {

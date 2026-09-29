@@ -63,10 +63,12 @@ pub struct Polarity {
     pub on_failure: OnFailure,
 }
 
-/// 行為を止めうる判定を返す境界の全数。**宣言順は行為の流れ**（hook〔起票の門・anchor の門まで〕→ host の見張り → 席の登録 → 権能の執行 → 走っている便の行 → 契約表 → intake → 審査 → spawn〔予算・承認〕→
+/// 行為を止めうる判定を返す境界の全数。**宣言順は行為の流れ**（hook〔選択式の問いの門から起票の門・anchor の門まで〕→ host の見張り → 席の登録 → 権能の執行 → 走っている便の行 → 契約表 → intake → 審査 → spawn〔予算・承認〕→
 /// runner → gate〔器の健康の遮断器・機械検証・純移動・lens〕→ land〔main 実測・anchor 同期・worktree の clean・追随の起こし直し〕→ store → 注入 → cycle → 退避 → 消費）で、順序に意味は無いが C2 の形（[`ALL`] と判別子順 pin）に合わせる。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Guard {
+    /// 選択式の問いの道具を `pre-tool-use` の全部の門の前で止める（[`crate::hook::choice_question`]・設計 vessel-hook.md §20）。
+    ChoiceQuestion,
     /// `pre-tool-use` の write-set guard（[`crate::hook::guard`]）。
     WriteSet,
     /// 内蔵 guard の承認の問いへの一律 deny（[`crate::hook::permission`]）。
@@ -137,6 +139,7 @@ pub enum Guard {
 
 /// [`Guard`] の全 variant（宣言順）。
 pub const ALL: &[Guard] = &[
+    Guard::ChoiceQuestion,
     Guard::WriteSet,
     Guard::Permission,
     Guard::Command,
@@ -195,6 +198,7 @@ impl Guard {
     /// 境界が持つ極性を返す**だけ**（一覧の側に値を書かない）。
     pub fn polarity(self) -> Polarity {
         match self {
+            Self::ChoiceQuestion => crate::hook::choice_question::POLARITY,
             Self::WriteSet => crate::hook::guard::POLARITY,
             Self::Permission => crate::hook::permission::POLARITY,
             Self::Command => crate::hook::command::POLARITY,
@@ -230,6 +234,7 @@ impl Guard {
     /// 境界の pointer（`module::Type`・crate 相対）。
     pub fn boundary(self) -> &'static str {
         match self {
+            Self::ChoiceQuestion => "hook::choice_question::ChoiceQuestionDecision",
             Self::WriteSet => "hook::guard::Decision",
             Self::Permission => "hook::permission::PermissionDecision",
             Self::Command => "hook::command::CommandDecision",
@@ -265,6 +270,7 @@ impl Guard {
     /// 一覧の行に出す名前（kebab）。
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::ChoiceQuestion => "choice-question-deny",
             Self::WriteSet => "write-set-guard",
             Self::Permission => "permission-deny",
             Self::Command => "command-guard",
