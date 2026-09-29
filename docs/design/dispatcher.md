@@ -639,7 +639,7 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
   - `.git` を持たない写しと木の写しそのもの（worktree / clone の本体）は消さない。disk は木の分だけ残る。
   - 起草の木の中の入れ子の repo の列の名の dir は、外の木の `git ls-files` で判じるので追跡されていない扱いで消えうる（§30 と同じ）。列の名で置かれた未追跡の物は中身ごと失う（ADR-0081 の代償のまま）。
   - 大きい build の置き場は書きの線を判じるのに entry を全部 lstat する（消す直前の 1 回と、線以後の entry が深い所に在る周）。
-  - lock が空のまま残る穴（`sweep.lock` の本文の書きの前に死ぬと `DeadOnly` の周が永久に skipped・別 memo）は起草の置き場の掃除も止める。
+  - `sweep.lock` の本文の書きの前に死んだ掃除が残す空の lock は、rules 行 `fleet.lock_stale_ms` を越えるまで起草の置き場の掃除も止める（[fleet-event-log.md](./fleet-event-log.md) §11 の回収で越えた周に外れ、永久には止まらない）。skipped=lock が続く周を知らせる口は無い（memo `s2-07l.736.8` の候補 3）。
 - 歯（接頭辞 pipe_sweep_drafts_ と rules_drafts_stale_・どちらも `grep -rn` は crates / docs で 0 件・2026-09-29）:
   - e2e（`crates/scribe2-boundary/tests/e2e/pipe/stop.rs` の §30 の歯の後ろ・helper `put_file` と `sweep_line` を使う・新しい module は作らない）。起草の木は toy repo から起草の置き場へ `git worktree add --detach` で切り、「古くする」は std の File の set_modified で entry を子から先に N 時間より前へ戻す（dir も File として開いて同じ呼び出し・e2e の fleet.rs に set_modified の前例）。終端は live な便 1 本の `pipe stop`。
     - (a) 席 2 つの起草の置き場: 1 つ目の木の 7 時間前の `target/`・書いたばかりの `node_modules/`・追跡されている `docs/target/keep.md` を持つ 7 時間前の `docs/target/`・列に無い 7 時間前の `out/`、同じ置き場の `.git` を持たない写しの 7 時間前の `target/`、2 つ目の木の 7 時間前の `.venv/`。終端の後、1 つ目の `target/` と 2 つ目の `.venv/` だけが消え、ほかと木の追跡されている file と `.git` は残り、stderr の sweep: の行が `sweep: removed=2 runs=0 failed=0 drafts=2 nogit=1`、stdout に sweep: が無い。
