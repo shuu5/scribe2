@@ -854,7 +854,7 @@ title = "依存を待つ行に受付の判定を予想の base で先に撃つ �
 req = ["FR48", "FR49", "FR68", "NFR4"]
 section = "27"
 touches = ["crate::pipe::cli::intake::Denial"]
-write-set = ["+crates/scribe2/src/pipe/dispatch/precheck.rs", "crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/dispatch/candidates.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/src/pipe/refuse.rs", "crates/scribe2/src/pipe/table.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch/terminal.rs", "docs/design/dispatcher.md"]
+write-set = ["+crates/scribe2/src/pipe/dispatch/precheck.rs", "crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/dispatch/candidates.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/cli/intake.rs", "+crates/scribe2/src/pipe/cli/intake/refusal.rs", "crates/scribe2/src/pipe/refuse.rs", "crates/scribe2/src/pipe/table.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch/terminal.rs", "docs/design/dispatcher.md"]
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_precheck_", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_refuse_evidence_ pipe_table_evidence_"]
 size = "L"
 growth = ["crates/scribe2/src/pipe/dispatch.rs:24", "crates/scribe2/src/pipe/cli.rs:8", "crates/scribe2/src/pipe/cli/intake.rs:24", "crates/scribe2/src/pipe/refuse.rs:120", "crates/scribe2/src/pipe/table.rs:60", "crates/scribe2-boundary/tests/e2e/pipe/dispatch/terminal.rs:330"]
