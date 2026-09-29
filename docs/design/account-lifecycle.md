@@ -486,6 +486,73 @@ user-scope MCP 設定の同期・別口座への `--resume` の混線 fence・pr
 - 却下: 今のまま全 model の窓を数える（席を Opus に替えても Fable の窓で群が止まる＝持ち主の裁定の前の形）／モデル別窓を門から外す（役割の model の窓が埋まった口座を通してしまう・Opus の窓が返るようになった周に守れない）／席の登録 row の `model=`（起動の実物）で数える（役割の既定と実物が食い違う周の読みが 2 つになる・残量の鍵は役割の行を読む・読みを揃える）。
 - 歯: `crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs`（`pipe_dispatch_group_model_gate_` 接頭辞・§20 の偽 usage の fixture〔モデル別窓の名は `Fable`〕・規則の写しの役割の行を `opus` にした写しを helper 1 つで作る）: (a) 役割 opus の群の今の口座が Fable の窓 100・5 時間窓 10・7 日窓 50 の周は逼迫でなく移らない（記録不変・base では逼迫で移る ＝ RED）(b) 役割 opus の群の今の口座が 7 日窓 97 で逼迫の周、Fable の窓 100・7 日窓 40 の候補へ移る（base では門で落ちて移り先なし ＝ RED）(c) 役割 fable（今の写し）の群は Fable の窓 96 で逼迫のまま（既存の歯の母集団で不変を確かめる 1 本）。`crates/scribe2-boundary/tests/e2e/seat.rs`（`seat_tick_judge_model_gate_` 接頭辞・§9 の判定の fixture）: (d) tick の判定も (a) と同じ（移動の fixture の写しの役割の行を `opus` にした写し・base では移る ＝ RED）。同 file（`seat_tick_account_gate_model_` 接頭辞・既存の `seat_tick_account_gate_reads_only_fresh_records_without_measuring` と同じ置き場〔`tick_place`・役割 orchestrator の登録 row〕と黙った時間・`tick_rules_text` の写しに役割の行 `seat.model.orchestrator` を 1 行足した `--rules`・自席の口座の鮮度の内側の記録は 5 時間窓 10・7 日窓 10・モデル別窓〔model = `Fable`〕96 の 3 行〔今の記録の helper はモデル別窓の行を置かないので、モデル別窓の行も置く helper を 1 つ足す〕・pane は prompt 行の無い形）: (g1) 役割の行が `opus` の写しは管理 tick の口座の門を通り次の門の `input-unknown` で止まる（base では `account-pressed` ＝ RED）(g2) 役割の行が `fable` の写しは同じ記録で `account-pressed`（自席の役割の集合を空で渡す変異を捕まえる）。(d) は群の移動の判定の経路で、口座の門（`account_pressed`）は (g) だけが測る。`crates/scribe2-boundary/tests/e2e/seat/account.rs`（`host_group_next_model_gate_` 接頭辞・`next_rules` の役割の行を opus にした写し）: (e) Fable の窓 100・7 日窓 40 の候補が `next=<label>`（base では none ＝ RED）。`crates/scribe2-boundary/tests/e2e/hook.rs`（`hook_group_model_gate_` 接頭辞・`put_group_round` の fixture）: (f) 埋め込みの役割の既定の表示名と**違う** model 名のモデル別窓だけが 96 の周は逼迫の 1 行を出さない（base では出す ＝ RED）。hook.rs の fixture の `put_group_round` はモデル別窓の名を**埋め込みの役割の既定の表示名**（lib の役割の既定の読み `vessel::seat::role::defaults` の model の `display`）で置く（今の `"Fable"` の字面を替える・`s2-07l.662` の着地の前後のどちらでも既存の `hook_group_model_window_alone_prints_the_model_window` が役割の窓で逼迫を測る）。lib: `crates/scribe2/src/hook/group.rs` の `hook_group_pressed_` 接頭辞（集合に在る model の窓だけが逼迫・集合が空ならモデル別窓を数えない・5 時間窓と 7 日窓は集合に依らない）。既存の `hook_group_pressed_picks_the_largest_window_over_its_own_cap` は集合 {Fable} を渡して期待は不変（lib の実測の行の helper はモデル別窓を `Fable` で置く）。役割の行を欠く写しの既存の歯（tick の `judged=error:unreadable`・dispatch の (j)・doctor の `no-rule`）は逼迫の周で、止まり方は不変。
 
+## 34. 群の表の名は Tier1〜Tier9 — 数字 10 以上の名を断り、park の区画の読みが着地するまで Tier9 の行も断る（契約表の行 x・[FR38](../../design-intent/spec/srs.html#FR38)・[ADR-0091](../../design-intent/decisions/ADR-0091-the-tier9-row-is-a-park-lot-that-holds-no-account.html)・memo `s2-07l.730`）
+
+やさしく言うと: いまの器は Tier9 も Tier10 も普通の群として読むので、Tier9 を書くと口座を 1 つ占めてしまう。要件は「名は Tier1〜Tier9・Tier9 は口座を占めない park の区画」に決まった。まず器が 10 以上の名を断り、区画として読める版（行 y）が入るまでは Tier9 の行も断る。
+
+- 何が起きているか（main fe03d363・verified）:
+  - `crates/scribe2/src/rules/groups.rs` の `check_tiers`（17〜38 行）は、名が `Tier` と先頭 0 の無い数字か（`tier_digits`・41〜45 行）と、宣言順が数字の狭義の昇順かだけを見る。Tier9 も Tier10 以上も普通の群として通る。
+  - 通った群は `crates/scribe2/src/rules/manifest.rs` の `seed_groups`（1116 行）が種を配り、`crates/scribe2/src/hook/group.rs` の `currents_of`（591 行）・`reserve`（661 行）・`crates/scribe2/src/rules/mod.rs` の `grouped_accounts`（58 行）が群として数える。＝Tier9 を宣言すると口座を 1 つ占める。
+  - SRS FR38（v0.30）は名を Tier1〜Tier9 に限り（Tier1〜Tier8 が群・Tier9 が park の区画〔FR95〕）、外の名を FR57 の読みで断る。AC63 (a) は Tier10・Tier0・Tier の形でない名・Tier9 の後ろの Tier3・Tier9 の 2 行の 5 形を断りとして測る。Tier0 と形でない名と昇順でない面と名の重複は今の検査が既に断る。
+  - Tier10 を「通る」側で使う既存の歯は 2 本: `crates/scribe2-boundary/tests/e2e/rules/host.rs` の `host_group_tier_ascending_numbers_pass_compared_numerically`（586〜605 行・Tier1・Tier2・Tier10）と `crates/scribe2-boundary/tests/e2e/seat/account.rs` の `host_group_doctor_prints_one_line_per_group_in_declaration_order`（427 行〜・Tier2・Tier10）。`grep -rn 'Tier9'` は crates で 0 件（2026-09-29）。
+- 形（番号は done と 1:1）:
+  1. `check_tiers` が、形の合う名のうち数字が 10 以上（字面の桁数が 2 以上）の名を、群の見出し行の欠陥「群の名 <名> の数字が 9 を越える（群の表の名は Tier1〜Tier9）」で断る。
+  2. 名 `Tier9` の行を、群の見出し行の欠陥「Tier9 は park の区画の名で、この版の器は park の区画を読めない」で断る。この断りは行 y が区画として読む形に置き換える（行 y が外す）。
+  3. 1 と 2 で断った行は昇順の欠陥を重ねない（形の欠陥の行と同じく 1 行 1 件）。面の欠陥の極性と伝わり方は今の名の断りと同じ（行番号つき・その host の面を読む口が全部止まる・FR57）。
+  4. 既存の歯 2 本の Tier10 を Tier3 に替える（宣言順のまま読む意図は Tier1・Tier2・Tier3 と Tier2・Tier3 で同じに測れる）。
+- 触らない: `tier_digits` と `compare_digits`（10 以上を断った後も比べ方は正しいまま）・名の重複の検査・種・群の段・doctor の群の行の字。
+- 却下: Tier9 を今すぐ普通の群として通したまま、宣言しない規律だけで守る（散文の規律・C16 / N2）／Tier9 を今すぐ区画として読む（行 y の大きさがあり、SRS の直後に撃てない）／10 以上を断らない（FR38 の名の集合の外が黙って群になる）。
+- 限界: 本行の着地から行 y の着地までは、Tier9 を書いた host の面は読めない（区画を宣言する運用は行 y と行 z と seat-heartbeat の行 z / aa の着地と PATH の binary の入れ替えの後）。
+- 歯（接頭辞 `host_group_park_gate_`・`grep -rn host_group_park_gate_` は crates と docs で 0 件・2026-09-29）: `crates/scribe2-boundary/tests/e2e/rules/host.rs` に、`tests/e2e/rules.rs` の `tier_refusals` と `seed_group` で組む面で (a) Tier1・Tier10 と Tier1・Tier12 の面が rc 1 で「9 を越える」の欠陥 1 件ずつ（群の見出し行の番号つき） (b) Tier1・Tier9 の面が rc 1 で「park の区画」の欠陥 1 件 (c) Tier1〜Tier8 の 8 行の面が rc 0 で `groups()` が宣言順の 8 つ (d) Tier9・Tier10 の面が欠陥 2 件（昇順の欠陥を重ねない）。
+- base で RED の理由: base の `check_tiers` は Tier9 と 10 以上を通すので (a) (b) (d) が rc 0 で落ちる（機能不在）。直す既存の歯のうち `crates/scribe2-boundary/tests/e2e/seat/account.rs` は同じ file に base で赤い新しい歯を持たないので、test 区間の行頭に `// flip-check: retroactive <この契約の bead id>` を置く。
+
+## 35. park の区画を群の表の中で群と分けて読む — Tier9 の行は `groups()` に入らず種を持たず、doctor に kind=park の行を出す（契約表の行 y・[FR95](../../design-intent/spec/srs.html#FR95) / FR38 / FR57・AC63 (a) (b)・ADR-0091）
+
+やさしく言うと: 群の表の Tier9 の行を「群」の列から外し、別の枠（park の区画）として持つ。群だけを見る仕組み（種・今の口座・予約・群の段・便の除外）は今のまま群だけを見るので、区画は口座を占めなくなる。doctor には区画の行を 1 本出し、隣の画面が Tier9 を群と読み違えないよう `kind=park` を付ける。
+
+- 何が起きているか（main fe03d363・verified）:
+  - 群の表の行は `crates/scribe2/src/rules/manifest.rs` の `AccountGroup`（303〜336 行・名・anchors・accounts・種・行番号）で、`Manifest` の欄 `groups`（373 行）に宣言順で入る。組み手は `build_group`（1002〜1026 行）、面の検査は `check_duplicate_groups`（1097〜1113 行・名と置き場の重複）→ `check_tiers`（708 行で呼ぶ）→ `seed_groups`（1116〜1126 行）、面を合わせる周は `unknown_candidates`（1131 行・候補が宣言された口座に在るか）と host の面の群で欄を伸ばす所（571 行）。
+  - `groups()`（626 行）の読み手は src に 9 か所: `crates/scribe2/src/account/mod.rs` の 535 行（doctor の群の行）・`crates/scribe2/src/hook/group.rs` の 476 行（`group_of`）/ 593 行（`currents_of`）/ 664 行（`reserve`）・`crates/scribe2/src/init.rs` の 505 / 548 行（群への参加）・`crates/scribe2/src/pipe/dispatch/group.rs` の 59 / 69 行（群の段）・`crates/scribe2/src/rules/mod.rs` の 69 行（`grouped_accounts`）。
+  - doctor の群の行は `crates/scribe2/src/account/mod.rs` の `render_group`（386〜408 行）で `group=<名> accounts=<列> anchors=<数> seat-accounts=<列> current=<…> next=<…> refused=<…> pressure=<…>`。`pressure=` は `render_pressure`（414〜428 行）が群の今の口座の実測を `pressed` に渡す。群の置き場の席の口座は `seat_accounts`（480〜487 行）。
+  - 行 x の後、Tier9 の行は面の欠陥で断られる。
+- 形（番号は done と 1:1）:
+  1. 面の読みは `[[account-group]]` の行を今どおり全部組み、`check_duplicate_groups` と `check_tiers` を全部の行に撃った後、名が `Tier9` の行を park の区画として群の列から分ける（名の重複の検査が 2 行目を断るので区画は高々 1 つ）。`Manifest` は区画を別の欄に持ち、読み口 `park`（区画の行が在れば 1 つ・型は群と同じ `AccountGroup`・種の欄は空）を足す。`groups()` は Tier1〜Tier8 の行だけを宣言順で返す。面を合わせる周は host の面の区画を持ち越す（tracked の面は群の表を持てない＝今のまま）。
+  2. 種は群にだけ配る（`seed_groups` は区画を見ない＝区画の候補が群の種の順を動かさない）。置き場と名の重複・候補が宣言された口座に在るかの検査は区画にも掛ける（群と区画に同じ置き場を書いた面は今の「置き場 <anchor> が 2 つの群に在る」で断る）。
+  3. 行 x の Tier9 の断り（§34 形 2）を外す（10 以上の断りは残す）。行 x の歯のうち Tier9 を断りと測る 2 本（§34 歯 (b) (d)）を、区画として通る形（(b) は rc 0 で `park` が Tier9・(d) は Tier10 の欠陥 1 件）へ書き換える。
+  4. `crates/scribe2/src/hook/group.rs` の `group_of` の隣に `park_of`（manifest と anchor → 区画の行・anchor が区画の anchors に在る周だけ `Some`）を 1 本置く（行 z と seat-heartbeat の行 z / aa が引く）。
+  5. doctor は群の行の後ろに区画の行を 1 本出す（区画を宣言しない host は 0 本＝今の外形は 1 行も動かない）: `group=Tier9 kind=park accounts=<宣言順> anchors=<数> seat-accounts=<群の行と同じ seat_accounts> current=- next=- refused=- pressure=<値>`。`pressure=` は区画の置き場の席の row の口座ごとに鮮度の内側の実測を群の段の門 `pressed`（閾値は群の逼迫の rules 行 3 本の `Caps`・役割の model は `role_models`）に渡し、越えた窓のうち使用率が最大の 1 つを群の行と同じ `<窓>:<使用率>/<閾値>`・越えた窓が無ければ `-`・鮮度の内側の実測を持つ row が 1 つも無ければ `unmeasured`・event log を読めなければ `unreadable`・rules 行が無ければ `no-rule`（群の行の語彙と同じ）。群の行は 1 字も変えない（`kind=` を持たない）。
+  6. 区画は今の口座の記録・種・予約・群の判定を持たない: `currents_of` / `reserve` / `grouped_accounts` / 群の段 / hook の `group_of` は `groups()` しか読まないので、区画の行が並べた口座と区画の席の row の口座は群の移り先と群の予約と便用の群の除外から外れない（それらの本体は触らない）。
+- 触らない: `crates/scribe2/src/init.rs`（群への参加は `groups()` を読むので `--group Tier9` は今の `no-group:Tier9` で断る＝区画への参加は host の面を手で書く）・`crates/scribe2/src/fleet/`（便用の row の除外は行 z）・`crates/scribe2/src/seat/`（session 用の除外と起動は行 z・tick は seat-heartbeat の行 z / aa）・`AccountGroup` の欄と `build_group`（heartbeat の key は seat-heartbeat の行 aa）。
+- 却下: 区画を別の見出しの表で持つ（ADR-0091: 表・key を足さない・消費側の読み手が同じ見出しを読む）／`AccountGroup` に種類の欄を足して `groups()` が区画も返す（読み手 9 か所が全部種類を判じる要があり、判じ漏れた所で区画が口座を占める）／doctor に区画の行を出さない（消費側の画面は host の面の Tier9 を群と読み、doctor に行が無い群が 1 つ在ると群の列が全部「まだ分からない」に倒れる・2026-09-29 に消費側の席から知らせ）／`kind=` を行の末尾に置く（読み手が先頭の語で弁別できない）。
+- 限界: `init --group Tier9` は区画に効かない（断る側）。FR73 の「群の表のどの行の anchor にも無い登録 row の anchor の数え」と FR80 の隣の集め（区画の anchors を含む・AC63 (e) (f)）は公開の門の行が `park` を読んで行う（本行の外）。
+- 歯（接頭辞 `host_park_lot_`・`grep -rn host_park_lot_` は crates と docs で 0 件・2026-09-29）:
+  - `crates/scribe2-boundary/tests/e2e/rules/host.rs`: (a) Tier1・Tier2・Tier9 の面が rc 0 で `groups()` が Tier1・Tier2・`park` が Tier9 (b) 区画の種は空で、区画の候補の先頭を群の候補の先頭にも置いた面で Tier1 の種がその口座のまま（区画が種を取らない） (c) Tier1 と Tier9 が同じ置き場を持つ面・Tier9 の候補が宣言に無い面が断られる (d) Tier9 の 2 行の面が名の重複 1 件 (e) Tier3・Tier9 の面の `crates/scribe2/src/rules/mod.rs` の `grouped_accounts` が Tier3 の今の口座だけを返し区画の候補を返さない。
+  - `crates/scribe2-boundary/tests/e2e/seat/account.rs`: (f) Tier1・Tier9 の面の doctor で Tier1 の行が今と同じ字（`kind=` 無し）・Tier9 の行が `group=Tier9 kind=park accounts=… anchors=… seat-accounts=… current=- next=- refused=-` で始まり、`pressure=` は区画の席の row の口座の実測が閾値以上の fixture で窓の値・未満で `-`・実測なしで `unmeasured` (g) Tier1 が逼迫し Tier1 の候補の残量の鍵の先頭が区画の席の row の口座の fixture で、Tier1 の行の `next=` がその口座（群の予約が区画の口座を除かない） (h) doctor と群の段を撃った後も host の根に Tier9 の今の口座の記録の file が無い。
+- base で RED の理由: base（行 x の後）は Tier9 の行を面の欠陥で断るので (a)〜(h) の Tier9 を含む面が読めない（(c) と (d) は断りの字が違う）。区画の読み口と doctor の区画の行は base に無い（機能不在）。
+
+## 36. park の区画は口座を占めない — 便用と session 用の除外から区画の席の row を外し、区画の席の起動の候補を区画の行の口座に限る（契約表の行 z・[FR36](../../design-intent/spec/srs.html#FR36) / FR95 / FR59 / FR69・AC63 (b) (c)・ADR-0091）
+
+やさしく言うと: 席の口座を他の席や便が取らないように、器は「席が使っている口座」を選定から外している。区画の席は占めない約束なので、この除外から区画の席を外す。区画の席を起こすときは、区画の行に並べた口座の中から選ぶ。
+
+- 何が起きているか（main fe03d363・verified）:
+  - session 用: `crates/scribe2/src/seat/cycle/relaunch.rs` の `choose`（25〜47 行）は、自席の鍵（役割, anchor）の外の登録 row の口座を全部除外に入れる。呼び手は `crates/scribe2/src/seat/cycle/launch.rs` の `pick_account`（337〜356 行）の 1 か所で、`pick_account` は群の置き場なら群の今の口座、口座の引数が在ればその口座（宣言に在ること）、無ければ宣言の全部の口座を `choose` に渡す。
+  - 便用: `crates/scribe2/src/fleet/replay.rs` の `select_for_run`（147〜160 行）は `RunSelect.repo` を anchor に持つ登録 row の口座（`State::registered_accounts`・91〜97 行）と `RunSelect.grouped` を除く。`crates/scribe2/src/fleet/cli.rs` の `select_account`（154〜200 行）は `--anchor` が在ればその anchor の row・無ければ全部の row の口座と `grouped_accounts` を除く。
+  - `grouped` の値は `crates/scribe2/src/rules/mod.rs` の `grouped_accounts`（58〜70 行・群の今の口座の集合）で、`crates/scribe2/src/pipe/ratelimit.rs` の `Pool`（欄 `grouped`・組むのは 57 行と 117 行）と `crates/scribe2/src/fleet/wait.rs` の `Completion::AccountFree`（欄 `grouped`・53〜75 行・組むのは `crates/scribe2/src/pipe/ratelimit.rs` の 347 行〔欄は 355 行〕と `wait.rs` の in-file の歯 682 / 726 / 789 行）が運ぶ。`RunSelect` の構築点は `crates/scribe2/src/pipe/ratelimit.rs` の 63 行と `crates/scribe2/src/fleet/wait.rs` の 165 行の 2 か所。`crates/scribe2/src/account/mod.rs` の 543 行（doctor の `run-accounts=`）も `grouped_accounts` を読む。
+  - `State::registered_accounts` は `crates/scribe2/src/account/mod.rs` の 790 行（退役の検査）も読む。
+  - 行 y の後、区画の席の row の口座は上の 3 つの除外（session 用・便用の `--anchor` あり / なし）に入り、区画の置き場の席の起動の候補は宣言の全部の口座である＝FR36 / FR95 と食い違う。
+- 形（番号は done と 1:1）:
+  1. `crates/scribe2/src/rules/mod.rs` に、区画の anchors の集合を host の面から解く 1 関数 `park_anchors` を `grouped_accounts` の隣に足す（同じ面の読み・面が無い周は空・読めない周は `GroupedError::Manifest`・記録は読まない）。`Pool`（組むのは `crates/scribe2/src/pipe/ratelimit.rs` の 57 / 117 行）・`Completion::AccountFree`（組むのは同じ file の 347 行と `crates/scribe2/src/fleet/wait.rs` の in-file の歯 3 か所）・`RunSelect`（組むのは `ratelimit.rs` の 63 行と `wait.rs` の 165 行）に欄 `park`（区画の anchors の集合）を足し、`grouped` と同じ所で同じく運ぶ（構築点は 2026-09-29 に grep で数えた・起こす前に現 main で測り直す）。`fleet select` の口（`crates/scribe2/src/fleet/cli.rs` の `select_account`）は `--purpose run` の周に `park_anchors` を 1 回読む（読めない周は群の読みと同じ断り・測らず選ばない）。`grouped_accounts` の返り値と doctor の `run-accounts=` は変えない。
+  2. 便用の row の除外の読み手を 1 本にする: `State` に「anchor の絞り（今の `registered_accounts` と同じ `Option`）と区画の anchors を受け、anchor が区画の anchors に在る row を数えない」method を足し、`select_for_run` と `select_account` の 2 つが呼ぶ。`registered_accounts`（退役の検査）は変えない。
+  3. session 用: `choose` が区画の anchors を受け、他の席の row のうち anchor が区画の anchors に在る row の口座を除外に入れない（自席の鍵の row は今どおり除外しない）。`pick_account` が面を合わせた manifest の `park` から anchors を渡す。
+  4. 区画の置き場の席の起動: `pick_account` は、anchor が区画の anchors に在り口座の引数が無い周、候補を宣言の口座のうち区画の行が並べた口座だけ（宣言の順）にして `choose` を撃つ。候補が無い周は今と同じ `Launched::None`（FR69 の語）。引数が在る周は今どおり宣言された口座ならその口座（区画の行の外の口座でも）。群の今の口座との不一致の断りは群の置き場だけに掛かる（今のまま）。
+- 触らない: 群の移り先・予約・種（`groups()` と `currents_of` だけを読む＝行 y で区画の口座を除かない形が既に成り立つ）・`registered_accounts`・`crates/scribe2/src/fleet/select.rs` の `select` の式と閾値・起動の断りの語。
+- 却下: 区画の席の row の口座を除外の集合から引き算する（同じ口座を群の席も使っている周に群の席の除外まで消える＝row を数えない形にする）／`grouped_accounts` の返り値を 2 欄の型に替える（返り値の集合を測る既存の歯が `tests/e2e/fleet.rs`・`tests/e2e/rules/host.rs`・`tests/e2e/pipe/dispatch/group.rs` に 8 か所在り、全部の assert が動く）／区画の席の起動の候補を宣言の全部にする（ADR-0091・裁定 user 2026-09-29T05:44Z は区画の行が並べた口座に限る）。
+- 限界: 区画の席と他の席が同じ口座に並びうる（ADR-0091 の引き受け）。`fleet select --purpose session` は今どおり row も群も読まない。
+- 歯（接頭辞 `park_lot_select_`・`grep -rn park_lot_select_` は crates と docs で 0 件・2026-09-29）:
+  - `crates/scribe2-boundary/tests/e2e/fleet.rs`（群の便用の除外の歯 `host_group_run_` の隣・`select_fixture` と `put_groups` を使う）: Tier1 と Tier9 を宣言し、Tier9 の置き場に口座 p の席の row・Tier1 の置き場に口座 g の席の row を置いた面で (a) `fleet select --purpose run --anchor <Tier9 の置き場>` が p を候補に残す (b) `--anchor` 無しの `--purpose run` が p を残し g を除く (c) `--anchor <Tier1 の置き場>` が g を除く（群の席の除外は今のまま）。
+  - `crates/scribe2-boundary/tests/e2e/seat/launch.rs`: (d) 別の置き場の席の `seat launch`（引数なし）が、使用率の最も低い口座が Tier9 の席の row の口座 p である fixture で p を選ぶ (e) Tier9 の置き場の席の `seat launch`（引数なし）が、区画の行の外に使用率の最も低い口座を 1 つ置いた fixture でもその口座を選ばず区画の行の口座から選ぶ (f) 同じ席の `--account <区画の行の外の口座>` がその口座で起きる（`group-account` の断り 0） (g) 区画の行の口座が全部閾値以上の fixture が `no-account` の 4 語で断られる。
+- base で RED の理由: base（行 y の後）は区画の席の row を 3 つの除外に入れ、区画の席の起動の候補を宣言の全部にするので (a) (b) (d) (e) が落ちる（機能不在）。(c) (f) (g) は回帰の歯で base でも緑（同じ file に赤い歯が在る）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -709,4 +776,37 @@ verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe
 size = "M"
 growth = ["crates/scribe2/src/hook/group.rs:40", "crates/scribe2/src/seat/tick.rs:10"]
 done = "(1) pressed は役割の model の表示名の集合を受け、モデル別 7 日窓は model の表示名が集合に在る行だけを数え、集合が空ならモデル別窓を数えず、5 時間窓と 7 日窓は集合に依らない (2) 役割 1 つの model を読む pub な 1 関数が在り role_models はそれを登録 row ごとに呼ぶ (3) decide は判じる群の role_models を逼迫を測る前に読み None の周は Unreadable、reserve は群ごとの集合を候補の門と pressed_now へ、席の turn の hook は判じる群の role_models を（None の周は 0 行）、tick は Front の役割から account_pressed へ自席の役割 1 つの集合（行が無い周は空）を渡す (4) 閾値の行・Caps・残量の鍵・予約の規則・便用の口座選定・usage の計測は不変で、pipe_dispatch_group_model_gate_（役割 opus で Fable の窓だけ高い今の口座は移らない・その候補へ移れる・役割 fable は不変）・seat_tick_judge_model_gate_・seat_tick_account_gate_model_（管理 tick の口座の門: 役割 opus の写しは Fable の窓だけ高い自席の口座で門を通る・役割 fable の写しは account-pressed）・host_group_next_model_gate_・hook_group_model_gate_ と put_group_round の窓の名を埋め込みの役割の既定に揃えた既存の歯・lib の hook_group_pressed_ を測る"
+[[contract]]
+id = "x"
+title = "群の表の名を Tier1〜Tier9 に閉じる — 数字 10 以上の名を断り、park の区画の読み（行 y）が着地するまで Tier9 の行も断る（§34・FR38・ADR-0091・s2-07l.730）"
+req = ["FR38", "FR57", "AC63", "AC41", "NFR4"]
+section = "34"
+write-set = ["crates/scribe2/src/rules/groups.rs", "crates/scribe2-boundary/tests/e2e/rules/host.rs", "crates/scribe2-boundary/tests/e2e/seat/account.rs", "docs/design/account-lifecycle.md"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail host_group_park_gate_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail host_group_tier_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail host_group_doctor_prints_one_line_per_group_in_declaration_order"]
+size = "S"
+growth = ["crates/scribe2/src/rules/groups.rs:15"]
+done = "(1) check_tiers が形の合う名のうち数字が 10 以上（桁数 2 以上）の名を、群の見出し行の欠陥「群の名 <名> の数字が 9 を越える（群の表の名は Tier1〜Tier9）」で断る (2) 名 Tier9 の行を、群の見出し行の欠陥「Tier9 は park の区画の名で、この版の器は park の区画を読めない」で断る (3) 1 と 2 で断った行は昇順の欠陥を重ねず、欠陥は行番号つきで面を読む口が全部止まる（今の名の断りと同じ極性） (4) host_group_tier_ascending_numbers_pass_compared_numerically と host_group_doctor_prints_one_line_per_group_in_declaration_order の Tier10 を Tier3 に替えて緑のまま 歯: host_group_park_gate_ の (a) Tier10 と Tier12 の 9 を越える断り (b) Tier9 の park の区画の断り (c) Tier1〜Tier8 の 8 行の面が通る (d) Tier9・Tier10 の面の欠陥 2 件が base で RED、既存の host_group_tier_ は緑。tier_digits・compare_digits・名の重複の検査・種・doctor の群の行の字は不変"
+[[contract]]
+id = "y"
+title = "park の区画を群の表の中で群と分けて読む — Tier9 の行は groups に入らず種を持たず、manifest の読み口 park と hook/group.rs の park_of を足し、doctor に kind=park の行を出す（§35・FR95・ADR-0091・s2-07l.730）"
+req = ["FR95", "FR38", "FR57", "AC63", "NFR4"]
+section = "35"
+write-set = ["crates/scribe2/src/rules/manifest.rs", "crates/scribe2/src/rules/groups.rs", "crates/scribe2/src/hook/group.rs", "crates/scribe2/src/account/mod.rs", "crates/scribe2-boundary/tests/e2e/rules/host.rs", "crates/scribe2-boundary/tests/e2e/seat/account.rs", "docs/design/account-lifecycle.md"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail host_park_lot_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail host_group_tier_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail host_group_seed_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail host_group_table_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail host_group_doctor_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail host_group_next_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail host_group_pressure_"]
+size = "M"
+growth = ["crates/scribe2/src/rules/manifest.rs:35", "crates/scribe2/src/account/mod.rs:40", "crates/scribe2/src/hook/group.rs:6"]
+depends = ["x"]
+done = "(1) 面の読みが [[account-group]] の全部の行に名と置き場の重複の検査と check_tiers を撃った後、名 Tier9 の行を群の列から分けて manifest の別の欄に持ち、読み口 park が区画（型は AccountGroup・種は空）を返し、groups は Tier1〜Tier8 の行だけを宣言順で返し、面を合わせる周は host の面の区画を持ち越す (2) seed_groups は群にだけ種を配り、置き場の重複と候補が宣言に在るかの検査は区画にも掛かる (3) 行 x の Tier9 の断りを外し（10 以上の断りは残す）、行 x の歯 host_group_park_gate_ のうち Tier9 を断りと測る 2 本（§34 歯 (b) (d)）を区画として通る形（(b) は rc 0 で park が Tier9・(d) は Tier10 の 1 件）へ書き換える (4) hook/group.rs の group_of の隣に park_of（manifest と anchor → anchor が区画の anchors に在る周だけ区画）が在る (5) doctor は群の行の後ろに group=Tier9 kind=park accounts= anchors= seat-accounts= current=- next=- refused=- pressure= の 1 行を出し、pressure= は区画の置き場の席の row の口座ごとに鮮度の内側の実測を pressed に渡して越えた窓のうち使用率が最大の 1 つ・越えなければ -・実測が無ければ unmeasured・読めなければ unreadable・行が無ければ no-rule で、区画の無い host は 0 本・群の行は 1 字も変わらない (6) currents_of・reserve・grouped_accounts・群の段・group_of の本体は変わらず、区画の口座を群の移り先と予約と便用の群の除外から除かず、区画の今の口座の記録の file を書かない 歯: host_park_lot_ の (a)〜(h) が base で RED、既存の host_group_tier_ / host_group_seed_ / host_group_table_ / host_group_doctor_ / host_group_next_ / host_group_pressure_ は緑。init の群への参加・fleet・seat は不変"
+[[contract]]
+id = "z"
+title = "park の区画は口座を占めない — 便用と session 用の除外から区画の置き場の席の row を外し、区画の置き場の席の起動の候補を区画の行の口座に限る（§36・FR36 / FR95・ADR-0091・s2-07l.730）"
+req = ["FR36", "FR95", "FR59", "FR69", "AC63"]
+section = "36"
+touches = ["crate::fleet::RunSelect"]
+write-set = ["crates/scribe2/src/rules/mod.rs", "crates/scribe2/src/fleet/replay.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/src/fleet/wait.rs", "crates/scribe2/src/pipe/ratelimit.rs", "crates/scribe2/src/seat/cycle/relaunch.rs", "crates/scribe2/src/seat/cycle/launch.rs", "crates/scribe2-boundary/tests/e2e/fleet.rs", "crates/scribe2-boundary/tests/e2e/seat/launch.rs", "docs/design/account-lifecycle.md", "=crates/scribe2/src/fleet/select.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail park_lot_select_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail host_group_run_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_launch_", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_ratelimit_resume_", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_stop_group_completion_"]
+size = "M"
+growth = ["crates/scribe2/src/rules/mod.rs:20", "crates/scribe2/src/fleet/replay.rs:15", "crates/scribe2/src/fleet/cli.rs:8", "crates/scribe2/src/fleet/wait.rs:6", "crates/scribe2/src/pipe/ratelimit.rs:8", "crates/scribe2/src/seat/cycle/relaunch.rs:6", "crates/scribe2/src/seat/cycle/launch.rs:12"]
+depends = ["y"]
+done = "(1) rules/mod.rs に区画の anchors の集合を host の面から解く park_anchors が grouped_accounts の隣に在り（面が無い周は空・読めない周は GroupedError の Manifest・記録は読まない）、Pool・Completion の AccountFree・RunSelect が欄 park を持ち grouped と同じ所で同じく運び、fleet select の --purpose run は park_anchors を 1 回読み、grouped_accounts の返り値と doctor の run-accounts= は不変 (2) State に anchor の絞りと区画の anchors を受けて区画の anchors に在る row を数えない method が在り、select_for_run と select_account がそれを呼び、registered_accounts は不変 (3) choose が区画の anchors を受け、他の席の row のうち anchor が区画の anchors に在る row の口座を除外に入れず、pick_account が面を合わせた manifest の park から渡す (4) pick_account は anchor が区画の anchors に在り口座の引数が無い周、候補を区画の行が並べた口座だけにして choose を撃ち、候補なしは Launched の None・引数が在る周は宣言された口座ならその口座 歯: park_lot_select_ の (a) (b) (d) (e) が base で RED、(c) (f) (g) と既存の host_group_run_ / seat_launch_ / lib の pipe_ratelimit_resume_ / pipe_stop_group_completion_ は緑。群の移り先・予約・種・select の式と閾値・起動の断りの語は不変"
 <!-- contracts:end -->
