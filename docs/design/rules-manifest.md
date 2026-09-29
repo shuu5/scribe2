@@ -442,7 +442,7 @@ title = "R-C4-1（core の本体の上限）を 60000 → 66000 に上げる —
 req = ["FR17"]
 section = "19"
 write-set = ["rules/manifest.toml", "crates/scribe2-boundary/tests/e2e/rules.rs", "docs/design/rules-manifest.md", "=crates/xtask/src/limits.rs", "=crates/xtask/src/check_tests.rs"]
-verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail rules_cli_get_returns_value", "cargo nextest run -p scribe2 --test e2e --no-tests=fail rules_core_lines_66000_"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_cli_get_returns_value", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_core_lines_66000_"]
 size = "S"
 done = "§19 の約束 1〜3 のとおり: 埋め込み manifest の R-C4-1 が値 66000 と裁定 id user 2026-09-29T00:59Z と ruled_at 2026-09-29 を持ち、rules get R-C4-1 が 66000 を出す歯と上げた行を名指す歯（rules_core_lines_66000_ で始まる）が緑で、§4.1 の表が同じ値と裁定を写して前の値 60000 の裁定を履歴に残し、src と憲法 §3 の閾値セルは不変で、xtask の閾値の読み手と歯（limits_match_rules_manifest・rules_manifest・real_limits）は現物の manifest から値を読むので 1 字も変えずに緑"
 <!-- contracts:end -->
