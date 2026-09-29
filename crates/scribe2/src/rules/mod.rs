@@ -9,6 +9,7 @@
 
 pub mod cli;
 pub mod device;
+pub mod exclusion;
 mod groups;
 pub mod manifest;
 
@@ -354,8 +355,9 @@ pub enum RuleKind {
     /// [`crate::pipe::contract::class_element`] の 1 本）で、契約表の検査が verify 各行に禁じる語列と同じ照合で当て、導出が
     /// 行の `classes` に無い行を断る。id は [`crate::pipe::contract::CLASS_ROW`] の 1 行。
     RunnerClassCommands,
-    /// host-guard の公開の見張りの行（設計 vessel-hook.md §16 形 6・ADR-0078）。値は札つきの要素 `form <記号>` と
-    /// `exclude <digest>` の列（読み手は [`publish::elements`] の 1 本）。
+    /// host-guard の公開の見張りの行（設計 vessel-hook.md §16 形 6・ADR-0078）。値は札つきの要素 `form <記号>` の
+    /// 列（読み手は [`publish::elements`] の 1 本）。頭の語が `exclude` の要素は置けない（除外は host の面の表
+    /// `[[publish-exclusion]]`・兄弟 [`exclusion`]・ADR-0093）。
     HostGuardPublish,
 }
 

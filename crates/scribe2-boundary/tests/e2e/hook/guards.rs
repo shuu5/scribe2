@@ -811,6 +811,41 @@ fn publish_widened_forms_are_denied_through_the_binary() {
     clean(&[&repo, &state]);
 }
 
+/// 埋め込みの manifest で、ruling の空の行を持つ host の面と ruling の欄の無い行を持つ host の面では、識別子を持たない
+/// `git push origin main` が rc 2・stdout 0 byte・stderr 1 行（`hit=host-unreadable:<行番号>` と「<行番号> 行目を直す」）と記録 1 行
+/// （what は行番号を持たない `host-guard-deny reason=host-unreadable`）で断られ、裁定 id を書いた面では同じ push が rc 0（断りの理由が
+/// 行であることの対）。`exclude` の要素を持つ publish の行の `--rules` では rules-unreadable で断られ、要素を消すと通る（§19 行 m）。
+#[test]
+fn publish_exclusion_host_face_rows_gate_even_an_identifier_free_push() {
+    let (repo, state) = (git_repo(), tmp());
+    let push = bash_payload(&repo, "git push origin main");
+    let face = |row: &str| fs::write(state.join("host.toml"), format!("schema = 1\n\n[[publish-exclusion]]\n{row}")).expect("host の面を書ける");
+    for (at, (row, line)) in [("phrase = \"a\"\nruling = \"\"\n", 5), ("phrase = \"a\"\n", 3)].into_iter().enumerate() {
+        face(row);
+        let text = assert_host_guard_deny(&run_host_guard_in(&state, &push), row);
+        let want = format!("{NAME}: host-guard deny kind=- hit=host-unreadable:{line} row=- ruling=- — 読めない周は通さない（fail-closed）: host の面（host.toml）の {line} 行目を直す");
+        assert_eq!(text.trim_end(), want, "{row}");
+        let lines = host_guard_records(&state);
+        assert_eq!(lines.len(), at + 1, "記録 1 行ずつ: {lines:?}");
+        assert_eq!(what_of(&lines.last().cloned().unwrap_or_default()), "host-guard-deny reason=host-unreadable", "{row}");
+    }
+    face("phrase = \"a\"\nruling = \"user 2026-09-29T05:46Z\"\n");
+    assert_silent(&run_host_guard_in(&state, &push), "裁定 id を書いた面");
+    assert_eq!(host_guard_records(&state).len(), 2, "通す周は記録を残さない");
+    let rules = state.join("rules.toml");
+    let rules_with = |value: &str| {
+        let row = format!("\n[[rule]]\nid = \"host_guard.publish\"\nkind = \"HostGuardPublish\"\nvalue = [{value}]\nenabled = true\nruling = \"r\"\nruled_at = \"2026-09-29\"\n");
+        fs::write(&rules, format!("schema = 1\n{}{row}", denied_rows_text(true))).expect("rules を書ける");
+    };
+    let args = ["--state-dir", &state.display().to_string(), "--rules", &rules.display().to_string()];
+    rules_with("\"form repo-name\", \"exclude 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"");
+    let text = assert_host_guard_deny(&run_host_guard(&args, &push), "exclude の要素");
+    assert!(text.contains("hit=rules-unreadable "), "{text}");
+    rules_with("\"form repo-name\"");
+    assert_silent(&run_host_guard(&args, &push), "要素を消した manifest");
+    clean(&[&repo, &state]);
+}
+
 /// (a) `[memo]` の title か `intake:memo` の label を持つ create は、body-file の本文に 4 節が全部在れば通り、1 つでも
 /// 欠ければ閉じた理由 1 つ（宣言順で最初の欠け）で止まる。相対 path は payload の `cwd` から解き、`scripts/bdw` も
 /// 連結の後ろの segment も読む。

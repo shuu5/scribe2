@@ -15,10 +15,8 @@ use std::path::{Path, PathBuf};
 
 /// 識別子の形の要素の札。
 const FORM: &str = "form";
-/// 除外の digest の要素の札。
+/// 除外の要素の札（置けない要素の頭の語・除外は host の面の表が持つ）。
 const EXCLUDE: &str = "exclude";
-/// 除外の digest の字数（sha256 の 16 進）。
-const DIGEST_LEN: usize = 64;
 /// 比べる語の末尾から落とす字（`(cd sub && git push)` の `push)` も push）。
 const TAIL: [char; 4] = [')', '}', '`', ';'];
 /// git の公開の動詞。
@@ -195,17 +193,16 @@ impl Form {
     }
 }
 
-/// 行の値を読んだもの（形の記号の列と除外の digest の列・どちらも manifest の順）。
+/// 行の値を読んだもの（形の記号の列・manifest の順）。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Elements {
     /// 走査する識別子の形。
     pub forms: Vec<Form>,
-    /// 除外の digest（16 進 64 字の小文字）。
-    pub excludes: Vec<String>,
 }
 
-/// 行の要素の読み手（**1 本**・`names_are_known` の arm が呼ぶ）: 各要素は `form <記号>` か `exclude <digest>`。綴り違いの
-/// 記号・同じ記号 2 回・16 進 64 字の小文字でない digest・同じ digest 2 回・札の外の要素を、要素を名指す理由で拒む（NFR4）。
+/// 行の要素の読み手（**1 本**・`names_are_known` の arm が呼ぶ）: 各要素は `form <記号>` だけ。綴り違いの記号・同じ記号 2 回・
+/// 札の外の要素を、要素を名指す理由で拒む。頭の語が `exclude` の要素は、除外が host の面の表 `[[publish-exclusion]]` に在ると
+/// 名指して拒む（ADR-0093・NFR4）。
 pub fn elements(values: &[String]) -> Result<Elements, String> {
     let mut found = Elements::default();
     for value in values {
@@ -222,22 +219,12 @@ pub fn elements(values: &[String]) -> Result<Elements, String> {
                     format!("記号が未知（取るのは {}）", taken.join(" / "))
                 }
             },
-            [EXCLUDE, digest] if !is_digest(digest) => format!("digest が 16 進 {DIGEST_LEN} 字の小文字でない"),
-            [EXCLUDE, digest] if found.excludes.iter().any(|seen| seen == digest) => "digest が 2 回目".to_owned(),
-            [EXCLUDE, digest] => {
-                found.excludes.push((*digest).to_owned());
-                continue;
-            }
-            _ => format!("札が {FORM} <記号> / {EXCLUDE} <digest> の形でない"),
+            [EXCLUDE, ..] => "除外の要素は置けない（除外は host の面の [[publish-exclusion]]・ADR-0093）".to_owned(),
+            _ => format!("札が {FORM} <記号> の形でない"),
         };
         return Err(format!("要素 {value:?} の{reason}"));
     }
     Ok(found)
-}
-
-/// 16 進 64 字の小文字か。
-fn is_digest(text: &str) -> bool {
-    text.len() == DIGEST_LEN && text.chars().all(|found| matches!(found, '0'..='9' | 'a'..='f'))
 }
 
 /// 公開の segment の種別。
@@ -1004,26 +991,29 @@ mod tests {
         assert_eq!(found.as_deref(), Some("host-guard-deny git"), "publish が先に回れば no-row");
     }
 
-    /// (e) 要素の読み手: 4 記号の form と 64 字小文字の exclude は受理し、綴り違い・同じ記号 2 回・63 字と大文字の digest・
-    /// 同じ digest 2 回・札の外の要素は拒む。
+    /// (e) 要素の読み手: 4 記号の form だけを受け、頭の語が exclude の要素（digest の形でも長さに依らず）は
+    /// `[[publish-exclusion]]` と ADR-0093 を名指す理由で拒み、綴り違い・同じ記号 2 回・札の外の要素も拒む（理由は form の形だけを名指す）。
     #[test]
-    fn host_guard_publish_elements_accept_the_four_forms_and_digests() {
-        let digest = "0123456789abcdef".repeat(4);
-        let mut good: Vec<String> = FORMS.iter().map(|form| format!("form {}", form.as_str())).collect();
-        good.push(format!("exclude {digest}"));
+    fn publish_exclusion_elements_take_only_the_form_symbols() {
+        let good: Vec<String> = FORMS.iter().map(|form| format!("form {}", form.as_str())).collect();
         let read = elements(&good).unwrap_or_else(|why| panic!("受理される: {why}"));
         assert_eq!(read.forms, [Form::RepoName, Form::ObjectId, Form::TrackedPath, Form::LedgerId], "宣言順の 4 記号");
-        assert_eq!(read.excludes, std::slice::from_ref(&digest), "digest");
+        let digest = "0123456789abcdef".repeat(4);
         let short = digest.get(1..).unwrap_or_default().to_owned();
-        let twice = |one: String| vec![one.clone(), one];
         for bad in [
-            vec!["form repo_name".to_owned()], twice("form repo-name".to_owned()), vec![format!("exclude {short}")],
-            vec![format!("exclude {}", digest.to_ascii_uppercase())], twice(format!("exclude {digest}")),
-            vec!["repo-name".to_owned()], vec!["scan repo-name".to_owned()],
+            format!("exclude {digest}"), format!("exclude {short}"), format!("exclude {}", digest.to_ascii_uppercase()),
+            "exclude proj-accent".to_owned(), "exclude".to_owned(),
         ] {
-            let why = elements(&bad).err().unwrap_or_else(|| panic!("{bad:?} は拒む"));
-            assert!(why.starts_with("要素 "), "{bad:?}: {why}");
+            let why = elements(std::slice::from_ref(&bad)).err().unwrap_or_else(|| panic!("{bad:?} は拒む"));
+            assert!(why.starts_with("要素 ") && why.contains("[[publish-exclusion]]") && why.contains("ADR-0093"), "{bad:?}: {why}");
         }
+        let twice = |one: &str| vec![one.to_owned(), one.to_owned()];
+        for bad in [vec!["form repo_name".to_owned()], twice("form repo-name"), vec!["repo-name".to_owned()], vec!["scan repo-name".to_owned()]] {
+            let why = elements(&bad).err().unwrap_or_else(|| panic!("{bad:?} は拒む"));
+            assert!(why.starts_with("要素 ") && !why.contains("[[publish-exclusion]]"), "{bad:?}: {why}");
+        }
+        let odd = elements(&["scan repo-name".to_owned()]).err().unwrap_or_default();
+        assert!(odd.contains("form <記号>") && !odd.contains("exclude <digest>"), "札の外の理由は form だけを名指す: {odd}");
     }
 
     /// 公開の segment ごとの印の語（cwd `/w`・root `/root`）。
