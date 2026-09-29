@@ -13,6 +13,8 @@ use crate::rules::manifest::Manifest;
 use crate::rules::RuleValue;
 use std::path::{Path, PathBuf};
 
+pub mod scan;
+
 /// 識別子の形の要素の札。
 const FORM: &str = "form";
 /// 除外の要素の札（置けない要素の頭の語・除外は host の面の表が持つ）。
@@ -1236,5 +1238,17 @@ mod tests {
         let bare = denied("gh api graphql -f query=\"$Q\"", &manifest("")).map(|(_, text)| text);
         let want = format!("{NAME}: host-guard deny kind=publish hit=no-row row=host_guard.publish ruling=- — {}", Kind::Publish.route());
         assert_eq!(bare, Some(want), "行の無い manifest");
+    }
+
+    /// 行 m2 (f) `elements` で読んだ要素の記号が名の当たりを決める（`form repo-name` で効き、`form object-id` だけでは当たらない）。
+    #[test]
+    fn publish_names_follow_the_row_elements() {
+        use super::scan::{scan, Neighbor, Phrases, Public, Source, Text};
+        let texts = [Text { source: Source::CommitMessage, body: "see proj-x" }];
+        let near = [Neighbor { tag: "t".to_owned(), names: vec!["proj".to_owned()] }];
+        let read = |value: &str| elements(&[value.to_owned()]).unwrap_or_default();
+        let hit = |value: &str| scan(&read(value), &texts, &near, &Public::default(), &Phrases::default());
+        assert_eq!(hit("form repo-name").as_deref(), Some("1:repo-name=proj@t"));
+        assert_eq!(hit("form object-id"), None);
     }
 }
