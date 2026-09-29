@@ -2300,10 +2300,13 @@ fn status_run(place: &TickPlace, extra: &[&str]) -> Output {
     run_seat(&args)
 }
 
-/// status の 1 行（契約の字面）。
+/// status の行の末尾 3 欄の既定（実測なしの `reopens=unmeasured`・群の無い置き場の `move=- grace_left=-`・seat-heartbeat.md §20 形 4）。
+const STATUS_TAIL: &str = " reopens=unmeasured move=- grace_left=-";
+
+/// status の 1 行（契約の字面・末尾は既定の 3 欄 [`STATUS_TAIL`]）。
 fn status_line(last: &str, age: &str, healthy: &str, heartbeat: &str, ladder: (&str, &str)) -> String {
     let (step, next) = ladder;
-    format!("seat tick status: target={TICK_TARGET} last={last} age={age} healthy={healthy} heartbeat={heartbeat} step={step} next={next}\n")
+    format!("seat tick status: target={TICK_TARGET} last={last} age={age} healthy={healthy} heartbeat={heartbeat} step={step} next={next}{STATUS_TAIL}\n")
 }
 
 /// 経過 `ago` 秒の打刻を置いて status を撃ち（`--rules` は `rules`）、打刻の ts と stdout を返す。秒を跨いで経過がずれた周は

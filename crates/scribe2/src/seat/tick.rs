@@ -53,13 +53,14 @@ use super::state::{self, SeatState, Stamp};
 use super::{host_groups_dir, pane_is_shell, pane_of, sanitize_target, seat_dir, state_dir_of, StateDir, REASON_TMUX_FAILED};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
 use crate::fleet::usage::{self, fresh_rows};
-use crate::fleet::State;
-use crate::hook::group::{self, current_of, exit_dialog, group_of, pressed, Caps, Judgement, Lock, Refusal, EXIT};
+use crate::fleet::select::{select, Input as SelectInput, Purpose, Selection, LIMIT_PCT};
+use crate::fleet::{Registration, State};
+use crate::hook::group::{self, current_of, exit_dialog, group_of, pressed, Caps, Judgement, Lock, Pending, Refusal, Step, EXIT};
 use crate::name::NAME;
 use crate::pipe::dispatch::facts;
 use crate::rules::manifest::{AccountGroup, Manifest};
 use crate::rules::{int_row, list_row, RuleError};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -539,8 +540,8 @@ pub fn health(seat: &Path, interval_s: u64) -> Health {
     health_of(&read_last(seat), interval_s, state::now_secs())
 }
 
-/// `seat tick status`（設計 §12 行 p 形 2）: 登録 row の席ごとに 1 行（鍵の順・`target` は 1 席）。周期と梯子の行のどちらかを読めない
-/// 周は `no-rule`・row の無い target は `no-row`（rc 1・stdout 0 行・既定を出さない）。梯子の記録は読むだけ。
+/// `seat tick status`（設計 §12 行 p 形 2・§20 形 4）: 登録 row の席ごとに 1 行（鍵の順・`target` は 1 席）。周期・梯子・退避の猶予の
+/// 行のどれかを読めない周は `no-rule`・row の無い target は `no-row`（rc 1・stdout 0 行・既定を出さない）。記録は読むだけ。
 pub fn status(state_dir: &str, target: Option<&str>, manifest: Result<Manifest, Vec<RuleError>>) -> Outcome {
     let named = target.map(|found| format!(" target={found}")).unwrap_or_default();
     let refused = |rc, reason: &str| Outcome::failed_line(rc, format!("seat tick status: refused reason={reason}{named}"));
@@ -548,21 +549,61 @@ pub fn status(state_dir: &str, target: Option<&str>, manifest: Result<Manifest, 
         return refused(RC_REFUSED, TickError::StateDir.as_str());
     };
     // 黙りの閾値は status が読まない（梯子の列だけを使う）ので 0 を置く。
-    let rows = manifest.ok().and_then(|found| Some((int_row(&found, ROW_INTERVAL).ok()?, Pace::of(0, list_row(&found, ROW_LADDER).ok()?).ok()?)));
-    let Some((interval_s, pace)) = rows else {
+    let rows = manifest.ok().and_then(|found| {
+        let pace = Pace::of(0, list_row(&found, ROW_LADDER).ok()?).ok()?;
+        Some((int_row(&found, ROW_INTERVAL).ok()?, pace, int_row(&found, ROW_GRACE).ok()?, found))
+    });
+    let Some((interval_s, pace, grace_s, found)) = rows else {
         return refused(RC_REFUSED, TickError::NoRule.as_str());
     };
     let Ok(events) = crate::fleet::store::read_all(&state.path) else {
         return refused(RC_BROKEN, TickError::Store.as_str());
     };
     let fleet = crate::fleet::replay(&events);
-    let seats: Vec<&str> = match target.map(|found| super::role::registration_of_target(&fleet, found)) {
-        Some(Some(row)) => vec![row.target.as_str()],
+    let seats: Vec<&Registration> = match target.map(|found| super::role::registration_of_target(&fleet, found)) {
+        Some(Some(row)) => vec![row],
         Some(None) => return refused(RC_REFUSED, NoopReason::NoRow.as_str()),
-        None => fleet.registrations.values().map(|latest| latest.registration.target.as_str()).collect(),
+        None => fleet.registrations.values().map(|latest| &latest.registration).collect(),
     };
+    // host の面は 1 回だけ合わせる（合わせられない周は全部の席の move= / grace_left= が unreadable）。
+    let manifest = crate::rules::with_state_dir(found, Some(&state.path)).ok();
     let now = state::now_secs();
-    Outcome::ok(seats.into_iter().map(|found| status_line(&seat_dir(&state.path, found), found, (interval_s, &pace), now)).collect())
+    let clock = (now, crate::fleet::cli::format_utc(now));
+    let line = |row: &Registration| {
+        let seat = seat_dir(&state.path, &row.target);
+        let tail = status_tail(&seat, (&state.path, manifest.as_ref(), &fleet), row, (clock.0, &clock.1), grace_s);
+        format!("{}{tail}", status_line(&seat, &row.target, (interval_s, &pace), now))
+    };
+    Outcome::ok(seats.into_iter().map(line).collect())
+}
+
+/// status の行の末尾の 3 欄（設計 §20 形 1〜3・値は判定の 1 本の答えの写しだけ）: `reopens=` は選定（[`select`]）を登録 row の口座
+/// 1 つ・席用・row の model・閾値 [`LIMIT_PCT`] で撃った結果、`move=` / `grace_left=` は移動の見立て（[`group::pending`]）と次の手
+/// （[`group::step_of`]）。`manifest` は host の面を合わせた manifest（合わせられない周は `None`＝`unreadable`）。
+fn status_tail(seat: &Path, read: (&Path, Option<&Manifest>, &State), row: &Registration, (now, utc): (u64, &str), grace_s: u64) -> String {
+    let (state_dir, manifest, fleet) = read;
+    let (labels, exclude, inflight) = ([row.account.clone()], BTreeSet::new(), BTreeMap::new());
+    let (allowance, purpose, model) = (&fleet.allowance, Purpose::Session, row.model.as_deref());
+    let input =
+        SelectInput { labels: &labels, allowance, purpose, model, exclude: &exclude, inflight: &inflight, threshold_pct: LIMIT_PCT, now: utc, prefer: None };
+    let reopens = match select(&input) {
+        Selection::Chosen(_) => DASH.to_owned(),
+        Selection::None(found) if found.limited.is_empty() => "unmeasured".to_owned(),
+        Selection::None(found) => found.earliest_reset.unwrap_or_else(|| "unknown".to_owned()),
+    };
+    let (moved, left) = match manifest.map_or(Pending::Unreadable, |found| group::pending(found, state_dir, (&row.anchor, &row.account))) {
+        Pending::None => (DASH.to_owned(), DASH.to_owned()),
+        Pending::Unreadable => (UNREADABLE.to_owned(), UNREADABLE.to_owned()),
+        Pending::Moving(_, current) => {
+            let left = match group::step_of(seat, group::signal_key(&current), now, grace_s) {
+                Step::Exit => "0".to_owned(),
+                Step::Wait(left) => left.to_string(),
+                Step::Signal => DASH.to_owned(),
+            };
+            (current.label, left)
+        }
+    };
+    format!(" reopens={reopens} move={moved} grace_left={left}")
 }
 
 /// status の 1 行: `next=` は次の段（記録の段 + 1）の待ちの残り（判定行の `pointer=` と同じ [`pointer_of`]・列を越える段は `stopped`）。
@@ -789,30 +830,29 @@ fn awake(input: &Input, account: &str, role: Role, anchor: &str, seat: &Path) ->
 /// 読めない周と host の面が読めない周は `group-unreadable`（種に読み替えない・C10）。移動の周は群の段と同じ lock の内側で退避の
 /// 1 手（[`evacuate`]）を撃つ（窓が shell の周は `front` の [`awake`] が先に起こす）。lock を取れない周は `group-locked`。
 /// 呼ぶ場所は `front` の中（打刻の前・§10 形 8）と、群の判定（[`judged`]）で移った周の後（§9 形 3）の 2 つで、関数は 1 本。
-/// 移動の周は 3 分岐（設計 §14 形 3・§18 形 2）: 猶予 0 なら今の形（lock → `/exit`）、`/exit` の判定（[`group::exit_due`]＝同じ
-/// 移動の合図の記録が在り、残りが `None` か合図に応え終えた印が真）が真なら lock → `/exit`、偽で記録（[`group::signalled`]）が
-/// 在れば `move=wait`（0 key・lock を取らない・file を書かない）、記録が無い・別の移動・読めない周は退避の合図の 1 行を同じ門で
-/// 送り、送れた周だけ `at` = 周の始めの今（送る前）の記録を書く（[`group::write_signal`]）。群の記録の ts の古さと種は分岐に入らない。
+/// 見立ては [`group::pending`]、次の手は [`group::step_of`] の 1 本ずつ（`seat tick status` と同じもの・設計 §20 形 2）。
+/// 移動の周は 3 分岐（設計 §14 形 3・§18 形 2）: exit なら lock → `/exit`、wait なら `move=wait`（0 key・lock を取らない・file を
+/// 書かない）、signal なら退避の合図の 1 行を同じ門で送り、送れた周だけ `at` = 周の始めの今（送る前）の記録を書く
+/// （[`group::write_signal`]）。群の記録の ts の古さと種は分岐に入らない。
 fn moving(input: &Input, (anchor, account): (&str, &str), seat: &Path, (rows, now): (&Rows, u64)) -> Option<Verdict> {
     let Ok(manifest) = crate::rules::with_state_dir(input.manifest.clone(), Some(&input.state.path)) else {
         return Some(Verdict::noop(NoopReason::GroupUnreadable));
     };
-    let group = group_of(&manifest, anchor)?;
-    let Ok(current) = current_of(&input.state.path, group) else {
-        return Some(Verdict::noop(NoopReason::GroupUnreadable));
+    let (group, current) = match group::pending(&manifest, &input.state.path, (anchor, account)) {
+        Pending::None => return None,
+        Pending::Unreadable => return Some(Verdict::noop(NoopReason::GroupUnreadable)),
+        Pending::Moving(group, current) => (group, current),
     };
-    if current.label == account {
-        return None;
-    }
     let key = group::signal_key(&current);
-    if rows.grace_s == 0 || group::exit_due(seat, key, now, rows.grace_s) {
-        let Ok(_lock) = Lock::take(&host_groups_dir(&input.state.path)) else {
-            return Some(Verdict::noop(NoopReason::GroupLocked));
-        };
-        return Some(evacuate(input, (EXIT, Move::Exit), rows.window_ms).0);
-    }
-    if group::signalled(seat, key).is_some() {
-        return Some(Verdict::moved(Move::Wait, None, None));
+    match group::step_of(seat, key, now, rows.grace_s) {
+        Step::Exit => {
+            let Ok(_lock) = Lock::take(&host_groups_dir(&input.state.path)) else {
+                return Some(Verdict::noop(NoopReason::GroupLocked));
+            };
+            return Some(evacuate(input, (EXIT, Move::Exit), rows.window_ms).0);
+        }
+        Step::Wait(_) => return Some(Verdict::moved(Move::Wait, None, None)),
+        Step::Signal => {}
     }
     let payload = group::evacuate_line(group.name(), &current.label, rows.grace_s);
     let (verdict, delivered) = evacuate(input, (&payload, Move::Signal), rows.window_ms);
