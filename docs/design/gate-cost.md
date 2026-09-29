@@ -21,7 +21,7 @@
 ## 2. 費用の原則（設計の向き）
 
 - **memory だけが硬い資源**。CPU は溢れても遅くなるだけなので上限を持たず、重み（席 > 便）だけを付ける。memory は溢れると kernel が process を殺すので、合計を受付で守り、個々を封じ込めで守る。
-- **硬い資源は 3 つ**（[ADR-0050](../../design-intent/decisions/ADR-0050-cores-and-scope-creation-are-hard-resources.html) が上の 1 行を置き換えた・2026-09-20 の事故 `s2-07l.504`）: memory に加えて CPU の core と、器が host に頼む scope の作成も、枯渇すれば host を止める。core は受付の枠（§31）と器の健康の遮断器（§32）が守り、scope の作成の rate は歯の道具箱（§30）が下げる。封じ込めの箱に CPU の上限を付けない形と重みだけを付ける形は不変である。
+- **硬い資源は 3 つ**（[ADR-0050](../../design-intent/decisions/ADR-0050-cores-and-scope-creation-are-hard-resources.html) が上の 1 行を置き換えた・2026-09-20 の事故 `s2-07l.504`）: memory に加えて CPU の core と、器が host に頼む scope の作成も、枯渇すれば host を止める。core は受付の枠（§31）と器の健康の遮断器（§32）が守り、scope の作成の rate は歯の道具箱（§30）が下げる。封じ込めの箱に CPU の上限を付けない形と重みだけを付ける形は不変である（この 1 文は [ADR-0095](../../design-intent/decisions/ADR-0095-cpu-width-of-boxes-is-one-admission-job.html) が置き換えた: 箱の CPU の上限は受付が配った幅か job 1 つの値段・§45）。
 - **宣言 → 測定 → 実効**（C10）: 並列度の上限（rules 行）は宣言値、host の空き memory と core 数は測定値、実際に渡す jobs は両者から導く実効値。宣言値をそのまま渡さない。
 - **止めない、縮退する**: 資源が足りない周は便を断らず、並列度を 1 まで下げて進む（1 は常に許される＝従来と同じ費用）。封じ込めが使えない host でも便は流れる（並列度 1）。
 - **同じ木を 2 度測らない**: 木の hash が一致する周の検出線（C12.4）は撃ち直さない。deny する行（nextest / clippy / check / deny）は撃ち直す（gate は run の worktree〔untracked を含む〕で撃ち、main 実測は tracked だけの木で撃つ＝環境が違う）。
@@ -65,13 +65,13 @@ manifest に行が載るまでは ADR-0021 の予定行（C14.2 の相互参照�
 - **`Completion::SlotFree { slots_dir, want, job_mb, reserve_mb, cap }`**（§3.2 の分担の宿題の決着）。variant はデータだけを運び、meminfo と札の読み手は wait の内側（`admission::has_room`）が持つ。待ちの間の観測は lock を取らず札も消さない（回収と記録は lock の内側の受付だけ）。`pid()` は pid を見張らない本 variant で 0 を返す（`/proc/0` は無い）。
 - **`slot=` の値**: `granted` / `degraded` / `unmeasured`、回収が在った周は `reclaimed:<n>`（枠を配れた周）か `<degraded|unmeasured>,reclaimed:<n>`（縮退と重なった周）。測れなかった理由は閉じた enum で `slot_why=<slots-dir|lock|meminfo|cores>` に残す（`cores` は行 w・§31.1）。meminfo が読めない周は札を回収しない（回収の数を残す前に縮退するため）。縮退（`degraded`）の周も 1 枠の札を置く。
 - **包めない周（`Unconfined`）は 1 枠だけを取りにいく**（札は置く）。箱の無い行に並列度を上げると、溢れたときに殺されるのが席の側になる。
-- **受付を通るのは gate の共通 verify の `{jobs}` 行だけ**。land の main 実測（`run_checks`・land.rs）は受付を持たず `jobs = 1` のまま撃つ（gate.rs `UNADMITTED_JOBS`・§3.3 の errata の `EFFECTIVE_JOBS` の改名）。main 実測の検出線は (c) で撃たなくなる。
+- **受付を通るのは gate の共通 verify の `{jobs}` 行だけ**。land の main 実測（`run_checks`・land.rs）は受付を持たず `jobs = 1` のまま撃つ（gate.rs `UNADMITTED_JOBS`・§3.3 の errata の `EFFECTIVE_JOBS` の改名）。main 実測の検出線は (c) で撃たなくなる。（受付を通る行は §45 形 2 で gate の共通 verify・検出線・契約の verify の全部の行に広がる・ADR-0095）
 - **受付の 4 行（`gate.mutants_jobs` / `gate.job_memory_mb` / `host.reserve_memory_mb` / `gate.slot_wait_s`）は `--rules` の manifest から読む**（pipe/cli.rs `limits_of`）。封じ込めの 3 線（§4.4・埋め込みだけ）と読み面が違うのは、待ちの上限を振る歯の fixture が gate へ届く口がここだけだからである。
 
 ### 3.3 実効 jobs の渡し方
 
 - 宣言 file の共通 verify と検出線の穴を `{base}` と **`{jobs}`** の 2 つにする（declaration.rs `Holes::Base` → 穴の列挙を「宣言の行に置ける穴」の閉じた集合にする・ADR-0010 §2.1 の部分 supersede）。scribe2 自身の宣言は `cargo xtask mutants-diff --base {base} --jobs {jobs}`。
-- gate は受付で得た jobs を `{jobs}` に置換して撃つ。`{jobs}` を持たない行は受付を通らない（枠を取らない＝mutants を持たない consumer は費用を払わない）。
+- gate は受付で得た jobs を `{jobs}` に置換して撃つ。`{jobs}` を持たない行は受付を通らない（枠を取らない＝mutants を持たない consumer は費用を払わない）。（§45 形 2 が置き換える: gate の `{jobs}` を持たない行も job 1 つの札を取る・ADR-0095）
 - xtask `mutants-diff` は `--jobs N` を cargo-mutants の `--jobs` にそのまま渡す（値は持たない）。
 - env で渡さない（C2.2 の精神・折り返しの裏口を作らない）。
 - errata（s2-07l.157 の現物）: 置ける穴は declaration.rs の**閉じた集合**（`BASE_HOLES` = `{base}` `{jobs}`・行 w で `{threads}` が 3 つ目に加わった・§31.1）1 本が持ち、`unfit` の判定と gate の置換が同じ列を読む（片側だけに足すと、intake を通った行が穴のまま撃たれる）。受付が入るまでの実効 jobs は gate.rs の `EFFECTIVE_JOBS = 1`（§9 (a)）で、xtask 側の既定も 1（`--jobs` 無し・読めない字面・0 は 1 へ落とす＝道具に「速い既定」を持たせない）。
@@ -890,6 +890,53 @@ e2e は binary を spawn し外部 command は PATH 先頭の stub で差し替�
 - 形 (10): 追随の面の判定は再 gate を省けるかの真偽を返す関数 1 本になり、候補の木の段が借りていた材料の型と中継の関数は消えた。
 - 形 (13) の歯: 消した 8 本と直した 2 本に加え、主実測の record の段数が 1 つ減って動いた既存の歯を同じ便で直した: `pipe_follow_docs_` 1（land.rs・主実測は ①②④）と段の秒の 1 本（主実測の母集団 3 record）。歯 (p) の候補の木の側は候補の木の fixture が在る land.rs に置いた（同じ接頭辞）。
 
+## 45. 箱の CPU の幅を受付の 1 job の値段で閉じる — gate の verify 行を全部受付に通し、便の箱に CPUQuota を付け、host の core 数は cgroup の上限に左右されない 1 本で読む（契約表の行 ap・ADR-0095・NFR6 / FR46・`s2-07l.736.18`）
+
+やさしく言うと: いまは変異検査の 1 行だけが受付で「何本まで同時に走ってよいか」を数えていて、gate の全件 test や clippy や契約の test は数えずに host の core を全部使いにいく。これを全部受付に通して同時の本数を数え、1 本が使える core の幅も箱の上限（CPUQuota）で閉じる。幅は受付が今も使っている「1 job の値段」（core 数 ÷ `gate.mutants_jobs`）で、新しい値は足さない。受付を通らない箱（runner・lens・着地の実測など）も同じ 1 job の幅を上限にする。
+
+- 出所: 台帳 memo `s2-07l.736.18`（消費側の席からの報告 2026-09-29・持ち主の要望「project 固有の知識でなく器の側で規制してほしい」は消費側の席の記録で、器の裁定ではない）。常設の裁定 2026-09-29T00:54Z / 04:37Z（分岐は推奨で進める）の下で本席が推奨を採り、[ADR-0095](../../design-intent/decisions/ADR-0095-cpu-width-of-boxes-is-one-admission-job.html) に残す。
+- 何が起きているか（main b1e5aa95・verified）:
+  - 受付（`crates/scribe2/src/pipe/admission.rs` の `admit`）を呼ぶのは `crates/scribe2/src/pipe/gate/verify.rs` の `admitted` だけで、条件は「`{jobs}` を持つ宣言の行」。本 repo の宣言 file の共通 verify 5 行は `{jobs}` を持たず、`{jobs}` を持つのは検出線 1 行（gate では撃たれない・§44）だけ＝**gate の全件 nextest・clippy・`xtask check`・`deny`・`flip-check` と契約の verify 行は受付を通らない**（§3.2.1 errata の「受付を通るのは `{jobs}` 行だけ」のとおり）。
+  - 便の箱（`crates/scribe2/src/pipe/confine.rs` の `scope_args`）の語は `MemoryMax` と `CPUWeight=50` と `OOMPolicy=continue` だけで、CPU の上限が無い。器は `{jobs}` を持たない行に `-j` も `--test-threads` も渡さないので、道具は既定の並列度（core 数ぶん）で走る。
+  - §32 の遮断器は行を撃つ**前**の門で、撃った後の 1 行が core を全部取ることは止めない。
+  - 消費側の実測（2026-09-29・消費側の席）: 全テスト 1 回は CPU 1327 秒・`--test-threads 2` で 608 秒・組み立ては CPU 80 秒＝重いのは test の走行。gate の共通 verify の全件 nextest 1 行は jobs=1 の record で 158 秒・平均約 8 core。
+  - 本席の実測（32 core の host・2026-09-29）: `systemd-run --user --scope -p CPUQuota=400%` の中で Rust std の `available_parallelism` は 4（cargo と nextest はこれで thread を縮める）、`nproc`・`/proc/stat` の cpu 行・`/proc/self/status` の `Cpus_allowed_list`（`0-31`）は 32。`taskset -c 0-5` の下の `Cpus_allowed_list` は `0-5`。`CPUWeight=50` の中ではどれも 32。上限の scope の中から `systemd-run --user --scope` で作った scope は `app.slice` の直下の兄弟に置かれ、外の上限を継がない（`cpu.max` = `max`）。
+  - **driver は席の箱の中に居る**（本席の実測・2026-09-29）: `pipe dispatch` が起こした `pipe run` の process の cgroup は、それを撃った席の scope（`…/app.slice/<NAME>-<target>-seat-0-….scope`）。行 aa（account-lifecycle §37）が席の箱に CPU の上限を付けると、driver の中で `available_parallelism` を読む受付（`admission.rs` の `host_cores`）と遮断器（`crates/scribe2/src/pipe/health.rs` の `host_cores`）は席の幅を host の core 数と読み違える。同じ読みは 2 か所に複製されている。
+- 原則の置き換え（ADR-0095）: §2 と §3.1 の「CPU は上限を持たず重みだけ」、ADR-0050 の「箱に CPU の上限を付けない形そのものは不変」と却下 OPT6 を、「箱の CPU の上限は受付が配った幅（配らない箱は 1 job の値段）」に置き換える。OPT6 の却下の理由のうち「上限は 1 本ずつを遅くするだけで積み上がる本数を減らさない」は、(i) 本節が gate の行の本数を受付で数えること、(ii) 上限の中の Rust の道具が thread を上限の幅まで縮めること（実測）で成り立たなくなる。「遅くなった行が枠を握ったまま居座る」は引き受ける（行の幅は札が払った値段と等しく、受け付けた幅の和は core 数を超えない）。
+- 形（番号は done と 1:1）:
+  1. **host の core 数の読みは 1 本**: `crates/scribe2/src/pipe/health.rs` に pub な読み口 `host_cores`（`/proc/self/status` の `Cpus_allowed_list` の区間の列を数える pure 関数 1 本 + 面を読む 1 行・読めない / 形が違う / 0 は `None`）を置き、受付の `host_cores` と遮断器の `host_cores` をこれに替える（`admission.rs` の複製を消す）。`available_parallelism` は読まない（cgroup の `cpu.max` で縮むので、上限つきの席の箱の中の driver が席の幅を host の core 数と読む）。affinity と cpuset は数に効き、`cpu.max` は効かない。環境変数は読まない（C2.2）。
+  2. **gate の行は全部受付を通る**: `admitted` の条件を「`Admit` が在り、段が共通 verify・検出線・契約の verify のどれか」にする（write-set の照合の段は行を撃たない）。`{jobs}` を持たない行（共通 verify と契約の verify）は包めるかに依らず `want = 1`（1 job）を求める。`{jobs}` を持つ行の `want` と丸めは今のまま。受付の式・札の形・待ち・縮退（`gate.slot_wait_s` の後は job 1 かつ thread 1）・測れない周の扱いは変えない（ADR-0050）。
+  3. **受付を通らない撃ち口は今のまま通らない**: land の主実測（`crates/scribe2/src/pipe/land/verify.rs` の `run_checks`）・着地の列の候補の木（`crates/scribe2/src/pipe/train.rs`）・intake の base の実測（`crates/scribe2/src/pipe/cli/base_run.rs`）は `Admit` を持たないまま（着地と intake を gate の札の後ろに並ばせない）。
+  4. **便の箱に CPUQuota**: `scope_args` を「CPU の重み」と「CPU の上限（%）」の 2 つの `Option` を受ける 1 関数にし、語の順を `MemoryMax` → `CPUWeight` → `CPUQuota` → `OOMPolicy` に固定する（どちらも `None` の形は今の席の頭と 1 字も変わらない）。`confine::Wrap` に欄 `width: Option<u64>`（受付が配った幅の thread 数）を足し、便の箱の `CPUQuota` を次で決める:
+     - 受付が配った行: `width = jobs × threads`（`Grant` の対）で `CPUQuota=<width × 100>%`。縮退と測れない周の `Grant`（job 1 かつ thread 1）は 100%。
+     - それ以外の便の箱（受付を通らない行・runner・lens・claude の包み・`width` が `None`）: 1 job の値段（`admission::Cpu::priced(形 1 の core 数, gate.mutants_jobs)` の thread 数）× 100%。`gate.mutants_jobs` は封じ込めの線と同じく**埋め込みの manifest**から読む（`Caps` の 4 本目・`--rules` は効かない＝3 つの起動点が同じ値で走る）。core 数を読めない周は `CPUQuota` の 2 語を置かない（重みと memory だけの今の形・止めない）。
+     - probe（scope を 1 度作って確かめる）は `width` が `None` の形の語列で撃つ（CPU の controller が委ねられていない host は今の `CPUWeight` と同じく probe で縮退する＝新しい失敗の形を足さない）。
+     - 席の頭（`seat_scope_head`）は本行では両方 `None` のまま（席の上限は行 aa）。
+     - **置き場**: `confine.rs` は上限の余地が 31 行しか無い（preflight・2026-09-29）ので、上限の導出（pure な関数 1 本: 受付の幅・core 数・`gate.mutants_jobs` → `CPUQuota` の % か無し）と 1 job の値段の読み口と (b) (c) の歯は、行 ap の write-set の `+` の file（`confine.rs` の子の module・親は `mod` の宣言 1 行）に置く。`confine.rs` に足すのは `Caps` と `Wrap` の欄・`scope_args` の引数・呼び出しだけ（growth 25 行）。
+  5. **Wrap の構築点**は全部 `width` を埋める: gate の行（`verify.rs` の `fire` は受付の `Grant` から・`admitted` の包めるかの試しは `None`）・`crates/scribe2/src/pipe/cli/base_run.rs`・`crates/scribe2/src/pipe/review.rs`・`crates/scribe2/src/pipe/spawn.rs`・`crates/scribe2/src/pipe/gate.rs`・`crates/scribe2/src/headless/mod.rs`（これらは `None`）と `confine.rs` / `verify.rs` の in-file の歯の構築点（census は main b1e5aa95 の `grep -rn "Wrap {"`・実装の前に現 main で数え直す）。
+  6. **rules 行を足さない**: 1 job の値段は既存の `gate.mutants_jobs` と実測の core 数から出す（ADR-0050 の「枠のために新しい宣言値の rules 行を足さない」を保つ）。`gate.cpu_weight`（50）は便の箱に付けたまま。
+- 触らない: 受付の置き場・札・lock・待ち・遮断器の判定と閾値・`limit_of` と箱の memory の 2 種（`{jobs}` を持たない行の箱は `HostReserve` のまま＝札の 1 job の memory の勘定と箱の大きさはずれたまま）・穴の置換（契約の行と受付を通らない行に穴は置かない）・`Grant` の形・record の形（`jobs=` は今の値のまま・`CPUQuota` は record に載せない）・席の起動行。
+- 却下:
+  - 受付を通る行だけに上限を付ける（runner の組み立てと test も gate と同じ重さで、受付の外で core を全部取る）。
+  - land の主実測と候補の木と intake の base の実測も受付に通す（着地と intake が gate の札の後ろで最大 `gate.slot_wait_s` 待つ・幅の上限だけで閉じる）。
+  - 道具の thread を env（`CARGO_BUILD_JOBS` / `NEXTEST_TEST_THREADS` 等）で渡す（言語ごとの道具の知識を器が持つ・器は言語に依らない・宣言の行は穴 `{threads}` を既に持てる）。
+  - 重みだけを下げる（`CPUWeight` の中では道具の thread 数は縮まず、走行可能の本数が積み上がる形が残る・実測）。
+  - affinity（`taskset` / `AllowedCPUs`）で core の組を配る（cpuset の controller は user の manager に委ねられていない・scope ごとに重ならない組を配る勘定が要る）。
+  - 幅を新しい rules 行にする（host ごとに core 数が違い、絶対値の行は host ごとの裁定が要る・§31 の却下と同じ）。
+  - core 数を `/proc/stat` の cpu 行で数える（affinity と cpuset を無視する・`Cpus_allowed_list` は両方を数える）。
+- 限界:
+  - host が空いていても、1 行と 1 箱は 1 job の幅（32 core・`gate.mutants_jobs` 4 の host で 8 core）しか使わない（重みと違い上限は空きを使わない）。全件 nextest 1 行の走行は幅の分だけ長くなる。
+  - Node と Python の道具は `cpu.max` を読まず core 数ぶんの thread を立て、上限で絞られる（上限にはなるが thread の本数は減らない）。
+  - 受付を通らない箱（runner・lens・着地の実測・候補の木・intake の base の実測）の本数は数えない。合計は core 数を超えうる（1 箱ずつは幅で閉じる）。
+  - cgroup の `cpu.max` で絞られた container の中では、`Cpus_allowed_list` は container の上限より多い core を数える（受付は host の core として勘定する・器は user の session manager の在る machine が前提）。
+- 歯（接頭辞 `cpu_width_`・`grep -rn cpu_width_` は crates と docs で 0 件・2026-09-29）:
+  - lib（`crates/scribe2/src/pipe/health.rs` の歯の区間）: (a) `Cpus_allowed_list` の読み: `0-31` は 32・`0-5` は 6・`0,2,4-7` は 6・`3` は 1・欄の無い本文・`0-` / `a-b` / 逆順の区間 `7-3` / 空の値は `None`・同じ本文に `Cpus_allowed:`（16 進の欄）が在っても `Cpus_allowed_list` だけを読む。
+  - lib（行 ap の write-set の `+` の file の歯の区間・`scope_args` は親の private な関数を `super::` で呼ぶ）: (b) `scope_args` の 4 形（重み・上限の有無の組）の語列の全文と順（`MemoryMax` → `CPUWeight` → `CPUQuota` → `OOMPolicy`）・両方 `None` の形が今の席の頭の語列と等しい。(c) 便の箱の上限の導出: `width` が `Some(12)` は `CPUQuota=1200%`・`Some(1)` は 100%・`None` は core 数 32 と `gate.mutants_jobs` 4 で 800%・core 数 3 と 4 で 100%（値段の床 1）・core 数を読めない周は `CPUQuota` の語が無い（導出を pure な関数 1 本にして core 数を引数で渡す）。
+  - e2e（`crates/scribe2-boundary/tests/e2e/pipe/gate/confine.rs`・偽 systemd-run の記録を `scope_prop` で読む既存の形）: (d) gate の共通 verify の `{jobs}` を持たない行と契約の verify 行の record が、それぞれ受付を通った印（`slot=`）を持ち、箱が `CPUQuota=<1 job の値段 × 100>%`（期待値は歯が `/proc/self/status` の `Cpus_allowed_list` と埋め込みの 4 から同じ式で組む）(e) `{jobs}` を持つ共通 verify の行の箱が `CPUQuota=<置換された jobs × threads × 100>%`（record の `{jobs}` と `{threads}` の実値から組む）(f) land の主実測の行は札を取らず（`slot=` が無い）、箱が 1 job の値段の `CPUQuota` (g) 受付が縮退した周（生きている札で枠を埋め待ちの上限を短くした既存の fixture）の行の箱が `CPUQuota=100%` (h) runner と lens の包みの箱が 1 job の値段の `CPUQuota` と `CPUWeight` を持つ。
+  - 直す既存の歯（同じ便）: `confine_collect_scope_args_carry_collect_once_in_order`（便の形の全文に `CPUQuota` の 2 語）・`confine_scope_args_two_forms_differ_only_by_cpu_weight`（便の形から重みと上限の 4 語を抜くと席の形・名は変えない）・`rule_read_confine_caps_of_reads_all_three_rows`（`Caps` の 4 本目の読み）・`crates/scribe2-boundary/tests/e2e/pipe/gate.rs` の core 数の oracle（`host_cores`・`available_parallelism` → `Cpus_allowed_list` の同じ読み＝便の箱の上限の中で走る歯が器と同じ数を読む）・`gate.rs` の helper `slot_row`（「`slot=` を持つ record がちょうど 1 件」→ `{jobs}` の行の record を `cmd` で選んでちょうど 1 件・呼び手は `pipe/gate/confine.rs` の 8 か所）・`pipe_slots_ticket_lives_only_during_the_jobs_line` の (4)（`{jobs}` の無い行の間は札が無い → その行の間も自便の札がちょうど 1 枚で本文の jobs が 1）。`{jobs}` を持たない行も受付の待ちを通るので、待ちを測る `pipe_slots_` の歯は `{jobs}` の行の record だけを読む形に揃える（census は main b1e5aa95 の `grep -rn "slot" crates/scribe2-boundary/tests/e2e/pipe`・実装の前に数え直す）。
+- base で RED の理由: (a) (c) は base に無い読み口と導出の関数を呼ぶ compile error、(b) は `scope_args` の引数の数が違う compile error（機能不在）。(d) (f) (g) (h) は base の箱に `CPUQuota` が無く、(d) は base で `{jobs}` を持たない行が受付を通らない（`slot=` が無い）。(e) は base の箱に `CPUQuota` が無い。直す既存の歯は同じ file に base で赤い新しい歯を持つ（`gate.rs` の oracle の直しは同じ file に赤い歯を持たないので、test 区間の行頭に `// flip-check: retroactive <この契約の bead id>` を置く）。
+- 着地の後: PATH の binary を `swap-binary.sh` で入れ替え、消費側の席（2 つ）へ「gate の全部の verify 行が host の受付を通り、便の箱に 1 job の幅の CPUQuota が付く・消費側の宣言の `{jobs}` を持たない共通 verify も札を取る」を 1 行で知らせる。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -1306,4 +1353,15 @@ verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe
 size = "M"
 depends = ["an"]
 done = "(9b) 主実測と候補の木の段の列に ③ が無く（①②④）、Detection と Gate の材料の欄と主実測の面の判定と DetectionSkip の SameTree と候補の木の後続ごとの検出線の段と Skipped の detection の構築が無く（site は §44 の形 9 の便の割り当て）、同じ木の主実測の record 1 本と木が違う周の ①②④ は変わらない (10) 追随の面の判定が再 gate を省くかだけを返し、path を読めない周は撃ち直す側のまま (13b) ③ を主実測と候補の木が撃つことを測る既存の歯が消え（消す 8 本と直す 2 本は §44 の形 13 の便の割り当て・main d11b83f）、同じ木の主実測の record 1 本の不変は pipe_main_same_tree_writes_one_record_and_fires_nothing が残って測り、③ を宣言した toy を land まで通す残りの歯は子の終わりを待ってから測って緑 (13c) pipe/land.rs の歯の区間（in-file の mod tests）の差分は SameTree の字面を持つ fixture の置き換えだけで base でも通る＝flip-check の green-on-base に当たるので、その歯の区間の行頭に札 // flip-check: retroactive s2-07l.607 を置き（効く 4 条件 = 歯の区間内・行頭・bead id・base から持ち越した札は効かない・札は HEAD から読まれるので commit してから撃つ）、判定行の retroactive=1 と no-op の proof（型の字面の置換だけで挙動差なし）を notes に書く（core-boundary.md §9 の 10 と同じ型・.607 の 1 回目の Gated FAIL） 歯: pipe_detection_off_main_ の歯が、検出線を宣言した便を land まで通すと主実測の record に landed の無い kind=detection が 0 本で木が違う周も ①②④ だけ・候補の木の後続の record も同じ、を測る"
+
+[[contract]]
+id = "ap"
+title = "箱の CPU の幅を受付の 1 job の値段で閉じる — gate の verify 行を全部受付に通し、便の箱に CPUQuota（受付の幅か 1 job の値段）を付け、host の core 数は Cpus_allowed_list の 1 本で読む（§45・ADR-0095・s2-07l.736.18）"
+req = ["NFR6", "FR46"]
+section = "45"
+write-set = ["crates/scribe2/src/pipe/health.rs", "crates/scribe2/src/pipe/admission.rs", "crates/scribe2/src/pipe/confine.rs", "+crates/scribe2/src/pipe/confine/cpu.rs", "crates/scribe2/src/pipe/gate/verify.rs", "crates/scribe2/src/pipe/cli/base_run.rs", "crates/scribe2/src/pipe/review.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/gate.rs", "crates/scribe2/src/headless/mod.rs", "crates/scribe2-boundary/tests/e2e/pipe/gate/confine.rs", "crates/scribe2-boundary/tests/e2e/pipe/gate.rs", "docs/design/gate-cost.md"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail cpu_width_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail cpu_width_", "cargo nextest run -p scribe2 --lib --no-tests=fail confine_collect_scope_args_", "cargo nextest run -p scribe2 --lib --no-tests=fail confine_scope_args_two_forms_", "cargo nextest run -p scribe2 --lib --no-tests=fail rule_read_confine_caps_", "cargo nextest run -p scribe2 --lib --no-tests=fail health_judge_", "cargo nextest run -p scribe2 --lib --no-tests=fail admission_cpu_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_slots_"]
+size = "M"
+growth = ["crates/scribe2/src/pipe/confine.rs:25"]
+done = "(1) health.rs が pub な host_cores を持ち、/proc/self/status の Cpus_allowed_list の区間の列を数える pure 関数 1 本で読み（読めない・形が違う・0 は None・available_parallelism と環境変数を読まない）、受付と遮断器がこの 1 本を読み、admission.rs の host_cores の複製が無い (2) gate の verify.rs の admitted が Admit の在る周に共通 verify・検出線・契約の verify の行を全部受付に通し、{jobs} を持たない行は包めるかに依らず want 1 を求め、{jobs} を持つ行の want と丸めと受付の式・札・待ち・縮退・測れない周は不変 (3) land の主実測・着地の列の候補の木・intake の base の実測は Admit を持たないまま (4) confine.rs の scope_args が CPU の重みと CPU の上限（%）の 2 つの Option を受ける 1 関数で（上限の導出の pure な関数 1 本と 1 job の値段の読み口は confine.rs の子の module cpu.rs に在り、confine.rs の差は欄・引数・呼び出し・mod の宣言だけ）語の順が MemoryMax → CPUWeight → CPUQuota → OOMPolicy、Wrap が欄 width（受付が配った幅の thread 数）を持ち、便の箱の CPUQuota は width が在れば width × 100%（縮退と測れない周の Grant は 100%）・無ければ 1 job の値段（Cpu::priced の thread 数・core 数は (1) の 1 本・gate.mutants_jobs は埋め込みの manifest から Caps の 4 本目として読む）× 100%・core 数を読めない周は CPUQuota の 2 語を置かず、probe は width の無い形で撃ち、席の頭の語列は 1 字も変わらない (5) Wrap の構築点（verify.rs の fire は Grant の jobs × threads・admitted の試しと base_run.rs・review.rs・spawn.rs・gate.rs・headless/mod.rs は None）が全部 width を埋める (6) rules 行を足さず gate.cpu_weight は便の箱に付けたまま 歯: lib の cpu_width_（health.rs の Cpus_allowed_list の読みの表・confine/cpu.rs の scope_args の 4 形の全文と順と便の箱の上限の導出）と e2e の cpu_width_（pipe/gate/confine.rs の偽 systemd-run の記録で、{jobs} を持たない共通 verify と契約の verify の record が slot= を持ち箱が 1 job の値段の CPUQuota・{jobs} の行の箱が置換した jobs × threads × 100%・land の主実測は slot= 無しで 1 job の値段・縮退した周は 100%・runner と lens の箱が 1 job の値段）が base で RED。直す既存の歯: confine_collect_scope_args_carry_collect_once_in_order・confine_scope_args_two_forms_differ_only_by_cpu_weight（名は不変）・rule_read_confine_caps_of_reads_all_three_rows・e2e の gate.rs の host_cores の oracle（Cpus_allowed_list の同じ読み）と helper slot_row（{jobs} の行の record を cmd で選ぶ）・pipe_slots_ticket_lives_only_during_the_jobs_line の (4)（{jobs} の無い行の間も自便の札 1 枚・jobs 1）・待ちを測る pipe_slots_ の歯が {jobs} の行の record だけを読む。gate.rs は test 区間の行頭に flip-check: retroactive の札を置く"
 <!-- contracts:end -->
