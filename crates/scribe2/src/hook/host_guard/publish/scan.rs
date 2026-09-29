@@ -380,7 +380,7 @@ pub struct GhTexts {
 }
 
 /// 値が [`readable`] な heredoc の形なら区切りの行の間の行（字面のまま）、そうでなければ値そのもの。
-fn body_of(value: &str) -> String {
+pub(super) fn body_of(value: &str) -> String {
     let lines = readable(value).then(|| value.strip_prefix("$(cat <<")).flatten().and_then(|rest| {
         let quote = rest.chars().next()?;
         let (delimiter, body) = rest.get(1..)?.split_once(quote)?;

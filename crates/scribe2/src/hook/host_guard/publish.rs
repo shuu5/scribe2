@@ -13,6 +13,7 @@ use crate::rules::manifest::Manifest;
 use crate::rules::RuleValue;
 use std::path::{Path, PathBuf};
 
+pub mod history;
 pub mod scan;
 
 /// 識別子の形の要素の札。
@@ -78,23 +79,26 @@ const HEREDOC_HEADS: [&str; 4] = ["git", "gh", "bd", "bdw"];
 /// 解けない segment の経路。
 const REWRITE: &str = "解ける形で書き直す（git / gh を包まずに頭の語に置く・ref と remote と dir と -R と可視性の欄は literal・本文は file〔--body-file か api の -F k=@file〕か区切りを引用した heredoc で渡す）";
 
-/// 断りの理由（閉じた 2 値・宣言順・設計 §17 形 1・全履歴は行 l が間に足す）。
+/// 断りの理由（閉じた 3 値・宣言順・設計 §17 形 1・§18 形 5）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Reason {
     /// 行が無い・列でない。
     NoRow,
+    /// 全履歴を走査せずに出す command（hit は `full-history:<種別>`・[`history`]）。
+    FullHistory,
     /// 字面で解けない（hit は `unresolved:<印の語>`）。
     Unresolved,
 }
 
 /// [`Reason`] の全 variant（宣言順）。
-pub const REASONS: &[Reason] = &[Reason::NoRow, Reason::Unresolved];
+pub const REASONS: &[Reason] = &[Reason::NoRow, Reason::FullHistory, Reason::Unresolved];
 
 impl Reason {
     /// hit の頭の語と経路。
     pub fn parts(self) -> (&'static str, &'static str) {
         match self {
             Self::NoRow => ("no-row", Kind::Publish.route()),
+            Self::FullHistory => ("full-history", history::ROUTE),
             Self::Unresolved => ("unresolved", REWRITE),
         }
     }
@@ -837,8 +841,9 @@ fn target_of(word: &str) -> String {
 }
 
 /// 判定（設計 §17 形 3）: 公開の segment（[`marked`]）が 0 の周は行を読まずに通し、行が無い・列でない周は no-row、
-/// `enabled = false` の周は通し、解けない段は segment の順に各 segment の印 → 形（どちらも宣言順）の先に当たった 1 つで断る。
-/// 印も形も無ければ通す（全履歴・走査の断りは後続の行）。子 process は撃たない。
+/// `enabled = false` の周は通し、全履歴の段は segment の順に [`history::kind_of`] の先に当たった 1 つで断り（前の segment の印や形より
+/// 先・§18）、解けない段は segment の順に各 segment の印 → 形（どちらも宣言順）の先に当たった 1 つで断る。印も形も無ければ通す
+/// （走査の断りは後続の行）。子 process は撃たない。
 pub(super) fn judge(kind: Kind, subject: &Subject, manifest: &Manifest) -> Option<Refusal> {
     let cwd = subject.scene.cwd;
     let root = root_of(cwd).unwrap_or_else(|| cwd.to_path_buf());
@@ -851,6 +856,9 @@ pub(super) fn judge(kind: Kind, subject: &Subject, manifest: &Manifest) -> Optio
     };
     if !row.enabled {
         return None;
+    }
+    if let Some(found) = found.iter().filter_map(|seg| seg.read.as_ref()).find_map(history::kind_of) {
+        return Some(refused(kind, Reason::FullHistory, Some(found.as_str()), row.ruling.clone()));
     }
     let first = |seg: &Marked| seg.marks.first().map(|mark| mark.as_str()).or_else(|| seg.holes.first().map(|hole| hole.as_str()));
     let word = found.iter().find_map(first)?;
@@ -1087,7 +1095,7 @@ mod tests {
     /// 行 k (c) 理由と印の閉じた列と、理由ごとの経路（no-row は publish の種類の経路・unresolved は書き直しの経路）。
     #[test]
     fn publish_marks_routes_are_one_per_reason() {
-        assert_eq!(REASONS.iter().map(|reason| reason.parts().0).collect::<Vec<_>>(), ["no-row", "unresolved"], "理由の宣言順");
+        assert_eq!(REASONS.iter().map(|reason| reason.parts().0).collect::<Vec<_>>(), ["no-row", "full-history", "unresolved"], "理由の宣言順");
         assert_eq!(MARKS.iter().map(|mark| mark.as_str()).collect::<Vec<_>>(), ["wrapped", "verb", "shape", "dir", "redirect"], "印の宣言順");
         let (no_row, unresolved) = (Reason::NoRow.parts().1, Reason::Unresolved.parts().1);
         assert_eq!(no_row, Kind::Publish.route(), "no-row は種類の経路");
@@ -1239,6 +1247,24 @@ mod tests {
         let bare = denied("gh api graphql -f query=\"$Q\"", &manifest("")).map(|(_, text)| text);
         let want = format!("{NAME}: host-guard deny kind=publish hit=no-row row=host_guard.publish ruling=- — {}", Kind::Publish.route());
         assert_eq!(bare, Some(want), "行の無い manifest");
+    }
+
+    /// 行 l (d) 判定の順: 全履歴の段は解けない段より先（前の segment の解けない形より先）・`enabled = false` は通す・行の無い manifest は
+    /// no-row・全履歴の断りの経路は「持ち主が手で行う（」で始まる。
+    #[test]
+    fn publish_history_is_judged_before_unresolved() {
+        let line = |hit: &str, ruling: &str, route: &str| format!("{NAME}: host-guard deny kind=publish hit={hit} row=host_guard.publish ruling={ruling} — {route}");
+        let route = Reason::FullHistory.parts().1;
+        assert!(route.starts_with("持ち主が手で行う（"), "{route}");
+        assert_eq!(Reason::FullHistory.parts().0, "full-history");
+        let history = "git push origin $B; gh repo edit o/n --visibility public";
+        let with = manifest(&row("host_guard.publish", "HostGuardPublish", "\"form repo-name\"", true));
+        let want = ("host-guard-deny publish".to_owned(), line("full-history:repo-edit-public", "r", route));
+        assert_eq!(denied(history, &with), Some(want), "段の順が segment の順より先");
+        assert_eq!(hit("gh repo edit o/n --visibility private; git push origin $B", true).as_deref(), Some("unresolved:variable-ref"));
+        assert_eq!(hit(history, false), None, "enabled = false は通す");
+        let bare = denied(history, &manifest("")).map(|(_, text)| text);
+        assert_eq!(bare, Some(line("no-row", "-", Kind::Publish.route())), "行の無い manifest");
     }
 
     /// 行 m2 (f) `elements` で読んだ要素の記号が名の当たりを決める（`form repo-name` で効き、`form object-id` だけでは当たらない）。

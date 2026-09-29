@@ -811,6 +811,32 @@ fn publish_widened_forms_are_denied_through_the_binary() {
     clean(&[&repo, &state]);
 }
 
+/// 埋め込みの manifest と群を宣言しない置き場（host.toml 無し）で、AC50 (d) の全履歴の 3 形は rc 2・stdout 0 byte・stderr 1 行
+/// （hit=full-history:<種別>・埋め込みの行の ruling・全履歴の経路）と記録 1 行ずつ、`gh repo edit o/n --visibility private` は rc 0・
+/// 記録なし（§18 行 l・偽の gh の回数は数えない）。
+#[test]
+fn publish_history_commands_are_denied_through_the_binary() {
+    let (repo, state) = (git_repo(), tmp());
+    assert!(!state.join("host.toml").exists(), "群を宣言しない置き場");
+    let route = "持ち主が手で行う（可視性を public へ変える command と public の repo を作る command は repo の全履歴を走査せずに出すので席の session からは撃たない）";
+    let forms = [
+        ("gh repo edit o/n --visibility public", "repo-edit-public"), ("gh repo create x --public", "repo-create-public"),
+        ("gh api -X PATCH repos/o/n -f visibility=public", "api-visibility-public"),
+    ];
+    for (at, (command, kind)) in forms.into_iter().enumerate() {
+        let text = assert_host_guard_deny(&run_host_guard_in(&state, &bash_payload(&repo, command)), command);
+        let want = format!("{NAME}: host-guard deny kind=publish hit=full-history:{kind} row=host_guard.publish ruling=user 2026-09-27T23:55Z — {route}");
+        assert_eq!(text.trim_end(), want, "{command}");
+        let lines = host_guard_records(&state);
+        assert_eq!(lines.len(), at + 1, "記録 1 行ずつ: {lines:?}");
+        assert_eq!(what_of(&lines.last().cloned().unwrap_or_default()), "host-guard-deny publish", "{command}");
+    }
+    let private = "gh repo edit o/n --visibility private";
+    assert_silent(&run_host_guard_in(&state, &bash_payload(&repo, private)), private);
+    assert_eq!(host_guard_records(&state).len(), forms.len(), "通す周は記録を残さない");
+    clean(&[&repo, &state]);
+}
+
 /// 埋め込みの manifest で、ruling の空の行を持つ host の面と ruling の欄の無い行を持つ host の面では、識別子を持たない
 /// `git push origin main` が rc 2・stdout 0 byte・stderr 1 行（`hit=host-unreadable:<行番号>` と「<行番号> 行目を直す」）と記録 1 行
 /// （what は行番号を持たない `host-guard-deny reason=host-unreadable`）で断られ、裁定 id を書いた面では同じ push が rc 0（断りの理由が
