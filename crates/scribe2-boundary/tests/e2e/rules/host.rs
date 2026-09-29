@@ -583,7 +583,7 @@ fn host_group_tier_malformed_digits_are_a_form_defect() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// (n) Tier1, Tier2, Tier10 は通る（数字は数値で比べる＝辞書順で Tier10 < Tier2 と読まない）。群は宣言順のまま。
+/// (n) Tier1, Tier2, Tier3 は通る（数字の昇順）。群は宣言順のまま。
 #[test]
 fn host_group_tier_ascending_numbers_pass_compared_numerically() {
     let dir = host_state_dir(None).expect("tmp の state dir を作れる");
@@ -591,7 +591,7 @@ fn host_group_tier_ascending_numbers_pass_compared_numerically() {
         "{GROUP_HEAD}{}{}{}",
         seed_group("Tier1", "/repo/a", "[\"g1\"]"),
         seed_group("Tier2", "/repo/b", "[\"g2\"]"),
-        seed_group("Tier10", "/repo/c", "[\"g3\"]")
+        seed_group("Tier3", "/repo/c", "[\"g3\"]")
     );
     let outcome = group_validate(dir.as_path(), &body);
     assert_eq!(outcome.rc, RC_OK, "{outcome:?}");
@@ -600,7 +600,80 @@ fn host_group_tier_ascending_numbers_pass_compared_numerically() {
         .and_then(|tracked| vessel::rules::with_state_dir(tracked, Some(dir.as_path())))
         .expect("host の面を合わせられる");
     let names: Vec<&str> = manifest.groups().iter().map(|group| group.name()).collect();
-    assert_eq!(names, ["Tier1", "Tier2", "Tier10"], "宣言順のまま（数字で並べ替えない）");
+    assert_eq!(names, ["Tier1", "Tier2", "Tier3"], "宣言順のまま（数字で並べ替えない）");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+// ─── 群の表の名は Tier1〜Tier9（account-lifecycle.md §34 の行 x・FR38・ADR-0091・接頭辞 `host_group_park_gate_`） ───
+
+/// 「9 を越える」の欠陥の行（名・群の見出し行の番号）。
+fn over_nine(name: &str, line: usize) -> String {
+    format!("rules: host.toml: 群の名 {name} の数字が 9 を越える（群の表の名は Tier1〜Tier9） line={line}")
+}
+
+/// 「park の区画」の欠陥の行（群の見出し行の番号）。
+fn park_lot(line: usize) -> String {
+    format!("rules: host.toml: Tier9 は park の区画の名で、この版の器は park の区画を読めない line={line}")
+}
+
+/// (a) Tier1・Tier10 と Tier1・Tier12 は 2 番目の群の見出し行（17 行目）の「9 を越える」の欠陥 1 件ずつ。base は通る（RED）。
+#[test]
+fn host_group_park_gate_names_over_nine_are_refused_on_the_group_line() {
+    let dir = host_state_dir(None).expect("tmp の state dir を作れる");
+    for name in ["Tier10", "Tier12"] {
+        let err = tier_refusals(&dir, &[("Tier1", "g1"), (name, "g2")]);
+        assert_eq!(err, vec![over_nine(name, 17)], "{name}: 9 を越える 1 件だけ");
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// (b) Tier1・Tier9 は 2 番目の群の見出し行（17 行目）の「park の区画」の欠陥 1 件。base は通る（RED）。
+#[test]
+fn host_group_park_gate_tier9_is_refused_as_a_park_lot() {
+    let dir = host_state_dir(None).expect("tmp の state dir を作れる");
+    let err = tier_refusals(&dir, &[("Tier1", "g1"), ("Tier9", "g2")]);
+    assert_eq!(err, vec![park_lot(17)], "park の区画の 1 件だけ");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// (c) Tier1〜Tier8 の 8 行は通り、群は宣言順の 8 つ（回帰の歯・base でも緑＝断りを Tier8 以下へ広げる変異を落とす）。
+#[test]
+fn host_group_park_gate_tier1_to_tier8_pass() {
+    let dir = host_state_dir(None).expect("tmp の state dir を作れる");
+    let want: Vec<String> = (1..=8).map(|at| format!("Tier{at}")).collect();
+    let head = (4..=8).fold(GROUP_HEAD.to_owned(), |head, at| format!("{head}\n[[account]]\nlabel = \"g{at}\"\n"));
+    let body = want.iter().zip(1..).fold(head, |body, (name, at)| {
+        format!("{body}{}", seed_group(name, &format!("/repo/{at}"), &format!("[\"g{at}\"]")))
+    });
+    let outcome = group_validate(dir.as_path(), &body);
+    assert_eq!(outcome.rc, RC_OK, "{outcome:?}");
+    assert!(outcome.err.is_empty(), "欠陥 0: {outcome:?}");
+    let manifest = Manifest::embedded()
+        .and_then(|tracked| vessel::rules::with_state_dir(tracked, Some(dir.as_path())))
+        .expect("host の面を合わせられる");
+    let names: Vec<&str> = manifest.groups().iter().map(|group| group.name()).collect();
+    assert_eq!(names, want, "宣言順の 8 つ");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// (d) Tier9・Tier10 はそれぞれの断りの 2 件だけ（Tier10 の行に昇順の欠陥を重ねない）。base は通る（RED）。
+#[test]
+fn host_group_park_gate_tier9_then_tier10_are_two_refusals() {
+    let dir = host_state_dir(None).expect("tmp の state dir を作れる");
+    let err = tier_refusals(&dir, &[("Tier9", "g1"), ("Tier10", "g2")]);
+    assert_eq!(err, vec![park_lot(12), over_nine("Tier10", 17)], "それぞれの断りだけ");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// (e) Tier10・Tier3 と Tier9・Tier3 は断った行の 1 件だけ（断った行は前の群にならない＝Tier3 の行の 17 行目の欠陥は 0 件）。
+/// base は Tier3 の行に昇順の欠陥が付く（RED）。
+#[test]
+fn host_group_park_gate_refused_row_is_not_the_prior_group() {
+    let dir = host_state_dir(None).expect("tmp の state dir を作れる");
+    let err = tier_refusals(&dir, &[("Tier10", "g1"), ("Tier3", "g2")]);
+    assert_eq!(err, vec![over_nine("Tier10", 12)], "Tier10 の行の 1 件だけ");
+    let err = tier_refusals(&dir, &[("Tier9", "g1"), ("Tier3", "g2")]);
+    assert_eq!(err, vec![park_lot(12)], "Tier9 の行の 1 件だけ");
     std::fs::remove_dir_all(&dir).ok();
 }
 

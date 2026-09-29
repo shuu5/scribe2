@@ -396,6 +396,8 @@ fn host_guard_doctor_binary_is_missing_ok_or_other_by_the_child() {
 
 // 群の名を Tier と数字に改めただけの歯（account-lifecycle.md §29 の行 s・base でも緑）。
 // flip-check: retroactive s2-07l.647
+// Tier10 を Tier3 に替えただけの歯（account-lifecycle.md §34 の行 x・群の表の名は Tier1〜Tier9・base でも緑）。
+// flip-check: retroactive s2-07l.737.9
 /// 置き場の host の面に群を宣言する（口座の表は持たない＝候補は `--rules` の tracked の面の label を指す）。
 /// `groups` は (名, 置き場の列, 候補の口座の列) の宣言順。
 #[expect(
@@ -427,11 +429,11 @@ fn group_line(lines: &[String], name: &str) -> String {
 #[test]
 fn host_group_doctor_prints_one_line_per_group_in_declaration_order() {
     let place = role_doctor_place();
-    put_groups(&place, &[("Tier2", &["/repo", "/repo/b"], &["acct-1", "spare"]), ("Tier10", &["/repo/c"], &["spare"])]);
+    put_groups(&place, &[("Tier2", &["/repo", "/repo/b"], &["acct-1", "spare"]), ("Tier3", &["/repo/c"], &["spare"])]);
     let lines = doctor_rows(&place, &account_rules(&["acct-1", "spare"]));
     let names: Vec<&str> =
         lines.iter().filter_map(|line| line.strip_prefix("group=")).filter_map(|rest| rest.split(' ').next()).collect();
-    assert_eq!(names, ["Tier2", "Tier10"], "宣言順（辞書順ではない）: {lines:?}");
+    assert_eq!(names, ["Tier2", "Tier3"], "宣言順: {lines:?}");
     assert_eq!(
         group_line(&lines, "Tier2"),
         "group=Tier2 accounts=acct-1,spare anchors=2 seat-accounts=acct-1 current=seed next=no-rule refused=- pressure=no-rule",
