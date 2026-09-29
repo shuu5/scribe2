@@ -11,13 +11,17 @@
 //! （`'…'` / `"…"`）と `\` を解いて語に分け、`;` / `&&` / `||` / `|` / 改行で segment に分ける。変数展開・command 置換は
 //! 解かない（字面のまま読む＝body-file の path が解けなければ開けない側＝deny に倒れる）。
 //!
+//! label `intake:question` を持つ create は memo の判定の代わりに問いの段（[`crate::ledger::question::judge`]・
+//! ledger-form.md §14）に掛かる。本文（body-file と `-d`）と metadata（`@<path>` は cwd から）の字は門が読んで渡す。
+//!
 //! memo の判定で止まらなかった `bd` / `bdw` の segment は、台帳 write の 6 形（[`FORMS`]・設計 vessel-hook.md §10・
 //! ledger-form.md §11）に
 //! 掛ける。断る形の閉じた列は rules 行 [`ROW`] の値が持ち（裁定 id つき）、判定は [`judge_write`] 1 本が持つ。rules が
 //! 読めない・行が無い・不発効・値が列でない周は `bd` / `bdw` を通さない（FailClosed・`bd` / `bdw` の無い command は
 //! rules を読まずに通す）。
 
-use crate::ledger::form::{pointer_text, MEMO_LABEL, MEMO_SECTIONS};
+use crate::ledger::form::{pointer_text, MEMO_LABEL, MEMO_SECTIONS, QUESTION_LABEL};
+use crate::ledger::question::{self, Gap, Metadata};
 use crate::name::NAME;
 use crate::polarity::{OnFailure, Polarity, Timing};
 use crate::rules::manifest::Manifest;
@@ -115,6 +119,14 @@ const BODY_FILE: &str = "--body-file";
 const ACCEPTANCE: &str = "--acceptance";
 /// plan の file の flag（`create --graph`）。
 const GRAPH: &str = "--graph";
+/// 本文の字の flag（綴り 2 つ）。
+const DESCRIPTION: [&str; 2] = ["--description", "-d"];
+/// metadata の flag（JSON の字か `@<path>`）。
+const METADATA: &str = "--metadata";
+/// 本文を標準入力から読む flag（`--body-file -` の別名）。
+const STDIN: &str = "--stdin";
+/// 親の label を継がない flag。
+const NO_INHERIT: &str = "--no-inherit-labels";
 
 /// 止める閉じた理由（1 周に 1 つ・先に当たったもの）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -232,9 +244,22 @@ pub struct Create {
     pub kind: Option<String>,
     /// `--graph` の plan の file（最後の 1 つ）。
     pub graph: Option<String>,
+    /// `-d` / `--description` の値（最後の 1 つ）。
+    pub description: Option<String>,
+    /// `--metadata` の値（最後の 1 つ）。
+    pub metadata: Option<String>,
+    /// `--stdin` を持つか（`=false` の周だけ持たない）。
+    pub stdin: bool,
+    /// `--no-inherit-labels` を持つか（裸か `=true` の周だけ持つ）。
+    pub no_inherit_labels: bool,
 }
 
 impl Create {
+    /// 台帳の問いの create か（label `intake:question` を持つ）。
+    pub fn has_question_label(&self) -> bool {
+        self.labels.iter().any(|label| label == QUESTION_LABEL)
+    }
+
     /// memo の create か（title が `[memo]` で始まるか label `intake:memo` を持つ）。
     pub fn is_memo(&self) -> bool {
         self.has_memo_label() || self.titles.iter().any(|title| title.trim_start().starts_with(MEMO_TITLE))
@@ -252,28 +277,66 @@ impl Create {
 }
 
 /// command 行を捌く（cwd は body-file の相対 path を解く起点・rules は `--rules` の差し替えか埋め込み）。memo の判定が
-/// 先で、止まらなければ `bd` / `bdw` の segment を台帳 write の 6 形に掛ける。当たる segment が無ければ Allow。
+/// 先で（label `intake:question` の create は代わりに問いの段）、止まらなければ `bd` / `bdw` の segment を台帳 write の
+/// 6 形に掛ける。当たる segment が無ければ Allow。
 pub fn decide(command: &str, cwd: &Path, rules: Option<&Path>) -> LedgerDecision {
     let all = segments(command);
-    let memo = all
-        .iter()
-        .filter_map(|words| create_of(words))
-        .find_map(|create| judge(&create, |path| std::fs::read_to_string(cwd.join(path)).ok()));
-    let refusal = memo.or_else(|| {
-        let writes: Vec<Write> = all.iter().filter_map(|words| write_of(words)).collect();
-        if writes.is_empty() {
-            return None;
+    let read = |path: &str| std::fs::read_to_string(cwd.join(path)).ok();
+    let created = all.iter().filter_map(|words| create_of(words)).find_map(|create| {
+        if create.has_question_label() {
+            return question_gap(&create, read).map(|gap| deny(gap.as_str(), question_line(&gap)));
         }
-        let manifest = rules.map_or_else(Manifest::embedded, Manifest::load);
-        match manifest.map_or(Err(Refusal::RulesUnreadable), |found| forms_of(&found)) {
-            Ok(forms) => writes.iter().find_map(|write| judge_write(write, &forms)),
-            Err(found) => Some(found),
-        }
+        judge(&create, read).map(|found| deny(found.as_str(), denied_line(found)))
     });
-    match refusal {
-        Some(found) => LedgerDecision::Deny { what: found.as_str().to_owned(), line: denied_line(found) },
-        None => LedgerDecision::Allow,
+    if let Some(found) = created {
+        return found;
     }
+    let writes: Vec<Write> = all.iter().filter_map(|words| write_of(words)).collect();
+    if writes.is_empty() {
+        return LedgerDecision::Allow;
+    }
+    let manifest = rules.map_or_else(Manifest::embedded, Manifest::load);
+    let refusal = match manifest.map_or(Err(Refusal::RulesUnreadable), |found| forms_of(&found)) {
+        Ok(forms) => writes.iter().find_map(|write| judge_write(write, &forms)),
+        Err(found) => Some(found),
+    };
+    refusal.map_or(LedgerDecision::Allow, |found| deny(found.as_str(), denied_line(found)))
+}
+
+/// 止める判定 1 つ。
+fn deny(what: &str, line: String) -> LedgerDecision {
+    LedgerDecision::Deny { what: what.to_owned(), line }
+}
+
+/// 問いの create 1 つを問いの段に掛ける（pure の判定へ渡す字を読む・`read` は cwd から解いた file の字）。通すなら `None`。
+fn question_gap(create: &Create, read: impl Fn(&str) -> Option<String>) -> Option<Gap> {
+    let inherits = create.parent.as_deref().filter(|parent| !parent.trim().is_empty() && !create.no_inherit_labels);
+    let body = question_body(create, &read);
+    let file: Option<String>;
+    let metadata = match create.metadata.as_deref() {
+        None => Metadata::Absent,
+        Some(value) => match value.strip_prefix('@') {
+            Some(path) => {
+                file = read(path);
+                file.as_deref().map_or(Metadata::Unreadable, Metadata::Text)
+            }
+            None => Metadata::Text(value),
+        },
+    };
+    question::judge(&create.labels, inherits, body.as_deref(), metadata)
+}
+
+/// 問いの本文（body-file の字と `-d` の最後の値を行の列として合わせる）。`--stdin`・値が `-` か無い `--body-file`・
+/// 開けない file・`$` か backtick を含む `-d` の値は読めない（`None`）。
+fn question_body(create: &Create, read: &impl Fn(&str) -> Option<String>) -> Option<String> {
+    let file = match create.body_file.as_deref().map(str::trim) {
+        _ if create.stdin => return None,
+        None => String::new(),
+        Some("" | "-") => return None,
+        Some(path) => read(path)?,
+    };
+    let text = create.description.as_deref().unwrap_or_default();
+    (!text.contains(['$', '`'])).then(|| format!("{file}\n{text}"))
 }
 
 /// create 1 つの判定（pure・本文は `read` が返す＝開けない周は `None`）。通すなら `None`。
@@ -430,6 +493,11 @@ fn flags_of(words: &[&String]) -> Create {
             create.titles.push(flag.to_owned());
             continue;
         }
+        if flag == STDIN {
+            create.stdin = inline.as_deref() != Some("false");
+        } else if flag == NO_INHERIT {
+            create.no_inherit_labels = inline.as_deref().is_none_or(|value| value == "true");
+        }
         if !takes {
             continue;
         }
@@ -460,6 +528,10 @@ fn apply(create: &mut Create, flag: &str, value: String) {
         create.kind = Some(value);
     } else if flag == GRAPH {
         create.graph = Some(value);
+    } else if DESCRIPTION.contains(&flag) {
+        create.description = Some(value);
+    } else if flag == METADATA {
+        create.metadata = Some(value);
     }
 }
 
@@ -522,6 +594,11 @@ fn denied_line(refusal: Refusal) -> String {
             refusal.guidance()
         ),
     }
+}
+
+/// 問いの段の deny 文（memo の理由と同じ頭・出所は ledger-form.md §14）。
+fn question_line(gap: &Gap) -> String {
+    format!("{NAME}: deny bd create は起票の門が止める reason={}（{}・ledger-form.md §14）", gap.as_str(), gap.guidance())
 }
 
 #[cfg(test)]
@@ -773,5 +850,48 @@ mod tests {
         let missing = std::path::Path::new("/nonexistent-ledger-guard-rules.toml");
         assert_eq!(what("bdw show s2-1", Some(missing)), "rules-unreadable", "rules が読めない周");
         assert_eq!(what("cargo build", Some(missing)), "", "bd / bdw の無い command は rules を読まない");
+    }
+
+    /// create_of は `-d` と `--description=`（最後の値）・`--metadata`・`--stdin`・`--no-inherit-labels` と `=false` を読む。
+    #[test]
+    fn hook_question_form_create_reads_body_metadata_and_flags() {
+        let create = |line: &str| create_of(&segments(line).into_iter().next().unwrap_or_default()).unwrap_or_default();
+        let found = create("bdw create x -d a --description='b c' --metadata '{\"effect\":1}' --stdin --no-inherit-labels -l intake:question");
+        assert_eq!(found.description.as_deref(), Some("b c"), "最後の値");
+        assert_eq!(found.metadata.as_deref(), Some("{\"effect\":1}"));
+        assert!(found.stdin && found.no_inherit_labels && found.has_question_label());
+        assert_eq!(found.titles, ["x"], "値を title に数えない");
+        let found = create("bd create x --stdin=false --no-inherit-labels=false");
+        assert!(!found.stdin && !found.no_inherit_labels, "=false は持たない");
+        assert!(create("bd create x --no-inherit-labels=true").no_inherit_labels);
+        assert!(!create("bd create x --no-inherit-labels=yes").no_inherit_labels, "true でない値は継ぐ側");
+        assert!(!create("bd create x -d y").has_question_label());
+    }
+
+    /// 段の順: 併せ持ちが継ぐ指定と 4 行より先・継ぐ指定が本文より先・本文を読めない形（--stdin・-・$・backtick・開けない）。
+    #[test]
+    fn hook_question_form_stages_run_in_order() {
+        let meta = "--metadata '{\"effect\":\"document\",\"asked\":\"seat\"}'";
+        let full = "-d '概要 = a\n技術 = b\n理由 = c\n推奨 = d'";
+        let what = |line: &str| match decide(line, std::path::Path::new("/nonexistent-question-cwd"), None) {
+            LedgerDecision::Deny { what, line } => {
+                assert_eq!(line.lines().count(), 1, "1 行: {line}");
+                assert!(line.contains("・ledger-form.md §14）"), "{line}");
+                what
+            }
+            LedgerDecision::Allow => String::new(),
+        };
+        let base = "bdw create x -l intake:question";
+        assert_eq!(what(&format!("{base},intake:memo --parent s2-1 -d y")), "question-memo-label", "併せ持ちが先");
+        assert_eq!(what(&format!("{base} --parent s2-1 -d y")), "question-inherits-labels", "継ぐ指定が 4 行より先");
+        let titled = "bdw create '[memo] x' -l intake:question --parent s2-1 --no-inherit-labels -d y";
+        assert_eq!(what(titled), "question-no-summary", "memo の判定を掛けない");
+        for body in ["--stdin", "--body-file -", "--body-file", "-d '$X'", "-d '`x`'", "--body-file nope.md"] {
+            assert_eq!(what(&format!("{base} --parent s2-1 --no-inherit-labels {meta} {body}")), "question-body-unreadable", "{body}");
+        }
+        assert_eq!(what(&format!("{base} --parent s2-1 --no-inherit-labels {full} --metadata @nope.json")), "question-metadata-unreadable");
+        assert_eq!(what(&format!("{base} --parent s2-1 --no-inherit-labels {full}")), "question-no-effect");
+        assert_eq!(what(&format!("{base} --parent s2-1 --no-inherit-labels {full} {meta}")), "");
+        assert_eq!(what(&format!("{base} --parent '' {full} {meta}")), "", "空の親は継がない");
     }
 }
