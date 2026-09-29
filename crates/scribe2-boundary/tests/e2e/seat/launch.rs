@@ -1267,6 +1267,85 @@ fn seat_launch_group_outside_anchor_is_unchanged() {
     fs::remove_dir_all(&place.dir).ok();
 }
 
+// ───── park の区画は口座を占めない（account-lifecycle.md §36 形 3 / 4・契約表の行 z・接頭辞 `park_lot_select_`） ─────
+
+/// 区画の歯の置き場: [`launch_group_place`]（群 Tier1 は別の置き場）に口座 l3 と区画 Tier9（置き場 = `lot_here` ならこの席の anchor・
+/// でなければ [`acct_anchor`]＝別席の登録が使う置き場・候補 = `lot_accounts`）を足す。
+fn launch_park_place(lot_here: bool, lot_accounts: &[&str]) -> (AcctPlace, String) {
+    let (place, path) = launch_group_place(true, None);
+    let anchor = if lot_here { launch_anchor(&place) } else { acct_anchor(&place) };
+    let listed: Vec<String> = lot_accounts.iter().map(|label| format!("\"{label}\"")).collect();
+    let host = place.state.join(vessel::rules::HOST_MANIFEST);
+    let body = fs::read_to_string(&host).unwrap_or_default();
+    let lot = format!(
+        "\n[[account]]\nlabel = \"l3\"\n\n[[account-group]]\nname = \"Tier9\"\nanchors = [\"{anchor}\"]\naccounts = [{}]\n",
+        listed.join(", ")
+    );
+    fs::write(&host, format!("{body}{lot}")).ok();
+    (place, path)
+}
+
+/// (d) 区画の席の row の口座は他の席の起動の除外に入らない: 使用率の最も低い l1 が区画（別の置き場）の席の row の口座でも、
+/// 区画の外の席の `seat launch`（引数なし）は l1 を選ぶ（base は l1 を除外して l2）。
+#[test]
+fn park_lot_select_launch_outside_the_lot_may_take_a_lot_seat_account() {
+    let (place, path) = launch_park_place(false, &["l1"]);
+    acct_measured(&place.state, "l1", 10, &acct_now());
+    acct_measured(&place.state, "l2", 30, &acct_now());
+    let lot_seat = acct_register_as(&place, "lotseat", "l1", ACCT_LAUNCH);
+    assert_eq!(rc_of(&lot_seat), i32::from(RC_OK), "区画の席の登録: stderr={}", stderr_of(&lot_seat));
+
+    let out = launch_group_long(&place, &path, &[]);
+
+    launch_group_assert_launched(&place, &out, "l1", "区画の席の口座も候補");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (e) 区画の置き場の席の `seat launch`（引数なし）は区画の行が並べた口座だけから選ぶ: 区画の行の外の l3 の使用率が最も低くても
+/// l3 を選ばず、区画の行の中で最も低い l1 を選ぶ（base は宣言の全部から l3）。
+#[test]
+fn park_lot_select_launch_in_the_lot_picks_only_from_the_lot_row() {
+    let (place, path) = launch_park_place(true, &["l1", "l2"]);
+    acct_measured(&place.state, "l1", 30, &acct_now());
+    acct_measured(&place.state, "l2", 40, &acct_now());
+    acct_measured(&place.state, "l3", 5, &acct_now());
+
+    let out = launch_group_long(&place, &path, &[]);
+
+    launch_group_assert_launched(&place, &out, "l1", "区画の行の外の l3 は選ばない");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (f) 区画の置き場の席の `--account <区画の行の外の口座>` はその口座で起きる（宣言された口座・`group-account` の断りは群だけ）。
+#[test]
+fn park_lot_select_launch_in_the_lot_with_an_account_argument_takes_it() {
+    let (place, path) = launch_park_place(true, &["l1", "l2"]);
+
+    let out = launch_group_long(&place, &path, &["--account", "l3"]);
+
+    launch_group_assert_launched(&place, &out, "l3", "区画の行の外の --account l3");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (g) 区画の行の口座が全部閾値以上なら、区画の行の外に低い口座（l3）が在っても `no-account` で断る（候補に足さない）。
+#[test]
+fn park_lot_select_launch_in_the_lot_refuses_when_the_lot_row_is_over_threshold() {
+    let (place, path) = launch_park_place(true, &["l1", "l2"]);
+    acct_measured(&place.state, "l1", 96, &acct_now());
+    acct_measured(&place.state, "l2", 97, &acct_now());
+    acct_measured(&place.state, "l3", 5, &acct_now());
+
+    let out = launch_group_long(&place, &path, &[]);
+
+    let line = stderr_of(&out);
+    assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "stdout={} stderr={line}", stdout_of(&out));
+    assert!(stdout_of(&out).is_empty(), "stdout は空");
+    assert!(line.starts_with("seat launch: refused reason=no-account detail=over-threshold target=gl_seat"), "{line}");
+    assert!(acct_rows(&place.state).is_empty(), "登録 row 0");
+    assert_eq!(launch_group_tmux_calls(&place, "send-keys"), 0, "1 key も送らない");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
 // ───── 席の起動が tick の unit を入れる（seat-heartbeat.md §5 形 2・契約表の行 d・接頭辞 `seat_launch_tick_`・§20 の fixture） ─────
 //
 // 群の外の置き場（[`launch_group_place`] の `outside`）に偽 tmux と偽 systemctl（引数を 1 行ずつ残す・[`LAUNCH_TICK_FAIL`] が在れば

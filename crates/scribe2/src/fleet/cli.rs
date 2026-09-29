@@ -149,7 +149,8 @@ fn place(args: &[String]) -> Result<StateDir, Vec<String>> {
 ///
 /// 除外集合（設計 §14 (3)・account-lifecycle.md §23 形 1 / 2）: `--purpose run` は `--exclude` の集合 ∪ 席の登録
 /// row の口座（`--anchor DIR` が在ればその anchor の row だけ・無い周は置き場の全 row＝保守側）∪ host の面が宣言した
-/// 各群の今の口座（[`crate::rules::grouped_accounts`]・host 全体・`--anchor` で絞らない）。記録が読めない群の在る周は
+/// 各群の今の口座（[`crate::rules::grouped_accounts`]・host 全体・`--anchor` で絞らない）。anchor が park の区画の置き場に在る
+/// row は数えない（[`State::run_registered_accounts`]・§36）。記録が読めない群の在る周は
 /// 測らず選ばず断る。`--purpose session` は `--exclude` だけ（row も群も読まない）。
 fn select_account(args: &[String], dir: &Path) -> Outcome {
     let SelectFlags { purpose, model, mut exclude, anchor } = match select_flags(args) {
@@ -161,9 +162,14 @@ fn select_account(args: &[String], dir: &Path) -> Outcome {
         Err(lines) => return Outcome::failed(RC_REFUSED, lines),
     };
     // 便用の群の除外は `select_for_run` の束と**同じ 1 本**で置き場から解く（口を 2 本にしない・§23 形 2）。
+    // 区画の置き場（[`crate::rules::park_anchors`]・席の row を数えない・§36 形 1）も同じ面の読みで 1 回読む。
+    let mut park = BTreeSet::new();
     if purpose == select::Purpose::Run {
-        match crate::rules::grouped_accounts(dir) {
-            Ok(found) => exclude.extend(found),
+        match crate::rules::grouped_accounts(dir).and_then(|found| Ok((found, crate::rules::park_anchors(dir)?))) {
+            Ok((found, lots)) => {
+                exclude.extend(found);
+                park = lots;
+            }
             Err(reason) => return Outcome::failed(RC_REFUSED, vec![format!("fleet: {reason}")]),
         }
     }
@@ -183,7 +189,7 @@ fn select_account(args: &[String], dir: &Path) -> Outcome {
     // 便用は席の口座を外す（`select_for_run` と同じ読み手・`--anchor` の有無で絞りが変わる・§14）。群の今の口座は上で
     // 足した（設計 account-lifecycle.md §23 形 4＝登録 row の除外に重なる）。session 用は群を読まない（§17 約束 6）。
     if purpose == select::Purpose::Run {
-        exclude.extend(state.registered_accounts(anchor.map(Path::new)));
+        exclude.extend(state.run_registered_accounts(anchor.map(Path::new), &park));
     }
     let now = now_utc();
     // 走行中の便数は便用の 2 つ目の鍵（`select_for_run` と同じ導出・ADR-0027 §2.3）。

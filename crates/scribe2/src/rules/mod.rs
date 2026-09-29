@@ -70,6 +70,19 @@ pub fn grouped_accounts(state_dir: &Path) -> Result<std::collections::BTreeSet<S
     face.groups().iter().map(current).collect()
 }
 
+/// `<state_dir>/host.toml` が宣言する park の区画の**置き場**（anchor）の集合（設計 account-lifecycle.md §36 形 1）。
+///
+/// 区画の置き場の席の row は口座を占めない＝便用と session 用の除外に数えない（区画の席の row を外す読み手は
+/// [`crate::fleet::State::run_registered_accounts`] と `choose`）。**[`grouped_accounts`] の隣の同じ面の読み**で、面が無い周・
+/// 区画の無い面は空、読めない周は [`GroupedError::Manifest`]。記録は読まない（区画は今の口座を持たない）。
+pub fn park_anchors(state_dir: &Path) -> Result<std::collections::BTreeSet<String>, GroupedError> {
+    match HostManifest::read(&host_manifest_path(state_dir)) {
+        HostManifest::Absent => Ok(std::collections::BTreeSet::new()),
+        HostManifest::Unreadable(errors) => Err(GroupedError::Manifest(errors)),
+        HostManifest::Present(face) => Ok(face.park().map(|lot| lot.anchors().iter().cloned().collect()).unwrap_or_default()),
+    }
+}
+
 /// 便用の除外を置き場から解けない周の断り（[`grouped_accounts`]・閉じた 2 値）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GroupedError {

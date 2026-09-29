@@ -334,6 +334,9 @@ fn replace_with(line: &str) -> &'static str {
 /// [`REASON_GROUP_RECORD`]。群の外の anchor は今のまま: `--account` は宣言（開いた manifest の `[[account]]`）に在る label だけ
 /// （無ければ `account-unknown`）・無ければ session 用の選定（除外 = 他の席の登録 row の口座・候補なしは [`Launched::None`]）。
 /// event log を読めない周は選定に入らず断る。**ここまでは row も key も書かない**。
+///
+/// 区画（park）の置き場の席は口座を占めない（設計 account-lifecycle.md §36）: 除外に区画の席の row を数えず、`--account` が無い周は
+/// 候補を区画の行が並べた口座だけにして選ぶ（`--account` が在る周は宣言に在る口座ならその口座）。
 fn pick_account(request: &Launch) -> Result<String, Launched> {
     let labels: Vec<String> = request.manifest.accounts().iter().map(|account| account.label().to_owned()).collect();
     if let Some(group) = crate::hook::group::group_of(request.manifest, &request.anchor.display().to_string()) {
@@ -349,7 +352,15 @@ fn pick_account(request: &Launch) -> Result<String, Launched> {
     let events = store::read_all(&request.state_dir.path).map_err(|_| Launched::Refused(REASON_LOG_UNREADABLE))?;
     let state = replay(&events);
     let anchor = request.anchor.display().to_string();
-    match choose((request.role, anchor.as_str(), None), &state, &labels, request.model, request.threshold_pct) {
+    // 区画の置き場の席は口座を占めない（他の席の除外に区画の席の row を数えない）代わりに、候補は区画の行が並べた口座だけ
+    // （宣言順・設計 account-lifecycle.md §36 形 3 / 4）。
+    let lot = request.manifest.park();
+    let park: std::collections::BTreeSet<String> = lot.map(|found| found.anchors().iter().cloned().collect()).unwrap_or_default();
+    let labels = match lot.filter(|_| park.contains(&anchor)) {
+        Some(found) => labels.into_iter().filter(|label| found.accounts().contains(label)).collect(),
+        None => labels,
+    };
+    match choose((request.role, anchor.as_str(), None), &state, (&labels, &park), request.model, request.threshold_pct) {
         Selection::Chosen(label) => Ok(label),
         Selection::None(found) => Err(Launched::None(found)),
     }

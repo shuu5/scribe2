@@ -96,6 +96,19 @@ impl State {
             .collect()
     }
 
+    /// 便用の除外に数える席の登録 row の口座の集合（[`Self::registered_accounts`] から、anchor が `park`＝区画の anchors に在る row を
+    /// 数えない・設計 account-lifecycle.md §36 形 2）。区画の席は口座を占めない（FR95）ので、その row の口座は便用の候補に残る。
+    /// 群の席の row・区画の外の row は今までどおり数える。`select_for_run` と `fleet select` の 2 つがこの 1 本を呼ぶ
+    /// （退役の検査は [`Self::registered_accounts`] のまま）。`anchor` の絞りは [`Self::registered_accounts`] と同じ。
+    pub fn run_registered_accounts(&self, anchor: Option<&Path>, park: &BTreeSet<String>) -> BTreeSet<String> {
+        self.registrations
+            .values()
+            .filter(|latest| anchor.is_none_or(|repo| OsStr::new(&latest.registration.anchor) == repo.as_os_str()))
+            .filter(|latest| !park.contains(&latest.registration.anchor))
+            .map(|latest| latest.registration.account.clone())
+            .collect()
+    }
+
     /// 口座 label → 走行中の便数（**導出値**・憲法 C10・ADR-0027 §2.3）。数えるのは [`Run::is_inflight`] な便のうち
     /// [`Run::account`] を持つものだけ（口座不明の便は 0）。便用の選定の 2 つ目の鍵（設計 account-autonomy.md §3）。
     pub fn inflight_by_account(&self) -> BTreeMap<String, usize> {
@@ -133,6 +146,9 @@ pub struct RunSelect<'a> {
     /// host の面が宣言した**各群の今の口座**（[`crate::rules::grouped_accounts`]・記録 > 種・host 全体で外す・設計
     /// account-lifecycle.md §23 形 1）。候補の残りは便用の候補に残る。群を 1 つも宣言しない host では空＝除外は今までどおり。
     pub grouped: &'a BTreeSet<String>,
+    /// host の面が宣言した park の区画の置き場（[`crate::rules::park_anchors`]・設計 account-lifecycle.md §36）。anchor がここに在る
+    /// 席の登録 row は口座を占めない＝除外に数えない。区画を宣言しない host では空＝除外は今までどおり。
+    pub park: &'a BTreeSet<String>,
 }
 
 /// 便用の規則で口座を 1 つ選ぶ（設計 account-autonomy.md §3 / §4）。**便の再開と待ちの観測が同じ
@@ -141,12 +157,12 @@ pub struct RunSelect<'a> {
 /// `model` は rules 行 `runner.model` の値（runner / lens が `--model` で毎回明示する model・設計 §3・`s2-07l.297`）
 /// ＝便が消費するのはその model のモデル別窓だけなので、他の model の窓が 100 でも候補から外さない。字面のまま
 /// 渡し、型にするのは `select` の中（別名 × 表示名の照合）。除外は [`RunSelect::repo`] を anchor に持つ登録 row の
-/// 口座（[`State::registered_accounts`]・設計 §14）に [`RunSelect::grouped`] を重ねたもの。走行中の便数は state から
+/// 口座（[`State::run_registered_accounts`]・設計 §14・区画の row は数えない）に [`RunSelect::grouped`] を重ねたもの。走行中の便数は state から
 /// 導く（[`State::inflight_by_account`]・呼び手は渡さない）。閾値は便用の規則が持たないので**窓の全量**
 /// （[`select::LIMIT_PCT`]）を置く＝session 用の分岐に届かない値であって、R-C9-1 の値ではない。
 pub fn select_for_run(state: &State, pool: &RunSelect<'_>, now: &str) -> select::Selection {
     let labels = state.without_retired(pool.labels.iter().map(String::as_str));
-    let mut exclude = state.registered_accounts(Some(pool.repo));
+    let mut exclude = state.run_registered_accounts(Some(pool.repo), pool.park);
     exclude.extend(pool.grouped.iter().cloned());
     select::select(&select::Input {
         labels: &labels,
@@ -339,5 +355,76 @@ fn apply_seat(state: &mut State, event: &Event) {
         | EventKind::TurnEndUnjudged
         | EventKind::IntakeRefused
         | EventKind::LifecycleCutover => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{select_for_run, RunSelect, State};
+    use crate::fleet::select::Selection;
+    use crate::fleet::{
+        Allowance, AllowanceKey, AllowanceLatest, Measured, Registration, RegistrationLatest, WindowKind,
+    };
+    use crate::seat::role::Role;
+    use std::collections::BTreeSet;
+    use std::path::Path;
+
+    /// 選定の「いま」。
+    const NOW: &str = "2026-09-13T06:00:00Z";
+
+    /// 席の登録 row（置き場 `anchor`・口座 `account`）。鍵は (役割, anchor) なので anchor の違う row は別の席。
+    fn row(anchor: &str, account: &str, seq: usize) -> ((Role, String), RegistrationLatest) {
+        let registration = Registration {
+            role: Role::Orchestrator,
+            anchor: anchor.to_owned(),
+            target: format!("t:{seq}"),
+            sid: None,
+            account: account.to_owned(),
+            launch: String::new(),
+            model: None,
+        };
+        ((Role::Orchestrator, anchor.to_owned()), RegistrationLatest { seq, registration })
+    }
+
+    /// 口座 `label` の 5 時間窓の実測 1 行（使用率 10・reset は `NOW` より後）。
+    fn measured(label: &str) -> (AllowanceKey, AllowanceLatest) {
+        let allowance = Allowance::Measured(Measured {
+            account: label.to_owned(),
+            window: WindowKind::FiveHour,
+            model: None,
+            endpoint: "oauth-usage".to_owned(),
+            used_pct: 10,
+            resets_at: Some("2026-09-13T09:00:00Z".to_owned()),
+        });
+        (allowance.key(), AllowanceLatest { ts: "2026-09-13T05:59:00Z".to_owned(), allowance })
+    }
+
+    /// 区画の置き場（`/lot`）の row（口座 p）と群の置き場（`/group`）の row（口座 g）を持つ state。
+    fn seated() -> State {
+        State {
+            registrations: [row("/lot", "p", 0), row("/group", "g", 1)].into_iter().collect(),
+            allowance: [measured("g"), measured("p")].into_iter().collect(),
+            ..State::default()
+        }
+    }
+
+    /// 便の repo が `repo`・候補が `label` だけ・`grouped` は空で、区画の anchors だけを `park` に渡した選定。
+    fn pick(state: &State, repo: &str, label: &str, park: &BTreeSet<String>) -> Selection {
+        let labels = [label.to_owned()];
+        let grouped = BTreeSet::new();
+        let pool = RunSelect { repo: Path::new(repo), labels: &labels, model: None, grouped: &grouped, park };
+        select_for_run(state, &pool, NOW)
+    }
+
+    /// (h) 区画の anchors に在る置き場の row は便用の除外に数えない: 便の repo が区画の置き場（`/lot`）のとき、区画の anchors が
+    /// {/lot} なら p は候補に残り、空を渡す対では p が外れて候補なし。群の置き場（`/group`）の row の g は区画の anchors に依らず外れる。
+    #[test]
+    fn park_lot_select_for_run_skips_the_lot_seat_rows() {
+        let state = seated();
+        let lot: BTreeSet<String> = ["/lot".to_owned()].into_iter().collect();
+        let none = BTreeSet::new();
+        assert_eq!(pick(&state, "/lot", "p", &lot), Selection::Chosen("p".to_owned()), "区画の row の p は数えない");
+        assert!(matches!(pick(&state, "/lot", "p", &none), Selection::None(_)), "対: 区画の anchors が空なら p は外れる");
+        assert!(matches!(pick(&state, "/group", "g", &lot), Selection::None(_)), "群の置き場の row の g は外れる（回帰）");
     }
 }

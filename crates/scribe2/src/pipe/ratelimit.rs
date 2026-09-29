@@ -39,9 +39,24 @@ pub struct Pool {
     /// host の面が宣言した各群の今の口座（[`crate::rules::grouped_accounts`]・便用の除外に重なる・設計
     /// account-lifecycle.md §23 形 1）。群を 1 つも宣言しない置き場では空＝除外は今までどおり。
     grouped: BTreeSet<String>,
+    /// host の面が宣言した park の区画の置き場（[`crate::rules::park_anchors`]・区画の席の row は便用の除外に数えない・設計
+    /// account-lifecycle.md §36 形 1）。区画を宣言しない置き場では空＝除外は今までどおり。
+    park: BTreeSet<String>,
 }
 
 impl Pool {
+    /// 置き場の host の面から群の今の口座と区画の置き場を読んで組む（**Pool の組み立てはこの 1 本**・初回の起動の
+    /// [`Self::declared`] と上限の周の [`ride_out_rate_limit`] が同じここを通る）。
+    fn over(args: &[String], labels: Vec<String>, model: &str, state_dir: &Path) -> Result<Self, String> {
+        Ok(Self {
+            args: usage_args(args)?,
+            labels,
+            model: model.to_owned(),
+            grouped: grouped_accounts(state_dir)?,
+            park: park_anchors(state_dir)?,
+        })
+    }
+
     /// 初回の起動（`pipe::cli::run::launch`）と衝突の起こし直し（`pipe land`）の入力: 宣言した口座が **1 つ以上
     /// 在る周だけ** `Some`。0 の周は `None`（runner は親の環境を継承・model の行も読まない＝口座を宣言しない
     /// 置き場に `runner.model` の行を要求しない）。宣言の読み手は [`declared_labels`] の 1 本。
@@ -50,17 +65,12 @@ impl Pool {
         if labels.is_empty() {
             return Ok(None);
         }
-        Ok(Some(Self {
-            args: usage_args(args)?,
-            labels,
-            model: runner_model_of(manifest)?.to_owned(),
-            grouped: grouped_accounts(state_dir)?,
-        }))
+        Self::over(args, labels, runner_model_of(manifest)?, state_dir).map(Some)
     }
 
     /// 便の repo を足して便用の選定の入力にする（選定も待ちの観測も**同じ束**を組む・C3.4）。
     fn run_select<'a>(&'a self, repo: &'a Path) -> fleet::RunSelect<'a> {
-        fleet::RunSelect { repo, labels: &self.labels, model: Some(&self.model), grouped: &self.grouped }
+        fleet::RunSelect { repo, labels: &self.labels, model: Some(&self.model), grouped: &self.grouped, park: &self.park }
     }
 }
 
@@ -113,10 +123,7 @@ pub(super) fn ride_out_rate_limit(
         // 行が無い / 不発効 / 文字列でない / 閉じた表に無い周は typed に断り、claude を呼ばず再開もしない。
         // 宣言が 0 の置き場でも組む（候補なしを名乗って口座待ちで止まる＝初回の起動の「継承」とは違う）。群の今の口座は
         // 周ごとに読み直す（群が移れば**次の選定から**効き、走行中の便は止めない・設計 account-lifecycle.md §23 形 3）。
-        let pool = match runner_model_of(manifest).and_then(|model| {
-            let grouped = grouped_accounts(&state_dir)?;
-            Ok(Pool { args: usage_args(args)?, labels: labels.clone(), model: model.to_owned(), grouped })
-        }) {
+        let pool = match runner_model_of(manifest).and_then(|model| Pool::over(args, labels.clone(), model, &state_dir)) {
             Ok(found) => found,
             Err(reason) => return refused(reason),
         };
@@ -147,6 +154,12 @@ fn declared_labels(manifest: &Manifest, state_dir: &Path) -> Result<Vec<String>,
 /// account-lifecycle.md §23 形 1）。tracked の面は群を持てないので `manifest` を読まない。
 fn grouped_accounts(state_dir: &Path) -> Result<BTreeSet<String>, String> {
     crate::rules::grouped_accounts(state_dir).map_err(|reason| reason.to_string())
+}
+
+/// 置き場の host の面が宣言した park の区画の置き場（[`crate::rules::park_anchors`]・便用の除外に数えない row の anchor・設計
+/// account-lifecycle.md §36 形 1）。
+fn park_anchors(state_dir: &Path) -> Result<BTreeSet<String>, String> {
+    crate::rules::park_anchors(state_dir).map_err(|reason| reason.to_string())
 }
 
 /// 宣言の欠陥の全件を typed な 1 行にまとめる（群の除外の断りも同じ形・[`crate::rules::GroupedError`]）。
@@ -353,6 +366,7 @@ fn choose_or_wait(
                 labels: pool.labels.clone(),
                 model: Some(pool.model.clone()),
                 grouped: pool.grouped.clone(),
+                park: pool.park.clone(),
             },
             deadline,
         );
@@ -390,4 +404,41 @@ fn usage_args(args: &[String]) -> Result<Vec<String>, String> {
         }
     }
     Ok(found)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Pool;
+    use crate::pipe::fixture::scratch;
+    use crate::rules::manifest::Manifest;
+    use std::collections::BTreeSet;
+    use std::path::Path;
+
+    /// 群 Tier1 と区画 Tier9（置き場は 2 つ）を宣言した host の面を持つ置き場。
+    fn declared_place(name: &str) -> std::path::PathBuf {
+        let state = scratch(name);
+        let body = "schema = 1\n\n[[account]]\nlabel = \"l1\"\n\n[[account-group]]\nname = \"Tier1\"\nanchors = [\"/group\"]\naccounts = [\"l1\"]\n\n\
+                    [[account-group]]\nname = \"Tier9\"\nanchors = [\"/lot\", \"/lot2\"]\naccounts = [\"l1\"]\n";
+        assert!(std::fs::write(state.join(crate::rules::HOST_MANIFEST), body).is_ok(), "host の面を置ける");
+        state
+    }
+
+    fn lots() -> BTreeSet<String> {
+        ["/lot".to_owned(), "/lot2".to_owned()].into_iter().collect()
+    }
+
+    /// (i) 便用の選定の入力は host の面の区画の anchors を運ぶ: 初回の起動の `Pool::declared` と上限の周が通る `Pool::over` の
+    /// 両方が `park` に Tier9 の anchors（群の Tier1 の置き場は入らない）を持ち、`run_select` の `RunSelect` が同じ集合を運ぶ。
+    #[test]
+    fn park_lot_select_pool_carries_the_lot_anchors() {
+        let state = declared_place("park-pool");
+        let manifest = Manifest::embedded().expect("埋め込みの面を読める");
+        let declared = Pool::declared(&[], &manifest, &state).expect("宣言を読める").expect("口座が 1 つ在る");
+        assert_eq!(declared.park, lots(), "初回の組み立て");
+        assert_eq!(declared.run_select(Path::new("/repo")).park, &lots(), "RunSelect が同じ集合を運ぶ");
+        let resumed = Pool::over(&[], vec!["l1".to_owned()], "opus", &state).expect("上限の周の組み立て");
+        assert_eq!(resumed.park, lots(), "上限の周の組み立て");
+        assert_eq!(resumed.run_select(Path::new("/repo")).park, &lots());
+        let _ = std::fs::remove_dir_all(&state);
+    }
 }

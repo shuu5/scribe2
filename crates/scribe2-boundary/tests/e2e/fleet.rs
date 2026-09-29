@@ -2868,6 +2868,57 @@ fn put_groups(fx: &UsageFixture, groups: &[(&str, &[&str], &[&str])]) {
     fs::write(fx.state.join(vessel::rules::HOST_MANIFEST), body).expect("host の面を書ける");
 }
 
+/// 区画の歯の置き場: 群 Tier1（置き場 `/repo/group`・候補 a1 → a2 → a3＝種 a1）と区画 Tier9（置き場 `/repo/lot`）を宣言し、区画の置き場の
+/// 席の row = a2（p）・群の置き場の席の row = a3（g）を置く。
+fn park_lot_fixture() -> (UsageFixture, PathBuf) {
+    let (fx, curl) = group_fixture(GROUP_THREE);
+    put_groups(&fx, &[("Tier1", &["/repo/group"], &["a1", "a2", "a3"]), ("Tier9", &["/repo/lot"], &["a1", "a2"])]);
+    register_anchored_account(&fx.state, "/repo/lot", "a2");
+    register_anchored_account(&fx.state, "/repo/group", "a3");
+    (fx, curl)
+}
+
+/// `fleet select --purpose run` の 1 行（rc 0 を測る）。
+fn park_lot_pick(fx: &UsageFixture, curl: &Path, extra: &[&str]) -> Vec<String> {
+    let args: Vec<&str> = ["--purpose", "run"].iter().chain(extra).copied().collect();
+    let out = run_select(fx, curl, &args);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{args:?}: {out:?}");
+    out_lines(&out)
+}
+
+/// (a) `--anchor <区画の置き場>` は区画の席の row の口座 p（a2）を候補に残す: 群の種 a1 だけが外れ a2 が選ばれ、`--exclude a2` を
+/// 重ねると a3（群の席の row は anchor が違うので数えない）。base は区画の席の row の a2 を外して a3。
+#[test]
+fn park_lot_select_run_with_the_lot_anchor_keeps_the_lot_seat_account() {
+    let (fx, curl) = park_lot_fixture();
+    assert_eq!(park_lot_pick(&fx, &curl, &["--anchor", "/repo/lot"]), ["select purpose=run chosen=a2"], "p は候補に残る");
+    assert_eq!(park_lot_pick(&fx, &curl, &["--anchor", "/repo/lot", "--exclude", "a2"]), ["select purpose=run chosen=a3"]);
+    drop_fixture(&fx);
+}
+
+/// (b) `--anchor` 無しは置き場の全 row を数える保守側のまま、区画の席の row だけを数えない: p（a2）は残って選ばれ、`--exclude a2` を
+/// 重ねると群の席の row の g（a3）は外れたままで候補なし。base は a2 も外れ、最初から候補なし。
+#[test]
+fn park_lot_select_run_without_an_anchor_keeps_p_and_drops_g() {
+    let (fx, curl) = park_lot_fixture();
+    assert_eq!(park_lot_pick(&fx, &curl, &[]), ["select purpose=run chosen=a2"], "p は候補に残る");
+    assert_eq!(park_lot_pick(&fx, &curl, &["--exclude", "a2"]), ["select purpose=run none=excluded earliest_reset=-"], "g は外れたまま");
+    drop_fixture(&fx);
+}
+
+/// (c) `--anchor <群の置き場>` は群の席の row の口座 g（a3）を今までどおり外す（回帰の歯・base でも緑）: `--exclude a2` を重ねて候補なし。
+#[test]
+fn park_lot_select_run_with_the_group_anchor_still_drops_the_group_seat_account() {
+    let (fx, curl) = park_lot_fixture();
+    assert_eq!(park_lot_pick(&fx, &curl, &["--anchor", "/repo/group"]), ["select purpose=run chosen=a2"]);
+    assert_eq!(
+        park_lot_pick(&fx, &curl, &["--anchor", "/repo/group", "--exclude", "a2"]),
+        ["select purpose=run none=excluded earliest_reset=-"],
+        "g は外れる"
+    );
+    drop_fixture(&fx);
+}
+
 /// (a) 群 [a1, a2, a3] の記録 = a2 → 便用の候補から外れるのは **a2 だけ**（`fleet select --purpose run` の口）: 並びの先頭
 /// a1 が選ばれ、`--exclude a1` を重ねると a3 が選ばれ（a1 と a3 は候補に残る）、両方を `--exclude` すると候補なし
 /// （`excluded`＝a2 は候補に戻らない）。除外は置き場（anchor）で絞らない——群の置き場と関係の無い `--anchor` を付けても

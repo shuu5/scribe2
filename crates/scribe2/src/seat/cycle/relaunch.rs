@@ -22,13 +22,24 @@ use std::time::{Duration, Instant};
 /// 自席の鍵 (role, anchor) と留まる口座（立て直しは自席の row の口座・初回の起動は row が無いので `None`・
 /// ADR-0028 §2.4・`s2-07l.312`）・`model` は席の model。除外は**他の席の**登録 row が持つ口座で、自席の row（同じ鍵）は
 /// 入れない（account-autonomy.md §5 / account-lifecycle.md §4）。
-pub(super) fn choose(own: (Role, &str, Option<&str>), state: &State, labels: &[String], model: Option<&str>, threshold_pct: u64) -> Selection {
+///
+/// `pool` は候補の label 列と区画の anchors（park の区画の置き場の席の row は口座を占めない＝除外に入れない・設計
+/// account-lifecycle.md §36 形 3）。
+pub(super) fn choose(
+    own: (Role, &str, Option<&str>),
+    state: &State,
+    pool: (&[String], &BTreeSet<String>),
+    model: Option<&str>,
+    threshold_pct: u64,
+) -> Selection {
     let (role, anchor, prefer) = own;
+    let (labels, park) = pool;
     let exclude: BTreeSet<String> = state
         .registrations
         .values()
         .map(|latest| &latest.registration)
         .filter(|found| (found.role, found.anchor.as_str()) != (role, anchor))
+        .filter(|found| !park.contains(&found.anchor))
         .map(|found| found.account.clone())
         .collect();
     let now = crate::fleet::cli::now_utc();

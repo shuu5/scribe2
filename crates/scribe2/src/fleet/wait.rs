@@ -72,6 +72,9 @@ pub enum Completion {
         /// host の面が宣言した群の候補の口座（宣言値・便用の除外に重なる・設計 account-lifecycle.md §17 の約束 4）。
         /// 観測と選定が**同じ除外**を組むために運ぶ（C3.4）。
         grouped: BTreeSet<String>,
+        /// host の面が宣言した park の区画の置き場（宣言値・区画の席の row を便用の除外に数えない・設計 account-lifecycle.md §36）。
+        /// 観測と選定が**同じ除外**を組むために運ぶ（C3.4）。
+        park: BTreeSet<String>,
     },
     /// **CI の判定が出ること**（`pipe land` の終端・設計 contract-source.md §5）: forge の CLI を子 process で
     /// 撃ち、着地した commit の run が**終端の判定**（success / failure）に達する。まだ走っている周・
@@ -161,10 +164,19 @@ impl Completion {
             Self::HostCalm { runnable_per_core, blocked_per_core } => crate::pipe::health::calm_now(
                 crate::pipe::health::PerCore { runnable: *runnable_per_core, blocked: *blocked_per_core },
             ),
-            Self::AccountFree { state_dir, repo, run, expected, labels, model, grouped, .. } => {
-                account_free(state_dir, run, *expected, &RunSelect { repo, labels, model: model.as_deref(), grouped })
+            Self::AccountFree { state_dir, run, expected, .. } => {
+                self.free_select().is_some_and(|pool| account_free(state_dir, run, *expected, &pool))
             }
         }
+    }
+
+    /// [`Self::AccountFree`] の観測が再評価する便用の選定の入力（選定と同じ束・C3.4・設計 account-lifecycle.md §36 形 1）。
+    /// 他の variant は `None`。区画の置き場（`park`）も群の今の口座と同じく運ぶ。
+    fn free_select(&self) -> Option<RunSelect<'_>> {
+        let Self::AccountFree { repo, labels, model, grouped, park, .. } = self else {
+            return None;
+        };
+        Some(RunSelect { repo, labels, model: model.as_deref(), grouped, park })
     }
 
     /// 1 周分の観測（[`wait`] の loop が周ごとに撃つ口・前回の観測を受けて今の観測を返す）。
@@ -772,8 +784,30 @@ mod tests {
             labels: Vec::new(),
             model: Some("opus".to_owned()),
             grouped: BTreeSet::new(),
+            park: BTreeSet::new(),
         };
         assert_eq!(found.pid(), 0);
+    }
+
+    /// 区画の置き場（`park`）は空きの観測の `RunSelect` へ運ばれる（観測と選定が同じ除外を組む・設計 account-lifecycle.md §36）。
+    #[test]
+    fn park_lot_select_account_free_observation_carries_the_park_anchors() {
+        let anchors: BTreeSet<String> = ["/lots/park".to_owned()].into_iter().collect();
+        let waiting = |park: &BTreeSet<String>| Completion::AccountFree {
+            reset_at: "2026-09-13T06:00:00Z".to_owned(),
+            state_dir: std::path::PathBuf::from("state"),
+            repo: std::path::PathBuf::from("repo"),
+            run: "r".to_owned(),
+            expected: Stage::RateLimited,
+            labels: Vec::new(),
+            model: None,
+            grouped: BTreeSet::new(),
+            park: park.clone(),
+        };
+        let carried = waiting(&anchors);
+        assert_eq!(carried.free_select().map(|pool| pool.park.clone()), Some(anchors), "区画の anchors を運ぶ");
+        assert_eq!(waiting(&BTreeSet::new()).free_select().map(|pool| pool.park.len()), Some(0), "対: 空は空のまま");
+        assert!(Completion::GroupGone(1).free_select().is_none(), "他の variant は入力を持たない");
     }
 
     #[test]
@@ -816,6 +850,7 @@ mod tests {
                 labels: Vec::new(),
                 model: None,
                 grouped: BTreeSet::new(),
+                park: BTreeSet::new(),
             },
             Completion::CiResult {
                 repo: std::path::PathBuf::from("repo"),
@@ -879,6 +914,7 @@ mod tests {
                 labels: Vec::new(),
                 model: None,
                 grouped: BTreeSet::new(),
+                park: BTreeSet::new(),
             },
             Completion::LandWindow { state_dir: PathBuf::from("state"), repo: PathBuf::from("repo") },
             Completion::HostCalm { runnable_per_core: 4, blocked_per_core: 1 },
