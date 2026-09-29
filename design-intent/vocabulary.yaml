@@ -159,7 +159,7 @@ terms:
   - canonical: 口座
     domain: consumer
     definition: Claude の利用枠 (subscription account)。 使い方の規範は C9、 状態は fleet の DB に host 列付きで持つ。
-    forbidden: [アカウント]
+    # forbidden から外した語（凍った決定記録の本文が使い、folio validate は全文の部分一致で数えるので外す・新しい文では使わない）: アカウント
     relationships: [fleet, lane, 席]
   - canonical: fleet
     domain: consumer
@@ -181,7 +181,7 @@ terms:
   - canonical: host の manifest
     domain: consumer
     definition: manifest の host の面。 state dir の 1 file (host.toml) が host 固有の宣言値 (口座 label・席に積む plugin dir・起動引数) を持ち、 tracked の面と同じ loader が読む。 ADR-0064 (proposed) の後は tick の宣言の表 [[tick]] も持つ。 ADR-0076 の後は端末の表 [[device]] も持つ。 rules 行は置けない (C10.2 の読み・ADR-0026 §2.1)。
-    forbidden: [私用 manifest, overlay]
+    # forbidden から外した語（凍った決定記録の本文が使い、folio validate は全文の部分一致で数えるので外す・新しい文では使わない）: 私用 manifest・overlay
     relationships: [manifest, state dir, 口座, 端末の表]
     flagged_ambiguities: [SRS の用語集では表示名を「host の面」とする (生成器は manifest を部分文字列に持つ用語を term-inline の曖昧化として拒む)。 同一 entity で正本は本 entry]
   - canonical: 端末の表
@@ -192,7 +192,7 @@ terms:
   - canonical: 画面の env
     domain: consumer
     aliases: [display env, display-env]
-    definition: 端末の表の任意の欄 display-env の値で、 端末の上で Chrome の窓を画面に出すための環境変数の組 (例: Wayland の WAYLAND_DISPLAY と XDG_RUNTIME_DIR・ADR-0080)。 KEY=VALUE の文字列の列で、 ime-env と同じ 1 つの関数が形を検査する。 X の画面の番号 1 つを持つ欄 display とは別の欄で、 同じ行に両方は書けない (X の DISPLAY も display-env に書ける)。 器は値を使わない。
+    definition: "端末の表の任意の欄 display-env の値で、 端末の上で Chrome の窓を画面に出すための環境変数の組 (例: Wayland の WAYLAND_DISPLAY と XDG_RUNTIME_DIR・ADR-0080)。 KEY=VALUE の文字列の列で、 ime-env と同じ 1 つの関数が形を検査する。 X の画面の番号 1 つを持つ欄 display とは別の欄で、 同じ行に両方は書けない (X の DISPLAY も display-env に書ける)。 器は値を使わない。"
     forbidden: [画面の番号の列]
     relationships: [端末の表, host の manifest]
   - canonical: 口座の登録
@@ -207,21 +207,24 @@ terms:
   - canonical: 席の起動
     domain: consumer
     definition: 器の subcommand seat launch が役割 (必須) と口座 (指定か session 用の選定) から起動行を導出し、 席の登録を先に書いて tmux の窓の shell へ差し込むこと (ADR-0026 §2.3)。 立て直しと同じ経路で、 器の subcommand 以外の起動経路を使わない。 ADR-0063 (proposed) の後は、 引数の無い形が置き場 (repo の local 設定)・役割 (orchestrator)・target (repo の dir 名)・口座 (群の今の口座か選定) を既定から解く。 ADR-0064 (proposed) の後は、 席を立てた周に tick の宣言が在れば tick の unit の install を面の値で撃ち、 結果を起動の 1 行の末尾に足す (断りは起動の rc を変えない)。 ADR-0065 (proposed) の後は、 登録を書いた後・起動行を差し込む前に、 選んだ口座の設定 dir の .claude.json に anchor の trust の印を置く (結果は閉じた言葉で 1 行の末尾に添え、 起動は止めない)。 ADR-0072 で起動行の頭に席の箱が付く (行が 0 / 読めない周と道具の無い host は素の行)。
-    forbidden: [cla, cld, wrapper 起動]
+    # forbidden から外した語（folio validate は全文の部分一致で数えるので、claude や class の字にも当たる・新しい文では使わない）: cla
+    forbidden: [cld, wrapper 起動]
     relationships: [席, 席の登録, 起動行の導出, 口座]
   - canonical: 起動行の導出
     domain: consumer
-    definition: 席の起動行を pure な関数 1 本が組むこと: 口座の設定 dir と agent view を切る env・器自身の plugin (anchor)・host の manifest の plugin dir と起動引数。 穴は口座の dir 1 つで、 雛形 file は読まない (ADR-0026 §2.3)。 役割なしの起動 (SRS FR60・ADR-0028 §2.5) は同じ関数から役割・席の登録・権能の 3 要素を除いた形。 1 つ目の plugin の枠は anchor の下の生成 dir で、 消費側の anchor ではその project の plugin の置き場になり、 版を跨いで保つ (ADR-0082)。
+    definition: "席の起動行を pure な関数 1 本が組むこと: 口座の設定 dir と agent view を切る env・器自身の plugin (anchor)・host の manifest の plugin dir と起動引数。 穴は口座の dir 1 つで、 雛形 file は読まない (ADR-0026 §2.3)。 役割なしの起動 (SRS FR60・ADR-0028 §2.5) は同じ関数から役割・席の登録・権能の 3 要素を除いた形。 1 つ目の plugin の枠は anchor の下の生成 dir で、 消費側の anchor ではその project の plugin の置き場になり、 版を跨いで保つ (ADR-0082)。"
     relationships: [席の起動, host の manifest, 役割なしの起動]
   - canonical: 役割なしの起動
     domain: consumer
     definition: 器の subcommand account shell が口座 label (必須) から役割を持たない対話 session の起動行を導出し、 窓が与えられれば差し込み、 与えられなければ 1 行を出すこと (SRS FR60・ADR-0028 §2.5)。 席の登録は書かず権能は無い。 前の版の口座切替 wrapper の後継。
-    forbidden: [cla, wrapper 起動, 素起動]
+    # forbidden から外した語（folio validate は全文の部分一致で数えるので、claude や class の字にも当たる・新しい文では使わない）: cla
+    forbidden: [wrapper 起動, 素起動]
     relationships: [席の起動, 起動行の導出, 口座, 席の登録]
   - canonical: 導入先
     domain: consumer
     definition: 本 repo 以外で器の plugin (hook の配線) と binary を積む project とその worktree (SRS FR61)。 母集団は口座の設定 dir の install 帳簿と席の登録 row の anchor から導く。 帳簿と cache は読むだけで書かない (ADR-0028 §2.3)。
-    forbidden: [consumer project, 利用側 repo]
+    # forbidden から外した語（凍った決定記録の本文が使い、folio validate は全文の部分一致で数えるので外す・新しい文では使わない）: consumer project
+    forbidden: [利用側 repo]
     relationships: [doctor, 読み込み元, build 元 commit, 席の登録, install 帳簿, plugin の読み込み元, anchor]
     flagged_ambiguities: [folio の domain tag consumer は語彙の所有者の印であって導入先ではない]
   - canonical: build 元 commit
@@ -231,7 +234,8 @@ terms:
   - canonical: 読み込み元
     domain: consumer
     definition: 席が起動時に受けた plugin root と、 そこに在る hooks.json の digest (依存なしの決定的な関数) の対。 SessionStart の hook が席の打刻の置き場に 1 行で記録する (SRS FR61・ADR-0028 §2.2)。 cache か作業ツリーかを器は推測しない。
-    forbidden: [plugin cache, 配線の出所]
+    # forbidden から外した語（凍った決定記録の本文が使い、folio validate は全文の部分一致で数えるので外す・新しい文では使わない）: plugin cache
+    forbidden: [配線の出所]
     relationships: [導入先, hook 集合の食い違い, build 元 commit]
   - canonical: hook 集合の食い違い
     domain: consumer
@@ -560,7 +564,8 @@ terms:
   - canonical: 健全
     domain: consumer
     definition: 管理 tick が周期どおり周っていること = 最後の周の打刻の時刻から今までの経過が周期の rules 行の 2 倍以内 (SRS FR78・ADR-0070)。 読み手 (seat tick status・doctor・外の画面) が導き、 管理 tick は判じない。
-    forbidden: [tick の健康, alive]
+    # forbidden から外した語（凍った決定記録の本文が使い、folio validate は全文の部分一致で数えるので外す・新しい文では使わない）: tick の健康
+    forbidden: [alive]
     relationships: [最後の周の打刻, 管理 tick, doctor]
   - canonical: 退避の猶予
     domain: consumer
@@ -631,7 +636,8 @@ terms:
   - canonical: 口座残量
     domain: consumer
     definition: 1 口座 1 時刻で読んだ、 5 時間窓・7 日窓・モデル別 7 日窓の残りと各 reset 時刻の組 (SRS FR33)。 口座の endpoint 由来で、 runner が受ける上限 record (claude の record 由来・検出の合図) とは別の entity。
-    forbidden: [クォータ, quota]
+    # forbidden から外した語（凍った決定記録の本文が使い、folio validate は全文の部分一致で数えるので外す・新しい文では使わない）: quota
+    forbidden: [クォータ]
     relationships: [口座, fleet, 上限 record, Measured]
   - canonical: 暫定行
     domain: consumer
@@ -854,7 +860,7 @@ terms:
     aliases: [push tip]
     definition: land の終端が push した main の最後の commit (最後に着地した commit)。 候補の木に並べた順に着地した便のうち先端でない便は、 自分の着地 commit を含む先端の commit の CI の結果で照合する (SRS FR50)。
     relationships: [land の終端, 候補の木, 着地の列]
-    forbidden: [列の先端]
+    # forbidden から外した語（凍った決定記録の本文が使い、folio validate は全文の部分一致で数えるので外す・新しい文では使わない）: 列の先端
     flagged_ambiguities: [着地の列の「先頭」(最初に着地する便) と逆の端, remote の先端 (FR80 が GitHub に問う push の前の値) とは別, "remote の main の先端 (SRS FR96 の PR の照合が読む merge の後の remote の main の最後の commit) とは別", "main の先端 (SRS FR85 の床の検査が撃つ main の最新の commit・push の前後を問わない) とは別"]
   - canonical: 台帳 adapter
     domain: consumer
@@ -870,7 +876,7 @@ terms:
     relationships: [散文の門, 設計 doc]
   - canonical: 契約 id
     domain: consumer
-    definition: 設計 doc の file 名の stem と行の id の対 (doc id # row id) で表す契約の識別子 (ADR-0023 §2.1)。 doc id は append-only で、 台帳の pointer 行・commit の trailer・外部の道具の追跡表が同じ形を鍵にする。
+    definition: "設計 doc の file 名の stem と行の id の対 (doc id # row id) で表す契約の識別子 (ADR-0023 §2.1)。 doc id は append-only で、 台帳の pointer 行・commit の trailer・外部の道具の追跡表が同じ形を鍵にする。"
     relationships: [契約表, 設計 pointer, trailer, 台帳]
   - canonical: trailer
     domain: consumer
@@ -998,7 +1004,8 @@ terms:
     domain: consumer
     aliases: [seat box]
     definition: 席 (人と話す claude とその subagent の Bash) の起動行の頭に置く memory 上限付きの systemd の scope (SRS FR59 / NFR6・ADR-0072)。 上限は rules 行 seat.memory_max_mb (MiB・既定 32768・user 裁定 id つき)。 語列と unit 名は封じ込めの箱と同じ 1 関数で、 CPU の重みは付けない。 ADR-0095 の後は job 1 つの値段の箱の CPU の上限を持つ (core 数を読めない周は付けない)。 行が 0 / 読めない周と systemd-run が PATH に無い host は素の行に縮退し、 起動の 1 行の scope= に理由が出る。 溢れて殺されるのは箱の中の process だけで、 claude が死んだ周は管理 tick が起こし直す。
-    forbidden: [seat cgroup, 席の cgroup の防壁]
+    # forbidden から外した語（凍った決定記録の本文が使い、folio validate は全文の部分一致で数えるので外す・新しい文では使わない）: 席の cgroup の防壁
+    forbidden: [seat cgroup]
     relationships: [封じ込めの箱, 席の起動, 起動行の導出, 管理 tick, rules 行]
   - canonical: 封じ込めの箱
     domain: consumer
@@ -1135,7 +1142,7 @@ terms:
     relationships: [権能, 起動の権能, live な便, orchestrator, guard]
   - canonical: project の群
     domain: consumer
-        aliases: [project group, 群, かたまり]
+    aliases: [project group, 群, かたまり]
     definition: 席の口座を持つ単位 (ADR-0049・proposed)。 名・置き場 (anchor) の列・候補の口座 label の順の列を host の面の表 1 つが宣言し、 群の中の席はどの置き場からでも同じ口座に居る。 置き場が project ごとに分かれていても同じ群に入れられる。 役割は 1 つになったので (ADR-0045)、 役割は単位として働かない。 群の表の Tier1〜Tier8 の行が宣言する (Tier9 の行は park の区画で群でない・SRS FR38・FR95)。
     relationships: [host の面, 群の今の口座, 便用の除外, 席, 口座選定, 役割の口座]
   - canonical: 群の今の口座
@@ -1152,7 +1159,7 @@ terms:
   - canonical: 残量の鍵
     domain: consumer
     definition: 群の移り先の候補を並べる比較の値の組 (SRS FR38・ADR-0069)。 7 日窓と役割の model の 7 日窓の残量 (100 − 使用率) の小さい方が大きい順 → 7 日窓の reset が早い順 → 宣言順。 役割の model の行が無い口座は最後。 5 時間窓は門にだけ効く。 便用の並べ順 (ADR-0042) とは別の関数。
-    forbidden: [並べ鍵, sort key]
+    # forbidden から外した語（凍った決定記録の本文が使い、folio validate は全文の部分一致で数えるので外す・新しい文では使わない）: 並べ鍵・sort key
     relationships: [群の予約, 口座残量, 役割の model, 口座選定]
   - canonical: 役割の model
     domain: consumer
@@ -1303,7 +1310,7 @@ terms:
   - canonical: 移動の門
     domain: consumer
     aliases: [move gate]
-    definition: 管理 tick の判定の列のうち、 群の今の口座と自席の登録 row の口座が違う周に、 退避 (/exit か dialog の Enter) か起こし直し (ADR-0067: 状態の打刻の最終行の会話 id を --resume で運ぶ) を自席にだけ撃つ段 (設計 docs/design/seat-heartbeat.md §4 / §7)。 ADR-0066 の群の移動の判定はこの門の前に置き、 判定の側は他の席に触らない。 ADR-0071 で退避は 3 分岐 (退避の猶予の内側で合図の記録が無ければ退避の合図・在れば待つ・内側でなければ /exit) になる。
+    definition: "管理 tick の判定の列のうち、 群の今の口座と自席の登録 row の口座が違う周に、 退避 (/exit か dialog の Enter) か起こし直し (ADR-0067: 状態の打刻の最終行の会話 id を --resume で運ぶ) を自席にだけ撃つ段 (設計 docs/design/seat-heartbeat.md §4 / §7)。 ADR-0066 の群の移動の判定はこの門の前に置き、 判定の側は他の席に触らない。 ADR-0071 で退避は 3 分岐 (退避の猶予の内側で合図の記録が無ければ退避の合図・在れば待つ・内側でなければ /exit) になる。"
     relationships: [管理 tick, 群の今の口座, 退避の合図, 席の登録, 群の移動の判定]
   - canonical: host-guard
     domain: consumer
