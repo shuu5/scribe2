@@ -271,7 +271,7 @@ xtask 側の drift 歯（最小形）: `crates/xtask/src/limits.rs` の `#[cfg(t
 - 何が起きているか（main c9423568・verified）: `cargo xtask check` の core-lines は 57618（上限 R-C4-1 = 60000・余地 2382）。SRS v0.29 の束 A・D・E の実装の計画（契約の行 37 本）は core の本体を約 5,500 行増やす見込みで、2 波目のあたりで受付の core の余地（§18 以後は gate の core-lines と同じ合計）が断り始め、束 E まで届かない。消せる行は約 200 行しかない。user 裁定 2026-09-29T00:59Z（A2・閾値の変更・逐語は器の裁定の event に残る）で上限を 66000 に上げる（1 割増し・37 本の後に約 3,000 行の余地）。贅肉の削りは、移行の前後のリファクタリングの memo の側が持つ。
 - 約束（この 3 つだけ）:
   1. `rules/manifest.toml` の行 `R-C4-1` の `value` を 66000 に・`ruling` を `user 2026-09-29T00:59Z` に・`ruled_at` を `2026-09-29` に書き換える。行の id・kind・`enabled` は不変で、行は増やさない（C5）。
-  2. 値を pin している既存の歯 1 本を 66000 に直す。実測: repo 全体で `R-C4-1` の値 60000 を持つのは、`crates/scribe2-boundary/tests/e2e/rules.rs` の `rules_cli_get_returns_value`（`rules get R-C4-1` の出力が埋め込みの値である・assert の文言の裁定 id も同じ便で新しい id に直す）と manifest と本 doc だけである。外形 snapshot はこの行の値を写していない。xtask の check の歯の fixture は自前の値を持つので変えない。
+  2. 値を pin している既存の歯 1 本を 66000 に直す。実測: repo 全体で `R-C4-1` の値 60000 を持つのは、`crates/scribe2-boundary/tests/e2e/rules.rs` の `rules_cli_get_returns_value`（`rules get R-C4-1` の出力が埋め込みの値である・assert の文言の裁定 id も同じ便で新しい id に直す）と manifest と本 doc だけである。外形 snapshot はこの行の値を写していない。xtask の閾値の読み手と歯（`crates/xtask/src/limits.rs#limits_match_rules_manifest`・`crates/xtask/src/check_tests.rs#rules_manifest`・`crates/xtask/src/check_tests.rs#real_limits`）は、現物の manifest を読んで値を得て、値の literal を持たない（fixture の閾値の行も現物の値から組む）。だから値を上げても期待は動かず、1 字も変えない。行 p はこの 2 file を write-set に `=`（置き場だけ・中身は変えない）で置き、審査の材料に本文を渡す。
   3. 上げた行を名指す歯を 1 本足す（名は `rules_core_lines_66000_` で始める）: 埋め込み manifest の `R-C4-1` が値 66000・kind `CoreLines`・発効・`ruling` が `user 2026-09-29T00:59Z` で始まり・`ruled_at` が `2026-09-29` で、整数の行の読み手が 66000 を返す、を assert する。base は値 60000 と前の裁定なので RED（**機能不在**でなく値の不一致の RED）。
 - §4.1 の表の `R-C4-1` の行の値と裁定を約束 1 と同じ内容に写し、前の値 60000 の裁定を履歴として残す（本 doc が write-set に在る理由はこれだけ）。
 - 触らない: `src` の全部（上限を読む側の xtask の core-lines と受付の core の余地は行の値を読むだけで、値を code に持たない）・憲法 §3 の閾値セル（初期値を持つ。xtask の憲法と manifest の突合の歯は、ruling が初期の裁定でない行の値の違いを通す）・他の行・§4 の切り方・過去の § が書いたその時点の実測値。
@@ -441,8 +441,8 @@ id = "p"
 title = "R-C4-1（core の本体の上限）を 60000 → 66000 に上げる — 値と裁定 id と ruled_at だけを書き換え、値を pin する歯を直し、上げた行を名指す歯を足す（裁定 user 2026-09-29T00:59Z・A2）"
 req = ["FR17"]
 section = "19"
-write-set = ["rules/manifest.toml", "crates/scribe2-boundary/tests/e2e/rules.rs", "docs/design/rules-manifest.md"]
+write-set = ["rules/manifest.toml", "crates/scribe2-boundary/tests/e2e/rules.rs", "docs/design/rules-manifest.md", "=crates/xtask/src/limits.rs", "=crates/xtask/src/check_tests.rs"]
 verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail rules_cli_get_returns_value", "cargo nextest run -p scribe2 --test e2e --no-tests=fail rules_core_lines_66000_"]
 size = "S"
-done = "§19 の約束 1〜3 のとおり: 埋め込み manifest の R-C4-1 が値 66000 と裁定 id user 2026-09-29T00:59Z と ruled_at 2026-09-29 を持ち、rules get R-C4-1 が 66000 を出す歯と上げた行を名指す歯（rules_core_lines_66000_ で始まる）が緑で、§4.1 の表が同じ値と裁定を写して前の値 60000 の裁定を履歴に残し、src と憲法 §3 の閾値セルは不変"
+done = "§19 の約束 1〜3 のとおり: 埋め込み manifest の R-C4-1 が値 66000 と裁定 id user 2026-09-29T00:59Z と ruled_at 2026-09-29 を持ち、rules get R-C4-1 が 66000 を出す歯と上げた行を名指す歯（rules_core_lines_66000_ で始まる）が緑で、§4.1 の表が同じ値と裁定を写して前の値 60000 の裁定を履歴に残し、src と憲法 §3 の閾値セルは不変で、xtask の閾値の読み手と歯（limits_match_rules_manifest・rules_manifest・real_limits）は現物の manifest から値を読むので 1 字も変えずに緑"
 <!-- contracts:end -->
