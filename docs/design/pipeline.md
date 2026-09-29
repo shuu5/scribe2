@@ -926,6 +926,38 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 - 限界: 約束が守られても中身が空の file は通る（在るかだけを測る）。`.rs` の無い木の注記の 1 行は段 ① の stderr に載るが、診断 file は赤い段の stderr だけを残すので、段 ① が緑の周の注記は record にも診断 file にも残らない。約束の行を持たない行の新設の名（散文の backtick）は測らない（契約表の検査の §39 の母集団は宣言の名であって約束ではない）。gate が判定した木と着地の木が同じ周は、land は段を撃たず gate の判定を使う（木が同じなので同じ結果）。列の着地では write-set は列の便の和で測る（`+` の在りかは和で測っても同じ）。
 - 却下: 受付で依存の `+` の在りかを測る（着地前の依存は測れない・約束の守りは出所の段が筋）／新しい段 ⑤ を足す（`CHECKS` と record の kind と land の段の列が動く・段 ① の照合は同じ diff の読みの隣）／land の後にだけ測る（着地した後では約束を破った便を戻せない）／e2e を既存の子 `pure_move` に置く（純移動の証明の族で主題が違う）・親の gate.rs に足す（段 ① の既存の歯と同じ file だが、親は族ごとに子へ割っている途中で、新しい族は子に置く）。
 
+## 59. pipe/declaration.rs の任意 key の群を子 module へ割る（契約表の行 bb・純移動・FR83 / FR85 / FR86 の新しい key の受け皿）
+
+やさしく言うと: 宣言 file（`.vessel.toml`）の任意の key を読む部分を、1 file の上限（1500 行）に迫った `crates/scribe2/src/pipe/declaration.rs` から子の file へ、中身を変えずに移す。後の行が足す 4 つの key（ruling-check・ruling-fixtures・floor-check・question-route）の置き場を先に空ける。
+
+- 何が起きているか（main 24f6ef1e・2026-09-29・verified）: `crates/scribe2/src/pipe/declaration.rs` は 1476 行（幅 120 で正規化 1486・上限 R-C4-2 = 1500）で**余地 14**。SRS の FR83（ruling-check と ruling-fixtures）・FR85（floor-check）・FR86（question-route）は宣言の任意 key を 4 つ足し、どれも key の名・値の読み手・key の列・HEAD の宣言から値を外へ渡す口をこの file に足す。受付は write-set の file ごとに余地を測る（`cap-headroom`）ので、割らないとそれらの行は受付を通らない。
+- 移す群（実測・17 item・HEAD 側 136 行）:
+  - key の列: `DECLARED_KEYS`（40–54 行）と `OPTIONAL_KEYS`（96–108 行）。
+  - key の名と既定: `REMOTE_KEY`・`CI_CMD_KEY`・`DEFAULT_CI_CMD`・`CI_SHA_HOLE`・`REQUIREMENTS_KEY`・`DEFAULT_REQUIREMENTS`（56–77 行）。
+  - 値の読み手: `requirements_of`・`remote_of`・`ci_cmd_of`・`repo_relative`（609–658 行）。
+  - 外へ渡す口: `TableFacts`・`table_facts`・`table_facts_named`・`TerminalFacts`・`terminal_facts`（660–707 行）。
+  - 4 つの塊の後ろの空行 1 本ずつも親から消える。
+- 群の閉じ方（grep で数えた・main 24f6ef1e）:
+  - 親の本体が群を裸で呼ぶのは 2 か所だけ: `Declared` の `parse`（`DECLARED_KEYS`・`requirements_of`・`remote_of`・`ci_cmd_of`）と `fields`（`OPTIONAL_KEYS`）。親の私有の `use` 1 行で解けるので、親の本体は 1 字も変わらない。`declared_at_head` の doc の link（`terminal_facts`）は再輸出で解ける。
+  - crate の中で `declaration` の path を通して群を引くのは 6 file: `crates/scribe2/src/fleet/wait.rs`（`CI_SHA_HOLE`）・`crates/scribe2/src/pipe/dispatch/prelens.rs` と `crates/scribe2/src/pipe/cli/step.rs`（`table_facts`）・`crates/scribe2/src/pipe/cli/intake.rs`（`table_facts` と `TableFacts`・歯の中の構築を含む）・`crates/scribe2/src/pipe/table/check.rs`（`table_facts_named`）・`crates/scribe2/src/pipe/land/finish.rs`（`terminal_facts`）。親の `pub use` 2 行で path が変わらないので、6 file は 1 字も変わらない。`DEFAULT_CI_CMD` と `DEFAULT_REQUIREMENTS` は外の site が 0 だが、公開の path を保つため同じ `pub use` に入れる。
+  - 群が親から引く名は 9 つ: `Raw`・`DeclError`（私有の `new` を含む）・`Sourced`（私有の `read` と `measure`・欄 `declared`）・`Ceiling`・`EntranceFlip`・`declared_at_head`・`DETECTION_KEY`・入口の flip の key の別名（親の私有の `use` の束縛）・module `path_kinds`。子の `use super::` の 2 行で引ける（子孫は祖先の私有の item と束縛を見る）。
+  - 兄弟の子 module（`crates/scribe2/src/pipe/declaration/entrance_flip.rs`・`crates/scribe2/src/pipe/declaration/path_kinds.rs`・`crates/scribe2/src/pipe/declaration/write_set.rs`）は群の名を 1 つも引かない。
+  - 閉包: 他の行の `touches` が持つ `declaration` の型は `EntranceFlip`（本 doc の行 ay）と `WriteSetItem`（contract-source.md の 2 行）だけ。群は `EntranceFlip` を戻り型で名指すだけで、閉包の 5 形（構築・match の arm・件数 pin・const slice・variant の構築）のどれにも当たらない。
+- 歯の置き場（実測）: 親の歯は in-file の `mod tests {`（904 行から末尾・23 本・573 行）の 1 つ。純移動の証明（`crates/scribe2/src/pipe/move_proof.rs`）は in-file の `mod tests {` を 1 item に畳むので、歯の一部を子へ出すと `mod tests` の本文が変わって `items-differ` で落ちる＝歯は 1 本も動かさない。歯の `use super::{…}` が名指す群の名（`CI_SHA_HOLE`・`DECLARED_KEYS`・`DEFAULT_CI_CMD`）は親の `pub use` と私有の `use` が解くので、歯の本文と `use` は 1 byte も変わらない。
+- 形（番号は done と 1:1）:
+  1. 上の 17 item を、行 bb の write-set の `+` の file（`crates/scribe2/src/pipe/declaration.rs` の子 module）へ名・本文・順序を変えずに移す。子の頭は module doc と `use` 3 行（`use super::path_kinds;`・上の 8 名を引く `use super::{…}`・`use std::path::Path;`）だけ。
+  2. 親に増えるのは 4 行だけ: `mod` 宣言 1 行（既存の `mod entrance_flip;` の隣）・`pub use` 2 行（外へ渡す口の 5 名と、既定と穴の 3 名）・私有の `use` 1 行（`parse` と `fields` が裸で呼ぶ 5 名）。どれも 120 桁に収め、属性と `use` を同じ行に書かない。親の本体と外の 6 file は 1 字も変わらない。
+  3. 可視性を上げるのは子の側だけで、語は `pub(super)` の 1 種・5 つ（`DECLARED_KEYS`・`OPTIONAL_KEYS`・`requirements_of`・`remote_of`・`ci_cmd_of`）。子の中だけで使う `REMOTE_KEY`・`CI_CMD_KEY`・`REQUIREMENTS_KEY`・`repo_relative` は私有のまま、`pub` の 8 つは `pub` のまま。親の側の可視性は 1 語も変えない。
+  4. 歯は動かさない: in-file の歯 23 本の名・本文・`use` は不変で、増えるのは札 `// flip-check: moved <行 bb の bead>` の 1 行（親の `mod tests` の最後の行＝閉じの `}` の直前・頭に置くと後ろの doc 行が全部ずれて審査の要約のコメント行の差が 74 行に膨らむ）だけ。子は歯の区間を持たないので札を置かない（歯の区間の外の札は flip-check に数えられない・§45 約束 5）。
+  5. 兄弟の子 module 3 本は 1 字も変えない。
+  6. 割った後の行数は、親が 1328 行（正規化 約 1337・余地 約 163）・`+` の file が 162 行（正規化 約 163）。core の本体は約 13 行増える（子の module doc と `use`・親の `mod` と `use`）。
+- 受け皿の使い方（後の行が決める・本行では足さない）: 新しい任意 key 1 本ごとに、key の名の const・読み手・`DECLARED_KEYS` と `OPTIONAL_KEYS` の 1 行ずつ・HEAD の宣言から値を渡す口（`terminal_facts` と同じ形）は子へ、`Declared` の欄 1 つと `parse` の読みの 1 行は親へ足す（親の増分は key 1 本あたり約 5 行）。
+- 触らない: `Declared`・`Sourced`・`Effective` と値の層（`fields`・`value_of`・`int_of`・`text_of`・`list_of`・`Raw`）・`DETECTION_KEY` と `EFFECTIVE_KEYS`・`head_declaration` と `declared_at_head`・verify 行の判定（`unfit` の群・`VerifyKind`・`KindGap`）・`scaffold`・兄弟の子 module 3 本・in-file の歯の本文・外の 6 file・e2e。
+- 却下: (a) key の名と読み手だけを移す（約 75 行）— key の列 2 つと外へ渡す口が親に残り、新しい key の行が親の 3 か所を触り続ける（受け皿にならない）。(b) 値の層（`fields`・`value_of`・`Raw` ほか）を移す — `Declared` と `Effective` の 2 つの読みが共有し、兄弟の path_kinds と entrance_flip も `use super::` で引くので兄弟の `use` を書き換えることになる。新しい key の受け皿でもない。(c) in-file の歯を `#[path]` の file へ出す — 余地は約 580 空くが読み手の受け皿は生まれず、次の行の歯が親の hub に戻る。(d) `DETECTION_KEY` も移す — 便の写し（`EFFECTIVE_KEYS`・`render`・`Effective` の `parse`）と上限の突き合わせで親が 5 か所使う core の key で、HEAD から外へ渡す任意 key ではない。(e) `Declared` の任意の欄を子の構造体へ束ねる（path の種別の `DeclaredPaths` の形）— 型の形と歯の欄の読み（`requirements`・`remote`・`ci_cmd`）が変わる＝純移動でない。要るなら後の行が決める。
+- 歯: 新設は 0 本（純移動・新しい接頭辞は無い）。検証行は群を測る既存の lib の歯 6 本を**名の全体**で 1 行 1 本に名指す: `declaration_kind_passes_declarations_without_cargo_and_keeps_the_schema`（key の列 11 本の pin）・`declaration_names_every_missing_key`（必須と任意の区別）・`declaration_requirements_is_an_optional_repo_relative_path`・`pipe_terminal_land_remote_is_an_optional_single_word`・`pipe_terminal_land_ci_cmd_must_carry_the_sha_hole`・`pipe_declaration_default_ci_cmd_carries_the_event_field`。6 本とも `crates/` の中で `crates/scribe2/src/pipe/declaration.rs` の 1 file だけに在る（grep・2026-09-29）＝歯の置き場の門が見る file は write-set の `-` の親だけ。外へ渡す口の e2e（契約表の検査と着地の終端）は done の全体の nextest が撃つ。
+- base で RED の理由: 無い。歯を足さない純移動で、検証行 6 本は base でも HEAD でも緑（不変の証明）。入口の RED は札 `moved` が免除する（§7）。
+- 実測（作業用の写しに本行の形を当てた・2026-09-29）: 純移動の証明が「名 + 本文の多重集合が一致 items=68 moved=17 visibility=5」・入口の flip-check が `RED-on-base ok tests_changed=0 moved=1`（rc 0）・`cargo clippy -p scribe2 --all-targets -- -D warnings` が rc 0・検証行の 6 本と現物の契約表の歯 2 本（`contract_closure_ext_real_table_has_zero_findings`・`contract_names_declared_real_table_has_zero_findings`）が緑・`cargo xtask check` が ok。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -1496,4 +1528,13 @@ verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail pipe_gate_promised
 size = "M"
 growth = ["crates/scribe2/src/pipe/gate/verify.rs:150"]
 done = "(1) 段 ① は diff の照合の後に、write-set の + の項目が便の HEAD の木に全部在り ~ の項目が全部無いことを git の木の読み 1 回で測り、外れた項目を rc 1 と stderr の見出しつきの列で名指し、木を読めない周は rc -1 で、外れを返すのは (2) と同じ pure な 1 関数 (2) 設計 pointer の行が約束の行を持つ周だけ、便の base の設計 doc の約束の行の symbols の + の名を便の HEAD の木の .rs の本文で symbols_in_base と同じ読み手で解き、解けない名を rc 1 で名指し、読み手の母集団の file（.rs）を 1 本も持たない木では名を測らず rc を変えずにその旨の 1 行を stderr に残す (3) 段・理由の型・verdict を足さず、land の主実測も同じ run_checks の段 ① で同じ 1 本を撃つ 歯: pipe_gate_promised_ の lib が + の在る / 無い・~ の在る / 無い・接頭辞なし・約束の + の名の解ける / 解けない・.rs の無い木の注記の形を測り、e2e（gate の e2e の子 module・親は mod の 1 行と、+ の先を宣言しながら作らない既存の fixture の直し〔畳みの歯の helper が rename しない周にも + の先を write-set に宣言していたので、rename の周だけ宣言する形にし、flip-check の retroactive の札を 1 行添える〕だけ）が + の file を作らずに commit した偽 runner の便の gate FAIL と段 ① の rc 1 と path・作った便の PASS、約束の行の + の名を宣言しない便の gate FAIL と名・宣言した便の PASS、写しの write-set に木に無い + の項目を足して主実測を撃たせた land の main-red と verify-main.jsonl の段 ① の rc 1 と path を測り、base では gate が PASS・land が Landed で RED"
+[[contract]]
+id = "bb"
+title = "pipe/declaration.rs の任意 key の群（key の列 2 つ・key の名と既定 6 つ・値の読み手 4 つ・外へ渡す口 5 つの 17 item）を子 module へ割る — 純移動・外から引く path は親の再輸出で不変・歯は動かさず札 moved（FR83 / FR85 / FR86 の新しい key の受け皿）"
+req = ["FR83", "FR85", "FR86"]
+section = "59"
+write-set = ["-crates/scribe2/src/pipe/declaration.rs", "+crates/scribe2/src/pipe/declaration/optional_keys.rs"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail declaration_kind_passes_declarations_without_cargo_and_keeps_the_schema", "cargo nextest run -p scribe2 --lib --no-tests=fail declaration_names_every_missing_key", "cargo nextest run -p scribe2 --lib --no-tests=fail declaration_requirements_is_an_optional_repo_relative_path", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_terminal_land_remote_is_an_optional_single_word", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_terminal_land_ci_cmd_must_carry_the_sha_hole", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_declaration_default_ci_cmd_carries_the_event_field"]
+size = "S"
+done = "(1) 17 item（DECLARED_KEYS / OPTIONAL_KEYS / REMOTE_KEY / CI_CMD_KEY / DEFAULT_CI_CMD / CI_SHA_HOLE / REQUIREMENTS_KEY / DEFAULT_REQUIREMENTS / requirements_of / remote_of / ci_cmd_of / repo_relative / TableFacts / table_facts / table_facts_named / TerminalFacts / terminal_facts）が + の file に名・本文・順序のまま在り、純移動の証明が moved=17 の要約を返す (2) 親に増えるのは mod 宣言 1 行・pub use 2 行・私有の use 1 行だけで、親の本体と、群を declaration の path で引く外の 6 file は 1 字も変わらない (3) 可視性を上げるのは子の側の pub(super) 5 つ（DECLARED_KEYS / OPTIONAL_KEYS / requirements_of / remote_of / ci_cmd_of）だけで、親の側は 1 語も変わらない (4) in-file の歯 23 本の名・本文・use が不変で全部緑、札 flip-check: moved が親の mod tests の最後の行（閉じの } の直前）に 1 行在り、入口の flip-check が moved=1 で rc 0 (5) 兄弟の子 module 3 本（entrance_flip / path_kinds / write_set）が 1 字も変わらない (6) file-lines で declaration.rs の余地が base の 14 から 150 以上へ増える"
 <!-- contracts:end -->
