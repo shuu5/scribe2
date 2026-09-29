@@ -592,6 +592,72 @@
 - 依存: 行 w（着地済み・tick.rs の余地）。この doc の他の行には依らない。
 - § を merge したら、key の表を消費側の席へ渡す（memo の約束）。
 
+## 21. park の区画の席の移動 — 管理 tick が周ごとに park の判定を撃ち、row の口座が session 用の閾値以上の周だけ区画の行の口座へ退避の合図と起こし直しで移る（契約表の行 z・[FR95](../../design-intent/spec/srs.html#FR95) / FR27 / FR44 / FR59・AC63 (d)・[ADR-0091](../../design-intent/decisions/ADR-0091-the-tier9-row-is-a-park-lot-that-holds-no-account.html)・memo `s2-07l.730`）
+
+やさしく言うと: park の区画（Tier9）の席は群と違って「今の口座の記録」を持たない。その代わり管理 tick が毎周、席の口座の使用率を見て、session 用の閾値を越えていたら区画の行に並べた口座から次の口座を選び、群の移動と同じ退避の合図と起こし直しでそこへ移す。計測も lock も記録の書き換えもしない。
+
+- 何が起きているか（main fe03d363・verified）:
+  - `crates/scribe2/src/seat/tick.rs` の `judge`（646 行）は `front`（774〜809 行: 登録 row → 窓が shell なら `awake` → 移動の門 `moving` → 状態の打刻 → 梯子）の後に群の判定 `judged`（665〜705 行）を撃ち、移った周だけ `moving` を撃つ。判定行の `judged=` は `Judged`（410〜434 行・閉じた 5 値 `-` / `moved:<口座>` / `stay` / `none` / `error:<語>`）。
+  - `awake`（811〜832 行）は anchor が群に属せば群の今の口座（lock の内側）、属さなければ row の口座で `wake`（868〜899 行）を撃つ。`wake` は起動の口 `launch`（`crates/scribe2/src/seat/cycle.rs` が再輸出）に口座を引数で渡し、会話 id を運ぶ。
+  - `moving`（837〜866 行）は `crates/scribe2/src/hook/group.rs` の `pending`（324 行）と `step_of`（348 行）で次の手を決める: exit は lock の内側で `/exit`・wait は 0 key・signal は `evacuate_line`（356 行）の 1 行を送り、送れた周だけ `write_signal`（283 行）で合図の記録（1 行 `to=<> ts=<> at=<>`・鍵は `signal_key`〔248 行〕の (移り先, 記録の ts か seed)）を書く。
+  - 行 y（[account-lifecycle.md](./account-lifecycle.md) §35）の後、区画の置き場は `groups()` に入らないので、区画の席は `awake` / `moving` / `judged` のどれでも群の外の席と同じに扱われる（移らない・起こし直しは row の口座）。
+  - 選定の部品: session 用の選定は `crates/scribe2/src/seat/cycle/relaunch.rs` の `choose`（25〜47 行・可視性は親の module まで・呼び手は `pick_account` の 1 か所・行 z〔account-lifecycle.md §36〕の後は区画の anchors を受ける）。鮮度の内側の最新の回は `crates/scribe2/src/fleet/usage.rs` の `fresh_rows`（380 行・`fleet.usage_fresh_s` の内側・計測は起こさない）。session 用の閾値は R-C9-1（`crates/scribe2/src/seat/mod.rs` の `ID_THRESHOLD`・408 行）。
+  - 席の hook: `crates/scribe2/src/hook/group.rs` の `line_of`（844〜874 行）は `group_of` が `None` の anchor で 0 行（区画の席は hook の 1 行を持たない）。群の席は鮮度の内側で逼迫なら `seat_line`（815 行）の 1 行と `put_request`、鮮度の外なら `measure_later`（876 行）の子を 1 本起こす。
+- 形（番号は done と 1:1）:
+  1. **park の判定の 1 関数**（行 z の write-set の + の file）: 入力は面を合わせた manifest・replay・自席の登録 row（口座・役割・anchor・model・seq）・今の UTC。読むのはこれだけで、計測・lock・file の書き込みは 0。結果は閉じた 6 値（区画の外 / 行なし / 測れない / 留まる / 移り先〔口座〕/ 候補なし）で、次の順に最初に立った値を返す:
+     - (a) anchor が区画の anchors（manifest の `park`）に無い → 区画の外。
+     - (b) R-C9-1 か `fleet.usage_fresh_s` を読めない → 行なし。
+     - (c) row の口座の `fresh_rows` が無い（記録なしか鮮度の外）→ 測れない。
+     - (d) `crates/scribe2/src/fleet/select.rs` の `select` を row の口座 1 つ・session 用・閾値 R-C9-1・row の model・除外なし・留まる口座なしで撃ち、選ばれれば留まる（閾値未満）。選ばれず理由が `unmeasured` の周は測れない（数える窓が無い）。
+     - (e) 候補 = 区画の行が並べた口座から row の口座と退役中の口座を除き、`fresh_rows` が在る口座だけ（鮮度の外の候補は数えない）。`choose` を（自席の役割, anchor, 留まる口座なし）・候補・row の model・R-C9-1 で撃ち、選ばれた口座が移り先、選ばれない周（候補 0 を含む）は候補なし。`choose` の可視性を crate へ上げ、`crates/scribe2/src/seat/cycle.rs` の再輸出に 1 名足す（関数を 2 本にしない・C2）。
+  2. **合図の鍵**: 区画の席の移動の鍵は（row の口座, `park.<登録 row の seq>`）。seq は event log の物理順で、起こし直しが登録 row を書き直すと変わる。`write_signal` / `step_of` はこの鍵をそのまま受ける（欄 `to` に row の口座が入る・読み手は鍵の等値だけを見る・群の鍵の 2 つ目は記録の時刻か `seed` で `park.` で始まる値と重ならない）。＝移り先が周ごとに変わっても、row の口座と登録が同じ間（窓が shell に戻って起こし直すまで）は同じ移動で、退避の合図を重ねない（D26）。
+  3. **移動の周**: `front` は群の `moving` の後に、区画の席で形 1 の判定を 1 回撃つ。移り先の周は `step_of`（鍵は形 2・猶予は `seat.move_grace_s`）で、exit なら `/exit`（lock を取らない）・wait なら `move=wait`・signal なら `evacuate_line` に群の名の位置へ `Tier9`・移り先の口座・猶予を渡した 1 行を同じ門で送り、送れた周だけ合図の記録を書く。移り先でない周は今の列（打刻 → 梯子 → 合図）へ進む。群の lock・群用 dir・承認 event は触らない。
+  4. **窓が shell の周**: `awake` は区画の席で形 1 の判定を撃ち、移り先ならその口座・そうでなければ row の口座で `wake` を撃つ（lock を取らない・会話 id を運ぶのは今のまま）。起動は口座を引数で受ける（区画の行の外の口座でも起きる・account-lifecycle.md §36 形 4）。
+  5. **判定行**: 区画の席の `judged=` は形 1 の語 — 移り先 `park:<口座>`・留まる `stay`・測れない `unmeasured`・候補なし `park-no-candidate`・行なし `error:no-rule`。形 3 の移動の周と形 4 の起こす周で `front` が止まる周も出す（判定は 1 周 1 回）。区画の外の席の語（群の席と群の外の席）は 1 字も変えない。`Judged` に variant を足す（本行の touches）。
+  6. **子 module の境**: 形 1 の file は `Move`・`NoopReason`・`Judged` の値を名指さない（判定の結果を判定行の語と `Verdict` へ写すのは `crates/scribe2/src/seat/tick.rs` の側＝他の行の touches の閉包を広げない）。
+  7. **席の hook**: `line_of` は `group_of` が `None` で `park_of`（行 y）が区画を返す anchor について、群の席と同じ門（`Caps`・区画の置き場の席の `role_models`・`fresh_rows`・`pressed`）を撃ち、逼迫なら `seat_line` の 1 行（`group=Tier9`）を出して `put_request` を撃たず、鮮度の外なら群の席と同じく `measure_later` の子を 1 本起こして `usage: measuring` の 1 行を出す。
+- 触らない: 群の判定（`judged` と群の段）・群の lock と記録・`put_request`・承認 event・`Move` の語・`NoopReason`・梯子と `account_pressed`・`seat tick status`（§20 の 3 欄は `pending` のまま＝区画の席は `move=-`）・`seat_line` と `evacuate_line` の字面・`select` と `choose` の式・rules 行。
+- 却下: 区画の移動を群の段（dispatch の 1 周）で撃つ（区画は群の段を持たない・ADR-0091）／鍵を（移り先, park）にする（移り先が周ごとに変わると合図を重ねる・D26）／鍵を（row の口座, park）だけにする（同じ口座で起こし直した後の次の逼迫で、前の合図の記録が猶予切れと読まれ、合図なしに `/exit` が届く）／判定を hook に置く（hook が読む閾値は群の逼迫の 3 行で、移る線は session 用の閾値・判定の 1 本は管理 tick に置く）／群の判定と同じく鮮度の窓ごとの打刻で絞る（区画の判定は読みだけで計測を起こさないので絞る理由が無い）／区画の席の hook が鮮度の外の口座を測らない（区画の判定が読む記録が古いまま残り、row の口座の逼迫を見ずに移らない＝FR95 の「区画の手は計測を起こさない」は管理 tick の周の手と読む・下の限界）。
+- 限界: `seat tick status` の `move=` / `grace_left=` は区画の席で `-`（FR78 の 7 項目に欄が無い・D11）。起こし直しの外で登録 row が書き直される周（手の `seat register`）も鍵が変わり、合図を 1 回重ねうる。hook が告げる線（群の逼迫の 3 行）と移る線（R-C9-1）は別の値で、告げても移らない周がある。形 7 の hook の計測は FR95 の「区画の手」の読みに依る（管理 tick の手に限ると読んだ・user の裁定で覆れば hook の計測を外す）。
+- 歯（接頭辞 `seat_tick_park_` と `hook_park_`・`grep -rn` は crates と docs で両方 0 件・2026-09-29）:
+  - `crates/scribe2-boundary/tests/e2e/seat/tick.rs`（Tier9 の置き場の席・row の口座 p・区画の行 p / q / r）: (a) 窓が claude・p の鮮度の内側の記録が R-C9-1 以上・q が閾値未満 → 判定行が `move=signal` と `judged=park:q`、送った 1 行が `group=Tier9` と `to=q` を持つ退避の合図、合図の記録の鍵が（p, park.<seq>）、承認 event 0・群用 dir の file 0・lock の file 0・計測の子の起動 0 (b) 2 周目は、移り先が q のままの fixture でも r に変わる fixture でも退避の合図 0（`move=wait`） (c) 窓が shell の同じ fixture → q で起こし直し（`--resume` で会話 id を運ぶ）・登録の記帳の口座が q (d) p が閾値未満・記録なし・鮮度の外の 3 fixture → 合図 0・起こし直し 0・`judged=` が `stay` / `unmeasured` / `unmeasured` (e) 窓が shell で判定が移り先を返さない fixture → p で起こし直す (f) q と r が閾値以上か鮮度の外 → 移らず `judged=park-no-candidate` (g) R-C9-1 の無い rules の写し → `judged=error:no-rule` で列は今のまま進む (h) 群にも区画にも属さない席の判定行が今と同じ字（`judged=-`）。
+  - `crates/scribe2-boundary/tests/e2e/hook/group.rs`: (i) 区画の席の hook が p の逼迫の fixture で `group=Tier9 account=p` で始まる 1 行を出し、群用 dir に移動を頼む記録の file 0 (j) 閾値未満の fixture で 0 行。
+- base で RED の理由: base（行 y と行 z の後）は区画の席を群の外の席と同じに扱う＝判定を撃たず `judged=-` で移らず、hook は 0 行を出すので (a)〜(g) と (i) が落ちる（機能不在）。(h) と (j) は回帰の歯で base でも緑（同じ file に base で赤い歯が在る）。
+- 依存: [account-lifecycle.md](./account-lifecycle.md) の行 y（読み口 `park` と `park_of`）と行 z（`choose` が区画の anchors を受ける形）。doc を跨ぐので表の `depends` に書けず、bead の blocks で結ぶ。
+
+## 22. heartbeat の実効の値を明示の記録 → 群の表の行の key → 種類の既定の順で決め、決まり方を explicit / group / default で名乗る — 口に default を足し、seat tick status は 7 項目・seat heartbeat status は 3 項目（契約表の行 aa・[FR78](../../design-intent/spec/srs.html#FR78) / FR27 / FR57・AC64・[ADR-0092](../../design-intent/decisions/ADR-0092-heartbeat-resolves-explicit-then-table-key-then-kind-default.html)・memo `s2-07l.730`）
+
+やさしく言うと: 今は「停止の記録が在れば送らない・無ければ送る」の 2 値で、park の区画の席を既定で止める形が無い。明示 on と明示 off の 2 つの記録・群の表の行に書ける `heartbeat` の key・置き場の種類の既定（群は送る・区画は送らない・どこにも属さない席は送る）の順で決め、どこで決まったかを 3 語で出す。外の画面は記録の file でなく口の出力を読む。
+
+- 何が起きているか（main fe03d363・verified）:
+  - `crates/scribe2/src/seat/tick.rs`: 停止の記録は席の置き場の `heartbeat-off`（`HEARTBEAT_OFF_FILE`・86 行・1 行 `ts=<UTC 秒>`）。`heartbeat_off`（1051 行）は metadata が NotFound でない周を全部「在る」と読む（読めない・dir も在る＝合図は正の証拠でだけ送る）。`front`（774〜809 行）が `off` を持ち、`back`（935 行〜）の頭が `noop reason=heartbeat-off` で止まる（起こし直し・退避・群の判定はその前に撃つ）。
+  - 口: `Switch`（1017 行・閉じた 3 値 off / on / status）と `heartbeat`（1058〜1085 行・出力 `seat heartbeat <語>: target=<t> heartbeat=<on|off>`・status は後ろに ` last= decision= reason=`）。記録の書き手は `switch_off` / `switch_on`（1093 / 1104 行）。有無の語 `switch_word`（1088 行）の読み手は `heartbeat`・`status_line`（610〜627 行）・`crates/scribe2/src/seat/role.rs` の `tick_words`（427〜432 行・doctor の席の行の `heartbeat= tick=`）の 3 つ。
+  - `seat tick status` の 1 行は `seat tick status: target= last= age= healthy= heartbeat= step= next=` の後ろに §20 の ` reopens= move= grace_left=`。
+  - 使い方: `crates/scribe2/src/seat/cli.rs` の `usage`（16〜18 行）と `crates/scribe2/src/help.rs` の表（340 行の FORM・351〜353 行の SUBCOMMANDS）。`heartbeat_of`（cli.rs の 352〜363 行）が `Switch` を parse する。外形は `e2e__seat__seat_usage_external_form.snap` と `crates/scribe2-boundary/tests/e2e/main.rs` の `cli_help_pages_match_the_live_form_and_every_subcommand`（FORM と生きた使い方の一致）が測る。
+  - 群の表の行の key: `crates/scribe2/src/rules/manifest.rs` の `GROUP_KEYS`（65 行・name / anchors / accounts・既知と必須が同じ 3 つ）と `build_group`（1002〜1026 行）。未知の key は行番号つきの欠陥で断る。
+  - host の面の読み: doctor の `doctor_lines`（role.rs）は `HostManifest` で host の面を 1 回読み、`seat tick status` は面を合わせた manifest を 1 回持ち（§20）、`seat heartbeat` の口は rules も面も読まない。
+  - 消費側の画面は記録の file の有無を heartbeat の on / off と読む（ADR-0092 CTX3）。
+- 形（番号は done と 1:1）:
+  1. **群の表の行の任意 key**: `[[account-group]]` の既知の key に `heartbeat` を足す（必須は今の 3 つのまま）。値は文字列 `on` か `off` だけで、他の文字列と型の違う値は key の行番号つきの欠陥で断る（FR57・面を読む口が全部止まる）。値の判定は `crates/scribe2/src/rules/groups.rs` に 1 関数で置き（manifest.rs には組み手からの呼び出しと欄だけ）、`AccountGroup` が値を持ち読み口 `heartbeat`（on / off / 無し）で返す。群の行と区画の行の両方に書ける。
+  2. **明示の記録**: 明示 off は今の `heartbeat-off`（置き場と形を変えない＝既に在る停止の記録は明示 off と読む）、明示 on は同じ置き場の `heartbeat-on`（1 行 `ts=<UTC 秒>`）。読み: 明示 on が読める file で明示 off が無い → on、明示 off が在り（読めない・dir を含む）明示 on が無い → off、両方在る → off、明示 on が在るのに読めない（dir を含む）→ off、両方無い → 次の段。決まり方はどれも explicit。
+  3. **実効の値の 1 関数**（行 aa の write-set の + の file）: 入力は席の置き場・登録 row の anchor・群の表の読み（読めた面・面の無い周・読めない周の 3 形）。順は形 2 → 群の表の行の key（anchor が群の行か区画の行の anchors に在り、その行が key を持つ周はその値・group）→ 種類の既定（群の置き場は on・区画の置き場は off・どの行にも無い置き場は on・default）。明示の記録が無く面が読めない周は値も決まり方も `unreadable`（合図を送らない側）。決まり方は閉じた 3 語 explicit / group / default（宣言順が決まる順・C2）。記録の読み書きの関数（形 2 と形 5 の書き手）も同じ file に置く。
+  4. **tick**: `front` の `off` を形 3 の値から取る（off か unreadable で真）。面は `moving` と同じ合わせ方で読む（合わせられない周は `moving` が既に `group-unreadable` で止めている）。`back` の `heartbeat-off` の noop・off の周に梯子を読まないこと・起こし直し・退避・群と区画の判定は今のまま。
+  5. **口**: `Switch` に語 `default` を足して 4 語（off / on / default / status）。on は明示 off を消してから明示 on を置き（在れば ts を書き換えない）、off は明示 off を置いてから明示 on を消し（在れば触らない）、default は両方を消す（無ければ何もしない）。書けない・消せない周は今の `record-unwritable`（rc 2）。出力は `seat heartbeat <語>: target=<t> heartbeat=<on|off|unreadable> heartbeat_by=<explicit|group|default|unreadable>`、status はその後ろに今の ` last= decision= reason=`（3 項目＝実効の値・決まり方・最後の周の打刻）。口は host の面を state dir の host の面の file から読む（`--rules` を足さない・群の表は host の面にしか無い）。
+  6. **seat tick status**: `heartbeat=` を実効の値にし、直後に `heartbeat_by=` を足す（7 項目 = last / age / healthy / heartbeat / heartbeat_by / step / next・`target=` と §20 の 3 欄は不変）。面は status が持つ合わせた manifest を渡す。
+  7. **doctor の席の行**: `heartbeat=` を実効の値（on / off / unreadable）にする。`tick=` は不変で `heartbeat_by` は足さない（FR78 の 2 項目）。面は `doctor_lines` が読む host の面を渡す。
+  8. **使い方**: `usage` と help の FORM の `heartbeat on …` の後ろに `heartbeat default --state-dir S --target S:W` を足し、help の SUBCOMMANDS に default の 1 行（ASCII・幅の歯に合う英文）を足して status の説明を実効の値と決まり方に直す。外形 snapshot を受け直す。`switch_word` は消す（読み手 3 つは形 3 の関数を呼ぶ）。
+  9. **子 module の境**: 形 3 の file は `NoopReason` と `SeatCommand` の値を名指さない（他の行の touches の閉包を広げない）。`Switch` への match は本行の touches。
+- 触らない: 管理 tick の判定の列の順・noop の語 `heartbeat-off`・`NoopReason`・梯子と記録・最後の周の打刻の形と健全の読み・rules 行・event の種類・`seat tick install` / `uninstall`・§20 の 3 欄・§21 の判定。
+- 却下: 明示 on を持たず停止の記録と種類の既定だけにする（既定 off の席で合図を受けたい意志を表せない・ADR-0092）／区画の席に器が停止の記録を書く（記録の書き手が口の外に増える・ADR-0092）／既定を host 全体の 1 値で持つ（置き場の種類で既定が変わらない・ADR-0092）／key の値を真偽値で書く（FR78 の語は on / off・口の語と同じ字面にそろえる）／面が読めない周に種類の既定へ倒す（群の行の key を見ずに送る＝正の証拠でない）／doctor の席の行に決まり方を足す（FR78 は 2 項目）。
+- 限界: 消費側の画面が記録の file の有無を読む形は、区画の席（既定 off）と key を持つ群の席で実効の値と食い違う＝消費側は口の出力へ移る（器の外・着地の後に 1 行知らせる）。`seat heartbeat` の 3 語の出力に `heartbeat_by=` が足される（外形の変更）。`init --group` は key を書かない（key は host の面を手で書く）。
+- 歯（接頭辞 `seat_heartbeat_mode_` と `host_group_heartbeat_key_`・`grep -rn` は crates と docs で両方 0 件・2026-09-29）:
+  - `crates/scribe2-boundary/tests/e2e/seat/tick.rs`: (a) 明示の記録 3 値（明示 on・明示 off・なし）× 置き場 5 形（key の無い群・`heartbeat = "off"` の群・key の無い区画・`heartbeat = "on"` の区画・どの行にも無い置き場）の 15 通りで、合図を送る周（`decision=inject`）と送らない周（`noop reason=heartbeat-off`）と `seat tick status` の `heartbeat=` / `heartbeat_by=` が形 3 の順と一致 (b) 両方在る記録と dir の明示 on の記録 → off・explicit (c) 明示 off・key の off・区画の既定の off の 3 形で、起こし直し・群の移動の判定・区画の移り先の判定の撃ちの件数が on の席と同じ (d) `heartbeat = "maybe"` の面で管理 tick が `noop reason=group-unreadable` で止まる。
+  - `crates/scribe2-boundary/tests/e2e/seat.rs`: (e) on / off / default の後の記録の残り（明示 on だけ・明示 off だけ・なし）と各出力の 1 行 (f) status の 3 項目 (g) 前の形の停止の記録だけを持つ席が off・explicit。
+  - `crates/scribe2-boundary/tests/e2e/rules/host.rs`: (h) `heartbeat = "maybe"` と `heartbeat = true` の群の行が key の行番号つきの欠陥 1 件ずつで断られ、`heartbeat = "off"` の群の行と `heartbeat = "on"` の区画の行は通る。
+  - 直す既存の歯（同じ便）: `crates/scribe2-boundary/tests/e2e/seat.rs` の heartbeat の口と status の行の helper（`heartbeat_status` と `status_line` の期待の行に `heartbeat_by=` を足す）・`crates/scribe2-boundary/tests/e2e/seat/tick.rs` の status の逐語の 1 行・seat の使い方の外形 snapshot。
+- base で RED の理由: base（§21 の後）は口が `default` を使い方の誤りで断り、出力に `heartbeat_by=` が無く、群の表の行の `heartbeat` を未知の key で断り、区画の席に合図を送るので (a)〜(h) が落ちる（機能不在）。直す既存の歯のうち base でも緑になる file は、同じ file に base で赤い新しい歯を持つ。持たない file は test 区間の行頭に `// flip-check: retroactive <この契約の bead id>` を置く（runner が flip-check で実測する）。
+- 依存: 行 z（§21・表の `depends`・同じ `crates/scribe2/src/seat/tick.rs` を触り、歯 (c) が区画の移り先の判定の撃ちを数える）と account-lifecycle.md の行 y（読み口 `park`・bead の blocks で結ぶ）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -868,4 +934,29 @@ verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail host
 size = "M"
 growth = ["crates/scribe2/src/account/mod.rs:30"]
 done = "(1) doctor の群の行の refused= の後ろに pressure= が付き、current_of か event log を読めない周は unreadable・Caps / role_models / 鮮度の rules 行を読めない周は no-rule・鮮度の内側の実測が無い周は unmeasured・pressed が Some なら <WindowKind の short>:<used>/<cap>・None なら - (2) 計測・記録・lock・他の置き場の log の読みは 0 で、読むのは自分の置き場の log と host の根の群の記録だけ・群 0 の host の行は 0 本のまま (3) hook/group.rs の pressed / Caps / role_models / current_of の本体は変わらない 歯: host_group_pressure_（窓ごとの 3 形と最大・役割の model・今の口座の読み・閾値未満の -・unmeasured・unreadable・no-rule）が base で RED、host_group_doctor_ / host_group_record_ / host_group_next_ / host_group_refused_ の群の行の assert 18 か所に pressure= を足した書き換えが base で RED・HEAD で緑"
+
+[[contract]]
+id = "z"
+title = "park の区画の席の移動 — 管理 tick が周ごとに park の判定（row の口座が R-C9-1 以上の周だけ区画の行の口座から session 用の選定）を撃ち、群と同じ退避の合図と起こし直しで移る・合図の鍵は row の口座と登録の seq・計測と lock と記録の書き換えは 0（§21・FR95・ADR-0091・s2-07l.730）"
+req = ["FR95", "FR27", "FR44", "FR59", "AC63", "NFR4"]
+section = "21"
+touches = ["crate::seat::tick::Judged"]
+write-set = ["crates/scribe2/src/seat/tick.rs", "+crates/scribe2/src/seat/tick/park.rs", "crates/scribe2/src/seat/cycle.rs", "crates/scribe2/src/seat/cycle/relaunch.rs", "crates/scribe2/src/hook/group.rs", "crates/scribe2-boundary/tests/e2e/seat/tick.rs", "crates/scribe2-boundary/tests/e2e/hook/group.rs", "docs/design/seat-heartbeat.md", "=crates/scribe2/src/fleet/select.rs", "=crates/scribe2/src/fleet/usage.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_park_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail hook_park_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_move_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_judge_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_status_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail hook_group_"]
+size = "L"
+growth = ["crates/scribe2/src/seat/tick.rs:45", "crates/scribe2/src/seat/tick/park.rs:170", "crates/scribe2/src/hook/group.rs:25", "crates/scribe2/src/seat/cycle.rs:1", "crates/scribe2/src/seat/cycle/relaunch.rs:2"]
+done = "(1) 行 z の + の file に park の判定の 1 関数が在り、入力は面を合わせた manifest・replay・自席の登録 row・今の UTC だけで計測・lock・書き込みは 0、結果は閉じた 6 値（区画の外 / 行なし / 測れない / 留まる / 移り先 / 候補なし）を §21 形 1 の (a)〜(e) の順で返し、(e) は区画の行の口座から row の口座と退役中の口座を除き fresh_rows の在る口座だけを choose に渡す（choose の可視性を crate へ上げ cycle.rs の再輸出に 1 名足す） (2) 区画の席の移動の鍵は（row の口座, park.<登録 row の seq>）で write_signal と step_of がそのまま受ける (3) front は群の moving の後に区画の席で判定を 1 回撃ち、移り先の周は step_of の exit / wait / signal を lock なしで撃ち、signal は evacuate_line に Tier9・移り先・猶予を渡した 1 行を同じ門で送って送れた周だけ記録を書き、移り先でない周は今の列へ進む (4) awake は区画の席で判定を撃ち、移り先ならその口座・でなければ row の口座で wake を撃つ（lock なし・会話 id を運ぶ） (5) 区画の席の judged= は park:<口座> / stay / unmeasured / park-no-candidate / error:no-rule で front が止まる周も出し、区画の外の席の語は不変 (6) 判定の file は Move・NoopReason・Judged を名指さない (7) line_of は区画の anchor で群と同じ門を撃ち、逼迫なら group=Tier9 の seat_line の 1 行を出して put_request を撃たず、鮮度の外なら measure_later の子を 1 本起こす 歯: seat_tick_park_ の (a)〜(g) と hook_park_ の (i) が base で RED、seat_tick_park_ の (h)・hook_park_ の (j)・既存の seat_tick_move_ / seat_tick_judge_ / seat_tick_status_ / hook_group_ は緑。群の判定・lock・群の記録・承認 event・Move の語・NoopReason・梯子・seat tick status・seat_line と evacuate_line の字面・select と choose の式は不変"
+
+[[contract]]
+id = "aa"
+title = "heartbeat の実効の値を明示の記録 → 群の表の行の key heartbeat → 種類の既定の順で決め explicit / group / default で名乗る — 口に default を足し、seat tick status に heartbeat_by= を足して 7 項目・seat heartbeat status は 3 項目・doctor の席の行は実効の値（§22・FR78・ADR-0092・s2-07l.730）"
+req = ["FR78", "FR27", "FR57", "AC64", "NFR4"]
+section = "22"
+touches = ["crate::seat::tick::Switch"]
+write-set = ["crates/scribe2/src/seat/tick.rs", "+crates/scribe2/src/seat/tick/beat.rs", "crates/scribe2/src/seat/role.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/help.rs", "crates/scribe2/src/rules/manifest.rs", "crates/scribe2/src/rules/groups.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "crates/scribe2-boundary/tests/e2e/seat/tick.rs", "crates/scribe2-boundary/tests/e2e/rules/host.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__seat__seat_usage_external_form.snap", "docs/design/seat-heartbeat.md", "=crates/scribe2-boundary/tests/e2e/main.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_heartbeat_mode_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail host_group_heartbeat_key_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_heartbeat_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_status_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_usage_external_form", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_doctor_external_form", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail cli_help_pages_match_the_live_form_and_every_subcommand"]
+size = "M"
+growth = ["crates/scribe2/src/seat/tick.rs:10", "crates/scribe2/src/seat/tick/beat.rs:130", "crates/scribe2/src/seat/role.rs:4", "crates/scribe2/src/seat/cli.rs:1", "crates/scribe2/src/help.rs:2", "crates/scribe2/src/rules/manifest.rs:10", "crates/scribe2/src/rules/groups.rs:15"]
+depends = ["z"]
+done = "(1) [[account-group]] の既知の key に heartbeat が在り（必須は 3 つのまま）、値は on / off だけで他の文字列と型の違う値は key の行番号つきの欠陥で断り、値の判定は groups.rs の 1 関数・AccountGroup の読み口 heartbeat が on / off / 無しを返す (2) 明示 off は heartbeat-off・明示 on は heartbeat-on（1 行 ts=<UTC 秒>）で、明示 on だけが読める周は on、明示 off が在る（読めない・dir を含む）周・両方在る周・明示 on が在るのに読めない周は off、どれも決まり方は explicit (3) 行 aa の + の file に実効の値の 1 関数が在り、明示の記録 → 群の表の行の key（group）→ 種類の既定（群は on・区画は off・どの行にも無い置き場は on・default）の順で決め、明示の記録が無く面が読めない周は値も決まり方も unreadable (4) front の off がこの値から取られ（off か unreadable で真）、back の heartbeat-off の noop・起こし直し・退避・群と区画の判定は不変 (5) seat heartbeat が off / on / default / status の 4 語を受け、on は明示 off を消して明示 on を置き・off は明示 off を置いて明示 on を消し・default は両方を消し、出力は heartbeat=<値> heartbeat_by=<語> で status は後ろに last= decision= reason= (6) seat tick status の heartbeat= が実効の値で直後に heartbeat_by= が在り、target= と reopens= / move= / grace_left= は不変 (7) doctor の席の行の heartbeat= が実効の値で tick= は不変・heartbeat_by は足さない (8) usage と help の FORM に heartbeat default の形が在り SUBCOMMANDS に default の 1 行が在り、使い方の snapshot を受け直し、switch_word が無い (9) 実効の値の file は NoopReason と SeatCommand の値を名指さない 歯: seat_heartbeat_mode_ の (a)〜(g) と host_group_heartbeat_key_ の (h) が base で RED、helper と status の逐語と snapshot を直した既存の seat_heartbeat_ / seat_tick_status_ / seat_usage_external_form と、不変の seat_doctor_external_form・cli_help_pages_match_the_live_form_and_every_subcommand は緑"
 <!-- contracts:end -->
