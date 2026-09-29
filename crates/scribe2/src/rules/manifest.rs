@@ -378,6 +378,8 @@ pub struct Manifest {
     contracts: Vec<TableRow>,
     vessel: Option<Box<VesselRepo>>,
     groups: Vec<AccountGroup>,
+    // Box は `HostManifest::Present` の大きさを抑えるため（clippy large_enum_variant・`tick` と同じ）。
+    park: Option<Box<AccountGroup>>,
     // Box は `HostManifest::Present` の大きさを抑えるため（clippy large_enum_variant）。
     tick: Option<Box<TickUnit>>,
     devices: Vec<Device>,
@@ -577,6 +579,7 @@ impl Manifest {
         self.plugins.extend(face.plugins);
         self.launch_args.extend(face.launch_args);
         self.groups.extend(face.groups);
+        self.park = face.park;
         self.devices.extend(face.devices);
         self.publish_exclusions.extend(face.publish_exclusions);
         self.vessel = self.vessel.take().or(face.vessel);
@@ -634,6 +637,11 @@ impl Manifest {
     /// 宣言した群を**宣言順**で返す（host の面・群を宣言しない host は空・設計 account-lifecycle.md §17）。
     pub fn groups(&self) -> &[AccountGroup] {
         &self.groups
+    }
+
+    /// 宣言した park の区画（名 `Tier9` の行・群には入らず種を持たない・無ければ `None`・設計 account-lifecycle.md §35）。
+    pub fn park(&self) -> Option<&AccountGroup> {
+        self.park.as_deref()
     }
 
     /// 宣言した tick の unit の置き場と binary（host の面・最大 1 行・無ければ `None`＝席の起動は unit を入れず行も変えない・
@@ -729,6 +737,7 @@ fn check_declared(found: &mut Manifest, errors: &mut Vec<RuleError>) {
     check_duplicate_labels(&found.accounts, errors);
     check_duplicate_groups(&found.groups, errors);
     super::groups::check_tiers(&found.groups, errors);
+    found.park = super::groups::split_park(&mut found.groups).map(Box::new);
     super::device::check_names(&found.devices, errors);
     seed_groups(&mut found.groups, errors);
 }
@@ -1151,6 +1160,7 @@ fn seed_groups(groups: &mut [AccountGroup], errors: &mut Vec<RuleError>) {
 fn unknown_candidates(face: &Manifest, known: impl Fn(&str) -> bool) -> Vec<RuleError> {
     face.groups
         .iter()
+        .chain(face.park.as_deref())
         .flat_map(|group| {
             group
                 .accounts

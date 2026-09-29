@@ -611,11 +611,6 @@ fn over_nine(name: &str, line: usize) -> String {
     format!("rules: host.toml: 群の名 {name} の数字が 9 を越える（群の表の名は Tier1〜Tier9） line={line}")
 }
 
-/// 「park の区画」の欠陥の行（群の見出し行の番号）。
-fn park_lot(line: usize) -> String {
-    format!("rules: host.toml: Tier9 は park の区画の名で、この版の器は park の区画を読めない line={line}")
-}
-
 /// (a) Tier1・Tier10 と Tier1・Tier12 は 2 番目の群の見出し行（17 行目）の「9 を越える」の欠陥 1 件ずつ。base は通る（RED）。
 #[test]
 fn host_group_park_gate_names_over_nine_are_refused_on_the_group_line() {
@@ -627,12 +622,18 @@ fn host_group_park_gate_names_over_nine_are_refused_on_the_group_line() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// (b) Tier1・Tier9 は 2 番目の群の見出し行（17 行目）の「park の区画」の欠陥 1 件。base は通る（RED）。
+/// (b) Tier1・Tier9 は rc 0 で通り、Tier9 は群でなく区画（`park`）・群は Tier1 だけ（§35 形 3・行 y が Tier9 の断りを外した）。
 #[test]
-fn host_group_park_gate_tier9_is_refused_as_a_park_lot() {
+fn host_group_park_gate_tier9_passes_as_the_park_lot() {
     let dir = host_state_dir(None).expect("tmp の state dir を作れる");
-    let err = tier_refusals(&dir, &[("Tier1", "g1"), ("Tier9", "g2")]);
-    assert_eq!(err, vec![park_lot(17)], "park の区画の 1 件だけ");
+    let body = format!("{GROUP_HEAD}{}{}", seed_group("Tier1", "/repo/a", "[\"g1\"]"), seed_group("Tier9", "/repo/b", "[\"g2\"]"));
+    let outcome = group_validate(dir.as_path(), &body);
+    assert_eq!(outcome.rc, RC_OK, "{outcome:?}");
+    assert!(outcome.err.is_empty(), "欠陥 0: {outcome:?}");
+    let manifest = joined_manifest(&dir);
+    assert_eq!(manifest.park().map(|lot| lot.name()), Some("Tier9"), "区画は Tier9");
+    let names: Vec<&str> = manifest.groups().iter().map(|group| group.name()).collect();
+    assert_eq!(names, ["Tier1"], "群は Tier1 だけ");
     std::fs::remove_dir_all(&dir).ok();
 }
 
@@ -656,24 +657,107 @@ fn host_group_park_gate_tier1_to_tier8_pass() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// (d) Tier9・Tier10 はそれぞれの断りの 2 件だけ（Tier10 の行に昇順の欠陥を重ねない）。base は通る（RED）。
+/// (d) Tier9・Tier10 は Tier10 の行（17 行目）の「9 を越える」の 1 件だけ（Tier9 は区画として通り、Tier10 の行に昇順の欠陥を重ねない）。
 #[test]
-fn host_group_park_gate_tier9_then_tier10_are_two_refusals() {
+fn host_group_park_gate_tier9_then_tier10_is_the_tier10_refusal_only() {
     let dir = host_state_dir(None).expect("tmp の state dir を作れる");
     let err = tier_refusals(&dir, &[("Tier9", "g1"), ("Tier10", "g2")]);
-    assert_eq!(err, vec![park_lot(12), over_nine("Tier10", 17)], "それぞれの断りだけ");
+    assert_eq!(err, vec![over_nine("Tier10", 17)], "Tier10 の断りだけ");
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// (e) Tier10・Tier3 と Tier9・Tier3 は断った行の 1 件だけ（断った行は前の群にならない＝Tier3 の行の 17 行目の欠陥は 0 件）。
-/// base は Tier3 の行に昇順の欠陥が付く（RED）。
+/// (e) Tier10・Tier3 は断った行の 1 件だけ（断った行は前の群にならない＝Tier3 の行の 17 行目の欠陥は 0 件）。Tier9・Tier3 は区画の
+/// 後ろの Tier3 が昇順の欠陥 1 件（17 行目・AC63 (a)）。
 #[test]
 fn host_group_park_gate_refused_row_is_not_the_prior_group() {
     let dir = host_state_dir(None).expect("tmp の state dir を作れる");
     let err = tier_refusals(&dir, &[("Tier10", "g1"), ("Tier3", "g2")]);
     assert_eq!(err, vec![over_nine("Tier10", 12)], "Tier10 の行の 1 件だけ");
     let err = tier_refusals(&dir, &[("Tier9", "g1"), ("Tier3", "g2")]);
-    assert_eq!(err, vec![park_lot(12)], "Tier9 の行の 1 件だけ");
+    let want = "rules: host.toml: 群 Tier3 の数字が前の群より大きくない（前の群は Tier9・宣言順は数字の昇順） line=17";
+    assert_eq!(err, vec![want.to_owned()], "区画の後ろの Tier3 の昇順の欠陥 1 件");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+// ─── park の区画は群と分けて読む（account-lifecycle.md §35 の行 y・FR95・ADR-0091・接頭辞 `host_park_lot_`） ───
+
+/// `dir` の host の面（書いた後）を tracked の面に合わせた manifest。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn joined_manifest(dir: &std::path::Path) -> Manifest {
+    Manifest::embedded().and_then(|tracked| vessel::rules::with_state_dir(tracked, Some(dir))).expect("host の面を合わせられる")
+}
+
+/// (a) Tier1・Tier2・Tier9 の面は rc 0 で、`groups()` は Tier1・Tier2・`park` は Tier9。
+#[test]
+fn host_park_lot_tier9_is_read_apart_from_the_groups() {
+    let dir = host_state_dir(None).expect("tmp の state dir を作れる");
+    let body = format!(
+        "{GROUP_HEAD}{}{}{}",
+        seed_group("Tier1", "/repo/a", "[\"g1\"]"),
+        seed_group("Tier2", "/repo/b", "[\"g2\"]"),
+        seed_group("Tier9", "/repo/c", "[\"g3\"]")
+    );
+    let outcome = group_validate(dir.as_path(), &body);
+    assert_eq!(outcome.rc, RC_OK, "{outcome:?}");
+    assert!(outcome.err.is_empty(), "欠陥 0: {outcome:?}");
+    let manifest = joined_manifest(&dir);
+    let names: Vec<&str> = manifest.groups().iter().map(|group| group.name()).collect();
+    assert_eq!(names, ["Tier1", "Tier2"], "群は Tier1〜Tier8 の行だけ（宣言順）");
+    let lot = manifest.park().expect("区画が在る");
+    assert_eq!((lot.name(), lot.anchors(), lot.accounts()), ("Tier9", &["/repo/c".to_owned()][..], &["g3".to_owned()][..]), "区画の宣言値");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// (b) 区画は種を取らない: 区画の候補の先頭（g1）を Tier1 の候補の先頭にも置いた面で、Tier1 の種は g1 のまま・区画の種の欄は空
+/// （区画を種の配りに入れると g1 は前の群の種で候補が尽き「種を決める候補が無い」で断られる）。
+#[test]
+fn host_park_lot_takes_no_seed() {
+    use vessel::hook::group::Source;
+    let dir = host_state_dir(None).expect("tmp の state dir を作れる");
+    let place = dir.join("place");
+    let body = format!("{GROUP_HEAD}{}{}", seed_group("Tier1", "/repo/a", "[\"g1\", \"g2\"]"), seed_group("Tier9", "/repo/b", "[\"g1\"]"));
+    assert_eq!(seed_currents(&place, &body), [("g1".to_owned(), Source::Seed)], "Tier1 の種は g1 のまま");
+    assert_eq!(joined_manifest(&place).park().map(|lot| lot.seed()), Some(""), "区画の種は空");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// (c) 置き場の重複と候補が宣言に無い区画は断られる（群と同じ検査が区画にも掛かる）。
+#[test]
+fn host_park_lot_shares_the_anchor_and_candidate_checks() {
+    let dir = host_state_dir(None).expect("tmp の state dir を作れる");
+    let same = format!("{GROUP_HEAD}{}{}", seed_group("Tier1", "/repo/a", "[\"g1\"]"), seed_group("Tier9", "/repo/a", "[\"g2\"]"));
+    let outcome = group_validate(dir.as_path(), &same);
+    assert_eq!(outcome.rc, RC_REFUSED, "{outcome:?}");
+    assert_eq!(outcome.err, vec!["rules: host.toml: 置き場 /repo/a が 2 つの群に在る line=17".to_owned()], "置き場の重複 1 件");
+    let unknown = format!("{GROUP_HEAD}{}{}", seed_group("Tier1", "/repo/a", "[\"g1\"]"), seed_group("Tier9", "/repo/b", "[\"g9\"]"));
+    let outcome = group_validate(dir.as_path(), &unknown);
+    assert_eq!(outcome.rc, RC_REFUSED, "{outcome:?}");
+    assert_eq!(outcome.err, vec!["rules: host.toml: 群 Tier9 の候補 g9 が宣言された口座に無い line=17".to_owned()], "宣言に無い候補 1 件");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// (d) Tier9 の 2 行の面は名の重複の 1 件（2 行目の 17 行目）。
+#[test]
+fn host_park_lot_declared_twice_is_the_duplicate_name_defect() {
+    let dir = host_state_dir(None).expect("tmp の state dir を作れる");
+    let err = tier_refusals(&dir, &[("Tier9", "g1"), ("Tier9", "g2")]);
+    assert_eq!(err, vec!["rules: host.toml: 群の名 Tier9 が重複する line=17".to_owned()], "名の重複の 1 件だけ");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// (e) Tier3・Tier9 の面の `grouped_accounts` は Tier3 の今の口座（種 g1）だけで、区画の候補（g3）を返さない。
+#[test]
+fn host_park_lot_candidates_are_not_grouped_accounts() {
+    let dir = host_state_dir(None).expect("tmp の state dir を作れる");
+    let place = dir.join("place");
+    std::fs::create_dir_all(&place).expect("置き場を作れる");
+    let body = format!("{GROUP_HEAD}{}{}", seed_group("Tier3", "/repo/a", "[\"g1\", \"g2\"]"), seed_group("Tier9", "/repo/b", "[\"g3\"]"));
+    std::fs::write(place.join(vessel::rules::HOST_MANIFEST), body).expect("host の面を書ける");
+    let grouped: Vec<String> = vessel::rules::grouped_accounts(&place).expect("除外を解ける").into_iter().collect();
+    assert_eq!(grouped, ["g1"], "群の今の口座だけ");
     std::fs::remove_dir_all(&dir).ok();
 }
 

@@ -1,7 +1,7 @@
 //! 群の名の形と宣言順の検査（設計 account-lifecycle.md §29 の行 s・ADR-0069）。
 //!
 //! 群の名は `Tier` の後ろに 10 進の数字 1 桁以上（先頭の 0 は不可）に限り、宣言順は数字の狭義の昇順である。
-//! 群の表の名は Tier1〜Tier9 で、数字 10 以上の名と、park の区画を読めないこの版では `Tier9` も断る（§34 の行 x）。
+//! 群の表の名は Tier1〜Tier9 で、数字 10 以上の名を断る（§34 の行 x）。`Tier9` は群でなく park の区画で、検査の後に群の列から分ける（§35 の行 y）。
 //! 数字は宣言順の検査にだけ使い、並べ替えには使わない（優先は宣言順のまま・食い違う面は黙って通さず断る）。
 
 use super::manifest::AccountGroup;
@@ -11,14 +11,14 @@ use std::cmp::Ordering;
 /// 群の名の接頭辞。
 const TIER: &str = "Tier";
 
-/// park の区画の名（`Tier9`）の数字（§34 の行 x・ADR-0091）。
-const PARK_DIGITS: &str = "9";
+/// park の区画の名（§35 の行 y・ADR-0091）。
+const PARK: &str = "Tier9";
 
 /// 名の形と宣言順を検査し、外れる群ごとに群の見出し行で 1 件ずつ `errors` へ積む。
 ///
-/// 形の合う名のうち数字が 10 以上の名と `Tier9`（park の区画の名）も群の見出し行で断る（§34 の行 x・Tier9 の断りは行 y が外す）。
+/// 形の合う名のうち数字が 10 以上の名を群の見出し行で断る（§34 の行 x）。`Tier9`（park の区画の名）は群と同じ検査を受ける（§35 の行 y）。
 /// 名が前の群と同じ群は昇順の欠陥を重ねない（名の重複は [`super::manifest`] の重複の検査が 1 件にする・同じ欠陥を 2 行にしない）。
-/// 前の群の名が形に外れる周と、前の群を 10 以上か Tier9 で断った周も重ねない（前の群の行がその欠陥で 1 件になっている）。
+/// 前の群の名が形に外れる周と、前の群を 10 以上で断った周も重ねない（前の群の行がその欠陥で 1 件になっている）。
 pub(super) fn check_tiers(groups: &[AccountGroup], errors: &mut Vec<RuleError>) {
     for (index, group) in groups.iter().enumerate() {
         let Some(digits) = tier_digits(group.name()) else {
@@ -58,15 +58,15 @@ fn group_digits(name: &str) -> Option<&str> {
     tier_digits(name).filter(|digits| outside_table(name, digits).is_none())
 }
 
-/// 形の合う名のうち群として読まない名の断り（数字が 10 以上＝群の表の名は Tier1〜Tier9・`Tier9` は park の区画の名）。
+/// 形の合う名のうち群の表の外の名の断り（数字が 10 以上＝群の表の名は Tier1〜Tier9）。
 fn outside_table(name: &str, digits: &str) -> Option<String> {
-    if digits.len() > 1 {
-        Some(format!("群の名 {name} の数字が 9 を越える（群の表の名は Tier1〜Tier9）"))
-    } else if digits == PARK_DIGITS {
-        Some(format!("{name} は park の区画の名で、この版の器は park の区画を読めない"))
-    } else {
-        None
-    }
+    (digits.len() > 1).then(|| format!("群の名 {name} の数字が 9 を越える（群の表の名は Tier1〜Tier9）"))
+}
+
+/// 検査の済んだ行の列から park の区画の行（名 `Tier9`）を分けて返す（名の重複の検査が済んでいるので高々 1 つ・§35 形 1）。
+pub(super) fn split_park(groups: &mut Vec<AccountGroup>) -> Option<AccountGroup> {
+    let at = groups.iter().position(|group| group.name() == PARK)?;
+    Some(groups.remove(at))
 }
 
 /// 先頭の 0 を持たない 10 進の字面を**数値で**比べる（桁数 → 同じ桁数なら字面・桁あふれしない）。

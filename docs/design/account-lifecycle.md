@@ -497,7 +497,7 @@ user-scope MCP 設定の同期・別口座への `--resume` の混線 fence・pr
   - Tier10 を「通る」側で使う既存の歯は 2 本: `crates/scribe2-boundary/tests/e2e/rules/host.rs` の `host_group_tier_ascending_numbers_pass_compared_numerically`（586〜605 行・Tier1・Tier2・Tier10）と `crates/scribe2-boundary/tests/e2e/seat/account.rs` の `host_group_doctor_prints_one_line_per_group_in_declaration_order`（427 行〜・Tier2・Tier10）。`grep -rn 'Tier9'` は crates で 0 件（2026-09-29）。
 - 形（番号は done と 1:1）:
   1. `check_tiers` が、形の合う名のうち数字が 10 以上（字面の桁数が 2 以上）の名を、群の見出し行の欠陥「群の名 <名> の数字が 9 を越える（群の表の名は Tier1〜Tier9）」で断る。
-  2. 名 `Tier9` の行を、群の見出し行の欠陥「Tier9 は park の区画の名で、この版の器は park の区画を読めない」で断る。この断りは行 y が区画として読む形に置き換える（行 y が外す）。
+  2. 名 `Tier9` の行を、群の見出し行の欠陥「Tier9 は park の区画の名で、この版の器は park の区画を読めない」で断る。この断りは行 y が区画として読む形に置き換えて外した（§35 形 3・着地済み）。
   3. 1 と 2 で断った行は昇順の欠陥を重ねず（1 行 1 件）、次の行の「前の群」にもならない＝次の行は昇順を比べない（形の欠陥の行が今 `prior` にならないのと同じ扱い・`check_tiers` の `prior` を、形が合い 1 と 2 で断られない名の前の群だけに絞る）。例: Tier10・Tier3 の面は Tier10 の行の 1 件だけで、Tier3 の行は欠陥を持たない。行 y が Tier9 を区画として読んだ後は、Tier9 の後ろの Tier3 が昇順の欠陥になる（AC63 (a)）。断った行が自分の昇順の欠陥を持たないことは、断った行の数字（9 以上）が断られない前の群の数字（8 以下）より常に大きいので、別の歯を持たない（観測できない）。面の欠陥の極性と伝わり方は今の名の断りと同じ（行番号つき・その host の面を読む口が全部止まる・FR57）。
   4. 既存の歯 2 本の Tier10 を Tier3 に替える（宣言順のまま読む意図は Tier1・Tier2・Tier3 と Tier2・Tier3 で同じに測れる）。
 - 触らない: `tier_digits` と `compare_digits`（10 以上を断った後も比べ方は正しいまま）・名の重複の検査・種・群の段・doctor の群の行の字。

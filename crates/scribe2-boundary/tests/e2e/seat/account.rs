@@ -888,6 +888,73 @@ fn host_group_pressure_says_unreadable_or_no_rule() {
     }
 }
 
+// ─── doctor の park の区画の行（account-lifecycle.md §35 形 5 / 6・契約表の行 y・接頭辞 `host_park_lot_`） ───
+//
+// `host_group_next_` の置き場（席の row は anchor `/repo`・口座 acct-1・役割 orchestrator）に群 Tier1（置き場 `/repo/elsewhere`）と
+// 区画 Tier9（置き場 `park_anchor`）を宣言し、実測の回を event log へ直に置く（doctor は測らない）。
+
+/// 群と区画の候補。
+const PARK_LABELS: [&str; 3] = ["acct-1", "spare", "third"];
+
+/// Tier1 と区画（置き場 `park_anchor`）を宣言し、`rounds` の (口座, ts, 使用率) を置いて `rules` の写しで doctor の行を返す。
+fn park_lines(park_anchor: &str, groups: [&[&str]; 2], rounds: &[(&str, &str, [u64; 3])]) -> (RolePlace, Vec<String>) {
+    let place = role_doctor_place();
+    put_groups(&place, &[("Tier1", &["/repo/elsewhere"], groups[0]), ("Tier9", &[park_anchor], groups[1])]);
+    for (account, ts, used) in rounds {
+        put_round(&place, ts, account, *used);
+    }
+    let lines = doctor_rows(&place, &next_rules(&PARK_LABELS, true));
+    (place, lines)
+}
+
+/// (f) Tier1 の行は区画を宣言しない周と 1 字も変わらず（`kind=` 無し）、Tier9 の行は `kind=park` で始まり `current=- next=- refused=-`。
+/// `pressure=` は区画の席の row の口座 acct-1 の実測が閾値以上で窓の値・未満で `-`・実測なしで `unmeasured`・席の row が区画の置き場に
+/// 無ければ `-`。
+#[test]
+fn host_park_lot_doctor_line_is_marked_and_reads_the_seat_row_pressure() {
+    let now = vessel::fleet::cli::now_utc();
+    let head = "group=Tier9 kind=park accounts=acct-1,spare,third anchors=1 seat-accounts=acct-1 current=- next=- refused=- pressure=";
+    for (rounds, want, why) in [
+        (vec![("acct-1", now.as_str(), [90, 10, 10])], "5h:90/85", "閾値以上"),
+        (vec![("acct-1", now.as_str(), [84, 10, 10])], "-", "閾値未満"),
+        (vec![("spare", now.as_str(), [90, 97, 97])], "unmeasured", "席の row の口座に実測が無い"),
+    ] {
+        let (place, lines) = park_lines("/repo", [&PARK_LABELS, &PARK_LABELS], &rounds);
+        assert_eq!(group_line(&lines, "Tier9"), format!("{head}{want}"), "{why}: {lines:?}");
+        let alone = role_doctor_place();
+        put_groups(&alone, &[("Tier1", &["/repo/elsewhere"], &PARK_LABELS)]);
+        for (account, ts, used) in &rounds {
+            put_round(&alone, ts, account, *used);
+        }
+        let bare = doctor_rows(&alone, &next_rules(&PARK_LABELS, true));
+        assert_eq!(group_line(&lines, "Tier1"), group_line(&bare, "Tier1"), "{why}: 群の行は区画の有無で変わらない");
+        assert!(!group_line(&lines, "Tier1").contains("kind="), "{why}: 群の行は kind= を持たない");
+        assert_eq!(lines.iter().filter(|line| line.starts_with("group=")).count(), 2, "{why}: 群の行 + 区画の行");
+        assert_eq!(lines.iter().rposition(|line| line.starts_with("group=")), lines.iter().position(|line| line.starts_with("group=Tier9 ")), "{why}: 区画の行は群の行の後ろ");
+        fs::remove_dir_all(&place.dir).ok();
+        fs::remove_dir_all(&alone.dir).ok();
+    }
+    let (place, lines) = park_lines("/repo/none", [&PARK_LABELS, &PARK_LABELS], &[]);
+    assert_eq!(
+        group_line(&lines, "Tier9"),
+        "group=Tier9 kind=park accounts=acct-1,spare,third anchors=1 seat-accounts=none current=- next=- refused=- pressure=-",
+        "席の row が無い区画: {lines:?}"
+    );
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (g) Tier1 が逼迫し、Tier1 の候補の残量の鍵の先頭が区画の席の row の口座 acct-1 の fixture で、Tier1 の行の `next=` は acct-1
+/// （群の予約が区画の席の口座を除かない）。
+#[test]
+fn host_park_lot_seat_account_is_not_excluded_from_the_group_reserve() {
+    let now = vessel::fleet::cli::now_utc();
+    let candidates = ["spare", "acct-1", "third"];
+    let (place, lines) = park_lines("/repo", [&candidates, &PARK_LABELS], &[("spare", &now, [90, 10, 10]), ("acct-1", &now, [10, 10, 10])]);
+    let tier1 = group_line(&lines, "Tier1");
+    assert!(tier1.contains(" seat-accounts=none current=seed next=acct-1 "), "区画の席の口座が予約の先頭: {tier1}");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
 // ─── host の面の端末の表（host-init.md §15 形 3・契約表の行 g・接頭辞 `host_device_doctor_`） ───
 
 /// 2 行の `[[device]]`（宣言順は win-1 → mac-2・名の昇順ではない・値は doctor に出ない字面 `me@`）。

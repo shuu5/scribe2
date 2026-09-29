@@ -384,27 +384,64 @@ const GROUP_UNREADABLE: &str = "unreadable";
 /// ／群の今の口座 `current=`＝[`render_current`]・§20 形 2 ／群の予約 `next=`＝[`render_next`]・§29 形 5 ／断りの印 `refused=`／今の
 /// 逼迫 `pressure=`＝[`render_pressure`]・seat-heartbeat.md §20 形 5）。記録は 1 件も書かない（読むだけ）。
 fn render_group(state_dir: &Path, manifest: &Manifest, group: &AccountGroup, state: Option<&State>) -> String {
-    let seats = match state {
-        None => GROUP_UNREADABLE.to_owned(),
-        Some(found) => {
-            let labels = seat_accounts(group, found);
-            if labels.is_empty() {
-                GROUP_NONE.to_owned()
-            } else {
-                labels.into_iter().collect::<Vec<&str>>().join(",")
-            }
-        }
-    };
     format!(
-        "group={} accounts={} anchors={} seat-accounts={seats} current={} next={} refused={} pressure={}",
+        "group={} accounts={} anchors={} seat-accounts={} current={} next={} refused={} pressure={}",
         group.name(),
         group.accounts().join(","),
         group.anchors().len(),
+        render_seats(group, state),
         render_current(state_dir, group),
         render_next(state_dir, manifest, group),
         render_refused(state_dir, group),
         render_pressure(state_dir, manifest, group, state)
     )
+}
+
+/// 群の行と区画の行の `seat-accounts=` の値（[`seat_accounts`] を畳んだ列・[`GROUP_NONE`]・[`GROUP_UNREADABLE`]）。
+fn render_seats(group: &AccountGroup, state: Option<&State>) -> String {
+    let Some(found) = state else { return GROUP_UNREADABLE.to_owned() };
+    let labels = seat_accounts(group, found);
+    if labels.is_empty() { GROUP_NONE.to_owned() } else { labels.into_iter().collect::<Vec<&str>>().join(",") }
+}
+
+/// doctor の park の区画の 1 行（設計 account-lifecycle.md §35 形 5・群の行の後ろ・**読むだけ**）: 今の口座・予約・断りの印を持たない
+/// ので `current=- next=- refused=-`、行の弁別は `kind=park`。
+fn render_park(manifest: &Manifest, lot: &AccountGroup, state: Option<&State>) -> String {
+    format!(
+        "group={} kind=park accounts={} anchors={} seat-accounts={} current=- next=- refused=- pressure={}",
+        lot.name(),
+        lot.accounts().join(","),
+        lot.anchors().len(),
+        render_seats(lot, state),
+        park_pressure(manifest, lot, state)
+    )
+}
+
+/// 区画の行の `pressure=` の値: 区画の置き場の席の row の口座ごとに鮮度の内側の実測を [`crate::hook::group::pressed`] に渡し、
+/// 越えた窓のうち使用率が最大の 1 つ（群の行と同じ `<窓>:<使用率>/<閾値>`）・越えなければ `-`。席の row が無ければ `-`・
+/// 実測を持つ row が 1 つも無ければ [`UNMEASURED`]・log を読めなければ [`GROUP_UNREADABLE`]・rules 行が無ければ [`NEXT_NO_RULE`]。
+fn park_pressure(manifest: &Manifest, lot: &AccountGroup, state: Option<&State>) -> String {
+    use crate::hook::group::{pressed, role_models, Caps};
+    let Some(state) = state else { return GROUP_UNREADABLE.to_owned() };
+    let seats = seat_accounts(lot, state);
+    if seats.is_empty() {
+        return "-".to_owned();
+    }
+    let (Ok(caps), Some(models)) = (Caps::of(manifest), role_models(manifest, lot, state)) else {
+        return NEXT_NO_RULE.to_owned();
+    };
+    let Ok(rounds) = seats.iter().map(|label| crate::fleet::usage::fresh_rows(manifest, state, label)).collect::<Result<Vec<_>, _>>() else {
+        return NEXT_NO_RULE.to_owned();
+    };
+    let rounds: Vec<Vec<_>> = rounds.into_iter().flatten().collect();
+    if rounds.is_empty() {
+        return UNMEASURED.to_owned();
+    }
+    rounds
+        .iter()
+        .filter_map(|rows| pressed(rows, caps, &models))
+        .max_by_key(|found| found.used)
+        .map_or_else(|| "-".to_owned(), |found| format!("{}:{}/{}", found.window.short(), found.used, found.cap))
 }
 
 /// 群の行の `pressure=` の値（群の段の門の判定 [`crate::hook::group::pressed`] を**測らずに**呼ぶ・seat-heartbeat.md §20 形 5）:
@@ -533,6 +570,7 @@ pub fn doctor_lines(state_dir: &Path, rules: Option<&str>) -> Vec<String> {
     // 群の行は口座の行の後ろに**宣言順**で（設計 account-lifecycle.md §17 の約束 7）。群を 1 つも宣言しない host は
     // 0 本＝既存の外形は 1 行も動かない（約束 8）。
     lines.extend(manifest.groups().iter().map(|group| render_group(state_dir, &manifest, group, state.as_ref())));
+    lines.extend(manifest.park().map(|lot| render_park(&manifest, lot, state.as_ref())));
     lines
 }
 

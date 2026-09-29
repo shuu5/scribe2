@@ -983,6 +983,21 @@ fn pipe_dispatch_group_exit_dialog_other_tail_gets_no_key_and_no_record() {
     }
 }
 
+/// (h・account-lifecycle.md §35 歯 (h)・接頭辞 `host_park_lot_`) 群 Tier1（置き場 0・候補 [a1, a2]）と区画 Tier9（置き場 1・候補
+/// [a3, a4]）の面で、a1 と a3 の 5 時間窓が閾値の上（90）・a2 と a4 が下（10）・置き場 0 の席が a1・置き場 1 の席が a3 のとき、
+/// 群の段の周は Tier1 を a2 へ移し（移動の書きまで届いた肯定の対照）、区画 Tier9 の今の口座の記録は書かず、承認 event は Tier1 の 1 件
+/// だけ（区画が群なら Tier9 も a4 へ移って記録と承認 event が 2 になる）。
+#[test]
+fn host_park_lot_pressed_seat_account_of_the_lot_is_not_moved() {
+    let place = groups_place(&[("a1", 90, 10, 10), ("a2", 10, 10, 10), ("a3", 90, 10, 10), ("a4", 10, 10, 10)], &[(GROUP, &[0], &["a1", "a2"]), ("Tier9", &[1], &["a3", "a4"])]);
+    group_seats(&place.state, ["a1", "a3"]);
+    let out = group_terminal(&place, "r-park-1");
+    assert_eq!(move_account(&place.state, GROUP).as_deref(), Some("a2"), "Tier1 は a2 へ移る（{}）", told(&out));
+    assert_eq!(move_account(&place.state, "Tier9"), None, "区画の記録は無い");
+    assert_eq!(move_counts(&place.state), (1, 0, 0), "承認 event 1・断り 0");
+    clean(&[&place.repo, &place.state]);
+}
+
 /// (形 4) 移動の周（記録を書いた同じ周）は dialog の既定の行を返す席にも Enter を送らない（退避の合図は門で断られ、`/exit` も
 /// Enter も 0・記録 0）。
 #[test]
