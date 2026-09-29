@@ -1,6 +1,7 @@
 // flip-check: moved s2-07l.686
 //! 終端の周の族の歯（接頭辞 `pipe_terminal_`・設計 docs/design/carry-prep.md §10 行 n・親 `tests/e2e/pipe/dispatch.rs` の
-//! helper を `use super::*` で使う）。
+//! helper を `use super::*` で使う）。起こす側の周の事前審査（接頭辞 `pipe_dispatch_precheck_`・dispatcher.md §27）と
+//! 受付の断りの記帳（接頭辞 `pipe_dispatch_intake_refused_`・dispatcher.md §32）の歯も置く。
 
 use super::*;
 
@@ -539,5 +540,80 @@ fn pipe_dispatch_precheck_follows_blocks_transitively_but_not_parents_or_closed(
         assert_eq!(result_of(&state, bead), "firm:1,provisional:0", "{bead} の祖先の外の宣言は入らない: {text}");
         assert!(text.contains(&format!("name=write-set-item-unresolved at=files:{file} ")), "{text}");
     }
+    clean(&[&repo, &state]);
+}
+
+// ───── 受付の断りの記帳（設計 docs/design/dispatcher.md §32・行 ag・接頭辞 `pipe_dispatch_intake_refused_`） ─────
+//
+// 起こす側の周が受付の断りを契約ごとに `IntakeRefused` 1 件に残す。base の周は 1 件も書かない（本数 0 で RED）。
+
+/// 断られる行 r の bead（write-set が base に無い file を素で持つ）。
+const REFUSED: &str = "s2-ref.1";
+
+/// hold した行 h の bead（base に在る file の行・断られない）。
+const HELD: &str = "s2-ref.2";
+
+/// 行 r と hold した行 h の toy repo と台帳（`(repo, state, bd)`）。
+fn refused_ledger() -> (std::path::PathBuf, std::path::PathBuf, String) {
+    let rows = [precheck_row("r", r#"["src/absent.rs"]"#, ""), precheck_row("h", r#"["src/lib.rs"]"#, "")];
+    let (repo, state) = precheck_repo(&rows, &[]);
+    let bd = fake_bd(&state, &[waiting_on(REFUSED, "r", &[]), waiting_on(HELD, "h", &[])]);
+    hold(&state, &[HELD]);
+    (repo, state, bd)
+}
+
+/// event log の全行。
+fn log_lines(state: &Path) -> Vec<String> {
+    fs::read_to_string(state.join("fleet").join("events.jsonl")).unwrap_or_default().lines().map(str::to_owned).collect()
+}
+
+/// event log の `IntakeRefused` の行（log の順）。
+fn refusals(state: &Path) -> Vec<String> {
+    log_lines(state).into_iter().filter(|line| line.contains("\"kind\":\"IntakeRefused\"")).collect()
+}
+
+/// (A) 周の前の `dispatch ls` は書かない。起こす側の 1 周は r の断りを 1 件だけ書き、2 周目と `dispatch ls` の後も 1 件のまま。
+/// hold した h の行は書かない。
+#[test]
+fn pipe_dispatch_intake_refused_records_the_refusal_once_and_only_from_the_firing_round() {
+    let (repo, state, bd) = refused_ledger();
+    let before = ls(&repo, &state, &bd);
+    assert!(reason_of(&before, REFUSED).starts_with("admission:"), "周の前にも r は受付で断られる（{}）", told(&before));
+    assert_eq!(refusals(&state).len(), 0, "観測の口は書かない: {:?}", log_lines(&state));
+    precheck_turn(&repo, &state, &bd);
+    assert_eq!(refusals(&state).len(), 1, "1 周目は 1 件: {:?}", refusals(&state));
+    let second = precheck_turn(&repo, &state, &bd);
+    assert!(stdout_of(&second).contains("started:0"), "起こさない（{}）", told(&second));
+    let after = ls(&repo, &state, &bd);
+    let reason = reason_of(&after, REFUSED);
+    let name = reason.strip_prefix("admission:").unwrap_or_default();
+    assert!(!name.is_empty() && name != "mark" && name != "spawn", "受付の断りの名（{}）", told(&after));
+    let found = refusals(&state);
+    assert_eq!(found.len(), 1, "同じ断りが続く間は 1 件のまま: {found:?}");
+    let line = found.first().map(String::as_str).unwrap_or_default();
+    assert!(line.contains(&format!("\"bead\":\"{REFUSED}\"")), "bead は r: {line}");
+    assert!(line.contains(&format!("\"refuse\":\"{name}\"")), "refuse は ls の理由の名 {name}: {line}");
+    assert!(!found.iter().any(|line| line.contains(&format!("\"bead\":\"{HELD}\""))), "h は書かない: {found:?}");
+    clean(&[&repo, &state]);
+}
+
+/// (B) 1 周の後に r へ `release` を打つと、次の周は同じ断りをもう 1 件書き、2 件目は release の行より後に在る。
+#[test]
+fn pipe_dispatch_intake_refused_records_again_after_a_release() {
+    let (repo, state, bd) = refused_ledger();
+    precheck_turn(&repo, &state, &bd);
+    release(&state, REFUSED);
+    precheck_turn(&repo, &state, &bd);
+    let lines = log_lines(&state);
+    let bead = format!("\"bead\":\"{REFUSED}\"");
+    let at: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.contains("\"kind\":\"IntakeRefused\"") && line.contains(&bead))
+        .map(|(at, _)| at)
+        .collect();
+    assert_eq!(at.len(), 2, "release の後の周はもう 1 件: {lines:?}");
+    let released = lines.iter().position(|line| line.contains("\"mark\":\"release\"") && line.contains(&bead));
+    assert!(released.is_some_and(|found| at.first() < Some(&found) && at.get(1) > Some(&found)), "release の行を挟む: {lines:?}");
     clean(&[&repo, &state]);
 }

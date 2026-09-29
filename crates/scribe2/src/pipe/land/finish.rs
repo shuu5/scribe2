@@ -145,6 +145,14 @@ pub(super) const CONTRACT_TRAILER: &str = "Contract";
 /// 要件を名指す trailer の語幹。
 pub(super) const REQUIREMENTS_TRAILER: &str = "Requirements";
 
+/// 発端の trailer の語幹（設計 vessel-hook.md §21 形 2 (b)・器の便でない merge の本文が持つ）。
+const SOURCE_TRAILER: &str = "Source";
+
+/// 発端の trailer の key（`<Name>-Source: `・merge の門が引く 1 本＝門は NAME から key を組み直さない・§21 形 7）。
+pub(crate) fn source_key() -> String {
+    trailer_key(SOURCE_TRAILER)
+}
+
 /// trailer の key（**器の名から導く**・C2.2＝名を 2 か所に焼かない）。
 ///
 /// 先頭を大文字にした器の名を前置するので、他の道具の trailer（`Co-Authored-By` 等）と衝突しない。
@@ -211,8 +219,8 @@ pub(in crate::pipe) fn landed_sha(state_dir: &Path, run: &str) -> Option<String>
 
 /// 便の sha が push の先端かどうか（**閉じた 2 値**・設計 contract-source.md §52・§53・行 bd / be）。
 ///
-/// 先端を知るのは [`land_train`] の 1 か所だけで、列の最後の便の外に [`Self::Behind`] を先端の sha つきで渡す。
-/// 単独の着地と `--terminal-only` は [`Self::Tip`]（従来の push → CI → close）。
+/// 着地の周で先端を知るのは [`land_train`] の 1 か所だけで、列の最後の便の外に [`Self::Behind`] を先端の sha つきで渡す。
+/// 単独の着地は [`Self::Tip`]、`--terminal-only` は anchor の main の今の先端で側を選ぶ（設計 contract-source.md §58）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::pipe) enum PushTip<'a> {
     /// push の先端の commit（forge の CI が run を作る側）。

@@ -14,7 +14,8 @@ use crate::pipe::declaration::{self, Ceiling, CEILING_ROW, DENIED_ROW};
 use crate::pipe::follow::Runner;
 use crate::pipe::gate::{Gate, Limits};
 use crate::pipe::land::detection::Detect;
-use crate::pipe::land::{Land, Retire};
+use crate::pipe::git_line;
+use crate::pipe::land::{Land, PushTip, Retire, MAIN_REF};
 use crate::pipe::lens_record::{self, LensSource};
 use crate::pipe::ratelimit::Pool;
 use crate::pipe::review::{review, Review};
@@ -52,6 +53,9 @@ fn terminal_input<'a>(args: &'a [String], manifest: &Manifest) -> Result<(u64, u
 ///
 /// 前提の段は `Landed`（着地は済んでいる）。着地した sha は記録から読む——HEAD の今の sha に
 /// 読み替えると、その後に別の便が main を進めた周に**別の commit の CI を照合する**（C10）。
+/// 照合の側は anchor の main の今の先端で選ぶ（設計 contract-source.md §58・行 bm）: 着地した sha が先端なら
+/// [`PushTip::Tip`]、先端でなければ先端の sha つきの [`PushTip::Behind`]（祖先かは終端が測る・§53）。main を
+/// 読めない周は先端の側に倒さず、何も書かずに断る。
 fn terminal_only(args: &[String], id: &str, manifest: &Manifest, policy: LockPolicy) -> Outcome {
     let resolved = match resolve(args, id, &[Stage::Landed], &Extra::Nothing) {
         Ok(found) => found,
@@ -59,6 +63,9 @@ fn terminal_only(args: &[String], id: &str, manifest: &Manifest, policy: LockPol
     };
     let Some(sha) = super::land::landed_sha(&resolved.state_dir, id) else {
         return refused(format!("run {id} の着地した sha を記録から読めない"));
+    };
+    let Some(head) = git_line(&resolved.repo, &["rev-parse", MAIN_REF]) else {
+        return refused(format!("{MAIN_REF} を読めない"));
     };
     let (ci_wait_s, ci_poll_s, bd) = match terminal_input(args, manifest) {
         Ok(found) => found,
@@ -88,8 +95,9 @@ fn terminal_only(args: &[String], id: &str, manifest: &Manifest, policy: LockPol
         train_max: 1,
         rules: None,
     };
-    // 終端だけの再実行は先端の側（従来の push → CI → close・設計 contract-source.md §52）。
-    let terminal = super::land::terminal(&entry, &sha, super::land::PushTip::Tip);
+    // 撃ち直しの push が押すのは anchor の main そのもの＝押した先端は main の今の先端（設計 contract-source.md §58）。
+    let tip = if head == sha { PushTip::Tip } else { PushTip::Behind(&head) };
+    let terminal = super::land::terminal(&entry, &sha, tip);
     Outcome {
         out: vec![format!("run={id} terminal={}", terminal.as_token())],
         err: Vec::new(),

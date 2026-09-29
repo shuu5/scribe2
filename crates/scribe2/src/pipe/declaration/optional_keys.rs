@@ -5,7 +5,7 @@
 //! 外へ渡す口をこの file へ、`Declared` の欄と `parse` の読みの 1 行を親へ足す。
 
 use super::path_kinds;
-use super::{declared_at_head, Ceiling, DeclError, EntranceFlip, Raw, Sourced, DETECTION_KEY, ENTRANCE_KEY};
+use super::{declared_at_head, head_declaration, Ceiling, DeclError, Declared, EntranceFlip, Raw, Sourced, DETECTION_KEY, ENTRANCE_KEY};
 use std::path::Path;
 
 /// 宣言が持つ key（この順で報告する）。path の種別の任意 key 3 本（[`path_kinds::KEYS`]・ADR-0047）は
@@ -22,7 +22,12 @@ pub(super) const DECLARED_KEYS: &[&str] = &[
     path_kinds::DESIGN_DOC_KEY,
     path_kinds::TESTS_KEY,
     ENTRANCE_KEY,
+    QUESTION_ROUTE_KEY,
 ];
+
+/// **問いの経路の 1 行**の key（任意・設計 vessel-hook.md §20 形 4・ADR-0084）。hook が選択式の問いの道具を断る 1 行の
+/// 後ろに添える（既定は持たない＝書かない宣言は何も添えない）。
+const QUESTION_ROUTE_KEY: &str = "question-route";
 
 /// **push 先の remote の名**の key（任意・設計 contract-source.md §5「land の終端」）。
 ///
@@ -59,7 +64,46 @@ pub(super) const OPTIONAL_KEYS: &[&str] = &[
     path_kinds::DESIGN_DOC_KEY,
     path_kinds::TESTS_KEY,
     ENTRANCE_KEY,
+    QUESTION_ROUTE_KEY,
 ];
+
+/// 問いの経路の 1 行（任意）。前後の空白を除いて空でなく、制御文字を持たない文字列だけを受ける（列・整数・空・空白だけ・
+/// 制御文字は key と行番号を名指す不備）。
+pub(super) fn question_route_of(found: &[(String, Raw, u64)], errors: &mut Vec<DeclError>) -> Option<String> {
+    let (_, value, line) = found.iter().find(|(seen, _, _)| seen == QUESTION_ROUTE_KEY)?;
+    match value {
+        Raw::Text(route) if !route.trim().is_empty() && !route.chars().any(char::is_control) => Some(route.trim().to_owned()),
+        _ => {
+            errors.push(DeclError::new(*line, format!("{QUESTION_ROUTE_KEY} は制御文字を持たない空でない 1 行の文字列である")));
+            None
+        }
+    }
+}
+
+/// HEAD の宣言の問いの経路（閉じた 3 値・設計 vessel-hook.md §20 形 4）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QuestionRoute {
+    /// 宣言した値（前後の空白を除いた 1 行）。
+    Declared(String),
+    /// 無い（宣言 file が HEAD に無い・git を撃てない・key が無い）。
+    Absent,
+    /// 読めない（宣言が在って不備）。「無い」に倒さない（C10）。
+    Unreadable,
+}
+
+/// HEAD の宣言から問いの経路を解く（読み手は [`head_declaration`] の 1 本・作業ツリーは読まない）。
+pub fn question_route(repo: &Path) -> QuestionRoute {
+    route_of(head_declaration(repo))
+}
+
+/// HEAD の読みの結果（無い / 不備 / 値）から閉じた 3 値への写し。
+fn route_of(read: Option<Result<Declared, Vec<DeclError>>>) -> QuestionRoute {
+    match read {
+        None => QuestionRoute::Absent,
+        Some(Err(_)) => QuestionRoute::Unreadable,
+        Some(Ok(declared)) => declared.question_route.map_or(QuestionRoute::Absent, QuestionRoute::Declared),
+    }
+}
 
 /// 要件面の path（任意）。書いた周は repo 相対の path の文字列だけを受ける（repo の外を読まない）。
 pub(super) fn requirements_of(found: &[(String, Raw, u64)], errors: &mut Vec<DeclError>) -> Option<String> {
@@ -159,4 +203,42 @@ pub fn terminal_facts(repo: &Path) -> Result<TerminalFacts, Vec<DeclError>> {
         remote: declared.remote,
         ci_cmd: declared.ci_cmd.unwrap_or_else(|| DEFAULT_CI_CMD.to_owned()),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::Declared;
+    use super::{route_of, QuestionRoute};
+
+    /// 必須 key だけの宣言の本文（3 行）の後ろに `extra` を足す。
+    fn with(extra: &str) -> String {
+        format!("schema = 1\nallowed-commands = [\"git\"]\ncommon-verify = [\"git diff --quiet\"]\n{extra}")
+    }
+
+    /// key の無い宣言は値なし、1 行の値は前後の空白を除いた値。
+    #[test]
+    fn declaration_question_route_reads_one_trimmed_line_or_nothing() {
+        assert_eq!(Declared::parse(&with("")).map(|found| found.question_route), Ok(None));
+        let declared = Declared::parse(&with("question-route = \"  台帳の問いへ \"\n"));
+        assert_eq!(declared.map(|found| found.question_route), Ok(Some("台帳の問いへ".to_owned())));
+    }
+
+    /// 空・空白だけ・tab を含む・列・整数の値は key と行番号（4 行目）を名指す不備。
+    #[test]
+    fn declaration_question_route_refuses_empty_blank_control_and_lists() {
+        for value in ["\"\"", "\"   \"", "\"a\tb\"", "[\"a\"]", "1"] {
+            let errors = Declared::parse(&with(&format!("question-route = {value}\n"))).expect_err(value);
+            assert!(errors.iter().any(|error| error.line == 4 && error.reason.contains("question-route")), "{value}: {errors:?}");
+        }
+    }
+
+    /// HEAD の読みの結果（無い / 不備 / 値）から閉じた 3 値への写し。key の無い宣言は「無い」。
+    #[test]
+    fn declaration_question_route_maps_the_head_read_to_three_values() {
+        assert_eq!(route_of(None), QuestionRoute::Absent);
+        assert_eq!(route_of(Some(Err(Vec::new()))), QuestionRoute::Unreadable);
+        assert_eq!(route_of(Some(Declared::parse(&with("")))), QuestionRoute::Absent);
+        let declared = Declared::parse(&with("question-route = \"x\"\n"));
+        assert_eq!(route_of(Some(declared)), QuestionRoute::Declared("x".to_owned()));
+    }
 }

@@ -77,6 +77,7 @@ use verify::{main_red, main_unmeasured, verify_main};
 mod finish;
 
 use finish::{finish, open_pr, squash};
+pub(crate) use finish::source_key;
 pub(in crate::pipe) use finish::{land_train, landed_sha, terminal, Car, PushTip};
 
 /// 着地が anchor を揃えなかった周の印（設計 §57・行 az）。書き手は境界 crate の歯からも呼べ、古さの判定は crate の中
@@ -136,8 +137,8 @@ impl AnchorSkip {
     }
 }
 
-/// 本文の最後に置く trailer の key（読み手が fleet の記録へ辿る鍵）。
-const RUN_TRAILER: &str = "run: ";
+/// 本文の最後に置く trailer の key（読み手が fleet の記録へ辿る鍵・merge の門も同じ字で run の行を読む）。
+pub(crate) const RUN_TRAILER: &str = "run: ";
 
 /// 検出線（変異検査）の面（**閉じた集合**・設計 §30・`s2-07l.397`）。末尾 `/` の項目は dir の接頭辞、
 /// それ以外は file の完全一致。検出線の行の出所（`.vessel.toml`）と、変異検査が読む面（crate の source・

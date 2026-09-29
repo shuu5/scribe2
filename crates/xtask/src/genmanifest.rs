@@ -29,8 +29,9 @@ pub const ROW_TIMEOUT: &str = "hook.timeout_s";
 
 /// `PreToolUse` で見る tool の matcher。**`Bash` を含む**（席の権能の Bash 面・設計 seat-roles.md §4・
 /// `s2-07l.201`）: write-set guard と cap guard は `Bash` を見ないまま（core 側の集合が決める）で、role guard
-/// だけが command 行を読む。
-const MATCHER: &str = "Bash|Edit|Write|MultiEdit|NotebookEdit";
+/// だけが command 行を読む。末尾の `AskUserQuestion` は選択式の問いの道具を役割を解く前に止める 1 関数へ届ける
+/// （設計 vessel-hook.md §20・ADR-0084）。
+const MATCHER: &str = "Bash|Edit|Write|MultiEdit|NotebookEdit|AskUserQuestion";
 
 /// `SessionStart` に紐づく subcommand。
 const SUB_SESSION_START: &str = "session-start";
@@ -437,11 +438,11 @@ mod tests {
             );
         }
         assert_every_command_line_carries_the_seat_args(&tracked);
-        // PreToolUse の matcher は Bash を含み（role guard の Bash 面）、PermissionRequest の matcher は不変。
+        // PreToolUse の matcher は Bash を含み（role guard の Bash 面）末尾に AskUserQuestion を持ち（§20）、PermissionRequest の matcher は不変。
         assert_eq!(
-            tracked.matches("\"matcher\": \"Bash|Edit|Write|MultiEdit|NotebookEdit\"").count(),
+            tracked.matches("\"matcher\": \"Bash|Edit|Write|MultiEdit|NotebookEdit|AskUserQuestion\"").count(),
             1,
-            "PreToolUse の matcher は Bash を含む"
+            "PreToolUse の matcher は Bash を含み末尾が AskUserQuestion"
         );
         assert_eq!(tracked.matches("\"matcher\": \"Bash\"").count(), 1, "PermissionRequest の matcher は Bash だけのまま");
     }

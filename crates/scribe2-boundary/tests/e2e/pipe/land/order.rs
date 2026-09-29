@@ -371,44 +371,59 @@ fn pipe_terminal_land_ci_failure_does_not_close_the_bead() {
     clean(&[&repo, &state]);
 }
 
-/// (§5 手順 3) `pipe land --terminal-only` は**着地をやり直さず終端だけ**を撃ち直す（冪等）。
-///
-/// CI が確定しなかった便（`ci:failure`）を、CI を直してから継ぐ。main は 1 mm も動かない——
-/// 着地は既に成立していて、やり直すのは終端の 3 段だけである。
-#[test]
-fn pipe_terminal_land_only_replays_the_terminal_without_relanding() {
-    let (repo, state) = repo_with_state();
-    let tools = fake_terminal(&repo, &state, "failure");
-    let marker = state.join("lens-ran");
-    let design = write_contract(&repo, &[], &[]);
-    let id = gated_pass(&repo, &state, &design, &marker);
-    let bd = state.join("fake-bd.sh").display().to_string();
-    let rules = ceiling_rules(&state);
-    let first = land_extra(&repo, &state, &id, &["--bd", &bd, "--rules", &rules]);
+/// 撃ち直しの歯の fixture（設計 contract-source.md §58・行 bm）: CI が failure の着地（close しない）の後に CI を直す
+/// （直した偽 CI も argv を写し、呼ばれた回数を数える）。返すのは道具・便・`--bd` と `--rules` の値・着地した sha。
+fn replay_fixture(repo: &Path, state: &Path) -> (FakeTerminal, String, [String; 2], String) {
+    let tools = fake_terminal(repo, state, "failure");
+    let design = write_contract(repo, &[], &[]);
+    let id = gated_pass(repo, state, &design, &state.join("lens-ran"));
+    let flags = [state.join("fake-bd.sh").display().to_string(), ceiling_rules(state)];
+    let first = land_extra(repo, state, &id, &["--bd", &flags[0], "--rules", &flags[1]]);
     assert_eq!(first.status.code(), Some(1), "1 周目は close しない: {}", stderr_of(&first));
-    let landed = git(&repo, &["rev-parse", "refs/heads/main"]);
     assert!(!tools.bd_log.exists(), "前提: 台帳はまだ閉じていない");
-    // **別の便が main を進める**（この歯の要）: 以後 HEAD ≠ 着地した sha なので、終端が「記録の sha」を
-    // 読むのか「HEAD の今の sha」を読むのかが弁別できる。同じ fixture で両方が等しいままだと、HEAD を
-    // 読む実装でも通ってしまう（空虚）。
-    fs::write(repo.join("unrelated.md"), "別の便
-").expect("別の便の file を書ける");
+    let landed = git(repo, &["rev-parse", "refs/heads/main"]);
+    // CI を直す（宣言は同じ path を指したまま・行は 1 byte も変えない）。
+    let (log, calls) = (tools.ci_log.display(), tools.ci_calls.display());
+    let body = format!("printf '%s\\n' \"$@\" > '{log}'\necho call >> '{calls}'\nprintf '[{{\"status\":\"completed\",\"conclusion\":\"success\"}}]\\n'\n");
+    exec_script(&state.join("fake-ci.sh"), &body);
+    (tools, id, flags, landed)
+}
+
+/// 終端だけを撃ち直す（`pipe land --terminal-only`・`--bd` と `--rules` は fixture の値）。
+fn replay(repo: &Path, state: &Path, id: &str, flags: &[String; 2]) -> Output {
+    land_extra(repo, state, id, &["--bd", &flags[0], "--rules", &flags[1], "--terminal-only"])
+}
+
+/// anchor の main と偽 remote の main を `sha` へ付け替える（remote の ref は bare repo の中で直に動かす）。
+fn point_main(repo: &Path, tools: &FakeTerminal, sha: &str) {
+    git(&tools.remote, &["update-ref", "refs/heads/main", sha]);
+    git(repo, &["update-ref", "refs/heads/main", sha]);
+}
+
+/// (§58 形 3) 着地した sha が main の今の先端の祖先の撃ち直しは、**先端の CI** で照合して close する（着地をやり直さない）。
+///
+/// CI が failure の便の後に別の commit が main を進め、CI を直して撃ち直す。main は器が動かさず、CI の argv は main の今の
+/// sha（着地した sha ではない）、reason は `landed <着地した sha> ci=success tip=<今の sha>`。base は着地した sha を照合する＝RED。
+#[test]
+fn pipe_replay_tip_behind_checks_the_current_main_tip_and_closes() {
+    let (repo, state) = repo_with_state();
+    let (tools, id, flags, landed) = replay_fixture(&repo, &state);
+    fs::write(repo.join("unrelated.md"), "別の便\n").expect("別の便の file を書ける");
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-q", "-m", "another-run"]);
     let moved = git(&repo, &["rev-parse", "refs/heads/main"]);
-    assert_ne!(moved, landed, "前提: HEAD は着地した sha から動いた");
-    // CI を直す（宣言は同じ path を指したまま・行は 1 byte も変えない）。
-    exec_script(&state.join("fake-ci.sh"), &format!("printf '%s\\n' \"$@\" > '{}'\nprintf '[{{\"status\":\"completed\",\"conclusion\":\"success\"}}]\\n'\n", tools.ci_log.display()));
-    let again = land_extra(&repo, &state, &id, &["--bd", &bd, "--rules", &rules, "--terminal-only"]);
+    assert_ne!(moved, landed, "前提: main は着地した sha から動いた");
+    let again = replay(&repo, &state, &id, &flags);
     assert_eq!(again.status.code(), Some(i32::from(RC_OK)), "継いだ終端は rc 0: {}", stderr_of(&again));
     assert_eq!(stdout_of(&again).trim(), format!("run={id} terminal=closed"), "終端だけの 1 行");
     // **着地はやり直さない**: main は別の便が進めた位置のままで、器は 1 mm も動かさない。
     assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), moved, "main は器が動かさない");
-    // **照合したのは記録の sha である**（HEAD の今の sha ではない）。
+    assert_eq!(git(&tools.remote, &["rev-parse", "refs/heads/main"]), moved, "偽 remote の main は今の sha");
+    // **照合したのは main の今の先端である**（着地した sha には forge の CI の run が付かない）。
     let ci_argv = fs::read_to_string(&tools.ci_log).expect("偽 CI が撃たれた");
     let words: Vec<&str> = ci_argv.lines().collect();
-    assert!(words.contains(&landed.as_str()), "CI の argv は**着地した sha**: {words:?}");
-    assert!(!words.contains(&moved.as_str()), "HEAD の今の sha では照合しない: {words:?}");
+    assert!(words.contains(&moved.as_str()), "CI の argv は main の今の sha: {words:?}");
+    assert!(!words.contains(&landed.as_str()), "着地した sha では照合しない: {words:?}");
     // 記録は 1 周目の 2 件に 2 周目の 3 件が続く（段ごとに 1 件・やり直した段も残る）。
     let details = landed_details(&state, &id);
     assert_eq!(
@@ -424,8 +439,59 @@ fn pipe_terminal_land_only_replays_the_terminal_without_relanding() {
         details.len()
     );
     let argv = fs::read_to_string(&tools.bd_log).expect("2 周目で台帳が閉じられた");
-    assert!(argv.contains(&landed), "理由は**1 周目に着地した sha**を名指す: {argv}");
-    assert!(!argv.contains(&moved), "HEAD の今の sha は理由に載らない: {argv}");
+    let reason = format!("landed {landed} ci=success tip={moved}");
+    assert_eq!(argv.lines().nth(3), Some(reason.as_str()), "理由は着地した sha と先端の sha を名指す: {argv}");
+    clean(&[&repo, &state]);
+}
+
+/// (§58 形 2 / 3) 1 本の fn の撃ち直し 2 周: main を着地した commit を祖先に持たない commit（同じ木・同じ親）へ動かした
+/// 周は CI を撃たず close しない（rc 1・`ci:unmeasurable`）。着地した commit へ戻した周は自分の sha の CI で照合して
+/// `tip=` の無い reason で close する。base は 1 周目で着地した sha を照合して close する＝RED。
+#[test]
+fn pipe_replay_tip_non_ancestor_stays_open_and_own_tip_closes_without_tip() {
+    let (repo, state) = repo_with_state();
+    let (tools, id, flags, landed) = replay_fixture(&repo, &state);
+    let tree = format!("{landed}^{{tree}}");
+    let sibling = git(&repo, &["commit-tree", &tree, "-p", &format!("{landed}^"), "-m", "sibling"]);
+    assert_ne!(sibling, landed, "前提: 着地した commit と別の commit");
+    git(&repo, &["push", "-q", "fake", &format!("{sibling}:refs/heads/sibling")]);
+    point_main(&repo, &tools, &sibling);
+    let calls = tools.ci_call_count();
+    let off = replay(&repo, &state, &id, &flags);
+    assert_eq!(off.status.code(), Some(1), "祖先でない周は close しない: {}", stderr_of(&off));
+    assert_eq!(stdout_of(&off).trim(), format!("run={id} terminal=ci:unmeasurable"), "終端の 1 行");
+    assert_eq!(tools.ci_call_count(), calls, "偽 CI は撃たれない");
+    assert!(!tools.bd_log.exists(), "偽 bd は撃たれない");
+    point_main(&repo, &tools, &landed);
+    let own = replay(&repo, &state, &id, &flags);
+    assert_eq!(own.status.code(), Some(i32::from(RC_OK)), "先端そのものの周は close する: {}", stderr_of(&own));
+    let ci_argv = fs::read_to_string(&tools.ci_log).expect("偽 CI が撃たれた");
+    assert!(ci_argv.lines().any(|word| word == landed), "CI の argv は着地した sha: {ci_argv}");
+    let argv = fs::read_to_string(&tools.bd_log).expect("2 周目で台帳が閉じられた");
+    let reason = format!("landed {landed} ci=success");
+    assert_eq!(argv.lines().nth(3), Some(reason.as_str()), "reason は tip= を持たない: {argv}");
+    let tail: Vec<String> = landed_details(&state, &id).into_iter().skip(1).collect();
+    let push = "terminal:push:fake";
+    let expected = [push, "terminal:ci:failure", push, "terminal:ci:unmeasurable", push, "terminal:ci:success", "terminal:close:ok"];
+    assert_eq!(tail, expected, "Landed の後ろの 7 件");
+    clean(&[&repo, &state]);
+}
+
+/// (§58 形 1) `refs/heads/main` を読めない撃ち直しは先端の側に倒さず、何も書かず何も撃たずに断る（rc 1・stderr 1 行）。
+/// base は終端へ進んで `terminal:unreadable` を記す＝RED。
+#[test]
+fn pipe_replay_tip_unreadable_main_refuses_without_events() {
+    let (repo, state) = repo_with_state();
+    let (tools, id, flags, _) = replay_fixture(&repo, &state);
+    git(&repo, &["update-ref", "-d", "refs/heads/main"]);
+    let (events, calls) = (event_count(&state), tools.ci_call_count());
+    let out = replay(&repo, &state, &id, &flags);
+    assert_eq!(out.status.code(), Some(1), "断りは rc 1: {}", stderr_of(&out));
+    assert_eq!(stdout_of(&out), "", "stdout は空");
+    assert!(stderr_of(&out).contains("refs/heads/main を読めない"), "断りの 1 行: {}", stderr_of(&out));
+    assert_eq!(event_count(&state), events, "event を 1 件も書かない");
+    assert_eq!(tools.ci_call_count(), calls, "偽 CI は撃たれない");
+    assert!(!tools.bd_log.exists(), "偽 bd は撃たれない");
     clean(&[&repo, &state]);
 }
 

@@ -1,5 +1,5 @@
 // flip-check: moved s2-07l.679
-//! guard の族の歯（接頭辞 `host_guard_` / `hook_guard_` / `hook_command_` / `hook_memo_` / `hook_ledger_`・設計 docs/design/carry-prep.md §9 行 g）。
+//! guard の族の歯（接頭辞 `host_guard_` / `hook_guard_` / `hook_command_` / `hook_memo_` / `hook_ledger_` / `hook_choice_question_`・設計 docs/design/carry-prep.md §9 行 g）。
 
 use super::*;
 
@@ -990,6 +990,222 @@ fn hook_ledger_write_fails_closed_without_the_row() {
     clean(&[&repo, &state]);
 }
 
+// ─────────────── 台帳の問いの create の形（`s2-07l.738.11`・設計 ledger-form.md §14 行 j・接頭辞 `hook_question_form_`） ───────────────
+//
+// `.beads` の無い toy repo で撃つ。rules は埋め込みの manifest の写しで `ledger.denied_writes` から bd-outside-bdw を外す
+// （`bd create` の揃った問いが 6 形に当たらず通る）。
+
+/// 埋め込みの manifest の字面（`--rules` に渡す写しの元）。
+const QUESTION_EMBEDDED: &str = include_str!("../../../../../rules/manifest.toml");
+
+/// 揃った問いの本文（4 行）。
+const QUESTION_BODY: &str = "概要 = 何を決めるか\n- 技術: 器の門\n理由：台帳の形\n推奨 = 断る\n";
+
+/// 揃った metadata。
+const QUESTION_META: &str = "{\"effect\":\"document\",\"asked\":\"seat\"}";
+
+/// 写しの rules を置き場に書き、path を返す。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn question_rules(state: &Path) -> String {
+    let text = QUESTION_EMBEDDED.replace("\"bd-outside-bdw\", ", "");
+    assert_ne!(text, QUESTION_EMBEDDED, "写しは bd-outside-bdw を外した（字面が manifest と揃っている）");
+    let path = state.join("question-rules.toml");
+    fs::write(&path, text).expect("rules の写しを書ける");
+    path.display().to_string()
+}
+
+/// 問いの create の command（label・親の flag・本文の `-d`・metadata の字）。
+fn question_create(client: &str, labels: &str, parent: &str, body: &str, meta: &str) -> String {
+    format!("{client} create 問い --labels {labels} {parent} -d '{body}' --metadata '{meta}'")
+}
+
+/// 写しの rules で撃ち、問いの段の deny の外形（rc 2・stdout 0 byte・stderr 1 行・語と §14）と記録 1 行を確かめ、stderr を返す。
+fn assert_question_deny(state: &Path, repo: &Path, rules: &str, command: &str, reason: &str) -> String {
+    let before = ledger_records(state).len();
+    let out = run_hook_args(&["pre-tool-use", "--rules", rules], &bash_payload(repo, command));
+    let text = stderr_text(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "{command}: deny は rc 2: {text}");
+    assert!(out.stdout.is_empty(), "{command}: deny でも stdout は 0 byte");
+    assert_eq!(stderr_lines(&out), 1, "{command}: stderr は 1 行: {text}");
+    let head = format!("{NAME}: deny bd create は起票の門が止める reason={reason}（");
+    assert!(text.starts_with(&head) && text.contains("・ledger-form.md §14）"), "{command}: {text}");
+    let lines = ledger_records(state);
+    assert_eq!(lines.len(), before + 1, "{command}: 記録は 1 行増える: {lines:?}");
+    assert_eq!(what_of(&lines.last().cloned().unwrap_or_default()), format!("ledger-deny {reason}"), "{command}");
+    text
+}
+
+/// 写しの rules で撃ち、rc 0・0 byte・記録なしで通ることを確かめる。
+fn assert_question_pass(state: &Path, repo: &Path, rules: &str, command: &str) {
+    let before = inject_lines(state).len();
+    assert_silent(&run_hook_args(&["pre-tool-use", "--rules", rules], &bash_payload(repo, command)), command);
+    assert_eq!(inject_lines(state).len(), before, "{command}: 通す周は記録を残さない");
+}
+
+/// (a) 10 形（4 行の欠け 4・effect の欠けと値の外・asked の欠けと値の外・intake:memo の併せ持ち・継がない指定の欠け）×
+/// bd と bdw の 20 本がどれも断られ、断り文は欠けた行・外れた値・併せ持つ label・継ぐ親の id を名指す。(c) label
+/// intake:question を持たない create と (d) 問いの create を中で撃つ script を起こす command は問いの語で断られない。
+#[test]
+fn hook_question_form_denies_each_missing_part_from_bd_and_bdw() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let rules = question_rules(&state);
+    let (question, keep) = ("intake:question", "--parent s2-1 --no-inherit-labels");
+    let without = |word: &str| QUESTION_BODY.lines().filter(|line| !line.contains(word)).collect::<Vec<_>>().join("\n");
+    let forms = [
+        ("question-no-summary", question, keep, without("概要"), QUESTION_META, "本文に 概要 の行が無い"),
+        ("question-no-technical", question, keep, without("技術"), QUESTION_META, "本文に 技術 の行が無い"),
+        ("question-no-reason", question, keep, without("理由"), QUESTION_META, "本文に 理由 の行が無い"),
+        ("question-no-recommendation", question, keep, without("推奨"), QUESTION_META, "本文に 推奨 の行が無い"),
+        ("question-no-effect", question, keep, QUESTION_BODY.to_owned(), "{\"asked\":\"seat\"}", "metadata に effect が無い"),
+        ("question-bad-effect", question, keep, QUESTION_BODY.to_owned(), "{\"effect\":\"docs\",\"asked\":\"seat\"}", "effect が docs"),
+        ("question-no-asked", question, keep, QUESTION_BODY.to_owned(), "{\"effect\":\"operation\"}", "metadata に asked が無い"),
+        ("question-bad-asked", question, keep, QUESTION_BODY.to_owned(), "{\"effect\":\"document\",\"asked\":\"planner\"}", "asked が planner"),
+        ("question-memo-label", "intake:question,intake:memo", keep, QUESTION_BODY.to_owned(), QUESTION_META, "label intake:memo を併せ持てない"),
+        ("question-inherits-labels", question, "--parent s2-1", QUESTION_BODY.to_owned(), QUESTION_META, "親 s2-1 の label を継ぐ"),
+    ];
+    for (reason, labels, parent, body, meta, named) in &forms {
+        for client in ["bd", "bdw"] {
+            let command = question_create(client, labels, parent, body, meta);
+            let text = assert_question_deny(&state, &repo, &rules, &command, reason);
+            assert!(text.contains(named), "{command}: {named} を名指す: {text}");
+        }
+    }
+    assert_eq!(ledger_records(&state).len(), 20, "20 本 × 記録 1 行");
+    for client in ["bd", "bdw"] {
+        assert_question_pass(&state, &repo, &rules, &format!("{client} create x --parent s2-1 --labels doc:toy -d '無い 4 行'"));
+    }
+    fs::write(repo.join("ask.sh"), "bdw create q --labels intake:question -d 'x'\n").expect("script を書ける");
+    assert_question_pass(&state, &repo, &rules, "sh ask.sh");
+    clean(&[&repo, &state]);
+}
+
+/// (b) 揃った問いの create（本文が body-file・`-d`・metadata が `@meta.json` の 3 形）は rc 0 で記録を残さず、(e) `--stdin`
+/// と `--body-file -` の問いは question-body-unreadable で断られる。
+#[test]
+fn hook_question_form_passes_complete_questions_and_denies_stdin_bodies() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let rules = question_rules(&state);
+    fs::write(repo.join("body.md"), QUESTION_BODY).expect("本文を書ける");
+    fs::write(repo.join("meta.json"), QUESTION_META).expect("metadata を書ける");
+    let keep = "--parent s2-1 --no-inherit-labels";
+    for command in [
+        format!("bdw create 問い --labels intake:question {keep} --body-file body.md --metadata @meta.json"),
+        question_create("bd", "doc:toy,intake:question", keep, QUESTION_BODY, QUESTION_META),
+        format!("scripts/bdw create --title=問い -l intake:question --parent=s2-1 --no-inherit-labels=true --body-file=body.md --metadata='{QUESTION_META}'"),
+    ] {
+        assert_question_pass(&state, &repo, &rules, &command);
+    }
+    for (client, body) in [("bd", "--stdin"), ("bdw", "--body-file -"), ("bdw", "--stdin --body-file body.md")] {
+        let command = format!("{client} create 問い --labels intake:question {keep} {body} --metadata @meta.json");
+        let text = assert_question_deny(&state, &repo, &rules, &command, "question-body-unreadable");
+        assert!(text.contains("--stdin"), "{command}: 読めない形を名指す: {text}");
+    }
+    clean(&[&repo, &state]);
+}
+
+// ─────────────── memo の引き金の行（`s2-07l.738.12`・設計 ledger-form.md §15 行 k・接頭辞 `hook_memo_trigger_`） ───────────────
+//
+// rules は §14 と同じ写し（[`question_rules`]）。`.beads` の無い toy repo で撃ち、接頭辞の歯だけ `.beads/config.yaml` を置いた
+// repo で撃つ（形の門が読む偽の client は根の epic E の 1 件を返し argv を 1 行ずつ記録する）。
+
+/// 4 節が揃い、昇格条件が散文だけ（値に括弧が続く引き金の行を含む）の memo の本文。
+const PROSE_MEMO: &str = "## memo\n### 出所\n- run: r\n### 観測\n- x\n### 候補\n### 昇格条件\n- 引き金: 再発 3（同じ落ち方）\n- 同じ落ち方が続いたら\n";
+
+/// 断り文が名指す 5 形の字面。
+const TRIGGER_SHAPES: &str = "引き金: 再発 <n> / 同梱 <path> / 依存 <id> / 期日 YYYY-MM-DDTHH:MMZ / 着地 <pointer>";
+
+/// `pre-tool-use` に `args` を足して撃つ。
+fn trigger_hook(repo: &Path, args: &[&str], command: &str) -> Output {
+    let all: Vec<&str> = ["pre-tool-use"].into_iter().chain(args.iter().copied()).collect();
+    run_hook_args(&all, &bash_payload(repo, command))
+}
+
+/// 引き金の段の deny の外形（rc 2・stdout 0 byte・stderr 1 行・`deny bd <verb>` の頭と語と §15）と記録 1 行を確かめ、stderr を返す。
+fn assert_trigger_deny(state: &Path, repo: &Path, args: &[&str], command: &str, (verb, reason): (&str, &str)) -> String {
+    let before = ledger_records(state).len();
+    let out = trigger_hook(repo, args, command);
+    let text = stderr_text(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "{command}: deny は rc 2: {text}");
+    assert!(out.stdout.is_empty(), "{command}: deny でも stdout は 0 byte");
+    assert_eq!(stderr_lines(&out), 1, "{command}: stderr は 1 行: {text}");
+    let head = format!("{NAME}: deny bd {verb} は起票の門が止める reason={reason}（");
+    assert!(text.starts_with(&head) && text.trim_end().ends_with("・ledger-form.md §15）"), "{command}: {text}");
+    let lines = ledger_records(state);
+    assert_eq!(lines.len(), before + 1, "{command}: 記録は 1 行増える: {lines:?}");
+    assert_eq!(what_of(&lines.last().cloned().unwrap_or_default()), format!("ledger-deny {reason}"), "{command}");
+    text
+}
+
+/// rc 0・0 byte・記録なしで通ることを確かめる。
+fn assert_trigger_pass(state: &Path, repo: &Path, args: &[&str], command: &str) {
+    let before = inject_lines(state).len();
+    assert_silent(&trigger_hook(repo, args, command), command);
+    assert_eq!(inject_lines(state).len(), before, "{command}: 通す周は記録を残さない");
+}
+
+/// (a) 昇格条件が散文だけの memo の create と、昇格条件を引き金の無い本文へ書き換える update（`--body-file`）の 2 形 × bd と bdw
+/// の 4 本がどれも断られ、断り文は 5 形の字面（create は最初の読めない行も）を名指す (b) 再発 1 の引き金を持つ memo の create と
+/// 見出しの無い本文の update は通る (c) `bdw update s2-1 --stdin` は update-body-unreadable。
+#[test]
+fn hook_memo_trigger_denies_prose_memos_and_untriggered_updates_from_bd_and_bdw() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let rules = question_rules(&state);
+    let args = ["--rules", rules.as_str()];
+    for (name, body) in [("prose.md", PROSE_MEMO), ("rewrite.md", "### 昇格条件\n- 散文だけの条件\n"), ("memo.md", MEMO_BODY), ("plain.md", "本文だけ\n")] {
+        fs::write(repo.join(name), body).expect("本文を書ける");
+    }
+    for client in ["bd", "bdw"] {
+        let create = format!("{client} create \"[memo] 観測の件\" --parent s2-1 --labels intake:memo --body-file prose.md");
+        let text = assert_trigger_deny(&state, &repo, &args, &create, ("create", "no-trigger"));
+        assert!(text.contains(TRIGGER_SHAPES), "{create}: 5 形の字面: {text}");
+        assert!(text.contains("最初の読めない行: - 引き金: 再発 3（同じ落ち方）"), "{create}: 読めない行: {text}");
+        let update = format!("{client} update s2-1 --body-file rewrite.md");
+        let text = assert_trigger_deny(&state, &repo, &args, &update, ("update", "update-no-trigger"));
+        assert!(text.contains(TRIGGER_SHAPES), "{update}: 5 形の字面: {text}");
+    }
+    assert_eq!(ledger_records(&state).len(), 4, "4 本 × 記録 1 行");
+    for client in ["bd", "bdw"] {
+        assert_trigger_pass(&state, &repo, &args, &format!("{client} create \"[memo] x\" --parent s2-1 --body-file memo.md"));
+        assert_trigger_pass(&state, &repo, &args, &format!("{client} update s2-1 --body-file plain.md"));
+    }
+    let text = assert_trigger_deny(&state, &repo, &args, "bdw update s2-1 --stdin", ("update", "update-body-unreadable"));
+    assert!(text.contains("--stdin"), "読めない形を名指す: {text}");
+    clean(&[&repo, &state]);
+}
+
+/// (d) `.beads/config.yaml` に接頭辞 toy を持つ repo で、toy の依存の行を持つ memo は通り（形の門が台帳を 1 回読む）、別の接頭辞
+/// の依存の行だけの memo は no-trigger で、引き金の段は台帳を 1 度も読まない。
+#[test]
+fn hook_memo_trigger_reads_dependencies_with_the_ledger_prefix() {
+    use std::os::unix::fs::PermissionsExt;
+    let repo = git_repo();
+    let state = linked(&repo);
+    fs::create_dir_all(repo.join(".beads")).expect(".beads を作れる");
+    fs::write(repo.join(".beads").join("config.yaml"), "issue-prefix: toy\n").expect("台帳の設定を書ける");
+    let (bd, log) = (state.join("bd"), state.join("bd.log"));
+    let ledger = graph_bead("E", "open", "epic", "");
+    fs::write(&bd, format!("#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nprintf '%s' '[{ledger}]'\n", log.display())).expect("偽の bd を書ける");
+    fs::set_permissions(&bd, fs::Permissions::from_mode(0o755)).expect("偽の bd を実行可能にできる");
+    let (rules, bd) = (question_rules(&state), bd.display().to_string());
+    let args = ["--rules", rules.as_str(), "--bd", bd.as_str()];
+    let reads = || fs::read_to_string(&log).map(|text| text.lines().count()).unwrap_or_default();
+    let command = "bdw create \"[memo] x\" --parent E --labels intake:memo --body-file dep.md";
+    fs::write(repo.join("dep.md"), MEMO_BODY.replace("- 引き金: 再発 1", "- 引き金: 依存 s2-7")).expect("本文を書ける");
+    let text = assert_trigger_deny(&state, &repo, &args, command, ("create", "no-trigger"));
+    assert!(text.contains("依存 s2-7"), "読めない依存の行を名指す: {text}");
+    assert_eq!(reads(), 0, "引き金の段は台帳を読まない");
+    fs::write(repo.join("dep.md"), MEMO_BODY.replace("- 引き金: 再発 1", "- 引き金: 依存 toy-7.1")).expect("本文を書ける");
+    assert_trigger_pass(&state, &repo, &args, command);
+    assert_eq!(reads(), 1, "通った create は形の門が 1 回だけ読む");
+    clean(&[&repo, &state]);
+}
+
 // ─────────────── 台帳の形の門（`s2-07l.733`・設計 ledger-form.md §12 行 h・接頭辞 `hook_graph_guard_`） ───────────────
 //
 // toy repo の root に `.beads` の dir を置き、`--bd` に偽の client（fixture の JSON を返し argv を 1 行ずつ記録する・読めない
@@ -1497,7 +1713,7 @@ fn hook_anchor_guard_unreadable_mark_is_denied() {
 
 /// (d) origin の main を local の main の 1 つ前に置いた（未 push の）anchor で、HEAD が main の `git commit` と `gh pr merge 1`
 /// は窓の busy の行と land-window の literal で断られる。HEAD を別 branch に替えた `git commit` は通り、origin を local に
-/// 揃えた後の `gh pr merge 1` は通る。
+/// 揃えた後の `gh pr merge 1`（発端の trailer の本文を持つ・merge の門は行 mg）は通る。
 #[test]
 fn hook_anchor_guard_closed_window_denies_main_commit_and_pr_merge() {
     let (repo, state) = anchor_place();
@@ -1514,7 +1730,7 @@ fn hook_anchor_guard_closed_window_denies_main_commit_and_pr_merge() {
     git(&repo, &["checkout", "-q", "-b", "side"]);
     assert_silent(&live_hook(&repo, &bash_payload(&repo, "git commit -m x")), "HEAD が別 branch");
     git(&repo, &["update-ref", "refs/remotes/origin/main", "refs/heads/main"]);
-    assert_silent(&live_hook(&repo, &bash_payload(&repo, "gh pr merge 1")), "窓が開いた");
+    assert_silent(&live_hook(&repo, &bash_payload(&repo, &format!("gh pr merge 1 --body '{}s2-a.1'", merge_key()))), "窓が開いた");
     clean(&[&repo, &state]);
 }
 
@@ -1526,4 +1742,260 @@ fn hook_anchor_guard_is_silent_in_a_repo_without_marker() {
     stale_anchor(&repo);
     assert_silent(&live_hook(&repo, &bash_payload(&repo, "git commit -m x")), "marker の無い repo");
     clean(&[&repo]);
+}
+
+// ─────────────── merge の門（設計 vessel-hook.md §21 行 mg・FR92 / AC62・接頭辞 `hook_merge_gate_`） ───────────────
+//
+// 窓を開いた anchor（origin の main を local の main へ揃える）で `gh pr merge` を撃ち、本文の発端の trailer か器の便の trailer
+// の有無で通すか断るかを binary の外形で測る。`--project` は anchor・payload の cwd も anchor。
+
+/// 発端の trailer の key（NAME の先頭を大文字にして `-Source: ` を足す・core の導出と独立に組む）。
+fn merge_key() -> String {
+    let mut chars = NAME.chars();
+    let head: String = chars.next().map(|first| first.to_uppercase().to_string()).unwrap_or_default();
+    format!("{head}{}-Source: ", chars.as_str())
+}
+
+/// 窓を開いた anchor と、紐づけた置き場。
+fn merge_place() -> (TmpDir, TmpDir) {
+    let (repo, state) = anchor_place();
+    git(&repo, &["update-ref", "refs/remotes/origin/main", "refs/heads/main"]);
+    (repo, state)
+}
+
+/// 記録のうち merge の門の行。
+fn merge_records(state: &Path) -> Vec<String> {
+    inject_lines(state).into_iter().filter(|line| what_of(line).starts_with("merge-deny")).collect()
+}
+
+/// 断りの外形（rc 2・stdout 0 byte・stderr 1 行・器の名乗りと理由）と記録「merge-deny <理由>」が 1 行増えることを確かめ、
+/// stderr を返す。
+fn assert_merge_deny(state: &Path, repo: &Path, command: &str, reason: &str) -> String {
+    let before = merge_records(state).len();
+    let out = live_hook(repo, &bash_payload(repo, command));
+    let text = stderr_text(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "{command}: deny は rc 2: {text}");
+    assert!(out.stdout.is_empty(), "{command}: stdout 0 byte");
+    assert_eq!(stderr_lines(&out), 1, "{command}: stderr 1 行: {text}");
+    assert!(text.starts_with(&format!("{NAME}: deny merge-gate reason={reason} ")), "{command}: {text}");
+    let records = merge_records(state);
+    assert_eq!(records.len(), before + 1, "{command}: 記録 1 行");
+    assert_eq!(records.last().map(|line| what_of(line)), Some(format!("merge-deny {reason}")), "{command}");
+    assert!(text.contains(merge_key().trim_end()) && text.contains("run: "), "{command}: key の字と run の形: {text}");
+    assert!(text.contains("gh pr merge <PR> --squash --body-file <絶対 path>"), "{command}: 次の一手: {text}");
+    text
+}
+
+/// (1) 通る 3 形（AC62 の通過 3/3）: 題の行と空行と発端の trailer（id 1 本）の `--body`、id 2 本の行の本文 file を絶対 path で渡す
+/// `--body-file`、器の便の trailer の `-b` は rc 0・0 byte・merge-deny の記録 0 行。
+#[test]
+fn hook_merge_gate_passes_the_three_trailer_forms() {
+    let (repo, state) = merge_place();
+    let place = tmp();
+    let key = merge_key();
+    let file = place.join("body.md");
+    fs::write(&file, format!("要旨の段落。\n\nCo-Authored-By: e2e <e2e@example.invalid>\n{key}s2-a.1 s2-b.2\n")).expect("本文を書ける");
+    for command in [
+        format!("gh pr merge 1 --squash --body \"題の行\n\n{key}s2-07l.739\""),
+        format!("gh pr merge 1 --squash --body-file {}", file.display()),
+        "gh pr merge 1 --squash -b 'run: s2-07l.351-20260922T061245Z'".to_owned(),
+    ] {
+        assert_silent(&live_hook(&repo, &bash_payload(&repo, &command)), &command);
+    }
+    assert!(merge_records(&state).is_empty(), "記録 0 行");
+    clean(&[&repo, &state, &place]);
+}
+
+/// (2) 断る 2 形（AC62 の断り 2/2）: 本文の無い `gh pr merge 1 --squash` は no-body で 4 つの flag と key の字を名指し、形の外の
+/// id（大文字）の trailer の本文は bad-source でその行を名指す。
+#[test]
+fn hook_merge_gate_denies_a_missing_body_and_a_bad_source_line() {
+    let (repo, state) = merge_place();
+    let key = merge_key();
+    let text = assert_merge_deny(&state, &repo, "gh pr merge 1 --squash", "no-body");
+    for flag in ["--body", "-b", "--body-file", "-F"] {
+        assert!(text.contains(flag), "{flag}: {text}");
+    }
+    let bad = format!("{key}S2-A.1");
+    let text = assert_merge_deny(&state, &repo, &format!("gh pr merge 1 --squash --body '要旨\n\n{bad}'"), "bad-source");
+    assert!(text.contains(&bad), "形の外の行を名指す: {text}");
+    assert_eq!(merge_records(&state).len(), 2, "記録 2 行");
+    clean(&[&repo, &state]);
+}
+
+/// (3) 形の周り: 良い本文の `--rebase` は rebase、`-F -` と値が変数の `--body` と無い file の `--body-file` は body-unreadable、
+/// payload の cwd からの相対 path の本文 file は通る。
+#[test]
+fn hook_merge_gate_refuses_rebase_and_unreadable_bodies_and_reads_relative_files() {
+    let (repo, state) = merge_place();
+    let key = merge_key();
+    assert_merge_deny(&state, &repo, &format!("gh pr merge 1 --rebase --body '{key}s2-a.1'"), "rebase");
+    let missing = repo.join("no-such-body.md");
+    for command in [
+        "gh pr merge 1 --squash -F -".to_owned(),
+        "gh pr merge 1 --squash --body \"$BODY\"".to_owned(),
+        format!("gh pr merge 1 --squash --body-file {}", missing.display()),
+    ] {
+        let text = assert_merge_deny(&state, &repo, &command, "body-unreadable");
+        assert!(text.contains("flag=-F") || text.contains("flag=--body"), "{command}: flag を名指す: {text}");
+    }
+    fs::write(repo.join("merge-body.md"), format!("要旨\n\n{key}s2-a.1\n")).expect("本文を書ける");
+    assert_silent(&live_hook(&repo, &bash_payload(&repo, "gh pr merge 1 --squash --body-file merge-body.md")), "相対 path");
+    clean(&[&repo, &state]);
+}
+
+/// (4) marker の無い repo では本文の無い merge も 0 byte・rc 0（FR24）。
+#[test]
+fn hook_merge_gate_is_silent_in_a_repo_without_marker() {
+    let repo = git_repo();
+    git(&repo, &["branch", "-M", "main"]);
+    assert_silent(&live_hook(&repo, &bash_payload(&repo, "gh pr merge 1 --squash")), "marker の無い repo");
+    clean(&[&repo]);
+}
+
+// ─────────────── 選択式の問いの門（設計 vessel-hook.md §20 行 ca・ADR-0084・接頭辞 `hook_choice_question_`） ───────────────
+//
+// AskUserQuestion の呼び出しを、席か runner か・誰が開いた session か・skill の直後か・例外の印が在るかに依らず全部の門の前で
+// 止める。器を名乗らない repo では 1 byte も出さない。
+
+/// AskUserQuestion の payload（同じ session_id と prompt_id・`extra` は先頭に足す欄〔`,` 始まり〕）。
+fn ask_payload(cwd: &Path, extra: &str) -> String {
+    format!(
+        "{{\"session_id\":\"sid-ask\",\"prompt_id\":\"p-ask\"{extra},\"cwd\":\"{}\",\"tool_name\":\"AskUserQuestion\",\
+         \"tool_input\":{{\"questions\":[{{\"question\":\"どれにする?\",\"options\":[{{\"label\":\"a\"}},{{\"label\":\"b\"}}]}}]}}}}",
+        cwd.display()
+    )
+}
+
+/// 記録のうち選択式の問いの門の行。
+fn choice_records(state: &Path) -> Vec<String> {
+    inject_lines(state).into_iter().filter(|line| what_of(line) == "choice-question-deny").collect()
+}
+
+/// 断りの外形（rc 2・stdout 0 byte・stderr 1 行・器の名乗り）と記録が 1 行増えることを確かめ、stderr を返す。
+fn assert_choice_deny(state: &Path, why: &str, run: impl FnOnce() -> Output) -> String {
+    let before = choice_records(state).len();
+    let out = run();
+    let text = stderr_text(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "{why}: deny は rc 2: {text}");
+    assert!(out.stdout.is_empty(), "{why}: stdout 0 byte");
+    assert_eq!(stderr_lines(&out), 1, "{why}: stderr 1 行: {text}");
+    assert!(text.starts_with(&format!("{NAME}: deny choice-question tool=AskUserQuestion ")), "{why}: {text}");
+    assert_eq!(choice_records(state).len(), before + 1, "{why}: 記録 1 行");
+    text
+}
+
+/// 宣言の必須 key だけの本文（3 行）。
+const ASK_DECL: &str = "schema = 1\nallowed-commands = [\"git\"]\ncommon-verify = [\"git diff --quiet\"]\n";
+
+/// `ASK_DECL` に `extra` を足した宣言を commit した repo と、紐づけた置き場。
+#[expect(clippy::expect_used, reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く")]
+fn ask_place(extra: &str) -> (TmpDir, TmpDir) {
+    let repo = git_repo();
+    fs::write(repo.join(DECL_FILE), format!("{ASK_DECL}{extra}")).expect("宣言を書ける");
+    git(&repo, &["add", DECL_FILE]);
+    git(&repo, &["commit", "-q", "-m", "decl"]);
+    let state = linked(&repo);
+    (repo, state)
+}
+
+/// (1) 5 形の AskUserQuestion がどれも断られ、1 形 1 行ずつ記録が増える: 登録 row を持つ orchestrator の席・pane の無い session・
+/// runner の形（`.vessel` を commit した repo の linked worktree を `--project` にし pane が無い）・skill の直後・例外の印。
+#[test]
+fn hook_choice_question_denies_every_form_of_session() {
+    let place = role_place();
+    let (seat, pane) = role_seat(&place, "askseat", Some("orchestrator"));
+    let state: &Path = &place.state;
+    let ask = ask_payload(&place.repo, "");
+    assert_choice_deny(state, "登録 row を持つ席", || run_role_hook(&place, &pane, &[], &ask));
+    assert_choice_deny(state, "pane の無い session", || run_hook_args(&["pre-tool-use"], &ask));
+
+    git(&place.repo, &["add", MARKER]);
+    git(&place.repo, &["commit", "-q", "-m", "marker"]);
+    let runner = tmp();
+    let worktree = runner.join("wt");
+    git(&place.repo, &["worktree", "add", "-q", &worktree.display().to_string()]);
+    let project = worktree.display().to_string();
+    assert_choice_deny(state, "runner の形", || run_hook_args(&["pre-tool-use", "--project", &project], &ask_payload(&worktree, "")));
+
+    let skill = format!(
+        "{{\"session_id\":\"sid-ask\",\"prompt_id\":\"p-ask\",\"cwd\":\"{}\",\"hook_event_name\":\"UserPromptSubmit\",\"prompt\":\"/grill-me 設計を詰める\"}}",
+        place.repo.display()
+    );
+    let submitted = run_hook_args(&["user-prompt-submit"], &skill);
+    assert_eq!(submitted.status.code(), Some(i32::from(RC_OK)), "skill の起動の行: {}", stderr_text(&submitted));
+    assert_choice_deny(state, "skill の直後", || run_hook_args(&["pre-tool-use"], &ask));
+
+    fs::write(state.join("grill-exception"), "").expect("v1 草稿の印の名の空 file を置ける");
+    let role_only = place.sock_dir.join("role-only.toml");
+    fs::write(&role_only, format!("schema = 1\n{}", role_rows_text(ORCHESTRATOR_CAPS))).expect("役割の行だけの manifest を書ける");
+    let marked = ask_payload(&place.repo, ",\"permission_mode\":\"bypassPermissions\"");
+    let args = ["pre-tool-use", "--pane", &pane, "--tmux-socket", &place.socket, "--rules", &role_only.display().to_string()];
+    assert_choice_deny(state, "例外の印", || run_hook_args(&args, &marked));
+    assert_eq!(choice_records(state).len(), 5, "1 形 1 行");
+    git(&place.repo, &["worktree", "remove", "--force", &project]);
+    drop(seat);
+    clean(&[&place.repo, &place.state, &place.sock_dir, &runner]);
+}
+
+/// (2) HEAD の宣言が question-route を持つ repo は stderr がその値を持ち、key の無い宣言の repo は持たず、不備の宣言（未知の key）
+/// の repo は「読めない」を持つ。どれも rc 2。
+#[test]
+fn hook_choice_question_names_the_declared_route() {
+    let (routed, routed_state) = ask_place("question-route = \"台帳の問いは bd で立てる\"\n");
+    let text = assert_choice_deny(&routed_state, "宣言した経路", || run_hook("pre-tool-use", &ask_payload(&routed, "")));
+    assert!(text.trim_end().ends_with("この repo の問いの経路: 台帳の問いは bd で立てる"), "{text}");
+    let (plain, plain_state) = ask_place("");
+    let text = assert_choice_deny(&plain_state, "key の無い宣言", || run_hook("pre-tool-use", &ask_payload(&plain, "")));
+    assert!(!text.contains("問いの経路") && !text.contains("読めない"), "{text}");
+    let (broken, broken_state) = ask_place("unknown-key = \"x\"\n");
+    let text = assert_choice_deny(&broken_state, "不備の宣言", || run_hook("pre-tool-use", &ask_payload(&broken, "")));
+    assert!(text.contains("vessel 宣言を読めない"), "{text}");
+    clean(&[&routed, &routed_state, &plain, &plain_state, &broken, &broken_state]);
+}
+
+/// (3) marker が別の NAME を言う repo と marker の無い repo では、`--pane` の有無の両方で同じ payload が 0 byte・rc 0・記録なし。
+#[test]
+fn hook_choice_question_is_silent_outside_the_vessel() {
+    let other = git_repo();
+    let marker = Marker { name: "other-vessel".to_owned(), version: GENERATION };
+    fs::write(other.join(MARKER), marker.render()).expect("marker を書ける");
+    let bare = git_repo();
+    let state = tmp();
+    let dir = state.display().to_string();
+    for (repo, why) in [(&other, "他の name の marker"), (&bare, "marker の無い repo")] {
+        let ask = ask_payload(repo, "");
+        assert_silent(&run_hook_args(&["pre-tool-use", "--state-dir", &dir], &ask), &format!("{why}・pane 無し"));
+        assert_silent(&run_hook_args(&["pre-tool-use", "--pane", "%999", "--state-dir", &dir], &ask), &format!("{why}・pane 在り"));
+    }
+    assert!(inject_lines(&state).is_empty(), "記録なし");
+    clean(&[&other, &bare, &state]);
+}
+
+/// (4) question-route を持つ repo と持たない repo で、禁じた語列の Bash と write-set の外への Edit の rc・stdout・stderr が一致して
+/// 既存の断りの字面のままで、選択式の問いの門の記録は 0 行。
+#[test]
+fn hook_choice_question_leaves_other_tools_unchanged() {
+    let (routed, routed_state) = ask_place("question-route = \"route-x\"\n");
+    let (plain, plain_state) = ask_place("");
+    let outs: Vec<(Output, Output)> = [&routed, &plain]
+        .iter()
+        .map(|repo| {
+            write_policy(repo, "src/lib.rs\n");
+            let bash = run_hook("pre-tool-use", &bash_payload(repo, "git push --force origin main"));
+            (bash, run_hook("pre-tool-use", &tool_payload(repo, "Edit", "docs/other.md")))
+        })
+        .collect();
+    let [(routed_bash, routed_edit), (plain_bash, plain_edit)] = outs.as_slice() else {
+        panic!("2 repo の出力");
+    };
+    for (left, right, why) in [(routed_bash, plain_bash, "Bash"), (routed_edit, plain_edit, "Edit")] {
+        assert_eq!(left.status.code(), Some(i32::from(RC_BROKEN)), "{why}: 既存の門が断る");
+        assert_eq!((left.status.code(), &left.stdout, &left.stderr), (right.status.code(), &right.stdout, &right.stderr), "{why}");
+        assert!(!stderr_text(left).contains("choice-question") && !stderr_text(left).contains("route-x"), "{why}");
+    }
+    assert!(stderr_text(routed_bash).contains("host_guard.git"), "command guard の字面: {}", stderr_text(routed_bash));
+    assert_eq!(stderr_text(routed_edit).trim_end(), format!("{NAME}: deny docs/other.md は契約 write-set の外（C16）"));
+    assert!(choice_records(&routed_state).is_empty() && choice_records(&plain_state).is_empty(), "記録 0 行");
+    clean(&[&routed, &routed_state, &plain, &plain_state]);
 }

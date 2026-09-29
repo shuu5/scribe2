@@ -23,9 +23,9 @@ mod write_set;
 
 pub use entrance_flip::{measure_named, EntranceFlip};
 use entrance_flip::{entrance_of, KEY as ENTRANCE_KEY};
-pub use optional_keys::{table_facts, table_facts_named, terminal_facts, TableFacts, TerminalFacts};
+pub use optional_keys::{question_route, table_facts, table_facts_named, terminal_facts, QuestionRoute, TableFacts, TerminalFacts};
 pub use optional_keys::{CI_SHA_HOLE, DEFAULT_CI_CMD, DEFAULT_REQUIREMENTS};
-use optional_keys::{ci_cmd_of, remote_of, requirements_of, DECLARED_KEYS, OPTIONAL_KEYS};
+use optional_keys::{ci_cmd_of, question_route_of, remote_of, requirements_of, DECLARED_KEYS, OPTIONAL_KEYS};
 pub use write_set::{headroom_shortfalls, line_count, read_write_set, Caps, FileLines, Headroom, NewFilePolicy, WriteSetItem, CORE};
 pub(crate) use write_set::is_under;
 
@@ -301,6 +301,8 @@ pub struct Declared {
     path_kinds: path_kinds::DeclaredPaths,
     /// 入口の flip の名乗り（任意 key `entrance-flip`・無ければ `None`＝現行の要求）。
     entrance_flip: Option<EntranceFlip>,
+    /// 問いの経路の 1 行（任意 key `question-route`・無ければ `None`・設計 vessel-hook.md §20）。
+    question_route: Option<String>,
 }
 
 /// 出所つきの宣言。**[`Effective`] はこれを消費してしか作れない**（C10）。
@@ -531,6 +533,7 @@ impl Declared {
         let ci_cmd = ci_cmd_of(&found, &mut errors);
         let path_kinds = path_kinds::declared_of(&found, &mut errors);
         let entrance_flip = entrance_of(&found, &mut errors);
+        let question_route = question_route_of(&found, &mut errors);
         if schema != Some(SCHEMA_VERSION) {
             errors.push(DeclError::new(
                 0,
@@ -550,6 +553,7 @@ impl Declared {
                 ci_cmd,
                 path_kinds,
                 entrance_flip,
+                question_route,
             })
         } else {
             Err(errors)
@@ -1209,7 +1213,7 @@ mod tests {
     }
 
     /// 先頭語 `cargo` の行を持たない宣言（`sh` / `git` だけの toy repo）は分類だけで断らない（§7「Rust 固有の検査を
-    /// 内蔵しない」のまま）。宣言 file の schema は不変（版 1・key の列は 10 本に §54 の任意 key 1 本を足した 11 本）。
+    /// 内蔵しない」のまま）。宣言 file の schema は不変（版 1・key の列は 10 本に §54 と vessel-hook.md §20 の任意 key 各 1 本を足した 12 本）。
     #[test]
     fn declaration_kind_passes_declarations_without_cargo_and_keeps_the_schema() {
         assert!(measured(r#"["git", "sh"]"#, r#"["git rev-parse --verify {base}", "sh verify.sh"]"#).is_ok(), "sh / git だけは通る");
@@ -1229,8 +1233,9 @@ mod tests {
                 "design-doc-paths",
                 "tests-paths",
                 "entrance-flip",
+                "question-route",
             ],
-            "宣言 file の key の列は動かない（末尾の任意 key は §54・ADR-0054）"
+            "宣言 file の key の列は動かない（末尾の任意 key は §54・ADR-0054 と vessel-hook.md §20・ADR-0084）"
         );
     }
 
