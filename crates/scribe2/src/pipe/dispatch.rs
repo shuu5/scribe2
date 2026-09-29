@@ -49,9 +49,6 @@ pub(in crate::pipe) mod prelens;
 
 use candidates::{entry_of, is_input, marks_of, settle, tools};
 
-/// `intake:memo` の bead（契約が未確定＝列に載せない・`.beads/PRIME.md` R3）。
-const MEMO_LABEL: &str = "intake:memo";
-
 /// 台帳の閉じた status の字面（依存が閉じたかの判定が読む）。
 const CLOSED: &str = "closed";
 

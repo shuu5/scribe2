@@ -10,6 +10,7 @@
 //! [`crate::seat::ledger::one_read`] で**同じ 1 回の出力**を分けて読む。読めない周は件数 0 に倒さず測れていない形の
 //! 行を出す（[`render_unreadable`]・C10 / NFR4）。極性は増やさない（doctor は読むだけで判定しない・C10.2）。
 
+use super::form::is_memo;
 use crate::pipe::table;
 use crate::rules::manifest::Manifest;
 use crate::seat::ledger::{self, Issue, LedgerError};
@@ -18,9 +19,6 @@ use std::path::Path;
 
 /// 行の先頭の字面。
 pub const PREFIX: &str = "ledger:";
-
-/// memo の識別の label。
-pub const MEMO_LABEL: &str = "intake:memo";
 
 /// memo の本文の機械が読む設計の見出し（固定の 1 つ）。
 pub const MEMO_HEADING: &str = "## memo";
@@ -54,11 +52,6 @@ pub struct Report {
 /// 契約の pointer の字面（acceptance の先頭行の `design =` の後ろ・trim 済み）。契約でなければ `None`。
 pub fn pointer_of(issue: &Issue) -> Option<&str> {
     issue.acceptance.trim_start().lines().next()?.trim().strip_prefix(DESIGN_KEY).map(str::trim)
-}
-
-/// memo か（label `intake:memo` を持つ）。
-fn is_memo(issue: &Issue) -> bool {
-    issue.labels.iter().any(|label| label == MEMO_LABEL)
 }
 
 /// acceptance が pointer の 1 行を超えるか（空でない行が 2 行以上）。

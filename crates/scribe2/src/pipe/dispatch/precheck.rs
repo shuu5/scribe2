@@ -15,8 +15,9 @@ use super::super::refuse::{discern, normalize, Certainty, DELETE_FILE, NEW_FILE}
 use super::super::table::Pointer;
 use super::super::{base_of_run, contract_path, current, git_bytes, head_of, worktree_path, DIR};
 use super::candidates::{is_blocking, pointer_of};
-use super::{Input, Turn, WaitReason, CLOSED, DASH, MEMO_LABEL};
+use super::{Input, Turn, WaitReason, CLOSED, DASH};
 use crate::fleet::{Stage, State};
+use crate::ledger::form::{is_memo, is_question};
 use crate::seat::ledger::Issue;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -43,15 +44,15 @@ pub(super) struct Population {
     pub(super) reach: BTreeMap<String, Vec<String>>,
 }
 
-/// 母集団と到達の 1 関数（形 1）: 同じ周の台帳の全件と置き場の run の列から、(a) 閉じていない契約の行（closed でない ∧ memo の
-/// label が無い ∧ acceptance の設計 pointer が列と同じ [`pointer_of`] で解ける bead・live な便の在る bead はその run dir の契約の
+/// 母集団と到達の 1 関数（形 1）: 同じ周の台帳の全件と置き場の run の列から、(a) 閉じていない契約の行（closed でない ∧ memo でも
+/// 台帳の問いでもない〔§31〕 ∧ acceptance の設計 pointer が列と同じ [`pointer_of`] で解ける bead・live な便の在る bead はその run dir の契約の
 /// 写しの write-set つき）と、(b) blocks の推移の到達（[`is_blocking`] の依存だけ＝`parent-child` は数えず closed で止まる・
 /// 1 度訪ねた bead で止まり循環で回らない）を返す。live でない行の write-set は呼び手が自分の材料で [`generated`] を撃って決める。
 pub(super) fn population(issues: &[Issue], state_dir: &Path, state: &State) -> Population {
     let closed: BTreeSet<&str> = issues.iter().filter(|issue| issue.status == CLOSED).map(|issue| issue.id.as_str()).collect();
     let rows: BTreeMap<String, Row> = issues
         .iter()
-        .filter(|issue| issue.status != CLOSED && !issue.labels.iter().any(|label| label == MEMO_LABEL))
+        .filter(|issue| issue.status != CLOSED && !is_memo(issue) && !is_question(issue))
         .filter_map(|issue| {
             let row = Row { pointer: pointer_of(&issue.acceptance)?, live: live_of(state_dir, state, &issue.id) };
             Some((issue.id.clone(), row))
@@ -441,4 +442,42 @@ pub(super) fn lines(input: &Input<'_>, turn: &Turn) -> Vec<String> {
             format!("{LINE} bead={bead} result={result} base={base}{}", super::prelens::word(input, bead))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{population, Path, State};
+    use crate::ledger::form::{MEMO_LABEL, QUESTION_LABEL};
+    use crate::seat::ledger::{Dep, Issue};
+
+    /// open の bead（label と acceptance と blocks の依存先だけを与える）。
+    fn open(id: &str, labels: &[&str], acceptance: &str, blocked_by: &[&str]) -> Issue {
+        let labels = labels.iter().map(|label| (*label).to_owned()).collect();
+        let deps = blocked_by.iter().map(|on| Dep { on: (*on).to_owned(), kind: "blocks".to_owned() }).collect();
+        let (id, status, acceptance, kind) = (id.to_owned(), "open".to_owned(), acceptance.to_owned(), "task".to_owned());
+        Issue { id, status, priority: None, labels, acceptance, deps, kind, description: String::new(), notes: String::new() }
+    }
+
+    /// 契約 c（q に blocks される）・label `label` と設計 pointer を持つ q・label の無い同じ pointer の p の (契約の行, c の到達)。
+    fn rows_and_reach(label: &str) -> (Vec<String>, Vec<String>) {
+        let issues = [
+            open("c", &[], "design = docs/design/x.md#c", &["q"]),
+            open("q", &[label], "design = docs/design/x.md#q", &[]),
+            open("p", &[], "design = docs/design/x.md#q", &[]),
+        ];
+        let found = population(&issues, Path::new("/nonexistent"), &State::default());
+        (found.rows.keys().cloned().collect(), found.reach.get("c").cloned().unwrap_or_default())
+    }
+
+    /// (c) 台帳の問い（label intake:question・設計 pointer）は契約の行に数えず、blocks の到達には残る（§31 形 4）。
+    #[test]
+    fn precheck_intake_label_question_is_not_a_row_but_stays_reachable() {
+        assert_eq!(rows_and_reach(QUESTION_LABEL), (vec!["c".to_owned(), "p".to_owned()], vec!["q".to_owned()]));
+    }
+
+    /// (d) 回帰: memo（label intake:memo・設計 pointer）も契約の行に数えない。
+    #[test]
+    fn precheck_intake_label_memo_is_not_a_row() {
+        assert_eq!(rows_and_reach(MEMO_LABEL).0, ["c", "p"]);
+    }
 }

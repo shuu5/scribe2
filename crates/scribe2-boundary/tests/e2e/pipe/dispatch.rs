@@ -246,6 +246,39 @@ fn pipe_dispatch_unmeasured_ledger_starts_nothing_and_is_not_zero() {
     clean(&[&repo, &state]);
 }
 
+/// label 1 つを持つ台帳の 1 件（[`issue`] の空の label の列を置き換える・印の字は呼び手が自分で書く）。
+fn labeled(id: &str, row: &str, label: &str) -> String {
+    issue(id, 2, row).replacen("\"labels\":[]", &format!("\"labels\":[\"{label}\"]"), 1)
+}
+
+/// 行 a を指す契約 `s2-toy.1` と、label `label` と行 b を指す設計 pointer を持つ `s2-toy.2` の台帳で `dispatch ls` を撃ち、
+/// 契約の reason が `-`（台帳を読めて判定に届いた対照）・`s2-toy.2` の字が 1 度も出ない・件数の行が 1 件であることを測る。
+fn assert_label_is_not_a_candidate(label: &str) {
+    let (repo, state) = repo_with_state();
+    two_rows(&repo);
+    let bd = fake_bd(&state, &[issue("s2-toy.1", 2, "a"), labeled("s2-toy.2", "b", label)]);
+    let out = ls(&repo, &state, &bd);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", told(&out));
+    assert_eq!(reason_of(&out, "s2-toy.1"), "-", "契約は判定に届く: {}", told(&out));
+    assert!(!stdout_of(&out).contains("bead=s2-toy.2"), "label {label} の bead は ls に出ない: {}", told(&out));
+    assert_eq!(count_of(&out), format!("{COUNT} total=1 ready=1"), "{}", told(&out));
+    clean(&[&repo, &state]);
+}
+
+/// (a) 設計 dispatcher.md §31 形 3: 台帳の問い（label intake:question）は acceptance に設計 pointer を持っても列に並ばない。
+///
+/// base の `is_input` は問いの label を見ないので、問いが reason `-` で並び件数の行が `total=2`（RED）。
+#[test]
+fn pipe_dispatch_intake_label_question_is_not_a_candidate() {
+    assert_label_is_not_a_candidate("intake:question");
+}
+
+/// (b) 回帰（base でも緑）: memo（label intake:memo）も同じ acceptance で列に並ばない。
+#[test]
+fn pipe_dispatch_intake_label_memo_is_not_a_candidate() {
+    assert_label_is_not_a_candidate("intake:memo");
+}
+
 /// (g) 形 7（設計 pipeline.md §56・行 ay）: `deny` を名乗る repo の契約は、偽の cargo が base で緑を返す形でも列の候補の判定で
 /// 待たされず（理由 `-`）、偽の cargo は 1 度も撃たれない（列の候補の judge は base の木を撃たない）。
 #[test]

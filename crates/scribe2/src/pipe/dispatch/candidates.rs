@@ -20,20 +20,20 @@ use super::super::review;
 use super::super::table::{self, Pointer};
 use super::super::{contract_path, current, git_bytes};
 use super::{
-    Candidate, Input, Launch, Ledger, Marks, Turn, WaitReason, BLOCKS, DESIGN_KEY, DRIVE, MARK, MEMO_LABEL, OPEN,
-    ROW_JOB_MB, ROW_RESERVE_MB, SLOT,
+    Candidate, Input, Launch, Ledger, Marks, Turn, WaitReason, BLOCKS, DESIGN_KEY, DRIVE, MARK, OPEN, ROW_JOB_MB,
+    ROW_RESERVE_MB, SLOT,
 };
 use crate::fleet::{Event, EventKind, Mark, Stage};
+use crate::ledger::form::{is_memo, is_question};
 use crate::rules::manifest::Manifest;
 use crate::seat::host_slots_dir;
 use crate::seat::ledger::{Dep, Issue};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// 列の入力になる bead か（設計 §2・**ここで落ちた bead は `ls` にも出ない**＝契約が未確定か終わっている）。
+/// 列の入力になる bead か（設計 §2・**ここで落ちた bead は `ls` にも出ない**＝契約が未確定か終わっているか、
+/// memo か台帳の問い＝契約でない・§31）。
 pub(super) fn is_input(issue: &Issue) -> bool {
-    issue.status == OPEN
-        && !issue.acceptance.trim().is_empty()
-        && !issue.labels.iter().any(|label| label == MEMO_LABEL)
+    issue.status == OPEN && !issue.acceptance.trim().is_empty() && !is_memo(issue) && !is_question(issue)
 }
 
 /// 台帳の 1 件を列の 1 件に解く（依存 → 印 → 設計 pointer → 審査 FAIL → 契約の生成の順）。

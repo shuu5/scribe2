@@ -10,6 +10,7 @@
 //! detail と ts。どの形にも当たらない終端（file が無い・evidence や detail が空・log を読めない）は写さず、閉じた
 //! 理由 1 つで断る（fail-closed）。
 
+use super::form::MEMO_LABEL;
 use crate::cli_outcome::{Outcome, RC_REFUSED};
 use crate::fleet::json_lite;
 use crate::fleet::{replay, store, Event, EventKind, Stage};
@@ -17,9 +18,6 @@ use crate::pipe::gate::Verdict;
 use crate::pipe::review::review_path;
 use crate::pipe::{question_of_run, run_dir, verdict_path};
 use std::path::Path;
-
-/// memo を名乗る label（識別は label の 1 つ・ledger-form.md §3 の 1）。
-pub const LABEL: &str = "intake:memo";
 
 /// 関連 bead へ張る edge の種類。
 pub const RELATES: &str = "relates-to";
@@ -220,7 +218,7 @@ impl Plan {
         let mut lines = vec![
             format!("arg: --title={}", self.title()),
             "arg: --type=task".to_owned(),
-            format!("arg: --labels={LABEL}"),
+            format!("arg: --labels={MEMO_LABEL}"),
             format!("arg: --parent={}", self.parent),
         ];
         lines.extend(self.relates.iter().map(|id| format!("arg: --deps={RELATES}:{id}")));

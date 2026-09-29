@@ -100,8 +100,13 @@ pub fn pointer_text(acceptance: &str) -> Option<&str> {
 }
 
 /// memo か（label `intake:memo` を持つ）。
-fn is_memo(issue: &Issue) -> bool {
+pub fn is_memo(issue: &Issue) -> bool {
     issue.labels.iter().any(|label| label == MEMO_LABEL)
+}
+
+/// 台帳の問いか（label `intake:question` を持つ・§13・ADR-0083）。
+pub fn is_question(issue: &Issue) -> bool {
+    issue.labels.iter().any(|label| label == QUESTION_LABEL)
 }
 
 /// 契約か（label を持たず pointer 行を持つ＝4 象限の契約）。
@@ -184,7 +189,7 @@ pub fn judge(issues: &[Issue], docs: &Docs) -> Report {
     let open: Vec<&Issue> = issues.iter().filter(|issue| issue.status != CLOSED).collect();
     let memos: Vec<&Issue> = open.iter().copied().filter(|issue| is_memo(issue)).collect();
     let memo_ids: Vec<&str> = issues.iter().filter(|issue| is_memo(issue)).map(|issue| issue.id.as_str()).collect();
-    let exempt = |issue: &Issue| EXEMPT_KINDS.contains(&issue.kind.as_str()) || issue.labels.iter().any(|label| label == QUESTION_LABEL);
+    let exempt = |issue: &Issue| EXEMPT_KINDS.contains(&issue.kind.as_str()) || is_question(issue);
     let shaped: Vec<&Issue> = open.iter().copied().filter(|issue| !exempt(issue)).collect();
     let contracts: Vec<&Issue> = open.iter().copied().filter(|issue| is_contract(issue)).collect();
     let unlanded: Vec<&Row> = docs.rows.iter().filter(|row| is_unlanded(row, &docs.tracked)).collect();
