@@ -623,6 +623,7 @@
   - `crates/scribe2-boundary/tests/e2e/seat/tick.rs`（Tier9 の置き場の席・row の口座 p・区画の行 p / q / r）: (a) 窓が claude・p の鮮度の内側の記録が R-C9-1 以上・q が閾値未満 → 判定行が `move=signal` と `judged=park:q`、送った 1 行が `group=Tier9` と `to=q` を持つ退避の合図、合図の記録の鍵が（p, park.<seq>）、承認 event 0・群用 dir の file 0・lock の file 0・計測の子の起動 0 (b) 2 周目は、移り先が q のままの fixture でも r に変わる fixture でも退避の合図 0（`move=wait`） (c) 窓が shell の同じ fixture → q で起こし直し（`--resume` で会話 id を運ぶ）・登録の記帳の口座が q (d) p が閾値未満・記録なし・鮮度の外の 3 fixture → 合図 0・起こし直し 0・`judged=` が `stay` / `unmeasured` / `unmeasured` (e) 窓が shell で判定が移り先を返さない fixture → p で起こし直す (f) q と r が閾値以上か鮮度の外 → 移らず `judged=park-no-candidate` (g) R-C9-1 の無い rules の写し → `judged=error:no-rule` で列は今のまま進む (h) 群にも区画にも属さない席の判定行が今と同じ字（`judged=-`）。
   - `crates/scribe2-boundary/tests/e2e/hook/group.rs`: (i) 区画の席の hook が p の逼迫の fixture で `group=Tier9 account=p` で始まる 1 行を出し、群用 dir に移動を頼む記録の file 0 (j) 閾値未満の fixture で 0 行。
 - base で RED の理由: base（行 y と行 z の後）は区画の席を群の外の席と同じに扱う＝判定を撃たず `judged=-` で移らず、hook は 0 行を出すので (a)〜(g) と (i) が落ちる（機能不在）。(h) と (j) は回帰の歯で base でも緑（同じ file に base で赤い歯が在る）。
+- 依存: [account-lifecycle.md](./account-lifecycle.md) の行 y（読み口 `park` と `park_of`）と行 z（`choose` が区画の anchors を受ける形）。doc を跨ぐので表の `depends` に書けず、bead の blocks で結ぶ。
 
 ## 22. heartbeat の実効の値を明示の記録 → 群の表の行の key → 種類の既定の順で決め、決まり方を explicit / group / default で名乗る — 口に default を足し、seat tick status は 7 項目・seat heartbeat status は 3 項目（契約表の行 aa・[FR78](../../design-intent/spec/srs.html#FR78) / FR27 / FR57・AC64・[ADR-0092](../../design-intent/decisions/ADR-0092-heartbeat-resolves-explicit-then-table-key-then-kind-default.html)・memo `s2-07l.730`）
 
@@ -655,6 +656,7 @@
   - `crates/scribe2-boundary/tests/e2e/rules/host.rs`: (h) `heartbeat = "maybe"` と `heartbeat = true` の群の行が key の行番号つきの欠陥 1 件ずつで断られ、`heartbeat = "off"` の群の行と `heartbeat = "on"` の区画の行は通る。
   - 直す既存の歯（同じ便）: `crates/scribe2-boundary/tests/e2e/seat.rs` の heartbeat の口と status の行の helper（`heartbeat_status` と `status_line` の期待の行に `heartbeat_by=` を足す）・`crates/scribe2-boundary/tests/e2e/seat/tick.rs` の status の逐語の 1 行・seat の使い方の外形 snapshot。
 - base で RED の理由: base（§21 の後）は口が `default` を使い方の誤りで断り、出力に `heartbeat_by=` が無く、群の表の行の `heartbeat` を未知の key で断り、区画の席に合図を送るので (a)〜(h) が落ちる（機能不在）。直す既存の歯のうち base でも緑になる file は、同じ file に base で赤い新しい歯を持つ。持たない file は test 区間の行頭に `// flip-check: retroactive <この契約の bead id>` を置く（runner が flip-check で実測する）。
+- 依存: 行 z（§21・表の `depends`・同じ `crates/scribe2/src/seat/tick.rs` を触り、歯 (c) が区画の移り先の判定の撃ちを数える）と account-lifecycle.md の行 y（読み口 `park`・bead の blocks で結ぶ）。
 
 <!-- contracts:begin -->
 schema = 1
