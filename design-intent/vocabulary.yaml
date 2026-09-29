@@ -680,8 +680,8 @@ terms:
   - canonical: 中間生成物
     domain: consumer
     aliases: [build output, intermediates]
-    definition: build や test や依存の取り込みが便の worktree の中に作る dir のうち、 器が対応する言語の決まった名を持つもの (target・node_modules・.venv・__pycache__・.mypy_cache・.pytest_cache・.ruff_cache・.expo の閉じた 8 つ)。 commit した木と toolchain と lock file から作り直せる。 器は運転手の終端の周ごとに、 live でない便の worktree (元の場所か退役先) から、 この名の dir で git が追う file を持たないものを消す (ADR-0081・dispatcher.md §30)。 無視の規則が無視する file 全部ではない (鍵や local の設定は含まない)。
-    relationships: [live な便, 退役]
+    definition: build や test や依存の取り込みが便の worktree の中に作る dir のうち、 器が対応する言語の決まった名を持つもの (target・node_modules・.venv・__pycache__・.mypy_cache・.pytest_cache・.ruff_cache・.expo の閉じた 8 つ)。 commit した木と toolchain と lock file から作り直せる。 器は運転手の終端の周ごとに、 live でない便の worktree (元の場所か退役先) から、 この名の dir で git が追う file を持たないものを消す (ADR-0081・dispatcher.md §30)。 無視の規則が無視する file 全部ではない (鍵や local の設定は含まない)。 ADR-0096 の後は、 席の起草の置き場の .git を持つ写しの中の、 書きの線より前のものも消す。
+    relationships: [live な便, 退役, 起草の置き場]
   - canonical: runner の印
     domain: consumer
     aliases: [印の file, runner mark]
@@ -744,8 +744,8 @@ terms:
     relationships: [席, 席の登録, worktree, 役割]
   - canonical: 席の指示文
     domain: consumer
-    definition: 席の役割ごとに、 tracked な雛形 1 枚と権能の rules 行から器が生成して session の開始・clear・圧縮後に注入する文 (SRS FR42・ADR-0022 §2.4)。 雛形の外に手書きの規範文を持たず、 hook で塞ぐ事項は書かない。
-    relationships: [役割, 権能, hook, 開発 session]
+    definition: 席の役割ごとに、 tracked な雛形 1 枚と権能の rules 行から器が生成して session の開始・clear・圧縮後に注入する文 (SRS FR42・ADR-0022 §2.4)。 雛形の外に手書きの規範文を持たず、 hook で塞ぐ事項は書かない。 ADR-0096 の後は 12 行で、 12 行目が起草の置き場の path を穴で渡す。
+    relationships: [役割, 権能, hook, 開発 session, 起草の置き場]
   - canonical: 圧縮の直前の 1 枠
     domain: consumer
     aliases: [precompact slot]
@@ -1739,3 +1739,15 @@ terms:
     aliases: [host core reader]
     definition: 受付と器の健康の遮断器と箱の CPU の上限が読む host の core 数の 1 本 (ADR-0095)。 この process の /proc/self/status の Cpus_allowed_list の区間の列を数え、 affinity と cpuset は数に効き、 cgroup の CPU 時間の上限は効かない (席の箱の中の driver も host の core 数を読む)。 環境変数は読まない。
     relationships: [job 1 つの値段, 並列の枠, 器の健康の遮断器, 箱の CPU の上限]
+  # ---------------------------------------------------------------- 席の起草の置き場 (ADR-0096)
+  - canonical: 起草の置き場
+    domain: consumer
+    aliases: [seat drafts area]
+    definition: 席ごとに器が持つ、 試作の repo の写しを置く dir (state dir の seat の下の、 潰した target の dir の drafts・ADR-0096)。 器は dir を作らず、 席の指示文の 12 行目が絶対 path を渡し、 席の git が写しを作る。 運転手の終端の周の掃除が、 置き場の .git を持つ写し (起草の木) から、 書きの線より前の中間生成物だけを消し、 写しは消さない。
+    relationships: [席の指示文, 中間生成物, 書きの線, 退役]
+    flagged_ambiguities: [Claude Code の session の一時 dir (器の外・器は掃かない) とは別]
+  - canonical: 書きの線
+    domain: consumer
+    aliases: [write cutoff]
+    definition: 今から rules 行 seat.drafts_stale_h の時間を引いた時刻 (ADR-0096)。 起草の木の中間生成物の dir は、 その dir 自身と下の全 entry の mtime の最新がこの線より前のときだけ消える。 便の worktree には掛けない。
+    relationships: [起草の置き場, 中間生成物, rules 行]
