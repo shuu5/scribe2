@@ -606,8 +606,12 @@ fn assert_already_landed_terminal(state: &Path, id: &str, squash: &str, out: &Ou
         stdout.split_whitespace().any(|word| word == "already-landed=1"),
         "stdout の末尾に `already-landed=1` を後置する: {stdout}"
     );
-    let (kind, stage, detail) = trail(state, id).pop().expect("便の event が在る");
-    assert_eq!((kind, stage), (EventKind::RunDone, Some(Stage::Landed)), "events の末尾は RunDone stage=Landed");
+    // 末尾の終端の行（`terminal:close:ok`・remote を持たない toy の着地が台帳を閉じた 1 件）は除いて読む。
+    let (kind, stage, detail) = trail(state, id)
+        .into_iter()
+        .rfind(|(_, _, detail)| !detail.as_deref().is_some_and(|found| found.starts_with("terminal:")))
+        .expect("便の event が在る");
+    assert_eq!((kind, stage), (EventKind::RunDone, Some(Stage::Landed)), "終端の行を除いた末尾は RunDone stage=Landed");
     assert_eq!(
         detail.unwrap_or_default(),
         format!("sha:{squash} main:{squash} already-landed"),
@@ -815,14 +819,15 @@ pub(super) fn make_tree_differ(repo: &Path, state: &Path, id: &str, rev: &str) {
     fs::write(&verdict, swapped).expect("verdict.json を差し替えられる");
 }
 
-/// 便の `RunDone stage=Landed` の detail（無ければ空・着地後の検出の `detection:` は読み飛ばす＝設計 gate-cost.md §44 形 (4)）。
+/// 便の `RunDone stage=Landed` の detail（無ければ空・着地後の検出の `detection:` は読み飛ばす＝設計 gate-cost.md §44 形 (4)・
+/// 終端の `terminal:` も読み飛ばす）。
 fn landed_detail(state: &Path, id: &str) -> String {
     trail(state, id)
         .into_iter()
         .rev()
         .filter(|(kind, stage, _)| *kind == EventKind::RunDone && *stage == Some(Stage::Landed))
         .filter_map(|(_, _, detail)| detail)
-        .find(|detail| !detail.starts_with("detection:"))
+        .find(|detail| !detail.starts_with("detection:") && !detail.starts_with("terminal:"))
         .unwrap_or_default()
 }
 
@@ -2570,11 +2575,17 @@ fn fake_terminal(repo: &Path, state: &Path, conclusion: &str) -> FakeTerminal {
 }
 
 /// [`fake_terminal`] の一般形（偽 CI が返す JSON を呼び手が選ぶ）。
+fn fake_terminal_json(repo: &Path, state: &Path, json: &str) -> FakeTerminal {
+    fake_terminal_decl(repo, state, json, true)
+}
+
+/// [`fake_terminal_json`] の本体。`declared` が偽の周は git の remote と偽 CI の宣言（`ci-cmd`）だけを足し、宣言に `remote` の行を
+/// 書かない＝押す先を宣言していない repo（撃たれれば偽 remote の ref と偽 CI の呼び出しが動く形）を作る。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn fake_terminal_json(repo: &Path, state: &Path, json: &str) -> FakeTerminal {
+fn fake_terminal_decl(repo: &Path, state: &Path, json: &str, declared: bool) -> FakeTerminal {
     let remote = state.join("remote.git");
     git(state, &["init", "--bare", "-q", &remote.display().to_string()]);
     git(repo, &["remote", "add", "fake", &remote.display().to_string()]);
@@ -2593,7 +2604,8 @@ fn fake_terminal_json(repo: &Path, state: &Path, json: &str) -> FakeTerminal {
     let bd_log = state.join("bd-argv.txt");
     exec_script(&state.join("fake-bd.sh"), &format!("printf '%s\\n' \"$@\" > '{}'\n", bd_log.display()));
     let body = fs::read_to_string(repo.join(".vessel.toml")).expect("宣言を読める");
-    let added = format!("{body}remote = \"fake\"\nci-cmd = \"{ci} {{sha}}\"\n");
+    let remote_line = if declared { "remote = \"fake\"\n" } else { "" };
+    let added = format!("{body}{remote_line}ci-cmd = \"{ci} {{sha}}\"\n");
     fs::write(repo.join(".vessel.toml"), added).expect("宣言を書ける");
     git(repo, &["add", "-f", ".vessel.toml"]);
     git(repo, &["commit", "-q", "-m", "terminal-decl"]);
@@ -3077,5 +3089,155 @@ fn pipe_verify_failed_main_red_records_the_tooth_and_keeps_the_stderr_log() {
         run_dir(&state, &id).join("verify-main.jsonl").exists(),
         "同じ dir に record が在る"
     );
+    clean(&[&repo, &state]);
+}
+
+// ───── remote を持たない repo の終端（設計 contract-source.md §5・FR50・ADR-0094 の経路 (2)・接頭辞 `pipe_terminal_no_remote_`） ─────
+//
+// 宣言に `remote` の行が無い repo の便は push も CI の照合も撃たず、台帳の close を `landed <sha> ci=none` で撃つ（`terminal=closed:no-ci`・rc 0）。
+// fixture は **git の remote と `ci-cmd` は在るが宣言に `remote` を書かない** toy（撃たれれば偽 remote の ref と偽 CI の回数が動く）。
+// 台帳 client は既定名（道具箱の見張りが PATH で受ける）＝見張りの記録が close の呼び出しの母集団である。
+
+/// 常に success の偽 CI と偽 remote を持つが宣言に `remote` を書かない toy（[`fake_terminal_decl`]）。
+fn fake_no_remote(repo: &Path, state: &Path) -> FakeTerminal {
+    fake_terminal_decl(repo, state, r#"[{"status":"completed","conclusion":"success"}]"#, false)
+}
+
+/// 台帳 client の見張りが写した呼び出し（1 起動 1 件・1 行 1 引数）を記録の名の昇順で返す。
+fn ledger_calls(state: &Path) -> Vec<Vec<String>> {
+    crate::toolbox_ledger_record_names(state)
+        .iter()
+        .map(|name| {
+            fs::read_to_string(crate::toolbox_ledger_records(state).join(name))
+                .unwrap_or_default()
+                .lines()
+                .map(str::to_owned)
+                .collect()
+        })
+        .collect()
+}
+
+/// 偽 remote に ref が 1 本も無い（push が撃たれていない）。
+fn remote_refs(tools: &FakeTerminal) -> String {
+    git(&tools.remote, &["for-each-ref"])
+}
+
+/// 便の `Landed` の後ろに並ぶ終端の行（`terminal:`）。
+fn terminal_lines(state: &Path, id: &str) -> Vec<String> {
+    landed_details(state, id).into_iter().filter(|detail| detail.starts_with("terminal:")).collect()
+}
+
+/// (a) 単独の着地: rc 0・`terminal=closed:no-ci`・見張りの記録はちょうど 1 件で 1 語目が `close`・理由は `landed <着地した sha> ci=none`
+/// （`tip=` を持たない）。偽 CI は 0 回・偽 remote に ref は無く、`Landed` の着地の後ろは `terminal:close:ok` の 1 件だけ。
+/// base は remote の無い周に close を撃たない＝記録 0 件で RED。
+#[test]
+fn pipe_terminal_no_remote_land_closes_with_ci_none() {
+    let (repo, state) = repo_with_state();
+    let tools = fake_no_remote(&repo, &state);
+    let design = write_contract(&repo, &[], &[]);
+    let id = gated_pass(&repo, &state, &design, &state.join("lens-ran"));
+    let out = land_once(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "close まで通った land は rc 0: {}", stderr_of(&out));
+    assert!(stdout_of(&out).contains("terminal=closed:no-ci"), "終端の token: {}", stdout_of(&out));
+    let landed = git(&repo, &["rev-parse", "refs/heads/main"]);
+    assert_eq!(landed_sha_of(&state, &id), landed, "fixture: 着地した sha は main の先端");
+    let calls = ledger_calls(&state);
+    assert_eq!(calls.len(), 1, "見張りの記録はちょうど 1 件: {calls:?}");
+    let words: Vec<&str> = calls.first().map(|found| found.iter().map(String::as_str).collect()).unwrap_or_default();
+    assert_eq!(words.first().copied(), Some("close"), "1 語目は close: {words:?}");
+    assert_eq!(words.get(2).copied(), Some("--reason"), "理由を渡す: {words:?}");
+    assert_eq!(words.get(3).copied(), Some(format!("landed {landed} ci=none").as_str()), "理由は ci=none（tip= を持たない）: {words:?}");
+    assert_eq!(tools.ci_call_count(), 0, "偽 CI は 1 度も撃たれない");
+    assert_eq!(remote_refs(&tools), "", "偽 remote に ref は無い（push しない）");
+    let details = landed_details(&state, &id);
+    assert_eq!(
+        details.iter().skip(1).cloned().collect::<Vec<String>>(),
+        vec!["terminal:close:ok".to_owned()],
+        "Landed の着地の後ろは close の 1 件だけ（走らなかった段の event を積まない・母集団 {} 件）: {details:?}",
+        details.len()
+    );
+    clean(&[&repo, &state]);
+}
+
+/// (b) 列（`train=2`）: 先頭と後続がそれぞれ自分の sha で close する（見張りの記録は 2 件・理由は便ごとの `landed <自分の sha> ci=none`・
+/// 先端の便が居ても `tip=` を持たない）。stdout は列の便ごとに `terminal=closed:no-ci`。偽 CI と偽 remote は動かない。
+#[test]
+fn pipe_terminal_no_remote_train_closes_each_run_with_its_own_sha() {
+    let (repo, state) = repo_with_state();
+    let tools = fake_no_remote(&repo, &state);
+    let marker = state.join("lens-ran");
+    let [id_a, id_b, _] = train_runs(&repo, &state, &marker, [ALL_GREEN, ALL_GREEN, ALL_GREEN]);
+    let rules = write_rules_train(&state, "rules-train.toml", Some(2));
+    let out = land_extra(&repo, &state, &id_a, &["--rules", &rules]);
+    let stdout = stdout_of(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "列の land は rc 0: {stdout} / {}", stderr_of(&out));
+    assert!(stdout.contains(&format!("run={id_a} train=2")), "先頭と後続の 2 本が列で着地した: {stdout}");
+    let (sha_a, sha_b) = (landed_sha_of(&state, &id_a), landed_sha_of(&state, &id_b));
+    assert_ne!(sha_a, sha_b, "fixture: 2 本の squash は別の commit");
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), sha_b, "fixture: main の先端は後続の b");
+    let mut calls = ledger_calls(&state);
+    calls.sort();
+    let mut want = vec![
+        vec!["close".to_owned(), "s2-2e5".to_owned(), "--reason".to_owned(), format!("landed {sha_a} ci=none")],
+        vec!["close".to_owned(), "s2-3ax".to_owned(), "--reason".to_owned(), format!("landed {sha_b} ci=none")],
+    ];
+    want.sort();
+    assert_eq!(calls, want, "記録は 2 件・便ごとに自分の sha（tip= なし）");
+    for id in [&id_a, &id_b] {
+        assert_eq!(terminal_lines(&state, id), ["terminal:close:ok"], "終端は close の 1 件: {id} {:?}", landed_details(&state, id));
+        let line = stdout.lines().find(|line| line.starts_with(&format!("run={id} landed="))).map(str::to_owned);
+        assert!(line.as_deref().is_some_and(|found| found.ends_with("terminal=closed:no-ci")), "stdout: {id} {stdout}");
+    }
+    assert_eq!(tools.ci_call_count(), 0, "偽 CI は 1 度も撃たれない");
+    assert_eq!(remote_refs(&tools), "", "偽 remote に ref は無い");
+    clean(&[&repo, &state]);
+}
+
+/// (c) 宣言を読めない周は close しない: `show HEAD:.vessel.toml` を落とす偽 git で撃つ land は rc 1・見張りの記録 0 件・
+/// `terminal:unreadable` が 1 件。偽 git を外した `--terminal-only` は rc 0（`run=<id> terminal=closed:no-ci`）で記録が 1 件になる。
+#[test]
+fn pipe_terminal_no_remote_unreadable_declaration_closes_nothing_until_refired() {
+    let (repo, state) = repo_with_state();
+    let _tools = fake_no_remote(&repo, &state);
+    let design = write_contract(&repo, &[], &[]);
+    let id = gated_pass(&repo, &state, &design, &state.join("lens-ran"));
+    let out = land_once_with_git_shim(&repo, &state, &id, "show HEAD:.vessel.toml", None);
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "宣言を読めない周は rc 1: {} / {}", stdout_of(&out), stderr_of(&out));
+    assert!(stdout_of(&out).contains("terminal=unreadable"), "終端の token: {}", stdout_of(&out));
+    assert!(ledger_calls(&state).is_empty(), "close しない: {:?}", ledger_calls(&state));
+    assert_eq!(terminal_lines(&state, &id), ["terminal:unreadable"], "終端の行は unreadable の 1 件");
+    let landed = landed_sha_of(&state, &id);
+    let refired = land_extra(&repo, &state, &id, &["--rules", &ceiling_rules(&state), "--terminal-only"]);
+    assert_eq!(refired.status.code(), Some(i32::from(RC_OK)), "偽 git を外した撃ち直しは rc 0: {}", stderr_of(&refired));
+    assert_eq!(stdout_of(&refired).trim(), format!("run={id} terminal=closed:no-ci"), "撃ち直しの stdout");
+    let calls = ledger_calls(&state);
+    assert_eq!(
+        calls,
+        vec![vec!["close".to_owned(), "s2-2e5".to_owned(), "--reason".to_owned(), format!("landed {landed} ci=none")]],
+        "撃ち直しで記録が 1 件（理由は記録から読んだ着地の sha）"
+    );
+    clean(&[&repo, &state]);
+}
+
+/// (d) PR の形で着地した便（`--pr-cmd`）は終端を撃たない: remote を宣言した repo（`fake_terminal`）でも、`--pr-cmd` の着地と
+/// 続く `--terminal-only`（着地した sha の記録が無い＝rc 1 で断る）のどちらも偽 remote の ref・偽 CI・偽 bd・見張りの記録を 1 件も動かさない。
+#[test]
+fn pipe_terminal_no_remote_pr_landed_run_writes_nothing() {
+    let (repo, state) = repo_with_state();
+    let tools = fake_terminal(&repo, &state, "success");
+    let design = write_contract(&repo, &[], &[]);
+    let id = gated_pass(&repo, &state, &design, &state.join("lens-ran"));
+    let bd = state.join("fake-bd.sh").display().to_string();
+    let out = land_extra(&repo, &state, &id, &["--pr-cmd", "true", "--bd", &bd]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "PR の形の land は rc 0: {}", stderr_of(&out));
+    assert!(stdout_of(&out).contains("landed=pr"), "PR の形: {}", stdout_of(&out));
+    let before = event_count(&state);
+    let refired = land_extra(&repo, &state, &id, &["--bd", &bd, "--rules", &ceiling_rules(&state), "--terminal-only"]);
+    assert_eq!(refired.status.code(), Some(i32::from(RC_REFUSED)), "着地した sha の記録が無い周は rc 1: {}", stdout_of(&refired));
+    assert_eq!(event_count(&state), before, "撃ち直しは event を 1 件も書かない");
+    assert_eq!(remote_refs(&tools), "", "偽 remote に ref は無い");
+    assert_eq!(tools.ci_call_count(), 0, "偽 CI は 1 度も撃たれない");
+    assert!(!tools.bd_log.exists(), "偽 bd は 1 度も撃たれない");
+    assert!(ledger_calls(&state).is_empty(), "見張りの記録は 0 件: {:?}", ledger_calls(&state));
     clean(&[&repo, &state]);
 }

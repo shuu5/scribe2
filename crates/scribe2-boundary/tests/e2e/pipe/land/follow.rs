@@ -139,7 +139,8 @@ fn pipe_follow_resolved_conflict_advances_the_base_and_lands() {
         .into_iter()
         .filter(|(kind, stage, _)| *kind == EventKind::RunDone && *stage == Some(Stage::Landed))
         .count();
-    assert_eq!(landings, 1, "Landed は 1 件");
+    // 着地の 1 件と、remote を持たない toy の終端が台帳を閉じた `terminal:close:ok` の 1 件（着地の後ろ）。
+    assert_eq!(landings, 2, "Landed は 2 件（着地 + 終端の close）");
     assert_eq!(stub_calls(&state), 2, "起こし直しは 1 回だけ");
     clean(&[&repo, &state]);
 }

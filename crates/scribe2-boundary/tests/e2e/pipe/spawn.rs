@@ -758,7 +758,8 @@ fn pipe_e2e_toy_repo_lands_one_bead_with_fake_runner() {
         .lines()
         .filter(|line| line.contains("\"kind\":\"RunDone\"") && line.contains("\"stage\":\"Landed\""))
         .count();
-    assert_eq!(landed_events, 1, "RunDone stage=Landed が 1 件: {log}");
+    // 着地の 1 件と、remote を持たない toy の終端が台帳を閉じた `terminal:close:ok` の 1 件（着地の後ろ）。
+    assert_eq!(landed_events, 2, "RunDone stage=Landed が 2 件（着地 + 終端の close）: {log}");
     clean(&[&repo, &state]);
 }
 

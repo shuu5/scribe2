@@ -192,8 +192,27 @@ fn gist_of(goal: &str) -> String {
 /// `--version` の括弧の中身と**同じ 1 つの値**である（3 形: `<sha12>` / `<sha12>+dirty` / `unknown`）。
 const GENERATION: &str = BUILD_COMMIT;
 
-/// 台帳の close に書く理由の書き出し（`landed <sha> ci=success`）。
+/// 台帳の close に書く理由の書き出し（`landed <sha> ci=success` / `landed <sha> ci=none`）。
 const CLOSE_REASON: &str = "landed";
+
+/// close の理由の尾（**閉じた 2 値**・設計 contract-source.md §5・FR50）。書き手は [`close_reason`] の 1 本で、
+/// 経路 (1)（push → CI の照合 → close）と経路 (2)（remote を持たない repo の close）が同じ関数を通る。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CloseTail<'a> {
+    /// CI が success だった（先端で照合した周だけ先端の sha を持つ・§53）。
+    CiSuccess(Option<&'a str>),
+    /// CI の照合をしていない（remote を持たない repo・先端は持たない）。
+    NoCi,
+}
+
+/// 台帳の close の理由（`landed <sha> ci=success` / `landed <sha> ci=success tip=<先端>` / `landed <sha> ci=none` の 3 形）。
+pub(super) fn close_reason(sha: &str, tail: CloseTail<'_>) -> String {
+    match tail {
+        CloseTail::CiSuccess(None) => format!("{CLOSE_REASON} {sha} ci=success"),
+        CloseTail::CiSuccess(Some(head)) => format!("{CLOSE_REASON} {sha} ci=success tip={head}"),
+        CloseTail::NoCi => format!("{CLOSE_REASON} {sha} ci=none"),
+    }
+}
 
 /// `Landed` の `RunDone` の detail が載せる着地した sha の前置き（[`finish`] が書く字面と同じ 1 本）。
 pub(super) const SHA_PREFIX: &str = "sha:";
@@ -233,6 +252,8 @@ pub(in crate::pipe) enum PushTip<'a> {
 ///
 /// **各段が typed な event を 1 件ずつ記す**（`RunDone` の detail で弁別）＝通った周は `Landed` の後ろに
 /// 3 件並ぶ。止まった段から先は撃たず、記録もそこで終わる（起きていない段の event を積まない）。
+/// remote を持たない repo（宣言を読めた上で `remote` の行が無い）の便は push も CI の照合も撃たず、台帳の close だけを
+/// `landed <sha> ci=none` の理由で撃つ（記すのは `close:ok` の 1 件・結末は [`Terminal::ClosedWithoutCi`]）。
 /// `tip` が [`PushTip::Behind`] の周は push の後に自分の sha が先端の祖先かを測り、祖先の周だけ CI の照合（待ちも
 /// `ci_now` も）を先端の sha で撃つ。祖先でない周と測れない周は照合を撃たず `ci:unmeasurable` で止まる（§53）。
 pub(in crate::pipe) fn terminal(entry: &Land<'_>, sha: &str, tip: PushTip<'_>) -> Terminal {
@@ -245,10 +266,14 @@ pub(in crate::pipe) fn terminal(entry: &Land<'_>, sha: &str, tip: PushTip<'_>) -
             return Terminal::Unreadable;
         }
     };
-    // 押す先を宣言していない repo は**終端を持たない**（A1 の「出す」を既定で撃たない）。1 件も記帳しない
-    // ——走らなかった段の event を積むと、記録から「何が起きたか」でなく「何が在るか」が読めなくなる。
+    // 押す先を宣言していない repo は push も CI の照合も撃たない（A1 の「出す」を既定で撃たない）が、bead は閉じる
+    // （経路 (2)・ADR-0094）。走らなかった段の event を積むと、記録から「何が起きたか」でなく「何が在るか」が読めなく
+    // なるので、記すのは close の 1 件だけである。先端は持たない（`Behind` の周も同じ・照合する CI が無い）。
     let Some(remote) = facts.remote.as_deref() else {
-        return Terminal::Undeclared;
+        return match close_bead(entry, &close_reason(sha, CloseTail::NoCi)) {
+            Terminal::Closed => Terminal::ClosedWithoutCi,
+            failed => failed,
+        };
     };
     // (1) push。**main:main だけ**を押す（便の branch は押さない）。
     if super::git_bytes(entry.repo, &["push", remote, "main:main"]).is_none() {
@@ -287,19 +312,24 @@ pub(in crate::pipe) fn terminal(entry: &Land<'_>, sha: &str, tip: PushTip<'_>) -
     }
     // (3) 台帳の close。閉じられない周も着地は取り消さない（やり直しは `--terminal-only`・冪等）。先端で照合した周は
     // reason に先端の id を後置する（FR50・§53）。
-    let reason = match tip {
-        PushTip::Tip => format!("{CLOSE_REASON} {sha} ci=success"),
-        PushTip::Behind(head) => format!("{CLOSE_REASON} {sha} ci=success tip={head}"),
+    let tail = match tip {
+        PushTip::Tip => CloseTail::CiSuccess(None),
+        PushTip::Behind(head) => CloseTail::CiSuccess(Some(head)),
     };
-    match crate::ledger::close(entry.bd, entry.repo, entry.bead, &reason) {
+    close_bead(entry, &close_reason(sha, tail))
+}
+
+/// 台帳の close を撃ち、結末（[`Terminal::Closed`] か [`Terminal::CloseFailed`]）を記す（経路 (1) と (2) が共有する 1 本）。
+fn close_bead(entry: &Land<'_>, reason: &str) -> Terminal {
+    match crate::ledger::close(entry.bd, entry.repo, entry.bead, reason) {
         Ok(()) => {
             note(entry, "close:ok");
             Terminal::Closed
         }
         Err(err) => {
-            let reason = err.render();
-            note(entry, &reason);
-            Terminal::CloseFailed(reason)
+            let failed = err.render();
+            note(entry, &failed);
+            Terminal::CloseFailed(failed)
         }
     }
 }

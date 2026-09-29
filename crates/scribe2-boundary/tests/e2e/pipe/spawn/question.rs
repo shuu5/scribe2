@@ -63,7 +63,8 @@ fn pipe_resume_kill_at_implemented_resumes_to_landed_in_new_process() {
     assert!(stdout_of(&landed).contains("landed="), "{}", stdout_of(&landed));
     assert!(show_line(&repo, &state, &id).contains("stage=Landed"), "段は Landed");
     let log = fs::read_to_string(state.join("fleet").join("events.jsonl")).unwrap_or_default();
-    assert_eq!(done_count(&state, &id, Stage::Landed), 1, "RunDone stage=Landed が 1 件: {log}");
+    // 着地の 1 件と、remote を持たない toy の終端が台帳を閉じた `terminal:close:ok` の 1 件（着地の後ろ）。
+    assert_eq!(done_count(&state, &id, Stage::Landed), 2, "RunDone stage=Landed が 2 件（着地 + 終端の close）: {log}");
     assert!(!log.contains("\"actor\":\"human\""), "人手なしで継いだ（C9）: {log}");
     let new = git(&repo, &["rev-parse", "refs/heads/main"]);
     assert_eq!(

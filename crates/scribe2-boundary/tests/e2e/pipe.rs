@@ -679,7 +679,7 @@ pub(super) const SLOT_WAIT_S: u64 = 1;
 /// tmp manifest の終端が CI を待つ上限（秒・rules 行 `pipe.ci_wait_s` の fixture 値）。
 ///
 /// **終端は押す先を宣言した repo でしか走らない**ので、この値が効くのは終端の歯だけである
-/// （既存の toy repo は `remote` を宣言しない＝`terminal=undeclared` で待たない）。
+/// （既存の toy repo は `remote` を宣言しない＝`terminal=closed:no-ci` で待たない）。
 pub(super) const CI_WAIT_S: u64 = 1;
 
 /// tmp manifest の終端が CI を照合する間隔（秒・rules 行 `pipe.ci_poll_s` の fixture 値・設計 contract-source.md §50）。
@@ -1044,7 +1044,9 @@ pub(super) fn run_pipe_with_git_shim(state: &Path, failing: &str, args: &[&str])
 
 /// PATH の先頭に置く偽 git（`script` を先に撃ってから実 git へ exec する）。返すのは PATH の値。
 ///
-/// 器の git の呼び方を**現物で**振る唯一の口である（読めない git・書き込む git・壊す git）。
+/// 器の git の呼び方を**現物で**振る唯一の口である（読めない git・書き込む git・壊す git）。後ろには host の PATH でなく
+/// 道具箱（[`crate::toolbox_path`]）を積む＝偽 git の周も台帳 client の見張りと偽 `systemd-run` を通り、実物の台帳へ
+/// 届かない（着地が close を撃つようになった後も host の `bd` を起こさない）。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
@@ -1061,7 +1063,7 @@ pub(super) fn shim_path(state: &Path, name: &str, script: &str) -> String {
     let shim = bin_dir.join("git");
     fs::write(&shim, format!("#!/bin/sh\n{script}\nexec '{real}' \"$@\"\n")).expect("shim を書ける");
     fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).expect("shim に実行権を付ける");
-    format!("{}:{}", bin_dir.display(), std::env::var("PATH").unwrap_or_default())
+    format!("{}:{}", bin_dir.display(), crate::toolbox_path(state))
 }
 
 /// PASS の gate まで通した便を作る。
@@ -1518,9 +1520,10 @@ fn e2e_shim_atomic_rebuilt_shim_runs_directly_with_rc_zero() {
 // ───── 道具箱の台帳 client の見張り（設計 gate-cost.md §37・行 ad・`s2-07l.484`・接頭辞 `e2e_ledger_tripwire_`） ─────
 // flip-check: retroactive s2-07l.484
 
-/// (b) 既定の枝: helper 経由で 1 便を intake → spawn → gate → land まで通した後、見張りの記録は **0 件**である。
-/// 同じ便で道具箱の systemd-run の記録が**1 件以上**在ることを対で測る（便が道具箱を通っていない周に 0 件が
-/// 空虚に通らない）。非空虚の枝（見張りへ届く経路が在ること）は列の歯の file の (a) が測る。
+/// (b) 既定の枝: helper 経由で 1 便を intake → spawn → gate → land まで通した後、見張りの記録は着地の close の **1 件だけ**
+/// である（remote を持たない toy の着地が台帳を閉じる・1 語目が `close` で理由は `ci=none`）。同じ便で道具箱の systemd-run の
+/// 記録が**1 件以上**在ることを対で測る（便が道具箱を通っていない周に記録の数が空虚に通らない）。非空虚の枝（見張りへ届く
+/// 経路が在ること）は列の歯の file の (a) が測る。
 #[test]
 fn e2e_ledger_tripwire_helper_run_to_landed_never_reaches_the_ledger() {
     let (repo, state) = repo_with_state();
@@ -1533,7 +1536,13 @@ fn e2e_ledger_tripwire_helper_run_to_landed_never_reaches_the_ledger() {
     let scopes = crate::toolbox_record_names(&state);
     assert!(!scopes.is_empty(), "母集団: 同じ便が道具箱の systemd-run を通っている（{scopes:?}）");
     let calls = crate::toolbox_ledger_record_names(&state);
-    assert!(calls.is_empty(), "器は台帳 client を 1 度も起こしていない（見張りの記録 {calls:?}・scope の記録 {scopes:?}）");
+    assert_eq!(calls.len(), 1, "器が台帳 client を起こしたのは着地の close の 1 回だけ（見張りの記録 {calls:?}・scope の記録 {scopes:?}）");
+    let landed = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let argv = fs::read_to_string(crate::toolbox_ledger_records(&state).join(calls.first().map_or("", String::as_str)))
+        .unwrap_or_default();
+    let words: Vec<&str> = argv.lines().collect();
+    assert_eq!(words.first().copied(), Some("close"), "1 語目は close: {words:?}");
+    assert_eq!(words.get(3).copied(), Some(format!("landed {landed} ci=none").as_str()), "理由は ci=none: {words:?}");
     clean(&[&repo, &state]);
 }
 
