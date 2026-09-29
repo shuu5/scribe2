@@ -32,6 +32,9 @@
 //! （[`crate::hook::group::judge`]）を撃って打刻を書く（[`judged`]）。判定の側は他の席に触らず、候補なしで断りの event を記した周
 //! だけ断りの 1 行を自席へ送る。判定行の末尾は `judged=<moved:<label>|stay|none|error:<語>|->`。
 //!
+//! park の区画の席も移す（設計 §21・契約表の行 z）: 群の移動の門の後に区画の判定（[`park`]・読むだけ＝計測・lock・記録の書き換え
+//! は 0）を周ごとに 1 回撃ち、移り先の周は群と同じ退避の合図と起こし直しで区画の行の口座へ移る（鍵は row の口座と登録の seq）。
+//!
 //! 合図は席ごとに止められる（設計 §12・契約表の行 o・ADR-0070）: 席の置き場の直下の停止の記録（[`HEARTBEAT_OFF_FILE`]・書き手は
 //! [`heartbeat`] の口 1 本）が在る周は `back` の頭（黙りの門の前）で `heartbeat-off` の noop に止まり、梯子の記録を読まず書かない。
 //! 起こし直し（[`awake`]）・退避（[`moving`]）・群の判定（[`judged`]）は記録を読まず、off の席でも撃つ。
@@ -42,6 +45,7 @@
 //! 合図の 1 行を 1 度だけ送る（設計 §13 / §14・契約表の行 q / 行 r・ADR-0071 / ADR-0073＝席の裏の subagent を `/exit` で落とさない）。
 
 pub mod install;
+mod park;
 mod signal;
 
 pub use signal::{candidate, pointer_of, raise, settle, signal, Ladder, Pace};
@@ -54,7 +58,7 @@ use super::{host_groups_dir, pane_is_shell, pane_of, sanitize_target, seat_dir, 
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
 use crate::fleet::usage::{self, fresh_rows};
 use crate::fleet::select::{select, Input as SelectInput, Purpose, Selection, LIMIT_PCT};
-use crate::fleet::{Registration, State};
+use crate::fleet::{Registration, RegistrationLatest, State};
 use crate::hook::group::{self, current_of, exit_dialog, group_of, pressed, Caps, Judgement, Lock, Pending, Refusal, Step, EXIT};
 use crate::name::NAME;
 use crate::pipe::dispatch::facts;
@@ -418,6 +422,12 @@ pub enum Judged {
     None,
     /// 判定できない（理由）。
     Error(&'static str),
+    /// 区画の席の移り先（区画の行の口座・設計 §21 形 5）。
+    Parked(String),
+    /// 区画の席の row の口座が測れない（記録なし・鮮度の外）。
+    Unmeasured,
+    /// 区画の席の移り先が無い。
+    ParkNone,
 }
 
 impl Judged {
@@ -429,6 +439,21 @@ impl Judged {
             Self::Stay => "stay".to_owned(),
             Self::None => "none".to_owned(),
             Self::Error(why) => format!("error:{why}"),
+            Self::Parked(label) => format!("park:{label}"),
+            Self::Unmeasured => "unmeasured".to_owned(),
+            Self::ParkNone => "park-no-candidate".to_owned(),
+        }
+    }
+
+    /// 区画の判定の結果から写す（区画の外の席は撃たない周＝`-`）。
+    fn of_park(found: &park::Park) -> Self {
+        match found {
+            park::Park::Outside => Self::Unjudged,
+            park::Park::NoRule => Self::Error(TickError::NoRule.as_str()),
+            park::Park::Unmeasured => Self::Unmeasured,
+            park::Park::Stay => Self::Stay,
+            park::Park::To(label) => Self::Parked(label.clone()),
+            park::Park::NoCandidate => Self::ParkNone,
         }
     }
 }
@@ -644,11 +669,12 @@ pub struct Input<'a> {
 /// （[`awake`]）で、移動の周（窓が claude）は移動の門（[`moving`]）で終わり、`front` の後に群の判定（[`judged`]）を撃ち、判定で
 /// 移った周は同じ周の移動の門が退避を撃って、以後の列（黙り・上限・床・口座の門・合図の注入）を撃たない。
 pub fn judge(input: &Input) -> (Verdict, Judged) {
-    let found = match front(input) {
+    let mut parked = Judged::Unjudged;
+    let found = match front(input, &mut parked) {
         Ok(found) => found,
-        Err(stopped) => return (stopped, Judged::Unjudged),
+        Err(stopped) => return (stopped, parked),
     };
-    let judged = judged(input, &found);
+    let judged = if parked == Judged::Unjudged { judged(input, &found) } else { parked };
     let moved = matches!(judged, Judged::Moved(_))
         .then(|| moving(input, (&found.anchor, &found.account), &found.seat, (&found.rows, found.now)))
         .flatten();
@@ -771,7 +797,7 @@ struct Front {
 /// 形 1 の 1〜3（登録 row → 窓が shell か〔§7 形 1〕→ 移動の周か〔§10 形 8〕→ 状態の打刻 → digest の比較）。窓が shell の周は
 /// 打刻と梯子を読まず起こす周（[`awake`]）の判定で、移動の周（窓が claude）は打刻と梯子を読まず移動の門（[`moving`]）の判定で
 /// 止まる（Busy の周も /exit を送る＝turn の途中の /exit は入力の列に積まれ turn の終わりで実行される・§10 形 9）。
-fn front(input: &Input) -> Result<Front, Verdict> {
+fn front(input: &Input, judged: &mut Judged) -> Result<Front, Verdict> {
     let rows = Rows::of(input.manifest).map_err(|_| Verdict::error(TickError::NoRule))?;
     let now = state::now_secs();
     let events = crate::fleet::store::read_all(&input.state.path).map_err(|_| Verdict::error(TickError::Store))?;
@@ -781,9 +807,12 @@ fn front(input: &Input) -> Result<Front, Verdict> {
         .ok_or_else(|| Verdict::noop(NoopReason::NoRow))?;
     let seat = seat_dir(&input.state.path, input.target);
     if pane_is_shell(input.socket, input.target) {
-        return Err(awake(input, &account, role, &anchor, &seat));
+        return Err(awake(input, (&account, role, &anchor), &seat, (&fleet, judged)));
     }
     if let Some(moved) = moving(input, (&anchor, &account), &seat, (&rows, now)) {
+        return Err(moved);
+    }
+    if let Some(moved) = parking(input, &fleet, &seat, (&rows, now), judged) {
         return Err(moved);
     }
     let stamps = stamps_of(&seat, rows.pace.stale_s, now, || input_gate(input).is_ok()).map_err(Verdict::noop)?;
@@ -805,16 +834,17 @@ fn front(input: &Input) -> Result<Front, Verdict> {
 }
 
 /// 窓が shell の周（設計 §7 形 1〜3）: 打刻と梯子を読まず、同じ target に席を起こす（[`wake`]）。口座は anchor が群に属せば群の
-/// 今の口座（[`current_of`]・記録 > 種・群の段と同じ lock の内側）、属さなければ登録 row の口座（群 0 の host を含む）。記録が
+/// 今の口座（[`current_of`]・記録 > 種・群の段と同じ lock の内側）、属さなければ登録 row の口座（群 0 の host を含む・区画の席は区画の判定が移り先を返せばその口座・lock を取らない）。記録が
 /// 在るのに読めない周と host の面が読めない周は `group-unreadable`・lock を取れない周は `group-locked`。起こし直しは打刻の最終行の
 /// sid を `--resume` で運び初手の 1 語を積む（[`state::resume_carry`]・row の launch には載せない）。
-fn awake(input: &Input, account: &str, role: Role, anchor: &str, seat: &Path) -> Verdict {
+fn awake(input: &Input, (account, role, anchor): (&str, Role, &str), seat: &Path, (fleet, judged): (&State, &mut Judged)) -> Verdict {
     let Ok(manifest) = crate::rules::with_state_dir(input.manifest.clone(), Some(&input.state.path)) else {
         return Verdict::noop(NoopReason::GroupUnreadable);
     };
     let carry = state::resume_carry(seat);
     let Some(group) = group_of(&manifest, anchor) else {
-        return wake(input, &manifest, (role, anchor), account, &carry);
+        let parked = parked_by(input, &manifest, fleet, judged);
+        return wake(input, &manifest, (role, anchor), parked.as_ref().map_or(account, |(_, to)| to), &carry);
     };
     let Ok(current) = current_of(&input.state.path, group) else {
         return Verdict::noop(NoopReason::GroupUnreadable);
@@ -843,23 +873,51 @@ fn moving(input: &Input, (anchor, account): (&str, &str), seat: &Path, (rows, no
         Pending::Unreadable => return Some(Verdict::noop(NoopReason::GroupUnreadable)),
         Pending::Moving(group, current) => (group, current),
     };
-    let key = group::signal_key(&current);
+    let lock = Some(host_groups_dir(&input.state.path));
+    Some(advance(input, seat, (group::signal_key(&current), (group.name(), &current.label)), (rows, now), lock))
+}
+
+/// 区画の席の移動の周（設計 §21 形 3）: 区画の判定（[`parked_by`]・1 周 1 回）が移り先を返した周だけ `Some`。鍵は（row の口座,
+/// `park.<seq>`）で、次の手は群の移動の周と同じ [`advance`]（lock は取らない）。移り先でない周は今の列へ進む。
+fn parking(input: &Input, fleet: &State, seat: &Path, (rows, now): (&Rows, u64), judged: &mut Judged) -> Option<Verdict> {
+    let manifest = crate::rules::with_state_dir(input.manifest.clone(), Some(&input.state.path)).ok()?;
+    let (latest, to) = parked_by(input, &manifest, fleet, judged)?;
+    let (account, tag) = park::key(latest);
+    let name = manifest.park()?.name();
+    Some(advance(input, seat, ((&account, &tag), (name, &to)), (rows, now), None))
+}
+
+/// 区画の判定を自席の登録 row で 1 回撃ち、判定行の語を `judged` に載せる。移り先の口座を返した周だけ `Some`（登録 row と口座）。
+fn parked_by<'a>(input: &Input, manifest: &Manifest, fleet: &'a State, judged: &mut Judged) -> Option<(&'a RegistrationLatest, String)> {
+    let latest = park::latest_of(fleet, input.target)?;
+    let found = park::judge(manifest, fleet, latest, &crate::fleet::cli::now_utc());
+    *judged = Judged::of_park(&found);
+    match found {
+        park::Park::To(to) => Some((latest, to)),
+        _ => None,
+    }
+}
+
+/// 移動の周の次の手（[`group::step_of`] の 1 本・群の移動の周と区画の席の移動の周の同じ 3 分岐）: `key` は移動の鍵、`(name,
+/// to)` は退避の合図の群の名と移り先。exit なら（`lock` の dir が在れば lock の内側で）`/exit`、wait なら `move=wait`、signal なら
+/// 退避の合図の 1 行を同じ門で送り、送れた周だけ `at` = 周の始めの今（送る前）の記録を書く（[`group::write_signal`]）。
+fn advance(input: &Input, seat: &Path, (key, (name, to)): ((&str, &str), (&str, &str)), (rows, now): (&Rows, u64), lock: Option<PathBuf>) -> Verdict {
     match group::step_of(seat, key, now, rows.grace_s) {
         Step::Exit => {
-            let Ok(_lock) = Lock::take(&host_groups_dir(&input.state.path)) else {
-                return Some(Verdict::noop(NoopReason::GroupLocked));
+            let Ok(_lock) = lock.as_deref().map(Lock::take).transpose() else {
+                return Verdict::noop(NoopReason::GroupLocked);
             };
-            return Some(evacuate(input, (EXIT, Move::Exit), rows.window_ms).0);
+            return evacuate(input, (EXIT, Move::Exit), rows.window_ms).0;
         }
-        Step::Wait(_) => return Some(Verdict::moved(Move::Wait, None, None)),
+        Step::Wait(_) => return Verdict::moved(Move::Wait, None, None),
         Step::Signal => {}
     }
-    let payload = group::evacuate_line(group.name(), &current.label, rows.grace_s);
+    let payload = group::evacuate_line(name, to, rows.grace_s);
     let (verdict, delivered) = evacuate(input, (&payload, Move::Signal), rows.window_ms);
     if delivered {
         let _ = group::write_signal(seat, key, now);
     }
-    Some(verdict)
+    verdict
 }
 
 /// 窓が shell の周の起こし（§4 形 3・§7 形 3）: `launch` の 1 本で同じ target に `account` の席を起こす（anchor と役割は自分の

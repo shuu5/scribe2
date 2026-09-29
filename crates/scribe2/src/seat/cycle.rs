@@ -13,6 +13,7 @@ pub use launch::{
     derive_launch, fill_launch, launch, render_launched, single_model, with_agent_view_off, with_defaults, with_flags, Holes,
     Launch, Launched, HOLES,
 };
+pub(crate) use relaunch::choose;
 
 use super::{state, tmux_ok};
 use crate::rules::manifest::Manifest;

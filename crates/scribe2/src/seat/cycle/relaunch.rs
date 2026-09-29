@@ -25,7 +25,7 @@ use std::time::{Duration, Instant};
 ///
 /// `pool` は候補の label 列と区画の anchors（park の区画の置き場の席の row は口座を占めない＝除外に入れない・設計
 /// account-lifecycle.md §36 形 3）。
-pub(super) fn choose(
+pub(crate) fn choose(
     own: (Role, &str, Option<&str>),
     state: &State,
     pool: (&[String], &BTreeSet<String>),

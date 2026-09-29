@@ -1629,3 +1629,303 @@ fn seat_tick_pending_missing_grace_row_is_no_rule() {
     assert_eq!((rc_of(&out), stdout_of(&out)), (i32::from(RC_REFUSED), String::new()), "rc 1・stdout 0 行");
     assert_eq!(stderr_of(&out), "seat tick status: refused reason=no-rule\n");
 }
+
+// ───── park の区画の席の移動（seat-heartbeat.md §21・契約表の行 z・FR95・接頭辞 `seat_tick_park_`） ─────
+//
+// §4 の移動の fixture（[`move_place`]・偽 tmux・`--rules` の写し）の host の面を「口座 p（= [`MOVE_A`]・席の row）・q（= [`MOVE_B`]）・
+// r（= [`PARK_R`]）と、置き場 [`PARK_ANCHOR`] の区画 Tier9（候補 p, q, r）」に書き換え、写しに R-C9-1（[`PARK_THRESHOLD`]）を足す。
+// 口座の実測は event log に置く（鮮度の内側は今・外は [`PARK_STALE_TS`]）。字面は契約から組む。
+
+/// 区画の置き場の席の anchor。
+const PARK_ANCHOR: &str = "/lot";
+/// 区画の名。
+const PARK_GROUP: &str = "Tier9";
+/// 区画の 3 つ目の口座（r）。
+const PARK_R: &str = "acct-r";
+/// 写しの R-C9-1 の値（session 用の閾値）。
+const PARK_THRESHOLD: u64 = 80;
+/// 鮮度の外の実測の ts（写しの鮮度 300 秒より十分古い）。
+const PARK_STALE_TS: &str = "2020-01-01T00:00:00Z";
+
+/// 区画の置き場を作る。`threshold` が `None` なら写しに R-C9-1 を足さない。席の row は口座 p・anchor は `anchor`。
+fn park_place(root: &Path, anchor: &str, threshold: Option<u64>) -> MovePlace {
+    let place = move_place(root, "state", anchor);
+    fs::remove_file(judge_stamp(root)).ok();
+    let host = format!(
+        "schema = 1\n\n[[account]]\nlabel = \"{MOVE_A}\"\n\n[[account]]\nlabel = \"{MOVE_B}\"\n\n[[account]]\nlabel = \"{PARK_R}\"\n\n\
+         [[account-group]]\nname = \"{PARK_GROUP}\"\nanchors = [\"{PARK_ANCHOR}\"]\naccounts = [\"{MOVE_A}\", \"{MOVE_B}\", \"{PARK_R}\"]\n"
+    );
+    fs::write(place.state.join("host.toml"), host).ok();
+    if let Some(value) = threshold {
+        let rules = fs::read_to_string(&place.rules).unwrap_or_default();
+        let row = format!(
+            "\n[[rule]]\nid = \"R-C9-1\"\nkind = \"AccountSelection\"\nvalue = {value}\nenabled = true\nruling = \"r\"\nruled_at = \"d\"\n"
+        );
+        fs::write(&place.rules, format!("{rules}{row}")).ok();
+    }
+    place
+}
+
+/// 口座ごとの鮮度の内側の実測（5 時間窓 = 使用率・7 日窓 1）を今の ts で置く。
+fn park_measure(place: &MovePlace, rows: &[(&str, u64)]) {
+    rows.iter().for_each(|(label, pct)| acct_measured(&place.state, label, *pct, &acct_now()));
+}
+
+/// 席の登録 row を積み直す（`seq` を 0 から離す・口座 p・区画の anchor）。
+fn park_register(place: &MovePlace) {
+    let (launch, state) = (fixture(&place.tools, "launch-again.txt", "claude\n"), place.state.display().to_string());
+    let out = run_seat(&[
+        "register", "--state-dir", &state, "--target", TICK_TARGET, "--role", "orchestrator", "--account", MOVE_A, "--launch",
+        &launch, "--anchor", PARK_ANCHOR,
+    ]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "登録 row を積み直せる: {}", stderr_of(&out));
+}
+
+/// 席の最新の登録 row の `seq`（event log の物理順・0 始まり）。
+fn park_seq(place: &MovePlace) -> usize {
+    let events = vessel::fleet::store::read_all(&place.state).unwrap_or_default();
+    events.iter().rposition(|event| event.registration.as_ref().is_some_and(|row| row.target == TICK_TARGET)).unwrap_or(usize::MAX)
+}
+
+/// 群用 dir の直下の file 名（無ければ空）。
+fn park_groups_files(root: &Path) -> Vec<String> {
+    let entries = fs::read_dir(move_groups_dir(root)).map(|found| found.filter_map(Result::ok).collect::<Vec<_>>()).unwrap_or_default();
+    entries.iter().map(|entry| entry.file_name().to_string_lossy().into_owned()).collect()
+}
+
+/// 区画の周の判定行（`judged=` の語だけを移動の周の行と変える）。
+fn park_line(step: &str, consumed: &str, launched: &str, judged: &str) -> String {
+    move_line(step, consumed, launched).replace("judged=-", &format!("judged={judged}"))
+}
+
+/// 区画の退避の合図の 1 行（群の名 Tier9・移り先 `to`・残りは猶予の値・群の字面と同じ 1 関数の出力）。
+fn park_signal(to: &str) -> String {
+    grace_line(GRACE_S).replace(&format!("group={MOVE_GROUP} to={MOVE_B}"), &format!("group={PARK_GROUP} to={to}"))
+}
+
+/// 窓を shell にする（前面 `bash`・prompt・打刻の最終行は Busy〔いま〕で会話 id は [`WAKE_SID`]）。
+fn park_shell(place: &MovePlace) {
+    fs::write(place.at(MOVE_FRONT), "bash\n").ok();
+    fs::write(place.at(TICK_PANE), PANE_SHELL_PROMPT).ok();
+    let seat = seat_dir_of(&place.state, TICK_SEAT);
+    fs::write(state_file(&seat), format!("{}\n", stamp_line("busy", "UserPromptSubmit", unix_now() - 10, WAKE_SID))).ok();
+}
+
+/// 口座の退役の event を積む。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn park_retire(place: &MovePlace, label: &str) {
+    use vessel::fleet::{Event, EventKind, SCHEMA};
+    let policy = vessel::fleet::store::LockPolicy::embedded().expect("lock の規則を読める");
+    let event = Event {
+        schema: SCHEMA,
+        ts: acct_now(),
+        kind: EventKind::AccountRetired,
+        run: String::new(),
+        bead: String::new(),
+        host: "h".to_owned(),
+        actor: EventKind::AccountRetired.default_actor().to_owned(),
+        stage: None,
+        seat: None,
+        pid: None,
+        detail: None,
+        allowance: None,
+        registration: None,
+        mark: None,
+        account: Some(label.to_owned()),
+        cost: None,
+        rule: None,
+        case: None,
+    };
+    vessel::fleet::store::append(&place.state, &event, policy).expect("退役の event を積める");
+}
+
+/// 群の判定・承認・断りの event と計測の子が 0 件（区画の手は群の面を触らない）。
+fn park_assert_no_group_surface(root: &Path, place: &MovePlace) {
+    use vessel::fleet::EventKind;
+    let kinds = [EventKind::GroupMoved, EventKind::GroupMoveRefused, EventKind::GroupPressureNotified];
+    assert!(kinds.iter().all(|kind| judge_events(place, *kind) == 0), "群の event は 0 件");
+    assert_eq!(park_groups_files(root), Vec::<String>::new(), "群用 dir の file は 0 件");
+    assert!(!place.at(TICK_CLIENT).exists() && !place.at(JUDGE_ARGS).exists(), "計測の子は起動しない");
+}
+
+/// (a) 窓が claude ∧ p の鮮度の内側の記録が閾値以上 ∧ q が閾値未満 → `move=signal`・`judged=park:q`・送った 1 行が `group=Tier9` と
+/// `to=q` を持つ退避の合図・合図の記録の鍵が（p, `park.<登録 row の seq>`）・承認 event 0・群用 dir の file 0・lock 0・計測の子 0。
+#[test]
+fn seat_tick_park_signals_a_pressed_seat_toward_the_lot_account() {
+    let root = tmp();
+    let place = park_place(&root, PARK_ANCHOR, Some(PARK_THRESHOLD));
+    park_measure(&place, &[(MOVE_A, 90), (MOVE_B, 10), (PARK_R, 20)]);
+    park_register(&place);
+    let seq = park_seq(&place);
+    assert!(seq > 0, "seq は 0 でない（鍵が seq を写すことを測る）: {seq}");
+    let (injections, before) = (move_injections(&place).len(), unix_now());
+    let out = move_run(&place);
+    let after = unix_now();
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(stdout_of(&out), park_line("signal", "false", "-", &format!("park:{MOVE_B}")), "判定行 1 行");
+    let line = park_signal(MOVE_B);
+    let want = [format!("send-keys -t {TICK_TARGET} -l {line}"), format!("send-keys -t {TICK_TARGET} Enter")];
+    assert_eq!(move_keys(&place), want, "合図の text 1 回 + Enter 1 回・/exit 0");
+    let lines = move_injections(&place);
+    assert_eq!(lines.len(), injections + 1, "記録 1 行: {lines:?}");
+    let (who, what) = move_who_what(lines.last().map(String::as_str).unwrap_or_default());
+    let head = format!("{NAME} group: evacuate group={PARK_GROUP} to={MOVE_B} ");
+    assert!(who.as_deref() == Some("seat-tick-move") && what.is_some_and(|what| what.starts_with(&head)), "who と what: {lines:?}");
+    let found = fs::read_to_string(grace_signal(&place)).unwrap_or_default();
+    let at = found
+        .strip_prefix(&format!("to={MOVE_A} ts=park.{seq} at="))
+        .and_then(|rest| rest.strip_suffix('\n'))
+        .and_then(|at| at.parse::<u64>().ok());
+    assert!(at.is_some_and(|at| (before..=after).contains(&at)), "鍵は（p, park.<seq>）・at は撃った周の今: {found:?}");
+    park_assert_no_group_surface(&root, &place);
+}
+
+/// (b) 2 周目: 同じ登録 row の合図の記録が在る間は、移り先が q のままの fixture でも r に変わる fixture でも退避の合図 0（`move=wait`・
+/// 合図の記録は不変・他の手の lock が在っても `group-locked` にならない）。登録 row の `seq` か row の口座が違う記録は別の移動で、再び合図を送る。
+#[test]
+fn seat_tick_park_waits_within_one_registration_whatever_the_destination() {
+    for (q, r, to) in [(10, 20, MOVE_B), (20, 5, PARK_R)] {
+        let root = tmp();
+        let place = park_place(&root, PARK_ANCHOR, Some(PARK_THRESHOLD));
+        park_measure(&place, &[(MOVE_A, 90), (MOVE_B, q), (PARK_R, r)]);
+        let seq = park_seq(&place);
+        grace_signal_put(&place, (MOVE_A, &format!("park.{seq}")), unix_now() - 100);
+        let body = fs::read_to_string(grace_signal(&place)).ok();
+        let lock = move_groups_dir(&root).join("lock");
+        fs::write(&lock, "pid=1\n").ok();
+        move_assert_quiet(&place, &park_line("wait", "-", "-", &format!("park:{to}")));
+        assert_eq!(fs::read_to_string(grace_signal(&place)).ok(), body, "{to}: 合図の記録は不変");
+        assert_eq!(fs::read_to_string(&lock).ok().as_deref(), Some("pid=1\n"), "{to}: 他の手の lock は触らない");
+    }
+    for other in [(MOVE_A, "park.999999".to_owned()), (MOVE_B, String::new())] {
+        let root = tmp();
+        let place = park_place(&root, PARK_ANCHOR, Some(PARK_THRESHOLD));
+        park_measure(&place, &[(MOVE_A, 90), (MOVE_B, 10), (PARK_R, 20)]);
+        let tag = if other.1.is_empty() { format!("park.{}", park_seq(&place)) } else { other.1.clone() };
+        grace_signal_put(&place, (other.0, &tag), unix_now() - 100);
+        let out = move_run(&place);
+        assert_eq!(stdout_of(&out), park_line("signal", "false", "-", &format!("park:{MOVE_B}")), "{other:?}: 別の移動は再び合図: {}", stderr_of(&out));
+    }
+}
+
+/// (b2) 合図の記録が猶予の外 → `move=exit`（`/exit` の text 1 回 + Enter 1 回・lock を取らない＝他の手の lock が在っても通り、触らない）。
+#[test]
+fn seat_tick_park_sends_the_exit_past_the_grace_without_the_lock() {
+    let root = tmp();
+    let place = park_place(&root, PARK_ANCHOR, Some(PARK_THRESHOLD));
+    park_measure(&place, &[(MOVE_A, 90), (MOVE_B, 10), (PARK_R, 20)]);
+    let seq = park_seq(&place);
+    grace_signal_put(&place, (MOVE_A, &format!("park.{seq}")), unix_now() - GRACE_S - 1);
+    let lock = move_groups_dir(&root).join("lock");
+    fs::write(&lock, "pid=1\n").ok();
+    let out = move_run(&place);
+    assert_eq!(stdout_of(&out), park_line("exit", "false", "-", &format!("park:{MOVE_B}")), "stderr={}", stderr_of(&out));
+    let want = [format!("send-keys -t {TICK_TARGET} -l /exit"), format!("send-keys -t {TICK_TARGET} Enter")];
+    assert_eq!(move_keys(&place), want, "/exit の text 1 回 + Enter 1 回");
+    assert_eq!(fs::read_to_string(&lock).ok().as_deref(), Some("pid=1\n"), "他の手の lock は触らない");
+}
+
+/// (c) 窓が shell の同じ fixture → q で起こし直す（起動行が q の設定 dir と `--resume <会話 id>` を持つ）・登録の記帳の口座が q・
+/// 群用 dir の file 0。
+#[test]
+fn seat_tick_park_relaunches_a_dead_seat_on_the_destination_carrying_the_conversation() {
+    let root = tmp();
+    let place = park_place(&root, PARK_ANCHOR, Some(PARK_THRESHOLD));
+    park_measure(&place, &[(MOVE_A, 90), (MOVE_B, 10), (PARK_R, 20)]);
+    park_shell(&place);
+    let out = move_run(&place);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(stdout_of(&out), park_line("launch", "-", "launch-unconfirmed", &format!("park:{MOVE_B}")), "判定行 1 行");
+    let texts = wake_texts(&place);
+    assert_eq!(texts.len(), 1, "起動行 1 行: {texts:?}");
+    let text = texts.first().cloned().unwrap_or_default();
+    assert!(text.contains(&wake_account_dir(&place, MOVE_B)) && !text.contains("/exit"), "q の設定 dir を持つ起動行: {text}");
+    assert!(text.ends_with(&format!(" --resume {WAKE_SID} {}", wake_first_word())), "会話 id と初手を運ぶ: {text}");
+    let rows = acct_rows(&place.state);
+    let last = rows.last().map(|row| (row.account.as_str(), row.anchor.as_str(), row.target.as_str()));
+    assert_eq!(last, Some((MOVE_B, PARK_ANCHOR, TICK_TARGET)), "登録の記帳は q");
+    park_assert_no_group_surface(&root, &place);
+}
+
+/// (d) p が閾値未満・記録なし・鮮度の外の 3 fixture → 合図 0・起こし直し 0・`judged=` が `stay` / `unmeasured` / `unmeasured`。
+#[test]
+fn seat_tick_park_leaves_a_seat_whose_account_is_below_or_unmeasured() {
+    for (word, own) in [("stay", Some((10, acct_now()))), ("unmeasured", None), ("unmeasured", Some((96, PARK_STALE_TS.to_owned())))] {
+        let root = tmp();
+        let place = park_place(&root, PARK_ANCHOR, Some(PARK_THRESHOLD));
+        if let Some((pct, ts)) = own {
+            acct_measured(&place.state, MOVE_A, pct, &ts);
+        }
+        park_measure(&place, &[(MOVE_B, 10), (PARK_R, 20)]);
+        move_assert_quiet(&place, &judge_recent(word));
+        assert!(!grace_signal(&place).exists(), "{word}: 合図の記録は書かれない");
+        park_assert_no_group_surface(&root, &place);
+    }
+}
+
+/// (e) 窓が shell で判定が移り先を返さない fixture（閾値未満・記録なし・q と r が無い）→ p で起こし直す（`judged=` は判定の語）。
+#[test]
+fn seat_tick_park_relaunches_on_the_row_account_when_no_destination() {
+    let cases = [("stay", vec![(MOVE_A, 10), (MOVE_B, 10)]), ("unmeasured", vec![(MOVE_B, 10)]), ("park-no-candidate", vec![(MOVE_A, 90)])];
+    for (word, rows) in cases {
+        let root = tmp();
+        let place = park_place(&root, PARK_ANCHOR, Some(PARK_THRESHOLD));
+        park_measure(&place, &rows);
+        park_shell(&place);
+        let out = move_run(&place);
+        assert_eq!(stdout_of(&out), park_line("launch", "-", "launch-unconfirmed", word), "{word}: stderr={}", stderr_of(&out));
+        let text = wake_texts(&place).first().cloned().unwrap_or_default();
+        assert!(text.contains(&wake_account_dir(&place, MOVE_A)), "{word}: p の設定 dir で起こす: {text}");
+        let last = acct_rows(&place.state).last().map(|row| row.account.clone());
+        assert_eq!(last.as_deref(), Some(MOVE_A), "{word}: 登録の記帳は p");
+    }
+}
+
+/// (f) q と r が閾値以上か鮮度の外 → 移らず `judged=park-no-candidate`・0 key。退役中の q と鮮度の外の q は候補に数えず、残りの
+/// 候補 r に移る。
+#[test]
+fn seat_tick_park_counts_only_fresh_unretired_candidates() {
+    for rows in [[(MOVE_B, 90, false), (PARK_R, 95, false)], [(MOVE_B, 90, false), (PARK_R, 10, true)]] {
+        let root = tmp();
+        let place = park_place(&root, PARK_ANCHOR, Some(PARK_THRESHOLD));
+        park_measure(&place, &[(MOVE_A, 90)]);
+        for (label, pct, old) in rows {
+            let ts = if old { PARK_STALE_TS.to_owned() } else { acct_now() };
+            acct_measured(&place.state, label, pct, &ts);
+        }
+        move_assert_quiet(&place, &judge_recent("park-no-candidate"));
+    }
+    let retired = tmp();
+    let place = park_place(&retired, PARK_ANCHOR, Some(PARK_THRESHOLD));
+    park_measure(&place, &[(MOVE_A, 90), (MOVE_B, 10), (PARK_R, 30)]);
+    park_retire(&place, MOVE_B);
+    let out = move_run(&place);
+    assert_eq!(stdout_of(&out), park_line("signal", "false", "-", &format!("park:{PARK_R}")), "退役中の q は数えない: {}", stderr_of(&out));
+    let stale = tmp();
+    let place = park_place(&stale, PARK_ANCHOR, Some(PARK_THRESHOLD));
+    park_measure(&place, &[(MOVE_A, 90), (PARK_R, 30)]);
+    acct_measured(&place.state, MOVE_B, 10, PARK_STALE_TS);
+    let out = move_run(&place);
+    assert_eq!(stdout_of(&out), park_line("signal", "false", "-", &format!("park:{PARK_R}")), "鮮度の外の q は数えない: {}", stderr_of(&out));
+}
+
+/// (g) R-C9-1 の無い rules の写し → `judged=error:no-rule`・列は今のまま進む（黙りの門）・0 key。
+#[test]
+fn seat_tick_park_without_the_threshold_row_is_no_rule_and_the_list_goes_on() {
+    let root = tmp();
+    let place = park_place(&root, PARK_ANCHOR, None);
+    park_measure(&place, &[(MOVE_A, 96), (MOVE_B, 10)]);
+    move_assert_quiet(&place, &judge_recent("error:no-rule"));
+}
+
+/// (h) 群にも区画にも属さない席の判定行が今と同じ字（`judged=-`）・区画の口座が逼迫でも合図 0。
+#[test]
+fn seat_tick_park_outside_the_lot_and_the_groups_is_unjudged() {
+    let root = tmp();
+    let place = park_place(&root, "/elsewhere", Some(PARK_THRESHOLD));
+    park_measure(&place, &[(MOVE_A, 96), (MOVE_B, 10)]);
+    move_assert_quiet(&place, &judge_recent("-"));
+}

@@ -476,6 +476,11 @@ pub fn group_of<'a>(manifest: &'a Manifest, anchor: &str) -> Option<&'a AccountG
     manifest.groups().iter().find(|group| group.anchors().iter().any(|found| found == anchor))
 }
 
+/// anchor が区画の anchors に在る周だけ区画の行（`group_of` の隣・群には入らない park の区画・設計 seat-heartbeat.md §21 形 7）。
+pub fn park_of<'a>(manifest: &'a Manifest, anchor: &str) -> Option<&'a AccountGroup> {
+    manifest.park().filter(|lot| lot.anchors().iter().any(|found| found == anchor))
+}
+
 /// 断りの理由（移り先の候補が無い＝妥協の移動を作らない・ADR-0020 §2.4）。
 const NO_CANDIDATE: &str = "no-candidate";
 
@@ -829,9 +834,10 @@ fn moving_line(group: &AccountGroup, row: &str, current: &str) -> String {
 
 /// 席の hook の群の段（SessionStart の brief・UserPromptSubmit の追加文脈に足す行）。`who` / `when` は記録の欄。
 ///
-/// 群に属さない anchor・群 0 の host・登録の無い席・読めない面は 0 行（席は止めない・rc は変えない）。鮮度の内側で逼迫なら
-/// 1 行、閾値未満なら 0 行、鮮度の外なら計測の子を 1 本起こして `usage: measuring account=<label>` の 1 行。出した行は
-/// 記録 1 行（`what` = [`WHAT_GROUP`]）を残す。
+/// 群にも区画にも属さない anchor・群 0 の host・登録の無い席・読めない面は 0 行（席は止めない・rc は変えない）。鮮度の内側で
+/// 逼迫なら 1 行、閾値未満なら 0 行、鮮度の外なら計測の子を 1 本起こして `usage: measuring account=<label>` の 1 行。出した行は
+/// 記録 1 行（`what` = [`WHAT_GROUP`]）を残す。区画（[`park_of`]）の席は逼迫の 1 行だけで、移動を頼む記録を置かず、鮮度の外も
+/// 計測の子を起こさず 0 行（設計 seat-heartbeat.md §21 形 7）。
 pub(super) fn lines(hooked: &Hooked, (who, when): (&str, &str), started: Instant) -> (Vec<String>, Vec<String>) {
     let Some(line) = line_of(hooked) else {
         return (Vec::new(), Vec::new());
@@ -844,7 +850,12 @@ pub(super) fn lines(hooked: &Hooked, (who, when): (&str, &str), started: Instant
 fn line_of(hooked: &Hooked) -> Option<String> {
     let tracked = hooked.rules.map_or_else(Manifest::embedded, |path| Manifest::load(Path::new(path))).ok()?;
     let manifest = crate::rules::with_state_dir(tracked, Some(hooked.dir)).ok()?;
-    let group = group_of(&manifest, &hooked.root.display().to_string())?;
+    let anchor = hooked.root.display().to_string();
+    // 群の席か、群に入らない区画の席（区画の手は計測を起こさない・記録を頼まない・現在地の記録を読まない・§21 形 7）。
+    let (group, lot) = match group_of(&manifest, &anchor) {
+        Some(found) => (found, None),
+        None => park_of(&manifest, &anchor).map(|found| (found, Some(found)))?,
+    };
     let caps = Caps::of(&manifest).ok()?;
     let pane = hooked.pane.filter(|found| !found.trim().is_empty())?;
     let socket = hooked.socket.filter(|found| !found.trim().is_empty());
@@ -854,9 +865,11 @@ fn line_of(hooked: &Hooked) -> Option<String> {
     let account = crate::seat::role::registration_of_target(&state, &target)?.account.clone();
     // 群の今の口座（記録 > 種）を読む: 記録が読めない周は 0 行・記録が登録 row と食い違う周は逼迫を測らず移動中の 1 行
     // （移動を頼む記録は置かない＝移動は既に決まっている・設計 §21 形 2）。
-    let current = current_of(hooked.dir, group).ok()?;
-    if current.source == Source::Record && current.label != account {
-        return Some(moving_line(group, &account, &current.label));
+    if lot.is_none() {
+        let current = current_of(hooked.dir, group).ok()?;
+        if current.source == Source::Record && current.label != account {
+            return Some(moving_line(group, &account, &current.label));
+        }
     }
     // 群の役割の model の集合（行が無い周は 0 行・設計 §33 形 3）。
     let models = role_models(&manifest, group, &state)?;
@@ -864,9 +877,12 @@ fn line_of(hooked: &Hooked) -> Option<String> {
         Some(rows) => {
             let found = pressed(&rows, caps, &models)?;
             // 逼迫を読んだ周は移動を頼む記録を置く（§20 形 4・在れば上書きしない・判定と移動は 1 周の群の段が lock の内側で行う）。
-            let _ = put_request(&host_groups_dir(hooked.dir), group.name(), &account, found.window);
+            if lot.is_none() {
+                let _ = put_request(&host_groups_dir(hooked.dir), group.name(), &account, found.window);
+            }
             Some(seat_line(group, &account, found))
         }
+        None if lot.is_some() => None,
         None => measure_later(hooked.dir, &account).then(|| format!("usage: measuring account={account}")),
     }
 }

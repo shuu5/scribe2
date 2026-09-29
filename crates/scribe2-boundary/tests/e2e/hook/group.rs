@@ -376,3 +376,92 @@ fn hook_group_current_unreadable_record_prints_nothing() {
     assert_eq!(group_requests(&place), Vec::<String>::new(), "頼みも置かない");
     clean(&[&place.repo, &place.state, &place.sock_dir]);
 }
+
+// ─────── park の区画の席の hook（seat-heartbeat.md §21 形 7・契約表の行 z・FR95・接頭辞 `hook_park_`・§19 の fixture） ───────
+//
+// 区画（Tier9）の席は群と同じ門で逼迫の 1 行（`group=Tier9 …`）を出すが、移動を頼む記録を置かず、鮮度の外でも計測の子を起こさない
+// （区画の手は計測を起こさない）。字面は契約から組む。
+
+/// 区画の名。
+const PARK_NAME: &str = "Tier9";
+
+/// host の面に口座 a1 / a2 と区画 1 つ（置き場 = `anchor`・候補 = a1 → a2）を書く。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn put_park(place: &RolePlace, anchor: &str) {
+    let body = format!(
+        "schema = 1\n\n[[account]]\nlabel = \"a1\"\n\n[[account]]\nlabel = \"a2\"\n\n[[account-group]]\nname = \"{PARK_NAME}\"\n\
+         anchors = [\"{anchor}\"]\naccounts = [\"a1\", \"a2\"]\n"
+    );
+    fs::write(place.state.join(vessel::rules::HOST_MANIFEST), body).expect("host の面を書ける");
+}
+
+/// 区画の逼迫の 1 行（器の字面を借りない）。
+fn park_line(account: &str, window: &str, used: u64, cap: u64) -> String {
+    format!("group={PARK_NAME} account={account} window={window} used={used} cap={cap} — 次の 1 周が移り先を決める")
+}
+
+/// host の根の群用 dir の直下の file 名（無ければ空）。
+fn park_groups_files(place: &RolePlace) -> Vec<String> {
+    let dir = place.state.parent().unwrap_or(&place.state).join(format!("{}-host", vessel::name::NAME)).join("groups");
+    let mut names: Vec<String> = fs::read_dir(dir)
+        .map(|entries| entries.filter_map(Result::ok).map(|entry| entry.file_name().to_string_lossy().into_owned()).collect())
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
+/// (i) 区画の席の hook が a1 の逼迫（5 時間窓 90・行の値 85）の fixture で `group=Tier9 account=a1` で始まる 1 行を 2 event とも出し、
+/// 群用 dir に移動を頼む記録の file を 1 つも置かない（base は 0 行 ＝ RED）。
+#[test]
+fn hook_park_pressed_seat_says_one_tier9_line_and_asks_for_nothing() {
+    let place = group_role_place();
+    put_park(&place, &place.repo.display().to_string());
+    let path = group_seat(&place, "parkhot", "a1");
+    put_group_round(&place.state, &group_now(), "a1", &group_windows(90, 10, 10));
+    assert_eq!(group_prompt_lines(&place, &path), vec![park_line("a1", "5h", 90, 85)], "UserPromptSubmit は 1 行");
+    assert_eq!(group_session_lines(&place, &path), vec![park_line("a1", "5h", 90, 85)], "SessionStart も 1 行");
+    assert_eq!(park_groups_files(&place), Vec::<String>::new(), "移動を頼む記録は置かない（群用 dir の file 0）");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// (j) 閾値未満（5 時間窓 84・7 日窓 94・モデル別窓 94）は 0 行・file 0（回帰の歯・base でも緑）。
+#[test]
+fn hook_park_under_threshold_prints_nothing() {
+    let place = group_role_place();
+    put_park(&place, &place.repo.display().to_string());
+    let path = group_seat(&place, "parkunder", "a1");
+    put_group_round(&place.state, &group_now(), "a1", &group_windows(84, 94, 94));
+    assert_eq!(group_prompt_lines(&place, &path), Vec::<String>::new(), "閾値未満は 0 行");
+    assert_eq!(group_session_lines(&place, &path), Vec::<String>::new(), "SessionStart も 0 行");
+    assert_eq!(park_groups_files(&place), Vec::<String>::new(), "file 0");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// (k) 記録なし（a1 の行が置き場に 0 件）と古い記録（鮮度の外の a1 の 3 行）の 2 fixture は 0 行（`usage: measuring` も無い）で、hook の
+/// 後に 3 秒待っても置き場の a1 の計測の行が増えない（記録なしは 0 件のまま・古い記録は 3 件のまま＝計測の子の起動 0）。
+#[test]
+fn hook_park_missing_or_stale_measurement_prints_nothing_and_measures_nothing() {
+    for (why, stale, held) in [("記録なし", false, 0), ("古い記録", true, 3)] {
+        let place = group_role_place();
+        put_park(&place, &place.repo.display().to_string());
+        let path = group_seat(&place, "parkstale", "a1");
+        if stale {
+            put_group_round(&place.state, GROUP_STALE_TS, "a1", &group_windows(99, 99, 99));
+        }
+        assert_eq!(group_prompt_lines(&place, &path), Vec::<String>::new(), "{why}: UserPromptSubmit は 0 行");
+        assert_eq!(group_session_lines(&place, &path), Vec::<String>::new(), "{why}: SessionStart も 0 行");
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        let rows = vessel::fleet::store::read_all(&place.state)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|event| event.allowance.as_ref())
+            .filter(|row| row.key().account == "a1")
+            .count();
+        assert_eq!(rows, held, "{why}: 置き場の a1 の行は増えない（計測の子の起動 0）");
+        assert_eq!(park_groups_files(&place), Vec::<String>::new(), "{why}: file 0");
+        clean(&[&place.repo, &place.state, &place.sock_dir]);
+    }
+}
