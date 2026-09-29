@@ -88,7 +88,7 @@
 - §4（AC31）: tmp の state dir に口座 2 つ（片方の `plugins/installed_plugins.json` に consumer 2 つ・片方は worktree の path）と `[[vessel]] repo` を置き `doctor --state-dir` を撃つ → consumer ごとに 1 行・`drift=` が `none` / `binary` / `plugin` / `ledger` の 4 語をそれぞれ出す fixture 4 つ／記録の無い consumer は `unrecorded`／帳簿が壊れていれば `ledger=unreadable` の 1 行で他の行は出る／`[[vessel]]` 無しは `head=undeclared`。
 - §5（AC31）: 偽 `git`・偽 `cargo`（argv を写す stub・PATH の先頭）で `vessel update` を撃つと順序 (1)→(4) の argv が写り `InstallRecorded` が 1 件・stdout 1 行／dirty な repo・ff できない repo・cargo が rc 101 の周はそれぞれ typed に断り event 0／`KINDS.len()` の pin が +1。
 - §6（AC32）: 偽 tmux で席を立て `plugin` 記録に digest A を置いた後 root の hooks.json を B に変える → tick が `kind=externalize origin=hook` を注入／退避 → Stop の後に `/exit` → 立て直しが同じ target・同じ口座（閾値未満）で走る／hooks 同じで binary だけ違う周は noop（理由 1 つ）。
-- 実地（done の一部・歯にしない）: 本 host で `vessel update` を 1 回撃ち、consumer（folio2 / ubuntu-note-system）の doctor 行が `drift=none` になり、hooks.json を変えた便の後に consumer の planner 席が器の手で作り直されること。
+- 実地（done の一部・歯にしない）: 本 host で `vessel update` を 1 回撃ち、consumer 2 つの doctor 行が `drift=none` になり、hooks.json を変えた便の後に consumer の planner 席が器の手で作り直されること。
 
 ## 10. 憲法・制約との整合
 
