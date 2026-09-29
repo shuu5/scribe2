@@ -1713,7 +1713,7 @@ fn hook_anchor_guard_unreadable_mark_is_denied() {
 
 /// (d) origin の main を local の main の 1 つ前に置いた（未 push の）anchor で、HEAD が main の `git commit` と `gh pr merge 1`
 /// は窓の busy の行と land-window の literal で断られる。HEAD を別 branch に替えた `git commit` は通り、origin を local に
-/// 揃えた後の `gh pr merge 1` は通る。
+/// 揃えた後の `gh pr merge 1`（発端の trailer の本文を持つ・merge の門は行 mg）は通る。
 #[test]
 fn hook_anchor_guard_closed_window_denies_main_commit_and_pr_merge() {
     let (repo, state) = anchor_place();
@@ -1730,7 +1730,7 @@ fn hook_anchor_guard_closed_window_denies_main_commit_and_pr_merge() {
     git(&repo, &["checkout", "-q", "-b", "side"]);
     assert_silent(&live_hook(&repo, &bash_payload(&repo, "git commit -m x")), "HEAD が別 branch");
     git(&repo, &["update-ref", "refs/remotes/origin/main", "refs/heads/main"]);
-    assert_silent(&live_hook(&repo, &bash_payload(&repo, "gh pr merge 1")), "窓が開いた");
+    assert_silent(&live_hook(&repo, &bash_payload(&repo, &format!("gh pr merge 1 --body '{}s2-a.1'", merge_key()))), "窓が開いた");
     clean(&[&repo, &state]);
 }
 
@@ -1741,6 +1741,115 @@ fn hook_anchor_guard_is_silent_in_a_repo_without_marker() {
     git(&repo, &["branch", "-M", "main"]);
     stale_anchor(&repo);
     assert_silent(&live_hook(&repo, &bash_payload(&repo, "git commit -m x")), "marker の無い repo");
+    clean(&[&repo]);
+}
+
+// ─────────────── merge の門（設計 vessel-hook.md §21 行 mg・FR92 / AC62・接頭辞 `hook_merge_gate_`） ───────────────
+//
+// 窓を開いた anchor（origin の main を local の main へ揃える）で `gh pr merge` を撃ち、本文の発端の trailer か器の便の trailer
+// の有無で通すか断るかを binary の外形で測る。`--project` は anchor・payload の cwd も anchor。
+
+/// 発端の trailer の key（NAME の先頭を大文字にして `-Source: ` を足す・core の導出と独立に組む）。
+fn merge_key() -> String {
+    let mut chars = NAME.chars();
+    let head: String = chars.next().map(|first| first.to_uppercase().to_string()).unwrap_or_default();
+    format!("{head}{}-Source: ", chars.as_str())
+}
+
+/// 窓を開いた anchor と、紐づけた置き場。
+fn merge_place() -> (TmpDir, TmpDir) {
+    let (repo, state) = anchor_place();
+    git(&repo, &["update-ref", "refs/remotes/origin/main", "refs/heads/main"]);
+    (repo, state)
+}
+
+/// 記録のうち merge の門の行。
+fn merge_records(state: &Path) -> Vec<String> {
+    inject_lines(state).into_iter().filter(|line| what_of(line).starts_with("merge-deny")).collect()
+}
+
+/// 断りの外形（rc 2・stdout 0 byte・stderr 1 行・器の名乗りと理由）と記録「merge-deny <理由>」が 1 行増えることを確かめ、
+/// stderr を返す。
+fn assert_merge_deny(state: &Path, repo: &Path, command: &str, reason: &str) -> String {
+    let before = merge_records(state).len();
+    let out = live_hook(repo, &bash_payload(repo, command));
+    let text = stderr_text(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "{command}: deny は rc 2: {text}");
+    assert!(out.stdout.is_empty(), "{command}: stdout 0 byte");
+    assert_eq!(stderr_lines(&out), 1, "{command}: stderr 1 行: {text}");
+    assert!(text.starts_with(&format!("{NAME}: deny merge-gate reason={reason} ")), "{command}: {text}");
+    let records = merge_records(state);
+    assert_eq!(records.len(), before + 1, "{command}: 記録 1 行");
+    assert_eq!(records.last().map(|line| what_of(line)), Some(format!("merge-deny {reason}")), "{command}");
+    assert!(text.contains(merge_key().trim_end()) && text.contains("run: "), "{command}: key の字と run の形: {text}");
+    assert!(text.contains("gh pr merge <PR> --squash --body-file <絶対 path>"), "{command}: 次の一手: {text}");
+    text
+}
+
+/// (1) 通る 3 形（AC62 の通過 3/3）: 題の行と空行と発端の trailer（id 1 本）の `--body`、id 2 本の行の本文 file を絶対 path で渡す
+/// `--body-file`、器の便の trailer の `-b` は rc 0・0 byte・merge-deny の記録 0 行。
+#[test]
+fn hook_merge_gate_passes_the_three_trailer_forms() {
+    let (repo, state) = merge_place();
+    let place = tmp();
+    let key = merge_key();
+    let file = place.join("body.md");
+    fs::write(&file, format!("要旨の段落。\n\nCo-Authored-By: e2e <e2e@example.invalid>\n{key}s2-a.1 s2-b.2\n")).expect("本文を書ける");
+    for command in [
+        format!("gh pr merge 1 --squash --body \"題の行\n\n{key}s2-07l.739\""),
+        format!("gh pr merge 1 --squash --body-file {}", file.display()),
+        "gh pr merge 1 --squash -b 'run: s2-07l.351-20260922T061245Z'".to_owned(),
+    ] {
+        assert_silent(&live_hook(&repo, &bash_payload(&repo, &command)), &command);
+    }
+    assert!(merge_records(&state).is_empty(), "記録 0 行");
+    clean(&[&repo, &state, &place]);
+}
+
+/// (2) 断る 2 形（AC62 の断り 2/2）: 本文の無い `gh pr merge 1 --squash` は no-body で 4 つの flag と key の字を名指し、形の外の
+/// id（大文字）の trailer の本文は bad-source でその行を名指す。
+#[test]
+fn hook_merge_gate_denies_a_missing_body_and_a_bad_source_line() {
+    let (repo, state) = merge_place();
+    let key = merge_key();
+    let text = assert_merge_deny(&state, &repo, "gh pr merge 1 --squash", "no-body");
+    for flag in ["--body", "-b", "--body-file", "-F"] {
+        assert!(text.contains(flag), "{flag}: {text}");
+    }
+    let bad = format!("{key}S2-A.1");
+    let text = assert_merge_deny(&state, &repo, &format!("gh pr merge 1 --squash --body '要旨\n\n{bad}'"), "bad-source");
+    assert!(text.contains(&bad), "形の外の行を名指す: {text}");
+    assert_eq!(merge_records(&state).len(), 2, "記録 2 行");
+    clean(&[&repo, &state]);
+}
+
+/// (3) 形の周り: 良い本文の `--rebase` は rebase、`-F -` と値が変数の `--body` と無い file の `--body-file` は body-unreadable、
+/// payload の cwd からの相対 path の本文 file は通る。
+#[test]
+fn hook_merge_gate_refuses_rebase_and_unreadable_bodies_and_reads_relative_files() {
+    let (repo, state) = merge_place();
+    let key = merge_key();
+    assert_merge_deny(&state, &repo, &format!("gh pr merge 1 --rebase --body '{key}s2-a.1'"), "rebase");
+    let missing = repo.join("no-such-body.md");
+    for command in [
+        "gh pr merge 1 --squash -F -".to_owned(),
+        "gh pr merge 1 --squash --body \"$BODY\"".to_owned(),
+        format!("gh pr merge 1 --squash --body-file {}", missing.display()),
+    ] {
+        let text = assert_merge_deny(&state, &repo, &command, "body-unreadable");
+        assert!(text.contains("flag=-F") || text.contains("flag=--body"), "{command}: flag を名指す: {text}");
+    }
+    fs::write(repo.join("merge-body.md"), format!("要旨\n\n{key}s2-a.1\n")).expect("本文を書ける");
+    assert_silent(&live_hook(&repo, &bash_payload(&repo, "gh pr merge 1 --squash --body-file merge-body.md")), "相対 path");
+    clean(&[&repo, &state]);
+}
+
+/// (4) marker の無い repo では本文の無い merge も 0 byte・rc 0（FR24）。
+#[test]
+fn hook_merge_gate_is_silent_in_a_repo_without_marker() {
+    let repo = git_repo();
+    git(&repo, &["branch", "-M", "main"]);
+    assert_silent(&live_hook(&repo, &bash_payload(&repo, "gh pr merge 1 --squash")), "marker の無い repo");
     clean(&[&repo]);
 }
 

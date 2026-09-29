@@ -491,7 +491,7 @@ impl Words {
 }
 
 /// 標準入力の形（**1 つの読み**・行 k3）: `-` と、`//` と `/./` を `/` に畳んだ path が `/dev/` か `/proc/` で始まるもの。
-fn is_stdin(path: &str) -> bool {
+pub(crate) fn is_stdin(path: &str) -> bool {
     let mut folded = path.to_owned();
     loop {
         let next = folded.replace("//", "/").replace("/./", "/");
@@ -504,7 +504,7 @@ fn is_stdin(path: &str) -> bool {
 }
 
 /// 字面で読めない path か: `$` か `` ` `` を持つか、`<(` / `>(` を含む（bash は語の途中も展開する・行 k3）。
-fn is_loose_path(path: &str) -> bool {
+pub(crate) fn is_loose_path(path: &str) -> bool {
     path.contains(['$', '`']) || path.contains("<(") || path.contains(">(")
 }
 
@@ -822,7 +822,7 @@ fn api(rest: &[String]) -> (Api, bool) {
 
 /// flag の語を（flag の名・続け書きの値）に分ける（**1 つの読み手**・1 字の flag の続け書きの値の頭の `=` は 1 つ落とす＝
 /// pflag の読み）。flag でない語は `None`。
-fn flag_of(word: &str) -> Option<(&str, Option<&str>)> {
+pub(crate) fn flag_of(word: &str) -> Option<(&str, Option<&str>)> {
     if word.starts_with("--") && word.len() > 2 {
         return Some(word.split_once('=').map_or((word, None), |(name, value)| (name, Some(value))));
     }

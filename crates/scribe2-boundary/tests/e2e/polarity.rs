@@ -123,8 +123,8 @@ fn polarity_lists_the_three_added_guards() {
     }
     assert_eq!(
         ALL.len(),
-        30,
-        "母集団は 30（行 ca で選択式の問いの門が 1・`.700` の行 h で anchor の門が 1・`.698` の行 i で走っている便の行の門が 1・`.574` の host の見張り 1 + 10 + 3 + 質問の口 1・`s2-07l.115` + land の 2・`s2-07l.124` + 入口の排他 1・`s2-07l.145` + 追随の回数 1・`s2-07l.146` + 登録の断り 1・`s2-07l.192` + 権能の執行 1・`s2-07l.201` + 契約表の検査 1・`s2-07l.208` + 純移動の証明 1・`s2-07l.266` + command guard 1・`s2-07l.168` + 審査の段 1・`s2-07l.241` + 起動行の受付 1・`s2-07l.411`・`.479.1` で cap guard と cycle の 2 つ・`.479.2` で退避と消費の 2 つが消え `.382` で land の終端が 1 つ・`.504` の行 x で器の健康の遮断器が 1 つ・`.517` の行 d で起票の門が 1 つ増えた）"
+        31,
+        "母集団は 31（行 mg で merge の門が 1・行 ca で選択式の問いの門が 1・`.700` の行 h で anchor の門が 1・`.698` の行 i で走っている便の行の門が 1・`.574` の host の見張り 1 + 10 + 3 + 質問の口 1・`s2-07l.115` + land の 2・`s2-07l.124` + 入口の排他 1・`s2-07l.145` + 追随の回数 1・`s2-07l.146` + 登録の断り 1・`s2-07l.192` + 権能の執行 1・`s2-07l.201` + 契約表の検査 1・`s2-07l.208` + 純移動の証明 1・`s2-07l.266` + command guard 1・`s2-07l.168` + 審査の段 1・`s2-07l.241` + 起動行の受付 1・`s2-07l.411`・`.479.1` で cap guard と cycle の 2 つ・`.479.2` で退避と消費の 2 つが消え `.382` で land の終端が 1 つ・`.504` の行 x で器の健康の遮断器が 1 つ・`.517` の行 d で起票の門が 1 つ増えた）"
     );
 }
 
@@ -144,7 +144,7 @@ fn runner_question_guard_is_in_loop_fail_open() {
     let stop = names.iter().position(|name| *name == "guard=runner-stop");
     let question = names.iter().position(|name| *name == "guard=runner-question");
     assert!(matches!((stop, question), (Some(s), Some(q)) if q == s + 1), "runner-stop の直後: {names:?}");
-    assert!(text.lines().last().is_some_and(|line| line.contains(" in-loop=24 ") && line.contains(" fail-open=4")), "集計（行 ca の選択式の問いの門が in-loop を +1・`.700` の行 h の anchor の門が in-loop を +1・`.698` の行 i の走っている便の行の門が in-loop を +1・.124 の 2・.145 の 1・.146 の 1・.192 の 1・.201 の 1・.168 の 1・.241 の審査 1・fail-open は .266 の純移動の証明 1 を含む・`.479.2` で退避と消費の 2 つが消えた・`.504` の行 x の遮断器が in-loop / fail-open を各 +1・`.517` の起票の門が in-loop を +1・`.574` の host の見張りが in-loop を +1）: {text}");
+    assert!(text.lines().last().is_some_and(|line| line.contains(" in-loop=25 ") && line.contains(" fail-open=4")), "集計（行 mg の merge の門が in-loop を +1・行 ca の選択式の問いの門が in-loop を +1・`.700` の行 h の anchor の門が in-loop を +1・`.698` の行 i の走っている便の行の門が in-loop を +1・.124 の 2・.145 の 1・.146 の 1・.192 の 1・.201 の 1・.168 の 1・.241 の審査 1・fail-open は .266 の純移動の証明 1 を含む・`.479.2` で退避と消費の 2 つが消えた・`.504` の行 x の遮断器が in-loop / fail-open を各 +1・`.517` の起票の門が in-loop を +1・`.574` の host の見張りが in-loop を +1）: {text}");
 }
 
 /// 3 クラスを名乗らない契約。
@@ -222,10 +222,10 @@ fn polarity_lists_land_anchor_sync_and_retire_clean_as_in_loop_fail_closed() {
     // 集計は行数から独立に数えた値と一致する（`.145` / `.146` / `.192` / `.201` / `.168` / `.241` の 各 1 が足され、
     // `.479.1` で cap guard と cycle の 2 つ・`.479.2` で退避と消費の 2 つが消えた）。
     let in_loop = text.lines().filter(|line| line.contains(" timing=in-loop ")).count();
-    assert_eq!(in_loop, 24, "in-loop の行数: {text}");
+    assert_eq!(in_loop, 25, "in-loop の行数: {text}");
     let summary = text.lines().last().unwrap_or_default();
-    assert_eq!(count_of(summary, "in-loop"), Some(24), "集計（行 ca で +1・`.700` の行 h で +1・`.698` の行 i で +1・+ .145 / .146 / .192 / .201 / .168 / .241 の 各 1・.266 は post-hoc ゆえ不変・`.479.2` で -2・`.504` の行 x で +1・`.517` の起票の門で +1・`.574` の host の見張りで +1）: {summary}");
-    assert_eq!(count_of(summary, "guards"), Some(30), "母集団（行 ca で +1〔選択式の問いの門〕・`.700` の行 h で +1〔anchor の門〕・`.698` の行 i で +1〔走っている便の行の門〕・+ .145 / .146 / .192 / .201 / .208 / .266 / .168 / .241 の 各 1・`.479.2` で -2・`.382` で +1〔land の終端〕・`.504` の行 x で +1〔遮断器〕・`.517` で +1〔起票の門〕・`.574` で +1〔host の見張り〕）: {summary}");
+    assert_eq!(count_of(summary, "in-loop"), Some(25), "集計（行 mg で +1・行 ca で +1・`.700` の行 h で +1・`.698` の行 i で +1・+ .145 / .146 / .192 / .201 / .168 / .241 の 各 1・.266 は post-hoc ゆえ不変・`.479.2` で -2・`.504` の行 x で +1・`.517` の起票の門で +1・`.574` の host の見張りで +1）: {summary}");
+    assert_eq!(count_of(summary, "guards"), Some(31), "母集団（行 mg で +1〔merge の門〕・行 ca で +1〔選択式の問いの門〕・`.700` の行 h で +1〔anchor の門〕・`.698` の行 i で +1〔走っている便の行の門〕・+ .145 / .146 / .192 / .201 / .208 / .266 / .168 / .241 の 各 1・`.479.2` で -2・`.382` で +1〔land の終端〕・`.504` の行 x で +1〔遮断器〕・`.517` で +1〔起票の門〕・`.574` で +1〔host の見張り〕）: {summary}");
 }
 
 /// 契約表の検査（`s2-07l.208`・設計 contract-source.md §8・ADR-0014 §2.1）は **post-hoc / fail-closed** で一覧に載る
@@ -251,7 +251,7 @@ fn polarity_lists_contract_table_as_a_post_hoc_fail_closed_guard() {
         "role-guard → live-row-guard の後・intake-unfit の直前: {names:?}"
     );
     let summary = text.lines().last().unwrap_or_default();
-    assert_eq!(count_of(summary, "guards"), Some(30), "母集団（行 ca で +1〔選択式の問いの門〕・`.700` の行 h で +1〔anchor の門〕・`.698` の行 i で +1〔走っている便の行の門〕・.168 の command guard と .241 の審査の段・.411 の起動行の受付を含む・`.479.2` で -2・`.382` で +1〔land の終端〕・`.504` の行 x で +1〔遮断器〕・`.517` で +1〔起票の門〕・`.574` で +1〔host の見張り〕）: {summary}");
+    assert_eq!(count_of(summary, "guards"), Some(31), "母集団（行 mg で +1〔merge の門〕・行 ca で +1〔選択式の問いの門〕・`.700` の行 h で +1〔anchor の門〕・`.698` の行 i で +1〔走っている便の行の門〕・.168 の command guard と .241 の審査の段・.411 の起動行の受付を含む・`.479.2` で -2・`.382` で +1〔land の終端〕・`.504` の行 x で +1〔遮断器〕・`.517` で +1〔起票の門〕・`.574` で +1〔host の見張り〕）: {summary}");
     assert_eq!(count_of(summary, "post-hoc"), Some(6), "post-hoc +1（gate の 3〔.266 の純移動の証明を含む〕・land の main 実測・契約表・`.382` の land の終端）: {summary}");
 }
 
@@ -287,8 +287,8 @@ fn polarity_lists_choice_question_deny_first_right_before_write_set_guard() {
 }
 
 /// anchor の門（`s2-07l.700`・設計 vessel-hook.md §14 形 6・契約表の行 h）は **in-loop / fail-closed** で一覧に 1 行載り、
-/// ledger-guard の**直後**・host-guard の**直前**に並ぶ。**生成物（binary の出力）の行だけで測る**＝base の木に重ねても compile
-/// が通り、RED の理由は行が無いことに限る。数は pin しない（集計は既存の数の pin が持つ）。
+/// ledger-guard の**直後**・host-guard の 2 つ前（間に merge の門・行 mg）に並ぶ。**生成物（binary の出力）の行だけで測る**＝base の
+/// 木に重ねても compile が通り、RED の理由は行が無いことに限る。数は pin しない（集計は既存の数の pin が持つ）。
 #[test]
 fn polarity_lists_anchor_guard_right_after_ledger_guard_before_host_guard() {
     let text = output();
@@ -298,8 +298,25 @@ fn polarity_lists_anchor_guard_right_after_ledger_guard_before_host_guard() {
     let at = |name: &str| names.iter().position(|found| *found == name);
     let (ledger, anchor, host) = (at("guard=ledger-guard"), at("guard=anchor-guard"), at("guard=host-guard"));
     assert!(
-        matches!((ledger, anchor, host), (Some(l), Some(a), Some(h)) if a == l + 1 && h == a + 1),
-        "ledger-guard の直後・host-guard の直前: {names:?}"
+        matches!((ledger, anchor, host), (Some(l), Some(a), Some(h)) if a == l + 1 && h == a + 2),
+        "ledger-guard の直後・merge-gate を挟んで host-guard の前: {names:?}"
+    );
+}
+
+/// merge の門（設計 vessel-hook.md §21 形 8・契約表の行 mg・FR92）は **in-loop / fail-closed** で一覧に 1 行載り、anchor-guard の
+/// **直後**・host-guard の**直前**に並ぶ。**生成物（binary の出力）の行だけで測る**＝base の木に重ねても compile が通り、RED の理由は
+/// 行が無いことに限る。数は pin しない（集計は既存の数の pin が持つ）。
+#[test]
+fn polarity_lists_merge_gate_right_after_anchor_guard_before_host_guard() {
+    let text = output();
+    let expected = "guard=merge-gate timing=in-loop on-failure=fail-closed boundary=hook::merge_gate::MergeDecision";
+    assert_eq!(text.lines().filter(|line| *line == expected).count(), 1, "一覧に 1 行で載る: {expected}\n{text}");
+    let names: Vec<&str> = text.lines().filter_map(|line| line.split(' ').next()).collect();
+    let at = |name: &str| names.iter().position(|found| *found == name);
+    let (anchor, merge, host) = (at("guard=anchor-guard"), at("guard=merge-gate"), at("guard=host-guard"));
+    assert!(
+        matches!((anchor, merge, host), (Some(a), Some(m), Some(h)) if m == a + 1 && h == m + 1),
+        "anchor-guard の直後・host-guard の直前: {names:?}"
     );
 }
 
@@ -456,8 +473,8 @@ fn polarity_lists_register_refusal_right_after_cap_guard() {
     let ledger = names.iter().position(|name| *name == "guard=ledger-guard");
     let refusal = names.iter().position(|name| *name == "guard=register-refusal");
     assert!(
-        matches!((ledger, refusal), (Some(g), Some(r)) if r == g + 3),
-        "ledger-guard → anchor-guard → host-guard → register-refusal（cap guard は `.479.1` で消え、`.517` で起票の門が hook の門の末尾に入り、`.574` で host の見張りがその直後に入り、`.700` で anchor の門が起票の門の直後に入った）: {names:?}"
+        matches!((ledger, refusal), (Some(g), Some(r)) if r == g + 4),
+        "ledger-guard → anchor-guard → merge-gate → host-guard → register-refusal（cap guard は `.479.1` で消え、`.517` で起票の門が hook の門の末尾に入り、`.574` で host の見張りがその直後に入り、`.700` で anchor の門が起票の門の直後に、行 mg で merge の門が anchor の門の直後に入った）: {names:?}"
     );
 }
 
@@ -482,7 +499,7 @@ fn polarity_lists_ledger_guard_as_in_loop_fail_closed_right_after_command_guard(
 }
 
 /// host の破壊防止の見張り（`s2-07l.574`・設計 vessel-hook.md §11 行 b・ADR-0056）は **in-loop / fail-closed** で一覧に 1 行
-/// 載り、`ledger-guard` の 2 つ後（間に anchor の門・`.700` の行 h）に並ぶ。値は境界の定数（`hook::host_guard::POLARITY`）で、
+/// 載り、`ledger-guard` の 3 つ後（間に anchor の門・`.700` の行 h と merge の門・行 mg）に並ぶ。値は境界の定数（`hook::host_guard::POLARITY`）で、
 /// boundary は判定の閉じた enum（`HostGuardDecision`）を名指す（種類ごとに行を分けない＝判定は 1 口 1 enum）。
 #[test]
 fn polarity_lists_host_guard_right_after_ledger_guard_as_in_loop_fail_closed() {
@@ -499,7 +516,7 @@ fn polarity_lists_host_guard_right_after_ledger_guard_as_in_loop_fail_closed() {
     let names: Vec<&str> = text.lines().filter_map(|line| line.split(' ').next()).collect();
     let at = |name: &str| names.iter().position(|found| *found == name);
     let (ledger, host_at) = (at("guard=ledger-guard"), at("guard=host-guard"));
-    assert!(matches!((ledger, host_at), (Some(l), Some(h)) if h == l + 2), "ledger-guard → anchor-guard の後: {names:?}");
+    assert!(matches!((ledger, host_at), (Some(l), Some(h)) if h == l + 3), "ledger-guard → anchor-guard → merge-gate の後: {names:?}");
 }
 
 /// Bash の command guard（`s2-07l.168`・ADR-0025 §2.2・設計 vessel-hook.md §5・C11.2 / C16.2）は **in-loop / fail-closed**
@@ -523,8 +540,8 @@ fn polarity_lists_command_guard_as_in_loop_fail_closed_right_after_cap_guard() {
     assert!(matches!((permission, command), (Some(c), Some(g)) if g == c + 1), "permission の直後（cap guard は `.479.1` で消えた）: {names:?}");
     assert!(matches!((command, role), (Some(g), Some(r)) if g < r), "role-guard より前: {names:?}");
     let summary = text.lines().last().unwrap_or_default();
-    assert_eq!(count_of(summary, "guards"), Some(30), "母集団（行 ca で +1・`.700` の行 h で +1・`.698` の行 i で +1・.241 の審査の段・.411 の起動行の受付を含む・`.479.2` で -2・`.382` で +1〔land の終端〕・`.504` の行 x で +1〔遮断器〕・`.517` で +1〔起票の門〕・`.574` で +1〔host の見張り〕）: {summary}");
-    assert_eq!(count_of(summary, "in-loop"), Some(24), "in-loop（行 ca で +1・`.700` の行 h で +1・`.698` の行 i で +1・.241 の審査の段・.411 の起動行の受付を含む・`.479.2` で -2・`.504` の行 x で +1・`.517` の起票の門で +1・`.574` の host の見張りで +1）: {summary}");
+    assert_eq!(count_of(summary, "guards"), Some(31), "母集団（行 mg で +1・行 ca で +1・`.700` の行 h で +1・`.698` の行 i で +1・.241 の審査の段・.411 の起動行の受付を含む・`.479.2` で -2・`.382` で +1〔land の終端〕・`.504` の行 x で +1〔遮断器〕・`.517` で +1〔起票の門〕・`.574` で +1〔host の見張り〕）: {summary}");
+    assert_eq!(count_of(summary, "in-loop"), Some(25), "in-loop（行 mg で +1・行 ca で +1・`.700` の行 h で +1・`.698` の行 i で +1・.241 の審査の段・.411 の起動行の受付を含む・`.479.2` で -2・`.504` の行 x で +1・`.517` の起票の門で +1・`.574` の host の見張りで +1）: {summary}");
     assert_eq!(count_of(summary, "fail-open"), Some(4), "fail-open は command guard では動かない（FailClosed の門・+1 は `.504` の行 x の遮断器）: {summary}");
 }
 

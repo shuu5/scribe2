@@ -88,8 +88,8 @@ pub(crate) fn targets_of(command: &str, cwd: &Path, root: &Path) -> Vec<Target> 
     git.chain(gh).collect()
 }
 
-/// gh の segment が `pr merge` か（`-` の語を除いた最初の 2 語）。
-fn is_pr_merge(words: &[String]) -> bool {
+/// gh の segment が `pr merge` か（`-` の語を除いた最初の 2 語・merge の門も同じ 1 本で見分ける・vessel-hook.md §21 形 1）。
+pub(crate) fn is_pr_merge(words: &[String]) -> bool {
     let lead = words.iter().take_while(|word| is_assignment(word)).count();
     let Some((GH, rest)) = verb_of(words.get(lead..).unwrap_or_default()) else {
         return false;
