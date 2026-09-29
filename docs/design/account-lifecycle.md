@@ -498,13 +498,13 @@ user-scope MCP 設定の同期・別口座への `--resume` の混線 fence・pr
 - 形（番号は done と 1:1）:
   1. `check_tiers` が、形の合う名のうち数字が 10 以上（字面の桁数が 2 以上）の名を、群の見出し行の欠陥「群の名 <名> の数字が 9 を越える（群の表の名は Tier1〜Tier9）」で断る。
   2. 名 `Tier9` の行を、群の見出し行の欠陥「Tier9 は park の区画の名で、この版の器は park の区画を読めない」で断る。この断りは行 y が区画として読む形に置き換える（行 y が外す）。
-  3. 1 と 2 で断った行は昇順の欠陥を重ねない（形の欠陥の行と同じく 1 行 1 件）。面の欠陥の極性と伝わり方は今の名の断りと同じ（行番号つき・その host の面を読む口が全部止まる・FR57）。
+  3. 1 と 2 で断った行は昇順の欠陥を重ねず（1 行 1 件）、次の行の「前の群」にもならない＝次の行は昇順を比べない（形の欠陥の行が今 `prior` にならないのと同じ扱い・`check_tiers` の `prior` を、形が合い 1 と 2 で断られない名の前の群だけに絞る）。例: Tier10・Tier3 の面は Tier10 の行の 1 件だけで、Tier3 の行は欠陥を持たない。行 y が Tier9 を区画として読んだ後は、Tier9 の後ろの Tier3 が昇順の欠陥になる（AC63 (a)）。断った行が自分の昇順の欠陥を持たないことは、断った行の数字（9 以上）が断られない前の群の数字（8 以下）より常に大きいので、別の歯を持たない（観測できない）。面の欠陥の極性と伝わり方は今の名の断りと同じ（行番号つき・その host の面を読む口が全部止まる・FR57）。
   4. 既存の歯 2 本の Tier10 を Tier3 に替える（宣言順のまま読む意図は Tier1・Tier2・Tier3 と Tier2・Tier3 で同じに測れる）。
 - 触らない: `tier_digits` と `compare_digits`（10 以上を断った後も比べ方は正しいまま）・名の重複の検査・種・群の段・doctor の群の行の字。
 - 却下: Tier9 を今すぐ普通の群として通したまま、宣言しない規律だけで守る（散文の規律・C16 / N2）／Tier9 を今すぐ区画として読む（行 y の大きさがあり、SRS の直後に撃てない）／10 以上を断らない（FR38 の名の集合の外が黙って群になる）。
 - 限界: 本行の着地から行 y の着地までは、Tier9 を書いた host の面は読めない（区画を宣言する運用は行 y と行 z と seat-heartbeat の行 z / aa の着地と PATH の binary の入れ替えの後）。
-- 歯（接頭辞 `host_group_park_gate_`・`grep -rn host_group_park_gate_` は crates と docs で 0 件・2026-09-29）: `crates/scribe2-boundary/tests/e2e/rules/host.rs` に、`tests/e2e/rules.rs` の `tier_refusals` と `seed_group` で組む面で (a) Tier1・Tier10 と Tier1・Tier12 の面が rc 1 で「9 を越える」の欠陥 1 件ずつ（群の見出し行の番号つき） (b) Tier1・Tier9 の面が rc 1 で「park の区画」の欠陥 1 件 (c) Tier1〜Tier8 の 8 行の面が rc 0 で `groups()` が宣言順の 8 つ (d) Tier9・Tier10 の面が欠陥 2 件（昇順の欠陥を重ねない）。
-- base で RED の理由: base の `check_tiers` は Tier9 と 10 以上を通すので (a) (b) (d) が rc 0 で落ちる（機能不在）。直す既存の歯のうち `crates/scribe2-boundary/tests/e2e/seat/account.rs` は同じ file に base で赤い新しい歯を持たないので、test 区間の行頭に `// flip-check: retroactive <この契約の bead id>` を置く。
+- 歯（接頭辞 `host_group_park_gate_`・`grep -rn host_group_park_gate_` は crates と docs で 0 件・2026-09-29）: `crates/scribe2-boundary/tests/e2e/rules/host.rs` に、`tests/e2e/rules.rs` の `tier_refusals` と `seed_group` で組む面で (a) Tier1・Tier10 と Tier1・Tier12 の面が rc 1 で「9 を越える」の欠陥 1 件ずつ（群の見出し行の番号つき） (b) Tier1・Tier9 の面が rc 1 で「park の区画」の欠陥 1 件 (c) Tier1〜Tier8 の 8 行の面が rc 0 で `groups()` が宣言順の 8 つ (d) Tier9・Tier10 の面が欠陥 2 件（それぞれの断りだけ） (e) Tier10・Tier3 と Tier9・Tier3 の面が欠陥 1 件ずつ（断った行の断りだけで、Tier3 の行の番号の欠陥が 0 件＝断った行を前の群に数える変異を落とす・Reviewed の審査 FAIL 2026-09-29T08:4xZ vacuous-assert の直し）。
+- base で RED の理由: base の `check_tiers` は Tier9 と 10 以上を通すので (a) (b) (d) が rc 0 で、(e) は Tier3 の行に昇順の欠陥が付き で落ちる（機能不在）。直す既存の歯のうち `crates/scribe2-boundary/tests/e2e/seat/account.rs` は同じ file に base で赤い新しい歯を持たないので、test 区間の行頭に `// flip-check: retroactive <この契約の bead id>` を置く。
 
 ## 35. park の区画を群の表の中で群と分けて読む — Tier9 の行は `groups()` に入らず種を持たず、doctor に kind=park の行を出す（契約表の行 y・[FR95](../../design-intent/spec/srs.html#FR95) / FR38 / FR57・AC63 (a) (b)・ADR-0091）
 
@@ -518,7 +518,7 @@ user-scope MCP 設定の同期・別口座への `--resume` の混線 fence・pr
 - 形（番号は done と 1:1）:
   1. 面の読みは `[[account-group]]` の行を今どおり全部組み、`check_duplicate_groups` と `check_tiers` を全部の行に撃った後、名が `Tier9` の行を park の区画として群の列から分ける（名の重複の検査が 2 行目を断るので区画は高々 1 つ）。`Manifest` は区画を別の欄に持ち、読み口 `park`（区画の行が在れば 1 つ・型は群と同じ `AccountGroup`・種の欄は空）を足す。`groups()` は Tier1〜Tier8 の行だけを宣言順で返す。面を合わせる周は host の面の区画を持ち越す（tracked の面は群の表を持てない＝今のまま）。
   2. 種は群にだけ配る（`seed_groups` は区画を見ない＝区画の候補が群の種の順を動かさない）。置き場と名の重複・候補が宣言された口座に在るかの検査は区画にも掛ける（群と区画に同じ置き場を書いた面は今の「置き場 <anchor> が 2 つの群に在る」で断る）。
-  3. 行 x の Tier9 の断り（§34 形 2）を外す（10 以上の断りは残す）。行 x の歯のうち Tier9 を断りと測る 2 本（§34 歯 (b) (d)）を、区画として通る形（(b) は rc 0 で `park` が Tier9・(d) は Tier10 の欠陥 1 件）へ書き換える。
+  3. 行 x の Tier9 の断り（§34 形 2）を外す（10 以上の断りは残す）。行 x の歯のうち Tier9 を断りと測る 3 本（§34 歯 (b) (d) と (e) の Tier9・Tier3 の面）を、区画として通る形（(b) は rc 0 で `park` が Tier9・(d) は Tier10 の欠陥 1 件・(e) の Tier9・Tier3 は Tier3 の行の昇順の欠陥 1 件＝AC63 (a)）へ書き換える。
   4. `crates/scribe2/src/hook/group.rs` の `group_of` の隣に `park_of`（manifest と anchor → 区画の行・anchor が区画の anchors に在る周だけ `Some`）を 1 本置く（行 z と seat-heartbeat の行 z / aa が引く）。
   5. doctor は群の行の後ろに区画の行を 1 本出す（区画を宣言しない host は 0 本＝今の外形は 1 行も動かない）: `group=Tier9 kind=park accounts=<宣言順> anchors=<数> seat-accounts=<群の行と同じ seat_accounts> current=- next=- refused=- pressure=<値>`。`pressure=` は区画の置き場の席の row の口座ごとに鮮度の内側の実測を群の段の門 `pressed`（閾値は群の逼迫の rules 行 3 本の `Caps`・役割の model は `role_models`）に渡し、越えた窓のうち使用率が最大の 1 つを群の行と同じ `<窓>:<使用率>/<閾値>`・越えた窓が無ければ `-`・区画の置き場の席の row が 1 つも無ければ `-`・row は在るが鮮度の内側の実測を持つ row が 1 つも無ければ `unmeasured`・event log を読めなければ `unreadable`・rules 行が無ければ `no-rule`（群の行の語彙と同じ）。群の行は 1 字も変えない（`kind=` を持たない）。
   6. 区画は今の口座の記録・種・予約・群の判定を持たない: `currents_of` / `reserve` / `grouped_accounts` / 群の段 / hook の `group_of` は `groups()` しか読まないので、区画の行が並べた口座と区画の席の row の口座は群の移り先と群の予約と便用の群の除外から外れない（それらの本体は触らない）。
@@ -785,7 +785,7 @@ write-set = ["crates/scribe2/src/rules/groups.rs", "crates/scribe2-boundary/test
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail host_group_park_gate_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail host_group_tier_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail host_group_doctor_prints_one_line_per_group_in_declaration_order"]
 size = "S"
 growth = ["crates/scribe2/src/rules/groups.rs:15"]
-done = "(1) check_tiers が形の合う名のうち数字が 10 以上（桁数 2 以上）の名を、群の見出し行の欠陥「群の名 <名> の数字が 9 を越える（群の表の名は Tier1〜Tier9）」で断る (2) 名 Tier9 の行を、群の見出し行の欠陥「Tier9 は park の区画の名で、この版の器は park の区画を読めない」で断る (3) 1 と 2 で断った行は昇順の欠陥を重ねず、欠陥は行番号つきで面を読む口が全部止まる（今の名の断りと同じ極性） (4) host_group_tier_ascending_numbers_pass_compared_numerically と host_group_doctor_prints_one_line_per_group_in_declaration_order の Tier10 を Tier3 に替えて緑のまま 歯: host_group_park_gate_ の (a) Tier10 と Tier12 の 9 を越える断り (b) Tier9 の park の区画の断り (c) Tier1〜Tier8 の 8 行の面が通る (d) Tier9・Tier10 の面の欠陥 2 件が base で RED、既存の host_group_tier_ は緑。tier_digits・compare_digits・名の重複の検査・種・doctor の群の行の字は不変"
+done = "(1) check_tiers が形の合う名のうち数字が 10 以上（桁数 2 以上）の名を、群の見出し行の欠陥「群の名 <名> の数字が 9 を越える（群の表の名は Tier1〜Tier9）」で断る (2) 名 Tier9 の行を、群の見出し行の欠陥「Tier9 は park の区画の名で、この版の器は park の区画を読めない」で断る (3) 1 と 2 で断った行は昇順の欠陥を重ねず、次の行の前の群にもならず（Tier10・Tier3 と Tier9・Tier3 の面は断った行の 1 件だけで Tier3 の行の欠陥は 0 件）、欠陥は行番号つきで面を読む口が全部止まる（今の名の断りと同じ極性） (4) host_group_tier_ascending_numbers_pass_compared_numerically と host_group_doctor_prints_one_line_per_group_in_declaration_order の Tier10 を Tier3 に替えて緑のまま 歯: host_group_park_gate_ の (a) Tier10 と Tier12 の 9 を越える断り (b) Tier9 の park の区画の断り (c) Tier1〜Tier8 の 8 行の面が通る (d) Tier9・Tier10 の面の欠陥 2 件 (e) Tier10・Tier3 と Tier9・Tier3 の面の欠陥 1 件ずつが base で RED、既存の host_group_tier_ は緑。tier_digits・compare_digits・名の重複の検査・種・doctor の群の行の字は不変"
 [[contract]]
 id = "y"
 title = "park の区画を群の表の中で群と分けて読む — Tier9 の行は groups に入らず種を持たず、manifest の読み口 park と hook/group.rs の park_of を足し、doctor に kind=park の行を出す（§35・FR95・ADR-0091・s2-07l.730）"
