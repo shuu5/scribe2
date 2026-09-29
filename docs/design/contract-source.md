@@ -1016,6 +1016,18 @@ verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail contract_closure_e
 size = "S"
 growth = ["crates/scribe2/src/pipe/cli/intake/refusal.rs:210"]
 done = "(1) 19 item（断りを組む口 4・Refuse を持たない断りの名 6・余地の判定と報告 3・rules 行の id 6）が名・本文・順序・doc comment を変えずに + の file へ移る（move_proof が pure と判じる・items-differ / residual-line 0 件） (2) 親に増えるのは空行を除いて 6 行だけ（use 群の直後の doc 1 行つきの mod 宣言 1 行と素の use 2 文〔本体が呼ぶ 10 名〕、既存の列 0 の #[cfg(test)] の直上の #[cfg(test)] だけの 1 行と use 1 行〔歯だけが引く 2 名〕）で、孤立した import 5 語を削る (3) in-file の歯の本文と use super::{…} が 1 byte も変わらず、e2e は触らない (4) 子側の pub(super) は親が呼ぶ 10 名と歯が引く 2 名の 12 名だけで、群の中だけの 7 名は私有のまま、親に残る型（Denial / Headrooms / Materials）とその field と親側の可視性と cli の再輸出は不変 (5) 札 moved が親の mod tests { の直後と子の module doc の直後に 1 行ずつで、子にも親の file 頭にも列 0 の #[cfg(test)] を足さない (6) 名指しの既存 4 本（in-file 1 本・e2e 3 本）が名・本数・本文不変で緑・clippy -D warnings が通常 build と test build の両方で rc 0"
+
+[[contract]]
+id = "bm"
+title = "終端だけの撃ち直し（--terminal-only）が main の今の先端で照合の側を選ぶ — 着地した sha が先端なら今の照合、先端でなければ先端の sha つきの Behind（祖先なら先端の CI で close し reason に tip=・祖先でなければ close しない）、main を読めない周は何も撃たずに断る（FR50・§53 の限界）"
+req = ["FR50"]
+section = "58"
+touches = ["crate::pipe::cli::step::terminal_only"]
+write-set = ["crates/scribe2/src/pipe/cli/step.rs", "crates/scribe2/src/pipe/land/finish.rs", "crates/scribe2-boundary/tests/e2e/pipe/land/order.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_replay_tip_"]
+size = "S"
+growth = ["crates/scribe2/src/pipe/cli/step.rs:10", "crates/scribe2/src/pipe/land/finish.rs:2", "crates/scribe2-boundary/tests/e2e/pipe/land/order.rs:90"]
+done = "(1) 終端だけの撃ち直しは記録の sha を読んだ後に anchor の refs/heads/main の今の sha を読み、読めない周は event を 1 件も書かず push も CI も close も撃たずに stderr 1 行（pipe: refs/heads/main を読めない）の rc 1 で断る (2) 着地した sha が先端の sha と等しい周は先端の側を渡し、自分の sha の CI で照合して reason landed <sha> ci=success で close する (3) 等しくない周は先端の sha つきの Behind を渡し、終端は push の後に祖先を測って、祖先の周は先端の sha で CI を照合し success なら reason landed <sha> ci=success tip=<先端> で close し、祖先でない周は CI を撃たず terminal:ci:unmeasurable を記して close しない（rc 1） (4) finish.rs は PushTip の doc comment だけが変わり、終端の本体・PushTip の 2 値・land_train・finish は変わらない (5) 終端の 7 値・event の詞・ci_now の判定・pipe.ci_wait_s と pipe.ci_poll_s の値・着地の周の先端の読み・close の reason の 2 形・撃ち直しの前提の段と記録の sha の読み・usage と help の字面は変わらない 歯: pipe_replay_tip_ の 3 本（order.rs）が (a) 既存の撃ち直しの歯を名と期待を書き直し、CI が failure の着地の後に別の commit が main を進めた撃ち直しで、CI の argv が main の今の sha を持ち着地した sha を持たず、reason が landed <着地した sha> ci=success tip=<今の sha> と等しいこと (b) 1 本の fn の撃ち直し 2 周で、main と偽 remote の main を着地した commit を祖先に持たない commit へ動かした周が rc 1・terminal=ci:unmeasurable で偽 CI も偽 bd も撃たず、着地した commit へ戻した周が自分の sha の CI で照合して reason landed <sha> ci=success（tip= なし）で close すること (c) refs/heads/main を消した撃ち直しが rc 1 で断りの 1 行を出し event を 1 件も書かないことを測り、base は (a) で着地した sha を照合し (b) の 1 周目で close し (c) で terminal:unreadable を記すので RED"
 <!-- contracts:end -->
 
 
@@ -1360,7 +1372,7 @@ done = "(1) 19 item（断りを組む口 4・Refuse を持たない断りの名 
   - 既存の `pipe_train_terminal_only_the_tip_checks_ci_and_closes` は期待が反転する。同じ PR で、接頭辞 `pipe_train_terminal_` のまま名と期待を書き直す（行 bd の verify 行を空にしない）: 常に success を返す偽 CI の 3 本の列の着地で、3 本とも `Landed` の後ろが `terminal:push:fake`・`terminal:ci:success`・`terminal:close:ok` の 3 件、偽 CI の呼び出しは 6 回で、最後に渡った sha が先端の sha。
   - `pipe_train_tip_close_`（1 本の fn の 2 周）: 1 周目は常に success の偽 CI の列の着地で、偽 bd の最後の close（列の先頭の便）の reason が `tip=<先端の sha>` を持つ。2 周目は偽 CI が failure を返す列の着地で、3 本とも close しない。
   - base では先端でない便が close せずに止まるので RED（機能不在）。
-- 限界: `--terminal-only` で先端でない便の終端を手で撃ち直す周は、今どおり自分の sha で照合する（上限まで待って `ci:unmeasurable`）。手の撃ち直しも先端で照合するには、anchor の main を先端とする判定が要る（次の行の候補）。
+- 限界: `--terminal-only` で先端でない便の終端を手で撃ち直す周は、今どおり自分の sha で照合する（上限まで待って `ci:unmeasurable`）。手の撃ち直しも先端で照合するには、anchor の main を先端とする判定が要る（§58・行 bm が閉じる）。
 - 却下:
   - 先端を先に終端させ、その結果を先端でない便へ写す。列の記帳の順（後続 → 先頭）を変え、終端の失敗の帰属が便ごとに取れなくなる。
   - 便ごとに自分の sha を先端として押し直す。便ごとに CI が走り、列の終端が CI の本数ぶん順に待つ。
@@ -1636,3 +1648,45 @@ done = "(1) 19 item（断りを組む口 4・Refuse を持たない断りの名 
   - `#[cfg(test)] use …;` を 1 行に畳む（残差の許容形に当たらず residual-line）。
 - 歯: 新設 0 本。検証行は既存の 4 本を名の全体で書く（repo 内で 1 件ずつ・2026-09-29 に grep で実測）。in-file（親の歯の区間）の `contract_closure_ext_survivor_a_cap_shortfall_recounts_without_the_unresolved_items`（余地の判定・余地の列・断りの名）。e2e（`crates/scribe2-boundary/tests/e2e/pipe/intake.rs`・write-set に `=` で載せる）の `pipe_intake_core_headroom_counts_the_core_total_without_in_file_tests`（core の余地の断りの行）・`contract_growth_preflight_headroom_estimate_is_per_file`（preflight の `headroom=` の行＝`headrooms_of` の列）・`pipe_intake_promise_verify_matches_as_a_set_or_is_refused_as_drift`（`refuse_of` を通る drift の断り）。
 - base で RED の理由: 純移動は歯を足さないので、base で RED になる歯は無い。入口の確かめは札（flip-check の moved）が持ち、移動の正しさは move_proof の機械証明（名と本文の hash の多重集合が一致し、残差は `use` / `mod` / `#[cfg(test)]` だけの行 / `//` / 札だけ）が持つ。
+
+## 58. 終端だけの撃ち直し（`--terminal-only`）は main の今の先端で照合する — 着地した commit が先端そのものなら今の照合、先端でなければ §53 の先端の照合へ回し、祖先でなければ閉じない（契約表の行 bm・FR50・§53 の限界）
+
+やさしく言うと: 止まった便の後始末（push → CI の確認 → 台帳を閉じる）をやり直す口 `pipe land --run <run> --terminal-only` は、今は便の commit そのものの CI を確かめる。ところが CI は main へ押した一番先の commit にしか走らないので、列で着地して先頭でなかった便や、後の commit が main を進めた便は、自分の commit の CI が見つからないか赤のままで、何度やり直しても閉じない。やり直しの周は main の今の先端を読み、便の commit が先端ならそのまま、先端より前（先端の祖先）なら先端の CI で確かめて閉じ、main の歴史から外れた便は閉じない。
+
+- 何が起きているか:
+  - verified（main c00026ab の code）: 終端だけの撃ち直しは、記録から着地した sha を読み（`crates/scribe2/src/pipe/land/finish.rs` の `landed_sha`・198 行）、終端に常に先端の側（`PushTip::Tip`）を渡す（`crates/scribe2/src/pipe/cli/step.rs` の 91–92 行）。終端は push の後、その sha そのもので CI を照合する（finish.rs の 261–279 行）。
+  - verified（§52 の実測）: forge の CI は push の先端の commit にだけ run を作る。先端でない sha の照合は run を 1 本も見ず、上限（rules 行 `pipe.ci_wait_s`）まで待って `ci:unmeasurable` で終わる。本 repo の CI の workflow は main への push ごとに走り、path の絞りも同時実行の打ち切りも持たない（`.github/workflows/ci.yml`）。
+  - deduced: §53 で着地の周は先端の CI で閉じるようになったが、終端が止まった便（先端の CI が上限までに終わらなかった・CI が赤で後の commit が直した・push や close が落ちた）の撃ち直しは、便の sha を先端として照合する。列の先端でなかった便は自分の sha に run が無く、上限まで待って `ci:unmeasurable` に戻る。自分の sha の CI が赤の便は、後の commit で main が緑になっても赤のまま。どちらも撃ち直しでは閉じず、手の close が残る。§53 の限界はこの穴を「anchor の main を先端とする判定が要る（次の行の候補）」と書いている。
+  - FR50 は「push の後は push の先端（最後に着地した commit）の CI の結果を commit id で照合し」「push の先端でない便は、自分の着地 commit を含む push の先端の commit の CI の結果で照合し、note に先端の commit id も持つ」を持つ。撃ち直しの push が押すのは anchor の main そのものなので、押した先端は main の今の先端である（要件の改訂は要らない）。
+- 現物（main c00026ab・verified）:
+  - `crates/scribe2/src/pipe/cli/step.rs`（423 行・in-file の歯の区間は無い）の `terminal_only`（55 行）: 段 `Landed` の確かめ → 記録の sha（60–62 行・読めない周は断る）→ 終端の材料 → `Land` を組み、91–92 行で `PushTip::Tip` を渡す。doc comment（51–54 行）は「HEAD の今の sha に読み替えない」を持つ。
+  - finish.rs の `PushTip`（217–222 行）は `Tip` と、先端の sha を持つ `Behind` の閉じた 2 値。doc comment（212–215 行）は「先端を知るのは `land_train` の 1 か所・単独の着地と `--terminal-only` は `Tip`」と書く。`terminal`（230 行）は push（246 行）の後、`Behind` の周だけ `git merge-base --is-ancestor <sha> <先端>` を測り（255 行）、祖先の周は CI の照合（待ちと `ci_now`）を先端の sha で撃ち、祖先でない周は `terminal:ci:unmeasurable` を記して `Terminal::CiUnmeasurable`（close しない）で返す。close の reason は `Tip` の周が `landed <sha> ci=success`、`Behind` の周が `landed <sha> ci=success tip=<先端>`（282–285 行）。
+  - main の ref の名は `crates/scribe2/src/pipe/land.rs` の `MAIN_REF`（98 行・`refs/heads/main`）で、着地の本体は同じ ref を読み、読めない周を「refs/heads/main を読めない」で断る（412–413 行）。
+  - 歯: `crates/scribe2-boundary/tests/e2e/pipe/land/order.rs` の 374–430 行の既存の撃ち直しの歯は、CI が failure の着地の後に別の commit で main を進め、撃ち直しが CI の argv と close の reason に着地した sha を持ち main の今の sha を持たないことを測る（407–411 行・426–428 行）。本 § で期待が反転する。`--terminal-only` を撃つ歯は repo の中にこの 1 本だけ（ほかに引数の断りの歯が flag の字面を 1 回使う・`crates/scribe2-boundary/tests/e2e/pipe/land.rs` の 3005 行）。
+- 判定の順（撃ち直しの周）: 段が `Landed` か → 記録の sha → main の今の sha（形 1）→ 着地した sha と等しいか（形 2 / 3）→ 終端: 押す先の宣言 → push → 祖先か（形 3・§53）→ CI の照合 → close。
+- 形（番号は done と 1:1）:
+  1. 終端だけの撃ち直しは、記録の sha を読んだ後に anchor の `refs/heads/main`（`MAIN_REF`）の今の sha を読む。読めない周は event を 1 件も書かず、push も CI も close も撃たずに stderr 1 行（`pipe: refs/heads/main を読めない`）の rc 1 で断る（先端の側に倒さない）。
+  2. 着地した sha が先端の sha と等しい周は、今どおり先端の側（`PushTip::Tip`）を渡す（自分の sha の CI で照合し、reason は `landed <sha> ci=success`）。
+  3. 等しくない周は、先端の sha つきの `PushTip::Behind` を渡す。終端は §53 の分岐のまま: push の後に祖先を測り、祖先の周は先端の sha で CI を照合して success なら reason `landed <sha> ci=success tip=<先端>` で close し、祖先でない周は CI を撃たず `terminal:ci:unmeasurable` を記して close しない（rc 1・stdout は `terminal=ci:unmeasurable`）。
+  4. finish.rs は `PushTip` の doc comment の 2 文だけを本 § の読みに直す（着地の周で先端を知るのは `land_train` の 1 か所・撃ち直しは main の今の先端で側を選ぶ）。終端の本体・`PushTip` の 2 値・`land_train`・`finish` は 1 字も変えない。
+  5. 変えないもの: 終端の 7 値・event の詞・`ci_now` の判定・rules 行 `pipe.ci_wait_s` と `pipe.ci_poll_s` の値・着地の周の先端の読み・close の reason の 2 形・撃ち直しの前提の段と記録の sha の読み（close の reason が名指すのは記録の sha のまま）・usage と help の字面。
+- write-set の面: step.rs は本体（先端の読みと側の選び・約 8 行）、finish.rs は doc comment だけ、order.rs は歯（既存の 1 本の書き直しと新しい 2 本）。e2e の親 `crates/scribe2-boundary/tests/e2e/pipe/land.rs` の helper（偽 remote・偽 CI・偽 bd・Landed の detail の列・event の数）は変えずに使う。
+- 見積: step.rs 423 → 約 431・finish.rs 624 → 625・order.rs 627 → 約 705。diff は歯込みで約 110 行（S）。core の本体の伸びは約 9 行。xtask の門の副作用は無い（git は既存の読み手 1 本を撃つ・rules 行を足さない・env の読みと process の起動の site を足さない）。
+- 触らない: finish.rs の終端の本体・`PushTip` の 2 値・`land_train` / `finish` / `Landing`・`Terminal` の 7 値と字面・記録の sha の読み手・台帳の close（`crates/scribe2/src/ledger/mod.rs`）・rules 行・usage と help・§52 / §53 の歯（`pipe_train_terminal_` / `pipe_train_tip_close_`）・`--detection-only`。
+- 限界:
+  - 撃ち直しの先端は anchor の local の main である。forge で merge した commit を anchor が取り込んでいない周（local の main が remote の main の祖先）は、push が non-fast-forward で断られて `terminal:push:failed:git` で止まる（今と同じ・anchor を揃えてから撃ち直す）。
+  - 自分の sha の CI を撃ち直して緑にした便でも、main が進んだ後は先端の CI で照合する。先端の CI が赤か上限までに終わらない周は閉じない（close しない側・先端が緑になってから撃ち直す）。
+  - 先端を読んでから push するまでに別の着地が main を進めた周は、押した先端と照合の先端が割れる。照合の先端に run が無ければ `ci:unmeasurable` で止まる（close しない側・撃ち直しで継ぐ）。
+  - 祖先でない便（main の歴史を書き換えた後など）は撃ち直しでは閉じない。閉じ方は本 § の外。
+- 却下:
+  - 自分の sha の CI を先に照合し、run が無ければ先端へ回す 2 段の照合。forge の CLI は走っている run と run の無い周を同じ未完了（`ci_now` の `None`）で返すので（§52 の却下と同じ）、自分の sha の照合が上限まで待ち、撃ち直しが上限の 2 倍かかる。`PushTip` に 3 つ目の値を足すと、閉じた 2 値の match の site が全部動く。
+  - 等しい周にも `Behind` を渡す。先端の便の reason に `tip=<自分>` が付き、単独の着地の reason（`ci=success` で終わる）と形が割れる。
+  - 先端を remote の ref から読む・撃ち直しで fetch する。撃ち直しが押すのは local の main なので、押した先端と照合の先端が割れる。fetch は network を撃つ新しい段になる。
+  - main を読めない周に先端の側へ倒す。先端の読みの失敗が記録に残らず、測れない値を効く値として使う（C10）。
+  - 祖先の照合を撃ち直しの側で push の前に撃つ。§53 の終端が同じ判定を持ち、判定が 2 か所になる。
+- 歯（接頭辞 `pipe_replay_tip_`・`crates/scribe2-boundary/tests/e2e/pipe/land/order.rs` の 3 本・新しい e2e の module は作らない・親の helper を `use super::*` で使う。`grep -rn pipe_replay_tip_ crates/ docs/` は 0 件〔main c00026ab・2026-09-29〕。契約表の nextest の verify 行〔26 doc・351 行〕の filter 語のどれも、3 本の名〔module path 込み〕の substring にならない）:
+  - (a) 既存の撃ち直しの歯（374–430 行）を、接頭辞 `pipe_replay_tip_` の名に改めて期待を書き直す（fixture は同じ: CI が failure の着地・別の commit で main を進める・CI を直す・撃ち直す）。rc 0・stdout が `run=<id> terminal=closed` の 1 行・main は器が動かさない・Landed の後ろの 5 件（push・ci:failure・push・ci:success・close:ok）は今と同じ。CI の argv が main の今の sha を持ち着地した sha を持たず、偽 remote の main が今の sha を指し、偽 bd の reason が `landed <着地した sha> ci=success tip=<今の sha>` と等しい。
+  - (b) 1 本の fn（CI が failure の着地の後に CI を直す・直した偽 CI も呼ばれた回数を数える）の撃ち直し 2 周: 1 周目は main と偽 remote の main を、着地した commit と同じ木で親も同じ別の commit（着地した commit を祖先に持たない）へ動かして撃ち直す（偽 remote へは別の ref で押してから main を付け替える・force の push は使わない）。rc 1・stdout が `run=<id> terminal=ci:unmeasurable`・偽 CI の呼び出しが増えず・偽 bd が撃たれない。2 周目は main と偽 remote の main を着地した commit へ戻して撃ち直す。rc 0・CI の argv が着地した sha・reason が `landed <着地した sha> ci=success` と等しい（`tip=` を持たない）。Landed の後ろは 7 件（push・ci:failure・push・ci:unmeasurable・push・ci:success・close:ok）。
+  - (c) CI が failure の着地の後に `refs/heads/main` を消して撃ち直す。rc 1・stdout が空・stderr が `refs/heads/main を読めない` を持ち、event の数が変わらず、偽 bd が撃たれない。
+  - 変異の A/B（判定の順・条件 1 つに歯 1 本）: 形 1 の断りを外して先端の側に倒す → (c) が落ちる（終端が `terminal:unreadable` を記す）。形 2 / 3 の選びを常に先端の側にする（base の形）→ (a)（照合が着地した sha）と (b) の 1 周目（close する）が落ちる。常に `Behind` を渡す → (b) の 2 周目が落ちる（reason に `tip=`）。記録の sha の代わりに main の今の sha を着地した sha として渡す → (a)（reason が着地した sha を名指さない）と (b) の 1 周目（close する）が落ちる。
+  - base で RED の理由: 3 本とも base に在る helper だけを使い、overlay の上で compile は通って assert が落ちる（機能不在）。base は (a) で着地した sha を照合し、(b) の 1 周目で close し、(c) で `terminal:unreadable` を記す。(a) は期待が動く既存の歯なので base で赤い普通の flip で、札は置かない。order.rs は 1 file で flip-check は 1 turn（1 行目の base から持ち越した純移動の札は効かず、stale-marker の 1 行が出るだけ）。
