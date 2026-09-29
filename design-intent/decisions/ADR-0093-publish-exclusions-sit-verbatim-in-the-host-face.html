@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="generator" content="folio ADR-pack assembler (folio-bwc / instance#2) — deterministic structure, prose slots unfilled">
-<title>席の指示文の出所の印は器の文書だと名乗り (→ 器の SSOT:)、 印の後ろの参照は 1 本残らず pointer の形に分類できなければならない — 1 本でも分類できない参照を持つ行は雛形の違反 (ADR-0018 §2.2 の印の字・ADR-0022 §2.4 の規範文の定義の読み・ADR-0046 の用語 pointer 行の字を部分 supersede)</title>
+<title>公開の除外の表は host の面に字句のまま置く — 無害と裁定した字句の除外を publish の種類の rules 行の digest の列から host の面の表へ移し、 行ごとに裁定 id を持たせ、 裁定 id の欄を欠く行を持つ面は読みで断る (ADR-0078 の除外の一覧の置き場と形を部分 supersede)</title>
 <style>
 /* ===========================================================================
    folio human-layer design system — core.css (S3 / folio-8oc プロトタイプ)
@@ -455,14 +455,14 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
     "schema": "https://schema.org/",
     "folio": "https://folio.dev/spec/v1/"
   },
-  "@id": "./ADR-0090-seat-brief-marks-the-vessel-ssot-and-every-reference-classifies.html",
+  "@id": "./ADR-0093-publish-exclusions-sit-verbatim-in-the-host-face.html",
   "@type": "schema:TechArticle",
   "dc:isPartOf": [
     {
       "@id": "./README.html"
     }
   ],
-  "dc:title": "席の指示文の出所の印は器の文書だと名乗り (→ 器の SSOT:)、 印の後ろの参照は 1 本残らず pointer の形に分類できなければならない — 1 本でも分類できない参照を持つ行は雛形の違反 (ADR-0018 §2.2 の印の字・ADR-0022 §2.4 の規範文の定義の読み・ADR-0046 の用語 pointer 行の字を部分 supersede)",
+  "dc:title": "公開の除外の表は host の面に字句のまま置く — 無害と裁定した字句の除外を publish の種類の rules 行の digest の列から host の面の表へ移し、 行ごとに裁定 id を持たせ、 裁定 id の欄を欠く行を持つ面は読みで断る (ADR-0078 の除外の一覧の置き場と形を部分 supersede)",
   "folio:version": "0.1.0",
   "folio:stakeholders": [
     "Developer",
@@ -474,28 +474,28 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
       "@id": "../spec/constitution.html#c1"
     },
     {
-      "@id": "../spec/constitution.html#n2"
+      "@id": "../spec/constitution.html#c5"
     },
     {
-      "@id": "../spec/constitution.html#n3"
+      "@id": "../spec/constitution.html#c10"
     },
     {
-      "@id": "../spec/srs.html#FR42"
+      "@id": "../spec/constitution.html#a1"
     },
     {
-      "@id": "../spec/srs.html#NFR4"
+      "@id": "../spec/srs.html#FR80"
     },
     {
-      "@id": "./ADR-0018-working-memory-subcommands-and-pointer-required-directives.html"
+      "@id": "../spec/srs.html#FR57"
     },
     {
-      "@id": "./ADR-0022-seat-roles-are-typed-and-enforced-by-hooks.html"
+      "@id": "../spec/srs.html#FR84"
     },
     {
-      "@id": "./ADR-0045-seat-role-is-one-orchestrator-and-dispatcher-lands-runs.html"
+      "@id": "./ADR-0026-account-lifecycle-host-manifest-and-seat-launch.html"
     },
     {
-      "@id": "./ADR-0046-constitution-is-enforced-by-gates-and-only-ask-first-and-never-are-injected.html"
+      "@id": "./ADR-0078-host-guard-stops-neighbor-identifiers-before-publish.html"
     }
   ]
 }
@@ -507,214 +507,178 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 <nav class="breadcrumb" aria-label="パンくず"><ol>
   <li><a href="../index.html">design-intent</a></li>
   <li><a href="./README.html">decisions</a></li>
-  <li aria-current="page">ADR-0090</li>
+  <li aria-current="page">ADR-0093</li>
 </ol></nav>
 <!-- /folio:chrome-top -->
 <div class="page" data-component="requirement-type-color-tokens">
 <header data-component="doc-cover-band">
-<p class="cover-eyebrow"><span class="doc-type">設計判断記録 (ADR)</span> <span>scribe2 — 席の指示文の出所の印</span></p>
-<h1>席の指示文の出所の印は器の文書だと名乗り (→ 器の SSOT:)、 印の後ろの参照は 1 本残らず pointer の形に分類できなければならない — 1 本でも分類できない参照を持つ行は雛形の違反 (ADR-0018 §2.2 の印の字・ADR-0022 §2.4 の規範文の定義の読み・ADR-0046 の用語 pointer 行の字を部分 supersede)</h1>
-<p class="cover-sub">器は登録された全ての席 (器の repo の席も、 別の repo の席も) へ同じ 11 行の指示文を渡す。 各行の末尾の出所の参照は器の repo の文書を指すが、 字からはそれが分からず、 別の repo の席が自分の repo の同じ名の文書と読み違えうる。 本 ADR は印そのものに持ち主を名乗らせ、 あわせて印の後ろに分類できない参照が在る行を黙って通していた穴を塞ぐ。</p>
-<div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">この記録で「器」は scribe2 の本体、 「席」は人と AI が話す 1 つの session、 「席の指示文」は器が session の始まりに席へ渡す 11 行の案内です。 指示文の各行の末尾には「→ SSOT:」という印があり、 その後ろに出所の参照 (憲法の条・決定記録の番号・設計の文書) が並びます。 参照は器の repo の文書を指しますが、 字からはそれが分かりません。 器を使う別の repo の席も同じ指示文を受け取り、 その repo も自分の憲法や決定記録を持つので、 字の近い条を自分の repo の条と読み違えうることが 2026-09-29 の報告で分かりました。 この記録は、 印そのものを「→ 器の SSOT:」に替えて持ち主を名乗らせ、 あわせて印の後ろに器が形を見分けられない参照が 1 本でも在る行を、 黙って通さず雛形の違反にすると決めます。</p></div></div>
-<div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">accepted</span></span><span class="m"><span class="k">選択肢</span><span class="v">9件 (OPT1–OPT9)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 3 / トレードオフ 3</span></span><span class="m"><span class="k">版</span><span class="v">v0.1.0 / 2026-09-29</span></span></div>
-<div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>FR42・NFR4</b></div>
+<p class="cover-eyebrow"><span class="doc-type">設計判断記録 (ADR)</span> <span>scribe2 — 公開の除外の表</span></p>
+<h1>公開の除外の表は host の面に字句のまま置く — 無害と裁定した字句の除外を publish の種類の rules 行の digest の列から host の面の表へ移し、 行ごとに裁定 id を持たせ、 裁定 id の欄を欠く行を持つ面は読みで断る (ADR-0078 の除外の一覧の置き場と形を部分 supersede)</h1>
+<p class="cover-sub">公開の見張りは、 隣の private repo の名の成分に当たる字面を止めるが、 無害と裁定した字句の中の当たりは数えない。 その字句の一覧は今、 PUBLIC な repo に載る rules 行が sha256 の digest の列で持つ。 短い字句の digest は候補の字句で当て直せるので、 一覧に在る字句と、 そこから隣の repo の名の成分が読める。 本 ADR は一覧を tracked でない host の面へ字句のまま移し、 行ごとに裁定 id を持たせる。</p>
+<div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">この記録で「器」は scribe2 の本体、 「見張り (host-guard)」は危ない操作を実行の直前に止める器の口、 「隣の private repo」は同じ machine の宣言に並ぶ非公開の repo、 「host の面」は machine ごとの宣言を置く、 git で追跡しない 1 つの file です。 見張りは、 公開の repo へ出る文字に隣の private repo の名の一部が混じると止めますが、 持ち主が無害と裁定した語の中の当たりは数えません。 その語の一覧は今、 公開の repo に載る規則の行が、 語を sha256 に掛けた指紋 (digest) の列で持っています。 短い語の指紋は、 候補の語を同じく指紋にして突き合わせれば当て直せるので、 一覧に在る語と、 そこから隣の repo の名の一部が読めてしまいます。 この記録は、 その一覧を host の面の「公開の除外の表」へ語のまま移し、 各行に裁定の番号 (裁定 id) を持たせ、 番号の欠けた行を持つ面は読むときに断ると決めます。 置き換えるのは ADR-0078 のうち、 除外の一覧の置き場と形だけです。</p></div></div>
+<div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">accepted</span></span><span class="m"><span class="k">選択肢</span><span class="v">5件 (OPT1–OPT5)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 3 / トレードオフ 3</span></span><span class="m"><span class="k">版</span><span class="v">v0.1.0 / 2026-09-29</span></span></div>
+<div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>FR80・FR57</b></div>
 <div data-component="approval-block">
-<div class="sign"><span class="role">裁定 (user)</span><span class="who">user</span><span class="when">裁定 id user 2026-09-28T00:54Z (決めてほしいことは推奨で進める、 の常設の指示)。 残る疑問 5 つ (出所の台帳 id・番号・xtask の判定を全参照に揃えるか・器の語で足りるか・器の文書を消費側から開く道) は orchestrator がこの指示の範囲で推奨のまま決めた。 憲法の条文は動かさないので改訂の裁定は要らない。 逐語は台帳にだけ在る (記録は memo s2-07l.739)</span><span class="stamp self">裁定済</span></div>
-<div class="sign"><span class="role">設計 (orchestrator)</span><span class="who">orchestrator</span><span class="when">2026-09-29 草稿 v1 (雛形 11 行・印の定数とその写し・行の分類と雛形の歯・hook の出力を現物で読み、 印の字を字で持つ file と外形 snapshot を数え、 器の外に指示文の行を字で読む道具が無いことを確かめた。 拘束する constitution の版 0.5.0)</span><span class="stamp self">作成</span></div>
+<div class="sign"><span class="role">裁定 (user)</span><span class="who">user</span><span class="when">持ち主の裁定 2026-09-29T05:46Z (除外の一覧を host の面へ字句のまま移す)・持ち主の裁定 2026-09-29T04:37Z (公開情報の扱いは推奨で進める)。 行の欄・読みの断り・rules 行の要素の細部は SRS v0.30 (FR80・FR57) が持ち、 orchestrator がこの範囲で推奨のまま決めた。 憲法の条文は動かさないので改訂の裁定は要らない。 逐語は台帳にだけ在る (記録は memo s2-07l.738.13)</span><span class="stamp self">裁定済</span></div>
+<div class="sign"><span class="role">設計 (orchestrator)</span><span class="who">orchestrator</span><span class="when">2026-09-29 草稿 v1 (ADR-0078 と ADR-0026 の決定、 SRS v0.30 の FR80・FR57・FR84 と AC50、 今の rules 行 host_guard.publish の値と読み手の札を読み、 除外の要素がまだ 0 で digest を計算する実装も無いことを確かめた。 拘束する constitution の版 0.5.0)</span><span class="stamp self">作成</span></div>
 </div>
 <div class="reader-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 想定読者: scribe2 の開発 session と user — 器の内部と Rust の専門知識は不要 (専門語はやさしい言葉を併記)</div>
 </header>
 <!-- folio:chrome-toc -->
 <!-- /folio:chrome-toc -->
-<section data-component="chapter-deck-band" class="tint-info"><span class="num">01</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v6m0 0L9 5m3 3l3-3"/><circle cx="12" cy="14" r="6"/></svg> 背景 / なぜこの判断が要るか</span><h2>いま何が問題か (確定方式を決める力学)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-01">なぜこの判断が要るのかを、 経緯 (印の字と pointer 行の定義を 3 本の決定記録が持つ)・事象 (別の repo の席が器の文書を自分の repo の文書と読みうる)・機序 (行の分類が形の外の参照を捨てる)・憲法と既存の決定の向き・この判断の範囲の 5 つから説明します。 印はもともと、 今は廃止された作業記憶の命令行の印でした。</p></section>
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">01</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v6m0 0L9 5m3 3l3-3"/><circle cx="12" cy="14" r="6"/></svg> 背景 / なぜこの判断が要るか</span><h2>いま何が問題か (確定方式を決める力学)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-01">なぜこの判断が要るのかを、 経緯 (除外の一覧は ADR-0078 が規則の行に指紋の列で置いた)・危険 (指紋の列は候補の語で当て直せる)・機序 (除外が無いと無害な公開が毎回止まる)・憲法と既存の決定の向き・この判断の範囲の 5 つから説明します。 この repo の規則の行には、 まだ除外の語は 1 つもありません。</p></section>
 <div class="chapbody">
 <div data-component="adr-context-list">
-<div data-component="adr-context-row"><span class="cxid">CTX1</span><div class="cxbody"><p class="cxh">経緯 — 印の字と pointer 行の定義は 3 本の決定が持つ</p><p class="cxd">ADR-0018 §2.2 は、 作業記憶の命令行が本文末に出所 pointer<span class="term" data-component="plain-language-term-inline" data-term="出所 pointer">器の文書を指す参照</span> (→ SSOT: の後ろの参照) を持ち、 器が形を閉じた enum (PointerKind<span class="term" data-component="plain-language-term-inline" data-term="PointerKind">参照の形の一覧</span>) で分類すると決めた。 ADR-0022 §2.4 は席の指示文<span class="term" data-component="plain-language-term-inline" data-term="席の指示文">席への最初の案内</span>の雛形の行を穴か出所 pointer を持つ行に限り (ADR-0018 §2.2 と同じ検査)、 規範文を「pointer を持たない行」と定めた。 ADR-0046 の用語集は pointer 行を「行末の → SSOT: の後ろに出所を持つ行」と字で定める。 作業記憶は ADR-0045 §2 (2) で廃止され、 印は席の指示文の雛形にだけ残る。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX2</span><div class="cxbody"><p class="cxh">事象 — 別の repo の席が器の文書を自分の repo の文書と読みうる</p><p class="cxd">器は SessionStart で、 登録された全ての席 (器の repo の席も消費側<span class="term" data-component="plain-language-term-inline" data-term="消費側">器を使う別の repo</span>の席も) へ同じ 11 行の指示文を渡す。 行末の → SSOT: の後ろの参照 (憲法の条・ADR の番号・設計 doc の path) は器の repo の文書を指すが、 字からはそれが分からない。 消費側の席の報告 (2026-09-29) と写しの表の突き合わせで、 消費側の repo の憲法にも器の条と字の近い id の条 (中身は別) が在り、 席が指示文の条を自分の repo の条と読みうることが分かった (実測 1 件・記録は memo s2-07l.739)。 同じ害は ADR の番号と設計 doc の path にも及ぶ。 印 → SSOT: は器の前の版の作業記憶の印で、 消費側の repo の文書にもその repo 自身の文書を指す印として残りうる。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX3</span><div class="cxbody"><p class="cxh">機序 — 行の分類は分類できない参照<span class="term" data-component="plain-language-term-inline" data-term="分類できない参照">形の外の参照</span>を捨てる</p><p class="cxd">行の分類は、 印の後ろの参照のうち分類できたものの最も強い kind を取り、 分類できない参照を捨てる。 雛形の歯も分類できない参照を黙って飛ばす。 同じ行に分類できる参照が 1 本在れば、 「憲法 N-7」「器の憲法 N3」のような分類できない字が印の後ろに在っても行は通り、 印の後ろに隠れた散文が規範文の検査の外に出る。 今の雛形 11 行には分類できない参照が無い。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX4</span><div class="cxbody"><p class="cxh">憲法と既存の決定の向き (本 ADR の解釈)</p><p class="cxd">C1.2 (生成文に手書きの規範文を持たない) は、 pointer 行の読みを「印の後ろの参照が全部 pointer の形の行」と狭めるほど強く執行される。 N2 (散文にしか無い規則を規則と扱わない) と N3 (host 固有の値で分岐しない) は動かさない。 印の字は host に依らず、 器の repo の置き場 (絶対 path) も指示文に書かない。 CON2 (公開面) から、 消費側の repo の名と条の中身は本 ADR に写さない。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX5</span><div class="cxbody"><p class="cxh">射程 — 動かすのは印の字と、 行の分類の 1 規則だけ</p><p class="cxd">動かすのは (1) 雛形 11 行の行末の印の字、 (2) 印の字の定数 (器の中の 1 つと xtask の写し)、 (3) 行の分類が分類できない参照を 1 本でも持つ行を違反にすること。 動かさないのは PointerKind の閉じた列と形と宣言順・前置き語の表・Anchor の解決・穴の列 (5 つ)・生成文の行数 11・hook の出す順と記録の what・rules 行・xtask の seat-brief の判定の形 (印の後ろに pointer の字が 1 つ在る行を通す)・消費側の repo の文書。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX1</span><div class="cxbody"><p class="cxh">経緯 — 除外の一覧は ADR-0078 が publish の種類の rules 行に digest<span class="term" data-component="plain-language-term-inline" data-term="digest">字句から作る指紋</span> の列で置いた</p><p class="cxd">ADR-0078 は host-guard に 6 つ目の種類 publish を足し、 rules 行 host_guard.publish の値を、 識別子の形の記号の閉じた列と、 無害と裁定した字句の除外の一覧 (字句の sha256 の digest の列で、 字句そのものは書かない) とした。 走査の段は、 repo の名の成分の当たりのうち、 除外の一覧に digest が在る字句の中の当たりだけを数えない。 除外の一覧は持ち主の裁定 2026-09-27T23:55Z (repo の名は区切った成分ごとに照合し、 無害と裁定した字句だけを除く) から来る。 今の器の rules 行の読み手は形の記号と除外の digest の 2 つの札を受け、 この repo の rules 行の値は形の記号 4 つだけで、 除外の要素はまだ 1 つも無い。 digest を計算する実装もまだ無い。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX2</span><div class="cxbody"><p class="cxh">危険 — digest の列は候補の字句で当て直せる (辞書攻撃)</p><p class="cxd">rules 行は tracked な manifest に在り、 PUBLIC な repo に載る。 除外に足す字句は、 隣の private repo<span class="term" data-component="plain-language-term-inline" data-term="隣の private repo">群に並ぶ非公開の repo</span> の名の成分を含むが無害な短い語 (一般の英単語や、 公開の文書に現れる語) で、 その候補の集合は小さい。 誰でも公開の字句を sha256 に掛けて digest の列と突き合わせれば、 一覧に在る字句が分かる。 字句が除外に在ることは、 その字句が隣の repo の名の成分を含むことを意味するので、 隣の repo の名の成分が読める。 digest は字句を隠さず、 公開の面から隣を指す手がかりになる。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX3</span><div class="cxbody"><p class="cxh">機序 — 除外が無いと無害な公開が毎回止まる</p><p class="cxd">走査は repo の名を区切った成分の並びで照合し、 一般語の名も除かない (持ち主の裁定 2026-09-27T22:21Z)。 隣の private repo の名が一般語と同じ成分を持つと、 その語を含む無害な字面 (生成した文書など) の push と本文が毎回断られる。 除外の表は、 この偽陽性を持ち主が裁定した字句に限って外す口で、 ほかの経路は字面を言い換えて出し直すことだけである。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX4</span><div class="cxbody"><p class="cxh">憲法と既存の決定の向き (本 ADR の解釈)</p><p class="cxd">C1 は規則の値 (閾値・enabled・裁定 id など) を repo の中の manifest 1 file に置く。 C10.2 は host 固有の値を manifest にだけ置き、 ADR-0026 はこの manifest を tracked の面と host の面<span class="term" data-component="plain-language-term-inline" data-term="host の面">host ごとの宣言の置き場</span> (state dir の 1 file・rules 行を置けない) の 2 面と読んだ。 本 ADR は、 識別子の形の列・判定の順・enabled を規則 (rules 行・C1) とし、 除外の字句を host 固有の宣言値と読む。 どの隣の repo が在るかは host 固有の事実 (隣は host の面の群の表の行の anchor から数える) なので、 その名の成分に当たる字句の除外も host 固有の値である。 C5 は rules 行を足すか変える変更に裁定 id<span class="term" data-component="plain-language-term-inline" data-term="裁定 id">裁定を指す番号</span> を求めて CI が断るが、 host の面は tracked でないので CI の門は届かない。 表の行ごとに裁定 id を持たせ、 欄を欠く行を持つ面を読みで断れば、 値が裁定の印を持つ向きは保てる。 CON2 と A1 (出す) から、 隣の名の成分を公開の面へ出す形 (字句そのものも、 当て直せる digest も) を採らない。 持ち主の裁定は 2 本 — 2026-09-29T05:46Z (除外の一覧を host の面へ字句のまま移す)・2026-09-29T04:37Z (公開情報の扱いは推奨で進める)。 逐語は台帳にだけ在る。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX5</span><div class="cxbody"><p class="cxh">射程 — 動かすのは除外の置き場と形と、 それに伴う読みの規則だけ</p><p class="cxd">動かすのは (1) 除外の一覧の置き場を rules 行から host の面の公開の除外の表<span class="term" data-component="plain-language-term-inline" data-term="公開の除外の表">数えない字句の表</span>へ移し、 形を digest から字句へ替えること、 (2) rules 行の値の要素を形の記号だけにすること、 (3) host の面の読み手が裁定 id の欄を欠く行を持つ面を断ること、 (4) 表の行の裁定を答えが操作で済む裁定として扱い、 未反映の裁定<span class="term" data-component="plain-language-term-inline" data-term="未反映の裁定">文書が引いていない裁定</span> (FR84) に数えないこと (答えは host の面へ行を書く操作で済み、 字句は tracked な file に書かないので、 追跡された file へ写すものが無い)。 動かさないのは、 host-guard の 6 つの種類・判定の順 (rules 行 → 全履歴を出す command → 解き → 可視性 → 走査)・識別子の閉じた 4 形と照合の単位 (区切った成分・大文字と小文字を区別しない・一般語も除かない)・GitHub への問いの範囲と A1 の解釈・読む上限と締め切り (NFR5)・着地の前の呼び出し (FR11・FR50)・配線の hook 行・host の面の読み手 1 本と断り方・host の面に rules 行を置けない規則。 要件の側は SRS v0.30 の FR80 の除外の句と FR57 の host の面の項目が持つ。</p></div></div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-brand"><span class="num">02</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v18"/><path d="M5 7l-3 6h6z"/><path d="M19 7l-3 6h6z"/><path d="M3 21h18"/></svg> 判断を縛る力 / 評価の軸</span><h2>選択肢を測るものさし (安全・速さ)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-02">この判断を評価する 4 本のものさしです。 どの行を 1 行だけ抜き出しても持ち主が読めること。 参照の形を見分ける仕組みを 1 通りのまま増やさないこと。 印の後ろに散文を隠させないこと (形の外の参照を黙って通さない)。 公開面と host に依らない形を守ること (置き場・名・別の repo の値を書かない)。</p></section>
+<section data-component="chapter-deck-band" class="tint-brand"><span class="num">02</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v18"/><path d="M5 7l-3 6h6z"/><path d="M19 7l-3 6h6z"/><path d="M3 21h18"/></svg> 判断を縛る力 / 評価の軸</span><h2>選択肢を測るものさし (安全・速さ)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-02">この判断を評価する 5 本のものさしです。 公開の面から隣の repo の名の一部を読めないこと。 除外の 1 行ずつを持ち主の裁定に結ぶこと。 machine ごとの値は machine ごとの宣言に置くこと。 足すものを最小にすること (既に在る読み手を使い、 依存を足さない)。 無害な公開を止め続けないこと。</p></section>
 <div class="chapbody">
 <table data-component="adr-driver-table"><tbody>
-<tr data-component="adr-driver-row"><td class="drid">DR1</td><td>1 行だけで持ち主が読める — どの行を抜き出しても、 印の後ろが器の文書だと字で分かる <span class="drg">CTX2</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR2</td><td>分類は 1 通り — 解き手の形 (PointerKind・前置き語の表・宣言順) と閉じた穴の列を増やさない <span class="drg">CTX1・CTX5</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR3</td><td>印の後ろに散文を隠さない — 分類できない参照を黙って通さない (C1.2・NFR4) <span class="drg">CTX3・CTX4</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR4</td><td>公開面と host 非依存を守る — 置き場・名・消費側の値を指示文にも記録にも書かない (N3・CON2) <span class="drg">CTX4</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR1</td><td>公開の面から隣を読めない — tracked で PUBLIC な file に、 除外の字句も当て直せる形も置かない (CON2・A1) <span class="drg">CTX2・CTX4</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR2</td><td>除外は裁定に結ぶ — 行ごとに裁定 id を持ち、 印の無い除外を黙って効かせない (C5 の向き・NFR4) <span class="drg">CTX1・CTX4</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR3</td><td>host 固有の値は host の面に置く — 隣の在り方は host ごとの事実 (C10.2・ADR-0026) <span class="drg">CTX4</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR4</td><td>足すものを最小にする — 既存の host の面の読み手と断り方を使い、 依存を足さない (C17・NFR3) <span class="drg">CTX1・CTX5</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR5</td><td>無害な公開を止め続けない — 裁定した字句の中の当たりは数えない (裁定 2026-09-27T23:55Z) <span class="drg">CTX3</span></td></tr>
 </tbody></table>
 </div>
-<section data-component="chapter-deck-band" class="tint-violet"><span class="num">03</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5"/></svg> 検討した選択肢 / 3 つの確定方式</span><h2>それぞれの利点と欠点を並べる</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-03">候補を 9 つ並べます。 印を「→ 器の SSOT:」に替えて印の後ろの参照を全部見分ける案 (選んだ案) と、 選ばなかった 8 つです。 選ばなかった案は、 持ち主の書き方を変える 5 つ (各参照に前置き・器の名・冒頭の 1 行・印の直後の語・anchor 付きの path)、 穴の塞ぎ方を変える 2 つ (歯だけを直す・前置き語の参照だけを違反にする)、 何もしない案です。</p></section>
+<section data-component="chapter-deck-band" class="tint-violet"><span class="num">03</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5"/></svg> 検討した選択肢 / 3 つの確定方式</span><h2>それぞれの利点と欠点を並べる</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-03">候補を 5 つ並べます。 host の面の表に語のまま置く案 (選んだ案) と、 選ばなかった 4 つです。 選ばなかったのは、 今のまま指紋の列を規則の行に置く案、 語のまま規則の行に置く案、 除外を持たない案、 machine だけが持つ秘密の値 (salt) を混ぜた指紋を規則の行に置く案で、 当て直せる・そのまま公開になる・無害な公開が毎回止まる・規則の行が machine ごとの値になる、 がそれぞれの決め手です。</p></section>
 <div class="chapbody">
 <div class="opt-grid">
 <div data-component="adr-option-card" class="chosen">
-<div class="opt-head"><span class="opt-id">OPT1</span><span class="opt-name">印を「→ 器の SSOT:」に替え、 印の後ろの参照は全部分類する</span><span class="opt-verdict chosen">採用</span></div>
-<p class="opt-sum">雛形 11 行の行末の印を → 器の SSOT: に替え (印より前の字・参照の列・行の数と順は不変)、 器の中の印の定数と xtask の写しを同じ字にする。 行の分類は印の後ろの参照を 1 本残らず分類し、 1 本でも分類できなければ分類できない行として違反に数える。 雛形の歯も黙って飛ばさない。 決め手は分析 (印が持ち主を名乗り、 分類の形は変わらない)。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT1">各行の末尾の印を「→ 器の SSOT:」に替える案です。 印より前の字と参照の並びは 1 字も変えません。 印そのものが持ち主を名乗るので、 どの行を 1 行だけ抜き出しても、 印の後ろに参照が何本並んでも、 器の文書だと読めます。 器の中の直しは印の字の定数とその写しだけで、 参照の形を見分ける仕組みは変わりません。 あわせて、 印の後ろの参照を 1 本残らず見分け、 見分けられない参照が 1 本でも在る行を違反にします。 代わりに、 全ての席の指示文が 1 行 7 byte 伸び、 「器」の語が通じるかは指示文の 1 行目に頼ります。 分析で選びました。</span>
+<div class="opt-head"><span class="opt-id">OPT1</span><span class="opt-name">host の面の公開の除外の表に字句のまま置く</span><span class="opt-verdict chosen">採用</span></div>
+<p class="opt-sum">無害と裁定した字句を host の面の公開の除外の表に字句のまま置き、 各行に裁定 id を持たせる。 host の面の読み手は裁定 id の欄が無いか空の行を持つ面を断る。 表は tracked な file に書かず、 行の裁定は答えが操作で済む裁定として未反映の裁定に数えない。 rules 行は識別子の形の記号だけを持つ。 決め手は持ち主の裁定 (2026-09-29T05:46Z)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT1">除外の語を host の面の「公開の除外の表」に語のまま置き、 各行に裁定の番号を持たせる案です。 番号の欄が無いか空の行を持つ面は、 読むときに断ります。 表は git で追跡しない file にだけ在り、 公開の repo には語も指紋も載らないので、 公開の面から隣の repo の名の一部を読めません。 隣の repo が在るという machine の事実と、 その名に当たる語の除外が、 同じ面に並びます。 既に在る読み手を使い、 照合は語の比べ合わせなので、 指紋を計算する実装も要りません。 代わりに、 除外の変更は PR の差分と CI の門に現れず、 置き場ごとの面に同じ行を置き、 番号が台帳で解けるかは読むときに測りません。 持ち主の裁定で選びました。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>行を 1 行だけ抜き出しても器の文書と読め、 印の後ろに参照が何本並んでも全部に掛かる (DR1)</li>
-<li>解き手の変更は印の定数とその写しだけで、 PointerKind と前置き語の表は 1 字も変わらない (DR2)</li>
-<li>前の版の印だけの行は既存の規則で pointer を持たない行になり、 新しい仕組みが要らない (DR2)</li>
-<li>印の後ろに分類できない字を置いた行が違反として名指され、 散文の逃げ道が塞がる (DR3)</li>
+<li>字句も当て直せる形も PUBLIC な repo に載らず、 公開の面から隣の名の成分を読めない (DR1)</li>
+<li>行ごとの裁定 id を読みで確かめ、 印の無い除外を黙って効かせない (DR2)</li>
+<li>隣が在るという host の事実と、 その名に当たる字句の除外が同じ host の面に並ぶ (DR3)</li>
+<li>既存の host の面の読み手 1 本と断り方を使い、 照合は字句の比較で digest を計算する実装が要らない (DR4)</li>
+<li>裁定した字句の中の当たりは数えず、 無害な公開を止め続けない (DR5)</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>全席の指示文の字が変わり、 1 行につき 7 byte 伸びる</li>
-<li>器の語が席に通じるかは、 指示文の 1 行目と名乗りの行に頼る</li>
-<li>xtask の seat-brief は印の後ろに pointer の字が 1 つ在る行を通したままで、 全参照を測るのは器の中の歯だけ</li>
+<li>表が tracked でないので、 除外の変更は PR の差分と CI の門 (C5) に現れず、 記録は台帳の裁定が持つ</li>
+<li>host の面は置き場 (state dir) ごとの 1 file なので、 置き場が複数の host では各面に同じ行が要る</li>
+<li>読みが確かめるのは裁定 id の欄の有無と空だけで、 id が台帳の裁定に解けるかは測らない</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT2</span><span class="opt-name">各参照の頭に「器の」を付ける</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">印は今の字のまま、 印の後ろの各参照の頭に持ち主の語を付ける (器の憲法 N3 など)。 決め手は分析 (解き手の形が 2 通りになる)。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT2">印は今のまま、 印の後ろの各参照の頭に「器の」を付ける案です (器の憲法 N3 など)。 参照ごとに持ち主が分かる点で勝ります。 けれども、 21 本の参照に同じ語が並び、 参照の形を見分ける仕組みに 2 段の前置きを足すことになって、 形ごとに書き方が 2 通りになります。 印の字は別の repo が自分の文書に使う印と同じままです。 退けました。</span>
+<div class="opt-head"><span class="opt-id">OPT2</span><span class="opt-name">ADR-0078 のまま digest の列を rules 行に置く</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">除外の一覧を今のまま publish の種類の rules 行に sha256 の digest の列で持つ。 決め手は分析 (候補の字句で当て直せる)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT2">今のまま、 除外の一覧を規則の行に指紋の列で持つ案です。 除外の変更が PR の差分と CI の門を通り、 全ての machine に同じ一覧が効き、 今の読み手をそのまま使える点で勝ります。 けれども、 短い語の指紋は、 公開の語を同じく指紋にして突き合わせれば当て直せ、 一覧に在る語と隣の repo の名の一部が読めます。 隣の在り方は machine ごとに違うのに除外は repo の追跡する行 1 つに固まり、 指紋を計算する実装も器に書くことになります。 退けました。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>参照ごとに持ち主が字で分かる</li>
+<li>除外の変更が PR の差分と CI の門 (C5) を通り、 全 host に同じ一覧が効く</li>
+<li>今の rules 行の読み手の札をそのまま使える</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>21 本の参照に同じ語が並ぶ</li>
-<li>前置き語の表に 2 段の前置きを足すことになり、 kind ごとに形が 2 通りになって、 形が互いに重ならないかを測り直す (DR2)</li>
-<li>印の字は前の版と同じままで、 消費側の repo が自分の文書に使う印と字で分かれない (DR1)</li>
+<li>短い字句の digest は、 公開の字句を hash して突き合わせれば当て直せ、 一覧に在る字句と隣の名の成分が読める (DR1)</li>
+<li>隣の在り方は host ごとに違うのに、 除外は repo の tracked な行 1 つに固まる (DR3)</li>
+<li>digest を計算する実装を器に書く (DR4)</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT3</span><span class="opt-name">器の binary の名を字で書く</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">印か参照に器の名を字で書く。 決め手は分析 (名の字を置く場所と穴の列が動く)。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT3">印か参照に器の名を字で書く案です。 器の名が直に分かる点で勝ります。 けれども、 器の名の字は repo の中の 1 か所だけに置く決まりがあり、 雛形に書くには名を埋める穴を 1 つ足すことになります。 閉じた穴の一覧が 5 つから 6 つになり、 その写しと件数の固定も動きます。 退けました。</span>
+<div class="opt-head"><span class="opt-id">OPT3</span><span class="opt-name">字句のまま rules 行に置く</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">除外の字句を digest にせず、 字句のまま publish の種類の rules 行に置く。 決め手は分析 (名の成分をそのまま公開する)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT3">除外の語を指紋にせず、 語のまま規則の行に置く案です。 除外の変更が PR の差分と CI の門を通り、 照合が語の比べ合わせで済む点で勝ります。 けれども、 隣の repo の名の一部を含む語を公開の repo の追跡する file に書くことになり、 それ自体が公開です。 machine ごとの値を追跡する行に置くことにもなります。 退けました。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>器の名が字で直に分かる</li>
+<li>除外の変更が PR の差分と CI の門 (C5) を通る</li>
+<li>照合は字句の比較で、 digest を計算する実装が要らない (DR4)</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>名の字は repo の中の 1 か所だけに置く決まりなので、 雛形に書くには穴を足すことになり、 閉じた穴の列 (器の中と xtask の写し・件数の pin) が 5 から 6 になる (DR2)</li>
+<li>隣の名の成分を含む字句を PUBLIC な repo の tracked な file に書くことになり、 それ自体が公開になる (DR1)</li>
+<li>host 固有の値を tracked な行に置く (DR3)</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT4</span><span class="opt-name">指示文の冒頭に「以下の出所は器の文書」の 1 行を足す</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">行の印は今のままにし、 指示文の頭に持ち主を告げる 1 行を足す。 決め手は分析 (行は 1 行ずつ読まれる)。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT4">指示文の頭に「以下の出所は器の文書」という 1 行を足す案です。 各行の字を変えない点で勝ります。 けれども、 行は 1 行ずつ抜き出して読まれるので、 冒頭の 1 行はその行に届きません。 指示文の行数 11 の決まりも動き、 足した 1 行も出所を持たなければそれ自体が雛形の違反です。 退けました。</span>
+<div class="opt-head"><span class="opt-id">OPT4</span><span class="opt-name">除外の表を持たない</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">除外を一切持たず、 当たった字面は言い換えて出し直すだけにする。 決め手は分析 (偽陽性が毎回起きる)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT4">除外を一切持たず、 当たった文字は言い換えて出し直すだけにする案です。 足す表も読み手も要らず、 除外の誤りで当たりを見逃すことも無い点で勝ります。 けれども、 隣の repo の名が一般的な単語と同じ部分を持つと、 その語を含む無害な push と本文が毎回止まります。 無害と裁定した語だけを除くという持ち主の裁定 (2026-09-27T23:55Z) を受ける口も無くなります。 退けました。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>各行の字を変えない</li>
+<li>足す表も読み手も要らない (DR4)</li>
+<li>除外の誤りで当たりを見逃すことが無い</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>行は 1 行ずつ抜き出して読まれ、 冒頭の 1 行はその行に届かない (DR1)</li>
-<li>指示文の行数 11 の決まり (ADR-0045 §2 (3)) が動く</li>
-<li>足す 1 行も印の後ろに出所を持たなければ、 それ自体が雛形の違反になる (DR3)</li>
+<li>一般語と同じ成分を持つ名の隣が在る host では、 その語を含む無害な push と本文が毎回断られる (DR5)</li>
+<li>無害と裁定した字句だけを除くという持ち主の裁定 (2026-09-27T23:55Z) を受ける口が無くなる</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT5</span><span class="opt-name">印を残し、 直後に持ち主の語を置く</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">印は今の字のまま、 印の直後に 1 度だけ持ち主の語を置く。 決め手は分析 (掛かる範囲が字から読めない)。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT5">印は今のまま、 印の直後に 1 度だけ「器の」を置く案です。 印の字を替えない点で勝ります。 けれども、 その語が区切りの後ろの参照にも掛かるのかが字から読めません。 別の repo が使う印とも字が同じままです。 持ち主の語は参照の形ではないので、 前の決定記録の形から外れ、 新しい決定記録も避けられません。 退けました。</span>
+<div class="opt-head"><span class="opt-id">OPT5</span><span class="opt-name">host だけが持つ salt を掛けた digest を rules 行に置く</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">除外の一覧を rules 行に残し、 host の面に置いた salt (字句に混ぜる秘密の値) を掛けた digest で持つ。 決め手は分析 (tracked な行が host 固有の値になる)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT5">除外の一覧を規則の行に残し、 host の面に置いた秘密の値 (salt) を語に混ぜてから指紋にする案です。 除外の変更が PR の差分と CI の門を通り、 salt を知らなければ公開の語から当て直せない点で勝ります。 けれども、 指紋が salt ごとに違うので、 追跡する規則の行の指紋の列が machine ごとの値になり、 salt の違う machine では効きません。 salt と指紋の 2 か所を揃える手間と、 指紋を計算する実装も要ります。 salt が漏れれば、 短い語の集合は再び当て直せます。 退けました。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>印の字を替えない</li>
+<li>除外の変更が PR の差分と CI の門 (C5) を通る</li>
+<li>salt を知らなければ、 公開の字句を hash しても当て直せない (DR1)</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>語が区切りの後ろの参照にも掛かるかが字から読めない (DR1)</li>
-<li>消費側の repo が自分の文書に使う印と字が同じまま (DR1)</li>
-<li>持ち主の語は PointerKind の形ではないので ADR-0018 §2.2 の形から外れ、 新しい ADR は避けられない</li>
-</ul></div></div>
-</div>
-<div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT6</span><span class="opt-name">参照を html の anchor 付きの path で書く</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">各参照を器の repo の中の文書の path と節の anchor で書く。 決め手は分析 (repo 相対の path は曖昧さを残す)。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT6">各参照を、 器の repo の中の文書の path と節の目印で書く案です。 参照が文書の場所と節まで名指す点で勝ります。 けれども、 repo の中の相対の path は別の repo にも同じ名で在りうるので、 どの repo の文書かの曖昧さが残ります。 退けました。</span>
-<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>参照が文書の場所と節まで名指す</li>
-</ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>repo 相対の path は消費側の repo にも同じ名で在りうるので、 どの repo の文書かの曖昧さが残る (DR1)</li>
-</ul></div></div>
-</div>
-<div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT7</span><span class="opt-name">雛形の歯だけを失敗に替える</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">印は OPT1 と同じく替え、 穴の塞ぎ方だけを本体の分類に置かず雛形の歯の中に留める。 決め手は分析 (今の雛形では歯が何も測らない)。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT7">印は選んだ案と同じく替え、 穴の塞ぎ方だけを雛形の歯 (自動の検査) の中に留める案です。 本体の型を触らない点で勝ります。 けれども、 今の雛形には見分けられない参照が無いので、 直す前でも直した後でも検査は緑のままで、 元の形へ戻す書き換えも捕まえません。 規則が歯の中にしか無く、 外から測れません。 退けました。</span>
-<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>本体の型を触らない</li>
-</ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>今の雛形には分類できない参照が無いので、 直す前の木でも直した後の木でも緑のまま、 最も強い kind だけを取る形へ戻す変異も捕まらない (DR3)</li>
-<li>規則が歯の中にしか無く、 行の分類の値として外から測れない</li>
-</ul></div></div>
-</div>
-<div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT8</span><span class="opt-name">前置き語を持つ参照だけを違反にする</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">印は OPT1 と同じく替え、 前置き語 (憲法・rules 行・ADR) を持つのに分類できない参照だけを違反にする。 決め手は分析 (逃げ道が残る)。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT8">印は選んだ案と同じく替え、 「憲法」「rules 行」「ADR」の前置き語を持つのに見分けられない参照だけを違反にする案です。 今の書き方への影響が小さい点で勝ります。 けれども、 器の中に閉じた前置き語の表を外へ出す口が要ります。 前置き語の無い字を印の後ろに置けば、 散文の逃げ道が残ります。 退けました。</span>
-<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>今の雛形の外の書き方への影響が小さい</li>
-</ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>本体の中に閉じた前置き語の表を外へ出す口が要る (DR2)</li>
-<li>前置き語の無い字を印の後ろに置けば散文の逃げ道が残る (DR3)</li>
-</ul></div></div>
-</div>
-<div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT9</span><span class="opt-name">何もしない</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">印の字も行の分類も今のままにする。 決め手は実測 (読み違えが 1 件ある)。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT9">印の字も行の見分け方も今のままにする案です。 字も検査も変わらない点で勝ります。 けれども、 別の repo の席の読み違えが実測で 1 件あり、 印の後ろに散文が隠れる穴も残ります。 退けました。</span>
-<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>字も歯も変わらない</li>
-</ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>消費側の席の読み違えが実測で 1 件ある (DR1)</li>
-<li>印の後ろに散文が隠れる穴が残る (DR3)</li>
+<li>digest が salt ごとに違うので、 tracked な rules 行の digest の列が host 固有の値になり、 salt の違う host では効かない (DR3)</li>
+<li>host の面の salt と rules 行の digest の 2 か所を揃え、 digest を計算する実装も要る (DR4)</li>
+<li>salt が漏れれば、 短い字句の集合は再び当て直せる (DR1)</li>
 </ul></div></div>
 </div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの方式を選ぶか</span><h2>選んだ方式と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、 それが要件書のどの要件を支えるかを示します。 雛形の各行の印を「→ 器の SSOT:」に替え、 印の字は器の中の定数と検査道具の写しで同じにします。 行の分類は印の後ろの参照を 1 本残らず見分け、 1 本でも見分けられない行を違反に数えます。 参照の形の一覧・行の数・hook の出し方は変えません。 支えるのは FR42 (指示文に手書きの規範文を含めない) と NFR4 (不正な入力を黙って落とさない) への主張です。</p></section>
+<section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの方式を選ぶか</span><h2>選んだ方式と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、 それが要件書のどの要件を支えるかを示します。 除外の語は host の面の公開の除外の表に語のまま置き、 各行に裁定 id を持たせ、 番号の欄が無いか空の行を持つ面は読むときに断ります。 表の語は git で追跡する file に書かず、 行の裁定は文書へ写す裁定として数えません。 規則の行は識別子の形の一覧だけを持ちます。 見張りの区分・判定の順・照合の単位は変えません。 支えるのは FR80 (公開の字面の走査) の除外の句と、 FR57 (host の面) の項目への主張です。</p></section>
 <div class="chapbody">
 <div data-component="adr-decision-panel" id="decision">
 <p class="dec-kick">採用 — OPT1</p>
-<p class="dec-state">席の指示文の雛形の各行 SHALL 行末の出所の印<span class="term" data-component="plain-language-term-inline" data-term="出所の印">行末の矢印の目印</span>を → 器の SSOT: とし、 印より前の字・印の後ろの参照の列・行の数と順は変えない。 印の字 SHALL 器の中の 1 つの定数と xtask の写しで同じ字とする。 前の版の印 → SSOT: だけを持つ行 SHALL pointer を持たない行 (規範文) と読む。 行の分類 SHALL 印の後ろの参照を 1 本残らず PointerKind に分類し、 1 本でも分類できない参照を持つ行を分類できない行 (最初の 1 本の字を持つ) として雛形の違反に数え、 参照を 1 本も持たない行を pointer を持たない行、 全部分類できる行を最も強い kind の pointer 行とする。 ADR-0022 §2.4 の規範文の定義「pointer を持たない行」SHALL「印の後ろの参照が全部 pointer の形である行だけが pointer 行」と読む。 雛形の歯 SHALL 分類できない参照を黙って飛ばさない。 PointerKind の閉じた列・形・宣言順・前置き語の表・Anchor の解決・穴の列・生成文の行数・hook の出す順と記録の what・rules 行 SHALL NOT 変えない。 xtask の seat-brief の判定の形 (印の後ろに pointer の字が 1 つ在る行を通す) は変えない。 指示文 SHALL NOT 器の repo の置き場 (絶対 path) と器の名の字を持たない。 要件書は変えない (FR42 の範囲)。</p>
-<span class="dec-plain" data-prose-slot="plain" data-slot-id="decision-plain">席の指示文の雛形の各行は、 末尾の出所の印を「→ 器の SSOT:」にします。 印より前の字、 印の後ろの参照の並び、 行の数と順は変えません。 印の字は器の中の 1 つの定数と検査道具の写しで同じにします。 前の版の印「→ SSOT:」だけの行は、 出所を持たない行 (規範文) と読みます。 行の分類は、 印の後ろの参照を 1 本残らず形の一覧で見分け、 1 本でも見分けられない参照を持つ行を雛形の違反に数えます。 参照が 1 本も無い行は出所を持たない行、 全部見分けられる行は最も強い形の出所の行です。 雛形の自動の検査も、 見分けられない参照を黙って飛ばしません。 参照の形の一覧とその順・穴の一覧・行の数・hook の出し方・rules 行は変えず、 検査道具の側の判定の形も変えません。 指示文には器の置き場の path も器の名の字も書きません。 要件書は変えません。</span>
-<span class="dec-why" data-prose-slot="rationale" data-slot-id="decision-rationale">別の repo の席は、 自分の repo にも憲法や決定記録を持つので、 字の近い参照を自分の文書と読みえます。 そのため、 どの repo の文書かを字で分ける必要があります。 印そのものに持ち主を名乗らせれば、 1 行だけ読んでも、 参照が何本並んでも、 全部に掛かります。 参照の形を見分ける仕組みは変わらず、 直すのは印の字の定数とその写しだけです。 前の版の印は別の repo の文書にも残りうるので、 字を替えることで印の段階で分かれます。 あわせて、 今の行の分類は見分けられない参照を捨てるので、 印の後ろに散文を隠せました。 穴を歯の中だけで塞ぐと今の雛形では何も測れないので、 規則は行の分類そのものに置きます。 前置き語で分けずに全部を違反にするのは、 前置き語の無い字も散文の逃げ道になるからです。 器の置き場や名を指示文に書く案は、 host に依らない形と公開面の決まりに当たるので採りません。</span>
+<p class="dec-state">器 SHALL 無害と裁定した字句の除外を、 publish の種類の rules 行でなく host の面の公開の除外の表に置く。 表の各行 SHALL 字句を字句のまま (digest にせず) 持ち、 裁定 id を持つ。 host の面の読み手 (FR57・ADR-0026 の 1 本) SHALL 裁定 id の欄が無いか空の行を 1 行でも持つ面を、 行番号つきで typed に読みで断る (既存の断りと同じ極性で、 面が無い host は 0 宣言のまま続く)。 表の字句 SHALL NOT tracked な file に書かない。 表の行の裁定 SHALL 答えが操作で済む裁定 (effect が operation) とし、 未反映の裁定 (FR84) に数えない。 publish の種類の rules 行の値 SHALL 識別子の形の記号の閉じた列だけとし、 除外の要素を持たない (在れば読みで断る)。 走査 SHALL repo の名の成分の当たりのうち、 公開の除外の表に在る字句の中の当たりだけを数えず、 器 SHALL NOT 除外のために digest を計算しない。 表の行は持ち主の裁定の答えを host の面へ書く操作で足し、 置き場 (state dir) ごとの面が自分の表を持つ。 host-guard の 6 つの種類・判定の順・識別子の閉じた 4 形と照合の単位・GitHub への問いの範囲と A1 の解釈・読む上限と締め切り・着地の前の呼び出し・配線の hook 行 SHALL NOT 変えない。 host の面が rules 行を持てない規則 (ADR-0026) は変えない (表は rules 行でない)。 要件は SRS v0.30 の FR80 の除外の句と FR57 の host の面の項目が持つ。</p>
+<span class="dec-plain" data-prose-slot="plain" data-slot-id="decision-plain">器は、 持ち主が無害と裁定した語の除外を、 規則の行でなく host の面の「公開の除外の表」に置きます。 表の各行は語を語のまま (指紋にせず) 持ち、 裁定 id を持ちます。 host の面の読み手は、 裁定 id の欄が無いか空の行を 1 行でも持つ面を、 行の番号をつけて読むときに断ります (面が無い machine は宣言 0 のまま続きます)。 表の語は git で追跡する file に書きません。 表の行の裁定は答えが操作で済む裁定とし、 文書へ写していない裁定 (未反映の裁定) には数えません。 規則の行は識別子の形の一覧だけを持ち、 除外の要素を持ちません (在れば読むときに断ります)。 見張りは、 隣の repo の名の当たりのうち、 表に在る語の中の当たりだけを数えず、 そのために指紋を計算しません。 表の行は、 持ち主の裁定の答えを host の面へ書く操作で足し、 置き場ごとの面が自分の表を持ちます。 見張りの区分・判定の順・識別子の 4 つの形と照合の単位・GitHub への問い合わせの範囲・読む上限と締め切り・着地の前の呼び出し・見張りの呼び出しの設定は変えません。 host の面に規則の行を置けない決まりも変えません (表は規則の行ではありません)。</span>
+<span class="dec-why" data-prose-slot="rationale" data-slot-id="decision-rationale">持ち主の裁定は、 除外の一覧を host の面へ語のまま移すこと (2026-09-29T05:46Z) と、 公開の情報の扱いは推奨で進めること (2026-09-29T04:37Z) でした。 規則の行は公開の repo に載るので、 指紋にしても、 候補の語を指紋にして突き合わせれば一覧の語が分かり、 隣の repo の名の一部が読めます。 語のまま規則の行に置けばそのまま公開になり、 machine だけの秘密の値を混ぜると規則の行が machine ごとの値になります。 除外を持たなければ、 一般的な単語と同じ部分を持つ名の隣が在る machine で、 無害な公開が毎回止まります。 そこで除外を公開の面から外し、 git で追跡しない host の面に置きます。 どの隣の repo が在るかは machine ごとの事実なので、 その名に当たる語の除外も machine ごとの値で、 machine ごとの値を host の面に置く決まり (ADR-0026) に合います。 host の面が規則の行を持てない決まりは保ちます (表は規則の行でなく、 識別子の形の一覧と判定の順は規則の行に残ります)。 規則の行の変更に裁定の番号を求める憲法 C5 の門 (CI) は追跡しない file に届かないので、 表の各行に裁定 id を持たせ、 欄の欠けた行を持つ面を読むときに断って、 値が裁定の印を持つ向きを保ちます。 行の裁定の答えは host の面へ行を書く操作で済み、 語は追跡する文書に書かないので、 文書へ写すものがありません。 そのため行の裁定は答えが操作で済む裁定とし、 未反映の裁定に数えません。</span>
 <div class="justify-box"><p class="jh">この判断が正当化する要件 (cross-doc 照会 → SRS-SCRIBE2-MVP)</p>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR42" data-justifies-req="FR42" data-justifies-role="claim">FR42</a><span class="justify-role">claim</span><span class="justify-note">FR42 (席の指示文は雛形と行から生成し、 雛形の外に手書きの規範文を含まない) の規範文の読みを、 印の後ろの参照が全部 pointer の形の行だけを pointer 行とする形で強め、 印に器の文書だと名乗らせると主張する。</span></div>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#NFR4" data-justifies-req="NFR4" data-justifies-role="claim">NFR4</a><span class="justify-role">claim</span><span class="justify-note">NFR4 (不正な入力を黙って落とさない) の向きで、 行の分類が分類できない参照を捨てず、 雛形の違反として行番号つきで名指すと主張する。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR80" data-justifies-req="FR80" data-justifies-role="claim">FR80</a><span class="justify-role">claim</span><span class="justify-note">FR80 (公開の字面の走査) の除外の句 — 無害と裁定した字句は公開の除外の表 (host の面) が字句のまま持ち、 tracked な file に書かず、 行は裁定 id を持ち、 裁定 id の欄が無いか空の行を持つ面は読みで断り、 行の裁定は未反映の裁定に数えない — を主張する。 識別子の 4 形<span class="term" data-component="plain-language-term-inline" data-term="識別子の 4 形">隣を指す 4 つの形</span>の一覧は publish の種類の rules 行に残る。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR57" data-justifies-req="FR57" data-justifies-role="claim">FR57</a><span class="justify-role">claim</span><span class="justify-note">FR57 (host の面) の項目に公開の除外の表を足し、 表を host の面の読み手 1 本と同じ断り方で検査すると主張する。 host の面が rules 行を持てない規則は変えない (表は rules 行でない)。</span></div>
 <p class="justify-tgt">照会先: SRS-SCRIBE2-MVP — SRS: 設計 → 契約 → 実装 → 検証 → land を、 人の手を借りずに 1 本通す器（MVP）</p>
 </div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-warn"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> 結果 / 良い面とトレードオフ</span><h2>この判断で何が良くなり、 何を引き受けるか</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">この判断で良くなること 3 つと、 代わりに引き受けること 3 つです。 良くなるのは、 どの席でも 1 行だけ読んで器の文書だと分かること、 印の後ろに散文が隠れないこと、 参照の形を見分ける仕組みが変わらないことです。 引き受けるのは、 全ての席の指示文の字が変わり binary を入れ替えた後から効くこと、 印が器の文書の場所までは渡さないこと、 検査道具の側の判定は全参照を測らないまま残ることです。</p></section>
+<section data-component="chapter-deck-band" class="tint-warn"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> 結果 / 良い面とトレードオフ</span><h2>この判断で何が良くなり、 何を引き受けるか</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">この判断で良くなること 3 つと、 代わりに引き受けること 3 つです。 良くなるのは、 公開の repo から除外の語も指紋も消えること、 裁定の番号の無い除外が黙って効かないこと、 器に指紋を計算する実装を足さずに済むことです。 引き受けるのは、 除外の変更が PR の差分と CI の門に現れず台帳の裁定だけが記録を持つこと、 置き場ごとの面に同じ行が要ること、 読むときに確かめるのは番号の欄の有無と空だけで、 番号が台帳で解けるかは測らないことです。</p></section>
 <div class="chapbody">
 <div data-component="scope-summary-panel"><div class="scol in"><h3>✓ 良い結果</h3><ul>
-<li data-component="adr-consequence-pos"><span class="b">●</span>消費側の席を含む全席で、 どの行を 1 行だけ読んでも印の後ろが器の文書だと字で分かり、 消費側の repo が自分の文書に使う印と字で分かれる</li>
-<li data-component="adr-consequence-pos"><span class="b">●</span>印の後ろに分類できない字を置いた行は雛形の違反として行番号つきで名指され、 印の後ろに散文が隠れない</li>
-<li data-component="adr-consequence-pos"><span class="b">●</span>分類の形 (PointerKind・前置き語の表・宣言順) は 1 字も変わらず、 解き手の変更は印の定数とその写しだけで済む</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>PUBLIC な repo の tracked な file から除外の字句も digest も消え、 公開の字句を hash しても隣の repo の名の成分は読めない</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>除外の行はどれも裁定 id を持ち、 印の無い行を持つ面は読みで断られるので、 裁定の無い除外が黙って効かない</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>照合は字句の比較になり、 器に digest (sha256) を計算する実装を足さずに済む</li>
 </ul></div><div class="scol out"><h3>⚖ トレードオフ・代償</h3><ul>
-<li data-component="adr-consequence-neg"><span class="b">●</span>全席の指示文の字が変わり (1 行 7 byte・11 行で 77 byte)、 PATH の binary を入れ替えて起こし直した席から効く。 入れ替えるまで既存の席は前の版の印のまま</li>
-<li data-component="adr-consequence-neg"><span class="b">●</span>器の語が席に通じるかは指示文の 1 行目と名乗りの行に頼り、 印は器の文書の場所を渡さない (消費側から器の文書を開く道は別の論点に残る)</li>
-<li data-component="adr-consequence-neg"><span class="b">●</span>xtask の seat-brief は印の後ろに pointer の字が 1 つ在る行を通したままで、 全参照の分類は器の中の歯だけが測る</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>表が tracked でないので、 除外の変更は PR の差分と CI の門に現れず、 変更の記録は台帳の裁定 (裁定 id と裁定 event) だけが持つ</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>host の面は置き場 (state dir) ごとの 1 file なので、 置き場が複数の host では各面に同じ行を置く。 行を欠く面は除外が少ない側 (断る側) に倒れ、 公開の側には倒れない</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>読みが確かめるのは裁定 id の欄の有無と空だけで、 id が台帳の裁定に解けるかは測らない (FR83 が数えるのは追跡された file の字面だけ)</li>
 </ul></div></div>
 </div>
-<section data-component="chapter-deck-band" class="tint-info"><span class="num">06</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> 改訂関係と原則 / この判断の位置づけ</span><h2>版の系譜と、 行き着く原則 (照会終端)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-06">この記録が版の系譜のどこに在るかと、 判断が最後に行き着く原則です。 この記録は 3 本の決定記録を一部だけ置き換えます。 印の字を決めた ADR-0018 §2.2、 規範文を「pointer を持たない行」と定めた ADR-0022 §2.4、 用語 pointer 行を字で定めた ADR-0046 です。 参照の形の一覧とその順、 雛形の経路と検査はそのまま保ちます。 行き着く原則は「指す字は、 それだけを切り出しても持ち主と形が読めなければならない」です。</p></section>
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">06</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> 改訂関係と原則 / この判断の位置づけ</span><h2>版の系譜と、 行き着く原則 (照会終端)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-06">この記録が版の系譜のどこに在るかと、 判断が最後に行き着く原則です。 この記録は ADR-0078 の一部を置き換えます。 置き換えるのは、 除外の一覧の置き場 (規則の行から host の面の表へ) と形 (指紋から語のままへ) だけです。 見張りの区分・判定の順・識別子の 4 つの形・GitHub への問い合わせの範囲はそのまま保ちます。 host の面を machine ごとの値の置き場とした ADR-0026 は置き換えず、 面が受ける表を 1 つ足すだけです。 行き着く原則は「隠す字は、 公開の面に字のままでも、 当て直せる指紋でも置かない」です。</p></section>
 <div class="chapbody">
 <div data-component="adr-supersession">
 <p class="ss-row"><span class="ss-k">改訂状態</span>current</p>
-<p class="ss-row"><span class="ss-k">置き換える ADR</span>ADR-0018, ADR-0022, ADR-0046</p>
+<p class="ss-row"><span class="ss-k">置き換える ADR</span>ADR-0078</p>
 <p class="ss-row"><span class="ss-k">置き換えられた</span>なし (現行)</p>
-<p class="ss-row">部分 supersede。 ADR-0018 §2.2 から置き換えるのは出所 pointer の印の字 (→ SSOT:) だけである。 作業記憶の命令行は ADR-0045 §2 (2) で作業記憶ごと廃止され、 印は ADR-0022 §2.4 が同じ検査として受けた席の指示文の雛形にだけ残るので、 置き換わるのはその雛形の印の字である。 ADR-0022 §2.4 から置き換えるのは規範文の定義「pointer を持たない行」の読みで、 印の後ろの参照が 1 本でも分類できない行も pointer 行でない (雛形の違反) と読む。 ADR-0046 の用語 pointer 行の定義の字 (行末の → SSOT: の後ろに出所を持つ行) は、 行末の → 器の SSOT: の後ろの参照が全部 pointer の形である行と読む。 動かさないもの: ADR-0018 §2.2 の PointerKind の閉じた列・形・宣言順を優先順位とすること・形の列挙の正本が機械側であること、 ADR-0022 §2.4 の雛形の経路・穴・xtask の検査の 3 項、 ADR-0046 の注入する憲法の行の範囲、 ADR-0045 §2 (3) の指示文の行数。</p>
+<p class="ss-row">部分 supersede。 ADR-0078 から置き換えるのは除外の一覧の置き場と形だけである。 (1) 決定の「rules 行 host_guard.publish (値は識別子の形の記号の閉じた列と、 無害と裁定した字句の除外の一覧〔字句の sha256 の digest の列〕)」を、 rules 行の値は識別子の形の記号の閉じた列だけとし、 除外は host の面の公開の除外の表が字句のまま持ち、 行ごとに裁定 id を持つ形に改める。 (2) 走査の段の「除外の一覧に digest が在る字句の中の当たりだけを数えない」を「公開の除外の表に在る字句の中の当たりだけを数えない」と読む。 (3) 用語 識別子の 4 形 の「除外の一覧 (字句の sha256 の digest の列) も同じ行が持つ」を、 除外は host の面の表が持つと読む。 動かさないもの: ADR-0078 の host-guard の 6 つの種類・判定の順・識別子の閉じた 4 形と照合の単位・可視性を GitHub に問うことと問いの範囲を A1 の許せる範囲とする解釈・読む上限と締め切り・着地の前の呼び出し・配線の hook 行。 ADR-0026 は supersede しない — host の面が host 固有の宣言値の唯一の置き場で、 rules 行を置けず、 1 本の読み手が同じ断り方で検査する形はそのままで、 host の面が受ける表を 1 つ足すだけである。</p>
 </div>
 <div data-component="adr-principle">
-<p class="prin-id">照会終端 — PRIN-POINTERS-NAME-THEIR-OWNER</p>
-<p class="prin-text">指す字は、 それだけを切り出しても持ち主と形が読めなければならない。</p>
-<p class="prin-note">本 ADR が各参照への前置き・冒頭の 1 行・何もしないを退け、 印そのものに持ち主を名乗らせ、 分類できない参照を 1 本でも持つ行を落としたのはこの原則に行き着く (これ以上は遡らない照会終端)。</p>
+<p class="prin-id">照会終端 — PRIN-HIDDEN-TOKENS-STAY-OFF-THE-PUBLIC-FACE</p>
+<p class="prin-text">隠す字は、 公開の面に字のままでも、 当て直せる指紋でも置かない。</p>
+<p class="prin-note">本 ADR が digest の列と字句の列を rules 行に置く案を退け、 除外を tracked でない host の面に字句のまま置いたのはこの原則に行き着く (これ以上は遡らない照会終端)。</p>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-brand"><span class="num">07</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg> 用語集 / この文書で使う専門語</span><h2>本文に出てくる専門語のやさしい説明</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-07">本文に出てくる専門語 6 個を、 やさしい言葉で説明します。</p></section>
+<section data-component="chapter-deck-band" class="tint-brand"><span class="num">07</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg> 用語集 / この文書で使う専門語</span><h2>本文に出てくる専門語のやさしい説明</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-07">本文に出てくる専門語 7 個を、 やさしい言葉で説明します。</p></section>
 <div class="chapbody">
 <div data-component="glossary-term-table">
-<div class="grow"><div class="gword">席の指示文<span class="en">seat brief</span></div><div class="gdef">器が session の開始のたびに、 役割ごとの雛形と権能の rules 行から生成して席へ渡す 11 行の文 (FR42・ADR-0022 §2.4)。 行は穴か、 行末の印の後ろに出所を持つ行に限る。</div></div>
-<div class="grow"><div class="gword">出所の印<span class="en">source mark</span></div><div class="gdef">雛形の各行の末尾に置き、 その後ろが出所の参照だと示す字。 本 ADR で前の版の字から → 器の SSOT: に替わる。</div></div>
-<div class="grow"><div class="gword">出所 pointer<span class="en">source pointer</span></div><div class="gdef">印の後ろに置く、 器の repo の文書 (憲法の条・ADR・設計 doc・rules 行) を指す参照。 器が形を閉じた一覧 (PointerKind) で分類し、 実在まで確かめる。</div></div>
-<div class="grow"><div class="gword">分類できない参照<span class="en">unclassified reference</span></div><div class="gdef">印の後ろに在るが、 PointerKind のどの形にも当たらない字 (例: 憲法 N-7・器の憲法 N3)。 本 ADR で、 1 本でも持つ行は雛形の違反になる。</div></div>
-<div class="grow"><div class="gword">PointerKind<span class="en">pointer kind</span></div><div class="gdef">出所 pointer の形の閉じた一覧 (憲法の条・ADR・設計 doc・rules 行 など)。 並びの順が強さの順で、 列挙の正本は器の中の型と外形の snapshot (ADR-0018 §2.2)。</div></div>
-<div class="grow"><div class="gword">消費側<span class="en">consumer repo</span></div><div class="gdef">器の repo 以外で、 器の binary を入れて自分の宣言と契約で便を回す repo。 自分の憲法・ADR・設計 doc を持つので、 器の文書と同じ名や近い id が在りうる。</div></div>
+<div class="grow"><div class="gword">公開の除外の表<span class="en">publish exclusion table</span></div><div class="gdef">host の面が持つ、 隣の private repo の名の当たりを数えない無害な字句の表 (FR80・本 ADR)。 字句のまま持ち、 行は裁定 id を持ち、 tracked な file に書かない。 口座選定の除外 (FR36) とは別。</div></div>
+<div class="grow"><div class="gword">host の面<span class="en">host manifest</span></div><div class="gdef">manifest の host の面。 state dir の 1 file が host 固有の宣言値 (口座・plugin の場所・起動引数・群の表・公開の除外の表 など) を持ち、 tracked の manifest と同じ読み手で読まれる。 rules 行は置けない (FR57・ADR-0026)。</div></div>
+<div class="grow"><div class="gword">隣の private repo<span class="en">neighbor private repo</span></div><div class="gdef">host の面の群の表の行が持つ anchor のうち、 実体が在り、 公開先の repo と別の repo で、 public と実測できないもの (可視性を読めない repo を含む・群の表の行を持たない host では 0・FR80)。</div></div>
+<div class="grow"><div class="gword">識別子の 4 形<span class="en">identifier forms</span></div><div class="gdef">隣の private repo を指す閉じた 4 つ — repo の名 (区切った成分の並びで照合)・object id・tracked path・台帳 id (FR80・ADR-0078)。 一覧は publish の種類の rules 行が持ち、 repo の名の当たりのうち公開の除外の表に在る字句の中の当たりだけを数えない。</div></div>
+<div class="grow"><div class="gword">裁定 id<span class="en">ruling id</span></div><div class="gdef">user の裁定を一意に指す id (FR82)。 台帳の問いの notes の裁定の行が持つ。 本 ADR では公開の除外の表の各行が持ち、 欄が無いか空の行を持つ面は読みで断られる。</div></div>
+<div class="grow"><div class="gword">未反映の裁定<span class="en">unreflected ruling</span></div><div class="gdef">effect が document の閉じた台帳の問いの裁定 id のうち、 main の追跡された file が 1 つも引かないもの (FR84)。 effect が operation の裁定は数えないので、 公開の除外の表の行の裁定は数えない。</div></div>
+<div class="grow"><div class="gword">digest<span class="en">digest</span></div><div class="gdef">字句を sha256 に掛けて得る 16 進 64 字の値。 字句そのものは読めないが、 候補の字句を同じく hash して突き合わせれば当て直せる。 ADR-0078 は除外の一覧をこの形で rules 行に置いた。</div></div>
 </div>
 </div>
 </div>
 <footer class="foot" data-component="fidelity-sync-meta"><div class="ft-grid">
 <div class="ft-plain">このページは、大もとの機械データ (正本) から自動で組み立てられています。構造は機械が自動で検査し、内容が元データに忠実かは独立のレビューで確かめます。</div>
-<div data-audience="machine">機械SSoT: <b>ADR-0090.adr.yaml</b> &middot; 生成: <b>2026-09-29 05:44</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
+<div data-audience="machine">機械SSoT: <b>ADR-0093.adr.yaml</b> &middot; 生成: <b>2026-09-29 06:30</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
 <div class="tags" data-audience="machine"><span>folio design system</span><span>ADR-pack</span><span>folio engine B1 (instance#2)</span><span>cross-doc 照会</span></div>
 </div></footer>
 <!-- folio:chrome-bottom -->
 <nav class="prevnext" aria-label="前後の文書">
-  <a class="prevnext__prev" href="ADR-0089-open-memos-sit-in-four-positions-and-close-by-three-reasons.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">開いた memo は宣言順の 4 つの局面のどれかにいて、 bead は種類ごとの閉じた理由の形でだけ閉じる — 昇格は memo を契約へ書き直す形と memo を残して契約を分け昇格の行を足す形の 2 つ、 全部の昇格が全部着地した memo だけを器が「昇格済み」で閉じ、 memo の見送りだけは user の裁定を要る (ADR-0051 と ADR-0085 の memo の昇格・close・数え・知らせ直しの止めの決定を部分 supersede)</span></a>
-  <a class="prevnext__next" href="ADR-0091-the-tier9-row-is-a-park-lot-that-holds-no-account.html"><span class="prevnext__dir">次 &rarr;</span><span class="prevnext__title">群の表の名 Tier9 の行は群でなく park の区画で、 口座を占めない — 区画は群の今の口座・種・予約・群の移動の判定・移動を頼む記録を持たず、 どの口座選定からも口座を除かず、 席は行が並べた口座からの session 用の選定の口座に居て、 park の移り先の判定が口座を返した周だけ移る (ADR-0069 の群の名の句と ADR-0049 の便用の row の除外の範囲を部分 supersede)</span></a>
+  <a class="prevnext__prev" href="ADR-0092-heartbeat-resolves-explicit-then-table-key-then-kind-default.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">heartbeat の実効の値は明示の記録 → 群の表の行の任意 key → 置き場の種類の既定の順で決まり、 決まり方を 3 語で名乗る — 口は seat heartbeat on|off|default|status で、 on と off は明示の記録を 1 つ置いて他方を消し、 default は両方を消し、 park の区画の席は既定で合図を受けない (ADR-0070 の停止の口の形を部分 supersede)</span></a>
+  <a class="prevnext__next" href="ADR-0094-the-land-terminal-closes-landed-runs-by-three-routes.html"><span class="prevnext__dir">次 &rarr;</span><span class="prevnext__title">land の終端が着地の形の close を書く経路は 3 つ — push の後の CI の照合と close、 vessel 宣言が任意 key remote を持たない repo の CI の照合なしの close、 PR で着地した便の merge の後に pipe retire が merge の祖先と先端の CI を照合してからの close (ADR-0089 の land の終端の範囲を部分 supersede)</span></a>
 </nav>
 <script>
 (function () {

@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="generator" content="folio ADR-pack assembler (folio-bwc / instance#2) — deterministic structure, prose slots unfilled">
-<title>予約は逼迫した群だけが持つ — 逼迫していない先の群は候補を測らず予約も導かず、 逼迫した後の群が鍵の先頭を取る。 移り先の無い断りは群用 dir の印と doctor の群の行で host の全席から読める (ADR-0069 の予約の読みを部分 supersede)</title>
+<title>heartbeat の実効の値は明示の記録 → 群の表の行の任意 key → 置き場の種類の既定の順で決まり、 決まり方を 3 語で名乗る — 口は seat heartbeat on|off|default|status で、 on と off は明示の記録を 1 つ置いて他方を消し、 default は両方を消し、 park の区画の席は既定で合図を受けない (ADR-0070 の停止の口の形を部分 supersede)</title>
 <style>
 /* ===========================================================================
    folio human-layer design system — core.css (S3 / folio-8oc プロトタイプ)
@@ -455,17 +455,14 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
     "schema": "https://schema.org/",
     "folio": "https://folio.dev/spec/v1/"
   },
-  "@id": "./ADR-0074-reservations-belong-to-pressed-groups-only.html",
+  "@id": "./ADR-0092-heartbeat-resolves-explicit-then-table-key-then-kind-default.html",
   "@type": "schema:TechArticle",
-  "dc:isReferencedBy": [
-    { "@id": "./ADR-0091-the-tier9-row-is-a-park-lot-that-holds-no-account.html" }
-  ],
   "dc:isPartOf": [
     {
       "@id": "./README.html"
     }
   ],
-  "dc:title": "予約は逼迫した群だけが持つ — 逼迫していない先の群は候補を測らず予約も導かず、 逼迫した後の群が鍵の先頭を取る。 移り先の無い断りは群用 dir の印と doctor の群の行で host の全席から読める (ADR-0069 の予約の読みを部分 supersede)",
+  "dc:title": "heartbeat の実効の値は明示の記録 → 群の表の行の任意 key → 置き場の種類の既定の順で決まり、 決まり方を 3 語で名乗る — 口は seat heartbeat on|off|default|status で、 on と off は明示の記録を 1 つ置いて他方を消し、 default は両方を消し、 park の区画の席は既定で合図を受けない (ADR-0070 の停止の口の形を部分 supersede)",
   "folio:version": "0.1.0",
   "folio:stakeholders": [
     "Developer",
@@ -474,7 +471,7 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
   ],
   "dc:references": [
     {
-      "@id": "../spec/constitution.html#c1"
+      "@id": "../spec/constitution.html#c2"
     },
     {
       "@id": "../spec/constitution.html#c10"
@@ -483,16 +480,25 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
       "@id": "../spec/constitution.html#c17"
     },
     {
-      "@id": "../spec/srs.html#FR38"
+      "@id": "../spec/constitution.html#n1"
+    },
+    {
+      "@id": "../spec/srs.html#FR78"
     },
     {
       "@id": "../spec/srs.html#FR27"
     },
     {
-      "@id": "./ADR-0066-the-management-tick-fires-the-group-move-judgement.html"
+      "@id": "../spec/srs.html#FR95"
     },
     {
-      "@id": "./ADR-0069-group-moves-pick-by-headroom-and-reserve-in-tier-order.html"
+      "@id": "./ADR-0058-heartbeat-returns-with-backoff-and-stops-at-24h.html"
+    },
+    {
+      "@id": "./ADR-0068-the-signal-ladder-is-a-list-and-live-runs-do-not-block-group-moves.html"
+    },
+    {
+      "@id": "./ADR-0070-heartbeat-is-the-stamp-signal-and-can-be-paused-per-seat.html"
     }
   ]
 }
@@ -504,158 +510,168 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 <nav class="breadcrumb" aria-label="パンくず"><ol>
   <li><a href="../index.html">design-intent</a></li>
   <li><a href="./README.html">decisions</a></li>
-  <li aria-current="page">ADR-0074</li>
+  <li aria-current="page">ADR-0092</li>
 </ol></nav>
 <!-- /folio:chrome-top -->
 <div class="page" data-component="requirement-type-color-tokens">
 <header data-component="doc-cover-band">
-<p class="cover-eyebrow"><span class="doc-type">設計判断記録 (ADR)</span> <span>scribe2 — 群の予約の持ち主</span></p>
-<h1>予約は逼迫した群だけが持つ — 逼迫していない先の群は候補を測らず予約も導かず、 逼迫した後の群が鍵の先頭を取る。 移り先の無い断りは群用 dir の印と doctor の群の行で host の全席から読める (ADR-0069 の予約の読みを部分 supersede)</h1>
-<p class="cover-sub">ADR-0069 は群を宣言順に見て先の群 (Tier1) が先に移り先を予約し、 後の群 (Tier2) はそれを避けると決めた。 先の群は逼迫していなくても予約を持つので、 口座 6 つのうち 3 つが上限・2 つが使用中の周に、 残る 1 つを暇な Tier1 が予約し、 上限に達した Tier2 が 3 時間「移り先なし」で止まった。 本 ADR は予約をその周に逼迫している群だけに限り、 断りを host の全席から読める印にする。</p>
-<div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">この記録で「器」は scribe2 の本体、 「席」は人と AI が話す 1 つの session、 「群」は同じ口座の候補を共に使う project の集まり、 「予約」は群が次に移る口座、 「逼迫」は口座が上限に近いことです。 前の決定 (ADR-0069) は群を宣言順に見て、 先の群 (Tier1) が先に移り先を予約し、 後の群 (Tier2) はそれを避けると決めました。 ところが先の群は逼迫していなくても予約を持つので、 口座 6 つのうち 3 つが上限・2 つが使用中の周に、 残る 1 つを暇な Tier1 が予約し、 上限に達した Tier2 が 3 時間「移り先なし」で止まりました。 断りは判定した 1 席の画面にしか出ませんでした。 この記録は、 予約をその周に逼迫している群だけに限り (両方が逼迫した周だけ宣言順)、 移り先の無い断りを群用 dir の印と doctor の群の行で host のどの席からも読めるようにすると決めます。 持ち主は 2026-09-26 にこの形を裁定しました。</p></div></div>
-<div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">accepted</span></span><span class="m"><span class="k">選択肢</span><span class="v">4件 (OPT1–OPT4)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 3 / トレードオフ 3</span></span><span class="m"><span class="k">版</span><span class="v">v0.1.0 / 2026-09-26</span></span></div>
-<div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>FR38・FR27</b></div>
+<p class="cover-eyebrow"><span class="doc-type">設計判断記録 (ADR)</span> <span>scribe2 — heartbeat の決め方</span></p>
+<h1>heartbeat の実効の値は明示の記録 → 群の表の行の任意 key → 置き場の種類の既定の順で決まり、 決まり方を 3 語で名乗る — 口は seat heartbeat on|off|default|status で、 on と off は明示の記録を 1 つ置いて他方を消し、 default は両方を消し、 park の区画の席は既定で合図を受けない (ADR-0070 の停止の口の形を部分 supersede)</h1>
+<p class="cover-sub">ADR-0070 は heartbeat (管理 tick が黙った席へ送る打刻の合図) を席ごとの停止の記録の有無で決め、 記録が無い席には全部送った。 席は残すが日々は動かさない置き場 (park の区画) の席には既定で合図を送らず、 それでも合図を受けたい席は表せるようにするため、 本 ADR は明示 on と明示 off の 2 つの記録と、 群の表の行の任意 key と、 置き場の種類の既定から heartbeat の値を決める。</p>
+<div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">この記録で「器」は scribe2 の本体、 「席」は人と AI が話す 1 つの session、 「見回り (管理 tick)」は席の外から周期で席を見る仕組み、 「合図 (heartbeat)」は見回りが黙った席へ送る「続きを進めて」の 1 行です。 これまで合図を送るかは、 席ごとの停止の記録が在るか無いかだけで決まり、 記録が無い席には全部送っていました (ADR-0070)。 持ち主は、 席は残すが日々は動かさない置き場 (park の区画) の席には既定で合図を送らず (合図で token を使わない)、 それでも合図を受けたい席は表せるようにすると裁定しました (2026-09-28)。 この記録は、 口を seat heartbeat on|off|default|status にし、 on と off は席ごとの明示の記録を 1 つ置き、 default はそれを消すこと、 合図を送るかは「明示の記録 → 群の表の行の key → 置き場の種類の既定 (群は送る・park の区画は送らない・どこにも属さない席は送る)」の順で決め、 どこで決まったかを 3 語 (explicit・group・default) で名乗ることを決めます。</p></div></div>
+<div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">accepted</span></span><span class="m"><span class="k">選択肢</span><span class="v">4件 (OPT1–OPT4)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 3 / トレードオフ 3</span></span><span class="m"><span class="k">版</span><span class="v">v0.1.0 / 2026-09-29</span></span></div>
+<div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>FR78・FR27・FR95</b></div>
 <div data-component="approval-block">
-<div class="sign"><span class="role">裁定 (user)</span><span class="who">user</span><span class="when">裁定 id user 2026-09-26T14:41Z (推奨の受諾 = 予約はその周に逼迫している群だけが持つ・両方が逼迫した周だけ宣言順・断りは見える形に。 ADR-0069 の周の「優先の低い群が移り先なしになるのは想定内」の是認 (2026-09-26T01:3xZ) を覆す。 逐語は台帳にだけ在る)</span><span class="stamp self">裁定済</span></div>
-<div class="sign"><span class="role">設計 (orchestrator)</span><span class="who">orchestrator</span><span class="when">2026-09-26 草稿 v1 (事象を現物 (予約の 1 関数・判定・断りの event・doctor の群の行) で再現し、 予約の持ち主の読みを改めた。 拘束する constitution の版 0.5.0)</span><span class="stamp self">作成</span></div>
+<div class="sign"><span class="role">裁定 (user)</span><span class="who">user</span><span class="when">裁定 id user 2026-09-28T01:55Z (park の区画の置き場の席には既定で合図を送らない・合図で token を使わない) と 2026-09-28T02:00Z (heartbeat の記録を明示 on・明示 off・既定の 3 値にし口を seat heartbeat on|off|default にすること、 群ごとの既定を群の表の行の任意 key heartbeat で持ち、 無ければ群は on・park の区画は off・どこにも属さない席は on とすることを推奨のまま決着)。 要旨だけを写す。 逐語は台帳にだけ在る (記録は memo s2-07l.730)</span><span class="stamp self">裁定済</span></div>
+<div class="sign"><span class="role">設計 (orchestrator)</span><span class="who">orchestrator</span><span class="when">2026-09-29 草稿 v1 (SRS v0.30 の FR78・FR27・FR95 と ADR-0070 の本文を読み、 口の形・実効の値の決まる順・決まり方の語・見せ方の項目を形にした。 拘束する constitution の版 0.5.0)</span><span class="stamp self">作成</span></div>
 </div>
 <div class="reader-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 想定読者: scribe2 の開発 session と user — 器の内部と Rust の専門知識は不要 (専門語はやさしい言葉を併記)</div>
 </header>
 <!-- folio:chrome-toc -->
 <!-- /folio:chrome-toc -->
-<section data-component="chapter-deck-band" class="tint-info"><span class="num">01</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v6m0 0L9 5m3 3l3-3"/><circle cx="12" cy="14" r="6"/></svg> 背景 / なぜこの判断が要るか</span><h2>いま何が問題か (確定方式を決める力学)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-01">なぜこの判断が要るのかを、 経緯 (予約は宣言順で先の群が先に取る)・事象 (暇な Tier1 の予約が上限に達した Tier2 の唯一の移り先を奪い 3 時間止まった)・機序 (予約は移る周にしか要らないのに移らない群も持っている)・これまでの決まり・この判断の範囲の 5 つから説明します。 前の決定 (ADR-0069) の周に持ち主は「後の群が移り先なしになるのは想定内」と是認しましたが、 それは両方が逼迫した周の話で、 暇な群が塞ぐ形は想定していませんでした。</p></section>
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">01</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v6m0 0L9 5m3 3l3-3"/><circle cx="12" cy="14" r="6"/></svg> 背景 / なぜこの判断が要るか</span><h2>いま何が問題か (確定方式を決める力学)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-01">なぜこの判断が要るのかを、 経緯 (合図を送るかは停止の記録の有無の 2 値)・要望と裁定 (park の区画の席は既定で送らず、 それでも受けたい席を表す)・機序 (2 値の口は既定を持てない)・憲法と既存の決定の向き・この判断の範囲の 5 つから説明します。 前の決定 (ADR-0070) は、 見回りは止めずに合図だけを席ごとに止める口を作りましたが、 止めていない席は全部「送る」でした。</p></section>
 <div class="chapbody">
 <div data-component="adr-context-list">
-<div data-component="adr-context-row"><span class="cxid">CTX1</span><div class="cxbody"><p class="cxh">経緯 — 群の予約<span class="term" data-component="plain-language-term-inline" data-term="群の予約">群が次に移る口座</span>は宣言順で、 先の群が先に取る (ADR-0069・設計 §29)</p><p class="cxd">ADR-0069 は移り先の候補を残量の鍵<span class="term" data-component="plain-language-term-inline" data-term="残量の鍵">候補を並べる物差し</span> (7 日窓と役割の model の 7 日窓の残量の小さい方が大きい順 → 7 日窓の reset → 宣言順) で並べ、 群を宣言順に見て「どの群の今の口座<span class="term" data-component="plain-language-term-inline" data-term="群の今の口座">群がいま使う口座</span>でもなく先の群の予約でもない先頭」を各群の予約とすると決めた。 予約は記録せず周ごとに lock の内側で導く。 後の群が移り先なしになるのは想定内として持ち主が是認した (2026-09-26T01:3xZ)。 現物の予約の 1 関数は、 先の群の逼迫<span class="term" data-component="plain-language-term-inline" data-term="逼迫">口座が上限に近いこと</span>を読まずに先の群の候補を測って予約を導く。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX2</span><div class="cxbody"><p class="cxh">事象 — 暇な Tier1 の予約が上限に達した Tier2 の唯一の移り先を奪い、 3 時間止まった</p><p class="cxd">2026-09-26 12:05Z から 14:07Z まで、 Tier2 の判定 (管理 tick<span class="term" data-component="plain-language-term-inline" data-term="管理 tick">席を周期で見る仕組み</span>) は今の口座の Fable 7 日窓 100% を実測しながら 3 周とも「移り先なし」で断った。 候補 6 口座のうち 3 つは閾値 (95%) 以上、 1 つは Tier1 の今の口座、 残る 1 つ (82%) は逼迫していない Tier1 (43%) の予約で、 Tier2 には回らなかった。 断りは判定した 1 席の画面と event log にしか出ず、 持ち主が気づいたのは 14:3xZ で、 記録を手で書き換えて 6 席を移した。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX3</span><div class="cxbody"><p class="cxh">機序 — 予約は「群が移る周に要る」のに、 移らない群も持っている</p><p class="cxd">予約の意味は、 同じ周に 2 群が同じ口座へ移らないことと、 両方が逼迫した周に先の群が良い方を取ることの 2 つで、 どちらも先の群が移る周にしか要らない。 現物は先の群の逼迫を読まないので、 移らない群が候補を 1 つ塞ぎ続ける。 口座の数が群の数より十分多い host では見えず、 上限に達した口座が増えた周に初めて現れる。 断りの出方も、 判定を撃つ席の置き場 (state dir) の event と pane に閉じ、 別の置き場の席 (別 project) からは見えない。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX4</span><div class="cxbody"><p class="cxh">憲法と既存の決定の向き (本 ADR の解釈)</p><p class="cxd">C17 (決定はしご) から、 先の群の逼迫は今の口座 1 つの実測で分かり、 候補を全部測る呼びは要らない。 C10 (宣言値・実測値・導出値を分ける) から、 予約は導出値のまま記録せず、 断りは判定の実測の印として別の file に置き、 導出値の語 (next=) に畳まない。 C1 (消さない) から、 印は次の判定で history へ退避する。 N3 (host 固有の値で分岐しない) から、 別の置き場の席を列挙して断りを送る形は採らず、 host で 1 つの群用 dir<span class="term" data-component="plain-language-term-inline" data-term="群用 dir">群の file の置き場</span> の印を doctor が読む。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX5</span><div class="cxbody"><p class="cxh">射程 — 動かすのは予約の持ち主・断りの印・doctor の群の行の 3 か所</p><p class="cxd">動かすのは (1) 予約の 1 関数が先の群の予約を導く条件 (先の群の今の口座が鮮度の内側の実測で逼迫している周だけ・鮮度の外は今の口座だけ 1 回測る)、 (2) 移り先の無い断りの周に群用 dir へ印 1 file を書き、 次の判定 (留まる・移る) で history へ退避すること、 (3) doctor の群の行に印の時刻を出すこと。 動かさないのは、 残量の鍵・門・判じる群の予約の導き・両方が逼迫した周の宣言順・断りの 1 行の宛先・断りの event の 1 回性・記録の形・便用の選定。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX1</span><div class="cxbody"><p class="cxh">経緯 — heartbeat は席ごとの停止の記録の有無の 2 値 (ADR-0070)</p><p class="cxd">ADR-0070 は heartbeat を、 管理 tick<span class="term" data-component="plain-language-term-inline" data-term="管理 tick">席を周期で見る仕組み</span> が黙った席へ送る打刻の合図<span class="term" data-component="plain-language-term-inline" data-term="打刻の合図">続きを促す 1 行</span>の呼び名とし、 口 seat heartbeat off|on|status を足した。 off は席の状態の dir<span class="term" data-component="plain-language-term-inline" data-term="席の状態の dir">席ごとの記録の置き場</span> に停止の記録 (1 行・時刻) を置き、 on はそれを消す。 管理 tick は合図の段の前で記録を読み、 在れば合図を送らず判定行を noop reason=heartbeat-off とし、 死んだ席の起こし直し・移動の周の退避・群の移動の判定はそのまま撃つ。 記録が在るのに読めない周も off と読む。 外の画面は記録の file を読んで on / off を出し、 止める・戻すは器の口を撃つ。 ADR-0070 は off を host の設定に席ごとの行で持つ案を、 席を休ませるたびに設定の編集と裁定が要るとして退けた。 値は記録の有無だけで決まり、 記録が無い席は全部 on である。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX2</span><div class="cxbody"><p class="cxh">要望と裁定 — park の区画<span class="term" data-component="plain-language-term-inline" data-term="park の区画">口座を占めない区画</span>の席は既定で合図を受けず、 それでも受けたい席を表す</p><p class="cxd">持ち主は、 席は残すが日々は動かさない repo の置き場 (park の区画・群の表の名 Tier9 の行・ADR-0091) の席には既定で合図を送らない (合図で token を使わない) と裁定した (2026-09-28T01:55Z)。 あわせて、 heartbeat の記録を明示 on・明示 off・既定の 3 値にし、 口を seat heartbeat on|off|default とする形と、 群ごとの既定を群の表<span class="term" data-component="plain-language-term-inline" data-term="群の表">かたまりを宣言する表</span>の行の任意 key heartbeat で持ち、 key が無ければ群は on・park の区画は off・どこにも属さない席は on とする形を、 推奨のまま裁定した (2026-09-28T02:00Z)。 要旨だけを写し、 逐語は台帳にだけ在る。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX3</span><div class="cxbody"><p class="cxh">機序 — 2 値の口は既定を持てない</p><p class="cxd">ADR-0070 の口は「停止の記録が在れば off・無ければ on」の 2 値で、 記録が無い状態が on に決まっている。 park の区画の席を既定で off にするには、 記録が無い状態の意味を置き場で変えるか、 誰かが停止の記録を置くしかない。 前者では、 既定が off の席で合図を受けたい意志を表す記録が無い (on は記録を消すだけで、 消した後は既定の off に戻る)。 後者では、 口の外に記録の書き手が増える。 外の画面が記録の file の有無を on / off と読む形も、 既定が置き場で変わると実際に合図を送るかと食い違う。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX4</span><div class="cxbody"><p class="cxh">憲法と既存の決定の向き (本 ADR の解釈)</p><p class="cxd">C2 (選定は 1 つの列の上の 1 つの関数で、 適用の順は列の宣言順だけから取る) から、 heartbeat の実効の値<span class="term" data-component="plain-language-term-inline" data-term="heartbeat の実効の値">合図を送るかの値</span>を決める順は、 決まり方<span class="term" data-component="plain-language-term-inline" data-term="決まり方">値がどこで決まったか</span>の閉じた 3 語 (explicit・group・default) の宣言順として 1 本の関数が持つ。 C10 (宣言値・実測値・導出値・実効の値を型で分ける) から、 明示の記録<span class="term" data-component="plain-language-term-inline" data-term="明示の記録">席ごとに置く札</span>と群の表の行の key は宣言した値で、 実効の値は管理 tick と口がその周に記録と host の面を読んで決める値であり、 決まり方の語でどの宣言から来たかを名乗る。 記録の file の有無そのものを実効の値と読まない。 C17.2 (足すときに外す物を名指す) から、 足すのは明示 on の記録 1 つ・群の表の行の任意 key 1 つ・口の default・決まり方の 3 語で、 外すのは ADR-0070 の「停止の記録が無ければ on」の読みである。 N1 (消えたら戻せない削除を断る) から、 明示の記録は口で置き直せば戻る可逆な形のままにする。 ADR-0070 の、 合図だけを止めて管理 tick は止めないこと・最後の周の打刻・健全を読み手が判じること・記録の書き手が器の口 1 本であること・打刻を event log に書かないことは前提で、 変えない。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX5</span><div class="cxbody"><p class="cxh">射程 — 動かすのは口の形・決まる順・見せ方の 3 か所</p><p class="cxd">動かすのは (1) 口の形 (seat heartbeat on|off|default|status・on と off は明示の記録を 1 つ置いて他方を消し・default は両方を消す)、 (2) heartbeat の実効の値の決まる順 (明示の記録 → 群の表の行の任意 key heartbeat → 置き場の種類の既定<span class="term" data-component="plain-language-term-inline" data-term="置き場の種類の既定">置き場で決まる既定</span>) と決まり方の 3 語、 (3) 見せ方 (seat tick status に決まり方を足して 7 項目・seat heartbeat status は実効の値と決まり方と最後の周の打刻<span class="term" data-component="plain-language-term-inline" data-term="最後の周の打刻">最後に周った記録</span>の 3 項目・doctor の席の行の heartbeat は実効の値) の 3 つ。 動かさないのは、 管理 tick の判定の列の順・合図を送らない周の判定行の理由 heartbeat-off・off の周も撃つ起こし直しと退避と群の移動の判定・最後の周の打刻の形と健全の読み・梯子の列と記録・rules 行・event の種類。 park の区画そのもの (名 Tier9 の行・席の口座の決め方・park の移り先の判定) は ADR-0091 が持つ。</p></div></div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-brand"><span class="num">02</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v18"/><path d="M5 7l-3 6h6z"/><path d="M19 7l-3 6h6z"/><path d="M3 21h18"/></svg> 判断を縛る力 / 評価の軸</span><h2>選択肢を測るものさし (安全・速さ)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-02">この判断を評価する 4 本のものさしです。 逼迫した群を逼迫していない群が飢えさせないこと (移らない群は候補を塞がない)。 先の群の優先は保つこと (両方が逼迫した周は宣言順で先の群が良い方を取る)。 止まった群が host のどの席からも見えること (断りが 1 席の画面に閉じない)。 呼びと状態を増やさないこと (逼迫の読みは今の口座 1 つの実測で足り、 印は 1 file で次の判定が退避する)。</p></section>
+<section data-component="chapter-deck-band" class="tint-brand"><span class="num">02</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v18"/><path d="M5 7l-3 6h6z"/><path d="M19 7l-3 6h6z"/><path d="M3 21h18"/></svg> 判断を縛る力 / 評価の軸</span><h2>選択肢を測るものさし (安全・速さ)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-02">この判断を評価する 4 本のものさしです。 置き場の種類で既定が変わること (park の区画の席は何もしなくても合図を受けない)。 既定と違う席の意志を、 置く／消すだけで戻せる記録で表せること。 記録の書き手と値の決まる順がそれぞれ 1 本であること。 値とその出所を、 外から口の出力で読めることです。</p></section>
 <div class="chapbody">
 <table data-component="adr-driver-table"><tbody>
-<tr data-component="adr-driver-row"><td class="drid">DR1</td><td>逼迫した群を、 逼迫していない群が飢えさせない — 移らない群は候補を塞がない <span class="drg">CTX2・CTX3</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR2</td><td>先の群の優先は保つ — 両方が逼迫した周は宣言順で先の群が良い方を取る (ADR-0069 の核) <span class="drg">CTX1・CTX3</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR3</td><td>止まった群は host のどの席からも見える — 断りが 1 席の画面に閉じない <span class="drg">CTX2・CTX4</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR4</td><td>呼びと状態を増やさない — 逼迫の読みは今の口座 1 つの実測で足り、 印は 1 file で次の判定が退避する (C17・C1) <span class="drg">CTX4・CTX5</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR1</td><td>置き場の種類で既定が変わる — park の区画の席は記録を置かなくても合図を受けず、 合図で token を使わない (持ち主の裁定) <span class="drg">CTX2・CTX3</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR2</td><td>既定と違う席の意志を、 置く／消すだけで戻せる記録で表す — 既定が off の席の on と既定が on の席の off を、 席を休ませるたびの設定の編集なしに (N1・ADR-0070) <span class="drg">CTX1・CTX2・CTX4</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR3</td><td>書き手と決まる順は 1 本 — 明示の記録の書き手は器の口だけで、 実効の値の決まる順は 1 本の関数が持つ (C2・ADR-0070) <span class="drg">CTX3・CTX4</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR4</td><td>値と出所を外から読める — 外の読み手は記録の file でなく口の出力から、 実効の値とどこで決まったかを読む (C10) <span class="drg">CTX3・CTX4</span></td></tr>
 </tbody></table>
 </div>
-<section data-component="chapter-deck-band" class="tint-violet"><span class="num">03</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5"/></svg> 検討した選択肢 / 3 つの確定方式</span><h2>それぞれの利点と欠点を並べる</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-03">候補を 4 つ並べます。 予約を逼迫した群だけに限り断りの印を群用 dir に置く案 (選んだ案)、 逼迫した後の群が先の群の予約を奪う案、 断りの 1 行を host の全席へ送る案、 口座を増やす運用で受ける案です。 選ばなかった 3 つは、 規則が 2 つになる・別の置き場は列挙できない・運用は規則でない、 という理由で退けました。</p></section>
+<section data-component="chapter-deck-band" class="tint-violet"><span class="num">03</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5"/></svg> 検討した選択肢 / 3 つの確定方式</span><h2>それぞれの利点と欠点を並べる</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-03">候補を 4 つ並べます。 明示 on と明示 off の 2 つの記録と、 群の表の行の key と、 置き場の種類の既定の順で決める案 (選んだ案)、 今の形のまま park の区画の席に器が停止の記録を書く案、 既定を host 全体の 1 値で持つ案、 明示 on を持たず停止の記録と種類の既定だけにする案です。 選ばなかった 3 案にも利点を並べ、 退けた決め手を各案に書きます。</p></section>
 <div class="chapbody">
 <div class="opt-grid">
 <div data-component="adr-option-card" class="chosen">
-<div class="opt-head"><span class="opt-id">OPT1</span><span class="opt-name">予約は逼迫した群だけ + 断りの印<span class="term" data-component="plain-language-term-inline" data-term="断りの印">移り先なしの控え</span>を群用 dir に置き doctor が出す</span><span class="opt-verdict chosen">採用</span></div>
-<p class="opt-sum">予約の 1 関数は先の群ごとに今の口座の実測 (鮮度の外なら今の口座だけ 1 回測る) を読み、 逼迫の周だけ候補を測って予約を導く。 逼迫でない先の群は予約なし。 移り先の無い断りの周は群用 dir に印 1 file を書き、 次の判定で history へ退避し、 doctor の群の行に時刻を出す。 決め手は持ち主の裁定 (14:41Z)。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT1">予約をその周に逼迫している群だけに限る案です。 予約の 1 関数は先の群ごとに今の口座の実測を読み (古ければ今の口座だけ 1 回測る)、 上限に近い周だけ候補を測って予約を導きます。 暇な先の群は予約を持たず候補も測りません。 両方が逼迫した周は今のまま宣言順で先の群が良い方を取ります。 あわせて、 移り先の無い断りの周は群用 dir に印を 1 つ書き、 次の判定で history へ退避し、 doctor の群の行に時刻を出します。 暇な群が候補を塞がず、 先の群の優先は保たれ、 断りは host のどの席からも読め、 増える呼びと状態は最小である点で勝ります。 代わりに、 先の群が暇な周は予約が無く逼迫に転じた周の移り先が次の周に決まり、 doctor の行が 1 欄増えます。 持ち主の裁定で選びました。</span>
+<div class="opt-head"><span class="opt-id">OPT1</span><span class="opt-name">明示 on と明示 off の 2 つの記録と default、 決まる順は明示 → 群の表の行の key → 種類の既定</span><span class="opt-verdict chosen">採用</span></div>
+<p class="opt-sum">口を seat heartbeat on|off|default|status にし、 on は明示 on の記録を、 off は明示 off の記録を席の状態の dir に 1 つ (1 行・時刻) 置いて他方を消し、 default は両方を消す。 heartbeat の実効の値は (1) 明示の記録 (explicit) → (2) 席の置き場が属する群の表の行の任意 key heartbeat (group) → (3) 置き場の種類の既定 (群は on・park の区画は off・群の表のどの行にも属さない席は on・default) の順で決まる。 明示の記録が 2 つとも在る周と在るのに読めない周は off (explicit)。 key の値が on と off の外の host の面は読みで断る。 決まり方を explicit・group・default の閉じた 3 語で出し、 外の読み手は口の出力を読む。 決め手は現物 (持ち主の裁定)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT1">席ごとの記録を「明示 on」と「明示 off」の 2 つにし、 口を on|off|default|status にする案です。 on と off はそれぞれの記録を 1 つ置いてもう一方を消し、 default は両方を消します。 合図を送るかは、 まず明示の記録、 無ければ席の置き場が属する群の表の行の key、 それも無ければ置き場の種類の既定 (群は送る・park の区画は送らない・どこにも属さない席は送る) の順で決まります。 記録が 2 つとも在る周や読めない周は送りません。 どこで決まったかを 3 語 (explicit・group・default) で出し、 外の読み手は口の出力を読みます。 park の区画の席は何もしなくても合図を受けず、 それでも受けたい席は明示 on で表せます。 代わりに、 記録の file が 2 種になり、 status の項目が増えます。 持ち主の裁定で選びました。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>移らない群が候補を塞がず、 逼迫した後の群が鍵の先頭を取る (DR1)</li>
-<li>両方が逼迫した周は今のまま宣言順で先の群が先 (DR2)</li>
-<li>断りの印は host で 1 つの群用 dir に在り、 どの席の doctor からも読める (DR3)</li>
-<li>増える呼びは先の群の今の口座 1 回、 増える状態は印 1 file で次の判定が退避する (DR4)</li>
+<li>park の区画の席は記録も key も無いまま off になり、 何もしなくても合図で token を使わない (DR1)</li>
+<li>既定が off の席でも明示 on で合図を受けられ、 既定が on の席でも明示 off で止められる。 どちらも置く／消すだけで戻せる (DR2)</li>
+<li>明示の記録の書き手は口 1 本のままで、 群の表の行の key は宣言 1 回で置き場の既定を決める (DR3)</li>
+<li>決まり方の語で、 実効の値がどの段で決まったかを外の読み手が口の出力から読める (DR4)</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>先の群が逼迫していない周は予約が無いので、 その周に先の群が逼迫に転じても移り先は次の周に決まる</li>
-<li>doctor の群の行が 1 欄増え、 既存の歯の期待が動く</li>
+<li>記録の file が 2 種になり、 2 つとも在る周と読めない周の読み (off) を決めて歯で持つ</li>
+<li>seat tick status の項目が 7 つ・seat heartbeat status の項目が 3 つに増え、 外の読み手の読む key が変わる</li>
+<li>決まる順が 3 段になり、 席の値の出所は記録・群の表・置き場の種類の 3 か所に分かれる (口の出力が 1 つにまとめる)</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT2</span><span class="opt-name">逼迫した後の群が先の群の予約を奪う</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">先の群の予約は今のまま導き、 後の群が逼迫した周だけそれを飛ばさずに取る。 決め手は分析 (規則が 2 つになる)。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT2">先の群の予約は今のまま導き、 逼迫した後の群だけがそれを奪える案です。 予約の導き方を変えない点で勝ります。 けれども、 「予約は避ける」と「奪ってよい」の 2 規則になり、 両方が逼迫した周の優先との境目が読み手に見えません。 先の群の候補を全部測る呼びも残ります。 退けました。</span>
+<div class="opt-head"><span class="opt-id">OPT2</span><span class="opt-name">ADR-0070 の形のまま、 park の区画の席には器が停止の記録を書く</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">口は off|on|status の 2 値のまま、 席の置き場が park の区画に入る周や席を起動する周に、 器が席の停止の記録を置く。 決め手は分析 (書き手が口の外に増える)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT2">口は今の 2 値のまま、 席が park の区画に入る周や起動する周に、 器が停止の記録を置く案です。 口の形も記録の種類も status の項目も変わらず、 外の読み手が今までどおり記録の有無を読める点で勝ります。 けれども、 記録の書き手が口の外に増え、 書き手を器の口 1 本にする線が崩れます。 区画から群へ移した席に記録が残って黙って合図を受けなくなり、 park の区画の席で on を撃っても次に器が記録を書く周に戻ってしまいます。 分析で退けました。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>予約の導き方は変えない</li>
+<li>口の形と記録の種類 (1 つ) と status の項目が変わらない</li>
+<li>外の読み手は今までどおり記録の有無を読める</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>「予約は避ける」と「奪ってよい」の 2 規則になり、 両方が逼迫した周の優先 (DR2) との境目が読み手に見えない</li>
-<li>先の群の候補を全部測る呼びは残る (DR4)</li>
+<li>停止の記録の書き手が口の外 (区画に入れる手・起動の手) に増え、 書き手は器の口 1 本の線が崩れる (DR3)</li>
+<li>席を区画から群へ移しても停止の記録が残り、 群の席が黙って合図を受けない (DR1)</li>
+<li>park の区画の席で on (記録を消す) を撃っても、 次に器が記録を書く周に off へ戻り、 合図を受けたい意志を残せない (DR2)</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT3</span><span class="opt-name">断りの 1 行を host の全席へ送る</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">判定を撃った tick が別の置き場の席にも断りの 1 行を注入する。 決め手は分析 (別の置き場は列挙できない)。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT3">判定を撃った tick が別の置き場の席にも断りの 1 行を注入する案です。 人が見ている席へ能動的に届く点で勝ります。 けれども、 tick は自分の置き場の登録 row しか読まず、 別の project の置き場を列挙する形は host 固有の path になります。 席の数だけ注入が増え、 作業中の席の入力欄を汚します。 退けました。</span>
+<div class="opt-head"><span class="opt-id">OPT3</span><span class="opt-name">既定を host の面に 1 値で持つ (host 全体の on / off)</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">host の面に heartbeat の既定を 1 値で置き、 停止の記録の無い席はその値に従う。 決め手は分析 (置き場の種類ごとの既定を表せない)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT3">host 全体の既定を 1 つの値で持ち、 記録の無い席はそれに従う案です。 既定の置き場が 1 つで、 1 行で全席の既定を変えられ、 記録も 1 種のままで済む点で勝ります。 けれども、 群の席は送る・park の区画の席は送らない、 のように置き場の種類ごとに違う既定を表せません。 席ごとに違う値を持たせるには host の設定で席を名指すことになり、 前の決定が退けた「席を休ませるたびに設定を書き換える」形に近づきます。 既定が off の host で合図を受けたい席も表せません。 分析で退けました。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>人が見ている席へ能動的に届く</li>
+<li>既定の置き場が 1 つで、 宣言 1 行で host の全席の既定を変えられる</li>
+<li>停止の記録は 1 種のままで済む</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>tick は自分の置き場の登録 row しか読まず、 別の置き場 (別 project の state dir) の列挙は host 固有の path になる (N3)</li>
-<li>席の数だけ注入が増え、 作業中の席の入力欄を汚す (DR4)</li>
+<li>群の席は on・park の区画の席は off のように、 置き場の種類ごとに違う既定を表せない (DR1)</li>
+<li>席ごとに既定と違う値を持たせるには host の面で席を名指すことになり、 ADR-0070 が退けた「席を休ませるたびに設定を編集する」形に近づく (DR2)</li>
+<li>既定が off の host で合図を受けたい席を表す記録が無い (DR2)</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT4</span><span class="opt-name">現状維持 — 口座を増やす運用で受ける</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">器は変えず、 口座の数を群の数より十分多く保つ。 決め手は分析 (運用は規則でない)。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT4">器は変えず、 口座の数を群の数より十分多く保つ運用の案です。 器に足すものが無い点で勝ります。 けれども、 上限に達した口座が増える周は必ず来て、 そのたびに暇な群が移り先を塞ぎます。 断りが 1 席の画面に閉じる問題も残ります。 退けました。</span>
+<div class="opt-head"><span class="opt-id">OPT4</span><span class="opt-name">明示 on を持たず、 停止の記録の有無と置き場の種類の既定だけにする</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">口は off|on|status のままで、 on は停止の記録を消す。 記録の無い席は置き場の種類の既定 (群は on・park の区画は off・どこにも属さない席は on) に従う。 決め手は分析 (既定が off の席で合図を受けたい席を表せない)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT4">明示 on の記録を持たず、 停止の記録の有無と置き場の種類の既定だけで決める案です。 記録が 1 種のままで口の操作も増えず、 park の区画の席は何もしなくても送らない点で勝ります。 けれども、 park の区画の席で合図を受けたい席を表せません。 on は記録を消すだけなので、 消した後は種類の既定の「送らない」に戻ります。 on を撃った後の結果が置き場で変わり、 口の操作と結果が食い違います。 分析で退けました。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>器に足すものが無い</li>
+<li>記録は 1 種のままで、 口の verb も増えない</li>
+<li>park の区画の席は何もしなくても off になる</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>上限に達した口座が増える周は必ず来て、 そのたびに暇な群が移り先を塞ぐ (DR1)</li>
-<li>断りが 1 席の画面に閉じる問題は残る (DR3)</li>
+<li>park の区画の席で合図を受けたい席を表せない。 on は記録を消すだけで、 消した後は種類の既定の off に戻る (DR2)</li>
+<li>on を撃った後の値が置き場で変わり (群では on・park の区画では off のまま)、 口の操作と結果が食い違う (DR4)</li>
 </ul></div></div>
 </div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの方式を選ぶか</span><h2>選んだ方式と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、 それが要件書のどの要件を支えるかを示します。 予約の 1 関数は先の群ごとに今の口座の実測 (鮮度の外なら今の口座だけ 1 回測る) を読み、 逼迫の周だけ候補を測って予約を導きます。 逼迫でない先の群は予約を持ちません。 移り先の無い断りの周は群用 dir に印 1 file を書き、 留まる判定と移る判定が history へ退避し、 doctor の群の行に時刻を出します。 支えるのは FR38 (群の逼迫の通知と移動) の根拠と FR27 (管理 tick) への主張です。</p></section>
+<section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの方式を選ぶか</span><h2>選んだ方式と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、 それが要件書のどの要件を支えるかを示します。 口を seat heartbeat on|off|default|status にし、 合図を送るかを「明示の記録 → 群の表の行の key → 置き場の種類の既定」の順で決め、 どこで決まったかを 3 語で出します。 支えるのは FR78 (heartbeat の決め方と見回りの健全) の根拠と、 FR27 (見回り) と FR95 (park の区画) への主張です。</p></section>
 <div class="chapbody">
 <div data-component="adr-decision-panel" id="decision">
 <p class="dec-kick">採用 — OPT1</p>
-<p class="dec-state">群の予約の 1 関数 SHALL 先の群ごとに、 その群の今の口座の鮮度の内側の実測 (鮮度の外なら今の口座だけ 1 回測る) が閾値以上の周だけ候補を測って予約を導き、 逼迫していない先の群と実測を持たない先の群 SHALL 予約を持たず候補を測らない。 判じる群の予約の導き・両方が逼迫した周の宣言順 (先の群が鍵の先頭)・役割の行が無い周の止まり方は変えない。 移り先の無い断りの周 SHALL 群用 dir に印 1 file (群の名・断りの時刻・理由) を書き、 同じ実測に 2 度断らない周は書き直さず、 留まる判定と記録を書く判定 SHALL 在る印を history へ退避する。 doctor の群の行 SHALL 印の時刻 (無ければ無し・形でなければ読めない) を予約の語の後ろに出す。 残量の鍵・門・断りの 1 行の宛先・断りの event の 1 回性・記録の形・種・便用の選定は変えない。 本 ADR は ADR-0069 の「先の群は逼迫に依らず予約を持つ」読みを置き換え、 要件書は変えない (FR38 / AC41 の範囲)。</p>
-<span class="dec-plain" data-prose-slot="plain" data-slot-id="decision-plain">群の予約の 1 関数は、 先の群ごとに、 その群の今の口座の新しい実測 (古ければ今の口座だけ 1 回測る) が閾値以上の周だけ候補を測って予約を導きます。 上限に近くない先の群と実測を持たない先の群は予約を持たず、 候補を測りません。 判じる群の予約の導き方・両方が逼迫した周の宣言順 (先の群が先)・役割の行が無い周の止まり方は変えません。 移り先の無い断りの周は群用 dir に印を 1 つ (群の名・断りの時刻・理由) 書き、 同じ実測に 2 度断らない周は書き直さず、 留まる判定と記録を書く判定は在る印を history へ退避します。 doctor の群の行は印の時刻 (無ければ無し・形でなければ読めない) を予約の語の後ろに出します。 残量の鍵・門・断りの 1 行の宛先・断りの event の 1 回性・記録の形・種・便用の選定は変えません。 この記録は ADR-0069 の「先の群は逼迫に依らず予約を持つ」読みを置き換え、 要件書は変えません。</span>
-<span class="dec-why" data-prose-slot="rationale" data-slot-id="decision-rationale">持ち主の裁定は、 予約をその周に逼迫している群だけに限り、 両方が逼迫した周だけ宣言順を効かせ、 断りを見える形にする、 の受諾でした。 予約の意味は「同じ周に 2 群が同じ口座へ移らない」と「両方が逼迫した周に先の群が良い方を取る」の 2 つで、 どちらも先の群が移る周にしか要りません。 移らない群が候補を塞ぐのは、 この意味から外れています。 先の群の逼迫は今の口座 1 つの実測で分かるので、 候補を全部測る呼びは要りません。 断りを群用 dir の印にするのは、 群用 dir が host で 1 つで、 どの置き場の席の doctor からも同じ file を読めるからです。 断りの 1 行を host の全席へ送る形は、 別の置き場の列挙が host 固有の path になるので採りません。 後の群が予約を奪う形は規則が 2 つになり、 口座を増やす運用は規則になりません。</span>
+<p class="dec-state">器 SHALL heartbeat を席ごとに決める口 seat heartbeat on|off|default|status を持ち、 on SHALL 明示 on の記録を、 off SHALL 明示 off の記録を、 それぞれ席の状態の dir に 1 つ (1 行・時刻・一時 file → rename) 置いて他方を消し、 default SHALL 両方を消す (可逆)。 明示 off の記録 SHALL ADR-0070 の停止の記録と同じ置き場と形とし、 既に在る停止の記録をそのまま明示 off と読む。 heartbeat の実効の値 SHALL 次の順で決まる — (1) 明示の記録が 1 つだけ在る周はその値で、 2 つとも在る周と在るのに読めない周は off (決まり方 explicit)、 (2) 明示の記録が無く、 席の置き場が属する群の表の行 (群か park の区画) が任意の key heartbeat (on か off) を持つ周はその値 (group)、 (3) それ以外は置き場の種類の既定で、 群の置き場の席は on・park の区画の置き場の席は off・群の表のどの行にも属さない席は on (default)。 決まる順 SHALL 決まり方の閉じた 3 語 (explicit・group・default) の宣言順として 1 本の関数が持つ。 口の default は明示の記録を消す操作で、 決まり方の default は (3) で決まったことを指す。 群の表の行の key heartbeat が on と off の外の値を持つ host の面 SHALL 読みで断る (fail-closed)。 実効の値が off の席には管理 tick SHALL 合図を送らず (alarm も届かない) 判定行に理由 heartbeat-off を出し、 死んだ席の起こし直し・移動の周の退避・群の移動の判定・park の移り先の判定 SHALL そのまま撃つ。 seat heartbeat status SHALL 実効の値・決まり方・最後の周の打刻の 3 項目を、 seat tick status SHALL 最後の周の時刻・経過・健全・実効の値・決まり方・梯子の段・次の合図の 7 項目を、 doctor の席の行 SHALL 実効の値と健全の 2 項目を出す。 外の読み手 SHALL heartbeat の実効の値を口の出力から読み (記録の file の有無は実効の値でない)、 on・off・default は口を撃つ。 明示の記録の書き手 SHALL 器の口 1 本とし、 管理 tick SHALL NOT 書かない。 最後の周の打刻の形・健全を読み手が判じること・打刻を event log に書かないこと (ADR-0070)・判定の列の順・梯子の列と記録・rules 行 SHALL NOT 変えない。</p>
+<span class="dec-plain" data-prose-slot="plain" data-slot-id="decision-plain">器は、 合図 (heartbeat) を席ごとに決める口 seat heartbeat on|off|default|status を持ちます。 on は明示 on の記録を、 off は明示 off の記録を席の dir に 1 つ (時刻 1 行) 置いてもう一方を消し、 default は両方を消します (戻せます)。 明示 off の記録は前の決定の停止の記録と同じ置き場と形で、 既に在る停止の記録はそのまま明示 off と読みます。 合図を送るかは次の順で決まります。 (1) 明示の記録が 1 つだけ在ればその値 (2 つとも在る周と読めない周は送らない)、 (2) 無ければ席の置き場が属する群の表の行の key heartbeat の値、 (3) それも無ければ置き場の種類の既定 (群は送る・park の区画は送らない・どこにも属さない席は送る)。 どこで決まったかは explicit・group・default の 3 語で名乗り、 この順は 1 本の関数が持ちます。 key に on と off の外の値を書いた host の面は読みで断ります。 送らない席にも、 落ちた席の起こし直し・移動のための退避・群の移動の判定・park の移り先の判定はそのまま撃ちます。 seat heartbeat status は値・決まり方・最後に周った記録の 3 項目を、 seat tick status は 7 項目を、 doctor の席の行は値と健全の 2 項目を出します。 外の読み手は記録の file でなく口の出力を読み、 on・off・default は口を叩きます。 記録の書き手は器の口 1 本で、 見回りは書きません。</span>
+<span class="dec-why" data-prose-slot="rationale" data-slot-id="decision-rationale">持ち主の裁定は、 park の区画の席には既定で合図を送らないこと (合図で token を使わない) と、 既定が off の席でも合図を受けたい席を表せることでした。 前の決定 (ADR-0070) の口は停止の記録の有無の 2 値で、 記録が無い状態が「送る」に決まっているので、 既定を置き場で変えるには記録が無い状態の意味を種類で変えるしかありません。 そうすると、 既定が off の席で合図を受けたい意志は、 記録を消すだけの on では表せません。 そこで明示 on と明示 off の 2 つの記録を持ち、 どちらも無い席だけが既定に従う形にしました。 器が park の区画の席に停止の記録を書く案を退けたのは、 記録の書き手が口の外に増え、 区画から外した席に記録が残るからです。 host 全体の 1 値を退けたのは、 群は送る・park の区画は送らない、 という種類ごとの既定を表せないからです。 前の決定は、 off を host の設定に持つ案を、 席を休ませるたびに設定の編集と裁定が要るとして退けました。 この記録でも席ごとの休止は口の明示の記録のまま残り、 群の表の行の key は置き場の種類の既定を宣言で 1 回決めるだけなので、 前の決定が避けた費用 (休止のたびの編集) は生じません。 決まる順を 3 語の宣言順として 1 本の関数に持たせるのは、 選定の順を 1 つの列の宣言順だけから取る決まり (C2) に沿うためです。 決まり方を口の出力に添え、 外の読み手に記録の file でなく口の出力を読ませるのは、 既定が置き場で変わると記録の有無と実際に送るかが食い違い、 値がどこから来たかを 1 語で知れる方が読み違えないからです。 2 つとも在る周と読めない周を送らないと読むのは、 合図は確かな証拠があるときだけ送る前の決定の読みを保つためです。 明示 off の記録を前の決定の停止の記録と同じにするのは、 既に止めている席を移し替えなしにそのまま止めておくためです。 status の項目が増え外の読み手の読む key が変わること・記録の file が 2 種になること・key の書き誤りで host の面の読みが止まることは、 代償として引き受けます。</span>
 <div class="justify-box"><p class="jh">この判断が正当化する要件 (cross-doc 照会 → SRS-SCRIBE2-MVP)</p>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR38" data-justifies-req="FR38" data-justifies-role="rationale">FR38</a><span class="justify-role">rationale</span><span class="justify-note">FR38 (群の逼迫の通知と移動) は逼迫した群が別の口座へ移ると書く。 本 ADR は移り先の予約を逼迫した群に限る根拠 (逼迫していない群が候補を塞がない) と、 移り先の無い周が host の全席から読める根拠を与える (裁定 2026-09-26T14:41Z)。</span></div>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR27" data-justifies-req="FR27" data-justifies-role="claim">FR27</a><span class="justify-role">claim</span><span class="justify-note">FR27 (管理 tick) の判定の周は同じ予約の 1 関数を呼ぶ。 本 ADR はその周の呼びが先の群の今の口座 1 回だけ増え、 判定の列の順と打刻を読まない形は変えないと主張する。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR78" data-justifies-req="FR78" data-justifies-role="rationale">FR78</a><span class="justify-role">rationale</span><span class="justify-note">FR78 (heartbeat の決め方と管理 tick の健全) は口 seat heartbeat on|off|default|status・明示の記録 2 つ・実効の値の決まる順・決まり方の 3 語・status と doctor の項目を書く。 本 ADR はその形の根拠を与える (裁定 2026-09-28T01:55Z・2026-09-28T02:00Z)。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR27" data-justifies-req="FR27" data-justifies-role="claim">FR27</a><span class="justify-role">claim</span><span class="justify-note">FR27 (管理 tick) の打刻の合図は、 heartbeat の実効の値が off の席には送らず alarm も届かないが、 死んだ席の起こし直し・移動の周の退避・群の移動の判定は止めないと主張する。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR95" data-justifies-req="FR95" data-justifies-role="claim">FR95</a><span class="justify-role">claim</span><span class="justify-note">FR95 (park の区画) の置き場の席は、 明示の記録も行の key も無ければ置き場の種類の既定で heartbeat が off になり、 park の移り先の判定は off の席でも撃つと主張する。</span></div>
 <p class="justify-tgt">照会先: SRS-SCRIBE2-MVP — SRS: 設計 → 契約 → 実装 → 検証 → land を、 人の手を借りずに 1 本通す器（MVP）</p>
 </div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-warn"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> 結果 / 良い面とトレードオフ</span><h2>この判断で何が良くなり、 何を引き受けるか</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">この判断で良くなること 3 つと、 代わりに引き受けること 3 つです。 良くなるのは、 逼迫していない群が候補を塞がず上限に達した群が移れること、 断りが host のどの席からも読めること、 増える呼びが先の群の今の口座 1 回で増える状態が印 1 file だけなことです。 引き受けるのは、 先の群が逼迫していない周は予約が無いので逼迫に転じた周の移り先が次の周に決まること、 doctor の群の行が 1 欄増えて既存の歯の期待が動くこと、 断りが能動的には 1 席にしか届かないことです。</p></section>
+<section data-component="chapter-deck-band" class="tint-warn"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> 結果 / 良い面とトレードオフ</span><h2>この判断で何が良くなり、 何を引き受けるか</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">この判断で良くなること 3 つと、 代わりに引き受けること 3 つです。 良くなるのは、 park の区画の席が何もしなくても合図を受けないこと、 既定と違う席の意志を戻せる記録で表せること、 値の出所を 1 語で読めることです。 引き受けるのは、 status の項目が増えて外の読み手の読む key が変わること、 記録の file が 2 種になること、 key の書き誤り 1 つで host の面の読みが止まることです。</p></section>
 <div class="chapbody">
 <div data-component="scope-summary-panel"><div class="scol in"><h3>✓ 良い結果</h3><ul>
-<li data-component="adr-consequence-pos"><span class="b">●</span>逼迫していない群が候補を塞がず、 上限に達した群は残る口座へ移れる。 両方が逼迫した周の優先は宣言順のまま</li>
-<li data-component="adr-consequence-pos"><span class="b">●</span>移り先の無い断りは群用 dir の印と doctor の群の行で host のどの席からも読め、 1 席の画面に閉じない</li>
-<li data-component="adr-consequence-pos"><span class="b">●</span>増える呼びは先の群の今の口座 1 回、 増える状態は印 1 file で、 次の判定が退避する</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>park の区画の席は記録も key も無いまま合図を受けず、 合図で token を使わない。 群の席と群の表のどの行にも属さない席は既定が on のままで、 既に在る停止の記録は明示 off と読まれるので、 群の表の行に key を書かない限り、 park の区画の席を除いて今の席の合図は変わらない</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>既定と違う席の意志 (既定が off の席の明示 on・既定が on の席の明示 off) を置く／消すだけで戻せる記録で表せ、 置き場の既定は群の表の行の key を宣言 1 回で変えられる。 席を休ませるたびの設定の編集は要らない</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>外の読み手が口の出力から実効の値と決まり方 (explicit・group・default) を読め、 なぜその値かを 1 語で知れる</li>
 </ul></div><div class="scol out"><h3>⚖ トレードオフ・代償</h3><ul>
-<li data-component="adr-consequence-neg"><span class="b">●</span>先の群が逼迫していない周は予約が無く、 その周に逼迫に転じた先の群の移り先は次の周に決まる (同じ周の候補は後の群が取っている)</li>
-<li data-component="adr-consequence-neg"><span class="b">●</span>doctor の群の行が 1 欄増え、 行の全文を読む既存の歯の期待が動く</li>
-<li data-component="adr-consequence-neg"><span class="b">●</span>断りは能動的には 1 席にしか届かない。 host の全席へ届く形は別の置き場の列挙を要し、 本 ADR では採らない</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>seat tick status の項目が 7 つ・seat heartbeat status の項目が 3 つに増え、 外の読み手 (別 project の画面など) の読む key が変わる。 記録の file の有無を on / off と読む形は使えなくなるので、 外の読み手へ知らせる</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>記録の file が 2 種 (明示 on・明示 off) になり、 2 つとも在る周と読めない周を off と読む規則を歯で持つ</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>群の表の行の key heartbeat が on と off の外の値を持つと host の面の読みごと断られ、 書き誤り 1 つで host の面の宣言全体が止まる (fail-closed の代償)</li>
 </ul></div></div>
 </div>
-<section data-component="chapter-deck-band" class="tint-info"><span class="num">06</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> 改訂関係と原則 / この判断の位置づけ</span><h2>版の系譜と、 行き着く原則 (照会終端)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-06">この記録が版の系譜のどこに在るかと、 判断が最後に行き着く原則です。 この記録は ADR-0069 の「先の群は逼迫に依らず予約を持つ」読みだけを置き換え、 残量の鍵・門・判じる群の予約の導き・両方が逼迫した周の宣言順・予約を記録しないこと・便の起動を排他しないこと・群の名の形は保ちます。 ADR-0066 の判定の置き場も保ちます。 行き着く原則は「席を取るのは、 その周に動く者だけ。 動かない者は列に並ばない」です。</p></section>
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">06</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> 改訂関係と原則 / この判断の位置づけ</span><h2>版の系譜と、 行き着く原則 (照会終端)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-06">この記録が版の系譜のどこに在るかと、 判断が最後に行き着く原則です。 この記録は前の決定 ADR-0070 の停止の口の形だけを置き換え、 合図だけを止めて見回りは止めないこと・最後に周った記録・健全かは読む側が判じること・記録の書き手は器の口 1 本であることは保ちます。 行き着く原則は「既定は置き場の種類が決め、 席の意志は戻せる記録で既定に勝つ。 値はどこから来たかを名乗って出す。」です。</p></section>
 <div class="chapbody">
 <div data-component="adr-supersession">
 <p class="ss-row"><span class="ss-k">改訂状態</span>current</p>
-<p class="ss-row"><span class="ss-k">置き換える ADR</span>ADR-0069</p>
+<p class="ss-row"><span class="ss-k">置き換える ADR</span>ADR-0070</p>
 <p class="ss-row"><span class="ss-k">置き換えられた</span>なし (現行)</p>
-<p class="ss-row">部分 supersede で、 置き換えるのは 1 つ — ADR-0069 の「先の群は逼迫に依らず予約を持つ」読み (逼迫した群だけが持つに改める) — で、 他は保つ。 保つのは、 ADR-0069 の残量の鍵・門・判じる群の予約の導き・両方が逼迫した周の宣言順・予約を記録しないこと・便の起動を排他しないこと・群の名の形、 ADR-0066 の判定の置き場、 の全部。</p>
+<p class="ss-row">部分 supersede。 ADR-0070 から置き換えるのは停止の口の形で、 (1) 口 seat heartbeat off|on|status を on|off|default|status に、 (2)「on は停止の記録を消す」を「on は明示 on の記録を置いて明示 off の記録を消す」に (記録を消すのは default)、 (3) 停止の記録の有無だけで on / off が決まる読みを、 明示の記録 → 群の表の行の任意 key heartbeat → 置き場の種類の既定の順の読みに、 (4) seat heartbeat status の出力 (on|off と最後の周の打刻) を実効の値・決まり方・最後の周の打刻に、 seat tick status の heartbeat の項目を実効の値と決まり方に、 (5) 外の画面が停止の記録の file を読んで on / off を出す形を、 口の出力から実効の値を読む形に、 (6) off を host の設定に持つ案の却下を、 席ごとの休止を host の面に持つ案の却下に狭める (群の表の行の key heartbeat は置き場の既定の宣言で、 席ごとの休止ではない)、 の 6 つである。 停止の記録は明示 off の記録として同じ置き場と形のまま残る。 動かさないもの: heartbeat は管理 tick が黙った席へ送る打刻の合図を指すこと、 合図だけを止めて管理 tick は止めないこと (off の周も起こし直し・退避・群の移動の判定を撃つ)、 判定行の理由 heartbeat-off、 記録が在るのに読めない周を off と読むこと、 最後の周の打刻 (1 行・rc 1 の周も) と健全を読み手が判じること、 明示の記録の書き手が器の口 1 本であること、 打刻を event log に書かないこと。</p>
 </div>
 <div data-component="adr-principle">
-<p class="prin-id">照会終端 — PRIN-ONLY-THE-NEEDY-RESERVE</p>
-<p class="prin-text">席を取るのは、 その周に動く者だけ。 動かない者は列に並ばない。</p>
-<p class="prin-note">本 ADR が「後の群が予約を奪う」「断りを全席へ送る」「口座を増やす運用」を退け、 予約の持ち主を逼迫した群に限って断りを印にしたのはこの原則に行き着く (これ以上は遡らない照会終端)。</p>
+<p class="prin-id">照会終端 — PRIN-KIND-SETS-DEFAULT-RECORD-SETS-INTENT</p>
+<p class="prin-text">既定は置き場の種類が決め、 席の意志は戻せる記録で既定に勝つ。 値はどこから来たかを名乗って出す。</p>
+<p class="prin-note">本 ADR が、 器が停止の記録を書く案・host 全体の 1 値・明示 on を持たない案を退け、 明示の記録 2 つと群の表の行の key と置き場の種類の既定の順と決まり方の 3 語にしたのはこの原則に行き着く (これ以上は遡らない照会終端)。</p>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-brand"><span class="num">07</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg> 用語集 / この文書で使う専門語</span><h2>本文に出てくる専門語のやさしい説明</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-07">本文に出てくる専門語 7 個を、 やさしい言葉で説明します。</p></section>
+<section data-component="chapter-deck-band" class="tint-brand"><span class="num">07</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg> 用語集 / この文書で使う専門語</span><h2>本文に出てくる専門語のやさしい説明</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-07">本文に出てくる専門語 10 個を、 やさしい言葉で説明します。</p></section>
 <div class="chapbody">
 <div data-component="glossary-term-table">
-<div class="grow"><div class="gword">群の予約<span class="en">group reservation</span></div><div class="gdef">群ごとに周ごと導く、 その群が次に移る口座。 候補を残量の鍵で並べ、 どの群の今の口座でもなく先の群の予約でもない先頭。 本 ADR で、 その周に逼迫している群だけが持つ。</div></div>
-<div class="grow"><div class="gword">逼迫<span class="en">pressure</span></div><div class="gdef">口座の実測の窓 (5 時間・7 日・モデル別 7 日) のどれかが閾値の rules 行の値以上であること。 群の今の口座が逼迫した周に群は移る。</div></div>
-<div class="grow"><div class="gword">残量の鍵<span class="en">headroom key</span></div><div class="gdef">7 日窓と役割の model の 7 日窓の残量の小さい方が大きい順 → 7 日窓の reset が早い順 → 宣言順、 の辞書順 (ADR-0069)。 本 ADR で変えない。</div></div>
-<div class="grow"><div class="gword">断りの印<span class="en">refusal mark</span></div><div class="gdef">移り先の無い断りの周に群用 dir へ書く 1 file (群の名・断りの時刻・理由)。 次の判定 (留まる・移る) が history へ退避する。 doctor の群の行が時刻を出す。</div></div>
-<div class="grow"><div class="gword">群の今の口座<span class="en">current account</span></div><div class="gdef">群の記録が指す口座 (記録が無ければ種)。 本 ADR で、 先の群の逼迫はこの口座の実測 1 つで判じる。</div></div>
-<div class="grow"><div class="gword">群用 dir<span class="en">group dir</span></div><div class="gdef">host で 1 つの dir で、 群ごとの記録・頼み・判定の打刻・本 ADR の断りの印を置く。 別の置き場 (state dir) の席からも同じ dir を読む。</div></div>
-<div class="grow"><div class="gword">管理 tick<span class="en">management tick</span></div><div class="gdef">席の外から周期 (rules 行 1 本・既定 15 秒) で回り、 死んだ席を起こし直し、 移動の周に退避を撃ち、 群の移動の判定を撃つ仕組み (ADR-0058・ADR-0066)。</div></div>
+<div class="grow"><div class="gword">heartbeat の実効の値<span class="en">effective heartbeat</span></div><div class="gdef">管理 tick がその席へ打刻の合図を送るか (on) 送らないか (off) の、 その周の値 (FR78)。 明示の記録 → 群の表の行の任意 key heartbeat → 置き場の種類の既定の順で決まる。 記録の file の有無そのものではない。</div></div>
+<div class="grow"><div class="gword">明示の記録<span class="en">explicit record</span></div><div class="gdef">口 seat heartbeat on / off が席の状態の dir に置く 1 行 (時刻) の file。 明示 on と明示 off の 2 種で、 置くときは他方を消し、 default は両方を消す。 書き手は器の口 1 本。 明示 off は ADR-0070 の停止の記録を引き継ぐ。</div></div>
+<div class="grow"><div class="gword">決まり方<span class="en">resolution source</span></div><div class="gdef">heartbeat の実効の値がどの段で決まったかを名乗る閉じた 3 語 — explicit (明示の記録)・group (群の表の行の key)・default (置き場の種類の既定)。 口の default (明示の記録を消す操作) とは別。</div></div>
+<div class="grow"><div class="gword">置き場の種類の既定<span class="en">kind default</span></div><div class="gdef">明示の記録も群の表の行の key も無い席の値。 群の置き場の席は on・park の区画の置き場の席は off・群の表のどの行にも属さない席は on。</div></div>
+<div class="grow"><div class="gword">群の表<span class="en">group table</span></div><div class="gdef">host の面が持つ置き場のかたまりの宣言の表 (FR38)。 行の名は Tier1〜Tier9 に限り、 Tier1〜Tier8 の行は群 (口座を占め、 群の今の口座を持つ) を、 Tier9 の行は park の区画を宣言する。 行は任意の key heartbeat (on か off) を持てる (FR78)。</div></div>
+<div class="grow"><div class="gword">park の区画<span class="en">park lot</span></div><div class="gdef">群の表の、 名 Tier9 の行が宣言する置き場のまとまり (FR95・ADR-0091)。 群ではなく口座を占めない。 席は残すが日々は動かさない repo を置く。 heartbeat の既定は off。</div></div>
+<div class="grow"><div class="gword">管理 tick<span class="en">management tick</span></div><div class="gdef">席の外から周期で回り、 死んだ席を起こし直し、 移動の周に退避を撃ち、 黙った席へ合図を送り、 群の移動の判定と park の移り先の判定を撃つ仕組み (FR27)。 heartbeat が off の席でも止めない。</div></div>
+<div class="grow"><div class="gword">打刻の合図<span class="en">stamp signal</span></div><div class="gdef">管理 tick が黙った席の入力欄へ注入する、 台帳の現在地から続きを進めるよう促す 1 行 (ADR-0058)。 heartbeat はこの合図の呼び名 (ADR-0070)。</div></div>
+<div class="grow"><div class="gword">席の状態の dir<span class="en">seat state dir</span></div><div class="gdef">state dir の下の席 (target) ごとの dir。 状態の打刻・梯子の記録・明示の記録・最後の周の打刻を置く。</div></div>
+<div class="grow"><div class="gword">最後の周の打刻<span class="en">last tick stamp</span></div><div class="gdef">管理 tick が周ごとに席の状態の dir へ書く 1 行 (時刻・判定・理由)。 rc 1 の周も書く。 健全かはこれを読む側が判じる (ADR-0070)。</div></div>
 </div>
 </div>
 </div>
 <footer class="foot" data-component="fidelity-sync-meta"><div class="ft-grid">
 <div class="ft-plain">このページは、大もとの機械データ (正本) から自動で組み立てられています。構造は機械が自動で検査し、内容が元データに忠実かは独立のレビューで確かめます。</div>
-<div data-audience="machine">機械SSoT: <b>ADR-0074-reservations-belong-to-pressed-groups-only.adr.yaml</b> &middot; 生成: <b>2026-09-26 14:47</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
+<div data-audience="machine">機械SSoT: <b>ADR-0092.adr.yaml</b> &middot; 生成: <b>2026-09-29 06:28</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
 <div class="tags" data-audience="machine"><span>folio design system</span><span>ADR-pack</span><span>folio engine B1 (instance#2)</span><span>cross-doc 照会</span></div>
 </div></footer>
 <!-- folio:chrome-bottom -->
 <nav class="prevnext" aria-label="前後の文書">
-  <a class="prevnext__prev" href="ADR-0073-move-grace-counts-from-the-notice-mark.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">退避の猶予の起点は合図の記録 — 猶予は席が退避の合図を受けた時刻から数え、 群の記録が古い周も記録の無い群の周も合図が先で /exit は猶予の後 (ADR-0071 の起点の読みを部分 supersede)</span></a>
-  <a class="prevnext__next" href="ADR-0075-group-pressure-counts-only-the-role-model-window.html"><span class="prevnext__dir">次 &rarr;</span><span class="prevnext__title">逼迫の門のモデル別窓は役割の model の窓だけを数える — 5 時間窓と 7 日窓は今のまま全部、 モデル別 7 日窓は群の席の役割の model の行だけで逼迫を判じる (ADR-0055 と ADR-0069 の窓の読みを部分 supersede)</span></a>
+  <a class="prevnext__prev" href="ADR-0091-the-tier9-row-is-a-park-lot-that-holds-no-account.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">群の表の名 Tier9 の行は群でなく park の区画で、 口座を占めない — 区画は群の今の口座・種・予約・群の移動の判定・移動を頼む記録を持たず、 どの口座選定からも口座を除かず、 席は行が並べた口座からの session 用の選定の口座に居て、 park の移り先の判定が口座を返した周だけ移る (ADR-0069 の群の名の句と ADR-0049 の便用の row の除外の範囲を部分 supersede)</span></a>
+  <a class="prevnext__next" href="ADR-0093-publish-exclusions-sit-verbatim-in-the-host-face.html"><span class="prevnext__dir">次 &rarr;</span><span class="prevnext__title">公開の除外の表は host の面に字句のまま置く — 無害と裁定した字句の除外を publish の種類の rules 行の digest の列から host の面の表へ移し、 行ごとに裁定 id を持たせ、 裁定 id の欄を欠く行を持つ面は読みで断る (ADR-0078 の除外の一覧の置き場と形を部分 supersede)</span></a>
 </nav>
 <script>
 (function () {
