@@ -549,7 +549,7 @@ terms:
   - canonical: 明示の記録
     domain: consumer
     aliases: [明示 on の記録, 明示 off の記録, 停止の記録]
-    definition: 席の状態の dir に置く 1 行の file (時刻) で、 明示 on と明示 off の 2 種 (SRS FR78・ADR-0092)。 器の口 seat heartbeat on / off だけが一方を置いて他方を消し、 default が両方を消す (可逆)。 heartbeat の実効の値の決まる順の先頭で、 2 つとも在る周と在るのに読めない周は off と読む。 ADR-0070 の停止の記録は明示 off の記録にあたる。
+    definition: 席の状態の dir に置く 1 行の file (時刻) で、 明示 on と明示 off の 2 種 (SRS FR78・ADR-0092)。 器の口 seat heartbeat on / off だけが一方を置いて他方を消し、 default が両方を消す (可逆)。 heartbeat の実効の値の決まる順の先頭で、 2 つとも在る周と在るのに読めない周は off と読む。 ADR-0070 の停止の記録は明示 off の記録にあたり、 同じ置き場と形のまま明示 off と読む。 書き手は器の口 1 本で、 管理 tick は書かない。
     forbidden: [heartbeat-off flag, pause file]
     relationships: [打刻の合図, 管理 tick, 最後の周の打刻, heartbeat の実効の値]
     flagged_ambiguities: [記録の file の有無は実効の値でない (外の読み手は器の口の出力を読む)]
@@ -847,7 +847,7 @@ terms:
   - canonical: land の終端
     domain: consumer
     aliases: [着地の終端]
-    definition: 着地の後に器が続ける 3 手 (公開の字面の走査を通った後の remote への push・push の先端の commit の CI の結果の照合・台帳の close) と、 その typed な記帳 (SRS FR50)。 着地の事実の正本は器の record で、 commit の trailer はそこからの導出面 (ADR-0023 §2.5)。 台帳へ書くのは便の close (close の理由は着地の形) と memo の自動の close (SRS FR93) だけで、 着地の形の close を書くのは land の終端だけ (SRS FR81 (d))。 着地の形の close の経路は 3 つ — push の後の照合と close・vessel 宣言が任意 key remote を持たない repo の、 走査と push と CI の照合を撃たない CI の照合なしの close・PR で着地した便の、 merge の後の pipe retire の照合と close (SRS FR50・FR96・ADR-0094)。 台帳の問いの裁定の行と close は bind と答えの口の書き (SRS FR82・ADR-0089)。
+    definition: 着地した便の台帳の close を着地の形で書く器の手の総称で、 経路は 3 つ — main に着地した便の、 公開の字面の走査を通った後の remote への push・push の先端の commit の CI の結果の照合・台帳の close と、 その typed な記帳 (SRS FR50)・vessel 宣言が任意 key remote を持たない repo の、 走査と push と CI の照合を撃たない CI の照合なしの close (SRS FR50)・PR で着地した便の、 merge の後の pipe retire の照合と close (SRS FR96)・ADR-0094。 着地の事実の正本は器の record で、 commit の trailer はそこからの導出面 (ADR-0023 §2.5)。 台帳へ書くのは便の close (close の理由は着地の形) と memo の自動の close (SRS FR93) だけで、 着地の形の close を書くのは land の終端だけ (SRS FR81 (d))。 台帳の問いの裁定の行と close は bind と答えの口の書き (SRS FR82・ADR-0089)。
     relationships: [land, 便, 台帳 adapter, trailer, Completion, 公開の字面の走査, push の先端, 着地の形]
   - canonical: push の先端
     domain: consumer
@@ -858,7 +858,7 @@ terms:
     flagged_ambiguities: [着地の列の「先頭」(最初に着地する便) と逆の端, remote の先端 (FR80 が GitHub に問う push の前の値) とは別, "remote の main の先端 (SRS FR96 の PR の照合が読む merge の後の remote の main の最後の commit) とは別", "main の先端 (SRS FR85 の床の検査が撃つ main の最新の commit・push の前後を問わない) とは別"]
   - canonical: 台帳 adapter
     domain: consumer
-    definition: 器が台帳へ触る唯一の module。 読みは読み取り専用で、 書きは land の終端の便の close と memo の自動の close (SRS FR50 / FR93)、 bind と答えの口の裁定の行と問いの close (SRS FR82) だけ (ADR-0023 §2.2・ADR-0083・ADR-0089)。 起票・受入条件の記帳は席の仕事。
+    definition: 器が台帳へ触る唯一の module。 読みは読み取り専用で、 書きは land の終端の便の close と memo の自動の close (SRS FR50 / FR96 / FR93)、 bind と答えの口の裁定の行と問いの close (SRS FR82) だけ (ADR-0023 §2.2・ADR-0083・ADR-0089)。 起票・受入条件の記帳は席の仕事。
     relationships: [台帳, bd, land の終端, doctor, 裁定の行, 答えの口, memo]
   - canonical: 散文の門
     domain: consumer
@@ -1141,7 +1141,7 @@ terms:
   - canonical: 群の今の口座
     domain: consumer
     aliases: [group effective account]
-    definition: その群の席がいま実際に使っている口座 (ADR-0049・proposed)。 器が host の根に書く実効値で、 群ごとに高々 1 件。 宣言の候補の列 (人が書く宣言値) とは file も型も別で、 記録が無い周は種 (宣言順で前の群の種でない最初の候補・ADR-0069) になる (憲法 C10)。 記録が在るのに読めない周は typed に止まる。
+    definition: その群の席がいま実際に使っている口座 (ADR-0049)。 群は群の表の Tier1〜Tier8 の行で、 park の区画は持たない (ADR-0091)。 器が host の根に書く実効値で、 群ごとに高々 1 件。 宣言の候補の列 (人が書く宣言値) とは file も型も別で、 記録が無い周は種 (宣言順で前の群の種でない最初の候補・ADR-0069) になる (憲法 C10)。 記録が在るのに読めない周は typed に止まる。
     relationships: [project の群, host の根, 便用の除外, 実効の口座, 実効の記録, 口座選定, 群の予約]
   - canonical: 群の予約
     domain: consumer
@@ -1273,7 +1273,7 @@ terms:
   - canonical: 群の逼迫
     domain: consumer
     aliases: [group pressure]
-    definition: 群の今の口座か群の席が居る口座の使用率が、 5 時間窓・7 日窓・モデル別窓のいずれかで閾値の rules 行の値以上である状態 (ADR-0055・proposed)。 便の終端の周と席自身の hook が既存の計測の 1 本で鮮度つきに読み、 timer では測らない。 ADR-0066 (proposed) の後は管理 tick も群ごとに鮮度の窓に 1 回まで読み、 移動の判定は群の段と tick が共有の 1 本 (群の移動の判定) を呼ぶ。 ADR-0075 の後は、 モデル別窓は群の席の役割の model の窓だけを数える (5 時間窓と 7 日窓は全部・管理 tick の口座の門は自席の役割の model の窓)。
+    definition: 群の今の口座か群の席が居る口座の使用率が、 5 時間窓・7 日窓・モデル別窓のいずれかで閾値の rules 行の値以上である状態 (ADR-0055・proposed)。 便の終端の周・席自身の hook・管理 tick の判定の周が既存の計測の 1 本で鮮度つきに読み、 timer では測らない。 ADR-0066 (proposed) の後は管理 tick も群ごとに鮮度の窓に 1 回まで読み、 移動の判定は群の段と tick が共有の 1 本 (群の移動の判定) を呼ぶ。 ADR-0075 の後は、 モデル別窓は群の席の役割の model の窓だけを数える (5 時間窓と 7 日窓は全部・管理 tick の口座の門は自席の役割の model の窓)。
     relationships: [project の群, 群の今の口座, 便の終端の周, 移動を頼む記録, 退避の合図, rules 行, 役割の model]
   - canonical: 便の終端の周
     domain: consumer
@@ -1329,7 +1329,7 @@ terms:
   - canonical: 公開先の repo
     domain: consumer
     aliases: [publish target repo]
-    definition: 公開の segment が字面を出す先の repo (git の push の行き先・gh の対象の repo・SRS FR80)。 owner/name は git が実際に押す URL (pushurl と insteadOf を当てた後) か gh が解いた repo の、 host が gh の既定の host である URL の path の末尾 2 成分として導き、 同じ repo かは owner/name の一致で判じる。
+    definition: 公開の segment が字面を出す先の repo (git の push の行き先・gh の対象の repo・SRS FR80)。 owner/name は git が実際に押す URL (pushurl と insteadOf を当てた後) か gh が解いた repo の、 host が gh の既定の host である URL の path の末尾 2 成分として導き、 群の表の行 (群と park の区画) の anchor の owner/name も同じ規則で導き、 同じ repo かは owner/name の一致で判じる。
     relationships: [公開の segment, 隣の private repo]
     flagged_ambiguities: [席の target (tmux の窓) とは別の語, 「公開」は可視性を含意しない (private の公開先もある)・public の repo とは別]
   - canonical: 出ていく字面
@@ -1346,7 +1346,7 @@ terms:
   - canonical: 識別子の 4 形
     domain: consumer
     aliases: [identifier forms]
-    definition: 隣の private repo を指す閉じた 4 つ — repo の名 (出ていく字面と名をともに ASCII の英数字と _ の外の字 〔- と . と / を含む〕 で区切った成分の並びで、 大文字と小文字を区別せずに照合し、 一般語の名も除かず、 公開の除外の表に在る字句の中の当たりだけを数えない)・object id (7 桁以上の 16 進の語で、 隣の object db の object の id かその接頭辞であり、 公開先の repo の remote の先端から辿れないもの)・tracked path (/ を含む語が、 隣の tracked な path を / の境界で切った末尾と一致し、 公開先の repo の remote の先端の tracked な path に無いもの)・台帳 id (隣の台帳に在る issue の id) (SRS FR80)。 publish の種類の rules 行の値が並べる記号 (無害な字句の除外は host の面の公開の除外の表が持つ・ADR-0093)。
+    definition: 隣の private repo を指す閉じた 4 つ — repo の名 (出ていく字面と名をともに ASCII の英数字と _ の外の字 〔- と . と / を含む〕 で区切った成分の並びで、 大文字と小文字を区別せずに照合し、 一般語の名も除かず、 公開の除外の表の字句を名と同じ区切りで切った成分の並びと大文字と小文字を区別せずに一致する区間の中の当たりだけを数えない)・object id (7 桁以上の 16 進の語で、 隣の object db の object の id かその接頭辞であり、 公開先の repo の remote の先端から辿れないもの)・tracked path (/ を含む語が、 隣の tracked な path を / の境界で切った末尾と一致し、 公開先の repo の remote の先端の tracked な path に無いもの)・台帳 id (隣の台帳に在る issue の id) (SRS FR80)。 publish の種類の rules 行の値が並べる記号 (無害な字句の除外は host の面の公開の除外の表が持つ・ADR-0093)。
     relationships: [隣の private repo, 公開の字面の走査, rules 行]
     flagged_ambiguities: [起票の門の台帳 write の 4 形とは別, 台帳 id は裁定面の記帳 id とは別]
   - canonical: host-guard の配線
@@ -1449,7 +1449,7 @@ terms:
     relationships: [管理 tick, 打刻の合図, 未反映の裁定, 床の検査, doctor, 局面の出力, 未仕分けの発話, 席の手番の閾値越え, 古さの印]
   - canonical: 雛形の合図
     domain: consumer
-    definition: 器が席の入力欄へ差し込む行の総称 (SRS FR44 の閉じた一覧 = 起動行・打刻の合図・群の逼迫の通知と移動の通知と退避の合図・便の終端の周の通知・裁定の指し示し)。 発話 event はこれを記帳しない (SRS FR82)。
+    definition: 器が席の入力欄へ差し込む行の総称 (SRS FR44 の閉じた一覧 = 起動行・打刻の合図・群の逼迫の通知と移動の通知と退避の合図・park の区画の移動の退避の合図・便の終端の周の通知・裁定の指し示し)。 発話 event はこれを記帳しない (SRS FR82)。
     relationships: [打刻の合図, 便の終端の周の通知, 裁定の指し示し, 発話 event]
   - canonical: message の包み
     domain: consumer
@@ -1682,27 +1682,27 @@ terms:
   - canonical: park の区画
     domain: consumer
     aliases: [park lot, Tier9]
-    definition: 群の表の名 Tier9 の行が宣言する置き場のまとまり (SRS FR95・ADR-0091)。 群ではなく、 群の今の口座・種・群の予約・群の移動の判定・移動を頼む記録を持たず、 park の区画の置き場の席の row の口座はどの口座選定からも群の移り先と予約からも除かない。 席は口座の引数か行が並べた口座からの session 用の選定の口座に居て、 park の移り先の判定が口座を返した周だけ移る。 heartbeat の既定は off (SRS FR78)。
+    definition: 群の表の名 Tier9 の行が宣言する置き場のまとまり (SRS FR95・ADR-0091)。 群ではなく、 群の今の口座・種・群の予約・群の移動の判定・移動を頼む記録を持たず、 park の区画の行が並べた口座と置き場の席の row の口座は、 口座選定・群の移り先・群の予約のどれからも除かない。 席は口座の引数か行が並べた口座からの session 用の選定の口座に居て、 park の移り先の判定が口座を返した周だけ移る。 heartbeat の既定は off (SRS FR78)。
     forbidden: [park の群, 普通の群]
     relationships: [群の表, park の移り先の判定, 口座選定, heartbeat の実効の値, 隣の private repo]
-    flagged_ambiguities: [SRS v0.30 の round 1 の草稿の「park の群」を置き換えた語 (群でないものに群の名を付けない)]
+    flagged_ambiguities: [群でないものに群の名を付けない (park の群・普通の群は禁止語)]
   - canonical: park の移り先の判定
     domain: consumer
     aliases: [park move target]
-    definition: park の区画の席の移り先の口座を返す判定 (SRS FR95・ADR-0091)。 row の口座の計測の記録の最新値が session 用の閾値 (R-C9-1 とその窓別の行) 以上の周だけ、 行が並べた口座から row の口座を除いた session 用の口座選定の口座を返し、 記録が無いか鮮度の外の周と候補が無い周は返さない。 計測を起こさず host の lock を取らない。 管理 tick の周と起こし直しと seat tick status が同じ結果を使う。
+    definition: park の区画の席の移り先の口座を返す判定 (SRS FR95・ADR-0091)。 row の口座の計測の記録の最新値が session 用の閾値 (SRS FR36) のいずれか以上の周だけ口座を返す。 条件の全部は SRS FR95 が持つ。
     relationships: [park の区画, 口座選定, 管理 tick, 計測]
     flagged_ambiguities: [群の移動の判定 (SRS FR38・ADR-0066) とは別]
   - canonical: 公開の除外の表
     domain: consumer
     aliases: [publish exclusion table]
-    definition: host の面が持つ、 隣の private repo の名の当たりを数えない無害な字句の表 (SRS FR80・ADR-0093)。 字句のまま持ち、 行は裁定 id を持ち (欄が無いか空の行を持つ面は読みで断る)、 tracked な file に書かない。 行の裁定は答えが操作で済む裁定で、 未反映の裁定 (SRS FR84) に数えない。
+    definition: host の面が持つ、 隣の private repo の名の当たりを数えない無害な字句の表 (SRS FR80・ADR-0093)。 字句のまま持ち、 行は裁定 id を持つ (欄が無いか空の行を持つ面は SRS FR57 の読みで断る)。 行を求める台帳の問いは effect を operation で立てる (document で立てた問いは未反映の裁定 〔SRS FR84〕 に数えられ、 待たせる側に倒れる)。 字句は台帳の問いと裁定の行にも残る (台帳の同期先は公開の面でない)。
     forbidden: [除外の一覧の digest]
     relationships: [識別子の 4 形, 公開の字面の走査, host の面, 隣の private repo]
     flagged_ambiguities: [口座選定の除外 (SRS FR36 の便用の除外・除外集合) とは別]
   - canonical: PR で着地した便
     domain: consumer
     aliases: [PR-landed run]
-    definition: --pr-cmd の形で Landed に達し、 main を動かさず自 repo への PR を作った便 (SRS FR96・ADR-0094)。 台帳の close は PR の merge の後に器の口 pipe retire が、 merge の commit が remote の main の先端の祖先であることと先端の CI の success を照合してから着地の形で撃つ。
+    definition: --pr-cmd の形で Landed に達し、 main を動かさず自 repo への PR を作った便 (SRS FR96・ADR-0094)。 land の終端の push の経路 (SRS FR50) の外に置く。 台帳の close は PR の merge の後に器の口 pipe retire (launch の権能の口・ADR-0048) が、 merge の commit が remote の main の先端の祖先であることと先端の CI の success を照合してから着地の形で撃ち、 畳むだけの指定 (--fold-only) は照合も close もせずに畳む。
     relationships: [自 repo への PR, land の終端, 着地の形, 便]
   - canonical: heartbeat の実効の値
     domain: consumer
@@ -1716,3 +1716,14 @@ terms:
     definition: heartbeat の実効の値がどこで決まったかを名乗る閉じた 3 語 (SRS FR78)。 explicit = 明示の記録 (2 つとも在る・読めない周の off を含む)・group = 群の表の行の key・default = 種類の既定 (群の表のどの行にも属さない席を含む)。
     relationships: [heartbeat の実効の値, 明示の記録]
     flagged_ambiguities: [口の default (明示の記録を両方消す操作) と決まり方の default (種類の既定で決まったこと) は別]
+  - canonical: row の口座
+    domain: consumer
+    aliases: [登録 row の口座]
+    definition: 席の登録 row が持つ口座 (SRS FR40)。 群の表のどの行にも属さない席の起こし直しの口座で、 park の区画の席では park の移り先の判定が口座を返さない周の起こし直しの口座 (SRS FR95・ADR-0091)。 群の席は row の口座でなく群の今の口座に居る。
+    relationships: [登録 row, park の区画, park の移り先の判定, 群の今の口座, 口座選定]
+  - canonical: session 用の閾値
+    domain: consumer
+    aliases: [session selection threshold]
+    definition: session 用の口座選定が候補にする口座の使用率の上限の rules 行 (SRS FR36・今の行は R-C9-1 の 1 本・窓別の行は user 裁定で足す)。 この値未満の口座だけが候補になり、 park の区画の席が移る線もこの行のいずれか以上 (SRS FR95・ADR-0091)。
+    relationships: [口座選定, rules 行, park の移り先の判定]
+    flagged_ambiguities: [群の逼迫の閾値 (5 時間窓・7 日窓・モデル別窓の rules 行 3 本・SRS FR38) とは別]
