@@ -863,7 +863,7 @@ id = "y"
 title = "doctor の群の行の末尾に今の逼迫 pressure= を足す — 群の段の門の pressed を測らずに呼び、越えた窓のうち使用率が最大の 1 つを <窓>:<使用率>/<閾値> で出す（写しを書かない・置き場を跨がない・§20・s2-07l.737.1）"
 req = ["FR38", "FR78", "AC41", "NFR4"]
 section = "20"
-write-set = ["crates/scribe2/src/account/mod.rs", "crates/scribe2-boundary/tests/e2e/seat/account.rs", "docs/design/seat-heartbeat.md", "=crates/scribe2/src/hook/group.rs"]
+write-set = ["crates/scribe2/src/account/mod.rs", "crates/scribe2-boundary/tests/e2e/seat/account.rs", "docs/design/seat-heartbeat.md", "=crates/scribe2/src/hook/group.rs", "=crates/scribe2/src/fleet/mod.rs"]
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail host_group_pressure_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail host_group_doctor_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail host_group_record_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail host_group_next_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail host_group_refused_"]
 size = "M"
 growth = ["crates/scribe2/src/account/mod.rs:30"]
