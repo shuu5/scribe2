@@ -66,7 +66,7 @@ ruled_at = "2026-09-07"
 
 | id | kind | value | enabled | 裁定（ruling / ruled_at）・design-intent 側の出所 |
 |---|---|---|---|---|
-| `R-C4-1` | CoreLines | 60000 | true | user 裁定 2026-09-15T11:2xZ（A2・**一時的**な緩和・s2-07l notes）・定期 refactor は .198（前値 40000 = user 裁定 2026-09-14〔A2・s2-07l notes〕・初期値 20000 = 論点 2 / 2026-09-07・憲法 §3）・**母集団は core crate の src の本体だけ**（in-file の歯〔`#[cfg(test)]` 区間〕は数えない＝R-C4-3 が数える側・user 裁定 2026-09-15・ADR-0033・[core-boundary.md](./core-boundary.md) §2） |
+| `R-C4-1` | CoreLines | 66000 | true | user 裁定 2026-09-29T00:59Z（A2・束 A・D・E の実装の余地・§19 行 p）・前値 60000 = user 裁定 2026-09-15T11:2xZ（A2・**一時的**な緩和・s2-07l notes）・定期 refactor は .198（その前 40000 = user 裁定 2026-09-14〔A2・s2-07l notes〕・初期値 20000 = 論点 2 / 2026-09-07・憲法 §3）・**母集団は core crate の src の本体だけ**（in-file の歯〔`#[cfg(test)]` 区間〕は数えない＝R-C4-3 が数える側・user 裁定 2026-09-15・ADR-0033・[core-boundary.md](./core-boundary.md) §2） |
 | `R-C4-2` | ModuleLines | 1500 | true | 同上 |
 | `R-C4-3` | TestSrcRatioPct | 100 | true | 同上（比 1.0 = 100%） |
 | `R-C4-4.fn-lines` | FnLines | 60 | true | 同上 |
@@ -266,6 +266,19 @@ xtask 側の drift 歯（最小形）: `crates/xtask/src/limits.rs` の `#[cfg(t
   - `intake_core_room_named_tests_do_not_eat_the_core_headroom`: 本体 1000 の素の file と、本体の印を持たない 400 行の _tests.rs の file を持つ base で、上限 1450 の core の余地は 450（base は 50＝S の新規 1 本〔100〕を断る＝RED）。
 - base で RED の理由: 2 本とも base の `FileLines::of` と既存の余地の関数だけを呼ぶ（compile は通る）。base は名を見ないので本体を全行に数え、assert が落ちる（機能不在）。
 
+## 19. R-C4-1 を 66000 に上げる（契約表の行 p）
+
+- 何が起きているか（main c9423568・verified）: `cargo xtask check` の core-lines は 57618（上限 R-C4-1 = 60000・余地 2382）。SRS v0.29 の束 A・D・E の実装の計画（契約の行 37 本）は core の本体を約 5,500 行増やす見込みで、2 波目のあたりで受付の core の余地（§18 以後は gate の core-lines と同じ合計）が断り始め、束 E まで届かない。消せる行は約 200 行しかない。user 裁定 2026-09-29T00:59Z（A2・閾値の変更・逐語は器の裁定の event に残る）で上限を 66000 に上げる（1 割増し・37 本の後に約 3,000 行の余地）。贅肉の削りは、移行の前後のリファクタリングの memo の側が持つ。
+- 約束（この 3 つだけ）:
+  1. `rules/manifest.toml` の行 `R-C4-1` の `value` を 66000 に・`ruling` を `user 2026-09-29T00:59Z` に・`ruled_at` を `2026-09-29` に書き換える。行の id・kind・`enabled` は不変で、行は増やさない（C5）。
+  2. 値を pin している既存の歯 1 本を 66000 に直す。実測: repo 全体で `R-C4-1` の値 60000 を持つのは、`crates/scribe2-boundary/tests/e2e/rules.rs` の `rules_cli_get_returns_value`（`rules get R-C4-1` の出力が埋め込みの値である・assert の文言の裁定 id も同じ便で新しい id に直す）と manifest と本 doc だけである。外形 snapshot はこの行の値を写していない。xtask の check の歯の fixture は自前の値を持つので変えない。
+  3. 上げた行を名指す歯を 1 本足す（名は `rules_core_lines_66000_` で始める）: 埋め込み manifest の `R-C4-1` が値 66000・kind `CoreLines`・発効・`ruling` が `user 2026-09-29T00:59Z` で始まり・`ruled_at` が `2026-09-29` で、整数の行の読み手が 66000 を返す、を assert する。base は値 60000 と前の裁定なので RED（**機能不在**でなく値の不一致の RED）。
+- §4.1 の表の `R-C4-1` の行の値と裁定を約束 1 と同じ内容に写し、前の値 60000 の裁定を履歴として残す（本 doc が write-set に在る理由はこれだけ）。
+- 触らない: `src` の全部（上限を読む側の xtask の core-lines と受付の core の余地は行の値を読むだけで、値を code に持たない）・憲法 §3 の閾値セル（初期値を持つ。xtask の憲法と manifest の突合の歯は、ruling が初期の裁定でない行の値の違いを通す）・他の行・§4 の切り方・過去の § が書いたその時点の実測値。
+- 着地の後: 受付と席は埋め込み manifest を読むので、PATH の binary を入れ替えるまで受付の core の余地は 60000 で測る（運用の手順・本行の done の外）。
+- 却下: 63000 に刻んで束 E の前に測り直す（聞く回数が 1 回増える）／上げずに先にリファクタリングで削る（削れる量が読めず、束 E の着地が遅れる）。
+- flip-check の入口: 変える test file は `tests/e2e/rules.rs` の 1 本で、直す歯と足す歯のどちらも base（値 60000）で RED になる。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -423,4 +436,13 @@ verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail intake_core_room_n
 size = "S"
 growth = ["crates/scribe2/src/pipe/declaration/write_set.rs:40"]
 done = "(1) FileLines::of が、path の file 名が tests.rs か _tests.rs で終わる周だけ本体を 0 行と数え、全体の行数は変えない（名の述語は core の側に 1 本・名に tests を含むが tail の違う file は素の file のまま） (2) 受付の core の合計が xtask check の core-lines と同じ切り方になる（名で test の file の本体を数えない） (3) src_region と審査の材料の読み手と file の余地（R-C4-2）の母集団は変えず、既存の pipe_intake_core_headroom_ の歯は期待を変えずに緑 (4) rules-manifest.md §4 の「名の弁別は持たない＝gate より厳しい側」の 1 文を同じ切り方になった形に写す（file 名の tail は backtick で書かない） 歯: intake_core_room_named_tests_count_zero_src_like_the_xtask_split（_tests.rs と tests.rs は本体 0・contests.rs と素の file は本体 = 全体）・intake_core_room_named_tests_do_not_eat_the_core_headroom（本体 1000 と印の無い 400 行の _tests.rs の base で上限 1450 の余地が 450・base は 50 で S の新規 1 本を断る）"
+[[contract]]
+id = "p"
+title = "R-C4-1（core の本体の上限）を 60000 → 66000 に上げる — 値と裁定 id と ruled_at だけを書き換え、値を pin する歯を直し、上げた行を名指す歯を足す（裁定 user 2026-09-29T00:59Z・A2）"
+req = ["FR17"]
+section = "19"
+write-set = ["rules/manifest.toml", "crates/scribe2-boundary/tests/e2e/rules.rs", "docs/design/rules-manifest.md"]
+verify = ["cargo nextest run -p scribe2 --test e2e --no-tests=fail rules_cli_get_returns_value", "cargo nextest run -p scribe2 --test e2e --no-tests=fail rules_core_lines_66000_"]
+size = "S"
+done = "§19 の約束 1〜3 のとおり: 埋め込み manifest の R-C4-1 が値 66000 と裁定 id user 2026-09-29T00:59Z と ruled_at 2026-09-29 を持ち、rules get R-C4-1 が 66000 を出す歯と上げた行を名指す歯（rules_core_lines_66000_ で始まる）が緑で、§4.1 の表が同じ値と裁定を写して前の値 60000 の裁定を履歴に残し、src と憲法 §3 の閾値セルは不変"
 <!-- contracts:end -->
