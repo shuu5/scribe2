@@ -579,6 +579,7 @@ impl Ledger {
             kind: kind.to_owned(),
             description: String::new(),
             notes: String::new(),
+            close_reason: String::new(),
         });
     }
 }

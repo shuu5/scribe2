@@ -225,28 +225,67 @@ fn counted_runs(runs: &[crate::fleet::json_tree::Tree]) -> Vec<&crate::fleet::js
         .collect()
 }
 
+/// CI の結果の**閉じた 4 値**（[`ci_read`] の答え・設計 contract-source.md §60）。
+///
+/// [`ci_now`] の `None` を「結果がまだ無い」と「問いを撃てない」に割った形である（FR96 の ci-not-success と
+/// unmeasured を分ける読み手のため）。`ci_now` はこれの写しで外形を変えない。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CiRead {
+    /// run が 1 本以上在り、落ちた run が無く全部が完了している。
+    Success,
+    /// 完了した run に success でないものが 1 本以上在る（他の run がまだ走っていても）。
+    Failure,
+    /// run が 0 本（schedule を外した後）か、落ちた run が無く走っている run が在る。
+    Pending,
+    /// 行を撃てない・rc が 0 でない・JSON を読めない。
+    Unmeasured,
+}
+
 /// CI の判定を**1 回だけ**読む（子 process 1 回・設計 contract-source.md §5）。
 ///
 /// 返すのは 3 形である: `Some(Failure)`（**完了した run に success でないものが 1 本以上在る**・他の run が
 /// まだ走っていても待たない）・`Some(Success)`（run が 1 本以上在り、落ちた run が無く全部が完了している）・
 /// `None`（run が 0 本・落ちた run は無いがまだ走っている run が在る・行を撃てない・JSON を読めない）。**`None` を「成功していない」と読まない**のは
-/// 呼び手の側で、`None` は「まだ測れていない」である（C10）。
+/// 呼び手の側で、`None` は「まだ測れていない」である（C10）。判定は [`ci_read`] の 1 本で、これはその写し
+/// （[`CiRead::Pending`] と [`CiRead::Unmeasured`] を `None` に畳む・設計 contract-source.md §60）。
 ///
 /// 行は **argv 1 本として撃つ**（shell を通さない）。宣言 `ci-cmd` は対象 repo の tracked file から来るので、
 /// shell に渡すと宣言 1 行が別の command を継ぎ足せる（契約の verify 行と同じ線）。
 pub fn ci_now(repo: &Path, sha: &str, cmd: &str) -> Option<CiRun> {
+    match ci_read(repo, sha, cmd) {
+        CiRead::Success => Some(CiRun::Success),
+        CiRead::Failure => Some(CiRun::Failure),
+        CiRead::Pending | CiRead::Unmeasured => None,
+    }
+}
+
+/// CI の結果を**1 回だけ**読み、[`CiRead`] の 4 値で返す（子 process 1 回・引数は [`ci_now`] と同じ）。
+///
+/// 判定の順は [`ci_now`] が持っていた順のまま: schedule の run を外す → 落ちた run を先に見る → 全部が完了
+/// なら success。行を撃てない（空の行・起動の失敗）・rc が 0 でない・JSON の配列として読めない周は
+/// [`CiRead::Unmeasured`]、run が 0 本か走っている run が在る周は [`CiRead::Pending`]（C10: 2 つを畳まない）。
+pub fn ci_read(repo: &Path, sha: &str, cmd: &str) -> CiRead {
     let line = cmd.replace(crate::pipe::declaration::CI_SHA_HOLE, sha);
     let mut words = line.split_whitespace();
-    let head = words.next()?;
-    let out = Invocation::new(head).args(words).current_dir(repo).output().ok()?;
+    let Some(head) = words.next() else {
+        return CiRead::Unmeasured;
+    };
+    let Ok(out) = Invocation::new(head).args(words).current_dir(repo).output() else {
+        return CiRead::Unmeasured;
+    };
     if !out.status.success() {
-        return None;
+        return CiRead::Unmeasured;
     }
-    let tree = crate::fleet::json_tree::parse(&String::from_utf8_lossy(&out.stdout)).ok()?;
-    // cron の run を**先に**外す（外した後に 0 本なら測れない）。
-    let runs = counted_runs(tree.as_array()?);
+    let Ok(tree) = crate::fleet::json_tree::parse(&String::from_utf8_lossy(&out.stdout)) else {
+        return CiRead::Unmeasured;
+    };
+    let Some(all) = tree.as_array() else {
+        return CiRead::Unmeasured;
+    };
+    // cron の run を**先に**外す（外した後に 0 本なら結果はまだ無い）。
+    let runs = counted_runs(all);
     if runs.is_empty() {
-        return None;
+        return CiRead::Pending;
     }
     let status_of = |run: &crate::fleet::json_tree::Tree| {
         run.get(CI_STATUS).and_then(crate::fleet::json_tree::Tree::as_str).map(str::to_owned)
@@ -259,14 +298,67 @@ pub fn ci_now(repo: &Path, sha: &str, cmd: &str) -> Option<CiRun> {
     // 走っていることが常態である。未完了を先に見ると、**測って落ちた事実**が上限いっぱい待った末の
     // 「測れていない」に化ける（C10 の反転）。落ちたと分かった時点で待つ理由は無い。
     if runs.iter().copied().any(failed) {
-        return Some(CiRun::Failure);
+        return CiRead::Failure;
     }
     // 落ちた run が 1 本も無い周は、**全部が完了している**ときだけ success と言える
     // （走っている run を成功に数えない）。
     if runs.iter().copied().any(|run| status_of(run).as_deref() != Some(CI_COMPLETED)) {
-        return None;
+        return CiRead::Pending;
     }
-    Some(CiRun::Success)
+    CiRead::Success
+}
+
+/// PR の merge の問いの**閉じた 3 値**（[`pr_merge`] の答え・設計 contract-source.md §60）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PrMerge {
+    /// `state` が `MERGED` で、merge の commit id（40 桁の 16 進）を持つ。
+    Merged(String),
+    /// `state` が `MERGED` でない文字列（`OPEN` / `CLOSED` …）。
+    NotMerged,
+    /// 起動の失敗・rc が 0 でない・JSON を読めない・`MERGED` なのに oid が無いか形が違う。
+    Unmeasured,
+}
+
+/// PR を問う forge の CLI（`--pr-cmd` の gh と同じ解き方・宣言で替えない・設計 contract-source.md §60 の限界）。
+const PR_PROGRAM: &str = "gh";
+
+/// PR の `state` が merge 済みの字面（字面は forge のもの）。
+const PR_MERGED: &str = "MERGED";
+
+/// commit id の桁数（40 桁の 16 進）。
+const OID_LEN: usize = 40;
+
+/// branch の PR が merge されたかとその commit を forge に**1 回だけ**問う（子 process 1 回・設計 contract-source.md §60）。
+///
+/// 撃つのは `gh pr view <branch> --json state,mergeCommit`（cwd は repo・shell を通さない・`--repo` を渡さない＝
+/// forge の既定の repo の選び方は gh に任せる）。
+pub fn pr_merge(repo: &Path, branch: &str) -> PrMerge {
+    let Ok(out) = Invocation::new(PR_PROGRAM)
+        .args(["pr", "view", branch, "--json", "state,mergeCommit"])
+        .current_dir(repo)
+        .output()
+    else {
+        return PrMerge::Unmeasured;
+    };
+    if !out.status.success() {
+        return PrMerge::Unmeasured;
+    }
+    let Ok(tree) = crate::fleet::json_tree::parse(&String::from_utf8_lossy(&out.stdout)) else {
+        return PrMerge::Unmeasured;
+    };
+    let Some(state) = tree.get("state").and_then(crate::fleet::json_tree::Tree::as_str) else {
+        return PrMerge::Unmeasured;
+    };
+    if state != PR_MERGED {
+        return PrMerge::NotMerged;
+    }
+    let oid = tree.get("mergeCommit").and_then(|found| found.get("oid")).and_then(crate::fleet::json_tree::Tree::as_str);
+    match oid {
+        Some(found) if found.len() == OID_LEN && found.bytes().all(|byte| byte.is_ascii_hexdigit()) => {
+            PrMerge::Merged(found.to_owned())
+        }
+        _ => PrMerge::Unmeasured,
+    }
 }
 
 /// file 1 本の印（長さ・mtime・inode・metadata だけで中身を parse しない）。
@@ -993,5 +1085,62 @@ mod tests {
         assert_eq!(found, Some(("ci-query-stub", Some(repo))), "program は 1 語目・cwd は repo");
         let args: Vec<&str> = calls.iter().flat_map(|call| call.args.iter().map(String::as_str)).collect();
         assert_eq!(args, ["run", "list", "--commit", "abc123", "--json", "status,conclusion"], "残りの語が引数");
+    }
+
+    /// CI の 7 つの答えが 4 値に分かれ、`ci_now` はその写し（設計 contract-source.md §60 の歯 (a)）。
+    #[test]
+    fn retire_parts_ci_read_splits_pending_from_unmeasured() {
+        use super::CiRead::{Failure, Pending, Success, Unmeasured};
+        use crate::pipe::fixture::{exited, Stub};
+        let repo = Path::new("/nonexistent-retire-parts-ci");
+        let cmd = "ci-query-stub run list --commit {sha} --json status,conclusion,event";
+        let cases: [(i32, &[u8], super::CiRead, Option<super::CiRun>); 7] = [
+            (0, br#"[{"status":"completed","conclusion":"success"}]"#, Success, Some(super::CiRun::Success)),
+            (0, br#"[{"status":"completed","conclusion":"failure"}]"#, Failure, Some(super::CiRun::Failure)),
+            (0, br#"[{"status":"in_progress","conclusion":""}]"#, Pending, None),
+            (0, b"[]", Pending, None),
+            (0, br#"[{"status":"completed","conclusion":"success","event":"schedule"}]"#, Pending, None),
+            (1, br#"[{"status":"completed","conclusion":"success"}]"#, Unmeasured, None),
+            (0, b"not json", Unmeasured, None),
+        ];
+        for (rc, stdout, read, now) in cases {
+            let body = stdout.to_vec();
+            let stub = Stub::install(move |_| exited(rc, &body));
+            assert_eq!(super::ci_read(repo, "abc123", cmd), read, "ci_read: rc {rc} {stdout:?}");
+            assert_eq!(super::ci_now(repo, "abc123", cmd), now, "ci_now: rc {rc} {stdout:?}");
+            assert_eq!(stub.calls().len(), 2, "1 回の読みにつき子 process 1 回");
+        }
+    }
+
+    /// PR の state と merge の commit が 3 値に分かれ、撃つ行は `gh pr view <branch> --json state,mergeCommit`
+    /// （cwd は repo・`--repo` なし）（設計 contract-source.md §60 の歯 (b)）。
+    #[test]
+    fn retire_parts_pr_merge_reads_the_state_and_the_merge_commit() {
+        use super::PrMerge::{Merged, NotMerged, Unmeasured};
+        use crate::pipe::fixture::{exited, Stub};
+        let repo = Path::new("/nonexistent-retire-parts-pr");
+        let oid = "0123456789abcdef0123456789abcdef01234567";
+        let merged = format!(r#"{{"state":"MERGED","mergeCommit":{{"oid":"{oid}"}}}}"#);
+        let short = format!(r#"{{"state":"MERGED","mergeCommit":{{"oid":"{}"}}}}"#, &oid[..39]);
+        let cases: [(i32, String, super::PrMerge); 8] = [
+            (0, merged.clone(), Merged(oid.to_owned())),
+            (0, r#"{"state":"OPEN","mergeCommit":null}"#.to_owned(), NotMerged),
+            (0, r#"{"state":"CLOSED","mergeCommit":null}"#.to_owned(), NotMerged),
+            (0, r#"{"state":"MERGED","mergeCommit":null}"#.to_owned(), Unmeasured),
+            (0, short, Unmeasured),
+            (1, merged, Unmeasured),
+            (0, "not json".to_owned(), Unmeasured),
+            (0, r#"{"mergeCommit":null}"#.to_owned(), Unmeasured),
+        ];
+        for (rc, stdout, want) in cases {
+            let body = stdout.clone().into_bytes();
+            let stub = Stub::install(move |_| exited(rc, &body));
+            assert_eq!(super::pr_merge(repo, "scribe2/s2-x"), want, "rc {rc} {stdout}");
+            let calls = stub.calls();
+            assert_eq!(calls.len(), 1, "問いは 1 回: {calls:?}");
+            let found = calls.first().map(|call| (call.program.as_str(), call.cwd.as_deref(), call.args.clone()));
+            let args = ["pr", "view", "scribe2/s2-x", "--json", "state,mergeCommit"].map(str::to_owned).to_vec();
+            assert_eq!(found, Some(("gh", Some(repo), args)), "program は gh・cwd は repo・--repo なし");
+        }
     }
 }

@@ -85,6 +85,8 @@ pub struct Issue {
     pub description: String,
     /// notes（無ければ空・本文と同じ読み手）。
     pub notes: String,
+    /// close の理由（`close_reason`・無ければ空・閉じ済みの契約を pipe retire が読む・設計 contract-source.md §60）。
+    pub close_reason: String,
 }
 
 /// 依存の 1 件（`dependencies[]` の `depends_on_id` と `type` だけを読む・**要素は status を持たない**ので
@@ -120,6 +122,7 @@ pub fn issues_of(text: &str) -> Option<Vec<Issue>> {
                 kind: text_of("issue_type").unwrap_or_default(),
                 description: text_of("description").unwrap_or_default(),
                 notes: text_of("notes").unwrap_or_default(),
+                close_reason: text_of("close_reason").unwrap_or_default(),
             })
         })
         .collect()
@@ -283,5 +286,14 @@ mod tests {
             envs: Vec::new(),
         };
         assert_eq!(stub.calls(), [bd("bd-gone"), bd("bd-stub")], "client の名と引数と cwd");
+    }
+
+    /// `close_reason` を持つ要素はその字面、持たない要素は空（設計 contract-source.md §60 の歯 (c)）。
+    #[test]
+    fn retire_parts_issue_reads_the_close_reason() {
+        let text = r#"[{"id":"s2-a","status":"closed","close_reason":"landed 0123 ci=success"},{"id":"s2-b","status":"open"}]"#;
+        let reasons: Option<Vec<String>> =
+            super::issues_of(text).map(|issues| issues.into_iter().map(|issue| issue.close_reason).collect());
+        assert_eq!(reasons, Some(vec!["landed 0123 ci=success".to_owned(), String::new()]));
     }
 }
