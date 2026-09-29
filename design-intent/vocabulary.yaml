@@ -694,7 +694,7 @@ terms:
   - canonical: 並列の枠
     domain: consumer
     aliases: [受付の枠]
-    definition: host 単位で便の変異検査に配る並列の枠 (SRS NFR6)。 契約を便にする前の検査の段 (受付) とは別。 置き場は state dir の親の下の host 用 dir で project をまたぎ、 枠 1 組は受付札 1 つで表す (ADR-0021 §2.3)。 器が管理する状態ではなく受付の一時的な印。
+    definition: host 単位で便の変異検査に配る並列の枠 (SRS NFR6)。 契約を便にする前の検査の段 (受付) とは別。 置き場は state dir の親の下の host 用 dir で project をまたぎ、 枠 1 組は受付札 1 つで表す (ADR-0021 §2.3)。 器が管理する状態ではなく受付の一時的な印。 ADR-0095 の後は、 gate の共通 verify・検出線・契約の verify の全部の行が枠を取る (穴 {jobs} を持たない行は job 1 つ)。
     relationships: [受付札, 実効 jobs, 封じ込め, 検出線]
   - canonical: 受付札
     domain: consumer
@@ -997,14 +997,14 @@ terms:
   - canonical: 席の箱
     domain: consumer
     aliases: [seat box]
-    definition: 席 (人と話す claude とその subagent の Bash) の起動行の頭に置く memory 上限付きの systemd の scope (SRS FR59 / NFR6・ADR-0072)。 上限は rules 行 seat.memory_max_mb (MiB・既定 32768・user 裁定 id つき)。 語列と unit 名は封じ込めの箱と同じ 1 関数で、 CPU の重みは付けない。 行が 0 / 読めない周と systemd-run が PATH に無い host は素の行に縮退し、 起動の 1 行の scope= に理由が出る。 溢れて殺されるのは箱の中の process だけで、 claude が死んだ周は管理 tick が起こし直す。
+    definition: 席 (人と話す claude とその subagent の Bash) の起動行の頭に置く memory 上限付きの systemd の scope (SRS FR59 / NFR6・ADR-0072)。 上限は rules 行 seat.memory_max_mb (MiB・既定 32768・user 裁定 id つき)。 語列と unit 名は封じ込めの箱と同じ 1 関数で、 CPU の重みは付けない。 ADR-0095 の後は job 1 つの値段の箱の CPU の上限を持つ (core 数を読めない周は付けない)。 行が 0 / 読めない周と systemd-run が PATH に無い host は素の行に縮退し、 起動の 1 行の scope= に理由が出る。 溢れて殺されるのは箱の中の process だけで、 claude が死んだ周は管理 tick が起こし直す。
     forbidden: [seat cgroup, 席の cgroup の防壁]
     relationships: [封じ込めの箱, 席の起動, 起動行の導出, 管理 tick, rules 行]
   - canonical: 封じ込めの箱
     domain: consumer
     aliases: [箱, confinement scope]
-    definition: 封じ込めが process を閉じ込める memory 上限付きの囲い (systemd-run --user --scope で作る transient scope)。 上限を超えると殺されるのはその中の process だけ (ADR-0021 §2.2・ADR-0040)。 ADR-0072 で席の箱も同じ語列と unit 名の関数で組む (席は CPU の重みを付けない)。
-    relationships: [封じ込め, 箱の上限の 2 種, 実装役の箱, 検証行の箱]
+    definition: 封じ込めが process を閉じ込める memory 上限付きの囲い (systemd-run --user --scope で作る transient scope)。 上限を超えると殺されるのはその中の process だけ (ADR-0021 §2.2・ADR-0040)。 ADR-0072 で席の箱も同じ語列と unit 名の関数で組む (席は CPU の重みを付けない)。 ADR-0095 で箱の CPU の上限も持つ (語の順は MemoryMax → CPUWeight → CPUQuota → OOMPolicy)。
+    relationships: [封じ込め, 箱の上限の 2 種, 実装役の箱, 検証行の箱, 箱の CPU の上限]
   - canonical: 箱の上限の 2 種
     domain: consumer
     aliases: [two limit kinds]
@@ -1181,8 +1181,8 @@ terms:
   - canonical: job 1 つの値段
     domain: consumer
     aliases: [per-job thread price]
-    definition: 変異検査の job 1 つが使う test の thread 本数 (ADR-0050・proposed)。 実測の core 数を rules 行 gate.mutants_jobs で割った値 (1 の床) を器の pure 関数 1 本が出す実効値で、 受付の枠の core の項の分母になり、 受け付けた枠が実効 jobs と対で行へ運ぶ。
-    relationships: [実効 jobs, 並列の枠, 硬い資源, 受付札]
+    definition: 変異検査の job 1 つが使う test の thread 本数 (ADR-0050・proposed)。 実測の core 数を rules 行 gate.mutants_jobs で割った値 (1 の床) を器の pure 関数 1 本が出す実効値で、 受付の枠の core の項の分母になり、 受け付けた枠が実効 jobs と対で行へ運ぶ。 ADR-0095 の後は、 受付を通らない便の箱と席の箱の CPU の上限の幅にもなり、 core 数は core 数の読み口の 1 本で測る。
+    relationships: [実効 jobs, 並列の枠, 硬い資源, 受付札, 箱の CPU の上限, core 数の読み口]
   - canonical: 器の健康の遮断器
     domain: consumer
     aliases: [host health circuit breaker]
@@ -1727,3 +1727,15 @@ terms:
     definition: session 用の口座選定が候補にする口座の使用率の上限の rules 行 (SRS FR36・今の行は R-C9-1 の 1 本・窓別の行は user 裁定で足す)。 この値未満の口座だけが候補になり、 park の区画の席が移る線もこの行のいずれか以上 (SRS FR95・ADR-0091)。
     relationships: [口座選定, rules 行, park の移り先の判定]
     flagged_ambiguities: [群の逼迫の閾値 (5 時間窓・7 日窓・モデル別窓の rules 行 3 本・SRS FR38) とは別]
+  # ---------------------------------------------------------------- 箱の CPU の幅 (ADR-0095)
+  - canonical: 箱の CPU の上限
+    domain: consumer
+    aliases: [box CPU quota, CPUQuota]
+    definition: 封じ込めの箱と席の箱に付ける CPU 時間の上限 (systemd の CPUQuota・ADR-0095)。 受付が配った行は job 数 × thread 数 × 100% (縮退と測れない周は 100%)、 それ以外の便の箱と席の箱は job 1 つの値段 × 100%。 core 数を読めない周は付けない。 CPU の重み (gate.cpu_weight) とは別で、 上限の中の Rust の道具は読む core 数が上限の幅まで縮む。
+    relationships: [封じ込めの箱, 席の箱, job 1 つの値段, 並列の枠]
+    flagged_ambiguities: [箱の上限の 2 種 (memory の上限の種) とは別]
+  - canonical: core 数の読み口
+    domain: consumer
+    aliases: [host core reader]
+    definition: 受付と器の健康の遮断器と箱の CPU の上限が読む host の core 数の 1 本 (ADR-0095)。 この process の /proc/self/status の Cpus_allowed_list の区間の列を数え、 affinity と cpuset は数に効き、 cgroup の CPU 時間の上限は効かない (席の箱の中の driver も host の core 数を読む)。 環境変数は読まない。
+    relationships: [job 1 つの値段, 並列の枠, 器の健康の遮断器, 箱の CPU の上限]
