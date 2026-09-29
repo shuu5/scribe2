@@ -9,8 +9,9 @@
 use crate::rules::manifest::Manifest;
 use std::path::{Component, Path, PathBuf};
 
-/// 出所 pointer の区切り。
-const SSOT: &str = "→ SSOT:";
+/// 出所 pointer の区切り（器の文書を指す印・消費側の repo が自分の文書に使う `→ SSOT:` と字で分ける・ADR-0090）。
+/// 旧い印 `→ SSOT:` だけの行は pointer を持たない行になる。
+const SSOT: &str = "→ 器の SSOT:";
 
 /// 憲法の置き場（anchor 相対）。
 const CONSTITUTION: &str = "design-intent/spec/constitution.html";
@@ -347,7 +348,7 @@ fn ledger_prefix(root: &Path) -> Option<String> {
     })
 }
 
-/// 項目の `→ SSOT:` 以降の参照の列（` / ` `、` `・` `,` `;` で区切る・従属行も含める）。
+/// 項目の `→ 器の SSOT:` 以降の参照の列（` / ` `、` `・` `,` `;` で区切る・従属行も含める）。
 pub fn references(text: &str) -> Vec<String> {
     let Some((_, tail)) = text.rsplit_once(SSOT) else {
         return Vec::new();

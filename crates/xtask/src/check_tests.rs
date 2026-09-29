@@ -146,7 +146,7 @@ fn write_healthy(dir: &Path) {
     // 設計 doc も同じ（prose-gate は対象 0 本を違反に倒す）。印を持つ文は pointer 付きで適合。
     write_at(dir, PROSE_DOC_REL, "# 設計\n\n器は失敗を記録しなければならない（C1）。\n");
     // 席の指示文の雛形も同じ（seat-brief は雛形 0 枚と行の無い役割を違反に倒す・`s2-07l.248`）。
-    write_at(dir, &brief_rel(), "{role} {target} {anchor} → SSOT: ADR-0022 §2.4\n{capabilities}\n");
+    write_at(dir, &brief_rel(), "{role} {target} {anchor} → 器の SSOT: ADR-0022 §2.4\n{capabilities}\n");
     // 契約表の欄の 2 面も同じ（contracts-schema は不在を違反に倒す・`s2-07l.208`）。
     crate::check_facts::contracts_fixture(FIXTURE_CORE).iter().for_each(|(rel, body)| write_at(dir, rel, body));
 }

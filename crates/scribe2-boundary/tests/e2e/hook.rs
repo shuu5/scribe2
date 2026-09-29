@@ -2272,7 +2272,10 @@ fn hook_brief_carries_the_ask_first_and_role_lines_without_c_articles() {
     let (seat, pane) = role_seat(&place, "briefsurface", Some("orchestrator"));
     let body = brief_lines(&place, &pane, &["--rules", &place.rules]);
     assert_eq!(body.len(), 11, "注入は 11 行: {body:?}");
-    assert!(body.iter().all(|line| line.contains("→ SSOT:")), "行はすべて出所 pointer を持つ: {body:?}");
+    assert!(
+        body.iter().all(|line| line.contains("→ 器の SSOT:") && !line.contains("→ SSOT:")),
+        "行はすべて器の文書を指す出所 pointer を持ち、旧い印を持たない: {body:?}"
+    );
     for pointer in ["憲法 A1", "憲法 A4.2", "憲法 A2", "憲法 A3", "憲法 N1", "憲法 C17"] {
         assert!(body.iter().any(|line| line.contains(pointer)), "{pointer} を指す行が在る: {body:?}");
     }
@@ -2406,7 +2409,10 @@ fn assert_bead_section(recent: &[String], total: usize) {
 fn brief_and_recent(place: &RolePlace, path: &str, bd: &str) -> (Vec<String>, Vec<String>) {
     let (brief, recent) = split_recent(stub_session_lines(place, path, bd));
     assert_eq!(brief.len(), 11, "§5 の指示文は 11 行のまま: {brief:?}");
-    assert!(brief.iter().all(|line| line.contains("→ SSOT:")), "指示文の行は pointer を持つ: {brief:?}");
+    assert!(
+        brief.iter().all(|line| line.contains("→ 器の SSOT:") && !line.contains("→ SSOT:")),
+        "指示文の行は器の文書を指す pointer を持ち、旧い印を持たない: {brief:?}"
+    );
     assert!(recent.iter().all(|line| line.starts_with("[RECENT-")), "DATA の行は行頭の marker で始まる: {recent:?}");
     (brief, recent)
 }
