@@ -65,11 +65,9 @@ jobs:
       # （added ≤ R-C13-1.per-pr・total ≤ R-C13-1）だけで決まり、check-delta-ms は判定行に残る検出線。
       - run: cargo xtask deps-delta --base '${{ github.event.pull_request.base.sha }}'
 
-  # push(main) の入口の出所（設計 docs/design/pipeline.md §7 約束 3・§60・`s2-07l.170`）。main の HEAD が PR の squash
+  # push(main) の入口の出所（設計 docs/design/pipeline.md §7 約束 3・`s2-07l.170`）。main の HEAD が PR の squash
   # （件名の末尾 `(#N)`）か `pipe land` の trailer（`run: <run id>`）を持つことを測る＝PR の flip-check も便の gate も
-  # 通らない直接の push を落とす。§60（行 bc）の着地の後は、PR の squash に本文の発端の trailer の行
-  # （`<Name>-Source: <bead id>`・文法は docs/design/vessel-hook.md §21 形 2）も要る。
-  # **push(main) のときだけ**撃つ（PR の HEAD はまだ squash されていない）。
+  # 通らない直接の push を落とす。**push(main) のときだけ**撃つ（PR の HEAD はまだ squash されていない）。
   # block scalar で書くのは、便の done（CLAUDE.md の done 区間＝`run: cargo …` の 1 行形の写し）に載せないため——
   # この門は着地した後の main でしか満たせず、便の worktree では構造的に通らない。
   main-provenance:
