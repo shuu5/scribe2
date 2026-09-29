@@ -560,6 +560,52 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
   - 契約かの判定を form.rs の 1 関数にまとめて列も使う。列は設計 pointer の無い bead を `NoDesignPointer` で見せる約束（§2）を持ち、form.rs の契約の数え（pointer 行を持つ bead）と母集団が違う。
   - 事前審査の母集団は変えず、列の入力だけ直す。問いが待ち行の祖先に居ると問いの宣言が予想の base に入り、§27 形 1 の「閉じていない契約の行」と食い違う。
 
+## 32. 起動の列の起こす側の周が、受付の断りを契約ごとに event に残す — 断りに入った周と名が変わった周に IntakeRefused を 1 件（契約表の行 ag・[FR68](../../design-intent/spec/srs.html#FR68) / AC60・[ADR-0088](../../design-intent/decisions/ADR-0088-case-positions-are-computed-once-by-the-vessel-and-read-from-one-file.html) (6)）
+
+やさしく言うと: 列が「この契約は受付で断られる」と判じても、今はどこにも残らない（`dispatch ls` を撃ったときに見えるだけ）。後で作る局面の出力（案件ごとの今の段と次の番）が読めるよう、断りを記録に残す。同じ断りが続く間は 1 件だけにして、記録が周ごとに伸びないようにする。
+
+- 何が起きているか（main 7c4ab0a1・verified）:
+  - 列が受付の断りを知る所は `crates/scribe2/src/pipe/dispatch/candidates.rs` の 2 つ: `entry_of`（repo の材料を読めない周 :71・契約の生成の断り :78・event log を読めず印を測れない周の `MARK` :62）と `blocker`（交差を読めない周 :146・受付の判定 `judge` の最初の断り :160・受付札の枠 `SLOT` :164）。どれも `WaitReason::Admission` に断りの名（`'static` の字）だけを持たせる。`crates/scribe2/src/pipe/dispatch.rs` の `fire` は起こせなかった候補の理由を `MARK` か `SPAWN` に上書きする（:652）。
+  - 名の出所は受付である。`crates/scribe2/src/pipe/cli/intake/refusal.rs` の `refuse` が `Refuse` の名を、`denied` が `Refuse` を持たない断りの名（args・generated・declaration・rules・size・store）を `Denial` の name に置く。`SLOT`・`SPAWN`・`MARK` の 3 語は dispatch.rs の私有の const（:71 / :74 / :78）。
+  - 列は受付の判定を置き場なしで撃つ（`blocker` の `Material` の state_dir が None）。ゆえに同時走行の最大値（max-live）・同じ秒の run の重複は列では判じず、列が起こした子の `pipe run` の受付だけが判じる。子の断りは run dir も event も作らず（受付の約束・e2e の 9 file・43 か所の歯が「断りは event を増やさない」を測る）、stderr が `<state_dir>/pipe/launch.log` に `pipe: <理由>` の 1 行で残るだけで、列の次の周はその bead を `launched:<ts>` で待たせる（§17）。
+  - 周は event log を 1 回全部読む（`measure` の `read_all`・:535）。読んだ列は `Ledger` の events に入り、`Read`（:514）は台帳と材料だけを `fire` へ返す。
+  - kind `IntakeRefused` と key（bead・refuse）は読み書きの両側に在る（[fleet-event-log.md](./fleet-event-log.md) §12・行 f）。本体は `crates/scribe2/src/fleet/mod.rs` の `Case` の `Refused`。`fleet record` はこの kind を断るので、書き手は器の中の列である。
+  - 周の数の目安（本 repo の置き場・2026-09-29 に読んだ）: 便の段の記帳（RunCreated・RunStage・RunDone・RunStopped）は 1 日 97〜807 件で、周はその終端ごとに 1 回撃つ。event log は 7.5 MB・33,230 行（2026-09-09〜09-29）で 1 日の伸びは 0.1〜1.0 MB。IntakeRefused の 1 行は約 150 byte。
+- 形（番号は done と 1:1）:
+  1. **何を記帳するか**: 起こす側の周（`fire`）が、起こし終えた後（`MARK` / `SPAWN` の上書きの後・事前審査の前）に、候補のうち理由が `WaitReason::Admission` で名が列自身の 2 語（`MARK`・`SPAWN`）でないものを候補の順に (bead, 名) で選ぶ。受付の断りの名（`Refuse` の名・受付の材料の断りの名）と受付札の `SLOT` が入る。`HostBusy` と他の待ちの理由は入らない（受付でない・§18）。
+  2. **いつ記帳するか（変わった周だけ）**: 選んだ (bead, 名) ごとに、同じ周が読んだ event の列のうち**その bead を持つ最後の行**が「kind `IntakeRefused` で refuse が同じ名」なら書かない。それ以外（その bead の行が無い・最後の行が別の名の IntakeRefused・最後の行が起こした印や release の印や便の段など別の kind）なら 1 件書く。event log を読めなかった周（`read_all` が Err）は 1 件も書かない。
+  3. **書く行**: kind `IntakeRefused`・bead = 契約の bead id・refuse = 断りの名・actor = kind の既定（machine）・detail なし・ts は書く時刻。追記は fleet の 1 本（`crates/scribe2/src/fleet/store.rs` の `append`）で、lock の待ち方は `launched` と同じく manifest の `LockPolicy` から読む。policy を読めない・書けない周は、列の結果（候補・理由・起こす便・rc・行）を 1 つも変えず stderr にも足さない。次の周は同じ判定で書き直す（最後の行が同じ断りでないので）。
+  4. **置き場**: 形 1〜3 の判定 2 つ（選ぶ純関数と、書くかを決める純関数）と書き手は子 module 1 つ（行 ag の write-set の `+` の file）に置く。dispatch.rs に足すのは mod 宣言・`Read` に周が読んだ event の列（読めない周は None）の 1 欄・`fire` の呼び出し 1 か所だけ。子は候補の列（`Candidate` の slice）を受け、`Turn` の literal を組まず、`EventKind` と `Stage` の match の arm と variant の構築を書かない（[consumer-sync.md](./consumer-sync.md) の行 g・本 doc の行 a・[contract-source.md](./contract-source.md) の 2 行の閉包を広げない）。子は `WaitReason::Admission` を読むので、`WaitReason` を touches に持つ本 doc の行 w の閉包に入る（行 w の write-set に子を `+` で足す・同じ docs PR）。
+  5. **書かない口**: 観測の口（`turn`・`dispatch ls`）・台帳を読めない周と実装役の口の無い周（`Unmeasured`）・受付（`pipe run` / `pipe intake` の断り。手で撃つ周も列が起こした子の周も）は書かない。
+- 触らない: `WaitReason` の値と `render` の字・`dispatch ls` の行・起こす判定と起こす便・受付の判定と断りの外形（run dir も event も作らない）・kind と key（行 f）・launch.log・事前審査（§27）・局面の出力がこの行を読む形（案件の局面の行の持ち分: 契約の断りの局面は、全部の書き直しで列の周が返す今の理由から決め、局面に入った時刻をその bead の最後の IntakeRefused の ts で読める）。
+- 限界:
+  - 列が起こした子の `pipe run` の受付の断り（max-live・同じ秒の run の重複・列の後に live になった便との交差など、列が判じない断り）は記帳しない。その bead は `launched:<ts>` で待ち、理由は launch.log の散文にしか無い。max-live を列の理由に上げるのは [gate-cost.md](./gate-cost.md) §24 (4) の約束の行で、`WaitReason::Admission` に受付の名 `max-live` を入れる形で起こせば、本行の書き手は変えずに拾う。
+  - 断り → 別の待ち（依存・hold）→ 同じ名の断りと移り、その間にその bead の行が 1 本も無ければ 2 度目は書かない（局面に入った時刻が古いまま残る）。
+  - 同じ時に 2 つの周が走ると、どちらも周の始めに読んだ log で判じるので同じ断りを 2 件書きうる（害は重複の 1 行）。
+  - 書けなかった周は次の周まで記録が無い（周は時計を持たないので、次の便の終端か手動の 1 周まで）。
+- 却下:
+  - 毎周 1 件書く（ADR-0088 の代償 N8 をそのまま受ける）。log が周 × 断りで伸び、断りが続く契約 10 本で 1 日最大 8,000 行・約 1.2 MB（今の 1 日の伸びを超える）。tick は log を全部読む（`read_all`）。変わった周だけでも、断りの名と bead と入った時刻は全部残る。
+  - 受付（`pipe run` / `pipe intake` の create）の断りで書く。受付の断りが event を作らないことは受付の約束で、e2e の 43 か所の歯が pin する。手で撃つ周を列の周と区別できず（`--drive` は手でも付く）、FR68 の「起動の列の周」の外まで数える。
+  - 前の周の断りを state dir の file に持って比べる。event log が同じ事実を既に持つ（新しい状態・C3）。
+  - 断りが解けた周に解除の event を書く。kind と key は行 f で閉じていて、key か kind を足すと跨版の面が増える。
+  - 子の断りを launch.log から読む。散文を判定に読む（C3.3）。
+  - mark と spawn も書く。受付の断りでない（mark は event log を読めない・書けない周で、書いても読めない）。
+- 歯（接頭辞 `refusal_record_`（in-file）と `pipe_dispatch_intake_refused_`（e2e）・`grep -rn` はどちらも 0 件・2026-09-29）:
+  - in-file（行 ag の `+` の file の歯の区間・event は `Event` の `from_line` で JSON の 1 行から組む・kind の字は歯が自分で書く）:
+    - (a) 理由が `Admission` の cap-headroom・`SLOT`・`MARK`・`SPAWN`、`Dependency`・`Hold`、理由なしの 7 候補から、選ばれるのが cap-headroom と slot の 2 件だけで候補の順。
+    - (b) その bead の最後の行が同じ名の IntakeRefused → 書かない。
+    - (c) 最後の行が別の名の IntakeRefused → 書く。
+    - (d) 同じ名の IntakeRefused の後にその bead の DispatchMark（release）の行 → 書く。
+    - (e) 同じ名の IntakeRefused の後に別の bead の行だけ → 書かない。
+    - (f) その bead の行が無い → 書く。
+    - (g) event log を読めない周（None）→ 1 件も書かない。
+  - e2e（`crates/scribe2-boundary/tests/e2e/pipe/dispatch/terminal.rs` に足す・新しい module は作らない・module の doc の接頭辞の列に 1 つ足す。helper は同じ file の `precheck_repo`・`precheck_row`・`waiting_on`・`hold`・`precheck_turn` と親の `ls`・`reason_of`・`release`）:
+    - (A) write-set が base に無い file を素で持つ行 r と、base に在る file の行 h の toy repo・台帳は r と h・h に hold。起こす側の手動の 1 周を 2 回、`dispatch ls` を 1 回撃つ。`dispatch ls` の r の理由が `admission:` で始まり mark でも spawn でもない（fixture の対照）。event log の `"kind":"IntakeRefused"` の行がちょうど 1 本で、bead が r・refuse が `dispatch ls` の理由の `admission:` の後ろの字と同じ。h の行は 0 本。2 周目の後も `dispatch ls` の後も 1 本のまま。
+    - (B) (A) の 1 周の後に r へ `release` を打ち、もう 1 周撃つと r の IntakeRefused の行が 2 本になり、2 本目が release の行より後に在る。
+  - 判定の順と変異（条件 1 つに歯 1 本）: `Admission` だけを選ぶ条件を外す変異と mark / spawn の除外を外す変異は (a)、いつも書く変異は (b)、名を比べない変異は (c)、最後の IntakeRefused だけを見る変異は (d)、log の最後の行を bead に依らず見る変異は (e)、行が無いと書かない変異は (f)、読めない周に書く変異は (g)、観測の口で書く変異は (A) の `dispatch ls` の後の本数、書き手の呼び出しを消す変異は (A)(B) が落とす。
+- base で RED の理由: (A)(B) は base の起こす側の周が IntakeRefused を 1 件も書かないので本数が 0（機能不在）。in-file の歯は新しい module と一緒に生まれるので flip-check は測らない（新しい module の file は base へ写せない。flip-check は e2e の file の赤 → 緑で入口を通す）。
+- 着地の後: PATH の binary を入れ替えた後から書く（swap-binary.sh は走行中の driver が在れば断る）。今の PATH の binary は行 f の着地より前の build で、この kind を読めない。入れ替えの 1 回で書き手と読み手が揃うので、古い読み手が新しい行を読む周は無い。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -842,7 +888,7 @@ title = "idle の知らせの末尾に並列の実測（live の本数・0 本�
 req = ["FR68", "FR44", "NFR4"]
 section = "26"
 touches = ["crate::pipe::dispatch::WaitReason"]
-write-set = ["+crates/scribe2/src/pipe/dispatch/precheck.rs", "+crates/scribe2/src/pipe/dispatch/facts.rs", "crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/dispatch/candidates.rs", "crates/scribe2/src/pipe/notify.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2-boundary/tests/e2e/notify.rs", "docs/design/dispatcher.md"]
+write-set = ["+crates/scribe2/src/pipe/dispatch/precheck.rs", "+crates/scribe2/src/pipe/dispatch/facts.rs", "+crates/scribe2/src/pipe/dispatch/refused.rs", "crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/dispatch/candidates.rs", "crates/scribe2/src/pipe/notify.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2-boundary/tests/e2e/notify.rs", "docs/design/dispatcher.md"]
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_notify_facts_"]
 size = "M"
 growth = ["crates/scribe2/src/pipe/dispatch.rs:4", "crates/scribe2/src/pipe/notify.rs:8", "crates/scribe2/src/pipe/cli.rs:6"]
@@ -938,4 +984,15 @@ verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe
 size = "S"
 growth = ["crates/scribe2/src/ledger/form.rs:8", "crates/scribe2/src/ledger/lint.rs:0", "crates/scribe2/src/ledger/memo.rs:0", "crates/scribe2/src/pipe/dispatch.rs:0", "crates/scribe2/src/pipe/dispatch/candidates.rs:4", "crates/scribe2/src/pipe/dispatch/precheck.rs:40"]
 done = "(1) intake:memo の字を定義するのは form.rs の MEMO_LABEL だけになり、lint.rs・memo.rs・dispatch.rs の const は消えて form.rs の const か (2) の述語を引き、intake:question は form.rs の QUESTION_LABEL のままで、memo の plan の引数 arg: --labels=intake:memo と doctor の台帳の 2 行と起票の門の断り文の字は変わらない (2) form.rs が memo か（is_memo を公開にする）と問いか（is_question を足す）の公開の述語 2 つを持ち、form.rs の 4 象限の問いの除外・lint.rs の memo の数え・列の入力・事前審査の母集団はこの述語を引いて label を自分で比べず、起票の門は今どおり form.rs の const を引く (3) 列の入力の判定が label intake:question を持つ bead を acceptance の有無に依らず外し、その bead は dispatch ls にも出ず、WaitReason の値と dispatch ls の行の形と順序は変わらない (4) 事前審査の母集団の関数が問いを契約の行に数えず、blocks の到達には今どおり残る 歯: pipe_dispatch_intake_label_ の (a) 行 a を指す契約 1 件と label intake:question と行 b を指す設計 pointer の acceptance を持つ問い 1 件の台帳で dispatch ls の契約の reason が - で問いの行が無く件数の行が total=1 ready=1（base は問いも候補に並び件数の行が total=2 なので RED）(b) 問いの代わりに label intake:memo の bead を置いた台帳で同じく行が無く total=1 ready=1（回帰の歯・base でも緑）、precheck_intake_label_ の (c) 問い q（label intake:question・設計 pointer）に blocks される契約 c と label の無い同じ pointer の bead p の 3 件で母集団の契約の行が c と p だけで c の到達が q を持つ（base は q も行に数えるので RED・歯は form.rs の既存の const を引き新しい述語を呼ばない）(d) q の label を intake:memo に替えても行が c と p だけ（回帰の歯・base でも緑）、e2e の台帳の 1 件を組む既存の helper と偽の台帳の helper の本文は変わらず、既存の歯 ledger_lint_judge_counts_each_defect_apart・quadrant_exempts_question_from_the_shaped_population・ledger_memo_plan_carries_label_parent_and_relates_to は本文を変えずに緑"
+
+[[contract]]
+id = "ag"
+title = "起動の列の起こす側の周が、受付が断った契約ごとに断りの名と bead を IntakeRefused 1 件に記帳する — 選ぶのは WaitReason::Admission のうち列自身の mark と spawn を除く名、書くのはその bead の event log の最後の行が同じ名の IntakeRefused でない周だけ（断りに入った周と名が変わった周）・判定 2 つと書き手は子 module・観測の口と受付は書かない（FR68・AC60・ADR-0088 (6)）"
+req = ["FR68"]
+section = "32"
+write-set = ["crates/scribe2/src/pipe/dispatch.rs", "+crates/scribe2/src/pipe/dispatch/refused.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch/terminal.rs", "=crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "=crates/scribe2/src/pipe/dispatch/candidates.rs", "=crates/scribe2/src/fleet/mod.rs", "=crates/scribe2/src/fleet/event.rs", "=crates/scribe2/src/fleet/store.rs"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail refusal_record_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_intake_refused_"]
+size = "S"
+growth = ["crates/scribe2/src/pipe/dispatch.rs:12", "crates/scribe2/src/pipe/dispatch/refused.rs:80"]
+done = "(1) 起こす側の周（fire）だけが、起こし終えた後（MARK / SPAWN の上書きの後・事前審査の前）に、候補のうち理由が WaitReason::Admission で名が MARK でも SPAWN でもないものを候補の順に (bead, 名) で選び、受付の断りの名と SLOT は入り HostBusy と他の理由は入らない (2) 選んだ (bead, 名) ごとに、同じ周が読んだ event の列のうちその bead を持つ最後の行が kind IntakeRefused で refuse が同じ名なら書かず、それ以外（行が無い・別の名の IntakeRefused・別の kind の行）なら 1 件書き、event log を読めなかった周は 1 件も書かない (3) 書く行は kind IntakeRefused・bead・refuse = 断りの名・actor は kind の既定・detail なしで、追記は fleet/store.rs の append の 1 本・lock の待ち方は launched と同じく manifest の LockPolicy から読み、policy を読めない・書けない周は候補・理由・起こす便・rc・stdout・stderr を 1 つも変えない (4) 判定 2 つと書き手は行 ag の + の file に在り、dispatch.rs に足すのは mod 宣言・Read に周が読んだ event の列（読めない周は None）の 1 欄・fire の呼び出し 1 か所だけで、子は Candidate の slice を受け Turn の literal と EventKind・Stage の match の arm と variant の構築を書かない (5) 観測の口（turn・dispatch ls）・Unmeasured の周・受付（pipe run / pipe intake の断り）は書かず、WaitReason の値と render の字・dispatch ls の行・受付の断りの外形（run dir も event も作らない）は変わらない 歯: refusal_record_ の in-file 7 本（(a) Admission の cap-headroom・SLOT・MARK・SPAWN と Dependency・Hold・理由なしの 7 候補から cap-headroom と slot の 2 件だけが候補の順で選ばれる (b) その bead の最後の行が同じ名の IntakeRefused なら書かない (c) 別の名なら書く (d) 同じ名の後にその bead の DispatchMark release の行が在れば書く (e) 同じ名の後に別の bead の行だけなら書かない (f) その bead の行が無ければ書く (g) event log を読めない周は書かない・event は Event の from_line で組む）と pipe_dispatch_intake_refused_ の e2e 2 本（terminal.rs に足す・(A) base に無い file を素で持つ行 r と hold した行 h の台帳で起こす側の手動の 1 周を 2 回と dispatch ls を 1 回撃つと、dispatch ls の r の理由が admission: で始まり mark でも spawn でもなく、event log の \"kind\":\"IntakeRefused\" の行がちょうど 1 本で bead が r・refuse が dispatch ls の理由の admission: の後ろの字と同じで h の行は 0 本、2 周目と dispatch ls の後も 1 本のまま (B) 1 周の後に r へ release を打ってもう 1 周撃つと r の行が 2 本で 2 本目が release の行より後）・base は起こす側の周が 1 件も書かないので (A)(B) が本数 0 で RED・in-file の歯は新しい module と一緒に生まれるので flip-check は e2e の file で入口を通す"
 <!-- contracts:end -->

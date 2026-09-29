@@ -168,7 +168,7 @@ subcommand と helper は責務ごとに 1 file に置く——入口（usage / 
   - 約束（この行が作るもの・番号は done と 1:1）:
     1. docs-only の分類は path の面（rules 行 `flip.docs_only_faces`・kind は list）で決め、面の外の file を含む便は `.rs` の差分が無くても `no-test-diff` で落ちる（`no-rust-diff` の skip は消す＝runner を撃たずに通す経路は残らない）。
     2. 札（`retroactive` / `moved`）の bead id は閉じた形で受け、形に合わない札は `bad-marker`、便が持つ札の本数が rules 行 `flip.marks_per_pr`（kind は int）を超えれば `too-many-marks` で落ちる。
-    3. push(main) の CI は HEAD が PR の squash（件名末尾の `(#N)`）か `pipe land` の trailer（`run: <run id>`）を持つことを `xtask main-provenance` で測る。口の本体は行 c の write-set の `+` の file に置き、`crates/xtask/src/main.rs` は分岐 1 本、`crates/xtask/src/limits.rs` は行の上限だけが動く。判定行は `main-provenance: ok via=pr number=<N>` / `ok via=land run=<run id>`（rc 0）・`FAIL reason=no-provenance`（rc 1）で、git を撃てない周は rc 2。CI の job は push(main) のときだけ撃ち、`run:` は block scalar で書く＝`CLAUDE.md` の done 区間（`run: cargo …` の 1 行形の写し）に載らない（着地した後の main でしか満たせない門を便の done にしない）。
+    3. push(main) の CI は HEAD が PR の squash（件名末尾の `(#N)`）か `pipe land` の trailer（`run: <run id>`）を持つことを `xtask main-provenance` で測る。口の本体は行 c の write-set の `+` の file に置き、`crates/xtask/src/main.rs` は分岐 1 本、`crates/xtask/src/limits.rs` は行の上限だけが動く。判定行は `main-provenance: ok via=pr number=<N>` / `ok via=land run=<run id>`（rc 0）・`FAIL reason=no-provenance`（rc 1）で、git を撃てない周は rc 2。CI の job は push(main) のときだけ撃ち、`run:` は block scalar で書く＝`CLAUDE.md` の done 区間（`run: cargo …` の 1 行形の写し）に載らない（着地した後の main でしか満たせない門を便の done にしない）。発端の trailer は §60（行 bc）で足す（(#N) だけの commit は `no-source` で落ちる）。
     4. 宣言の `common-verify` の各行は先頭語列で閉じた `VerifyKind` に分類され、先頭語 `cargo` の行を 1 本でも持ちながら入口の flip を撃つ行を持たない宣言は intake が `NoEntranceRed` で断る。先頭語 `cargo` の行を持たない宣言（Rust でない toy repo・`sh` / `git` だけの `common-verify`）は分類だけで断らない＝上の「Rust 固有の検査を内蔵しない」のまま。宣言 file の schema は変えない。
     5. 足す rules 行は 2 本（`flip.docs_only_faces` = list・`flip.marks_per_pr` = int）で、kind の列（`crates/scribe2/src/rules/mod.rs`）・行の読み手（`crates/scribe2/src/rules/manifest.rs`）・外形の pin（`crates/scribe2-boundary/tests/e2e/rules.rs` の snapshot）・kind の網羅の sample に同じ便で載る。値と裁定 id（C5・user 裁定 2026-09-22T06:48Z・逐語は台帳 `s2-07l.170`）: `flip.docs_only_faces` = `docs/` `design-intent/` `.beads/` `README.md` `CLAUDE.md`（直近 40 commit の非 `.rs` の面の実測: docs 33・design-intent 1。`plugin/` と `rules/` は生成物と規則で docs でない）、`flip.marks_per_pr` = 16（HEAD の札の母集団: 便ごとの最大 15〔`.222`〕・10・9・8・6・6 の上）。manifest の `ruling` 欄は `user 2026-09-22T06:48Z` を写す。既存の歯 `flipcheck_no_rust_diff_skips`（`crates/xtask/src/flipcheck_overlay_tests.rs`）は形 1 で消える `reason=no-rust-diff` の rc 0 を pin しているので、同じ便で新しい語彙（`no-test-diff`）へ書き換える＝行 c の write-set に持つ。
     6. 閾値の読み手（`crates/xtask/src/limits.rs` の `Limits::read`）は足した行を含めて欠け無く読む（要求する本数は行の本数に追随する）。
@@ -958,6 +958,84 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 - base で RED の理由: 無い。歯を足さない純移動で、検証行 6 本は base でも HEAD でも緑（不変の証明）。入口の RED は札 `moved` が免除する（§7）。
 - 実測（作業用の写しに本行の形を当てた・2026-09-29）: 純移動の証明が「名 + 本文の多重集合が一致 items=68 moved=17 visibility=5」・入口の flip-check が `RED-on-base ok tests_changed=0 moved=1`（rc 0）・`cargo clippy -p scribe2 --all-targets -- -D warnings` が rc 0・検証行の 6 本と現物の契約表の歯 2 本（`contract_closure_ext_real_table_has_zero_findings`・`contract_names_declared_real_table_has_zero_findings`）が緑・`cargo xtask check` が ok。
 
+## 60. main-provenance が器の便でない先端の commit に発端の trailer を要る — 件名の (#N) に本文の発端の行を足し、(#N) だけの commit を名指して落とす（契約表の行 bc・[FR92](../../design-intent/spec/srs.html#FR92) / AC62・[ADR-0088](../../design-intent/decisions/ADR-0088-case-positions-are-computed-once-by-the-vessel-and-read-from-one-file.html) (7)）
+
+やさしく言うと: main に入る commit のうち、器の便（自動の着地）でないもの＝人が PR を merge したものは、どの台帳の件のための変更かを本文の 1 行で名乗らないと CI が赤くなる。名乗り方の決まり（文法）と merge の手順の正本は [vessel-hook.md](./vessel-hook.md) §21 で、ここは CI の側の読み手を作る。
+
+- 何が起きているか（main 7c4ab0a1・verified）:
+  - `crates/xtask/src/provenance.rs` の `provenance_of` は件名の末尾の ` (#N)` を先に見て、無ければ 2 行目から後ろの `run: <run id>`（`is_run_id` の閉じた形）を探す。`verdict` の判定行は `ok via=pr number=<N>`・`ok via=land run=<run id>`・`FAIL reason=no-provenance` の 3 つで、発端の trailer は読まない。歯は in-file の 4 本。
+  - CI の job main-provenance（`.github/workflows/ci.yml`）は push(main) のときだけ、既定の `--rev HEAD` で撃つ。checkout は既定の深さで、測るのは**その push の先端の 1 commit だけ**である。
+  - main の直近 400 commit（2026-09-29）: 件名の末尾が (#N) の squash 252・本文に `run:` を持つ器の便の着地 147・どちらも無い手の merge commit 1。
+  - squash の本文と件名: repo の既定は、本文が PR の commit の message の列、件名が commit か PR の題に ` (#N)` を足したもの。repo は merge commit と rebase merge も許す（どちらも先端の件名が (#N) で終わらない）。gh 2.45.0 の `gh pr merge` は `-b` / `--body`（merge の commit の本文）・`-F` / `--body-file`（file か `-` で標準入力）・`-t` / `--subject` を持つ。
+  - xtask の依存は 0（`crates/xtask/Cargo.toml`）で core を引けず、core も xtask に依存しない。bead id の閉じた形は `crates/xtask/src/flipcheck.rs` の `is_bead_id`（run id の頭にも使う）。trailer の key は core では `crates/scribe2/src/pipe/land/finish.rs` の `trailer_key` が NAME から導く（先頭を大文字にして `-<語幹>: ` を足す）。xtask は NAME を `crates/xtask/src/workspace.rs` の `Layout` で core の name.rs から読む。
+- 形（番号は done と 1:1）:
+  1. **入口の判定**: 本文（2 行目から後ろ）を形 2 で `run` / `source` / `none` の 3 語に分け、件名の (#N) と組む。
+     - `run` → `main-provenance: ok via=land run=<run id> sha=<sha>`（今のまま・件名に依らない）。
+     - `source` で件名が (#N) で終わる → `main-provenance: ok via=pr number=<N> source=<id>[,<id>…] sha=<sha>`（rc 0）。
+     - `none` で件名が (#N) で終わる → `main-provenance: FAIL reason=no-source number=<N> sha=<sha>`（rc 1）。(#N) だけの commit をこの行が名指す。
+     - 件名が (#N) で終わらず `run` でもない → `main-provenance: FAIL reason=no-provenance sha=<sha>`（rc 1）。発端の行を持っていても直接の push は落とす（(#N) が PR を通った唯一の印）。
+     - git を撃てない・rev が解けない・workspace の NAME を読めない周は、判定行を出さず stderr に理由を出して rc 2（今と同じ極性・測れないを通過にも赤にも化けさせない）。
+  2. **本文の分け方**（正本は [vessel-hook.md](./vessel-hook.md) §21 形 2。ここは xtask の読み手が実装する形の写しで、2 つが 1 字でも違えば形 3 の見本の歯が落ちる）:
+     - key は NAME から導く: 先頭を大文字にした NAME に `-Source:` を足す（本 repo では `Scribe2-Source:`）。
+     - 本文の行は、各行から末尾の CR と、末尾の半角空白と tab を落とした字。本文の行のうち、**行頭から key で始まる行**を発端の行と読む。字下げした行と大小の違う行は発端の行でない（`run:` の読みと同じ）。
+     - 発端の行が形に合うのは、その字が「key・半角空白 1 つ・bead id（`is_bead_id` の形）を半角空白 1 つで区切って 1 本以上」だけのとき。id の無い行・空白 2 つ（空の id）・`,` か読点の区切り・key の直後の空白の欠け・key の後ろか id の間の tab・形に合わない id は形の外。
+     - 分け方の順: 形の外の発端の行を 1 本でも持つ本文は `none`（他の行に依らない）。そうでなく `is_run_id` の形の `run:` の行を持つ本文は `run`。そうでなく発端の行を 1 本以上持つ本文は `source`（id は全部の発端の行の id を出てきた順に並べる）。どれでもなければ `none`。
+     - 台帳の接頭辞と台帳での実在は見ない（CI は台帳に届かない。打ち違いと台帳に無い発端は局面の出力の misfit が数える・FR92）。
+  3. **2 つの読み手を 1 つの見本で揃える**: 行 bc の write-set の `+` の file（text の見本）に、塊ごとに期待の語と本文を置く。形: 行頭 `#` は注、行 `===` が塊の区切り、塊の 1 行目が期待の語（`source` / `run` / `none`）、2 行目から区切りの前までが本文（件名は含めない）。xtask の歯はこの file を読んで各塊を形 2 で分け、語が期待と一致することを確かめる。[vessel-hook.md](./vessel-hook.md) の行 mg の歯（merge の門の読み手・core）も同じ file を読む（`source` と `run` を通過、`none` を断りと読む）。core と xtask は互いに依存しないので読み手の実装は 2 つ、見本は 1 つである。CR を含む行は file の改行の扱いに依らないよう見本に置かず、両方の歯が本文を組んで測る。塊は少なくとも次の 24（key は本 repo の字）:
+
+     | # | 期待 | 本文 |
+     |---|---|---|
+     | 1 | source | `Scribe2-Source: s2-07l.739` |
+     | 2 | source | `Scribe2-Source: s2-07l.739 s2-07l.722`（id 2 本・AC62） |
+     | 3 | source | 要旨の段落・空行・`Co-Authored-By:` の行・`Scribe2-Source: s2-a.1`（本文のどこに在ってもよい） |
+     | 4 | source | `Scribe2-Source: s2-a.1` の後ろに半角空白（行末の空白は除く） |
+     | 5 | source | `Scribe2-Source: s2-a.1` と `Scribe2-Source: s2-b.2` の 2 行 |
+     | 6 | run | `run: s2-07l.351-20260922T061245Z` と `Scribe2-Contract: docs/design/pipeline.md#b` |
+     | 7 | none | 空の本文 |
+     | 8 | none | `Scribe2-Source:`（id なし） |
+     | 9 | none | `Scribe2-Source: TODO` |
+     | 10 | none | `Scribe2-Source: s2-a.1  s2-b.2`（空白 2 つ） |
+     | 11 | none | `Scribe2-Source: s2-a.1,s2-b.2` |
+     | 12 | none | `Scribe2-Source:s2-a.1`（key の直後の空白なし） |
+     | 13 | none | 行頭に半角空白 2 つを置いた `Scribe2-Source: s2-a.1` |
+     | 14 | none | `scribe2-source: s2-a.1`（小文字） |
+     | 15 | none | `Scribe2-Source: s2-a.1` と `Scribe2-Source: s2-07l..3` の 2 行（1 本でも形の外） |
+     | 16 | none | `run: s2-07l.351-20260922T061245Z` と `Scribe2-Source: TODO`（形の外の発端の行が run より先） |
+     | 17 | none | `Scribe2-Source: S2-A.1`（大文字の id） |
+     | 18 | source | `Scribe2-Source: s2-a.1` の後ろに tab（行末の tab は除く） |
+     | 19 | none | `Scribe2-Source:` の直後に tab 1 つと `s2-a.1`（tab は区切りでない） |
+     | 20 | none | `Scribe2-Source: s2-a.1、`（末尾に読点） |
+     | 21 | none | `Scribe2-Source: 12345`（`-` の無い数字だけの id） |
+     | 22 | none | 文の途中に `Scribe2-Source: s2-a.1` の字を持つ行だけ（行頭でないので発端の行でない） |
+     | 23 | none | `run: TODO`（run id の形でない run の行は数えない） |
+     | 24 | run | `run: s2-07l.351-20260922T061245Z` と `Scribe2-Source: s2-a.1`（両方が形に合えば run を先に採る） |
+  4. **NAME の読み**: `run` は cwd の workspace を `Layout` で読んで NAME を得て key を組む。CI は repo の root で撃つので今の job のまま読める。
+  5. **CI の job と口は変えない**: `.github/workflows/ci.yml`・`--rev` の読み・USAGE の字・`is_run_id` と `is_bead_id` の形は 1 字も変えない（job の頭の注だけは、本行が本 § と vessel-hook.md §21 を指す形に直す＝write-set の `.github/workflows/ci.yml`。docs PR で直すと flip-check が docs の面の外の変更として no-test-diff で落とす）。先端の 1 commit だけを測る形のまま。`crates/xtask/src/provenance.rs` の頭の doc を入口の 3 形と発端の行の読みに書き直す。
+- 切り替えの線（新しい状態を持たない）: CI は push(main) ごとに**その先端の木に在る** xtask を build して先端の 1 commit だけを測る。ゆえに線は「行 bc の着地を木に持つ最初の push(main) の先端」で、それより前に main に入った commit は二度と先端として測られない（古い run の再実行は古い commit の木の xtask を撃つ）。state file・日付・sha の定数は要らない。行 bc の着地の commit は器の便の land（`run:`）なので自分では落ちない。局面の出力の側の線（event `LifecycleCutover`・AC62 の「線の前の trailer の無い commit は misfit に数えない」）は案件の局面の行の持ち分で、本行は触らない。
+- 着地の後（手順の変わり目・自分を締め出さないために）: 行 bc の着地の**直後から**（PATH の binary の入れ替えを待たない。CI は先端の木の xtask を撃つ）、この repo の器の便でない merge は全部、本文 file の最後の段落に `Scribe2-Source: <bead id>` の 1 行を置いて `gh pr merge <N> --squash --body-file <絶対 path>` で撃つ。手順の正本は [vessel-hook.md](./vessel-hook.md) §21 の「席の merge の手順」（`--subject` を渡さない・`--merge` と `--rebase` を使わない・渡した本文は既定の本文を置き換える・merge の後に先端の本文と CI を確かめる・忘れた周は履歴を書き換えず次の push で直す・画面の merge の本文の欄にも足す）。[vessel-hook.md](./vessel-hook.md) の行 mg（merge の門）は行 bc の着地の後に起こし（行 bc の見本を読むため・台帳の blocks で持つ）、その着地と PATH の binary の入れ替えの後は、本文の無い `gh pr merge` を実行の前に断る（手順は同じ）。
+- 触らない: `.github/workflows/ci.yml`（job・撃つ時機・checkout の深さ）・`crates/xtask/src/main.rs` の分岐と USAGE・`run:` の判定と `is_run_id`・`is_bead_id`・器の land の squash の本文（`trailer_key` と `run:` の行）・merge の門（[vessel-hook.md](./vessel-hook.md) の行 mg）・局面の出力の misfit（台帳に無い発端・event log に無い便・線の後の trailer の無い commit）・flip-check。
+- 限界:
+  - 先端しか測らないので、1 回の push に載った途中の commit は測らない（今と同じ。器の land の連なりの途中は便の commit）。
+  - 形だけを見る。台帳に無い id・打ち違いは CI を通り、局面の出力の misfit でだけ見える（FR92・ADR-0088 の代償 N6）。
+  - 発端の行をまねた直接の push は、件名を ` (#N)` で終わらせれば通る（今の (#N) と同じ強さ。事故の push を拾う門で、偽りを拾う門ではない）。
+- 却下:
+  - 発端の行だけで通す（(#N) を要らない）。直接の push が発端の行を写すと通り、§7 約束 3 が塞いだ「PR の flip-check を通らない push」が開く。
+  - push の範囲（前の先端から今の先端まで）を測る。workflow に前の先端の sha を渡す変更と fetch の深さが要り、force の周と初回の push の扱いを決める手が要る。先端だけなら状態も線の定数も要らない。
+  - 線の sha か日付を xtask の定数か state file に持つ。先端だけを測る形では要らない。
+  - xtask に `Scribe2-Source` を字で焼く。名を 2 か所に持つ（C2.2）。
+  - xtask を core に依存させて core の読み手を呼ぶ。xtask は依存 0 で core を測る側に居る（core の build が壊れた周に門も壊れる）。
+  - 見本を 2 つの歯へ字で写す。片方だけ直すと静かにずれる。
+  - merge commit と rebase merge も通す。repo の約束は「1 bead = 1 PR・squash」で、先端の件名で PR を見分けられない。
+- 歯（`crates/xtask/src/provenance.rs` の in-file・接頭辞 `main_provenance_source_`・`grep -rn main_provenance_source_ crates/` は 0 件・2026-09-29。歯は NAME の小文字の字を引用符で書かない＝name-literal の門）:
+  - (a) 見本の歯: 見本 file の塊を全部読み、各塊の本文を形 2 で分けた語が期待と一致する。key は本 repo の workspace を `Layout` で読んだ NAME から組む。塊が 24 以上・3 つの語が全部出ることも測る（母集団の件数を同時に出す）。加えて CR LF の行の本文（`Scribe2-Source: s2-a.1` の行末に CR）を歯の中で組んで `source`。
+  - (b) 件名の末尾が (#542) で、本文が要旨と `Co-authored-by:` の行だけの message が `main-provenance: FAIL reason=no-source number=542 sha=abc123`・rc 1（今の「(#N) だけで通る」歯を書き換えたもの）。
+  - (c) 件名が (#810) で終わり本文に `Scribe2-Source: s2-07l.739` を持つ message が `main-provenance: ok via=pr number=810 source=s2-07l.739 sha=…`・rc 0、`Scribe2-Source: s2-07l.739 s2-07l.722` を持つ message が `… source=s2-07l.739,s2-07l.722 …`・rc 0（AC62 の id 1 本と 2 本。器の便の trailer の通過は既存の歯が測る＝CI の通過 3/3）。
+  - (d) 件名に (#N) が無く本文に形に合う発端の行を持つ message が `FAIL reason=no-provenance`・rc 1（回帰の歯・base でも緑）。
+  - (e) key の導き: 名 `fixturename` で組んだ key では `Fixturename-Source: s2-a.1` が `source`、`Scribe2-Source: s2-a.1` が `none`。
+  - 本文を変えない既存の歯（verify に載せる・base でも緑）: `main_provenance_accepts_land_trailer_run_id`・`main_provenance_refuses_head_without_either_entrance`（11 形はどれも `no-provenance` のまま）・`main_provenance_rev_argument_forms`。
+  - 判定の順と変異（条件 1 つに歯 1 本）: 発端の行を要らなくする変異は (b)、(#N) を要らなくする変異は (d)、形を緩める変異（空の id を許す・`split_whitespace`・字下げを許す・1 本でも形に合えば通す）は (a) の none の塊、run を後に回す変異は (a) の塊 24、形の外の判定を run の後に回す変異は (a) の塊 16、key を字で焼く変異は (e)、id の区切りを変える変異は (c) が落とす。
+- base で RED の理由: 歯の区間は新しい関数と引数を呼ぶので、base の本体へ写すと compile されず RED（flip-check の規則: 写した後の compile error は RED）。挙動でも (b) は base が (#N) だけで `ok via=pr` を返し、(c) は base の行が `source=` を持たない（機能不在）。(a) は base に見本 file も分ける関数も無い（機能不在）。(d) は回帰の歯で base でも緑。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -1537,4 +1615,15 @@ write-set = ["-crates/scribe2/src/pipe/declaration.rs", "+crates/scribe2/src/pip
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail declaration_kind_passes_declarations_without_cargo_and_keeps_the_schema", "cargo nextest run -p scribe2 --lib --no-tests=fail declaration_names_every_missing_key", "cargo nextest run -p scribe2 --lib --no-tests=fail declaration_requirements_is_an_optional_repo_relative_path", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_terminal_land_remote_is_an_optional_single_word", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_terminal_land_ci_cmd_must_carry_the_sha_hole", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_declaration_default_ci_cmd_carries_the_event_field"]
 size = "S"
 done = "(1) 17 item（DECLARED_KEYS / OPTIONAL_KEYS / REMOTE_KEY / CI_CMD_KEY / DEFAULT_CI_CMD / CI_SHA_HOLE / REQUIREMENTS_KEY / DEFAULT_REQUIREMENTS / requirements_of / remote_of / ci_cmd_of / repo_relative / TableFacts / table_facts / table_facts_named / TerminalFacts / terminal_facts）が + の file に名・本文・順序のまま在り、純移動の証明が moved=17 の要約を返す (2) 親に増えるのは mod 宣言 1 行・pub use 2 行・私有の use 1 行だけで、親の本体と、群を declaration の path で引く外の 6 file は 1 字も変わらない (3) 可視性を上げるのは子の側の pub(super) 5 つ（DECLARED_KEYS / OPTIONAL_KEYS / requirements_of / remote_of / ci_cmd_of）だけで、親の側は 1 語も変わらない (4) in-file の歯 23 本の名・本文・use が不変で全部緑、札 flip-check: moved が親の mod tests の最後の行（閉じの } の直前）に 1 行在り、入口の flip-check が moved=1 で rc 0 (5) 兄弟の子 module 3 本（entrance_flip / path_kinds / write_set）が 1 字も変わらない (6) file-lines で declaration.rs の余地が base の 14 から 150 以上へ増える"
+
+[[contract]]
+id = "bc"
+title = "main-provenance が器の便でない先端の commit に発端の trailer を要る — 本文を run / source / none に分ける 1 関数（key は NAME から導く・行頭の key の行が形に合うのは bead id を半角空白 1 つで区切って 1 本以上のときだけ・形の外が 1 本でも在れば none）で、件名の (#N) と発端の行の両方を持つ commit だけを via=pr で通し、(#N) だけの commit を no-source で名指して rc 1 にし、run の trailer の commit は今どおり通す — 2 つの読み手が同じ見本 file を読む（xtask・core の外・先端だけを測る形と CI の job は不変・FR92 / AC62）"
+req = ["FR92"]
+section = "60"
+write-set = ["crates/xtask/src/provenance.rs", "+crates/xtask/src/source_trailer_cases.txt", ".github/workflows/ci.yml", "=crates/xtask/src/workspace.rs", "=crates/xtask/src/flipcheck.rs", "=crates/scribe2/src/pipe/land/finish.rs"]
+verify = ["cargo nextest run -p xtask --no-tests=fail main_provenance_source_", "cargo nextest run -p xtask --no-tests=fail main_provenance_accepts_land_trailer_run_id", "cargo nextest run -p xtask --no-tests=fail main_provenance_refuses_head_without_either_entrance", "cargo nextest run -p xtask --no-tests=fail main_provenance_rev_argument_forms"]
+size = "S"
+growth = ["crates/xtask/src/provenance.rs:150"]
+done = "(1) 本文（2 行目から後ろ）を run / source / none に分ける 1 関数が、形の外の発端の行を 1 本でも持つ本文を none、そうでなく is_run_id の形の run: の行を持つ本文を run、そうでなく発端の行を 1 本以上持つ本文を source（id は全部の発端の行の id を出てきた順）、どれでもなければ none に分け、判定行は run が ok via=land run=<id>、source で件名が (#N) で終わる commit が ok via=pr number=<N> source=<id,…>、none で (#N) の commit が FAIL reason=no-source number=<N>、(#N) で終わらず run でもない commit が FAIL reason=no-provenance で、どれも末尾 sha=<sha>・rc は 0 / 1 (2) 発端の行は行頭から key（先頭を大文字にした NAME と -Source:）で始まる行で、字下げと大小の違う行は発端の行でなく、形に合うのは末尾の CR と半角空白と tab を落とした字が key・半角空白 1 つ・is_bead_id の形の id を半角空白 1 つで区切って 1 本以上だけのとき (3) 行 bc の + の見本 file（行頭 # の注・行 === の区切り・塊の 1 行目の期待の語・2 行目からの本文）が設計 §60 形 3 の 24 塊以上を持ち、xtask の歯が全塊を読んで分けた語が期待と全部一致し、その file は core の歯からも workspace の path で読める (4) run は cwd の workspace を Layout で読んで NAME を得て key を組み、NAME を読めない周は git を撃てない周と同じく判定行なしの rc 2 (5) .github/workflows/ci.yml は job の頭の注だけが本 § と vessel-hook.md §21 を指す形に変わり（job・撃つ時機・checkout の深さは不変）、main.rs の分岐と USAGE・is_run_id・is_bead_id は変わらず、provenance.rs の頭の doc が入口の 3 形と発端の行の読みを書く 歯: main_provenance_source_ の (a) 見本の全塊の語が期待と一致し塊は 24 以上で 3 語が全部出る（key は本 repo の workspace の NAME から組む）・CR LF の行の本文を歯の中で組んだ本文も source(b) 件名が (#542) で終わり発端の行の無い message が FAIL reason=no-source number=542 sha=abc123・rc 1（今の (#N) だけで通る歯を書き換えたもの）(c) (#810) の件名と Scribe2-Source: s2-07l.739 の本文が ok via=pr number=810 source=s2-07l.739・rc 0、Scribe2-Source: s2-07l.739 s2-07l.722 の本文が source=s2-07l.739,s2-07l.722・rc 0 (d) (#N) の無い件名と形に合う発端の行の本文が FAIL reason=no-provenance・rc 1（回帰の歯・base でも緑）(e) 名 fixturename で組んだ key で Fixturename-Source: s2-a.1 が source・Scribe2-Source: s2-a.1 が none、既存の歯 main_provenance_accepts_land_trailer_run_id・main_provenance_refuses_head_without_either_entrance・main_provenance_rev_argument_forms は本文を変えずに緑、歯は NAME の小文字の字を引用符で書かない（name-literal の門）・base は歯の区間が新しい関数を呼んで compile されず、挙動でも (b) が ok を返し (c) が source= を持たないので RED"
 <!-- contracts:end -->
