@@ -214,6 +214,19 @@ pub fn seat_dir(state_dir: &Path, target: &str) -> PathBuf {
     path.parent().map_or_else(|| path.clone(), Path::to_path_buf)
 }
 
+/// 席ごとの起草の置き場の名（席の置き場の直下・器は作らない・設計 dispatcher.md §33 形 1）。
+pub const DRAFTS: &str = "drafts";
+
+/// 席ごとの置き場の根（`<state_dir>/seat`・dir 名の字を 2 面に持たない）。
+pub fn seats_root(state_dir: &Path) -> PathBuf {
+    state_dir.join(inject::SEAT_DIR)
+}
+
+/// 席の起草の置き場（`<state_dir>/seat/<潰した target>/drafts/`・器は dir を作らない）。
+pub fn drafts_dir(state_dir: &Path, target: &str) -> PathBuf {
+    seat_dir(state_dir, target).join(DRAFTS)
+}
+
 /// 置き場の解決の出所（語彙 Provenance・憲法 C10）。**2 値で閉じる**（解決順序 `--state-dir` >
 /// git 設定の 2 経路しか無く、第 3 の経路を足すときは variant を足す＝行の `source=` が経路の
 /// 全数を名乗る・憲法 C2）。

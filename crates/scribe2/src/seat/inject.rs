@@ -34,7 +34,7 @@ const WHAT_CAP: usize = 80;
 /// 記録 file の名前。
 const TICK_FILE: &str = "tick.jsonl";
 /// 記録の置き場（state dir 直下の dir 名）。
-const SEAT_DIR: &str = "seat";
+pub(super) const SEAT_DIR: &str = "seat";
 /// 記録の who。
 const WHO: &str = "seat-inject";
 /// 記録の when。

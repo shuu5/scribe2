@@ -237,9 +237,9 @@ pub fn dispatch(args: &[String]) -> Outcome {
     // 止まる＝記帳だけで終わる。
     let terminal = verb.is_some_and(|found| TERMINALS.contains(&found));
     let contact = terminal || (verb.is_some_and(|found| GATES.contains(&found)) && outcome.rc == RC_OK);
-    // **段の記帳の後・列の 1 周の前に live でない便の木を掃く**（設計 dispatcher.md §30 形 3・`--repo` の無い周も撃つ）。
+    // **段の記帳の後・列の 1 周の前に live でない便の木と席の起草の木を掃く**（設計 dispatcher.md §30 形 3・§33 形 4・`--repo` の無い周も撃つ）。
     if let (true, Ok(Some(state_dir))) = (terminal, flag(args, "--state-dir")) {
-        outcome.err.extend(super::sweep::sweep(std::path::Path::new(state_dir), policy));
+        outcome.err.extend(super::sweep::sweep(std::path::Path::new(state_dir), policy, &manifest));
     }
     if contact {
         if let Some(queue) = queue_of(args, &manifest, driving.as_ref(), drove.as_deref()) {

@@ -282,6 +282,9 @@ pub enum RuleKind {
     /// land の終端が CI の判定を照合する間隔（秒・設計 contract-source.md §50）。[`Self::PipeCiWaitS`] の上限の内側を
     /// この間隔で撃つ（1 回が forge の API の 1 回）。0 は唯一の待ちの既定の周期に戻る。
     PipeCiPollS,
+    /// 席の起草の置き場の写しの中間生成物を器が消す**書きの線**（時間・設計 dispatcher.md §33・ADR-0096）。
+    /// 起草の木の名が閉じた列の dir は、自身と下の全 entry の最新の書きがこの時間より前のときだけ消える。0 は線 = 今。
+    SeatDraftsStaleH,
     /// 席の指示文の `{ledger}` が台帳（`bd --readonly`）の子 process を待つ上限（秒）。超えたら数えを返さない。
     LedgerTimeoutS,
     /// 役割ごとの権能（設計 seat-roles.md §3・ADR-0022 §2.2）。値は権能の名の列で、名の集合は
@@ -424,6 +427,7 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::PipeLandWaitS,
     RuleKind::PipeCiWaitS,
     RuleKind::PipeCiPollS,
+    RuleKind::SeatDraftsStaleH,
     RuleKind::LedgerTimeoutS,
     RuleKind::RoleCapabilities,
     RuleKind::PipeSizeSLines,
@@ -502,6 +506,7 @@ impl RuleKind {
             Self::HostBlockedPerCore => "HostBlockedPerCore",
             Self::PipeLandWaitS => "PipeLandWaitS",
             Self::PipeCiWaitS => "PipeCiWaitS", Self::PipeCiPollS => "PipeCiPollS",
+            Self::SeatDraftsStaleH => "SeatDraftsStaleH",
             Self::LedgerTimeoutS => "LedgerTimeoutS",
             Self::RoleCapabilities => "RoleCapabilities",
             Self::PipeSizeSLines => "PipeSizeSLines", Self::PipeSizeMLines => "PipeSizeMLines",
@@ -557,7 +562,7 @@ impl RuleKind {
             | Self::HostRunnablePerCore
             | Self::HostBlockedPerCore
             | Self::PipeLandWaitS
-            | Self::PipeCiWaitS | Self::PipeCiPollS
+            | Self::PipeCiWaitS | Self::PipeCiPollS | Self::SeatDraftsStaleH
             | Self::LedgerTimeoutS
             | Self::PipeSizeSLines
             | Self::PipeSizeMLines

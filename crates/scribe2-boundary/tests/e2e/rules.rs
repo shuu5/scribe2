@@ -878,6 +878,30 @@ fn rules_ci_poll_row_follows_the_ci_wait() {
     assert!(errors.join("\n").contains("形と合わない"), "形は Int だけ: {errors:?}");
 }
 
+/// 席の起草の置き場の書きの線の行（設計 dispatcher.md §33 形 5・`s2-07l.736.25`）が埋め込み manifest に id / kind / 形 Int /
+/// 値 6 / enabled / 裁定 id / 裁定日で 1 本在り、行は `pipe.ci_poll_s` の直後・kind は `ALL` の `PipeCiPollS` の直後で字面から
+/// 引け、形は Int だけ（base では行も kind も無い ＝ RED）。
+#[test]
+fn rules_drafts_stale_row_follows_the_ci_poll() {
+    let manifest = Manifest::embedded().unwrap_or_else(|errors| panic!("埋め込み manifest が拒まれた: {errors:?}"));
+    let id = "seat.drafts_stale_h";
+    let row = manifest.get(id).unwrap_or_else(|| panic!("{id} の行が在る"));
+    assert_eq!((row.kind, row.kind.shape()), (RuleKind::SeatDraftsStaleH, ValueShape::Int), "{id} の kind と形");
+    assert_eq!(row.value, RuleValue::Int(6), "{id} の値（6 時間）");
+    assert!(row.enabled, "{id} は既定で効く");
+    assert_eq!((row.ruling.as_str(), row.ruled_at.as_str()), ("user 2026-09-29T11:43Z", "2026-09-29"), "{id} の裁定 id と裁定日");
+    assert_eq!(int_row(&manifest, id), Ok(6), "{id} を整数の読み手で引ける");
+    assert_eq!(manifest.rows().iter().filter(|found| found.kind == RuleKind::SeatDraftsStaleH).count(), 1, "kind の行は 1 本");
+    let at = ALL.iter().position(|kind| *kind == RuleKind::PipeCiPollS).expect("PipeCiPollS は ALL に在る");
+    assert_eq!(ALL.get(at + 1), Some(&RuleKind::SeatDraftsStaleH), "kind は PipeCiPollS の直後");
+    let rows: Vec<&str> = manifest.rows().iter().map(|found| found.id.as_str()).collect();
+    let poll = rows.iter().position(|found| *found == "pipe.ci_poll_s").expect("pipe.ci_poll_s の行が在る");
+    assert_eq!(rows.get(poll + 1).copied(), Some(id), "行も pipe.ci_poll_s の直後（母集団 {} 行）", rows.len());
+    assert_eq!(RuleKind::parse("SeatDraftsStaleH"), Some(RuleKind::SeatDraftsStaleH), "字面から引ける");
+    let errors = rejected(&one_row(RuleKind::SeatDraftsStaleH, "\"6\"")).expect("文字列の値の fixture が受理された");
+    assert!(errors.join("\n").contains("形と合わない"), "形は Int だけ: {errors:?}");
+}
+
 /// 重なる語列の移動（設計 vessel-hook.md §11 の形 f 4・user 裁定 2026-09-19T15:28Z）: runner.denied_commands は cargo の
 /// 2 語列だけを持ち、host_guard.git は git の 7 語列を持ち、両方に同じ語列は無い（command guard と intake は ∪ で読むので
 /// 語列が禁じられることは変わらない）。

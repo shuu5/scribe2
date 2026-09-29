@@ -979,3 +979,180 @@ fn pipe_sweep_landed_run_retired_target_with_nested_git_is_removed() {
     assert_eq!(sweep_line(&out), "sweep: removed=1 runs=1 failed=0", "stderr: {}", stderr_of(&out));
     clean(&[&repo, &state]);
 }
+
+// ───── 席の起草の置き場の中間生成物の掃除（`s2-07l.736.25`・設計 dispatcher.md §33・接頭辞 `pipe_sweep_drafts_`） ─────
+
+/// 起草の木の mtime を今から `hours` 時間前へ戻す（子から先・dir も File として開いて同じ呼び出し）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn rewind(path: &Path, hours: u64) {
+    if fs::symlink_metadata(path).expect("entry を読める").is_dir() {
+        for entry in fs::read_dir(path).expect("dir を読める") {
+            rewind(&entry.expect("entry を読める").path(), hours);
+        }
+    }
+    age_one(path, hours);
+}
+
+/// 1 entry だけの mtime を今から `hours` 時間前へ戻す（下へは降りない）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn age_one(path: &Path, hours: u64) {
+    let past = std::time::SystemTime::now() - std::time::Duration::from_secs(hours * 3600);
+    fs::File::open(path).expect("開ける").set_modified(past).expect("mtime を戻せる");
+}
+
+/// 終端に撃つ live な便 `r-end` を置く（置き場の pipe の dir に記録を置く＝掃除は pipe の dir の無い置き場を撃たない・木は切らない）。
+fn drafts_run(repo: &Path, state: &Path) {
+    live_run(state, "r-end");
+    put_file(&state.join("pipe").join("r-end").join("repo"), &format!("{}\n", repo.display()));
+}
+
+/// 席 `seat` の起草の置き場に、toy repo から `git worktree add --detach` で木 `name` を切る（木の path を返す）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn draft_tree(repo: &Path, state: &Path, seat: &str, name: &str) -> PathBuf {
+    let tree = state.join("seat").join(seat).join("drafts").join(name);
+    fs::create_dir_all(tree.parent().expect("親を解ける")).expect("起草の置き場を作れる");
+    git(repo, &["worktree", "add", "-q", "--detach", &tree.display().to_string(), "HEAD"]);
+    tree
+}
+
+/// 行 `seat.drafts_stale_h` を持たない tmp manifest（`ceiling_rules` の本文に stop が読む `pipe.stop_grace_ms` の行を足した写し）に
+/// `extra` を足して書く。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn drafts_rules(state: &Path, extra: &str) -> String {
+    let base = fs::read_to_string(ceiling_rules(state)).expect("受付の写しを読める");
+    let grace = embedded_int("pipe.stop_grace_ms");
+    let stop = format!(
+        "[[rule]]\nid = \"pipe.stop_grace_ms\"\nkind = \"StopGraceMs\"\nvalue = {grace}\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n"
+    );
+    let path = state.join("rules-drafts.toml");
+    fs::write(&path, format!("{base}\n{stop}\n{extra}")).expect("写しを書ける");
+    path.display().to_string()
+}
+
+/// (a) 席 2 つの起草の置き場: 1 つ目の木の 7 時間前の `target/` と 2 つ目の木の 7 時間前の `.venv/` だけが消え、書いたばかりの
+/// `node_modules/`・追跡 file を持つ 7 時間前の `docs/target/`・列に無い 7 時間前の `out/`・`.git` を持たない写しの 7 時間前の
+/// `target/`・木の追跡 file と `.git` は残る。
+#[test]
+fn pipe_sweep_drafts_old_build_dirs_of_two_seats_are_removed_and_the_rest_stays() {
+    let (repo, state) = repo_with_state();
+    put_file(&repo.join("docs").join("target").join("keep.md"), "tracked\n");
+    git(&repo, &["add", "docs/target/keep.md"]);
+    git(&repo, &["commit", "-q", "-m", "tracked target"]);
+    drafts_run(&repo, &state);
+    let first = draft_tree(&repo, &state, "s1", "t1");
+    let second = draft_tree(&repo, &state, "s2", "t2");
+    let copy = state.join("seat").join("s1").join("drafts").join("copy");
+    for path in [
+        first.join("target").join("debug").join("app.o"),
+        first.join("out").join("bundle.txt"),
+        second.join(".venv").join("lib").join("x.py"),
+        copy.join("target").join("debug").join("app.o"),
+    ] {
+        put_file(&path, "x\n");
+    }
+    put_file(&first.join("node_modules").join("pkg").join("index.js"), "x\n");
+    for old in [first.join("target"), first.join("out"), first.join("docs").join("target"), second.join(".venv"), copy.join("target")] {
+        rewind(&old, 7);
+    }
+
+    let out = run_pipe(&["stop", "--run", "r-end", "--state-dir", &state.display().to_string()]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "終端の rc は変わらない: {}", stderr_of(&out));
+    assert!(!first.join("target").exists(), "1 つ目の木の古い target/ は消える");
+    assert!(!second.join(".venv").exists(), "2 つ目の木の古い .venv/ は消える");
+    for kept in [
+        first.join("node_modules").join("pkg").join("index.js"),
+        first.join("docs").join("target").join("keep.md"),
+        first.join("out").join("bundle.txt"),
+        copy.join("target").join("debug").join("app.o"),
+        first.join("src").join("lib.rs"),
+        second.join("src").join("lib.rs"),
+        first.join(".git"),
+        second.join(".git"),
+    ] {
+        assert!(kept.exists(), "{} は残る", kept.display());
+    }
+    assert_eq!(sweep_line(&out), "sweep: removed=2 runs=0 failed=0 drafts=2 nogit=1", "stderr: {}", stderr_of(&out));
+    assert!(!stdout_of(&out).contains("sweep:"), "stdout には出さない: {}", stdout_of(&out));
+    clean(&[&repo, &state]);
+}
+
+/// (b) 深い所に書いたばかりの file を持つ 7 時間前の `target/` と、深い所に書いたばかりの空の dir を持つ 7 時間前の
+/// `.mypy_cache/` は残り、7 時間前の `__pycache__/` だけが消える。
+#[test]
+fn pipe_sweep_drafts_a_fresh_write_deep_inside_keeps_the_old_dir() {
+    let (repo, state) = repo_with_state();
+    drafts_run(&repo, &state);
+    let tree = draft_tree(&repo, &state, "s1", "t1");
+    put_file(&tree.join("target").join("debug").join("old.o"), "x\n");
+    put_file(&tree.join(".mypy_cache").join("a").join("b").join("x.json"), "x\n");
+    put_file(&tree.join("__pycache__").join("m.pyc"), "x\n");
+    for old in [tree.join("target"), tree.join(".mypy_cache"), tree.join("__pycache__")] {
+        rewind(&old, 7);
+    }
+    put_file(&tree.join("target").join("debug").join("deps").join("fresh.o"), "x\n");
+    age_one(&tree.join("target").join("debug"), 7);
+    let parent = tree.join(".mypy_cache").join("a").join("b");
+    fs::create_dir(parent.join("fresh")).expect("書いたばかりの空の dir を作れる");
+    age_one(&parent, 7);
+
+    let out = run_pipe(&["stop", "--run", "r-end", "--state-dir", &state.display().to_string()]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "終端の rc は変わらない: {}", stderr_of(&out));
+    assert!(tree.join("target").join("debug").join("deps").join("fresh.o").is_file(), "深い所の書いたばかりの file を持つ target/ は残る");
+    assert!(parent.join("fresh").is_dir(), "深い所の書いたばかりの空の dir を持つ .mypy_cache/ は残る");
+    assert!(!tree.join("__pycache__").exists(), "全部古い __pycache__/ だけが消える");
+    assert_eq!(sweep_line(&out), "sweep: removed=1 runs=0 failed=0 drafts=1 nogit=0", "stderr: {}", stderr_of(&out));
+    clean(&[&repo, &state]);
+}
+
+/// (c) 行 `seat.drafts_stale_h` を持たない tmp manifest の周は、7 時間前の `target/` を残し、行を読めない語 `no-rule` を残す。
+#[test]
+fn pipe_sweep_drafts_a_missing_rule_row_sweeps_nothing_and_says_no_rule() {
+    let (repo, state) = repo_with_state();
+    drafts_run(&repo, &state);
+    let tree = draft_tree(&repo, &state, "s1", "t1");
+    put_file(&tree.join("target").join("debug").join("app.o"), "x\n");
+    rewind(&tree.join("target"), 7);
+
+    let rules = drafts_rules(&state, "");
+    let out = run_pipe(&["stop", "--run", "r-end", "--state-dir", &state.display().to_string(), "--rules", &rules]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "終端の rc は変わらない: {}", stderr_of(&out));
+    assert!(tree.join("target").join("debug").join("app.o").is_file(), "行を読めない周は既定値へ倒さず消さない");
+    assert_eq!(sweep_line(&out), "sweep: removed=0 runs=0 failed=0 drafts=no-rule nogit=0", "stderr: {}", stderr_of(&out));
+    clean(&[&repo, &state]);
+}
+
+/// (d) 値 0 の行を足した tmp manifest の周は、書いたばかりの `target/` を消す。`target/` の中の symlink は辿らず、木の外の dir の
+/// 1 日先の mtime の file は書きの線にも消しにも数えず、木の外の file は残る。
+#[test]
+fn pipe_sweep_drafts_zero_hours_removes_a_fresh_dir_without_following_symlinks() {
+    let (repo, state) = repo_with_state();
+    drafts_run(&repo, &state);
+    let tree = draft_tree(&repo, &state, "s1", "t1");
+    let outside = state.join("outside");
+    put_file(&outside.join("far.txt"), "x\n");
+    let future = std::time::SystemTime::now() + std::time::Duration::from_secs(86_400);
+    fs::File::open(outside.join("far.txt")).expect("開ける").set_modified(future).expect("mtime を進められる");
+    put_file(&tree.join("target").join("debug").join("app.o"), "x\n");
+    std::os::unix::fs::symlink(&outside, tree.join("target").join("link")).expect("symlink を置ける");
+
+    let extra = "[[rule]]\nid = \"seat.drafts_stale_h\"\nkind = \"SeatDraftsStaleH\"\nvalue = 0\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n";
+    let rules = drafts_rules(&state, extra);
+    let out = run_pipe(&["stop", "--run", "r-end", "--state-dir", &state.display().to_string(), "--rules", &rules]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "終端の rc は変わらない: {}", stderr_of(&out));
+    assert!(!tree.join("target").exists(), "値 0 は線 = 今: 書いたばかりの target/ も消える");
+    assert!(outside.join("far.txt").is_file(), "木の外の file は残る");
+    assert_eq!(sweep_line(&out), "sweep: removed=1 runs=0 failed=0 drafts=1 nogit=0", "stderr: {}", stderr_of(&out));
+    clean(&[&repo, &state]);
+}

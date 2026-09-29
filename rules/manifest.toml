@@ -519,6 +519,18 @@ enabled = true
 ruling = "user 2026-09-27T11:14Z"
 ruled_at = "2026-09-27"
 
+# 席の起草の置き場の写しの中間生成物を器が消す書きの線（時間・設計 dispatcher.md §33・ADR-0096）。置き場の写しの
+# 名が閉じた列に在る dir のうち、自身と下の全 entry の最新の書きがこの時間より前のものだけを終端の周の掃除が消す。
+# 0 は「線 = 今」（書きの有無を問わず掃く）。行を読めない周は起草の木を 1 本も掃かない。
+
+[[rule]]
+id = "seat.drafts_stale_h"
+kind = "SeatDraftsStaleH"
+value = 6
+enabled = true
+ruling = "user 2026-09-29T11:43Z"
+ruled_at = "2026-09-29"
+
 # 席の指示文の台帳の現在値（設計 seat-roles.md §5・ADR-0045 §2 (3)）。台帳の子 process を待つ上限。
 
 [[rule]]
