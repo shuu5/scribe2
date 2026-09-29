@@ -1418,3 +1418,214 @@ fn seat_tick_precheck_without_the_row_keeps_the_gate_and_says_unset() {
         "alarm= の列は u の語の後ろに precheck-unset"
     );
 }
+
+// ───── seat tick status の器の判定の 3 欄（seat-heartbeat.md §20 形 1〜4・契約表の行 x・接頭辞 `seat_tick_reopens_` / `seat_tick_pending_`） ─────
+//
+// §12 の status の fixture（[`tick_place`]・[`status_run`]）と §13 / §14 / §18 の移動の fixture（[`move_place`]・[`move_record`]・
+// [`grace_signal_put`]・[`saved_place`]）をそのまま使い、実測行を窓ごとの reset つきで積む helper 1 つ（[`reopens_rows`]）を足す。
+// 字面は契約の key の表から組む（器の helper を借りない）。
+
+/// 当たっている 5 時間窓の reset（R1）。
+const REOPENS_R1: &str = "2099-01-01T05:00:00Z";
+/// 7 日窓の reset（R2・R1 と R3 より遅い）。
+const REOPENS_R2: &str = "2099-01-07T00:00:00Z";
+/// 席の model のモデル別窓の reset（R3・R1 より遅く R2 より早い）。
+const REOPENS_R3: &str = "2099-01-03T00:00:00Z";
+/// 席の登録 row の model（表示名）。
+const REOPENS_MODEL: &str = "Opus";
+
+/// 登録 row（口座 [`TICK_ACCOUNT`]・`model` が在れば `--model`）の在る status の置き場。
+fn reopens_place(model: Option<&str>) -> TickPlace {
+    let place = tick_place(false);
+    let (launch, state) = (fixture(&place.dir, "launch.txt", "claude\n"), place.state.display().to_string());
+    let mut args = vec![
+        "register", "--state-dir", state.as_str(), "--target", TICK_TARGET, "--role", "orchestrator", "--account", TICK_ACCOUNT,
+        "--launch", launch.as_str(), "--anchor", "/repo",
+    ];
+    args.extend(model.map(|found| ["--model", found]).into_iter().flatten());
+    let out = run_seat(&args);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "登録 row を積める: {}", stderr_of(&out));
+    place
+}
+
+/// 口座 [`TICK_ACCOUNT`] の実測行を (窓, モデル別窓の model, 使用率, reset) の列で今の時刻に積む（`fleet usage` と同じ形）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn reopens_rows(place: &TickPlace, rows: &[(vessel::fleet::WindowKind, Option<&str>, u64, Option<&str>)]) {
+    use vessel::fleet::{Allowance, Event, EventKind, Measured, SCHEMA};
+    let policy = vessel::fleet::store::LockPolicy::embedded().expect("lock の規則を読める");
+    let ts = acct_now();
+    for (window, model, used_pct, reset) in rows.iter().copied() {
+        let allowance = Allowance::Measured(Measured {
+            account: TICK_ACCOUNT.to_owned(),
+            window,
+            model: model.map(str::to_owned),
+            endpoint: "oauth-usage".to_owned(),
+            used_pct,
+            resets_at: reset.map(str::to_owned),
+        });
+        let event = Event {
+            schema: SCHEMA,
+            ts: ts.clone(),
+            kind: EventKind::AllowanceMeasured,
+            run: String::new(),
+            bead: String::new(),
+            host: "h".to_owned(),
+            actor: "machine".to_owned(),
+            stage: None,
+            seat: None,
+            pid: None,
+            detail: None,
+            allowance: Some(allowance),
+            registration: None,
+            mark: None,
+            account: None,
+            cost: None,
+            rule: None,
+            case: None,
+        };
+        vessel::fleet::store::append(&place.state, &event, policy).expect("実測行を積める");
+    }
+}
+
+/// status を全部の行の写しで撃ち、rc 0 の stdout を返す。
+fn reopens_status(place: &TickPlace) -> String {
+    let rules = status_rules(place, "");
+    let out = status_run(place, &["--rules", &rules]);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    stdout_of(&out)
+}
+
+/// (a) 席の model（Opus）の row で: 5 時間窓 100（R1）+ 7 日窓 40 → R1・5 時間窓 100 + 7 日窓 100（R2）→ R2（遅い方）・(R1 の組) + 別の
+/// model（Sonnet）のモデル別窓 100 → R1（数えない）・(R1 の組) + 席の model のモデル別窓 100（R3）→ R3（base では欄が無く RED）。
+#[test]
+fn seat_tick_reopens_takes_the_later_reset_of_the_limited_windows_of_the_seat_model() {
+    use vessel::fleet::WindowKind::{FiveHour, SevenDay, SevenDayModel};
+    let base = [(FiveHour, None, 100, Some(REOPENS_R1)), (SevenDay, None, 40, Some(REOPENS_R2))];
+    let cases = [
+        (vec![], REOPENS_R1, "5 時間窓だけが当たる"),
+        (vec![(SevenDay, None, 100, Some(REOPENS_R2))], REOPENS_R2, "7 日窓も当たる＝遅い方"),
+        (vec![(SevenDayModel, Some("Sonnet"), 100, Some(REOPENS_R3))], REOPENS_R1, "席の model でない窓は数えない"),
+        (vec![(SevenDayModel, Some(REOPENS_MODEL), 100, Some(REOPENS_R3))], REOPENS_R3, "席の model の窓は数える"),
+    ];
+    for (extra, want, why) in cases {
+        let place = reopens_place(Some(REOPENS_MODEL));
+        let rows: Vec<_> = base.iter().copied().filter(|row| !extra.iter().any(|found| found.0 == row.0)).chain(extra.iter().copied()).collect();
+        reopens_rows(&place, &rows);
+        let line = reopens_status(&place);
+        assert_eq!(tick_token(&line, "reopens").as_deref(), Some(want), "{why}: {line}");
+        assert_eq!((tick_token(&line, "move").as_deref(), tick_token(&line, "grace_left").as_deref()), (Some("-"), Some("-")), "{line}");
+    }
+}
+
+/// (b) 5 時間窓 99 → `reopens=-`（行の全体）・実測なし → `unmeasured`・reset の無い 100 の行 → `unknown`。
+#[test]
+fn seat_tick_reopens_says_dash_unmeasured_or_unknown() {
+    use vessel::fleet::WindowKind::{FiveHour, SevenDay};
+    let place = reopens_place(None);
+    assert_eq!(tick_token(&reopens_status(&place), "reopens").as_deref(), Some("unmeasured"), "実測なし");
+    reopens_rows(&place, &[(FiveHour, None, 99, Some(REOPENS_R1)), (SevenDay, None, 40, Some(REOPENS_R2))]);
+    let want = status_line("-", "-", "no", "on", ("-", "-")).replace(STATUS_TAIL, " reopens=- move=- grace_left=-");
+    assert_eq!(reopens_status(&place), want, "当たっていない");
+    let place = reopens_place(None);
+    reopens_rows(&place, &[(FiveHour, None, 100, None), (SevenDay, None, 40, Some(REOPENS_R2))]);
+    assert_eq!(tick_token(&reopens_status(&place), "reopens").as_deref(), Some("unknown"), "当たっているが時刻が無い");
+}
+
+/// 移動の置き場で status を偽 tmux の PATH と写しで撃ち、rc 0 の stdout を返す。撃つ前後で event log・群の記録・合図の記録は 1 byte も
+/// 変わらず、偽 tmux と偽 client の呼出は 0・lock は残らない（計測の子・tmux・lock・書き込みは 0・§20 形 6）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn pending_status(root: &Path, place: &MovePlace) -> String {
+    let log = vessel::fleet::store::events_path(&place.state);
+    let record = move_groups_dir(root).join(format!("{MOVE_GROUP}.account"));
+    let files = || [&log, &record, &grace_signal(place)].map(|path| fs::read(path).ok());
+    let before = files();
+    let state = place.state.display().to_string();
+    let out = Command::new(bin())
+        .args(["seat", "tick", "status", "--state-dir", &state, "--rules", &place.rules])
+        .env("PATH", &place.path)
+        .output()
+        .expect("binary を起動できる");
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert_eq!(files(), before, "event log・群の記録・合図の記録は動かない");
+    assert!(!place.at(TICK_CALLS).exists() && !place.at(TICK_CLIENT).exists(), "tmux と client の呼出 0");
+    assert!(!move_groups_dir(root).join("lock").exists(), "lock を取らない");
+    stdout_of(&out)
+}
+
+/// status の行の `move=` と `grace_left=`。
+fn pending_pair(line: &str) -> (Option<String>, Option<String>) {
+    (tick_token(line, "move"), tick_token(line, "grace_left"))
+}
+
+/// (c) 群の記録が口座 B・同じ移動の合図の at = 今 − 100 → `move=<B> grace_left=` が猶予 − 100 前後・合図の記録なし → `-`・別の移動の
+/// 記録 → `-`（合図がまだ届いていない＝猶予が始まっていない・base では欄が無く RED）。
+#[test]
+fn seat_tick_pending_counts_the_grace_left_after_the_signal() {
+    let root = tmp();
+    let place = move_place(&root, "state", MOVE_ANCHOR);
+    move_record(&root, MOVE_B);
+    let before = unix_now();
+    grace_signal_put(&place, (MOVE_B, MOVE_TS), before - 100);
+    let line = pending_status(&root, &place);
+    let spent = unix_now() - before;
+    let (moved, left) = pending_pair(&line);
+    assert_eq!(moved.as_deref(), Some(MOVE_B), "{line}");
+    let want = GRACE_S - 100;
+    assert!(left.and_then(|secs| secs.parse::<u64>().ok()).is_some_and(|secs| (want - spent..=want).contains(&secs)), "猶予の残り: {line}");
+    fs::remove_file(grace_signal(&place)).ok();
+    assert_eq!(pending_pair(&pending_status(&root, &place)), (Some(MOVE_B.to_owned()), Some("-".to_owned())), "合図の記録なし");
+    grace_signal_put(&place, (MOVE_A, MOVE_TS), unix_now() - 100);
+    assert_eq!(pending_pair(&pending_status(&root, &place)), (Some(MOVE_B.to_owned()), Some("-".to_owned())), "別の移動の記録");
+}
+
+/// (c2) 猶予の外の合図 → `0`・猶予の内で合図の at 以後の Busy と最終行 Stop の Idle（応え終えた印）→ `0`・猶予 0 の写しで合図なし → `0`
+/// （次の tick の周で `/exit`）。
+#[test]
+fn seat_tick_pending_is_zero_when_the_exit_is_due() {
+    let zero = (Some(MOVE_B.to_owned()), Some("0".to_owned()));
+    let root = tmp();
+    let place = move_place(&root, "state", MOVE_ANCHOR);
+    move_record(&root, MOVE_B);
+    move_signal_past(&place);
+    assert_eq!(pending_pair(&pending_status(&root, &place)), zero, "猶予切れ");
+    let root = tmp();
+    let place = saved_place(&root, 100, Some(&[SAVED_BUSY, SAVED_STOP]));
+    assert_eq!(pending_pair(&pending_status(&root, &place)), zero, "応え終えた印");
+    let root = tmp();
+    let place = move_place(&root, "state", MOVE_ANCHOR);
+    move_record(&root, MOVE_B);
+    grace_put(&place, 0);
+    assert_eq!(pending_pair(&pending_status(&root, &place)), zero, "猶予 0");
+}
+
+/// (d) 群の無い置き場 → `move=- grace_left=-`（行の全体）・群の記録が無く row が種と同じ → `-` / `-`・形でない記録 →
+/// `unreadable` / `unreadable` で rc 0・他の欄は不変。
+#[test]
+fn seat_tick_pending_is_dash_without_a_move_and_unreadable_on_a_malformed_record() {
+    let place = tick_place(true);
+    assert_eq!(reopens_status(&place), status_line("-", "-", "no", "on", ("-", "-")), "群の無い置き場");
+    let root = tmp();
+    let place = move_place(&root, "state", MOVE_ANCHOR);
+    let seed = pending_status(&root, &place);
+    assert_eq!(pending_pair(&seed), (Some("-".to_owned()), Some("-".to_owned())), "種 = row: {seed}");
+    let body = format!("account={MOVE_B}\nts=yesterday\nreason=move\nprevious={MOVE_A}\n");
+    fs::write(move_groups_dir(&root).join(format!("{MOVE_GROUP}.account")), body).ok();
+    let line = pending_status(&root, &place);
+    assert_eq!(line, seed.replace(" move=- grace_left=-", " move=unreadable grace_left=unreadable"), "形でない記録");
+}
+
+/// (e) `seat.move_grace_s` を欠く写し → rc 1・`seat tick status: refused reason=no-rule`・stdout 0 行（base では rc 0 で 6 項目 ＝ RED）。
+#[test]
+fn seat_tick_pending_missing_grace_row_is_no_rule() {
+    let place = tick_place(true);
+    let rules = status_rules(&place, "seat.move_grace_s");
+    let out = status_run(&place, &["--rules", &rules]);
+    assert_eq!((rc_of(&out), stdout_of(&out)), (i32::from(RC_REFUSED), String::new()), "rc 1・stdout 0 行");
+    assert_eq!(stderr_of(&out), "seat tick status: refused reason=no-rule\n");
+}

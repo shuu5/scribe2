@@ -308,6 +308,50 @@ pub fn exit_due(seat: &Path, key: (&str, &str), now: u64, grace_s: u64) -> bool 
     signalled(seat, key).is_some_and(|at| grace_left(at, now, grace_s).is_none() || answered(seat, at))
 }
 
+/// 移動の見立て（**閉じた 3 値**・設計 seat-heartbeat.md §20 形 2 (a)）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Pending<'a> {
+    /// 移動の周でない（anchor が群の外・群 0 の host・群の今の口座が row の口座と同じ）。
+    None,
+    /// 群の記録が在るのに読めない（種に読み替えない・C10）。
+    Unreadable,
+    /// 群の今の口座（[`current_of`] の返り値）が row の口座と食い違う。
+    Moving(&'a AccountGroup, Current),
+}
+
+/// 移動の見立ての 1 関数（面を合わせた `manifest`・置き場・登録 row の anchor と口座）。呼び手は tick の移動の周と `seat tick status`
+/// の 2 つ（同じ組み立てを 2 本書かない・C2）。面を合わせられない周は呼び手が読めない側に畳む。
+pub fn pending<'a>(manifest: &'a Manifest, state_dir: &Path, (anchor, account): (&str, &str)) -> Pending<'a> {
+    let Some(group) = group_of(manifest, anchor) else {
+        return Pending::None;
+    };
+    match current_of(state_dir, group) {
+        Ok(current) if current.label == account => Pending::None,
+        Ok(current) => Pending::Moving(group, current),
+        Err(_) => Pending::Unreadable,
+    }
+}
+
+/// 移動の周の次の手（**閉じた 3 値**・設計 seat-heartbeat.md §20 形 2 (b)）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Step {
+    /// `/exit` を送る（猶予 0 か [`exit_due`] が真）。
+    Exit,
+    /// 同じ移動の合図を送り済みで猶予の内（残りの秒）。
+    Wait(u64),
+    /// 退避の合図を送る（記録が無い・別の移動・読めない）。
+    Signal,
+}
+
+/// 次の手の 1 関数（席の置き場・移動の鍵・今・猶予の秒）: 猶予 0 か [`exit_due`] なら exit・同じ移動の合図（[`signalled`]）の残り
+/// （[`grace_left`]）が在れば wait・無ければ signal。呼び手は tick の移動の周と `seat tick status` の 2 つ。
+pub fn step_of(seat: &Path, key: (&str, &str), now: u64, grace_s: u64) -> Step {
+    if grace_s == 0 || exit_due(seat, key, now, grace_s) {
+        return Step::Exit;
+    }
+    signalled(seat, key).and_then(|at| grace_left(at, now, grace_s)).map_or(Step::Signal, Step::Wait)
+}
+
 /// 退避の合図の 1 行（**字面はこの 1 関数**・群の段と tick が同じ字面を送る・設計 seat-heartbeat.md §18 形 5）。
 pub fn evacuate_line(group: &str, to: &str, left: u64) -> String {
     format!(
