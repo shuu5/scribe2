@@ -866,6 +866,7 @@ fn refused(kind: Kind, reason: Reason, word: Option<&str>, ruling: String) -> Re
 
 #[cfg(test)]
 mod tests {
+    // flip-check: retroactive s2-07l.738.16
     use super::super::{judge, HostGuardDecision, Kind, Scene};
     use super::{elements, marked, read, Form, Published, Reason, FORMS, MARKS, REASONS};
     use crate::name::NAME;
@@ -1245,7 +1246,7 @@ mod tests {
     fn publish_names_follow_the_row_elements() {
         use super::scan::{scan, Neighbor, Phrases, Public, Source, Text};
         let texts = [Text { source: Source::CommitMessage, body: "see proj-x" }];
-        let near = [Neighbor { tag: "t".to_owned(), names: vec!["proj".to_owned()] }];
+        let near = [Neighbor { tag: "t".to_owned(), names: vec!["proj".to_owned()], ..Neighbor::default() }];
         let read = |value: &str| elements(&[value.to_owned()]).unwrap_or_default();
         let hit = |value: &str| scan(&read(value), &texts, &near, &Public::default(), &Phrases::default());
         assert_eq!(hit("form repo-name").as_deref(), Some("1:repo-name=proj@t"));
