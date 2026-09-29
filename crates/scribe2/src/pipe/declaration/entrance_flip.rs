@@ -53,7 +53,7 @@ pub(super) fn entrance_of(found: &[(String, Raw, u64)], errors: &mut Vec<DeclErr
     let (_, value, line) = found.iter().find(|(seen, _, _)| seen == KEY)?;
     let named = match value {
         Raw::Text(word) => EntranceFlip::parse(word),
-        Raw::Int(_) | Raw::List(_) => None,
+        Raw::Int(_) | Raw::Bool(_) | Raw::List(_) => None,
     };
     if named.is_none() {
         errors.push(DeclError::new(*line, format!("{KEY} は 1 語 \"unmeasured\" / \"detect\" / \"deny\" の文字列だけである")));

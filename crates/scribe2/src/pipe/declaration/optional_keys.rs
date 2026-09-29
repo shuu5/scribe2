@@ -23,7 +23,12 @@ pub(super) const DECLARED_KEYS: &[&str] = &[
     path_kinds::TESTS_KEY,
     ENTRANCE_KEY,
     QUESTION_ROUTE_KEY,
+    CLOSE_CHECK_KEY,
 ];
+
+/// **close の理由の門に加わるか**の key（任意・設計 ledger-form.md §16・ADR-0097）。値は真偽だけ（既定は持たない＝
+/// 書かない宣言は加わらない）。
+const CLOSE_CHECK_KEY: &str = "close-check";
 
 /// **問いの経路の 1 行**の key（任意・設計 vessel-hook.md §20 形 4・ADR-0084）。hook が選択式の問いの道具を断る 1 行の
 /// 後ろに添える（既定は持たない＝書かない宣言は何も添えない）。
@@ -65,7 +70,46 @@ pub(super) const OPTIONAL_KEYS: &[&str] = &[
     path_kinds::TESTS_KEY,
     ENTRANCE_KEY,
     QUESTION_ROUTE_KEY,
+    CLOSE_CHECK_KEY,
 ];
+
+/// close の理由の門に加わるか（任意）。真偽だけを受ける（文字列・整数・列は key と行番号を名指す不備）。
+pub(super) fn close_check_of(found: &[(String, Raw, u64)], errors: &mut Vec<DeclError>) -> Option<bool> {
+    let (_, value, line) = found.iter().find(|(seen, _, _)| seen == CLOSE_CHECK_KEY)?;
+    match value {
+        Raw::Bool(joins) => Some(*joins),
+        _ => {
+            errors.push(DeclError::new(*line, format!("{CLOSE_CHECK_KEY} は true か false の真偽だけである")));
+            None
+        }
+    }
+}
+
+/// HEAD の宣言の close の理由の門への加わり（閉じた 3 値・設計 ledger-form.md §16）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CloseCheck {
+    /// 加わる（key が true）。
+    Joins,
+    /// 加わらない（key が false か無い・宣言 file が HEAD に無い・git を撃てない）。
+    Exempt,
+    /// 読めない（宣言が在って不備）。「加わらない」に倒さない（C10）。
+    Unreadable,
+}
+
+/// HEAD の宣言から close の理由の門への加わりを解く（読み手は [`head_declaration`] の 1 本・作業ツリーは読まない）。
+pub fn close_check(repo: &Path) -> CloseCheck {
+    check_of(head_declaration(repo))
+}
+
+/// HEAD の読みの結果（無い / 不備 / 値）から閉じた 3 値への写し。
+fn check_of(read: Option<Result<Declared, Vec<DeclError>>>) -> CloseCheck {
+    match read {
+        None => CloseCheck::Exempt,
+        Some(Err(_)) => CloseCheck::Unreadable,
+        Some(Ok(declared)) if declared.close_check == Some(true) => CloseCheck::Joins,
+        Some(Ok(_)) => CloseCheck::Exempt,
+    }
+}
 
 /// 問いの経路の 1 行（任意）。前後の空白を除いて空でなく、制御文字を持たない文字列だけを受ける（列・整数・空・空白だけ・
 /// 制御文字は key と行番号を名指す不備）。
@@ -208,7 +252,7 @@ pub fn terminal_facts(repo: &Path) -> Result<TerminalFacts, Vec<DeclError>> {
 #[cfg(test)]
 mod tests {
     use super::super::Declared;
-    use super::{route_of, QuestionRoute};
+    use super::{check_of, close_check, route_of, CloseCheck, QuestionRoute};
 
     /// 必須 key だけの宣言の本文（3 行）の後ろに `extra` を足す。
     fn with(extra: &str) -> String {
@@ -240,5 +284,53 @@ mod tests {
         assert_eq!(route_of(Some(Declared::parse(&with("")))), QuestionRoute::Absent);
         let declared = Declared::parse(&with("question-route = \"x\"\n"));
         assert_eq!(route_of(Some(declared)), QuestionRoute::Declared("x".to_owned()));
+    }
+
+    /// key が true は加わる・false と key の無い宣言は加わらない（欄は真偽のまま）。
+    #[test]
+    fn declaration_close_check_reads_true_false_and_absent() {
+        assert_eq!(Declared::parse(&with("")).map(|found| found.close_check), Ok(None));
+        assert_eq!(Declared::parse(&with("close-check = true\n")).map(|found| found.close_check), Ok(Some(true)));
+        assert_eq!(Declared::parse(&with("close-check = false\n")).map(|found| found.close_check), Ok(Some(false)));
+    }
+
+    /// 文字列・整数・列は key と行番号（4 行目）を名指す不備、重複は 5 行目を名指す不備。
+    #[test]
+    fn declaration_close_check_refuses_text_int_list_and_duplicates() {
+        for value in ["\"true\"", "\"\"", "1", "0", "[\"true\"]"] {
+            let errors = Declared::parse(&with(&format!("close-check = {value}\n"))).expect_err(value);
+            assert!(errors.iter().any(|error| error.line == 4 && error.reason.contains("close-check")), "{value}: {errors:?}");
+        }
+        let errors = Declared::parse(&with("close-check = true\nclose-check = false\n")).expect_err("重複");
+        assert!(errors.iter().any(|error| error.line == 5 && error.reason.contains("close-check")), "{errors:?}");
+    }
+
+    /// HEAD の読みの結果（無い / 不備 / 値）から閉じた 3 値への写し。true だけが加わり、型違いの宣言は読めない。
+    #[test]
+    fn declaration_close_check_maps_the_head_read_to_three_values() {
+        assert_eq!(check_of(None), CloseCheck::Exempt);
+        assert_eq!(check_of(Some(Err(Vec::new()))), CloseCheck::Unreadable);
+        assert_eq!(check_of(Some(Declared::parse(&with("")))), CloseCheck::Exempt);
+        assert_eq!(check_of(Some(Declared::parse(&with("close-check = false\n")))), CloseCheck::Exempt);
+        assert_eq!(check_of(Some(Declared::parse(&with("close-check = true\n")))), CloseCheck::Joins);
+        assert_eq!(check_of(Some(Declared::parse(&with("close-check = \"true\"\n")))), CloseCheck::Unreadable);
+    }
+
+    /// git を撃てない dir（repo でない）は宣言の無い周と同じ「加わらない」。
+    #[test]
+    fn declaration_close_check_treats_a_dir_without_git_as_exempt() {
+        assert_eq!(close_check(std::path::Path::new("/nonexistent-close-check-dir")), CloseCheck::Exempt);
+    }
+
+    /// 真偽を書いた他の key は key ごとの型の不備になり、entrance-flip = true は 3 語の外として key と行番号を名指す。
+    #[test]
+    fn declaration_close_check_bool_in_other_keys_is_a_typed_refusal() {
+        let errors = Declared::parse(&with("entrance-flip = true\n")).expect_err("entrance-flip");
+        assert!(errors.iter().any(|error| error.line == 4 && error.reason.contains("entrance-flip")), "{errors:?}");
+        let errors = Declared::parse(&with("remote = true\n")).expect_err("remote");
+        assert!(errors.iter().any(|error| error.line == 4 && error.reason.contains("remote")), "{errors:?}");
+        let text = "schema = true\nallowed-commands = [\"git\"]\ncommon-verify = [\"git diff --quiet\"]\n";
+        let errors = Declared::parse(text).expect_err("schema");
+        assert!(errors.iter().any(|error| error.line == 1 && error.reason.contains("schema")), "{errors:?}");
     }
 }
