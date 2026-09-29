@@ -401,6 +401,9 @@ pub(super) fn land_run(args: &[String], id: &str, manifest: &Manifest, policy: L
     })
 }
 
+/// 照合も close もせずに畳むだけの flag（値なし・PR の便にだけ効く・設計 contract-source.md §61 形 3）。
+const FOLD_ONLY: &str = "--fold-only";
+
 /// `pipe retire`。前提 stage = `Landed` ∨ (`Failed` ∧ 最後の `RunStage` の detail が
 /// `rebase-empty` / `rebase-conflict`) ∨ (`Gated` ∧ verdict が FAIL) ∨ `Stopped` ∨
 /// (`Reviewed` ∧ 審査の verdict が PASS でない)（worktree 在り・clean の検査は retire 側が持つ）。
@@ -419,11 +422,15 @@ pub(super) fn land_run(args: &[String], id: &str, manifest: &Manifest, policy: L
 /// 動かす」経路になるため、段違いは一般則どおり rc 1。
 ///
 /// 残す event の段は [`super::Resolved::stage`] のまま＝**`Landed` に決め打ちしない**（終端を動かさない）。
-pub(super) fn retire_run(args: &[String], id: &str, policy: LockPolicy) -> Outcome {
+pub(super) fn retire_run(args: &[String], id: &str, manifest: &Manifest, policy: LockPolicy) -> Outcome {
     let allowed = [Stage::Landed, Stage::Failed, Stage::Gated, Stage::Stopped, Stage::Reviewed];
     let resolved = match resolve(args, id, &allowed, &Extra::Retire) {
         Ok(found) => found,
         Err(outcome) => return outcome,
+    };
+    let bd = match flag(args, "--bd") {
+        Ok(found) => found.unwrap_or(crate::ledger::DEFAULT_BD),
+        Err(reason) => return refused(reason),
     };
     super::land::retire(&Retire {
         run: id,
@@ -432,5 +439,9 @@ pub(super) fn retire_run(args: &[String], id: &str, policy: LockPolicy) -> Outco
         state_dir: &resolved.state_dir,
         stage: resolved.stage,
         policy,
+        // PR で着地した便の照合が使う台帳 client・畳むだけの指定・規則（台帳の待ち上限）。
+        bd,
+        fold_only: super::present(args, FOLD_ONLY),
+        manifest,
     })
 }

@@ -78,7 +78,9 @@ mod finish;
 
 use finish::{finish, open_pr, squash};
 pub(crate) use finish::source_key;
-pub(in crate::pipe) use finish::{land_train, landed_sha, terminal, Car, PushTip};
+pub(in crate::pipe) use finish::{
+    close_reason, land_train, landed_sha, terminal, Car, CloseTail, PushTip, CLOSE_REASON,
+};
 
 /// 着地が anchor を揃えなかった周の印（設計 §57・行 az）。書き手は境界 crate の歯からも呼べ、古さの判定は crate の中
 /// （land-window と行 h の hook）から呼べる。
@@ -995,8 +997,7 @@ pub(super) fn broken(reason: String) -> Outcome {
 // 歯（`mod tests`）だけが `super::` で読む 9 名（[`finish`] へ移した群・親の本体の site は 0）。
 #[cfg(test)]
 use finish::{
-    close_reason, squash_message, subject_of, trailer_key, CloseTail, CONTRACT_TRAILER, REQUIREMENTS_TRAILER,
-    SHA_PREFIX, SUBJECT_CHARS,
+    squash_message, subject_of, trailer_key, CONTRACT_TRAILER, REQUIREMENTS_TRAILER, SHA_PREFIX, SUBJECT_CHARS,
 };
 
 /// message の 3 部（`s2-07l.130`）を **goal に改行が在る形**で測る歯。

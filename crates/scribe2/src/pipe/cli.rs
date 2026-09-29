@@ -442,7 +442,7 @@ fn subcommand(
         Some(PipeCommand::Answer) => by_run(args, |id| answer_run(args, id, policy)),
         Some(PipeCommand::Gate) => by_run(args, |id| gate_run(args, id, manifest, policy)),
         Some(PipeCommand::Land) => by_run(args, |id| land_run(args, id, manifest, policy)),
-        Some(PipeCommand::Retire) => by_run(args, |id| retire_run(args, id, policy)),
+        Some(PipeCommand::Retire) => by_run(args, |id| retire_run(args, id, manifest, policy)),
         Some(PipeCommand::Run) => run_all(args, manifest, policy, driven),
         Some(PipeCommand::Show) => show(args),
         Some(PipeCommand::Resume) => resume(args, manifest, policy, driven),

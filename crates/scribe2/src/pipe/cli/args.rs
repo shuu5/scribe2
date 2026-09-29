@@ -151,7 +151,10 @@ const ALLOWED_LAND: &[cli_args::Allowed] = &[
     Allowed::switch("--detection-only"),
 ];
 /// `pipe retire`。
-const ALLOWED_RETIRE: &[cli_args::Allowed] = &[PLACE[0], PLACE[1], PLACE[2], value("--run"), TOOLS[0], TOOLS[1], TOOLS[2], TOOLS[3]];
+const ALLOWED_RETIRE: &[cli_args::Allowed] = &[
+    PLACE[0], PLACE[1], PLACE[2],
+    value("--run"), TOOLS[0], TOOLS[1], TOOLS[2], TOOLS[3], Allowed::switch("--fold-only"),
+];
 /// `pipe run`（受付から着地までを 1 本で通る＝受付と段の手の flag の和）。
 const ALLOWED_RUN: &[cli_args::Allowed] = &[
     PLACE[0], PLACE[1], PLACE[2],

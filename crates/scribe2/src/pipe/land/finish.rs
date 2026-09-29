@@ -193,12 +193,12 @@ fn gist_of(goal: &str) -> String {
 const GENERATION: &str = BUILD_COMMIT;
 
 /// 台帳の close に書く理由の書き出し（`landed <sha> ci=success` / `landed <sha> ci=none`）。
-const CLOSE_REASON: &str = "landed";
+pub(in crate::pipe) const CLOSE_REASON: &str = "landed";
 
 /// close の理由の尾（**閉じた 2 値**・設計 contract-source.md §5・FR50）。書き手は [`close_reason`] の 1 本で、
 /// 経路 (1)（push → CI の照合 → close）と経路 (2)（remote を持たない repo の close）が同じ関数を通る。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum CloseTail<'a> {
+pub(in crate::pipe) enum CloseTail<'a> {
     /// CI が success だった（先端で照合した周だけ先端の sha を持つ・§53）。
     CiSuccess(Option<&'a str>),
     /// CI の照合をしていない（remote を持たない repo・先端は持たない）。
@@ -206,7 +206,7 @@ pub(super) enum CloseTail<'a> {
 }
 
 /// 台帳の close の理由（`landed <sha> ci=success` / `landed <sha> ci=success tip=<先端>` / `landed <sha> ci=none` の 3 形）。
-pub(super) fn close_reason(sha: &str, tail: CloseTail<'_>) -> String {
+pub(in crate::pipe) fn close_reason(sha: &str, tail: CloseTail<'_>) -> String {
     match tail {
         CloseTail::CiSuccess(None) => format!("{CLOSE_REASON} {sha} ci=success"),
         CloseTail::CiSuccess(Some(head)) => format!("{CLOSE_REASON} {sha} ci=success tip={head}"),
