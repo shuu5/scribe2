@@ -1085,9 +1085,9 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 
 ### 約束
 1. land は verdict が PASS と確かめた直後、`--pr-cmd` の分岐と番待ちの前に、留めの判定を 1 回撃つ。PR の形の便も同じに留める（PR を開かない）。
-2. 掛けるのは、**便の base の宣言**で ruling-check が true の便だけ。宣言の読みは §36 の rev つきの読みで、base と先端の 2 回。
+2. 掛けるのは、**便の base の宣言**で ruling-check が true の便だけ。宣言の読みは `dispatcher.md §36` の rev つきの読みで、base と先端の 2 回。
 3. 差分は、worktree の `git diff --unified=0 <base> HEAD` の足した行（file ごと）。当たる形は次の 4 つ。
-   - (a) §36 の規則で数える解けない問い id の形・batch: / policy: と、線より後の時刻の形。線の前か後かは同じ file を線の木で見る。fixtures は外す。
+   - (a) `dispatcher.md §36` の規則で数える解けない問い id の形・batch: / policy: と、線より後の時刻の形。線の前か後かは同じ file を線の木で見る。fixtures は外す。
    - (b) 判断の欄を足すか変える行が、台帳の接頭辞の問い id の形を 1 つも持たない。bead の id だけの行も、接頭辞違いの問い id の形だけの行も当たる。判断の欄は閉じた 3 つの字面で見分ける:
      - toml の行で、剥がした字が `ruling` と `=` で始まる。
      - `design-intent/decisions/` の html の行で、`class="role">裁定` を持つ。
@@ -1103,6 +1103,11 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
    - 候補の木の先頭は、積む前に後続を同じ判定に掛け、当たる便を積まない（記帳はその便の自走に任せる）。
 7. **撃ち直し**: held の便は Gated・PASS のまま。既存の passed_gate の枝が次の周に起こし、同じ判定を撃つ。新しい枝は足さない。
 8. 判定の台帳の読みは、land の `--bd` の client で 1 回。読めない周は当たりと同じく留める（名指しは `unmeasured:<語>`）。通すに読み替えない。
+9. **列の読み**: 列の読みは detail の頭 `held:` と `released:` を FR の語に依らず読む（行 bf の `held:FR84:` と `released:FR84` も同じ読みで外れて戻る）。
+10. **閉包を広げない**: 子 module（留めの判定）は `Land`・`Stage`・`EventKind`・`Issue` を名指さず、repo・base・head・台帳の client の素の値を受けて名指しの列を返す。記帳（RunStage）は land.rs が書く。
+
+### 依存
+- `dispatcher.md 行 ak`（数えの関数と rev つきの宣言の読み）。台帳の依存（bead の blocks）で結ぶ。
 
 ### 歯
 - `pipe_land_ruling_hold_`（e2e・`tests/e2e/pipe/land.rs`・偽の bd を PATH に置く）。
@@ -1111,17 +1116,20 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
   - 通過: 線の前の引用・key の無い repo・解ける 4 形。
   - 解除: 台帳に裁定の行を足した次の周に着地し、`released:FR83` が 1 件。
   - PR の形: 留めで pr の command を撃たない。
+  - 読めない台帳: 偽の bd が失敗する周は `held:FR83:unmeasured:<語>` で留まり、main は動かない。
   - 母集団: 留め 8 本 + 通過 6 本。本数を assert の文に出す。
   - base で RED: 機能不在（解けない id を足す便が main に載る）。
 - `hold_diff_`（lib・新しい子 module）。判断の欄の 3 字面 × 3 引用（bead の id だけ・接頭辞違いだけ・問い id の形）、外しの有無、名指しの並べ替えを確かめる。
   - base で RED: 機能不在。
 - `pipe_order_held_`（lib・queue.rs）。held の便が番と後続の列から外れ、released の後に戻ることを確かめる。
   - base で RED: 機能不在（held を外す読みが無い）。
-- 既存の歯を名指す: `pipe_order_`（lib 20 本・queue.rs 18 と gate/lens.rs 2）・`pipe_train_`（4 本）・`pipe_land_turn_`・`pipe_land_pr_cmd_`。
+- `pipe_train_`（lib・train.rs）に 1 本足す: 候補の木の先頭は、留めの判定に当たる後続を積まない（判定は関数を渡す形で pure に測る）。
+  - base で RED: 機能不在。
+- 既存の歯を名指す: `pipe_order_`（lib 20 本・queue.rs 18 と gate/lens.rs 2）・`pipe_train_`（既存の 4 本）・`pipe_land_turn_`・`pipe_land_pr_cmd_`。
 
 ### 触らない
-- 数えの規則と解き方（§36）。受付の断り（dispatcher §37）。
-- passed_gate と verdict の読み。FR84 の未反映（dispatcher の行 am と pipeline の行 bf）は同じ留めの形（`held:FR84:`）を使う前提で、この § は FR83 だけを掛ける。
+- 数えの規則と解き方（`dispatcher.md §36`）。受付の断り（`dispatcher.md §37`）。
+- passed_gate と verdict の読み。FR84 の未反映（`dispatcher.md 行 am` と行 bf）は同じ留めの形（`held:FR84:`）を使う前提で、この § は FR83 だけを掛ける。
 - FR50 の留め（別の行）。
 
 ### 限界
@@ -1134,17 +1142,22 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 - 列が event の detail を読まず、札で外す案: held の便の札は Absent なので、Dead と見分けられない。
 - 判定を番待ちの後に置く案: 先頭の held が後続を塞ぐ。
 
-## [[contract]] 行（案）
-
 ## 63. 未反映の裁定に関わる便を着地の周に FR10 の留めに掛ける（契約表の行 bf・[FR10](../../design-intent/spec/srs.html#FR10) / FR84・AC54）
 
-- 着地の判定は、置き場の unreflected の file の「関わる契約の表」に便の bead が在る周に、pipeline の行 be の留めの口で便を Gated に留める。
-  - 原因は FR84 と当たった id。event は便ごとに 1 件で、同じ原因が続く周は記帳し直さない。
+- 依存: 行 be（留めの口）と `dispatcher.md 行 am`（置き場の unreflected の file と、その読みの関数）。`dispatcher.md 行 am` は台帳の依存（bead の blocks）で結ぶ。
+- 着地の判定は、`dispatcher.md §38` の置き場の unreflected の file の「関わる契約の表」に便の bead が在る周に、行 be の留めの口で便を Gated に留める。
+  - 表の読みは `dispatcher.md 行 am` が `pub(crate)` で開く読みの関数を呼ぶ。その子の file は書かない。
+  - 名指しは当たった id で、detail は `held:FR84:<id>`。同じ原因が続く周は記帳し直さない（便ごとに 1 件）。
   - 撃ち直しの上限に数えず、Failed にしない。
-- 表から消えた後の dispatch の周に着地する。file が無い・読めない周の扱いは、pipeline の行 be の「判定できない周」と同じ極性にする（留める）。
-- 歯: 接頭辞 `pipe_land_unreflected_`（tests/e2e/pipe/land.rs）。留め・上限の回数を越えて非 Failed・表から消えた後の着地（2/2＋1）。
-
-## [[contract]] 行
+- 表から消えた後の周に、`released:FR84` を 1 件記帳して着地する。列の読みは行 be の読み（detail の頭 `held:` と `released:` を FR の語に依らず読む）のまま。
+- 置き場の file が無い周は留めない（列がまだ測っていない）。在るのに読めない周だけ `held:FR84:unmeasured` で留める。
+- 歯: 接頭辞 `pipe_land_unreflected_`（tests/e2e/pipe/land.rs）。
+  - (a) 表に bead が在る便は Gated に留まり、main は動かない。
+  - (b) 上限の回数を越えて回しても Failed にならない。
+  - (c) 表から消えた後の周に `released:FR84` を 1 件記帳して着地する。
+  - (d) 同じ原因で 3 周撃っても `held:FR84:` は 1 件。
+  - (e) 読めない file の周は `held:FR84:unmeasured` で留まり、file の無い置き場の便は着地する。
+  - base で RED: 機能不在（表に在る便が main に載る）。
 
 <!-- contracts:begin -->
 schema = 1
@@ -1756,7 +1769,7 @@ write-set = ["+crates/scribe2/src/pipe/land/ruling_hold.rs", "crates/scribe2/src
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_land_ruling_hold_", "cargo nextest run -p scribe2 --lib --no-tests=fail hold_diff_", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_order_held_", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_order_", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_train_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_land_turn_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_land_pr_cmd_"]
 size = "M"
 growth = ["crates/scribe2/src/pipe/land.rs:12", "crates/scribe2/src/pipe/queue.rs:22", "crates/scribe2/src/pipe/train.rs:6"]
-done = "(1) base の宣言が ruling-check = true の便で、差分が足す解けない 3 形・線の後の時刻の形・問い id の形の無い判断の欄 3 種・接頭辞違いだけの判断の欄・問い id を足さない ruling-check の外しの 8 形が、main を動かさず PR も開かず Gated に留まる (2) 理由の event は RunStage Gated の held:FR83:<並べ替えた名指し> で、同じ理由の周を何度撃っても 1 件のまま。retries を超える周を回しても Failed が無い (3) 線の前の引用・key の無い repo・解ける 4 形は着地する (4) 留めの後に台帳が解けた周は released:FR83 を 1 件記帳して着地する (5) 列の読みが held の便を番と後続の列から外し、released の後に戻す。候補の木の先頭は当たる後続を積まない (6) 台帳を読めない周は unmeasured の名指しで留め、通さない (7) 起こし直しは既存の passed_gate の枝だけで、dispatch.rs を変えない"
+done = "(1) base の宣言が ruling-check = true の便で、差分が足す解けない 3 形・線の後の時刻の形・問い id の形の無い判断の欄 3 種・接頭辞違いだけの判断の欄・問い id を足さない ruling-check の外しの 8 形が、main を動かさず PR も開かず Gated に留まる (2) 理由の event は RunStage Gated の held:FR83:<並べ替えた名指し> で、同じ理由の周を何度撃っても 1 件のまま。retries を超える周を回しても Failed が無い (3) 線の前の引用・key の無い repo・解ける 4 形は着地する (4) 留めの後に台帳が解けた周は released:FR83 を 1 件記帳して着地する (5) 列の読みが held の便を番と後続の列から外し、released の後に戻す。候補の木の先頭は当たる後続を積まない (6) 台帳を読めない周は unmeasured の名指しで留め、通さない (7) 起こし直しは既存の passed_gate の枝だけで、dispatch.rs を変えない (8) 列の読みは detail の頭 held: と released: を FR の語に依らず読む (9) 子は Land・Stage・EventKind・Issue を名指さず素の値を受け、記帳は land.rs が書く (10) 候補の木の先頭が当たる後続を積まないことを pipe_train_ の lib の歯 1 本で測る"
 
 [[contract]]
 id = "bf"
@@ -1764,9 +1777,9 @@ title = "未反映の裁定に関わる便を着地の周に FR10 の留めに�
 req = ["FR10", "FR84"]
 section = "63"
 depends = ["be"]
-write-set = ["crates/scribe2/src/pipe/land.rs", "crates/scribe2-boundary/tests/e2e/pipe/land.rs"]
+write-set = ["crates/scribe2/src/pipe/land.rs", "crates/scribe2-boundary/tests/e2e/pipe/land.rs", "=crates/scribe2/src/pipe/dispatch.rs"]
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_land_unreflected_"]
 size = "S"
 growth = ["crates/scribe2/src/pipe/land.rs:25"]
-done = "(1) 表に bead が在る便は Gated に留まり main は動かない (2) 同じ原因の event は便ごとに 1 件 (3) 上限の回数を越えて回しても Failed にならない (4) 表から消えた後の周に着地する (5) file が無い・読めない周は留める"
+done = "(1) 表に bead が在る便は Gated に留まり main は動かない (2) detail は held:FR84:<id> で、同じ原因の event は便ごとに 1 件（3 周撃っても 1 件） (3) 上限の回数を越えて回しても Failed にならない (4) 表から消えた後の周に released:FR84 を 1 件記帳して着地する (5) 置き場の file が無い周は留めず、在るのに読めない周だけ held:FR84:unmeasured で留める (6) 表の読みは dispatcher.md 行 am の読みの関数を呼び、その子の file は書かない"
 <!-- contracts:end -->
