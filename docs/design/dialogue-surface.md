@@ -194,8 +194,10 @@ user の裁定を受けた turn の中で対話面の席の口（seat ruling add
 - 歯（e2e は既存の `tests/e2e/seat/ruling.rs` と `tests/e2e/hook/guards.rs`。極性は既存の `tests/e2e/polarity.rs` と外形の snapshot）:
   - e2e `seat_ruling_answer_`（偽の bd）:
     - (a) 通る周: 経路 gui の発話 event と 5 欄の行（経路 gui）と close と裁定 event が 1 件ずつ書かれ、stdout が裁定 id の 1 行、承認 event は 0 件。
-    - (b) 空白だけ・閉じた問い・問いでない bead の 3 形で、event log も偽の bd の書きも不変。
+    - (b) 断りの 4 語の全部: 空白だけの逐語（`words-empty`）・偽の bd の show が読めない JSON を返す（`ledger-unreadable`）・閉じた問い（`closed`）・問いでない bead（`not-question`）。どれも rc 1 で `reason=<語>` の 1 行を出し、event log（発話 event を含む）も偽の bd の書き（append-notes と close）も撃つ前と同じ。
     - (c) 全部の使い方の行（数を母集団として出す）のうち、`WORDS` で逐語を受ける行が答えの口の 1 行だけ。
+    - (d) 断りの順: 2 つの断りに同時に当たる入力 3 形で、先の語だけが出る。空白だけの逐語 + 読めない台帳 → `words-empty`・空白だけの逐語 + 閉じた問い → `words-empty`・閉じていて問いでない bead → `closed`。
+    - (e) 書きの途中の失敗: 偽の bd が close の撃ちの中で event log の file を脇へ移し、同じ path に dir を置く（fleet-event-log §14 行 h の歯 (h) と同じ撃ち方）。答えの口は rc 1 で、出力に `partial utterance=<ts>` の 1 行が在り、その ts は脇へ移した log の経路 gui の発話 event の ts と一致し、偽の bd の append-notes と close の書きは残る。log を戻して同じ問いと ts で `seat ruling bind` を撃つと rc 0 で、log の裁定 event が 1 件になり、発話 event は 1 件のまま（発話が残り、結び直せる証拠）。
   - e2e `hook_answer_mouth_`:
     - 止まる 5 形: 素の撃ち・変数の binary・`cd … &&` の連鎖・`sh -c '…'`・`bash -lc "…"`。どれも rc 2 で、実行されない（偽の binary の印の file が無い）。
     - 通る 3 形: `grep -rn "seat ruling answer" docs`・`… seat ruling bind …`・`… seat ruling ls …`。
@@ -335,7 +337,7 @@ write-set = ["+crates/scribe2/src/hook/answer_mouth.rs", "crates/scribe2/src/hoo
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_ruling_answer_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail hook_answer_mouth_"]
 size = "M"
 growth = ["crates/scribe2/src/hook/answer_mouth.rs:150", "crates/scribe2/src/hook/mod.rs:4", "crates/scribe2/src/polarity.rs:12", "crates/scribe2/src/seat/ruling.rs:90", "crates/scribe2/src/seat/cli.rs:25", "crates/scribe2/src/help.rs:2", "crates/scribe2/src/fleet/cli.rs:1"]
-done = "(1) seat ruling answer --repo --state-dir --question [--bd] が標準入力の逐語を 1 byte も変えずに受け、使い方は < WORDS で示す (2) 空白だけ・台帳を読めない・閉じた問い・問いでない bead を、この順に何も書かず（発話 event も）rc 1 で断る (3) 通る周は経路 gui の発話 event を一意の ms の ts で書いてから行 h の結びの 1 関数を呼び、後半が落ちた周は partial utterance=<ts> で rc 1 (4) stdout は裁定 id の 1 行だけ (5) 承認 event を書かない (6) hook の子 module が choice の門の直後に Bash の command を segments で読み、引用の外の seat ruling answer の並びと、shell か eval の語の中の seat ruling answer を、役割と pane に依らず rc 2 で断る (7) 極性一覧に answer-mouth-deny（in-loop・fail-closed）を choice-question の直後に 1 行 (8) 使い方と help の表に ruling answer を足し、fleet/cli.rs の注を直す 歯: seat_ruling_answer_ が通る周の 4 つの書きと裁定 id の 1 行と承認 0 件、断り 3 形の不変、WORDS で逐語を受ける使い方が 1 行だけ（母集団は全部の使い方の行）を、hook_answer_mouth_ が止まる 5 形の不実行と通る 3 形と pane の無い session の断りを測る。base は answer が使い方の誤りで、素の撃ちが門を通って RED"
+done = "(1) seat ruling answer --repo --state-dir --question [--bd] が標準入力の逐語を 1 byte も変えずに受け、使い方は < WORDS で示す (2) 空白だけ・台帳を読めない・閉じた問い・問いでない bead を、この順に何も書かず（発話 event も）rc 1 で断る (3) 通る周は経路 gui の発話 event を一意の ms の ts で書いてから行 h の結びの 1 関数を呼び、後半が落ちた周は partial utterance=<ts> で rc 1 (4) stdout は裁定 id の 1 行だけ (5) 承認 event を書かない (6) hook の子 module が choice の門の直後に Bash の command を segments で読み、引用の外の seat ruling answer の並びと、shell か eval の語の中の seat ruling answer を、役割と pane に依らず rc 2 で断る (7) 極性一覧に answer-mouth-deny（in-loop・fail-closed）を choice-question の直後に 1 行 (8) 使い方と help の表に ruling answer を足し、fleet/cli.rs の注を直す 歯: seat_ruling_answer_ が通る周の 4 つの書きと裁定 id の 1 行と承認 0 件、断りの 4 語の全部（読めない台帳は偽の bd の壊れた JSON）で何も書かないこと、2 つの断りに同時に当たる 3 形で先の語だけが出る順、close の中で event log が塞がれた周の partial utterance=<ts> の rc 1 と残る notes と close と同じ ts の bind での結び直し、WORDS で逐語を受ける使い方が 1 行だけ（母集団は全部の使い方の行）を、hook_answer_mouth_ が止まる 5 形の不実行と通る 3 形と pane の無い session の断りを測る。base は answer が使い方の誤りで、素の撃ちが門を通って RED"
 
 [[contract]]
 id = "k"
