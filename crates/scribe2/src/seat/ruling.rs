@@ -10,7 +10,7 @@
 
 use crate::fleet::json_lite;
 use crate::fleet::store::{self, LockPolicy};
-use crate::fleet::{cli, Case, Channel, Event, EventKind, ACTOR_HUMAN, SCHEMA};
+use crate::fleet::{cli, epoch_ms_of, epoch_of, Case, Channel, Event, EventKind, ACTOR_HUMAN, SCHEMA};
 use crate::ledger::close_reason::is_ruling_id;
 use crate::ledger::form::QUESTION_LABEL;
 use crate::ledger::{self, Bead};
@@ -358,11 +358,106 @@ impl Tally {
     }
 }
 
+/// 問いの起票が発話より後の結びの数（pure・[`AskedAfter::line`] の材料・設計 dialogue-surface.md §13・FR89）。母集団は
+/// [`Case::Ruling`] を持つ裁定 event（`utterance` を持たない古い裁定 event は数えない）。
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AskedAfter {
+    /// 母集団の結びの数。
+    pub binds: usize,
+    /// asked が seat で問いの起票が発話より後の結びの裁定 id（log の順）。
+    pub after_seat: Vec<String>,
+    /// asked が user で問いの起票が発話より後の結びの裁定 id（log の順）。
+    pub after_user: Vec<String>,
+    /// asked の無い結びの裁定 id（発話との前後に依らない・log の順）。
+    pub asked_none: Vec<String>,
+    /// 問いの起票か発話の時刻を読めない結びの数（`after-*` に入れない）。
+    pub unreadable: usize,
+}
+
+/// 裁定 id の列の字（無ければ `-`）。
+fn ids_or_dash(ids: &[String]) -> String {
+    if ids.is_empty() {
+        "-".to_owned()
+    } else {
+        ids.join(",")
+    }
+}
+
+impl AskedAfter {
+    /// log から数える（pure）。問いの起票の時刻は [`epoch_of`]、発話の ts は [`epoch_ms_of`] で読み、発話を秒へ切り捨てて比べる
+    /// （字面で比べない・同じ秒は後に数えない）。
+    pub fn of(events: &[Event]) -> Self {
+        let mut found = Self::default();
+        for event in events.iter().filter(|event| event.kind == EventKind::RulingReceived) {
+            let Some(Case::Ruling { ruling, utterance, question_ts, asked, .. }) = &event.case else {
+                continue;
+            };
+            found.binds = found.binds.saturating_add(1);
+            if asked.is_none() {
+                found.asked_none.push(ruling.clone());
+            }
+            let (Some(asked_at), Some(said_ms)) = (epoch_of(question_ts), epoch_ms_of(utterance)) else {
+                found.unreadable = found.unreadable.saturating_add(1);
+                continue;
+            };
+            if asked_at <= said_ms / 1_000 {
+                continue;
+            }
+            match asked.as_deref() {
+                Some("seat") => found.after_seat.push(ruling.clone()),
+                Some("user") => found.after_user.push(ruling.clone()),
+                _ => {}
+            }
+        }
+        found
+    }
+
+    /// doctor の 1 行（`binds=<N> after-seat=<n> after-seat-ids=<id,…|-> after-user=<n> after-user-ids=<id,…|-> asked-none=<n>
+    /// asked-none-ids=<id,…|->`・読めない結びが在れば末尾に ` unreadable=<n>`）。
+    pub fn line(&self) -> String {
+        let mut line = format!(
+            "binds={} after-seat={} after-seat-ids={} after-user={} after-user-ids={} asked-none={} asked-none-ids={}",
+            self.binds,
+            self.after_seat.len(),
+            ids_or_dash(&self.after_seat),
+            self.after_user.len(),
+            ids_or_dash(&self.after_user),
+            self.asked_none.len(),
+            ids_or_dash(&self.asked_none)
+        );
+        if self.unreadable > 0 {
+            line.push_str(&format!(" unreadable={}", self.unreadable));
+        }
+        line
+    }
+}
+
+/// doctor の問いの起票の行（[`AskedAfter`]・母集団 0 の周は行を出さず、読めない log は `binds=unreadable`）。
+fn asked_after_lines(events: Option<&[Event]>) -> Vec<String> {
+    let Some(events) = events else {
+        return vec!["binds=unreadable".to_owned()];
+    };
+    let found = AskedAfter::of(events);
+    if found.binds == 0 {
+        Vec::new()
+    } else {
+        vec![found.line()]
+    }
+}
+
 /// doctor の突合の行（設計 §9 (4)・読むだけ・判定しない＝rc を変えない）。manifest は `rules`（`--rules` の値）か埋め込み。
 ///
 /// 裁定 0・母集団 0・skipped 0 の周は**行を出さない**（数えるものの無い置き場の doctor の外形を動かさない）。log か manifest を
 /// 読めない周は数を 0 と書かず `unreadable` を名乗る 1 行を出す。`events` は呼び手が 1 回だけ読んだ log（読めない周は `None`）。
+/// 突合の行の直後に問いの起票の行（[`asked_after_lines`]）が続く。
 pub fn doctor_lines(events: Option<&[Event]>, rules: Option<&str>) -> Vec<String> {
+    let mut lines = tally_lines(events, rules);
+    lines.extend(asked_after_lines(events));
+    lines
+}
+
+/// 突合の行（[`doctor_lines`] の前半）。
+fn tally_lines(events: Option<&[Event]>, rules: Option<&str>) -> Vec<String> {
     let manifest = super::manifest_read(rules.map_or_else(Manifest::embedded, |path| Manifest::load(Path::new(path))));
     match (events, manifest) {
         (Some(events), Ok(found)) => {
@@ -383,8 +478,8 @@ pub fn doctor_lines(events: Option<&[Event]>, rules: Option<&str>) -> Vec<String
 
 #[cfg(test)]
 mod tests {
-    use super::{ruling_id, ruling_minute, Tally};
-    use crate::fleet::{Event, EventKind, ACTOR_HUMAN, SCHEMA};
+    use super::{ruling_id, ruling_minute, AskedAfter, Tally};
+    use crate::fleet::{Case, Channel, Event, EventKind, ACTOR_HUMAN, SCHEMA};
     use crate::ledger::close_reason::is_ruling_id;
     use crate::rules::manifest::Manifest;
 
@@ -481,5 +576,57 @@ mod tests {
         let none = Tally::of(&[], &manifest(""));
         assert!(none.is_empty(), "数えるものの無い周");
         assert_eq!(Tally::of(&events, &manifest("")).line(), "rulings=3 rule-rulings=0/0 unmatched=- skipped=0");
+    }
+
+    /// 結びの形の裁定 1 件（裁定 id・発話の ts・問いの起票の時刻・asked を選ぶ）。
+    fn bound(id: &str, utterance: &str, question_ts: &str, asked: Option<&str>) -> Event {
+        let case = Case::Ruling {
+            ruling: id.to_owned(),
+            utterance: utterance.to_owned(),
+            channel: Channel::Chat,
+            question_ts: question_ts.to_owned(),
+            asked: asked.map(str::to_owned),
+        };
+        Event { case: Some(case), ..ruling("2026-09-30T09:00:00.000Z") }
+    }
+
+    /// 発話（秒より下の桁を持つ）と秒までの question_ts の比べ: 発話の秒の後の question_ts は後・前は後でない・同じ秒（ミリ秒が 999 でも
+    /// 0 でも）は後に数えない。字面で比べると崩れる桁の数の違い（`.5Z` と `:10Z`）の形でも秒で比べる。
+    #[test]
+    fn doctor_asked_after_compares_seconds_truncating_the_utterance_and_skips_the_same_second() {
+        let said = "2026-09-30T07:05:09.999Z";
+        let events = [
+            bound("a:1", said, "2026-09-30T07:05:10Z", Some("seat")),
+            bound("b:1", said, "2026-09-30T07:05:09Z", Some("seat")),
+            bound("c:1", "2026-09-30T07:05:09.000Z", "2026-09-30T07:05:09Z", Some("user")),
+            bound("d:1", said, "2026-09-30T07:05:08Z", Some("user")),
+            bound("e:1", "2026-09-30T07:05:09.001Z", "2026-09-30T07:06:00Z", Some("user")),
+        ];
+        let found = AskedAfter::of(&events);
+        assert_eq!((found.binds, found.unreadable), (5, 0));
+        assert_eq!((found.after_seat, found.after_user), (vec!["a:1".to_owned()], vec!["e:1".to_owned()]));
+    }
+
+    /// 母集団は結びの形（case が Ruling）だけ・asked の無い結びは前後に依らず全部 asked-none に log の順で並び、
+    /// 読めない時刻（question_ts・発話のどちらも）は binds と asked-none に数えて after-* に入れず unreadable に数える。
+    #[test]
+    fn doctor_asked_after_counts_the_population_and_keeps_unreadable_times_out_of_after() {
+        let events = [
+            ruling("2026-09-30T07:05:09.123Z"),
+            bound("z:1", "2026-09-30T07:05:09.123Z", "2026-09-30T08:00:00Z", None),
+            bound("m:1", "2026-09-30T07:05:09.123Z", "2026-09-30T06:00:00Z", None),
+            bound("s:1", "2026-09-30T07:05:09.123Z", "not-a-time", Some("seat")),
+            bound("u:1", "2026-09-30T07:05:09Z", "2026-09-30T08:00:00Z", Some("user")),
+            bound("n:1", "2026-09-30T07:05:09.123Z", "bad", None),
+        ];
+        let found = AskedAfter::of(&events);
+        assert_eq!((found.binds, found.unreadable), (5, 3), "古い裁定は数えない・秒の発話の ts も読めない");
+        assert_eq!(found.asked_none, ["z:1", "m:1", "n:1"], "log の順");
+        assert!(found.after_seat.is_empty() && found.after_user.is_empty(), "読めない結びは after に入れない");
+        assert_eq!(
+            found.line(),
+            "binds=5 after-seat=0 after-seat-ids=- after-user=0 after-user-ids=- asked-none=3 asked-none-ids=z:1,m:1,n:1 unreadable=3"
+        );
+        assert_eq!(AskedAfter::of(&[ruling("2026-09-30T07:05:09.123Z")]).binds, 0, "古い裁定だけの母集団は 0");
     }
 }

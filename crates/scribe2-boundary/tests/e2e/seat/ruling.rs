@@ -640,8 +640,11 @@ fn fleet_ruling_doctor_matches_user_ts_rows_by_the_same_minute() {
     assert_eq!(line, "rulings=1 rule-rulings=1/2 unmatched=ruled.miss skipped=1", "{lines:?}");
     let at = lines.iter().position(|found| *found == line);
     let first_seat = lines.iter().position(|found| found.starts_with("seat: "));
-    assert_eq!(at.map(|found| found + 1), first_seat, "登録 row の行の直前: {lines:?}");
-    assert_eq!(lines.len(), bare.len() + 1, "足すのは 1 行だけ: {lines:?}");
+    // 結びの形の裁定 1 件は、突合の行の直後に問いの起票の行（行 l）も足す。
+    let next = at.and_then(|found| lines.get(found + 1));
+    assert!(next.is_some_and(|found| found.starts_with("binds=1 ")), "突合の行の直後は問いの起票の行: {lines:?}");
+    assert_eq!(at.map(|found| found + 2), first_seat, "登録 row の行の直前: {lines:?}");
+    assert_eq!(lines.len(), bare.len() + 2, "足すのは 2 行だけ: {lines:?}");
     fs::remove_dir_all(&place.dir).ok();
 }
 
@@ -1154,4 +1157,114 @@ fn seat_ruling_answer_notes_failure_is_partial_and_keeps_the_utterance_without_a
     let verbs: Vec<String> = fake.writes().iter().filter_map(|call| call.first().cloned()).collect();
     assert_eq!(verbs, ["update"], "append-notes だけを撃ち close は撃たない");
     assert!(fake.rulings().is_empty(), "裁定 event は書かない");
+}
+
+// ─────────── 問いの起票が発話より後の結びの doctor の 1 行（設計 docs/design/dialogue-surface.md §13・行 l・接頭辞 `doctor_asked_after_`） ───────────
+
+/// 発話の ts（ミリ秒の形）と、それより後・前の問いの起票の時刻。
+const SAID: &str = "2026-09-30T07:05:09.123Z";
+const ASKED_AFTER: &str = "2026-09-30T08:00:00Z";
+const ASKED_BEFORE: &str = "2026-09-30T06:00:00Z";
+
+/// 古い裁定 event（utterance を持たない・rule だけの形）を置き場へ足す。
+fn put_old_ruling(state: &Path) {
+    let old = Event { rule: Some("R-C9-1".to_owned()), ..event(EventKind::RulingReceived, "2026-09-22T01:02:03Z", "s2-x.1", Some("古い逐語"), None) };
+    let policy = LockPolicy::embedded();
+    assert!(policy.is_ok(), "lock の値を読める");
+    if let Ok(policy) = policy {
+        assert!(store::append(state, &old, policy).is_ok(), "古い裁定を足せる");
+    }
+}
+
+/// 結びの形の裁定 event を、裁定 id・（発話の ts・問いの起票の時刻）・asked つきで置き場へ足す。
+fn put_bound(state: &Path, id: &str, (utterance, question_ts): (&str, &str), asked: Option<&str>) {
+    let case = Case::Ruling {
+        ruling: id.to_owned(),
+        utterance: utterance.to_owned(),
+        channel: Channel::Chat,
+        question_ts: question_ts.to_owned(),
+        asked: asked.map(str::to_owned),
+    };
+    let policy = LockPolicy::embedded();
+    assert!(policy.is_ok(), "lock の値を読める");
+    if let Ok(policy) = policy {
+        let found = event(EventKind::RulingReceived, "2026-09-30T09:00:00Z", "s2-q", Some("推奨で"), Some(case));
+        assert!(store::append(state, &found, policy).is_ok(), "結びの裁定 event を足せる");
+    }
+}
+
+/// 7 件の fixture: asked が seat と user でそれぞれ発話の前と後の 4 結び・asked の無い後の結び 1（裁定 id が字の順で後ろ・log で先）・asked の無い
+/// 前の結び 1（裁定 id が字の順で前・log で後）・utterance を持たない古い裁定 1。
+fn put_seven(state: &Path) {
+    put_old_ruling(state);
+    put_bound(state, "s2-n9:20260930T0705Z-1", (SAID, ASKED_AFTER), None);
+    put_bound(state, "s2-sb:20260930T0705Z-1", (SAID, ASKED_BEFORE), Some("seat"));
+    put_bound(state, "s2-sa:20260930T0705Z-1", (SAID, ASKED_AFTER), Some("seat"));
+    put_bound(state, "s2-ub:20260930T0705Z-1", (SAID, ASKED_BEFORE), Some("user"));
+    put_bound(state, "s2-ua:20260930T0705Z-1", (SAID, ASKED_AFTER), Some("user"));
+    put_bound(state, "s2-n1:20260930T0705Z-1", (SAID, ASKED_BEFORE), None);
+}
+
+/// doctor の出力行のうち `binds=` で始まる行（無ければ `None`）。
+fn binds_line(place: &RolePlace) -> Option<String> {
+    doctor_rows(place, NO_ACCOUNT_RULES).into_iter().find(|line| line.starts_with("binds="))
+}
+
+/// (a) 7 件の fixture で、doctor の行が 7 語の順・件数・裁定 id（asked-none は log の順で字の順と逆）と一致する。
+#[test]
+fn doctor_asked_after_counts_each_asked_value_and_lists_the_ids_in_log_order() {
+    let place = dialogue_place();
+    put_seven(&place.state);
+    let expected = "binds=6 after-seat=1 after-seat-ids=s2-sa:20260930T0705Z-1 after-user=1 after-user-ids=s2-ua:20260930T0705Z-1 \
+                    asked-none=2 asked-none-ids=s2-n9:20260930T0705Z-1,s2-n1:20260930T0705Z-1";
+    assert_eq!(binds_line(&place).as_deref(), Some(expected));
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (b) 古い裁定だけの置き場（母集団 0）は行を出さない。
+#[test]
+fn doctor_asked_after_prints_no_line_when_only_old_rulings_exist() {
+    let place = dialogue_place();
+    put_old_ruling(&place.state);
+    let rows = doctor_rows(&place, NO_ACCOUNT_RULES);
+    assert!(!rows.iter().any(|line| line.contains("binds=")), "母集団 0 は行を出さない: {rows:?}");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (c) log が読めない置き場は `binds=unreadable`。
+#[test]
+fn doctor_asked_after_names_an_unreadable_log() {
+    let place = dialogue_place();
+    fs::create_dir_all(place.state.join("fleet")).ok();
+    fs::write(store::events_path(&place.state), "こわれ\n").ok();
+    let rows = doctor_rows(&place, NO_ACCOUNT_RULES);
+    assert_eq!(rows.iter().filter(|line| line.as_str() == "binds=unreadable").count(), 1, "{rows:?}");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (d) asked が seat で question_ts が読めない結びを足すと、binds が 1 増え `unreadable=1` が末尾に付き、after-* と asked-none の数は変わらない。
+/// utterance が読めない結びを足した形でも同じ。
+#[test]
+fn doctor_asked_after_keeps_unreadable_times_out_of_the_after_columns() {
+    let base = "binds=7 after-seat=1 after-seat-ids=s2-sa:20260930T0705Z-1 after-user=1 after-user-ids=s2-ua:20260930T0705Z-1 \
+                asked-none=2 asked-none-ids=s2-n9:20260930T0705Z-1,s2-n1:20260930T0705Z-1 unreadable=1";
+    for (utterance, question_ts) in [(SAID, "not-a-time"), ("2026-09-30T07:05:09Z", ASKED_AFTER)] {
+        let place = dialogue_place();
+        put_seven(&place.state);
+        put_bound(&place.state, "s2-bad:20260930T0705Z-1", (utterance, question_ts), Some("seat"));
+        assert_eq!(binds_line(&place).as_deref(), Some(base), "{utterance} / {question_ts}");
+        fs::remove_dir_all(&place.dir).ok();
+    }
+}
+
+/// (e) asked が user の後の結びを持たない置き場（seat の後の結び 1・asked の無い結び 1）で、行が `after-user=0 after-user-ids=-` を持つ。
+#[test]
+fn doctor_asked_after_prints_a_dash_for_an_empty_id_column() {
+    let place = dialogue_place();
+    put_bound(&place.state, "s2-sa:20260930T0705Z-1", (SAID, ASKED_AFTER), Some("seat"));
+    put_bound(&place.state, "s2-n1:20260930T0705Z-1", (SAID, ASKED_BEFORE), None);
+    let line = binds_line(&place).unwrap_or_default();
+    assert!(line.contains(" after-user=0 after-user-ids=- "), "{line}");
+    assert_eq!(line.split(' ').count(), 7, "7 語: {line}");
+    fs::remove_dir_all(&place.dir).ok();
 }
