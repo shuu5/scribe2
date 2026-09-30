@@ -9,7 +9,7 @@ use super::probe::{run, Bound, Stop};
 use super::Published;
 use crate::fleet::json_tree;
 use crate::hook::host_guard::Scene;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// 導く host（大小を畳む）。
 const GITHUB: &str = "github.com";
@@ -99,6 +99,8 @@ pub struct Anchor {
     pub label: String,
     /// 導けた owner/name（導けない anchor は `None`＝private の隣）。
     pub repo: Option<String>,
+    /// 実体の dir（材料の子を撃つ場）。
+    pub dir: PathBuf,
 }
 
 /// anchor の設定から push の URL: `remote.pushDefault`（無ければ origin）の pushurl（無ければ url）に insteadOf の最長一致を当てる。
@@ -130,7 +132,7 @@ pub fn anchors(scene: &Scene, bound: Bound) -> Result<Vec<Anchor>, Halt> {
             Err(Stop::Deadline) => return Err(Halt::Deadline),
         };
         let label = Path::new(dir).file_name().map_or_else(|| dir.to_owned(), |name| name.to_string_lossy().into_owned());
-        found.push(Anchor { label, repo: push_url(&config).and_then(|url| repo_of(&url)) });
+        found.push(Anchor { label, repo: push_url(&config).and_then(|url| repo_of(&url)), dir: PathBuf::from(dir) });
     }
     Ok(found)
 }
@@ -303,7 +305,7 @@ mod tests {
         }
         let missing = ask(&["o/n".to_owned()], Path::new("/nonexistent/scribe2-no-such-gh"), bound()).unwrap_or_else(|why| panic!("問える: {why:?}"));
         assert_eq!(missing, [Seen::Unread], "起こせない gh");
-        let anchor = |label: &str, repo: Option<&str>| Anchor { label: label.to_owned(), repo: repo.map(str::to_owned) };
+        let anchor = |label: &str, repo: Option<&str>| Anchor { label: label.to_owned(), repo: repo.map(str::to_owned), dir: PathBuf::new() };
         let anchors = [anchor("open", Some("o/open")), anchor("lost", None), anchor("intra", Some("o/intra"))];
         let names = vec!["o/pub".to_owned(), "o/open".to_owned(), "o/intra".to_owned()];
         let unread = settle(&[vec![Some("o/pub".to_owned())]], &anchors, &(names.clone(), vec![Seen::Unread; 3]));
