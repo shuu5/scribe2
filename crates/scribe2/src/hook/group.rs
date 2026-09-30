@@ -30,7 +30,7 @@ use crate::fleet::cli::{host, now_utc};
 use crate::fleet::select::Model;
 use crate::fleet::store::{self, LockPolicy};
 use crate::fleet::usage;
-use crate::fleet::{epoch_of, replay, Allowance, Event, EventKind, Measured, State, WindowKind, SCHEMA};
+use crate::fleet::{account_dir, epoch_of, replay, Allowance, Event, EventKind, Measured, State, WindowKind, SCHEMA};
 use crate::invocation::Invocation;
 use crate::name::NAME;
 use crate::rules::manifest::{AccountGroup, Manifest};
@@ -471,6 +471,30 @@ pub fn pressed(rows: &[Allowance], caps: Caps, models: &BTreeSet<&str>) -> Optio
         })
 }
 
+/// 群の移動の契機（**閉じた 2 値**・設計 account-lifecycle.md §38 形 3）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MoveCause {
+    /// 今の口座が逼迫（[`pressed`] の答え）。
+    Pressed(Pressed),
+    /// 今の口座が墓標（[`usage::credential_of`] が dead・実測の行は読まない）。
+    Tombstone,
+}
+
+/// 口座 1 つの移動の契機（**pure**・契機の 1 本）: 墓標なら行を読まずに [`MoveCause::Tombstone`]、でなければ行の [`pressed`] の答えを
+/// [`MoveCause::Pressed`] で包む（閾値未満・測れなかった行だけ・行なしは `None`）。呼び手は [`decide`] と [`pressed_now`] の 2 つで、
+/// 墓標かは各所が [`usage::credential_of`] で読む。
+pub fn move_cause(dead: bool, rows: Option<&[Allowance]>, caps: Caps, models: &BTreeSet<&str>) -> Option<MoveCause> {
+    if dead {
+        return Some(MoveCause::Tombstone);
+    }
+    rows.and_then(|found| pressed(found, caps, models)).map(MoveCause::Pressed)
+}
+
+/// 口座 `label` の credential が墓標か（**読みは [`usage::credential_of`] の 1 本**・墓標の口座は測らず移り先にもしない）。
+fn is_dead(input: &Judge<'_>, label: &str) -> bool {
+    usage::credential_of(&account_dir(input.state_dir, label)) == usage::Credential::Dead
+}
+
 /// anchor の属する群（宣言順で最初の 1 つ・宣言は同じ置き場を 2 つの群に置けない）。
 pub fn group_of<'a>(manifest: &'a Manifest, anchor: &str) -> Option<&'a AccountGroup> {
     manifest.groups().iter().find(|group| group.anchors().iter().any(|found| found == anchor))
@@ -549,7 +573,7 @@ pub fn judge(input: &Judge<'_>, measured: &mut BTreeSet<String>) -> Judgement {
     let request = request_path(&dir, input.group.name());
     let requested = request.is_file() && set.is_subset(input.forced);
     for label in &set {
-        if measured.insert(label.clone()) {
+        if !is_dead(input, label) && measured.insert(label.clone()) {
             (input.measure)(label, input.forced.contains(label));
         }
     }
@@ -570,10 +594,15 @@ fn decide(input: &Judge<'_>, current: &str, set: &BTreeSet<String>, measured: &m
     let Some(models) = role_models(input.manifest, input.group, &state) else {
         return Judgement::Unreadable;
     };
-    let pressed_of = |label: &str| usage::latest_of(&state, label).and_then(|rows| pressed(&rows, input.caps, &models));
-    if pressed_of(current).is_none() {
+    let cause_of =
+        |label: &str| move_cause(is_dead(input, label), usage::latest_of(&state, label).as_deref(), input.caps, &models);
+    if cause_of(current).is_none() {
         clear_refused(&host_groups_dir(input.state_dir), input.group.name());
-        return Judgement::Stay(set.iter().filter_map(|label| Some((label.clone(), pressed_of(label)?))).collect());
+        let pressed_in = set.iter().filter_map(|label| match cause_of(label)? {
+            MoveCause::Pressed(found) => Some((label.clone(), found)),
+            MoveCause::Tombstone => None,
+        });
+        return Judgement::Stay(pressed_in.collect());
     }
     // 移り先は自分の予約（役割の model の行が無い周・読めない周は移らず断らない＝記録 0・event 0・設計 §29 形 1 / 2）。
     match reserve(input, measured) {
@@ -658,10 +687,10 @@ fn key_of(rows: &[Allowance], models: &BTreeSet<&str>) -> (bool, Reverse<u64>, b
     (missing, Reverse(remaining), reset.is_none(), reset)
 }
 
-/// 群の予約（**1 関数**・設計 §29 形 2 / 3・§31 形 1）: 群を宣言順に `input.group` まで見て、判じる群と**今の口座が逼迫の先の群**
-/// （[`pressed_now`]）ごとに門を通る候補を残量の鍵（[`by_key`]）で並べ、先の群の予約でない先頭をその群の予約とし、`input.group` の
+/// 群の予約（**1 関数**・設計 §29 形 2 / 3・§31 形 1・§38 形 5）: 群を宣言順に `input.group` まで見て、判じる群と**今の口座が移動の
+/// 契機を持つ先の群**（逼迫か墓標・[`pressed_now`]）ごとに門を通る候補を残量の鍵（[`by_key`]）で並べ、先の群の予約でない先頭をその群の予約とし、`input.group` の
 /// 予約を返す（無ければ `None`）。逼迫でない先の群は候補を測らず予約を持たない。門は今の口座でなく・どの群の今の口座でもなく（先の
-/// 群は周の頭の `head`・判じる群は `taken`）・退役中でなく・鮮度の内側の実測を持ち 3 窓とも閾値未満（鮮度の外の候補は `measure` で
+/// 群は周の頭の `head`・判じる群は `taken`）・退役中でなく・墓標でなく（[`is_dead`]・鮮度の内側の実測を持つ墓標も外す）・鮮度の内側の実測を持ち 3 窓とも閾値未満（鮮度の外の候補は `measure` で
 /// 口座ごとに 1 周 1 回測る）。予約は記録しない（周ごとに導き直す）。役割の model の行が無い周は測らずに [`Unreserved::NoRule`]。
 pub fn reserve(input: &Judge<'_>, measured: &mut BTreeSet<String>) -> Result<Option<String>, Unreserved> {
     let read = || store::read_all(input.state_dir).map(|events| replay(&events)).map_err(|_| Unreserved::Unreadable);
@@ -677,8 +706,11 @@ pub fn reserve(input: &Judge<'_>, measured: &mut BTreeSet<String>) -> Result<Opt
             continue;
         }
         let taken = if target { input.taken } else { input.head };
-        let open: Vec<&String> =
-            found.accounts().iter().filter(|label| !taken.contains(*label) && !state.retired.contains_key(*label)).collect();
+        let open: Vec<&String> = found
+            .accounts()
+            .iter()
+            .filter(|label| !taken.contains(*label) && !state.retired.contains_key(*label) && !is_dead(input, label))
+            .collect();
         for label in &open {
             if measured.insert((*label).clone()) {
                 (input.measure)(label, false);
@@ -699,8 +731,8 @@ pub fn reserve(input: &Judge<'_>, measured: &mut BTreeSet<String>) -> Result<Opt
     Ok(None)
 }
 
-/// 先の群の今の口座が逼迫か（設計 §31 形 1）: 記録を読めない群・鮮度の内側の実測を持たない群は偽。鮮度の外は**今の口座だけ**を
-/// `measure` で口座ごとに 1 周 1 回測る。`models` はその群の役割の model の表示名の集合（呼び手が読む・設計 §33 形 3）。
+/// 先の群の今の口座が移動の契機を持つか（設計 §31 形 1・§38 形 6・[`move_cause`]）: 記録を読めない群・鮮度の内側の実測を持たない群
+/// は偽・墓標の今の口座は測らずに真。鮮度の外は**今の口座だけ**（墓標でなければ）を `measure` で口座ごとに 1 周 1 回測る。`models` はその群の役割の model の表示名の集合（呼び手が読む・設計 §33 形 3）。
 fn pressed_now(
     input: &Judge<'_>,
     found: &AccountGroup,
@@ -710,12 +742,13 @@ fn pressed_now(
     let Ok(current) = current_of(input.state_dir, found) else {
         return Ok(false);
     };
-    if measured.insert(current.label.clone()) {
+    let dead = is_dead(input, &current.label);
+    if !dead && measured.insert(current.label.clone()) {
         (input.measure)(&current.label, false);
     }
     let state = store::read_all(input.state_dir).map(|events| replay(&events)).map_err(|_| Unreserved::Unreadable)?;
     let fresh = usage::fresh_rows(input.manifest, &state, &current.label).map_err(|_| Unreserved::NoRule)?;
-    Ok(fresh.is_some_and(|rows| pressed(&rows, input.caps, models).is_some()))
+    Ok(move_cause(dead, fresh.as_deref(), input.caps, models).is_some())
 }
 
 /// 移動の記録と承認（この順）: 前提（宣言の逐語・起こし直しの刻み・役割の既定の面）が揃わない周と記録を書けない周は 1 つも
@@ -905,7 +938,8 @@ fn measure_later(state_dir: &Path, account: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        answered, by_key, exit_due, grace_left, measure_later, pressed, refused_mark, refused_ts, write_signal, Caps, Pressed, Signal,
+        answered, by_key, exit_due, grace_left, measure_later, move_cause, pressed, refused_mark, refused_ts, write_signal, Caps,
+        MoveCause, Pressed, Signal,
     };
     use crate::fleet::{Allowance, Measured, WindowKind};
     use std::collections::BTreeSet;
@@ -1039,6 +1073,32 @@ mod tests {
         assert_eq!(pressed(&tie, caps, &fable).map(|found| found.window), Some(WindowKind::FiveHour), "同率は先の窓");
         let under = [measured(WindowKind::FiveHour, 84), measured(WindowKind::SevenDay, 94)];
         assert_eq!(pressed(&under, caps, &fable), None, "どの窓も閾値未満");
+    }
+
+    /// 移動の契機の真理表（設計 account-lifecycle.md §38 形 3）: 墓標は行の有無と値に依らず `Tombstone`・墓標でない閾値以上は
+    /// [`pressed`] と同じ窓と値の `Pressed`・閾値未満と測れなかった行だけと行なしは `None`。
+    #[test]
+    fn group_tombstone_need_cause_truth_table() {
+        let caps = Caps { five: 85, seven: 95, model: 95 };
+        let fable = BTreeSet::from(["Fable"]);
+        let over = [measured(WindowKind::FiveHour, 90), measured(WindowKind::SevenDay, 10)];
+        let under = [measured(WindowKind::FiveHour, 84), measured(WindowKind::SevenDay, 94)];
+        let unmeasured = [Allowance::Unmeasured(crate::fleet::Unmeasured {
+            account: "a1".to_owned(),
+            window: None,
+            model: None,
+            endpoint: "oauth-usage".to_owned(),
+            reason: crate::fleet::UnmeasuredReason::Tombstone,
+        })];
+        let want = Some(MoveCause::Pressed(Pressed { window: WindowKind::FiveHour, used: 90, cap: 85 }));
+        assert_eq!(move_cause(true, Some(&over), caps, &fable), Some(MoveCause::Tombstone), "墓標 ∧ 閾値以上");
+        assert_eq!(move_cause(true, Some(&under), caps, &fable), Some(MoveCause::Tombstone), "墓標 ∧ 閾値未満");
+        assert_eq!(move_cause(true, None, caps, &fable), Some(MoveCause::Tombstone), "墓標 ∧ 行なし");
+        assert_eq!(move_cause(false, Some(&over), caps, &fable), want, "墓標でない ∧ 閾値以上は pressed と同じ");
+        assert_eq!(move_cause(false, Some(&over), caps, &fable), pressed(&over, caps, &fable).map(MoveCause::Pressed));
+        assert_eq!(move_cause(false, Some(&under), caps, &fable), None, "墓標でない ∧ 閾値未満");
+        assert_eq!(move_cause(false, Some(&unmeasured), caps, &fable), None, "測れなかった行だけ");
+        assert_eq!(move_cause(false, None, caps, &fable), None, "行なし");
     }
 
     /// モデル別窓の行 1 つ（model の字面を選ぶ）。

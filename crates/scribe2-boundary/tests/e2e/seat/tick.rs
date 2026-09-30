@@ -603,6 +603,151 @@ fn seat_tick_judge_model_gate_opus_role_with_only_the_fable_window_high_stays() 
     assert_eq!(move_keys(&place), Vec::<String>::new(), "0 key");
 }
 
+// ───────────── 群は今の口座が墓標なら移る（account-lifecycle.md §38 行 ac・接頭辞 `seat_tick_judge_tombstone_`） ─────────────
+//
+// §9 の判定の fixture（[`judge_place`]）と §29 の予約の fixture（[`reserve_place`]）の口座の credential を墓標（`expiresAt` 0）に
+// 書き換える。判定行は全体を等値で測らず末尾の `judged=` の語と event の数と記録で測る（行 ad の後に理由の語が変わっても緑）。
+
+/// 口座 `label` の credential を墓標に書き換える（token の字は fixture の本文の字のまま）。
+fn tombstone_put(place: &MovePlace, label: &str) {
+    let file = place.state.join("accounts").join(label).join(".credentials.json");
+    let body = format!("{{\"claudeAiOauth\":{{\"accessToken\":\"tok-{label}\",\"refreshToken\":\"r\",\"expiresAt\":0}}}}");
+    fs::write(file, body).ok();
+}
+
+/// 置き場の event log の口座 `label` の実測の行（測れた・測れなかった）の件数。
+fn tombstone_rows(place: &MovePlace, label: &str) -> usize {
+    use vessel::fleet::{Allowance, EventKind};
+    let events = vessel::fleet::store::read_all(&place.state).unwrap_or_default();
+    let of = |allowance: &Allowance| match allowance {
+        Allowance::Measured(found) => found.account == label,
+        Allowance::Unmeasured(found) => found.account == label,
+    };
+    events.iter().filter(|event| event.kind == EventKind::AllowanceMeasured && event.allowance.as_ref().is_some_and(of)).count()
+}
+
+/// 実測の窓が開き直る時刻（遠い未来の番兵）。
+const TOMBSTONE_FAR: &str = "2099-01-01T00:00:00Z";
+
+/// 口座 `label` の鮮度の内側の実測（5 時間窓・7 日窓・モデル別窓〔Fable〕とも 10%・10 秒前の event）を event log へ直に置く。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn tombstone_fresh(place: &MovePlace, label: &str) {
+    use vessel::fleet::{Allowance, Event, EventKind, Measured, WindowKind};
+    let policy = vessel::fleet::store::LockPolicy::embedded().expect("lock の規則を読める");
+    let ts = vessel::fleet::cli::format_utc(unix_now() - 10);
+    for window in [WindowKind::FiveHour, WindowKind::SevenDay, WindowKind::SevenDayModel] {
+        let measured = Measured {
+            account: label.to_owned(),
+            window,
+            model: (window == WindowKind::SevenDayModel).then(|| "Fable".to_owned()),
+            endpoint: "oauth-usage".to_owned(),
+            used_pct: 10,
+            resets_at: Some(TOMBSTONE_FAR.to_owned()),
+        };
+        let event = Event {
+            schema: vessel::fleet::SCHEMA,
+            ts: ts.clone(),
+            kind: EventKind::AllowanceMeasured,
+            run: String::new(),
+            bead: String::new(),
+            host: "h".to_owned(),
+            actor: EventKind::AllowanceMeasured.default_actor().to_owned(),
+            stage: None,
+            seat: None,
+            pid: None,
+            detail: None,
+            allowance: Some(Allowance::Measured(measured)),
+            registration: None,
+            mark: None,
+            account: None,
+            cost: None,
+            rule: None,
+            case: None,
+        };
+        vessel::fleet::store::append(&place.state, &event, policy).expect("実測を置ける");
+    }
+}
+
+/// (f) 5 時間窓 [10, 10]（A も B も閾値未満）で A（群の種）の credential が墓標 → `judged=moved:<B>`・群の記録が B・承認 event 1
+/// （逐語は群の宣言の行の逐語）・偽 client の呼出は B の 1 回だけ（A は測らない・base は `judged=stay` ＝ RED）。
+#[test]
+fn seat_tick_judge_tombstone_current_account_moves_the_group_without_measuring_it() {
+    use vessel::fleet::EventKind;
+    let root = tmp();
+    let place = judge_place(&root, MOVE_ANCHOR, [10, 10]);
+    tombstone_put(&place, MOVE_A);
+    let out = move_run(&place);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert!(stdout_of(&out).ends_with(&format!(" judged=moved:{MOVE_B}\n")), "stdout={} stderr={}", stdout_of(&out), stderr_of(&out));
+    let record = fs::read_to_string(move_groups_dir(&root).join(format!("{MOVE_GROUP}.account"))).unwrap_or_default();
+    assert!(record.starts_with(&format!("account={MOVE_B}\n")) && record.contains(&format!("previous={MOVE_A}\n")), "{record}");
+    let events = vessel::fleet::store::read_all(&place.state).unwrap_or_default();
+    let moved: Vec<_> = events.iter().filter(|event| event.kind == EventKind::GroupMoved).collect();
+    assert_eq!(moved.len(), 1, "承認 event 1");
+    let host = place.state.join("host.toml");
+    let text = fs::read_to_string(&host).unwrap_or_default();
+    let head = text.lines().position(|line| line == "[[account-group]]").map_or(0, |at| at + 1);
+    let block = text.lines().skip(head - 1).collect::<Vec<_>>().join("\n");
+    let words = format!("{}:{head}\n{block}", host.display());
+    assert_eq!(moved.first().and_then(|event| event.detail.as_deref()), Some(words.as_str()), "承認の逐語は群の宣言の行の逐語");
+    assert_eq!(judge_calls(&place), 1, "偽 client の呼出は B の 1 回だけ");
+    assert_eq!(tombstone_rows(&place, MOVE_A), 0, "墓標の A は測らない");
+}
+
+/// (g) A は逼迫（5 時間窓 90）・B の credential が墓標で B の鮮度の内側の実測（10%）が在る → `judged=none`・断りの event 1・記録不変
+/// （墓標の候補を予約しない・base は B を予約して `judged=moved:<B>` ＝ RED）。
+#[test]
+fn seat_tick_judge_tombstone_candidate_is_not_reserved_even_with_a_fresh_measurement() {
+    use vessel::fleet::EventKind;
+    let root = tmp();
+    let place = judge_place(&root, MOVE_ANCHOR, [90, 10]);
+    tombstone_put(&place, MOVE_B);
+    tombstone_fresh(&place, MOVE_B);
+    let out = move_run(&place);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert!(stdout_of(&out).ends_with(" judged=none\n"), "stdout={} stderr={}", stdout_of(&out), stderr_of(&out));
+    assert_eq!(judge_events(&place, EventKind::GroupMoveRefused), 1, "断りの event 1");
+    assert_eq!(judge_events(&place, EventKind::GroupMoved), 0, "承認 event 0");
+    assert!(!move_groups_dir(&root).join(format!("{MOVE_GROUP}.account")).exists(), "記録不変");
+}
+
+/// (h) A も B も墓標 → `judged=none`・断りの event 1・記録不変・A の実測の行（測れなかったを含む）は 0 件（墓標の口座を測らない・
+/// base は A を測り `AllowanceUnmeasured` の行が 1 件 ＝ RED）。
+#[test]
+fn seat_tick_judge_tombstone_every_account_dead_refuses_without_measuring() {
+    use vessel::fleet::EventKind;
+    let root = tmp();
+    let place = judge_place(&root, MOVE_ANCHOR, [10, 10]);
+    tombstone_put(&place, MOVE_A);
+    tombstone_put(&place, MOVE_B);
+    let out = move_run(&place);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert!(stdout_of(&out).ends_with(" judged=none\n"), "stdout={} stderr={}", stdout_of(&out), stderr_of(&out));
+    assert_eq!(judge_events(&place, EventKind::GroupMoveRefused), 1, "断りの event 1");
+    assert!(!move_groups_dir(&root).join(format!("{MOVE_GROUP}.account")).exists(), "記録不変");
+    assert_eq!(tombstone_rows(&place, MOVE_A), 0, "A の実測の行 0 件");
+    assert_eq!(judge_calls(&place), 0, "偽 client は呼ばれない");
+}
+
+/// (h2) 群 2 つ（Tier1 = [D, B, C]・種 D、Tier2 = [A, B, C]・種 A が 90）で Tier1 の種 D の credential が墓標 → 墓標の今の口座の
+/// Tier1 が予約 B を持ち、Tier2 は C へ移る（`judged=moved:acct-c`・Tier2 の記録が C・Tier1 の記録は書かない・base は D を逼迫でない
+/// と読み `judged=moved:acct-b` ＝ RED）。
+#[test]
+fn seat_tick_judge_tombstone_earlier_group_with_a_dead_current_holds_a_reserve() {
+    let root = tmp();
+    let place = reserve_place(&root);
+    tombstone_put(&place, RESERVE_D);
+    let out = move_run(&place);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    assert!(stdout_of(&out).ends_with(&format!(" judged=moved:{RESERVE_C}\n")), "stdout={} stderr={}", stdout_of(&out), stderr_of(&out));
+    assert_eq!(reserve_record(&root).as_deref(), Some(RESERVE_C), "Tier2 の記録は C");
+    assert!(!move_groups_dir(&root).join("Tier1.account").exists(), "Tier1 の記録は書かない");
+    assert_eq!(tombstone_rows(&place, RESERVE_D), 0, "墓標の D は測らない");
+}
+
 /// (a) 最終行 busy ∧ 前面 `bash` ∧ 群の外の row → `move=launch`・起動行 1 行が row の口座（A）を持ち、末尾に `--resume <打刻の
 /// sid> '<NAME> seat: relaunch …'`（base では `--resume <sid>` で終わる ＝ RED）。群の外の席は lock を取らない。
 #[test]

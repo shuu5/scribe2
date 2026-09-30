@@ -787,6 +787,50 @@ fn host_group_next_model_gate_opus_role_names_a_candidate_with_only_the_fable_wi
     fs::remove_dir_all(&place.dir).ok();
 }
 
+// ─── doctor の群の行と墓標（account-lifecycle.md §38 行 ac・接頭辞 `host_group_dead_`） ───
+//
+// `host_group_next_` の置き場（群 Tier1・置き場 `/repo`・候補 [acct-1, spare, third]・種 acct-1）で、口座の credential を墓標
+// （`expiresAt` 0）か未来の期限の file に書き換える。
+
+/// 口座 `label` の credential を置く（`expires_at` はミリ秒の epoch・0 が墓標）。
+fn put_credential(place: &RolePlace, label: &str, expires_at: u64) {
+    let body = format!("{{\"claudeAiOauth\":{{\"accessToken\":\"tok-{label}\",\"expiresAt\":{expires_at}}}}}");
+    account_fixture(place, label, &[(".credentials.json", &body)]);
+}
+
+/// (i) 候補 third（7 日窓 20・model 20＝残量 80）と spare（60 / 10＝残量 40）に鮮度の内側の実測を置き、third の credential を墓標に
+/// すると群の行の `next=spare`（墓標の候補を名指さない・base は `next=third`）。同じ置き場で third が墓標でなければ `next=third`。
+#[test]
+fn host_group_dead_next_does_not_name_a_tombstone_candidate() {
+    let now = vessel::fleet::cli::now_utc();
+    let labels = ["acct-1", "spare", "third"];
+    let place = role_doctor_place();
+    put_groups(&place, &[("Tier1", &["/repo"], &labels)]);
+    put_next_round(&place, &now, "spare", (60, 10));
+    put_next_round(&place, &now, "third", (20, 20));
+    put_credential(&place, "spare", 4_102_444_800_000);
+    put_credential(&place, "third", 4_102_444_800_000);
+    let rules = next_rules(&labels, true);
+    let alive = group_line(&doctor_rows(&place, &rules), "Tier1");
+    assert_eq!(alive, format!("{NEXT_HEAD} next=third refused=- pressure=unmeasured"), "墓標でなければ鍵の先頭 third");
+    put_credential(&place, "third", 0);
+    let dead = group_line(&doctor_rows(&place, &rules), "Tier1");
+    assert_eq!(dead, format!("{NEXT_HEAD} next=spare refused=- pressure=unmeasured"), "墓標の third は名指さない");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// (i) 種 acct-1 だけが墓標で、記録の口座 spare に鮮度の内側・閾値未満の実測を置くと `pressure=-`（墓標の語を群の行に出さず今の
+/// 口座を読む・不変の歯）。
+#[test]
+fn host_group_dead_pressure_reads_the_record_account_not_the_dead_seed() {
+    let now = vessel::fleet::cli::now_utc();
+    let place = pressure_place(&[("spare", &now, [10, 10, 10])]);
+    put_credential(&place, "acct-1", 0);
+    put_group_record(&place, "Tier1", "account=spare\nts=2026-09-24T00:00:00Z\nreason=move\nprevious=acct-1\n");
+    assert_pressure(&place, &next_rules(&PRESSURE_LABELS, true), "-", "記録の口座 spare");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
 // ─── doctor の群の行の `refused=`（account-lifecycle.md §31 形 3・契約表の行 u・接頭辞 `host_group_refused_`） ───
 //
 // `host_group_next_` の置き場に群 Tier1（置き場 `/repo`・候補 [acct-1]）と Tier2（置き場 `/repo/b`・候補 [spare]）を宣言し、
