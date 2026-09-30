@@ -16,6 +16,7 @@
 - **入力** = 台帳の open な bead のうち「依存が全部 closed ∧ acceptance が非空 ∧ `intake:memo` の label が無い ∧ acceptance に設計 pointer の行 `design = docs/design/<題>.md#<id>` が在る ∧ **同じ契約 file の sha で終端に着いた便が無い**」もの（.209 の `--design` と同じ字面・pointer の無い便は理由 `NoDesignPointer`・直前の便が終端〔`Landed` / `Failed` / `Stopped`、および審査や gate の判定で終端になった段〕で終わり契約 file の sha が変わっていない便は `Settled { sha, stage }`＝既存の event log（replay の段）と run dir の契約 file の sha から導く・終端かの判定は受付と同じ 1 本・新しい event kind は足さない。列外の便も `dispatch ls` には理由付きで出す＝planner が直すべき契約が見える）。
 - **終端の便を列外にするのは無限再起動を塞ぐためである**（`s2-07l.366`）: 便が終端に着くと live でなくなって交差が消えるが、bead は台帳で `open` のまま（器は台帳に書かない・C15）なので、終端が来るたびに同じ契約が起こし直される（着地から close までの間ずっと）。契約が改訂されて sha が動けば列に戻る＝「直すまで起こさない」で `Landed`（済んでいる）・`Failed`（契約を直すまで再試行しない）・`Stopped`（人が止めた）のどれも筋が通る。契約の字が正しいのに器の側の理由で終端に着いた便（実装役の起動の失敗など）を、字を変えずに列へ戻す口は §12（`release` の印）。台帳の読みは席の指示文の `{ledger}` と同じ子 process と同じ関数（`read_ledger`・`bd --readonly list --limit 0 --json`・待ち上限は rules 行 `seat.ledger_timeout_s`・置き場は `seat/ledger.rs`）を共用し、読めない周は列を空と読まず `unmeasured` で止まる（NFR4・C10）。
 - **審査の時点 = `pipe run` の Reviewed の段のまま**（[contract-source.md](./contract-source.md) §4・契約 (c) = s2-07l.241）。「契約が出来た直後に審査し verdict を sha に紐づける」旧案（user 裁定 2026-09-15 13:4xZ・旧 (r)・`ContractReviewed`）は ADR-0045 §2 の後は持たない: 契約は設計 doc の行 1 つになり（[contract-source.md](./contract-source.md) §2「台帳の bead」・`s2-07l.209`）本文の不備は CI の `contracts check` が先に落とすので、審査の材料は起動の時点で揃う。FAIL の便が列を塞ぐ形は「同じ sha で審査 FAIL に終わった便は列外」（上の入力の条件）で塞ぎ、契約の改訂（設計 doc の PR）で sha が変わればまた列に入る。新しい event kind・審査を飛ばす flag は作らない（C2・C16・C17.2）。
+- 審査の時点の後継（[row-review.md](./row-review.md)・[ADR-0103](../../design-intent/decisions/ADR-0103-contract-rows-pass-row-review-before-merge-and-failed-rows-keep-their-place.html)・proposed）: 設計の PR の段の行の審査が Reviewed の段の前に在り、Reviewed の段は判定の鍵が同じ記録の使い回しと審査し直しの段になる（旧 (r) の merge の後の審査は復活させない）。実装は同じ設計の行で、SRS の追加 round の後に起こす。
 - **順序** = 1 関数 `order`（行の列 → 候補 `Candidate` の列）: (1) 介入 `first` の便 (2) 台帳の `priority`（P0 → P4）(3) 起票順（id の数字）。同順は起票順。**散文の順序を持たない**（憲法 C2）。
 - **hold** の便は列に載るが起こさない（理由 = `Hold`）。
 
@@ -188,6 +189,7 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
 - FAIL も同じ鍵でよい（裁定）: § を直した契約は再審査に値する。FAIL と INCONCLUSIVE の弁別は鍵には要らない——どちらも「この材料では通らなかった」であって、材料が変われば測り直す側である。
 - 触らない: `dispatch ls` の理由の字面（sha は契約 file の名札のまま・観測の面を増やさない）・event kind と field（足さない・C17.1）・`release` の印と戻す段の match・§2 の列の入力の条件・審査の材料の書き方と判定の記録の形・`req` の要件文（鍵に入れない——要件面の改訂は SRS の周であって、契約 1 本を起こし直す契機ではない）。
 - 却下案: `release` の印で `Reviewed` も戻す（印は器の側の理由で落ちた便を戻す口で、中身が変わっていない便を審査へ送り直す＝FR49 の「中身が変わるまで」を印で破る）／鍵に要件文も入れる（SRS の 1 字の改訂で、その要件を指す契約が一斉に列へ戻る）／審査の判定を § の sha に紐づけて記録する（新しい on-disk の面を足す＝超過した旧案（§2「審査の時点」）と同じ型・C17.2）／設計 doc を直す便で契約 file の字も必ず動かす運用にする（手書きの規範文を増やす・C1 / N2）。
+- 却下案の採り直し（[row-review.md](./row-review.md) §13・ADR-0103・proposed）: 「審査の判定を § の sha に紐づけて記録する」は、merge の門の入力にする理由で行の審査の記録として採り直す（足す面は同じ設計の §10 で消す面と対にする）。この節の鍵（§ の本文を Reviewed の終端の鍵に入れる）は変えない。
 - 歯（`pipe_dispatch_section_key_` 接頭辞・置き場は列の歯の file）: (a) 審査 INCONCLUSIVE で終端した `Reviewed` の便の契約が、§ の本文を直した後の 1 周で列に戻る（`dispatch ls` の理由が値なしの欄になる）／(b) § も契約 file も変わっていない周は列外のまま（無限に起こし直さない）／(c) 審査 FAIL で終端した便も § を直せば戻る／(d) § の写しを持たない便と、写しが在るのに読めない便は契約 file だけの鍵で今までどおり列外（母集団 = 写しの 3 値: 在って読める / 在るが読めない / 無い）／(e) `Landed` の便は § を直しても戻らない（母集団 = 終端の段の種類）／(f) § の本文を 1 文字だけ変えた周も戻る（列が突き合わせる本文が審査の材料と同じ 1 本から出ている pin）／(g) `release` の印の既存の規則は変わらない（既存の歯が測る側・行の verify がその接頭辞も撃つ）。
 
 ## 17. 起こした便が受付に届かない周は同じ bead を起こし直さない（契約表の行 n・`s2-07l.509`・約束の行の形）
@@ -384,6 +386,8 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
 ## 27. 依存を待つ行に受付の機械の審査を先に撃つ — 未着地の依存の宣言か実物で base を予想し、確定と暫定を分けて置き場に残し、確定の誤りを根で束ねて直しへ導く（契約表の行 x / y / aa・裁定 user 2026-09-27T13:32Z / 14:02Z）
 
 やさしく言うと: 依存の着地を待つ契約は、待っている間に受付の審査を 1 度も受けない。器が「依存が着地したらこうなる」木を予想してその上で受付と同じ審査を撃ち、依存が着地しても消えない誤り（確定）だけを束にして直させる。予想の結果で便を起こしも止めもしない（起こす時の受付は今どおり実物の main で撃つ）。
+
+- 退役（[row-review.md](./row-review.md) §6・[ADR-0103](../../design-intent/decisions/ADR-0103-contract-rows-pass-row-review-before-merge-and-failed-rows-keep-their-place.html)）: 形 aa（先撃ち）と形 ac（先撃ちの判定の使い回し）は、設計の PR の段の行の審査に置き換えて退役する（段 1 は rules 行 pipe.precheck_lens_per_round の値 0、段 2 は code の退役・どちらも SRS の追加 round の後の行）。形 x（事前審査の機械の予想）と形 y（束と知らせ）は残す。
 
 - 何が起きているか（実測 2026-09-27・verified）:
   - 列の 1 件の解き（`entry_of`）は依存 → 印 → 設計 pointer → 契約の生成 → 列外の鍵の順で、依存待ちを最初に返す。依存を待つ bead は契約の生成（`generated`＝契約表の検査の 1 行）も受付の判定（`judge`＝`pipe preflight` と同じ 1 本）も受けない。

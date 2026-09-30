@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="generator" content="folio ADR-pack assembler (folio-bwc / instance#2) — deterministic structure, prose slots unfilled">
-<title>器が起こす審査役は読みの道具だけを持ち、 契約の審査は審査の時点の HEAD の木の上で・先撃ちは予想の木の上で読み、 口座の自動 memory を読まない — runner には共通 verify の行を渡し、 終わりの門で器が撃った赤を同じ worktree で直させる (ADR-0011 が残した lens の起動形を決める)</title>
+<title>契約表の行は設計の PR を main に入れる前に行の審査を通し、 審査か gate で落ちた行は行の予約で順番を守り、 同じ設計の兄弟の行を直しが入るまで待たせる — 先撃ちは退役する</title>
 <style>
 /* ===========================================================================
    folio human-layer design system — core.css (S3 / folio-8oc プロトタイプ)
@@ -447,7 +447,7 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 .ss-row{margin:3px 0}.ss-row .ss-k{font-weight:700;color:var(--ink-soft);font-size:12px;margin-right:6px}
 
 </style>
-<meta name="folio-version" content="0.1.0">
+<meta name="folio-version" content="0.2.0">
 <script type="application/ld+json">
 {
   "@context": {
@@ -455,15 +455,15 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
     "schema": "https://schema.org/",
     "folio": "https://folio.dev/spec/v1/"
   },
-  "@id": "./ADR-0102-lens-reads-with-read-only-tools-and-runner-gets-the-common-verify.html",
+  "@id": "./ADR-0103-contract-rows-pass-row-review-before-merge-and-failed-rows-keep-their-place.html",
   "@type": "schema:TechArticle",
   "dc:isPartOf": [
     {
       "@id": "./README.html"
     }
   ],
-  "dc:title": "器が起こす審査役は読みの道具だけを持ち、 契約の審査は審査の時点の HEAD の木の上で・先撃ちは予想の木の上で読み、 口座の自動 memory を読まない — runner には共通 verify の行を渡し、 終わりの門で器が撃った赤を同じ worktree で直させる (ADR-0011 が残した lens の起動形を決める)",
-  "folio:version": "0.1.0",
+  "dc:title": "契約表の行は設計の PR を main に入れる前に行の審査を通し、 審査か gate で落ちた行は行の予約で順番を守り、 同じ設計の兄弟の行を直しが入るまで待たせる — 先撃ちは退役する",
+  "folio:version": "0.2.0",
   "folio:stakeholders": [
     "Developer",
     "AI Agent",
@@ -471,46 +471,43 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
   ],
   "dc:references": [
     {
-      "@id": "../spec/constitution.html#c1"
-    },
-    {
-      "@id": "../spec/constitution.html#c2"
-    },
-    {
       "@id": "../spec/constitution.html#c5"
     },
     {
       "@id": "../spec/constitution.html#c10"
     },
     {
-      "@id": "../spec/constitution.html#c16"
-    },
-    {
       "@id": "../spec/constitution.html#c17"
     },
     {
-      "@id": "../spec/constitution.html#n2"
-    },
-    {
-      "@id": "../spec/srs.html#FR5"
-    },
-    {
-      "@id": "../spec/srs.html#FR6"
-    },
-    {
-      "@id": "../spec/srs.html#FR8"
-    },
-    {
-      "@id": "../spec/srs.html#FR9"
+      "@id": "../spec/constitution.html#n1"
     },
     {
       "@id": "../spec/srs.html#FR49"
     },
     {
-      "@id": "./ADR-0010-vessel-declaration-holds-allowlist-and-common-verify.html"
+      "@id": "../spec/srs.html#FR68"
     },
     {
-      "@id": "./ADR-0011-vessel-launches-claude-without-settings.html"
+      "@id": "../spec/srs.html#FR92"
+    },
+    {
+      "@id": "../spec/srs.html#FR39"
+    },
+    {
+      "@id": "../spec/srs.html#FR44"
+    },
+    {
+      "@id": "./ADR-0019-parallel-runs-exclude-overlap-at-intake-and-runner-resolves-conflicts.html"
+    },
+    {
+      "@id": "./ADR-0034-dispatcher-starts-reviewed-contracts-automatically.html"
+    },
+    {
+      "@id": "./ADR-0045-seat-role-is-one-orchestrator-and-dispatcher-lands-runs.html"
+    },
+    {
+      "@id": "./ADR-0088-case-positions-are-computed-once-by-the-vessel-and-read-from-one-file.html"
     }
   ]
 }
@@ -522,186 +519,187 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 <nav class="breadcrumb" aria-label="パンくず"><ol>
   <li><a href="../index.html">design-intent</a></li>
   <li><a href="./README.html">decisions</a></li>
-  <li aria-current="page">ADR-0102</li>
+  <li aria-current="page">ADR-0103</li>
 </ol></nav>
 <!-- /folio:chrome-top -->
 <div class="page" data-component="requirement-type-color-tokens">
 <header data-component="doc-cover-band">
-<p class="cover-eyebrow"><span class="doc-type">設計判断記録 (ADR)</span> <span>scribe2 — 審査役の読みの道具と runner の終わりの門</span></p>
-<h1>器が起こす審査役は読みの道具だけを持ち、 契約の審査は審査の時点の HEAD の木の上で・先撃ちは予想の木の上で読み、 口座の自動 memory を読まない — runner には共通 verify の行を渡し、 終わりの門で器が撃った赤を同じ worktree で直させる (ADR-0011 が残した lens の起動形を決める)</h1>
-<p class="cover-sub">器が起こす審査役 (lens) は、 「道具は無い」と言われて材料の字だけで判定する一方、 実際には編集を自動で承認する設定で main の作業場所を起点に起きていた。 実装役 (runner) は、 gate が必ず撃つ共通の検査を知らされていなかった。 本 ADR は、 審査役に読むだけの道具を渡して書く道具を持たせず、 契約の審査を審査する時点の repo の写しの上で、 先回りの審査を予想の写しの上で読ませ、 口座ごとの自動 memory を読ませないと決める。 あわせて runner に共通の検査の行を渡し、 runner の終わりに器がその行を撃って、 赤なら同じ作業場所で直させる。</p>
-<div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">この記録で「器」は scribe2 の本体、 「審査役」は契約や差分を読んで合否を返す Claude、 「runner」は契約を実装する Claude です。 審査役は「道具は無い」と言われて材料の字だけで判定していましたが、 実際には編集を自動で許す設定のまま、 main の作業場所を起点に起きていました。 runner は、 gate が必ず撃つ共通の検査を知らされていませんでした。 この記録は、 審査役には読むだけの道具 (Read・Grep・Glob) だけを渡し、 契約の審査は審査する時点の repo の写しの上で、 先回りの審査は予想の写しの上で読ませ、 口座ごとの自動の記憶を読ませないと決めます。 先回りの審査の判定は、 本番の審査に写しません。 runner には共通の検査の行を渡し、 runner が終わったら器がその行を撃って、 赤なら同じ作業場所で直させます。</p></div></div>
-<div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">accepted</span></span><span class="m"><span class="k">選択肢</span><span class="v">5件 (OPT1–OPT5)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 4 / トレードオフ 5</span></span><span class="m"><span class="k">版</span><span class="v">v0.1.0 / 2026-09-30</span></span></div>
-<div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>FR5・FR49・FR9・FR8・FR6</b></div>
+<p class="cover-eyebrow"><span class="doc-type">設計判断記録 (ADR)</span> <span>scribe2 — 行の審査と落ちた行の順番</span></p>
+<h1>契約表の行は設計の PR を main に入れる前に行の審査を通し、 審査か gate で落ちた行は行の予約で順番を守り、 同じ設計の兄弟の行を直しが入るまで待たせる — 先撃ちは退役する</h1>
+<p class="cover-sub">契約の審査は、 契約が起動の列に並んで便が起きた後に在る。 設計の穴はそこで初めて見つかり、 落ちた行は列から外れ、 同じ file を触る後ろの行が先に起きる。 事前に撃つ先撃ちは審査の層になっておらず、 判定の使い回しは 1 度も起きていない。 本 ADR は、 審査を設計の PR の段 (列に並ぶ前) へ移して merge の門で止め、 それでも落ちた行は触る file を取り置いて順番を守り、 同じ設計から出た兄弟の行を待たせ、 先撃ちを退役させると決める。</p>
+<div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">この記録で「器」は scribe2 の本体、 「契約表の行」は設計の文書に書いた 1 件の仕事の約束、 「便」はその約束を実装して main に入れる 1 回の流れです。 これまで、 約束の中身の審査は、 約束が起動の列 (起こす順番の並び) に入って便が起きた後に行っていました。 そのため設計の穴は並んだ後に見つかり、 落ちた行は列から外れて、 同じ file を触る後ろの行が先に起きていました。 事前に撃っていた先撃ちは、 判定を 1 度も使い回せていません。 この記録は、 審査を設計の変更を main に入れる前 (merge の前) へ移して通らない変更の merge を止め、 それでも落ちた行は触る file を取り置いて順番を守り、 同じ設計から出た兄弟の行を直しが入るまで待たせ、 先撃ちをやめると決めます。</p></div></div>
+<div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">proposed</span></span><span class="m"><span class="k">選択肢</span><span class="v">5件 (OPT1–OPT5)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 4 / トレードオフ 6</span></span><span class="m"><span class="k">版</span><span class="v">v0.2.0 / 2026-09-30</span></span></div>
+<div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>FR49・FR68・FR92・FR39・FR44</b></div>
 <div data-component="approval-block">
-<div class="sign"><span class="role">裁定 (user)</span><span class="who">user</span><span class="when">裁定 id user 2026-09-28T00:54Z (決めてほしいことは推奨で進める常設の裁定) の適用。 発端は user 2026-09-30T11:30Z の問い (便の FAIL が多い根と、 AI に code の文脈が渡っていない構造の分析) で、 分析の打ち手 0 と 2 を本 ADR が決める。 逐語は台帳の epic s2-07l.736.33 と s2-07l.736.31 の notes にだけ在る。 rules 行の値 (lens の turn の上限・終わりの門の周の上限) は本裁定に含めず、 SRS の追加 round で別に裁定を取る</span><span class="stamp self">裁定済</span></div>
-<div class="sign"><span class="role">設計 (orchestrator)</span><span class="who">orchestrator</span><span class="when">2026-09-30 草稿 v1・同日 v2 で PR #915 の敵対審査 (high 3・medium 10・low 11) を 1 件ずつ現物で再現して反映 (lens と runner の起動形・契約の審査と gate の雛形・審査の cwd・runner の本文の組み手・gate の verify の撃ち手を現物で読み、 claude 2.1.285 の道具と mode と自動 memory の効きを実測して、 ADR-0010 と ADR-0011 の決定と照らした。 拘束する constitution の版 0.5.0)</span><span class="stamp self">作成</span></div>
+<div class="sign"><span class="role">設計 (orchestrator)</span><span class="who">orchestrator</span><span class="when">2026-09-30 草稿 v2 (契約の審査の段・先撃ちの木と使い回しの読み口・起動の列の終端の行の扱いと順序と交差の判定・merge の門・vessel 宣言の任意 key の読み手・lens の rules 行の読みを現物で読み、 ADR-0019・ADR-0034・ADR-0045・ADR-0088 の決定と、 便 165 本の FAIL / INCONCLUSIVE 76 件の分析と、 PR の敵対審査の 36 件と照らした。 推奨の採用は 裁定 user 2026-09-28T00:54Z (決めてほしいことは推奨で進める、 の常設の指示) の適用で、 逐語は台帳にだけ在る。 SRS の追加 round の grill の論点 (予想と partial の判断不能を merge で通すか・兄弟の範囲・門の名乗り・行の審査の消費) は推奨として書き、 round の裁定で確定する。 rules 行 pipe.reserve_h の値と pipe.precheck_lens_per_round の値 0 は常設の指示に含めず、 C5 の裁定 id を round で別に取る。 拘束する constitution の版 0.5.0)</span><span class="stamp self">作成</span></div>
 </div>
 <div class="reader-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 想定読者: scribe2 の開発 session と user — 器の内部と Rust の専門知識は不要 (専門語はやさしい言葉を併記)</div>
 </header>
 <!-- folio:chrome-toc -->
 <!-- /folio:chrome-toc -->
-<section data-component="chapter-deck-band" class="tint-info"><span class="num">01</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v6m0 0L9 5m3 3l3-3"/><circle cx="12" cy="14" r="6"/></svg> 背景 / なぜこの判断が要るか</span><h2>いま何が問題か (確定方式を決める力学)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-01">なぜこの判断が要るのかを 5 つから説明します。 便の失敗の根の多くが設計の側に在り、 code の事実が役に渡っていないという経緯・審査役は書けるのに「道具は無い」と言われ、 runner は共通の検査を知らないという現物・claude の道具と設定の効きの実測・決める範囲・憲法の条のこの記録での読み方です。</p></section>
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">01</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v6m0 0L9 5m3 3l3-3"/><circle cx="12" cy="14" r="6"/></svg> 背景 / なぜこの判断が要るか</span><h2>いま何が問題か (確定方式を決める力学)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-01">なぜこの判断が要るのかを 4 つから説明します。 便の失敗の大半が設計の側にあり、 審査が列に並んだ後に在るという経緯・落ちた行の file が誰のものでもなくなり、 兄弟の行を止める口が無いという現物・先撃ちが審査の層になっておらず使い回しが当たらないという実測・決める範囲です。</p></section>
 <div class="chapbody">
 <div data-component="adr-context-list">
-<div data-component="adr-context-row"><span class="cxid">CTX1</span><div class="cxbody"><p class="cxh">経緯 — 便の FAIL の根は設計の側で、 code の事実が役に渡っていない</p><p class="cxd">2026-09-28〜09-30 に起きた便 165 本のうち、 FAIL か判定できなかった 76 件を 1 件ずつ分けると、 73 件の根は設計の側に在った (設計が code の事実を誤ったか知らなかった 32・done の項目に落ちる歯が無い 24・設計の中の食い違い 9・書き足りなさ 8)。 審査役の誤りは 0 件で、 runner の誤りが主因の件は 2 件だった。 契約の審査で落ちた 46 件のうち約 21 件は code の事実 (呼び手・struct を組み立てる場所・既存の歯の pin・可視性) が要り、 gate で落ちた 30 件のうち 15 件は gate が必ず撃つ共通 verify の赤だった。 分析は epic s2-07l.736.33 の打ち手 0 (審査役の安全の穴と読みの道具<span class="term" data-component="plain-language-term-inline" data-term="読みの道具">読むだけの道具</span>) と 2 (runner の終わりに器が done の門を撃つ) を最も効きが大きく小さいものに挙げた。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX2</span><div class="cxbody"><p class="cxh">現物 — 審査役は書けるのに「道具は無い」と言われ、 runner は共通 verify を知らない</p><p class="cxd">lens の起動形は headless の build (runner と lens の唯一の構築点・ADR-0011) が組み、 permission mode は lens の flag の値を素通しする。 運用の lens の cmd は編集を自動で承認する mode を焼いており、 道具を絞る flag は渡っていない (ADR-0011 は lens の起動形を変えないと射程の外に残した)。 契約の審査の lens の cwd は anchor の main の作業木で、 先撃ちの lens も同じ。 先撃ちの材料は予想の base の木 (祖先の層を当てた一時の worktree) で組むが、 その木は lens を起こす前に外し、 Reviewed の段の使い回しの鍵は材料の digest と lens の cmd の字だけで、 lens が読んだ木を含まない。 契約の審査と gate の雛形は「tool が渡されていない」と書き、 2026-09-30 の lens 132 回のうち 126 回が 1 turn で終わった。 前提を無視して code を読んだ 6 回のうち 3 回は行番号つきで本物の欠陥を掘り出した。 runner の雛形は「契約の verify 行が緑になるまで直す」とだけ言い、 runner 28 本のうち xtask check を撃ったのは 5 本だった。 runner と lens には口座ごとの自動 memory<span class="term" data-component="plain-language-term-inline" data-term="自動 memory">口座ごとの記憶</span> の索引が載り、 中身は口座で違う。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX3</span><div class="cxbody"><p class="cxh">実測 — claude の道具の列・mode・env の効き</p><p class="cxd">claude 2.1.285 で、 空の設定 dir と無効な API key の起動 (課金なし・init の record だけ) と haiku の実 call 3 回で測った (2026-09-30)。 道具の列の flag に Read・Grep・Glob を渡すと、 init の道具は 3 つだけになり、 Write と Bash は無い。 許可の問いを誰にも出さない mode (dontAsk) で allow の規則を渡さない形では、 cwd の中の Read は通り、 cwd の外の Read と Grep は断られた。 allow の規則に Read を足すと cwd の外も読めた。 自動 memory を切る env を 1 にすると init の memory の path が消え、 0 と未設定では口座の設定 dir の下の path が載った。 settings を読まない flag だけでは自動 memory は切れない。 gate の共通 verify の行ごとの時間は、 record 570 件の中央値で flip-check 93 秒・workspace の nextest 35 秒・clippy 5 秒・xtask check 4 秒だった。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX4</span><div class="cxbody"><p class="cxh">射程 — 審査役の起動形と runner の材料と終わりの門<span class="term" data-component="plain-language-term-inline" data-term="終わりの門">実装後すぐの検査</span>を決め、 審査の段の位置は変えない</p><p class="cxd">決めるのは、 (1) 審査役の道具と mode と env の起動形、 (2) 契約の審査の cwd (審査の木<span class="term" data-component="plain-language-term-inline" data-term="審査の木">審査用の写し</span>)、 (3) 審査の雛形の前提の書き方、 (4) runner に共通 verify の行を渡す節、 (5) runner の終わりに器が撃つ終わりの門とその赤の渡し方。 変えないのは、 runner の起動形 (allowlist と plugin)、 gate の判定と撃つ行、 Gated の FAIL が終端であること、 審査の材料の組み手、 lens の cap と model と effort の行。 審査を列に入れる前の門へ移すこと、 逆引きの表、 done と歯の対応の欄は別の ADR が決める。 終わりの門は SRS の FR6 の字を変えるので、 実装の行は SRS の追加 round の後に起こす。 ADR を書く条件のうち 1 (C16・C1・C2.2 の読み・CTX5)・3 (event の detail と run dir の記録の形)・4 (却下案を残す価値) に当たる。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX5</span><div class="cxbody"><p class="cxh">憲法の読み — 終わりの門は事後の検証で編集の時の止めに足すもの・道具の列と mode は閉じた定数・自動 memory の env は子へ設定するだけ</p><p class="cxd">C16 (仕様からの逸れを編集の時に止め、 事後の検証で代えない) について: 終わりの門は runner の turn の後に撃つ事後の検証で、 編集の時の止め (write-set の hook と許可の要求の一律 deny) に足すものであって、 それを代えない。 hook と deny は本 ADR の後も runner の turn の中で効く。 C1 (規則の値は manifest の 1 file) について: lens の道具の列 Read・Grep・Glob と permission mode dontAsk は閾値ではない閉じた定数で、 manifest の行を持たない (xtask の env の読みの許す集合と同じ読み)。 runner の許可の上限を rules 行 runner.allowed_commands が持つのは、 それが repo ごとに変わりうる列だからで、 lens の道具の列は器の全 repo に共通の起動形の一部である。 lens の turn の上限と終わりの門の周の上限は閾値なので、 rules 行に置き、 値は user の裁定で決める。 C2.2 (env を直に読まない・新しい env の seam を作らない) について: 自動 memory を切る env は、 器が子の process へ設定するだけで自分では読まない。 口座の env と agent view の env と同じ置き方で、 新しい seam ではない。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX1</span><div class="cxbody"><p class="cxh">経緯 — 便の失敗の 96 % は設計の側で、 審査は列に並んだ後に在る</p><p class="cxd">2026-09-28〜09-30 に起きた便 165 本のうち、 FAIL か判断不能 (INCONCLUSIVE) は 76 件 (契約の審査 46・gate 30) で、 73 件の根は設計の側だった (code の事実の誤り 32・done の項目に落ちる歯が無い 24・設計の中の食い違い 9・書き足りない 8)。 runner の誤りが主因は 2 件、 環境 1 件、 審査役の誤りは 0 件。 契約の審査 (SRS FR49) は、 設計の PR を merge して行が起動の列に入り、 便が起きた後の Reviewed の段に在る。 そのため設計の欠陥は便の中で初めて見つかり、 審査は 1 周に穴を 1〜3 個しか名指さないので、 同じ行が 2〜4 周する (1 行で 4 周・55 分)。 持ち主は 2026-09-30 に、 審査で落ちた行が後ろに回り他の行が前に回るのは依存と優先度の順を崩すと指摘した。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX2</span><div class="cxbody"><p class="cxh">現物 — 落ちた行の file は誰のものでもなくなり、 同じ欠陥の兄弟を止める口が無い</p><p class="cxd">起動の列は、 直前の便が終端に着き契約の中身が変わらない行を列外 (Settled) にする。 列外の行の write-set は交差の相手に数えず、 交差を測る相手は live な便と同じ周に起こした便だけである。 そのため落ちた行が直るまでの間と、 直って列に戻った行が待つ間に、 同じ file を触る後ろの行が起きる。 2026-09-30 に、 2 回落ちた P2 の行の直しの間に同じ P2 の別の行が起き、 直った行はその行の終わりを待った。 同じ設計の PR で書いた兄弟の行は、 先の行が同じ指示で落ちた 4 秒後に起こされ、 同じ理由で落ちた (直しは 53 分後)。 merge の門 (SRS FR92) は本文の trailer だけを読み、 行の中身を見ない。 gh の pr merge は head の sha を固定する flag (--match-head-commit) を持つ。 vessel 宣言の任意 key の読み手は、 どれも git で commit の宣言を読み、 作業ツリーの宣言を読まない。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX3</span><div class="cxbody"><p class="cxh">先撃ち — 審査の層になっておらず、 使い回しは構造上当たらない</p><p class="cxd">先撃ち (依存を待つ行に事前に撃つ契約の審査・設計 dispatcher.md §27) は、 契約の審査で落ちた 46 件のうち 9 件にしか撃たれておらず、 そのうち 6 件は FAIL か判断不能を出したまま起動した (判定が起動を止めない)。 依存の無い行と再受付の便の 34 件には原理的に届かない。 判定の使い回しは全期間で 0 件で、 使い回しの口が在った窓の契約の審査 61 回でも 0 回だった。 理由は、 先撃ちの材料に予想の印の行が必ず入ること (114 本中 114 本)、 宣言だけの祖先は着地で変える既存の file を予想に写さず新しい file を空で置くので祖先の着地で材料が変わること、 lens の cmd に binary の置き場の path が入り 56 時間で 18 回変わったこと。 印を外しても材料が全部同じだったのは 20 回中 1 回で、 使い回すと先撃ちの見逃し (同じ版の PASS 11 回中 2 回を本番が FAIL にした) が素通りする。 費用は 09-28 以後 114 本で約 54.5 ドル (契約の審査の 41 %) で、 便の消費の記録に載らない。 lens の上限の値を 0 にしても、 先撃ちの一時の木と材料の組み直しは毎周撃たれる。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX4</span><div class="cxbody"><p class="cxh">射程 — 審査の時点・merge の門・列の順・先撃ちの扱いを決め、 審査役の道具は別の決定に任せる</p><p class="cxd">決めるのは、 (1) 契約表の行を足す・変える設計の PR の head で、 変わった行ごとに機械の検査と契約の審査を撃つ口と、 その記録の形、 (2) merge の門がその記録を見て止める形と、 門に加わる repo の名乗り、 (3) 契約の審査の段が記録を使い回す条件、 (4) 先撃ちの退役の段、 (5) 落ちた行の行の予約<span class="term" data-component="plain-language-term-inline" data-term="行の予約">落ちた行の取り置き</span>と兄弟の行の待ち。 審査役に読みだけの道具を渡し作業場所を HEAD の写しにする形は、 同じ program の別の決定に任せ、 行の審査<span class="term" data-component="plain-language-term-inline" data-term="行の審査">merge 前の審査</span>の実装はその決定の実装の後に起こす。 SRS の FR49・FR68・FR92 の字は追加の round で直し、 実装の行はその後に起こす。 ADR を書く条件のうち 1 (C10・C17.2・N1 の解釈)・3 (記録の形・跨版)・4 (却下案を残す価値) に当たる。</p></div></div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-brand"><span class="num">02</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v18"/><path d="M5 7l-3 6h6z"/><path d="M19 7l-3 6h6z"/><path d="M3 21h18"/></svg> 判断を縛る力 / 評価の軸</span><h2>選択肢を測るものさし (安全・速さ)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-02">この判断を評価する 6 本のものさしです。 審査役が code の事実を確かめられること。 審査役が書けないこと。 同じ契約が口座に依らず同じ材料で扱われること。 runner の合格の条件を散文でなく器の仕組みで渡すこと。 判定の後に便を戻さないこと。 起動の値を運用の手書きに置かないことです。</p></section>
+<section data-component="chapter-deck-band" class="tint-brand"><span class="num">02</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v18"/><path d="M5 7l-3 6h6z"/><path d="M19 7l-3 6h6z"/><path d="M3 21h18"/></svg> 判断を縛る力 / 評価の軸</span><h2>選択肢を測るものさし (安全・速さ)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-02">この判断を評価する 7 本のものさしです。 設計の穴を列に並ぶ前に止めること。 落ちた行が在っても列の順を崩さず、 待ち合いの輪を作らないこと。 同じ欠陥の兄弟の行を続けて落とさないこと。 同じ審査を 2 度撃たず、 見逃しを素通りさせないこと。 仕組みを足す前に消す仕組みを名指すこと。 消費側の repo を黙って変えず、 公開の repo の CI に口座を置かず、 席の入力欄への差し込みを増やさないこと。 判定できないことを、 そのまま通ることに倒さないことです。</p></section>
 <div class="chapbody">
 <table data-component="adr-driver-table"><tbody>
-<tr data-component="adr-driver-row"><td class="drid">DR1</td><td>審査役が判定の前に code の事実を木の現物で確かめられる <span class="drg">CTX1・CTX2</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR2</td><td>審査役は書けない — 道具も mode も書きを持たず、 読みは便の木の中に閉じる <span class="drg">CTX2・CTX3</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR3</td><td>同じ契約は走る口座に依らず同じ材料で審査され実装される (C10・本 ADR が閉じるのは自動 memory の分) <span class="drg">CTX2・CTX3</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR4</td><td>runner の合格の条件は散文の注意でなく器の材料と器の測りで渡す (N2・C16) <span class="drg">CTX1・CTX2</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR5</td><td>判定の段の後に便を戻さない — Gated の FAIL の終端と着地の列の数えを動かさない <span class="drg">CTX4</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR6</td><td>起動形の値を運用の cmd の手書きに置かない (閾値でない閉じた定数は器の code・閾値は rules 行・CTX5) <span class="drg">CTX2・CTX5</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR1</td><td>設計の穴を列に並ぶ前に止める — 便の中の審査と gate の FAIL の周回を減らす <span class="drg">CTX1</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR2</td><td>列の順 (依存・優先度) を、 落ちた行が在っても崩さず、 待ちの輪を作らない <span class="drg">CTX1・CTX2</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR3</td><td>同じ欠陥を持つ兄弟の行を連鎖させない <span class="drg">CTX2</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR4</td><td>同じ審査を 2 度撃たない — 撃ち直さない鍵は判定に効く入力の全部で取り、 見逃しを素通りさせない <span class="drg">CTX3</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR5</td><td>足す物の前に消す物を名指す (C17.2) — 口 1・on-disk の形 2・任意 key 1・門の断りの語 6・待ちの理由 2・rules 行 1・lens の flag 1 を足し、 先撃ちの module の残り・lens の --stage prelens・先撃ちの置き場の形 1・rules 行 2・使い回しの読み口 1 を消す。 event の種類は足さない (C17) <span class="drg">CTX2・CTX3・CTX4</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR6</td><td>消費側の repo を黙って変えず、 PUBLIC の repo の CI に口座を置かず、 席の入力欄への差し込みを増やさない <span class="drg">CTX4</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR7</td><td>測れないを通すに倒さない (C10) — 予想の審査と partial の判断不能を merge で通すのは、 その記録が契約の審査の段で写されず、 祖先の着地の後の契約の審査が実物で測り直して今どおり止めるからで、 測れないまま効く判定にはしない。 宣言や記録を読めない周は門を断る側に倒す <span class="drg">CTX2・CTX4</span></td></tr>
 </tbody></table>
 </div>
-<section data-component="chapter-deck-band" class="tint-violet"><span class="num">03</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5"/></svg> 検討した選択肢 / 3 つの確定方式</span><h2>それぞれの利点と欠点を並べる</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-03">候補を 5 つ並べます。 読むだけの道具と審査用の写しと終わりの門を持つ案 (選んだ案) と、 選ばなかった 4 つです。 選ばなかった案は、 許可の規則で読みと git の読みを許す案・道具を渡さず材料を広げる案・gate の赤を自動で runner へ戻す案・起動の mode を丸ごと絞る案です。</p></section>
+<section data-component="chapter-deck-band" class="tint-violet"><span class="num">03</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5"/></svg> 検討した選択肢 / 3 つの確定方式</span><h2>それぞれの利点と欠点を並べる</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-03">候補を 5 つ並べます。 merge の前に審査して門で止め、 落ちた行の順番を守り、 先撃ちをやめる案 (選んだ案) と、 選ばなかった 4 つです。 選ばなかった案は、 先撃ちの審査役を強い model に戻すだけの案・先撃ちの判定で起動を止める案・CI で審査を撃つ案・merge の後に審査する案です。</p></section>
 <div class="chapbody">
 <div class="opt-grid">
 <div data-component="adr-option-card" class="chosen">
-<div class="opt-head"><span class="opt-id">OPT1</span><span class="opt-name">審査役は読みの道具だけ・契約の審査と先撃ちは木の上で読む・runner に共通 verify の節<span class="term" data-component="plain-language-term-inline" data-term="共通 verify の節">検査の行の一覧</span>と終わりの門</span><span class="opt-verdict chosen">採用</span></div>
-<p class="opt-sum">lens は渡された permission mode の値を使わず、 器が dontAsk と道具の列 Read・Grep・Glob を毎回渡し、 allow の規則は渡さない。 dontAsk でない値が渡された周は便の記録に 1 語を残す。 器が起こす claude は自動 memory を読まない。 契約の審査は対象 repo の HEAD に detach した一時の worktree (審査の木) を cwd にし、 判定の後に外す。 先撃ちは材料を組んだ予想の木を cwd にし、 予想の判定は Reviewed に写さない。 雛形は道具と木を正直に書く。 runner の本文に共通 verify の行の節を足し、 runner の終わりに器が gate と同じ行を撃ち、 赤なら同じ worktree で runner を起こし直して赤を渡す。 決め手は分析 (FAIL の根と、 読んだ lens の半分が欠陥を掘り出した実測) と実測 (道具と mode の効き)。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT1">審査役には読むだけの道具 3 つだけを渡し、 許可の問いを誰にも出さない設定で起こし、 契約の審査は審査する時点の写しの上で、 先回りの審査は予想の写しの上で読ませ、 口座ごとの自動の記憶は読ませない案です。 runner には共通の検査の行を渡し、 終わった直後に器が同じ行を撃って、 赤なら同じ作業場所で直させます。 審査役は code を読めて書けず、 材料は口座で変わらず、 赤は gate の前に直ります。 代わりに、 読む審査役は時間と token が増え、 緑の便も共通の検査を 2 回撃ちます。</span>
+<div class="opt-head"><span class="opt-id">OPT1</span><span class="opt-name">設計の PR の段の行の審査と merge の門・落ちた行の行の予約と兄弟の待ち・先撃ちの退役</span><span class="opt-verdict chosen">採用</span></div>
+<p class="opt-sum">設計の PR の head で、 変わった行ごとに受付と同じ機械の検査と契約の審査の lens を撃ち、 判定の鍵<span class="term" data-component="plain-language-term-inline" data-term="判定の鍵">審査を写す鍵</span>ごとに記録する。 merge の門は vessel 宣言で名乗った repo で、 head を固定しない merge と、 変わった行の審査が通っていない merge と、 審査の後に main で契約表が動いた merge を断る。 契約の審査の段は、 判定の鍵が同じ実物の PASS の記録だけを使い回す。 審査か gate で落ちた行は write-set を取り置き、 同じ設計の兄弟の行を待たせる。 先撃ちは rules 行の値 0 と code の退役の 2 段で畳む。 決め手は分析 (CTX1〜CTX3)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT1">設計の変更を main に入れる前に、 変わった行ごとに機械の検査と審査役の審査を撃って記録し、 名乗った repo の merge の門で止める案です。 落ちた行は触る file を取り置いて順番を守り、 同じ設計から出た兄弟の行を直しが入るまで待たせ、 先撃ちはやめます。 席が merge する行は並ぶ前に審査され、 先撃ちの届かなかった行にも審査が届き、 足す仕組みは消す仕組みと対にします。 代わりに、 設計の変更ごとに審査の費用と待ちが要り、 まだ無い祖先に頼る行と仕事の札の無い行の判断不能は merge を通ります。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>審査役は木の中の code を読んで事実を確かめられる (DR1)</li>
-<li>書きの道具も shell も無く、 cwd の外は読めない (DR2)</li>
-<li>自動 memory を読まないので、 その分の材料が口座で変わらない (DR3)</li>
-<li>runner は gate の撃つ行を渡され、 器が終わりに撃って赤を戻す (DR4)</li>
-<li>戻すのは判定の前の runner の turn の延長で、 Gated の終端は動かない (DR5)</li>
-<li>道具と mode の値は器の定数で、 運用の cmd の字が緩められず、 古い雛形でも審査は止まらない (DR6)</li>
+<li>席が merge する設計の PR の行は、 列に並ぶ前に審査を通る (DR1)</li>
+<li>依存の無い行と再受付の行にも審査が届く (先撃ちの届かない 34 件) (DR1)</li>
+<li>落ちた行の file は取り置かれ、 直った行は元の順位のまま後ろの行より先に起きる。 落ちた行の依存の祖先は待たないので輪ができない (DR2)</li>
+<li>同じ設計の PR の兄弟の行は直しが入るまで起きない (DR3)</li>
+<li>撃ち直さない鍵と使い回しの鍵は判定に効く入力の全部と lens の子が出す版で取り、 予想の審査は写さない (DR4)</li>
+<li>足す物と消す物を対で名指し、 event の種類を足さず、 受付・事前審査・契約の審査・merge の門の既存の関数と口を借りる (DR5)</li>
+<li>門に加わるのは宣言で名乗った repo だけで、 審査は host の器が撃ち、 口は前面で最後まで走って席へ差し込まない (DR6)</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>読む lens は 1 回の時間と token が増える (実測で時間はおよそ 2 倍・token の多くは cache の読み)</li>
-<li>緑の便も終わりの門と gate で共通 verify を 2 回撃つ</li>
-<li>道具と env の名は claude の版に従い、 器の歯は fake の argv と env しか測らない</li>
-<li>起動の雛形が dontAsk でない値を渡し続けても審査は止まらないので、 古い雛形は 1 語の記録で見つけるほかない</li>
-<li>先撃ちの判定を Reviewed に写さないので、 先撃ちが退役するまで契約の審査は lens を撃ち直す</li>
+<li>設計の PR ごとに読みの道具を持つ lens を行の数だけ撃つ費用が要る (未実測)</li>
+<li>記録は host の state dir に在り、 別の host から merge すると撃ち直しが要る</li>
+<li>祖先が未着地の行と bead の無い行の判断不能は merge を通り、 その行の穴は列に入った後の審査で止まる</li>
+<li>新しい doc を 1 本の PR で起こすと、 その doc の全部の行が兄弟になる</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT2</span><span class="opt-name">allow の規則で Read と読みだけの git の Bash を許す</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">棚卸しの案。 道具は絞らず、 lens に allow の規則で Read と git grep・git show・git log の Bash を許し、 書きの道具を deny の規則で外す。 決め手は実測 (allow の規則は cwd の外の読みを開く)。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT2">道具は絞らず、 許可の規則で読みと git の読みの命令を許し、 書く道具を禁止の規則で外す案です。 git の履歴も読める点で勝ります。 けれども実測では、 許可の規則に読みを足すと作業場所の外の file まで読めてしまいました。 許していない命令は承認の問いに倒れ、 人のいない審査役はそこで止まります。 禁止の規則を書き漏らすと書く道具が残ります。</span>
+<div class="opt-head"><span class="opt-id">OPT2</span><span class="opt-name">先撃ちを Opus に戻すだけ</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">先撃ちの model を契約の審査と同じ model に戻し、 使い回しの条件を満たさせる。 決め手は実測 (CTX3)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT2">先撃ちの審査役を、 本番の審査と同じ強い model に戻すだけの案です。 仕組みを足さず、 規則の表の値 1 つで済む点で勝ります。 けれども、 判定を使い回す鍵は材料の違いで外れ、 model が同じだった期間でも 1 度も当たりませんでした。 当たっても先撃ちの見逃しがそのまま本番を素通りし、 届くのも依存を待つ行だけです。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>git の履歴も読め、 base と HEAD を比べられる</li>
-<li>道具の列の flag に頼らない</li>
+<li>足す仕組みが無く、 rules 行の値 1 つで済む</li>
+<li>先撃ちの判定の質が契約の審査と揃う</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>allow の規則は cwd の外の file も読ませる (DR2)</li>
-<li>Bash の語の allowlist の外は承認の問いへ倒れ、 無人の lens では止まる</li>
-<li>deny の規則の書き漏れで書きの道具が残りうる (DR2)</li>
+<li>使い回しは材料の鍵<span class="term" data-component="plain-language-term-inline" data-term="材料の鍵">審査材料の指紋</span>で外れ、 model を揃えた窓でも 0 回だった (DR4)</li>
+<li>当たっても先撃ちの見逃しがそのまま素通りする (DR4)</li>
+<li>依存を待つ行にしか届かず、 審査が列に並んだ後に在る形は変わらない (DR1・DR2)</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT3</span><span class="opt-name">1 turn・材料だけのまま、 材料の組み手を広げる</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">lens に道具を渡さず、 器が逆引きの結果や既存の歯の本文まで材料に束ねる。 決め手は分析 (材料の上限の中に逆引きの全部は収まらない)。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT3">審査役には道具を渡さず、 器が逆引きの結果や既存の検査の本文まで材料に束ねる案です。 1 回の費用が今と同じで、 何を読んだかが材料で決まる点で勝ります。 けれども、 外の材料は上限で今でも半分以上落ちています。 器が先に知っている事実しか届かず、 書ける設定の穴も残ります。</span>
+<div class="opt-head"><span class="opt-id">OPT3</span><span class="opt-name">先撃ちの判定で起動を止める</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">先撃ちが FAIL か判断不能を出した行を、 依存が閉じても起こさない。 決め手は分析 (CTX3)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT3">先撃ちが落とした行を、 依存が閉じても起こさない案です。 先撃ちの判定のまま起きてしまった 6 件は止まり、 待ちの理由を 1 つ足すだけで済む点で勝ります。 けれども、 届くのは依存を待つ行だけで、 審査で落ちた 46 件のうち 34 件には届きません。 落ちた行が列から外れて順番が崩れる形も残ります。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>lens の 1 回の費用が今と同じ</li>
-<li>審査役が何を読んだかが材料で決まる</li>
+<li>先撃ちの判定のまま起動した 6 件は止まる</li>
+<li>待ちの理由を 1 つ足すだけで済む</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>外の材料は上限で半分以上落ちている (DR1)</li>
-<li>束ねる事実を器が先に知る必要があり、 知らない事実は届かない (DR1)</li>
-<li>起動形の書きの穴は残る (DR2)</li>
+<li>届くのは依存を待つ行だけで、 46 件中 34 件には届かない (DR1)</li>
+<li>落ちた行が列から外れて順番が崩れる形は残る (DR2)</li>
+<li>予想の空の file に由来する判断不能で、 着地で消える理由の待ちが生まれる (DR4・DR7)</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT4</span><span class="opt-name">gate の verify の赤を自動で runner へ戻す</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">終わりの門を置かず、 gate の verify が赤の周に Gated を FAIL で終えずに runner を同じ worktree で起こし直す。 決め手は設計 pipeline.md §49 の却下 (判定の後に器が戻すと契約の赤を撃ち直し続ける形が作れる)。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT4">終わりの門を置かず、 gate の検査が赤のときに、 便を終わらせず runner を同じ作業場所で起こし直す案です。 共通の検査を 2 回撃たずに済む点で勝ります。 けれども、 判定を出した後に器が便を戻すことになり、 終わった便の数えと着地の列の読みが動きます。 設計はこの形を、 契約の赤を撃ち直し続ける形が作れるとして既に退けています。</span>
+<div class="opt-head"><span class="opt-id">OPT4</span><span class="opt-name">CI で契約の審査の lens を撃つ</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">設計の PR の CI の job で lens を撃ち、 合格を merge の条件にする。 決め手は分析と PUBLIC の制約 (DR6)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT4">設計の変更の CI (自動の検査の場) で審査役の審査を撃ち、 合格を merge の条件にする案です。 forge の必須の検査に載せられ、 どこから merge しても同じ記録を見る点で勝ります。 けれども、 公開の repo の CI に審査役の口座と model を持たせることになり、 口座の選び方や箱の上限や台帳は host の器の側に在るので CI からは届きません。 push のたびに撃つと費用も増えます。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>共通 verify を 2 回撃たずに済む</li>
-<li>撃つ場所が gate の 1 か所のまま</li>
+<li>merge の条件を forge の必須の検査に載せられる</li>
+<li>どの host から merge しても同じ記録を見る</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>判定の段の後に戻すので、 終端の数えと着地の列の読みが動く (DR5)</li>
-<li>gate の lens を撃つ前後で戻る形が 2 つになる</li>
+<li>PUBLIC の repo の CI に lens の口座と model を持たせることになる (DR6)</li>
+<li>口座の選定・封じ込め・rules 行は host の器が持ち、 CI は台帳に届かない (DR5)</li>
+<li>PR の push ごとに撃つと費用が push の数に比例する (DR4)</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT5</span><span class="opt-name">起動の mode を丸ごと絞る flag (restricted か bare) を渡す</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">claude の restricted の mode か bare の mode で lens を起こす。 決め手は ADR-0011 の決定 (起動形を組む 1 関数は restricted を渡さない) と実測 (dontAsk と道具の列で cwd の外の読みは断られた・bare は OAuth を読まない)。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT5">claude の起動の mode を丸ごと絞る flag で審査役を起こす案です。 1 つの flag で道具と設定の読みが絞れ、 片方の mode は読みを作業場所の中に閉じることを文書で約束する点で勝ります。 けれども、 その mode は前の記録が「claude を起こす命令を組む関数は渡さない」と決めた flag です。 書く道具を持たない審査役なら止まりはしませんが、 読むだけの道具と許可の問いを出さない設定でも、 実測で同じ効きが得られたので、 前の記録を審査役のためだけに改めるほどの差がありません。 もう片方の mode は subscription の口座で起きません。</span>
+<div class="opt-head"><span class="opt-id">OPT5</span><span class="opt-name">行の審査を merge の後 (列に入った直後) に撃つ</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">契約表の行が main に入った直後に審査し、 判定を中身ごとに記録する (ADR-0045 の前の、 契約が出来た直後の審査の形)。 決め手は分析 (DR1・DR2)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT5">契約表の行が main に入った直後に審査する案で、 以前の形の復活です。 merge の門を変えずに済む点で勝ります。 けれども、 行は既に main に在るので、 落ちた行の直しにもう 1 本の変更が要り、 行の字が変わる merge の時点で止めないと、 落ちた行が起動の列の入力に残ります。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>1 つの flag で道具と設定の読みが絞れ、 restricted は読みを cwd に閉じることを文書で保証する</li>
-<li>bare なら自動 memory と hook も同時に切れる</li>
+<li>merge の門を変えずに済む</li>
+<li>審査は列に入る前に済む</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>restricted は書きの道具を持たない lens では承認の問いを生まないが、 ADR-0011 が起動形を組む 1 関数に渡さないと決めた flag で、 dontAsk と道具の列で実測上同じ効きが得られる以上、 その決定を lens のために部分 supersede するほどの差が無い (DR6)</li>
-<li>bare は subscription の口座で起きない</li>
+<li>行は既に main に在り、 落ちた行の直しにもう 1 本の PR が要る (DR1)</li>
+<li>行の字が変わるのは merge の時点だけで、 そこで止めないと落ちた行が列の入力に残る (DR2)</li>
 </ul></div></div>
 </div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの方式を選ぶか</span><h2>選んだ方式と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、 それが要件書のどの要件を支えるかを示します。 審査役は読むだけの道具で起き、 契約の審査は審査する時点の写しの上で読み、 先回りの審査は予想の写しの上で読んでその判定を本番に写さず、 自動の記憶は読みません。 runner は共通の検査の行を受け取り、 終わった直後に器が同じ行を撃って、 赤なら決めた回数まで同じ作業場所で直させます。 gate は今どおり全部の行を撃ちます。</p></section>
+<section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの方式を選ぶか</span><h2>選んだ方式と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、 それが要件書のどの要件を支えるかを示します。 設計の変更を main に入れる前に、 変わった行ごとに機械の検査と審査役の審査を撃ち、 判定に効く入力の全部を鍵にして記録します。 名乗った repo の merge の門は、 先端を固定しない merge・審査が通っていない merge・審査の後に main で行が動いた merge を止めます。 便の中の審査は、 鍵が同じ実物の合格の記録だけを使い回します。 落ちた行は触る file を取り置き、 兄弟の行を待たせ、 先撃ちは 2 段でやめます。</p></section>
 <div class="chapbody">
 <div data-component="adr-decision-panel" id="decision">
 <p class="dec-kick">採用 — OPT1</p>
-<p class="dec-state">器 SHALL 審査役 (契約の審査・gate・先撃ちの lens) の claude を、 道具の列 Read・Grep・Glob と permission mode dontAsk を毎回渡し allow の規則を渡さない形で起こす。 lens は permission mode の引数を受けても値を使わず、 dontAsk でない値が渡された周は契約の file の dir に 1 語の記録 lens.ignored を残す (消費側ごとの起動の雛形は repo の外に在り、 断ると全部の審査が止まる)。 器が起こす claude (runner・lens・計測の refresh) は、 起動形を組む 1 関数が子の env で口座の自動 memory を毎回切り、 親の値を継承させない。 契約の審査は、 材料を組む前に対象 repo の HEAD の sha を読み、 先撃ちの判定を使い回さない周だけ、 その sha に detach した一時の worktree (審査の木) を材料の dir の外の run dir の直下に作って lens の cwd とし、 同じ path の前の周の木は先に外し、 判定を読んだ後に木を外し、 木の sha を審査の記録に残し、 作れない周は lens を撃たず INCONCLUSIVE にする。 先撃ちの lens は材料を組んだ予想の木を cwd にし、 lens が終わるまで木を外さず、 木の sha と種類 (祖先の層の無い actual か、 層を当てた forecast) を置き場に残し、 Reviewed は種類が actual で sha が審査の木と同じ判定だけを使い回す。 gate の lens の cwd は便の worktree のまま。 審査の雛形は、 読みの道具だけが在ること・cwd の外は読めないこと・材料に無い code の事実は木の現物で確かめること・穴を全部見てから判定することを書き、 道具が無いとは書かない。 器 SHALL runner の stdin の契約の直後に、 便の写しの共通 verify の行を gate と同じ 4 つの穴の埋め方 (base の sha・受付を通らない並列度 1・契約の verify 行の filter 語) で埋めた節を足し、 runner の雛形はその行を commit の後に全部撃って緑にしてから終えると読む。 器 SHALL runner の turn が rc 0 かつ commit 1 本以上で終わった周に、 gate と同じ撃ち手と受付で書きの範囲の検査・共通 verify・契約の検証行を便の worktree に撃ち (終わりの門)、 全行 rc 0 なら Implemented にし、 赤が在り測れなかった行が無く周が rules 行の上限に届かない周は同じ worktree・同じ base で runner を起こし直して赤い行と診断の抜粋の節を渡し、 周を使い切った周と測れなかった行が在る周は Implemented にして gate へ進める。 gate は終わりの門の結果を持ち越さず全行を撃ち、 Gated の FAIL は終端のまま。 lens の turn の上限と終わりの門の周の上限は rules 行が持ち、 値は SRS の追加 round で裁定を取る。 実装は設計 doc pipeline.md §64 の行 bg・§65 の行 bh・§66 (後の行)。</p>
-<span class="dec-plain" data-prose-slot="plain" data-slot-id="decision-plain">審査役 (契約の審査・gate・先回りの審査) の claude は、 読むだけの道具 Read・Grep・Glob と、 許可の問いを誰にも出さない設定で毎回起こします。 許可の規則は渡さないので、 作業場所の外は読めません。 起動の行が許可の設定を渡しても、 その値は使いません。 許可の問いを出さない設定と違う値が渡されたときは、 便の記録に 1 語の file を残して古い起動の行を名指します。 器が起こす claude は、 口座ごとの自動の記憶を毎回切ります。 契約の審査は、 材料を組む前に対象の repo の最新の commit を読み、 それを一時の写しとして材料の置き場の外に取り出し、 その上で読ませ、 判定の後に写しを片付けます。 同じ場所に前の写しが残っていれば先に片付け、 写しを作れないときは審査をせず、 判定できなかったとします。 先回りの審査は、 材料を組んだ予想の写しの上で読ませ、 審査役が終わるまで写しを残します。 本番の審査は、 祖先の変更を当てていない写しで、 同じ commit を読んだ先回りの判定だけを使い回します。 審査の指示文は、 読む道具だけが在ること、 材料に無い code の事実は写しの現物で確かめること、 穴を全部見てから判定することを書きます。 runner には、 契約の直後に共通の検査の行を出発点の sha で埋めて渡し、 commit の後に全部撃って緑にしてから終えるよう読ませます。 runner が正常に終わり commit が在るときは、 器が gate と同じ検査を同じ作業場所で撃ち、 全部緑なら次の段へ進め、 赤なら決めた回数まで runner を起こし直して赤を渡し、 回数を使い切るか測れなかったときは gate へ進めます。 gate は今どおり全部の行を撃ちます。</span>
-<span class="dec-why" data-prose-slot="rationale" data-slot-id="decision-rationale">読むだけの道具を選んだのは、 前提を無視して code を読んだ審査役の半分が本物の欠陥を掘り出した一方で、 材料を束ねるやり方は上限で半分以上が落ちるからです。 許可の規則で読みを許さず道具の列で絞るのは、 実測で許可の規則が作業場所の外の読みまで開いたからで、 道具の列と許可の問いを出さない設定の組み合わせだけが、 読みを作業場所の中に閉じました。 契約の審査を出発点の写しの上で読ませるのは、 main の作業場所を書き換えられる穴を閉じ、 審査する契約と同じ出発点の code を読ませるためです。 自動の記憶を切るのは、 同じ契約が走る口座によって違う材料で扱われないためです。 runner に検査の行を渡すだけでなく器が終わりに撃つのは、 渡したかどうかではなく撃って緑かどうかが合格の条件で、 それは散文の注意では確かめられないからです。 赤を gate の後でなく runner の終わりで戻すのは、 判定を出した後に便を戻すと終わった便の数えと着地の列が動くからです。 先回りの審査の判定を本番に写さないのは、 予想の写しで読んだ code が、 祖先が着地した後の code と同じとは言えないからです。</span>
+<p class="dec-state">器 SHALL 契約表の行を足す・変える設計の PR の head で行の審査を撃つ口 (pipe review --ref) を持つ。 口は head と origin/main の merge-base の間で行の digest<span class="term" data-component="plain-language-term-inline" data-term="行の digest">行の中身の指紋</span> (受付と同じ生成の契約の字の hash と、 実装する設計の節の本文の hash の対) が変わった行のうち、 指す bead が無いか 1 本でも closed でない行ごとに、 受付と同じ機械の検査と、 契約の審査と同じ lens を読みだけの形で 1 回撃つ。 判定は判定の鍵 (行の digest・材料の鍵・code の木の鍵・basis・祖先ごとの状態・lens の子が自ら出す lens の版) ごとに state dir の記録 (schema 1) に残し、 同じ鍵の行は撃ち直さず、 head ごとの結果を 1 語 (pass・fail・pending・stale) で残す。 口は前面で最後まで走り、 席の入力欄へは知らせない (FR44 の閉じた列は変えない)。 未着地の祖先を持つ行は祖先の行と節を材料に足した予想の審査 (forecast) とし、 空の file を置かない。 bead の無い行の doc を跨ぐ祖先は測れない (partial)。 merge の門は、 anchor の HEAD か PR の head の vessel 宣言が任意 key row-review を持つ repo で、 head を 40 桁で固定しない merge、 その head の結果が pass でない merge、 審査の後に main で契約表の file が動いた merge を断る。 forecast と partial の判断不能は pass に数え、 FAIL と actual の判断不能は止める。 契約の審査の段は、 実物の base で組んだ判定の鍵が basis actual の PASS の記録と同じ周だけ lens を撃たずに写す。 先撃ちは rules 行 pipe.precheck_lens_per_round の値 0 (材料の組み直しも止める) と code の退役の 2 段で畳み、 事前審査の機械の予想と束は残す。 起動の列は、 直前の便が着地でない終端に着いた open な行 (列外か列に戻ったかを問わない) の write-set を行の予約とし、 FR68 の順序で後ろの候補のうち交差するものを待たせる (その行の依存の祖先は待たせない)。 審査の FAIL か unparsed でない判断不能か gate の FAIL で終端した行の兄弟 (同じ節の行と、 その行の digest を載せた設計の PR の行の審査の記録に載る行) は待つ (first の印は待たない)。 行の予約と兄弟の待ち<span class="term" data-component="plain-language-term-inline" data-term="兄弟の待ち">兄弟の行の待ち</span>が解ける契機は設計 row-review.md §7・§8 の閉じた列が持ち、 どちらも既存の記録から周ごとに導き、 event の種類を足さない。 実装は同じ設計の行 a〜g で、 SRS の追加 round の後に起こす。</p>
+<span class="dec-plain" data-prose-slot="plain" data-slot-id="decision-plain">器は、 契約表の行を足す・変える設計の変更の先端で、 行の審査を撃つ口を持ちます。 口は、 main との分かれ目から中身の指紋 (行の digest) が変わった行のうち、 まだ着地していない行ごとに、 受付と同じ機械の検査と、 本番と同じ審査役の審査を読みだけの形で 1 回撃ちます。 判定は、 行の中身・材料・code の木・祖先の状態・審査役が自分で名乗る版を並べた鍵ごとに記録し、 同じ鍵の行は撃ち直さず、 先端ごとの結果を 1 語で残します。 口は最後まで前で走り、 席の入力欄へは知らせません。 祖先がまだ無い行は、 空の file を置かず、 祖先の行と節を材料に足して予想の審査にします。 名乗った repo の merge の門は、 main か変更の側のどちらかが名乗っていれば、 先端を固定しない merge・結果が通っていない merge・審査の後に main で契約表が動いた merge を断ります。 予想の審査と仕事の札の無い行の判断不能は通し、 FAIL は止めます。 便の中の審査は、 鍵が同じ実物の合格の記録の時だけ撃たずに写します。 先撃ちは、 規則の表の値を 0 にして材料の組み直しも止める段と、 code をやめる段の 2 段で畳みます。 起動の列は、 着地でない終わり方をした行の触る file を、 その行が次の便を起こすまで取り置き、 順番で後ろの行を待たせます (その行が待っている祖先は待たせません)。 審査か gate で落ちた行の兄弟 (同じ節の行と、 同じ設計の変更で審査された行) は、 直しが入るまで待ちます。 取り置きと兄弟の待ちが解ける契機は設計の文書が閉じた列で持ち、 既存の記録から毎回導き、 出来事の種類は増やしません。</span>
+<span class="dec-why" data-prose-slot="rationale" data-slot-id="decision-rationale">merge の前に審査するのは、 行の字が変わるのは merge の時点だけで、 そこで止めれば席が merge する行は並ぶ前に審査済みになり、 落ちた行が列から外れて順番が崩れる形が生まれにくいからです。 先撃ちを強めない・判定で止めるだけにしないのは、 使い回しが材料の違いで外れて 1 度も当たらず、 依存を待つ行にしか届かないと実測で分かったからです。 CI で撃たないのは、 公開の repo に口座を置かず、 口座と箱と台帳を持つ host の器が撃つためです。 口が知らせを送らないのは、 席の入力欄への差し込みは閉じた列で持っていて、 新しい口は前に消した口の復活になるからです。 撃ち直さない鍵に材料と code の木と祖先の状態を入れるのは、 祖先の直しや code の着地で判定が変わりうるのに古い判定を写さないためで、 審査役の起動の字の代わりに審査役が自分で名乗る版を比べるのは、 字に本体の置き場が入り入れ替えのたびに外れるからです。 門が main と変更の両方の宣言を読むのは、 変更が自分で名乗りを外して門を素通りする形と、 名乗りを足す変更が自分の門を持たない形を両方塞ぐためです。 予想の審査の判断不能を通すのは、 祖先の本文は祖先が着地するまで存在せず、 止めると設計の変更が 1 本ずつになるからで、 その記録は便の中の審査で写さないので、 その行は列に入った後に実物で改めて測られます。 落ちた行の file を取り置くのは、 直した行を元の順位で先に起こすためで、 その行が待っている祖先を待たせないのは、 前提の行を足して直す形で待ち合いの輪を作らないためです。 兄弟を同じ節と同じ設計の変更に絞るのは、 同じ時に同じ前提で書いた行だけが同じ欠陥を持ちやすく、 指示が同じかは機械で判じられないからです。</span>
 <div class="justify-box"><p class="jh">この判断が正当化する要件 (cross-doc 照会 → SRS-SCRIBE2-MVP)</p>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR5" data-justifies-req="FR5" data-justifies-role="claim">FR5</a><span class="justify-role">claim</span><span class="justify-note">FR5 (runner と lens の起動の 1 形・permission を毎回明示) の中で、 lens の permission を器の定数にし、 道具の列と自動 memory の切りを同じ構築点で毎回渡すと主張する。 1 形のままで、 第 2 の構築点は作らない。</span></div>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR49" data-justifies-req="FR49" data-justifies-role="claim">FR49</a><span class="justify-role">claim</span><span class="justify-note">FR49 (intake の直後の契約の審査) の lens が契約と設計と要件を読むことは変えず、 cwd を審査の木にして材料に無い code の事実を木の現物で確かめさせると主張する。 判定の読みと Reviewed の終端は変えない。</span></div>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR9" data-justifies-req="FR9" data-justifies-role="claim">FR9</a><span class="justify-role">claim</span><span class="justify-note">FR9 (gate の lens の判定と INCONCLUSIVE) は変えず、 gate の lens も同じ読みの起動形で diff の外の事実を確かめると主張する。</span></div>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR8" data-justifies-req="FR8" data-justifies-role="claim">FR8</a><span class="justify-role">claim</span><span class="justify-note">FR8 (gate が verify の各行を実走する) は変えず、 gate は終わりの門の結果を持ち越さずに全行を撃つと主張する。</span></div>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR6" data-justifies-req="FR6" data-justifies-role="rationale">FR6</a><span class="justify-role">rationale</span><span class="justify-note">FR6 (runner の終わりの段) は rc 0 かつ commit 1 本以上なら Implemented と決めている。 終わりの門は赤の周に runner を起こし直すので FR6 の字と食い違い、 SRS の追加 round で FR6 を改めてから実装の行を起こす理由になる。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR49" data-justifies-req="FR49" data-justifies-role="claim">FR49</a><span class="justify-role">claim</span><span class="justify-note">FR49 (契約の審査) は便が受付を通った直後に審査する。 本 ADR は同じ審査を設計の PR の段へ前倒しし、 契約の審査の段は、 判定の鍵が同じ実物の PASS の記録の使い回しと、 予想の審査と入力の変わった行の審査し直しの段として残すと主張する (字の直しは SRS の追加 round)。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR68" data-justifies-req="FR68" data-justifies-role="claim">FR68</a><span class="justify-role">claim</span><span class="justify-note">FR68 (起動の列) は起こせない契約を閉じた型の理由で待たせる。 本 ADR は理由に行の予約の待ちと兄弟の待ちの 2 つを足し、 どちらも既存の記録から導き、 FR68 の順序の 1 関数で前後を決めると主張する (字の直しは SRS の追加 round)。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR92" data-justifies-req="FR92" data-justifies-role="claim">FR92</a><span class="justify-role">claim</span><span class="justify-note">FR92 (merge の門) は本文の trailer の形を merge の前に確かめる。 本 ADR は名乗った repo の門に、 head の固定と行の審査の結果と契約表の動きを見る 2 つ目の判定を足すと主張する (trailer の判定の字に主語を付ける直しは SRS の追加 round)。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR39" data-justifies-req="FR39" data-justifies-role="rationale">FR39</a><span class="justify-role">rationale</span><span class="justify-note">FR39 (交差の排他) の判定をそのまま行の予約の交差に使う。 本 ADR は交差の相手に、 live な便に加えて落ちた行の行の予約を数える理由を与えるだけで、 FR39 の判定の関数は変えない。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR44" data-justifies-req="FR44" data-justifies-role="rationale">FR44</a><span class="justify-role">rationale</span><span class="justify-note">FR44 (席の入力欄への差し込み) の閉じた列に項を足さない。 行の審査の口は前面で最後まで走り、 席は自分の道具の待ちで結果の行を読むので、 新しい差し込みの口が要らない。</span></div>
 <p class="justify-tgt">照会先: SRS-SCRIBE2-MVP — SRS: 設計 → 契約 → 実装 → 検証 → land を、 人の手を借りずに 1 本通す器（MVP）</p>
 </div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-warn"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> 結果 / 良い面とトレードオフ</span><h2>この判断で何が良くなり、 何を引き受けるか</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">この判断で良くなること 4 つと、 代わりに引き受けること 5 つです。 良くなるのは、 審査役が事実を確かめてから判定すること、 審査役が書けなくなること、 自動の記憶の分だけ口座で材料が変わらなくなること、 共通の検査の赤が早く直ることです。 引き受けるのは、 審査の時間と token が増えること、 共通の検査を 2 回撃つこと、 claude の版に依ること、 古い起動の行が 1 語の記録でしか見えないこと、 先回りの審査の判定を本番に写さないので本番の審査が毎回審査役を起こすことです。</p></section>
+<section data-component="chapter-deck-band" class="tint-warn"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> 結果 / 良い面とトレードオフ</span><h2>この判断で何が良くなり、 何を引き受けるか</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">この判断で良くなること 4 つと、 代わりに引き受けること 6 つです。 良くなるのは、 席が merge する設計の変更の行が merge の前に審査されること、 落ちた行が元の順位で先に起きること、 兄弟の行が続けて落ちないこと、 記録に載らない先撃ちの費用が無くなることです。 引き受けるのは、 merge の前の審査の費用と待ち、 門を通らない merge が残ること、 祖先がまだ無い行と仕事の札の無い行の判断不能が merge を通ること、 新しい文書の行が全部兄弟になること、 期限と退役の値と審査の消費に持ち主の裁定が要ること、 記録が畳まれず増えることです。</p></section>
 <div class="chapbody">
 <div data-component="scope-summary-panel"><div class="scol in"><h3>✓ 良い結果</h3><ul>
-<li data-component="adr-consequence-pos"><span class="b">●</span>審査役が呼び手・組み立ての場所・既存の歯を木の現物で確かめてから判定する</li>
-<li data-component="adr-consequence-pos"><span class="b">●</span>審査役は書けず、 読みは便の木に閉じるので、 main の作業場所を書き換える穴が閉じる</li>
-<li data-component="adr-consequence-pos"><span class="b">●</span>自動 memory の分について、 同じ契約は走る口座に依らず同じ材料で審査され実装される (口座の設定 dir の他の入力は着地の後に測る)</li>
-<li data-component="adr-consequence-pos"><span class="b">●</span>共通 verify の赤は runner の turn の中か終わりの門で直り、 gate の FAIL と便の捨て直しが減る</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>席が merge する設計の PR の行は、 merge の前に行の審査を通り、 設計の穴はそこで止まる</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>落ちた行は元の順位のまま、 同じ file を触る後ろの行より先に起きる</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>同じ設計の PR の兄弟の行が、 同じ欠陥で続けて落ちない</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>先撃ちの費用 (便の記録に載らない分) が無くなり、 行の審査の消費は記録に残る</li>
 </ul></div><div class="scol out"><h3>⚖ トレードオフ・代償</h3><ul>
-<li data-component="adr-consequence-neg"><span class="b">●</span>読む lens の 1 回の時間と token が増える</li>
-<li data-component="adr-consequence-neg"><span class="b">●</span>緑の便も終わりの門と gate で共通 verify を 2 回撃つ (中央値の和で約 137 秒)</li>
-<li data-component="adr-consequence-neg"><span class="b">●</span>道具と env の名は claude の版に従い、 実 binary の効きは着地の後に init の record で測り直すほかない</li>
-<li data-component="adr-consequence-neg"><span class="b">●</span>起動の雛形に残った書きの mode は審査を止めず、 便の記録の 1 語でだけ見える</li>
-<li data-component="adr-consequence-neg"><span class="b">●</span>先撃ちの判定は予想の木で出るので Reviewed へ写らず、 先撃ちが退役するまで契約の審査は毎回 lens を撃つ (先撃ちは別の ADR が畳む)</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>設計の PR ごとに読みの道具を持つ lens を行の数だけ撃つ費用と待ちが要る (費用は未実測で、 着地の後に測って見直す)</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>門の外の merge が残る。 別の host の merge は記録が無く口の撃ち直しが要り、 GitHub の画面の merge と器が着地させる便 (runner が設計 doc の行を書き換えた便を含む) は門を通らない</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>祖先が未着地の行と bead の無い行の判断不能は merge を通り、 その穴は列に入った後の契約の審査で止まる</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>新しい doc を 1 本の PR で起こすと、 1 行の欠陥でその doc の全部の行が直しまで待つ (first の印で名指して起こせる)</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>行の予約の期限と先撃ちの退役の値と行の審査の消費は、 SRS の追加 round で持ち主の裁定を取る</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>行の審査の記録は畳まれず push ごとに増える (量の上限と掃除は別の設計)</li>
 </ul></div></div>
 </div>
-<section data-component="chapter-deck-band" class="tint-info"><span class="num">06</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> 改訂関係と原則 / この判断の位置づけ</span><h2>版の系譜と、 行き着く原則 (照会終端)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-06">この記録が版の系譜のどこに在るかと、 判断が最後に行き着く原則です。 この記録は、 起動の形を 1 か所で組み設定を読まないと決めた ADR-0011 を置き換えず、 そこで決めずに残した審査役の起動の形を決めます。 原則は、 器は各役に合格の条件と判定に要る読みを渡し、 要らない権能は持たせず、 渡したかどうかは散文でなく器の仕組みで決まる、 です。</p></section>
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">06</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> 改訂関係と原則 / この判断の位置づけ</span><h2>版の系譜と、 行き着く原則 (照会終端)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-06">この記録が版の系譜のどこに在るかと、 判断が最後に行き着く原則です。 この記録はどの記録も置き換えません。 器が便を自動で起こす決定と、 席を 1 つにして器が便を着地させる決定はそのまま保ち、 後者が持たないとした merge の後の審査も復活させません。 以前の設計が退けた「審査の判定を記録する」形は、 merge の門に読ませる理由で採り直し、 足す物は消す物と対にします。 原則は、 列の順は並ぶ前に審査して守り、 並んだ後に落ちた物は、 直るまでその場所を持ち続ける、 です。</p></section>
 <div class="chapbody">
 <div data-component="adr-supersession">
 <p class="ss-row"><span class="ss-k">改訂状態</span>current</p>
 <p class="ss-row"><span class="ss-k">置き換える ADR</span>なし (新規)</p>
 <p class="ss-row"><span class="ss-k">置き換えられた</span>なし (現行)</p>
-<p class="ss-row">置き換える ADR は無い。 ADR-0011 は器が起こす claude の起動形を 1 関数に置き settings を読まないと決め、 lens の起動形 (道具を絞るか) は射程の外に残した。 本 ADR はその残りを決め、 同じ 1 関数に道具の列と自動 memory の切りを足す。 ADR-0011 の restricted と settings の追加読込を渡さない決定と、 runner の allowlist と plugin の渡し方は不変。 ADR-0010 の共通 verify の宣言と写しの凍結も不変で、 本 ADR は写しの行を runner の本文と終わりの門でも読む。</p>
+<p class="ss-row">supersede は無い。 ADR-0034 (審査を通った契約を器が自動で起こす) と ADR-0045 (席は orchestrator 1 つで、 器の dispatcher が便を起こし着地させる) はそのまま保ち、 ADR-0045 が持たないとした契約が出来た直後の審査 (merge の後) は復活させず、 審査を merge の前の段に置く。 設計 dispatcher.md §16 が却下した「審査の判定を中身に紐づけて記録する」形は、 merge の門の入力にする理由で行の審査の記録として採り直し、 足す面は消す面と対にする (C17.2)。 ADR-0019 の交差の排他の判定は変えず、 相手に行の予約を足すだけである。 先撃ち (設計 dispatcher.md §27) は ADR を持たない設計の段で、 その code の退役は git の履歴に残る可逆な形 (N1) で行い、 設計 doc が記録する。</p>
 </div>
 <div data-component="adr-principle">
-<p class="prin-id">照会終端 — PRIN-GIVE-EACH-ROLE-ITS-PASS-CONDITIONS-AND-ONLY-THE-POWERS-IT-NEEDS</p>
-<p class="prin-text">器は各役に、 合格の条件と判定に要る読みを渡し、 役に要らない権能は持たせない。 渡したかどうかは散文でなく器の起動形と器の測りで決まる。</p>
-<p class="prin-note">本 ADR が allow の規則で読みを開く案・材料だけを広げる案・gate の赤を判定の後に戻す案・起動の mode を丸ごと絞る flag の案を退け、 読みの道具だけの起動形と審査の木と終わりの門を選んだのはこの原則に行き着く (これ以上は遡らない照会終端)。</p>
+<p class="prin-id">照会終端 — PRIN-JUDGE-BEFORE-THE-QUEUE-AND-KEEP-THE-PLACE-OF-WHAT-FELL</p>
+<p class="prin-text">列の順は並ぶ前に審査して守り、 並んだ後に落ちた物は、 直るまでその場所を持ち続ける。</p>
+<p class="prin-note">本 ADR が先撃ちを強める案・CI で撃つ案・merge の後に撃つ案を退け、 merge の門と行の予約と兄弟の待ちを選んだのはこの原則に行き着く (これ以上は遡らない照会終端)。</p>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-brand"><span class="num">07</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg> 用語集 / この文書で使う専門語</span><h2>本文に出てくる専門語のやさしい説明</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-07">本文に出てくる専門語 5 個を、 やさしい言葉で説明します。</p></section>
+<section data-component="chapter-deck-band" class="tint-brand"><span class="num">07</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg> 用語集 / この文書で使う専門語</span><h2>本文に出てくる専門語のやさしい説明</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-07">本文に出てくる専門語 6 個を、 やさしい言葉で説明します。</p></section>
 <div class="chapbody">
 <div data-component="glossary-term-table">
-<div class="grow"><div class="gword">読みの道具<span class="en">read-only tools</span></div><div class="gdef">器が審査役の claude に渡す道具の閉じた列 Read・Grep・Glob (本 ADR)。 書きの道具と shell を持たず、 許可の問いを誰にも出さない mode で cwd の外の読みは断られる。</div></div>
-<div class="grow"><div class="gword">審査の木<span class="en">review tree</span></div><div class="gdef">審査役の lens の cwd になる一時の worktree (本 ADR)。 契約の審査では、 器が材料の前に読んだ対象 repo の HEAD の sha を run dir の直下に detach し、 判定の後に外す。 先撃ちでは、 材料を組んだ予想の木 (HEAD に祖先の層を当てた木) で、 lens が終わるまで外さない。</div></div>
-<div class="grow"><div class="gword">自動 memory<span class="en">auto memory</span></div><div class="gdef">claude が口座の設定 dir の下に cwd ごとに持つ記憶の索引で、 起動時に文脈へ載る (本 ADR)。 器が起こす claude は env で毎回切る。</div></div>
-<div class="grow"><div class="gword">終わりの門<span class="en">end gate</span></div><div class="gdef">runner の turn が rc 0 かつ commit 1 本以上で終わった直後に、 器が gate と同じ撃ち手で書きの範囲の検査・共通 verify・契約の検証行を便の worktree に撃つ段 (本 ADR)。 赤なら rules 行の周まで同じ worktree で runner を起こし直す。</div></div>
-<div class="grow"><div class="gword">共通 verify の節<span class="en">common verify section</span></div><div class="gdef">器が runner の stdin の契約の直後に足す節で、 便の写しの共通 verify の各行を gate と同じ 4 つの穴の埋め方で埋めて並べる (本 ADR)。 runner は commit の後にその行を全部撃って緑にしてから終える。</div></div>
+<div class="grow"><div class="gword">行の審査<span class="en">row review</span></div><div class="gdef">契約表の行を足す・変える設計の PR の head で、 変わった行ごとに器が撃つ機械の検査と契約の審査の lens (本 ADR)。 判定は判定の鍵ごとに state dir に記録し、 merge の門と契約の審査の段が読む。</div></div>
+<div class="grow"><div class="gword">行の digest<span class="en">row digest</span></div><div class="gdef">行の欄から受付と同じ生成で作った契約の字の hash と、 行が実装する設計の節の本文の hash の対 (本 ADR)。 SRS FR49 が契約の中身の同一性に使う 2 つと同じもの。</div></div>
+<div class="grow"><div class="gword">材料の鍵<span class="en">materials key</span></div><div class="gdef">審査の材料の dir の全 file の名と本文から決まる 1 つの digest (本 ADR)。 lens の cmd の字は入れない。 判定の鍵の 1 つ。</div></div>
+<div class="grow"><div class="gword">判定の鍵<span class="en">verdict key</span></div><div class="gdef">行の digest・材料の鍵・code の木の鍵・basis・祖先ごとの状態・lens の版を並べた字の digest (本 ADR)。 同じ鍵の行は撃ち直さず、 契約の審査の段は同じ鍵の実物の PASS だけを写す。</div></div>
+<div class="grow"><div class="gword">行の予約<span class="en">row reservation</span></div><div class="gdef">直前の便が着地でない終端に着いた open な行が、 次の便を起こすまで持つ write-set の取り置き (本 ADR)。 起動の列の順で後ろの候補のうち交差するものを待たせ、 その行の依存の祖先は待たせない。 群の予約とは別。</div></div>
+<div class="grow"><div class="gword">兄弟の待ち<span class="en">sibling wait</span></div><div class="gdef">審査か gate で落ちた行と同じ節を実装する行か、 落ちた行を載せた設計の PR の行の審査の記録に載る行を、 直しが入るまで待たせる起動の列の理由 (本 ADR)。 介入 first の印を持つ候補は待たない。</div></div>
 </div>
 </div>
 </div>
 <footer class="foot" data-component="fidelity-sync-meta"><div class="ft-grid">
 <div class="ft-plain">このページは、大もとの機械データ (正本) から自動で組み立てられています。構造は機械が自動で検査し、内容が元データに忠実かは独立のレビューで確かめます。</div>
-<div data-audience="machine">機械SSoT: <b>ADR-0102-lens-reads-with-read-only-tools-and-runner-gets-the-common-verify.adr.yaml</b> &middot; 生成: <b>2026-09-30 13:21</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
+<div data-audience="machine">機械SSoT: <b>ADR-0103.adr.yaml</b> &middot; 生成: <b>2026-09-30 13:14</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
 <div class="tags" data-audience="machine"><span>folio design system</span><span>ADR-pack</span><span>folio engine B1 (instance#2)</span><span>cross-doc 照会</span></div>
 </div></footer>
 <!-- folio:chrome-bottom -->
 <nav class="prevnext" aria-label="前後の文書">
-  <a class="prevnext__prev" href="ADR-0101-seat-draft-build-dirs-are-capped-per-state-dir-and-shed-oldest-first.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">席の起草の置き場の build の置き場に state dir ごとの量の上限を持たせ、 越えた周は書きの新しさの古い順に上限まで消す — 組み立て中の窓の内は消さず、 測れない木は数えずに名指し、 越えたままなら掃除の行と doctor の行で知らせる (ADR-0096 の書きの線だけで消す決定と原則を部分 supersede)</span></a>
-  <a class="prevnext__next" href="ADR-0103-contract-rows-pass-row-review-before-merge-and-failed-rows-keep-their-place.html"><span class="prevnext__dir">次 &rarr;</span><span class="prevnext__title">契約表の行は設計の PR を main に入れる前に行の審査を通し、 審査か gate で落ちた行は行の予約で順番を守り、 同じ設計の兄弟の行を直しが入るまで待たせる — 先撃ちは退役する</span></a>
+  <a class="prevnext__prev" href="ADR-0102-lens-reads-with-read-only-tools-and-runner-gets-the-common-verify.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">器が起こす審査役は読みの道具だけを持ち、 契約の審査は審査の時点の HEAD の木の上で・先撃ちは予想の木の上で読み、 口座の自動 memory を読まない — runner には共通 verify の行を渡し、 終わりの門で器が撃った赤を同じ worktree で直させる (ADR-0011 が残した lens の起動形を決める)</span></a>
 </nav>
 <script>
 (function () {
