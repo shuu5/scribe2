@@ -8,6 +8,7 @@ use super::{
     parse_actor, Allowance, Case, Channel, Cost, CostSource, EventKind, Install, Mark, Measured, Pressure, Registration,
     Shape, Sorting, Stage, Unmeasured, UnmeasuredReason, Usage, WindowKind, SCHEMA,
 };
+use crate::ledger::question::ASKED;
 use crate::seat::role::Role;
 
 /// event の 1 行が持てる key の全体（設計 §3）。
@@ -19,10 +20,17 @@ const KNOWN_KEYS: &[&str] = &[
     "account", "window", "model", "endpoint", "used_pct", "resets_at", "reason", "role", "anchor", "target", "sid", "launch",
     "mark", "source", "usage", "turns", "wall_ms", "rule",
     "channel", "session", "utterance", "sorting", "refuse", "version", "main",
+    "ruling", "question_ts", "asked",
 ];
 
-/// run 無しの裁定の kind（[`Shape::Ruling`]）だけが持てる key（他の kind の行に在れば malformed・設計 §9）。
-const RULING_KEYS: &[&str] = &["rule"];
+/// run 無しの裁定の kind（[`Shape::Ruling`]）だけが持てる key（他の kind の行に在れば malformed・設計 §9・§14）。
+const RULING_KEYS: &[&str] = &["rule", "ruling", "question_ts", "asked"];
+
+/// 結びの裁定（[`Case::Ruling`]）の 5 key（設計 §14・`rule` と併せ持てない）。`utterance` と `channel` は案件の kind とも共有する。
+const BOUND_KEYS: &[&str] = &["ruling", "utterance", "channel", "question_ts", "asked"];
+
+/// 結びの裁定が案件の kind と共有する key（[`Shape::Ruling`] の行はこの 2 つだけ [`CASE_KEYS`] から持てる）。
+const BOUND_SHARED_KEYS: &[&str] = &["utterance", "channel"];
 
 /// 案件の一生の kind（[`Shape::Case`]）だけが持てる key（他の kind の行に在れば malformed・kind ごとの内訳は
 /// [`Body::case`] の `own`・設計 §12）。
@@ -124,6 +132,7 @@ impl Event {
             Shape::Ruling => {
                 pairs.extend(Some(&self.bead).filter(|bead| !bead.is_empty()).map(|bead| ("bead", Value::Str(bead.clone()))));
                 pairs.extend(self.rule.iter().map(|rule| ("rule", Value::Str(rule.clone()))));
+                pairs.extend(self.case.iter().flat_map(|case| case.pairs(&self.bead)));
             }
             Shape::Case => pairs.extend(self.case.iter().flat_map(|case| case.pairs(&self.bead))),
             Shape::Allowance | Shape::Registration | Shape::Account | Shape::Install | Shape::Pressure | Shape::Group => {}
@@ -244,7 +253,8 @@ impl Body {
             forbid(pairs, RULING_KEYS)?;
         }
         if kind.shape() != Shape::Case {
-            forbid(pairs, CASE_KEYS)?;
+            let shared = if kind.shape() == Shape::Ruling { BOUND_SHARED_KEYS } else { &[] };
+            forbid(pairs, CASE_KEYS.iter().filter(|key| !shared.contains(key)))?;
         }
         match kind {
             EventKind::AllowanceMeasured => {
@@ -382,18 +392,38 @@ impl Body {
         })
     }
 
-    /// run 無しの裁定の行の本体（設計 §9）: `detail`（user の逐語）が**必須**・`bead` と `rule` は任意（在って文字列でなければ
+    /// run 無しの裁定の行の本体（設計 §9・§14）: `detail`（user の逐語）が**必須**・`bead` と `rule` は任意（在って文字列でなければ
     /// malformed）。`run` / `stage` / `seat` / `pid`（`seat` が在ると replay が幽霊の席を作る）・口座残量・登録・列の印の key は
-    /// **持たない**（在れば malformed）。
+    /// **持たない**（在れば malformed）。結びの 5 key（[`BOUND_KEYS`]）を 1 つでも持つ行は新しい形で、`rule` と併せ持てず
+    /// （key を名指して malformed）、`ruling` / `utterance` / `channel` / `question_ts` と `bead`（問い id）が必須。
     fn ruling(pairs: &[(String, Value)]) -> Result<Self, String> {
         let foreign = ["run", "stage", "seat", "pid"];
         forbid(pairs, foreign.iter().chain(ALLOWANCE_KEYS).chain(REGISTRATION_KEYS).chain(MARK_KEYS))?;
         text_of(field(pairs, "detail"), "detail")?;
-        Ok(Self {
-            bead: optional_text(field(pairs, "bead"), "bead")?.unwrap_or_default(),
-            rule: optional_text(field(pairs, "rule"), "rule")?,
-            ..Self::default()
-        })
+        let bead = optional_text(field(pairs, "bead"), "bead")?.unwrap_or_default();
+        let Some(bound) = BOUND_KEYS.iter().find(|key| field(pairs, key).is_some()) else {
+            return Ok(Self { bead, rule: optional_text(field(pairs, "rule"), "rule")?, ..Self::default() });
+        };
+        if field(pairs, "rule").is_some() {
+            return Err(format!("rule と {bound} を併せ持つ（結びの行は rule を持たない）"));
+        }
+        if bead.is_empty() {
+            return Err("結びの行に bead（問い id）が無い".to_owned());
+        }
+        let channel = word_of(pairs, "channel")?;
+        let channel = Channel::parse(&channel).ok_or(format!("channel {channel} は chat / gui でない"))?;
+        let asked = optional_word(pairs, "asked")?;
+        if let Some(found) = asked.as_deref().filter(|found| !ASKED.contains(found)) {
+            return Err(format!("asked {found} は {} のどちらでもない", ASKED.join(" / ")));
+        }
+        let case = Case::Ruling {
+            ruling: word_of(pairs, "ruling")?,
+            utterance: word_of(pairs, "utterance")?,
+            channel,
+            question_ts: word_of(pairs, "question_ts")?,
+            asked,
+        };
+        Ok(Self { bead, case: Some(case), ..Self::default() })
     }
 
     /// 群の逼迫の通知の行の本体（設計 account-lifecycle.md §19 形 3）: `account`（口座 label）と `detail`（[`Pressure`] の
@@ -664,5 +694,80 @@ fn optional_stage(value: Option<&Value>) -> Result<Option<Stage>, String> {
         Some(text) => Stage::parse(&text)
             .map(Some)
             .ok_or(format!("stage {text} は未知である")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Event, BOUND_KEYS};
+    use crate::fleet::{Case, Channel, EventKind};
+
+    /// 裁定の行の頭（kind と actor と host は固定・detail は逐語）。`extra` は本体の key の列（`,` で始める）。
+    fn line(extra: &str) -> String {
+        format!(r#"{{"schema":1,"ts":"2026-09-30T07:06:00Z","kind":"RulingReceived"{extra},"host":"h","actor":"human","detail":"推奨で"}}"#)
+    }
+
+    /// 結びの形の本体（5 key）。
+    const BOUND: &str = r#","bead":"s2-q1","ruling":"s2-q1:20260930T0705Z-1","utterance":"2026-09-30T07:05:09.123Z","channel":"chat","question_ts":"2026-09-30T06:00:00Z","asked":"seat""#;
+
+    /// 新しい形の行は 5 key を `Case::Ruling` として読み、書き戻すと同じ行になる（asked の無い形は asked の key ごと書かない）。
+    #[test]
+    fn fleet_ruling_body_bound_line_round_trips() {
+        let text = line(BOUND);
+        let event = Event::from_line(&text).unwrap_or_else(|err| panic!("新しい形を読める: {err}"));
+        let case = Case::Ruling {
+            ruling: "s2-q1:20260930T0705Z-1".to_owned(),
+            utterance: "2026-09-30T07:05:09.123Z".to_owned(),
+            channel: Channel::Chat,
+            question_ts: "2026-09-30T06:00:00Z".to_owned(),
+            asked: Some("seat".to_owned()),
+        };
+        assert_eq!((event.kind, event.bead.as_str(), event.rule.as_ref()), (EventKind::RulingReceived, "s2-q1", None));
+        assert_eq!(event.case, Some(case), "本体");
+        assert_eq!(event.to_line(), text, "書き戻すと同じ行（key の並びは ruling・utterance・channel・question_ts・asked）");
+        let without = line(&BOUND.replace(r#","asked":"seat""#, ""));
+        let plain = Event::from_line(&without).unwrap_or_else(|err| panic!("asked の無い形を読める: {err}"));
+        assert!(matches!(&plain.case, Some(Case::Ruling { asked: None, .. })), "asked は None: {:?}", plain.case);
+        assert_eq!(plain.to_line(), without, "asked の key を書かない");
+    }
+
+    /// `rule` との併せ持ちは key を名指して malformed（5 key のどれと併せても）。結びの行に bead（問い id）が無い・必須の key が欠ける・
+    /// channel か asked が閉じた値の外・結びの key が別の kind の行に在る周も malformed。
+    #[test]
+    fn fleet_ruling_body_refuses_rule_alongside_bound_keys_and_malformed_bound_lines() {
+        for key in BOUND_KEYS {
+            let text = line(&format!(r#","bead":"s2-q1","rule":"R-C9-1","{key}":"x""#));
+            let err = Event::from_line(&text).expect_err("rule と併せ持つ行は読めない");
+            assert!(err.contains("rule") && err.contains(key), "{key}: key を名指す: {err}");
+        }
+        assert!(Event::from_line(&line(&format!(r#"{BOUND},"rule":"R-C9-1""#))).is_err(), "5 key と rule");
+        let broken = [
+            BOUND.replace(r#""bead":"s2-q1","#, ""),
+            BOUND.replace(r#","question_ts":"2026-09-30T06:00:00Z""#, ""),
+            BOUND.replace(r#""ruling":"s2-q1:20260930T0705Z-1","#, ""),
+            BOUND.replace(r#""channel":"chat""#, r#""channel":"phone""#),
+            BOUND.replace(r#""asked":"seat""#, r#""asked":"nobody""#),
+            BOUND.replace(r#""asked":"seat""#, r#""asked":"""#),
+        ];
+        for extra in broken {
+            assert!(Event::from_line(&line(&extra)).is_err(), "読めない形: {extra}");
+        }
+        for key in ["ruling", "question_ts", "asked"] {
+            let text = format!(r#"{{"schema":1,"ts":"t","kind":"UtteranceReceived","channel":"gui","{key}":"x","host":"h","actor":"human","detail":"d"}}"#);
+            let err = Event::from_line(&text).expect_err("結びの key は裁定の kind だけ");
+            assert!(err.contains(key), "{key}: {err}");
+        }
+    }
+
+    /// `rule` だけの古い行は今までどおり読め（本体は無い）、書き戻すと同じ行になる。
+    #[test]
+    fn fleet_ruling_body_reads_the_old_rule_only_line() {
+        let text = line(r#","bead":"s2-x.1","rule":"R-C9-1""#);
+        let event = Event::from_line(&text).unwrap_or_else(|err| panic!("古い形を読める: {err}"));
+        assert_eq!((event.rule.as_deref(), event.bead.as_str()), (Some("R-C9-1"), "s2-x.1"));
+        assert_eq!(event.case, None, "本体は無い");
+        assert_eq!(event.to_line(), text, "書き戻すと同じ行");
+        let bare = Event::from_line(&line("")).unwrap_or_else(|err| panic!("rule も bead も無い古い行を読める: {err}"));
+        assert_eq!((bare.rule, bare.case, bare.bead.as_str()), (None, None, ""));
     }
 }

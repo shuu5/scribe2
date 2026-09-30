@@ -363,7 +363,7 @@ fn seat_args_unknown_flag_is_refused_with_rc_2_on_every_verb() {
     let verbs: [Vec<&str>; 3] = [
         vec!["register", "--state-dir", &path, "--target", "s:w", "--role", "orchestrator", "--account", "a1", "--launch", &launch],
         vec!["launch", "--state-dir", &path, "--role", "orchestrator", "--target", "s:w", "--account", "a1", "--tmux-socket", &socket],
-        vec!["ruling", "add", "--state-dir", &path, "--target", "s:w", "--words", "w"],
+        vec!["ruling", "bind", "--repo", &path, "--state-dir", &path, "--question", "s2-q", "--utterance", "2026-09-30T00:00:00.000Z"],
     ];
     for verb in verbs {
         let mut args = verb.clone();

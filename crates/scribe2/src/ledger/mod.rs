@@ -1,8 +1,9 @@
 //! 台帳 adapter（設計 docs/design/contract-source.md §6・FR50）。
 //!
-//! **書きは `close` の 1 種だけ**である——起票・acceptance の編集・裁定の記帳は席の手番で、器が持つのは
-//! 「着地した便の bead を閉じる」1 つに限る（憲法 C15: 台帳が持つのは task と裁定だけ）。読みは席の側
-//! （[`crate::seat::ledger`]）に在るものをそのまま使い、2 本目の reader を作らない（C2）。
+//! **書きは `close` と `append_notes` の 2 種だけ**である——起票・acceptance の編集は席の手番で、器が持つのは
+//! 「着地した便の bead を閉じる」ことと、裁定の結び（`seat ruling bind`）が notes へ 1 行足すことに限る（憲法 C15:
+//! 台帳が持つのは task と裁定だけ）。一覧の読みは席の側（[`crate::seat::ledger`]）に在るものをそのまま使い、
+//! 2 本目の reader を作らない（C2）。bead 1 本の読み（`show`）だけは結びが撃つ。
 //!
 //! client の binary の名は既定の const（PATH 解決は子 process の起動側・**env も HOME も読まない**・C2.2）。
 //!
@@ -21,8 +22,10 @@ pub mod question;
 pub mod trigger;
 
 use crate::cli_outcome::{Outcome, RC_REFUSED};
+use crate::fleet::json_tree::{self, Tree};
 use crate::invocation::Invocation;
 use crate::polarity::{OnFailure, Polarity, Timing};
+use crate::seat::ledger::LedgerError;
 use std::path::Path;
 
 /// `ledger` に続く引数を捌く（verb は `memo` の 1 つ）。
@@ -79,6 +82,15 @@ const CLOSE: &str = "close";
 /// 理由を渡す flag。
 const REASON: &str = "--reason";
 
+/// `bd update <bead> --append-notes <line>` の subcommand と flag（notes の追記・裁定の結びだけが撃つ）。
+const UPDATE: &str = "update";
+const APPEND_NOTES: &str = "--append-notes";
+
+/// `bd --readonly show <bead> --json`（bead 1 本の読み）。
+const READONLY: &str = "--readonly";
+const SHOW: &str = "show";
+const JSON: &str = "--json";
+
 /// bead を閉じる（設計 §6・FR50）。
 ///
 /// 着地した便の終端だけが撃つ。**冪等である**ことは台帳の側が持つ（既に closed の bead を閉じ直した
@@ -87,11 +99,18 @@ const REASON: &str = "--reason";
 /// **cwd は `repo` に固定する**（読みの口 `spawn_read` と同じ形・設計 pipeline.md 行 ap）: client は台帳を cwd から
 /// 上へ探すので、運転手の cwd（消えた dir でも）を継ぐと同じ repo でも台帳を解けない周が出る。
 pub fn close(bd: &str, repo: &Path, bead: &str, reason: &str) -> Result<(), CloseError> {
-    let out = Invocation::new(bd)
-        .args([CLOSE, bead, REASON, reason])
-        .current_dir(repo)
-        .output()
-        .map_err(|_| CloseError::Unlaunchable)?;
+    write(bd, repo, [CLOSE, bead, REASON, reason])
+}
+
+/// `bd update <bead> --append-notes <line>`（notes の追記・**裁定の結びだけが撃つ**・設計 fleet-event-log.md §14 約束 5）。
+/// cwd と失敗の型は [`close`] と同じ 1 本（[`write`]）。
+pub fn append_notes(bd: &str, repo: &Path, bead: &str, line: &str) -> Result<(), CloseError> {
+    write(bd, repo, [UPDATE, bead, APPEND_NOTES, line])
+}
+
+/// 書きの 1 撃ち（cwd は `repo`・rc 0 だけが成功・失敗は stderr の末尾 1 行を運ぶ）。
+fn write(bd: &str, repo: &Path, args: [&str; 4]) -> Result<(), CloseError> {
+    let out = Invocation::new(bd).args(args).current_dir(repo).output().map_err(|_| CloseError::Unlaunchable)?;
     if out.status.success() {
         return Ok(());
     }
@@ -99,6 +118,60 @@ pub fn close(bd: &str, repo: &Path, bead: &str, reason: &str) -> Result<(), Clos
     Err(CloseError::Refused {
         rc: out.status.code(),
         tail: text.lines().next_back().unwrap_or_default().trim().to_owned(),
+    })
+}
+
+/// `bd --readonly show <bead> --json` の読み（bead 1 本・[`show`] が返す key だけ）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Bead {
+    /// status の字面。
+    pub status: String,
+    /// label の列（無ければ空）。
+    pub labels: Vec<String>,
+    /// 起票の時刻（`created_at` の字のまま）。
+    pub created_at: String,
+    /// metadata の asked（無い・閉じた 2 値の外なら `None`）。
+    pub asked: Option<String>,
+    /// notes（無ければ空）。
+    pub notes: String,
+}
+
+/// bead 1 本を読む（読みだけ・cwd は `repo`）。要素が 0 件の配列は `Ok(None)`（bead が無い）で、起動できない・rc ≠ 0・JSON を読めない・
+/// `status` か `created_at` の文字列が無い周は `Err(Unreadable)`（読めなさを「無い」に倒さない・[`crate::seat::ledger::POLARITY`]）。
+pub fn show(bd: &str, repo: &Path, bead: &str) -> Result<Option<Bead>, LedgerError> {
+    let out = Invocation::new(bd)
+        .args([READONLY, SHOW, bead, JSON])
+        .current_dir(repo)
+        .output()
+        .map_err(|_| LedgerError::Unreadable)?;
+    if !out.status.success() {
+        return Err(LedgerError::Unreadable);
+    }
+    let tree = json_tree::parse(&String::from_utf8_lossy(&out.stdout)).map_err(|_| LedgerError::Unreadable)?;
+    let node = match &tree {
+        Tree::Array(items) => match items.first() {
+            Some(first) => first,
+            None => return Ok(None),
+        },
+        other => other,
+    };
+    bead_of(node).map(Some).ok_or(LedgerError::Unreadable)
+}
+
+/// bead 1 本の JSON から [`Bead`] を読む（`status` と `created_at` の文字列が無ければ `None`）。
+fn bead_of(node: &Tree) -> Option<Bead> {
+    let text_of = |key: &str| node.get(key).and_then(Tree::as_str).map(str::to_owned);
+    Some(Bead {
+        status: text_of("status")?,
+        labels: node.get("labels").and_then(Tree::as_array).unwrap_or_default().iter().filter_map(Tree::as_str).map(str::to_owned).collect(),
+        created_at: text_of("created_at")?,
+        asked: node
+            .get("metadata")
+            .and_then(|metadata| metadata.get(question::ASKED_KEY))
+            .and_then(Tree::as_str)
+            .filter(|found| question::ASKED.contains(found))
+            .map(str::to_owned),
+        notes: text_of("notes").unwrap_or_default(),
     })
 }
 

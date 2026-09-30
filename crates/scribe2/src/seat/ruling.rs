@@ -1,113 +1,213 @@
-//! run 無しの user 裁定を承認 event として持つ口（設計 docs/design/fleet-event-log.md §9・ADR-0037・SRS FR41 / FR22・憲法 C7.2）。
+//! run 無しの user 裁定を承認 event として持つ口（設計 docs/design/fleet-event-log.md §9 / §14・ADR-0037・ADR-0087・SRS FR41 /
+//! FR22 / FR89・憲法 C7.2）。
 //!
-//! 書き手は `seat ruling add` の 1 本だけで、対話面の席（登録 row の役割が rules 行 [`ID_DIALOGUE_SURFACE`] の値の席）
-//! からの逐語を [`EventKind::RulingReceived`]（actor = `human`・`run` 無し）として 1 件書く。ts は器が打ち、それが**裁定 id**
-//! になる。読み手は `seat ruling ls`（1 件 1 行）と doctor の突合の 1 行（[`doctor_lines`]・manifest の `user <ts>` の行ごとに
+//! 書き手は `seat ruling bind` の 1 本だけで、記帳された発話（[`EventKind::UtteranceReceived`]）と開いた台帳の問いを結び、
+//! 裁定 id を発行して notes に 5 欄の行を書き、`裁定 <id>` で close し、[`EventKind::RulingReceived`]（actor = `human`・
+//! `run` 無し・本体は [`Case::Ruling`]）を 1 件書く（[`bind`]）。逐語は発話 event から写す（席が逐語を渡す口は無い・ADR-0087）。
+//! 読み手は `seat ruling ls`（1 件 1 行）と doctor の突合の 1 行（[`doctor_lines`]・manifest の `user <ts>` の行ごとに
 //! 同じ分の event の有無を数えるだけ・判定しない＝C10.2）。
 
-use super::role::role_of_target;
-use super::RuleRead;
+use crate::fleet::json_lite;
 use crate::fleet::store::{self, LockPolicy};
-use crate::fleet::{cli, replay, Event, EventKind, State, ACTOR_HUMAN, SCHEMA};
+use crate::fleet::{cli, Case, Channel, Event, EventKind, ACTOR_HUMAN, SCHEMA};
+use crate::ledger::close_reason::is_ruling_id;
+use crate::ledger::form::QUESTION_LABEL;
+use crate::ledger::{self, Bead};
 use crate::rules::manifest::Manifest;
-use crate::rules::RuleValue;
 use std::collections::BTreeSet;
 use std::path::Path;
 
-/// 対話面の役割を宣言する rules 行の id（kind `DialogueSurface`・値は役割の名・ADR-0022 §2.2）。
-pub const ID_DIALOGUE_SURFACE: &str = "R-C7-1";
+/// 結びを断る理由（**閉じた 4 語**・判定の順・断る周は何も書かない・設計 §14 約束 2）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    /// その ts の発話が記帳されていない。
+    NoUtterance,
+    /// 同じ発話と同じ問いの組の裁定が在る。
+    Bound,
+    /// 問いの status が open でない。
+    Closed,
+    /// bead が無い、または label が問いでない。
+    NotQuestion,
+}
 
-/// 裁定を書かずに断る理由（閉じた enum・断る周は event を 1 byte も書かない）。
+/// [`Refusal`] の全 variant（判定の順・`enum-slices` が集合完全性を測る）。
+pub const REFUSALS: &[Refusal] = &[Refusal::NoUtterance, Refusal::Bound, Refusal::Closed, Refusal::NotQuestion];
+
+impl Refusal {
+    /// 行に出す理由の 1 語。
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::NoUtterance => "no-utterance",
+            Self::Bound => "bound",
+            Self::Closed => "closed",
+            Self::NotQuestion => "not-question",
+        }
+    }
+}
+
+/// 書きが途中で止まった段（設計 §14 約束 8・止まった後の撃ち直しが仕上げる）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stage {
+    /// notes は書いた・close が落ちた。
+    Close,
+    /// notes と close は済んだ・裁定 event が落ちた。
+    Event,
+}
+
+impl Stage {
+    /// 行に出す段の 1 語。
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Close => "close",
+            Self::Event => "event",
+        }
+    }
+}
+
+/// 結びが通らなかった形（rc と行は呼び手が決める）。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RulingRefusal {
-    /// 逐語が空（空白だけも空）＝聞いた形だけが残る記録を作らない（`pipe approve` の `record_words` と同じ型）。
-    EmptyWords,
-    /// target の登録 row の役割が対話面の行の値でない・row が無い・log か行を読めない（FailClosed）。
-    NotDialogueSurface,
-    /// event log へ書けない（理由の本文）。
-    Store(String),
+pub enum BindError {
+    /// 閉じた 4 語の断り（何も書いていない）。
+    Refused(Refusal),
+    /// 台帳の bead を読めない（何も書いていない）。
+    LedgerUnreadable,
+    /// event log を読めない（何も書いていない・理由の本文）。
+    LogUnreadable(Vec<String>),
+    /// notes の追記が落ちた（何も書いていない）。
+    NotesFailed,
+    /// 書きが途中で止まった（止まった段と裁定 id）。
+    Partial { stage: Stage, id: String },
 }
 
-impl RulingRefusal {
-    /// 行に出す字面（store の断りは理由の本文を添える）。
-    pub fn render(&self, target: &str) -> String {
-        let reason = match self {
-            Self::EmptyWords => "empty-words".to_owned(),
-            Self::NotDialogueSurface => "not-dialogue-surface".to_owned(),
-            Self::Store(text) => format!("store detail={text}"),
-        };
-        format!("seat ruling: refused reason={reason} target={target}")
+/// 結びの入力（`seat ruling bind` の引数）。
+pub struct Bind<'a> {
+    /// 台帳を撃つ repo（bd の cwd）。
+    pub repo: &'a Path,
+    /// event log の置き場。
+    pub state_dir: &'a Path,
+    /// 問いの bead id。
+    pub question: &'a str,
+    /// 発話の ts（[`EventKind::UtteranceReceived`] の ts の字面）。
+    pub utterance: &'a str,
+    /// 台帳 client。
+    pub bd: &'a str,
+}
+
+/// 結べた裁定（stdout の 1 行の材料）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Bound {
+    /// 裁定 id。
+    pub id: String,
+    /// 発話の経路。
+    pub channel: Channel,
+}
+
+/// 問いの status（open の間だけ新しく結べる）。
+const OPEN: &str = "open";
+
+/// 裁定 id の末尾の番号（1 問 1 裁定なので常に 1）。
+const COUNT: u32 = 1;
+
+/// 裁定 id `<問い id>:<発話の年月日と時分 YYYYMMDDTHHMMZ>-1`（pure）。発話の時刻から作るので、撃ち直しても同じ id になる。
+/// ts の形が読めない・問い id が同じ台帳の bead id の形でない周は `None`（[`is_ruling_id`] が真の字だけを返す）。
+pub fn ruling_id(question: &str, utterance: &str) -> Option<String> {
+    let part = |range: std::ops::Range<usize>| utterance.get(range).filter(|found| found.bytes().all(|byte| byte.is_ascii_digit()));
+    let (year, month, day, hour, minute) = (part(0..4)?, part(5..7)?, part(8..10)?, part(11..13)?, part(14..16)?);
+    let id = format!("{question}:{year}{month}{day}T{hour}{minute}Z-{COUNT}");
+    let prefix = question.split_once('-')?.0;
+    is_ruling_id(&id, Some(prefix)).then_some(id)
+}
+
+/// notes に足す裁定の 1 行 `<裁定 id> | <問い id> | <発話の ts> | <経路> | <逐語>`（pure）。逐語は JSON の文字列の字面で最後の欄に置く
+/// ＝改行を含んでも 1 行で、戻すと 1 byte も違わない。
+fn row_of(id: &str, question: &str, utterance: &str, channel: Channel, words: &str) -> String {
+    format!("{id} | {question} | {utterance} | {} | {}", channel.as_str(), json_lite::quote(words))
+}
+
+/// 記帳された発話と開いた台帳の問いを結ぶ（設計 §14）。断りは (a) 発話が無い (b) 結び済み (c) 閉じた問い (d) 問いでない の順で、
+/// 台帳は (b) の後に 1 回だけ読む。書きは notes → close → 裁定 event の順（途中で止まった周は [`BindError::Partial`]・同じ組の
+/// 撃ち直しが続きだけを書く）。
+pub fn bind(args: &Bind<'_>) -> Result<Bound, BindError> {
+    let events =
+        store::read_all(args.state_dir).map_err(|errors| BindError::LogUnreadable(errors.iter().map(ToString::to_string).collect()))?;
+    let said = events.iter().find(|event| event.kind == EventKind::UtteranceReceived && event.ts == args.utterance);
+    let Some((said, Some(Case::Utterance { channel, .. }))) = said.map(|event| (event, event.case.clone())) else {
+        return Err(BindError::Refused(Refusal::NoUtterance));
+    };
+    let bound = events.iter().any(|event| {
+        event.kind == EventKind::RulingReceived
+            && event.bead == args.question
+            && matches!(&event.case, Some(Case::Ruling { utterance, .. }) if utterance == args.utterance)
+    });
+    if bound {
+        return Err(BindError::Refused(Refusal::Bound));
     }
-}
-
-/// target が対話面の席か（pure）: 登録 row の役割（[`role_of_target`]・役割の解決の 1 本）が、発効した行
-/// [`ID_DIALOGUE_SURFACE`] の値と一致する周だけ `Ok`。row が無い・行が無い / 不発効 / 文字列でない・manifest を読めない周は
-/// [`RulingRefusal::NotDialogueSurface`]（読めなさを「対話面」に倒さない）。
-pub fn surface_check(state: &State, target: &str, manifest: &Result<Manifest, RuleRead>) -> Result<(), RulingRefusal> {
-    let role = role_of_target(state, target).ok_or(RulingRefusal::NotDialogueSurface)?;
-    let row = manifest.as_ref().ok().and_then(|found| found.get(ID_DIALOGUE_SURFACE)).filter(|row| row.enabled);
-    match row.map(|found| &found.value) {
-        Some(RuleValue::Str(name)) if name == role.as_str() => Ok(()),
-        _ => Err(RulingRefusal::NotDialogueSurface),
+    let bead = ledger::show(args.bd, args.repo, args.question).map_err(|_| BindError::LedgerUnreadable)?;
+    let not_question = BindError::Refused(Refusal::NotQuestion);
+    let (Some(bead), Some(id)) = (bead, ruling_id(args.question, &said.ts)) else {
+        return Err(not_question);
+    };
+    let words = said.detail.clone().unwrap_or_default();
+    let row = row_of(&id, args.question, &said.ts, channel, &words);
+    let written = bead.notes.lines().any(|line| line == row);
+    if bead.status != OPEN && !written {
+        return Err(BindError::Refused(Refusal::Closed));
     }
-}
-
-/// 裁定 1 件の材料（`seat ruling add` の引数）。
-pub struct Draft<'a> {
-    /// 対話面の席の target（`session:window`）。
-    pub target: &'a str,
-    /// user の逐語（要約しない・言い換えた時点で裁定ではなくなる）。
-    pub words: &'a str,
-    /// 裁定が指す契約の bead id（任意）。
-    pub bead: Option<&'a str>,
-    /// 裁定が指す rules 行の id（任意）。
-    pub rule: Option<&'a str>,
-}
-
-/// 裁定を 1 件書く（設計 §9 (2)）。**逐語を先に測り**、次に対話面の席かを測る（断る周は event を書かない）。manifest は
-/// 埋め込み（tracked）の 1 本（席の口は `--rules` を受けない）。書いた event を返す（ts が裁定 id）。
-pub fn add(state_dir: &Path, draft: &Draft<'_>) -> Result<Event, RulingRefusal> {
-    if draft.words.trim().is_empty() {
-        return Err(RulingRefusal::EmptyWords);
+    if bead.status == OPEN && !bead.labels.iter().any(|label| label == QUESTION_LABEL) {
+        return Err(not_question);
     }
-    let state = store::read_all(state_dir).map(|events| replay(&events)).map_err(|_| RulingRefusal::NotDialogueSurface)?;
-    surface_check(&state, draft.target, &super::embedded_manifest())?;
-    let event = Event {
+    let partial = |stage| BindError::Partial { stage, id: id.clone() };
+    if bead.status == OPEN {
+        if !written {
+            ledger::append_notes(args.bd, args.repo, args.question, &row).map_err(|_| BindError::NotesFailed)?;
+        }
+        ledger::close(args.bd, args.repo, args.question, &format!("裁定 {id}")).map_err(|_| partial(Stage::Close))?;
+    }
+    let event = ruling_event(args, &bead, &id, channel, words);
+    let policy = LockPolicy::embedded().map_err(|_| partial(Stage::Event))?;
+    store::append(args.state_dir, &event, policy).map_err(|_| partial(Stage::Event))?;
+    Ok(Bound { id, channel })
+}
+
+/// 結んだ裁定の event（actor human・bead は問い id・detail は発話の逐語・本体は [`Case::Ruling`]）。
+fn ruling_event(args: &Bind<'_>, bead: &Bead, id: &str, channel: Channel, words: String) -> Event {
+    Event {
         schema: SCHEMA,
         ts: cli::now_utc(),
         kind: EventKind::RulingReceived,
         run: String::new(),
-        bead: draft.bead.unwrap_or_default().to_owned(),
+        bead: args.question.to_owned(),
         host: cli::host(),
         actor: ACTOR_HUMAN.to_owned(),
         stage: None,
         seat: None,
         pid: None,
-        detail: Some(draft.words.to_owned()),
+        detail: Some(words),
         allowance: None,
         registration: None,
         mark: None,
         account: None,
         cost: None,
-        rule: draft.rule.map(str::to_owned),
-        case: None,
-    };
-    let store_err = |err: store::StoreError| RulingRefusal::Store(err.to_string());
-    store::append(state_dir, &event, LockPolicy::embedded().map_err(store_err)?).map_err(store_err)?;
-    Ok(event)
+        rule: None,
+        case: Some(Case::Ruling {
+            ruling: id.to_owned(),
+            utterance: args.utterance.to_owned(),
+            channel,
+            question_ts: bead.created_at.clone(),
+            asked: bead.asked.clone(),
+        }),
+    }
 }
 
 /// 裁定 1 件の 1 行（pure・`ruling: ts=<ts> bead=<b> rule=<id> words=<逐語>`）。無い欄は `-`、逐語は改行や `"` を含んでも 1 行に
-/// 収まるよう引用符つきで escape する（中身は逐語のまま・要約しない）。
+/// 収まるよう引用符つきで escape する（中身は逐語のまま・要約しない）。結びの形の行は `rule=` の代わりに `ruling=<裁定 id>` を出す。
 pub fn render(event: &Event) -> String {
     let or_dash = |text: &str| if text.is_empty() { "-".to_owned() } else { text.to_owned() };
-    format!(
-        "ruling: ts={} bead={} rule={} words={:?}",
-        event.ts,
-        or_dash(&event.bead),
-        or_dash(event.rule.as_deref().unwrap_or_default()),
-        event.detail.as_deref().unwrap_or_default()
-    )
+    let key = match &event.case {
+        Some(Case::Ruling { ruling, .. }) => format!("ruling={ruling}"),
+        _ => format!("rule={}", or_dash(event.rule.as_deref().unwrap_or_default())),
+    };
+    format!("ruling: ts={} bead={} {key} words={:?}", event.ts, or_dash(&event.bead), event.detail.as_deref().unwrap_or_default())
 }
 
 /// log の裁定の一覧（物理順・1 件 1 行）。読めない log は `Err`（0 件に潰さない）。
@@ -214,11 +314,10 @@ pub fn doctor_lines(state_dir: &Path, rules: Option<&str>) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ruling_minute, surface_check, RulingRefusal, Tally};
-    use crate::fleet::{Event, EventKind, Registration, State, ACTOR_HUMAN, SCHEMA};
+    use super::{ruling_id, ruling_minute, Tally};
+    use crate::fleet::{Event, EventKind, ACTOR_HUMAN, SCHEMA};
+    use crate::ledger::close_reason::is_ruling_id;
     use crate::rules::manifest::Manifest;
-    use crate::seat::role::Role;
-    use crate::seat::RuleRead;
 
     /// `[[rule]]` の行の本文（id・ruling・発効）。
     fn row(id: &str, kind: &str, value: &str, enabled: bool, ruling: &str) -> String {
@@ -231,40 +330,6 @@ mod tests {
             Ok(found) => found,
             Err(errors) => panic!("fixture の manifest を読める: {errors:?}"),
         }
-    }
-
-    /// target `s:w` に登録 row を 1 件持つ state。
-    fn registered() -> State {
-        let registration = Registration {
-            role: Role::Orchestrator,
-            anchor: "/repo".to_owned(),
-            target: "s:w".to_owned(),
-            sid: None,
-            account: "a".to_owned(),
-            launch: "l".to_owned(),
-            model: None,
-        };
-        let event = Event {
-            schema: SCHEMA,
-            ts: "2026-09-22T00:00:00Z".to_owned(),
-            kind: EventKind::SeatRegistered,
-            run: String::new(),
-            bead: String::new(),
-            host: "h".to_owned(),
-            actor: "machine".to_owned(),
-            stage: None,
-            seat: None,
-            pid: None,
-            detail: None,
-            allowance: None,
-            registration: Some(registration),
-            mark: None,
-            account: None,
-            cost: None,
-            rule: None,
-            case: None,
-        };
-        crate::fleet::replay(&[event])
     }
 
     /// 裁定 1 件（ts だけを選ぶ）。
@@ -291,20 +356,29 @@ mod tests {
         }
     }
 
-    /// 対話面の判定（pure）: 行の値と登録 row の役割が一致する周だけ `Ok`。row が無い target・行が無い / 不発効・manifest を
-    /// 読めない周はどれも `NotDialogueSurface`（FailClosed・読めなさを対話面に倒さない）。
+    /// 裁定 id（pure）: 問い id と発話の ts（秒とミリ秒を持つ字）から `<問い id>:<YYYYMMDDTHHMMZ>-1` を作り、秒とミリ秒は id に効かない
+    /// （同じ分の発話は同じ id）・同じ入力で同じ字を返し・`is_ruling_id` に台帳の接頭辞を渡すと真になる。
     #[test]
-    fn fleet_ruling_surface_check_is_fail_closed_on_every_unreadable_or_foreign_case() {
-        let state = registered();
-        let on = Ok(manifest(&row("R-C7-1", "DialogueSurface", "\"orchestrator\"", true, "r")));
-        assert_eq!(surface_check(&state, "s:w", &on), Ok(()), "対話面の役割の row");
-        let refused = Err(RulingRefusal::NotDialogueSurface);
-        assert_eq!(surface_check(&state, "other:w", &on), refused, "row の無い target");
-        assert_eq!(surface_check(&State::default(), "s:w", &on), refused, "登録の無い log");
-        let off = Ok(manifest(&row("R-C7-1", "DialogueSurface", "\"orchestrator\"", false, "r")));
-        assert_eq!(surface_check(&state, "s:w", &off), refused, "不発効の行");
-        assert_eq!(surface_check(&state, "s:w", &Ok(manifest(""))), refused, "行が無い");
-        assert_eq!(surface_check(&state, "s:w", &Err(RuleRead::ManifestUnreadable)), refused, "manifest を読めない");
+    fn seat_ruling_id_is_minute_precise_deterministic_and_a_ruling_id() {
+        let id = ruling_id("s2-q1.2", "2026-09-30T07:05:09.123Z");
+        assert_eq!(id.as_deref(), Some("s2-q1.2:20260930T0705Z-1"), "問い id・発話の時分・-1");
+        assert_eq!(ruling_id("s2-q1.2", "2026-09-30T07:05:09.123Z"), id, "同じ入力で同じ id");
+        assert_eq!(ruling_id("s2-q1.2", "2026-09-30T07:05:59.999Z"), id, "秒とミリ秒は効かない");
+        assert_ne!(ruling_id("s2-q1.2", "2026-09-30T07:06:00.000Z"), id, "分が違えば id も違う");
+        assert_ne!(ruling_id("s2-q1.3", "2026-09-30T07:05:09.123Z"), id, "問い id が違えば id も違う");
+        assert!(is_ruling_id(id.as_deref().unwrap_or_default(), Some("s2")), "台帳の接頭辞を渡すと裁定 id の形");
+        assert_eq!(ruling_id("s2-q1", "2026-09-30T07:05:09Z").as_deref(), Some("s2-q1:20260930T0705Z-1"), "秒までの字面も読む");
+    }
+
+    /// 読めない入力は id を作らない（黙って別の字を作らない）: 形の崩れた ts・存在しない日時・接頭辞の無い問い id。
+    #[test]
+    fn seat_ruling_id_refuses_unreadable_input() {
+        for utterance in ["", "2026-09-30", "2026-09-30T07", "2026-9-30T07:05:09Z", "2026-13-30T07:05:09Z", "2026-09-30T25:05:09Z", "xxxx-xx-xxTxx:xxZ"] {
+            assert_eq!(ruling_id("s2-q1", utterance), None, "{utterance:?}");
+        }
+        for question in ["", "q1", "s2-", "s2-a b", "-q1"] {
+            assert_eq!(ruling_id(question, "2026-09-30T07:05:09.123Z"), None, "{question:?}");
+        }
     }
 
     /// `ruling` 欄の読み（pure）: `user <分>Z` は分、`user ` で始まるが分まで読めない形は `Some(None)`（skipped）、`user ` で

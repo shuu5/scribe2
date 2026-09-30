@@ -22,7 +22,7 @@ pub const ASKED: [&str; 2] = ["seat", "user"];
 const EFFECT: &str = "effect";
 
 /// metadata の key（誰のきっかけの問いか）。
-const ASKED_KEY: &str = "asked";
+pub(crate) const ASKED_KEY: &str = "asked";
 
 /// 次の一手に置く metadata の字。
 const METADATA_HINT: &str = "--metadata '{\"effect\":\"document\",\"asked\":\"seat\"}'";

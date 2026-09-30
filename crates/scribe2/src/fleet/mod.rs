@@ -73,7 +73,8 @@ pub enum EventKind {
     RunCost,
     /// run 無しの user 裁定を受け取った（設計 fleet-event-log.md §9・ADR-0037・[`Shape::Ruling`]）。actor は `human`・`detail` =
     /// user の逐語・`bead` と `rule`（rules 行の id）は任意・**便に紐づかない**（replay は便を作らない）。書き手は
-    /// `seat ruling add` だけ（`fleet record` は断る）。
+    /// `seat ruling bind` だけ（`fleet record` は断る・結びの行は [`Case::Ruling`] の 5 key を持ち `rule` と併せ持たない・
+    /// 設計 §14）。`rule` だけを持つ古い行は今までどおり読める。
     RulingReceived,
     /// 群の逼迫を群の置き場の席へ知らせた（設計 account-lifecycle.md §19 形 3・[`Shape::Pressure`]）。`account` = 逼迫の
     /// 口座 label・本体は [`Pressure`]（`detail` の 1 行）。**便に紐づかない**。同じ群・口座・窓の 2 度目の通知を
@@ -276,7 +277,7 @@ pub enum Shape {
     /// `run` + `bead` + 消費の本体 [`Cost`]（便に紐づくが段を持たない＝replay は便を作らない・設計 gate-cost.md §26 形 (2)）。
     Cost,
     /// run 無しの裁定（`detail` = 逐語が必須・`bead` と `rule` は任意・`run` / `stage` / `seat` / `pid` を持たない・設計
-    /// fleet-event-log.md §9）。
+    /// fleet-event-log.md §9・結びの形は本体 [`Case::Ruling`] を持ち `rule` と併せ持たない §14）。
     Ruling,
     /// 群の逼迫の通知（`account` = 口座 label と `detail` = [`Pressure`] の 1 行が必須・`run` / `bead` / `stage` / `seat` /
     /// `pid` を持たない・設計 account-lifecycle.md §19 形 3）。
@@ -371,6 +372,9 @@ pub enum Case {
     Refused { refuse: String },
     /// [`EventKind::LifecycleCutover`]: 線を引いた器の版と main の sha（小文字の 16 進）。
     Cutover { version: String, main: String },
+    /// [`EventKind::RulingReceived`] の結びの形（設計 §14）: 結んだ裁定 id・発話の ts・経路・問いの起票の時刻と、問いが
+    /// metadata に持つ asked（無ければ `None`）。`bead` は問い id（行の field）。
+    Ruling { ruling: String, utterance: String, channel: Channel, question_ts: String, asked: Option<String> },
 }
 
 impl Case {
@@ -390,6 +394,16 @@ impl Case {
             }
             Self::Refused { refuse } => [bead, Some(text("refuse", refuse))].into_iter().flatten().collect(),
             Self::Cutover { version, main } => vec![text("version", version), text("main", main)],
+            Self::Ruling { ruling, utterance, channel, question_ts, asked } => [
+                Some(text("ruling", ruling)),
+                Some(text("utterance", utterance)),
+                Some(text("channel", channel.as_str())),
+                Some(text("question_ts", question_ts)),
+                asked.as_deref().map(|found| text("asked", found)),
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
         }
     }
 }
