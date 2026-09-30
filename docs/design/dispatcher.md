@@ -1009,6 +1009,90 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
   - (b) 未反映の間は全部の契約を止める案。FR84 は関わる契約だけ。
   - (c) 段を上げる案。語彙の定義と食い違う。
 
+## 39. 席の起草の置き場の build の置き場に量の上限を持たせる — 同じ掃除の同じ lock の中で、書きの線が残した起草の木の dir の合計が rules 行の上限を越える周に、書きの新しさの古い順に上限まで消し、組み立て中の窓の内は消さず、越えたままなら stderr の行と doctor の行で知らせる（契約表の行 an・[ADR-0101](../../design-intent/decisions/ADR-0101-seat-draft-build-dirs-are-capped-per-state-dir-and-shed-oldest-first.html)・FR68 / FR30・裁定 user 2026-09-30T07:18Z・memo `s2-07l.737.27`）
+
+やさしく言うと: §33 の掃除は「6 時間書かれていない build の置き場」だけを消す。席が並列に写しを作ってそれぞれ組み立てると、6 時間の中でも置き場が溜まり、disk の大きな割合を占める。そこで state dir ごとに量の上限（100 GiB）を持ち、上限を越えた周だけ、最後に書かれたのが古い置き場から順に、上限を下回るまで消す。30 分以内に書かれた置き場は組み立て中とみなして消さない。消しても上限を越えたままなら、掃除の行と doctor の行で知らせる。写しそのもの・追跡される file・commit していない変更は今までどおり消さない。
+
+- 出所（2026-09-30）:
+  - 消費側の席の実測（量は台帳の memo `s2-07l.737.27` にだけ在る・PUBLIC に写さない）: 6 時間の書きの線の中で、並列の写しの build の置き場が host の disk の大きな割合を占めた。
+  - 持ち主の問い（CI を通った後に写しを消せないか）と、推奨（量の上限 100 GiB / state dir・組み立て中の窓 30 分）への裁定 user 2026-09-30T07:18Z（逐語は台帳の memo の notes と `RulingReceived` の event）。この裁定は、上限を越えた周に書きの線より新しい build の置き場も消すことへの憲法 A1 の「消す」の承認を含む。**木の写しと追跡される file と commit していない変更を消すことは承認の外**（ADR-0096 と同じ）。
+- 現物（main c66e9cf3・行 ai の着地の後・verified）:
+  - `crates/scribe2/src/pipe/sweep.rs` の `sweep`（:70-92）は、置き場の lock の中で便の木を掃いた後に `sweep_drafts`（:108-122）で起草の木を掃く。`swept`（:174-212）は線を持つ木で `quiet_since`（:216-235）が「線以後の entry が在る」と返した dir を黙って残し、残した dir を呼び手へ返さない。量を測る口は無い。
+  - stderr の行は `sweep: removed=<n> runs=<k> failed=<m>[:<名>,…][ drafts=<t> nogit=<p>]` で、出すのは dir を消した周・失敗が在る周・lock を取れない周・no-rule の周だけ（:83-91）。§30 と §33 の歯 6 本（`crates/scribe2-boundary/tests/e2e/pipe/stop.rs`）がこの字を逐語で pin する。
+  - 起草の置き場の path は `crates/scribe2/src/seat/mod.rs` の `drafts_dir`（:226）、根は `seats_root`（:221）。根の直下を読むのは `drafts_of` だけで、dir でない子は飛ばす（sweep.rs :140）。
+  - doctor の `--state-dir` の枝は `crates/scribe2-boundary/src/main.rs` の `render_doctor_with` で、行 ai が末尾に床の検査の 1 行（`floor=`・file が無い周は出さない）を足した。置き場の量の行は無い。
+  - 整数の rules 行の pipe の読み手は `crates/scribe2/src/pipe/cli/args.rs` の `int_row`（:60・無い・不発効・整数でないを Err）。
+  - rules の末尾（行 ai の後）: kind は `ALL` の末尾が `FloorTimeoutS`、行は manifest の末尾が `floor.timeout_s`。末尾を pin する歯は `rules_floor_timeout_row_is_the_last_kind_and_the_last_row`（kind と行の末尾）・`class_derive_embedded_row_carries_the_ruled_three_elements_and_ruling_id`（kind の末尾 3 つ）・`rules_embedded_manifest_declares_host_guard_kinds_at_the_tail_of_all`（kind の末尾 10）、本数を pin する歯は `rules_embedded_manifest_is_valid_and_covers_all_kinds`（行 83）・`rules_embedded_manifest_declares_one_capability_row_per_role`（kind 81）・`rules_external_form` の snapshot（`rows=83 kinds=81` の 2 行）。
+- 形（番号は行 an の done と 1:1）:
+  1. **候補**: 量の線の候補は、同じ周に書きの線（§33 形 3）が「線以後の entry を持つ」ので残した起草の木の dir だけ。`swept` は線を持つ木でそう残した dir の path を呼び手へ返す（便の木は線を持たないので返さない）。便の木・名が `NAMES` に無い dir・追跡されている file を持つ dir・`.git` を持たない写し・木の本体と `.git` は候補にならない。
+  2. **大きさと新しさ**: 候補ごとに dir 自身と下の全 entry を symlink を辿らずに lstat し（symlink は symlink そのもの）、大きさ = st_blocks × 512 の和（disk の上の使用量）、新しさ = mtime の最新とする。
+  3. **測れない木**: 書きの線の掃きが失敗を返した木（`git ls-files` を撃てない・dir か mtime を読めない・消せない）と、候補の中に読めない dir か entry を持つ木は、木ごと量の線から外す。その木の dir は候補にも合計にも入れず、木の名（`<潰した target>/<木の dir 名>`）を失敗の列に 1 回だけ足し、外した木の数を unmeasured に数える（合計は測れた木の和で、外した数を記録が名指す・0 と読まない・C10）。
+  4. **消す順と止め所**: 合計が上限（行 seat.drafts_cap_mb の値 × 1048576 byte）を越える周だけ、候補を新しさの古い順（同じ時刻は名 `<潰した target>/<木の dir 名>/<木から相対の path>` の字の順）に 1 つずつ見る。組み立て中の窓の内の候補（形 5）は飛ばし、それ以外を `remove_dir_all` で消し、消せたら合計から大きさを引き、合計が上限以下になった所で止める。消せない候補は失敗に数えて（木の名を失敗の列へ・同じ木は 1 回）合計から引かずに次へ進む。
+  5. **組み立て中の窓**: 新しさが「今 − 行 seat.drafts_busy_s の秒」以後の候補は、合計が上限を越えていても消さず、busy に数える（busy は候補のうち窓の内の数で、止め所の前か後かに依らない）。
+  6. **越えたままの知らせ（stderr）**: 量の線の後の合計が上限を越えたままなら、over = (合計 − 上限) を MiB に切り上げた数（上限以下は 0）。量の線が dir を 1 つ以上消した周か over が 0 でない周は、§33 の行の `nogit=<p>` の後ろに ` cap=<k> over=<m>`（k = 量の線が消した dir の数）を足す。over が 0 でない周は、消した dir も失敗も無くても行を出す。`removed` は k を含み、`drafts=<t>` は書きの線か量の線で dir を 1 つ以上消した起草の木の数。k = 0 ∧ over = 0 の周の行の字は §33 のまま 1 byte も変わらない。stdout・event・rc は変えない。
+  7. **記録と doctor の行**: 起草の置き場が 1 つでも在る周は、lock の中で `<state_dir>/seat/drafts-cap`（置き場の根の直下の 1 file）に 1 行を書く。
+     - 形: `ok used=<u> cap=<c> over=<m> busy=<b> unmeasured=<n>`。over が 0 でない周は頭の語が `over`。u と c は MiB で、u は切り上げ。木が 0 本の周は u = 0。
+     - 行を読めない周（形 8）は `no-rule`。
+     - 記録の字の組みと読みは `crates/scribe2/src/seat/mod.rs` の 1 か所に置く（書き手と読み手が同じ file）。
+     - `doctor --state-dir` は、記録が在る周に `drafts-cap=<記録の行>` の 1 行を行 ai の床の検査の行の後に出す。形の合わない・読めない記録は `drafts-cap=unreadable`、記録が無い周は行を出さない（既存の doctor の外形は変わらない）。
+     - 書けない周は stderr の行と rc を変えない（限界へ）。
+  8. **rules 行**: 行 seat.drafts_cap_mb（kind SeatDraftsCapMb・Int・値 102400〔MiB = 100 GiB・既存の `_mb` の行と同じ単位〕・enabled・裁定 id user 2026-09-30T07:18Z・裁定日 2026-09-30）と行 seat.drafts_busy_s（kind SeatDraftsBusyS・Int・値 1800〔秒 = 30 分〕・同じ裁定 id と裁定日）を足す。
+     - 置き場所: manifest の末尾（`floor.timeout_s` の後）に cap → busy の順、kind は `ALL` の末尾（`FloorTimeoutS` の後）に同じ順（enum の宣言も末尾で、宣言順と `ALL` の一致は変わらない）。
+     - 読み手は `sweep.rs` の const の id 2 つと `int_row` で、起草の置き場が 1 つでも在る周に読む。
+     - 3 行（seat.drafts_stale_h と本 2 行）のどれかを読めない周（無い・不発効・整数でない）は量の線を撃たず、stderr の行に量の尾を足さず、記録は `no-rule`（既定値に倒さない）。stderr の `drafts=no-rule` の尾と書きの線の周の振る舞いは §33 のまま（木が 1 本以上在る周だけ）。
+     - 値 0 の上限は「窓の外の候補を全部消す」、値 0 の窓は「窓無し」。値を変えるのは C5 の裁定だけ。
+  9. **撃つ周と lock**: `sweep` の中で、書きの線の掃きの後に同じ lock の中で撃つ（`sweep_drafts` の続き・2 つ目の消す仕組みと lock を足さない・C17）。lock を取れない周は `sweep: skipped=lock` のまま、量の線も記録も撃たない。撃つ周は §30 形 3 のまま（`TERMINALS` の周）。管理 tick には足さない。
+  10. 変えないもの: `NAMES` の 8 つ・書きの線（§33 形 3）と行 seat.drafts_stale_h・lock の名と取り方・便の母集団と `live`・`tree_of`・`crates/scribe2/src/pipe/cli.rs` の呼び出し（引数 3）・event の kind・席の指示文（12 行目は書きの線の行を名指したまま）・§30 と §33 の歯 6 本（字も期待も不変）。
+- 触らない: `crates/scribe2/src/pipe/mod.rs`・`crates/scribe2/src/pipe/cli.rs`・`crates/scribe2/src/fleet/store.rs` の lock の実装・管理 tick・席の指示文の雛形。
+- 却下（[ADR-0101](../../design-intent/decisions/ADR-0101-seat-draft-build-dirs-are-capped-per-state-dir-and-shed-oldest-first.html) の比較と同じ）:
+  - 書きの線を短くする（6 時間を 1 時間などへ）: 量は写しの数と組み立ての大きさに比例し、時間の線では有界にならない。短くするほど、席が戻ってくる写しの組み立てを作り直す。
+  - CI の通過か merge の契機で消す: 起草の写しは便の記録も PR も持たず、器は写しと CI・merge の結びを持たない（結びを作るには写しの登録の仕組みが要る）。CI の後も同じ写しで続く席の試作を壊す。
+  - 写しの間で build の置き場を共有する（Rust の target の置き場の環境変数など）: 言語ごとの仕組みで、器が席の環境変数を配ることになる（N2・器は言語に依らない）。並列の組み立てが同じ置き場の lock で直列になり、枝の違う写しの間で作り直しが続く。
+  - 木の写しごと消す: 承認の外で、commit していない仕事を失う（N1）。
+  - 量を doctor の周に測る: doctor を撃つたびに全部の候補を歩く。記録は掃除が測った周の値を残す。
+  - 管理 tick の alarm に出す: 越えたままは組み立て中の窓の内の置き場が在る周で、窓を出れば次の終端の周が消す（一時の状態）。越えたままが続く周が doctor で見えたら、別の memo で起こす。tick の合図の列は行 aj・am が同じ file（`crates/scribe2/src/seat/tick/signal.rs`）を触る。
+  - 見かけの大きさ（st_size）で測る: disk の使用量と違い、小さい file の多い依存の置き場で小さく出る。
+- 限界:
+  - 便を走らせない置き場（終端の周が来ない project）の起草の置き場は掃かれない（§33 と同じ）。
+  - 消費側の state dir は、binary の入れ替えの後に埋め込みの manifest の同じ値（100 GiB・30 分）を読む（host の manifest で上書きしない限り）。上限は state dir ごとで、同じ disk の state dir の数だけ量が積まれる。
+  - 量の線は終端の周ごとに全部の候補を lstat で歩く（候補の entry の数に比例する時間が掃除に足される）。
+  - hard link は entry ごとに数える（同じ inode を 2 度数え、使用量より大きく出る・消しは候補の外に出ない）。
+  - 判じと消しの間に組み立てが始まる競合は排他でない（§33 と同じ・窓を出た候補だけを消す）。
+  - 測れない木の build の置き場は量の線の外で、合計は測れた木の和（unmeasured が名指す）。
+  - 記録を書けない周は、doctor が前の周の記録を読む（記録は時刻を持たない）。
+  - 知らせは stderr と doctor の行で、席の pane へは押し出さない。
+  - 席の指示文の 12 行目は量の線を告げない（上限を越えた周には、書きの線より新しくても窓の外の置き場が消えうる・次の組み立てで作り直す）。
+- 歯（接頭辞 pipe_sweep_drafts_cap_ と rules_drafts_cap_・どちらも `grep -rn` は crates / docs で 0 件・2026-09-30）:
+  - e2e（`crates/scribe2-boundary/tests/e2e/pipe/stop.rs` の §33 の歯の後ろ・新しい module は作らない）。
+    - 使う helper: §33 の `rewind`・`drafts_run`・`draft_tree`・`drafts_rules` と §30 の `sweep_tree`・`live_run`・`sweep_line`。§30 と §33 の歯と helper の本文は 1 字も変えない。
+    - 足す helper（歯の外）: 大きさの決まった file を書く 1 本（字 x の繰り返し）・木の全 entry の mtime を同じ時刻へ置く 1 本（子から先）・rules の写しの 3 行（時間の行 6・上限の行 1・窓の行 1800 を `drafts_rules` の extra に渡す字）・doctor の `drafts-cap=` の行を返す 1 本（無ければ空・pipe.rs の bin_cmd で `doctor --state-dir` を撃つ・行 ai の floor の行の helper と同じ形）。
+    - 大きさは 768 KiB・512 KiB・2560 KiB・4096 KiB（4 KiB の倍数）で、dir の entry の数 KiB（ext4 は 4 KiB・tmpfs は 0）で MiB の切り上げが変わらない値に選ぶ。
+    - 「数えれば上限を越える」負の歯は、誤って数えた実装が消す量にしてある（各歯の括弧）。
+    - 終端は live な便 1 本の `pipe stop`（(j) は 2 本）。(d)(e)(f) の外の歯は、時間の行・上限の行・窓の行の 3 行を持つ写し（上限 1 MiB）で撃つ。
+  - (a) 古い順・同じ時刻は名の順・上限以下で止まる: 1 つの起草の木に 3 時間前の `target/`、ちょうど同じ 2 時間前の時刻に置いた `.venv/` と `node_modules/`（各 768 KiB）。上限 1 MiB の写しの終端の後、`target/` と `.venv/` が消え、`node_modules/` と木の追跡 file と `.git` は残る。行が `sweep: removed=2 runs=0 failed=0 drafts=1 nogit=0 cap=2 over=0`、doctor の行が `drafts-cap=ok used=1 cap=1 over=0 busy=0 unmeasured=0`。
+  - (b) 組み立て中の窓と越えたまま: 3 時間前の `target/`（768 KiB）と書いたばかりの `node_modules/`（2560 KiB）。`target/` だけが消え、行が `sweep: removed=1 runs=0 failed=0 drafts=1 nogit=0 cap=1 over=2`、doctor の行が `drafts-cap=over used=3 cap=1 over=2 busy=1 unmeasured=0`。
+  - (c) 消す物が無くても越えれば行を出す: 書いたばかりの `node_modules/`（2560 KiB）だけ。残り、行が `sweep: removed=0 runs=0 failed=0 drafts=0 nogit=0 cap=0 over=2`（base は行を出さない）。
+  - (d) 窓の行を持たない写し（時間の行と上限の行だけ）: 3 時間前の `target/`（768 KiB）と書いたばかりの `node_modules/`（2560 KiB）が両方残り、sweep: の行が無く、doctor の行が `drafts-cap=no-rule`（窓を 0 に倒す実装は両方消す）。
+  - (e) 上限の行を持たない写し（時間の行と窓の行だけ）: (d) と同じ置き場で両方残り、sweep: の行が無く、doctor の行が `drafts-cap=no-rule`。
+  - (f) 時間の行を持たない写し（上限の行と窓の行だけ）: 3 時間前の `target/` と 2 時間前の `.venv/`（各 768 KiB）が両方残り、行が `sweep: removed=0 runs=0 failed=0 drafts=no-rule nogit=0`、doctor の行が `drafts-cap=no-rule`（書きの線を経ずに量だけで消す実装は `target/` を消す）。
+  - (g) 書きの線で失敗した木: 席 s1 の木 t0 は `.git` が在らぬ gitdir を指す file で、3 時間前の `target/`（4096 KiB）を持つ。同じ席の木 t1 は 3 時間前の `target/` と 2 時間前の `.venv/`（各 768 KiB）を持つ。t1 の `target/` だけが消え、t0 の `target/` と t1 の `.venv/` は残り、行が `sweep: removed=1 runs=0 failed=1:s1/t0 drafts=1 nogit=0 cap=1 over=0`、doctor の行が `drafts-cap=ok used=1 cap=1 over=0 busy=0 unmeasured=1`（t0 を数える実装は t0 の `target/` を先に消す）。
+  - (h) 候補の中の読めない dir: 1 時間前の `target/` の下の `debug/`（768 KiB の file を持つ）を古くした後に mode 000 にし、同じ木に 2 時間前の `.venv/` と 3 時間前の `node_modules/`（各 768 KiB）。3 つとも残り、行が `sweep: removed=0 runs=0 failed=1:s1/t1 drafts=0 nogit=0`、doctor の行が `drafts-cap=ok used=0 cap=1 over=0 busy=0 unmeasured=1`（読めない dir を 0 と数える実装は `node_modules/` を消す）。歯の終わりに mode を戻して片付ける。root で撃つと読めてしまい赤になる（黙って緑にならない）。
+  - (i) 候補にならない物は残る: live な便 r-live の木（§30 の helper）の 4 時間前の `target/`、追跡 file を持つ 4 時間前の `docs/target/`（追跡されない 768 KiB の file も持つ）、`.git` を持たない写しの 4 時間前の `target/`（各 768 KiB）と、起草の木の 1 時間前の `.venv/`（768 KiB）。全部残り、sweep: の行が無く、doctor の行が `drafts-cap=ok used=1 cap=1 over=0 busy=0 unmeasured=0`（候補の外を数える実装は合計が上限を越えて 4 時間前の物を消す）。
+  - (j) lock を取れない周: 置き場の pipe の dir の掃除の lock（sweep.lock）に test の process の pid を書いた生きた lock を置き、3 時間前の `target/` と 2 時間前の `.venv/`（各 768 KiB）で 1 つ目の終端を撃つ。両方残り、行が `sweep: skipped=lock`、doctor の行が無い。lock を外して 2 つ目の live な便 r-two の終端を撃つと `target/` が消え、行が `sweep: removed=1 runs=0 failed=0 drafts=1 nogit=0 cap=1 over=0`。
+  - (k) 記録の書きと読み: 起草の置き場に `.git` を持たない写しだけが在る周の後、doctor の行が `drafts-cap=ok used=0 cap=1 over=0 busy=0 unmeasured=0`。記録を形の合わない字で上書きすると `drafts-cap=unreadable`。
+  - (l) symlink を辿らない: 1 時間前の `node_modules/`（512 KiB）の中に、木の外の 4096 KiB の file を持つ dir を指す symlink を置く。残り、sweep: の行が無く、doctor の行が `drafts-cap=ok used=1 cap=1 over=0 busy=0 unmeasured=0`、木の外の file も残る（辿る実装は合計が越えて `node_modules/` を消す）。
+  - e2e（`crates/scribe2-boundary/tests/e2e/rules.rs`・`rules_floor_timeout_` の歯の後ろ）: (m) 行 seat.drafts_cap_mb と seat.drafts_busy_s が、kind SeatDraftsCapMb / SeatDraftsBusyS・形 Int・値 102400 / 1800・enabled・裁定 id と裁定日で 1 本ずつ在る。`ALL` の末尾 2 つと manifest の末尾 2 行がこの順で、`int_row` で値が読め、字面から引け、文字列の値の写しは「形と合わない」で断られる。
+  - 直す既存の歯（同じ便・どれも直した後は base で落ちるので retroactive の札は要らない）:
+    - `rules_floor_timeout_row_is_the_last_kind_and_the_last_row` は名を rules_floor_timeout_row_precedes_the_drafts_cap_rows に替え（接頭辞 rules_floor_timeout_ は保つ）、kind と行が末尾から 3 つ目で、後ろが本行の 2 つ（base に kind が無い）。
+    - `class_derive_embedded_row_carries_the_ruled_three_elements_and_ruling_id` は kind の末尾 5 つ。
+    - `rules_embedded_manifest_declares_host_guard_kinds_at_the_tail_of_all` は kind の末尾 12。
+    - `rules_embedded_manifest_is_valid_and_covers_all_kinds` は行数 +2、`rules_embedded_manifest_declares_one_capability_row_per_role` は kind +2、`rules_external_form` の snapshot は rows と kinds の 2 行を +2（行 ai の後の main で 83 → 85・81 → 83・便の base で数え直す）。
+    - §30 と §33 の pipe_sweep_ の歯 6 本は字も期待も変えずに緑（埋め込みの上限 100 GiB に届かない置き場と、上限の行を持たない写しの行は 1 byte も変わらない）。
+  - 判定の順と変異（条件 1 つに歯 1 本）: 候補の外を数える → (i)・symlink を辿る → (l)・測れない木を数える → (g)(h)・古い順でなく名の順か新しい順 → (a)・同じ時刻を名の逆順 → (a)・止め所を持たず全部消す → (a)・窓を見ない → (b)・越えたままを知らせない → (b)(c)・窓の行を読めない周に 0 へ倒す → (d)・上限の行を読めない周に撃つ → (e)・時間の行を読めない周に量だけで撃つ → (f)・lock の外で撃つ → (j)・記録を書かない・読みの形を見ない → (k)・行を末尾でなく別の位置に置く → (m)。
+- base で RED の理由: (a)(b)(g)(j) は base が量で消さないので dir が残り、行に量の尾が無い。(c) は base が行を出さない。(d)(e)(f)(h)(i)(k)(l) は base に記録も doctor の行も無い（`drafts-cap=` の行が空）。(m) は base に行も kind も無い。直す既存の歯は base の本数と末尾で落ちる。
+- 順: ADR-0101 と本 § と行 an を同じ docs PR で land → 行 ai の着地の後に行 an の便（rules の末尾と doctor の枝が行 ai の後の形・台帳で行 an の bead を行 ai の bead の blocks に置く）。
+- 着地の後: 掃除の振る舞いが変わるので PATH の binary を `swap-binary.sh` で入れ替える（走行中の運転手が在れば断られる）。消費側の state dir は、入れ替えの後の最初の終端の周から同じ値で量の線を撃つ。席の手順と置き場の path は変わらないので、席への知らせは要らない。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -1470,4 +1554,16 @@ verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe
 size = "M"
 growth = ["crates/scribe2/src/pipe/dispatch/unreflected.rs:230", "crates/scribe2/src/pipe/dispatch.rs:25", "crates/scribe2/src/pipe/dispatch/facts.rs:8", "crates/scribe2/src/seat/tick/signal.rs:5", "crates/scribe2/src/seat/ledger.rs:3", "crates/scribe2/src/hook/graph_guard.rs:1", "crates/scribe2-boundary/src/main.rs:1"]
 done = "(1) 母集団は閉じた問いの effect = document の裁定の行の id で、operation と effect 無しは数えない (2) 未反映は行 ak の数えで main の先端の sha の追跡された file が 1 つも引かない id・ruling-check の有無に依らない (3) 起こす側の周ごとに置き場の file を上書きし 0 件も空の列・sha と母集団が同じ周は読み直さない (4) acceptance・notes・blocks の 3 形の候補が unreflected-ruling:<id> で待ち、関わらない候補は起きる (5) doctor の unreflected= の 1 行は 1 件以上の周だけ (6) alarm の語 unreflected は precheck の後・floor の前・段は上げない (7) Issue の effect と構築点 4 か所 (8) 子は WaitReason と Turn を名指さない (9) 直す既存の歯に retroactive の札 (10) 子の mod 宣言と置き場の読みの関数を pub(crate) にし、pipeline.md 行 bf が着地の周に呼べる (11) doctor の行は境界の main.rs の --state-dir の枝に 1 本足す"
+[[contract]]
+id = "an"
+title = "席の起草の置き場の build の置き場に量の上限 — 同じ掃除の同じ lock の中で、書きの線が残した起草の木の dir の合計が rules 行 seat.drafts_cap_mb（100 GiB）を越える周に書きの新しさの古い順に上限まで消し、rules 行 seat.drafts_busy_s（30 分）の窓の内は消さず、越えたままなら stderr の行の cap= over= と doctor の drafts-cap= の行で知らせる（木と追跡 file と測れない木は消さない・行を読めない周は撃たない・ADR-0101）"
+req = ["FR68", "FR30"]
+section = "39"
+depends = ["ai"]
+touches = ["crate::rules::RuleKind"]
+write-set = ["crates/scribe2/src/pipe/sweep.rs", "crates/scribe2/src/seat/mod.rs", "crates/scribe2/src/rules/mod.rs", "rules/manifest.toml", "crates/scribe2-boundary/src/main.rs", "crates/scribe2-boundary/tests/e2e/pipe/stop.rs", "crates/scribe2-boundary/tests/e2e/rules.rs", "crates/scribe2-boundary/tests/e2e/rules/embedded.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__rules__rules_external_form.snap"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_sweep_drafts_cap_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_drafts_cap_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_sweep_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_floor_timeout_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail class_derive_embedded_row_carries_the_ruled_three_elements_and_ruling_id", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_embedded_manifest_declares_host_guard_kinds_at_the_tail_of_all", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_embedded_manifest_is_valid_and_covers_all_kinds", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_embedded_manifest_declares_one_capability_row_per_role", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_external_form"]
+size = "M"
+growth = ["crates/scribe2/src/pipe/sweep.rs:140", "crates/scribe2/src/seat/mod.rs:50", "crates/scribe2/src/rules/mod.rs:10", "crates/scribe2-boundary/src/main.rs:1"]
+done = "(1) 量の線の候補は同じ周の書きの線が線以後の entry を持つので残した起草の木の dir だけで、swept が線を持つ木でそう残した dir の path を返し、便の木・名が NAMES に無い dir・追跡 file を持つ dir・.git を持たない写し・木の本体と .git は候補にならない (2) 候補ごとの大きさは dir 自身と下の全 entry の lstat の st_blocks × 512 の和、新しさは mtime の最新で、symlink は辿らずに symlink そのものを数える (3) 書きの線の掃きが失敗を返した木と、候補の中に読めない dir か entry を持つ木は、木ごと量の線から外して候補にも合計にも入れず、木の名を失敗の列に 1 回だけ足し、外した木の数を unmeasured に数える (4) 合計が上限（行の値 × 1048576 byte）を越える周だけ、候補を新しさの古い順（同じ時刻は <潰した target>/<木の dir 名>/<木から相対の path> の字の順）に見て、窓の外の候補を remove_dir_all で消して合計から引き、上限以下で止まり、消せない候補は失敗に数えて合計から引かずに次へ進む (5) 新しさが今 − 行 seat.drafts_busy_s の秒以後の候補は消さずに busy に数える（busy は候補のうち窓の内の数） (6) 量の線が dir を消した周か over（合計 − 上限を MiB に切り上げ）が 0 でない周は、stderr の sweep: の行の nogit=<p> の後ろに cap=<k> over=<m> を足し、over が 0 でない周は消した dir も失敗も無くても行を出し、removed は k を含み、drafts= は書きの線か量の線で dir を消した起草の木の数で、k = 0 ∧ over = 0 の周の行の字と stdout・event・rc は変わらない (7) 起草の置き場が 1 つでも在る周は lock の中で <state_dir>/seat/drafts-cap に ok used=<u> cap=<c> over=<m> busy=<b> unmeasured=<n>（over が 0 でない周の頭の語は over・MiB で used は切り上げ・木が 0 本の周は used=0）か no-rule の 1 行を書き、字の組みと読みは seat/mod.rs の 1 か所に在り、doctor --state-dir は記録が在る周だけ床の検査の行の後に drafts-cap=<記録の行> を出し、形の合わない記録は drafts-cap=unreadable で、記録が無い周は行を出さない (8) 埋め込みの manifest の末尾に行 seat.drafts_cap_mb（kind SeatDraftsCapMb・Int・値 102400・enabled・裁定 id user 2026-09-30T07:18Z・裁定日 2026-09-30）と行 seat.drafts_busy_s（kind SeatDraftsBusyS・Int・値 1800・同じ裁定 id と裁定日）がこの順で在り、kind は ALL の末尾に同じ順で字面から引け、sweep.rs が const の id を int_row で読み、seat.drafts_stale_h と本 2 行のどれかを読めない周は量の線を撃たず、行に量の尾を足さず、記録は no-rule (9) 量の線は sweep の中で書きの線の掃きの後に同じ lock の中で撃ち、lock を取れない周は sweep: skipped=lock のまま量の線も記録も撃たず、管理 tick と cli.rs の呼び出しは変わらない (10) NAMES・書きの線と行 seat.drafts_stale_h・lock の名と取り方・便の母集団と live・tree_of・event の kind・席の指示文・§30 と §33 の歯 6 本の字と期待は変わらない 歯: pipe_sweep_drafts_cap_ の e2e 12 本（stop.rs の §33 の歯の後ろ・(d)(e)(f) の外は時間の行 6・上限の行 1・窓の行 1800 の写しで live な便の pipe stop を撃ち、大きさは 4 KiB の倍数の KiB で MiB の切り上げが dir の entry の差で変わらない値）の (a) 3 時間前の target/ と同じ 2 時間前の時刻の .venv/ と node_modules/（各 768 KiB）で target/ と .venv/ が消え、node_modules/ と追跡 file と .git が残り、行が sweep: removed=2 runs=0 failed=0 drafts=1 nogit=0 cap=2 over=0 で doctor の行が drafts-cap=ok used=1 cap=1 over=0 busy=0 unmeasured=0 (b) 3 時間前の target/（768 KiB）と書いたばかりの node_modules/（2560 KiB）で target/ だけが消え、行が sweep: removed=1 runs=0 failed=0 drafts=1 nogit=0 cap=1 over=2 で doctor の行が drafts-cap=over used=3 cap=1 over=2 busy=1 unmeasured=0 (c) 書いたばかりの node_modules/（2560 KiB）だけの置き場で残り、行が sweep: removed=0 runs=0 failed=0 drafts=0 nogit=0 cap=0 over=2 (d) 窓の行を持たない写しで 3 時間前の target/ と書いたばかりの node_modules/ が両方残り、sweep: の行が無く、doctor の行が drafts-cap=no-rule (e) 上限の行を持たない写しで同じ置き場が両方残り、sweep: の行が無く、doctor の行が drafts-cap=no-rule (f) 時間の行を持たない写しで 3 時間前の target/ と 2 時間前の .venv/ が残り、行が sweep: removed=0 runs=0 failed=0 drafts=no-rule nogit=0 で doctor の行が drafts-cap=no-rule (g) .git が在らぬ gitdir を指す file の木 t0 の 3 時間前の target/（4096 KiB）と木 t1 の 3 時間前の target/ と 2 時間前の .venv/（各 768 KiB）で t1 の target/ だけが消え、行が sweep: removed=1 runs=0 failed=1:s1/t0 drafts=1 nogit=0 cap=1 over=0 で doctor の行が drafts-cap=ok used=1 cap=1 over=0 busy=0 unmeasured=1 (h) 古くした後に mode 000 にした debug/ を持つ 1 時間前の target/ と 2 時間前の .venv/ と 3 時間前の node_modules/ が全部残り、行が sweep: removed=0 runs=0 failed=1:s1/t1 drafts=0 nogit=0 で doctor の行が drafts-cap=ok used=0 cap=1 over=0 busy=0 unmeasured=1 (i) live な便の木の 4 時間前の target/・追跡 file を持つ 4 時間前の docs/target/・.git を持たない写しの 4 時間前の target/ と起草の木の 1 時間前の .venv/ が全部残り、sweep: の行が無く、doctor の行が drafts-cap=ok used=1 cap=1 over=0 busy=0 unmeasured=0 (j) 生きた持ち主の sweep.lock の周は 3 時間前の target/ と 2 時間前の .venv/ が残って行が sweep: skipped=lock で doctor の行が無く、lock を外した 2 つ目の live な便の終端で target/ が消えて行が sweep: removed=1 runs=0 failed=0 drafts=1 nogit=0 cap=1 over=0 (k) .git を持たない写しだけの置き場の周の後に doctor の行が drafts-cap=ok used=0 cap=1 over=0 busy=0 unmeasured=0 で、記録を形の合わない字で上書きすると drafts-cap=unreadable (l) 1 時間前の node_modules/（512 KiB）の中の、木の外の 4096 KiB の file を持つ dir を指す symlink を辿らず、残り、sweep: の行が無く、doctor の行が drafts-cap=ok used=1 cap=1 over=0 busy=0 unmeasured=0 で木の外の file も残る、と rules_drafts_cap_ の e2e 1 本（rules.rs の rules_floor_timeout_ の歯の後ろ）の (m) 2 行の id・kind・形 Int・値 102400 / 1800・enabled・裁定 id と裁定日・int_row で値・kind の行が 1 本ずつ・ALL の末尾 2 つと manifest の末尾 2 行がこの順・字面から引ける・文字列の値の写しは形と合わないで断られる、直す既存の歯 rules_floor_timeout_row_is_the_last_kind_and_the_last_row（名を rules_floor_timeout_row_precedes_the_drafts_cap_rows へ替え、kind と行が末尾から 3 つ目）と class_derive_embedded_row_carries_the_ruled_three_elements_and_ruling_id（kind の末尾 5）と rules_embedded_manifest_declares_host_guard_kinds_at_the_tail_of_all（kind の末尾 12）と rules_embedded_manifest_is_valid_and_covers_all_kinds（行数 +2）と rules_embedded_manifest_declares_one_capability_row_per_role（kind +2）と rules_external_form の snapshot（rows と kinds の 2 行を +2）は base で RED なので retroactive の札は要らず、§30 と §33 の pipe_sweep_ の歯 6 本は字も期待も変えずに緑・base は (a)(b)(g)(j) の dir が残り (c) の行が無く (d)(e)(f)(h)(i)(k)(l) の doctor の行が無く (m) の kind が無いので RED"
 <!-- contracts:end -->
