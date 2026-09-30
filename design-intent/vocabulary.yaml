@@ -197,7 +197,7 @@ terms:
     relationships: [端末の表, host の manifest]
   - canonical: 口座の登録
     domain: consumer
-    definition: 器の subcommand account add が口座の設定 dir・席の前提の設定・host の manifest の宣言を揃え、 login 用の起動 command を user へ渡すこと (ADR-0026 §2.2)。 login は user の手番で、 器は credential に触れない。 trust の印は ADR-0065 (proposed) の後は席の起動が置く (account add は書かない)。
+    definition: 器の subcommand account add が口座の設定 dir・席の前提の設定・host の manifest の宣言を揃え、 login 用の起動 command を user へ渡すこと (ADR-0026 §2.2)。 login は user の手番で、 登録の口は credential を読まず書かない (器が credential の file を読むのは計測 SRS FR33 と口座の墓標の判定 SRS FR97 だけ・ADR-0098)。 trust の印は ADR-0065 (proposed) の後は席の起動が置く (account add は書かない)。
     relationships: [口座, host の manifest, 退役, doctor, trust の印]
   - canonical: trust の印
     domain: consumer
@@ -510,12 +510,12 @@ terms:
     relationships: [管理 tick, 席, 打刻の合図, 開発 session]
   - canonical: 管理 tick
     domain: consumer
-    definition: 開発 session が黙っていないかを周期で見て、 条件が揃ったときだけ続きを促す打刻の合図を 1 行注入する仕組み (SRS FR27・ADR-0058)。 無変化の席には backoff で合図の間隔を伸ばし、 24 時間で止める。 退避の合図と cycle は ADR-0045 で廃止のまま。 ADR-0066 の後は、 自席の anchor が群に属する周に群の移動の判定を群ごとに鮮度の窓 (fleet.usage_fresh_s) に 1 回まで host の lock の内側で撃ち (lock を取れない周は撃たず今の列へ)、 判定の周だけ計測を起こしてよい (退避と起こし直しは自席の移動の門のまま)。 管理 tick の周は局面の出力の部分の書き直しの契機でもある (SRS FR27 / FR90・ADR-0088)。 ADR-0098 (proposed) の後は、 登録 row の口座が口座の墓標の席に合図を送らず判定行の理由を account-dead とし (停止の記録の席は heartbeat-off のまま)、 打刻を読まずに群の移動の判定へ進み、 窓が shell の群の席は群の今の口座が墓標なら起こす前に判定を撃つ。
+    definition: 開発 session が黙っていないかを周期で見て、 条件が揃ったときだけ続きを促す打刻の合図を 1 行注入する仕組み (SRS FR27・ADR-0058)。 無変化の席には backoff で合図の間隔を伸ばし、 24 時間で止める。 退避の合図と cycle は ADR-0045 で廃止のまま。 ADR-0066 の後は、 自席の anchor が群に属する周に群の移動の判定を群ごとに鮮度の窓 (fleet.usage_fresh_s) に 1 回まで host の lock の内側で撃ち (lock を取れない周は撃たず今の列へ)、 判定の周だけ計測を起こしてよい (退避と起こし直しは自席の移動の門のまま)。 管理 tick の周は局面の出力の部分の書き直しの契機でもある (SRS FR27 / FR90・ADR-0088)。 ADR-0098 (proposed) の後は、 登録 row の口座が口座の墓標の席に合図を送らず判定行の理由を account-dead とし (heartbeat の実効の値が off の席は理由 heartbeat-off が先)、 打刻を読まずに群の移動の判定へ進み、 窓が shell の群の席は群の今の口座が墓標なら起こす前に判定を撃つ。
     relationships: [開発 session, 打刻の合図, backoff, 変化の digest, tick の unit, 群の移動の判定, 判定の打刻, 移動の門, 局面の出力, alarm, 口座の墓標, 口座の門]
   - canonical: 口座の門
     domain: consumer
     aliases: [account gate, account-pressed]
-    definition: 管理 tick の判定の列の 1 つで、 席の口座の計測の記録が群の逼迫の閾値以上なら合図を送らない門 (SRS FR27・ADR-0058・理由の語 account-pressed)。 記録が無い・古い周は通す (門は正の証拠でだけ閉じる)。 口座の墓標の席の判定 (ADR-0098) はこの門とは別の位置 (打刻の前と停止の記録の門の後) に在る。
+    definition: 管理 tick の判定の列の 1 つで、 席の口座の計測の記録が群の逼迫の閾値以上なら合図を送らない門 (SRS FR27・ADR-0058・理由の語 account-pressed)。 記録が無い・古い周は通す (門は正の証拠でだけ閉じる)。 口座の墓標の席の判定 (ADR-0098) はこの門とは別の位置 (打刻の前と、 heartbeat の実効の値が off の席の理由 heartbeat-off の門の後) に在る。
     relationships: [管理 tick, 群の逼迫, 口座の墓標]
   - canonical: statusline
     domain: consumer
@@ -1174,7 +1174,7 @@ terms:
   - canonical: 群の予約
     domain: consumer
     aliases: [group reservation, next]
-    definition: 群ごとに周ごと導出する、 その群が次に移る口座 (ADR-0069・ADR-0074・SRS FR38)。 移り先の候補を残量の鍵 (7 日窓と役割の model の 7 日窓の残量の小さい方が大きい順 → 7 日窓の reset が早い順 → 宣言順) で並べ、 群を宣言順に見て、 どの群の今の口座でもなく先の群の予約でもない先頭。 ADR-0074 で予約を持つのはその周に逼迫している群だけ (逼迫していない先の群は候補を測らず予約も持たない)。 記録せず lock の内側で導出し、 他の群の移動と予約を排他するが便の起動は排他しない。 doctor の群の行の next= の値。 ADR-0098 (proposed) の後は、 移動の契機 (群の逼迫か今の口座の口座の墓標) を持つ群が予約を持ち、 墓標の口座は予約されない。
+    definition: 群ごとに周ごと導出する、 その群が次に移る口座 (ADR-0069・ADR-0074・SRS FR38)。 移り先の候補を残量の鍵 (7 日窓と役割の model の 7 日窓の残量の小さい方が大きい順 → 7 日窓の reset が早い順 → 宣言順) で並べ、 群を宣言順に見て、 どの群の今の口座でもなく先の群の予約でもない先頭。 ADR-0074 で予約を持つのはその周に逼迫している群だけ (逼迫していない先の群は候補を測らず予約も持たない)。 記録せず lock の内側で導出し、 他の群の移動と予約を排他するが便の起動は排他しない。 doctor の群の行の next= の値。 ADR-0098 (proposed) の後は、 群の今の口座の実測が閾値以上の群か群の今の口座が口座の墓標の群が予約を持ち、 墓標の口座は予約されない。
     forbidden: [reserved file]
     relationships: [群の今の口座, project の群, 口座選定, 口座残量, 管理 tick, 残量の鍵]
   - canonical: 残量の鍵
@@ -1322,13 +1322,13 @@ terms:
   - canonical: 口座の墓標
     domain: consumer
     aliases: [credential tombstone]
-    definition: 口座の credential の file の claudeAiOauth.expiresAt が 0 の状態 (ADR-0098)。 再 login でしか戻らず、 置かれる時は器の外 (Claude Code の振る舞い)。 器は credential の file を読む 1 本の関数で判じ、 語は present・missing・dead (dead が墓標)。 計測 (SRS FR33) は測れなかった理由 tombstone で記録する。
+    definition: 口座の credential の file に現れる、 再 login でしか戻らない印 (条件は ADR-0098 で、 claudeAiOauth.expiresAt が 0)。 期限切れの file は墓標でない。 置かれる時は器の外 (Claude Code の振る舞い)。 器は credential の file を読む 1 本の関数で判じ、 語は present・missing・dead (dead が墓標)。 計測 (SRS FR33) は測れなかった理由 tombstone で記録する。
     relationships: [口座, 群の移動の判定, 移動の契機, 管理 tick, 口座の門, 口座残量, doctor]
     flagged_ambiguities: ["判定の語 dead (credential=dead / account-dead) と、 SRS FR59 の起こし直しが扱う「死んだ席」 (claude が落ちて窓が shell に戻った席) は別"]
   - canonical: 移動の契機
     domain: consumer
     aliases: [move cause]
-    definition: 群の移動の判定が群を移す理由の閉じた 2 値 (ADR-0098)。 群の今の口座の群の逼迫と、 群の今の口座が口座の墓標であること。 どちらでも移り先の決め方・記録・承認・退避・起こし直しは同じで、 契機は記録しない。
+    definition: 群の移動の判定が群を移す理由の閉じた 2 値 (ADR-0098)。 群の今の口座の実測が群の逼迫の閾値以上であることと、 群の今の口座が口座の墓標であること。 どちらでも移り先の決め方・記録・承認・退避・起こし直しは同じで、 契機は記録しない。
     relationships: [群の移動の判定, 群の逼迫, 口座の墓標, 群の予約]
   - canonical: 判定の打刻
     domain: consumer
