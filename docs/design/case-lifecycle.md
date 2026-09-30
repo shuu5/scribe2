@@ -507,6 +507,7 @@ lifecycle.stale
   - bind の口と答えの口の後の契機は後の行が足す。それまで、2 つの口の記帳は次の dispatch の周か書き直しの口の周まで出力に遅れる。
   - AC60 の全部の書き直しの契機 6 つのうち、本行が持つのは 3 つ（dispatch の周・land の終端の close・全部を書き直す口）で、bind・答えの口・memo の自動の close の後の 3 つは後の行が持つ。
   - `unmeasured` の `multi-anchor` は本行が出さない（本行は `--repo` の 1 つだけを読み、1 つの state dir が 2 つ以上の anchor を持つ周の判じ方は後の行が決める）。
+  - 出力の読み（stale → json の順・`fleet lifecycle show` が使う 1 本）と入力の印の読みは、fleet の兄弟の module から呼べる可視性で置く（ledger-form.md 行 o の読み手が呼ぶ）。呼べることは本行の歯では測れず、呼び手の行の compile が測る。
   - anchor が main の先端より遅れていても、宣言は読んだ main の sha の tree から読むので、close-check の線はその sha の宣言で引く。
 - 却下: 新しい top-level の口（R-C4-5）・固定の名の一時 file・印を lifecycle.json に持つ（門が大きな file を読み書きする・NFR5）・線を出力に持つ（ADR-0088）・部分の書き直しが印を消す（ADR-0088 (3)）・既定の取り方の lock（生きた書き手から奪われる）・台帳の印に更新時刻を使う（読みでも動く）・呼び手の stdout の行に `lifecycle=<語>` を足す（既存の完全一致の歯と消費側の面の key を動かす）。
 
