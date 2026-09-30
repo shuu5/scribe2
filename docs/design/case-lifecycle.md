@@ -104,7 +104,7 @@ contract-queued の理由から手番（語の集合が `WAIT_REASONS` を含む
 | hold・no-design-pointer・unreflected-ruling・floor | seat |
 | settled | none（最新の便の部品が手番を持つ） |
 
-- `admission` は contract-refused に当たり、この表に来ない。表に無い語は misfit `no-phase` へ倒す（fail-closed）。
+- `admission` は contract-refused に当たり、queued の部品にはならない。ただし表は `WAIT_REASONS` の 8 語を全部覆う（語が増えたら表の歯が落ちる）ので、admission を contract-refused と同じ手番 seat で持つ（表は 10 語）。表に無い語は misfit `no-phase` へ倒す（fail-closed）。
 
 ## 4. misfit の理由の語（閉じた 15 語）
 
@@ -254,9 +254,9 @@ lifecycle.stale
   5. `Issue` に `created_at` と `closed_at`（どちらも字の `Option`）を足し、`issues_of` が読む。無い要素は None（ほかの欄の読みは変えない）。4 か所の組みを直す（構築点は便の始めに今の main で数え直す）。
 - 閉包: 新しい file は `Issue` を字で組まず、`WaitReason`・`Stage`・`EventKind` の変種を名指さない（それらを touches に持つ行の閉包を広げない）。歯の fixture の `Issue` は bd の JSON の字を `issues_of` で読んで作る。
 - 歯（接頭辞・母集団・base で RED の理由）:
-  - `phase_table_`（7 本・case の `+` の file の末尾の歯の区間）: (a) 38 語が ASCII の小文字と `-`・一意・種類の接頭辞を持つ (b) 宣言順が §2 の表の順 (c) 手番の 6 語 (d) contract-queued の表が `WAIT_REASONS` を全部と unreflected-ruling・floor を含む (e) 表に無い語は None (f) misfit の 15 語の字 (g) 部品の共通の欄の 9 key と `links` の 8 key の const の列が、§5.2 の字と順に 1 字も違わない。
-  - `promotion_line_`（6 本・昇格の行の読み手の `+` の file の末尾の歯の区間）: 全部と一部／2 行で最後が勝つ／読めない 3 形／行頭でない `昇格:` は読まない／`,` を区切りと読まない。
-  - `trigger_met_`（6 本・trigger.rs の歯の区間）: 5 形の満ちと満ちない各 1 組／同梱の dir の前方一致と印の外し。
+  - `phase_table_`（9 本・case の `+` の file の末尾の歯の区間）: (a) 38 語が ASCII の小文字と `-`・一意・種類の接頭辞を持つ (b) 38 語の列が §2 の表の字と宣言順に 1 字も違わない（期待の列を歯に写す） (c) 手番の 6 語 (d) contract-queued の表が `WAIT_REASONS` を全部と unreflected-ruling・floor を含む (e) 表に無い語は None (f) misfit の 15 語の字 (g) 部品の共通の欄の 9 key と `links` の 8 key の const の列が、§5.2 の字と順に 1 字も違わない (h) 9 つの種類の語の字と順 (i) 語から手番の関数が §3 の表の全行と一致する（38 語の各語、memo-promoting の理由 2 つ〔contract-open・close-due〕、contract-queued の理由 10 語の各手番を期待の表として歯に写す・全部を 1 つの手番に倒す実装を落とす）。
+  - `promotion_line_`（7 本・昇格の行の読み手の `+` の file の末尾の歯の区間）: 全部と一部／2 行で最後が勝つ／最後の行が読めず前の行が読める notes は読めない（前の行へ倒れない）／読めない 3 形のそれぞれの理由の語と行の字／行頭でない `昇格:` は読まない／`,` を区切りと読まない。
+  - `trigger_met_`（8 本・trigger.rs の歯の区間）: 5 形の満ちと満ちない各 1 組（再発は本数＝値で満ち・値−1 で満ちない、期日は周の時刻＝値で満ち・1 秒前で満ちない）／同梱の dir の前方一致と印の外し／値が `/` で終わらない同梱は前方一致で満ちない（値の字が項目の字の頭と一致するだけで、等しくない組）。
   - `issue_times_`（2 本・seat/ledger.rs の歯の区間）: 時刻の 2 欄を読む／無い要素は None でほかの欄は同じ。
   - 置き場と file ごとの base で RED の理由（§1）: `trigger_met_` は trigger.rs の test 区間（新しい `met` を呼ぶので base で compile できない）、`issue_times_` は seat/ledger.rs の test 区間（`Issue` の新しい 2 欄を読むので同じ）。組みを直す 3 file（precheck.rs・form.rs・graph_guard.rs）の歯の区間も `Issue` の新しい欄を書くので base で compile できない。
   - base で RED: 4 つとも歯の名が base に 0 本（rc 4・機能不在）。既存の `ledger_trigger_`・`seat_ledger_`・`precheck_intake_` は期待を変えずに緑（組みの直しの非回帰）。
@@ -289,12 +289,13 @@ lifecycle.stale
   7. since は §5.2 の規則で導ける値だけを返す（問いと epic の閉じは `closed_at`・question-open は `created_at`・promoting は辿れる契約の `created_at` の最新・close-due と epic-closable は閉じの最新・期日の満ちは期日・依存と着地の満ちは相手の `closed_at`）。ほかは None。
   8. memo の `due`・`triggers`・`keep` と、閉じた contract の `pointer` を埋める。
 - 歯（行 a1 の write-set の `+` の兄弟の歯の file・`crates/scribe2/src/ledger/mod.rs` の test 区間の素の `mod` 宣言と file の頭の `#![cfg(test)]`・§1・その file の歯は全部が行 a1 の新しい関数を呼ぶので base で compile できず RED・接頭辞 `phase_ledger_`・約 26 本・fixture の `Issue` は JSON の字から `issues_of` で作る）:
+  - どの fixture も、部品の局面・手番・理由の 3 つを測る（局面だけを見ない）。
   - (1) 入力の組の不足で落ちない・開いた契約を返さない（1 本）。
-  - (2) 種類の判定 4 つと form-both・form-neither／memo の 4 局面の各 1 fixture と、2 局面に当たる fixture 3 本で上が勝つ（AC61）／引き金の行の無い memo が memo-no-trigger・actionable の条件にも当たる fixture も misfit（AC61）／actionable の理由 4 語の各 1／keep の付いた満ちが waiting（約 14 本）。
+  - (2) 種類の判定 4 つと重なり 2 形（問いの label と memo の label の両方 → question・epic の型と memo の label → memo）と form-both・form-neither／memo の 4 局面の各 1 fixture と、2 局面に当たる fixture 3 本（promoting ∧ asking・asking ∧ actionable・actionable ∧ waiting）で上が勝つ（AC61）／引き金の行の無い memo が memo-no-trigger・actionable の条件にも当たる fixture も misfit（AC61）／actionable の理由 4 語の各 1／keep の付いた満ちが waiting（約 14 本）。
   - (3) close-due の memo が promoting で手番 vessel・FR93 の条件の 5 つの欠けの各 1 で close-due にならない（6 本）。
-  - (4) 問いの 3 局面（1 本）。(5) epic の 3 局面（1 本）。
-  - (6) 閉じの 5 語の各 1 fixture／close-check の線より前の同じ閉じは `*-closed` で、線の後へ動かすと 1 件（AC61）／close-check が None の repo は数えない／`裁定 <id> 束 batch:x` の閉じは question-closed／窓の外の閉じは載らず misfit の閉じは残る／接頭辞が None で `unmeasured`（約 10 本）。
-  - (7) since の導ける 6 形と、導けない部品の None（1 本）。(8) memo の 3 欄と契約の pointer（1 本）。
+  - (4) 問いの 3 局面と links（閉じた問いの `rulings` が閉じの理由の裁定 id・`source` が親の memo）（1 本）。(5) epic の 3 局面と、子の無い開いた epic が epic-open（1 本）。
+  - (6) 閉じの 5 語の各 1 fixture（close-kind-mismatch は 4 形〔種類と頭の食い違い・空・9 頭の外・着地の値の崩れ〕、close-unresolved は 2 形〔値の崩れ・台帳に無い id〕）／close-check の線より前の同じ閉じは `*-closed` で、線の後へ動かすと 1 件（AC61）／close-check が None の repo は数えない／`裁定 <id> 束 batch:x` の閉じは question-closed／窓の外の閉じは載らず misfit の閉じは残る／接頭辞が None で `unmeasured`（約 10 本）。
+  - (7) since の導ける 6 形と、導けない部品の None（1 本）。(8) memo の 3 欄（`due` は満ちていない期日の最も早い値で、より早い期日が満ちた memo では次の期日）と契約の pointer（1 本）。
   - base で RED: 歯の名が 0 本（rc 4・機能不在）。行 a の `phase_table_` は緑のまま。
 - 限界: 閉じた時点の notes は台帳に残らないので、昇格の行は今の notes で判じる。
 - 却下: 古い形の閉じに新しい misfit の語を足す形（a2 の 1 語で数えられる）・線より前の閉じを判じる形（消費側の台帳に古い形の閉じが多く在り、直す手が無い）。
@@ -311,7 +312,7 @@ lifecycle.stale
   4. 閉じた memo の見送りの裁定 id が子の問いの裁定でない → deferred-not-child-ruling。
   5. 線の規則は行 a1 と同じ（2 つの線がどちらも在り、閉じた時刻が両方より後の閉じだけ）。
 - 閉包: 歯の fixture の `Issue` は JSON の字から `issues_of` で作り、字で組まない。
-- 歯（接頭辞 `phase_ruling_`・約 7 本・(1) は `crates/scribe2/src/ledger/mod.rs` の既存の `mod tests` に〔行 a2 の新しい関数を呼ぶので base で compile できず RED〕、(2)〜(5) は `+` の file の末尾の歯の区間に置く・§1）: (1) 関数が列を返し行 a1 の部品を変えない (2) 解けない値と古い形の各 1 (3) 結ばれていない裁定 id (4) 子の問いでない見送り (5) 線の前の同じ閉じは数えない・close-check が None なら数えない。base で RED: 歯の名が 0 本（rc 4・機能不在）。
+- 歯（接頭辞 `phase_ruling_`・約 7 本・(1) は `crates/scribe2/src/ledger/mod.rs` の既存の `mod tests` に〔行 a2 の新しい関数を呼ぶので base で compile できず RED〕、(2)〜(5) は `+` の file の末尾の歯の区間に置く・§1）: (1) 関数が列を返し行 a1 の部品を変えない (2) 解けない値と古い形の各 1 (3) 結ばれていない裁定 id (4) 子の問いでない見送り (5) 線の前の同じ閉じは数えない・close-check が None なら数えない (6) 対照: 解けて結ばれた裁定の閉じた問いと、子の問いの裁定の見送りの memo は misfit 0 件（(2)〜(4) の各歯の中に置き、全部を misfit にする実装を落とす）。base で RED: 歯の名が 0 本（rc 4・機能不在）。
 - 却下: 行 a1 の関数を広げる形（行 a1 を FR83 の行〔dispatcher.md 行 ak〕と結びの行〔fleet-event-log.md 行 h〕の着地まで待たせない）。
 
 ## 9. 便と列と発話の側の部品（行 b）
@@ -332,9 +333,9 @@ lifecycle.stale
 - 閉包: 本行の `+` の file は `Stage` の変種を名指す（網羅の match）。`Stage` を touches に持つ contract-source.md 行 c の write-set に、本行の `+` の file を同じ docs PR で `+` 付きで宣言した。`WaitReason` と `EventKind` の変種は名指さない（理由は字で受け、event は本体の `Case` で見分ける）。歯の fixture の event は JSON の字を `from_line` で読んで作る。
 - 歯（接頭辞 `phase_event_`・約 16 本・(3) の `STAGES` の全部の写しの 1 本は `crates/scribe2/src/fleet/mod.rs` の末尾の新しい test 区間に〔行 b の段の写しの関数を呼ぶので base で compile できず RED〕、ほかは `+` の file の末尾の歯の区間に置く・§1）:
   - (1) 入力の組が不足でも落ちない（1 本）。
-  - (2) contract-running の理由が便の語／admission と受付の断りの 2 経路の refused・断りの後に便が起きたら refused でない／queued の 8 語と unreflected-ruling・floor の手番と `links.on`／列に無い契約は no-phase／pointer の無い開いた契約は部品にならない（約 6 本）。
-  - (3) `STAGES` の全部が §2.1 の語に写る／Reviewed と Gated の PASS と PASS でない／Landed の札の生死（ci-waiting と landed-open・理由は終端の語）／閉じた契約の便は載らない（約 5 本）。
-  - (4) 発話の open と sorted の 3 つの行き先・線より前の発話は載らない・窓の外の sorted は載らない・逐語が出力に無い（約 4 本）。
+  - (2) contract-running の理由が便の語で手番 none／admission と受付の断りの 2 経路の refused（手番 seat）・断りの後に便が起きたら refused でない／札の生きた便と admission の理由が同時に在る契約は running（上が勝つ）／queued の 8 語と unreflected-ruling・floor の手番と `links.on`／列に無い契約は no-phase／pointer の無い開いた契約は部品にならない（約 7 本）。
+  - (3) `STAGES` の全部が §2.1 の語と手番（§3）に写る／Reviewed と Gated の PASS と PASS でない（理由は判定の語）／Landed の札の生死（ci-waiting と landed-open・理由は終端の語）／Failed の理由が最後の detail の頭／閉じた契約の便は載らない（約 5 本）。
+  - (4) 発話の open と sorted の 3 つの行き先・id が発話の ts の字のまま（秒より下の桁を持つ）で session と channel の写し・since は開きなら受けた ts・仕分けなら仕分けの ts・線より前の発話は載らない・窓の外の sorted は載らない・逐語が出力に無い（約 5 本）。
   - base で RED: 歯の名が 0 本（rc 4・機能不在）。行 a の `phase_table_` は緑のまま。
 - 触らない: 列の判定（局面の関数は列を呼ばない・ADR-0088 (1)）・event の kind と key・終端の語。
 - 却下: contract-running の手番を便と同じにする形（owned が二重に数える）。
@@ -353,7 +354,7 @@ lifecycle.stale
   4. requirement: どの行の req にも無い要件 → requirement-unrowed（seat・`owned` に数えない）・在る → requirement-rowed。
   5. 要件 id の列が無いか読める形でなければ requirement を `unmeasured` の `srs-unreadable`、契約表が同じなら row を `table-unreadable` で名指し、0 件と書かない。
 - 閉包: 歯の fixture の `Issue` は JSON の字から `issues_of` で作る。
-- 歯（行 b1 の write-set の `+` の兄弟の歯の file・`crates/scribe2/src/ledger/mod.rs` の test 区間の素の `mod` 宣言と file の頭の `#![cfg(test)]`・§1・その file の歯は全部が行 b1 の新しい関数を呼ぶので base で compile できず RED・接頭辞 `phase_main_`・約 12 本）: (1) 入力の不足で落ちない (2) commit の 4 語の各 1 fixture・器の便の commit は部品にならず結ばれる・線より前の commit は載らない (3) row の 3 局面（`.md` と `.toml` の pointer）・線より前の取り下げの閉じは着地 (4) requirement の 2 局面 (5) `unmeasured` の 2 語。base で RED: 歯の名が 0 本（rc 4・機能不在）。
+- 歯（行 b1 の write-set の `+` の兄弟の歯の file・`crates/scribe2/src/ledger/mod.rs` の test 区間の素の `mod` 宣言と file の頭の `#![cfg(test)]`・§1・その file の歯は全部が行 b1 の新しい関数を呼ぶので base で compile できず RED・接頭辞 `phase_main_`・約 12 本）: (1) 入力の不足で落ちない (2) commit の 4 語の各 1 fixture・`run:` が event log に無く発端の id も台帳に無い commit は run-trailer-unknown（先の語）・器の便の commit は部品にならず結ばれる・線より前の commit は載らない (3) row の 3 局面（`.md` と `.toml` の pointer）・row-beaded の since が bead の `created_at`・線より前の取り下げの閉じは着地 (4) requirement の 2 局面（requirement-unrowed の手番は seat） (5) `unmeasured` の 2 語（その周は requirement と row の部品を 1 件も出さない）。base で RED: 歯の名が 0 本（rc 4・機能不在）。
 - 限界: 消費側の SRS が器の読めない形なら requirement は常に `unmeasured`（読み手を足すのは別の行）。
 - 却下: row-beaded を閉じた bead にも当てる形（行の大半が窓を持たずに出力に残る）。
 
@@ -371,7 +372,7 @@ lifecycle.stale
   3. 記帳の関数 1 本が、線の種類（切り替え・close-check）・器の版（`CARGO_PKG_VERSION`）・main の sha を受け、約束 2 の値で 1 件だけ足す。close-check の線は detail に close-check を持つ。両方を足す周は切り替えの線を先に足す（close-check の線は切り替えの線より前にならない）。既に在る線は動かさない。
   4. event の読み手の既知の key と kind の表（`KNOWN_KEYS` と case の kind の key の表）と `EventKind` は変えない。close-check の線の行は今の読み手で読める。
 - 閉包: 本行の `+` の file は `LifecycleCutover` の event を組むので `EventKind` の変種を名指す。`EventKind` を touches に持つ dispatcher.md 行 a の write-set に、本行の `+` の file を同じ docs PR で `+` 付きで宣言した。
-- 歯（接頭辞 `cutover_line_`・約 8 本・(2) は `crates/scribe2/src/fleet/store.rs` の既存の test 区間に〔`Condition` の新しい値を使うので base で compile できず RED〕、ほかは `+` の file の末尾の歯の区間に置く・§1）: (1) 2 つの線の読み・最初の行が勝つ・detail がほかの値の行は数えない (2) 2 本の thread が同じ述語で足すと 1 件だけ (3) 1 度だけ・既に在れば足さない・同じ周は切り替えの線が先・close-check の線は detail を持つ (4) detail が close-check の `LifecycleCutover` の行の字が `Event::from_line` で読め、同じ行に既知の表の外の key を 1 つ足した字は読めない（読み手の表を変えないことを振る舞いで測る・`KNOWN_KEYS` は私有の const で、兄弟の module から数えられない）。base で RED: 歯の名が 0 本（rc 4・機能不在）。
+- 歯（接頭辞 `cutover_line_`・約 8 本・(2) は `crates/scribe2/src/fleet/store.rs` の既存の test 区間に〔`Condition` の新しい値を使うので base で compile できず RED〕、ほかは `+` の file の末尾の歯の区間に置く・§1）: (1) 2 つの線の読み・最初の行が勝つ・detail がほかの値の行は数えない (2) 2 本の thread が同じ述語で足すと 1 件だけ (3) 1 度だけ・既に在れば足さない・同じ周は切り替えの線が先・close-check の線は detail を持つ・記帳した行の version が器の版（`CARGO_PKG_VERSION`）で main が渡した sha (4) detail が close-check の `LifecycleCutover` の行の字が `Event::from_line` で読め、同じ行に既知の表の外の key を 1 つ足した字は読めない（読み手の表を変えないことを振る舞いで測る・`KNOWN_KEYS` は私有の const で、兄弟の module から数えられない）。base で RED: 歯の名が 0 本（rc 4・機能不在）。
 - 触らない: 局面の判定・書き直し・宣言の読み（呼び手の行 c が読んで渡す）。
 - 限界: 旧い版の器は close-check の線の行を読めるが線として扱わない。1 つの state dir が 2 つ以上の repo を持っても線は 1 本（FR90）。
 - 却下: key line を足す形・新しい kind を足す形（ADR-0100・旧い版の器が log の全部を読めなくなる）。
@@ -449,11 +450,12 @@ lifecycle.stale
   - 新しい file と歯の fixture に、`WaitReason` の変種の literal と `crates/scribe2/src/pipe/dispatch.rs` の `Turn` の literal を書かない（contract-source.md 行 c・dispatcher.md 行 w・consumer-sync.md 行 g の閉包を広げない）。列の判定は `WaitReason::render` の字で受ける。
   - rules 行は id の字で引く（`RuleKind` の変種を新しい file で名指さない）。
 - 歯:
-  - lib（行 c の書き手の `+` の file の末尾の歯の区間・接頭辞 `lifecycle_writer_`・約 16 本）: (2) 書きかけの不可視・古い書きの捨て 3 通りと順を持たない組・`Unchanged` で rename しない・`Busy` (3) 窓と since の継ぎと owned・行 a2 の関数が名指した行 a1 の閉じた部品が misfit に替わる（同じ id の部品が 1 つだけで、局面は misfit・理由は a2 の語）(4) 読めない 6 語の順と印・SRS が無い repo は unmeasured で書く (5) 置き換えの向き 2 通り・空の marks の作りと不消 (6) 印の消えの表（3 種 × {開始が印より前・印の後で同じ入力・印の後で新しい入力}）と merge-gate の event log だけの進み (7) 線の 2 置き場の記帳と不動・読めない宣言で記帳しない・`render` の字が `parse` で読める。
+  - lib（行 c の書き手の `+` の file の末尾の歯の区間・接頭辞 `lifecycle_writer_`・約 16 本）: (2) 書きかけの不可視・古い書きの捨て 3 通りと順を持たない組・`Unchanged` で rename しない・生きた pid の lock は rules 行 `fleet.lock_stale_ms` より古くても外さず `Busy`・死んだ pid の lock は外して `Written` (3) 窓は終わりの局面の閉じた部品だけに掛かる（窓より古く閉じた ruling-unreflected の問いは残る）・since の継ぎの 3 形（前の出力の同じ (part, id, phase) から継ぐ・前の出力が在って同じ組が無ければ `generated_at`・前の出力が無ければ null）・owned の 4 欄（count・unset・unknown・oldest・requirement は数えない）・行 a2 の関数が名指した行 a1 の閉じた部品が misfit に替わる（同じ id の部品が 1 つだけで、局面は misfit・理由は a2 の語）(4) 読めない 6 語の順と印（2 つの入力が同時に読めない周は読む順で先の語）・SRS が無い repo は unmeasured で書く (5) 置き換えの向き 2 通り・空の marks の作りと不消 (6) 印の消えの表（3 種 × {開始が印より前・印の後で同じ入力・印の後で新しい入力}）と merge-gate の event log だけの進み (7) 線の 2 置き場の記帳と不動・読めない宣言で記帳しない・宣言が false の repo は close-check の線を足さない・`Discarded` と `Busy` の周は線を足さない・`render` の字が `parse` で読める。
   - lib（行 c の印の読み手の `+` の file の末尾の歯の区間・接頭辞 `lifecycle_mark_`・約 8 本）: (1) manifest の fixture 3 形（journal だけ・table file つき・gc の世代つき）と files の形・順の比べ（同じ gen の chunks・gen の違い・head の違い）・loose の ref と packed-refs と worktree の gitfile。
-  - e2e（既存の `crates/scribe2-boundary/tests/e2e/fleet.rs`・接頭辞 `fleet_lifecycle_`・約 8 本）: (9) write と show が 1 字も違わない・absent と unreadable・`--wait-ms` の busy と coalesced (8) 契機 (a)(d)(e) で generated が進み、`dispatch ls` では進まない・偽 bd が落ちる周の印と理由 `ledger`・`lifecycle.lock` を生きた pid で持たせた周の契機 (a) は `dispatch` の rc と stdout の字を変えず、stderr に `lifecycle=busy` の 1 行を出す。新しい e2e の file は作らない（約 9 本）。
+  - e2e（既存の `crates/scribe2-boundary/tests/e2e/fleet.rs`・接頭辞 `fleet_lifecycle_`・約 8 本）: (9) write と show が 1 字も違わない・頭の行と部品の行の字が §12 の形（key の順・値の無い欄の `-`）・absent と unreadable・`--wait-ms` の busy と coalesced・使い方の行と `scribe2 help fleet` の頁（FORM と SUBCOMMANDS）が `lifecycle` を持つ (8) 契機 (a)(d)(e) で generated が進み、`dispatch ls` では進まない・(d) は land の終端の `close_bead` と `pipe retire` の close の 2 経路で進み、偽 bd の close が落ちた周は進まない（同じ歯の中の肯定と組）・偽 bd が落ちる周の印と理由 `ledger`・`lifecycle.lock` を生きた pid で持たせた周の契機 (a) は `dispatch` の rc と stdout の字を変えず、stderr に `lifecycle=busy` の 1 行を出す。新しい e2e の file は作らない（約 9 本）。
   - lib（`crates/scribe2/src/pipe/declaration/optional_keys.rs` の既存の test 区間・接頭辞 `close_check_at_sha_`・2 本）: (3) 2 つの commit の toy repo（1 つ目の宣言は close-check = false・2 つ目は true）で、sha の読みが 1 つ目で `Exempt`・2 つ目で `Joins`、HEAD を 1 つ目へ戻しても 2 つ目の sha の読みは `Joins`／宣言 file の無い sha は `Exempt`・型の違う宣言の sha は `Unreadable`。
-  - rules（既存の rules の e2e・接頭辞 `rules_lifecycle_rows_`・2 本）: (10) kind 2 つと行 14 本・語の外の後ろを断る。あわせて kind と行の数の pin（`rules_embedded_manifest_`）と外形 snapshot を直す。直す既存の歯は数の pin で base で落ちるので、札を付けずに flip-check の RED-on-base を通る（retroactive の札は base で緑のままの歯の逃がし・`crates/xtask/src/flipcheck.rs`・base で緑のままの歯が在る周だけ、その歯に札）。
+  - rules（既存の rules の e2e・接頭辞 `rules_lifecycle_rows_`・2 本）: (10) kind 2 つと行 14 本・行ごとの値（72 と 2・4・24・72）と裁定 id と ruled_at・語の外の後ろを断る。あわせて kind と行の数の pin（`rules_embedded_manifest_`）と外形 snapshot を直す。直す既存の歯は数の pin で base で落ちるので、札を付けずに flip-check の RED-on-base を通る（retroactive の札は base で緑のままの歯の逃がし・`crates/xtask/src/flipcheck.rs`・base で緑のままの歯が在る周だけ、その歯に札）。
+  - 外形の snapshot の歯（既存の `fleet_external_form`・`crates/scribe2-boundary/tests/e2e/fleet.rs`）を verify に入れる。使い方の行が `lifecycle` を持つので snapshot が変わり、base で落ちる。
   - base で RED の理由は機能不在: lib は歯の名が 0 本（rc 4）、e2e は使い方の誤りの rc 2、rules は行が無い。
   - 置き場と file ごとの base で RED の理由（§1）: `close_check_at_sha_` は optional_keys.rs の test 区間（新しい sha の読みを呼ぶので base で compile できない）。e2e の `fleet_lifecycle_` はどの歯も `fleet lifecycle` の口か出力の在ることを測る（base は使い方の誤りの rc 2 か出力が無い）。「`dispatch ls` では進まない」は契機 (a) で進む肯定と同じ歯に置く。`rules_lifecycle_rows_` は行が無い。直す `rules_embedded_manifest_` の pin は数が違う。
 - 触らない: 局面の判定（行 a〜b1）・線の読みと記帳（行 c1）・部分の書き直し（行 d）・門の印付け（行 e）・読み手（§15）・dispatch の判定と rc・land の終端の段と字。
@@ -492,8 +494,8 @@ lifecycle.stale
 - 閉包: 本行の `+` の file は便の event を読むので `EventKind` の変種を名指す。dispatcher.md 行 a の write-set に同じ docs PR で `+` 付きで宣言した。`Stage` の arm・`WaitReason` の変種の literal・`Turn` の literal は書かない（§12 の閉包と同じ）。
 - 歯:
   - lib（store の歯の区間・接頭辞 `store_read_after_`・4 本）: (4) 読みを数える包みで、10 MB と 20 MB の log（同じ 1 行目・同じ末尾）の読む byte が一致し、末尾の長さ + 1 と等しい (5) 繋がらない 3 形で読めない。
-  - lib（行 d の write-set の `+` の file の歯の区間・接頭辞 `lifecycle_partial_`・約 10 本）: (2) `Absent` (3) `Busy` (4) 開いた部品 200 本と窓の中の閉じた部品 700 本の出力に 10 MB と 20 MB の log を当て、読む byte・書いた中身・`Unchanged` の判定が一致する (6) 発話の 3 形と逐語の不在・便の段の移り・期日の移り・契約の部品の不動 (7) 印を消さない・`unreadable` の印。
-  - e2e（既存の `crates/scribe2-boundary/tests/e2e/seat/tick.rs`・接頭辞 `seat_tick_rewrites_lifecycle_`・2 本）: (1) tick の周で期日の memo が移る歯と、便の局面が移る歯。どちらも同じ歯の中で、出力の在る置き場の周の bd と git の shim の呼びの数が出力の無い置き場の周と等しい（撃ち 0）ことも測る（否定だけの歯を作らない・§1）。
+  - lib（行 d の write-set の `+` の file の歯の区間・接頭辞 `lifecycle_partial_`・約 10 本）: (2) `Absent` (3) 生きた pid の lock で 200 ms の後に `Busy`・死んだ pid の lock は外して書き直す (4) 開いた部品 200 本と窓の中の閉じた部品 700 本の出力に 10 MB と 20 MB の log を当て、読む byte・書いた中身・`Unchanged` の判定が一致する (6) 発話の 3 形と逐語の不在・request の仕分けで出力に在る memo の `links.source` に発話の ts が足される・便の段の移り・期日の移り・年齢の閾値を越えた部品が overdue true になり `owned.count` が増える・`scope` が partial で `inputs` の ledger と main は前の値のまま・契約の部品の不動 (7) 印を消さない・繋がらない 3 形のどれでも書かず `unreadable`（理由 `events`）の印。
+  - e2e（既存の `crates/scribe2-boundary/tests/e2e/seat/tick.rs`・接頭辞 `seat_tick_rewrites_lifecycle_`・2 本）: (1) tick の周で期日の memo が移る歯と、便の局面が移る歯（どちらも tick の rc は 0 のまま）。どちらも同じ歯の中で、出力の在る置き場の周の bd と git の shim の呼びの数が出力の無い置き場の周と等しい（撃ち 0）ことも測る（否定だけの歯を作らない・§1）。
   - 置き場と file ごとの base で RED の理由（§1）: `store_read_after_` は store.rs の test 区間（新しい末尾の読みを呼ぶので base で compile できない）。tick の e2e は base で出力が動かない。
   - base で RED の理由は機能不在: 歯の名が 0 本（rc 4）・tick の周で出力が動かない。
 - 触らない: tick の合図と alarm・全部の書き直し（行 c）・印付け（行 e）・`read_all` とその呼び手・発話と仕分けの記帳の本体・`emit` の門（`NotStopped`）。
@@ -522,7 +524,7 @@ lifecycle.stale
   7. 印を付けられない周（値を読めない・stale の lock を取れない）は allow を変えずに付けない（fail-open）。
 - 閉包: 本行の `+` の file は起票の門の書きと create の型の変種を名指さない（読みの関数が値を返すかだけを使う）。
 - 歯:
-  - e2e（既存の `crates/scribe2-boundary/tests/e2e/hook.rs`・接頭辞 `hook_stale_mark_`・約 9 本・bd と git の shim は呼びを file へ記す）: (1)(2) bdw の update が通った周に ledger-gate の印が付き値が fixture の manifest の印・断られた書きと読みだけの bd では付かない (3) `gh pr merge` が通った周に merge-gate の印が付き値が fixture の loose の ref（packed-refs だけの fixture と worktree の fixture でも同じ）(4) 出力の無い置き場では付かず、同じ置き場に出力を作った後の同じ command では付く (5) 2 度の書きで印が 1 つ・2 度目の値・門の後の消えない 3 通り（印の後の部分の書き直し・印より前に始まった全部の書き直し・manifest を動かさない `fleet lifecycle write`）と消える 1 通り（manifest の chunks を進めた後の `fleet lifecycle write`）・merge の印が event log だけの進みで消えない (6) 印が付いた周の bd と git の shim の呼びが 0（(1)〜(3) の歯の中で測る） (7) stale の lock を持った周は allow が変わらず印も付かず、lock を外した後の同じ command では付く。
+  - e2e（既存の `crates/scribe2-boundary/tests/e2e/hook.rs`・接頭辞 `hook_stale_mark_`・約 9 本・bd と git の shim は呼びを file へ記す）: (1)(2) bdw の update が通った周に ledger-gate の印が付き値が fixture の manifest の印・断られた書きと読みだけの bd では付かない (3) `gh pr merge` が通った周に merge-gate の印が付き値が fixture の loose の ref（packed-refs だけの fixture と worktree の fixture でも同じ）・台帳の書きと `gh pr merge` の片を両方持つ command では 2 種の印が付く(4) 出力の無い置き場では付かず、同じ置き場に出力を作った後の同じ command では付く (5) 2 度の書きで印が 1 つ・2 度目の値・印を付けた周に `lifecycle.json` の bytes が変わらない（書き直しを撃たない）・門の後の消えない 3 通り（印の後の部分の書き直し・印より前に始まった全部の書き直し・manifest を動かさない `fleet lifecycle write`）と消える 1 通り（manifest の chunks を進めた後の `fleet lifecycle write`）・merge の印が event log だけの進みで消えない (6) 印が付いた周の bd と git の shim の呼びが 0（(1)〜(3) の歯の中で測る） (7) stale の lock を持った周と、manifest を壊して台帳の印を読めない置き場の周は、allow が変わらず印も付かず、lock を外した後と manifest を直した後の同じ command では付く。
   - 否定だけの歯を作らない（§1）: 「付かない」「呼びが 0」「allow が変わらない」は、どれも印が付く肯定と同じ歯に置く。
   - lib（merge_gate.rs の歯の区間・接頭辞 `merge_gate_names_merge_`・3 本）: (3) merge の 3 形で真・`gh pr view` と help の読みだけで偽・`decide` と同じ片を名指す。
   - base で RED の理由は機能不在: e2e の hook.rs はどの歯も印が付く肯定を持ち、base では付かない。merge_gate.rs の test 区間の歯は新しい判じを呼ぶので base で compile できない。
@@ -560,8 +562,8 @@ section = "6"
 write-set = ["+crates/scribe2/src/case/mod.rs", "+crates/scribe2/src/ledger/promotion.rs", "crates/scribe2/src/ledger/trigger.rs", "crates/scribe2/src/ledger/mod.rs", "crates/scribe2/src/seat/ledger.rs", "crates/scribe2/src/pipe/dispatch/precheck.rs", "crates/scribe2/src/ledger/form.rs", "crates/scribe2/src/hook/graph_guard.rs", "crates/scribe2/src/lib.rs"]
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail phase_table_", "cargo nextest run -p scribe2 --lib --no-tests=fail promotion_line_", "cargo nextest run -p scribe2 --lib --no-tests=fail trigger_met_", "cargo nextest run -p scribe2 --lib --no-tests=fail issue_times_"]
 size = "M"
-growth = ["crates/scribe2/src/case/mod.rs:560", "crates/scribe2/src/ledger/promotion.rs:170", "crates/scribe2/src/ledger/trigger.rs:120", "crates/scribe2/src/seat/ledger.rs:30", "crates/scribe2/src/ledger/mod.rs:1", "crates/scribe2/src/lib.rs:1", "crates/scribe2/src/pipe/dispatch/precheck.rs:2", "crates/scribe2/src/ledger/form.rs:2", "crates/scribe2/src/hook/graph_guard.rs:2"]
-done = "(1) case の新しい module が §2 の 38 語（宣言順）・9 種類・6 手番・§4 の misfit の 15 語・§5.2 の部品の型と、共通の欄の 9 key と links の 8 key の const の列を持ち、字は表と 1 字も違わず、lib.rs に 1 行・歯の module は file の末尾 (2) 語から手番の 1 関数が §3 の表を網羅の match で持ち、contract-queued の理由の表は WAIT_REASONS の 8 語と unreflected-ruling・floor を含み、表に無い語は None (3) trigger.rs の純関数 met が 5 形の満ちを世界から判じる（同梱は印を外した等しさと dir の前方一致） (4) 昇格の行の読み手が 全部 / 一部 の 2 形を読み、最後の行が勝ち、読めない行は字と理由を持ち、行頭でない行と , を区切りと読まない (5) Issue が created_at と closed_at を Option で持ち、issues_of が読み、無い要素は None で、組みの 4 か所（便の始めに数え直す）を直す 歯: phase_table_ 7（(g) は key の列）・promotion_line_ 6・trigger_met_ 6（trigger.rs の test 区間）・issue_times_ 2（seat/ledger.rs の test 区間）が base で 0 本（rc 4・機能不在）、既存の ledger_trigger_・seat_ledger_・precheck_intake_ は期待を変えずに緑"
+growth = ["crates/scribe2/src/case/mod.rs:600", "crates/scribe2/src/ledger/promotion.rs:185", "crates/scribe2/src/ledger/trigger.rs:150", "crates/scribe2/src/seat/ledger.rs:30", "crates/scribe2/src/ledger/mod.rs:1", "crates/scribe2/src/lib.rs:1", "crates/scribe2/src/pipe/dispatch/precheck.rs:2", "crates/scribe2/src/ledger/form.rs:2", "crates/scribe2/src/hook/graph_guard.rs:2"]
+done = "(1) case の新しい module が §2 の 38 語（宣言順）・9 種類・6 手番・§4 の misfit の 15 語・§5.2 の部品の型と、共通の欄の 9 key と links の 8 key の const の列を持ち、字は表と 1 字も違わず、lib.rs に 1 行・歯の module は file の末尾 (2) 語から手番の 1 関数が §3 の表を網羅の match で持ち、contract-queued の理由の表は WAIT_REASONS の 8 語と unreflected-ruling・floor を含み、表に無い語は None (3) trigger.rs の純関数 met が 5 形の満ちを世界から判じる（同梱は印を外した等しさと dir の前方一致） (4) 昇格の行の読み手が 全部 / 一部 の 2 形を読み、最後の行が勝ち、読めない行は字と理由を持ち、行頭でない行と , を区切りと読まない (5) Issue が created_at と closed_at を Option で持ち、issues_of が読み、無い要素は None で、組みの 4 か所（便の始めに数え直す）を直す 歯: phase_table_ 9（(g) は key の列・(h) 種類・(i) §3 の表の全行）・promotion_line_ 7（最後の行が読めない形）・trigger_met_ 8（境界と / の無い同梱・trigger.rs の test 区間）・issue_times_ 2（seat/ledger.rs の test 区間）が base で 0 本（rc 4・機能不在）、既存の ledger_trigger_・seat_ledger_・precheck_intake_ は期待を変えずに緑"
 
 [[contract]]
 id = "a1"
@@ -572,8 +574,8 @@ depends = ["a"]
 write-set = ["+crates/scribe2/src/ledger/phase.rs", "+crates/scribe2/src/ledger/phase_tests.rs", "crates/scribe2/src/ledger/mod.rs"]
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail phase_ledger_"]
 size = "L"
-growth = ["crates/scribe2/src/ledger/phase.rs:480", "crates/scribe2/src/ledger/phase_tests.rs:600", "crates/scribe2/src/ledger/mod.rs:2"]
-done = "(1) ledger の新しい module の純関数 1 本が台帳・接頭辞・時刻・窓・2 つの線・未反映の id・処置の無い判定の id・開いた契約の write-set を受け、question・memo・epic と閉じた contract の部品と misfit を返し、開いた契約は返さない (2) 種類の判定は §2 の順、memo は form-both → promoting → asking → no-trigger → actionable（理由 4 語）→ waiting（keep）→ no-phase の順 (3) FR93 の条件の 1 関数が 5 つの条件を持ち crate の中から呼べる (4) 問いの 3 局面と links (5) epic の 3 局面 (6) 閉じの 5 語を 2 つの線の両方より後の閉じだけに判じ、ほかは *-closed、接頭辞が None なら unmeasured に ledger-prefix (7) since は導ける値だけ (8) memo の due・triggers・keep と閉じた契約の pointer 歯: phase_ledger_（入力の不足・種類と memo の局面と上の勝ち・close-due と条件の欠け・問い・epic・閉じの 5 語と線の前後と close-check が None・since・欄）約 26 本（兄弟の歯の file を ledger/mod.rs の test 区間の素の mod で宣言し、頭に #![cfg(test)]）が base で 0 本（rc 4・機能不在）、fixture の Issue は JSON の字から issues_of で作る"
+growth = ["crates/scribe2/src/ledger/phase.rs:480", "crates/scribe2/src/ledger/phase_tests.rs:680", "crates/scribe2/src/ledger/mod.rs:2"]
+done = "(1) ledger の新しい module の純関数 1 本が台帳・接頭辞・時刻・窓・2 つの線・未反映の id・処置の無い判定の id・開いた契約の write-set を受け、question・memo・epic と閉じた contract の部品と misfit を返し、開いた契約は返さない (2) 種類の判定は §2 の順、memo は form-both → promoting → asking → no-trigger → actionable（理由 4 語）→ waiting（keep）→ no-phase の順 (3) FR93 の条件の 1 関数が 5 つの条件を持ち crate の中から呼べる (4) 問いの 3 局面と links (5) epic の 3 局面 (6) 閉じの 5 語を 2 つの線の両方より後の閉じだけに判じ、ほかは *-closed、接頭辞が None なら unmeasured に ledger-prefix (7) since は導ける値だけ (8) memo の due・triggers・keep と閉じた契約の pointer 歯: phase_ledger_（入力の不足・局面と手番と理由・種類の重なりと memo の局面と上の勝ち・close-due と条件の欠け・問いと links・子の無い epic・閉じの 5 語〔close-kind-mismatch 4 形・close-unresolved 2 形〕と線の前後と close-check が None・since・欄と次の期日）約 30 本（兄弟の歯の file を ledger/mod.rs の test 区間の素の mod で宣言し、頭に #![cfg(test)]）が base で 0 本（rc 4・機能不在）、fixture の Issue は JSON の字から issues_of で作る"
 
 [[contract]]
 id = "a2"
@@ -584,8 +586,8 @@ depends = ["a1"]
 write-set = ["+crates/scribe2/src/ledger/phase_ruling.rs", "crates/scribe2/src/ledger/mod.rs"]
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail phase_ruling_"]
 size = "S"
-growth = ["crates/scribe2/src/ledger/phase_ruling.rs:240", "crates/scribe2/src/ledger/mod.rs:30"]
-done = "(1) ledger の新しい module の純関数 1 本が閉じた問いと memo・2 つの線・結んだ裁定 id を受けて misfit の (bead id・語) の列を返し、行 a1 の部品を変えない (2) 解けない裁定と見送りの値と古い形が close-ruling-unresolved (3) 結んだ列に無い裁定 id が close-ruling-not-bound (4) 子の問いでない見送りが deferred-not-child-ruling (5) 線の規則は行 a1 と同じ 歯: phase_ruling_ 約 7 本（(1) は ledger/mod.rs の mod tests）が base で 0 本（rc 4・機能不在）、fixture の Issue は JSON の字から作る"
+growth = ["crates/scribe2/src/ledger/phase_ruling.rs:260", "crates/scribe2/src/ledger/mod.rs:30"]
+done = "(1) ledger の新しい module の純関数 1 本が閉じた問いと memo・2 つの線・結んだ裁定 id を受けて misfit の (bead id・語) の列を返し、行 a1 の部品を変えない (2) 解けない裁定と見送りの値と古い形が close-ruling-unresolved (3) 結んだ列に無い裁定 id が close-ruling-not-bound (4) 子の問いでない見送りが deferred-not-child-ruling (5) 線の規則は行 a1 と同じ 歯: phase_ruling_ 約 7 本（(2)〜(4) は解けて結ばれた対照の 0 件と組）（(1) は ledger/mod.rs の mod tests）が base で 0 本（rc 4・機能不在）、fixture の Issue は JSON の字から作る"
 
 [[contract]]
 id = "b"
@@ -596,8 +598,8 @@ depends = ["a"]
 write-set = ["+crates/scribe2/src/fleet/phase.rs", "crates/scribe2/src/fleet/mod.rs"]
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail phase_event_"]
 size = "L"
-growth = ["crates/scribe2/src/fleet/phase.rs:760", "crates/scribe2/src/fleet/mod.rs:30"]
-done = "(1) fleet の新しい module の純関数 1 本が列の判定（理由の名と値の字）・最新の便・受付の断り・発話と仕分けの event・bind の結び・線と時刻と窓を受け、開いた契約と便と発話の部品を返す (2) 開いた契約は running（理由は便の語・手番 none）→ refused（admission か便の後に起きていない断り）→ queued（§3 の表と links.on）→ no-phase、pointer の無い契約は部品にしない (3) 便の段の写しは段の値だけを受ける別の純関数が §2.1 を Stage の網羅の match で持つ (4) 発話は線より後だけ・sorted は 3 つの行き先と窓・open は seat・逐語なし 歯: phase_event_ 約 16 本（STAGES の写しの 1 本は fleet/mod.rs の末尾の新しい test 区間）が base で 0 本（rc 4・機能不在）、WaitReason と EventKind の変種を名指さず、fixture の event は JSON の字を from_line で読む"
+growth = ["crates/scribe2/src/fleet/phase.rs:800", "crates/scribe2/src/fleet/mod.rs:30"]
+done = "(1) fleet の新しい module の純関数 1 本が列の判定（理由の名と値の字）・最新の便・受付の断り・発話と仕分けの event・bind の結び・線と時刻と窓を受け、開いた契約と便と発話の部品を返す (2) 開いた契約は running（理由は便の語・手番 none）→ refused（admission か便の後に起きていない断り）→ queued（§3 の表と links.on）→ no-phase、pointer の無い契約は部品にしない (3) 便の段の写しは段の値だけを受ける別の純関数が §2.1 を Stage の網羅の match で持つ (4) 発話は線より後だけ・sorted は 3 つの行き先と窓・open は seat・逐語なし 歯: phase_event_ 約 18 本（上の勝ち・手番・理由の字・発話の id と since を含む・STAGES の写しの 1 本は fleet/mod.rs の末尾の新しい test 区間）が base で 0 本（rc 4・機能不在）、WaitReason と EventKind の変種を名指さず、fixture の event は JSON の字を from_line で読む"
 
 [[contract]]
 id = "b1"
@@ -608,8 +610,8 @@ depends = ["a"]
 write-set = ["+crates/scribe2/src/ledger/phase_main.rs", "+crates/scribe2/src/ledger/phase_main_tests.rs", "crates/scribe2/src/ledger/mod.rs"]
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail phase_main_"]
 size = "M"
-growth = ["crates/scribe2/src/ledger/phase_main.rs:220", "crates/scribe2/src/ledger/phase_main_tests.rs:320", "crates/scribe2/src/ledger/mod.rs:2"]
-done = "(1) ledger の新しい module の純関数 1 本が線より後の commit・event log の run id・台帳・契約表の行・要件 id を受け、commit・row・requirement の部品を返す (2) 器の便の commit は部品にせず links.commits に結び、run-trailer-unknown・source-unresolved・commit-no-trailer・commit-landed を判じる (3) row の 3 局面（.md と .toml・線より前の閉じは着地） (4) requirement の 2 局面（owned に数えない） (5) 要件と契約表が無いか読めない形なら unmeasured の srs-unreadable と table-unreadable 歯: phase_main_ 約 12 本（兄弟の歯の file を ledger/mod.rs の test 区間の素の mod で宣言し、頭に #![cfg(test)]）が base で 0 本（rc 4・機能不在）、fixture の Issue は JSON の字から作る"
+growth = ["crates/scribe2/src/ledger/phase_main.rs:220", "crates/scribe2/src/ledger/phase_main_tests.rs:340", "crates/scribe2/src/ledger/mod.rs:2"]
+done = "(1) ledger の新しい module の純関数 1 本が線より後の commit・event log の run id・台帳・契約表の行・要件 id を受け、commit・row・requirement の部品を返す (2) 器の便の commit は部品にせず links.commits に結び、run-trailer-unknown・source-unresolved・commit-no-trailer・commit-landed を判じる (3) row の 3 局面（.md と .toml・線より前の閉じは着地） (4) requirement の 2 局面（owned に数えない） (5) 要件と契約表が無いか読めない形なら unmeasured の srs-unreadable と table-unreadable 歯: phase_main_ 約 13 本（2 語に当たる commit の先の語・row-beaded の since・unmeasured の周の部品 0 を含む）（兄弟の歯の file を ledger/mod.rs の test 区間の素の mod で宣言し、頭に #![cfg(test)]）が base で 0 本（rc 4・機能不在）、fixture の Issue は JSON の字から作る"
 
 [[contract]]
 id = "c1"
@@ -619,7 +621,7 @@ section = "11"
 write-set = ["+crates/scribe2/src/fleet/lifecycle_line.rs", "crates/scribe2/src/fleet/mod.rs", "crates/scribe2/src/fleet/store.rs"]
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail cutover_line_"]
 size = "S"
-growth = ["crates/scribe2/src/fleet/lifecycle_line.rs:200", "crates/scribe2/src/fleet/mod.rs:1", "crates/scribe2/src/fleet/store.rs:45"]
+growth = ["crates/scribe2/src/fleet/lifecycle_line.rs:205", "crates/scribe2/src/fleet/mod.rs:1", "crates/scribe2/src/fleet/store.rs:45"]
 done = "(1) fleet の新しい module の読みの純関数が event の列から切り替えの線（detail の無い最初の LifecycleCutover）と close-check の線（detail が close-check の最初の行）を返し、detail がほかの値の行は数えない (2) store の Condition に無いときだけ足す値を 1 つ足し、event の lock の内側で述語に当たる event が無いときだけ追記し、match は store.rs の 1 か所のまま (3) 記帳の関数が器の版と main の sha で 1 件だけ足し、close-check の線は detail に close-check を持ち、同じ周は切り替えの線が先、在る線は動かさない (4) KNOWN_KEYS と kind の key の表と EventKind は変えず、close-check の線の行が from_line で読め、表の外の key を足した行は読めない 歯: cutover_line_ 約 8 本（(2) は store.rs の test 区間）が base で 0 本（rc 4・機能不在）"
 
 [[contract]]
@@ -629,10 +631,10 @@ req = ["FR90", "FR94", "AC60"]
 section = "12"
 depends = ["a2", "b", "b1", "c1"]
 write-set = ["+crates/scribe2/src/fleet/lifecycle.rs", "+crates/scribe2/src/fleet/lifecycle_mark.rs", "crates/scribe2/src/fleet/mod.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/src/help.rs", "crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/land/finish.rs", "crates/scribe2/src/pipe/retire.rs", "crates/scribe2/src/pipe/declaration/optional_keys.rs", "crates/scribe2/src/rules/mod.rs", "rules/manifest.toml", "crates/scribe2-boundary/tests/e2e/fleet.rs", "crates/scribe2-boundary/tests/e2e/rules.rs", "crates/scribe2-boundary/tests/e2e/rules/embedded.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__rules__rules_external_form.snap", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__fleet__fleet_external_form.snap"]
-verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail lifecycle_writer_", "cargo nextest run -p scribe2 --lib --no-tests=fail lifecycle_mark_", "cargo nextest run -p scribe2 --lib --no-tests=fail close_check_at_sha_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail fleet_lifecycle_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_lifecycle_rows_"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail lifecycle_writer_", "cargo nextest run -p scribe2 --lib --no-tests=fail lifecycle_mark_", "cargo nextest run -p scribe2 --lib --no-tests=fail close_check_at_sha_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail fleet_lifecycle_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail fleet_external_form", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_lifecycle_rows_"]
 size = "L"
-growth = ["crates/scribe2/src/fleet/lifecycle.rs:1060", "crates/scribe2/src/fleet/lifecycle_mark.rs:260", "crates/scribe2/src/fleet/mod.rs:2", "crates/scribe2/src/fleet/cli.rs:60", "crates/scribe2/src/help.rs:2", "crates/scribe2/src/pipe/dispatch.rs:6", "crates/scribe2/src/pipe/land/finish.rs:4", "crates/scribe2/src/pipe/retire.rs:4", "crates/scribe2/src/pipe/declaration/optional_keys.rs:40", "crates/scribe2/src/rules/mod.rs:40", "crates/scribe2-boundary/tests/e2e/fleet.rs:260"]
-done = "(1) 入力の印は ledger {noms: root・gen・chunks | files: len・mtime_ns}・events {len・head}・main {ref refs/remotes/origin/main・sha} で、台帳は manifest の 1 file、main は git を撃たずに loose・packed-refs・worktree の common dir を読み、同じ gen / head なら数の大小・違えば順を持たない (2) 書き手 1 本が lifecycle.lock を死んだ所有者だけ外す取り方で取り、.lifecycle.json.<pid>.tmp に render で書いて fsync の後 rename し、新しい印の file には Discarded・generated_at の他に同じ中身は Unchanged で rename せず、返りは閉じた 6 値 (3) 全部の書き直しは lock の後に FR90 の 5 入力を読み、宣言は読んだ main の sha の tree から optional_keys.rs に足す sha の読み（同じ閉じた 3 値）で読み、行 a1・a2・b・b1 で導いて a2 の misfit を置き換え、since を継ぎ、窓を終わりの閉じた部品だけに掛け、owned を数える (4) 読めない周は書かず unreadable の印（理由は ledger・events・main・table・srs・declaration の最初の 1 語）、SRS と契約表の無い repo は unmeasured で書く (5) lifecycle.stale は lifecycle.stale.lock の内側の 1 関数で読み書きし、種類 3 つ・種類ごとに 1 つ・後の印が置き換え、最初の Written で空の marks を作って消さず、json の rename の後に消す (6) 印を消すのは Written か Unchanged の全部の書き直しで、開始が印の at より後 ∧ 種類ごとの条件の印だけ (7) Written か Unchanged の周に行 c1 の関数で切り替えの線と、宣言が true なら close-check の線を足す (8) fire の後・finish.rs と retire.rs の close の Ok の後・口の契機で撃ち（bind と答えの口の後の契機は後の行）、呼び手の rc と stdout を変えず、Written・Unchanged・Coalesced の外は stderr に lifecycle=<語> の 1 行、dispatch ls は撃たない (9) fleet lifecycle write（--wait-ms・Coalesced・busy）と show（absent・unreadable）の text の 2 種の行が §12 のとおりで、使い方と help と外形 snapshot が lifecycle を持つ (10) rules 行 lifecycle.closed_window_h（72）と lifecycle.age_h.<語> 13 行が裁定 user 2026-09-30T04:25Z で在り、語の外の後ろは断る 歯: lifecycle_writer_（a2 の misfit の置き換えを含む）・lifecycle_mark_・close_check_at_sha_（optional_keys.rs の test 区間）が base で 0 本（rc 4）、fleet_lifecycle_（busy の周の stderr の 1 行を含む）が使い方の誤りの rc 2、rules_lifecycle_rows_ が行の不在で RED（機能不在）、直す rules_embedded_manifest_ の pin と外形 snapshot は札を付けずに flip-check の RED-on-base を通る（base で緑のままの歯が在る周だけ、その歯に札）"
+growth = ["crates/scribe2/src/fleet/lifecycle.rs:1120", "crates/scribe2/src/fleet/lifecycle_mark.rs:260", "crates/scribe2/src/fleet/mod.rs:2", "crates/scribe2/src/fleet/cli.rs:60", "crates/scribe2/src/help.rs:2", "crates/scribe2/src/pipe/dispatch.rs:6", "crates/scribe2/src/pipe/land/finish.rs:4", "crates/scribe2/src/pipe/retire.rs:4", "crates/scribe2/src/pipe/declaration/optional_keys.rs:40", "crates/scribe2/src/rules/mod.rs:40", "crates/scribe2-boundary/tests/e2e/fleet.rs:320"]
+done = "(1) 入力の印は ledger {noms: root・gen・chunks | files: len・mtime_ns}・events {len・head}・main {ref refs/remotes/origin/main・sha} で、台帳は manifest の 1 file、main は git を撃たずに loose・packed-refs・worktree の common dir を読み、同じ gen / head なら数の大小・違えば順を持たない (2) 書き手 1 本が lifecycle.lock を死んだ所有者だけ外す取り方で取り、.lifecycle.json.<pid>.tmp に render で書いて fsync の後 rename し、新しい印の file には Discarded・generated_at の他に同じ中身は Unchanged で rename せず、返りは閉じた 6 値 (3) 全部の書き直しは lock の後に FR90 の 5 入力を読み、宣言は読んだ main の sha の tree から optional_keys.rs に足す sha の読み（同じ閉じた 3 値）で読み、行 a1・a2・b・b1 で導いて a2 の misfit を置き換え、since を継ぎ、窓を終わりの閉じた部品だけに掛け、owned を数える (4) 読めない周は書かず unreadable の印（理由は ledger・events・main・table・srs・declaration の最初の 1 語）、SRS と契約表の無い repo は unmeasured で書く (5) lifecycle.stale は lifecycle.stale.lock の内側の 1 関数で読み書きし、種類 3 つ・種類ごとに 1 つ・後の印が置き換え、最初の Written で空の marks を作って消さず、json の rename の後に消す (6) 印を消すのは Written か Unchanged の全部の書き直しで、開始が印の at より後 ∧ 種類ごとの条件の印だけ (7) Written か Unchanged の周に行 c1 の関数で切り替えの線と、宣言が true なら close-check の線を足す (8) fire の後・finish.rs と retire.rs の close の Ok の後・口の契機で撃ち（bind と答えの口の後の契機は後の行）、呼び手の rc と stdout を変えず、Written・Unchanged・Coalesced の外は stderr に lifecycle=<語> の 1 行、dispatch ls は撃たない (9) fleet lifecycle write（--wait-ms・Coalesced・busy）と show（absent・unreadable）の text の 2 種の行が §12 のとおりで、使い方と help と外形 snapshot が lifecycle を持つ (10) rules 行 lifecycle.closed_window_h（72）と lifecycle.age_h.<語> 13 行が裁定 user 2026-09-30T04:25Z で在り、語の外の後ろは断る 歯: lifecycle_writer_（a2 の misfit の置き換え・lock の生死・窓と since の 3 形と owned の 4 欄・読めない 2 入力の先の語・false と Discarded と Busy の周の線を含む）・lifecycle_mark_・close_check_at_sha_（optional_keys.rs の test 区間）が base で 0 本（rc 4）、fleet_lifecycle_（busy の周の stderr の 1 行・text の形・help の頁・close の 2 経路と落ちた close を含む）が使い方の誤りの rc 2、fleet_external_form が外形の snapshot の違い、rules_lifecycle_rows_（値と裁定 id）が行の不在で RED（機能不在）、直す rules_embedded_manifest_ の pin と外形 snapshot は札を付けずに flip-check の RED-on-base を通る（base で緑のままの歯が在る周だけ、その歯に札）"
 
 [[contract]]
 id = "d"
@@ -643,8 +645,8 @@ depends = ["c"]
 write-set = ["+crates/scribe2/src/fleet/lifecycle_partial.rs", "crates/scribe2/src/fleet/mod.rs", "crates/scribe2/src/fleet/store.rs", "crates/scribe2/src/seat/tick.rs", "crates/scribe2-boundary/tests/e2e/seat/tick.rs"]
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail store_read_after_", "cargo nextest run -p scribe2 --lib --no-tests=fail lifecycle_partial_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_rewrites_lifecycle_"]
 size = "M"
-growth = ["crates/scribe2/src/fleet/lifecycle_partial.rs:420", "crates/scribe2/src/fleet/mod.rs:1", "crates/scribe2/src/fleet/store.rs:60", "crates/scribe2/src/seat/tick.rs:4"]
-done = "(1) 管理 tick の周の契機で撃ち、呼び手の rc と字を変えない（発話と仕分けの記帳の直後の契機は後の行） (2) 出力の無い置き場は Absent (3) lifecycle.lock を死んだ所有者だけ外す取り方で 200 ms まで取り直し、取れなければ Busy (4) 読むのは今の lifecycle.json・log の 1 行目・len の直前の 1 byte・store に足す末尾の読みによる len から末尾・埋め込みの rules だけで、子 process を撃たない (5) head が違う・短い・直前が改行でない周は書かず unreadable（理由 events） (6) 発話・仕分けの行き先と memo の発端の結び・開いた契約の最新の便の局面・due の過ぎた memo の memo-actionable への移り・年齢と owned を行 a・b の関数で書き直し、scope は partial・inputs.events だけを進め、ほかの部品を動かさない (7) 書きは行 c の書き手 1 本で、印を消さない 歯: store_read_after_（数える包みで 10 MB と 20 MB の読む byte が末尾の長さ + 1 で一致・繋がらない 3 形）・lifecycle_partial_（Absent・Busy・200 + 700 部品で 10 MB と 20 MB の読む byte と中身の一致・発話 3 形と逐語の不在・便と期日の移り・契約の不動・印の不消と読めない印）・seat_tick_rewrites_lifecycle_（tick の周の移り 2/2 と、同じ歯の中の shim の呼びの数の一致）が base で RED（機能不在）"
+growth = ["crates/scribe2/src/fleet/lifecycle_partial.rs:470", "crates/scribe2/src/fleet/mod.rs:1", "crates/scribe2/src/fleet/store.rs:60", "crates/scribe2/src/seat/tick.rs:4"]
+done = "(1) 管理 tick の周の契機で撃ち、呼び手の rc と字を変えない（発話と仕分けの記帳の直後の契機は後の行） (2) 出力の無い置き場は Absent (3) lifecycle.lock を死んだ所有者だけ外す取り方で 200 ms まで取り直し、取れなければ Busy (4) 読むのは今の lifecycle.json・log の 1 行目・len の直前の 1 byte・store に足す末尾の読みによる len から末尾・埋め込みの rules だけで、子 process を撃たない (5) head が違う・短い・直前が改行でない周は書かず unreadable（理由 events） (6) 発話・仕分けの行き先と memo の発端の結び・開いた契約の最新の便の局面・due の過ぎた memo の memo-actionable への移り・年齢と owned を行 a・b の関数で書き直し、scope は partial・inputs.events だけを進め、ほかの部品を動かさない (7) 書きは行 c の書き手 1 本で、印を消さない 歯: store_read_after_（数える包みで 10 MB と 20 MB の読む byte が末尾の長さ + 1 で一致・繋がらない 3 形）・lifecycle_partial_（Absent・lock の生死・200 + 700 部品で 10 MB と 20 MB の読む byte と中身の一致・発話 3 形と逐語の不在・発端の結び・便と期日の移り・年齢と owned・scope と inputs・契約の不動・印の不消と繋がらない 3 形の読めない印）・seat_tick_rewrites_lifecycle_（tick の周の移り 2/2 と、同じ歯の中の shim の呼びの数の一致）が base で RED（機能不在）"
 
 [[contract]]
 id = "e"
@@ -655,6 +657,6 @@ depends = ["c"]
 write-set = ["+crates/scribe2/src/hook/stale_gate.rs", "crates/scribe2/src/hook/mod.rs", "crates/scribe2/src/hook/merge_gate.rs", "crates/scribe2-boundary/tests/e2e/hook.rs"]
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail hook_stale_mark_", "cargo nextest run -p scribe2 --lib --no-tests=fail merge_gate_names_merge_"]
 size = "S"
-growth = ["crates/scribe2/src/hook/stale_gate.rs:120", "crates/scribe2/src/hook/mod.rs:4", "crates/scribe2/src/hook/merge_gate.rs:40", "crates/scribe2-boundary/tests/e2e/hook.rs:260"]
-done = "(1) hook の PreToolUse の Bash の道が最後に allow と決めた周だけ hook/mod.rs の allow の出口の 1 行から新しい子 module の判じを呼び、門が断った周は付けない (2) segments と write_of・create_of が値を返す片を持つ command に行 c の台帳の印（書きの前の値）の ledger-gate を付ける (3) merge_gate.rs に gh pr merge の片を名指すかの判じ 1 本を decide と同じ片の割りで足し、当たる command に行 c の main の読みの sha の merge-gate を付ける (4) lifecycle.json の無い置き場では付けない (5) 書くのは行 c の印の関数 1 本で種類ごとに 1 つ・後の印が置き換え・書き直しは撃たない (6) 子 process は 0 本 (7) 値を読めない周と stale の lock を取れない周は allow を変えずに付けない 歯: hook_stale_mark_（ledger-gate と merge-gate の値・packed-refs と worktree・断られた書きと読みだけの bd と出力の無い置き場で付かない・置き換え・消えない 3 通りと消える 1 通り・event log だけの進み・shim の呼び 0・lock を持った周の allow。否定はどれも印が付く肯定と同じ歯に置く）と merge_gate_names_merge_ が base で RED（機能不在）"
+growth = ["crates/scribe2/src/hook/stale_gate.rs:120", "crates/scribe2/src/hook/mod.rs:4", "crates/scribe2/src/hook/merge_gate.rs:40", "crates/scribe2-boundary/tests/e2e/hook.rs:290"]
+done = "(1) hook の PreToolUse の Bash の道が最後に allow と決めた周だけ hook/mod.rs の allow の出口の 1 行から新しい子 module の判じを呼び、門が断った周は付けない (2) segments と write_of・create_of が値を返す片を持つ command に行 c の台帳の印（書きの前の値）の ledger-gate を付ける (3) merge_gate.rs に gh pr merge の片を名指すかの判じ 1 本を decide と同じ片の割りで足し、当たる command に行 c の main の読みの sha の merge-gate を付ける (4) lifecycle.json の無い置き場では付けない (5) 書くのは行 c の印の関数 1 本で種類ごとに 1 つ・後の印が置き換え・書き直しは撃たない (6) 子 process は 0 本 (7) 値を読めない周と stale の lock を取れない周は allow を変えずに付けない 歯: hook_stale_mark_（ledger-gate と merge-gate の値・packed-refs と worktree・2 種の片を持つ command の 2 印・印の周の lifecycle.json の不変・読めない manifest の fail-open・断られた書きと読みだけの bd と出力の無い置き場で付かない・置き換え・消えない 3 通りと消える 1 通り・event log だけの進み・shim の呼び 0・lock を持った周の allow。否定はどれも印が付く肯定と同じ歯に置く）と merge_gate_names_merge_ が base で RED（機能不在）"
 <!-- contracts:end -->
