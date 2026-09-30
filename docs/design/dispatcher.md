@@ -770,9 +770,10 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
   3. **理由の語**: 待ちの理由に 1 値 `floor` を足す。描画は `floor:<rc>`・`floor:unfireable`・`floor:timeout` の 3 形。
      - 名の列の末尾に floor を足す（行 am は後から floor の直前に unreflected-ruling を足す）。
      - 床の検査の型の値は子 module の型で持ち、待ちの理由への写しは dispatch.rs だけが書く。floor.rs は WaitReason を名指さない（facts.rs の既存の Overlap の読みは変えない）。
+     - この分け方は挙動に差が出ないので done には載せない（便の diff の設計適合は gate の審査で見る・行 al・be と同じ扱い）。
   4. **並列の実測**: 並列の実測に床の欄を 1 つ足す。今の判定の file の語が fail / unfireable / timeout の周だけ値を持つ。
      - tick は git を撃たず、file だけを読む。main の先端の sha を持たないので、本行が床の子 module に足す sha を取らない今の判定の読み current（current_of の包み・file が無い周と読めない周は無し・撃たない）を呼ぶ。列の 1 周は sha を持つので judgement を呼ぶ。
-     - 合図の行（live= idle= …）の字面は変えない。
+     - 合図の行（live= idle= …）の字面は変えない。床の欄を合図の行の欄にしない（`floor=` の欄を足さない）。床の不合格は alarm= の値の語だけで出る。
   5. **alarm**: 床の欄が値を持つ周は、alarm の列に語 `floor` を足す。
      - 順は idle → precheck → unreflected → floor（unreflected は行 am が間に足す）。
      - 上げの秒は、黙りの閾値を縮めない最大値として渡す。梯子の段だけが 0 に戻り、席は初段の間隔で起こされ続ける（FR85 の「alarm の floor が席を起こし」）。
@@ -792,11 +793,12 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
   - tick（接頭辞 `seat_tick_alarm_floor_`・tests/e2e/seat/tick.rs）:
     - `seat_tick_floor_` は既存の歯の名の接頭辞なので、この接頭辞は使わない。
     - 段 2 の梯子の記録で、段 0 の待ちは越え段 2 の待ちは越えない周を作る。今の判定が fail の置き場では、合図が 1 回出て alarm= に floor が載る。pass の置き場では、同じ周が段の待ちの noop になる。
+    - 合図の行の欄（約束 4）: 同じ fail の周の合図の行を空白で割った欄に、`floor=` で始まる欄が 0 個（床の欄が値を持つ周だけ欄を足す実装を落とす）。unfireable と timeout の周でも同じ（3/3）。
     - 今の判定が unfireable と timeout の置き場でも、同じ周に alarm= に floor が載る（2/2）。
     - 事前審査の断り（precheck）と床の不合格が同時の置き場で、alarm= が `precheck,floor` の順。
     - 閾値を縮めない（約束 5）: 段 0 の梯子の記録で、黙りが段 0 の待ちの手前（黙りの閾値より短い）周を作る。今の判定が fail の置き場でも、合図を出さず noop になる（上げの秒を 0 か閾値より小さい値で渡し、黙りの閾値を縮める実装は同じ周に合図を出して落ちる）。
     - 読めない今の判定（約束 4・current の無し）: 今の判定の file が形の合わない字の置き場で、段 0 の待ちは越え段 2 の待ちは越えない段 2 の周が、段の待ちの noop になり alarm= に floor が載らない（読めない file を fail と読む実装は合図を出して落ちる）。
-  - 単体の歯 `pipe_dispatch_wait_reasons_render_the_name_and_the_value` の本文に 3 形を足す。既存の歯の本文を直すので、retroactive の札を付ける。
+  - 単体の歯 `pipe_dispatch_wait_reasons_render_the_name_and_the_value` の本文に 3 形を足す。既存の歯の本文を直すので、retroactive の札を付ける。札の欠けは gate の flip-check が赤で落とすので、done の項目にしない（器の門が測る）。
   - 既存の `seat_tick_precheck_` の 3 本は不変で通る。
   - base の RED は機能不在（理由の値も語も無い）。
 - 触らないもの: 撃つ側（行 ai の撃つ段・記録の書き・judgement と doctor の 1 行。floor.rs に足すのは current の 1 本だけ）・first の印の書き手・枠と重なりの判定・rules 行・合図の行の字面。
@@ -924,9 +926,11 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
    - `pipe intake` と `pipe preflight` は TOOLS の `--bd` を受ける（無ければ既定の bd）。
    - `pipe run` と列の周は、既に受ける値を渡す。
    - client は材料（`Materials`）の欄に持たせ、`Materials::read` と `Materials::of` が受ける。列の候補と事前の lens の候補の側の Material の literal（write-set の `=` の 2 file）は変えない。
+   - client の置き場と literal を変えないことは挙動に差が出ないので歯では弁別できず、done には載せない（字面の pin は書かない・便の diff の設計適合は gate の審査で見る・[contract-source.md](./contract-source.md) §44 の形 1 と同じ扱い）。
    - 引用の事実（裁定の行の索引・線・線の木の時刻の形の集合・fixtures）は、材料の読みの 1 周に 1 回で持つ。引用を 1 件でも持つ契約が出たときに初めて読む（引用の無い周は台帳を読まない）。
 6. 列の周の断りは既存の IntakeRefused（行 ag）がそのまま記帳する。値が 1 つ増えるだけで、記帳の口は変えない（この行の歯は持たない）。
 7. **閉包を広げない**: 子 module ruling.rs は `Refuse`・`Evidence`・`Issue` を名指さない。断りの組み立ては intake.rs が書き、子は判定の素の値（名指す id の列と置き場）だけを返す。
+   - この分け方も挙動に差が出ないので done には載せない（約束 5 の client の置き場と同じ扱い・行 al の最初の便の契約審査が vacuous-assert の FAIL で歯の無い done の項目として名指した）。
 
 ### 歯
 - `pipe_intake_ruling_`（e2e・`tests/e2e/pipe/intake.rs`・偽の bd を PATH に置く）。AC53 の受付の側を全部確かめる。
@@ -1705,7 +1709,7 @@ write-set = ["crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/dis
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_floor_wait_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_alarm_floor_", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_dispatch_wait_reasons_render_the_name_and_the_value", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_precheck_"]
 size = "S"
 growth = ["crates/scribe2/src/pipe/dispatch.rs:22", "crates/scribe2/src/pipe/dispatch/facts.rs:10", "crates/scribe2/src/pipe/dispatch/floor.rs:6", "crates/scribe2/src/seat/tick/signal.rs:6"]
-done = "(1) 不合格（rc≠0・unfireable・timeout）の周に first の印の無い候補（launched と settled を除く）が floor:<rc> / floor:unfireable / floor:timeout で待ち、準備の表から外れる (2) first の印の候補は床の検査で待たない (3) 判定は sha の結果 → 同じ sha の今の判定の順で file だけを読み、撃たない (4) 待ちの理由の名の列の末尾に floor (5) 並列の実測の床の欄と alarm の語 floor・段は 0 に戻り閾値は縮まない（黙りが段 0 の待ちの手前の席は fail の周も合図を出さない） (6) 合図の行の字面は不変 (7) 直す既存の歯に retroactive の札 (8) 床の判定の値から待ちの理由の floor の値への写しは dispatch.rs だけが書き、floor.rs は WaitReason を名指さない（facts.rs が base から名指す Overlap の読みは変えない） (9) 列の 1 周は行 ai が置いた sha の判定の読み judgement を呼び、git を撃たず sha を持たない tick は、本行が床の子 module に 1 本だけ足す sha を取らない今の判定の読み current（current_of の包み・file が無い周と読めない周は無しで、読めない周の tick は床の欄を持たない・撃たない）を呼び、floor.rs のほかの item と撃つ段と記録の書きは変えない"
+done = "(1) 不合格（rc≠0・unfireable・timeout）の周に first の印の無い候補（launched と settled を除く）が floor:<rc> / floor:unfireable / floor:timeout で待ち、準備の表から外れる (2) first の印の候補は床の検査で待たない (3) 判定は sha の結果 → 同じ sha の今の判定の順で file だけを読み、撃たない (4) 待ちの理由の名の列の末尾に floor (5) 並列の実測の床の欄と alarm の語 floor・段は 0 に戻り閾値は縮まない（黙りが段 0 の待ちの手前の席は fail の周も合図を出さない） (6) 床の欄が値を持つ周も、合図の行は alarm= の値に floor が載るだけで、空白で割った欄に floor= で始まる欄を持たない (7) 列の 1 周は行 ai が置いた sha の判定の読み judgement を呼び、git を撃たず sha を持たない tick は、本行が床の子 module に 1 本だけ足す sha を取らない今の判定の読み current（current_of の包み・file が無い周と読めない周は無しで、読めない周の tick は床の欄を持たない・撃たない）を呼び、floor.rs のほかの item と撃つ段と記録の書きは変えない"
 
 [[contract]]
 id = "ak"
@@ -1730,7 +1734,7 @@ write-set = ["+crates/scribe2/src/pipe/cli/intake/ruling.rs", "crates/scribe2/sr
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_intake_ruling_", "cargo nextest run -p scribe2 --lib --no-tests=fail refuse_ruling_", "cargo nextest run -p scribe2 --lib --no-tests=fail refuse_names_are_pinned_in_declaration_order", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_refuse_evidence_discern_", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_refuse_evidence_is_decided_once_for_each_of_the_23_words", "cargo nextest run -p scribe2 --lib --no-tests=fail refuse_carries_its_own_rc_and_names_the_run", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_intake_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_preflight_"]
 size = "M"
 growth = ["crates/scribe2/src/pipe/cli/intake.rs:14", "crates/scribe2/src/pipe/refuse.rs:40", "crates/scribe2/src/pipe/cli/args.rs:2", "crates/scribe2/src/pipe/cli/preflight.rs:2", "crates/scribe2/src/pipe/dispatch.rs:1", "crates/scribe2/src/pipe/review.rs:0"]
-done = "(1) ruling-check が true の repo で、節か行に解けない問い id の形・解けない batch: / policy:・線の後の時刻の形を持つ契約が rc 1 の ruling-unresolved で断られ、本文が置き場ごとに id を全て名指す (2) 解ける 4 形・束の欄にだけ在る batch:・接頭辞違い・一覧に載せた字面・線の前の引用・key の無い repo は通る (3) 台帳を読めない周は rc 2 の ruling-unresolved で断られ、通らない (4) REFUSALS の末尾が ruling-unresolved で、Evidence は Place。歯の見本の列に rc 1 の形を 1 つ足し、既存の歯 refuse_names_are_pinned_in_declaration_order と pipe_refuse_evidence_is_decided_once_for_each_of_the_23_words の本文を retroactive の札つきで直す（名は変えない） (5) 引用を持たない契約の周は台帳を読まない（偽の bd の呼び出しの回数 0） (6) pipe intake / preflight が --bd を受けて明示した bd を撃ち、無ければ既定の bd を撃つ (7) 子 module ruling.rs は Refuse・Evidence・Issue を名指さず、断りの組み立ては intake.rs が書く (8) 台帳の client は Materials の欄に持たせ、Material の literal は変えない（列の周の受け渡しは構造で持ち、歯は受付と事前審査で測る） (9) 引用の判定は judge の中で entrance-not-red の後・置き場が要る判定の前に撃ち、preflight の refuse= の行の順が entrance-not-red → ruling-unresolved → write-set-overlap"
+done = "(1) ruling-check が true の repo で、節か行に解けない問い id の形・解けない batch: / policy:・線の後の時刻の形を持つ契約が rc 1 の ruling-unresolved で断られ、本文が置き場ごとに id を全て名指す (2) 解ける 4 形・束の欄にだけ在る batch:・接頭辞違い・一覧に載せた字面・線の前の引用・key の無い repo は通る (3) 台帳を読めない周は rc 2 の ruling-unresolved で断られ、通らない (4) REFUSALS の末尾が ruling-unresolved で、Evidence は Place。歯の見本の列に rc 1 の形を 1 つ足し、既存の歯 refuse_names_are_pinned_in_declaration_order と pipe_refuse_evidence_is_decided_once_for_each_of_the_23_words の本文を retroactive の札つきで直す（名は変えない） (5) 引用を持たない契約の周は台帳を読まない（偽の bd の呼び出しの回数 0） (6) pipe intake / preflight が --bd を受けて明示した bd を撃ち、無ければ既定の bd を撃つ (7) 引用の判定は judge の中で entrance-not-red の後・置き場が要る判定の前に撃ち、preflight の refuse= の行の順が entrance-not-red → ruling-unresolved → write-set-overlap"
 
 [[contract]]
 id = "am"
