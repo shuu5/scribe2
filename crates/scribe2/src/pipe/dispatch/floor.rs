@@ -173,6 +173,11 @@ pub fn judgement(state_dir: &Path, sha: &str) -> Option<Judged> {
     current_of(state_dir).flatten().filter(|found| found.sha == sha)
 }
 
+/// sha を取らない今の判定の読み（tick が読む・file が無い周と読めない周は `None`・撃たない）。
+pub fn current(state_dir: &Path) -> Option<Judged> {
+    current_of(state_dir).flatten()
+}
+
 /// doctor の 1 行（今の判定の file が在る周だけ・読めない file は `floor=unreadable`）。
 pub fn doctor_line(state_dir: &Path) -> Option<String> {
     current_of(state_dir).map(|read| read.map_or_else(|| "floor=unreadable".to_owned(), |found| found.line()))

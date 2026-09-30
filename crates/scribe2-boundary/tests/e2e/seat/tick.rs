@@ -2450,3 +2450,110 @@ fn seat_heartbeat_mode_group_key_value_is_read_by_the_tick_and_a_bad_value_stops
     let out = move_run(&place);
     assert!(stdout_of(&out).contains(" reason=group-unreadable "), "maybe の面は group-unreadable で止まる: {} stderr={}", stdout_of(&out), stderr_of(&out));
 }
+
+// ───── 床の検査の不合格と管理 tick の alarm（設計 dispatcher.md §35 約束 4・5・契約表の行 aj・接頭辞 `seat_tick_alarm_floor_`） ─────
+//
+// 置き場の `<state>/pipe/floor/current`（今の判定の file）を直に書き、tick が file だけを読んで alarm= の語 `floor` を足すかを測る
+// （tick は git も列の 1 周も撃たない）。字面は契約から組む（実装の helper を使わない）。
+
+/// 今の判定の file の本文（1 行の JSON・sha は 40 字）。
+fn tick_floor_body(word: &str, rc: &str) -> String {
+    format!("{{\"schema\":1,\"sha\":\"0123456789abcdef0123456789abcdef01234567\",\"word\":\"{word}\",\"rc\":{rc},\"why\":null,\"summary\":\"boom\",\"at\":\"2026-09-30T00:00:00Z\"}}\n")
+}
+
+/// 置き場の今の判定の file を `body` で書く。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn tick_floor_put(place: &TickPlace, body: &str) {
+    let dir = place.state.join("pipe").join("floor");
+    fs::create_dir_all(&dir).expect("floor の dir を作れる");
+    fs::write(dir.join("current"), body).expect("今の判定の file を書ける");
+}
+
+/// 段 2 の梯子の記録の置き場: 席の打刻は 1900 秒前の Stop（黙りの閾値 1800 を越える）・記録は段 1（基準は同じ打刻・`sent_at` は
+/// 2000 秒前）。段の候補は 2（待ち 10800 秒は越えない）で、段 0 に戻れば待ち 1800 秒を越える。今の判定の file は `current`（無ければ書かない）。
+fn tick_floor_place(current: Option<&str>) -> TickPlace {
+    let place = tick_place(true);
+    let now = unix_now();
+    tick_stamps(&place, &[("idle", "Stop", now - 1900)]);
+    tick_ladder_put(&place, now - 2000, 1, Some(now - 1900));
+    if let Some(body) = current {
+        tick_floor_put(&place, body);
+    }
+    place
+}
+
+/// 送った合図の text の列。
+fn tick_floor_texts(place: &TickPlace) -> Vec<String> {
+    let prefix = format!("send-keys -t {TICK_TARGET} -l ");
+    tick_keys(place).iter().filter_map(|key| key.strip_prefix(&prefix).map(str::to_owned)).collect()
+}
+
+/// 段の待ちの noop の判定行か（段 2 の待ち）。
+fn tick_floor_is_step_wait(line: &str) -> bool {
+    line.starts_with(&format!("decision=noop target={TICK_SEAT} reason=wait pointer=wait:")) && line.ends_with(&format!(" step=2 consumed=-{TICK_NO_MOVE}\n"))
+}
+
+/// (a) 今の判定が fail の置き場は、段 2 の待ちを越えない周でも段が 0 に戻って合図が 1 回出て alarm= に floor が載り、記録の段は 0。
+/// pass の置き場の同じ周は段の待ちの noop（何も送らない）。
+#[test]
+fn seat_tick_alarm_floor_fail_returns_the_ladder_to_step_zero_and_pass_keeps_the_wait() {
+    let place = tick_floor_place(Some(&tick_floor_body("fail", "1")));
+    let out = tick_run(&place, &[]);
+    assert_eq!(stdout_of(&out), tick_inject(0), "fail の周は段 0 で送る: stderr={}", stderr_of(&out));
+    assert_eq!(tick_floor_texts(&place), [tick_facts_want(" live=0 idle=- alarm=floor")], "合図 1 回・alarm= は floor");
+    assert_eq!(tick_ladder(&place).map(|(_, step, _)| step), Some(0), "記録の段は 0");
+    let place = tick_floor_place(Some(&tick_floor_body("pass", "0")));
+    let line = stdout_of(&tick_run(&place, &[]));
+    assert!(tick_floor_is_step_wait(&line), "pass の周は段の待ち: {line}");
+    assert!(tick_floor_texts(&place).is_empty(), "pass の周は 0 key");
+}
+
+/// (b) 合図の行の欄と unfireable・timeout: 3 語（fail / unfireable / timeout）どれも同じ周で alarm= が floor だけで、合図の行を空白で
+/// 割った欄に `floor=` で始まる欄が 0 個（床の欄が値を持つ周だけ欄を足す実装は落ちる）。
+#[test]
+fn seat_tick_alarm_floor_names_every_failing_word_in_alarm_and_adds_no_floor_field() {
+    for (word, rc) in [("fail", "2"), ("unfireable", "null"), ("timeout", "null")] {
+        let place = tick_floor_place(Some(&tick_floor_body(word, rc)));
+        let out = tick_run(&place, &[]);
+        assert_eq!(stdout_of(&out), tick_inject(0), "{word}: 段 0 で送る: stderr={}", stderr_of(&out));
+        let texts = tick_floor_texts(&place);
+        assert_eq!(texts, [tick_facts_want(" live=0 idle=- alarm=floor")], "{word}: alarm= に floor");
+        let fields = texts.iter().flat_map(|text| text.split_whitespace()).filter(|field| field.starts_with("floor=")).count();
+        assert_eq!(fields, 0, "{word}: floor= で始まる欄は 0 個");
+    }
+}
+
+/// (c) 事前審査の断り（precheck）と床の不合格が同時の置き場: alarm= の列は `precheck,floor` の順（値 60 の束が 120 秒前・席の打刻は 90 秒前）。
+#[test]
+fn seat_tick_alarm_floor_follows_precheck_in_the_word_list() {
+    let place = tick_place(true);
+    tick_precheck_put(&place, Some(120));
+    tick_floor_put(&place, &tick_floor_body("fail", "1"));
+    tick_silent_for(&place, 90);
+    let (line, texts) = tick_idle_run(&place, &tick_precheck_rules(&place, Some(900), Some(60)));
+    assert_eq!(line, tick_inject(0), "値 60 の門を越えた周は送る");
+    assert_eq!(texts, [tick_facts_want(" live=0 idle=- precheck=1/1:1 alarm=precheck,floor")], "alarm= は precheck,floor の順");
+}
+
+/// (d) 閾値を縮めない: 席の打刻が 90 秒前（黙りの閾値 1800 より短い）・記録なしの周は、今の判定が fail でも合図を出さず `stamp-recent` の
+/// noop（上げの秒を 0 か閾値より小さい値で渡し黙りの閾値を縮める実装は同じ周に合図を出して落ちる）。
+#[test]
+fn seat_tick_alarm_floor_never_shrinks_the_silence_gate() {
+    let place = tick_place(true);
+    tick_floor_put(&place, &tick_floor_body("fail", "1"));
+    tick_silent_for(&place, 90);
+    tick_assert_quiet(&place, &tick_noop("stamp-recent", "wait:0", "0"));
+}
+
+/// (e) 読めない今の判定（current の無し）: 形の合わない字の file の置き場は、段 2 の待ちを越えない周が段の待ちの noop になり何も送らない
+/// （読めない file を fail と読む実装は合図を出して落ちる）。
+#[test]
+fn seat_tick_alarm_floor_reads_an_unreadable_current_as_no_failure() {
+    let place = tick_floor_place(Some("not json\n"));
+    let line = stdout_of(&tick_run(&place, &[]));
+    assert!(tick_floor_is_step_wait(&line), "読めない file は床の不合格でない: {line}");
+    assert!(tick_floor_texts(&place).is_empty(), "0 key");
+}

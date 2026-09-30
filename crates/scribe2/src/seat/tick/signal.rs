@@ -132,7 +132,9 @@ pub(super) fn idle_alarm(rows: &Rows, found: &Facts, now: u64) -> (Option<u64>, 
         (Some(value), Some(first)) if value > 0 && now.saturating_sub(first) >= value => (Some(value), Some("precheck")),
         _ => (None, None),
     });
-    ([idle.0, precheck.0].into_iter().flatten().min(), [idle.1, precheck.1].into_iter().flatten().collect())
+    // 床の検査の不合格は語 `floor` だけ足し、上げの秒は黙りの閾値を縮めない最大値で渡す（段だけ 0 に戻る・設計 §35 約束 5）。
+    let floor = found.floor.map_or((None, None), |_| (Some(u64::MAX), Some("floor")));
+    ([idle.0, precheck.0, floor.0].into_iter().flatten().min(), [idle.1, precheck.1, floor.1].into_iter().flatten().collect())
 }
 
 /// 段の上げ（pure・設計 §17 形 3 (a)(b)・**1 本**）: 上げた周は（黙りの閾値, 段）を（`seat.tick_stale_s` と値の小さい方, 0）に。
