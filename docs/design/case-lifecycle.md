@@ -186,7 +186,7 @@ lifecycle.stale
   - question・memo・contract・epic は bead id。run は run id。commit は 40 桁の sha。
   - row は便の `--design` の pointer の字のまま（`.md#<行 id>` と `.toml#<行 id>` の 2 形・`parse_pointer` が受ける字）。
   - requirement は要件面の id（`FR<n>`・`NFR<n>`）。
-- `closed`: bead の部品は台帳で閉じたか。run と commit は閉じた契約に結ばれたか。
+- `closed`: bead の部品は台帳で閉じたか。run と commit は閉じた契約に結ばれたか（commit は契約の trailer が台帳で閉じた bead を名指すか）。row は row-landed だけ真。utterance と requirement は常に偽。
 - `links` の 8 key:
   - `source`＝発端・`questions`＝子の問い・`rulings`＝問いに結んだ裁定 id・`promoted`＝昇格した契約・`runs`＝便・`commits`＝着地の commit
   - `destination`＝仕分け済みの発話の行き先（`[{"to":"memo"|"ruling"|"chat","id":"<id>"|null}]`・字の形から推さない）
@@ -394,8 +394,10 @@ lifecycle.stale
   4. requirement: どの行の req にも無い要件 → requirement-unrowed（手番 seat）・在る → requirement-rowed。`owned` に数えないのは数えを持つ書き手（行 c・§5.2）で、この関数は `owned` を持たない。
      - この関数が `owned` を持たないことは挙動に差が出ないので done に載せない（便の diff の設計適合は gate の審査で見る）。
   5. 要件 id の列が無いか読める形でなければ requirement を `unmeasured` の `srs-unreadable`、契約表が同じなら row を `table-unreadable` で名指し、0 件と書かない。
+  6. `closed`（§5.2）: commit の部品は、その commit の契約の trailer が台帳で閉じた bead を名指すときだけ真（trailer が無いか、名指す bead が開いているか台帳に無ければ偽・語が commit-landed でも misfit でも同じ規則）。row は row-landed だけ真。requirement は常に偽。
+     - 便 s2-07l.738.38.5-20260930T172347Z の gate の審査が、§5.2 が row と requirement の closed を決めておらず、commit の closed を測る歯も無いと INCONCLUSIVE にした。
 - 閉包: 歯の fixture の `Issue` は JSON の字から `issues_of` で作る。
-- 歯（接頭辞 `phase_main_`・(1) は `crates/scribe2/src/ledger/mod.rs` の既存の `mod tests` に〔行 b1 の新しい関数を呼ぶので base で compile できず RED〕、(2)〜(5) は `+` の file の末尾の歯の区間に置く・§1・歯の置き場は compile・`cargo xtask check` の非 Rust 実行物の分類・flip-check が測るので done にしない〔器の門が測る〕）: (1) 入力の不足で落ちない (2) commit の 4 語の各 1 fixture・`run:` が event log に無く発端の id も台帳に無い commit は run-trailer-unknown（先の語）・器の便の commit は commit の部品にならず、返す結びの便の run id と契約の bead id の両方にその sha が載る（結びを捨てる実装と便の id だけに結ぶ実装を落とす） (3) row の 3 局面（`.md` と `.toml` の pointer）・row-beaded の since が bead の `created_at`・trailer の経路（pointer を持つ bead が線より後に取り下げで閉じ、main の commit の契約の trailer がその bead を名指す行は row-landed、trailer の無い同じ行は row-unbeaded）・線の前後の対（線より前の取り下げの閉じは着地で row-landed、線より後の取り下げの閉じは row-unbeaded・線を見ずに閉じを全部着地と読む実装を落とす） (4) requirement の 2 局面（requirement-unrowed の手番は seat） (5) `unmeasured` の 2 語（その周は requirement と row の部品を 1 件も出さない）。base で RED: 歯の名が 0 本（rc 4・機能不在）。
+- 歯（接頭辞 `phase_main_`・(1) は `crates/scribe2/src/ledger/mod.rs` の既存の `mod tests` に〔行 b1 の新しい関数を呼ぶので base で compile できず RED〕、(2)〜(5) は `+` の file の末尾の歯の区間に置く・§1・歯の置き場は compile・`cargo xtask check` の非 Rust 実行物の分類・flip-check が測るので done にしない〔器の門が測る〕）: (1) 入力の不足で落ちない (2) commit の 4 語の各 1 fixture・`run:` が event log に無く発端の id も台帳に無い commit は run-trailer-unknown（先の語）・器の便の commit は commit の部品にならず、返す結びの便の run id と契約の bead id の両方にその sha が載る（結びを捨てる実装と便の id だけに結ぶ実装を落とす） (3) row の 3 局面（`.md` と `.toml` の pointer）・row-beaded の since が bead の `created_at`・trailer の経路（pointer を持つ bead が線より後に取り下げで閉じ、main の commit の契約の trailer がその bead を名指す行は row-landed、trailer の無い同じ行は row-unbeaded）・線の前後の対（線より前の取り下げの閉じは着地で row-landed、線より後の取り下げの閉じは row-unbeaded・線を見ずに閉じを全部着地と読む実装を落とす） (4) requirement の 2 局面（requirement-unrowed の手番は seat） (5) `unmeasured` の 2 語（その周は requirement と row の部品を 1 件も出さない） (6) `closed` の 5 形: 閉じた bead を契約の trailer で名指す commit-landed が真・開いた bead を名指す commit-landed と trailer の無い commit（commit-no-trailer）が偽・row-landed が真で row-beaded と row-unbeaded が偽・requirement の 2 局面が偽（commit を常に偽にする実装と、終わりの語だけで真にする実装を落とす）。base で RED: 歯の名が 0 本（rc 4・機能不在）。
 - 限界: 消費側の SRS が器の読めない形なら requirement は常に `unmeasured`（読み手を足すのは別の行）。線より前の commit を渡さないのは呼び手（行 c）で、この行の歯は測らない（行 c の書き手が切り替えの線の sha から先端までを読む）。
 - 却下: row-beaded を閉じた bead にも当てる形（行の大半が窓を持たずに出力に残る）。
 
@@ -679,7 +681,7 @@ write-set = ["+crates/scribe2/src/ledger/phase_main.rs", "crates/scribe2/src/led
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail phase_main_", "cargo run -q -p scribe2-boundary --bin scribe2 -- contracts check --repo ."]
 size = "M"
 growth = ["crates/scribe2/src/ledger/phase_main.rs:520", "crates/scribe2/src/ledger/mod.rs:60"]
-done = "(1) ledger の新しい module の純関数 1 本が線より後の commit（呼び手が渡す）・切り替えの線の時刻・event log の run id・台帳・契約表の行・要件 id を受け、commit・row・requirement の部品と、便の run id と契約の bead id ごとの commit の結びを返す (2) 器の便の commit は部品にせず結びの run id と bead id の両方に載せ、run-trailer-unknown・source-unresolved・commit-no-trailer・commit-landed を判じる (3) row の 3 局面（.md と .toml・着地の形の閉じか main の契約の trailer で row-landed・線より前の閉じは形を問わず着地・線より後の着地でない閉じは着地でない） (4) requirement の 2 局面（requirement-unrowed の手番は seat） (5) 要件と契約表が無いか読めない形なら unmeasured の srs-unreadable と table-unreadable 歯: phase_main_（2 語に当たる commit の先の語・結びの 2 つの id・row-beaded の since・trailer の経路の row-landed と trailer の無い対・線の前後の取り下げの閉じの対・unmeasured の周の部品 0 を含む）が base で 0 本（rc 4・機能不在） (6) 歯の fixture は Issue を literal で組まず JSON の字から issues_of で作り、verify の最終行の contracts check が便の木で findings 0"
+done = "(1) ledger の新しい module の純関数 1 本が線より後の commit（呼び手が渡す）・切り替えの線の時刻・event log の run id・台帳・契約表の行・要件 id を受け、commit・row・requirement の部品と、便の run id と契約の bead id ごとの commit の結びを返す (2) 器の便の commit は部品にせず結びの run id と bead id の両方に載せ、run-trailer-unknown・source-unresolved・commit-no-trailer・commit-landed を判じる (3) row の 3 局面（.md と .toml・着地の形の閉じか main の契約の trailer で row-landed・線より前の閉じは形を問わず着地・線より後の着地でない閉じは着地でない） (4) requirement の 2 局面（requirement-unrowed の手番は seat） (5) 要件と契約表が無いか読めない形なら unmeasured の srs-unreadable と table-unreadable (6) closed は commit が契約の trailer で閉じた bead を名指すときだけ真・row は row-landed だけ真・requirement は常に偽 歯: phase_main_（2 語に当たる commit の先の語・結びの 2 つの id・row-beaded の since・trailer の経路の row-landed と trailer の無い対・線の前後の取り下げの閉じの対・unmeasured の周の部品 0・closed の 5 形を含む）が base で 0 本（rc 4・機能不在） (7) 歯の fixture は Issue を literal で組まず JSON の字から issues_of で作り、verify の最終行の contracts check が便の木で findings 0"
 
 [[contract]]
 id = "c1"
