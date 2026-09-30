@@ -755,7 +755,7 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
   - 管理 tick の alarm は、並列の実測（置き場の file だけを読む）から語と上げの秒を返す 1 関数が決める。
     - 語は idle / idle-unset / precheck / precheck-unset の 4 つ。
     - 上げは、黙りの閾値を値との小さい方に縮めて、段を 0 に戻す。
-  - 並列の実測の struct の literal は、実測の file の中の 3 か所だけ。
+  - 並列の実測の struct の literal は、実測の file の中の 3 か所と、行 g（consumer-sync の着地）が足した `crates/scribe2/src/hook/utterance.rs` の歯の区間の 1 か所（2026-09-30・便 s2-07l.738.37.2-20260930T092320Z の問い about:write-set 09:30Z）。
   - 行 ai の着地（0dbc1b9c）の後（verified）: `crates/scribe2/src/pipe/dispatch/floor.rs` の pub の読みは、sha を取る判定の読み judgement（sha の結果の file → 同じ sha の今の判定）と doctor の 1 行だけ。sha を取らない今の判定の読み current_of と置き場の path（dir_of・CURRENT）は私有。§34 約束 11 の読みの関数は judgement として着地した。floor.rs と tick の合図の file は WaitReason を名指さず、実測の file（facts.rs）は重なりの値 Overlap を読むので既に名指す。
 - 約束:
   1. **待ちの判定**: 列の 1 周（観測の口も起こす側も）は、main の先端の sha を読み、次の順で判定する。
@@ -1699,7 +1699,7 @@ title = "床の検査が不合格の間、介入 first の印の無い起動の�
 req = ["FR85", "FR68", "FR27"]
 section = "35"
 depends = ["ai"]
-write-set = ["crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/dispatch/facts.rs", "crates/scribe2/src/pipe/dispatch/floor.rs", "crates/scribe2/src/seat/tick/signal.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "crates/scribe2-boundary/tests/e2e/seat/tick.rs"]
+write-set = ["crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/dispatch/facts.rs", "crates/scribe2/src/pipe/dispatch/floor.rs", "crates/scribe2/src/seat/tick/signal.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "crates/scribe2-boundary/tests/e2e/seat/tick.rs", "crates/scribe2/src/hook/utterance.rs"]
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_floor_wait_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_alarm_floor_", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_dispatch_wait_reasons_render_the_name_and_the_value", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_precheck_"]
 size = "S"
 growth = ["crates/scribe2/src/pipe/dispatch.rs:22", "crates/scribe2/src/pipe/dispatch/facts.rs:10", "crates/scribe2/src/pipe/dispatch/floor.rs:6", "crates/scribe2/src/seat/tick/signal.rs:6"]
