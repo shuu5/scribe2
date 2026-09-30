@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="generator" content="folio ADR-pack assembler (folio-bwc / instance#2) — deterministic structure, prose slots unfilled">
-<title>契約表の行は設計の PR を main に入れる前に行の審査を通し、 審査か gate で落ちた行は write-set を予約して順番を守り、 同じ設計の兄弟の行を直しが入るまで待たせる — 先撃ちは退役する</title>
+<title>契約表の行は設計の PR を main に入れる前に行の審査を通し、 審査か gate で落ちた行は行の予約で順番を守り、 同じ設計の兄弟の行を直しが入るまで待たせる — 先撃ちは退役する</title>
 <style>
 /* ===========================================================================
    folio human-layer design system — core.css (S3 / folio-8oc プロトタイプ)
@@ -447,7 +447,7 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 .ss-row{margin:3px 0}.ss-row .ss-k{font-weight:700;color:var(--ink-soft);font-size:12px;margin-right:6px}
 
 </style>
-<meta name="folio-version" content="0.1.0">
+<meta name="folio-version" content="0.2.0">
 <script type="application/ld+json">
 {
   "@context": {
@@ -462,8 +462,8 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
       "@id": "./README.html"
     }
   ],
-  "dc:title": "契約表の行は設計の PR を main に入れる前に行の審査を通し、 審査か gate で落ちた行は write-set を予約して順番を守り、 同じ設計の兄弟の行を直しが入るまで待たせる — 先撃ちは退役する",
-  "folio:version": "0.1.0",
+  "dc:title": "契約表の行は設計の PR を main に入れる前に行の審査を通し、 審査か gate で落ちた行は行の予約で順番を守り、 同じ設計の兄弟の行を直しが入るまで待たせる — 先撃ちは退役する",
+  "folio:version": "0.2.0",
   "folio:stakeholders": [
     "Developer",
     "AI Agent",
@@ -471,16 +471,10 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
   ],
   "dc:references": [
     {
-      "@id": "../spec/constitution.html#c3"
-    },
-    {
       "@id": "../spec/constitution.html#c5"
     },
     {
       "@id": "../spec/constitution.html#c10"
-    },
-    {
-      "@id": "../spec/constitution.html#c16"
     },
     {
       "@id": "../spec/constitution.html#c17"
@@ -499,6 +493,9 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
     },
     {
       "@id": "../spec/srs.html#FR39"
+    },
+    {
+      "@id": "../spec/srs.html#FR44"
     },
     {
       "@id": "./ADR-0019-parallel-runs-exclude-overlap-at-intake-and-runner-resolves-conflicts.html"
@@ -528,13 +525,13 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 <div class="page" data-component="requirement-type-color-tokens">
 <header data-component="doc-cover-band">
 <p class="cover-eyebrow"><span class="doc-type">設計判断記録 (ADR)</span> <span>scribe2 — 行の審査と落ちた行の順番</span></p>
-<h1>契約表の行は設計の PR を main に入れる前に行の審査を通し、 審査か gate で落ちた行は write-set を予約して順番を守り、 同じ設計の兄弟の行を直しが入るまで待たせる — 先撃ちは退役する</h1>
-<p class="cover-sub">契約の審査は、 契約が起動の列に並んで便が起きた後に在る。 設計の穴はそこで初めて見つかり、 落ちた行は列から外れ、 同じ file を触る後ろの行が先に起きる。 事前に撃つ先撃ちは審査の層になっておらず、 判定の使い回しは 1 度も起きていない。 本 ADR は、 審査を設計の PR の段 (列に並ぶ前) へ移して merge の門で止め、 それでも落ちた行は触る file を予約して順番を守り、 同じ設計から出た兄弟の行を待たせ、 先撃ちを退役させると決める。</p>
+<h1>契約表の行は設計の PR を main に入れる前に行の審査を通し、 審査か gate で落ちた行は行の予約で順番を守り、 同じ設計の兄弟の行を直しが入るまで待たせる — 先撃ちは退役する</h1>
+<p class="cover-sub">契約の審査は、 契約が起動の列に並んで便が起きた後に在る。 設計の穴はそこで初めて見つかり、 落ちた行は列から外れ、 同じ file を触る後ろの行が先に起きる。 事前に撃つ先撃ちは審査の層になっておらず、 判定の使い回しは 1 度も起きていない。 本 ADR は、 審査を設計の PR の段 (列に並ぶ前) へ移して merge の門で止め、 それでも落ちた行は触る file を取り置いて順番を守り、 同じ設計から出た兄弟の行を待たせ、 先撃ちを退役させると決める。</p>
 <div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">この記録で「器」は scribe2 の本体、 「契約表の行」は設計の文書に書いた 1 件の仕事の約束、 「便」はその約束を実装して main に入れる 1 回の流れです。 これまで、 約束の中身の審査は、 約束が起動の列 (起こす順番の並び) に入って便が起きた後に行っていました。 そのため設計の穴は並んだ後に見つかり、 落ちた行は列から外れて、 同じ file を触る後ろの行が先に起きていました。 事前に撃っていた先撃ちは、 判定を 1 度も使い回せていません。 この記録は、 審査を設計の変更を main に入れる前 (merge の前) へ移して通らない変更の merge を止め、 それでも落ちた行は触る file を取り置いて順番を守り、 同じ設計から出た兄弟の行を直しが入るまで待たせ、 先撃ちをやめると決めます。</p></div></div>
-<div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">proposed</span></span><span class="m"><span class="k">選択肢</span><span class="v">5件 (OPT1–OPT5)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 4 / トレードオフ 5</span></span><span class="m"><span class="k">版</span><span class="v">v0.1.0 / 2026-09-30</span></span></div>
-<div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>FR49・FR68・FR92・FR39</b></div>
+<div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">proposed</span></span><span class="m"><span class="k">選択肢</span><span class="v">5件 (OPT1–OPT5)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 4 / トレードオフ 6</span></span><span class="m"><span class="k">版</span><span class="v">v0.2.0 / 2026-09-30</span></span></div>
+<div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>FR49・FR68・FR92・FR39・FR44</b></div>
 <div data-component="approval-block">
-<div class="sign"><span class="role">設計 (orchestrator)</span><span class="who">orchestrator</span><span class="when">2026-09-30 草稿 v1 (契約の審査の段・先撃ちの使い回しの読み口・起動の列の終端の行の扱いと順序と交差の判定・merge の門・vessel 宣言の任意 key・rules 行を現物で読み、 ADR-0019・ADR-0034・ADR-0045・ADR-0088 の決定と、 便 165 本の FAIL / INCONCLUSIVE 76 件の分析と照らした。 持ち主の常設の指示 (決めてほしいことは推奨で進める) の下の orchestrator の決定で、 本件に固有の user の裁定 id は無い。 実装の行は SRS の追加 round (FR49・FR68・FR92 の字) の後に起こし、 rules 行 pipe.reserve_h の値と pipe.precheck_lens_per_round の値 0 は C5 の裁定 id をその行で取る。 拘束する constitution の版 0.5.0)</span><span class="stamp self">作成</span></div>
+<div class="sign"><span class="role">設計 (orchestrator)</span><span class="who">orchestrator</span><span class="when">2026-09-30 草稿 v2 (契約の審査の段・先撃ちの木と使い回しの読み口・起動の列の終端の行の扱いと順序と交差の判定・merge の門・vessel 宣言の任意 key の読み手・lens の rules 行の読みを現物で読み、 ADR-0019・ADR-0034・ADR-0045・ADR-0088 の決定と、 便 165 本の FAIL / INCONCLUSIVE 76 件の分析と、 PR の敵対審査の 36 件と照らした。 推奨の採用は 裁定 user 2026-09-28T00:54Z (決めてほしいことは推奨で進める、 の常設の指示) の適用で、 逐語は台帳にだけ在る。 SRS の追加 round の grill の論点 (予想と partial の判断不能を merge で通すか・兄弟の範囲・門の名乗り・行の審査の消費) は推奨として書き、 round の裁定で確定する。 rules 行 pipe.reserve_h の値と pipe.precheck_lens_per_round の値 0 は常設の指示に含めず、 C5 の裁定 id を round で別に取る。 拘束する constitution の版 0.5.0)</span><span class="stamp self">作成</span></div>
 </div>
 <div class="reader-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 想定読者: scribe2 の開発 session と user — 器の内部と Rust の専門知識は不要 (専門語はやさしい言葉を併記)</div>
 </header>
@@ -544,41 +541,42 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 <div class="chapbody">
 <div data-component="adr-context-list">
 <div data-component="adr-context-row"><span class="cxid">CTX1</span><div class="cxbody"><p class="cxh">経緯 — 便の失敗の 96 % は設計の側で、 審査は列に並んだ後に在る</p><p class="cxd">2026-09-28〜09-30 に起きた便 165 本のうち、 FAIL か判断不能 (INCONCLUSIVE) は 76 件 (契約の審査 46・gate 30) で、 73 件の根は設計の側だった (code の事実の誤り 32・done の項目に落ちる歯が無い 24・設計の中の食い違い 9・書き足りない 8)。 runner の誤りが主因は 2 件、 環境 1 件、 審査役の誤りは 0 件。 契約の審査 (SRS FR49) は、 設計の PR を merge して行が起動の列に入り、 便が起きた後の Reviewed の段に在る。 そのため設計の欠陥は便の中で初めて見つかり、 審査は 1 周に穴を 1〜3 個しか名指さないので、 同じ行が 2〜4 周する (1 行で 4 周・55 分)。 持ち主は 2026-09-30 に、 審査で落ちた行が後ろに回り他の行が前に回るのは依存と優先度の順を崩すと指摘した。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX2</span><div class="cxbody"><p class="cxh">現物 — 落ちた行の file は誰のものでもなくなり、 同じ欠陥の兄弟を止める口が無い</p><p class="cxd">起動の列は、 直前の便が終端に着き契約の中身が変わらない行を列外 (Settled) にする。 列外の行の write-set は交差の相手に数えないので、 落ちた行が直るまでの間、 同じ file を触る後ろの行が起きる。 2026-09-30 に、 2 回落ちた P2 の行の直しの間に同じ P2 の別の行が起き、 直った行はその行の終わりを待った。 同じ設計の PR で書いた兄弟の行は、 先の行が同じ指示で落ちた 4 秒後に起こされ、 同じ理由で落ちた (直しは 53 分後)。 merge の門 (SRS FR92) は本文の trailer だけを読み、 行の中身を見ない。 gh の pr merge は head の sha を固定する flag (--match-head-commit) を持つ。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX3</span><div class="cxbody"><p class="cxh">先撃ち — 審査の層になっておらず、 使い回しは構造上当たらない</p><p class="cxd">先撃ち (依存を待つ行に事前に撃つ契約の審査・設計 dispatcher.md §27) は、 契約の審査で落ちた 46 件のうち 9 件にしか撃たれておらず、 そのうち 6 件は FAIL か判断不能を出したまま起動した (判定が起動を止めない)。 依存の無い行と再受付の便の 34 件には原理的に届かない。 判定の使い回しは全期間で 0 件で、 使い回しの口が在った窓の契約の審査 61 回でも 0 回だった。 理由は、 先撃ちの材料に予想の印の行が必ず入ること (114 本中 114 本)、 宣言だけの祖先は着地で変える既存の file を予想に写さず新しい file を空で置くので祖先の着地で材料が変わること、 lens の cmd に binary の置き場の path が入り 56 時間で 18 回変わったこと。 印を外しても材料が全部同じだったのは 20 回中 1 回で、 使い回すと先撃ちの見逃し (同じ版の PASS 11 回中 2 回を本番が FAIL にした) が素通りする。 費用は 09-28 以後 114 本で約 54.5 ドル (契約の審査の 41 %) で、 便の消費の記録に載らない。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX4</span><div class="cxbody"><p class="cxh">射程 — 審査の時点・merge の門・列の順・先撃ちの扱いを決め、 審査役の道具は別の決定に任せる</p><p class="cxd">決めるのは、 (1) 契約表の行を足す・変える設計の PR の head で、 変わった行ごとに機械の検査と契約の審査を撃つ口と、 その記録の形、 (2) merge の門がその記録を見て止める形と、 門に加わる repo の名乗り、 (3) 契約の審査の段が記録を使い回す条件、 (4) 先撃ちの退役の段、 (5) 落ちた行の write-set の予約と兄弟の行の待ちと、 その期限。 審査役に読みだけの道具を渡し作業場所を base の写しにする形は、 同じ program の別の決定に任せる。 SRS の FR49・FR68・FR92 の字は追加の round で直し、 実装の行はその後に起こす。 ADR を書く条件のうち 3 (記録の形・跨版) と 4 (却下案を残す価値) に当たる。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX2</span><div class="cxbody"><p class="cxh">現物 — 落ちた行の file は誰のものでもなくなり、 同じ欠陥の兄弟を止める口が無い</p><p class="cxd">起動の列は、 直前の便が終端に着き契約の中身が変わらない行を列外 (Settled) にする。 列外の行の write-set は交差の相手に数えず、 交差を測る相手は live な便と同じ周に起こした便だけである。 そのため落ちた行が直るまでの間と、 直って列に戻った行が待つ間に、 同じ file を触る後ろの行が起きる。 2026-09-30 に、 2 回落ちた P2 の行の直しの間に同じ P2 の別の行が起き、 直った行はその行の終わりを待った。 同じ設計の PR で書いた兄弟の行は、 先の行が同じ指示で落ちた 4 秒後に起こされ、 同じ理由で落ちた (直しは 53 分後)。 merge の門 (SRS FR92) は本文の trailer だけを読み、 行の中身を見ない。 gh の pr merge は head の sha を固定する flag (--match-head-commit) を持つ。 vessel 宣言の任意 key の読み手は、 どれも git で commit の宣言を読み、 作業ツリーの宣言を読まない。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX3</span><div class="cxbody"><p class="cxh">先撃ち — 審査の層になっておらず、 使い回しは構造上当たらない</p><p class="cxd">先撃ち (依存を待つ行に事前に撃つ契約の審査・設計 dispatcher.md §27) は、 契約の審査で落ちた 46 件のうち 9 件にしか撃たれておらず、 そのうち 6 件は FAIL か判断不能を出したまま起動した (判定が起動を止めない)。 依存の無い行と再受付の便の 34 件には原理的に届かない。 判定の使い回しは全期間で 0 件で、 使い回しの口が在った窓の契約の審査 61 回でも 0 回だった。 理由は、 先撃ちの材料に予想の印の行が必ず入ること (114 本中 114 本)、 宣言だけの祖先は着地で変える既存の file を予想に写さず新しい file を空で置くので祖先の着地で材料が変わること、 lens の cmd に binary の置き場の path が入り 56 時間で 18 回変わったこと。 印を外しても材料が全部同じだったのは 20 回中 1 回で、 使い回すと先撃ちの見逃し (同じ版の PASS 11 回中 2 回を本番が FAIL にした) が素通りする。 費用は 09-28 以後 114 本で約 54.5 ドル (契約の審査の 41 %) で、 便の消費の記録に載らない。 lens の上限の値を 0 にしても、 先撃ちの一時の木と材料の組み直しは毎周撃たれる。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX4</span><div class="cxbody"><p class="cxh">射程 — 審査の時点・merge の門・列の順・先撃ちの扱いを決め、 審査役の道具は別の決定に任せる</p><p class="cxd">決めるのは、 (1) 契約表の行を足す・変える設計の PR の head で、 変わった行ごとに機械の検査と契約の審査を撃つ口と、 その記録の形、 (2) merge の門がその記録を見て止める形と、 門に加わる repo の名乗り、 (3) 契約の審査の段が記録を使い回す条件、 (4) 先撃ちの退役の段、 (5) 落ちた行の行の予約<span class="term" data-component="plain-language-term-inline" data-term="行の予約">落ちた行の取り置き</span>と兄弟の行の待ち。 審査役に読みだけの道具を渡し作業場所を HEAD の写しにする形は、 同じ program の別の決定に任せ、 行の審査<span class="term" data-component="plain-language-term-inline" data-term="行の審査">merge 前の審査</span>の実装はその決定の実装の後に起こす。 SRS の FR49・FR68・FR92 の字は追加の round で直し、 実装の行はその後に起こす。 ADR を書く条件のうち 1 (C10・C17.2・N1 の解釈)・3 (記録の形・跨版)・4 (却下案を残す価値) に当たる。</p></div></div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-brand"><span class="num">02</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v18"/><path d="M5 7l-3 6h6z"/><path d="M19 7l-3 6h6z"/><path d="M3 21h18"/></svg> 判断を縛る力 / 評価の軸</span><h2>選択肢を測るものさし (安全・速さ)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-02">この判断を評価する 6 本のものさしです。 設計の穴を列に並ぶ前に止めること。 落ちた行が在っても列の順を崩さないこと。 同じ欠陥の兄弟の行を続けて落とさないこと。 同じ審査を 2 度撃たず、 見逃しを素通りさせないこと。 仕組みを増やさないこと。 消費側の repo を黙って変えず、 公開の repo の CI に口座を置かないことです。</p></section>
+<section data-component="chapter-deck-band" class="tint-brand"><span class="num">02</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v18"/><path d="M5 7l-3 6h6z"/><path d="M19 7l-3 6h6z"/><path d="M3 21h18"/></svg> 判断を縛る力 / 評価の軸</span><h2>選択肢を測るものさし (安全・速さ)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-02">この判断を評価する 7 本のものさしです。 設計の穴を列に並ぶ前に止めること。 落ちた行が在っても列の順を崩さず、 待ち合いの輪を作らないこと。 同じ欠陥の兄弟の行を続けて落とさないこと。 同じ審査を 2 度撃たず、 見逃しを素通りさせないこと。 仕組みを足す前に消す仕組みを名指すこと。 消費側の repo を黙って変えず、 公開の repo の CI に口座を置かず、 席の入力欄への差し込みを増やさないこと。 判定できないことを、 そのまま通ることに倒さないことです。</p></section>
 <div class="chapbody">
 <table data-component="adr-driver-table"><tbody>
 <tr data-component="adr-driver-row"><td class="drid">DR1</td><td>設計の穴を列に並ぶ前に止める — 便の中の審査と gate の FAIL の周回を減らす <span class="drg">CTX1</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR2</td><td>列の順 (依存・優先度) を、 落ちた行が在っても崩さない <span class="drg">CTX1・CTX2</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR2</td><td>列の順 (依存・優先度) を、 落ちた行が在っても崩さず、 待ちの輪を作らない <span class="drg">CTX1・CTX2</span></td></tr>
 <tr data-component="adr-driver-row"><td class="drid">DR3</td><td>同じ欠陥を持つ兄弟の行を連鎖させない <span class="drg">CTX2</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR4</td><td>同じ審査を 2 度撃たない — 使い回しの鍵は判定に効く材料だけで取り、 見逃しを素通りさせない <span class="drg">CTX3</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR5</td><td>仕組みを増やさない — event の種類を足さず、 既存の判定の関数と口を借りる (C17) <span class="drg">CTX2・CTX4</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR6</td><td>消費側の repo を黙って変えず、 PUBLIC の repo の CI に口座を置かない <span class="drg">CTX4</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR4</td><td>同じ審査を 2 度撃たない — 撃ち直さない鍵は判定に効く入力の全部で取り、 見逃しを素通りさせない <span class="drg">CTX3</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR5</td><td>足す物の前に消す物を名指す (C17.2) — 口 1・on-disk の形 2・任意 key 1・門の断りの語 6・待ちの理由 2・rules 行 1・lens の flag 1 を足し、 先撃ちの module の残り・lens の --stage prelens・先撃ちの置き場の形 1・rules 行 2・使い回しの読み口 1 を消す。 event の種類は足さない (C17) <span class="drg">CTX2・CTX3・CTX4</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR6</td><td>消費側の repo を黙って変えず、 PUBLIC の repo の CI に口座を置かず、 席の入力欄への差し込みを増やさない <span class="drg">CTX4</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR7</td><td>測れないを通すに倒さない (C10) — 予想の審査と partial の判断不能を merge で通すのは、 その記録が契約の審査の段で写されず、 祖先の着地の後の契約の審査が実物で測り直して今どおり止めるからで、 測れないまま効く判定にはしない。 宣言や記録を読めない周は門を断る側に倒す <span class="drg">CTX2・CTX4</span></td></tr>
 </tbody></table>
 </div>
 <section data-component="chapter-deck-band" class="tint-violet"><span class="num">03</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5"/></svg> 検討した選択肢 / 3 つの確定方式</span><h2>それぞれの利点と欠点を並べる</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-03">候補を 5 つ並べます。 merge の前に審査して門で止め、 落ちた行の順番を守り、 先撃ちをやめる案 (選んだ案) と、 選ばなかった 4 つです。 選ばなかった案は、 先撃ちの審査役を強い model に戻すだけの案・先撃ちの判定で起動を止める案・CI で審査を撃つ案・merge の後に審査する案です。</p></section>
 <div class="chapbody">
 <div class="opt-grid">
 <div data-component="adr-option-card" class="chosen">
-<div class="opt-head"><span class="opt-id">OPT1</span><span class="opt-name">設計の PR の段の行の審査<span class="term" data-component="plain-language-term-inline" data-term="行の審査">merge 前の審査</span>と merge の門・落ちた行の予約<span class="term" data-component="plain-language-term-inline" data-term="行の予約">落ちた行の取り置き</span>と兄弟の待ち・先撃ちの退役</span><span class="opt-verdict chosen">採用</span></div>
-<p class="opt-sum">設計の PR の head で、 変わった行ごとに受付と同じ機械の検査と契約の審査の lens を撃ち、 行の digest<span class="term" data-component="plain-language-term-inline" data-term="行の digest">行の中身の指紋</span> (契約の字と設計の節の本文の hash) ごとに記録する。 merge の門は vessel 宣言で名乗った repo で、 head を固定しない merge と、 変わった行の審査が通っていない merge を断る。 契約の審査の段は、 判定に効く材料が同じ記録だけを使い回す。 審査か gate で落ちた行は write-set を予約し、 同じ設計の兄弟の行を待たせる。 先撃ちは rules 行の値 0 と code の退役の 2 段で畳む。 決め手は分析 (CTX1〜CTX3)。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT1">設計の変更を main に入れる前に、 変わった行ごとに機械の検査と審査役の審査を撃って記録し、 名乗った repo の merge の門で止める案です。 落ちた行は触る file を取り置いて順番を守り、 同じ設計から出た兄弟の行を直しが入るまで待たせ、 先撃ちはやめます。 列に入る行が全部審査済みになり、 先撃ちの届かなかった行にも審査が届き、 仕組みも既存の物を借りて増やしません。 代わりに、 設計の変更ごとに審査の費用と待ちが要り、 まだ無い祖先に頼る行の判断不能は merge を通ります。</span>
+<div class="opt-head"><span class="opt-id">OPT1</span><span class="opt-name">設計の PR の段の行の審査と merge の門・落ちた行の行の予約と兄弟の待ち・先撃ちの退役</span><span class="opt-verdict chosen">採用</span></div>
+<p class="opt-sum">設計の PR の head で、 変わった行ごとに受付と同じ機械の検査と契約の審査の lens を撃ち、 判定の鍵<span class="term" data-component="plain-language-term-inline" data-term="判定の鍵">審査を写す鍵</span>ごとに記録する。 merge の門は vessel 宣言で名乗った repo で、 head を固定しない merge と、 変わった行の審査が通っていない merge と、 審査の後に main で契約表が動いた merge を断る。 契約の審査の段は、 判定の鍵が同じ実物の PASS の記録だけを使い回す。 審査か gate で落ちた行は write-set を取り置き、 同じ設計の兄弟の行を待たせる。 先撃ちは rules 行の値 0 と code の退役の 2 段で畳む。 決め手は分析 (CTX1〜CTX3)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT1">設計の変更を main に入れる前に、 変わった行ごとに機械の検査と審査役の審査を撃って記録し、 名乗った repo の merge の門で止める案です。 落ちた行は触る file を取り置いて順番を守り、 同じ設計から出た兄弟の行を直しが入るまで待たせ、 先撃ちはやめます。 席が merge する行は並ぶ前に審査され、 先撃ちの届かなかった行にも審査が届き、 足す仕組みは消す仕組みと対にします。 代わりに、 設計の変更ごとに審査の費用と待ちが要り、 まだ無い祖先に頼る行と仕事の札の無い行の判断不能は merge を通ります。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>設計の穴が列に並ぶ前に止まり、 列に入る行は全部が審査済みになる (DR1)</li>
+<li>席が merge する設計の PR の行は、 列に並ぶ前に審査を通る (DR1)</li>
 <li>依存の無い行と再受付の行にも審査が届く (先撃ちの届かない 34 件) (DR1)</li>
-<li>落ちた行の file は予約され、 直った行は元の順位のまま後ろの行より先に起きる (DR2)</li>
+<li>落ちた行の file は取り置かれ、 直った行は元の順位のまま後ろの行より先に起きる。 落ちた行の依存の祖先は待たないので輪ができない (DR2)</li>
 <li>同じ設計の PR の兄弟の行は直しが入るまで起きない (DR3)</li>
-<li>使い回しは判定に効く材料と lens の版が同じ時だけで、 予想で撃った審査は写さない (DR4)</li>
-<li>event の種類を足さず、 受付・事前審査・契約の審査・merge の門の既存の関数と口を借りる (DR5)</li>
-<li>門に加わるのは宣言で名乗った repo だけで、 審査は host の器が撃つ (DR6)</li>
+<li>撃ち直さない鍵と使い回しの鍵は判定に効く入力の全部と lens の子が出す版で取り、 予想の審査は写さない (DR4)</li>
+<li>足す物と消す物を対で名指し、 event の種類を足さず、 受付・事前審査・契約の審査・merge の門の既存の関数と口を借りる (DR5)</li>
+<li>門に加わるのは宣言で名乗った repo だけで、 審査は host の器が撃ち、 口は前面で最後まで走って席へ差し込まない (DR6)</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
 <li>設計の PR ごとに読みの道具を持つ lens を行の数だけ撃つ費用が要る (未実測)</li>
 <li>記録は host の state dir に在り、 別の host から merge すると撃ち直しが要る</li>
-<li>祖先が未着地の行の判断不能は merge を通り、 その行の穴は祖先の着地の後の審査で止まる</li>
+<li>祖先が未着地の行と bead の無い行の判断不能は merge を通り、 その行の穴は列に入った後の審査で止まる</li>
 <li>新しい doc を 1 本の PR で起こすと、 その doc の全部の行が兄弟になる</li>
 </ul></div></div>
 </div>
@@ -605,7 +603,7 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
 <li>届くのは依存を待つ行だけで、 46 件中 34 件には届かない (DR1)</li>
 <li>落ちた行が列から外れて順番が崩れる形は残る (DR2)</li>
-<li>予想の空の file に由来する判断不能で、 着地で消える理由の待ちが生まれる (DR4)</li>
+<li>予想の空の file に由来する判断不能で、 着地で消える理由の待ちが生まれる (DR4・DR7)</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
@@ -635,65 +633,68 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 </div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの方式を選ぶか</span><h2>選んだ方式と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、 それが要件書のどの要件を支えるかを示します。 設計の変更を main に入れる前に、 変わった行ごとに機械の検査と審査役の審査を撃って記録し、 名乗った repo の merge の門がその記録を見て止めます。 便の中の審査は、 判定に効く材料が同じ記録だけを使い回します。 落ちた行は触る file を取り置き、 兄弟の行を待たせ、 先撃ちは 2 段でやめます。</p></section>
+<section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの方式を選ぶか</span><h2>選んだ方式と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、 それが要件書のどの要件を支えるかを示します。 設計の変更を main に入れる前に、 変わった行ごとに機械の検査と審査役の審査を撃ち、 判定に効く入力の全部を鍵にして記録します。 名乗った repo の merge の門は、 先端を固定しない merge・審査が通っていない merge・審査の後に main で行が動いた merge を止めます。 便の中の審査は、 鍵が同じ実物の合格の記録だけを使い回します。 落ちた行は触る file を取り置き、 兄弟の行を待たせ、 先撃ちは 2 段でやめます。</p></section>
 <div class="chapbody">
 <div data-component="adr-decision-panel" id="decision">
 <p class="dec-kick">採用 — OPT1</p>
-<p class="dec-state">器 SHALL 契約表の行を足す・変える設計の PR の head で行の審査を撃つ口 (pipe review --ref) を持つ。 口は head と main の先端の merge-base の間で行の digest (受付と同じ生成の契約の字の hash と、 実装する設計の節の本文の hash の対) が変わった行のうち着地済みでない行ごとに、 受付と同じ機械の検査と、 契約の審査と同じ lens を読みだけの形で 1 回撃ち、 判定と材料の鍵と lens の版 (model・effort・雛形の digest) を行の digest ごとに state dir の記録 (schema 1) に残し、 head ごとの結果を 1 語 (pass・fail・pending) で残す。 未着地の祖先を持つ行は祖先の行と節を材料に足して予想の審査 (forecast) とし、 空の file を置かない。 merge の門は vessel 宣言が任意 key row-review を持つ repo で、 head を固定しない merge と、 その head の結果が pass でない merge を断る。 forecast の判断不能は pass に数え、 FAIL は止める。 契約の審査の段は、 実物の base で組んだ材料の鍵と lens の版が forecast でない PASS の記録と同じ周だけ lens を撃たずに写し、 鍵に lens の cmd の字を入れない。 先撃ちは、 rules 行 pipe.precheck_lens_per_round の値 0 と code の退役の 2 段で畳み、 事前審査の機械の予想と束は残す。 起動の列は、 直前の便が着地でない終端に着いた open な行の write-set を、 その行が次の便を起こすか、 close か、 hold か、 rules 行 pipe.reserve_h の期限まで予約し、 順序で後ろの候補の交差を待たせる。 審査の FAIL か判断不能 (unparsed を除く) か gate の FAIL で終端した行と、 同じ節か同じ設計の PR の兄弟の候補は、 その行の digest が変わるまで待つ (first の印は待たない)。 予約と兄弟の待ち<span class="term" data-component="plain-language-term-inline" data-term="兄弟の待ち">兄弟の行の待ち</span>は既存の記録から周ごとに導き、 event の種類を足さない。 実装は設計 doc row-review.md の行 a〜g で、 SRS の追加 round の後に起こす。</p>
-<span class="dec-plain" data-prose-slot="plain" data-slot-id="decision-plain">器は、 契約表の行を足す・変える設計の変更の先端で、 行の審査を撃つ口を持ちます。 口は、 main との分かれ目から中身の指紋 (行の digest) が変わった行のうち、 まだ着地していない行ごとに、 受付と同じ機械の検査と、 本番と同じ審査役の審査を読みだけの形で 1 回撃ち、 判定と材料の指紋と審査役の版を記録し、 先端ごとの結果を 1 語で残します。 祖先がまだ無い行は、 空の file を置かず、 祖先の行と節を材料に足して予想の審査にします。 名乗った repo の merge の門は、 先端を固定しない merge と、 結果が通っていない merge を断ります。 予想の審査の判断不能は通し、 FAIL は止めます。 便の中の審査は、 材料の指紋と審査役の版が予想でない合格の記録と同じ時だけ、 撃たずに写します。 先撃ちは、 規則の表の値を 0 にする段と code をやめる段の 2 段で畳みます。 起動の列は、 着地でない終わり方をした行の触る file を、 その行が次の便を起こすまで (期限は規則の表の 1 行) 取り置き、 順番で後ろの行を待たせます。 審査か gate で落ちた行の兄弟 (同じ節か同じ設計の変更の行) は、 落ちた行の中身が変わるまで待ちます。 取り置きと兄弟の待ちは既存の記録から毎回導き、 出来事の種類は増やしません。</span>
-<span class="dec-why" data-prose-slot="rationale" data-slot-id="decision-rationale">merge の前に審査するのは、 行の字が変わるのは merge の時点だけで、 そこで止めれば列に入る行が全部審査済みになり、 落ちた行が列から外れて順番が崩れる形が生まれないからです。 先撃ちを強めない・判定で止めるだけにしないのは、 使い回しが材料の違いで外れて 1 度も当たらず、 依存を待つ行にしか届かないと実測で分かったからです。 CI で撃たないのは、 公開の repo に口座を置かず、 口座と箱と台帳を持つ host の器が撃つためです。 予想の審査の判断不能を通すのは、 祖先の本文は祖先が着地するまで存在せず、 止めると設計の変更が祖先の着地を待って 1 本ずつになるからで、 その行は着地の後の本番の審査で改めて測ります。 使い回しの鍵に審査役の起動の字を入れないのは、 字に本体の置き場が入り入れ替えのたびに外れるからで、 代わりに model と雛形の版を比べます。 落ちた行の file を取り置くのは、 直した行を元の順位で先に起こし、 後ろの行が先に同じ file を変えて直した行が待つ形を塞ぐためです。 兄弟を同じ節と同じ設計の変更に絞るのは、 同じ時に同じ前提で書いた行だけが同じ欠陥を持ちやすく、 指示が同じかは機械で判じられないからです。</span>
+<p class="dec-state">器 SHALL 契約表の行を足す・変える設計の PR の head で行の審査を撃つ口 (pipe review --ref) を持つ。 口は head と origin/main の merge-base の間で行の digest<span class="term" data-component="plain-language-term-inline" data-term="行の digest">行の中身の指紋</span> (受付と同じ生成の契約の字の hash と、 実装する設計の節の本文の hash の対) が変わった行のうち、 指す bead が無いか 1 本でも closed でない行ごとに、 受付と同じ機械の検査と、 契約の審査と同じ lens を読みだけの形で 1 回撃つ。 判定は判定の鍵 (行の digest・材料の鍵・code の木の鍵・basis・祖先ごとの状態・lens の子が自ら出す lens の版) ごとに state dir の記録 (schema 1) に残し、 同じ鍵の行は撃ち直さず、 head ごとの結果を 1 語 (pass・fail・pending・stale) で残す。 口は前面で最後まで走り、 席の入力欄へは知らせない (FR44 の閉じた列は変えない)。 未着地の祖先を持つ行は祖先の行と節を材料に足した予想の審査 (forecast) とし、 空の file を置かない。 bead の無い行の doc を跨ぐ祖先は測れない (partial)。 merge の門は、 anchor の HEAD か PR の head の vessel 宣言が任意 key row-review を持つ repo で、 head を 40 桁で固定しない merge、 その head の結果が pass でない merge、 審査の後に main で契約表の file が動いた merge を断る。 forecast と partial の判断不能は pass に数え、 FAIL と actual の判断不能は止める。 契約の審査の段は、 実物の base で組んだ判定の鍵が basis actual の PASS の記録と同じ周だけ lens を撃たずに写す。 先撃ちは rules 行 pipe.precheck_lens_per_round の値 0 (材料の組み直しも止める) と code の退役の 2 段で畳み、 事前審査の機械の予想と束は残す。 起動の列は、 直前の便が着地でない終端に着いた open な行 (列外か列に戻ったかを問わない) の write-set を行の予約とし、 FR68 の順序で後ろの候補のうち交差するものを待たせる (その行の依存の祖先は待たせない)。 審査の FAIL か unparsed でない判断不能か gate の FAIL で終端した行の兄弟 (同じ節の行と、 その行の digest を載せた設計の PR の行の審査の記録に載る行) は待つ (first の印は待たない)。 行の予約と兄弟の待ち<span class="term" data-component="plain-language-term-inline" data-term="兄弟の待ち">兄弟の行の待ち</span>が解ける契機は設計 row-review.md §7・§8 の閉じた列が持ち、 どちらも既存の記録から周ごとに導き、 event の種類を足さない。 実装は同じ設計の行 a〜g で、 SRS の追加 round の後に起こす。</p>
+<span class="dec-plain" data-prose-slot="plain" data-slot-id="decision-plain">器は、 契約表の行を足す・変える設計の変更の先端で、 行の審査を撃つ口を持ちます。 口は、 main との分かれ目から中身の指紋 (行の digest) が変わった行のうち、 まだ着地していない行ごとに、 受付と同じ機械の検査と、 本番と同じ審査役の審査を読みだけの形で 1 回撃ちます。 判定は、 行の中身・材料・code の木・祖先の状態・審査役が自分で名乗る版を並べた鍵ごとに記録し、 同じ鍵の行は撃ち直さず、 先端ごとの結果を 1 語で残します。 口は最後まで前で走り、 席の入力欄へは知らせません。 祖先がまだ無い行は、 空の file を置かず、 祖先の行と節を材料に足して予想の審査にします。 名乗った repo の merge の門は、 main か変更の側のどちらかが名乗っていれば、 先端を固定しない merge・結果が通っていない merge・審査の後に main で契約表が動いた merge を断ります。 予想の審査と仕事の札の無い行の判断不能は通し、 FAIL は止めます。 便の中の審査は、 鍵が同じ実物の合格の記録の時だけ撃たずに写します。 先撃ちは、 規則の表の値を 0 にして材料の組み直しも止める段と、 code をやめる段の 2 段で畳みます。 起動の列は、 着地でない終わり方をした行の触る file を、 その行が次の便を起こすまで取り置き、 順番で後ろの行を待たせます (その行が待っている祖先は待たせません)。 審査か gate で落ちた行の兄弟 (同じ節の行と、 同じ設計の変更で審査された行) は、 直しが入るまで待ちます。 取り置きと兄弟の待ちが解ける契機は設計の文書が閉じた列で持ち、 既存の記録から毎回導き、 出来事の種類は増やしません。</span>
+<span class="dec-why" data-prose-slot="rationale" data-slot-id="decision-rationale">merge の前に審査するのは、 行の字が変わるのは merge の時点だけで、 そこで止めれば席が merge する行は並ぶ前に審査済みになり、 落ちた行が列から外れて順番が崩れる形が生まれにくいからです。 先撃ちを強めない・判定で止めるだけにしないのは、 使い回しが材料の違いで外れて 1 度も当たらず、 依存を待つ行にしか届かないと実測で分かったからです。 CI で撃たないのは、 公開の repo に口座を置かず、 口座と箱と台帳を持つ host の器が撃つためです。 口が知らせを送らないのは、 席の入力欄への差し込みは閉じた列で持っていて、 新しい口は前に消した口の復活になるからです。 撃ち直さない鍵に材料と code の木と祖先の状態を入れるのは、 祖先の直しや code の着地で判定が変わりうるのに古い判定を写さないためで、 審査役の起動の字の代わりに審査役が自分で名乗る版を比べるのは、 字に本体の置き場が入り入れ替えのたびに外れるからです。 門が main と変更の両方の宣言を読むのは、 変更が自分で名乗りを外して門を素通りする形と、 名乗りを足す変更が自分の門を持たない形を両方塞ぐためです。 予想の審査の判断不能を通すのは、 祖先の本文は祖先が着地するまで存在せず、 止めると設計の変更が 1 本ずつになるからで、 その記録は便の中の審査で写さないので、 その行は列に入った後に実物で改めて測られます。 落ちた行の file を取り置くのは、 直した行を元の順位で先に起こすためで、 その行が待っている祖先を待たせないのは、 前提の行を足して直す形で待ち合いの輪を作らないためです。 兄弟を同じ節と同じ設計の変更に絞るのは、 同じ時に同じ前提で書いた行だけが同じ欠陥を持ちやすく、 指示が同じかは機械で判じられないからです。</span>
 <div class="justify-box"><p class="jh">この判断が正当化する要件 (cross-doc 照会 → SRS-SCRIBE2-MVP)</p>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR49" data-justifies-req="FR49" data-justifies-role="claim">FR49</a><span class="justify-role">claim</span><span class="justify-note">FR49 (契約の審査) は便が受付を通った直後に審査する。 本 ADR は同じ審査を設計の PR の段へ前倒しし、 契約の審査の段は記録の使い回しと、 予想の審査と材料の変わった行の審査し直しの段として残すと主張する (字の直しは SRS の追加 round)。</span></div>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR68" data-justifies-req="FR68" data-justifies-role="claim">FR68</a><span class="justify-role">claim</span><span class="justify-note">FR68 (起動の列) は起こせない契約を閉じた型の理由で待たせる。 本 ADR は理由に予約の待ちと兄弟の待ちの 2 つを足し、 どちらも既存の記録から導くと主張する (字の直しは SRS の追加 round)。</span></div>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR92" data-justifies-req="FR92" data-justifies-role="claim">FR92</a><span class="justify-role">claim</span><span class="justify-note">FR92 (merge の門) は本文の trailer の形を merge の前に確かめる。 本 ADR は名乗った repo の門に、 head の固定と行の審査の結果の 2 つ目の判定を足すと主張する (字の直しは SRS の追加 round)。</span></div>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR39" data-justifies-req="FR39" data-justifies-role="rationale">FR39</a><span class="justify-role">rationale</span><span class="justify-note">FR39 (交差の排他) の判定をそのまま予約の交差に使う。 本 ADR は交差の相手に、 live な便に加えて落ちた行の予約を数える理由を与えるだけで、 FR39 の判定の関数は変えない。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR49" data-justifies-req="FR49" data-justifies-role="claim">FR49</a><span class="justify-role">claim</span><span class="justify-note">FR49 (契約の審査) は便が受付を通った直後に審査する。 本 ADR は同じ審査を設計の PR の段へ前倒しし、 契約の審査の段は、 判定の鍵が同じ実物の PASS の記録の使い回しと、 予想の審査と入力の変わった行の審査し直しの段として残すと主張する (字の直しは SRS の追加 round)。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR68" data-justifies-req="FR68" data-justifies-role="claim">FR68</a><span class="justify-role">claim</span><span class="justify-note">FR68 (起動の列) は起こせない契約を閉じた型の理由で待たせる。 本 ADR は理由に行の予約の待ちと兄弟の待ちの 2 つを足し、 どちらも既存の記録から導き、 FR68 の順序の 1 関数で前後を決めると主張する (字の直しは SRS の追加 round)。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR92" data-justifies-req="FR92" data-justifies-role="claim">FR92</a><span class="justify-role">claim</span><span class="justify-note">FR92 (merge の門) は本文の trailer の形を merge の前に確かめる。 本 ADR は名乗った repo の門に、 head の固定と行の審査の結果と契約表の動きを見る 2 つ目の判定を足すと主張する (trailer の判定の字に主語を付ける直しは SRS の追加 round)。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR39" data-justifies-req="FR39" data-justifies-role="rationale">FR39</a><span class="justify-role">rationale</span><span class="justify-note">FR39 (交差の排他) の判定をそのまま行の予約の交差に使う。 本 ADR は交差の相手に、 live な便に加えて落ちた行の行の予約を数える理由を与えるだけで、 FR39 の判定の関数は変えない。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR44" data-justifies-req="FR44" data-justifies-role="rationale">FR44</a><span class="justify-role">rationale</span><span class="justify-note">FR44 (席の入力欄への差し込み) の閉じた列に項を足さない。 行の審査の口は前面で最後まで走り、 席は自分の道具の待ちで結果の行を読むので、 新しい差し込みの口が要らない。</span></div>
 <p class="justify-tgt">照会先: SRS-SCRIBE2-MVP — SRS: 設計 → 契約 → 実装 → 検証 → land を、 人の手を借りずに 1 本通す器（MVP）</p>
 </div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-warn"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> 結果 / 良い面とトレードオフ</span><h2>この判断で何が良くなり、 何を引き受けるか</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">この判断で良くなること 4 つと、 代わりに引き受けること 5 つです。 良くなるのは、 列に入る行が全部審査済みになること、 落ちた行が元の順位で先に起きること、 兄弟の行が続けて落ちないこと、 記録に載らない先撃ちの費用が無くなることです。 引き受けるのは、 merge の前の審査の費用と待ち、 記録が host ごとに在ること、 祖先がまだ無い行の判断不能が merge を通ること、 新しい文書の行が全部兄弟になること、 期限と退役の値に持ち主の裁定が要ることです。</p></section>
+<section data-component="chapter-deck-band" class="tint-warn"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> 結果 / 良い面とトレードオフ</span><h2>この判断で何が良くなり、 何を引き受けるか</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">この判断で良くなること 4 つと、 代わりに引き受けること 6 つです。 良くなるのは、 席が merge する設計の変更の行が merge の前に審査されること、 落ちた行が元の順位で先に起きること、 兄弟の行が続けて落ちないこと、 記録に載らない先撃ちの費用が無くなることです。 引き受けるのは、 merge の前の審査の費用と待ち、 門を通らない merge が残ること、 祖先がまだ無い行と仕事の札の無い行の判断不能が merge を通ること、 新しい文書の行が全部兄弟になること、 期限と退役の値と審査の消費に持ち主の裁定が要ること、 記録が畳まれず増えることです。</p></section>
 <div class="chapbody">
 <div data-component="scope-summary-panel"><div class="scol in"><h3>✓ 良い結果</h3><ul>
-<li data-component="adr-consequence-pos"><span class="b">●</span>列に入る行は全部が行の審査を通り、 設計の穴は merge の前に止まる</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>席が merge する設計の PR の行は、 merge の前に行の審査を通り、 設計の穴はそこで止まる</li>
 <li data-component="adr-consequence-pos"><span class="b">●</span>落ちた行は元の順位のまま、 同じ file を触る後ろの行より先に起きる</li>
 <li data-component="adr-consequence-pos"><span class="b">●</span>同じ設計の PR の兄弟の行が、 同じ欠陥で続けて落ちない</li>
 <li data-component="adr-consequence-pos"><span class="b">●</span>先撃ちの費用 (便の記録に載らない分) が無くなり、 行の審査の消費は記録に残る</li>
 </ul></div><div class="scol out"><h3>⚖ トレードオフ・代償</h3><ul>
 <li data-component="adr-consequence-neg"><span class="b">●</span>設計の PR ごとに読みの道具を持つ lens を行の数だけ撃つ費用と待ちが要る (費用は未実測で、 着地の後に測って見直す)</li>
-<li data-component="adr-consequence-neg"><span class="b">●</span>記録は host の state dir に在り、 別の host から merge すると口の撃ち直しが要る。 GitHub の画面の merge は門の外に在る</li>
-<li data-component="adr-consequence-neg"><span class="b">●</span>祖先が未着地の行の判断不能は merge を通り、 その穴は祖先の着地の後の契約の審査で止まる</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>門の外の merge が残る。 別の host の merge は記録が無く口の撃ち直しが要り、 GitHub の画面の merge と器が着地させる便 (runner が設計 doc の行を書き換えた便を含む) は門を通らない</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>祖先が未着地の行と bead の無い行の判断不能は merge を通り、 その穴は列に入った後の契約の審査で止まる</li>
 <li data-component="adr-consequence-neg"><span class="b">●</span>新しい doc を 1 本の PR で起こすと、 1 行の欠陥でその doc の全部の行が直しまで待つ (first の印で名指して起こせる)</li>
-<li data-component="adr-consequence-neg"><span class="b">●</span>予約の期限と先撃ちの退役の値は rules 行の値で、 実装の行で user の裁定 id を取る</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>行の予約の期限と先撃ちの退役の値と行の審査の消費は、 SRS の追加 round で持ち主の裁定を取る</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>行の審査の記録は畳まれず push ごとに増える (量の上限と掃除は別の設計)</li>
 </ul></div></div>
 </div>
-<section data-component="chapter-deck-band" class="tint-info"><span class="num">06</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> 改訂関係と原則 / この判断の位置づけ</span><h2>版の系譜と、 行き着く原則 (照会終端)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-06">この記録が版の系譜のどこに在るかと、 判断が最後に行き着く原則です。 この記録はどの記録も置き換えません。 器が便を自動で起こす決定と、 席を 1 つにして器が便を着地させる決定はそのまま保ち、 後者が持たないとした merge の後の審査も復活させません。 原則は、 列の順は並ぶ前に審査して守り、 並んだ後に落ちた物は、 直るまでその場所を持ち続ける、 です。</p></section>
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">06</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> 改訂関係と原則 / この判断の位置づけ</span><h2>版の系譜と、 行き着く原則 (照会終端)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-06">この記録が版の系譜のどこに在るかと、 判断が最後に行き着く原則です。 この記録はどの記録も置き換えません。 器が便を自動で起こす決定と、 席を 1 つにして器が便を着地させる決定はそのまま保ち、 後者が持たないとした merge の後の審査も復活させません。 以前の設計が退けた「審査の判定を記録する」形は、 merge の門に読ませる理由で採り直し、 足す物は消す物と対にします。 原則は、 列の順は並ぶ前に審査して守り、 並んだ後に落ちた物は、 直るまでその場所を持ち続ける、 です。</p></section>
 <div class="chapbody">
 <div data-component="adr-supersession">
 <p class="ss-row"><span class="ss-k">改訂状態</span>current</p>
 <p class="ss-row"><span class="ss-k">置き換える ADR</span>なし (新規)</p>
 <p class="ss-row"><span class="ss-k">置き換えられた</span>なし (現行)</p>
-<p class="ss-row">supersede は無い。 ADR-0034 (審査を通った契約を器が自動で起こす) と ADR-0045 (席は orchestrator 1 つで、 器の dispatcher が便を起こし着地させる) はそのまま保つ。 ADR-0045 が持たないとした契約が出来た直後の審査 (merge の後) は復活させず、 審査を merge の前の段に置く。 ADR-0019 の交差の排他の判定は変えず、 相手に予約を足すだけである。 先撃ち (設計 dispatcher.md §27) は ADR を持たない設計の段で、 退役は設計 doc が記録する。</p>
+<p class="ss-row">supersede は無い。 ADR-0034 (審査を通った契約を器が自動で起こす) と ADR-0045 (席は orchestrator 1 つで、 器の dispatcher が便を起こし着地させる) はそのまま保ち、 ADR-0045 が持たないとした契約が出来た直後の審査 (merge の後) は復活させず、 審査を merge の前の段に置く。 設計 dispatcher.md §16 が却下した「審査の判定を中身に紐づけて記録する」形は、 merge の門の入力にする理由で行の審査の記録として採り直し、 足す面は消す面と対にする (C17.2)。 ADR-0019 の交差の排他の判定は変えず、 相手に行の予約を足すだけである。 先撃ち (設計 dispatcher.md §27) は ADR を持たない設計の段で、 その code の退役は git の履歴に残る可逆な形 (N1) で行い、 設計 doc が記録する。</p>
 </div>
 <div data-component="adr-principle">
 <p class="prin-id">照会終端 — PRIN-JUDGE-BEFORE-THE-QUEUE-AND-KEEP-THE-PLACE-OF-WHAT-FELL</p>
 <p class="prin-text">列の順は並ぶ前に審査して守り、 並んだ後に落ちた物は、 直るまでその場所を持ち続ける。</p>
-<p class="prin-note">本 ADR が先撃ちを強める案・CI で撃つ案・merge の後に撃つ案を退け、 merge の門と予約と兄弟の待ちを選んだのはこの原則に行き着く (これ以上は遡らない照会終端)。</p>
+<p class="prin-note">本 ADR が先撃ちを強める案・CI で撃つ案・merge の後に撃つ案を退け、 merge の門と行の予約と兄弟の待ちを選んだのはこの原則に行き着く (これ以上は遡らない照会終端)。</p>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-brand"><span class="num">07</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg> 用語集 / この文書で使う専門語</span><h2>本文に出てくる専門語のやさしい説明</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-07">本文に出てくる専門語 5 個を、 やさしい言葉で説明します。</p></section>
+<section data-component="chapter-deck-band" class="tint-brand"><span class="num">07</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg> 用語集 / この文書で使う専門語</span><h2>本文に出てくる専門語のやさしい説明</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-07">本文に出てくる専門語 6 個を、 やさしい言葉で説明します。</p></section>
 <div class="chapbody">
 <div data-component="glossary-term-table">
-<div class="grow"><div class="gword">行の審査<span class="en">row review</span></div><div class="gdef">契約表の行を足す・変える設計の PR の head で、 変わった行ごとに器が撃つ機械の検査と契約の審査の lens (本 ADR)。 判定は行の digest ごとに state dir に記録し、 merge の門と契約の審査の段が読む。</div></div>
+<div class="grow"><div class="gword">行の審査<span class="en">row review</span></div><div class="gdef">契約表の行を足す・変える設計の PR の head で、 変わった行ごとに器が撃つ機械の検査と契約の審査の lens (本 ADR)。 判定は判定の鍵ごとに state dir に記録し、 merge の門と契約の審査の段が読む。</div></div>
 <div class="grow"><div class="gword">行の digest<span class="en">row digest</span></div><div class="gdef">行の欄から受付と同じ生成で作った契約の字の hash と、 行が実装する設計の節の本文の hash の対 (本 ADR)。 SRS FR49 が契約の中身の同一性に使う 2 つと同じもの。</div></div>
-<div class="grow"><div class="gword">材料の鍵<span class="en">materials key</span></div><div class="gdef">審査の材料の dir の全 file の名と本文から決まる 1 つの digest (本 ADR)。 lens の cmd の字は入れない。 契約の審査の段が行の審査の記録を使い回すかの判じに使う。</div></div>
-<div class="grow"><div class="gword">行の予約<span class="en">row reservation</span></div><div class="gdef">直前の便が着地でない終端に着いた open な行が、 次の便を起こすまで持つ write-set の取り置き (本 ADR)。 起動の列の順で後ろの候補のうち交差するものを予約の待ちで待たせる。 期限は rules 行 pipe.reserve_h。</div></div>
-<div class="grow"><div class="gword">兄弟の待ち<span class="en">sibling wait</span></div><div class="gdef">審査か gate で落ちた行と同じ節を実装する行か、 同じ設計の PR で行の審査を受けた行を、 落ちた行の digest が変わるまで待たせる起動の列の理由 (本 ADR)。 介入 first の印を持つ候補は待たない。</div></div>
+<div class="grow"><div class="gword">材料の鍵<span class="en">materials key</span></div><div class="gdef">審査の材料の dir の全 file の名と本文から決まる 1 つの digest (本 ADR)。 lens の cmd の字は入れない。 判定の鍵の 1 つ。</div></div>
+<div class="grow"><div class="gword">判定の鍵<span class="en">verdict key</span></div><div class="gdef">行の digest・材料の鍵・code の木の鍵・basis・祖先ごとの状態・lens の版を並べた字の digest (本 ADR)。 同じ鍵の行は撃ち直さず、 契約の審査の段は同じ鍵の実物の PASS だけを写す。</div></div>
+<div class="grow"><div class="gword">行の予約<span class="en">row reservation</span></div><div class="gdef">直前の便が着地でない終端に着いた open な行が、 次の便を起こすまで持つ write-set の取り置き (本 ADR)。 起動の列の順で後ろの候補のうち交差するものを待たせ、 その行の依存の祖先は待たせない。 群の予約とは別。</div></div>
+<div class="grow"><div class="gword">兄弟の待ち<span class="en">sibling wait</span></div><div class="gdef">審査か gate で落ちた行と同じ節を実装する行か、 落ちた行を載せた設計の PR の行の審査の記録に載る行を、 直しが入るまで待たせる起動の列の理由 (本 ADR)。 介入 first の印を持つ候補は待たない。</div></div>
 </div>
 </div>
 </div>
 <footer class="foot" data-component="fidelity-sync-meta"><div class="ft-grid">
 <div class="ft-plain">このページは、大もとの機械データ (正本) から自動で組み立てられています。構造は機械が自動で検査し、内容が元データに忠実かは独立のレビューで確かめます。</div>
-<div data-audience="machine">機械SSoT: <b>ADR-0103.adr.yaml</b> &middot; 生成: <b>2026-09-30 12:16</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
+<div data-audience="machine">機械SSoT: <b>ADR-0103.adr.yaml</b> &middot; 生成: <b>2026-09-30 13:14</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
 <div class="tags" data-audience="machine"><span>folio design system</span><span>ADR-pack</span><span>folio engine B1 (instance#2)</span><span>cross-doc 照会</span></div>
 </div></footer>
 <!-- folio:chrome-bottom -->
