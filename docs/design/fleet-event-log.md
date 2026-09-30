@@ -221,7 +221,12 @@ C3 は「1 つの DB file（host 列）」と言う。MVP はそれを **append-
   2. **読む値**: payload を `json_tree::parse` で読み、`prompt`（逐語・escape を解いた字）と `session_id` を取る。prompt の key が無い・空白だけの周は何も書かず、何も出さない（既存の歯の payload はこの形なので、出力が変わらない）。
   3. **除外（閉じた 4 つ）**。当たる周は記帳も出力もしない。
      - (a) 差し込みの行: prompt の頭が `<NAME> <語>:` で、語が閉じた 4 語（pipe・seat・group・tick）のどれか。
-     - (b) 別の session からの包み: prompt の頭が閉じた一覧の字（const slice 1 本）で始まる。一覧は実装の前に実測で決める（下の「未決」）。
+     - (b) 別の session と harness からの包み: prompt の頭（先頭の空白を除く）が閉じた一覧の字（const slice 1 本・5 つ）のどれかで始まる。
+       - `Another Claude session sent a message:`（別の session と teammate の message の包みの 1 行目）
+       - `<cross-session-message`・`<teammate-message`（包みの 2 行目が頭に来る形）
+       - `<task-notification>`（背景の task と subagent の完了の知らせ）
+       - `This session is being continued from a previous conversation`（compaction の後の要約）
+       - 出所: orchestrator の席の transcript 1 本（2026-09-30）で、user の turn の本文の頭を数えた実測。`<task-notification>` 297 件、1 行目が `Another Claude session sent a message:` の包み 136 件（2 行目が `<cross-session-message` 107 件・`<teammate-message` 29 件）、compaction の要約 44 件。背景の task の知らせと compaction の要約は別の session ではないが、user の発話でもないので同じ一覧で外す。
      - (c) runner: `--plugin-root` が anchor の state dir の `pipe` の dir（`pipe::run_dir` と同じ導出）の下。
      - (d) lens は hook が撃たれないので code は持たない。起動行に `--plugin-dir` が無いことを歯で押さえる。
   4. **ts**: 秒の下にミリ秒の 3 桁を持つ UTC の字面（`YYYY-MM-DDTHH:MM:SS.mmmZ`）。作る関数は `fleet/cli.rs` の `format_utc` の隣の 1 本、逆の読みは `fleet/wait.rs` の `epoch_of` の隣の 1 本（ミリ秒の形だけを読む）。
@@ -233,7 +238,7 @@ C3 は「1 つの DB file（host 列）」と言う。MVP はそれを **append-
 - 歯（e2e は既存の `tests/e2e/hook/session.rs` に足す。新しい e2e の file は作らない。lib は行 g の `+` の file の歯の区間）:
   - e2e `hook_utterance_record_`:
     - (a) 開いた問いが在る時と無い時（偽の bd が呼ばれた回数を数える）の 2 本で、発話 event が 1 件ずつ・逐語は改行と非 ASCII と `"` を含めて一致・session と channel chat・bd の呼び出しは 0 回・stdout は ts の 1 行。
-    - (b) 差し込みの 9 種の見本と包みの見本と runner の plugin-root で、どれも記帳が 0・stdout は 0 byte。
+    - (b) 差し込みの 9 種の見本と包みの 5 つの頭の見本（それぞれ後ろに本文の行を持つ）と runner の plugin-root で、どれも記帳が 0・stdout は 0 byte。
     - (c) marker の無い repo と別の NAME の repo で 0 件。
     - (d) 同じ秒に 2 回撃つと ts が 2 つとも違い、log の順に増える。
     - (e) `pipe report` の human_events が発話の前後で同じ。
@@ -410,7 +415,7 @@ write-set = ["+crates/scribe2/src/hook/utterance.rs", "crates/scribe2/src/hook/m
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail hook_utterance_record_", "cargo nextest run -p scribe2 --lib --no-tests=fail utterance_tail_"]
 size = "M"
 growth = ["crates/scribe2/src/hook/utterance.rs:230", "crates/scribe2/src/hook/mod.rs:6", "crates/scribe2/src/fleet/store.rs:75", "crates/scribe2/src/fleet/cli.rs:14", "crates/scribe2/src/fleet/wait.rs:30", "crates/scribe2/src/pipe/notify.rs:12", "crates/scribe2/src/pipe/dispatch/group.rs:12", "crates/scribe2/src/headless/mod.rs:10", "crates/scribe2/src/pipe/mod.rs:1", "crates/scribe2/src/pipe/dispatch.rs:1", "crates/scribe2/src/seat/tick.rs:1"]
-done = "(1) hook の子 module 1 つが user-prompt-submit の枝で打刻の後・群の行の前に 1 回撃たれる (2) payload を json_tree で読み、prompt の無い・空白だけの周は何も書かず何も出さない (3) 頭が <NAME> と閉じた 4 語の差し込みの行・閉じた一覧の包み・plugin-root が state dir の pipe の dir の下の runner は記帳も出力もせず、lens の起動行は --plugin-dir を持たない (4) ts はミリ秒 3 桁の UTC の字面で、作りと読みは fleet/cli.rs と fleet/wait.rs の各 1 本 (5) store の追記の 1 本が lock の中で末尾 64 KiB だけを読んで最後の発話の ts より 1 ms 以上後の ts を振る (6) 行は UtteranceReceived・human・chat・session・逐語の detail・run 無し (7) 記帳した周だけ stdout に <NAME> utterance: ts=<ts> の 1 行（逐語なし） (8) session 無し・lock・書けない周は rc 0 で stderr 1 行 reason=no-session|lock|write (9) bd を撃たない (10) 作り手の親の mod 宣言 3 つ（pipe の notify・dispatch の group・tick の signal）を pub(crate) に広げ、作り手の関数を crate の中から呼べるようにし、行を増やさない 歯: hook_utterance_record_ が問いの有無の 2 本の記帳と逐語の一致と bd 0 回・差し込み 9 種と包みと runner の 0 件・marker の外 2 形の 0 件・同じ秒の 2 発話の ts の違いと順・pipe report の human_events の不変を、utterance_tail_ が 10 MB と 20 MB の読む byte の一致・作り手 9 種の実物の行の判定・ミリ秒の往復を測る。base は書き手が無く記帳 0 件で RED"
+done = "(1) hook の子 module 1 つが user-prompt-submit の枝で打刻の後・群の行の前に 1 回撃たれる (2) payload を json_tree で読み、prompt の無い・空白だけの周は何も書かず何も出さない (3) 頭が <NAME> と閉じた 4 語の差し込みの行・閉じた 5 つの頭の包み（別の session と teammate の包みの 3 形・背景の task の知らせ・compaction の要約）・plugin-root が state dir の pipe の dir の下の runner は記帳も出力もせず、lens の起動行は --plugin-dir を持たない (4) ts はミリ秒 3 桁の UTC の字面で、作りと読みは fleet/cli.rs と fleet/wait.rs の各 1 本 (5) store の追記の 1 本が lock の中で末尾 64 KiB だけを読んで最後の発話の ts より 1 ms 以上後の ts を振る (6) 行は UtteranceReceived・human・chat・session・逐語の detail・run 無し (7) 記帳した周だけ stdout に <NAME> utterance: ts=<ts> の 1 行（逐語なし） (8) session 無し・lock・書けない周は rc 0 で stderr 1 行 reason=no-session|lock|write (9) bd を撃たない (10) 作り手の親の mod 宣言 3 つ（pipe の notify・dispatch の group・tick の signal）を pub(crate) に広げ、作り手の関数を crate の中から呼べるようにし、行を増やさない 歯: hook_utterance_record_ が問いの有無の 2 本の記帳と逐語の一致と bd 0 回・差し込み 9 種と包みと runner の 0 件・marker の外 2 形の 0 件・同じ秒の 2 発話の ts の違いと順・pipe report の human_events の不変を、utterance_tail_ が 10 MB と 20 MB の読む byte の一致・作り手 9 種の実物の行の判定・ミリ秒の往復を測る。base は書き手が無く記帳 0 件で RED"
 
 [[contract]]
 id = "h"
