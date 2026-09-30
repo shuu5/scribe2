@@ -10,7 +10,7 @@ use super::*;
 use vessel::cli_outcome::RC_BROKEN;
 use vessel::fleet::json_lite;
 use vessel::fleet::store::{self, LockPolicy};
-use vessel::fleet::{Case, Channel, Event, EventKind, ACTOR_HUMAN, SCHEMA};
+use vessel::fleet::{Case, Channel, Event, EventKind, Sorting, ACTOR_HUMAN, SCHEMA};
 
 /// 対話面の席の target（登録 row を持つ）。
 const DIALOGUE: &str = "ruling:dialogue";
@@ -639,4 +639,291 @@ fn fleet_ruling_doctor_matches_user_ts_rows_by_the_same_minute() {
     assert_eq!(at.map(|found| found + 1), first_seat, "登録 row の行の直前: {lines:?}");
     assert_eq!(lines.len(), bare.len() + 1, "足すのは 1 行だけ: {lines:?}");
     fs::remove_dir_all(&place.dir).ok();
+}
+
+// ─────────── 発話の仕分けの口（設計 docs/design/dialogue-surface.md §10・行 i・接頭辞 `utterance_sort_`） ───────────
+
+/// 同じ秒の 2 つの発話の ts（ミリ秒だけが違う）と、別の分の発話の ts。
+const TS_B: &str = "2026-09-30T07:05:09.456Z";
+const TS_C: &str = "2026-09-30T07:06:00.000Z";
+
+/// `utterance <args…>` を binary で 1 回撃つ。
+#[expect(clippy::expect_used, reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く")]
+fn utterance(args: &[&str]) -> Output {
+    Command::new(bin()).arg("utterance").args(args).output().expect("binary を起動できる")
+}
+
+/// 開いた memo（label intake:memo）の show。
+fn open_memo() -> String {
+    show_json("open", &["intake:memo"], "2026-09-30T06:00:00Z", None, "")
+}
+
+/// 断りの 1 行（設計 §10 約束 5）。
+fn refused_sort(reason: &str, ts: &str) -> String {
+    format!("utterance: refused reason={reason} ts={ts}\n")
+}
+
+impl Fake {
+    /// `utterance sort` を撃つ（`--repo` と `--bd` は偽の bd・会話の周でも渡し、台帳が読まれないことを呼び出しの記録で測る）。
+    fn sort_with(&self, ts: &str, how: &[&str]) -> Output {
+        let (repo, state) = (self.repo.display().to_string(), self.state.display().to_string());
+        let mut args = vec!["sort", "--state-dir", state.as_str(), "--ts", ts, "--repo", repo.as_str(), "--bd", self.bd.as_str()];
+        args.extend_from_slice(how);
+        utterance(&args)
+    }
+
+    /// 要望の仕分け（`--as request --memo <memo>`）。
+    fn request(&self, ts: &str, memo: &str) -> Output {
+        self.sort_with(ts, &["--as", "request", "--memo", memo])
+    }
+
+    /// 会話の仕分け（`--as chat`）。
+    fn chat(&self, ts: &str) -> Output {
+        self.sort_with(ts, &["--as", "chat"])
+    }
+
+    /// `utterance show` を撃つ。
+    fn shown(&self, ts: &str) -> Output {
+        utterance(&["show", "--state-dir", self.state.display().to_string().as_str(), "--ts", ts])
+    }
+
+    /// log の仕分けの event の (bead, 本体)（物理順）。
+    fn sorted(&self) -> Vec<(String, Option<Case>)> {
+        let all = store::read_all(&self.state).unwrap_or_default();
+        all.into_iter().filter(|found| found.kind == EventKind::UtteranceSorted).map(|found| (found.bead, found.case)).collect()
+    }
+}
+
+/// 仕分けの本体（発話の ts と仕分け）。
+fn sorted_case(utterance: &str, sorting: Sorting) -> Option<Case> {
+    Some(Case::Sorted { utterance: utterance.to_owned(), sorting })
+}
+
+/// 通った周の外形: rc 0・stderr 0 byte・stdout が期待の 1 行・逐語の字を出さない。
+fn assert_ok_line(out: &Output, expected: &str, label: &str) {
+    assert_eq!(rc_of(out), i32::from(RC_OK), "{label}: stderr={}", stderr_of(out));
+    assert!(stderr_of(out).is_empty(), "{label}: stderr 0 byte");
+    assert_eq!(stdout_of(out), expected, "{label}");
+    assert!(!stdout_of(out).contains(WORDS_MARKS), "{label}: 逐語の字を出さない");
+}
+
+/// 断った周の外形: rc 1・stdout 0 byte・stderr が 1 行の断り・event log は撃つ前のまま・偽の bd の書きは 0 回。
+fn assert_refused_sort(fake: &Fake, out: &Output, expected: &str, before: &str, label: &str) {
+    assert_eq!(rc_of(out), i32::from(RC_REFUSED), "{label}: {}", stderr_of(out));
+    assert!(stdout_of(out).is_empty(), "{label}: stdout 0 byte");
+    assert_eq!(stderr_of(out), expected, "{label}");
+    assert_eq!(fake.log(), before, "{label}: event log は不変");
+    assert!(fake.writes().is_empty(), "{label}: 偽の bd の書きは 0 回: {:?}", fake.writes());
+}
+
+/// (a) 要望と会話がそれぞれ仕分けの event を 1 件だけ書き（要望は bead に memo の id・会話は無し・actor machine）、偽の bd の書きは 0 回。
+/// 会話の周は偽の bd の呼び出しが 0 行（台帳を読まない）で、読めない JSON を返す memo が在っても通る。
+#[test]
+fn utterance_sort_writes_one_event_for_a_request_and_for_a_chat_without_touching_the_ledger() {
+    let fake = Fake::new();
+    fake.say(TS_A, Channel::Chat, WORDS);
+    fake.say(TS_B, Channel::Gui, WORDS);
+    fake.show("s2-m1", &open_memo());
+    fake.show("s2-broken", "こわれた JSON");
+    let before = fake.log();
+    assert_ok_line(&fake.request(TS_A, "s2-m1"), &format!("utterance: sorted ts={TS_A} as=request memo=s2-m1\n"), "要望");
+    assert_eq!(fake.log().lines().count(), before.lines().count() + 1, "log は 1 行だけ増える");
+    assert!(fake.log().starts_with(&before), "追記だけ");
+    assert_eq!(fake.sorted(), [("s2-m1".to_owned(), sorted_case(TS_A, Sorting::Request))], "要望の 1 件");
+    assert!(fake.writes().is_empty(), "偽の bd の書きは 0 回: {:?}", fake.writes());
+    assert_eq!(fake.reads(), 1, "台帳の読みは memo 1 本");
+    let last = store::read_all(&fake.state).unwrap_or_default().pop();
+    assert_eq!(last.map(|found| (found.actor, found.detail)), Some(("machine".to_owned(), None)), "actor machine・逐語を持たない");
+    fake.forget();
+    assert_ok_line(&fake.chat(TS_B), &format!("utterance: sorted ts={TS_B} as=chat\n"), "会話");
+    let expected = [("s2-m1".to_owned(), sorted_case(TS_A, Sorting::Request)), (String::new(), sorted_case(TS_B, Sorting::Chat))];
+    assert_eq!(fake.sorted(), expected, "会話の 1 件が足される");
+    assert!(fake.calls().is_empty(), "会話は台帳を 1 度も撃たない: {:?}", fake.calls());
+}
+
+/// (b) 1 つの発話を 2 つの memo へ仕分けられる（同じ組だけが already）。
+#[test]
+fn utterance_sort_one_utterance_can_be_sorted_to_two_memos() {
+    let fake = Fake::new();
+    fake.say(TS_A, Channel::Chat, WORDS);
+    for memo in ["s2-m1", "s2-m2"] {
+        fake.show(memo, &open_memo());
+        assert_ok_line(&fake.request(TS_A, memo), &format!("utterance: sorted ts={TS_A} as=request memo={memo}\n"), memo);
+    }
+    let expected = [("s2-m1".to_owned(), sorted_case(TS_A, Sorting::Request)), ("s2-m2".to_owned(), sorted_case(TS_A, Sorting::Request))];
+    assert_eq!(fake.sorted(), expected, "別の memo の 2 件");
+    assert!(fake.writes().is_empty(), "台帳は書かない");
+}
+
+/// (c) 断りの 7 形（無い ts の no-utterance を request と chat の 2 形・答えを持つ発話への会話と要望を持つ発話への会話の linked 2 形・
+/// 無い bead / 閉じた memo / label の無い bead の not-memo 3 形）が、どれも rc 1・stdout 0 byte・stderr が 1 行の断りと逐語で一致し、
+/// event log も偽の bd の書きも変えない。
+#[test]
+fn utterance_sort_refuses_the_seven_forms_without_writing() {
+    let fake = Fake::new();
+    fake.say(TS_A, Channel::Chat, WORDS);
+    fake.tie("s2-q1", TS_A);
+    fake.say(TS_B, Channel::Chat, WORDS);
+    fake.say(TS_C, Channel::Chat, WORDS);
+    fake.show("s2-m1", &open_memo());
+    assert_eq!(rc_of(&fake.request(TS_B, "s2-m1")), i32::from(RC_OK), "要望を持つ発話を用意する");
+    fake.show("s2-closed", &show_json("closed", &["intake:memo"], "2026-09-30T06:00:00Z", None, ""));
+    fake.show("s2-plain", &show_json("open", &[], "2026-09-30T06:00:00Z", None, ""));
+    fake.show("s2-gone", "[]");
+    type Call = fn(&Fake) -> Output;
+    let cases: [(&str, &str, &str, Call); 7] = [
+        ("要望の無い ts", "no-utterance", TS_MISSING, |fake| fake.request(TS_MISSING, "s2-m1")),
+        ("会話の無い ts", "no-utterance", TS_MISSING, |fake| fake.chat(TS_MISSING)),
+        ("答えを持つ発話への会話", "linked", TS_A, |fake| fake.chat(TS_A)),
+        ("要望を持つ発話への会話", "linked", TS_B, |fake| fake.chat(TS_B)),
+        ("無い bead", "not-memo", TS_C, |fake| fake.request(TS_C, "s2-gone")),
+        ("閉じた memo", "not-memo", TS_C, |fake| fake.request(TS_C, "s2-closed")),
+        ("label の無い bead", "not-memo", TS_C, |fake| fake.request(TS_C, "s2-plain")),
+    ];
+    for (label, reason, ts, call) in cases {
+        let before = fake.log();
+        let out = call(&fake);
+        assert_refused_sort(&fake, &out, &refused_sort(reason, ts), &before, label);
+    }
+}
+
+/// (c2) 断りの順: 無い ts ∧ 読めない JSON の request と、無い ts ∧ 開いた memo でない名指しの request が、どちらも no-utterance だけを出し、
+/// 台帳は 1 度も読まれない（event log の判定が台帳より先）。
+#[test]
+fn utterance_sort_a_missing_utterance_is_refused_before_the_ledger_is_read() {
+    let fake = Fake::new();
+    fake.say(TS_A, Channel::Chat, WORDS);
+    fake.show("s2-broken", "こわれた JSON");
+    fake.show("s2-plain", &show_json("open", &[], "2026-09-30T06:00:00Z", None, ""));
+    for memo in ["s2-broken", "s2-plain"] {
+        let before = fake.log();
+        let out = fake.request(TS_MISSING, memo);
+        assert_refused_sort(&fake, &out, &refused_sort("no-utterance", TS_MISSING), &before, memo);
+    }
+    assert!(fake.calls().is_empty(), "台帳は読まれない: {:?}", fake.calls());
+}
+
+/// (d) 同じ秒の 2 つの発話（ミリ秒だけが違う）を ts で別々に仕分けられる。秒までの ts は別の発話を指せず no-utterance。
+#[test]
+fn utterance_sort_two_utterances_of_the_same_second_are_sorted_apart_by_ts() {
+    let fake = Fake::new();
+    fake.say(TS_A, Channel::Chat, WORDS);
+    fake.say(TS_B, Channel::Chat, WORDS);
+    fake.show("s2-m1", &open_memo());
+    assert_eq!(rc_of(&fake.request(TS_A, "s2-m1")), i32::from(RC_OK));
+    assert_eq!(rc_of(&fake.chat(TS_B)), i32::from(RC_OK), "隣の発話は要望を持たない");
+    let expected = [("s2-m1".to_owned(), sorted_case(TS_A, Sorting::Request)), (String::new(), sorted_case(TS_B, Sorting::Chat))];
+    assert_eq!(fake.sorted(), expected, "ts ごとに 1 件");
+    let before = fake.log();
+    let out = fake.chat("2026-09-30T07:05:09Z");
+    assert_refused_sort(&fake, &out, &refused_sort("no-utterance", "2026-09-30T07:05:09Z"), &before, "秒までの ts");
+}
+
+/// (e) `utterance show` は逐語を 1 byte も違わずに 1 件だけ返し（末尾の改行 1 つ）、3 つの発話を持つ log で真ん中の ts は真ん中の逐語だけ。
+/// 同じ ts を持つ発話でない event の逐語は返さず、無い ts は rc 1 で no-utterance。log も台帳も動かさない。
+#[test]
+fn utterance_sort_show_returns_the_verbatim_words_of_one_utterance() {
+    let fake = Fake::new();
+    fake.say(TS_A, Channel::Chat, "最初の発話");
+    fake.say(TS_B, Channel::Gui, WORDS);
+    fake.say(TS_C, Channel::Chat, "最後の発話");
+    fake.tie("s2-q9", TS_A);
+    let before = fake.log();
+    for (ts, words) in [(TS_A, "最初の発話"), (TS_B, WORDS), (TS_C, "最後の発話")] {
+        let out = fake.shown(ts);
+        assert_eq!(rc_of(&out), i32::from(RC_OK), "{ts}: stderr={}", stderr_of(&out));
+        assert_eq!(stdout_of(&out), format!("{words}\n"), "{ts}: 逐語だけ");
+        assert!(stderr_of(&out).is_empty(), "{ts}: stderr 0 byte");
+    }
+    let out = fake.shown(TS_MISSING);
+    assert_refused_sort(&fake, &out, &refused_sort("no-utterance", TS_MISSING), &before, "無い ts（同じ ts の裁定 event が在っても）");
+    assert!(fake.calls().is_empty(), "show は台帳を読まない");
+}
+
+/// (e2) 同じ ts と同じ memo の request と、会話の札が在る発話への chat は、どちらも rc 0・stdout が `already` の 1 行で、event log は不変。
+/// 要望は台帳より先に見る（最初の周の後に memo が閉じても already で、台帳の読みは増えない）。
+#[test]
+fn utterance_sort_the_same_pair_twice_is_already_and_writes_nothing() {
+    let fake = Fake::new();
+    fake.say(TS_A, Channel::Chat, WORDS);
+    fake.say(TS_B, Channel::Chat, WORDS);
+    fake.show("s2-m1", &open_memo());
+    assert_eq!(rc_of(&fake.request(TS_A, "s2-m1")), i32::from(RC_OK));
+    assert_eq!(rc_of(&fake.chat(TS_B)), i32::from(RC_OK));
+    fake.show("s2-m1", &show_json("closed", &["intake:memo"], "2026-09-30T06:00:00Z", None, ""));
+    let (before, reads) = (fake.log(), fake.reads());
+    assert_ok_line(&fake.request(TS_A, "s2-m1"), "already\n", "同じ組の要望");
+    assert_ok_line(&fake.chat(TS_B), "already\n", "会話の札が在る発話への会話");
+    assert_eq!(fake.log(), before, "event log は不変");
+    assert_eq!(fake.reads(), reads, "already は台帳を読まない");
+}
+
+/// (e3) 偽の bd の show が読めない JSON を返す周と、show が rc 1 の周の request は、rc 1・stdout 0 byte・stderr の 1 行が
+/// `reason=ledger-unreadable` で、event log は不変。
+#[test]
+fn utterance_sort_an_unreadable_ledger_refuses_a_request_and_writes_nothing() {
+    let fake = Fake::new();
+    fake.say(TS_A, Channel::Chat, WORDS);
+    fake.show("s2-broken", "こわれた JSON");
+    for memo in ["s2-broken", "s2-nofile"] {
+        let before = fake.log();
+        let out = fake.request(TS_A, memo);
+        assert_refused_sort(&fake, &out, &refused_sort("ledger-unreadable", TS_A), &before, memo);
+    }
+    assert_eq!(fake.reads(), 2, "どちらも台帳を読みに行った");
+}
+
+/// (e4) 読みの範囲: 対象の発話の後に発話でない event を 2 MB 続けた log で、会話の sort と要望の sort と show が通る（末尾の窓だけを読む実装を落とす）。
+#[test]
+fn utterance_sort_reads_the_whole_log_past_two_megabytes_of_later_events() {
+    let fake = Fake::new();
+    fake.say(TS_A, Channel::Chat, WORDS);
+    fake.say(TS_B, Channel::Chat, WORDS);
+    fake.show("s2-m1", &open_memo());
+    let filler = "あ".repeat(2700);
+    for _ in 0..260 {
+        fake.put(&event(EventKind::RulingReceived, "2026-09-30T08:00:00Z", "s2-x.1", Some(&filler), None));
+    }
+    assert!(fake.log().len() >= 2 * 1024 * 1024, "log は 2 MB を超える: {}", fake.log().len());
+    assert_ok_line(&fake.chat(TS_A), &format!("utterance: sorted ts={TS_A} as=chat\n"), "会話");
+    assert_ok_line(&fake.request(TS_B, "s2-m1"), &format!("utterance: sorted ts={TS_B} as=request memo=s2-m1\n"), "要望");
+    let shown = fake.shown(TS_A);
+    assert_eq!((rc_of(&shown), stdout_of(&shown)), (i32::from(RC_OK), format!("{WORDS}\n")), "show: {}", stderr_of(&shown));
+}
+
+/// 使い方の誤り（未知の語・`--as` の語・要る flag の欠け・`--memo` を持つ会話・空文字・余分な位置引数）は rc 2 で使い方の行で終わり、
+/// 何も書かない。第 1 token の無い周と未知の語は使い方の 1 行と rc 1。`--help` は使い方を stdout に出して rc 0。
+#[test]
+fn utterance_sort_usage_errors_write_nothing_and_end_with_the_usage_line() {
+    let fake = Fake::new();
+    fake.say(TS_A, Channel::Chat, WORDS);
+    let state = fake.state.display().to_string();
+    let usage = vessel::utterance::cli::usage();
+    let before = fake.log();
+    let bad: [&[&str]; 8] = [
+        &["sort", "--state-dir", &state, "--ts", TS_A, "--as", "maybe"],
+        &["sort", "--state-dir", &state, "--ts", TS_A, "--as", "request"],
+        &["sort", "--state-dir", &state, "--ts", TS_A, "--as", "chat", "--memo", "s2-m1"],
+        &["sort", "--state-dir", &state, "--as", "chat"],
+        &["sort", "--state-dir", &state, "--ts", "", "--as", "chat"],
+        &["sort", "--state-dir", &state, "--ts", TS_A, "--as", "chat", "extra"],
+        &["show", "--state-dir", &state],
+        &["show", "--state-dir", &state, "--ts", TS_A, "--unknown", "x"],
+    ];
+    for args in bad {
+        let out = utterance(args);
+        assert_eq!(rc_of(&out), 2, "{args:?}: {}", stderr_of(&out));
+        assert!(stdout_of(&out).is_empty(), "{args:?}: stdout 0 byte");
+        assert_eq!(stderr_of(&out).lines().last(), Some(usage.as_str()), "{args:?}: 使い方の行で終わる");
+    }
+    for args in [&[][..], &["nosuch"]] {
+        let out = utterance(args);
+        assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "{args:?}");
+        assert_eq!(stderr_of(&out), format!("{usage}\n"), "{args:?}: 使い方の 1 行");
+        assert!(stdout_of(&out).is_empty(), "{args:?}: stdout 0 byte");
+    }
+    let help = utterance(&["sort", "--help"]);
+    assert_eq!((rc_of(&help), stdout_of(&help)), (i32::from(RC_OK), format!("{usage}\n")), "--help");
+    assert_eq!(fake.log(), before, "どの周も log は不変");
+    assert!(fake.calls().is_empty(), "台帳は撃たれない");
 }

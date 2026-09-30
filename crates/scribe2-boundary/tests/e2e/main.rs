@@ -1872,11 +1872,11 @@ fn help_live_usage(word: &str) -> Option<String> {
     run.out.into_iter().chain(run.err).find(|line| line.starts_with("usage:"))
 }
 
-/// (a) `help` は頂点の 15 語に各 1 行の目的を出し、`help <command>` への案内の 1 行を持つ（base では使い方の 1 行だけ）。
+/// (a) `help` は頂点の 16 語に各 1 行の目的を出し、`help <command>` への案内の 1 行を持つ（base では使い方の 1 行だけ）。
 #[test]
 fn cli_help_overview_names_every_top_word_with_a_purpose() {
     let words = help_top_words();
-    assert_eq!(words.len(), 15, "頂点の語は 15: {words:?}");
+    assert_eq!(words.len(), 16, "頂点の語は 16: {words:?}");
     assert!(words.iter().any(|word| word == "--version"), "--version を含む");
     let run = help_run(&["help"]);
     assert_eq!(run.rc, Some(0), "rc 0: {:?}", run.err);
@@ -1889,11 +1889,11 @@ fn cli_help_overview_names_every_top_word_with_a_purpose() {
     assert!(run.out.iter().any(|line| line.contains(&pointer)), "案内の行が無い: {:?}", run.out);
 }
 
-/// (b) 15 語の各面は 7 見出しをこの順で持ち、`FORM` は 1 行で、免除の 6 口の `FORM` は表の字面（`usage: <NAME> <語>` で始まる）。
+/// (b) 16 語の各面は 7 見出しをこの順で持ち、`FORM` は 1 行で、免除の 6 口の `FORM` は表の字面（`usage: <NAME> <語>` で始まる）。
 #[test]
 fn cli_help_pages_carry_the_headings_in_order() {
     let words = help_top_words();
-    assert_eq!(words.len(), 15, "頂点の語は 15: {words:?}");
+    assert_eq!(words.len(), 16, "頂点の語は 16: {words:?}");
     assert!(HELP_EXEMPT.iter().all(|exempt| words.iter().any(|word| word == exempt)), "免除の 6 口は頂点の語");
     for word in &words {
         let run = help_run(&["help", word]);
@@ -1910,13 +1910,13 @@ fn cli_help_pages_carry_the_headings_in_order() {
     }
 }
 
-/// (b) 免除の 6 口の外の 9 口は、`FORM` が引数なしの生きた出力の `usage:` で始まる最初の行と逐語で一致し、`SUBCOMMANDS` が
+/// (b) 免除の 6 口の外の 10 口は、`FORM` が引数なしの生きた出力の `usage:` で始まる最初の行と逐語で一致し、`SUBCOMMANDS` が
 /// その行の最初の `<…|…>` の全語を持つ（語を持たない口〔runner / lens〕は `(none)` の 1 行）。
 #[test]
 fn cli_help_pages_match_the_live_form_and_every_subcommand() {
     let words = help_top_words();
     let parity: Vec<&String> = words.iter().filter(|word| !HELP_EXEMPT.contains(&word.as_str())).collect();
-    assert_eq!(parity.len(), 9, "突き合わせる口は 9: {parity:?}");
+    assert_eq!(parity.len(), 10, "突き合わせる口は 10: {parity:?}");
     for word in parity {
         let run = help_run(&["help", word]);
         let form = help_section(&run.out, "FORM").first().copied().unwrap_or_default();
@@ -1964,7 +1964,7 @@ fn cli_help_flag_prints_usage_and_a_pointer() {
 #[test]
 fn cli_help_bare_and_unknown_stay_one_usage_line() {
     let usage = format!(
-        "usage: {NAME} <name|--version|doctor|account|rules|fleet|vessel|hook|host-guard|pipe|runner|lens|seat|polarity|contracts>"
+        "usage: {NAME} <name|--version|doctor|account|rules|fleet|vessel|hook|host-guard|pipe|runner|lens|seat|polarity|contracts|utterance>"
     );
     for args in [&[][..], &["nosuch"], &["help", "nosuch"], &["help", "pipe", "show"], &["--helpx"]] {
         let run = help_run(args);
