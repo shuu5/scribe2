@@ -385,6 +385,8 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
 
 やさしく言うと: 依存の着地を待つ契約は、待っている間に受付の審査を 1 度も受けない。器が「依存が着地したらこうなる」木を予想してその上で受付と同じ審査を撃ち、依存が着地しても消えない誤り（確定）だけを束にして直させる。予想の結果で便を起こしも止めもしない（起こす時の受付は今どおり実物の main で撃つ）。
 
+- 退役（[row-review.md](./row-review.md) §6・[ADR-0103](../../design-intent/decisions/ADR-0103-contract-rows-pass-row-review-before-merge-and-failed-rows-keep-their-place.html)）: 形 aa（先撃ち）と形 ac（先撃ちの判定の使い回し）は、設計の PR の段の行の審査に置き換えて退役する（段 1 は rules 行 pipe.precheck_lens_per_round の値 0、段 2 は code の退役・どちらも SRS の追加 round の後の行）。形 x（事前審査の機械の予想）と形 y（束と知らせ）は残す。
+
 - 何が起きているか（実測 2026-09-27・verified）:
   - 列の 1 件の解き（`entry_of`）は依存 → 印 → 設計 pointer → 契約の生成 → 列外の鍵の順で、依存待ちを最初に返す。依存を待つ bead は契約の生成（`generated`＝契約表の検査の 1 行）も受付の判定（`judge`＝`pipe preflight` と同じ 1 本）も受けない。
   - 非公開の隣の project の依存待ち 10 本に今の main で `pipe preflight` を撃つと ok 3・refused 6。6 本とも write-set-item-unresolved で、未着地の依存（live の 1 本）が `+` で作る file を素の path で持つ。依存の宣言の `+` の file を空の file として置いた木（宣言の予想）で撃ち直すと、6 本と同じ依存を推移的に待つ 1 本の計 7 本が全部 ok、依存の便の実物の木（Gated・足した 9 file と変えた 2 file）で撃っても 7 本とも ok。1 本 0.02 秒（process 全体）。本 repo の行は置き場なしの `pipe preflight` で 1 本 0.05〜0.15 秒（材料の読みを含む・6 行・起草の時）、0.21〜0.32 秒（10 行・2026-09-28 の直しの時・host の負荷の違い）。

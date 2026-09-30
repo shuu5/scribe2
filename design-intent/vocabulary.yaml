@@ -853,8 +853,8 @@ terms:
     relationships: [約束の行, 契約表, 契約の審査]
   - canonical: 契約の審査
     domain: consumer
-    definition: intake の直後に、 契約とそれが実装する設計と要件を lens が読んで判定する段 (SRS FR49)。 実装後の gate の lens (SRS FR9) とは別の段で、 判定が合格でない便は runner を起こさない (ADR-0019 §2.1 の終端の定義に足す・ADR-0023 §2.7)。
-    relationships: [lens, 便, Stage, gate]
+    definition: intake の直後に、 契約とそれが実装する設計と要件を lens が読んで判定する段 (SRS FR49)。 実装後の gate の lens (SRS FR9) とは別の段で、 判定が合格でない便は runner を起こさない (ADR-0019 §2.1 の終端の定義に足す・ADR-0023 §2.7)。 ADR-0103 (proposed) の後は、 同じ審査を設計の PR の段で撃つ行の審査が前に在り、 この段は行の審査の記録を材料の鍵で使い回すか、 審査し直す段になる。
+    relationships: [lens, 便, Stage, gate, 行の審査, 材料の鍵]
   - canonical: land の終端
     domain: consumer
     aliases: [着地の終端]
@@ -1544,7 +1544,7 @@ terms:
     domain: consumer
     definition: dispatcher が起動の列の待ちの行に先に掛け、 受付が断りうる理由を予想して置き場の file に残す段 (設計 dispatcher)。 結果は待ちの理由・起こす判定・受付のどれも読まない (予想は通行証にしない)。
     relationships: [dispatcher, 起動の列, 受付]
-    flagged_ambiguities: ["事前審査 (予想・lens を撃たない) と契約の審査 (SRS FR49・lens の判定) は別"]
+    flagged_ambiguities: ["事前審査 (予想・lens を撃たない) と契約の審査 (SRS FR49・lens の判定) は別", "事前審査の機械の予想と束は ADR-0103 (proposed) の後も残り、 退役するのは先撃ち (事前審査の lens) だけ"]
   - canonical: 選択式の問いの遮断
     domain: consumer
     aliases: [choice question block]
@@ -1685,7 +1685,7 @@ terms:
     domain: consumer
     aliases: [merge gate]
     definition: 器の hook の入口が、 席の道具の呼び出しの PR の merge の command を実行の前に読み、 渡す commit の本文が発端の trailer か器の便の trailer を持たなければ欠けを名指して断る段 (SRS FR92・ADR-0088)。 trailer の形だけを見て台帳を読まない。 器の便でない merge を通したときは書き直さずに古さの印を置く (SRS FR90)。 事後の検出は CI の main の検査。
-    relationships: [発端の trailer, trailer, 古さの印, 着地の列, hook]
+    relationships: [発端の trailer, trailer, 古さの印, 着地の列, hook, 行の審査]
   - canonical: 受付の断りの event
     domain: consumer
     aliases: [IntakeRefused]
@@ -1863,3 +1863,31 @@ terms:
     aliases: [read-only table]
     definition: 外へ何も出さない gh の群と動詞の対の閉じた表 (pr の view・list・status・checks・diff、 issue の view・list・status、 release・gist・repo の view・list、 label の list) と、 api の GET の形 (ADR-0099)。 器の定数で持ち、 表の外は wrapped の印を受ける。
     relationships: [wrapped の印, 公開の segment]
+  # ---------------------------------------------------------------- 行の審査と落ちた行の順番 (ADR-0103・proposed)
+  - canonical: 行の審査
+    domain: consumer
+    aliases: [row review]
+    definition: 契約表の行を足す・変える設計の PR の head で、 行の digest が merge-base と違う着地済みでない行ごとに、 器の口 (pipe review --ref) が撃つ受付と同じ機械の検査と契約の審査の lens (ADR-0103・proposed・設計 docs/design/row-review.md)。 判定は行の digest ごとに state dir に記録し、 vessel 宣言の任意 key row-review を持つ repo の merge の門と、 契約の審査の段が読む。 未着地の祖先を持つ行は予想の審査 (forecast) で、 その判断不能は merge を通す。
+    relationships: [契約の審査, merge の門, 行の digest, 材料の鍵, 事前審査]
+    flagged_ambiguities: ["行の審査 (設計の PR の段・merge の前) と契約の審査 (便の Reviewed の段・SRS FR49) は同じ lens を別の時点で撃つ"]
+  - canonical: 行の digest
+    domain: consumer
+    aliases: [row digest]
+    definition: 行の欄から受付と同じ生成で作った契約の字の hash と、 行が実装する設計の節の本文の hash の対 (ADR-0103・proposed)。 SRS FR49 が契約の中身の同一性に使う 2 つと同じもので、 行の審査の記録の鍵になる。
+    relationships: [行の審査, 契約の審査, 契約表]
+  - canonical: 材料の鍵
+    domain: consumer
+    aliases: [materials key]
+    definition: 審査の材料の dir の全 file の名と本文から名の順に決まる 1 つの digest (ADR-0103・proposed)。 lens の cmd の字は入れず、 lens の同一性は model・effort・雛形の digest で比べる。 契約の審査の段が行の審査の記録を使い回すかの判じに使う。
+    relationships: [行の審査, 契約の審査]
+  - canonical: 行の予約
+    domain: consumer
+    aliases: [row reservation]
+    definition: 直前の便が着地でない終端に着いた open な行が、 次の便を起こすか close か hold か期限 (rules 行 pipe.reserve_h) まで持つ write-set の取り置き (ADR-0103・proposed)。 起動の列の順で後ろの候補のうち write-set が交差するものを待ちの理由 reserved で待たせ、 前の候補は待たせない。 記帳せず既存の記録から周ごとに導く。
+    relationships: [起動の列, write-set, 介入, dispatcher]
+    flagged_ambiguities: ["行の予約 (起動の列の write-set の取り置き) と群の予約 (群が次に移る口座・ADR-0069) は別"]
+  - canonical: 兄弟の待ち
+    domain: consumer
+    aliases: [sibling wait]
+    definition: 審査の FAIL か判断不能 (unparsed を除く) か gate の FAIL で終端した行と同じ節を実装する行か、 同じ設計の PR で行の審査を受けた行を、 落ちた行の digest が変わるまで待たせる起動の列の待ちの理由 sibling (ADR-0103・proposed)。 介入 first の印を持つ候補は待たない。
+    relationships: [起動の列, 行の審査, 行の digest, 介入]
