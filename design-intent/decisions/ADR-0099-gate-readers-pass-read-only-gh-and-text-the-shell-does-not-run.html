@@ -1,0 +1,801 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="folio ADR-pack assembler (folio-bwc / instance#2) — deterministic structure, prose slots unfilled">
+<title>門の読み手は、 外へ出さないと閉じた表で言い切れる gh と、 shell が撃たないと閉じた列で言い切れる字だけを読みから外す — 読みだけの gh の表に当たる包まれた gh には wrapped の印を付けず、 本文を shell に渡さない受け手だけの command 行の、 区切りを引用した heredoc の本文を segment に入れず、 全ての頭が閉じた列に在り生きた置換を持たない command の data の命令の単引用の中の字と逆斜線が逃がした字を語の割りに使わない。 外れる形は今の読みのまま断り、 それでも新しく通る撃ちは限界として名指す (ADR-0078 の読みの補い・supersede なし)</title>
+<style>
+/* ===========================================================================
+   folio human-layer design system — core.css (S3 / folio-8oc プロトタイプ)
+   要件定義書 (SRS) ビジュアル design system の中核 register。
+   視覚言語 = deck帯 × B2高密度 (ADR-0041)。テーマ = 環境追従 prefers-color-scheme。
+   styling は意味クラス、taxonomy 識別は [data-component] 属性 (floor gate A)。
+   taxonomy = design-intent/research/srs-component-taxonomy.html
+   =========================================================================== */
+
+/* ---- requirement-type-color-tokens (meta / 全 register が共有・両テーマ定義) ---- */
+:root{
+  --ink:#08131a; --ink-soft:#3a4a55; --ink-faint:#5b6671;
+  --paper:#ffffff; --paper-2:#f5f8fa; --paper-3:#eef3f7;
+  --line:#dbe4ea; --line-soft:#eef3f7;
+  --brand:#2a4d6e; --brand-deep:#15324a; --brand-tint:#e8f0f7;
+  --ok:#1e7b65; --ok-tint:#e6f6f2; --ok-line:#9fd9cb;
+  --bad:#b22323; --bad-tint:#fdf3f3; --bad-line:#eab3b3;
+  --warn:#916626; --warn-tint:#fefbea; --warn-line:#e4cf8f;
+  --info:#2a5d9e; --info-tint:#eaf1fb; --info-line:#a8c4e8;
+  --violet:#5b3e8e; --violet-tint:#f0eafa; --violet-line:#cdb8ec;
+  --shadow:0 1px 2px rgba(8,19,26,.06),0 8px 24px rgba(8,19,26,.07);
+  --shadow-lg:0 2px 6px rgba(8,19,26,.08),0 18px 50px rgba(8,19,26,.12);
+  /* 要件型カラートークン (FR/NFR/CON/ASM) */
+  --fr:var(--brand); --nfr:var(--violet); --con:var(--warn); --asm:var(--info);
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --ink:#e8eef2; --ink-soft:#a9b7c1; --ink-faint:#8a99a4; /* ink-faint: 全 dark bg で contrast ≥4.85 = WCAG AA (≥4.5) 充足・最小は ok-tint/warn-tint (gate F・folio-vuf) */
+    --paper:#0d171e; --paper-2:#15222b; --paper-3:#1b2c37;
+    --line:#273947; --line-soft:#1b2c37;
+    --brand:#7db8e8; --brand-deep:#1d3a54; --brand-tint:#16293a;
+    --ok:#5ac8b8; --ok-tint:#10302b; --ok-line:#2e6258;
+    --bad:#ef7a7a; --bad-tint:#341c1c; --bad-line:#6e3636;
+    --warn:#d6a94e; --warn-tint:#312a13; --warn-line:#5e4e23;
+    --info:#7da9e8; --info-tint:#16263c; --info-line:#33507c;
+    --violet:#b89be0; --violet-tint:#241a36; --violet-line:#473a64;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.5);
+    --shadow-lg:0 2px 6px rgba(0,0,0,.5),0 18px 50px rgba(0,0,0,.6);
+  }
+}
+*{box-sizing:border-box;}
+html{scroll-behavior:smooth;}
+body{
+  margin:0; background:var(--paper-2); color:var(--ink);
+  font-family:"Noto Sans CJK JP","Noto Sans JP",system-ui,-apple-system,"Hiragino Kaku Gothic ProN",Meiryo,sans-serif;
+  font-feature-settings:"palt" 1; line-height:1.7; letter-spacing:.01em;
+  -webkit-font-smoothing:antialiased;
+}
+.page{max-width:1280px; margin:0 auto; background:var(--paper); box-shadow:var(--shadow-lg);}
+svg{display:block;} .ico{width:1em; height:1em;}
+
+/* ---- plain-language-term-inline (glossary 派生ビュー / 専門語のやさしい併記) ---- */
+.term{
+  /* font-size 下限 (folio-276 #5)。 .72em は em 連鎖 (例 .actor .role=11px 内) で 7.9px<8px へ縮み
+     判読不能化する。 max() で 10.5px を下限に据え、 広文脈では従来比率を保つ。 */
+  display:inline-block; font-size:max(10.5px,.72em); font-weight:700; line-height:1;
+  padding:.18em .5em; border-radius:999px; margin-left:.3em; vertical-align:.08em;
+  background:var(--paper-3); color:var(--ink-soft); border:1px solid var(--line);
+  letter-spacing:.02em; white-space:nowrap;
+}
+.term.en{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;}
+
+/* ===================== doc-cover-band (deck-band / 表紙) ===================== */
+[data-component="doc-cover-band"]{
+  position:relative; overflow:hidden; color:#fff;
+  /* deeper navy にして白文字 (小サイズ含む) を WCAG AA 維持 (gate F worst-case-stop が最明合成でも
+     ≥4.5 を要求)。 highlight radial は薄め、 linear の最明端 (旧 #33658f) を暗色化。 */
+  background:
+    radial-gradient(1200px 500px at 88% -10%, rgba(255,255,255,.07), transparent 60%),
+    linear-gradient(135deg,#0c1f30 0%,#143049 48%,#173a57 100%);
+  padding:54px 56px 46px;
+}
+.cover-eyebrow{font-size:12.5px; font-weight:700; letter-spacing:.22em; text-transform:uppercase; opacity:.86; margin:0 0 14px; display:flex; align-items:center; gap:10px; flex-wrap:wrap;}
+.cover-eyebrow .doc-type{background:rgba(255,255,255,.16); padding:3px 10px; border-radius:6px; letter-spacing:.16em; border:1px solid rgba(255,255,255,.22);}
+[data-component="doc-cover-band"] h1{font-size:42px; line-height:1.14; margin:0 0 8px; font-weight:800; text-wrap:balance;}
+.cover-sub{font-size:17px; opacity:.9; margin:0 0 22px; font-weight:500;}
+.summary-card{background:rgba(255,255,255,.1); border:1px solid rgba(255,255,255,.2); border-radius:14px; padding:18px 22px; display:flex; gap:18px; align-items:flex-start; max-width:880px;}
+.summary-card .lab{font-size:11px; font-weight:700; letter-spacing:.16em; opacity:.8; margin:0 0 4px;}
+.summary-card .txt{font-size:17.5px; line-height:1.6; font-weight:600; margin:0;}
+.summary-card .txt b{color:#ffe8a8;}
+.cover-meta{display:flex; flex-wrap:wrap; gap:10px 26px; margin-top:24px; font-size:13px;}
+.cover-meta .m{display:flex; gap:8px; align-items:center; opacity:.92;}
+.cover-meta .m .k{opacity:.62; font-weight:600;} .cover-meta .m .v{font-weight:700;}
+.reader-chip{display:inline-flex; gap:8px; align-items:center; margin-top:18px; background:#ffce6e; color:#3a2c05; font-weight:700; font-size:13.5px; padding:8px 14px; border-radius:10px; box-shadow:0 3px 10px rgba(0,0,0,.2);}
+a{color:var(--brand);} /* anchor 既定色 — UA 既定 #0000ee は dark bg で 1.72 (skip-link/domain 目次等の素 anchor で 3 例目の同型欠陥・型 selector ゆえ class 付きリンクは specificity で不変・gate F WCAG AA 両テーマ ≥7.6) */
+
+/* ===================== approval-block (deck-band / 承認証跡) ★critic補填 ===== */
+[data-component="approval-block"]{display:flex; flex-wrap:wrap; gap:14px; align-items:stretch; margin-top:22px;}
+.sign{flex:1 1 200px; background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.22); border-radius:12px; padding:13px 16px; display:flex; flex-direction:column; gap:3px; min-width:0;}
+.sign .role{font-size:10.5px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; opacity:.7;}
+.sign .who{font-size:15px; font-weight:800;}
+.sign .when{font-size:11.5px; opacity:.72; font-weight:600;}
+.sign .stamp{align-self:flex-start; margin-top:4px; font-size:10px; font-weight:800; letter-spacing:.08em; padding:2px 8px; border-radius:6px; background:#ffce6e; color:#3a2c05;}
+.sign .stamp.self{background:rgba(255,255,255,.18); color:#fff; border:1px solid rgba(255,255,255,.3);}
+
+/* ===================== chapter-deck-band (deck-band / 章開き) =============== */
+[data-component="chapter-deck-band"]{position:relative; padding:34px 56px 12px;}
+[data-component="chapter-deck-band"] .num{position:absolute; top:-6px; right:34px; font-size:138px; font-weight:900; line-height:1; opacity:.06; letter-spacing:-.04em; user-select:none; pointer-events:none; font-family:ui-monospace,monospace;}
+.kicker{display:inline-flex; align-items:center; gap:9px; font-size:12px; font-weight:800; letter-spacing:.14em; text-transform:uppercase; padding:5px 12px; border-radius:8px; margin-bottom:10px;}
+[data-component="chapter-deck-band"] h2{font-size:27px; margin:0 0 6px; font-weight:800; line-height:1.2;}
+.lead{font-size:15px; color:var(--ink-soft); margin:0; max-width:920px; line-height:1.65;}
+.tint-brand{background:var(--brand-tint);} .tint-ok{background:var(--ok-tint);} .tint-bad{background:var(--bad-tint);}
+.tint-warn{background:var(--warn-tint);} .tint-info{background:var(--info-tint);} .tint-violet{background:var(--violet-tint);}
+.tint-brand .kicker{background:var(--brand); color:#fff;} .tint-ok .kicker{background:var(--ok); color:#fff;}
+.tint-bad .kicker{background:var(--bad); color:#fff;} .tint-warn .kicker{background:var(--warn); color:#fff;}
+.tint-info .kicker{background:var(--info); color:#fff;} .tint-violet .kicker{background:var(--violet); color:#fff;}
+.chapbody{padding:22px 56px 40px; background:var(--paper);}
+
+/* ===================== section-lead-callout (callout / 章導入) ============= */
+[data-component="section-lead-callout"]{display:grid; grid-template-columns:repeat(3,1fr); gap:16px;}
+.card{background:var(--paper); border:1px solid var(--line); border-radius:14px; padding:18px 18px 16px; box-shadow:var(--shadow); position:relative; overflow:hidden;}
+.card.accent::before{content:""; position:absolute; left:0; top:0; bottom:0; width:5px; background:var(--brand);}
+.card .cid{font-size:11.5px; font-weight:800; letter-spacing:.12em; color:var(--brand); margin-bottom:8px; display:flex; align-items:center; gap:8px;}
+.card .ct{font-size:16.5px; font-weight:800; line-height:1.4; margin:0 0 6px;}
+.card .cd{font-size:13px; color:var(--ink-soft); margin:0;}
+
+/* ===================== scope-summary-panel (dense-list / 範囲) ============= */
+[data-component="scope-summary-panel"]{display:grid; grid-template-columns:1fr 1fr; gap:20px;}
+.scol{border-radius:14px; padding:18px 20px; box-shadow:var(--shadow);}
+.scol.in{background:var(--ok-tint); border:1px solid var(--ok-line);}
+.scol.out{background:var(--bad-tint); border:1px solid var(--bad-line);}
+.scol h3{margin:0 0 12px; font-size:15px; font-weight:800; display:flex; align-items:center; gap:9px;}
+.scol.in h3{color:var(--ok);} .scol.out h3{color:var(--bad);}
+.scol ul{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:9px;}
+.scol li{display:flex; gap:10px; align-items:flex-start; font-size:13.5px; line-height:1.5;}
+.scol li .b{flex:0 0 auto; margin-top:3px;}
+
+/* ===================== actor-stakeholder-table (dense-table / 主体) ======== */
+[data-component="actor-stakeholder-table"]{display:flex; flex-wrap:wrap; gap:12px;}
+.actor{display:flex; align-items:center; gap:11px; background:var(--paper); border:1px solid var(--line); border-radius:12px; padding:11px 15px 11px 12px; box-shadow:var(--shadow); min-width:0;}
+.actor .av{flex:0 0 auto; width:38px; height:38px; border-radius:10px; display:grid; place-items:center; color:#fff;}
+.actor .nm{font-size:14px; font-weight:700; line-height:1.25;}
+.actor .role{font-size:11px; color:var(--ink-faint); font-weight:600;}
+.ext-badge{font-size:9.5px; font-weight:800; letter-spacing:.08em; background:var(--warn-tint); color:var(--warn); border:1px solid var(--warn-line); padding:1px 6px; border-radius:5px; margin-left:6px;}
+
+/* ===================== source-trace-origin (dense-table / 上位ニーズ) ★補填 = */
+[data-component="source-trace-origin"]{width:100%; min-width:440px; border-collapse:separate; border-spacing:0; font-size:13.5px;}
+[data-component="source-trace-origin"] thead th{background:var(--info); color:#fff; text-align:left; font-size:11.5px; font-weight:800; letter-spacing:.06em; padding:11px 14px;}
+[data-component="source-trace-origin"] thead th:first-child{border-top-left-radius:12px;} [data-component="source-trace-origin"] thead th:last-child{border-top-right-radius:12px;}
+[data-component="source-trace-origin"] tbody td{padding:12px 14px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.5;}
+[data-component="source-trace-origin"] tbody tr:nth-child(even) td{background:var(--paper-2);}
+[data-component="source-trace-origin"] .nid{font-weight:800; font-family:ui-monospace,monospace; color:var(--info); white-space:nowrap;}
+[data-component="source-trace-origin"] .origin{font-size:11.5px; color:var(--ink-faint); font-weight:700;}
+
+/* ===================== requirement-matrix-table (dense-table / 要件本体) === */
+[data-component="requirement-matrix-table"]{width:100%; min-width:620px; border-collapse:separate; border-spacing:0; font-size:13.5px;}
+[data-component="requirement-matrix-table"] thead th{background:var(--brand-deep); color:#fff; text-align:left; font-size:11.5px; font-weight:800; letter-spacing:.06em; padding:11px 14px;}
+[data-component="requirement-matrix-table"] thead th:first-child{border-top-left-radius:12px;} [data-component="requirement-matrix-table"] thead th:last-child{border-top-right-radius:12px;}
+[data-component="requirement-matrix-table"] tbody td{padding:12px 14px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.5;}
+[data-component="requirement-matrix-table"] tbody tr:nth-child(even) td{background:var(--paper-2);}
+[data-component="requirement-matrix-table"] tbody tr:hover td{background:var(--brand-tint);}
+.fid{font-weight:800; font-family:ui-monospace,monospace; font-size:13px; white-space:nowrap; color:var(--brand);}
+td.cond{color:var(--ink-soft); font-size:13px; width:22%;}
+td.resp{font-size:13.5px; width:40%;}
+/* ears-requirement-row: 根拠 Rationale を必須スロットとして明示 (critic #3 格上げ) */
+td.resp .why{display:block; margin-top:5px; font-size:11.5px; color:var(--ink-faint); padding-left:62px; position:relative;}
+td.resp .why::before{content:"↳ なぜ要る"; position:absolute; left:0; font-weight:700; color:var(--ink-faint);}
+td.resp .plain{display:block; margin-top:5px; font-size:12.5px; color:var(--ink-soft);}
+td.resp .plain::before{content:"やさしく言うと "; font-weight:700; font-size:10px; color:var(--brand);}
+/* dense-table を clip せず狭幅で内部横スクロールへ倒す (folio-276 #1)。 旧 overflow:hidden は
+   375-390px で列を 1 文字/行へ潰し判読不能にした上 scroll も封じていた (gate F 盲点=#2 で捕捉)。
+   overflow-x:auto + table 側 min-width = rtm-grid と同じ「狭幅は横スクロール」方針へ統一する。 */
+.tbl-wrap{border:1px solid var(--line); border-radius:12px; overflow-x:auto; box-shadow:var(--shadow);}
+
+/* ---- priority-badge + EARS chip (badge) ---- */
+.ears{display:inline-flex; align-items:center; gap:5px; font-size:10.5px; font-weight:800; letter-spacing:.04em; padding:3px 9px; border-radius:7px; white-space:nowrap; border:1px solid;}
+.ears.always{background:var(--info-tint); color:var(--info); border-color:var(--info-line);}
+.ears.trigger{background:var(--brand-tint); color:var(--brand); border-color:var(--brand);}
+.ears.state{background:var(--violet-tint); color:var(--violet); border-color:var(--violet-line);}
+.ears.forbid{background:var(--bad-tint); color:var(--bad); border-color:var(--bad-line);}
+.ears.option{background:var(--warn-tint); color:var(--warn); border-color:var(--warn-line);}
+.ears .en{opacity:.7; font-weight:600; font-family:ui-monospace,monospace; font-size:9px;}
+.prio{display:inline-flex; align-items:center; gap:4px; font-size:10px; font-weight:800; letter-spacing:.04em; padding:2px 8px; border-radius:6px; white-space:nowrap;}
+.prio.must{background:var(--bad); color:#fff;} .prio.should{background:var(--warn); color:#fff;} .prio.may{background:var(--paper-3); color:var(--ink-soft); border:1px solid var(--line);}
+.vmeth{font-size:10px; font-weight:800; font-family:ui-monospace,monospace; padding:2px 6px; border-radius:5px; background:var(--ok-tint); color:var(--ok); border:1px solid var(--ok-line);}
+.ears-legend{display:flex; flex-wrap:wrap; gap:10px; margin-bottom:14px; align-items:center;}
+.ears-legend .lt{font-size:12px; font-weight:700; color:var(--ink-soft); margin-right:4px;}
+/* ears-requirement-row = requirement-matrix-table の各 <tr>。行 styling は table を継承し、
+   data-component で floor gate A 識別 + 根拠 (td.resp .why) を空不可スロットに保つ */
+tr[data-component="ears-requirement-row"] td.resp .why:empty::after{content:"⚠ 根拠 未記入"; color:var(--bad); font-weight:700;}
+
+/* ===================== nfr-hero-metrics + nfr-metrics-table =============== */
+[data-component="nfr-hero-metrics"]{display:grid; grid-template-columns:repeat(4,1fr); gap:16px; margin-bottom:24px;}
+.nfr-hero{border-radius:16px; padding:20px 18px 18px; box-shadow:var(--shadow); position:relative; overflow:hidden; border:1px solid var(--line); background:var(--paper);}
+.nfr-hero .cat{font-size:11px; font-weight:800; letter-spacing:.1em; text-transform:uppercase; margin-bottom:8px; display:flex; align-items:center; gap:7px;}
+.nfr-hero .big{font-size:38px; font-weight:900; line-height:1; letter-spacing:-.02em; display:flex; align-items:baseline; gap:4px;}
+.nfr-hero .big .u{font-size:16px; font-weight:800; opacity:.7;}
+.nfr-hero .qual{font-size:12.5px; font-weight:600; color:var(--ink-soft); margin-top:8px; line-height:1.45;}
+.nfr-hero.c1{background:linear-gradient(160deg,var(--info-tint),var(--paper));} .nfr-hero.c1 .cat,.nfr-hero.c1 .big{color:var(--info);}
+.nfr-hero.c2{background:linear-gradient(160deg,var(--ok-tint),var(--paper));} .nfr-hero.c2 .cat,.nfr-hero.c2 .big{color:var(--ok);}
+.nfr-hero.c3{background:linear-gradient(160deg,var(--brand-tint),var(--paper));} .nfr-hero.c3 .cat,.nfr-hero.c3 .big{color:var(--brand);}
+.nfr-hero.c4{background:linear-gradient(160deg,var(--violet-tint),var(--paper));} .nfr-hero.c4 .cat,.nfr-hero.c4 .big{color:var(--violet);}
+[data-component="nfr-metrics-table"]{width:100%; min-width:480px; border-collapse:separate; border-spacing:0; font-size:13px;}
+[data-component="nfr-metrics-table"] th{background:var(--paper-3); text-align:left; font-size:11px; font-weight:800; letter-spacing:.05em; color:var(--ink-soft); padding:10px 14px; text-transform:uppercase;}
+[data-component="nfr-metrics-table"] td{padding:11px 14px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.55;}
+[data-component="nfr-metrics-table"] tbody tr:last-child td{border-bottom:none;}
+.nid{font-weight:800; font-family:ui-monospace,monospace; color:var(--brand); white-space:nowrap;}
+.tgt{font-weight:800; color:var(--ink); white-space:nowrap;}
+.meas{color:var(--ink-soft); font-size:12.5px;}
+
+/* ===================== rtm-grid (rtm-grid / 双方向トレース + 孤立検出) ===== */
+[data-component="rtm-grid"]{overflow-x:auto; border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow);}
+.rtm{border-collapse:separate; border-spacing:0; font-size:12.5px; width:100%; min-width:760px;}
+.rtm th,.rtm td{padding:11px 12px; text-align:center; border-bottom:1px solid var(--line); border-right:1px solid var(--line-soft);}
+.rtm th{background:var(--brand-deep); color:#fff; font-size:11px; font-weight:800; letter-spacing:.04em;}
+.rtm thead th:first-child{text-align:left;}
+.rtm .grp{background:var(--paper-3); color:var(--ink-soft); font-weight:800; font-size:10.5px; letter-spacing:.06em; text-transform:uppercase;}
+.rtm tbody th{background:var(--paper-2); text-align:left; font-weight:800; color:var(--brand); font-family:ui-monospace,monospace; white-space:nowrap; font-size:12px;}
+.rtm tbody th .lbl{display:block; font-family:inherit; font-weight:600; color:var(--ink-soft); font-size:10.5px; margin-top:2px;}
+.rtm td.hit{background:var(--ok-tint);}
+.rtm td .dot{display:inline-grid; place-items:center; width:22px; height:22px; border-radius:50%; background:var(--ok); color:#fff;}
+.rtm td .dot.ac{display:inline-flex; align-items:center; width:auto; min-width:0; height:auto; border-radius:6px; padding:2px 7px; font-size:10px; font-weight:700; line-height:1.2; margin:1px;}
+.rtm td.gap{background:var(--bad-tint);} .rtm td.gap .x{color:var(--bad); font-weight:900;}
+.rtm tbody tr:last-child td,.rtm tbody tr:last-child th{border-bottom:none;}
+
+/* ===================== rtm-collapse (折りたたみ RTM の fold affordance / folio-276 #4) ====
+   生成 SRS は核心 RTM を <details data-component="rtm-collapse"> で既定折りたたむ。 素の details は
+   marker が小さく「開けるUI」と気付けず要旨が素通りした (ceiling 第2層)。 summary を panel ヘッダ化し
+   ▶ caret + 「クリックで開閉」ヒントで開閉可能性を明示する。 折りたたみ機構自体は assembler が所有。 */
+[data-component="rtm-collapse"]{border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow); background:var(--paper); overflow:hidden;}
+[data-component="rtm-collapse"]>summary{cursor:pointer; list-style:none; user-select:none; display:flex; align-items:center; gap:11px; padding:15px 20px; font-size:14.5px; font-weight:800; color:var(--brand); background:var(--brand-tint);}
+[data-component="rtm-collapse"]>summary::-webkit-details-marker{display:none;}
+[data-component="rtm-collapse"]>summary::before{content:""; flex:0 0 auto; width:0; height:0; border-left:7px solid currentColor; border-top:5px solid transparent; border-bottom:5px solid transparent; transition:transform .15s ease;}
+[data-component="rtm-collapse"][open]>summary::before{transform:rotate(90deg);}
+[data-component="rtm-collapse"]>summary::after{content:"クリックで開閉"; margin-left:auto; font-size:10.5px; font-weight:700; letter-spacing:.04em; color:var(--ink-faint); background:var(--paper); border:1px solid var(--line); border-radius:6px; padding:2px 9px;}
+[data-component="rtm-collapse"][open]>summary{border-bottom:1px solid var(--line);}
+[data-component="rtm-collapse"]>.rtm-summary-derived,[data-component="rtm-collapse"]>[data-prose-slot="rtm-summary"]{margin:0; padding:13px 20px 0; font-size:13px; color:var(--ink-soft); line-height:1.6;}
+[data-component="rtm-collapse"]>[data-component="rtm-grid"]{margin:16px 20px 18px;}
+
+/* ===================== acceptance-criteria-checklist (dense-list) ========= */
+[data-component="acceptance-criteria-checklist"]{display:grid; grid-template-columns:repeat(3,1fr); gap:16px;}
+.ac{background:var(--paper); border:1px solid var(--ok-line); border-radius:14px; padding:17px 18px; box-shadow:var(--shadow); position:relative; display:flex; flex-direction:column; gap:8px;}
+.ac::before{content:""; position:absolute; left:0; top:0; bottom:0; width:5px; background:var(--ok); border-radius:14px 0 0 14px;}
+.ac .aid{font-size:11.5px; font-weight:800; color:var(--ok); letter-spacing:.1em; display:flex; align-items:center; gap:8px;}
+.ac .at{font-size:14.5px; font-weight:700; line-height:1.5; margin:0;}
+.ac .at b{color:var(--ok); font-weight:800;}
+.ac .metric{display:flex; align-items:baseline; gap:6px; margin-top:auto; padding-top:6px;}
+.ac .metric .v{font-size:26px; font-weight:900; color:var(--ok); line-height:1;}
+.ac .metric .l{font-size:11.5px; color:var(--ink-faint); font-weight:600;}
+
+/* ===================== constraint-callout (callout / 制約・規制) =========== */
+[data-component="constraint-callout"]{width:100%; border-collapse:separate; border-spacing:0; font-size:13.5px;}
+[data-component="constraint-callout"] td{padding:13px 16px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.55;}
+[data-component="constraint-callout"] tbody tr:last-child td{border-bottom:none;}
+.cid2{font-weight:800; font-family:ui-monospace,monospace; color:var(--warn); white-space:nowrap; width:60px;}
+.cl{font-weight:700; white-space:nowrap; width:170px; color:var(--ink);}
+.reg-badge{font-size:9.5px; font-weight:800; letter-spacing:.06em; background:var(--bad-tint); color:var(--bad); border:1px solid var(--bad-line); padding:1px 7px; border-radius:5px; margin-left:6px;}
+
+/* ===================== glossary-term-table (glossary / 用語 SSoT) ========= */
+[data-component="glossary-term-table"]{display:grid; grid-template-columns:1fr 1fr; gap:0 28px; border:1px solid var(--line); border-radius:14px; overflow:hidden; box-shadow:var(--shadow);}
+.grow{display:flex; gap:16px; padding:15px 20px; border-bottom:1px solid var(--line-soft); align-items:flex-start;}
+.grow:nth-child(odd){background:var(--paper);} .grow:nth-child(even){background:var(--paper-2);}
+.gword{flex:0 0 142px; font-size:14.5px; font-weight:800; color:var(--brand); line-height:1.3;}
+.gword .en{display:block; font-size:11px; font-weight:700; color:var(--ink-faint); font-family:ui-monospace,monospace; margin-top:2px;}
+.gdef{font-size:13px; color:var(--ink-soft); line-height:1.55;}
+
+/* ===================== fidelity-sync-meta + footer (meta) ================= */
+.foot{padding:26px 56px 40px; background:var(--brand-deep); color:rgba(255,255,255,.78); font-size:12px;}
+.foot .ft-grid{display:flex; flex-wrap:wrap; gap:14px 40px; justify-content:space-between; align-items:center;}
+.foot b{color:#fff;}
+.foot .tags{display:flex; flex-wrap:wrap; gap:8px;}
+.foot .tags span{background:rgba(255,255,255,.1); border:1px solid rgba(255,255,255,.18); padding:4px 10px; border-radius:7px; font-size:11px; font-weight:600;}
+/* i6f9: 読者向け平易行は常時可視の第 1 行 (flex-basis:100%)、 dev メタ行は font-size のみ控えめ化
+   (色/opacity は据置 = contrast 不変で gate F に新規 risk を持ち込まない)。 */
+.foot .ft-plain{flex-basis:100%; font-size:13px; color:rgba(255,255,255,.92); font-weight:500;}
+.foot .ft-grid>[data-audience="machine"]{font-size:10.5px;}
+
+/* ===========================================================================
+   残り register (taxonomy 全 37 部品の被覆) — 多くは中核 register を再利用
+   =========================================================================== */
+
+/* ---- dense-table family: interface / data / revision-history ---- */
+[data-component="interface-spec-table"],
+[data-component="data-requirements-block"],
+[data-component="revision-history-table"]{width:100%; border-collapse:separate; border-spacing:0; font-size:13px;}
+[data-component="interface-spec-table"] th,
+[data-component="data-requirements-block"] th,
+[data-component="revision-history-table"] th{background:var(--paper-3); text-align:left; font-size:11px; font-weight:800; letter-spacing:.05em; color:var(--ink-soft); padding:10px 14px; text-transform:uppercase;}
+[data-component="interface-spec-table"] td,
+[data-component="data-requirements-block"] td,
+[data-component="revision-history-table"] td{padding:11px 14px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.55;}
+[data-component="interface-spec-table"] tbody tr:last-child td,
+[data-component="data-requirements-block"] tbody tr:last-child td,
+[data-component="revision-history-table"] tbody tr:last-child td{border-bottom:none;}
+.iid{font-weight:800; font-family:ui-monospace,monospace; color:var(--info); white-space:nowrap;}
+.dir{font-size:10px; font-weight:800; padding:2px 7px; border-radius:5px; background:var(--info-tint); color:var(--info); border:1px solid var(--info-line);}
+
+/* ---- dense-list family: ui / functions / use-case / references / toc / appendix ---- */
+[data-component="ui-spec-block"],
+[data-component="product-functions-list"],
+[data-component="use-case-card"],
+[data-component="references-list"],
+[data-component="toc-navigator"],
+[data-component="assumptions-constraints-list"],
+[data-component="supporting-info-appendix"]{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:9px;}
+[data-component="ui-spec-block"] li,
+[data-component="product-functions-list"] li,
+[data-component="references-list"] li,
+[data-component="toc-navigator"] li,
+[data-component="assumptions-constraints-list"] li,
+[data-component="supporting-info-appendix"] li{display:flex; gap:11px; align-items:flex-start; background:var(--paper); border:1px solid var(--line); border-radius:11px; padding:11px 15px; box-shadow:var(--shadow); font-size:13.5px; line-height:1.5;}
+[data-component="assumptions-constraints-list"] li{border-left:5px solid var(--warn);}
+.li-tag{font-size:10px; font-weight:800; padding:2px 7px; border-radius:5px; background:var(--warn-tint); color:var(--warn); border:1px solid var(--warn-line); flex:0 0 auto;}
+[data-component="toc-navigator"]{display:grid; grid-template-columns:repeat(2,1fr); gap:9px 18px;}
+[data-component="toc-navigator"] li{box-shadow:none; border-color:var(--line-soft);}
+[data-component="toc-navigator"] .tn{font-weight:800; font-family:ui-monospace,monospace; color:var(--brand); flex:0 0 auto;}
+[data-component="references-list"] .ref-n{font-weight:800; font-family:ui-monospace,monospace; color:var(--ink-faint); flex:0 0 auto;}
+.li-key{font-weight:800; color:var(--brand); flex:0 0 auto;}
+
+/* use-case-card: precondition/flow/postcondition の枠 */
+[data-component="use-case-card"] li{flex-direction:column; gap:7px; border-left:5px solid var(--info); padding:14px 17px;}
+.uc-id{font-size:11.5px; font-weight:800; color:var(--info); letter-spacing:.08em;}
+.uc-flow{display:flex; flex-wrap:wrap; gap:6px; align-items:center; font-size:12.5px;}
+.uc-flow .stp{background:var(--paper-2); border:1px solid var(--line); border-radius:7px; padding:3px 9px; font-weight:600;}
+.uc-flow .ar{color:var(--ink-faint); font-weight:800;}
+
+/* ---- rtm-grid family: verification-method-grid / requirement-attributes-rtm ---- */
+[data-component="verification-method-grid"],
+[data-component="requirement-attributes-rtm"]{overflow-x:auto; border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow);}
+[data-component="verification-method-grid"] table,
+[data-component="requirement-attributes-rtm"] table{border-collapse:separate; border-spacing:0; font-size:12.5px; width:100%; min-width:680px;}
+[data-component="verification-method-grid"] th,
+[data-component="requirement-attributes-rtm"] th{background:var(--brand-deep); color:#fff; font-size:11px; font-weight:800; padding:10px 12px; text-align:left;}
+[data-component="verification-method-grid"] td,
+[data-component="requirement-attributes-rtm"] td{padding:10px 12px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.5;}
+[data-component="verification-method-grid"] tbody tr:nth-child(even) td,
+[data-component="requirement-attributes-rtm"] tbody tr:nth-child(even) td{background:var(--paper-2);}
+
+/* ---- callout family: quality-checklist / audience-toggle ---- */
+[data-component="quality-checklist-callout"]{background:var(--paper-2); border:1px solid var(--line); border-left:5px solid var(--ok); border-radius:12px; padding:16px 20px; box-shadow:var(--shadow);}
+[data-component="quality-checklist-callout"] .qt{font-size:13px; font-weight:800; color:var(--ok); margin:0 0 10px; display:flex; align-items:center; gap:8px;}
+[data-component="quality-checklist-callout"] ul{list-style:none; margin:0; padding:0; display:grid; grid-template-columns:repeat(3,1fr); gap:7px 16px;}
+[data-component="quality-checklist-callout"] li{font-size:12.5px; display:flex; gap:7px; color:var(--ink-soft);}
+[data-component="quality-checklist-callout"] li .ck{color:var(--ok); font-weight:900; flex:0 0 auto;}
+[data-component="audience-toggle"]{display:inline-flex; gap:0; border:1px solid var(--line); border-radius:10px; overflow:hidden; box-shadow:var(--shadow);}
+[data-component="audience-toggle"] button{border:none; background:var(--paper); color:var(--ink-soft); font:inherit; font-size:12.5px; font-weight:700; padding:8px 16px; cursor:pointer; border-right:1px solid var(--line);}
+[data-component="audience-toggle"] button:last-child{border-right:none;}
+[data-component="audience-toggle"] button[aria-pressed="true"]{background:var(--brand); color:#fff;}
+
+/* ---- diagram family: context / use-case-flow / state-machine ---- */
+[data-component="context-diagram"],
+[data-component="use-case-flow-diagram"],
+[data-component="state-machine-diagram"]{background:var(--paper); border:1px solid var(--line); border-radius:14px; padding:20px; box-shadow:var(--shadow); overflow-x:auto;}
+[data-component="context-diagram"] figcaption,
+[data-component="use-case-flow-diagram"] figcaption,
+[data-component="state-machine-diagram"] figcaption{font-size:11.5px; color:var(--ink-faint); font-weight:600; margin-top:10px; text-align:center;}
+/* use-case flow steps (横並びステップ) */
+.uc-basic{display:flex; align-items:stretch; gap:0; flex-wrap:wrap;}
+.uc-step{flex:1 1 0; min-width:140px; background:var(--paper); border:1px solid var(--brand); border-radius:13px; padding:14px; box-shadow:var(--shadow); display:flex; flex-direction:column; gap:5px;}
+.uc-arrow{flex:0 0 30px; display:grid; place-items:center; color:var(--brand); font-weight:800;}
+.uc-step .sn{font-size:11px; font-weight:800; color:var(--brand); letter-spacing:.06em;}
+.uc-step .st{font-size:14px; font-weight:800; line-height:1.3;}
+.uc-step .sd{font-size:11.5px; color:var(--ink-faint); line-height:1.45;}
+
+/* ---- badge: informative-normative-label ---- */
+.io-label{display:inline-flex; align-items:center; gap:5px; font-size:10px; font-weight:800; letter-spacing:.06em; padding:2px 9px; border-radius:6px; text-transform:uppercase;}
+.io-label.normative{background:var(--brand); color:#fff;}
+.io-label.informative{background:var(--paper-3); color:var(--ink-soft); border:1px solid var(--line);}
+
+/* ---- responsive ---- */
+@media (max-width:1080px){
+  [data-component="section-lead-callout"],[data-component="nfr-hero-metrics"],[data-component="acceptance-criteria-checklist"]{grid-template-columns:1fr 1fr;}
+  [data-component="scope-summary-panel"],[data-component="glossary-term-table"]{grid-template-columns:1fr;}
+}
+@media (max-width:720px){
+  [data-component="chapter-deck-band"],.chapbody,[data-component="doc-cover-band"],.foot{padding-left:22px; padding-right:22px;}
+  [data-component="section-lead-callout"],[data-component="nfr-hero-metrics"],[data-component="acceptance-criteria-checklist"]{grid-template-columns:1fr;}
+  [data-component="doc-cover-band"] h1{font-size:31px;}
+  [data-component="chapter-deck-band"] .num{font-size:92px;}
+}
+
+/* ============================================================================
+   dark accent コントラスト補正 — ★このブロックはファイル末尾に置くこと (source-order)。
+   dark では accent トークン (--brand/--info/--warn/--ok/--bad/--violet) が明色へ反転するため、
+   それを塗りに使い白文字を載せる小要素 (kicker / priority-badge / actor avatar / dot 等) は
+   WCAG AA が崩れる (gate F low-contrast で実検出)。 文字を暗色へ切替えて contrast を確保する。
+   基底の `color:#fff` ルールと同 specificity ゆえ、 source-order で後勝ちさせるには本ブロックが
+   それら全ての後 (= ファイル末尾) に来る必要がある。 前方へ移すと基底ルールに負け無効化する。
+   構造ヘッダ/フッタ (--brand-deep 塗り) は dark でも暗色維持ゆえ白文字のままで可読。
+   ============================================================================ */
+@media (prefers-color-scheme: dark){
+  .tint-brand .kicker, .tint-ok .kicker, .tint-bad .kicker,
+  .tint-warn .kicker, .tint-info .kicker, .tint-violet .kicker,
+  [data-component="source-trace-origin"] thead th,
+  .prio.must, .prio.should,
+  .rtm td .dot,
+  .actor .av,
+  [data-component="audience-toggle"] button[aria-pressed="true"],
+  .io-label.normative{ color:#08131a; }
+}
+/* ===== ADR-pack 固有部品 (folio-bwc / instance#2)。 srs.css の token を流用 ===== */
+[data-component="adr-context-row"]{display:flex;gap:12px;align-items:flex-start;padding:13px 16px;border:1px solid var(--line);border-left:3px solid var(--info);border-radius:10px;background:var(--paper-2);margin:10px 0}
+[data-component="adr-context-row"] .cxid{flex:0 0 auto;font-weight:700;font-size:12px;color:var(--info);background:var(--info-tint);border:1px solid var(--info-line);border-radius:6px;padding:2px 8px;letter-spacing:.02em}
+[data-component="adr-context-row"] .cxbody .cxh{font-weight:700;margin:0 0 3px;font-size:14.5px}
+[data-component="adr-context-row"] .cxbody .cxd{margin:0;color:var(--ink-soft);font-size:13.5px;line-height:1.7}
+table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;margin:8px 0;font-size:13.5px}
+[data-component="adr-driver-row"] td{border:1px solid var(--line);padding:9px 12px;vertical-align:top}
+[data-component="adr-driver-row"] .drid{font-weight:700;color:var(--brand);white-space:nowrap}
+[data-component="adr-driver-row"] .drg{display:inline-block;margin-left:6px;font-size:11px;color:var(--ink-soft);background:var(--paper-3);border:1px solid var(--line);border-radius:5px;padding:1px 6px}
+.opt-grid{display:flex;flex-direction:column;gap:12px;margin:10px 0}
+[data-component="adr-option-card"]{border:1px solid var(--line);border-radius:12px;padding:14px 16px;background:var(--paper);box-shadow:var(--shadow)}
+[data-component="adr-option-card"].chosen{border:2px solid var(--ok);background:var(--ok-tint)}
+[data-component="adr-option-card"].rejected{opacity:.92}
+.opt-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:4px}
+.opt-head .opt-id{font-weight:700;font-size:12px;color:var(--ink-soft)}
+.opt-head .opt-name{font-weight:800;font-size:15px}
+.opt-verdict{font-size:11.5px;font-weight:700;border-radius:999px;padding:2px 11px;border:1px solid}
+.opt-verdict.chosen{color:var(--ok);background:var(--ok-tint);border-color:var(--ok-line)}
+.opt-verdict.rejected{color:var(--bad);background:var(--bad-tint);border-color:var(--bad-line)}
+.opt-verdict.deferred{color:var(--warn);background:var(--warn-tint);border-color:var(--warn-line)}
+[data-component="adr-option-card"] .opt-sum{margin:2px 0 8px;color:var(--ink-soft);font-size:13.5px;line-height:1.7}
+[data-component="adr-option-card"] .opt-plain{display:block;margin:0 0 9px;font-size:13px;color:var(--ink-soft);background:var(--brand-tint);border-radius:7px;padding:6px 10px}
+.opt-pc{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media(max-width:640px){.opt-pc{grid-template-columns:1fr}}
+.opt-pc ul{margin:3px 0 0;padding-left:2px;list-style:none}
+.opt-pc li{font-size:12.5px;line-height:1.65;padding-left:18px;position:relative;margin:3px 0;color:var(--ink-soft)}
+.opt-pc .pros h4,.opt-pc .cons h4{margin:0;font-size:11.5px;letter-spacing:.04em}
+.opt-pc .pros h4{color:var(--ok)} .opt-pc .cons h4{color:var(--bad)}
+.opt-pc .pros li::before{content:"+";position:absolute;left:2px;color:var(--ok);font-weight:800}
+.opt-pc .cons li::before{content:"\2212";position:absolute;left:2px;color:var(--bad);font-weight:800}
+[data-component="adr-decision-panel"]{border:2px solid var(--ok);border-radius:14px;padding:16px 18px;background:var(--ok-tint);margin:8px 0}
+[data-component="adr-decision-panel"] .dec-kick{font-size:11.5px;font-weight:700;letter-spacing:.05em;color:var(--ok);text-transform:uppercase}
+[data-component="adr-decision-panel"] .dec-state{font-size:15.5px;font-weight:700;line-height:1.7;margin:5px 0 4px}
+[data-component="adr-decision-panel"] .dec-plain{display:block;font-size:13.5px;color:var(--ink-soft);line-height:1.7;margin:0 0 8px}
+[data-component="adr-decision-panel"] .dec-why{display:block;font-size:13px;color:var(--ink);background:var(--paper);border:1px solid var(--ok-line);border-radius:8px;padding:8px 11px;line-height:1.75;margin:0 0 10px}
+.justify-box{background:var(--paper);border:1px solid var(--line);border-radius:9px;padding:10px 12px}
+.justify-box .jh{font-size:12px;font-weight:700;color:var(--ink-faint);margin:0 0 6px}
+.justify-row{display:flex;gap:9px;align-items:baseline;padding:5px 0;border-top:1px dashed var(--line)}
+.justify-row:first-of-type{border-top:0}
+.justify-req{flex:0 0 auto;font-weight:800;font-size:12.5px;color:var(--ok);background:var(--ok-tint);border:1px solid var(--ok-line);border-radius:6px;padding:1px 9px}
+.justify-role{flex:0 0 auto;font-size:10.5px;color:var(--violet);background:var(--violet-tint);border:1px solid var(--violet-line);border-radius:999px;padding:1px 8px}
+.justify-note{flex:1 1 auto;font-size:12.5px;color:var(--ink-soft);line-height:1.6}
+.justify-tgt{font-size:11.5px;color:var(--ink-faint);margin:8px 0 0}
+[data-component="adr-supersession"],[data-component="adr-principle"]{border:1px solid var(--line);border-radius:10px;padding:12px 15px;margin:10px 0;font-size:13.5px;line-height:1.7}
+[data-component="adr-supersession"]{background:var(--paper-2)}
+[data-component="adr-principle"]{background:var(--violet-tint);border-color:var(--violet-line)}
+[data-component="adr-principle"] .prin-id{font-weight:700;color:var(--violet);font-size:12px;letter-spacing:.02em}
+[data-component="adr-principle"] .prin-text{font-weight:700;margin:4px 0 2px;color:var(--ink)}
+[data-component="adr-principle"] .prin-note{color:var(--ink-soft);font-size:12.5px}
+.ss-row{margin:3px 0}.ss-row .ss-k{font-weight:700;color:var(--ink-soft);font-size:12px;margin-right:6px}
+
+</style>
+<meta name="folio-version" content="0.1.0">
+<script type="application/ld+json">
+{
+  "@context": {
+    "dc": "http://purl.org/dc/terms/",
+    "schema": "https://schema.org/",
+    "folio": "https://folio.dev/spec/v1/"
+  },
+  "@id": "./ADR-0099-gate-readers-pass-read-only-gh-and-text-the-shell-does-not-run.html",
+  "@type": "schema:TechArticle",
+  "dc:isPartOf": [
+    {
+      "@id": "./README.html"
+    }
+  ],
+  "dc:title": "門の読み手は、 外へ出さないと閉じた表で言い切れる gh と、 shell が撃たないと閉じた列で言い切れる字だけを読みから外す — 読みだけの gh の表に当たる包まれた gh には wrapped の印を付けず、 本文を shell に渡さない受け手だけの command 行の、 区切りを引用した heredoc の本文を segment に入れず、 全ての頭が閉じた列に在り生きた置換を持たない command の data の命令の単引用の中の字と逆斜線が逃がした字を語の割りに使わない。 外れる形は今の読みのまま断り、 それでも新しく通る撃ちは限界として名指す (ADR-0078 の読みの補い・supersede なし)",
+  "folio:version": "0.1.0",
+  "folio:stakeholders": [
+    "Developer",
+    "AI Agent",
+    "External Reviewer"
+  ],
+  "dc:references": [
+    {
+      "@id": "../spec/constitution.html#a1"
+    },
+    {
+      "@id": "../spec/constitution.html#c2"
+    },
+    {
+      "@id": "../spec/constitution.html#c11"
+    },
+    {
+      "@id": "../spec/constitution.html#c17"
+    },
+    {
+      "@id": "../spec/srs.html#FR80"
+    },
+    {
+      "@id": "../spec/srs.html#FR81"
+    },
+    {
+      "@id": "../spec/srs.html#FR56"
+    },
+    {
+      "@id": "../spec/srs.html#FR72"
+    },
+    {
+      "@id": "../spec/srs.html#FR74"
+    },
+    {
+      "@id": "../spec/srs.html#FR76"
+    },
+    {
+      "@id": "../spec/srs.html#NFR4"
+    },
+    {
+      "@id": "../spec/srs.html#NFR5"
+    },
+    {
+      "@id": "./ADR-0056-destructive-guards-are-one-vessel-subcommand-wired-from-account-settings.html"
+    },
+    {
+      "@id": "./ADR-0078-host-guard-stops-neighbor-identifiers-before-publish.html"
+    }
+  ]
+}
+</script>
+</head>
+<body>
+<!-- folio:chrome-top -->
+<a class="skip-link" href="#cover-summary">本文へスキップ</a>
+<nav class="breadcrumb" aria-label="パンくず"><ol>
+  <li><a href="../index.html">design-intent</a></li>
+  <li><a href="./README.html">decisions</a></li>
+  <li aria-current="page">ADR-0099</li>
+</ol></nav>
+<!-- /folio:chrome-top -->
+<div class="page" data-component="requirement-type-color-tokens">
+<header data-component="doc-cover-band">
+<p class="cover-eyebrow"><span class="doc-type">設計判断記録 (ADR)</span> <span>scribe2 — 門の読み手と shell が撃たない字</span></p>
+<h1>門の読み手は、 外へ出さないと閉じた表で言い切れる gh と、 shell が撃たないと閉じた列で言い切れる字だけを読みから外す — 読みだけの gh の表に当たる包まれた gh には wrapped の印を付けず、 本文を shell に渡さない受け手だけの command 行の、 区切りを引用した heredoc の本文を segment に入れず、 全ての頭が閉じた列に在り生きた置換を持たない command の data の命令の単引用の中の字と逆斜線が逃がした字を語の割りに使わない。 外れる形は今の読みのまま断り、 それでも新しく通る撃ちは限界として名指す (ADR-0078 の読みの補い・supersede なし)</h1>
+<p class="cover-sub">host-guard の公開の門を全口座へ配線した直後に、 外へ何も出さない 3 つの定型 (CI を待つ loop の中の読みだけの gh・file に書く heredoc の本文・echo や printf の単引用の中の字) が全部の session で断られた。 原因は 2 つで、 wrapped の印が gh の動詞を見ないことと、 共有の分割が shell の撃たない字を撃つ字と読むことである。 本 ADR は、 閉じた表と閉じた列で言い切れる形だけを読みから外し、 言い切れない形は今のまま断り、 それでも新しく通る撃ちを限界として名指すと決める。</p>
+<div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">この記録で「器」は scribe2 の本体、 「門」は session が撃つ Bash の命令を撃つ前に読んで、 危ない形を止める器の見張りです。 外へ出す命令 (git の push や、 本文を GitHub へ出す gh の命令) を読む公開の門を全部の口座に配線した直後に、 外へ何も出さない 3 つの定型が全部の session で止まりました。 CI を待つ loop の中の読むだけの gh、 cat や python3 に渡す heredoc (命令の中に書く複数行の本文) の本文、 echo や printf の単引用の中の字です。 原因は 2 つで、 疑いの印が gh の動詞を見ないことと、 命令を区切る共通の読みが、 shell が命令として撃たない字を撃つ字と読むことです。 この記録は、 決まった一覧 (閉じた表と閉じた列) で言い切れる形だけを読みから外すと決めます。 1 つ目に、 読むだけの gh の一覧に当たる gh は疑いの印を受けません。 2 つ目に、 本文を shell に渡さない命令 (cat・tee と、 引数が無いか - 1 つだけの python3・python) しか無い行の、 区切りを引用した heredoc の本文は命令として読みません。 3 つ目に、 行の全部の命令が字を動かさない命令の一覧 (echo・grep・cat・head・cd など) に在り、 行のどこにも生きた置換が無いときだけ、 単引用の中の字を疑いの判じに使いません。 一覧から 1 つでも外れる形 (bash に渡す heredoc・sh -c の中・pipe の先の自作の script・sed の e・字を撃つ option を持つ命令など) は今のまま止めます。 代わりに、 今は偶然止めている撃ちのうち 2 つが新しく通ることを引き受けます。 python3 に渡す本文の中の撃ちと、 cat や echo で file に書いた字を後の呼び出しで撃つ形です (書いた file の中は、 もともと門が測らない所です)。 一覧の外の命令 (printf・sed・sudo cat・bd など) の偽の止めは残ります。</p></div></div>
+<div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">accepted</span></span><span class="m"><span class="k">選択肢</span><span class="v">9件 (OPT1–OPT9)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 4 / トレードオフ 7</span></span><span class="m"><span class="k">版</span><span class="v">v0.1.0 / 2026-09-30</span></span></div>
+<div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>FR80・FR81・FR56・FR72・FR74・FR76・NFR4・NFR5</b></div>
+<div data-component="approval-block">
+<div class="sign"><span class="role">裁定 (user)</span><span class="who">user</span><span class="when">裁定 id user 2026-09-29T21:53Z (host-guard の公開の種類を全口座の hook へ配線することを推奨どおり進める裁定。 誤検知の直しの形は、 この裁定の下で orchestrator が推奨の形を選んだ。 逐語は台帳の event にだけ在る)</span><span class="stamp self">裁定済</span></div>
+<div class="sign"><span class="role">裁定 (user)</span><span class="who">user</span><span class="when">裁定 id user 2026-09-27T23:55Z (公開の種類の rules 行と照合の形の裁定・ADR-0078。 本 ADR は行の値と照合の形を変えない。 逐語は台帳の event にだけ在る)</span><span class="stamp self">裁定済</span></div>
+<div class="sign"><span class="role">設計 (orchestrator)</span><span class="who">orchestrator</span><span class="when">2026-09-30 草稿 v4 (共有の分割・公開の印の読み・host-guard の判定・command guard の分割の現物を読み、 host-guard に payload を直に渡して 3 つの形と撃たれる形を実測し、 ADR-0078 の決定と限界と照らした。 fidelity の審査 2 周と敵対 review の findings を orchestrator の裁定 2026-09-30 で直し、 data の頭の免除を閉じた頭の列 (allowlist) と生きた置換の条件で閉じ、 列から字を撃つ option を持つ頭を外した。 拘束する constitution の版 0.5.0)</span><span class="stamp self">作成</span></div>
+</div>
+<div class="reader-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 想定読者: scribe2 の開発 session と user — 器の内部と Rust の専門知識は不要 (専門語はやさしい言葉を併記)</div>
+</header>
+<!-- folio:chrome-toc -->
+<!-- /folio:chrome-toc -->
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">01</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v6m0 0L9 5m3 3l3-3"/><circle cx="12" cy="14" r="6"/></svg> 背景 / なぜこの判断が要るか</span><h2>いま何が問題か (確定方式を決める力学)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-01">なぜこの判断が要るのかを 6 つから説明します。 公開の門が命令をどう区切って読むかの経緯・配線の直後に 3 つの定型が止まった事象と 2 つの原因・撃たれる形も今は偶然止めている事実・読みが 1 本で字の出所が捨てられている事実・憲法の向き・この判断で動かす範囲です。</p></section>
+<div class="chapbody">
+<div data-component="adr-context-list">
+<div data-component="adr-context-row"><span class="cxid">CTX1</span><div class="cxbody"><p class="cxh">経緯 — 公開の門は、 共有の分割<span class="term" data-component="plain-language-term-inline" data-term="共有の分割">命令を区切る共通の読み</span>が返す segment と、 その中の細かい語を読む</p><p class="cxd">ADR-0078 は host-guard (口座の設定から呼ばれる器の見張り・ADR-0056) の種類に公開 (publish) を足し、 外へ出す命令 (git の push と、 本文を出す gh の命令) の segment を撃つ前に読む形を決めた。 Bash の command は、 台帳の門の module に在る 1 本の分割が、 引用の外の改行と operator で segment に切り、 引用を解いた語の列にして返す。 この共有の分割を 7 か所 (host-guard の判定・起票の門・台帳のグラフの門・anchor の門・merge の門・live-row の門と公開の門が共有する読み手・公開の印の読み) が読む。 公開の門は、 頭の語が git でも gh でもない segment の細かい語も読み、 command 置換 ($( か backtick) を持つ語を割って、 git と後ろの push か、 gh と後ろの公開の群の語が在れば wrapped の印<span class="term" data-component="plain-language-term-inline" data-term="wrapped の印">包まれた公開の疑い</span>を付けて解けない形として断る (設計 vessel-hook.md §17。 割るのは実際に撃たれる command 置換を持つ語だけとする orchestrator の裁定 2026-09-28)。 ADR-0078 は sh -c の中と alias の push を測らない限界を、 設計 vessel-hook.md §17 は script の file の中を測らない限界を引き受けている。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX2</span><div class="cxbody"><p class="cxh">事象 — 配線の直後に、 外へ何も出さない定型が 3 つの形で止まった (原因は 2 つ)</p><p class="cxd">公開の種類を全口座の hook へ配線した直後 (2026-09-29T23:15Z) に、 全部の session の定型が 3 つの形で断られた (2026-09-30 に、 main と同じ hook の code の binary へ payload を直に渡して実測)。 (1) CI を待つ loop と command 置換の中の読みだけの gh (x=$(gh pr view …)・for の本体と until の条件の gh pr checks・command 置換の gh api の GET など 10 形)。 (2) 区切りを引用した heredoc の本文の行 (cat で file に書く手順書・python3 に渡す script): 公開の門は本文の x=$(gh pr view 1) と git push の字を、 host-guard の tmux と git の種類は本文の tmux kill-server と git reset --hard を断る。 (3) echo と printf の単引用の中の $( か backtick を持つ字 (echo '$(git push)' など)。 報告された sed の式は、 省かれた字に $( か backtick を持っていたと推定する (報告の字だけでは通る・推定で未測)。 原因は 2 つある。 (1) は wrapped の印が、 gh の後ろに公開の群の語 (pr・issue・api など) が在るだけで、 動詞を見ずに付くこと。 (2) と (3) は共有の分割が heredoc を知らず、 引用を解くときに字の出所を捨てるので、 shell が撃たない字<span class="term" data-component="plain-language-term-inline" data-term="撃たない字">命令として動かない字</span>を撃つ字と読むことである。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX3</span><div class="cxbody"><p class="cxh">現物 — 撃たれる形も、 今は $( の字と本文の字で偶然断っている</p><p class="cxd">今の読みは撃たない字と撃つ字を分けないので、 撃たれる形も断っている (同じ実測)。 sh -c・python3 -c・awk の単引用の中の $(git push) と、 GNU sed の e の置換の中の $(git push) は wrapped の印で断られる。 echo と printf の単引用の $(git push) を、 pipe の先の bash・sh・xargs の sh -c・自作の script が撃つ形と、 file に書いて ./f.sh で撃つ形と、 file に書いた $(shell git push) を make -f で撃つ形も wrapped の印で断られる。 単引用の字を撃つ option や読みを持つ命令 (rg の --pre・sort の --compress-program・bash の printf の -v の配列の添字) と、 process 置換の &gt;(bash) も、 字の中の $( を実際に撃ち (scratch で touch を撃って実測)、 今は wrapped の印で断られる。 bash に heredoc で渡す本文・cat の本文を pipe で bash に渡す形・書いた file を後ろの行の bash で撃つ形・.git/hooks の file へ書く形・python3 -c が stdin の本文を os.system で撃つ形の本文の git push origin main は、 行き先を解けない形で断られる。 python3 に heredoc で渡す本文の os.system の中の $(git push …) は wrapped の印で断られる。 ただし $( を持たない同じ撃ち方 (echo 'git push origin main' | bash・python3 の本文の subprocess.run の git push) は今も通る。 門はこれらの撃ちを測っておらず、 $( の字と本文の字で偶然断っている。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX4</span><div class="cxbody"><p class="cxh">現物 — 読みは 1 本で、 字の出所は捨てられている</p><p class="cxd">共有の分割は 1 本 (C2) で、 heredoc を読む直しをそこに置けば 7 か所の読み手が同じ読みを受ける。 公開の門だけを直すと、 同じ本文の偽陽性が他の門に残る。 語の字がどの引用から来たか (字の出所) は、 分割が引用を解くときに捨てていて、 単引用と二重引用を分けられない。 runner の session と verify 行を読む command guard は、 引用を解かない別の分割で、 共有の分割を読まない。 解けない形の断りに添える書き直しの字 (断りの経路) は、 理由が解けない形の全部の断りが共有している。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX5</span><div class="cxbody"><p class="cxh">憲法と既存の決定の向き (本 ADR の解釈)</p><p class="cxd">A1 の「出す」は push と公開を名指し、 公開は取り消せない。 C11 は境界ごとの失敗を極性で持ち、 host-guard は閉じる側 (FailClosed・NFR4) で、 決められない形を通す向きに倒さない。 C2 は経路を 1 本にする。 C17 は足すものを最小にし、 消すものを先に名指す。 本 ADR が消すのは、 外へ何も出さない定型が断られるたびに、 session が Bash の呼び出しを分け直すか書き直す手である。 ADR-0078 の限界 (sh -c の中・alias) と §17 の限界 (script の file の中) は、 字面で撃つかどうかを決められない所を測らないと引き受けた線で、 本 ADR が読む ADR-0078 の線もこれであり、 本 ADR の限界もこの線に揃える。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX6</span><div class="cxbody"><p class="cxh">射程 — 動かすのは読みの 3 つだけ</p><p class="cxd">動かすのは (1) 包まれた gh のうち読みだけの閉じた表<span class="term" data-component="plain-language-term-inline" data-term="読みだけの閉じた表">読むだけの gh の一覧</span>に当たる gh に wrapped の印を付けないこと、 (2) 共有の分割が、 本文を shell に渡さない受け手<span class="term" data-component="plain-language-term-inline" data-term="本文を shell に渡さない受け手">本文を受ける命令</span>だけの command 行の、 区切りを引用した heredoc の本文を segment に入れないこと、 (3) 単引用の中の字と、 引用の外か二重引用の中で逆斜線が逃がした字を、 同じ command の全ての segment の頭が閉じた頭の列<span class="term" data-component="plain-language-term-inline" data-term="閉じた頭の列">字を動かさない命令の一覧</span>に在り、 生きた置換と process 置換を command のどこにも持たない周だけ、 data の頭<span class="term" data-component="plain-language-term-inline" data-term="data の頭">字を shell に渡さない命令</span>の segment の語の割りに使わないことの 3 つである。 (2) は共有の分割を読む全部の門に効く: host-guard の git と tmux の種類 (FR56)・自分の設定の種類 (FR72)・rm の種類 (FR74)・台帳の種類 (FR76)・公開の種類 (FR80)・起票の門 (FR81)・台帳のグラフの門・anchor の門・merge の門・live-row の門。 (1) と (3) は公開の門だけが読む。 閉じた頭の列には、 字を撃つ option や読みを持つ頭 (GNU sed の e・rg の --pre・sort の --compress-program・bash の printf の -v の配列の添字・bd の mail の委譲と edit の $EDITOR・bd へ委ねる bdw) を入れない。 動かさないのは、 印と解けない形の閉じた列と宣言順・判定の順・断りの字と経路・rules 行・記録の形・command 置換の中の cat の heredoc の値の読み・command guard の分割と照合・要件書である。 ADR-0078 の決定は変えず、 公開の segment とその中の語の読みを補う。 設計 vessel-hook.md §23 (契約表の行 o・o2) が実装する。 ADR を書く条件のうち 4 (却下案を残す価値) に当たる。</p></div></div>
+</div>
+</div>
+<section data-component="chapter-deck-band" class="tint-brand"><span class="num">02</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v18"/><path d="M5 7l-3 6h6z"/><path d="M19 7l-3 6h6z"/><path d="M3 21h18"/></svg> 判断を縛る力 / 評価の軸</span><h2>選択肢を測るものさし (安全・速さ)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-02">この判断を評価する 5 本のものさしです。 外へ何も出さない定型を止めないこと。 今止めている撃たれる形を新しく通さないこと。 撃たないと言い切れない形は撃つ字として読むこと。 同じ本文を全部の門で同じに読むこと。 足すものを最小にし、 断りの字や規則の行や要件を変えないことです。</p></section>
+<div class="chapbody">
+<table data-component="adr-driver-table"><tbody>
+<tr data-component="adr-driver-row"><td class="drid">DR1</td><td>外へ何も出さない定型 (読みだけの gh・file に書く heredoc の本文・data の命令の引用の中の字) を断らない <span class="drg">CTX2</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR2</td><td>今の読みが断る撃たれる形を、 新しく通さない (A1) <span class="drg">CTX3・CTX5</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR3</td><td>撃たないと言い切れない形は、 撃つ字として読む (C11・NFR4) <span class="drg">CTX3・CTX5</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR4</td><td>同じ本文を全部の門で同じに読み、 読み手を 2 つにしない (C2) <span class="drg">CTX4</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR5</td><td>足すものを最小にし、 断りの字・経路・rules 行・記録の形・要件を変えない (C17) <span class="drg">CTX4・CTX6</span></td></tr>
+</tbody></table>
+</div>
+<section data-component="chapter-deck-band" class="tint-violet"><span class="num">03</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5"/></svg> 検討した選択肢 / 3 つの確定方式</span><h2>それぞれの利点と欠点を並べる</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-03">候補を 9 つ並べます。 決まった一覧に当たるときだけ読みから外し、 新しく通る撃ちを限界として名指す案 (選んだ案) と、 選ばなかった 8 つです。 選ばなかった案は、 区切りを引用した heredoc の本文を受け手に依らず読まない案・受け手のそばに撃たない命令の一覧を足す案・単引用の字を全部の命令で字のまま読む案・公開の動詞が見えるときだけ止める案・断り文に書き直しの句を足す案・公開の門だけで heredoc を読む案・pipe の先の命令だけで免除を取り消す案・字を命令として動かす命令の一覧 (denylist) で免除を取り消す案です。</p></section>
+<div class="chapbody">
+<div class="opt-grid">
+<div data-component="adr-option-card" class="chosen">
+<div class="opt-head"><span class="opt-id">OPT1</span><span class="opt-name">閉じた表と閉じた列に当たるときだけ読みから外し、 新しく通る撃ちは限界として名指す</span><span class="opt-verdict chosen">採用</span></div>
+<p class="opt-sum">読みだけの gh の閉じた表に当たる包まれた gh には wrapped の印を付けない。 共有の分割は、 本文を shell に渡さない受け手 (cat・tee と、 引数が無いか - 1 つだけの python3・python) だけの command 行の、 区切りを引用した heredoc の本文を segment に入れない。 単引用の中の字と逆斜線が逃がした字は、 同じ command の全ての segment の頭が閉じた頭の列 (data の頭と、 head・tail・wc・uniq・cut・tr と、 cd) に在り、 生きた置換と process 置換を command のどこにも持たない周だけ、 data の頭 (echo・grep の仲間・cat・tee・jq) の segment で語の割りに使わない。 どれも閉じた列から 1 つでも外れる形は今の読みのまま断り、 それでも新しく通る撃ちは限界として名指す。 決め手は実測と分析と orchestrator の裁定 2026-09-30 (同じ command の中で撃たれる形を断ったまま、 止まった定型を通す)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT1">3 つの読みを、 決まった一覧 (閉じた表と閉じた列) に当たるときだけ変える案です。 読むだけの gh の一覧 (pr の view や checks、 api の GET など) に当たる gh は、 包まれていても疑いの印を受けません。 本文を shell に渡さない命令 (cat・tee と、 引数が無いか - 1 つだけの python3・python) しか無い行の、 区切りを引用した heredoc の本文は、 命令として読みません。 行の全部の命令が字を動かさない命令の一覧 (echo・grep の仲間・cat・tee・jq と、 head・wc などの整形と、 cd) に在り、 行のどこにも生きた置換と process 置換が無いときだけ、 字を shell に渡さない命令の単引用の中の字と逆斜線が逃がした字を、 命令の疑いの判じに使いません。 一覧から 1 つでも外れる形は今のまま止めます。 止まっていた定型を通しつつ、 bash に渡す heredoc・pipe の先の bash や自作の script・書いた file を同じ行で撃つ形・sh -c の中・sed の e・rg の --pre や printf の -v のような字を撃つ option は止めたままにし、 7 か所の読み手が同じ読みを受け、 断りの字や要件を変えない点で勝ります。 代わりに、 今は偶然止めている撃ちのうち、 python3 に渡す本文の中の $( を新しく通し、 cat や echo で file に書いた字は書く時点で読まなくなり、 後の呼び出しで撃つ形は門の外になります。 一覧の命令が字を撃つ option を持てば黙って通るので、 一覧に命令を足すたびにその有無を確かめる裁きが要ります。 一覧の外の命令 (printf・sed・sudo cat・bd など) と、 git や for と並ぶ字では偽の止めが残り、 読みの仕組みに heredoc と字の出所と一覧の読みが増えます。 実測と分析と orchestrator の裁定で選びました。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>CI を待つ loop と command 置換の中の読みだけの gh が通る (DR1)</li>
+<li>file に書く heredoc の本文と、 echo や grep などの data の命令の単引用の中の字が通る (DR1)</li>
+<li>bash・sh・sh -c・python3 -c・awk・sed の e と、 同じ command の中で data の字を撃つ列の外の頭 (pipe の先の自作の script・書いた file を ./f.sh や make -f で撃つ形・rg の --pre・sort の --compress-program・printf の -v) と process 置換は今のまま断る (DR2・DR3)</li>
+<li>7 か所の読み手が、 同じ分割から同じ読みを受ける (DR4)</li>
+<li>断りの字・経路・rules 行・記録の形・要件を変えない (DR5)</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>python3 と python に program として渡す heredoc の本文の中の $( (os.system に渡す字など) を新しく通す (今は断っている)(DR2)</li>
+<li>受け手だけの行と閉じた頭の列だけの command で file に書いた字は書く時点で読まれず、 後の呼び出しで撃つ形は script の file の中の限界へ移る (.git/hooks や rc file へ書く本文も同じ)(DR2)</li>
+<li>閉じた頭の列の命令が字を撃つ option を持てば黙って通り、 列に頭を足すたびに撃つ option の有無の裁きが要る (DR3・DR5)</li>
+<li>受け手と data の頭の列の外の頭 (sudo cat・引数を持つ python3・本文を heredoc で渡す bd create・printf・bd・sed) と、 受け手の後ろに command を足した行と、 列の外の頭 (git・for など) と並ぶ data の字は今のまま読み、 偽陽性が残る (DR1)</li>
+<li>分割の状態機械に heredoc の読みと字の出所を足し、 読みだけの表と受け手の列と閉じた頭の列を器の定数で持つ (DR5)</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT2</span><span class="opt-name">区切りを引用した heredoc の本文を、 受け手に依らず読まない</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">区切りを引用した heredoc の本文は shell が展開しないので、 受け手の命令に依らず本文の行を segment に入れない。 決め手は実測 (撃たれる形の本文を通す)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT2">区切りを引用した heredoc の本文は shell が展開しないので、 どの命令に渡すかに依らず本文を読まない案です。 規則が 1 つで済み、 sudo cat などの偽の止めも消える点で勝ります。 けれども、 bash に heredoc で渡す本文や、 cat の本文を pipe で bash に渡す形、 書いた file を後ろの行で撃つ形の git push を通してしまいます (今は止めています)。 引用した区切りは展開を止めるだけで、 受け手が本文を撃つかは決めません。 退けました。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>規則が 1 つで済み、 受け手の列を持たない</li>
+<li>sudo cat や、 本文を heredoc で渡す bd create の偽陽性も消える</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>bash に heredoc で渡す本文・cat の本文を pipe で bash に渡す形・書いた file を後ろの行で撃つ形の git push を通す (今は断っている)(DR2)</li>
+<li>引用した区切り<span class="term" data-component="plain-language-term-inline" data-term="引用した区切り">本文を字のまま渡す印</span>は展開を止めるだけで、 受け手が本文を撃つかは決めない (DR3)</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT3</span><span class="opt-name">受け手のそばに、 撃たない command の閉じた列を足す</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">本文を shell に渡さない受け手の後ろに &amp;&amp; や ; で続く撃たない command (git add・echo など) の閉じた列を足し、 それだけが続く行も本文を読まない。 決め手は分析 (列の中の命令も撃ちうる)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT3">本文を shell に渡さない命令の後ろに続く、 撃たない命令 (git add や echo など) の一覧を足し、 それだけが続く行も本文を読まない案です。 本文を書いてすぐ add する定型も 1 回で通り、 通る形が多い点で勝ります。 けれども、 一覧の中の命令も hook や filter で撃ちえます (git add は設定の clean filter を撃ちます)。 一覧を足すたびに、 撃つか撃たないかの裁きも要ります。 退けました。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>本文を書いてすぐ add する定型も、 1 回の Bash で通る</li>
+<li>受け手だけの条件より、 通る形が多い</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>列の中の命令も hook や filter で撃ちうる (git add は設定の clean filter を撃つ)(DR2・DR3)</li>
+<li>列を足すたびに、 撃つか撃たないかの裁きが要る (DR5)</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT4</span><span class="opt-name">単引用の字を、 全部の頭で字のまま読む</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">単引用の中の字は shell が展開しないので、 頭の語に依らず語の割りに使わない。 決め手は実測 (単引用の字を code として撃つ受け手が在る)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT4">単引用の中の字は shell が展開しないので、 どの命令でも字のまま読む案です。 規則が 1 つで済み、 一覧に無い命令の単引用でも偽の止めが消える点で勝ります。 けれども、 sh -c や python3 -c や awk の単引用の中の $(git push) を通してしまいます (今は止めています)。 頭の命令に依らないので、 単引用の中を shell や code として撃つ命令を見分けません。 退けました。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>規則が 1 つで済み、 data の頭の列を持たない</li>
+<li>列に無い data の命令の単引用でも、 偽陽性が消える</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>sh -c・python3 -c・awk の単引用の中の $(git push) を通す (今は断っている)(DR2)</li>
+<li>頭の語に依らないので、 単引用の字を shell や code として撃つ受け手を見分けない (DR3)</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT5</span><span class="opt-name">包まれた gh を、 公開の動詞の語が見えるときだけ断る</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">包まれた gh は、 後ろに公開の動詞 (create・merge・edit など) の語が見えるときだけ wrapped の印を付け、 見えないときは通す。 決め手は分析 (表の外を通す)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT5">包まれた gh を、 後ろに公開の動詞 (create・merge・edit など) の語が見えるときだけ止め、 見えないときは通す案です。 読むだけの一覧を持たずに済み、 一覧に無い読むだけの動詞も通る点で勝ります。 けれども、 知らない並びや変数に入れた動詞、 gh api の書き込み (--input や -f) を通してしまい、 公開の動詞の一覧が漏れた周に公開の命令が黙って通ります。 退けました。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>読みだけの表を持たずに済む</li>
+<li>表に無い読みだけの動詞も通る</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>知らない並び・変数の動詞・gh api の書き (--input・-f) を通す (DR2・DR3)</li>
+<li>公開の動詞の列が漏れた周に、 公開の命令が黙って通る (DR3)</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT6</span><span class="opt-name">断りの経路に、 読みだけの gh の書き直しの句を足す</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">印の読みは変えず、 解けない形の断りに添える書き直しの字 (断りの経路) に、 読みだけの gh の書き直しの句を足す。 決め手は分析 (経路は全部の断りの字で、 直した後は要らない)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT6">読みは変えずに、 止めたときの断り文の書き直しの案内に、 読むだけの gh の書き直しの句を足す案です。 読み手の code を変えずに済み、 session が断り文から書き直し方を知れる点で勝ります。 けれども、 定型が止まるたびに session が書き直す手間は残ります。 断り文の案内は解けない形の全部の断りが共有する字で、 既存の test の字が 10 か所以上動きます。 退けました。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>読み手の code を変えずに済む</li>
+<li>session が、 書き直しの形を断り文から知る</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>定型が断られるたびに、 session が書き直す手は残る (DR1)</li>
+<li>経路は、 理由が解けない形の全部の断りが共有する字で、 既存の歯の字が 10 か所以上動く (DR5)</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT7</span><span class="opt-name">公開の門の読み手だけで heredoc を読む</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">共有の分割は変えず、 公開の印の読みだけが heredoc の本文を落とす。 決め手は分析 (同じ本文の偽陽性が他の門に残る)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT7">命令を区切る共通の読みは変えず、 公開の門の読み手だけが heredoc の本文を落とす案です。 他の門の読みが変わらず、 直す範囲が公開の門の中で閉じる点で勝ります。 けれども、 同じ本文の tmux kill-server や git reset --hard を tmux や git の見張りが、 本文の bd の行を起票の門が、 今のまま止めます。 heredoc の読み手も 2 つになり、 経路を 1 本にする憲法の条に反します。 退けました。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>他の門の読みが変わらない</li>
+<li>直す範囲が、 公開の module の中で閉じる</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>同じ本文の tmux kill-server と git reset --hard を host-guard の tmux と git の種類が、 本文の bd の行を起票の門が、 今のまま断る (DR1)</li>
+<li>heredoc の読み手が 2 つになる (DR4・C2)</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT8</span><span class="opt-name">data の頭の免除を、 pipe の先の頭だけで取り消す</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">data の頭の segment の出力を pipe で受ける segment の頭が閉じた頭の列に無ければ、 その command の免除を取り消す。 ; と &amp;&amp; の後ろの頭は見ない。 決め手は分析 (; と &amp;&amp; の後ろの頭を見ないので ./f.sh が通る)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT8">字を shell に渡さない命令の出力を pipe で受ける命令だけを見て、 それが一覧に無いときに免除を取り消す案です。 pipe の先の自作の script が撃つ形も閉じ、 ; や &amp;&amp; の後ろの命令を一覧に縛らない点で勝ります。 けれども、 ; や &amp;&amp; の後ろの命令を見ないので、 書いた file を ./f.sh で撃つ形や、 &amp;&amp; の後ろの make -f が通ってしまいます (今は止めています)。 行の全部の命令を見る heredoc の条件と形も揃いません。 退けました。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>pipe の先の自作の script が撃つ形も閉じる</li>
+<li>; と &amp;&amp; の後ろの頭を列に縛らない</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>; と &amp;&amp; の後ろの頭を見ないので、 書いた file を ./f.sh で撃つ形と、 &amp;&amp; の後ろの make -f が通る (今は断っている)(DR2)</li>
+<li>受け手の列 (全ての segment の頭を見る) と形が揃わず、 読みの形が 2 つになる (DR3・DR4)</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT9</span><span class="opt-name">実行者の閉じた列 (denylist) が在るときだけ免除を取り消す</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">同じ command に実行者 (bash・sh・zsh・dash・eval・source・.・xargs と、 -c か - を持つか引数を持たない python3・python) の segment が在るときだけ data の頭の免除を取り消し、 他の頭と並ぶ command は通す。 決め手は分析と orchestrator の裁定 2026-09-30 (列の外の実行者が通る)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT9">字を命令として動かす命令の一覧 (bash・sh・eval・xargs・python3 -c など) を持ち、 それが行に在るときだけ免除を取り消す案です。 git や for と並ぶ行でも免除が効き、 整形の命令の一覧を持たずに済む点で勝ります。 けれども、 一覧の外で字を撃つ命令 (自作の script や make の recipe) が同じ行で撃つ形を新しく通してしまいます (今は止めています)。 撃つ命令は数え切れず、 一覧が漏れた周に撃たれる形が黙って通り、 止める側へ倒す向き (FailClosed) に反します。 分析と orchestrator の裁定で、 行の全部の命令を見る一覧 (allowlist) を選び、 退けました。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>git や for など、 撃たない頭と並ぶ command でも免除が効く</li>
+<li>整形の頭の列を持たずに済む</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>列の外の実行者 (自作の script・make の recipe) が data の字を撃つ形を新しく通す (今は断っている)(DR2・C11.2)</li>
+<li>撃つ頭は開いた集合で、 列が漏れた周に撃たれる形が黙って通る (DR3)</li>
+</ul></div></div>
+</div>
+</div>
+</div>
+<section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの方式を選ぶか</span><h2>選んだ方式と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、 それが要件書のどの要件を支えるかを示します。 読むだけの gh の一覧に当たる包まれた gh は疑いの印を受けず、 本文を shell に渡さない命令しか無い行の、 区切りを引用した heredoc の本文は命令の区切りに入らず、 行の全部の命令が字を動かさない命令の一覧に在り生きた置換が無いときだけ、 単引用の中の字と逆斜線が逃がした字が語の割りに使われません。 FR80 (公開の字面の走査)・FR81 (起票の門)・FR56 (禁じる語列の拒否)・FR72 (見張りの設定の編集の拒否)・FR74 (rm の拒否)・FR76 (台帳の破壊の拒否) への主張で、 NFR4 (決められない形は止める) と NFR5 (hook の時間の予算) を退行させない読みを添えます。</p></section>
+<div class="chapbody">
+<div data-component="adr-decision-panel" id="decision">
+<p class="dec-kick">採用 — OPT1</p>
+<p class="dec-state">門の読み手 SHALL、 外へ出さないと次の閉じた表で言い切れる gh と、 shell が撃たないと次の閉じた列で言い切れる字だけを読みから外し、 1 つでも外れる形は今の読みのまま断る。 (1) 公開の門 SHALL、 頭の語が git でも gh でもない segment の中の gh が、 -R か --repo とその値を読み飛ばした後に読みだけの表の群と動詞 (pr の view・list・status・checks・diff、 issue の view・list・status、 release と gist と repo の view・list、 label の list) を持つか、 api の後ろが対象 1 つ (graphql でない) と読みの flag (-q・--jq・-t・--template・--paginate・--slurp・-i・--include・--silent・--verbose・--cache・--hostname と、 値が大文字の GET ちょうどの -X と --method) だけのとき、 その gh に wrapped の印を付けない。 値を取る読みの flag は空白書きと長い名の = 書きだけを読み、 短い flag の続け書きは知らない flag と読む。 表の外の動詞・変数の動詞・知らない flag・書きの flag (-f・-F・--raw-field・--field・--input・-H・--header)・GET ちょうどでない method を持つ gh が 1 つでも在れば、 今のまま印を付ける。 (2) 共有の分割 SHALL、 command 行の heredoc が全て引用した区切りで、 全ての本文が区切りの行で閉じ、 本文と区切りの行を除いた全ての segment の頭の語が本文を shell に渡さない受け手 (cat・tee と、 heredoc の operator と redirect の外の引数が無いか - 1 つだけの python3・python) で heredoc の operator を持ち、 生きた command 置換と process 置換を持たない周だけ、 本文の行と区切りの行を segment に入れない。 pipe の先・; と &amp;&amp; の後ろ・区切りの後ろの行に command が 1 つでも在れば今の読みのまま。 共有の分割を読む全部の門が同じ読みを受け、 分割の返りの型と呼び手は変えない。 (3) 共有の分割 SHALL 語ごとに、 単引用 ($ 付きの単引用を含む) の中の字と、 引用の外か二重引用の中で逆斜線が逃がした字を撃たない字と印し、 公開の門 SHALL segment の頭の語が data の頭 (echo・grep・egrep・fgrep・cat・tee・jq) の周だけ、 撃たない字の $( と backtick と process 置換を語を割る判じに数えない。 この免除は、 同じ command の全ての segment の頭の語が閉じた頭の列 (data の頭と、 head・tail・wc・uniq・cut・tr と、 cd) に在り、 生きた command 置換と process 置換を command のどこにも持たない周だけ効き、 1 つでも外れれば、 その command の全ての segment で取り消す。 列には字を撃つ option を持たない頭だけを置き、 sed・printf・rg・sort・bd・bdw と他の頭の周は今の割りのまま。 python3 と python の heredoc の本文の中の撃ちと、 受け手だけの行と閉じた頭の列だけの command で file に書いた字を後の呼び出しで撃つ形は、 読みから外れる限界として引き受ける。 印と解けない形の閉じた列と宣言順・判定の順・断りの字と経路・rules 行・記録の形・command guard の分割は変えない。 実装は設計 vessel-hook.md §23 (契約表の行 o・o2)。</p>
+<span class="dec-plain" data-prose-slot="plain" data-slot-id="decision-plain">門の読み手は、 外へ出さないと決まった表で言い切れる gh と、 shell が撃たないと決まった一覧で言い切れる字だけを読みから外し、 1 つでも外れる形は今のまま止めます。 1 つ目に、 公開の門は、 先頭が git でも gh でもない命令の中の gh が、 -R か --repo とその値を読み飛ばした後に読むだけの一覧の群と動詞 (pr の view・list・status・checks・diff、 issue の view・list・status、 release と gist と repo の view・list、 label の list) を持つか、 api の後ろが対象 1 つ (graphql でない) と読むだけの flag だけのとき、 疑いの印 (wrapped) を付けません。 method の値は大文字の GET ちょうどだけを読むだけと見て、 短い flag の続け書き (-XPATCH など) は知らない flag と読みます。 一覧の外の動詞・変数に入れた動詞・知らない flag・書き込みの flag を持つ gh が 1 つでも在れば、 今のまま印を付けます。 2 つ目に、 命令を区切る共通の読みは、 行の heredoc が全て区切りを引用していて本文が閉じ、 本文を除いた全部の命令が本文を shell に渡さない命令 (cat・tee と、 引数が無いか - 1 つだけの python3・python) で、 どの命令も heredoc の記号を持ち、 生きた command 置換も process 置換も持たないときだけ、 本文と区切りの行を命令の区切りに入れません。 pipe の先や ; と &amp;&amp; の後ろ、 区切りの後ろの行に命令が 1 つでも在れば、 今のまま読みます。 この読みは、 共通の読みを使う全部の門に同じく効きます。 3 つ目に、 共通の読みは単引用 ($ 付きの単引用も含む) の中の字と、 引用の外か二重引用の中で逆斜線が逃がした字に「撃たない字」の印を付けます。 公開の門は、 行の全部の命令が字を動かさない命令の一覧 (echo・grep・egrep・fgrep・cat・tee・jq と、 head・tail・wc・uniq・cut・tr と、 cd) に在り、 行のどこにも生きた command 置換と process 置換が無いときだけ、 字を shell に渡さない命令の周の、 その印の付いた $( と backtick と process 置換を疑いの判じに数えません。 一覧の外の命令 (bash・sh・eval・xargs・python3・自作の script・make・git など) が 1 つでも在れば、 行の全部で今のまま読みます。 字を撃つ option を持つ sed・printf・rg・sort・bd・bdw も一覧に入れません。 代わりに、 python3 に渡す本文の中の撃ちと、 受け手だけの行や一覧だけの行で file に書いた字を後の呼び出しで撃つ形は、 門の読みから外れる限界として引き受けます。 印の一覧・判定の順・断りの字・規則の行・記録の形・runner の見張りの読みは変えません。</span>
+<span class="dec-why" data-prose-slot="rationale" data-slot-id="decision-rationale">一覧に当たるときだけ読みを変えるのは、 今の読みが止めている撃たれる形 (bash に渡す heredoc・pipe の先の bash や自作の script・書いた file を同じ行で撃つ形・sh -c や python3 -c や awk の中・sed の e・rg の --pre や printf の -v などの字を撃つ option・process 置換) を止めたままにして、 止まっていた定型を通せるからです。 区切りを引用した heredoc の本文を受け手に依らず読まない案は、 bash に渡す本文の git push を通すので退けました。 引用は展開を止めるだけで、 撃つかどうかは受け手が決めるからです。 単引用の字を全部の命令で字のまま読まないのも同じ理由で、 sh -c や awk は単引用の中を撃ちます。 python3 を、 引数が無いか - 1 つだけのときだけ本文を shell に渡さない命令に数えるのは、 -c や script の path を持つ python3 は本文を shell に渡す program を撃てるからです。 単引用の字の免除を、 行の全部の命令が字を動かさない命令の一覧 (allowlist) に在るときだけ効かせるのは、 字を撃つ命令は数え切れず、 撃つ命令の一覧 (denylist) では一覧の外の自作の script や make が同じ行で撃つ形を通すからで、 heredoc の条件 (行の全部が受け手) と同じ形で止める側へ倒します (C11.2)。 一覧の命令が字を撃つ option を持てば黙って通るので、 一覧には撃つ option を持たないことを確かめた命令だけを入れ (sed・rg・sort・printf・bd・bdw は入れません)、 hook や filter を撃つ git add のような命令は入れません。 python3 に渡す本文の中の撃ちと、 file に書いた字を後の呼び出しで撃つ形は新しく通ります。 どちらも $( を持たない同じ撃ち方 (本文の中の subprocess の git push・書いた script を後で撃つ形) を今も通していて、 門が測っていない所を $( の字と本文の字で偶然止めていただけで、 本 ADR が読む ADR-0078 の線 (sh -c の中は測らない) と §17 の線 (script の file の中は測らない) と同じ所です。 python3 を本文を shell に渡さない命令に置くのは、 python3 に heredoc で script を渡す形が日常の定型で頻度が高いからです。 公開の動詞が見えるときだけ止める案は、 知らない並びや gh api の書き込みを通し、 止める側へ倒す向き (FailClosed) に反します。 heredoc の読みを共通の読みに置くのは、 同じ本文の偽の止めが公開の門のほかに tmux や git の見張りや起票の門にも出ていて、 読み手を 2 つにすると経路を 1 本にする条 (C2) に反するからです。 誤って止めた命令は書き直せば通りますが、 誤って通した公開は取り消せないので、 言い切れない形は撃つ字として読みます。</span>
+<div class="justify-box"><p class="jh">この判断が正当化する要件 (cross-doc 照会 → SRS-SCRIBE2-MVP)</p>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR80" data-justifies-req="FR80" data-justifies-role="claim">FR80</a><span class="justify-role">claim</span><span class="justify-note">FR80 (公開の字面の走査) の、 公開の segment とその中の語の読みの側。 本 ADR は、 読みだけの閉じた表に当たる包まれた gh は外へ出す命令でなく解けない形に数えないこと、 本文を shell に渡さない受け手だけの command 行の区切りを引用した heredoc の本文と、 全ての頭が閉じた頭の列に在り生きた置換を持たない command の data の頭の segment の撃たない字は command の字面でないことを主張する。 判定の順・解けない形の断りの字と代わりの経路・識別子の走査は変えない。 FR80 は字面で解けない形を断る要件で、 撃たない字の読みの細部は設計の層なので、 要件の字は直さない。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR81" data-justifies-req="FR81" data-justifies-role="claim">FR81</a><span class="justify-role">claim</span><span class="justify-note">FR81 (起票の門の 4 つの断り) の、 台帳の書きの字面の読みの側。 本文を shell に渡さない受け手だけの command 行の、 区切りを引用した heredoc の本文の bd と bdw の行は、 道具の呼び出しとして撃たれる台帳の書きでないので、 起票の門はそれを読まないと主張する。 4 つの断りの形と告げる中身は変えない。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR56" data-justifies-req="FR56" data-justifies-role="claim">FR56</a><span class="justify-role">claim</span><span class="justify-note">FR56 (禁じる語列の command の拒否) の、 host-guard の git と tmux の種類が読む語列の側。 同じ本文の行は撃たれる command でないので語列に数えないと主張する。 禁じる語列と断りの形は変えない。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR72" data-justifies-req="FR72" data-justifies-role="claim">FR72</a><span class="justify-role">claim</span><span class="justify-note">FR72 (見張り自身の設定の編集の拒否) の、 Bash の書き込みの語列の側。 同じ本文の行は語列に数えないが、 heredoc の operator の行の redirect の先 (設定の file への &gt;) は今のまま読むと主張する。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR74" data-justifies-req="FR74" data-justifies-role="claim">FR74</a><span class="justify-role">claim</span><span class="justify-note">FR74 (rm の不可逆削除の拒否) の側。 同じ本文の rm の行は撃たれる command でないので対象に数えないと主張する。 守る集合と断りの形は変えない。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR76" data-justifies-req="FR76" data-justifies-role="claim">FR76</a><span class="justify-role">claim</span><span class="justify-note">FR76 (台帳の破壊と素 write の拒否) の側。 同じ本文の bd と bdw の行は撃たれる command でないので、 台帳の破壊の語列と素 write の形に数えないと主張する。 語列と断りの形は変えない。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#NFR4" data-justifies-req="NFR4" data-justifies-role="rationale">NFR4</a><span class="justify-role">rationale</span><span class="justify-note">非退行の読み。 NFR4 (fail-closed) は不正な入力を黙って落とさない。 本 ADR は閉じた表と閉じた列に当たる形だけを通し、 1 つでも外れる形 (閉じない本文・引用しない区切り・受け手の外の segment・引数を持つ python3・生きた command 置換・表の外の動詞・知らない flag・知らない頭・列の外の頭を持つ command) は今の読みのまま断るので、 読めない形を通す向きを持ち込まない。 新しく通る撃ちは、 門が今も測っていない経路 ($( を持たない同じ撃ち方は今も通る) の上に在り、 限界として名指す。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#NFR5" data-justifies-req="NFR5" data-justifies-role="rationale">NFR5</a><span class="justify-role">rationale</span><span class="justify-note">非退行の読み。 NFR5 (hook の予算) は hook の呼び出しに重い I/O を持たせない。 本 ADR の読みは command の字の読みだけで、 git と gh の子 process を足さない。</span></div>
+<p class="justify-tgt">照会先: SRS-SCRIBE2-MVP — SRS: 設計 → 契約 → 実装 → 検証 → land を、 人の手を借りずに 1 本通す器（MVP）</p>
+</div>
+</div>
+</div>
+<section data-component="chapter-deck-band" class="tint-warn"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> 結果 / 良い面とトレードオフ</span><h2>この判断で何が良くなり、 何を引き受けるか</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">この判断で良くなること 4 つと、 代わりに引き受けること 7 つです。 良くなるのは、 CI を待つ定型が通ること、 本文を file に書く定型と python3 に script を渡す定型が全部の門で通ること、 字を動かさない命令だけの行の単引用の中の字で止まらなくなること、 bash や sh -c や同じ行の自作の script や字を撃つ option などで撃たれる形は今のまま止まり断りの字や要件が変わらないことです。 引き受けるのは、 python3 に渡す本文の中の撃ちを新しく通すこと、 cat や echo で file に書いた字を書く時点で読まなくなり後の呼び出しで撃つ形が門の外になること、 一覧の外の命令 (printf・sed・sudo cat・bd など) の heredoc と単引用の字と、 一覧の外の命令と並ぶ字では偽の止めが残ること、 受け手の後ろに命令を 1 つ足した行も今のまま読むこと、 空白を持つ --jq の値は止める側に倒れること、 runner の session の見張りは本文を今のまま見ること、 一覧に無い読むだけの動詞は今のまま止まることです。</p></section>
+<div class="chapbody">
+<div data-component="scope-summary-panel"><div class="scol in"><h3>✓ 良い結果</h3><ul>
+<li data-component="adr-consequence-pos"><span class="b">●</span>CI を待つ定型 (loop と command 置換の中の gh pr view・checks・list、 gh issue view、 gh api の GET) が公開の門を通る</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>cat・tee だけの command 行で本文を file に書く定型と、 引数が無いか - 1 つだけの python3・python に script を渡す定型が、 共有の分割を読む全部の門 (host-guard の 6 種類・起票の門・台帳のグラフ・anchor・merge・live-row) で通る</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>全ての頭が閉じた頭の列に在り生きた置換を持たない command の data の命令 (echo・grep の仲間・cat・tee・jq) の単引用の中の $( と backtick で断られなくなる</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>bash・sh・sh -c・python3 -c・awk・sed の e と、 同じ command の中で data の字を撃つ列の外の頭 (pipe の先の自作の script・./f.sh・make -f・rg の --pre・sort の --compress-program・printf の -v) と process 置換で撃たれる形は今のまま断り、 断りの字・経路・rules 行・記録の形・要件は変わらない</li>
+</ul></div><div class="scol out"><h3>⚖ トレードオフ・代償</h3><ul>
+<li data-component="adr-consequence-neg"><span class="b">●</span>python3 と python に program として渡す heredoc の本文の中の撃ち (os.system に渡す字の中の $( など) を、 本文を読まなくなる全部の門で新しく通す (今は断っている)。 受け手の列に python3 を置くのは、 python3 に heredoc で script を渡す形が session の日常の定型で頻度が高く、 本文の中の os.system と subprocess の撃ちは、 今も測らない script の file の中 (§17 の限界) と同じ所だからで、 $( を持たない subprocess の撃ちは今も通っている。 -c や script の path を持つ python3 は本文を shell に渡す program を撃てるので受け手に数えず、 今のまま本文を読む</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>受け手だけの行 (cat と tee の &gt; file) と閉じた頭の列だけの command (echo の &gt; file) で file に書いた字は、 書く時点で読まなくなり、 後の呼び出しで撃つ形は script の file の中の限界 (§17) へ移る。 .git/hooks の file や shell の rc file へ書く本文も同じ</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>受け手と data の頭の列の外の頭 (sudo cat・command cat・引数を持つ python3・本文を heredoc で渡す bd create) の heredoc と、 printf・bd・bdw・sed の単引用の中の $( と backtick と、 列の外の頭 (git・for など) と並ぶ data の命令の単引用の中の字は今のまま断り、 偽陽性が残る (報告された printf と sed の形はこの判断では直らない・回避は Bash の呼び出しを分けるか、 Write の道具で file に書く)</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>受け手の後ろに撃たない command を 1 つ足しただけの行 (本文を書いてすぐ git add する行) も、 今のまま本文を読む</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>読みだけの api の --jq の値が空白を持つと片が割れて位置の片が増え、 読みだけでない側 (断る側) に倒れる</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>command guard (runner の session と verify 行の検査) の分割は heredoc の本文を今のまま見る</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>表に無い読みだけの動詞は今のまま断る。 表は器の定数で、 足すのは便の仕事になる</li>
+</ul></div></div>
+</div>
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">06</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> 改訂関係と原則 / この判断の位置づけ</span><h2>版の系譜と、 行き着く原則 (照会終端)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-06">この記録が版の系譜のどこに在るかと、 判断が最後に行き着く原則です。 この記録はどの記録も置き換えず、 ADR-0078 (公開の門) の決定を変えずに読みを補います。 ADR-0078 が引き受けた限界 (sh -c の中・alias は測らない) と、 設計 §17 が引き受けた限界 (script の file の中は測らない) の線に、 python3 に渡す本文の中の撃ちと、 受け手だけの行と字を動かさない命令だけの行で file に書いた字を後の呼び出しで撃つ形を、 同じ線の限界として揃えます。 行き着く原則は「門は、 外へ出さないと閉じた表で言い切れる gh と、 shell が撃たないと閉じた列で言い切れる字だけを読みから外し、 言い切れないものは外へ出す命令や撃つ字として読む。 誤って止めた命令は書き直せば通るが、 誤って通した公開は取り消せない」です。</p></section>
+<div class="chapbody">
+<div data-component="adr-supersession">
+<p class="ss-row"><span class="ss-k">改訂状態</span>current</p>
+<p class="ss-row"><span class="ss-k">置き換える ADR</span>なし (新規)</p>
+<p class="ss-row"><span class="ss-k">置き換えられた</span>なし (現行)</p>
+<p class="ss-row">置き換える ADR は無い。 ADR-0078 の決定 (公開の種類・判定の順・解けない形・識別子の走査・限界) は変えず、 公開の segment とその中の語の読みを補う。 ADR-0078 の限界 (sh -c の中・alias は測らない) と設計 vessel-hook.md §17 の限界 (script の file の中は測らない) の線に、 python3 と python の heredoc の本文の中の撃ちと、 受け手だけの行と閉じた頭の列だけの command で file に書いた字を後の呼び出しで撃つ形を、 同じ線の限界として揃える。 §17 の、 割るのは実際に撃たれる command 置換を持つ語だけとする読みは、 本 ADR が字の出所で細かくする。</p>
+</div>
+<div data-component="adr-principle">
+<p class="prin-id">照会終端 — PRIN-GATES-READ-AS-RUN-WHAT-THEY-CANNOT-PROVE-UNRUN</p>
+<p class="prin-text">門は、 外へ出さないと閉じた表で言い切れる gh と、 shell が撃たないと閉じた列で言い切れる字だけを読みから外し、 言い切れないものは外へ出す命令や撃つ字として読む。 誤って止めた命令は書き直せば通るが、 誤って通した公開は取り消せない。</p>
+<p class="prin-note">本 ADR が、 本文を受け手に依らず読まない案・単引用を全部の頭で字のまま読む案・公開の動詞が見えるときだけ断る案・受け手のそばに撃たない command の列を足す案・pipe の先の頭だけで免除を取り消す案・実行者の列で免除を取り消す案を退け、 閉じた表と閉じた列に当たるときだけ読みを変える形を選んだのは、 この原則に行き着く (これ以上は遡らない照会終端)。</p>
+</div>
+</div>
+<section data-component="chapter-deck-band" class="tint-brand"><span class="num">07</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg> 用語集 / この文書で使う専門語</span><h2>本文に出てくる専門語のやさしい説明</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-07">本文に出てくる専門語 8 個を、 やさしい言葉で説明します。</p></section>
+<div class="chapbody">
+<div data-component="glossary-term-table">
+<div class="grow"><div class="gword">共有の分割<span class="en">shared splitter</span></div><div class="gdef">Bash の command を、 引用の外の改行と operator (; や &amp;&amp; や pipe) で segment に切り、 引用を解いた語の列にして返す器の 1 本の読み。 台帳の門の module に在り、 7 か所 (host-guard の判定・起票の門・台帳のグラフの門・anchor の門・merge の門・live-row の門と公開の門が共有する読み手・公開の印の読み) が読む。 command guard の分割は別で、 引用を解かない。</div></div>
+<div class="grow"><div class="gword">撃たない字<span class="en">unexecuted text</span></div><div class="gdef">shell が command として撃たない字。 本 ADR が読みから外すのは、 本文を shell に渡さない受け手だけの command 行の区切りを引用した heredoc の本文と、 全ての頭が閉じた頭の列に在り生きた置換を持たない command の data の頭の segment の、 単引用 ($ 付きの単引用を含む) の中の字と、 引用の外か二重引用の中で逆斜線が逃がした字だけで、 閉じた列で言い切れない字は撃つ字として読む。</div></div>
+<div class="grow"><div class="gword">引用した区切り<span class="en">quoted delimiter</span></div><div class="gdef">heredoc の operator (&lt;&lt; か &lt;&lt;-) の後ろの区切りの語のうち、 単引用・二重引用・逆斜線のどれかを含むもの。 shell は本文の変数と command 置換を展開せずに字のまま受け手へ渡す。 展開を止めるだけで、 受け手が本文を撃つかは決めない。</div></div>
+<div class="grow"><div class="gword">本文を shell に渡さない受け手<span class="en">non-shell sink</span></div><div class="gdef">heredoc の本文を shell の command として撃たずに受け取る命令の閉じた列 cat・tee・python3・python (頭の語の basename)。 cat と tee は本文を字のまま書く。 python3 と python は heredoc の operator と redirect の外の引数が無いか - 1 つだけの周だけ列に入り、 本文を Python の program として撃つ (本文の中の os.system と subprocess の撃ちは限界として測らない)。 -c や script の path を持つ python3 は本文を shell に渡す program を撃てるので入れない。 command 行の全ての segment がこの列の命令で、 他の条件も満たす周だけ、 共有の分割は本文を segment に入れない。</div></div>
+<div class="grow"><div class="gword">data の頭<span class="en">data head</span></div><div class="gdef">単引用の中の字を shell にも他の program にも渡さない命令の閉じた列 echo・grep・egrep・fgrep・cat・tee・jq。 この頭の segment だけ、 公開の門は撃たない字の $( と backtick を語を割る判じに数えない。 同じ command に閉じた頭の列の外の頭か、 生きた置換か process 置換が 1 つでも在れば取り消す。 字を撃つ option や読みを持つ頭 (GNU sed の e・rg の --pre・bash の printf の -v の配列の添字・bd の mail の委譲と edit の $EDITOR・bd へ委ねる bdw) は入れない。</div></div>
+<div class="grow"><div class="gword">閉じた頭の列<span class="en">closed head list</span></div><div class="gdef">data の頭の免除が効くための、 command の全ての segment の頭の語の閉じた列 (allowlist)。 data の頭 (echo・grep・egrep・fgrep・cat・tee・jq) と、 撃たない整形の頭 head・tail・wc・uniq・cut・tr と、 cd から成り、 どの頭も字を撃つ option を持たないことを確かめて入れる (sort は --compress-program があるので入れない)。 列の外の頭 (bash・sh・eval・xargs・python3・自作の script・make・git・for などの予約語) が 1 つでも在れば、 その command の全ての segment で免除を取り消す。 撃つ頭の列 (denylist) は持たない。</div></div>
+<div class="grow"><div class="gword">wrapped の印<span class="en">wrapped mark</span></div><div class="gdef">公開の門の印の 1 つ。 頭の語が git でも gh でもない segment の細かい語に、 git と後ろの push か、 gh と後ろの公開の群の語が在るときに付き、 解けない形として断る (設計 vessel-hook.md §17)。 本 ADR で、 読みだけの閉じた表に当たる gh には付けない。</div></div>
+<div class="grow"><div class="gword">読みだけの閉じた表<span class="en">read-only table</span></div><div class="gdef">外へ何も出さない gh の群と動詞の対の閉じた表 (pr の view・list・status・checks・diff、 issue の view・list・status、 release・gist・repo の view・list、 label の list) と、 api の GET の形 (対象 1 つと読みの flag だけ・method は大文字の GET ちょうど・短い flag の続け書きは知らない flag)。 器の定数で持ち、 表の外は今のまま wrapped の印を受ける。</div></div>
+</div>
+</div>
+</div>
+<footer class="foot" data-component="fidelity-sync-meta"><div class="ft-grid">
+<div class="ft-plain">このページは、大もとの機械データ (正本) から自動で組み立てられています。構造は機械が自動で検査し、内容が元データに忠実かは独立のレビューで確かめます。</div>
+<div data-audience="machine">機械SSoT: <b>ADR-0099.adr.yaml</b> &middot; 生成: <b>2026-09-30 01:15</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
+<div class="tags" data-audience="machine"><span>folio design system</span><span>ADR-pack</span><span>folio engine B1 (instance#2)</span><span>cross-doc 照会</span></div>
+</div></footer>
+<!-- folio:chrome-bottom -->
+<nav class="prevnext" aria-label="前後の文書">
+  <a class="prevnext__prev" href="ADR-0098-credential-tombstones-move-the-group-and-close-the-heartbeat-gate.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">口座の墓標は器が credential の file から 1 本の関数で判じ、 群は今の口座が墓標なら移動の判定の 1 本で移り、 管理 tick は墓標の席に合図を送らずに群の判定へ進む — 知らせは doctor と管理 tick の行の語で持ち、 席へ押し出す口は足さない (ADR-0058 の判定の列・ADR-0026 の credential を読まない句・ADR-0049 と ADR-0066 の移動の契機・ADR-0074 の予約の読みを部分 supersede)</span></a>
+</nav>
+<script>
+(function () {
+  var openedForPrint = [];
+  window.addEventListener('beforeprint', function () {
+    openedForPrint = [];
+    var ds = document.querySelectorAll('details:not([open])');
+    for (var i = 0; i < ds.length; i++) { ds[i].setAttribute('open', ''); openedForPrint.push(ds[i]); }
+  });
+  window.addEventListener('afterprint', function () {
+    for (var i = 0; i < openedForPrint.length; i++) openedForPrint[i].removeAttribute('open');
+    openedForPrint = [];
+  });
+  if (!document.querySelector('[data-audience]')) return;
+  /* 既定 = 人間プレゼン型 (ADR-0040 / rules §11.3): script 経由で初期 class を付与するため
+     no-JS では付かず全文可視に graceful degrade する。 static DOM は全文を保持 (AI/検索/印刷は不変)。 */
+  document.body.classList.add('audience-human');
+  var bar = document.createElement('nav');
+  bar.className = 'audience-toggle';
+  bar.setAttribute('aria-label', '表示対象の切替');
+  var states = [['both', '両方'], ['human', '人間向け'], ['machine', '機械向け']];
+  for (var s = 0; s < states.length; s++) {
+    (function (mode, label) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.setAttribute('aria-pressed', mode === 'human' ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        document.body.classList.remove('audience-human', 'audience-machine');
+        if (mode !== 'both') document.body.classList.add('audience-' + mode);
+        var bs = bar.querySelectorAll('button');
+        for (var j = 0; j < bs.length; j++) bs[j].setAttribute('aria-pressed', bs[j] === b ? 'true' : 'false');
+      });
+      bar.appendChild(b);
+    })(states[s][0], states[s][1]);
+  }
+  var bc = document.querySelector('nav.breadcrumb');
+  if (bc && bc.parentNode) { bc.parentNode.insertBefore(bar, bc.nextSibling); }
+  else { document.body.insertBefore(bar, document.body.firstChild); }
+})();
+</script>
+<!-- /folio:chrome-bottom -->
+</body>
+</html>

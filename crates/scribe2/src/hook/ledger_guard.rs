@@ -63,6 +63,14 @@ const REASON_FILE: &str = "--reason-file";
 const GATE: &str = "gate";
 const RESOLVE: &str = "resolve";
 
+/// update の状態の flag（綴り 2 つ・`=` の形も読む）と、理由を渡せない閉じの値。
+const STATUS: [&str; 2] = ["--status", "-s"];
+const CLOSED: &str = "closed";
+
+/// `epic close-eligible`（bd が自分の字の理由で閉じる口）と、閉じずに数えるだけの flag。
+const CLOSE_ELIGIBLE: &str = "close-eligible";
+const DRY_RUN: &str = "--dry-run";
+
 /// 宣言を読めない repo で close の段に当たった周の記録の語。
 const CLOSE_UNREADABLE: &str = "close-declaration-unreadable";
 
@@ -377,11 +385,32 @@ fn close_stage(
 }
 
 /// 理由を持つ close の口（`close`・別名 `done`・`gate resolve`）か。
-fn is_close(write: &Write) -> bool {
+fn is_reason_close(write: &Write) -> bool {
     matches!(write.subcommand.as_str(), "close" | "done") || (write.subcommand == GATE && write.second() == RESOLVE)
 }
 
-/// close の断りの語（行 l1 の閉じた 4 語・宣言を読めない周は [`CLOSE_UNREADABLE`] に包む）。値は説明の材料。
+/// close の段に当たる書きか（理由を持つ口と、理由を持てない口 [`mouth_of`]）。
+fn is_close(write: &Write) -> bool {
+    is_reason_close(write) || mouth_of(write).is_some()
+}
+
+/// 理由を持てない close の口（行 l2）: update の `--status` / `-s` の値 closed と、bd が自分の字の理由で閉じる `duplicate`・
+/// `supersede`・`epic close-eligible`（`--dry-run` を持つ周は閉じないので通す）。
+fn mouth_of(write: &Write) -> Option<Close> {
+    let sub = write.subcommand.as_str();
+    if sub == UPDATE && write.values_of(&STATUS).any(|value| value == CLOSED) {
+        return Some(Close::StatusClosed);
+    }
+    let dry = write.has(DRY_RUN) && !write.values_of(&[DRY_RUN]).any(|value| value == "false");
+    match (sub, write.second()) {
+        ("duplicate", _) => Some(Close::ImplicitReason("重複 <id>")),
+        ("supersede", _) => Some(Close::ImplicitReason("後継 <id>")),
+        ("epic", CLOSE_ELIGIBLE) if !dry => Some(Close::ImplicitReason("完了")),
+        _ => None,
+    }
+}
+
+/// close の断りの語（行 l1 の閉じた 4 語と行 l2 の 2 語・宣言を読めない周は [`CLOSE_UNREADABLE`] に包む）。値は説明の材料。
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Close {
     /// 理由の値を 1 つも持たないか空。
@@ -392,6 +421,10 @@ enum Close {
     Outside(String),
     /// 読めない形（`--reason-file` の `-`・値なし・開けない file・`$` か backtick の値）。
     Unreadable(String),
+    /// update の `--status` の値が closed（理由を渡せない・行 l2）。
+    StatusClosed,
+    /// bd が自分の字の理由で閉じる口（値は理由の形の書き出し・行 l2）。
+    ImplicitReason(&'static str),
 }
 
 impl Close {
@@ -402,6 +435,8 @@ impl Close {
             Self::Landed => "close-landed",
             Self::Outside(_) => "close-outside-forms",
             Self::Unreadable(_) => "close-reason-unreadable",
+            Self::StatusClosed => "status-closed",
+            Self::ImplicitReason(_) => "implicit-reason",
         }
     }
 
@@ -412,6 +447,10 @@ impl Close {
             Self::Landed => "着地の形は land の終端と pipe retire だけが書く — 止まった終端は原因を直して pipe land --run <run> --terminal-only で撃ち直し、PR の便は pipe retire --run <run>（どちらも名指しの 1 行なら席の決着の権能 settle で撃てる・seat-roles.md §32）".to_owned(),
             Self::Outside(what) => format!("理由が和の外 {what} — 次のどれかで書く: {CLOSE_FORMS}"),
             Self::Unreadable(what) => format!("理由を読めない: {what} — 字のままの --reason '<形>' で渡す"),
+            Self::StatusClosed => format!("update の --status closed は理由を渡せない — bdw close <id> --reason '<形>' で閉じる（形: {CLOSE_FORMS}）"),
+            Self::ImplicitReason(form) => format!(
+                "この口は bd が自分の字の理由で閉じる — bdw close <id> --reason '{form}' で理由つきに閉じる（形: {CLOSE_FORMS}）"
+            ),
         }
     }
 }
@@ -419,6 +458,9 @@ impl Close {
 /// close 1 つの理由の全部（`-r`・`--reason`・`--reason-file` の値を出てきた順に）を読み手に掛け、最初に外れた語を返す。
 /// 理由の値を 1 つも持たない close は [`Close::NoReason`]（`-` で始まる値は flag と読まれ持たない側に倒れる）。
 fn judge_close(write: &Write, prefix: Option<&str>, read: &impl Fn(&str) -> Option<String>) -> Option<Close> {
+    if let Some(found) = mouth_of(write) {
+        return Some(found);
+    }
     let mut seen = false;
     for (flag, value) in &write.values {
         let text = if REASON.contains(&flag.as_str()) {
@@ -1325,6 +1367,73 @@ mod tests {
         assert_eq!(closed("bdw close toy-1 --reason '取り下げ x'", &broken).0, "", "形に合う close は読めない repo でも通る");
         assert_eq!(closed("bdw show toy-1 && sh close.sh", &broken).0, "", "close の segment が無い周は読まない");
         for dir in [&joined, &worktree, &broken] {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    /// 理由を持てない口: `--status` の 4 つの綴り（値 closed）は status-closed、`duplicate`・`supersede`・`epic close-eligible` は
+    /// implicit-reason で次の一手の理由の形を名指す。`--status` の別の値・`--dry-run`・`epic status`・加わらない repo は通る。
+    #[test]
+    fn hook_close_mouth_denies_the_status_and_implicit_reason_forms() {
+        let joined = toy("close-mouth-joins", Some("close-check = true\n"), true);
+        let plain = toy("close-mouth-plain", Some(""), true);
+        let broken = toy("close-mouth-unreadable", Some("close-check = \"yes\"\n"), true);
+        // 埋め込みの rules では bd の直の書きは 6 形の語が先なので、bd の経路は e2e が測る。
+        for client in ["bdw", "scripts/bdw"] {
+            for tail in ["update toy-1 --status closed", "update toy-1 -s closed", "update toy-1 --status=closed", "update toy-1 -s=closed", "update --status closed toy-1 -p 1"] {
+                let line = format!("{client} {tail}");
+                let (word, text) = closed(&line, &joined);
+                assert_eq!(word, "status-closed", "{line}");
+                assert!(text.contains("bdw close <id> --reason '<形>'"), "{line}: {text}");
+                let (word, text) = closed(&line, &broken);
+                assert_eq!(word, "close-declaration-unreadable", "{line}");
+                assert!(text.contains("status-closed"), "{line}: {text}");
+                assert_eq!(closed(&line, &plain).0, "", "{line}: 加わらない repo");
+            }
+        }
+        for dir in [&joined, &plain, &broken] {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
+    /// bd が理由を書く口と、通す近い形（`--status` の別の値・`--dry-run`・`epic status`・読みの subcommand）。
+    #[test]
+    fn hook_close_mouth_denies_the_implicit_reason_forms_and_passes_the_near_ones() {
+        let joined = toy("close-mouth-implicit-joins", Some("close-check = true\n"), true);
+        let plain = toy("close-mouth-implicit-plain", Some(""), true);
+        let broken = toy("close-mouth-implicit-unreadable", Some("close-check = \"yes\"\n"), true);
+        for client in ["bdw", "scripts/bdw"] {
+            for (tail, next) in [
+                ("duplicate toy-1 --of toy-2", "重複 <id>"),
+                ("supersede toy-1 --with toy-2", "後継 <id>"),
+                ("epic close-eligible", "完了"),
+                ("epic close-eligible --dry-run=false", "完了"),
+            ] {
+                let line = format!("{client} {tail}");
+                let (word, text) = closed(&line, &joined);
+                assert_eq!(word, "implicit-reason", "{line}");
+                assert!(text.contains(&format!("bdw close <id> --reason '{next}'")), "{line}: {text}");
+                assert_eq!(closed(&line, &broken).0, "close-declaration-unreadable", "{line}");
+                assert_eq!(closed(&line, &plain).0, "", "{line}: 加わらない repo");
+            }
+            for tail in [
+                "update toy-1 --status pinned",
+                "update toy-1 --status open",
+                "update toy-1 -s in_progress",
+                "update toy-1 --title closed",
+                "epic close-eligible --dry-run",
+                "epic status",
+                "epic",
+                "duplicates",
+                "show toy-1 --status closed",
+                "list --status closed",
+            ] {
+                let line = format!("{client} {tail}");
+                assert_eq!(closed(&line, &joined).0, "", "{line}");
+                assert_eq!(closed(&line, &broken).0, "", "{line}");
+            }
+        }
+        for dir in [&joined, &plain, &broken] {
             let _ = std::fs::remove_dir_all(dir);
         }
     }

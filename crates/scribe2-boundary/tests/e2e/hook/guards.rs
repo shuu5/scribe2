@@ -2679,3 +2679,52 @@ fn hook_close_reason_unreadable_declaration_denies_only_a_form_that_hits() {
     }
     close_done(&[&broken, &joined]);
 }
+
+// ─────────────── 理由を持てない close の口（`s2-07l.738.29`・設計 ledger-form.md §16 行 l2・接頭辞 `hook_close_mouth_`） ───────────────
+
+/// (a) 加わる repo で、`update` の `--status closed` の 4 つの綴りと `duplicate`・`supersede`・`epic close-eligible` の 7 形 × bd と bdw の
+/// 14 本がどれも断られ、語は status-closed・implicit-reason で断り文は理由つきの close を次の一手に持つ (b) 同じ repo で
+/// `update --status pinned`・`epic close-eligible --dry-run`・`epic status` は rc 0 で記録を残さない (c) 宣言の無い repo で (a) の 14 本が
+/// rc 0 で記録を残さない。
+#[test]
+fn hook_close_mouth_denies_the_seven_forms_in_a_joined_repo_and_passes_the_near_ones() {
+    let joined = close_place("joins");
+    let plain = close_place("no-decl");
+    let forms = [
+        ("update toy-1 --status closed", "status-closed", "bdw close <id> --reason '<形>'"),
+        ("update toy-1 -s closed", "status-closed", "bdw close <id> --reason '<形>'"),
+        ("update toy-1 --status=closed", "status-closed", "bdw close <id> --reason '<形>'"),
+        ("update toy-1 -s=closed", "status-closed", "bdw close <id> --reason '<形>'"),
+        ("duplicate toy-1 --of toy-2", "implicit-reason", "bdw close <id> --reason '重複 <id>'"),
+        ("supersede toy-1 --with toy-2", "implicit-reason", "bdw close <id> --reason '後継 <id>'"),
+        ("epic close-eligible", "implicit-reason", "bdw close <id> --reason '完了'"),
+    ];
+    for client in ["bd", "bdw"] {
+        for (tail, reason, next) in forms {
+            let command = format!("{client} {tail}");
+            let text = assert_close_deny(&joined, &command, reason);
+            assert!(text.contains(next), "{command}: 次の一手: {text}");
+            assert_close_pass(&plain, &command);
+        }
+        for tail in ["update toy-1 --status pinned", "epic close-eligible --dry-run", "epic status"] {
+            assert_close_pass(&joined, &format!("{client} {tail}"));
+        }
+    }
+    assert_eq!(ledger_records(&joined.state).len(), 14, "14 本 × 記録 1 行");
+    assert!(ledger_records(&plain.state).is_empty(), "宣言の無い repo は記録なし");
+    close_done(&[&joined, &plain]);
+}
+
+/// 読めない repo では同じ口が close-declaration-unreadable で断られ、断り文が当たった語を名指す。
+#[test]
+fn hook_close_mouth_unreadable_declaration_names_the_hit_word() {
+    let broken = close_place("yes");
+    for client in ["bd", "bdw"] {
+        for (tail, word) in [("update toy-1 --status closed", "status-closed"), ("epic close-eligible", "implicit-reason")] {
+            let text = assert_close_deny(&broken, &format!("{client} {tail}"), "close-declaration-unreadable");
+            assert!(text.contains(word) && text.contains(".vessel.toml"), "{client} {tail}: {text}");
+        }
+        assert_close_pass(&broken, &format!("{client} epic status"));
+    }
+    close_done(&[&broken]);
+}
