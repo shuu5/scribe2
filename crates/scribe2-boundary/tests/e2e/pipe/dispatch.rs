@@ -3392,3 +3392,282 @@ fn pipe_dispatch_floor_wait_reads_the_current_only_for_the_same_sha() {
     assert_eq!(count_of(&listed), format!("{COUNT} total=2 ready=2"), "準備の表に戻る");
     clean(&[&place.repo, &place.state]);
 }
+
+// ───── 未反映の裁定（設計 dispatcher.md §38・契約表の行 am・接頭辞 `pipe_dispatch_unreflected_`）─────
+//
+// 偽の台帳（閉じた問い・metadata の effect・notes の裁定の行）と床の置き場の toy repo（行 a・b を commit・床の検査は rc 0）で、
+// 置き場の `<state>/pipe/unreflected`・doctor の行・`dispatch ls` の理由を測る。裁定 id は `batch:` の形（台帳の接頭辞に依らない）。
+
+/// 台帳の問い 1 件（label `intake:question`・`effect` が在れば metadata の effect・notes は裁定 id ごとの 5 欄の行）。
+fn ruled_question(id: &str, status: &str, effect: Option<&str>, rulings: &[&str]) -> String {
+    let meta = effect.map_or_else(String::new, |found| format!(",\"metadata\":{{\"effect\":\"{found}\"}}"));
+    let notes: Vec<String> = rulings.iter().map(|ruling| format!("{ruling} | {id} | 2026-09-30T00:00Z | chat | 逐語")).collect();
+    format!("{{\"id\":\"{id}\",\"status\":\"{status}\",\"priority\":2,\"labels\":[\"intake:question\"],\"notes\":\"{}\"{meta}}}", notes.join("\\n"))
+}
+
+/// effect が document の閉じた問い 1 件（[`ruled_question`]）。
+fn document_question(id: &str, rulings: &[&str]) -> String {
+    ruled_question(id, "closed", Some("document"), rulings)
+}
+
+/// 台帳の 1 件に notes を足す（`dependencies` の前に置く）。
+fn with_notes(issue: String, notes: &str) -> String {
+    issue.replacen("\"dependencies\"", &format!("\"notes\":\"{notes}\",\"dependencies\""), 1)
+}
+
+/// acceptance が設計 pointer（行 `row`）の後ろの行で `cited` の字を持つ候補。
+fn citing(id: &str, row: &str, cited: &str) -> String {
+    listed(id, "open", 2, &format!("design = {DESIGN_FILE}#{row}\\n{cited}"), &[])
+}
+
+/// 置き場の未反映の file の path。
+fn unreflected_path(place: &FloorPlace) -> std::path::PathBuf {
+    place.state.join("pipe").join("unreflected")
+}
+
+/// 置き場の未反映の file の本文（無ければ空）。
+fn unreflected_text(place: &FloorPlace) -> String {
+    fs::read_to_string(unreflected_path(place)).unwrap_or_default()
+}
+
+/// `doctor --state-dir S` の出力のうち `prefix` で始まる行。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn doctor_lines_with(place: &FloorPlace, prefix: &str) -> Vec<String> {
+    let out = super::bin_cmd().args(["doctor", "--state-dir"]).arg(&place.state).env("PATH", place.path()).output().expect("binary を起動できる");
+    stdout_of(&out).lines().filter(|line| line.starts_with(prefix)).map(str::to_owned).collect()
+}
+
+/// main に file を 1 つ足して commit する（器の便でない commit・引用を載せる）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn commit_file(repo: &Path, name: &str, body: &str) {
+    fs::write(repo.join(name), body).expect("file を書ける");
+    git(repo, &["add", name]);
+    git(repo, &["commit", "-q", "-m", "cite"]);
+}
+
+/// PATH の先頭に置く git の包み（本物の git を撃ち、argv を 1 行ずつ記録する）。記録の file の path を返す。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn git_spy(place: &FloorPlace) -> std::path::PathBuf {
+    let log = place.state.join("git-calls");
+    let real = std::env::var("PATH").unwrap_or_default().split(':').map(|dir| Path::new(dir).join("git")).find(|path| path.is_file()).expect("本物の git を PATH から引ける");
+    script(&place.bin.join("git"), &format!("printf '%s\\n' \"$*\" >> '{}'\nexec '{}' \"$@\"\n", log.display(), real.display()));
+    log
+}
+
+/// 記録した git の呼び出しのうち `grep` の部分命令の本数。
+fn grep_calls(log: &Path) -> usize {
+    fs::read_to_string(log).unwrap_or_default().lines().filter(|line| line.split(' ').any(|word| word == "grep")).count()
+}
+
+/// 未反映の裁定 `batch:r1` を持つ置き場の台帳（問い s2-q.1 と、acceptance が引く候補 s2-toy.1）。
+fn ruled_bd(place: &FloorPlace) -> String {
+    fake_bd(&place.state, &[document_question("s2-q.1", &["batch:r1"]), citing("s2-toy.1", "a", "see batch:r1")])
+}
+
+/// (a)(b) 置き場の列に id が 1 件（1 行の JSON・母集団も同じ）・doctor の行は件数 1 と sha の頭 7 字と id。2 件の周の行は `, ` で区切る。
+#[test]
+fn pipe_dispatch_unreflected_writes_the_place_and_the_doctor_line() {
+    let place = wait_place(FLOOR_CMD, "exit 0");
+    let rules = floor_rules(&place.state, Some(600));
+    let out = wait_round(&place, &rules, &ruled_bd(&place));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "撃った周 1 回: {}", told(&out));
+    let text = unreflected_text(&place);
+    assert_eq!(text.lines().count(), 1, "1 行の JSON: {text:?}");
+    assert!(text.contains("\"unreflected\":[\"batch:r1\"]") && text.contains("\"population\":[\"batch:r1\"]"), "未反映の列と母集団: {text}");
+    assert!(text.contains(&format!("\"sha\":\"{}\"", place.sha())), "main の先端の sha: {text}");
+    assert_eq!(doctor_lines_with(&place, "unreflected="), [format!("unreflected=1 sha={} ids=batch:r1", head7(&place.sha()))], "doctor の行");
+    let two = fake_bd(&place.state, &[document_question("s2-q.1", &["batch:r1"]), document_question("s2-q.2", &["batch:r2"])]);
+    wait_round(&place, &rules, &two);
+    assert_eq!(doctor_lines_with(&place, "unreflected="), [format!("unreflected=2 sha={} ids=batch:r1, batch:r2", head7(&place.sha()))], "2 件の周の行（2 周目）");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (c)(d) acceptance・notes・blocks の 3 本が `unreflected-ruling:<id>` で待ち（3/3）、関わらない 1 本は同じ周に起きる。
+#[test]
+fn pipe_dispatch_unreflected_holds_the_three_citing_forms_and_spares_the_rest() {
+    let place = wait_place(FLOOR_CMD, "exit 0");
+    let (rules, want) = (floor_rules(&place.state, Some(600)), "unreflected-ruling:batch:r1");
+    let blocks = listed("s2-toy.3", "open", 2, &format!("design = {DESIGN_FILE}#a"), &[("s2-q.1", "blocks")]);
+    let issues = [
+        document_question("s2-q.1", &["batch:r1"]),
+        citing("s2-toy.1", "a", "see batch:r1"),
+        with_notes(issue("s2-toy.2", 2, "a"), "see batch:r1"),
+        blocks,
+        issue("s2-toy.4", 2, "b"),
+    ];
+    let bd = fake_bd(&place.state, &issues);
+    let listed = wait_ls(&place, &rules, &bd);
+    for bead in ["s2-toy.1", "s2-toy.2", "s2-toy.3"] {
+        assert_eq!(reason_of(&listed, bead), want, "{bead}（{}）", told(&listed));
+    }
+    assert_eq!(reason_of(&listed, "s2-toy.4"), "-", "関わらない候補は待たない（{}）", told(&listed));
+    assert_eq!(count_of(&listed), format!("{COUNT} total=4 ready=1"), "母集団 4 件のうち準備の表は 1 本");
+    let out = wait_round(&place, &rules, &bd);
+    assert_eq!(wait_dispatch(&out), "dispatch=started:1,resumed:0,waiting:3", "関わらない 1 本だけ起きる（{}）", told(&out));
+    assert_eq!(created(&place.state, &["s2-toy.4"], 1), 1, "関わらない便の RunCreated が 1 件");
+    assert_eq!(created(&place.state, &["s2-toy.1", "s2-toy.2", "s2-toy.3"], 0), 0, "待った便は起きない");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (e) 器の便でない commit で引用を main に載せた次の周に、待ち・doctor・列が消える（3/3）。置き場の file は在り、未反映の列が空。
+#[test]
+fn pipe_dispatch_unreflected_clears_the_wait_the_doctor_line_and_the_column_once_main_cites() {
+    let place = wait_place(FLOOR_CMD, "exit 0");
+    let (rules, bd) = (floor_rules(&place.state, Some(600)), ruled_bd(&place));
+    wait_round(&place, &rules, &bd);
+    let held = wait_ls(&place, &rules, &bd);
+    assert_eq!(reason_of(&held, "s2-toy.1"), "unreflected-ruling:batch:r1", "前提: 引用が無い周は待つ（{}）", told(&held));
+    assert_eq!(doctor_lines_with(&place, "unreflected=").len(), 1, "前提: doctor の行が 1 本");
+    commit_file(&place.repo, "notes.md", "裁定 batch:r1 を写した\n");
+    let free = wait_ls(&place, &rules, &bd);
+    assert_eq!(reason_of(&free, "s2-toy.1"), "-", "待ちが消える（{}）", told(&free));
+    let out = wait_round(&place, &rules, &bd);
+    assert_eq!(wait_dispatch(&out), "dispatch=started:1,resumed:0,waiting:0", "次の周に起きる（{}）", told(&out));
+    assert_eq!(doctor_lines_with(&place, "unreflected="), Vec::<String>::new(), "doctor の行が消える");
+    let text = unreflected_text(&place);
+    assert!(text.contains("\"unreflected\":[]") && text.contains("\"population\":[\"batch:r1\"]"), "file は在り未反映の列が空: {text}");
+    assert_eq!(created(&place.state, &["s2-toy.1"], 1), 1, "起きた便の RunCreated が 1 件");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (f) 数えない 3 形: effect が operation の閉じた問い・metadata を持たない閉じた問い・effect が document の開いた問いの裁定 id は、
+/// 置き場の列に入らず（母集団も空）、その id を引く候補も待たない。
+#[test]
+fn pipe_dispatch_unreflected_does_not_count_operation_absent_or_open_questions() {
+    let place = wait_place(FLOOR_CMD, "exit 0");
+    let rules = floor_rules(&place.state, Some(600));
+    let issues = [
+        ruled_question("s2-q.1", "closed", Some("operation"), &["batch:o1"]),
+        ruled_question("s2-q.2", "closed", None, &["batch:n1"]),
+        ruled_question("s2-q.3", "open", Some("document"), &["batch:p1"]),
+        citing("s2-toy.1", "a", "see batch:o1 batch:n1 batch:p1"),
+    ];
+    let bd = fake_bd(&place.state, &issues);
+    let listed = wait_ls(&place, &rules, &bd);
+    assert_eq!(reason_of(&listed, "s2-toy.1"), "-", "数えない id を引く候補は待たない（{}）", told(&listed));
+    let out = wait_round(&place, &rules, &bd);
+    assert_eq!(wait_dispatch(&out), "dispatch=started:1,resumed:0,waiting:0", "その候補は起きる（{}）", told(&out));
+    let text = unreflected_text(&place);
+    assert!(text.contains("\"population\":[]") && text.contains("\"unreflected\":[]"), "0 件も空の列を書く（3 形とも数えない）: {text}");
+    assert_eq!(created(&place.state, &["s2-toy.1"], 1), 1, "起きた便の RunCreated が 1 件");
+    assert_eq!(doctor_lines_with(&place, "unreflected="), Vec::<String>::new(), "0 件の周は doctor の行が無い");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (g) ruling-check の宣言が無い repo でも、false の repo でも同じに数える。
+#[test]
+fn pipe_dispatch_unreflected_counts_the_same_without_a_ruling_check() {
+    for line in [None, Some("ruling-check = false")] {
+        let place = wait_place(FLOOR_CMD, "exit 0");
+        if let Some(line) = line {
+            let mut text = fs::read_to_string(place.repo.join(".vessel.toml")).unwrap_or_default();
+            text.push_str(&format!("{line}\n"));
+            fs::write(place.repo.join(".vessel.toml"), text).unwrap_or_else(|err| panic!("宣言を書ける: {err}"));
+            git(&place.repo, &["add", "-f", ".vessel.toml"]);
+            git(&place.repo, &["commit", "-q", "-m", "ruling-check-decl"]);
+        }
+        let declared = fs::read_to_string(place.repo.join(".vessel.toml")).unwrap_or_default();
+        assert_eq!(declared.contains("ruling-check = false"), line.is_some(), "前提: 宣言の形 {line:?}");
+        assert!(!declared.contains("ruling-check = true"), "true の宣言は無い");
+        wait_round(&place, &floor_rules(&place.state, Some(600)), &ruled_bd(&place));
+        assert!(unreflected_text(&place).contains("\"unreflected\":[\"batch:r1\"]"), "{line:?}: 数える: {}", unreflected_text(&place));
+        clean(&[&place.repo, &place.state]);
+    }
+}
+
+/// (h) 読み直さない: git の包みで、sha と母集団が同じ 2 周目は `grep` 0 回・main に commit を足した 3 周目は 1 回以上・main を動かさず
+/// 台帳に effect が document の問いを 1 件新しく閉じた 4 周目も 1 回以上でその id が未反映の列に入る（鍵を sha だけにする実装を落とす）。
+#[test]
+fn pipe_dispatch_unreflected_does_not_reread_the_tree_for_the_same_sha_and_population() {
+    let place = wait_place(FLOOR_CMD, "exit 0");
+    let log = git_spy(&place);
+    let (rules, bd) = (floor_rules(&place.state, Some(600)), ruled_bd(&place));
+    wait_round(&place, &rules, &bd);
+    assert!(grep_calls(&log) >= 1, "1 周目は追跡された file を読む: {}", fs::read_to_string(&log).unwrap_or_default());
+    fs::write(&log, "").unwrap_or_else(|err| panic!("記録を空にできる: {err}"));
+    wait_round(&place, &rules, &bd);
+    assert_eq!(grep_calls(&log), 0, "sha と母集団が同じ 2 周目は読み直さない: {}", fs::read_to_string(&log).unwrap_or_default());
+    assert!(unreflected_text(&place).contains("\"unreflected\":[\"batch:r1\"]"), "未反映の列は引き継ぐ: {}", unreflected_text(&place));
+    advance(&place.repo);
+    wait_round(&place, &rules, &bd);
+    assert!(grep_calls(&log) >= 1, "main が進んだ 3 周目は読み直す");
+    fs::write(&log, "").unwrap_or_else(|err| panic!("記録を空にできる: {err}"));
+    let grown = fake_bd(&place.state, &[document_question("s2-q.1", &["batch:r1"]), document_question("s2-q.2", &["batch:r2"])]);
+    wait_round(&place, &rules, &grown);
+    assert!(grep_calls(&log) >= 1, "母集団だけが変わった 4 周目も読み直す");
+    assert!(unreflected_text(&place).contains("\"unreflected\":[\"batch:r1\",\"batch:r2\"]"), "新しい問いの id が未反映の列に入る: {}", unreflected_text(&place));
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (l) main の先端: 別の branch を checkout した toy repo で、その branch の file だけが id を引き main の先端は引かない周に、id は未反映の列に入る
+/// （HEAD を数える実装を落とす）。main をその branch まで進めた周は列が空になる（対）。
+#[test]
+fn pipe_dispatch_unreflected_counts_the_tip_of_main_not_the_checked_out_head() {
+    let place = wait_place(FLOOR_CMD, "exit 0");
+    git(&place.repo, &["checkout", "-q", "-b", "side"]);
+    commit_file(&place.repo, "side.md", "裁定 batch:r1 を写した\n");
+    let (rules, bd) = (floor_rules(&place.state, Some(600)), ruled_bd(&place));
+    wait_round(&place, &rules, &bd);
+    assert!(unreflected_text(&place).contains("\"unreflected\":[\"batch:r1\"]"), "HEAD の branch だけが引く id は未反映: {}", unreflected_text(&place));
+    let held = wait_ls(&place, &rules, &bd);
+    assert_eq!(reason_of(&held, "s2-toy.1"), "unreflected-ruling:batch:r1", "待つ（{}）", told(&held));
+    git(&place.repo, &["checkout", "-q", "main"]);
+    git(&place.repo, &["merge", "-q", "--ff-only", "side"]);
+    wait_round(&place, &rules, &bd);
+    assert!(unreflected_text(&place).contains("\"unreflected\":[]"), "main が引いた周は空: {}", unreflected_text(&place));
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (i) 観測の口: `dispatch ls` だけを撃った置き場に unreflected の file が無く、同じ候補の理由は `unreflected-ruling:<id>`（2 回撃っても同じ）。
+#[test]
+fn pipe_dispatch_unreflected_the_observing_door_judges_but_never_writes() {
+    let place = wait_place(FLOOR_CMD, "exit 0");
+    let (rules, bd) = (floor_rules(&place.state, Some(600)), ruled_bd(&place));
+    for round in 1..=2 {
+        let listed = wait_ls(&place, &rules, &bd);
+        assert_eq!(reason_of(&listed, "s2-toy.1"), "unreflected-ruling:batch:r1", "{round} 回目: 同じ判定（{}）", told(&listed));
+        assert!(!unreflected_path(&place).exists(), "{round} 回目: 観測の口は file を書かない");
+    }
+    assert_eq!(doctor_lines_with(&place, "unreflected="), Vec::<String>::new(), "file の無い置き場は doctor の行が無い");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (j) 複数の id と床の待ち: 未反映の 2 つの id を acceptance で引く候補の理由は、未反映の列の順で最初の id（acceptance の字の順を逆に置く）。
+/// 床の検査が不合格の周は、同じ候補の理由が `floor:<rc>` のまま。
+#[test]
+fn pipe_dispatch_unreflected_names_the_first_id_of_the_column_and_yields_to_the_floor() {
+    for (body, want) in [("exit 0", "unreflected-ruling:batch:r1"), ("exit 1", "floor:1")] {
+        let place = wait_place(FLOOR_CMD, body);
+        let rules = floor_rules(&place.state, Some(600));
+        let issues = [document_question("s2-q.1", &["batch:r2", "batch:r1"]), citing("s2-toy.1", "a", "see batch:r2 then batch:r1")];
+        let bd = fake_bd(&place.state, &issues);
+        wait_round(&place, &rules, &bd);
+        let listed = wait_ls(&place, &rules, &bd);
+        assert_eq!(reason_of(&listed, "s2-toy.1"), want, "{body}（{}）", told(&listed));
+        clean(&[&place.repo, &place.state]);
+    }
+}
+
+/// (k) 読めない file: 置き場の file を形の合わない字で上書きした後の doctor の行は `unreflected=unreadable`。file の無い置き場と 0 件の置き場の
+/// doctor の出力は `unreflected=` で始まる行を持たない。
+#[test]
+fn pipe_dispatch_unreflected_names_an_unreadable_file_and_stays_silent_without_one() {
+    let place = wait_place(FLOOR_CMD, "exit 0");
+    assert_eq!(doctor_lines_with(&place, "unreflected="), Vec::<String>::new(), "file の無い置き場は行を出さない");
+    let rules = floor_rules(&place.state, Some(600));
+    wait_round(&place, &rules, &fake_bd(&place.state, &[]));
+    assert!(unreflected_path(&place).exists(), "0 件の周も file を書く");
+    assert_eq!(doctor_lines_with(&place, "unreflected="), Vec::<String>::new(), "0 件の周は行を出さない");
+    fs::write(unreflected_path(&place), "not json\n").unwrap_or_else(|err| panic!("file を上書きできる: {err}"));
+    assert_eq!(doctor_lines_with(&place, "unreflected="), ["unreflected=unreadable"], "読めない file");
+    clean(&[&place.repo, &place.state]);
+}

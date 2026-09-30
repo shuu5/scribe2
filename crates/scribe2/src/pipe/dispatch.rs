@@ -22,6 +22,7 @@ use crate::cli_outcome::Outcome;
 use crate::fleet::store;
 use crate::fleet::{replay, Event, EventKind, Mark, Stage, State, SCHEMA, STAGES};
 use crate::invocation::Invocation;
+use crate::ledger::form::is_question;
 use crate::name::NAME;
 use crate::rules::manifest::Manifest;
 use crate::seat::ledger;
@@ -56,6 +57,9 @@ pub mod floor;
 /// memo の引き金の満ちを判じる行と審査の置き場の形・読み（設計 §40・契約表の行 ao）。
 pub mod memo;
 
+/// 未反映の裁定の判定と置き場の file・読み手（設計 §38・契約表の行 am）。
+pub mod unreflected;
+
 use candidates::{entry_of, is_input, marks_of, settle, tools};
 
 /// 台帳の閉じた status の字面（依存が閉じたかの判定が読む）。
@@ -63,6 +67,9 @@ const CLOSED: &str = "closed";
 
 /// 列の入力になる status の字面（`in_progress` の bead は既に走っている便が持つ）。
 const OPEN: &str = "open";
+
+/// 問いの metadata の effect の字（文書へ写すべき裁定・設計 §38 約束 1）。
+const EFFECT_DOCUMENT: &str = "document";
 
 /// 順序を決める依存の種別（`parent-child` は所属であって順序ではない・`.beads/PRIME.md` R2）。
 const BLOCKS: &str = "blocks";
@@ -92,7 +99,7 @@ const LAUNCH_LOG: [&str; 2] = ["pipe", "launch.log"];
 
 /// [`WaitReason`] の全 variant の名（宣言順・`enum-slices` が集合完全性を測る）。
 pub const WAIT_REASONS: &[&str] =
-    &["dependency", "overlap", "admission", "host-busy", "hold", "launched", "settled", "no-design-pointer", "floor"];
+    &["dependency", "overlap", "admission", "host-busy", "hold", "launched", "settled", "no-design-pointer", "unreflected-ruling", "floor"];
 
 /// 列に載ったのに起こさない理由（**閉じた型**・設計 §3 の表）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -145,6 +152,12 @@ pub enum WaitReason {
     },
     /// acceptance に設計 pointer の行が無い。
     NoDesignPointer,
+    /// 未反映の裁定（effect が document の閉じた問いの裁定 id で main の先端が引かないもの）を引く・その問いへ blocks の候補が待つ
+    /// （値は未反映の列の順で最初の id・設計 §38・行 am）。
+    UnreflectedRuling {
+        /// 待たせる未反映の裁定 id。
+        id: String,
+    },
     /// 床の検査が不合格の間、介入 `first` の印の無い候補が待つ（値は今の判定・設計 §35・行 aj）。
     Floor(floor::Judged),
 }
@@ -161,6 +174,7 @@ impl WaitReason {
             Self::Launched { .. } => "launched",
             Self::Settled { .. } => "settled",
             Self::NoDesignPointer => "no-design-pointer",
+            Self::UnreflectedRuling { .. } => "unreflected-ruling",
             Self::Floor(_) => "floor",
         }
     }
@@ -173,6 +187,7 @@ impl WaitReason {
             Self::Overlap { ref with, ref files } => format!("{name}:{with}/{}", files.len()),
             Self::Admission { reason } => format!("{name}:{reason}"),
             Self::Hold { ref since } | Self::Launched { ref since } => format!("{name}:{since}"),
+            Self::UnreflectedRuling { ref id } => format!("{name}:{id}"),
             Self::Settled { ref sha, stage } => format!("{name}:{sha}/{}", stage.as_str()),
             Self::Floor(ref found) => format!("{name}:{}", found.rc.map_or_else(|| found.word.as_str().to_owned(), |rc| rc.to_string())),
             Self::HostBusy | Self::NoDesignPointer => name.to_owned(),
@@ -531,6 +546,8 @@ struct Read {
     materials: Result<Materials, Denial>,
     /// 周が読んだ event の列（event log を読めない周は `None`・断りの記帳が同じ 1 回を借りる・設計 §32）。
     events: Option<Vec<Event>>,
+    /// 未反映の裁定の判定（起こす側の周が置き場の file に書く・読めない周は `None`・設計 §38）。
+    unreflected: Option<unreflected::Judged>,
 }
 
 /// 列を 1 周して読みも返す（[`turn`] の本体・台帳を読めない周は読みが `None`）。
@@ -551,6 +568,8 @@ fn measure(input: &Input<'_>) -> (Turn, Option<Read>) {
     let unreadable = read.is_err();
     let events = read.unwrap_or_default();
     let marks = marks_of(&events);
+    let sha = git_line(input.repo, &["rev-parse", MAIN_REF]);
+    let unreflected = sha.as_deref().and_then(|sha| unreflected_of(input, sha, &issues));
     let (mut turn, materials, events) = {
         let ledger = Ledger {
             marks: marks.order,
@@ -561,15 +580,19 @@ fn measure(input: &Input<'_>) -> (Turn, Option<Read>) {
         };
         let mut ready: BTreeMap<String, (Pointer, Contract)> = BTreeMap::new();
         let mut candidates: Vec<Candidate> = Vec::new();
-        let floor = git_line(input.repo, &["rev-parse", MAIN_REF])
-            .and_then(|sha| floor::judgement(input.state_dir, &sha))
-            .filter(|found| found.word != floor::Word::Pass);
+        let floor = sha.as_deref().and_then(|sha| floor::judgement(input.state_dir, sha)).filter(|found| found.word != floor::Word::Pass);
         for issue in issues.iter().filter(|issue| is_input(issue)) {
             let (mut candidate, mut found) = entry_of(input, issue, &ledger);
             // 床の検査が不合格の周は、`first` の印・起こした事実・終端の記録のどれも持たない候補を準備の表から外して待たせる（設計 §35 約束 2）。
             let kept = matches!(candidate.reason, Some(WaitReason::Launched { .. } | WaitReason::Settled { .. }));
             if let (Some(judged), false, false) = (&floor, kept, candidate.mark == Some(Mark::First)) {
                 (candidate.reason, found) = (Some(WaitReason::Floor(judged.clone())), None);
+            }
+            // 未反映の裁定を引く・その問いへ blocks の候補は、床の待ちと起こした事実・終端の記録でない限り待たせる（設計 §38 約束 4）。
+            let floored = matches!(candidate.reason, Some(WaitReason::Floor(_)));
+            let wanted = unreflected.as_ref().and_then(|judged| judged.reason_of(&candidate.bead));
+            if let (Some(id), false, false) = (wanted, kept, floored) {
+                (candidate.reason, found) = (Some(WaitReason::UnreflectedRuling { id: id.to_owned() }), None);
             }
             if let Some(entry) = found {
                 ready.insert(candidate.bead.clone(), entry);
@@ -582,7 +605,27 @@ fn measure(input: &Input<'_>) -> (Turn, Option<Read>) {
     if !turn.launches.is_empty() && host_busy(input.manifest) {
         hold_for_host(&mut turn);
     }
-    (turn, Some(Read { issues, materials, events: (!unreadable).then_some(events) }))
+    (turn, Some(Read { issues, materials, events: (!unreadable).then_some(events), unreflected }))
+}
+
+/// 未反映の裁定の判定（main の先端の sha と追跡された file を読めない周は `None`＝待たせない・file は書かない・設計 §38）。
+/// 母集団は閉じた問い（effect = document）、関わりを測るのは閉じていない問い以外の bead。
+fn unreflected_of(input: &Input<'_>, sha: &str, issues: &[ledger::Issue]) -> Option<unreflected::Judged> {
+    let asked: Vec<unreflected::Question<'_>> = issues
+        .iter()
+        .filter(|issue| issue.status == CLOSED && issue.effect == EFFECT_DOCUMENT && is_question(issue))
+        .map(|issue| unreflected::Question { id: &issue.id, notes: &issue.notes })
+        .collect();
+    let beads: Vec<unreflected::Bead<'_>> = issues
+        .iter()
+        .filter(|issue| issue.status != CLOSED && !is_question(issue))
+        .map(|issue| unreflected::Bead {
+            id: &issue.id,
+            text: format!("{}\n{}", issue.acceptance, issue.notes),
+            blocks: issue.deps.iter().filter(|dep| dep.kind == BLOCKS).map(|dep| dep.on.as_str()).collect(),
+        })
+        .collect();
+    unreflected::judge(input.repo, input.state_dir, sha, &asked, &beads)
 }
 
 /// 器の健康の遮断器が「待つ」を返すか（**gate と同じ 1 関数**・設計 §18・C2）。
@@ -641,6 +684,10 @@ pub fn fire(input: &Input<'_>) -> Turn {
         return unmeasured(Unmeasured::NoRunner);
     }
     let (mut turn, read) = measure(input);
+    // 未反映の裁定の置き場の file は起こす側の周だけが上書きする（0 件の周も空の列・観測の口は書かない・設計 §38 約束 3）。
+    if let Some(found) = read.as_ref().and_then(|found| found.unreflected.as_ref()) {
+        unreflected::write(input.state_dir, found);
+    }
     // **測れなかった周は 1 つも動かさない**（起こすのも起こし直すのも同じ 1 周の中の手・fail-closed）。
     // 起こし直しは台帳を読まないが、列を 1 周として成立させられない周に片方だけ動かすと、
     // `dispatch=unmeasured` の行が「何もしなかった」を意味しなくなる（C10）。
@@ -1283,6 +1330,7 @@ mod tests {
     }
 
     // flip-check: retroactive s2-07l.738.37.2
+    // flip-check: retroactive s2-07l.738.37.5
     /// 理由の名は [`WAIT_REASONS`] と 1 対 1 で、値を持つ variant は値も描く（`dispatch ls` の `reason=`）。
     #[test]
     fn pipe_dispatch_wait_reasons_render_the_name_and_the_value() {
@@ -1295,6 +1343,7 @@ mod tests {
             WaitReason::Launched { since: "t2".to_owned() },
             WaitReason::Settled { sha: "abc".to_owned(), stage: Stage::Landed },
             WaitReason::NoDesignPointer,
+            WaitReason::UnreflectedRuling { id: "s2-q:20260930T0000Z-1".to_owned() },
             WaitReason::Floor(floor_judged(floor::Word::Fail, Some(2), None, "")),
             WaitReason::Floor(floor_judged(floor::Word::Unfireable, None, Some("path"), "")),
             WaitReason::Floor(floor_judged(floor::Word::Timeout, None, None, "")),
@@ -1314,11 +1363,12 @@ mod tests {
                 "launched:t2",
                 "settled:abc/Landed",
                 "no-design-pointer",
+                "unreflected-ruling:s2-q:20260930T0000Z-1",
                 "floor:2",
                 "floor:unfireable",
                 "floor:timeout",
             ],
-            "値を持つ 6 件は値も描き、床は 3 形（rc・unfireable・timeout）"
+            "値を持つ 7 件は値も描き、床は 3 形（rc・unfireable・timeout）"
         );
     }
 

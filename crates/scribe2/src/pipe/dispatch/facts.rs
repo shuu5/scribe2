@@ -12,7 +12,7 @@
 use super::super::cli::live;
 use super::super::current;
 use super::super::refuse::normalize;
-use super::{floor, Turn, WaitReason};
+use super::{floor, unreflected, Turn, WaitReason};
 use crate::fleet::epoch_of;
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -67,6 +67,8 @@ pub(crate) struct Facts {
     pub(crate) held: Option<Fact<Held>>,
     /// 事前審査の本数（置き場に事前審査の dir が無ければ `None`＝`precheck=` を出さない）。
     pub(crate) precheck: Option<Precheck>,
+    /// 未反映の裁定の件数（置き場の file だけから読む・0 件と file の無い周と読めない周は 0・合図の行には出さず alarm の語だけに出る・設計 §38 約束 7）。
+    pub(crate) unreflected: usize,
     /// 床の検査の今の判定の語（fail / unfireable / timeout の周だけ・合図の行には出さず alarm の語だけに出る・設計 §35 約束 4）。
     pub(crate) floor: Option<floor::Word>,
 }
@@ -77,15 +79,16 @@ pub(crate) struct Facts {
 pub(crate) fn facts(state_dir: &Path, turn: Option<&Turn>, now: u64) -> Facts {
     let (held, precheck) = (turn.map(held_of), super::bundle::tally(state_dir));
     let floor = floor::current(state_dir).map(|found| found.word).filter(|word| *word != floor::Word::Pass);
+    let unreflected = unreflected::count(state_dir);
     let Ok(state) = current(state_dir) else {
-        return Facts { live: Fact::Unmeasured, idle: Fact::Unmeasured, held, precheck, floor };
+        return Facts { live: Fact::Unmeasured, idle: Fact::Unmeasured, held, precheck, unreflected, floor };
     };
     let mut count = 0;
     for (id, run) in &state.runs {
         match live(state_dir, id, run.stage) {
             Some(true) => count += 1,
             Some(false) => {}
-            None => return Facts { live: Fact::Unmeasured, idle: Fact::Unmeasured, held, precheck, floor },
+            None => return Facts { live: Fact::Unmeasured, idle: Fact::Unmeasured, held, precheck, unreflected, floor },
         }
     }
     let idle = if count > 0 || state.runs.is_empty() {
@@ -97,7 +100,7 @@ pub(crate) fn facts(state_dir: &Path, turn: Option<&Turn>, now: u64) -> Facts {
             None => Fact::Unmeasured,
         }
     };
-    Facts { live: Fact::Value(count), idle, held, precheck, floor }
+    Facts { live: Fact::Value(count), idle, held, precheck, unreflected, floor }
 }
 
 /// 列の結果の候補のうち理由が今の `Overlap` の本数と、その交差の file 名。台帳を読めなかった周は測れない。

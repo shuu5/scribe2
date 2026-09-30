@@ -308,19 +308,25 @@ struct Population {
     cites: BTreeSet<(String, Cite)>,
 }
 
-/// HEAD の tree を `git grep -I` で読み、引用を拾う（粗い候補の行を `git grep` が選び、[`scan`] が拾う）。
-fn population(repo: &Path, prefix: Option<&str>) -> Result<Population, Reason> {
-    let listed = git_run(repo, &strings(["grep", "-I", "-l", "-z", "-e", "", HEAD]), true).ok_or(Reason::Git)?;
+/// `rev` の tree を `git grep -I` で読み、引用を拾う（粗い候補の行を `git grep` が選び、[`scan`] が拾う）。
+fn population(repo: &Path, rev: &str, prefix: Option<&str>) -> Result<Population, Reason> {
+    let listed = git_run(repo, &strings(["grep", "-I", "-l", "-z", "-e", "", rev]), true).ok_or(Reason::Git)?;
     let files = listed.split('\0').filter(|name| !name.is_empty()).count();
     let mut args = strings(["grep", "-I", "-F", "-z"]);
     let lead = prefix.map(|found| format!("{found}-"));
     for word in [BATCH, POLICY, USER].into_iter().chain(lead.as_deref()) {
         args.extend([String::from("-e"), word.to_owned()]);
     }
-    args.push(HEAD.to_owned());
+    args.push(rev.to_owned());
     let out = git_run(repo, &args, true).ok_or(Reason::Git)?;
-    let cites = grep_hits(&out, HEAD).flat_map(|(path, text)| scan(text, prefix).into_iter().map(move |cite| (path.clone(), cite))).collect();
+    let cites = grep_hits(&out, rev).flat_map(|(path, text)| scan(text, prefix).into_iter().map(move |cite| (path.clone(), cite))).collect();
     Ok(Population { files, cites })
+}
+
+/// `rev`（main の先端の sha など）の追跡された file が引く（path・引用）の集合（[`population`] の 1 回・ruling-check の有無に依らず、
+/// fixtures も外さない）。読めない周（git が落ちる）は `Err`（未反映の判定が読めない側へ倒す）。
+pub(crate) fn cited_at(repo: &Path, rev: &str, prefix: Option<&str>) -> Result<BTreeSet<(String, Cite)>, Reason> {
+    population(repo, rev, prefix).map(|seen| seen.cites)
 }
 
 /// doctor の行が出す数（母集団と、解けない引用と、線より前の時刻の形）。
@@ -381,7 +387,7 @@ fn measure(repo: &Path, ledger: impl FnOnce() -> Option<Notes>) -> Result<Option
     let notes = ledger().ok_or(Reason::Ledger)?;
     let prefix = prefix_of(repo);
     let line = line_commit(repo)?.ok_or(Reason::Git)?;
-    let seen = population(repo, prefix.as_deref())?;
+    let seen = population(repo, HEAD, prefix.as_deref())?;
     let times = seen.cites.iter().filter(|(_, cite)| cite.form == Form::Time).map(|(path, cite)| (path.clone(), cite.text.clone())).collect();
     let before = before_line(repo, &line, &times)?;
     Ok(Some(report_of(&seen, &keys.fixtures, &Index::new(&notes, prefix.as_deref()), &before)))

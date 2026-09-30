@@ -2557,3 +2557,83 @@ fn seat_tick_alarm_floor_reads_an_unreadable_current_as_no_failure() {
     assert!(tick_floor_is_step_wait(&line), "読めない file は床の不合格でない: {line}");
     assert!(tick_floor_texts(&place).is_empty(), "0 key");
 }
+
+// ───── 未反映の裁定と管理 tick の alarm（設計 dispatcher.md §38 約束 7・契約表の行 am・接頭辞 `seat_tick_alarm_unreflected_`） ─────
+//
+// 置き場の `<state>/pipe/unreflected`（未反映の裁定の file）を直に書き、tick が file だけを読んで alarm= の語 `unreflected` を足すかを測る。
+// 字面は契約から組む（実装の helper を使わない）。
+
+/// 未反映の裁定の file の本文（1 行の JSON・`ids` が母集団も未反映の列も兼ねる・sha は 40 字）。
+fn tick_unreflected_body(ids: &[&str]) -> String {
+    let list = ids.iter().map(|id| format!("\"{id}\"")).collect::<Vec<_>>().join(",");
+    format!("{{\"schema\":1,\"sha\":\"0123456789abcdef0123456789abcdef01234567\",\"population\":[{list}],\"unreflected\":[{list}],\"table\":{{}}}}\n")
+}
+
+/// 置き場の未反映の裁定の file を `body` で書く。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn tick_unreflected_put(place: &TickPlace, body: &str) {
+    let dir = place.state.join("pipe");
+    fs::create_dir_all(&dir).expect("pipe の dir を作れる");
+    fs::write(dir.join("unreflected"), body).expect("未反映の裁定の file を書ける");
+}
+
+/// (a) 置き場の file が 1 件の周の合図の alarm= は `unreflected`・0 件の周と file の無い周は alarm= が無い（母集団 3 周）。
+#[test]
+fn seat_tick_alarm_unreflected_names_the_word_only_for_one_or_more_items() {
+    let rounds = [(Some(tick_unreflected_body(&["batch:r1"])), " live=0 idle=- alarm=unreflected"), (Some(tick_unreflected_body(&[])), " live=0 idle=-"), (None, " live=0 idle=-")];
+    for (body, tail) in &rounds {
+        let place = tick_place(true);
+        if let Some(body) = body {
+            tick_unreflected_put(&place, body);
+        }
+        tick_silent_for(&place, 1900);
+        let out = tick_run(&place, &[]);
+        assert_eq!(stdout_of(&out), tick_inject(0), "黙りの閾値を越えた周は段 0 で送る: stderr={}", stderr_of(&out));
+        let texts = tick_floor_texts(&place);
+        assert_eq!(texts, [tick_facts_want(tail)], "母集団 {} 周・alarm= の有無", rounds.len());
+        let fields = texts.iter().flat_map(|text| text.split_whitespace()).filter(|field| field.starts_with("unreflected=")).count();
+        assert_eq!(fields, 0, "合図の行の欄に unreflected= は足さない");
+    }
+}
+
+/// (b) 順: 事前審査の断り・未反映 1 件・床の不合格が同時の置き場は、alarm= が `precheck,unreflected,floor` の順（値 60 の束が 120 秒前・席の打刻は 90 秒前）。
+#[test]
+fn seat_tick_alarm_unreflected_sits_between_precheck_and_floor() {
+    let place = tick_place(true);
+    tick_precheck_put(&place, Some(120));
+    tick_unreflected_put(&place, &tick_unreflected_body(&["batch:r1"]));
+    tick_floor_put(&place, &tick_floor_body("fail", "1"));
+    tick_silent_for(&place, 90);
+    let (line, texts) = tick_idle_run(&place, &tick_precheck_rules(&place, Some(900), Some(60)));
+    assert_eq!(line, tick_inject(0), "値 60 の門を越えた周は送る");
+    assert_eq!(texts, [tick_facts_want(" live=0 idle=- precheck=1/1:1 alarm=precheck,unreflected,floor")], "alarm= は precheck,unreflected,floor の順");
+}
+
+/// (c) 段を上げない: 段 2 の梯子の記録で段 2 の待ちを越えない周に、未反映だけが在る置き場では合図を送らず、梯子の段は 2 のまま。
+/// 黙りの閾値も縮めない（席の打刻が 90 秒前・記録なしの周は `stamp-recent` の noop）。
+#[test]
+fn seat_tick_alarm_unreflected_never_raises_the_ladder_or_shrinks_the_gate() {
+    let place = tick_floor_place(None);
+    tick_unreflected_put(&place, &tick_unreflected_body(&["batch:r1", "batch:r2"]));
+    let line = stdout_of(&tick_run(&place, &[]));
+    assert!(tick_floor_is_step_wait(&line), "未反映だけの周は段の待ち: {line}");
+    assert!(tick_floor_texts(&place).is_empty(), "0 key");
+    assert_eq!(tick_ladder(&place).map(|(_, step, _)| step), Some(1), "記録の段は動かない（送っていない）");
+    let place = tick_place(true);
+    tick_unreflected_put(&place, &tick_unreflected_body(&["batch:r1"]));
+    tick_silent_for(&place, 90);
+    tick_assert_quiet(&place, &tick_noop("stamp-recent", "wait:0", "0"));
+}
+
+/// (d) 読めない file は未反映の件数に数えない: 形の合わない字の置き場は alarm= に unreflected を載せず、段の待ちの noop になる。
+#[test]
+fn seat_tick_alarm_unreflected_reads_an_unreadable_file_as_no_item() {
+    let place = tick_floor_place(None);
+    tick_unreflected_put(&place, "not json\n");
+    let line = stdout_of(&tick_run(&place, &[]));
+    assert!(tick_floor_is_step_wait(&line), "読めない file は未反映の 1 件でない: {line}");
+    assert!(tick_floor_texts(&place).is_empty(), "0 key");
+}

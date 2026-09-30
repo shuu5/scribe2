@@ -582,6 +582,7 @@ impl Ledger {
             close_reason: String::new(),
             created_at: None,
             closed_at: None,
+            effect: String::new(),
         });
     }
 }

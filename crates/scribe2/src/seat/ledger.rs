@@ -91,6 +91,8 @@ pub struct Issue {
     pub created_at: Option<String>,
     /// 閉じた時刻の字（`closed_at`・閉じていない bead は `None`）。
     pub closed_at: Option<String>,
+    /// metadata の `effect` の字（無ければ空・閉じた問いの裁定が文書へ写すべきかを未反映の数えが読む）。
+    pub effect: String,
 }
 
 /// 依存の 1 件（`dependencies[]` の `depends_on_id` と `type` だけを読む・**要素は status を持たない**ので
@@ -129,6 +131,7 @@ pub fn issues_of(text: &str) -> Option<Vec<Issue>> {
                 close_reason: text_of("close_reason").unwrap_or_default(),
                 created_at: text_of("created_at"),
                 closed_at: text_of("closed_at"),
+                effect: node.get("metadata").and_then(|meta| meta.get("effect")).and_then(Tree::as_str).map(str::to_owned).unwrap_or_default(),
             })
         })
         .collect()
