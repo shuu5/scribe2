@@ -709,8 +709,8 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
   - 形:
     - (a) key の無い repo は 0 回で、置き場の dir も doctor の行も無い。
     - (b) rc 0 → 結果 rc 0・doctor `floor=pass`。
-    - (c) rc 1 と rc 2 → 結果と `floor=fail rc=1|2`。
-    - (d) 上限 1 秒の rules の写しで 5 秒眠る → 結果の file 無し・`floor=timeout`・次の周に撃ち直す（2 回）。
+    - (c) rc 1 と rc 2 → 結果と `floor=fail rc=1|2`。要約（約束 5）: 偽の command が 3 行を出し最後の行が空の形で、要約は 2 行目の字。制御文字（tab と ESC）を持つ 300 字の行を最後に出す形で、要約は制御文字を除いた頭の 200 字。
+    - (d) 上限 1 秒の rules の写しで 5 秒眠る → 結果の file 無し・`floor=timeout`・次の周に撃ち直す（2 回）。偽の command は眠りの後に別の marker の行を足す形にし、周が返ってから 6 秒待っても眠りの後の行が無い（子を止めた）。
     - (e) PATH に無い頭の語 → 0 回・`floor=unfireable why=path`。次の周に PATH へ置くと撃つ。
     - (f) 2 行・禁じる語列・記号の 3 形 → 0 回・`why=form|denied|metachar`。
     - (g) 同じ sha の 2 周目 → 撃ち直さない（1 回のまま）。
@@ -719,6 +719,9 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
     - (j) 撃てない理由の残り 3 形: rules の写しから floor.timeout_s を外すと `why=row`、probe が rc 1 を返す systemd-run の stub では `why=confine`、木の名の path に木でない dir（file を 1 つ持つ）を置いた周は `why=tree` で、その dir と file は残る。木の名は、偽の command に撃たれた場所（pwd）を marker へ書かせて 1 周目で測り、main に commit を足した 2 周目の sha に置き換えて作る。どれも 0 回で、結果の file は無い。
     - (k) 木と lock の分離: 偽の command が pwd と floor の dir の一覧を marker に書く。1 周目（sha A）の pwd の名が A を持ち、一覧に A の lock が在る。main に commit を足し（sha B）、A の木の名の dir に sentinel の file を置き、A の lock を test の process の pid で作ってから 2 周目を撃つ。B を 1 回撃ち（pwd の名が B を持つ）、A の dir・sentinel・lock は残る。
     - (l) 今の判定の file（floor の dir の中で名に sha を持たない file）を読めない字で上書きすると、doctor の行は `floor=unreadable`。
+    - (m) 同じ sha の生きた lock（約束 6）: main の sha の lock を、本文に test の process の pid を持たせて置いてから周を撃つ。0 回・結果の file 無し・今の判定の file 無し（書かない）。lock を外した次の周に 1 回撃つ。
+    - (n) 同じ sha の死んだ lock（約束 6）: 本文に在りえない pid（i32 の最大値・Linux の pid の上限 2^22 を越える）を持つ main の sha の lock を置いてから周を撃つ。lock を取り直して 1 回撃ち、結果の file が在る。
+    - (o) 観測の口（約束 2）: key を持ち結果の無い repo で `pipe dispatch ls` を 2 回撃つ。0 回・floor の dir 無し・doctor の floor= の行無し。続く起こす側の 1 周で 1 回撃つ。
   - rules の歯（接頭辞 `rules_floor_timeout_`）: 行の id・kind・値・ruling を測る。
   - lib の歯（接頭辞 `declaration_floor_check_`・optional_keys.rs の歯の区間）: 文字列 1 つは通り、列・整数・真偽・空白だけの値は key と行番号を名指す不備。
   - 既存の歯の扱いは約束 12。
@@ -1401,7 +1404,7 @@ write-set = ["crates/scribe2/src/pipe/declaration.rs", "crates/scribe2/src/pipe/
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_floor_fire_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_floor_timeout_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_external_form", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_embedded_manifest_is_valid_and_covers_all_kinds", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_embedded_manifest_declares_host_guard_kinds_at_the_tail_of_all", "cargo nextest run -p scribe2 --lib --no-tests=fail declaration_floor_check_", "cargo nextest run -p scribe2 --lib --no-tests=fail declaration_kind_passes_declarations_without_cargo_and_keeps_the_schema"]
 size = "M"
 growth = ["crates/scribe2/src/pipe/dispatch/floor.rs:330", "crates/scribe2/src/pipe/declaration/optional_keys.rs:60", "crates/scribe2/src/pipe/declaration.rs:6", "crates/scribe2/src/pipe/dispatch.rs:14", "crates/scribe2/src/rules/mod.rs:6", "crates/scribe2-boundary/src/main.rs:1"]
-done = "(1) 任意 key floor-check を sha の tree の宣言から読み、値は空でない文字列 1 つ（列・整数・真偽・空白だけは key と行番号を名指す不備）。key の無い repo は撃たず置き場も作らない (2) 撃つのは起こす側の 1 周の頭だけで、観測の口は撃たない。sha の結果が在る周は撃ち直さない (3) 行の 3 つの検査（form・denied・metachar）に当たる行は撃たずに unfireable (4) 撃てない 4 形（path・tree・confine・row）はどれも 0 回で why を名指す。木は sha ごとに別の dir で撃った後に片付け、木でない dir は消さない。上限を越えた周は子を止めて timeout (5) 終わった周は sha ごとの結果の file に rc と要約を残し、unfireable と timeout は結果を残さず次の周に撃ち直す。今の判定の file を毎周書く (6) sha ごとの lock を排他で取り、取れない周は撃たない。別の sha の周は走っている周の木と lock に触らない (7) doctor の floor= の 1 行（読めない今の判定の file は floor=unreadable） (8) rules 行 floor.timeout_s = 600・ruling user 2026-09-30T04:25Z・kind は ALL の末尾 (9) 置き場は floor の dir の sha ごとの結果・sha ごとの lock・今の判定・sha ごとの木だけ（結果・lock・木の名は sha の 40 字を持つ） (10) 新しい子は WaitReason・RuleKind・Stage・EventKind・Issue・Confinement を名指さず、包めたかは .confined() と .reason() で判じる (11) 待つ側（行 aj）が呼ぶ読みの関数（sha の結果と今の判定を file だけから読み、撃たない）を子 module に置く (12) 直す既存の歯（rules の本数と並び・外形 snapshot・DECLARED_KEYS の列）は札を付けずに flip-check の RED-on-base を通り、base で緑のままの直す歯が在る周だけその歯に retroactive の札 歯: pipe_dispatch_floor_fire_ の (a)〜(l)（撃つ回数を母集団に数える）・rules_floor_timeout_・declaration_floor_check_。base は key と rules 行が無く撃たれず RED"
+done = "(1) 任意 key floor-check を sha の tree の宣言から読み、値は空でない文字列 1 つ（列・整数・真偽・空白だけは key と行番号を名指す不備）。key の無い repo は撃たず置き場も作らない (2) 撃つのは起こす側の 1 周の頭だけで、観測の口は撃たない。sha の結果が在る周は撃ち直さない (3) 行の 3 つの検査（form・denied・metachar）に当たる行は撃たずに unfireable (4) 撃てない 4 形（path・tree・confine・row）はどれも 0 回で why を名指す。木は sha ごとに別の dir で撃った後に片付け、木でない dir は消さない。上限を越えた周は子を止めて timeout (5) 終わった周は sha ごとの結果の file に rc と要約を残し、unfireable と timeout は結果を残さず次の周に撃ち直す。今の判定の file を毎周書く (6) sha ごとの lock を排他で取り、取れない周は撃たない。別の sha の周は走っている周の木と lock に触らない (7) doctor の floor= の 1 行（読めない今の判定の file は floor=unreadable） (8) rules 行 floor.timeout_s = 600・ruling user 2026-09-30T04:25Z・kind は ALL の末尾 (9) 置き場は floor の dir の sha ごとの結果・sha ごとの lock・今の判定・sha ごとの木だけ（結果・lock・木の名は sha の 40 字を持つ） (10) 新しい子は WaitReason・RuleKind・Stage・EventKind・Issue・Confinement を名指さず、包めたかは .confined() と .reason() で判じる (11) 待つ側（行 aj）が呼ぶ読みの関数（sha の結果と今の判定を file だけから読み、撃たない）を子 module に置く (12) 直す既存の歯（rules の本数と並び・外形 snapshot・DECLARED_KEYS の列）は札を付けずに flip-check の RED-on-base を通り、base で緑のままの直す歯が在る周だけその歯に retroactive の札 歯: pipe_dispatch_floor_fire_ の (a)〜(o)（撃つ回数を母集団に数える・(c) 要約の最後の空でない行と 200 字と制御文字・(d) 越えた子の停止・(m) 同じ sha の生きた lock で 0 回と判定の不書き・(n) 死んだ lock の取り直し・(o) 観測の口の 0 回）・rules_floor_timeout_・declaration_floor_check_。base は key と rules 行が無く撃たれず RED"
 
 [[contract]]
 id = "aj"
