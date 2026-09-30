@@ -45,12 +45,20 @@
 | **SCIP + 構文の分類** | **49** | **31** | **0.968** | **0.780** |
 | compiler の試し撃ち（改名・欄を足す・私有化） | 20 | 10 | 0.446 | 0.661 |
 | compiler の試し撃ち（#[deprecated]・doc の link） | 39 | 21 | 0.751 | 0.652 |
-| 既製の graph 3 つ（code-review-graph・graphify・codebase-memory-mcp） | 9〜16 | 4〜5 | 0.33〜0.44 | 0.39〜0.85 |
+| 既製の graph 3 つ（code-review-graph・graphify・codebase-memory-mcp・行で数える） | 10〜16 | 4〜5 | 0.36〜0.45 | 0.39〜0.84 |
+| 同じ 3 つを関数単位で数える（正解の行を囲む関数が合えば当たり・recall と precision も関数で数える） | 14〜27 | 5〜13 | 0.47〜0.70 | 0.38〜0.50 |
 
 - SCIP + 構文の分類は、型 a・b・d・e・f の 211 site で recall 0.995・precision 0.972。同名の別 symbol が在る 16 問で別物を出した数は 0。落ちは索引の外の file（toml の 3 site）と型 g の 1 問。
 - SCIP（rust-analyzer 1.98.1）に出ない物: doc の link（1 base に 3551 個）・`format!` の文字列の暗黙の取り込み・`Self { … }` の literal（impl の symbol に付く）・test の役・use と呼び出しの区別・source の字の可視性（署名の文は正規化した実効の形で、`pub(in …)` の path が消える）。どれも構文の層で足した。
-- 注意: 規則 3 つ（format の取り込み・doc の散文の名指し・文字列の中の数）は同じ bench の落ちを見てから足した。新しい問いでは割り引いて読む。
-- 既製の graph は literal（型 b）が 0/5、可視性と mod（型 f）が 0〜1/7。graphify は Rust で path と名を小文字にして node を潰す（fn と同名の struct が 1 つになる）。
+- 注意: 規則 3 つ（format の取り込み・doc の散文の名指し・文字列の中の数）は同じ bench の落ちを見てから足した。新しい問いでは割り引いて読む（新しく作った 10 問では recall を落とさなかった・下の監査のやり直し）。
+- 既製の graph は、行で数えると literal（型 b）が 3 つとも 0/5、可視性と mod（型 f）が 0〜1/7。道具が名乗る参照と呼び手の 33 問（型 a・d）に絞っても、名の単語の grep と SCIP + 構文の分類の 32/33 に対し、graph は行で 8〜12・関数単位で 10〜20。
+- codebase-memory-mcp は呼び手（型 d）を関数単位なら 14/16 当てる（行では 8/16）。呼び手の関数の下見には使えるが、行の網羅には使えない。呼び手は SCIP + 構文の分類が行で 16/16 答えるので、その下見も要らない。
+- graphify は Rust で path と名を小文字にして node を潰す（fn と同名の struct が 1 つになる）。source と小さな見本の crate で確かめ、設定では避けられない。main の木では item の 1.5% が消える。
+- 監査のやり直し（2026-10-01）: 元の採点の不公平を 2 つ見つけ、直した数字を上の表に書いた。
+  - (1) 行が一致した site だけを数えたので、呼び手の関数を名指すが行を持たない辺が 0 点になった。関数単位で数え直すと codebase-memory-mcp で 11 問・graphify で 3 問・code-review-graph で 1 問ぶん。
+  - (2) code-review-graph の `references_to` の問い合わせを使わなかった（1 問）。ほかに codebase-memory-mcp の辺の引数の欄を読んでいなかった（直しても合格は同じで、site が 2 つ増えるだけ）。graphify は同名の型の stub も辿る版を採った（+1 問）。
+  - bench に無い名と場所で新しく作った 10 問（正解 55 site）では、SCIP + 構文の分類が 10/10（precision 0.90）で、bench を見て足した規則は recall を落とさなかった。graph は行で 1〜3/10、関数単位では codebase-memory-mcp だけが 8/10。
+  - 3 つとも網羅の列挙を約束していない（codebase-memory-mcp は README と論文で、graphify は docs で自ら否定する）。測ったのは器の用途（行の網羅）で、道具の本来の売り（token の削減・全体像）ではない。
 - 費用: SCIP の索引 1 本は wall 約 30 秒（host の load が高いと 80〜105 秒）・peak RSS 約 2.5 GB・`.scip` 35〜41 MB。増分は無く、1 commit ごとに全部作り直す。compiler の試し撃ち 1 回は増分で 5〜9 秒。
 - 決定性と egress: 同じ base の 2 回の出力は byte で同一。network を切った名前空間の中で索引と問いが最後まで通り、答えは同一。rust-analyzer は build script と proc-macro を実行する（cargo build と同じ信頼）。
 
@@ -193,7 +201,7 @@ SRS の追加 round（FR48・FR55・FR47 の字の直しと新しい要件 3 つ
 
 ## 14. 却下
 
-- 既製の code の graph（code-review-graph・graphify・codebase-memory-mcp）: literal と可視性が引けず（型 b 0/5・型 f 0〜1/7）、名の一致で結ぶ作りが器の失敗の型そのもの。graphify は node を潰す。
+- 既製の code の graph（code-review-graph・graphify・codebase-memory-mcp）: 53 問のうち行で 10〜16（関数単位で 14〜27）で、literal と可視性が引けず（行で型 b 0/5・型 f 0〜1/7）、名の一致で結ぶ作りが器の失敗の型そのもの。graphify は node を潰し、設定では避けられない。codebase-memory-mcp は呼び手の関数の下見（関数単位で型 d 14/16）には使えるが、行の網羅には使えず、呼び手は SCIP + 構文の分類が答える。
 - 構文木の crate を器に足す（syn 等）: 実行時の依存（NFR3）で、Rust に閉じる（[contract-source.md](./contract-source.md) §11 の却下と同じ）。
 - scip の CLI で JSON に直してから読む: 道具が 1 つ増え、1 本 71 MB の JSON を読む。器が protobuf の必要な欄だけを読む方が小さい。
 - 素の grep の件数だけを表にする: 事実の 88% を持つが precision 0.023 で、同名の別物と use の行と歯の中の呼び出しが混ざり、設計者が読めない。
