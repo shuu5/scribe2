@@ -13,7 +13,7 @@
 //! contract-source.md §6・契約表の行 e）は子 module [`lint`] に置く（読むだけ・極性は増えない）。台帳のグラフの形
 //! （doctor の項目 1 行・ledger-form.md §10・契約表の行 f）は子 module [`graph`] に置く（読むだけ）。案件の局面のうち台帳の側の
 //! 部品（question・memo・epic と閉じた contract・case-lifecycle.md §7・行 a1）と FR93 の条件の 1 関数は子 module [`phase`] に置く
-//! （純関数・I/O も時計も持たない）。
+//! （純関数・I/O も時計も持たない）。裁定と見送りの閉じの misfit 3 語（行 a2）は子 module [`phase_ruling`] に置く（純関数）。
 
 pub mod citation;
 pub mod close_reason;
@@ -22,6 +22,7 @@ pub mod graph;
 pub mod lint;
 pub mod memo;
 pub mod phase;
+pub mod phase_ruling;
 pub mod promotion;
 pub mod question;
 pub mod trigger;
@@ -374,5 +375,32 @@ mod tests {
         let (due, (phase, _, reason)) = fr93_probe(&issues, &["s2-m".to_owned()]);
         assert!(!due, "処置の無い判定が在る memo は FR93 を満たさない");
         assert_eq!((phase.as_str(), reason.as_deref()), ("memo-actionable", Some("verdict")));
+    }
+
+    /// 裁定の閉じの misfit の関数に、線の後の閉じた問いと memo を通して (bead id・語) の列を返す（JSON の字から `issues_of` で作る）。
+    fn ruling_misfits(question_reason: &str, memo_reason: &str) -> Vec<(String, &'static str)> {
+        use super::phase::Lines;
+        use super::phase_ruling::{derive, Input};
+        let closed = |id: &str, label: &str, reason: &str| {
+            format!(r#"{{"id":"{id}","status":"closed","labels":["{label}"],"close_reason":"{reason}","closed_at":"2026-09-28T00:00:00Z"}}"#)
+        };
+        let text = format!("[{},{}]", closed("s2-q", "intake:question", question_reason), closed("s2-m", "intake:memo", memo_reason));
+        let issues = crate::seat::ledger::issues_of(&text).expect("fixture の JSON を読める");
+        let (cutover, check) = (crate::fleet::epoch_of("2026-09-20T00:00:00Z"), crate::fleet::epoch_of("2026-09-25T00:00:00Z"));
+        let input = Input { issues: &issues, prefix: Some("s2"), lines: Lines { cutover, close_check: check }, bound: &[] };
+        derive(&input).into_iter().map(|(id, word)| (id, word.as_str())).collect()
+    }
+
+    /// 解けず結ばれてもいない問いの裁定は close-ruling-unresolved の 1 語だけ（not-bound を足さない・表の順）。
+    #[test]
+    fn phase_ruling_question_unresolved_returns_one_word() {
+        assert_eq!(ruling_misfits("裁定 nonsense", "完了"), [("s2-q".to_owned(), "close-ruling-unresolved")]);
+    }
+
+    /// 解けず子の問いの裁定でもない見送りは close-ruling-unresolved の 1 語だけ（deferred-not-child-ruling を足さない）。
+    #[test]
+    fn phase_ruling_memo_unresolved_returns_one_word() {
+        let got = ruling_misfits("完了", "見送り nonsense");
+        assert_eq!(got, [("s2-m".to_owned(), "close-ruling-unresolved")]);
     }
 }
