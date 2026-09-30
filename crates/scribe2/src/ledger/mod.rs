@@ -14,6 +14,7 @@
 //! （doctor の項目 1 行・ledger-form.md §10・契約表の行 f）は子 module [`graph`] に置く（読むだけ）。案件の局面のうち台帳の側の
 //! 部品（question・memo・epic と閉じた contract・case-lifecycle.md §7・行 a1）と FR93 の条件の 1 関数は子 module [`phase`] に置く
 //! （純関数・I/O も時計も持たない）。裁定と見送りの閉じの misfit 3 語（行 a2）は子 module [`phase_ruling`] に置く（純関数）。
+//! main の側の部品（commit・row・requirement）と着地の commit の misfit 3 語（行 b1）は子 module [`phase_main`] に置く（純関数）。
 
 pub mod citation;
 pub mod close_reason;
@@ -22,6 +23,7 @@ pub mod graph;
 pub mod lint;
 pub mod memo;
 pub mod phase;
+pub mod phase_main;
 pub mod phase_ruling;
 pub mod promotion;
 pub mod question;
@@ -402,5 +404,17 @@ mod tests {
     fn phase_ruling_memo_unresolved_returns_one_word() {
         let got = ruling_misfits("完了", "見送り nonsense");
         assert_eq!(got, [("s2-m".to_owned(), "close-ruling-unresolved")]);
+    }
+
+    /// main の側の部品の関数は入力の不足（commit・台帳・表・要件が全部空か読めない）で落ちず、読めない 2 面を名指す（行 b1）。
+    #[test]
+    fn phase_main_missing_inputs_do_not_panic() {
+        use super::phase_main::{derive, Input};
+        let input = Input { commits: &[], cutover: 0, runs: &[], issues: &[], rows: None, requirements: None };
+        let out = derive(&input);
+        assert!(out.parts.is_empty() && out.ties.runs.is_empty() && out.ties.beads.is_empty(), "部品も結びも無い");
+        assert_eq!(out.unmeasured.len(), 2, "表と要件の 2 面を測れないと名指す");
+        let empty = derive(&Input { rows: Some(&[]), requirements: Some(&[]), ..input });
+        assert!(empty.parts.is_empty() && empty.unmeasured.is_empty(), "読めて空なら 0 件で unmeasured は空");
     }
 }
