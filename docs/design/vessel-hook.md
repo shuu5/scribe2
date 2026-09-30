@@ -885,6 +885,121 @@ xtask 側: `crates/xtask/src/genmanifest.rs` の `#[cfg(test)]` に、render の
   - 行 n2 の後、消費側の席へ「publish の segment の周は git push の前に試し撃ちと remote の先端の問いを撃ち、行き先を解けない push は unresolved:target で断る」と 1 行知らせる。行 n5 の後、「隣の private repo の名を持つ push と gh の本文は identifier で断る（直し方は言い換えか host の面の除外の行）」と 1 行知らせる。
   - 行 n7 は doctor の key を 1 つ足すので、doctor の字を読む消費側の面へ 1 行知らせる。
 
+## 23. publish の門は、読みだけの gh と、shell が撃たない字を断らない — 包まれた gh の後ろが読みだけの閉じた表の動詞なら wrapped の印を付けない（行 o）、本文を撃たない受け手だけの command 行の区切りを引用した heredoc の本文を segment に入れず、全ての segment の頭が閉じた列に在る command の data の頭の segment では単引用と `\` が逃がした字を細かい語の割りに使わない（行 o2）（契約表の行 o / o2・[ADR-0099](../../design-intent/decisions/ADR-0099-gate-readers-pass-read-only-gh-and-text-the-shell-does-not-run.html)・[ADR-0078](../../design-intent/decisions/ADR-0078-host-guard-stops-neighbor-identifiers-before-publish.html)・FR80 / FR81 / FR56 / FR72 / FR74 / FR76 / NFR4・`s2-07l.738.26`・`s2-07l.696`）
+
+やさしく言うと: host-guard を全口座へ配線した直後に、公開の門が「外へ何も出さない command」を 3 つの形で止めた。(1) CI 待ちの loop や `x=$(…)` の中の gh pr view・gh pr checks（読むだけ）。(2) `cat <<'EOF'` や `python3 - <<'EOF'` の本文の行（shell が命令として撃たない字）。(3) `echo '…'` や `printf` の単引用の中の `$(` や backtick（これも shell は撃たない字）。原因は 2 つある。(1) は wrapped の印が gh の動詞を見ないこと、(2) と (3) は共有の分割が shell の撃たない字を撃つ字と読むこと。本 § は、読むだけの gh の閉じた表と、「shell が撃たない字」の見分けを読み手に足して、この 3 つを通す。どれも閉じた列に当たるときだけ通し、決められない形は今のまま断る（FailClosed）。command の中に列の外の頭（`bash`・`sh`・`eval`・`xargs`・`sh -c`・`awk`・`./x.sh`・`make`…）が 1 つでも在れば、今のまま読む。`sed` は GNU sed の `e` が置換の結果を shell で撃つので、単引用の字を読まない列に入れない（報告の sed の形はこの § では直らない）。
+
+- 出所: memo `s2-07l.738.26`（観測と候補 1〜3・昇格条件の再発 1 を満たした・2026-09-29T23:47Z）。§17 形 2（wrapped: 頭の語が git / gh でない segment の細かい語に、git と後ろの push か、gh と後ろの公開の群の語が在る）と、§17 の却下「実際に撃たれる command 置換を持つ語（`$(` か `` ` ``）だけを割る（orchestrator の裁定 2026-09-28）」「単引用の中の `$` を通す — `segments` が引用の出所を落とし、単引用と二重引用を分けられない」。ADR-0078 の限界（`sh -c` の中・alias）と、§17 の限界（script の file の中）。
+- 何が起きているか（PATH の binary 1d2f5e6 = main 8feebe3c の hook の code と同じ・host-guard に payload を直に渡した実測・verified・2026-09-30・表は草稿の probe/ の 4 file）:
+  - **罠 B（読みだけの gh）**: 次の 14 形が rc 2 `unresolved:wrapped` になる。
+    - `x=$(gh pr view 859 --repo o/n --json state)`・`for i in 1 2; do gh pr checks 859; done`・`until gh pr checks 859; do sleep 30; done`・`while ! gh pr checks 1; do sleep 5; done`
+    - `if gh pr view 1 --json state | grep -q MERGED; then echo ok; fi`・`echo "$(gh pr view 1)"`・`x=$(gh -R o/n pr view 1)`・`x=$(gh pr list --state open)`・`x=$(gh issue view 3)`・`x=$(gh api repos/o/n/pulls/1 --jq .state)`
+    - 書きの `x=$(gh pr create …)`・`for …; do gh pr merge 1; done`・`x=$(gh api -X PATCH … -f title=x)`・`x=$(gh api repos/o/n/issues --input /tmp/b)` も同じ印（こちらは断るべき形）。続け書きの `-XPATCH`・`-fk=v`・`-Fk=@f` と小文字の `-X post` も今は同じ印。
+    - 通る: 頭の語の gh pr view の redirect と pipe・gh api の GET・`x=$(gh run list …)`（run は公開の群でない）・gh pr checks --watch。
+    - 原因: `follows`（`crates/scribe2/src/hook/host_guard/publish.rs` 630 行）が、gh の後ろのどこかに公開の群の語が在れば動詞を見ずに印を付ける。for の本体は頭の語が `do`、until の条件は `until` なので、頭の語が gh の segment の読みに届かない。
+  - **罠 A（区切りを引用した heredoc の本文）**: 共有の分割 `segments`（`crates/scribe2/src/hook/ledger_guard.rs` 632 行）は引用の外の改行で segment を切り、heredoc を知らない。本文の行は command の segment として全ての門に渡る。
+    - publish: `cat <<'EOF' > f` の本文の `x=$(gh pr view 1)`・`- git push の前に`・`` - `git push` の前に ``、`python3 - <<'EOF'` の本文の `# git の -c で push` は rc 2 `unresolved:wrapped`。本文の `git $sub` は `unresolved:verb`。
+    - 本文の `git push origin main` は push の segment として読まれ、行 n2 の行き先の解きまで進む（`unresolved:target`・repo の中なら試し撃ちと ls-remote を撃つ）。
+    - `<<"EOF"`・`<<\EOF`・`<<-'EOF'` も同じ。
+    - 他の門も同じ: host-guard の tmux の種類は本文の `tmux kill-server`、git の種類は本文の `git reset --hard origin/main` と `git push --force origin main` で断る（rc 2・hit=tmux / hit=git）。
+  - **罠 C（単引用の中の字）**: 報告の形（`sed -i 's#^- \[…\](…) — .*#- […] — …git/gh 行や git push の字…#' f.md`）は、丸括弧・`#`・`\[` を持っても通る（6 形とも rc 0）。
+    - 印が付くのは、同じ語が `$(` か `` ` `` を持つ周だけ: `echo 'a$(b) git push'`・`echo 'a`b` git push'`・`printf '%s\n' '$(gh pr view 1)'`・`echo '$(git push)'`・`echo \$\(git push\)`・`sed -i 's#a#`git push`#' f.md` が rc 2 `unresolved:wrapped`。
+    - 原因: `segments` が引用を解いた字だけを返し、`fine`（publish.rs 707 行）が語の中の `$(` と `` ` `` を、単引用か `\` の中の字でも「実際に撃たれる command 置換」と読んで割る。報告の sed の式は、省かれた字に backtick か `$(` を持っていたと推定する（inferred・報告の形の字だけでは通る・未測）。
+    - **罠 A の直し（heredoc の本文）では塞がらない**。同じ分割に「字の出所」を足す直しで塞ぐ（行 o2 に束ねる）。
+  - **撃たれる形（今の読みが偶然 `$(` や本文の字で断っている形・同じ実測・probe/cases-run.txt）**: 次はどれも今 rc 2 で断る。
+    - `$(` を持つ単引用を撃つ受け手: `sh -c 'echo $(git push)'`・`python3 -c 'x = "$(git push)"'`・`awk 'BEGIN { system("$(git push)") }'`・`sed 's#a#$(git push)#e' f`（GNU sed の `e`）が `unresolved:wrapped`。
+    - data の命令の字を後ろで撃つ形: `echo '$(git push)' | bash`・`printf '%s' '$(git push)' | sh`・`echo '$(git push)' | xargs -I{} sh -c '{}'`・`echo '$(git push)' | ./x.sh`・`echo '$(git push)' > f.sh && ./f.sh` が `unresolved:wrapped`。
+    - heredoc の本文を撃つ形: `bash <<'EOF'`・`cat <<'EOF' | bash`・`cat <<'EOF' > p.sh` の後の行の `bash p.sh` の本文の `git push origin main` が `unresolved:target`、`python3 - <<'EOF'` の本文の `os.system("$(git push origin main)")` が `unresolved:wrapped`、`cat <<'EOF' > .git/hooks/pre-commit` の本文の `git push origin main` が `unresolved:target`。
+    - `$(` を持たない同じ撃ち方は今も通る: `echo 'git push origin main' | bash`（lens の実測）・`python3 - <<'EOF'` の本文の `subprocess.run(["git", "push", …])`（rc 0）。門はこの経路の撃ちを測っておらず、`$(` の字で偶然断っている。
+  - 共有の範囲（`segments` の呼び手・crates の grep で src の 7 か所）: host-guard の `judge`（`crates/scribe2/src/hook/host_guard.rs` 417 行・git / tmux〔FR56〕・台帳〔FR76〕・rm〔FR74〕・自分の設定〔FR72〕・publish〔FR80〕の 6 種類）・起票の門の `decide`（ledger_guard.rs 294 行・FR81）・台帳のグラフの門（`crates/scribe2/src/hook/graph_guard.rs` 245 行）・anchor の門（`crates/scribe2/src/hook/anchor_guard.rs` 87 行・`git_segments` 経由の 82 行も）・merge の門（`crates/scribe2/src/hook/merge_gate.rs` 236 行）・live-row の門と publish の読み手 `walked`（`crates/scribe2/src/hook/live_row.rs` 195 行）・publish の `marked`（publish.rs 432 行）。command guard の `split`（`crates/scribe2/src/hook/command.rs` 67 行）は引用を解かない別の分割で、共有でない。
+  - 行数（幅 120 で畳んだ数・上限 1500・main 74f57b29）: publish.rs 1470（余地 **30**）・ledger_guard.rs 1055（445）・host_guard_tests.rs 1467（33）。publish.rs の余地が足りないので、細かい語の読み（`fine`・`pieces`・`follows`・`is_group` と `BREAKS`）を行 o の `+` の file へ移す。
+- 形（行 o・読みだけの gh・行 o の done と 1:1）:
+  1. **置き場**: 行 o の `+` の file（publish の module の `pub` な子）。publish.rs の `fine`・`pieces`・`follows`・`is_group` と、`pieces` だけが読む `BREAKS` をこの file へ移す（`fine` と `pieces` の本体は変えない・`follows` だけ形 3 で変える）。publish.rs は印の読み（`has`・`marked`・`variable_verb`・`Before`）から呼ぶだけ。
+  2. **細かい語の対**: 細かい語を（basename を取る前の片・basename）の対で返す。印の 5 つと `Before` の読みは basename の側を今のまま使う。読みだけの判じは前の片で読む（`--input=/tmp/b` の basename は `b` になり flag が消えるため）。
+  3. **wrapped の gh の arm**:
+     - 細かい語の gh（basename）ごとに、後ろの片を読む。`-R` / `--repo` とその値（`--repo=<値>` と `-R<値>` の続け書き）だけを読み飛ばし、次の片が群、その次の片が形 4 の表の動詞なら、その gh は読みだけ。
+     - 群が api なら、後ろの片（segment の末尾まで）が「対象 1 つ（`graphql` でない・`-` で始まらない）と、読みの flag とその値」だけのとき読みだけ。読みの flag は `-q` / `--jq`・`-t` / `--template`・`--paginate`・`--slurp`・`-i` / `--include`・`--silent`・`--verbose`・`--cache`・`--hostname`・値が大文字の `GET` ちょうどの `-X` / `--method`。値を取る読みの flag は空白書きと長い名の `--<名>=<値>` だけを読み、短い flag の続け書き（`-XPATCH`・`-XGET`・`-fk=v`・`-Fk=@f`・`-q.state`）は知らない flag と読む。
+     - 次のどれかを 1 つでも持てば読みだけでない: `-f`・`-F`・`--raw-field`・`--field`・`--input`・`-H`・`--header`・`GET` ちょうどでない method（`-X post`・`-X get` を含む）・知らない flag・2 つ目の位置の片。
+     - gh の後ろに公開の群の語が在り（今の判じ）、読みだけでない gh が 1 つでも在れば wrapped。git と後ろの push の arm は変えない。
+  4. **読みだけの閉じた表**: pr = view / list / status / checks / diff・issue = view / list / status・release = view / list・gist = view / list・label = list・repo = view / list（行 o の `+` の file の const・全ての群と動詞の対の const slice）。表の外（`checkout`・`download`・`clone`・`fork`・`sync`・変数の動詞）は今のまま。
+  5. **経路は変えない**: 断りの経路（publish.rs の `REWRITE`・理由 unresolved の全ての断りが共有する）は 1 字も変えない。
+  6. **行 o は足さない**: heredoc の本文と単引用の字の読み（行 o2）。
+- 形（行 o2・shell が撃たない字・行 o2 の done と 1:1）:
+  1. **置き場**: `crates/scribe2/src/hook/ledger_guard.rs` の分割の状態機械 1 本に、heredoc の読みと字の出所を足す。`segments` の返りの型と 7 か所の呼び手は変えない。同じ状態機械の 2 本目の返り（語ごとの字と、字ごとの「撃たない字か」の印の列）を足し、publish の `marked` だけがそれを読む（同じ分割なので segment の数と順は `segments` と同じ）。
+  2. **heredoc の見分け**（引用の外で・注釈の外で）:
+     - 語の頭の `#` から改行までは注釈で、operator を探さない（`cat f # <<'EOF'` の次の行は撃たれる行）。
+     - `<<` か `<<-`（`<<<` でない）の後ろの空白を読み飛ばした 1 語が区切り。区切りの語のどこかに `'` か `"` か `\` が在れば「引用した区切り」で、区切りの字は引用を解いた字。
+     - 本文は、operator の在る論理行（引用の外の、`\` で逃がさない改行で終わる）の次の行から、区切りと同じ行まで（`<<-` は行頭の tab を落として比べる）。1 行に operator が複数在れば、本文は順に続く。
+  3. **本文を segment に入れない条件**（全部を満たす command 行だけ・1 つでも欠けたら今の読み）:
+     - a. command 行の heredoc が全て引用した区切りで、全ての本文が区切りの行で閉じる。
+     - b. 本文と区切りの行を落とした command 行の**全ての** segment が、頭の語（前置きの代入の後の語の basename・launcher は剥がない）が本文を撃たない受け手の閉じた列 `cat` / `tee` / `python3` / `python` で、heredoc の operator を持つ。pipe の先・`;` と `&&` の後ろ・区切りの後ろの行の command が 1 つでも在れば、その command 行は読みを変えない。
+     - c. その segment が生きた command 置換と process 置換（引用の外か二重引用の中の `$(`・`` ` ``・`<(`・`>(`）を持たない。
+     - 満たす周は、本文の行と区切りの行を segment にも語にも入れない。operator の在る行（`cat <<'EOF' > f`）は今のまま読む（redirect の先を読む門は変わらない）。
+     - 受け手の列は「本文を shell として撃たない」列で、本文を撃たないとは言わない: `python3` / `python` は本文を Python として撃つ（本文の中の `os.system` と `subprocess` の撃ちは測らない・限界の 1 つ目）。
+  4. **字の出所**: 語ごとに、単引用（`'…'` と `$'…'`）の中の字と、引用の外か二重引用の中で `\` が逃がした字を「撃たない字」と印する。
+  5. **細かい語の割り**（行 o の `+` の file の `fine`）:
+     - 形 6 の門を通った command で、segment の頭の語（条件 3b と同じ読み・前置きの代入の後の語の basename・launcher は剥がない）が data の頭の閉じた列 `echo` / `printf` / `grep` / `egrep` / `fgrep` / `rg` / `cat` / `tee` / `jq` / `bd` / `bdw` の周は、撃たない字の `$(`・`` ` ``・`<(`・`>(` を「割る語か」の判じに数えず、撃たない字の空白と区切りの字では割らない。
+     - `sed` は列に入れない: GNU sed の `e`（`s///e` と `e` の命令）は置換の結果を shell で撃つ。`sed` の単引用の中の `$(` と backtick は今のまま割って断る（報告の罠 C の sed の形はこの § では直らない・回避は Write の道具で式を file に書いて `sed -f` で読ませる）。
+     - 他の頭（`sh`・`bash`・`eval`・`ssh`・`python`・`awk`・`sed`・`xargs`・`find`・知らない頭）の周は今の割り。単引用の字を shell や code として撃つ受け手が在り、今は `$(` を持つ字だけを偶然断っているため（ADR-0078 の `sh -c` の限界の中）。
+  6. **閉じた頭の列の門**（形 5 の免除を閉じる・lens H1・orchestrator の裁定 2026-09-30 で allowlist）:
+     - 形 5 の免除は、同じ command 行の**全ての** segment の頭の語が閉じた頭の列に在る周だけ効く。1 つでも列の外の頭（`bash`・`sh`・`eval`・`xargs`・`python3`・`./x.sh`・`make`・`git`・`for` / `do` などの予約語・頭の語を持たない前置きの代入だけの segment を含む全て）が在れば、その command 行の全ての segment で免除を取り消す（今の割りに戻す）。
+     - 閉じた頭の列（行 o2 が行 o の `+` の file に足す const 1 本）= 形 5 の data の頭 ∪ 撃たない整形の頭 `head` / `tail` / `wc` / `sort` / `uniq` / `cut` / `tr` ∪ `cd`。
+     - 実行者の列（denylist）は持たない。条件 3b の受け手の列と形 6 の列は、どちらも「全ての segment の頭が列に在る」allowlist の const 1 本ずつ。
+     - これで同じ command の中で data の字を撃つ形（pipe の先の `bash` / `sh` / `xargs` / `python3 -c` / 自作の script・`> f.sh && ./f.sh`・`&& make`）は今のまま断る。閉じた列だけの command で file に書いた字を後の Bash の呼び出しで撃つ形は閉じない（限界 2）。
+  7. **他の門の読みが変わる所**（3 の条件を満たす command 行だけ）:
+     - host-guard の git / tmux の語列（FR56）と台帳の語列と台帳の形（FR76）・rm（FR74）・自分の設定（FR72）（`crates/scribe2/src/hook/host_guard.rs` の `sequences`・`writes`・`removals`・`own_settings`）: 本文の行を読まない。operator の行の redirect の先（自分の設定の file への `>`）は今のまま読む。
+     - 起票の門（FR81）と台帳のグラフの門: 本文の bd / bdw の行を読まない。
+     - anchor の門と merge の門: 本文の `gh pr merge` の行を読まない。
+     - live-row の門と publish の読み: 本文の git と `cd` の行を読まない。
+     - 4〜6 の字の出所と閉じた頭の列の門は publish の細かい語だけが読み、他の門の読みは変えない。
+     - command guard の `split` は変えない（本文の行を今のまま見る・限界）。
+  8. **行 o2 は足さない**: 解けない形（variable-ref・unreadable-body）の `$` の読み。単引用の中の `$`（graphql の `$変数`）は §17 の fail-closed の代償のまま。
+- 触らない: 印と解けない形の閉じた列と宣言順・`readable`（`$(cat <<'EOF'` の値の読み）・行 j の `read` と公開の表・全履歴と配線の段・断りの経路・command guard の分割と照合。
+- 却下:
+  - 区切りを引用した heredoc の本文を**受け手に依らず**読まない（依頼の軸そのまま）— `bash <<'EOF'`・`cat <<'EOF' | bash`・`cat <<'EOF' > p.sh` の後の `bash p.sh` の本文は撃たれる。今は本文を読むので断っている（実測）。受け手の閉じた列と「command 行の全てが受け手」の条件で、この 3 形を通さない。
+  - 本文を撃たない受け手のそばに撃たない command（`&& git add f`・`echo done`）を許す閉じた列を足す — 列の中の命令も hook や filter で撃ちうる（`git add` は設定の clean filter を撃つ）うえ、撃たれうる後続（`make`・`./p.sh`・`npm run`）は開いた集合。回避は Bash の呼び出しを分けるか Write の道具で書くこと。
+  - 単引用の字を全ての頭の segment で割らない — 頭の語に依らないので、`sh -c 'echo $(git push)'`・`python3 -c '…$(git push)…'`・`awk '…system(…)…'` のように単引用を撃つ受け手を見分けない（今は印で断り、撃たれる）。data の頭の閉じた列だけ変える。
+  - wrapped の gh を「後ろに公開の動詞の語が在るか」で判じる（表の外を通す）— 知らない並び・変数の動詞・`gh api` の書き（`--input`・`-f`）を通す。読みだけの閉じた表に当たる gh だけを外す。
+  - 断りの経路に読みだけの gh の書き直しの句を足す（memo の候補 3）— 経路は理由 unresolved の全ての断りの字で、既存の歯の字（publish.rs と e2e の 10 か所以上）が動く。直した後は読みだけの gh が通るので、足す句が要らない。
+  - 読み手ごとに heredoc を読む（publish の `marked` だけ直す）— 同じ本文の偽陽性が host-guard の git / tmux の種類・起票の門・merge の門に残り、読み手が 2 つになる（C2）。
+  - data の頭の免除を pipe の先の頭だけで閉じる（pipe の先が列に無ければ取り消す）— `;` と `&&` の後ろの頭を見ないので、書いてから撃つ形（`echo '$(git push)' > f.sh && ./f.sh`）が通る。
+  - 実行者の閉じた列（denylist: `bash`・`sh`・`eval`・`xargs`・`-c` の `python3` など）が在るときだけ免除を取り消す — 列の外の実行者（自作の script・`make` の recipe）が data の字を撃つ形が新しく通る（DR2・C11.2・`| ./x.sh` と `> f.sh && ./f.sh` は今は断る・実測）。条件 3b と同じ allowlist の形にする（orchestrator の裁定 2026-09-30）。
+- 限界（射程の外として残す・どれも今は `$(` の字か本文の字で偶然断っている形で、`$(` を持たない同じ撃ち方は今も通る）:
+  1. `python3` / `python` の heredoc の本文の中の撃ち（`os.system("… $(git push) …")`）は、行 o2 の後は本文を読まないので**新しく通る**（今は断っている）。受け手の列に python3 を置くのは、`python3 - <<'EOF'` が席の日常の定型で頻度が高く、本文の中の `os.system` と `subprocess` の撃ちは今も測らない script の file の中（§17 の限界）と同じ所だから。`$(` を持たない `subprocess.run(["git", "push"])` は今も通る（実測）。
+  2. 閉じた頭の列だけの command で file に書いた data の字（`echo '$(git push)' > f.sh`）を、後の Bash の呼び出しで撃つ形は、書く時点で `$(` を読まなくなり、限界 3 と同じ script の file の中の限界（§17）へ移る。同じ command の中で撃つ形（`| ./x.sh`・`> f.sh && ./f.sh`）は形 6 が今のまま断る。`$(` を持たない `echo 'git push origin main' | bash` は今も通る（lens の実測）。
+  3. 受け手だけの command 行（`cat` / `tee` の `> file`）で file に書いた本文は、書く時点で読まなくなり、script の file の中の限界（§17）へ移る。`.git/hooks/` の file や shell の rc file へ書く本文も同じ（`cat <<'EOF' > .git/hooks/pre-commit` の本文の `git push origin main` は今は `unresolved:target` で断る・実測）。
+  4. 撃たない受け手の列の外の頭（`sudo cat`・`command cat`・`bd create --body-file - <<'EOF'`）の heredoc は、今のまま本文を読む（偽陽性が残る・回避は Write の道具）。`sed` の単引用の中の `$(` と backtick も今のまま断る（罠 C の報告の形は直らない）。
+  5. 読みだけの api は、値に空白を持つ `--jq '.a | .b'` の片が割れて位置の片が増え、読みだけでない側（断る側）に倒れる。
+  6. command guard（runner の session と verify 行の検査）は heredoc の本文を今のまま見る。
+- 歯（接頭辞は行 o `publish_read_only_gh_`・行 o2 `split_unexecuted_`。crates と docs で 0 件〔main 74f57b29・2026-09-30〕。互いに部分文字列でなく、契約表の nextest の verify 行の filter 語のどれも、下の歯の名の部分文字列にならない〔実測〕）:
+  - 行 o・lib（行 o の `+` の file の歯の区間）:
+    - (a) 読みだけの形が印を持たない: 罠 B の読みの 10 形と `x=$(gh api -X GET repos/o/n/pulls/1)`。
+    - (b) 表の外と決められない並びが wrapped のまま: `x=$(gh pr create …)`・`for …; do gh pr merge 1; done`・`x=$(gh api -X PATCH …)`・`--input`・`-f`・`-H` を持つ api・`graphql` の api・続け書きの `-XPATCH`・`-fk=v`・`-Fk=@f` と小文字の `-X post` の api・`x=$(gh $v pr view 1)`・`x=$(gh pr $v 1)`・`x=$(gh --foo pr view 1)`・二重引用の中の改行で続く `gh pr view 1` と `gh pr create`。
+    - (c) 表の群と動詞の対の const slice が宣言順。
+  - 行 o・lib（publish.rs の歯の区間・行 o の `+` の file の関数を引く）: (d) `marked` で読んだ印が、`until gh pr checks 1; do sleep 30; done` で 0、`until gh pr merge 1; do sleep 30; done` で wrapped。
+  - 行 o・e2e（`crates/scribe2-boundary/tests/e2e/hook/guards.rs`）: (e) 埋め込みの manifest で、CI 待ちの 4 形（command 置換の gh pr view・for の本体と until の条件の gh pr checks・command 置換の gh api の GET）が rc 0 で記録なし、`for i in 1; do gh pr merge 1; done` が rc 2 の `unresolved:wrapped`。
+  - 行 o2・lib（`crates/scribe2/src/hook/ledger_guard.rs` の歯の区間）:
+    - (a) 本文を読まない形: `cat <<'EOF' > f`・`cat > f <<'EOF'`・`tee f <<'EOF'`・`python3 - <<'EOF'`・`<<"EOF"`・`<<\EOF`・`<<-'EOF'`（tab を落とす）の本文の行が segment に無く、operator の行は今の語のまま。
+    - (b) 今のまま読む形: `bash <<'EOF'`・`cat <<'EOF' | bash`・`cat <<'EOF' > p.sh` と後ろの行の `bash p.sh`・`<<EOF`（引用しない）・閉じない本文・`cat f # <<'EOF'`（注釈の中）・`$((1 << 2))`・`cat <<'EOF' > >(bash)`・`sudo cat <<'EOF'` は本文の行が segment に在る。
+    - (c) 字の出所の印: 単引用・`$'…'`・`\` で逃がした字が撃たない字、二重引用の中の `$(` は撃つ字。
+  - 行 o2・lib（行 o の `+` の file の歯の区間）:
+    - (d) data の頭の `echo '`git push`'`・`echo \$\(git push\)`・`printf '%s\n' '$(gh pr view 1)'`・`grep 'a$(git push)' f` が印を持たず、`echo "$(git push)"`・`sh -c 'echo $(git push)'`・`python3 -c 'x = "$(git push)"'`・`sed 's#a#$(git push)#e' f`・`sed -i 's#a#`git push`#' f.md` は wrapped のまま。
+    - (d2) 閉じた頭の列の門の対（同じ data の頭で、列の外の頭の有無だけが違う）: `echo '$(git push)' | grep x`・`printf '%s' '$(git push)' | tee f`・`echo '$(git push)' | head -1`・`echo '$(git push)' | wc -l`・`cd d && bd update x --append-notes '$(git push)'` は印なし、`echo '$(git push)' | bash`・`printf '%s' '$(git push)' | sh`・`echo '$(git push)' | xargs -I{} sh -c '{}'`・`echo '$(git push)' | python3 -c 'import sys'`・`echo '$(git push)' | ./x.sh`・`echo '$(git push)' > f.sh && ./f.sh`・`echo '$(git push)' > m.mk && make` は wrapped のまま。
+  - 行 o2・lib（`crates/scribe2/src/hook/host_guard_tests.rs`）: (e) 本文を撃たない受け手だけの command 行の本文の `tmux kill-server` と `git reset --hard origin/main` を host-guard が通し、同じ本文の `bash <<'EOF'` は tmux と git の種類で断る。
+  - 行 o2・e2e（guards.rs）: (f) 罠 A の 4 形（`cat` の本文の `x=$(gh pr view 1)` と `- git push の前に`・`python3 -` の本文の `# git の -c で push` と `git $sub`）と罠 C の echo の形（backtick を持つ単引用）が rc 0、`bash <<'EOF'` と `cat <<'EOF' | bash` の本文の `git push origin main` と区切りの後ろの行の `git push origin $B` と `echo '$(git push)' | bash` が rc 2。
+- base で RED の理由:
+  - 行 o: (a)(c) は新しい module の歯で、base で filter の該当が 0 本（nextest の rc 4）。(b) も同じ file の歯。(d) は base に無い子の module を引く compile error（flip-check は publish.rs の歯の区間で測る）。(e) は base が読みだけの gh を wrapped で断る。
+  - 行 o2: (a)〜(c) は base に無い 2 本目の返りを引く compile error。(d) と (d2) は行 o の着地の後の base の `fine` が字の出所と閉じた頭の列の門を受けない compile error（(d2) の断る側の半分は base でも断る不変の形で、同じ歯の印なしの半分が base で赤い）。(e) と (f) は base が本文の行と単引用の中の `$(` を読んで断る。
+  - 既存の歯で期待が動くものは無い（`publish_marks_are_the_closed_five` の wrapped の表は書きの gh と git push だけ・`host_guard_kind_quoted_separator_splits_the_two_mouths` は二重引用で `$(` を持たない・heredoc を持つ既存の歯は `readable` の値の歯だけ〔crates の grep〕）。札は要らない。
+- 順:
+  - 行 o → 行 o2（行 o2 は行 o の `+` の file を素の path で持つので、行 o の着地の後に契約表へ足す）。どちらも publish.rs を write-set に持つ。
+  - 行 o を先にする理由: CI 待ちの定型（全ての席の背景の Bash）が止まる痛みが大きく、行 o は publish の module の中で閉じる（他の門に効かない）。
+  - 余地（幅 120 で畳んだ数・main 74f57b29 の実測）: 行 o は publish.rs から 62 行（`is_group` 5・`follows` 12・`fine` 20・`pieces` 23・`BREAKS` 2）を移し、約 19 行（子の module の宣言 1・use 1・対の読みの差 約 3・歯 (d) 約 14）を足すので約 −43。行 o の write-set は publish.rs を `-` の縮む面で宣言する（増分 0 以下・file は残る・余地 30 は見込みに数えない・縮みは受付の `-` の門が測る）。行 o2 は publish.rs が約 +6（実行者の門の呼び出し）。host_guard_tests.rs は行 o2 が約 +12（余地 33）。
+- 着地の後:
+  - どちらの行も binary の判定を変えるので、着地のたびに PATH の binary を `swap-binary.sh` で入れ替える。
+  - 行 o の後、消費側の席へ「loop と command 置換の中の読みだけの gh（pr view / checks / list・issue view・api の GET）は publish の門を通る」と 1 行知らせる。行 o2 の後、「`cat` / `tee` / `python3` だけの command 行の、区切りを引用した heredoc の本文と、全ての頭が echo / printf / grep / head / cd の類の閉じた列に在る command の単引用の中の字は、どの門も command として読まない。`sed` の単引用の中の `$(` と backtick は今のまま断る」と 1 行知らせる。
+  - memo `s2-07l.738.26` は行 o2 の close で閉じる。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -1184,4 +1299,15 @@ verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail publish_material_"
 size = "L"
 growth = ["crates/scribe2/src/hook/host_guard/publish/material.rs:340", "crates/scribe2/src/hook/host_guard/publish/outgoing.rs:15", "crates/scribe2/src/hook/host_guard/publish/visibility.rs:4", "crates/scribe2-boundary/tests/e2e/hook/guards.rs:130"]
 done = "(1) 隣の在る segment ごとに candidates を 1 回呼び、候補の在る形だけを問う (2) 隣ごとに git -C <anchor> の cat-file --batch-check を 1 回（候補を stdin・missing でない行を在るとし ambiguous も在る）、ls-files -z を 1 回（repo からの相対）、anchor の .beads/issues.jsonl の各行の id（file の無い隣は空・読めない行が在れば解けない）を読み、子の失敗と読めない台帳は hit unresolved:neighbor で断る (3) 公開先は押す repo で候補を cat-file --batch-check 1 回で解き、commit の候補だけを rev-list --stdin <候補> --not <server の先端> の 1 回に渡して出力に無い候補を辿れる側とし（commit でない object と手元に無い候補と、rev-list が落ちる周〔rc 非 0・子を起こせない〕の commit の候補は辿れない側）、出ていく ref の変更前の sha と HEAD の sha のうち手元に在る先端の ls-tree -r --name-only -z で path を読み（読めない先端は空）、gh の segment は dir の remote のうち導いた owner/name が対象と同じ 1 つの URL の ls-remote で先端を得る（無ければ空） (4) 隣と公開先の材料は読む上限の外で締め切りだけが縛る (5) scan の object / path / 台帳の形が行 m3 の集合の演算のまま効く (6) 材料が走査の段に届く繋ぎ（check が Scene を受けると材料の file は行 n4 の touches〔Scene〕の閉包に入るので、行 n4 の write-set にその file を足してある）: Anchor に実体の dir の欄、Found に segment の dir と行き先の解き（git の segment は Push・gh の segment は無し）の欄を足し、check は Scene（git の program と host の面）と締め切りも受けて stage が渡す（struct literal は Anchor 5 か所・Found 2 か所でどれも write-set の中） 歯: lib の publish_material_（行 n5 の + の file の歯の区間の 5 本〔形ごとに候補の在る周だけ 1 回問い ambiguous は在り台帳の file の無い隣は空で読めない行は解けない・commit でない object と手元に無い候補は辿れない側・読む上限 8 byte の Bound でも隣の上限を越える長さの tracked path を読み切りその path の字面を identifier で断る〔unresolved でも oversize でもない〕・呼ばれると 30 秒眠る偽の git を Scene の git に置き締め切り 1500 ms の Bound で呼ぶと 2.5 秒の内に deadline で断る・rev-list にだけ rc 1 を返し他の子は本物の git へ渡す偽の git を Scene の git に置くと、本物の git なら公開先の先端から辿れて通る隣の commit id が辿れない側に残り identifier で断る〕）と e2e の publish_material_ の 1 本（object id・tracked path・台帳 id の push と 6 つ持つ push〔先頭 5 件と件数 6〕・7 桁の object id・隣と同じ path の file を足す push が rc 2、公開先と共有する object id・公開先にも在る path・6 桁の object id・/ を含まない隣の path の push が rc 0）が base で RED（歯の URL の字面のうち利用者の部分の後ろの domain の直後が : でないものは @ の前後を concat! の別の literal に割る・起こし口は guards.rs の既存のものを使い親の hook.rs は触らない）、publish_scan_ と publish_visibility_ は緑"
+
+[[contract]]
+id = "o"
+title = "publish の wrapped の印を読みだけの gh で付けない — 細かい語の読み（fine・pieces・follows・is_group と BREAKS）を publish の子の module へ移して（basename の前の片・basename）の対で返し、包まれた gh の後ろが -R / --repo の後の群と読みだけの閉じた表の動詞（pr view / list / status / checks / diff・issue view / list / status・release と gist と repo の view / list・label list）か api の GET の形（対象 1 つと読みの flag だけ・method は大文字の GET ちょうど・短い flag の続け書きは知らない flag）なら印を付けず、表の外と決められない並びは今のまま断る（§23 行 o・ADR-0099・FR80 / NFR4・s2-07l.738.26）"
+req = ["FR80", "NFR4", "AC50"]
+section = "23"
+write-set = ["-crates/scribe2/src/hook/host_guard/publish.rs", "+crates/scribe2/src/hook/host_guard/publish/wrap.rs", "crates/scribe2-boundary/tests/e2e/hook/guards.rs", "docs/design/vessel-hook.md"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail publish_read_only_gh_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail publish_read_only_gh_", "cargo nextest run -p scribe2 --lib --no-tests=fail publish_marks_", "cargo nextest run -p scribe2 --lib --no-tests=fail publish_unresolved_", "cargo nextest run -p scribe2 --lib --no-tests=fail publish_widened_", "cargo nextest run -p scribe2 --lib --no-tests=fail host_guard_publish_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail publish_marks_are_denied_through_the_binary", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail publish_widened_forms_are_denied_through_the_binary"]
+size = "M"
+growth = ["crates/scribe2/src/hook/host_guard/publish/wrap.rs:200", "crates/scribe2-boundary/tests/e2e/hook/guards.rs:40"]
+done = "(1) 細かい語の読み fine・pieces・follows・is_group と pieces だけが読む BREAKS が行 o の + の file（publish の module の pub な子）に在り、fine と pieces の本体は移す前と同じで、publish.rs は has・marked・variable_verb・Before から呼ぶだけ (2) 細かい語が（basename を取る前の片・basename）の対で、印の 5 つと Before の読みは basename の側を今のまま使い、読みだけの判じは前の片で読む (3) 細かい語の gh（basename）ごとに、-R / --repo とその値（--repo=<値> と -R<値> の続け書き）だけを読み飛ばした次の片が群・その次の片が (4) の表の動詞ならその gh は読みだけ、群が api なら後ろの片が対象 1 つ（graphql でない・- で始まらない）と読みの flag（-q / --jq・-t / --template・--paginate・--slurp・-i / --include・--silent・--verbose・--cache・--hostname・値が大文字の GET ちょうどの -X / --method）とその値だけのとき読みだけで、値を取る読みの flag は空白書きと長い名の --<名>=<値> だけを読み、短い flag の続け書き（-XPATCH・-XGET・-fk=v・-Fk=@f・-q.state）は知らない flag と読む（-f・-F・--raw-field・--field・--input・-H・--header・GET ちょうどでない method〔-X post・-X get を含む〕・知らない flag・2 つ目の位置の片のどれかで読みだけでない）、gh の後ろに公開の群の語が在り読みだけでない gh が 1 つでも在れば wrapped、git と後ろの push の arm は変わらない (4) 読みだけの閉じた表（pr = view / list / status / checks / diff・issue = view / list / status・release = view / list・gist = view / list・label = list・repo = view / list）が行 o の + の file の const と全ての対の const slice で、表の外の動詞と変数の動詞は今のまま (5) publish.rs の REWRITE と全ての断りの経路の字が変わらず、publish.rs は縮む（write-set の - は縮む面・増分 0 以下・file は残る・diff は M・縮みは受付の - の門が測る・見積りは移す 62 行〔is_group 5・follows 12・fine 20・pieces 23・BREAKS 2〕− 足す約 19 行〔子の module の宣言 1・use 1・対の読みの差 約 3・歯 約 14〕= 約 −43） (6) heredoc の本文と単引用の字の読みを足さない 歯: lib の publish_read_only_gh_（行 o の + の file の 3 本〔読みだけの 11 形〔command 置換の gh pr view・for の本体と until と while の条件の gh pr checks・if の条件の gh pr view・二重引用の command 置換・-R の後の pr view・pr list・issue view・api の --jq と -X GET〕が印を持たない・書きと決められない 15 形〔pr create・loop の pr merge・api の -X PATCH と --input と -f と -H と graphql・続け書きの -XPATCH と -fk=v と -Fk=@f・小文字の -X post・変数の群の前と後・知らない flag・二重引用の改行で続く pr create〕が wrapped のまま・表の対の const slice の宣言順〕と publish.rs の歯の区間の 1 本〔marked の印が until の gh pr checks で 0・until の gh pr merge で wrapped〕）と e2e の publish_read_only_gh_ の 1 本（埋め込みの manifest で CI 待ちの 4 形が rc 0 で記録なし・for の本体の gh pr merge が rc 2 の unresolved:wrapped）が base で RED、publish_marks_ / publish_unresolved_ / publish_widened_ / host_guard_publish_ と e2e の publish_marks_are_denied_through_the_binary・publish_widened_forms_are_denied_through_the_binary は緑"
 <!-- contracts:end -->
