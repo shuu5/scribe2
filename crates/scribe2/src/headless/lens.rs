@@ -112,8 +112,15 @@ const READ_TOOLS: &str = "Read,Grep,Glob";
 /// 渡された permission mode が [`PERMISSION_MODE`] でなかった周に、契約の file の dir へ置く 1 語の記録の file 名。
 const IGNORED_FILE: &str = "lens.ignored";
 
-/// `--stage` が取る唯一の値（事前審査の先撃ちの lens・`pipe::dispatch::prelens` が lens の行の末尾に足す）。
+/// `--stage` が取る値の 1 つ目（事前審査の先撃ちの lens・`pipe::dispatch::prelens` が lens の行の末尾に足す）。
 pub const STAGE_PRELENS: &str = "prelens";
+
+/// `--stage` が取る値の 2 つ目（memo の審査の lens・`pipe::dispatch::memo_lens` が lens の行の末尾に足す・設計 dispatcher.md §41）。
+/// `--contract` は契約でなく memo の材料の file を指し、diff も契約の隣の材料も読まない。
+pub const STAGE_MEMO: &str = "memo";
+
+/// memo の審査の prompt の文面（tracked な template・穴は `{memo}` だけ・絶対 path も口座名も含まない）。
+const MEMO_TEMPLATE: &str = include_str!("lens-memo.txt");
 
 /// claude の終了を待つ poll の間隔（各周で scope の `memory.peak` を 1 回読む・設計 gate-cost.md §13）。
 /// async は使わない（C13.3）。
@@ -122,7 +129,7 @@ const POLL: Duration = Duration::from_secs(1);
 /// 使い方の 1 行。
 pub fn usage() -> String {
     format!(
-        "usage: {} lens --contract F --worktree D [--permission-mode M] [--rules PATH] [--account-dir D] [--claude PATH] [--cgroup-root DIR] [--stage prelens] < diff",
+        "usage: {} lens --contract F --worktree D [--permission-mode M] [--rules PATH] [--account-dir D] [--claude PATH] [--cgroup-root DIR] [--stage prelens|memo] < diff",
         crate::name::NAME
     )
 }
@@ -151,7 +158,7 @@ fn unknown_arg(args: &[String]) -> Option<&str> {
 }
 
 /// lens が model を読む rules 行（`--stage` の値で選ぶ・設計 pipeline.md §61）: 無ければ `lens.model`・[`STAGE_PRELENS`] は
-/// `pipe.precheck_lens_model`。他の値は [`ArgsError::Unknown`]（字面 `--stage <値>`）・値の欠けは [`ArgsError::Missing`]＝
+/// `pipe.precheck_lens_model`・[`STAGE_MEMO`] は `lens.model`。他の値は [`ArgsError::Unknown`]（字面 `--stage <値>`）・値の欠けは [`ArgsError::Missing`]＝
 /// 未知の引数と同じ断り（[`refusal`]）で claude を呼ばない。
 fn model_row_id(args: &[String]) -> Result<&'static str, ArgsError> {
     let Some(at) = args.iter().position(|arg| arg == STAGE_FLAG) else {
@@ -159,6 +166,7 @@ fn model_row_id(args: &[String]) -> Result<&'static str, ArgsError> {
     };
     match args.get(at + 1).map(String::as_str) {
         Some(STAGE_PRELENS) => Ok(ROW_PRELENS_MODEL),
+        Some(STAGE_MEMO) => Ok(ROW_LENS_MODEL),
         Some(value) if !value.starts_with("--") => Err(ArgsError::Unknown(format!("{STAGE_FLAG} {value}"))),
         _ => Err(ArgsError::Missing(STAGE_FLAG.to_owned())),
     }
@@ -204,6 +212,10 @@ pub fn dispatch(args: &[String]) -> Outcome {
         Ok(found) => found,
         Err(reason) => return Outcome::failed(RC_REFUSED, vec![format!("lens: {reason}"), usage()]),
     };
+    // memo の審査は契約を持たない（`--contract` は memo の材料の file）＝契約の読みも裁定も diff も通らない。
+    if args.windows(2).any(|pair| pair.first().is_some_and(|flag| flag == STAGE_FLAG) && pair.get(1).is_some_and(|value| value == STAGE_MEMO)) {
+        return memo(args, row, (&contract, &worktree), (claude.as_deref(), account.as_deref(), cgroup_root.as_deref()));
+    }
     // **読めない契約で claude を起こさない**。材料が無いまま問えば返るのは
     // INCONCLUSIVE だけで、払った 1 回分は捨て金になる。
     let contract_path = Path::new(&contract);
@@ -232,9 +244,22 @@ pub fn dispatch(args: &[String]) -> Outcome {
         Err(outcome) => return outcome,
     };
     ask(
-        &Call {
-        claude: claude.as_deref().unwrap_or(DEFAULT_CLAUDE),
-        prompt: &prompt,
+        &call_of(&prompt, (model, effort), claude.as_deref(), account.as_deref(), &worktree),
+        Path::new(cgroup_root.as_deref().unwrap_or(confine::CGROUP_ROOT)),
+    )
+}
+
+/// claude を 1 回起こす材料（契約の審査・diff の審査・memo の審査が同じ 1 本で組む）。
+fn call_of<'a>(
+    prompt: &'a str,
+    (model, effort): (Model, Effort),
+    claude: Option<&'a str>,
+    account: Option<&'a str>,
+    worktree: &'a str,
+) -> Call<'a> {
+    Call {
+        claude: claude.unwrap_or(DEFAULT_CLAUDE),
+        prompt,
         // permission mode は渡された値に依らず dontAsk を**毎回**明示し、道具は読みの 3 つだけを渡す（設計 pipeline.md §64 形 1）。
         permission_mode: PERMISSION_MODE,
         // rules 行の model と effort を**毎回**渡す（claude CLI の字面・runner と同じ 2 行）。
@@ -242,16 +267,37 @@ pub fn dispatch(args: &[String]) -> Outcome {
         effort: Some(effort.alias()),
         tools: Some(READ_TOOLS),
         plugin_dir: None,
-        account_dir: account.as_deref(),
+        account_dir: account,
         // **便の worktree で起こす**（anchor の repo は渡さない）。判定に載る憲法は
         // base の checkout のものであり、anchor 側の未 commit な `CLAUDE.md` ではない。
-        cwd: Some(Path::new(&worktree)),
+        cwd: Some(Path::new(worktree)),
         // 判定と消費の 6 値を 1 object の封筒で受ける（設計 gate-cost.md §26 形 (2)）。stream-json にすると
         // 「最後の JSON 行」が claude の result record になり、判定が record の中の文字列へ埋もれる。
         output: Format::Json,
         max_turns: None,
-        },
-        Path::new(cgroup_root.as_deref().unwrap_or(confine::CGROUP_ROOT)),
+    }
+}
+
+/// `--stage memo` の 1 回（設計 dispatcher.md §41 形 5）: `--contract` の file を memo の材料として読み、雛形の `{memo}` に
+/// 埋めて問う。材料が読めない周と rules 行が解けない周は claude を起こさず rc 2。材料は cap（`gate.token_cap`・byte）で
+/// 切る（既存の prompt の上限・文字の境界で落とす）。stdin は読まない。
+fn memo(args: &[String], row: &str, (material, worktree): (&str, &str), (claude, account, cgroup_root): (Option<&str>, Option<&str>, Option<&str>)) -> Outcome {
+    let text = match std::fs::read_to_string(material) {
+        Ok(found) => found,
+        Err(err) => return Outcome::failed_line(RC_BROKEN, format!("lens: memo の材料を読めない: {material}: {err}")),
+    };
+    let (cap, model, effort) = match rows_of(args, row) {
+        Ok(found) => found,
+        Err(reason) => return Outcome::failed_line(RC_BROKEN, format!("lens: {reason}")),
+    };
+    let mut end = usize::try_from(cap).unwrap_or(usize::MAX).min(text.len());
+    while !text.is_char_boundary(end) {
+        end = end.saturating_sub(1);
+    }
+    let prompt = fill(MEMO_TEMPLATE, &[("{memo}", text.get(..end).unwrap_or_default())]);
+    ask(
+        &call_of(&prompt, (model, effort), claude, account, worktree),
+        Path::new(cgroup_root.unwrap_or(confine::CGROUP_ROOT)),
     )
 }
 

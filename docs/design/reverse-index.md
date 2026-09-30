@@ -3,7 +3,7 @@
 - 出所: epic s2-07l.736.33 の打ち手 3（逆引きの表を器が機械で組む）と打ち手 6（設計に書いた code の事実を、便を起こす時点で測り直す）→ [ADR-0105](../../design-intent/decisions/ADR-0105-code-facts-come-from-an-external-index-the-vessel-reads.html)。材料は 2026-09-28〜09-30 の便 165 本の FAIL / INCONCLUSIVE 76 件の分類と、同じ日の索引の道具の試し（問い 74・採点 53・正解の site 249・base 32 本）。どちらも host の file で tracked でない。推奨の採用は常設の裁定 user 2026-09-28T00:54Z（決めてほしいことは推奨で進める）の適用で、外の道具を採ること（憲法 A3）と rules 行の値 2 つ（§4 形 7）と索引の置き場の消し（A1）は、SRS の追加 round で裁定を取った（user 2026-09-30T22:13Z 項 index-tools・項 index-cap・項 index-timeout）。
 - 要件（今の字）: [FR48](../../design-intent/spec/srs.html#FR48) 閉包 / [FR55](../../design-intent/spec/srs.html#FR55) CI の契約表の検査 / [FR47](../../design-intent/spec/srs.html#FR47) 契約の正本 / [FR49](../../design-intent/spec/srs.html#FR49) 契約の審査 / [FR68](../../design-intent/spec/srs.html#FR68) 起動の列 / [NFR3](../../design-intent/spec/srs.html#NFR3) 依存 / [NFR6](../../design-intent/spec/srs.html#NFR6) host の資源。FR48・FR55・FR47 の字を直し、要件を 3 つ足す SRS の追加 round が先に要る（§12）。
 - 前提: 審査役が読みの道具を持つ設計（[pipeline.md](./pipeline.md) §64・行 bg）、行の審査（[row-review.md](./row-review.md)・[ADR-0103](../../design-intent/decisions/ADR-0103-contract-rows-pass-row-review-before-merge-and-failed-rows-keep-their-place.html)）、done の項目ごとの歯の欄（[contract-source.md](./contract-source.md) の done の欄の設計・同じ epic の別の PR・未着地）。表を材料に足す場所と受付の検査に足す場所は、この 3 つの設計の口に揃える。
-- この設計から出る契約: §12 の 8 行。契約表の行は SRS の round と A3 の裁定の後に足す。
+- この設計から出る契約: §12 の 8 行。行 0 は [contract-source.md](./contract-source.md) の契約表の行 bu（§67）に束ね、行 f は SRS の round を待たずに本 doc の契約表に足した（§15）。ほかの行は SRS の round と A3 の裁定の後に足す。
 
 ## 1. 何を解くか
 
@@ -130,7 +130,7 @@
 
 ## 8. 読み手の先行と入れ替えの順
 
-- 欄 `code-facts` と宣言の key 2 つは、今の binary には未知で、書いた doc の区間ごと・宣言ごと読めなくなる（§2）。done の項目ごとの歯の欄の設計と同じく、読むだけの行（§12 の行 0）を先に着地させ、PATH の binary を入れ替えてから書く。
+- 欄 `code-facts` と宣言の key 2 つは、今の binary には未知で、書いた doc の区間ごと・宣言ごと読めなくなる（§2）。done の項目ごとの歯の欄の設計と同じく、読むだけの行（§12 の行 0・[contract-source.md](./contract-source.md) §67 の行 bu）を先に着地させ、PATH の binary を入れ替えてから書く。
 - 同じ時期に done の歯の欄の読むだけの行が未着地なら、2 つの欄を 1 本の読むだけの行で足す（入れ替えを 1 回で済ませる）。
 - 行 a〜h の着地のあとも、受付・起動の列・審査の材料の振る舞いが変わる行は、そのつど入れ替える。
 
@@ -166,27 +166,27 @@
 
 ## 12. SRS の round の後の行（粒度・順序・write-set の見込み・歯）
 
-SRS の追加 round（FR48・FR55・FR47 の字の直しと新しい要件 3 つ・直しの一覧は epic s2-07l.736.33 の notes が名指す）と A3 の裁定の後に、次の行をこの doc の契約表に足す。write-set は見込みで、起票の前に `pipe preflight` と行の審査で測り直す。
+SRS の追加 round（FR48・FR55・FR47 の字の直しと新しい要件 3 つ・直しの一覧は epic s2-07l.736.33 の notes が名指す）と A3 の裁定の後に、次の行をこの doc の契約表に足す。write-set は見込みで、起票の前に `pipe preflight` と行の審査で測り直す。行 0 と行 f は round を待たないので先に起こした（行 0 は contract-source.md §67 の行 bu・行 f は §15）。
 
 | 行 | 中身 | 順（台帳の blocks） | write-set の見込み |
 |---|---|---|---|
-| 0 | 欄 `code-facts` と宣言の key `index-scip`・`index-roles` を読むだけ（読んで捨てる・効かせない） | round を待たない（FR47 の「少なくとも」の内）。done の歯の欄の読むだけの行と束ねてよい | `crates/scribe2/src/pipe/table.rs`・`contracts/schema.toml`・`crates/scribe2/src/pipe/declaration/optional_keys.rs`・`crates/scribe2/src/pipe/declaration.rs`・e2e の既存の歯の file |
+| 0 | 欄 `code-facts` と宣言の key `index-scip`・`index-roles` を読むだけ（読んで捨てる・効かせない） | round を待たない（FR47 の「少なくとも」の内）。done の歯の欄の読むだけの行と束ね、[contract-source.md](./contract-source.md) §67 の行 bu に起こした | `crates/scribe2/src/pipe/table.rs`・`contracts/schema.toml`・`crates/scribe2/src/pipe/declaration/optional_keys.rs`・`crates/scribe2/src/pipe/declaration.rs`・e2e の既存の歯の file |
 | a | 索引の組み立て（§4 形 1〜8・`pipe index build`・SCIP と役の一致の読み手・結び・平らな表の書き手と読み手・撃ち中の印・量の上限・rules 行 2 本） | 0 と、行の審査の行 a（共用の木）の後。touches は rules の kind の閉じた型（行 2 本の kind） | pipe の新しい子 module（`+`）・`crates/scribe2/src/pipe/cli.rs`・`crates/scribe2/src/pipe/cli/args.rs`・`crates/scribe2/src/help.rs`・`crates/scribe2/src/account/mod.rs`（JSON の読み手を開く）・`crates/scribe2/src/rules/mod.rs`・`rules/manifest.toml`・e2e の新しい歯の file と SCIP と一致の fixture・rules と pipe の外形 snapshot |
 | b | 本 repo の宣言（`.vessel.toml` の 2 key・`rust-toolchain.toml` の component・役の規則の file） | a の後・A3 の裁定の後 | `.vessel.toml`・`rust-toolchain.toml`・役の規則の file（`+`） |
 | c | 逆引きの表（§6・`pipe index show`）と材料 index.txt（§7 (a)） | a の後 | 行 a の子 module・`crates/scribe2/src/pipe/review.rs`・`crates/scribe2/src/headless/lens.rs`（雛形の 1 文）・e2e の審査の歯の file・headless の外形 snapshot |
 | d | 受付の索引の閉包（§7 (b)）と索引の状態の扱い | a の後（c と同じ file を触るなら受付の交差が順を決める）。断りの名を足す閉じた型を touches に持ち、その閉包の file を起票の前に数える | `crates/scribe2/src/pipe/closure.rs`・`crates/scribe2/src/pipe/cli/intake.rs`・表の検査の file・`crates/scribe2/src/pipe/dispatch/candidates.rs`・e2e の受付と起動の列の歯の file |
 | e | 欄 `code-facts` の照らしと測り（§7 (c)・表の検査・行の審査・受付・起動の列・裏の組み立ての起こし） | d の後。表の検査の断りの閉じた型を touches に持ち、その閉包の file を起票の前に数える | 表の検査の file・`crates/scribe2/src/pipe/cli/intake.rs`・`crates/scribe2/src/pipe/dispatch/candidates.rs`・`crates/scribe2/src/pipe/dispatch.rs`（裏の起こし）・e2e の歯の file |
-| f | runner の stdin の「ほかの行の touches の型」の節（§7 (b) の後半） | pipeline.md の行 bh（共通 verify の節）の後 | `crates/scribe2/src/pipe/spawn.rs`・`crates/scribe2/src/headless/runner.rs`・e2e の spawn の歯の file・runner の外形 snapshot |
+| f | runner の stdin の「ほかの行の touches の型」の節（§7 (b) の後半） | pipeline.md の行 bh（共通 verify の節）の後。bh は着地済みで、§15 と本 doc の契約表の行 f に起こした | `crates/scribe2/src/pipe/spawn.rs`・`crates/scribe2/src/headless/runner.rs`・e2e の spawn の歯の file・runner の外形 snapshot |
 | g | 外の材料の `.rs` の item と要約の塊を外す（§9） | c と pipeline.md の行 bg（読みの道具）の後 | `crates/scribe2/src/pipe/review/outside.rs`・その子 module・e2e の審査の歯の file |
 | h（条件つき） | 試し撃ち（§11） | 分類にその型が出た時だけ | 別の設計で決める |
 
 - 歯（done の項目ごとに 1 本以上・どれも base で RED の理由を書く）:
-  - 行 0（接頭辞 contract_code_facts_read_ と declaration_index_keys_・e2e）: 欄と key を持つ fixture を読んで断らない。base は未知の欄と key で断るので RED。FIELDS の数と DECLARED_KEYS の列を pin する既存の歯を書き換えるので retroactive の札。
+  - 行 0: contract-source.md §67 の歯（接頭辞 contract_fields_read_only_・欄と key を持つ fixture を読んで断らない・形の違いを名指す）。書き換える pin の歯は base の列に対して RED になり flip する。
   - 行 a（接頭辞 pipe_index_build_・e2e）: 偽の宣言（fixture の SCIP と一致の file を `{out}` と stdout へ写すだけの command）で (1) 1 回目は組み、2 回目は撃たない (2) code の file を 1 つ変えると組み直し、契約表の doc だけを変えると組み直さない (3) 上限を越えると HEAD の鍵と撃ち中の鍵を残して古い順に消す (4) 壊れた SCIP・rc 1・時間切れで失敗の語を記録し表を置かない (5) 箱と受付札の record が残る。base は subcommand が無いので RED。
   - 行 c（接頭辞 pipe_index_show_・e2e）: fixture の小さな crate（別名・`Self` の literal・glob・再輸出・test の module の file・doc の link・文字列の取り込み・別 module の同名の型）から作った SCIP と一致で、7 列の site が期待と一致し、同名の別物を数えず、toml に現れる名を `outside-index` に数える。材料に index.txt が在り、索引の無い周は unavailable の 1 行。base は RED。
   - 行 d（接頭辞 pipe_intake_index_closure_・e2e）: 別名で型を組む file が write-set に無い行を、索引の在る受付が `(索引)` 付きで断り、索引の無い受付と CI の表の検査は通す。撃ち中は index-building で待ち、失敗は index=unavailable で通る。base は RED。
   - 行 e（接頭辞 contract_code_facts_ と pipe_dispatch_code_facts_・e2e）: 形の外れを表の検査が行番号つきで名指し、値の違いを受付が断り、起動の列が code-facts で待ち、索引の無い周は code-facts-unmeasured で待ち、欄の無い行は待たない。base は RED。
-  - 行 f（接頭辞 pipe_spawn_touched_types_・e2e）: runner の stdin にほかの行の touches の型と行 id の節が在り、自分の行の touches は載らない。base は RED。
+  - 行 f: §15 の歯（接頭辞 runner_touches_section_・e2e）。runner の stdin にほかの行の touches の項目と行の pointer の節が在り、自分の行の touches は載らない。base は RED。
   - 行 g（接頭辞 pipe_review_outside_trimmed_・e2e）: outside.txt に item の本文と要約の塊が無く、依存の表・親 module の宣言・data file の鍵の塊は残る。base は塊が在るので RED。
 
 ## 13. 限界
@@ -210,3 +210,49 @@ SRS の追加 round（FR48・FR55・FR47 の字の直しと新しい要件 3 つ
 - 事実を欄でなく § の散文の数から読む: 散文を判定の入力にしない（憲法 C3.3）。
 - 起動の列の測り直しに新しい待ちの理由を足す: 受付の理由の語で足り、閉じた型と FR68 の字を動かさない。
 - 試し撃ちを今起こす: 試しで試し撃ちだけが答えた問いは 0 で、言語ごとの編集の字と診断の読みが要る（§11）。
+
+## 15. runner の stdin にほかの行の touches の項目を並べる（§7 (b) の後半を索引なしで先に・契約表の行 f・FR4 / FR48）
+
+やさしく言うと: 便の runner は、自分の行の write-set の中で新しい file や行を書く。そこで、ほかの行が touches に挙げた型を新しく名指す（組み立てる・match する・数を pin する）と、その行の閉包がその行の write-set の外へ広がり、gate の共通の検証の閉包の歯が落ちる。落ちる前に runner に知らせるため、stdin に「ほかの行の touches」節を足し、ほかの契約表の行の touches の項目と行の名を並べる。契約表を読むだけなので、索引は要らない。
+
+- 出所: 行 al の 2 本目の便が gate で落ちた型（[contract-source.md](./contract-source.md) §66 の出所）と、§7 (b) の後半。
+- 何が起きているか（main 36c34993・verified）:
+  - runner の stdin は `crates/scribe2/src/pipe/spawn.rs` の prompt が組む。順は、契約 file の写し → 「## 共通 verify」節（common_section・[pipeline.md](./pipeline.md) の行 bh・着地済み）→ 回答 → 途中再開 → 追随。節の読み方は雛形 `crates/scribe2/src/headless/runner.txt` が持ち、外形の snapshot の歯 headless_runner_prompt_external_form が雛形の字を pin する。
+  - 便の base は初回の spawn で repo の HEAD を記録し、再開の turn も同じ base を使う。gate は設計 doc を便の base から git show の形で読む（`crates/scribe2/src/pipe/gate/verify.rs` の約束の行の読み）。
+  - 契約表の doc の母集団は `crates/scribe2/src/pipe/table/check.rs` の私有の fn design_docs（docs/design の直下の .md・tracked の順）で、contracts check と宣言済みの新規 file の母集団 declared_files が使う。`crates/scribe2/src/pipe/table.rs` の pub(crate) の再輸出の列は declared_files・read・tracked_files などを crate の中へ開くが、design_docs は開いていない。read_table と parse_pointer は pub の再輸出に在る。
+  - 契約 file の design は設計 pointer（<doc>#<行 id>）である。
+  - 母集団（main 36c34993 で数え直した）: 契約表の行 434、touches を持つ行 76、touches の項目の異なり 50（うち fn 形〔末尾が小文字始まり・contract-source.md §18〕6）。
+- 形（番号は行 f の done と 1:1）:
+  1. **節の置き場と中身**: prompt は「## 共通 verify」節の直後・回答の節の前に「## ほかの行の touches」節を足す。中身は便の base の木の契約表から組む。base の tracked な path の列（git ls-tree）を design_docs の母集団で絞り、doc ごとに base の本文（git show）を read_table で読み、行ごとに pointer（<doc>#<id>）と touches の列を集める。契約 file の design と同じ pointer の行（自分の行）は除く。並べ方は touches の項目ごとに 1 行「- <項目> ← <pointer>, <pointer>」で、項目は辞書順・pointer は doc の順と行の順・同じ pointer は 1 回。anchor の作業木は読まない（未 commit の行は載らない）。
+  2. **読めない周**: base の木の列・doc の本文・doc の区間のどれかを読めない周は、節の本文を理由の 1 行「（ほかの行の touches を読めない: <理由>）」にし、runner を止めない（段は今までどおり進む）。理由は doc の path と最初の不備を持つ（declared_files の断りと同じ形）。
+  3. **組み立ての関数**: 本文の組み立ては pure な pub の 1 関数（行の pointer と touches の列・自分の pointer を受けて本文を返す）で、e2e が直に撃てる（common_lines と同じ置き方）。項目が 0 のときは「なし」の 1 行。
+  4. **母集団の読み**: design_docs を pub(crate) にし、table.rs の pub(crate) の再輸出の列に足す（2 つ目の doc の母集団の読みを作らない・C6）。
+  5. **雛形**: runner.txt の守ることに 1 項目足す。「ほかの行の touches」節の項目は、ほかの契約表の行が閉包で守る名である。write-set の file のうち今それを名指していない file に新しく名指す（struct の literal・match の arm・件数の pin・const slice の宣言・variant の構築・同じ module での同名の fn の宣言）と、その行の閉包がその行の write-set の外へ広がり、gate の共通の検証の閉包の歯が落ちる。名指さずに作れないときは、契約の不足として質問で止まる。
+  6. **変えないもの**: 共通 verify・回答・途中再開・追随の節の字と順、段と rc、契約 file の字。
+  7. **閉包**: spawn.rs と e2e の歯の file は、read_table の返りを field で読むだけにし、ContractRow（契約表の行 h の touches・[contract-source.md](./contract-source.md) §66 の出所の型）を名で書かない。組み立ての関数の入力は pointer と touches の列の組にする。便の木で契約表の検査を撃つ検証行を最後に置いて測る（contract-source.md §66 形 0 の closure）。
+- 歯（接頭辞 runner_touches_section_・e2e の `crates/scribe2-boundary/tests/e2e/pipe/spawn.rs`・どれも base で RED）:
+  - (a) 自分の行（touches に型 1 つ）と、別の doc の 2 行（1 行は型と fn の 2 項目・もう 1 行は同じ型）と、docs/design の下の子の dir の doc の行（touches に型 1 つ）を commit し、anchor の作業木だけに別の doc の行を 1 本足した repo の便の初回の stdin は、「## 共通 verify」節の後に「## ほかの行の touches」節を持つ。本文は 2 項目の 2 行（型の行は 2 つの pointer・fn の行は 1 つ）だけで、自分の行の型・子の dir の doc の型・未 commit の行の型を持たない。base は節が無いので RED。
+  - (b) 受付の後・spawn の前に別の doc の区間を壊して commit した便の節の本文は、doc の path を持つ理由の 1 行で、段は Implemented まで進む。base は節が無いので RED。
+  - (c) 組み立ての関数を直に撃つ。項目 0 は「なし」の 1 行、自分の pointer の行を除く、同じ項目の pointer を 1 行に束ねる。base は関数が無く compile で落ちる。
+  - (d) 外形の snapshot headless_runner_prompt_external_form が雛形の新しい項目を持つ（snapshot を作り直す）。base は雛形の字が違うので RED。
+  - 変わらない既存の歯: runner_common_section_ の 3 本（節の本文は次の「## 」の手前で切るので、後ろに節が増えても本文は同じ）。
+- 限界:
+  - 読むのは行の欄 touches だけ。約束の行の symbols から導く touches（Promised の行）は載らない。
+  - docs/design の直下の .md だけを読み、導出物の .toml は読まない（declared_files と同じ母集団）。
+  - 名指してよいかは判じない。器は知らせるだけで、測るのは gate の共通の検証の閉包の歯のまま。
+  - 項目の形（型か fn か）を読み分けず、節の長さに上限を置かない（今の母集団で 50 項目ほど）。
+
+<!-- contracts:begin -->
+schema = 1
+
+[[contract]]
+id = "f"
+title = "runner の stdin の共通 verify の節の後に「ほかの行の touches」節を足し、便の base の契約表から自分の行を除いた行の touches の項目を pointer と並べ、雛形はそれを新しく名指すとその行の閉包が広がると読む（§15）"
+req = ["FR4", "FR48"]
+section = "15"
+write-set = ["crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/table.rs", "crates/scribe2/src/pipe/table/check.rs", "crates/scribe2/src/headless/runner.txt", "crates/scribe2-boundary/tests/e2e/pipe/spawn.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__headless__headless_runner_prompt_external_form.snap", "=crates/scribe2-boundary/tests/e2e/headless.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail runner_touches_section_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail headless_runner_prompt_external_form", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail runner_common_section_", "cargo run -q -p scribe2-boundary --bin scribe2 -- contracts check --repo ."]
+size = "M"
+growth = ["crates/scribe2/src/pipe/spawn.rs:60", "crates/scribe2/src/pipe/table.rs:1", "crates/scribe2/src/pipe/table/check.rs:1", "crates/scribe2-boundary/tests/e2e/pipe/spawn.rs:170"]
+done = "(1) runner の stdin は「## 共通 verify」節の後・回答の節の前に「## ほかの行の touches」節を持ち、本文は便の base の木の契約表（docs/design の直下の .md の区間）の行のうち契約 file の design と同じ pointer の行を除いた行の touches の項目を、項目ごとに 1 行「- <項目> ← <pointer>, …」で辞書順に並べ、anchor の作業木だけに在る行は載せない〔runner_touches_section_ の (a)〕 (2) base の木の列・doc の本文・doc の区間のどれかを読めない周の本文は（ほかの行の touches を読めない: <理由>）の 1 行で doc の path を持ち、runner は止まらず段は Implemented まで進む〔(b)〕 (3) 組み立ては pure な pub の 1 関数で、項目 0 は なし の 1 行・自分の pointer の行を除く・同じ項目の pointer を 1 行に束ねる〔(c)〕 (4) doc の母集団は check.rs の design_docs を pub(crate) にして table.rs の再輸出の列から読み、docs/design の下の子の dir の doc の行を載せない〔(a)〕 (5) runner.txt の守ることに、節の項目を今それを名指していない file で新しく名指すとその行の閉包がその行の write-set の外へ広がり gate の共通の検証の閉包の歯が落ちる・名指さずに作れないときは契約の不足として質問で止まる、の項目が在る〔外形の snapshot headless_runner_prompt_external_form〕 (6) 共通 verify の節の本文と順は変わらない〔変わらない既存の歯 runner_common_section_〕 (7) spawn.rs と e2e の歯の file は ContractRow を名で書かず、契約表の行 h の閉包を広げない〔verify の 4 行目の契約表の検査〕 歯: e2e の runner_touches_section_（spawn.rs・(a) 自分の行と別の doc の 2 行と子の dir の doc の行を commit し作業木だけに 1 行を足した repo の初回の stdin (b) 受付の後に別の doc の区間を壊して commit した便 (c) 組み立ての関数を直に撃つ）・headless_runner_prompt_external_form（snapshot を作り直す）・変わらない既存の歯 runner_common_section_、base は節と関数が無いので (a)(b) が RED・(c) は compile で落ち・snapshot は雛形の字が違うので RED"
+<!-- contracts:end -->

@@ -278,6 +278,7 @@ impl Body {
             EventKind::TurnEndUnjudged => Self::case(pairs, &["session", "reason"], turn_end_of),
             EventKind::IntakeRefused => Self::case(pairs, &["bead", "refuse"], refused_of),
             EventKind::LifecycleCutover => Self::case(pairs, &["version", "main"], cutover_of),
+            EventKind::MemoJudged => Self::case(pairs, &["bead"], judged_of),
             EventKind::RunCreated
             | EventKind::RunStage
             | EventKind::RunDone
@@ -503,6 +504,15 @@ fn turn_end_of(pairs: &[(String, Value)]) -> Result<(Case, Option<String>), Stri
 fn refused_of(pairs: &[(String, Value)]) -> Result<(Case, Option<String>), String> {
     let bead = word_of(pairs, "bead")?;
     Ok((Case::Refused { refuse: word_of(pairs, "refuse")? }, Some(bead)))
+}
+
+/// MemoJudged: `bead`（memo の id）と空でない `detail`（判定の語）が必須（本体の欄は持たない）。
+fn judged_of(pairs: &[(String, Value)]) -> Result<(Case, Option<String>), String> {
+    let bead = word_of(pairs, "bead")?;
+    if text_of(field(pairs, "detail"), "detail")?.is_empty() {
+        return Err("detail が空".to_owned());
+    }
+    Ok((Case::Judged, Some(bead)))
 }
 
 /// LifecycleCutover: `version` と `main`（小文字の 16 進）が必須。

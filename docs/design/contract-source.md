@@ -1113,6 +1113,16 @@ size = "S"
 growth = ["crates/scribe2/src/pipe/cli/step.rs:12", "crates/scribe2/src/pipe/land.rs:2", "crates/scribe2-boundary/tests/e2e/pipe/land/order.rs:110"]
 done = "(1) 終端だけの撃ち直しは、記録の sha が anchor の refs/heads/main の今の sha（先端）と等しくない周に、land.rs の既存の読み手 landed_squash_of で先端の祖先から本文に run: <run id> と字面の等しい行を持つ squash を 1 回探し、見つかればその sha を着地の sha として先端と比べ直す (2) 見つけた sha が先端と等しい周は先端の側を渡し、見つけた sha の CI で照合して reason landed <見つけた sha> ci=success（tip= なし）で close し、等しくない周は先端の sha つきの Behind を渡し、終端は祖先を測って先端の sha で CI を照合し reason landed <見つけた sha> ci=success tip=<先端> で close する (3) 見つからない周（当たった commit の本文に run: <run id> と字面の等しい行が無い周を含む）は記録の sha のまま今の分岐で、終端は CI も台帳も撃たず terminal:ci:unmeasurable を記して close しない（rc 1） (4) event の詞・終端の 7 値・stdout の 1 行・記録の sha の読み（landed_sha）は変わらず、器は main も偽 remote の main も動かさず、見つけた sha は CI の argv と close の reason にだけ現れる (5) land.rs は landed_squash_of の可視性と doc comment だけが変わり、既着地の便の読み（rebase_onto の呼び）と finish.rs は変わらない 歯: pipe_replay_relocate_ の 2 本（order.rs）が (a) 1 本の fn の撃ち直し 2 周で、着地した commit の親の上に別の便の commit を積み、その上に着地した commit の本文の run の行だけを run: <run id>-x に替えた写しと、写しの上の 1 commit を置いて main と偽 remote の main をその先端へ付け替えた 1 周目が rc 1・stdout run=<id> terminal=ci:unmeasurable・偽 CI の呼び出しが増えず偽 bd が撃たれないこと、同じ別の便の commit の上に本文を字のまま写した写しと、写しの上の 1 commit を置いて付け替えた 2 周目が rc 0・stdout run=<id> terminal=closed・CI の argv が先端の sha を持ち着地した sha も写しの sha も持たず・偽 bd の reason が landed <写しの sha> ci=success tip=<先端の sha> と等しく・main と偽 remote の main が先端のまま・Landed の後ろが push・ci:failure・push・ci:unmeasurable・push・ci:success・close:ok の 7 件であること (b) 本文を字のまま写した写しそのものを main と偽 remote の main の先端にした撃ち直しが rc 0・CI の argv が写しの sha を持ち着地した sha を持たず・偽 bd の reason が landed <写しの sha> ci=success と等しい（tip= を持たない）ことを測り、変わらない既存の歯 pipe_replay_tip_（記録の sha が先端の祖先の周・trailer を持たない兄弟の commit の周・main を読めない周）と pipe_land_already_landed_（既着地の便の読み）が緑のまま、base は (a) の 2 周目と (b) で記録の sha が先端の祖先でないので CI を撃たず close しない（rc 1）ので RED"
 
+[[contract]]
+id = "bu"
+title = "欄と宣言の key を読むだけの行 — 契約表の行の任意の欄 done-teeth と code-facts・契約 file の任意 key done-teeth・vessel 宣言の任意 key teeth-check と index-scip と index-roles を読んで形だけ確かめ、値は捨てて何にも効かせない（§67）"
+req = ["FR47", "FR53"]
+section = "67"
+write-set = ["crates/scribe2/src/pipe/table.rs", "crates/scribe2/src/pipe/table/parse.rs", "contracts/schema.toml", "crates/scribe2/src/pipe/contract.rs", "crates/scribe2/src/pipe/declaration/optional_keys.rs", "crates/scribe2/src/pipe/declaration.rs", "crates/scribe2-boundary/tests/e2e/pipe/contracts.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail contract_fields_read_only_", "cargo nextest run -p scribe2 --lib --no-tests=fail contract_fields_read_only_", "cargo nextest run -p scribe2 --lib --no-tests=fail table_fields_pin_the_schema_columns_and_the_reader_enforces_their_shapes", "cargo nextest run -p scribe2 --lib --no-tests=fail contract_promise_need_conditional_is_two_fields_in_the_schema", "cargo nextest run -p scribe2 --lib --no-tests=fail contract_whole_goal_head_pins_the_folio2_schema_and_the_goal_stays_off_the_fields", "cargo nextest run -p scribe2 --lib --no-tests=fail declaration_kind_passes_declarations_without_cargo_and_keeps_the_schema", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail contract_schema_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail contract_growth_schema_lists_growth_as_an_optional_list", "cargo run -q -p scribe2-boundary --bin scribe2 -- contracts check --repo ."]
+size = "M"
+growth = ["crates/scribe2/src/pipe/table.rs:8", "crates/scribe2/src/pipe/table/parse.rs:6", "crates/scribe2/src/pipe/contract.rs:40", "crates/scribe2/src/pipe/declaration/optional_keys.rs:35", "crates/scribe2/src/pipe/declaration.rs:6", "crates/scribe2-boundary/tests/e2e/pipe/contracts.rs:140"]
+done = "(1) 契約表の行の欄の正本 FIELDS の末尾（growth の後）に任意の文字列の列の欄 done-teeth と code-facts をこの順に足して 20 欄（必須 5・条件付き 2・任意 13）にし、contracts/schema.toml を contracts schema の出力で作り直す〔書き換える既存の歯 table_fields_pin_the_schema_columns_and_the_reader_enforces_their_shapes・contract_promise_need_conditional_is_two_fields_in_the_schema・contract_whole_goal_head_pins_the_folio2_schema_and_the_goal_stays_off_the_fields と、変わらない既存の歯 contract_schema_ の 2 本・contract_growth_schema_lists_growth_as_an_optional_list〕 (2) 行の型付けは 2 欄を既存の配列の読みで読んで値を捨て（ContractRow に field を足さない）、2 欄を持つ行の doc の contracts check は rc 0・findings 0 で、2 欄を消した同じ repo と判定行が同じ字〔e2e の contract_fields_read_only_ の (a)〕 (3) 2 欄に文字列を書いた行は、欄の名と「は文字列の配列でなければならない」の字で欄の行番号に名指され rc 2〔(b)〕 (4) 契約 file の任意 key に done-teeth を足し、既存の配列の読みで読んで値を捨て（Contract に field を足さない・render は書かない）、done-teeth を持つ契約 file は持たない同じ file と等しい Contract に読め、文字列の done-teeth は key の名を持つ不備になり「未知の key」とは言わない〔lib の contract_fields_read_only_ の (c)〕 (5) vessel 宣言の DECLARED_KEYS と OPTIONAL_KEYS の末尾に teeth-check・index-scip・index-roles をこの順に足して 20 key にし、宣言の読みは teeth-check を真偽・index-scip と index-roles を文字列の配列として読んで値を捨て（Declared にも便の写しにも field を足さない）、3 key を持つ宣言の repo の contracts check は 3 key を消した同じ repo と判定行が同じ字で rc 0〔(a)・書き換える既存の歯 declaration_kind_passes_declarations_without_cargo_and_keeps_the_schema〕 (6) 3 key に文字列を書いた宣言は rc 2 で、stderr が key の名と、teeth-check は真偽・index-scip と index-roles は配列の字を持つ〔(b)〕 (7) 足した code はほかの行の touches の型を今それを名指していない file で新しく名指さず、契約表の閉包を広げない〔verify の 9 行目の契約表の検査〕 歯: e2e の contract_fields_read_only_（contracts.rs・(a) 欄 2 つの行と key 3 つの宣言を持つ repo と、それらを消した同じ repo の判定行の一致と rc 0 (b) 形の違い 5 形の名指し）、lib の contract_fields_read_only_（contract.rs の既存の test 区間・(c)）、書き換える既存の歯 4 本（table.rs の 3 本は欄の宣言順と数 20 と任意 13・declaration.rs の 1 本は key の列 20 本と doc comment の本数）は base の FIELDS と DECLARED_KEYS に対して RED になり flip するので retroactive の札は要らない。base は未知の欄と key で区間・契約 file・宣言を読めないので (a)(b)(c) が RED"
 <!-- contracts:end -->
 
 
@@ -2178,7 +2188,8 @@ done = "(1) 終端だけの撃ち直しは、記録の sha が anchor の refs/h
   - 行 (0) 欄を読むだけ: FIELDS に任意の欄 done-teeth（文字列の列）を足して `contracts/schema.toml` を作り直し、契約 file の OPTIONAL に done-teeth を足し（読んで捨てる・Contract の field は足さない）、DECLARED_KEYS に teeth-check を足す（真偽を読み、効かせない）。照らし・写し・要否は持たない。
     - req は FR47・FR53（FR47 の「少なくとも」の内・FR1 の必須の集合は変わらない）。touches なし（閉じた型に variant を足さない）。
     - write-set の見込み: `crates/scribe2/src/pipe/table.rs`・`contracts/schema.toml`・`crates/scribe2/src/pipe/contract.rs`・`crates/scribe2/src/pipe/declaration/optional_keys.rs`・`crates/scribe2/src/pipe/declaration.rs`・e2e の既存の歯の file。growth は各 file 20 行以内。
-    - base で RED の理由: 表の読み・契約 file の読み・宣言の読みが、どれも未知の key で断る（機能不在）。FIELDS の数（18 → 19）と DECLARED_KEYS の列を pin する既存の歯の本文を書き換えるので、retroactive の札が要る。
+    - base で RED の理由: 表の読み・契約 file の読み・宣言の読みが、どれも未知の key で断る（機能不在）。FIELDS の数と DECLARED_KEYS の列を pin する既存の歯の本文を書き換える。書き換えた歯は base の列に対して RED になるので flip し、retroactive の札は要らない（§67 の歯）。
+    - 起こした形: 契約表の行 bu（§67）。[reverse-index.md](./reverse-index.md) §8 の束ねで、欄 code-facts と宣言の key index-scip・index-roles も同じ行で読むだけにする（入れ替えを 1 回で済ませる）。write-set は現物で数え直し、行の型付けの file と e2e の contracts の歯の file を足した。
   - 行 (4) `=` の file の不変（形 0 の表の place-only）: spawn が runner の allowlist を組むとき `=` の項目を外し、gate の段 ① が diff の path のうち `=` の項目に当たるものを名指して落とす。歯の置き場の門（§20）と閉包と交差は今のまま `=` の項目を write-set に数える。欄 done-teeth の有無に依らずどの便にも効く。
     - req は FR4・FR20（round で FR4 に「置き場だけの印の項目は allowlist から除く」、FR20 に「write-set の置き場だけの印の項目へ」の句を足す）。depends なし（表に足すのは形 8 の順で、行 (0) の入れ替えの後）。
     - write-set の見込み: `crates/scribe2/src/pipe/spawn.rs`・`crates/scribe2/src/pipe/gate/verify.rs`・e2e の spawn と gate の歯の file。touches なし。
@@ -2220,3 +2231,41 @@ done = "(1) 終端だけの撃ち直しは、記録の sha が anchor の refs/h
   - doc を跨いで行を移す PR と doc の改名は、移した行を足された行と読み、欄を求める。
   - 行 (0) より前の binary は、欄を持つ行を含む doc の区間と teeth-check を持つ宣言を丸ごと読めない（形 8・入れ替えは前へだけ）。行 (0) の着地と入れ替えの前に欄と key を書かない。
   - done の中の全角の番号は項目と読まない（§64 の限界のまま）。欄を求められた行は半角の番号で書き直す。
+
+## 67. 欄と宣言の key を読むだけの行 — 契約表の行の任意の欄 done-teeth・code-facts、契約 file の任意 key done-teeth、vessel 宣言の任意 key teeth-check・index-scip・index-roles を読んで形だけ確かめ、値は捨てて何にも効かせない（契約表の行 bu・§66 の行 (0) と [reverse-index.md](./reverse-index.md) §8 の束ね・FR47 / FR53）
+
+やさしく言うと: §66（done の項目ごとの歯の欄）と reverse-index.md（code の索引）は、どちらも行の欄と vessel 宣言の key を新しく足す。今の器は知らない欄や key を 1 つでも見ると、その doc の区間ごと・宣言ごと読めなくなる。そこで、欄と key を書く前に「読んで捨てるだけ」の版を着地させ、PATH の binary を入れ替えておく。2 つの設計の読むだけの行を 1 本に束ねて、入れ替えを 1 回で済ませる。
+
+- 出所: §66 形 8（読み手の先行と入れ替えの順）と、reverse-index.md §8 の「同じ時期に done の歯の欄の読むだけの行が未着地なら、2 つの欄を 1 本の読むだけの行で足す」。
+- 何が起きているか（main 36c34993・verified）:
+  - 行の欄の正本 FIELDS（`crates/scribe2/src/pipe/table.rs`）は 18 欄（必須 5・条件付き 2・任意 11）。表の key の集合は FIELDS から引き、未知の key を持つ行が在る doc は区間ごと unreadable（rc 2）になる。
+  - 行の型付けは `crates/scribe2/src/pipe/table/parse.rs` の typed が欄ごとに形を読んで ContractRow を組む。table.rs の歯 table_fields_pin_the_schema_columns_and_the_reader_enforces_their_shapes は FIELDS の全部の欄に形の違う値を書き、「<欄> は」の字で名指されることを求める。FIELDS に足す欄は、typed でも形を読まないとこの歯が赤になる。
+  - FIELDS の数を 18 で pin する歯は table.rs の 3 本（上の 1 本・contract_promise_need_conditional_is_two_fields_in_the_schema・contract_whole_goal_head_pins_the_folio2_schema_and_the_goal_stays_off_the_fields）。生成物 contracts/schema.toml は contracts schema の出力で、e2e の歯 3 本（contract_schema_ の 2 本・contract_growth_schema_lists_growth_as_an_optional_list）と xtask check の contracts-schema が FIELDS と照らす（どれも数を pin しない）。
+  - 契約 file の key は `crates/scribe2/src/pipe/contract.rs` の REQUIRED 9 と OPTIONAL 5（classes・opens・touches・targets・growth）で、未知の key は行番号つきで断る。targets は Contract の field を持たない任意 key の前例（読むのは gate の検出線だけ）。
+  - vessel 宣言の key は `crates/scribe2/src/pipe/declaration/optional_keys.rs` の DECLARED_KEYS（17 key）と OPTIONAL_KEYS（14 key）。`crates/scribe2/src/pipe/declaration.rs` の fields は OPTIONAL_KEYS に無い key を必須と読むので、任意 key は 2 つの列の両方に足す。値の読み value_of は空の配列を ruling-fixtures のほかは断る。真偽の読みは optional_keys.rs の bool_key。DECLARED_KEYS の列は declaration.rs の歯 declaration_kind_passes_declarations_without_cargo_and_keeps_the_schema が 17 本で pin する。
+  - contracts check は宣言を HEAD から読み、読めない周は rc 2 で stderr に key の名を出す（e2e の contracts.rs の entrance-flip の歯と同じ経路）。
+  - 幅 120 で数えた行数: declaration.rs 1380（余地 120）・table.rs 857・parse.rs 653・contract.rs 734・optional_keys.rs 554。core の本体の行は概算で約 69600 / 74000（R-C4-1）。
+- 形（番号は行 bu の done と 1:1）:
+  1. **行の欄**: FIELDS の末尾（growth の後）に、任意の文字列の列の欄 done-teeth と code-facts をこの順に足す（20 欄・任意 13・1 項目 1 行のまま＝xtask check の contracts-schema が字面で読む）。生成物 contracts/schema.toml は contracts schema の出力で作り直す（手で書かない）。
+  2. **行の型付け**: typed は 2 欄を既存の配列の読みで読んで形だけ確かめ、値は捨てる。ContractRow に field を足さないので、構築点は動かない。要素の中身（番号と歯の形・列の語と値）は読まない（§66 の行 (1) と reverse-index.md の行 e が読む）。
+  3. **形の違い**: 2 欄に文字列を書いた行は、既存の字「<欄> は文字列の配列でなければならない」で欄の行番号に名指す（新しい字を作らない）。空の配列は今の表の読みが断る。
+  4. **契約 file**: OPTIONAL に done-teeth を足す（key の名は contract.rs の const 1 つで、GROWTH と同じ置き方）。build は既存の配列の読みで読んで形だけ確かめ、値は捨てる。Contract に field を足さず、render は書かない（写すのは §66 の行 (1)）。
+  5. **vessel 宣言**: DECLARED_KEYS と OPTIONAL_KEYS の末尾に teeth-check・index-scip・index-roles をこの順に足す（20 key・任意 17）。読みは optional_keys.rs の関数 1 つに置き、Declared の parse の読みの列には 1 行だけ足す。teeth-check は bool_key と同じ真偽の読み、index-scip と index-roles は文字列の配列の読みで、値は捨てる。Declared に field を足さず、便の写し（Effective）にも写さない。片方だけの宣言・穴の有無・command の許しは見ない（reverse-index.md の行 a）。
+  6. **宣言の形の違い**: 3 key に文字列を書いた宣言は、今の宣言の読みと同じく rc 2 で、key の名と「真偽」か「配列」の字を持つ不備になる。
+  7. **閉包**: 足す code は、ほかの行の touches の型（ContractRow は契約表の行 h・TableError は行 aw・ax・az の touches）を、今それを名指していない file で新しく名指さない。便の木で契約表の検査を撃つ検証行を最後に置いて測る（§66 形 0 の closure・#918 の形）。
+- 変えないもの: 欄も key も持たない行・契約 file・宣言の読みと出力の字、contracts check の判定行、受付と preflight の判定、生成した契約 file の字（着地の列の settled の鍵）、gate、審査の材料。欄や key を持つ行と宣言も、形が合えば持たないものと同じ出力になる。
+- 入れ替え: 着地の後に PATH の binary を入れ替えるまで、欄と key を main に書かない（§66 形 8・reverse-index.md §8）。
+- 歯（done の項目ごと・どれも base で RED）:
+  - e2e（`crates/scribe2-boundary/tests/e2e/pipe/contracts.rs`・接頭辞 contract_fields_read_only_）:
+    - (a) 欄 2 つを持つ行の doc と、key 3 つを持つ宣言の repo の contracts check が rc 0・findings 0 で、欄と key を消した同じ repo と判定行が同じ字。base は未知の key で区間と宣言を読めず rc 2 なので RED。
+    - (b) 形の違い 5 形（done-teeth と code-facts に文字列・teeth-check と index-scip と index-roles に文字列）。欄の 2 形は findings が欄の名と「は文字列の配列」の字を持ち rc 2。宣言の 3 形は rc 2 で stderr が key の名と「真偽」か「配列」の字を持つ。base は「未知の key」の字で断るので、字の照合で RED。
+  - lib（contract.rs の既存の test 区間・接頭辞 contract_fields_read_only_）:
+    - (c) done-teeth を持つ契約 file が、持たない同じ file と等しい Contract に読める。文字列の done-teeth は key の名を持つ不備になり、「未知の key」とは言わない。base は未知の key で断るので RED。
+  - 書き換える既存の歯: table.rs の 3 本（欄の宣言順・数 20・任意 13）と declaration.rs の 1 本（key の列 20 本・doc comment の本数）。書き換えた歯は base の FIELDS と DECLARED_KEYS に対して RED になり flip するので、retroactive の札は要らない。
+  - 変わらない既存の歯: contract_schema_ の 2 本と contract_growth_schema_lists_growth_as_an_optional_list（生成物と FIELDS の照らし）。
+- 他の行との順: 行 c（[case-lifecycle.md](./case-lifecycle.md) §12 の行 c）が declaration.rs と optional_keys.rs を write-set に持つ（sha の読みを 1 本足す・DECLARED_KEYS は変えない）。走行中の交差は受付が直列にするので、blocks は結ばない。[reverse-index.md](./reverse-index.md) §15 の行 f とは table.rs を共に持つ（行 f は pub(crate) の再輸出の列を 1 語、本行は FIELDS と歯を変える）。
+- 限界:
+  - 値を捨てるので、欄と key を書いても何も起きない。書いた行を器が照らすのは、§66 の行 (1)・(2) と reverse-index.md の行 a・e の着地の後。この版の binary は中身の誤った欄も通す。
+  - code-facts を契約 file へ写す key は足さない（reverse-index.md §7 (c) は行の欄を表の検査・受付・起動の列で測り、契約 file は読まない）。
+  - 2 欄の値は ContractRow に載らないので、live な行の書き換えを止める hook の guard と、着地の列の settled の鍵（生成した契約 file の字）は、2 欄だけの変化を見ない。field を足すのは §66 の行 (1) と reverse-index.md の行 e。
+- ADR: 書かない（欄と key の形は ADR-0104・ADR-0105 が決めた。本 § はその読み手を先に置く段）。

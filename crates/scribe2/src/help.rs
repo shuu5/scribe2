@@ -247,7 +247,7 @@ pub const TABLE: &[Entry] = &[
             "it on main. Each subcommand moves one run one stage, or shows and steers the queue.",
             "The pipeline has no switch that skips the review stage.",
         ],
-        form: "{NAME} pipe <intake|preflight|spawn|approve|answer|gate|land|retire|run|show|resume|stop|report|dispatch> [--state-dir D] [--repo R（cwd は読まない＝--state-dir の無い周と便の写し面の無い周は要る）] [--rules PATH] [stop: --all [--reason WORDS（live な便が 2 本以上の周は要る）]|--run ID] [dispatch: (1 周)|ls|first|hold|release BEAD] [run|resume: --drive] [land: --terminal-only|--detection-only] [--runner CMD] [flags]",
+        form: "{NAME} pipe <intake|preflight|spawn|approve|answer|gate|land|retire|run|show|resume|stop|report|dispatch> [--state-dir D] [--repo R（cwd は読まない＝--state-dir の無い周と便の写し面の無い周は要る）] [--rules PATH] [stop: --all [--reason WORDS（live な便が 2 本以上の周は要る）]|--run ID] [dispatch: (1 周)|ls|first|hold|release BEAD|memo-lens MEMO] [run|resume: --drive] [land: --terminal-only|--detection-only] [--runner CMD] [flags]",
         subcommands: &[
             ("intake", "Take one contract row in and create its run."),
             ("preflight", "Review a contract before intake, without creating a run."),
@@ -315,7 +315,7 @@ pub const TABLE: &[Entry] = &[
             "asks Claude to judge it against the contract, and prints the verdict with its",
             "findings. It changes nothing in the worktree.",
         ],
-        form: "{NAME} lens --contract F --worktree D [--permission-mode M] [--rules PATH] [--account-dir D] [--claude PATH] [--cgroup-root DIR] [--stage prelens] < diff",
+        form: "{NAME} lens --contract F --worktree D [--permission-mode M] [--rules PATH] [--account-dir D] [--claude PATH] [--cgroup-root DIR] [--stage prelens|memo] < diff",
         subcommands: NO_SUBCOMMANDS,
         flags: &[
             ("--contract F", "Contract file the diff is judged against."),
@@ -324,7 +324,7 @@ pub const TABLE: &[Entry] = &[
             ("--account-dir D", "Account config dir the session runs under."),
             ("--claude PATH", "Claude program to start instead of the default one."),
             ("--cgroup-root DIR", "cgroup under which the session is confined."),
-            ("--stage prelens", "Pre-fired lens of the pre-check; reads its own model row."),
+            ("--stage prelens|memo", "prelens: pre-check lens; memo: memo review (--contract F = its material)."),
         ],
         examples: &["{NAME} lens --contract C --worktree WT < diff"],
         see: &["docs/design/pipeline.md", "docs/design/gate-cost.md"],
