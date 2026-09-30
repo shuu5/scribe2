@@ -1218,6 +1218,27 @@ fn publish_widened_forms_are_denied_through_the_binary() {
     clean(&[&repo, &state]);
 }
 
+/// 埋め込みの manifest で、CI 待ちの 4 形（command 置換の gh pr view・for の本体と until の条件の gh pr checks・command 置換の gh api の
+/// GET）は rc 0・記録なし、for の本体の gh pr merge は rc 2・stderr 1 行（hit=unresolved:wrapped・unresolved の経路）と記録 1 行（§23 行 o）。
+#[test]
+fn publish_read_only_gh_is_passed_in_a_wait_loop_and_a_merge_in_a_loop_is_denied() {
+    let (repo, state) = (git_repo(), tmp());
+    for command in [
+        "x=$(gh pr view 1 --json state)", "for i in 1 2; do gh pr checks 1; done", "until gh pr checks 1; do sleep 30; done",
+        "x=$(gh api repos/o/n/pulls/1 --jq .state)",
+    ] {
+        assert_silent(&run_host_guard_in(&state, &bash_payload(&repo, command)), command);
+    }
+    assert!(host_guard_records(&state).is_empty(), "通す周は記録を残さない");
+    let command = "for i in 1; do gh pr merge 1; done";
+    let text = assert_host_guard_deny(&run_host_guard_in(&state, &bash_payload(&repo, command)), command);
+    let route = "解ける形で書き直す（git / gh を包まずに頭の語に置く・ref と remote と dir と -R と可視性の欄は literal・本文は file〔--body-file か api の -F k=@file〕か区切りを引用した heredoc で渡す）";
+    let want = format!("{NAME}: host-guard deny kind=publish hit=unresolved:wrapped row=host_guard.publish ruling=user 2026-09-27T23:55Z — {route}");
+    assert_eq!(text.trim_end(), want, "{command}");
+    assert_eq!(host_guard_records(&state).len(), 1, "記録 1 行");
+    clean(&[&repo, &state]);
+}
+
 /// 埋め込みの manifest と群を宣言しない置き場（host.toml 無し）で、AC50 (d) の全履歴の 3 形は rc 2・stdout 0 byte・stderr 1 行
 /// （hit=full-history:<種別>・埋め込みの行の ruling・全履歴の経路）と記録 1 行ずつ、`gh repo edit o/n --visibility private` は rc 0・
 /// 記録なし（§18 行 l・偽の gh の回数は数えない）。

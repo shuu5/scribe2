@@ -20,6 +20,9 @@ pub mod probe;
 pub mod scan;
 pub mod texts;
 pub mod visibility;
+pub mod wrap;
+
+use wrap::{fine, follows, is_group};
 
 /// 識別子の形の要素の札。
 const FORM: &str = "form";
@@ -53,8 +56,6 @@ const VALUED: [(&str, &str); 10] = [
 const BARE: [(&str, &str); 4] = [("-i", "--include"), ("", "--paginate"), ("", "--silent"), ("", "--verbose")];
 /// 書きの method。
 const WRITE_METHODS: [&str; 4] = ["POST", "PUT", "PATCH", "DELETE"];
-/// 細かい語を割る shell の区切りの字（空白と `$` の前と `:-` `:=` `:+` `:?` でも割る）。
-const BREAKS: [char; 10] = [';', '&', '|', '(', ')', '{', '}', '<', '>', '`'];
 /// 付け替えの env の名（launcher が剥いだ語と前の segment の代入で数える・前置きの値は行 j が読む）。
 const REDIRECT_ENV: [&str; 4] = ["GIT_DIR", "GIT_WORK_TREE", "GH_REPO", "GH_HOST"];
 /// 行き先を付け替える git の設定の接頭辞（小文字で比べる）。
@@ -393,8 +394,8 @@ pub struct Marked {
 struct Piece<'a> {
     /// segment の語（前置きと launcher を含む）。
     words: &'a [String],
-    /// 細かい語。
-    fine: Vec<String>,
+    /// 細かい語（片と basename の対・印は basename を読む）。
+    fine: Vec<(String, String)>,
     /// 辿り（前置きだけの segment は `None`）。
     walk: Option<&'a Walked>,
     /// 頭の語（比べる語・前置きだけの segment は空）。
@@ -415,7 +416,7 @@ struct Before {
 impl Before {
     /// segment 1 つを足した後。
     fn after(self, piece: &Piece) -> Self {
-        let moved = piece.fine.iter().any(|word| word == POPD || (!MOVES.contains(&piece.head) && MOVES.contains(&word.as_str())));
+        let moved = piece.fine.iter().any(|(_, word)| word == POPD || (!MOVES.contains(&piece.head) && MOVES.contains(&word.as_str())));
         let exporting = piece.walk.is_none() || EXPORTS.contains(&piece.head);
         let exported = exporting && piece.words.iter().any(|word| assigns(word, true));
         Self { moved: self.moved || moved, exported: self.exported || exported }
@@ -621,23 +622,6 @@ fn has(mark: Mark, piece: &Piece, before: Before, root: &Path) -> bool {
     }
 }
 
-/// gh の公開の群の語か。
-fn is_group(word: &str) -> bool {
-    word == API || TABLE.iter().any(|(group, _)| *group == word)
-}
-
-/// 細かい語に `git` とその後ろの `push`、か `gh` とその後ろの公開の群の語が在るか（隣でなくてよい）。
-fn follows(fine: &[String]) -> bool {
-    fine.iter().enumerate().any(|(at, word)| {
-        let after = fine.get(at.saturating_add(1)..).unwrap_or_default();
-        match word.as_str() {
-            "git" => after.iter().any(|next| next == PUSH),
-            "gh" => after.iter().any(|next| is_group(next)),
-            _ => false,
-        }
-    })
-}
-
 /// verb の印: 頭の語が `$` / `` ` `` を持ち頭の語の 2 つ目以後の片か後ろの語の細かい語に push か公開の群の語が在る・git の
 /// 動詞・gh の群か動詞・api の method が解けない字を持つ（api の対象の placeholder は印でない）。
 fn variable_verb(seg: &Walked, head: &str, root: &Path) -> bool {
@@ -645,7 +629,7 @@ fn variable_verb(seg: &Walked, head: &str, root: &Path) -> bool {
     if head.contains(['$', '`']) {
         let first = seg.words.first().map(|word| fine(word)).unwrap_or_default();
         let mut later = first.into_iter().skip(1).chain(rest.iter().flat_map(|word| fine(word)));
-        return later.any(|word| word == PUSH || is_group(&word));
+        return later.any(|(_, word)| word == PUSH || is_group(&word));
     }
     let unresolved = |word: &str| word.contains(UNRESOLVED);
     match head {
@@ -700,49 +684,6 @@ fn configured(words: &[String]) -> bool {
         }
     }
     false
-}
-
-/// 語の細かい語（設計 §17 形 2）: `$(` か `` ` `` を持つ語と、空白を持たずに `<(` か `>(` を持つ語は [`pieces`] で割り、他の語は
-/// 割らずに先頭の `(` `{` と末尾の `)` `}` `;` だけを落とす。どちらも片の先頭の `NAME=` を落とした basename（空の片は捨てる）。
-fn fine(word: &str) -> Vec<String> {
-    let substituted = word.contains("$(") || word.contains('`');
-    let process = !word.contains(char::is_whitespace) && (word.contains("<(") || word.contains(">("));
-    let parts = if substituted || process {
-        pieces(word)
-    } else {
-        vec![word.trim_start_matches(['(', '{']).trim_end_matches([')', '}', ';'])]
-    };
-    parts
-        .into_iter()
-        .filter_map(|part| {
-            let bare = if is_assignment(part) { part.split_once('=').map_or(part, |(_, value)| value) } else { part };
-            let base = bare.rsplit('/').next().unwrap_or(bare);
-            (!base.is_empty()).then(|| base.to_owned())
-        })
-        .collect()
-}
-
-/// 割る語を片に分ける: 空白と [`BREAKS`] と `:-` `:=` `:+` `:?` で割り、`$` の前でも割る。
-fn pieces(word: &str) -> Vec<&str> {
-    let (mut found, mut start) = (Vec::new(), 0_usize);
-    for (at, found_char) in word.char_indices() {
-        let next = at.saturating_add(found_char.len_utf8());
-        let resume = if found_char.is_whitespace() || BREAKS.contains(&found_char) {
-            Some(next)
-        } else if found_char == '$' {
-            Some(at)
-        } else if found_char == ':' && word.get(next..).is_some_and(|rest| rest.starts_with(['-', '=', '+', '?'])) {
-            Some(next.saturating_add(1))
-        } else {
-            None
-        };
-        if let Some(resume) = resume {
-            found.extend(word.get(start..at));
-            start = resume;
-        }
-    }
-    found.extend(word.get(start..));
-    found
 }
 
 /// 比べる語（末尾の [`TAIL`] を落とす）。
@@ -1109,6 +1050,14 @@ mod tests {
         ] {
             assert!(marks(line).is_empty(), "公開の segment に加わらない: {line}: {:?}", marks(line));
         }
+    }
+
+    /// 行 o (d) until の条件の gh は動詞で分かれる: 読みだけの `pr checks` は印 0、書きの `pr merge` は wrapped。
+    #[test]
+    fn publish_read_only_gh_in_a_loop_condition_is_marked_by_its_verb() {
+        assert!(marks("until gh pr checks 1; do sleep 30; done").is_empty(), "{:?}", marks("until gh pr checks 1; do sleep 30; done"));
+        let merge = marks("until gh pr merge 1; do sleep 30; done");
+        assert_eq!(merge.into_iter().find_map(|seg| seg.first().copied()), Some("wrapped"));
     }
 
     /// 行 k (b) 判定の順: 行の無い manifest は no-row、enabled の行は segment の順に先頭の印で unresolved、`enabled = false` は通す。
