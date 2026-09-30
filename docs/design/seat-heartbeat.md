@@ -688,6 +688,48 @@
   - (a) 計画どおり src の群を移す案。合図の群は行 w で移済みで、残る src の群はどれも I/O の本体に絡み、純移動の形が取れない。
   - (b) 上限の値を上げる案。憲法 C4 の閾値の変更で、A2 の裁定が要る。
 
+## 24. 管理 tick の alarm に unsorted と owned を、直近の流れの事実行に席の手番の閾値越えを、局面の出力から出す（契約表の行 ac・[FR27](../../design-intent/spec/srs.html#FR27) / FR42 / FR94・AC58・AC60・ADR-0088）
+
+やさしく言うと: 席を起こす合図の末尾の alarm に「未仕分けの発話が在る（unsorted）」「席の番のまま閾値を越えた案件が在る（owned）」を足し、session の始まりの事実の行に閾値越えの件数と最古の 1 件を出す。どちらも器が 1 か所で計算した局面の出力を読むだけで、自前で判じない。出力が古いときは古いと、無いときは無いと示す。
+
+- 何が起きているか（main 46b1f91f・verified）:
+  - alarm の語と上げの秒は `crates/scribe2/src/seat/tick/signal.rs` の `idle_alarm` の 1 本が決める（語は idle・idle-unset・precheck・precheck-unset）。`crates/scribe2/src/seat/tick.rs` がその語を `,` でつなぎ、合図の facts の後ろに ` alarm=<語,…>` として足す。tick.rs は 1228 行（歯の module を子の file へ割った後）。
+  - 語 unreflected と floor は dispatcher.md 行 am と行 aj が同じ関数に足す（未着地）。順は idle → precheck → unreflected → floor。
+  - 既存の tick の歯（`crates/scribe2-boundary/tests/e2e/seat/tick.rs`）は合図の字を完全一致で見る。局面の出力の無い置き場で語を足すと、これらが RED になる。
+  - 直近の流れの事実行（`crates/scribe2/src/seat/recent.rs`）の種類は wip・bead・git・commit・dirty の 5 つ（閉じた enum と KINDS）。測れない種類は `[RECENT-UNMEASURED] kind=<種類> reason=<語>`、0 件は `[RECENT-NONE] kind=<種類>`（C10）。台帳は SessionStart の hook（`crates/scribe2/src/hook/mod.rs`）が 1 回読んで渡す。
+  - FR27 の alarm の閉じた語は unreflected・floor・unsorted・owned で、局面の出力が古さの印を持つ周は unsorted と owned に閉じた 1 語 stale を添える。**出力が無いか読めない周の語と、添える先の無い周の単独の stale は FR27 に無い**（SRS の追加の round の依頼の項 3）。
+- 前提（doc を跨ぐ順は台帳の依存で表す）: ledger-form.md 行 o（局面の出力の読み手 1 本）の着地の後。dispatcher.md 行 aj と行 am（alarm の語 floor と unreflected）の着地の後。**SRS の追加の round で FR27 に語 unreadable と単独の stale が入った後に起こす**。
+- 約束（番号は done と 1:1）:
+  1. alarm の語は `idle_alarm` の 1 本に足す。入力は ledger-form.md 行 o の読み手が、比べる印を event log の長さにして読んだ結果（case-lifecycle §15 の表・古さの印が 1 つでも在る周は古い）。
+     - 出力の未仕分けの発話の部品（utterance-open）が 1 つ以上 → `unsorted`。
+     - 出力の `owned.count` が 1 以上 → `owned`。
+     - 古い周は、出した語に `:stale` を添える（`unsorted:stale`）。件数が 0 で古い周は `stale` を 1 語だけ出す。
+     - 出力が無いか読めない周は `unreadable` を 1 語だけ出す。
+     - 並びは既存の語の後ろに unsorted → owned（→ stale か unreadable）。上げの秒は既存の語と同じ最大値で、梯子の段は変えない（黙りの初段を縮めない）。
+  2. tick は置き場の file だけを読み、台帳も git も撃たない（FR27）。event log は長さだけを測り中身を読まないので、読む量は log の大きさに依らない（NFR5）。tick.rs に足すのは読み手の呼び出しの数行だけ。
+  3. 合図を送らない周の席（実効の値が off・梯子の列が尽きた席）には、今どおり alarm も届かない。
+  4. 直近の流れの事実行に種類 owned を宣言順の末尾に足す（KINDS と閉じた enum に 1 値・測れない理由の閉じた enum に lifecycle の 1 値）。比べる印は台帳と main（§15）。
+     - 閾値越えが在る周: `[RECENT-OWNED] count=<n> oldest=<部品>:<id> phase=<局面> since=<時刻>`。
+     - 0 件の周: `[RECENT-NONE] kind=owned`。
+     - 出力が無いか読めない周: `[RECENT-UNMEASURED] kind=owned reason=lifecycle`。
+     - 古い周は行の末尾に ` stale=<印の種類,…>`（読み手が返す種類の列）を付ける。古さの印の無いまま台帳か main が動いた周もここで古いと示す（AC60）。
+  5. 閾値（rules 行 `lifecycle.age_h.<語>`）を当てるのは局面の出力の書き手（case-lifecycle 行 c）で、本行は出力の件数と最古をそのまま写し、自前で判じない（FR94）。
+- 閉包: 本行は recent.rs の閉じた enum 2 つ（種類と測れない理由）に 1 値ずつ足すので、その 2 つを touches に宣言する。新しい file は作らない。
+- 歯:
+  - e2e（既存の `crates/scribe2-boundary/tests/e2e/seat/tick.rs` の末尾・接頭辞 `seat_tick_lifecycle_alarm_`・7 本・出力は読み手の読める形の fixture を置き場に書く）: (a) 未仕分けの発話 1 つで `unsorted` (b) owned.count 1 で `owned` (c) 古さの印と両方の語で `unsorted:stale,owned:stale` (d) event log が出力の長さより伸びた周は古い（同じ歯の等しい周は `:stale` が無い） (e) 件数 0 の周は語が無く、同じ置き場で古い周は `stale` の 1 語 (f) 出力の無い置き場で `unreadable` (g) 偽の bd と git が 1 度も撃たれない（(a) の周で測る）。
+  - 既存の tick の歯: tick を撃つ共通の helper が、撃つ直前に今の log の長さを印に持つ部品 0 の出力を書く 1 手を足す（16 か所の期待の字は動かさない）。helper を直す file に新しい歯を置く（helper だけの file は flip-check が落とす）。
+  - e2e（既存の `crates/scribe2-boundary/tests/e2e/hook/session.rs`・接頭辞 `hook_session_recent_owned_`・4 本）: (h) 閾値越えの行 (i) NONE の行 (j) 出力の無い置き場の UNMEASURED の行 (k) 古さの印の無い台帳の変化で `stale=ledger`（同じ歯の変化の無い周は `stale=` が無い）。
+  - session の全種類の歯は、出力の無い置き場で owned の行が UNMEASURED になり、種類ごとに 1 行・宣言順の期待を保つ（便の base で測り、期待の字が変わる歯は直す）。
+  - base で RED: 語も行も無い（機能不在）。
+- 触らない: 梯子・口座の門・墓標の門・heartbeat の実効の値・既存の語の条件と上げの秒・recent の既存の 5 種類の字と上限・局面の出力の書き手と閾値の行。
+- 限界:
+  - 出力の書きは dispatch の周と部分の書き直しの契機にしか起きない。書きの間の変化は、古さの印か event log の長さで古いと示すだけ。
+  - 事実行は SessionStart のときの 1 回だけ出る。
+  - 台帳の印が files の形の置き場は、読みで更新時刻が動くと古いと出うる（case-lifecycle §5.3）。
+- 却下:
+  - 切り替えの線より前は語を出さない案。FR94 の「出力が無い周も示す」に反し、tick が event log を走査する。
+  - unsorted や owned で黙りの初段を縮める案。差し込みが増える。turn の終わりの止め（dialogue-surface.md 行 k）が未仕分けを先に扱う。
+
 ## [[contract]] 行
 
 <!-- contracts:begin -->
@@ -1002,4 +1044,16 @@ verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail seat::tick::tests:
 size = "S"
 growth = ["crates/scribe2/src/seat/tick_tests.rs:240"]
 done = "(1) 親の歯の区間は cfg(test) の単独行・path の行・mod tests; の 3 行と宣言の直後の札 moved だけ (2) 子の file の先頭 2 行が説明と札 moved で、本文は module の本体を 1 段浅くしたもの (3) module path seat::tick::tests と歯 11 本の名は不変で base = head (4) 親の src 区間の item・可視性・use は不変 (5) flip-check が moved で通る (6) file-lines で tick.rs の余地が 200 行以上に増える"
+
+[[contract]]
+id = "ac"
+title = "管理 tick の alarm に局面の出力の unsorted と owned（古い周は :stale・件数 0 で古い周は stale・無いか読めない周は unreadable）を足し、SessionStart の直近の流れの事実行に種類 owned（[RECENT-OWNED] count= oldest= phase= since=・古い周は stale=）を足す — 読みは ledger-form 行 o の読み手 1 本・tick は台帳も git も撃たない（§24・FR27・FR94）"
+req = ["FR27", "FR42", "FR94", "AC58", "AC60"]
+section = "24"
+touches = ["crate::seat::recent::Kind", "crate::seat::recent::Unmeasured"]
+write-set = ["crates/scribe2/src/seat/tick/signal.rs", "crates/scribe2/src/seat/tick.rs", "crates/scribe2/src/seat/recent.rs", "crates/scribe2/src/hook/mod.rs", "crates/scribe2-boundary/tests/e2e/seat/tick.rs", "crates/scribe2-boundary/tests/e2e/hook/session.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_lifecycle_alarm_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail hook_session_recent_owned_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail hook_session_recent_"]
+size = "M"
+growth = ["crates/scribe2/src/seat/tick/signal.rs:35", "crates/scribe2/src/seat/tick.rs:6", "crates/scribe2/src/seat/recent.rs:45", "crates/scribe2/src/hook/mod.rs:3"]
+done = "(1) alarm の語は idle_alarm の 1 本に足し、入力は ledger-form 行 o の読み手が比べる印を event log の長さにして読んだ結果で、未仕分けの発話の部品が 1 つ以上なら unsorted・owned の件数が 1 以上なら owned、古さの印が 1 つでも在るか event log が出力の長さより伸びた周は出した語に :stale を添え、件数が 0 で古い周は stale の 1 語、出力が無いか読めない周は unreadable の 1 語で、並びは既存の語の後ろに unsorted → owned（→ stale か unreadable）、上げの秒は既存の語と同じ最大値で梯子の段は変えない (2) tick は置き場の file だけを読み、台帳も git も撃たず、event log は長さだけを測り、tick.rs に足すのは読み手の呼び出しの数行だけ (3) 合図を送らない周の席には今どおり alarm も届かない (4) 直近の流れの事実行の種類 owned を宣言順の末尾に足し（KINDS と種類の閉じた enum に 1 値・測れない理由の閉じた enum に lifecycle の 1 値）、比べる印は台帳と main で、閾値越えが在る周は [RECENT-OWNED] count=<n> oldest=<部品>:<id> phase=<局面> since=<時刻>、0 件の周は [RECENT-NONE] kind=owned、出力が無いか読めない周は [RECENT-UNMEASURED] kind=owned reason=lifecycle、古い周は行の末尾に stale=<種類,…> (5) 件数と最古は出力の値をそのまま写し、閾値を自前で当てない 歯: seat_tick_lifecycle_alarm_ の e2e 7 本（seat/tick.rs の末尾・出力は読み手の読める形の fixture を置き場に書く）の (a) 未仕分けの発話 1 つで unsorted (b) owned の件数 1 で owned (c) 古さの印と両方の語で unsorted:stale,owned:stale (d) event log が出力の長さより伸びた周は :stale で同じ歯の等しい周は :stale が無い (e) 件数 0 の周は語が無く同じ置き場で古い周は stale の 1 語 (f) 出力の無い置き場で unreadable (g) (a) の周に偽の bd と git が 1 度も撃たれない、と hook_session_recent_owned_ の e2e 4 本（hook/session.rs）の (h) 閾値越えの行 (i) NONE の行 (j) 出力の無い置き場の UNMEASURED の行 (k) 古さの印の無い台帳の変化で stale=ledger と同じ歯の変化の無い周は stale= が無い、既存の tick の歯は撃つ共通の helper が撃つ直前に今の log の長さを印に持つ部品 0 の出力を書く 1 手を同じ file に足して期待の字を変えずに緑、既存の hook_session_recent_ の歯は出力の無い置き場で owned が UNMEASURED の 1 行になる期待を便の base で数え直し、直した期待が base で落ちる歯は retroactive の札が要らない・base は語も行も無いので RED（機能不在）"
 <!-- contracts:end -->
