@@ -1179,6 +1179,7 @@ use refusal::{ROW_FILE_LINES, ROW_SIZE_S};
 #[cfg(test)]
 mod tests {
     // flip-check: moved s2-07l.736.12
+    // flip-check: retroactive s2-07l.736.28
     use super::{
         exclude_cap_shortfall, int_row, with_write_set, Entrance, Materials, WriteSet, ENTRANCE_LOCK, ROW_FILE_LINES,
         ROW_SIZE_S, WRITE_SETS,
@@ -1258,7 +1259,7 @@ mod tests {
             tracked: vec![full.to_owned()],
             sources: vec![Source { path: full.to_owned(), body: Ok(body) }],
             snapshots: Vec::new(),
-            facts: TableFacts { allowed: Vec::new(), denied: Vec::new(), requirements: String::new() },
+            facts: TableFacts { allowed: Vec::new(), denied: Vec::new(), requirements: String::new(), crate_roots: vec!["crates/".to_owned()] },
             requirements: Ok(BTreeSet::new()),
             declared: Ok(Vec::new()),
             classes: Vec::new(),

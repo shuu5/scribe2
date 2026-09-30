@@ -165,7 +165,7 @@ pub(super) fn exclude_cap_shortfall(manifest: &Manifest, contract: &Contract, ma
             ));
         }
     };
-    let short: Vec<Refuse> = declaration::headroom_shortfalls(&items, &lines, &growth, caps)
+    let short: Vec<Refuse> = declaration::headroom_shortfalls_under(&materials.facts.crate_roots, &items, &lines, &growth, caps)
         .into_iter()
         .map(|found| Refuse::CapHeadroom {
             file: found.file,

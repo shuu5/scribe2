@@ -158,6 +158,22 @@ pub fn detection_needed<'a>(paths: impl IntoIterator<Item = &'a str>) -> bool {
     paths.into_iter().any(|path| DETECTION_SCOPE.iter().any(|face| in_face(path, face)))
 }
 
+/// path の列が検出線の面に触れるか（追随の再 gate の省きと着地後の検出線が通る 1 本・設計 contract-source.md §62）。
+///
+/// 面は [`DETECTION_SCOPE`] の照らし（[`detection_needed`]・値は変えない）と「宣言した根のどれかの crate の中の path」の
+/// 和。宣言が在って読めない周（[`declaration::RootsAtHead::Unreadable`]）は path が 1 つでも在れば触れる側（fail-closed・
+/// 空の列は従来どおり偽）。
+pub(crate) fn scope_touched(roots: &declaration::RootsAtHead, paths: &[&str]) -> bool {
+    match roots {
+        declaration::RootsAtHead::Unreadable => !paths.is_empty(),
+        declaration::RootsAtHead::Fixed => detection_needed(paths.iter().copied()),
+        declaration::RootsAtHead::Declared(added) => {
+            let all = declaration::with_fixed(added);
+            detection_needed(paths.iter().copied()) || paths.iter().any(|path| declaration::crate_of(&all, path).is_some())
+        }
+    }
+}
+
 /// path が面の 1 項目に触れるか（dir は接頭辞・file は完全一致）。`cratesx/a.rs` は `crates/` に触れない。
 fn in_face(path: &str, face: &str) -> bool {
     if face.ends_with('/') {
@@ -675,7 +691,7 @@ fn regate_skippable(repo: &Path, base: &str, main: &str) -> bool {
         return false;
     };
     let paths = nul_paths(&bytes);
-    !detection_needed(paths.iter().map(String::as_str))
+    !scope_touched(&declaration::RootsAtHead::read(repo), &paths.iter().map(String::as_str).collect::<Vec<&str>>())
 }
 
 /// stdout の判定行で「撃ち直しを省いて引き継いだ」を名乗る token（gate が撃った周には出ない）。
@@ -1011,9 +1027,10 @@ mod tests {
     // flip-check: moved s2-07l.498
     use super::super::gate::{next_number, skip_record, Skipped};
     use super::{
-        close_reason, detection_needed, landed_sha, squash_message, subject_of, trailer_key, CloseTail, Terminal,
+        close_reason, detection_needed, landed_sha, regate_skippable, squash_message, subject_of, trailer_key, CloseTail, Terminal,
         CONTRACT_TRAILER, REQUIREMENTS_TRAILER, SHA_PREFIX, SUBJECT_CHARS, TERMINAL_TOKENS,
     };
+    use super::{declaration, git_line, git_ok, PathBuf};
     use crate::cli_outcome::RC_OK;
     use crate::fleet::{EventKind, Stage};
 
@@ -1185,5 +1202,32 @@ mod tests {
             "件名 = `b: ` + 72 文字 + `…`: {subject}"
         );
         assert!(subject.ends_with('…'), "切った印が付く: {subject}");
+    }
+
+    /// (f)(g) の fixture: 1 つ目の commit に宣言（`key` は宣言の末尾に足す行）、2 つ目の commit で面の外の `notes/x.md` だけを
+    /// 足した使い捨ての repo（HEAD は 2 つ目・宣言は動かない）と 2 つの sha。
+    pub(super) fn notes_repo(name: &str, key: &str) -> (PathBuf, String, String) {
+        let repo = crate::pipe::fixture::scratch(name);
+        let setup: [&[&str]; 4] =
+            [&["init", "-q", "-b", "main"], &["config", "user.name", "t"], &["config", "user.email", "t@example.invalid"], &["config", "commit.gpgsign", "false"]];
+        assert!(setup.iter().all(|args| git_ok(&repo, args)), "repo を作れた");
+        let text = format!("schema = 1\nallowed-commands = [\"git\"]\ncommon-verify = [\"git diff --quiet\"]\n{key}");
+        assert!(std::fs::write(repo.join(declaration::DECL_FILE), text).is_ok(), "宣言を書けた");
+        assert!(git_ok(&repo, &["add", "-A"]) && git_ok(&repo, &["commit", "-q", "-m", "declare"]), "1 つ目");
+        let first = git_line(&repo, &["rev-parse", "HEAD"]).unwrap_or_default();
+        assert!(std::fs::create_dir_all(repo.join("notes")).is_ok() && std::fs::write(repo.join("notes/x.md"), "x\n").is_ok(), "notes を書けた");
+        assert!(git_ok(&repo, &["add", "-A"]) && git_ok(&repo, &["commit", "-q", "-m", "notes"]), "2 つ目");
+        let second = git_line(&repo, &["rev-parse", "HEAD"]).unwrap_or_default();
+        (repo, first, second)
+    }
+
+    /// (f) 宣言が在って読めない周（key の値が絶対 path）は、面の外の `notes/` の file だけの差分でも再 gate を撃ち直す
+    /// （`regate_skippable` が偽）。key の無い形は今どおり省く（真）。読めない周を固定の根だけに倒す実装は前者で落ちる。
+    #[test]
+    fn declaration_crate_roots_regate_skippable_reads_an_unreadable_declaration_as_touching() {
+        let (broken, first, second) = notes_repo("crate-roots-regate-broken", "crate-roots = [\"/abs/\"]\n");
+        assert!(!regate_skippable(&broken, &first, &second), "読めない宣言は撃ち直す");
+        let (plain, first, second) = notes_repo("crate-roots-regate-plain", "");
+        assert!(regate_skippable(&plain, &first, &second), "key の無い宣言は面の外だけなら省く（対照）");
     }
 }

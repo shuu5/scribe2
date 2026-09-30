@@ -473,6 +473,57 @@ fn pipe_land_onto_records_main_as_the_new_base_and_skips_regate_outside_scope() 
     clean(&[&repo, &state]);
 }
 
+/// 宣言に key `crate-roots = ["nest/crates/"]` を足して commit する（`declared` の repo だけ・便を起こす前に呼ぶ）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn commit_crate_roots(repo: &Path) {
+    let text = fs::read_to_string(repo.join(".vessel.toml")).expect("宣言を読める");
+    fs::write(repo.join(".vessel.toml"), format!("{text}crate-roots = [\"nest/crates/\"]\n")).expect("宣言を書ける");
+    git(repo, &["add", "-f", ".vessel.toml"]);
+    git(repo, &["commit", "-q", "-m", "crate-roots"]);
+}
+
+/// gate の後に main が `nest/crates/toy/src/other.rs` だけ動いた便を追随で land し、(stdout・lens の写しが走ったか) を返す。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn land_after_nested_main_move(declared: bool) -> (String, bool) {
+    let (repo, state) = repo_with_state();
+    if declared {
+        commit_crate_roots(&repo);
+    }
+    let path = write_contract(&repo, &[], &[]);
+    let marker = state.join("lens-ran");
+    let id = gated_pass(&repo, &state, &path, &marker);
+    commit_main_file(&repo, "nest/crates/toy/src/other.rs", "other\n");
+    fs::remove_file(&marker).expect("lens の marker を消せる");
+    fs::remove_file(state.join(REVIEW_MARKER)).expect("審査の marker を消せる");
+    let out = land_once(&repo, &state, &id);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "追随した land は rc 0: {}", stderr_of(&out));
+    let seen = (stdout_of(&out), state.join(REVIEW_MARKER).exists());
+    clean(&[&repo, &state]);
+    seen
+}
+
+/// 宣言した根の下だけ main が動いた追随は再 gate を撃つ（写しの lens が走り・`regate=skipped` が無い）。
+#[test]
+fn pipe_land_crate_roots_declared_root_move_fires_the_regate() {
+    let (stdout, lens_ran) = land_after_nested_main_move(true);
+    assert!(lens_ran, "宣言した根の下は面の内＝写しの lens が走る: {stdout}");
+    assert!(stdout.contains("verdict=PASS") && !stdout.contains("regate=skipped"), "撃ち直しの判定行: {stdout}");
+}
+
+/// key の無い repo の同じ動きは今どおり `regate=skipped` で前周の PASS を引き継ぐ（対照）。
+#[test]
+fn pipe_land_crate_roots_without_the_key_the_same_move_skips_the_regate() {
+    let (stdout, lens_ran) = land_after_nested_main_move(false);
+    assert!(!lens_ran, "面の外＝lens は走らない: {stdout}");
+    assert!(stdout.contains("regate=skipped"), "再 gate を省いて引き継いだ: {stdout}");
+}
+
 /// (e) 祖先である周（従来の追随）の起こし直しの「追随」節も同じ 2 sha の形で `--onto <main> <base>` を命じる（経路を 2 本に
 /// しない）。既存の追随の歯（`$SHA` で素の rebase を撃つ stub）の期待は変えない＝節の 1 行目は不変。
 #[test]

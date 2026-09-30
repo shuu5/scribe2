@@ -132,6 +132,61 @@ fn pipe_landed_detection_outside_scope_writes_a_skip_record() {
     clean(&[&run.repo, &run.state]);
 }
 
+/// 入れ子の根の下の file（[`LANDED_LIB`] の歯は契約の verify の filter 語のために残す）だけを runner が足す便を gate まで通し、
+/// `declared` なら gate の後に main の宣言へ key `crate-roots = ["nest/crates/"]` を足して commit し（HEAD の宣言が読み面）、
+/// 面の外の docs の 1 commit で main を進めて land する（子の終わりを待つ）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn landed_nested_run(declared: bool) -> LandedRun {
+    let nested = "nest/crates/toy/src/a.rs";
+    let mut case = landed_crates_case();
+    case.base.push((nested, "// nested\n".to_owned()));
+    case.runner = format!("echo '// landed' >> {nested} && git add -A && git commit -q -m runner");
+    case.contract = vec![format!("write-set = [\"{LANDED_LIB}\", \"{nested}\"]"), landed_verify()];
+    let mut run = landed_gated(&case);
+    if declared {
+        let text = fs::read_to_string(run.repo.join(".vessel.toml")).expect("宣言を読める");
+        fs::write(run.repo.join(".vessel.toml"), format!("{text}crate-roots = [\"nest/crates/\"]\n")).expect("宣言を書ける");
+        git(&run.repo, &["add", "-f", ".vessel.toml"]);
+        git(&run.repo, &["commit", "-q", "-m", "crate-roots"]);
+    }
+    let landed = land_after_docs_move(&run);
+    assert_eq!(landed.status.code(), Some(i32::from(RC_OK)), "land: {} / {}", stdout_of(&landed), stderr_of(&landed));
+    await_detection_child(&run.state, &run.id);
+    run.sha = git(&run.repo, &["rev-parse", "refs/heads/main"]);
+    run
+}
+
+/// 宣言した根の下だけの着地は検出線の面の内: 口が stub を 1 回呼び、`detection=measured`・`landed` 付きの record +1。
+#[test]
+fn pipe_landed_detection_crate_roots_declared_root_fires_the_stub_once() {
+    let run = landed_nested_run(true);
+    let before = landed_before(&run);
+    let out = detection_only(&run, None);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "口は rc 0: {}", stderr_of(&out));
+    assert_eq!(stdout_of(&out), format!("run={} detection=measured\n", run.id), "stdout は 1 行");
+    assert_eq!(landed_calls(&run.repo).len(), before.calls + 1, "stub は 1 回呼ばれる");
+    let row = added_landed_row(&run, &before);
+    assert_eq!(value_of(&row, "line"), LANDED_LINE, "line= は stub の判定行: {row:?}");
+    clean(&[&run.repo, &run.state]);
+}
+
+/// key の無い repo の同じ便は今どおり面の外: stub を呼ばず `reason=outside-scope` の skip record を書く（対照）。
+#[test]
+fn pipe_landed_detection_crate_roots_without_the_key_writes_outside_scope() {
+    let run = landed_nested_run(false);
+    let before = landed_before(&run);
+    let out = detection_only(&run, None);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "口は rc 0: {}", stderr_of(&out));
+    assert_eq!(stdout_of(&out), format!("run={} detection=skipped\n", run.id), "stdout は 1 行");
+    assert_eq!(landed_calls(&run.repo).len(), before.calls, "stub は呼ばれない");
+    let row = added_landed_row(&run, &before);
+    assert_eq!(value_of(&row, "reason"), "outside-scope", "理由は面の外: {row:?}");
+    clean(&[&run.repo, &run.state]);
+}
+
 /// (c) 測れなかった周: stub が rc 2 の便は stub が 1 回だけ呼ばれ（撃ち直さない）、record の rc が 2・`unmeasured=rc-2`。
 #[test]
 fn pipe_landed_detection_rc2_is_unmeasured_and_fired_once() {

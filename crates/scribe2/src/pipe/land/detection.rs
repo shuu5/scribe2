@@ -15,14 +15,14 @@
 //! event を書けない周だけ。宣言に検出線の行が無い便は何も書かずに rc 1 で断る。
 
 use super::super::contract::Contract;
-use super::super::declaration::Effective;
+use super::super::declaration::{Effective, RootsAtHead};
 use super::super::gate::{
     aimed_lines, keep_detection, keep_reason, landed_step_record, landed_unfired_record, next_copy_dir, next_number,
     population_lines, recorded_rc, run_detection_admitted, Admit, Checks, LandedMark, Limits, Record, Step, Unfired,
 };
 use super::super::{emit, git_bytes, git_line, git_ok, verify_log_path, vessel_path, Emit};
 use super::verify::{check_path, MAIN_UNKNOWN, VERIFY_MAIN_FILE, VERIFY_MAIN_STDERR_FILE};
-use super::{broken, detection_needed, nul_paths, refused};
+use super::{broken, nul_paths, refused, scope_touched};
 use crate::cli_outcome::Outcome;
 use crate::fleet::store::{append_line, LockPolicy};
 use crate::fleet::{EventKind, Stage};
@@ -167,7 +167,8 @@ fn touches_scope(repo: &Path, parent: &str, sha: &str) -> bool {
     let Some(bytes) = git_bytes(repo, &["diff-tree", "-r", "--name-only", "-z", parent, sha]) else {
         return true;
     };
-    detection_needed(nul_paths(&bytes).iter().map(String::as_str))
+    let paths = nul_paths(&bytes);
+    scope_touched(&RootsAtHead::read(repo), &paths.iter().map(String::as_str).collect::<Vec<&str>>())
 }
 
 /// 着地した commit を置き場の別名へ detach で出す（出せた周だけ真）。
@@ -249,5 +250,21 @@ fn next_n(path: &Path) -> Result<u64, String> {
         Ok(text) => Ok(next_number(text.lines().filter(|line| !line.trim().is_empty()).count())),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(next_number(0)),
         Err(err) => Err(format!("{} を読めない: {err}", path.display())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::tests::notes_repo;
+    use super::touches_scope;
+
+    /// (g) 宣言が在って読めない周（key の値が絶対 path）は、面の外の `notes/` の file だけの着地でも検出線を撃つ側
+    /// （`touches_scope` が真）。key の無い形は今どおり撃たない（偽）。読めない周を固定の根だけに倒す実装は前者で落ちる。
+    #[test]
+    fn declaration_crate_roots_touches_scope_reads_an_unreadable_declaration_as_touching() {
+        let (broken, parent, sha) = notes_repo("crate-roots-touch-broken", "crate-roots = [\"/abs/\"]\n");
+        assert!(touches_scope(&broken, &parent, &sha), "読めない宣言は撃つ");
+        let (plain, parent, sha) = notes_repo("crate-roots-touch-plain", "");
+        assert!(!touches_scope(&plain, &parent, &sha), "key の無い宣言は面の外だけなら撃たない（対照）");
     }
 }

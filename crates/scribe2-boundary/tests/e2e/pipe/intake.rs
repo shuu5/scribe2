@@ -654,6 +654,68 @@ fn pipe_intake_core_headroom_keeps_the_file_headroom_on_the_whole_file() {
     clean(&[&repo, &state]);
 }
 
+// ── 入れ子の根（`s2-07l.736.28` 行 bq・設計 contract-source.md §62・接頭辞 `pipe_intake_crate_roots_`） ──
+
+/// [`repo_with_heavy_file`] と同じ本体 1000 行 + 歯 399 行の file を `nest/crates/toy/src/heavy.rs` に持つ repo。
+/// `declared` なら宣言に key `crate-roots = ["nest/crates/"]` を足して commit する（key の無い repo との対照）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn repo_with_nested_heavy_file(declared: bool) -> (PathBuf, PathBuf) {
+    let (repo, state) = repo_with_state();
+    if declared {
+        let text = fs::read_to_string(repo.join(".vessel.toml")).expect("宣言を読める");
+        fs::write(repo.join(".vessel.toml"), format!("{text}crate-roots = [\"nest/crates/\"]\n")).expect("宣言を書ける");
+        git(&repo, &["add", "-f", ".vessel.toml"]);
+        git(&repo, &["commit", "-q", "-m", "crate-roots"]);
+    }
+    let dir = repo.join("nest").join("crates").join("toy").join("src");
+    fs::create_dir_all(&dir).expect("入れ子の dir を作れる");
+    let body = format!("{}#[cfg(test)]\n{}", "// x\n".repeat(1000), "// t\n".repeat(398));
+    fs::write(dir.join("heavy.rs"), body).expect("歯を持つ file を書ける");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "heavy"]);
+    (repo, state)
+}
+
+/// 宣言した根の下の file は、`crates/` の直下と同じ値（file の余地 101・core の余地 99）で断られる: M（300）は file の余地で、
+/// 新規 1 本の S（100）は core の上限 1099 の余地で（`pipe_intake_core_headroom_` の 2 本と同じ値）。
+#[test]
+fn pipe_intake_crate_roots_declared_root_measures_the_file_and_core_room() {
+    let (repo, state) = repo_with_nested_heavy_file(true);
+    let heavy = "\"nest/crates/toy/src/heavy.rs\"";
+    let roomy = capped_rules(&state, "rules-roomy.toml", 40_000);
+    let over = intake_with_rules(&repo, &state, &sized_contract(&repo, "m", "M", heavy), "s2-nm", &roomy);
+    let err = stderr_of(&over);
+    assert_eq!(over.status.code(), Some(i32::from(RC_REFUSED)), "全体 1399 → 余地 101 に M は入らない: {err}");
+    assert!(err.contains("nest/crates/toy/src/heavy.rs の上限の余地が 101 行") && err.contains("size M"), "file の余地: {err}");
+    let tight = capped_rules(&state, "rules-tight.toml", 1_099);
+    let fresh = "\"+nest/crates/toy/src/new.rs\"";
+    let short = intake_with_rules(&repo, &state, &sized_contract(&repo, "s", "S", fresh), "s2-ns", &tight);
+    let err = stderr_of(&short);
+    assert_eq!(short.status.code(), Some(i32::from(RC_REFUSED)), "本体 1000 → 余地 99 に S の 1 本は入らない: {err}");
+    assert!(err.contains("core の上限の余地が 99 行") && err.contains("size S"), "core の余地: {err}");
+    assert_eq!(event_count(&state), 0, "断った周は event を書かない");
+    clean(&[&repo, &state]);
+}
+
+/// key の無い repo は同じ契約が通る（今の振る舞いの対照＝入れ子の dir は測る集合の外）。
+#[test]
+fn pipe_intake_crate_roots_without_the_key_the_same_contracts_pass() {
+    let (repo, state) = repo_with_nested_heavy_file(false);
+    let heavy = "\"nest/crates/toy/src/heavy.rs\"";
+    let roomy = capped_rules(&state, "rules-roomy.toml", 40_000);
+    let over = intake_with_rules(&repo, &state, &sized_contract(&repo, "m", "M", heavy), "s2-nm", &roomy);
+    assert_eq!(over.status.code(), Some(i32::from(RC_OK)), "M は測る集合の外で通る: {}", stderr_of(&over));
+    stop_run_ok(&state, &run_id_of(&over));
+    let tight = capped_rules(&state, "rules-tight.toml", 1_099);
+    let fresh = "\"+nest/crates/toy/src/new.rs\"";
+    let fits = intake_with_rules(&repo, &state, &sized_contract(&repo, "s", "S", fresh), "s2-ns", &tight);
+    assert_eq!(fits.status.code(), Some(i32::from(RC_OK)), "S も通る: {}", stderr_of(&fits));
+    clean(&[&repo, &state]);
+}
+
 // ── file ごとの見込み growth（設計 docs/design/contract-source.md §46・行 ax・`s2-07l.578`・接頭辞 `contract_growth_`） ──
 
 /// [`sized_contract`] と同じ行に `growth` の欄（`None` なら書かない）を足して commit し、pointer を返す。

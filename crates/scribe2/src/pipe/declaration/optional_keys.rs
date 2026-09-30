@@ -4,7 +4,7 @@
 //! 再輸出で `crate::pipe::declaration::terminal_facts` などのまま。新しい任意 key は、key の名・読み手・key の列の 1 行ずつ・
 //! 外へ渡す口をこの file へ、`Declared` の欄と `parse` の読みの 1 行を親へ足す。
 
-use super::path_kinds;
+use super::{crate_roots, path_kinds};
 use super::{declared_at_head, head_declaration, Ceiling, DeclError, Declared, EntranceFlip, Raw, Sourced, DETECTION_KEY, ENTRANCE_KEY};
 use std::path::Path;
 
@@ -25,6 +25,7 @@ pub(super) const DECLARED_KEYS: &[&str] = &[
     QUESTION_ROUTE_KEY,
     CLOSE_CHECK_KEY,
     FLOOR_CHECK_KEY,
+    crate_roots::KEY,
 ];
 
 /// **床の検査の 1 行**の key（任意・設計 dispatcher.md §34・ADR-0084）。main の先端の sha の木で撃つ（既定は持たない＝書かない宣言は撃たない）。
@@ -76,6 +77,7 @@ pub(super) const OPTIONAL_KEYS: &[&str] = &[
     QUESTION_ROUTE_KEY,
     CLOSE_CHECK_KEY,
     FLOOR_CHECK_KEY,
+    crate_roots::KEY,
 ];
 
 /// 床の検査の 1 行（任意）。前後の空白を除いて空でない文字列だけを受ける（列・整数・真偽・空・空白だけは key と行番号を名指す不備）。
@@ -236,6 +238,8 @@ pub struct TableFacts {
     pub denied: Vec<String>,
     /// 要件面の repo 相対 path（宣言 `requirements`・無ければ [`DEFAULT_REQUIREMENTS`]）。
     pub requirements: String,
+    /// crate の根の列（固定の根 `crates/` に宣言 `crate-roots` を足した列・設計 contract-source.md §62）。
+    pub crate_roots: Vec<String>,
 }
 
 /// HEAD の宣言を読み、上限と突き合わせて契約表の検査の事実にする（intake と同じ読み口・作業ツリーは読まない）。
@@ -251,8 +255,9 @@ pub fn table_facts_named(
     let sourced = Sourced::read(repo, ceiling)?;
     let requirements = sourced.declared.requirements.clone().unwrap_or_else(|| DEFAULT_REQUIREMENTS.to_owned());
     let entrance = sourced.declared.entrance_flip;
+    let crate_roots = crate_roots::with_fixed(&sourced.declared.crate_roots);
     let effective = sourced.measure(ceiling, &[])?;
-    Ok((TableFacts { allowed: effective.allowed, denied: ceiling.denied.to_vec(), requirements }, entrance))
+    Ok((TableFacts { allowed: effective.allowed, denied: ceiling.denied.to_vec(), requirements, crate_roots }, entrance))
 }
 
 /// land の終端が読む宣言の事実（設計 contract-source.md §5・push 先と CI の行）。

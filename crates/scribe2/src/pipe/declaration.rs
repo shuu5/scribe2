@@ -16,17 +16,19 @@ use crate::polarity::{OnFailure, Polarity, Timing};
 use crate::rules::manifest::{list, scalar, Scalar};
 use std::path::Path;
 
+mod crate_roots;
 mod entrance_flip;
 mod optional_keys;
 pub mod path_kinds;
 mod write_set;
 
+pub use crate_roots::{crate_of, fixed_roots, with_fixed, CrateFile, RootsAtHead};
 pub use entrance_flip::{measure_named, EntranceFlip};
 use entrance_flip::{entrance_of, KEY as ENTRANCE_KEY};
 pub use optional_keys::{close_check, floor_check_at, question_route, table_facts, table_facts_named, terminal_facts, CloseCheck, QuestionRoute, TableFacts, TerminalFacts};
 pub use optional_keys::{CI_SHA_HOLE, DEFAULT_CI_CMD, DEFAULT_REQUIREMENTS};
 use optional_keys::{ci_cmd_of, close_check_of, floor_check_of, question_route_of, remote_of, requirements_of, DECLARED_KEYS, OPTIONAL_KEYS};
-pub use write_set::{headroom_shortfalls, line_count, read_write_set, Caps, FileLines, Headroom, NewFilePolicy, WriteSetItem, CORE};
+pub use write_set::{headroom_shortfalls, headroom_shortfalls_under, line_count, read_write_set, Caps, FileLines, Headroom, NewFilePolicy, WriteSetItem, CORE};
 pub(crate) use write_set::is_under;
 
 /// 対象 repo の root に置く宣言 file の名。
@@ -307,6 +309,8 @@ pub struct Declared {
     close_check: Option<bool>,
     /// 床の検査の 1 行（任意 key `floor-check`・無ければ `None`・設計 dispatcher.md §34）。
     floor_check: Option<String>,
+    /// 足す根（任意 key `crate-roots`・無ければ空・固定の根は含まない・設計 contract-source.md §62）。
+    crate_roots: Vec<String>,
 }
 
 /// 出所つきの宣言。**[`Effective`] はこれを消費してしか作れない**（C10）。
@@ -542,6 +546,7 @@ impl Declared {
         let question_route = question_route_of(&found, &mut errors);
         let close_check = close_check_of(&found, &mut errors);
         let floor_check = floor_check_of(&found, &mut errors);
+        let crate_roots = crate_roots::declared_of(&found, &mut errors);
         if schema != Some(SCHEMA_VERSION) {
             errors.push(DeclError::new(
                 0,
@@ -564,6 +569,7 @@ impl Declared {
                 question_route,
                 close_check,
                 floor_check,
+                crate_roots,
             })
         } else {
             Err(errors)
@@ -1224,7 +1230,7 @@ mod tests {
     }
 
     /// 先頭語 `cargo` の行を持たない宣言（`sh` / `git` だけの toy repo）は分類だけで断らない（§7「Rust 固有の検査を
-    /// 内蔵しない」のまま）。宣言 file の schema は不変（版 1・key の列は 10 本に §54 と vessel-hook.md §20 と ledger-form.md §16 と dispatcher.md §34 の任意 key 各 1 本を足した 14 本）。
+    /// 内蔵しない」のまま）。宣言 file の schema は不変（版 1・key の列は 10 本に §54 と vessel-hook.md §20 と ledger-form.md §16 と dispatcher.md §34 と contract-source.md §62 の任意 key 各 1 本を足した 15 本）。
     #[test]
     fn declaration_kind_passes_declarations_without_cargo_and_keeps_the_schema() {
         assert!(measured(r#"["git", "sh"]"#, r#"["git rev-parse --verify {base}", "sh verify.sh"]"#).is_ok(), "sh / git だけは通る");
@@ -1247,8 +1253,9 @@ mod tests {
                 "question-route",
                 "close-check",
                 "floor-check",
+                "crate-roots",
             ],
-            "宣言 file の key の列は動かない（末尾の任意 key は §54・ADR-0054 と vessel-hook.md §20・ADR-0084 と ledger-form.md §16・ADR-0097 と dispatcher.md §34）"
+            "宣言 file の key の列は動かない（末尾の任意 key は §54・ADR-0054 と vessel-hook.md §20・ADR-0084 と ledger-form.md §16・ADR-0097 と dispatcher.md §34 と contract-source.md §62）"
         );
     }
 

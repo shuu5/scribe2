@@ -8,6 +8,7 @@
 //! （file ごとの見込み行数・§46）の読み手 [`WriteSetItem::read_growth`] と file の見込み [`Caps::estimate`] も同じ群に
 //! 置く（親の再 export の型の関連 fn＝呼び手は型の path で引く）。
 
+use super::{crate_of, fixed_roots};
 use crate::pipe::refuse::{DELETE_FILE, NEW_FILE, PLACE_ONLY_FILE, SHRINK_FILE};
 
 /// write-set の 1 項目を base（tracked file の一覧）に対して読んだもの。
@@ -254,6 +255,18 @@ fn is_named_test_file(path: &str) -> bool {
 /// file を割る便を受付が断って満杯が固定される型を塞ぐ・§3「上限の余地」・§24）。**置き場だけの file（`=`）** は
 /// 増分 0 なので同じ腕（§43 (1)）。
 pub fn headroom_shortfalls(items: &[WriteSetItem], lines: &[FileLines], growth: &[(String, u64)], caps: Caps) -> Vec<Headroom> {
+    headroom_shortfalls_under(&fixed_roots(), items, lines, growth, caps)
+}
+
+/// [`headroom_shortfalls`] の、crate の根の列（固定の根 `crates/` に宣言 `crate-roots` を足した列・設計 §62）を受ける形。
+/// 測る集合は「根のどれかの crate の `src/` の下の file」（[`core_of`]）で、core は `<根><crate>/src` ごと。
+pub fn headroom_shortfalls_under(
+    roots: &[String],
+    items: &[WriteSetItem],
+    lines: &[FileLines],
+    growth: &[(String, u64)],
+    caps: Caps,
+) -> Vec<Headroom> {
     let files: Vec<&str> = items
         .iter()
         .flat_map(|item| match *item {
@@ -267,21 +280,21 @@ pub fn headroom_shortfalls(items: &[WriteSetItem], lines: &[FileLines], growth: 
     let estimate = |path: &str| caps.estimate(path, growth);
     let mut found: Vec<Headroom> = files
         .iter()
-        .filter(|path| core_of(path).is_some())
+        .filter(|path| core_of(roots, path).is_some())
         .filter_map(|path| {
             let headroom = caps.file_lines.saturating_sub(lines_of(path));
             let estimate = estimate(path);
             (estimate > headroom).then(|| Headroom { file: (*path).to_owned(), headroom, estimate })
         })
         .collect();
-    let mut cores: Vec<&str> = files.iter().filter_map(|path| core_of(path)).collect();
+    let mut cores: Vec<&str> = files.iter().filter_map(|path| core_of(roots, path)).collect();
     cores.sort_unstable();
     cores.dedup();
     for core in cores {
-        let members = files.iter().filter(|path| core_of(path) == Some(core));
+        let members = files.iter().filter(|path| core_of(roots, path) == Some(core));
         let estimate = members.fold(0_u64, |sum, path| sum.saturating_add(estimate(path)));
         // core の合計は本体だけ（in-file の歯を除く＝xtask の core-lines と同じ母集団）。
-        let total: u64 = lines.iter().filter(|found| core_of(&found.path) == Some(core)).map(|found| found.src).sum();
+        let total: u64 = lines.iter().filter(|found| core_of(roots, &found.path) == Some(core)).map(|found| found.src).sum();
         let headroom = caps.core_lines.saturating_sub(total);
         if estimate > headroom {
             found.push(Headroom { file: CORE.to_owned(), headroom, estimate });
@@ -290,12 +303,11 @@ pub fn headroom_shortfalls(items: &[WriteSetItem], lines: &[FileLines], growth: 
     found
 }
 
-/// `.rs` の path が属する core（`crates/<c>/src/…` の `crates/<c>/src`）。その形でなければ `None`。
-fn core_of(path: &str) -> Option<&str> {
-    let rest = path.strip_prefix("crates/")?;
-    let (crate_name, tail) = rest.split_once("/src/")?;
-    let head = path.len().checked_sub(tail.len().saturating_add(1))?;
-    (!crate_name.is_empty() && !crate_name.contains('/')).then(|| path.get(..head)).flatten()
+/// `.rs` の path が属する core（根のどれかの crate の `<根><c>/src/…` の `<根><c>/src`）。その形でなければ `None`
+/// （crate の読みは [`crate_of`] の 1 関数）。
+fn core_of<'a>(roots: &[String], path: &'a str) -> Option<&'a str> {
+    let found = crate_of(roots, path)?;
+    found.rest.starts_with("src/").then(|| path.get(..found.root.len().saturating_add(found.name.len()).saturating_add("/src".len()))).flatten()
 }
 
 #[cfg(test)]
@@ -303,7 +315,7 @@ mod tests {
     // flip-check: moved s2-07l.373
 
     use super::super::tests::strings;
-    use super::{headroom_shortfalls, line_count, read_write_set, Caps, FileLines, Headroom, NewFilePolicy, WriteSetItem, CORE};
+    use super::{fixed_roots, headroom_shortfalls, headroom_shortfalls_under, line_count, read_write_set, Caps, FileLines, Headroom, NewFilePolicy, WriteSetItem, CORE};
 
     /// base の tracked file（write-set の項目の fixture）。
     fn base() -> Vec<String> {
@@ -627,7 +639,7 @@ mod tests {
             .iter()
             .filter_map(|item| match *item {
                 WriteSetItem::File(ref path) | WriteSetItem::New(ref path) => {
-                    super::core_of(path).map(|_| path.clone())
+                    super::core_of(&fixed_roots(), path).map(|_| path.clone())
                 }
                 WriteSetItem::Dir(_) | WriteSetItem::Shrink(_) | WriteSetItem::Delete(_) | WriteSetItem::PlaceOnly(_) => None,
             })
@@ -674,9 +686,27 @@ mod tests {
             ("crates//src/a.rs", None),
             ("crates/a/b/src/a.rs", None),
         ];
-        let got: Vec<(&str, Option<&str>)> = table.iter().map(|(path, _)| (*path, super::core_of(path))).collect();
+        let got: Vec<(&str, Option<&str>)> = table.iter().map(|(path, _)| (*path, super::core_of(&fixed_roots(), path))).collect();
         let hits = got.iter().zip(&table).filter(|(found, want)| found == want).count();
         assert_eq!(got, table, "core と読む形は 1 つだけ（一致 {hits} 件 / 母集団 {} 形）", table.len());
+    }
+
+    /// (d) 根の列を受ける余地: 宣言した根の下の 1 file（余地 100・見積 300）は file の上限と core の合計の両方で名指され、
+    /// 固定の根だけの列では名指されない。
+    #[test]
+    fn declaration_crate_roots_headroom_names_the_declared_root_file_and_core() {
+        let path = "nest/crates/toy/src/a.rs";
+        let items = read_write_set(&strings(&[path]), &strings(&[path]), NewFilePolicy::MustBeAbsent).unwrap_or_default();
+        let lines = whole(&[(path, 1_400)]);
+        let caps = Caps { file_lines: 1_500, core_lines: 1_500, size_lines: 300 };
+        let declared = ["crates/".to_owned(), "nest/crates/".to_owned()];
+        assert_eq!(
+            headroom_shortfalls_under(&declared, &items, &lines, &[], caps),
+            vec![Headroom { file: path.to_owned(), headroom: 100, estimate: 300 }, Headroom { file: CORE.to_owned(), headroom: 100, estimate: 300 }],
+            "宣言した根の下は file と core の両方で名指される"
+        );
+        assert!(headroom_shortfalls_under(&fixed_roots(), &items, &lines, &[], caps).is_empty(), "固定の根だけでは測る集合の外");
+        assert!(headroom_shortfalls(&items, &lines, &[], caps).is_empty(), "根の列を受けない口は固定の根");
     }
 
     /// growth の見込みの組（path と行数）。
