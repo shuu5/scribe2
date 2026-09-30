@@ -1016,7 +1016,7 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
 - 出所（2026-09-30）:
   - 消費側の席の実測（量は台帳の memo `s2-07l.737.27` にだけ在る・PUBLIC に写さない）: 6 時間の書きの線の中で、並列の写しの build の置き場が host の disk の大きな割合を占めた。
   - 持ち主の問い（CI を通った後に写しを消せないか）と、推奨（量の上限 100 GiB / state dir・組み立て中の窓 30 分）への裁定 user 2026-09-30T07:18Z（逐語は台帳の memo の notes と `RulingReceived` の event）。この裁定は、上限を越えた周に書きの線より新しい build の置き場も消すことへの憲法 A1 の「消す」の承認を含む。**木の写しと追跡される file と commit していない変更を消すことは承認の外**（ADR-0096 と同じ）。
-- 現物（main fbf68d9f と行 ai の着地の commit・verified）:
+- 現物（main c66e9cf3・行 ai の着地の後・verified）:
   - `crates/scribe2/src/pipe/sweep.rs` の `sweep`（:70-92）は、置き場の lock の中で便の木を掃いた後に `sweep_drafts`（:108-122）で起草の木を掃く。`swept`（:174-212）は線を持つ木で `quiet_since`（:216-235）が「線以後の entry が在る」と返した dir を黙って残し、残した dir を呼び手へ返さない。量を測る口は無い。
   - stderr の行は `sweep: removed=<n> runs=<k> failed=<m>[:<名>,…][ drafts=<t> nogit=<p>]` で、出すのは dir を消した周・失敗が在る周・lock を取れない周・no-rule の周だけ（:83-91）。§30 と §33 の歯 6 本（`crates/scribe2-boundary/tests/e2e/pipe/stop.rs`）がこの字を逐語で pin する。
   - 起草の置き場の path は `crates/scribe2/src/seat/mod.rs` の `drafts_dir`（:226）、根は `seats_root`（:221）。根の直下を読むのは `drafts_of` だけで、dir でない子は飛ばす（sweep.rs :140）。
