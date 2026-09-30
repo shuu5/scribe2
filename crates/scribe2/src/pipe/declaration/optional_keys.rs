@@ -24,7 +24,11 @@ pub(super) const DECLARED_KEYS: &[&str] = &[
     ENTRANCE_KEY,
     QUESTION_ROUTE_KEY,
     CLOSE_CHECK_KEY,
+    FLOOR_CHECK_KEY,
 ];
+
+/// **床の検査の 1 行**の key（任意・設計 dispatcher.md §34・ADR-0084）。main の先端の sha の木で撃つ（既定は持たない＝書かない宣言は撃たない）。
+const FLOOR_CHECK_KEY: &str = "floor-check";
 
 /// **close の理由の門に加わるか**の key（任意・設計 ledger-form.md §16・ADR-0097）。値は真偽だけ（既定は持たない＝
 /// 書かない宣言は加わらない）。
@@ -71,7 +75,30 @@ pub(super) const OPTIONAL_KEYS: &[&str] = &[
     ENTRANCE_KEY,
     QUESTION_ROUTE_KEY,
     CLOSE_CHECK_KEY,
+    FLOOR_CHECK_KEY,
 ];
+
+/// 床の検査の 1 行（任意）。前後の空白を除いて空でない文字列だけを受ける（列・整数・真偽・空・空白だけは key と行番号を名指す不備）。
+pub(super) fn floor_check_of(found: &[(String, Raw, u64)], errors: &mut Vec<DeclError>) -> Option<String> {
+    let (_, value, line) = found.iter().find(|(seen, _, _)| seen == FLOOR_CHECK_KEY)?;
+    match value {
+        Raw::Text(row) if !row.trim().is_empty() => Some(row.trim().to_owned()),
+        _ => {
+            errors.push(DeclError::new(*line, format!("{FLOOR_CHECK_KEY} は空でない 1 行の文字列である")));
+            None
+        }
+    }
+}
+
+/// 名指した sha の tree の宣言が持つ床の検査の 1 行（`git show <sha>:.vessel.toml` と同じ読み手・作業ツリーは読まない）。
+/// 宣言が無い・key が無い周は `Ok(None)`、宣言が在って読めない周は `Err`（key の行の不備を含む）。
+pub fn floor_check_at(repo: &Path, sha: &str) -> Result<Option<String>, Vec<DeclError>> {
+    let spec = format!("{sha}:{}", super::DECL_FILE);
+    match super::super::git_bytes(repo, &["show", &spec]) {
+        None => Ok(None),
+        Some(bytes) => Declared::parse(&String::from_utf8_lossy(&bytes)).map(|declared| declared.floor_check),
+    }
+}
 
 /// close の理由の門に加わるか（任意）。真偽だけを受ける（文字列・整数・列は key と行番号を名指す不備）。
 pub(super) fn close_check_of(found: &[(String, Raw, u64)], errors: &mut Vec<DeclError>) -> Option<bool> {
@@ -252,7 +279,7 @@ pub fn terminal_facts(repo: &Path) -> Result<TerminalFacts, Vec<DeclError>> {
 #[cfg(test)]
 mod tests {
     use super::super::Declared;
-    use super::{check_of, close_check, route_of, CloseCheck, QuestionRoute};
+    use super::{check_of, close_check, floor_check_at, route_of, CloseCheck, QuestionRoute};
 
     /// 必須 key だけの宣言の本文（3 行）の後ろに `extra` を足す。
     fn with(extra: &str) -> String {
@@ -314,6 +341,31 @@ mod tests {
         assert_eq!(check_of(Some(Declared::parse(&with("close-check = false\n")))), CloseCheck::Exempt);
         assert_eq!(check_of(Some(Declared::parse(&with("close-check = true\n")))), CloseCheck::Joins);
         assert_eq!(check_of(Some(Declared::parse(&with("close-check = \"true\"\n")))), CloseCheck::Unreadable);
+    }
+
+    /// key の無い宣言は値なし、文字列 1 つは前後の空白を除いた値（引数の分割は読み手の外・撃つ側が持つ）。
+    #[test]
+    fn declaration_floor_check_reads_one_trimmed_string_or_nothing() {
+        assert_eq!(Declared::parse(&with("")).map(|found| found.floor_check), Ok(None));
+        let declared = Declared::parse(&with("floor-check = \"  cargo check --workspace \"\n"));
+        assert_eq!(declared.map(|found| found.floor_check), Ok(Some("cargo check --workspace".to_owned())));
+    }
+
+    /// 列・整数・真偽・空・空白だけの値は key と行番号（4 行目）を名指す不備、重複は 5 行目を名指す不備。
+    #[test]
+    fn declaration_floor_check_refuses_lists_ints_bools_and_blank_naming_the_key() {
+        for value in ["[\"cargo check\"]", "1", "true", "false", "\"\"", "\"   \""] {
+            let errors = Declared::parse(&with(&format!("floor-check = {value}\n"))).expect_err(value);
+            assert!(errors.iter().any(|error| error.line == 4 && error.reason.contains("floor-check")), "{value}: {errors:?}");
+        }
+        let errors = Declared::parse(&with("floor-check = \"a\"\nfloor-check = \"b\"\n")).expect_err("重複");
+        assert!(errors.iter().any(|error| error.line == 5 && error.reason.contains("floor-check")), "{errors:?}");
+    }
+
+    /// git を撃てない dir（repo でない）は宣言の無い周と同じ「無い」（sha の tree から読む口・作業ツリーは読まない）。
+    #[test]
+    fn declaration_floor_check_treats_a_dir_without_git_as_absent() {
+        assert_eq!(floor_check_at(std::path::Path::new("/nonexistent-floor-check-dir"), "HEAD"), Ok(None));
     }
 
     /// git を撃てない dir（repo でない）は宣言の無い周と同じ「加わらない」。

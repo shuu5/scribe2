@@ -50,6 +50,9 @@ pub(in crate::pipe) mod prelens;
 /// 起こす側の周が受付の断りを契約ごとに `IntakeRefused` へ記帳する書き手（設計 §32・契約表の行 ag）。
 mod refused;
 
+/// 床の検査を sha の木で 1 回撃つ段と、待つ側が読む判定の読み手（設計 §34・契約表の行 ai）。
+pub mod floor;
+
 use candidates::{entry_of, is_input, marks_of, settle, tools};
 
 /// 台帳の閉じた status の字面（依存が閉じたかの判定が読む）。
@@ -612,6 +615,8 @@ pub fn fire(input: &Input<'_>) -> Turn {
     // （`--runner`）の無い周も走り、見る側（[`turn`]・`dispatch ls`）は撃たない。群 0 の host は 1 語も出さない。移動（§20）も
     // この段の中で便の列の前に走り、段が typed に止まった周（lock の残り・読めない面）も列の rc と行は変えない（§20 形 7）。
     let _ = group::round(input);
+    // **床の検査の段は群の段の後・台帳を読む前**（設計 §34 約束 2）: main の先端の sha の宣言に key が在る周だけ 1 回撃つ。
+    floor::round(input);
     // **driver の死んだ便を先に起こし直す**（設計 §5）: 起こし直した便は live のままなので列の交差は
     // 動かない。起こす側より先に撃つのは、同じ 1 周の中で「止まっている便」を先に動かすためである。
     // **実装役の口が無い周は列を測らない**（`pipe run` は `--runner` を要り、器は既定を持たない）。
@@ -951,6 +956,7 @@ mod tests {
         review_unmeasured, revive_of, section_keyed, tools, Advance, Candidate, Handoff, Input, Pointer, WaitReason,
         DRIVE, HANDOFFS, WAIT_REASONS,
     };
+    use super::floor;
     use crate::fleet::{Event, EventKind, Mark, Stage, SCHEMA, STAGES};
     use crate::rules::manifest::Manifest;
     use std::path::Path;
@@ -1300,6 +1306,79 @@ mod tests {
         let found: Vec<(String, Vec<String>)> = calls.into_iter().map(|call| (call.program, call.args)).collect();
         let expected: Vec<String> = std::iter::once(super::PIPE.to_owned()).chain(argv.iter().cloned()).collect();
         assert_eq!(found, vec![(super::myself(), expected)], "program は自分・引数は pipe と argv");
+        let _ = std::fs::remove_dir_all(&state);
+    }
+
+    /// 床の判定の 1 件（歯の fixture・sha は 40 字）。
+    fn floor_judged(word: floor::Word, rc: Option<i32>, why: Option<&str>, summary: &str) -> floor::Judged {
+        floor::Judged { sha: "0123456789abcdef0123456789abcdef01234567".to_owned(), word, rc, why: why.map(str::to_owned), summary: summary.to_owned() }
+    }
+
+    /// 床の今の判定の file の本文は同じ reader で読み戻せ（引用符・逆斜線・日本語も）、doctor の行は逐語の形（rc と理由が無い欄は `-`・
+    /// 要約が空なら `-`）。読めない本文は `None`。
+    #[test]
+    fn pipe_dispatch_floor_current_body_round_trips_and_renders_the_doctor_line() {
+        use super::floor::Word;
+        for found in [
+            floor_judged(Word::Pass, Some(0), None, "ok \"quoted\" \\ done"),
+            floor_judged(Word::Fail, Some(-1), None, ""),
+            floor_judged(Word::Unfireable, None, Some("path"), ""),
+            floor_judged(Word::Timeout, None, None, "日本語 summary"),
+        ] {
+            assert_eq!(floor::judged_of(&found.body()), Some(found.clone()), "{}", found.body());
+        }
+        assert_eq!(floor_judged(Word::Pass, Some(0), None, "ok").line(), "floor=pass rc=0 sha=0123456 why=- summary=ok");
+        assert_eq!(floor_judged(Word::Unfireable, None, Some("path"), "").line(), "floor=unfireable rc=- sha=0123456 why=path summary=-");
+        assert_eq!(floor::judged_of("not json"), None);
+    }
+
+    /// 床の要約は最後の空でない行・制御文字を除いた頭の 200 字で、空白だけの行は空に数え、何も無ければ `None`。
+    #[test]
+    fn pipe_dispatch_floor_summary_is_the_last_nonblank_line_without_controls() {
+        assert_eq!(floor::summary_of(b"a\nb\n\n  \n"), Some("b".to_owned()));
+        let long = format!("x\t\u{1b}{}", "y".repeat(300));
+        assert_eq!(floor::summary_of(long.as_bytes()).map(|found| found.chars().count()), Some(200));
+        assert_eq!(floor::summary_of(b"\n \t\n"), None);
+        assert_eq!(floor::summary_of(b""), None);
+    }
+
+    /// 床の行の 3 つの検査は (i) form → (ii) denied → (iii) metachar の順に最初の語を名乗り、当たらない行は通る。
+    #[test]
+    fn pipe_dispatch_floor_fault_names_the_first_of_form_denied_metachar() {
+        let manifest = Manifest::embedded().expect("埋め込みは読める");
+        for (row, want) in [
+            ("a\nb; c", Some("form")),
+            ("a\tb", Some("form")),
+            ("a {base}", Some("form")),
+            ("git push --force; ls", Some("denied")),
+            ("git branch -D x", Some("denied")),
+            ("ls | wc", Some("metachar")),
+            ("cargo check --workspace", None),
+        ] {
+            assert_eq!(floor::fault(&manifest, row), want, "{row:?}");
+        }
+    }
+
+    /// 待つ側が呼ぶ読み手は file だけを読む: 置き場の無い state dir は何も持たず、sha の結果の file が今の判定に先立ち、今の判定は
+    /// 同じ sha のときだけ返る。
+    #[test]
+    fn pipe_dispatch_floor_judgement_reads_the_result_then_the_current_of_the_same_sha() {
+        use crate::pipe::fixture::scratch;
+        let state = scratch("floor-judgement");
+        let (sha, other) = ("0123456789abcdef0123456789abcdef01234567", "89abcdef0123456789abcdef0123456789abcdef");
+        assert_eq!((floor::doctor_line(&state), floor::judgement(&state, sha)), (None, None), "置き場の無い周");
+        let dir = state.join("pipe").join("floor");
+        std::fs::create_dir_all(&dir).expect("floor の dir を作れる");
+        let timed = floor_judged(floor::Word::Timeout, None, None, "");
+        std::fs::write(dir.join("current"), timed.body()).expect("今の判定を置ける");
+        assert_eq!(floor::judgement(&state, sha), Some(timed.clone()), "結果が無ければ同じ sha の今の判定");
+        assert_eq!(floor::judgement(&state, other), None, "別の sha の今の判定は返さない");
+        assert_eq!(floor::doctor_line(&state), Some(timed.line()), "doctor の行");
+        std::fs::write(dir.join(format!("{sha}.result")), "{\"schema\":1,\"rc\":2,\"summary\":\"boom\"}\n").expect("結果を置ける");
+        let failed = floor::judgement(&state, sha).expect("結果を読める");
+        assert_eq!((failed.word, failed.rc, failed.summary.as_str()), (floor::Word::Fail, Some(2), "boom"), "結果の file が先");
+        std::fs::write(dir.join(format!("{other}.result")), "{\"schema\":1,\"rc\":0,\"summary\":\"\"}\n").expect("結果を置ける");
+        assert_eq!(floor::judgement(&state, other).map(|found| found.word), Some(floor::Word::Pass), "rc 0 は pass");
         let _ = std::fs::remove_dir_all(&state);
     }
 }
