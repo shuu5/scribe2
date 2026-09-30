@@ -109,7 +109,8 @@ user の裁定を受けた turn の中で対話面の席の口（seat ruling add
   - 最上位の口の一覧（`crates/scribe2-boundary/src/main.rs` の `render_usage` と match）に `utterance` は無い。
   - 境界の crate は R-C4-5（316 行）の中に在り、口を 1 つ足すと match の 1 行と使い方の 1 語だけ伸びる。
   - `help.rs` は口ごとの表を持ち、`help_table_` の歯が表の FORM を live の使い方と照らす。
-  - memo の判定は `ledger/form.rs` の `is_memo` と `MEMO_LABEL`。台帳の bead 1 本の読みは行 h が `ledger/mod.rs` に足す。
+  - memo の判定は `ledger/form.rs` の `is_memo` と `MEMO_LABEL`。台帳の bead 1 本の読みは行 h が `ledger/mod.rs` に足す（本行は行 h の着地の後に走り、その読みを呼ぶだけで `ledger/mod.rs` は書かない）。
+  - 仕分けの値は `fleet/mod.rs` の `Sorting`（`Request`・`Chat`）。答えの結びは行 h が `RulingReceived` に足す発話の ts の key で読む。
 - 約束（番号は done と 1:1）:
   1. **置き場**: core に最上位の module を 1 つ足す（行 i の write-set の `+` の file 2 つ: 本体と cli）。`lib.rs` に 1 行、境界の `main.rs` の match と使い方に `utterance` を 1 つ。
   2. **仕分け済みかの純関数（1 本だけ）**:
@@ -136,7 +137,9 @@ user の裁定を受けた turn の中で対話面の席の口（seat ruling add
     - (b) 1 つの発話を 2 つの memo へ仕分けられる。
     - (c) 断り 3 形（無い ts・答えを持つ発話への会話・開いた memo でない名指し）で event log が不変。
     - (d) 同じ秒の 2 つの発話を ts で別々に仕分けられる。
-    - (e) `utterance show` が逐語を 1 byte も違わずに返す。
+    - (e) `utterance show` が逐語を 1 byte も違わずに返す。無い ts は rc 1 で `no-utterance` を出す。
+    - (e2) 同じ ts と同じ memo の request と、会話の札が在る発話への chat が `already` で、event log が不変。
+    - (e3) 偽の bd の show が読めない JSON を返す周の request が rc 1 で `ledger-unreadable` を出し、event log が不変。
   - lib `utterance_sorted_of_`:
     - (f) 3 つの値の表（無し・会話だけ・要望・答え・会話の後の要望・会話の後の答え・承認に使った発話を会話にした形）。
     - (g) 同じ入力を 2 回渡すと同じ結果になる。
@@ -251,7 +254,7 @@ write-set = ["+crates/scribe2/src/utterance.rs", "+crates/scribe2/src/utterance/
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail utterance_sort_", "cargo nextest run -p scribe2 --lib --no-tests=fail utterance_sorted_of_"]
 size = "M"
 growth = ["crates/scribe2/src/utterance.rs:210", "crates/scribe2/src/utterance/cli.rs:150", "crates/scribe2/src/lib.rs:1", "crates/scribe2-boundary/src/main.rs:2", "crates/scribe2/src/help.rs:12"]
-done = "(1) core に最上位の module 1 つと cli を足し、lib.rs と境界の main.rs に utterance を 1 つずつ (2) 仕分け済みかは IO の無い純関数 1 本が未仕分け・会話だけ・結びありの 3 値で決め、要望か答えが在れば会話を数えない (3) sort --as request --memo が開いた memo の周に UtteranceSorted request を 1 件書き、台帳を書かず、同じ組は already (4) sort --as chat が台帳を読まずに 1 件書く (5) no-utterance・linked・not-memo・ledger-unreadable を何も書かずに rc 1 で断る (6) show が 1 件の逐語だけを返し、無い ts は no-utterance (7) 両口は read_all で読む (8) 最上位の使い方と help の表に utterance の sort と show 歯: utterance_sort_ が要望と会話の 1 件ずつと台帳の不変、1 発話 2 memo、断り 3 形の不変、同じ秒の 2 発話、show の逐語の一致を、utterance_sorted_of_ が 3 値の表と会話の外しと同じ入力の同じ結果を測る。base は utterance が使い方の誤りで RED"
+done = "(1) core に最上位の module 1 つと cli を足し、lib.rs と境界の main.rs に utterance を 1 つずつ (2) 仕分け済みかは IO の無い純関数 1 本が未仕分け・会話だけ・結びありの 3 値で決め、要望か答えが在れば会話を数えない (3) sort --as request --memo が開いた memo の周に UtteranceSorted request を 1 件書き、台帳を書かず、同じ組は already (4) sort --as chat が台帳を読まずに 1 件書く (5) no-utterance・linked・not-memo・ledger-unreadable を何も書かずに rc 1 で断る (6) show が 1 件の逐語だけを返し、無い ts は no-utterance (7) 両口は read_all で読む (8) 最上位の使い方と help の表に utterance の sort と show 歯: utterance_sort_ が要望と会話の 1 件ずつと台帳の不変、1 発話 2 memo、断り 3 形の不変、同じ秒の 2 発話、show の逐語の一致と no-utterance、already の不変、ledger-unreadable の不変を、utterance_sorted_of_ が 3 値の表と会話の外しと同じ入力の同じ結果を測る。base は utterance が使い方の誤りで RED"
 
 [[contract]]
 id = "j"
