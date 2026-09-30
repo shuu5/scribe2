@@ -1143,12 +1143,14 @@ struct RolePlace {
 }
 
 /// orchestrator の権能（裁定 `user 2026-09-18T08:3xZ`・ADR-0045 §2 (1) の値に裁定 `user 2026-09-20`・ADR-0048 §2 が
-/// 便 1 本を名指す停止 `stop` を足した列）。**起動と着地（launch / merge）と src の編集（edit-code）は持たない**。
+/// 便 1 本を名指す停止 `stop` を、裁定 `user 2026-09-29T21:53Z`・ADR-0097 が止まった終端を閉じる名指しの 2 形 `settle`
+/// を足した列）。**起動と着地（launch / merge）と src の編集（edit-code）は持たない**。
 const ORCHESTRATOR_CAPS: &[&str] = &[
     "answer",
     "approve",
     "go",
     "stop",
+    "settle",
     "edit-contract",
     "edit-design-intent",
     "edit-design-doc",
@@ -2068,6 +2070,113 @@ fn hook_role_stop_is_denied_when_the_row_lacks_stop() {
     assert!(text.contains("（launch）"), "{text}");
     // 対: `stop` を持つ行では同じ名指しが通る。
     assert_silent(&run_stop_hook(&place, &path, Some(&place.rules), &named), "stop を持つ行では通る");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+// ─────────────── 止まった終端を閉じる権能 settle（契約行 z・`s2-07l.737.18`・seat-roles.md §32・ADR-0097・接頭辞 `hook_role_settle_`） ───────────────
+//
+// 登録済みの orchestrator の席（置き場は fixture の state dir・anchor は fixture の repo・行は `settle` を持ち `launch` /
+// `merge` を持たない）で PreToolUse の Bash 面を撃つ。名指しの 6 形は通り、名指しでない 20 形は merge か launch で断られて
+// 決着の句を持つ（約束 3 / 4 / 6）。`settle` を抜いた行では名指しの 6 形が `settle` で断られて句を持たない（約束 9）。
+
+/// 決着の窓が降りた周の deny 文の末尾の 1 句（seat-roles.md §32・`role_guard.rs` の `SETTLE_HINT` の字面）。
+const SETTLE_HINT: &str = "hint=止まった終端の撃ち直しは --run <id> --terminal-only、退役は --run <id>（畳むだけは --fold-only を 1 つ足す）に、席の置き場の --state-dir か anchor の --repo だけを足した 1 行（rules は足さず、前にも後ろにも何も付けない）で settle の権能で通る";
+
+/// 名指しの決着 6 形（land 2・retire 4）。`state` は fixture の置き場・`repo` は fixture の anchor。
+fn settle_named_lines(place: &RolePlace) -> Vec<String> {
+    let (state, repo) = (place.state.display().to_string(), place.repo.display().to_string());
+    [
+        "pipe land --run r-1 --terminal-only".to_owned(),
+        format!("pipe land --terminal-only --run r-1 --state-dir {state} --repo {repo}"),
+        "pipe retire --run r-1".to_owned(),
+        format!("pipe retire --state-dir {state} --run r-1 --repo {repo}"),
+        "pipe retire --run r-1 --fold-only".to_owned(),
+        "pipe retire --fold-only --run r-1 --repo .".to_owned(),
+    ]
+    .map(|window| format!("{NAME} {window}"))
+    .to_vec()
+}
+
+/// 名指しでない決着 20 形（land 10 は merge・retire 10 は launch）。
+fn settle_unnamed_lines() -> Vec<(String, &'static str)> {
+    let land = [
+        "--run r-1",
+        "--terminal-only",
+        "--terminal-only --terminal-only --run r-1",
+        "--run=r-1 --terminal-only",
+        "--run r-1 --terminal-only --detection-only",
+        "--run r-1 --terminal-only --bd b",
+        "--run r-1 --run r-2 --terminal-only",
+        "--run r-1 --terminal-only 2>&1 | tail -3",
+        "--run r-1 --terminal-only --rules f",
+        "--run r-1 --terminal-only --state-dir /elsewhere",
+    ];
+    let retire = [
+        "",
+        "--fold-only",
+        "--run=r-1",
+        "--run r-1 --bd b",
+        "--run r-1 --run r-2",
+        "--run r-1 --fold-only --fold-only",
+        "--run r-1 --fold-only x",
+        "--run r-1 --fold-only=x",
+        "--run r-1 2>&1 | tail -3",
+        "--run r-1 --repo /other",
+    ];
+    let lands = land.map(|window| (format!("{NAME} pipe land {window}"), "（merge）"));
+    let retires = retire.map(|window| (format!("{NAME} pipe retire {window}"), "（launch）"));
+    lands.into_iter().chain(retires).collect()
+}
+
+/// 約束 3 / 4: 名指しの 6 形は席で通り（rc 0・stdout 0 byte・記録 1 行 `role-allow capability=settle`）、埋め込み manifest
+/// （`--rules` 無し）でも同じ判定＝裁定の値が binary に在る。名指しでない 20 形はどれも rc 2・stderr 1 行で括弧つきの
+/// `（merge）` か `（launch）` と決着の句を持ち、記録は `role-deny capability=merge|launch`。
+#[test]
+fn hook_role_settle_named_forms_pass_and_the_others_are_denied_with_the_hint() {
+    let place = role_place();
+    let path = stub_seat(&place, "rolesettlea", Some("orchestrator"));
+    let me = "rolesettlea_rolesettlea";
+    for rules in [Some(place.rules.as_str()), None] {
+        for line in settle_named_lines(&place) {
+            let before = role_records(&place.state).len();
+            assert_silent(&run_stop_hook(&place, &path, rules, &line), &line);
+            assert_role_record(&place.state, before, "role-allow capability=settle", me);
+        }
+    }
+    let unnamed = settle_unnamed_lines();
+    assert_eq!(unnamed.len(), 20, "名指しでない形は 20");
+    for (line, name) in &unnamed {
+        let before = role_records(&place.state).len();
+        let text = assert_role_deny(&run_stop_hook(&place, &path, Some(&place.rules), line), line);
+        assert!(text.contains(name) && text.contains("role.orchestrator"), "{line}: {name} と行 id を名指す: {text}");
+        assert!(text.trim_end().ends_with(&format!(" {SETTLE_HINT}")), "{line}: 句の字面: {text}");
+        assert_eq!(text.matches("hint=").count(), 1, "{line}: 句は 1 つ: {text}");
+        let what = format!("role-deny capability={}", name.trim_matches(['（', '）']));
+        assert_role_record(&place.state, before, &what, me);
+    }
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
+/// 約束 9: `settle` を持たない行の席では名指しの 6 形も括弧つきの `（settle）` で断られ（記録は
+/// `role-deny capability=settle`）、句を持たない＝通したのは行の値であって判定の穴ではない。
+#[test]
+fn hook_role_settle_is_denied_when_the_row_lacks_settle() {
+    let place = role_place();
+    let path = stub_seat(&place, "rolesettleb", Some("orchestrator"));
+    let me = "rolesettleb_rolesettleb";
+    let stripped = place.sock_dir.join("no-settle.toml");
+    assert!(fs::write(&stripped, role_rules_text(&caps_without("settle"))).is_ok(), "rules を書ける");
+    let rules = stripped.display().to_string();
+    for line in settle_named_lines(&place) {
+        let before = role_records(&place.state).len();
+        let text = assert_role_deny(&run_stop_hook(&place, &path, Some(&rules), &line), &line);
+        assert!(text.contains("（settle）") && text.contains("role.orchestrator"), "{line}: settle と行 id を名指す: {text}");
+        assert!(!text.contains("hint=") && !text.contains("（merge）") && !text.contains("（launch）"), "{line}: 句を持たない: {text}");
+        assert_role_record(&place.state, before, "role-deny capability=settle", me);
+    }
+    // 対: `settle` を持つ行では同じ名指しが通る。
+    let named = settle_named_lines(&place);
+    assert_silent(&run_stop_hook(&place, &path, Some(&place.rules), &named[0]), "settle を持つ行では通る");
     clean(&[&place.repo, &place.state, &place.sock_dir]);
 }
 

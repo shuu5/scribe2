@@ -914,7 +914,8 @@ fn rules_embedded_manifest_declares_boundary_lines_row_with_its_ruling() {
 
 /// 裁定 `user 2026-09-18T08:3xZ`（ADR-0045 §2 (1)）の値に裁定 `user 2026-09-20`（ADR-0048 §2）が `stop` を足した:
 /// 席は orchestrator 1 つで、記帳（回答・承認・go）と便 1 本を名指す停止と契約・`design-intent/`・設計 doc・repo の
-/// 外の編集と歯（`crates/<crate>/tests/`）の編集を持つ。
+/// 外の編集と歯（`crates/<crate>/tests/`）の編集を持つ。裁定 `user 2026-09-29T21:53Z`（ADR-0097）が止まった終端を閉じる
+/// `settle` を足した。
 /// **便の起動と着地（launch / merge）は器の dispatcher の口ゆえ持たず、src の編集（edit-code）も持たない**
 /// （印で開いた便の write-set だけ・AC16）。
 #[test]
@@ -926,6 +927,7 @@ fn rules_embedded_manifest_role_rows_carry_the_ruled_capabilities() {
         Capability::Approve,
         Capability::Go,
         Capability::Stop,
+        Capability::Settle,
         Capability::EditContract,
         Capability::EditDesignIntent,
         Capability::EditDesignDoc,
@@ -958,6 +960,7 @@ fn rules_embedded_manifest_role_row_is_one_orchestrator_row() {
         "approve",
         "go",
         "stop",
+        "settle",
         "edit-contract",
         "edit-design-intent",
         "edit-design-doc",
@@ -978,7 +981,7 @@ fn rules_embedded_manifest_role_row_is_one_orchestrator_row() {
         other => panic!("{ORCHESTRATOR_ROW} の値は名の列: {other:?}"),
     };
     assert_eq!(names, EXPECTED, "{ORCHESTRATOR_ROW} の値（宣言順）");
-    assert_eq!(row.ruling, STOP_RULING, "{ORCHESTRATOR_ROW} の裁定 id");
+    assert_eq!(row.ruling, ROW_RULING, "{ORCHESTRATOR_ROW} の裁定 id");
 }
 
 /// 歯 (d・形 6): 埋め込み manifest が役割の既定の 2 行を**値ごと**運ぶ（裁定 `user 2026-09-26T15:41Z` の

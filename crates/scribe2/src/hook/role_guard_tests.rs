@@ -9,7 +9,7 @@
 
 use super::{
     capabilities_of, is_self, judge, refused, subject, unanchored_line, Invalid, Operation, PathKind, PathKinds,
-    RefuseReason, RoleDecision, Subject, CAPABILITY_COMMANDS, DECL_FILE, PATH_KINDS, STOP_HINT,
+    RefuseReason, RoleDecision, Subject, CAPABILITY_COMMANDS, DECL_FILE, PATH_KINDS, SETTLE_HINT, STOP_HINT,
 };
 use crate::name::NAME;
 use crate::pipe::declaration::path_kinds::{DeclaredPaths, INVALID_REASONS};
@@ -222,7 +222,7 @@ fn bash(line: &str) -> Subject {
 #[test]
 fn role_guard_stop_judge_requires_the_stop_capability_from_the_row() {
     let named = bash(&format!("{NAME} pipe stop --run r"));
-    assert_eq!(named, Subject::Capabilities(vec![Capability::Stop], false));
+    assert_eq!(named, Subject::Capabilities(vec![Capability::Stop], Vec::new()));
     let with_stop = manifest_with(&[Capability::Answer, Capability::Stop]);
     assert_eq!(judge(&named, Role::Orchestrator, &with_stop), RoleDecision::Allow, "行が stop を持てば通る");
     let without_stop = manifest_with(&[Capability::Answer, Capability::EditTests]);
@@ -232,7 +232,7 @@ fn role_guard_stop_judge_requires_the_stop_capability_from_the_row() {
     assert!(line.contains("（stop）") && line.contains("role.orchestrator"), "欠けた権能と行 id: {line}");
     assert!(!line.contains("hint="), "名指しの停止は窓が降りていない: {line}");
     let all = bash(&format!("{NAME} pipe stop --all"));
-    assert_eq!(all, Subject::Capabilities(vec![Capability::Launch], true));
+    assert_eq!(all, Subject::Capabilities(vec![Capability::Launch], vec![Capability::Stop]));
     let RoleDecision::Deny(line) = judge(&all, Role::Orchestrator, &with_stop) else {
         panic!("--all は stop を持つ行でも deny（launch を要る）");
     };
@@ -244,7 +244,7 @@ fn role_guard_stop_judge_requires_the_stop_capability_from_the_row() {
     let head = format!("{NAME}: この操作（launch）は席の権能でない（rules 行 role.orchestrator）＝orchestrator 席では止める");
     assert_eq!(line, format!("{head} {STOP_HINT}"), "今の行の末尾に半角空白 1 つと句");
     let run = bash(&format!("{NAME} pipe run --run r --repo ."));
-    assert_eq!(run, Subject::Capabilities(vec![Capability::Launch], false));
+    assert_eq!(run, Subject::Capabilities(vec![Capability::Launch], Vec::new()));
     let RoleDecision::Deny(line) = judge(&run, Role::Orchestrator, &with_stop) else {
         panic!("素の起動は deny");
     };
@@ -263,7 +263,7 @@ fn role_guard_stop_window_runs_to_the_end_of_the_line() {
     assert_eq!(capabilities_of(&split), vec![Capability::Launch], "2 語目に区切りが直付け");
     let both = format!("{NAME} pipe answer --run r --words x && {NAME} pipe stop --run r");
     let subject = bash(&both);
-    assert_eq!(subject, Subject::Capabilities(vec![Capability::Answer, Capability::Stop], false), "前の口と名指しの停止");
+    assert_eq!(subject, Subject::Capabilities(vec![Capability::Answer, Capability::Stop], Vec::new()), "前の口と名指しの停止");
     assert_eq!(judge(&subject, Role::Orchestrator, &manifest_with(&[Capability::Answer, Capability::Stop])), RoleDecision::Allow);
     let RoleDecision::Deny(line) = judge(&subject, Role::Orchestrator, &manifest_with(&[Capability::Stop])) else {
         panic!("answer を持たない行は deny");
@@ -275,14 +275,169 @@ fn role_guard_stop_window_runs_to_the_end_of_the_line() {
     assert!(line.contains("（stop）"), "欠けた stop だけを名指す: {line}");
 }
 
+/// 決着の歯の anchor（repo root と cwd）と置き場（hook が解いた値）。
+const SETTLE_ANCHOR: &str = "/repo";
+const SETTLE_PLACE: &str = "/state";
+
+/// 決着の入口: root と cwd は anchor・置き場は `place`（`None` は anchor を解けない周）。Bash 面は git を撃たない。
+fn settle_subject(line: &str, place: Option<&str>) -> Subject {
+    let anchor = Path::new(SETTLE_ANCHOR);
+    let op = Operation { tool: "Bash", command: Some(line), path: None, root: Some(anchor), cwd: anchor };
+    subject(&op, place.map(Path::new)).unwrap_or_else(|| panic!("権能付きの行: {line}"))
+}
+
+/// 名指しの決着の 6 形（land 2・retire 4）。
+fn settle_named() -> Vec<String> {
+    let (place, anchor) = (SETTLE_PLACE, SETTLE_ANCHOR);
+    [
+        "pipe land --run r --terminal-only".to_owned(),
+        format!("pipe land --terminal-only --run r --state-dir {place} --repo {anchor}"),
+        "pipe retire --run r".to_owned(),
+        format!("pipe retire --state-dir {place} --run r --repo {anchor}"),
+        "pipe retire --run r --fold-only".to_owned(),
+        "pipe retire --fold-only --run r --repo .".to_owned(),
+    ]
+    .map(|window| format!("{NAME} {window}"))
+    .to_vec()
+}
+
+/// 名指しでない land 10 形（どれも merge・降りた列は settle）。
+fn settle_unnamed_land() -> Vec<String> {
+    [
+        "--run r",
+        "--terminal-only",
+        "--terminal-only --terminal-only --run r",
+        "--run=r --terminal-only",
+        "--run r --terminal-only --detection-only",
+        "--run r --terminal-only --bd b",
+        "--run r --run r2 --terminal-only",
+        "--run r --terminal-only 2>&1 | tail -3",
+        "--run r --terminal-only --rules f",
+        "--run r --terminal-only --state-dir /elsewhere",
+    ]
+    .map(|window| format!("{NAME} pipe land {window}"))
+    .to_vec()
+}
+
+/// 名指しでない retire 10 形（どれも launch・降りた列は settle）。
+fn settle_unnamed_retire() -> Vec<String> {
+    [
+        "",
+        "--fold-only",
+        "--run=r",
+        "--run r --bd b",
+        "--run r --run r2",
+        "--run r --fold-only --fold-only",
+        "--run r --fold-only x",
+        "--run r --fold-only=x",
+        "--run r 2>&1 | tail -3",
+        "--run r --repo /other",
+    ]
+    .map(|window| format!("{NAME} pipe retire {window}"))
+    .to_vec()
+}
+
+/// 約束 3 / 4 / 5: 名指しの 6 形は settle で降りた列は空。名指しでない land 10 形は merge・retire 10 形は launch で、
+/// どれも降りた列は settle。停止の窓の判定は別で、決着の窓に `--rules` は通らない。
+#[test]
+fn role_guard_settle_named_windows_are_settle_and_the_others_fall_to_merge_or_launch() {
+    for line in settle_named() {
+        let want = Subject::Capabilities(vec![Capability::Settle], Vec::new());
+        assert_eq!(settle_subject(&line, Some(SETTLE_PLACE)), want, "{line}");
+    }
+    for (lines, cap) in [(settle_unnamed_land(), Capability::Merge), (settle_unnamed_retire(), Capability::Launch)] {
+        assert_eq!(lines.len(), 10, "名指しでない形は 10");
+        for line in lines {
+            let want = Subject::Capabilities(vec![cap], vec![Capability::Settle]);
+            assert_eq!(settle_subject(&line, Some(SETTLE_PLACE)), want, "{line}");
+        }
+    }
+    let rules = format!("{NAME} pipe retire --run r --rules /r.toml");
+    assert_eq!(capabilities_of(&rules), vec![Capability::Launch], "--rules を持つ形は名指しでない");
+    let stop = settle_subject(&format!("{NAME} pipe stop --run r --rules /r.toml"), Some(SETTLE_PLACE));
+    assert_eq!(stop, Subject::Capabilities(vec![Capability::Stop], Vec::new()), "停止の窓は不変");
+}
+
+/// 約束 3 / 4: 置き場と anchor は `Path` の成分で比べる（末尾の `/`・`.` は同じ・`..` と相対で外れる形は違う）。
+/// 置き場を渡さない `subject` と公開の `capabilities_of` は `--state-dir` か `--repo` を持つ 3 形を名指しと読まない。
+#[test]
+fn role_guard_settle_place_and_repo_are_compared_by_components() {
+    for window in ["--state-dir /state/", "--state-dir /state/.", "--repo /repo/", "--repo ./", "--state-dir /state --repo ."] {
+        let line = format!("{NAME} pipe retire --run r {window}");
+        let want = Subject::Capabilities(vec![Capability::Settle], Vec::new());
+        assert_eq!(settle_subject(&line, Some(SETTLE_PLACE)), want, "{line}");
+    }
+    for window in ["--state-dir /state/../state", "--state-dir state", "--repo ..", "--repo /repo/../repo", "--state-dir /repo"] {
+        let line = format!("{NAME} pipe retire --run r {window}");
+        let want = Subject::Capabilities(vec![Capability::Launch], vec![Capability::Settle]);
+        assert_eq!(settle_subject(&line, Some(SETTLE_PLACE)), want, "{line}");
+    }
+    let named = settle_named();
+    assert_eq!(named.iter().filter(|line| line.contains("--state-dir") || line.contains("--repo")).count(), 3);
+    for line in &named {
+        let carries = line.contains("--state-dir") || line.contains("--repo");
+        let (found, demoted) = if carries { (vec![want_cap(line)], vec![Capability::Settle]) } else { (vec![Capability::Settle], Vec::new()) };
+        assert_eq!(settle_subject(line, None), Subject::Capabilities(found.clone(), demoted), "置き場を渡さない: {line}");
+        assert_eq!(capabilities_of(line), found, "公開の読み: {line}");
+    }
+}
+
+/// 名指しでない形の権能（land は merge・retire は launch）。
+fn want_cap(line: &str) -> Capability {
+    if line.contains(" land ") {
+        Capability::Merge
+    } else {
+        Capability::Launch
+    }
+}
+
+/// 約束 6 / 9: settle を持つ行は名指しの 6 形を通し、持たない行は括弧つきの `（settle）` で断って句を持たない。
+/// 名指しでない形の断り文は今の行の末尾に半角空白 1 つと決着の句で、名指しでない停止と退役を並べた行は 2 つの句を
+/// この順に持ち、素の起動は句を持たない。
+#[test]
+fn role_guard_settle_judge_holds_the_row_and_appends_the_hint() {
+    let with_settle = manifest_with(&[Capability::Answer, Capability::Settle]);
+    let without = manifest_with(&[Capability::Answer, Capability::Stop]);
+    for line in settle_named() {
+        let named = settle_subject(&line, Some(SETTLE_PLACE));
+        assert_eq!(judge(&named, Role::Orchestrator, &with_settle), RoleDecision::Allow, "{line}");
+        let RoleDecision::Deny(text) = judge(&named, Role::Orchestrator, &without) else {
+            panic!("settle を持たない行は断る: {line}");
+        };
+        assert!(text.contains("（settle）") && text.contains("role.orchestrator"), "{text}");
+        assert!(!text.contains("hint="), "{text}");
+    }
+    for (line, name) in settle_unnamed_land().into_iter().map(|line| (line, "（merge）"))
+        .chain(settle_unnamed_retire().into_iter().map(|line| (line, "（launch）")))
+    {
+        let RoleDecision::Deny(text) = judge(&settle_subject(&line, Some(SETTLE_PLACE)), Role::Orchestrator, &with_settle) else {
+            panic!("名指しでない形は settle を持つ行でも断る: {line}");
+        };
+        let head = format!("{NAME}: この操作（{}）は席の権能でない（rules 行 role.orchestrator）＝orchestrator 席では止める", name.trim_matches(['（', '）']));
+        assert!(text.contains(name), "{line}: {text}");
+        assert_eq!(text, format!("{head} {SETTLE_HINT}"), "{line}");
+    }
+    let both = format!("{NAME} pipe stop --all && {NAME} pipe retire --run r --repo /other");
+    let RoleDecision::Deny(text) = judge(&settle_subject(&both, Some(SETTLE_PLACE)), Role::Orchestrator, &with_settle) else {
+        panic!("名指しでない停止と退役は断る");
+    };
+    assert!(text.ends_with(&format!(" {STOP_HINT} {SETTLE_HINT}")), "2 つの句をこの順に: {text}");
+    assert_eq!(text.matches("hint=").count(), 2, "{text}");
+    let run = settle_subject(&format!("{NAME} pipe run --run r"), Some(SETTLE_PLACE));
+    let RoleDecision::Deny(text) = judge(&run, Role::Orchestrator, &with_settle) else {
+        panic!("素の起動は断る");
+    };
+    assert!(text.contains("（launch）") && !text.contains("hint="), "素の起動は句を持たない: {text}");
+}
+
 /// 判定は行の値だけを読む: 持てば Allow・欠けば Deny（deny 文は欠けた権能と行 id）・行の無い周は
 /// 権能なし・印で開いた path は種別の権能が無くても Allow。
 #[test]
 fn role_guard_judge_reads_the_role_row() {
     let manifest = manifest_with(&[Capability::Answer, Capability::EditDesignDoc]);
-    let answer = Subject::Capabilities(vec![Capability::Answer], false);
+    let answer = Subject::Capabilities(vec![Capability::Answer], Vec::new());
     assert_eq!(judge(&answer, Role::Orchestrator, &manifest), RoleDecision::Allow);
-    let launch = Subject::Capabilities(vec![Capability::Answer, Capability::Launch], false);
+    let launch = Subject::Capabilities(vec![Capability::Answer, Capability::Launch], Vec::new());
     let RoleDecision::Deny(line) = judge(&launch, Role::Orchestrator, &manifest) else {
         panic!("欠けた権能は deny");
     };
@@ -460,7 +615,7 @@ fn hook_role_guard_route_every_variant_is_non_empty() {
 /// `unanchored_line` は `NoAnchor` の同じ形・`judge` の行なしは `no-row <row>` の同じ形。
 #[test]
 fn hook_role_guard_route_deny_line_ends_with_route() {
-    let subject = Subject::Capabilities(vec![Capability::Answer], false);
+    let subject = Subject::Capabilities(vec![Capability::Answer], Vec::new());
     for (reason, word) in RefuseReason::ALL.into_iter().zip(REASON_WORDS) {
         let line = refused(&subject, reason);
         assert_eq!(line.lines().count(), 1, "deny 文は 1 行: {line}");
@@ -488,7 +643,7 @@ fn hook_role_guard_route_deny_line_ends_with_route() {
 /// 記録の種別の字面。
 #[test]
 fn role_guard_subject_renders_capability_or_path_kind() {
-    let caps = Subject::Capabilities(vec![Capability::Answer, Capability::Launch], true);
+    let caps = Subject::Capabilities(vec![Capability::Answer, Capability::Launch], vec![Capability::Stop]);
     assert_eq!(caps.render(), "capability=answer+launch");
     assert_eq!(path(PathKind::Code, false).render(), "path=code");
     assert_eq!(path(PathKind::Code, true).render(), "path=code opened");
@@ -557,7 +712,7 @@ proptest! {
     fn prop_role_bash_face_allows_iff_matched_capabilities_are_held(line in armed_command(), extra in capability_set()) {
         let matched = capabilities_of(&line);
         prop_assert!(!matched.is_empty(), "{line}");
-        let subject = Subject::Capabilities(matched.clone(), false);
+        let subject = Subject::Capabilities(matched.clone(), Vec::new());
         let mut held = matched.clone();
         held.extend(extra.iter().copied());
         prop_assert_eq!(judge(&subject, Role::Orchestrator, &manifest_with(&held)), RoleDecision::Allow);
