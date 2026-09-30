@@ -1599,6 +1599,144 @@ fn hook_question_form_passes_complete_questions_and_denies_stdin_bodies() {
     clean(&[&repo, &state]);
 }
 
+// ─────────────── notes の裁定の行（`s2-07l.738.37.10`・設計 ledger-form.md §18 行 n・接頭辞 `hook_notes_ruling_`） ───────────────
+//
+// rules は §14 と同じ写し（[`question_rules`]）。`.beads` の無い toy repo で撃つので、裁定 id は接頭辞を要らない `batch:` /
+// `policy:` の形（問い id の形は接頭辞を解く lib の歯が持つ）。
+
+/// 裁定の行 3 形: 5 欄・3 欄（裁定 id が先頭の欄でない）・`batch:` の欄を持つ行。
+const NOTES_RULINGS: [&str; 3] = [
+    "policy:e2e | s2-1 | 2026-10-01T00:00Z | chat | 逐語",
+    "s2-1 | policy:e2e | 逐語",
+    "メモ | batch:e2e 束 | 逐語",
+];
+
+/// 断り文の語ごとの案内の字（§18）。
+const NOTES_NEXT: [(&str, &str); 2] = [("notes-ruling-line", "seat ruling bind"), ("notes-unreadable", "note <id> --file")];
+
+/// 写しの rules で撃ち、notes の段の deny の外形（rc 2・stdout 0 byte・stderr 1 行・`deny bd <sub>` の頭・語・§18・語ごとの案内）
+/// と記録 1 行を確かめる。
+fn assert_notes_deny(state: &Path, repo: &Path, rules: &str, command: &str, (sub, reason): (&str, &str)) {
+    let before = ledger_records(state).len();
+    let out = run_hook_args(&["pre-tool-use", "--rules", rules], &bash_payload(repo, command));
+    let text = stderr_text(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "{command}: deny は rc 2: {text}");
+    assert!(out.stdout.is_empty(), "{command}: deny でも stdout は 0 byte");
+    assert_eq!(stderr_lines(&out), 1, "{command}: stderr は 1 行: {text}");
+    let head = format!("{NAME}: deny bd {sub} は起票の門が止める reason={reason}（");
+    assert!(text.starts_with(&head) && text.trim_end().ends_with("・ledger-form.md §18）"), "{command}: {text}");
+    let next = NOTES_NEXT.iter().find(|(word, _)| *word == reason).map(|(_, next)| *next).unwrap_or_default();
+    assert!(text.contains(next), "{command}: 語ごとの案内 {next}: {text}");
+    let lines = ledger_records(state);
+    assert_eq!(lines.len(), before + 1, "{command}: 記録は 1 行増える: {lines:?}");
+    assert_eq!(what_of(&lines.last().cloned().unwrap_or_default()), format!("ledger-deny {reason}"), "{command}");
+}
+
+/// (a) 裁定の行を足す 6 形（update の `--append-notes value` と `=` 形・create の `--append-notes` と `--notes`・note の本文の語と
+/// `--file`）× bd と bdw の 12 本が notes-ruling-line で断られ、12 本は裁定の行の 3 形を割り振る。`-` で始まる値の裁定の行も断る。
+#[test]
+fn hook_notes_ruling_denies_the_six_forms_from_bd_and_bdw() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let rules = question_rules(&state);
+    let mut fired = 0_usize;
+    for (at, client) in ["bd", "bdw"].into_iter().enumerate() {
+        for (form, (sub, tail)) in [
+            ("update", "update s2-1 --append-notes \"{}\""),
+            ("update", "update s2-1 --append-notes=\"{}\""),
+            ("create", "create x --parent s2-1 --append-notes \"{}\""),
+            ("create", "create x --parent s2-1 --notes \"{}\""),
+            ("note", "note s2-1 \"{}\""),
+            ("note", "note s2-1 --file n.md"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let line = NOTES_RULINGS.get(form.wrapping_add(at) % 3).copied().unwrap_or_default();
+            fs::write(repo.join("n.md"), format!("{line}\n")).expect("本文の file を書ける");
+            let command = format!("{client} {}", tail.replace("{}", line));
+            assert_notes_deny(&state, &repo, &rules, &command, (sub, "notes-ruling-line"));
+            fired = fired.saturating_add(1);
+        }
+        let command = format!("{client} update s2-1 --append-notes \"-x | policy:e2e | 逐語\"");
+        assert_notes_deny(&state, &repo, &rules, &command, ("update", "notes-ruling-line"));
+        fired = fired.saturating_add(1);
+    }
+    assert_eq!(fired, 14, "母集団は 6 形 × 2 経路 + 値が - で始まる 2 本");
+    assert_eq!(ledger_records(&state).len(), fired, "{fired} 本 × 記録 1 行");
+    clean(&[&repo, &state]);
+}
+
+/// (b) 読めない 5 形（`$(…)`・backtick・note の `--stdin`・開けない `--file`・値の無い flag）× bd と bdw の 10 本が
+/// notes-unreadable で断られる。
+#[test]
+fn hook_notes_ruling_denies_unreadable_forms_from_bd_and_bdw() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let rules = question_rules(&state);
+    fs::write(repo.join("n.md"), "素の字\n").expect("本文の file を書ける");
+    let forms = [
+        ("update", "update s2-1 --append-notes \"$(cat n.md)\""),
+        ("update", "update s2-1 --append-notes \"`cat n.md`\""),
+        ("note", "note s2-1 --stdin"),
+        ("note", "note s2-1 --file nope.md"),
+        ("update", "update s2-1 --append-notes"),
+    ];
+    for client in ["bd", "bdw"] {
+        for (sub, tail) in forms {
+            assert_notes_deny(&state, &repo, &rules, &format!("{client} {tail}"), (sub, "notes-unreadable"));
+        }
+    }
+    assert_eq!(ledger_records(&state).len(), forms.len() * 2, "母集団は 5 形 × 2 経路の 10 本");
+    clean(&[&repo, &state]);
+}
+
+/// (c) 裁定の行を含まない notes（素の字・裁定 id を文の途中で引く散文・`### 出所` の行・素の file）と、`--design` / `-d` に置いた
+/// 裁定の行は rc 0 で記録を残さない。
+#[test]
+fn hook_notes_ruling_passes_plain_notes_and_ruling_lines_outside_notes() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let rules = question_rules(&state);
+    fs::write(repo.join("plain.md"), "素の字\n### 出所\n").expect("本文の file を書ける");
+    for client in ["bd", "bdw"] {
+        for tail in [
+            "update s2-1 --append-notes \"素の字\"",
+            "update s2-1 --append-notes \"裁定 policy:e2e を引く\"",
+            "update s2-1 --append-notes \"### 出所\"",
+            "create x --parent s2-1 --append-notes \"x\"",
+            "note s2-1 素の字",
+            "note s2-1 --file plain.md",
+            "update s2-1 --design \"policy:e2e | s2-1 | 逐語\"",
+            "update s2-1 -d \"policy:e2e | s2-1 | 逐語\"",
+            "create x --parent s2-1 -d \"policy:e2e | s2-1 | 逐語\"",
+        ] {
+            assert_question_pass(&state, &repo, &rules, &format!("{client} {tail}"));
+        }
+    }
+    assert_eq!(ledger_records(&state).len(), 0, "通した書きは記録を残さない");
+    clean(&[&repo, &state]);
+}
+
+/// (d) update の `--notes` に裁定の行を置いた書きは notes-replace でなく notes-ruling-line（裁定の行の無い `--notes` は notes-replace
+/// のまま）。(d2) label intake:memo の create で `### 出所` の見出しが無く `--notes` に裁定の行を置いた書きは、memo の create の段の語
+/// no-source。(e) 埋め込みの rules のままの `bd note s2-1 x` は bd-outside-bdw。
+#[test]
+fn hook_notes_ruling_keeps_the_stage_order_and_bd_note_is_a_write() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let rules = question_rules(&state);
+    assert_notes_deny(&state, &repo, &rules, "bdw update s2-1 --notes \"policy:e2e | s2-1 | 逐語\"", ("update", "notes-ruling-line"));
+    let out = run_hook_args(&["pre-tool-use", "--rules", &rules], &bash_payload(&repo, "bdw update s2-1 --notes plain"));
+    assert_write_deny(&state, &out, "bdw update s2-1 --notes plain", "notes-replace");
+    fs::write(repo.join("nosrc.md"), "## memo\n### 観測\n### 候補\n### 昇格条件\n").expect("本文を書ける");
+    let memo = "bdw create \"[memo] x\" --parent s2-1 --labels intake:memo --body-file nosrc.md --notes \"policy:e2e | s2-1 | 逐語\"";
+    assert_ledger_deny(&state, &repo, memo, "no-source");
+    assert_write_denied(&state, &repo, "bd note s2-1 x", "bd-outside-bdw");
+    assert_ledger_pass(&state, &repo, "bdw note s2-1 x");
+    clean(&[&repo, &state]);
+}
+
 // ─────────────── memo の引き金の行（`s2-07l.738.12`・設計 ledger-form.md §15 行 k・接頭辞 `hook_memo_trigger_`） ───────────────
 //
 // rules は §14 と同じ写し（[`question_rules`]）。`.beads` の無い toy repo で撃ち、接頭辞の歯だけ `.beads/config.yaml` を置いた

@@ -20,6 +20,9 @@
 //! 読めない・行が無い・不発効・値が列でない周は `bd` / `bdw` を通さない（FailClosed・`bd` / `bdw` の無い command は
 //! rules を読まずに通す）。
 //!
+//! notes の段（ledger-form.md §18）: create の段の後・6 形の前に、notes の本文（[`notes`] の子 module が読む）に裁定の行を足す
+//! 書きと本文を読めない書きを止める。
+//!
 //! 引き金の段（ledger-form.md §15）: memo の判定で止まらない memo の create と 6 形で止まらない本文を書く update は、昇格条件
 //! の節に読める引き金の行（[`trigger::read`]）が無ければ止める。台帳は読まず、接頭辞は cwd から上の `.beads` の設定から解く。
 
@@ -34,6 +37,8 @@ use crate::rules::manifest::Manifest;
 use crate::rules::RuleValue;
 use crate::seat::brief::pointer::Anchor;
 use std::path::Path;
+
+mod notes;
 
 /// この境界の極性: 起票の時点で止め、memo の本文を読めない周は create を通さない。
 pub const POLARITY: Polarity = Polarity {
@@ -90,7 +95,7 @@ const MEMORY: [&str; 3] = ["remember", "recall", "memories"];
 /// は `ledger.denied_writes` が不発効の周にこの列を全部断る＝設計 vessel-hook.md §11 の形 f 2）。
 pub(crate) const WRITES: &[&str] = &[
     "create", "update", "close", "reopen", "delete", "dep", "label", "comment", "comments", "edit", "remember", "forget",
-    "set-state", "rename", "rename-prefix", "move", "promote", "import", "merge", "duplicate", "supersede", "sync",
+    "set-state", "rename", "rename-prefix", "move", "promote", "import", "merge", "duplicate", "supersede", "sync", "note",
 ];
 
 /// notes を丸ごと置き換える flag（`--append-notes` は別の語）。
@@ -326,7 +331,7 @@ pub fn decide(command: &str, cwd: &Path, rules: Option<&Path>) -> LedgerDecision
         let found = judge(&create, read).map(|found| deny(found.as_str(), denied_line(found)));
         found.or_else(|| memo_untriggered(&create, read, cwd).map(Untriggered::decision))
     });
-    if let Some(found) = created {
+    if let Some(found) = created.or_else(|| notes::judge(&all, &read, || ledger_prefix(cwd))) {
         return found;
     }
     let writes: Vec<Write> = all.iter().filter_map(|words| write_of(words)).collect();

@@ -769,7 +769,7 @@ fn host_guard_ledger_four_forms_hit_with_the_gate_words() {
 fn host_guard_ledger_without_the_writes_row_denies_every_write_subcommand() {
     let root = ledger_root("no-writes", true, true);
     for (manifest, why) in [(ledger_manifest(true, None), "行が無い"), (ledger_manifest(true, Some(false)), "不発効")] {
-        for command in ["bd close x", "bdw close x", "bdw update x --append-notes y"] {
+        for command in ["bd close x", "bdw close x", "bdw update x --append-notes y", "bd note x y", "bdw note x --file f"] {
             let found = ledger_hit(command, &root, &manifest);
             assert_eq!(found, Some(("host-guard-deny ledger".to_owned(), "no-row".to_owned())), "{why}: {command}");
         }
@@ -778,6 +778,31 @@ fn host_guard_ledger_without_the_writes_row_denies_every_write_subcommand() {
         }
         let git = ledger_hit("bd list && git push --force", &root, &manifest);
         assert_eq!(git, Some(("host-guard-deny git".to_owned(), "git push --force".to_owned())), "{why}: git は動く");
+    }
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// 起票の門の notes の段（ledger-form.md §18）は `decide` 1 本で 3 つの口（update の append-notes・create の notes・note の本文
+/// と file）を読み、裁定の行は notes-ruling-line・読めない本文は notes-unreadable で断り、裁定の行を含まない本文は通す。
+#[test]
+fn hook_notes_ruling_decide_reads_the_three_mouths() {
+    let root = ledger_root("notes-ruling", false, false);
+    let _ = fs::write(root.join("f"), "x\nbatch:m | s2-1 | 逐語\n");
+    let denied = |command: &str| match ledger_guard::decide(command, &root, None) {
+        ledger_guard::LedgerDecision::Deny { what, .. } => Some(what),
+        ledger_guard::LedgerDecision::Allow => None,
+    };
+    for (command, want) in [
+        ("bdw update s2-1 --append-notes 'batch:m | s2-1 | 逐語'", Some("notes-ruling-line")),
+        ("bd create t --parent s2-1 --notes=policy:p", Some("notes-ruling-line")),
+        ("bdw note s2-1 'a | batch:m | b'", Some("notes-ruling-line")),
+        ("bdw note s2-1 --file f", Some("notes-ruling-line")),
+        ("bdw note s2-1 --stdin", Some("notes-unreadable")),
+        ("bdw update s2-1 --append-notes '$(cat f)'", Some("notes-unreadable")),
+        ("bdw update s2-1 --append-notes 'plain'", None),
+        ("bdw note s2-1 plain", None),
+    ] {
+        assert_eq!(denied(command).as_deref(), want, "{command}");
     }
     let _ = fs::remove_dir_all(&root);
 }

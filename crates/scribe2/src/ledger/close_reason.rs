@@ -182,6 +182,13 @@ pub fn is_ruling_id(text: &str, prefix: Option<&str>) -> bool {
     prefix.is_some_and(|prefix| question_form(text, prefix))
 }
 
+/// 裁定の行か（ledger-form.md §18）: 行を `|` で割り、前後の空白を剥いだ欄のどれかが [`is_ruling_id`] で真なら真（欄の数に
+/// 依らない＝5 欄・4 欄・3 欄・`batch:` の欄だけの行）。裁定 id を文の途中で引く散文（欄の全体が id でない）・空の欄・接頭辞の
+/// 違う問い id は偽。裁定の行かの判定はこの 1 本だけが持つ。
+pub fn is_ruling_line(line: &str, prefix: Option<&str>) -> bool {
+    line.split('|').map(str::trim).any(|field| is_ruling_id(field, prefix))
+}
+
 /// 裁定の行（bead の notes の 1 行）の 5 欄（設計 dispatcher.md §36 約束 4・fleet-event-log.md 行 h が書く行）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RulingRow {
@@ -305,7 +312,7 @@ fn is_count(text: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_ruling_id, read, ruling_row, Defect, Form, Head, LandedTail, RulingRow, ROUTE_CHAT};
+    use super::{is_ruling_id, is_ruling_line, read, ruling_row, Defect, Form, Head, LandedTail, RulingRow, ROUTE_CHAT};
 
     /// 40 桁の 16 進（小文字）。
     const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
@@ -531,5 +538,39 @@ mod tests {
         let named = "batch:2026-09-28 | s2-1 | 2026-09-30T00:00Z | chat | 逐語";
         assert!(ruling_row(named, Some("tz")).is_some() && ruling_row(named, None).is_some(), "batch: は接頭辞に依らない");
         assert_eq!(ruling_row("policy:batch:x | s2-1 | 2026-09-30T00:00Z | 逐語", None).map(|found| found.id), Some("policy:batch:x".to_owned()));
+    }
+
+    /// 裁定の行の判定は欄の数に依らず、欄のどれかが裁定 id なら真。id を文の途中で引く散文・空の欄・接頭辞の違う id は偽。
+    #[test]
+    fn ruling_line_is_true_when_any_field_is_a_ruling_id_whatever_the_field_count() {
+        let id = "s2-1:20260930T0000Z-1";
+        let yes = |line: &str| is_ruling_line(line, Some("s2"));
+        for line in [
+            format!("{id} | s2-1 | 2026-09-30T00:00Z | chat | 逐語"),
+            format!("{id} | s2-1 | 2026-09-30T00:00Z | 逐語"),
+            format!("{id} | s2-1 | 逐語"),
+            "batch:m2 | s2-1 | 逐語".to_owned(),
+            format!("メモ | {id} | 逐語"),
+            format!("  {id}\u{3000}"),
+            "policy:p".to_owned(),
+            "x | batch:y".to_owned(),
+        ] {
+            assert!(yes(&line), "{line}");
+        }
+        for line in [
+            format!("裁定 {id} を引く"),
+            format!("{id} を引く | s2-1 | 逐語"),
+            "tz-1:20260930T0000Z-1 | tz-1 | 逐語".to_owned(),
+            "s2-1:20260930T0000Z-0 | s2-1".to_owned(),
+            "batch: | policy: | ".to_owned(),
+            "### 出所".to_owned(),
+            String::new(),
+            " | | ".to_owned(),
+        ] {
+            assert!(!yes(&line), "{line}");
+        }
+        assert!(is_ruling_line("x | tz-1:20260930T0000Z-1", Some("tz")), "接頭辞が合えば真");
+        assert!(!is_ruling_line(id, None), "接頭辞が解けない周は問い id の形を読めない");
+        assert!(is_ruling_line("a | batch:x", None), "batch: は接頭辞に依らない");
     }
 }
