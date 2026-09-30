@@ -1157,14 +1157,17 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 - 置き場の file が無い周は留めない（列がまだ測っていない）。在るのに読めない周だけ `held:FR84:unmeasured` で留める。file が無い周と読めない周の区別は、`dispatcher.md 行 am` の読みの関数が分けて返す（`dispatcher.md §38`）。
 - released の語は、便の最後の held の FR の語に揃える。行 be の約束 5 は「当たらない周で最後の held の後に released が無ければ `released:FR83`」と書き、最後の held が `held:FR84:` の便にも `released:FR83` を書く。本行は land.rs の記帳を直し、`released:FR83` は最後の held が `held:FR83:` の便だけに書き、`released:FR84` は最後の held が `held:FR84:` の便で表から消えた周だけに書く。
   - 直さないと、ruling-check = true の repo で FR84 の留めの次の周に FR83 の判定が当たらず `released:FR83` が書かれ、便は列に戻る。表に残る同じ id の周は、直前の event が held でないので `held:FR84:` を新しく記帳し、held と released が周ごとに往復する。表から消えた周も `released:FR84` が出ない。
+- 候補の木の先頭の判定（行 be の約束 6）にも FR84 を足す。先頭は後続を積む前に、FR83 の判定に加えて、置き場の表にその便の bead が在るかでも掛け、在る便を積まない（記帳はその便の自走に任せる・行 be と同じ）。判定の置き場は行 be が `crates/scribe2/src/pipe/train.rs` に足す後続の掛けの所で、train.rs は write-set に在る。
+  - 足さないと、表に bead が在る後続の便は先頭の候補の木に積まれ、自分の着地の周の判定を経ずに先頭と一緒に main に載る（事前審査の束 151ecf21d5ac5fca の 2 周目の指摘）。
 - 歯: 接頭辞 `pipe_land_unreflected_`（tests/e2e/pipe/land.rs）。
   - (a) 表に bead が在る便は Gated に留まり、main は動かない。留めの event の detail は `held:FR84:<表がその便の bead に結ぶ裁定 id>` と逐語で一致する（表に別の bead と別の id の組も置き、取り違える実装を落とす）。
   - (b) 上限の回数を越えて回しても Failed にならない。
   - (c) 表から消えた後の周に `released:FR84` を 1 件記帳して着地する。
   - (d) 同じ原因で 3 周撃っても `held:FR84:` は 1 件。
   - (e) 読めない file の周は `held:FR84:unmeasured` で留まり、file の無い置き場の便は着地する。
+  - (g) 候補の木の先頭の周に、表に bead が在る後続の便（FR83 には当たらない）と表に無い後続の便を置くと、表に在る便は積まれず main に載らず、表に無い便は積まれる（先頭の掛けに FR84 を入れない実装を落とす）。
   - (f) ruling-check = true の宣言で FR83 の判定が当たらない便を、表に bead を置いたまま 3 周撃つと、event は `held:FR84:<id>` の 1 件だけで `released:FR83` は 0 件。表から消した周に `released:FR84` が 1 件で、`released:FR83` は 0 件のまま（最後の held の語に依らず `released:FR83` を書く実装を落とす）。
-  - base で RED: 機能不在（表に在る便が main に載る）。
+  - base で RED: 機能不在（表に在る便が main に載る）。(g) は、base の先頭の掛けが FR83 だけを見て表に在る後続を積むので落ちる。
 
 ## 64. 審査役の claude を読みの道具だけで起こす — 道具は Read・Grep・Glob、許可の問いを誰にも出さない mode、口座の自動 memory を読まない、契約の審査は審査の時点の HEAD の木の上で・先撃ちは予想の木の上で読み、予想の判定を Reviewed に写さず、prompt の「tool が渡されていない」を消す（契約表の行 bg・[ADR-0102](../../design-intent/decisions/ADR-0102-lens-reads-with-read-only-tools-and-runner-gets-the-common-verify.html) §2.1・epic `s2-07l.736.33` の打ち手 0）
 
@@ -1959,11 +1962,11 @@ title = "未反映の裁定に関わる便を着地の周に FR10 の留めに�
 req = ["FR10", "FR84"]
 section = "63"
 depends = ["be"]
-write-set = ["crates/scribe2/src/pipe/land.rs", "crates/scribe2-boundary/tests/e2e/pipe/land.rs", "=crates/scribe2/src/pipe/dispatch.rs"]
+write-set = ["crates/scribe2/src/pipe/land.rs", "crates/scribe2/src/pipe/train.rs", "crates/scribe2-boundary/tests/e2e/pipe/land.rs", "=crates/scribe2/src/pipe/dispatch.rs"]
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_land_unreflected_"]
 size = "S"
 growth = ["crates/scribe2/src/pipe/land.rs:25"]
-done = "(1) 表に bead が在る便は Gated に留まり main は動かない (2) detail は held:FR84:<表がその便の bead に結ぶ裁定 id> で、同じ名指しの event は 1 件（3 周撃っても 1 件） (3) 上限の回数を越えて回しても Failed にならない (4) 表から消えた後の周に released:FR84 を 1 件記帳して着地する (5) 置き場の file が無い周は留めず、在るのに読めない周だけ held:FR84:unmeasured で留める (6) ruling-check = true の repo で FR83 の判定が当たらない周も、最後の held が held:FR84: の便には released:FR83 を記帳せず、表から消えた周の released:FR84 だけを書く"
+done = "(1) 表に bead が在る便は Gated に留まり main は動かない (2) detail は held:FR84:<表がその便の bead に結ぶ裁定 id> で、同じ名指しの event は 1 件（3 周撃っても 1 件） (3) 上限の回数を越えて回しても Failed にならない (4) 表から消えた後の周に released:FR84 を 1 件記帳して着地する (5) 置き場の file が無い周は留めず、在るのに読めない周だけ held:FR84:unmeasured で留める (6) ruling-check = true の repo で FR83 の判定が当たらない周も、最後の held が held:FR84: の便には released:FR83 を記帳せず、表から消えた周の released:FR84 だけを書く (7) 候補の木の先頭は、表に bead が在る後続の便を積まず、表に無い後続は積む"
 
 [[contract]]
 id = "bg"
