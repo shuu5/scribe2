@@ -924,9 +924,11 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
    - `pipe intake` と `pipe preflight` は TOOLS の `--bd` を受ける（無ければ既定の bd）。
    - `pipe run` と列の周は、既に受ける値を渡す。
    - client は材料（`Materials`）の欄に持たせ、`Materials::read` と `Materials::of` が受ける。列の候補と事前の lens の候補の側の Material の literal（write-set の `=` の 2 file）は変えない。
+   - client の置き場と literal を変えないことは挙動に差が出ないので歯では弁別できず、done には載せない（字面の pin は書かない・便の diff の設計適合は gate の審査で見る・[contract-source.md](./contract-source.md) §44 の形 1 と同じ扱い）。
    - 引用の事実（裁定の行の索引・線・線の木の時刻の形の集合・fixtures）は、材料の読みの 1 周に 1 回で持つ。引用を 1 件でも持つ契約が出たときに初めて読む（引用の無い周は台帳を読まない）。
 6. 列の周の断りは既存の IntakeRefused（行 ag）がそのまま記帳する。値が 1 つ増えるだけで、記帳の口は変えない（この行の歯は持たない）。
 7. **閉包を広げない**: 子 module ruling.rs は `Refuse`・`Evidence`・`Issue` を名指さない。断りの組み立ては intake.rs が書き、子は判定の素の値（名指す id の列と置き場）だけを返す。
+   - この分け方も挙動に差が出ないので done には載せない（約束 5 の client の置き場と同じ扱い・行 al の最初の便の契約審査が vacuous-assert の FAIL で歯の無い done の項目として名指した）。
 
 ### 歯
 - `pipe_intake_ruling_`（e2e・`tests/e2e/pipe/intake.rs`・偽の bd を PATH に置く）。AC53 の受付の側を全部確かめる。
@@ -1730,7 +1732,7 @@ write-set = ["+crates/scribe2/src/pipe/cli/intake/ruling.rs", "crates/scribe2/sr
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_intake_ruling_", "cargo nextest run -p scribe2 --lib --no-tests=fail refuse_ruling_", "cargo nextest run -p scribe2 --lib --no-tests=fail refuse_names_are_pinned_in_declaration_order", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_refuse_evidence_discern_", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_refuse_evidence_is_decided_once_for_each_of_the_23_words", "cargo nextest run -p scribe2 --lib --no-tests=fail refuse_carries_its_own_rc_and_names_the_run", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_intake_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_preflight_"]
 size = "M"
 growth = ["crates/scribe2/src/pipe/cli/intake.rs:14", "crates/scribe2/src/pipe/refuse.rs:40", "crates/scribe2/src/pipe/cli/args.rs:2", "crates/scribe2/src/pipe/cli/preflight.rs:2", "crates/scribe2/src/pipe/dispatch.rs:1", "crates/scribe2/src/pipe/review.rs:0"]
-done = "(1) ruling-check が true の repo で、節か行に解けない問い id の形・解けない batch: / policy:・線の後の時刻の形を持つ契約が rc 1 の ruling-unresolved で断られ、本文が置き場ごとに id を全て名指す (2) 解ける 4 形・束の欄にだけ在る batch:・接頭辞違い・一覧に載せた字面・線の前の引用・key の無い repo は通る (3) 台帳を読めない周は rc 2 の ruling-unresolved で断られ、通らない (4) REFUSALS の末尾が ruling-unresolved で、Evidence は Place。歯の見本の列に rc 1 の形を 1 つ足し、既存の歯 refuse_names_are_pinned_in_declaration_order と pipe_refuse_evidence_is_decided_once_for_each_of_the_23_words の本文を retroactive の札つきで直す（名は変えない） (5) 引用を持たない契約の周は台帳を読まない（偽の bd の呼び出しの回数 0） (6) pipe intake / preflight が --bd を受けて明示した bd を撃ち、無ければ既定の bd を撃つ (7) 子 module ruling.rs は Refuse・Evidence・Issue を名指さず、断りの組み立ては intake.rs が書く (8) 台帳の client は Materials の欄に持たせ、Material の literal は変えない（列の周の受け渡しは構造で持ち、歯は受付と事前審査で測る） (9) 引用の判定は judge の中で entrance-not-red の後・置き場が要る判定の前に撃ち、preflight の refuse= の行の順が entrance-not-red → ruling-unresolved → write-set-overlap"
+done = "(1) ruling-check が true の repo で、節か行に解けない問い id の形・解けない batch: / policy:・線の後の時刻の形を持つ契約が rc 1 の ruling-unresolved で断られ、本文が置き場ごとに id を全て名指す (2) 解ける 4 形・束の欄にだけ在る batch:・接頭辞違い・一覧に載せた字面・線の前の引用・key の無い repo は通る (3) 台帳を読めない周は rc 2 の ruling-unresolved で断られ、通らない (4) REFUSALS の末尾が ruling-unresolved で、Evidence は Place。歯の見本の列に rc 1 の形を 1 つ足し、既存の歯 refuse_names_are_pinned_in_declaration_order と pipe_refuse_evidence_is_decided_once_for_each_of_the_23_words の本文を retroactive の札つきで直す（名は変えない） (5) 引用を持たない契約の周は台帳を読まない（偽の bd の呼び出しの回数 0） (6) pipe intake / preflight が --bd を受けて明示した bd を撃ち、無ければ既定の bd を撃つ (7) 引用の判定は judge の中で entrance-not-red の後・置き場が要る判定の前に撃ち、preflight の refuse= の行の順が entrance-not-red → ruling-unresolved → write-set-overlap"
 
 [[contract]]
 id = "am"
