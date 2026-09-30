@@ -1872,7 +1872,7 @@ terms:
   - canonical: 歯の対応の欄
     domain: consumer
     aliases: [done-teeth field]
-    definition: 契約表の行の任意の欄 done-teeth (ADR-0104)。 要素は「<番号>:<歯>」で、 done の項目ごとに、 その約束を外した実装で落ちる歯を 1 本以上名指す。 歯は名・既存の歯の印を前に置いた名・検証行の番号の歯・仕組みの歯の 4 形。 表の検査・受付・preflight が揃いと検証行の選びと base の在りかを照らし、 gate の最初の段が便の木に書かれたかを測る。 vessel 宣言の任意 key teeth-check を true と名乗った repo では、 base から変わった行に欄を求める。 Promised の行は持てず、 約束の行の歯の完全名が同じ対応を持つ。
+    definition: 契約表の行の任意の欄 done-teeth (ADR-0104)。 要素は「<番号>:<歯>」で、 done の項目ごとに、 その約束を外した実装で落ちる歯を 1 本以上名指す。 歯は名・既存の歯の印を前に置いた名・検証行の番号の歯・仕組みの歯の 4 形。 表の検査・受付・preflight が揃いと検証行の選びと base の在りかを照らし、 gate の最初の段が便の木に書かれたかを測る。 vessel 宣言の任意 key teeth-check を true と名乗った repo では、 base に無い行と done の字が base と違う行に欄を求める (done 以外の欄だけを変えた行には求めない)。 欄を読むだけの版を先に着地させて器を入れ替えてから、 初めて欄を書く。 Promised の行は持てず、 約束の行の歯の完全名が同じ対応を持つ。
     relationships: [done の項目, 契約表, 約束の行, 契約の検証行, 契約の審査, gate]
   - canonical: 既存の歯の印
     domain: consumer
@@ -1887,5 +1887,5 @@ terms:
   - canonical: 仕組みの歯
     domain: consumer
     aliases: [mechanism tooth]
-    definition: 歯の対応の欄の !<名> の形 (ADR-0104)。 名は閉じた 4 語 write-set・place-only・new-file・closure で、 外した実装でも観測の変わらない構造の制約を器の仕組み (runner の guard・gate の最初の段・契約表の検査の閉包) が測ることを表す。 挙動の約束には書かない。 仕組みが測らない構造の制約は done に載せない。 place-only は write-set の = の file を runner の allowlist から外し、 gate の最初の段が diff の = の file を落とす測り (設計 docs/design/contract-source.md §66 の行 (4)) を指す。
+    definition: 歯の対応の欄の !<名> の形 (ADR-0104)。 名は閉じた 4 語 write-set・place-only・new-file・closure で、 外した実装でも観測の変わらない構造の制約を器の仕組み (runner の guard・gate の最初の段・契約表の検査の閉包) が測ることを表す。 closure が測るのは、 足した file が他の行の touches の閉包をその行の write-set の外へ広げないことで、 子 module が型を名指さないことではない。 挙動の約束には書かない。 仕組みが測らない構造の制約は done に載せない。 place-only は write-set の = の file を runner の allowlist から外し、 gate の最初の段が diff の = の file を落とす測り (設計 docs/design/contract-source.md §66 の行 (4)) を指す。
     relationships: [歯の対応の欄, done の項目, write-set, gate]

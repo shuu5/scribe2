@@ -474,6 +474,15 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
       "@id": "../spec/constitution.html#n2"
     },
     {
+      "@id": "../spec/constitution.html#n4"
+    },
+    {
+      "@id": "../spec/constitution.html#c1"
+    },
+    {
+      "@id": "../spec/constitution.html#c5"
+    },
+    {
       "@id": "../spec/constitution.html#c16"
     },
     {
@@ -498,13 +507,25 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
       "@id": "../spec/srs.html#FR8"
     },
     {
+      "@id": "../spec/srs.html#FR4"
+    },
+    {
+      "@id": "../spec/srs.html#FR20"
+    },
+    {
       "@id": "./ADR-0004-mvp-persistence-and-cross-version-formats.html"
+    },
+    {
+      "@id": "./ADR-0010-vessel-declaration-holds-allowlist-and-common-verify.html"
     },
     {
       "@id": "./ADR-0023-contract-source-is-the-design-document-table.html"
     },
     {
       "@id": "./ADR-0051-contract-rows-carry-promise-rows-and-ledger-state-is-two-fields.html"
+    },
+    {
+      "@id": "./ADR-0084-dispatch-waits-on-a-failing-floor-and-choice-questions-are-denied.html"
     }
   ]
 }
@@ -524,23 +545,24 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 <p class="cover-eyebrow"><span class="doc-type">設計判断記録 (ADR)</span> <span>scribe2 — done の項目と歯の対応の欄</span></p>
 <h1>契約表の行は done の番号つき項目ごとの歯を欄 done-teeth で名指し、 器は表の検査・受付・gate の最初の段でその対応を機械で照らす — 欄の要否は vessel 宣言の任意 key teeth-check と base からの差分で決め、 着地済みの行は書き換えない</h1>
 <p class="cover-sub">契約の done は番号つきの約束を並べるが、 どの約束をどの歯 (落ちる test) が測るかは設計の散文の中にしか無く、 器は数えられない。 そのため約束の 1 つに歯が無い行が列に入り、 便の中の審査で初めて落ちていた。 本 ADR は、 行に約束の番号と歯の名の対応の欄を持たせ、 器が設計の PR の CI・受付・gate の 3 か所で対応の揃いと歯の在りかを数えると決める。 歯が約束を本当に測るかの判断は審査の係に残す。</p>
-<div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">この記録で「器」は scribe2 の本体、 「契約表の行」は設計の文書の末尾に並ぶ 1 つの仕事の約束、 「歯」はその約束を外した実装で落ちる test です。 行の done には「(1) … (2) …」と番号つきの約束が並びますが、 どの約束をどの歯が確かめるかは文書の散文の中にしか無く、 器は数えられませんでした。 そのため約束の 1 つに歯が無い行がそのまま実装の順番の列に入り、 実装の前の審査で初めて落ちて、 列の順番も崩れていました。 この記録は、 行に「約束の番号と歯の名」の対応の欄を持たせ、 器が設計の変更の PR の CI・受付・実装後の検査の 3 か所で、 対応が揃っているかと歯が在るかを数えると決めます。 歯が約束を本当に確かめるかの判断は、 審査の係に残します。 外した実装でも動きの変わらない決まり (ある部品が別の型を名指さない・変えないと宣言した file を変えないなど) は、 器の仕組みが確かめる 4 つに限って仕組みの名を書き、 それ以外は約束に載せません。</p></div></div>
-<div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">proposed</span></span><span class="m"><span class="k">選択肢</span><span class="v">6件 (OPT1–OPT6)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 5 / トレードオフ 7</span></span><span class="m"><span class="k">版</span><span class="v">v0.1.0 / 2026-09-30</span></span></div>
-<div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>FR47・FR55・FR49・FR8</b></div>
+<div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">この記録で「器」は scribe2 の本体、 「契約表の行」は設計の文書の末尾に並ぶ 1 つの仕事の約束、 「歯」はその約束を外した実装で落ちる test です。 行の done には「(1) … (2) …」と番号つきの約束が並びますが、 どの約束をどの歯が確かめるかは文書の散文の中にしか無く、 器は数えられませんでした。 そのため約束の 1 つに歯が無い行がそのまま実装の順番の列に入り、 実装の前の審査で初めて落ちて、 列の順番も崩れていました。 この記録は、 行に「約束の番号と歯の名」の対応の欄を持たせ、 器が設計の変更の PR の CI・受付・実装後の検査の 3 か所で、 対応が揃っているかと歯が在るかを数えると決めます。 歯が約束を本当に確かめるかの判断は、 審査の係に残します。 外した実装でも動きの変わらない決まり (ある部品が別の型を名指さない・変えないと宣言した file を変えないなど) は、 器の仕組みが確かめる 4 つに限って仕組みの名を書き、 それ以外は約束に載せません。 欄を知らない古い器は、 欄を持つ行が 1 本在るだけで表全体を読めなくなるので、 先に「欄を読むだけ」の版を着地させて器を入れ替えてから、 初めて欄を書きます。</p></div></div>
+<div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">proposed</span></span><span class="m"><span class="k">選択肢</span><span class="v">8件 (OPT1–OPT8)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 5 / トレードオフ 7</span></span><span class="m"><span class="k">版</span><span class="v">v0.1.0 / 2026-09-30</span></span></div>
+<div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>FR47・FR55・FR49・FR4・FR20・FR8</b></div>
 <div data-component="approval-block">
-<div class="sign"><span class="role">設計 (orchestrator)</span><span class="who">orchestrator</span><span class="when">2026-09-30 草稿 v1 (FAIL の根の分析の done と歯の型 24 件を 1 件ずつ読み、 行の欄の型・done の項目の読み手・検証行から歯の名を解く読み手・表の検査・契約 file の key の列・審査の係の表 (設計 §64)・gate の最初の段 (設計 §58)・CI の job を現物で読み、 ADR-0023 と ADR-0051 の決定と照らした。 持ち主の常設の指示 (決めてほしいことは推奨で進める) の下の orchestrator の決定で、 本件に固有の user の裁定 id は無い。 rules 行を足さないので C5 の裁定 id も要らない。 拘束する constitution の版 0.5.0)</span><span class="stamp self">作成</span></div>
+<div class="sign"><span class="role">設計 (orchestrator)</span><span class="who">orchestrator</span><span class="when">2026-09-30 草稿 v1 (FAIL の根の分析の done と歯の型 24 件を 1 件ずつ読み、 行の欄の型・done の項目の読み手・検証行から歯の名を解く読み手・表の検査・契約 file の key の列・審査の係の表 (設計 §64)・gate の最初の段 (設計 pipeline.md §58)・CI の job を現物で読み、 ADR-0023 と ADR-0051 の決定と照らした。 持ち主の常設の指示 (決めてほしいことは推奨で進める) の下の orchestrator の決定で、 本件に固有の user の裁定 id は無い。 rules 行を足さないので C5 の裁定 id も要らない。 拘束する constitution の版 0.5.0。 v2 は PR の審査の 22 件を現物の code で 1 件ずつ再現して直した)</span><span class="stamp self">作成</span></div>
 </div>
 <div class="reader-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 想定読者: scribe2 の開発 session と user — 器の内部と Rust の専門知識は不要 (専門語はやさしい言葉を併記)</div>
 </header>
 <!-- folio:chrome-toc -->
 <!-- /folio:chrome-toc -->
-<section data-component="chapter-deck-band" class="tint-info"><span class="num">01</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v6m0 0L9 5m3 3l3-3"/><circle cx="12" cy="14" r="6"/></svg> 背景 / なぜこの判断が要るか</span><h2>いま何が問題か (確定方式を決める力学)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-01">なぜこの判断が要るのかを 4 つから説明します。 約束に歯が無い行が列に入り、 実装の前の審査で初めて落ちていたという経緯・手書きの行は対応の欄を持たず、 約束の行だけが持つという現物・器は言語に依らず、 歯の名の読み手は検証行の形ごとだという事情・決める範囲です。</p></section>
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">01</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v6m0 0L9 5m3 3l3-3"/><circle cx="12" cy="14" r="6"/></svg> 背景 / なぜこの判断が要るか</span><h2>いま何が問題か (確定方式を決める力学)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-01">なぜこの判断が要るのかを 5 つから説明します。 約束に歯が無い行が列に入り、 実装の前の審査で初めて落ちていたという経緯・手書きの行は対応の欄を持たず、 約束の行だけが持つという現物・器は言語に依らず、 歯の名の読み手は検証行の形ごとだという事情・決める範囲・憲法と既存の決定との向きです。</p></section>
 <div class="chapbody">
 <div data-component="adr-context-list">
 <div data-component="adr-context-row"><span class="cxid">CTX1</span><div class="cxbody"><p class="cxh">経緯 — 約束に歯が無い行が列に入り、 便の中で初めて落ちる</p><p class="cxd">2026-09-28 から 09-30 に起動した便 165 本の FAIL と判断不能の 76 件を 1 件ずつ根で分けると、 done の項目<span class="term" data-component="plain-language-term-inline" data-term="done の項目">番号つきの約束</span>に落ちる歯が無いか、 歯が判別しない型が 24 件だった。 うち 14 件は、 少なくとも 1 つの項目に歯が 1 本も無い形 (歯は在るが検証行に入っていない形を含む) で、 10 件は、 歯は在るが fixture が約束を外した実装を落とさない形 (空虚) だった。 14 件はどれも、 項目と歯の 1 対 1 の表を書けば起票の前に見える型で、 契約の審査の係 (lens) が材料だけで名指していた。 審査は列に入れた後の便の中に在るので、 落ちた行は列の外へ出て順番が崩れ、 1 周に 1 から 3 個の穴しか名指されないので同じ行が 2 から 4 周した。 設計 doc contract-source.md §64 (行 bs) は、 審査の係に項目ごとの歯の表を 1 周で全部書かせる形を足したが、 表を作るのは係なので、 器は表の歯が在るか・検証行が撃つかを照らせない。 その形が着地して最初の 2 便 (2026-09-30) は、 どちらも「挙動に差の出ない構造の制約」 (子 module が型を名指さない・置き場だけの file を変えない・既存の枝で起こし直す) を done に載せていて、 歯が無いと名指されて落ちた。 同じ型の約束を done に載せないと書いた前例 (設計 §44) は在るが、 規則にはなっていない。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX2</span><div class="cxbody"><p class="cxh">現物 — 手書きの行は対応の欄を持たず、 約束の行だけが持つ</p><p class="cxd">契約表の行の欄の正本は core の型 (18 欄) で、 done は 1 本の文字列である。 約束の行 (ADR-0051 §4) は約束 1 つごとに歯の完全名の列を必須で持つが、 手書きの行には項目と歯の対応の欄<span class="term" data-component="plain-language-term-inline" data-term="歯の対応の欄">約束と歯の対応表</span>が無い。 done の項目の読み手 (番号の印 (1) (2) で区切る 1 関数・設計 §64) と、 検証行から歯の名を解く読み手 (nextest の行の crate・scope・filter 語と、 歯の区間の test の fn の名) は既に在る。 表の検査は CI の nextest の歯が base 無しで撃ち、 base を持つ CI の job は PR のときだけの flip check の job である。 契約 file の key は閉じた列で、 未知の key を断る。 gate の最初の段は write-set と約束の行の名を便の木で測る (設計 §58)。 設計 doc の契約表の行 361 のうち、 番号つきの done を持つ行は 244 (2026-09-30)。 write-set の置き場だけの印 (=) の file は、 runner の allowlist に接頭辞を剥がして入り、 gate の最初の段も write-set の内と読むので、 中身を変えないという約束はどこでも測られていない。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX2</span><div class="cxbody"><p class="cxh">現物 — 手書きの行は対応の欄を持たず、 約束の行だけが持つ</p><p class="cxd">契約表の行の欄の正本は core の型 (18 欄) で、 done は 1 本の文字列である。 約束の行 (ADR-0051 §4) は約束 1 つごとに歯の完全名の列を必須で持つが、 手書きの行には項目と歯の対応の欄<span class="term" data-component="plain-language-term-inline" data-term="歯の対応の欄">約束と歯の対応表</span>が無い。 done の項目の読み手 (番号の印 (1) (2) で区切る 1 関数・設計 §64) と、 検証行から歯の名を解く読み手 (nextest の行の crate・scope・filter 語と、 歯の区間の test の fn の名) は既に在る。 表の検査は CI の nextest の歯が base 無しで撃ち、 base を持つ CI の job は PR のときだけの flip check の job である。 表の欄の key・契約 file の key・vessel 宣言の key はどれも閉じた列で、 未知の key を断る。 表では、 未知の key を持つ行が 1 本在るだけで、 その doc の区間が丸ごと読めなくなり、 表の検査は全部の doc の全部の行を読めないと名指し、 受付も全部の契約の材料を読めない。 宣言の未知の key では受付が全部の契約を断る。 gate の最初の段は write-set と約束の行の名を便の木で測る (設計 pipeline.md §58)。 着地の列が行の変化を見る鍵は、 生成した契約 file の sha で、 導出の write-set を含み、 行の欄の値の sha ではない。 設計 doc の契約表の行は 432 で、 done の字に番号の印 (1) を持つ行は 285、 持たない行は 143、 done の無い約束の行は 4 (2026-09-30)。 write-set の置き場だけの印 (=) の file は、 runner の allowlist に接頭辞を剥がして入り、 gate の最初の段も write-set の内と読むので、 中身を変えないという約束はどこでも測られていない。</p></div></div>
 <div data-component="adr-context-row"><span class="cxid">CTX3</span><div class="cxbody"><p class="cxh">言語 — 器は言語に依らず、 歯の名の読み手は検証行の形ごと</p><p class="cxd">器は限られた言語の集合 (Rust・TypeScript・型付きの Python など) の repo に対応し、 どれかの言語だけの仕組みを必須にしない。 検証行の形の読み手は今 nextest の形の 1 つだけで、 他の形 (別の言語の test の撃ち手・文書の検査・xtask の門) の行からは、 歯の名を 1 本ずつ解けない。 消費側の repo には、 隣の project の生成器が契約表を導出する形もあり、 欄を足す変更を消費側に一斉に求めると、 生成器が追いつくまで消費側の CI が落ちる。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX4</span><div class="cxbody"><p class="cxh">射程 — 行の欄と 3 か所の照らしを足し、 審査の判断と done の書き方は変えない</p><p class="cxd">決めるのは、 (1) 行の欄の形、 (2) 欄を持つ行に掛ける機械の照らしと掛ける所、 (3) 欄を求める行の範囲と消費側の名乗り、 (4) 契約 file と審査の材料への写し、 (5) gate の最初の段での歯の在りかの測り、 の 5 つ。 変えないのは、 done の 1 本の文字列と番号の書き方、 審査の係の表の倒し方 (設計 §64)、 約束の行の欄と導出、 write-set の導出、 flip check の判定、 検出線の歯の穴である。 実装の行は要件書の round (FR47 と FR55 の改訂と新しい要件) の後に起こす。 ADR を書く条件のうち 3 (行の欄・契約 file の key・vessel 宣言の key の 3 つの跨版の形) と 4 (却下案を残す価値) に当たる。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX4</span><div class="cxbody"><p class="cxh">射程 — 行の欄と 3 か所の照らしを足し、 審査の判断と done の書き方は変えない</p><p class="cxd">決めるのは、 (0) 欄を読むだけの版を先に着地させる順、 (1) 行の欄の形、 (2) 欄を持つ行に掛ける機械の照らしと掛ける所、 (3) 欄を求める行の範囲と消費側の名乗り、 (4) 契約 file と審査の材料への写し、 (5) gate の最初の段での歯の在りかの測り、 の 5 つ。 変えないのは、 done の 1 本の文字列と番号の書き方、 審査の係の表の倒し方 (設計 §64)、 約束の行の欄と導出、 write-set の導出、 flip check の判定、 検出線の歯の穴である。 実装の行は 5 本で、 欄を読むだけの行は要件書の字を変えずに先に起こし、 残る 4 行は要件書の round (FR47・FR55・FR4・FR20 の改訂と新しい要件) の後に起こす。 足す語のうち「歯」を含む 4 語は要件書の glossary に載せず (glossary の語は互いの部分文字列になれず、 「歯」は既存の語)、 要件の字では開いて書く。 ADR を書く条件のうち 3 (行の欄・契約 file の key・vessel 宣言の key の 3 つの跨版の形) と 4 (却下案を残す価値) に当たる。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX5</span><div class="cxbody"><p class="cxh">憲法と既存の決定の向き — 宣言の値・止める段・flip check・跨版の版</p><p class="cxd">C1 は規則の値を manifest 1 つに置き、 C5 は rules 行に裁定 id を求める。 teeth-check は規則の値 (閾値や有効の旗) ではなく、 floor-check (ADR-0084) や ruling-check と同じく repo が器に名乗る宣言の値で、 置き場は vessel 宣言である (ADR-0010 が宣言を repo の名乗りとする読み)。 rules 行を足さないので C5 の裁定 id も要らない。 C16 は逸脱を編集の時に止め、 後の検証で代えないと定める。 欄の照らしは preflight と受付でも撃つが、 欄の要否 (変わった行に欄を求めること) は設計の PR の CI の段でだけ求める。 preflight と受付は main の先端の行を読むだけで、 起票の前の行が base から変わったかを持たず、 要否を出すには main の行と比べる読みを別に持つことになる。 設計の PR の CI は列に入れる前の最後の段で、 そこで止めれば列の後で落ちる周は無いので、 C16 の編集の時の止めを設計の PR の段の止めと読む。 C12.2 について、 flip check の判定 (歯ごとの base の RED を測らない) は変えない。 N4 について、 行の欄・契約 file の key・宣言の key を 1 つずつ足すだけで既存の値の意味を変えないので、 版は同じである (ADR-0004 §2.5 の、 任意の field を足すだけの変更は同じ schema 番号)。 ただし古い版の器は新しい key を読めないので、 読むだけの版を先に着地させて入れ替える。</p></div></div>
 </div>
 </div>
 <section data-component="chapter-deck-band" class="tint-brand"><span class="num">02</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v18"/><path d="M5 7l-3 6h6z"/><path d="M19 7l-3 6h6z"/><path d="M3 21h18"/></svg> 判断を縛る力 / 評価の軸</span><h2>選択肢を測るものさし (安全・速さ)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-02">この判断を評価する 6 本のものさしです。 散文でなく器の門で止めること。 列に入れる前に止めること。 名指した歯を実装で守らせること。 言語に依らないこと。 着地済みの行と消費側を書き換えさせないこと。 仕組みを増やさず、 消す物を名指すことです。</p></section>
@@ -550,17 +572,17 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 <tr data-component="adr-driver-row"><td class="drid">DR2</td><td>列の前で止める — 設計の PR の段で止め、 便の中の審査に頼らない (C16) <span class="drg">CTX1</span></td></tr>
 <tr data-component="adr-driver-row"><td class="drid">DR3</td><td>実装で守らせる — 名指した歯を runner が書き、 検証行が撃つことを gate で測る <span class="drg">CTX2</span></td></tr>
 <tr data-component="adr-driver-row"><td class="drid">DR4</td><td>言語に依らない — 欄の文法は言語に依らず、 名の解きは検証行の形ごとの読み手に閉じる <span class="drg">CTX3</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR5</td><td>書き換えさせない — 着地済みの行・開いた行・消費側の表を、 名乗るか変わるまで今のまま通す <span class="drg">CTX2・CTX3</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR5</td><td>書き換えさせない — 着地済みの行・開いた行・消費側の表を、 名乗るか変わるまで今のまま通し、 古い版の器が表を読めなくなる周を作らない <span class="drg">CTX2・CTX3・CTX5</span></td></tr>
 <tr data-component="adr-driver-row"><td class="drid">DR6</td><td>仕組みを増やさない — 既存の読み手と段を使い回し、 足す物の代わりに消す物を名指す (C17) <span class="drg">CTX2</span></td></tr>
 </tbody></table>
 </div>
-<section data-component="chapter-deck-band" class="tint-violet"><span class="num">03</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5"/></svg> 検討した選択肢 / 3 つの確定方式</span><h2>それぞれの利点と欠点を並べる</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-03">候補を 6 つ並べます。 行に対応の欄を足して器が 3 か所で数える案 (選んだ案) と、 選ばなかった 5 つです。 選ばなかった案は、 審査の係の表だけで持つ案・done を子行に割る案・全部の行に欄を求める案・今の行を一覧に凍らせて免除する案・動きの変わらない決まりにも字を数える歯を書かせる案です。</p></section>
+<section data-component="chapter-deck-band" class="tint-violet"><span class="num">03</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5"/></svg> 検討した選択肢 / 3 つの確定方式</span><h2>それぞれの利点と欠点を並べる</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-03">候補を 8 つ並べます。 行に対応の欄を足して器が 3 か所で数える案 (選んだ案) と、 選ばなかった 7 つです。 選ばなかった案は、 審査の係の表だけで持つ案・done を子行に割る案・全部の行に欄を求める案・今の行を一覧に凍らせて免除する案・動きの変わらない決まりにも字を数える歯を書かせる案・変わった行を着地の列の鍵で決める案・欄の読み手と照らしを一度に足す案です。</p></section>
 <div class="chapbody">
 <div class="opt-grid">
 <div data-component="adr-option-card" class="chosen">
 <div class="opt-head"><span class="opt-id">OPT1</span><span class="opt-name">行の欄 done-teeth を足し、 器が 3 か所で照らす (要否は宣言の名乗りと base からの差分)</span><span class="opt-verdict chosen">採用</span></div>
-<p class="opt-sum">行に「&lt;番号&gt;:&lt;歯&gt;」の列の欄を足す。 歯は、 名 (検証行の読み手が選ぶ test の名)・既存の歯 (= を前に置く)・検証行の番号 (@k)・仕組みの名 (! を前に置く・器が測る構造の制約だけ) の 4 形。 表の検査と受付は、 番号が done の項目をちょうど覆い、 名が検証行に選ばれ、 既存の歯が base の 1 か所に在ることを照らす。 gate の最初の段は、 名の歯が便の木に在り base から動いたことを測る。 欄を求めるのは、 vessel 宣言が teeth-check を名乗った repo で base から変わった行だけ。 決め手は分析 (欠けの型 14 件は表を書けば起票の前に見える)。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT1">行に「約束の番号:歯」の列を足し、 器が 3 か所で数える案です。 歯は test の名、 変えない既存の歯 (前に = を置く)、 何本目の検証行か (@ と番号)、 器の仕組みの名 (前に ! を置く・動きの変わらない決まりだけ) の 4 つの書き方があります。 設計の変更の PR の CI と受付は、 全部の約束に歯が在り、 その歯を検証行が撃つかを数え、 実装後の検査は名指した歯が書かれたかを数えます。 欄を求めるのは、 名乗った repo で変わった行だけです。 代わりに、 歯は在るが約束を確かめない空虚な形は塞がらず、 設計者は歯の名を先に決めることになります。</span>
+<p class="opt-sum">行に「&lt;番号&gt;:&lt;歯&gt;」の列の欄を足す。 歯は、 名 (検証行の読み手が選ぶ test の名)・既存の歯 (= を前に置く)・検証行の番号 (@k)・仕組みの名 (! を前に置く・器が測る構造の制約だけ) の 4 形。 表の検査と受付は、 番号が done の項目をちょうど覆い、 名が検証行に選ばれ、 既存の歯が base の 1 か所に在ることを照らす。 gate の最初の段は、 名の歯が便の木に在り base から動いたことを測る。 欄を求めるのは、 vessel 宣言が teeth-check を名乗った repo で、 base から足された行と done の字が変わった行だけ。 欄と key を書く前に、 読むだけの版を着地させて器を入れ替える。 決め手は分析 (欠けの型 14 件は表を書けば起票の前に見える)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT1">行に「約束の番号:歯」の列を足し、 器が 3 か所で数える案です。 歯は test の名、 変えない既存の歯 (前に = を置く)、 何本目の検証行か (@ と番号)、 器の仕組みの名 (前に ! を置く・動きの変わらない決まりだけ) の 4 つの書き方があります。 設計の変更の PR の CI と受付は、 全部の約束に歯が在り、 その歯を検証行が撃つかを数え、 実装後の検査は名指した歯が書かれたかを数えます。 欄を求めるのは、 名乗った repo で、 足した行と約束の字を変えた行だけです。 代わりに、 歯は在るが約束を確かめない空虚な形は塞がらず、 設計者は歯の名を先に決めることになります。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
 <li>約束に歯が無い行は、 設計の PR の CI で名指されて列に入らない (DR1・DR2)</li>
 <li>歯が検証行に選ばれず撃たれない形と、 runner が名指した歯を書かない形が機械で止まる (DR3)</li>
@@ -589,12 +611,12 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 <div data-component="adr-option-card" class="rejected">
 <div class="opt-head"><span class="opt-id">OPT3</span><span class="opt-name">done を子行に割り、 項目ごとに歯の欄を持つ</span><span class="opt-verdict rejected">不採用</span></div>
 <p class="opt-sum">done の番号つきの項目を、 約束の行と同じ形の子行 (項目の文と歯の列) に割る。 決め手は分析 (書き換えの量と型の数)。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT3">done の約束を、 約束の行と同じ形の子行に割り、 子行ごとに歯を持たせる案です。 約束と歯が 1 つの子行に並んで読みやすく、 番号の印の字面に頼らない点で勝ります。 けれども、 番号つきの done を持つ 244 行を書き換えるか、 2 つの形を並べて持つことになり、 約束の行と並ぶ 2 つ目の子行の型が増えて、 表の読みと検査が 2 通りになります。</span>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT3">done の約束を、 約束の行と同じ形の子行に割り、 子行ごとに歯を持たせる案です。 約束と歯が 1 つの子行に並んで読みやすく、 番号の印の字面に頼らない点で勝ります。 けれども、 番号つきの done を持つ 285 行を書き換えるか、 2 つの形を並べて持つことになり、 約束の行と並ぶ 2 つ目の子行の型が増えて、 表の読みと検査が 2 通りになります。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
 <li>項目と歯が 1 つの子行に並び、 読みやすい</li>
 <li>項目の区切りを番号の印の字面に頼らない</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>番号つきの done を持つ 244 行の書き換えか、 2 つの形の併存が要る (DR5)</li>
+<li>番号つきの done を持つ 285 行の書き換えか、 2 つの形の併存が要る (DR5)</li>
 <li>約束の行と並ぶ 2 つ目の子行の型が増え、 表の読みと検査が 2 通りになる (DR6)</li>
 </ul></div></div>
 </div>
@@ -612,8 +634,8 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 </div>
 <div data-component="adr-option-card" class="rejected">
 <div class="opt-head"><span class="opt-id">OPT5</span><span class="opt-name">欄を持たない行の sha を tracked な一覧に凍らせて免除する</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">今の行の欄の値の sha を一覧に書いて免除し、 一覧に無い行と sha が変わった行に欄を求める。 決め手は分析 (base からの差分で同じ免除を言える)。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT5">今の行の中身の指紋 (sha) を一覧に書いて免除し、 一覧に無い行と指紋が変わった行に欄を求める案です。 base が要らず、 受付でも求められる点で勝ります。 けれども、 行の数だけの一覧と、 古い項目を減らしていく運用を持つことになり、 消費側は名乗るたびに一覧を作る口が要ります。 変わった行は base との差分でも同じに見分けられます。</span>
+<p class="opt-sum">今の行の done の字の sha を一覧に書いて免除し、 一覧に無い行と sha が変わった行に欄を求める。 決め手は分析 (base からの差分で同じ免除を言える)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT5">今の行の約束の字の指紋 (sha) を一覧に書いて免除し、 一覧に無い行と指紋が変わった行に欄を求める案です。 base が要らず、 受付でも求められる点で勝ります。 けれども、 行の数だけの一覧と、 古い項目を減らしていく運用を持つことになり、 消費側は名乗るたびに一覧を作る口が要ります。 変わった行は base との差分でも同じに見分けられます。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
 <li>base が要らず、 受付でも要否を求められる</li>
 <li>変わった行を base 無しで見分けられる</li>
@@ -634,25 +656,51 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 <li>器の仕組みが既に測る制約を歯で二重に測る (DR6)</li>
 </ul></div></div>
 </div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT7</span><span class="opt-name">変わった行を着地の列の鍵 (生成した契約 file の sha) で決める</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">欄を求める変わった行を、 着地の列が既に持つ鍵 (生成した契約 file の sha) が base と違う行とする。 決め手は現物 (鍵は導出の write-set を含み、 depends などを含まない)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT7">欄を求める「変わった行」を、 着地の列が既に持つ鍵 (生成した契約の file の指紋) が base と違う行とする案です。 新しい比べ方を足さずに既存の鍵を使い回せ、 着地の列と判断が揃う点で勝ります。 けれども、 その鍵は器が導いた置き場の列を含むので、 code を変える PR だけで字の同じ着地済みの行まで変わった行になり、 欄の後付けを強います。 逆に依存の欄などだけを変えた行は変わった行に数えず、 約束を変えた行と数がずれます。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>新しい比べの読みを足さず、 既存の鍵を使い回せる</li>
+<li>着地の列と同じ読みで、 変わったかの判断が 1 つに揃う</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>code を変える PR で導出の write-set が動くと、 字の同じ着地済みの行まで変わった行になり、 欄の後付けを強いる (DR5)</li>
+<li>depends などだけを変えた行は変わった行に数えず、 done を変えた行と母集団がずれる (DR1)</li>
+</ul></div></div>
+</div>
+<div data-component="adr-option-card" class="rejected">
+<div class="opt-head"><span class="opt-id">OPT8</span><span class="opt-name">欄の読み手と照らしを 1 つの版で一度に足す</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">欄を読むだけの版を置かず、 欄の読み手・照らし・写しを 1 つの行で足し、 その行が自分の欄を持つ。 決め手は現物 (未知の key を持つ行が 1 本在ると、 古い版の器は表の区間を丸ごと読めない)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT8">欄を読むだけの版を置かず、 欄の読み手と照らしと写しを 1 つの版で一度に足す案です。 行と器の入れ替えが 1 回少なく、 読みと照らしが同じ版で揃う点で勝ります。 けれども、 欄を持つ行を足す設計の PR の時点では、 main の code も手元の器も欄を知らず、 知らない欄を持つ行が 1 本在るだけで表の検査が全部の行を読めないと名指し、 受付も止まります。 vessel 宣言の key も同じで、 key を書いた時から入れ替えまで受付が全部断ります。</span>
+<div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
+<li>行と入れ替えの回数が 1 つ少ない</li>
+<li>欄の読みと照らしが同じ版で揃う</li>
+</ul></div><div class="cons"><h4>− 欠点</h4><ul>
+<li>欄を持つ行を足す設計の PR の時点で main の code と PATH の器が欄を知らず、 表の検査が全部の行を読めないと名指し、 受付が止まる (DR5)</li>
+<li>宣言の key も同じで、 key を書いた周から入れ替えまで受付が全部断る (DR5)</li>
+</ul></div></div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの方式を選ぶか</span><h2>選んだ方式と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、 それが要件書のどの要件を支えるかを示します。 行は約束の番号ごとに歯を名指し、 器は表の検査と受付で対応の揃いと歯の在りかを、 実装後の検査の最初の段で歯が書かれたかを数えます。 欄を求めるのは、 名乗った repo で変わった行だけです。 動きの変わらない決まりは、 器の仕組みの名を書くか約束に載せず、 変えないと宣言した file は実装の時と検査で守らせます。</p></section>
+</div>
+<section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの方式を選ぶか</span><h2>選んだ方式と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、 それが要件書のどの要件を支えるかを示します。 行は約束の番号ごとに歯を名指し、 器は表の検査と受付で対応の揃いと歯の在りかを、 実装後の検査の最初の段で歯が書かれたかを数えます。 欄を求めるのは、 名乗った repo で、 足した行と約束の字を変えた行だけです。 欄を書く前に、 欄を読むだけの版を着地させて器を入れ替えます。 動きの変わらない決まりは、 器の仕組みの名を書くか約束に載せず、 変えないと宣言した file は実装の時と検査で守らせます。</p></section>
 <div class="chapbody">
 <div data-component="adr-decision-panel" id="decision">
 <p class="dec-kick">採用 — OPT1</p>
-<p class="dec-state">器 SHALL 契約表の行に任意の欄 done-teeth (文字列の列) を持つ。 要素は「&lt;番号&gt;:&lt;歯&gt;」で、 番号は done の番号つき項目の番号、 歯は名 (その行の検証行の読み手が選ぶ test の名)・既存の歯 (= を前に置き、 base に在り本文を変えない歯)・検証行の番号 (@k・k 本目の検証行の全体)・仕組みの名 (! を前に置き、 閉じた 4 語 write-set・place-only・new-file・closure のどれか) の 4 形のどれか 1 つ。 外した実装で観測が変わる挙動の約束は落ちる歯を持ち、 観測の変わらない構造の制約は 4 つの仕組みが測るものに限って仕組みの名を書き、 それ以外の構造の制約は done に載せない (種類の判じは審査の係が持つ)。 Promised の行と番号つきの項目を持たない行は欄を持てない。 器 SHALL 欄を持つ行に、 表の検査・受付・preflight の同じ 1 関数で、 要素の形、 番号の集合が項目の 1 から K とちょうど等しいこと、 @k が検証行の本数の内、 名と既存の歯が読み手の在る形の検証行の 1 本に選ばれること、 既存の歯が base の選ぶ行の crate と scope の歯の区間にちょうど 1 つ在り、 base に在る名が 1 か所に定まること、 仕組みの名が 4 語の内で測る物を行が持つことを照らし、 外れを全件・行番号つきで名指して断る。 器 SHALL vessel 宣言の任意 key teeth-check が true の repo で、 表の検査に base の commit が渡された周だけ、 base の同じ行と欄の値の sha が違う行 (足された行を含み、 Promised の行を除く) に、 番号つきの項目と欄を持つことを求め、 base の無い周と受付は要否を求めない。 本 repo は teeth-check を true と名乗り、 CI は PR のときだけの job で base を渡して表の検査を撃つ。 器 SHALL 受付の生成で欄を契約 file の任意 key へ写し、 審査と gate の係に渡す契約の字に欄を載せる。 器 SHALL 欄を持つ便の gate の最初の段で、 名の歯が便の木の選ぶ行の歯の区間にちょうど 1 つ在り、 base に無いか本文が base と違うこと、 既存の歯が便の木に 1 つ在ることを測り、 外れた歯を名指して段を落とす (新しい段も理由の型も足さない)。 器 SHALL write-set の置き場だけの印 (=) の file を runner の allowlist から外し、 gate の最初の段で diff に在る = の file を名指して落とす (欄の有無に依らない)。 審査の係の項目ごとの表 (設計 §64) は、 欄を持つ行では宣言の歯の中から選ばせ、 外の歯を形の合わない項目に数える。 歯が約束を本当に測るかは器が測らず、 審査の係と検出線に残す。 消すのは、 起票の前に席が回す done と歯の監査の手順と、 係が材料の外から歯の名を書く余地。 実装は設計 doc contract-source.md §66 の 4 行で、 欄の 3 行は要件書の round の後に起こす。</p>
-<span class="dec-plain" data-prose-slot="plain" data-slot-id="decision-plain">器は、 契約表の行に任意の欄 done-teeth を持ちます。 要素は「約束の番号:歯」で、 歯は test の名・前に = を置いた変えない既存の歯・何本目の検証行かを表す @ と番号、 の 3 つの書き方のどれかです。 器の仕組みの名は、 write-set・place-only・new-file・closure の 4 つだけです。 約束の行を持つ行と、 番号つきの約束を持たない行は欄を持てません。 欄を持つ行には、 表の検査と受付と事前の確かめが同じ 1 つの関数で、 形が読めること・番号が約束の全部をちょうど覆うこと・番号の検証行が在ること・名の歯を検証行が撃つこと・既存の歯が base の 1 か所に在ることを確かめ、 外れを全部名指して断ります。 欄を求めるのは、 vessel 宣言で teeth-check を名乗った repo で、 表の検査に base が渡された周の、 base から変わった行だけです。 本 repo は名乗り、 CI は PR のときだけ base を渡して撃ちます。 受付は欄を契約の file に写し、 審査と実装後の検査の係に渡る契約の字にも載せます。 実装後の検査の最初の段は、 名の歯が便の木に 1 つ在って base から足されたか変わったこと、 既存の歯が残っていることを測ります。 変えないと宣言した file (= の印) は、 実装役が書ける file の列から外し、 検査の最初の段でも変わっていれば落とします。 審査の係の表は、 宣言した歯の中から選ばせます。</span>
-<span class="dec-why" data-prose-slot="rationale" data-slot-id="decision-rationale">行に欄を選んだのは、 歯の無い約束の型が、 約束と歯の対応を書けば起票の前に見える型で、 数えるのは機械でできるからです。 審査の係の表だけで持つ案は、 器が歯の在りかを確かめられず、 確かめる所が列の後に残るので退けました。 子行に割る案は書き換えと型が増え、 全部の行に求める案は着地済みの行と消費側を一斉に落とすので退けました。 一覧で免除する案は、 base との差分で同じ免除が言えるのに運用の一覧を増やすので退けました。 要否を名乗りと差分にしたのは、 変わる行から順に新しい形へ移し、 名乗らない消費側を壊さないためです。 歯の名を検証行が撃つかまで確かめるのは、 歯が在っても検証行に入っていなければ撃たれないからで、 実装後に歯が書かれたかを測るのは、 検証行は名指した歯が無くても他の歯で緑になりうるからです。 歯が約束を本当に確かめるかを器が判じないのは、 それが意味の判断で、 機械の数えでは言えないからです。 動きの変わらない決まりを仕組みの名か約束の外に分けたのは、 外した実装でも動きが変わらない約束は落ちる歯を持てず、 字を数える歯はこの repo の規則が禁じるからです。</span>
+<p class="dec-state">器 SHALL 契約表の行に任意の欄 done-teeth (文字列の列) を持つ。 要素は「&lt;番号&gt;:&lt;歯&gt;」で、 番号は done の番号つき項目の番号、 歯は名 (その行の検証行の読み手が選ぶ test の名)・既存の歯 (= を前に置き、 base に在り本文を変えない歯)・検証行の番号 (@k・k 本目の検証行の全体)・仕組みの名 (! を前に置き、 閉じた 4 語 write-set・place-only・new-file・closure のどれか) の 4 形のどれか 1 つ。 外した実装で観測が変わる挙動の約束は落ちる歯を持ち、 観測の変わらない構造の制約は 4 つの仕組みが測るものに限って仕組みの名を書き、 それ以外の構造の制約は done に載せない (種類の判じは審査の係が持つ)。 Promised の行と番号つきの項目を持たない行は欄を持てない。 器 SHALL 欄と vessel 宣言の任意 key teeth-check を main に初めて書く前に、 表・契約 file・宣言がその欄と key を読んで効かせない版を着地させ、 PATH の器をその版へ入れ替える。 器 SHALL 欄を持つ行に、 表の検査・受付・preflight の同じ 1 関数で、 要素の形 (4 形)、 番号の集合が項目の 1 から K とちょうど等しいこと、 @k が検証行の本数の内、 名と既存の歯が読み手の在る形の検証行の 1 本に選ばれること、 仕組みの名が 4 語の内で測る物を行が持つことを照らし、 base を持つ周 (base を渡した表の検査の変わった行・受付・preflight) では既存の歯が base の選ぶ行の crate と scope の歯の区間にちょうど 1 つ在り、 base に在る名が 1 か所に定まることも照らし、 外れを全件・行番号つきで名指して断る。 器 SHALL teeth-check が true の repo で、 表の検査に base の commit が渡された周だけ、 変わった行 (base の同じ doc に同じ id の行が無い行と、 done の字が base と違う行・Promised の行を除く) に、 番号つきの項目と欄を持つことを求める。 比べるのは表の行の done の字で、 生成した契約 file の sha ではなく、 done 以外の欄だけを変えた行には求めない。 base の無い周と受付は要否を求めない。 本 repo は teeth-check を true と名乗り、 CI は PR のときだけの job で base を渡して表の検査を撃つ。 器 SHALL 受付の生成で欄を契約 file の任意 key へ写し、 欄を持つ契約だけ審査と gate の係に渡す契約の字に欄を載せる。 器 SHALL 欄を持つ便の gate の最初の段で、 名の歯が便の木の選ぶ行の歯の区間にちょうど 1 つ在り、 base に無いか本文が base と違うこと、 既存の歯が同じ区間に 1 つ在ることを測り、 外れた歯を名指して段を落とす (新しい段も理由の型も足さない)。 器 SHALL write-set の置き場だけの印 (=) の file を runner の allowlist から外し、 gate の最初の段で diff に在る = の file を名指して落とす (欄の有無に依らない)。 審査の係の項目ごとの表 (設計 §64) は、 欄を持つ行では宣言の歯の中から選ばせ、 外の歯を形の合わない項目に数える。 歯が約束を本当に測るかは器が測らず、 審査の係と検出線に残す。 消すのは、 起票の前に席が回す done と歯の監査の手順と、 係が材料の外から歯の名を書く余地。 実装は設計 doc contract-source.md §66 の 5 行で、 読むだけの行は要件書の字を変えずに先に起こし、 残る 4 行は要件書の round の後に、 読むだけの行の入れ替えの後で起こす。</p>
+<span class="dec-plain" data-prose-slot="plain" data-slot-id="decision-plain">器は、 契約表の行に任意の欄 done-teeth を持ちます。 要素は「約束の番号:歯」で、 歯は test の名・前に = を置いた変えない既存の歯・何本目の検証行かを表す @ と番号、 ・前に ! を置いた器の仕組みの名、 の 4 つの書き方のどれかです。 仕組みの名は write-set・place-only・new-file・closure の 4 つだけで、 動きの変わらない決まりにだけ書きます。 約束の行を持つ行と、 番号つきの約束を持たない行は欄を持てません。 欄を持つ行には、 表の検査と受付と事前の確かめが同じ 1 つの関数で、 形が読めること・番号が約束の全部をちょうど覆うこと・番号の検証行が在ること・名の歯を検証行が撃つこと・仕組みの名が 4 つの内で確かめる物を行が持つことを確かめ、 base の在る周では既存の歯が base の 1 か所に在ることも確かめて、 外れを全部名指して断ります。 欄を求めるのは、 vessel 宣言で teeth-check を名乗った repo で、 表の検査に base が渡された周の、 base に無い行と約束の字が base と違う行だけです。 比べるのは表の行の約束の字で、 置き場の列などだけを変えた行には求めません。 本 repo は名乗り、 CI は PR のときだけ base を渡して撃ちます。 受付は欄を契約の file に写し、 欄を持つ契約だけ、 審査と実装後の検査の係に渡る契約の字にも載せます。 実装後の検査の最初の段は、 名の歯が便の木に 1 つ在って base から足されたか変わったこと、 既存の歯が残っていることを測ります。 変えないと宣言した file (= の印) は、 実装役が書ける file の列から外し、 検査の最初の段でも変わっていれば落とします。 審査の係の表は、 宣言した歯の中から選ばせます。 欄と teeth-check を初めて書く前に、 それを読むだけで効かせない版を着地させ、 器をその版へ入れ替えます。</span>
+<span class="dec-why" data-prose-slot="rationale" data-slot-id="decision-rationale">行に欄を選んだのは、 歯の無い約束の型が、 約束と歯の対応を書けば起票の前に見える型で、 数えるのは機械でできるからです。 審査の係の表だけで持つ案は、 器が歯の在りかを確かめられず、 確かめる所が列の後に残るので退けました。 子行に割る案は書き換えと型が増え、 全部の行に求める案は着地済みの行と消費側を一斉に落とすので退けました。 一覧で免除する案は、 base との差分で同じ免除が言えるのに運用の一覧を増やすので退けました。 着地の列の鍵で変わった行を決める案は、 その鍵が導出した置き場の列を含み、 code の変更だけで字の同じ着地済みの行まで変わった行になるので退け、 約束の字が変わった行に絞りました。 欄の読み手と照らしを一度に足す案は、 欄を持つ行を書いた時点で古い器が表全体を読めなくなるので退け、 読むだけの版を先に入れ替える順にしました。 要否を名乗りと差分にしたのは、 変わる行から順に新しい形へ移し、 名乗らない消費側を壊さないためです。 歯の名を検証行が撃つかまで確かめるのは、 歯が在っても検証行に入っていなければ撃たれないからで、 実装後に歯が書かれたかを測るのは、 検証行は名指した歯が無くても他の歯で緑になりうるからです。 歯が約束を本当に確かめるかを器が判じないのは、 それが意味の判断で、 機械の数えでは言えないからです。 動きの変わらない決まりを仕組みの名か約束の外に分けたのは、 外した実装でも動きが変わらない約束は落ちる歯を持てず、 字を数える歯はこの repo の規則が禁じるからです。</span>
 <div class="justify-box"><p class="jh">この判断が正当化する要件 (cross-doc 照会 → SRS-SCRIBE2-MVP)</p>
 <div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR47" data-justifies-req="FR47" data-justifies-role="claim">FR47</a><span class="justify-role">claim</span><span class="justify-note">FR47 は契約の正本を設計 doc の契約表の 1 行に置き、 行が少なくとも持つ欄を決める。 本 ADR は、 行が done の項目ごとの歯の対応を任意の欄で持てると主張する (欄を名指す字は要件書の round で FR47 に足す)。</span></div>
 <div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR55" data-justifies-req="FR55" data-justifies-role="claim">FR55</a><span class="justify-role">claim</span><span class="justify-note">FR55 は CI が全行に受付と同じ検査を回すと決める。 本 ADR は、 同じ検査に対応の照らしを足し、 base を渡す PR の周だけ変わった行に欄を求めると主張する (字は要件書の round で FR55 に足す)。</span></div>
 <div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR49" data-justifies-req="FR49" data-justifies-role="rationale">FR49</a><span class="justify-role">rationale</span><span class="justify-note">FR49 は受付の直後に審査の係が契約と設計と要件を読む段を決める。 本 ADR は、 係の項目ごとの表を行が宣言した歯の中からの選びに閉じる理由を与える (係の判断を機械で照らせる形にする)。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR4" data-justifies-req="FR4" data-justifies-role="claim">FR4</a><span class="justify-role">claim</span><span class="justify-note">FR4 は runner を write-set の allowlist を書いて起動すると決める。 本 ADR は、 置き場だけの印 (=) の項目を allowlist から除くと主張する (除く句は要件書の round で FR4 に足す)。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR20" data-justifies-req="FR20" data-justifies-role="claim">FR20</a><span class="justify-role">claim</span><span class="justify-note">FR20 は write-set の外への編集を編集の時点で断ると決める。 本 ADR は、 置き場だけの印 (=) の項目への編集も同じく断ると主張する (その句は要件書の round で FR20 に足す)。</span></div>
 <div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR8" data-justifies-req="FR8" data-justifies-role="rationale">FR8</a><span class="justify-role">rationale</span><span class="justify-note">FR8 は gate が契約の検証行を便の木で実走すると決める。 本 ADR は、 同じ gate の最初の段に、 行が名指した歯が便の木に書かれたかの測りを足す理由を与える (検証行は、 名指した歯が無くても filter の他の歯で緑になりうる)。</span></div>
 <p class="justify-tgt">照会先: SRS-SCRIBE2-MVP — SRS: 設計 → 契約 → 実装 → 検証 → land を、 人の手を借りずに 1 本通す器（MVP）</p>
 </div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-warn"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> 結果 / 良い面とトレードオフ</span><h2>この判断で何が良くなり、 何を引き受けるか</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">この判断で良くなること 5 つと、 代わりに引き受けること 7 つです。 良くなるのは、 歯の無い約束が列に入らないこと、 撃たれない歯と書かれない歯が止まること、 審査の係が歯の名を作らなくなること、 名乗らない側が今のまま通ること、 動きの変わらない決まりで落ちる周が無くなることです。 引き受けるのは、 空虚な歯は塞がらないこと、 読み手の無い形は番号でしか書けないこと、 CI が少し延びること、 設計者の手間が増えること、 古い版の器が新しい契約を読めないこと、 base の無い経路では求めないこと、 約束の種類の見分けは審査の係に頼ることです。</p></section>
+<section data-component="chapter-deck-band" class="tint-warn"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> 結果 / 良い面とトレードオフ</span><h2>この判断で何が良くなり、 何を引き受けるか</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">この判断で良くなること 5 つと、 代わりに引き受けること 7 つです。 良くなるのは、 歯の無い約束が列に入らないこと、 撃たれない歯と書かれない歯が止まること、 審査の係が歯の名を作らなくなること、 名乗らない側が今のまま通ること、 動きの変わらない決まりで落ちる周が無くなることです。 引き受けるのは、 空虚な歯は塞がらないこと、 読み手の無い形は番号でしか書けないこと、 CI が少し延びること、 設計者の手間が増えること、 古い版の器が欄を持つ表を読めないので入れ替えの順を守ること、 base の無い経路では求めないこと、 約束の種類の見分けは審査の係に頼ることです。</p></section>
 <div class="chapbody">
 <div data-component="scope-summary-panel"><div class="scol in"><h3>✓ 良い結果</h3><ul>
 <li data-component="adr-consequence-pos"><span class="b">●</span>約束に歯が無い行は、 設計の PR の CI で名指され、 列に入らない</li>
@@ -665,7 +713,7 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 <li data-component="adr-consequence-neg"><span class="b">●</span>nextest でない形の repo は検証行の番号でしか書けず、 項目ごとの歯の在りかを測らない</li>
 <li data-component="adr-consequence-neg"><span class="b">●</span>CI の PR の job に step が 1 本増え、 器の binary を組む時間が足される</li>
 <li data-component="adr-consequence-neg"><span class="b">●</span>行の字が増え、 設計者は歯の名を起票の時に決める</li>
-<li data-component="adr-consequence-neg"><span class="b">●</span>古い版の器は、 新しい key を持つ契約 file を未知の key として断る (入れ替えは前へだけ)</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>読むだけの版より古い器は、 欄を持つ行を含む表の区間と teeth-check を持つ宣言を丸ごと読めない。 読むだけの版を先に着地させて入れ替える順で避け、 入れ替えは前へだけ</li>
 <li data-component="adr-consequence-neg"><span class="b">●</span>base の無い経路では要否を求めない (merge の門と main の出所の門がその経路を閉じている前提)</li>
 <li data-component="adr-consequence-neg"><span class="b">●</span>項目が挙動の約束か構造の制約かは器が判じない。 挙動の約束に仕組みの名だけを書いた行は、 審査の係が見つけて初めて落ちる</li>
 </ul></div></div>
@@ -676,12 +724,12 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 <p class="ss-row"><span class="ss-k">改訂状態</span>current</p>
 <p class="ss-row"><span class="ss-k">置き換える ADR</span>なし (新規)</p>
 <p class="ss-row"><span class="ss-k">置き換えられた</span>なし (現行)</p>
-<p class="ss-row">本 ADR は現行。 既存の ADR を置き換えない。 ADR-0023 (契約の正本は設計 doc の契約表) の行の欄の集合に任意の欄を 1 つ足し、 ADR-0051 §4 (約束の行は歯の完全名を持つ) の対応を手書きの行へ広げる。 ADR-0004 §2.3 の契約 file の形 (TOML の subset) は不変で、 任意の key が 1 つ増える。 SRS FR47 と FR55 の字は user の /folio-architect の周で改訂する。</p>
+<p class="ss-row">本 ADR は現行。 既存の ADR を置き換えない。 ADR-0023 (契約の正本は設計 doc の契約表) の行の欄の集合に任意の欄を 1 つ足し、 ADR-0051 §4 (約束の行は歯の完全名を持つ) の対応を手書きの行へ広げる。 ADR-0004 §2.3 の契約 file の形 (TOML の subset) は不変で、 任意の key が 1 つ増える。 SRS の FR47・FR55・FR4・FR20 の字と新しい要件は user の /folio-architect の周で改訂する。</p>
 </div>
 <div data-component="adr-principle">
 <p class="prin-id">照会終端 — PRIN-EVERY-PROMISE-NAMES-ITS-TOOTH</p>
 <p class="prin-text">約束は、 それを外した実装で落ちる歯を約束の隣に名指させ、 名指しの揃いと在りかは機械が数え、 歯が約束を測るかの判断だけを人と審査役に残す。</p>
-<p class="prin-note">本 ADR が審査の係の表だけで持つ案・子行に割る案・全行に求める案・一覧で免除する案・構造の制約にも字の歯を書かせる案を退け、 行の欄と 3 か所の照らしを選んだのはこの原則に行き着く (これ以上は遡らない照会終端)。</p>
+<p class="prin-note">本 ADR が審査の係の表だけで持つ案・子行に割る案・全行に求める案・一覧で免除する案・構造の制約にも字の歯を書かせる案・着地の列の鍵で変わった行を決める案・読み手と照らしを一度に足す案を退け、 行の欄と 3 か所の照らしを選んだのはこの原則に行き着く (これ以上は遡らない照会終端)。</p>
 </div>
 </div>
 <section data-component="chapter-deck-band" class="tint-brand"><span class="num">07</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg> 用語集 / この文書で使う専門語</span><h2>本文に出てくる専門語のやさしい説明</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-07">本文に出てくる専門語 5 個を、 やさしい言葉で説明します。</p></section>
@@ -697,7 +745,7 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 </div>
 <footer class="foot" data-component="fidelity-sync-meta"><div class="ft-grid">
 <div class="ft-plain">このページは、大もとの機械データ (正本) から自動で組み立てられています。構造は機械が自動で検査し、内容が元データに忠実かは独立のレビューで確かめます。</div>
-<div data-audience="machine">機械SSoT: <b>ADR-0104.adr.yaml</b> &middot; 生成: <b>2026-09-30 12:34</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
+<div data-audience="machine">機械SSoT: <b>ADR-0104.adr.yaml</b> &middot; 生成: <b>2026-09-30 13:18</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
 <div class="tags" data-audience="machine"><span>folio design system</span><span>ADR-pack</span><span>folio engine B1 (instance#2)</span><span>cross-doc 照会</span></div>
 </div></footer>
 <!-- folio:chrome-bottom -->
