@@ -1122,6 +1122,7 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 - `hold_diff_`（lib・新しい子 module）。判断の欄の 3 字面 × 3 引用（bead の id だけ・接頭辞違いだけ・問い id の形）、外しの有無、名指しの並べ替えを確かめる。
   - base で RED: 機能不在。
 - `pipe_order_held_`（lib・queue.rs）。held の便が番と後続の列から外れ、released の後に戻ることを確かめる。
+  - 約束 9（FR の語に依らない読み）: fixture を FR83 だけにしない。`held:FR84:x` と `held:FR99:y` の便もそれぞれ外れ、`released:FR84` と `released:FR99` の後に戻る（`held:FR83:` を字で見る実装を落とす）。
   - base で RED: 機能不在（held を外す読みが無い）。
 - `pipe_train_`（lib・train.rs）に 1 本足す: 候補の木の先頭は、留めの判定に当たる後続を積まない（判定は関数を渡す形で pure に測る）。
   - base で RED: 機能不在。
@@ -1152,7 +1153,7 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 - 表から消えた後の周に、`released:FR84` を 1 件記帳して着地する。列の読みは行 be の読み（detail の頭 `held:` と `released:` を FR の語に依らず読む）のまま。
 - 置き場の file が無い周は留めない（列がまだ測っていない）。在るのに読めない周だけ `held:FR84:unmeasured` で留める。
 - 歯: 接頭辞 `pipe_land_unreflected_`（tests/e2e/pipe/land.rs）。
-  - (a) 表に bead が在る便は Gated に留まり、main は動かない。
+  - (a) 表に bead が在る便は Gated に留まり、main は動かない。留めの event の detail は `held:FR84:<表の bead の id>` と逐語で一致する。
   - (b) 上限の回数を越えて回しても Failed にならない。
   - (c) 表から消えた後の周に `released:FR84` を 1 件記帳して着地する。
   - (d) 同じ原因で 3 周撃っても `held:FR84:` は 1 件。
