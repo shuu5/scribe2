@@ -33,7 +33,7 @@ use std::process::Stdio;
 mod candidates;
 
 /// 1 周の群の段（群の逼迫の通知と自動の移動・設計 account-lifecycle.md §19 形 2〜4・§20）。
-mod group;
+pub(crate) mod group;
 
 /// 並列の実測の事実と字面（idle の知らせと heartbeat が共用する 1 関数・設計 §26）。
 pub(crate) mod facts;

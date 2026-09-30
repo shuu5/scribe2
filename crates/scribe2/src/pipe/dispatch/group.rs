@@ -317,6 +317,11 @@ fn place(input: &Input<'_>) -> StateDir {
     }
 }
 
+/// 群の席へ送る逼迫の 1 行（**字面はこの 1 関数**・先頭の `<NAME> group:` が器自身の差し込みの目印・発話の記帳が読む）。
+pub(crate) fn pressure_line(group: &str, label: &str, found: Pressed) -> String {
+    format!("{NAME} group: pressure group={group} account={label} window={} used={} cap={}", found.window.short(), found.used, found.cap)
+}
+
 /// 1 本が逼迫と判じた（群, 口座）1 つに、新しい実測が在れば送って記す（§19 形 3 / 4）。
 fn notice(read: &Read<'_, '_>, group: &AccountGroup, label: &str, found: Pressed) {
     let noticed = |event: &Event| {
@@ -326,13 +331,7 @@ fn notice(read: &Read<'_, '_>, group: &AccountGroup, label: &str, found: Pressed
     if !group::measured_since(&read.events, label, Some(found.window), noticed) {
         return;
     }
-    let payload = format!(
-        "{NAME} group: pressure group={} account={label} window={} used={} cap={}",
-        group.name(),
-        found.window.short(),
-        found.used,
-        found.cap
-    );
+    let payload = pressure_line(group.name(), label, found);
     let input = read.input;
     let mut sent: u64 = 0;
     for anchor in group.anchors() {

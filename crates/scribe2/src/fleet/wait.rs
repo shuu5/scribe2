@@ -492,6 +492,16 @@ pub fn epoch_of(ts: &str) -> Option<u64> {
     Some(days * 86_400 + hour * 3_600 + minute * 60 + second)
 }
 
+/// `YYYY-MM-DDTHH:MM:SS.mmmZ` を UNIX ミリ秒にする（[`cli::format_utc_ms`] の逆・**ミリ秒 3 桁の形だけ**を読み、秒の形と
+/// ほかは `None`）。発話の ts の年齢は [`epoch_of`] では読めないので、この 1 本で読む。
+pub fn epoch_ms_of(ts: &str) -> Option<u64> {
+    let (head, millis) = ts.strip_suffix('Z')?.rsplit_once('.')?;
+    if millis.len() != 3 || !millis.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    epoch_of(&format!("{head}Z"))?.checked_mul(1_000)?.checked_add(millis.parse().ok()?)
+}
+
 /// 期限までに終わらなかった。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Timeout;

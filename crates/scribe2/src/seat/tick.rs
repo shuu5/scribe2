@@ -50,7 +50,7 @@
 pub mod beat;
 pub mod install;
 mod park;
-mod signal;
+pub(crate) mod signal;
 
 pub use signal::{candidate, pointer_of, raise, settle, signal, Ladder, Pace};
 use signal::idle_alarm;

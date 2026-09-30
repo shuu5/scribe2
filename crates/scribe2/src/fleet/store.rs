@@ -11,13 +11,16 @@
 //! と**共有する 1 本**で、ここに置く（lock の実装が 1 本であるのと同じ理由・憲法 C6.3）。
 
 use crate::polarity::{OnFailure, Polarity, Timing};
-use super::{Event, Stage};
+use super::{cli, epoch_ms_of, epoch_of, Event, EventKind, Stage};
 use crate::rules::manifest::Manifest;
 use crate::rules::RuleValue;
 use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+/// 発話の ts を振るとき log の末尾から読む byte 数（64 KiB・設計 fleet-event-log.md §13 約束 5）。
+const TAIL_WINDOW: u64 = 64 * 1024;
 
 /// lock の再試行の上限を持つ rules 行。
 const ROW_RETRY: &str = "fleet.lock_retry_ms";
@@ -352,6 +355,38 @@ pub fn append_line(path: &Path, line: &str, policy: LockPolicy) -> Result<Vec<Wa
     append_line_when(path, line, policy, || Ok(()))
 }
 
+/// 発話 1 件を追記する（設計 fleet-event-log.md §13 約束 5・`event.ts` は使わず **lock の中で振る**）。振る ts は「今」と
+/// 「末尾 [`TAIL_WINDOW`] byte の中の最後の発話の ts + 1 ms」の大きい方で、読む byte は log の大きさに依らない（全件を読む
+/// [`append_if`] は使わない）。振った ts を返す。
+pub fn append_utterance(dir: &Path, event: &Event, policy: LockPolicy) -> Result<(String, Vec<Warning>), StoreError> {
+    let path = events_path(dir);
+    let mut stamped = String::new();
+    let warnings = append_line_with(&path, policy, || {
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |since| u64::try_from(since.as_millis()).unwrap_or(u64::MAX));
+        let ms = last_utterance_ms(&path)?.map_or(now, |last| now.max(last.saturating_add(1)));
+        stamped = cli::format_utc_ms(ms);
+        Ok(Event { ts: stamped.clone(), ..event.clone() }.to_line())
+    })?;
+    Ok((stamped, warnings))
+}
+
+/// 末尾 [`TAIL_WINDOW`] byte の中の発話 event の ts（ミリ秒・秒の形の ts も秒として読む）の最大。窓の頭で途切れた 1 行は捨てる。
+fn last_utterance_ms(path: &Path) -> Result<Option<u64>, StoreError> {
+    let io = |what: &str, err: std::io::Error| StoreError::Io(format!("event log の末尾を{what}: {err}"));
+    let mut file = match fs::File::open(path) {
+        Ok(found) => found,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(io("開けない", err)),
+    };
+    let start = file.metadata().map_err(|err| io("測れない", err))?.len().saturating_sub(TAIL_WINDOW);
+    let mut tail = Vec::new();
+    file.seek(SeekFrom::Start(start)).and_then(|_| file.take(TAIL_WINDOW).read_to_end(&mut tail)).map_err(|err| io("読めない", err))?;
+    let text = String::from_utf8_lossy(&tail);
+    let lines = text.lines().skip(usize::from(start > 0));
+    let stamps = lines.filter_map(|line| Event::from_line(line).ok()).filter(|event| event.kind == EventKind::UtteranceReceived);
+    Ok(stamps.filter_map(|event| epoch_ms_of(&event.ts).or_else(|| epoch_of(&event.ts)?.checked_mul(1_000))).max())
+}
+
 /// [`append_line`] の本体: lock を取り、`check` が `Ok` の周だけ 1 行書き、lock を外す（**判定は lock の中**）。
 fn append_line_when(
     path: &Path,
@@ -359,13 +394,18 @@ fn append_line_when(
     policy: LockPolicy,
     check: impl FnOnce() -> Result<(), StoreError>,
 ) -> Result<Vec<Warning>, StoreError> {
+    append_line_with(path, policy, || check().map(|()| line.to_owned()))
+}
+
+/// [`append_line_when`] の本体: lock を取り、`produce` が返した 1 行を書き、lock を外す（**行の材料も判定も lock の中**）。
+fn append_line_with(path: &Path, policy: LockPolicy, produce: impl FnOnce() -> Result<String, StoreError>) -> Result<Vec<Warning>, StoreError> {
     let parent = path
         .parent()
         .ok_or_else(|| StoreError::Io("追記先の親 dir が無い".to_owned()))?;
     fs::create_dir_all(parent).map_err(|err| StoreError::Io(format!("dir を作れない: {err}")))?;
     let lock = lock_of(path);
     let warnings = acquire(&lock, policy)?;
-    let outcome = check().and_then(|()| write_line(path, line));
+    let outcome = produce().and_then(|line| write_line(path, &line));
     let released = fs::remove_file(&lock);
     outcome?;
     released.map_err(|err| StoreError::Io(format!("lock を外せない: {err}")))?;

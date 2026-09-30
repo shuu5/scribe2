@@ -502,6 +502,13 @@ pub fn format_utc(secs: u64) -> String {
     )
 }
 
+/// UNIX ミリ秒を `YYYY-MM-DDTHH:MM:SS.mmmZ` にする（発話の ts・秒の形の作りは [`format_utc`] の 1 本・逆の読みは
+/// [`super::epoch_ms_of`]）。
+pub fn format_utc_ms(ms: u64) -> String {
+    let secs = format_utc(ms / 1_000);
+    format!("{}.{:03}Z", secs.trim_end_matches('Z'), ms % 1_000)
+}
+
 /// 1970-01-01 からの日数を暦の (年, 月, 日) にする。
 ///
 /// chrono を足さないための最小実装である（NFR3・直接依存 0 本）。

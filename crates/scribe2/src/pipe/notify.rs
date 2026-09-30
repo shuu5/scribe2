@@ -40,19 +40,19 @@ const CONFIRMED: &str = "confirmed";
 const DASH: &str = "-";
 
 /// 終端の 1 行の材料（字面だけ・段の判定は呼び手が済ませている）。
-pub(super) struct Terminal<'a> {
+pub(crate) struct Terminal<'a> {
     /// 便の bead id。
-    pub(super) bead: &'a str,
+    pub(crate) bead: &'a str,
     /// 便 id。
-    pub(super) run: &'a str,
+    pub(crate) run: &'a str,
     /// 最後の段の `as_str`。
-    pub(super) stage: &'a str,
+    pub(crate) stage: &'a str,
     /// verdict か kind か detail の 1 語（[`head_word`] を通した字面）。
-    pub(super) word: &'a str,
+    pub(crate) word: &'a str,
 }
 
 /// 終端の 1 行（§19 形 3 (a)・次の 1 手が末尾に在る 1 行・逐語も path も載せない）。
-pub(super) fn terminal_line(terminal: &Terminal<'_>) -> String {
+pub(crate) fn terminal_line(terminal: &Terminal<'_>) -> String {
     format!(
         "{NAME} pipe: {} {} {}={} — 次の 1 手は pipe dispatch ls",
         terminal.bead, terminal.run, terminal.stage, terminal.word
@@ -66,7 +66,7 @@ pub(super) fn terminal_line(terminal: &Terminal<'_>) -> String {
 ///
 /// その後ろに未処置の終端（`pending`・呼び手が候補の順に判じた字面・`run` は載せない）を
 /// ` pending=<k>:<bead>/<段>=<語>,…` で足す。0 本の周は key を出さない（設計 §29 形 2）。
-pub(super) fn idle_line(turn: &Turn, facts: &Facts, pending: &[Terminal<'_>]) -> Option<String> {
+pub(crate) fn idle_line(turn: &Turn, facts: &Facts, pending: &[Terminal<'_>]) -> Option<String> {
     if !turn.launches.is_empty() {
         return None;
     }
@@ -83,7 +83,7 @@ pub(super) fn idle_line(turn: &Turn, facts: &Facts, pending: &[Terminal<'_>]) ->
 
 /// 直しの束の 1 行（設計 dispatcher.md §27 形 2・行 y）: `precheck bundles=<n> rows=<m>` の後ろに束ごとの ` <束の id>=<束の file の
 /// path>`。載せるのは束の一覧と在り処だけで、作法の散文は載せない（N2）。束が 0 本の周は `bundles=0 rows=0` で終わる。
-pub(super) fn precheck_line((bundles, rows): &(Vec<(String, PathBuf)>, usize)) -> String {
+pub(crate) fn precheck_line((bundles, rows): &(Vec<(String, PathBuf)>, usize)) -> String {
     let listed: String = bundles.iter().map(|(id, path)| format!(" {id}={}", path.display())).collect();
     format!("{NAME} pipe: precheck bundles={} rows={rows}{listed}", bundles.len())
 }

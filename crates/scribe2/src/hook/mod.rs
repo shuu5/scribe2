@@ -25,6 +25,7 @@ pub mod permission;
 pub mod precompact;
 pub mod role_guard;
 pub mod stamp;
+pub mod utterance;
 pub mod vessel;
 
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK};
@@ -199,6 +200,10 @@ pub fn dispatch(args: &[String], payload: &str) -> Outcome {
         Some(EVENT_PERMISSION_REQUEST) => permission_request(&hooked, payload, started),
         Some(EVENT_USER_PROMPT_SUBMIT) => {
             let mut outcome = stamped(args, payload, Event::UserPromptSubmit, &dir);
+            // 打刻の後・群の行の前に発話の記帳（ts の 1 行・設計 fleet-event-log.md §13・書けない周も prompt を止めない）。
+            let (out, err) = utterance::record(&hooked, args, payload);
+            outcome.out.extend(out);
+            outcome.err.extend(err);
             // 群の逼迫の 1 行を追加文脈へ（設計 account-lifecycle.md §19 形 5・群に属さない anchor は 0 byte のまま）。
             let (out, err) = group::lines(&hooked, (EVENT_USER_PROMPT_SUBMIT, "UserPromptSubmit"), started);
             outcome.out.extend(out);

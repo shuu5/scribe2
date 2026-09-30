@@ -806,3 +806,247 @@ fn hook_recovery_edge_precompact_with_a_socket_resolves_the_registered_seat() {
     assert!(!slot.exists(), "出した後に枠は消える");
     clean(&[&place.repo, &place.state, &place.sock_dir]);
 }
+
+// ─────────────────── 発話の記帳（接頭辞 `hook_utterance_record_`・設計 fleet-event-log.md §13・ADR-0083 / ADR-0087） ───────────────────
+//
+// `user-prompt-submit` は user の prompt を model が読む前に `UtteranceReceived` として 1 件記帳し、stdout に ts の 1 行を返す。
+// 差し込みの行・別の session の包み・runner は記帳せず、書けない周も prompt を止めない（rc 0）。どの歯も先に普通の prompt を
+// 1 件記帳させる対照を置く（除外や不発だけの歯は base でも緑になるため）。
+
+/// 逐語（改行・`"`・非 ASCII を含み、ts と `NAME` に無い字で作る＝stdout に逐語が載ったら見分けられる）。
+const UTTER_WORDS: &str = "進めて\n\"承認\" です 🙆";
+
+/// `session_id` と `prompt` を（在れば）持つ `UserPromptSubmit` の payload（逐語は JSON の escape を通す）。
+fn utter_payload(cwd: &Path, sid: Option<&str>, prompt: Option<&str>) -> String {
+    let mut pairs = vec![format!("\"cwd\":{}", json_lite::quote(&cwd.display().to_string()))];
+    pairs.extend(sid.map(|found| format!("\"session_id\":{}", json_lite::quote(found))));
+    pairs.extend(prompt.map(|words| format!("\"prompt\":{}", json_lite::quote(words))));
+    format!("{{{}}}", pairs.join(","))
+}
+
+/// `user-prompt-submit` を（pane 無しで）撃つ。
+fn utter(repo: &Path, args: &[&str], sid: Option<&str>, prompt: Option<&str>) -> Output {
+    let mut all = vec!["user-prompt-submit"];
+    all.extend(args);
+    run_hook_args(&all, &utter_payload(repo, sid, prompt))
+}
+
+/// 普通の prompt を 1 件撃つ（対照・session は `sid-utt`）。
+fn utter_plain(repo: &Path, args: &[&str], prompt: &str) -> Output {
+    utter(repo, args, Some("sid-utt"), Some(prompt))
+}
+
+/// event log の発話 event。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn utterances(state: &Path) -> Vec<vessel::fleet::Event> {
+    let events = vessel::fleet::store::read_all(state).expect("log を読める");
+    events.into_iter().filter(|event| event.kind == vessel::fleet::EventKind::UtteranceReceived).collect()
+}
+
+/// stdout の行。
+fn stdout_lines(out: &Output) -> Vec<String> {
+    String::from_utf8_lossy(&out.stdout).lines().map(str::to_owned).collect()
+}
+
+/// 撃った回数を数える偽の台帳 client（引数に依らず `body` を stdout へ出し、呼ばれるたびに `log` へ 1 行足す）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn counting_bd(dir: &Path, body: &str) -> (String, PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+    let (json, log, path) = (dir.join("bd.json"), dir.join("bd.calls"), dir.join("bd"));
+    fs::write(&json, body).expect("台帳の fixture を書ける");
+    fs::write(&path, format!("#!/bin/sh\necho called >> \"{}\"\ncat \"{}\"\n", log.display(), json.display())).expect("偽の bd を書ける");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("実行権を付けられる");
+    (path.display().to_string(), log)
+}
+
+/// 記帳できた周の外形（rc 0・stderr 0 byte・stdout は `<NAME> utterance: ts=<ts>` の 1 行）と、その ts。
+fn assert_recorded(out: &Output, why: &str) -> String {
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{why}: rc 0: {}", stderr_text(out));
+    assert_eq!(stderr_text(out), "", "{why}: stderr 0 byte");
+    let lines = stdout_lines(out);
+    let prefix = format!("{NAME} utterance: ts=");
+    let ts = lines.first().and_then(|line| line.strip_prefix(&prefix)).map(str::to_owned);
+    assert!(lines.len() == 1 && ts.is_some(), "{why}: stdout は ts の 1 行: {lines:?}");
+    ts.unwrap_or_default()
+}
+
+/// (a) 開いた問いが在る時と無い時の 2 本で、発話 event が 1 件ずつ: 逐語は 1 byte も変わらず、session と経路 chat・actor human・
+/// run の key 無し、bd は 0 回、stdout は ts の 1 行（ミリ秒の字面で event と同じ・逐語の字を載せない）。
+#[test]
+fn hook_utterance_record_writes_one_verbatim_event_and_never_calls_the_ledger() {
+    for (form, ledger) in [("開いた問い有り", r#"[{"id":"q-1","status":"open"}]"#), ("問い無し", "[]")] {
+        let (repo, aux) = (git_repo(), tmp());
+        let state = linked(&repo);
+        let (bd, calls) = counting_bd(&aux, ledger);
+        let out = utter_plain(&repo, &["--bd", &bd], UTTER_WORDS);
+        let ts = assert_recorded(&out, form);
+        let events = utterances(&state);
+        assert_eq!(events.len(), 1, "{form}: 発話 event は 1 件");
+        let event = events.first().unwrap_or_else(|| panic!("{form}: 1 件目"));
+        assert_eq!(event.detail.as_deref(), Some(UTTER_WORDS), "{form}: 逐語は 1 byte も変わらない");
+        let case = vessel::fleet::Case::Utterance { channel: vessel::fleet::Channel::Chat, session: Some("sid-utt".to_owned()) };
+        assert_eq!(event.case, Some(case), "{form}: 経路 chat と session");
+        assert_eq!((event.actor.as_str(), event.run.as_str()), ("human", ""), "{form}: actor と run");
+        let raw = fs::read_to_string(vessel::fleet::store::events_path(&state)).unwrap_or_default();
+        assert!(!raw.contains("\"run\""), "{form}: run の key を書かない: {raw}");
+        assert_eq!(event.ts, ts, "{form}: stdout の ts と event の ts が同じ");
+        assert_eq!(ts.len(), "YYYY-MM-DDTHH:MM:SS.mmmZ".len(), "{form}: ミリ秒 3 桁の字面: {ts}");
+        assert!(vessel::fleet::epoch_ms_of(&ts).is_some(), "{form}: ミリ秒の字面として読める: {ts}");
+        let shown = String::from_utf8_lossy(&out.stdout);
+        assert!(!shown.contains("承認") && !shown.contains("進めて") && !shown.contains('"'), "{form}: stdout に逐語を載せない: {shown}");
+        assert!(!calls.exists(), "{form}: bd は 0 回");
+        clean(&[&repo, &aux, &state]);
+    }
+}
+
+/// (b) 差し込みの 9 種の見本・包みの 5 つの頭の見本（どれも後ろに本文の行を持つ）・runner の plugin-root は、どれも記帳 0・
+/// stdout も stderr も 0 byte。対照の普通の prompt は 1 件記帳される。
+#[test]
+fn hook_utterance_record_skips_injected_lines_wrappers_and_runners() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    assert_recorded(&utter_plain(&repo, &[], "普通の依頼"), "対照");
+    let injected = [
+        format!("{NAME} pipe: b-1 run-1 Landed=ok — 次の 1 手は pipe dispatch ls"),
+        format!("{NAME} pipe: idle ready=1 launched=0 reason=-"),
+        format!("{NAME} pipe: precheck bundles=0 rows=0"),
+        format!("{NAME} seat: 裁定 r-1 が届いた（在りかは裁定面の記帳）"),
+        format!("{NAME} tick: heartbeat step=0 — 台帳の現在地から続きを進める"),
+        format!("{NAME} seat: relaunch — 台帳の現在地から続きを進める"),
+        format!("{NAME} group: evacuate group=Tier1 to=a2 — 新しい subagent を起こさない"),
+        format!("{NAME} group: move-refused group=Tier1 reason=no-candidate"),
+        format!("{NAME} group: pressure group=Tier1 account=a1 window=5h used=90 cap=85"),
+    ];
+    let wrappers = [
+        "Another Claude session sent a message:",
+        "<cross-session-message from=x>",
+        "<teammate-message teammate_id=x>",
+        "<task-notification>",
+        "This session is being continued from a previous conversation that ran out of context.",
+    ];
+    assert_eq!((injected.len(), wrappers.len()), (9, 5), "母集団");
+    for head in injected.iter().map(String::as_str).chain(wrappers) {
+        let out = utter_plain(&repo, &[], &format!("{head}\n本文の行\n二行目"));
+        assert_silent(&out, head);
+    }
+    let plugin = state.join("pipe").join("run-1").join("plugin");
+    assert_silent(&utter_plain(&repo, &["--plugin-root", &plugin.display().to_string()], "runner の prompt"), "runner の plugin-root");
+    assert_eq!(utterances(&state).len(), 1, "記帳は対照の 1 件だけ");
+    clean(&[&repo, &state]);
+}
+
+/// (b2) 除きすぎない: 語が閉じた 4 語の外・`NAME` でない名・包みの頭の字が 2 行目・`pipe` の dir の外の plugin-root の 4 形は
+/// 1 件ずつ記帳され、先頭に空白を置いた包みは除かれる。
+#[test]
+fn hook_utterance_record_does_not_skip_lookalikes() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let beside = state.join("pipe2").join("plugin").display().to_string();
+    let lookalikes: [(&str, &[&str], String); 4] = [
+        ("閉じた語の外", &[], format!("{NAME} note: 覚え書き")),
+        ("別の名", &[], "other-name pipe: idle".to_owned()),
+        ("包みの頭が 2 行目", &[], "依頼\n<task-notification>".to_owned()),
+        ("pipe の dir の外の plugin-root", &["--plugin-root", &beside], "隣の dir".to_owned()),
+    ];
+    for (count, (why, args, prompt)) in lookalikes.iter().enumerate() {
+        assert_recorded(&utter_plain(&repo, args, prompt), why);
+        assert_eq!(utterances(&state).len(), count + 1, "{why}: 1 件記帳される");
+    }
+    assert_silent(&utter_plain(&repo, &[], "  \n<task-notification>\n本文"), "先頭に空白を置いた包み");
+    assert_eq!(utterances(&state).len(), 4, "空白つきの包みは記帳されない");
+    clean(&[&repo, &state]);
+}
+
+/// (c) marker の無い repo と別の `NAME` の repo は記帳 0・出力 0 byte。対照の仕える repo は 1 件記帳される。
+#[test]
+fn hook_utterance_record_is_silent_outside_a_served_repo() {
+    let (bare, other, served) = (git_repo(), git_repo(), git_repo());
+    let state = linked(&served);
+    let foreign = Marker { name: "other-vessel".to_owned(), version: GENERATION };
+    fs::write(other.join(MARKER), foreign.render()).unwrap_or_else(|err| panic!("marker: {err}"));
+    let flag = state.display().to_string();
+    assert_recorded(&utter_plain(&served, &["--state-dir", &flag], "対照"), "仕える repo");
+    assert_eq!(utterances(&state).len(), 1, "対照は 1 件");
+    for (why, repo) in [("marker の無い repo", &bare), ("別の器が名乗る repo", &other)] {
+        assert_silent(&utter_plain(repo, &["--state-dir", &flag], "依頼"), why);
+    }
+    assert_eq!(utterances(&state).len(), 1, "仕えない repo は記帳しない");
+    clean(&[&bare, &other, &served, &state]);}
+
+/// (d) 続けて撃つと ts が 2 つとも違い、log の順に増える。
+#[test]
+fn hook_utterance_record_stamps_distinct_increasing_ts() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let first = assert_recorded(&utter_plain(&repo, &[], "一つ目"), "1 回目");
+    let second = assert_recorded(&utter_plain(&repo, &[], "二つ目"), "2 回目");
+    assert!(vessel::fleet::epoch_ms_of(&first) < vessel::fleet::epoch_ms_of(&second), "ts は増える: {first} < {second}");
+    let logged: Vec<String> = utterances(&state).into_iter().map(|event| event.ts).collect();
+    assert_eq!(logged, [first, second], "log の順");
+    clean(&[&repo, &state]);
+}
+
+/// (e) `pipe report` の human_events は発話の前後で同じ（発話は人由来に数えない・FR22）。
+#[test]
+fn hook_utterance_record_leaves_the_pipe_report_human_events_unchanged() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let report = |state: &Path| {
+        let out = Command::new(bin()).args(["pipe", "report", "--state-dir", &state.display().to_string()]).output().unwrap_or_else(|err| panic!("binary: {err}"));
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "report は rc 0: {}", stderr_text(&out));
+        stdout_lines(&out).into_iter().next().unwrap_or_default()
+    };
+    let before = report(&state);
+    assert!(before.contains("human_events=0 human_events_other_than_approval=0"), "前は 0: {before}");
+    assert_recorded(&utter_plain(&repo, &[], "依頼"), "発話");
+    assert_eq!(utterances(&state).len(), 1, "発話は 1 件");
+    assert_eq!(report(&state), before, "発話の後も同じ");
+    clean(&[&repo, &state]);
+}
+
+/// (k) 何も書かない 2 形: prompt の key の無い payload と、空白・改行・tab だけの prompt は rc 0・stdout と stderr が 0 byte・記帳 0。
+#[test]
+fn hook_utterance_record_writes_nothing_without_words() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    assert_recorded(&utter_plain(&repo, &[], "対照"), "対照");
+    assert_silent(&utter(&repo, &[], Some("sid-utt"), None), "prompt の key が無い");
+    assert_silent(&utter_plain(&repo, &[], " \n\t "), "空白だけ");
+    assert_eq!(utterances(&state).len(), 1, "記帳は対照の 1 件だけ");
+    clean(&[&repo, &state]);
+}
+
+/// (l) 止めない 3 形: session_id の無い周・生きた pid が握る lock（待ちを 50 ms にした rules）・event log の path が dir の置き場は、
+/// rc 0・stdout 0 byte・stderr は `<NAME>: utterance unrecorded reason=<語>` の 1 行だけで記帳 0。
+#[test]
+fn hook_utterance_record_never_stops_the_prompt_when_it_cannot_write() {
+    let (repo, aux) = (git_repo(), tmp());
+    let state = linked(&repo);
+    assert_recorded(&utter_plain(&repo, &[], "対照"), "対照");
+    let unrecorded = |out: &Output, reason: &str| {
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{reason}: rc 0");
+        assert!(out.stdout.is_empty(), "{reason}: stdout 0 byte");
+        assert_eq!(stderr_text(out), format!("{NAME}: utterance unrecorded reason={reason}\n"), "{reason}: stderr の 1 行");
+    };
+    unrecorded(&utter(&repo, &[], None, Some("session の無い依頼")), "no-session");
+    let rules = aux.join("rules.toml");
+    let row = |id: &str, kind: &str, value: u64| format!("[[rule]]\nid = \"{id}\"\nkind = \"{kind}\"\nvalue = {value}\nenabled = true\nruling = \"r\"\nruled_at = \"d\"\n\n");
+    fs::write(&rules, format!("schema = 1\n\n{}{}", row("fleet.lock_retry_ms", "LockRetryMs", 50), row("fleet.lock_stale_ms", "LockStaleMs", 600_000)))
+        .unwrap_or_else(|err| panic!("rules: {err}"));
+    let lock = vessel::fleet::store::lock_path(&state);
+    fs::write(&lock, format!("{}\n", std::process::id())).unwrap_or_else(|err| panic!("lock: {err}"));
+    unrecorded(&utter_plain(&repo, &["--rules", &rules.display().to_string()], "lock 待ちの依頼"), "lock");
+    fs::remove_file(&lock).unwrap_or_else(|err| panic!("lock を外せる: {err}"));
+    assert_eq!(utterances(&state).len(), 1, "no-session と lock の周は記帳しない");
+    let events = vessel::fleet::store::events_path(&state);
+    fs::remove_file(&events).unwrap_or_else(|err| panic!("log を外せる: {err}"));
+    fs::create_dir_all(&events).unwrap_or_else(|err| panic!("log の位置に dir: {err}"));
+    unrecorded(&utter_plain(&repo, &[], "書けない依頼"), "write");
+    clean(&[&repo, &aux, &state]);
+}

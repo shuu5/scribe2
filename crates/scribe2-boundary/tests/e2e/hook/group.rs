@@ -176,6 +176,32 @@ fn hook_group_user_prompt_submit_adds_one_context_line() {
     clean(&[&place.repo, &place.state, &place.sock_dir]);
 }
 
+/// (発話 m) 撃つ位置（設計 fleet-event-log.md §13 約束 1 / 7）: prompt を持つ UserPromptSubmit は、stdout の 1 行目が発話の
+/// `<NAME> utterance: ts=<ts>`・2 行目が群の行。発話 event は 1 件（ts は 1 行目と同じ）で、席の打刻は Busy。
+#[test]
+fn hook_utterance_record_line_comes_before_the_group_line() {
+    let place = group_role_place();
+    put_group(&place, &place.repo.display().to_string());
+    let path = group_seat(&place, "utterprompt", "a1");
+    put_group_round(&place.state, &group_now(), "a1", &group_windows(90, 10, 10));
+    let cwd = json_lite::quote(&place.repo.display().to_string());
+    let payload = format!("{{\"cwd\":{cwd},\"session_id\":\"sid-group\",\"prompt\":\"群の席への依頼\"}}");
+    let out = run_stub_hook(&path, &["user-prompt-submit", "--pane", STUB_PANE], &payload);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "rc 0: {}", stderr_text(&out));
+    assert_eq!(stderr_text(&out), "", "stderr 0 byte");
+    let lines: Vec<String> = String::from_utf8_lossy(&out.stdout).lines().map(str::to_owned).collect();
+    assert_eq!(lines.len(), 2, "発話の行と群の行の 2 行: {lines:?}");
+    let ts = lines[0].strip_prefix(&format!("{NAME} utterance: ts=")).unwrap_or_else(|| panic!("1 行目は発話の行: {lines:?}"));
+    assert_eq!(lines[1], group_line("a1", "5h", 90, 85), "2 行目は群の行");
+    let events = vessel::fleet::store::read_all(&place.state).unwrap_or_else(|errors| panic!("log を読める: {errors:?}"));
+    let said: Vec<_> = events.iter().filter(|event| event.kind == vessel::fleet::EventKind::UtteranceReceived).collect();
+    assert_eq!(said.iter().map(|event| event.ts.as_str()).collect::<Vec<_>>(), [ts], "発話 event は 1 件で ts は 1 行目と同じ");
+    let stamps = fs::read_to_string(state_file(&place.state, "utterprompt")).unwrap_or_default();
+    let last = stamps.lines().last().unwrap_or_default();
+    assert_eq!(value_of(last, "state"), Some(json_lite::Value::Str("busy".to_owned())), "打刻は Busy: {stamps}");
+    clean(&[&place.repo, &place.state, &place.sock_dir]);
+}
+
 /// (3) 群に属さない anchor（群の置き場が別の path）は、逼迫の実測が在っても 2 event とも 0 行（UserPromptSubmit は
 /// stdout 0 byte のまま・SessionStart は群の行を足さない）。
 #[test]
