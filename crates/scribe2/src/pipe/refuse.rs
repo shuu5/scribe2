@@ -64,6 +64,7 @@ pub(crate) const REFUSALS: &[&str] = &[
     "promise-symbol-unresolved",
     "max-live",
     "entrance-not-red",
+    "ruling-unresolved",
 ];
 
 /// 契約 file が読めた後の、契約単位の拒否理由。**新しい理由は variant を 1 つ足す**（憲法 C2）。
@@ -230,6 +231,17 @@ pub(crate) enum Refuse {
         /// 契約の検証行ごとの 4 値の語（検証行の順）。
         values: Vec<String>,
     },
+    /// ruling-check が true の repo で、契約の設計の節か契約表の行が、台帳に解けない裁定 id の引用（解けない問い id の形・解けない
+    /// `batch:` / `policy:`・線より後の時刻の形）を持つ（設計 dispatcher.md §37・FR83 / AC53・受付が撃つ）。**置き場ごとに id を全て**
+    /// 持つ。台帳か線を読めない周は `unmeasured` に語を持ち（rc 2・測れないを通すに読み替えない）、id の列は空。
+    RulingUnresolved {
+        /// 設計の節の解けない引用の字面（昇順・重複を除く）。
+        section: Vec<String>,
+        /// 契約表の行の解けない引用の字面（昇順・重複を除く）。
+        row: Vec<String>,
+        /// 台帳か線を読めなかった周の語（測れた周は `None`）。
+        unmeasured: Option<String>,
+    },
 }
 
 impl Refuse {
@@ -259,6 +271,7 @@ impl Refuse {
             Self::PromiseSymbolUnresolved { .. } => "promise-symbol-unresolved",
             Self::MaxLive { .. } => "max-live",
             Self::EntranceNotRed { .. } => "entrance-not-red",
+            Self::RulingUnresolved { .. } => "ruling-unresolved",
         }
     }
 
@@ -331,6 +344,7 @@ impl Refuse {
             Self::EntranceNotRed { count, ref values } => {
                 format!("{} base で緑か測れない契約の検証行が {count} 本在る（deny の名乗り・行ごと {}）", self.as_str(), values.join(","))
             }
+            Self::RulingUnresolved { ref section, ref row, ref unmeasured } => ruling_reason(self.as_str(), [section, row], unmeasured.as_deref()),
         }
     }
 
@@ -357,7 +371,8 @@ impl Refuse {
             | Self::SameKindRepeated { .. }
             | Self::FindingUnaddressed { .. }
             | Self::MaxLive { .. }
-            | Self::EntranceNotRed { .. } => Evidence::Place,
+            | Self::EntranceNotRed { .. }
+            | Self::RulingUnresolved { .. } => Evidence::Place,
             Self::ContractTable(ref found) => found.evidence(),
         }
     }
@@ -387,10 +402,28 @@ impl Refuse {
             | Self::PromiseSymbolUnresolved { .. }
             | Self::MaxLive { .. }
             | Self::EntranceNotRed { .. } => RC_REFUSED,
+            Self::RulingUnresolved { ref unmeasured, .. } if unmeasured.is_some() => RC_BROKEN,
+            Self::RulingUnresolved { .. } => RC_REFUSED,
             Self::WriteSetUnreadable { .. } => RC_BROKEN,
             Self::ContractTable(ref found) => found.rc(),
         }
     }
+}
+
+/// 裁定 id の引用の断りの 1 行（設計 dispatcher.md §37 約束 4）。測れた周は置き場（設計の節 → 契約表の行の順・空の置き場は書かない）
+/// ごとに id を全て名指し、件数は置き場ごとの字面の和。測れない周（`unmeasured`）は語を名指す。
+fn ruling_reason(name: &str, places: [&Vec<String>; 2], unmeasured: Option<&str>) -> String {
+    if let Some(word) = unmeasured {
+        return format!("{name} 裁定 id の引用を測れない（{word}）");
+    }
+    let count = places.iter().fold(0_usize, |sum, ids| sum.saturating_add(ids.len()));
+    let named: Vec<String> = ["設計の節", "契約表の行"]
+        .iter()
+        .zip(places)
+        .filter(|(_, ids)| !ids.is_empty())
+        .map(|(place, ids)| format!("{place}: {}", ids.join(",")))
+        .collect();
+    format!("{name} 解けない裁定 id の引用 {count} 件（{}）", named.join("／"))
 }
 
 /// 断りの証拠の在り処（**閉じた 4 値**・設計 docs/design/dispatcher.md §27 形 3）: 予想の base（未着地の依存を重ねた木）で
@@ -628,6 +661,11 @@ mod tests {
             Refuse::PromiseSymbolUnresolved { of: "ag".to_owned(), n: 2, name: "+Refuse::Fresh".to_owned() },
             Refuse::MaxLive { live: 3, cap: 2 },
             Refuse::EntranceNotRed { count: 1, values: vec!["green-on-base".to_owned(), "absent".to_owned()] },
+            Refuse::RulingUnresolved {
+                section: vec!["batch:b7".to_owned(), "s2-07l.9:20260930T0000Z-1".to_owned()],
+                row: vec!["policy:x".to_owned()],
+                unmeasured: None,
+            },
         ]
     }
 
@@ -736,6 +774,7 @@ mod tests {
         assert!(!covered(&["src".to_owned()], "src/x.rs"), "末尾 / 無しは dir として配下を含まない");
     }
 
+    // flip-check: retroactive s2-07l.738.37.4
     /// 名前の slice は **宣言順**で、`as_str` の網羅 match と 1 対 1 である（ADR-0013 §2.1）。
     #[test]
     fn refuse_names_are_pinned_in_declaration_order() {
@@ -749,11 +788,12 @@ mod tests {
         assert_eq!(names.get(2).copied(), Some("write-set-overlap"), "{names:?}");
         assert_eq!(names.get(3).copied(), Some("write-set-unreadable"), "{names:?}");
         // 約束の行の 2 理由（設計 contract-source.md §33・`s2-07l.512`）が同時本数の上限（gate-cost.md §24・`s2-07l.398`）の
-        // 手前に並び、base の木で撃った入口の断り（pipeline.md §56・`s2-07l.557`）が末尾で、母集団は 23 値。
-        assert_eq!(REFUSALS.len(), 23, "母集団 23 値");
+        // 手前に並び、base の木で撃った入口の断り（pipeline.md §56・`s2-07l.557`）がその次で、裁定 id の引用の断り（dispatcher.md
+        // §37・行 al）が末尾で、母集団は 24 値。
+        assert_eq!(REFUSALS.len(), 24, "母集団 24 値");
         assert_eq!(
             names.iter().rev().take(4).copied().collect::<Vec<&str>>(),
-            ["entrance-not-red", "max-live", "promise-symbol-unresolved", "promised-field-written"]
+            ["ruling-unresolved", "entrance-not-red", "max-live", "promise-symbol-unresolved"]
         );
         let entrance = samples().get(22).map(|found| (found.reason(), found.rc()));
         let want = "entrance-not-red base で緑か測れない契約の検証行が 1 本在る（deny の名乗り・行ごと green-on-base,absent）".to_owned();
@@ -770,9 +810,10 @@ mod tests {
         assert!(found.iter().skip(19).all(|refuse| refuse.rc() == RC_REFUSED && !refuse.reason().contains('\n')), "rc 1・1 行");
     }
 
+    // flip-check: retroactive s2-07l.738.37.4
     /// 在り処は `REFUSALS` の 23 語の母集団で 1 語に 1 つずつ決まる（設計 dispatcher.md §27 形 3・宣言順）: 行の字だけで
     /// 決まる 3 語・名指した file の 4 語（file は payload の字面）・本文の読み手の 7 語・置き場と host の 8 語・契約表の
-    /// 欠陥は理由の側（samples の `section-missing` は行）。
+    /// 欠陥は理由の側（samples の `section-missing` は行）。名の 23 は歯を置いた時の語数で、行 al が置き場と host に 1 語足した（24 語）。
     #[test]
     fn pipe_refuse_evidence_is_decided_once_for_each_of_the_23_words() {
         let found: Vec<(&str, String)> = samples().iter().map(|refuse| (refuse.as_str(), refuse.evidence().render())).collect();
@@ -800,10 +841,11 @@ mod tests {
             ("promise-symbol-unresolved", "name"),
             ("max-live", "place"),
             ("entrance-not-red", "place"),
+            ("ruling-unresolved", "place"),
         ];
         let want: Vec<(&str, String)> = want.iter().map(|(name, at)| (*name, (*at).to_owned())).collect();
         assert_eq!(found, want, "母集団 {} 語の在り処", REFUSALS.len());
-        assert_eq!(found.len(), REFUSALS.len(), "23 語すべてに 1 つ");
+        assert_eq!(found.len(), REFUSALS.len(), "全語に 1 つ");
         let unreadable = Refuse::ContractTable(crate::pipe::table::TableError::Unreadable { line: 0, reason: "r".to_owned() });
         assert_eq!(unreadable.evidence(), Evidence::Place, "契約表の欠陥は理由の側が決める（読めない表は測れない）");
     }
@@ -829,6 +871,31 @@ mod tests {
         assert_eq!(discern(&Evidence::Name, &snap), provisional, "本文の読み手は .snap も読む");
         let words: Vec<&str> = [firm, provisional, unmeasured].iter().map(|found| found.as_str()).collect();
         assert_eq!(words, ["firm", "provisional", "unmeasured"], "結果の file の語");
+    }
+
+    /// 裁定 id の引用の断り（設計 dispatcher.md §37 約束 4）: 測れた周は rc 1 で本文が置き場ごとに id を全て名指し（置き場の順は
+    /// 設計の節 → 契約表の行・片方が空の置き場は書かない）、測れない周は rc 2 で語を名指す。在り処はどちらも Place（台帳の状態に依る）。
+    #[test]
+    fn refuse_ruling_names_every_id_per_place_and_keeps_two_rcs() {
+        let both = samples().pop();
+        let both = both.as_ref();
+        assert_eq!(
+            both.map(Refuse::reason),
+            Some("ruling-unresolved 解けない裁定 id の引用 3 件（設計の節: batch:b7,s2-07l.9:20260930T0000Z-1／契約表の行: policy:x）".to_owned()),
+            "置き場ごとに id を全て名指す"
+        );
+        assert_eq!(both.map(Refuse::rc), Some(RC_REFUSED), "測れた周は rc 1");
+        let row_only = Refuse::RulingUnresolved { section: Vec::new(), row: vec!["batch:x".to_owned()], unmeasured: None };
+        assert_eq!(row_only.reason(), "ruling-unresolved 解けない裁定 id の引用 1 件（契約表の行: batch:x）", "空の置き場は書かない");
+        let section_only = Refuse::RulingUnresolved { section: vec!["policy:y".to_owned()], row: Vec::new(), unmeasured: None };
+        assert_eq!(section_only.reason(), "ruling-unresolved 解けない裁定 id の引用 1 件（設計の節: policy:y）", "空の置き場は書かない");
+        let unmeasured = Refuse::RulingUnresolved { section: Vec::new(), row: Vec::new(), unmeasured: Some("ledger".to_owned()) };
+        assert_eq!(unmeasured.reason(), "ruling-unresolved 裁定 id の引用を測れない（ledger）", "測れない周は語を名指す");
+        assert_eq!((unmeasured.rc(), unmeasured.as_str()), (RC_BROKEN, "ruling-unresolved"), "測れない周は同じ値の rc 2");
+        for found in [both, Some(&row_only), Some(&section_only), Some(&unmeasured)] {
+            assert_eq!(found.map(|refuse| refuse.evidence().render()), Some("place".to_owned()), "在り処は Place");
+            assert_eq!(found.map(|refuse| refuse.reason().contains('\n')), Some(false), "理由は 1 行");
+        }
     }
 
     /// **rc は variant が持つ**: 読めない周だけ rc 2 で、残りは rc 1。理由は run / path を名乗る。

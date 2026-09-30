@@ -459,7 +459,7 @@ fn design_text(repo: &Path, design: &str) -> String {
 
 /// 節 `number` の本文（`## N.` の見出しの次の行から次の `## ` 見出しの前まで・契約表の区間と fence の中の
 /// `## ` は見出しに数えない・`pipe::table` の節の読みと同じ形）。無ければ空。
-fn section_text(doc: &str, number: &str) -> String {
+pub(in crate::pipe) fn section_text(doc: &str, number: &str) -> String {
     let mut found: Vec<&str> = Vec::new();
     let (mut fenced, mut inside, mut open) = (false, false, false);
     for line in doc.lines() {

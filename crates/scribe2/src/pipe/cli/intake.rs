@@ -46,6 +46,7 @@ use crate::pipe::table::{self, ContractRow, TableError};
 use crate::pipe::{contract_path, current, emit, run_dir, run_id, vessel_path, Emit, CONTRACT_FILE};
 use crate::rules::manifest::Manifest;
 use crate::rules::RuleValue;
+use crate::seat::ledger::{timeout_of, DEFAULT_BD};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -53,6 +54,10 @@ use std::path::{Path, PathBuf};
 mod refusal;
 use refusal::{denied, exclude_cap_shortfall, not_a_repo, refuse, refuse_of};
 use refusal::{DENIAL_ARGS, DENIAL_DECLARATION, DENIAL_GENERATED, DENIAL_RULES, DENIAL_STORE};
+
+/// 裁定 id の引用の判定（設計 dispatcher.md §37・契約表の行 al）。断りの組み立ては [`exclude_unresolved_rulings`] が書く。
+mod ruling;
+use ruling::Ruled;
 
 /// host で同時に走る便（live な便）の本数の最大値を持つ rules 行（設計 gate-cost.md §24・値は読むだけ・C1）。
 const ROW_MAX_LIVE: &str = "pipe.max_live";
@@ -147,7 +152,8 @@ fn intake_run(args: &[String], manifest: &Manifest, policy: LockPolicy) -> Resul
     // 上限・材料（設計 dispatcher.md §5 の 1 回）・行の生成と表の検査・freeze は**入口の lock の前**に 1 周に 1 回
     // （§56 形 2・base の木の実走の長さで入口を塞がない）。lock の中の judge は freeze の結果を借りる。
     let ceiling = ceiling_of(manifest).map_err(|denial| denial.outcome)?;
-    let materials = Materials::read(&repo, &ceiling.borrow()).map_err(|denial| denial.outcome)?;
+    let bd = flag(args, "--bd").map_err(refused)?.unwrap_or(DEFAULT_BD);
+    let materials = Materials::read(&repo, &ceiling.borrow(), bd).map_err(|denial| denial.outcome)?;
     let (contract, body) = generated(&repo, &pointer, &materials).map_err(|denial| denial.outcome)?;
     let early = early(&repo, manifest, &contract, Some(&state_dir), &sha);
     // **入口の排他はここから**（ADR-0019 §2.1・設計 pipeline-conflict.md §2）: [`judge`] と [`create`] を
@@ -241,14 +247,16 @@ pub(in crate::pipe) struct Materials {
     declared: Result<Vec<String>, String>,
     /// クラスの語列表（上限の [`Ceiling`] から借りた写し・表の検査が verify 行から 3 クラスを導く）。
     classes: Vec<String>,
+    /// 裁定 id の引用の判定の材料（台帳の client と、1 周に 1 回だけ読む宣言・台帳・線・設計 dispatcher.md §37 約束 5）。
+    ruling: ruling::Rulings,
 }
 
 impl Materials {
-    /// repo を 1 回走査して材料を読む。
+    /// repo を 1 回走査して材料を読む。`bd` は裁定 id の引用の判定が台帳を読む client（読むのは引用を持つ契約が出たときだけ）。
     ///
     /// 断りの**順序は従来のまま**である（tracked を読めない＝git repo でない〔rc 2〕→ 宣言が読めない・上限に
     /// 外れる〔rc 1〕）。順を替えると「宣言が壊れている」便が「表を読めない」に化ける。
-    pub(in crate::pipe) fn read(repo: &Path, ceiling: &Ceiling<'_>) -> Result<Self, Denial> {
+    pub(in crate::pipe) fn read(repo: &Path, ceiling: &Ceiling<'_>, bd: &str) -> Result<Self, Denial> {
         let Some(tracked) = table::tracked_files(repo) else {
             let reason = format!("{} の tracked file を読めない（git repo でない）", repo.display());
             return Err(refuse(&Refuse::ContractTable(TableError::Unreadable { line: 0, reason }), &[]));
@@ -261,13 +269,22 @@ impl Materials {
         let requirements =
             table::read(repo, &facts.requirements).and_then(|found| table::requirement_ids(&facts.requirements, &found));
         let declared = table::declared_files(repo, &tracked);
-        Ok(Self { tracked, sources, snapshots, facts, requirements, declared, classes: ceiling.classes.to_vec() })
+        Ok(Self {
+            tracked,
+            sources,
+            snapshots,
+            facts,
+            requirements,
+            declared,
+            classes: ceiling.classes.to_vec(),
+            ruling: ruling::Rulings::new(bd),
+        })
     }
 
     /// rules 行の上限から材料を読む（列の入口・上限の読みと base の走査を 1 本にまとめた口）。
-    pub(in crate::pipe) fn of(repo: &Path, manifest: &Manifest) -> Result<Self, Denial> {
+    pub(in crate::pipe) fn of(repo: &Path, manifest: &Manifest, bd: &str) -> Result<Self, Denial> {
         let rows = ceiling_of(manifest)?;
-        Self::read(repo, &rows.borrow())
+        Self::read(repo, &rows.borrow(), bd)
     }
 
     /// base の tracked file（交差の dir の展開が読む・**2 本目の走査を作らない**ための借り）。
@@ -433,7 +450,8 @@ pub(super) fn regenerated(
     let denied_commands = list_row(manifest, DENIED_ROW).map_err(refused)?;
     let classes = list_row(manifest, CLASS_ROW).map_err(refused)?;
     let ceiling = Ceiling { row: CEILING_ROW, commands: frozen.allowed(), denied: &denied_commands, classes: &classes };
-    let materials = Materials::read(repo, &ceiling).map_err(refused_as)?;
+    // 取り直す本文は台帳を読まない（引用の判定は judge だけが撃つ）ので client は既定の名のまま。
+    let materials = Materials::read(repo, &ceiling, DEFAULT_BD).map_err(refused_as)?;
     let (_, body) = generated(repo, &pointer, &materials).map_err(refused_as)?;
     Ok(Some(body))
 }
@@ -598,7 +616,7 @@ pub(in crate::pipe) struct Judged {
 }
 
 /// 受付の判定（run を作らない・§21）。判定関数を `freeze` → `settle_write_set` → `exclude_cap_shortfall` →
-/// `exclude_max_live` → `exclude_overlap` → 重複 run の順に**全部撃ち**、各関数が返した断りを列に積む。前段の Ok 値を取るのは導出値で
+/// `exclude_entrance_not_red` → `exclude_unresolved_rulings` → `exclude_max_live` → `exclude_overlap` → 重複 run の順に**全部撃ち**、各関数が返した断りを列に積む。前段の Ok 値を取るのは導出値で
 /// write-set を置き換える 1 点だけで、`settle_write_set` が Err の周は契約 file の write-set のまま後段を撃つ
 /// （Declared 行は元々置き換えが無い＝前段と後段の断りが同時に載る）。git repo でない対象は他の関数が撃てないので
 /// `not-a-repo` の 1 件で止まる。
@@ -652,6 +670,11 @@ pub(in crate::pipe) fn judge(material: &Material<'_>) -> Judged {
     if let Some(denial) = exclude_entrance_not_red(early) {
         judged.denials.push(denial);
     }
+    // **裁定 id の引用の判定は entrance-not-red の直後・置き場が要る判定の前**（設計 dispatcher.md §37 約束 1）: 置き場を持たない
+    // 呼び手（事前審査・列の候補）でも撃つ。
+    if let Some(denial) = exclude_unresolved_rulings(material) {
+        judged.denials.push(denial);
+    }
     let Some(state_dir) = state_dir else {
         return judged;
     };
@@ -681,6 +704,18 @@ fn exclude_entrance_not_red(early: Option<&Early>) -> Option<Denial> {
     let base = early.and_then(Early::denying)?;
     let count = base.not_red();
     (count > 0).then(|| refuse(&Refuse::EntranceNotRed { count, values: base.values() }, &[]))
+}
+
+/// ruling-check が true の repo で、契約の設計の節か契約表の行が解けない裁定 id の引用を持つ周（と、台帳か線を読めない周）の断り
+/// （設計 dispatcher.md §37・置き場の要る判定の前）。判定は [`ruling`] の素の値で、断りの組み立てはここが書く。
+fn exclude_unresolved_rulings(material: &Material<'_>) -> Option<Denial> {
+    let Material { repo, manifest, contract, materials, .. } = *material;
+    let (section, row, unmeasured) = match materials.ruling.judge_contract(repo, timeout_of(manifest), contract) {
+        Ruled::Clear => return None,
+        Ruled::Unresolved { section, row } => (section, row, None),
+        Ruled::Unmeasured(word) => (Vec::new(), Vec::new(), Some(word.to_owned())),
+    };
+    Some(refuse(&Refuse::RulingUnresolved { section, row, unmeasured }, &[]))
 }
 
 /// 便を作る（run dir・写し・event）。judge の断りが 1 件でも在れば**先頭の 1 件**で断り、何も書かない（従来の外形）。
@@ -1181,6 +1216,7 @@ use refusal::{ROW_FILE_LINES, ROW_SIZE_S};
 mod tests {
     // flip-check: moved s2-07l.736.12
     // flip-check: retroactive s2-07l.736.28
+    use super::ruling::Rulings;
     use super::{
         exclude_cap_shortfall, int_row, with_write_set, Entrance, Materials, WriteSet, ENTRANCE_LOCK, ROW_FILE_LINES,
         ROW_SIZE_S, WRITE_SETS,
@@ -1264,6 +1300,7 @@ mod tests {
             requirements: Ok(BTreeSet::new()),
             declared: Ok(Vec::new()),
             classes: Vec::new(),
+            ruling: Rulings::new("bd"),
         };
         (contract, materials)
     }

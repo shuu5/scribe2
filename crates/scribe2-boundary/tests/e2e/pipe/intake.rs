@@ -2565,3 +2565,305 @@ fn pipe_intake_base_run_head_moved_during_the_run_makes_every_line_unmeasurable(
     assert_eq!(cargo_calls(&log).len(), 2, "撃った本数は 2");
     clean(&[&repo, &state]);
 }
+
+// ───── 裁定 id の引用の受付（設計 docs/design/dispatcher.md §37・契約表の行 al・接頭辞 `pipe_intake_ruling_`） ─────
+
+/// 閉じた問い `s2-q.1` の notes: 5 欄の行（逐語の欄にだけ別の問い id `s2-q.3…` を持つ）・束の欄に `batch:b7`・逐語に `batch:v9` を持つ
+/// 4 欄の行・最後の欄に `batch:v8` を持つ 4 欄の行・裁定 id の欄が `policy:batch:x` の行・`policy:p1` の行（doctor の歯と同じ母集団）。
+const RULING_NOTES: &str = "s2-q.1:20260930T0000Z-1 | s2-q.1 | 2026-09-30T00:00Z | chat | 逐語に s2-q.3:20260930T0200Z-1 を引く\n\
+batch:m1 | s2-q.1 | batch:b7 | 逐語 batch:v9\n\
+batch:m2 | s2-q.1 | 2026-09-30T00:00Z | batch:v8\n\
+policy:batch:x | s2-q.1 | 2026-09-30T00:00Z | chat | 逐語\n\
+policy:p1 | s2-q.1 | 2026-09-30T00:00Z | chat | 逐語";
+
+/// 開いた問い `s2-q.2` の notes（裁定の行の形だが問いが開いている）。
+const RULING_OPEN_NOTES: &str = "s2-q.2:20260930T0100Z-1 | s2-q.2 | 2026-09-30T01:00Z | chat | 開いた問い";
+
+/// 台帳の JSON: 閉じた問い 1 本と開いた問い 1 本。
+fn ruling_ledger_json() -> String {
+    let closed = RULING_NOTES.replace('\n', "\\n");
+    format!(
+        "[{{\"id\":\"s2-q.1\",\"status\":\"closed\",\"labels\":[\"intake:question\"],\"notes\":\"{closed}\"}},\
+         {{\"id\":\"s2-q.2\",\"status\":\"open\",\"labels\":[\"intake:question\"],\"notes\":\"{RULING_OPEN_NOTES}\"}}]\n"
+    )
+}
+
+/// 偽の台帳 client `bd` を置き場の隣の `name` の dir に書き、(client の path, 起動の記録) を返す。`ledger` があればその JSON を返し、
+/// 無ければ rc 3 で落ちる（読めない台帳）。記録は 1 起動 1 行。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn ruling_bd(state: &Path, name: &str, ledger: Option<&str>) -> (String, PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = state.parent().expect("置き場は tmp の 1 段下").join(name);
+    fs::create_dir_all(&dir).expect("偽の bd の dir を作れる");
+    let body = match ledger {
+        Some(json) => {
+            let file = dir.join("ledger.json");
+            fs::write(&file, json).expect("偽の台帳を書ける");
+            format!("cat '{}'", file.display())
+        }
+        None => "exit 3".to_owned(),
+    };
+    let (bd, log) = (dir.join("bd"), dir.join("calls.log"));
+    fs::write(&bd, format!("#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\n{body}\n", log.display())).expect("偽の bd を書ける");
+    fs::set_permissions(&bd, fs::Permissions::from_mode(0o755)).expect("偽の bd に実行権を付ける");
+    (bd.display().to_string(), log)
+}
+
+/// 偽の bd の起動の本数（記録が無ければ 0＝1 度も撃たれていない）。
+fn ruling_calls(log: &Path) -> usize {
+    fs::read_to_string(log).map_or(0, |text| text.lines().count())
+}
+
+/// 受付と事前審査が読む `--rules`（上限の写しに台帳の待ち上限の行を足す・行が無いと台帳を読めない周になる）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn ruling_rules(state: &Path) -> String {
+    let path = state.join("rules-ruling.toml");
+    if !path.exists() {
+        let base = fs::read_to_string(ceiling_rules(state)).expect("上限の写しを読める");
+        let row = "\n[[rule]]\nid = \"seat.ledger_timeout_s\"\nkind = \"LedgerTimeoutS\"\nvalue = 60\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n";
+        fs::write(&path, format!("{base}{row}")).expect("写しを書ける");
+    }
+    path.display().to_string()
+}
+
+/// 行 `t`（導出の形・`derive_` の歯）に `over` の欄を足した行。
+fn ruling_row(over: &[(&str, &str)]) -> String {
+    let mut fields = vec![("verify", "[\"cargo nextest run -p toy --no-tests=fail derive_\"]")];
+    fields.extend_from_slice(over);
+    derive_row("t", &fields)
+}
+
+/// 設計 doc: 節 1 の本文 `section` と、`rows` の契約表。
+fn ruling_doc(section: &str, rows: &[String]) -> String {
+    format!("# 設計: toy\n\n## 1. 何を解くか\n\n{section}\n\n## 2. 型\n\n本文。\n\n## 3. 空の節\n\n{}", table_region(rows))
+}
+
+/// 台帳の接頭辞 `s2` を持つ導出の toy repo と置き場（宣言は `vessel` の後ろに `extra` の行を足す）。
+fn ruling_repo(extra: &str, section: &str, rows: &[String]) -> (PathBuf, PathBuf) {
+    let vessel = format!("schema = 1\nallowed-commands = [\"git\", \"sh\", \"cargo\"]\ncommon-verify = [\"git status\"]\n{extra}");
+    derive_repo_with(&ruling_doc(section, rows), &[(".vessel.toml", &vessel), (".beads/config.yaml", "issue-prefix: s2\n")])
+}
+
+/// 設計 doc を書き換えて commit する（宣言を置いた commit が opt-in の線なので、この doc の字面は線の後）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn ruling_recommit(repo: &Path, section: &str, rows: &[String]) {
+    fs::write(repo.join("docs/design/toy.md"), ruling_doc(section, rows)).expect("設計 doc を書ける");
+    git(repo, &["add", "-A"]);
+    git(repo, &["commit", "-q", "-m", "doc"]);
+}
+
+/// 行 `t` の受付か事前審査を 1 回撃つ（`path` があれば PATH を差し替える・`bd` があれば `--bd` を渡す・審査の lens は偽 PASS）。
+fn ruling_run(verb: &str, repo: &Path, state: &Path, bd: Option<&str>, path: Option<&str>) -> Output {
+    let (rules, repo, dir) = (ruling_rules(state), repo.display().to_string(), state.display().to_string());
+    let mut args: Vec<String> = [verb, "--design", BASE_RUN_DESIGN, "--bead", "s2-ruling", "--repo", &repo, "--state-dir", &dir, "--rules", &rules]
+        .iter()
+        .map(|word| (*word).to_owned())
+        .collect();
+    if verb == "intake" {
+        args.extend(["--lens".to_owned(), review_lens_pass(state)]);
+    }
+    if let Some(client) = bd {
+        args.extend(["--bd".to_owned(), client.to_owned()]);
+    }
+    let borrowed: Vec<&str> = args.iter().map(String::as_str).collect();
+    match path {
+        Some(found) => run_pipe_with_path(found, &borrowed),
+        None => run_pipe(&borrowed),
+    }
+}
+
+/// 解ける 4 形（問い id・裁定 id の欄の batch:・束の欄の batch:・欄の全体が policy:batch:x）・`policy:p1`・接頭辞違い・一覧に載せた 2 字面・
+/// 線の前の時刻の形は、節にも行にも書いて通る。bd は事前審査と受付の各 1 周に 1 回だけ撃たれる。
+#[test]
+fn pipe_intake_ruling_passes_resolvable_listed_prefixed_and_before_line_forms() {
+    let section = "- 解ける: s2-q.1:20260930T0000Z-1 と batch:m1 と batch:m2 と batch:b7 と policy:batch:x と policy:p1\n\
+                   - 接頭辞違い: tz-1:20260930T0000Z-1\n\
+                   - 見本: batch:fix と policy:fix\n\
+                   - 線の前: user 2026-09-29T12:00Z\n";
+    let row = ruling_row(&[("done", "\"t は batch:m1 と policy:p1 と tz-1:20260930T0000Z-1 を引く\"")]);
+    let (repo, state) = ruling_repo("ruling-check = true\nruling-fixtures = [\"batch:fix\", \"policy:fix\"]\n", section, &[row]);
+    let (bd, log) = ruling_bd(&state, "bd-serving", Some(&ruling_ledger_json()));
+    let checked = ruling_run("preflight", &repo, &state, Some(&bd), None);
+    let text = stdout_of(&checked);
+    assert_eq!(checked.status.code(), Some(i32::from(RC_OK)), "通る形だけの契約は事前審査も rc 0: {text}{}", stderr_of(&checked));
+    assert!(fact_lines(&checked, "refuse=").is_empty() && tail_line(&checked) == "preflight: ok", "{text}");
+    assert_eq!(ruling_calls(&log), 1, "引用を持つ周は台帳を 1 回だけ読む");
+    let taken = ruling_run("intake", &repo, &state, Some(&bd), None);
+    assert_eq!(taken.status.code(), Some(i32::from(RC_OK)), "受付も通る: {}", stderr_of(&taken));
+    assert_eq!(ruling_calls(&log), 2, "受付の 1 周も台帳を 1 回だけ読む（事前審査 1 周と受付 1 周で 2 回）");
+    clean(&[&repo, &state]);
+}
+
+/// 節の 3 形（台帳に無い問い id・台帳に無い batch:・線より後の時刻の形）は rc 1 の `ruling-unresolved` で、本文が節の id を全て名指す。
+/// 事前審査は `refuse=` の 1 行と `refused n=1`、run dir も event も作らない。
+#[test]
+fn pipe_intake_ruling_refuses_unresolved_forms_in_the_section() {
+    let (repo, state) = ruling_repo("ruling-check = true\n", "本文。", &[ruling_row(&[])]);
+    let bad = "- 未知の問い id: s2-q.9:20260930T0000Z-1\n- 未知の batch: batch:zz\n- 線の後: user 2026-09-30T05:00Z\n";
+    ruling_recommit(&repo, bad, &[ruling_row(&[])]);
+    let (bd, _) = ruling_bd(&state, "bd-serving", Some(&ruling_ledger_json()));
+    let want = "ruling-unresolved 解けない裁定 id の引用 3 件（設計の節: batch:zz,s2-q.9:20260930T0000Z-1,user 2026-09-30T05:00Z）";
+    let taken = ruling_run("intake", &repo, &state, Some(&bd), None);
+    let err = stderr_of(&taken);
+    assert_eq!(taken.status.code(), Some(i32::from(RC_REFUSED)), "解けない引用は rc 1: {err}");
+    assert!(err.contains(&format!("pipe: {want}")), "節の id を全て名指す（3 形 3/3）: {err}");
+    assert_eq!((run_dirs(&state).len(), event_count(&state)), (0, 0), "run dir も event も作らない");
+    let checked = ruling_run("preflight", &repo, &state, Some(&bd), None);
+    assert_eq!(fact_lines(&checked, "refuse="), [format!("refuse=ruling-unresolved:{want}")], "{}", stdout_of(&checked));
+    assert_eq!((checked.status.code(), tail_line(&checked).as_str()), (Some(i32::from(RC_REFUSED)), "preflight: refused n=1"));
+    clean(&[&repo, &state]);
+}
+
+/// 契約表の行の欄（`title` 〔契約の goal〕と `done`）の同じ 3 形も rc 1 で、本文が行の id を全て名指す。
+#[test]
+fn pipe_intake_ruling_refuses_unresolved_forms_in_the_row() {
+    let (repo, state) = ruling_repo("ruling-check = true\n", "本文。", &[ruling_row(&[])]);
+    let row = ruling_row(&[("title", "\"行 t は user 2026-09-30T05:00Z を引く\""), ("done", "\"s2-q.9:20260930T0000Z-1 と batch:zz を引く\"")]);
+    ruling_recommit(&repo, "本文。", &[row]);
+    let (bd, _) = ruling_bd(&state, "bd-serving", Some(&ruling_ledger_json()));
+    let taken = ruling_run("intake", &repo, &state, Some(&bd), None);
+    let err = stderr_of(&taken);
+    let want = "ruling-unresolved 解けない裁定 id の引用 3 件（契約表の行: batch:zz,s2-q.9:20260930T0000Z-1,user 2026-09-30T05:00Z）";
+    assert_eq!(taken.status.code(), Some(i32::from(RC_REFUSED)), "{err}");
+    assert!(err.contains(&format!("pipe: {want}")), "行の id を全て名指す（3 形 3/3）: {err}");
+    clean(&[&repo, &state]);
+}
+
+/// 節と行の両方に解けない引用を持つ契約は、1 つの本文が置き場ごとに（設計の節 → 契約表の行の順で）id を並べる。
+#[test]
+fn pipe_intake_ruling_names_both_places_in_one_line() {
+    let (repo, state) = ruling_repo("ruling-check = true\n", "本文。", &[ruling_row(&[])]);
+    ruling_recommit(&repo, "- 未知: batch:zz\n", &[ruling_row(&[("done", "\"policy:zz を引く\"")])]);
+    let (bd, _) = ruling_bd(&state, "bd-serving", Some(&ruling_ledger_json()));
+    let err = stderr_of(&ruling_run("intake", &repo, &state, Some(&bd), None));
+    assert!(err.contains("pipe: ruling-unresolved 解けない裁定 id の引用 2 件（設計の節: batch:zz／契約表の行: policy:zz）"), "{err}");
+    clean(&[&repo, &state]);
+}
+
+/// 台帳に無い batch: と policy:（2 字面）・一覧に載せない字面（一覧に載せた別の toy repo の通る歯と同じ字面）・backtick の囲み・逐語の欄
+/// にだけ在る問い id の形は、どれも rc 1 で断られ、書式は字面を外さない（節 5 字面）。
+#[test]
+fn pipe_intake_ruling_refuses_named_forms_unlisted_fixtures_backticks_and_verbatim_only_ids() {
+    let (repo, state) = ruling_repo("ruling-check = true\n", "本文。", &[ruling_row(&[])]);
+    let bad = "- 台帳に無い: batch:zz と policy:zz\n- 一覧に載せない見本: batch:fix\n- 囲み: `batch:tick`\n- 逐語の欄にだけ在る: s2-q.3:20260930T0200Z-1\n";
+    ruling_recommit(&repo, bad, &[ruling_row(&[])]);
+    let (bd, _) = ruling_bd(&state, "bd-serving", Some(&ruling_ledger_json()));
+    let err = stderr_of(&ruling_run("intake", &repo, &state, Some(&bd), None));
+    let ids = "batch:fix,batch:tick,batch:zz,policy:zz,s2-q.3:20260930T0200Z-1";
+    assert!(err.contains(&format!("pipe: ruling-unresolved 解けない裁定 id の引用 5 件（設計の節: {ids}）")), "5 字面 5/5: {err}");
+    clean(&[&repo, &state]);
+}
+
+/// ruling-check の key を持たない repo（key 無し・false）は、節にも行にも解けない引用を書いても通り、台帳 client を 1 度も起こさない。
+#[test]
+fn pipe_intake_ruling_without_the_key_passes_and_never_reads_the_ledger() {
+    let bad = "- 未知: s2-q.9:20260930T0000Z-1 と batch:zz と user 2026-09-30T05:00Z\n";
+    for (extra, label) in [("", "key 無し"), ("ruling-check = false\n", "false")] {
+        let (repo, state) = ruling_repo(extra, "本文。", &[ruling_row(&[])]);
+        ruling_recommit(&repo, bad, &[ruling_row(&[("done", "\"policy:zz を引く\"")])]);
+        let (bd, log) = ruling_bd(&state, "bd-serving", Some(&ruling_ledger_json()));
+        let checked = ruling_run("preflight", &repo, &state, Some(&bd), None);
+        assert_eq!(tail_line(&checked), "preflight: ok", "{label}: {}", stdout_of(&checked));
+        let taken = ruling_run("intake", &repo, &state, Some(&bd), None);
+        assert_eq!(taken.status.code(), Some(i32::from(RC_OK)), "{label}: {}", stderr_of(&taken));
+        assert_eq!(ruling_calls(&log), 0, "{label}: 台帳の client を起こさない");
+        clean(&[&repo, &state]);
+    }
+}
+
+/// 引用を 1 件も持たない契約の周は、ruling-check が true でも台帳を読まない（偽の bd の呼び出しの回数 0）。
+#[test]
+fn pipe_intake_ruling_without_a_citation_never_reads_the_ledger() {
+    let (repo, state) = ruling_repo("ruling-check = true\n", "本文。", &[ruling_row(&[])]);
+    let (bd, log) = ruling_bd(&state, "bd-serving", Some(&ruling_ledger_json()));
+    let checked = ruling_run("preflight", &repo, &state, Some(&bd), None);
+    assert_eq!(tail_line(&checked), "preflight: ok", "{}", stdout_of(&checked));
+    let taken = ruling_run("intake", &repo, &state, Some(&bd), None);
+    assert_eq!(taken.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&taken));
+    assert_eq!(ruling_calls(&log), 0, "引用の無い周は台帳を読まない（母集団: 事前審査 1 周と受付 1 周）");
+    clean(&[&repo, &state]);
+}
+
+/// 台帳を読めない周（client が rc 3 で落ちる）は同じ値 `ruling-unresolved` の rc 2 で断られ、通らない。対照: 台帳が読める周は同じ契約が
+/// rc 1（解けない引用）で、rc 2 は読めなさの側から来る。
+#[test]
+fn pipe_intake_ruling_unreadable_ledger_is_refused_with_rc_2() {
+    let (repo, state) = ruling_repo("ruling-check = true\n", "本文。", &[ruling_row(&[])]);
+    ruling_recommit(&repo, "- 未知: batch:zz\n", &[ruling_row(&[])]);
+    let (bd, log) = ruling_bd(&state, "bd-failing", None);
+    let taken = ruling_run("intake", &repo, &state, Some(&bd), None);
+    let err = stderr_of(&taken);
+    assert_eq!(taken.status.code(), Some(i32::from(RC_BROKEN)), "読めない台帳は rc 2: {err}");
+    assert!(err.contains("pipe: ruling-unresolved 裁定 id の引用を測れない（ledger）"), "{err}");
+    assert_eq!((run_dirs(&state).len(), event_count(&state), ruling_calls(&log)), (0, 0, 1), "通らない（run dir も event も無い）");
+    let checked = ruling_run("preflight", &repo, &state, Some(&bd), None);
+    assert_eq!(checked.status.code(), Some(i32::from(RC_BROKEN)), "{}", stdout_of(&checked));
+    assert_eq!(fact_lines(&checked, "refuse=").len(), 1, "{}", stdout_of(&checked));
+    assert_eq!(tail_line(&checked), "preflight: broken", "{}", stdout_of(&checked));
+    let (readable, _) = ruling_bd(&state, "bd-serving", Some(&ruling_ledger_json()));
+    let control = ruling_run("intake", &repo, &state, Some(&readable), None);
+    assert_eq!(control.status.code(), Some(i32::from(RC_REFUSED)), "対照: 読める台帳では同じ契約が rc 1: {}", stderr_of(&control));
+    clean(&[&repo, &state]);
+}
+
+/// `--bd` を明示した周は名指した client を撃ち（既定の bd の見張りは撃たれない）、明示しない周は既定の bd を撃つ。受付も事前審査も同じ。
+#[test]
+fn pipe_intake_ruling_bd_flag_names_the_client_and_the_default_is_the_fallback() {
+    let (repo, state) = ruling_repo("ruling-check = true\n", "本文。", &[ruling_row(&[])]);
+    ruling_recommit(&repo, "- 未知: batch:zz\n", &[ruling_row(&[])]);
+    let (bd, log) = ruling_bd(&state, "bd-serving", Some(&ruling_ledger_json()));
+    for verb in ["preflight", "intake"] {
+        let (fake, watch) = (ruling_calls(&log), crate::toolbox_ledger_record_names(&state).len());
+        let named = ruling_run(verb, &repo, &state, Some(&bd), None);
+        assert_eq!(named.status.code(), Some(i32::from(RC_REFUSED)), "{verb}: {}{}", stdout_of(&named), stderr_of(&named));
+        assert_eq!((ruling_calls(&log), crate::toolbox_ledger_record_names(&state).len()), (fake + 1, watch), "{verb}: 名指した client だけを撃つ");
+        let plain = ruling_run(verb, &repo, &state, None, None);
+        assert_eq!(plain.status.code(), Some(i32::from(RC_BROKEN)), "{verb}: 既定の bd は見張りで落ちる: {}{}", stdout_of(&plain), stderr_of(&plain));
+        assert_eq!((ruling_calls(&log), crate::toolbox_ledger_record_names(&state).len()), (fake + 1, watch + 1), "{verb}: 既定の bd を撃つ");
+    }
+    clean(&[&repo, &state]);
+}
+
+/// 判定の順（約束 1）その 1: entrance-not-red に当たる契約に解けない引用を足すと、事前審査の `refuse=` が entrance-not-red →
+/// ruling-unresolved の順で、受付は entrance-not-red で断る。
+#[test]
+fn pipe_intake_ruling_order_puts_the_citation_after_entrance_not_red() {
+    let row = table_row("t", &[("write-set", BASE_RUN_WRITE_SET), ("verify", BASE_RUN_VERIFY), ("done", "\"t は batch:zz を引く\"")]);
+    let (repo, state) = ruling_repo("entrance-flip = \"deny\"\nruling-check = true\n", "本文。", &[row]);
+    let (path, _) = fake_cargo(&state, "cargo-green", &[("derive_", "exit 0"), ("other_", "exit 4")]);
+    let (bd, _) = ruling_bd(&state, "bd-serving", Some(&ruling_ledger_json()));
+    let checked = ruling_run("preflight", &repo, &state, Some(&bd), Some(&path));
+    let names: Vec<String> =
+        fact_lines(&checked, "refuse=").iter().map(|line| line.split(':').next().unwrap_or_default().to_owned()).collect();
+    assert_eq!(names, ["refuse=entrance-not-red", "refuse=ruling-unresolved"], "{}", stdout_of(&checked));
+    let taken = ruling_run("intake", &repo, &state, Some(&bd), Some(&path));
+    assert_eq!(taken.status.code(), Some(i32::from(RC_REFUSED)), "{}", stderr_of(&taken));
+    assert!(stderr_of(&taken).starts_with("pipe: entrance-not-red "), "受付は先頭の 1 件: {}", stderr_of(&taken));
+    clean(&[&repo, &state]);
+}
+
+/// 判定の順その 2: live な便と write-set が重なる契約に解けない引用を足すと、事前審査の `refuse=` が ruling-unresolved →
+/// write-set-overlap の順（置き場が要る判定の前に引用を撃つ）。
+#[test]
+fn pipe_intake_ruling_order_puts_the_citation_before_the_overlap() {
+    let live = derive_row("a", &[("verify", "[\"cargo nextest run -p toy --no-tests=fail derive_\"]")]);
+    let (repo, state) = ruling_repo("ruling-check = true\n", "本文。", &[live.clone(), ruling_row(&[])]);
+    let first = intake_raw(&repo, &state, "docs/design/toy.md#a", "s2-live");
+    assert_eq!(first.status.code(), Some(i32::from(RC_OK)), "live な便を 1 本置く: {}", stderr_of(&first));
+    ruling_recommit(&repo, "本文。", &[live, ruling_row(&[("done", "\"t は batch:zz を引く\"")])]);
+    let (bd, _) = ruling_bd(&state, "bd-serving", Some(&ruling_ledger_json()));
+    let checked = ruling_run("preflight", &repo, &state, Some(&bd), None);
+    let names: Vec<String> =
+        fact_lines(&checked, "refuse=").iter().map(|line| line.split(':').next().unwrap_or_default().to_owned()).collect();
+    assert_eq!(names, ["refuse=ruling-unresolved", "refuse=write-set-overlap"], "{}", stdout_of(&checked));
+    clean(&[&repo, &state]);
+}

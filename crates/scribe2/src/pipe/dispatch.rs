@@ -557,7 +557,7 @@ fn measure(input: &Input<'_>) -> (Turn, Option<Read>) {
             launched: (!unreadable).then_some(marks.launched),
             events,
             closed: issues.iter().filter(|issue| issue.status == CLOSED).map(|issue| issue.id.as_str()).collect(),
-            materials: Materials::of(input.repo, input.manifest),
+            materials: Materials::of(input.repo, input.manifest, input.bd),
         };
         let mut ready: BTreeMap<String, (Pointer, Contract)> = BTreeMap::new();
         let mut candidates: Vec<Candidate> = Vec::new();

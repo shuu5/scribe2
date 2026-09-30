@@ -18,9 +18,10 @@
 
 use super::base_run::BaseRun;
 use super::intake::{ceiling_of, early, generated, judge, read_args, Denial, Judged, Material, Materials};
-use super::state_dir_of;
+use super::{flag, refused, state_dir_of};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
 use crate::rules::manifest::Manifest;
+use crate::seat::ledger::DEFAULT_BD;
 
 /// 末尾の判定行の書き出し。
 const TAIL: &str = "preflight:";
@@ -48,7 +49,12 @@ pub(super) fn preflight(args: &[String], manifest: &Manifest) -> Outcome {
     // **repo の材料の読みは 1 回**（設計 dispatcher.md §5）。生成も判定も同じ 1 つを借りる。材料の読みの
     // 断り（tracked を読めない・宣言が上限に外れる）は、`s2-07l.366` の前は [`generated`] の中で立って
     // いた＝**末尾の判定行は同じ 1 本で積む**（C2・積み忘れると「対象が揃わなかった周」だけ末尾を失う）。
-    let materials = match Materials::read(&repo, &ceiling.borrow()) {
+    // 台帳の client は受付と同じ（`--bd` を明示した周はその名・無ければ既定の名・読むのは引用を持つ契約が出たときだけ）。
+    let bd = match flag(args, "--bd") {
+        Ok(found) => found.unwrap_or(DEFAULT_BD),
+        Err(reason) => return refused(reason),
+    };
+    let materials = match Materials::read(&repo, &ceiling.borrow(), bd) {
         Ok(found) => found,
         Err(denial) => return tailed(denial),
     };

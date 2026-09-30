@@ -132,9 +132,10 @@ const PLACE: [Allowed; 3] = [value("--state-dir"), value(REPO_FLAG), value("--ru
 
 /// `pipe intake` が受ける flag（設計 pipeline.md §14 約束 5・以下 subcommand の宣言順）。
 const ALLOWED_INTAKE: &[cli_args::Allowed] =
-    &[PLACE[0], PLACE[1], PLACE[2], value("--design"), value("--bead"), value("--contract"), value("--lens")];
+    &[PLACE[0], PLACE[1], PLACE[2], value("--design"), value("--bead"), value("--contract"), value("--lens"), TOOLS[0]];
 /// `pipe preflight`。
-const ALLOWED_PREFLIGHT: &[cli_args::Allowed] = &[PLACE[0], PLACE[1], PLACE[2], value("--design"), value("--bead"), value("--contract")];
+const ALLOWED_PREFLIGHT: &[cli_args::Allowed] =
+    &[PLACE[0], PLACE[1], PLACE[2], value("--design"), value("--bead"), value("--contract"), TOOLS[0]];
 /// `pipe spawn`。
 const ALLOWED_SPAWN: &[cli_args::Allowed] = &[PLACE[0], PLACE[1], PLACE[2], value("--run"), value("--runner"), value("--curl")];
 /// `pipe approve`（記帳が成った周は列を 1 周撃つ＝道具も受ける）。
