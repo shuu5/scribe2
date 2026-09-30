@@ -36,7 +36,7 @@ const PINNED: &str = "pinned";
 /// 違反が 1 つ以上の周に行の末尾へ 1 回添える直す形。
 const FIX: &str = "top は bdw update <top> --parent <epic> か --type epic・親 2 つと親の輪は bdw update <子> --parent \
                    <epic> で 1 本に置き換える・溢れは bdw create <題> --type epic --parent <親> の子 epic へ付け替える・\
-                   close-eligible は bdw close <epic>";
+                   close-eligible は bdw close <epic> --reason 完了";
 
 /// 親をたどった行き先。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

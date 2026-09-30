@@ -259,7 +259,7 @@ ruling = \"user 2026-09-27T17:33Z 項 2-3\"\nruled_at = \"2026-09-27\"\n";
 
 /// 違反が 1 つ以上の周に行の末尾へ 1 回付く直す形。
 const FIX: &str = " — top は bdw update <top> --parent <epic> か --type epic・親 2 つと親の輪は bdw update <子> --parent <epic> \
-で 1 本に置き換える・溢れは bdw create <題> --type epic --parent <親> の子 epic へ付け替える・close-eligible は bdw close <epic>";
+で 1 本に置き換える・溢れは bdw create <題> --type epic --parent <親> の子 epic へ付け替える・close-eligible は bdw close <epic> --reason 完了";
 
 /// 埋め込みの manifest の写しの上限の行を `row` に替えて置き場に書き、その path を返す。
 #[expect(
