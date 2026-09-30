@@ -372,6 +372,51 @@ memo か契約かを「label が在るか」と「受入条件に設計の 1 行
 - 自分を締め出す順: 行 n は fleet-event-log の行 h（bind）と dialogue-surface の行 j（答えの口）の着地と PATH の binary の入れ替えの後に走る（台帳の依存で持つ）。先に着くと席が裁定を残す道が無くなる。
 - 着地の後: PATH の binary を入れ替える（入れ替えの script で）。同じ host の消費側の席へ先に「notes の `$(...)` と `--stdin` は断られる・`note --file` を使う」を知らせ、`.beads/PRIME.md` の R1 に「本文が file なら `scripts/bdw note <id> --file F`」の 1 句を docs PR で足す。
 
+## 19. 局面の出力の読み手 1 本と doctor の 3 行・上限を越えた memo の notes の名指し・memo の rules 行 3 本（契約表の行 o・[FR51](../../design-intent/spec/srs.html#FR51) / FR88 / FR94 / FR87・AC57・AC58・AC60・ADR-0088 / ADR-0089）
+
+やさしく言うと: 局面の出力（器が 1 か所で計算した案件ごとの段と手番の file）を読む関数を 1 本だけ置き、読み手ごとに「出力が今の台帳・記録・main より古くないか」を同じ手で確かめる。doctor はその関数で、未仕分けの発話・処置を待つ memo・席の番のまま閾値を越えた案件の 3 行を出す。notes が大きすぎる memo も名指す。memo の審査の間隔と本数の rules 行もここで足す。
+
+- 何が起きているか（main 46b1f91f・verified）:
+  - doctor の台帳の行は `--repo` を渡した周だけ出る（`crates/scribe2-boundary/src/main.rs`）。`ledger:`・`ledger-graph:`・`ledger-form:` の 3 行を、`crates/scribe2/src/ledger/lint.rs` の `doctor_lines` が台帳の 1 回の読み（`one_read`）の中で出す。
+  - 既存の歯は、`ledger-form:` が末尾で graph の行が lint の行の直後にあること、`ledger:` の行の字の完全一致（lint.rs の in-file の歯と e2e）、`--state-dir` だけの doctor の総行数を見る。`--state-dir` と `--repo` の両方を渡す doctor の歯は 0 本。
+  - 境界の crate は 283/316 行（R-C4-5）。core は 64039/74000 行（R-C4-1）。
+  - open な memo 34 本のうち notes が 8192 byte を越えるものは 4 本、最大 44120 byte（bd の JSON の notes の byte 長・2026-09-30）。
+  - 局面の出力（`<state_dir>/fleet/lifecycle.json` と `lifecycle.stale`）の書き手・印の読み・前の出力の読みは case-lifecycle.md 行 c（§12・未着地）が置く。読み手ごとに比べる印の組は case-lifecycle §15 の表が決め、表を執行する読み手の 1 本はまだ無い。
+  - rules 行 `memo.notes_max_bytes`（値 8192・裁定 user 2026-09-30T04:25Z）と `memo.triage_interval_h`・`memo.triage_per_round`（値 24 と 2・裁定 user 2026-09-28T07:27Z＝1 周に 2 本まで・1 本の memo は 24 時間に 1 回まで）は manifest に無い。
+- 前提（doc を跨ぐ順は台帳の依存で表す）: case-lifecycle.md 行 c の着地の後。dispatcher.md 行 an（rules の末尾の行）の着地の後（直す末尾の pin の歯の名が決まる）。
+- 約束（番号は done と 1:1）:
+  1. 読み手 1 本（`crates/scribe2/src/fleet/lifecycle_read.rs`・`crates/scribe2/src/fleet/mod.rs` に `pub mod` の 1 行）が、置き場と比べる印の種類の組（台帳・event log・main の部分集合）を受け、閉じた 3 値を返す: 無い（`lifecycle.json` が無い）・読めない（json か stale が読めない）・読めた（部品の列・owned・入力の印と、古い理由の種類の列）。
+     - 読む順は stale → json（case-lifecycle §5.2）。json の読みは行 c の出力の読み（`fleet lifecycle show` が使う 1 本）を使い、写しを持たない。今の印は行 c の印の読み（manifest の 1 file・event log の長さと 1 行目・main の ref）で読み、台帳も git も撃たない。
+     - 行 c のどちらの読みも、行 c の中で fleet の兄弟の file（口と書き手）から呼ばれるので、fleet の中から呼べる可視性で在る見込み。行 c の file は本行の write-set に入れない（行 c の着地の前の CI で解けない）。起票の前に行 c の着地の姿で可視性を測り、足りなければ行 c の file を素の path で本行の write-set へ足してから起票する。
+     - 古い理由の種類: 古さの印の種類（ledger-gate・merge-gate・unreadable）が在ればその語、比べる印の今の値が出力の入力の印と違えば `ledger`・`events`・`main`。並びはこの順。
+     - dispatcher.md 行 aq・ar と seat-heartbeat.md 行 ac は、この 1 本を呼ぶ（写しを持たない・C2）。
+  2. doctor は `--state-dir` と `--repo` の両方を渡した周だけ、台帳の 3 行の前に局面の出力から 3 行を出す（`ledger-form:` は末尾のまま）。比べる印は台帳・event log・main の 3 つ（§15 の表）。
+     - `lifecycle-utterance: unsorted=<n> oldest=<ts|-> request=<n> chat=<n>`（FR88・未仕分けの数と最古・仕分けの行き先ごとの数）。
+     - `lifecycle-memo: open=<n> actionable=<n> oldest=<memo id>:<n>h|-`（FR51・処置の待ちの本数と最古の年齢）。
+     - `lifecycle-owned: count=<n> oldest=<部品>:<id>:<局面>:<n>h|-`（FR94・出力が持つ件数と最古をそのまま写す）。
+     - 古い周は各行の末尾に ` stale=<種類,…>`。出力が無いか読めない周は `<頭> unreadable reason=<absent|unparsed>` で件数を出さない（C10）。
+  3. 境界の crate の変更は、台帳の行の呼び出しに state dir を渡す 1 行の書き換えだけ（R-C4-5 を増やさない）。判定と字は core に置く。
+  4. `ledger:` の行に、notes の byte が rules 行 `memo.notes_max_bytes` を越えた open な memo の数 ` oversized=<n>` を `unpointed=<n>` の後ろに、id の列 ` oversized:<id>,…` を `unpointed:` の列の後ろに足す。行を読めない周は `oversized=no-rule`（0 に畳まない）。門では止めない（ADR-0089）。
+  5. rules 行 3 本を manifest の末尾に足す（kind は `ALL` の末尾に同じ順・Int・enabled）: `memo.notes_max_bytes`（8192・裁定 user 2026-09-30T04:25Z）・`memo.triage_interval_h`（24・裁定 user 2026-09-28T07:27Z）・`memo.triage_per_round`（2・同じ裁定）。後の 2 本は dispatcher.md 行 aq が読む（rules の末尾を直す便を 1 本にまとめる）。
+- 閉包: 本行は `RuleKind` に kind を 3 つ足すので touches に `RuleKind` を持ち、write-set に閉包を持つ。本行の `+` の file は `EventKind`・`Stage`・`WaitReason` の変種と `Issue`・`Turn` の literal を名指さない。rules 行は id の字で引く。
+- 歯:
+  - e2e（既存の `crates/scribe2-boundary/tests/e2e/ledger.rs`・接頭辞 `ledger_doctor_lifecycle_`・5 本・出力は行 c の書き直しの口で偽の台帳と置き場から作る〔手書きの JSON を使わない〕）: (a) 3 行の件数と最古・処置の無い昇格の判定の memo と、昇格の行の契約が全部取り下げで閉じた memo の 2 本が `actionable` に入る（AC57） (b) 古さの印を置いた周の `stale=ledger-gate`（同じ歯の印の無い周は `stale=` が無い） (c) 印の無い台帳の変化で `stale=ledger` (d) 出力の無い置き場で `unreadable reason=absent` の 3 行 (e) `--state-dir` の無い周は 3 行が無い（同じ歯の両方を渡す周は在る）。
+  - e2e（同じ file・接頭辞 `ledger_lint_oversized_`・3 本）: (f) 8193 byte の memo を名指し、8192 byte の memo は名指さない (g) 行の無い manifest で `oversized=no-rule`（同じ歯の行の在る manifest は数） (h) closed の memo は数えない（同じ歯の open の memo は数える）。
+  - lib（`crates/scribe2/src/fleet/lifecycle_read.rs` の末尾の歯の区間・接頭辞 `lifecycle_read_`・5 本）: (i) 無い・読めない・読めたの 3 値 (j) 古さの印の 3 種がそのまま理由の語になる (k) 比べる組に無い印の違いは理由にしない（events だけの組で台帳の違いは古くない） (l) 読む順が stale → json（stale を読めない置き場は json が在っても読めない） (m) 理由の並びの順。
+  - rules（既存の `crates/scribe2-boundary/tests/e2e/rules.rs`・接頭辞 `rules_memo_rows_`・1 本）: (n) 3 行の id・kind・Int・値・enabled・裁定 id と裁定日、`ALL` の末尾 3 つと manifest の末尾 3 行がこの順、文字列の値の写しは形と合わないで断られる。
+  - 直す既存の歯（便の base で数え直す・どれも直した期待が base で落ちるので retroactive の札は要らない）: `ledger:` の字を見る lint.rs の in-file の歯（`ledger_lint_judge_counts_each_defect_apart`）と e2e の歯（`ledger_lint_` の 4 本）と境界の crate の in-file の歯 `ledger_lint_doctor_external_form` の snapshot・rules の行数と kind の数と末尾を pin する歯（`rules_embedded_manifest_is_valid_and_covers_all_kinds`・`rules_embedded_manifest_declares_one_capability_row_per_role`・`rules_embedded_manifest_declares_host_guard_kinds_at_the_tail_of_all`・`class_derive_embedded_row_carries_the_ruled_three_elements_and_ruling_id`・行 an の `rules_drafts_cap_` の末尾の pin・外形の snapshot）。
+  - base で RED: 行も key も rules 行も無い（機能不在）。
+- 触らない: `ledger-graph:` の行・起票の門・`--repo` だけと `--state-dir` だけの doctor の行と行数・台帳の形の (iv)〜(viii)。
+- 限界:
+  - 3 行は両方を渡した周だけ出る。片方の周は、出力の在り処か台帳の印の読み元が無い。
+  - request と chat の数は出力が持つ窓（`lifecycle.closed_window_h`）の中の数で、通算ではない。
+  - 台帳の形の (viii)（辿れる契約が全部閉じた open な memo）は残す。代わりになる memo の自動の close（FR93）の行はまだ無いので、その行が (viii) を消す。(vi)（§ か本文が memo を名指すのに辺の無い契約）は局面の出力が § の散文を読まないので代わりが無く、残す。
+  - 台帳の印が files の形の置き場は、読みで更新時刻が動くと古いと出うる（case-lifecycle §5.3）。
+- 却下:
+  - `ledger:` の行に actionable を混ぜる案。台帳の lint は台帳だけから判じる純関数で、古さの意味が混ざる。
+  - 3 行を `--state-dir` だけの周にも出す案。総行数の歯が動き、台帳の印を比べられない。
+  - 読み手ごとに比べを書く案。4 つの読み手が同じ比べを写す（C2）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -562,4 +607,16 @@ verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail hook
 growth = ["crates/scribe2/src/hook/ledger_guard/notes.rs:170", "crates/scribe2/src/hook/ledger_guard.rs:10", "crates/scribe2/src/ledger/close_reason.rs:40", "crates/scribe2-boundary/tests/e2e/hook/guards.rs:190"]
 size = "M"
 done = "(1) close_reason.rs の is_ruling_id の隣に、| で割った欄のどれかが裁定 id なら裁定の行とする判定 1 本が在り、門はそれだけを呼ぶ (2) 判定は ledger_guard の子 module が segment の語と cwd から読む関数だけを受けて持ち、bd / bdw の update と create の --notes・--append-notes（空白形と = 形・複数・値は次の語を無条件）と note の本文の語と --file の file を読み、Write・Create・Refusal を名指さない (3) 裁定の行を含む書きは notes-ruling-line、--stdin・値の無い flag・開けない file・$ か backtick を含む値は notes-unreadable で deny し、断り文は既存の形の 1 行で器の口の名か note --file を告げ ledger-form.md §18 を指す (4) 段は create の段の後・6 形の前 (5) WRITES に note が在る 歯: hook_notes_ruling_ の e2e が 6 形（create の --notes を含む）× bd と bdw の 12 本の notes-ruling-line と - で始まる値、読めない 5 形（値の無い flag を含む）× 2 経路の 10 本の notes-unreadable（どれも rc 2・stdout 0 byte・stderr 1 行・記録 1 行で、stderr が §18 と語ごとの案内の字を含む）、裁定の行を含まない notes と --design / -d の裁定の行の rc 0、update --notes の裁定の行が notes-replace でなく notes-ruling-line、見出しを欠く memo の create の裁定の行が no-source、埋め込みの rules の bd note の bd-outside-bdw を測り、撃った数を母集団として出す。lib の hook_notes_ruling_ が値の対と note の語の繋ぎと読めない字を、ruling_line_ が欄の数に依らない真と散文・空の欄・接頭辞の違う id の偽を測る。既存の hook_ledger_write_passes_the_near_misses と host_guard_ledger_four_forms_hit_with_the_gate_words が緑。base は門が notes を読まず rc 0 で通るので RED"
+
+[[contract]]
+id = "o"
+title = "局面の出力の読み手 1 本（置き場と比べる印の組を受け、無い・読めない・読めたと古い理由の種類の列を返す）と doctor の 3 行 lifecycle-utterance: / lifecycle-memo: / lifecycle-owned:（--state-dir と --repo の両方の周だけ・古い周は stale=・無いか読めない周は unreadable reason=）・ledger: の行の oversized= と oversized: の列・rules 行 memo.notes_max_bytes / memo.triage_interval_h / memo.triage_per_round（§19）"
+req = ["FR51", "FR88", "FR94", "FR87", "AC57", "AC58", "AC60"]
+section = "19"
+touches = ["crate::rules::RuleKind"]
+write-set = ["+crates/scribe2/src/fleet/lifecycle_read.rs", "crates/scribe2/src/fleet/mod.rs", "crates/scribe2/src/ledger/lint.rs", "crates/scribe2/src/rules/mod.rs", "rules/manifest.toml", "crates/scribe2-boundary/src/main.rs", "crates/scribe2-boundary/src/snapshots/scribe2__tests__ledger_lint_doctor_external_form.snap", "crates/scribe2-boundary/tests/e2e/ledger.rs", "crates/scribe2-boundary/tests/e2e/rules.rs", "crates/scribe2-boundary/tests/e2e/rules/embedded.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__rules__rules_external_form.snap"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail ledger_doctor_lifecycle_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail ledger_lint_oversized_", "cargo nextest run -p scribe2 --lib --no-tests=fail lifecycle_read_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_memo_rows_", "cargo nextest run -p scribe2-boundary --bin scribe2 --no-tests=fail ledger_lint_doctor_external_form", "cargo nextest run -p scribe2 --lib --no-tests=fail ledger_lint_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail ledger_lint_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail class_derive_embedded_row_carries_the_ruled_three_elements_and_ruling_id", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_embedded_manifest_declares_host_guard_kinds_at_the_tail_of_all", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_embedded_manifest_is_valid_and_covers_all_kinds", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_embedded_manifest_declares_one_capability_row_per_role", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_external_form"]
+size = "L"
+growth = ["crates/scribe2/src/fleet/lifecycle_read.rs:210", "crates/scribe2/src/fleet/mod.rs:1", "crates/scribe2/src/ledger/lint.rs:60", "crates/scribe2/src/rules/mod.rs:12", "crates/scribe2-boundary/src/main.rs:1"]
+done = "(1) 読み手 1 本（行 o の + の file・fleet/mod.rs に pub mod の 1 行）が置き場と比べる印の種類の組（台帳・event log・main の部分集合）を受けて閉じた 3 値（無い・読めない・読めた）を返し、読めた値は部品の列・owned・入力の印と古い理由の種類の列を持ち、読む順は stale → json、json は case-lifecycle 行 c の出力の読み（fleet lifecycle show が使う 1 本）を・今の印は行 c の印の読みを呼んで写しを持たず（どちらも fleet の中の兄弟から呼ばれる可視性で在り、行 c の file は変えない）、台帳も git も撃たず、古い理由は古さの印の種類（ledger-gate・merge-gate・unreadable）と比べる組のうち今の値が出力の入力の印と違う種類（ledger・events・main）をこの順に並べる (2) doctor は --state-dir と --repo の両方を渡した周だけ台帳の 3 行の前に lifecycle-utterance: unsorted=<n> oldest=<ts|-> request=<n> chat=<n>・lifecycle-memo: open=<n> actionable=<n> oldest=<memo id>:<n>h|-・lifecycle-owned: count=<n> oldest=<部品>:<id>:<局面>:<n>h|- の 3 行を出し（比べる印は 3 つ全部・ledger-form: は末尾のまま）、古い周は各行の末尾に stale=<種類,…>、出力が無いか読めない周は <頭> unreadable reason=<absent|unparsed> で件数を出さない (3) 境界の crate の変更は台帳の行の呼び出しに state dir を渡す 1 行の書き換えだけで、判定と字は core に置く (4) ledger: の行の unpointed=<n> の後ろに oversized=<n>（notes の byte が rules 行 memo.notes_max_bytes を越えた open な memo の数）を、unpointed: の列の後ろに oversized:<id>,… を足し、行を読めない周は oversized=no-rule で 0 に畳まず、門では止めない (5) rules 行 3 本を manifest の末尾に足し（kind は ALL の末尾に同じ順・Int・enabled）、memo.notes_max_bytes は 8192（裁定 user 2026-09-30T04:25Z）・memo.triage_interval_h は 24 と memo.triage_per_round は 2（裁定 user 2026-09-28T07:27Z） 歯: ledger_doctor_lifecycle_ の e2e 5 本（既存の ledger.rs・出力は行 c の書き直しの口で偽の台帳と置き場から作る）の (a) 3 行の件数と最古と、処置の無い昇格の判定の memo と昇格の行の契約が全部取り下げで閉じた memo の 2 本が actionable に入る (b) 古さの印を置いた周の stale=ledger-gate と同じ歯の印の無い周に stale= が無い (c) 印の無い台帳の変化で stale=ledger (d) 出力の無い置き場で unreadable reason=absent の 3 行 (e) --state-dir の無い周は 3 行が無く同じ歯の両方を渡す周は在る、ledger_lint_oversized_ の e2e 3 本（同じ file）の (f) 8193 byte の memo を名指し 8192 byte の memo は名指さない (g) 行の無い manifest で oversized=no-rule と同じ歯の行の在る manifest は数 (h) closed の memo は数えず同じ歯の open の memo は数える、lifecycle_read_ の lib 5 本（行 o の + の file の末尾の歯の区間）の (i) 無い・読めない・読めたの 3 値 (j) 古さの印の 3 種がそのまま理由の語 (k) 比べる組に無い印の違いは理由にしない (l) stale を読めない置き場は json が在っても読めない (m) 理由の並びの順、rules_memo_rows_ の e2e 1 本（既存の rules.rs）の (n) 3 行の id・kind・Int・値・enabled・裁定 id と裁定日と、ALL の末尾 3 つと manifest の末尾 3 行がこの順で、文字列の値の写しは断られる、直す既存の歯は ledger: の字を見る lint.rs の in-file の歯と e2e の歯と境界の crate の ledger_lint_doctor_external_form の snapshot と、rules の行数と kind の数と末尾を pin する歯（rules_embedded_manifest_is_valid_and_covers_all_kinds・rules_embedded_manifest_declares_one_capability_row_per_role・rules_embedded_manifest_declares_host_guard_kinds_at_the_tail_of_all・class_derive_embedded_row_carries_the_ruled_three_elements_and_ruling_id・rules_external_form の snapshot と、便の base で末尾を pin する歯〔dispatcher 行 an と case-lifecycle 行 c が足す末尾の pin〕を数え直して verify に足す）で、どれも直した期待が base で落ちるので retroactive の札は要らない・base は行も key も rules 行も無いので RED（機能不在）"
 <!-- contracts:end -->
