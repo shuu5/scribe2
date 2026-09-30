@@ -39,7 +39,7 @@ pub use check::{check_promises, check_table, requirement_ids};
 pub use parse::{
     contract_id, find_row, form_of, parse_pointer, promises_of, read_rows, read_table, Form, Pointer, PointerError,
 };
-pub(crate) use check::{check_repo, declared_files, read, read_all, repo_findings, tracked_files, Located};
+pub(crate) use check::{check_repo, declared_files, design_docs, read, read_all, repo_findings, tracked_files, Located};
 
 /// 区間の始まりの行（CLAUDE.md の憲法区間と同じ marker 形・行全体が marker の行だけを数える）。
 pub const BEGIN: &str = "<!-- contracts:begin -->";

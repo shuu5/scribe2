@@ -13,8 +13,9 @@ use super::declaration::Effective;
 use super::gate::{fill_holes, last_json_object, teeth_of};
 use super::land::MAIN_REF;
 use super::refuse;
+use super::table::{design_docs, read_table};
 use super::{
-    base_of_run, branch_name, contract_path, emit, git_line, plugin_path, record_cost, runner_stderr_path,
+    base_of_run, branch_name, contract_path, emit, git_bytes, git_line, plugin_path, record_cost, runner_stderr_path,
     runner_stdout_path, vessel_path, worktree_path, Budget, Emit, Question, RC_QUESTION,
 };
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
@@ -25,6 +26,7 @@ use crate::headless::{NO_VALUE, RC_RATE_LIMIT, RC_UNREACHABLE};
 use crate::name::{NAME, PLUGIN_DIR};
 use crate::pipe::contract::Contract;
 use crate::polarity::{OnFailure, Polarity, Timing};
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -450,12 +452,64 @@ pub fn common_lines(common: &[String], base: &str, verify: &[String]) -> String 
     if lines.is_empty() { "なし\n".to_owned() } else { lines.concat() }
 }
 
-/// runner の stdin に流す本文 = 契約の写し（再読）+ 「共通 verify」節 + 回答済みの質問が在れば「回答」節 +
-/// 途中再開なら「途中再開」節 + 追随の相手が在れば「追随」節。**順序は 契約 → 共通 verify → 回答 → 途中再開 →
-/// 追随**である（節の読み方は `headless/runner.txt` の雛形が持ち、ここは run ごとの値だけを載せる）。
+/// 「ほかの行の touches」節の本文（設計 reverse-index.md §15）: 便の **base の木**の契約表（[`design_docs`] の母集団）の
+/// 行の touches の項目を、契約 file の design（自分の行の pointer）の行を除いて並べる。anchor の作業木は読まない。
+/// 読めない周は理由の 1 行（runner は止めない）。
+fn touches_section(launch: &Launch<'_>, base: &str) -> String {
+    match touches_rows(launch.repo, base) {
+        Ok(rows) => touches_lines(&rows, &launch.contract.design),
+        Err(reason) => format!("（ほかの行の touches を読めない: {reason}）\n"),
+    }
+}
+
+/// 便の base の木の契約表の行ごとの（pointer `<doc>#<id>`・touches の列）。doc の順と行の順（読めない周は doc の path を
+/// 持つ理由）。
+fn touches_rows(repo: &Path, base: &str) -> Result<Vec<(String, Vec<String>)>, String> {
+    let listed = git_bytes(repo, &["ls-tree", "-r", "-z", "--name-only", base])
+        .ok_or_else(|| format!("base {base} の木を読めない"))?;
+    let tracked: Vec<String> =
+        String::from_utf8_lossy(&listed).split('\0').filter(|path| !path.is_empty()).map(str::to_owned).collect();
+    let mut rows = Vec::new();
+    for doc in design_docs(&tracked) {
+        let shown = git_bytes(repo, &["show", &format!("{base}:{doc}")])
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .ok_or_else(|| format!("{doc} を base から読めない"))?;
+        let (found, _) = read_table(doc, &shown).map_err(|errors| {
+            let first = errors.first().map(|error| error.reason()).unwrap_or_default();
+            format!("{doc} の区間を読めない: {first}")
+        })?;
+        rows.extend(found.into_iter().map(|row| (format!("{doc}#{}", row.id), row.touches)));
+    }
+    Ok(rows)
+}
+
+/// [`touches_section`] の本文の組み立て（行の pointer と touches の列・自分の pointer から・**pure**）。項目ごとに 1 行
+/// `- <項目> ← <pointer>, <pointer>`（項目は辞書順・pointer は受けた順で同じ pointer は 1 回・自分の pointer の行は
+/// 除く）。項目 0 は `なし`。
+pub fn touches_lines(rows: &[(String, Vec<String>)], own: &str) -> String {
+    let mut by_item: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for (pointer, touches) in rows.iter().filter(|(pointer, _)| pointer != own) {
+        for item in touches {
+            let pointers = by_item.entry(item.as_str()).or_default();
+            if !pointers.contains(&pointer.as_str()) {
+                pointers.push(pointer.as_str());
+            }
+        }
+    }
+    if by_item.is_empty() {
+        return "なし\n".to_owned();
+    }
+    by_item.iter().map(|(item, pointers)| format!("- {item} ← {}\n", pointers.join(", "))).collect()
+}
+
+/// runner の stdin に流す本文 = 契約の写し（再読）+ 「共通 verify」節 + 「ほかの行の touches」節 + 回答済みの質問が在れば
+/// 「回答」節 + 途中再開なら「途中再開」節 + 追随の相手が在れば「追随」節。**順序は 契約 → 共通 verify → ほかの行の
+/// touches → 回答 → 途中再開 → 追随**である（節の読み方は `headless/runner.txt` の雛形が持ち、ここは run ごとの値だけを
+/// 載せる）。
 fn prompt(launch: &Launch<'_>, base: &str) -> String {
     let mut body = std::fs::read_to_string(contract_path(launch.state_dir, launch.run)).unwrap_or_default();
     body.push_str(&format!("\n## 共通 verify\n{}", common_section(launch, base)));
+    body.push_str(&format!("\n## ほかの行の touches\n{}", touches_section(launch, base)));
     if let Some(Question { question, answer: Some(answer), .. }) = &launch.answered {
         body.push_str(&format!("\n## 回答\n- 質問: {question}\n- 回答: {answer}\n"));
     }

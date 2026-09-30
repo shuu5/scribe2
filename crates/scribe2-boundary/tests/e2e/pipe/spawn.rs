@@ -2032,3 +2032,111 @@ fn runner_common_section_says_none_for_an_empty_common_verify() {
     let one = vec!["git status".to_owned()];
     assert_eq!(vessel::pipe::spawn::common_lines(&one, "abc", &[]), "- git status\n", "1 行は項目");
 }
+
+// ───── runner の stdin にほかの行の touches の節（設計 reverse-index.md §15・行 f・接頭辞 `runner_touches_section_`） ─────
+
+/// 区間を持つ設計 doc（行 `id` ごとに touches の列を持つ）を repo の `rel` へ書く（commit は呼び手）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn write_touches_doc(repo: &Path, rel: &str, rows: &[(&str, &[&str])]) {
+    let fields: Vec<Vec<String>> = rows
+        .iter()
+        .map(|(id, touches)| {
+            let quoted: Vec<String> = touches.iter().map(|item| format!("\"{item}\"")).collect();
+            row_fields(id, &[], &[format!("touches = [{}]", quoted.join(", ")).as_str()])
+        })
+        .collect();
+    let path = repo.join(rel);
+    fs::create_dir_all(path.parent().expect("doc の dir が在る")).expect("doc の dir を作れる");
+    fs::write(&path, design_doc_rows(&fields)).expect("doc を書ける");
+}
+
+/// 自分の行（touches は型 1 つ・toy.md の行 a）を持つ repo に、別の doc の 2 行と子の dir の doc の 1 行を commit し、便を受け付けて
+/// 返す（repo・置き場・run id）。
+fn touches_intake() -> (PathBuf, PathBuf, String) {
+    let (repo, state) = repo_with_state();
+    write_touches_doc(
+        &repo,
+        "docs/design/other.md",
+        &[("b1", &["crate::other::Shared", "crate::other::helper"]), ("b2", &["crate::other::Shared"])],
+    );
+    write_touches_doc(&repo, "docs/design/child/deep.md", &[("c1", &["crate::child::Hidden"])]);
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "other-docs"]);
+    let design = write_contract(&repo, &[], &[r#"touches = ["crate::pipe::refuse::Refuse"]"#]);
+    let id = intake(&repo, &state, &design);
+    (repo, state, id)
+}
+
+/// runner が stdin を写して commit を 1 本作る周の stdin（runner は止まらず rc 0）。
+fn touches_spawn_stdin(repo: &Path, state: &Path, id: &str) -> String {
+    let copied = state.join("got-stdin.txt");
+    let runner = format!("cat > '{}' && {TOY_COMMIT}", copied.display());
+    let out = run_pipe(&[
+        "spawn", "--run", id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--runner", &runner,
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "runner は止まらない: {}", stderr_of(&out));
+    fs::read_to_string(&copied).unwrap_or_default()
+}
+
+/// stdin から「## ほかの行の touches」節の本文（次の節の見出しの手前まで）を取る。
+fn touches_body(stdin: &str) -> String {
+    let after = stdin.split("\n## ほかの行の touches\n").nth(1).unwrap_or_default();
+    after.split("\n## ").next().unwrap_or_default().to_owned()
+}
+
+/// (a) 自分の行・別の doc の 2 行・子の dir の doc の行を commit し、anchor の作業木だけに別の doc の行を足した repo の初回の
+/// stdin は、「## 共通 verify」節の後に「## ほかの行の touches」節を持つ。本文は 2 項目の 2 行（型は 2 つの pointer・fn は 1 つ）
+/// だけで、自分の行の型・子の dir の doc の型・未 commit の行の型を持たない。
+#[test]
+fn runner_touches_section_lists_other_rows_from_the_base_tree_without_own_row() {
+    let (repo, state, id) = touches_intake();
+    write_touches_doc(&repo, "docs/design/dirty.md", &[("d1", &["crate::dirty::Wip"])]);
+    let stdin = touches_spawn_stdin(&repo, &state, &id);
+    let (common_at, section_at) = (stdin.find("\n## 共通 verify\n"), stdin.find("\n## ほかの行の touches\n"));
+    assert!(matches!((common_at, section_at), (Some(c), Some(s)) if c < s), "共通 verify の後に節: {stdin}");
+    let want = "- crate::other::Shared ← docs/design/other.md#b1, docs/design/other.md#b2\n\
+                - crate::other::helper ← docs/design/other.md#b1\n";
+    assert_eq!(touches_body(&stdin), want, "2 項目の 2 行だけ: {stdin}");
+    for absent in ["Refuse", "Hidden", "Wip"] {
+        assert!(!touches_body(&stdin).contains(absent), "{absent} は載らない: {stdin}");
+    }
+    clean(&[&repo, &state]);
+}
+
+/// (b) 受付の後・spawn の前に別の doc の区間を壊して commit した便の節の本文は、doc の path を持つ理由の 1 行で、段は
+/// Implemented まで進む。
+#[test]
+fn runner_touches_section_says_why_when_a_doc_region_is_unreadable() {
+    let (repo, state, id) = touches_intake();
+    let broken = format!("# 壊れた doc\n\n{}\nこれは表ではない\n{}\n", vessel::pipe::table::BEGIN, vessel::pipe::table::END);
+    fs::write(repo.join("docs/design/other.md"), broken).unwrap_or_default();
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "break-other"]);
+    let stdin = touches_spawn_stdin(&repo, &state, &id);
+    let body = touches_body(&stdin);
+    assert!(
+        body.starts_with("（ほかの行の touches を読めない: docs/design/other.md") && body.trim_end().ends_with('）'),
+        "doc の path を持つ理由の 1 行: {stdin}"
+    );
+    assert_eq!(body.trim_end().lines().count(), 1, "本文は 1 行: {body}");
+    let last = stages(&state, &id).into_iter().next_back().and_then(|(stage, _)| stage);
+    assert_eq!(last, Some(Stage::Implemented), "段は Implemented まで進む");
+    clean(&[&repo, &state]);
+}
+
+/// (c) 組み立ての関数を直に撃つ。項目 0 は `なし` の 1 行・自分の pointer の行を除く・同じ項目の pointer を 1 行に束ねる
+/// （同じ pointer は 1 回・項目は辞書順）。
+#[test]
+fn runner_touches_section_lines_skip_own_row_and_bundle_pointers() {
+    let row = |pointer: &str, touches: &[&str]| {
+        (pointer.to_owned(), touches.iter().map(|item| (*item).to_owned()).collect::<Vec<_>>())
+    };
+    assert_eq!(vessel::pipe::spawn::touches_lines(&[], "d#a"), "なし\n", "項目 0 は なし");
+    let rows = [row("d#a", &["X", "Z"]), row("d#b", &["Y", "X", "X"]), row("e#c", &["X"])];
+    assert_eq!(vessel::pipe::spawn::touches_lines(&rows, "d#a"), "- X ← d#b, e#c\n- Y ← d#b\n", "自分を除き・束ね・辞書順");
+    assert_eq!(vessel::pipe::spawn::touches_lines(rows.get(..1).unwrap_or_default(), "d#a"), "なし\n", "自分の行だけなら項目 0");
+}

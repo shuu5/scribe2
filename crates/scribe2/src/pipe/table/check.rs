@@ -629,8 +629,9 @@ fn judge_repo(repo: &Path, ceiling: &Ceiling<'_>) -> Result<Judged, Outcome> {
     Ok(Judged { docs: docs.len(), rows, found, untracked, entrance, places })
 }
 
-/// tracked な設計 doc（`docs/design/` 直下の `.md`・tracked の順）。
-fn design_docs(tracked: &[String]) -> Vec<&String> {
+/// tracked な設計 doc（`docs/design/` 直下の `.md`・tracked の順）。契約表の doc の母集団の読みはこの 1 本である
+/// （runner の stdin の「ほかの行の touches」節も base の木の path の列をこれで絞る・設計 reverse-index.md §15）。
+pub(crate) fn design_docs(tracked: &[String]) -> Vec<&String> {
     tracked
         .iter()
         .filter(|path| path.strip_prefix(DESIGN_DIR).is_some_and(|rest| !rest.contains('/') && rest.ends_with(".md")))
