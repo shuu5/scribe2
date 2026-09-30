@@ -44,7 +44,7 @@ pub(crate) use record::{
     aimed_lines, keep_detection, keep_reason, landed_step_record, landed_unfired_record, next_copy_dir,
     population_lines, LandedMark, Unfired,
 };
-pub(crate) use verify::{recorded_rc, run_detection_admitted, Admit};
+pub(crate) use verify::{fill_holes, recorded_rc, run_detection_admitted, teeth_of, Admit};
 // 受付が契約の検証行を base の木で撃つ口（設計 pipeline.md §56 形 3・撃つ実装を 2 本にしない）。
 pub(crate) use verify::run_line_captured;
 pub use verify::{is_unreadable, run_checks, Check, Checks, Step, CHECKS};

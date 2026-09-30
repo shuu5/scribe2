@@ -9,7 +9,8 @@
 use super::approve::{block, Approval, Approve, RC_BLOCKED};
 use super::confine;
 use super::follow::{Halt, Resumption, Section, RUNNER_UNREACHABLE};
-use super::gate::last_json_object;
+use super::declaration::Effective;
+use super::gate::{fill_holes, last_json_object, teeth_of};
 use super::land::MAIN_REF;
 use super::refuse;
 use super::{
@@ -235,7 +236,7 @@ fn launch_runner(launch: &Launch<'_>, worktree: &Path, cmd: &str, base: &str) ->
     if let Some(mut stdin) = child.stdin.take() {
         // 読まずに終える runner への write は EPIPE になる。**段は rc と stdout で決める**ので
         // ここの失敗は理由にしない（take で drop され、runner は EOF を見る）。
-        let _ = stdin.write_all(prompt(launch).as_bytes());
+        let _ = stdin.write_all(prompt(launch, base).as_bytes());
     }
     // rc が要るのでここは `wait_with_output`（`Child::wait` と同じ待ち・stdout を回収する形）。
     // pid の生存だけを見る待機（`pipe stop`）は `fleet::wait` のままで、**待機の実装は
@@ -428,11 +429,33 @@ fn account_dir_in(cmd: &str) -> Option<String> {
     Some(tokens.next().map_or_else(|| NO_VALUE.to_owned(), str::to_owned))
 }
 
-/// runner の stdin に流す本文 = 契約の写し（再読）+ 回答済みの質問が在れば「回答」節 +
-/// 途中再開なら「途中再開」節 + 追随の相手が在れば「追随」節。**順序は 契約 → 回答 → 途中再開 →
+/// 「共通 verify」節の本文（設計 pipeline.md §65）: 便の写しの common-verify の各行を、gate と同じ [`fill_holes`] で
+/// 埋めた字（`{jobs}` と `{threads}` は受付を通らない周の 1・`{teeth}` は契約の verify 行の filter 語）で 1 行 1 項目に
+/// 並べる。写しを読めない周は理由の 1 行・行が 0 本の写しは `なし`（runner は止めない）。
+fn common_section(launch: &Launch<'_>, base: &str) -> String {
+    let frozen = match Effective::load(&vessel_path(launch.state_dir, launch.run)) {
+        Ok(found) => found,
+        Err(errors) => {
+            let reasons: Vec<String> = errors.iter().map(ToString::to_string).collect();
+            return format!("（共通 verify の写しを読めない: {}）\n", reasons.join(" / "));
+        }
+    };
+    common_lines(frozen.common_verify(), base, &launch.contract.verify)
+}
+
+/// [`common_section`] の本文の組み立て（写しの行と契約の verify 行から・**pure**）。0 行は `なし`。
+pub fn common_lines(common: &[String], base: &str, verify: &[String]) -> String {
+    let teeth = teeth_of(verify);
+    let lines: Vec<String> = common.iter().map(|line| format!("- {}\n", fill_holes(line, base, 1, 1, &teeth))).collect();
+    if lines.is_empty() { "なし\n".to_owned() } else { lines.concat() }
+}
+
+/// runner の stdin に流す本文 = 契約の写し（再読）+ 「共通 verify」節 + 回答済みの質問が在れば「回答」節 +
+/// 途中再開なら「途中再開」節 + 追随の相手が在れば「追随」節。**順序は 契約 → 共通 verify → 回答 → 途中再開 →
 /// 追随**である（節の読み方は `headless/runner.txt` の雛形が持ち、ここは run ごとの値だけを載せる）。
-fn prompt(launch: &Launch<'_>) -> String {
+fn prompt(launch: &Launch<'_>, base: &str) -> String {
     let mut body = std::fs::read_to_string(contract_path(launch.state_dir, launch.run)).unwrap_or_default();
+    body.push_str(&format!("\n## 共通 verify\n{}", common_section(launch, base)));
     if let Some(Question { question, answer: Some(answer), .. }) = &launch.answered {
         body.push_str(&format!("\n## 回答\n- 質問: {question}\n- 回答: {answer}\n"));
     }

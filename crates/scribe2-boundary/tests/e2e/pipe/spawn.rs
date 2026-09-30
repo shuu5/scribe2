@@ -1921,3 +1921,114 @@ fn pipe_spawn_reason_vocabulary_closes_over_the_unnamed_kill() {
     let unique: BTreeSet<&str> = words.iter().copied().collect();
     assert_eq!(unique.len(), words.len(), "字面の重複 0: {words:?}");
 }
+
+// ───── runner の stdin に共通 verify の節（設計 pipeline.md §65・行 bh・接頭辞 `runner_common_section_`） ─────
+
+/// 契約の verify 行（filter 語 `sect_words_` を持つ nextest 行）。語は共通 verify の写しにも雛形にも無い字面。
+const SECTION_VERIFY: &str = r#"verify = ["cargo nextest run -p toy --no-tests=fail sect_words_"]"#;
+
+/// 宣言の共通 verify（穴を持つ行 2 本と穴の無い行 1 本）。
+const SECTION_COMMON: &str =
+    r#"["git rev-parse --verify {base}", "git log -n {jobs} --grep={teeth} --format={threads}", "git status --short"]"#;
+
+/// 共通 verify を宣言し、契約の verify 行に filter 語 `sect_words_` を持たせた便を intake する（repo・置き場・run id）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn section_intake(common: &str) -> (PathBuf, PathBuf, String) {
+    let (repo, state) = repo_with_state();
+    commit_vessel(&repo, r#"["cargo", "git", "sh"]"#, common);
+    // 契約の verify 行の filter 語 `sect_words_` の置き場（受付が歯の置き場を解く）。
+    fs::create_dir_all(repo.join("crates/toy/tests")).expect("dir を作れる");
+    fs::write(repo.join("crates/toy/tests/sect.rs"), "#[test]\nfn sect_words_one() {}\n").expect("歯を書ける");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "sect-tooth"]);
+    let design = write_contract(&repo, &["verify", "write-set"], &[SECTION_VERIFY, r#"write-set = ["src/lib.rs", "crates/toy/tests/sect.rs"]"#]);
+    let id = intake(&repo, &state, &design);
+    (repo, state, id)
+}
+
+/// [`section_intake`] の便を質問で止め、回答済みにして 2 turn 目の runner に stdin を写させる（stdin を返す）。
+fn section_answered_stdin(repo: &Path, state: &Path, id: &str) -> String {
+    let out = run_pipe(&[
+        "spawn", "--run", id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--runner", &question_runner(),
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BLOCKED)), "質問で止まる: {}", stderr_of(&out));
+    let answered = run_pipe(&["answer", "--run", id, "--words", "そのまま進める", "--state-dir", &state.display().to_string()]);
+    assert_eq!(answered.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&answered));
+    let copied = state.join("got-stdin.txt");
+    let out = resume_copying(repo, state, id, &copied);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{} / {}", stdout_of(&out), stderr_of(&out));
+    fs::read_to_string(&copied).unwrap_or_default()
+}
+
+/// stdin から「## 共通 verify」節の本文（次の節の見出しの手前まで）を取る。
+fn section_body(stdin: &str) -> String {
+    let after = stdin.split("\n## 共通 verify\n").nth(1).unwrap_or_default();
+    after.split("\n## ").next().unwrap_or_default().to_owned()
+}
+
+/// 便の最初の `Spawned` の記録した base の sha。
+fn recorded_base(state: &Path, id: &str) -> String {
+    let detail = stages(state, id)
+        .into_iter()
+        .find_map(|(stage, detail)| (stage == Some(Stage::Spawned)).then_some(detail).flatten())
+        .unwrap_or_default();
+    detail.strip_prefix("base:").map(|rest| rest.split(',').next().unwrap_or_default().to_owned()).unwrap_or_default()
+}
+
+/// (a) 回答済みの質問を持つ便の 2 turn 目の stdin は、契約の本文の後・回答の節の前に「## 共通 verify」節を持ち、写しの各行を
+/// `{base}` は記録した base の sha・`{jobs}` と `{threads}` は 1・`{teeth}` は契約の verify 行の filter 語で埋めた字で
+/// 1 行 1 項目に並べる。穴の字 `{` は節に残らない。
+#[test]
+fn runner_common_section_lists_the_filled_lines_between_contract_and_answer() {
+    let (repo, state, id) = section_intake(SECTION_COMMON);
+    let stdin = section_answered_stdin(&repo, &state, &id);
+    let (contract_at, section_at, answer_at) = (stdin.find("goal = "), stdin.find("\n## 共通 verify\n"), stdin.find("\n## 回答\n"));
+    assert!(
+        matches!((contract_at, section_at, answer_at), (Some(c), Some(s), Some(a)) if c < s && s < a),
+        "契約 → 共通 verify → 回答 の順: {stdin}"
+    );
+    let base = recorded_base(&state, &id);
+    assert_eq!(base.len(), 40, "記録した base は sha: {base}");
+    let want = format!(
+        "- git rev-parse --verify {base}\n- git log -n 1 --grep=sect_words_ --format=1\n- git status --short\n"
+    );
+    assert_eq!(section_body(&stdin), want, "穴を埋めた行が 1 行 1 項目で並ぶ: {stdin}");
+    assert!(!section_body(&stdin).contains('{'), "穴の字が残らない: {stdin}");
+    clean(&[&repo, &state]);
+}
+
+/// (b) 写しを読めない便の節の本文は読めない理由の 1 行で、runner は止まらず段は Implemented まで進む（回答後の resume は
+/// 写しを取り直す段で先に断るので、写しを壊すのは初回の spawn の前）。
+#[test]
+fn runner_common_section_says_why_when_the_copy_is_unreadable() {
+    let (repo, state, id) = section_intake(SECTION_COMMON);
+    fs::write(vessel_copy(&state, &id), "これは宣言ではない\n").unwrap_or_default();
+    let copied = state.join("got-stdin.txt");
+    let runner = format!("cat > '{}' && {TOY_COMMIT}", copied.display());
+    let out = run_pipe(&[
+        "spawn", "--run", &id, "--repo", &repo.display().to_string(),
+        "--state-dir", &state.display().to_string(), "--runner", &runner,
+    ]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "runner は止まらない: {}", stderr_of(&out));
+    let stdin = fs::read_to_string(&copied).unwrap_or_default();
+    let body = section_body(&stdin);
+    assert!(body.starts_with("（共通 verify の写しを読めない: ") && body.trim_end().ends_with('）'), "理由の 1 行: {stdin}");
+    assert_eq!(body.trim_end().lines().count(), 1, "本文は 1 行: {body}");
+    assert!(!body.contains("- "), "行の項目は無い: {body}");
+    let last = stages(&state, &id).into_iter().next_back().and_then(|(stage, _)| stage);
+    assert_eq!(last, Some(Stage::Implemented), "段は Implemented まで進む");
+    clean(&[&repo, &state]);
+}
+
+/// (c) common-verify が 0 行の写しの節の本文は `なし` の 1 行。宣言も便の写しも 0 行を読み込みで断る（空の配列を許さない）ので
+/// 0 行の写しの便は file からは作れない——節の組み立ての関数を直に撃つ。対: 1 行なら `なし` でなく項目になる。
+#[test]
+fn runner_common_section_says_none_for_an_empty_common_verify() {
+    assert_eq!(vessel::pipe::spawn::common_lines(&[], "abc", &[]), "なし\n", "0 行は なし の 1 行");
+    let one = vec!["git status".to_owned()];
+    assert_eq!(vessel::pipe::spawn::common_lines(&one, "abc", &[]), "- git status\n", "1 行は項目");
+}

@@ -274,7 +274,7 @@ fn fire_row(
 ///
 /// **1 走査で埋めない**のは、穴の値が sha と数字と filter 語（`[A-Za-z0-9_]` と `,` / `-`）だけで、互いの字面を
 /// 含まないためである（`{worktree}` のように外から来る path を埋める面とは条件が違う）。
-fn fill_holes(line: &str, base: &str, jobs: u64, threads: u64, teeth: &str) -> String {
+pub(crate) fn fill_holes(line: &str, base: &str, jobs: u64, threads: u64, teeth: &str) -> String {
     line.replace(BASE_HOLE, base)
         .replace(JOBS_HOLE, &jobs.to_string())
         .replace(THREADS_HOLE, &threads.to_string())
@@ -284,7 +284,7 @@ fn fill_holes(line: &str, base: &str, jobs: u64, threads: u64, teeth: &str) -> S
 /// `{teeth}` の実値: 契約の verify 行の filter 語を宣言順に `,` で結ぶ（filter を持たない行は飛ばし・0 本は
 /// [`NO_TEETH`]・設計 gate-cost.md §34 約束 5）。語の導出は置き場の導出と同じ関数（[`closure::teeth_words`]）で、
 /// 環境変数では渡さない（C2.2）。gate も land の主実測も [`Checks::contract`] から同じここを通る。
-fn teeth_of(verify: &[String]) -> String {
+pub(crate) fn teeth_of(verify: &[String]) -> String {
     let words = closure::teeth_words(verify);
     if words.is_empty() {
         NO_TEETH.to_owned()
