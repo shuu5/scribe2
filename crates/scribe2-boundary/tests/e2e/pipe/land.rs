@@ -3241,3 +3241,360 @@ fn pipe_terminal_no_remote_pr_landed_run_writes_nothing() {
     assert!(ledger_calls(&state).is_empty(), "見張りの記録は 0 件: {:?}", ledger_calls(&state));
     clean(&[&repo, &state]);
 }
+
+// ───── 着地の留め（設計 docs/design/pipeline.md §62・契約表の行 be・FR83 / FR10・接頭辞 `pipe_land_ruling_hold_`） ─────
+
+/// base の宣言に足す 2 行（`ruling-check` を opt-in する・見本の一覧は空）。
+const HOLD_ON: &str = "ruling-check = true\nruling-fixtures = []\n";
+
+/// 偽の台帳の裁定の行（閉じた問い `s2-q.1` の notes）。解ける形は問い id・裁定 id の欄の `batch:m1`・束の欄の `batch:b7`・
+/// 欄の全体が `policy:batch:x`。
+const HOLD_NOTES: &str = "s2-q.1:20260930T0000Z-1 | s2-q.1 | 2026-09-30T00:00Z | chat | 逐語\n\
+batch:m1 | s2-q.1 | batch:b7 | 逐語\n\
+policy:batch:x | s2-q.1 | 2026-09-30T00:00Z | chat | 逐語";
+
+/// 偽の台帳の JSON（閉じた問い 1 本・`extra` は裁定の行を足す）。
+fn hold_ledger(extra: &[&str]) -> String {
+    let rows: Vec<&str> = std::iter::once(HOLD_NOTES).chain(extra.iter().copied()).collect();
+    let notes = rows.join("\n").replace('\n', "\\n");
+    format!("[{{\"id\":\"s2-q.1\",\"status\":\"closed\",\"labels\":[\"intake:question\"],\"notes\":\"{notes}\"}}]\n")
+}
+
+/// 偽の台帳 client を置き場の隣に書く（`ledger` があれば list の出力・無ければ rc 3 で落ちる＝読めない台帳）。返すのは client の path と
+/// 台帳の file（書き換えれば次の周の読みが変わる）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn hold_bd(state: &Path, ledger: Option<&str>) -> (String, PathBuf) {
+    let dir = state.parent().expect("置き場は tmp の 1 段下").join("bd-hold");
+    fs::create_dir_all(&dir).expect("偽の bd の dir を作れる");
+    let file = dir.join("ledger.json");
+    let body = match ledger {
+        Some(json) => {
+            fs::write(&file, json).expect("偽の台帳を書ける");
+            format!("case \"$*\" in *list*) cat '{}';; esac\nexit 0\n", file.display())
+        }
+        None => "exit 3\n".to_owned(),
+    };
+    (exec_script(&dir.join("bd"), &body), file)
+}
+
+/// 着地が読む `--rules`（land の待ちの上限 `wait_s` 秒・台帳の待ち上限の行・`train_max` があれば列の上限の行）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn hold_rules(state: &Path, wait_s: u64, train_max: Option<u64>) -> String {
+    let path = write_rules_land_wait(state, "rules-hold.toml", Some(wait_s));
+    let row = |id: &str, kind: &str, value: u64| {
+        format!("\n[[rule]]\nid = \"{id}\"\nkind = \"{kind}\"\nvalue = {value}\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n")
+    };
+    let mut rows = row("seat.ledger_timeout_s", "LedgerTimeoutS", 60);
+    if let Some(value) = train_max {
+        rows.push_str(&row("land.train_max", "LandTrainMax", value));
+    }
+    let text = fs::read_to_string(&path).expect("tmp manifest を読める");
+    fs::write(&path, format!("{text}{rows}")).expect("tmp manifest を書ける");
+    path
+}
+
+/// 宣言に `decl` の行を足し、台帳の接頭辞 `s2` を置いて commit する（**この commit が opt-in の線**・`decl` が空なら key の無い repo）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn hold_declare(repo: &Path, decl: &str) {
+    let body = fs::read_to_string(repo.join(".vessel.toml")).expect("宣言を読める");
+    fs::write(repo.join(".vessel.toml"), format!("{body}{decl}")).expect("宣言を書ける");
+    fs::create_dir_all(repo.join(".beads")).expect(".beads を作れる");
+    fs::write(repo.join(".beads").join("config.yaml"), "issue-prefix: s2\n").expect("接頭辞を書ける");
+    git(repo, &["add", "-f", ".vessel.toml", ".beads/config.yaml"]);
+    git(repo, &["commit", "-q", "-m", "ruling-line"]);
+}
+
+/// 留めの判定に掛ける 1 便の材料。
+struct HoldCase {
+    /// base の宣言に足す行（[`HOLD_ON`] か空）。
+    decl: &'static str,
+    /// 便の write-set の file。
+    file: &'static str,
+    /// 線の前に commit する file の中身（`None` は触らない）。
+    seed: Option<&'static str>,
+    /// 便の runner（worktree で commit を 1 本作る sh）。
+    runner: String,
+}
+
+/// `file` の末尾へ `line` を足して commit する便（`line` に単引用符は置かない）。
+fn appended(decl: &'static str, file: &'static str, seed: Option<&'static str>, line: &str) -> HoldCase {
+    HoldCase { decl, file, seed, runner: format!("printf '%s\\n' '{line}' >> {file} && git add -A && git commit -q -m runner") }
+}
+
+/// `case` の便を gate の PASS まで通す（seed の commit → 宣言の commit＝線 → 行の commit → intake → spawn → gate）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn hold_run(case: &HoldCase) -> (PathBuf, PathBuf, String) {
+    let (repo, state) = repo_with_state();
+    if let Some(seed) = case.seed {
+        let file = repo.join(case.file);
+        fs::create_dir_all(file.parent().expect("file は dir の下")).expect("dir を作れる");
+        fs::write(&file, seed).expect("seed を書ける");
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-q", "-m", "seed-file"]);
+    }
+    hold_declare(&repo, case.decl);
+    commit_rows(&repo, &[row_fields("a", &["write-set"], &[&format!("write-set = [\"{}\"]", case.file)])]);
+    let id = intake_bead(&repo, &state, &format!("{DESIGN_FILE}#a"), "s2-2e5");
+    let spawned = spawn_with(&repo, &state, &id, &case.runner);
+    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "spawn: {}", stderr_of(&spawned));
+    let gated = gate_once(&repo, &state, &id, Some(&fake_lens(&state.join("lens-ran"), &lens_verdict("PASS"))));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "gate: {}", stderr_of(&gated));
+    (repo, state, id)
+}
+
+/// 便の land を 1 回（`tools` は `--rules` と `--bd` の値・`extra` は続けて渡す）。
+fn hold_land(repo: &Path, state: &Path, id: &str, tools: (&str, &str), extra: &[&str]) -> Output {
+    let mut args = vec!["--rules", tools.0, "--bd", tools.1];
+    args.extend_from_slice(extra);
+    land_extra(repo, state, id, &args)
+}
+
+/// 便の `RunStage` の detail のうち頭が `head` のもの（記帳の順）。
+fn hold_details(state: &Path, id: &str, head: &str) -> Vec<String> {
+    stages(state, id).into_iter().filter_map(|(_, detail)| detail).filter(|detail| detail.starts_with(head)).collect()
+}
+
+/// 留めの周の共通の断言: rc 1・main は動かず・段は Gated のまま・`Failed` も `Landed` も無く・留めの記帳は `want` の 1 件だけ。
+fn assert_held(repo: &Path, state: &Path, id: &str, out: &Output, want: &str) {
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{want}: 留めは rc 1: {} / {}", stdout_of(out), stderr_of(out));
+    assert!(stderr_of(out).contains(want), "{want}: 断りは名指しを持つ: {}", stderr_of(out));
+    assert_eq!(hold_details(state, id, "held:"), [format!("held:FR83:{want}")], "{want}: 留めの記帳は 1 件");
+    assert!(show_line(repo, state, id).contains("stage=Gated"), "{want}: 段は Gated のまま: {}", show_line(repo, state, id));
+    assert_eq!(stage_count(state, id, Stage::Failed) + stage_count(state, id, Stage::Landed), 0, "{want}: Failed も Landed も無い");
+    assert!(hold_details(state, id, "released:").is_empty(), "{want}: 解除の記帳は無い");
+}
+
+/// 差分の 3 形・判断の欄 3 種（bead の id だけ・接頭辞違いだけ・欄ごと）・問い id を足さない `ruling-check` の外しの 8 形は、main を動かさず
+/// Gated に留まり、名指しが逐語で一致する。base には機能が無く、解けない id を足す便が main に載る（RED）。
+#[test]
+fn pipe_land_ruling_hold_holds_the_eight_forms_on_gated() {
+    let (lib, adr) = ("src/lib.rs", "design-intent/decisions/ADR-0001.html");
+    let off = "sed -i '/^ruling-check/d;/^ruling-fixtures/d' .vessel.toml && git add -A && git commit -q -m runner";
+    let forms: Vec<(&str, HoldCase)> = vec![
+        ("s2-q.9:20260930T0000Z-1", appended(HOLD_ON, lib, None, "// s2-q.9:20260930T0000Z-1")),
+        ("batch:zz", appended(HOLD_ON, lib, None, "// batch:zz")),
+        ("time:2026-09-30T05:00Z@src/lib.rs", appended(HOLD_ON, lib, None, "// user 2026-09-30T05:00Z")),
+        ("field:rules@rules/t.toml", appended(HOLD_ON, "rules/t.toml", Some("# rules\n"), "ruling = \"s2-07l.738\"")),
+        ("field:adr@design-intent/decisions/ADR-0001.html", appended(HOLD_ON, adr, Some("<html></html>\n"), "<td class=\"role\">裁定</td><td>s2-07l.738</td>")),
+        ("field:design@docs/design/other.md", appended(HOLD_ON, "docs/design/other.md", Some("# other\n"), "- 裁定: s2-07l.738")),
+        ("field:rules@rules/t.toml", appended(HOLD_ON, "rules/t.toml", Some("# rules\n"), "ruling = \"tz-1:20260930T0000Z-1\"")),
+        ("ruling-check-off", HoldCase { decl: HOLD_ON, file: ".vessel.toml", seed: None, runner: off.to_owned() }),
+    ];
+    let mut held = 0;
+    for (want, case) in &forms {
+        let (repo, state, id) = hold_run(case);
+        let (bd, _) = hold_bd(&state, Some(&hold_ledger(&[])));
+        let before = git(&repo, &["rev-parse", "refs/heads/main"]);
+        let out = hold_land(&repo, &state, &id, (&hold_rules(&state, 1, None), &bd), &[]);
+        assert_held(&repo, &state, &id, &out, want);
+        assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), before, "{want}: main は動かない");
+        held += 1;
+        clean(&[&repo, &state]);
+    }
+    assert_eq!((held, forms.len()), (8, 8), "留める 8 形を確かめ終えた（通過の 6 形は別の歯）");
+}
+
+/// 線の前の引用・key の無い repo・解ける 4 形（問い id・裁定 id の欄・束の欄・欄の全体）は着地し、留めも解除も記帳しない
+/// （held の無い便に released を書く実装を落とす）。
+#[test]
+fn pipe_land_ruling_hold_lands_the_six_clear_forms_without_a_record() {
+    let lib = "src/lib.rs";
+    let seeded = Some("// seed\n// user 2026-09-29T12:00Z\n");
+    let forms: Vec<(&str, HoldCase)> = vec![
+        ("線の前の時刻の形", appended(HOLD_ON, lib, seeded, "// user 2026-09-29T12:00Z")),
+        ("key の無い repo", appended("", lib, None, "// batch:zz")),
+        ("解ける問い id", appended(HOLD_ON, lib, None, "// s2-q.1:20260930T0000Z-1")),
+        ("裁定 id の欄", appended(HOLD_ON, lib, None, "// batch:m1")),
+        ("束の欄", appended(HOLD_ON, lib, None, "// batch:b7")),
+        ("欄の全体", appended(HOLD_ON, lib, None, "// policy:batch:x")),
+    ];
+    let mut landed = 0;
+    for (label, case) in &forms {
+        let (repo, state, id) = hold_run(case);
+        let (bd, _) = hold_bd(&state, Some(&hold_ledger(&[])));
+        let out = hold_land(&repo, &state, &id, (&hold_rules(&state, 1, None), &bd), &[]);
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{label}: 着地する: {} / {}", stdout_of(&out), stderr_of(&out));
+        assert!(show_line(&repo, &state, &id).contains("stage=Landed"), "{label}: 段は Landed");
+        assert!(hold_details(&state, &id, "held:").is_empty(), "{label}: 留めの記帳は無い");
+        assert!(hold_details(&state, &id, "released:").is_empty(), "{label}: 解除の記帳も無い");
+        landed += 1;
+        clean(&[&repo, &state]);
+    }
+    assert_eq!((landed, forms.len()), (6, 6), "通過の 6 形を確かめ終えた（留める 8 形は別の歯）");
+}
+
+/// 同じ理由で何周撃っても `held:` は 1 件で（上限 `pipe.follow_retries` = 2 を超えても Failed が無い）、名指しが変わった周は新しい 1 件になり、
+/// 変わらない周はまた増えない。
+#[test]
+fn pipe_land_ruling_hold_records_one_event_per_reason_and_never_fails() {
+    let (repo, state, id) = hold_run(&appended(HOLD_ON, "src/lib.rs", None, "// batch:zz"));
+    let (bd, _) = hold_bd(&state, Some(&hold_ledger(&[])));
+    let rules = hold_rules(&state, 1, None);
+    let before = git(&repo, &["rev-parse", "refs/heads/main"]);
+    for round in 1..=4 {
+        let out = hold_land(&repo, &state, &id, (&rules, &bd), &[]);
+        assert_held(&repo, &state, &id, &out, "batch:zz");
+        assert_eq!(hold_details(&state, &id, "held:").len(), 1, "{round} 周目も 1 件");
+    }
+    let tree = worktree_of(&repo, &id);
+    let text = fs::read_to_string(tree.join("src").join("lib.rs")).expect("便の file を読める");
+    fs::write(tree.join("src").join("lib.rs"), format!("{text}// batch:yy\n")).expect("便の file を書ける");
+    git(&tree, &["add", "-A"]);
+    git(&tree, &["commit", "-q", "-m", "more"]);
+    for _ in 0..2 {
+        let out = hold_land(&repo, &state, &id, (&rules, &bd), &[]);
+        assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "名指しが変わっても留め: {}", stderr_of(&out));
+    }
+    assert_eq!(hold_details(&state, &id, "held:"), ["held:FR83:batch:zz", "held:FR83:batch:yy,batch:zz"], "名指しが変わった周だけ新しい 1 件");
+    assert_eq!(stage_count(&state, &id, Stage::Failed), 0, "Failed は無い: {:?}", stages(&state, &id));
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), before, "main は動かない");
+    clean(&[&repo, &state]);
+}
+
+/// 留めの後に台帳が解けた周は着地し、`released:FR83` が 1 件（着地した後の周は記帳を増やさない）。
+#[test]
+fn pipe_land_ruling_hold_releases_when_the_ledger_resolves() {
+    let (repo, state, id) = hold_run(&appended(HOLD_ON, "src/lib.rs", None, "// batch:rel"));
+    let (bd, ledger) = hold_bd(&state, Some(&hold_ledger(&[])));
+    let rules = hold_rules(&state, 1, None);
+    let held = hold_land(&repo, &state, &id, (&rules, &bd), &[]);
+    assert_held(&repo, &state, &id, &held, "batch:rel");
+    let row = "batch:rel | s2-q.1 | 2026-09-30T00:00Z | chat | 逐語";
+    fs::write(&ledger, hold_ledger(&[row])).unwrap_or_else(|err| panic!("偽の台帳を書き直せる: {err}"));
+    let out = hold_land(&repo, &state, &id, (&rules, &bd), &[]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "解けた周は着地する: {} / {}", stdout_of(&out), stderr_of(&out));
+    assert!(show_line(&repo, &state, &id).contains("stage=Landed"), "段は Landed");
+    assert_eq!(hold_details(&state, &id, "held:").len(), 1, "留めの記帳は増えない");
+    assert_eq!(hold_details(&state, &id, "released:"), ["released:FR83"], "解除の記帳は 1 件");
+    let events = event_count(&state);
+    let again = hold_land(&repo, &state, &id, (&rules, &bd), &[]);
+    assert_eq!(again.status.code(), Some(i32::from(RC_OK)), "着地済みの便の land は rc 0: {}", stderr_of(&again));
+    assert_eq!(event_count(&state), events, "着地した便は記帳を増やさない");
+    clean(&[&repo, &state]);
+}
+
+/// PR の形（`--pr-cmd`）の便も同じに留める: pr の command を撃たず main も branch も動かさず、解けた周は解除を記帳して PR を開く。
+#[test]
+fn pipe_land_ruling_hold_holds_the_pr_form_without_firing_the_command() {
+    let (repo, state, id) = hold_run(&appended(HOLD_ON, "src/lib.rs", None, "// batch:rel"));
+    let (bd, ledger) = hold_bd(&state, Some(&hold_ledger(&[])));
+    let rules = hold_rules(&state, 1, None);
+    let marker = state.join("pr-ran");
+    let pr = format!("printf x > '{}'", marker.display());
+    let before = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let out = hold_land(&repo, &state, &id, (&rules, &bd), &["--pr-cmd", &pr]);
+    assert_held(&repo, &state, &id, &out, "batch:rel");
+    assert!(!marker.exists(), "留めの周は pr の command を撃たない");
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), before, "main は動かない");
+    let row = "batch:rel | s2-q.1 | 2026-09-30T00:00Z | chat | 逐語";
+    fs::write(&ledger, hold_ledger(&[row])).unwrap_or_else(|err| panic!("偽の台帳を書き直せる: {err}"));
+    let opened = hold_land(&repo, &state, &id, (&rules, &bd), &["--pr-cmd", &pr]);
+    assert_eq!(opened.status.code(), Some(i32::from(RC_OK)), "解けた周は PR を開く: {} / {}", stdout_of(&opened), stderr_of(&opened));
+    assert!(marker.exists() && stdout_of(&opened).contains("landed=pr"), "pr の command を撃った: {}", stdout_of(&opened));
+    assert_eq!(hold_details(&state, &id, "released:"), ["released:FR83"], "解除の記帳は 1 件");
+    clean(&[&repo, &state]);
+}
+
+/// 台帳を読めない周（偽の bd が失敗する）は通さず `held:FR83:unmeasured:ledger` で留め、同じ周を撃ち直しても記帳は 1 件のまま。
+#[test]
+fn pipe_land_ruling_hold_holds_an_unreadable_ledger_as_unmeasured() {
+    let (repo, state, id) = hold_run(&appended(HOLD_ON, "src/lib.rs", None, "// batch:m1"));
+    let (bd, _) = hold_bd(&state, None);
+    let rules = hold_rules(&state, 1, None);
+    let before = git(&repo, &["rev-parse", "refs/heads/main"]);
+    for _ in 0..2 {
+        let out = hold_land(&repo, &state, &id, (&rules, &bd), &[]);
+        assert_held(&repo, &state, &id, &out, "unmeasured:ledger");
+    }
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), before, "main は動かない");
+    clean(&[&repo, &state]);
+}
+
+/// 同じ base から 3 便（a・b・c）を PASS の gate まで通す。便 `dirty` だけが解けない `batch:zz` を足す（ほかは file に 1 語だけ）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn hold_three(dirty: usize) -> (PathBuf, PathBuf, [String; 3]) {
+    let (repo, state) = repo_with_state();
+    hold_declare(&repo, HOLD_ON);
+    let files = ["crates/toy/a.rs", "src/b.rs", "src/c.rs"];
+    let rows: Vec<Vec<String>> = ["a", "b", "c"]
+        .iter()
+        .zip(files)
+        .map(|(row, file)| row_fields(row, &["write-set"], &[&format!("write-set = [\"{file}\"]")]))
+        .collect();
+    commit_rows(&repo, &rows);
+    let lens = fake_lens(&state.join("lens-ran"), &lens_verdict("PASS"));
+    let mut ids = Vec::new();
+    for (index, ((row, bead), file)) in ["a", "b", "c"].iter().zip(["s2-2e5", "s2-3ax", "s2-4cz"]).zip(files).enumerate() {
+        let id = intake_bead(&repo, &state, &format!("{DESIGN_FILE}#{row}"), bead);
+        let body = if index == dirty { format!("{row} batch:zz") } else { (*row).to_owned() };
+        let runner = format!("mkdir -p crates/toy && echo '{body}' > {file} && git add -A && git commit -q -m runner");
+        let spawned = spawn_with(&repo, &state, &id, &runner);
+        assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "{row} の spawn: {}", stderr_of(&spawned));
+        let gated = gate_once(&repo, &state, &id, Some(&lens));
+        assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "{row} の gate: {}", stderr_of(&gated));
+        ids.push(id);
+    }
+    (repo, state, ids.try_into().expect("3 便"))
+}
+
+/// 候補の木の先頭は留めに当たる後続を積まない: 3 本の列の 2 本目だけが解けない問い id を足す周に、先頭の land は 1 本目と 3 本目を積んで
+/// 着地させ（`train=2`・3 本目が 1 本目の上）、2 本目は Gated のまま main に載らず、2 本目の event は増えない（先頭の掛けを外す実装と、
+/// 掛けの判定を固定の値にする実装を落とす）。2 本目は自分の land で初めて留めを記帳する。
+#[test]
+fn pipe_land_ruling_hold_train_front_leaves_the_held_follower_behind() {
+    let (repo, state, [id_a, id_b, id_c]) = hold_three(1);
+    let (bd, _) = hold_bd(&state, Some(&hold_ledger(&[])));
+    let rules = hold_rules(&state, 1, Some(3));
+    let base = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let trail_before = trail(&state, &id_b).len();
+    let out = hold_land(&repo, &state, &id_a, (&rules, &bd), &[]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "先頭の land は rc 0: {} / {}", stdout_of(&out), stderr_of(&out));
+    assert!(stdout_of(&out).contains(&format!("run={id_a} train=2")), "積んだのは 2 本: {}", stdout_of(&out));
+    let (sha_a, sha_c) = (landed_sha_of(&state, &id_a), landed_sha_of(&state, &id_c));
+    assert_eq!(git(&repo, &["rev-parse", &format!("{sha_a}^")]), base, "a は base の上");
+    assert_eq!(git(&repo, &["rev-parse", &format!("{sha_c}^")]), sha_a, "c は a の上");
+    let main = git(&repo, &["rev-parse", "refs/heads/main"]);
+    assert_eq!(main, sha_c, "main の先端は c");
+    assert_eq!(git(&repo, &["show", &format!("{main}:src/c.rs")]), "c", "c の仕事は載る");
+    assert!(!git(&repo, &["show", &format!("{main}:src/b.rs")]).contains("batch:zz"), "b の仕事は main に載らない");
+    assert!(show_line(&repo, &state, &id_b).contains("stage=Gated"), "2 本目は Gated のまま");
+    assert_eq!(trail(&state, &id_b).len(), trail_before, "2 本目の event は増えない: {:?}", trail(&state, &id_b));
+    assert_eq!(exported_order(&state, &id_c), "train", "3 本目は train");
+    let own = hold_land(&repo, &state, &id_b, (&rules, &bd), &[]);
+    assert_held(&repo, &state, &id_b, &own, "batch:zz");
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), main, "2 本目の land も main を動かさない");
+    clean(&[&repo, &state]);
+}
+
+/// 留めの便は番の計算から外れる: 1 本目が留めを記帳した後、2 本目の land は前の便を待たず（`order=first`）着地する。
+/// 外さない実装では 2 本目が 1 本目の列の前を待ち、上限（1 秒）で縮退する（`order=degraded`）。
+#[test]
+fn pipe_land_ruling_hold_held_run_does_not_hold_up_the_turn() {
+    let (repo, state, [id_a, id_b, id_c]) = hold_three(0);
+    let (bd, _) = hold_bd(&state, Some(&hold_ledger(&[])));
+    let rules = hold_rules(&state, 1, None);
+    let held = hold_land(&repo, &state, &id_a, (&rules, &bd), &[]);
+    assert_held(&repo, &state, &id_a, &held, "batch:zz");
+    let out = hold_land(&repo, &state, &id_b, (&rules, &bd), &[]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "2 本目は着地する: {} / {}", stdout_of(&out), stderr_of(&out));
+    assert_eq!(order_token(&out), "first", "留めの 1 本目を待たない: {}", stdout_of(&out));
+    assert!(show_line(&repo, &state, &id_b).contains("stage=Landed"), "2 本目は Landed");
+    assert!(show_line(&repo, &state, &id_a).contains("stage=Gated"), "1 本目は Gated のまま");
+    assert!(show_line(&repo, &state, &id_c).contains("stage=Gated"), "3 本目は Gated のまま");
+    clean(&[&repo, &state]);
+}

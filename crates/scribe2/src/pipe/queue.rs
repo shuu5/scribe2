@@ -34,6 +34,8 @@ pub struct Queued {
     /// driver の札の状態（設計 pipeline.md §36・行 d の [`driver_ticket`] の同じ 1 本）。列に入りうる便でなければ
     /// 読まない＝`None`（`verdict` と同じ規則）。
     pub driver: Option<Ticket>,
+    /// 最後の留めの記帳が `held:` で、その後に `released:` が無い（番と後続の列から外れる・設計 pipeline.md §62 約束 6）。
+    pub held: bool,
 }
 
 /// 着地の番を取った周の記帳の detail（`RunStage stage=Gated`・設計 pipeline.md §22・新しい `EventKind` を足さない）。
@@ -89,7 +91,7 @@ pub fn turn_skipping(queue: Option<&[Queued]>, me: &str) -> (Turn, Vec<String>) 
     let mut ahead: Option<(&str, &str)> = None;
     let mut taken: Option<(&str, &str)> = None;
     let mut skipped: Vec<(&str, &str)> = Vec::new();
-    for entry in entries.iter().filter(|found| may_queue(found.stage, found.gated_at.is_some()) && found.worktree) {
+    for entry in entries.iter().filter(|found| !found.held && may_queue(found.stage, found.gated_at.is_some()) && found.worktree) {
         let (Some(verdict), Some(ts)) = (entry.verdict, entry.gated_at.as_deref()) else {
             if entry.run == me {
                 continue;
@@ -147,7 +149,7 @@ pub fn train_in(queue: &[Queued], me: &str, max: u64) -> Vec<String> {
     };
     let mut behind: Vec<(&str, &str)> = queue
         .iter()
-        .filter(|found| found.stage == Stage::Gated && found.worktree && found.verdict == Some(Verdict::Pass))
+        .filter(|found| found.stage == Stage::Gated && found.worktree && !found.held && found.verdict == Some(Verdict::Pass))
         .filter_map(|found| found.gated_at.as_deref().map(|ts| (ts, found.run.as_str())))
         .filter(|key| *key > (mine, me))
         .collect();
@@ -217,6 +219,7 @@ fn queue_from(state_dir: &Path, events: &[Event]) -> Option<Vec<Queued>> {
 fn queue_with(state_dir: &Path, events: &[Event], state: &State) -> Option<Vec<Queued>> {
     let gated_at = first_gated_at(events);
     let taken = taken_at(events);
+    let holds = last_holds(events);
     let mut queue = Vec::new();
     for (id, run) in &state.runs {
         let first = gated_at.get(id.as_str()).map(|ts| (*ts).to_owned());
@@ -233,9 +236,54 @@ fn queue_with(state_dir: &Path, events: &[Event], state: &State) -> Option<Vec<Q
             worktree,
             taken_at: taken.get(id.as_str()).map(|ts| (*ts).to_owned()),
             driver: open.then(|| driver_ticket(state_dir, id)),
+            held: matches!(last_from(holds.get(id.as_str())), Last::Held(_)),
         });
     }
     Some(queue)
+}
+
+/// 留めの記帳の detail の頭（`held:<FR の語>:<名指し>`・行 be と行 bf が書く）。列の読みは FR の語に依らず頭だけを見る。
+const HELD: &str = "held:";
+
+/// 留めを解いた記帳の detail の頭（`released:<FR の語>`）。
+const RELEASED: &str = "released:";
+
+/// 便の最後の留めの記帳（[`last_hold`]・設計 pipeline.md §62）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::pipe) enum Last {
+    /// 留めも解除も記帳していない。
+    Never,
+    /// 最後が留め（detail の全文・同じ名指しの周で記帳し直さない鍵）。
+    Held(String),
+    /// 最後が解除。
+    Released,
+}
+
+/// 便ごとの最後の留めか解除の記帳の detail（**pure**・追記だけの log の最後の 1 件・`RunStage` のうち detail の頭が
+/// [`HELD`] か [`RELEASED`] のもの）。
+fn last_holds(events: &[Event]) -> BTreeMap<&str, &str> {
+    let mut last: BTreeMap<&str, &str> = BTreeMap::new();
+    for event in events.iter().filter(|event| event.kind == EventKind::RunStage) {
+        if let Some(detail) = event.detail.as_deref().filter(|found| found.starts_with(HELD) || found.starts_with(RELEASED)) {
+            last.insert(event.run.as_str(), detail);
+        }
+    }
+    last
+}
+
+/// 最後の記帳の detail（[`last_holds`] の 1 便ぶん）を [`Last`] に読む（列の読みと着地の判定が同じ 1 本を通る）。
+fn last_from(detail: Option<&&str>) -> Last {
+    match detail {
+        Some(found) if found.starts_with(HELD) => Last::Held((*found).to_owned()),
+        Some(_) => Last::Released,
+        None => Last::Never,
+    }
+}
+
+/// 便の最後の留めの記帳を置き場の log から読む。**store を読めない周は `None`**（記帳の無い便に読み替えない）。
+pub(in crate::pipe) fn last_hold(state_dir: &Path, run: &str) -> Option<Last> {
+    let events = store::read_all(state_dir).ok()?;
+    Some(last_from(last_holds(&events).get(run)))
 }
 
 /// 追随の記帳の detail の頭（`RunStage` `Implemented` の `rebase:<old>..<new>`・§18 の追随が書く）。
@@ -486,7 +534,7 @@ fn wait_turn(entry: &Land<'_>) -> (Order, Vec<String>) {
 #[cfg(test)]
 mod tests {
     // flip-check: moved s2-07l.253
-    use super::{after_wake, await_turn, first_gated_at, following_of, train_in, turn_in, turn_skipping, Next, Order, Queued, Turn};
+    use super::{after_wake, await_turn, first_gated_at, following_of, last_from, last_holds, train_in, turn_in, turn_skipping, Last, Next, Order, Queued, Turn};
     use crate::fleet::store::LockPolicy;
     use crate::fleet::{replay, wait, Completion, Event, EventKind, Stage};
     use crate::pipe::contract::Contract;
@@ -582,6 +630,7 @@ mod tests {
             worktree,
             taken_at: None,
             driver: None,
+            held: false,
         }
     }
 
@@ -990,5 +1039,71 @@ mod tests {
         };
         assert_eq!(turn.pid(), 0, "pid を見張らない variant");
         assert_eq!(wait(turn, Duration::ZERO), Ok(()), "自分が列に居ない＝Unmeasurable＝待たない");
+    }
+
+    /// 留め中の便の fixture（段は `Gated`・PASS・worktree 在り）。
+    fn held(run: &str, ts: &str) -> Queued {
+        Queued { held: true, ..queued(run, Stage::Gated, Some(Verdict::Pass), ts, true) }
+    }
+
+    /// 留めか解除の記帳の fixture（`RunStage stage=Gated detail=<detail>`）。
+    fn hold_event(run: &str, ts: &str, detail: &str) -> Event {
+        event_with(run, EventKind::RunStage, Stage::Gated, ts, Some(detail))
+    }
+
+    /// 留め中の便は番の計算から外れる: 前に居ても待たず、後ろの便も留めの便を待たない。番を取っていても先頭に立たず、自分が留めの周の番も
+    /// 他の便だけで決まる。負例の対: 同じ列の留めを外すと待つ（上の First が空虚でない）。
+    #[test]
+    fn pipe_order_held_run_leaves_the_turn() {
+        let open = |run: &str, ts: &str| queued(run, Stage::Gated, Some(Verdict::Pass), ts, true);
+        let queue = [held("early", EARLY), open("me", MID), open("late", LATE)];
+        assert_eq!(turn_in(Some(&queue), "me"), Turn::First, "前の留めの便を待たない");
+        assert_eq!(turn_in(Some(&queue), "late"), Turn::After("me".to_owned()), "留めの便は後続も待たせない");
+        let back = [open("early", EARLY), open("me", MID), open("late", LATE)];
+        assert_eq!(turn_in(Some(&back), "me"), Turn::After("early".to_owned()), "留めを外すと待つ");
+        let taker = [Queued { taken_at: Some(LATE.to_owned()), ..held("taker", EARLY) }, open("me", MID)];
+        assert_eq!(turn_in(Some(&taker), "me"), Turn::First, "番を取った留めの便も先頭に立たない");
+        let mine = [held("me", EARLY), open("other", LATE)];
+        assert_eq!(turn_in(Some(&mine), "other"), Turn::First, "留めの便は列に居ない");
+        assert_eq!(turn_in(Some(&mine), "me"), Turn::First, "自分が留めの周は他の便だけで決まる");
+    }
+
+    /// 留め中の便は後続を積む列から外れる（積む便の選びの両側: 留めの便は選ばれず、外すと選ばれる）。
+    #[test]
+    fn pipe_order_held_run_leaves_the_train() {
+        let open = |run: &str, ts: &str| queued(run, Stage::Gated, Some(Verdict::Pass), ts, true);
+        let queue = [open("me", EARLY), held("mid", MID), open("late", LATE)];
+        assert_eq!(train_in(&queue, "me", 10), vec!["late"], "留めの便は積まない");
+        let back = [open("me", EARLY), open("mid", MID), open("late", LATE)];
+        assert_eq!(train_in(&back, "me", 10), vec!["mid", "late"], "留めを外すと積む");
+    }
+
+    /// 約束 9: 列の読みは detail の頭 `held:` と `released:` を FR の語に依らず読む。`held:FR84:` と `held:FR99:` の便も外れ、
+    /// `released:FR84` と `released:FR99` の後に戻り、留めの後の留めは再び外れる。`RunStage` でない記帳の字面は読まない。
+    #[test]
+    fn pipe_order_held_reads_the_head_of_the_detail_for_any_fr_word() {
+        let events = [
+            hold_event("a", EARLY, "held:FR83:x"),
+            hold_event("b", EARLY, "held:FR84:x"),
+            hold_event("c", EARLY, "held:FR99:y"),
+            hold_event("d", EARLY, "held:FR83:z"),
+            hold_event("b", MID, "released:FR84"),
+            hold_event("c", MID, "released:FR99"),
+            hold_event("d", MID, "released:FR83"),
+            hold_event("d", LATE, "held:FR84:again"),
+            hold_event("e", EARLY, "verdict:PASS"),
+            event_with("f", EventKind::RunDone, Stage::Landed, EARLY, Some("held:FR83:x")),
+        ];
+        let last = last_holds(&events);
+        let read = |run: &str| last_from(last.get(run));
+        assert_eq!(read("a"), Last::Held("held:FR83:x".to_owned()));
+        assert_eq!(read("b"), Last::Released, "held:FR84 の後の released:FR84");
+        assert_eq!(read("c"), Last::Released, "held:FR99 の後の released:FR99");
+        assert_eq!(read("d"), Last::Held("held:FR84:again".to_owned()), "解除の後の留めは再び外れる");
+        assert_eq!((read("e"), read("f"), read("g")), (Last::Never, Last::Never, Last::Never), "留めの記帳でない便・RunStage でない記帳・記帳の無い便");
+        let held_now = |run: &str| matches!(read(run), Last::Held(_));
+        let open = |run: &str, ts: &str| Queued { held: held_now(run), ..queued(run, Stage::Gated, Some(Verdict::Pass), ts, true) };
+        let queue = [open("a", EARLY), open("b", EARLY), open("c", EARLY), open("d", EARLY), open("me", LATE)];
+        assert_eq!(turn_in(Some(&queue), "me"), Turn::After("b".to_owned()), "a と d は外れ、解除された b と c の先頭の b を待つ");
     }
 }

@@ -60,11 +60,12 @@ use super::{emit, git_bytes, git_line, git_ok, worktree_path, Emit};
 // 持たないと**移した本文の path を書き換える**ことになり、純移動の機械証明（設計 §5.3）の (名, 本文の hash)
 // が動く。親自身は従来どおり `super::` で `pipe` の側を呼ぶ（本体は 1 byte も変えていない）。
 use super::{base_of_run, branch_name, declaration, verify_log_path, vessel_path};
-use super::queue::{await_turn, Order, Turned};
+use super::queue::{await_turn, last_hold, Last, Order, Turned};
 use super::retire::verdict_field;
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
 use crate::fleet::store::{self, append_line, LockPolicy};
 use crate::fleet::{EventKind, Stage};
+use crate::rules::manifest::Manifest;
 use std::path::{Path, PathBuf};
 
 /// 主実測の群（設計 §41・`s2-07l.457` の純移動）。`land` が呼ぶ 3 本だけを借りる（`measure_main` は [`finish`] の側）。
@@ -92,6 +93,9 @@ pub(in crate::pipe) use anchor::anchor_sync;
 
 /// 着地後の検出の口（`pipe land --detection-only`・設計 gate-cost.md §44 行 ak）。
 pub(in crate::pipe) mod detection;
+
+/// 着地の留めの判定（設計 §62・行 be）。素の値だけを受けて名指しの列を返す（記帳は [`hold`] が書く）。
+mod ruling_hold;
 
 pub(crate) use super::queue::turn_now;
 pub use super::queue::{turn_in, Queued, Turn};
@@ -353,6 +357,10 @@ pub fn land(entry: &Land<'_>) -> Outcome {
     if verdict_of(entry.state_dir, entry.run) != Some(Verdict::Pass) {
         return refused(format!("run {} の verdict が PASS でない", entry.run));
     }
+    // **留めの判定は PR の分岐と番待ちの前の 1 点**（設計 §62 約束 1）: 先頭の留めが後続を塞がず、PR の形も同じに留める。
+    if let Some(held) = hold(entry, &worktree, &base) {
+        return held;
+    }
     if let Some(cmd) = entry.pr_cmd {
         return open_pr(entry, &base, cmd);
     }
@@ -419,6 +427,63 @@ fn recorded_base(entry: &Land<'_>) -> Result<String, Outcome> {
         super::Base::Absent => Err(refused(format!("run {} に base が無い", entry.run))),
         super::Base::Unreadable => Err(broken(format!("run {} の base を読めない（置き場）", entry.run))),
     }
+}
+
+/// 留めの記帳の detail の頭（FR83・列の読みは FR の語に依らず `held:` だけを見る・[`super::queue`]）。
+const HELD_FR83: &str = "held:FR83:";
+
+/// 留めを解いた記帳の detail（FR83）。
+const RELEASED_FR83: &str = "released:FR83";
+
+/// 留めの名指し（空は通す・設計 §62）。自分の land の判定と候補の木の先頭の後続の掛け（[`super::train`]）が同じ 1 本を通る。
+/// 台帳の待ち上限は `--rules`（無ければ埋め込み）の manifest から、台帳を読む周だけ読む。
+pub(in crate::pipe) fn hold_names(entry: &Land<'_>, worktree: &Path, base: &str) -> Vec<String> {
+    let timeout = || {
+        let manifest = entry.rules.map_or_else(Manifest::embedded, Manifest::load).ok()?;
+        crate::seat::ledger::timeout_of(&manifest)
+    };
+    ruling_hold::judge(&ruling_hold::Input { repo: entry.repo, worktree, base, bd: entry.bd, timeout: &timeout })
+}
+
+/// 留めの周（設計 §62 約束 4・5）。当たる周は `RunStage Gated held:FR83:<名指し>`（直前の留めが同じ detail の周は記帳し直さない）を
+/// 書き、verdict が PASS でない周と同じ rc の断りで返る（Failed も追随の数えも無い）。当たらない周は最後の留めに解除が無ければ
+/// `released:FR83` を 1 件書いて `None`（進む）。着地済みの便（列の先頭が積んだ便の 2 度目の land）は判定しない。
+fn hold(entry: &Land<'_>, worktree: &Path, base: &str) -> Option<Outcome> {
+    let stage = super::current(entry.state_dir).ok().and_then(|state| state.runs.get(entry.run).map(|found| found.stage));
+    if stage == Some(Stage::Landed) {
+        return None;
+    }
+    let Some(last) = last_hold(entry.state_dir, entry.run) else {
+        return Some(broken(format!("run {} の留めの記帳を読めない（置き場）", entry.run)));
+    };
+    let names = hold_names(entry, worktree, base);
+    if names.is_empty() {
+        return match last {
+            Last::Held(_) => note_hold(entry, RELEASED_FR83.to_owned()).err(),
+            Last::Never | Last::Released => None,
+        };
+    }
+    let detail = format!("{HELD_FR83}{}", names.join(","));
+    if last != Last::Held(detail.clone()) {
+        if let Err(stopped) = note_hold(entry, detail.clone()) {
+            return Some(stopped);
+        }
+    }
+    Some(refused(format!("run {} は留め（{detail}）・main は動かさない", entry.run)))
+}
+
+/// 留めか解除の記帳 1 件（`RunStage stage=Gated`）。
+fn note_hold(entry: &Land<'_>, detail: String) -> Result<(), Outcome> {
+    let record = Emit {
+        kind: EventKind::RunStage,
+        run: entry.run,
+        bead: entry.bead,
+        stage: Some(Stage::Gated),
+        seat: None,
+        pid: None,
+        detail: Some(detail),
+    };
+    emit(entry.state_dir, &record, entry.policy).map_err(|err| broken(err.to_string()))
 }
 
 /// 着地の試行 1 回（追随 → 撃ち直し → CAS → 主実測 → 終端）。stale の周だけ [`Attempt::Stale`] で戻り、
@@ -1230,5 +1295,29 @@ mod tests {
         assert!(!regate_skippable(&broken, &first, &second), "読めない宣言は撃ち直す");
         let (plain, first, second) = notes_repo("crate-roots-regate-plain", "");
         assert!(regate_skippable(&plain, &first, &second), "key の無い宣言は面の外だけなら省く（対照）");
+    }
+
+    /// 本物の git の差分（`core.quotePath=false`）を読む（設計 §62 約束 8・新しい子 module の歯を既存の `mod tests` にも 1 本置く）:
+    /// 便の commit が足した設計 doc の判断の欄は名指され、base に在った欄の行は名指されない。引用符で囲まれた header（`"` を含む path）は
+    /// escape を戻した path で名指し、非 ASCII の path は quotePath=false で引用されないまま同じ字で名指す。
+    #[test]
+    fn hold_diff_real_git_reads_quoted_headers_and_only_the_added_lines() {
+        use super::ruling_hold::{judge, Input};
+        let (repo, _, _) = notes_repo("hold-diff-real-git", "ruling-check = true\n");
+        let write = |name: &str, text: &str| {
+            let path = repo.join(name);
+            assert!(path.parent().is_some_and(|dir| std::fs::create_dir_all(dir).is_ok()) && std::fs::write(&path, text).is_ok(), "{name} を書けた");
+        };
+        write("docs/design/old.md", "- 裁定: 昔の欄\n");
+        assert!(git_ok(&repo, &["add", "-A"]) && git_ok(&repo, &["commit", "-q", "-m", "old"]), "base の commit");
+        let base = git_line(&repo, &["rev-parse", "HEAD"]).unwrap_or_default();
+        write("docs/design/a\"b.md", "- 裁定: 足した欄\n");
+        write("docs/design/日.md", "- 裁定: 足した欄\n");
+        assert!(git_ok(&repo, &["add", "-A"]) && git_ok(&repo, &["commit", "-q", "-m", "added"]), "便の commit");
+        let no_ledger = || None;
+        let input = Input { repo: &repo, worktree: &repo, base: &base, bd: "bd", timeout: &no_ledger };
+        let want = ["field:design@docs/design/a\"b.md".to_owned(), "field:design@docs/design/日.md".to_owned()];
+        assert_eq!(judge(&input), want, "足した欄だけが escape を戻した path で名指される（台帳は読まない）");
+        let _ = std::fs::remove_dir_all(&repo);
     }
 }
