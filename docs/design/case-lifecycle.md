@@ -29,7 +29,7 @@
 - 歯の置き方（9 行に共通・flip-check が base の木へ写せる形）:
   - 新しい `+` の file の歯は、その file の末尾の `#[cfg(test)] mod tests` に置く（file の頭に置かない）。そのうえで、行の歯を少なくとも 1 本、base に在る file の test 区間に置く。
   - 理由: flip-check は、base に無く名が歯の file でない src の file を base の木へ写さない（`crates/xtask/src/flipcheck.rs` の `overlay`）。新しい file の中の歯だけの行は `not-flippable` で落ち、新しい親が末尾で宣言する兄弟の歯の file は、宣言ごと base に写らず `green-on-base` と判じられる（使い捨ての workspace で現物の xtask を撃って確かめた・2026-09-30）。
-  - 兄弟の歯の file（名が `_tests.rs` で終わる file）は、親が base に在り test 区間を持つとき（9 行の親では `crates/scribe2/src/ledger/mod.rs` だけ）に限る。親の test 区間に素の `mod <名>_tests;` を 1 行足して宣言し、歯の file の頭に `#![cfg(test)]` を置く。
+  - 兄弟の歯の file（名が `_tests.rs` で終わる file）は、親が base に在り test 区間を持つとき（9 行の親では `crates/scribe2/src/ledger/mod.rs` だけ）に限る。親の test 区間に `#[cfg(test)]` を付けた `mod <名>_tests;` を足して宣言し、歯の file の 1 行目は `//!` の doc comment にする（`#!` で始めない。`cargo xtask check` の非 Rust 実行物の分類器は先頭 2 byte の `#!` を実行物と読み、`#![cfg(test)]` で始まる file は done の門で赤になる）。
   - 既存の file の歯が 1 本在れば通るのは、新しい `+` の src file の中の歯（`not-flippable` の型）だけである。兄弟の歯の file・e2e の file・base に在る file の test 区間は、file ごとに単独に撃たれ、base で緑の歯が 1 本でも在れば落ちる。だから歯を置く file ごとに、その file の歯だけで base で RED になる理由（新しい関数・欄・型を呼ぶので base で compile できない、または期待が base の振る舞いと違う）が立つ。否定だけを測る歯（「進まない」「付かない」）は、同じ歯の中で肯定と組にする。本文だけ直して base で緑のままの既存の歯には retroactive の札を付ける。
   - 行ごとの置き場と、file ごとの base で RED の理由は、各 § の歯の項が名指す。
 
@@ -270,7 +270,7 @@ lifecycle.stale
 
 - 何が起きているか（verified）: doctor の 4 象限（`judge`）は both / neither を出すが、局面は持たない。閉じの理由の読みは、裁定と見送りの 1 語目の値だけを読み、後ろの語を読まない。
 - 約束（番号は done と 1:1）:
-  1. 行 a1 の write-set の `+` の file（`crates/scribe2/src/ledger/phase.rs`）の純関数 1 本が、台帳の読み（`Issue` の列）・台帳の接頭辞・周の時刻・窓の秒・2 つの線の時刻（切り替え・close-check。close-check を true で持たない repo は None）・未反映の裁定 id の列（FR84・dispatcher の後の行が渡すまで空）・処置の無い判定を持つ memo id の列（FR87・後の行が渡すまで空）・開いた契約の write-set の項目を受け、question・memo・epic の部品と、閉じた contract の部品と、形と閉じの misfit を返す。開いた契約の局面は行 b が持つ。`crates/scribe2/src/ledger/mod.rs` に `pub mod` の宣言を 1 行と、test 区間に歯の file の素の `mod` 宣言を 1 行足す（§1）。
+  1. 行 a1 の write-set の `+` の file（`crates/scribe2/src/ledger/phase.rs`）の純関数 1 本が、台帳の読み（`Issue` の列）・台帳の接頭辞・周の時刻・窓の秒・2 つの線の時刻（切り替え・close-check。close-check を true で持たない repo は None）・未反映の裁定 id の列（FR84・dispatcher の後の行が渡すまで空）・処置の無い判定を持つ memo id の列（FR87・後の行が渡すまで空）・開いた契約の write-set の項目を受け、question・memo・epic の部品と、閉じた contract の部品と、形と閉じの misfit を返す。開いた契約の局面は行 b が持つ。`crates/scribe2/src/ledger/mod.rs` に `pub mod` の宣言を 1 行と、test 区間に歯の file の `#[cfg(test)]` 付きの `mod` 宣言を足す（§1）。
   2. 種類の判定は §2 の順。memo の局面は FR91 の順に判じる:
      - form-both → memo-promoting（辿れる開いた契約が 1 本以上・理由 `contract-open`・手番 none。または FR93 の条件を満たす・理由 `close-due`・手番 vessel）→ memo-asking（子の開いた問い）→ memo-no-trigger → memo-actionable → memo-waiting → no-phase。memo-waiting は前の段に当たらない開いた memo の全部を受ける（理由 null）ので、行 a1 の部品は no-phase に落ちない（no-phase は §3 の判じる順の最後の受けで、行 a1 では到達しない）。
      - memo-actionable の理由: `trigger-met`（満ちて keep の無い引き金）・`verdict`（処置の無い判定）・`promotion-unmet`（昇格の行を持ち、辿れる開いた契約が無く、FR93 を満たさない・辿れる契約 0 本を含む）・`promotion-unreadable`（最後の昇格の行が読めない）。
@@ -288,7 +288,7 @@ lifecycle.stale
      - 接頭辞が解けない周は bead id と裁定 id の値を判じず、`unmeasured` に question・memo・contract・epic を `ledger-prefix` で名指す。
   7. since は §5.2 の規則で導ける値だけを返す（問いと epic の閉じは `closed_at`・question-open は `created_at`・promoting は辿れる契約の `created_at` の最新・close-due と epic-closable は閉じの最新・期日の満ちは期日・依存と着地の満ちは相手の `closed_at`）。ほかは None。
   8. memo の `due`・`triggers`・`keep` と、閉じた contract の `pointer` を埋める。
-- 歯（行 a1 の write-set の `+` の兄弟の歯の file・`crates/scribe2/src/ledger/mod.rs` の test 区間の素の `mod` 宣言と file の頭の `#![cfg(test)]`・§1・その file の歯は全部が行 a1 の新しい関数を呼ぶので base で compile できず RED・接頭辞 `phase_ledger_`・fixture の `Issue` は JSON の字から `issues_of` で作る）:
+- 歯（行 a1 の write-set の `+` の兄弟の歯の file・`crates/scribe2/src/ledger/mod.rs` の test 区間の `#[cfg(test)]` 付きの `mod` 宣言・file の頭は `#!` で始めない・§1・その file の歯は全部が行 a1 の新しい関数を呼ぶので base で compile できず RED・接頭辞 `phase_ledger_`・fixture の `Issue` は JSON の字から `issues_of` で作る）:
   - どの fixture も、部品の局面・手番・理由の 3 つを測る（局面だけを見ない）。
   - (1) 入力の組の不足で落ちない・開いた契約を返さない（1 本）。
   - (2) 種類の判定 4 つと重なり 2 形（問いの label と memo の label の両方 → question・epic の型と memo の label → memo）と form-both・form-neither／memo の 4 局面の各 1 fixture と、2 局面に当たる fixture 3 本（promoting ∧ asking・asking ∧ actionable・actionable ∧ waiting）で上が勝つ（AC61）／引き金の行の無い memo が memo-no-trigger・actionable の条件にも当たる fixture も misfit（AC61）／actionable の理由 4 語の各 1／keep の付いた満ちが waiting／形と no-trigger の位置の 3 本: form-both ∧ promoting の memo は form-both、引き金の行の無い promoting の memo は promoting、引き金の行の無い asking の memo は asking（no-trigger を promoting か asking より先に判じる実装と、form-both を promoting より後に判じる実装を落とす）／数えの外の 2 本: 別の memo だけが `discovered-from` で指す memo は promoting にならず、`parent-child` でなく `discovered-from` で結ぶ開いた問いだけを持つ memo は asking にならない。
@@ -376,7 +376,7 @@ lifecycle.stale
 
 - 何が起きているか（verified）: 器の便の着地の commit の本文は `run: <run id>`・契約と要件の trailer を持ち、発端の trailer の key は `source_key`。merge の trailer の門（vessel-hook.md 行 mg）が着地済み。契約表は `.md` と `.toml` の 2 形を契約表の読み手が読む。
 - 約束（番号は done と 1:1）:
-  1. 行 b1 の write-set の `+` の file（`crates/scribe2/src/ledger/phase_main.rs`）の純関数 1 本が次を受け、commit・row・requirement の部品を返す。`crates/scribe2/src/ledger/mod.rs` に `pub mod` の宣言を 1 行と、test 区間に歯の file の素の `mod` 宣言を 1 行足す（§1）。
+  1. 行 b1 の write-set の `+` の file（`crates/scribe2/src/ledger/phase_main.rs`）の純関数 1 本が次を受け、commit・row・requirement の部品を返す。`crates/scribe2/src/ledger/mod.rs` に `pub mod` の宣言を 1 行と、test 区間に歯の file の `#[cfg(test)]` 付きの `mod` 宣言を足す（§1）。
      - 切り替えの線の main の sha から先端までの first-parent の commit（sha・時刻・発端の id の列・`run:` の値・契約の trailer の値）。線より後の commit だけを渡すのは呼び手（行 c の全部の書き直し）で、この関数は受けた commit を全部判じる。
      - 切り替えの線の時刻（row の閉じの読みに使う）
      - event log の run id の集合・台帳の読み・契約表の行（pointer・req）・要件 id の列（読めなければ None）
@@ -385,7 +385,7 @@ lifecycle.stale
   4. requirement: どの行の req にも無い要件 → requirement-unrowed（手番 seat）・在る → requirement-rowed。`owned` に数えないのは数えを持つ書き手（行 c・§5.2）で、この関数は `owned` を持たない。
   5. 要件 id の列が無いか読める形でなければ requirement を `unmeasured` の `srs-unreadable`、契約表が同じなら row を `table-unreadable` で名指し、0 件と書かない。
 - 閉包: 歯の fixture の `Issue` は JSON の字から `issues_of` で作る。
-- 歯（行 b1 の write-set の `+` の兄弟の歯の file・`crates/scribe2/src/ledger/mod.rs` の test 区間の素の `mod` 宣言と file の頭の `#![cfg(test)]`・§1・その file の歯は全部が行 b1 の新しい関数を呼ぶので base で compile できず RED・接頭辞 `phase_main_`）: (1) 入力の不足で落ちない (2) commit の 4 語の各 1 fixture・`run:` が event log に無く発端の id も台帳に無い commit は run-trailer-unknown（先の語）・器の便の commit は commit の部品にならず、返す結びの便の run id と契約の bead id の両方にその sha が載る（結びを捨てる実装と便の id だけに結ぶ実装を落とす） (3) row の 3 局面（`.md` と `.toml` の pointer）・row-beaded の since が bead の `created_at`・trailer の経路（pointer を持つ bead が線より後に取り下げで閉じ、main の commit の契約の trailer がその bead を名指す行は row-landed、trailer の無い同じ行は row-unbeaded）・線の前後の対（線より前の取り下げの閉じは着地で row-landed、線より後の取り下げの閉じは row-unbeaded・線を見ずに閉じを全部着地と読む実装を落とす） (4) requirement の 2 局面（requirement-unrowed の手番は seat） (5) `unmeasured` の 2 語（その周は requirement と row の部品を 1 件も出さない）。base で RED: 歯の名が 0 本（rc 4・機能不在）。
+- 歯（行 b1 の write-set の `+` の兄弟の歯の file・`crates/scribe2/src/ledger/mod.rs` の test 区間の `#[cfg(test)]` 付きの `mod` 宣言・file の頭は `#!` で始めない・§1・その file の歯は全部が行 b1 の新しい関数を呼ぶので base で compile できず RED・接頭辞 `phase_main_`）: (1) 入力の不足で落ちない (2) commit の 4 語の各 1 fixture・`run:` が event log に無く発端の id も台帳に無い commit は run-trailer-unknown（先の語）・器の便の commit は commit の部品にならず、返す結びの便の run id と契約の bead id の両方にその sha が載る（結びを捨てる実装と便の id だけに結ぶ実装を落とす） (3) row の 3 局面（`.md` と `.toml` の pointer）・row-beaded の since が bead の `created_at`・trailer の経路（pointer を持つ bead が線より後に取り下げで閉じ、main の commit の契約の trailer がその bead を名指す行は row-landed、trailer の無い同じ行は row-unbeaded）・線の前後の対（線より前の取り下げの閉じは着地で row-landed、線より後の取り下げの閉じは row-unbeaded・線を見ずに閉じを全部着地と読む実装を落とす） (4) requirement の 2 局面（requirement-unrowed の手番は seat） (5) `unmeasured` の 2 語（その周は requirement と row の部品を 1 件も出さない）。base で RED: 歯の名が 0 本（rc 4・機能不在）。
 - 限界: 消費側の SRS が器の読めない形なら requirement は常に `unmeasured`（読み手を足すのは別の行）。線より前の commit を渡さないのは呼び手（行 c）で、この行の歯は測らない（行 c の書き手が切り替えの線の sha から先端までを読む）。
 - 却下: row-beaded を閉じた bead にも当てる形（行の大半が窓を持たずに出力に残る）。
 
@@ -617,7 +617,7 @@ write-set = ["+crates/scribe2/src/ledger/phase.rs", "+crates/scribe2/src/ledger/
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail phase_ledger_"]
 size = "L"
 growth = ["crates/scribe2/src/ledger/phase.rs:480", "crates/scribe2/src/ledger/phase_tests.rs:680", "crates/scribe2/src/ledger/mod.rs:2"]
-done = "(1) ledger の新しい module の純関数 1 本が台帳・接頭辞・時刻・窓・2 つの線・未反映の id・処置の無い判定の id・開いた契約の write-set を受け、question・memo・epic と閉じた contract の部品と misfit を返し、開いた契約は返さない (2) 種類の判定は §2 の順、memo は form-both → promoting → asking → no-trigger → actionable（理由 4 語）→ waiting（keep・ほかの全部）の順で、辿れる契約は contract の種類の discovered-from だけ・子の問いは parent-child だけを数え、行 a1 の部品は no-phase に落ちない (3) FR93 の条件の 1 関数が 5 つの条件を持ち、crate の中から呼べる可視性で置かれ、兄弟の歯の file が直に呼ぶ（ledger の外の module から呼べることは呼び手の行の compile が測る） (4) 問いの 3 局面と links (5) epic の 3 局面 (6) 閉じの 5 語を 2 つの線の両方より後の閉じだけに判じ、ほかは *-closed、接頭辞が None なら unmeasured に ledger-prefix (7) since は導ける 8 つの部品の値だけで、ほかは None (8) memo の due・triggers・keep と閉じた契約の pointer 歯: phase_ledger_（入力の不足・局面と手番と理由・種類の重なりと memo の局面と上の勝ち・form-both と no-trigger の位置の 3 本・数えの外の 2 本・FR93 の関数の直の呼び出しと条件の欠け・問いと links・子の無い epic・閉じの 5 語〔close-kind-mismatch 4 形・close-unresolved 2 形・merged-into-not-open 2 形〕と見送りの崩れと 2 つの線の前後と close-check が None・since の 8 つ・欄と次の期日）（兄弟の歯の file を ledger/mod.rs の test 区間の素の mod で宣言し、頭に #![cfg(test)]）が base で 0 本（rc 4・機能不在）、fixture の Issue は JSON の字から issues_of で作る"
+done = "(1) ledger の新しい module の純関数 1 本が台帳・接頭辞・時刻・窓・2 つの線・未反映の id・処置の無い判定の id・開いた契約の write-set を受け、question・memo・epic と閉じた contract の部品と misfit を返し、開いた契約は返さない (2) 種類の判定は §2 の順、memo は form-both → promoting → asking → no-trigger → actionable（理由 4 語）→ waiting（keep・ほかの全部）の順で、辿れる契約は contract の種類の discovered-from だけ・子の問いは parent-child だけを数え、行 a1 の部品は no-phase に落ちない (3) FR93 の条件の 1 関数が 5 つの条件を持ち、crate の中から呼べる可視性で置かれ、兄弟の歯の file が直に呼ぶ（ledger の外の module から呼べることは呼び手の行の compile が測る） (4) 問いの 3 局面と links (5) epic の 3 局面 (6) 閉じの 5 語を 2 つの線の両方より後の閉じだけに判じ、ほかは *-closed、接頭辞が None なら unmeasured に ledger-prefix (7) since は導ける 8 つの部品の値だけで、ほかは None (8) memo の due・triggers・keep と閉じた契約の pointer 歯: phase_ledger_（入力の不足・局面と手番と理由・種類の重なりと memo の局面と上の勝ち・form-both と no-trigger の位置の 3 本・数えの外の 2 本・FR93 の関数の直の呼び出しと条件の欠け・問いと links・子の無い epic・閉じの 5 語〔close-kind-mismatch 4 形・close-unresolved 2 形・merged-into-not-open 2 形〕と見送りの崩れと 2 つの線の前後と close-check が None・since の 8 つ・欄と次の期日）（兄弟の歯の file を ledger/mod.rs の test 区間の #[cfg(test)] 付きの mod で宣言し、file の頭は #! で始めない）が base で 0 本（rc 4・機能不在）、fixture の Issue は JSON の字から issues_of で作る"
 
 [[contract]]
 id = "a2"
@@ -653,7 +653,7 @@ write-set = ["+crates/scribe2/src/ledger/phase_main.rs", "+crates/scribe2/src/le
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail phase_main_"]
 size = "M"
 growth = ["crates/scribe2/src/ledger/phase_main.rs:220", "crates/scribe2/src/ledger/phase_main_tests.rs:340", "crates/scribe2/src/ledger/mod.rs:2"]
-done = "(1) ledger の新しい module の純関数 1 本が線より後の commit（呼び手が渡す）・切り替えの線の時刻・event log の run id・台帳・契約表の行・要件 id を受け、commit・row・requirement の部品と、便の run id と契約の bead id ごとの commit の結びを返す (2) 器の便の commit は部品にせず結びの run id と bead id の両方に載せ、run-trailer-unknown・source-unresolved・commit-no-trailer・commit-landed を判じる (3) row の 3 局面（.md と .toml・着地の形の閉じか main の契約の trailer で row-landed・線より前の閉じは形を問わず着地・線より後の着地でない閉じは着地でない） (4) requirement の 2 局面（手番 seat・owned の数えは行 c の書き手が持ち、この関数は owned を持たない） (5) 要件と契約表が無いか読めない形なら unmeasured の srs-unreadable と table-unreadable 歯: phase_main_（2 語に当たる commit の先の語・結びの 2 つの id・row-beaded の since・trailer の経路の row-landed と trailer の無い対・線の前後の取り下げの閉じの対・unmeasured の周の部品 0 を含む）（兄弟の歯の file を ledger/mod.rs の test 区間の素の mod で宣言し、頭に #![cfg(test)]）が base で 0 本（rc 4・機能不在）、fixture の Issue は JSON の字から作る"
+done = "(1) ledger の新しい module の純関数 1 本が線より後の commit（呼び手が渡す）・切り替えの線の時刻・event log の run id・台帳・契約表の行・要件 id を受け、commit・row・requirement の部品と、便の run id と契約の bead id ごとの commit の結びを返す (2) 器の便の commit は部品にせず結びの run id と bead id の両方に載せ、run-trailer-unknown・source-unresolved・commit-no-trailer・commit-landed を判じる (3) row の 3 局面（.md と .toml・着地の形の閉じか main の契約の trailer で row-landed・線より前の閉じは形を問わず着地・線より後の着地でない閉じは着地でない） (4) requirement の 2 局面（手番 seat・owned の数えは行 c の書き手が持ち、この関数は owned を持たない） (5) 要件と契約表が無いか読めない形なら unmeasured の srs-unreadable と table-unreadable 歯: phase_main_（2 語に当たる commit の先の語・結びの 2 つの id・row-beaded の since・trailer の経路の row-landed と trailer の無い対・線の前後の取り下げの閉じの対・unmeasured の周の部品 0 を含む）（兄弟の歯の file を ledger/mod.rs の test 区間の #[cfg(test)] 付きの mod で宣言し、file の頭は #! で始めない）が base で 0 本（rc 4・機能不在）、fixture の Issue は JSON の字から作る"
 
 [[contract]]
 id = "c1"
