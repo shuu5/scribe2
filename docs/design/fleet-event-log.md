@@ -242,6 +242,8 @@ C3 は「1 つの DB file（host 列）」と言う。MVP はそれを **append-
     - (c) marker の無い repo と別の NAME の repo で 0 件。
     - (d) 同じ秒に 2 回撃つと ts が 2 つとも違い、log の順に増える（hook の経路の一意と順。+1 ms の枝は lib の (f) が決定的に測る）。
     - (e) `pipe report` の human_events が発話の前後で同じ。
+    - (k) 何も書かない 2 形（約束 2）: prompt の key の無い payload と、空白だけ（空白・改行・tab）の prompt。どちらも rc 0・stdout と stderr が 0 byte・記帳 0。同じ歯の中で先に普通の prompt を 1 件記帳させる対照を置く（base で RED）。
+    - (l) 止めない 3 形（約束 8）: session_id の無い payload で reason=no-session、生きた pid（test の process）を本文に持つ event log の lock を置き、rules の写しの行 fleet.lock_retry_ms を 50 にして `--rules` で渡す周で reason=lock、event log の path を dir にした置き場で reason=write。どれも rc 0・stdout 0 byte・stderr が `<NAME>: utterance unrecorded reason=<語>` の 1 行だけ・記帳 0。対照は (k) と同じ。
   - lib `utterance_tail_`（(f)〜(h) は store の追記の 1 本〔約束 5〕を直接呼ぶ。log は歯が event の行を書いて作り、撃つ前と後の時刻で「今」を挟む）:
     - (f) 最後の発話の ts が今より 1 時間先の log（発話 1 件）に 1 件足すと、振られた ts がちょうど先の ts + 1 ms。今だけを振る実装と、末尾を読まない実装を落とす。
     - (g) 同じ先の発話の後に、発話でない event を合わせて 80 KiB 続けた log では、振られた ts が今（撃つ前と後の時刻の間）。読む byte が末尾の 64 KiB に閉じることを測り、log の全部や窓の外まで遡る実装を落とす。
@@ -250,7 +252,7 @@ C3 は「1 つの DB file（host 列）」と言う。MVP はそれを **append-
       - 作り手のうち 3 つは私有の module の中に在る（`pipe/mod.rs` の `notify`・`pipe/dispatch.rs` の `group`・`seat/tick.rs` の `signal`）。この 3 つの mod 宣言を `pub(crate)` に広げ、作り手の関数も crate の中から呼べる可視性にする。行は増やさない。
     - (j) ミリ秒の字面の作りと読みが往復する。
     - 前の版の (f)（数える reader を通した 10 MB と 20 MB の log で読む byte が同じ）は (g) に置き換えた。(g) は同じ約束（読む byte が log の大きさに依らず末尾の窓に閉じる）を reader の seam 無しで測る。前の (f) だけだと、末尾を全く読まない実装でも緑になる。
-  - base で RED の理由: 機能不在。書き手が無いので (a)(d) は 0 件で落ちる。lib の (f)〜(j) は新しい file の中なので、base では該当 0 本（rc 4）。(b)(c)(e) は除外だけだと base で緑になる。そこで同じ歯の中で先に普通の prompt を 1 件記帳させる対照を置き、base で RED にする（負例だけの歯にしない）。
+  - base で RED の理由: 機能不在。書き手が無いので (a)(d) は 0 件で落ちる。lib の (f)〜(j) は新しい file の中なので、base では該当 0 本（rc 4）。(b)(c)(e)(k)(l) は除外や不発だけだと base で緑になる。そこで同じ歯の中で先に普通の prompt を 1 件記帳させる対照を置き、base で RED にする（負例だけの歯にしない）。
 - 触らない:
   - 打刻（Busy）・群の行・Stop・SessionStart。
   - 行 f の event の型と読み手。
@@ -261,6 +263,7 @@ C3 は「1 つの DB file（host 列）」と言う。MVP はそれを **append-
   - user が手で `<NAME> pipe:` で始まる字を打つと、差し込みと読んで記帳しない。
   - 1 秒に 1000 を越える発話は、ts が次の秒の字面へはみ出す。一意と順は保つ。
   - 64 KiB より前の発話は見ない（同じ ms に 64 KiB を越える追記が挟まる周だけ、一意が崩れうる）。
+  - lock の待ちは store の既存の取り方のまま rules 行 fleet.lock_retry_ms（今 5000 ms）まで続く。lock が長く取られた周は、user の prompt がその間だけ待つ（rules 行 hook.budget_ms の 2000 ms を越えうる）。待ちを hook の予算に揃えるかは別 memo。
   - ミリ秒の ts は `epoch_of` では読めない。発話の年齢を測る後の行は、約束 4 の読みを使う。
   - 包みの字は CLI の版で変わりうる。変わると記帳が増える向きに倒れる（止める向きではない）。
 - 却下:
@@ -425,7 +428,7 @@ write-set = ["+crates/scribe2/src/hook/utterance.rs", "crates/scribe2/src/hook/m
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail hook_utterance_record_", "cargo nextest run -p scribe2 --lib --no-tests=fail utterance_tail_"]
 size = "M"
 growth = ["crates/scribe2/src/hook/utterance.rs:260", "crates/scribe2/src/hook/mod.rs:6", "crates/scribe2/src/fleet/store.rs:75", "crates/scribe2/src/fleet/cli.rs:14", "crates/scribe2/src/fleet/wait.rs:30", "crates/scribe2/src/fleet/mod.rs:1", "crates/scribe2/src/pipe/notify.rs:12", "crates/scribe2/src/pipe/dispatch/group.rs:12", "crates/scribe2/src/headless/mod.rs:10", "crates/scribe2/src/pipe/mod.rs:1", "crates/scribe2/src/pipe/dispatch.rs:1", "crates/scribe2/src/seat/tick.rs:1"]
-done = "(1) hook の子 module 1 つが user-prompt-submit の枝で打刻の後・群の行の前に 1 回撃たれる (2) payload を json_tree で読み、prompt の無い・空白だけの周は何も書かず何も出さない (3) 頭が <NAME> と閉じた 4 語の差し込みの行・閉じた 5 つの頭の包み（別の session と teammate の包みの 3 形・背景の task の知らせ・compaction の要約）・plugin-root が state dir の pipe の dir の下の runner は記帳も出力もしない（lens は hook が撃たれない既存の事実で、本行は触らない） (4) ts はミリ秒 3 桁の UTC の字面で、作りと読みは fleet/cli.rs と fleet/wait.rs の各 1 本 (5) store の追記の 1 本が lock の中で末尾 64 KiB だけを読み、今と最後の発話の ts + 1 ms の大きい方を振る（窓の外の発話は見ない・窓の頭で途切れた行は捨てる） (6) 行は UtteranceReceived・human・chat・session・逐語の detail・run 無し (7) 記帳した周だけ stdout に <NAME> utterance: ts=<ts> の 1 行（逐語なし） (8) session 無し・lock・書けない周は rc 0 で stderr 1 行 reason=no-session|lock|write (9) bd を撃たない (10) 作り手の親の mod 宣言 3 つ（pipe の notify・dispatch の group・tick の signal）を pub(crate) に広げ、作り手の関数を crate の中から呼べるようにし、行を増やさない (11) ミリ秒の読みを fleet/mod.rs の pub use wait の列に 1 語足す 歯: hook_utterance_record_ が問いの有無の 2 本の記帳と逐語の一致と bd 0 回・差し込み 9 種と包みと runner の 0 件・marker の外 2 形の 0 件・同じ秒の 2 発話の ts の違いと順・pipe report の human_events の不変を、utterance_tail_ が 1 時間先の最後の発話への追記でちょうど +1 ms・80 KiB の他の event の後ろの先の発話では今・60 KiB の後ろでは +1 ms・作り手 9 種の実物の行の判定・ミリ秒の往復を測る。base は書き手が無く記帳 0 件で RED"
+done = "(1) hook の子 module 1 つが user-prompt-submit の枝で打刻の後・群の行の前に 1 回撃たれる (2) payload を json_tree で読み、prompt の無い・空白だけの周は何も書かず何も出さない (3) 頭が <NAME> と閉じた 4 語の差し込みの行・閉じた 5 つの頭の包み（別の session と teammate の包みの 3 形・背景の task の知らせ・compaction の要約）・plugin-root が state dir の pipe の dir の下の runner は記帳も出力もしない（lens は hook が撃たれない既存の事実で、本行は触らない） (4) ts はミリ秒 3 桁の UTC の字面で、作りと読みは fleet/cli.rs と fleet/wait.rs の各 1 本 (5) store の追記の 1 本が lock の中で末尾 64 KiB だけを読み、今と最後の発話の ts + 1 ms の大きい方を振る（窓の外の発話は見ない・窓の頭で途切れた行は捨てる） (6) 行は UtteranceReceived・human・chat・session・逐語の detail・run 無し (7) 記帳した周だけ stdout に <NAME> utterance: ts=<ts> の 1 行（逐語なし） (8) session 無し・lock・書けない周は rc 0 で stderr 1 行 reason=no-session|lock|write (9) bd を撃たない (10) 作り手の親の mod 宣言 3 つ（pipe の notify・dispatch の group・tick の signal）を pub(crate) に広げ、作り手の関数を crate の中から呼べるようにし、行を増やさない (11) ミリ秒の読みを fleet/mod.rs の pub use wait の列に 1 語足す 歯: hook_utterance_record_ が問いの有無の 2 本の記帳と逐語の一致と bd 0 回・差し込み 9 種と包みと runner の 0 件・marker の外 2 形の 0 件・同じ秒の 2 発話の ts の違いと順・pipe report の human_events の不変・prompt の無い周と空白だけの周の記帳 0 と出力 0 byte・session 無し・lock・書けない周の rc 0 と stderr の reason の 1 行と記帳 0 を、utterance_tail_ が 1 時間先の最後の発話への追記でちょうど +1 ms・80 KiB の他の event の後ろの先の発話では今・60 KiB の後ろでは +1 ms・作り手 9 種の実物の行の判定・ミリ秒の往復を測る。base は書き手が無く記帳 0 件で RED"
 
 [[contract]]
 id = "h"
