@@ -1473,9 +1473,14 @@ terms:
     aliases: [閉じの門への加わり]
     definition: vessel 宣言の任意 key で、 値は真偽だけ (ADR-0097)。 true を持つ repo の席の close に、 起票の門の close の段 (理由の無い close・close の理由の文法の外・席の着地の形・理由を渡せない口を断る) が掛かる。 false・key が無い・宣言 file が HEAD に無い・git を撃てない repo には掛からず、 宣言が在って読めない repo には同じ判定が掛かる。 局面の出力は、 main の先端の宣言が true を持つ repo の閉じだけを、 close-check の線より後に限って misfit に数える (SRS FR90)。 key を知らない古い binary は key を持つ宣言を丸ごと読めない。
     relationships: [vessel 宣言, 任意 key, 起票の門, close の理由の文法, close-check の線]
+  - canonical: 切り替えの線
+    domain: consumer
+    aliases: [cutover line]
+    definition: この版の器がその state dir で最初に局面の出力を全部書き直した時刻 (SRS FR90・ADR-0088)。 event の種類 LifecycleCutover (key version = 線を引いた器の版・key main = その書き直しが読んだ main の印) の 1 件で state dir ごとに 1 度だけ記帳し、 後の版は動かさない。 detail を持たない最初の LifecycleCutover の行が線である (ADR-0100)。 閉じと着地の commit に由来する misfit はこの線より後の記録にだけ掛ける。
+    relationships: [局面の出力, close-check の線, misfit, event log]
   - canonical: close-check の線
     domain: consumer
-    definition: 局面の出力の全部の書き直しが main の先端の vessel 宣言で close-check を初めて true と読んだ時刻。 state dir ごとに 1 度だけ記帳し、 後の書き直しは動かさず、 切り替えの線より前にはならない。 閉じに由来する misfit はこの線より後の閉じだけに掛ける (SRS FR90・FR91)。
+    definition: 局面の出力の全部の書き直しが main の先端の vessel 宣言で close-check を初めて true と読んだ時刻。 state dir ごとに 1 度だけ記帳し、 後の書き直しは動かさず、 切り替えの線より前にはならない。 閉じに由来する misfit はこの線より後の閉じだけに掛ける (SRS FR90・FR91)。 記帳は event の種類 LifecycleCutover の 1 件で、 既存の任意の key detail に閉じた 1 語 close-check を持ち、 detail が close-check の最初の行が線である (ADR-0100)。
     relationships: [close-check, 切り替えの線, misfit]
     flagged_ambiguities: ["close-check の線 (閉じの misfit の数えの境・SRS FR90) と opt-in の線 (ruling-check が main の履歴で初めて true になった commit・SRS FR83) と切り替えの線 (この版の器の最初の全部の書き直し・SRS FR90) は別"]
   - canonical: 判断の欄
