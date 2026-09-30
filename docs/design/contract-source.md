@@ -1047,7 +1047,7 @@ title = "land の終端と pipe retire が共有する問いの部品 — CI の
 req = ["FR96", "AC65"]
 section = "60"
 touches = ["crate::seat::ledger::Issue"]
-write-set = ["crates/scribe2/src/fleet/wait.rs", "crates/scribe2/src/fleet/mod.rs", "crates/scribe2/src/seat/ledger.rs", "crates/scribe2/src/hook/graph_guard.rs", "crates/scribe2/src/ledger/form.rs", "crates/scribe2/src/pipe/dispatch/precheck.rs"]
+write-set = ["crates/scribe2/src/fleet/wait.rs", "+crates/scribe2/src/pipe/dispatch/unreflected.rs", "crates/scribe2/src/fleet/mod.rs", "crates/scribe2/src/seat/ledger.rs", "crates/scribe2/src/hook/graph_guard.rs", "crates/scribe2/src/ledger/form.rs", "crates/scribe2/src/pipe/dispatch/precheck.rs"]
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail retire_parts_", "cargo nextest run -p scribe2 --lib --no-tests=fail invocation_fleet_ci_query_names_the_program_and_cwd"]
 size = "M"
 growth = ["crates/scribe2/src/fleet/wait.rs:120", "crates/scribe2/src/fleet/mod.rs:1", "crates/scribe2/src/seat/ledger.rs:20", "crates/scribe2/src/hook/graph_guard.rs:1", "crates/scribe2/src/ledger/form.rs:1", "crates/scribe2/src/pipe/dispatch/precheck.rs:1"]
