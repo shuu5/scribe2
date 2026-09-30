@@ -21,9 +21,9 @@ scribe2 は scribe v1 を捨てて作り直す「次の器」（Rust・単一 bi
 3. **実装**: `bd --readonly ready --limit 0` から 1 本選び `bd update <id> --claim`。先に落ちる test を書き **RED を実測**
    （RED の理由も弁別する: 機能不在 / 道具不在 / 環境）→ 実装 → `cargo xtask flip-check --base origin/main` で入口確認。
 4. **検証**: 自分の diff を lens 1 本の敵対 review に 1 周（findings は**自分で再現してから**直す）→ 下の「done の定義」を全部 GREEN。
-5. **land**: PR → CI 緑 → squash merge → `bd close <id> --reason "…"`。**1 bead = 1 PR**。close は merge の後。
+5. **land**: PR → CI 緑 → squash merge。**1 bead = 1 PR**。契約の close は席が書かず、器の land の終端が着地の形（`landed <sha> ci=…`）で書く（席の着地の形の close は起票の門が断る・ledger-form.md §16）。終端が止まったら、原因を直して orchestrator の名指しの 2 形 `pipe land --run <run> --terminal-only`（撃ち直し）・`pipe retire --run <run>`（PR の便の閉じ）で閉じる。
 
-## done の定義（1 つでも赤なら close しない）
+## done の定義（1 つでも赤なら着地を止める）
 <!-- 本区間は `cargo xtask gen-claude-md` の生成物である。手で編集しない（`cargo xtask check` の claude-md-done が drift を落とす）。正本は `.github/workflows/ci.yml` の `run: cargo …` 行。 -->
 <!-- done:begin -->
 ```

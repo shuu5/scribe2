@@ -6,7 +6,7 @@
 
 ## この repo の前提（最重要）
 - **scribe v1 plugin は積まない**（2026-09-09 user 直命）。役割別の外部注入は無い＝**本 PRIME が bd 運用の唯一の SSOT** である。
-- 起票・依存・close はすべて作業 session が自分で行う。「誰が」を分ける規約は持たない（席が 1 つしかない）。
+- 起票・依存はすべて作業 session が自分で行う。「誰が」を分ける規約は持たない（席が 1 つしかない）。契約の close は着地の形（`landed …`）を器の land の終端だけが書き、席は書かない（起票の門が断る・ledger-form.md §16）。
 - 役割を超えた開発規約（作業の流れ・done の定義・review・ADR を書く条件）の SSOT は repo の `CLAUDE.md` と `design-intent/spec/`。
 
 ## 役割分担
@@ -17,7 +17,7 @@
 - **後継を持たない機能が 2 つある**: 機械横断な事実の共有と semantic 検索には後継なし——能力喪失として受容する。代替は `git grep` と ADR 索引の語による探索で、届くのは repo tracked な carrier まで。auto-memory は非 tracked ゆえ母集団に入らない（host 固有の事実はそこに留め、昇格させない）。
 
 ## 台帳の規則（本文 SSOT・pointer 先は持たない）
-- **R0** 読みは `bd --readonly <sub>` 形。1 bead = 1 PR。close は merge の後。
+- **R0** 読みは `bd --readonly <sub>` 形。1 bead = 1 PR。契約の close は merge の後に器の land の終端が書く。席の close は理由を必ず持ち（`-r` / `--reason` / `--reason-file`）、閉じた 9 つの頭（§16）のどれかで書く。
 - **R1** notes は `--append-notes`（`--notes` は置換＝過去の記帳を消す）。description は `--body-file`（heredoc の引用崩れを避ける）。
 - **R2** 新規 bead は必ず epic に属させる（`--parent`）。**親の label は継承されるので起票直後に labels を実測する。** 所属 = parent-child ／ blocks = 順序専用。
 - **R3** memo 段階（契約未確定）は label `intake:memo` で名乗る。
@@ -42,7 +42,7 @@
 ## Essential Commands（要点。全コマンド・詳細は `bd --help` / `bd <cmd> --help`）
 - 探す: `bd --readonly ready --limit 0` / `bd --readonly list --limit 0` / `bd --readonly show <id>` / `bd --readonly search <query>` / `bd --readonly dep tree <id>`
 - 作る/更新: `scripts/bdw create --title="..." --body-file F --type=task|bug|feature --priority=2 --parent <epic>` / `scripts/bdw update <id> --claim` / `scripts/bdw update <id> --acceptance "$(cat F)" --append-notes "..."`
-- 完了/依存: `scripts/bdw close <id> --reason="..."` / `scripts/bdw dep add <issue> <depends-on>`
+- 閉じ/依存: 契約は器の land の終端が閉じる（止まった終端は orchestrator が `pipe land --run <run> --terminal-only` か `pipe retire --run <run>`）。席が閉じるのは `scripts/bdw close <id> --reason '重複 <id>'`（後継 <id>・取り下げ <理由>・裁定 <裁定 id>・昇格済み <契約 id>・まとめた <memo id>・見送り <裁定 id>・完了）の形だけで、`landed` は書けない。`update --status closed`・`duplicate`・`supersede`・`epic close-eligible` は理由を渡せず断られる（`bd help close`）。依存は `scripts/bdw dep add <issue> <depends-on>`
 - 同期/健全: `bd dolt push` / `bd dolt pull` / `bd --readonly stats` / `bd doctor`
 
 <!-- beads-init-template v:2 — このファイルは scribe:setup（旧 beads-init）skill 由来。skill はこの marker の `v:N` バージョン番号で「我々の版か」と「role 中立版か」を判定する。この行（特に `v:N`）を残せば手動編集しても上書きされない。scribe2 は v1 plugin を積まないので本 PRIME が唯一の SSOT（role 別注入は無い）。 -->

@@ -322,6 +322,16 @@ mod tests {
         assert_eq!(close_check(std::path::Path::new("/nonexistent-close-check-dir")), CloseCheck::Exempt);
     }
 
+    /// 本 repo の宣言（`CARGO_MANIFEST_DIR` から 2 つ上）が読めて、close-check が true である（行 l3）。
+    #[test]
+    fn declaration_close_check_own_repo_declares_true_and_reads() {
+        let own = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join(super::super::DECL_FILE);
+        let text = std::fs::read_to_string(&own).unwrap_or_else(|err| panic!("{} を読める: {err}", own.display()));
+        let declared = Declared::parse(&text).unwrap_or_else(|errors| panic!("本 repo の宣言を読める: {errors:?}"));
+        assert_eq!(declared.close_check, Some(true), "本 repo の宣言は close-check = true");
+        assert_eq!(check_of(Some(Ok(declared))), CloseCheck::Joins);
+    }
+
     /// 真偽を書いた他の key は key ごとの型の不備になり、entrance-flip = true は 3 語の外として key と行番号を名指す。
     #[test]
     fn declaration_close_check_bool_in_other_keys_is_a_typed_refusal() {

@@ -14,3 +14,6 @@ detection-verify = ["cargo xtask mutants-diff --base {base} --jobs {jobs} --thre
 # 出す行為（憲法 A1 の「出す」）なので、押す先はここで名指した repo の便だけが終端を持つ。
 # `ci-cmd` は書かない＝既定の 1 行（forge の CLI・`{sha}` は 40 桁）を撃つ。
 remote = "origin"
+# close の理由の門に加わる（設計 ledger-form.md §16・ADR-0097）。理由の無い close・和の外の理由・席の着地の形の close を
+# 起票の門が断る。契約の close は land の終端が書く。
+close-check = true
