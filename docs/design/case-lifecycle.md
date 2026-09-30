@@ -254,7 +254,7 @@ lifecycle.stale
   5. `Issue` に `created_at` と `closed_at`（どちらも字の `Option`）を足し、`issues_of` が読む。無い要素は None（ほかの欄の読みは変えない）。4 か所の組みを直す（構築点は便の始めに今の main で数え直す）。
 - 閉包: 新しい file は `Issue` を字で組まず、`WaitReason`・`Stage`・`EventKind` の変種を名指さない（それらを touches に持つ行の閉包を広げない）。歯の fixture の `Issue` は bd の JSON の字を `issues_of` で読んで作る。
 - 歯（接頭辞・母集団・base で RED の理由）:
-  - `phase_table_`（9 本・case の `+` の file の末尾の歯の区間）: (a) 38 語が ASCII の小文字と `-`・一意・種類の接頭辞を持つ (b) 38 語の列が §2 の表の字と宣言順に 1 字も違わない（期待の列を歯に写す） (c) 手番の 6 語 (d) contract-queued の表が `WAIT_REASONS` を全部と unreflected-ruling・floor を含む (e) 表に無い語は None (f) misfit の 15 語の字 (g) 部品の共通の欄の 9 key と `links` の 8 key の const の列が、§5.2 の字と順に 1 字も違わない (h) 9 つの種類の語の字と順 (i) 語から手番の関数が §3 の表の全行と一致する（38 語の各語、memo-promoting の理由 2 つ〔contract-open・close-due〕、contract-queued の理由 10 語の各手番を期待の表として歯に写す・全部を 1 つの手番に倒す実装を落とす）。
+  - `phase_table_`（9 本・case の `+` の file の末尾の歯の区間）: (a) 38 語が ASCII の小文字と `-`・一意で、§2 の表で自分の種類の名を頭に持たない 2 語（question の `ruling-unreflected`・全部の種類に共通の `misfit`）を除く 36 語が `<種類>-` を頭に持つ。除く 2 語は歯に字で写す (b) 38 語の列が §2 の表の字と宣言順に 1 字も違わない（期待の列を歯に写す） (c) 手番の 6 語 (d) contract-queued の表が `WAIT_REASONS` を全部と unreflected-ruling・floor を含む (e) 表に無い語は None (f) misfit の 15 語の字 (g) 部品の共通の欄の 9 key と `links` の 8 key の const の列が、§5.2 の字と順に 1 字も違わない (h) 9 つの種類の語の字と順 (i) 語から手番の関数が §3 の表の全行と一致する（38 語の各語、memo-promoting の理由 2 つ〔contract-open・close-due〕、contract-queued の理由 10 語の各手番を期待の表として歯に写す・全部を 1 つの手番に倒す実装を落とす）。
   - `promotion_line_`（7 本・昇格の行の読み手の `+` の file の末尾の歯の区間）: 全部と一部／2 行で最後が勝つ／最後の行が読めず前の行が読める notes は読めない（前の行へ倒れない）／読めない 3 形のそれぞれの理由の語と行の字／行頭でない `昇格:` は読まない／`,` を区切りと読まない。
   - `trigger_met_`（8 本・trigger.rs の歯の区間）: 5 形の満ちと満ちない各 1 組（再発は本数＝値で満ち・値−1 で満ちない、期日は周の時刻＝値で満ち・1 秒前で満ちない）／同梱の dir の前方一致と印の外し／値が `/` で終わらない同梱は前方一致で満ちない（値の字が項目の字の頭と一致するだけで、等しくない組）。
   - `issue_times_`（2 本・seat/ledger.rs の歯の区間）: 時刻の 2 欄を読む／無い要素は None でほかの欄は同じ。
@@ -364,6 +364,7 @@ lifecycle.stale
 
 - 何が起きているか（verified）:
   - `LifecycleCutover` の本体は key version・main で、書き手は 0 件。案件の一生の kind の本体の読みは任意の key detail を受け、`LifecycleCutover` の本体の読みは detail を見ない。
+  - detail は kind に依らず `Event` の欄が持つ（`crates/scribe2/src/fleet/event.rs`）。1 行の読み `from_line` は任意の detail を欄へ読み（`optional_text` の 1 か所）、1 行の書き `to_line` は欄が `Some` の周に key detail を書く。案件の一生の kind の本体の読みは「登録・列の印の key を持たず、detail は任意」で、`LifecycleCutover` の行が detail を持っても読める。だから本行は event.rs を触らずに、`Event` の欄 detail に close-check を入れて書き、読んだ欄で線を見分ける（event.rs は材料として write-set に `=` で載せる）。
   - event の 1 行の読み `from_line` は `KNOWN_KEYS` の外の key と表の外の kind の行を読めない行にし、event log の読み（`crates/scribe2/src/fleet/store.rs` の `read_all`）は 1 行でも読めなければ全部を Err で返す（NFR4）。
   - 条件付きの追記 `append_if` の `Condition` は閉じた enum で値は `NotStopped` の 1 つ、match は store.rs の 1 か所だけ。
 - 約束（番号は done と 1:1）:
@@ -563,7 +564,7 @@ write-set = ["+crates/scribe2/src/case/mod.rs", "+crates/scribe2/src/ledger/prom
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail phase_table_", "cargo nextest run -p scribe2 --lib --no-tests=fail promotion_line_", "cargo nextest run -p scribe2 --lib --no-tests=fail trigger_met_", "cargo nextest run -p scribe2 --lib --no-tests=fail issue_times_"]
 size = "M"
 growth = ["crates/scribe2/src/case/mod.rs:600", "crates/scribe2/src/ledger/promotion.rs:185", "crates/scribe2/src/ledger/trigger.rs:150", "crates/scribe2/src/seat/ledger.rs:30", "crates/scribe2/src/ledger/mod.rs:1", "crates/scribe2/src/lib.rs:1", "crates/scribe2/src/pipe/dispatch/precheck.rs:2", "crates/scribe2/src/ledger/form.rs:2", "crates/scribe2/src/hook/graph_guard.rs:2"]
-done = "(1) case の新しい module が §2 の 38 語（宣言順）・9 種類・6 手番・§4 の misfit の 15 語・§5.2 の部品の型と、共通の欄の 9 key と links の 8 key の const の列を持ち、字は表と 1 字も違わず、lib.rs に 1 行・歯の module は file の末尾 (2) 語から手番の 1 関数が §3 の表を網羅の match で持ち、contract-queued の理由の表は WAIT_REASONS の 8 語と unreflected-ruling・floor を含み、表に無い語は None (3) trigger.rs の純関数 met が 5 形の満ちを世界から判じる（同梱は印を外した等しさと dir の前方一致） (4) 昇格の行の読み手が 全部 / 一部 の 2 形を読み、最後の行が勝ち、読めない行は字と理由を持ち、行頭でない行と , を区切りと読まない (5) Issue が created_at と closed_at を Option で持ち、issues_of が読み、無い要素は None で、組みの 4 か所（便の始めに数え直す）を直す 歯: phase_table_ 9（(g) は key の列・(h) 種類・(i) §3 の表の全行）・promotion_line_ 7（最後の行が読めない形）・trigger_met_ 8（境界と / の無い同梱・trigger.rs の test 区間）・issue_times_ 2（seat/ledger.rs の test 区間）が base で 0 本（rc 4・機能不在）、既存の ledger_trigger_・seat_ledger_・precheck_intake_ は期待を変えずに緑"
+done = "(1) case の新しい module が §2 の 38 語（宣言順）・9 種類・6 手番・§4 の misfit の 15 語・§5.2 の部品の型と、共通の欄の 9 key と links の 8 key の const の列を持ち、字は表と 1 字も違わず、lib.rs に 1 行・歯の module は file の末尾 (2) 語から手番の 1 関数が §3 の表を網羅の match で持ち、contract-queued の理由の表は WAIT_REASONS の 8 語と unreflected-ruling・floor を含み、表に無い語は None (3) trigger.rs の純関数 met が 5 形の満ちを世界から判じる（同梱は印を外した等しさと dir の前方一致） (4) 昇格の行の読み手が 全部 / 一部 の 2 形を読み、最後の行が勝ち、読めない行は字と理由を持ち、行頭でない行と , を区切りと読まない (5) Issue が created_at と closed_at を Option で持ち、issues_of が読み、無い要素は None で、組みの 4 か所（便の始めに数え直す）を直す 歯: phase_table_ 9（(a) は種類の名を頭に持たない 2 語〔ruling-unreflected・misfit〕を除く 36 語の接頭辞・(g) は key の列・(h) 種類・(i) §3 の表の全行）・promotion_line_ 7（最後の行が読めない形）・trigger_met_ 8（境界と / の無い同梱・trigger.rs の test 区間）・issue_times_ 2（seat/ledger.rs の test 区間）が base で 0 本（rc 4・機能不在）、既存の ledger_trigger_・seat_ledger_・precheck_intake_ は期待を変えずに緑"
 
 [[contract]]
 id = "a1"
@@ -618,7 +619,7 @@ id = "c1"
 title = "線の読みと記帳 — 切り替えの線は detail の無い最初の LifecycleCutover・close-check の線は detail が close-check の最初の行と読み、store の Condition の無いときだけ足す値で 1 度だけ記帳する（case-lifecycle §11・ADR-0100・FR90 / AC61）"
 req = ["FR90", "AC61"]
 section = "11"
-write-set = ["+crates/scribe2/src/fleet/lifecycle_line.rs", "crates/scribe2/src/fleet/mod.rs", "crates/scribe2/src/fleet/store.rs"]
+write-set = ["+crates/scribe2/src/fleet/lifecycle_line.rs", "crates/scribe2/src/fleet/mod.rs", "crates/scribe2/src/fleet/store.rs", "=crates/scribe2/src/fleet/event.rs"]
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail cutover_line_"]
 size = "S"
 growth = ["crates/scribe2/src/fleet/lifecycle_line.rs:205", "crates/scribe2/src/fleet/mod.rs:1", "crates/scribe2/src/fleet/store.rs:45"]
