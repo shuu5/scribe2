@@ -49,6 +49,7 @@
   8. **撃ち中の印と重ねての撃ち**: 口は ref の dir に撃ち中の印（`<pid> <起動時刻>`・`lock_owner` で生死を判じる）を置き、同じ sha に 2 本目の口を撃つと、印の持ち主が生きていれば撃たずに待ち、死んでいれば印を外して撃ち直す。
   9. **ref の結果**: 行ごとの判定（lens の JSON を Reviewed と同じ `read_outcome` → `narrow` の 2 本で読み、done の対応の表の倒し〔[contract-source.md](./contract-source.md) §64 形 4〕を通す）から ref の結果を 1 語に決める: 全行が PASS か、INCONCLUSIVE の行が全部 basis が forecast か partial で理由の型が unparsed でない → pass／FAIL の行か、basis が actual の INCONCLUSIVE の行か、unparsed の行が 1 本でも在る → fail／撃ち中の印の持ち主が生きている → pending／印の持ち主が死んで撃ち終えていない → stale。
 - forecast と partial の INCONCLUSIVE を pass に数える理由と C10 の読み: 祖先の本文は祖先が着地するまで存在しない。止めると依存を持つ行の設計の PR が祖先の着地を待って直列になる。「測れない」を merge の通過に倒すのは、その判定が便の段の判定として効かないからである: forecast と partial の記録は Reviewed の段で使い回されない（§5・材料の鍵か code の木の鍵が必ず違う）ので、その行は祖先の着地の後の Reviewed で実物の base で審査し直され、そこで測れなければ今どおり Reviewed で止まる。FAIL は basis に依らず止める。
+- 索引の表（[reverse-index.md](./reverse-index.md) §7 (a)・(b)・(c)・[ADR-0105](../../design-intent/decisions/ADR-0105-code-facts-come-from-an-external-index-the-vessel-reads.html)・proposed）: vessel 宣言が code の索引を名乗る repo では、形 4 の機械の検査に索引の閉包と code の事実の欄の測りが加わり（確定の finding）、形 5 の材料に逆引きの表 index.txt が加わる。どちらも同じ epic の別の設計の行で、この設計の行 a の後に起こす。
 
 ## 4. merge の門の 2 つ目の判定（vessel 宣言の任意 key row-review）
 
