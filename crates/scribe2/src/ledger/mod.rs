@@ -11,7 +11,9 @@
 //! （読むだけ・書きの口は増えない）。memo の入口（plan を標準出力に出す read-only の口・§3 の 8）は子 module
 //! [`memo`] に置く（台帳を読まず書かない・起票は席の手番）。台帳 lint（doctor の項目 1 行・設計
 //! contract-source.md §6・契約表の行 e）は子 module [`lint`] に置く（読むだけ・極性は増えない）。台帳のグラフの形
-//! （doctor の項目 1 行・ledger-form.md §10・契約表の行 f）は子 module [`graph`] に置く（読むだけ）。
+//! （doctor の項目 1 行・ledger-form.md §10・契約表の行 f）は子 module [`graph`] に置く（読むだけ）。案件の局面のうち台帳の側の
+//! 部品（question・memo・epic と閉じた contract・case-lifecycle.md §7・行 a1）と FR93 の条件の 1 関数は子 module [`phase`] に置く
+//! （純関数・I/O も時計も持たない）。
 
 pub mod citation;
 pub mod close_reason;
@@ -19,6 +21,7 @@ pub mod form;
 pub mod graph;
 pub mod lint;
 pub mod memo;
+pub mod phase;
 pub mod promotion;
 pub mod question;
 pub mod trigger;
@@ -277,5 +280,99 @@ mod tests {
         assert_eq!(err, CloseError::Refused { rc: Some(1), tail: "last word".to_owned() }, "断りの形");
         assert_eq!(err.render(), "close:failed:rc=1 last word", "記録の 1 行");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// FR93 の fixture（memo `s2-m`・契約 2 本・子の問い 1 本）の台帳を JSON の字から作る。5 つの条件を満たす値が既定で、引数が欠けを 1 つ入れる。
+    fn fr93_ledger(notes_line: &str, second_reason: &str, child_status: &str) -> Vec<crate::seat::ledger::Issue> {
+        let sha = "0123456789abcdef0123456789abcdef01234567";
+        let contract = |id: &str, reason: &str| {
+            format!(
+                r#"{{"id":"{id}","status":"closed","acceptance_criteria":"design = docs/design/x.md#a","close_reason":"{reason}","dependencies":[{{"depends_on_id":"s2-m","type":"discovered-from"}}]}}"#
+            )
+        };
+        let memo = format!(
+            r####"{{"id":"s2-m","status":"open","labels":["intake:memo"],"description":"### 出所\n### 観測\n### 候補\n### 昇格条件\n- 引き金: 再発 5\n","notes":"{notes_line}"}}"####
+        );
+        let child = format!(
+            r#"{{"id":"s2-q","status":"{child_status}","labels":["intake:question"],"dependencies":[{{"depends_on_id":"s2-m","type":"parent-child"}}]}}"#
+        );
+        let text = format!("[{memo},{},{},{child}]", contract("s2-c1", &format!("landed {sha} ci=success")), contract("s2-c2", second_reason));
+        crate::seat::ledger::issues_of(&text).expect("fixture の JSON を読める")
+    }
+
+    /// FR93 の関数を直に呼び、同じ台帳を局面の関数に通して memo の (局面・手番・理由) を返す。
+    fn fr93_probe(issues: &[crate::seat::ledger::Issue], unjudged: &[String]) -> (bool, (String, String, Option<String>)) {
+        use super::phase::{close_due, derive, Input, Lines};
+        let memo = issues.iter().find(|issue| issue.id == "s2-m").expect("memo が在る");
+        let input = Input {
+            issues,
+            prefix: Some("s2"),
+            now: 0,
+            window_s: 0,
+            lines: Lines { cutover: None, close_check: None },
+            unreflected: &[],
+            unjudged,
+            write_set: &[],
+        };
+        let part = derive(&input).parts.into_iter().find(|part| part.id == "s2-m").expect("memo の部品が在る");
+        (close_due(memo, issues, Some("s2"), unjudged), (part.phase.as_str().to_owned(), part.turn.as_str().to_owned(), part.reason))
+    }
+
+    /// 5 つの条件を満たす既定の値。
+    const FR93_LINE: &str = "昇格: 全部 s2-c1 s2-c2";
+    const FR93_LANDED: &str = "landed 0123456789abcdef0123456789abcdef01234567 ci=success";
+
+    /// 5 つの条件を全部満たす memo は真・局面の関数では close-due の promoting（手番 vessel）。
+    #[test]
+    fn phase_ledger_fr93_met_when_all_five_conditions_hold() {
+        let issues = fr93_ledger(FR93_LINE, FR93_LANDED, "closed");
+        let (due, (phase, turn, reason)) = fr93_probe(&issues, &[]);
+        assert!(due, "5 つを満たす memo は FR93 を満たす");
+        assert_eq!((phase.as_str(), turn.as_str(), reason.as_deref()), ("memo-promoting", "vessel", Some("close-due")));
+    }
+
+    /// 条件 (1) 最後の昇格の行が `全部` でない（`一部`）と偽・close-due にならない。
+    #[test]
+    fn phase_ledger_fr93_unmet_when_the_last_line_is_partial() {
+        let issues = fr93_ledger("昇格: 一部 s2-c1 s2-c2", FR93_LANDED, "closed");
+        let (due, (phase, turn, reason)) = fr93_probe(&issues, &[]);
+        assert!(!due, "一部の行は FR93 を満たさない");
+        assert_eq!((phase.as_str(), turn.as_str(), reason.as_deref()), ("memo-actionable", "seat", Some("promotion-unmet")));
+    }
+
+    /// 条件 (2) 行の列と辿れる契約の集合が違う（行が s2-c2 を挙げない）と偽・close-due にならない。
+    #[test]
+    fn phase_ledger_fr93_unmet_when_the_list_differs_from_the_traced_contracts() {
+        let issues = fr93_ledger("昇格: 全部 s2-c1", FR93_LANDED, "closed");
+        let (due, (phase, _, reason)) = fr93_probe(&issues, &[]);
+        assert!(!due, "列が違う memo は FR93 を満たさない");
+        assert_eq!((phase.as_str(), reason.as_deref()), ("memo-actionable", Some("promotion-unmet")));
+    }
+
+    /// 条件 (3) 辿れる契約の 1 本が着地の形でない（取り下げ）と偽・close-due にならない。
+    #[test]
+    fn phase_ledger_fr93_unmet_when_a_traced_one_closed_without_landing() {
+        let issues = fr93_ledger(FR93_LINE, "取り下げ 不要になった", "closed");
+        let (due, (phase, _, reason)) = fr93_probe(&issues, &[]);
+        assert!(!due, "着地でない閉じの契約が在る memo は FR93 を満たさない");
+        assert_eq!((phase.as_str(), reason.as_deref()), ("memo-actionable", Some("promotion-unmet")));
+    }
+
+    /// 条件 (4) 子の開いた問いが在ると偽・close-due にならない（memo-asking）。
+    #[test]
+    fn phase_ledger_fr93_unmet_when_a_child_question_is_open() {
+        let issues = fr93_ledger(FR93_LINE, FR93_LANDED, "open");
+        let (due, (phase, turn, reason)) = fr93_probe(&issues, &[]);
+        assert!(!due, "子の開いた問いが在る memo は FR93 を満たさない");
+        assert_eq!((phase.as_str(), turn.as_str(), reason), ("memo-asking", "user", None));
+    }
+
+    /// 条件 (5) 処置の無い判定が在ると偽・close-due にならない（actionable の verdict）。
+    #[test]
+    fn phase_ledger_fr93_unmet_when_a_verdict_awaits_action() {
+        let issues = fr93_ledger(FR93_LINE, FR93_LANDED, "closed");
+        let (due, (phase, _, reason)) = fr93_probe(&issues, &["s2-m".to_owned()]);
+        assert!(!due, "処置の無い判定が在る memo は FR93 を満たさない");
+        assert_eq!((phase.as_str(), reason.as_deref()), ("memo-actionable", Some("verdict")));
     }
 }
