@@ -458,7 +458,7 @@ lifecycle.stale
 
 - 何が起きているか（verified）:
   - 部分の書き直しは無い。event log の読みは `read_all` の 1 本だけで、毎回全部を読む。
-  - 管理 tick は `crates/scribe2/src/seat/tick.rs` に在り、file の余地は約 10 行（seat-heartbeat の行 ab の純移動の後に増える）。
+  - 管理 tick は `crates/scribe2/src/seat/tick.rs` に在る。歯の module を子の file へ割る純移動が着地し、file は約 1230 行（余地は約 270 行）。本行が足すのは周の呼び出しの数行だけで、本体は行 d の `+` の file に置く。
   - hook の予算は NFR5: 2.0 秒以内で、読む byte が event log の大きさで変わらないこと。
 - 約束（番号は done と 1:1）:
   1. 契機は管理 tick の周の 1 つ（呼び手の rc と字を変えない）。FR90 の残りの 2 契機（発話の記帳の直後・仕分けの記帳の直後）は fleet-event-log の行 g と dialogue-surface の行 i の `+` の file に呼び出しを足す手で、その 2 行の着地の後に本 § へ足す行が持つ（今は名指せない）。便の段の記帳の直後の契機は FR90 の契機の列に無いので、SRS の追加の round の後の行にする。
