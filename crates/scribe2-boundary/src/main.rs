@@ -1,5 +1,5 @@
 //! CLI の骨格。`name` / `--version` / `doctor` / `account` / `rules` / `fleet` / `vessel` / `hook` / `host-guard` /
-//! `pipe` / `runner` / `lens` / `seat` / `polarity` / `contracts` の 15 subcommand と、memo の plan の口 `ledger` と、雛形の
+//! `pipe` / `runner` / `lens` / `seat` / `polarity` / `contracts` / `utterance` の 16 subcommand と、memo の plan の口 `ledger` と、雛形の
 //! pointer を書く口 `host`（host-init.md §3）と、repo を器に載せる口 `init`（同 §4）を持つ。
 //!
 //! subcommand の結果は [`Outcome`] ただ 1 型で、rc はその `rc` をそのまま返す。
@@ -112,7 +112,7 @@ fn render_doctor_with(rest: &[String]) -> Result<Vec<String>, ()> {
 
 /// 未知の引数に対する使い方の行。
 fn render_usage() -> String {
-    format!("usage: {NAME} <name|--version|doctor|account|rules|fleet|vessel|hook|host-guard|pipe|runner|lens|seat|polarity|contracts>")
+    format!("usage: {NAME} <name|--version|doctor|account|rules|fleet|vessel|hook|host-guard|pipe|runner|lens|seat|polarity|contracts|utterance>")
 }
 
 /// 先頭の引数と続く引数を出力行の列へ写す。未知なら `Err` に使い方を載せる。
@@ -149,6 +149,7 @@ fn run(args: &[String], program: &Path) -> Outcome {
         Some("init") => vessel::init::dispatch(rest, program),
         Some("pipe") => vessel::pipe::cli::dispatch(rest),
         Some("seat") => vessel::seat::cli::dispatch(rest),
+        Some("utterance") => vessel::utterance::cli::dispatch(rest),
         // 極性一覧（ADR-0014 §2.2）。引数も stdin も env も読まない。
         Some("polarity") => Outcome::ok(vessel::polarity::render()),
         // 契約表の検査と欄の生成物（設計 contract-source.md §2）。env を読まない。

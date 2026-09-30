@@ -406,6 +406,29 @@ pub const TABLE: &[Entry] = &[
         examples: &["{NAME} contracts check --repo .", "{NAME} contracts schema"],
         see: &["docs/design/contract-source.md"],
     },
+    Entry {
+        name: "utterance",
+        purpose: "Sort a recorded user utterance as a request or a chat, and show one verbatim.",
+        what: &[
+            "Each utterance the user types is recorded with a timestamp. sort marks one utterance as a",
+            "request for an open memo, or as chat, with one event; it never writes the ledger. show",
+            "prints the verbatim words of one utterance, and is the only command that does.",
+        ],
+        form: "utterance <sort --repo R --state-dir S --ts TS --as request --memo ID [--bd B]|sort --state-dir S --ts TS --as chat|show --state-dir S --ts TS>",
+        subcommands: &[
+            ("sort", "Sort the utterance at TS as a request for an open memo, or as chat."),
+            ("show", "Print the verbatim words of the utterance at TS."),
+        ],
+        flags: &[
+            ("--state-dir S", "Host state dir that holds the event log."),
+            ("--ts TS", "Timestamp of the utterance, as recorded."),
+            ("--as request|chat", "How to sort the utterance (sort)."),
+            ("--memo ID", "Open memo the request belongs to (sort --as request)."),
+            ("--repo R", "Repo whose ledger is read to check the memo (sort --as request)."),
+        ],
+        examples: &["{NAME} utterance sort --repo . --state-dir STATE --ts TS --as request --memo MEMO", "{NAME} utterance show --state-dir STATE --ts TS"],
+        see: &["docs/design/dialogue-surface.md", "docs/design/fleet-event-log.md"],
+    },
 ];
 
 /// 字面の穴 [`HOLE`] に NAME を埋める。
@@ -499,12 +522,12 @@ mod tests {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..")
     }
 
-    /// (f) 表の name は一意（15 語）で、引けば同じ行が返る。
+    /// (f) 表の name は一意（16 語）で、引けば同じ行が返る。
     #[test]
     fn help_table_names_are_unique() {
         let names: BTreeSet<&str> = TABLE.iter().map(|found| found.name).collect();
         assert_eq!(names.len(), TABLE.len(), "name が重なる");
-        assert_eq!(TABLE.len(), 15, "頂点の語は 15");
+        assert_eq!(TABLE.len(), 16, "頂点の語は 16");
         for found in TABLE {
             assert_eq!(entry(found.name).map(|hit| hit.name), Some(found.name), "{}", found.name);
         }
