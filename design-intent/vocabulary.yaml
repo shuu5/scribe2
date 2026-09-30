@@ -691,7 +691,7 @@ terms:
   - canonical: 中間生成物
     domain: consumer
     aliases: [build output, intermediates]
-    definition: build や test や依存の取り込みが便の worktree の中に作る dir のうち、 器が対応する言語の決まった名を持つもの (target・node_modules・.venv・__pycache__・.mypy_cache・.pytest_cache・.ruff_cache・.expo の閉じた 8 つ)。 commit した木と toolchain と lock file から作り直せる。 器は運転手の終端の周ごとに、 live でない便の worktree (元の場所か退役先) から、 この名の dir で git が追う file を持たないものを消す (ADR-0081・dispatcher.md §30)。 無視の規則が無視する file 全部ではない (鍵や local の設定は含まない)。 ADR-0096 の後は、 席の起草の置き場の .git を持つ写しの中の、 書きの線より前のものも消す。
+    definition: build や test や依存の取り込みが便の worktree の中に作る dir のうち、 器が対応する言語の決まった名を持つもの (target・node_modules・.venv・__pycache__・.mypy_cache・.pytest_cache・.ruff_cache・.expo の閉じた 8 つ)。 commit した木と toolchain と lock file から作り直せる。 器は運転手の終端の周ごとに、 live でない便の worktree (元の場所か退役先) から、 この名の dir で git が追う file を持たないものを消す (ADR-0081・dispatcher.md §30)。 無視の規則が無視する file 全部ではない (鍵や local の設定は含まない)。 ADR-0096 の後は、 席の起草の置き場の .git を持つ写しの中の、 書きの線より前のものも消す。 ADR-0101 の後は、 起草の置き場の分の合計が量の上限を越えた周に、 書きの線より新しく組み立て中の窓の外のものも古い順に上限まで消す。
     relationships: [live な便, 退役, 起草の置き場]
   - canonical: runner の印
     domain: consumer
@@ -1794,18 +1794,33 @@ terms:
     aliases: [host core reader]
     definition: 受付と器の健康の遮断器と箱の CPU の上限が読む host の core 数の 1 本 (ADR-0095)。 この process の /proc/self/status の Cpus_allowed_list の区間の列を数え、 affinity と cpuset は数に効き、 cgroup の CPU 時間の上限は効かない (席の箱の中の driver も host の core 数を読む)。 環境変数は読まない。
     relationships: [job 1 つの値段, 並列の枠, 器の健康の遮断器, 箱の CPU の上限]
-  # ---------------------------------------------------------------- 席の起草の置き場 (ADR-0096)
+  # ---------------------------------------------------------------- 席の起草の置き場 (ADR-0096・ADR-0101)
   - canonical: 起草の置き場
     domain: consumer
     aliases: [seat drafts area]
-    definition: 席ごとに器が持つ、 試作の repo の写しを置く dir (state dir の seat の下の、 潰した target の dir の drafts・ADR-0096)。 器は dir を作らず、 席の指示文の 12 行目が絶対 path を渡し、 席の git が写しを作る。 運転手の終端の周の掃除が、 置き場の .git を持つ写し (起草の木) から、 書きの線より前の中間生成物だけを消し、 写しは消さない。
-    relationships: [席の指示文, 中間生成物, 書きの線, 退役]
+    definition: 席ごとに器が持つ、 試作の repo の写しを置く dir (state dir の seat の下の、 潰した target の dir の drafts・ADR-0096)。 器は dir を作らず、 席の指示文の 12 行目が絶対 path を渡し、 席の git が写しを作る。 運転手の終端の周の掃除が、 置き場の .git を持つ写し (起草の木) から、 書きの線より前の中間生成物だけを消し、 写しは消さない。 ADR-0101 の後は、 中間生成物の合計が量の上限を越えた周に限り、 書きの線より新しく組み立て中の窓の外の物も書きの新しさの古い順に上限まで消す。
+    relationships: [席の指示文, 中間生成物, 書きの線, 退役, 量の上限]
     flagged_ambiguities: [Claude Code の session の一時 dir (器の外・器は掃かない) とは別]
   - canonical: 書きの線
     domain: consumer
     aliases: [write cutoff]
-    definition: 今から rules 行 seat.drafts_stale_h の時間を引いた時刻 (ADR-0096)。 起草の木の中間生成物の dir は、 その dir 自身と下の全 entry の mtime の最新がこの線より前のときだけ消える。 便の worktree には掛けない。
+    definition: 今から rules 行 seat.drafts_stale_h の時間を引いた時刻 (ADR-0096)。 起草の木の中間生成物の dir は、 その dir 自身と下の全 entry の mtime の最新がこの線より前のときだけ消える。 便の worktree には掛けない。 ADR-0101 の後は、 合計が量の上限を越えた周に限り、 この線より新しい dir も組み立て中の窓の外なら消えうる (候補はこの線が残した dir だけ)。
     relationships: [起草の置き場, 中間生成物, rules 行]
+  - canonical: 量の上限
+    domain: consumer
+    aliases: [drafts cap]
+    definition: state dir ごとの、 席の起草の置き場の .git を持つ写しの中の中間生成物の dir の合計の上限 (rules 行 seat.drafts_cap_mb・MiB・ADR-0101)。 候補は書きの線が残した dir だけで、 合計は dir 自身と下の全 entry の lstat の st_blocks の和。 越えた周だけ、 運転手の終端の周の同じ掃除が、 書きの新しさの古い順に、 組み立て中の窓の内を飛ばして上限まで消す。 測れない写しは数えずに名指す。
+    relationships: [起草の置き場, 中間生成物, 書きの線, 組み立て中の窓, 書きの新しさ]
+  - canonical: 組み立て中の窓
+    domain: consumer
+    aliases: [busy window]
+    definition: 今から rules 行 seat.drafts_busy_s の秒を引いた時刻より後 (ADR-0101)。 書きの新しさがこの窓の内の中間生成物の dir は組み立て中とみなし、 量の上限を越えていても消さない。
+    relationships: [量の上限, 書きの新しさ]
+  - canonical: 書きの新しさ
+    domain: consumer
+    aliases: [newest write]
+    definition: 中間生成物の dir 自身と下の全 entry の mtime の最新 (symlink は辿らない・ADR-0101)。 量の上限で消す順と、 組み立て中の窓の判じに使う。
+    relationships: [量の上限, 組み立て中の窓, 書きの線]
   # ---------------------------------------------------------------- 門の読み手と shell が撃たない字 (ADR-0099)
   - canonical: 共有の分割
     domain: consumer
