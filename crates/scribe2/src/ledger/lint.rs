@@ -115,11 +115,20 @@ pub fn render_unreadable(reason: &str) -> String {
     format!("{PREFIX} unreadable reason={reason}")
 }
 
-/// doctor の台帳の 3 行（本行 → [`super::graph`] の行 → [`super::form`] の行＝台帳の形の行が末尾）。台帳は**1 回だけ**
-/// 読み、3 行が同じ出力を分けて読む。
+/// doctor の台帳の 4 行（本行 → [`super::graph`] の行 → [`super::form`] の行 → [`super::citation`] の行＝裁定 id の引用の行が末尾）。
+/// 台帳は**1 回だけ**読み、4 行が同じ出力を分けて読む。
 pub fn doctor_lines(repo: &Path, rules: Option<&str>) -> Vec<String> {
-    use super::{form, graph};
-    ledger::one_read(|| vec![doctor_line(repo, rules), graph::doctor_line(repo, rules), form::doctor_line(repo, rules)])
+    use super::{citation, form, graph};
+    ledger::one_read(|| {
+        let notes = || issues_of(repo, rules).ok().map(|issues| notes_of(&issues));
+        vec![doctor_line(repo, rules), graph::doctor_line(repo, rules), form::doctor_line(repo, rules), citation::doctor_line(repo, notes)]
+    })
+}
+
+/// 引用の行へ渡す台帳の材料（閉じた問いの notes と全 bead の notes）。
+fn notes_of(issues: &[Issue]) -> super::citation::Notes {
+    let closed_questions = issues.iter().filter(|issue| issue.status == CLOSED && super::form::is_question(issue)).map(|issue| issue.notes.clone()).collect();
+    super::citation::Notes { closed_questions, every: issues.iter().map(|issue| issue.notes.clone()).collect() }
 }
 
 /// doctor の項目 1 行（`--repo R` の台帳と設計 doc を読み、[`judge`] を撃つ）。`rules` は待ち上限を読む manifest
@@ -133,16 +142,21 @@ pub fn doctor_line(repo: &Path, rules: Option<&str>) -> String {
 
 /// 読みの全部（manifest → 台帳 → pointer の先）。読めない周は理由の語。
 fn measure(repo: &Path, rules: Option<&str>) -> Result<Report, &'static str> {
+    let issues = issues_of(repo, rules)?;
+    let resolved = issues.iter().filter_map(pointer_of).filter(|text| resolves(repo, text)).map(str::to_owned).collect();
+    Ok(judge(&issues, &resolved))
+}
+
+/// 台帳を読む（manifest の待ち上限 → 台帳の client）。読めない周は理由の語。引用の行も同じ読みを [`ledger::one_read`] の区間で分ける。
+fn issues_of(repo: &Path, rules: Option<&str>) -> Result<Vec<Issue>, &'static str> {
     let manifest = rules
         .map_or_else(Manifest::embedded, |path| Manifest::load(Path::new(path)))
         .map_err(|_| "rules-unreadable")?;
     let timeout = ledger::timeout_of(&manifest).ok_or("no-rule")?;
-    let issues = ledger::read_ledger(ledger::DEFAULT_BD, repo, timeout).map_err(|error| match error {
+    ledger::read_ledger(ledger::DEFAULT_BD, repo, timeout).map_err(|error| match error {
         LedgerError::Unreadable => "ledger-unreadable",
         LedgerError::Timeout => "ledger-timeout",
-    })?;
-    let resolved = issues.iter().filter_map(pointer_of).filter(|text| resolves(repo, text)).map(str::to_owned).collect();
-    Ok(judge(&issues, &resolved))
+    })
 }
 
 /// pointer が解けるか（形・doc の在る・区間に行 id が在る）。

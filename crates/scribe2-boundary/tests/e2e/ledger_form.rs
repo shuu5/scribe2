@@ -59,6 +59,8 @@ struct Bead<'a> {
     status: &'a str,
     kind: &'a str,
     memo: bool,
+    /// 台帳の問い（label `intake:question`）。
+    question: bool,
     pointer: Option<&'a str>,
     description: &'a str,
     notes: &'a str,
@@ -71,7 +73,7 @@ impl<'a> Bead<'a> {
     /// open の task（label・pointer・本文・edge 無し）。
     fn task(id: &'a str) -> Self {
         let (description, notes) = ("", "");
-        Self { id, status: "open", kind: "task", memo: false, pointer: None, description, notes, from: None, parents: &[] }
+        Self { id, status: "open", kind: "task", memo: false, question: false, pointer: None, description, notes, from: None, parents: &[] }
     }
 
     /// `status` と `kind` を持ち `parents` の下に付く bead（台帳のグラフの fixture）。
@@ -91,7 +93,11 @@ impl<'a> Bead<'a> {
 
     /// JSON の 1 要素。
     fn json(&self) -> String {
-        let labels = if self.memo { "[\"intake:memo\",\"doc:toy\"]" } else { "[\"doc:toy\"]" };
+        let labels = match (self.memo, self.question) {
+            (true, _) => "[\"intake:memo\",\"doc:toy\"]",
+            (false, true) => "[\"intake:question\",\"doc:toy\"]",
+            (false, false) => "[\"doc:toy\"]",
+        };
         let acceptance = self.pointer.map_or_else(String::new, |found| format!("design = docs/design/toy.md#{found}"));
         let edge = |on: &str, kind: &str| {
             format!("{{\"issue_id\":{},\"depends_on_id\":{},\"type\":{}}}", quoted(self.id), quoted(on), quoted(kind))
@@ -150,12 +156,17 @@ fn doctor(place: &Place, path: &str, rules: Option<&Path>) -> String {
     stdout
 }
 
-/// `doctor --repo` を `path` の PATH で撃ち、rc 0 を確かめて `ledger-form:` の行（ちょうど 1 本）を返す。
+/// `doctor --repo` を `path` の PATH で撃ち、rc 0 を確かめて `ledger-form:` の行（ちょうど 1 本）を返す。行は引用の行（`ruling-cite:`・
+/// key の無い toy repo は `check=off`）の直前で、引用の行が doctor の末尾（設計 dispatcher.md §36 約束 7）。
+// flip-check: retroactive s2-07l.738.37.3
 fn line_with(place: &Place, path: &str) -> String {
     let stdout = doctor(place, path, None);
     let lines: Vec<&str> = stdout.lines().filter(|line| line.starts_with("ledger-form:")).collect();
     assert_eq!(lines.len(), 1, "台帳の形の行はちょうど 1 本: {stdout}");
-    assert_eq!(stdout.lines().last(), lines.first().copied(), "台帳の形の行は doctor の末尾: {stdout}");
+    let all: Vec<&str> = stdout.lines().collect();
+    assert_eq!(all.last().copied(), Some("ruling-cite: check=off"), "引用の行が doctor の末尾: {stdout}");
+    let before_last = all.len().checked_sub(2).and_then(|at| all.get(at)).copied();
+    assert_eq!(before_last, lines.first().copied(), "台帳の形の行は引用の行の直前: {stdout}");
     lines.first().map(|line| (*line).to_owned()).unwrap_or_default()
 }
 
@@ -275,7 +286,7 @@ fn rules_with(place: &Place, row: &str) -> PathBuf {
 }
 
 /// 偽の client を先頭に積んだ PATH で `doctor --repo`（`rules` が在れば `--rules` も）を撃ち、台帳のグラフの行（ちょうど
-/// 1 本）を返す。行は台帳 lint の行の直後・台帳の形の行（doctor の末尾）の直前に在る。
+/// 1 本）を返す。行は台帳 lint の行の直後・台帳の形の行の直前に在り、台帳の形の行の後ろに引用の行が 1 本だけ続いて doctor の末尾になる。
 fn graph_line(place: &Place, rules: Option<&Path>) -> String {
     let stdout = doctor(place, &format!("{}:{}", place.bin.display(), std::env::var("PATH").unwrap_or_default()), rules);
     let lines: Vec<&str> = stdout.lines().collect();
@@ -284,7 +295,8 @@ fn graph_line(place: &Place, rules: Option<&Path>) -> String {
     let at = found.first().copied().unwrap_or_default();
     assert!(lines.get(at.wrapping_sub(1)).is_some_and(|l| l.starts_with("ledger:")), "台帳 lint の行の直後: {stdout}");
     assert!(lines.get(at + 1).is_some_and(|l| l.starts_with("ledger-form:")), "台帳の形の行の直前: {stdout}");
-    assert_eq!(at + 2, lines.len(), "台帳の形の行が doctor の末尾のまま: {stdout}");
+    assert!(lines.get(at + 2).is_some_and(|l| l.starts_with("ruling-cite:")), "引用の行が台帳の形の行の直後: {stdout}");
+    assert_eq!(at + 3, lines.len(), "引用の行が doctor の末尾: {stdout}");
     lines.get(at).map(|line| (*line).to_owned()).unwrap_or_default()
 }
 
@@ -399,4 +411,187 @@ fn ledger_graph_missing_rule_is_unreadable_no_rule() {
     assert!(graph_line(&place, None).contains(" beads=10 "), "埋め込みの rules では数える（否定の枝の対照）");
     assert_eq!(graph_line(&place, Some(&rules)), "ledger-graph: unreadable reason=no-rule", "行の無い rules");
     fs::remove_dir_all(&place.dir).ok();
+}
+
+// ─── 裁定 id の引用の行（設計 dispatcher.md §36 約束 7・契約表の行 ak・接頭辞 `ledger_ruling_doctor_`） ───
+
+/// 宣言の本文（必須 key の 3 行の後ろに `extra` を足す）。歯の中の `(path, 字)` の組に `&str` のまま置けるよう、字は process の終わりまで残す。
+fn declaration(extra: &str) -> &'static str {
+    Box::leak(format!("schema = 1\nallowed-commands = [\"git\"]\ncommon-verify = [\"git diff --quiet\"]\n{extra}").into_boxed_str())
+}
+
+/// 引用の行の歯の toy repo（`branch` の名で git init・台帳の接頭辞 `s2` は追跡しない `.beads/config.yaml` が持つ）。
+fn cite_place(branch: &str) -> Option<Place> {
+    let dir = make_tmp_dir()?.canonical()?;
+    let repo = dir.join("repo");
+    fs::create_dir_all(repo.join(".beads")).ok()?;
+    fs::write(repo.join(".beads/config.yaml"), "issue-prefix: s2\n").ok()?;
+    let bin = dir.join("bin");
+    fs::create_dir_all(&bin).ok()?;
+    let record = dir.join("bd-args");
+    let setup: [&[&str]; 4] =
+        [&["init", "-q", "-b", branch], &["config", "user.name", "t"], &["config", "user.email", "t@example.invalid"], &["config", "commit.gpgsign", "false"]];
+    setup.iter().all(|args| git(&repo, args)).then_some(())?;
+    Some(Place { dir, repo, bin, record })
+}
+
+/// `files`（path と字）を書いて 1 commit にする（`.beads` は追跡しない）。
+fn commit_files(place: &Place, files: &[(&str, &str)]) -> Option<()> {
+    for (name, text) in files {
+        let path = place.repo.join(name);
+        fs::create_dir_all(path.parent()?).ok()?;
+        fs::write(&path, text).ok()?;
+    }
+    (git(&place.repo, &["add", "-A", "--", ".", ":!.beads"]) && git(&place.repo, &["commit", "-q", "-m", "c"])).then_some(())
+}
+
+/// 履歴を積む（1 commit ずつ `files` を書く）。
+fn history(place: &Place, commits: &[&[(&str, &str)]]) {
+    for files in commits {
+        assert!(commit_files(place, files).is_some(), "commit を積める: {files:?}");
+    }
+}
+
+/// 偽の client を先頭に積んだ PATH で `doctor --repo` を撃ち、引用の行（ちょうど 1 本・doctor の末尾・台帳の形の行の直後）を返す。
+fn cite_line(place: &Place) -> String {
+    let stdout = doctor(place, &format!("{}:{}", place.bin.display(), std::env::var("PATH").unwrap_or_default()), None);
+    let lines: Vec<&str> = stdout.lines().collect();
+    let found: Vec<&str> = lines.iter().copied().filter(|line| line.starts_with("ruling-cite:")).collect();
+    assert_eq!(found.len(), 1, "引用の行はちょうど 1 本: {stdout}");
+    assert_eq!(lines.last().copied(), found.first().copied(), "引用の行は doctor の末尾（4 行目）: {stdout}");
+    let before = lines.len().checked_sub(2).and_then(|at| lines.get(at)).copied();
+    assert!(before.is_some_and(|line| line.starts_with("ledger-form:")), "台帳の形の行の直後: {stdout}");
+    found.first().map(|line| (*line).to_owned()).unwrap_or_default()
+}
+
+/// 閉じた問い `s2-q.1` の notes: 5 欄の行（逐語の欄にだけ別の問い id `s2-q.3…` を持つ）・束の欄に `batch:b7`・逐語に `batch:v9` を持つ
+/// 4 欄の行・最後の欄に `batch:v8` を持つ 4 欄の行・裁定 id の欄が `policy:batch:x` の行・`policy:p1` の行。
+const RULING_NOTES: &str = "s2-q.1:20260930T0000Z-1 | s2-q.1 | 2026-09-30T00:00Z | chat | 逐語に s2-q.3:20260930T0200Z-1 を引く\n\
+batch:m1 | s2-q.1 | batch:b7 | 逐語 batch:v9\n\
+batch:m2 | s2-q.1 | 2026-09-30T00:00Z | batch:v8\n\
+policy:batch:x | s2-q.1 | 2026-09-30T00:00Z | chat | 逐語\n\
+policy:p1 | s2-q.1 | 2026-09-30T00:00Z | chat | 逐語";
+
+/// 開いた問い `s2-q.2` の notes（裁定の行の形だが問いが開いている）。
+const OPEN_NOTES: &str = "s2-q.2:20260930T0100Z-1 | s2-q.2 | 2026-09-30T01:00Z | chat | 開いた問い";
+
+/// 台帳: 閉じた問い 1 本と開いた問い 1 本。
+fn ruling_ledger(place: &Place) {
+    let closed = Bead { status: "closed", question: true, notes: RULING_NOTES, ..Bead::task("s2-q.1") };
+    serve(place, &[closed, Bead { question: true, notes: OPEN_NOTES, ..Bead::task("s2-q.2") }]);
+}
+
+/// 固定の toy repo の file 3 本（線の commit の木に在る）。a.md は解ける 6 形（問い id・batch: 3 形〔裁定 id の欄 2・束の欄 1〕・
+/// 欄の全体が `policy:batch:x`・`policy:p1`）と解けない 6 形（未知の問い id・開いた問い・逐語の欄にだけ在る問い id・逐語の欄の `batch:v9`・
+/// 最後の欄の `batch:v8`・未知の `batch:zz`）・接頭辞違い 1・見本の 2 字面・線の前の時刻の形 1。
+const A_MD: &str = "# a\n\
+- 解ける: s2-q.1:20260930T0000Z-1 と batch:m1 と batch:m2 と batch:b7 と policy:batch:x と policy:p1\n\
+- 解けない: s2-q.9:20260930T0000Z-1 と s2-q.2:20260930T0100Z-1 と s2-q.3:20260930T0200Z-1 と batch:v9 と batch:v8 と batch:zz\n\
+- 接頭辞違い: tz-1:20260930T0000Z-1\n\
+- 見本: batch:fix と policy:fix\n\
+- 線の前: user 2026-09-29T12:00Z\n";
+
+/// b.md: 線の前の時刻の形 1（c.md へ写す字面）と、a.md と同じ解ける字面 1。
+const B_MD: &str = "# b\n- 線の前: user 2026-09-29T13:00Z と batch:m1\n";
+
+/// c.md（線の後の commit）: b.md から写した時刻の形（別の file なので線の前に数えない）・線の後の時刻の形・見本の時刻の形。
+const C_MD: &str = "# c\n- 写した: user 2026-09-29T13:00Z\n- 線の後: user 2026-09-30T05:00Z\n- 見本の時刻: user 2026-09-30T00:0xZ\n";
+
+/// 固定の toy repo の 1 行（file 4 本〔.vessel.toml と md 3 本〕・数えた引用 17 件・解けない 8 字面・線の前 2 字面）。
+const FIXED_LINE: &str = "ruling-cite: check=on files=4 cited=17 \
+unresolved=8:batch:v8,batch:v9,batch:zz,s2-q.2:20260930T0100Z-1,s2-q.3:20260930T0200Z-1,s2-q.9:20260930T0000Z-1,user 2026-09-29T13:00Z,user 2026-09-30T05:00Z \
+before-line=2:user 2026-09-29T12:00Z,user 2026-09-29T13:00Z";
+
+/// 4 行目が check=on で母集団と件数と字面を出す。解ける 4 形（問い id・裁定 id の欄の batch:・束の欄の batch:・欄の全体が policy:batch:x）は
+/// unresolved に載らず、接頭辞違いは数えず、見本の 2 字面と線の後の見本の時刻の形は cited に入らない。ほかの欄（逐語の欄・開いた問いの行）
+/// だけの一致・逐語の欄の中の batch:・最後の欄の batch: は unresolved に載る。線の commit の木で別の file に在った時刻の形を後の
+/// commit で別の file に写した引用は before-line でなく unresolved に数え、同じ file の同じ字面は before-line に数える。台帳は 1 回だけ読む。
+#[test]
+fn ledger_ruling_doctor_counts_the_fixed_toy_repo_with_its_population() {
+    let place = cite_place("main").unwrap_or_else(|| panic!("置き場を作れる"));
+    let first = declaration("ruling-check = true\nruling-fixtures = [\"batch:fix\", \"policy:fix\"]\n");
+    let later = declaration("ruling-check = true\nruling-fixtures = [\"batch:fix\", \"policy:fix\", \"user 2026-09-30T00:0xZ\"]\n");
+    history(&place, &[&[(".vessel.toml", first), ("docs/a.md", A_MD), ("docs/b.md", B_MD)], &[("docs/c.md", C_MD)], &[(".vessel.toml", later)]]);
+    ruling_ledger(&place);
+    assert_eq!(cite_line(&place), FIXED_LINE);
+    assert_eq!(calls(&place), ["--readonly list --all --limit 0 --json"], "台帳は readonly で 1 回だけ読む");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// key を持たない repo（宣言 file が無い・key が無い・`ruling-check = false`）は 3 形とも `check=off` の 1 行だけで、数えも断りもしない
+/// （引用を持つ file が在っても・台帳を読めなくても件数を出さない）。
+#[test]
+fn ledger_ruling_doctor_without_the_key_is_off() {
+    let place = cite_place("main").unwrap_or_else(|| panic!("置き場を作れる"));
+    ruling_ledger(&place);
+    history(&place, &[&[("docs/a.md", A_MD)]]);
+    assert_eq!(cite_line(&place), "ruling-cite: check=off", "宣言 file が無い");
+    history(&place, &[&[(".vessel.toml", declaration(""))]]);
+    assert_eq!(cite_line(&place), "ruling-cite: check=off", "key が無い");
+    history(&place, &[&[(".vessel.toml", declaration("ruling-check = false\nruling-fixtures = []\n"))]]);
+    write_client(&place, "cat /dev/null\nexit 3");
+    assert_eq!(cite_line(&place), "ruling-cite: check=off", "false・台帳を読めない周でも数えも断りもしない");
+    history(&place, &[&[(".vessel.toml", declaration("ruling-check = true\n"))]]);
+    assert_eq!(cite_line(&place), "ruling-cite: unreadable reason=ledger", "対照: true にすると台帳を読めない周は測れない");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// 線は最初に true と読める commit: true → false → true と変わる履歴では、false の間に足した引用は線の後（before-line でなく unresolved）。
+#[test]
+fn ledger_ruling_doctor_line_is_the_first_true_commit_across_flips() {
+    let place = cite_place("main").unwrap_or_else(|| panic!("置き場を作れる"));
+    let (on, off) = (declaration("ruling-check = true\n"), declaration("ruling-check = false\n"));
+    history(
+        &place,
+        &[
+            &[(".vessel.toml", on), ("docs/a.md", "- user 2026-09-29T10:00Z\n")],
+            &[(".vessel.toml", off), ("docs/p.md", "- user 2026-09-29T11:00Z\n")],
+            &[(".vessel.toml", on)],
+        ],
+    );
+    serve(&place, &[]);
+    let want = "ruling-cite: check=on files=3 cited=2 unresolved=1:user 2026-09-29T11:00Z before-line=1:user 2026-09-29T10:00Z";
+    assert_eq!(cite_line(&place), want, "線は最初の true の commit（最後の true の commit ではない）");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// 壊れた宣言のまま `ruling-check = true` を足した commit と時刻の形 X を足した commit の後に、ruling-check の行を変えず別の行だけを直した
+/// commit を置き、その後に Y を足した履歴では、線は直した commit で before-line は X の 1 件だけ（`-G ruling-check` で候補を絞ると線を取り逃がす）。
+#[test]
+fn ledger_ruling_doctor_line_is_the_commit_that_fixed_another_row() {
+    let place = cite_place("main").unwrap_or_else(|| panic!("置き場を作れる"));
+    let (broken, fixed) = (declaration("ruling-check = true\nclose-check = \"yes\"\n"), declaration("ruling-check = true\nclose-check = true\n"));
+    history(
+        &place,
+        &[&[(".vessel.toml", broken)], &[("docs/x.md", "- user 2026-09-29T15:00Z\n")], &[(".vessel.toml", fixed)], &[("docs/y.md", "- user 2026-09-29T16:00Z\n")]],
+    );
+    serve(&place, &[]);
+    let want = "ruling-cite: check=on files=3 cited=2 unresolved=1:user 2026-09-29T16:00Z before-line=1:user 2026-09-29T15:00Z";
+    assert_eq!(cite_line(&place), want, "線は直した commit・X は線の前・Y は線の後");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// 読めない 3 形は閉じた 3 語で、件数を 1 つも出さない（4 行目・逐語一致）。宣言 → 台帳 → git の順に最初に読めなかった 1 つ:
+/// 壊した宣言は declaration（台帳も落ちていても）・落ちる台帳は ledger（main の ref が無くても）・main の ref を持たない repo は git。
+#[test]
+fn ledger_ruling_doctor_unreadable_names_the_first_unreadable_face() {
+    let broken = cite_place("main").unwrap_or_else(|| panic!("置き場を作れる"));
+    history(&broken, &[&[(".vessel.toml", declaration("ruling-check = \"yes\"\n")), ("docs/a.md", A_MD)]]);
+    ruling_ledger(&broken);
+    let want = "ruling-cite: unreadable reason=declaration";
+    assert_eq!(cite_line(&broken), want, "壊した宣言");
+    write_client(&broken, "cat /dev/null\nexit 3");
+    assert_eq!(cite_line(&broken), want, "台帳も落ちていても宣言が先");
+    let trunk = cite_place("trunk").unwrap_or_else(|| panic!("置き場を作れる"));
+    history(&trunk, &[&[(".vessel.toml", declaration("ruling-check = true\n")), ("docs/a.md", A_MD)]]);
+    ruling_ledger(&trunk);
+    assert_eq!(cite_line(&trunk), "ruling-cite: unreadable reason=git", "main の ref を持たない repo");
+    write_client(&trunk, "printf '[{\"id\":'");
+    let torn = cite_line(&trunk);
+    assert_eq!(torn, "ruling-cite: unreadable reason=ledger", "台帳が壊れていれば git より先");
+    for found in [want, torn.as_str()] {
+        assert!(!found.contains("files=") && !found.contains("cited="), "件数を出さない: {found}");
+    }
+    fs::remove_dir_all(&broken.dir).ok();
+    fs::remove_dir_all(&trunk.dir).ok();
 }

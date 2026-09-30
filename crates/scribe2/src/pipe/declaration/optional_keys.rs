@@ -26,7 +26,17 @@ pub(super) const DECLARED_KEYS: &[&str] = &[
     CLOSE_CHECK_KEY,
     FLOOR_CHECK_KEY,
     crate_roots::KEY,
+    RULING_CHECK_KEY,
+    RULING_FIXTURES_KEY,
 ];
+
+/// **裁定 id の引用の実在を確かめるか**の key（任意・設計 dispatcher.md §36・FR83）。値は真偽だけ（既定は持たない＝
+/// 書かない宣言は false）。
+const RULING_CHECK_KEY: &str = "ruling-check";
+
+/// **引用の見本の一覧**の key（任意・設計 dispatcher.md §36）。字面の閉じた一覧で、引用との完全一致だけで外す（型は持たない）。
+/// 空の一覧 `[]` は書ける（親の値の読みが、この key だけ空の配列を受ける）。
+pub(super) const RULING_FIXTURES_KEY: &str = "ruling-fixtures";
 
 /// **床の検査の 1 行**の key（任意・設計 dispatcher.md §34・ADR-0084）。main の先端の sha の木で撃つ（既定は持たない＝書かない宣言は撃たない）。
 const FLOOR_CHECK_KEY: &str = "floor-check";
@@ -78,6 +88,8 @@ pub(super) const OPTIONAL_KEYS: &[&str] = &[
     CLOSE_CHECK_KEY,
     FLOOR_CHECK_KEY,
     crate_roots::KEY,
+    RULING_CHECK_KEY,
+    RULING_FIXTURES_KEY,
 ];
 
 /// 床の検査の 1 行（任意）。前後の空白を除いて空でない文字列だけを受ける（列・整数・真偽・空・空白だけは key と行番号を名指す不備）。
@@ -104,13 +116,57 @@ pub fn floor_check_at(repo: &Path, sha: &str) -> Result<Option<String>, Vec<Decl
 
 /// close の理由の門に加わるか（任意）。真偽だけを受ける（文字列・整数・列は key と行番号を名指す不備）。
 pub(super) fn close_check_of(found: &[(String, Raw, u64)], errors: &mut Vec<DeclError>) -> Option<bool> {
-    let (_, value, line) = found.iter().find(|(seen, _, _)| seen == CLOSE_CHECK_KEY)?;
+    bool_key(found, CLOSE_CHECK_KEY, errors)
+}
+
+/// 真偽だけの任意 key（無ければ `None`・型違いは key と行番号を名指す不備）。
+fn bool_key(found: &[(String, Raw, u64)], key: &str, errors: &mut Vec<DeclError>) -> Option<bool> {
+    let (_, value, line) = found.iter().find(|(seen, _, _)| seen == key)?;
     match value {
         Raw::Bool(joins) => Some(*joins),
         _ => {
-            errors.push(DeclError::new(*line, format!("{CLOSE_CHECK_KEY} は true か false の真偽だけである")));
+            errors.push(DeclError::new(*line, format!("{key} は true か false の真偽だけである")));
             None
         }
+    }
+}
+
+/// 裁定 id の引用の実在を確かめるか（任意・[`bool_key`] と同じ読み）。
+pub(super) fn ruling_check_of(found: &[(String, Raw, u64)], errors: &mut Vec<DeclError>) -> Option<bool> {
+    bool_key(found, RULING_CHECK_KEY, errors)
+}
+
+/// 引用の見本の一覧（任意）。文字列の一覧だけを受ける（文字列・整数・真偽は key と行番号を名指す不備・要素の型違いは値の読みが積む）。
+pub(super) fn ruling_fixtures_of(found: &[(String, Raw, u64)], errors: &mut Vec<DeclError>) -> Option<Vec<String>> {
+    let (_, value, line) = found.iter().find(|(seen, _, _)| seen == RULING_FIXTURES_KEY)?;
+    match value {
+        Raw::List(items) => Some(items.clone()),
+        _ => {
+            errors.push(DeclError::new(*line, format!("{RULING_FIXTURES_KEY} は文字列の一覧である")));
+            None
+        }
+    }
+}
+
+/// 名指した rev の tree の宣言が持つ裁定の引用の 2 key（`ruling-check` と `ruling-fixtures`）。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RulingKeys {
+    /// `ruling-check`（無い・宣言 file が無いなら false）。
+    pub check: bool,
+    /// `ruling-fixtures`（無ければ空）。
+    pub fixtures: Vec<String>,
+}
+
+/// rev の tree の宣言から裁定の引用の 2 key を読む（`git show <rev>:.vessel.toml`・作業ツリーは読まない・HEAD 以外の rev も読める）。
+/// 宣言 file が無い（その rev に無い・git を撃てない）周は false と空、在って読めない周は `Err`（key の行の不備を含む）。
+pub fn ruling_keys_at(repo: &Path, rev: &str) -> Result<RulingKeys, Vec<DeclError>> {
+    let spec = format!("{rev}:{}", super::DECL_FILE);
+    match super::super::git_bytes(repo, &["show", &spec]) {
+        None => Ok(RulingKeys::default()),
+        Some(bytes) => Declared::parse(&String::from_utf8_lossy(&bytes)).map(|declared| RulingKeys {
+            check: declared.ruling_check == Some(true),
+            fixtures: declared.ruling_fixtures.unwrap_or_default(),
+        }),
     }
 }
 
@@ -284,7 +340,7 @@ pub fn terminal_facts(repo: &Path) -> Result<TerminalFacts, Vec<DeclError>> {
 #[cfg(test)]
 mod tests {
     use super::super::Declared;
-    use super::{check_of, close_check, floor_check_at, route_of, CloseCheck, QuestionRoute};
+    use super::{check_of, close_check, floor_check_at, route_of, ruling_keys_at, CloseCheck, QuestionRoute, RulingKeys};
 
     /// 必須 key だけの宣言の本文（3 行）の後ろに `extra` を足す。
     fn with(extra: &str) -> String {
@@ -387,6 +443,87 @@ mod tests {
         let declared = Declared::parse(&text).unwrap_or_else(|errors| panic!("本 repo の宣言を読める: {errors:?}"));
         assert_eq!(declared.close_check, Some(true), "本 repo の宣言は close-check = true");
         assert_eq!(check_of(Some(Ok(declared))), CloseCheck::Joins);
+    }
+
+    /// key が true は確かめる・false と key の無い宣言は確かめない（欄は真偽のまま・close-check とは別の欄）。
+    #[test]
+    fn declaration_ruling_check_reads_true_false_and_absent() {
+        assert_eq!(Declared::parse(&with("")).map(|found| found.ruling_check), Ok(None));
+        assert_eq!(Declared::parse(&with("ruling-check = true\n")).map(|found| found.ruling_check), Ok(Some(true)));
+        assert_eq!(Declared::parse(&with("ruling-check = false\n")).map(|found| found.ruling_check), Ok(Some(false)));
+        let apart = Declared::parse(&with("close-check = true\n")).map(|found| (found.close_check, found.ruling_check));
+        assert_eq!(apart, Ok((Some(true), None)), "close-check は ruling-check を立てない");
+    }
+
+    /// 文字列・整数・列は key と行番号（4 行目）を名指す不備、重複は 5 行目を名指す不備。
+    #[test]
+    fn declaration_ruling_check_refuses_text_int_list_and_duplicates() {
+        for value in ["\"true\"", "\"\"", "1", "0", "[\"true\"]"] {
+            let errors = Declared::parse(&with(&format!("ruling-check = {value}\n"))).expect_err(value);
+            assert!(errors.iter().any(|error| error.line == 4 && error.reason.contains("ruling-check")), "{value}: {errors:?}");
+        }
+        let errors = Declared::parse(&with("ruling-check = true\nruling-check = false\n")).expect_err("重複");
+        assert!(errors.iter().any(|error| error.line == 5 && error.reason.contains("ruling-check")), "{errors:?}");
+    }
+
+    /// 宣言 file を書いて（`None` は消して）1 commit にする。
+    fn commit_declaration(repo: &std::path::Path, declaration: Option<&str>) {
+        let file = repo.join(super::super::DECL_FILE);
+        match declaration {
+            Some(text) => assert!(std::fs::write(&file, text).is_ok(), "宣言を書けた"),
+            None => assert!(std::fs::remove_file(&file).is_ok(), "宣言を消せた"),
+        }
+        assert!(crate::pipe::git_ok(repo, &["add", "-A"]), "add");
+        assert!(crate::pipe::git_ok(repo, &["commit", "-q", "-m", "c"]), "commit");
+    }
+
+    /// HEAD と違う rev の宣言を読む（rev を 1 引数で受ける）: false → true と fixtures → 型違い → file の削除の 4 commit の履歴を、
+    /// 古い rev ほど遡って読む。存在しない rev と宣言の無い repo は false と空・作業ツリーの宣言は読まない。
+    #[test]
+    fn declaration_ruling_check_reads_the_named_rev() {
+        let repo = crate::pipe::fixture::scratch("ruling-keys-rev");
+        for args in [&["init", "-q", "-b", "main"][..], &["config", "user.name", "t"], &["config", "user.email", "t@example.invalid"], &["config", "commit.gpgsign", "false"]] {
+            assert!(crate::pipe::git_ok(&repo, args), "{args:?}");
+        }
+        for declaration in [
+            Some(with("ruling-check = false\n")),
+            Some(with("ruling-check = true\nruling-fixtures = [\"batch:a\", \"policy:b\"]\n")),
+            Some(with("ruling-check = \"yes\"\n")),
+        ] {
+            commit_declaration(&repo, declaration.as_deref());
+        }
+        let keys = |check, fixtures: &[&str]| Ok(RulingKeys { check, fixtures: fixtures.iter().map(|item| (*item).to_owned()).collect() });
+        assert_eq!(ruling_keys_at(&repo, "HEAD~2"), keys(false, &[]), "最初の commit は false");
+        assert_eq!(ruling_keys_at(&repo, "HEAD~1"), keys(true, &["batch:a", "policy:b"]), "HEAD と違う rev の値を読む");
+        assert!(ruling_keys_at(&repo, "HEAD").is_err(), "HEAD の型違いは宣言の誤り");
+        assert_eq!(ruling_keys_at(&repo, "HEAD~9"), keys(false, &[]), "存在しない rev は宣言の無い repo と同じ");
+        assert!(std::fs::write(repo.join(super::super::DECL_FILE), with("ruling-check = true\n")).is_ok());
+        assert!(ruling_keys_at(&repo, "HEAD").is_err(), "作業ツリーの宣言は読まない");
+        commit_declaration(&repo, None);
+        assert_eq!(ruling_keys_at(&repo, "HEAD"), keys(false, &[]), "宣言 file の無い tree は false と空");
+        assert_eq!(ruling_keys_at(std::path::Path::new("/nonexistent-ruling-keys-dir"), "HEAD"), keys(false, &[]), "git を撃てない dir");
+    }
+
+    /// 一覧は key の無い宣言で無し・文字列の一覧はそのまま（順も保つ）・空の一覧 `[]` は書けて空。
+    #[test]
+    fn declaration_ruling_fixtures_reads_a_list_empty_or_nothing() {
+        assert_eq!(Declared::parse(&with("")).map(|found| found.ruling_fixtures), Ok(None));
+        let two = Declared::parse(&with("ruling-fixtures = [\"policy:b\", \"batch:a\"]\n")).map(|found| found.ruling_fixtures);
+        assert_eq!(two, Ok(Some(vec!["policy:b".to_owned(), "batch:a".to_owned()])));
+        assert_eq!(Declared::parse(&with("ruling-fixtures = []\n")).map(|found| found.ruling_fixtures), Ok(Some(Vec::new())), "空の一覧は可");
+        let errors = Declared::parse(&with("close-check = []\n")).expect_err("空の一覧を受けるのはこの key だけ");
+        assert!(errors.iter().any(|error| error.line == 4 && error.reason.contains("close-check")), "{errors:?}");
+    }
+
+    /// 一覧でない値（文字列・整数・真偽）と要素が文字列でない一覧は key と行番号（4 行目）を名指す不備、重複は 5 行目を名指す不備。
+    #[test]
+    fn declaration_ruling_fixtures_refuses_non_lists_and_non_strings() {
+        for value in ["\"batch:a\"", "1", "true", "[1]", "[\"a\", 2]", "[true]", "[\"\"]"] {
+            let errors = Declared::parse(&with(&format!("ruling-fixtures = {value}\n"))).expect_err(value);
+            assert!(errors.iter().any(|error| error.line == 4 && error.reason.contains("ruling-fixtures")), "{value}: {errors:?}");
+        }
+        let errors = Declared::parse(&with("ruling-fixtures = [\"a\"]\nruling-fixtures = [\"b\"]\n")).expect_err("重複");
+        assert!(errors.iter().any(|error| error.line == 5 && error.reason.contains("ruling-fixtures")), "{errors:?}");
     }
 
     /// 真偽を書いた他の key は key ごとの型の不備になり、entrance-flip = true は 3 語の外として key と行番号を名指す。

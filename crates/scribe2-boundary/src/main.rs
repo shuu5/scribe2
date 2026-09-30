@@ -61,9 +61,9 @@ fn render_doctor() -> Vec<String> {
 /// さらに導入先の行（1 導入先 1 行・[`vessel::account::consumers::doctor_lines`]・consumer-sync.md §4・FR61）を
 /// 足し、最後に host-guard の 1 行（種類ごとの on / off・配線・binary の解決・[`vessel::account::wire::doctor_line`]・
 /// vessel-hook.md §12 形 5）を足す。`--bin B`（`--state-dir` と並べる歯の seam）は binary の解決に撃つ program を
-/// `<NAME>` から差し替える。`--repo R` 付きは末尾に台帳 lint の 1 行と台帳の形の 1 行（[`vessel::ledger::lint::doctor_lines`]・
-/// contract-source.md §6 / ledger-form.md §3 の 4・台帳は 1 回だけ読む・`--state-dir` 無しでも `--rules` と並べて
-/// 撃てる）。`--unit-dir U --binary PATH`（`--state-dir` と並べる・2 つはそろって在る）は登録 row の行の末尾に `tick-unit=` の
+/// `<NAME>` から差し替える。`--repo R` 付きは末尾に台帳 lint の 1 行と台帳の形の 1 行と裁定 id の引用の 1 行（`ruling-cite:`・
+/// [`vessel::ledger::lint::doctor_lines`]・contract-source.md §6 / ledger-form.md §3 の 4 / dispatcher.md §36・台帳は 1 回だけ読む・
+/// `--state-dir` 無しでも `--rules` と並べて撃てる）。`--unit-dir U --binary PATH`（`--state-dir` と並べる・2 つはそろって在る）は登録 row の行の末尾に `tick-unit=` の
 /// 1 語を足す（seat-heartbeat.md §3）。2 つとも無い周は host の面の `[[tick]]` の値が既定（面にも無ければ足さない・flag が勝つ・§5 形 3）。
 /// 値欠け・空文字・重複・未知の引数・片方だけの `--unit-dir` / `--binary` は使い方の誤り（`Err`）。
 fn render_doctor_with(rest: &[String]) -> Result<Vec<String>, ()> {

@@ -182,6 +182,38 @@ pub fn is_ruling_id(text: &str, prefix: Option<&str>) -> bool {
     prefix.is_some_and(|prefix| question_form(text, prefix))
 }
 
+/// 裁定の行（bead の notes の 1 行）の 5 欄（設計 dispatcher.md §36 約束 4・fleet-event-log.md 行 h が書く行）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RulingRow {
+    /// 裁定 id（先頭の欄）。
+    pub id: String,
+    /// 問い id。
+    pub question: String,
+    /// 発話の ts。
+    pub ts: String,
+    /// 経路（4 欄の古い行は [`ROUTE_CHAT`]）。
+    pub route: String,
+    /// 逐語。
+    pub verbatim: String,
+}
+
+/// 4 欄の古い行が持つと読む経路。
+pub const ROUTE_CHAT: &str = "chat";
+
+/// notes の 1 行を裁定の行として読む（`|` で割り、欄ごとに前後の空白を剥ぐ）。先頭の欄が [`is_ruling_id`] で真なら 5 欄
+/// （4 欄の古い行は経路を [`ROUTE_CHAT`] と読む）を返し、ほかの行（先頭の欄が裁定 id でない・欄が 4 でも 5 でもない）は
+/// `None`。`prefix` は台帳の接頭辞（解けない周は `None`＝問い id の形の裁定 id は読めない）。
+pub fn ruling_row(line: &str, prefix: Option<&str>) -> Option<RulingRow> {
+    let fields: Vec<&str> = line.split('|').map(str::trim).collect();
+    let own = |text: &str| text.to_owned();
+    let (id, question, ts, route, verbatim) = match fields.as_slice() {
+        [id, question, ts, route, verbatim] => (id, question, ts, *route, verbatim),
+        [id, question, ts, verbatim] => (id, question, ts, ROUTE_CHAT, verbatim),
+        _ => return None,
+    };
+    is_ruling_id(id, prefix).then(|| RulingRow { id: own(id), question: own(question), ts: own(ts), route: own(route), verbatim: own(verbatim) })
+}
+
 /// 着地の形 `<40 桁の 16 進> <尾>` を読む（値の語が無いか id が 40 桁の 16 進でなければ `None`）。
 fn landed(values: &[&str]) -> Option<Form> {
     let (commit, tail) = values.split_first()?;
@@ -273,7 +305,7 @@ fn is_count(text: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_ruling_id, read, Defect, Form, Head, LandedTail};
+    use super::{is_ruling_id, read, ruling_row, Defect, Form, Head, LandedTail, RulingRow, ROUTE_CHAT};
 
     /// 40 桁の 16 進（小文字）。
     const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
@@ -444,5 +476,60 @@ mod tests {
         }
         assert!(!is_ruling_id("s2-1:20260928T1347Z-1", None), "接頭辞が無ければ問い id の形は読めない");
         assert!(is_ruling_id("batch:x", None) && is_ruling_id("policy:x", None));
+    }
+
+    /// 裁定の行の 5 欄と期待の欄の組（裁定 id・問い id・発話の ts・経路・逐語）。
+    fn row(id: &str, question: &str, ts: &str, route: &str, verbatim: &str) -> Option<RulingRow> {
+        let own = |text: &str| text.to_owned();
+        Some(RulingRow { id: own(id), question: own(question), ts: own(ts), route: own(route), verbatim: own(verbatim) })
+    }
+
+    /// 5 欄の行は 5 欄をそのまま返し、4 欄の古い行は経路を chat と読む（発話の ts と逐語は 4 欄の位置のまま）。
+    #[test]
+    fn ruling_row_reads_five_fields_and_four_fields_as_chat() {
+        let five = "s2-1:20260930T0000Z-1 | s2-1 | 2026-09-30T00:00Z | chat | 逐語の字";
+        assert_eq!(ruling_row(five, Some("s2")), row("s2-1:20260930T0000Z-1", "s2-1", "2026-09-30T00:00Z", "chat", "逐語の字"));
+        let route = "s2-1:20260930T0000Z-1 | s2-1 | 2026-09-30T00:00Z | seat | 逐語";
+        assert_eq!(ruling_row(route, Some("s2")).map(|found| found.route), Some("seat".to_owned()), "5 欄の経路は書かれたまま");
+        let four = "batch:m2 | s2-1 | 2026-09-30T00:00Z | 逐語";
+        assert_eq!(ruling_row(four, Some("s2")), row("batch:m2", "s2-1", "2026-09-30T00:00Z", ROUTE_CHAT, "逐語"));
+        assert_eq!(ROUTE_CHAT, "chat");
+    }
+
+    /// 欄ごとに前後の空白（全角を含む）を剥ぎ、欄の中の空白は残す。
+    #[test]
+    fn ruling_row_trims_each_field() {
+        let line = "  policy:p \u{3000}|\t s2-1 | 2026-09-30T00:00Z |chat|  逐語  の 字  ";
+        assert_eq!(ruling_row(line, Some("s2")), row("policy:p", "s2-1", "2026-09-30T00:00Z", "chat", "逐語  の 字"));
+    }
+
+    /// 先頭の欄が裁定 id でない行（逐語の欄にだけ id を持つ行・ほかの欄が id の行・地の文）と、欄が 4 でも 5 でもない行は無し。
+    #[test]
+    fn ruling_row_refuses_rows_whose_first_field_is_not_a_ruling_id() {
+        let id = "s2-1:20260930T0000Z-1";
+        for line in [
+            format!("s2-1 | {id} | 2026-09-30T00:00Z | chat | 逐語"),
+            format!("メモ | s2-1 | 2026-09-30T00:00Z | chat | {id}"),
+            format!("{id} を引く | s2-1 | 2026-09-30T00:00Z | chat | 逐語"),
+            String::new(),
+            "batch:".to_owned(),
+            format!("{id} | s2-1 | 2026-09-30T00:00Z"),
+            format!("{id} | s2-1 | 2026-09-30T00:00Z | chat | 逐語 | 余り"),
+            id.to_owned(),
+        ] {
+            assert_eq!(ruling_row(&line, Some("s2")), None, "{line}");
+        }
+    }
+
+    /// 接頭辞が違う問い id の形の行は無し（batch: / policy: の裁定 id の行は接頭辞に依らず読める）。接頭辞が解けない周も同じ。
+    #[test]
+    fn ruling_row_reads_the_question_form_only_under_the_ledger_prefix() {
+        let other = "tz-1:20260930T0000Z-1 | tz-1 | 2026-09-30T00:00Z | chat | 逐語";
+        assert_eq!(ruling_row(other, Some("s2")), None, "接頭辞違い");
+        assert_eq!(ruling_row(other, None), None, "接頭辞が解けない周");
+        assert!(ruling_row(other, Some("tz")).is_some());
+        let named = "batch:2026-09-28 | s2-1 | 2026-09-30T00:00Z | chat | 逐語";
+        assert!(ruling_row(named, Some("tz")).is_some() && ruling_row(named, None).is_some(), "batch: は接頭辞に依らない");
+        assert_eq!(ruling_row("policy:batch:x | s2-1 | 2026-09-30T00:00Z | 逐語", None).map(|found| found.id), Some("policy:batch:x".to_owned()));
     }
 }

@@ -224,7 +224,7 @@ pub fn judge(issues: &[Issue], docs: &Docs) -> Report {
 }
 
 /// 欠陥 1 種の欄（`<語>=<件数>` と、1 件以上なら `:<id>,<id>…`）。
-fn field(word: &str, found: &[String]) -> String {
+pub(super) fn field(word: &str, found: &[String]) -> String {
     if found.is_empty() {
         format!("{word}=0")
     } else {

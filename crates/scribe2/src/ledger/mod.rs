@@ -13,6 +13,7 @@
 //! contract-source.md §6・契約表の行 e）は子 module [`lint`] に置く（読むだけ・極性は増えない）。台帳のグラフの形
 //! （doctor の項目 1 行・ledger-form.md §10・契約表の行 f）は子 module [`graph`] に置く（読むだけ）。
 
+pub mod citation;
 pub mod close_reason;
 pub mod form;
 pub mod graph;
