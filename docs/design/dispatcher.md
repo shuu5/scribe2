@@ -980,6 +980,14 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
   - 列は台帳を 1 周に 1 回読み、候補ごとに理由を決める。問いの label の bead は列の入力から外れる（行 af）。
   - 待ちの理由の型を名指す file は行 w の閉包に入る。Issue を名指す file は `contract-source.md 行 bo` の閉包に入る（どちらも touches・verified）。
   - 今の main の実測（verified・main 828e85fb）: Issue は created_at と closed_at も持つ（metadata は持たない・型の literal は 4 か所のまま）。main の先端の sha の読みは床の検査（`crates/scribe2/src/pipe/dispatch/floor.rs`）の、pipe の git_line で land の MAIN_REF を rev-parse する 1 行。実測の file（`crates/scribe2/src/pipe/dispatch/facts.rs`）は重なりの値を読むので、待ちの理由の型と Turn を既に名指す。
+- 材料（本行の審査が読む code の事実・main c264dbf3・verified）:
+  - 行 ak の数え（`crates/scribe2/src/ledger/citation.rs`）: 追跡された file の字面から引用を拾う私有の関数 `population` は、`git grep -I` を HEAD に固定して撃ち、rev の引数を持たない。拾った（path・引用）を返す pub の関数も無い（pub は `scan`・`verdict`・`before_line`・`doctor_line` ほか）。doctor の数え（`measure`）は ruling-check が true の repo だけで撃つ。
+    - 本行は `population` に rev の引数を足し（今の呼び手は HEAD を渡す）、rev を受けて（path・引用）の集合を返す `pub(crate)` の関数 1 本を足す。約束 2 の数えはこの関数を main の先端の sha で撃ち、ruling-check の有無に依らない。`citation.rs` は write-set に在る。
+  - 床の待ちの置き場（`crates/scribe2/src/pipe/dispatch.rs` の候補を作る loop）: 周の頭で `rev-parse` を `MAIN_REF`（`refs/heads/main`）に 1 回撃ち、`entry_of` で候補を作った直後に、launched・settled の理由と first の印を持たない候補の理由を floor の待ちに替えて準備の表から外す。枠と重なりは、その後の `settle`（`candidates.rs`）が測る。
+    - 約束 4 の待ちは同じ loop の同じ位置に置き、床の待ちの候補は床の理由のまま残す。`candidates.rs` は変えない。
+  - alarm の語の組み立て（`crates/scribe2/src/seat/tick/signal.rs` の `idle_alarm`）: 並列の実測の Facts（`crates/scribe2/src/pipe/dispatch/facts.rs`）の値から、idle・precheck・floor の順に語を並べる。floor の語は Facts の floor の欄から来る。
+    - 約束 7 の `unreflected` は Facts に件数の欄を足して precheck の後・floor の前に並べる。`seat/tick.rs` は変えない。
+  - 便 s2-07l.738.37.5-20260930T152314Z の契約の審査が、この 3 つの材料が無く write-set の外の落ちを測れないと INCONCLUSIVE にした。
 - 約束:
   1. **母集団**: 列の 1 周が読んだ台帳の中の、status が closed で label intake:question を持ち、metadata の effect が document の問い。
      - その notes の裁定の行の id を集める（読みは行 ak が `ledger/close_reason.rs` に置く 1 本）。
@@ -1755,7 +1763,7 @@ title = "未反映の裁定を列の周ごとに置き場の file に書き（0 
 req = ["FR84", "FR68", "FR27"]
 section = "38"
 depends = ["ak", "aj"]
-write-set = ["crates/scribe2/src/seat/ledger.rs", "crates/scribe2/src/hook/graph_guard.rs", "crates/scribe2/src/pipe/dispatch/precheck.rs", "crates/scribe2/src/ledger/form.rs", "crates/scribe2/src/pipe/dispatch.rs", "+crates/scribe2/src/pipe/dispatch/unreflected.rs", "crates/scribe2/src/pipe/dispatch/facts.rs", "crates/scribe2/src/seat/tick/signal.rs", "crates/scribe2-boundary/src/main.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "crates/scribe2-boundary/tests/e2e/seat/tick.rs"]
+write-set = ["crates/scribe2/src/seat/ledger.rs", "crates/scribe2/src/hook/graph_guard.rs", "crates/scribe2/src/pipe/dispatch/precheck.rs", "crates/scribe2/src/ledger/form.rs", "crates/scribe2/src/pipe/dispatch.rs", "+crates/scribe2/src/pipe/dispatch/unreflected.rs", "crates/scribe2/src/pipe/dispatch/facts.rs", "crates/scribe2/src/ledger/citation.rs", "crates/scribe2/src/seat/tick/signal.rs", "crates/scribe2-boundary/src/main.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "crates/scribe2-boundary/tests/e2e/seat/tick.rs"]
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_unreflected_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_alarm_unreflected_", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_dispatch_wait_reasons_render_the_name_and_the_value", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_floor_wait_", "cargo run -q -p scribe2-boundary --bin scribe2 -- contracts check --repo ."]
 size = "M"
 growth = ["crates/scribe2/src/pipe/dispatch/unreflected.rs:230", "crates/scribe2/src/pipe/dispatch.rs:25", "crates/scribe2/src/pipe/dispatch/facts.rs:8", "crates/scribe2/src/seat/tick/signal.rs:5", "crates/scribe2/src/seat/ledger.rs:3", "crates/scribe2/src/hook/graph_guard.rs:1", "crates/scribe2-boundary/src/main.rs:1"]
