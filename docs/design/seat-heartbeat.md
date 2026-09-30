@@ -658,6 +658,38 @@
 - base で RED の理由: base（§21 の後）は口が `default` を使い方の誤りで断り、出力に `heartbeat_by=` が無く、群の表の行の `heartbeat` を未知の key で断り、区画の席に合図を送るので (a)〜(h) が落ちる（機能不在）。直す既存の歯のうち base でも緑になる file は、同じ file に base で赤い新しい歯を持つ。持たない file は test 区間の行頭に `// flip-check: retroactive <この契約の bead id>` を置く（runner が flip-check で実測する）。
 - 依存: 行 z（§21・表の `depends`・同じ `crates/scribe2/src/seat/tick.rs` を触り、歯 (c) が区画の移り先の判定の撃ちを数える）と account-lifecycle.md の行 y（読み口 `park`・bead の blocks で結ぶ）。
 
+## 23. seat/tick.rs の歯の module を歯の file へ割る — `#[path]` の子 module で module path と歯の名を変えない（契約表の行 ab・純移動・行 w の後の受け皿）
+
+やさしく言うと: 管理 tick の file は上限（1500 行）まで残り 10 行です。この後の行（tick の周に局面の出力を書き直す行と、alarm の語を足す行）が入れません。file の末尾にある歯（test）の塊を、名前も中身も変えずに隣の歯専用の file へ移して、余地を作ります。挙動は 1 つも変わりません。
+
+- 何が起きているか（main 3908279b・verified）:
+  - `crates/scribe2/src/seat/tick.rs` は物理 1449 行で、正規化すると 1490 行です（余地 10）。
+  - src 区間は 1–1224 行。1225 行の行頭の `#[cfg(test)]` の次の行が `mod tests {` で、in-file の歯は 11 本です。
+    - 11 本の名は全部 `seat_tick_` で始まり、module path は tick の子の tests です。
+    - 歯の区間は正規化で約 235 行あります。
+  - 歯の `use super::{…}` は親の名と、親が子（signal）から `pub use` する名を引きます。子の file へ移しても `super` は同じ `seat::tick` を指します。
+  - 先例は seat-roles §33（行 aa・hook/role_guard.rs）と、xtask の check.rs → check_tests.rs です。
+- 約束:
+  1. 親の歯の区間は 3 行と札 1 行だけにする。3 行は `#[cfg(test)]` / `#[path = "…_tests.rs"]` / `mod tests;`（属性は単独行）で、札 `// flip-check: moved <bead>` は宣言の直後に置く。
+  2. 子の file の中身:
+     - 先頭に説明 1 行と札 `// flip-check: moved <bead>` の 2 行を置く。
+     - 本文は module の本体を 1 段浅くしたもの。本体の中の旧い札（行 w の bead）の行も一緒に移す（`//` 行は残差の許容形）。
+  3. module path（tick の子の tests）と 11 本の名は変わらない。
+  4. 親の src 区間の item・可視性・use は 1 字も変わらない。
+  5. 歯を足さず、書き換えもしない（move_proof の許容形の中だけで動かす）。
+- 歯の案: 新しい歯は無い（純移動）。
+  - 既存の 11 本を `seat::tick::tests::` の filter で名指す。この filter は tick の子 module の歯の module path の部分文字列にならない。
+  - base で RED にはならない。flip-check は子の file の先頭の moved の札で通す。子は `*_tests.rs` なので、file 全体が歯の区間と読まれる。
+- 触らないもの: 親の src の全部・子 module（beat / install / park / signal）・e2e の tick の歯・rules 行。
+- 限界:
+  - 親の `#[cfg(test)]` の次の行は `#[path` なので、xtask は親の file 全体を src と読む。core-lines は +3 動く（3 行ぶん）。
+  - 余地は約 230 行まで戻るが、tick.rs に足す行が続けば、また割る日が来る。
+- 却下:
+  - (a) 計画どおり src の群を移す案。合図の群は行 w で移済みで、残る src の群はどれも I/O の本体に絡み、純移動の形が取れない。
+  - (b) 上限の値を上げる案。憲法 C4 の閾値の変更で、A2 の裁定が要る。
+
+## [[contract]] 行
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -959,4 +991,15 @@ size = "M"
 growth = ["crates/scribe2/src/seat/tick.rs:10", "crates/scribe2/src/seat/tick/beat.rs:130", "crates/scribe2/src/seat/role.rs:4", "crates/scribe2/src/seat/cli.rs:1", "crates/scribe2/src/help.rs:2", "crates/scribe2/src/rules/manifest.rs:10", "crates/scribe2/src/rules/groups.rs:15"]
 depends = ["z"]
 done = "(1) [[account-group]] の既知の key に heartbeat が在り（必須は 3 つのまま）、値は on / off だけで他の文字列と型の違う値は key の行番号つきの欠陥で断り、値の判定は groups.rs の 1 関数・AccountGroup の読み口 heartbeat が on / off / 無しを返す (2) 明示 off は heartbeat-off・明示 on は heartbeat-on（1 行 ts=<UTC 秒>）で、明示 on だけが読める周は on、明示 off が在る（読めない・dir を含む）周・両方在る周・明示 on が在るのに読めない周は off、どれも決まり方は explicit (3) 行 aa の + の file に実効の値の 1 関数が在り、明示の記録 → 群の表の行の key（group）→ 種類の既定（群は on・区画は off・どの行にも無い置き場は on・default）の順で決め、明示の記録が無く面が読めない周は値も決まり方も unreadable (4) front の off がこの値から取られ（off か unreadable で真）、back の heartbeat-off の noop・起こし直し・退避・群と区画の判定は不変 (5) seat heartbeat が off / on / default / status の 4 語を受け、on は明示 off を消して明示 on を置き・off は明示 off を置いて明示 on を消し・default は両方を消し、出力は heartbeat=<値> heartbeat_by=<語> で status は後ろに last= decision= reason= (6) seat tick status の heartbeat= が実効の値で直後に heartbeat_by= が在り、target= と reopens= / move= / grace_left= は不変 (7) doctor の席の行の heartbeat= が実効の値で tick= は不変・heartbeat_by は足さない (8) usage と help の FORM に heartbeat default の形が在り SUBCOMMANDS に default の 1 行が在り、使い方の snapshot を受け直し、switch_word が無い (9) 実効の値の file は NoopReason と SeatCommand の値を名指さない 歯: seat_heartbeat_mode_ の (a)〜(g)（(d) は on の正例と maybe の負例を 1 本の fn で撃ち、正例が base の未知の key の断りで落ちる）と host_group_heartbeat_key_ の (h) が base で RED、helper と status の逐語と snapshot を直した既存の seat_heartbeat_ / seat_tick_status_ / seat_usage_external_form と、不変の seat_doctor_external_form・cli_help_pages_match_the_live_form_and_every_subcommand は緑"
+
+[[contract]]
+id = "ab"
+title = "seat/tick.rs の歯の module（11 本）を #[path] の子 module の file へ割る — 純移動・module path と歯の名は不変・親の src と可視性は不変・札 moved・tick.rs に足す後の行の余地を作る（§23）"
+req = ["FR27"]
+section = "23"
+write-set = ["-crates/scribe2/src/seat/tick.rs", "+crates/scribe2/src/seat/tick_tests.rs"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail seat::tick::tests::"]
+size = "S"
+growth = ["crates/scribe2/src/seat/tick_tests.rs:240"]
+done = "(1) 親の歯の区間は cfg(test) の単独行・path の行・mod tests; の 3 行と宣言の直後の札 moved だけ (2) 子の file の先頭 2 行が説明と札 moved で、本文は module の本体を 1 段浅くしたもの (3) module path seat::tick::tests と歯 11 本の名は不変で base = head (4) 親の src 区間の item・可視性・use は不変 (5) flip-check が moved で通る (6) file-lines で tick.rs の余地が 200 行以上に増える"
 <!-- contracts:end -->
