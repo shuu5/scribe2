@@ -837,6 +837,25 @@ enabled = true
 ruling = "user 2026-09-30T04:25Z"
 ruled_at = "2026-09-30"
 
+# 席の起草の置き場の build の置き場の量の上限（MiB = 100 GiB・state dir ごと・設計 dispatcher.md §39・ADR-0101）と、量の線が消さない
+# 組み立て中の窓（秒 = 30 分）。読めない周は量の線を撃たず記録は no-rule（既定値に倒さない）。
+
+[[rule]]
+id = "seat.drafts_cap_mb"
+kind = "SeatDraftsCapMb"
+value = 102400
+enabled = true
+ruling = "user 2026-09-30T07:18Z"
+ruled_at = "2026-09-30"
+
+[[rule]]
+id = "seat.drafts_busy_s"
+kind = "SeatDraftsBusyS"
+value = 1800
+enabled = true
+ruling = "user 2026-09-30T07:18Z"
+ruled_at = "2026-09-30"
+
 # 口座の宣言（設計 fleet-usage.md §2・account-lifecycle.md §2・ADR-0026 §2.1）は host の manifest（state dir
 # の host.toml）にだけ置く。この file に口座の表は置かない（文法は残る・足す変更は A1 の対話面で聞く・本 repo
 # は PUBLIC・SRS CON2）。器は credential の置き場を走査せず、宣言だけを真実として読む（C3）。

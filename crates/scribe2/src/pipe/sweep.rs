@@ -9,10 +9,11 @@ use super::retire::retired_path;
 use super::{current, git_bytes, repo_of_run, worktree_path, DIR};
 use crate::fleet::store::{self, LockPolicy};
 use crate::rules::manifest::Manifest;
-use crate::seat::{drafts_dir, seats_root};
+use crate::seat::{drafts_dir, seats_root, write_drafts_cap, DraftsCap};
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -35,6 +36,13 @@ impl Drop for Held {
 /// 席の起草の木の書きの線の rules 行の id（設計 dispatcher.md §33 形 5）。
 const ROW_DRAFTS_STALE: &str = "seat.drafts_stale_h";
 
+/// 量の線の上限（MiB）と組み立て中の窓（秒）の rules 行の id（設計 dispatcher.md §39 形 8）。
+const ROW_DRAFTS_CAP: &str = "seat.drafts_cap_mb";
+const ROW_DRAFTS_BUSY: &str = "seat.drafts_busy_s";
+
+/// 上限の MiB を byte へ引く係数。
+const MIB: u64 = 1_048_576;
+
 /// 1 周の集計（消した dir の数・dir を消した便の木の数・失敗した木の名）。
 #[derive(Default)]
 struct Totals {
@@ -45,20 +53,46 @@ struct Totals {
 
 impl Totals {
     /// 木 1 本の結果を足す。`name` は失敗した木の名（便 id か `<潰した target>/<木の dir 名>`）。
-    fn add(&mut self, (count, broken): (usize, bool), name: &str) -> bool {
-        self.removed = self.removed.saturating_add(count);
-        if broken {
+    fn add(&mut self, found: &Swept, name: &str) -> bool {
+        self.removed = self.removed.saturating_add(found.removed);
+        if found.broken {
+            self.fail(name);
+        }
+        found.removed > 0
+    }
+
+    /// 失敗した木の名を足す（同じ名は 1 回だけ）。
+    fn fail(&mut self, name: &str) {
+        if !self.failed.iter().any(|found| found == name) {
             self.failed.push(name.to_owned());
         }
-        count > 0
     }
 }
 
-/// 起草の置き場の周の集計（dir を消した起草の木の数・`.git` を持たない写しの数・行を読めなかったか）。
+/// 木 1 本の掃きの結果（消した dir の数・失敗したか・書きの線が線以後の entry を持つので残した dir の木から相対の path）。
+struct Swept {
+    removed: usize,
+    broken: bool,
+    kept: Vec<PathBuf>,
+}
+
+/// 起草の置き場の周の集計（dir を消した起草の木の数・`.git` を持たない写しの数・行を読めなかったか・
+/// 量の線が消した dir の数と越えたままの MiB）。
 struct Drafts {
     swept: usize,
     nogit: usize,
     no_rule: bool,
+    shed: usize,
+    over: u64,
+}
+
+/// 量の線の候補 1 つ（木の名・path・字の順の鍵 `<木の名>/<木から相対の path>`・大きさ〔byte〕・新しさ）。
+struct Candidate {
+    name: String,
+    path: PathBuf,
+    key: String,
+    bytes: u64,
+    newest: SystemTime,
 }
 
 /// 置き場の live でない便の木と席の起草の木を掃き、stderr の 1 行を返す（形 2・形 5・§33）。
@@ -80,13 +114,14 @@ pub(super) fn sweep(state_dir: &Path, policy: LockPolicy, manifest: &Manifest) -
     let mut totals = Totals::default();
     sweep_runs(state_dir, &mut totals);
     let drafts = sweep_drafts(state_dir, manifest, &mut totals);
-    if totals.removed == 0 && totals.failed.is_empty() && !drafts.as_ref().is_some_and(|found| found.no_rule) {
+    if totals.removed == 0 && totals.failed.is_empty() && !drafts.as_ref().is_some_and(|found| found.no_rule || found.over > 0) {
         return None;
     }
     let named = if totals.failed.is_empty() { String::new() } else { format!(":{}", totals.failed.join(",")) };
     let tail = drafts.map_or_else(String::new, |found| {
         let swept = if found.no_rule { "no-rule".to_owned() } else { found.swept.to_string() };
-        format!(" drafts={swept} nogit={}", found.nogit)
+        let cap = if found.shed > 0 || found.over > 0 { format!(" cap={} over={}", found.shed, found.over) } else { String::new() };
+        format!(" drafts={swept} nogit={}{cap}", found.nogit)
     });
     Some(format!("sweep: removed={} runs={} failed={}{named}{tail}", totals.removed, totals.runs, totals.failed.len()))
 }
@@ -100,25 +135,114 @@ fn sweep_runs(state_dir: &Path, totals: &mut Totals) {
         let Some(tree) = tree_of(state_dir, &run.id) else {
             continue;
         };
-        totals.runs = totals.runs.saturating_add(usize::from(totals.add(swept(&tree, None), &run.id)));
+        totals.runs = totals.runs.saturating_add(usize::from(totals.add(&swept(&tree, None), &run.id)));
     }
 }
 
-/// 席の起草の木を掃く（起草の置き場が 1 つも無い周は `None`・行は木が 1 本以上在る周だけ読む・§33 形 4・形 5）。
+/// 席の起草の木を掃く（起草の置き場が 1 つも無い周は `None`・書きの線の行は木が 1 本以上在る周だけ `no_rule` に読む・
+/// §33 形 4・形 5）。書きの線の後に、3 行が読める周だけ量の線を撃ち（§39 形 9）、起草の置き場が在る周は量の記録を書く。
 fn sweep_drafts(state_dir: &Path, manifest: &Manifest, totals: &mut Totals) -> Option<Drafts> {
     let (trees, nogit) = drafts_of(state_dir)?;
-    let mut found = Drafts { swept: 0, nogit, no_rule: false };
-    if trees.is_empty() {
-        return Some(found);
-    }
+    let mut found = Drafts { swept: 0, nogit, no_rule: false, shed: 0, over: 0 };
     let Some(line) = stale_line(manifest) else {
-        found.no_rule = true;
+        found.no_rule = !trees.is_empty();
+        write_drafts_cap(state_dir, None);
         return Some(found);
     };
+    let (mut shed_trees, mut unmeasured, mut kept) = (BTreeSet::new(), 0_usize, Vec::new());
     for (name, tree) in &trees {
-        found.swept = found.swept.saturating_add(usize::from(totals.add(swept(tree, Some(line)), name)));
+        let result = swept(tree, Some(line));
+        if totals.add(&result, name) {
+            shed_trees.insert(name.clone());
+        }
+        if result.broken {
+            unmeasured = unmeasured.saturating_add(1);
+        } else {
+            kept.push((name, tree, result.kept));
+        }
     }
+    let rows = int_row(manifest, ROW_DRAFTS_CAP).ok().zip(int_row(manifest, ROW_DRAFTS_BUSY).ok());
+    let Some((cap_mb, busy_s)) = rows else {
+        found.swept = shed_trees.len();
+        write_drafts_cap(state_dir, None);
+        return Some(found);
+    };
+    let mut candidates = Vec::new();
+    for (name, tree, rels) in kept {
+        match candidates_of(name, tree, &rels) {
+            Some(measured) => candidates.extend(measured),
+            None => {
+                totals.fail(name);
+                unmeasured = unmeasured.saturating_add(1);
+            }
+        }
+    }
+    let cap_bytes = cap_mb.saturating_mul(MIB);
+    let (total, busy, shed) = shed_oldest(&mut candidates, (cap_bytes, busy_s), totals, &mut shed_trees);
+    (found.swept, found.shed, found.over) = (shed_trees.len(), shed, total.saturating_sub(cap_bytes).div_ceil(MIB));
+    totals.removed = totals.removed.saturating_add(shed);
+    let record = DraftsCap { used: total.div_ceil(MIB), cap: cap_mb, over: found.over, busy, unmeasured };
+    write_drafts_cap(state_dir, Some(&record));
     Some(found)
+}
+
+/// 候補を新しさの古い順（同じ時刻は鍵の字の順）に見て、合計が上限を越える間だけ窓の外の候補を消す（§39 形 4・形 5）。
+/// 返すのは（消した後の合計 byte・窓の内の候補の数・消した dir の数）。消せない候補は失敗に数えて合計から引かない。
+fn shed_oldest(
+    candidates: &mut [Candidate],
+    (cap_bytes, busy_s): (u64, u64),
+    totals: &mut Totals,
+    shed_trees: &mut BTreeSet<String>,
+) -> (u64, usize, usize) {
+    let mut total = candidates.iter().fold(0_u64, |sum, found| sum.saturating_add(found.bytes));
+    let window = SystemTime::now().checked_sub(Duration::from_secs(busy_s)).filter(|_| busy_s > 0);
+    let in_window = |found: &Candidate| window.is_some_and(|since| found.newest >= since);
+    let busy = candidates.iter().filter(|found| in_window(found)).count();
+    candidates.sort_by(|left, right| left.newest.cmp(&right.newest).then_with(|| left.key.cmp(&right.key)));
+    let mut shed = 0_usize;
+    for found in candidates.iter().filter(|found| !in_window(found)) {
+        if total <= cap_bytes {
+            break;
+        }
+        if std::fs::remove_dir_all(&found.path).is_ok() {
+            total = total.saturating_sub(found.bytes);
+            shed = shed.saturating_add(1);
+            shed_trees.insert(found.name.clone());
+        } else {
+            totals.fail(&found.name);
+        }
+    }
+    (total, busy, shed)
+}
+
+/// 木の残した dir（木から相対の path）を候補に測る。1 つでも読めない dir か entry が在れば木ごと `None`（§39 形 3）。
+fn candidates_of(name: &str, tree: &Path, rels: &[PathBuf]) -> Option<Vec<Candidate>> {
+    rels.iter()
+        .map(|rel| {
+            let path = tree.join(rel);
+            let (bytes, newest) = measure(&path)?;
+            Some(Candidate { name: name.to_owned(), key: format!("{name}/{}", rel.display()), path, bytes, newest })
+        })
+        .collect()
+}
+
+/// dir 自身と下の全 entry の使用量（lstat の `st_blocks` × 512 の和）と mtime の最新。symlink は辿らずに symlink
+/// そのものを数える。読めない dir・entry が在れば `None`（0 と読まない・C10）。
+fn measure(dir: &Path) -> Option<(u64, SystemTime)> {
+    let own = std::fs::symlink_metadata(dir).ok()?;
+    let (mut bytes, mut newest, mut pending) = (own.blocks().saturating_mul(512), own.modified().ok()?, vec![dir.to_path_buf()]);
+    while let Some(current) = pending.pop() {
+        for entry in std::fs::read_dir(&current).ok()? {
+            let entry = entry.ok()?;
+            let meta = entry.metadata().ok()?;
+            bytes = bytes.saturating_add(meta.blocks().saturating_mul(512));
+            newest = newest.max(meta.modified().ok()?);
+            if meta.is_dir() {
+                pending.push(entry.path());
+            }
+        }
+    }
+    Some((bytes, newest))
 }
 
 /// 書きの線（今 − rules 行の時間）。行を読めない周と引けない値は `None`（既定値へ倒さない・全部消す側へも倒さない）。
@@ -164,16 +288,18 @@ fn tree_of(state_dir: &Path, id: &str) -> Option<PathBuf> {
     [worktree_path(&repo, id), retired_path(&repo, id)].into_iter().find(|tree| tree.is_dir())
 }
 
-/// 木を `.git` に降りずに歩き、名が列に在り追跡されている file を持たない dir を消す（(消した数, 失敗したか)）。
+/// 木を `.git` に降りずに歩き、名が列に在り追跡されている file を持たない dir を消す（[`Swept`]）。
 ///
 /// 追跡の判定はその木の `git ls-files` の 1 回で、撃てない木は 1 つも消さずに失敗に数える。消した dir の下へは
 /// 降りない（入れ子の `.git` を持っていても消す）。symlink は dir として辿らない（木の外を消さない）。
 ///
 /// `line` を持つ木（席の起草の木・§33 形 3）は、その dir 自身と下の全 entry の mtime の最新が線より前の dir だけを消す。
-/// 線以後の entry が 1 つでも在る dir と、mtime か dir を読めない dir は残す（後者は失敗に数える）。
-fn swept(tree: &Path, line: Option<SystemTime>) -> (usize, bool) {
+/// 線以後の entry が 1 つでも在る dir は残して `kept` に返し（量の線の候補・§39 形 1）、mtime か dir を読めない dir は
+/// 残して失敗に数える。
+fn swept(tree: &Path, line: Option<SystemTime>) -> Swept {
+    let mut kept = Vec::new();
     let Some(listed) = git_bytes(tree, &["ls-files", "-z"]) else {
-        return (0, true);
+        return Swept { removed: 0, broken: true, kept };
     };
     // 追跡されている path とその祖先の dir（木から相対）。gitlink の名そのものも残す側に数える。
     let tracked: BTreeSet<PathBuf> = listed
@@ -201,14 +327,14 @@ fn swept(tree: &Path, line: Option<SystemTime>) -> (usize, bool) {
                 pending.push(path);
             } else {
                 match line.map_or(Some(true), |line| quiet_since(&entry.path(), line)) {
-                    Some(false) => {}
+                    Some(false) => kept.push(path),
                     Some(true) if std::fs::remove_dir_all(entry.path()).is_ok() => removed = removed.saturating_add(1),
                     _ => broken = true,
                 }
             }
         }
     }
-    (removed, broken)
+    Swept { removed, broken, kept }
 }
 
 /// dir 自身と下の全 entry の mtime がどれも線より前か（線以後を 1 つ見つけたら打ち切って `Some(false)`・

@@ -99,6 +99,7 @@ fn render_doctor_with(rest: &[String]) -> Result<Vec<String>, ()> {
             let program = Path::new(bin.unwrap_or(NAME));
             lines.push(vessel::account::wire::doctor_line(Path::new(dir), rules, &render_version(), program));
             lines.extend(vessel::pipe::dispatch::floor::doctor_line(Path::new(dir)));
+            lines.extend(vessel::seat::drafts_cap_doctor_line(Path::new(dir)));
         }
         (None, None, None, _) | (None, None, Some(_), Some(_)) if bin.is_none() && units.is_none() => {}
         (None, _, _, _) => return Err(()),

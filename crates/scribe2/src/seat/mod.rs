@@ -227,6 +227,56 @@ pub fn drafts_dir(state_dir: &Path, target: &str) -> PathBuf {
     seat_dir(state_dir, target).join(DRAFTS)
 }
 
+/// 起草の置き場の量の記録の file 名（`<state_dir>/seat/` の直下・設計 dispatcher.md §39 形 7）。席の dir ではないので掃除は飛ばす。
+const DRAFTS_CAP: &str = "drafts-cap";
+
+/// 量の線の 1 周の測り（`used`・`cap`・`over` は MiB・`busy` は窓の内の候補数・`unmeasured` は量の線から外した木の数）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DraftsCap {
+    pub(crate) used: u64,
+    pub(crate) cap: u64,
+    pub(crate) over: u64,
+    pub(crate) busy: usize,
+    pub(crate) unmeasured: usize,
+}
+
+impl DraftsCap {
+    /// 記録の 1 行（`over` が 0 でない周の頭の語は `over`）。
+    pub fn line(&self) -> String {
+        let Self { used, cap, over, busy, unmeasured } = self;
+        format!("{} used={used} cap={cap} over={over} busy={busy} unmeasured={unmeasured}", if *over == 0 { "ok" } else { "over" })
+    }
+
+    /// 記録の 1 行を読む（形の合わない字は `None`・読んだ値を組み直した字が元の行と一致した周だけ通す）。
+    pub fn parse(line: &str) -> Option<Self> {
+        let mut words = line.split(' ').skip(1);
+        let mut number = |key: &str| words.next()?.strip_prefix(key)?.parse::<u64>().ok();
+        let (used, cap, over) = (number("used=")?, number("cap=")?, number("over=")?);
+        let (busy, unmeasured) = (usize::try_from(number("busy=")?).ok()?, usize::try_from(number("unmeasured=")?).ok()?);
+        Some(Self { used, cap, over, busy, unmeasured }).filter(|found| found.line() == line)
+    }
+}
+
+/// 行を読めない周の記録の語。
+const DRAFTS_CAP_NO_RULE: &str = "no-rule";
+
+/// 量の記録を書く（`Some` は測り・`None` は行を読めない周の `no-rule`・書けない周は黙って抜ける＝限界）。
+pub fn write_drafts_cap(state_dir: &Path, found: Option<&DraftsCap>) {
+    let line = found.map_or_else(|| DRAFTS_CAP_NO_RULE.to_owned(), DraftsCap::line);
+    let _ = std::fs::write(seats_root(state_dir).join(DRAFTS_CAP), format!("{line}\n"));
+}
+
+/// doctor の 1 行（記録が在る周だけ・形の合わない記録と読めない記録は `drafts-cap=unreadable`）。
+pub fn drafts_cap_doctor_line(state_dir: &Path) -> Option<String> {
+    let path = seats_root(state_dir).join(DRAFTS_CAP);
+    std::fs::symlink_metadata(&path).ok()?;
+    let shown = std::fs::read_to_string(&path).ok().and_then(|text| {
+        let line = text.strip_suffix('\n')?;
+        (line == DRAFTS_CAP_NO_RULE || DraftsCap::parse(line).is_some()).then(|| line.to_owned())
+    });
+    Some(format!("drafts-cap={}", shown.as_deref().unwrap_or("unreadable")))
+}
+
 /// 置き場の解決の出所（語彙 Provenance・憲法 C10）。**2 値で閉じる**（解決順序 `--state-dir` >
 /// git 設定の 2 経路しか無く、第 3 の経路を足すときは variant を足す＝行の `source=` が経路の
 /// 全数を名乗る・憲法 C2）。

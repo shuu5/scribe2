@@ -382,6 +382,11 @@ pub enum RuleKind {
     /// 床の検査（vessel 宣言の任意 key `floor-check`）を待つ上限（秒・設計 dispatcher.md §34 約束 4）。越えた周は子を止めて timeout と読む。
     /// 読み手は `pipe::dispatch::floor` の 1 本で、行を読めない周は撃たず unfireable（`row`）。
     FloorTimeoutS,
+    /// 席の起草の置き場の build の置き場の量の上限（MiB・state dir ごと・設計 dispatcher.md §39・ADR-0101）。書きの線が残した
+    /// 起草の木の dir の合計がこれを越える周に、書きの新しさの古い順に上限まで消す。値 0 は窓の外の候補を全部消す。
+    SeatDraftsCapMb,
+    /// 量の線が消さない組み立て中の窓（秒・設計 dispatcher.md §39 形 5）。新しさがこの秒数以内の候補は上限を越えても消さない。0 は窓無し。
+    SeatDraftsBusyS,
 }
 
 /// [`RuleKind`] の全 variant。parity test の母集団である。
@@ -467,6 +472,8 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::RunnerClassCommands,
     RuleKind::HostGuardPublish,
     RuleKind::FloorTimeoutS,
+    RuleKind::SeatDraftsCapMb,
+    RuleKind::SeatDraftsBusyS,
 ];
 
 impl RuleKind {
@@ -516,7 +523,7 @@ impl RuleKind {
             Self::HostBlockedPerCore => "HostBlockedPerCore",
             Self::PipeLandWaitS => "PipeLandWaitS",
             Self::PipeCiWaitS => "PipeCiWaitS", Self::PipeCiPollS => "PipeCiPollS",
-            Self::SeatDraftsStaleH => "SeatDraftsStaleH",
+            Self::SeatDraftsStaleH => "SeatDraftsStaleH", Self::SeatDraftsCapMb => "SeatDraftsCapMb", Self::SeatDraftsBusyS => "SeatDraftsBusyS",
             Self::LedgerTimeoutS => "LedgerTimeoutS",
             Self::RoleCapabilities => "RoleCapabilities",
             Self::PipeSizeSLines => "PipeSizeSLines", Self::PipeSizeMLines => "PipeSizeMLines",
@@ -572,7 +579,7 @@ impl RuleKind {
             | Self::HostRunnablePerCore
             | Self::HostBlockedPerCore
             | Self::PipeLandWaitS
-            | Self::PipeCiWaitS | Self::PipeCiPollS | Self::SeatDraftsStaleH
+            | Self::PipeCiWaitS | Self::PipeCiPollS | Self::SeatDraftsStaleH | Self::SeatDraftsCapMb | Self::SeatDraftsBusyS
             | Self::LedgerTimeoutS
             | Self::PipeSizeSLines
             | Self::PipeSizeMLines

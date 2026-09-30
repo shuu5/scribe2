@@ -829,10 +829,10 @@ fn rules_precheck_alarm_row_follows_the_idle_alarm() {
 }
 
 /// 床の検査の待ちの上限の行（設計 dispatcher.md §34 約束 8・行 ai・`s2-07l.738.37.1`）が埋め込み manifest に id / kind / 形 Int / 値 600 /
-/// enabled / 裁定 id / 裁定日で 1 本在り、kind は `ALL` の末尾・行は manifest の末尾で、字面から引け、形は Int だけ（base では行も
-/// kind も無い ＝ RED）。
+/// enabled / 裁定 id / 裁定日で 1 本在り、kind は `ALL` の末尾から 3 つ目・行は manifest の末尾から 3 つ目（後ろは起草の置き場の量の
+/// 上限と窓の 2 つ・`.736.30`）で、字面から引け、形は Int だけ。
 #[test]
-fn rules_floor_timeout_row_is_the_last_kind_and_the_last_row() {
+fn rules_floor_timeout_row_precedes_the_drafts_cap_rows() {
     let manifest = Manifest::embedded().unwrap_or_else(|errors| panic!("埋め込み manifest が拒まれた: {errors:?}"));
     let id = "floor.timeout_s";
     let row = manifest.get(id).unwrap_or_else(|| panic!("{id} の行が在る"));
@@ -844,10 +844,40 @@ fn rules_floor_timeout_row_is_the_last_kind_and_the_last_row() {
     assert_eq!((row.ruling.as_str(), row.ruled_at.as_str()), ("user 2026-09-30T04:25Z", "2026-09-30"), "{id} の裁定 id と裁定日");
     assert_eq!(int_row(&manifest, id), Ok(600), "{id} を整数の読み手で引ける");
     assert_eq!(manifest.rows().iter().filter(|found| found.kind == kind).count(), 1, "kind の行は 1 本");
-    assert_eq!(ALL.last(), Some(&kind), "kind は ALL の末尾（母集団 {} 種）", ALL.len());
-    assert_eq!(manifest.rows().last().map(|found| found.id.as_str()), Some(id), "行は manifest の末尾（母集団 {} 行）", manifest.rows().len());
+    let kinds: Vec<&RuleKind> = ALL.iter().rev().take(3).collect();
+    assert_eq!(kinds, [&RuleKind::SeatDraftsBusyS, &RuleKind::SeatDraftsCapMb, &kind], "kind は ALL の末尾から 3 つ目（母集団 {} 種）", ALL.len());
+    let rows: Vec<&str> = manifest.rows().iter().rev().take(3).map(|found| found.id.as_str()).collect();
+    assert_eq!(rows, ["seat.drafts_busy_s", "seat.drafts_cap_mb", id], "行は manifest の末尾から 3 つ目（母集団 {} 行）", manifest.rows().len());
     let errors = rejected(&one_row(kind, "\"ten\"")).expect("文字列の値の fixture が受理された");
     assert!(errors.join("\n").contains("形と合わない"), "形は Int だけ: {errors:?}");
+}
+
+/// 席の起草の置き場の量の上限と組み立て中の窓の 2 行（設計 dispatcher.md §39 形 8・行 an・ADR-0101・`s2-07l.736.30`）が埋め込み manifest に
+/// id / kind / 形 Int / 値 102400 と 1800 / enabled / 裁定 id / 裁定日で 1 本ずつ在り、kind は `ALL` の末尾 2 つ・行は manifest の末尾 2 行で
+/// この順、字面から引け、形は Int だけ（base では行も kind も無い ＝ RED）。
+#[test]
+fn rules_drafts_cap_rows_are_the_last_two_kinds_and_rows() {
+    let manifest = Manifest::embedded().unwrap_or_else(|errors| panic!("埋め込み manifest が拒まれた: {errors:?}"));
+    for (id, name, kind, value) in [
+        ("seat.drafts_cap_mb", "SeatDraftsCapMb", RuleKind::SeatDraftsCapMb, 102_400),
+        ("seat.drafts_busy_s", "SeatDraftsBusyS", RuleKind::SeatDraftsBusyS, 1800),
+    ] {
+        let row = manifest.get(id).unwrap_or_else(|| panic!("{id} の行が在る"));
+        assert_eq!(RuleKind::parse(name), Some(kind), "{name} を字面から引ける");
+        assert_eq!((kind.as_str(), kind.shape()), (name, ValueShape::Int), "kind の字面と形");
+        assert_eq!(row.kind, kind, "{id} の kind");
+        assert_eq!(row.value, RuleValue::Int(value), "{id} の値");
+        assert!(row.enabled, "{id} は既定で効く");
+        assert_eq!((row.ruling.as_str(), row.ruled_at.as_str()), ("user 2026-09-30T07:18Z", "2026-09-30"), "{id} の裁定 id と裁定日");
+        assert_eq!(int_row(&manifest, id), Ok(value), "{id} を整数の読み手で引ける");
+        assert_eq!(manifest.rows().iter().filter(|found| found.kind == kind).count(), 1, "{id} の kind の行は 1 本");
+        let errors = rejected(&one_row(kind, "\"big\"")).expect("文字列の値の fixture が受理された");
+        assert!(errors.join("\n").contains("形と合わない"), "形は Int だけ: {errors:?}");
+    }
+    let tail: Vec<&RuleKind> = ALL.iter().rev().take(2).rev().collect();
+    assert_eq!(tail, [&RuleKind::SeatDraftsCapMb, &RuleKind::SeatDraftsBusyS], "kind は ALL の末尾 2 つ・この順（母集団 {} 種）", ALL.len());
+    let rows: Vec<&str> = manifest.rows().iter().rev().take(2).rev().map(|found| found.id.as_str()).collect();
+    assert_eq!(rows, ["seat.drafts_cap_mb", "seat.drafts_busy_s"], "行は manifest の末尾 2 行・この順（母集団 {} 行）", manifest.rows().len());
 }
 
 /// 事前審査の先撃ちの 1 周の本数の行（設計 dispatcher.md §27 形 1・行 aa・`s2-07l.718`）が埋め込み manifest に id / kind / 形 Int /
@@ -1091,8 +1121,12 @@ fn class_derive_embedded_row_carries_the_ruled_three_elements_and_ruling_id() {
     assert!(row.enabled, "既定で効く");
     assert_eq!((row.kind, row.kind.shape()), (RuleKind::RunnerClassCommands, ValueShape::List), "kind と形");
     // `.696` が末尾に公開の見張りの kind を足し、`.738.37.1` が床の検査の待ちの上限の kind を足した（その 2 つ前が RunnerClassCommands）。
-    let tail: Vec<&RuleKind> = ALL.iter().rev().take(3).collect();
-    assert_eq!(tail, [&RuleKind::FloorTimeoutS, &RuleKind::HostGuardPublish, &RuleKind::RunnerClassCommands], "kind は ALL の末尾の 2 つ前");
+    let tail: Vec<&RuleKind> = ALL.iter().rev().take(5).collect();
+    assert_eq!(
+        tail,
+        [&RuleKind::SeatDraftsBusyS, &RuleKind::SeatDraftsCapMb, &RuleKind::FloorTimeoutS, &RuleKind::HostGuardPublish, &RuleKind::RunnerClassCommands],
+        "kind は ALL の末尾の 5 つ目"
+    );
     assert_eq!(RuleKind::parse("RunnerClassCommands"), Some(RuleKind::RunnerClassCommands), "kind を字面から引ける");
     let allowed = match manifest.get("runner.allowed_commands").map(|found| &found.value) {
         Some(RuleValue::List(commands)) => commands.clone(),

@@ -1156,3 +1156,421 @@ fn pipe_sweep_drafts_zero_hours_removes_a_fresh_dir_without_following_symlinks()
     assert_eq!(sweep_line(&out), "sweep: removed=1 runs=0 failed=0 drafts=1 nogit=0", "stderr: {}", stderr_of(&out));
     clean(&[&repo, &state]);
 }
+
+// ───── 席の起草の置き場の build の置き場の量の上限（`s2-07l.736.30`・設計 dispatcher.md §39・接頭辞 `pipe_sweep_drafts_cap_`） ─────
+
+/// 量の線の歯の rules 行（id・kind・値）: 時間の行 6（時間）・上限の行 1（MiB）・窓の行 1800（秒）。
+const CAP_ROWS: [(&str, &str, u64); 3] = [
+    ("seat.drafts_stale_h", "SeatDraftsStaleH", 6),
+    ("seat.drafts_cap_mb", "SeatDraftsCapMb", 1),
+    ("seat.drafts_busy_s", "SeatDraftsBusyS", 1800),
+];
+
+/// [`CAP_ROWS`] のうち id が `skip` の行を除いた行を足した tmp manifest（`None` は 3 行とも足す）。
+fn cap_rules(state: &Path, skip: Option<&str>) -> String {
+    let extra: String = CAP_ROWS
+        .iter()
+        .filter(|(id, _, _)| Some(*id) != skip)
+        .map(|(id, kind, value)| {
+            format!("[[rule]]\nid = \"{id}\"\nkind = \"{kind}\"\nvalue = {value}\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n\n")
+        })
+        .collect();
+    drafts_rules(state, &extra)
+}
+
+/// `kib` KiB の file を 1 本置く（字 x の繰り返し）。
+fn put_sized(path: &Path, kib: usize) {
+    put_file(path, &"x".repeat(kib * 1024));
+}
+
+/// 今から `hours` 時間前。
+fn ago_h(hours: u64) -> std::time::SystemTime {
+    std::time::SystemTime::now() - std::time::Duration::from_secs(hours * 3600)
+}
+
+/// 木の全 entry の mtime を同じ時刻 `past` へ置く（子から先・dir も File として開いて同じ呼び出し）。symlink は辿らず、
+/// `touch -h` で symlink そのものの時刻を置く。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn rewind_to(path: &Path, past: std::time::SystemTime) {
+    let kind = fs::symlink_metadata(path).expect("entry を読める").file_type();
+    if kind.is_symlink() {
+        let secs = past.duration_since(std::time::UNIX_EPOCH).expect("epoch より後").as_secs();
+        let status = Command::new("touch").args(["-h", "-d", &format!("@{secs}")]).arg(path).status().expect("touch を起動できる");
+        assert!(status.success(), "symlink の時刻を置ける");
+        return;
+    }
+    if kind.is_dir() {
+        for entry in fs::read_dir(path).expect("dir を読める") {
+            rewind_to(&entry.expect("entry を読める").path(), past);
+        }
+    }
+    fs::File::open(path).expect("開ける").set_modified(past).expect("mtime を戻せる");
+}
+
+/// dir の mode を置く（読めない dir・消せない dir を作る歯が使い、歯の終わりに 0o755 へ戻す）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn chmod(path: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(mode)).expect("mode を置ける");
+}
+
+/// 終端（live な便 `r-end` の `pipe stop`）を `rules` の写しで撃つ（rc は変わらない）。
+fn cap_stop(state: &Path, rules: &str) -> std::process::Output {
+    let out = run_pipe(&["stop", "--run", "r-end", "--state-dir", &state.display().to_string(), "--rules", rules]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "終端の rc は変わらない: {}", stderr_of(&out));
+    out
+}
+
+/// `doctor --state-dir S` の出力の行。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn doctor_lines_of(state: &Path) -> Vec<String> {
+    let out = bin_cmd().args(["doctor", "--state-dir"]).arg(state).output().expect("binary を起動できる");
+    stdout_of(&out).lines().map(str::to_owned).collect()
+}
+
+/// `doctor --state-dir S` の `drafts-cap=` の行（無ければ空）。
+fn cap_line(state: &Path) -> String {
+    doctor_lines_of(state).into_iter().filter(|line| line.starts_with("drafts-cap=")).collect::<Vec<_>>().join("\n")
+}
+
+/// (a) 古い順・同じ時刻は名の順・上限以下で止まる: 3 時間前の `target/` と、同じ 2 時間前の時刻の `.venv/` と `node_modules/`
+/// （各 768 KiB）は、上限 1 MiB で `target/` と `.venv/` が消え、`node_modules/`・追跡 file・`.git` は残る。
+#[test]
+fn pipe_sweep_drafts_cap_sheds_oldest_first_then_by_name_and_stops_under_the_cap() {
+    let (repo, state) = repo_with_state();
+    drafts_run(&repo, &state);
+    let tree = draft_tree(&repo, &state, "s1", "t1");
+    for name in ["target", ".venv", "node_modules"] {
+        put_sized(&tree.join(name).join("blob"), 768);
+    }
+    rewind_to(&tree.join("target"), ago_h(3));
+    let two = ago_h(2);
+    rewind_to(&tree.join(".venv"), two);
+    rewind_to(&tree.join("node_modules"), two);
+
+    let out = cap_stop(&state, &cap_rules(&state, None));
+    assert!(!tree.join("target").exists(), "最も古い target/ は消える");
+    assert!(!tree.join(".venv").exists(), "同じ時刻は名の順で .venv/ が先に消える");
+    for kept in [tree.join("node_modules").join("blob"), tree.join("src").join("lib.rs"), tree.join(".git")] {
+        assert!(kept.exists(), "{} は残る（上限以下で止まる）", kept.display());
+    }
+    assert_eq!(sweep_line(&out), "sweep: removed=2 runs=0 failed=0 drafts=1 nogit=0 cap=2 over=0", "stderr: {}", stderr_of(&out));
+    assert_eq!(cap_line(&state), "drafts-cap=ok used=1 cap=1 over=0 busy=0 unmeasured=0", "doctor");
+    clean(&[&repo, &state]);
+}
+
+/// (b) 組み立て中の窓と越えたまま: 3 時間前の `target/`（768 KiB）と書いたばかりの `node_modules/`（2560 KiB）は、`target/`
+/// だけが消え、越えたままを行と doctor が名指す。
+#[test]
+fn pipe_sweep_drafts_cap_keeps_a_fresh_dir_inside_the_window_and_says_over() {
+    let (repo, state) = repo_with_state();
+    drafts_run(&repo, &state);
+    let tree = draft_tree(&repo, &state, "s1", "t1");
+    put_sized(&tree.join("target").join("blob"), 768);
+    rewind_to(&tree.join("target"), ago_h(3));
+    put_sized(&tree.join("node_modules").join("blob"), 2560);
+
+    let out = cap_stop(&state, &cap_rules(&state, None));
+    assert!(!tree.join("target").exists(), "窓の外の target/ は消える");
+    assert!(tree.join("node_modules").join("blob").is_file(), "書いたばかりの node_modules/ は窓の内で残る");
+    assert_eq!(sweep_line(&out), "sweep: removed=1 runs=0 failed=0 drafts=1 nogit=0 cap=1 over=2", "stderr: {}", stderr_of(&out));
+    assert_eq!(cap_line(&state), "drafts-cap=over used=3 cap=1 over=2 busy=1 unmeasured=0", "doctor");
+    clean(&[&repo, &state]);
+}
+
+/// (c) 消す物が無くても越えれば行を出す: 書いたばかりの `node_modules/`（2560 KiB）だけの置き場は残り、行が `cap=0 over=2`。
+#[test]
+fn pipe_sweep_drafts_cap_says_over_even_when_nothing_can_be_shed() {
+    let (repo, state) = repo_with_state();
+    drafts_run(&repo, &state);
+    let tree = draft_tree(&repo, &state, "s1", "t1");
+    put_sized(&tree.join("node_modules").join("blob"), 2560);
+
+    let out = cap_stop(&state, &cap_rules(&state, None));
+    assert!(tree.join("node_modules").join("blob").is_file(), "窓の内の node_modules/ は残る");
+    assert_eq!(sweep_line(&out), "sweep: removed=0 runs=0 failed=0 drafts=0 nogit=0 cap=0 over=2", "stderr: {}", stderr_of(&out));
+    clean(&[&repo, &state]);
+}
+
+/// 3 時間前の `target/`（768 KiB）と、下に mode 000 の dir を持つ書いたばかりの `node_modules/`（2560 KiB）の置き場を作る
+/// （`(d)` `(e)` の共通・`node_modules/` の中の dir は mode 000 のまま返す）。
+fn unreadable_fresh_place(repo: &Path, state: &Path) -> PathBuf {
+    drafts_run(repo, state);
+    let tree = draft_tree(repo, state, "s1", "t1");
+    put_sized(&tree.join("target").join("blob"), 768);
+    rewind_to(&tree.join("target"), ago_h(3));
+    put_sized(&tree.join("node_modules").join("blob"), 2560);
+    put_file(&tree.join("node_modules").join("locked").join("x"), "x\n");
+    chmod(&tree.join("node_modules").join("locked"), 0o000);
+    tree
+}
+
+/// (d) 窓の行を持たない写しは量の線を撃たず（読めない dir を測らない）、両方残り、sweep: の行が無く、記録は `no-rule`。
+#[test]
+fn pipe_sweep_drafts_cap_without_the_busy_row_measures_nothing_and_records_no_rule() {
+    let (repo, state) = repo_with_state();
+    let tree = unreadable_fresh_place(&repo, &state);
+    let out = cap_stop(&state, &cap_rules(&state, Some("seat.drafts_busy_s")));
+    chmod(&tree.join("node_modules").join("locked"), 0o755);
+    assert!(tree.join("target").join("blob").is_file() && tree.join("node_modules").join("blob").is_file(), "両方残る");
+    assert_eq!(sweep_line(&out), "", "sweep: の行は無い: {}", stderr_of(&out));
+    assert_eq!(cap_line(&state), "drafts-cap=no-rule", "doctor");
+    clean(&[&repo, &state]);
+}
+
+/// (e) 上限の行を持たない写しは (d) と同じ置き場で両方残り、sweep: の行が無く、記録は `no-rule`。
+#[test]
+fn pipe_sweep_drafts_cap_without_the_cap_row_measures_nothing_and_records_no_rule() {
+    let (repo, state) = repo_with_state();
+    let tree = unreadable_fresh_place(&repo, &state);
+    let out = cap_stop(&state, &cap_rules(&state, Some("seat.drafts_cap_mb")));
+    chmod(&tree.join("node_modules").join("locked"), 0o755);
+    assert!(tree.join("target").join("blob").is_file() && tree.join("node_modules").join("blob").is_file(), "両方残る");
+    assert_eq!(sweep_line(&out), "", "sweep: の行は無い: {}", stderr_of(&out));
+    assert_eq!(cap_line(&state), "drafts-cap=no-rule", "doctor");
+    clean(&[&repo, &state]);
+}
+
+/// (f) 時間の行を持たない写しは書きの線を経ず量だけでも消さず、行は `drafts=no-rule`・記録は `no-rule`。
+#[test]
+fn pipe_sweep_drafts_cap_without_the_stale_row_sheds_nothing_and_records_no_rule() {
+    let (repo, state) = repo_with_state();
+    drafts_run(&repo, &state);
+    let tree = draft_tree(&repo, &state, "s1", "t1");
+    put_sized(&tree.join("target").join("blob"), 768);
+    rewind_to(&tree.join("target"), ago_h(3));
+    put_sized(&tree.join(".venv").join("blob"), 768);
+    put_file(&tree.join(".venv").join("locked").join("x"), "x\n");
+    rewind_to(&tree.join(".venv"), ago_h(2));
+    chmod(&tree.join(".venv").join("locked"), 0o000);
+
+    let out = cap_stop(&state, &cap_rules(&state, Some("seat.drafts_stale_h")));
+    chmod(&tree.join(".venv").join("locked"), 0o755);
+    assert!(tree.join("target").join("blob").is_file() && tree.join(".venv").join("blob").is_file(), "両方残る");
+    assert_eq!(sweep_line(&out), "sweep: removed=0 runs=0 failed=0 drafts=no-rule nogit=0", "stderr: {}", stderr_of(&out));
+    assert_eq!(cap_line(&state), "drafts-cap=no-rule", "doctor");
+    clean(&[&repo, &state]);
+}
+
+/// (g) 書きの線で失敗した木は量の線から外れる: 席 s1 の木 t0（`.git` が在らぬ gitdir を指す file・3 時間前の 4096 KiB の
+/// `target/`）は残り、木 t1 の `target/` だけが消える。
+#[test]
+fn pipe_sweep_drafts_cap_leaves_a_tree_the_write_line_failed_on_out_of_the_total() {
+    let (repo, state) = repo_with_state();
+    drafts_run(&repo, &state);
+    let broken = state.join("seat").join("s1").join("drafts").join("t0");
+    put_file(&broken.join(".git"), "gitdir: /nonexistent/gitdir\n");
+    put_sized(&broken.join("target").join("blob"), 4096);
+    rewind_to(&broken.join("target"), ago_h(3));
+    let tree = draft_tree(&repo, &state, "s1", "t1");
+    put_sized(&tree.join("target").join("blob"), 768);
+    rewind_to(&tree.join("target"), ago_h(3));
+    put_sized(&tree.join(".venv").join("blob"), 768);
+    rewind_to(&tree.join(".venv"), ago_h(2));
+
+    let out = cap_stop(&state, &cap_rules(&state, None));
+    assert!(broken.join("target").join("blob").is_file(), "失敗した木の target/ は量の線でも消えない");
+    assert!(!tree.join("target").exists() && tree.join(".venv").join("blob").is_file(), "t1 は古い target/ だけが消える");
+    let want = "sweep: removed=1 runs=0 failed=1:s1/t0 drafts=1 nogit=0 cap=1 over=0";
+    assert_eq!(sweep_line(&out), want, "stderr: {}", stderr_of(&out));
+    assert_eq!(cap_line(&state), "drafts-cap=ok used=1 cap=1 over=0 busy=0 unmeasured=1", "doctor");
+    clean(&[&repo, &state]);
+}
+
+/// (h) 候補の中の読めない dir: 古くした後に mode 000 にした `debug/` を持つ 1 時間前の `target/` と 2 時間前の `.venv/` と
+/// 3 時間前の `node_modules/` は、木ごと量の線から外れて全部残り、合計は 0 と読まれない。
+#[test]
+fn pipe_sweep_drafts_cap_leaves_a_tree_with_an_unreadable_candidate_out_of_the_total() {
+    let (repo, state) = repo_with_state();
+    drafts_run(&repo, &state);
+    let tree = draft_tree(&repo, &state, "s1", "t1");
+    put_sized(&tree.join("target").join("debug").join("blob"), 768);
+    rewind_to(&tree.join("target"), ago_h(1));
+    chmod(&tree.join("target").join("debug"), 0o000);
+    for (name, hours) in [(".venv", 2), ("node_modules", 3)] {
+        put_sized(&tree.join(name).join("blob"), 768);
+        rewind_to(&tree.join(name), ago_h(hours));
+    }
+
+    let out = cap_stop(&state, &cap_rules(&state, None));
+    chmod(&tree.join("target").join("debug"), 0o755);
+    for name in ["target/debug", ".venv", "node_modules"] {
+        assert!(tree.join(name).join("blob").is_file(), "{name} は残る");
+    }
+    assert_eq!(sweep_line(&out), "sweep: removed=0 runs=0 failed=1:s1/t1 drafts=0 nogit=0", "stderr: {}", stderr_of(&out));
+    assert_eq!(cap_line(&state), "drafts-cap=ok used=0 cap=1 over=0 busy=0 unmeasured=1", "doctor");
+    clean(&[&repo, &state]);
+}
+
+/// (i) 候補にならない物は残る: live な便の木の 4 時間前の `target/`・追跡 file を持つ 4 時間前の `docs/target/`・名が列に無い
+/// 4 時間前の `scratch/`・`.git` を持たない写しの 4 時間前の `target/` は合計に数えず、起草の木の 1 時間前の `.venv/` だけが候補。
+#[test]
+fn pipe_sweep_drafts_cap_counts_only_the_write_lines_kept_dirs_of_draft_trees() {
+    let (repo, state) = repo_with_state();
+    put_file(&repo.join("docs").join("target").join("keep.md"), "tracked\n");
+    git(&repo, &["add", "docs/target/keep.md"]);
+    git(&repo, &["commit", "-q", "-m", "tracked target"]);
+    drafts_run(&repo, &state);
+    live_run(&state, "r-live");
+    let live_tree = sweep_tree(&repo, &state, "r-live", &vessel::pipe::worktree_path(&repo, "r-live"));
+    let tree = draft_tree(&repo, &state, "s1", "t1");
+    let copy = state.join("seat").join("s1").join("drafts").join("copy");
+    for (path, hours) in [
+        (live_tree.join("target"), 4),
+        (tree.join("docs").join("target"), 4),
+        (tree.join("scratch"), 4),
+        (copy.join("target"), 4),
+        (tree.join(".venv"), 1),
+    ] {
+        put_sized(&path.join("blob"), 768);
+        rewind_to(&path, ago_h(hours));
+    }
+
+    let out = cap_stop(&state, &cap_rules(&state, None));
+    for kept in [live_tree.join("target"), tree.join("docs").join("target"), tree.join("scratch"), copy.join("target"), tree.join(".venv")] {
+        assert!(kept.join("blob").is_file(), "{} は残る", kept.display());
+    }
+    assert_eq!(sweep_line(&out), "", "sweep: の行は無い: {}", stderr_of(&out));
+    assert_eq!(cap_line(&state), "drafts-cap=ok used=1 cap=1 over=0 busy=0 unmeasured=0", "doctor");
+    clean(&[&repo, &state]);
+}
+
+/// (j) lock を取れない周: 生きた持ち主の `sweep.lock` の周は量の線も記録も撃たず `sweep: skipped=lock`、lock を外した 2 つ目の
+/// live な便の終端で 3 時間前の `target/` が消える。
+#[test]
+fn pipe_sweep_drafts_cap_does_not_fire_or_record_when_the_lock_is_held() {
+    let (repo, state) = repo_with_state();
+    drafts_run(&repo, &state);
+    live_run(&state, "r-two");
+    let tree = draft_tree(&repo, &state, "s1", "t1");
+    put_sized(&tree.join("target").join("blob"), 768);
+    rewind_to(&tree.join("target"), ago_h(3));
+    put_sized(&tree.join(".venv").join("blob"), 768);
+    rewind_to(&tree.join(".venv"), ago_h(2));
+    let lock = state.join("pipe").join("sweep.lock");
+    put_file(&lock, &format!("{}\n", std::process::id()));
+    let rules = cap_rules(&state, None);
+
+    let held = cap_stop(&state, &rules);
+    assert!(tree.join("target").join("blob").is_file() && tree.join(".venv").join("blob").is_file(), "lock の周は両方残る");
+    assert_eq!(sweep_line(&held), "sweep: skipped=lock", "stderr: {}", stderr_of(&held));
+    assert_eq!(cap_line(&state), "", "記録も書かない");
+    fs::remove_file(&lock).unwrap_or_else(|err| panic!("lock を外せる: {err}"));
+    let out = run_pipe(&["stop", "--run", "r-two", "--state-dir", &state.display().to_string(), "--rules", &rules]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    assert!(!tree.join("target").exists(), "lock を外した周は target/ が消える");
+    assert_eq!(sweep_line(&out), "sweep: removed=1 runs=0 failed=0 drafts=1 nogit=0 cap=1 over=0", "stderr: {}", stderr_of(&out));
+    clean(&[&repo, &state]);
+}
+
+/// (k) 記録の書きと読み: `.git` を持たない写しだけの置き場の周の後、doctor の行は `ok used=0 …`。形の合わない字は
+/// `drafts-cap=unreadable`。床の検査の今の判定の file に形の合わない字を置いた周は、`drafts-cap=` の行が `floor=unreadable` の後ろ。
+#[test]
+fn pipe_sweep_drafts_cap_record_is_written_read_and_ordered_after_the_floor_line() {
+    let (repo, state) = repo_with_state();
+    drafts_run(&repo, &state);
+    put_sized(&state.join("seat").join("s1").join("drafts").join("copy").join("target").join("blob"), 768);
+
+    cap_stop(&state, &cap_rules(&state, None));
+    assert_eq!(cap_line(&state), "drafts-cap=ok used=0 cap=1 over=0 busy=0 unmeasured=0", "木が 0 本の周");
+    fs::write(state.join("seat").join("drafts-cap"), "garbage\n").unwrap_or_else(|err| panic!("記録を上書きできる: {err}"));
+    assert_eq!(cap_line(&state), "drafts-cap=unreadable", "形の合わない記録");
+    put_file(&state.join("pipe").join("floor").join("current"), "not json\n");
+    let lines = doctor_lines_of(&state);
+    let at = |prefix: &str| lines.iter().position(|line| line.starts_with(prefix));
+    assert!(at("floor=unreadable").is_some() && at("drafts-cap=") > at("floor=unreadable"), "床の検査の行の後ろ: {lines:?}");
+    clean(&[&repo, &state]);
+}
+
+/// (l) symlink を辿らない: 1 時間前の `node_modules/`（512 KiB）の中の、木の外の 4096 KiB の file を持つ dir を指す symlink は
+/// 合計に数えず、残り、木の外の file も残る。
+#[test]
+fn pipe_sweep_drafts_cap_does_not_follow_a_symlink_out_of_the_tree() {
+    let (repo, state) = repo_with_state();
+    drafts_run(&repo, &state);
+    let tree = draft_tree(&repo, &state, "s1", "t1");
+    let outside = state.join("outside");
+    put_sized(&outside.join("far.bin"), 4096);
+    put_sized(&tree.join("node_modules").join("blob"), 512);
+    std::os::unix::fs::symlink(&outside, tree.join("node_modules").join("link")).unwrap_or_else(|err| panic!("symlink を置ける: {err}"));
+    rewind_to(&tree.join("node_modules"), ago_h(1));
+
+    let out = cap_stop(&state, &cap_rules(&state, None));
+    assert!(tree.join("node_modules").join("blob").is_file() && outside.join("far.bin").is_file(), "node_modules/ も木の外の file も残る");
+    assert_eq!(sweep_line(&out), "", "sweep: の行は無い: {}", stderr_of(&out));
+    assert_eq!(cap_line(&state), "drafts-cap=ok used=1 cap=1 over=0 busy=0 unmeasured=0", "doctor");
+    clean(&[&repo, &state]);
+}
+
+/// (n) 見かけの大きさで測らない: 1 時間前の `target/` の 512 KiB の file と、`set_len` で見かけだけ 8192 KiB にした byte を書かない
+/// 穴の file は、使用量の 1 MiB に収まり残る。
+#[test]
+fn pipe_sweep_drafts_cap_measures_disk_blocks_not_the_apparent_size() {
+    let (repo, state) = repo_with_state();
+    drafts_run(&repo, &state);
+    let tree = draft_tree(&repo, &state, "s1", "t1");
+    put_sized(&tree.join("target").join("blob"), 512);
+    let hole = fs::File::create(tree.join("target").join("hole")).expect("穴の file を作れる");
+    hole.set_len(8192 * 1024).expect("見かけの長さを伸ばせる");
+    drop(hole);
+    rewind_to(&tree.join("target"), ago_h(1));
+
+    let out = cap_stop(&state, &cap_rules(&state, None));
+    assert!(tree.join("target").join("blob").is_file(), "target/ は残る");
+    assert_eq!(sweep_line(&out), "", "sweep: の行は無い: {}", stderr_of(&out));
+    assert_eq!(cap_line(&state), "drafts-cap=ok used=1 cap=1 over=0 busy=0 unmeasured=0", "doctor");
+    clean(&[&repo, &state]);
+}
+
+/// (o) 新しさは下の entry の最新: 3 時間前の `target/`（768 KiB）と、中の 2560 KiB の file を書いた後に dir 自身の mtime だけを
+/// 4 時間前へ戻した `node_modules/` は、`target/` だけが消える（`node_modules/` は下の最新が今で窓の内）。
+#[test]
+fn pipe_sweep_drafts_cap_newness_is_the_newest_entry_not_the_dir_itself() {
+    let (repo, state) = repo_with_state();
+    drafts_run(&repo, &state);
+    let tree = draft_tree(&repo, &state, "s1", "t1");
+    put_sized(&tree.join("target").join("blob"), 768);
+    rewind_to(&tree.join("target"), ago_h(3));
+    put_sized(&tree.join("node_modules").join("blob"), 2560);
+    age_one(&tree.join("node_modules"), 4);
+
+    let out = cap_stop(&state, &cap_rules(&state, None));
+    assert!(!tree.join("target").exists(), "dir 自身が新しい target/ が消える");
+    assert!(tree.join("node_modules").join("blob").is_file(), "下の entry が新しい node_modules/ は残る");
+    assert_eq!(sweep_line(&out), "sweep: removed=1 runs=0 failed=0 drafts=1 nogit=0 cap=1 over=2", "stderr: {}", stderr_of(&out));
+    assert_eq!(cap_line(&state), "drafts-cap=over used=3 cap=1 over=2 busy=1 unmeasured=0", "doctor");
+    clean(&[&repo, &state]);
+}
+
+/// (p) 消せない候補: 下の `debug/` を古くした後に mode 555 にした 3 時間前の `target/` は残り、失敗に数えて合計から引かず次へ
+/// 進み、2 時間前の `.venv/` と 1 時間前の `node_modules/` が消える。
+#[test]
+fn pipe_sweep_drafts_cap_counts_an_unremovable_candidate_as_failed_and_goes_on() {
+    let (repo, state) = repo_with_state();
+    drafts_run(&repo, &state);
+    let tree = draft_tree(&repo, &state, "s1", "t1");
+    put_sized(&tree.join("target").join("debug").join("blob"), 768);
+    rewind_to(&tree.join("target"), ago_h(3));
+    chmod(&tree.join("target").join("debug"), 0o555);
+    for (name, hours) in [(".venv", 2), ("node_modules", 1)] {
+        put_sized(&tree.join(name).join("blob"), 768);
+        rewind_to(&tree.join(name), ago_h(hours));
+    }
+
+    let out = cap_stop(&state, &cap_rules(&state, None));
+    chmod(&tree.join("target").join("debug"), 0o755);
+    assert!(tree.join("target").join("debug").join("blob").is_file(), "消せない target/ は残る");
+    assert!(!tree.join(".venv").exists() && !tree.join("node_modules").exists(), "次の候補へ進み .venv/ と node_modules/ が消える");
+    assert_eq!(sweep_line(&out), "sweep: removed=2 runs=0 failed=1:s1/t1 drafts=1 nogit=0 cap=2 over=0", "stderr: {}", stderr_of(&out));
+    assert_eq!(cap_line(&state), "drafts-cap=ok used=1 cap=1 over=0 busy=0 unmeasured=0", "doctor");
+    clean(&[&repo, &state]);
+}
