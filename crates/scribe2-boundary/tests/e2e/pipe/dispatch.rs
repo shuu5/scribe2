@@ -2766,3 +2766,466 @@ fn dialog_place(screen: Option<&str>) -> GroupPlace {
     assert_eq!(move_counts(&place.state), (1, 0, 1), "移動の周は承認 1・保留 1（{}）", told(&out));
     place
 }
+
+// ───── 床の検査を撃つ側（設計 dispatcher.md §34・契約表の行 ai・接頭辞 `pipe_dispatch_floor_fire_`）─────
+//
+// 偽の command は PATH の先頭に置いた script で、撃たれるたびに marker へ `fired` の行を足す（撃った回数を母集団として数える）。
+// 起こす側の 1 周は `pipe dispatch --runner true`（台帳は空）で、封じ込めは道具箱の偽 `systemd-run` が受ける。
+
+/// 偽の床の検査の script の名（PATH の先頭の dir に置く）。
+const FLOOR_CMD: &str = "floor-probe";
+
+/// 偽の command の script が自分の marker を名指す字面（偽の command の dir の隣の file・sh の引数の形）。
+const MARKER: &str = "\"$(dirname \"$0\")/../floor-marker\"";
+
+/// 床の検査の置き場（repo・置き場・偽の command の dir・撃った印の marker）。
+struct FloorPlace {
+    /// 対象 repo（main を持つ）。
+    repo: std::path::PathBuf,
+    /// 置き場。
+    state: std::path::PathBuf,
+    /// 偽の command を置いた dir（PATH の先頭）。
+    bin: std::path::PathBuf,
+    /// 偽の command が撃たれるたびに 1 行足す file。
+    marker: std::path::PathBuf,
+}
+
+impl FloorPlace {
+    /// 偽の command の dir を先頭に積んだ PATH（後ろは道具箱と host の PATH）。
+    fn path(&self) -> String {
+        format!("{}:{}", self.bin.display(), crate::toolbox_path(&self.state))
+    }
+
+    /// 置き場の floor の dir。
+    fn dir(&self) -> std::path::PathBuf {
+        self.state.join("pipe").join("floor")
+    }
+
+    /// main の先端の sha。
+    fn sha(&self) -> String {
+        git(&self.repo, &["rev-parse", "refs/heads/main"])
+    }
+
+    /// 偽の command が撃たれた回数（marker の `fired` の行）。
+    fn fired(&self) -> usize {
+        fs::read_to_string(&self.marker).unwrap_or_default().lines().filter(|line| *line == "fired").count()
+    }
+
+    /// marker の全行。
+    fn marks(&self) -> Vec<String> {
+        fs::read_to_string(&self.marker).unwrap_or_default().lines().map(str::to_owned).collect()
+    }
+
+    /// floor の dir の entry 名（昇順・無ければ空）。
+    fn names(&self) -> Vec<String> {
+        let mut names: Vec<String> =
+            fs::read_dir(self.dir()).into_iter().flatten().flatten().map(|entry| entry.file_name().to_string_lossy().into_owned()).collect();
+        names.sort();
+        names
+    }
+
+    /// sha の木の path（名に sha の 40 字を持つ）。
+    fn tree(&self, sha: &str) -> std::path::PathBuf {
+        self.dir().join(format!("{sha}.tree"))
+    }
+
+    /// sha の結果の file の path。
+    fn result(&self, sha: &str) -> std::path::PathBuf {
+        self.dir().join(format!("{sha}.result"))
+    }
+
+    /// sha の lock の path。
+    fn lock(&self, sha: &str) -> std::path::PathBuf {
+        self.dir().join(format!("{sha}.lock"))
+    }
+}
+
+/// 宣言（`floor-check` の行 `line`）を repo の root へ書く。`commit` なら commit する（HEAD の tree が読み面）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn declare_floor(repo: &Path, line: &str, commit: bool) {
+    super::write_vessel(repo, super::VESSEL_ALLOWED, super::VESSEL_COMMON);
+    let mut text = fs::read_to_string(repo.join(".vessel.toml")).expect("宣言を読める");
+    text.push_str(line);
+    text.push('\n');
+    fs::write(repo.join(".vessel.toml"), text).expect("宣言を書ける");
+    if commit {
+        git(repo, &["add", "-f", ".vessel.toml"]);
+        git(repo, &["commit", "-q", "-m", "floor-decl"]);
+    }
+}
+
+/// main に空の commit を 1 つ足す（sha が動く）。
+fn advance(repo: &Path) {
+    git(repo, &["commit", "-q", "--allow-empty", "-m", "next"]);
+}
+
+/// 床の検査の置き場を作る。`row` が在れば宣言に `floor-check` として commit する。偽の command は `body` の script。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn floor_place(row: Option<&str>, body: &str) -> FloorPlace {
+    let (repo, state) = super::repo_with_state();
+    let bin = state.join("floor-bin");
+    fs::create_dir_all(&bin).expect("偽の command の dir を作れる");
+    let marker = state.join("floor-marker");
+    script(&bin.join(FLOOR_CMD), &format!("echo fired >> '{}'\n{body}", marker.display()));
+    if let Some(row) = row {
+        declare_floor(&repo, &format!("floor-check = \"{row}\""), true);
+    }
+    FloorPlace { repo, state, bin, marker }
+}
+
+/// 列の写し（[`dispatch_rules`]）に floor.timeout_s の行を足した写し（`None` は行を持たない写し）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn floor_rules(state: &Path, timeout: Option<u64>) -> String {
+    let base = fs::read_to_string(dispatch_rules(state)).expect("列の写しを読める");
+    let row = timeout.map_or_else(String::new, |secs| {
+        format!("\n[[rule]]\nid = \"floor.timeout_s\"\nkind = \"FloorTimeoutS\"\nvalue = {secs}\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n")
+    });
+    let path = state.join(format!("rules-floor-{}.toml", timeout.map_or("none".to_owned(), |secs| secs.to_string())));
+    fs::write(&path, format!("{base}{row}")).expect("写しを書ける");
+    path.display().to_string()
+}
+
+/// 起こす側の 1 周（`pipe dispatch --runner true`・台帳は空）を撃つ。
+fn floor_round(place: &FloorPlace, rules: &str) -> Output {
+    let (state, repo, bd) = (place.state.display().to_string(), place.repo.display().to_string(), fake_bd(&place.state, &[]));
+    let args = ["dispatch", "--state-dir", state.as_str(), "--repo", repo.as_str(), "--rules", rules, "--bd", bd.as_str(), "--runner", "true"];
+    run_pipe_with_path(&place.path(), &args)
+}
+
+/// 観測の口（`pipe dispatch ls`）を撃つ。
+fn floor_ls(place: &FloorPlace, rules: &str) -> Output {
+    let (state, repo, bd) = (place.state.display().to_string(), place.repo.display().to_string(), fake_bd(&place.state, &[]));
+    let args = ["dispatch", "ls", "--state-dir", state.as_str(), "--repo", repo.as_str(), "--rules", rules, "--bd", bd.as_str()];
+    run_pipe_with_path(&place.path(), &args)
+}
+
+/// 既定の写し（上限 600）で 1 周撃つ。
+fn floor_once(place: &FloorPlace) -> Output {
+    floor_round(place, &floor_rules(&place.state, Some(600)))
+}
+
+/// `doctor --state-dir S` の `floor=` の行（無ければ空）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn floor_line(place: &FloorPlace) -> String {
+    let out = super::bin_cmd().args(["doctor", "--state-dir"]).arg(&place.state).env("PATH", place.path()).output().expect("binary を起動できる");
+    stdout_of(&out).lines().filter(|line| line.starts_with("floor=")).collect::<Vec<_>>().join("\n")
+}
+
+/// sha の頭 7 字。
+fn head7(sha: &str) -> &str {
+    sha.get(..7).unwrap_or_default()
+}
+
+/// (a) key の無い repo は 0 回で、floor の dir も doctor の行も無い。
+#[test]
+fn pipe_dispatch_floor_fire_without_the_key_shoots_nothing_and_leaves_no_place() {
+    let place = floor_place(None, "exit 0");
+    let out = floor_once(&place);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "1 周は rc 0（{}）", told(&out));
+    assert_eq!(place.fired(), 0, "撃たない");
+    assert!(!place.dir().exists(), "floor の dir を作らない");
+    assert_eq!(floor_line(&place), "", "doctor の floor= の行は無い");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (b) rc 0 → 結果 rc 0・doctor の行が逐語・木は畳まれ（dir も worktree の登録も無い）・floor の dir は結果と今の判定の 2 本だけ。
+/// 出力の無い command では `summary=-`。
+#[test]
+fn pipe_dispatch_floor_fire_pass_leaves_the_result_and_the_current_and_folds_the_tree() {
+    let place = floor_place(Some(FLOOR_CMD), "echo first\necho 'last line'\nexit 0");
+    let out = floor_once(&place);
+    let sha = place.sha();
+    assert_eq!(place.fired(), 1, "1 回撃つ（{}）", told(&out));
+    let result = fs::read_to_string(place.result(&sha)).unwrap_or_default();
+    assert!(result.contains("\"rc\":0"), "結果は rc 0: {result}");
+    assert_eq!(floor_line(&place), format!("floor=pass rc=0 sha={} why=- summary=last line", head7(&sha)), "doctor の行");
+    assert!(!place.tree(&sha).exists(), "木の dir は無い");
+    let listed = git(&place.repo, &["worktree", "list", "--porcelain"]);
+    assert!(!listed.contains(&format!("{sha}.tree")), "worktree の登録も無い: {listed}");
+    let mut want = vec![format!("{sha}.result"), "current".to_owned()];
+    want.sort();
+    assert_eq!(place.names(), want, "floor の dir は結果と今の判定だけ（lock は外れる）");
+    let quiet = floor_place(Some(FLOOR_CMD), "exit 0");
+    floor_once(&quiet);
+    assert_eq!(floor_line(&quiet), format!("floor=pass rc=0 sha={} why=- summary=-", head7(&quiet.sha())), "出力の無い command は summary=-");
+    clean(&[&place.repo, &place.state, &quiet.repo, &quiet.state]);
+}
+
+/// (c) rc 1 と rc 2 は結果と `floor=fail`。要約は最後の空でない行（3 行目が空なら 2 行目）で、制御文字を除いた頭の 200 字。
+#[test]
+fn pipe_dispatch_floor_fire_fail_records_the_rc_and_a_clean_summary() {
+    for rc in [1, 2] {
+        let place = floor_place(Some(FLOOR_CMD), &format!("printf 'one\\ntwo\\n\\n'\nexit {rc}"));
+        floor_once(&place);
+        let sha = place.sha();
+        assert_eq!(floor_line(&place), format!("floor=fail rc={rc} sha={} why=- summary=two", head7(&sha)), "rc {rc} の行");
+        let result = fs::read_to_string(place.result(&sha)).unwrap_or_default();
+        assert!(result.contains(&format!("\"rc\":{rc}")), "結果は rc {rc}: {result}");
+        clean(&[&place.repo, &place.state]);
+    }
+    let long = format!("a\tb\u{1b}{}", "y".repeat(300));
+    let place = floor_place(Some(FLOOR_CMD), &format!("printf 'head\\n%s\\n' '{long}'\nexit 1"));
+    floor_once(&place);
+    let want = format!("ab{}", "y".repeat(198));
+    assert_eq!(floor_line(&place), format!("floor=fail rc=1 sha={} why=- summary={want}", head7(&place.sha())), "制御文字を除いた頭の 200 字");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (d) 上限 1 秒の写しで眠る command は結果の file 無し・`floor=timeout`・次の周に撃ち直し（2 回）。眠りの後の行は足されない（子を止めた）。
+#[test]
+fn pipe_dispatch_floor_fire_timeout_stops_the_child_and_retries_next_round() {
+    let place = floor_place(Some(FLOOR_CMD), &format!("sleep 3\necho woke >> {MARKER}\nexit 0"));
+    let rules = floor_rules(&place.state, Some(1));
+    floor_round(&place, &rules);
+    let sha = place.sha();
+    assert!(!place.result(&sha).exists(), "結果の file は無い");
+    assert_eq!(floor_line(&place), format!("floor=timeout rc=- sha={} why=- summary=-", head7(&sha)), "越えた周の行");
+    floor_round(&place, &rules);
+    assert_eq!(place.fired(), 2, "次の周に撃ち直す");
+    std::thread::sleep(std::time::Duration::from_secs(4));
+    assert!(!place.marks().iter().any(|line| line == "woke"), "眠りの後の行が無い（子を止めた）: {:?}", place.marks());
+    assert!(!place.names().iter().any(|name| name.ends_with(".lock") || name.ends_with(".tree")), "lock と木は外れる: {:?}", place.names());
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (e) PATH に無い頭の語は 0 回・`floor=unfireable ... why=path` で、次の周に PATH へ置くと撃つ。
+#[test]
+fn pipe_dispatch_floor_fire_unfireable_path_shoots_nothing_until_the_head_is_on_the_path() {
+    let place = floor_place(Some("floor-not-yet"), "exit 0");
+    floor_once(&place);
+    let sha = place.sha();
+    assert_eq!(place.fired(), 0, "0 回");
+    assert_eq!(floor_line(&place), format!("floor=unfireable rc=- sha={} why=path summary=-", head7(&sha)), "撃てない周の行");
+    assert!(!place.result(&sha).exists(), "結果の file は無い");
+    fs::copy(place.bin.join(FLOOR_CMD), place.bin.join("floor-not-yet")).unwrap_or_else(|err| panic!("偽の command を置ける: {err}"));
+    floor_once(&place);
+    assert_eq!(place.fired(), 1, "PATH へ置いた次の周に撃つ");
+    assert!(place.result(&sha).exists(), "結果の file が在る");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (f) 行の 3 つの検査: form の 3 形（CR を持つ行・tab を持つ行・`{` の穴を持つ行）・禁じる語列・記号の 5 形は 0 回で `why=form|denied|metachar`。
+/// 2 つに同時に当たる 3 形（CR と `;` → form・禁じる語列と `;` → denied・PATH に頭の語の無い禁じる語列 → denied）の語は先の 1 つだけ。
+/// 宣言は 1 行に書くので、改行の形は CR（`\r`・行の途中の制御文字）で作る。
+#[test]
+fn pipe_dispatch_floor_fire_row_faults_name_the_first_word_and_shoot_nothing() {
+    let place = floor_place(None, "exit 0");
+    let rules = fs::read_to_string(floor_rules(&place.state, Some(600))).unwrap_or_default();
+    let widened = rules.replace("\"bd delete\"", "\"bd delete\", \"floor-no-such-tool go\"");
+    assert_ne!(widened, rules, "前提: host_guard.ledger の行に禁じる語列を 1 つ足せた");
+    let copy = place.state.join("rules-floor-denied.toml");
+    fs::write(&copy, widened).unwrap_or_else(|err| panic!("写しを書ける: {err}"));
+    let rows = [
+        ("floor-probe a\rb", "form"),
+        ("floor-probe a\tb", "form"),
+        ("floor-probe {base}", "form"),
+        ("git push --force", "denied"),
+        ("floor-probe a ; b", "metachar"),
+        ("floor-probe a\r; b", "form"),
+        ("git push --force ; ls", "denied"),
+        ("floor-no-such-tool go", "denied"),
+    ];
+    for (row, why) in rows {
+        declare_floor(&place.repo, &format!("floor-check = \"{row}\""), true);
+        floor_round(&place, &copy.display().to_string());
+        let sha = place.sha();
+        assert_eq!(floor_line(&place), format!("floor=unfireable rc=- sha={} why={why} summary=-", head7(&sha)), "{row:?}");
+        assert!(!place.result(&sha).exists(), "{row:?}: 結果の file は無い");
+    }
+    assert_eq!(place.fired(), 0, "どの形も 0 回");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (g) 同じ sha の 2 周目は撃ち直さない。(h) main に commit を足した周は撃ち直す。
+#[test]
+fn pipe_dispatch_floor_fire_shoots_once_per_sha() {
+    let place = floor_place(Some(FLOOR_CMD), "exit 0");
+    floor_once(&place);
+    floor_once(&place);
+    assert_eq!(place.fired(), 1, "同じ sha は撃ち直さない");
+    advance(&place.repo);
+    floor_once(&place);
+    assert_eq!(place.fired(), 2, "sha が動いた周は撃ち直す");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (i) 封じ込めの偽 `systemd-run` の argv に floor の unit と command が載る。
+#[test]
+fn pipe_dispatch_floor_fire_wraps_the_command_in_a_floor_unit() {
+    let row = format!("{FLOOR_CMD} one two");
+    let place = floor_place(Some(&row), "exit 0");
+    floor_once(&place);
+    let record = crate::toolbox_record(&place.state, "floor");
+    let lines: Vec<&str> = record.lines().collect();
+    assert!(lines.iter().any(|line| line.starts_with("--unit=") && line.contains("-floor-")), "floor の unit: {record}");
+    let program = place.bin.join(FLOOR_CMD).display().to_string();
+    let at = lines.iter().position(|line| *line == "--").unwrap_or(lines.len());
+    assert_eq!(lines.get(at.saturating_add(1)..).unwrap_or_default(), [program.as_str(), "one", "two"], "`--` の後ろは解いた path と引数: {record}");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// 偽の command が撃たれた場所（pwd）を置き場の `floor-pwd` へ足す 1 行。
+const PWD_LINE: &str = "pwd >> \"$(dirname \"$0\")/../floor-pwd\"";
+
+/// 1 周目に撃たれた場所（pwd）から sha `from` を `to` に置き換えた木の名。
+fn tree_of(place: &FloorPlace, from: &str, to: &str) -> std::path::PathBuf {
+    let seen = fs::read_to_string(place.state.join("floor-pwd")).unwrap_or_default();
+    let first = seen.lines().next().unwrap_or_default().to_owned();
+    assert!(first.contains(from), "撃たれた場所の名は sha を持つ: {first}");
+    std::path::PathBuf::from(first.replace(from, to))
+}
+
+/// (j) 撃てない理由の残り 3 形（row・confine・tree）はどれも 0 回で結果の file は無い。tree は木でない dir とその file が残る。
+#[test]
+fn pipe_dispatch_floor_fire_remaining_unfireable_forms_shoot_nothing() {
+    let row = floor_place(Some(FLOOR_CMD), "exit 0");
+    floor_round(&row, &floor_rules(&row.state, None));
+    assert_eq!(floor_line(&row), format!("floor=unfireable rc=- sha={} why=row summary=-", head7(&row.sha())), "行を読めない周");
+    assert_eq!(row.fired(), 0, "row: 0 回");
+    clean(&[&row.repo, &row.state]);
+
+    let confine = floor_place(Some(FLOOR_CMD), "exit 0");
+    script(&confine.bin.join("systemd-run"), "exit 1\n");
+    floor_once(&confine);
+    assert_eq!(floor_line(&confine), format!("floor=unfireable rc=- sha={} why=confine summary=-", head7(&confine.sha())), "包めない周");
+    assert_eq!(confine.fired(), 0, "confine: 0 回");
+    assert!(!confine.result(&confine.sha()).exists(), "結果の file は無い");
+    clean(&[&confine.repo, &confine.state]);
+
+    let tree = floor_place(Some(FLOOR_CMD), PWD_LINE);
+    floor_once(&tree);
+    let first = tree.sha();
+    advance(&tree.repo);
+    let second = tree.sha();
+    let path = tree_of(&tree, &first, &second);
+    fs::create_dir_all(&path).unwrap_or_else(|err| panic!("木の名に dir を置ける: {err}"));
+    fs::write(path.join("keep"), "x").unwrap_or_else(|err| panic!("dir に file を置ける: {err}"));
+    floor_once(&tree);
+    assert_eq!(floor_line(&tree), format!("floor=unfireable rc=- sha={} why=tree summary=-", head7(&second)), "木を作れない周");
+    assert_eq!(tree.fired(), 1, "tree: 撃たない（1 周目の 1 回のまま）");
+    assert!(path.join("keep").is_file(), "木でない dir と file は残る");
+    assert!(!tree.result(&second).exists(), "結果の file は無い");
+    clean(&[&tree.repo, &tree.state]);
+}
+
+/// (k) 木と lock は sha ごと: 別の sha の周は走っている周の木と lock に触らない。
+#[test]
+fn pipe_dispatch_floor_fire_trees_and_locks_are_per_sha() {
+    let place = floor_place(Some(FLOOR_CMD), &format!("{PWD_LINE}\nls \"$(dirname \"$0\")/../pipe/floor\" >> \"$(dirname \"$0\")/../floor-ls\""));
+    floor_once(&place);
+    let first = place.sha();
+    let seen = fs::read_to_string(place.state.join("floor-ls")).unwrap_or_default();
+    assert!(seen.lines().any(|name| name == format!("{first}.lock")), "撃っている間は sha の lock が在る: {seen}");
+    advance(&place.repo);
+    let second = place.sha();
+    let held = place.tree(&first);
+    fs::create_dir_all(&held).unwrap_or_else(|err| panic!("A の木の名に dir を置ける: {err}"));
+    fs::write(held.join("sentinel"), "x").unwrap_or_else(|err| panic!("sentinel を置ける: {err}"));
+    fs::write(place.lock(&first), format!("{}\n", std::process::id())).unwrap_or_else(|err| panic!("A の lock を置ける: {err}"));
+    floor_once(&place);
+    assert_eq!(place.fired(), 2, "B を 1 回撃つ");
+    let pwds = fs::read_to_string(place.state.join("floor-pwd")).unwrap_or_default();
+    assert!(pwds.lines().nth(1).is_some_and(|line| line.contains(&second)), "2 周目の場所の名は B を持つ: {pwds}");
+    assert!(held.join("sentinel").is_file() && place.lock(&first).is_file(), "A の dir・sentinel・lock は残る");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (l) 今の判定の file を読めない字で上書きすると、doctor の行は `floor=unreadable`。
+#[test]
+fn pipe_dispatch_floor_fire_unreadable_current_is_named_by_doctor() {
+    let place = floor_place(Some(FLOOR_CMD), "exit 0");
+    floor_once(&place);
+    assert!(floor_line(&place).starts_with("floor=pass"), "前提: 読める周は pass");
+    fs::write(place.dir().join("current"), "not json\n").unwrap_or_else(|err| panic!("上書きできる: {err}"));
+    assert_eq!(floor_line(&place), "floor=unreadable", "読めない file");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (m) 同じ sha の生きた lock は 0 回・結果の file も今の判定の file も無い。lock を外した次の周に 1 回撃つ。
+#[test]
+fn pipe_dispatch_floor_fire_live_lock_blocks_the_round_and_writes_no_judgement() {
+    let place = floor_place(Some(FLOOR_CMD), "exit 0");
+    let sha = place.sha();
+    fs::create_dir_all(place.dir()).unwrap_or_else(|err| panic!("floor の dir を作れる: {err}"));
+    fs::write(place.lock(&sha), format!("{}\n", std::process::id())).unwrap_or_else(|err| panic!("lock を置ける: {err}"));
+    floor_once(&place);
+    assert_eq!(place.fired(), 0, "生きた lock の周は撃たない");
+    assert_eq!(place.names(), [format!("{sha}.lock")], "結果も今の判定も書かない（lock は残る）");
+    fs::remove_file(place.lock(&sha)).unwrap_or_else(|err| panic!("lock を外せる: {err}"));
+    floor_once(&place);
+    assert_eq!(place.fired(), 1, "lock を外した次の周に撃つ");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (n) 同じ sha の死んだ lock（在りえない pid）は取り直して 1 回撃ち、結果の file が在る。
+#[test]
+fn pipe_dispatch_floor_fire_dead_lock_is_taken_over() {
+    let place = floor_place(Some(FLOOR_CMD), "exit 0");
+    let sha = place.sha();
+    fs::create_dir_all(place.dir()).unwrap_or_else(|err| panic!("floor の dir を作れる: {err}"));
+    fs::write(place.lock(&sha), format!("{}\n", i32::MAX)).unwrap_or_else(|err| panic!("死んだ lock を置ける: {err}"));
+    floor_once(&place);
+    assert_eq!(place.fired(), 1, "死んだ lock は取り直して撃つ");
+    assert!(place.result(&sha).exists(), "結果の file が在る");
+    assert!(!place.lock(&sha).exists(), "撃ち終えた周は lock を外す");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (o) 観測の口（`pipe dispatch ls`）は 2 回撃っても 0 回・floor の dir 無し・doctor の行無し。続く起こす側の 1 周で 1 回撃つ。
+#[test]
+fn pipe_dispatch_floor_fire_the_observing_door_never_shoots() {
+    let place = floor_place(Some(FLOOR_CMD), "exit 0");
+    let rules = floor_rules(&place.state, Some(600));
+    for _ in 0..2 {
+        let out = floor_ls(&place, &rules);
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "ls は rc 0（{}）", told(&out));
+    }
+    assert_eq!(place.fired(), 0, "観測の口は撃たない");
+    assert!(!place.dir().exists(), "floor の dir は無い");
+    assert_eq!(floor_line(&place), "", "doctor の floor= の行は無い");
+    floor_round(&place, &rules);
+    assert_eq!(place.fired(), 1, "続く起こす側の 1 周で 1 回撃つ");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (p) 宣言は sha の木から読む: 作業ツリーの `.vessel.toml` だけに key を書いて commit しない repo は 0 回・floor の dir 無し。
+#[test]
+fn pipe_dispatch_floor_fire_reads_the_declaration_from_the_tree_not_the_worktree() {
+    let place = floor_place(None, "exit 0");
+    declare_floor(&place.repo, &format!("floor-check = \"{FLOOR_CMD}\""), false);
+    floor_once(&place);
+    assert_eq!(place.fired(), 0, "commit されていない key は撃たない");
+    assert!(!place.dir().exists(), "floor の dir は無い");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (q) 死んだ周の木の片付け: 撃つ sha の名の path に先に作られた木は、周が 1 回撃ち、周の後にその path も worktree の登録も無い。
+#[test]
+fn pipe_dispatch_floor_fire_cleans_a_tree_left_by_a_dead_round() {
+    let place = floor_place(Some(FLOOR_CMD), PWD_LINE);
+    floor_once(&place);
+    let first = place.sha();
+    advance(&place.repo);
+    let second = place.sha();
+    let path = tree_of(&place, &first, &second);
+    git(&place.repo, &["worktree", "add", "-q", "--detach", &path.display().to_string(), &second]);
+    assert!(path.join(".git").is_file(), "前提: 死んだ周の木が在る");
+    floor_once(&place);
+    assert_eq!(place.fired(), 2, "周は 1 回撃つ");
+    assert!(!path.exists(), "周の後にその path の dir は無い");
+    let listed = git(&place.repo, &["worktree", "list", "--porcelain"]);
+    assert!(!listed.contains(&path.display().to_string()), "worktree の登録も無い: {listed}");
+    clean(&[&place.repo, &place.state]);
+}

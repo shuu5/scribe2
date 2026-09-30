@@ -379,6 +379,9 @@ pub enum RuleKind {
     /// 列（読み手は [`publish::elements`] の 1 本）。頭の語が `exclude` の要素は置けない（除外は host の面の表
     /// `[[publish-exclusion]]`・兄弟 [`exclusion`]・ADR-0093）。
     HostGuardPublish,
+    /// 床の検査（vessel 宣言の任意 key `floor-check`）を待つ上限（秒・設計 dispatcher.md §34 約束 4）。越えた周は子を止めて timeout と読む。
+    /// 読み手は `pipe::dispatch::floor` の 1 本で、行を読めない周は撃たず unfireable（`row`）。
+    FloorTimeoutS,
 }
 
 /// [`RuleKind`] の全 variant。parity test の母集団である。
@@ -463,6 +466,7 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::SeatPrecheckAlarmS,
     RuleKind::RunnerClassCommands,
     RuleKind::HostGuardPublish,
+    RuleKind::FloorTimeoutS,
 ];
 
 impl RuleKind {
@@ -528,7 +532,7 @@ impl RuleKind {
             Self::HostGuardDeniedCommands => "HostGuardDeniedCommands", Self::HostGuardRmProtected => "HostGuardRmProtected", Self::HostGuardPublish => "HostGuardPublish",
             // 管理 tick の 3 kind と席の箱も 2 行に畳み、対で読む model と effort の 2 組も 1 行ずつに畳む（同じ上限）。
             Self::SeatTickIntervalS => "SeatTickIntervalS", Self::SeatTickStaleS => "SeatTickStaleS", Self::SeatMemoryMaxMb => "SeatMemoryMaxMb",
-            Self::SeatPrecheckAlarmS => "SeatPrecheckAlarmS",
+            Self::SeatPrecheckAlarmS => "SeatPrecheckAlarmS", Self::FloorTimeoutS => "FloorTimeoutS",
             Self::SeatPointerLadderS => "SeatPointerLadderS", Self::SeatMoveGraceS => "SeatMoveGraceS", Self::SeatIdleAlarmS => "SeatIdleAlarmS",
         }
     }
@@ -578,7 +582,7 @@ impl RuleKind {
             | Self::PipeMaxLive
             | Self::FlipMarksPerPr | Self::LedgerOpenChildrenMax
             | Self::SeatTickIntervalS | Self::SeatTickStaleS | Self::SeatMoveGraceS | Self::SeatMemoryMaxMb | Self::SeatIdleAlarmS
-            | Self::SeatPrecheckAlarmS | Self::AccountSelection => ValueShape::Int,
+            | Self::SeatPrecheckAlarmS | Self::AccountSelection | Self::FloorTimeoutS => ValueShape::Int,
             Self::DialogueSurface
             | Self::RunnerModel
             | Self::RunnerEffort | Self::LensModel | Self::PipePrecheckLensModel

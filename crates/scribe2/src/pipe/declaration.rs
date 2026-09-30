@@ -23,9 +23,9 @@ mod write_set;
 
 pub use entrance_flip::{measure_named, EntranceFlip};
 use entrance_flip::{entrance_of, KEY as ENTRANCE_KEY};
-pub use optional_keys::{close_check, question_route, table_facts, table_facts_named, terminal_facts, CloseCheck, QuestionRoute, TableFacts, TerminalFacts};
+pub use optional_keys::{close_check, floor_check_at, question_route, table_facts, table_facts_named, terminal_facts, CloseCheck, QuestionRoute, TableFacts, TerminalFacts};
 pub use optional_keys::{CI_SHA_HOLE, DEFAULT_CI_CMD, DEFAULT_REQUIREMENTS};
-use optional_keys::{ci_cmd_of, close_check_of, question_route_of, remote_of, requirements_of, DECLARED_KEYS, OPTIONAL_KEYS};
+use optional_keys::{ci_cmd_of, close_check_of, floor_check_of, question_route_of, remote_of, requirements_of, DECLARED_KEYS, OPTIONAL_KEYS};
 pub use write_set::{headroom_shortfalls, line_count, read_write_set, Caps, FileLines, Headroom, NewFilePolicy, WriteSetItem, CORE};
 pub(crate) use write_set::is_under;
 
@@ -60,7 +60,7 @@ const DETECTION_KEY: &str = "detection-verify";
 
 /// shell が意味を変える文字。**1 行 1 command の粒度**はここで守る——gate と land は行を
 /// `sh -c` で撃つので、先頭語だけを見ても包みや連結を止められない（ADR-0010 §2.3）。
-const METACHARS: &[char] = &[';', '&', '|', '`', '$', '(', ')', '<', '>', '"', '\''];
+pub(crate) const METACHARS: &[char] =&[';', '&', '|', '`', '$', '(', ')', '<', '>', '"', '\''];
 
 /// 宣言が読めない / 撃てない理由。**行番号を必ず持つ**（0 は file 全体）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -305,6 +305,8 @@ pub struct Declared {
     question_route: Option<String>,
     /// close の理由の門に加わるか（任意 key `close-check`・無ければ `None`・設計 ledger-form.md §16）。
     close_check: Option<bool>,
+    /// 床の検査の 1 行（任意 key `floor-check`・無ければ `None`・設計 dispatcher.md §34）。
+    floor_check: Option<String>,
 }
 
 /// 出所つきの宣言。**[`Effective`] はこれを消費してしか作れない**（C10）。
@@ -539,6 +541,7 @@ impl Declared {
         let entrance_flip = entrance_of(&found, &mut errors);
         let question_route = question_route_of(&found, &mut errors);
         let close_check = close_check_of(&found, &mut errors);
+        let floor_check = floor_check_of(&found, &mut errors);
         if schema != Some(SCHEMA_VERSION) {
             errors.push(DeclError::new(
                 0,
@@ -560,6 +563,7 @@ impl Declared {
                 entrance_flip,
                 question_route,
                 close_check,
+                floor_check,
             })
         } else {
             Err(errors)
@@ -1220,7 +1224,7 @@ mod tests {
     }
 
     /// 先頭語 `cargo` の行を持たない宣言（`sh` / `git` だけの toy repo）は分類だけで断らない（§7「Rust 固有の検査を
-    /// 内蔵しない」のまま）。宣言 file の schema は不変（版 1・key の列は 10 本に §54 と vessel-hook.md §20 と ledger-form.md §16 の任意 key 各 1 本を足した 13 本）。
+    /// 内蔵しない」のまま）。宣言 file の schema は不変（版 1・key の列は 10 本に §54 と vessel-hook.md §20 と ledger-form.md §16 と dispatcher.md §34 の任意 key 各 1 本を足した 14 本）。
     #[test]
     fn declaration_kind_passes_declarations_without_cargo_and_keeps_the_schema() {
         assert!(measured(r#"["git", "sh"]"#, r#"["git rev-parse --verify {base}", "sh verify.sh"]"#).is_ok(), "sh / git だけは通る");
@@ -1242,8 +1246,9 @@ mod tests {
                 "entrance-flip",
                 "question-route",
                 "close-check",
+                "floor-check",
             ],
-            "宣言 file の key の列は動かない（末尾の任意 key は §54・ADR-0054 と vessel-hook.md §20・ADR-0084 と ledger-form.md §16・ADR-0097）"
+            "宣言 file の key の列は動かない（末尾の任意 key は §54・ADR-0054 と vessel-hook.md §20・ADR-0084 と ledger-form.md §16・ADR-0097 と dispatcher.md §34）"
         );
     }
 

@@ -828,6 +828,28 @@ fn rules_precheck_alarm_row_follows_the_idle_alarm() {
     assert!(errors.join("\n").contains("形と合わない"), "形は Int だけ: {errors:?}");
 }
 
+/// 床の検査の待ちの上限の行（設計 dispatcher.md §34 約束 8・行 ai・`s2-07l.738.37.1`）が埋め込み manifest に id / kind / 形 Int / 値 600 /
+/// enabled / 裁定 id / 裁定日で 1 本在り、kind は `ALL` の末尾・行は manifest の末尾で、字面から引け、形は Int だけ（base では行も
+/// kind も無い ＝ RED）。
+#[test]
+fn rules_floor_timeout_row_is_the_last_kind_and_the_last_row() {
+    let manifest = Manifest::embedded().unwrap_or_else(|errors| panic!("埋め込み manifest が拒まれた: {errors:?}"));
+    let id = "floor.timeout_s";
+    let row = manifest.get(id).unwrap_or_else(|| panic!("{id} の行が在る"));
+    let kind = RuleKind::parse("FloorTimeoutS").expect("字面から引ける");
+    assert_eq!((kind.as_str(), kind.shape()), ("FloorTimeoutS", ValueShape::Int), "kind の字面と形");
+    assert_eq!(row.kind, kind, "{id} の kind");
+    assert_eq!(row.value, RuleValue::Int(600), "{id} の値（10 分）");
+    assert!(row.enabled, "{id} は既定で効く");
+    assert_eq!((row.ruling.as_str(), row.ruled_at.as_str()), ("user 2026-09-30T04:25Z", "2026-09-30"), "{id} の裁定 id と裁定日");
+    assert_eq!(int_row(&manifest, id), Ok(600), "{id} を整数の読み手で引ける");
+    assert_eq!(manifest.rows().iter().filter(|found| found.kind == kind).count(), 1, "kind の行は 1 本");
+    assert_eq!(ALL.last(), Some(&kind), "kind は ALL の末尾（母集団 {} 種）", ALL.len());
+    assert_eq!(manifest.rows().last().map(|found| found.id.as_str()), Some(id), "行は manifest の末尾（母集団 {} 行）", manifest.rows().len());
+    let errors = rejected(&one_row(kind, "\"ten\"")).expect("文字列の値の fixture が受理された");
+    assert!(errors.join("\n").contains("形と合わない"), "形は Int だけ: {errors:?}");
+}
+
 /// 事前審査の先撃ちの 1 周の本数の行（設計 dispatcher.md §27 形 1・行 aa・`s2-07l.718`）が埋め込み manifest に id / kind / 形 Int /
 /// 値 1 / enabled / 裁定 id / 裁定日で 1 本在り、行は `gate.lens_count` の直後・kind は `ALL` の `GateLensCount` の直後で
 /// `GateTokenCap` の前、字面から引け、形は Int だけ（base では行も kind も無い ＝ RED）。
@@ -1068,8 +1090,9 @@ fn class_derive_embedded_row_carries_the_ruled_three_elements_and_ruling_id() {
     assert_eq!((row.ruling.as_str(), row.ruled_at.as_str()), ("user 2026-09-24T00:13Z", "2026-09-24"), "裁定 id と裁定日");
     assert!(row.enabled, "既定で効く");
     assert_eq!((row.kind, row.kind.shape()), (RuleKind::RunnerClassCommands, ValueShape::List), "kind と形");
-    // `.696` が末尾に公開の見張りの kind を足した（その直前が RunnerClassCommands）。
-    assert_eq!(ALL.iter().rev().take(2).collect::<Vec<_>>(), [&RuleKind::HostGuardPublish, &RuleKind::RunnerClassCommands], "kind は ALL の末尾の 1 つ前");
+    // `.696` が末尾に公開の見張りの kind を足し、`.738.37.1` が床の検査の待ちの上限の kind を足した（その 2 つ前が RunnerClassCommands）。
+    let tail: Vec<&RuleKind> = ALL.iter().rev().take(3).collect();
+    assert_eq!(tail, [&RuleKind::FloorTimeoutS, &RuleKind::HostGuardPublish, &RuleKind::RunnerClassCommands], "kind は ALL の末尾の 2 つ前");
     assert_eq!(RuleKind::parse("RunnerClassCommands"), Some(RuleKind::RunnerClassCommands), "kind を字面から引ける");
     let allowed = match manifest.get("runner.allowed_commands").map(|found| &found.value) {
         Some(RuleValue::List(commands)) => commands.clone(),

@@ -826,6 +826,17 @@ enabled = true
 ruling = "user 2026-09-27T17:33Z 項 2-1"
 ruled_at = "2026-09-27"
 
+# 床の検査（vessel 宣言の任意 key floor-check・設計 dispatcher.md §34・ADR-0084）を撃つ子を待つ上限（秒）。越えた周は子を止めて
+# timeout と読み、結果を残さず次の周に撃ち直す。読めない周は撃たず unfireable（why=row・既定値に倒さない）。
+
+[[rule]]
+id = "floor.timeout_s"
+kind = "FloorTimeoutS"
+value = 600
+enabled = true
+ruling = "user 2026-09-30T04:25Z"
+ruled_at = "2026-09-30"
+
 # 口座の宣言（設計 fleet-usage.md §2・account-lifecycle.md §2・ADR-0026 §2.1）は host の manifest（state dir
 # の host.toml）にだけ置く。この file に口座の表は置かない（文法は残る・足す変更は A1 の対話面で聞く・本 repo
 # は PUBLIC・SRS CON2）。器は credential の置き場を走査せず、宣言だけを真実として読む（C3）。
