@@ -44,6 +44,7 @@
 //! [`OUTSIDE_FILE`] として置く（約束の行と同じ形）。lens は `{outside}` の穴を名ごとに cap の残りで埋める（[`outside_block`]）。
 
 mod base;
+mod items;
 mod judgement;
 mod outside;
 mod requirements;
@@ -84,6 +85,9 @@ pub const BASE_FILE: &str = "base.txt";
 
 /// `{outside}` の穴の本文（契約が名指す write-set の外の物・名指しの在る周だけ契約の写しの隣に置く・§51）。
 pub const OUTSIDE_FILE: &str = "outside.txt";
+
+/// done の番号つき項目の本文（項目が 1 個以上で Promised でない行だけ契約の写しの隣に置く・lens が契約の本文の後ろに足す・§64）。
+pub const ITEMS_FILE: &str = "items.txt";
 
 /// lens の scope の unit 名に載せる段の名。
 const REVIEW_STAGE: &str = "review";
@@ -274,6 +278,8 @@ struct Material {
     base: String,
     /// 契約が名指す write-set の外の物（名指しの無い契約は空・§51）。
     outside: String,
+    /// done の番号つき項目（項目 0 個か Promised の行は空・§64）。
+    items: String,
 }
 
 /// 審査の判定 1 件（verdict と根拠と、PASS でない周の理由の型と場所）。
@@ -309,9 +315,11 @@ pub fn review(entry: &Review<'_>) -> Outcome {
         LensSource::Cmd(cmd) if entry.same_model => super::dispatch::prelens::reusable(entry.state_dir, entry.bead, &dir, cmd),
         LensSource::Cmd(_) | LensSource::Absent | LensSource::Unreadable { .. } => None,
     };
+    // done の項目の数（Promised の行は 0・材料の書き手 `materials` と同じ読み手 `done_items`・§64 形 5）。
+    let items = if promised { 0 } else { items::done_items(&entry.contract.done).len() };
     let (finding, scope, usage) = match &reused {
-        Some((rc, text)) => (read_outcome(*rc, text), None, None),
-        None => decide(entry, &contract),
+        Some((rc, text)) => (read_outcome(*rc, text, items), None, None),
+        None => decide(entry, &contract, items),
     };
     let finding = narrow(finding, promised);
     let verdict = finding.verdict;
@@ -354,9 +362,12 @@ fn materials(repo: &Path, contract: &Contract, requirements: &str) -> Material {
     let mut bodies = vec![design.as_str(), contract.done.as_str()];
     bodies.extend(promised.iter().map(|promise| promise.text.as_str()));
     let outside = outside::outside_text(repo, contract, &bodies);
+    // Promised の行の done は器が約束の行から組む字なので項目に割らない（項目 0 個として扱う・§64 形 5）。
+    let items = if promised.is_empty() { items::items_text(&contract.done) } else { String::new() };
     Material {
         requirements: requirements_text(repo, requirements, &contract.req),
         promises: render_promises(&promised.iter().collect::<Vec<&table::PromiseRow>>()),
+        items,
         base: base::base_text(repo, &contract.write_set),
         outside,
         design,
@@ -495,7 +506,7 @@ fn keep(dir: &Path, source: &Path, material: &Material) -> Result<PathBuf, Strin
         std::fs::write(&path, material_file(body)).map_err(|err| format!("{} を書けない: {err}", path.display()))?;
     }
     // 約束の行の写しは Promised の行だけ・外の材料は名指しの在る契約だけ置く（無い file ＝ lens の雛形は 1 字も変わらない）。
-    for (name, body) in [(PROMISES_FILE, &material.promises), (OUTSIDE_FILE, &material.outside)] {
+    for (name, body) in [(PROMISES_FILE, &material.promises), (OUTSIDE_FILE, &material.outside), (ITEMS_FILE, &material.items)] {
         if body.is_empty() {
             continue;
         }
@@ -521,7 +532,7 @@ fn lens_cmd(source: &LensSource) -> Result<&str, Finding> {
 ///
 /// 2 つ目は lens の scope を片付けた結果（record に書く周だけ `Some`）・3 つ目は lens の claude の消費の 6 値（lens が
 /// rc 0 で終わり判定 object が運んだ周だけ `Some`＝gate の lens と同じ読み [`lens_usage`]）。
-fn decide(entry: &Review<'_>, contract: &Path) -> (Finding, Option<confine::Released>, Option<Usage>) {
+fn decide(entry: &Review<'_>, contract: &Path, items: usize) -> (Finding, Option<confine::Released>, Option<Usage>) {
     let cmd = match lens_cmd(entry.lens) {
         Ok(found) => found,
         Err(finding) => return (finding, None, None),
@@ -555,11 +566,11 @@ fn decide(entry: &Review<'_>, contract: &Path) -> (Finding, Option<confine::Rele
         .ok()
         .filter(|out| out.status.success())
         .and_then(|out| lens_usage(&String::from_utf8_lossy(&out.stdout)));
-    (lens_outcome(waited, &confinement), scope, usage)
+    (lens_outcome(waited, &confinement, items), scope, usage)
 }
 
 /// 終わった lens の出力から判定を読む（箱の中の死 → rc → 最後の JSON 行の順・gate の lens と同じ極性）。
-fn lens_outcome(waited: std::io::Result<std::process::Output>, confinement: &confine::Confinement) -> Finding {
+fn lens_outcome(waited: std::io::Result<std::process::Output>, confinement: &confine::Confinement, items: usize) -> Finding {
     let out = match waited {
         Ok(found) => found,
         Err(err) => return Finding::inconclusive(format!("lens の出力を読めない: {err}")),
@@ -572,21 +583,53 @@ fn lens_outcome(waited: std::io::Result<std::process::Output>, confinement: &con
             return Finding::inconclusive(format!("lens が scope の中で死んだ（reason={}）", reason.as_str()));
         }
     }
-    read_outcome(out.status.code(), &text)
+    read_outcome(out.status.code(), &text, items)
 }
 
-/// 終わった lens の rc と stdout から判定を読む（rc → 最後の JSON 行の順・[`lens_outcome`] の後段の 1 本）。
-fn read_outcome(rc: Option<i32>, text: &str) -> Finding {
+/// 終わった lens の rc と stdout から判定を読む（rc → 最後の JSON 行 → done の対応の表の順・[`lens_outcome`] の後段の 1 本）。
+/// `items` は done の項目の数（0 は表を読まない・§64 形 5・lens を撃った周と先撃ちを使い回した周が同じこの 1 本を通る）。
+fn read_outcome(rc: Option<i32>, text: &str, items: usize) -> Finding {
     if rc != Some(0) {
         return Finding::inconclusive(format!("lens が rc {} で終わった", rc.unwrap_or(-1)));
     }
-    parse_lens(text)
+    tip(parse_lens(text), text, items)
+}
+
+/// done の対応の表の倒し（§64 形 4）: JSON が読め verdict が 3 値の周だけ、表の欠けは INCONCLUSIVE・unparsed に、歯の無い項目を
+/// 持つ PASS は FAIL・vacuous-assert に、FAIL / INCONCLUSIVE は at と evidence の末尾に歯の無い項目を足す。他の周は不変。
+fn tip(found: Finding, text: &str, items: usize) -> Finding {
+    let pairs = last_json_object(text).unwrap_or_default();
+    let get = |key: &str| pairs.iter().find(|(name, _)| name == key).map(|(_, value)| value);
+    if items == 0 || get("verdict").and_then(Value::as_str).and_then(Verdict::parse).is_none() {
+        return found;
+    }
+    let evidence = found.evidence.as_str();
+    match (items::holes(get("done"), items), found.verdict) {
+        (Err(reason), verdict) => Finding {
+            verdict: Verdict::Inconclusive,
+            evidence: format!("done の対応の表が欠ける（{reason}）: {evidence}"),
+            kind: Some(FindingKind::Unparsed),
+            at: found.at.clone().filter(|_| verdict != Verdict::Pass),
+        },
+        (Ok(none), _) if none.is_empty() => found,
+        (Ok(none), Verdict::Pass) => Finding {
+            verdict: Verdict::Fail,
+            evidence: format!("歯の無い done の項目 {}（lens の対応の表）: {evidence}", items::listed(&none)),
+            kind: Some(FindingKind::VacuousAssert),
+            at: items::named_at(None, &none),
+        },
+        (Ok(none), _) => Finding {
+            evidence: format!("{evidence}・歯の無い done の項目 {}", items::listed(&none)),
+            at: items::named_at(found.at.as_deref(), &none),
+            ..found
+        },
+    }
 }
 
 /// 先撃ちの lens の判定（設計 dispatcher.md §27 形 aa 2・Reviewed の段と同じ読み手 [`read_outcome`]）: verdict・理由の型
-/// （PASS は `None`）・根拠の 1 行。
+/// （PASS は `None`）・根拠の 1 行。項目の数は持たない（0 を渡す・§64 の限界）。
 pub(in crate::pipe) fn outcome_of(rc: Option<i32>, text: &str) -> (Verdict, Option<FindingKind>, String) {
-    let found = read_outcome(rc, text);
+    let found = read_outcome(rc, text, 0);
     (found.verdict, found.kind, found.evidence)
 }
 
@@ -683,6 +726,7 @@ mod tests {
         requirement_row, requirement_yaml, requirements_text, section_text, split_at, strip_tags, unaddressed, verdict_of,
         write_review, Finding, FindingKind, Found, Judgement, ReviewCheck, Rework, FINDING_KINDS,
     };
+    use super::items::done_items;
     use crate::pipe::closure::Source;
     use crate::pipe::gate::Verdict;
     use crate::pipe::lens_record::LensSource;
@@ -696,6 +740,22 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::create_dir_all(&dir);
         dir
+    }
+
+    /// (a) done の項目の読み: (1) から 1 ずつ増える半角の印が順に現れた所で割り、順の外の印は本文の一部・(10) も 1 つの印・
+    /// (1) を持たない done と全角の括弧・全角の数字は 0 個・(1) の前の字は項目でない。
+    #[test]
+    fn pipe_review_done_items_split_on_the_ascending_ascii_marks_only() {
+        let bodies = done_items;
+        assert_eq!(bodies("(1) 甲 (2) 乙 形 (2) の字 (3) 丙"), ["甲", "乙 形 (2) の字", "丙"], "順の外の (2) は本文");
+        let ten: String = (1..=10).map(|number| format!("({number}) n{number} ")).collect();
+        let found = bodies(&ten);
+        assert_eq!((found.len(), found.last().map(String::as_str)), (10, Some("n10")), "(10) は 10 番目の印");
+        assert_eq!(bodies("(2) a (1) b"), ["b"], "(1) より前の印と字は項目でない");
+        assert_eq!(bodies("前置き (1) a"), ["a"]);
+        for plain in ["d", "（1） e", "(１) f", ""] {
+            assert!(bodies(plain).is_empty(), "{plain}: (1) を持たない done は 0 個");
+        }
     }
 
     /// 節の本文は `## N.` の見出しの次の行から次の `## ` の前まで。fence の中の `## ` と契約表の区間は見出しに

@@ -1897,6 +1897,28 @@ fn pipe_intake_promise_verify_matches_as_a_set_or_is_refused_as_drift() {
     clean(&[&repo, &state]);
 }
 
+/// (h) done の項目の表（設計 contract-source.md §64・行 bs）は Promised の行に求めない: 約束の行 2 つ（done は器が組む番号つきの字）の
+/// 行と、同じ doc の番号つきの done（`(1) 甲 (2) 乙`）の素の行を、key done の無い PASS の偽 lens で審査まで通すと、素の行は items.txt を置いて
+/// INCONCLUSIVE（rc 3）、Promised の行は items.txt を置かず PASS（rc 0）。
+#[test]
+fn pipe_intake_promise_row_is_not_asked_for_the_done_item_table() {
+    let plain = derive_row("q", &[("write-set", "[\"crates/toy/src/tint.rs\"]"), ("done", "\"(1) 甲 (2) 乙\"")]);
+    let promised = format!("{}\n{}", promised_row("p", &[]), two_promises("p"));
+    let (repo, state) = derive_repo(&table_doc(&table_region(&[plain, promised])));
+    let lens = fake_lens(&state.join("lens-ran"), &lens_finding("PASS", None, None));
+    for (id, rc, items) in [("q", RC_INCONCLUSIVE, true), ("p", RC_OK, false)] {
+        let out = run_pipe(&[
+            "intake", "--design", &format!("docs/design/toy.md#{id}"), "--bead", &format!("s2-{id}"),
+            "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+            "--rules", &ceiling_rules(&state), "--lens", &lens,
+        ]);
+        assert_eq!(out.status.code(), Some(i32::from(rc)), "行 {id}: {}", stderr_of(&out));
+        let dir = review_dir(&state, &run_id_of(&out));
+        assert_eq!(dir.join("items.txt").exists(), items, "行 {id} の items.txt: {:?}", dir_names(&dir));
+    }
+    clean(&[&repo, &state]);
+}
+
 // ───── 約束の行の files の既存 .rs と crate:: の型の path 形（設計 contract-source.md §34・行 ai・`s2-07l.528`・接頭辞 `pipe_intake_promise_files_`） ─────
 
 /// 1 つの約束の行だけを持つ Promised の行 `id`（歯は tests の `derive_ok`）。

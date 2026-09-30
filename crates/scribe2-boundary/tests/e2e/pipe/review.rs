@@ -334,6 +334,152 @@ fn pipe_review_kind_missing_or_unknown_or_unreadable_falls_to_unparsed_without_m
     clean(&[&repo, &state]);
 }
 
+// ───── done の項目ごとの歯の対応の表（設計 contract-source.md §64・行 bs・接頭辞 `pipe_review_done_items_`） ─────
+
+/// (c)〜(f) が撃つ同じ done（順の外の印 (2) を 1 つ持つ 3 項目・書き手と読みの数え方が違うと (d)〜(f) が落ちる）。
+const ITEMS_DONE: &str = "(1) 甲を作る (2) 乙を測る 形 (2) の字 (3) 丙を足す";
+
+/// 偽 lens の最終行: [`lens_finding`] に key done を足す（`table` は JSON の値の字面・`None` は key を書かない）。
+fn table_finding(verdict: &str, kind: Option<&str>, at: Option<&str>, table: Option<&str>) -> String {
+    let line = lens_finding(verdict, kind, at);
+    table.map_or_else(|| line.clone(), |value| format!("{},\"done\":{value}}}", line.trim_end_matches('}')))
+}
+
+/// 表が `table`（文字列の値）の PASS の最終行。
+fn table_pass(table: &str) -> String {
+    table_finding("PASS", None, None, Some(&format!("\"{table}\"")))
+}
+
+/// done が `done` の行を受付から審査まで通す（`lens` は偽 lens の全文・`None` は `--lens` 無し）。
+fn done_intake(repo: &Path, state: &Path, bead: &str, done: &str, lens: Option<&str>) -> Output {
+    let path = write_contract(repo, &["done"], &[&format!("done = \"{done}\"")]);
+    let (repo, state_dir, rules) = (repo.display().to_string(), state.display().to_string(), ceiling_rules(state));
+    let mut args: Vec<&str> = vec!["intake", "--design", &path, "--bead", bead, "--repo", &repo, "--state-dir", &state_dir, "--rules", &rules];
+    if let Some(found) = lens {
+        args.extend(["--lens", found]);
+    }
+    run_pipe(&args)
+}
+
+/// 偽 lens が `line` を最終行に書く周の全文（rc 0）。
+fn says(state: &Path, line: &str) -> String {
+    fake_lens(&state.join("lens-ran"), line)
+}
+
+/// 審査の判定の 1 行: `rc|verdict|kind|at|evidence`（無い key は `<無し>`）。
+fn judged(state: &Path, out: &Output) -> String {
+    let id = run_id_of(out);
+    let pairs = review_pairs(state, &id);
+    let field = |key: &str| if review_has(state, &id, key) { value_of(&pairs, key) } else { "<無し>".to_owned() };
+    format!("{}|{}|{}|{}|{}", out.status.code().unwrap_or(-1), field("verdict"), field("kind"), field("at"), field("evidence"))
+}
+
+/// (c) 材料: 順の外の印を持つ 3 項目の行は材料の dir が 5 本（items.txt が増える）で、items.txt が見出し（3 個）・表の形の指示
+/// （`1:<歯>,2:<歯>,3:<歯>`）・項目 3 行をこの順に持つ。番号を持たない done の行は items.txt を置かず、偽 lens が PASS と表 `1:-` を
+/// 返しても PASS のまま（kind も at も無い）。
+#[test]
+fn pipe_review_done_items_material_lists_the_items_and_a_plain_done_places_none() {
+    let (repo, state) = repo_with_state();
+    let out = done_intake(&repo, &state, "s2-ic", ITEMS_DONE, Some(&says(&state, &table_pass("1:a,2:b,3:c"))));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    let (first, dir) = (run_id_of(&out), review_dir(&state, &run_id_of(&out)));
+    assert_eq!(dir_names(&dir), ["base.txt", "contract.toml", "design.txt", "items.txt", "requirements.txt"], "items.txt が 1 本増える");
+    stop_run_ok(&state, &first);
+    let text = fs::read_to_string(dir.join("items.txt")).unwrap_or_default();
+    let lines: Vec<&str> = text.lines().collect();
+    assert!(lines.first().is_some_and(|head| head.starts_with("## done の項目（3 個")), "見出しの行: {text}");
+    assert!(lines.iter().any(|line| line.contains("1:<歯>,2:<歯>,3:<歯>")), "表の形の指示: {text}");
+    let at = |want: &str| lines.iter().position(|line| *line == want);
+    let found = [at("(1) 甲を作る"), at("(2) 乙を測る 形 (2) の字"), at("(3) 丙を足す")];
+    assert!(found.iter().all(Option::is_some) && found.windows(2).all(|pair| pair.first() < pair.get(1)), "項目 3 行をこの順に: {text}");
+    assert_eq!(lines.len(), found.last().copied().flatten().map_or(0, |last| last + 1), "項目の行が末尾: {text}");
+    let plain = done_intake(&repo, &state, "s2-ip", "d-plain", Some(&says(&state, &table_pass("1:-"))));
+    assert_eq!(judged(&state, &plain), "0|PASS|<無し>|<無し>|fake", "番号を持たない行は表を読まない: {}", stderr_of(&plain));
+    assert_eq!(dir_names(&review_dir(&state, &run_id_of(&plain))), ["base.txt", "contract.toml", "design.txt", "requirements.txt"]);
+    clean(&[&repo, &state]);
+}
+
+/// (d) PASS の倒し: 歯の無い項目（`-`）を持つ揃った表の PASS は FAIL・vacuous-assert（at は `-` の番号の `done(n)` の列・evidence は
+/// 歯の無い項目と lens の evidence・rc 1・detail は倒した後の値）。空白と末尾の `,` を持つ揃った表の PASS は PASS のまま。
+#[test]
+fn pipe_review_done_items_pass_with_a_toothless_item_falls_to_vacuous_assert() {
+    let (repo, state) = repo_with_state();
+    let out = done_intake(&repo, &state, "s2-id1", ITEMS_DONE, Some(&says(&state, &table_pass("1:pipe_x_,2:-,3:-"))));
+    assert_eq!(
+        judged(&state, &out),
+        "1|FAIL|vacuous-assert|done(2),done(3)|歯の無い done の項目 (2)(3)（lens の対応の表）: fake",
+        "{}",
+        stderr_of(&out)
+    );
+    assert_eq!(reviewed_detail(&state, &run_id_of(&out)), "verdict:FAIL kind:vacuous-assert");
+    let clean_table = done_intake(&repo, &state, "s2-id2", ITEMS_DONE, Some(&says(&state, &table_pass("1:a, 2:b ,3:c,"))));
+    assert_eq!(judged(&state, &clean_table), "0|PASS|<無し>|<無し>|fake", "空白と末尾の , を剥がして揃う: {}", stderr_of(&clean_table));
+    assert_eq!(reviewed_detail(&state, &run_id_of(&clean_table)), "verdict:PASS");
+    clean(&[&repo, &state]);
+}
+
+/// (e) FAIL と INCONCLUSIVE への足し: verdict と kind と rc は lens の値のまま、at の末尾に lens の at に無い `done(n)` だけを番号の順に
+/// 足し（重ねない）、evidence の末尾に歯の無い項目の全部を足す。`-` の無い表は at も evidence も lens の値のまま。
+#[test]
+fn pipe_review_done_items_fail_and_inconclusive_gain_the_toothless_items_without_repeating() {
+    let (repo, state) = repo_with_state();
+    let fail = table_finding("FAIL", Some("literal-mismatch"), Some("§2,done(2)"), Some("\"1:-,2:-,3:t\""));
+    let out = done_intake(&repo, &state, "s2-ie1", ITEMS_DONE, Some(&says(&state, &fail)));
+    assert_eq!(judged(&state, &out), "1|FAIL|literal-mismatch|§2,done(2),done(1)|fake・歯の無い done の項目 (1)(2)", "{}", stderr_of(&out));
+    assert_eq!(reviewed_detail(&state, &run_id_of(&out)), "verdict:FAIL kind:literal-mismatch");
+    let open = table_finding("INCONCLUSIVE", Some("other"), None, Some("\"1:t,2:t,3:-\""));
+    let out = done_intake(&repo, &state, "s2-ie2", ITEMS_DONE, Some(&says(&state, &open)));
+    assert_eq!(judged(&state, &out), "3|INCONCLUSIVE|other|done(3)|fake・歯の無い done の項目 (3)", "{}", stderr_of(&out));
+    let full = table_finding("FAIL", Some("literal-mismatch"), Some(LENS_AT), Some("\"1:a,2:b,3:c\""));
+    let out = done_intake(&repo, &state, "s2-ie3", ITEMS_DONE, Some(&says(&state, &full)));
+    assert_eq!(judged(&state, &out), format!("1|FAIL|literal-mismatch|{LENS_AT}|fake"), "`-` の無い表は不変: {}", stderr_of(&out));
+    clean(&[&repo, &state]);
+}
+
+/// (f) 表の欠け: 揃わない 7 形の PASS は INCONCLUSIVE・unparsed・at 無しで evidence の頭に理由、欠けた FAIL は at を lens の値のまま
+/// 残す。器が作る INCONCLUSIVE の 4 形（rc 7・JSON 無し・verdict が 3 値の外・`--lens` 無し）は表を読まない（rc 7 の周の stdout は `-` を
+/// 持つ揃った表の PASS・MAYBE の周も `-` を持つ揃った表を持つ＝外しを飛ばす実装は rc 7 を FAIL に・MAYBE に歯の無い項目を足す）。
+#[test]
+fn pipe_review_done_items_missing_table_falls_to_unparsed_and_vessel_inconclusives_skip_the_table() {
+    let (repo, state) = repo_with_state();
+    for (index, (value, reason)) in [
+        (None, "key done が無い"),
+        (Some("\"1:a,3:b\""), "無い番号 (2)"),
+        (Some("\"1:a,2:b,3:c,4:d\""), "余る番号 (4)"),
+        (Some("\"1:a,1:b,2:c,3:d\""), "重なる番号 (1)"),
+        (Some("\"1:a,2:,3:c\""), "無い番号 (2)・形の合わない項目 1 件"),
+        (Some("\"1:a,x:b,2:c,3:d\""), "形の合わない項目 1 件"),
+        (Some("7"), "key done が文字列でない"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let line = table_finding("PASS", None, None, value);
+        let out = done_intake(&repo, &state, &format!("s2-if{index}"), ITEMS_DONE, Some(&says(&state, &line)));
+        let want = format!("3|INCONCLUSIVE|unparsed|<無し>|done の対応の表が欠ける（{reason}）: fake");
+        assert_eq!(judged(&state, &out), want, "{reason}: {}", stderr_of(&out));
+    }
+    let lost = table_finding("FAIL", Some("literal-mismatch"), Some("§2"), None);
+    let out = done_intake(&repo, &state, "s2-ifa", ITEMS_DONE, Some(&says(&state, &lost)));
+    let want = "3|INCONCLUSIVE|unparsed|§2|done の対応の表が欠ける（key done が無い）: fake";
+    assert_eq!(judged(&state, &out), want, "欠けた FAIL は at を残す: {}", stderr_of(&out));
+    let row = table_pass("1:-,2:t,3:t");
+    let cases = [
+        ("s2-ifr", format!("cat >/dev/null; echo '{row}'; exit 7"), "lens が rc 7 で終わった"),
+        ("s2-ifj", says(&state, "not-json"), "lens の出力に JSON 行が無い"),
+        ("s2-ifm", says(&state, &table_finding("MAYBE", Some("other"), None, Some("\"1:-,2:t,3:t\""))), "lens の verdict が 3 値でない"),
+    ];
+    for (bead, lens, reason) in cases {
+        let out = done_intake(&repo, &state, bead, ITEMS_DONE, Some(&lens));
+        assert_eq!(judged(&state, &out), format!("3|INCONCLUSIVE|unparsed|<無し>|{reason}"), "{bead}: {}", stderr_of(&out));
+    }
+    let out = done_intake(&repo, &state, "s2-ifn", ITEMS_DONE, None);
+    let text = judged(&state, &out);
+    assert!(text.starts_with("3|INCONCLUSIVE|unparsed|<無し>|") && text.contains("--lens"), "{text}");
+    assert!(!text.contains("done の対応の表") && !text.contains("歯の無い"), "--lens 無しは表を求めない: {text}");
+    clean(&[&repo, &state]);
+}
+
 /// (b') 設計 pointer の契約は base の設計 doc からその行の `section` の節の本文を、要件面（`.html` の `id=`）から `req` の
 /// 各 id の本文（tag 無し）を材料に写す。無い id はその旨を行に明示する（§4「順序」: 生成 (b) の前でも穴の出所は行の pointer）。
 #[test]
@@ -1150,7 +1296,16 @@ fn reuse_pass() -> String {
 
 /// 行 a（`+docs/g.md`）と a を blocks で待つ行 b（`docs/g.md`）の置き場（A と B を hold する＝列は起こさない）。
 fn reuse_place() -> Prelens {
-    let rows = [prelens_row("a", r#"["+docs/g.md"]"#, &[]), prelens_row("b", r#"["docs/g.md"]"#, &[])];
+    reuse_place_with(None)
+}
+
+/// [`reuse_place`] の行 b の done を `done_b` にした置き場（`None` は既定の done）。
+fn reuse_place_with(done_b: Option<&str>) -> Prelens {
+    let row_b = match done_b {
+        Some(text) => row_fields("b", &["write-set", "done"], &[r#"write-set = ["docs/g.md"]"#, &format!("done = \"{text}\"")]),
+        None => prelens_row("b", r#"["docs/g.md"]"#, &[]),
+    };
+    let rows = [prelens_row("a", r#"["+docs/g.md"]"#, &[]), row_b];
     let (repo, state) = prelens_repo(&design_doc_rows(&rows), &[]);
     let bd = prelens_ledger(&state, &[prelens_issue(PRELENS_A, "open", "a", &[]), prelens_issue(PRELENS_B, "open", "b", &[PRELENS_A])]);
     prelens_hold(&state, &[PRELENS_A, PRELENS_B]);
@@ -1165,12 +1320,17 @@ fn reuse_fire(place: &Prelens, lens: &str) {
 }
 
 /// A を Gated PASS にし（A の木が G に 2 行を書く）、B へ `body` を撃つ偽 lens で先撃ちする。(置き場, A の便, 偽 lens) を返す。
+fn reuse_gated(body: &str) -> (Prelens, String, String) {
+    reuse_gated_with(body, None)
+}
+
+/// [`reuse_gated`] の行 b の done を `done_b` にした形。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
-fn reuse_gated(body: &str) -> (Prelens, String, String) {
-    let place = reuse_place();
+fn reuse_gated_with(body: &str, done_b: Option<&str>) -> (Prelens, String, String) {
+    let place = reuse_place_with(done_b);
     let id = intake_bead(&place.repo, &place.state, &format!("{DESIGN_FILE}#a"), PRELENS_A);
     let runner = "printf 'one\\ntwo\\n' > docs/g.md && git add -A && git commit -q -m runner";
     let spawned = spawn_with(&place.repo, &place.state, &id, runner);
@@ -1232,6 +1392,20 @@ fn pipe_review_reuse_same_material_and_lens_copies_the_verdict_without_firing() 
     assert_eq!(prelens_count(&place.state), 1, "審査は偽 lens を撃たない: {detail}");
     assert_eq!(detail, "verdict:PASS prelens:reused", "先撃ちの判定を写し末尾に語");
     assert_eq!(costs, 0, "使い回した審査は消費の event を書かない");
+    prelens_clean(&place, &[]);
+}
+
+/// (g) 行 b の done が `(1) 甲 (2) 乙` で、先撃ちの偽 lens が PASS と表 `1:-,2:t` を返した周の審査は、偽 lens を撃たず（回数 1）使い回した
+/// 判定を倒しの 1 本に通し、detail が `verdict:FAIL kind:vacuous-assert prelens:reused`・review.json の at が `done(1)`。
+#[test]
+fn pipe_review_done_items_reused_prelens_verdict_goes_through_the_same_fall() {
+    let (place, id, lens) = reuse_gated_with(&format!("echo '{}'", table_pass("1:-,2:t")), Some("(1) 甲 (2) 乙"));
+    reuse_land(&place, Some(&id), None, &lens);
+    let (detail, _) = reuse_review(&place, &lens);
+    assert_eq!(prelens_count(&place.state), 1, "審査は偽 lens を撃たない: {detail}");
+    assert_eq!(detail, "verdict:FAIL kind:vacuous-assert prelens:reused");
+    let reviewed = run_dirs(&place.state).into_iter().find(|run| *run != id && review_has(&place.state, run, "verdict")).unwrap_or_default();
+    assert_eq!(value_of(&review_pairs(&place.state, &reviewed), "at"), "done(1)", "倒しの at");
     prelens_clean(&place, &[]);
 }
 
