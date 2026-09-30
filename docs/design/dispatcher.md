@@ -987,6 +987,7 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
     - 約束 4 の待ちは同じ loop の同じ位置に置き、床の待ちの候補は床の理由のまま残す。`candidates.rs` は変えない。
   - alarm の語の組み立て（`crates/scribe2/src/seat/tick/signal.rs` の `idle_alarm`）: 並列の実測の Facts（`crates/scribe2/src/pipe/dispatch/facts.rs`）の値から、idle・precheck・floor の順に語を並べる。floor の語は Facts の floor の欄から来る。
     - 約束 7 の `unreflected` は Facts に件数の欄を足して precheck の後・floor の前に並べる。`seat/tick.rs` は変えない。
+    - Facts の全欄の literal は、facts.rs の外では `crates/scribe2/src/hook/utterance.rs` の歯の区間に 1 か所在る（差し込みの行の作り手の歯）。欄を足すとここが compile できないので、この file を write-set に置き、literal に新しい欄を足す（便 s2-07l.738.37.5-20260930T161720Z の問い）。
   - 便 s2-07l.738.37.5-20260930T152314Z の契約の審査が、この 3 つの材料が無く write-set の外の落ちを測れないと INCONCLUSIVE にした。
 - 約束:
   1. **母集団**: 列の 1 周が読んだ台帳の中の、status が closed で label intake:question を持ち、metadata の effect が document の問い。
@@ -1764,7 +1765,7 @@ title = "未反映の裁定を列の周ごとに置き場の file に書き（0 
 req = ["FR84", "FR68", "FR27"]
 section = "38"
 depends = ["ak", "aj"]
-write-set = ["crates/scribe2/src/seat/ledger.rs", "crates/scribe2/src/hook/graph_guard.rs", "crates/scribe2/src/pipe/dispatch/precheck.rs", "crates/scribe2/src/ledger/form.rs", "crates/scribe2/src/pipe/dispatch.rs", "+crates/scribe2/src/pipe/dispatch/unreflected.rs", "crates/scribe2/src/pipe/dispatch/facts.rs", "crates/scribe2/src/ledger/citation.rs", "crates/scribe2/src/seat/tick/signal.rs", "crates/scribe2-boundary/src/main.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "crates/scribe2-boundary/tests/e2e/seat/tick.rs"]
+write-set = ["crates/scribe2/src/seat/ledger.rs", "crates/scribe2/src/hook/graph_guard.rs", "crates/scribe2/src/pipe/dispatch/precheck.rs", "crates/scribe2/src/ledger/form.rs", "crates/scribe2/src/pipe/dispatch.rs", "+crates/scribe2/src/pipe/dispatch/unreflected.rs", "crates/scribe2/src/pipe/dispatch/facts.rs", "crates/scribe2/src/hook/utterance.rs", "crates/scribe2/src/ledger/citation.rs", "crates/scribe2/src/seat/tick/signal.rs", "crates/scribe2-boundary/src/main.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "crates/scribe2-boundary/tests/e2e/seat/tick.rs"]
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_unreflected_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_alarm_unreflected_", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_dispatch_wait_reasons_render_the_name_and_the_value", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_floor_wait_", "cargo run -q -p scribe2-boundary --bin scribe2 -- contracts check --repo ."]
 size = "M"
 growth = ["crates/scribe2/src/pipe/dispatch/unreflected.rs:230", "crates/scribe2/src/pipe/dispatch.rs:25", "crates/scribe2/src/pipe/dispatch/facts.rs:8", "crates/scribe2/src/seat/tick/signal.rs:5", "crates/scribe2/src/seat/ledger.rs:3", "crates/scribe2/src/hook/graph_guard.rs:1", "crates/scribe2-boundary/src/main.rs:1"]
