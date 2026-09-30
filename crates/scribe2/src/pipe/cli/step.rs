@@ -15,7 +15,7 @@ use crate::pipe::follow::Runner;
 use crate::pipe::gate::{Gate, Limits};
 use crate::pipe::land::detection::Detect;
 use crate::pipe::git_line;
-use crate::pipe::land::{Land, PushTip, Retire, MAIN_REF};
+use crate::pipe::land::{landed_squash_of, Land, PushTip, Retire, MAIN_REF};
 use crate::pipe::lens_record::{self, LensSource};
 use crate::pipe::ratelimit::Pool;
 use crate::pipe::review::{review, Review};
@@ -56,6 +56,10 @@ fn terminal_input<'a>(args: &'a [String], manifest: &Manifest) -> Result<(u64, u
 /// 照合の側は anchor の main の今の先端で選ぶ（設計 contract-source.md §58・行 bm）: 着地した sha が先端なら
 /// [`PushTip::Tip`]、先端でなければ先端の sha つきの [`PushTip::Behind`]（祖先かは終端が測る・§53）。main を
 /// 読めない周は先端の側に倒さず、何も書かずに断る。
+///
+/// 記録の sha が先端と違う周は、先端の祖先から本文に `run: <run id>` の行を持つ squash を 1 回探し直し
+/// （設計 §65・anchor の main を揃えて着地の commit の sha が変わった便）、見つけた sha を着地の sha として側を選ぶ。
+/// 見つからない周は記録の sha のまま今の分岐へ渡す（fail-closed）。
 fn terminal_only(args: &[String], id: &str, manifest: &Manifest, policy: LockPolicy) -> Outcome {
     let resolved = match resolve(args, id, &[Stage::Landed], &Extra::Nothing) {
         Ok(found) => found,
@@ -96,6 +100,11 @@ fn terminal_only(args: &[String], id: &str, manifest: &Manifest, policy: LockPol
         rules: None,
     };
     // 撃ち直しの push が押すのは anchor の main そのもの＝押した先端は main の今の先端（設計 contract-source.md §58）。
+    let sha = if head == sha {
+        sha
+    } else {
+        landed_squash_of(&resolved.repo, &head, id).unwrap_or(sha)
+    };
     let tip = if head == sha { PushTip::Tip } else { PushTip::Behind(&head) };
     let terminal = super::land::terminal(&entry, &sha, tip);
     Outcome {

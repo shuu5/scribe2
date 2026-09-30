@@ -795,7 +795,8 @@ fn stale_rows_stop(entry: &Land<'_>, worktree: &Path, base: &str, main: &str) ->
 /// regex に読ませない・母集団は `main` の祖先）。`--grep` は行の部分一致なので、当たった commit の本文に
 /// **trailer と字面が等しい行**が在ることを確かめてから返す（別の便の id が接頭辞で重なる周を自分と読まない）。
 /// 読めない周・無い周はどちらも `None`（呼び手は従来どおり `rebase-empty` へ倒す＝在ると読み替えない）。
-fn landed_squash_of(repo: &Path, main: &str, run: &str) -> Option<String> {
+/// 呼び手は `rebase_onto` と、終端だけの撃ち直しが記録の sha の違う周に着地の commit を探し直す口（設計 §65）。
+pub(in crate::pipe) fn landed_squash_of(repo: &Path, main: &str, run: &str) -> Option<String> {
     let trailer = format!("{RUN_TRAILER}{run}");
     let grep = format!("--grep={trailer}");
     let found = git_line(repo, &["log", main, "-n", "1", "--fixed-strings", &grep, "--format=%H"])?;

@@ -495,6 +495,87 @@ fn pipe_replay_tip_unreadable_main_refuses_without_events() {
     clean(&[&repo, &state]);
 }
 
+/// 撃ち直しの写しの fixture（設計 §65）: 着地した commit の親の上に別の便の commit を積み、その上に着地した commit の木と
+/// `body` で写しの commit を作り、写しの上に 1 commit を置く。偽 remote へは別の ref で押す（main はまだ動かさない・force の
+/// push は使わない）。返すのは（写しの sha・写しの上の commit の sha）。
+fn relocated(repo: &Path, landed: &str, other: &str, body: &str) -> (String, String) {
+    let tree = format!("{landed}^{{tree}}");
+    let copy = git(repo, &["commit-tree", &tree, "-p", other, "-m", body]);
+    let top = git(repo, &["commit-tree", &tree, "-p", &copy, "-m", "top"]);
+    git(repo, &["push", "-q", "fake", &format!("{top}:refs/heads/relocated-{top}")]);
+    (copy, top)
+}
+
+/// (§65 形 1〜3) 1 本の fn の撃ち直し 2 周: main を、着地した commit の写し（本文の run の行だけ別の字）の上の commit へ
+/// 付け替えた周は見つからず CI も台帳も撃たない（rc 1・`ci:unmeasurable`）。本文を字のまま写した写しの上の commit へ付け替えた周は
+/// 写しを着地の commit と読み、先端の CI で照合して `tip=` つきの reason で close する。base は 2 周目も記録の sha で測る＝RED。
+#[test]
+fn pipe_replay_relocate_finds_the_copy_by_run_line_and_checks_the_tip() {
+    let (repo, state) = repo_with_state();
+    let (tools, id, flags, landed) = replay_fixture(&repo, &state);
+    let body = git(&repo, &["log", "-n", "1", "--format=%B", &landed]);
+    let tree = format!("{landed}^{{tree}}");
+    let other = git(&repo, &["commit-tree", &tree, "-p", &format!("{landed}^"), "-m", "another-run"]);
+    let altered = body.replace(&format!("run: {id}"), &format!("run: {id}-x"));
+    assert_ne!(altered, body, "前提: 本文に run の行が在る: {body}");
+    let (_, top_x) = relocated(&repo, &landed, &other, &altered);
+    point_main(&repo, &tools, &top_x);
+    let calls = tools.ci_call_count();
+    let off = replay(&repo, &state, &id, &flags);
+    assert_eq!(off.status.code(), Some(1), "run の行が字面で合わない周は close しない: {}", stderr_of(&off));
+    assert_eq!(stdout_of(&off).trim(), format!("run={id} terminal=ci:unmeasurable"), "終端の 1 行");
+    assert_eq!(tools.ci_call_count(), calls, "偽 CI は撃たれない");
+    assert!(!tools.bd_log.exists(), "偽 bd は撃たれない");
+    let (copy, top) = relocated(&repo, &landed, &other, &body);
+    assert_ne!(copy, landed, "前提: 写しは着地した commit と別の sha");
+    point_main(&repo, &tools, &top);
+    let own = replay(&repo, &state, &id, &flags);
+    assert_eq!(own.status.code(), Some(i32::from(RC_OK)), "写しを見つけた周は close する: {}", stderr_of(&own));
+    assert_eq!(stdout_of(&own).trim(), format!("run={id} terminal=closed"), "終端の 1 行");
+    let ci_argv = fs::read_to_string(&tools.ci_log).expect("偽 CI が撃たれた");
+    let words: Vec<&str> = ci_argv.lines().collect();
+    let hit = |sha: &String| words.contains(&sha.as_str());
+    assert_eq!([hit(&top), hit(&landed), hit(&copy)], [true, false, false], "CI の argv は先端の sha だけ: {words:?}");
+    let argv = fs::read_to_string(&tools.bd_log).expect("2 周目で台帳が閉じられた");
+    let reason = format!("landed {copy} ci=success tip={top}");
+    assert_eq!(argv.lines().nth(3), Some(reason.as_str()), "理由は写しの sha と先端の sha を名指す: {argv}");
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), top, "main は器が動かさない");
+    assert_eq!(git(&tools.remote, &["rev-parse", "refs/heads/main"]), top, "偽 remote の main は先端のまま");
+    let tail: Vec<String> = landed_details(&state, &id).into_iter().skip(1).collect();
+    let push = "terminal:push:fake";
+    let expected = [push, "terminal:ci:failure", push, "terminal:ci:unmeasurable", push, "terminal:ci:success", "terminal:close:ok"];
+    assert_eq!(tail, expected, "Landed の後ろの 7 件");
+    clean(&[&repo, &state]);
+}
+
+/// (§65 形 2) 本文を字のまま写した写しそのものが main の先端の撃ち直しは、写しの側（`PushTip::Tip`）を渡し、写しの sha の
+/// CI で照合して `tip=` の無い reason で close する。base は記録の sha が先端の祖先でないので close しない＝RED。
+#[test]
+fn pipe_replay_relocate_copy_at_the_tip_closes_without_tip() {
+    let (repo, state) = repo_with_state();
+    let (tools, id, flags, landed) = replay_fixture(&repo, &state);
+    let body = git(&repo, &["log", "-n", "1", "--format=%B", &landed]);
+    let tree = format!("{landed}^{{tree}}");
+    let other = git(&repo, &["commit-tree", &tree, "-p", &format!("{landed}^"), "-m", "another-run"]);
+    let (copy, top) = relocated(&repo, &landed, &other, &body);
+    git(&repo, &["push", "-q", "fake", &format!("{copy}:refs/heads/relocated-{copy}")]);
+    assert_ne!(top, copy, "前提: 写しの上の commit は別");
+    point_main(&repo, &tools, &copy);
+    let out = replay(&repo, &state, &id, &flags);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "写しが先端の周は close する: {}", stderr_of(&out));
+    let ci_argv = fs::read_to_string(&tools.ci_log).expect("偽 CI が撃たれた");
+    let words: Vec<&str> = ci_argv.lines().collect();
+    assert!(words.contains(&copy.as_str()), "CI の argv は写しの sha: {words:?}");
+    assert!(!words.contains(&landed.as_str()), "着地した sha では照合しない: {words:?}");
+    let argv = fs::read_to_string(&tools.bd_log).expect("台帳が閉じられた");
+    let reason = format!("landed {copy} ci=success");
+    assert_eq!(argv.lines().nth(3), Some(reason.as_str()), "reason は tip= を持たない: {argv}");
+    let tail: Vec<String> = landed_details(&state, &id).into_iter().skip(1).collect();
+    let push = "terminal:push:fake";
+    assert_eq!(tail, [push, "terminal:ci:failure", push, "terminal:ci:success", "terminal:close:ok"], "Landed の後ろの 5 件");
+    clean(&[&repo, &state]);
+}
+
 /// (§5 手順 4) record の `generation` は **binary の build 元 commit**（`--version` の括弧の中身と同じ 1 本）で、
 /// 同じ行の `sha`（着地した commit）とは**別の値**である。
 ///
