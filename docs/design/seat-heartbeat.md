@@ -31,7 +31,7 @@
   4. **黙りの門** `stamp-recent`: 最終行の `ts` から `seat.tick_stale_s` 未満なら送らない（席は最近まで動いていた＝黙っていない）。境界は未満・時計は `state.jsonl` と同じ UTC 秒。
   5. **上限の判定** `stopped`: 段の候補の待ち（形 2）が `seat.pointer_backoff_max_s` を超える段は送らない（判定行 `pointer=stopped`）。
   6. **床** `wait`: 記録の `sent_at` から段の候補の待ちが経っていない周は送らない（`pointer=wait:<残り秒>`）。記録が無い周は床を通る（初段）。
-  7. **口座の門** `account-pressed`: 形 4。
+  7. **口座の門** `account-pressed`: 形 4。登録 row の口座が墓標の席（打刻の前の読み・停止の記録の門の後の `account-dead`・起こす前の群の判定）は [account-lifecycle.md](./account-lifecycle.md) §38 形 7〜10（ADR-0098）。
   8. **pane と入力欄の門** `pane-missing` / `input-busy` / `input-unknown` / `input-own-queued`: pane を取れない周は注入しない。`pass_input`（`own` は `last_own_payload`）を通し、Foreign は `input-busy`・prompt 行を特定できなければ `input-unknown`・自席の文が Enter 1 回の後も残れば `input-own-queued`。
   9. **記録** `record-unwritable`: 形 2 の記録を一時 file → rename で書く。書けない周は 1 key も送らない（fail-closed・ADR-0058）。
   10. **注入**: `deliver_within`（窓は rules 行 `pipe.stop_grace_ms`＝dispatcher の通知と同じ行・行を増やさない）。送達の結果（消費 / queue / 断り / 未確認）は判定行に載せ、**落ちても送ったと数える**（記録は残す・次の段で再送・best-effort）。
