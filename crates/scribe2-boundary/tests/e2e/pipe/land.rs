@@ -3598,3 +3598,127 @@ fn pipe_land_ruling_hold_held_run_does_not_hold_up_the_turn() {
     assert!(show_line(&repo, &state, &id_c).contains("stage=Gated"), "3 本目は Gated のまま");
     clean(&[&repo, &state]);
 }
+
+/// 置き場の unreflected の file（設計 dispatcher.md §38）を `rows`（bead → 裁定 id）の表で書く。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn unreflected_table(state: &Path, rows: &[(&str, &str)]) {
+    let table: Vec<String> = rows.iter().map(|(bead, id)| format!("\"{bead}\":\"{id}\"")).collect();
+    let ids: Vec<String> = rows.iter().map(|(_, id)| format!("\"{id}\"")).collect();
+    let body = format!(
+        "{{\"schema\":1,\"sha\":\"{}\",\"population\":[{ids}],\"unreflected\":[{ids}],\"table\":{{{table}}}}}\n",
+        "0".repeat(40),
+        ids = ids.join(","),
+        table = table.join(",")
+    );
+    fs::create_dir_all(state.join("pipe")).expect("pipe dir を作れる");
+    fs::write(state.join("pipe").join("unreflected"), body).expect("置き場の file を書ける");
+}
+
+/// FR84 の留めの周の断言: rc 1・main は動かず・段は Gated のまま・`Failed` も `Landed` も無く・留めの記帳は `want` の 1 件だけで解除は無い。
+fn assert_unreflected_held(repo: &Path, state: &Path, id: &str, out: &Output, want: &str) {
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{want}: 留めは rc 1: {} / {}", stdout_of(out), stderr_of(out));
+    assert_eq!(hold_details(state, id, "held:"), [format!("held:FR84:{want}")], "{want}: 留めの記帳は 1 件");
+    assert!(show_line(repo, state, id).contains("stage=Gated"), "{want}: 段は Gated のまま");
+    assert_eq!(stage_count(state, id, Stage::Failed) + stage_count(state, id, Stage::Landed), 0, "{want}: Failed も Landed も無い");
+    assert!(hold_details(state, id, "released:").is_empty(), "{want}: 解除の記帳は無い");
+}
+
+/// 表に bead が在る便は Gated に留まり main は動かない。detail は表がその便の bead に結ぶ id（別の bead の組を取り違えない）。上限
+/// （`pipe.follow_retries` = 2）を越えて 4 周撃っても Failed は無く `held:FR84:` は 1 件。表から消えた周に `released:FR84` を 1 件記帳して
+/// 着地し、`released:FR83` は書かない。
+#[test]
+fn pipe_land_unreflected_holds_the_bead_in_the_table_and_releases_when_it_leaves() {
+    let (repo, state, id) = hold_run(&appended("", "src/lib.rs", None, "// ok"));
+    let (bd, _) = hold_bd(&state, Some(&hold_ledger(&[])));
+    let rules = hold_rules(&state, 1, None);
+    unreflected_table(&state, &[("s2-9zz", "s2-q.8:20260930T0000Z-1"), ("s2-2e5", "s2-q.7:20260930T0000Z-1")]);
+    let before = git(&repo, &["rev-parse", "refs/heads/main"]);
+    for round in 1..=4 {
+        let out = hold_land(&repo, &state, &id, (&rules, &bd), &[]);
+        assert_unreflected_held(&repo, &state, &id, &out, "s2-q.7:20260930T0000Z-1");
+        assert_eq!(hold_details(&state, &id, "held:").len(), 1, "{round} 周目も 1 件");
+    }
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), before, "main は動かない");
+    unreflected_table(&state, &[("s2-9zz", "s2-q.8:20260930T0000Z-1")]);
+    let out = hold_land(&repo, &state, &id, (&rules, &bd), &[]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "表から消えた周は着地する: {} / {}", stdout_of(&out), stderr_of(&out));
+    assert!(show_line(&repo, &state, &id).contains("stage=Landed"), "段は Landed");
+    assert_eq!(hold_details(&state, &id, "released:"), ["released:FR84"], "解除の記帳は FR84 の 1 件");
+    assert_eq!(hold_details(&state, &id, "held:").len(), 1, "留めの記帳は増えない");
+    clean(&[&repo, &state]);
+}
+
+/// 置き場の file が無い周は留めず着地する。在るのに読めない周だけ `held:FR84:unmeasured` で留まる。
+#[test]
+fn pipe_land_unreflected_holds_only_an_unreadable_file_as_unmeasured() {
+    let (repo, state, id) = hold_run(&appended("", "src/lib.rs", None, "// ok"));
+    let (bd, _) = hold_bd(&state, Some(&hold_ledger(&[])));
+    let rules = hold_rules(&state, 1, None);
+    fs::create_dir_all(state.join("pipe")).unwrap_or_else(|err| panic!("pipe dir を作れる: {err}"));
+    fs::write(state.join("pipe").join("unreflected"), "not json\n").unwrap_or_else(|err| panic!("壊れた file を書ける: {err}"));
+    for _ in 0..2 {
+        let out = hold_land(&repo, &state, &id, (&rules, &bd), &[]);
+        assert_unreflected_held(&repo, &state, &id, &out, "unmeasured");
+    }
+    fs::remove_file(state.join("pipe").join("unreflected")).unwrap_or_else(|err| panic!("file を消せる: {err}"));
+    let out = hold_land(&repo, &state, &id, (&rules, &bd), &[]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "file の無い周は着地する: {} / {}", stdout_of(&out), stderr_of(&out));
+    assert_eq!(hold_details(&state, &id, "released:"), ["released:FR84"], "読めない留めの解除も FR84");
+    clean(&[&repo, &state]);
+
+    let (repo, state, id) = hold_run(&appended("", "src/lib.rs", None, "// ok"));
+    let (bd, _) = hold_bd(&state, Some(&hold_ledger(&[])));
+    let out = hold_land(&repo, &state, &id, (&hold_rules(&state, 1, None), &bd), &[]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "file の無い置き場の便は着地する: {} / {}", stdout_of(&out), stderr_of(&out));
+    assert!(hold_details(&state, &id, "held:").is_empty() && hold_details(&state, &id, "released:").is_empty(), "記帳は無い");
+    clean(&[&repo, &state]);
+}
+
+/// `ruling-check = true` の宣言で FR83 の判定が当たらない便（解ける問い id を足す）を表に bead を置いたまま 3 周撃つと、event は
+/// `held:FR84:<id>` の 1 件だけで `released:FR83` は 0 件。表から消した周に `released:FR84` が 1 件で `released:FR83` は 0 件のまま。
+#[test]
+fn pipe_land_unreflected_never_writes_released_fr83_for_a_fr84_hold() {
+    let (repo, state, id) = hold_run(&appended(HOLD_ON, "src/lib.rs", None, "// s2-q.1:20260930T0000Z-1"));
+    let (bd, _) = hold_bd(&state, Some(&hold_ledger(&[])));
+    let rules = hold_rules(&state, 1, None);
+    unreflected_table(&state, &[("s2-2e5", "s2-q.7:20260930T0000Z-1")]);
+    for _ in 0..3 {
+        let out = hold_land(&repo, &state, &id, (&rules, &bd), &[]);
+        assert_unreflected_held(&repo, &state, &id, &out, "s2-q.7:20260930T0000Z-1");
+    }
+    assert!(hold_details(&state, &id, "released:FR83").is_empty(), "released:FR83 は 0 件");
+    unreflected_table(&state, &[]);
+    let out = hold_land(&repo, &state, &id, (&rules, &bd), &[]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "表から消えた周は着地する: {} / {}", stdout_of(&out), stderr_of(&out));
+    assert_eq!(hold_details(&state, &id, "released:"), ["released:FR84"], "解除は released:FR84 の 1 件だけ");
+    assert_eq!(hold_details(&state, &id, "held:").len(), 1, "留めの記帳は増えない");
+    clean(&[&repo, &state]);
+}
+
+/// 候補の木の先頭は、表に bead が在る後続（FR83 には当たらない）を積まず、表に無い後続は積む: 3 本の列の 2 本目だけが表に在る周に、
+/// 先頭の land は 1 本目と 3 本目を積んで着地させ（`train=2`）、2 本目は Gated のまま main に載らず event も増えない。
+#[test]
+fn pipe_land_unreflected_train_front_leaves_the_table_follower_behind() {
+    let (repo, state, [id_a, id_b, id_c]) = hold_three(3);
+    let (bd, _) = hold_bd(&state, Some(&hold_ledger(&[])));
+    let rules = hold_rules(&state, 1, Some(3));
+    unreflected_table(&state, &[("s2-3ax", "s2-q.7:20260930T0000Z-1")]);
+    let base = git(&repo, &["rev-parse", "refs/heads/main"]);
+    let trail_before = trail(&state, &id_b).len();
+    let out = hold_land(&repo, &state, &id_a, (&rules, &bd), &[]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "先頭の land は rc 0: {} / {}", stdout_of(&out), stderr_of(&out));
+    assert!(stdout_of(&out).contains(&format!("run={id_a} train=2")), "積んだのは 2 本: {}", stdout_of(&out));
+    let (sha_a, sha_c) = (landed_sha_of(&state, &id_a), landed_sha_of(&state, &id_c));
+    assert_eq!(git(&repo, &["rev-parse", &format!("{sha_a}^")]), base, "a は base の上");
+    assert_eq!(git(&repo, &["rev-parse", &format!("{sha_c}^")]), sha_a, "c は a の上");
+    let main = git(&repo, &["rev-parse", "refs/heads/main"]);
+    assert_eq!(main, sha_c, "main の先端は c");
+    let moved = git(&repo, &["diff", "--name-only", &base, &main]);
+    assert!(moved.lines().any(|path| path == "src/c.rs") && moved.lines().all(|path| path != "src/b.rs"), "c だけが載り b は載らない: {moved}");
+    assert!(show_line(&repo, &state, &id_b).contains("stage=Gated"), "2 本目は Gated のまま");
+    assert_eq!(trail(&state, &id_b).len(), trail_before, "2 本目の event は増えない: {:?}", trail(&state, &id_b));
+    clean(&[&repo, &state]);
+}

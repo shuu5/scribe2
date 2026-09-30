@@ -18,7 +18,7 @@
 use super::contract::Contract;
 use super::declaration::Effective;
 use super::gate::{is_unreadable, run_checks, step_record, Check, Checks, Step};
-use super::land::{hold_names, land_train, Car, Land, WorktreeCheck, MAIN_REF};
+use super::land::{hold_of, land_train, Car, Land, WorktreeCheck, MAIN_REF};
 use super::queue::{train_now, Order};
 use super::{base_of_run, contract_path, current, git_line, git_ok, repo_of_run, vessel_path, worktree_path, worktrees_dir};
 use crate::cli_outcome::Outcome;
@@ -108,8 +108,8 @@ pub(super) fn train(entry: &Land<'_>, worktree: &Path, order: Order) -> Train {
         return dissolved(entry, 1, Why::Read);
     };
     let mut riders = vec![head];
-    // 留めに当たる後続は積まない（設計 §62 約束 6・記帳はその便の自走に任せる）。自分の land と同じ 1 本の判定を通る。
-    riders.extend(behind.iter().filter_map(|run| rider_of(entry, run)).filter(|rider| hold_names(&land_of(entry, rider), &rider.worktree, &rider.base).is_empty()));
+    // 留めに当たる後続は積まない（設計 §62 約束 6・§63・記帳はその便の自走に任せる）。自分の land と同じ 1 本の判定を通る。
+    riders.extend(behind.iter().filter_map(|run| rider_of(entry, run)).filter(|rider| hold_of(&land_of(entry, rider), &rider.worktree, &rider.base).is_none()));
     if riders.len() < 2 {
         return Train::Solo;
     }

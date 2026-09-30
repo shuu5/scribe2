@@ -65,6 +65,7 @@ use super::retire::verdict_field;
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_OK, RC_REFUSED};
 use crate::fleet::store::{self, append_line, LockPolicy};
 use crate::fleet::{EventKind, Stage};
+use super::dispatch::unreflected::{self, Table};
 use crate::rules::manifest::Manifest;
 use std::path::{Path, PathBuf};
 
@@ -432,12 +433,11 @@ fn recorded_base(entry: &Land<'_>) -> Result<String, Outcome> {
 /// 留めの記帳の detail の頭（FR83・列の読みは FR の語に依らず `held:` だけを見る・[`super::queue`]）。
 const HELD_FR83: &str = "held:FR83:";
 
-/// 留めを解いた記帳の detail（FR83）。
-const RELEASED_FR83: &str = "released:FR83";
+/// 未反映の裁定の留めの detail の頭（FR84・設計 §63）。
+const HELD_FR84: &str = "held:FR84:";
 
-/// 留めの名指し（空は通す・設計 §62）。自分の land の判定と候補の木の先頭の後続の掛け（[`super::train`]）が同じ 1 本を通る。
-/// 台帳の待ち上限は `--rules`（無ければ埋め込み）の manifest から、台帳を読む周だけ読む。
-pub(in crate::pipe) fn hold_names(entry: &Land<'_>, worktree: &Path, base: &str) -> Vec<String> {
+/// 留めの名指し（FR83・空は通す・設計 §62）。台帳の待ち上限は `--rules`（無ければ埋め込み）の manifest から、台帳を読む周だけ読む。
+fn hold_names(entry: &Land<'_>, worktree: &Path, base: &str) -> Vec<String> {
     let timeout = || {
         let manifest = entry.rules.map_or_else(Manifest::embedded, Manifest::load).ok()?;
         crate::seat::ledger::timeout_of(&manifest)
@@ -445,9 +445,30 @@ pub(in crate::pipe) fn hold_names(entry: &Land<'_>, worktree: &Path, base: &str)
     ruling_hold::judge(&ruling_hold::Input { repo: entry.repo, worktree, base, bd: entry.bd, timeout: &timeout })
 }
 
-/// 留めの周（設計 §62 約束 4・5）。当たる周は `RunStage Gated held:FR83:<名指し>`（直前の留めが同じ detail の周は記帳し直さない）を
+/// 留めの detail（当たらない周は `None`）。FR83 の判定に当たらない周は、置き場の関わる契約の表に便の bead が在るか（FR84・設計 §63）で
+/// 掛け、file が無い周は留めず、在るのに読めない周だけ `held:FR84:unmeasured`。自分の land の判定と候補の木の先頭の後続の掛け
+/// （[`super::train`]）が同じ 1 本を通る。
+pub(in crate::pipe) fn hold_of(entry: &Land<'_>, worktree: &Path, base: &str) -> Option<String> {
+    let names = hold_names(entry, worktree, base);
+    if !names.is_empty() {
+        return Some(format!("{HELD_FR83}{}", names.join(",")));
+    }
+    match unreflected::involved(entry.state_dir) {
+        Table::Absent => None,
+        Table::Unreadable => Some(format!("{HELD_FR84}unmeasured")),
+        Table::Rows(rows) => rows.get(entry.bead).map(|id| format!("{HELD_FR84}{id}")),
+    }
+}
+
+/// 最後の留め（`held:<FR の語>:…`）の FR の語に揃えた解除の detail（`released:FR83` か `released:FR84`）。
+fn released_of(held: &str) -> String {
+    let word = held.strip_prefix("held:").and_then(|rest| rest.split(':').next()).unwrap_or("FR83");
+    format!("released:{word}")
+}
+
+/// 留めの周（設計 §62 約束 4・5・§63）。当たる周は `RunStage Gated held:<FR の語>:<名指し>`（直前の留めが同じ detail の周は記帳し直さない）を
 /// 書き、verdict が PASS でない周と同じ rc の断りで返る（Failed も追随の数えも無い）。当たらない周は最後の留めに解除が無ければ
-/// `released:FR83` を 1 件書いて `None`（進む）。着地済みの便（列の先頭が積んだ便の 2 度目の land）は判定しない。
+/// その留めの語の `released:<FR の語>` を 1 件書いて `None`（進む）。着地済みの便（列の先頭が積んだ便の 2 度目の land）は判定しない。
 fn hold(entry: &Land<'_>, worktree: &Path, base: &str) -> Option<Outcome> {
     let stage = super::current(entry.state_dir).ok().and_then(|state| state.runs.get(entry.run).map(|found| found.stage));
     if stage == Some(Stage::Landed) {
@@ -456,14 +477,12 @@ fn hold(entry: &Land<'_>, worktree: &Path, base: &str) -> Option<Outcome> {
     let Some(last) = last_hold(entry.state_dir, entry.run) else {
         return Some(broken(format!("run {} の留めの記帳を読めない（置き場）", entry.run)));
     };
-    let names = hold_names(entry, worktree, base);
-    if names.is_empty() {
+    let Some(detail) = hold_of(entry, worktree, base) else {
         return match last {
-            Last::Held(_) => note_hold(entry, RELEASED_FR83.to_owned()).err(),
+            Last::Held(held) => note_hold(entry, released_of(&held)).err(),
             Last::Never | Last::Released => None,
         };
-    }
-    let detail = format!("{HELD_FR83}{}", names.join(","));
+    };
     if last != Last::Held(detail.clone()) {
         if let Err(stopped) = note_hold(entry, detail.clone()) {
             return Some(stopped);
