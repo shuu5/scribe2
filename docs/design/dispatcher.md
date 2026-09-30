@@ -980,6 +980,7 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
   - 列は台帳を 1 周に 1 回読み、候補ごとに理由を決める。問いの label の bead は列の入力から外れる（行 af）。
   - 待ちの理由の型を名指す file は行 w の閉包に入る。Issue を名指す file は `contract-source.md 行 bo` の閉包に入る（どちらも touches・verified）。
   - 今の main の実測（verified・main 828e85fb）: Issue は created_at と closed_at も持つ（metadata は持たない・型の literal は 4 か所のまま）。main の先端の sha の読みは床の検査（`crates/scribe2/src/pipe/dispatch/floor.rs`）の、pipe の git_line で land の MAIN_REF を rev-parse する 1 行。実測の file（`crates/scribe2/src/pipe/dispatch/facts.rs`）は重なりの値を読むので、待ちの理由の型と Turn を既に名指す。
+    - 行 a1 の着地の後（main eb65f29e）も、`Issue` の literal は同じ 4 か所（`crates/scribe2/src/pipe/dispatch/precheck.rs`・`crates/scribe2/src/ledger/form.rs`・`crates/scribe2/src/seat/ledger.rs`・`crates/scribe2/src/hook/graph_guard.rs`・どれも write-set に在る）。`crates/scribe2/src/ledger/phase.rs` は `Issue` を引数と参照で読むだけで literal を持たない（fixture は JSON の字から `issues_of` で作る・行 a1 の done (9)）ので、`effect` を足しても compile は落ちず write-set に入れない。便 s2-07l.738.37.5-20260930T170635Z の契約の審査が、この file の要約が cap で落ちて測れないと INCONCLUSIVE にした。
 - 材料（本行の審査が読む code の事実・main c264dbf3・verified）:
   - 行 ak の数え（`crates/scribe2/src/ledger/citation.rs`）: 追跡された file の字面から引用を拾う私有の関数 `population` は、`git grep -I` を HEAD に固定して撃ち、rev の引数を持たない。拾った（path・引用）を返す pub の関数も無い（pub は `scan`・`verdict`・`before_line`・`doctor_line` ほか）。doctor の数え（`measure`）は ruling-check が true の repo だけで撃つ。
     - 本行は `population` に rev の引数を足し（今の呼び手は HEAD を渡す）、rev を受けて（path・引用）の集合を返す `pub(crate)` の関数 1 本を足す。約束 2 の数えはこの関数を main の先端の sha で撃ち、ruling-check の有無に依らない。`citation.rs` は write-set に在る。

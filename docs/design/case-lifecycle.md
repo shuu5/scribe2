@@ -32,6 +32,7 @@
   - 兄弟の歯の file（名が `_tests.rs` で終わる新しい file）は使わない。親の test 区間に足す `#[cfg(test)]` 付きの `mod` 宣言は、flip-check が宣言の file を本体の木へ同梱する形（test 区間の差の行が全部 `mod x;`）を `#[cfg(test)]` の行で外れる。兄弟の file は宣言ごと base に写らず、単独で撃たれて `green-on-base` になる（行 b1 の便が 2026-09-30 に gate の flip-check で落ちた）。
   - 既存の file の歯が 1 本在れば通るのは、新しい `+` の src file の中の歯（`not-flippable` の型）だけである。e2e の file と base に在る file の test 区間は、file ごとに単独に撃たれ、base で緑の歯が 1 本でも在れば落ちる。だから歯を置く file ごとに、その file の歯だけで base で RED になる理由（新しい関数・欄・型を呼ぶので base で compile できない、または期待が base の振る舞いと違う）が立つ。否定だけを測る歯（「進まない」「付かない」）は、同じ歯の中で肯定と組にする。本文だけ直して base で緑のままの既存の歯には retroactive の札を付ける。
   - 行ごとの置き場と、file ごとの base で RED の理由は、各 § の歯の項が名指す。
+  - 歯の名に `contract_` の字を含めない。[contract-source.md](./contract-source.md) の行 a の verify の filter `contract_` は名の途中にも当たり、当たった歯の file が行 a の write-set の外と数えられて `contracts check` が findings 1 になる（行 b1 の便の歯 `phase_main_row_lands_through_the_contract_trailer` が 2026-10-01 に gate の共通の verify で落ちた）。契約は `row_` か `pointer_` の語で書く。
 
 ## 2. 局面の語と優先の順（閉じた 38 語・宣言順＝優先の順）
 
