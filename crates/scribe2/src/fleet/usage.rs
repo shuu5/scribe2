@@ -68,6 +68,40 @@ const NO_DECLARATION: &str = "fleet usage: 宣言なし（[[account]] が 0 行�
 /// credential の置き場（`<state_dir>/accounts/<label>/` の下）の file 名。
 const CREDENTIAL_FILE: &str = ".credentials.json";
 
+/// 口座の credential の 3 値（doctor と `account ls` の `credential=` の語・閉じた enum・設計 account-lifecycle.md §38 形 1）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Credential {
+    /// file が在り、墓標と読めない（読めない・形が違う・期限切れ・token が無いもここ）。
+    Present,
+    /// file が無い（file でない dir なども）。
+    Missing,
+    /// 墓標（[`UnmeasuredReason::Tombstone`]）と読めた。
+    Dead,
+}
+
+impl Credential {
+    /// 行の字面。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Present => "present",
+            Self::Missing => "missing",
+            Self::Dead => "dead",
+        }
+    }
+}
+
+/// 口座の dir `dir` の credential を判じる（墓標の判じは [`token_of`] の 1 本・計測を起こさず file に書かず token を返さない）。
+pub fn credential_of(dir: &Path) -> Credential {
+    let path = dir.join(CREDENTIAL_FILE);
+    if !std::fs::metadata(&path).is_ok_and(|found| found.is_file()) {
+        return Credential::Missing;
+    }
+    match read_credential(&path).and_then(|text| token_of(&text, now_ms())) {
+        Err(UnmeasuredReason::Tombstone) => Credential::Dead,
+        Ok(_) | Err(_) => Credential::Present,
+    }
+}
+
 /// refresh の起動で止め方の猶予を持つ rules 行（`pipe stop` と共用・新しい行を足さない）。
 const ROW_GRACE: &str = "pipe.stop_grace_ms";
 
@@ -736,6 +770,7 @@ mod tests {
         body_of, client_args, config_of, endpoint, grace_of, group_target, normalize_resets, render, signal_group, table,
         table_row, token_of, windows_of, TableRow, UsageError, ROW_GRACE,
     };
+    use super::{credential_of, Credential};
     use crate::pipe::fixture::{exited, Call, Stub};
     use crate::cli_outcome::{RC_BROKEN, RC_REFUSED};
     use crate::fleet::json_tree::parse;
@@ -794,6 +829,49 @@ mod tests {
         for (text, want) in cases {
             assert_eq!(token_of(&text, NOW_MS), Err(want), "{text}");
         }
+    }
+
+    /// `credential_of` の真理表（tmp の口座 dir・設計 account-lifecycle.md §38 (a)）。
+    #[test]
+    fn credential_verdict_reads_the_file_by_the_tombstone_of_token_of() {
+        let root = std::env::temp_dir().join(format!("credential-verdict-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let dir_of = |name: &str| {
+            let dir = root.join(name);
+            std::fs::create_dir_all(&dir).expect("口座 dir を作れる");
+            dir
+        };
+        let put = |name: &str, body: &str| {
+            let dir = dir_of(name);
+            std::fs::write(dir.join(".credentials.json"), body).expect("credential を書ける");
+            dir
+        };
+        let future = format!(r#"{{"claudeAiOauth":{{"accessToken":"t","expiresAt":{FUTURE_MS}}}}}"#);
+        let no_token = format!(r#"{{"claudeAiOauth":{{"expiresAt":{FUTURE_MS}}}}}"#);
+        let as_dir = dir_of("as-dir");
+        std::fs::create_dir_all(as_dir.join(".credentials.json")).expect("credential の名の dir を作れる");
+        let cases = [
+            ("no-file", dir_of("no-file"), Credential::Missing),
+            ("as-dir", as_dir, Credential::Missing),
+            ("tombstone", put("tombstone", r#"{"claudeAiOauth":{"accessToken":"t","expiresAt":0}}"#), Credential::Dead),
+            ("tombstone-no-token", put("tombstone-no-token", r#"{"claudeAiOauth":{"expiresAt":0}}"#), Credential::Dead),
+            ("expired", put("expired", r#"{"claudeAiOauth":{"accessToken":"t","expiresAt":1000}}"#), Credential::Present),
+            ("future", put("future", &future), Credential::Present),
+            ("no-token", put("no-token", &no_token), Credential::Present),
+            ("empty-object", put("empty-object", "{}"), Credential::Present),
+            ("broken", put("broken", "{壊れ"), Credential::Present),
+            ("string-zero", put("string-zero", r#"{"claudeAiOauth":{"accessToken":"t","expiresAt":"0"}}"#), Credential::Present),
+        ];
+        for (name, dir, want) in cases {
+            assert_eq!(credential_of(&dir), want, "{name}");
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn credential_verdict_words_are_in_declaration_order() {
+        let words = [Credential::Present, Credential::Missing, Credential::Dead].map(Credential::as_str);
+        assert_eq!(words, ["present", "missing", "dead"]);
     }
 
     #[test]

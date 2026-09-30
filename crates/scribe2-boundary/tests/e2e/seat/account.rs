@@ -262,6 +262,61 @@ fn doctor_accounts_writes_nothing_into_the_account_dirs() {
     fs::remove_dir_all(&place.dir).ok();
 }
 
+/// fixture の token の字（口座の label と重ならない字にする＝出力に現れないことの assert が空虚にならない）。
+const TOMBSTONE_TOKEN: &str = "zq9-secret-token-7f3";
+
+/// 口座 4 つ（墓標・期限切れ・`{}`・file 無し）の置き場で doctor と `account ls` の行の `credential=` が
+/// `dead` / `present` / `present` / `missing`・他の欄は今の字面（設計 account-lifecycle.md §38 (c)）。
+#[test]
+fn account_tombstone_doctor_and_ls_say_dead_only_for_the_tombstone() {
+    let place = role_doctor_place();
+    let tomb = format!("{{\"claudeAiOauth\":{{\"accessToken\":\"{TOMBSTONE_TOKEN}\",\"expiresAt\":0}}}}");
+    let expired = format!("{{\"claudeAiOauth\":{{\"accessToken\":\"{TOMBSTONE_TOKEN}\",\"expiresAt\":1000}}}}");
+    account_fixture(&place, "t-tomb", &[(".credentials.json", &tomb)]);
+    account_fixture(&place, "t-expired", &[(".credentials.json", &expired)]);
+    account_fixture(&place, "t-empty", &[(".credentials.json", "{}")]);
+    account_fixture(&place, "t-none", &[]);
+    let rules = account_rules(&["t-tomb", "t-expired", "t-empty", "t-none"]);
+    let lines = doctor_rows(&place, &rules);
+    fs::write(place.state.join(vessel::rules::HOST_MANIFEST), &rules).expect("host の面を書ける");
+    let state = place.state.display().to_string();
+    let listed = run_account(&["ls", "--state-dir", &state]);
+    assert_eq!(rc_of(&listed), i32::from(RC_OK), "stderr={}", stderr_of(&listed));
+    let ls_lines: Vec<String> = stdout_of(&listed).lines().map(str::to_owned).collect();
+    for (label, word) in [("t-tomb", "dead"), ("t-expired", "present"), ("t-empty", "present"), ("t-none", "missing")] {
+        let want = format!("account={label} dir=present credential={word} config=missing agentview=unreadable trust=unreadable retired=no");
+        assert_eq!(account_line(&lines, label), want, "doctor: {lines:?}");
+        let ls_line = account_line(&ls_lines, label);
+        assert!(ls_line.starts_with(&want), "ls: {ls_lines:?}");
+    }
+    fs::remove_dir_all(&place.dir).ok();
+}
+
+/// doctor と `account ls` を撃った後も credential file の bytes が不変で、fixture の token の字は stdout と stderr のどちらにも
+/// 0 回（設計 account-lifecycle.md §38 (d)）。
+#[test]
+fn account_tombstone_reading_leaves_the_file_and_prints_no_token() {
+    let place = role_doctor_place();
+    let tomb = format!("{{\"claudeAiOauth\":{{\"accessToken\":\"{TOMBSTONE_TOKEN}\",\"expiresAt\":0}}}}");
+    let dir = account_fixture(&place, "t-tomb", &[(".credentials.json", &tomb)]);
+    let rules = account_rules(&["t-tomb"]);
+    let file = dir.join(".credentials.json");
+    let before = fs::read(&file).expect("credential を読める");
+    let state = place.state.display().to_string();
+    let doctor = role_doctor_rules(&place, &rules);
+    let doctor_line = account_line(&stdout_of(&doctor).lines().map(str::to_owned).collect::<Vec<_>>(), "t-tomb");
+    assert!(doctor_line.contains("credential=dead"), "doctor が墓標を読んだ周で測る: {doctor_line}");
+    fs::write(place.state.join(vessel::rules::HOST_MANIFEST), &rules).expect("host の面を書ける");
+    let listed = run_account(&["ls", "--state-dir", &state]);
+    assert_eq!(fs::read(&file).expect("credential を読める"), before, "bytes が不変");
+    for (name, out) in [("doctor", &doctor), ("ls", &listed)] {
+        assert_eq!(rc_of(out), i32::from(RC_OK), "{name}: stderr={}", stderr_of(out));
+        assert_eq!(stdout_of(out).matches(TOMBSTONE_TOKEN).count(), 0, "{name} stdout");
+        assert_eq!(stderr_of(out).matches(TOMBSTONE_TOKEN).count(), 0, "{name} stderr");
+    }
+    fs::remove_dir_all(&place.dir).ok();
+}
+
 // ─── doctor の host-guard の 1 行（vessel-hook.md §12 行 d 形 5 / 6・ADR-0056 §2・接頭辞 `host_guard_doctor_`） ───
 
 /// 種類の行を持たない manifest の host-guard の行の頭（`wired=` より前）。

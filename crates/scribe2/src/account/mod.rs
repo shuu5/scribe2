@@ -4,7 +4,8 @@
 //! doctor の口座行（[`doctor_lines`]・`s2-07l.233`）と `account ls` の行は**同じ 1 関数**（[`render_account`]）で作る
 //! （一覧を 2 面に書かない・C10.2）。**env も HOME も読まない**（C2.2）: 置き場は `--state-dir` だけで、口座の dir を
 //! **走査しない**（宣言が真実・C3）。退役は可逆な move と event 1 件で、削除の口を持たない（N1 / N1.2）。前提違反は file も
-//! event も書かずに typed に断る（[`AccountError`]・C11.3）。credential には触れない（読まない・書かない・login を待たない）。
+//! event も書かずに typed に断る（[`AccountError`]・C11.3）。credential は登録の口では読まず書かず login を待たない・一覧は
+//! [`credential_of`] の 1 本で墓標かだけを読む（ADR-0098・§38）。
 //! doctor の導入先の行（口座の行の後ろ・consumer-sync.md §4）は [`consumers`]。host-guard の配線の verb `wire` と doctor の
 //! host-guard の 1 行（vessel-hook.md §12）は [`wire`]。
 
@@ -14,6 +15,7 @@ pub mod wire;
 
 use crate::fleet::json_tree::{self, Tree};
 use crate::fleet::store::{self, LockPolicy};
+use crate::fleet::usage::{credential_of, Credential};
 use crate::fleet::{
     account_dir, cli as fleet_cli, effective_accounts, replay, Allowance, AllowanceLatest, Event, EventKind, State,
     WindowKind, SCHEMA,
@@ -228,8 +230,8 @@ impl Retired {
 pub struct AccountProbe {
     /// dir か（link を辿って dir）。
     pub dir: Presence,
-    /// 直下の `.credentials.json` が file か（中身は読まない）。
-    pub credential: Presence,
+    /// 直下の `.credentials.json` の判じ（[`credential_of`]・墓標かだけを読み token は持たない）。
+    pub credential: Credential,
     /// 直下の `settings.json` が file か（Claude Code の設定 dir の印）。
     pub config: Presence,
     /// 直下の `settings.json` の `disableAgentView`。
@@ -267,7 +269,7 @@ fn probe_account(dir: &Path, anchors: Option<&BTreeSet<String>>) -> AccountProbe
     };
     AccountProbe {
         dir: Presence::of(fs::metadata(dir).is_ok_and(|found| found.is_dir())),
-        credential: Presence::of(is_file(".credentials.json")),
+        credential: credential_of(dir),
         config: Presence::of(is_file(SETTINGS_FILE)),
         agentview: AgentView::of(flag_at(read_tree(&dir.join(SETTINGS_FILE)).as_ref(), &["disableAgentView"])),
         trust: anchors.map(|found| found.iter().map(trust_of).collect()),

@@ -209,6 +209,7 @@ mod tests {
     use std::path::PathBuf;
     use vessel::account::consumers::{drift_of, render_consumer, Consumer, Head, Source};
     use vessel::account::{render_account, render_host_manifest, AccountProbe, AgentView, Presence, Retired, Trust};
+    use vessel::fleet::usage::Credential;
     use vessel::hook::vessel::digest::PluginRecord;
     use vessel::init::{render_host_template, render_init, Gap, Readiness, Template};
     use vessel::name::PLUGIN_DIR;
@@ -298,7 +299,7 @@ mod tests {
         lines.push(render_init(&Readiness::Gaps(vec![Gap::Declaration, Gap::Session, Gap::Registration]), &template));
         let probe = AccountProbe {
             dir: Presence::Present,
-            credential: Presence::Present,
+            credential: Credential::Present,
             config: Presence::Missing,
             agentview: AgentView::Unreadable,
             trust: Some(vec![("/repo/a".to_owned(), Trust::Accepted), ("/repo/b".to_owned(), Trust::Unreadable)]),
