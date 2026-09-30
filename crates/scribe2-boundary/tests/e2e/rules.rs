@@ -928,22 +928,22 @@ fn rules_cli_get_returns_value() {
     let args = ["get".to_owned(), "R-C4-1".to_owned()];
     let outcome = vessel::rules::cli::dispatch(&args);
     assert_eq!(outcome.rc, RC_OK, "rc: {outcome:?}");
-    assert_eq!(outcome.out, vec!["66000".to_owned()], "値の行（裁定 id user 2026-09-29T00:59Z）");
+    assert_eq!(outcome.out, vec!["74000".to_owned()], "値の行（裁定 id user 2026-09-30T05:26Z）");
 }
 
-/// core の本体の上限の行 `R-C4-1`（設計 rules-manifest.md §19 行 p・user 裁定 2026-09-29T00:59Z・A2）が埋め込み manifest に
-/// 値 66000 / kind `CoreLines` / enabled / 裁定 id / 裁定日で在り、整数の読み手が 66000 を返す（base は値 60000 と前の裁定 ＝ RED）。
+/// core の本体の上限の行 `R-C4-1`（設計 rules-manifest.md §20 行 q・user 裁定 2026-09-30T05:26Z・A2）が埋め込み manifest に
+/// 値 74000 / kind `CoreLines` / enabled / 裁定 id / 裁定日で在り、整数の読み手が 74000 を返す（base は値 66000 と前の裁定 ＝ RED）。
 #[test]
-fn rules_core_lines_66000_raised_by_ruling() {
+fn rules_core_lines_74000_raised_by_ruling() {
     let manifest = Manifest::embedded().unwrap_or_else(|errors| panic!("埋め込み manifest が拒まれた: {errors:?}"));
     let id = "R-C4-1";
     let row = manifest.get(id).unwrap_or_else(|| panic!("{id} の行が在る"));
     assert_eq!(row.kind, RuleKind::CoreLines, "{id} の kind");
-    assert_eq!(row.value, RuleValue::Int(66_000), "{id} の値（行）");
+    assert_eq!(row.value, RuleValue::Int(74_000), "{id} の値（行）");
     assert!(row.enabled, "{id} は発効している");
-    assert!(row.ruling.starts_with("user 2026-09-29T00:59Z"), "{id} の裁定 id: {}", row.ruling);
-    assert_eq!(row.ruled_at, "2026-09-29", "{id} の裁定日");
-    assert_eq!(int_row(&manifest, id), Ok(66_000), "{id} を整数の読み手で引ける");
+    assert!(row.ruling.starts_with("user 2026-09-30T05:26Z"), "{id} の裁定 id: {}", row.ruling);
+    assert_eq!(row.ruled_at, "2026-09-30", "{id} の裁定日");
+    assert_eq!(int_row(&manifest, id), Ok(74_000), "{id} を整数の読み手で引ける");
 }
 
 #[test]
