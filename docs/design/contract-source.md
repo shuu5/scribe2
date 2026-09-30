@@ -1065,6 +1065,30 @@ verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pr_r
 size = "L"
 growth = ["crates/scribe2/src/pipe/retire.rs:200", "crates/scribe2/src/pipe/cli/step.rs:25", "crates/scribe2/src/pipe/cli/args.rs:2", "crates/scribe2/src/pipe/cli.rs:2", "crates/scribe2/src/pipe/land/finish.rs:1", "crates/scribe2/src/pipe/land.rs:1", "crates/scribe2-boundary/tests/e2e/pipe/land/retire.rs:340"]
 done = "(1) 段が Landed でその RunDone の detail が pr の便だけが経路 (3) を通り、他の対象は今のまま畳むだけで forge に問わず台帳に書かない (2) worktree が無いか clean でない周は worktree-unready（git と forge と台帳に問わない） (3) --fold-only（値なし・ALLOWED_RETIRE に足す）の周は照合も close もせず可逆な move で畳み契約を開いたまま残す (4) --bd の台帳を 1 回読み（待ち上限は rules 行 seat.ledger_timeout_s）、便の bead が closed で close_reason の頭の語が landed なら照合も close もせずに畳み、読めない周と待ち上限の行が無い周は unmeasured (5) terminal_facts が読めないか remote が無い周は unmeasured（forge に問わない） (6) pr_merge を branch_name の名で撃ち、not-merged は not-merged、unmeasured は unmeasured (7) git ls-remote <remote> refs/heads/main で先端を読み git fetch --no-tags --no-write-fetch-head <remote> refs/heads/main で object を取り、落ちた周と先端の object が無い周は unmeasured、merge の object が無い周と merge-base --is-ancestor が rc 1 の周は not-ancestor、他の rc は unmeasured (8) ci_read を先端と宣言の ci-cmd で 1 回だけ撃ち（待たない）、failure と pending は ci-not-success、unmeasured は unmeasured (9) 理由を §59 の 1 関数で組んで（merge の commit id・CI が success・先端が merge と違う周だけ tip=<先端>）close し、落ちた周は unwritten で畳まず、通った周は RunDone stage=Landed detail=terminal:close:ok を 1 件記す (10) close の後に retire_worktree で move して detail=retired を 1 件記し（段は Landed のまま）、move が落ちた周は worktree-unready で close は残る (11) 通らない周は stdout 1 行 run=<id> retire=<語>・rc 1・event と台帳の書き 0（close の後の move の失敗だけ形 9 の 1 件が残る）で、語は閉じた 6 語（宣言順 worktree-unready・not-merged・not-ancestor・ci-not-success・unmeasured・unwritten）の enum と const slice、close して畳んだ周の stdout は run=<id> retired=<畳んだ先> close=ok、畳むだけの周は今の run=<id> retired=<畳んだ先> (12) retire_run が manifest を受け（cli.rs の 1 か所）--bd と --fold-only を Retire に運び、usage と help の字面は変わらない (13) e2e の PR の便の既存の 2 本（pipe_retire_moves_pr_landed_worktree_and_keeps_branch・pipe_retire_refuses_unless_landed_and_clean）は retire.rs の中の --fold-only を足した撃ちの helper で撃ち（親 land.rs の retire_once は不変）、期待は変わらない (14) land/finish.rs の close_reason・CloseTail・CLOSE_REASON が pub(in crate::pipe) で land.rs の pub(in crate::pipe) use finish::{…} の列に在り（中身と字面は不変）、retire.rs はこの 1 関数で理由を組む 歯: e2e（land/retire.rs・偽 remote と ci-cmd の偽 CI と PATH の偽 gh と --bd の偽 client の fixture）の pr_retire_closes_then_folds_when_the_merge_is_under_a_green_tip（先端そのものと先端でない 2 周・close 1 回で理由 landed <merge> ci=success と tip=<先端>・retired へ移り branch は残る・Landed の後ろは terminal:close:ok と retired・偽 gh と偽 CI の argv）・pr_retire_refuses_with_one_closed_word_and_writes_nothing（9 つの fixture が閉じた 6 語・rc 1・stdout 1 行・worktree 残る・event と偽の台帳が不変・worktree-unready と remote の無い周は偽 gh 0 回・worktree-unready の撃ち直しが success で close）・pr_retire_fold_only_and_closed_contracts_fold_without_checks（--fold-only が not-merged で畳み close 0 と偽 gh 0・retired/<id> の先置きで close の後の move が落ちて worktree-unready・退けた撃ち直しが close も偽 gh も増やさずに畳む）で、base は PR の便を forge に問わず畳み --fold-only を断るので assert で RED"
+
+[[contract]]
+id = "bq"
+title = "入れ子の source の根を vessel 宣言の任意 key crate-roots（末尾 / の dir の配列・固定の根 crates/ に足すだけ）で宣言し、追随の再 gate の要否と着地後の検出線の面と受付の 1 file と core の上限の余地が、宣言した根の下の crate を crates/ の直下の crate と同じ 1 関数で読む（宣言を読めない周は撃つ側・§62）"
+req = ["FR34", "FR48", "NFR4"]
+section = "62"
+write-set = ["+crates/scribe2/src/pipe/declaration/crate_roots.rs", "crates/scribe2/src/pipe/declaration.rs", "crates/scribe2/src/pipe/declaration/optional_keys.rs", "crates/scribe2/src/pipe/declaration/write_set.rs", "crates/scribe2/src/pipe/land.rs", "crates/scribe2/src/pipe/land/detection.rs", "crates/scribe2/src/pipe/cli/intake/refusal.rs", "crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2-boundary/tests/e2e/pipe/intake.rs", "crates/scribe2-boundary/tests/e2e/pipe/land/rebase.rs", "crates/scribe2-boundary/tests/e2e/pipe/gate/detection.rs"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail declaration_crate_roots_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_intake_crate_roots_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_land_crate_roots_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_landed_detection_crate_roots_", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_detection_scope_needed_is_a_closed_prefix_set"]
+size = "L"
+growth = ["crates/scribe2/src/pipe/declaration/crate_roots.rs:240", "crates/scribe2/src/pipe/declaration.rs:8", "crates/scribe2/src/pipe/declaration/optional_keys.rs:8", "crates/scribe2/src/pipe/declaration/write_set.rs:20", "crates/scribe2/src/pipe/land.rs:16", "crates/scribe2/src/pipe/land/detection.rs:8", "crates/scribe2/src/pipe/cli/intake/refusal.rs:3", "crates/scribe2/src/pipe/cli/intake.rs:2", "crates/scribe2-boundary/tests/e2e/pipe/intake.rs:80", "crates/scribe2-boundary/tests/e2e/pipe/land/rebase.rs:70", "crates/scribe2-boundary/tests/e2e/pipe/gate/detection.rs:50"]
+done = "(1) vessel 宣言の任意 key crate-roots（repo 相対の dir の配列・各項目の末尾は /）を読み、書かない宣言と宣言 file の無い repo は今と同じで schema は 1 のまま (2) 固定の根 crates/ は常に在り key は足すだけで置き換えない (3) 空・末尾 / 無し・絶対 path・home の短縮記号・..・crates/ と重なる・項目どうしで重なる項目は key と行番号を名指す不備 (4) 根の列と path から根・crate の名・残りを返すか無しを返す pure な 1 関数と HEAD の宣言から根を読む口を子 module に置き、親が再輸出する (5) DETECTION_SCOPE の値と detection_needed は変えず、子の HEAD の口の閉じた 3 値と path の列から面に触れるかを返す 1 本を land.rs に足し、regate_skippable（否定）と touches_scope がそれを通る (6) 宣言が在って読めない周は 1 本が触れるを返す（regate_skippable が偽・touches_scope が真） (7) core_of を根の列の形にし、headroom_shortfalls と Caps は変えずに根の列を受ける呼び口を足して親が再輸出し、exclude_cap_shortfall が materials.facts の根で呼ぶ (8) TableFacts に根の列の欄を足して table_facts_named が埋め、歯の区間の字面 1 か所に固定の根の値を足す（retroactive の札） (9) doctor・stdout・event の key は足さない (10) dispatcher の行 ai・ak と並走しない 歯: declaration_crate_roots_ が key の有無と不備 7 形・関数の表・面の表・余地の名指し・HEAD の口の 3 値と読めない周の面を、pipe_intake_crate_roots_ が宣言した根の下の file と core の余地の断りと key の無い repo の通過を、pipe_land_crate_roots_ が宣言した根の下だけの main の動きで再 gate を撃つことと key の無い repo の regate=skipped を、pipe_landed_detection_crate_roots_ が宣言した根の下だけの着地で stub を 1 回呼ぶことと key の無い repo の outside-scope を測る。base は key が未知の key の不備で RED"
+
+[[contract]]
+id = "br"
+title = "閉包と歯の置き場の導出・nextest 行の組み立て・新しい file の親の候補・名の衝突の予想が、行 bq の根の列の 1 関数で入れ子の crate を crates/ の直下の crate と同じに読む — Context と Base に根の列の欄を足し、2 つの CRATES_DIR を消す（§63）"
+req = ["FR48", "FR47"]
+section = "63"
+depends = ["bq"]
+write-set = ["crates/scribe2/src/pipe/closure/derive.rs", "crates/scribe2/src/pipe/closure.rs", "crates/scribe2/src/pipe/table/check/collide.rs", "crates/scribe2/src/pipe/table.rs", "crates/scribe2/src/pipe/table/check.rs", "crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/src/pipe/contract.rs", "crates/scribe2-boundary/tests/e2e/pipe/contracts.rs"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail closure_crate_roots_", "cargo nextest run -p scribe2 --lib --no-tests=fail contracts_collide_crate_roots_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail contract_crate_roots_"]
+size = "M"
+growth = ["crates/scribe2/src/pipe/closure/derive.rs:60", "crates/scribe2/src/pipe/table/check/collide.rs:40", "crates/scribe2/src/pipe/table.rs:3", "crates/scribe2/src/pipe/table/check.rs:12", "crates/scribe2/src/pipe/cli/intake.rs:4", "crates/scribe2/src/pipe/contract.rs:8", "crates/scribe2-boundary/tests/e2e/pipe/contracts.rs:80"]
+done = "(1) Context と Base に根の列の欄を足し、本体の字面は TableFacts の根で埋め、歯の区間の字面（Base 10・Context 7）に固定の根の値を足す（retroactive の札） (2) crate_relative・parent_candidates・target_of・collide.rs の module_path が §62 の 1 関数で path を割り、2 つの CRATES_DIR を消す (3) verify の -p <crate> は宣言したどの根の下の同じ名の crate にも当たる (4) nextest_line と promised_verify が根の列を受け、呼び手が材料の根を渡し、歯の区間の呼び出しは固定の根（retroactive の札） (5) parent_candidates はどの根でも <根><crate>/src の直下に lib.rs と main.rs の候補を足す (6) module_path は宣言した根の下の src/ と tests/ の後ろの段を読む (7) 宣言の無い repo の導出の結果・判定行・findings の字面は不変 (8) 行 bq の着地の後に走る 歯: closure_crate_roots_ が入れ子の歯の置き場・nextest 行の旗・親の候補を宣言の有無の 2 形で、contracts_collide_crate_roots_ が module の段を 2 形で、contract_crate_roots_ が宣言した repo の teeth-outside-write-set の 1 件と宣言の無い repo の 0 件を測る。base は欄と関数の形が無く RED"
+
 <!-- contracts:end -->
 
 
@@ -1848,3 +1872,90 @@ done = "(1) 段が Landed でその RunDone の detail が pr の便だけが経
   - (c) `pr_retire_fold_only_and_closed_contracts_fold_without_checks`: not-merged の fixture に `--fold-only` を付けた撃ちが rc 0・畳む・close 0・偽 gh の呼び出し 0。`retired/<id>` に先に dir を置いた success の fixture の撃ちが rc 1 の `worktree-unready`・close 1 回（偽の台帳が closed・landed）・worktree が元の場所に在る。dir を退けて撃ち直すと rc 0 で畳み、close も偽 gh も増えない。
   - 変異の A/B（判定の順・条件 1 つに歯 1 本）: worktree の確かめを forge の後ろへ移す → (b) の worktree-unready の周で偽 gh が撃たれる。閉じ済みの確かめを外す → (c) の撃ち直しで close が 2 回。祖先の照合を外す → (b) の not-ancestor の周で close する。pending を success に倒す → (b) の空の結果の周で close する。先端の違いを見ずに `tip=` を付けない → (a) の 2 周目が落ちる。close の前に畳む → (b) の unwritten の周で worktree が消える。
   - base で RED の理由: (a)(c) は base の retire が forge に問わず close を撃たず `--fold-only` を未知の flag として断るので assert で RED、(b) は base が PR の便を畳んで rc 0 を返すので RED（機能不在）。書き直す既存の 2 本は `--fold-only` を base が断るので base で赤い。
+
+## 62. 入れ子の source の根を vessel 宣言の任意 key crate-roots で足し、追随の再 gate の要否・着地後の検出線の面・受付の上限の余地が、宣言した根の下の crate を crates/ の直下の crate と同じに読む（契約表の行 bq・FR34・FR48・NFR4）
+
+やさしく言うと: 器は「crate は repo の根の crates/ の直下に在る」と決めてかかって、いくつかの検査の範囲を決めている。根の workspace の member に入れ子の dir の crate を持つ repo（隣の project が持つ形）では、その crate の変更が 3 つの検査から黙って外れる。main がその crate だけで動いた周に、ほかの便の再 gate を省く。着地した便の検出線も撃たない。受付も 1 file 1500 行と core の合計の上限を測らない。repo が「crate の根はここにも在る」と vessel 宣言に書けば、器が同じ規則でその下も測るようにする。
+
+- 何が起きているか（main b028af03・verified）:
+  - 検出線の面は `crates/scribe2/src/pipe/land.rs` 151 行の `DETECTION_SCOPE`（`crates/`・`Cargo.toml`・`Cargo.lock`・`rules/`・`.vessel.toml` の閉じた集合）で、157 行の `detection_needed` と 162 行の `in_face` が repo の根からの相対 path を接頭辞（末尾 `/` の項目）か完全一致で照らす。呼び手は 2 つ。
+    - 追随の再 gate の省き: land.rs 672 行の `regate_skippable`（641 行から呼ぶ）。`<base>..<main>` の path が面に 1 つも触れない周に、前周の PASS を引き継いで lens を撃たない。
+    - 着地後の検出線: `crates/scribe2/src/pipe/land/detection.rs` 166 行の `touches_scope`（136 行から呼ぶ）。触れない周は `outside-scope` の skip record を書いて撃たない。
+  - 受付の上限の余地は `crates/scribe2/src/pipe/declaration/write_set.rs` 256 行の `headroom_shortfalls` が測る。測る file の集合は 294 行の `core_of` が `Some` の file だけで、`core_of` は接頭辞 `crates/` と「crate の名に `/` が無い」を要求する。R-C4-2 の 1 file の上限と R-C4-1 の core の合計の両方が、この集合の外の file を数えない。呼び手は `crates/scribe2/src/pipe/cli/intake/refusal.rs` 125 行の `exclude_cap_shortfall` の 1 つ（128 行で `Caps` を組み、168 行で呼ぶ）。`headroom_shortfalls` の歯の呼び出しは write_set.rs の歯の区間に約 30 か所、`Caps` の struct の字面は 11 か所（本体 1・歯 10）在る。
+  - 入れ子の dir の crate の path（例 nest/crates/toy/src/a.rs）は、上の 2 つの読み手のどちらでも crate の file と読まれない。どちらの判定も失敗を出さず、黙って「面の外」「測る集合の外」に倒れる。
+  - vessel 宣言の任意 key の置き方は `crates/scribe2/src/pipe/declaration/optional_keys.rs` の頭の注（1〜5 行）が決める。key の名と読み手と key の列（13 行の `DECLARED_KEYS`・63 行の `OPTIONAL_KEYS`）の 1 行ずつと外へ渡す口を置き、`Declared`（`crates/scribe2/src/pipe/declaration.rs` 281 行）の欄と `parse` の読みの 1 行（549 行の `Self` の字面）を親へ足す。配列の値は親の 751 行の `list_of` が読む。path の種別の key 3 本（`crates/scribe2/src/pipe/declaration/path_kinds.rs`・ADR-0047）が同じ族の先例で、子 module に key と読み手と値の型を置く。
+  - 受付の材料の `TableFacts`（optional_keys.rs 205 行）は HEAD の宣言から組み（228 行の `table_facts_named` の中の字面 1 か所）、`crates/scribe2/src/pipe/cli/intake.rs` の `Materials` の欄 `facts` として `exclude_cap_shortfall` へ届く。`TableFacts` の struct の字面は本体 1 か所（optional_keys.rs 228 行）と歯 1 か所（intake.rs 1261 行・歯の区間）の 2 か所。
+  - HEAD の宣言の読み手は declaration.rs 365 行の `head_declaration`（宣言 file が無い周は `None`・読めない周は `Some(Err)`）。
+- 形（番号は done と 1:1）:
+  1. **key**: vessel 宣言の任意 key `crate-roots` を 1 つ足す。値は repo 相対の dir の配列で、各項目は末尾が `/`。書かない宣言と宣言 file を持たない repo は今と 1 行も変わらない。schema は 1 のまま。
+  2. **足すだけ**: 固定の根 `crates/` は常に在り、key はそれに足す根を並べる（置き換えない）。宣言で器自身の検査の範囲を狭められないようにするためで、path の種別の key（置き換える）と違う。
+  3. **項目の検査**: 空の項目・末尾が `/` でない項目・絶対 path・home の短縮記号・`..` の段・`crates/` と同じか一方が他方の接頭辞になる項目・項目どうしで一方が他方の接頭辞になる項目は、key と行番号を名指す不備（DeclError）にする。1 つの path が 2 つの根に入ると crate の名が 2 通りに読めるためである。書いた空配列は既存の配列の層が断る。
+  4. **1 つの関数**: 根の列と repo 相対の path から「根・crate の名・crate の中の残り」を返すか、どの根の crate にも入らないなら無しを返す pure な 1 関数を、行 bq の write-set の `+` の file（declaration の子 module・path の種別の子と同じ置き方）に置く。crate の名は根の直後の 1 段で、空でなく `/` を持たない。残りは空でない。根の列の型と関数は親の `declaration.rs` が再輸出し（`path_kinds` と同じ）、行 br の導出の読み手も同じ 1 関数を通る。同じ子に、HEAD の宣言から根の列を読む口を置く。`head_declaration` は親の私有の関数なので子から呼び、結果を閉じた 3 値（宣言した根・固定の根だけ・読めない）で返す（`PathKinds` の `read_at_head` と同じ形）。
+  5. **検出線の面**: `DETECTION_SCOPE` の値と `detection_needed` は変えない（既定の面・既存の歯の母集団）。根の列を受ける読み手を 1 本足し、面は `DETECTION_SCOPE` の照らしと「宣言した根のどれかの crate の中の path」の和にする。`regate_skippable` と `touches_scope` は land.rs の同じ 1 本（形 4 の HEAD の口の閉じた 3 値と path の列から「面に触れるか」を返す）を通る。`regate_skippable` はその否定を返す。
+  6. **読めない周**: 宣言が在って読めない周は、形 5 の 1 本が「触れる」を返す。`regate_skippable` は偽（撃ち直す）、`touches_scope` は真（撃つ）になり、どちらも既存の「diff を読めない周」と同じ fail-closed の極性になる。宣言 file が無い周は固定の根だけ。
+  7. **上限の余地**: `core_of` を根の列を受ける形にし、測る集合を「根のどれかの crate の src の下の file」にする。core の合計は crate ごと（`<根><crate>/src` ごと）で、今の `crates/<crate>/src` ごとの束ね方と同じ。`headroom_shortfalls` の signature と `Caps` は変えない（固定の根で呼ぶ）。根の列を受ける呼び口を 1 本足して親の `declaration.rs` が再輸出し、`exclude_cap_shortfall` はそちらを `materials.facts` の根の列で呼ぶ。約 30 か所の歯の呼び出しと 11 か所の `Caps` の字面を書き直さないためである。
+  8. **受付の材料**: `TableFacts` に根の列の欄を 1 つ足し、`table_facts_named` が宣言から埋める。歯の区間の字面 1 か所（intake.rs 1261 行）には固定の根だけの値を足す（retroactive の札）。
+  9. **外へ出さない**: doctor の行・stdout の字面・event の key は足さない。宣言の key の名 `crate-roots` だけが跨版の面になる。
+  10. **並走しない**: dispatcher.md の行 ai・ak も `declaration.rs` と `optional_keys.rs` を触るので、その 2 行と並走させない（順は台帳の依存で表す）。
+- 触らない: 固定の根 `crates/` と `DETECTION_SCOPE` の値・`Caps` の欄・閉包と歯の導出と名の衝突の予測（行 br）・`cargo xtask check` の core-lines と file-lines（器の repo の門・消費側の repo の門は消費側の xtask が持つ）・rules 行の値。
+- 限界:
+  - 入れ子の workspace の根の manifest（例 nest/Cargo.toml）は根の crate の中の path でないので、検出線の面に入らない。根の workspace の `Cargo.toml` と `Cargo.lock` は今どおり面に入る。
+  - crate の名は dir の名と読む（今の `crates/<crate>` と同じ前提）。package の名が dir の名と違う crate は、今と同じく導出の `-p` を誤る（行 br の限界）。
+- 却下:
+  - Cargo の workspace の members から根を導く案。Cargo の repo にしか効かず、入れ子の表を持つ TOML の新しい読み手も要る。宣言なら言語に依らない。
+  - 根を rules 行にする案。pipeline.md §30 は `DETECTION_SCOPE` を「値でなく閉じた path の集合」として rules 行にしないと決めた。根は閾値でなく repo の形なので、repo が持つ宣言に置く。閉じた集合（`DETECTION_SCOPE` の値）は code のまま変えない。
+  - 宣言の根で固定の根を置き換える案。宣言 1 行で器自身の crate の検査を外せてしまう。
+  - ADR を書く案。path の種別の key（ADR-0047）と同じ族で、宣言の任意 key を 1 つ足すだけ（schema 1 のまま・key の不在は今と同じ・読むのは器の同じ binary だけ）なので、bead の notes に 3 行で残す。
+- 見積: 新しい子 module 約 240（本体約 110・歯約 130）・declaration.rs と optional_keys.rs 各約 8・write_set.rs 約 20・land.rs 約 16・detection.rs 約 8・refusal.rs 約 3。e2e 3 file で約 200。diff は歯込みで約 500 行（L）。
+- 歯（接頭辞は lib が `declaration_crate_roots_`、e2e が `pipe_intake_crate_roots_`・`pipe_land_crate_roots_`・`pipe_landed_detection_crate_roots_`。`grep -rn crate_roots crates/ docs/` は 0 件〔main b028af03・2026-09-30〕。e2e は既存の file に置く）:
+  - lib `declaration_crate_roots_`（行 bq の `+` の file の歯の区間）:
+    - (a) key が無い宣言は固定の根だけ。2 項目の key は固定の根 + 2 つ。形 3 の不備 7 形（空・末尾 `/` 無し・絶対 path・home の短縮記号・`..`・`crates/` と重なる・項目どうしで重なる）がそれぞれ key と行番号を名指して断られる。
+    - (b) 形 4 の関数の表: 宣言した根の下の nest/crates/toy/src/a.rs は根・`toy`・src/a.rs、宣言しない repo では無し、crates/toy/src/a.rs は宣言の有無に依らず今と同じ、根の直下の file（nest/crates/README.md）と crate の名の無い path は無し。
+    - (c) 形 5 の面: 宣言した根の下の path だけの列は真、宣言しない列は偽、`DETECTION_SCOPE` の既存の表は根の列に依らず同じ値。
+    - (d) 形 7 の余地: 宣言した根の下の 1 file が 1 file の上限と core の合計の両方で名指される。宣言しない根の列では名指されない。
+    - (e) 形 4 の HEAD の口が、宣言 file の無い repo で固定の根だけ、key を持つ宣言で宣言した根、壊した宣言で読めないを返す（使い捨ての git repo）。形 5 の 1 本が読めない 3 値の周に、面の外の path だけの列でも「触れる」を返す。
+  - e2e `pipe_intake_crate_roots_`（`crates/scribe2-boundary/tests/e2e/pipe/intake.rs`）: 本体 1000 行の file を nest/crates/toy/src/heavy.rs に持つ base。key で nest/crates/ を宣言した repo では、その file への M が file の余地で断られ、新規 1 本の S が core の余地で断られる（既存の `pipe_intake_core_headroom_` の 2 本と同じ値）。key の無い repo では同じ契約が通る（今の振る舞いの対照）。
+  - e2e `pipe_land_crate_roots_`（`crates/scribe2-boundary/tests/e2e/pipe/land/rebase.rs`）: 宣言した repo で main が nest/crates/toy/src/other.rs だけ動いた追随は、再 gate を撃つ（lens の marker が在り、stdout に `regate=skipped` が無い）。key の無い repo で同じ動きは、今どおり `regate=skipped` で引き継ぐ。
+  - e2e `pipe_landed_detection_crate_roots_`（`crates/scribe2-boundary/tests/e2e/pipe/gate/detection.rs`）: 宣言した repo で着地した diff が nest/crates/toy/src/a.rs だけの便は、検出線の stub を 1 回呼ぶ。key の無い repo の同じ便は、今どおり `outside-scope` の skip record を書く。
+  - 変異の A/B（条件 1 つに歯 1 本）: 固定の根を宣言で置き換える → (a) の key の有る表で crates/toy/src/a.rs が無しになる。項目の重なりの検査を外す → (a) の重なりの 2 形が通る。形 5 の 1 本の読めない周を偽にする → (e) が落ちる。`exclude_cap_shortfall` を固定の根の呼び口のままにする → intake の宣言の周が通る。
+  - base で RED の理由: lib (a)〜(d) は base に子 module が無く該当 0 本（rc 4）。e2e は base が key を「未知の key」の不備で断り、受付・追随・検出の assert で落ちる（機能不在）。対照の 3 形（key の無い repo）は base で緑で、振る舞いが変わらないことの pin である。
+
+## 63. 閉包と歯の置き場の導出・nextest 行の組み立て・名の衝突の予想が、行 bq の根の列の 1 関数で入れ子の crate を crates/ の直下の crate と同じに読む（契約表の行 br・FR48・FR47）
+
+やさしく言うと: 契約表の検査と受付は、verify の行が名指す歯がどの file に在るかを導き、write-set の外の歯を断る。約束の行からは nextest の行と新しい file の親の宣言 file も導く。この導出も「crate は crates/ の直下」と決めてかかるので、入れ子の dir の crate の歯は見つからず、断るべき行が黙って通る。§62（行 bq）で宣言した根の列を、この導出にも同じ 1 関数で渡す。
+
+- 何が起きているか（main b028af03・verified）:
+  - `crates/scribe2/src/pipe/closure.rs` 100 行の `CRATES_DIR`（`crates/`）を `crates/scribe2/src/pipe/closure/derive.rs` が 3 か所で使う。
+    - 318 行の `crate_relative`（300 行の `in_crate` と 305 行の `in_scope` が呼ぶ）: verify の `-p <crate>` から歯の置き場の file を探す（163 行の `teeth_places`・172 行）。
+    - 396 行の `parent_candidates`: `+` の新しい file の親の宣言 file の候補。`crates/<crate>/src` の直下だけ `lib.rs` と `main.rs` を足す。
+    - 565 行の `target_of`: 548 行の `nextest_line` が file の path から `-p <crate>`・`--lib`・`--test <名>` を組む。呼び手は derive.rs 474 行（`promised_inputs` の中）と `crates/scribe2/src/pipe/contract.rs` 479 行の `promised_verify`（482・489 行）。`promised_verify` の呼び手は `crates/scribe2/src/pipe/cli/intake.rs` 476 行。
+  - `crates/scribe2/src/pipe/table/check/collide.rs` 23 行に同じ値の `CRATES_DIR` がもう 1 つ在り、193 行の `module_path` が名の衝突の予想（§54）の段を読む。
+  - 導出の材料 `Base`（derive.rs 71 行）の struct の字面は、本体 3 か所（collide.rs 85 行・`crates/scribe2/src/pipe/table/check.rs` 494 行・intake.rs 813 行の `base_of`）と歯 10 か所（derive.rs の歯の区間）に在る。
+  - 表の検査の文脈 `Context`（`crates/scribe2/src/pipe/table.rs` 544 行）の字面は、本体 2 か所（check.rs 608 行・intake.rs 299 行）と歯 7 か所（check.rs の歯の区間・1008 行は `..closed` の形で字面を足さない）に在る。
+  - 入れ子の dir の crate の path は、どの読み手でも crate の外（`-p` 無し・置き場 0 件・module の段 0）と読まれる。`teeth-outside-write-set` の検査は歯を見つけられず、何も言わない。
+- 形（番号は done と 1:1）:
+  1. **材料**: `Context` と `Base` に根の列の欄を 1 つずつ足す。`Context` の本体の字面 2 か所は `TableFacts` の根の列（§62 形 8）から埋め、`Base` の本体の字面 3 か所は `Context` か `Materials` の根の列から埋める。歯の区間の字面（`Base` 10・`Context` 7）には固定の根だけの値を足す（retroactive の札）。
+  2. **1 つの関数**: `crate_relative`・`parent_candidates`・`target_of`・collide.rs の `module_path` は、§62 形 4 の関数で path を根・crate の名・残りに割って読む。2 つの `CRATES_DIR` は消し、固定の根の値は §62 の子 module の 1 か所だけにする。
+  3. **歯の置き場**: verify の `-p <crate>` は、宣言したどの根の下の同じ名の crate にも当たる（固定の根の下だけに当てない）。
+  4. **nextest 行**: `nextest_line` と `promised_verify` は根の列を引数に取り、入れ子の crate の file からも `-p <crate>` と scope を組む。呼び手（derive.rs 474 行・contract.rs・intake.rs 476 行）は材料の根の列を渡す。歯の区間の呼び出し（derive.rs 2 か所・contract.rs 3 か所）には固定の根を渡す（retroactive の札）。
+  5. **親の宣言 file**: `parent_candidates` は、宣言したどの根でも `<根><crate>/src` の直下の新しい file に `lib.rs` と `main.rs` の候補を足す。
+  6. **名の衝突の予想**: collide.rs の `module_path` は、宣言した根の下の crate の `src/` と `tests/` の後ろの段を読む。
+  7. **変えないもの**: 宣言の無い repo の導出の結果・判定行・findings の字面は 1 byte も変えない。
+  8. **並走しない**: 行 bq の着地の後に走る（`depends`）。
+- 触らない: §62 の検出線の面・受付の上限の余地・宣言の読み・`derive_write_set` の (i) の閉包（型の名で base の `.rs` の全部を読むので、今も入れ子の file を拾う）・`contracts check` の判定行の字面。
+- 限界:
+  - crate の名は dir の名と読む。package の名が dir の名と違う crate では、導出の `-p` が cargo の package の名とずれる（今の `crates/` の直下と同じ前提）。
+  - 2 つの根の下に同じ名の crate が在る repo では、`-p <crate>` の歯の置き場が両方に当たる（cargo も同じ名の package を 2 つ持てない）。
+- 却下:
+  - 読み手ごとに根の列を持たせる案。§62 の 1 関数を通さないと、根の規則が 2 か所で分かれる。
+  - `Base` に欄を足さず導出の関数の引数に根の列を足す案。`derive_write_set` などの公開の関数の歯の呼び出しが `Base` の字面より多い。
+- 見積: derive.rs 約 20（歯の書き直しと新しい歯で約 60）・collide.rs 約 10・table.rs 約 3・check.rs 約 12・intake.rs 約 4・contract.rs 約 8・closure.rs は `CRATES_DIR` を消して約 −2。e2e 約 80。diff は歯込みで約 300 行（M）。
+- 歯（接頭辞は lib が `closure_crate_roots_` と `contracts_collide_crate_roots_`、e2e が `contract_crate_roots_`。`grep -rn crate_roots crates/ docs/` は §62 の行 bq の歯の接頭辞だけ〔`declaration_crate_roots_`・`pipe_*_crate_roots_`〕で、どれも本行の接頭辞を部分文字列に持たず、本行の接頭辞もそれらを持たない）:
+  - lib `closure_crate_roots_`（derive.rs の歯の区間）:
+    - (a) 根に nest/crates/ を持つ材料で、`-p toy --lib x_` の歯を nest/crates/toy/src/a.rs に見つける。固定の根だけの材料では見つけない。
+    - (b) `nextest_line` が nest/crates/toy/src/a.rs から `-p toy --lib`、nest/crates/toy/tests/e2e.rs から `-p toy --test e2e` を組む。固定の根だけでは旗の無い行。
+    - (c) +nest/crates/toy/src/new.rs の親の候補に nest/crates/toy/src/lib.rs と `main.rs` が入る。固定の根だけでは入らない。
+  - lib `contracts_collide_crate_roots_`（collide.rs に歯の区間を足す）: nest/crates/toy/src/a/b.rs の module の段が根を宣言した周は `a`・`b`、固定の根だけでは空。
+  - e2e `contract_crate_roots_`（`crates/scribe2-boundary/tests/e2e/pipe/contracts.rs`）: 宣言で nest/crates/ を足した toy repo の `contracts check` が、nest/crates/toy/src/a.rs に在る歯を write-set の外に持つ行を `teeth-outside-write-set` の 1 件で名指す。宣言の無い同じ repo では findings が今と同じ（0 件）。
+  - 変異の A/B: `Context` の根を固定の根に戻す → e2e の宣言の周が 0 件になる。`target_of` だけ固定の根のまま → (b) が落ちる。`parent_candidates` だけ固定の根のまま → (c) が落ちる。
+  - base で RED の理由: lib の新しい歯は base の関数の signature と欄が無く該当 0 本（rc 4）か compile で落ちる。e2e は base が key を「未知の key」の不備で断って findings の assert で落ちる（機能不在）。宣言の無い対照は base で緑。
