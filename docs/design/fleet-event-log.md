@@ -302,6 +302,7 @@ C3 は「1 つの DB file（host 列）」と言う。MVP はそれを **append-
      - (b) `bound`: 同じ発話と同じ問いの組の `RulingReceived` が在る。1 つの発話を別の問いへ結ぶのは通す。
      - (c) `closed`: 問いの status が open でない。
      - (d) `not-question`: bead が無い、または label に `intake:question` が無い。
+     - 台帳の読み（約束 3）は (b) の後・(c) の前に 1 回だけ撃つ。(a)(b) で断る周は台帳を読まない。読めない周は (c)(d) を調べずに `ledger-unreadable` で断る。
   3. **台帳の読み**: `ledger/mod.rs` に 1 本足す。bd の読みだけの show で bead 1 本を読み、status・labels・起票の時刻・metadata の asked・notes を返す。読めない周は rc 1 で `reason=ledger-unreadable` と出し、何も書かない。
   4. **裁定 id**: `<問い id>:<発話の ts の UTC の年月日と時分 YYYYMMDDTHHMMZ>-1`。発話の時刻から作るので、撃ち直しても同じ id になる。`is_ruling_id` に台帳の接頭辞を渡すと真になる。
   5. **裁定の行**: 次の 1 行を notes に追記する（`ledger/mod.rs` に追記の 1 本を足す）。
@@ -314,8 +315,9 @@ C3 は「1 つの DB file（host 列）」と言う。MVP はそれを **append-
      - `Case` に variant を 1 つ足し、key を 5 つ持つ: ruling・utterance・channel・question_ts・asked。asked は metadata に在る周だけで、値は閉じた 2 値。
      - 読み手は、この 5 key の行を新しい形として読み、`rule` と併せ持つ行を key を名指して malformed にする。`rule` だけの古い行は今までどおり読む。
   8. **書きの順と途中の失敗**: notes → close → event の順に書く。
-     - close の後で event が落ちた周は rc 1 で `partial` を出す。
+     - close の後で event が落ちた周は rc 1 で `partial` を出す。notes の後で close が落ちた周も同じく rc 1 で `partial` を出し、notes の行は残る。
      - 同じ組の撃ち直しは、問いが closed でも notes に同じ裁定の行が在り event が無いなら、event だけを書いて rc 0 にする（半端な結びの仕上げ・新しい結びではない）。
+     - 問いが open のまま notes に同じ裁定の行が在る撃ち直し（close の前で落ちた結び）は、notes を書かずに close と event を書いて rc 0 にする（約束 5 の重ねない）。
   9. **返す 1 行**: rc 0 で stdout に `ruling: id=<裁定 id> question=<id> utterance=<ts> channel=<経路>`。逐語は載せない。
   10. **add を消す**:
       - 口・使い方・help の行と、専用の部品（`add`・`Draft`・`surface_check`・`ID_DIALOGUE_SURFACE`・`RulingRefusal` の `EmptyWords` と `NotDialogueSurface`）を消す。`RulingRefusal` の型と `Store` と `render` は、bind の断りに使うなら残し、使わないなら消す（呼び手の無い部品を残さない）。
@@ -326,18 +328,19 @@ C3 は「1 つの DB file（host 列）」と言う。MVP はそれを **append-
 - 歯（e2e は既存の `tests/e2e/seat/ruling.rs`。lib は `fleet/event.rs` の歯の区間）:
   - e2e `seat_ruling_bind_`（偽の bd が show の JSON を返し、append-notes と close の引数を記録する）:
     - (a) 先に在った問いと、発話の後に起こした問いの 2 形で 1 回ずつ通る。
-      - notes の行が 1 行（5 欄・経路 chat）。逐語は改行と `"` と非 ASCII を含む字で、最後の欄を JSON の文字列として戻すと発話 event の detail と 1 byte も違わない。
+      - notes の行が 1 行（5 欄・経路は発話 event の channel）。2 形の 1 つは channel gui の発話（event log に直書き）で、notes の経路の欄と stdout の `channel=` が gui、もう 1 つは channel chat の発話。逐語は改行と `"` と非 ASCII を含む字で、最後の欄を JSON の文字列として戻すと発話 event の detail と 1 byte も違わない。
       - close の理由が `裁定 <id>`、裁定 event が 1 件。先に在った問いの形は metadata に asked=seat を持ち、event は 5 key（asked=seat）。発話の後に起こした問いの形は metadata に asked を持たず、event は asked の key を持たない 4 key。id は `<問い id>:<発話の ts の YYYYMMDDTHHMMZ>-1`。
       - 偽の bd の記録で append-notes が close より先に撃たれ、event は close の後に在る（約束 8 の順）。
-      - rc 0・stdout は `ruling: id=<id> question=<id> utterance=<ts> channel=chat` の 1 行だけで、逐語の字を含まない（逐語は cmd の引数に無い字で作る）。stderr は 0 byte。
+      - rc 0・stdout は `ruling: id=<id> question=<id> utterance=<ts> channel=<経路>` の 1 行だけで、逐語の字を含まない（逐語は cmd の引数に無い字で作る）。stderr は 0 byte。
     - (b) 断り 4 形（無い ts・結び済み・閉じた問い・問いでない bead）がどれも rc 1・stdout 0 byte・stderr が `seat ruling: refused reason=<語> question=<id> utterance=<ts>` の 1 行（語は形の順に no-utterance・bound・closed・not-question）で、event log も偽の bd の書きも変えない。
-    - (b2) 断りの順: 2 つの断りに同時に当たる 3 形（無い ts ∧ 問いでない bead・結び済み ∧ 閉じた問い〔(a) の後の同じ組〕・閉じた問い ∧ 問いでない bead〔label の無い閉じた bead〕）で、stderr の語はそれぞれ先の語（no-utterance・bound・closed）だけ。
+    - (b2) 断りの順: 隣り合う語の対を全部持つ 3 形で順を 1 列に決める。無い ts ∧ 結び済み〔同じ組の `RulingReceived` だけを event log に直書きし、その ts の `UtteranceReceived` を置かない〕・結び済み ∧ 閉じた問い〔(a) の後の同じ組〕・閉じた問い ∧ 問いでない bead〔label の無い閉じた bead〕で、stderr の語はそれぞれ先の語（no-utterance・bound・closed）だけ。加えて無い ts ∧ 問いでない bead で no-utterance。
     - (c) 1 つの発話を 2 つの問いへ結べる。
     - (d) 半端な結び（notes と close だけ済み）の撃ち直しが event だけを足す。偽の bd の append-notes と close の呼び出しは 0 回（同じ行を重ねない）。
+    - (d2) close の前で落ちた結び: 偽の bd の close が 1 回目だけ rc 1 を返す周は rc 1 で `partial`・notes の行が 1 行・event 0 件・問いは open。同じ組の撃ち直しは rc 0 で、偽の bd の append-notes は 0 回・close は 1 回・event は 1 件、notes の裁定の行は 1 行のまま。
     - (e) 使い方の行と `scribe2 help seat` の頁（FORM の行と SUBCOMMANDS）の両方に `ruling bind` が在り、`ruling add` が無い。
     - (e2) 消えた口（約束 10）: 対話面の役割の登録 row を持つ置き場で、今の `add` の全引数の形（`seat ruling add --state-dir S --target T --words W --bead B --rule R`）を撃つと rc 2（使い方の誤り）・stdout 0 byte・stderr が使い方の 1 行（`ruling bind` を持ち `ruling add` を持たない）で、event log に `RulingReceived` が 0 件・置き場の file の一覧が撃つ前と同じ。base は add が通って rc 0 と event 1 件で RED。
     - (f) (a) の後の `seat ruling ls` の行が `ruling=<id>` を出す（消す `fleet_ruling_add_` の ls の歯の代わり）。
-    - (g) 偽の bd の show が読めない JSON を返す周は rc 1 で `reason=ledger-unreadable` を出し、event log も偽の bd の書きも変えない。
+    - (g) 偽の bd の show が読めない JSON を返す周は rc 1 で `reason=ledger-unreadable` を出し、event log も偽の bd の書きも変えない。同じ偽の bd で、無い ts の周と結び済みの組の周は no-utterance と bound で断り、偽の bd の show の呼び出しは 0 回（台帳は (b) の後に読む）。
     - (h) 偽の bd が close の撃ちの中で event log の path を dir に替えた周は rc 1 で `partial` を出し、notes と close の書きは残る。同じ組の撃ち直しは (d) と同じく event だけを足す。
   - lib `fleet_ruling_body_`: 新しい形の行の往復・`rule` との併せ持ちの malformed・古い `rule` だけの行の読み。
   - lib `seat_ruling_id_`（`seat/ruling.rs` の既存の歯の区間）: 裁定 id を作る関数が、問い id と発話の ts（秒とミリ秒を持つ字）から `<問い id>:<YYYYMMDDTHHMMZ>-1` を返し、同じ入力で同じ字を返し、`is_ruling_id` に台帳の接頭辞を渡すと真。
@@ -448,5 +451,5 @@ write-set = ["crates/scribe2/src/seat/ruling.rs", "crates/scribe2/src/seat/cli.r
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_ruling_bind_", "cargo nextest run -p scribe2 --lib --no-tests=fail fleet_ruling_body_", "cargo nextest run -p scribe2 --lib --no-tests=fail seat_ruling_id_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail fleet_ruling_report_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail fleet_ruling_doctor_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_args_unknown_flag_is_refused_with_rc_2_on_every_verb"]
 size = "L"
 growth = ["crates/scribe2/src/ledger/question.rs:1", "crates/scribe2/src/seat/ruling.rs:170", "crates/scribe2/src/seat/cli.rs:25", "crates/scribe2/src/ledger/mod.rs:110", "crates/scribe2/src/fleet/mod.rs:45", "crates/scribe2/src/fleet/event.rs:70", "crates/scribe2/src/pipe/dispatch/refused.rs:2", "crates/scribe2/src/help.rs:2"]
-done = "(1) seat ruling bind --repo --state-dir --question --utterance [--bd] が在る (2) 無い ts・結び済みの組・閉じた問い・問いでない bead を、この順に閉じた 4 語で何も書かずに rc 1 で断る (3) ledger に bead 1 本の読みを足し、読めない周は ledger-unreadable で何も書かない (4) 裁定 id は <問い id>:<発話の時分>-1 で is_ruling_id が真 (5) notes に 5 欄の 1 行（逐語は JSON の文字列の字面で最後の欄・同じ行は重ねない） (6) 裁定 <id> で close (7) RulingReceived は Case の新しい variant に 5 key を持ち、rule との併せ持ちは malformed、rule だけの古い行は読める (8) notes→close→event の順で、半端な結びの撃ち直しは event だけを足す (9) stdout 1 行に逐語を載せない (10) seat ruling add と専用の部品（add・Draft・surface_check・ID_DIALOGUE_SURFACE・EmptyWords・NotDialogueSurface）と surface_check の lib の歯を消し、ls は新しい形で ruling= を出す (11) 使い方と help の表が bind を持ち add を持たない (12) ledger/question.rs の ASKED_KEY を pub(crate) に広げる 歯: seat_ruling_bind_ が 2 形の通過と行（逐語の往復）・notes→close→event の順・close・event・id の形・stdout の 1 行と逐語の不在、断り 4 形の rc 1 と stderr の語と不変、2 つの断りに当たる 3 形の先の語、1 発話 2 問、半端な結びの仕上げと書きの重ねの無さ、使い方と help の頁の bind の在と add の不在、消えた add の口を全引数で撃って rc 2 と event 0 件と置き場の不変、ls の ruling= の列、ledger-unreadable の不変、partial の rc 1 と撃ち直しを、fleet_ruling_body_ が新しい形の往復と併せ持ちの断りと古い行の読みを、seat_ruling_id_ が裁定 id の字と決定性と is_ruling_id を測る。既存の fleet_ruling_add_ の 2 本と surface_check の lib の歯 1 本は消し、2 本は fixture を event の直書きに替え、seat.rs の未知の flag の歯の 3 つ目の verb を ruling bind に替える。base は bind が使い方の誤りで RED"
+done = "(1) seat ruling bind --repo --state-dir --question --utterance [--bd] が在る (2) 無い ts・結び済みの組・閉じた問い・問いでない bead を、この順に閉じた 4 語で何も書かずに rc 1 で断る (3) ledger に bead 1 本の読みを足し、読めない周は ledger-unreadable で何も書かない (4) 裁定 id は <問い id>:<発話の時分>-1 で is_ruling_id が真 (5) notes に 5 欄の 1 行（逐語は JSON の文字列の字面で最後の欄・同じ行は重ねない） (6) 裁定 <id> で close (7) RulingReceived は Case の新しい variant に 5 key を持ち、rule との併せ持ちは malformed、rule だけの古い行は読める (8) notes→close→event の順で、close か event が落ちた周は rc 1 で partial、close の後の半端な結びの撃ち直しは event だけを足し、close の前の半端な結びの撃ち直しは notes を書かずに close と event を書く (9) stdout 1 行に逐語を載せない (10) seat ruling add と専用の部品（add・Draft・surface_check・ID_DIALOGUE_SURFACE・EmptyWords・NotDialogueSurface）と surface_check の lib の歯を消し、ls は新しい形で ruling= を出す (11) 使い方と help の表が bind を持ち add を持たない (12) ledger/question.rs の ASKED_KEY を pub(crate) に広げる 歯: seat_ruling_bind_ が 2 形の通過と行（逐語の往復）・notes→close→event の順・close・event・id の形・stdout の 1 行と逐語の不在、断り 4 形の rc 1 と stderr の語と不変、隣り合う語の対の 3 形と無い ts ∧ 問いでない bead の先の語、1 発話 2 問、半端な結びの仕上げと書きの重ねの無さ（close の後と close の前の 2 形）、使い方と help の頁の bind の在と add の不在、消えた add の口を全引数で撃って rc 2 と event 0 件と置き場の不変、ls の ruling= の列、ledger-unreadable の不変、partial の rc 1 と撃ち直しを、fleet_ruling_body_ が新しい形の往復と併せ持ちの断りと古い行の読みを、seat_ruling_id_ が裁定 id の字と決定性と is_ruling_id を測る。既存の fleet_ruling_add_ の 2 本と surface_check の lib の歯 1 本は消し、2 本は fixture を event の直書きに替え、seat.rs の未知の flag の歯の 3 つ目の verb を ruling bind に替える。base は bind が使い方の誤りで RED"
 <!-- contracts:end -->
