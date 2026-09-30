@@ -53,6 +53,9 @@ mod refused;
 /// 床の検査を sha の木で 1 回撃つ段と、待つ側が読む判定の読み手（設計 §34・契約表の行 ai）。
 pub mod floor;
 
+/// memo の引き金の満ちを判じる行と審査の置き場の形・読み（設計 §40・契約表の行 ao）。
+pub mod memo;
+
 use candidates::{entry_of, is_input, marks_of, settle, tools};
 
 /// 台帳の閉じた status の字面（依存が閉じたかの判定が読む）。
@@ -921,6 +924,14 @@ pub fn listing(input: &Input<'_>, turn: &Turn) -> Outcome {
     if let Some(at) = outcome.out.iter().position(|line| line.starts_with(COUNT)) {
         outcome.out.splice(at..at, precheck::lines(input, turn).into_iter().chain(bundle::lines(input.state_dir)));
     }
+    outcome
+}
+
+/// `dispatch ls` の全行（[`listing`] の後ろに memo ごとの 1 行を足す・同じ 1 回の読みから判じ、台帳を読めない周は足さない・設計 §40）。
+pub fn observe(input: &Input<'_>) -> Outcome {
+    let (turn, read) = measure(input);
+    let mut outcome = listing(input, &turn);
+    outcome.out.extend(read.iter().flat_map(|found| memo::lines(input, found, crate::seat::state::now_secs())));
     outcome
 }
 

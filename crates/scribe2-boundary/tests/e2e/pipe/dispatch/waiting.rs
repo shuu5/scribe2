@@ -4,6 +4,7 @@
 //! `tests/e2e/pipe/dispatch.rs` の helper を `use super::*` で使う）。
 
 use super::*;
+use vessel::fleet::json_lite;
 
 /// (§12 列へ戻す印) `Failed` で終端した便の bead は `settled` で列外だが、その後の `release` で**同じ sha の
 /// まま**列に戻り（`reason=-`・`ready=1`）、起こし直した便が同じ sha でまた終端に着くと再び `settled` になる
@@ -665,5 +666,374 @@ fn pipe_dispatch_revive_followed_rebase_is_resumed_by_a_manual_turn() {
     let out = waiting_turn(&repo, &state);
     assert_eq!(stdout_of(&out).trim_end(), resumed_line(1), "手動の 1 周が起こす（{}）", told(&out));
     revived_to_landed(&state, &id, gated);
+    clean(&[&repo, &state]);
+}
+
+// ───── memo の引き金の満ち（設計 dispatcher.md §40・契約表の行 ao・接頭辞 `pipe_dispatch_memo_trigger_`） ─────
+
+/// memo の行の書き出し（器の字面を借りない）。
+const MEMO_LINE: &str = "[DISPATCH-MEMO]";
+
+/// 作られた時刻を気にしない memo の時刻。
+const MEMO_CREATED: &str = "2026-09-01T00:00:00Z";
+
+/// 5 形の引き金の歯の置き場: 行 a・b を commit した repo に、台帳の接頭辞（依存と昇格の行の id の形が読む）を置く。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn memo_repo() -> (std::path::PathBuf, std::path::PathBuf) {
+    let (repo, state) = repo_with_state();
+    two_rows(&repo);
+    fs::create_dir_all(repo.join(".beads")).expect(".beads を作れる");
+    fs::write(repo.join(".beads").join("config.yaml"), "issue-prefix: s2\n").expect("台帳の接頭辞を書ける");
+    (repo, state)
+}
+
+/// memo の台帳の 1 件（label `intake:memo`・昇格条件の節に `triggers` の行を置く・時刻の欄は `created` が `None` なら持たない）。
+fn memo_of(id: &str, status: &str, created: Option<&str>, triggers: &[&str], notes: &str) -> String {
+    let description = format!("### 出所\nx\n### 観測\nx\n### 候補\nx\n### 昇格条件\n{}\n", triggers.join("\n"));
+    let created = created.map(|found| format!(",\"created_at\":{}", json_lite::quote(found))).unwrap_or_default();
+    format!(
+        "{{\"id\":\"{id}\",\"status\":\"{status}\",\"priority\":2,\"labels\":[\"intake:memo\"],\
+         \"description\":{},\"notes\":{}{created}}}",
+        json_lite::quote(&description),
+        json_lite::quote(notes)
+    )
+}
+
+/// 開いた memo（時刻は [`MEMO_CREATED`]）。
+fn memo_bead(id: &str, triggers: &[&str], notes: &str) -> String {
+    memo_of(id, "open", Some(MEMO_CREATED), triggers, notes)
+}
+
+/// `dispatch ls` の memo の行（出てきた順）。
+fn memo_lines(out: &Output) -> Vec<String> {
+    stdout_of(out).lines().filter(|line| line.starts_with(MEMO_LINE)).map(str::to_owned).collect()
+}
+
+/// memo 1 本の行の `key=` の値（行が無いか key が無い周は空）。
+fn memo_field(out: &Output, id: &str, key: &str) -> String {
+    memo_lines(out)
+        .iter()
+        .find(|line| line.contains(&format!(" memo={id} ")))
+        .and_then(|line| line.split_whitespace().find_map(|word| word.strip_prefix(key)))
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// memo 1 本の `trigger=` の値の一覧（`(id, 値)`）を 1 回の ls で引く。
+fn triggers_of(out: &Output, ids: &[&str]) -> Vec<(String, String)> {
+    ids.iter().map(|id| ((*id).to_owned(), memo_field(out, id, "trigger="))).collect()
+}
+
+/// 期待の `(id, 値)` の列。
+fn expected(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+    pairs.iter().map(|(id, value)| ((*id).to_owned(), (*value).to_owned())).collect()
+}
+
+/// (a) 再発: 本数＝値で満ち、値−1 で満ちない。満ちない形（再発 9）と満ちる形（期日が過去）の 2 本を持つ memo は満ちた形の語になる。
+///
+/// base は memo の行を出さない（RED・機能不在）。
+#[test]
+fn pipe_dispatch_memo_trigger_recurrence_meets_at_the_value_and_not_below() {
+    let (repo, state) = memo_repo();
+    let two = "[再発] 2026-09-28 一度目\n[再発] 2026-09-29 二度目\n";
+    let bd = fake_bd(
+        &state,
+        &[
+            memo_bead("s2-m.1", &["引き金: 再発 2"], two),
+            memo_bead("s2-m.2", &["引き金: 再発 3"], two),
+            memo_bead("s2-m.3", &["引き金: 再発 9", "引き金: 期日 2000-01-01T00:00Z"], two),
+        ],
+    );
+    let out = ls(&repo, &state, &bd);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", told(&out));
+    assert_eq!(
+        triggers_of(&out, &["s2-m.1", "s2-m.2", "s2-m.3"]),
+        expected(&[("s2-m.1", "met:再発"), ("s2-m.2", "unmet"), ("s2-m.3", "met:期日")]),
+        "{}",
+        told(&out)
+    );
+    clean(&[&repo, &state]);
+}
+
+/// (b) 期日: 周の時刻以前の期日で満ち、未来の期日で満ちない。
+#[test]
+fn pipe_dispatch_memo_trigger_deadline_meets_in_the_past_and_not_in_the_future() {
+    let (repo, state) = memo_repo();
+    let bd = fake_bd(
+        &state,
+        &[
+            memo_bead("s2-m.1", &["引き金: 期日 2000-01-01T00:00Z"], ""),
+            memo_bead("s2-m.2", &["引き金: 期日 2999-01-01T00:00Z"], ""),
+        ],
+    );
+    let out = ls(&repo, &state, &bd);
+    assert_eq!(
+        triggers_of(&out, &["s2-m.1", "s2-m.2"]),
+        expected(&[("s2-m.1", "met:期日"), ("s2-m.2", "unmet")]),
+        "{}",
+        told(&out)
+    );
+    clean(&[&repo, &state]);
+}
+
+/// (c) 同梱: 開いた契約の write-set の項目と等しい path と、その項目を含む dir で満ち、開いた契約の無い行の path（行 b の
+/// `src/b.rs`）は満ちない。
+#[test]
+fn pipe_dispatch_memo_trigger_bundle_meets_an_open_contract_write_set_item() {
+    let (repo, state) = memo_repo();
+    let bd = fake_bd(
+        &state,
+        &[
+            issue("s2-toy.1", 2, "a"),
+            memo_bead("s2-m.1", &["引き金: 同梱 src/lib.rs"], ""),
+            memo_bead("s2-m.2", &["引き金: 同梱 src/b.rs"], ""),
+            memo_bead("s2-m.3", &["引き金: 同梱 src/"], ""),
+        ],
+    );
+    let out = ls(&repo, &state, &bd);
+    assert_eq!(
+        triggers_of(&out, &["s2-m.1", "s2-m.2", "s2-m.3"]),
+        expected(&[("s2-m.1", "met:同梱"), ("s2-m.2", "unmet"), ("s2-m.3", "met:同梱")]),
+        "{}",
+        told(&out)
+    );
+    clean(&[&repo, &state]);
+}
+
+/// (d) 依存: 相手の bead が閉じると満ち、開いていると満ちない。
+#[test]
+fn pipe_dispatch_memo_trigger_dependency_meets_when_the_bead_is_closed() {
+    let (repo, state) = memo_repo();
+    let bd = fake_bd(
+        &state,
+        &[
+            listed("s2-toy.9", "closed", 2, "", &[]),
+            listed("s2-toy.8", "open", 2, "", &[]),
+            memo_bead("s2-m.1", &["引き金: 依存 s2-toy.9"], ""),
+            memo_bead("s2-m.2", &["引き金: 依存 s2-toy.8"], ""),
+        ],
+    );
+    let out = ls(&repo, &state, &bd);
+    assert_eq!(
+        triggers_of(&out, &["s2-m.1", "s2-m.2"]),
+        expected(&[("s2-m.1", "met:依存"), ("s2-m.2", "unmet")]),
+        "{}",
+        told(&out)
+    );
+    clean(&[&repo, &state]);
+}
+
+/// (e) 着地: 値の設計 pointer を持つ bead が閉じると満ち、開いていると満ちない。
+#[test]
+fn pipe_dispatch_memo_trigger_landing_meets_when_the_pointer_bead_is_closed() {
+    let (repo, state) = memo_repo();
+    let bd = fake_bd(
+        &state,
+        &[
+            listed("s2-toy.5", "closed", 2, &format!("design = {DESIGN_FILE}#a"), &[]),
+            issue("s2-toy.6", 2, "b"),
+            memo_bead("s2-m.1", &[&format!("引き金: 着地 {DESIGN_FILE}#a")], ""),
+            memo_bead("s2-m.2", &[&format!("引き金: 着地 {DESIGN_FILE}#b")], ""),
+        ],
+    );
+    let out = ls(&repo, &state, &bd);
+    assert_eq!(
+        triggers_of(&out, &["s2-m.1", "s2-m.2"]),
+        expected(&[("s2-m.1", "met:着地"), ("s2-m.2", "unmet")]),
+        "{}",
+        told(&out)
+    );
+    clean(&[&repo, &state]);
+}
+
+/// 置き場の判定の file を書く。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn put_memo_verdict(state: &Path, memo: &str, body: &str) {
+    let dir = state.join("pipe").join("memo").join(memo);
+    fs::create_dir_all(&dir).expect("memo の置き場を作れる");
+    fs::write(dir.join("verdict"), body).expect("判定を書ける");
+}
+
+/// (f) 置き場の判定と時刻が `verdict=` と `judged=` に写り、置き場の無い memo は `-`、読めない判定の file は `unreadable`。
+/// age は作られた時刻からの時間の切り捨て（5 時間 30 分前は 5h）で、作られた時刻の無い memo は `age=-`。
+#[test]
+fn pipe_dispatch_memo_trigger_verdict_and_age_are_read_from_the_place_and_the_ledger() {
+    let (repo, state) = memo_repo();
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|found| found.as_secs()).unwrap_or_default();
+    let ago = vessel::fleet::cli::format_utc(secs - 5 * 3600 - 1800);
+    let unmet = ["引き金: 期日 2999-01-01T00:00Z"];
+    let bd = fake_bd(
+        &state,
+        &[
+            memo_of("s2-m.1", "open", Some(&ago), &unmet, ""),
+            memo_of("s2-m.2", "open", Some(MEMO_CREATED), &unmet, ""),
+            memo_of("s2-m.3", "open", None, &unmet, ""),
+            memo_of("s2-m.4", "open", Some(MEMO_CREATED), &unmet, ""),
+        ],
+    );
+    put_memo_verdict(
+        &state,
+        "s2-m.1",
+        "{\"verdict\":\"promote\",\"at\":\"2026-09-30T01:02:03Z\",\"evidence\":\"e\",\"sketch\":\"s\"}\n",
+    );
+    put_memo_verdict(&state, "s2-m.4", "{\"verdict\":\"maybe\"}\n");
+    let out = ls(&repo, &state, &bd);
+    let first = memo_lines(&out).into_iter().next().unwrap_or_default();
+    assert_eq!(
+        first,
+        format!("{MEMO_LINE} memo=s2-m.1 trigger=unmet verdict=promote age=5h judged=2026-09-30T01:02:03Z"),
+        "{}",
+        told(&out)
+    );
+    assert_eq!(memo_field(&out, "s2-m.2", "verdict="), "-", "置き場の無い memo");
+    assert_eq!(memo_field(&out, "s2-m.2", "judged="), "-");
+    assert_eq!(memo_field(&out, "s2-m.3", "age="), "-", "作られた時刻の無い memo");
+    assert_eq!(memo_field(&out, "s2-m.4", "verdict="), "unreadable", "読めない判定: {}", told(&out));
+    assert!(memo_field(&out, "s2-m.2", "age=").ends_with('h'), "作られた時刻の在る memo の age は時間");
+    clean(&[&repo, &state]);
+}
+
+/// (g) 最後の昇格の行が「全部」の memo は行が無く、「一部」・読めない行・行の無い memo は在る（最後の行が勝つ）。
+#[test]
+fn pipe_dispatch_memo_trigger_population_drops_only_the_fully_promoted() {
+    let (repo, state) = memo_repo();
+    let unmet = ["引き金: 期日 2999-01-01T00:00Z"];
+    let bd = fake_bd(
+        &state,
+        &[
+            memo_bead("s2-m.1", &unmet, "昇格: 全部 s2-toy.1\n"),
+            memo_bead("s2-m.2", &unmet, "昇格: 一部 s2-toy.1\n"),
+            memo_bead("s2-m.3", &unmet, "昇格: 全部 s2-toy.1\n昇格: 一部 s2-toy.1\n"),
+            memo_bead("s2-m.4", &unmet, "昇格: 全部 x-1\n"),
+            memo_bead("s2-m.5", &unmet, ""),
+        ],
+    );
+    let out = ls(&repo, &state, &bd);
+    let ids: Vec<String> = ["s2-m.1", "s2-m.2", "s2-m.3", "s2-m.4", "s2-m.5"]
+        .iter()
+        .filter(|id| !memo_field(&out, id, "trigger=").is_empty())
+        .map(|id| (*id).to_owned())
+        .collect();
+    assert_eq!(ids, ["s2-m.2", "s2-m.3", "s2-m.4", "s2-m.5"], "全部だけが母集団から外れる: {}", told(&out));
+    clean(&[&repo, &state]);
+}
+
+/// (h) 読める引き金が 0 の memo は最初の読めない行の理由の語、引き金の行の無い memo は `unreadable:none`。読める行が 1 本でも在れば
+/// 読めない行が在っても `unmet` になる。
+#[test]
+fn pipe_dispatch_memo_trigger_unreadable_names_the_first_reason_or_none() {
+    let (repo, state) = memo_repo();
+    let bd = fake_bd(
+        &state,
+        &[
+            memo_bead("s2-m.1", &["引き金: 失敗 3"], ""),
+            memo_bead("s2-m.2", &["引き金: 再発", "引き金: 失敗 3"], ""),
+            memo_bead("s2-m.3", &[], ""),
+            memo_bead("s2-m.4", &["引き金: 失敗 3", "引き金: 期日 2999-01-01T00:00Z"], ""),
+            memo_bead("s2-m.5", &["引き金: 再発 0"], ""),
+        ],
+    );
+    let out = ls(&repo, &state, &bd);
+    assert_eq!(
+        triggers_of(&out, &["s2-m.1", "s2-m.2", "s2-m.3", "s2-m.4", "s2-m.5"]),
+        expected(&[
+            ("s2-m.1", "unreadable:kind"),
+            ("s2-m.2", "unreadable:words"),
+            ("s2-m.3", "unreadable:none"),
+            ("s2-m.4", "unmet"),
+            ("s2-m.5", "unreadable:value"),
+        ]),
+        "{}",
+        told(&out)
+    );
+    clean(&[&repo, &state]);
+}
+
+/// 台帳の子 process の呼びを 1 行ずつ記録して JSON を返す偽の `bd`。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn counting_bd(state: &Path, name: &str, issues: &[String]) -> (String, std::path::PathBuf) {
+    let json = state.join(format!("{name}.json"));
+    let log = state.join(format!("{name}.calls"));
+    fs::write(&json, format!("[{}]\n", issues.join(","))).expect("偽の台帳を書ける");
+    let bd = script(&state.join(name), &format!("echo x >> '{}'\ncat '{}'\n", log.display(), json.display()));
+    (bd, log)
+}
+
+/// 偽の `bd` が記録した呼びの本数。
+fn calls_of(log: &Path) -> usize {
+    fs::read_to_string(log).map(|text| text.lines().count()).unwrap_or_default()
+}
+
+/// (i) 候補 0 の周は `[DISPATCH-NONE]` の直後、列の行の在る周は件数の行の後ろに、bead id の字の順（`s2-m.10` が `s2-m.9` の前）で
+/// 出る。同じ台帳の手動の 1 周の stdout に memo の行は無い。memo の行を出す ls の偽の bd の呼びの本数は、memo の無い台帳の ls と等しい。
+#[test]
+fn pipe_dispatch_memo_trigger_lines_follow_the_queue_lines_in_id_order_and_read_the_ledger_once() {
+    let (repo, state) = memo_repo();
+    let unmet = ["引き金: 期日 2999-01-01T00:00Z"];
+    let memos = [memo_bead("s2-m.9", &unmet, ""), memo_bead("s2-m.10", &unmet, "")];
+    let only = fake_bd(&state, &memos);
+    let none = ls(&repo, &state, &only);
+    let shown: Vec<String> = stdout_of(&none).lines().map(|line| line.split(" trigger=").next().unwrap_or_default().to_owned()).collect();
+    assert_eq!(
+        shown,
+        [NONE_LINE.to_owned(), format!("{MEMO_LINE} memo=s2-m.10"), format!("{MEMO_LINE} memo=s2-m.9")],
+        "候補 0 の周は NONE の直後・id の字の順: {}",
+        told(&none)
+    );
+    let mixed: Vec<String> = std::iter::once(issue("s2-toy.1", 2, "a")).chain(memos.iter().cloned()).collect();
+    let bd = fake_bd(&state, &mixed);
+    let listed_out = ls(&repo, &state, &bd);
+    let lines: Vec<String> = stdout_of(&listed_out).lines().map(str::to_owned).collect();
+    let count_at = lines.iter().position(|line| line.starts_with(COUNT));
+    let first_memo = lines.iter().position(|line| line.starts_with(MEMO_LINE));
+    assert!(count_at.is_some_and(|at| first_memo == Some(at + 1)), "件数の行の直後から memo の行: {}", told(&listed_out));
+    assert_eq!(memo_lines(&listed_out).len(), 2, "{}", told(&listed_out));
+    let manual = launch_turn(&repo, &state, &only, IMPLEMENT);
+    assert_eq!(manual.status.code(), Some(i32::from(RC_OK)), "{}", told(&manual));
+    assert!(!stdout_of(&manual).contains(MEMO_LINE), "手動の 1 周に memo の行は無い: {}", told(&manual));
+    let contract = [issue("s2-toy.1", 2, "a")];
+    let (bare, bare_log) = counting_bd(&state, "bd-bare", &contract);
+    let (rich, rich_log) = counting_bd(&state, "bd-rich", &mixed);
+    let _ = ls(&repo, &state, &bare);
+    let with_memos = ls(&repo, &state, &rich);
+    assert_eq!(memo_lines(&with_memos).len(), 2, "{}", told(&with_memos));
+    assert!(calls_of(&bare_log) >= 1, "前提: ls は台帳を読む");
+    assert_eq!(calls_of(&rich_log), calls_of(&bare_log), "memo の行を出しても台帳の呼びは増えない");
+    clean(&[&repo, &state]);
+}
+
+/// (j) memo を close した後の周に、close の前の周に在った行が消える。
+#[test]
+fn pipe_dispatch_memo_trigger_line_disappears_after_the_memo_is_closed() {
+    let (repo, state) = memo_repo();
+    let unmet = ["引き金: 期日 2999-01-01T00:00Z"];
+    let open = fake_bd(&state, &[memo_of("s2-m.1", "open", Some(MEMO_CREATED), &unmet, "")]);
+    let before = ls(&repo, &state, &open);
+    assert_eq!(memo_lines(&before).len(), 1, "close の前は行が在る: {}", told(&before));
+    let closed = fake_bd(&state, &[memo_of("s2-m.1", "closed", Some(MEMO_CREATED), &unmet, "")]);
+    let after = ls(&repo, &state, &closed);
+    assert!(memo_lines(&after).is_empty(), "close の後は行が消える: {}", told(&after));
+    clean(&[&repo, &state]);
+}
+
+/// (k) 台帳を読めない周は `[DISPATCH-UNMEASURED reason=ledger]` の 1 行だけ（memo の行を出さない）で、同じ置き場の読める周は行が在る。
+#[test]
+fn pipe_dispatch_memo_trigger_unmeasured_ledger_prints_no_memo_line() {
+    let (repo, state) = memo_repo();
+    let broken = script(&state.join("bd-broken"), "exit 1\n");
+    let out = ls(&repo, &state, &broken);
+    assert_eq!(stdout_of(&out).trim_end(), UNMEASURED, "読めない周の 1 行だけ: {}", told(&out));
+    let bd = fake_bd(&state, &[memo_bead("s2-m.1", &["引き金: 期日 2999-01-01T00:00Z"], "")]);
+    let read = ls(&repo, &state, &bd);
+    assert_eq!(memo_lines(&read).len(), 1, "読める周は行が在る: {}", told(&read));
     clean(&[&repo, &state]);
 }
