@@ -383,7 +383,7 @@ terms:
     relationships: [flip check, KNOWN-RED 台帳]
   - canonical: gate
     domain: consumer
-    definition: 便の成果物を独立に検証して Verdict を返す機構。 MVP は契約の verify の実走 + lens 1 本 (SRS FR8 / FR9)。 crate の gate module が担う。 歯 (test / lint / CI) とは別の entity。
+    definition: 便の成果物を独立に検証して Verdict を返す機構。 MVP は共通 verify と契約の verify の実走 + lens 1 本 (SRS FR8 / FR9)。 crate の gate module が担う。 歯 (test / lint / CI) とは別の entity。
     relationships: [Verdict, 便, land, lens]
   - canonical: flip check
     domain: consumer
@@ -934,7 +934,7 @@ terms:
   - canonical: 受付
     domain: consumer
     aliases: [contract intake]
-    definition: 契約 file を便にする前に器が撃つ検査の段。 必須 field・verify の形・allowlist・write-set の余地・host の memory の枠・同時走行の最大値 (SRS FR68) を通った契約だけが便になる (交差の排他は SRS FR39)。 変異検査の並列の枠 (SRS NFR6) とは別。 上限の読み・材料の読み・契約表の検査・宣言と上限の突き合わせ (freeze) は入口の lock の前に 1 周 1 回撃ち、 lock の中の判定はその突き合わせの結果 (有効値と名乗りの語) を借りて宣言を読み直さない (ADR-0059・accepted)。 detect か deny を名乗った宣言の契約では、 lock の前に nextest の検証行を base の木で撃って base で緑の行の本数を残し、 deny の契約は base で緑か測れない行が在れば断る (ADR-0059・accepted)。 preflight は同じ判定を便を作らずに撃つ口。
+    definition: 契約 file を便にする前に器が撃つ検査の段。 必須 field・verify の形・allowlist・write-set の余地と閉包 (SRS FR48)・設計 pointer (SRS FR54)・done の項目ごとの歯の欄 (SRS FR105)・code の事実の欄 (SRS FR109)・host の memory の枠・同時走行の最大値 (SRS FR68) を通った契約だけが便になる (交差の排他は SRS FR39)。 並列の枠 (SRS NFR6) とは別。 上限の読み・材料の読み・契約表の検査・宣言と上限の突き合わせ (freeze) は入口の lock の前に 1 周 1 回撃ち、 lock の中の判定はその突き合わせの結果 (有効値と名乗りの語) を借りて宣言を読み直さない (ADR-0059・accepted)。 detect か deny を名乗った宣言の契約では、 lock の前に nextest の検証行を base の木で撃って base で緑の行の本数を残し、 deny の契約は base で緑か測れない行が在れば断る (ADR-0059・accepted)。 preflight は同じ判定を便を作らずに撃つ口。
     relationships: [dispatcher, 並列の枠, write-set, 便, base で緑の行, 名乗りの語, 契約の検証行, 受付の断りの event]
   - canonical: priority
     domain: consumer
