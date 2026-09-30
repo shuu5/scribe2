@@ -2469,3 +2469,213 @@ fn hook_choice_question_leaves_other_tools_unchanged() {
     assert!(choice_records(&routed_state).is_empty() && choice_records(&plain_state).is_empty(), "記録 0 行");
     clean(&[&routed, &routed_state, &plain, &plain_state]);
 }
+
+// ─────────────── close の理由の段（`s2-07l.738.28`・設計 ledger-form.md §16 行 l1・接頭辞 `hook_close_reason_`） ───────────────
+//
+// rules は §14 と同じ写し（[`question_rules`]）で bd の直の close も close の段に届く。toy repo は `.vessel.toml` の close-check を
+// commit した repo（`.beads/config.yaml` は接頭辞 toy）で、`--bd` に argv を記録する偽の client を渡し、1 度も起きないことを確かめる。
+
+/// close の理由の段を撃つ置き場（toy repo・置き場・写しの rules・偽の client・client の argv の記録）。
+struct ClosePlace {
+    /// toy repo。
+    repo: TmpDir,
+    /// 置き場。
+    state: TmpDir,
+    /// 写しの rules の path。
+    rules: String,
+    /// 偽の client の path。
+    bd: String,
+    /// client の argv の記録。
+    log: PathBuf,
+}
+
+/// 置き場を作る。`kind` は宣言と `.beads` の形: joins（true）・false・key-less（key 無し）・yes（文字列）・no-decl（宣言 file を
+/// commit で消した）・no-beads（true で `.beads` 無し）・worktree-only（key 無しを commit し作業ツリーだけ true）。
+#[expect(clippy::expect_used, reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く")]
+fn close_place(kind: &str) -> ClosePlace {
+    use std::os::unix::fs::PermissionsExt;
+    let extra = match kind {
+        "joins" | "no-beads" => "close-check = true\n",
+        "false" => "close-check = false\n",
+        "yes" => "close-check = \"yes\"\n",
+        _ => "",
+    };
+    let (repo, state) = ask_place(extra);
+    if kind == "no-decl" {
+        git(&repo, &["rm", "-q", DECL_FILE]);
+        git(&repo, &["commit", "-q", "-m", "no decl"]);
+    }
+    if kind == "worktree-only" {
+        fs::write(repo.join(DECL_FILE), format!("{ASK_DECL}close-check = true\n")).expect("作業ツリーの宣言を書ける");
+    }
+    if kind != "no-beads" {
+        fs::create_dir_all(repo.join(".beads")).expect(".beads を作れる");
+        fs::write(repo.join(".beads").join("config.yaml"), "issue-prefix: toy\n").expect("台帳の設定を書ける");
+    }
+    let (bd, log) = (state.join("bd"), state.join("bd.log"));
+    fs::write(&bd, format!("#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nexit 1\n", log.display())).expect("偽の bd を書ける");
+    fs::set_permissions(&bd, fs::Permissions::from_mode(0o755)).expect("偽の bd を実行可能にできる");
+    let rules = question_rules(&state);
+    ClosePlace { repo, state, rules, bd: bd.display().to_string(), log }
+}
+
+/// 撃つ（写しの rules と偽の client）。
+fn close_hook(place: &ClosePlace, command: &str) -> Output {
+    run_hook_args(&["pre-tool-use", "--rules", &place.rules, "--bd", &place.bd], &bash_payload(&place.repo, command))
+}
+
+/// 偽の client が起きた回数。
+fn close_reads(place: &ClosePlace) -> usize {
+    fs::read_to_string(&place.log).map(|text| text.lines().count()).unwrap_or_default()
+}
+
+/// close の段の deny の外形（rc 2・stdout 0 byte・stderr 1 行・`deny bd close` の頭と語と §16）と記録 1 行を確かめ、stderr を返す。
+fn assert_close_deny(place: &ClosePlace, command: &str, reason: &str) -> String {
+    let before = ledger_records(&place.state).len();
+    let out = close_hook(place, command);
+    let text = stderr_text(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "{command}: deny は rc 2: {text}");
+    assert!(out.stdout.is_empty(), "{command}: deny でも stdout は 0 byte");
+    assert_eq!(stderr_lines(&out), 1, "{command}: stderr は 1 行: {text}");
+    let head = format!("{NAME}: deny bd close は起票の門が止める reason={reason}（");
+    assert!(text.starts_with(&head) && text.trim_end().ends_with("・ledger-form.md §16）"), "{command}: {text}");
+    let lines = ledger_records(&place.state);
+    assert_eq!(lines.len(), before + 1, "{command}: 記録は 1 行増える: {lines:?}");
+    assert_eq!(what_of(&lines.last().cloned().unwrap_or_default()), format!("ledger-deny {reason}"), "{command}");
+    text
+}
+
+/// rc 0・0 byte・記録なしで通ることを確かめる。
+fn assert_close_pass(place: &ClosePlace, command: &str) {
+    let before = inject_lines(&place.state).len();
+    assert_silent(&close_hook(place, command), command);
+    assert_eq!(inject_lines(&place.state).len(), before, "{command}: 通す周は記録を残さない");
+}
+
+/// 撃った後の後片付け（偽の client は 1 回も起きない）。
+fn close_done(places: &[&ClosePlace]) {
+    for place in places {
+        assert_eq!(close_reads(place), 0, "偽の client は 1 回も起きない");
+        clean(&[&place.repo, &place.state]);
+    }
+}
+
+/// 着地の形の理由（40 桁の 16 進）。
+const CLOSE_LANDED: &str = "landed 0123456789abcdef0123456789abcdef01234567 ci=success";
+
+/// (a) 加わる repo で、理由の無い close・和の外の理由の close・着地の形の理由の close の 3 形 × bd と bdw の 6 本がどれも断られ、
+/// 断り文は語ごとの次の一手を名指す (b) landed を除く頭を種類との組 10 形で書いた close × bd と bdw の 20 本が rc 0 で記録を残さない。
+#[test]
+fn hook_close_reason_denies_the_three_shapes_and_passes_the_ten_forms() {
+    let place = close_place("joins");
+    for client in ["bd", "bdw"] {
+        let text = assert_close_deny(&place, &format!("{client} close toy-1"), "close-no-reason");
+        assert!(text.contains("重複 <bead id>") && text.contains("完了") && !text.contains("landed <"), "{client}: 8 つの頭: {text}");
+        let text = assert_close_deny(&place, &format!("{client} close toy-1 --reason \"done it\""), "close-outside-forms");
+        assert!(text.contains("「done it」") && text.contains("取り下げ <理由>"), "{client}: 理由の先頭と 8 つの頭: {text}");
+        let text = assert_close_deny(&place, &format!("{client} close toy-1 --reason \"{CLOSE_LANDED}\""), "close-landed");
+        for named in ["pipe land --run <run> --terminal-only", "pipe retire --run <run>", "settle"] {
+            assert!(text.contains(named), "{client}: {named} を名指す: {text}");
+        }
+    }
+    assert_eq!(ledger_records(&place.state).len(), 6, "6 本 × 記録 1 行");
+    let forms = [
+        ("契約", "重複 toy-2"),
+        ("契約", "後継 toy-2"),
+        ("契約", "取り下げ 要らなくなった"),
+        ("epic", "取り下げ 親ごと畳んだ"),
+        ("epic", "完了"),
+        ("問い", "裁定 toy-3:20260928T1347Z-1"),
+        ("decision", "裁定 batch:b1"),
+        ("memo", "昇格済み toy-4 toy-5"),
+        ("memo", "まとめた toy-6"),
+        ("memo", "見送り policy:p1"),
+    ];
+    for (_, reason) in forms {
+        for client in ["bd", "bdw"] {
+            assert_close_pass(&place, &format!("{client} close toy-1 --reason \"{reason}\""));
+        }
+    }
+    assert_eq!(ledger_records(&place.state).len(), 6, "通した 20 本は記録を残さない");
+    close_done(&[&place]);
+}
+
+/// (c) `-r`・`--reason=`・`--reason-file`・`done`・`gate resolve -r` の理由が読まれ、2 つの id と 2 つの `--reason` の 2 つ目だけが形の外の
+/// 周は close-outside-forms (d) `--reason-file -`・値の無い `--reason-file`・無い file・`$(` を含む理由は close-reason-unreadable
+/// (e) 別の接頭辞の重複・`,` で繋いだ昇格済み・n が 0 の裁定 id・`Landed` は close-outside-forms。
+#[test]
+fn hook_close_reason_reads_every_reason_flag_and_the_bad_forms() {
+    let place = close_place("joins");
+    fs::write(place.repo.join("ok.txt"), "  完了\n").expect("理由の file を書ける");
+    fs::write(place.repo.join("bad.txt"), "done it\n").expect("理由の file を書ける");
+    for client in ["bd", "bdw"] {
+        for tail in [
+            "close toy-1 -r 完了",
+            "close toy-1 --reason=完了",
+            "close toy-1 --reason-file ok.txt",
+            "done toy-1 --reason 完了",
+            "gate resolve toy-9 -r 完了",
+            "close toy-1 toy-2 --reason 完了 --reason \"後継 toy-3\"",
+        ] {
+            assert_close_pass(&place, &format!("{client} {tail}"));
+        }
+        for (tail, reason) in [
+            ("close toy-1 toy-2 --reason 完了 --reason \"done it\"", "close-outside-forms"),
+            ("close toy-1 -r \"done it\"", "close-outside-forms"),
+            ("close toy-1 --reason=\"done it\"", "close-outside-forms"),
+            ("close toy-1 --reason-file bad.txt", "close-outside-forms"),
+            ("done toy-1 --reason \"done it\"", "close-outside-forms"),
+            ("gate resolve toy-9 -r \"done it\"", "close-outside-forms"),
+            ("close toy-1 --reason \"重複 other-1\"", "close-outside-forms"),
+            ("close toy-1 --reason \"昇格済み toy-1,toy-2\"", "close-outside-forms"),
+            ("close toy-1 --reason \"裁定 toy-3:20260928T1347Z-0\"", "close-outside-forms"),
+            ("close toy-1 --reason \"Landed 0123456789abcdef0123456789abcdef01234567 ci=success\"", "close-outside-forms"),
+            ("close toy-1 --reason-file -", "close-reason-unreadable"),
+            ("close toy-1 --reason-file", "close-reason-unreadable"),
+            ("close toy-1 --reason-file gone.txt", "close-reason-unreadable"),
+            ("close toy-1 --reason \"$(cat r.txt)\"", "close-reason-unreadable"),
+        ] {
+            let command = format!("{client} {tail}");
+            assert_close_deny(&place, &command, reason);
+        }
+    }
+    close_done(&[&place]);
+}
+
+/// (f) close-check が false の repo・key の無い repo・宣言の無い repo・`.beads` の無い repo・作業ツリーにだけ true を書いた repo では、
+/// (a) の 6 本がどれも rc 0 で記録を残さない。
+#[test]
+fn hook_close_reason_passes_a_repo_that_did_not_join() {
+    let places: Vec<ClosePlace> = ["false", "key-less", "no-decl", "no-beads", "worktree-only"].into_iter().map(close_place).collect();
+    let landed = format!("close toy-1 --reason \"{CLOSE_LANDED}\"");
+    for place in &places {
+        for client in ["bd", "bdw"] {
+            for tail in ["close toy-1", "close toy-1 --reason \"done it\"", landed.as_str()] {
+                assert_close_pass(place, &format!("{client} {tail}"));
+            }
+        }
+        assert!(ledger_records(&place.state).is_empty(), "記録なし");
+    }
+    close_done(&places.iter().collect::<Vec<_>>());
+}
+
+/// (g) close-check が文字列 yes の repo では理由の無い close が close-declaration-unreadable で断られ断り文が close-no-reason を名指し、
+/// `取り下げ x` の close は rc 0 (h) close を中で撃つ script を起こす command は bd / bdw の segment を持たないので、読めない repo でも
+/// 加わる repo でも rc 0。
+#[test]
+fn hook_close_reason_unreadable_declaration_denies_only_a_form_that_hits() {
+    let broken = close_place("yes");
+    let joined = close_place("joins");
+    for client in ["bd", "bdw"] {
+        let text = assert_close_deny(&broken, &format!("{client} close toy-1"), "close-declaration-unreadable");
+        assert!(text.contains("close-no-reason") && text.contains(".vessel.toml") && text.contains("true か false"), "{client}: {text}");
+        let text = assert_close_deny(&broken, &format!("{client} close toy-1 --reason \"{CLOSE_LANDED}\""), "close-declaration-unreadable");
+        assert!(text.contains("close-landed"), "{client}: {text}");
+        assert_close_pass(&broken, &format!("{client} close toy-1 --reason \"取り下げ x\""));
+    }
+    for place in [&broken, &joined] {
+        fs::write(place.repo.join("close.sh"), "bdw close toy-1\nbd close toy-2\n").expect("script を書ける");
+        assert_close_pass(place, "sh close.sh");
+    }
+    close_done(&[&broken, &joined]);
+}
