@@ -96,9 +96,6 @@ const PATH_SEPARATOR: &str = "::";
 /// 歯の印（この行の直下の `fn` が歯・helper の fn は数えない）。
 pub(crate) const TEST_ATTR: &str = "#[test]";
 
-/// crate の置き場（`crates/<crate>/` 配下がその crate の file・上限の余地の `core_of` と同じ規約）。
-const CRATES_DIR: &str = "crates/";
-
 /// 外形 snapshot の置き場（repo 相対 path の中の dir・`crates/<c>/src/snapshots/` と `crates/<c>/tests/e2e/snapshots/`）。
 const SNAPSHOT_DIRS: &[&str] = &["src/snapshots/", "tests/e2e/snapshots/"];
 

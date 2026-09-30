@@ -716,6 +716,81 @@ fn pipe_intake_crate_roots_without_the_key_the_same_contracts_pass() {
     clean(&[&repo, &state]);
 }
 
+// ── 入れ子の根の導出（`s2-07l.736.29` 行 br・設計 contract-source.md §63・接頭辞 `pipe_intake_nest_roots_`） ──
+
+/// 入れ子の crate `toy` の歯の file（歯 `nest_x_` を歯の区間に持つ）。
+const NEST_TOY_FILE: (&str, &str) =
+    ("nest/crates/toy/src/a.rs", "pub fn a() {}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn nest_x_() {}\n}\n");
+
+/// 別の crate `other` の対照の file（同じ接頭辞 `nest_x_` の歯を歯の区間に持つ・crates/toy の下には置かない）。
+const NEST_OTHER_FILE: (&str, &str) =
+    ("crates/other/src/b.rs", "pub fn b() {}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn nest_x_other() {}\n}\n");
+
+/// 入れ子の歯の nextest 行（crate `toy` の lib）。
+const NEST_VERIFY: &str = "cargo nextest run -p toy --lib --no-tests=fail nest_x_";
+
+/// 導出の toy repo に入れ子の 2 file を足した repo と置き場。`declared` なら宣言に key `crate-roots = ["nest/crates/"]` を足す。
+fn nest_repo(doc: &str, declared: bool) -> (PathBuf, PathBuf) {
+    let vessel = if declared { format!("{DERIVE_VESSEL}crate-roots = [\"nest/crates/\"]\n") } else { DERIVE_VESSEL.to_owned() };
+    derive_repo_with(doc, &[(".vessel.toml", vessel.as_str()), NEST_TOY_FILE, NEST_OTHER_FILE])
+}
+
+/// (d) Declared 行（verify が入れ子の歯 `nest_x_`・write-set に a.rs が無い）を `pipe preflight` に通すと、宣言した repo は
+/// rc 1 で `refuse=` の行が `teeth-outside-write-set` と入れ子の a.rs を名指し、stderr は空（判定の関数が `base_of` の根で歯を
+/// 入れ子の file に解いて断る）。別の crate の b.rs は名指さない。key の無い同じ repo は `refuse=` が a.rs を名指さない。
+#[test]
+fn pipe_intake_nest_roots_declared_row_names_the_nested_teeth_file_outside_the_write_set() {
+    let row = table_row("t", &[("write-set", "[\"crates/toy/src/tint.rs\"]"), ("verify", &format!("[\"{NEST_VERIFY}\"]"))]);
+    let doc = table_doc(&table_region(&[row]));
+    let (repo, state) = nest_repo(&doc, true);
+    let out = preflight_raw(&repo, &state, "docs/design/toy.md#t", "s2-nt", true);
+    let (text, err) = (stdout_of(&out), stderr_of(&out));
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "入れ子の歯が write-set の外: {text} {err}");
+    let refuses = fact_lines(&out, "refuse=");
+    assert!(
+        refuses.len() == 1 && refuses.iter().all(|line| line.contains("teeth-outside-write-set") && line.contains("nest/crates/toy/src/a.rs")),
+        "refuse= の行は teeth-outside-write-set と a.rs を名指す: {text}"
+    );
+    assert!(!text.contains("crates/other/src/b.rs"), "別の crate の歯は名指さない: {text}");
+    assert!(err.is_empty(), "stderr は空: {err}");
+    clean(&[&repo, &state]);
+    let (plain, plain_state) = nest_repo(&doc, false);
+    let flat = preflight_raw(&plain, &plain_state, "docs/design/toy.md#t", "s2-nt", true);
+    assert!(!stdout_of(&flat).contains("nest/crates/toy/src/a.rs"), "key の無い repo は入れ子の file を名指さない: {}", stdout_of(&flat));
+    clean(&[&plain, &plain_state]);
+}
+
+/// (e) 同じ verify の Derived 行（`pipe_preflight_ok_reports_facts_and_matches_intake` の行と同じ形）は rc 0 で、`teeth=` の行が
+/// 入れ子の a.rs を名指し、`write-set=derived` の件数が a.rs 1 本（`base_of` の根が Derived 行の歯の置き場を入れ子に解く）。
+#[test]
+fn pipe_intake_nest_roots_derived_row_places_the_teeth_in_the_nested_crate() {
+    let row = derive_row("a", &[("verify", &format!("[\"{NEST_VERIFY}\"]"))]);
+    let (repo, state) = nest_repo(&table_doc(&table_region(&[row])), true);
+    let out = preflight_raw(&repo, &state, "docs/design/toy.md#a", "s2-na", true);
+    let (text, err) = (stdout_of(&out), stderr_of(&out));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "入れ子の歯を置き場に解いて通る: {text} {err}");
+    assert_eq!(fact_lines(&out, "teeth="), ["teeth=nest_x_:1@nest/crates/toy/src/a.rs"], "{text}");
+    assert_eq!(fact_lines(&out, "write-set="), ["write-set=derived files=1"], "{text}");
+    clean(&[&repo, &state]);
+}
+
+/// (f) 約束の行 1 つ（files が a.rs・teeth が `nest_x_`）を `pipe intake` に通すと rc 0 で、写しの verify が `-p toy --lib` の 1 行、
+/// 写しの write-set が a.rs を含み別の crate の b.rs を含まない（`promised_verify` の呼び手と `promised_inputs` の中の
+/// `nextest_line` の呼び出しが材料の根を渡す）。
+#[test]
+fn pipe_intake_nest_roots_promised_row_copies_the_nested_verify_and_write_set() {
+    let promise = promise_toml(("a", 1), "", "[\"nest/crates/toy/src/a.rs\"]", "[\"nest_x_\"]", "入れ子の歯が緑");
+    let (repo, state) = nest_repo(&table_doc(&table_region(&[format!("{}\n{promise}", promised_row("a", &[]))])), true);
+    let out = intake_raw(&repo, &state, "docs/design/toy.md#a", "s2-np");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "約束の行から生成して通る: {}", stderr_of(&out));
+    let id = run_id_of(&out);
+    let copied = vessel::pipe::contract::Contract::parse(&copied_contract(&state, &id)).map_err(|errors| format!("{errors:?}"));
+    assert_eq!(copied.map(|found| found.verify).unwrap_or_default(), [NEST_VERIFY], "写しの verify は入れ子の crate の lib の 1 行");
+    assert_eq!(copied_write_set(&state, &id), ["nest/crates/toy/src/a.rs"], "写しの write-set は a.rs だけ（b.rs を含まない）");
+    stop_run_ok(&state, &id);
+    clean(&[&repo, &state]);
+}
+
 // ── file ごとの見込み growth（設計 docs/design/contract-source.md §46・行 ax・`s2-07l.578`・接頭辞 `contract_growth_`） ──
 
 /// [`sized_contract`] と同じ行に `growth` の欄（`None` なら書かない）を足して commit し、pointer を返す。

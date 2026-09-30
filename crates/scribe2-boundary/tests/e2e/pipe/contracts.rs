@@ -473,6 +473,61 @@ fn contracts_prefix_collision_unmatched_word_hits_only_when_every_candidate_is_o
     assert_eq!(loud, (Some(i32::from(RC_REFUSED)), want), "旗の周は当たった 2 行が予想の出所と直し方を持つ");
 }
 
+// ─────── 入れ子の根の導出（設計 docs/design/contract-source.md §63・行 br・`s2-07l.736.29`・接頭辞 `contract_crate_roots_`） ───────
+
+/// 入れ子の根を宣言する（`declared`）か宣言しない toy repo で [`collision_check`] を撃ち、toy.md の本文と旗の無い周の
+/// (rc, findings の行) を返す（判定行は数えない）。
+fn nest_findings(declared: bool, toy: &[String], fresh: &[String], files: &[(&str, &str)]) -> (String, Option<i32>, Vec<String>) {
+    let vessel = format!("{DERIVE_VESSEL}crate-roots = [\"nest/crates/\"]\n");
+    let mut seeded = files.to_vec();
+    if declared {
+        seeded.push((".vessel.toml", vessel.as_str()));
+    }
+    let (doc, [(rc, lines), _]) = collision_check(toy, fresh, &seeded);
+    (doc, rc, lines.into_iter().filter(|line| line.starts_with("contracts: ")).collect())
+}
+
+/// 入れ子の crate `toy` の歯の file（歯 `nest_x_case` を歯の区間に持つ）。
+const NEST_TOOTH: (&str, &str) =
+    ("nest/crates/toy/src/a.rs", "pub fn a() {}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn nest_x_case() {}\n}\n");
+
+/// 宣言で nest/crates/ を足した toy repo の `contracts check` が、nest/crates/toy/src/a.rs に在る歯を write-set の外に持つ行を
+/// `teeth-outside-write-set` の 1 件で名指す（`Context` の根が歯の置き場を入れ子に解く）。宣言の無い同じ repo では findings 0。
+#[test]
+fn contract_crate_roots_nested_teeth_outside_the_write_set_is_named_only_when_declared() {
+    let out = declared_teeth_row("out", "nest_x_", "[\"crates/toy/src/tint.rs\"]");
+    let plain = table_row("plain", &[("write-set", "[\"crates/toy/src/tint.rs\"]")]);
+    let (toy, fresh) = ([out], [plain]);
+    let (doc, rc, found) = nest_findings(true, &toy, &fresh, &[NEST_TOOTH]);
+    let want = collision_finding(&doc, "out", "nest/crates/toy/src/a.rs");
+    assert_eq!((rc, found), (Some(i32::from(RC_REFUSED)), vec![want]), "宣言した根の下の歯は write-set の外の 1 件");
+    let (_, rc, found) = nest_findings(false, &toy, &fresh, &[NEST_TOOTH]);
+    assert_eq!((rc, found), (Some(0), Vec::new()), "宣言の無い repo は今と同じ（入れ子の歯は crate の外＝0 件）");
+}
+
+/// 名の衝突の予想の入れ子の写し（§54 の (a)）: 宣言で nest/crates/ を足した toy repo に、crate `toy` の nest/crates/toy/src/dial.rs
+/// （歯の区間に `dial_ok`）を置く。新しい語 `dial_knob_` の行（別の doc）は write-set に `+` の dial/knob.rs と dial.rs と other.rs
+/// を持つ。filter `dial_`（`-p toy --lib`）で write-set が dial.rs だけの行が、knob.rs を名指す `teeth-outside-write-set` の 1 件に
+/// なる。宣言の無い同じ repo では 0 件。
+#[test]
+fn contract_crate_roots_nested_prefix_collision_is_predicted_only_when_declared() {
+    let knob = "\"+nest/crates/toy/src/dial/knob.rs\", \"nest/crates/toy/src/dial.rs\", \"nest/crates/toy/src/other.rs\"";
+    let toy = [collision_row("lib", "[\"nest/crates/toy/src/dial.rs\"]", &collision_verify("--lib", "dial_"))];
+    let fresh = [collision_row("n", &format!("[{knob}]"), &collision_verify("--lib", "dial_knob_"))];
+    let files = [
+        (
+            "nest/crates/toy/src/dial.rs",
+            "pub fn dial() {}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn dial_ok() {}\n}\n",
+        ),
+        ("nest/crates/toy/src/other.rs", "pub fn other() {}\n"),
+    ];
+    let (doc, rc, found) = nest_findings(true, &toy, &fresh, &files);
+    let want = collision_finding(&doc, "lib", "nest/crates/toy/src/dial/knob.rs");
+    assert_eq!((rc, found), (Some(i32::from(RC_REFUSED)), vec![want]), "宣言した根の下の衝突は 1 件");
+    let (_, rc, found) = nest_findings(false, &toy, &fresh, &files);
+    assert_eq!((rc, found), (Some(0), Vec::new()), "宣言の無い repo は 0 件");
+}
+
 // ─────── 閉包の拡張（設計 docs/design/contract-source.md §3 の 4 点・§9・契約 (g)・`s2-07l.249`・接頭辞 `contract_closure_ext_`） ───────
 
 /// (1) `surfaces`（第 5 形）: snapshot の名を宣言した行は snapshot の file とその名を持つ歯が write-set に無いと

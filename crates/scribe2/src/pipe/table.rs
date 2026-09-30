@@ -559,6 +559,8 @@ pub struct Context<'a> {
     /// 宣言済みの新規 file（repo の全 doc の行の write-set の `+` 項目と `creates`・印は剥がす・名指しの解に足す）。
     /// 区間を読めない doc が在る周は理由（母集団を縮めて通さない・設計 contract-source.md §39）。
     pub declared: &'a Result<Vec<String>, String>,
+    /// crate の根の列（固定の根 + 宣言した根・§62 の 1 関数が歯の置き場と module の段を読む）。
+    pub crate_roots: &'a [String],
 }
 
 /// `<NAME> contracts schema` の全出力（tracked な生成物 `contracts/schema.toml` の本文・1 行ずつ）。

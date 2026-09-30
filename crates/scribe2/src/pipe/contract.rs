@@ -475,18 +475,19 @@ pub fn render(row: &crate::pipe::table::ContractRow, design: &str, write_set: &[
 
 /// Promised の行（設計 contract-source.md §33 項 4）の契約 file の `verify`: 歯を置き場の（crate・scope）で束ね、束ごとに
 /// nextest 行 1 本（filter は歯の**完全名**を空白で並べる・束の順は歯の初出の順＝`n` の順）。行の形は §28 の scope を
-/// 置き場の path から読む [`crate::pipe::closure::nextest_line`] の 1 本。`teeth` は (完全名, 置き場の file)。
-pub fn promised_verify(teeth: &[(String, String)]) -> Vec<String> {
+/// 置き場の path から読む [`crate::pipe::closure::nextest_line`] の 1 本。`roots` は crate の根の列（§62 の 1 関数が
+/// path を割る）・`teeth` は (完全名, 置き場の file)。
+pub fn promised_verify(roots: &[String], teeth: &[(String, String)]) -> Vec<String> {
     let mut bundles: Vec<(String, &str, Vec<&str>)> = Vec::new();
     for (name, file) in teeth {
-        let head = crate::pipe::closure::nextest_line(file, &[]);
+        let head = crate::pipe::closure::nextest_line(roots, file, &[]);
         match bundles.iter_mut().find(|(found, _, _)| *found == head) {
             Some((_, _, names)) if names.contains(&name.as_str()) => {}
             Some((_, _, names)) => names.push(name),
             None => bundles.push((head, file, vec![name])),
         }
     }
-    bundles.into_iter().map(|(_, file, names)| crate::pipe::closure::nextest_line(file, &names)).collect()
+    bundles.into_iter().map(|(_, file, names)| crate::pipe::closure::nextest_line(roots, file, &names)).collect()
 }
 
 /// Promised の行の契約 file の `done`: 約束の行を `n` の順に「(n) `expect`」で並べ、空白で繋いだ 1 文（§33 項 4・設計
@@ -505,6 +506,7 @@ mod tests {
         CLASS_ALL, GENERATED_DISPOSITION, GENERATED_OWNER,
     };
     use crate::order::is_declaration_order;
+    use crate::pipe::declaration::fixed_roots;
     use crate::pipe::table::{ContractRow, PromiseRow};
 
     /// §48 の 1: 3 クラスの閉じた型は宣言順 delete / publish / consume の 3 値で、契約 file の `classes` の受理集合がその
@@ -646,6 +648,7 @@ mod tests {
     }
 
     // flip-check: s2-07l.512
+    // flip-check: retroactive s2-07l.736.29
 
     /// 約束の行 1 つ（`n` と `expect` だけを振る・他の欄は固定）。
     fn promise(n: u64, expect: &str) -> PromiseRow {
@@ -680,7 +683,7 @@ mod tests {
         .map(|(name, file)| ((*name).to_owned(), (*file).to_owned()))
         .collect();
         assert_eq!(
-            promised_verify(&teeth),
+            promised_verify(&fixed_roots(), &teeth),
             [
                 "cargo nextest run -p c --lib --no-tests=fail a_one a_two",
                 "cargo nextest run -p c --test e2e --no-tests=fail pipe::intake::pipe_intake_promise_b",
@@ -689,7 +692,7 @@ mod tests {
             ],
             "（crate・scope）ごとに 1 行"
         );
-        assert!(promised_verify(&[]).is_empty(), "歯 0 本は行 0 本");
+        assert!(promised_verify(&fixed_roots(), &[]).is_empty(), "歯 0 本は行 0 本");
     }
 
     /// §33 (c): `done` は約束の行を `n` の順に「(n) expect」で空白で繋いだ 1 文（書かれた順ではない）で、生成値を行の値の
@@ -699,7 +702,7 @@ mod tests {
         let (second, first) = (promise(2, "rc 1 で断る"), promise(1, "rc 0 で通る"));
         let done = promised_done(&[&second, &first]);
         assert_eq!(done, "(1) rc 0 で通る (2) rc 1 で断る", "n の順");
-        let verify = promised_verify(&[("t_1".to_owned(), "crates/c/src/x.rs".to_owned())]);
+        let verify = promised_verify(&fixed_roots(), &[("t_1".to_owned(), "crates/c/src/x.rs".to_owned())]);
         let mut row = row();
         row.done = done.clone();
         row.verify = verify.clone();

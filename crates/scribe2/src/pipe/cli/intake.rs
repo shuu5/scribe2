@@ -291,7 +291,7 @@ impl Materials {
 
     /// 閉包を測る base（`.rs` / `.snap` / tracked の 3 面を 1 つに束ねた借り）。
     fn base(&self) -> closure::Base<'_> {
-        base_of(&self.sources, &self.snapshots, &self.tracked)
+        base_of(&self.sources, &self.snapshots, &self.tracked, &self.facts.crate_roots)
     }
 
     /// 表の検査の ctx（`contracts check` と同じ材料の形）。
@@ -305,6 +305,7 @@ impl Materials {
             tracked: &self.tracked,
             snapshots: &self.snapshots,
             declared: &self.declared,
+            crate_roots: &self.facts.crate_roots,
         }
     }
 }
@@ -473,7 +474,7 @@ fn promised(path: &str, text: &str, row: &ContractRow, materials: &Materials) ->
     check_symbols(&own, materials).map_err(|error| refuse(&error, &[]))?;
     let (derived, inputs) =
         closure::derive_promised(&own, &materials.base()).map_err(|error| refuse(&refuse_of(error, row), &[]))?;
-    let verify = crate::pipe::contract::promised_verify(&inputs.teeth);
+    let verify = crate::pipe::contract::promised_verify(&materials.facts.crate_roots, &inputs.teeth);
     if !row.verify.is_empty() {
         let wanted: BTreeSet<String> = verify.iter().cloned().collect();
         closure::check_drift(&row.verify, &wanted).map_err(|error| refuse(&refuse_of(error, row), &[]))?;
@@ -810,8 +811,8 @@ fn fields_of(row: &ContractRow) -> closure::Fields<'_> {
 }
 
 /// base の tree の事実を導出の材料に写す。
-fn base_of<'a>(sources: &'a [Source], snapshots: &'a [Source], tracked: &'a [String]) -> closure::Base<'a> {
-    closure::Base { sources, snapshots, tracked, core_crate: NAME }
+fn base_of<'a>(sources: &'a [Source], snapshots: &'a [Source], tracked: &'a [String], roots: &'a [String]) -> closure::Base<'a> {
+    closure::Base { sources, snapshots, tracked, core_crate: NAME, roots }
 }
 
 /// 契約の `design` が設計 pointer なら base の契約表の行を引いて write-set を弁別する（§3「手書きの write-set の扱いと

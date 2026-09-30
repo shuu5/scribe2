@@ -491,7 +491,7 @@ impl Places {
             self.outside = None;
             return Vec::new();
         };
-        let base = Base { sources: ctx.sources, snapshots: ctx.snapshots, tracked: ctx.tracked, core_crate: NAME };
+        let base = Base { sources: ctx.sources, snapshots: ctx.snapshots, tracked: ctx.tracked, core_crate: NAME, roots: ctx.crate_roots };
         let mut found = Vec::new();
         for row in declared {
             let mut outside: BTreeSet<String> = teeth_outside(row, &base, &texts).into_iter().collect();
@@ -614,6 +614,7 @@ fn judge_repo(repo: &Path, ceiling: &Ceiling<'_>) -> Result<Judged, Outcome> {
         tracked: &tracked,
         snapshots: &snapshots,
         declared: &declared,
+        crate_roots: &facts.crate_roots,
     };
     let docs = design_docs(&tracked);
     let (mut rows, mut found) = (0_usize, Vec::new());
@@ -730,7 +731,9 @@ pub(crate) fn read_all(repo: &Path, tracked: &[String], ext: &str) -> Vec<Source
 #[cfg(test)]
 mod tests {
     // flip-check: moved s2-07l.374
+    // flip-check: retroactive s2-07l.736.29
 
+    use super::super::super::declaration::fixed_roots;
     use super::super::read_rows;
     use super::super::tests::full_promise;
     use super::super::WHOLE_HEAD;
@@ -814,6 +817,7 @@ mod tests {
             tracked: &tracked,
             snapshots: &[],
             declared: &Ok(Vec::new()),
+            crate_roots: &fixed_roots(),
         };
         let mut rows: Vec<ContractRow> = ["a", "a", "c", "d", "e", "f", "g", "h", "i"]
             .iter()
@@ -866,6 +870,7 @@ mod tests {
             tracked: &tracked,
             snapshots: &[],
             declared: &Ok(Vec::new()),
+            crate_roots: &fixed_roots(),
         };
         let mut dependent = row(20, "b");
         dependent.depends = vec!["a".to_owned()];
@@ -897,6 +902,7 @@ mod tests {
                 tracked: &tracked,
                 snapshots: &[],
                 declared: &Ok(Vec::new()),
+                crate_roots: &fixed_roots(),
             };
             let mut touched = row(10, "a");
             touched.touches = vec!["crate::kind::Kind".to_owned()];
@@ -923,6 +929,7 @@ mod tests {
             tracked: &tracked,
             snapshots: &[],
             declared: &Ok(Vec::new()),
+            crate_roots: &fixed_roots(),
         };
         let text = format!("# t\n\n{BEGIN}\nschema = 1\n\n[[contract]]\nid = \"a\"\ntitle = \"t\"\nreq = [\"FR1\"]\nsection = \"1\"\ntouches = [\"crate::kind::Kind\"]\ncreates = [\"src/new.rs\"]\ntests = [\"tests/t.rs\"]\nalso = [\"docs/d.md\"]\nverify = [\"git status\"]\nsize = \"S\"\ndone = \"`src/new.rs` が通る\"\n{END}\n");
         let rows = read_rows("docs/design/t.md", &text).unwrap_or_else(|errors| panic!("write-set の無い行は読める: {errors:?}"));
@@ -956,6 +963,7 @@ mod tests {
             tracked: &tracked,
             snapshots: &[],
             declared: &Ok(Vec::new()),
+            crate_roots: &fixed_roots(),
         };
         let row = |id: &str, goal: &str| {
             let goal = if goal.is_empty() { String::new() } else { format!("goal = \"{goal}\"\n") };
@@ -998,6 +1006,7 @@ mod tests {
             tracked: &tracked,
             snapshots: &[],
             declared: &Ok(Vec::new()),
+            crate_roots: &fixed_roots(),
         };
         let found = check_table(DOC, &[forced.clone()], &["a"], &closed);
         let labels: Vec<String> = found.iter().map(|finding| finding.refuse.label()).collect();
@@ -1026,6 +1035,7 @@ mod tests {
             tracked: &tracked,
             snapshots: &[],
             declared: &Ok(Vec::new()),
+            crate_roots: &fixed_roots(),
         };
         let contract = "schema = 1\n\n[[contract]]\nid = \"a\"\ntitle = \"t\"\nreq = [\"FR1\"]\nsection = \"1\"\nwrite-set = [\"src/kind.rs\"]\nverify = [\"git status\"]\nsize = \"S\"\ndone = \"d\"\n";
         let doc = |promises: &[String]| format!("# t\n\n## 1. 本文の在る節\n\n本文。\n\n{BEGIN}\n{contract}{}{END}\n", promises.concat());
@@ -1073,6 +1083,7 @@ mod tests {
             tracked: &tracked,
             snapshots: &[],
             declared: &Ok(Vec::new()),
+            crate_roots: &fixed_roots(),
         };
         let mut touched = row(10, "a");
         touched.touches = vec!["crate::kind::Kind".to_owned()];
@@ -1116,6 +1127,7 @@ mod tests {
             tracked: &tracked,
             snapshots: &[],
             declared: &Ok(Vec::new()),
+            crate_roots: &fixed_roots(),
         };
         check_table(DOC, rows, &ids_of(rows), &ctx).into_iter().map(|finding| (finding.line, finding.refuse)).collect()
     }
@@ -1335,6 +1347,7 @@ mod tests {
             tracked: &tracked,
             snapshots: &[],
             declared: &Ok(Vec::new()),
+            crate_roots: &fixed_roots(),
         };
         let owned = |items: &[&str]| items.iter().map(|item| (*item).to_owned()).collect::<Vec<String>>();
         let cases: [(&[&str], &[&str], &str); 6] = [

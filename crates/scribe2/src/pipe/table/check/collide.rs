@@ -11,6 +11,7 @@ use super::super::{read_table, Context, ContractRow};
 use super::{is_declared, read, teeth_outside};
 use crate::name::NAME;
 use crate::pipe::closure::{teeth_places, teeth_words, test_region, Base, ClosureError, Fields};
+use crate::pipe::declaration::crate_of;
 use crate::pipe::refuse::{normalize, NEW_FILE, SHRINK_FILE};
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -18,9 +19,6 @@ use std::path::Path;
 /// src の歯の区間の印（`test_region` が読む行頭の印）。新しい語の読みは各 file の本文の前にこれを置いた写しで撃ち
 /// （`#[path]` の子 module の歯の file の既存の歯も数える・§54 形 1）、仮の歯の本文も同じ印から始める。
 const TEST_MARK: &str = "#[cfg(test)]";
-
-/// crate の file の置き場（`crates/<crate>/`）。
-const CRATES_DIR: &str = "crates/";
 
 /// module の path が始まる crate の dir（`src/` と `tests/` の後ろの段・§54 形 3）。
 const MODULE_ROOTS: &[&str] = &["src/", "tests/"];
@@ -82,7 +80,7 @@ pub(super) fn predict(repo: &Path, docs: &[&String], ctx: &Context<'_>) -> Vec<P
             read_table(doc, &text).ok().map(|(rows, _)| (doc.as_str(), rows))
         })
         .collect();
-    let base = Base { sources: ctx.sources, snapshots: ctx.snapshots, tracked: ctx.tracked, core_crate: NAME };
+    let base = Base { sources: ctx.sources, snapshots: ctx.snapshots, tracked: ctx.tracked, core_crate: NAME, roots: ctx.crate_roots };
     let ground = Ground { base, texts: &texts, whole: &whole, tables: &tables };
     let mut found = Vec::new();
     for (doc, rows) in &tables {
@@ -163,22 +161,22 @@ fn candidates(row: &ContractRow, one: &[String], word: &str, ground: &Ground<'_>
     let body = tooth(word);
     let texts: Vec<(&str, &str)> = placeable.iter().map(|path| (path.as_str(), body.as_str())).collect();
     let scoped = teeth_places(&only(one), &ground.base, &texts).unwrap_or_default();
-    narrow(placeable.into_iter().filter(|path| scoped.contains(path)).collect(), word)
+    narrow(ground.base.roots, placeable.into_iter().filter(|path| scoped.contains(path)).collect(), word)
 }
 
 /// module の path の語で絞る（§54 形 3）: 一致の段数が最も多い file だけを残し、一致が無ければ全部を残す。
-fn narrow(files: Vec<String>, word: &str) -> Vec<String> {
-    let best = files.iter().map(|path| depth(path, word)).max().unwrap_or(0);
+fn narrow(roots: &[String], files: Vec<String>, word: &str) -> Vec<String> {
+    let best = files.iter().map(|path| depth(roots, path, word)).max().unwrap_or(0);
     if best == 0 {
         return files;
     }
-    files.into_iter().filter(|path| depth(path, word) == best).collect()
+    files.into_iter().filter(|path| depth(roots, path, word) == best).collect()
 }
 
 /// `path` の module の path の末尾の段の連なりを `_` で繋いだ字面が、語と等しいか語の先頭に `_` の境で一致する最大の
 /// 段数（一致が無ければ 0）。
-fn depth(path: &str, word: &str) -> usize {
-    let segments = module_path(path);
+fn depth(roots: &[String], path: &str, word: &str) -> usize {
+    let segments = module_path(roots, path);
     (1..=segments.len())
         .filter(|count| {
             let joined = segments.get(segments.len().saturating_sub(*count)..).unwrap_or_default().join("_");
@@ -188,13 +186,13 @@ fn depth(path: &str, word: &str) -> usize {
         .unwrap_or(0)
 }
 
-/// module の path の段（`crates/<crate>/src/` か `crates/<crate>/tests/` より後ろ・末尾の `.rs` を落とし `mod` / `lib` /
-/// `main` の段は数えない）。crate の外の file は空。
-fn module_path(path: &str) -> Vec<&str> {
-    let Some((_, rest)) = path.strip_prefix(CRATES_DIR).and_then(|rest| rest.split_once('/')) else {
+/// module の path の段（根のどれかの `<根><crate>/src/` か `<根><crate>/tests/` より後ろ・末尾の `.rs` を落とし `mod` /
+/// `lib` / `main` の段は数えない）。crate の外の file は空。
+fn module_path<'p>(roots: &[String], path: &'p str) -> Vec<&'p str> {
+    let Some(found) = crate_of(roots, path) else {
         return Vec::new();
     };
-    let Some(inner) = MODULE_ROOTS.iter().find_map(|root| rest.strip_prefix(root)) else {
+    let Some(inner) = MODULE_ROOTS.iter().find_map(|root| found.rest.strip_prefix(root)) else {
         return Vec::new();
     };
     inner.strip_suffix(RS).unwrap_or(inner).split('/').filter(|segment| !ROOT_SEGMENTS.contains(segment)).collect()
@@ -251,4 +249,31 @@ fn tooth(word: &str) -> String {
 fn is_ident(word: &str) -> bool {
     word.chars().next().is_some_and(|head| head.is_ascii_alphabetic() || head == '_')
         && word.chars().all(|found| found.is_ascii_alphanumeric() || found == '_')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::module_path;
+    use crate::pipe::declaration::{fixed_roots, with_fixed};
+
+    /// 宣言した根（`nest/crates/`）を足した根の列。
+    fn declared() -> Vec<String> {
+        with_fixed(&["nest/crates/".to_owned()])
+    }
+
+    #[test]
+    fn contracts_collide_crate_roots_src_steps_are_read_under_a_declared_root() {
+        let path = "nest/crates/toy/src/a/b.rs";
+        assert_eq!(module_path(&declared(), path), ["a", "b"], "宣言した根の下の src/ の後ろの段");
+        assert!(module_path(&fixed_roots(), path).is_empty(), "固定の根だけでは crate の外＝空");
+        assert_eq!(module_path(&fixed_roots(), "crates/toy/src/a/b.rs"), ["a", "b"], "固定の根の下は宣言の有無に依らず同じ");
+    }
+
+    #[test]
+    fn contracts_collide_crate_roots_tests_steps_are_read_under_a_declared_root() {
+        let path = "nest/crates/toy/tests/e2e/x.rs";
+        assert_eq!(module_path(&declared(), path), ["e2e", "x"], "tests/ の後ろの段");
+        assert!(module_path(&fixed_roots(), path).is_empty(), "固定の根だけでは crate の外＝空");
+        assert_eq!(module_path(&declared(), "crates/toy/tests/e2e/x.rs"), ["e2e", "x"], "固定の根は宣言があっても残る");
+    }
 }
