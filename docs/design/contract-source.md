@@ -2118,6 +2118,8 @@ done = "(1) 終端だけの撃ち直しは、記録の sha が anchor の refs/h
      - 既存の歯 `=<名>`: base に在り、この便が本文を変えない歯（約束のうち「変えない」を測る既存の歯）。印の字は write-set の `=`（置き場だけ）と揃える。
      - 検証行の番号の歯 `@<k>`: その行の検証行の k 本目（1 から数える）の全体。読み手の無い形の行（nextest でない test の撃ち手・folio validate・xtask check など）で測る項目は、この形で書く。
      - 1 つの項目に歯を 2 本以上名指すときは、同じ番号の要素を並べる。例: `done-teeth = ["1:done_teeth_table_reads_items", "2:=done_teeth_table_keeps_rows", "2:done_teeth_table_keeps_order", "3:@4"]`。
+     - vessel 宣言の共通の検証（common-verify）だけが測る項目は、その command を行の検証行に 1 本足して `@<k>` で名指す（共通の検証の並びを行から番号で指す形は持たない＝宣言の並びが行の字に漏れない）。
+     - write-set の外の file を触らないという約束は done に書かない（write-set の allowlist と gate の段 ① の diff の照合が測り、歯を持たない）。
      - Promised の行は欄を持てない（約束の行の teeth が同じ対応を持つ）。
   2. **表の検査と受付の照らし**（欄を持つ行だけ）: 表の検査・受付・preflight が同じ 1 関数を撃ち、外れを全件・行番号つきで名指す。
      - (a) 形: 要素ごとに番号と歯の形が読めること。空・空白を含む・`,` を含む・3 形の外の要素と、同じ要素の重なりを名指す。
