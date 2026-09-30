@@ -23,10 +23,12 @@
 //! 引き金の段（ledger-form.md §15）: memo の判定で止まらない memo の create と 6 形で止まらない本文を書く update は、昇格条件
 //! の節に読める引き金の行（[`trigger::read`]）が無ければ止める。台帳は読まず、接頭辞は cwd から上の `.beads` の設定から解く。
 
+use crate::ledger::close_reason::{self, Defect, Form, Head};
 use crate::ledger::form::{pointer_text, MEMO_LABEL, MEMO_SECTIONS, QUESTION_LABEL};
 use crate::ledger::question::{self, Gap, Metadata};
 use crate::ledger::trigger;
 use crate::name::NAME;
+use crate::pipe::declaration::{close_check, CloseCheck};
 use crate::polarity::{OnFailure, Polarity, Timing};
 use crate::rules::manifest::Manifest;
 use crate::rules::RuleValue;
@@ -50,6 +52,22 @@ const UPDATE: &str = "update";
 
 /// 台帳の dir（接頭辞を解く root の印）。
 const BEADS: &str = ".beads";
+
+/// close の理由の flag（綴り 2 つ・`=` の形も読む）。
+const REASON: [&str; 2] = ["-r", "--reason"];
+
+/// close の理由を file から読む flag。
+const REASON_FILE: &str = "--reason-file";
+
+/// `gate resolve`（理由を持つ close の口）の 2 語。
+const GATE: &str = "gate";
+const RESOLVE: &str = "resolve";
+
+/// 宣言を読めない repo で close の段に当たった周の記録の語。
+const CLOSE_UNREADABLE: &str = "close-declaration-unreadable";
+
+/// 席が書ける理由の 8 つの頭の字面（landed は器だけが書く）。
+const CLOSE_FORMS: &str = "重複 <bead id>・後継 <bead id>・取り下げ <理由>・裁定 <裁定 id>・昇格済み <契約 id …>・まとめた <memo id>・見送り <裁定 id>・完了";
 
 /// 断る形の閉じた列を持つ rules 行の id。
 pub const ROW: &str = "ledger.denied_writes";
@@ -316,7 +334,138 @@ pub fn decide(command: &str, cwd: &Path, rules: Option<&Path>) -> LedgerDecision
         return deny(found.as_str(), denied_line(found));
     }
     let mut updates = all.iter().filter_map(|words| command_of(words, UPDATE));
-    updates.find_map(|update| update_untriggered(&update, read, cwd)).map_or(LedgerDecision::Allow, Untriggered::decision)
+    if let Some(found) = updates.find_map(|update| update_untriggered(&update, read, cwd)) {
+        return found.decision();
+    }
+    closes_denied(&writes, cwd, &read).unwrap_or(LedgerDecision::Allow)
+}
+
+/// close の段（ledger-form.md §16）: close の segment が在る周だけ HEAD の宣言を 1 回読み、加わる周と読めない周に掛ける。
+fn closes_denied(writes: &[Write], cwd: &Path, read: &impl Fn(&str) -> Option<String>) -> Option<LedgerDecision> {
+    if !writes.iter().any(is_close) {
+        return None;
+    }
+    let root = ledger_root(cwd);
+    let check = root.map_or(CloseCheck::Exempt, close_check);
+    let prefix = root.filter(|_| check != CloseCheck::Exempt).and_then(prefix_at);
+    close_stage(check, writes, prefix.as_deref(), read)
+}
+
+/// close の段の判定（pure・3 値ごとの掛け方）: 加わらない周は撃たず、加わる周は最初に外れた理由の語で、読めない周は同じ判定で
+/// 当たった語を名指す close-declaration-unreadable で断る。
+fn close_stage(
+    check: CloseCheck,
+    writes: &[Write],
+    prefix: Option<&str>,
+    read: &impl Fn(&str) -> Option<String>,
+) -> Option<LedgerDecision> {
+    if check == CloseCheck::Exempt {
+        return None;
+    }
+    let found = writes.iter().filter(|write| is_close(write)).find_map(|write| judge_close(write, prefix, read))?;
+    let (what, why) = if check == CloseCheck::Unreadable {
+        let fix = format!(
+            "当たった形は {}（{}）。この repo の宣言 .vessel.toml を読めない — 不備を直す（close-check の値は true か false・contracts check --repo で key と行番号を読める）",
+            found.as_str(),
+            found.guidance()
+        );
+        (CLOSE_UNREADABLE, fix)
+    } else {
+        (found.as_str(), found.guidance())
+    };
+    Some(deny(what, format!("{NAME}: deny bd close は起票の門が止める reason={what}（{why}・ledger-form.md §16）")))
+}
+
+/// 理由を持つ close の口（`close`・別名 `done`・`gate resolve`）か。
+fn is_close(write: &Write) -> bool {
+    matches!(write.subcommand.as_str(), "close" | "done") || (write.subcommand == GATE && write.second() == RESOLVE)
+}
+
+/// close の断りの語（行 l1 の閉じた 4 語・宣言を読めない周は [`CLOSE_UNREADABLE`] に包む）。値は説明の材料。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Close {
+    /// 理由の値を 1 つも持たないか空。
+    NoReason,
+    /// 頭が landed（値の形を問わない）。
+    Landed,
+    /// 頭の外・値の形の外・id を読めない（理由の先頭 40 字と欠陥）。
+    Outside(String),
+    /// 読めない形（`--reason-file` の `-`・値なし・開けない file・`$` か backtick の値）。
+    Unreadable(String),
+}
+
+impl Close {
+    /// 記録と deny 文の理由の 1 語。
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::NoReason => "close-no-reason",
+            Self::Landed => "close-landed",
+            Self::Outside(_) => "close-outside-forms",
+            Self::Unreadable(_) => "close-reason-unreadable",
+        }
+    }
+
+    /// 説明と次の一手（断り文の後半）。
+    fn guidance(&self) -> String {
+        match self {
+            Self::NoReason => format!("理由の無い close は席に許さない — --reason '<形>' を渡す（形: {CLOSE_FORMS}）"),
+            Self::Landed => "着地の形は land の終端と pipe retire だけが書く — 止まった終端は原因を直して pipe land --run <run> --terminal-only で撃ち直し、PR の便は pipe retire --run <run>（どちらも名指しの 1 行なら席の決着の権能 settle で撃てる・seat-roles.md §32）".to_owned(),
+            Self::Outside(what) => format!("理由が和の外 {what} — 次のどれかで書く: {CLOSE_FORMS}"),
+            Self::Unreadable(what) => format!("理由を読めない: {what} — 字のままの --reason '<形>' で渡す"),
+        }
+    }
+}
+
+/// close 1 つの理由の全部（`-r`・`--reason`・`--reason-file` の値を出てきた順に）を読み手に掛け、最初に外れた語を返す。
+/// 理由の値を 1 つも持たない close は [`Close::NoReason`]（`-` で始まる値は flag と読まれ持たない側に倒れる）。
+fn judge_close(write: &Write, prefix: Option<&str>, read: &impl Fn(&str) -> Option<String>) -> Option<Close> {
+    let mut seen = false;
+    for (flag, value) in &write.values {
+        let text = if REASON.contains(&flag.as_str()) {
+            if value.contains(['$', '`']) {
+                return Some(Close::Unreadable(format!("{flag} の値に $ か backtick（展開の後の字を門は知らない）")));
+            }
+            value.clone()
+        } else if flag == REASON_FILE {
+            match value.trim() {
+                "" => return Some(Close::Unreadable(format!("{REASON_FILE} の値が空"))),
+                path => match read(path) {
+                    Some(text) => text,
+                    None => return Some(Close::Unreadable(format!("{REASON_FILE} の {path} を開けない"))),
+                },
+            }
+        } else {
+            continue;
+        };
+        seen = true;
+        if let Some(found) = judge_reason(&text, prefix) {
+            return Some(found);
+        }
+    }
+    let files = write.flags.iter().filter(|flag| *flag == REASON_FILE).count();
+    let valued = write.values.iter().filter(|(flag, _)| flag == REASON_FILE).count();
+    if files > valued {
+        return Some(Close::Unreadable(format!("{REASON_FILE} が - か値なし")));
+    }
+    (!seen).then_some(Close::NoReason)
+}
+
+/// 理由の字 1 つを読み手（[`close_reason::read`]）に掛ける。頭が landed なら値の形に依らず [`Close::Landed`]。
+fn judge_reason(text: &str, prefix: Option<&str>) -> Option<Close> {
+    match close_reason::read(text, prefix) {
+        Ok(Form::Landed { .. }) | Err(Defect::Value(Head::Landed)) => Some(Close::Landed),
+        Ok(_) => None,
+        Err(Defect::Empty) => Some(Close::NoReason),
+        Err(defect) => {
+            let head: String = text.trim().chars().take(40).map(|found| if found.is_control() { ' ' } else { found }).collect();
+            let why = match defect {
+                Defect::Value(found) => format!("{} の値の形の外", found.as_str()),
+                Defect::NoPrefix => "台帳の接頭辞が解けず bead id を読めない".to_owned(),
+                _ => "頭が 8 つの外".to_owned(),
+            };
+            Some(Close::Outside(format!("「{head}」（{why}）")))
+        }
+    }
 }
 
 /// 引き金の段の断り（ledger-form.md §15・[`Refusal`] に変種を足さない）。値は最初の読めない行（先頭 40 字と理由）。
@@ -376,7 +525,16 @@ fn untriggered(body: &str, cwd: &Path) -> Option<Option<String>> {
 
 /// cwd から上へ辿った最初の `.beads` の dir を持つ dir の台帳の接頭辞（bd が台帳を探す向き・解けない周は `None`）。
 fn ledger_prefix(cwd: &Path) -> Option<String> {
-    let root = cwd.ancestors().find(|dir| dir.join(BEADS).is_dir())?;
+    prefix_at(ledger_root(cwd)?)
+}
+
+/// cwd から上へ辿った最初の `.beads` の dir を持つ dir（台帳の根・無ければ `None`）。
+fn ledger_root(cwd: &Path) -> Option<&Path> {
+    cwd.ancestors().find(|dir| dir.join(BEADS).is_dir())
+}
+
+/// 台帳の根の接頭辞。
+fn prefix_at(root: &Path) -> Option<String> {
     Anchor::open(root)?.prefixes().first().cloned()
 }
 
@@ -1027,5 +1185,147 @@ mod tests {
             assert_eq!(triggered("bdw create '[memo] x' --parent s2-1 --body-file m.md", &deep), want, "{dep}");
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 40 桁の 16 進。
+    const SHA: &str = "0123456789abcdef0123456789abcdef01234567";
+
+    /// git を 1 回撃つ（toy repo の組み立て用）。
+    fn git(dir: &std::path::Path, args: &[&str]) {
+        let status = std::process::Command::new("git").arg("-C").arg(dir).args(args).status();
+        assert!(status.is_ok_and(|found| found.success()), "git {args:?}");
+    }
+
+    /// toy repo（`declaration` を HEAD に commit・`beads` が真なら `.beads/config.yaml`＝接頭辞 toy を置く）。宣言 `None` は無い。
+    fn toy(name: &str, declaration: Option<&str>, beads: bool) -> std::path::PathBuf {
+        let dir = crate::pipe::fixture::scratch(name);
+        git(&dir, &["init", "-q"]);
+        git(&dir, &["config", "user.name", "t"]);
+        git(&dir, &["config", "user.email", "t@example.invalid"]);
+        std::fs::write(dir.join("seed"), "seed\n").unwrap_or_else(|error| panic!("{error}"));
+        if let Some(extra) = declaration {
+            let text = format!("schema = 1\nallowed-commands = [\"git\"]\ncommon-verify = [\"git diff --quiet\"]\n{extra}");
+            std::fs::write(dir.join(crate::pipe::declaration::DECL_FILE), text).unwrap_or_else(|error| panic!("{error}"));
+        }
+        if beads {
+            std::fs::create_dir_all(dir.join(".beads")).unwrap_or_else(|error| panic!("{error}"));
+            std::fs::write(dir.join(".beads").join("config.yaml"), "issue-prefix: \"toy\"\n").unwrap_or_else(|error| panic!("{error}"));
+        }
+        git(&dir, &["add", "-A", "."]);
+        git(&dir, &["commit", "-q", "-m", "seed"]);
+        dir
+    }
+
+    /// close の段で撃ち、断れば 1 行と §16 の出所と `deny bd close` の頭を確かめて語を返す（通れば空）。
+    fn closed(line: &str, cwd: &std::path::Path) -> (String, String) {
+        match decide(line, cwd, None) {
+            LedgerDecision::Deny { what, line: text } => {
+                assert!(text.lines().count() == 1 && text.ends_with("・ledger-form.md §16）"), "{line}: {text}");
+                assert!(text.contains(&format!("deny bd close は起票の門が止める reason={what}（")), "{line}: {text}");
+                (what, text)
+            }
+            LedgerDecision::Allow => (String::new(), String::new()),
+        }
+    }
+
+    /// 理由の集め方: `-r`・`-r=`・`--reason=`・`--reason`・`--reason-file`（前後の空白を除く）・`done`・`gate resolve` の理由が読まれ、
+    /// 値の無い `--reason`・空・`-r<字>` は理由なし、2 つの理由は出てきた順に最初の外れで断る。
+    #[test]
+    fn hook_close_reason_collects_every_reason_flag_and_reads_in_order() {
+        let dir = toy("close-reason-collect", Some("close-check = true\n"), true);
+        std::fs::write(dir.join("ok.txt"), "  完了\n").unwrap_or_else(|error| panic!("{error}"));
+        std::fs::write(dir.join("bad.txt"), "done it\n").unwrap_or_else(|error| panic!("{error}"));
+        std::fs::write(dir.join("landed.txt"), format!("landed {SHA} ci=success\n")).unwrap_or_else(|error| panic!("{error}"));
+        let word = |line: &str| closed(line, &dir).0;
+        for line in [
+            "bdw close toy-1 -r 完了",
+            "bdw close toy-1 -r=完了",
+            "bdw close toy-1 --reason=完了",
+            "bdw close toy-1 --reason 完了",
+            "bdw done toy-1 --reason '取り下げ 要らない'",
+            "bdw gate resolve toy-9 -r 完了",
+            "scripts/bdw close toy-1 --reason '重複 toy-2'",
+            "bdw close toy-1 --reason-file ok.txt",
+            "bdw close toy-1 toy-2 --reason 完了 --reason '後継 toy-3'",
+            "bdw update toy-1 --status open",
+            "bdw show toy-1",
+        ] {
+            assert_eq!(word(line), "", "{line}");
+        }
+        for line in ["bdw close", "bdw close toy-1", "bdw close toy-1 --reason", "bdw close toy-1 --reason ''", "bdw close toy-1 -r=", "bdw close toy-1 --reason=", "bdw done toy-1", "bdw gate resolve toy-9", "bdw close toy-1 -r完了"] {
+            assert_eq!(word(line), "close-no-reason", "{line}");
+        }
+        for line in ["bdw close toy-1 --reason 'done it'", "bdw done toy-1 -r 'done it'", "bdw gate resolve toy-9 -r 'done it'", "bdw close toy-1 --reason-file bad.txt", "bdw close toy-1 toy-2 --reason 完了 --reason 'x y'", "bdw close toy-1 --reason nope --reason 'landed x'", "bdw close toy-1 --reason '重複 other-1'", "bdw close toy-1 --reason '昇格済み toy-1,toy-2'", "bdw close toy-1 --reason 'Landed x'"] {
+            assert_eq!(word(line), "close-outside-forms", "{line}");
+        }
+        for line in [format!("bdw close toy-1 --reason 'landed {SHA} ci=success'"), "bdw close toy-1 --reason 'landed x'".to_owned(), "bdw close toy-1 --reason-file landed.txt".to_owned(), "bdw close toy-1 --reason 完了 --reason 'landed'".to_owned()] {
+            assert_eq!(word(&line), "close-landed", "{line}");
+        }
+        for line in ["bdw close toy-1 --reason-file -", "bdw close toy-1 --reason-file", "bdw close toy-1 --reason-file=", "bdw close toy-1 --reason-file gone.txt", "bdw close toy-1 --reason '$X'", "bdw close toy-1 --reason '`x`'", "bdw close toy-1 -r \"$(cat r.txt)\"", "bdw close toy-1 --reason=完了$"] {
+            assert_eq!(word(line), "close-reason-unreadable", "{line}");
+        }
+        let (_, text) = closed("bdw close toy-1 --reason 'landed x'", &dir);
+        for named in ["pipe land --run <run> --terminal-only", "pipe retire --run <run>", "settle"] {
+            assert!(text.contains(named), "{named}: {text}");
+        }
+        let (_, text) = closed("bdw close toy-1 --reason 'done it'", &dir);
+        assert!(text.contains("「done it」") && text.contains("重複 <bead id>") && text.contains("完了") && !text.contains("landed <"), "{text}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 3 値ごとの掛け方（pure の判定）: 加わる周は断り、読めない周は同じ判定で当たった語を名指す close-declaration-unreadable、
+    /// 加わらない周は撃たない。形に合う close はどの値でも通る。
+    #[test]
+    fn hook_close_reason_stage_applies_by_the_three_values() {
+        use crate::pipe::declaration::CloseCheck;
+        let writes = |line: &str| -> Vec<super::Write> { segments(line).iter().filter_map(|words| write_of(words)).collect() };
+        let stage = |check: CloseCheck, line: &str| super::close_stage(check, &writes(line), Some("toy"), &|_: &str| None::<String>);
+        let what = |found: Option<LedgerDecision>| match found {
+            Some(LedgerDecision::Deny { what, line }) => (what, line),
+            _ => (String::new(), String::new()),
+        };
+        assert_eq!(what(stage(CloseCheck::Joins, "bdw close toy-1")).0, "close-no-reason");
+        let (word, line) = what(stage(CloseCheck::Unreadable, "bdw close toy-1"));
+        assert_eq!(word, "close-declaration-unreadable");
+        assert!(line.contains("close-no-reason") && line.contains(".vessel.toml") && line.contains("true か false"), "{line}");
+        let (_, line) = what(stage(CloseCheck::Unreadable, "bdw close toy-1 --reason 'landed x'"));
+        assert!(line.contains("close-landed"), "{line}");
+        assert_eq!(stage(CloseCheck::Exempt, "bdw close toy-1"), None, "加わらない周は撃たない");
+        for check in [CloseCheck::Joins, CloseCheck::Unreadable] {
+            assert_eq!(stage(check, "bdw close toy-1 --reason '取り下げ x'"), None, "形に合う close は通る");
+            assert_eq!(stage(check, "bdw show toy-1"), None, "close の segment が無い");
+        }
+        assert_eq!(what(stage(CloseCheck::Joins, "bdw show x && bdw done toy-2")).0, "close-no-reason", "後ろの segment も読む");
+    }
+
+    /// 宣言の読みは HEAD だけ・close の segment が在る周だけ: false・key 無し・宣言 file 無し・`.beads` 無し・作業ツリーだけの true は
+    /// 通し、文字列 yes の宣言は close-declaration-unreadable、加わる repo は語で断る。close の無い command は読めない repo でも通る。
+    #[test]
+    fn hook_close_reason_reads_the_head_declaration_once_per_close_and_exempts_the_rest() {
+        let bare = "bdw close toy-1";
+        let joined = toy("close-reason-joins", Some("close-check = true\n"), true);
+        assert_eq!(closed(bare, &joined).0, "close-no-reason");
+        assert_eq!(closed(bare, &joined.join(".beads")).0, "close-no-reason", "根は cwd から上へ辿る");
+        for (name, declaration, beads) in [
+            ("close-reason-false", Some("close-check = false\n"), true),
+            ("close-reason-absent", Some(""), true),
+            ("close-reason-nodecl", None, true),
+            ("close-reason-nobeads", Some("close-check = true\n"), false),
+        ] {
+            let dir = toy(name, declaration, beads);
+            assert_eq!(closed(bare, &dir).0, "", "{name}");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+        let worktree = toy("close-reason-worktree", Some(""), true);
+        std::fs::write(worktree.join(crate::pipe::declaration::DECL_FILE), "schema = 1\nallowed-commands = [\"git\"]\ncommon-verify = [\"git diff --quiet\"]\nclose-check = true\n").unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(closed(bare, &worktree).0, "", "作業ツリーの宣言は読まない");
+        let broken = toy("close-reason-unreadable", Some("close-check = \"yes\"\n"), true);
+        let (word, text) = closed(bare, &broken);
+        assert_eq!((word.as_str(), text.contains("close-no-reason")), ("close-declaration-unreadable", true), "{text}");
+        assert_eq!(closed("bdw close toy-1 --reason '取り下げ x'", &broken).0, "", "形に合う close は読めない repo でも通る");
+        assert_eq!(closed("bdw show toy-1 && sh close.sh", &broken).0, "", "close の segment が無い周は読まない");
+        for dir in [&joined, &worktree, &broken] {
+            let _ = std::fs::remove_dir_all(dir);
+        }
     }
 }
