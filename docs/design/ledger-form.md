@@ -325,6 +325,51 @@ memo か契約かを「label が在るか」と「受入条件に設計の 1 行
   2. seat-roles.md §32 の行 z（決着の権能）は行 l〜l2 と独立で、先でも後でもよい。行 l3 の前に着地し、同じ入れ替えか先の入れ替えで PATH に載っていること（門が入った後に止まった終端を席が閉じる手）。
   3. 行 l3 は、本 repo を対象にする全部の host・全部の置き場の binary を、行 l の読み手と行 z の権能を持つ binary に入れ替えた後にだけ起こす（古い binary が本 repo の宣言を読めなくなり、受付と land の終端と権能 guard の path の種別が止まる）。台帳では行 l3 の bead を行 l2 と行 z の bead の blocks に置き、bead の起票そのものを入れ替えの後にする（blocks は入れ替えを表せない）。行 l3 の着地の後は入れ替え不要（宣言の key を足すだけ）。
 
+## 17. hook/ledger_guard.rs の歯の module を歯の file へ割る — `#[path]` の子 module で module path と歯の名を変えない（契約表の行 m・純移動・行 n と後続の余地を作る）
+
+やさしく言うと: 起票の門の本体の file は上限（1500 行）まで 14 行しか空きが無い。空きを食っているのは後ろの確かめの塊なので、その塊だけを名前も中身も変えずに隣の file へ引っ越す。動きは 1 つも変わらない。
+
+- 何が起きているか（main b028af03・verified）: `crates/scribe2/src/hook/ledger_guard.rs` は 1440 行・file-lines の重みで 1486（src 約 894 行 + 886 行目の `#[cfg(test)]` から後の歯の module 約 592）。歯 21 本（接頭辞 hook_memo_guard_ 3・hook_ledger_write_ 4・hook_ledger_edge_ 5・hook_question_form_ 2・hook_memo_trigger_ 2・hook_close_reason_ 3・hook_close_mouth_ 2）。この file へ足す行は行 n と、束 E の後の行（局面の出力の古さの印）。
+- 形（[seat-roles.md](./seat-roles.md) §33 と同型）: 歯の module の本文（`use super::{` の行から最後の歯の閉じ括弧まで）を、行 m の write-set の `+` の file（ledger_guard.rs と同じ dir・名は _tests.rs で終わる形）へ indent を 1 段外してそのまま移す。親の歯の区間は `#[cfg(test)]` の単独行・`#[path]` の行・`mod tests;` の 3 行と札 `// flip-check: moved <bead>` だけ。札は子の module doc の直後にも置く（子は file 全体が歯の区間）。親の src・可視性・`use` は変えない。
+- 見積: 親 約 890 行（重み 約 900・余地 約 600）・子 約 560 行。
+- 歯: 既存の 21 本が全部緑で期待を変えない。verify は接頭辞 7 語を 1 行ずつ撃つ。
+- 後続: 行 n は depends で本行の着地を待つ。行 n は子の file に歯を足さない（行 n の lib の歯は行 n の `+` の file と `ledger/close_reason.rs` の in-file）ので、子の file を後の行の write-set へ移す docs PR は要らない。
+- 却下: 行 n の判定を ledger_guard.rs の本体に書いて余地 14 行の中で収める（配線と語の列の増分だけで 10 行前後・rustfmt の折り返しで越えうる・後の行が同じ file で再び詰まる）。
+
+## 18. notes に裁定の行を足す席の書きを起票の門が断る — update と create の notes の 2 flag・bd note の本文と file・読めない本文（契約表の行 n・FR81 (b)・AC51・ADR-0083・ADR-0087）
+
+やさしく言うと: 裁定の行（問いへの user の答えを記す 1 行）は器の口（bind と裁定面の答えの口）だけが書く。席が自分で notes にその形の行を書けると、user が言っていない裁定を作れてしまうので、起票の門で止める。中身を読めない書き方（`$` や標準入力）は裁定の行が無いと言えないので止め、file を名指す口を案内する。
+
+- 何が起きているか（main b028af03・verified）:
+  - 門（ledger_guard.rs の `decide`）の順は memo と問いの create の段 → 台帳 write の 6 形 → memo の update の段 → close の段で、notes の字を読まない。update の `--notes` は 6 形の notes-replace が断る（rules 行 ledger.denied_writes の値に在る）が、`--append-notes` と create の `--notes` / `--append-notes` の字は読まない。
+  - bd 1.1.0（`bd help`）の notes の口: update と create の `--notes`・`--append-notes`、`bd note <id> [text...]`（`--file <path>`・`--stdin`・`update --append-notes` の略記）。close と reopen は notes の flag を持たない。`bd comment` は notes でなく comment を書く。
+  - 書き込みの subcommand の列 `WRITES`（22 語・`pub(crate)`・host_guard.rs も読む）に note が無い。`bd note` の直の撃ちは bd-outside-bdw に当たらず、host-guard が rules 行の不発効の周に全部を断る列にも入らない（穴。`bd note` を扱う code と歯は 0 件）。
+  - 裁定 id の形の判定は `ledger/close_reason.rs` の `is_ruling_id`（pub・接頭辞を渡すと問い id の形も読む）に在る。門は cwd から台帳の接頭辞を解く `ledger_prefix` を持つ（ledger_guard.rs の私有の関数・子 module から呼べる）。
+  - 5 欄の裁定の行（`<裁定 id> | <問い id> | <発話の ts> | <経路> | <逐語>`）の書き手は fleet-event-log の行 h（bind）で、行を読んで「裁定の行か」を判じる関数は main に無い。席は今、裁定を notes に手で書く（memo の notes の「裁定 user <ts>」の散文・裁定 id の欄を持たない）。
+- 約束（done と 1:1）:
+  1. **裁定の行の判定（1 本）**: `ledger/close_reason.rs` の `is_ruling_id` の隣に、行を `|` で割って前後の空白を剥いだ欄のどれかが `is_ruling_id` で真なら裁定の行とする関数を 1 本置く（FR81 (b) の「裁定 id の欄を持つ行」・欄の数に依らない）。裁定 id を行の途中で引く散文（欄の全体が id でない）は裁定の行でない。この判定はこの 1 関数だけが持ち、門も後の行もこれを呼ぶ（C2）。
+  2. **読む口**: 判定は行 n の write-set の `+` の file（ledger_guard の子 module）が持ち、segment の語の列と、相対 path を payload の cwd から読む関数だけを受ける。対象は bd / bdw の segment（先頭の代入を飛ばし、path の末尾が bd か bdw）のうち、update と create の `--notes`・`--append-notes`（`--flag value` と `--flag=value`・何度でも・値は次の語を無条件に取る＝bd の flag の読みと同じく `-` で始まる本文も値）と、note の本文（subcommand と id の後の flag でない語を空白 1 つで繋いだ字と、`--file` の file の字）。`Write`・`Create`・`Refusal` を名指さない（本 doc の行 g・h・j の閉包を広げない）。
+  3. **断りの語**（記録は `ledger-deny <語>`・閉じた 2 語）: notes-ruling-line（本文のどれかの行が裁定の行）・notes-unreadable（`--stdin`・値の無い flag・開けない file・`$` か backtick を含む値）。断り文は既存の形 `deny bd <sub> は起票の門が止める reason=<語>（<説明と次の一手>・ledger-form.md §18）` の 1 行で、前者は「裁定の行を書くのは器の口（seat ruling bind・裁定面の答えの口）だけ — 発話を bind で問いへ結ぶ」、後者は「本文を file に書いて bdw note <id> --file <path> で足す」を告げる。
+  4. **段の順**: memo と問いの create の段の後・6 形の前（語の具体な断りが先）。当たらない segment は今の段へ進む。
+  5. **`WRITES` に note を足す**（bd-outside-bdw と host-guard の全断りが `bd note` を書き込みと読む）。
+- 歯（接頭辞 hook_notes_ruling_ と ruling_line_・`git grep -c` はどちらも 0 件）:
+  - e2e（`crates/scribe2-boundary/tests/e2e/hook/guards.rs`・新しい e2e の file は作らない）: 本 doc の行 j の歯の写しの rules（guards.rs の `question_rules`・埋め込みの manifest から bd-outside-bdw を外す）で撃つ。
+    - (a) 裁定の行を足す 5 形（update の `--append-notes value`・`--append-notes=`・create の `--append-notes`・note の本文の語・note の `--file`）× bd と bdw の 10 本が notes-ruling-line で rc 2・stdout 0 byte・stderr 1 行・記録 1 行。`-` で始まる値の裁定の行も断られる。
+    - (b) 読めない 4 形（`"$(cat F)"`・backtick・note の `--stdin`・開けない `--file`）× 2 経路の 8 本が notes-unreadable（同じ 4 つの形）。
+    - (c) 裁定の行を含まない notes（素の字・裁定 id を行の途中で引く散文・`### 出所` の行）と、`--design` / `-d` に置いた裁定の行は rc 0 で記録を残さない。
+    - (d) 段の順: update の `--notes` に裁定の行を置いた書きは notes-replace でなく notes-ruling-line。
+    - (e) 埋め込みの rules のままの `bd note s2-1 x` は bd-outside-bdw で断られる（`WRITES` の note）。
+    - 撃った書きの数を母集団として出す。AC51 の (b) の 2 経路はこの歯が持つ。
+  - lib（行 n の `+` の file の in-file・接頭辞 hook_notes_ruling_）: 値の対（次の語を無条件・`=` 形・複数の flag）・note の語の繋ぎ・読めない字の判定。
+  - lib（`ledger/close_reason.rs` の in-file・接頭辞 ruling_line_）: 5 欄・4 欄・3 欄の行と batch: / policy: の欄は真、id を途中で引く散文・空の欄・接頭辞の違う id の欄は偽。
+  - 既存: `hook_ledger_write_passes_the_near_misses`（e2e・素の `--append-notes` が通る）と `host_guard_ledger_four_forms_hit_with_the_gate_words`（lib）が緑のまま。
+- base で RED の理由: base の門は notes の字を読まず、裁定の行の append-notes と `bd note` が rc 0 で通る（機能不在）。判定の関数も無い（lib は該当 0 本）。
+- 触らない: 6 形と rules 行 ledger.denied_writes・問い / memo / 引き金 / close の段・極性一覧（同じ guard の段）・hook/mod.rs・台帳の読み（NFR5）・器の口が子 process で書く notes（道具の呼び出しでない）。
+- 限界: `bd comment` / `comments add`（notes でない）・description / design / acceptance の中の裁定の行（読み手は notes しか読まないので裁定に数えられない）・`create --graph` / `-f` の file の node・席の子 process の書き（FR81 の門の外）。裁定 id の欄を持たない散文は裁定の行でないので通る。`$` は単引用符の中の字でも読めない側に倒れる（§14 と同じ）。
+- 却下: `"$(cat <literal path>)"` を読む（語の中の置換を解く読みが門に 1 つ増え、§16 の close の段と逆の扱いになる）／rules 行の語に載せる（FR81 は無条件・§14 の決めたこと 15 と同じ）／台帳を読んで問いの bead だけに掛ける（NFR5・門は台帳を読まない）／判定を門の子 module に置く（後の行が別の読みを書く）。
+- 自分を締め出す順: 行 n は fleet-event-log の行 h（bind）と dialogue-surface の行 j（答えの口）の着地と PATH の binary の入れ替えの後に走る（台帳の依存で持つ）。先に着くと席が裁定を残す道が無くなる。
+- 着地の後: PATH の binary を入れ替える（入れ替えの script で）。同じ host の消費側の席へ先に「notes の `$(...)` と `--stdin` は断られる・`note --file` を使う」を知らせ、`.beads/PRIME.md` の R1 に「本文が file なら `scripts/bdw note <id> --file F`」の 1 句を docs PR で足す。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -493,4 +538,26 @@ verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail declaration_close_
 growth = ["crates/scribe2/src/pipe/declaration/optional_keys.rs:10"]
 size = "S"
 done = "(1) 本 repo の .vessel.toml が close-check = true を持ち、注記の行が ledger-form.md §16 と ADR-0097 を指し、宣言は今の読み手で読める (2) CLAUDE.md の作業の流れの 5 が契約の close を器の land の終端に、止まった終端の閉じを orchestrator の名指しの 2 形（pipe land --run <run> --terminal-only・pipe retire --run <run>）に結び、done の定義の見出しが close でなく着地を止める字になり、.beads/PRIME.md の前提と R0 と Essential Commands の close の字が §16 の形と bd help の読みになる (3) lib: optional_keys.rs の in-file の歯が本 repo の .vessel.toml を読み close-check が true であることを測って緑"
+
+[[contract]]
+id = "m"
+title = "hook/ledger_guard.rs の歯の module（21 本・約 590 行）を #[path] の子 module の file へ割る — 純移動・歯の module の path と歯の名は不変・親の src と可視性は不変・札 moved・行 n の余地を作る（§17）"
+req = ["FR81"]
+section = "17"
+write-set = ["-crates/scribe2/src/hook/ledger_guard.rs", "+crates/scribe2/src/hook/ledger_guard_tests.rs"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail hook_memo_guard_", "cargo nextest run -p scribe2 --lib --no-tests=fail hook_ledger_write_", "cargo nextest run -p scribe2 --lib --no-tests=fail hook_ledger_edge_", "cargo nextest run -p scribe2 --lib --no-tests=fail hook_question_form_", "cargo nextest run -p scribe2 --lib --no-tests=fail hook_memo_trigger_", "cargo nextest run -p scribe2 --lib --no-tests=fail hook_close_reason_", "cargo nextest run -p scribe2 --lib --no-tests=fail hook_close_mouth_"]
+size = "S"
+done = "歯の module の本文が子の file に在り、親の歯の区間は cfg(test) の単独行と path と mod 宣言の 3 行と札だけ、module path と歯 21 本の名は不変で base = head、親の src と可視性は不変、札 moved が子の module doc の直後と親の宣言の直後に対で在って flip-check が moved で通り、file-lines で ledger_guard.rs の余地が 550 行以上に増える"
+
+[[contract]]
+id = "n"
+title = "notes に裁定の行を足す席の書きを起票の門が断る — update / create の --notes と --append-notes・bd note の本文と --file・読めない本文は note --file へ案内・WRITES に note・裁定の行の判定 1 本を is_ruling_id の隣に置く（§18）"
+req = ["FR81", "FR82"]
+section = "18"
+depends = ["m"]
+write-set = ["+crates/scribe2/src/hook/ledger_guard/notes.rs", "crates/scribe2/src/hook/ledger_guard.rs", "crates/scribe2/src/ledger/close_reason.rs", "crates/scribe2-boundary/tests/e2e/hook/guards.rs", "=crates/scribe2/src/hook/host_guard_tests.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail hook_notes_ruling_", "cargo nextest run -p scribe2 --lib --no-tests=fail hook_notes_ruling_", "cargo nextest run -p scribe2 --lib --no-tests=fail ruling_line_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail hook_ledger_write_passes_the_near_misses", "cargo nextest run -p scribe2 --lib --no-tests=fail host_guard_ledger_four_forms_hit_with_the_gate_words"]
+growth = ["crates/scribe2/src/hook/ledger_guard/notes.rs:170", "crates/scribe2/src/hook/ledger_guard.rs:10", "crates/scribe2/src/ledger/close_reason.rs:40", "crates/scribe2-boundary/tests/e2e/hook/guards.rs:150"]
+size = "M"
+done = "(1) close_reason.rs の is_ruling_id の隣に、| で割った欄のどれかが裁定 id なら裁定の行とする判定 1 本が在り、門はそれだけを呼ぶ (2) 判定は ledger_guard の子 module が segment の語と cwd から読む関数だけを受けて持ち、bd / bdw の update と create の --notes・--append-notes（空白形と = 形・複数・値は次の語を無条件）と note の本文の語と --file の file を読み、Write・Create・Refusal を名指さない (3) 裁定の行を含む書きは notes-ruling-line、--stdin・値の無い flag・開けない file・$ か backtick を含む値は notes-unreadable で deny し、断り文は既存の形の 1 行で器の口の名か note --file を告げ ledger-form.md §18 を指す (4) 段は create の段の後・6 形の前 (5) WRITES に note が在る 歯: hook_notes_ruling_ の e2e が 5 形 × bd と bdw の 10 本の notes-ruling-line と - で始まる値、読めない 4 形 × 2 経路の 8 本の notes-unreadable（どれも rc 2・stdout 0 byte・stderr 1 行・記録 1 行）、裁定の行を含まない notes と --design / -d の裁定の行の rc 0、update --notes の裁定の行が notes-replace でなく notes-ruling-line、埋め込みの rules の bd note の bd-outside-bdw を測り、撃った数を母集団として出す。lib の hook_notes_ruling_ が値の対と note の語の繋ぎと読めない字を、ruling_line_ が欄の数に依らない真と散文・空の欄・接頭辞の違う id の偽を測る。既存の hook_ledger_write_passes_the_near_misses と host_guard_ledger_four_forms_hit_with_the_gate_words が緑。base は門が notes を読まず rc 0 で通るので RED"
 <!-- contracts:end -->
