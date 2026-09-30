@@ -1434,7 +1434,9 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
   - (e) e2e（`crates/scribe2-boundary/tests/e2e/rules/embedded.rs`）: 埋め込み manifest の `lens.max_turns` の行が、値 30・kind・発効・裁定 id と裁定日・形 Int を持ち、kind は `RunTokenCeiling` の直後。
   - 直す既存の歯:
     - 埋め込み manifest の行数の pin（`e2e/rules/embedded.rs`）と、外形の snapshot `rules_external_form` の rows と kinds を 1 つ増やす。
-    - lens の成功の周を撃つ歯の fixture の manifest に turn の上限の行を足す（足さないと rc 2 で落ちる）。`e2e/headless.rs` の `rules_with_cap` と、`e2e/headless/lens.rs` の model・effort・段・memo の歯が組む行の列（main a526f825 で 5 か所）。失敗の周を測る fixture（model や effort の行が無い manifest）は、先の行で落ちるので直さない。
+    - lens の成功の周を撃つ歯の fixture の manifest には turn の上限の行が要る（無いと rc 2 で落ちる）。main a526f825 で、`e2e/headless.rs` の `rules_with_cap` と、`e2e/headless/lens.rs` の model・effort・段・memo の歯が `rules_with_rows` で組む行の列の 5 か所が当たる。
+    - 直し方は helper の側に置く: `rules_with_rows` は、渡された行の列に turn の上限の行が無ければ、埋め込みと同じ値の行を足す。成功の周を撃つ既存の歯の本文は直さない（本文を直すと retroactive の札が要る）。失敗の周を測る fixture（model や effort の行が無い manifest）は、先の行で落ちるので向きが変わらない。
+    - 行の無い manifest を測る歯 (b) と、値を振る歯 (a) は、helper が行を足さない形（行の列に turn の上限の行を持たせるか、manifest を直に書く）で組む。
 - base で RED の理由: (a) は base が `--max-turns` を渡さないので落ちる。(b) は base がこの行を読まず claude を呼ぶので落ちる。(c) は base が `result` の PASS を判定に読み、`result` の無い封筒では evidence が `lens output has no json line` なので落ちる。(d) は base の gate が PASS で偽 claude の回数が 1 なので落ちる。(e) は kind が無く compile されない。行数の pin と snapshot は、base の manifest が 1 行少ないので落ちる（機能不在）。
 
 <!-- contracts:begin -->
