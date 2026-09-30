@@ -829,8 +829,10 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
 2. **ruling-fixtures** は字面の閉じた一覧。(b) と、線より後の (c) だけを、一覧と完全に一致したときに引用から外す。wildcard などの型は持たない。(a) は一覧に載っていても外さない。
 3. **解ける**の判定。台帳を読めない周は解けない側へ倒さず、「測れない」と返す（呼び手が断る側へ倒す）。
    - (a) は、閉じた台帳の問い（label intake:question・status closed）の notes の裁定の行で、裁定 id の欄と一致すれば解ける。ほかの欄（逐語など）にだけ在る一致は解けない扱い。
-   - (b) は、台帳のどの bead の notes の裁定の行でも、裁定 id の欄と一致すれば解ける。
-   - 裁定の行は束の欄を持たない。束の裁定は裁定 id の形 `batch:<字>` で表す。
+   - (b) は、台帳のどの bead の notes の裁定の行でも、裁定 id の欄か束の欄と一致すれば解ける（FR83・ADR-0083）。
+   - 束の欄: 先頭の欄が裁定 id の行の、先頭の欄とも最後の欄（逐語）とも違う欄のうち、欄の字全体が (b) の形のもの（0 個以上）。消費側の台帳が自分の経路で書く行が持ちうる。器の結びの口が書く 5 欄の行では、問い・発話の ts・経路の欄は (b) の形にならないので 0 個。
+   - (a) は束の欄に解けない（裁定 id の欄だけ）。逐語の欄にだけ在る一致は、(a) も (b) も解けない。
+   - 束の欄は解けるの判定（citation.rs）が同じ行を `|` で割った欄から読む。約束 4 の 5 欄の読みは変えない（行 am の呼び出しは変わらない）。
 4. **裁定の行の読み 1 本**（この行が置く・行 am も呼ぶ）: `ledger/close_reason.rs` の `is_ruling_id` の隣に pub の関数 1 本を置く。
    - notes の 1 行を `|` で割り、欄ごとに前後の空白を剥ぐ。先頭の欄が `is_ruling_id`（台帳の接頭辞を渡す）で真なら、裁定 id・問い id・発話の ts・経路・逐語の 5 欄を返す。4 欄の古い行は経路を chat と読む。ほかの行は無しを返す。
    - 行を書くのは `fleet-event-log.md 行 h`（書く側だけで、読みは持たない）。
@@ -864,9 +866,10 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
 - `ledger_ruling_doctor_`（e2e・`tests/e2e/ledger_form.rs`・偽の bd を PATH に置く）。
   - 解ける 4 形、接頭辞違いは数えの外、一覧の 2 字面、線の前の引用、解けない引用と開いた問いの id、key の無い repo、読めない台帳を確かめる。
   - ほかの欄だけの一致（約束 3）: 閉じた問いの正しい 5 欄の裁定の行の逐語の欄にだけ別の問い id X を持つ台帳で、X の引用は unresolved に数えられる。
+  - 束の欄（約束 3）: ある bead の notes に消費側の形の行 2 本 `batch:m1 | <問い> | batch:b7 | 逐語 batch:v9` と `batch:m2 | <問い> | 2026-09-30T00:00Z | batch:v8` を持つ台帳で、引用 `batch:m1`・`batch:m2`（裁定 id の欄）と `batch:b7`（束の欄）は解け、`batch:v9`（逐語の欄の字の中だけ）と `batch:v8`（最後の欄）は unresolved に数えられる。束の欄を読まない実装は `batch:b7` を、欄の字の中の部分一致で解く実装は `batch:v9` を、最後の欄も束の欄と読む実装は `batch:v8` を取り違える。
   - 線の 2 形（約束 5）: 線の commit の木で別の file に在った字面を、後の commit で別の file に写した引用は before-line に数えない。ruling-check が true → false → true と変わる履歴では、線は最初の true の commit で、false の間に足した引用は before-line に数えない。
   - 読めない 3 形（約束 7）: 壊した宣言の repo は `ruling-cite: unreadable reason=declaration`、偽の bd が落ちる台帳は `reason=ledger`、main の ref を持たない repo（branch が別の名だけ）は `reason=git`。どれも 4 行目で、逐語一致（`files=` などの件数を持たない）。
-  - 母集団: 固定の toy repo（file 3 本・引用 12 件）。
+  - 母集団: 固定の toy repo（file 3 本・引用 12 件に、束の欄の歯の引用 5 件〔batch:b7・batch:m1・batch:v9・batch:m2・batch:v8〕を足す）。
   - base で RED: 機能不在（行が無い）。
 
 ### 触らない
@@ -876,6 +879,7 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
 
 ### 限界
 - (b) の終わりの字の集合は字句の決めごと。消費側の束の id に ASCII の外の字があると、途中で切れる。そのときは行を足して集合を広げる。
+- 束の欄は位置でなく字の形で見る（先頭と最後の欄の間で字全体が (b) の形の欄）。消費側の台帳が束の欄を最後に置く形や、束の欄に (b) の形でない字を足す形は解けない（逐語の欄と区別できない）。
 - id の一覧に上限を置かない（FR が id を求める）。件数が多い repo では行が長くなる。
 - 線の判定は first-parent の履歴を読む。main を書き換えた repo（force push）では、線がずれうる。
 
@@ -1532,7 +1536,7 @@ write-set = ["+crates/scribe2/src/ledger/citation.rs", "crates/scribe2/src/ledge
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail cite_scan_", "cargo nextest run -p scribe2 --lib --no-tests=fail ruling_row_", "cargo nextest run -p scribe2 --lib --no-tests=fail declaration_kind_passes_declarations_without_cargo_and_keeps_the_schema", "cargo nextest run -p scribe2 --lib --no-tests=fail declaration_ruling_check_", "cargo nextest run -p scribe2 --lib --no-tests=fail declaration_ruling_fixtures_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail ledger_ruling_doctor_", "cargo nextest run -p scribe2 --lib --no-tests=fail declaration_close_check_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail ledger_form_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail ledger_graph_"]
 size = "L"
 growth = ["crates/scribe2/src/ledger/close_reason.rs:40", "crates/scribe2/src/ledger/mod.rs:1", "crates/scribe2/src/ledger/lint.rs:6", "crates/scribe2/src/ledger/form.rs:0", "crates/scribe2/src/pipe/declaration/optional_keys.rs:45", "crates/scribe2/src/pipe/declaration.rs:8", "crates/scribe2-boundary/src/main.rs:1"]
-done = "(1) 閉じた規則の 1 関数が 4 形を拾い、接頭辞の違う問い id の形と `policy: Type` と `apolicy:x` を拾わず、末尾の句読点を剥がし、backtick の囲みを外さない (2) ruling-fixtures は batch: / policy: と線の後の時刻の形だけを完全一致で外し、問い id の形は外さない (3) 問い id の形は閉じた問いの裁定の行の裁定 id の欄だけに解け、開いた問いとほかの欄だけの一致は解けない。batch: / policy: はどの bead の裁定の行の裁定 id の欄にも解ける。台帳を読めない周は測れないを返す (4) opt-in の線は ruling-check が main で初めて true と読める commit で、同じ file の同じ字面が線の木に在る引用を線の前と数える (5) 宣言の key 2 つの型違い・重複・非文字列は宣言の誤り。無い repo は false と空 (6) doctor --repo の 4 行目が check=on / off / unreadable の 3 形で、母集団（files・cited）と unresolved と before-line の件数と id を出す。unreadable の理由は閉じた 3 語（declaration・ledger・git）で件数を出さない (7) close_reason.rs の is_ruling_id の隣に裁定の行の読み 1 本（pub）を置き、先頭の欄が裁定 id の行から 5 欄を返し、4 欄の古い行は経路を chat と読み、ほかの行は無しを返す (8) 宣言の読みは rev を 1 引数で受け、HEAD 以外の rev の宣言を読む (9) ledger/mod.rs に pub mod citation。citation.rs は Issue を名指さず、台帳の読みは呼び手が渡す (10) 直す既存の歯に retroactive の札"
+done = "(1) 閉じた規則の 1 関数が 4 形を拾い、接頭辞の違う問い id の形と `policy: Type` と `apolicy:x` を拾わず、末尾の句読点を剥がし、backtick の囲みを外さない (2) ruling-fixtures は batch: / policy: と線の後の時刻の形だけを完全一致で外し、問い id の形は外さない (3) 問い id の形は閉じた問いの裁定の行の裁定 id の欄だけに解け、開いた問いとほかの欄だけの一致は解けない。batch: / policy: はどの bead の裁定の行の裁定 id の欄か束の欄（先頭の欄とも最後の欄とも違う欄のうち字全体が batch: / policy: の形の欄）に解け、逐語の欄の中だけの一致と最後の欄は解けない。台帳を読めない周は測れないを返す (4) opt-in の線は ruling-check が main で初めて true と読める commit で、同じ file の同じ字面が線の木に在る引用を線の前と数える (5) 宣言の key 2 つの型違い・重複・非文字列は宣言の誤り。無い repo は false と空 (6) doctor --repo の 4 行目が check=on / off / unreadable の 3 形で、母集団（files・cited）と unresolved と before-line の件数と id を出す。unreadable の理由は閉じた 3 語（declaration・ledger・git）で件数を出さない (7) close_reason.rs の is_ruling_id の隣に裁定の行の読み 1 本（pub）を置き、先頭の欄が裁定 id の行から 5 欄を返し、4 欄の古い行は経路を chat と読み、ほかの行は無しを返す。束の欄は解けるの判定が同じ行の欄から読み、5 欄の読みは変えない (8) 宣言の読みは rev を 1 引数で受け、HEAD 以外の rev の宣言を読む (9) ledger/mod.rs に pub mod citation。citation.rs は Issue を名指さず、台帳の読みは呼び手が渡す (10) 直す既存の歯に retroactive の札"
 
 [[contract]]
 id = "al"
