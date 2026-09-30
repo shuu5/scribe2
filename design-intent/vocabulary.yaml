@@ -70,7 +70,7 @@ terms:
   # ---------------------------------------------------------------- §5 day-1 optional adapter
   - canonical: day-1 optional adapter
     domain: consumer
-    definition: seam だけを最初から用意し、 採否を K 指標で決める外部依存の枠。 rtk と graphify が該当する。 依存の追加は A3 の対象。
+    definition: seam だけを最初から用意し、 採否を K 指標で決める外部依存の枠。 rtk と graphify が該当する。 依存の追加は A3 の対象。 graphify の枠は ADR-0105 (proposed) で code の索引が持つ。
     relationships: [rtk, graphify, seam, K 指標]
   - canonical: rtk
     domain: consumer
@@ -78,7 +78,7 @@ terms:
     relationships: [day-1 optional adapter]
   - canonical: graphify
     domain: consumer
-    definition: land ごとに知識グラフを生成して context を供給する候補 (day-1 optional adapter)。 v1 では micro-bench のみ (v1 の実測は本 repo へ持ち越していない・SPIKE-tooling-report.md 冒頭)。
+    definition: land ごとに知識グラフを生成して context を供給する候補 (day-1 optional adapter)。 v1 では micro-bench のみ (v1 の実測は本 repo へ持ち越していない・SPIKE-tooling-report.md 冒頭)。 2026-09-30 の試しで不採用の案 (ADR-0105・proposed・code の問い 53 のうち 9 合格)。
     relationships: [day-1 optional adapter, land]
   - canonical: K 指標
     domain: consumer
@@ -1965,3 +1965,35 @@ terms:
     aliases: [mechanism tooth]
     definition: 歯の対応の欄の !<名> の形 (ADR-0104)。 名は閉じた 4 語 write-set・place-only・new-file・closure で、 外した実装でも観測の変わらない構造の制約を器の仕組み (runner の guard・gate の最初の段・契約表の検査の閉包) が測ることを表す。 closure が測るのは、 足した file がほかの行の touches の型を名指して、 その行の閉包をその行の write-set の外へ広げないこと (子 module がほかの行の touches の型を名指さない約束を含む) で、 行は便の木で契約表の検査を撃つ検証行の 1 行を持つ。 挙動の約束には書かない。 仕組みが測らない構造の制約は done に載せない。 place-only は write-set の = の file を runner の allowlist から外し、 gate の最初の段が diff の = の file を落とす測り (設計 docs/design/contract-source.md §66 の行 (4)) を指す。
     relationships: [歯の対応の欄, done の項目, write-set, gate]
+  # ---------------------------------------------------------------- code の索引と逆引きの表 (ADR-0105・proposed)
+  - canonical: code の索引
+    domain: consumer
+    aliases: [code index]
+    definition: vessel 宣言の任意 key index-scip と index-roles が名乗る外の道具が commit の木から作った SCIP と構文の役の一致を、 器が自前の読み手で読んで state dir に置く平らな表 (ADR-0105・proposed・設計 docs/design/reverse-index.md)。 1 行 1 occurrence の導出値で、 真実の置き場にしない。 置き場の量の上限は rules 行 index.cap_mb。
+    relationships: [索引の鍵, 構文の役, 逆引きの表, day-1 optional adapter]
+  - canonical: 逆引きの表
+    domain: consumer
+    aliases: [reverse lookup table]
+    definition: 契約表の行が触る型と節が名指す型と関数を項目に、 参照・呼び手・literal・pattern・歯・可視性の連鎖・その項目を touches に持つほかの行の 7 列を、 site と write-set の外の印と母集団 (名の字の件数・索引の外の件数) とともに並べた表 (ADR-0105・proposed)。 口 pipe index show と審査の材料 index.txt が同じ字で出す。
+    relationships: [code の索引, 行の審査, 契約の審査]
+  - canonical: 索引の鍵
+    domain: consumer
+    aliases: [index key]
+    definition: code の木の鍵と索引の宣言の字を並べた字の digest (ADR-0105・proposed)。 同じ鍵の code の索引は作り直さず、 契約表の doc だけを変えた設計の PR は main の索引を使う。
+    relationships: [code の索引, 判定の鍵]
+  - canonical: 構文の役
+    domain: consumer
+    aliases: [syntax role]
+    definition: occurrence が literal・pattern・call・use・reexport・test・doclink・capture・vis のどれに当たるかを表す閉じた 9 語 (ADR-0105・proposed)。 どの構文の node がどの役かは vessel 宣言が名指す言語ごとの規則の file が持ち、 器は語だけを知る。
+    relationships: [code の索引]
+  - canonical: 索引の閉包
+    domain: consumer
+    aliases: [index closure]
+    definition: write-set の閉包の 3 形 (literal の構築・match の arm・variant の構築) を、 字の代わりに code の索引が解いた symbol で数えた file の集合 (ADR-0105・proposed)。 別名・Self の構築・glob の越しの site が加わる。 受付と行の審査だけが撃ち、 CI の契約表の検査は字面の閉包のまま。
+    relationships: [code の索引, 受付, 行の審査]
+    flagged_ambiguities: ["索引の閉包 (索引で解いた 3 形の file) と字面の閉包 (pipe/closure.rs の字面の走査・下界) は同じ形を別の測りで数える"]
+  - canonical: code の事実の欄
+    domain: consumer
+    aliases: [code facts field]
+    definition: 契約表の行の任意の欄 code-facts。 要素は列 (refs・files・callers・literals・patterns・teeth・vis) と項目と値の 1 組で、 行の審査・受付・起動の列が各々の commit の code の索引で測り、 違えば断るか受付の理由 code-facts で待たせる (ADR-0105・proposed)。
+    relationships: [code の索引, 逆引きの表, 受付, 起動の列]
