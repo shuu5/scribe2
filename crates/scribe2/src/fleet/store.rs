@@ -71,6 +71,18 @@ pub enum StoreError {
     /// 条件付き追記（[`append_if`]）の述語が偽だった: 便（値）は `pipe stop --run` で `Stopped` に落ちている
     /// （設計 pipeline.md §39）。書かずに断る。
     Stopped(String),
+    /// 条件付き追記（[`append_if`]）の述語 [`Condition::LineAbsent`] が偽だった（線の記帳・設計 case-lifecycle.md §11）。
+    /// 書かずに断る。
+    Refused(Refusal),
+}
+
+/// 線の記帳（[`Condition::LineAbsent`]）が断られた理由。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    /// 同じ線が既に在る（在る線は動かさない）。
+    Present,
+    /// close-check の線を足す周に切り替えの線が無い（close-check の線は切り替えの線より前にならない）。
+    NoCutover,
 }
 
 impl std::fmt::Display for StoreError {
@@ -82,6 +94,8 @@ impl std::fmt::Display for StoreError {
             Self::ReclaimToken(path) => write!(f, "fleet: 回収の token {path} が残っている（人が外す）"),
             Self::Rules(reason) => write!(f, "fleet: rules 行を引けない（{reason}）"),
             Self::Stopped(run) => write!(f, "fleet: run {run} は Stopped である（後の段を記帳しない）"),
+            Self::Refused(Refusal::Present) => write!(f, "fleet: 線は既に在る（動かさない）"),
+            Self::Refused(Refusal::NoCutover) => write!(f, "fleet: 切り替えの線が無い（close-check の線を先に足さない）"),
         }
     }
 }
@@ -93,6 +107,12 @@ pub enum Condition<'a> {
     NotStopped {
         /// 便 id。
         run: &'a str,
+    },
+    /// 線（[`super::lifecycle_line`]）が無い: `close_check` が偽なら切り替えの線が無い、真なら切り替えの線が在って
+    /// close-check の線が無い。
+    LineAbsent {
+        /// close-check の線を足す周か。
+        close_check: bool,
     },
 }
 
@@ -341,6 +361,14 @@ fn holds(path: &Path, condition: Condition<'_>) -> Result<(), StoreError> {
                 Err(StoreError::Stopped(run.to_owned()))
             } else {
                 Ok(())
+            }
+        }
+        Condition::LineAbsent { close_check } => {
+            let lines = super::lifecycle_line::read_lines(&events);
+            match (close_check, lines.cutover.is_some(), lines.close_check.is_some()) {
+                (false, true, _) | (true, _, true) => Err(StoreError::Refused(Refusal::Present)),
+                (true, false, false) => Err(StoreError::Refused(Refusal::NoCutover)),
+                _ => Ok(()),
             }
         }
     }
@@ -787,6 +815,39 @@ mod tests {
         std::fs::write(events_path(&dir), "こわれ\n").expect("壊れた行を書ける");
         assert!(matches!(append_if(&dir, &other, policy, Condition::NotStopped { run: "other" }), Err(StoreError::Malformed { .. })));
         assert_eq!(std::fs::read_to_string(events_path(&dir)).unwrap_or_default(), "こわれ\n", "読めない周は書かない");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// (2) 線の述語は lock の中で評価する: 2 本の thread が同じ `LineAbsent` で足すと 1 件だけ入り、もう一方は `Present` で断る。
+    /// close-check の述語は切り替えの線の無い log では `NoCutover` で断り、線の後は足せて 2 度目は `Present` で断る。
+    #[test]
+    fn cutover_line_condition_admits_exactly_one_of_two_threads() {
+        use super::{append_if, events_path, read_all, Condition, Refusal};
+        use crate::fleet::{Case, Event, EventKind};
+        use crate::pipe::fixture::event;
+        let dir = scratch("cutover-line");
+        let policy = LockPolicy { retry_ms: 5_000, stale_ms: 600_000 };
+        let line = Event {
+            case: Some(Case::Cutover { version: "0.1.0".to_owned(), main: "0123abcd".to_owned() }),
+            run: String::new(),
+            bead: String::new(),
+            ..event("", EventKind::LifecycleCutover, None, None, None)
+        };
+        let close = Event { detail: Some("close-check".to_owned()), ..line.clone() };
+        let refused = append_if(&dir, &close, policy, Condition::LineAbsent { close_check: true });
+        assert_eq!(refused, Err(StoreError::Refused(Refusal::NoCutover)), "切り替えの線の前は足せない");
+        assert!(!events_path(&dir).exists() || read_all(&dir).expect("読める").is_empty(), "断った周は書かない");
+        let cutover = Condition::LineAbsent { close_check: false };
+        let results: Vec<_> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..2).map(|_| scope.spawn(|| append_if(&dir, &line, policy, cutover))).collect();
+            handles.into_iter().map(|handle| handle.join().expect("thread が落ちない")).collect()
+        });
+        assert_eq!(results.iter().filter(|found| found.is_ok()).count(), 1, "{results:?}");
+        assert!(results.contains(&Err(StoreError::Refused(Refusal::Present))), "{results:?}");
+        assert_eq!(read_all(&dir).expect("読める").len(), 1, "1 件だけ");
+        append_if(&dir, &close, policy, Condition::LineAbsent { close_check: true }).expect("切り替えの線の後は足せる");
+        assert_eq!(append_if(&dir, &close, policy, Condition::LineAbsent { close_check: true }), Err(StoreError::Refused(Refusal::Present)));
+        assert_eq!(read_all(&dir).expect("読める").len(), 2);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
