@@ -1106,7 +1106,7 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 8. 判定の台帳の読みは、land の `--bd` の client で 1 回。読めない周は当たりと同じく留める（名指しは `unmeasured:<語>`）。通すに読み替えない。
 9. **列の読み**: 列の読みは detail の頭 `held:` と `released:` を FR の語に依らず読む（行 bf の `held:FR84:` と `released:FR84` も同じ読みで外れて戻る）。
 10. **閉包を広げない**: 子 module（留めの判定）は `Land`・`Stage`・`EventKind`・`Issue` を名指さず、repo・base・head・台帳の client の素の値を受けて名指しの列を返す。記帳（RunStage）は land.rs が書く。
-    - この分け方は挙動に差が出ないので done には載せない（行 be の最初の便の契約審査が vacuous-assert の FAIL で歯の無い done の項目として名指した・約束 7 と同じ扱い）。
+    - 4 つの型はほかの行の touches に在り、子が名指すとその行の閉包に子の file が入って、現物の契約表の閉包の検査（gate の共通の verify の歯と同じ `contracts check`）が赤になる。runner が自分の verify で気づけるよう、便の木で `contracts check` を撃つ 1 行を verify の最終行に置き、done (9) の歯にする（dispatcher.md 行 al の 2 本目の便が同じ形の約束を破って gate で落ちた・前の直しの「挙動に差が出ない」は誤り）。
 
 ### 依存
 - `dispatcher.md 行 ak`（数えの関数と rev つきの宣言の読み）。台帳の依存（bead の blocks）で結ぶ。
@@ -1769,10 +1769,10 @@ title = "着地は、便の base の宣言が ruling-check = true の便の差�
 req = ["FR83", "FR10"]
 section = "62"
 write-set = ["+crates/scribe2/src/pipe/land/ruling_hold.rs", "crates/scribe2/src/pipe/land.rs", "crates/scribe2/src/pipe/queue.rs", "crates/scribe2/src/pipe/train.rs", "crates/scribe2-boundary/tests/e2e/pipe/land.rs", "=crates/scribe2/src/pipe/declaration/optional_keys.rs", "=crates/scribe2/src/pipe/dispatch.rs", "=crates/scribe2/src/pipe/gate/lens.rs"]
-verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_land_ruling_hold_", "cargo nextest run -p scribe2 --lib --no-tests=fail hold_diff_", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_order_held_", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_order_", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_train_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_land_turn_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_land_pr_cmd_"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_land_ruling_hold_", "cargo nextest run -p scribe2 --lib --no-tests=fail hold_diff_", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_order_held_", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_order_", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_train_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_land_turn_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_land_pr_cmd_", "cargo run -q -p scribe2-boundary --bin scribe2 -- contracts check --repo ."]
 size = "M"
 growth = ["crates/scribe2/src/pipe/land.rs:12", "crates/scribe2/src/pipe/queue.rs:22", "crates/scribe2/src/pipe/train.rs:6"]
-done = "(1) base の宣言が ruling-check = true の便で、差分が足す解けない 3 形・線の後の時刻の形・問い id の形の無い判断の欄 3 種・接頭辞違いだけの判断の欄・問い id を足さない ruling-check の外しの 8 形が、main を動かさず PR も開かず Gated に留まる (2) 理由の event は RunStage Gated の held:FR83:<並べ替えた名指し> で、同じ理由の周を何度撃っても 1 件のまま、名指しが変わった周は新しい 1 件。retries を超える周を回しても Failed が無い (3) 線の前の引用・key の無い repo・解ける 4 形は着地し、released を記帳しない (4) 留めの後に台帳が解けた周は released:FR83 を 1 件記帳して着地する (5) 列の読みが held の便を番と後続の列から外し、released の後に戻す。候補の木の先頭は当たる後続を積まない (6) 台帳を読めない周は unmeasured の名指しで留め、通さない (7) 列の読みは detail の頭 held: と released: を FR の語に依らず読む (8) 候補の木の先頭が当たる後続を積まないことを、train.rs に新しく置く歯の区間の pipe_train_ の lib の歯 1 本で測る"
+done = "(1) base の宣言が ruling-check = true の便で、差分が足す解けない 3 形・線の後の時刻の形・問い id の形の無い判断の欄 3 種・接頭辞違いだけの判断の欄・問い id を足さない ruling-check の外しの 8 形が、main を動かさず PR も開かず Gated に留まる (2) 理由の event は RunStage Gated の held:FR83:<並べ替えた名指し> で、同じ理由の周を何度撃っても 1 件のまま、名指しが変わった周は新しい 1 件。retries を超える周を回しても Failed が無い (3) 線の前の引用・key の無い repo・解ける 4 形は着地し、released を記帳しない (4) 留めの後に台帳が解けた周は released:FR83 を 1 件記帳して着地する (5) 列の読みが held の便を番と後続の列から外し、released の後に戻す。候補の木の先頭は当たる後続を積まない (6) 台帳を読めない周は unmeasured の名指しで留め、通さない (7) 列の読みは detail の頭 held: と released: を FR の語に依らず読む (8) 候補の木の先頭が当たる後続を積まないことを、train.rs に新しく置く歯の区間の pipe_train_ の lib の歯 1 本で測る (9) 子 module は Land・Stage・EventKind・Issue を名指さず、verify の最終行の contracts check が便の木で findings 0"
 
 [[contract]]
 id = "bf"
