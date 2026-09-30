@@ -221,10 +221,15 @@ C3 は「1 つの DB file（host 列）」と言う。MVP はそれを **append-
   2. **読む値**: payload を `json_tree::parse` で読み、`prompt`（逐語・escape を解いた字）と `session_id` を取る。prompt の key が無い・空白だけの周は何も書かず、何も出さない（既存の歯の payload はこの形なので、出力が変わらない）。
   3. **除外（閉じた 4 つ）**。当たる周は記帳も出力もしない。
      - (a) 差し込みの行: prompt の頭が `<NAME> <語>:` で、語が閉じた 4 語（pipe・seat・group・tick）のどれか。
-     - (b) 別の session からの包み: prompt の頭が閉じた一覧の字（const slice 1 本）で始まる。一覧は実装の前に実測で決める（下の「未決」）。
+     - (b) 別の session と harness からの包み: prompt の頭（先頭の空白を除く）が閉じた一覧の字（const slice 1 本・5 つ）のどれかで始まる。
+       - `Another Claude session sent a message:`（別の session と teammate の message の包みの 1 行目）
+       - `<cross-session-message`・`<teammate-message`（包みの 2 行目が頭に来る形）
+       - `<task-notification>`（背景の task と subagent の完了の知らせ）
+       - `This session is being continued from a previous conversation`（compaction の後の要約）
+       - 出所: orchestrator の席の transcript 1 本（2026-09-30）で、user の turn の本文の頭を数えた実測。`<task-notification>` 297 件、1 行目が `Another Claude session sent a message:` の包み 136 件（2 行目が `<cross-session-message` 107 件・`<teammate-message` 29 件）、compaction の要約 44 件。背景の task の知らせと compaction の要約は別の session ではないが、user の発話でもないので同じ一覧で外す。
      - (c) runner: `--plugin-root` が anchor の state dir の `pipe` の dir（`pipe::run_dir` と同じ導出）の下。
-     - (d) lens は hook が撃たれないので code は持たない。起動行に `--plugin-dir` が無いことを歯で押さえる。
-  4. **ts**: 秒の下にミリ秒の 3 桁を持つ UTC の字面（`YYYY-MM-DDTHH:MM:SS.mmmZ`）。作る関数は `fleet/cli.rs` の `format_utc` の隣の 1 本、逆の読みは `fleet/wait.rs` の `epoch_of` の隣の 1 本（ミリ秒の形だけを読む）。
+     - (d) lens は hook が撃たれないので code は持たない（`headless/lens.rs` の起動の `Call` は `plugin_dir: None`・e2e の `headless.rs` の偽の claude の argv の読みで確かめられる既存の事実）。本行は lens に触らないので、この除外は歯を持たない。
+  4. **ts**: 秒の下にミリ秒の 3 桁を持つ UTC の字面（`YYYY-MM-DDTHH:MM:SS.mmmZ`）。作る関数は `fleet/cli.rs` の `format_utc` の隣の 1 本、逆の読みは `fleet/wait.rs` の `epoch_of` の隣の 1 本（ミリ秒の形だけを読む）。`wait` は `fleet/mod.rs` の私有の `mod wait` なので、足した読みは同じ file の `pub use wait::{…}` の列（今は `epoch_of` などを出す 1 行）に 1 語足して crate の外にも出す。
   5. **一意の振り方**: `fleet/store.rs` に追記の関数を 1 本足す。lock の中で今の時刻を取り、log の末尾の固定の byte（64 KiB）だけを後ろから読んで、最後の発話 event の ts を探す。振る ts は「今」と「最後の ts + 1 ms」の大きい方。読む byte は log の大きさに依らない（NFR5）。既存の `append_if` は log 全体を読むので使わない。
   6. **書く行**: `UtteranceReceived`・actor human・channel chat・session は payload の値・detail は逐語そのまま（改行を含めて 1 byte も変えない）・run は無し。
   7. **返す 1 行**: 記帳できた周だけ stdout に `<NAME> utterance: ts=<ts>` を 1 行出す（群の行より前）。逐語は載せない（FR65）。席はこの ts で、同じ turn の中で仕分けか結びを撃てる。
@@ -233,13 +238,14 @@ C3 は「1 つの DB file（host 列）」と言う。MVP はそれを **append-
 - 歯（e2e は既存の `tests/e2e/hook/session.rs` に足す。新しい e2e の file は作らない。lib は行 g の `+` の file の歯の区間）:
   - e2e `hook_utterance_record_`:
     - (a) 開いた問いが在る時と無い時（偽の bd が呼ばれた回数を数える）の 2 本で、発話 event が 1 件ずつ・逐語は改行と非 ASCII と `"` を含めて一致・session と channel chat・bd の呼び出しは 0 回・stdout は ts の 1 行。
-    - (b) 差し込みの 9 種の見本と包みの見本と runner の plugin-root で、どれも記帳が 0・stdout は 0 byte。
+    - (b) 差し込みの 9 種の見本と包みの 5 つの頭の見本（それぞれ後ろに本文の行を持つ）と runner の plugin-root で、どれも記帳が 0・stdout は 0 byte。
     - (c) marker の無い repo と別の NAME の repo で 0 件。
     - (d) 同じ秒に 2 回撃つと ts が 2 つとも違い、log の順に増える。
     - (e) `pipe report` の human_events が発話の前後で同じ。
   - lib `utterance_tail_`:
     - (f) 数える reader を通した 10 MB と 20 MB の log で、読む byte が同じ（上限の中）。
     - (g) 作り手の 9 種の 1 行を実物の関数で作り、(a) の判定が全部を差し込みと読む（種の数を const の表から数えて母集団として出す）。
+      - 作り手のうち 3 つは私有の module の中に在る（`pipe/mod.rs` の `notify`・`pipe/dispatch.rs` の `group`・`seat/tick.rs` の `signal`）。この 3 つの mod 宣言を `pub(crate)` に広げ、作り手の関数も crate の中から呼べる可視性にする。行は増やさない。
     - (h) ミリ秒の字面の作りと読みが往復する。
   - base で RED の理由: 機能不在。書き手が無いので (a)(d) は 0 件で落ちる。lib の (f)(g)(h) は新しい file の中なので、base では該当 0 本（rc 4）。(b)(c)(e) は除外だけだと base で緑になる。そこで同じ歯の中で先に普通の prompt を 1 件記帳させる対照を置き、base で RED にする（負例だけの歯にしない）。
 - 触らない:
@@ -272,7 +278,7 @@ C3 は「1 つの DB file（host 列）」と言う。MVP はそれを **append-
   - 器が台帳へ書く口は `ledger/mod.rs` の `close` だけ（cwd を repo に固定して bd を撃つ）。notes の追記と、1 本の bead の status・label・起票の時刻・metadata を読む口は無い。
     - 席の読み（`seat/ledger.rs` の `Issue`）は起票の時刻と metadata を持たない。この型は別の係の行が field を足す見込みなので触らない。
   - 裁定 id の形の判定は `ledger/close_reason.rs` の `is_ruling_id` に在る（問い id の形・batch・policy）。
-  - 問いの label と asked の値は `ledger/form.rs` の `QUESTION_LABEL` と `ledger/question.rs` の `ASKED`（seat・user）と `ASKED_KEY`。
+  - 問いの label と asked の値は `ledger/form.rs` の `QUESTION_LABEL` と `ledger/question.rs` の `ASKED`（seat・user）と `ASKED_KEY`。`ASKED_KEY` は私有なので、行 h が `pub(crate)` に広げる。
   - `seat ruling add` を名指すもの:
     - code: `help.rs` の表の 1 行、`seat/cli.rs` の使い方、`fleet/mod.rs` の注。
     - 歯: e2e の `seat/ruling.rs` の 4 本と、使い方の snapshot。
@@ -312,6 +318,9 @@ C3 は「1 つの DB file（host 列）」と言う。MVP はそれを **append-
     - (c) 1 つの発話を 2 つの問いへ結べる。
     - (d) 半端な結び（notes と close だけ済み）の撃ち直しが event だけを足す。
     - (e) 使い方の行に `ruling add` が無く、`ruling bind` が在る。
+    - (f) (a) の後の `seat ruling ls` の行が `ruling=<id>` を出す（消す `fleet_ruling_add_` の ls の歯の代わり）。
+    - (g) 偽の bd の show が読めない JSON を返す周は rc 1 で `reason=ledger-unreadable` を出し、event log も偽の bd の書きも変えない。
+    - (h) 偽の bd が close の撃ちの中で event log の path を dir に替えた周は rc 1 で `partial` を出し、notes と close の書きは残る。同じ組の撃ち直しは (d) と同じく event だけを足す。
   - lib `fleet_ruling_body_`: 新しい形の行の往復・`rule` との併せ持ちの malformed・古い `rule` だけの行の読み。
   - 既存の歯の扱い（retroactive の札が要る）:
     - `fleet_ruling_add_` の 2 本は消す。
@@ -402,20 +411,20 @@ id = "g"
 title = "user の prompt を model が読む前に発話 event として記帳する — UserPromptSubmit の hook が差し込みの行・別の session の包み・runner・marker の外を除き、逐語を一意のミリ秒の ts で書いて ts の 1 行を返す（台帳を読まず・読む byte は log の大きさに依らない・ADR-0083・ADR-0087）"
 req = ["FR82", "FR88", "NFR5"]
 section = "13"
-write-set = ["+crates/scribe2/src/hook/utterance.rs", "crates/scribe2/src/hook/mod.rs", "crates/scribe2/src/fleet/store.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/src/fleet/wait.rs", "crates/scribe2/src/pipe/notify.rs", "crates/scribe2/src/pipe/dispatch/group.rs", "crates/scribe2/src/headless/mod.rs", "crates/scribe2-boundary/tests/e2e/hook/session.rs"]
+write-set = ["+crates/scribe2/src/hook/utterance.rs", "crates/scribe2/src/hook/mod.rs", "crates/scribe2/src/fleet/store.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2/src/fleet/wait.rs", "crates/scribe2/src/fleet/mod.rs", "crates/scribe2/src/pipe/notify.rs", "crates/scribe2/src/pipe/dispatch/group.rs", "crates/scribe2/src/headless/mod.rs", "crates/scribe2/src/pipe/mod.rs", "crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/seat/tick.rs", "crates/scribe2-boundary/tests/e2e/hook/session.rs"]
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail hook_utterance_record_", "cargo nextest run -p scribe2 --lib --no-tests=fail utterance_tail_"]
 size = "M"
-growth = ["crates/scribe2/src/hook/utterance.rs:230", "crates/scribe2/src/hook/mod.rs:6", "crates/scribe2/src/fleet/store.rs:75", "crates/scribe2/src/fleet/cli.rs:14", "crates/scribe2/src/fleet/wait.rs:30", "crates/scribe2/src/pipe/notify.rs:12", "crates/scribe2/src/pipe/dispatch/group.rs:12", "crates/scribe2/src/headless/mod.rs:10"]
-done = "(1) hook の子 module 1 つが user-prompt-submit の枝で打刻の後・群の行の前に 1 回撃たれる (2) payload を json_tree で読み、prompt の無い・空白だけの周は何も書かず何も出さない (3) 頭が <NAME> と閉じた 4 語の差し込みの行・閉じた一覧の包み・plugin-root が state dir の pipe の dir の下の runner は記帳も出力もせず、lens の起動行は --plugin-dir を持たない (4) ts はミリ秒 3 桁の UTC の字面で、作りと読みは fleet/cli.rs と fleet/wait.rs の各 1 本 (5) store の追記の 1 本が lock の中で末尾 64 KiB だけを読んで最後の発話の ts より 1 ms 以上後の ts を振る (6) 行は UtteranceReceived・human・chat・session・逐語の detail・run 無し (7) 記帳した周だけ stdout に <NAME> utterance: ts=<ts> の 1 行（逐語なし） (8) session 無し・lock・書けない周は rc 0 で stderr 1 行 reason=no-session|lock|write (9) bd を撃たない 歯: hook_utterance_record_ が問いの有無の 2 本の記帳と逐語の一致と bd 0 回・差し込み 9 種と包みと runner の 0 件・marker の外 2 形の 0 件・同じ秒の 2 発話の ts の違いと順・pipe report の human_events の不変を、utterance_tail_ が 10 MB と 20 MB の読む byte の一致・作り手 9 種の実物の行の判定・ミリ秒の往復を測る。base は書き手が無く記帳 0 件で RED"
+growth = ["crates/scribe2/src/hook/utterance.rs:230", "crates/scribe2/src/hook/mod.rs:6", "crates/scribe2/src/fleet/store.rs:75", "crates/scribe2/src/fleet/cli.rs:14", "crates/scribe2/src/fleet/wait.rs:30", "crates/scribe2/src/fleet/mod.rs:1", "crates/scribe2/src/pipe/notify.rs:12", "crates/scribe2/src/pipe/dispatch/group.rs:12", "crates/scribe2/src/headless/mod.rs:10", "crates/scribe2/src/pipe/mod.rs:1", "crates/scribe2/src/pipe/dispatch.rs:1", "crates/scribe2/src/seat/tick.rs:1"]
+done = "(1) hook の子 module 1 つが user-prompt-submit の枝で打刻の後・群の行の前に 1 回撃たれる (2) payload を json_tree で読み、prompt の無い・空白だけの周は何も書かず何も出さない (3) 頭が <NAME> と閉じた 4 語の差し込みの行・閉じた 5 つの頭の包み（別の session と teammate の包みの 3 形・背景の task の知らせ・compaction の要約）・plugin-root が state dir の pipe の dir の下の runner は記帳も出力もしない（lens は hook が撃たれない既存の事実で、本行は触らない） (4) ts はミリ秒 3 桁の UTC の字面で、作りと読みは fleet/cli.rs と fleet/wait.rs の各 1 本 (5) store の追記の 1 本が lock の中で末尾 64 KiB だけを読んで最後の発話の ts より 1 ms 以上後の ts を振る (6) 行は UtteranceReceived・human・chat・session・逐語の detail・run 無し (7) 記帳した周だけ stdout に <NAME> utterance: ts=<ts> の 1 行（逐語なし） (8) session 無し・lock・書けない周は rc 0 で stderr 1 行 reason=no-session|lock|write (9) bd を撃たない (10) 作り手の親の mod 宣言 3 つ（pipe の notify・dispatch の group・tick の signal）を pub(crate) に広げ、作り手の関数を crate の中から呼べるようにし、行を増やさない (11) ミリ秒の読みを fleet/mod.rs の pub use wait の列に 1 語足す 歯: hook_utterance_record_ が問いの有無の 2 本の記帳と逐語の一致と bd 0 回・差し込み 9 種と包みと runner の 0 件・marker の外 2 形の 0 件・同じ秒の 2 発話の ts の違いと順・pipe report の human_events の不変を、utterance_tail_ が 10 MB と 20 MB の読む byte の一致・作り手 9 種の実物の行の判定・ミリ秒の往復を測る。base は書き手が無く記帳 0 件で RED"
 
 [[contract]]
 id = "h"
 title = "器の結びの口 seat ruling bind — 記帳された発話と開いた台帳の問いを結び、裁定 id を発行して 5 欄の裁定の行を notes に書き、裁定 <id> で close し、RulingReceived に ruling・utterance・channel・question_ts・asked を足す。逐語を受ける seat ruling add は消す（ADR-0083・ADR-0087・ADR-0089）"
 req = ["FR82", "FR89", "FR91"]
 section = "14"
-write-set = ["crates/scribe2/src/seat/ruling.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/ledger/mod.rs", "crates/scribe2/src/fleet/mod.rs", "crates/scribe2/src/fleet/event.rs", "crates/scribe2/src/pipe/dispatch/refused.rs", "crates/scribe2/src/help.rs", "crates/scribe2-boundary/tests/e2e/seat/ruling.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__seat__seat_usage_external_form.snap"]
+write-set = ["crates/scribe2/src/seat/ruling.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/ledger/mod.rs", "crates/scribe2/src/ledger/question.rs", "crates/scribe2/src/fleet/mod.rs", "crates/scribe2/src/fleet/event.rs", "crates/scribe2/src/pipe/dispatch/refused.rs", "crates/scribe2/src/help.rs", "crates/scribe2-boundary/tests/e2e/seat/ruling.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__seat__seat_usage_external_form.snap"]
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_ruling_bind_", "cargo nextest run -p scribe2 --lib --no-tests=fail fleet_ruling_body_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail fleet_ruling_report_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail fleet_ruling_doctor_"]
 size = "L"
-growth = ["crates/scribe2/src/seat/ruling.rs:170", "crates/scribe2/src/seat/cli.rs:25", "crates/scribe2/src/ledger/mod.rs:110", "crates/scribe2/src/fleet/mod.rs:45", "crates/scribe2/src/fleet/event.rs:70", "crates/scribe2/src/pipe/dispatch/refused.rs:2", "crates/scribe2/src/help.rs:2"]
-done = "(1) seat ruling bind --repo --state-dir --question --utterance [--bd] が在る (2) 無い ts・結び済みの組・閉じた問い・問いでない bead を、この順に閉じた 4 語で何も書かずに rc 1 で断る (3) ledger に bead 1 本の読みを足し、読めない周は ledger-unreadable で何も書かない (4) 裁定 id は <問い id>:<発話の時分>-1 で is_ruling_id が真 (5) notes に 5 欄の 1 行（逐語は JSON の文字列の字面で最後の欄・同じ行は重ねない） (6) 裁定 <id> で close (7) RulingReceived は Case の新しい variant に 5 key を持ち、rule との併せ持ちは malformed、rule だけの古い行は読める (8) notes→close→event の順で、半端な結びの撃ち直しは event だけを足す (9) stdout 1 行に逐語を載せない (10) seat ruling add と専用の部品を消し、ls は新しい形で ruling= を出す (11) 使い方と help の表が bind を持ち add を持たない 歯: seat_ruling_bind_ が 2 形の通過と行・close・event・id の形、断り 4 形の不変、1 発話 2 問、半端な結びの仕上げ、使い方の add の不在を、fleet_ruling_body_ が新しい形の往復と併せ持ちの断りと古い行の読みを測る。既存の fleet_ruling_ の 2 本は消し、2 本は fixture を event の直書きに替える。base は bind が使い方の誤りで RED"
+growth = ["crates/scribe2/src/ledger/question.rs:1", "crates/scribe2/src/seat/ruling.rs:170", "crates/scribe2/src/seat/cli.rs:25", "crates/scribe2/src/ledger/mod.rs:110", "crates/scribe2/src/fleet/mod.rs:45", "crates/scribe2/src/fleet/event.rs:70", "crates/scribe2/src/pipe/dispatch/refused.rs:2", "crates/scribe2/src/help.rs:2"]
+done = "(1) seat ruling bind --repo --state-dir --question --utterance [--bd] が在る (2) 無い ts・結び済みの組・閉じた問い・問いでない bead を、この順に閉じた 4 語で何も書かずに rc 1 で断る (3) ledger に bead 1 本の読みを足し、読めない周は ledger-unreadable で何も書かない (4) 裁定 id は <問い id>:<発話の時分>-1 で is_ruling_id が真 (5) notes に 5 欄の 1 行（逐語は JSON の文字列の字面で最後の欄・同じ行は重ねない） (6) 裁定 <id> で close (7) RulingReceived は Case の新しい variant に 5 key を持ち、rule との併せ持ちは malformed、rule だけの古い行は読める (8) notes→close→event の順で、半端な結びの撃ち直しは event だけを足す (9) stdout 1 行に逐語を載せない (10) seat ruling add と専用の部品を消し、ls は新しい形で ruling= を出す (11) 使い方と help の表が bind を持ち add を持たない (12) ledger/question.rs の ASKED_KEY を pub(crate) に広げる 歯: seat_ruling_bind_ が 2 形の通過と行・close・event・id の形、断り 4 形の不変、1 発話 2 問、半端な結びの仕上げ、使い方の add の不在、ls の ruling= の列、ledger-unreadable の不変、partial の rc 1 と撃ち直しを、fleet_ruling_body_ が新しい形の往復と併せ持ちの断りと古い行の読みを測る。既存の fleet_ruling_ の 2 本は消し、2 本は fixture を event の直書きに替える。base は bind が使い方の誤りで RED"
 <!-- contracts:end -->

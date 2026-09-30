@@ -17,6 +17,7 @@
 - 出所 = Claude Code の hook event（席の中で器の binary が呼ばれる）:
   - `UserPromptSubmit` → `Busy`（注入された 1 行も user の入力として submit されるので、tick の pointer が消費された周もここで Busy になる）
   - `Stop` → `Idle`（turn の終端。`stop_hook_active` が真の再入は打刻しない）
+    - 器の turn の終わりの止め（[dialogue-surface.md](./dialogue-surface.md) §12・行 k）が止めた周は打たず（Busy のまま）、その止めの続きの終わりの再入で打つ。
   - `SessionStart` → `Idle`（作り直し・再開・/clear の後。既存の `session-start` hook に打刻を足す）
 - 打刻の形: `<state_dir>/seat/<target>/state.jsonl` へ **1 行 JSON を append**（`schema` / `state` / `event` / `ts`〔UTC〕/ `sid`）。tick と cycle は**最終行**を読む。append-only は heartbeat / tick.jsonl と同じ store（`fleet::store::append_line`・lock 込み）を通す。
 - 出所付き（C10）: 行の `event` が「どの hook から来た値か」を名乗る。tick の判定行は `state=<busy|idle|missing|unreadable|stale> event=<SessionStart|UserPromptSubmit|Stop|none>` を出す（`source=` は置き場の出所〔flag|git-config〕の既存 token ゆえ流用しない・planner 裁定 2026-09-11）。
@@ -43,6 +44,7 @@
 
 - 打刻 hook（UserPromptSubmit / Stop / SessionStart の打刻）は**行為を止めない**ので guard ではない（[polarity.md §2](./polarity.md) の定義）＝極性一覧に載せない。打刻に失敗しても席は止めない（stdout 0 byte・rc 0）。
 - 「状態が無い・読めない・stale なら注入しない」という tick の判定は、tick ごと消えた（`s2-07l.479.1`・§4）。
+- 打刻は guard でないが、同じ Stop の周の turn の終わりの判定（dialogue-surface.md §12）は行為を止めるので guard で、極性一覧に 1 行を持つ（turn-end-block・in-loop・fail-open）。
 
 ## 6. 証拠の出所（`s2-07l.112` で本文化）と後続
 
