@@ -1801,3 +1801,45 @@ terms:
     aliases: [write cutoff]
     definition: 今から rules 行 seat.drafts_stale_h の時間を引いた時刻 (ADR-0096)。 起草の木の中間生成物の dir は、 その dir 自身と下の全 entry の mtime の最新がこの線より前のときだけ消える。 便の worktree には掛けない。
     relationships: [起草の置き場, 中間生成物, rules 行]
+  # ---------------------------------------------------------------- 門の読み手と shell が撃たない字 (ADR-0099)
+  - canonical: 共有の分割
+    domain: consumer
+    aliases: [shared splitter]
+    definition: Bash の command を引用の外の改行と operator で segment に切り、 引用を解いた語の列にして返す器の 1 本の読み (ADR-0099)。 host-guard の判定・起票の門・台帳のグラフの門・anchor の門・merge の門・live-row の門と公開の門が共有する読み手・公開の印の読みの 7 か所が読む。 区切りを引用した heredoc の本文の読みもここに在る。
+    relationships: [host-guard, 起票の門, 公開の segment, command guard, 撃たない字]
+    flagged_ambiguities: [command guard の分割 (引用を解かない別の読み) とは別]
+  - canonical: 撃たない字
+    domain: consumer
+    aliases: [unexecuted text]
+    definition: shell が command として撃たない字 (ADR-0099)。 門が読みから外すのは、 本文を shell に渡さない受け手だけの command 行の区切りを引用した heredoc の本文と、 全ての頭が閉じた頭の列に在り生きた置換を持たない command の data の頭の segment の、 単引用の中の字と引用の外か二重引用の中で逆斜線が逃がした字だけ。
+    relationships: [共有の分割, 引用した区切り, 本文を shell に渡さない受け手, data の頭, 閉じた頭の列]
+  - canonical: 引用した区切り
+    domain: consumer
+    aliases: [quoted delimiter]
+    definition: heredoc の区切りの語のうち、 単引用・二重引用・逆斜線のどれかを含むもの (ADR-0099)。 shell は本文を展開せずに字のまま受け手へ渡す。 展開を止めるだけで、 受け手が本文を撃つかは決めない。
+    relationships: [共有の分割, 本文を shell に渡さない受け手, 撃たない字]
+  - canonical: 本文を shell に渡さない受け手
+    domain: consumer
+    aliases: [non-shell sink]
+    definition: heredoc の本文を shell の command として撃たずに受け取る命令の閉じた列 cat・tee・python3・python (ADR-0099)。 python3 と python は heredoc の operator と redirect の外の引数が無いか - 1 つだけの周だけ列に入り、 本文を Python の program として撃つ (本文の中の撃ちは門が測らない限界)。 -c や script の path を持つ python3 は入れない。 command 行の全ての segment がこの列の命令のときだけ、 共有の分割は本文を segment に入れない。
+    relationships: [共有の分割, 引用した区切り, 撃たない字]
+  - canonical: data の頭
+    domain: consumer
+    aliases: [data head]
+    definition: 単引用の中の字を shell にも他の program にも渡さない命令の閉じた列 echo・grep・egrep・fgrep・cat・tee・jq (ADR-0099)。 この頭の segment だけ、 公開の門は撃たない字の command 置換の字を語を割る判じに数えない。 字を撃つ option や読みを持つ頭 (sed の e・rg の --pre・printf の -v・bd の mail と edit・bdw) は入れない。
+    relationships: [閉じた頭の列, 撃たない字, wrapped の印]
+  - canonical: 閉じた頭の列
+    domain: consumer
+    aliases: [closed head list]
+    definition: data の頭の免除が効くための、 command の全ての segment の頭の語の閉じた列 (allowlist・ADR-0099)。 data の頭と、 撃たない整形の頭 head・tail・wc・uniq・cut・tr と、 cd から成り、 どの頭も字を撃つ option を持たない。 列の外の頭か、 生きた置換か process 置換が 1 つでも在れば、 その command の全ての segment で免除を取り消す。
+    relationships: [data の頭, 撃たない字]
+  - canonical: wrapped の印
+    domain: consumer
+    aliases: [wrapped mark]
+    definition: 公開の門の印の 1 つで、 頭の語が git でも gh でもない segment の細かい語に、 git と後ろの push か、 gh と後ろの公開の群の語が在るときに付き、 解けない形として断る (設計 docs/design/vessel-hook.md §17・ADR-0078)。 読みだけの閉じた表に当たる gh には付けない (ADR-0099)。
+    relationships: [公開の segment, 公開の字面の走査, 読みだけの閉じた表]
+  - canonical: 読みだけの閉じた表
+    domain: consumer
+    aliases: [read-only table]
+    definition: 外へ何も出さない gh の群と動詞の対の閉じた表 (pr の view・list・status・checks・diff、 issue の view・list・status、 release・gist・repo の view・list、 label の list) と、 api の GET の形 (ADR-0099)。 器の定数で持ち、 表の外は wrapped の印を受ける。
+    relationships: [wrapped の印, 公開の segment]
