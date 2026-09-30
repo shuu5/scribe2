@@ -135,11 +135,11 @@ user の裁定を受けた turn の中で対話面の席の口（seat ruling add
   - e2e `utterance_sort_`（偽の bd と、event の fixture で書いた発話）:
     - (a) 要望と会話がそれぞれ仕分けの event を 1 件書き、偽の bd の書きは 0 回。会話は、偽の bd の show が読めない JSON を返す置き場でも rc 0 で 1 件書き、偽の bd の呼び出しの記録が 0 行（約束 4 の台帳を読まない）。
     - (b) 1 つの発話を 2 つの memo へ仕分けられる。
-    - (c) 断りの 5 形（無い ts の no-utterance・答えを持つ発話への会話の linked・名指しが無い bead / 閉じた memo / label intake:memo の無い bead の not-memo 3 形）が、どれも rc 1・stdout 0 byte・stderr が `utterance: refused reason=<語> ts=<ts>` の 1 行と逐語で一致し、event log が不変。ledger-unreadable は (e3)。
+    - (c) 断りの 7 形（無い ts の no-utterance を `--as request` と `--as chat` の 2 形・答えを持つ発話への会話と要望を持つ発話への会話の linked 2 形・名指しが無い bead / 閉じた memo / label intake:memo の無い bead の not-memo 3 形）が、どれも rc 1・stdout 0 byte・stderr が `utterance: refused reason=<語> ts=<ts>` の 1 行と逐語で一致し、event log が不変。ledger-unreadable は (e3)。会話の口で発話の在否を見ない実装と、答えだけを linked に数える実装を落とす（FR88 は要望か答えの仕分けを持つ発話への会話を断る）。
     - (c2) 断りの順: 無い ts ∧ 偽の bd の読めない JSON の request と、無い ts ∧ 開いた memo でない名指しの request が、どちらも no-utterance だけを出す（event log の判定が台帳より先）。
     - (d) 同じ秒の 2 つの発話を ts で別々に仕分けられる。
     - (e) `utterance show` が逐語を 1 byte も違わずに返す。3 つの発話を持つ log で真ん中の ts の show が真ん中の逐語だけを返す。無い ts は rc 1 で `no-utterance` を出す。
-    - (e2) 同じ ts と同じ memo の request と、会話の札が在る発話への chat が `already` で、event log が不変。
+    - (e2) 同じ ts と同じ memo の request と、会話の札が在る発話への chat が、どちらも rc 0・stdout が `already` の 1 行で、event log が不変。
     - (e3) 偽の bd の show が読めない JSON を返す周の request が rc 1・stdout 0 byte・stderr の 1 行が `reason=ledger-unreadable` で、event log が不変。
     - (e4) 読みの範囲（約束 7）: 対象の発話の後に発話でない event を合わせて 2 MB 続けた log で、会話の sort と show が通る（末尾の窓だけを読む実装を落とす）。
   - e2e の既存の `cli_help_`（`crates/scribe2-boundary/tests/e2e/main.rs`・約束 8）: 最上位の語が 1 つ増えるので、次を直す。直した歯は base で落ちるので retroactive の札は付けない。
@@ -148,7 +148,7 @@ user の裁定を受けた turn の中で対話面の席の口（seat ruling add
     - `cli_help_bare_and_unknown_stay_one_usage_line` の最上位の使い方の行の字（`utterance` を 1 語足す）。
   - 最上位の使い方の行を写す既存の外形 snapshot 5 本を書き直す: `tests/e2e/snapshots/e2e__rules__rules_external_form.snap` と、境界の crate の `src/snapshots/` の doctor の 4 本（`doctor_external_form`・`ledger_form_doctor_external_form`・`ledger_lint_doctor_external_form`・`ledger_graph_doctor_external_form`）。
   - lib `utterance_sorted_of_`:
-    - (f) 3 つの値の表（無し・会話だけ・要望・答え・会話の後の要望・会話の後の答え・承認に使った発話を会話にした形）。
+    - (f) 3 つの値の表（無し・会話だけ・要望・答え・会話の後の要望・会話の後の答え・承認に使った発話を会話にした形・要望の後の会話）。要望の後の会話（口は linked で断るが、入力の列としては在りうる並び）も結びありで、札の並びに依らない（最後の札で決める実装を落とす）。
     - (g) 同じ入力を 2 回渡すと同じ結果になる。
   - AC58 の「承認の発話と回答の発話が会話で仕分け済み」は (f) の fixture で表す。器は承認 event へ結ばない（仕分けの口は承認 event を読まない）。
   - base で RED の理由: 機能不在（`utterance` が最上位の使い方の誤りで rc 2・lib は新しい file で該当 0 本）。
@@ -177,16 +177,16 @@ user の裁定を受けた turn の中で対話面の席の口（seat ruling add
   - 承認 event を書くのは `pipe approve` だけ。
 - 約束（番号は done と 1:1）:
   1. **口の形**: `seat ruling answer --repo R --state-dir S --question ID [--bd B]`。逐語は標準入力の全部で、末尾の改行も 1 byte も変えずに持つ。使い方の字は `< WORDS` で標準入力を示す。
-  2. **断り（何も書かない・rc 1）**: 次の順で調べ、`seat ruling: refused reason=<語> question=<id>` を出す。語は閉じた集合で、行 h の const slice に足す。
+  2. **断り（何も書かない・rc 1）**: 次の順で調べ、`seat ruling: refused reason=<語> question=<id>` を出す。語は閉じた 4 語。closed と not-question は行 h の結びの断りの語、ledger-unreadable は行 h の台帳を読めない周の断りの語と同じ字で、words-empty だけが答えの口の新しい語。行 h の結びの閉じた 4 語の断り（no-utterance・bound・closed・not-question の const slice）は変えない（結びは words-empty を返さない）。
      - `words-empty`: 逐語が空白だけ。
      - `ledger-unreadable`: 台帳を読めない。
      - `closed`: 問いが閉じている。
      - `not-question`: 台帳の問いでない。
      - 断りの周は、発話 event も書かない。
   3. **通る周**: 次の順に書く。
-     - (a) 経路 gui の `UtteranceReceived` を 1 件書く（session 無し・逐語の detail）。行 g の store の 1 本で、一意の ms の ts を振る。
-     - (b) 行 h の結びの 1 関数を、その ts と経路 gui で呼ぶ（裁定 id・5 欄の行・close・裁定 event）。
-     - (b) が落ちた周は rc 1 で `partial utterance=<ts>` を出す。発話は残るので、`seat ruling bind` で同じ ts を結び直せる。
+     - (a) 経路 gui の `UtteranceReceived` を 1 件書く（session 無し・逐語の detail）。行 g が `crates/scribe2/src/fleet/store.rs` に足す追記の 1 本（lock の中で一意の ms の ts を振る・fleet-event-log §13 約束 5）を呼ぶ。
+     - (b) 行 h の結びの 1 関数を、その ts で呼ぶ（裁定 id・5 欄の行・close・裁定 event）。経路は結びが発話 event の gui を読む（結びの関数は経路を引数に持たない）。
+     - (b) が落ちた周（結びの断り・台帳を読めない・notes の追記の失敗・close か裁定 event の途中の止まりのどれでも）は rc 1 で `partial utterance=<ts>` を出す。発話は残るので、`seat ruling bind` で同じ ts を結び直せる。
   4. **返す 1 行**: rc 0 で stdout に裁定 id だけを 1 行。逐語は載せない。
   5. **承認でない**: `ApprovalReceived` を書かない。承認の口と権能には触れない（C7）。
   6. **hook の門**: hook の子 module 1 つ（行 j の write-set の `+` の file）。`pre_tool_use` で choice の門の直後に撃ち、Bash の周だけ command を `segments` で読む。次のどちらかで deny する（rc 2・stderr 1 行・inject.jsonl に what が `answer-mouth-deny` の 1 行）。
@@ -205,6 +205,7 @@ user の裁定を受けた turn の中で対話面の席の口（seat ruling add
     - (c) 全部の使い方の行（数を母集団として出す）のうち、`WORDS` で逐語を受ける行が答えの口の 1 行だけ。
     - (d) 断りの順: 2 つの断りに同時に当たる入力 3 形で、先の語だけが出る。空白だけの逐語 + 読めない台帳 → `words-empty`・空白だけの逐語 + 閉じた問い → `words-empty`・閉じていて問いでない bead → `closed`。
     - (e) 書きの途中の失敗: 偽の bd が close の撃ちの中で event log の file を脇へ移し、同じ path に dir を置く（fleet-event-log §14 行 h の歯 (h) と同じ撃ち方）。答えの口は rc 1 で、出力に `partial utterance=<ts>` の 1 行が在り、その ts は脇へ移した log の経路 gui の発話 event の ts と一致し、偽の bd の append-notes と close の書きは残る。log を戻して同じ問いと ts で `seat ruling bind` を撃つと rc 0 で、log の裁定 event が 1 件になり、発話 event は 1 件のまま（発話が残り、結び直せる証拠）。
+    - (e2) notes の追記の失敗: 偽の bd の append-notes が rc 1 を返す周も、答えの口は rc 1 で `partial utterance=<ts>` の 1 行を出し、発話 event は 1 件残り、close は撃たれない（close の途中の止まりだけを partial にする実装を落とす）。
   - e2e `hook_answer_mouth_`:
     - 止まる 8 形: 素の撃ち・変数の binary・`cd … &&` の連鎖・`sh -c '…'`・`bash -lc "…"`・`eval "… seat ruling answer …"`・`X=1 bash -c '…'`（前の代入を除いた頭の語）・`cargo run -- seat ruling answer …`。どれも rc 2 で、実行されない（偽の binary の印の file が無い）。stderr は 1 行で `seat ruling bind` を含み、inject.jsonl に what が `answer-mouth-deny` の行が 1 行増える（撃った形の数を母集団として出す）。
     - 通る 3 形: `grep -rn "seat ruling answer" docs`・`… seat ruling bind …`・`… seat ruling ls …`。
@@ -263,7 +264,7 @@ user の裁定を受けた turn の中で対話面の席の口（seat ruling add
     - (d) 5 語の各 fixture で rc 0・`TurnEndUnjudged` 1 件（reason が一致）。同じ fixture で Stop をもう 1 度撃つと、控えを持てる 2 語（no-start・log-unreadable）は増えず、控えを持てない・読めない・書けない 3 語（no-session・told-unreadable・told-unwritable）は 1 件増える（約束 8）。
     - (e) session の前に 10 MB と 20 MB の埋め草の event を置いた 2 つの log で、どちらも止まり、`sh -c` で起こした子の読みの byte（親の /proc の io の rchar・wait の後に子の分が親へ積まれる）が等しく、`--bd` の偽の client の記録が 0 行（台帳の読み 0）。
     - (f) marker の無い repo と、発話の無い session（runner の形の payload）は、止めず event も書かない（同じ歯で対象の session が止まることも確かめる）。
-    - (g) 2 度目の SessionStart（resume の形）は開始の位置を上書きせず、1 度目の前の未仕分けで止まる。
+    - (g) 1 度目の SessionStart の後に未仕分けの発話を 1 つ書き、2 度目の SessionStart（resume の形）を撃つ。開始の位置は上書きされず、次の Stop がその発話で止まる（上書きする実装は 2 度目の位置から読んで止めない）。
     - (h) session_id の無い SessionStart の後、state dir の session の置き場の下に file が 0 本（約束 2 の書かない）。同じ歯で session_id を持つ SessionStart が開始の位置を 1 つ書くことも確かめる。
   - lib（行 k の `+` の file の in-file・接頭辞 hook_unsorted_stop_）: 控えの読み書き・再入の表・reason の語の閉じた列。
   - e2e（`crates/scribe2-boundary/tests/e2e/polarity.rs`・接頭辞 polarity_lists_turn_end_block_）: 一覧に `guard=turn-end-block timing=in-loop on-failure=fail-open` の 1 行が末尾に載る。
@@ -283,20 +284,20 @@ user の裁定を受けた turn の中で対話面の席の口（seat ruling add
 - 何が起きているか（main b028af03・verified）:
   - doctor の裁定の行は `crates/scribe2/src/seat/ruling.rs` の `doctor_lines`（pub・境界の crate の doctor が呼ぶ）で、今は run 無しの裁定 event と rules 行の ruling の分の突合 `rulings=<n> rule-rulings=<m>/<of> …` の 1 行。数えるものが無い周は行を出さず、log を読めない周は `unreadable` を名乗る。
   - fleet-event-log の行 h（bind）は `seat ruling add` を消し、突合の行は古い行を読むだけで残し、裁定 event（`RulingReceived`）に key ruling・utterance（発話の ts）・channel・question_ts（問いの起票の時刻）・asked（metadata に在る周だけ・seat か user）を足す。本 doc の行 j（答えの口）の裁定 event も同じ key を持つ。
-  - 時刻の読みは `fleet::epoch_of`（pub の再輸出・秒の UNIX 時刻）の 1 本で、行 g がミリ秒の形も読むよう広げる。
+  - 時刻の読みは `fleet::epoch_of`（pub の再輸出・秒の形だけを読む・秒の UNIX 時刻）。発話の ts はミリ秒の形（fleet-event-log §13 約束 4）で epoch_of では読めず、行 g が `crates/scribe2/src/fleet/wait.rs` の epoch_of の隣にミリ秒の形だけを読む 1 本を足して fleet から再輸出する（fleet-event-log §13 の限界）。question_ts は台帳の created_at の秒の形の字のまま。
   - 境界の crate（R-C4-5 の上限 316）は doctor の行を library の関数から組むだけ。
 - 約束（done と 1:1）:
   1. **母集団**: key utterance を持つ裁定 event（bind と答えの口の結び）。utterance を持たない古い裁定 event は数えない。
-  2. **後の結び**: question_ts が発話の ts より新しい結び。両方を `fleet::epoch_of` で秒の時刻として読んで比べる（字面で比べない）。同じ秒は後に数えない。
+  2. **後の結び**: question_ts が発話の ts より新しい結び。question_ts は `fleet::epoch_of` で、発話の ts は行 g のミリ秒の形の読みで読み、発話を秒へ切り捨てて秒の時刻として比べる（字面で比べない）。同じ秒は後に数えない。
   3. **1 行の形**: `binds=<N> after-seat=<n> after-seat-ids=<id,…|-> after-user=<n> after-user-ids=<id,…|-> asked-none=<n> asked-none-ids=<id,…|->`。asked-none は asked の無い結びを発話との前後に依らず全部数える（FR89）。id は裁定 id を log の順に並べる。
-  4. **出さない周と読めない周**: 母集団 0 の周は行を出さない（doctor の外形を動かさない）。log を読めない周は `binds=unreadable` の 1 行。question_ts か utterance を読めない結びは `after-*` に入れず、行の末尾に `unreadable=<n>` を足す（0 の周は出さない）。
+  4. **出さない周と読めない周**: 母集団 0 の周は行を出さない（doctor の外形を動かさない）。log を読めない周は `binds=unreadable` の 1 行。question_ts か utterance を読めない結びは母集団（binds）と asked-none には数え、`after-*` に入れず、行の末尾に `unreadable=<n>` を足す（0 の周は出さない）。
   5. **置き場**: 数えは `seat/ruling.rs` の純関数 1 本で、行は同じ `doctor_lines` から出す（境界の crate を触らない）。`EventKind` の match の arm を書かない（== で比べる）。
 - 歯（接頭辞 doctor_asked_after_・`git grep -c` は 0 件）:
   - e2e（`crates/scribe2-boundary/tests/e2e/seat/ruling.rs`・裁定 event を log へ直に書いた fixture）:
-    - (a) asked が seat と user でそれぞれ発話の前と後に起こした問いの 4 結び・asked の無い後の結び 1・asked の無い前の結び 1・utterance を持たない古い裁定 1 で、doctor の行が `binds=6 after-seat=1 after-seat-ids=<id> after-user=1 after-user-ids=<id> asked-none=2 asked-none-ids=<id>,<id>` と一致する。
+    - (a) asked が seat と user でそれぞれ発話の前と後に起こした問いの 4 結び・asked の無い後の結び 1・asked の無い前の結び 1・utterance を持たない古い裁定 1 で、doctor の行が `binds=6 after-seat=1 after-seat-ids=<id> after-user=1 after-user-ids=<id> asked-none=2 asked-none-ids=<id>,<id>` と一致する。asked-none の 2 つの結びは、log の順が裁定 id の字の順と逆になるように置く（字の順に並べる実装を落とす・約束 3 の log の順）。発話の ts は全てミリ秒の形（行 g の形）で置く（発話の ts を epoch_of で読む実装は全部を unreadable に落として一致しない）。
     - (b) 母集団 0 の置き場（古い裁定だけを含む）は行を出さない。
     - (c) log が読めない置き場は `binds=unreadable`。
-    - (d) question_ts が時刻として読めない結びを 1 つ足すと `unreadable=1` が末尾に付き、after-* の数は変わらない。utterance が時刻として読めない結びを 1 つ足した形でも同じく `unreadable=1`。
+    - (d) asked が seat で question_ts が時刻として読めない結びを 1 つ足すと、binds が 1 増え、`unreadable=1` が末尾に付き、after-* と asked-none の数は変わらない。utterance が時刻として読めない結びを 1 つ足した形でも同じく `unreadable=1`。
     - (e) asked が user の後の結びを持たない置き場（seat の後の結び 1・asked の無い結び 1）で、行が `after-user=0 after-user-ids=-` を持つ（約束 3 の無い列の `-`）。
   - lib（`seat/ruling.rs` の in-file・接頭辞 doctor_asked_after_）: 秒より下の桁を持つ発話の ts と秒までの question_ts の比べ・同じ秒は後に数えない・読めない時刻の unreadable。
 - base で RED の理由: base の doctor に `binds=` の行が無い（機能不在）。lib は該当 0 本。
@@ -335,11 +336,11 @@ id = "i"
 title = "発話の仕分けの口 — utterance sort が要望（開いた memo へ）と会話を仕分けの event 1 件で記帳し（台帳を書かない）、utterance show が ts で 1 件の逐語を返し、仕分け済みかを 1 本の純関数が決める（ADR-0087）"
 req = ["FR88", "FR65"]
 section = "10"
-write-set = ["+crates/scribe2/src/utterance.rs", "+crates/scribe2/src/utterance/cli.rs", "crates/scribe2/src/lib.rs", "crates/scribe2-boundary/src/main.rs", "crates/scribe2/src/help.rs", "crates/scribe2-boundary/tests/e2e/seat/ruling.rs", "crates/scribe2-boundary/tests/e2e/main.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__rules__rules_external_form.snap", "crates/scribe2-boundary/src/snapshots/scribe2__tests__doctor_external_form.snap", "crates/scribe2-boundary/src/snapshots/scribe2__tests__ledger_form_doctor_external_form.snap", "crates/scribe2-boundary/src/snapshots/scribe2__tests__ledger_lint_doctor_external_form.snap", "crates/scribe2-boundary/src/snapshots/scribe2__tests__ledger_graph_doctor_external_form.snap", "=crates/scribe2-boundary/tests/e2e/rules.rs", "=crates/scribe2-boundary/tests/e2e/seat.rs"]
+write-set = ["+crates/scribe2/src/utterance.rs", "+crates/scribe2/src/utterance/cli.rs", "crates/scribe2/src/lib.rs", "crates/scribe2-boundary/src/main.rs", "crates/scribe2/src/help.rs", "crates/scribe2-boundary/tests/e2e/seat/ruling.rs", "crates/scribe2-boundary/tests/e2e/main.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__rules__rules_external_form.snap", "crates/scribe2-boundary/src/snapshots/scribe2__tests__doctor_external_form.snap", "crates/scribe2-boundary/src/snapshots/scribe2__tests__ledger_form_doctor_external_form.snap", "crates/scribe2-boundary/src/snapshots/scribe2__tests__ledger_lint_doctor_external_form.snap", "crates/scribe2-boundary/src/snapshots/scribe2__tests__ledger_graph_doctor_external_form.snap", "=crates/scribe2-boundary/tests/e2e/rules.rs", "=crates/scribe2-boundary/tests/e2e/seat.rs", "=crates/scribe2/src/ledger/mod.rs"]
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail utterance_sort_", "cargo nextest run -p scribe2 --lib --no-tests=fail utterance_sorted_of_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail cli_help_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_external_form", "cargo nextest run -p scribe2-boundary --bin scribe2 --no-tests=fail doctor_external_form"]
 size = "M"
 growth = ["crates/scribe2/src/utterance.rs:210", "crates/scribe2/src/utterance/cli.rs:150", "crates/scribe2/src/lib.rs:1", "crates/scribe2-boundary/src/main.rs:2", "crates/scribe2/src/help.rs:12"]
-done = "(1) core に最上位の module 1 つと cli を足し、lib.rs と境界の main.rs に utterance を 1 つずつ (2) 仕分け済みかは IO の無い純関数 1 本が未仕分け・会話だけ・結びありの 3 値で決め、要望か答えが在れば会話を数えない (3) sort --as request --memo が開いた memo の周に UtteranceSorted request を 1 件書き、台帳を書かず、同じ組は already (4) sort --as chat が台帳を読まずに 1 件書く (5) no-utterance・linked・ledger-unreadable・not-memo をこの順に何も書かずに rc 1・stdout 0 byte・stderr 1 行で断る (6) show が 1 件の逐語だけを返し、無い ts は no-utterance (7) 両口は read_all で読む (8) 最上位の使い方と help の表に utterance の sort と show（最上位の使い方を写す既存の cli_help_ の 4 本と外形 snapshot 5 本を直す） 歯: utterance_sort_ が要望と会話の 1 件ずつと台帳の不変・読めない台帳でも会話が書けて bd の呼び出し 0、1 発話 2 memo、断り 5 形の rc 1 と stderr の逐語と不変、2 つの断りに当たる 2 形の no-utterance、同じ秒の 2 発話、show の逐語の一致と 3 発話の真ん中の弁別と no-utterance、already の不変、ledger-unreadable の rc 1 と不変、2 MB の後ろの発話の sort と show を、utterance_sorted_of_ が 3 値の表と会話の外しと同じ入力の同じ結果を、cli_help_ が頂点の語 16 と突き合わせ 10 と使い方の行を、rules_external_form と doctor_external_form が使い方の行を写す外形を測る。base は utterance が使い方の誤りで RED"
+done = "(1) core に最上位の module 1 つと cli を足し、lib.rs と境界の main.rs に utterance を 1 つずつ (2) 仕分け済みかは IO の無い純関数 1 本が未仕分け・会話だけ・結びありの 3 値で決め、要望か答えが在れば会話を数えない (3) sort --as request --memo が開いた memo の周に UtteranceSorted request を 1 件書き、台帳を書かず、同じ組は already (4) sort --as chat が台帳を読まずに 1 件書く (5) no-utterance・linked・ledger-unreadable・not-memo をこの順に何も書かずに rc 1・stdout 0 byte・stderr 1 行で断る（no-utterance は request と chat の両方・linked は要望か答えを持つ発話への会話） (6) show が 1 件の逐語だけを返し、無い ts は no-utterance (7) 両口は read_all で読む (8) 最上位の使い方と help の表に utterance の sort と show（最上位の使い方を写す既存の cli_help_ の 4 本と外形 snapshot 5 本を直す） 歯: utterance_sort_ が要望と会話の 1 件ずつと台帳の不変・読めない台帳でも会話が書けて bd の呼び出し 0、1 発話 2 memo、断り 7 形（no-utterance は request と chat の 2 形・linked は答えと要望の 2 形）の rc 1 と stderr の逐語と不変、2 つの断りに当たる 2 形の no-utterance、同じ秒の 2 発話、show の逐語の一致と 3 発話の真ん中の弁別と no-utterance、already の rc 0 と stdout の 1 行と不変、ledger-unreadable の rc 1 と不変、2 MB の後ろの発話の sort と show を、utterance_sorted_of_ が 3 値の表と会話の外しと札の並びに依らない結びと同じ入力の同じ結果を、cli_help_ が頂点の語 16 と突き合わせ 10 と使い方の行を、rules_external_form と doctor_external_form が使い方の行を写す外形を測る。base は utterance が使い方の誤りで RED"
 
 [[contract]]
 id = "j"
@@ -347,11 +348,11 @@ title = "裁定面の答えの口 seat ruling answer — 問いの id と標準�
 req = ["FR82", "FR88"]
 section = "11"
 depends = ["i"]
-write-set = ["+crates/scribe2/src/hook/answer_mouth.rs", "crates/scribe2/src/hook/mod.rs", "crates/scribe2/src/polarity.rs", "crates/scribe2/src/seat/ruling.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/help.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2-boundary/tests/e2e/seat/ruling.rs", "crates/scribe2-boundary/tests/e2e/hook/guards.rs", "crates/scribe2-boundary/tests/e2e/polarity.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__polarity__polarity_external_form.snap", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__seat__seat_usage_external_form.snap", "=crates/scribe2-boundary/tests/e2e/seat.rs", "=crates/scribe2-boundary/tests/e2e/main.rs"]
+write-set = ["+crates/scribe2/src/hook/answer_mouth.rs", "crates/scribe2/src/hook/mod.rs", "crates/scribe2/src/polarity.rs", "crates/scribe2/src/seat/ruling.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/help.rs", "crates/scribe2/src/fleet/cli.rs", "crates/scribe2-boundary/tests/e2e/seat/ruling.rs", "crates/scribe2-boundary/tests/e2e/hook/guards.rs", "crates/scribe2-boundary/tests/e2e/polarity.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__polarity__polarity_external_form.snap", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__seat__seat_usage_external_form.snap", "=crates/scribe2-boundary/tests/e2e/seat.rs", "=crates/scribe2-boundary/tests/e2e/main.rs", "=crates/scribe2/src/fleet/store.rs"]
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_ruling_answer_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail hook_answer_mouth_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail polarity_lists_answer_mouth_deny_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail polarity_lists_choice_question_deny_first_right_before_write_set_guard", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail runner_question_guard_is_in_loop_fail_open", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail polarity_lists_land_anchor_sync_and_retire_clean_as_in_loop_fail_closed", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail polarity_lists_contract_table_as_a_post_hoc_fail_closed_guard", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail polarity_external_form", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_usage_external_form", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail cli_help_pages_match_the_live_form_and_every_subcommand"]
 size = "M"
 growth = ["crates/scribe2/src/hook/answer_mouth.rs:150", "crates/scribe2/src/hook/mod.rs:4", "crates/scribe2/src/polarity.rs:12", "crates/scribe2/src/seat/ruling.rs:90", "crates/scribe2/src/seat/cli.rs:25", "crates/scribe2/src/help.rs:2", "crates/scribe2/src/fleet/cli.rs:1"]
-done = "(1) seat ruling answer --repo --state-dir --question [--bd] が標準入力の逐語を 1 byte も変えずに受け、使い方は < WORDS で示す (2) 空白だけ・台帳を読めない・閉じた問い・問いでない bead を、この順に何も書かず（発話 event も）rc 1 で断る (3) 通る周は経路 gui の発話 event を一意の ms の ts で書いてから行 h の結びの 1 関数を呼び、後半が落ちた周は partial utterance=<ts> で rc 1 (4) stdout は裁定 id の 1 行だけ (5) 承認 event を書かない (6) hook の子 module が choice の門の直後に Bash の command を segments で読み、引用の外の seat ruling answer の並びと、shell か eval の語の中の seat ruling answer を、役割と pane に依らず rc 2 で断る (7) 極性一覧に answer-mouth-deny（in-loop・fail-closed）を choice-question の直後に 1 行 (8) 使い方と help の表に ruling answer を足し、fleet/cli.rs の注を直す 歯: seat_ruling_answer_ が通る周の 4 つの書きと裁定 id の 1 行と承認 0 件と標準入力の byte の一致、断りの 4 語の全部（読めない台帳は偽の bd の壊れた JSON）で何も書かないこと、2 つの断りに同時に当たる 3 形で先の語だけが出る順、close の中で event log が塞がれた周の partial utterance=<ts> の rc 1 と残る notes と close と同じ ts の bind での結び直し、WORDS で逐語を受ける使い方が 1 行だけ（母集団は全部の使い方の行）を、hook_answer_mouth_ が止まる 8 形（eval・前の代入・cargo run の前置きを含む）の不実行と stderr の bind の案内と inject.jsonl の 1 行と、通る 3 形と pane の無い session の断りを、polarity_lists_answer_mouth_deny_ が一覧の 1 行と choice-question-deny の直後の位置を、直した極性の歯 4 本と外形 snapshot が数と並びを、seat_usage_external_form と cli_help_pages_match_the_live_form_and_every_subcommand が使い方と help の表を測る。base は answer が使い方の誤りで、素の撃ちが門を通って RED"
+done = "(1) seat ruling answer --repo --state-dir --question [--bd] が標準入力の逐語を 1 byte も変えずに受け、使い方は < WORDS で示す (2) 空白だけ・台帳を読めない・閉じた問い・問いでない bead を、この順に何も書かず（発話 event も）rc 1 で断り、新しい語は words-empty だけで行 h の結びの閉じた 4 語は変えない (3) 通る周は経路 gui の発話 event を行 g の store の追記の 1 本で一意の ms の ts に書いてから、その ts で行 h の結びの 1 関数を呼び（経路は結びが発話 event から読む）、後半のどの失敗の周も partial utterance=<ts> で rc 1 (4) stdout は裁定 id の 1 行だけ (5) 承認 event を書かない (6) hook の子 module が choice の門の直後に Bash の command を segments で読み、引用の外の seat ruling answer の並びと、shell か eval の語の中の seat ruling answer を、役割と pane に依らず rc 2 で断る (7) 極性一覧に answer-mouth-deny（in-loop・fail-closed）を choice-question の直後に 1 行 (8) 使い方と help の表に ruling answer を足し、fleet/cli.rs の注を直す 歯: seat_ruling_answer_ が通る周の 4 つの書きと裁定 id の 1 行と承認 0 件と標準入力の byte の一致、断りの 4 語の全部（読めない台帳は偽の bd の壊れた JSON）で何も書かないこと、2 つの断りに同時に当たる 3 形で先の語だけが出る順、close の中で event log が塞がれた周の partial utterance=<ts> の rc 1 と残る notes と close と同じ ts の bind での結び直し、append-notes の失敗の周の partial utterance=<ts> と残る発話と撃たれない close、WORDS で逐語を受ける使い方が 1 行だけ（母集団は全部の使い方の行）を、hook_answer_mouth_ が止まる 8 形（eval・前の代入・cargo run の前置きを含む）の不実行と stderr の bind の案内と inject.jsonl の 1 行と、通る 3 形と pane の無い session の断りを、polarity_lists_answer_mouth_deny_ が一覧の 1 行と choice-question-deny の直後の位置を、直した極性の歯 4 本と外形 snapshot が数と並びを、seat_usage_external_form と cli_help_pages_match_the_live_form_and_every_subcommand が使い方と help の表を測る。base は answer が使い方の誤りで、素の撃ちが門を通って RED"
 
 [[contract]]
 id = "k"
@@ -359,11 +360,11 @@ title = "turn の終わりの止め — SessionStart で session の開始の位
 req = ["FR88", "NFR5"]
 section = "12"
 depends = ["i", "j"]
-write-set = ["+crates/scribe2/src/hook/turn_end.rs", "crates/scribe2/src/hook/mod.rs", "crates/scribe2/src/hook/stamp.rs", "crates/scribe2/src/polarity.rs", "crates/scribe2-boundary/tests/e2e/hook/session.rs", "crates/scribe2-boundary/tests/e2e/polarity.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__polarity__polarity_external_form.snap", "=crates/scribe2-boundary/tests/e2e/hook.rs"]
+write-set = ["+crates/scribe2/src/hook/turn_end.rs", "crates/scribe2/src/hook/mod.rs", "crates/scribe2/src/hook/stamp.rs", "crates/scribe2/src/polarity.rs", "crates/scribe2-boundary/tests/e2e/hook/session.rs", "crates/scribe2-boundary/tests/e2e/polarity.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__polarity__polarity_external_form.snap", "=crates/scribe2-boundary/tests/e2e/hook.rs", "=crates/scribe2/src/fleet/store.rs", "=crates/scribe2/src/fleet/event.rs"]
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail hook_unsorted_stop_", "cargo nextest run -p scribe2 --lib --no-tests=fail hook_unsorted_stop_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail polarity_lists_turn_end_block_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_state_hook_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail polarity_summary_counts_match_lines", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail runner_question_guard_is_in_loop_fail_open", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail polarity_lists_land_anchor_sync_and_retire_clean_as_in_loop_fail_closed", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail polarity_lists_contract_table_as_a_post_hoc_fail_closed_guard", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail polarity_external_form"]
 growth = ["crates/scribe2/src/hook/turn_end.rs:280", "crates/scribe2/src/hook/mod.rs:8", "crates/scribe2/src/hook/stamp.rs:15", "crates/scribe2/src/polarity.rs:8", "crates/scribe2-boundary/tests/e2e/hook/session.rs:380", "crates/scribe2-boundary/tests/e2e/polarity.rs:30"]
 size = "L"
-done = "(1) Stop と SessionStart の分岐が hook の子 module の関数を 1 回ずつ呼び、hook の呼び出しは 1 回のまま (2) SessionStart が session の置き場に event log の長さを開始の位置として書き、既に在れば上書きせず、session_id の無い周は書かない (3) 判定は台帳を読まず開始の位置から log の末尾を読み、その session の発話を行 i の純関数で未仕分けと判じ、発話の無い session は打刻だけで event も控えも書かない (4) 控えは session の置き場の 1 file で told・block・released・unjudged の 4 形 (5) 未告が在る周は控えを書いてから rc 2・stdout 0 byte・stderr 1 行（未仕分けの ts を全部・仕分けの口・bind・show の名・逐語なし）で、打刻も差し込みの記録もせず、控えを書けない周は止めない (6) 未告 0 の周は今のまま打刻・rc 0・0 byte (7) 再入は止めず、控えの最後が block の周だけ Idle を打って released を足す (8) 読めない周は TurnEndUnjudged を reason の 5 語（no-session・no-start・log-unreadable・told-unreadable・told-unwritable）で記帳して打刻・rc 0 で、控えを持てる 2 語（no-start・log-unreadable）は session ごとに 1 度、控えを持てない・読めない・書けない 3 語は毎回 (9) 極性一覧の末尾に turn-end-block（in-loop・fail-open）が 1 行で、数の pin を持つ既存の極性の歯 3 本と snapshot を 1 行分直す 歯: hook_unsorted_stop_ の e2e が止めと stdout 0 byte と 2 度目の通過と 3 つ目での再度の止め・別 session の不止め・仕分け済みの不止め・busy の保持と差し込み 0 と再入の idle・5 語の記帳と、2 度目の Stop で控えを持てる 2 語は増えず 3 語は 1 件増えること・10 MB と 20 MB での止めと rchar の一致と台帳の読み 0・marker の無い repo と発話の無い session の不止め・2 度目の SessionStart の不上書き・session_id の無い SessionStart の置き場の file 0 本を、lib が控えの読み書きと再入の表と語の列を、polarity_lists_turn_end_block_ が一覧の末尾の 1 行を、直した極性の歯 3 本と polarity_external_form が数と外形を測る。既存の seat_state_hook_ と polarity_summary_counts_match_lines が緑。base は Stop が判定を持たず rc 0 なので RED"
+done = "(1) Stop と SessionStart の分岐が hook の子 module の関数を 1 回ずつ呼び、hook の呼び出しは 1 回のまま (2) SessionStart が session の置き場に event log の長さを開始の位置として書き、既に在れば上書きせず、session_id の無い周は書かない (3) 判定は台帳を読まず開始の位置から log の末尾を読み、その session の発話を行 i の純関数で未仕分けと判じ、発話の無い session は打刻だけで event も控えも書かない (4) 控えは session の置き場の 1 file で told・block・released・unjudged の 4 形 (5) 未告が在る周は控えを書いてから rc 2・stdout 0 byte・stderr 1 行（未仕分けの ts を全部・仕分けの口・bind・show の名・逐語なし）で、打刻も差し込みの記録もせず、控えを書けない周は止めない (6) 未告 0 の周は今のまま打刻・rc 0・0 byte (7) 再入は止めず、控えの最後が block の周だけ Idle を打って released を足す (8) 読めない周は TurnEndUnjudged を reason の 5 語（no-session・no-start・log-unreadable・told-unreadable・told-unwritable）で記帳して打刻・rc 0 で、控えを持てる 2 語（no-start・log-unreadable）は session ごとに 1 度、控えを持てない・読めない・書けない 3 語は毎回 (9) 極性一覧の末尾に turn-end-block（in-loop・fail-open）が 1 行で、数の pin を持つ既存の極性の歯 3 本と snapshot を 1 行分直す 歯: hook_unsorted_stop_ の e2e が止めと stdout 0 byte と 2 度目の通過と 3 つ目での再度の止め・別 session の不止め・仕分け済みの不止め・busy の保持と差し込み 0 と再入の idle・5 語の記帳と、2 度目の Stop で控えを持てる 2 語は増えず 3 語は 1 件増えること・10 MB と 20 MB での止めと rchar の一致と台帳の読み 0・marker の無い repo と発話の無い session の不止め・2 度目の SessionStart の不上書き（1 度目と 2 度目の間の未仕分けで止まる）・session_id の無い SessionStart の置き場の file 0 本を、lib が控えの読み書きと再入の表と語の列を、polarity_lists_turn_end_block_ が一覧の末尾の 1 行を、直した極性の歯 3 本と polarity_external_form が数と外形を測る。既存の seat_state_hook_ と polarity_summary_counts_match_lines が緑。base は Stop が判定を持たず rc 0 なので RED"
 
 [[contract]]
 id = "l"
@@ -371,9 +372,9 @@ title = "doctor の 1 行 — utterance を持つ裁定 event を母集団に、
 req = ["FR89"]
 section = "13"
 depends = ["j"]
-write-set = ["crates/scribe2/src/seat/ruling.rs", "crates/scribe2-boundary/tests/e2e/seat/ruling.rs"]
+write-set = ["crates/scribe2/src/seat/ruling.rs", "crates/scribe2-boundary/tests/e2e/seat/ruling.rs", "=crates/scribe2/src/fleet/wait.rs"]
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail doctor_asked_after_", "cargo nextest run -p scribe2 --lib --no-tests=fail doctor_asked_after_"]
 growth = ["crates/scribe2/src/seat/ruling.rs:110", "crates/scribe2-boundary/tests/e2e/seat/ruling.rs:130"]
 size = "S"
-done = "(1) 母集団は utterance を持つ裁定 event で、古い裁定 event を数えない (2) 後の結びは question_ts が発話の ts より新しい結びで、fleet::epoch_of で秒の時刻として比べ同じ秒は数えない (3) doctor の行が binds・after-seat・after-seat-ids・after-user・after-user-ids・asked-none・asked-none-ids の順の 1 行で、asked-none は前後に依らず数え、id は log の順・無ければ - (4) 母集団 0 の周は行を出さず、log を読めない周は binds=unreadable、時刻を読めない結びは unreadable=<n> を足す (5) 数えは seat/ruling.rs の純関数 1 本・行は doctor_lines から出し、境界の crate を触らず EventKind の match の arm を書かない 歯: doctor_asked_after_ の e2e が 7 件の fixture の行の一致・母集団 0 の不出力・読めない log の unreadable・読めない question_ts と読めない utterance の unreadable=1・無い id の列の - を、lib が秒より下の桁の比べと同じ秒の不算入と読めない時刻を測る。base は binds= の行が無いので RED"
+done = "(1) 母集団は utterance を持つ裁定 event で、古い裁定 event を数えない (2) 後の結びは question_ts が発話の ts より新しい結びで、question_ts を fleet::epoch_of・発話の ts を行 g のミリ秒の形の読みで読み、秒へ切り捨てて比べ同じ秒は数えない (3) doctor の行が binds・after-seat・after-seat-ids・after-user・after-user-ids・asked-none・asked-none-ids の順の 1 行で、asked-none は前後に依らず数え、id は log の順・無ければ - (4) 母集団 0 の周は行を出さず、log を読めない周は binds=unreadable、時刻を読めない結びは binds に数えて after-* に入れず unreadable=<n> を足す (5) 数えは seat/ruling.rs の純関数 1 本・行は doctor_lines から出し、境界の crate を触らず EventKind の match の arm を書かない 歯: doctor_asked_after_ の e2e が 7 件の fixture の行の一致（asked-none の id を字の順と逆の log の順に置いた形）・母集団 0 の不出力・読めない log の unreadable・読めない question_ts と読めない utterance の unreadable=1・無い id の列の - を、lib が秒より下の桁の比べと同じ秒の不算入と読めない時刻を測る。base は binds= の行が無いので RED"
 <!-- contracts:end -->
