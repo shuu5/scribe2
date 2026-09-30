@@ -348,7 +348,7 @@ fn build_event(args: &[String]) -> Result<Event, String> {
     // この口が書けるのは本体が便の形（[`Shape::Run`]＝`run` + `bead`）の kind だけで、ほかの形の kind は**全部断る**
     // （設計 fleet-event-log.md §12 形 5）。この口は本体（口座残量・登録・列の印・消費・案件の一生の key 等）を持たないので、
     // 通すと読み手が malformed と読む行が append-only の log に残り、置き場の replay が止まる。各形の書き手は専用の口
-    // （`fleet usage`・`seat register` / `seat retire`・`account retire` / `restore`・`vessel update`・pipe の口・`seat ruling add`
+    // （`fleet usage`・`seat register` / `seat retire`・`account retire` / `restore`・`vessel update`・pipe の口・`seat ruling bind` / `seat ruling answer`
     // 等）だけで、断りは手書きの列でなく形から導く（kind を足した周に列を直す手を要らない・C2）。
     if kind.shape() != Shape::Run {
         return Err(format!("kind {kind_text} は record では書けない"));

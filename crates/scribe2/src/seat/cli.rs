@@ -5,7 +5,7 @@
 
 use super::cycle;
 use super::role;
-use super::ruling::BindError;
+use super::ruling::{AnswerError, BindError};
 use super::tick::install::Verb;
 use crate::cli_args::{self, Allowed};
 use crate::cli_outcome::{Outcome, RC_BROKEN, RC_REFUSED};
@@ -15,7 +15,7 @@ use std::path::Path;
 
 /// `seat` の使い方。
 pub fn usage() -> String {
-    "usage: seat <register --state-dir S --target T --role R --account L --launch FILE [--anchor DIR]|launch --state-dir S --role R --target S:W [--account L] [--anchor DIR] [--model M] [--restore CMD] [--rules F]|ruling bind --repo R --state-dir S --question ID --utterance TS [--bd B]|ruling ls --state-dir S|tick --state-dir S --target S:W [--rules F]|tick install --state-dir S --target S:W --unit-dir U --binary PATH [--rules F]|tick uninstall --state-dir S --target S:W --unit-dir U --binary PATH [--rules F]|tick status --state-dir S [--target S:W] [--rules F]|retire --state-dir S --target S:W [--reason WORDS]|heartbeat off --state-dir S --target S:W|heartbeat on --state-dir S --target S:W|heartbeat default --state-dir S --target S:W|heartbeat status --state-dir S --target S:W|deliver --state-dir S --target S:W --ruling ID|<label> [--orchestrator] [-c|-r ID] [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]".to_owned()
+    "usage: seat <register --state-dir S --target T --role R --account L --launch FILE [--anchor DIR]|launch --state-dir S --role R --target S:W [--account L] [--anchor DIR] [--model M] [--restore CMD] [--rules F]|ruling bind --repo R --state-dir S --question ID --utterance TS [--bd B]|ruling answer --repo R --state-dir S --question ID [--bd B] (stdin: WORDS)|ruling ls --state-dir S|tick --state-dir S --target S:W [--rules F]|tick install --state-dir S --target S:W --unit-dir U --binary PATH [--rules F]|tick uninstall --state-dir S --target S:W --unit-dir U --binary PATH [--rules F]|tick status --state-dir S [--target S:W] [--rules F]|retire --state-dir S --target S:W [--reason WORDS]|heartbeat off --state-dir S --target S:W|heartbeat on --state-dir S --target S:W|heartbeat default --state-dir S --target S:W|heartbeat status --state-dir S --target S:W|deliver --state-dir S --target S:W --ruling ID|<label> [--orchestrator] [-c|-r ID] [--target S:W] [--model M] [--anchor DIR] [--restore CMD] [--state-dir S]> [--tmux-socket PATH] [--capture-file PATH] [--state-dir PATH]".to_owned()
 }
 
 /// `seat` の既知の verb（閉じた語・宣言順・設計 contract-source.md §17 の形 (vii)）。短い形の第 1 token（口座 label）は
@@ -289,6 +289,7 @@ fn ruling_of(rest: &[String]) -> Outcome {
     };
     match verb {
         "bind" => ruling_bind(rest, Path::new(state_dir)),
+        "answer" => ruling_answer(rest, Path::new(state_dir)),
         "ls" => match super::ruling::ls(Path::new(state_dir)) {
             Ok(lines) => Outcome::ok(lines),
             Err(errors) => Outcome::failed(RC_BROKEN, errors.iter().map(ToString::to_string).collect()),
@@ -407,6 +408,29 @@ fn ruling_bind(rest: &[String], state_dir: &Path) -> Outcome {
         Err(BindError::Partial { stage, id }) => {
             Outcome::failed_line(RC_REFUSED, named("partial", &format!("stage={} id={id} ", stage.as_str())))
         }
+    }
+}
+
+/// `seat ruling answer`（設計 dialogue-surface.md §11）: `--repo` / `--question` は必須で値欠けと空文字は使い方の誤り・逐語は標準入力の
+/// 全部（1 byte も変えない・UTF-8 でない入力は使い方の誤り）。通る周の stdout は裁定 id の 1 行だけ。断りと書きの途中の止まりは
+/// [`super::ruling::answer`] が持ち、途中の止まりは `partial utterance=<ts>`（`seat ruling bind` で結び直せる）。
+fn ruling_answer(rest: &[String], state_dir: &Path) -> Outcome {
+    let [repo, question] = ["--repo", "--question"].map(|name| required_nonempty(rest, name));
+    let (Ok(repo), Ok(question), Ok(bd)) = (repo, question, nonempty(rest, "--bd")) else {
+        return refused_usage();
+    };
+    let mut bytes = Vec::new();
+    let words = std::io::Read::read_to_end(&mut std::io::stdin(), &mut bytes).ok().and_then(|_| String::from_utf8(bytes).ok());
+    let Some(words) = words else {
+        return refused_usage();
+    };
+    let bind = super::ruling::Bind { repo: Path::new(repo), state_dir, question, utterance: "", bd: bd.unwrap_or(crate::ledger::DEFAULT_BD) };
+    let named = |head: &str, tail: &str| format!("seat ruling: {head} {tail}question={question}");
+    match super::ruling::answer(&bind, &words) {
+        Ok(id) => Outcome::ok_line(id),
+        Err(AnswerError::Refused(reason)) => Outcome::failed_line(RC_REFUSED, named("refused", &format!("reason={reason} "))),
+        Err(AnswerError::Unwritten) => Outcome::failed_line(RC_BROKEN, named("failed", "stage=utterance ")),
+        Err(AnswerError::Partial(ts)) => Outcome::failed_line(RC_REFUSED, named("partial", &format!("utterance={ts} "))),
     }
 }
 

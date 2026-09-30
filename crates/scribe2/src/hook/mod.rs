@@ -12,6 +12,7 @@
 //! （[`store::append_line`]）を通す。
 
 pub mod anchor_guard;
+pub mod answer_mouth;
 pub mod choice_question;
 pub mod command;
 pub mod graph_guard;
@@ -663,6 +664,9 @@ fn pre_tool_use(hooked: &Hooked, payload: &str, started: Instant) -> Outcome {
     // 選択式の問いの道具は全部の門の前で止める（§20・宣言は AskUserQuestion の周だけ読む）。
     if let ChoiceQuestionDecision::Deny(line) = choice_question::decide(&tool, || crate::pipe::declaration::question_route(root)) {
         return denied(hooked, choice_question::WHAT, line, started);
+    }
+    if let answer_mouth::AnswerMouthDecision::Deny(line) = answer_mouth::decide(&tool, || command_of(payload)) {
+        return denied(hooked, answer_mouth::WHAT, line, started);
     }
     let path = field(payload, KEY_FILE).or_else(|| field(payload, KEY_NOTEBOOK));
     if let Some(git_dir) = vessel::git_dir(cwd) {

@@ -4,6 +4,7 @@
 //! 書き手は `seat ruling bind` の 1 本だけで、記帳された発話（[`EventKind::UtteranceReceived`]）と開いた台帳の問いを結び、
 //! 裁定 id を発行して notes に 5 欄の行を書き、`裁定 <id>` で close し、[`EventKind::RulingReceived`]（actor = `human`・
 //! `run` 無し・本体は [`Case::Ruling`]）を 1 件書く（[`bind`]）。逐語は発話 event から写す（席が逐語を渡す口は無い・ADR-0087）。
+//! 逐語を受ける口は `seat ruling answer` の 1 本だけで、経路 gui の発話を書いてから同じ [`bind`] を呼ぶ（[`answer`]・hook が席の撃ちを止める）。
 //! 読み手は `seat ruling ls`（1 件 1 行）と doctor の突合の 1 行（[`doctor_lines`]・manifest の `user <ts>` の行ごとに
 //! 同じ分の event の有無を数えるだけ・判定しない＝C10.2）。
 
@@ -167,6 +168,74 @@ pub fn bind(args: &Bind<'_>) -> Result<Bound, BindError> {
     let policy = LockPolicy::embedded().map_err(|_| partial(Stage::Event))?;
     store::append(args.state_dir, &event, policy).map_err(|_| partial(Stage::Event))?;
     Ok(Bound { id, channel })
+}
+
+/// 答えの口の断り（何も書いていない）の語のうち、結びの 4 語にも台帳を読めない周の語にも無いもの（設計 dialogue-surface.md §11 約束 2）。
+pub const WORDS_EMPTY: &str = "words-empty";
+
+/// 台帳を読めない周の断りの語（結びの [`BindError::LedgerUnreadable`] を行にするときの字と同じ）。
+pub const LEDGER_UNREADABLE: &str = "ledger-unreadable";
+
+/// 答えの口が通らなかった形（rc と行は呼び手が決める）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AnswerError {
+    /// 何も書かずに断った（語は [`WORDS_EMPTY`]・[`LEDGER_UNREADABLE`]・[`Refusal::Closed`]・[`Refusal::NotQuestion`] のどれか）。
+    Refused(&'static str),
+    /// 発話を書けなかった（何も書いていない）。
+    Unwritten,
+    /// 発話は書いた後で結びが落ちた（発話の ts・`seat ruling bind` で同じ ts を結び直せる）。
+    Partial(String),
+}
+
+/// 答えの口（設計 dialogue-surface.md §11 約束 2 / 3）: 逐語が空白だけ → 台帳を読めない → 問いが閉じている → 台帳の問いでない
+/// の順に調べ（どれも何も書かない）、通る周は経路 gui の発話を 1 件書き（ts は store が lock の中で振る）、その ts で [`bind`]
+/// を呼んで裁定 id を返す。結びのどの失敗も [`AnswerError::Partial`]（発話は残る）。承認 event は書かない。
+pub fn answer(args: &Bind<'_>, words: &str) -> Result<String, AnswerError> {
+    if words.trim().is_empty() {
+        return Err(AnswerError::Refused(WORDS_EMPTY));
+    }
+    let bead = ledger::show(args.bd, args.repo, args.question).map_err(|_| AnswerError::Refused(LEDGER_UNREADABLE))?;
+    let not_question = AnswerError::Refused(Refusal::NotQuestion.as_str());
+    let Some(bead) = bead else {
+        return Err(not_question);
+    };
+    if bead.status != OPEN {
+        return Err(AnswerError::Refused(Refusal::Closed.as_str()));
+    }
+    // 裁定 id を作れない問い（id の形・時刻の形）は結びも断るので、発話を書く前に断る。
+    if !bead.labels.iter().any(|label| label == QUESTION_LABEL) || ruling_id(args.question, SAMPLE_TS).is_none() {
+        return Err(not_question);
+    }
+    let policy = LockPolicy::embedded().map_err(|_| AnswerError::Unwritten)?;
+    let (ts, _) = store::append_utterance(args.state_dir, &utterance_event(words), policy).map_err(|_| AnswerError::Unwritten)?;
+    bind(&Bind { utterance: &ts, ..*args }).map(|done| done.id).map_err(|_| AnswerError::Partial(ts))
+}
+
+/// 裁定 id を作れるか確かめるための ts の字（形だけ・発話の ts は store が振る）。
+const SAMPLE_TS: &str = "2026-01-01T00:00:00.000Z";
+
+/// 書く発話の event（`UtteranceReceived`・actor human・経路 gui・session 無し・逐語の detail・run 無し）。ts は store が振る。
+fn utterance_event(words: &str) -> Event {
+    Event {
+        schema: SCHEMA,
+        ts: String::new(),
+        kind: EventKind::UtteranceReceived,
+        run: String::new(),
+        bead: String::new(),
+        host: cli::host(),
+        actor: ACTOR_HUMAN.to_owned(),
+        stage: None,
+        seat: None,
+        pid: None,
+        detail: Some(words.to_owned()),
+        allowance: None,
+        registration: None,
+        mark: None,
+        account: None,
+        cost: None,
+        rule: None,
+        case: Some(Case::Utterance { channel: Channel::Gui, session: None }),
+    }
 }
 
 /// 結んだ裁定の event（actor human・bead は問い id・detail は発話の逐語・本体は [`Case::Ruling`]）。

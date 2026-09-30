@@ -7,6 +7,8 @@
 //! 撃たれた引数を `calls.log` に 1 撃ち 1 行（tab 区切り）で残す。
 
 use super::*;
+use std::io::Write;
+use std::process::Stdio;
 use vessel::cli_outcome::RC_BROKEN;
 use vessel::fleet::json_lite;
 use vessel::fleet::store::{self, LockPolicy};
@@ -27,7 +29,8 @@ const TS_MISSING: &str = "2026-09-30T09:00:00.000Z";
 
 /// 偽の bd（sh）。撃たれた引数を tab 区切りで `calls.log` に足し、`--readonly show <id> --json` は `show-<id>.json` を返す
 /// （無ければ rc 1）・`update <id> --append-notes <行>` は `notes.txt` に行を足し・`close` は `close.fail` が在れば 1 回だけ rc 1・
-/// `close.swap` が在れば書く前に中の path を dir に替える。update と close の撃ちの時点の裁定 event の件数を `*.rulings` に残す。
+/// `close.swap` が在れば中の path を `<path>.aside` へ移して同じ path に dir を置く（移した log は撃ち直しの前に戻せる）・`notes.fail` が在れば
+/// update は書かずに rc 1。update と close の撃ちの時点の裁定 event の件数を `*.rulings` に残す。
 const FAKE_BD: &str = "#!/bin/sh
 d=$(dirname \"$0\")
 first=$1; second=$2; third=$3; fourth=$4
@@ -39,12 +42,13 @@ case \"$first\" in
   [ -f \"$d/show-$third.json\" ] || exit 1
   cat \"$d/show-$third.json\" ;;
 update)
+  if [ -f \"$d/notes.fail\" ]; then echo 'update refused' >&2; exit 1; fi
   grep -c RulingReceived \"$(cat \"$d/events.path\")\" > \"$d/update.rulings\"
   printf '%s\\n' \"$fourth\" >> \"$d/notes.txt\" ;;
 close)
   grep -c RulingReceived \"$(cat \"$d/events.path\")\" > \"$d/close.rulings\"
   if [ -f \"$d/close.fail\" ]; then rm -f \"$d/close.fail\"; echo 'close refused' >&2; exit 1; fi
-  if [ -f \"$d/close.swap\" ]; then p=$(cat \"$d/close.swap\"); rm -f \"$p\"; mkdir \"$p\"; fi ;;
+  if [ -f \"$d/close.swap\" ]; then p=$(cat \"$d/close.swap\"); mv \"$p\" \"$p.aside\"; mkdir \"$p\"; fi ;;
 esac
 exit 0
 ";
@@ -926,4 +930,228 @@ fn utterance_sort_usage_errors_write_nothing_and_end_with_the_usage_line() {
     assert_eq!((rc_of(&help), stdout_of(&help)), (i32::from(RC_OK), format!("{usage}\n")), "--help");
     assert_eq!(fake.log(), before, "どの周も log は不変");
     assert!(fake.calls().is_empty(), "台帳は撃たれない");
+}
+
+// ─────────── 裁定面の答えの口（設計 docs/design/dialogue-surface.md §11・行 j・接頭辞 `seat_ruling_answer_`） ───────────
+
+/// 答えの逐語: 前後に空白・途中に改行と `"`・末尾に改行 2 つ（標準入力の byte をそのまま持つ）。
+const ANSWER_WORDS: &str = "  推奨で進めて \"Ω\" を採る\n二行目も逐語  \n\n";
+
+/// 標準入力の印（使い方の字）。
+const STDIN_MARK: &str = "(stdin: WORDS)";
+
+impl Fake {
+    /// `seat ruling answer` を撃つ（逐語は標準入力へ書いて閉じる）。
+    #[expect(clippy::expect_used, reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く")]
+    fn answer(&self, question: &str, words: &str) -> Output {
+        let (repo, state) = (self.repo.display().to_string(), self.state.display().to_string());
+        let mut child = Command::new(bin())
+            .args(["seat", "ruling", "answer", "--repo", &repo, "--state-dir", &state, "--question", question, "--bd", &self.bd])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("binary を起動できる");
+        child.stdin.take().expect("stdin を開ける").write_all(words.as_bytes()).expect("逐語を書ける");
+        child.wait_with_output().expect("終わりを待てる")
+    }
+
+    /// log の発話 event（物理順）。
+    fn utterances(&self) -> Vec<Event> {
+        store::read_all(&self.state).unwrap_or_default().into_iter().filter(|found| found.kind == EventKind::UtteranceReceived).collect()
+    }
+
+    /// log の承認 event の件数。
+    fn approvals(&self) -> usize {
+        store::read_all(&self.state).unwrap_or_default().iter().filter(|found| found.kind == EventKind::ApprovalReceived).count()
+    }
+}
+
+/// 発話の ts から作る裁定 id（`<問い id>:<YYYYMMDDTHHMMZ>-1`）。
+fn answered_id(question: &str, ts: &str) -> String {
+    let part = |range: std::ops::Range<usize>| ts.get(range).unwrap_or_default().to_owned();
+    format!("{question}:{}{}{}T{}{}Z-1", part(0..4), part(5..7), part(8..10), part(11..13), part(14..16))
+}
+
+/// 断った周の外形: rc 1・stdout 0 byte・stderr が 1 行の断りと逐語で一致し、event log（発話 event を含む）も偽の bd の書きも撃つ前と同じ。
+fn assert_answer_refused(fake: &Fake, question: &str, words: &str, reason: &str) {
+    let before = fake.log();
+    let out = fake.answer(question, words);
+    assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "{reason}: {}", stderr_of(&out));
+    assert!(stdout_of(&out).is_empty(), "{reason}: stdout 0 byte");
+    assert_eq!(stderr_of(&out), format!("seat ruling: refused reason={reason} question={question}\n"), "{reason}");
+    assert_eq!(fake.log(), before, "{reason}: event log は不変（発話 event も書かない）");
+    assert!(fake.writes().is_empty(), "{reason}: 偽の bd の書きは 0 回: {:?}", fake.writes());
+}
+
+/// 偽の bd への書きが notes（5 欄・経路 gui・最後の欄を戻した字が標準入力の byte と一致）→ close（理由 `裁定 <id>`）の順に 1 回ずつで、
+/// 裁定 event はどちらの撃ちの時点でも 0 件。
+fn assert_answer_notes_then_close(fake: &Fake, id: &str, ts: &str) {
+    let notes = fake.notes();
+    let row = notes.trim_end_matches('\n');
+    assert_eq!(notes.lines().count(), 1, "notes の行は 1 行（改行を含む逐語でも）");
+    let fields: Vec<&str> = row.splitn(5, " | ").collect();
+    assert_eq!(fields.len(), 5, "5 欄: {notes}");
+    assert_eq!(fields.iter().take(4).copied().collect::<Vec<_>>(), [id, "s2-q1", ts, "gui"], "先頭の 4 欄");
+    assert_eq!(unquote(fields.last().copied().unwrap_or_default()), ANSWER_WORDS, "最後の欄を戻した字は標準入力の byte と一致");
+    let expected = [
+        vec!["update".to_owned(), "s2-q1".to_owned(), "--append-notes".to_owned(), row.to_owned()],
+        vec!["close".to_owned(), "s2-q1".to_owned(), "--reason".to_owned(), format!("裁定 {id}")],
+    ];
+    assert_eq!(fake.writes(), expected, "notes → close の順に 1 回ずつ");
+    assert_eq!((fake.seen("update.rulings"), fake.seen("close.rulings")), ("0".to_owned(), "0".to_owned()), "裁定 event は close の後");
+}
+
+/// (a) 通る周: 経路 gui の発話 event と 5 欄の行（経路 gui）と close と裁定 event が 1 件ずつ・この順に書かれ、stdout が裁定 id の 1 行だけ、
+/// 承認 event は 0 件。標準入力は前後に空白と末尾の改行 2 つを持ち、発話 event の detail と 5 欄の行の最後の欄を戻した字と裁定 event の
+/// detail が、どれも標準入力の byte と一致する。
+#[test]
+fn seat_ruling_answer_writes_the_four_records_and_prints_only_the_ruling_id() {
+    let fake = Fake::new();
+    fake.show("s2-q1", &open_question("2026-09-30T06:00:00Z", Some("user")));
+    let out = fake.answer("s2-q1", ANSWER_WORDS);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    let said = fake.utterances();
+    assert_eq!(said.len(), 1, "発話 event は 1 件: {said:?}");
+    let said = said.first().cloned().unwrap_or_else(event_none);
+    assert_eq!(said.detail.as_deref(), Some(ANSWER_WORDS), "発話の detail は標準入力の byte と一致");
+    assert_eq!(said.case, Some(Case::Utterance { channel: Channel::Gui, session: None }), "経路 gui・session 無し");
+    assert_eq!((said.actor.as_str(), said.run.as_str()), (ACTOR_HUMAN, ""), "actor human・run 無し");
+    let id = answered_id("s2-q1", &said.ts);
+    assert_eq!(stdout_of(&out), format!("{id}\n"), "stdout は裁定 id の 1 行だけ");
+    assert!(stderr_of(&out).is_empty(), "stderr 0 byte");
+    assert!(!stdout_of(&out).contains(WORDS_MARKS), "逐語を載せない");
+    assert_answer_notes_then_close(&fake, &id, &said.ts);
+    let found = fake.rulings();
+    assert_eq!(found.len(), 1, "裁定 event は 1 件: {found:?}");
+    let event = found.first().cloned().unwrap_or_else(event_none);
+    assert_eq!(event.detail.as_deref(), Some(ANSWER_WORDS), "裁定 event の detail も標準入力の byte と一致");
+    let case = Case::Ruling {
+        ruling: id,
+        utterance: said.ts.clone(),
+        channel: Channel::Gui,
+        question_ts: "2026-09-30T06:00:00Z".to_owned(),
+        asked: Some("user".to_owned()),
+    };
+    assert_eq!(event.case, Some(case), "本体は発話の ts と経路 gui");
+    assert_eq!(fake.approvals(), 0, "承認 event は書かない");
+    let order: Vec<EventKind> = store::read_all(&fake.state).unwrap_or_default().into_iter().map(|found| found.kind).collect();
+    assert_eq!(order, [EventKind::UtteranceReceived, EventKind::RulingReceived], "発話 → 裁定の順");
+}
+
+/// (b) 断りの 4 語の全部: 空白だけの逐語（`words-empty`）・偽の bd の show が読めない JSON を返す（`ledger-unreadable`・show が無い bead の rc 1 も）・
+/// 閉じた問い（`closed`）・問いでない bead（`not-question`・無い bead と label の無い bead）。どれも何も書かない（発話 event も）。
+#[test]
+fn seat_ruling_answer_refuses_the_four_words_without_writing() {
+    let fake = Fake::new();
+    fake.show("s2-q1", &open_question("2026-09-30T06:00:00Z", None));
+    fake.show("s2-broken", "こわれた JSON");
+    fake.show("s2-closed", &show_json("closed", &["intake:question"], "2026-09-30T06:00:00Z", None, ""));
+    fake.show("s2-plain", &show_json("open", &[], "2026-09-30T06:00:00Z", None, ""));
+    fake.show("s2-gone", "[]");
+    let cases = [
+        ("s2-q1", " \n\t  \n", "words-empty"),
+        ("s2-q1", "", "words-empty"),
+        ("s2-broken", ANSWER_WORDS, "ledger-unreadable"),
+        ("s2-nofile", ANSWER_WORDS, "ledger-unreadable"),
+        ("s2-closed", ANSWER_WORDS, "closed"),
+        ("s2-plain", ANSWER_WORDS, "not-question"),
+        ("s2-gone", ANSWER_WORDS, "not-question"),
+    ];
+    for (question, words, reason) in cases {
+        assert_answer_refused(&fake, question, words, reason);
+    }
+    assert!(fake.utterances().is_empty(), "どの周も発話 event を書かない");
+}
+
+/// (d) 断りの順: 2 つの断りに同時に当たる 3 形で先の語だけが出る（空白だけの逐語 + 読めない台帳 → `words-empty`・空白だけの逐語 + 閉じた問い →
+/// `words-empty`・閉じていて問いでない bead → `closed`）。
+#[test]
+fn seat_ruling_answer_refusal_order_is_words_then_ledger_then_closed_then_question() {
+    let fake = Fake::new();
+    fake.show("s2-broken", "こわれた JSON");
+    fake.show("s2-closed", &show_json("closed", &["intake:question"], "2026-09-30T06:00:00Z", None, ""));
+    fake.show("s2-closed-plain", &show_json("closed", &[], "2026-09-30T06:00:00Z", None, ""));
+    let cases = [
+        ("s2-broken", "  \n", "words-empty"),
+        ("s2-closed", "\t", "words-empty"),
+        ("s2-closed-plain", ANSWER_WORDS, "closed"),
+    ];
+    for (question, words, reason) in cases {
+        assert_answer_refused(&fake, question, words, reason);
+    }
+}
+
+/// (c) 頂点の 16 語の `help <語>` の FORM の行の全部（16 本・数を母集団として出す）で、`(stdin: WORDS)` は seat の行の `ruling answer` の form に
+/// 1 回だけ在り、ほかの 15 本と seat の行のほかの form（`ruling bind` を含む）には無い。
+#[test]
+fn seat_ruling_answer_stdin_mark_sits_only_in_its_own_form_of_the_seat_line() {
+    let words = crate::help_top_words();
+    let mut forms: Vec<(String, String)> = Vec::new();
+    for word in &words {
+        let run = crate::help_run(&["help", word]);
+        forms.extend(crate::help_section(&run.out, "FORM").into_iter().map(|line| (word.clone(), line.to_owned())));
+    }
+    assert_eq!(forms.len(), 16, "FORM の行の母集団は 16: {forms:?}");
+    let holders: Vec<&str> = forms.iter().filter(|(_, line)| line.contains(STDIN_MARK)).map(|(word, _)| word.as_str()).collect();
+    assert_eq!(holders, ["seat"], "印を持つ行は seat の 1 本だけ");
+    let seat = forms.iter().find(|(word, _)| word == "seat").map(|(_, line)| line.clone()).unwrap_or_default();
+    assert_eq!(seat.matches(STDIN_MARK).count(), 1, "seat の行に 1 回だけ: {seat}");
+    let split = |from: &str, to: &str| seat.split_once(from).and_then(|(_, rest)| rest.split_once(to)).map(|(form, _)| form.to_owned()).unwrap_or_default();
+    assert!(split("|ruling answer ", "|ruling ls").contains(STDIN_MARK), "ruling answer の form の中: {seat}");
+    assert!(!split("|ruling bind ", "|ruling answer").contains(STDIN_MARK), "ruling bind の form には無い: {seat}");
+    let tail = seat.split_once("|ruling ls").map(|(_, rest)| rest.to_owned()).unwrap_or_default();
+    assert!(!tail.contains(STDIN_MARK), "ほかの form には無い: {seat}");
+}
+
+/// (e) 書きの途中の失敗: 偽の bd が close の撃ちの中で event log の file を脇へ移して同じ path に dir を置く。答えの口は rc 1 で
+/// `partial utterance=<ts>` の 1 行を出し、その ts は脇へ移した log の経路 gui の発話 event の ts と一致し、notes と close の書きは残る。
+/// log を戻して同じ問いと ts で `seat ruling bind` を撃つと rc 0 で、裁定 event が 1 件・発話 event は 1 件のまま。
+#[test]
+fn seat_ruling_answer_event_failure_is_partial_and_bind_finishes_the_same_utterance() {
+    let fake = Fake::new();
+    fake.show("s2-q1", &open_question("2026-09-30T06:00:00Z", None));
+    let path = store::events_path(&fake.state);
+    fixture(&fake.dir, "close.swap", &path.display().to_string());
+    let out = fake.answer("s2-q1", ANSWER_WORDS);
+    let aside = PathBuf::from(format!("{}.aside", path.display()));
+    let moved: Vec<Event> = fs::read_to_string(&aside).unwrap_or_default().lines().filter_map(|line| Event::from_line(line).ok()).collect();
+    let said: Vec<&Event> = moved.iter().filter(|found| found.kind == EventKind::UtteranceReceived).collect();
+    assert_eq!(said.len(), 1, "脇へ移した log に発話 event が 1 件: {moved:?}");
+    let ts = said.first().map(|found| found.ts.clone()).unwrap_or_default();
+    assert_eq!(said.first().map(|found| found.case.clone()), Some(Some(Case::Utterance { channel: Channel::Gui, session: None })), "経路 gui");
+    assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "stderr={}", stderr_of(&out));
+    assert!(stdout_of(&out).is_empty(), "stdout 0 byte");
+    assert_eq!(stderr_of(&out), format!("seat ruling: partial utterance={ts} question=s2-q1\n"));
+    let verbs: Vec<String> = fake.writes().iter().filter_map(|call| call.first().cloned()).collect();
+    assert_eq!(verbs, ["update", "close"], "notes と close の書きは残る");
+    assert!(path.is_dir(), "log の path は dir に替わった");
+    fs::remove_dir(&path).ok();
+    fs::rename(&aside, &path).ok();
+    fake.show("s2-q1", &show_json("closed", &["intake:question"], "2026-09-30T06:00:00Z", None, &fake.notes()));
+    fake.forget();
+    let again = fake.bind("s2-q1", &ts);
+    assert_eq!(rc_of(&again), i32::from(RC_OK), "stderr={}", stderr_of(&again));
+    assert!(fake.writes().is_empty(), "結び直しは台帳へ書かない: {:?}", fake.writes());
+    assert_eq!(fake.rulings().len(), 1, "裁定 event は 1 件");
+    assert_eq!(fake.utterances().len(), 1, "発話 event は 1 件のまま");
+}
+
+/// (e2) notes の追記の失敗: 偽の bd の append-notes が rc 1 を返す周も、答えの口は rc 1 で `partial utterance=<ts>` の 1 行を出し、発話 event は
+/// 1 件残り、close は撃たれない（close の途中の止まりだけを partial にする実装を落とす）。
+#[test]
+fn seat_ruling_answer_notes_failure_is_partial_and_keeps_the_utterance_without_a_close() {
+    let fake = Fake::new();
+    fake.show("s2-q1", &open_question("2026-09-30T06:00:00Z", None));
+    fixture(&fake.dir, "notes.fail", "");
+    let out = fake.answer("s2-q1", ANSWER_WORDS);
+    let said = fake.utterances();
+    assert_eq!(said.len(), 1, "発話 event は 1 件残る: {said:?}");
+    let ts = said.first().map(|found| found.ts.clone()).unwrap_or_default();
+    assert_eq!(rc_of(&out), i32::from(RC_REFUSED), "stderr={}", stderr_of(&out));
+    assert!(stdout_of(&out).is_empty(), "stdout 0 byte");
+    assert_eq!(stderr_of(&out), format!("seat ruling: partial utterance={ts} question=s2-q1\n"));
+    let verbs: Vec<String> = fake.writes().iter().filter_map(|call| call.first().cloned()).collect();
+    assert_eq!(verbs, ["update"], "append-notes だけを撃ち close は撃たない");
+    assert!(fake.rulings().is_empty(), "裁定 event は書かない");
 }

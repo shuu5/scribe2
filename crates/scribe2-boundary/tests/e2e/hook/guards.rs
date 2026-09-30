@@ -1,5 +1,5 @@
 // flip-check: moved s2-07l.679
-//! guard の族の歯（接頭辞 `host_guard_` / `hook_guard_` / `hook_command_` / `hook_memo_` / `hook_ledger_` / `hook_choice_question_`・設計 docs/design/carry-prep.md §9 行 g）。
+//! guard の族の歯（接頭辞 `host_guard_` / `hook_guard_` / `hook_command_` / `hook_memo_` / `hook_ledger_` / `hook_choice_question_` / `hook_answer_mouth_`・設計 docs/design/carry-prep.md §9 行 g）。
 
 use super::*;
 
@@ -2489,6 +2489,81 @@ fn hook_choice_question_leaves_other_tools_unchanged() {
     assert_eq!(stderr_text(routed_edit).trim_end(), format!("{NAME}: deny docs/other.md は契約 write-set の外（C16）"));
     assert!(choice_records(&routed_state).is_empty() && choice_records(&plain_state).is_empty(), "記録 0 行");
     clean(&[&routed, &routed_state, &plain, &plain_state]);
+}
+
+// ─────────────── 答えの口の門（設計 dialogue-surface.md §11 行 j・ADR-0087・接頭辞 `hook_answer_mouth_`） ───────────────
+//
+// `seat ruling answer` を席の道具の呼び出しから撃たせない。役割・pane・台帳を読まず command の字だけで止める。hook は command を撃たず
+// 判定だけを返すので、止まったことは rc 2 と stderr と記録の行で測る（偽の binary の印の file の無さは測りにならない）。
+
+/// 記録のうち答えの口の門の行。
+fn answer_records(state: &Path) -> Vec<String> {
+    inject_lines(state).into_iter().filter(|line| what_of(line) == "answer-mouth-deny").collect()
+}
+
+/// 止める command の 8 形（素の撃ち・変数の binary・`cd … &&` の連鎖・`sh -c`・`bash -lc`・`eval`・前の代入つきの `bash -c`・`cargo run --`）。
+const ANSWER_DENIED: [&str; 8] = [
+    "scribe2 seat ruling answer --repo . --state-dir S --question s2-q1",
+    "$BIN seat ruling answer --repo . --state-dir S --question s2-q1",
+    "cd /tmp && scribe2 seat ruling answer --repo . --state-dir S --question s2-q1",
+    "sh -c 'scribe2 seat ruling answer --repo . --state-dir S --question s2-q1'",
+    "bash -lc \"scribe2 seat ruling answer --repo . --state-dir S --question s2-q1\"",
+    "eval \"scribe2 seat ruling answer --repo . --state-dir S --question s2-q1\"",
+    "X=1 bash -c 'scribe2 seat ruling answer --repo . --state-dir S --question s2-q1'",
+    "cargo run -- seat ruling answer --repo . --state-dir S --question s2-q1",
+];
+
+/// 断りの外形（rc 2・stdout 0 byte・stderr 1 行で `seat ruling bind` を告げる）と、記録が 1 行増えることを確かめる。
+fn assert_answer_deny(state: &Path, why: &str, run: impl FnOnce() -> Output) {
+    let before = answer_records(state).len();
+    let out = run();
+    let text = stderr_text(&out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "{why}: deny は rc 2: {text}");
+    assert!(out.stdout.is_empty(), "{why}: stdout 0 byte");
+    assert_eq!(stderr_lines(&out), 1, "{why}: stderr 1 行: {text}");
+    assert!(text.contains("seat ruling bind"), "{why}: 結びの口を告げる: {text}");
+    assert_eq!(answer_records(state).len(), before + 1, "{why}: 記録 1 行");
+}
+
+/// (1) 止まる 8 形がどれも rc 2 で断られ、1 形 1 行ずつ記録が増える（撃った形の数を母集団として出す）。pane の無い session（runner の形）でも止まる。
+#[test]
+fn hook_answer_mouth_denies_the_eight_forms_without_a_pane() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    assert_eq!(ANSWER_DENIED.len(), 8, "母集団は 8 形");
+    for command in ANSWER_DENIED {
+        assert_answer_deny(&state, command, || run_hook("pre-tool-use", &bash_payload(&repo, command)));
+    }
+    assert_eq!(answer_records(&state).len(), ANSWER_DENIED.len(), "1 形 1 行");
+    clean(&[&repo, &state]);
+}
+
+/// (2) 通る 3 形（引用の中の字面を読む grep・`seat ruling bind`・`seat ruling ls`）は黙って通り、記録を増やさない。
+#[test]
+fn hook_answer_mouth_passes_the_three_forms() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let forms = [
+        "grep -rn \"seat ruling answer\" docs",
+        "scribe2 seat ruling bind --repo . --state-dir S --question s2-q1 --utterance 2026-09-30T07:05:09.123Z",
+        "scribe2 seat ruling ls --state-dir S",
+    ];
+    for command in forms {
+        assert_silent(&run_hook("pre-tool-use", &bash_payload(&repo, command)), command);
+    }
+    assert!(answer_records(&state).is_empty(), "記録 0 行");
+    clean(&[&repo, &state]);
+}
+
+/// (3) `--pane` を持つ session（席の形・pane を解けなくても）も、同じ形で止まる（役割も台帳も読まない）。
+#[test]
+fn hook_answer_mouth_denies_a_session_with_a_pane_flag_too() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    for command in [ANSWER_DENIED[0], ANSWER_DENIED[5]] {
+        assert_answer_deny(&state, command, || run_hook_args(&["pre-tool-use", "--pane", "%999"], &bash_payload(&repo, command)));
+    }
+    clean(&[&repo, &state]);
 }
 
 // ─────────────── close の理由の段（`s2-07l.738.28`・設計 ledger-form.md §16 行 l1・接頭辞 `hook_close_reason_`） ───────────────

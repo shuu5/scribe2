@@ -69,6 +69,8 @@ pub struct Polarity {
 pub enum Guard {
     /// 選択式の問いの道具を `pre-tool-use` の全部の門の前で止める（[`crate::hook::choice_question`]・設計 vessel-hook.md §20）。
     ChoiceQuestion,
+    /// 裁定面の答えの口 `seat ruling answer` を席の道具の呼び出しから撃たせない（[`crate::hook::answer_mouth`]・設計 dialogue-surface.md §11）。
+    AnswerMouth,
     /// `pre-tool-use` の write-set guard（[`crate::hook::guard`]）。
     WriteSet,
     /// 内蔵 guard の承認の問いへの一律 deny（[`crate::hook::permission`]）。
@@ -143,6 +145,7 @@ pub enum Guard {
 /// [`Guard`] の全 variant（宣言順）。
 pub const ALL: &[Guard] = &[
     Guard::ChoiceQuestion,
+    Guard::AnswerMouth,
     Guard::WriteSet,
     Guard::Permission,
     Guard::Command,
@@ -203,6 +206,7 @@ impl Guard {
     pub fn polarity(self) -> Polarity {
         match self {
             Self::ChoiceQuestion => crate::hook::choice_question::POLARITY,
+            Self::AnswerMouth => crate::hook::answer_mouth::POLARITY,
             Self::WriteSet => crate::hook::guard::POLARITY,
             Self::Permission => crate::hook::permission::POLARITY,
             Self::Command => crate::hook::command::POLARITY,
@@ -240,6 +244,7 @@ impl Guard {
     pub fn boundary(self) -> &'static str {
         match self {
             Self::ChoiceQuestion => "hook::choice_question::ChoiceQuestionDecision",
+            Self::AnswerMouth => "hook::answer_mouth::AnswerMouthDecision",
             Self::WriteSet => "hook::guard::Decision",
             Self::Permission => "hook::permission::PermissionDecision",
             Self::Command => "hook::command::CommandDecision",
@@ -277,6 +282,7 @@ impl Guard {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::ChoiceQuestion => "choice-question-deny",
+            Self::AnswerMouth => "answer-mouth-deny",
             Self::WriteSet => "write-set-guard",
             Self::Permission => "permission-deny",
             Self::Command => "command-guard",
