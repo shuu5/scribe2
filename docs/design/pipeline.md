@@ -1150,6 +1150,7 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
 - 依存: 行 be（留めの口）と `dispatcher.md 行 am`（置き場の unreflected の file と、その読みの関数）。`dispatcher.md 行 am` は台帳の依存（bead の blocks）で結ぶ。
 - 着地の判定は、`dispatcher.md §38` の置き場の unreflected の file の「関わる契約の表」に便の bead が在る周に、行 be の留めの口で便を Gated に留める。
   - 表の読みは `dispatcher.md 行 am` が `pub(crate)` で開く読みの関数を呼ぶ。その子の file は書かない。
+    - 呼び先は挙動に差が出ないので done には載せない（便の diff の設計適合は gate の審査で見る・§62 の約束 7 と同じ扱い）。子の file を書かないことは、write-set の外の file として runner の guard が測るので done にしない（器の門）。
   - 名指しは表がその便の bead に結ぶ裁定 id で、detail は `held:FR84:<id>`。同じ名指しが続く周は記帳し直さない（行 be の約束 4・名指しが変わった周は新しい 1 件）。
   - 撃ち直しの上限に数えず、Failed にしない。
 - 表から消えた後の周に、`released:FR84` を 1 件記帳して着地する。列の読みは行 be の読み（detail の頭 `held:` と `released:` を FR の語に依らず読む）のまま。
@@ -1959,7 +1960,7 @@ write-set = ["crates/scribe2/src/pipe/land.rs", "crates/scribe2-boundary/tests/e
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_land_unreflected_"]
 size = "S"
 growth = ["crates/scribe2/src/pipe/land.rs:25"]
-done = "(1) 表に bead が在る便は Gated に留まり main は動かない (2) detail は held:FR84:<表がその便の bead に結ぶ裁定 id> で、同じ名指しの event は 1 件（3 周撃っても 1 件） (3) 上限の回数を越えて回しても Failed にならない (4) 表から消えた後の周に released:FR84 を 1 件記帳して着地する (5) 置き場の file が無い周は留めず、在るのに読めない周だけ held:FR84:unmeasured で留める (6) 表の読みは dispatcher.md 行 am の読みの関数を呼び、その子の file は書かない"
+done = "(1) 表に bead が在る便は Gated に留まり main は動かない (2) detail は held:FR84:<表がその便の bead に結ぶ裁定 id> で、同じ名指しの event は 1 件（3 周撃っても 1 件） (3) 上限の回数を越えて回しても Failed にならない (4) 表から消えた後の周に released:FR84 を 1 件記帳して着地する (5) 置き場の file が無い周は留めず、在るのに読めない周だけ held:FR84:unmeasured で留める"
 
 [[contract]]
 id = "bg"
