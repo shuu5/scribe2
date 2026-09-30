@@ -103,6 +103,15 @@ const KNOWN_FLAGS: [&str; 8] =
 /// 段の flag（値は [`STAGE_PRELENS`] だけ・設計 pipeline.md §61）。
 const STAGE_FLAG: &str = "--stage";
 
+/// lens が claude に**毎回**渡す permission mode（許可の問いを誰にも出さない mode・渡された値は使わない・設計 pipeline.md §64 形 1）。
+const PERMISSION_MODE: &str = "dontAsk";
+
+/// lens が claude に渡す道具の列（読みの道具だけ・`--tools` の値・設計 pipeline.md §64 形 1）。
+const READ_TOOLS: &str = "Read,Grep,Glob";
+
+/// 渡された permission mode が [`PERMISSION_MODE`] でなかった周に、契約の file の dir へ置く 1 語の記録の file 名。
+const IGNORED_FILE: &str = "lens.ignored";
+
 /// `--stage` が取る唯一の値（事前審査の先撃ちの lens・`pipe::dispatch::prelens` が lens の行の末尾に足す）。
 pub const STAGE_PRELENS: &str = "prelens";
 
@@ -113,7 +122,7 @@ const POLL: Duration = Duration::from_secs(1);
 /// 使い方の 1 行。
 pub fn usage() -> String {
     format!(
-        "usage: {} lens --contract F --worktree D --permission-mode M [--rules PATH] [--account-dir D] [--claude PATH] [--cgroup-root DIR] [--stage prelens] < diff",
+        "usage: {} lens --contract F --worktree D [--permission-mode M] [--rules PATH] [--account-dir D] [--claude PATH] [--cgroup-root DIR] [--stage prelens] < diff",
         crate::name::NAME
     )
 }
@@ -182,7 +191,8 @@ pub fn dispatch(args: &[String]) -> Outcome {
         Ok::<_, String>((
             need(args, "--contract")?.to_owned(),
             need(args, "--worktree")?.to_owned(),
-            need(args, "--permission-mode")?.to_owned(),
+            // 任意の flag（受けても値は使わない・古い雛形が焼いた値は [`note_ignored`] が 1 語の記録に残す）。
+            flag(args, "--permission-mode")?.map(str::to_owned),
             flag(args, "--account-dir")?.map(str::to_owned),
             flag(args, "--claude")?.map(str::to_owned),
             // cgroup の root（claude の scope の peak の置き場・設計 gate-cost.md §13）。省くと typed な既定
@@ -216,6 +226,7 @@ pub fn dispatch(args: &[String]) -> Outcome {
         Ok(found) => found,
         Err(reason) => return Outcome::failed_line(RC_BROKEN, format!("lens: {reason}")),
     };
+    note_ignored(contract_path, mode.as_deref());
     let prompt = match prompt_of(contract_path, &state(&contract), &rulings, cap) {
         Ok(found) => found,
         Err(outcome) => return outcome,
@@ -224,10 +235,12 @@ pub fn dispatch(args: &[String]) -> Outcome {
         &Call {
         claude: claude.as_deref().unwrap_or(DEFAULT_CLAUDE),
         prompt: &prompt,
-        permission_mode: &mode,
+        // permission mode は渡された値に依らず dontAsk を**毎回**明示し、道具は読みの 3 つだけを渡す（設計 pipeline.md §64 形 1）。
+        permission_mode: PERMISSION_MODE,
         // rules 行の model と effort を**毎回**渡す（claude CLI の字面・runner と同じ 2 行）。
         model: Some(model.alias()),
         effort: Some(effort.alias()),
+        tools: Some(READ_TOOLS),
         plugin_dir: None,
         account_dir: account.as_deref(),
         // **便の worktree で起こす**（anchor の repo は渡さない）。判定に載る憲法は
@@ -240,6 +253,22 @@ pub fn dispatch(args: &[String]) -> Outcome {
         },
         Path::new(cgroup_root.as_deref().unwrap_or(confine::CGROUP_ROOT)),
     )
+}
+
+/// 渡された permission mode が [`PERMISSION_MODE`] でない周は、契約の file の dir に 1 語の記録 [`IGNORED_FILE`] を置く
+/// （字は `ignored:` に渡された値を続けた 1 行）。dontAsk の周と flag の無い周は置かず、前の周の file が在れば消す
+/// （どの雛形が古いかを便の記録の dir の 1 語で分かるようにする・stderr は 3 つの呼び手が捨てるので使わない）。
+/// 書けない・消せない周は判定を動かさない（記録は判定の材料でない）。
+fn note_ignored(contract: &Path, mode: Option<&str>) {
+    let path = contract.with_file_name(IGNORED_FILE);
+    match mode.filter(|value| *value != PERMISSION_MODE) {
+        Some(value) => {
+            let _ = std::fs::write(&path, format!("ignored:{value}\n"));
+        }
+        None => {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
 }
 
 /// 審査の材料と prompt（**どちらの審査かは契約の隣の材料で決まる**）。

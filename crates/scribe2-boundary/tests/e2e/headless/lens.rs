@@ -8,6 +8,7 @@
 
 use super::*;
 
+// flip-check: retroactive s2-07l.736.33.1
 #[test]
 fn headless_lens_inconclusive_over_cap_without_calling_claude() {
     let dir = tmp();
@@ -40,12 +41,9 @@ fn headless_lens_inconclusive_over_cap_without_calling_claude() {
         "128KiB 超でも判定を返す"
     );
     let args = slurp(&dir.join("args"));
-    assert!(
-        args.lines().collect::<Vec<_>>().windows(2).any(|w| {
-            w.first() == Some(&"--permission-mode") && w.get(1) == Some(&"acceptEdits")
-        }),
-        "lens も permission mode を毎回明示する: {args}"
-    );
+    // 渡した値（acceptEdits）は使わず、器が dontAsk を毎回明示する（設計 pipeline.md §64 形 1）。
+    assert!(pair(&args, "--permission-mode", "dontAsk"), "lens も permission mode を毎回明示する: {args}");
+    assert!(!args.contains("acceptEdits"), "渡された値は argv に載らない: {args}");
 
     // **境界ちょうど（diff の byte 数 == cap）は cap の内側**である。`>` を `>=` に
     // すり替える変異は、境界を撃たない歯では捕まらない（実測で生存した）。
@@ -315,6 +313,7 @@ fn model_split_lens_refuses_when_its_stage_row_is_missing() {
     clean(&[&dir]);
 }
 
+// flip-check: retroactive s2-07l.736.33.1
 #[test]
 fn headless_lens_extracts_last_json_line() {
     let dir = tmp();
@@ -346,7 +345,7 @@ fn headless_lens_extracts_last_json_line() {
     let args = slurp(&dir.join("args"));
     let lines: Vec<&str> = args.lines().collect();
     assert!(lines.contains(&"-p"), "headless で回す: {args}");
-    assert!(pair(&args, "--permission-mode", "plan"), "permission mode を毎回明示する: {args}");
+    assert!(pair(&args, "--permission-mode", "dontAsk"), "permission mode を毎回明示する（渡した plan は使わない）: {args}");
     assert!(
         !lines.iter().any(|line| line.starts_with("--dangerously")),
         "権限を外す flag を渡さない: {args}"
@@ -813,6 +812,88 @@ fn headless_lens_loads_no_settings_from_account_or_checkout() {
     assert!(has_arg(&args, "--strict-mcp-config"), "MCP も宣言外を拾わない: {args}");
     assert!(!has_arg(&args, "--settings"), "settings を file で渡し直さない: {args}");
     assert!(!has_arg(&args, "--restricted"), "restricted は使わない: {args}");
+    clean(&[&dir]);
+}
+
+/// (a) lens は渡された permission mode に依らず、argv に `--tools` と値 `Read,Grep,Glob` の対をちょうど 1 つ・`--permission-mode` と
+/// 値 dontAsk の対をちょうど 1 つ持ち、`--allowedTools` と渡された値（acceptEdits・plan）を持たない（設計 pipeline.md §64 形 1）。
+/// 渡す mode を 3 通りに変えて撃つ（定数へ固定する変異と素通しの変異を同じ歯が分ける）。
+#[test]
+fn lens_read_argv_has_one_tools_pair_and_dontask_whatever_mode_is_passed() {
+    for mode in ["acceptEdits", "plan", "dontAsk"] {
+        let dir = tmp();
+        let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"ok\"}\n", false, 0);
+        let contract = contract_in(&dir);
+        let out = run_lens(&contract, 4096, mode, &claude, b"--- a\n+++ b\n");
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{mode}: {}", stderr_of(&out));
+        assert!(dir.join("called").exists(), "{mode}: claude を呼ぶ");
+        let args = slurp(&dir.join("args"));
+        let lines: Vec<&str> = args.lines().collect();
+        assert!(pair(&args, "--tools", "Read,Grep,Glob"), "{mode}: 読みの道具の対: {args}");
+        assert_eq!(lines.iter().filter(|line| **line == "--tools").count(), 1, "{mode}: --tools はちょうど 1 本: {args}");
+        assert_eq!(lines.iter().filter(|line| **line == "Read,Grep,Glob").count(), 1, "{mode}: 値もちょうど 1 つ: {args}");
+        assert!(pair(&args, "--permission-mode", "dontAsk"), "{mode}: dontAsk を毎回明示する: {args}");
+        assert_eq!(lines.iter().filter(|line| **line == "--permission-mode").count(), 1, "{mode}: mode の対は 1 つ: {args}");
+        assert!(!has_arg(&args, "--allowedTools"), "{mode}: --allowedTools は渡さない（cwd の外も読めてしまう）: {args}");
+        assert!(!args.contains("acceptEdits") && !lines.contains(&"plan"), "{mode}: 渡された値は argv に載らない: {args}");
+        clean(&[&dir]);
+    }
+}
+
+/// (b) dontAsk でない値（acceptEdits・plan）を渡した周は `--contract` の file の dir に `lens.ignored` を置く（字は `ignored:` に値を
+/// 続けた 1 行・設計 pipeline.md §64 形 1）。
+#[test]
+fn lens_read_ignored_mode_is_recorded_as_one_word() {
+    let dir = tmp();
+    let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"ok\"}\n", false, 0);
+    let contract = contract_in(&dir);
+    let record = dir.join("lens.ignored");
+    for mode in ["acceptEdits", "plan"] {
+        let out = run_lens(&contract, 4096, mode, &claude, b"--- a\n+++ b\n");
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{mode}: {}", stderr_of(&out));
+        assert_eq!(slurp(&record).trim_end(), format!("ignored:{mode}"), "{mode}: 渡された値を 1 語で残す");
+        assert_eq!(slurp(&record).lines().count(), 1, "{mode}: 1 行だけ");
+    }
+    clean(&[&dir]);
+}
+
+/// (b) dontAsk を渡した周と `--permission-mode` を渡さない周は claude を呼んで rc 0 で判定を返し、`lens.ignored` は無い（前の周の file を
+/// 置いた同じ dir でも消える）。
+#[test]
+fn lens_read_dontask_and_flagless_rounds_call_claude_and_leave_no_record() {
+    let dir = tmp();
+    let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"ok\"}\n", false, 0);
+    let contract = contract_in(&dir);
+    let record = dir.join("lens.ignored");
+    let out = run_lens(&contract, 4096, "plan", &claude, b"--- a\n+++ b\n");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "plan: {}", stderr_of(&out));
+    // 前の周（plan）の file が在る dir で、dontAsk の周は消す。
+    assert!(record.exists(), "前提: 前の周の記録が在る");
+    fs::remove_file(dir.join("called")).expect("前の周の印を消せる");
+    let out = run_lens(&contract, 4096, "dontAsk", &claude, b"--- a\n+++ b\n");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "dontAsk: {}", stderr_of(&out));
+    assert!(dir.join("called").exists(), "dontAsk の周も claude を呼ぶ");
+    assert!(!record.exists(), "dontAsk の周は記録が無い（前の周の file も消える）");
+    // もう一度 plan で記録を置き、flag の無い周で消す。
+    let out = run_lens(&contract, 4096, "plan", &claude, b"--- a\n+++ b\n");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "plan: {}", stderr_of(&out));
+    assert!(record.exists(), "前提: plan の周が記録を置く");
+    fs::remove_file(dir.join("called")).expect("前の周の印を消せる");
+    let rules = rules_with_cap(&dir, 4096);
+    let out = run_bin(
+        &dir,
+        &[
+            "lens", "--contract", &contract.display().to_string(), "--worktree", &dir.display().to_string(),
+            "--rules", &rules.display().to_string(), "--claude", &claude.display().to_string(),
+        ],
+        b"--- a\n+++ b\n",
+    );
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "flag 無し: {}", stderr_of(&out));
+    assert!(dir.join("called").exists(), "flag の無い周も claude を呼ぶ（--permission-mode は任意）");
+    assert_eq!(stdout_of(&out).trim(), r#"{"verdict":"PASS","evidence":"ok"}"#, "判定を返す");
+    assert!(!record.exists(), "flag の無い周は記録が無い");
+    let args = slurp(&dir.join("args"));
+    assert!(pair(&args, "--permission-mode", "dontAsk"), "flag が無くても dontAsk を明示する: {args}");
     clean(&[&dir]);
 }
 

@@ -4,7 +4,7 @@
 //! 理由の型を持つ周だけ確定の finding（在り処 [`AT`]）を事前審査の結果に載せる。
 //!
 //! 置き場は事前審査の dir の下の `lens/<bead>/`（材料の鍵 `key`・起こした時の鍵 `fired`・lens の cmd の字 `lens`・撃ち中の印
-//! `pid`・`rc`・`out`・理由 `unbuilt`・材料の dir・一時の worktree `tree`）。1 周に起こす本数は rules 行 [`ROW`] で、撃ち中の行を
+//! `pid`・`rc`・`out`・理由 `unbuilt`・材料の dir・lens が読む一時の worktree `tree` と木の印 `tree.sha`）。1 周に起こす本数は rules 行 [`ROW`] で、撃ち中の行を
 //! 含めて数える（材料の組み直しは上限の外）。予想は通行証にしない（結果は `WaitReason`・起こす判定・受付のどれも読まない）。
 //!
 //! 歯は e2e（`crates/scribe2-boundary/tests/e2e/pipe/review.rs` の `pipe_prelens_`）が外形で測る——新設の module に in-file の歯を
@@ -15,7 +15,7 @@ use super::super::declaration::{table_facts, Ceiling, CEILING_ROW, DENIED_ROW};
 use super::super::gate::Verdict;
 use super::super::refuse::{normalize, Certainty, DELETE_FILE, NEW_FILE};
 use super::super::review::{self, FindingKind, REVIEW_DIR};
-use super::super::{git_ok, CONTRACT_FILE};
+use super::super::{git_line, git_ok, CONTRACT_FILE};
 use super::precheck::{dir_of, write, Finding, Kept, Layer, Population};
 use super::Input;
 use crate::fleet::store::{lock_owner, started_ms, Owner};
@@ -40,6 +40,16 @@ const TREE: &str = "tree";
 
 /// 材料の鍵の file（1 行目は事前審査の鍵・2 行目は材料の dir の鍵）。
 const KEY: &str = "key";
+
+/// lens が読む木の印の file（`<木の sha> <種類>` の 1 行・種類は [`ACTUAL`] か [`FORECAST`]・設計 pipeline.md §64 形 5）。判定を
+/// 撃った木を指し続ける（判定を残す周は書き直さない）。
+const TREE_SHA: &str = "tree.sha";
+
+/// 種類: 祖先の層の無い予想（木は HEAD そのまま＝Reviewed の審査の木と同じ形）。
+const ACTUAL: &str = "actual";
+
+/// 種類: 祖先の層を当てた予想（判定は Reviewed に写さない）。
+const FORECAST: &str = "forecast";
 
 /// lens を起こした時の材料の鍵の file。
 const FIRED: &str = "fired";
@@ -119,8 +129,14 @@ pub(super) fn round(sweep: &Sweep<'_, '_>, forecast: &mut dyn FnMut(&str) -> Opt
             rebuild(sweep.input, &place, &kept.key, forecast(bead));
         }
         carry(sweep, bead, &place, &kept);
-        if room > 0 && ready(&place, &kept.key) && fire(sweep.input, &place, cmd) {
+        // 撃つ周に木が無い行（前の周の頭で外した行）は、撃つ前に同じ周の予想で組み直す（形 5）。
+        if room > 0 && ready(&place, &kept.key) && !place.join(TREE).join(".git").is_file() {
+            rebuild(sweep.input, &place, &kept.key, forecast(bead));
+        }
+        if room > 0 && ready(&place, &kept.key) && fire(&place, cmd) {
             room = room.saturating_sub(1);
+        } else {
+            drop_tree(sweep.input.repo, &place.join(TREE));
         }
     }
 }
@@ -143,15 +159,18 @@ pub(super) fn word(input: &Input<'_>, bead: &str) -> &'static str {
     }
 }
 
-/// 周の頭の片付け: 落ちた周の worktree の残り（`tree` に在る worktree は `git worktree remove --force`・dir が無く登録だけが
-/// 残る worktree は `git worktree prune`）を外し、母集団を出た bead の置き場を外す。worktree でない file は消さない（形 aa 1）。
+/// 周の頭の片付け: 落ちた周の worktree の残りと lens が終わった行の木（`tree` に在る worktree は `git worktree remove --force`・
+/// dir が無く登録だけが残る worktree は `git worktree prune`）を外し、母集団を出た bead の置き場を外す。**撃ち中の置き場の木は外さない**
+/// （lens が cwd に読んでいる・形 5）。worktree でない file は消さない（形 aa 1）。
 fn prune(repo: &Path, root: &Path, population: &Population) {
     let Ok(entries) = std::fs::read_dir(root) else {
         return;
     };
     for entry in entries.flatten() {
-        drop_tree(repo, &entry.path().join(TREE));
         let name = entry.file_name().to_string_lossy().into_owned();
+        if !(population.rows.contains_key(&name) && in_flight(&entry.path())) {
+            drop_tree(repo, &entry.path().join(TREE));
+        }
         if !population.rows.contains_key(&name) {
             let _ = std::fs::remove_dir_all(entry.path());
         }
@@ -181,7 +200,7 @@ fn rebuild(input: &Input<'_>, place: &Path, key: &str, forecast: Option<Forecast
     let built = forecast
         .ok_or_else(|| "予想の base を決められない（祖先の層か契約の生成）".to_owned())
         .and_then(|found| build(input, place, &found));
-    let digest = match built {
+    let (digest, mark) = match built {
         Ok(found) => found,
         Err(reason) => return unbuilt(place, &reason),
     };
@@ -192,6 +211,11 @@ fn rebuild(input: &Input<'_>, place: &Path, key: &str, forecast: Option<Forecast
             let _ = std::fs::remove_file(place.join(name));
         }
     }
+    // 判定を残す周（材料の鍵が撃った時と同じ）は木の印を書き直さない＝判定と印は撃った木を指し続ける。判定を残さない周は、今の木の
+    // 印を書く（別の木を指す判定と印の対を作らない・形 5）。
+    if !place.join(OUT).exists() {
+        let _ = std::fs::write(place.join(TREE_SHA), format!("{mark}\n"));
+    }
     let _ = std::fs::write(place.join(KEY), format!("{key}\n{digest}\n"));
 }
 
@@ -201,8 +225,9 @@ fn unbuilt(place: &Path, reason: &str) {
     let _ = std::fs::write(place.join(UNBUILT), format!("{}\n", reason.replace('\n', " ")));
 }
 
-/// 置き場の `tree` に main の HEAD の detached な worktree を作り、層を当てて材料を組み、worktree を外す。材料の鍵を返す。
-fn build(input: &Input<'_>, place: &Path, forecast: &Forecast) -> Result<String, String> {
+/// 置き場の `tree` に main の HEAD の detached な worktree を作り、層を当てて材料を組む。材料の鍵と木の印（`<sha> <種類>`）を返す。
+/// **木は外さない**（撃つ lens が cwd に読む・外すのは [`prune`] と撃たない周・形 5）。組めない周は木を外す。
+fn build(input: &Input<'_>, place: &Path, forecast: &Forecast) -> Result<(String, String), String> {
     let tree = place.join(TREE);
     std::fs::create_dir_all(place).map_err(|err| format!("{} を作れない: {err}", place.display()))?;
     drop_tree(input.repo, &tree);
@@ -211,8 +236,15 @@ fn build(input: &Input<'_>, place: &Path, forecast: &Forecast) -> Result<String,
         return Err(format!("一時の worktree {path} を作れない"));
     }
     let staged = materialize(&tree, &forecast.layers).and_then(|declared| stage(input, place, &tree, forecast, declared.as_deref()));
-    drop_tree(input.repo, &tree);
-    staged
+    let marked = staged.and_then(|digest| {
+        let sha = git_line(&tree, &["rev-parse", "HEAD"]).ok_or_else(|| "一時の worktree の HEAD を読めない".to_owned())?;
+        let kind = if forecast.layers.is_empty() { ACTUAL } else { FORECAST };
+        Ok((digest, format!("{sha} {kind}")))
+    });
+    if marked.is_err() {
+        drop_tree(input.repo, &tree);
+    }
+    marked
 }
 
 /// 一時の worktree を外す（worktree の印 `.git` の file を持つ dir だけ・worktree でない file は触らない＝組めない周の file は残す）。
@@ -312,11 +344,15 @@ fn ended(place: &Path) -> Option<(Option<i32>, String)> {
     Some((line_of(place, RC, 0).and_then(|found| found.trim().parse().ok()), text))
 }
 
-/// Reviewed の段の使い回しの読み口（形 ac 1）: 実物の base で組んだ材料の dir `dir` の鍵が置き場の `fired` と同じで、判定が
-/// 測れて（`unparsed` でない）、置き場の `lens` の字が便の lens の `cmd` と同じ周だけ、先撃ちの lens の rc と stdout を返す。
-pub(in crate::pipe) fn reusable(state_dir: &Path, bead: &str, dir: &Path, cmd: &str) -> Option<(Option<i32>, String)> {
+/// Reviewed の段の使い回しの読み口（形 ac 1・設計 pipeline.md §64 形 5）: 実物の base で組んだ材料の dir `dir` の鍵が置き場の `fired` と
+/// 同じで、判定が測れて（`unparsed` でない）、置き場の `lens` の字が便の lens の `cmd` と同じで、置き場の木の印 [`TREE_SHA`] が
+/// `<審査の木の sha> actual` の周だけ、先撃ちの lens の rc と stdout を返す。`forecast` の判定・別の sha の判定・印の無い置き場は写さない。
+/// `at` は材料の dir と審査の木の sha の対。
+pub(in crate::pipe) fn reusable(state_dir: &Path, bead: &str, at: (&Path, &str), cmd: &str) -> Option<(Option<i32>, String)> {
+    let (dir, sha) = at;
     let place = dir_of(state_dir).join(LENS_DIR).join(bead);
     let same = digest(dir).ok().is_some_and(|found| line_of(&place, FIRED, 0) == Some(found))
+        && line_of(&place, TREE_SHA, 0) == Some(format!("{sha} {ACTUAL}"))
         && std::fs::read_to_string(place.join(LENS)).is_ok_and(|found| found == cmd);
     (same && verdict(&place).is_some_and(|found| found.is_ok())).then(|| ended(&place)).flatten()
 }
@@ -359,20 +395,22 @@ fn ready(place: &Path, key: &str) -> bool {
 /// `fired` と `lens` を起こす時に写し、起こせたら印 `<pid> <起動時刻>` を置く。起こせない周は `unbuilt` を置いて `false`。
 /// 穴を埋めた行の末尾に `--stage prelens` を足す（先撃ちの model の行を読ませる・設計 pipeline.md §61 形 4）。`lens` に写す字は
 /// 穴を埋める前の cmd のまま（足した flag を含まない＝Reviewed の段の lens の cmd と比べる字）。
-fn fire(input: &Input<'_>, place: &Path, cmd: &str) -> bool {
+fn fire(place: &Path, cmd: &str) -> bool {
     let Some(digest) = line_of(place, KEY, 1) else {
         return false;
     };
     let _ = std::fs::remove_file(place.join(PID));
     let marked = std::fs::write(place.join(FIRED), format!("{digest}\n")).and_then(|()| std::fs::write(place.join(LENS), cmd));
     let contract = place.join(REVIEW_DIR).join(CONTRACT_FILE).display().to_string();
-    let filled = crate::headless::fill(cmd, &[("{contract}", &contract), ("{worktree}", &input.repo.display().to_string())]);
+    // `{worktree}` と包みの cwd は置き場の木（祖先の層を当てた予想の木・lens が材料と同じ木を読む・形 5）。
+    let tree = place.join(TREE);
+    let filled = crate::headless::fill(cmd, &[("{contract}", &contract), ("{worktree}", &tree.display().to_string())]);
     let line = format!("{filled} --stage {}", crate::headless::lens::STAGE_PRELENS);
     let spawned = marked.and_then(|()| {
         Invocation::new("sh")
             .args(["-c", WRAP, line.as_str()])
             .args([place.join(PARTIAL), place.join(RC), place.join(OUT)])
-            .current_dir(input.repo)
+            .current_dir(&tree)
             .env_remove(PANE_ENV)
             .process_group(0)
             .stdin(Stdio::null())

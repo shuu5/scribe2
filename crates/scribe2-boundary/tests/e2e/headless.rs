@@ -79,6 +79,9 @@ fn fake_claude(dir: &Path, body: &str, lingering: bool, rc: u8) -> PathBuf {
 /// 親の値を別の字面に固定し、子の写しが `1` なら器が**設定した**と読める形にする。
 const INHERITED_AGENT_VIEW: &str = "inherited-from-parent";
 
+/// binary へ渡す親の自動 memory の env の値（`1` でも空でもない字面・[`INHERITED_AGENT_VIEW`] と同じ理由）。
+const INHERITED_AUTO_MEMORY: &str = "inherited-memory-from-parent";
+
 /// binary を撃つ側（席の pane の中）の `TMUX_PANE`。
 ///
 /// 席の管理席が `pipe` の外で `runner` / `lens` を単体起動する周を作る。子（claude）に届くと hook が
@@ -95,6 +98,7 @@ fn bin_cmd_with_toolbox(place: &Path) -> Command {
     let mut cmd = Command::new(bin());
     cmd.env("PATH", crate::toolbox_path(place))
         .env("CLAUDE_CODE_DISABLE_AGENT_VIEW", INHERITED_AGENT_VIEW)
+        .env("CLAUDE_CODE_DISABLE_AUTO_MEMORY", INHERITED_AUTO_MEMORY)
         .env("TMUX_PANE", PARENT_PANE);
     cmd
 }
@@ -625,6 +629,64 @@ fn headless_agent_view_off_env_reaches_runner_and_lens() {
     clean(&[&dir, &worktree]);
 }
 
+/// fake が写した claude の env の `key` の値（写しに行が無ければ `None`）。
+fn env_value(dir: &Path, key: &str) -> Option<String> {
+    let prefix = format!("{key}=");
+    slurp(&dir.join("env")).lines().find_map(|line| line.strip_prefix(&prefix)).map(str::to_owned)
+}
+
+/// (d) runner と lens の子は口座の自動 memory を読まずに起きる（設計 pipeline.md §64 形 2・agent view の歯と同じ形）: `build` が子の
+/// env の `CLAUDE_CODE_DISABLE_AUTO_MEMORY` を 1 に設定し、親の値（[`INHERITED_AUTO_MEMORY`]）を継承させない。`--account-dir` を
+/// 渡さない runner の周と、渡す lens の周のどちらも同じ。base は設定せず親の値がそのまま届く（RED）。
+#[test]
+fn lens_read_auto_memory_env_is_one_for_runner_and_lens_and_never_inherited() {
+    let dir = tmp();
+    let worktree = tmp();
+    let claude = fake_claude(&dir, "", false, 0);
+    let write_set = dir.join("write-set.txt");
+    let vessel = write_vessel_copy(&dir, r#"["cargo"]"#);
+    fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
+    let out = run_runner(
+        &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "plan", account: None },
+        b"goal = \"x\"\n",
+    );
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    assert_eq!(env_value(&dir, "CLAUDE_CODE_DISABLE_AUTO_MEMORY").as_deref(), Some("1"), "runner の子で自動 memory を切る");
+
+    // lens の周の写しを runner の周の残りと取り違えない（呼ばれた印ごと消してから撃つ）。
+    fs::remove_file(dir.join("env")).expect("runner の周の写しを消せる");
+    fs::remove_file(dir.join("called")).expect("runner の周の印を消せる");
+    let verdict = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"x\"}\n", false, 0);
+    let contract = contract_in(&dir);
+    let out = run_lens(&contract, 4096, "plan", &verdict, b"--- a\n+++ b\n");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    assert!(dir.join("called").exists(), "cap 内なので lens も claude を呼ぶ");
+    assert_eq!(env_value(&dir, "CLAUDE_CODE_DISABLE_AUTO_MEMORY").as_deref(), Some("1"), "lens の子で自動 memory を切る");
+    clean(&[&dir, &worktree]);
+}
+
+/// (e) runner の argv は今のまま: `--tools` を 1 本も持たず、`--allowedTools` の allowlist と渡した permission mode（acceptEdits）を
+/// そのまま持つ（道具の列を持つのは lens だけ・設計 pipeline.md §64 形 1）。
+#[test]
+fn lens_read_runner_argv_has_no_tools_flag_and_keeps_allowlist_and_mode() {
+    let dir = tmp();
+    let worktree = tmp();
+    let claude = fake_claude(&dir, "", false, 0);
+    let write_set = dir.join("write-set.txt");
+    let vessel = write_vessel_copy(&dir, r#"["cargo"]"#);
+    fs::write(&write_set, "src/lib.rs\n").expect("write-set を書ける");
+    let out = run_runner(
+        &RunnerCall { dir: &dir, worktree: &worktree, write_set: &write_set, vessel: &vessel, claude: &claude, mode: "acceptEdits", account: None },
+        b"goal = \"x\"\n",
+    );
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    let args = slurp(&dir.join("args"));
+    assert!(!has_arg(&args, "--tools"), "runner は道具の列を渡さない: {args}");
+    assert!(has_arg(&args, "--allowedTools"), "allowlist は今のまま: {args}");
+    assert!(pair(&args, "--permission-mode", "acceptEdits"), "渡した permission mode は今のまま: {args}");
+    clean(&[&dir, &worktree]);
+}
+
 /// fake が写した claude の env に起動側の [`PARENT_PANE`] が**無い**。
 ///
 /// 母集団を先に測る——写しが空なら「無い」は空虚に通るので、行数 > 0 と親から継承した `PATH` を見る。
@@ -732,6 +794,23 @@ fn lens_promise_prompt_of_fixed_fixture() -> String {
 fn headless_lens_promise_prompt_external_form() {
     let prompt = lens_promise_prompt_of_fixed_fixture();
     insta::assert_snapshot!("lens_promise_prompt_external_form", prompt);
+}
+
+/// (c) 契約の審査の雛形・約束の行つきの雛形・gate の雛形（diff の審査）で組んだ prompt は「読みの道具（Read・Grep・Glob）」を持ち、
+/// 「tool が渡されていない」を 1 件も持たない（設計 pipeline.md §64 形 4）。base の雛形は 1 行目を持たず 2 行目を 1 件ずつ持つ。
+#[test]
+fn lens_read_prompts_name_the_read_tools_and_say_no_tool_is_missing() {
+    let prompts = [
+        ("gate の雛形", lens_prompt_of_fixed_fixture()),
+        ("契約の審査の雛形", lens_contract_prompt_of_fixed_fixture()),
+        ("約束の行つきの雛形", lens_promise_prompt_of_fixed_fixture()),
+    ];
+    for (label, prompt) in prompts {
+        assert!(!prompt.is_empty(), "{label}: prompt の写しが空（母集団 0）");
+        assert_eq!(prompt.matches("読みの道具（Read・Grep・Glob）").count(), 1, "{label}: 読みの道具を名乗る: {prompt}");
+        assert_eq!(prompt.matches("tool が渡されていない").count(), 0, "{label}: 「tool が渡されていない」は消える: {prompt}");
+        assert_eq!(prompt.matches("読むだけで決める").count(), 0, "{label}: 「読むだけで決める」は消える: {prompt}");
+    }
 }
 
 /// lens の prompt に載る裁定の節の見出し（`s2-07l.309`）。

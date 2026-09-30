@@ -164,6 +164,13 @@ pub const AGENT_VIEW_ENV: &str = "CLAUDE_CODE_DISABLE_AGENT_VIEW";
 /// [`AGENT_VIEW_ENV`] に設定する値（agent view off）。
 pub const AGENT_VIEW_OFF: &str = "1";
 
+/// 口座の自動 memory を読ませない**子 process の**環境変数（設計 pipeline.md §64 形 2）。[`AGENT_VIEW_ENV`] の隣で、
+/// 器が起こす claude の構築点（本 module の [`build`]）が毎回設定する（親の値は継承させない・子へ設定するだけで読まない）。
+pub const AUTO_MEMORY_ENV: &str = "CLAUDE_CODE_DISABLE_AUTO_MEMORY";
+
+/// [`AUTO_MEMORY_ENV`] に設定する値（自動 memory off）。
+pub const AUTO_MEMORY_OFF: &str = "1";
+
 /// 席の起動行だけが [`AGENT_VIEW_ENV`] の隣に前置する feedback の調査を切る env（seat-heartbeat.md §11・値は [`AGENT_VIEW_OFF`] と同じ `1`・headless は設定しない）。
 pub const FEEDBACK_SURVEY_ENV: &str = "CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY";
 
@@ -324,6 +331,9 @@ pub struct Call<'a> {
     /// **毎回**渡す（`Some`・model と同じ理由＝省くと口座ごとに深さがばらばらになる・`s2-07l.322`）。
     /// `fleet usage` の token refresh は `None`（argv は不変）。
     pub effort: Option<&'a str>,
+    /// claude が使える道具の列（`--tools <値>`）。`Some` の周だけ argv に載る——lens だけが読みの道具 `Read,Grep,Glob` を渡し
+    /// （設計 pipeline.md §64 形 1）、runner と `fleet usage` の token refresh は `None`（argv は不変）。
+    pub tools: Option<&'a str>,
     /// 本 repo の plugin を載せる dir。
     pub plugin_dir: Option<&'a str>,
     /// 口座の設定 dir（子の環境変数へ書く値）。
@@ -395,6 +405,10 @@ pub fn build(call: &Call<'_>) -> (Invocation, confine::Confinement) {
     if let Some(effort) = call.effort {
         inner.arg("--effort").arg(effort);
     }
+    // 道具の列は `Some` の周だけ渡す（lens の読みの道具・`--allowedTools` は渡さない＝渡すと cwd の外も読める・§64）。
+    if let Some(tools) = call.tools {
+        inner.arg("--tools").arg(tools);
+    }
     inner
         // **settings を 1 つも読まない**（ADR-0011 §2.1）。空の値は user / project / local の
         // **どれも読まない**という意味で、`project` に絞る形では対象 repo の
@@ -450,6 +464,9 @@ pub fn build(call: &Call<'_>) -> (Invocation, confine::Confinement) {
     // `/exit` で dialog を出して止まり、器は描画を読まない（C3.3）ので答えられない。runner と lens の唯一の構築点がここ
     // なので 1 か所で足りる（口座の有無に依らない・親の値は継承させず上書きする）。
     cmd.env(AGENT_VIEW_ENV, AGENT_VIEW_OFF);
+    // **口座の自動 memory も常に切る**（設計 pipeline.md §64 形 2）: 口座の設定 dir の memory が読まれると、同じ材料が口座ごとに違う
+    // 入力になる。構築点はここ 1 つなので runner・lens・`fleet usage` の refresh の全部に効く（親の値は継承させず上書きする）。
+    cmd.env(AUTO_MEMORY_ENV, AUTO_MEMORY_OFF);
     cmd.stdin(Stdio::piped()).stdout(Stdio::piped());
     (cmd, confinement)
 }
@@ -538,6 +555,7 @@ mod tests {
             permission_mode: "plan",
             model: None,
             effort: None,
+            tools: None,
             plugin_dir: Some(&text),
             account_dir: None,
             cwd: None,
@@ -562,6 +580,7 @@ mod tests {
             permission_mode: "plan",
             model: None,
             effort: None,
+            tools: None,
             plugin_dir: None,
             account_dir: None,
             cwd: None,
@@ -584,6 +603,7 @@ mod tests {
                 permission_mode: "plan",
                 model: None,
                 effort: None,
+                tools: None,
                 plugin_dir: None,
                 account_dir: None,
                 cwd: None,
@@ -615,6 +635,7 @@ mod tests {
                 permission_mode: "plan",
                 model: None,
                 effort: None,
+                tools: None,
                 plugin_dir: None,
                 account_dir: None,
                 cwd: None,
@@ -645,6 +666,7 @@ mod tests {
                 permission_mode: "plan",
                 model,
                 effort: None,
+                tools: None,
                 plugin_dir: None,
                 account_dir: None,
                 cwd: None,
@@ -667,11 +689,41 @@ mod tests {
         assert_eq!(some.len(), none.len() + 2, "足されるのは対の 2 引数だけ: {some:?} / {none:?}");
     }
 
+    /// (h) 道具の列を持つ call の argv は `--tools` と値の対がちょうど 1 つで（`--allowedTools` は 0 本）、持たない call の
+    /// argv には `--tools` が 0 本（runner と `fleet usage` の refresh の argv は不変・設計 pipeline.md §64 形 1）。
+    #[test]
+    fn lens_read_tools_pair_is_in_argv_only_when_the_call_has_tools() {
+        let args_of = |tools: Option<&str>| {
+            let (command, _) = build(&Call {
+                claude: "claude",
+                prompt: "",
+                permission_mode: "dontAsk",
+                model: None,
+                effort: None,
+                tools,
+                plugin_dir: None,
+                account_dir: None,
+                cwd: None,
+                output: Format::Json,
+                max_turns: None,
+            });
+            command.get_args().map(|arg| arg.to_string_lossy().into_owned()).collect::<Vec<String>>()
+        };
+        let some = args_of(Some("Read,Grep,Glob"));
+        assert_eq!(some.windows(2).filter(|pair| pair == &["--tools", "Read,Grep,Glob"]).count(), 1, "{some:?}");
+        assert_eq!(some.iter().filter(|arg| arg.as_str() == "--tools").count(), 1, "--tools はちょうど 1 本: {some:?}");
+        assert!(!some.iter().any(|arg| arg == "--allowedTools"), "--allowedTools は渡さない: {some:?}");
+        let none = args_of(None);
+        assert!(!none.iter().any(|arg| arg == "--tools"), "None では現れない: {none:?}");
+        assert_eq!(some.len(), none.len() + 2, "足されるのは対の 2 引数だけ: {some:?} / {none:?}");
+    }
+
     /// 構築点の起動は差し替え口を通る（設計 core-boundary.md §9 行 e）: 撃った 1 起動の argv は構築点が記述した
     /// program と flag の列そのもので、claude の program の後に `-p` と permission mode と出力形式が並び（包めた host
     /// では `systemd-run … --` の後ろ）、cwd と口座の env と agent view の env を付けて `TMUX_PANE` を外す。flag の
     /// 字面は構築点の 1 か所だけが持つ（claude-spawn-points）ので、ここは記述との一致で測る。base は差し替え口を
     /// 通らずに撃つので stub に記録が残らず RED。
+    // flip-check: retroactive s2-07l.736.33.1
     #[test]
     fn invocation_wrap_headless_build_names_the_program_and_flags() {
         let claude = "/nonexistent-invocation-wrap/claude";
@@ -682,6 +734,7 @@ mod tests {
             permission_mode: "plan",
             model: None,
             effort: None,
+            tools: None,
             plugin_dir: None,
             account_dir: Some("/nonexistent-invocation-wrap/account"),
             cwd: Some(cwd),
@@ -718,6 +771,7 @@ mod tests {
         let envs = found.map(|one| one.envs.clone()).unwrap_or_default();
         let want_envs = vec![
             (super::AGENT_VIEW_ENV.to_owned(), Some(super::AGENT_VIEW_OFF.to_owned())),
+            (super::AUTO_MEMORY_ENV.to_owned(), Some(super::AUTO_MEMORY_OFF.to_owned())),
             (super::ACCOUNT_ENV.to_owned(), Some("/nonexistent-invocation-wrap/account".to_owned())),
             ("TMUX_PANE".to_owned(), None),
         ];

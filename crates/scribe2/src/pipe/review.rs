@@ -56,7 +56,8 @@ use requirements::requirements_text;
 use super::contract::Contract;
 use super::gate::{last_json_object, lens_usage, Verdict};
 use super::lens_record::LensSource;
-use super::{confine, contract_path, emit, record_cost, table, Emit};
+use super::dispatch::floor::Worktree;
+use super::{confine, contract_path, emit, git_line, record_cost, run_dir, table, Emit};
 use crate::cli_outcome::{Outcome, RC_BROKEN};
 use crate::fleet::json_lite::{self, Value};
 use crate::fleet::store::LockPolicy;
@@ -305,21 +306,25 @@ impl Finding {
 /// 審査を 1 回通す。
 pub fn review(entry: &Review<'_>) -> Outcome {
     let (source, dir) = (contract_path(entry.state_dir, entry.run), review_dir(entry.state_dir, entry.run));
+    // 審査の木の sha は**材料を組む前に** 1 回だけ読む（受付の base の木と同じ・設計 pipeline.md §64 形 3）。使い回しの鍵も同じ値。
+    let head = git_line(entry.repo, &["rev-parse", "HEAD"]);
     let (contract, promised) = match stage(entry.repo, (entry.contract, &source), entry.requirements, &dir, "") {
         Ok(found) => found,
         Err(reason) => return broken(reason),
     };
-    // 先撃ちの判定を使い回せる周（材料の鍵・判定・lens の字・model の行が同じ・設計 dispatcher.md §27 形 ac 1・pipeline.md §61
-    // 形 5）は lens を撃たない。
-    let reused = match entry.lens {
-        LensSource::Cmd(cmd) if entry.same_model => super::dispatch::prelens::reusable(entry.state_dir, entry.bead, &dir, cmd),
-        LensSource::Cmd(_) | LensSource::Absent | LensSource::Unreadable { .. } => None,
+    // 先撃ちの判定を使い回せる周（材料の鍵・判定・lens の字・model の行が同じ・置き場の木が審査の木・設計 dispatcher.md §27 形 ac 1・
+    // pipeline.md §61 形 5・§64 形 5）は lens を撃たない（木も作らない）。
+    let reused = match (entry.lens, head.as_deref()) {
+        (LensSource::Cmd(cmd), Some(sha)) if entry.same_model => {
+            super::dispatch::prelens::reusable(entry.state_dir, entry.bead, (&dir, sha), cmd)
+        }
+        _ => None,
     };
     // done の項目の数（Promised の行は 0・材料の書き手 `materials` と同じ読み手 `done_items`・§64 形 5）。
     let items = if promised { 0 } else { items::done_items(&entry.contract.done).len() };
-    let (finding, scope, usage) = match &reused {
-        Some((rc, text)) => (read_outcome(*rc, text, items), None, None),
-        None => decide(entry, &contract, items),
+    let (finding, scope, usage, tree) = match &reused {
+        Some((rc, text)) => (read_outcome(*rc, text, items), None, None, None),
+        None => decide(entry, &contract, items, head.as_deref()),
     };
     let finding = narrow(finding, promised);
     let verdict = finding.verdict;
@@ -327,7 +332,7 @@ pub fn review(entry: &Review<'_>) -> Outcome {
     // 書けない周も判定と rc は変えない。使い回した周は lens を撃っていないので書かない（形 ac 2）。
     let cost = usage.map(|found| Cost { source: CostSource::Review, usage: found });
     let noted = record_cost(entry.state_dir, (entry.run, entry.bead), cost, entry.policy);
-    match settle(entry, &finding, scope, reused.is_some()) {
+    match settle(entry, &finding, scope, reused.is_some(), tree.as_deref()) {
         Err(reason) => broken(reason),
         Ok(()) => Outcome {
             out: vec![format!("run={} stage={} verdict={}", entry.run, Stage::Reviewed.as_str(), verdict.as_str())],
@@ -531,17 +536,36 @@ fn lens_cmd(source: &LensSource) -> Result<&str, Finding> {
 /// lens を 1 回撃って判定を得る（**wildcard 無し・判定に届かない周は INCONCLUSIVE**）。
 ///
 /// 2 つ目は lens の scope を片付けた結果（record に書く周だけ `Some`）・3 つ目は lens の claude の消費の 6 値（lens が
-/// rc 0 で終わり判定 object が運んだ周だけ `Some`＝gate の lens と同じ読み [`lens_usage`]）。
-fn decide(entry: &Review<'_>, contract: &Path, items: usize) -> (Finding, Option<confine::Released>, Option<Usage>) {
+/// rc 0 で終わり判定 object が運んだ周だけ `Some`＝gate の lens と同じ読み [`lens_usage`]）。4 つ目は lens が読んだ審査の木の sha
+/// （木を作って lens を撃った周だけ `Some`）。
+///
+/// **lens の cwd と `{worktree}` は審査の木**（run dir の直下の `<sha>.tree`・`head` は審査の前に読んだ repo の HEAD の sha に detach
+/// した worktree・設計 pipeline.md §64 形 3）。作れない周は lens を撃たず INCONCLUSIVE（anchor の作業木へは倒さない）で、木は判定を
+/// 読んだ後に登録ごと外れる（[`Worktree`] の Drop）。
+fn decide(
+    entry: &Review<'_>,
+    contract: &Path,
+    items: usize,
+    head: Option<&str>,
+) -> (Finding, Option<confine::Released>, Option<Usage>, Option<String>) {
     let cmd = match lens_cmd(entry.lens) {
         Ok(found) => found,
-        Err(finding) => return (finding, None, None),
+        Err(finding) => return (finding, None, None, None),
     };
-    // **渡すのは path であって本文ではない**（cmd は `sh -c` の 1 行）。穴は gate と同じ 2 つで、`{worktree}` は
-    // 便の worktree がまだ無いので base の repo（lens が憲法を読む cwd）を置く。**1 走査で埋める**。
+    let run = run_dir(entry.state_dir, entry.run);
+    let Some(sha) = head else {
+        let reason = "審査の木を作れない: repo の HEAD を読めない".to_owned();
+        return (Finding::inconclusive(reason), None, None, None);
+    };
+    let Some(tree) = Worktree::make(entry.repo, &run, sha) else {
+        let reason = format!("審査の木 {} を作れない", Worktree::place(&run, sha).display());
+        return (Finding::inconclusive(reason), None, None, None);
+    };
+    // **渡すのは path であって本文ではない**（cmd は `sh -c` の 1 行）。穴は gate と同じ 2 つで、`{worktree}` は審査の木を置く。
+    // **1 走査で埋める**。
     let line = crate::headless::fill(
         cmd,
-        &[("{contract}", &contract.display().to_string()), ("{worktree}", &entry.repo.display().to_string())],
+        &[("{contract}", &contract.display().to_string()), ("{worktree}", &tree.path.display().to_string())],
     );
     let unit = confine::unit_name(entry.run, REVIEW_STAGE, 1);
     // 審査の lens の箱は 1 × `gate.job_memory_mb`（設計 gate-cost.md §12）。
@@ -549,14 +573,14 @@ fn decide(entry: &Review<'_>, contract: &Path, items: usize) -> (Finding, Option
     let (mut command, confinement) = confine::wrap_line(&line, &wrap);
     // diff は無い（stdin は piped のまま閉じる＝lens は EOF を見る）。stderr は捨てる（gate と同じ）。
     let spawned = command
-        .current_dir(entry.repo)
+        .current_dir(&tree.path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn();
     let mut child = match spawned {
         Ok(found) => found,
-        Err(err) => return (Finding::inconclusive(format!("lens を起動できない: {err}")), None, None),
+        Err(err) => return (Finding::inconclusive(format!("lens を起動できない: {err}")), None, None, None),
     };
     drop(child.stdin.take());
     let waited = child.wait_with_output();
@@ -566,7 +590,7 @@ fn decide(entry: &Review<'_>, contract: &Path, items: usize) -> (Finding, Option
         .ok()
         .filter(|out| out.status.success())
         .and_then(|out| lens_usage(&String::from_utf8_lossy(&out.stdout)));
-    (lens_outcome(waited, &confinement, items), scope, usage)
+    (lens_outcome(waited, &confinement, items), scope, usage, Some(sha.to_owned()))
 }
 
 /// 終わった lens の出力から判定を読む（箱の中の死 → rc → 最後の JSON 行の順・gate の lens と同じ極性）。
@@ -661,7 +685,13 @@ fn parse_lens(text: &str) -> Finding {
 
 /// 判定を `review.json` へ atomic に書き、`Reviewed` を 1 件追記する。`kind` と `at` は任意 field（schema 1 のまま・
 /// 古い読み手は無視・PASS の周は無い）。先撃ちを使い回した周は detail の末尾に [`REUSED`] を足す。
-fn settle(entry: &Review<'_>, finding: &Finding, scope: Option<confine::Released>, reused: bool) -> Result<(), String> {
+fn settle(
+    entry: &Review<'_>,
+    finding: &Finding,
+    scope: Option<confine::Released>,
+    reused: bool,
+    tree: Option<&str>,
+) -> Result<(), String> {
     let mut fields = vec![
         ("schema", Value::Num(SCHEMA)),
         ("run", Value::Str(entry.run.to_owned())),
@@ -676,6 +706,10 @@ fn settle(entry: &Review<'_>, finding: &Finding, scope: Option<confine::Released
     }
     if let Some(released) = scope {
         fields.push(("scope", Value::Str(released.as_str().to_owned())));
+    }
+    // lens が読んだ審査の木の sha（事後に読んだ木を辿れる・NFR4・使い回した周と木を作れなかった周は無い・§64 形 3）。
+    if let Some(sha) = tree {
+        fields.push(("tree", Value::Str(sha.to_owned())));
     }
     fields.push(("ts", Value::Str(now_utc())));
     let body = json_lite::write_object(&fields);

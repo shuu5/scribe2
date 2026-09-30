@@ -117,6 +117,8 @@ pub fn dispatch(args: &[String]) -> Outcome {
         // rules 行の model と effort を**毎回**渡す（claude CLI の字面・lens と同じ 2 行）。
         model: Some(model.alias()),
         effort: Some(effort.alias()),
+        // runner は道具の列を渡さない（`--allowedTools` の allowlist のまま・設計 pipeline.md §64）。
+        tools: None,
         plugin_dir: Some(&plugin_dir),
         account_dir: account.as_deref(),
         cwd: Some(Path::new(&worktree)),

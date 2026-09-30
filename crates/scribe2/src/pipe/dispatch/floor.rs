@@ -218,18 +218,24 @@ impl Drop for Lock {
     }
 }
 
-/// sha の一時の木（器の作った木だけを片付ける・Drop で worktree の登録ごと畳む）。
-struct Worktree {
+/// sha の一時の木（器の作った木だけを片付ける・Drop で worktree の登録ごと畳む）。契約の審査の木（`pipe::review`・設計
+/// pipeline.md §64 形 3）も同じ木を借りる（一時の木の 7 つ目を書かない）。
+pub(in crate::pipe) struct Worktree {
     /// 親 repo。
     repo: PathBuf,
     /// 木の path（名に sha の 40 字を持つ）。
-    path: PathBuf,
+    pub(in crate::pipe) path: PathBuf,
 }
 
 impl Worktree {
+    /// `dir` の下の sha の木の path（[`Self::make`] が作る場所・作れない周の理由が名指す path もこの 1 本）。
+    pub(in crate::pipe) fn place(dir: &Path, sha: &str) -> PathBuf {
+        dir.join(format!("{sha}.tree"))
+    }
+
     /// 作る。同じ sha の死んだ周が残した木は先に片付ける（木でない dir は消さない＝作れない周になる）。
-    fn make(repo: &Path, dir: &Path, sha: &str) -> Option<Self> {
-        let path = dir.join(format!("{sha}.tree"));
+    pub(in crate::pipe) fn make(repo: &Path, dir: &Path, sha: &str) -> Option<Self> {
+        let path = Self::place(dir, sha);
         let text = path.display().to_string();
         if path.join(".git").is_file() {
             let _ = git_ok(repo, &["worktree", "remove", "--force", &text]);

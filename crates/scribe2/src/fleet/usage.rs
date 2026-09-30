@@ -612,6 +612,7 @@ fn refresh(dir: &Path, label: &str, reader: &Reader<'_>) -> Refresh {
         // runner / lens の行）。
         model: None,
         effort: None,
+        tools: None,
         plugin_dir: None,
         account_dir: Some(&account),
         cwd: Some(dir),
