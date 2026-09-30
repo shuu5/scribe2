@@ -1480,7 +1480,7 @@ terms:
     relationships: [局面の出力, close-check の線, misfit, event log]
   - canonical: close-check の線
     domain: consumer
-    definition: 局面の出力の全部の書き直しが main の先端の vessel 宣言で close-check を初めて true と読んだ時刻。 state dir ごとに 1 度だけ記帳し、 後の書き直しは動かさず、 切り替えの線より前にはならない。 閉じに由来する misfit はこの線より後の閉じだけに掛ける (SRS FR90・FR91)。 記帳は event の種類 LifecycleCutover の 1 件で、 既存の任意の key detail に閉じた 1 語 close-check を持ち、 detail が close-check の最初の行が線である (ADR-0100)。
+    definition: 局面の出力の全部の書き直しが main の先端の vessel 宣言で close-check を初めて true と読んだ時刻。 state dir ごとに 1 度だけ記帳し、 後の書き直しは動かさず、 切り替えの線より前にはならない。 閉じに由来する misfit はこの線より後の閉じだけに掛ける (SRS FR90・FR91)。 記帳は event の種類 LifecycleCutover の 1 件で、 既存の任意の key detail に閉じた 1 語 close-check を持ち、 detail が close-check である最初の LifecycleCutover の行が線である (ADR-0100)。
     relationships: [close-check, 切り替えの線, misfit]
     flagged_ambiguities: ["close-check の線 (閉じの misfit の数えの境・SRS FR90) と opt-in の線 (ruling-check が main の履歴で初めて true になった commit・SRS FR83) と切り替えの線 (この版の器の最初の全部の書き直し・SRS FR90) は別"]
   - canonical: 判断の欄
