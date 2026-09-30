@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="generator" content="folio ADR-pack assembler (folio-bwc / instance#2) — deterministic structure, prose slots unfilled">
-<title>席の起草の置き場の build の置き場に state dir ごとの量の上限を持たせ、 越えた周は書きの新しさの古い順に上限まで消す — 組み立て中の窓の内は消さず、 測れない木は数えずに名指し、 越えたままなら掃除の行と doctor の行で知らせる (ADR-0096 の書きの線だけで消す決定と原則を部分 supersede)</title>
+<title>器が起こす審査役は読みの道具だけを持ち、 契約の審査は審査の時点の HEAD の木の上で・先撃ちは予想の木の上で読み、 口座の自動 memory を読まない — runner には共通 verify の行を渡し、 終わりの門で器が撃った赤を同じ worktree で直させる (ADR-0011 が残した lens の起動形を決める)</title>
 <style>
 /* ===========================================================================
    folio human-layer design system — core.css (S3 / folio-8oc プロトタイプ)
@@ -455,14 +455,14 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
     "schema": "https://schema.org/",
     "folio": "https://folio.dev/spec/v1/"
   },
-  "@id": "./ADR-0101-seat-draft-build-dirs-are-capped-per-state-dir-and-shed-oldest-first.html",
+  "@id": "./ADR-0102-lens-reads-with-read-only-tools-and-runner-gets-the-common-verify.html",
   "@type": "schema:TechArticle",
   "dc:isPartOf": [
     {
       "@id": "./README.html"
     }
   ],
-  "dc:title": "席の起草の置き場の build の置き場に state dir ごとの量の上限を持たせ、 越えた周は書きの新しさの古い順に上限まで消す — 組み立て中の窓の内は消さず、 測れない木は数えずに名指し、 越えたままなら掃除の行と doctor の行で知らせる (ADR-0096 の書きの線だけで消す決定と原則を部分 supersede)",
+  "dc:title": "器が起こす審査役は読みの道具だけを持ち、 契約の審査は審査の時点の HEAD の木の上で・先撃ちは予想の木の上で読み、 口座の自動 memory を読まない — runner には共通 verify の行を渡し、 終わりの門で器が撃った赤を同じ worktree で直させる (ADR-0011 が残した lens の起動形を決める)",
   "folio:version": "0.1.0",
   "folio:stakeholders": [
     "Developer",
@@ -471,13 +471,10 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
   ],
   "dc:references": [
     {
-      "@id": "../spec/constitution.html#a1"
+      "@id": "../spec/constitution.html#c1"
     },
     {
-      "@id": "../spec/constitution.html#n1"
-    },
-    {
-      "@id": "../spec/constitution.html#n2"
+      "@id": "../spec/constitution.html#c2"
     },
     {
       "@id": "../spec/constitution.html#c5"
@@ -486,22 +483,34 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
       "@id": "../spec/constitution.html#c10"
     },
     {
+      "@id": "../spec/constitution.html#c16"
+    },
+    {
       "@id": "../spec/constitution.html#c17"
     },
     {
-      "@id": "../spec/srs.html#FR68"
+      "@id": "../spec/constitution.html#n2"
     },
     {
-      "@id": "../spec/srs.html#FR30"
+      "@id": "../spec/srs.html#FR5"
     },
     {
-      "@id": "../spec/srs.html#NFR6"
+      "@id": "../spec/srs.html#FR6"
     },
     {
-      "@id": "./ADR-0081-run-worktree-intermediates-are-swept-when-runs-stop-being-live.html"
+      "@id": "../spec/srs.html#FR8"
     },
     {
-      "@id": "./ADR-0096-seat-drafts-are-vessel-owned-and-swept-after-writes-stop.html"
+      "@id": "../spec/srs.html#FR9"
+    },
+    {
+      "@id": "../spec/srs.html#FR49"
+    },
+    {
+      "@id": "./ADR-0010-vessel-declaration-holds-allowlist-and-common-verify.html"
+    },
+    {
+      "@id": "./ADR-0011-vessel-launches-claude-without-settings.html"
     }
   ]
 }
@@ -513,182 +522,186 @@ table[data-component="adr-driver-table"]{width:100%;border-collapse:collapse;mar
 <nav class="breadcrumb" aria-label="パンくず"><ol>
   <li><a href="../index.html">design-intent</a></li>
   <li><a href="./README.html">decisions</a></li>
-  <li aria-current="page">ADR-0101</li>
+  <li aria-current="page">ADR-0102</li>
 </ol></nav>
 <!-- /folio:chrome-top -->
 <div class="page" data-component="requirement-type-color-tokens">
 <header data-component="doc-cover-band">
-<p class="cover-eyebrow"><span class="doc-type">設計判断記録 (ADR)</span> <span>scribe2 — 席の起草の置き場の量の上限</span></p>
-<h1>席の起草の置き場の build の置き場に state dir ごとの量の上限を持たせ、 越えた周は書きの新しさの古い順に上限まで消す — 組み立て中の窓の内は消さず、 測れない木は数えずに名指し、 越えたままなら掃除の行と doctor の行で知らせる (ADR-0096 の書きの線だけで消す決定と原則を部分 supersede)</h1>
-<p class="cover-sub">器の掃除は、 席 (人と AI が話す session) が試作のために作る repo の写しから、 書きが 6 時間無い build と依存の置き場を消す。 線は時間だけで量を見ないので、 席が写しを並列に作って組み立てると、 6 時間の中でも置き場が溜まって disk の大きな割合を占める。 本 ADR は、 置き場の合計に state dir ごとの上限を持たせ、 越えた周だけ最後の書きが古い順に上限まで消し、 書いたばかりの置き場は消さず、 越えたままなら知らせると決める。</p>
-<div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">この記録で「器」は scribe2 の本体、 「席」は人と AI が話す作業の画面、 「起草の置き場」は席が試作のために repo の写しを置く器の中の場所です。 器の掃除は、 写しの中の組み立ての産物 (build と依存の置き場) のうち、 6 時間書かれていない物を消します。 けれども時間しか見ないので、 席が写しをたくさん並べて組み立てると、 6 時間の中でも産物が溜まり、 disk の大きな割合を占めました。 この記録は、 産物の合計に state dir ごとの上限 (100 GiB) を持たせ、 越えた周だけ、 最後に書かれたのが古い物から上限を下回るまで消し、 30 分以内に書かれた物は組み立て中とみなして消さず、 それでも越えたままなら知らせると決めます。 持ち主が推奨に同意した裁定に基づく決定です。</p></div></div>
+<p class="cover-eyebrow"><span class="doc-type">設計判断記録 (ADR)</span> <span>scribe2 — 審査役の読みの道具と runner の終わりの門</span></p>
+<h1>器が起こす審査役は読みの道具だけを持ち、 契約の審査は審査の時点の HEAD の木の上で・先撃ちは予想の木の上で読み、 口座の自動 memory を読まない — runner には共通 verify の行を渡し、 終わりの門で器が撃った赤を同じ worktree で直させる (ADR-0011 が残した lens の起動形を決める)</h1>
+<p class="cover-sub">器が起こす審査役 (lens) は、 「道具は無い」と言われて材料の字だけで判定する一方、 実際には編集を自動で承認する設定で main の作業場所を起点に起きていた。 実装役 (runner) は、 gate が必ず撃つ共通の検査を知らされていなかった。 本 ADR は、 審査役に読むだけの道具を渡して書く道具を持たせず、 契約の審査を審査する時点の repo の写しの上で、 先回りの審査を予想の写しの上で読ませ、 口座ごとの自動 memory を読ませないと決める。 あわせて runner に共通の検査の行を渡し、 runner の終わりに器がその行を撃って、 赤なら同じ作業場所で直させる。</p>
+<div class="summary-card"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#ffe8a8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><p class="lab">この判断が約束すること (1 文サマリ)</p><p class="txt" data-prose-slot="cover-summary" data-slot-id="cover-summary">この記録で「器」は scribe2 の本体、 「審査役」は契約や差分を読んで合否を返す Claude、 「runner」は契約を実装する Claude です。 審査役は「道具は無い」と言われて材料の字だけで判定していましたが、 実際には編集を自動で許す設定のまま、 main の作業場所を起点に起きていました。 runner は、 gate が必ず撃つ共通の検査を知らされていませんでした。 この記録は、 審査役には読むだけの道具 (Read・Grep・Glob) だけを渡し、 契約の審査は審査する時点の repo の写しの上で、 先回りの審査は予想の写しの上で読ませ、 口座ごとの自動の記憶を読ませないと決めます。 先回りの審査の判定は、 本番の審査に写しません。 runner には共通の検査の行を渡し、 runner が終わったら器がその行を撃って、 赤なら同じ作業場所で直させます。</p></div></div>
 <div class="cover-meta"><span class="m"><span class="k">状態</span><span class="v">accepted</span></span><span class="m"><span class="k">選択肢</span><span class="v">5件 (OPT1–OPT5)</span></span><span class="m"><span class="k">結果</span><span class="v">良い 4 / トレードオフ 5</span></span><span class="m"><span class="k">版</span><span class="v">v0.1.0 / 2026-09-30</span></span></div>
-<div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>FR68・FR30・NFR6</b></div>
+<div class="reader-chip" data-component="cross-doc-ref-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 正当化する要件: <b>SRS-SCRIBE2-MVP</b> の <b>FR5・FR49・FR9・FR8・FR6</b></div>
 <div data-component="approval-block">
-<div class="sign"><span class="role">裁定 (user)</span><span class="who">user</span><span class="when">裁定 id user 2026-09-30T07:18Z (席の起草の置き場の build と依存の置き場の合計に state dir ごとの上限 100 GiB を持たせ、 越えた周に最後の書きが 30 分より前の置き場を古い順に上限まで消すことへの憲法 A1 の承認と、 上限と窓の値の裁定。 持ち主が推奨に同意した裁定で、 逐語は台帳の memo s2-07l.737.27 の notes と RulingReceived の event にだけ在る)。 同じ裁定は、 木の写しと追跡される file と commit していない変更を消すことを承認していない</span><span class="stamp self">裁定済</span></div>
-<div class="sign"><span class="role">設計 (orchestrator)</span><span class="who">orchestrator</span><span class="when">2026-09-30 草稿 v1 (掃除の関数と書きの線・stderr の行とそれを固定する歯・起草の置き場の根・doctor の枝・rules の末尾を現物で読み、 ADR-0081 と ADR-0096 の決定と照らした。 拘束する constitution の版 0.5.0)</span><span class="stamp self">作成</span></div>
+<div class="sign"><span class="role">裁定 (user)</span><span class="who">user</span><span class="when">裁定 id user 2026-09-28T00:54Z (決めてほしいことは推奨で進める常設の裁定) の適用。 発端は user 2026-09-30T11:30Z の問い (便の FAIL が多い根と、 AI に code の文脈が渡っていない構造の分析) で、 分析の打ち手 0 と 2 を本 ADR が決める。 逐語は台帳の epic s2-07l.736.33 と s2-07l.736.31 の notes にだけ在る。 rules 行の値 (lens の turn の上限・終わりの門の周の上限) は本裁定に含めず、 SRS の追加 round で別に裁定を取る</span><span class="stamp self">裁定済</span></div>
+<div class="sign"><span class="role">設計 (orchestrator)</span><span class="who">orchestrator</span><span class="when">2026-09-30 草稿 v1・同日 v2 で PR #915 の敵対審査 (high 3・medium 10・low 11) を 1 件ずつ現物で再現して反映 (lens と runner の起動形・契約の審査と gate の雛形・審査の cwd・runner の本文の組み手・gate の verify の撃ち手を現物で読み、 claude 2.1.285 の道具と mode と自動 memory の効きを実測して、 ADR-0010 と ADR-0011 の決定と照らした。 拘束する constitution の版 0.5.0)</span><span class="stamp self">作成</span></div>
 </div>
 <div class="reader-chip"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a2c05" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> 想定読者: scribe2 の開発 session と user — 器の内部と Rust の専門知識は不要 (専門語はやさしい言葉を併記)</div>
 </header>
 <!-- folio:chrome-toc -->
 <!-- /folio:chrome-toc -->
-<section data-component="chapter-deck-band" class="tint-info"><span class="num">01</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v6m0 0L9 5m3 3l3-3"/><circle cx="12" cy="14" r="6"/></svg> 背景 / なぜこの判断が要るか</span><h2>いま何が問題か (確定方式を決める力学)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-01">なぜこの判断が要るのかを 4 つから説明します。 6 時間の線だけでは量に限りが無いという経緯・掃除が線より新しい物を黙って残し、 量を測る口を持たないという現物・写しは便の記録と結びを持たず、 置き場の共有は言語ごとに違うという事情・決める範囲です。</p></section>
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">01</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2v6m0 0L9 5m3 3l3-3"/><circle cx="12" cy="14" r="6"/></svg> 背景 / なぜこの判断が要るか</span><h2>いま何が問題か (確定方式を決める力学)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-01">なぜこの判断が要るのかを 5 つから説明します。 便の失敗の根の多くが設計の側に在り、 code の事実が役に渡っていないという経緯・審査役は書けるのに「道具は無い」と言われ、 runner は共通の検査を知らないという現物・claude の道具と設定の効きの実測・決める範囲・憲法の条のこの記録での読み方です。</p></section>
 <div class="chapbody">
 <div data-component="adr-context-list">
-<div data-component="adr-context-row"><span class="cxid">CTX1</span><div class="cxbody"><p class="cxh">経緯 — 書きの線<span class="term" data-component="plain-language-term-inline" data-term="書きの線">消してよい古さの線</span>だけでは量が有界にならない</p><p class="cxd">ADR-0096 は、 席ごとの起草の置き場を state dir の下に持ち、 運転手 (便を段から段へ運ぶ器の process) の終端の周の掃除が、 置き場の .git を持つ写し (起草の木) から、 名が閉じた 8 つに在り追跡される file を持たない dir のうち、 書きが rules 行 seat.drafts_stale_h の時間 (6 時間) 無いものだけを消すと決めた。 線は時間だけで、 量は見ない。 席が起草の係 (subagent) ごとに写しを作って並列に組み立てると、 6 時間の中で作られた写しの build の置き場は、 消える前に溜まる。 2026-09-30、 消費側の席で、 6 時間の窓の中の写しの build の置き場が host の disk の大きな割合を占めた (量は台帳の memo s2-07l.737.27 にだけ在る)。 持ち主は CI を通った後に写しを消せないかと問い、 量の上限<span class="term" data-component="plain-language-term-inline" data-term="量の上限">置き場の大きさの上限</span>と組み立て中の窓<span class="term" data-component="plain-language-term-inline" data-term="組み立て中の窓">書いたばかりの間</span>の推奨に裁定を与えた (user 2026-09-30T07:18Z)。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX2</span><div class="cxbody"><p class="cxh">現物 — 掃除は線以後の dir を黙って残し、 量を測る口を持たない</p><p class="cxd">掃除の 1 関数 (pipe/sweep.rs の sweep) は、 置き場ごとの lock の中で便の木を掃いた後に起草の木を掃く。 起草の木では、 書きの線以後の entry を 1 つでも持つ dir を残し、 残した dir を呼び手へ返さない。 dir の大きさを測る口は無い (verified)。 結果は stderr の 1 行 (消した数・便の木の数・失敗の数と名・起草の木の数・.git を持たない写しの数) だけで、 dir を消した周・失敗が在る周・lock を取れない周・行を読めない周にだけ出し、 その字は 6 本の歯が逐語で固定している (verified)。 doctor は置き場の量を出さない。 起草の置き場の根の直下を読むのは掃除だけで、 dir でない子は飛ばす (verified)。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX3</span><div class="cxbody"><p class="cxh">写しの一生 — 写しは便の記録と結びを持たず、 置き場の共有は言語ごとに違う</p><p class="cxd">起草の写しは、 席が試作のために git の worktree か clone で置く物で、 便の記録も PR も持たない。 席は同じ写しで試作を続けることがあり、 CI を通った後も写しを使いうる。 器は、 写しがいつ使い終わったかを知る結びを持たない。 build と依存の置き場は言語ごとの道具が作り、 置き場を写しの間で共有する仕組み (Rust の target の置き場の環境変数など) は言語ごとに違う。 器は限られた言語の集合に対応し、 どれかの言語だけの仕組みを採らず、 席の環境変数を配らない (N2)。</p></div></div>
-<div data-component="adr-context-row"><span class="cxid">CTX4</span><div class="cxbody"><p class="cxh">射程 — 量の線を足すだけで、 書きの線と写しの扱いは変えない</p><p class="cxd">決めるのは、 (1) 起草の木の build の置き場の合計に state dir ごとの上限を持たせること、 (2) 越えた周に消す物・順・止め所、 (3) 組み立て中とみなす窓、 (4) 測れない物の扱い、 (5) 越えたままの知らせの口 (掃除の行と、 置き場の根の直下の記録の file と doctor の行)、 (6) rules 行 2 本。 変えないのは、 書きの線と行 seat.drafts_stale_h、 消す名の閉じた 8 つの列、 追跡の判じ、 lock の名と取り方、 撃つ周 (運転手の終端の周だけ)、 便の木の掃除 (ADR-0081)、 起草の置き場の場所と席の指示文 (ADR-0096)。 ADR を書く条件のうち 1 (A1 の承認の読み)・3 (記録の file の形)・4 (却下案を残す価値) に当たる。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX1</span><div class="cxbody"><p class="cxh">経緯 — 便の FAIL の根は設計の側で、 code の事実が役に渡っていない</p><p class="cxd">2026-09-28〜09-30 に起きた便 165 本のうち、 FAIL か判定できなかった 76 件を 1 件ずつ分けると、 73 件の根は設計の側に在った (設計が code の事実を誤ったか知らなかった 32・done の項目に落ちる歯が無い 24・設計の中の食い違い 9・書き足りなさ 8)。 審査役の誤りは 0 件で、 runner の誤りが主因の件は 2 件だった。 契約の審査で落ちた 46 件のうち約 21 件は code の事実 (呼び手・struct を組み立てる場所・既存の歯の pin・可視性) が要り、 gate で落ちた 30 件のうち 15 件は gate が必ず撃つ共通 verify の赤だった。 分析は epic s2-07l.736.33 の打ち手 0 (審査役の安全の穴と読みの道具<span class="term" data-component="plain-language-term-inline" data-term="読みの道具">読むだけの道具</span>) と 2 (runner の終わりに器が done の門を撃つ) を最も効きが大きく小さいものに挙げた。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX2</span><div class="cxbody"><p class="cxh">現物 — 審査役は書けるのに「道具は無い」と言われ、 runner は共通 verify を知らない</p><p class="cxd">lens の起動形は headless の build (runner と lens の唯一の構築点・ADR-0011) が組み、 permission mode は lens の flag の値を素通しする。 運用の lens の cmd は編集を自動で承認する mode を焼いており、 道具を絞る flag は渡っていない (ADR-0011 は lens の起動形を変えないと射程の外に残した)。 契約の審査の lens の cwd は anchor の main の作業木で、 先撃ちの lens も同じ。 先撃ちの材料は予想の base の木 (祖先の層を当てた一時の worktree) で組むが、 その木は lens を起こす前に外し、 Reviewed の段の使い回しの鍵は材料の digest と lens の cmd の字だけで、 lens が読んだ木を含まない。 契約の審査と gate の雛形は「tool が渡されていない」と書き、 2026-09-30 の lens 132 回のうち 126 回が 1 turn で終わった。 前提を無視して code を読んだ 6 回のうち 3 回は行番号つきで本物の欠陥を掘り出した。 runner の雛形は「契約の verify 行が緑になるまで直す」とだけ言い、 runner 28 本のうち xtask check を撃ったのは 5 本だった。 runner と lens には口座ごとの自動 memory<span class="term" data-component="plain-language-term-inline" data-term="自動 memory">口座ごとの記憶</span> の索引が載り、 中身は口座で違う。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX3</span><div class="cxbody"><p class="cxh">実測 — claude の道具の列・mode・env の効き</p><p class="cxd">claude 2.1.285 で、 空の設定 dir と無効な API key の起動 (課金なし・init の record だけ) と haiku の実 call 3 回で測った (2026-09-30)。 道具の列の flag に Read・Grep・Glob を渡すと、 init の道具は 3 つだけになり、 Write と Bash は無い。 許可の問いを誰にも出さない mode (dontAsk) で allow の規則を渡さない形では、 cwd の中の Read は通り、 cwd の外の Read と Grep は断られた。 allow の規則に Read を足すと cwd の外も読めた。 自動 memory を切る env を 1 にすると init の memory の path が消え、 0 と未設定では口座の設定 dir の下の path が載った。 settings を読まない flag だけでは自動 memory は切れない。 gate の共通 verify の行ごとの時間は、 record 570 件の中央値で flip-check 93 秒・workspace の nextest 35 秒・clippy 5 秒・xtask check 4 秒だった。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX4</span><div class="cxbody"><p class="cxh">射程 — 審査役の起動形と runner の材料と終わりの門<span class="term" data-component="plain-language-term-inline" data-term="終わりの門">実装後すぐの検査</span>を決め、 審査の段の位置は変えない</p><p class="cxd">決めるのは、 (1) 審査役の道具と mode と env の起動形、 (2) 契約の審査の cwd (審査の木<span class="term" data-component="plain-language-term-inline" data-term="審査の木">審査用の写し</span>)、 (3) 審査の雛形の前提の書き方、 (4) runner に共通 verify の行を渡す節、 (5) runner の終わりに器が撃つ終わりの門とその赤の渡し方。 変えないのは、 runner の起動形 (allowlist と plugin)、 gate の判定と撃つ行、 Gated の FAIL が終端であること、 審査の材料の組み手、 lens の cap と model と effort の行。 審査を列に入れる前の門へ移すこと、 逆引きの表、 done と歯の対応の欄は別の ADR が決める。 終わりの門は SRS の FR6 の字を変えるので、 実装の行は SRS の追加 round の後に起こす。 ADR を書く条件のうち 1 (C16・C1・C2.2 の読み・CTX5)・3 (event の detail と run dir の記録の形)・4 (却下案を残す価値) に当たる。</p></div></div>
+<div data-component="adr-context-row"><span class="cxid">CTX5</span><div class="cxbody"><p class="cxh">憲法の読み — 終わりの門は事後の検証で編集の時の止めに足すもの・道具の列と mode は閉じた定数・自動 memory の env は子へ設定するだけ</p><p class="cxd">C16 (仕様からの逸れを編集の時に止め、 事後の検証で代えない) について: 終わりの門は runner の turn の後に撃つ事後の検証で、 編集の時の止め (write-set の hook と許可の要求の一律 deny) に足すものであって、 それを代えない。 hook と deny は本 ADR の後も runner の turn の中で効く。 C1 (規則の値は manifest の 1 file) について: lens の道具の列 Read・Grep・Glob と permission mode dontAsk は閾値ではない閉じた定数で、 manifest の行を持たない (xtask の env の読みの許す集合と同じ読み)。 runner の許可の上限を rules 行 runner.allowed_commands が持つのは、 それが repo ごとに変わりうる列だからで、 lens の道具の列は器の全 repo に共通の起動形の一部である。 lens の turn の上限と終わりの門の周の上限は閾値なので、 rules 行に置き、 値は user の裁定で決める。 C2.2 (env を直に読まない・新しい env の seam を作らない) について: 自動 memory を切る env は、 器が子の process へ設定するだけで自分では読まない。 口座の env と agent view の env と同じ置き方で、 新しい seam ではない。</p></div></div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-brand"><span class="num">02</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v18"/><path d="M5 7l-3 6h6z"/><path d="M19 7l-3 6h6z"/><path d="M3 21h18"/></svg> 判断を縛る力 / 評価の軸</span><h2>選択肢を測るものさし (安全・速さ)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-02">この判断を評価する 6 本のものさしです。 量に限りを持たせること。 組み立て中の物を消さないこと。 承認の範囲の外の物を消さないこと。 仕組みを増やさず言語に依らないこと。 測れない物を 0 と読まないこと。 越えたままを人が知れることです。</p></section>
+<section data-component="chapter-deck-band" class="tint-brand"><span class="num">02</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v18"/><path d="M5 7l-3 6h6z"/><path d="M19 7l-3 6h6z"/><path d="M3 21h18"/></svg> 判断を縛る力 / 評価の軸</span><h2>選択肢を測るものさし (安全・速さ)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-02">この判断を評価する 6 本のものさしです。 審査役が code の事実を確かめられること。 審査役が書けないこと。 同じ契約が口座に依らず同じ材料で扱われること。 runner の合格の条件を散文でなく器の仕組みで渡すこと。 判定の後に便を戻さないこと。 起動の値を運用の手書きに置かないことです。</p></section>
 <div class="chapbody">
 <table data-component="adr-driver-table"><tbody>
-<tr data-component="adr-driver-row"><td class="drid">DR1</td><td>量を有界にする — 写しの数に依らず、 置き場の build と依存の置き場が host の disk を満たさない <span class="drg">CTX1</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR2</td><td>組み立て中の物を消さない — 書いている最中の置き場は、 量を越えていても残す <span class="drg">CTX1・CTX3</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR3</td><td>承認の範囲に閉じる — 消すのは作り直せる名の dir だけで、 木の写しと追跡される file と commit していない変更は消さない (A1・N1) <span class="drg">CTX1・CTX4</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR4</td><td>仕組みを増やさない — 2 つ目の消す仕組みと lock を足さず、 言語と道具に依らない (C17・N2) <span class="drg">CTX2・CTX3</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR5</td><td>測れない物を 0 と読まず、 読めない行を既定値に倒さない (C10) <span class="drg">CTX2</span></td></tr>
-<tr data-component="adr-driver-row"><td class="drid">DR6</td><td>越えたままを人が知れる — 消しても越えた周を黙らない <span class="drg">CTX2</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR1</td><td>審査役が判定の前に code の事実を木の現物で確かめられる <span class="drg">CTX1・CTX2</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR2</td><td>審査役は書けない — 道具も mode も書きを持たず、 読みは便の木の中に閉じる <span class="drg">CTX2・CTX3</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR3</td><td>同じ契約は走る口座に依らず同じ材料で審査され実装される (C10・本 ADR が閉じるのは自動 memory の分) <span class="drg">CTX2・CTX3</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR4</td><td>runner の合格の条件は散文の注意でなく器の材料と器の測りで渡す (N2・C16) <span class="drg">CTX1・CTX2</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR5</td><td>判定の段の後に便を戻さない — Gated の FAIL の終端と着地の列の数えを動かさない <span class="drg">CTX4</span></td></tr>
+<tr data-component="adr-driver-row"><td class="drid">DR6</td><td>起動形の値を運用の cmd の手書きに置かない (閾値でない閉じた定数は器の code・閾値は rules 行・CTX5) <span class="drg">CTX2・CTX5</span></td></tr>
 </tbody></table>
 </div>
-<section data-component="chapter-deck-band" class="tint-violet"><span class="num">03</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5"/></svg> 検討した選択肢 / 3 つの確定方式</span><h2>それぞれの利点と欠点を並べる</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-03">候補を 5 つ並べます。 量の上限を持って古い順に消す案 (選んだ案) と、 選ばなかった 4 つです。 選ばなかった案は、 6 時間の線を短くする案・CI を通った後か merge の時に消す案 (持ち主の問いの案)・写しの間で組み立ての置き場を共有する案・写しごと消す案です。</p></section>
+<section data-component="chapter-deck-band" class="tint-violet"><span class="num">03</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6H13a3 3 0 0 1 3 3v.5M8.5 18H13a3 3 0 0 0 3-3v-.5"/></svg> 検討した選択肢 / 3 つの確定方式</span><h2>それぞれの利点と欠点を並べる</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-03">候補を 5 つ並べます。 読むだけの道具と審査用の写しと終わりの門を持つ案 (選んだ案) と、 選ばなかった 4 つです。 選ばなかった案は、 許可の規則で読みと git の読みを許す案・道具を渡さず材料を広げる案・gate の赤を自動で runner へ戻す案・起動の mode を丸ごと絞る案です。</p></section>
 <div class="chapbody">
 <div class="opt-grid">
 <div data-component="adr-option-card" class="chosen">
-<div class="opt-head"><span class="opt-id">OPT1</span><span class="opt-name">量の上限を持ち、 越えた周は書きの新しさ<span class="term" data-component="plain-language-term-inline" data-term="書きの新しさ">最後に書いた時</span>の古い順に上限まで消す</span><span class="opt-verdict chosen">採用</span></div>
-<p class="opt-sum">書きの線が残した起草の木の build と依存の置き場を候補とし、 大きさ (lstat の st_blocks の和) と書きの新しさ (mtime の最新) を測る。 合計が rules 行の上限 (100 GiB) を越える周だけ、 新しさの古い順に、 組み立て中の窓 (rules 行・30 分) の内を飛ばして消し、 上限以下で止める。 測れない木は数えずに名指し、 越えたままなら掃除の行と doctor の行で知らせる。 決め手は裁定 user 2026-09-30T07:18Z と分析 (量は時間の線でなく量の線でしか有界にならない)。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT1">組み立ての産物の合計に上限を持たせ、 越えた周だけ、 最後に書かれたのが古い物から上限を下回るまで消す案です。 写しがいくつ並んでも量は上限の近くに保たれ、 30 分以内に書かれた物は消さないので走っている組み立てを壊さず、 写しそのものや追跡される file は消さず、 仕組みも 1 つのままです。 代わりに、 越えた周には 6 時間より新しい産物も消えることがあり、 席が戻ると組み立てを作り直します。 掃除の時間も、 産物を全部測る分だけ延びます。</span>
+<div class="opt-head"><span class="opt-id">OPT1</span><span class="opt-name">審査役は読みの道具だけ・契約の審査と先撃ちは木の上で読む・runner に共通 verify の節<span class="term" data-component="plain-language-term-inline" data-term="共通 verify の節">検査の行の一覧</span>と終わりの門</span><span class="opt-verdict chosen">採用</span></div>
+<p class="opt-sum">lens は渡された permission mode の値を使わず、 器が dontAsk と道具の列 Read・Grep・Glob を毎回渡し、 allow の規則は渡さない。 dontAsk でない値が渡された周は便の記録に 1 語を残す。 器が起こす claude は自動 memory を読まない。 契約の審査は対象 repo の HEAD に detach した一時の worktree (審査の木) を cwd にし、 判定の後に外す。 先撃ちは材料を組んだ予想の木を cwd にし、 予想の判定は Reviewed に写さない。 雛形は道具と木を正直に書く。 runner の本文に共通 verify の行の節を足し、 runner の終わりに器が gate と同じ行を撃ち、 赤なら同じ worktree で runner を起こし直して赤を渡す。 決め手は分析 (FAIL の根と、 読んだ lens の半分が欠陥を掘り出した実測) と実測 (道具と mode の効き)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT1">審査役には読むだけの道具 3 つだけを渡し、 許可の問いを誰にも出さない設定で起こし、 契約の審査は審査する時点の写しの上で、 先回りの審査は予想の写しの上で読ませ、 口座ごとの自動の記憶は読ませない案です。 runner には共通の検査の行を渡し、 終わった直後に器が同じ行を撃って、 赤なら同じ作業場所で直させます。 審査役は code を読めて書けず、 材料は口座で変わらず、 赤は gate の前に直ります。 代わりに、 読む審査役は時間と token が増え、 緑の便も共通の検査を 2 回撃ちます。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>写しの数に依らず、 置き場の合計は上限に近く保たれる (組み立て中の分を除く) (DR1)</li>
-<li>組み立て中の窓の内の置き場は消えない (DR2)</li>
-<li>書きの新しさの古い順に消して上限以下で止まるので、 書く手が止まってから長い物から要る分だけ空く (DR2)</li>
-<li>消すのは書きの線と同じ名の dir だけで、 木の写しと追跡される file は残る (DR3)</li>
-<li>消す仕組みと lock は 1 つのままで、 測りは mtime と lstat だけ (DR4)</li>
-<li>測れない木は数えずに名指し、 行を読めない周は撃たない (DR5)</li>
-<li>越えたままの周は掃除の行と doctor の行に出る (DR6)</li>
+<li>審査役は木の中の code を読んで事実を確かめられる (DR1)</li>
+<li>書きの道具も shell も無く、 cwd の外は読めない (DR2)</li>
+<li>自動 memory を読まないので、 その分の材料が口座で変わらない (DR3)</li>
+<li>runner は gate の撃つ行を渡され、 器が終わりに撃って赤を戻す (DR4)</li>
+<li>戻すのは判定の前の runner の turn の延長で、 Gated の終端は動かない (DR5)</li>
+<li>道具と mode の値は器の定数で、 運用の cmd の字が緩められず、 古い雛形でも審査は止まらない (DR6)</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>上限を越えた周には、 書きの線より新しくても窓の外の置き場が消え、 席が戻ると組み立てを作り直す</li>
-<li>終端の周ごとに候補の全部の entry を lstat で歩く時間が掃除に足される</li>
-<li>上限は state dir ごとで、 同じ disk の state dir の数だけ量が積まれる</li>
-<li>知らせは掃除の行と doctor の行で、 席へは押し出さない</li>
+<li>読む lens は 1 回の時間と token が増える (実測で時間はおよそ 2 倍・token の多くは cache の読み)</li>
+<li>緑の便も終わりの門と gate で共通 verify を 2 回撃つ</li>
+<li>道具と env の名は claude の版に従い、 器の歯は fake の argv と env しか測らない</li>
+<li>起動の雛形が dontAsk でない値を渡し続けても審査は止まらないので、 古い雛形は 1 語の記録で見つけるほかない</li>
+<li>先撃ちの判定を Reviewed に写さないので、 先撃ちが退役するまで契約の審査は lens を撃ち直す</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT2</span><span class="opt-name">書きの線を短くする</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">rules 行 seat.drafts_stale_h の値を 6 時間より短くし、 量の線は足さない。 決め手は分析 (量は写しの数に比例する)。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT2">6 時間の線を 1 時間などへ短くし、 量の上限は足さない案です。 仕組みも行も足さず、 値を変えるだけで済む点で勝ります。 けれども、 量は写しの数に比例するので、 写しをたくさん並べれば短い線の中でも溜まり、 限りになりません。 量が少ないときも短い線で消えるので、 戻ってくる写しの組み立てを作り直す回数が増えます。</span>
+<div class="opt-head"><span class="opt-id">OPT2</span><span class="opt-name">allow の規則で Read と読みだけの git の Bash を許す</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">棚卸しの案。 道具は絞らず、 lens に allow の規則で Read と git grep・git show・git log の Bash を許し、 書きの道具を deny の規則で外す。 決め手は実測 (allow の規則は cwd の外の読みを開く)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT2">道具は絞らず、 許可の規則で読みと git の読みの命令を許し、 書く道具を禁止の規則で外す案です。 git の履歴も読める点で勝ります。 けれども実測では、 許可の規則に読みを足すと作業場所の外の file まで読めてしまいました。 許していない命令は承認の問いに倒れ、 人のいない審査役はそこで止まります。 禁止の規則を書き漏らすと書く道具が残ります。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>足す仕組みも行も無く、 値の裁定 1 つで済む</li>
-<li>判じは時間の 1 つのままで済む</li>
+<li>git の履歴も読め、 base と HEAD を比べられる</li>
+<li>道具の列の flag に頼らない</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>並列の写しが多ければ、 短い線の中でも量は有界にならない (DR1)</li>
-<li>量が少ない周にも短い線で消え、 戻ってくる写しの組み立てを作り直す (DR2)</li>
+<li>allow の規則は cwd の外の file も読ませる (DR2)</li>
+<li>Bash の語の allowlist の外は承認の問いへ倒れ、 無人の lens では止まる</li>
+<li>deny の規則の書き漏れで書きの道具が残りうる (DR2)</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT3</span><span class="opt-name">CI を通った後か merge の契機で消す</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">持ち主の問いの案で、 写しの CI が通った時か merge の時に、 その写しの build の置き場を消す。 決め手は分析 (写しは便の記録も PR も持たない)。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT3">持ち主が問うた案で、 写しの CI が通った時か merge の時に、 その写しの組み立ての産物を消します。 使い終えたと分かる時に消せ、 時間や量の値が要らない点で勝ります。 けれども、 器は写しと CI や merge の結びつきを持っておらず、 作るには写しを登録する仕組みが要ります。 CI を通った後も同じ写しで試作を続けることがあり、 その組み立てを消してしまいます。 CI にも merge にも届かない試作の写しは残り続けます。</span>
+<div class="opt-head"><span class="opt-id">OPT3</span><span class="opt-name">1 turn・材料だけのまま、 材料の組み手を広げる</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">lens に道具を渡さず、 器が逆引きの結果や既存の歯の本文まで材料に束ねる。 決め手は分析 (材料の上限の中に逆引きの全部は収まらない)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT3">審査役には道具を渡さず、 器が逆引きの結果や既存の検査の本文まで材料に束ねる案です。 1 回の費用が今と同じで、 何を読んだかが材料で決まる点で勝ります。 けれども、 外の材料は上限で今でも半分以上落ちています。 器が先に知っている事実しか届かず、 書ける設定の穴も残ります。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>使い終えたと分かる時に消せる</li>
-<li>時間と量の値が要らない</li>
+<li>lens の 1 回の費用が今と同じ</li>
+<li>審査役が何を読んだかが材料で決まる</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>器は写しと CI・merge の結びを持たず、 結びを作るには写しを便か PR へ登録する仕組みが要る (DR4)</li>
-<li>CI を通った後も同じ写しで続く試作の組み立てを消す (DR2)</li>
-<li>便にも PR にもならない試作の写しは残り続ける (DR1)</li>
+<li>外の材料は上限で半分以上落ちている (DR1)</li>
+<li>束ねる事実を器が先に知る必要があり、 知らない事実は届かない (DR1)</li>
+<li>起動形の書きの穴は残る (DR2)</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT4</span><span class="opt-name">写しの間で build の置き場を 1 つに共有する</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">Rust の target の置き場の環境変数などで、 写しの build の置き場を state dir の 1 か所に集める。 決め手は分析 (言語ごとの仕組みで、 器が環境変数を配る)。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT4">写しの間で組み立ての置き場を 1 か所に共有する案です (Rust の置き場を環境変数で 1 か所に向けるなど)。 同じ依存の組み立てを使い回せ、 量が写しの数に比例しない点で勝ります。 けれども、 共有の仕組みは言語と道具ごとに違い、 器が言語ごとの知識を持って席の環境変数を配ることになります。 並列の組み立ては同じ置き場の鍵で 1 本ずつになり、 枝の違う写しの間では作り直しが続き、 共有の置き場そのものの量にも限りがありません。</span>
+<div class="opt-head"><span class="opt-id">OPT4</span><span class="opt-name">gate の verify の赤を自動で runner へ戻す</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">終わりの門を置かず、 gate の verify が赤の周に Gated を FAIL で終えずに runner を同じ worktree で起こし直す。 決め手は設計 pipeline.md §49 の却下 (判定の後に器が戻すと契約の赤を撃ち直し続ける形が作れる)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT4">終わりの門を置かず、 gate の検査が赤のときに、 便を終わらせず runner を同じ作業場所で起こし直す案です。 共通の検査を 2 回撃たずに済む点で勝ります。 けれども、 判定を出した後に器が便を戻すことになり、 終わった便の数えと着地の列の読みが動きます。 設計はこの形を、 契約の赤を撃ち直し続ける形が作れるとして既に退けています。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>同じ依存の組み立てを写しの間で使い回せ、 量が写しの数に比例しない</li>
-<li>消す場所が 1 か所になる</li>
+<li>共通 verify を 2 回撃たずに済む</li>
+<li>撃つ場所が gate の 1 か所のまま</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>仕組みは言語と道具ごとに違い、 器が言語ごとの知識と環境変数の配りを持つ (DR4・N2)</li>
-<li>並列の組み立てが同じ置き場の lock で直列になり、 枝の違う写しの間で作り直しが続く (DR2)</li>
-<li>共有の置き場そのものの量は有界にならない (DR1)</li>
+<li>判定の段の後に戻すので、 終端の数えと着地の列の読みが動く (DR5)</li>
+<li>gate の lens を撃つ前後で戻る形が 2 つになる</li>
 </ul></div></div>
 </div>
 <div data-component="adr-option-card" class="rejected">
-<div class="opt-head"><span class="opt-id">OPT5</span><span class="opt-name">木の写しごと消す</span><span class="opt-verdict rejected">不採用</span></div>
-<p class="opt-sum">量を越えた周に、 古い写しを build の置き場だけでなく写しごと消す。 決め手は裁定の範囲と分析 (N1)。</p>
-<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT5">量を越えた周に、 古い写しを組み立ての産物だけでなく写しごと消す案です。 取り戻せる量が最大になる点で勝ります。 けれども、 持ち主の裁定は写しそのものを消すことを承認しておらず、 写しには commit していない試作が在りうるので、 消すと作り直せません。</span>
+<div class="opt-head"><span class="opt-id">OPT5</span><span class="opt-name">起動の mode を丸ごと絞る flag (restricted か bare) を渡す</span><span class="opt-verdict rejected">不採用</span></div>
+<p class="opt-sum">claude の restricted の mode か bare の mode で lens を起こす。 決め手は ADR-0011 の決定 (起動形を組む 1 関数は restricted を渡さない) と実測 (dontAsk と道具の列で cwd の外の読みは断られた・bare は OAuth を読まない)。</p>
+<span class="opt-plain" data-prose-slot="plain" data-slot-id="plain-OPT5">claude の起動の mode を丸ごと絞る flag で審査役を起こす案です。 1 つの flag で道具と設定の読みが絞れ、 片方の mode は読みを作業場所の中に閉じることを文書で約束する点で勝ります。 けれども、 その mode は前の記録が「claude を起こす命令を組む関数は渡さない」と決めた flag です。 書く道具を持たない審査役なら止まりはしませんが、 読むだけの道具と許可の問いを出さない設定でも、 実測で同じ効きが得られたので、 前の記録を審査役のためだけに改めるほどの差がありません。 もう片方の mode は subscription の口座で起きません。</span>
 <div class="opt-pc"><div class="pros"><h4>+ 利点</h4><ul>
-<li>取り戻す量が最大になる (写しの本体の分も空く)</li>
-<li>置き場が使い終えた写しで埋まらない</li>
+<li>1 つの flag で道具と設定の読みが絞れ、 restricted は読みを cwd に閉じることを文書で保証する</li>
+<li>bare なら自動 memory と hook も同時に切れる</li>
 </ul></div><div class="cons"><h4>− 欠点</h4><ul>
-<li>裁定は木の写しの削除を承認していない (DR3)</li>
-<li>写しには commit していない試作が在りえ、 作り直せない (DR3・N1)</li>
+<li>restricted は書きの道具を持たない lens では承認の問いを生まないが、 ADR-0011 が起動形を組む 1 関数に渡さないと決めた flag で、 dontAsk と道具の列で実測上同じ効きが得られる以上、 その決定を lens のために部分 supersede するほどの差が無い (DR6)</li>
+<li>bare は subscription の口座で起きない</li>
 </ul></div></div>
 </div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの方式を選ぶか</span><h2>選んだ方式と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、 それが要件書のどの要件を支えるかを示します。 候補は 6 時間の線が残した組み立ての産物だけで、 大きさと最後の書きを測り、 合計が上限を越える周だけ、 最後の書きが古い順に、 30 分以内に書かれた物を飛ばして消し、 上限を下回った所で止めます。 測れない写しは数えずに名指し、 越えたままなら掃除の行と doctor の行で知らせます。</p></section>
+<section data-component="chapter-deck-band" class="tint-ok"><span class="num">04</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M14 4l6 6-3 3-6-6z"/><path d="M11 7L4 14l3 3 7-7"/><path d="M3 21h10"/></svg> 採用した判断 / どの方式を選ぶか</span><h2>選んだ方式と、 それが守る要件 (cross-doc 照会)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-04">選んだ案と、 それが要件書のどの要件を支えるかを示します。 審査役は読むだけの道具で起き、 契約の審査は審査する時点の写しの上で読み、 先回りの審査は予想の写しの上で読んでその判定を本番に写さず、 自動の記憶は読みません。 runner は共通の検査の行を受け取り、 終わった直後に器が同じ行を撃って、 赤なら決めた回数まで同じ作業場所で直させます。 gate は今どおり全部の行を撃ちます。</p></section>
 <div class="chapbody">
 <div data-component="adr-decision-panel" id="decision">
 <p class="dec-kick">採用 — OPT1</p>
-<p class="dec-state">器 SHALL 席の起草の置き場の build と依存の置き場に、 state dir ごとの量の上限を持つ。 候補は、 運転手の終端の周の同じ掃除が同じ lock の中で書きの線 (ADR-0096) を掛けた起草の木から、 線以後の entry を持つので残した名の dir だけで、 便の木・追跡される file を持つ dir・.git を持たない写し・木の本体は候補にならない。 候補ごとに dir 自身と下の全 entry を symlink を辿らずに lstat し、 大きさを st_blocks の和 (disk の上の使用量)、 書きの新しさを mtime の最新とする。 合計が rules 行 seat.drafts_cap_mb の上限を越える周だけ、 候補を書きの新しさの古い順 (同じ時刻は名の順) に見て、 新しさが rules 行 seat.drafts_busy_s の窓の内の候補 (組み立て中) を飛ばして消し、 合計が上限以下になった所で止める。 書きの線の掃きで失敗した木と、 候補の中に読めない entry を持つ木は、 木ごと候補と合計から外して失敗として名指し、 外した数を記録に残す。 掃除の stderr の行は、 量で消した周か越えたままの周だけ末尾に消した数と越えた量を足し、 越えたままの周は消す物が無くても行を出し、 それ以外の周の字は変えない。 掃除は起草の置き場が在る周ごとに、 置き場の根の直下の 1 file に使用量・上限・越えた量・窓の内の数・外した数の 1 行 (行を読めない周は no-rule) を書き、 doctor はそれを 1 行で出す。 行は seat.drafts_cap_mb (102400 MiB = 100 GiB) と seat.drafts_busy_s (1800 秒 = 30 分) の 2 本 (裁定 user 2026-09-30T07:18Z)。 書きの線の行と本 2 行のどれかを読めない周は量の線を撃たず、 既定値に倒さない。 消す名の閉じた 8 つの列・書きの線・lock・撃つ周・便の木の掃除は変えず、 木の写しと追跡される file は消さない。 実装は設計 doc dispatcher.md §39 の行 an。</p>
-<span class="dec-plain" data-prose-slot="plain" data-slot-id="decision-plain">器は、 席の起草の置き場の組み立ての産物に、 state dir ごとの量の上限を持ちます。 候補は、 同じ掃除が 6 時間の線を掛けた後に、 線より新しいので残った産物だけです。 便の作業場所・追跡される file を持つ dir・.git を持たない写し・写しの本体は候補になりません。 候補ごとに、 中の全部を symlink を辿らずに測り、 disk の上の大きさと最後の書きの時刻を取ります。 合計が上限を越える周だけ、 最後の書きが古い順 (同じ時刻は名の順) に見て、 30 分以内に書かれた物を飛ばして消し、 上限を下回った所で止めます。 6 時間の線の掃除で失敗した写しと、 中に読めない物を持つ写しは、 数えずに外して失敗として名指し、 外した数を記録に残します。 掃除の行は、 量で消した周か越えたままの周だけ末尾に消した数と越えた量を足し、 越えたままなら消す物が無くても行を出します。 それ以外の周の行は変えません。 掃除は置き場の量を 1 行の記録に書き、 doctor がそれを出します。 上限 100 GiB と 30 分は rules 行 2 本が持ち、 6 時間の行とこの 2 本のどれかが読めない周は量で消しません。</span>
-<span class="dec-why" data-prose-slot="rationale" data-slot-id="decision-rationale">量の上限を選んだのは、 量が写しの数に比例するので、 時間の線を短くしても限りにならないからです。 CI や merge の時に消す案は、 器が写しと CI の結びつきを持たず、 CI の後も続く試作の組み立てを消すので退けました。 置き場の共有は言語ごとの仕組みで、 器が環境変数を配ることになるので退け、 写しごと消すのは承認の外で作り直せない仕事を失うので退けました。 最後の書きが古い順に消し、 上限を下回った所で止めるのは、 書く手が止まってから長い物から要る分だけ消し、 要る分より多くは消さないためです。 30 分の窓を設けるのは、 走っている組み立てを消して落とさないためです。 測れない写しを数えないのは、 測れない量を 0 と読んで上限の判断を誤らないためで、 外した数を記録に残して、 合計が一部の和だと分かるようにします。 越えたままを知らせるのは、 消せなかった周を黙らないためです。</span>
+<p class="dec-state">器 SHALL 審査役 (契約の審査・gate・先撃ちの lens) の claude を、 道具の列 Read・Grep・Glob と permission mode dontAsk を毎回渡し allow の規則を渡さない形で起こす。 lens は permission mode の引数を受けても値を使わず、 dontAsk でない値が渡された周は契約の file の dir に 1 語の記録 lens.ignored を残す (消費側ごとの起動の雛形は repo の外に在り、 断ると全部の審査が止まる)。 器が起こす claude (runner・lens・計測の refresh) は、 起動形を組む 1 関数が子の env で口座の自動 memory を毎回切り、 親の値を継承させない。 契約の審査は、 材料を組む前に対象 repo の HEAD の sha を読み、 先撃ちの判定を使い回さない周だけ、 その sha に detach した一時の worktree (審査の木) を材料の dir の外の run dir の直下に作って lens の cwd とし、 同じ path の前の周の木は先に外し、 判定を読んだ後に木を外し、 木の sha を審査の記録に残し、 作れない周は lens を撃たず INCONCLUSIVE にする。 先撃ちの lens は材料を組んだ予想の木を cwd にし、 lens が終わるまで木を外さず、 木の sha と種類 (祖先の層の無い actual か、 層を当てた forecast) を置き場に残し、 Reviewed は種類が actual で sha が審査の木と同じ判定だけを使い回す。 gate の lens の cwd は便の worktree のまま。 審査の雛形は、 読みの道具だけが在ること・cwd の外は読めないこと・材料に無い code の事実は木の現物で確かめること・穴を全部見てから判定することを書き、 道具が無いとは書かない。 器 SHALL runner の stdin の契約の直後に、 便の写しの共通 verify の行を gate と同じ 4 つの穴の埋め方 (base の sha・受付を通らない並列度 1・契約の verify 行の filter 語) で埋めた節を足し、 runner の雛形はその行を commit の後に全部撃って緑にしてから終えると読む。 器 SHALL runner の turn が rc 0 かつ commit 1 本以上で終わった周に、 gate と同じ撃ち手と受付で書きの範囲の検査・共通 verify・契約の検証行を便の worktree に撃ち (終わりの門)、 全行 rc 0 なら Implemented にし、 赤が在り測れなかった行が無く周が rules 行の上限に届かない周は同じ worktree・同じ base で runner を起こし直して赤い行と診断の抜粋の節を渡し、 周を使い切った周と測れなかった行が在る周は Implemented にして gate へ進める。 gate は終わりの門の結果を持ち越さず全行を撃ち、 Gated の FAIL は終端のまま。 lens の turn の上限と終わりの門の周の上限は rules 行が持ち、 値は SRS の追加 round で裁定を取る。 実装は設計 doc pipeline.md §64 の行 bg・§65 の行 bh・§66 (後の行)。</p>
+<span class="dec-plain" data-prose-slot="plain" data-slot-id="decision-plain">審査役 (契約の審査・gate・先回りの審査) の claude は、 読むだけの道具 Read・Grep・Glob と、 許可の問いを誰にも出さない設定で毎回起こします。 許可の規則は渡さないので、 作業場所の外は読めません。 起動の行が許可の設定を渡しても、 その値は使いません。 許可の問いを出さない設定と違う値が渡されたときは、 便の記録に 1 語の file を残して古い起動の行を名指します。 器が起こす claude は、 口座ごとの自動の記憶を毎回切ります。 契約の審査は、 材料を組む前に対象の repo の最新の commit を読み、 それを一時の写しとして材料の置き場の外に取り出し、 その上で読ませ、 判定の後に写しを片付けます。 同じ場所に前の写しが残っていれば先に片付け、 写しを作れないときは審査をせず、 判定できなかったとします。 先回りの審査は、 材料を組んだ予想の写しの上で読ませ、 審査役が終わるまで写しを残します。 本番の審査は、 祖先の変更を当てていない写しで、 同じ commit を読んだ先回りの判定だけを使い回します。 審査の指示文は、 読む道具だけが在ること、 材料に無い code の事実は写しの現物で確かめること、 穴を全部見てから判定することを書きます。 runner には、 契約の直後に共通の検査の行を出発点の sha で埋めて渡し、 commit の後に全部撃って緑にしてから終えるよう読ませます。 runner が正常に終わり commit が在るときは、 器が gate と同じ検査を同じ作業場所で撃ち、 全部緑なら次の段へ進め、 赤なら決めた回数まで runner を起こし直して赤を渡し、 回数を使い切るか測れなかったときは gate へ進めます。 gate は今どおり全部の行を撃ちます。</span>
+<span class="dec-why" data-prose-slot="rationale" data-slot-id="decision-rationale">読むだけの道具を選んだのは、 前提を無視して code を読んだ審査役の半分が本物の欠陥を掘り出した一方で、 材料を束ねるやり方は上限で半分以上が落ちるからです。 許可の規則で読みを許さず道具の列で絞るのは、 実測で許可の規則が作業場所の外の読みまで開いたからで、 道具の列と許可の問いを出さない設定の組み合わせだけが、 読みを作業場所の中に閉じました。 契約の審査を出発点の写しの上で読ませるのは、 main の作業場所を書き換えられる穴を閉じ、 審査する契約と同じ出発点の code を読ませるためです。 自動の記憶を切るのは、 同じ契約が走る口座によって違う材料で扱われないためです。 runner に検査の行を渡すだけでなく器が終わりに撃つのは、 渡したかどうかではなく撃って緑かどうかが合格の条件で、 それは散文の注意では確かめられないからです。 赤を gate の後でなく runner の終わりで戻すのは、 判定を出した後に便を戻すと終わった便の数えと着地の列が動くからです。 先回りの審査の判定を本番に写さないのは、 予想の写しで読んだ code が、 祖先が着地した後の code と同じとは言えないからです。</span>
 <div class="justify-box"><p class="jh">この判断が正当化する要件 (cross-doc 照会 → SRS-SCRIBE2-MVP)</p>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR68" data-justifies-req="FR68" data-justifies-role="claim">FR68</a><span class="justify-role">claim</span><span class="justify-note">FR68 (便の自動起動) は終端の段の周に列の 1 周を撃つ。 本 ADR は、 同じ周の同じ掃除の 1 手に量の線を足すだけで、 列・順序・契機は変えないと主張する (ADR-0081・ADR-0096 と同じ位置)。</span></div>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR30" data-justifies-req="FR30" data-justifies-role="claim">FR30</a><span class="justify-role">claim</span><span class="justify-note">FR30 (配送構造) は便の起動と着地を席でなく器が行うと決める。 本 ADR は写しの置き場の量の管理も席の手でなく器の運転手の周に置き、 席に消す手順を渡さないと主張する。</span></div>
-<div class="justify-row"><a class="justify-req" href="../spec/srs.html#NFR6" data-justifies-req="NFR6" data-justifies-role="rationale">NFR6</a><span class="justify-role">rationale</span><span class="justify-note">NFR6 (host の資源) の目標は封じ込めの外で走る器の子 process 0 本と並列度で、 disk は数えない。 本 ADR は label の趣旨 (host の資源を守る) に disk の量の側から理由を与えるだけで、 目標の文は変えない。 足す仕事は運転手の process の中の std の fs の読みと削除で、 子 process は足さない。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR5" data-justifies-req="FR5" data-justifies-role="claim">FR5</a><span class="justify-role">claim</span><span class="justify-note">FR5 (runner と lens の起動の 1 形・permission を毎回明示) の中で、 lens の permission を器の定数にし、 道具の列と自動 memory の切りを同じ構築点で毎回渡すと主張する。 1 形のままで、 第 2 の構築点は作らない。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR49" data-justifies-req="FR49" data-justifies-role="claim">FR49</a><span class="justify-role">claim</span><span class="justify-note">FR49 (intake の直後の契約の審査) の lens が契約と設計と要件を読むことは変えず、 cwd を審査の木にして材料に無い code の事実を木の現物で確かめさせると主張する。 判定の読みと Reviewed の終端は変えない。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR9" data-justifies-req="FR9" data-justifies-role="claim">FR9</a><span class="justify-role">claim</span><span class="justify-note">FR9 (gate の lens の判定と INCONCLUSIVE) は変えず、 gate の lens も同じ読みの起動形で diff の外の事実を確かめると主張する。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR8" data-justifies-req="FR8" data-justifies-role="claim">FR8</a><span class="justify-role">claim</span><span class="justify-note">FR8 (gate が verify の各行を実走する) は変えず、 gate は終わりの門の結果を持ち越さずに全行を撃つと主張する。</span></div>
+<div class="justify-row"><a class="justify-req" href="../spec/srs.html#FR6" data-justifies-req="FR6" data-justifies-role="rationale">FR6</a><span class="justify-role">rationale</span><span class="justify-note">FR6 (runner の終わりの段) は rc 0 かつ commit 1 本以上なら Implemented と決めている。 終わりの門は赤の周に runner を起こし直すので FR6 の字と食い違い、 SRS の追加 round で FR6 を改めてから実装の行を起こす理由になる。</span></div>
 <p class="justify-tgt">照会先: SRS-SCRIBE2-MVP — SRS: 設計 → 契約 → 実装 → 検証 → land を、 人の手を借りずに 1 本通す器（MVP）</p>
 </div>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-warn"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> 結果 / 良い面とトレードオフ</span><h2>この判断で何が良くなり、 何を引き受けるか</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">この判断で良くなること 4 つと、 代わりに引き受けること 5 つです。 良くなるのは、 量が上限に近く保たれること、 組み立て中の物を壊さないこと、 仕組みが増えず言語に依らないこと、 越えたままと測れない物が名指されることです。 引き受けるのは、 越えた周に 6 時間より新しい産物も消えうること、 掃除の時間が延びること、 上限が state dir ごとであること、 同じ file を 2 度数えうること、 知らせが席へ押し出されないことです。</p></section>
+<section data-component="chapter-deck-band" class="tint-warn"><span class="num">05</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> 結果 / 良い面とトレードオフ</span><h2>この判断で何が良くなり、 何を引き受けるか</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-05">この判断で良くなること 4 つと、 代わりに引き受けること 5 つです。 良くなるのは、 審査役が事実を確かめてから判定すること、 審査役が書けなくなること、 自動の記憶の分だけ口座で材料が変わらなくなること、 共通の検査の赤が早く直ることです。 引き受けるのは、 審査の時間と token が増えること、 共通の検査を 2 回撃つこと、 claude の版に依ること、 古い起動の行が 1 語の記録でしか見えないこと、 先回りの審査の判定を本番に写さないので本番の審査が毎回審査役を起こすことです。</p></section>
 <div class="chapbody">
 <div data-component="scope-summary-panel"><div class="scol in"><h3>✓ 良い結果</h3><ul>
-<li data-component="adr-consequence-pos"><span class="b">●</span>写しの数に依らず、 起草の置き場の build と依存の置き場の合計が上限に近く保たれる (組み立て中の分を除く)</li>
-<li data-component="adr-consequence-pos"><span class="b">●</span>組み立て中の窓の内の置き場は消えないので、 走っている組み立てを壊さない</li>
-<li data-component="adr-consequence-pos"><span class="b">●</span>消す仕組みと lock は 1 つのままで、 測りは言語と道具に依らない (mtime と lstat だけ)</li>
-<li data-component="adr-consequence-pos"><span class="b">●</span>越えたままの周と測れない木は、 掃除の行と doctor の行で名指される</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>審査役が呼び手・組み立ての場所・既存の歯を木の現物で確かめてから判定する</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>審査役は書けず、 読みは便の木に閉じるので、 main の作業場所を書き換える穴が閉じる</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>自動 memory の分について、 同じ契約は走る口座に依らず同じ材料で審査され実装される (口座の設定 dir の他の入力は着地の後に測る)</li>
+<li data-component="adr-consequence-pos"><span class="b">●</span>共通 verify の赤は runner の turn の中か終わりの門で直り、 gate の FAIL と便の捨て直しが減る</li>
 </ul></div><div class="scol out"><h3>⚖ トレードオフ・代償</h3><ul>
-<li data-component="adr-consequence-neg"><span class="b">●</span>上限を越えた周には、 書きの線より新しくても窓の外の置き場が消え、 席が戻ると組み立てを作り直す。 席の指示文は量の線を告げない</li>
-<li data-component="adr-consequence-neg"><span class="b">●</span>終端の周ごとに候補の全部の entry を歩く時間が掃除に足される</li>
-<li data-component="adr-consequence-neg"><span class="b">●</span>上限は state dir ごとで、 同じ disk の state dir の数だけ量が積まれる</li>
-<li data-component="adr-consequence-neg"><span class="b">●</span>hard link は entry ごとに数え、 使用量より大きく出る (消しは候補の外に出ない)</li>
-<li data-component="adr-consequence-neg"><span class="b">●</span>知らせは掃除の行と doctor の行だけで、 席へは押し出さない。 越えたままが続く周が見えたら、 管理 tick の合図に出すかを別に決める</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>読む lens の 1 回の時間と token が増える</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>緑の便も終わりの門と gate で共通 verify を 2 回撃つ (中央値の和で約 137 秒)</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>道具と env の名は claude の版に従い、 実 binary の効きは着地の後に init の record で測り直すほかない</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>起動の雛形に残った書きの mode は審査を止めず、 便の記録の 1 語でだけ見える</li>
+<li data-component="adr-consequence-neg"><span class="b">●</span>先撃ちの判定は予想の木で出るので Reviewed へ写らず、 先撃ちが退役するまで契約の審査は毎回 lens を撃つ (先撃ちは別の ADR が畳む)</li>
 </ul></div></div>
 </div>
-<section data-component="chapter-deck-band" class="tint-info"><span class="num">06</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> 改訂関係と原則 / この判断の位置づけ</span><h2>版の系譜と、 行き着く原則 (照会終端)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-06">この記録が版の系譜のどこに在るかと、 判断が最後に行き着く原則です。 この記録は ADR-0096 を一部だけ置き換えます。 置き換えるのは、 6 時間書かれていない物だけを消すとした決定に、 上限を越えた周に限って 30 分書かれていない物を古い順に足すところと、 原則の「書く手が止まった」の測りを、 その周だけ 30 分の窓に縮めるところです。 原則は、 作り直せる物を量のために消すときは、 書く手が止まってから長い物から要る分だけ消し、 今書いている物と測れない物は消さない、 です。</p></section>
+<section data-component="chapter-deck-band" class="tint-info"><span class="num">06</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> 改訂関係と原則 / この判断の位置づけ</span><h2>版の系譜と、 行き着く原則 (照会終端)</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-06">この記録が版の系譜のどこに在るかと、 判断が最後に行き着く原則です。 この記録は、 起動の形を 1 か所で組み設定を読まないと決めた ADR-0011 を置き換えず、 そこで決めずに残した審査役の起動の形を決めます。 原則は、 器は各役に合格の条件と判定に要る読みを渡し、 要らない権能は持たせず、 渡したかどうかは散文でなく器の仕組みで決まる、 です。</p></section>
 <div class="chapbody">
 <div data-component="adr-supersession">
 <p class="ss-row"><span class="ss-k">改訂状態</span>current</p>
-<p class="ss-row"><span class="ss-k">置き換える ADR</span>ADR-0096</p>
+<p class="ss-row"><span class="ss-k">置き換える ADR</span>なし (新規)</p>
 <p class="ss-row"><span class="ss-k">置き換えられた</span>なし (現行)</p>
-<p class="ss-row">部分 supersede。 ADR-0096 が起草の木の中間生成物を書きが rules 行の時間無い dir だけ消すとした決定の母集団に、 合計が上限を越えた周に限り、 書きの線より新しく組み立て中の窓の外の dir を古い順に上限まで足す。 原則 (書く手が止まったと測れた物だけを消す) の「止まった」の測りを、 上限を越えた周だけ組み立て中の窓に縮める。 起草の置き場の場所・席の指示文・書きの線の意味と行・消す名の閉じた列・追跡の判じ・lock・撃つ周・木の写しを消さないことは不変。 ADR-0081 (便の木の掃除) は置き換えない。</p>
+<p class="ss-row">置き換える ADR は無い。 ADR-0011 は器が起こす claude の起動形を 1 関数に置き settings を読まないと決め、 lens の起動形 (道具を絞るか) は射程の外に残した。 本 ADR はその残りを決め、 同じ 1 関数に道具の列と自動 memory の切りを足す。 ADR-0011 の restricted と settings の追加読込を渡さない決定と、 runner の allowlist と plugin の渡し方は不変。 ADR-0010 の共通 verify の宣言と写しの凍結も不変で、 本 ADR は写しの行を runner の本文と終わりの門でも読む。</p>
 </div>
 <div data-component="adr-principle">
-<p class="prin-id">照会終端 — PRIN-SHED-THE-LONGEST-QUIET-ONLY-AS-MUCH-AS-NEEDED</p>
-<p class="prin-text">作り直せる物を量のために消すときは、 書く手が止まってから長い物から要る分だけ消し、 今書いている物と測れない物は消さない。</p>
-<p class="prin-note">本 ADR が書きの線を短くする案・CI か merge の契機で消す案・置き場を共有する案・写しごと消す案を退け、 量の上限と古い順と組み立て中の窓を選んだのはこの原則に行き着く (これ以上は遡らない照会終端)。</p>
+<p class="prin-id">照会終端 — PRIN-GIVE-EACH-ROLE-ITS-PASS-CONDITIONS-AND-ONLY-THE-POWERS-IT-NEEDS</p>
+<p class="prin-text">器は各役に、 合格の条件と判定に要る読みを渡し、 役に要らない権能は持たせない。 渡したかどうかは散文でなく器の起動形と器の測りで決まる。</p>
+<p class="prin-note">本 ADR が allow の規則で読みを開く案・材料だけを広げる案・gate の赤を判定の後に戻す案・起動の mode を丸ごと絞る flag の案を退け、 読みの道具だけの起動形と審査の木と終わりの門を選んだのはこの原則に行き着く (これ以上は遡らない照会終端)。</p>
 </div>
 </div>
-<section data-component="chapter-deck-band" class="tint-brand"><span class="num">07</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg> 用語集 / この文書で使う専門語</span><h2>本文に出てくる専門語のやさしい説明</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-07">本文に出てくる専門語 4 個を、 やさしい言葉で説明します。</p></section>
+<section data-component="chapter-deck-band" class="tint-brand"><span class="num">07</span><span class="kicker"><svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg> 用語集 / この文書で使う専門語</span><h2>本文に出てくる専門語のやさしい説明</h2><p class="lead" data-prose-slot="chapter-lead" data-slot-id="chapter-lead-07">本文に出てくる専門語 5 個を、 やさしい言葉で説明します。</p></section>
 <div class="chapbody">
 <div data-component="glossary-term-table">
-<div class="grow"><div class="gword">量の上限<span class="en">drafts cap</span></div><div class="gdef">state dir ごとの、 席の起草の木の build と依存の置き場の合計の上限 (rules 行 seat.drafts_cap_mb・MiB・本 ADR)。 越えた周だけ、 掃除が書きの新しさの古い順に上限まで消す。</div></div>
-<div class="grow"><div class="gword">組み立て中の窓<span class="en">busy window</span></div><div class="gdef">今から rules 行 seat.drafts_busy_s の秒を引いた時刻より後 (本 ADR)。 書きの新しさがこの窓の内の置き場は組み立て中とみなし、 量の上限を越えていても消さない。</div></div>
-<div class="grow"><div class="gword">書きの新しさ<span class="en">newest write</span></div><div class="gdef">置き場の dir 自身と下の全 entry の mtime の最新 (symlink は辿らない・本 ADR)。 量で消す順と、 組み立て中かの判じに使う。</div></div>
-<div class="grow"><div class="gword">書きの線<span class="en">write cutoff</span></div><div class="gdef">今から rules 行 seat.drafts_stale_h の時間を引いた時刻 (ADR-0096)。 書きの新しさがこの線より前の中間生成物の dir は、 量に依らず消える。 量の上限の候補は、 この線が残した dir だけ。</div></div>
+<div class="grow"><div class="gword">読みの道具<span class="en">read-only tools</span></div><div class="gdef">器が審査役の claude に渡す道具の閉じた列 Read・Grep・Glob (本 ADR)。 書きの道具と shell を持たず、 許可の問いを誰にも出さない mode で cwd の外の読みは断られる。</div></div>
+<div class="grow"><div class="gword">審査の木<span class="en">review tree</span></div><div class="gdef">審査役の lens の cwd になる一時の worktree (本 ADR)。 契約の審査では、 器が材料の前に読んだ対象 repo の HEAD の sha を run dir の直下に detach し、 判定の後に外す。 先撃ちでは、 材料を組んだ予想の木 (HEAD に祖先の層を当てた木) で、 lens が終わるまで外さない。</div></div>
+<div class="grow"><div class="gword">自動 memory<span class="en">auto memory</span></div><div class="gdef">claude が口座の設定 dir の下に cwd ごとに持つ記憶の索引で、 起動時に文脈へ載る (本 ADR)。 器が起こす claude は env で毎回切る。</div></div>
+<div class="grow"><div class="gword">終わりの門<span class="en">end gate</span></div><div class="gdef">runner の turn が rc 0 かつ commit 1 本以上で終わった直後に、 器が gate と同じ撃ち手で書きの範囲の検査・共通 verify・契約の検証行を便の worktree に撃つ段 (本 ADR)。 赤なら rules 行の周まで同じ worktree で runner を起こし直す。</div></div>
+<div class="grow"><div class="gword">共通 verify の節<span class="en">common verify section</span></div><div class="gdef">器が runner の stdin の契約の直後に足す節で、 便の写しの共通 verify の各行を gate と同じ 4 つの穴の埋め方で埋めて並べる (本 ADR)。 runner は commit の後にその行を全部撃って緑にしてから終える。</div></div>
 </div>
 </div>
 </div>
 <footer class="foot" data-component="fidelity-sync-meta"><div class="ft-grid">
 <div class="ft-plain">このページは、大もとの機械データ (正本) から自動で組み立てられています。構造は機械が自動で検査し、内容が元データに忠実かは独立のレビューで確かめます。</div>
-<div data-audience="machine">機械SSoT: <b>ADR-0101-seat-draft-build-dirs-are-capped-per-state-dir-and-shed-oldest-first.adr.yaml</b> &middot; 生成: <b>2026-09-30 07:41</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
+<div data-audience="machine">機械SSoT: <b>ADR-0102-lens-reads-with-read-only-tools-and-runner-gets-the-common-verify.adr.yaml</b> &middot; 生成: <b>2026-09-30 13:21</b> &middot; 検証状態: <b>structure ✓ fabrication-free / prose ✓ 充填済 (fidelity ceiling → S5 対象)</b></div>
 <div class="tags" data-audience="machine"><span>folio design system</span><span>ADR-pack</span><span>folio engine B1 (instance#2)</span><span>cross-doc 照会</span></div>
 </div></footer>
 <!-- folio:chrome-bottom -->
 <nav class="prevnext" aria-label="前後の文書">
-  <a class="prevnext__prev" href="ADR-0100-the-close-check-line-rides-the-cutover-event-in-its-detail.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">close-check の線は切り替えの線と同じ event LifecycleCutover の 1 件に、 既存の任意の key detail の閉じた 1 語 close-check を持たせて記帳し、 新しい key も kind も足さない — 2 つの線は種類ごとに最初の行で読む (ADR-0088 の LifecycleCutover の key の組を部分 supersede)</span></a>
-  <a class="prevnext__next" href="ADR-0102-lens-reads-with-read-only-tools-and-runner-gets-the-common-verify.html"><span class="prevnext__dir">次 &rarr;</span><span class="prevnext__title">器が起こす審査役は読みの道具だけを持ち、 契約の審査は審査の時点の HEAD の木の上で・先撃ちは予想の木の上で読み、 口座の自動 memory を読まない — runner には共通 verify の行を渡し、 終わりの門で器が撃った赤を同じ worktree で直させる (ADR-0011 が残した lens の起動形を決める)</span></a>
+  <a class="prevnext__prev" href="ADR-0101-seat-draft-build-dirs-are-capped-per-state-dir-and-shed-oldest-first.html"><span class="prevnext__dir">&larr; 前</span><span class="prevnext__title">席の起草の置き場の build の置き場に state dir ごとの量の上限を持たせ、 越えた周は書きの新しさの古い順に上限まで消す — 組み立て中の窓の内は消さず、 測れない木は数えずに名指し、 越えたままなら掃除の行と doctor の行で知らせる (ADR-0096 の書きの線だけで消す決定と原則を部分 supersede)</span></a>
+  <a class="prevnext__next" href="ADR-0103-contract-rows-pass-row-review-before-merge-and-failed-rows-keep-their-place.html"><span class="prevnext__dir">次 &rarr;</span><span class="prevnext__title">契約表の行は設計の PR を main に入れる前に行の審査を通し、 審査か gate で落ちた行は行の予約で順番を守り、 同じ設計の兄弟の行を直しが入るまで待たせる — 先撃ちは退役する</span></a>
 </nav>
 <script>
 (function () {

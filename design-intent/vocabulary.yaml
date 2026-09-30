@@ -322,8 +322,8 @@ terms:
     relationships: [write-set, 極性, command guard]
   - canonical: runner
     domain: consumer
-    definition: 契約 1 本を worktree で実装する headless の Claude process (SRS FR4 / FR5)。 席ではなく使い捨て。 起動時に口座と対象 repo の settings を 1 つも読まない (ADR-0011)。
-    relationships: [契約, headless, lens, 便, allowlist]
+    definition: 契約 1 本を worktree で実装する headless の Claude process (SRS FR4 / FR5)。 席ではなく使い捨て。 起動時に口座と対象 repo の settings を 1 つも読まない (ADR-0011)。 ADR-0102 の行 bg・bh の着地の後は口座の自動 memory も読まず、 stdin の契約の直後に共通 verify の節を受ける。 pipeline.md §66 の行の着地の後は、 終わりの門の赤の周に同じ worktree で起こし直される。
+    relationships: [契約, headless, lens, 便, allowlist, 共通 verify の節, 終わりの門, 自動 memory]
   - canonical: allowlist
     domain: consumer
     definition: 器が runner に与える「実行してよい command 名の列」。 値は対象 repo の vessel 宣言が持ち、 manifest の rules 行 runner.allowed_commands は宣言が名乗れる上限である (C1 / C10・ADR-0010)。 intake が上限と突合して便ごとに凍結し、 runner は凍結した写しから claude へ --allowedTools として渡し、 口座と対象 repo の settings を 1 つも読まない (ADR-0009 / ADR-0011)。 明示 allow の外は hook が deny する。 許可の内側で禁じる語列は manifest の rules 行 runner.denied_commands が対で持ち、 宣言は緩められない (ADR-0025 §2.1)。
@@ -338,6 +338,7 @@ terms:
     relationships: [hook, in-loop guard, allowlist, rules 行, 極性一覧]
   - canonical: 共通 verify
     domain: consumer
+    aliases: [common verify, 共通の verify]
     definition: どの便にも共通の deny する検証 (flip check・test・lint・依存監査) を対象 repo の vessel 宣言に置き、 intake が便ごとに凍結した写しを gate が契約 verify の前に撃つもの (C2・ADR-0009 / ADR-0010)。 検出線の行は別の列 (detection-verify・ADR-0021 §2.4) に置き、 gate でなく便の着地の後に着地後の検出が撃つ (ADR-0060・proposed)。 契約の verify は便固有の行だけを持つ。
     relationships: [gate, vessel 宣言, 契約, 変異検出線, 着地後の検出]
   - canonical: 変異検出線
@@ -346,8 +347,8 @@ terms:
     relationships: [共通 verify, gate, flip check, 着地後の検出]
   - canonical: lens
     domain: consumer
-    definition: diff を読んで verdict (PASS / FAIL / INCONCLUSIVE) を返す headless の Claude process (SRS FR9)。 MVP の gate は lens 1 本。 runner と同じ起動形で、 口座と対象 repo の settings を 1 つも読まない (ADR-0011)。
-    relationships: [gate, headless, Verdict]
+    definition: diff を読んで verdict (PASS / FAIL / INCONCLUSIVE) を返す headless の Claude process (SRS FR9)。 MVP の gate は lens 1 本。 runner と同じ起動形で、 口座と対象 repo の settings を 1 つも読まない (ADR-0011)。 ADR-0102 の行 bg の着地の後は読みの道具だけを持ち、 口座の自動 memory を読まず、 契約の審査と先撃ちの周は審査の木を cwd に起きる。
+    relationships: [gate, headless, Verdict, 読みの道具, 審査の木, 自動 memory]
   - canonical: headless
     domain: consumer
     definition: 対話画面を持たず、 入力を受けて 1 回で答えを返す Claude の実行形 (claude -p)。 口座は環境変数で切り替え、 permission は毎回明示し、 user / project / local の settings は読まない (ADR-0011)。
@@ -1863,6 +1864,32 @@ terms:
     aliases: [read-only table]
     definition: 外へ何も出さない gh の群と動詞の対の閉じた表 (pr の view・list・status・checks・diff、 issue の view・list・status、 release・gist・repo の view・list、 label の list) と、 api の GET の形 (ADR-0099)。 器の定数で持ち、 表の外は wrapped の印を受ける。
     relationships: [wrapped の印, 公開の segment]
+  # ---------------------------------------------------------------- 審査役の読みの道具と runner の終わりの門 (ADR-0102)
+  - canonical: 読みの道具
+    domain: consumer
+    aliases: [read-only tools]
+    definition: 器が審査役 (契約の審査・gate・先撃ちの lens) の claude に渡す道具の閉じた列 Read・Grep・Glob (ADR-0102)。 書きの道具と shell を持たず、 許可の問いを誰にも出さない mode で起き、 cwd の外の読みは断られる。 起動の雛形が渡す permission mode の値は使わず、 dontAsk でない値の周は契約の file の dir に 1 語の記録 lens.ignored を残す。
+    relationships: [lens, 審査の木, 自動 memory]
+  - canonical: 審査の木
+    domain: consumer
+    aliases: [review tree]
+    definition: 審査役の lens の cwd になる一時の worktree (ADR-0102)。 契約の審査では、 器が材料の前に読んだ対象 repo の HEAD の sha を run dir の直下 (材料の dir の外) に detach し、 判定の後に外す。 先撃ちでは、 材料を組んだ予想の木 (HEAD に祖先の層を当てた木) で、 lens が終わるまで外さず、 その sha と種類 (actual か forecast) を置き場に残す。 受付の base の木とは別の木。
+    relationships: [契約の審査, lens, 読みの道具, base の木, 事前審査]
+  - canonical: 自動 memory
+    domain: consumer
+    aliases: [auto memory]
+    definition: claude が口座の設定 dir の下に cwd ごとに持ち、 起動時に文脈へ載せる記憶の索引 (ADR-0102)。 器が起こす claude (runner・lens・計測の refresh) は子の env で毎回切る。 開発 session の席の記憶とは別の扱い。
+    relationships: [runner, lens, 読みの道具]
+  - canonical: 共通 verify の節
+    domain: consumer
+    aliases: [common verify section]
+    definition: 器が runner の stdin の契約の直後に足す見出し「## 共通 verify」の節で、 便の写しの共通 verify の各行を gate と同じ 4 つの穴の埋め方 (base の sha・受付を通らない並列度 1・契約の verify 行の filter 語) で埋めて並べる (ADR-0102)。 runner は commit の後にその行を撃って緑にしてから turn を閉じる。
+    relationships: [runner, 共通 verify, 終わりの門]
+  - canonical: 終わりの門
+    domain: consumer
+    aliases: [end gate]
+    definition: runner の turn が rc 0 かつ commit 1 本以上で終わった直後に、 器が gate と同じ撃ち手と受付で書きの範囲の検査・共通 verify・契約の検証行を便の worktree に撃つ段 (ADR-0102)。 赤の周は rules 行の周まで同じ worktree で runner を起こし直し、 使い切った周と測れなかった周は gate へ進める。 gate は結果を持ち越さない。
+    relationships: [runner, gate, 共通 verify, 共通 verify の節, 契約の検証行]
   # ---------------------------------------------------------------- 行の審査と落ちた行の順番 (ADR-0103・proposed)
   - canonical: 行の審査
     domain: consumer
