@@ -1162,6 +1162,181 @@ AC1 の条件文は「実 runner + 実 lens」なので、CI の歯（fake）は
   - (e) 読めない file の周は `held:FR84:unmeasured` で留まり、file の無い置き場の便は着地する。
   - base で RED: 機能不在（表に在る便が main に載る）。
 
+## 64. 審査役の claude を読みの道具だけで起こす — 道具は Read・Grep・Glob、許可の問いを誰にも出さない mode、口座の自動 memory を読まない、契約の審査は審査の時点の HEAD の木の上で・先撃ちは予想の木の上で読み、予想の判定を Reviewed に写さず、prompt の「tool が渡されていない」を消す（契約表の行 bg・[ADR-0102](../../design-intent/decisions/ADR-0102-lens-reads-with-read-only-tools-and-runner-gets-the-common-verify.html) §2.1・epic `s2-07l.736.33` の打ち手 0）
+
+やさしく言うと: 審査役（lens）は今、「道具は無い」と言われて材料の字だけで判定している。ところが実際には、編集を自動で承認する設定のまま、main の作業場所を起点に起きている。つまり審査役は code を読めるのに読まず、そのうえ書き換えもできてしまう。これを逆にする。審査役には読むだけの道具を渡し、それ以外は持たせない。契約の審査は、審査する時点の repo の写しの上で読ませる。先回りの審査（先撃ち）は、材料を組んだ予想の写しの上で読ませ、その判定を本番の審査に写さない。prompt にも正直にそう書く。
+
+- 何が起きているか（main 633edd9a・verified）:
+  - lens の起動形は `crates/scribe2/src/headless/lens.rs` の `dispatch` → `ask` → `crates/scribe2/src/headless/mod.rs` の `build`（runner と lens の唯一の構築点・[ADR-0011](../../design-intent/decisions/ADR-0011-vessel-launches-claude-without-settings.html) §2.1）。permission mode は lens の必須の flag `--permission-mode` の値をそのまま渡す。運用の lens の cmd（便の置き場の `lens.toml` に写る 1 行・§26）は `--permission-mode acceptEdits` を焼いている。この値は器の既定でなく、起動側の cmd の雛形（host の file・repo の外）から来ていて、隣の project の運転手も同じ形の cmd を渡している（orchestrator の実測 2026-09-30T12:23Z）。lens には `--allowedTools` も道具を絞る flag も渡らない（ADR-0011 §2.1 は「lens の起動形は本 ADR では変えない」と残した）。
+  - 契約の審査（Reviewed の段）の lens は `crates/scribe2/src/pipe/review.rs` の `decide` が起こし、cmd の穴 `{worktree}` と wrapper の cwd に `entry.repo`（anchor の main の作業木）を置く。gate の lens（`crates/scribe2/src/pipe/gate/lens.rs`）は便の worktree を置く。
+  - 先撃ちの lens（`crates/scribe2/src/pipe/dispatch/prelens.rs` の `fire`）も anchor の repo を cwd と `{worktree}` に置く。材料は予想の base の木（HEAD に祖先の層を当てた一時の worktree）で組むが、その木は lens を起こす前に外す（`build` の末尾の `drop_tree`）。Reviewed の段の使い回し（同じ file の `reusable`）の鍵は、材料の dir の digest と lens の cmd の字だけで、lens が読んだ木を含まない。読みの道具を渡すと、先撃ちの lens は材料と違う木の code を読み、祖先の着地の前の code で出した判定が着地の後の Reviewed にそのまま写りうる（Reviewed の FAIL は終端で、FR68 は同じ中身の契約を列から外す）。
+  - 3 つの呼び手は lens の stderr を捨てる（`review.rs` と `gate/lens.rs` は null・先撃ちの包みは /dev/null）。
+  - 契約の審査の雛形 `crates/scribe2/src/headless/lens-contract.txt` の 31 行目と gate の雛形 `crates/scribe2/src/headless/lens.txt` の 35 行目は「あなたには tool が渡されていない。shell も cargo も git も撃てない」と書く。2026-09-30 の生の log では lens 132 回のうち 126 回が 1 turn で終わった。前提を無視して code を読んだ 6 回のうち 3 回は、行番号つきで本物の欠陥を掘り出した（epic の分析の報告）。
+  - 実測（claude 2.1.285・2026-09-30・空の設定 dir と無効な API key で init の record だけを読む形と、haiku の実 call 3 回・計 0.05 USD 未満）:
+    - `--tools "Read,Grep,Glob"` を渡すと init の tools は Glob・Grep・Read の 3 つだけになる。Write と Bash は無い（model が「使える道具に無い」と答え、file は作られなかった）。
+    - `--permission-mode dontAsk` を足し `--allowedTools` を渡さない形では、cwd の中の Read は通った。cwd の外の file の Read と Grep は「don't ask mode なので断った」で断られた（permission_denials 2 件）。`--allowedTools "Read,Grep,Glob"` を足すと cwd の外も読めてしまう。
+    - 環境変数 CLAUDE_CODE_DISABLE_AUTO_MEMORY を 1 にすると、init の record から memory_paths が消えた（値 0 と未設定では口座の設定 dir の下の memory の path が載る）。`--setting-sources ""` だけでは自動 memory は切れない。
+    - `--max-turns` は help に無いが受け付けられる（未知の flag は rc 1 で断られる）。
+- 形:
+  1. **lens の道具と mode は器が決める**: lens は渡された permission mode に依らず、permission mode dontAsk を毎回明示し、`build` に道具の列 Read,Grep,Glob を渡す。`build` はその列を `--tools` の値として渡す（道具の列を持つのは lens だけ・runner と `fleet usage` の refresh は渡さず argv は不変）。`--allowedTools` は lens に渡さない（渡すと cwd の外も読める・実測）。
+     - `--permission-mode` は任意の flag に下げ、受けても値を使わない。消費側ごとの cmd の雛形は host の file で、断ると全部の消費側の審査が雛形を手で直すまで止まる。
+     - 渡された値が dontAsk でない周（acceptEdits と plan を含む）は、`--contract` の file と同じ dir に 1 語の記録の file `lens.ignored` を置く。字は `ignored:` に渡された値を続けた 1 行。dontAsk の周と flag の無い周は置かず、前の周の file が在れば消す。どの雛形が古いかは、便の記録の dir に残る 1 語で分かる。
+     - stderr には書かない。3 つの呼び手が lens の stderr を捨てるので、書いても誰も読めない。
+     - usage の 1 行と help の頁（`crates/scribe2/src/help.rs` の lens の form）は `[--permission-mode M]` の任意の形にする。help の FORM と生きた usage の一致は、既存の歯 `cli_help_pages_match_the_live_form_and_every_subcommand` が gate の共通 verify の中で測る。help の flags の説明は英語（help の頁は ASCII・幅 100 字）で「受けるが使わない・審査役は読みだけで起きる」の旨にし、examples から `--permission-mode M` を外す。説明と examples の字は歯で測れない（help の頁の本文の snapshot は無い）ので、done には載せない（便の diff の設計適合は gate の審査で見る・行 al・be と同じ扱い）。
+  2. **器が起こす claude は口座の自動 memory を読まない**: `build` が子の env に CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 を毎回設定し、親の値を継承させない（agent view の env と同じ置き方・`AGENT_VIEW_ENV` の隣・器は子へ設定するだけで読まない）。runner・lens・`fleet usage` の refresh の全部に効く（構築点は 1 つ）。
+  3. **契約の審査の cwd は審査の木**:
+     - `review` は材料を組む前に、対象 repo の HEAD の sha を 1 回読む（受付の base の木と同じく、材料の前に読む）。
+     - 先撃ちの判定を使い回す周（形 5 の鍵）は木を作らない。鍵はこの sha で決まる。
+     - 使い回さない周は、run dir の直下の `<sha>.tree` に、その sha に detach した worktree（審査の木）を作る。材料の dir（`review/`）の中には置かない。材料の鍵の digest は dir の全 file を読むので、中に置くと鍵が壊れる。
+     - 作り方と片付けは `crates/scribe2/src/pipe/dispatch/floor.rs` の `Worktree` の `make` と Drop を借りる（その 2 つを crate::pipe の中に見せる・一時の木の 7 つ目を書かない）。作る前に、同じ path に前の周の木（`.git` の file を持つ登録済みの worktree・lens の途中で driver が死んだ便の残り）が在れば `worktree remove --force` と `prune` で外す。判定を読んだ後に、木を登録ごと外す。
+     - lens の cmd の穴 `{worktree}` と wrapper の cwd をその木にする。
+     - worktree でない物が path を塞ぐ周と、git が作るのを断る周は、lens を撃たず INCONCLUSIVE にする。evidence は審査の木を作れない理由の 1 行で、anchor の作業木へは倒さない。
+     - `review.json` に key `tree`（木の sha）を足す。事後に、lens が読んだ木を辿れる（NFR4）。
+  4. **雛形は道具を正直に書く**: `lens-contract.txt` の「審査の前提」の本文を次の 4 つにする。
+     - (i) あなたには読みの道具（Read・Grep・Glob）だけが在る。cwd は審査の木（この契約を当てる前の repo の写し。未着地の祖先を持つ先撃ちでは、祖先の変更を当てた予想の写し）で、その外の file は読めない。shell・cargo・git・書きの道具は無い（試さなくてよい）。
+     - (ii) 材料に無い code の事実（関数の呼び手・struct を組み立てる全ての場所・match の全ての場所・名や字を含む既存の歯・可視性の連鎖・file の置き場）は、判定の前に木の現物で確かめる。
+     - (iii) 穴を 1 つ見つけても止めず、材料と木を見終えてから判定し、`at` に見つけた場所を全部並べる。
+     - (iv) 設計の節や要件が「（…を読めない）」「（…に無い）」の形で欠けている周は、木で補えるものを補い、補えない欠けを evidence に書いて INCONCLUSIVE を選ぶ。
+     - 「読むだけで決める」の行は消す。
+     - `lens.txt` の「審査の前提」も同じ形にする。cwd は便の worktree（diff を当てた後の木）で、diff の外の事実（呼び手・既存の歯・憲法の生成 file）は木の現物で確かめる。消すのは「tool が渡されていない」の行と「読むだけで決める」の行。「審査の材料は…だけである」の行は「審査の対象は契約と diff で、木は事実を確かめるために読む」にする。
+     - `lens.txt` で字を変えないもの（既存の歯が逐語で測る）: 見出し `## 審査の前提（検証は済んでいる）`・見出し `## 審査の材料（契約と diff だけ）`・「契約に名指しされていない検査（整形・rustfmt・lint の既定 等）を根拠に INCONCLUSIVE / FAIL を出さない。」と「判定に届かない周は、evidence に「契約のどの行を撃てなかったか」を書く。」の 2 文・句「「verify を自分で撃てなかった」」を持つ行。前提の節 → 材料の節 → 契約の順も変えない。
+     - 契約に名指しされていない検査を根拠にしない行と、`findings` と `population`（diff の母集団）の定めは変えない。
+  5. **先撃ちの lens も木の上で読み、予想の判定は Reviewed に写さない**（PR #915 の審査の H1）:
+     - `build` は材料を組んだ予想の木を外さずに残す。置き場の file `tree.sha` に、木の sha と種類の 1 行を書く。種類は、祖先の層が無い予想なら `actual`、層を当てた予想なら `forecast`。
+     - `fire` は `{worktree}` と包みの cwd をその木にする。撃つ周に木が無い行（前の周の頭で外した行）は、撃つ前に同じ周の予想で組み直す。
+     - 周の頭の `prune` は、撃ち中の置き場（`in_flight`）の木を外さない。ほかの木（lens が終わった行・撃たなかった行・母集団を出た行・落ちた周の残り）は今どおり外す。lens が終わった木は、次の周の頭で外れる。
+     - Reviewed の段の使い回し（`reusable`）の鍵に木を足す。置き場の `tree.sha` が `<審査の木の sha> actual` と一致する周だけ使い回す。`forecast` の判定・sha の違う判定・`tree.sha` の無い置き場（この便の前に撃った判定）は写さず、Reviewed で lens を撃つ。
+     - 依存を待つ行の予想は、いつも祖先の層を持つ。そのため先撃ちが退役する（審査の門の設計・ADR-0103）までの間、使い回しは実際には起きない。予想の判定を写さない形は、その設計の「予想の記録は使い回さない」と同じ。
+     - 事前審査の結果への写し（`carry`）と、材料の組み手は変えない。
+- 触らない: runner の起動形（permission mode は runner の flag のまま・`--allowedTools` の allowlist・`--plugin-dir`）・gate の lens の cwd（便の worktree のまま）・審査の材料の組み手（`materials` は anchor の作業木を読むまま）・事前審査の結果への先撃ちの写し・lens の cap と model と effort の行・判定の読み（`read_outcome`・done の対応の表）・lens の cmd の穴の数（`{contract}` と `{worktree}` の 2 つ）。
+- 却下（[ADR-0102](../../design-intent/decisions/ADR-0102-lens-reads-with-read-only-tools-and-runner-gets-the-common-verify.html) §4）:
+  - **`--allowedTools` で Read と読みだけの Bash（git grep・git show）を許す**（棚卸しの案）: 許可の規則が cwd の外まで読みを開く（実測）。Bash は語の allowlist の外を承認の問いへ倒し、無人の lens では止まる。
+  - **`--restricted` を渡す**: lens は書きの道具を持たないので、restricted が settings と git の書きを人の承認へ倒しても lens は止まらない。読みを cwd に閉じる保証を文書で持つ利点もある。それでも採らないのは、ADR-0011 §2.1 が「build は `--restricted` を渡さない（MUST NOT）」と決めていて（理由は runner の Bash と書きの承認）、lens のためにそれを部分 supersede するほどの差が無いからである（dontAsk と道具の列でも、実測で cwd の外の読みは断られた）。claude の版で効きが崩れたら、そのときに比べ直す。
+  - **今の 1 turn・材料だけのまま、材料の組み手を広げる**: 材料の cap（`gate.token_cap`）の中に逆引きの全部は収まらない（外の材料は cap で半分以上落ちる・分析の実測）。読んだ 6 回の半分が欠陥を掘り出した事実に反する。
+  - **lens の cmd の `--permission-mode` を plan に書き換えるだけ**: 起動形の値が運用の cmd の手書きに残り、器の外で緩められる（`--cap` を外した理由と同じ）。雛形は消費側ごとの host の外の file で、散文で直させる形は効かない。
+  - **`--permission-mode` を未知の引数として断る**（`--cap` を外した周の形）: 雛形を直すまで全部の消費側の審査が INCONCLUSIVE で止まる。値を使わずに受け、古い雛形を 1 語の記録で名指すほうが、止めずに同じ安全を得る。
+  - **`--bare` で自動 memory と hook を切る**: OAuth を読まないので subscription の口座で起きない。
+  - **先撃ちの使い回しを止めるだけ**（審査の H1 の案 (b)）: 使い回しは止まるが、先撃ちの lens が anchor の作業木を読み、材料の木と読む木が食い違う形は残る。
+- 限界:
+  - turn の上限は渡さない。上限の値は rules 行の裁定が要り（C5）、SRS の追加 round で裁定を取る（行 `lens.max_turns` を足す後の行・推奨 30・読んだ lens の turn は実測で 2〜10）。
+    - 行 bg は上限の行より先に着地する。その間は、読む lens の消費に天井が無い。便の token の検出線（R-C6-1）は判定行を出すだけで止めない。間の期間は SRS の round と上限の行の着地までで、その間の lens の消費は pipe show の判定行で見る。
+  - 道具の名と env の名は claude の版に従う。器の歯は fake の argv と env しか測らないので、実 binary の効き（init の tools と memory_paths）は着地の後に orchestrator が init の record で測り、台帳の notes に残す（ADR-0011 の測り方と同じ）。
+  - 自動 memory のほかに、口座で変わる入力が残るかは測っていない（例: 口座の設定 dir の CLAUDE.md が `--setting-sources ""` の下で読まれるか）。init の record はその読みを載せないので、課金の要る 1 回の実測で着地の後に測る。ADR-0102 の「口座に依らず同じ材料」は、自動 memory の分についての主張である。
+  - 審査の木は HEAD の commit で、材料は anchor の作業木から読む。anchor に commit していない編集が在る周は、木と材料が違いうる。
+  - 1 語の記録は契約の file の dir に置くので、契約の審査では材料の dir（`review/`）に入る。材料の鍵の digest は lens を撃つ前に取るので、鍵には入らない。撃ち直しの審査で前の周の file が残っていれば鍵が外れ、使い回さない側に倒れる。
+- 歯（接頭辞 `lens_read_`・crates と docs で 0 件・2026-09-30）:
+  - e2e（`crates/scribe2-boundary/tests/e2e/headless/lens.rs`）: 偽 claude が argv と env を file に写す形で、
+    - (a) lens の argv に `--tools` の直後の値 Read,Grep,Glob の対がちょうど 1 つ・`--permission-mode` の直後が dontAsk・`--allowedTools` と acceptEdits が 0 件。
+    - (b) `--permission-mode acceptEdits` と `--permission-mode plan` を渡した lens の argv の permission mode が dontAsk で、`--contract` の file の dir の `lens.ignored` の字がそれぞれ `ignored:acceptEdits` と `ignored:plan`。`--permission-mode dontAsk` を渡した周と flag の無い周は、偽 claude が呼ばれ（印の file が在る）lens が rc 0 で判定を返し、`lens.ignored` が無い（前の周の file を置いた dir でも消える）。
+    - (c) 契約の審査の雛形と gate の雛形で組んだ prompt に「読みの道具（Read・Grep・Glob）」が在り、「tool が渡されていない」が 0 件。
+  - e2e（`crates/scribe2-boundary/tests/e2e/headless.rs`）:
+    - (d) runner と lens の子の env の自動 memory の値が 1 で、親に別の値を置いても継承されない（agent view の歯と同じ形・fixture の親の値は入力の字と別の字面）。
+    - (e) runner の argv に `--tools` が 0 件で、`--allowedTools` と渡した permission mode は今のまま。
+  - e2e（`crates/scribe2-boundary/tests/e2e/pipe/review.rs`）:
+    - (f) 契約の審査の lens の `{worktree}` が repo と違う path で、run dir の直下の `<sha>.tree`。lens の中で読んだ `git rev-parse HEAD` が審査の前の repo の HEAD と同じで、wrapper の cwd も同じ path、`review.json` の `tree` がその sha。審査の後にその dir は無く、`git worktree list` にも無い。材料の dir の名の列は今のまま。
+    - (g) 木の path に file を置いた周は、Reviewed が INCONCLUSIVE で evidence が審査の木を名指し、偽の lens の印が無い。
+    - (g2) 同じ path に前の周の登録済みの worktree を残した周は、それを外して審査が進み、偽の lens の印が在る。
+    - (g3) 木の path に file を置いたうえで、使い回せる先撃ち（置き場の `tree.sha` を `<HEAD> actual` にした置き場）を置いた周は、INCONCLUSIVE でなく使い回しの判定になる（detail が ` prelens:reused` で終わる）。
+    - (i) 先撃ちの偽 lens が写した cwd と `{worktree}` が置き場の `tree` で、そこに祖先の層の file が在る（宣言だけの祖先の `+` の file が空で在る）。
+    - (j) 撃ち中の偽 lens（印の file が出るまで待つ）の間に撃った次の周の後も、置き場の `tree` が在る。lens を終わらせた後の周の後は、置き場にも `git worktree list` にも無い。
+    - (k) Gated の祖先を着地させた後の審査は、置き場の `tree.sha` が `forecast` の周に偽 lens を撃つ（回数 2・語が無い）。`<着地後の HEAD> actual` に書き換えた周は撃たずに写し（回数 1）、`<別の sha> actual` に書き換えた周は撃つ（回数 2）。
+  - in-file（`crates/scribe2/src/headless/mod.rs` の `mod tests`）: (h) 道具の列を持つ call の argv に `--tools` と値の対がちょうど 1 つ、持たない call には `--tools` が 0 件。
+  - 直す既存の歯（同じ便・本文を直す歯には retroactive の札を付ける。札の欠けは gate の flip-check が赤で落とすので、done には載せない・器の門が測る）:
+    - lens が渡された permission mode をそのまま渡すと測る歯（`crates/scribe2-boundary/tests/e2e/headless/lens.rs` の acceptEdits と plan の対を測る 2 か所）は、dontAsk の定数を測る形に替える。fixture の helper（`crates/scribe2-boundary/tests/e2e/headless.rs` の `run_lens` と `lens_args`）は permission mode を渡したまま使える（値を使わない）ので、呼び手は直さなくてよい。
+    - in-file の `invocation_wrap_headless_build_names_the_program_and_flags`（`crates/scribe2/src/headless/mod.rs`）は子の env の列を等号で測るので、列に自動 memory の env を足す。
+    - `pipe_review_pass_spawns` の `{worktree}` の期待を審査の木に替える。
+    - 先撃ちの 2 本 `pipe_prelens_declared_ancestor_places_empty_files_in_a_temporary_tree` と `pipe_prelens_leftover_tree_and_registration_are_removed_at_the_round_head` は、木が残らないことを、lens が終わった後の次の周の後に測る。
+    - 使い回しの 2 本 `pipe_review_reuse_same_material_and_lens_copies_the_verdict_without_firing` と `pipe_review_done_items_reused_prelens_verdict_goes_through_the_same_fall` は、審査の前に置き場の `tree.sha` を `<着地後の HEAD> actual` に書き換える（層の無い予想の置き場を模す）。
+    - 外形の snapshot 4 本（lens の usage を写す `headless_external_form`・`lens_prompt_external_form`・`lens_contract_prompt_external_form`・`lens_promise_prompt_external_form`）を更新する。
+    - help の頁と生きた usage を突き合わせる歯 `cli_help_pages_match_the_live_form_and_every_subcommand` は緑のまま。
+- base で RED の理由:
+  - (a)〜(c) と (h) は、base の lens が permission mode を素通しし、記録の file を置かず、道具の列を渡さず、雛形が「tool が渡されていない」を持つので落ちる。(b) の flag の無い周は、base が `--permission-mode` を必須にして rc 1 で断るので落ちる。
+  - (d) は、base の `build` が自動 memory の env を設定しないので落ちる。
+  - (f)・(g)・(g2) は、base の `{worktree}` が repo なので落ちる（機能不在）。
+  - (i)・(j) は、base の先撃ちが repo を cwd にし、木を撃つ前に外すので落ちる。(k) は、base の使い回しが `tree.sha` を読まず `forecast` の周も写すので落ちる。
+  - (e) と (g3) は回帰の歯で、同じ file に base で赤い歯（(d) と (f)）を持つ。
+- 着地の後: PATH の binary を `swap-binary.sh` で入れ替える。
+  - 入れ替えの後の審査は、雛形が `--permission-mode acceptEdits` を持ったままでも読みだけで起き、便の記録の dir に 1 語の記録が残る。admin の道具が焼く雛形からは値を外してよい（外さなくても審査は止まらない）。
+  - 消費側の席へ、審査役が読みだけで起きることと、1 語の記録の file `lens.ignored` を 1 行で知らせる。
+  - 入れ替えの後に 1 回、実 binary の init の record（無効な API key の形）で tools と permissionMode と memory_paths の不在を測り、台帳の notes に残す。口座の設定 dir の CLAUDE.md の読み（限界の 3 項目め）も 1 回測る。
+
+## 65. runner の stdin に共通 verify の行を渡す — 契約の後ろに「## 共通 verify」節を足し、便の写しの common-verify を 4 つの穴を gate と同じ埋め方で埋めた字で並べ、雛形は commit の後に全部撃って緑にしてから終えると読む（契約表の行 bh・[ADR-0102](../../design-intent/decisions/ADR-0102-lens-reads-with-read-only-tools-and-runner-gets-the-common-verify.html) §2.2・epic `s2-07l.736.33` の打ち手 2 の 1 段目）
+
+やさしく言うと: 実装役（runner）は「契約の検証の行が緑になるまで直せ」とだけ言われていて、gate が必ず撃つ共通の検査（入口の RED・全部の test・lint・器の規則の検査・依存の監査）を知らない。そのせいで、直せば済む赤を gate で初めて見つけて便ごと捨てている。gate が撃つ行をそのまま渡し、終える前に自分で撃たせる。
+
+- 何が起きているか（main 633edd9a・verified）:
+  - runner の雛形 `crates/scribe2/src/headless/runner.txt` の 6 行目は「契約の verify 行が緑になるまで直す」だけを言う。7 行目は背景実行を残して終えることを禁じる。stdin の本文は `crates/scribe2/src/pipe/spawn.rs` の `prompt` が組み、順は 契約 → 回答 → 途中再開 → 追随で、共通 verify は載らない。
+  - gate は便の写しの `vessel.toml` の common-verify（本 repo では flip-check・workspace の nextest・clippy・xtask check・deny の 5 行）を契約の verify の前に撃つ（`crates/scribe2/src/pipe/gate/record.rs` の `record_verify`）。
+  - 共通 verify に置ける穴は 4 つ（`{base}`・`{jobs}`・`{threads}`・`{teeth}`・`crates/scribe2/src/pipe/declaration.rs` の `BASE_HOLES`）。gate は 4 つとも埋めて撃つ（`crates/scribe2/src/pipe/gate/verify.rs` の `fill_holes`・`{teeth}` は同じ file の `teeth_of`・受付を通らない周の `{jobs}` と `{threads}` は 1）。
+  - 分析（2026-09-28〜09-30・gate の FAIL 30 件）: 15 件が共通 verify の赤で、中身は xtask check の規則 7・現物の契約表の歯 5・既存の歯の pin 3（重複あり）。runner 28 本のうち xtask check を撃ったのは 5 本、workspace の nextest は 8 本。
+  - 費用（gate の common の record 570 件の実測）: 行ごとの中央値は flip-check 93 秒・nextest 35 秒・clippy 5 秒・xtask check 4 秒・deny 0 秒（p90 は 295・133・14・7・0 秒）。
+- 形:
+  1. **節を足す**: `prompt` は契約の本文の直後（回答の節の前）に「## 共通 verify」節を足す。
+     - 本文は便の写しの common-verify の各行で、4 つの穴を gate と同じ埋め方で埋めた字を 1 行 1 項目で並べる。`{base}` は便の base の sha、`{jobs}` と `{threads}` は 1（runner が撃つ行は受付を通らない・gate の受付を通らない周の値と同じ）、`{teeth}` は契約の verify 行の filter 語（gate と同じ導出）。
+     - 埋め方は `gate/verify.rs` の `fill_holes` と `teeth_of` を借りる（crate::pipe の中に見せる・2 本目を書かない）。
+     - 写しの読み手は gate と同じ `Effective::load` の 1 本。この読み手の分け方は挙動に差が出ないので、done には載せない（便の diff の設計適合は gate の審査で見る・行 al・be と同じ扱い）。
+     - 読めない周は、節の本文を「（共通 verify の写しを読めない: 理由）」の 1 行にし、runner は止めない。行が 0 本の写しは「なし」。
+  2. **雛形の 1 項目**: `runner.txt` の「守ること」に、次の旨の項目を足す。
+     - 契約の末尾の「## 共通 verify」節の行は、gate が契約の verify 行の前に撃つ行である。
+     - commit を作った後に、節の行を 1 本ずつ全部撃ち、全部緑にしてから turn を閉じる。節の行には commit を読む行があるので、commit の前に撃っても測れない。
+     - 長い行は、Bash の timeout を上限 600000 ms まで明示して撃つ。
+     - 緑にできない行が残るときは、何が赤かを最後に 1 行で述べる。
+- 触らない: gate の撃つ行と判定・契約の verify の行・runner の allowlist（共通 verify の行の頭の語は allowlist の中）・回答と途中再開と追随の節の字と順・runner の起動形。
+- 却下: runner.txt に common-verify の行を直に書く（写しは repo ごとの宣言で、雛形は器の全 repo に共通）／runner に `--vessel` の写しを読ませて自分で組ませる（穴の値を runner が知らない）／節を置かず終わりの門（§66）だけにする（門は SRS の追加 round を待つ。節は今の FR の中で効き、門が入った後も runner が 1 turn の中で直す材料になる）。
+- 限界:
+  - 撃ったかは器が測らない（撃たずに終えた runner は今と同じく gate で落ちる）。撃つ時間（中央値の和で約 137 秒）が runner の turn に足される。器が撃って赤を戻すのは §66。
+  - **Bash の timeout**: runner が撃つ行は Claude Code の Bash の道具の上で走る。既定の timeout は 120 秒で、指定できる上限は 600 秒。flip-check の p90（295 秒）と nextest の p90（133 秒）は既定を越え、上限の 600 秒を越える行も在りうる。runner.txt は背景実行を禁じるので、切られた行は赤と読まれるか、撃ち直しが重なる。雛形で上限までの指定を言う（形 2）。
+    - 論点（推奨つき）: 上限を env（Claude Code の Bash の timeout の上限の変数）で延ばすか。推奨は延ばさない。600 秒を越える行は §66 の終わりの門が器の側で撃って測る（門は Bash の道具を通らない）。延ばすと runner の turn が 1 行で 10 分を越えて止まって見え、env の名も claude の版に依る。
+  - **受付と箱の外**: gate の行は受付・遮断器・行ごとの箱を通る（並列度を受け取らない行が host の core を全部取りにいく形を塞ぐ・`gate/verify.rs` の `admitted`）。runner が撃つ行はどれも通らず、runner 自身と同じ 1 × `gate.job_memory_mb`（3072 MB）の箱の中で走る。同時に走る便は `pipe.max_live`（16）まで。
+    - 箱の中の OOM は runner の終端の Failed になる（`spawn.rs` の `box_killed`）。gate の OOM は INCONCLUSIVE（測り直せる）なので、扱いが違う。host の CPU の過剰な割り当ても起きうる（推測・測っていない）。
+    - `{jobs}` と `{threads}` を 1 で埋めるのは、この外れを並列度の側で抑えるため。受付を通る撃ち方は §66 の門が持つ。
+- 歯（接頭辞 `runner_common_section_`・crates と docs で 0 件・2026-09-30）: e2e（`crates/scribe2-boundary/tests/e2e/pipe/spawn.rs`）で runner の stdin を写す偽 runner を使う。
+  - (a) 写しの common-verify に `{base}` を含む行・`{jobs}` と `{teeth}` を含む行・穴の無い行を置き、回答済みの質問を持つ便の 2 turn 目の stdin で、節が契約の本文の後・回答の節の前に在る（`find` の順・既存の順の歯 `crates/scribe2-boundary/tests/e2e/pipe/land/follow.rs` と `crates/scribe2-boundary/tests/e2e/pipe/ratelimit.rs` と同じ測り方）。各行の穴が、記録した base と同じ sha・1・契約の verify 行の filter 語で埋まり、`{` が残らない。
+  - (b) 写しを読めなくした便の節の本文が読めない理由の 1 行で、段は Implemented まで進む。
+  - (c) common-verify が 0 行の写しの便の節の本文が「なし」の 1 行。
+  - 外形の snapshot `headless_runner_prompt_external_form` を更新する。
+- base で RED の理由: base の `prompt` は節を足さないので (a)〜(c) が落ちる（機能不在）。snapshot は雛形の項目が増えるので base で落ちる。
+
+## 66. runner の終わりに器が共通 verify と契約の検証行を撃つ — 赤なら同じ worktree で runner を起こし直して赤を渡し、上限の周まで直させてから Implemented にする（終わりの門・[ADR-0102](../../design-intent/decisions/ADR-0102-lens-reads-with-read-only-tools-and-runner-gets-the-common-verify.html) §2.3・epic `s2-07l.736.33` の打ち手 2 の 2 段目・SRS の追加 round の後の行）
+
+やさしく言うと: §65 は検査の行を runner に渡すだけで、撃ったかどうかは分からない。そこで runner が終わった直後に、器自身が gate と同じ行を撃つ。赤ければ、同じ作業場所で runner をもう一度起こし、どの行がどう赤かを渡して直させる。決めた回数を使い切るか、器が測れなかったときは、今と同じく gate へ進む。
+
+- 何が起きているか（main 633edd9a・verified）:
+  - runner の終わりの段は `crates/scribe2/src/pipe/spawn.rs` の `settle` が決める: rc 0 かつ base から先の commit が 1 本以上なら Implemented、それ以外は Failed（[FR6](../../design-intent/spec/srs.html#FR6)）。`settle` の前に、runner の pid の `SeatStopped` を記帳済み。
+  - `spawn` の呼び手は `crates/scribe2/src/pipe/follow.rs` の `spawn_turn` の 1 本だけ（起動口は spawn の 1 本・C6）。`spawn_turn` は毎回 `Precheck::measure` で Budget を作り、回答・追随・途中再開の材料を置き場から読んで `Launch` を組む。
+  - `spawn.rs` の `prepare_worktree` は、`Launch` の回答・追随・途中再開のどれかが在る周だけ、同じ worktree と記録済みの base を使う。ほかの周は HEAD から worktree を切る。
+  - 手の `pipe resume`（`crates/scribe2/src/pipe/cli/resume.rs`）の Spawned の枝は、最後の `SeatSpawned` の pid の生死だけで「隣にもう 1 つ起こさない」を判じる。
+  - gate の verify の撃ち手は `crates/scribe2/src/pipe/gate/verify.rs` の `run_checks_admitted` の 1 本（gate と着地の main の実測が共有）で、行ごとの受付・箱・遮断器を通り、record は `verify.jsonl`、赤い行の診断は stderr の診断 file に残る。
+  - Gated の FAIL は終端で、器が理由を分けて自動で戻すことは §49 が却下している（「契約の赤を無限に撃ち直す形が作れる」）。
+- 形（番号は後の行の done と 1:1 の予定）:
+  1. **撃つ時**: runner の turn が rc 0 かつ commit 1 本以上で終わった周（`settle` の Implemented の枝）だけ。停止・上限・質問・API に届かない周・Failed の周は今の枝が勝ち、門を撃たない。
+  2. **撃つ行と撃ち手**: gate の verify と同じ列（書きの範囲の検査 → 共通 verify → 契約の検証行）を、同じ撃ち手 `run_checks_admitted` で、同じ受付・箱・遮断器を通して便の worktree に撃つ。record は run dir の `end-gate.jsonl`（`verify.jsonl` と同じ行の形に周の番号を足す）に残し、赤い行の診断は gate と同じ抜き方で別の診断 file に残す。
+  3. **全行 rc 0**: Implemented（detail は緑と周の番号）。
+  4. **赤が在り、測れなかった行が無く、周が rules 行（`runner.end_gate_rounds`・推奨 2）の値に届いていない**: 段は Spawned のまま、門の赤の `RunStage` を 1 件記帳する（stage は `Spawned`・detail は `end-gate:red:<周>:<赤い行の数>`）。起こし直しは形 7 の輪が撃つ。
+  5. **周を使い切った周と、測れなかった行が在る周**（遮断器が閉じた・受付が断った・箱の中で死んだ・書きの範囲の検査が読めない）: Implemented にし、detail で赤か測れなかったかを名乗り、gate へ進む。gate は今どおり全行を撃つ（門の結果を持ち越さない）。
+  6. **周の数え方**: 便の event を畳み、stage が `Spawned` でない最新の段の記帳より後ろの、detail が `end-gate:red:` で始まる `RunStage` の件数（process の記憶に持たない・FR3）。
+  7. **輪の持ち主**: 門は `spawn.rs` の `settle` の Implemented の枝に置く（spawn の内側・起動口は 1 本のまま）。起こし直しの輪は `follow.rs` の `spawn_turn` が持つ。
+     - `spawn` が返った後、便の最新の段の記帳が門の赤なら、`Precheck::measure` で Budget を測り直し、`Launch` に門の赤の節を足して `spawn` を呼び直す。
+     - 追随の後始末（`follow.rs` の `settle`）は、輪を抜けた後に 1 回だけ撃つ。
+  8. **Launch の field**: `Launch` に門の赤の節の本文を持つ任意の field を足す。
+     - stdin は契約の後ろに「## 門の赤」節を足す。赤い行ごとに、行の字・rc・診断の末尾の抜粋を並べる。抜粋は行ごとと合計に上限を持つ。
+     - `prepare_worktree` は、回答・追随・途中再開・門の赤のどれかが在る周に、同じ worktree と記録済みの base を使う。
+     - 起こし直しの `Spawned` の detail は `base:` で始めない（途中再開の `account:<label>,resume:<理由>` と同じく、base の読み手が飛ばす形）。detail は `end-gate:<周>` を持つ。
+     - `Launch` を組み立てる場所は、main 633edd9a で `spawn_turn` の 1 か所と歯の helper。行の起票の前に、現 main で grep で数え直す。
+  9. **門の間の印**: 門を撃つ間、runner の pid は死んでいて、段は Spawned のまま。
+     - 門を撃つ process は、run dir に印 `end-gate.pid`（`<pid> <起動時刻>`・先撃ちの pid の印と同じ形）を置き、門を抜けたら外す。
+     - `pipe resume` の Spawned の枝は、runner の pid に加えてこの印の持ち主が生きている周も断る（隣に 2 本目を起こさない）。印の読みは `lock_owner` で、読めない印は生きていると読む（fail-closed）。
+     - driver の札は自動の経路だけを守るので、手の resume にはこの印が要る。
+- SRS の追加 round が要る理由: FR6 は「rc 0 かつ commit 1 本以上なら Implemented」と決めていて、門の赤で runner を起こし直す周はこの字に反する。周の上限の値は rules 行の裁定が要る（C5）。
+- 却下（[ADR-0102](../../design-intent/decisions/ADR-0102-lens-reads-with-read-only-tools-and-runner-gets-the-common-verify.html) §4）:
+  - **gate の verify の赤を自動で runner へ戻す**: §49 の却下と同じ（判定の段の後に戻すと、着地の列と終端の数えが動く）。門は判定の前で、runner の turn の延長として置く。
+  - **claude の session を `--resume` で続ける**: session の記録は口座の設定 dir に在り、起こし直しの口座が変わると続けられない。器は起動形を「stdin の契約と節」の 1 つに保つ（途中再開と同じ）。
+  - **gate が門の緑を持ち越して撃ち直さない**: 節約は common の中央値で約 137 秒で、門と gate を木の sha で結ぶ跨 process の記録が増え、gate が独立に測る性質が弱まる。着地の後に gate の時間が問題になったら測り直して決める。
+  - **§65 の節だけで止める**: runner が撃ったかは器が測らない（撃った runner は 28 本中 5 本）。
+  - **門で lens も撃つ**: 論理の誤りの審査は gate の lens の役目で、門は機械の検査だけを持つ。
+  - **輪を spawn の中に置く**: spawn は Budget を受ける側で、測り直しの手を持たない。`spawn_turn` は既に回答・追随・途中再開の材料を毎周読み直すので、同じ所に輪を置く。
+- 限界: 緑の便も門と gate で共通 verify を 2 回撃つ（中央値の和で約 137 秒・p90 で約 450 秒が足される）。runner の論理の誤り（gate の lens の FAIL の型）は塞がない。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -1785,4 +1960,26 @@ verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe
 size = "S"
 growth = ["crates/scribe2/src/pipe/land.rs:25"]
 done = "(1) 表に bead が在る便は Gated に留まり main は動かない (2) detail は held:FR84:<表がその便の bead に結ぶ裁定 id> で、同じ名指しの event は 1 件（3 周撃っても 1 件） (3) 上限の回数を越えて回しても Failed にならない (4) 表から消えた後の周に released:FR84 を 1 件記帳して着地する (5) 置き場の file が無い周は留めず、在るのに読めない周だけ held:FR84:unmeasured で留める (6) 表の読みは dispatcher.md 行 am の読みの関数を呼び、その子の file は書かない"
+
+[[contract]]
+id = "bg"
+title = "審査役の claude を読みの道具だけで起こす — lens は渡された permission mode に依らず dontAsk と --tools Read,Grep,Glob を毎回渡して値の違う周は 1 語の記録を残し、器が起こす claude は口座の自動 memory を読まず、契約の審査は審査の時点の HEAD の木を・先撃ちは予想の木を cwd に読み、予想の判定を Reviewed に写さず、雛形 2 本の「tool が渡されていない」を消す（§64）"
+req = ["FR5", "FR9", "FR49"]
+section = "64"
+write-set = ["crates/scribe2/src/headless/mod.rs", "crates/scribe2/src/headless/lens.rs", "crates/scribe2/src/headless/runner.rs", "crates/scribe2/src/headless/lens-contract.txt", "crates/scribe2/src/headless/lens.txt", "crates/scribe2/src/fleet/usage.rs", "crates/scribe2/src/pipe/review.rs", "crates/scribe2/src/pipe/dispatch/prelens.rs", "crates/scribe2/src/pipe/dispatch/floor.rs", "crates/scribe2/src/help.rs", "crates/scribe2-boundary/tests/e2e/headless.rs", "crates/scribe2-boundary/tests/e2e/headless/lens.rs", "crates/scribe2-boundary/tests/e2e/headless/runner.rs", "crates/scribe2-boundary/tests/e2e/pipe/review.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__headless__headless_external_form.snap", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__headless__lens_prompt_external_form.snap", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__headless__lens_contract_prompt_external_form.snap", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__headless__lens_promise_prompt_external_form.snap"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail lens_read_", "cargo nextest run -p scribe2 --lib --no-tests=fail lens_read_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail headless_external_form", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail headless_lens_prompt_external_form", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail headless_lens_contract_prompt_external_form", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail headless_lens_promise_prompt_external_form", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_review_pass_spawns"]
+size = "L"
+growth = ["crates/scribe2/src/pipe/review.rs:50", "crates/scribe2/src/headless/mod.rs:15", "crates/scribe2/src/headless/lens.rs:12", "crates/scribe2/src/headless/runner.rs:2", "crates/scribe2/src/fleet/usage.rs:2", "crates/scribe2/src/help.rs:2", "crates/scribe2/src/pipe/dispatch/prelens.rs:25", "crates/scribe2/src/pipe/dispatch/floor.rs:4"]
+done = "(1) lens は渡された permission mode に依らず permission mode dontAsk を毎回明示し、argv に --tools と値 Read,Grep,Glob の対をちょうど 1 つ持ち --allowedTools を持たず、--permission-mode の無い周も claude を呼んで rc 0 で判定を返す〔lens_read_ の (a)(b)〕 (2) dontAsk でない値（acceptEdits・plan）が渡された周は --contract の file の dir の lens.ignored の字が ignored: に値を続けた 1 行で、dontAsk の周と flag の無い周はその file が無い（前の周の file を置いた dir でも消える）〔(b)〕 (3) lens の usage の 1 行の --permission-mode M が任意の flag の形〔外形の snapshot headless_external_form〕 (4) runner と lens の子の env の自動 memory の値が 1 で親の値を継承せず、runner の argv は --tools を持たず permission mode と --allowedTools は今のまま〔(d)(e)(h)〕 (5) 契約の審査の lens の {worktree} と wrapper の cwd は、審査の前に読んだ repo の HEAD の sha に detach した run dir の直下の <sha>.tree で、review.json の tree がその sha、判定の後にその dir も worktree の登録も無く、材料の dir の名の列は今のまま〔(f)〕 (6) 木の path を worktree でない file が塞ぐ周は lens を撃たず INCONCLUSIVE で evidence が審査の木を名指し、同じ path に前の周の登録済みの worktree が残る周はそれを外して審査が進む〔(g)(g2)〕 (7) 使い回せる先撃ちの判定を持つ周は木を作らず、木の path が塞がれていても使い回しの判定になる〔(g3)〕 (8) 契約の審査の雛形と gate の雛形で組んだ prompt に「読みの道具（Read・Grep・Glob）」が在り「tool が渡されていない」が 0 件〔(c)・外形の snapshot lens_prompt_external_form・lens_contract_prompt_external_form・lens_promise_prompt_external_form〕 (9) 先撃ちの lens の {worktree} と cwd は置き場の tree で祖先の層の file を持ち、撃ち中の間の周は tree を外さず、lens が終わった後の周に tree も登録も無い〔(i)(j)〕 (10) Reviewed は置き場の tree.sha が <審査の木の sha> actual の先撃ちの判定だけを写し、forecast と別の sha の判定では lens を撃つ〔(k)〕"
+
+[[contract]]
+id = "bh"
+title = "runner の stdin の契約の直後に「## 共通 verify」節を足し、便の写しの common-verify を 4 つの穴（{base} は base の sha・{jobs} と {threads} は 1・{teeth} は契約の verify 行の filter 語）を gate と同じ埋め方で埋めた字で並べ、runner.txt は commit の後にその行を全部撃って緑にしてから終えると読む（§65）"
+req = ["FR4", "FR8"]
+section = "65"
+write-set = ["crates/scribe2/src/pipe/spawn.rs", "crates/scribe2/src/pipe/gate/verify.rs", "crates/scribe2/src/headless/runner.txt", "crates/scribe2-boundary/tests/e2e/pipe/spawn.rs", "crates/scribe2-boundary/tests/e2e/headless.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__headless__headless_runner_prompt_external_form.snap"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail runner_common_section_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail headless_runner_prompt_external_form"]
+size = "M"
+growth = ["crates/scribe2/src/pipe/spawn.rs:30", "crates/scribe2/src/pipe/gate/verify.rs:4"]
+done = "(1) 回答済みの質問を持つ便の runner の stdin は、契約の本文の後・回答の節の前に「## 共通 verify」節を持ち、写しの common-verify の各行を、{base} は記録した base の sha・{jobs} と {threads} は 1・{teeth} は契約の verify 行の filter 語で埋めた字で 1 行 1 項目に並べ、穴の字 { が残らない〔runner_common_section_ の (a)〕 (2) 写しを読めない便の節の本文は読めない理由の 1 行で、段は Implemented まで進む〔(b)〕 (3) common-verify が 0 行の写しの便の節の本文は なし の 1 行〔(c)〕 (4) runner.txt の守ることに、節の行は gate が契約の verify 行の前に撃つ行で、commit の後に全部撃って緑にしてから turn を閉じ、長い行は Bash の timeout を上限 600000 ms まで明示し、緑にできない行は最後に 1 行で述べる、の項目が在る〔外形の snapshot headless_runner_prompt_external_form〕"
 <!-- contracts:end -->
