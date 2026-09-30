@@ -66,7 +66,7 @@ ruled_at = "2026-09-07"
 
 | id | kind | value | enabled | 裁定（ruling / ruled_at）・design-intent 側の出所 |
 |---|---|---|---|---|
-| `R-C4-1` | CoreLines | 66000 | true | user 裁定 2026-09-29T00:59Z（A2・束 A・D・E の実装の余地・§19 行 p）・前値 60000 = user 裁定 2026-09-15T11:2xZ（A2・**一時的**な緩和・s2-07l notes）・定期 refactor は .198（その前 40000 = user 裁定 2026-09-14〔A2・s2-07l notes〕・初期値 20000 = 論点 2 / 2026-09-07・憲法 §3）・**母集団は core crate の src の本体だけ**（in-file の歯〔`#[cfg(test)]` 区間〕は数えない＝R-C4-3 が数える側・user 裁定 2026-09-15・ADR-0033・[core-boundary.md](./core-boundary.md) §2） |
+| `R-C4-1` | CoreLines | 74000 | true | user 裁定 2026-09-30T05:26Z（A2・束 E の見込みの余地・§20 行 q）・前値 66000 = user 裁定 2026-09-29T00:59Z（A2・束 A・D・E の実装の余地・§19 行 p）・前々値 60000 = user 裁定 2026-09-15T11:2xZ（A2・**一時的**な緩和・s2-07l notes）・定期 refactor は .198（その前 40000 = user 裁定 2026-09-14〔A2・s2-07l notes〕・初期値 20000 = 論点 2 / 2026-09-07・憲法 §3）・**母集団は core crate の src の本体だけ**（in-file の歯〔`#[cfg(test)]` 区間〕は数えない＝R-C4-3 が数える側・user 裁定 2026-09-15・ADR-0033・[core-boundary.md](./core-boundary.md) §2） |
 | `R-C4-2` | ModuleLines | 1500 | true | 同上 |
 | `R-C4-3` | TestSrcRatioPct | 100 | true | 同上（比 1.0 = 100%） |
 | `R-C4-4.fn-lines` | FnLines | 60 | true | 同上 |
