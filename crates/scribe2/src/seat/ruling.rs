@@ -292,20 +292,20 @@ impl Tally {
 /// doctor の突合の行（設計 §9 (4)・読むだけ・判定しない＝rc を変えない）。manifest は `rules`（`--rules` の値）か埋め込み。
 ///
 /// 裁定 0・母集団 0・skipped 0 の周は**行を出さない**（数えるものの無い置き場の doctor の外形を動かさない）。log か manifest を
-/// 読めない周は数を 0 と書かず `unreadable` を名乗る 1 行を出す。
-pub fn doctor_lines(state_dir: &Path, rules: Option<&str>) -> Vec<String> {
+/// 読めない周は数を 0 と書かず `unreadable` を名乗る 1 行を出す。`events` は呼び手が 1 回だけ読んだ log（読めない周は `None`）。
+pub fn doctor_lines(events: Option<&[Event]>, rules: Option<&str>) -> Vec<String> {
     let manifest = super::manifest_read(rules.map_or_else(Manifest::embedded, |path| Manifest::load(Path::new(path))));
-    match (store::read_all(state_dir), manifest) {
-        (Ok(events), Ok(found)) => {
-            let tally = Tally::of(&events, &found);
+    match (events, manifest) {
+        (Some(events), Ok(found)) => {
+            let tally = Tally::of(events, &found);
             if tally.is_empty() {
                 Vec::new()
             } else {
                 vec![tally.line()]
             }
         }
-        (Err(_), _) => vec!["rulings=unreadable rule-rulings=unmeasurable".to_owned()],
-        (Ok(events), Err(_)) => {
+        (None, _) => vec!["rulings=unreadable rule-rulings=unmeasurable".to_owned()],
+        (Some(events), Err(_)) => {
             let rulings = events.iter().filter(|event| event.kind == EventKind::RulingReceived).count();
             vec![format!("rulings={rulings} rule-rulings=manifest-unreadable")]
         }

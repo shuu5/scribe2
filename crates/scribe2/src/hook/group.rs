@@ -693,16 +693,43 @@ fn key_of(rows: &[Allowance], models: &BTreeSet<&str>) -> (bool, Reverse<u64>, b
 /// 群は周の頭の `head`・判じる群は `taken`）・退役中でなく・墓標でなく（[`is_dead`]・鮮度の内側の実測を持つ墓標も外す）・鮮度の内側の実測を持ち 3 窓とも閾値未満（鮮度の外の候補は `measure` で
 /// 口座ごとに 1 周 1 回測る）。予約は記録しない（周ごとに導き直す）。役割の model の行が無い周は測らずに [`Unreserved::NoRule`]。
 pub fn reserve(input: &Judge<'_>, measured: &mut BTreeSet<String>) -> Result<Option<String>, Unreserved> {
-    let read = || store::read_all(input.state_dir).map(|events| replay(&events)).map_err(|_| Unreserved::Unreadable);
-    let state = read()?;
+    reserve_with(input, measured, Reading::Log)
+}
+
+/// [`reserve`] の 2 つ目の読み（doctor の `next=`）: 呼び手の replay だけを使い、log を開かず measure の後も読み直さない。
+pub fn reserve_given(input: &Judge<'_>, measured: &mut BTreeSet<String>, state: &State) -> Result<Option<String>, Unreserved> {
+    reserve_with(input, measured, Reading::Given(state))
+}
+
+/// 群の予約と逼迫の判定の読み方（閉じた 2 値）: `Log` は置き場の log から読み measure の後に読み直す・`Given` は呼び手の replay だけ。
+#[derive(Clone, Copy)]
+enum Reading<'a> {
+    Log,
+    Given(&'a State),
+}
+
+impl<'a> Reading<'a> {
+    /// この読み方での replay（`slot` は `Log` の周が読んだ値の置き場）。
+    fn state(self, dir: &Path, slot: &'a mut Option<State>) -> Result<&'a State, Unreserved> {
+        match self {
+            Self::Given(state) => Ok(state),
+            Self::Log => store::read_all(dir).map(|events| &*slot.insert(replay(&events))).map_err(|_| Unreserved::Unreadable),
+        }
+    }
+}
+
+/// [`reserve`] と [`reserve_given`] が共有する本文。
+fn reserve_with(input: &Judge<'_>, measured: &mut BTreeSet<String>, reading: Reading<'_>) -> Result<Option<String>, Unreserved> {
+    let mut first = None;
+    let state = reading.state(input.state_dir, &mut first)?;
     let groups = input.manifest.groups();
     let upto = groups.iter().position(|found| found.name() == input.group.name()).map_or(0, |at| at.saturating_add(1));
-    let models = groups.iter().take(upto).map(|found| role_models(input.manifest, found, &state).ok_or(Unreserved::NoRule));
+    let models = groups.iter().take(upto).map(|found| role_models(input.manifest, found, state).ok_or(Unreserved::NoRule));
     let models = models.collect::<Result<Vec<_>, _>>()?;
     let mut reserved: BTreeSet<String> = BTreeSet::new();
     for (found, models) in groups.iter().zip(&models) {
         let target = found.name() == input.group.name();
-        if !target && !pressed_now(input, found, models, measured)? {
+        if !target && !pressed_now(input, found, models, measured, reading)? {
             continue;
         }
         let taken = if target { input.taken } else { input.head };
@@ -716,10 +743,11 @@ pub fn reserve(input: &Judge<'_>, measured: &mut BTreeSet<String>) -> Result<Opt
                 (input.measure)(label, false);
             }
         }
-        let state = read()?;
+        let mut again = None;
+        let state = reading.state(input.state_dir, &mut again)?;
         let mut rows = Vec::new();
         for label in open {
-            let fresh = usage::fresh_rows(input.manifest, &state, label).map_err(|_| Unreserved::NoRule)?;
+            let fresh = usage::fresh_rows(input.manifest, state, label).map_err(|_| Unreserved::NoRule)?;
             rows.extend(fresh.filter(|found| pressed(found, input.caps, models).is_none()).map(|found| (label.clone(), found)));
         }
         let pick = by_key(&rows, models).into_iter().find(|label| !reserved.contains(*label)).map(str::to_owned);
@@ -732,12 +760,13 @@ pub fn reserve(input: &Judge<'_>, measured: &mut BTreeSet<String>) -> Result<Opt
 }
 
 /// 先の群の今の口座が移動の契機を持つか（設計 §31 形 1・§38 形 6・[`move_cause`]）: 記録を読めない群・鮮度の内側の実測を持たない群
-/// は偽・墓標の今の口座は測らずに真。鮮度の外は**今の口座だけ**（墓標でなければ）を `measure` で口座ごとに 1 周 1 回測る。`models` はその群の役割の model の表示名の集合（呼び手が読む・設計 §33 形 3）。
+/// は偽・墓標の今の口座は測らずに真。鮮度の外は**今の口座だけ**（墓標でなければ）を `measure` で口座ごとに 1 周 1 回測る。`models` はその群の役割の model の表示名の集合（呼び手が読む・設計 §33 形 3）。`reading` は replay の読み方（[`Reading`]）。
 fn pressed_now(
     input: &Judge<'_>,
     found: &AccountGroup,
     models: &BTreeSet<&str>,
     measured: &mut BTreeSet<String>,
+    reading: Reading<'_>,
 ) -> Result<bool, Unreserved> {
     let Ok(current) = current_of(input.state_dir, found) else {
         return Ok(false);
@@ -746,8 +775,9 @@ fn pressed_now(
     if !dead && measured.insert(current.label.clone()) {
         (input.measure)(&current.label, false);
     }
-    let state = store::read_all(input.state_dir).map(|events| replay(&events)).map_err(|_| Unreserved::Unreadable)?;
-    let fresh = usage::fresh_rows(input.manifest, &state, &current.label).map_err(|_| Unreserved::NoRule)?;
+    let mut slot = None;
+    let state = reading.state(input.state_dir, &mut slot)?;
+    let fresh = usage::fresh_rows(input.manifest, state, &current.label).map_err(|_| Unreserved::NoRule)?;
     Ok(move_cause(dead, fresh.as_deref(), input.caps, models).is_some())
 }
 
@@ -938,8 +968,8 @@ fn measure_later(state_dir: &Path, account: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        answered, by_key, exit_due, grace_left, measure_later, move_cause, pressed, refused_mark, refused_ts, write_signal, Caps,
-        MoveCause, Pressed, Signal,
+        answered, by_key, currents_of, exit_due, grace_left, measure_later, move_cause, pressed, refused_mark, refused_ts, reserve,
+        reserve_given, write_signal, Caps, Judge, MoveCause, Pressed, Signal,
     };
     use crate::fleet::{Allowance, Measured, WindowKind};
     use std::collections::BTreeSet;
@@ -1217,6 +1247,68 @@ mod tests {
         ];
         assert_eq!(order(&rows, &["Fable", "Opus"]), ["worn", "bare", "half"]);
         assert_eq!(order(&rows, &["Fable"]), ["half", "worn", "bare"]);
+    }
+
+    /// 群の予約の 2 つの読み（fleet-event-log.md §15）: 群 1 つ（候補 l1 = 今の口座・l2）の実測の無い置き場で、measure の口が l2 の
+    /// 鮮度の内側の閾値未満の回を置き場の log へ書く。今の読みの [`reserve`] は measure の後に読み直してその回を見て l2 を予約し、
+    /// measure の前に replay した値を渡す [`reserve_given`] は log を読み直さず `None`（今の読みが先・渡された値が後の順で撃つ）。
+    #[test]
+    fn group_reserve_log_current_form_rereads_after_measure_and_given_form_does_not() {
+        use crate::fleet::store::{self, LockPolicy};
+        use crate::fleet::{replay, Event, EventKind, SCHEMA};
+        let state = crate::pipe::fixture::scratch("group-reserve-log");
+        let face = "schema = 1\n\n[[account]]\nlabel = \"l1\"\n\n[[account]]\nlabel = \"l2\"\n\n[[account-group]]\nname = \"Tier1\"\nanchors = [\"/g\"]\naccounts = [\"l1\", \"l2\"]\n";
+        assert!(std::fs::write(state.join(crate::rules::HOST_MANIFEST), face).is_ok(), "host の面を置ける");
+        let manifest = crate::rules::read(None, Some(&state)).expect("合わせた面を読める");
+        let policy = LockPolicy::embedded().expect("lock の規則を読める");
+        let measure = |label: &str, _forced: bool| {
+            for window in [WindowKind::FiveHour, WindowKind::SevenDay] {
+                let row = Measured {
+                    account: label.to_owned(),
+                    window,
+                    model: None,
+                    endpoint: "oauth-usage".to_owned(),
+                    used_pct: 10,
+                    resets_at: Some("2099-01-01T00:00:00Z".to_owned()),
+                };
+                let event = Event {
+                    schema: SCHEMA,
+                    ts: crate::fleet::cli::now_utc(),
+                    kind: EventKind::AllowanceMeasured,
+                    run: String::new(),
+                    bead: String::new(),
+                    host: "h".to_owned(),
+                    actor: EventKind::AllowanceMeasured.default_actor().to_owned(),
+                    stage: None,
+                    seat: None,
+                    pid: None,
+                    detail: None,
+                    allowance: Some(Allowance::Measured(row)),
+                    registration: None,
+                    mark: None,
+                    account: None,
+                    cost: None,
+                    rule: None,
+                    case: None,
+                };
+                let _ = store::append(&state, &event, policy);
+            }
+        };
+        let currents = currents_of(&state, &manifest);
+        let judge = Judge {
+            state_dir: &state,
+            manifest: &manifest,
+            group: &manifest.groups()[0],
+            head: &currents,
+            taken: &currents,
+            forced: &BTreeSet::new(),
+            caps: Caps::of(&manifest).expect("閾値の行を読める"),
+            measure: &measure,
+        };
+        let before = replay(&store::read_all(&state).expect("log を読める"));
+        assert_eq!(reserve(&judge, &mut BTreeSet::new()), Ok(Some("l2".to_owned())), "今の読みは measure の後の回を見て予約する");
+        assert_eq!(reserve_given(&judge, &mut BTreeSet::new(), &before), Ok(None), "渡された値の形は log を読み直さない");
+        let _ = std::fs::remove_dir_all(&state);
     }
 
     /// 鮮度の外の口座を測る子は起動の記述を通る（設計 core-boundary.md §9 行 h）: program は自分・引数は `fleet usage

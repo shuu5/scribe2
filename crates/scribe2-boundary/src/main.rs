@@ -89,15 +89,18 @@ fn render_doctor_with(rest: &[String]) -> Result<Vec<String>, ()> {
     // 骨格の 2 行の直後に雛形の pointer の 1 行（置き場を渡さない周も出す＝`init` の前に確かめられる・host-init.md §3）と、
     // 置き場を渡した周だけ `init=` の 1 行（ROOT は `--repo` か cwd・host-init.md §6）。
     let root = repo.map_or_else(|| std::env::current_dir().unwrap_or_default(), std::path::PathBuf::from);
-    lines.extend(vessel::init::doctor_lines(state_dir.map(Path::new), &root, socket));
+    // 置き場を渡した周は event log を 1 回だけ読み replay を 1 回だけ撃つ（読めない周は `None`・fleet-event-log.md §15）。
+    let events = state_dir.and_then(|dir| vessel::fleet::store::read_all(Path::new(dir)).ok());
+    let state = events.as_deref().map(vessel::fleet::replay);
+    lines.extend(vessel::init::doctor_lines(state_dir.map(Path::new), &root, socket, state.as_ref()));
     match (state_dir, socket, rules, repo) {
         (Some(dir), _, _, _) => {
-            lines.extend(vessel::seat::ruling::doctor_lines(Path::new(dir), rules));
-            lines.extend(vessel::seat::role::doctor_lines(Path::new(dir), socket, rules, units.as_ref()));
-            lines.extend(vessel::account::doctor_lines(Path::new(dir), rules));
-            lines.extend(vessel::account::consumers::doctor_lines(Path::new(dir), rules));
+            lines.extend(vessel::seat::ruling::doctor_lines(events.as_deref(), rules));
+            lines.extend(vessel::seat::role::doctor_lines(Path::new(dir), socket, rules, units.as_ref(), state.as_ref()));
+            lines.extend(vessel::account::doctor_lines(Path::new(dir), rules, state.as_ref()));
+            lines.extend(vessel::account::consumers::doctor_lines(Path::new(dir), rules, state.as_ref()));
             let program = Path::new(bin.unwrap_or(NAME));
-            lines.push(vessel::account::wire::doctor_line(Path::new(dir), rules, &render_version(), program));
+            lines.push(vessel::account::wire::doctor_line(Path::new(dir), rules, &render_version(), program, state.as_ref()));
             lines.extend(vessel::pipe::dispatch::floor::doctor_line(Path::new(dir)));
             lines.extend(vessel::seat::drafts_cap_doctor_line(Path::new(dir)));
         }

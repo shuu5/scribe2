@@ -393,7 +393,7 @@ fn render_group(state_dir: &Path, manifest: &Manifest, group: &AccountGroup, sta
         group.anchors().len(),
         render_seats(group, state),
         render_current(state_dir, group),
-        render_next(state_dir, manifest, group),
+        render_next(state_dir, manifest, group, state),
         render_refused(state_dir, group),
         render_pressure(state_dir, manifest, group, state)
     )
@@ -479,19 +479,23 @@ fn render_refused(state_dir: &Path, group: &AccountGroup) -> String {
 
 /// 群の行の `next=` の値（群の予約の 1 関数 [`crate::hook::group::reserve`] を**測らずに**呼ぶ＝鮮度の外の候補は門を通らない）:
 /// 予約の label・無ければ [`GROUP_NONE`]・記録か event log を読めなければ [`GROUP_UNREADABLE`]・閾値 / 鮮度 / 役割の model の
-/// rules 行が無ければ [`NEXT_NO_RULE`]（どれにも潰さない・C10）。
-fn render_next(state_dir: &Path, manifest: &Manifest, group: &AccountGroup) -> String {
-    use crate::hook::group::{current_of, currents_of, reserve, Caps, Judge, Unreserved};
+/// rules 行が無ければ [`NEXT_NO_RULE`]（どれにも潰さない・C10）。予約は呼び手が読んだ replay（`state`・読めない周は `None`）だけで導き、
+/// log を読み直さない（[`crate::hook::group::reserve_given`]・fleet-event-log.md §15）。
+fn render_next(state_dir: &Path, manifest: &Manifest, group: &AccountGroup, state: Option<&State>) -> String {
+    use crate::hook::group::{current_of, currents_of, reserve_given, Caps, Judge, Unreserved};
     if current_of(state_dir, group).is_err() {
         return GROUP_UNREADABLE.to_owned();
     }
     let Ok(caps) = Caps::of(manifest) else {
         return NEXT_NO_RULE.to_owned();
     };
+    let Some(state) = state else {
+        return GROUP_UNREADABLE.to_owned();
+    };
     let currents = currents_of(state_dir, manifest);
     let judge =
         Judge { state_dir, manifest, group, head: &currents, taken: &currents, forced: &BTreeSet::new(), caps, measure: &|_, _| {} };
-    match reserve(&judge, &mut BTreeSet::new()) {
+    match reserve_given(&judge, &mut BTreeSet::new(), state) {
         Ok(found) => found.unwrap_or_else(|| GROUP_NONE.to_owned()),
         Err(Unreserved::NoRule) => NEXT_NO_RULE.to_owned(),
         Err(Unreserved::Unreadable) => GROUP_UNREADABLE.to_owned(),
@@ -550,8 +554,8 @@ fn rows(state_dir: &Path, manifest: &Manifest, state: Option<&State>) -> Vec<(St
 /// （`rules` = `--rules FILE` か埋め込みの tracked の面 + `<state_dir>/host.toml`・env を読まない）の `[[account]]` の label の
 /// 辞書順に 1 行（[`rows`]）、最後に `[[account-group]]` の**宣言順**に 1 行（[`render_group`]・account-lifecycle.md §17）。
 /// 判定しない（rc を変えず行を出すだけ）。宣言を読めない周は 1 行 `accounts: manifest=unreadable`
-/// （0 行に潰さない・C11）。host の面が壊れている周も報告は止めない。
-pub fn doctor_lines(state_dir: &Path, rules: Option<&str>) -> Vec<String> {
+/// （0 行に潰さない・C11）。host の面が壊れている周も報告は止めない。`state` は呼び手が 1 回だけ読んだ event log の replay（読めない周は `None`）。
+pub fn doctor_lines(state_dir: &Path, rules: Option<&str>, state: Option<&State>) -> Vec<String> {
     let host = HostManifest::read(&crate::rules::host_manifest_path(state_dir));
     let word = host.as_str();
     let present = matches!(host, HostManifest::Present(_));
@@ -564,15 +568,14 @@ pub fn doctor_lines(state_dir: &Path, rules: Option<&str>) -> Vec<String> {
     let Ok(Ok(manifest)) = declared else {
         return vec![head, MANIFEST_UNREADABLE.to_owned()];
     };
-    let state = read_state(state_dir);
     // 面が present の周だけ末尾に便用の口座の数（account-lifecycle.md §26 形 1・absent の行は 1 字も変わらない）。
-    let head = if present { format!("{head} run-accounts={}", run_accounts(state_dir, &manifest, state.as_ref())) } else { head };
+    let head = if present { format!("{head} run-accounts={}", run_accounts(state_dir, &manifest, state)) } else { head };
     let mut lines = vec![head];
-    lines.extend(rows(state_dir, &manifest, state.as_ref()).into_iter().map(|(_, line)| line));
+    lines.extend(rows(state_dir, &manifest, state).into_iter().map(|(_, line)| line));
     // 群の行は口座の行の後ろに**宣言順**で（設計 account-lifecycle.md §17 の約束 7）。群を 1 つも宣言しない host は
     // 0 本＝既存の外形は 1 行も動かない（約束 8）。
-    lines.extend(manifest.groups().iter().map(|group| render_group(state_dir, &manifest, group, state.as_ref())));
-    lines.extend(manifest.park().map(|lot| render_park(&manifest, lot, state.as_ref())));
+    lines.extend(manifest.groups().iter().map(|group| render_group(state_dir, &manifest, group, state)));
+    lines.extend(manifest.park().map(|lot| render_park(&manifest, lot, state)));
     lines
 }
 

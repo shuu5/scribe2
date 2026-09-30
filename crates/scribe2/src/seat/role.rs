@@ -399,8 +399,7 @@ pub fn render_reconcile(state: Option<&State>, live: Option<&[String]>) -> Strin
 /// （[`crate::seat::tick::install::doctor_word`]・設計 seat-heartbeat.md §3）、flag が無く host の面に `[[tick]]` が在る周は面の値で
 /// 同じ 1 語を足す（flag が勝つ・§5 形 3）。どちらも無い周は `tick-unit=` を足さない。`paths=` の直後には常に
 /// `heartbeat=` / `tick=` の 2 項目（[`tick_words`]・§12 行 p 形 3）。
-pub fn doctor_lines(state_dir: &Path, socket: Option<&str>, rules: Option<&str>, units: Option<&Probe>) -> Vec<String> {
-    let state = store::read_all(state_dir).ok().map(|events| replay(&events));
+pub fn doctor_lines(state_dir: &Path, socket: Option<&str>, rules: Option<&str>, units: Option<&Probe>, state: Option<&State>) -> Vec<String> {
     let panes = super::tmux_stdout(socket, &["list-panes", "-a", "-F", "#{session_name}:#{window_name}"]);
     let live: Option<Vec<String>> = panes.map(|out| out.lines().map(str::to_owned).collect());
     let manifest = super::manifest_read(rules.map_or_else(Manifest::embedded, |path| Manifest::load(Path::new(path))));
@@ -425,8 +424,8 @@ pub fn doctor_lines(state_dir: &Path, socket: Option<&str>, rules: Option<&str>,
         let words = found.registrations.values().map(|latest| doctor_word(state_dir, &latest.registration.target, probe, &manifest));
         lines.into_iter().zip(words).map(|(line, word)| format!("{line} {word}")).collect()
     };
-    let mut lines = state.as_ref().map(rows).unwrap_or_default();
-    lines.push(render_reconcile(state.as_ref(), live.as_deref()));
+    let mut lines = state.map(rows).unwrap_or_default();
+    lines.push(render_reconcile(state, live.as_deref()));
     lines
 }
 

@@ -651,10 +651,10 @@ req = ["FR90", "FR91", "FR83"]
 section = "8"
 depends = ["a1"]
 write-set = ["+crates/scribe2/src/ledger/phase_ruling.rs", "crates/scribe2/src/ledger/mod.rs"]
-verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail phase_ruling_"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail phase_ruling_", "cargo run -q -p scribe2-boundary --bin scribe2 -- contracts check --repo ."]
 size = "S"
 growth = ["crates/scribe2/src/ledger/phase_ruling.rs:260", "crates/scribe2/src/ledger/mod.rs:30"]
-done = "(1) ledger の新しい module の純関数 1 本が台帳の全件・接頭辞・2 つの線・裁定 event の結びを受け、misfit の (bead id・語) の列を 1 つの閉じに 1 語まで §4 の表の順で返す (2) 閉じた問いの裁定と閉じた memo の見送りの値が解けないか古い形なら close-ruling-unresolved、種類と頭の食い違う閉じは判じない (3) 自分の notes の裁定の行（行 ak の読み）にも裁定 event にも無い裁定 id の問いが close-ruling-not-bound (4) parent-child の子の問いに結んだ裁定でない見送りが deferred-not-child-ruling (5) 線の規則は行 a1 と同じで、接頭辞が None なら空の列 歯: phase_ruling_（1 つの閉じに 1 語の 2 形・食い違う閉じの 0 件・notes と event の各経路の 0 件・discovered-from の問いと子の問いの対・線と close-check と接頭辞の前後の対・(2)〜(4) は解けて結ばれた対照の 0 件と組）が base で 0 本（rc 4・機能不在）、fixture の Issue は JSON の字から作る"
+done = "(1) ledger の新しい module の純関数 1 本が台帳の全件・接頭辞・2 つの線・裁定 event の結びを受け、misfit の (bead id・語) の列を 1 つの閉じに 1 語まで §4 の表の順で返す (2) 閉じた問いの裁定と閉じた memo の見送りの値が解けないか古い形なら close-ruling-unresolved、種類と頭の食い違う閉じは判じない (3) 自分の notes の裁定の行（行 ak の読み）にも裁定 event にも無い裁定 id の問いが close-ruling-not-bound (4) parent-child の子の問いに結んだ裁定でない見送りが deferred-not-child-ruling (5) 線の規則は行 a1 と同じで、接頭辞が None なら空の列 歯: phase_ruling_（1 つの閉じに 1 語の 2 形・食い違う閉じの 0 件・notes と event の各経路の 0 件・discovered-from の問いと子の問いの対・線と close-check と接頭辞の前後の対・(2)〜(4) は解けて結ばれた対照の 0 件と組）が base で 0 本（rc 4・機能不在） (6) 歯の fixture は Issue を literal で組まず JSON の字から issues_of で作り、verify の最終行の contracts check が便の木で findings 0"
 
 [[contract]]
 id = "b"
@@ -675,10 +675,10 @@ req = ["FR90", "FR92"]
 section = "10"
 depends = ["a"]
 write-set = ["+crates/scribe2/src/ledger/phase_main.rs", "+crates/scribe2/src/ledger/phase_main_tests.rs", "crates/scribe2/src/ledger/mod.rs"]
-verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail phase_main_"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail phase_main_", "cargo run -q -p scribe2-boundary --bin scribe2 -- contracts check --repo ."]
 size = "M"
 growth = ["crates/scribe2/src/ledger/phase_main.rs:220", "crates/scribe2/src/ledger/phase_main_tests.rs:340", "crates/scribe2/src/ledger/mod.rs:2"]
-done = "(1) ledger の新しい module の純関数 1 本が線より後の commit（呼び手が渡す）・切り替えの線の時刻・event log の run id・台帳・契約表の行・要件 id を受け、commit・row・requirement の部品と、便の run id と契約の bead id ごとの commit の結びを返す (2) 器の便の commit は部品にせず結びの run id と bead id の両方に載せ、run-trailer-unknown・source-unresolved・commit-no-trailer・commit-landed を判じる (3) row の 3 局面（.md と .toml・着地の形の閉じか main の契約の trailer で row-landed・線より前の閉じは形を問わず着地・線より後の着地でない閉じは着地でない） (4) requirement の 2 局面（requirement-unrowed の手番は seat） (5) 要件と契約表が無いか読めない形なら unmeasured の srs-unreadable と table-unreadable 歯: phase_main_（2 語に当たる commit の先の語・結びの 2 つの id・row-beaded の since・trailer の経路の row-landed と trailer の無い対・線の前後の取り下げの閉じの対・unmeasured の周の部品 0 を含む）が base で 0 本（rc 4・機能不在）、fixture の Issue は JSON の字から作る"
+done = "(1) ledger の新しい module の純関数 1 本が線より後の commit（呼び手が渡す）・切り替えの線の時刻・event log の run id・台帳・契約表の行・要件 id を受け、commit・row・requirement の部品と、便の run id と契約の bead id ごとの commit の結びを返す (2) 器の便の commit は部品にせず結びの run id と bead id の両方に載せ、run-trailer-unknown・source-unresolved・commit-no-trailer・commit-landed を判じる (3) row の 3 局面（.md と .toml・着地の形の閉じか main の契約の trailer で row-landed・線より前の閉じは形を問わず着地・線より後の着地でない閉じは着地でない） (4) requirement の 2 局面（requirement-unrowed の手番は seat） (5) 要件と契約表が無いか読めない形なら unmeasured の srs-unreadable と table-unreadable 歯: phase_main_（2 語に当たる commit の先の語・結びの 2 つの id・row-beaded の since・trailer の経路の row-landed と trailer の無い対・線の前後の取り下げの閉じの対・unmeasured の周の部品 0 を含む）が base で 0 本（rc 4・機能不在） (6) 歯の fixture は Issue を literal で組まず JSON の字から issues_of で作り、verify の最終行の contracts check が便の木で findings 0"
 
 [[contract]]
 id = "c1"

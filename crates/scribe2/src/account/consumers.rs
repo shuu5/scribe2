@@ -7,7 +7,7 @@
 //! 記録の無い導入先は `unrecorded`（`none` に潰さない）。値は全部実測か `unknown` / `unrecorded` / `undeclared`。
 
 use crate::fleet::json_tree::{self, Tree};
-use crate::fleet::{account_dir, effective_accounts, replay, store, State};
+use crate::fleet::{account_dir, effective_accounts, State};
 use crate::hook::vessel::digest::{self, PluginRecord};
 use crate::hook::vessel::{upstream, Upstream, DEFAULT_BRANCH, DEFAULT_REMOTE};
 use crate::invocation::Invocation;
@@ -370,16 +370,15 @@ fn gather(state_dir: &Path, manifest: &Manifest, state: Option<&State>) -> (BTre
 /// doctor の導入先の項目（口座の行の後ろ・導入先ごとに 1 行・path の辞書順・壊れた帳簿は末尾に 1 行ずつ）。宣言
 /// （`rules` = `--rules FILE` か埋め込み + `<state_dir>/host.toml`）を読めない周は 0 行（口座の項目が 1 行で名指す）。
 /// event log を読めない周は登録 row の側を持たず、口座は宣言の全件。判定しない（rc を変えず行を出すだけ）。
-pub fn doctor_lines(state_dir: &Path, rules: Option<&str>) -> Vec<String> {
+pub fn doctor_lines(state_dir: &Path, rules: Option<&str>, state: Option<&State>) -> Vec<String> {
     let Ok(manifest) = crate::rules::read(rules.map(Path::new), Some(state_dir)) else {
         return Vec::new();
     };
-    let state = store::read_all(state_dir).ok().map(|events| replay(&events));
     let vessel = manifest.vessel().map(|found| PathBuf::from(found.repo()));
     let head = head_of(vessel.as_deref());
     // 上流との差は終端の周の軸と**同じ 1 本**で読む（fetch を撃たない・判定しない・設計 consumer-sync.md §15 形 4）。
     let behind = upstream(vessel.as_deref(), DEFAULT_REMOTE, DEFAULT_BRANCH);
-    let (drafts, broken) = gather(state_dir, &manifest, state.as_ref());
+    let (drafts, broken) = gather(state_dir, &manifest, state);
     let mut lines: Vec<String> = drafts
         .iter()
         .map(|(path, draft)| {
