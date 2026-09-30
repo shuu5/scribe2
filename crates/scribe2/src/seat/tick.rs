@@ -31,6 +31,8 @@
 //! （`<群>.judged`）が `fleet.usage_fresh_s` より古い（か無い）周だけ、群の段と同じ lock の内側で判定の 1 本
 //! （[`crate::hook::group::judge`]）を撃って打刻を書く（[`judged`]）。判定の側は他の席に触らず、候補なしで断りの event を記した周
 //! だけ断りの 1 行を自席へ送る。判定行の末尾は `judged=<moved:<label>|stay|none|error:<語>|->`。
+//! 登録 row の口座が墓標の席は打刻と梯子を読まず群の判定へ進み、合図は `account-dead` で止める（[`tombstone`]・設計
+//! account-lifecycle.md §38 行 ad）。窓が shell の群の席は今の口座が墓標なら起こす前に群の判定を撃つ。
 //!
 //! park の区画の席も移す（設計 §21・契約表の行 z）: 群の移動の門の後に区画の判定（[`park`]・読むだけ＝計測・lock・記録の書き換え
 //! は 0）を周ごとに 1 回撃ち、移り先の周は群と同じ退避の合図と起こし直しで区画の行の口座へ移る（鍵は row の口座と登録の seq）。
@@ -144,6 +146,8 @@ pub enum NoopReason {
     GroupLocked,
     /// 停止の記録が在る（在るのに読めない周も・合図だけを止める・設計 §12 形 3・ADR-0070）。
     HeartbeatOff,
+    /// 登録 row の口座が墓標（合図を送らない・毎周 credential の file を読む・設計 account-lifecycle.md §38 形 8）。
+    AccountDead,
 }
 
 /// [`NoopReason`] の全部（宣言順・歯の母集団）。
@@ -167,6 +171,7 @@ pub const NOOP_REASONS: &[NoopReason] = &[
     NoopReason::GroupUnreadable,
     NoopReason::GroupLocked,
     NoopReason::HeartbeatOff,
+    NoopReason::AccountDead,
 ];
 
 impl NoopReason {
@@ -192,6 +197,7 @@ impl NoopReason {
             Self::GroupUnreadable => "group-unreadable",
             Self::GroupLocked => "group-locked",
             Self::HeartbeatOff => "heartbeat-off",
+            Self::AccountDead => "account-dead",
         }
     }
 }
@@ -676,7 +682,7 @@ pub fn judge(input: &Input) -> (Verdict, Judged) {
         Ok(found) => found,
         Err(stopped) => return (stopped, parked),
     };
-    let judged = if parked == Judged::Unjudged { judged(input, &found) } else { parked };
+    let judged = if parked == Judged::Unjudged { judged(input, &found.anchor, (&found.rows, found.now)) } else { parked };
     let moved = matches!(judged, Judged::Moved(_))
         .then(|| moving(input, (&found.anchor, &found.account), &found.seat, (&found.rows, found.now)))
         .flatten();
@@ -690,12 +696,12 @@ const ROW_FRESH: &str = "fleet.usage_fresh_s";
 /// と同じ lock の内側で判定の 1 本を撃ち（他の群の今の口座 ∪ 記録を読めない群の候補を移り先から外し・鮮度に依らず測る口座と既に
 /// 測った口座は空）、打刻を判定の時刻で書く。lock を取れない周は撃たない（列は今のまま）。断りの event を記した周だけ断りの 1 行を
 /// 自席へ注入の経路で送る（入力欄の門を通らない周は落とす）。
-fn judged(input: &Input, front: &Front) -> Judged {
+fn judged(input: &Input, anchor: &str, (rows, now): (&Rows, u64)) -> Judged {
     let state_dir = input.state.path.as_path();
     let Ok(manifest) = crate::rules::with_state_dir(input.manifest.clone(), Some(state_dir)) else {
         return Judged::Error(NoopReason::GroupUnreadable.as_str());
     };
-    let Some(found) = group_of(&manifest, &front.anchor) else {
+    let Some(found) = group_of(&manifest, anchor) else {
         return Judged::Unjudged;
     };
     let Ok(fresh_s) = int_row(&manifest, ROW_FRESH) else {
@@ -704,7 +710,7 @@ fn judged(input: &Input, front: &Front) -> Judged {
     let dir = host_groups_dir(state_dir);
     let stamp = group::judged_path(&dir, found.name());
     let last = fs::read_to_string(&stamp).ok().and_then(|text| text.trim().parse::<u64>().ok());
-    if last.is_some_and(|ts| !aged(ts, front.now, fresh_s)) {
+    if last.is_some_and(|ts| !aged(ts, now, fresh_s)) {
         return Judged::Unjudged;
     }
     let Ok(_lock) = Lock::take(&dir) else {
@@ -717,14 +723,14 @@ fn judged(input: &Input, front: &Front) -> Judged {
     };
     let forced = BTreeSet::new();
     let (head, taken) = (&currents, &currents);
-    let judge = group::Judge { state_dir, manifest: &manifest, group: found, head, taken, forced: &forced, caps: front.rows.caps, measure: &measure };
+    let judge = group::Judge { state_dir, manifest: &manifest, group: found, head, taken, forced: &forced, caps: rows.caps, measure: &measure };
     let judgement = group::judge(&judge, &mut BTreeSet::new());
-    let _ = fs::write(&stamp, format!("{}\n", front.now));
+    let _ = fs::write(&stamp, format!("{now}\n"));
     match judgement {
         Judgement::Moved(label) => Judged::Moved(label),
         Judgement::Stay(_) => Judged::Stay,
         Judgement::NoCandidate(Refusal::Recorded) => {
-            refused(input, found, front.rows.window_ms);
+            refused(input, found, rows.window_ms);
             Judged::None
         }
         Judgement::NoCandidate(Refusal::Repeated) => Judged::None,
@@ -790,6 +796,8 @@ struct Front {
     now: u64,
     /// 実効の値が off か unreadable（梯子の記録を読まない周・`back` の頭で止まる・設計 §22 形 4）。
     off: bool,
+    /// 登録 row の口座が墓標（打刻と梯子を読まない周・`back` が `account-dead` で止まる・設計 §38 形 7）。
+    dead: bool,
     /// 黙りの門の閾値（段を上げた周は短い・[`raise`]）。
     stale_s: u64,
     /// 合図の末尾（§16 の並列の実測と §17 の ` alarm=` の列・列が空の周は key を出さない）。
@@ -809,7 +817,7 @@ fn front(input: &Input, judged: &mut Judged) -> Result<Front, Verdict> {
         .ok_or_else(|| Verdict::noop(NoopReason::NoRow))?;
     let seat = seat_dir(&input.state.path, input.target);
     if pane_is_shell(input.socket, input.target) {
-        return Err(awake(input, (&account, role, &anchor), &seat, (&fleet, judged)));
+        return Err(awake(input, (&account, role, &anchor), &seat, (&fleet, (&rows, now), judged)));
     }
     if let Some(moved) = moving(input, (&anchor, &account), &seat, (&rows, now)) {
         return Err(moved);
@@ -817,30 +825,50 @@ fn front(input: &Input, judged: &mut Judged) -> Result<Front, Verdict> {
     if let Some(moved) = parking(input, &fleet, &seat, (&rows, now), judged) {
         return Err(moved);
     }
-    let stamps = stamps_of(&seat, rows.pace.stale_s, now, || input_gate(input).is_ok()).map_err(Verdict::noop)?;
-    let digest = stamps.last().map_or(0, |stamp| stamp.ts);
     let merged = crate::rules::with_state_dir(input.manifest.clone(), Some(&input.state.path));
     let off = beat::resolve(&seat, &anchor, merged.as_ref().map_or(beat::Table::Unreadable, beat::Table::Read)).silent();
-    let record = if off { None } else { read_ladder(&seat).map_err(Verdict::noop)? };
+    let dead = tombstone(&input.state.path, &account);
+    let (stale_s, tail) = (rows.pace.stale_s, String::new());
+    let front = Front { rows, fleet, account, role, anchor, seat, digest: 0, step: 0, pointer: Pointer::Open, now, off, dead, stale_s, tail };
+    if dead { Ok(front) } else { ladder(input, front) }
+}
+
+/// 口座 `label` の credential が墓標か（読みは [`usage::credential_of`] の 1 本・毎周読む・設計 §38 形 1）。
+fn tombstone(state_dir: &Path, label: &str) -> bool {
+    usage::credential_of(&crate::fleet::account_dir(state_dir, label)) == usage::Credential::Dead
+}
+
+/// 形 1 の 3（状態の打刻 → 梯子の記録 → digest の比較）: 墓標でない周だけ読み、`front` の打刻と梯子の欄を埋める。
+fn ladder(input: &Input, front: Front) -> Result<Front, Verdict> {
+    let (rows, seat, now) = (&front.rows, &front.seat, front.now);
+    let stamps = stamps_of(seat, rows.pace.stale_s, now, || input_gate(input).is_ok()).map_err(Verdict::noop)?;
+    let digest = stamps.last().map_or(0, |stamp| stamp.ts);
+    let record = if front.off { None } else { read_ladder(seat).map_err(Verdict::noop)? };
     let record = match record {
-        Some(found) => Some(settled(&seat, found, &stamps, digest, (now, rows.pace.stale_s))?),
+        Some(found) => Some(settled(seat, found, &stamps, digest, (now, rows.pace.stale_s))?),
         None => None,
     };
     // 並列の実測（設計 §16・列の結果なし＝`held=` を出さない・台帳も列も撃たない）で段を上げるかを決める（§17 形 2）。
     let measured = facts::facts(&input.state.path, None, now);
-    let (alarm_s, words) = idle_alarm(&rows, &measured, now);
+    let (alarm_s, words) = idle_alarm(rows, &measured, now);
     let (stale_s, step) = raise(&rows.pace, candidate(record.as_ref(), digest), alarm_s);
     let pointer = pointer_of(&rows.pace, record.map(|found| found.sent_at), step, now);
     let alarm = if words.is_empty() { String::new() } else { format!(" alarm={}", words.join(",")) };
     let tail = format!("{}{alarm}", facts::line(&measured));
-    Ok(Front { rows, fleet, account, role, anchor, seat, digest, step, pointer, now, off, stale_s, tail })
+    Ok(Front { digest, step, pointer, stale_s, tail, ..front })
 }
 
 /// 窓が shell の周（設計 §7 形 1〜3）: 打刻と梯子を読まず、同じ target に席を起こす（[`wake`]）。口座は anchor が群に属せば群の
 /// 今の口座（[`current_of`]・記録 > 種・群の段と同じ lock の内側）、属さなければ登録 row の口座（群 0 の host を含む・区画の席は区画の判定が移り先を返せばその口座・lock を取らない）。記録が
 /// 在るのに読めない周と host の面が読めない周は `group-unreadable`・lock を取れない周は `group-locked`。起こし直しは打刻の最終行の
-/// sid を `--resume` で運び初手の 1 語を積む（[`state::resume_carry`]・row の launch には載せない）。
-fn awake(input: &Input, (account, role, anchor): (&str, Role, &str), seat: &Path, (fleet, judged): (&State, &mut Judged)) -> Verdict {
+/// sid を `--resume` で運び初手の 1 語を積む（[`state::resume_carry`]・row の launch には載せない）。群の今の口座が墓標
+/// （[`tombstone`]）なら lock を取る前に群の判定（[`judged`]）を撃って `judged` に載せ、今の口座を読み直して起こす（設計 §38 形 10）。
+fn awake(
+    input: &Input,
+    (account, role, anchor): (&str, Role, &str),
+    seat: &Path,
+    (fleet, clock, judged): (&State, (&Rows, u64), &mut Judged),
+) -> Verdict {
     let Ok(manifest) = crate::rules::with_state_dir(input.manifest.clone(), Some(&input.state.path)) else {
         return Verdict::noop(NoopReason::GroupUnreadable);
     };
@@ -849,9 +877,16 @@ fn awake(input: &Input, (account, role, anchor): (&str, Role, &str), seat: &Path
         let parked = parked_by(input, &manifest, fleet, judged);
         return wake(input, &manifest, (role, anchor), parked.as_ref().map_or(account, |(_, to)| to), &carry);
     };
-    let Ok(current) = current_of(&input.state.path, group) else {
+    let Ok(mut current) = current_of(&input.state.path, group) else {
         return Verdict::noop(NoopReason::GroupUnreadable);
     };
+    if tombstone(&input.state.path, &current.label) {
+        *judged = self::judged(input, anchor, clock);
+        let Ok(moved) = current_of(&input.state.path, group) else {
+            return Verdict::noop(NoopReason::GroupUnreadable);
+        };
+        current = moved;
+    }
     let Ok(_lock) = Lock::take(&host_groups_dir(&input.state.path)) else {
         return Verdict::noop(NoopReason::GroupLocked);
     };
@@ -992,10 +1027,13 @@ fn evacuate(input: &Input, (payload, step): (&str, Move), window_ms: u64) -> (Ve
     }
 }
 
-/// 形 1 の 4〜10（停止の記録の門〔§12 形 3〕→ 黙りの門 → 上限 → 床 → 口座の門 → 入力欄の門 → 記録 → 注入）。
+/// 形 1 の 4〜10（停止の記録の門〔§12 形 3〕→ 墓標の門〔account-lifecycle.md §38 形 8〕→ 黙りの門 → 上限 → 床 → 口座の門 → 入力欄の門 → 記録 → 注入）。
 fn back(input: &Input, front: &Front) -> Result<Verdict, Verdict> {
     if front.off {
         return Err(Verdict::noop(NoopReason::HeartbeatOff));
+    }
+    if front.dead {
+        return Err(Verdict::noop(NoopReason::AccountDead));
     }
     let at = |reason| Verdict::noop_at(reason, front.pointer, front.step);
     if !aged(front.digest, front.now, front.stale_s) {
@@ -1299,14 +1337,14 @@ mod tests {
     #[test]
     fn seat_tick_reasons_are_unique_in_declaration_order() {
         assert!(is_declaration_order(NOOP_REASONS, |reason| reason as usize), "NOOP_REASONS は宣言順");
-        assert_eq!(NOOP_REASONS.len(), 19, "母集団");
+        assert_eq!(NOOP_REASONS.len(), 20, "母集団");
         let words: Vec<&str> = NOOP_REASONS.iter().map(|reason| reason.as_str()).collect();
         assert_eq!(
             words,
             [
                 "no-row", "state-missing", "state-unreadable", "busy", "state-stale", "settling", "record-unreadable",
                 "stamp-recent", "stopped", "wait", "account-pressed", "pane-missing", "input-busy", "input-unknown",
-                "input-own-queued", "record-unwritable", "group-unreadable", "group-locked", "heartbeat-off",
+                "input-own-queued", "record-unwritable", "group-unreadable", "group-locked", "heartbeat-off", "account-dead",
             ]
         );
         assert!(is_declaration_order(TICK_ERRORS, |error| error as usize), "TICK_ERRORS は宣言順");
@@ -1315,7 +1353,7 @@ mod tests {
         let mut all: Vec<&str> = words.iter().chain(errors.iter()).copied().collect();
         all.sort_unstable();
         all.dedup();
-        assert_eq!(all.len(), 22, "noop と error の語は重ならない");
+        assert_eq!(all.len(), 23, "noop と error の語は重ならない");
     }
 
     /// 判定行: 梯子の手前は `pointer=- step=-`・梯子の後は評価と段・注入した周だけ `consumed=`（届かない周は unknown:理由）。
@@ -1349,18 +1387,18 @@ mod tests {
         assert!(render("s:w", &sent(Sent::Unconfirmed("absent"))).ends_with(" consumed=unknown:absent move=- launched=-"));
     }
 
-    /// 移動の門の 2 値と停止の記録の門の 1 値（設計 §12 形 3）は `NoopReason` の宣言順の末尾に在り、既存の 16 値の語と重ならない
-    /// （母集団は 16 → 18 → 19）。移動の周の手は 5 値（猶予の合図と待ちが末尾・設計 §13 形 6）。
+    /// 移動の門の 2 値と停止の記録の門の 1 値（設計 §12 形 3）と墓標の門の 1 値（account-lifecycle.md §38 形 9）は `NoopReason` の
+    /// 宣言順の末尾に在り、既存の 16 値の語と重ならない（母集団は 16 → 18 → 19 → 20）。移動の周の手は 5 値（猶予の合図と待ちが末尾・設計 §13 形 6）。
     #[test]
     fn seat_tick_tail_reasons_are_the_last_three_in_declaration_order() {
         assert!(is_declaration_order(NOOP_REASONS, |reason| reason as usize), "NOOP_REASONS は宣言順");
         let tail: Vec<&str> = NOOP_REASONS.iter().rev().take(3).map(|reason| reason.as_str()).collect();
-        assert_eq!(tail, ["heartbeat-off", "group-locked", "group-unreadable"], "末尾の 3 値（逆順）");
+        assert_eq!(tail, ["account-dead", "heartbeat-off", "group-locked"], "末尾の 3 値（逆順）");
         let mut words: Vec<&str> = NOOP_REASONS.iter().map(|reason| reason.as_str()).collect();
         let before = words.len();
         words.sort_unstable();
         words.dedup();
-        assert_eq!((before, words.len()), (19, 19), "19 値で重複しない");
+        assert_eq!((before, words.len()), (20, 20), "20 値で重複しない");
         let moves = [Move::Launch, Move::Exit, Move::Enter, Move::Signal, Move::Wait];
         let words: Vec<&str> = moves.iter().map(|found| found.as_str()).collect();
         assert_eq!(words, ["launch", "exit", "enter", "signal", "wait"], "手の語 5 値（設計 §13 形 6・signal / wait は末尾）");

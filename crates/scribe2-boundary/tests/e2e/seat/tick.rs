@@ -748,6 +748,188 @@ fn seat_tick_judge_tombstone_earlier_group_with_a_dead_current_holds_a_reserve()
     assert_eq!(tombstone_rows(&place, RESERVE_D), 0, "墓標の D は測らない");
 }
 
+// ───────────── 管理 tick の墓標の門（account-lifecycle.md §38 行 ad・接頭辞 `seat_tick_tombstone_`） ─────────────
+//
+// §9 の判定の fixture（[`judge_place`]）の row の口座 A を墓標に書き換える。群の外の席は anchor を群の置き場の外に置く。
+
+/// 口座 `label` の credential の期限を `at_ms`（epoch ミリ秒）に書き換える（0 は墓標）。
+fn tombstone_expires(place: &MovePlace, label: &str, at_ms: u64) {
+    let file = place.state.join("accounts").join(label).join(".credentials.json");
+    fs::write(file, format!("{{\"claudeAiOauth\":{{\"accessToken\":\"tok-{label}\",\"refreshToken\":\"r\",\"expiresAt\":{at_ms}}}}}")).ok();
+}
+
+/// 席の打刻の最終行を `ago` 秒前の `(state, event)` 1 行に書き直す。
+fn tombstone_stamp(place: &MovePlace, (state, event): (&str, &str), ago: u64) {
+    let seat = seat_dir_of(&place.state, TICK_SEAT);
+    fs::write(state_file(&seat), format!("{}\n", stamp_line(state, event, unix_now() - ago, "sid-move"))).ok();
+}
+
+/// 群の外の席（row の口座 A・最終行 40 分前の Idle・入力欄が空）の置き場（A の credential は未来の期限＝墓標でない）。
+fn tombstone_silent(root: &Path) -> MovePlace {
+    let place = judge_place(root, "/elsewhere", [10, 10]);
+    tombstone_stamp(&place, ("idle", "Stop"), TICK_STALE + 600);
+    place
+}
+
+/// 窓が shell（前面 `bash`・子なしの prompt）の群の席の置き場（row の口座 A・群の記録なし・判定の打刻なし）。
+fn tombstone_shell(root: &Path) -> MovePlace {
+    let place = judge_place(root, MOVE_ANCHOR, [10, 10]);
+    fs::write(place.at(MOVE_FRONT), "bash\n").ok();
+    fs::write(place.at(TICK_PANE), PANE_SHELL_PROMPT).ok();
+    place
+}
+
+/// 撃って起こした周（`move=launch`・`judged=<judged>`）を測り、起動行（1 行）を返す。
+fn tombstone_launch(place: &MovePlace, judged: &str) -> String {
+    let out = move_run(place);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    let want = format!(
+        "decision=move target={TICK_SEAT} reason=- pointer=- step=- consumed=- move=launch launched=launch-unconfirmed judged={judged}\n"
+    );
+    assert_eq!(stdout_of(&out), want, "判定行 1 行: stderr={}", stderr_of(&out));
+    let texts = wake_texts(place);
+    assert_eq!(texts.len(), 1, "起動行 1 行: {texts:?}");
+    texts.first().cloned().unwrap_or_default()
+}
+
+/// 起動行が `has` の口座の設定 dir を持ち `lacks` の口座の設定 dir を持たない。
+fn tombstone_assert_account(place: &MovePlace, text: &str, (has, lacks): (&str, &str)) {
+    assert!(text.contains(&wake_account_dir(place, has)), "{has} の設定 dir を持つ起動行: {text}");
+    assert!(!text.contains(&wake_account_dir(place, lacks)), "{lacks} の設定 dir を持たない起動行: {text}");
+}
+
+/// 群の記録の口座（無ければ `None`）。
+fn tombstone_record(root: &Path) -> Option<String> {
+    let text = fs::read_to_string(move_groups_dir(root).join(format!("{MOVE_GROUP}.account"))).ok()?;
+    text.lines().find_map(|line| line.strip_prefix("account=").map(str::to_owned))
+}
+
+/// (j) 群の席の row の口座 A（種）が墓標・最終行が 10 秒前の Busy・窓が claude で入力欄が空 → 打刻の Busy で止まらず群の判定を撃ち
+/// `judged=moved:<B>`・同じ周に移動の門が撃たれる（猶予 0 の写しで `/exit`・base は `busy` で止まり判定を撃たない ＝ RED）。
+#[test]
+fn seat_tick_tombstone_judges_the_group_past_a_busy_stamp() {
+    let root = tmp();
+    let place = judge_place(&root, MOVE_ANCHOR, [10, 10]);
+    tombstone_put(&place, MOVE_A);
+    tombstone_stamp(&place, ("busy", "UserPromptSubmit"), 10);
+    let out = move_run(&place);
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    let want = format!("decision=move target={TICK_SEAT} reason=- pointer=- step=- consumed=false move=exit launched=- judged=moved:{MOVE_B}\n");
+    assert_eq!(stdout_of(&out), want, "stderr={}", stderr_of(&out));
+    assert_eq!(tombstone_record(&root).as_deref(), Some(MOVE_B), "群の記録は B");
+    assert_eq!(
+        move_keys(&place),
+        [format!("send-keys -t {TICK_TARGET} -l /exit"), format!("send-keys -t {TICK_TARGET} Enter")],
+        "自席への key は移動の門の /exit だけ"
+    );
+    assert!(!place.state.join("seat").join(TICK_SEAT).join("pointer-ladder").exists(), "梯子の記録は書かれない");
+}
+
+/// (k) 群の外の席の row の口座が墓標・最終行が 40 分前の Idle・入力欄が空 → `noop reason=account-dead pointer=- step=-`・0 key・梯子の
+/// 記録 0（base は合図を送る ＝ RED）。pane が `no prompt here` の周も `account-dead`（入力欄の門より前）。
+#[test]
+fn seat_tick_tombstone_sends_no_heartbeat_outside_a_group() {
+    let root = tmp();
+    let place = tombstone_silent(&root);
+    tombstone_put(&place, MOVE_A);
+    move_assert_quiet(&place, &move_noop("account-dead"));
+    fs::write(place.at(TICK_PANE), "no prompt here\n").ok();
+    move_assert_quiet(&place, &move_noop("account-dead"));
+}
+
+/// (l) 期限切れ（墓標でない）の credential は門を閉じず今どおり合図が 1 行。墓標の周の後で file を未来の期限に書き換えた次の周も
+/// 合図が 1 行（毎周読む）。
+#[test]
+fn seat_tick_tombstone_expiry_is_not_death_and_relogin_reopens() {
+    let root = tmp();
+    let place = tombstone_silent(&root);
+    tombstone_expires(&place, MOVE_A, 1000);
+    let out = move_run(&place);
+    assert_eq!(stdout_of(&out), tick_inject(0), "期限切れは門を閉じない: stderr={}", stderr_of(&out));
+    let again = tmp();
+    let place = tombstone_silent(&again);
+    tombstone_put(&place, MOVE_A);
+    move_assert_quiet(&place, &move_noop("account-dead"));
+    tombstone_expires(&place, MOVE_A, 4_102_444_800_000);
+    let out = move_run(&place);
+    assert_eq!(stdout_of(&out), tick_inject(0), "再 login の次の周は合図: stderr={}", stderr_of(&out));
+}
+
+/// (m) (k) の席に停止の記録（heartbeat off）→ `reason=heartbeat-off`（停止の記録の門が先）。
+#[test]
+fn seat_tick_tombstone_heartbeat_off_comes_first() {
+    let root = tmp();
+    let place = tombstone_silent(&root);
+    tombstone_put(&place, MOVE_A);
+    heartbeat_assert(&place.state, "off", &heartbeat_line("off", "off"));
+    move_assert_quiet(&place, &move_noop("heartbeat-off"));
+}
+
+/// (n) 記録 B を先に置き row の口座 A が墓標・pane が claude・猶予 0 → `move=exit`・`judged=-`（移動の門が墓標の読みより前・
+/// 判定は撃たない）。
+#[test]
+fn seat_tick_tombstone_move_gate_comes_first_for_a_claude_pane() {
+    let root = tmp();
+    let place = judge_place(&root, MOVE_ANCHOR, [10, 10]);
+    move_record(&root, MOVE_B);
+    tombstone_put(&place, MOVE_A);
+    let out = move_run(&place);
+    assert_eq!(stdout_of(&out), move_line("exit", "false", "-"), "stderr={}", stderr_of(&out));
+    assert_eq!(judge_calls(&place), 0, "判定は撃たない");
+}
+
+/// (o) (n) で pane が shell → `move=launch`・起動行が B の設定 dir を持ち A のを持たない・`judged=-`（群の今の口座 B は墓標でない）。
+#[test]
+fn seat_tick_tombstone_shell_pane_wakes_the_moved_record() {
+    let root = tmp();
+    let place = tombstone_shell(&root);
+    move_record(&root, MOVE_B);
+    tombstone_put(&place, MOVE_A);
+    let text = tombstone_launch(&place, "-");
+    tombstone_assert_account(&place, &text, (MOVE_B, MOVE_A));
+    assert_eq!(judge_calls(&place), 0, "判定は撃たない");
+}
+
+/// (p) row の口座 A（種・記録なし）が墓標・pane が shell → 起こす前に群の判定を撃ち `judged=moved:<B>`・起動行が B の設定 dir を持ち
+/// A のを持たない・群の記録 B・承認 event 1（base は判定を撃たず墓標の A で起こし `judged=-` ＝ RED）。
+#[test]
+fn seat_tick_tombstone_shell_pane_judges_before_waking() {
+    let root = tmp();
+    let place = tombstone_shell(&root);
+    tombstone_put(&place, MOVE_A);
+    let text = tombstone_launch(&place, &format!("moved:{MOVE_B}"));
+    tombstone_assert_account(&place, &text, (MOVE_B, MOVE_A));
+    assert_eq!(tombstone_record(&root).as_deref(), Some(MOVE_B), "群の記録は B");
+    assert_eq!(judge_events(&place, vessel::fleet::EventKind::GroupMoved), 1, "承認 event 1");
+}
+
+/// (q) (p) で B も墓標 → `judged=none`・起動行が A の設定 dir を持つ・群の記録なし・断りの event 1（墓標の口座のまま起こす）。
+#[test]
+fn seat_tick_tombstone_shell_pane_wakes_the_dead_account_without_candidates() {
+    let root = tmp();
+    let place = tombstone_shell(&root);
+    tombstone_put(&place, MOVE_A);
+    tombstone_put(&place, MOVE_B);
+    let text = tombstone_launch(&place, "none");
+    tombstone_assert_account(&place, &text, (MOVE_A, MOVE_B));
+    assert_eq!(tombstone_record(&root), None, "群の記録なし");
+    assert_eq!(judge_events(&place, vessel::fleet::EventKind::GroupMoveRefused), 1, "断りの event 1");
+}
+
+/// (r) (p) の置き場に鮮度の窓の内側の判定の打刻を先に置く → `judged=-`・起動行が A の設定 dir を持ち B のを持たない・群の記録なし
+/// （判定は窓に 1 回まで・墓標の口座のまま起こす）。
+#[test]
+fn seat_tick_tombstone_shell_pane_wakes_the_dead_account_inside_the_window() {
+    let root = tmp();
+    let place = tombstone_shell(&root);
+    tombstone_put(&place, MOVE_A);
+    fs::write(judge_stamp(&root), format!("{}\n", unix_now())).ok();
+    let text = tombstone_launch(&place, "-");
+    tombstone_assert_account(&place, &text, (MOVE_A, MOVE_B));
+    assert_eq!(tombstone_record(&root), None, "群の記録なし");
+    assert_eq!(judge_calls(&place), 0, "計測 0");
+}
+
 /// (a) 最終行 busy ∧ 前面 `bash` ∧ 群の外の row → `move=launch`・起動行 1 行が row の口座（A）を持ち、末尾に `--resume <打刻の
 /// sid> '<NAME> seat: relaunch …'`（base では `--resume <sid>` で終わる ＝ RED）。群の外の席は lock を取らない。
 #[test]
