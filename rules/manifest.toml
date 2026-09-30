@@ -546,15 +546,17 @@ ruled_at = "2026-09-12"
 # subcommand）と Edit 系（path 種別）の 2 面でこの行を読んで止める。席は orchestrator の 1 つで、src の編集
 # （edit-code）は行に無く、歯（crates/<crate>/tests/）だけが edit-tests で開く。便の起動と着地と merge（launch /
 # merge）は器の dispatcher の口ゆえ行に並ばない。便 1 本を名指す停止（stop・pipe stop --run <id>）は席が撃てる
-# （ADR-0048 §2・--all と名指しの無い停止は launch のまま）。
+# （ADR-0048 §2・--all と名指しの無い停止は launch のまま）。止まった終端を閉じる名指しの 2 形（settle・pipe land
+# --run <id> --terminal-only と pipe retire --run <id>）も席が撃てる（ADR-0097 §32・窓から外れた形は merge と launch
+# のまま）。
 
 [[rule]]
 id = "role.orchestrator"
 kind = "RoleCapabilities"
-value = ["answer", "approve", "go", "stop", "edit-contract", "edit-design-intent", "edit-design-doc", "edit-tests", "edit-outside"]
+value = ["answer", "approve", "go", "stop", "settle", "edit-contract", "edit-design-intent", "edit-design-doc", "edit-tests", "edit-outside"]
 enabled = true
-ruling = "user 2026-09-20"
-ruled_at = "2026-09-20"
+ruling = "user 2026-09-29T21:53Z"
+ruled_at = "2026-09-29"
 
 # 役割ごとの既定の model と effort（設計 seat-roles.md §19・`s2-07l.433`）。役割ごとに 2 行（id は
 # seat.model.<役割名> と seat.effort.<役割名>）で、値は claude CLI の字面（閉じた表は crates 側の

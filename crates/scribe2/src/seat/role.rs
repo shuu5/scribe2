@@ -101,7 +101,9 @@ fn table_row<T>(manifest: &Manifest, id: &str, parse: impl Fn(&str) -> Option<T>
 /// （go の記帳の口は後続・契約は台帳の write）＝行の値には在るが Bash 面では照合されない宣言だけの
 /// 権能である。`Launch` / `Merge` は器の dispatcher だけが行う操作で、席の行には並ばない（ADR-0045 §2 (1)）。
 /// `Stop` は便 1 本を名指す停止（`pipe stop --run <id>`）だけに結び、`--all` と名指しの無い停止は `Launch` の
-/// まま（ADR-0048 §2・設計 seat-roles.md §25）。
+/// まま（ADR-0048 §2・設計 seat-roles.md §25）。`Settle` は止まった終端を閉じる名指しの 2 形（終端だけの撃ち直し
+/// `pipe land --run <id> --terminal-only` と退役 `pipe retire --run <id>`）だけに結び、窓から外れた形は
+/// `Merge` / `Launch` のまま（ADR-0097・設計 seat-roles.md §32）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Capability {
     /// 回答の記帳（`pipe answer`）。
@@ -110,12 +112,14 @@ pub enum Capability {
     Approve,
     /// go の記帳（merge の許可・記帳の口は後続）。
     Go,
-    /// 便の起動（`pipe intake` / `run` / `resume` / `retire`・名指しでない `stop`）。
+    /// 便の起動（`pipe intake` / `run` / `resume`・名指しでない `retire` と `stop`）。
     Launch,
-    /// go 後の merge（`pipe land`）。
+    /// go 後の merge（`pipe land`・名指しの撃ち直しでない形）。
     Merge,
     /// 便 1 本を名指す停止（`pipe stop --run <id>`・ADR-0048）。
     Stop,
+    /// 止まった終端を閉じる名指しの 2 形（`pipe land --run <id> --terminal-only`・`pipe retire --run <id>`・ADR-0097）。
+    Settle,
     /// 契約の編集（台帳の write・path 種別を持たない）。
     EditContract,
     /// `design-intent/` の編集。
@@ -138,6 +142,7 @@ pub const CAPABILITIES: &[Capability] = &[
     Capability::Launch,
     Capability::Merge,
     Capability::Stop,
+    Capability::Settle,
     Capability::EditContract,
     Capability::EditDesignIntent,
     Capability::EditDesignDoc,
@@ -156,6 +161,7 @@ impl Capability {
             Self::Launch => "launch",
             Self::Merge => "merge",
             Self::Stop => "stop",
+            Self::Settle => "settle",
             Self::EditContract => "edit-contract",
             Self::EditDesignIntent => "edit-design-intent",
             Self::EditDesignDoc => "edit-design-doc",

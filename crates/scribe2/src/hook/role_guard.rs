@@ -157,7 +157,8 @@ impl PathKind {
 /// 権能付き subcommand の名（`<NAME>` の直後の 2 語）→ 権能。**器の口だけ**を見る（`gh pr merge` 等の他 tool は
 /// 見ない）。`Go` / `EditContract` は対応する subcommand が無い（宣言だけ・module doc）。`pipe stop` は便 1 本を
 /// 名指す形（[`named_stop`]）だけが `Stop` で、それ以外の停止は [`capabilities_of`] が `Launch` へ降ろす
-/// （ADR-0048 §2・設計 seat-roles.md §25 約束 3 / 4）。
+/// （ADR-0048 §2・設計 seat-roles.md §25 約束 3 / 4）。land と retire の行は窓の外れの権能（`Merge` / `Launch`）で、
+/// 名指しの決着の窓（[`named_settle`]）だけが `Settle` へ替わる（§32 約束 4・表は変えない）。
 pub const CAPABILITY_COMMANDS: &[(&str, Capability)] = &[
     ("pipe answer", Capability::Answer),
     ("pipe approve", Capability::Approve),
@@ -182,12 +183,31 @@ const SHELL_CHARS: &[char] = &[';', '&', '|', '(', ')', '$', '`', '\'', '"', '<'
 const STOP_HINT: &str =
     "hint=名指しの停止は --run <id> と置き場・repo・rules の値の対だけの 1 行（前にも後ろにも何も付けない）で stop の権能で通る";
 
+/// 名指しの決着の窓の表（口 → 値なしの flag とその数の下限と上限・§32 約束 4）: 撃ち直しは `--terminal-only` を
+/// ちょうど 1 回・退役は `--fold-only` を 0 か 1 回。
+const SETTLE_WINDOWS: [(&str, &str, (usize, usize)); 2] =
+    [("pipe land", "--terminal-only", (1, 1)), ("pipe retire", "--fold-only", (0, 1))];
+
+/// 名指しの決着の窓に許す値つきの flag（完全一致・`--rules` を持たない・§32 約束 3）。
+const SETTLE_FLAGS: [&str; 3] = ["--run", "--state-dir", "--repo"];
+
+/// 決着の窓が降りた周の deny 文の末尾の 1 句（通る名指しの形・設計 seat-roles.md §32）。
+const SETTLE_HINT: &str = "hint=止まった終端の撃ち直しは --run <id> --terminal-only、退役は --run <id>（畳むだけは --fold-only を 1 つ足す）に、席の置き場の --state-dir か anchor の --repo だけを足した 1 行（rules は足さず、前にも後ろにも何も付けない）で settle の権能で通る";
+
+/// 決着の窓の値が名指しかを比べる相手（hook が解いた置き場と anchor・相対の値の基準の cwd）。
+#[derive(Clone, Copy)]
+struct Place<'a> {
+    state_dir: &'a Path,
+    root: &'a Path,
+    cwd: &'a Path,
+}
+
 /// 権能付きの操作の種別（記録の `what` と deny 文に書く）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Subject {
-    /// Bash の command 行が含む権能付き subcommand の権能（宣言順・重複なし・1 行に複数在れば全部）と、その行に
-    /// 停止の窓が名指しでなく降りた occurrence が 1 つ以上在ったか（[`stop_demoted`]・§29）。
-    Capabilities(Vec<Capability>, bool),
+    /// Bash の command 行が含む権能付き subcommand の権能（宣言順・重複なし・1 行に複数在れば全部）と、その行で
+    /// 名指しの窓が名指しでなく降りた権能の列（stop と settle・宣言順・重複なし・[`scan`]・§29 / §32）。
+    Capabilities(Vec<Capability>, Vec<Capability>),
     /// Edit 系の編集先の種別。`opened` = 契約が印で開いた便の write-set の内側（AC16）。
     Path {
         /// 編集先の種別。
@@ -257,9 +277,9 @@ pub struct Seat<'a> {
 /// 撃つ・§24）。repo の外の判定は宣言に依らないので、`Outside` の周は不正の理由を載せない。
 pub fn subject(op: &Operation, state_dir: Option<&Path>) -> Option<Subject> {
     if op.tool == BASH {
-        let command = op.command.unwrap_or_default();
-        let found = capabilities_of(command);
-        return (!found.is_empty()).then(|| Subject::Capabilities(found, stop_demoted(command)));
+        let place = state_dir.zip(op.root).map(|(state_dir, root)| Place { state_dir, root, cwd: op.cwd });
+        let (found, demoted) = scan(op.command.unwrap_or_default(), place);
+        return (!found.is_empty()).then_some(Subject::Capabilities(found, demoted));
     }
     if !GUARDED.contains(&op.tool) {
         return None;
@@ -282,40 +302,55 @@ pub fn subject(op: &Operation, state_dir: Option<&Path>) -> Option<Subject> {
 /// 照合は空白区切りの token の並び `<NAME> <sub> <sub2>` で、binary の名は `NAME` そのものか path の末尾
 /// （`target/debug/<NAME>`）・写しの形（`<NAME>.bin` / `…/<NAME>-pipe.bin`・[`is_self`]）。`${..._BIN}` の展開後の字面は見ない（shell の展開を器は解かない）。
 ///
-/// 停止（[`STOP_COMMAND`]）だけは 2 語の後ろの**窓**も読む: 便 1 本を名指す形（[`named_stop`]）は `Stop`・それ以外は
-/// `Launch` へ降ろす（席の行に `launch` は無いのでどの席でも止まる・fail-closed・§25 約束 4）。
+/// 停止（[`STOP_COMMAND`]）と決着の 2 語（[`SETTLE_WINDOWS`]）だけは 2 語の後ろの**窓**も読む: 便 1 本を名指す形
+/// （[`named_stop`]）は `Stop`・それ以外は `Launch` へ降ろす（席の行に `launch` は無いのでどの席でも止まる・
+/// fail-closed・§25 約束 4）。決着の窓が名指し（[`named_settle`]）なら `Settle`・そうでなければ表の権能（land は
+/// `Merge`・retire は `Launch`）で、置き場を持たないこの読みは `--state-dir` か `--repo` を持つ決着の窓を名指しと
+/// 読まない（§32 約束 4）。
 pub fn capabilities_of(command: &str) -> Vec<Capability> {
+    scan(command, None).0
+}
+
+/// command 行が要る権能（宣言順・重複なし）と、名指しの窓が名指しでなく降りた権能の列（stop と settle・宣言順・
+/// 重複なし・§29 / §32・deny 文の句の条件）。`place` は決着の窓の値を比べる相手で、無ければ `--state-dir` か
+/// `--repo` を持つ決着の窓は名指しでない。
+///
+/// 判定は [`is_self`] と [`named_stop`] と [`named_settle`] に委ねる（規則を増やさない）。
+fn scan(command: &str, place: Option<Place>) -> (Vec<Capability>, Vec<Capability>) {
     let tokens: Vec<&str> = command.split_whitespace().collect();
-    let mut found: Vec<Capability> = Vec::new();
+    let word = |at: usize| tokens.get(at).map(|t| t.trim_end_matches(SEPARATORS));
+    let (mut found, mut demoted): (Vec<Capability>, Vec<Capability>) = (Vec::new(), Vec::new());
     for (at, token) in tokens.iter().enumerate() {
+        let (Some(sub), Some(sub2)) = (word(at.saturating_add(1)), word(at.saturating_add(2))) else {
+            continue;
+        };
         if !is_self(token) {
             continue;
         }
-        let sub = tokens.get(at.saturating_add(1)).map(|t| t.trim_end_matches(SEPARATORS));
-        let sub2 = tokens.get(at.saturating_add(2)).map(|t| t.trim_end_matches(SEPARATORS));
-        let (Some(sub), Some(sub2)) = (sub, sub2) else {
-            continue;
-        };
         let named = format!("{sub} {sub2}");
-        let demoted = named == STOP_COMMAND && !named_stop(&tokens, at);
         let listed = CAPABILITY_COMMANDS.iter().filter(|(name, _)| *name == named).map(|(_, cap)| *cap);
-        found.extend(listed.map(|cap| if demoted { Capability::Launch } else { cap }));
+        if named == STOP_COMMAND {
+            if named_stop(&tokens, at) {
+                found.push(Capability::Stop);
+            } else {
+                found.push(Capability::Launch);
+                demoted.push(Capability::Stop);
+            }
+        } else if SETTLE_WINDOWS.iter().any(|(name, ..)| *name == named) {
+            if named_settle(&tokens, at, &named, place) {
+                found.push(Capability::Settle);
+            } else {
+                found.extend(listed);
+                demoted.push(Capability::Settle);
+            }
+        } else {
+            found.extend(listed);
+        }
     }
-    crate::seat::role::CAPABILITIES.iter().copied().filter(|cap| found.contains(cap)).collect()
-}
-
-/// command 行に停止の 2 語の窓が名指しでなく降りた occurrence が 1 つ以上在ったか（§29・deny 文の 1 句の条件）。
-///
-/// [`capabilities_of`] と同じ token の並びを読み、判定は [`is_self`] と [`named_stop`] に委ねる（規則を増やさない）。
-fn stop_demoted(command: &str) -> bool {
-    let tokens: Vec<&str> = command.split_whitespace().collect();
-    let word = |at: usize| tokens.get(at).map(|t| t.trim_end_matches(SEPARATORS));
-    tokens.iter().enumerate().any(|(at, token)| {
-        let (Some(sub), Some(sub2)) = (word(at.saturating_add(1)), word(at.saturating_add(2))) else {
-            return false;
-        };
-        is_self(token) && format!("{sub} {sub2}") == STOP_COMMAND && !named_stop(&tokens, at)
-    })
+    let ordered = |list: &[Capability]| -> Vec<Capability> {
+        crate::seat::role::CAPABILITIES.iter().copied().filter(|cap| list.contains(cap)).collect()
+    };
+    (ordered(&found), ordered(&demoted))
 }
 
 /// `tokens[at]` が器の名で続く 2 語が停止の周に、その呼び出しが便 1 本を名指す停止か（§25 約束 3・allowlist）。
@@ -344,6 +379,59 @@ fn stop_window_is_named(window: &[&str]) -> bool {
         }
     }
     runs == 1
+}
+
+/// `tokens[at]` が器の名で続く 2 語が決着の口（[`SETTLE_WINDOWS`]）に、その呼び出しの窓が便 1 本を名指す決着か
+/// （§32 約束 3 / 4）。停止と同じく 2 語目に区切りが直付けの形は窓が別の command なので名指しでない。
+fn named_settle(tokens: &[&str], at: usize, named: &str, place: Option<Place>) -> bool {
+    let plain = tokens.get(at.saturating_add(2)).is_some_and(|raw| !raw.ends_with(SEPARATORS));
+    let Some((_, bare, bounds)) = SETTLE_WINDOWS.iter().find(|(name, ..)| *name == named) else {
+        return false;
+    };
+    plain && settle_window_is_named(tokens.get(at.saturating_add(3)..).unwrap_or_default(), bare, *bounds, place)
+}
+
+/// 決着の窓が名指しの形か（[`stop_window_is_named`] とは別の判定）: 窓を左から読み、値なしの flag `bare` を
+/// `bounds`（下限と上限）の回数、ほかは [`SETTLE_FLAGS`] とその値の対だけで、`--run` がちょうど 1 回、値は `-` で
+/// 始まらず [`SHELL_CHARS`] を含まず、`--state-dir` の値は hook が解いた置き場と・`--repo` の値は anchor と同じ
+/// （[`same_place`]）。`--rules`・道具の flag・`--x=<v>` の 1 語・値の欠けた対はすべて `false`。
+fn settle_window_is_named(window: &[&str], bare: &str, bounds: (usize, usize), place: Option<Place>) -> bool {
+    let (mut bares, mut runs) = (0usize, 0usize);
+    let mut rest = window;
+    while let Some((flag, tail)) = rest.split_first() {
+        if *flag == bare {
+            bares = bares.saturating_add(1);
+            rest = tail;
+            continue;
+        }
+        let Some((value, after)) = tail.split_first() else {
+            return false;
+        };
+        if !SETTLE_FLAGS.contains(flag) || value.starts_with('-') || value.contains(SHELL_CHARS) {
+            return false;
+        }
+        let placed = match *flag {
+            "--run" => {
+                runs = runs.saturating_add(1);
+                true
+            }
+            "--state-dir" => place.is_some_and(|found| same_place(value, found.state_dir, found.cwd)),
+            _ => place.is_some_and(|found| same_place(value, found.root, found.cwd)),
+        };
+        if !placed {
+            return false;
+        }
+        rest = after;
+    }
+    runs == 1 && (bounds.0..=bounds.1).contains(&bares)
+}
+
+/// 窓の値 `value` が `want`（hook が解いた置き場か anchor）と同じ場所を名指すか: どちらも `cwd` から絶対にし、
+/// `Path` の成分で比べる（symlink も存在も見ない）。`..` を持つ値は同じにならない。
+fn same_place(value: &str, want: &Path, cwd: &Path) -> bool {
+    let given = Path::new(value);
+    let absolute = |path: &Path| if path.is_absolute() { path.to_path_buf() } else { cwd.join(path) };
+    !given.components().any(|part| part == Component::ParentDir) && absolute(given) == absolute(want)
 }
 
 /// token が器の binary を名指すか: basename（最後の `/` の後ろ）が `NAME` に等しいか、`NAME` で始まりその直後の
@@ -571,14 +659,14 @@ pub fn judge(subject: &Subject, role: Role, manifest: &Manifest) -> RoleDecision
     let Some(held) = held_by(manifest, role) else {
         return RoleDecision::Deny(refused(subject, RefuseReason::NoRow(role)));
     };
-    let (missing, invalid, demoted): (Vec<Capability>, Option<Invalid>, bool) = match subject {
+    let (missing, invalid, demoted): (Vec<Capability>, Option<Invalid>, &[Capability]) = match subject {
         Subject::Capabilities(needed, demoted) => {
-            (needed.iter().copied().filter(|cap| !held.contains(cap)).collect(), None, *demoted)
+            (needed.iter().copied().filter(|cap| !held.contains(cap)).collect(), None, demoted.as_slice())
         }
-        Subject::Path { opened: true, .. } => (Vec::new(), None, false),
+        Subject::Path { opened: true, .. } => (Vec::new(), None, &[]),
         Subject::Path { kind, opened: false, invalid } => {
             let cap = kind.capability();
-            (if held.contains(&cap) { Vec::new() } else { vec![cap] }, *invalid, false)
+            (if held.contains(&cap) { Vec::new() } else { vec![cap] }, *invalid, &[])
         }
     };
     if missing.is_empty() {
@@ -609,12 +697,16 @@ fn held_by(manifest: &Manifest, role: Role) -> Option<Vec<Capability>> {
 /// 役割は orchestrator 1 つなので「他の役割が持つ」形は持たない（ADR-0045 §2 (1)）——欠けた権能は
 /// 行に無いということで、行 id を 1 本名指せば直す先が決まる。
 ///
-/// 欠けた権能に `launch` を含み、かつ停止の窓が降りた行（`demoted`）の周だけ、末尾に通る名指しの形の 1 句
-/// （[`STOP_HINT`]）を足す（§29）。条件が揃わない周の行は変わらない。
-fn denied(role: Role, missing: &[Capability], invalid: Option<Invalid>, demoted: bool) -> String {
+/// 降りた列（`demoted`）に stop を含み欠けた権能に `launch` を含む周は末尾に通る名指しの停止の 1 句
+/// （[`STOP_HINT`]・§29）を、降りた列に settle を含み欠けた権能に `merge` か `launch` を含む周は続けて名指しの決着の
+/// 1 句（[`SETTLE_HINT`]・§32）を、半角空白 1 つずつで足す。条件が揃わない周の行は変わらない。
+fn denied(role: Role, missing: &[Capability], invalid: Option<Invalid>, demoted: &[Capability]) -> String {
     let names: Vec<&str> = missing.iter().map(|cap| cap.as_str()).collect();
     let paths = invalid.map(|reason| format!(" paths={}", PathKinds::Invalid(reason).render())).unwrap_or_default();
-    let hint = if demoted && missing.contains(&Capability::Launch) { format!(" {STOP_HINT}") } else { String::new() };
+    let lacks = |caps: &[Capability]| caps.iter().any(|cap| missing.contains(cap));
+    let stop = demoted.contains(&Capability::Stop) && lacks(&[Capability::Launch]);
+    let settle = demoted.contains(&Capability::Settle) && lacks(&[Capability::Merge, Capability::Launch]);
+    let hint = format!("{}{}", if stop { format!(" {STOP_HINT}") } else { String::new() }, if settle { format!(" {SETTLE_HINT}") } else { String::new() });
     format!(
         "{NAME}: この操作（{}）は席の権能でない（rules 行 {}）＝{} 席では止める{paths}{hint}",
         names.join("+"),
