@@ -21,3 +21,4 @@ pub mod pipe;
 pub mod polarity;
 pub mod rules;
 pub mod seat;
+pub mod utterance;
