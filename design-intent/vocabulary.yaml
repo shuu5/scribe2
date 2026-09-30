@@ -706,7 +706,7 @@ terms:
   - canonical: 並列の枠
     domain: consumer
     aliases: [受付の枠]
-    definition: host 単位で便の変異検査に配る並列の枠 (SRS NFR6)。 契約を便にする前の検査の段 (受付) とは別。 置き場は state dir の親の下の host 用 dir で project をまたぎ、 枠 1 組は受付札 1 つで表す (ADR-0021 §2.3)。 器が管理する状態ではなく受付の一時的な印。 ADR-0095 の後は、 gate の共通 verify・検出線・契約の verify の全部の行が枠を取る (穴 {jobs} を持たない行は job 1 つ)。
+    definition: host 単位で便の検証の行 (変異検査と、 gate と終わりの門の共通 verify・契約の verify の行) に配る並列の枠 (SRS NFR6)。 契約を便にする前の検査の段 (受付) とは別。 置き場は state dir の親の下の host 用 dir で project をまたぎ、 枠 1 組は受付札 1 つで表す (ADR-0021 §2.3)。 器が管理する状態ではなく受付の一時的な印。 ADR-0095 の後は、 gate の共通 verify・検出線・契約の verify の全部の行が枠を取る (穴 {jobs} を持たない行は job 1 つ)。
     relationships: [受付札, 実効 jobs, 封じ込め, 検出線]
   - canonical: 受付札
     domain: consumer
@@ -763,7 +763,7 @@ terms:
     aliases: [precompact slot]
     definition: 圧縮が始まる直前に、 器が席の直前の発言を逐語で書く高々 1 つの記録 (SRS FR42・設計 docs/design/seat-roles.md)。 置き場は state dir の席ごとの置き場で repo の外。 圧縮の後の session の開始で 1 回だけ出して消す。 AI が書く散文の退避物ではない (SRS FR23 / FR66)。
     relationships: [席の指示文, state dir, hook, 開発 session]
-    flagged_ambiguities: ["枠: 圧縮の直前の 1 枠 (席の記録) と並列の枠 (変異検査の並列・SRS NFR6) と host の memory の枠 (受付) は別義"]
+    flagged_ambiguities: ["枠: 圧縮の直前の 1 枠 (席の記録) と並列の枠 (検証の行の並列・SRS NFR6) と host の memory の枠 (受付) は別義"]
   - canonical: 席の queue
     domain: consumer
     definition: 席に向けた dispatch・席宛ての質問・裁定済みの次の行動の集合として前の器が持っていた実体。 器は持たず、 続きの pointer を queue から注入しない (ADR-0045・SRS FR43)。 席の次の仕事は台帳の現在値が持ち、 管理 tick が台帳の現在地から続きを促す (ADR-0058)。
@@ -934,7 +934,7 @@ terms:
   - canonical: 受付
     domain: consumer
     aliases: [contract intake]
-    definition: 契約 file を便にする前に器が撃つ検査の段。 必須 field・verify の形・allowlist・write-set の余地と閉包 (SRS FR48)・設計 pointer (SRS FR54)・done の項目ごとの歯の欄 (SRS FR105)・code の事実の欄 (SRS FR109)・host の memory の枠・同時走行の最大値 (SRS FR68) を通った契約だけが便になる (交差の排他は SRS FR39)。 並列の枠 (SRS NFR6) とは別。 上限の読み・材料の読み・契約表の検査・宣言と上限の突き合わせ (freeze) は入口の lock の前に 1 周 1 回撃ち、 lock の中の判定はその突き合わせの結果 (有効値と名乗りの語) を借りて宣言を読み直さない (ADR-0059・accepted)。 detect か deny を名乗った宣言の契約では、 lock の前に nextest の検証行を base の木で撃って base で緑の行の本数を残し、 deny の契約は base で緑か測れない行が在れば断る (ADR-0059・accepted)。 preflight は同じ判定を便を作らずに撃つ口。
+    definition: 契約 file を便にする前に器が撃つ検査の段。 必須 field・verify の形・allowlist・write-set の余地と閉包 (SRS FR48)・設計 pointer (SRS FR54)・done の項目ごとの歯の欄 (SRS FR105)・code の事実の欄 (SRS FR109)・host の memory の枠・同時走行の最大値 (SRS FR68) を通った契約だけが便になる (交差の排他は SRS FR39)。 vessel 宣言が ruling-check を true で持つ repo では裁定 id の実在 (SRS FR83) も確かめる。 並列の枠 (SRS NFR6) とは別。 上限の読み・材料の読み・契約表の検査・宣言と上限の突き合わせ (freeze) は入口の lock の前に 1 周 1 回撃ち、 lock の中の判定はその突き合わせの結果 (有効値と名乗りの語) を借りて宣言を読み直さない (ADR-0059・accepted)。 detect か deny を名乗った宣言の契約では、 lock の前に nextest の検証行を base の木で撃って base で緑の行の本数を残し、 deny の契約は base で緑か測れない行が在れば断る (ADR-0059・accepted)。 preflight は同じ判定を便を作らずに撃つ口。
     relationships: [dispatcher, 並列の枠, write-set, 便, base で緑の行, 名乗りの語, 契約の検証行, 受付の断りの event]
   - canonical: priority
     domain: consumer
@@ -975,7 +975,7 @@ terms:
     aliases: [live run cap]
     definition: host で同時に走る live な便の本数の上限。 値は rules 行 pipe.max_live が持ち (user 裁定 id 付き・憲法 C5)、 受付が便を作る前に live な便を数えて値以上の周は typed に断り、 dispatcher はその契約を列に留めて次の契機で再判定する。 走行中の便には効かない。 env・launcher の変数・host の宣言 file には置かない (ADR-0035)。 並列の枠 (変異検査の並列度・memory の枠) とは別。
     relationships: [live な便, 受付, dispatcher, 起動の列, rules 行, 並列の枠]
-    flagged_ambiguities: ["上限: 同時走行の最大値 (便の本数・pipe.max_live) と並列の枠 (変異検査の並列度・memory) と上限停止 (口座の使用上限) は別義"]
+    flagged_ambiguities: ["上限: 同時走行の最大値 (便の本数・pipe.max_live) と並列の枠 (検証の行の並列度・memory) と上限停止 (口座の使用上限) は別義"]
   - canonical: 着地の列
     domain: consumer
     aliases: [landing queue]
