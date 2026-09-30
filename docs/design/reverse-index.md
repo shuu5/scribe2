@@ -61,7 +61,7 @@
      - `index-scip`: 1 行ごとに SCIP の file を 1 つ出す command。穴は `{tree}`（索引を作る commit の木）と `{out}`（出力の file の path・器が行ごとに別の名を渡す）。言語ごとに 1 行（Rust は rust-analyzer・TypeScript は scip-typescript・Python は scip-python か ty-scip）。
      - `index-roles`: 1 行ごとに構文の役（§5）の一致を stdout に 1 行 1 件の JSON で出す command。穴は `{tree}`。本 repo は ast-grep の scan に役の規則の file を渡す 1 行。
      - どちらも無い repo は索引を持たない（今の振る舞いのまま・§7 の検査は全部撃たない）。片方だけの宣言は読めない宣言として断る。
-  2. **撃つ所**: 索引を作る commit を detach した木（行の審査の行 a が共用にする木の実体化と片付け・[row-review.md](./row-review.md) §3 形 5）の上で、宣言の順に撃つ。撃つ子は封じ込めの箱の中で走り（NFR6）、受付札を 1 枚（jobs 1・job の memory は `gate.job_memory_mb`）取る。時間の上限は rules 行 `index.timeout_s`。
+  2. **撃つ所**: 索引を作る commit を detach した木（行の審査の行 a が共用にする木の実体化と片付け・[row-review.md](./row-review.md) §3 形 5）の上で、cwd をその木にして宣言の順に撃つ（rustup の proxy は cwd の toolchain の宣言で版を選ぶ）。撃つ子は封じ込めの箱の中で走り（NFR6）、受付札を 1 枚（jobs 1・job の memory は `gate.job_memory_mb`）取る。時間の上限は rules 行 `index.timeout_s`。
   3. **読む**: 器は外の道具の library を持たない（NFR3）。
      - SCIP は protobuf の wire の形のうち、document の path・occurrence の範囲と symbol と役の印と囲む範囲・symbol の情報の名と種類だけを std の読み手で読む。外の crate の symbol と関数の中の local は落とす。
      - 役の一致は JSON の 1 行ずつを、入れ子の JSON の読み手（account の私有の `read_tree` を crate の中へ開いて共用する・2 本目の JSON の読み手を作らない）で読む。
@@ -70,7 +70,7 @@
   6. **鍵と置き場**: 索引の鍵は、code の木の鍵（[row-review.md](./row-review.md) §5・契約表を持つ file を除いた全 file の path と blob の hash の列の digest・役の規則の file も tracked なのでここに入る）と、宣言 2 key の字を並べた字の FNV-1a 64（16 桁）。置き場は state dir の pipe の下の index の dir で、鍵ごとに平らな表と記録（1 行 1 key の `key=value`・1 行目は `schema=1`・key は key・commit・宣言の digest・rows・files・secs・at・stderr の末尾）。撃ち中の印は `<鍵>.pid`（`<pid> <起動時刻>`・`lock_owner` で生死を判じる）。外の道具の出力（SCIP の file と一致の列）は平らにした後に外す。
   7. **量の上限と消し**: 置き場の合計が rules 行 `index.cap_mb` を越える周は、撃ち中の鍵と、anchor の HEAD の鍵を除いて、記録の at の古い順に上限まで消す（[ADR-0101](../../design-intent/decisions/ADR-0101-seat-draft-build-dirs-are-capped-per-state-dir-and-shed-oldest-first.html) と同じ形・消すのは器が作った導出値だけ）。撃つのは組み立てが表を書いた直後の同じ印の中（2 つ目の掃除を足さない）。rules 行 2 本を読めない周は組み立てを撃たず、索引は無いと読む（既定値に倒さない）。
   8. **無い・壊れた・古い**: 表が無い・schema が違う・読めない鍵は「無い」と読む。組み立てが rc 0 でない・時間切れ・出力を読めない周は、記録に失敗の語（`failed:<rc|timeout|unreadable>`）を書き、表は置かない。索引は導出値で、真実の置き場にしない（憲法 C3・C10）。
-- 口: `<NAME> pipe index build --repo R --state-dir S [--ref <sha>]`（既定は HEAD・同じ鍵の表が在れば撃たない・撃ち中の印の持ち主が生きていれば待つ）と `<NAME> pipe index show --repo R --state-dir S [--ref <sha>] (--row <doc>#<行 id> | --item <path>)…`（§6 の表を出す）。どちらも前面で最後まで走る。結果の 1 行は `[INDEX] key=<16 桁> rows=<n> files=<m> built|cached|failed:<語> secs=<s>`。
+- 口: `<NAME> pipe index build --repo R --state-dir S [--ref <sha>]`（既定は HEAD・同じ鍵の表が在れば撃たない・撃ち中の印の持ち主が生きていれば、唯一の待機の実装の pid の終わりの完了の値で待つ〔C3.4・今の値で名が合わなければ値を 1 つ足すかを行 a で決める〕）と `<NAME> pipe index show --repo R --state-dir S [--ref <sha>] (--row <doc>#<行 id> | --item <path>)…`（§6 の表を出す）。どちらも前面で最後まで走る。結果の 1 行は `[INDEX] key=<16 桁> rows=<n> files=<m> built|cached|failed:<語> secs=<s>`。
 
 ## 5. 構文の役（閉じた語の列・言語は宣言の側）
 
@@ -106,7 +106,7 @@
 - 表の検査の 1 行の判定（`generated` → 表の検査・行の審査の機械の検査〔[row-review.md](./row-review.md) §3 形 4〕・`pipe preflight`・受付）に、索引を持つ周だけ効く判定を 1 つ足す。CI（索引を持たない）は今の字面の閉包のまま。
 - 索引の閉包: touches の型の項目ごとに、字面の閉包の形 1（literal）・形 2（match の arm）・形 6（variant 構築）と同じ形を、字の代わりに索引の解いた symbol で数える（literal の役・pattern の役・variant の symbol の本体の参照）。形を足さず、別名・`Self`・glob の越しの site が加わるだけ（字面の閉包の上に足す）。形 3・形 4 と fn 形は字面のまま。
 - 索引の閉包が名指し、字面の閉包が名指さない file が write-set に無ければ、字面の閉包と同じ write-set-incomplete の finding を、在り処に `(索引)` を添えて出す（確定の finding・行の審査では lens を撃たずに FAIL）。
-- 索引の状態ごとの扱い: 撃ち中 → 起動の列はその周の候補を受付の理由 `index-building` で待たせる。失敗・宣言が無い → 字面の閉包だけで判じ、受付の 1 行と `dispatch ls` の行に ` index=unavailable` を足す（止めない、縮退する・[gate-cost.md](./gate-cost.md) §2 と同じ極性）。
+- 索引の状態ごとの扱い（索引を要するのは touches の型か欄 `code-facts` を持つ行だけで、どちらも持たない行はどの状態でも今のまま）: 撃ち中 → 起動の列はその候補を受付の理由 `index-building` で待たせ、手の受付は同じ名で断る（便を作らない）。失敗・宣言が無い → 字面の閉包だけで判じ、受付の 1 行と `dispatch ls` の行に ` index=unavailable` を足す（止めない、縮退する・[gate-cost.md](./gate-cost.md) §2 と同じ極性）。
 - 新しい `+` の file が将来名指す型は、受付の時点で file が無いので測れない。代わりに、runner の stdin に「ほかの行の touches の型」の節を足す: 行の write-set の外の行（open な行と着地済みの行）の touches の型の列と、その行 id（契約表から導く・索引は要らない）。runner がその型を字面の閉包の形で名指すと、終わりの門（[pipeline.md](./pipeline.md) §66）と gate の共通の検証の閉包の歯が落とす。節は、落ちる前に runner に知らせる形である。
 
 ### (c) code の事実の欄と、起動の列の測り直し（打ち手 6）
@@ -118,7 +118,7 @@
   - 起動の列: 候補ごとの `generated` が同じ判定を HEAD の索引で撃つ。違えば受付の理由 `code-facts` で待つ（FR68 の閉じた理由の「受付」の内・新しい待ちの理由を足さない）。
 - 断りの 1 行は、要素・宣言の値・実測の値・増えた site と消えた site（先頭 3 つと残りの件数）・母集団（`text=`）を名指す。
 - 索引を測れない周（撃ち中・失敗・宣言が無い）に欄を持つ行は、受付の理由 `code-facts-unmeasured` で待つ（名乗った事実を測らずに通さない・C10）。欄の無い行は (b) の扱いのまま。
-- 起動の列の周は、HEAD の鍵の表が無く撃ち中の印も無いとき、`pipe index build` を 1 本、裏で起こして待たない（先撃ちの `fire` と同じ起こし方・撃ち中の印が 2 本目を止める）。
+- 起動の列の周は、索引を要する候補が在り、HEAD の鍵の表が無く撃ち中の印も無いとき、`pipe index build` を 1 本、裏で起こして待たない（`spawn_self` と同じ起こし方・撃ち中の印が 2 本目を止める）。
 
 ## 8. 読み手の先行と入れ替えの順
 
@@ -163,11 +163,11 @@ SRS の追加 round（FR48・FR55・FR47 の字の直しと新しい要件 3 つ
 | 行 | 中身 | 順（台帳の blocks） | write-set の見込み |
 |---|---|---|---|
 | 0 | 欄 `code-facts` と宣言の key `index-scip`・`index-roles` を読むだけ（読んで捨てる・効かせない） | round を待たない（FR47 の「少なくとも」の内）。done の歯の欄の読むだけの行と束ねてよい | `crates/scribe2/src/pipe/table.rs`・`contracts/schema.toml`・`crates/scribe2/src/pipe/declaration/optional_keys.rs`・`crates/scribe2/src/pipe/declaration.rs`・e2e の既存の歯の file |
-| a | 索引の組み立て（§4 形 1〜8・`pipe index build`・SCIP と役の一致の読み手・結び・平らな表の書き手と読み手・撃ち中の印・量の上限・rules 行 2 本） | 0 と、行の審査の行 a（共用の木）の後 | pipe の新しい子 module（`+`）・`crates/scribe2/src/pipe/cli.rs`・`crates/scribe2/src/pipe/cli/args.rs`・`crates/scribe2/src/help.rs`・`crates/scribe2/src/account/mod.rs`（JSON の読み手を開く）・`crates/scribe2/src/rules/mod.rs`・`rules/manifest.toml`・e2e の新しい歯の file と SCIP と一致の fixture・rules と pipe の外形 snapshot |
+| a | 索引の組み立て（§4 形 1〜8・`pipe index build`・SCIP と役の一致の読み手・結び・平らな表の書き手と読み手・撃ち中の印・量の上限・rules 行 2 本） | 0 と、行の審査の行 a（共用の木）の後。touches は rules の kind の閉じた型（行 2 本の kind） | pipe の新しい子 module（`+`）・`crates/scribe2/src/pipe/cli.rs`・`crates/scribe2/src/pipe/cli/args.rs`・`crates/scribe2/src/help.rs`・`crates/scribe2/src/account/mod.rs`（JSON の読み手を開く）・`crates/scribe2/src/rules/mod.rs`・`rules/manifest.toml`・e2e の新しい歯の file と SCIP と一致の fixture・rules と pipe の外形 snapshot |
 | b | 本 repo の宣言（`.vessel.toml` の 2 key・`rust-toolchain.toml` の component・役の規則の file） | a の後・A3 の裁定の後 | `.vessel.toml`・`rust-toolchain.toml`・役の規則の file（`+`） |
 | c | 逆引きの表（§6・`pipe index show`）と材料 index.txt（§7 (a)） | a の後 | 行 a の子 module・`crates/scribe2/src/pipe/review.rs`・`crates/scribe2/src/headless/lens.rs`（雛形の 1 文）・e2e の審査の歯の file・headless の外形 snapshot |
-| d | 受付の索引の閉包（§7 (b)）と索引の状態の扱い | c の後 | `crates/scribe2/src/pipe/closure.rs`・`crates/scribe2/src/pipe/cli/intake.rs`・表の検査の file・`crates/scribe2/src/pipe/dispatch/candidates.rs`・e2e の受付と起動の列の歯の file |
-| e | 欄 `code-facts` の照らしと測り（§7 (c)・表の検査・行の審査・受付・起動の列・裏の組み立ての起こし） | d の後 | 表の検査の file・`crates/scribe2/src/pipe/cli/intake.rs`・`crates/scribe2/src/pipe/dispatch/candidates.rs`・`crates/scribe2/src/pipe/dispatch.rs`（裏の起こし）・e2e の歯の file |
+| d | 受付の索引の閉包（§7 (b)）と索引の状態の扱い | a の後（c と同じ file を触るなら受付の交差が順を決める）。断りの名を足す閉じた型を touches に持ち、その閉包の file を起票の前に数える | `crates/scribe2/src/pipe/closure.rs`・`crates/scribe2/src/pipe/cli/intake.rs`・表の検査の file・`crates/scribe2/src/pipe/dispatch/candidates.rs`・e2e の受付と起動の列の歯の file |
+| e | 欄 `code-facts` の照らしと測り（§7 (c)・表の検査・行の審査・受付・起動の列・裏の組み立ての起こし） | d の後。表の検査の断りの閉じた型を touches に持ち、その閉包の file を起票の前に数える | 表の検査の file・`crates/scribe2/src/pipe/cli/intake.rs`・`crates/scribe2/src/pipe/dispatch/candidates.rs`・`crates/scribe2/src/pipe/dispatch.rs`（裏の起こし）・e2e の歯の file |
 | f | runner の stdin の「ほかの行の touches の型」の節（§7 (b) の後半） | pipeline.md の行 bh（共通 verify の節）の後 | `crates/scribe2/src/pipe/spawn.rs`・`crates/scribe2/src/headless/runner.rs`・e2e の spawn の歯の file・runner の外形 snapshot |
 | g | 外の材料の `.rs` の item と要約の塊を外す（§9） | c と pipeline.md の行 bg（読みの道具）の後 | `crates/scribe2/src/pipe/review/outside.rs`・その子 module・e2e の審査の歯の file |
 | h（条件つき） | 試し撃ち（§11） | 分類にその型が出た時だけ | 別の設計で決める |
