@@ -1105,6 +1105,71 @@ fn publish_scan_a_neighbor_only_in_the_park_lot_is_named_by_its_push() {
     clean(&[&repo, &bare, &state, &nest]);
 }
 
+/// 隣 nbr-alpha（公開先の main を fetch した上に隣だけの commit・secret/plan.md・notes.md・台帳 id s2-nbr.1〜7 を足したもの）と、server に main が在る公開先の
+/// 面で、隣だけの 7 桁の object id・隣の tracked path・隣の台帳 id の push と、台帳 id を 6 つ持つ push（件数 6 と先頭 5 件）・隣と同じ path の file を足す push の
+/// 5 本は rc 2（hit=identifier:<件数>:<先頭 5 件>・row は publish の行）で記録 1 行ずつ。公開先の先端と共有する object id・公開先にも在る path・6 桁の
+/// object id・`/` を含まない隣の path の push の 4 本は rc 0・記録なし（§22 行 n6・AC50 (a)(b)(g)）。
+#[test]
+fn publish_material_neighbor_object_ids_paths_and_ledger_ids_are_denied_and_the_shared_ones_pass() {
+    use vessel::hook::host_guard::publish::Reason;
+    let ((repo, bare), (state, nest)) = (github_repo(), (tmp(), tmp()));
+    fs::create_dir_all(repo.join("shared")).expect("dir を作れる");
+    fs::write(repo.join("shared/lib.rs"), "x\n").expect("file を書ける");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "shared"]);
+    git(&bare, &["symbolic-ref", "HEAD", "refs/heads/main"]);
+    git(&repo, &["push", "-q", &bare.display().to_string(), "main"]);
+    let alpha = named_anchor(&nest, "nbr-alpha");
+    for (key, value) in [("user.name", "e2e"), ("user.email", "e2e@example.invalid")] {
+        git(&alpha, &["config", key, value]);
+    }
+    git(&alpha, &["fetch", "-q", &repo.display().to_string(), "main"]);
+    git(&alpha, &["checkout", "-q", "-B", "main", "FETCH_HEAD"]);
+    fs::create_dir_all(alpha.join("secret")).expect("dir を作れる");
+    for file in ["secret/plan.md", "notes.md"] {
+        fs::write(alpha.join(file), "y\n").expect("file を書ける");
+    }
+    fs::create_dir_all(alpha.join(".beads")).expect("dir を作れる");
+    let ids: String = (1..=7).map(|at| format!("{{\"id\":\"s2-nbr.{at}\"}}\n")).collect();
+    fs::write(alpha.join(".beads/issues.jsonl"), ids).expect("台帳を書ける");
+    git(&alpha, &["add", "secret/plan.md", "notes.md"]);
+    git(&alpha, &["commit", "-q", "-m", "private"]);
+    let (shared, private) = (git(&repo, &["rev-parse", "main"]), git(&alpha, &["rev-parse", "HEAD"]));
+    put_anchors(&state, &[&alpha]);
+    let rules = publish_rules(&state, true, 6000);
+    fs::write(&rules, fs::read_to_string(&rules).expect("rules を読める").replace("form repo-name", "form object-id\", \"form tracked-path\", \"form ledger-id")).expect("形を足せる");
+    let fakes = Fakes::new(GH_BY_NAME, &bare);
+    let mut at = 0;
+    let mut push = |text: &str| {
+        at += 1;
+        fakes.run(&state, &["--rules", &rules], &bash_payload(&repo, &leak_push(&repo, (at, "message", text))))
+    };
+    let six = "s2-nbr.1 s2-nbr.2 s2-nbr.3 s2-nbr.4 s2-nbr.5 s2-nbr.6";
+    let denied = [
+        (format!("see {}", &private[..7]), format!("1:object-id={}@nbr-alpha", &private[..7])), ("see secret/plan.md".to_owned(), "1:tracked-path=secret/plan.md@nbr-alpha".to_owned()),
+        ("see s2-nbr.7".to_owned(), "1:ledger-id=s2-nbr.7@nbr-alpha".to_owned()),
+        (six.to_owned(), "6:ledger-id=s2-nbr.1@nbr-alpha,ledger-id=s2-nbr.2@nbr-alpha,ledger-id=s2-nbr.3@nbr-alpha,ledger-id=s2-nbr.4@nbr-alpha,ledger-id=s2-nbr.5@nbr-alpha".to_owned()),
+    ];
+    let want = |word: &str| format!("{NAME}: host-guard deny kind=publish hit=identifier:{word} row=host_guard.publish ruling=r — {}", Reason::Identifier.parts().1);
+    for (text, word) in denied {
+        assert_eq!(assert_host_guard_deny(&push(&text), &text).trim_end(), want(&word), "{text}");
+    }
+    git(&repo, &["switch", "-q", "-C", "add-plan", "main"]);
+    fs::create_dir_all(repo.join("secret")).expect("dir を作れる");
+    fs::write(repo.join("secret/plan.md"), "z\n").expect("file を書ける");
+    git(&repo, &["add", "secret/plan.md"]);
+    git(&repo, &["commit", "-q", "-m", "x"]);
+    let out = fakes.run(&state, &["--rules", &rules], &bash_payload(&repo, "git push origin add-plan"));
+    assert_eq!(assert_host_guard_deny(&out, "隣と同じ path の file").trim_end(), want("1:tracked-path=secret/plan.md@nbr-alpha"));
+    assert_eq!(host_guard_records(&state).len(), 5, "断りは記録 1 行ずつ");
+    git(&repo, &["switch", "-q", "main"]);
+    for text in [format!("see {}", &shared[..7]), "see shared/lib.rs".to_owned(), format!("see {}", &private[..6]), "see notes.md".to_owned()] {
+        assert_silent(&push(&text), &text);
+    }
+    assert_eq!(host_guard_records(&state).len(), 5, "通す周は記録を残さない");
+    clean(&[&repo, &bare, &state, &nest]);
+}
+
 /// 埋め込みの manifest と群を宣言しない置き場（host.toml 無し）で、AC50 (e) の解けない形 4 つは rc 2・stdout 0 byte・stderr 1 行
 /// （hit=unresolved:<形の語>・unresolved の経路）と記録 1 行ずつ、区切りを引用した heredoc の本文の gh pr create は rc 0・記録なし
 /// （§17 行 k2・偽の gh / git の回数は数えない）。

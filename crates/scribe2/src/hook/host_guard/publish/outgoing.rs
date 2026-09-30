@@ -13,7 +13,7 @@ use super::visibility::{gh_target, repo_of, sight, Sighted};
 use super::{Marked, Published, Reason, Sort};
 use crate::hook::host_guard::{Scene, PUBLISH_ROW};
 use crate::rules::manifest::Manifest;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 /// 上限の行が無い周の経路（行 id ごと・行を置く文）。
@@ -269,7 +269,7 @@ fn outgoing(blocks: &[Block], tips: &[(String, String)]) -> Vec<Ref> {
 }
 
 /// server の先端（`ls-remote` の `<sha>\t<名>` の行）。
-fn server_tips(output: &str) -> Vec<(String, String)> {
+pub(super) fn server_tips(output: &str) -> Vec<(String, String)> {
     output.lines().filter_map(|line| line.split_once('\t')).map(|(sha, name)| (name.to_owned(), sha.to_owned())).collect()
 }
 
@@ -377,7 +377,7 @@ pub(super) fn stage(found: &[Marked], manifest: &Manifest, scene: &Scene, ruling
     let deadline_ruling = manifest.get(DEADLINE_ROW).map_or_else(|| "-".to_owned(), |row| row.ruling.clone());
     let bound = Bound { deadline: Instant::now() + Duration::from_millis(deadline), limit };
     match walk(found, &Walk { scene, bound, ruling, deadline_ruling }) {
-        Ok(read) => check(&read, manifest, scene.host, ruling),
+        Ok(read) => check(&read, manifest, (scene, bound), ruling),
         Err(stop) => Some(stop),
     }
 }
@@ -403,40 +403,47 @@ pub struct Found {
     pub sighted: Sighted,
     /// 対象の owner/name（git は push の URL ごと・gh は 1 つ・導けないものは `None`）。
     pub own: Vec<Option<String>>,
+    /// segment の dir（材料の子を撃つ場）。
+    pub dir: PathBuf,
+    /// git の segment の行き先の解き（gh の segment は `None`）。
+    pub push: Option<Push>,
 }
 
-/// 解きの止まりを段の断りにする。
-fn denial(halt: Halt, plan: &Walk) -> Denial {
+/// 解きの止まりを段の断りにする（`ruling` は publish の行・`deadline_ruling` は締め切りの行の裁定 id）。
+pub(super) fn denial(halt: Halt, ruling: &str, deadline_ruling: &str) -> Denial {
     match halt {
-        Halt::Gap(gap) => Denial { reason: Reason::Unresolved, word: gap.as_str().to_owned(), row: PUBLISH_ROW, ruling: plan.ruling.to_owned(), route: None },
-        Halt::Deadline => Denial { reason: Reason::Deadline, word: DEADLINE_ROW.to_owned(), row: DEADLINE_ROW, ruling: plan.deadline_ruling.clone(), route: None },
+        Halt::Gap(gap) => Denial { reason: Reason::Unresolved, word: gap.as_str().to_owned(), row: PUBLISH_ROW, ruling: ruling.to_owned(), route: None },
+        Halt::Deadline => Denial { reason: Reason::Deadline, word: DEADLINE_ROW.to_owned(), row: DEADLINE_ROW, ruling: deadline_ruling.to_owned(), route: None },
     }
 }
 
 /// 公開の segment 1 つを解いて字面を読み、対象の owner/name（git は push の URL ごと・gh は 1 つ）を導く（設計 §22 行 n3 形 6・行 n4 形 3〜4）:
 /// git push は行き先の解きの後に字面を読み（解けない行き先の周は log を撃たない）、gh は本文と本文の file を読んだ後に対象を導く。
-fn segment(seg: &Published, plan: &Walk, budget: &mut Budget) -> Result<(Texts, Vec<Option<String>>), Halt> {
-    let (program, bound) = (plan.scene.git, plan.bound);
+/// 返りの `sighted` は空（可視性は [`walk`] が最後に 1 回問う）。
+fn segment(seg: &Published, plan: &Walk, budget: &mut Budget) -> Result<Found, Halt> {
+    let (program, bound, dir) = (plan.scene.git, plan.bound, seg.dir.clone());
+    let sighted = Sighted::default();
     match seg.sort {
         Sort::Git => {
             let push = solve(seg, &seg.dir, program, bound)?;
-            Ok((of_push(seg, &push, program, bound, budget)?, push.urls.iter().map(|url| repo_of(url)).collect()))
+            let own = push.urls.iter().map(|url| repo_of(url)).collect();
+            Ok(Found { texts: of_push(seg, &push, program, bound, budget)?, sighted, own, dir, push: Some(push) })
         }
-        Sort::Gh | Sort::Api => Ok((of_gh(seg, budget)?, vec![gh_target(seg, plan.scene.gh, bound)?])),
+        Sort::Gh | Sort::Api => Ok(Found { texts: of_gh(seg, budget)?, sighted, own: vec![gh_target(seg, plan.scene.gh, bound)?], dir, push: None }),
     }
 }
 
 /// 公開の segment を command 行の順に解いて字面を読み、最後に可視性を 1 回問う（設計 §22 行 n4）。字面は出ていく字面の合計を 1 つの計数で数える。
 fn walk(found: &[Marked], plan: &Walk) -> Result<Vec<Found>, Denial> {
     let mut budget = Budget { left: plan.bound.limit };
-    let (mut texts, mut targets) = (Vec::new(), Vec::new());
+    let stop = |halt| denial(halt, plan.ruling, &plan.deadline_ruling);
+    let mut reads = Vec::new();
     for seg in found.iter().filter_map(|seg| seg.read.as_ref()) {
-        let (read, target) = segment(seg, plan, &mut budget).map_err(|halt| denial(halt, plan))?;
-        texts.push(read);
-        targets.push(target);
+        reads.push(segment(seg, plan, &mut budget).map_err(stop)?);
     }
-    let sighted = sight(&targets, plan.scene, plan.bound).map_err(|halt| denial(halt, plan))?;
-    Ok(texts.into_iter().zip(sighted).zip(targets).map(|((texts, sighted), own)| Found { texts, sighted, own }).collect())
+    let targets: Vec<Vec<Option<String>>> = reads.iter().map(|read| read.own.clone()).collect();
+    let sighted = sight(&targets, plan.scene, plan.bound).map_err(stop)?;
+    Ok(reads.into_iter().zip(sighted).map(|(read, sighted)| Found { sighted, ..read }).collect())
 }
 
 #[cfg(test)]
@@ -631,7 +638,7 @@ mod tests {
         };
         let answer = r#"{"data":{"r0":{"visibility":"PUBLIC"},"r1":{"visibility":"PRIVATE"}}}"#;
         assert_eq!((sighted(&Manifest::default(), answer), count()), (vec![Sighted::default()], 0), "群の無い面");
-        let neighbor = Anchor { label: "a-other".to_owned(), repo: Some("acme/other".to_owned()) };
+        let neighbor = Anchor { label: "a-other".to_owned(), repo: Some("acme/other".to_owned()), dir: other.clone() };
         assert_eq!((sighted(&face(&[&other]), answer), count()), (vec![Sighted { neighbors: vec![neighbor], ..Sighted::default() }], 1), "対象の外の anchor");
         assert_eq!((sighted(&face(&[&mine]), answer), count()), (vec![Sighted::default()], 0), "anchor が対象だけ");
         let private = r#"{"data":{"r0":{"visibility":"PRIVATE"},"r1":{"visibility":"PRIVATE"}}}"#;
