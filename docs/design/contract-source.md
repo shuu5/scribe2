@@ -2096,3 +2096,70 @@ done = "(1) 終端だけの撃ち直しは、記録の sha が anchor の refs/h
   - 変わらない既存の歯（本文は変えない）: `pipe_replay_tip_` の 3 本（記録の sha が先端の祖先の周は探し直しで記録の sha そのものが見つかり reason が今と同じ・trailer を持たない兄弟の commit の周は見つからず close しない・main を読めない周は探す前に断る）と `pipe_land_already_landed_` の 3 本（既着地の便の読み）。
   - 変異の A/B（判定の順・条件 1 つに歯 1 本）: 探し直しを撃たない（base の形）→ (a) の 2 周目と (b) が落ちる。字面の等しい行を確かめず `--grep` の当たりをそのまま使う → (a) の 1 周目が落ちる（close する）。見つけた sha でなく記録の sha と先端を比べて側を選ぶ（常に `PushTip::Behind`）→ (b) が落ちる（reason に `tip=`）。close の reason に記録の sha を書く → (a) の 2 周目と (b) が落ちる。`PushTip::Behind` の周に見つけた sha で CI を照合する → (a) の 2 周目が落ちる（argv が写しの sha）。祖先の周にも見つけた sha で記録を上書きする形の誤り（等しい周も探して記録を捨てる）は、祖先の周に見つかるのが記録の sha そのものなので観測が変わらない（歯を置かない）。
   - base で RED の理由: 2 本とも base に在る helper だけを使い、overlay の上で compile は通って assert が落ちる（機能不在）。base は (a) の 2 周目と (b) で記録の sha が先端の祖先でないので CI を撃たず close しない（rc 1・`terminal=ci:unmeasurable`）。(a) の 1 周目は base でも同じ観測（1 本の fn の中の対）。
+
+## 66. 契約表の行が done の番号つき項目ごとの歯を欄 done-teeth で名指し、器が表の検査・受付・gate の段 ① で対応を照らす — 欄の要否は vessel 宣言の任意 key teeth-check と base からの差分で決め、着地済みの行は書き換えない（epic `s2-07l.736.33` の打ち手 5・[ADR-0104](../../design-intent/decisions/ADR-0104-contract-rows-name-a-tooth-for-each-numbered-done-item.html)・行は SRS の round の後に起こす）
+
+やさしく言うと: 契約の done は「(1) … (2) …」と約束を並べるが、どの約束をどの歯（落ちる test）が測るかは § の散文の中にしか無く、器は数えられない。そのため「約束の 1 つに歯が無い」行がそのまま列に入り、便の中の審査で初めて落ちていた（2026-09-28〜30 の FAIL 76 件のうち 14 件）。行に「約束の番号 → 歯の名」の欄を持たせ、器が 3 か所で数える。設計の PR の CI と受付では「全部の約束に歯が在り、その歯を検証行が撃つか」、gate では「名指した歯を runner が本当に書いたか」。歯がその約束を本当に測るかの判断だけは審査の係に残し、係には行が名指した歯の中から選ばせる。
+
+- 出所（2026-09-30・verified）:
+  - FAIL の根の分析（epic `s2-07l.736.33`・便 165 本の FAIL / INCONCLUSIVE 76 件）で、「done の項目に落ちる歯が無い・歯が判別しない」型が 24 件。24 件のうち 14 件は、少なくとも 1 つの項目に歯が 1 本も無い形（歯は在るが検証行に入っていない形を含む）で、10 件は、歯は在るが fixture が約束を外した実装を落とさない形（空虚）だった。
+  - 14 件はどれも、項目と歯の 1 対 1 の表を書けば起票の前に見える型で、審査の lens が材料だけで名指していた。行 bs（§64）はその表を lens に書かせたが、表を作るのは lens なので、器は表の歯が在るか・検証行が撃つかを照らせない（§64 の限界）。照らす所も便の中（列の後）である。
+- 現物（main eb377622・verified）:
+  - 行の欄の正本は `crates/scribe2/src/pipe/table.rs` の FIELDS（18 欄）で、done は 1 本の text である。約束の行の欄 PROMISE_FIELDS は、約束 1 つごとに歯の完全名の列 teeth を必須で持つ（ADR-0051 §4）。手書きの行には、項目と歯の対応の欄が無い。欄の生成物は `contracts/schema.toml`。
+  - done の項目の読み手は `crates/scribe2/src/pipe/review/items.rs` の done_items の 1 本（§64 形 1・審査の材料の書き手と判定の読みが呼ぶ）。
+  - 歯の名の読み手は `crates/scribe2/src/pipe/closure/derive.rs` に在る: nextest の行の読み（nextest_read・crate・scope・filter 語・一致の型）、歯の区間の `#[test]` の直下の fn の名の列（test_fns）、fn の本文（fn_body）。verify 行の形の読み手は nextest の形の 1 つだけで、他の形の行は歯の置き場を持たない。
+  - 表の検査は `crates/scribe2/src/pipe/table/check.rs` の judge_repo。CI の job に contracts check の step は無く、nextest の job の歯 contract_closure_ext_real_table_has_zero_findings が現物の表を base 無しで撃つ。base を持つ job は PR のときだけの flip-check の job で、rules-diff と deps-delta が同じ base で相乗りしている。
+  - 契約 file の key は閉じた列（`crates/scribe2/src/pipe/contract.rs` の REQUIRED と OPTIONAL・未知の key は行番号つきで断る）。runner の prompt の穴 {contract} は契約 file の字をそのまま運ぶ。lens の穴 {contract} は `crates/scribe2/src/headless/lens.rs` の state が goal / done / verify / write-set だけを組んだ字である。
+  - gate の段 ① は `crates/scribe2/src/pipe/gate/verify.rs` の check_write_set で、§58 が write-set の + / ~ と約束の行の名を便の木で測る。land の主実測も同じ段を撃つ。
+  - 母集団（2026-09-30 の main）: 設計 doc の契約表の行 361（Promised の行を含む）のうち、番号つきの done を持つ行 244・持たない行 117（§64 形 1 の数え方）。open な契約の bead は 20。
+- 形:
+  1. **欄 done-teeth**（任意・文字列の列）: 要素 1 つが「<番号>:<歯>」。番号は done の項目の番号（ASCII の数字）で、区切りは最初の `:` だけ。歯は次の 3 形のどれか 1 つ。
+     - 名の歯 `<名>`: その行の検証行の読み手が選ぶ歯の名。nextest の形では、歯の区間の `#[test]` の直下の fn の名（識別子 1 つ・module の path は書かない）。
+     - 既存の歯 `=<名>`: base に在り、この便が本文を変えない歯（約束のうち「変えない」を測る既存の歯）。印の字は write-set の `=`（置き場だけ）と揃える。
+     - 検証行の番号の歯 `@<k>`: その行の検証行の k 本目（1 から数える）の全体。読み手の無い形の行（nextest でない test の撃ち手・folio validate・xtask check など）で測る項目は、この形で書く。
+     - 1 つの項目に歯を 2 本以上名指すときは、同じ番号の要素を並べる。例: `done-teeth = ["1:done_teeth_table_reads_items", "2:=done_teeth_table_keeps_rows", "2:done_teeth_table_keeps_order", "3:@4"]`。
+     - Promised の行は欄を持てない（約束の行の teeth が同じ対応を持つ）。
+  2. **表の検査と受付の照らし**（欄を持つ行だけ）: 表の検査・受付・preflight が同じ 1 関数を撃ち、外れを全件・行番号つきで名指す。
+     - (a) 形: 要素ごとに番号と歯の形が読めること。空・空白を含む・`,` を含む・3 形の外の要素と、同じ要素の重なりを名指す。
+     - (b) 覆い: 番号の集合が 1〜K（K は done_items の項目の数）とちょうど等しいこと。無い番号・余る番号を名指す。K が 0 の行（番号つきの項目を持たない done）は欄を持てない。
+     - (c) 検証行: `@<k>` の k が 1〜（検証行の本数）に在ること。
+     - (d) 選ばれる: 名の歯と既存の歯は、その行の検証行のうち読み手の在る形の行の 1 本が選ぶこと。nextest の形では、行の一致の型で名が filter 語に当たること（teeth_places と同じ述語）。どの行にも選ばれない名は「撃たれない歯」として名指す（歯は在るが検証行に入っていない型）。
+     - (e) 在りか: 既存の歯は、選ぶ行の crate と scope の base の歯の区間にちょうど 1 つ在ること（0 は「無い歯」・2 以上は「2 か所の名」）。名の歯は、base に在れば同じく 1 つに定まること（2 以上を名指す）。base に無い名の歯は新しい歯で、置き場は今の tests 欄と write-set の `+` が持つ。
+     - 断りは表の検査の findings の 1 種（`done-teeth`）で、要素と理由を持つ。受付は同じ判定で便を作らない。
+  3. **要否**（vessel 宣言の任意 key teeth-check・無ければ false）:
+     - teeth-check が true の repo で `contracts check` に `--base <sha>` を渡した周だけ、base の同じ doc の同じ id の行と比べて欄の値の sha が違う行（足された行を含む）のうち Promised でない行に、(i) 番号つきの項目を 1 つ以上持つこと (ii) 欄 done-teeth を持つことを求める。外れは `done-unnumbered`・`done-teeth-missing` の 2 語で名指す。
+     - 比べる sha は行の欄の値の sha（着地の列の settled の鍵と同じ読み）で、§ の散文だけの変更は行を変えない。
+     - `--base` の無い周（CI の nextest の歯・push(main)・受付・preflight）は要否を求めず、在る欄だけを形 2 で照らす。受付と preflight は、欄の有無を 1 語（`done-teeth=present` か `done-teeth=absent`）で行に出す（母集団を見せる）。
+     - CI は、PR のときだけの flip-check の job に `contracts check --repo . --base <PR の base>` の step を 1 本足す（器の binary を PR の木で組んで撃つ）。本 repo の `.vessel.toml` に teeth-check = true を書く。
+     - 着地済みの行と、欄を持たないまま変わらない行には求めない（書き換えさせない）。
+  4. **写し**: 受付の生成は欄を契約 file の任意 key `done-teeth` へ写す（REQUIRED の外・OPTIONAL に 1 つ足す）。runner は契約 file の字で名を読む。lens の state は done の次の行に `done-teeth:` と要素の列を足す（契約の審査の lens と gate の lens の両方が読む）。
+  5. **gate の段 ①**（契約 file が欄を持つ便だけ）: §58 と同じ段・同じ rc と stderr の見出しの形で測り、新しい段も理由の型も作らない。
+     - 名の歯は、便の HEAD の木で、選ぶ行の crate と scope の歯の区間にちょうど 1 つ在り、base に無いか本文（fn_body の字）が base と違うこと。無い歯を「書かれていない歯」、本文が base と同じ歯を「動いていない歯」として名指す（動かさない既存の歯は `=` で書く）。
+     - 既存の歯は、便の HEAD の木にちょうど 1 つ在ること（消した歯・2 か所に増えた歯を名指す）。
+     - 検証行の番号の歯は段 ① では測らない（検証行の実走〔FR8〕が測る）。
+     - 読み手の母集団の file（今は .rs）を 1 本も持たない木では名を測らず、stderr に 1 行残す（§58 形 2 と同じ）。
+     - land の主実測も同じ段で撃つ。列の着地は、列の便の欄の和を列の base で測る。
+  6. **審査の lens の表**（§64）: 欄を持つ行の材料 items.txt は、項目の行ごとに宣言の歯を「(n) <本文> ／ 歯: <その番号の歯の列>」と添える。表の指示は「<歯> はその項目の宣言の歯のうち、約束を外した実装で落ちる 1 本・無ければ `-`」と告げる。器は、表の歯が宣言の歯（`=` の有無は問わない）の外なら形の合わない項目に数える（§64 形 4 の INCONCLUSIVE）。欄の無い行の材料と判定は §64 のまま。
+  7. **変えないもの**: done の 1 本の text と番号の書き方・§64 の項目の読み（done_items）と倒しの 4 形・約束の行の欄と導出・write-set の導出と歯の置き場の門（§3・§20・§28）・flip-check の判定（FR7・歯ごとの base の RED は測らない）・検出線の {teeth} の穴の導出。
+- 消すもの（C17.2）: 起票の前に席が done の項目と歯を 1 対 1 に書き出して監査する手順（散文の規律で、器は回ったかを知らない）と、§64 の表で lens が歯の名を材料の外から書く余地。どちらも欄と形 2・形 6 が置き換える。
+- 足す語（vocabulary・ADR-0104）: done の項目・歯の対応の欄・既存の歯の印・検証行の番号の歯。
+- 行の割り（SRS の round の後に起こす・3 行とも欄 done-teeth を自分で持つ）:
+  - 行 (1) 欄と照らし: 形 1・形 2・形 4（FIELDS に 1 欄・`contracts/schema.toml`・表の読み・照らしの 1 関数・受付と preflight の 1 語・契約 file の OPTIONAL・lens の state）。
+  - 行 (2) 要否: 形 3（宣言の任意 key・`contracts check --base`・変わった行の読み・CI の step・`.vessel.toml`）。depends 行 (1)。
+  - 行 (3) gate と審査: 形 5・形 6。depends 行 (1)。
+  - 歯の接頭辞は `done_teeth_` で始める。2026-09-30 の main で、設計 doc の検証行の filter 語 753 語のどれも `done_teeth_table_` / `done_teeth_gate_` / `done_teeth_review_` の部分に当たらず、fn の名に `done_teeth` を持つ歯は 0 本。起こす時に §54 の衝突の予想と preflight で測り直す。
+  - base で RED の理由（予定）: 欄の名が FIELDS に無く表の読みが未知の key で断る・宣言の key が閉じた列の外・段 ① が欄を読まない（どれも機能不在）。
+- ADR を書く理由: ADR の条件 3（契約表の行の欄・契約 file の key・vessel 宣言の key の 3 つの跨版の形）と 4（却下案）。
+- 却下（詳しくは ADR-0104）:
+  - lens の表だけで持つ（§64 のまま）: 器が表の歯の在りかも検証行の選びも照らせず、照らす所が便の中に残る。
+  - done を子行に割る（約束の行と同じ形の 2 つ目の子行）: 番号つきの 244 行の書き換えと、子行の型が 2 つになる。
+  - 全行に欄を求める: 着地済みの行と開いた行の書き換えになる。
+  - 欄を持たない行の sha を tracked な一覧に凍らせて免除する: 増える側の運用の一覧を持つ。base からの差分で同じ免除を言える。
+  - 歯ごとの base の RED を flip-check の出力から読む: 言語ごとの出力の読みを器が持ち、compile の赤で空に通る。
+- 限界:
+  - 歯がその約束を本当に測るか（空虚でないか）は器が測らない。器が測るのは、対応の揃い・選ばれ・在りか・書かれたか・動いたかである。測りの意味は審査の lens と検出線（変異）のままで、分析の空虚の型 10 件は本 § では塞がらない。
+  - 名の歯を解くのは nextest の形の読み手だけ。他の形の repo は `@<k>` で書き、項目ごとの名の在りかは測らない。
+  - `--base` の無い経路（直接の push など）では要否を求めない。main-provenance と merge の門がその経路を閉じている前提に立つ。
+  - base に無い名の歯が同じ便の中で 2 か所に置かれた周は、gate が名指す（受付では測れない）。
+  - 古い binary は、新しい key を持つ契約 file を未知の key として断る（入れ替えは前へだけ・growth / targets を足した時と同じ）。
+  - done の中の全角の番号は項目と読まない（§64 の限界のまま）。欄を求められた行は半角の番号で書き直す。
