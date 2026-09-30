@@ -87,6 +87,10 @@ pub struct Issue {
     pub notes: String,
     /// close の理由（`close_reason`・無ければ空・閉じ済みの契約を pipe retire が読む・設計 contract-source.md §60）。
     pub close_reason: String,
+    /// 起票の時刻の字（`created_at`・無ければ `None`・局面の関数が since を導く・設計 case-lifecycle.md §6）。
+    pub created_at: Option<String>,
+    /// 閉じた時刻の字（`closed_at`・閉じていない bead は `None`）。
+    pub closed_at: Option<String>,
 }
 
 /// 依存の 1 件（`dependencies[]` の `depends_on_id` と `type` だけを読む・**要素は status を持たない**ので
@@ -123,6 +127,8 @@ pub fn issues_of(text: &str) -> Option<Vec<Issue>> {
                 description: text_of("description").unwrap_or_default(),
                 notes: text_of("notes").unwrap_or_default(),
                 close_reason: text_of("close_reason").unwrap_or_default(),
+                created_at: text_of("created_at"),
+                closed_at: text_of("closed_at"),
             })
         })
         .collect()
@@ -295,5 +301,30 @@ mod tests {
         let reasons: Option<Vec<String>> =
             super::issues_of(text).map(|issues| issues.into_iter().map(|issue| issue.close_reason).collect());
         assert_eq!(reasons, Some(vec!["landed 0123 ci=success".to_owned(), String::new()]));
+    }
+
+    /// 時刻の 2 欄（`created_at`・`closed_at`）を字のまま読む（開いた bead は `closed_at` を持たない）。
+    #[test]
+    fn issue_times_reads_created_and_closed_at() {
+        let text = r#"[{"id":"s2-a","status":"closed","created_at":"2026-09-29T01:02:03Z","closed_at":"2026-09-30T04:05:06Z"},{"id":"s2-b","status":"open","created_at":"2026-09-30T00:00:00Z"}]"#;
+        let times: Option<Vec<(Option<String>, Option<String>)>> =
+            super::issues_of(text).map(|issues| issues.into_iter().map(|issue| (issue.created_at, issue.closed_at)).collect());
+        assert_eq!(
+            times,
+            Some(vec![
+                (Some("2026-09-29T01:02:03Z".to_owned()), Some("2026-09-30T04:05:06Z".to_owned())),
+                (Some("2026-09-30T00:00:00Z".to_owned()), None),
+            ])
+        );
+    }
+
+    /// 時刻の要素が無い bead は 2 欄とも `None` で、ほかの欄の読みは変わらない。
+    #[test]
+    fn issue_times_absent_elements_are_none_and_other_fields_unchanged() {
+        let text = r#"[{"id":"s2-a","status":"open","priority":1,"labels":["x"],"close_reason":"r"}]"#;
+        let issues = super::issues_of(text).expect("読める");
+        let [issue] = issues.as_slice() else { panic!("1 件") };
+        assert_eq!((issue.created_at.as_deref(), issue.closed_at.as_deref()), (None, None));
+        assert_eq!((issue.id.as_str(), issue.status.as_str(), issue.priority, issue.labels.as_slice(), issue.close_reason.as_str()), ("s2-a", "open", Some(1), ["x".to_owned()].as_slice(), "r"));
     }
 }

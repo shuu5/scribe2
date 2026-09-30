@@ -580,6 +580,8 @@ impl Ledger {
             description: String::new(),
             notes: String::new(),
             close_reason: String::new(),
+            created_at: None,
+            closed_at: None,
         });
     }
 }

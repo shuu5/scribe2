@@ -192,6 +192,41 @@ pub fn read(description: &str, notes: &str, prefix: Option<&str>) -> Reading {
     reading
 }
 
+/// 引き金が満ちたかを判じる世界（入力は全部書き手が集めて渡す・I/O も時計も持たない）。
+#[derive(Debug, Clone, Copy)]
+pub struct World<'a> {
+    /// notes の `[再発]` の行の本数。
+    pub recurrences: usize,
+    /// 開いた契約の write-set の項目（`+` `-` `=` の印つきの字のまま）。
+    pub write_set: &'a [String],
+    /// 閉じた bead id の集合。
+    pub closed: &'a [String],
+    /// 閉じた bead の設計 pointer の集合。
+    pub closed_pointers: &'a [Pointer],
+    /// 周の時刻（UNIX 秒）。
+    pub now: u64,
+}
+
+/// write-set の項目の印（`+` `-` `=`）。
+const WRITE_SET_MARKS: [char; 3] = ['+', '-', '='];
+
+/// 引き金が満ちたか（**純関数**・FR87 と部分の書き直しの期日の移りが同じ 1 本を引く）。
+///
+/// 再発は本数が値以上・同梱は印を外した項目が値の path と等しいか、値が `/` で終わって項目がそれで始まる・依存は値の bead が
+/// 閉じた・期日は周の時刻が値以後・着地は値の pointer を持つ bead が 1 本以上閉じた。
+pub fn met(trigger: &Trigger, world: &World<'_>) -> bool {
+    match trigger {
+        Trigger::Recurrence(count) => u64::try_from(world.recurrences).is_ok_and(|found| found >= *count),
+        Trigger::Bundle(path) => world.write_set.iter().any(|item| {
+            let bare = item.strip_prefix(WRITE_SET_MARKS).unwrap_or(item);
+            bare == path || (path.ends_with('/') && bare.starts_with(path.as_str()))
+        }),
+        Trigger::Dependency(id) => world.closed.contains(id),
+        Trigger::Deadline(at) => world.now >= *at,
+        Trigger::Landing(pointer) => world.closed_pointers.contains(pointer),
+    }
+}
+
 /// 見出しの行か（行頭の空白を除いて `#` が 1〜3 個と空白で始まる・`####` は節の中）。
 fn is_heading(line: &str) -> bool {
     let line = line.trim_start();
@@ -251,7 +286,7 @@ fn is_repo_path(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{read, shapes, Kind, Line, Reason, Trigger};
+    use super::{met, read, shapes, Kind, Line, Reason, Trigger, World};
     use crate::pipe::table::Pointer;
 
     /// 引き金の行 1 本を節の中に置いて読む。
@@ -359,5 +394,94 @@ mod tests {
             assert!(text.contains(&format!("{} {}", kind.as_str(), kind.placeholder())), "{text}");
         }
         assert!(text.starts_with("引き金: 再発 <n> / "), "{text}");
+    }
+
+    /// 何も満たさない世界（周の時刻 0）。
+    fn empty() -> World<'static> {
+        World { recurrences: 0, write_set: &[], closed: &[], closed_pointers: &[], now: 0 }
+    }
+
+    /// 同梱の世界（write-set の項目だけ持つ）。
+    fn with_items(items: &[String]) -> World<'_> {
+        World { write_set: items, ..empty() }
+    }
+
+    /// 再発: 本数＝値で満ち、値−1 で満ちない。
+    #[test]
+    fn trigger_met_recurrence_at_the_threshold() {
+        assert!(met(&Trigger::Recurrence(3), &World { recurrences: 3, ..empty() }));
+        assert!(met(&Trigger::Recurrence(3), &World { recurrences: 4, ..empty() }));
+        assert!(!met(&Trigger::Recurrence(3), &World { recurrences: 2, ..empty() }));
+    }
+
+    /// 期日: 周の時刻＝値で満ち、1 秒前で満ちない。
+    #[test]
+    fn trigger_met_deadline_at_the_second() {
+        assert!(met(&Trigger::Deadline(1_790_769_600), &World { now: 1_790_769_600, ..empty() }));
+        assert!(!met(&Trigger::Deadline(1_790_769_600), &World { now: 1_790_769_599, ..empty() }));
+    }
+
+    /// 依存: 値の bead が閉じた集合に在れば満ち、無ければ満ちない。
+    #[test]
+    fn trigger_met_dependency_closed_or_not() {
+        let closed = ["s2-a".to_owned(), "s2-b".to_owned()];
+        assert!(met(&Trigger::Dependency("s2-b".to_owned()), &World { closed: &closed, ..empty() }));
+        assert!(!met(&Trigger::Dependency("s2-c".to_owned()), &World { closed: &closed, ..empty() }));
+        assert!(!met(&Trigger::Dependency("s2-b".to_owned()), &empty()));
+    }
+
+    /// 着地: 値の pointer を持つ bead が 1 本以上閉じれば満ち、別の pointer だけなら満ちない。
+    #[test]
+    fn trigger_met_landing_pointer_closed_or_not() {
+        let pointer = |id: &str| Pointer { path: "docs/design/ledger-form.md".to_owned(), id: id.to_owned() };
+        let closed = [pointer("a"), pointer("k")];
+        assert!(met(&Trigger::Landing(pointer("k")), &World { closed_pointers: &closed, ..empty() }));
+        assert!(!met(&Trigger::Landing(pointer("z")), &World { closed_pointers: &closed, ..empty() }));
+        assert!(!met(&Trigger::Landing(pointer("k")), &empty()));
+    }
+
+    /// 同梱: 印（`+` `-` `=`）を外した項目が値の path と等しければ満ち、違う path は満ちない。
+    #[test]
+    fn trigger_met_bundle_equal_after_stripping_the_mark() {
+        let want = Trigger::Bundle("crates/x/a.rs".to_owned());
+        for item in ["crates/x/a.rs", "+crates/x/a.rs", "-crates/x/a.rs", "=crates/x/a.rs"] {
+            assert!(met(&want, &with_items(&[item.to_owned()])), "{item}");
+        }
+        assert!(!met(&want, &with_items(&["+crates/x/b.rs".to_owned()])));
+        assert!(!met(&want, &empty()));
+    }
+
+    /// 同梱: 値が `/` で終わる dir は項目がそれで始まれば満ち（印を外して）、別の dir は満ちない。
+    #[test]
+    fn trigger_met_bundle_dir_prefix() {
+        let want = Trigger::Bundle("crates/x/".to_owned());
+        assert!(met(&want, &with_items(&["+crates/x/a.rs".to_owned()])));
+        assert!(met(&want, &with_items(&["crates/x/deep/b.rs".to_owned()])));
+        assert!(!met(&want, &with_items(&["crates/xy/a.rs".to_owned()])));
+        assert!(!met(&want, &with_items(&["+crates/y/x/a.rs".to_owned()])));
+    }
+
+    /// 同梱: 値が `/` で終わらなければ前方一致で満ちない（値の字が項目の頭と一致するだけで等しくない組）。
+    #[test]
+    fn trigger_met_bundle_without_trailing_slash_is_not_a_prefix() {
+        let want = Trigger::Bundle("crates/x/a".to_owned());
+        assert!(!met(&want, &with_items(&["+crates/x/a.rs".to_owned()])));
+        assert!(!met(&want, &with_items(&["crates/x/a/b.rs".to_owned()])));
+        assert!(met(&want, &with_items(&["crates/x/a".to_owned()])), "等しい組は満ちる");
+    }
+
+    /// 5 形とも、何も無い世界では満ちない（全部を真に倒す実装を落とす）。
+    #[test]
+    fn trigger_met_nothing_in_an_empty_world() {
+        let pointer = Pointer { path: "docs/design/ledger-form.md".to_owned(), id: "k".to_owned() };
+        for trigger in [
+            Trigger::Recurrence(1),
+            Trigger::Bundle("crates/x/".to_owned()),
+            Trigger::Dependency("s2-a".to_owned()),
+            Trigger::Deadline(1),
+            Trigger::Landing(pointer),
+        ] {
+            assert!(!met(&trigger, &empty()), "{trigger:?}");
+        }
     }
 }

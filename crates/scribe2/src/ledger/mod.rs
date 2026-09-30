@@ -18,6 +18,7 @@ pub mod form;
 pub mod graph;
 pub mod lint;
 pub mod memo;
+pub mod promotion;
 pub mod question;
 pub mod trigger;
 
