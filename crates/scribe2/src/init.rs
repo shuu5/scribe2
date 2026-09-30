@@ -131,10 +131,15 @@ pub enum Readiness {
 /// 見ない・§5 の 9 段目と §6 の `registration` が呼ぶ 1 述語）。anchor は登録が書いた値との字面の等値。log を読めない周は
 /// 「無い」側（在ると推測しない）。
 pub fn registered(state_dir: &Path, root: &Path) -> bool {
-    let (Ok(events), Some(anchor)) = (crate::fleet::store::read_all(state_dir), root.to_str()) else {
+    registered_in(crate::fleet::store::read_all(state_dir).ok().map(|events| crate::fleet::replay(&events)).as_ref(), root)
+}
+
+/// [`registered`] の述語を呼び手が読んだ replay（読めない周は `None`）で測る形（doctor が log を 1 回だけ読んで渡す・fleet-event-log.md §15）。
+pub fn registered_in(state: Option<&crate::fleet::State>, root: &Path) -> bool {
+    let (Some(state), Some(anchor)) = (state, root.to_str()) else {
         return false;
     };
-    crate::fleet::replay(&events).registrations.contains_key(&(crate::seat::role::Role::Orchestrator, anchor.to_owned()))
+    state.registrations.contains_key(&(crate::seat::role::Role::Orchestrator, anchor.to_owned()))
 }
 
 /// tmux の session `name` が在るか（`has-session -t =<名>`・socket は `socket` が在ればそれ、無ければ既定）。撃てない周は
@@ -158,7 +163,7 @@ fn declared_at_head(root: &Path) -> bool {
 }
 
 /// doctor の `init=` を測る（§6）: `root`（`--repo` か cwd）を含む repo の root について 6 項目を段の順に測る。
-pub fn measure(state_dir: &Path, root: &Path, socket: Option<&str>) -> Readiness {
+pub fn measure(state_dir: &Path, root: &Path, socket: Option<&str>, state: Option<&crate::fleet::State>) -> Readiness {
     let Some(root) = vessel::repo_root(root) else {
         return Readiness::NoRepo;
     };
@@ -183,7 +188,7 @@ pub fn measure(state_dir: &Path, root: &Path, socket: Option<&str>) -> Readiness
     if !name.is_some_and(|found| session_exists(socket, found)) {
         gaps.push(Gap::Session);
     }
-    if !registered(state_dir, &root) {
+    if !registered_in(state, &root) {
         gaps.push(Gap::Registration);
     }
     Readiness::Gaps(gaps)
@@ -209,12 +214,12 @@ pub fn render_init(readiness: &Readiness, template: &Template) -> String {
 }
 
 /// doctor の骨格の直後の行: `host-template=` の 1 行と、置き場を渡した周だけその直後に `init=` の 1 行（§3・§6）。
-/// `root` は `--repo` か cwd。
-pub fn doctor_lines(state_dir: Option<&Path>, root: &Path, socket: Option<&str>) -> Vec<String> {
+/// `root` は `--repo` か cwd。`state` は呼び手が 1 回だけ読んだ event log の replay（読めない周は `None`）。
+pub fn doctor_lines(state_dir: Option<&Path>, root: &Path, socket: Option<&str>, state: Option<&crate::fleet::State>) -> Vec<String> {
     let template = read_template();
     let mut lines = vec![render_host_template(&template)];
     if let Some(dir) = state_dir {
-        lines.push(render_init(&measure(dir, root, socket), &template));
+        lines.push(render_init(&measure(dir, root, socket, state), &template));
     }
     lines
 }

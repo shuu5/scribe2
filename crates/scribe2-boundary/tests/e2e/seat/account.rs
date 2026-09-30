@@ -831,6 +831,104 @@ fn host_group_dead_pressure_reads_the_record_account_not_the_dead_seed() {
     fs::remove_dir_all(&place.dir).ok();
 }
 
+// ─── doctor は event log を 1 回だけ読む（fleet-event-log.md §15・契約表の行 i・接頭辞 `doctor_single_read_`） ───
+
+/// 期限つきで doctor を撃つ（`role_doctor_rules` と同じ引数・`limit` を越えたら子を止めて `None`）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn doctor_within(place: &RolePlace, body: &str, limit: Duration) -> Option<Output> {
+    let state = place.state.display().to_string();
+    let rules = fixture(&place.dir, "doctor-rules.toml", body);
+    let mut child = Command::new(bin())
+        .args(["doctor", "--state-dir", &state, "--tmux-socket", &place.socket, "--rules", &rules, "--bin", bin()])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("binary を起動できる");
+    let started = Instant::now();
+    while started.elapsed() < limit {
+        if child.try_wait().expect("子の状態を読める").is_some() {
+            return child.wait_with_output().ok();
+        }
+        sleep(Duration::from_millis(50));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    None
+}
+
+/// 行の `key`（`next=` など）の値（無ければ `None`）。
+fn field(line: &str, key: &str) -> Option<String> {
+    line.split(' ').find_map(|token| token.strip_prefix(key)).map(str::to_owned)
+}
+
+/// 行の列のうち `head` で始まる 1 行の `key` の値。
+fn field_of(lines: &[String], head: &str, key: &str) -> Option<String> {
+    lines.iter().find(|line| line.starts_with(head)).and_then(|line| field(line, key))
+}
+
+/// 群 Tier1・Tier2 の行の `key` の値（無い行は空）。
+fn group_words(lines: &[String], key: &str) -> [String; 2] {
+    ["Tier1", "Tier2"].map(|name| field_of(lines, &format!("group={name} "), key).unwrap_or_default())
+}
+
+/// 数字だけの空でない語か。
+fn is_count(word: &str) -> bool {
+    !word.is_empty() && word.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+/// (a) 群 2 つ（Tier1 の今の口座 acct-1 が鮮度の内側の実測で 5 時間窓の閾値を越え、Tier2 の予約の計算が先の群の逼迫の判定と
+/// 候補の測り直しの読みを通る）の置き場で 3 周: 1 周目は普通の file の log の出力が席の登録数・群の行 2 本の `next=<label>`・
+/// `ungrouped=<数>` を持つ。2 周目は同じ中身の log を書き手が 1 回だけ流す FIFO に替えても doctor が 30 秒以内に rc 0 で終わり、
+/// 出力が 1 周目と行ごとに等しい（log を 2 回開く実装は 2 回目の open が書き手を待って止まる）。3 周目は log を dir に替えた置き場が
+/// 読めない周の字を出し、役割の model の行を欠く rules は `next=unreadable`（log が先）・閾値の行を欠く rules は `next=no-rule`
+/// （閾値の行が log より先）。
+#[test]
+fn doctor_single_read_serves_every_line_from_one_open_of_the_event_log() {
+    let now = vessel::fleet::cli::now_utc();
+    let labels = ["acct-1", "spare", "third", "fourth"];
+    let place = role_doctor_place();
+    put_groups(&place, &[("Tier1", &["/repo"], &["acct-1", "spare"]), ("Tier2", &["/repo/b"], &["third", "fourth"])]);
+    put_round(&place, &now, "acct-1", [90, 10, 10]);
+    put_next_round(&place, &now, "spare", (20, 20));
+    put_next_round(&place, &now, "fourth", (20, 20));
+    let rules = next_rules(&labels, true);
+    let first = doctor_rows(&place, &rules);
+    let (seats, guard) = ("seats: ", HOST_GUARD_HEAD);
+    assert_eq!(field_of(&first, seats, "registered=").as_deref(), Some("1"), "席の登録数: {first:?}");
+    assert_eq!(group_words(&first, "next="), ["spare", "fourth"], "群ごとの予約: {first:?}");
+    assert!(is_count(&field_of(&first, guard, "ungrouped=").unwrap_or_default()), "ungrouped は数: {first:?}");
+    // 2 周目: 同じ中身を FIFO に置き換える（書き手は 1 回だけ開いて流して閉じる）。
+    let log = vessel::fleet::store::events_path(&place.state);
+    let body = fs::read(&log).expect("log を読める");
+    fs::remove_file(&log).expect("log を外せる");
+    assert!(Command::new("mkfifo").arg(&log).status().expect("mkfifo を撃てる").success(), "FIFO を作れる");
+    let writer_log = log.clone();
+    drop(std::thread::spawn(move || fs::write(&writer_log, body)));
+    let out = doctor_within(&place, &rules, Duration::from_secs(30)).expect("doctor は 30 秒以内に終わる（log を 1 回だけ開く）");
+    assert_eq!(rc_of(&out), i32::from(RC_OK), "stderr={}", stderr_of(&out));
+    let second: Vec<String> = stdout_of(&out).lines().map(str::to_owned).collect();
+    assert_eq!(second, first, "FIFO の周も 1 周目と行ごとに等しい");
+    // 3 周目: log が dir の置き場は読めない周の字（0 や空に潰さない）。
+    fs::remove_file(&log).expect("FIFO を外せる");
+    fs::create_dir(&log).expect("log の位置を dir にできる");
+    let dead = doctor_rows(&place, &rules);
+    assert!(dead.iter().any(|line| line == "rulings=unreadable rule-rulings=unmeasurable"), "裁定の行: {dead:?}");
+    assert_eq!(field_of(&dead, seats, "registered=").as_deref(), Some("unreadable"), "席の行: {dead:?}");
+    assert!(dead.iter().any(|line| line.starts_with("host-manifest=") && line.contains(" run-accounts=unreadable")), "{dead:?}");
+    assert_eq!(group_words(&dead, "next="), ["unreadable"; 2], "群の next: {dead:?}");
+    assert_eq!(group_words(&dead, "pressure="), ["unreadable"; 2], "群の pressure: {dead:?}");
+    assert_eq!(field_of(&dead, guard, "ungrouped=").as_deref(), Some("unreadable"), "{dead:?}");
+    // 判定の順（群の記録 → 閾値の行 → log → 役割の model の行）。
+    let no_role = doctor_rows(&place, &next_rules(&labels, false));
+    let no_caps = doctor_rows(&place, &account_rules(&labels));
+    assert_eq!(group_words(&no_role, "next="), ["unreadable"; 2], "役割の行を欠く rules でも log が先: {no_role:?}");
+    assert_eq!(group_words(&no_caps, "next="), ["no-rule"; 2], "閾値の行を欠く rules は log より先: {no_caps:?}");
+    fs::remove_dir_all(&place.dir).ok();
+}
+
 // ─── doctor の群の行の `refused=`（account-lifecycle.md §31 形 3・契約表の行 u・接頭辞 `host_group_refused_`） ───
 //
 // `host_group_next_` の置き場に群 Tier1（置き場 `/repo`・候補 [acct-1]）と Tier2（置き場 `/repo/b`・候補 [spare]）を宣言し、
