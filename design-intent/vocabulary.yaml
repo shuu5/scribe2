@@ -1454,8 +1454,13 @@ terms:
   - canonical: close-check
     domain: consumer
     aliases: [閉じの門への加わり]
-    definition: vessel 宣言の任意 key で、 値は真偽だけ (ADR-0097)。 true を持つ repo の席の close に、 起票の門の close の段 (理由の無い close・close の理由の文法の外・席の着地の形・理由を渡せない口を断る) が掛かる。 false・key が無い・宣言 file が HEAD に無い repo には掛からず、 宣言が在って読めない repo には同じ判定が掛かる。 key を知らない古い binary は key を持つ宣言を丸ごと読めない。
-    relationships: [vessel 宣言, 任意 key, 起票の門, close の理由の文法]
+    definition: vessel 宣言の任意 key で、 値は真偽だけ (ADR-0097)。 true を持つ repo の席の close に、 起票の門の close の段 (理由の無い close・close の理由の文法の外・席の着地の形・理由を渡せない口を断る) が掛かる。 false・key が無い・宣言 file が HEAD に無い・git を撃てない repo には掛からず、 宣言が在って読めない repo には同じ判定が掛かる。 局面の出力は、 main の先端の宣言が true を持つ repo の閉じだけを、 close-check の線より後に限って misfit に数える (SRS FR90)。 key を知らない古い binary は key を持つ宣言を丸ごと読めない。
+    relationships: [vessel 宣言, 任意 key, 起票の門, close の理由の文法, close-check の線]
+  - canonical: close-check の線
+    domain: consumer
+    definition: 局面の出力の全部の書き直しが main の先端の vessel 宣言で close-check を初めて true と読んだ時刻。 state dir ごとに 1 度だけ記帳し、 後の書き直しは動かさず、 切り替えの線より前にはならない。 閉じに由来する misfit はこの線より後の閉じだけに掛ける (SRS FR90・FR91)。
+    relationships: [close-check, 切り替えの線, misfit]
+    flagged_ambiguities: ["close-check の線 (閉じの misfit の数えの境・SRS FR90) と opt-in の線 (ruling-check が main の履歴で初めて true になった commit・SRS FR83) と切り替えの線 (この版の器の最初の全部の書き直し・SRS FR90) は別"]
   - canonical: 判断の欄
     domain: consumer
     definition: 裁定を引くべき欄の閉じた 3 種 (rules 行の ruling 欄・ADR の approval の裁定の欄・設計の節の裁定の欄)。 着地の差分が足すか変える判断の欄は、 問いの部分が台帳の接頭辞で始まる問い id の形の裁定 id を要り、 台帳の bead の id だけの引用は数えない (SRS FR83)。 vessel 宣言の ruling-check を true から外す差分も同じく裁定 id を要る。
