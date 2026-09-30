@@ -104,6 +104,9 @@ pub enum EventKind {
     IntakeRefused,
     /// 切り替えの線を引いた（§12・ADR-0088・[`Case::Cutover`]）。**便に紐づかない**。
     LifecycleCutover,
+    /// memo の審査の判定を残した（dispatcher.md §41・ADR-0085・[`Case::Judged`]・`bead` = memo の id・`detail` = 判定の語）。
+    /// **便に紐づかない**。
+    MemoJudged,
 }
 
 /// [`EventKind`] の全 variant。
@@ -137,6 +140,7 @@ pub const KINDS: &[EventKind] = &[
     EventKind::TurnEndUnjudged,
     EventKind::IntakeRefused,
     EventKind::LifecycleCutover,
+    EventKind::MemoJudged,
 ];
 
 impl EventKind {
@@ -172,6 +176,7 @@ impl EventKind {
             Self::TurnEndUnjudged => "TurnEndUnjudged",
             Self::IntakeRefused => "IntakeRefused",
             Self::LifecycleCutover => "LifecycleCutover",
+            Self::MemoJudged => "MemoJudged",
         }
     }
 
@@ -209,7 +214,8 @@ impl EventKind {
             | Self::UtteranceSorted
             | Self::TurnEndUnjudged
             | Self::IntakeRefused
-            | Self::LifecycleCutover => ACTOR_MACHINE,
+            | Self::LifecycleCutover
+            | Self::MemoJudged => ACTOR_MACHINE,
         }
     }
 
@@ -245,7 +251,8 @@ impl EventKind {
             | Self::UtteranceSorted
             | Self::TurnEndUnjudged
             | Self::IntakeRefused
-            | Self::LifecycleCutover => Shape::Case,
+            | Self::LifecycleCutover
+            | Self::MemoJudged => Shape::Case,
         }
     }
 
@@ -374,6 +381,8 @@ pub enum Case {
     Refused { refuse: String },
     /// [`EventKind::LifecycleCutover`]: 線を引いた器の版と main の sha（小文字の 16 進）。
     Cutover { version: String, main: String },
+    /// [`EventKind::MemoJudged`]: 本体の欄を持たない（memo の id は行の `bead`・判定の語は `detail`）。
+    Judged,
     /// [`EventKind::RulingReceived`] の結びの形（設計 §14）: 結んだ裁定 id・発話の ts・経路・問いの起票の時刻と、問いが
     /// metadata に持つ asked（無ければ `None`）。`bead` は問い id（行の field）。
     Ruling { ruling: String, utterance: String, channel: Channel, question_ts: String, asked: Option<String> },
@@ -396,6 +405,7 @@ impl Case {
             }
             Self::Refused { refuse } => [bead, Some(text("refuse", refuse))].into_iter().flatten().collect(),
             Self::Cutover { version, main } => vec![text("version", version), text("main", main)],
+            Self::Judged => bead.into_iter().collect(),
             Self::Ruling { ruling, utterance, channel, question_ts, asked } => [
                 Some(text("ruling", ruling)),
                 Some(text("utterance", utterance)),

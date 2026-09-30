@@ -57,6 +57,9 @@ pub mod floor;
 /// memo の引き金の満ちを判じる行と審査の置き場の形・読み（設計 §40・契約表の行 ao）。
 pub mod memo;
 
+/// memo の審査の裏の process `pipe dispatch memo-lens`（口座を選び lens の段 memo を撃ち、判定を置き場と event に残す・設計 §41・契約表の行 ap）。
+pub(in crate::pipe) mod memo_lens;
+
 /// 未反映の裁定の判定と置き場の file・読み手（設計 §38・契約表の行 am）。
 pub mod unreflected;
 

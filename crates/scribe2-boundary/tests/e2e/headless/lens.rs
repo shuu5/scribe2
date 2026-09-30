@@ -285,7 +285,78 @@ fn model_split_lens_refuses_other_stage_values_like_unknown_args() {
         assert!(stdout_of(&out).is_empty(), "{extra:?}: 判定の面には何も出さない");
         assert!(!dir.join("called").exists(), "{extra:?}: claude を 1 度も起動しない");
     }
-    assert!(usage.contains(" [--stage prelens] "), "usage は段の flag を写す: {usage}");
+    assert!(usage.contains(" [--stage prelens|memo] "), "usage は段の flag を写す: {usage}");
+    clean(&[&dir]);
+}
+
+/// memo の審査の lens の引数（`--contract` は memo の材料の file・`--stage memo`）。
+fn memo_args(material: &Path, worktree: &Path, extra: &[&str], claude: &Path) -> Vec<String> {
+    let mut args = lens_args(material, worktree, &["--stage", "memo"], claude);
+    args.extend(extra.iter().map(|item| (*item).to_owned()));
+    args
+}
+
+/// (g) `--stage memo` の lens は model に rules 行 `lens.model` の値を渡し（`runner.model` と `pipe.precheck_lens_model` を別の値に置いた
+/// fixture で弁別）、prompt は memo の雛形の字で材料の本文を 1 回だけ埋め、絶対 path を持たない。契約を読まず（材料は TOML でない）・stdin の
+/// diff も読まず・`--stage` は claude へ渡らない。base は `--stage memo` を未知の引数として断るので RED（機能不在）。
+#[test]
+fn headless_lens_memo_reads_lens_model_and_fills_the_memo_template() {
+    let dir = tmp();
+    let claude = fake_claude(&dir, "{\"verdict\":\"keep\",\"evidence\":\"memo の歯\",\"sketch\":\"\"}\n", false, 0);
+    let material = dir.join("material");
+    fs::write(&material, "# memo zq-1\n\n## description\nzqmemo-body の本文 {memo} {contract}\n").expect("材料を書ける");
+    let rows = [cap_row(4096), model_row("opus"), lens_model_row("fable"), prelens_model_row("haiku"), effort_row(RUNNER_EFFORT)];
+    let rules = rules_with_rows(&dir, "rules-memo.toml", &rows);
+    let rules = rules.display().to_string();
+    let out = run_bin_owned(&dir, &memo_args(&material, &dir, &["--rules", &rules], &claude), "stdin の diff は読まない".as_bytes());
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    assert_eq!(stdout_of(&out).trim(), r#"{"verdict":"keep","evidence":"memo の歯","sketch":""}"#, "判定は claude の行");
+    let args = slurp(&dir.join("args"));
+    assert_eq!(model_arg(&dir), Some("fable".to_owned()), "lens.model の値を渡す: {args}");
+    assert!(!has_arg(&args, "--stage"), "--stage は claude へ渡らない: {args}");
+    let prompt = slurp(&dir.join("stdin"));
+    assert!(prompt.contains("memo（契約にする前の覚え書き）を 1 周だけ読む審査役"), "memo の雛形の字: {prompt}");
+    assert!(prompt.contains("## memo の材料\n# memo zq-1"), "材料は見出しの下に入る: {prompt}");
+    assert_eq!(prompt.matches("zqmemo-body の本文").count(), 1, "材料は 1 回だけ埋まる");
+    assert!(prompt.contains("zqmemo-body の本文 {memo} {contract}"), "材料の中の穴の字面は展開されない（1 走査）: {prompt}");
+    assert!(!prompt.contains("stdin の diff"), "stdin は読まない");
+    let absolute = prompt.split_whitespace().any(|word| word.starts_with('/') && word.len() > 1);
+    assert!(!prompt.contains(&dir.display().to_string()) && !absolute, "絶対 path を持たない: {prompt}");
+    // 材料は cap（byte）で切る: cap 16 の manifest では材料の頭の 16 byte だけが入る。
+    let small = rules_with_rows(&dir, "rules-memo-small.toml", &[cap_row(16), lens_model_row("fable"), effort_row(RUNNER_EFFORT)]);
+    let out = run_bin_owned(&dir, &memo_args(&material, &dir, &["--rules", &small.display().to_string()], &claude), b"");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", stderr_of(&out));
+    let cut = slurp(&dir.join("stdin"));
+    assert!(cut.ends_with("# memo zq-1\n\n## \n") && !cut.contains("description"), "材料は cap で切る: {cut}");
+    clean(&[&dir]);
+}
+
+/// (h) `--stage` は `prelens` と `memo` だけを取る: `--stage other` と値の欠けは今どおり未知の引数と同じ断り（`lens: <理由>` の 1 行と usage・
+/// rc 2）で、偽 claude の呼び出しは 0。材料が読めない `--stage memo` と `lens.model` の行が無い manifest の `--stage memo` も claude を
+/// 呼ばず rc 2。
+#[test]
+fn headless_lens_memo_refuses_other_stage_values_and_unreadable_material() {
+    let dir = tmp();
+    let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"呼ばれてはならない\"}\n", false, 0);
+    let material = dir.join("material");
+    fs::write(&material, "# memo zq-2\n").expect("材料を書ける");
+    let usage = vessel::headless::lens::usage();
+    for (extra, reason) in [(&["--stage", "other"][..], "未知の引数 --stage other"), (&["--stage"][..], "--stage に値が無い")] {
+        let out = run_bin_owned(&dir, &lens_args(&material, &dir, extra, &claude), b"");
+        assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "{extra:?}: rc 2 / {}", stderr_of(&out));
+        assert_eq!(stderr_of(&out), format!("lens: {reason}\n{usage}\n"), "{extra:?}: 未知の引数と同じ断りの形");
+        assert!(stdout_of(&out).is_empty(), "{extra:?}: 判定の面には何も出さない");
+        assert!(!dir.join("called").exists(), "{extra:?}: claude を 1 度も起動しない");
+    }
+    let missing = dir.join("no-such-material");
+    let out = run_bin_owned(&dir, &memo_args(&missing, &dir, &[], &claude), b"");
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "材料が無い: {}", stderr_of(&out));
+    assert!(stderr_of(&out).starts_with("lens: memo の材料を読めない"), "{}", stderr_of(&out));
+    let no_lens = rules_with_rows(&dir, "no-lens-memo.toml", &[cap_row(4096), model_row("opus"), prelens_model_row("sonnet"), effort_row(RUNNER_EFFORT)]);
+    let out = run_bin_owned(&dir, &memo_args(&material, &dir, &["--rules", &no_lens.display().to_string()], &claude), b"");
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "lens.model が無い: {}", stderr_of(&out));
+    assert_eq!(stderr_of(&out), "lens: lens.model が無い\n", "理由の 1 行だけ");
+    assert!(!dir.join("called").exists(), "claude を 1 度も起動しない");
     clean(&[&dir]);
 }
 

@@ -136,11 +136,38 @@ pub fn judgement(state_dir: &Path, memo: &str) -> Judgement {
 /// 母集団は開いた memo から最後の昇格の行が「全部」の memo を除いた全部（「一部」は含む・FR91）。
 pub(super) fn lines(input: &Input<'_>, read: &Read, now: u64) -> Vec<String> {
     let prefix = Anchor::open(input.repo).and_then(|anchor| anchor.prefixes().first().cloned());
+    triggers(input, read, now, |_, notes| !fully_promoted(notes, prefix.as_deref()))
+        .into_iter()
+        .map(|(id, trigger, created)| {
+            let (verdict, judged) = match judgement(input.state_dir, id) {
+                Judgement::Absent => (DASH, DASH.to_owned()),
+                Judgement::Unreadable => ("unreadable", DASH.to_owned()),
+                Judgement::Judged(found) => (found.word.as_str(), found.at),
+            };
+            let age = created.map_or(DASH.to_owned(), |at| format!("{}h", now.saturating_sub(at) / 3600));
+            format!("{HEAD} memo={id} trigger={trigger} verdict={verdict} age={age} judged={judged}")
+        })
+        .collect()
+}
+
+/// 開いた memo 1 本の引き金の欄の値（[`lines`] と同じ World の組み立てと [`trigger_of`] を通した同じ字・開いた memo でなければ `None`）。
+pub(super) fn trigger_value(input: &Input<'_>, read: &Read, now: u64, memo: &str) -> Option<String> {
+    triggers(input, read, now, |id, _| id == memo).into_iter().next().map(|(_, trigger, _)| trigger)
+}
+
+/// `pick` が選んだ開いた memo ごとの（id・引き金の欄の値・作られた時刻）を bead id の字の順に返す（世界の 5 入力は `read` の 1 回の読みから組む）。
+fn triggers<'a>(
+    input: &Input<'_>,
+    read: &'a Read,
+    now: u64,
+    pick: impl Fn(&str, &str) -> bool,
+) -> Vec<(&'a str, String, Option<u64>)> {
+    let prefix = Anchor::open(input.repo).and_then(|anchor| anchor.prefixes().first().cloned());
     let mut memos: Vec<_> = read.issues.iter().filter(|issue| is_memo(issue) && issue.status != CLOSED).collect();
     memos.sort_by(|left, right| left.id.cmp(&right.id));
     let rows: Vec<(&str, Reading, Option<u64>)> = memos
         .into_iter()
-        .filter(|issue| !fully_promoted(&issue.notes, prefix.as_deref()))
+        .filter(|issue| pick(&issue.id, &issue.notes))
         .map(|issue| {
             let reading = trigger::read(&issue.description, &issue.notes, prefix.as_deref());
             (issue.id.as_str(), reading, issue.created_at.as_deref().and_then(epoch_at))
@@ -153,18 +180,7 @@ pub(super) fn lines(input: &Input<'_>, read: &Read, now: u64) -> Vec<String> {
     let bundled = rows.iter().any(|(_, reading, _)| reading.readable().any(|found| matches!(found, Trigger::Bundle(_))));
     let write_set = if bundled { open_write_set(input.repo, read) } else { Vec::new() };
     let world = World { recurrences: 0, write_set: &write_set, closed: &closed, closed_pointers: &closed_pointers, now };
-    rows.iter()
-        .map(|(id, reading, created)| {
-            let (verdict, judged) = match judgement(input.state_dir, id) {
-                Judgement::Absent => (DASH, DASH.to_owned()),
-                Judgement::Unreadable => ("unreadable", DASH.to_owned()),
-                Judgement::Judged(found) => (found.word.as_str(), found.at),
-            };
-            let age = created.map_or(DASH.to_owned(), |at| format!("{}h", now.saturating_sub(at) / 3600));
-            let trigger = trigger_of(reading, &World { recurrences: reading.recurrences, ..world });
-            format!("{HEAD} memo={id} trigger={trigger} verdict={verdict} age={age} judged={judged}")
-        })
-        .collect()
+    rows.iter().map(|(id, reading, created)| (*id, trigger_of(reading, &World { recurrences: reading.recurrences, ..world }), *created)).collect()
 }
 
 /// 最後の昇格の行が読めて範囲が「全部」か（読めない行と行の無い notes は母集団に残す）。

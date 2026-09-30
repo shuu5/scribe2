@@ -423,14 +423,14 @@ fn fleet_replay_seat_retired_then_registered_resolves_the_last_row() {
     assert_eq!(before.registrations.len(), 1, "登録より前の退役は後の登録を消さない");
 }
 
-/// 形 4: `SeatRetired` は `Shape::Registration`・既定の actor は human・`KINDS` の 24 種目（29 種の末尾は案件の一生の
-/// `LifecycleCutover`・fleet-event-log.md §12）で、`fleet record` からは書けない（書き手は `seat retire` だけ・rc 1・log を作らない）。
+/// 形 4: `SeatRetired` は `Shape::Registration`・既定の actor は human・`KINDS` の 24 種目（30 種の末尾は memo の判定の
+/// `MemoJudged`・dispatcher.md §41）で、`fleet record` からは書けない（書き手は `seat retire` だけ・rc 1・log を作らない）。
 #[test]
 fn fleet_replay_seat_retired_kind_is_a_registration_shape_and_record_refuses_it() {
     use vessel::fleet::Shape;
-    assert_eq!(KINDS.len(), 29, "母集団");
+    assert_eq!(KINDS.len(), 30, "母集団");
     assert_eq!(KINDS.get(23), Some(&EventKind::SeatRetired), "宣言順の 24 種目");
-    assert_eq!(KINDS.last(), Some(&EventKind::LifecycleCutover), "宣言順の末尾");
+    assert_eq!(KINDS.last(), Some(&EventKind::MemoJudged), "宣言順の末尾");
     assert_eq!(EventKind::SeatRetired.shape(), Shape::Registration);
     assert_eq!(EventKind::SeatRetired.default_actor(), "human", "退役は人由来");
     assert_eq!(EventKind::parse("SeatRetired"), Some(EventKind::SeatRetired), "as_str ↔ parse の往復");
@@ -670,17 +670,19 @@ fn fleet_case_kind_utterance_is_not_counted_as_human() {
     assert_eq!(counted.rulings, 0, "裁定の数えは変わらない");
 }
 
-/// §12 歯 6: `KINDS` は 29 種で、25 番目から後ろの字面が 5 つの名の順。既定の actor は 1 つ目だけ human。5 つとも `Shape` が
-/// Run でなく、互いに同じ値。base は 24 種で RED。
+/// §12 歯 6: `KINDS` は 30 種で、25 番目から 5 つの字面が 5 つの名の順、末尾は `MemoJudged`（dispatcher.md §41）。既定の actor は
+/// 1 つ目だけ human（`MemoJudged` は machine）。5 つも `MemoJudged` も `Shape` が Run でなく、互いに同じ値。base は 29 種で RED。
 #[test]
 fn fleet_case_kind_kinds_are_appended_in_order() {
     use vessel::fleet::Shape;
-    assert_eq!(KINDS.len(), 29, "母集団");
-    let tail: Vec<EventKind> = KINDS.iter().copied().skip(24).collect();
-    assert_eq!(tail.iter().map(|kind| kind.as_str()).collect::<Vec<_>>(), CASE_KIND_NAMES, "末尾 5 つの字面");
+    assert_eq!(KINDS.len(), 30, "母集団");
+    let tail: Vec<EventKind> = KINDS.iter().copied().skip(24).take(5).collect();
+    assert_eq!(tail.iter().map(|kind| kind.as_str()).collect::<Vec<_>>(), CASE_KIND_NAMES, "25 番目から 5 つの字面");
     let actors: Vec<&str> = tail.iter().map(|kind| kind.default_actor()).collect();
     assert_eq!(actors, ["human", "machine", "machine", "machine", "machine"], "既定の actor");
-    let shapes: BTreeSet<String> = tail.iter().map(|kind| format!("{:?}", kind.shape())).collect();
-    assert_eq!(shapes.len(), 1, "5 つは 1 つの形を共有する: {shapes:?}");
+    assert_eq!(KINDS.last(), Some(&EventKind::MemoJudged), "宣言順の末尾");
+    assert_eq!(EventKind::MemoJudged.default_actor(), "machine", "memo の判定は機械由来");
+    let shapes: BTreeSet<String> = tail.iter().chain([&EventKind::MemoJudged]).map(|kind| format!("{:?}", kind.shape())).collect();
+    assert_eq!(shapes.len(), 1, "5 つと MemoJudged は 1 つの形を共有する: {shapes:?}");
     assert!(tail.iter().all(|kind| kind.shape() != Shape::Run), "Run の形でない");
 }

@@ -1037,3 +1037,315 @@ fn pipe_dispatch_memo_trigger_unmeasured_ledger_prints_no_memo_line() {
     assert_eq!(memo_lines(&read).len(), 1, "読める周は行が在る: {}", told(&read));
     clean(&[&repo, &state]);
 }
+
+// ───── memo の審査の裏の process（設計 dispatcher.md §41・契約表の行 ap・接頭辞 `pipe_dispatch_memo_lens_`） ─────
+
+use super::super::ratelimit as lifecycle;
+
+/// 偽の lens の置き場（呼びの回数・argv・stdin・返す出力を `name` ごとに持つ）。
+fn memo_spy(state: &Path, name: &str) -> std::path::PathBuf {
+    state.join("memo-lens-spy").join(name)
+}
+
+/// 偽の lens（argv と stdin を置き場へ記し、`out` を stdout へ返して `rc` で終わる shell）。返すのは `--lens` の値（穴つき）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn memo_lens_cmd(state: &Path, name: &str, out: &str, rc: u8) -> String {
+    let spy = memo_spy(state, name);
+    fs::create_dir_all(&spy).expect("偽 lens の置き場を作れる");
+    fs::write(spy.join("out"), out).expect("偽 lens の出力を書ける");
+    let body = format!(
+        "printf 'call\\n' >> '{d}/calls'\nprintf '%s\\n' \"$@\" > '{d}/argv'\ncat > '{d}/stdin'\ncat '{d}/out'\nexit {rc}\n",
+        d = spy.display()
+    );
+    let path = script(&state.join(format!("{name}.sh")), &body);
+    format!("sh {path} --contract {{contract}} --worktree {{worktree}}")
+}
+
+/// 偽の lens が起こされた回数。
+fn memo_lens_calls(state: &Path, name: &str) -> usize {
+    calls_of(&memo_spy(state, name).join("calls"))
+}
+
+/// 偽の lens が受けた argv（1 行 1 語）。
+fn memo_lens_argv(state: &Path, name: &str) -> Vec<String> {
+    fs::read_to_string(memo_spy(state, name).join("argv")).unwrap_or_default().lines().map(str::to_owned).collect()
+}
+
+/// `pipe dispatch memo-lens <memo>` を 1 回撃つ（`extra` は `--curl` などの足し）。
+fn memo_lens(repo: &Path, state: &Path, bd: &str, memo: &str, tools: (&str, &str)) -> Output {
+    memo_lens_with(repo, state, (bd, memo), tools, &[])
+}
+
+/// [`memo_lens`] に `--curl` などの足しを渡す形。
+fn memo_lens_with(repo: &Path, state: &Path, (bd, memo): (&str, &str), (lens, rules): (&str, &str), extra: &[&str]) -> Output {
+    let (state_arg, repo_arg) = (state.display().to_string(), repo.display().to_string());
+    let mut args = vec![
+        "dispatch", "memo-lens", memo,
+        "--state-dir", &state_arg,
+        "--repo", &repo_arg,
+        "--rules", rules,
+        "--bd", bd,
+        "--lens", lens,
+    ];
+    args.extend(extra);
+    run_pipe(&args)
+}
+
+/// memo の置き場の dir。
+fn memo_place(state: &Path, memo: &str) -> std::path::PathBuf {
+    state.join("pipe").join("memo").join(memo)
+}
+
+/// 置き場の file の中身（無ければ空）。
+fn place_file(state: &Path, memo: &str, name: &str) -> String {
+    fs::read_to_string(memo_place(state, memo).join(name)).unwrap_or_default()
+}
+
+/// JSON の 1 object の `(key, 文字列の値)` の列（文字列でない値は空）。
+fn string_pairs(text: &str) -> Vec<(String, String)> {
+    json_lite::parse_object(text.trim())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(key, value)| (key, value.as_str().unwrap_or_default().to_owned()))
+        .collect()
+}
+
+/// `pairs` の `key` の値（無ければ空）。
+fn pair_of(pairs: &[(String, String)], key: &str) -> String {
+    pairs.iter().find(|(found, _)| found == key).map(|(_, value)| value.clone()).unwrap_or_default()
+}
+
+/// event log の `MemoJudged` の行（log の順）。
+fn judged_lines(state: &Path) -> Vec<String> {
+    fs::read_to_string(state.join("fleet").join("events.jsonl"))
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| line.contains("\"kind\":\"MemoJudged\""))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// 引き金が満ちない開いた memo（id の列）の台帳。
+fn unmet_memos(ids: &[&str]) -> Vec<String> {
+    ids.iter().map(|id| memo_bead(id, &["引き金: 期日 2999-01-01T00:00Z"], "")).collect()
+}
+
+/// (a) 最後の行に promote の JSON を返す lens（前の行に close の JSON を置く＝最後の行を読まない実装を落とす）の周は、`verdict` の
+/// file が promote・`at`・evidence・sketch を持ち、`MemoJudged` が 1 行（bead が memo の id・detail が promote・本体の key は bead だけ）、
+/// stdout が `memo-lens memo=<id> verdict=promote` の 1 行で、`pid` が消えて `rc` が在る。keep を返す周の `verdict` の語は keep で sketch を
+/// 持たず、`scribe2 pipe` の使い方の行の最初の `<…>` の verb の列に memo-lens は無い。base は `memo-lens` が使い方の誤りで RED（機能不在）。
+#[test]
+fn pipe_dispatch_memo_lens_writes_the_last_json_line_as_the_verdict_and_one_event() {
+    let (repo, state) = memo_repo();
+    let bd = fake_bd(&state, &unmet_memos(&["s2-m.1", "s2-m.2"]));
+    let rules = dispatch_rules(&state);
+    let promote = "前置き\n{\"verdict\":\"close\",\"evidence\":\"前の行\",\"sketch\":\"\"}\n{\"verdict\":\"promote\",\"evidence\":\"ev-zq\",\"sketch\":\"sk-zq\"}\n";
+    let lens = memo_lens_cmd(&state, "promote", promote, 0);
+    let out = memo_lens(&repo, &state, &bd, "s2-m.1", (&lens, &rules));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", told(&out));
+    assert_eq!(stdout_of(&out), "memo-lens memo=s2-m.1 verdict=promote\n", "{}", told(&out));
+    let verdict = string_pairs(&place_file(&state, "s2-m.1", "verdict"));
+    assert_eq!(pair_of(&verdict, "verdict"), "promote", "{verdict:?}");
+    assert!(pair_of(&verdict, "at").ends_with('Z'), "判定の時刻: {verdict:?}");
+    assert_eq!((pair_of(&verdict, "evidence"), pair_of(&verdict, "sketch")), ("ev-zq".to_owned(), "sk-zq".to_owned()), "{verdict:?}");
+    let events = judged_lines(&state);
+    assert_eq!(events.len(), 1, "MemoJudged は 1 行: {events:?}");
+    let event = string_pairs(events.first().map_or("", String::as_str));
+    assert_eq!((pair_of(&event, "bead"), pair_of(&event, "detail")), ("s2-m.1".to_owned(), "promote".to_owned()), "{event:?}");
+    let keys: std::collections::BTreeSet<&str> = event.iter().map(|(key, _)| key.as_str()).collect();
+    assert_eq!(keys, ["actor", "bead", "detail", "host", "kind", "schema", "ts"].into_iter().collect(), "本体の key は bead だけ: {event:?}");
+    assert_eq!(pair_of(&event, "actor"), "machine", "{event:?}");
+    assert!(!memo_place(&state, "s2-m.1").join("pid").exists(), "pid は消える");
+    assert_eq!(place_file(&state, "s2-m.1", "rc").trim(), "0", "rc が在る");
+    assert!(place_file(&state, "s2-m.1", "out").contains("ev-zq"), "lens の出力は out に残る");
+    let keep = memo_lens_cmd(&state, "keep", "{\"verdict\":\"keep\",\"evidence\":\"ev-keep\",\"sketch\":\"捨てる\"}\n", 0);
+    let kept = memo_lens(&repo, &state, &bd, "s2-m.2", (&keep, &rules));
+    assert_eq!(stdout_of(&kept), "memo-lens memo=s2-m.2 verdict=keep\n", "{}", told(&kept));
+    let verdict = string_pairs(&place_file(&state, "s2-m.2", "verdict"));
+    assert_eq!((pair_of(&verdict, "verdict"), pair_of(&verdict, "sketch")), ("keep".to_owned(), String::new()), "keep は sketch を持たない: {verdict:?}");
+    assert_memo_lens_is_a_dispatch_word_not_a_verb();
+    clean(&[&repo, &state]);
+}
+
+/// `scribe2 pipe` の使い方の行の最初の `<…>` の verb の列に memo-lens は無く、`dispatch:` の副の語の列には在る。
+fn assert_memo_lens_is_a_dispatch_word_not_a_verb() {
+    let usage = run_pipe(&[]);
+    let first = stderr_of(&usage).lines().next().unwrap_or_default().to_owned();
+    let verbs = first.split_once('<').and_then(|(_, rest)| rest.split_once('>')).map(|(found, _)| found.to_owned()).unwrap_or_default();
+    assert!(!verbs.contains("memo-lens") && verbs.contains("dispatch"), "verb の列に memo-lens は無い: {first}");
+    assert!(first.contains("release BEAD|memo-lens MEMO]"), "dispatch の副の語の列には在る: {first}");
+}
+
+/// (b) JSON の無い出力・語の外の JSON・lens の rc 1 の 3 形は、どれも `unparsed`（verdict の file と stdout と event の detail）。同じ歯の
+/// promote の周（rc 0）は promote で、3 形は JSON の良し悪しでなく形の読みで分かれる。
+#[test]
+fn pipe_dispatch_memo_lens_unreadable_output_is_unparsed_in_three_shapes() {
+    let (repo, state) = memo_repo();
+    let bd = fake_bd(&state, &unmet_memos(&["s2-m.1", "s2-m.2", "s2-m.3", "s2-m.4"]));
+    let rules = dispatch_rules(&state);
+    let good = "{\"verdict\":\"promote\",\"evidence\":\"e\",\"sketch\":\"s\"}\n";
+    let shapes = [
+        ("s2-m.1", "no-json", "JSON の無い出力\n".to_owned(), 0, "unparsed"),
+        ("s2-m.2", "word", "{\"verdict\":\"maybe\",\"evidence\":\"e\"}\n".to_owned(), 0, "unparsed"),
+        ("s2-m.3", "rc1", good.to_owned(), 1, "unparsed"),
+        ("s2-m.4", "pair", good.to_owned(), 0, "promote"),
+    ];
+    for (memo, name, output, rc, word) in shapes {
+        let lens = memo_lens_cmd(&state, name, &output, rc);
+        let out = memo_lens(&repo, &state, &bd, memo, (&lens, &rules));
+        assert_eq!(stdout_of(&out), format!("memo-lens memo={memo} verdict={word}\n"), "{name}: {}", told(&out));
+        let verdict = string_pairs(&place_file(&state, memo, "verdict"));
+        assert_eq!(pair_of(&verdict, "verdict"), word, "{name}: {verdict:?}");
+        assert!(word == "promote" || !pair_of(&verdict, "evidence").is_empty(), "{name}: unparsed は理由を evidence に書く: {verdict:?}");
+        assert_eq!(place_file(&state, memo, "rc").trim(), rc.to_string(), "{name}: lens の rc");
+    }
+    let details: Vec<String> = judged_lines(&state).iter().map(|line| pair_of(&string_pairs(line), "detail")).collect();
+    assert_eq!(details, ["unparsed", "unparsed", "unparsed", "promote"], "event の detail は判定の語");
+    clean(&[&repo, &state]);
+}
+
+/// (c) 偽の bd の呼びは台帳の読みの 1 回（`--readonly` つき）だけで書きが 0 回。lens が close を返した周も `verdict` の語は close で、台帳の
+/// 内容は変わらず memo は開いたまま。
+#[test]
+fn pipe_dispatch_memo_lens_reads_the_ledger_once_and_never_writes_it() {
+    let (repo, state) = memo_repo();
+    let json = state.join("ledger.json");
+    fs::write(&json, format!("[{}]\n", unmet_memos(&["s2-m.1"]).join(","))).expect("偽の台帳を書ける");
+    let before = fs::read_to_string(&json).unwrap_or_default();
+    let log = state.join("bd-logged.calls");
+    let bd = script(&state.join("bd-logged"), &format!("echo \"$@\" >> '{}'\ncat '{}'\n", log.display(), json.display()));
+    let rules = dispatch_rules(&state);
+    let lens = memo_lens_cmd(&state, "close", "{\"verdict\":\"close\",\"evidence\":\"もう要らない\",\"sketch\":\"\"}\n", 0);
+    let out = memo_lens(&repo, &state, &bd, "s2-m.1", (&lens, &rules));
+    assert_eq!(stdout_of(&out), "memo-lens memo=s2-m.1 verdict=close\n", "{}", told(&out));
+    assert_eq!(pair_of(&string_pairs(&place_file(&state, "s2-m.1", "verdict")), "verdict"), "close");
+    let calls: Vec<String> = fs::read_to_string(&log).unwrap_or_default().lines().map(str::to_owned).collect();
+    assert_eq!(calls.len(), 1, "台帳の呼びは読みの 1 回だけ: {calls:?}");
+    assert!(calls.iter().all(|call| call.starts_with("--readonly ")), "書きの呼びは 0: {calls:?}");
+    assert_eq!(fs::read_to_string(&json).unwrap_or_default(), before, "台帳は変わらない");
+    assert!(fs::read_to_string(&json).unwrap_or_default().contains("\"status\":\"open\""), "memo は閉じない");
+    clean(&[&repo, &state]);
+}
+
+/// discovered-from の依存（`from` が `on` を指す）を台帳の 1 件の JSON に足す。
+fn discovered_from(json: &str, from: &str, on: &str) -> String {
+    let dep = format!(",\"dependencies\":[{{\"issue_id\":\"{from}\",\"depends_on_id\":\"{on}\",\"type\":\"discovered-from\"}}]}}");
+    json.strip_suffix('}').map_or_else(|| json.to_owned(), |head| format!("{head}{dep}"))
+}
+
+/// (d) 偽の lens が受けた argv の末尾は `--stage memo` で、`--contract` が置き場の material を・`--worktree` が repo を指し、material が
+/// memo の description・notes・引き金の読み・辿れる契約の status（memo から出る向きも memo へ入る向きも）を持ち、辿れない契約は持たない。
+#[test]
+fn pipe_dispatch_memo_lens_argv_ends_with_stage_memo_and_material_carries_the_memo() {
+    let (repo, state) = memo_repo();
+    let memo = discovered_from(&memo_bead("s2-m.1", &["引き金: 再発 2"], "zq-notes-body\n[再発] 2026-09-28 a\n[再発] 2026-09-29 b\n"), "s2-m.1", "s2-c.1");
+    let reverse = listed("s2-c.3", "open", 2, "", &[("s2-m.1", "discovered-from")]);
+    let bd = fake_bd(&state, &[memo, listed("s2-c.1", "closed", 2, "", &[]), listed("s2-c.2", "open", 2, "", &[]), reverse]);
+    let rules = dispatch_rules(&state);
+    let lens = memo_lens_cmd(&state, "argv", "{\"verdict\":\"keep\",\"evidence\":\"e\",\"sketch\":\"\"}\n", 0);
+    let out = memo_lens(&repo, &state, &bd, "s2-m.1", (&lens, &rules));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", told(&out));
+    let argv = memo_lens_argv(&state, "argv");
+    assert_eq!(argv.iter().rev().take(2).rev().cloned().collect::<Vec<_>>(), ["--stage", "memo"], "末尾は --stage memo: {argv:?}");
+    let material = memo_place(&state, "s2-m.1").join("material").display().to_string();
+    let value = |flag: &str| argv.windows(2).find(|pair| pair.first().is_some_and(|found| found == flag)).and_then(|pair| pair.get(1).cloned());
+    assert_eq!(value("--contract"), Some(material.clone()), "--contract は置き場の material: {argv:?}");
+    assert_eq!(value("--worktree"), Some(repo.display().to_string()), "--worktree は repo: {argv:?}");
+    let text = fs::read_to_string(&material).unwrap_or_default();
+    for want in ["### 昇格条件", "引き金: 再発 2", "zq-notes-body", "met:再発", "- s2-c.1 status=closed", "- s2-c.3 status=open"] {
+        assert!(text.contains(want), "material は {want} を持つ: {text}");
+    }
+    assert!(!text.contains("s2-c.2"), "辿れない契約は持たない: {text}");
+    clean(&[&repo, &state]);
+}
+
+/// (e) 生きた持ち主の `pid` が在る周は lens を撃たず rc 1（`pid` は持ち主のまま・`rc` も `verdict` も書かない）・死んだ持ち主の `pid` の
+/// 周は撃って `pid` を消す。
+#[test]
+fn pipe_dispatch_memo_lens_live_owner_blocks_and_dead_owner_fires() {
+    let (repo, state) = memo_repo();
+    let bd = fake_bd(&state, &unmet_memos(&["s2-m.1"]));
+    let rules = dispatch_rules(&state);
+    let lens = memo_lens_cmd(&state, "owner", "{\"verdict\":\"keep\",\"evidence\":\"e\",\"sketch\":\"\"}\n", 0);
+    let mut owner = Command::new("sleep").arg("30").spawn().expect("持ち主の process を起こせる");
+    fs::create_dir_all(memo_place(&state, "s2-m.1")).expect("置き場を作れる");
+    let pid_file = memo_place(&state, "s2-m.1").join("pid");
+    fs::write(&pid_file, format!("{}\n", owner.id())).expect("pid を置ける");
+    let blocked = memo_lens(&repo, &state, &bd, "s2-m.1", (&lens, &rules));
+    assert_eq!(blocked.status.code(), Some(1), "生きた持ち主が在れば rc 1: {}", told(&blocked));
+    assert_eq!(memo_lens_calls(&state, "owner"), 0, "lens は撃たない");
+    assert_eq!(fs::read_to_string(&pid_file).unwrap_or_default().trim(), owner.id().to_string(), "pid は持ち主のまま");
+    assert!(place_file(&state, "s2-m.1", "rc").is_empty() && place_file(&state, "s2-m.1", "verdict").is_empty(), "rc も verdict も書かない");
+    owner.kill().expect("持ち主を止められる");
+    owner.wait().expect("持ち主を回収できる");
+    let fired = memo_lens(&repo, &state, &bd, "s2-m.1", (&lens, &rules));
+    assert_eq!(fired.status.code(), Some(i32::from(RC_OK)), "死んだ持ち主の周は撃つ: {}", told(&fired));
+    assert_eq!(memo_lens_calls(&state, "owner"), 1, "lens を撃つ");
+    assert!(!pid_file.exists(), "終わりに pid を消す");
+    clean(&[&repo, &state]);
+}
+
+/// 口座を宣言した manifest（列の写しに計測の行・鮮度の行・便の model の行と `[[account]]` を足す。`measured` が偽なら計測の待ち時間の行を
+/// 落とす＝計測が撃てない置き場）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn account_rules(state: &Path, labels: &[&str], measured: bool) -> String {
+    let mut body = fs::read_to_string(dispatch_rules(state)).expect("列の写しを読める");
+    let row = |id: &str, kind: &str, value: &str| format!("\n[[rule]]\nid = \"{id}\"\nkind = \"{kind}\"\nvalue = {value}\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n");
+    if measured {
+        body.push_str(&row("fleet.usage_timeout_s", "UsageTimeoutS", "13"));
+    }
+    body.push_str(&row("fleet.usage_fresh_s", "UsageFreshS", "0"));
+    body.push_str(&row("runner.model", "RunnerModel", "\"opus\""));
+    for label in labels {
+        body.push_str(&format!("\n[[account]]\nlabel = \"{label}\"\n"));
+    }
+    let path = state.join("rules-memo-accounts.toml");
+    fs::write(&path, body).expect("口座つきの写しを書ける");
+    path.display().to_string()
+}
+
+/// (f) 宣言した口座の計測が落ちる置き場は lens を撃たず `rc` が `account-unmeasured`・宣言した口座が全部便用の規則の外（当たっている）の
+/// 置き場は `rc` が `account-none` で、どちらも `verdict` も event も書かない。同じ歯の口座を宣言しない置き場は撃ち（`--account-dir` 無し）、
+/// 便用の規則の内で余裕の在る口座を宣言した置き場は偽 lens の argv の `--account-dir` が選んだ口座の dir を指し、`--stage memo` が末尾に残る。
+#[test]
+fn pipe_dispatch_memo_lens_chooses_the_account_or_stops_without_a_verdict() {
+    let (repo, state) = memo_repo();
+    let bd = fake_bd(&state, &unmet_memos(&["s2-m.1", "s2-m.2", "s2-m.3", "s2-m.4"]));
+    let ok = "{\"verdict\":\"keep\",\"evidence\":\"e\",\"sketch\":\"\"}\n";
+    let curl = lifecycle::fake_usage_curl(&state);
+    lifecycle::put_account(&state, "a1", &[lifecycle::windows(100, 10)]);
+    lifecycle::put_account(&state, "a2", &[lifecycle::windows(100, 10)]);
+    let unmeasured = memo_lens_cmd(&state, "unmeasured", ok, 0);
+    let out = memo_lens_with(&repo, &state, (&bd, "s2-m.1"), (&unmeasured, &account_rules(&state, &["a1"], false)), &["--curl", &curl]);
+    assert_ne!(out.status.code(), Some(i32::from(RC_OK)), "撃たない周は成功でない: {}", told(&out));
+    assert_eq!(place_file(&state, "s2-m.1", "rc").trim(), "account-unmeasured", "{}", told(&out));
+    let none = memo_lens_cmd(&state, "none", ok, 0);
+    let out = memo_lens_with(&repo, &state, (&bd, "s2-m.2"), (&none, &account_rules(&state, &["a1", "a2"], true)), &["--curl", &curl]);
+    assert_eq!(place_file(&state, "s2-m.2", "rc").trim(), "account-none", "{}", told(&out));
+    for (memo, name) in [("s2-m.1", "unmeasured"), ("s2-m.2", "none")] {
+        assert_eq!(memo_lens_calls(&state, name), 0, "{name}: lens を撃たない");
+        assert!(place_file(&state, memo, "verdict").is_empty(), "{name}: verdict を書かない");
+        assert!(!memo_place(&state, memo).join("pid").exists(), "{name}: pid は消える");
+    }
+    assert!(judged_lines(&state).is_empty(), "判定の無い周は event を書かない");
+    let plain = memo_lens_cmd(&state, "plain", ok, 0);
+    let out = memo_lens(&repo, &state, &bd, "s2-m.3", (&plain, &dispatch_rules(&state)));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "口座を宣言しない置き場は撃つ: {}", told(&out));
+    assert_eq!(memo_lens_calls(&state, "plain"), 1);
+    assert_eq!(lifecycle::argv_account_dir(&memo_lens_argv(&state, "plain")), None, "宣言 0 は起動行を変えない");
+    lifecycle::put_account(&state, "b1", &[lifecycle::windows(100, 10)]);
+    lifecycle::put_account(&state, "b2", &[lifecycle::windows(40, 10)]);
+    let chosen = memo_lens_cmd(&state, "chosen", ok, 0);
+    let out = memo_lens_with(&repo, &state, (&bd, "s2-m.4"), (&chosen, &account_rules(&state, &["b1", "b2"], true)), &["--curl", &curl]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{}", told(&out));
+    let argv = memo_lens_argv(&state, "chosen");
+    assert_eq!(lifecycle::argv_account_dir(&argv), Some(state.join("accounts").join("b2").display().to_string()), "選んだ口座の dir: {argv:?}");
+    assert_eq!(argv.iter().rev().take(2).rev().cloned().collect::<Vec<_>>(), ["--stage", "memo"], "末尾は --stage memo: {argv:?}");
+    clean(&[&repo, &state]);
+}

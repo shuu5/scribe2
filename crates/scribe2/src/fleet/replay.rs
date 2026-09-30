@@ -261,7 +261,8 @@ fn apply_account(state: &mut State, event: &Event) {
         | EventKind::UtteranceSorted
         | EventKind::TurnEndUnjudged
         | EventKind::IntakeRefused
-        | EventKind::LifecycleCutover => {}
+        | EventKind::LifecycleCutover
+        | EventKind::MemoJudged => {}
     }
 }
 
@@ -354,7 +355,8 @@ fn apply_seat(state: &mut State, event: &Event) {
         | EventKind::UtteranceSorted
         | EventKind::TurnEndUnjudged
         | EventKind::IntakeRefused
-        | EventKind::LifecycleCutover => {}
+        | EventKind::LifecycleCutover
+        | EventKind::MemoJudged => {}
     }
 }
 
