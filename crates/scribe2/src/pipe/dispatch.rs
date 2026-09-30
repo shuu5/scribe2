@@ -14,10 +14,10 @@ use super::cli::{live, stage_of, Denial, Materials};
 use super::contract::Contract;
 use super::gate::{Limits, Verdict};
 use super::health;
-use super::land::verdict_of;
+use super::land::{verdict_of, MAIN_REF};
 use super::regate::{followed_since_gate, regated_since_gate};
 use super::table::Pointer;
-use super::{current, Ticket};
+use super::{current, git_line, Ticket};
 use crate::cli_outcome::Outcome;
 use crate::fleet::store;
 use crate::fleet::{replay, Event, EventKind, Mark, Stage, State, SCHEMA, STAGES};
@@ -92,7 +92,7 @@ const LAUNCH_LOG: [&str; 2] = ["pipe", "launch.log"];
 
 /// [`WaitReason`] の全 variant の名（宣言順・`enum-slices` が集合完全性を測る）。
 pub const WAIT_REASONS: &[&str] =
-    &["dependency", "overlap", "admission", "host-busy", "hold", "launched", "settled", "no-design-pointer"];
+    &["dependency", "overlap", "admission", "host-busy", "hold", "launched", "settled", "no-design-pointer", "floor"];
 
 /// 列に載ったのに起こさない理由（**閉じた型**・設計 §3 の表）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -145,6 +145,8 @@ pub enum WaitReason {
     },
     /// acceptance に設計 pointer の行が無い。
     NoDesignPointer,
+    /// 床の検査が不合格の間、介入 `first` の印の無い候補が待つ（値は今の判定・設計 §35・行 aj）。
+    Floor(floor::Judged),
 }
 
 impl WaitReason {
@@ -159,6 +161,7 @@ impl WaitReason {
             Self::Launched { .. } => "launched",
             Self::Settled { .. } => "settled",
             Self::NoDesignPointer => "no-design-pointer",
+            Self::Floor(_) => "floor",
         }
     }
 
@@ -171,6 +174,7 @@ impl WaitReason {
             Self::Admission { reason } => format!("{name}:{reason}"),
             Self::Hold { ref since } | Self::Launched { ref since } => format!("{name}:{since}"),
             Self::Settled { ref sha, stage } => format!("{name}:{sha}/{}", stage.as_str()),
+            Self::Floor(ref found) => format!("{name}:{}", found.rc.map_or_else(|| found.word.as_str().to_owned(), |rc| rc.to_string())),
             Self::HostBusy | Self::NoDesignPointer => name.to_owned(),
         }
     }
@@ -557,8 +561,16 @@ fn measure(input: &Input<'_>) -> (Turn, Option<Read>) {
         };
         let mut ready: BTreeMap<String, (Pointer, Contract)> = BTreeMap::new();
         let mut candidates: Vec<Candidate> = Vec::new();
+        let floor = git_line(input.repo, &["rev-parse", MAIN_REF])
+            .and_then(|sha| floor::judgement(input.state_dir, &sha))
+            .filter(|found| found.word != floor::Word::Pass);
         for issue in issues.iter().filter(|issue| is_input(issue)) {
-            let (candidate, found) = entry_of(input, issue, &ledger);
+            let (mut candidate, mut found) = entry_of(input, issue, &ledger);
+            // 床の検査が不合格の周は、`first` の印・起こした事実・終端の記録のどれも持たない候補を準備の表から外して待たせる（設計 §35 約束 2）。
+            let kept = matches!(candidate.reason, Some(WaitReason::Launched { .. } | WaitReason::Settled { .. }));
+            if let (Some(judged), false, false) = (&floor, kept, candidate.mark == Some(Mark::First)) {
+                (candidate.reason, found) = (Some(WaitReason::Floor(judged.clone())), None);
+            }
             if let Some(entry) = found {
                 ready.insert(candidate.bead.clone(), entry);
             }
@@ -1270,6 +1282,7 @@ mod tests {
         assert_eq!(found.launched.len(), 2, "母集団 4 bead のうち残るのは 2 つ");
     }
 
+    // flip-check: retroactive s2-07l.738.37.2
     /// 理由の名は [`WAIT_REASONS`] と 1 対 1 で、値を持つ variant は値も描く（`dispatch ls` の `reason=`）。
     #[test]
     fn pipe_dispatch_wait_reasons_render_the_name_and_the_value() {
@@ -1282,8 +1295,12 @@ mod tests {
             WaitReason::Launched { since: "t2".to_owned() },
             WaitReason::Settled { sha: "abc".to_owned(), stage: Stage::Landed },
             WaitReason::NoDesignPointer,
+            WaitReason::Floor(floor_judged(floor::Word::Fail, Some(2), None, "")),
+            WaitReason::Floor(floor_judged(floor::Word::Unfireable, None, Some("path"), "")),
+            WaitReason::Floor(floor_judged(floor::Word::Timeout, None, None, "")),
         ];
-        let names: Vec<&str> = listed.iter().map(WaitReason::as_str).collect();
+        let mut names: Vec<&str> = listed.iter().map(WaitReason::as_str).collect();
+        names.dedup();
         assert_eq!(names, WAIT_REASONS, "母集団 {} 件（宣言順）", WAIT_REASONS.len());
         let rendered: Vec<String> = listed.iter().map(WaitReason::render).collect();
         assert_eq!(
@@ -1297,8 +1314,11 @@ mod tests {
                 "launched:t2",
                 "settled:abc/Landed",
                 "no-design-pointer",
+                "floor:2",
+                "floor:unfireable",
+                "floor:timeout",
             ],
-            "値を持つ 6 件は値も描く"
+            "値を持つ 6 件は値も描き、床は 3 形（rc・unfireable・timeout）"
         );
     }
 

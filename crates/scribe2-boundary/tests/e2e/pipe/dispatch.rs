@@ -3229,3 +3229,166 @@ fn pipe_dispatch_floor_fire_cleans_a_tree_left_by_a_dead_round() {
     assert!(!listed.contains(&path.display().to_string()), "worktree の登録も無い: {listed}");
     clean(&[&place.repo, &place.state]);
 }
+
+// ───── 床の検査の待ち（設計 dispatcher.md §35・契約表の行 aj・接頭辞 `pipe_dispatch_floor_wait_`）─────
+//
+// 床の検査の置き場（[`FloorPlace`]）に行 a・b（write-set は交差しない）を commit し、台帳に 2 本（s2-toy.1 = 行 a・s2-toy.2 = 行 b）を持つ
+// 偽の bd で撃つ。起こす側の 1 周の出力の 1 行 `dispatch=started:<n>,resumed:0,waiting:<m>` と、観測の口の `reason=` を測る。
+
+/// 行 a・b を commit した床の置き場（宣言の `floor-check` が `row`・偽の command は `body`）。
+fn wait_place(row: &str, body: &str) -> FloorPlace {
+    let place = floor_place(Some(row), body);
+    two_rows(&place.repo);
+    place
+}
+
+/// 台帳に行 a・b の 1 本ずつ（s2-toy.1・s2-toy.2）を持つ偽の bd。
+fn wait_bd(place: &FloorPlace) -> String {
+    fake_bd(&place.state, &[issue("s2-toy.1", 2, "a"), issue("s2-toy.2", 2, "b")])
+}
+
+/// 起こす側の 1 周（審査は偽 PASS の lens・実装役は `true`）。
+fn wait_round(place: &FloorPlace, rules: &str, bd: &str) -> Output {
+    let (state, repo, lens) = (place.state.display().to_string(), place.repo.display().to_string(), review_lens_pass(&place.state));
+    let args = ["dispatch", "--state-dir", state.as_str(), "--repo", repo.as_str(), "--rules", rules, "--bd", bd, "--lens", lens.as_str(), "--runner", "true"];
+    run_pipe_with_path(&place.path(), &args)
+}
+
+/// 観測の口（`pipe dispatch ls`）。
+fn wait_ls(place: &FloorPlace, rules: &str, bd: &str) -> Output {
+    let (state, repo) = (place.state.display().to_string(), place.repo.display().to_string());
+    run_pipe_with_path(&place.path(), &["dispatch", "ls", "--state-dir", state.as_str(), "--repo", repo.as_str(), "--rules", rules, "--bd", bd])
+}
+
+/// 起こす側の 1 周の出力の `dispatch=` の行。
+fn wait_dispatch(out: &Output) -> String {
+    stdout_of(out).lines().find(|line| line.starts_with("dispatch=")).unwrap_or_default().to_owned()
+}
+
+/// (a) rc 1・rc 2・timeout・unfireable の 4 形の周に、first の印の無い 2 本がどれも `floor:<形>` で待つ（4/4）。準備の表は空で 1 本も起こさない。
+#[test]
+fn pipe_dispatch_floor_wait_every_failing_form_holds_both_plain_candidates() {
+    let forms = [("exit 1", 600, FLOOR_CMD, "floor:1"), ("exit 2", 600, FLOOR_CMD, "floor:2"), ("sleep 3", 1, FLOOR_CMD, "floor:timeout"), ("exit 0", 600, "floor-not-yet", "floor:unfireable")];
+    for (body, timeout, row, want) in forms {
+        let place = wait_place(row, body);
+        let (rules, bd) = (floor_rules(&place.state, Some(timeout)), wait_bd(&place));
+        let out = wait_round(&place, &rules, &bd);
+        assert_eq!(wait_dispatch(&out), "dispatch=started:0,resumed:0,waiting:2", "{want}: 1 本も起こさない（{}）", told(&out));
+        let listed = wait_ls(&place, &rules, &bd);
+        for bead in ["s2-toy.1", "s2-toy.2"] {
+            assert_eq!(reason_of(&listed, bead), want, "{want}: {bead}（{}）", told(&listed));
+        }
+        assert_eq!(count_of(&listed), format!("{COUNT} total=2 ready=0"), "{want}: 準備の表から外れる");
+        clean(&[&place.repo, &place.state]);
+    }
+}
+
+/// (b) 同じ周に first の印の 1 本は起きる（もう 1 本は floor で待つ）。観測の口の準備の表も first の 1 本だけ。
+#[test]
+fn pipe_dispatch_floor_wait_a_first_marked_candidate_is_not_held() {
+    let place = wait_place(FLOOR_CMD, "exit 1");
+    let (rules, bd) = (floor_rules(&place.state, Some(600)), wait_bd(&place));
+    wait_round(&place, &rules, &bd);
+    let marked = run_pipe(&["dispatch", "first", "s2-toy.1", "--state-dir", &place.state.display().to_string()]);
+    assert_eq!(marked.status.code(), Some(i32::from(RC_OK)), "first: {}", told(&marked));
+    let listed = wait_ls(&place, &rules, &bd);
+    assert_eq!(reason_of(&listed, "s2-toy.1"), "-", "first の印の候補は床で待たない（{}）", told(&listed));
+    assert_eq!(reason_of(&listed, "s2-toy.2"), "floor:1", "印の無い候補は待つ（{}）", told(&listed));
+    assert_eq!(count_of(&listed), format!("{COUNT} total=2 ready=1"), "準備の表は first の 1 本");
+    let out = wait_round(&place, &rules, &bd);
+    assert_eq!(wait_dispatch(&out), "dispatch=started:1,resumed:0,waiting:1", "first の 1 本だけ起きる（{}）", told(&out));
+    assert_eq!(created(&place.state, &["s2-toy.1"], 1), 1, "first の便の RunCreated が 1 件");
+    assert_eq!(created(&place.state, &["s2-toy.2"], 0), 0, "待った便は起きない");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (c) rc 0 の周は待たせず、2 本とも起きる。
+#[test]
+fn pipe_dispatch_floor_wait_a_passing_floor_holds_nobody() {
+    let place = wait_place(FLOOR_CMD, "exit 0");
+    let (rules, bd) = (floor_rules(&place.state, Some(600)), wait_bd(&place));
+    let out = wait_round(&place, &rules, &bd);
+    assert_eq!(wait_dispatch(&out), "dispatch=started:2,resumed:0,waiting:0", "2 本とも起きる（{}）", told(&out));
+    assert_eq!(created(&place.state, &["s2-toy.1", "s2-toy.2"], 2), 2, "RunCreated が 2 件");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (d) 行の 3 つの検査（form・denied・metachar）に当たる 3 形の周は、どれも `floor:unfireable` で待つ（3/3）。
+#[test]
+fn pipe_dispatch_floor_wait_row_faults_hold_as_unfireable() {
+    for row in ["floor-probe {base}", "git push --force", "floor-probe a ; b"] {
+        let place = wait_place(row, "exit 0");
+        let (rules, bd) = (floor_rules(&place.state, Some(600)), wait_bd(&place));
+        let out = wait_round(&place, &rules, &bd);
+        assert_eq!(wait_dispatch(&out), "dispatch=started:0,resumed:0,waiting:2", "{row:?}: 起こさない（{}）", told(&out));
+        let listed = wait_ls(&place, &rules, &bd);
+        for bead in ["s2-toy.1", "s2-toy.2"] {
+            assert_eq!(reason_of(&listed, bead), "floor:unfireable", "{row:?}: {bead}（{}）", told(&listed));
+        }
+        clean(&[&place.repo, &place.state]);
+    }
+}
+
+/// (e) rc 1 の後に main を直す commit を足し、手動の 1 周を撃つと、その周に撃ち直されて 2 本とも起きる。
+#[test]
+fn pipe_dispatch_floor_wait_a_fixing_commit_releases_the_wait_on_the_next_round() {
+    let place = wait_place(FLOOR_CMD, "test -f fixed");
+    let (rules, bd) = (floor_rules(&place.state, Some(600)), wait_bd(&place));
+    let held = wait_round(&place, &rules, &bd);
+    assert_eq!(wait_dispatch(&held), "dispatch=started:0,resumed:0,waiting:2", "直す前は待つ（{}）", told(&held));
+    fs::write(place.repo.join("fixed"), "ok\n").unwrap_or_else(|err| panic!("直す file を書ける: {err}"));
+    git(&place.repo, &["add", "fixed"]);
+    git(&place.repo, &["commit", "-q", "-m", "fix-main"]);
+    let out = wait_round(&place, &rules, &bd);
+    assert_eq!(wait_dispatch(&out), "dispatch=started:2,resumed:0,waiting:0", "その周に撃ち直されて起きる（{}）", told(&out));
+    assert_eq!(created(&place.state, &["s2-toy.1", "s2-toy.2"], 2), 2, "RunCreated が 2 件");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (f) 観測の口（`dispatch ls`）は撃たずに同じ理由を出す（2 回撃っても 1 回目の周の 1 回のまま）。
+#[test]
+fn pipe_dispatch_floor_wait_the_observing_door_reads_the_verdict_and_never_shoots() {
+    let place = wait_place(FLOOR_CMD, "exit 1");
+    let (rules, bd) = (floor_rules(&place.state, Some(600)), wait_bd(&place));
+    wait_round(&place, &rules, &bd);
+    for _ in 0..2 {
+        let listed = wait_ls(&place, &rules, &bd);
+        assert_eq!(reason_of(&listed, "s2-toy.1"), "floor:1", "同じ理由（{}）", told(&listed));
+    }
+    assert_eq!(place.fired(), 1, "観測の口は撃たない");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (g) 除く 2 形: rc 1 の周に起こした事実（launched）の候補と終端の記録（settled）の候補と印の無い候補を 1 本ずつ置く。前の 2 本の理由は
+/// launched / settled のまま（floor で上書きされない）で、印の無い 1 本だけが floor。
+#[test]
+fn pipe_dispatch_floor_wait_keeps_the_launched_and_settled_reasons() {
+    let place = wait_place(FLOOR_CMD, "exit 1");
+    let settled = intake_bead(&place.repo, &place.state, &format!("{DESIGN_FILE}#a"), "s2-toy.1");
+    fs::write(place.state.join("pipe").join(&settled).join(REVIEW_FILE), "{\"verdict\":\"FAIL\"}\n").unwrap_or_else(|err| panic!("審査の判定を書ける: {err}"));
+    let ts = "2026-09-21T00:00:00Z";
+    put_launched(&place.state, "s2-toy.2", ts);
+    let (rules, bd) = (floor_rules(&place.state, Some(600)), fake_bd(&place.state, &[issue("s2-toy.1", 2, "a"), issue("s2-toy.2", 2, "b"), issue("s2-toy.3", 2, "b")]));
+    wait_round(&place, &rules, &bd);
+    let listed = wait_ls(&place, &rules, &bd);
+    assert!(reason_of(&listed, "s2-toy.1").starts_with("settled:"), "終端の記録は残る（{}）", told(&listed));
+    assert_eq!(reason_of(&listed, "s2-toy.2"), format!("launched:{ts}"), "起こした事実は残る（{}）", told(&listed));
+    assert_eq!(reason_of(&listed, "s2-toy.3"), "floor:1", "印の無い候補は待つ（{}）", told(&listed));
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (h) 今の判定は同じ sha のときだけ: 今の判定の file が古い sha の unfireable のまま、main に commit を足して結果の file の無い周の
+/// `dispatch ls` は、first の印の無い候補を floor で待たせない。
+#[test]
+fn pipe_dispatch_floor_wait_reads_the_current_only_for_the_same_sha() {
+    let place = wait_place("floor-not-yet", "exit 0");
+    let (rules, bd) = (floor_rules(&place.state, Some(600)), wait_bd(&place));
+    wait_round(&place, &rules, &bd);
+    let held = wait_ls(&place, &rules, &bd);
+    assert_eq!(reason_of(&held, "s2-toy.1"), "floor:unfireable", "前提: 同じ sha の周は待つ（{}）", told(&held));
+    advance(&place.repo);
+    let listed = wait_ls(&place, &rules, &bd);
+    assert_eq!(reason_of(&listed, "s2-toy.1"), "-", "古い sha の今の判定では待たせない（{}）", told(&listed));
+    assert_eq!(count_of(&listed), format!("{COUNT} total=2 ready=2"), "準備の表に戻る");
+    clean(&[&place.repo, &place.state]);
+}
