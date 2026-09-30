@@ -1089,6 +1089,17 @@ size = "M"
 growth = ["crates/scribe2/src/pipe/closure/derive.rs:60", "crates/scribe2/src/pipe/table/check/collide.rs:40", "crates/scribe2/src/pipe/table.rs:3", "crates/scribe2/src/pipe/table/check.rs:12", "crates/scribe2/src/pipe/cli/intake.rs:4", "crates/scribe2/src/pipe/contract.rs:8", "crates/scribe2-boundary/tests/e2e/pipe/contracts.rs:80", "crates/scribe2-boundary/tests/e2e/pipe/intake.rs:120"]
 done = "(1) Context と Base に根の列の欄を足し、本体の字面は TableFacts の根で埋め、歯の区間の字面（Base 10・Context 7）に固定の根の値を足す（retroactive の札） (2) crate_relative・parent_candidates・target_of・collide.rs の module_path が §62 の 1 関数で path を割り、2 つの CRATES_DIR を消す (3) verify の -p <crate> は宣言したどの根の下の同じ名の crate にも当たる (4) nextest_line と promised_verify が根の列を受け、呼び手が材料の根を渡し、歯の区間の呼び出しは固定の根（retroactive の札） (5) parent_candidates はどの根でも <根><crate>/src の直下に lib.rs と main.rs の候補を足す (6) module_path は宣言した根の下の src/ と tests/ の後ろの段を読む (7) 宣言の無い repo の導出の結果・判定行・findings の字面は不変 (8) 行 bq の着地の後に走る 歯: closure_crate_roots_ が入れ子の歯の置き場（同じ名の crate の 2 根で 2 file）・nextest 行の旗・親の候補を宣言の有無の 2 形で、contracts_collide_crate_roots_ が module の段（src/ と tests/ の後ろ）を 2 形で、contract_crate_roots_ が宣言した repo の teeth-outside-write-set の 1 件と宣言の無い repo の 0 件、入れ子の名の衝突の予想の 1 件と宣言の無い repo の 0 件を、pipe_intake_nest_roots_ が受付の経路の 3 つの配線（表の検査の Context が preflight で判定の関数より先に入れ子の歯の file を名指す・判定の関数の base_of が Derived 行の歯の置き場を入れ子に解く・約束の行の promised_verify の呼び手が -p toy --lib の verify と入れ子の file の write-set を写しに書く）を測る。base は欄と関数の形が無く RED"
 
+[[contract]]
+id = "bs"
+title = "審査の lens に done の番号つき項目ごとの歯の対応の表を出させ、表の欠けた判定を INCONCLUSIVE に、歯の無い項目を持つ PASS を FAIL（vacuous-assert）に倒し、歯の無い項目を全部 at に名指す（§64）"
+req = ["FR49", "FR9"]
+section = "64"
+write-set = ["+crates/scribe2/src/pipe/review/items.rs", "crates/scribe2/src/pipe/review.rs", "crates/scribe2/src/headless/lens.rs", "crates/scribe2-boundary/tests/e2e/pipe/review.rs", "crates/scribe2-boundary/tests/e2e/pipe/intake.rs"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail pipe_review_done_items_", "cargo nextest run -p scribe2 --lib --no-tests=fail headless_lens_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_review_done_items_", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_review_kind_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_review_kind_fail_keeps_kind_and_at_in_review_json_and_two_word_detail", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_review_kind_missing_or_unknown_or_unreadable_falls_to_unparsed_without_moving_the_verdict", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_review_reuse_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_intake_promise_"]
+size = "M"
+growth = ["crates/scribe2/src/pipe/review.rs:70", "crates/scribe2/src/headless/lens.rs:50", "crates/scribe2-boundary/tests/e2e/pipe/review.rs:260", "crates/scribe2-boundary/tests/e2e/pipe/intake.rs:45"]
+done = "(1) done の字を頭から見て (1) から 1 ずつ増える番号の印が順に現れた所で項目に区切り、順の外の印は本文の一部、番号の印は半角の括弧と ASCII の数字だけ、(1) を持たない done は 0 個で、読み手は review/items.rs の 1 関数を材料の書き手と判定の読みが呼ぶ (2) 項目が 1 個以上で Promised でない行の審査だけ材料の dir に items.txt（見出し・K 個の番号を並べた表の形の指示の行・項目を 1 行ずつ）を置き、lens は契約の本文の後ろに空行 1 つを挟んで items.txt の本文を足し、cap に items.txt の byte を数え、在るのに読めない周は rc 2 で、置かない行の材料の dir と prompt は 1 字も変わらない (3) lens の最終行の key done の文字列を , で割り空白を剥がし空を落とした各項目を 番号:歯 と読み、歯の - は落ちる歯が無いこと、表が揃うのは番号が 1〜K をちょうど 1 回ずつ覆い形の合わない項目が無い周 (4) 項目 1 個以上で Promised でない行の、lens の JSON が読め verdict が 3 値の周だけ、表が揃わない周は INCONCLUSIVE・unparsed に倒して evidence の頭に理由（key done が無い・文字列でない・無い番号・余る番号・重なる番号・形の合わない項目の件数）を置き、at は lens の verdict が PASS でない周だけ lens の値、表が揃い - を持つ PASS は FAIL・vacuous-assert に倒して at を - の番号の done(n) の列・evidence を歯の無い done の項目と lens の evidence にし、表が揃い - を持つ FAIL / INCONCLUSIVE は verdict と kind を保ち at の末尾に lens の at に無い done(n) を番号の順に足し evidence の末尾に歯の無い done の項目を足し、- の無い表と、項目 0 個・Promised・JSON が読めない・3 値でない・rc が 0 でない・lens に届かない周は判定を変えない (5) 倒しは read_outcome の中で parse_lens の直後に 1 回で、lens を撃った周と先撃ちを使い回した周が同じ関数を通り、review が項目の数を渡し outcome_of は 0 を渡す (6) review.json の key の集合と schema 1・event の detail の形・理由の 7 語・雛形の字・items.txt の無い周の prompt・Promised の行の審査・使い回しの鍵と手順は変わらない 歯: lib の pipe_review_done_items_（review.rs の tests・(a) 項目の読み）と headless_lens_items_（lens.rs の tests・(b) prompt への足し・cap・読めない材料）、e2e の pipe_review_done_items_（review.rs・(c) 材料と番号を持たない行 (d) PASS の倒しと - の無い表 (e) FAIL と INCONCLUSIVE への足しと重ねない at (f) 表の欠けの 6 形と欠けた FAIL の at と器の INCONCLUSIVE の 3 形 (g) 先撃ちの使い回し、intake.rs・(h) Promised の行と素の番号つきの行）、変わらない既存の歯 headless_lens_・pipe_review_kind_（lib）・pipe_review_kind_fail_keeps_kind_and_at_in_review_json_and_two_word_detail・pipe_review_kind_missing_or_unknown_or_unreadable_falls_to_unparsed_without_moving_the_verdict・pipe_review_reuse_・pipe_intake_promise_、base は items.txt を置かず key done を読まないので (c)〜(h) が RED で (a)(b) は compile で落ちる"
+
 <!-- contracts:end -->
 
 
@@ -1970,3 +1981,61 @@ done = "(1) Context と Base に根の列の欄を足し、本体の字面は Ta
     - (f) 約束の行 1 つ（files が nest/crates/toy/src/a.rs・teeth が `nest_x_`）の行を `pipe intake` に通すと rc 0 で、便の写しの契約の verify が `cargo nextest run -p toy --lib --no-tests=fail nest_x_` の 1 行、写しの write-set が nest/crates/toy/src/a.rs を含む（`promised_verify` の呼び手が材料の根を渡す証拠）。
   - 変異の A/B: `Context` の根を固定の根に戻す → e2e の宣言の周が 0 件になり、(d) は判定の関数の断り（`refuse=` の行）に落ちる。受付の `base_of` だけ固定の根のまま → (e) が歯の置き場を解けず rc 1、(f) の write-set が a.rs を持たない。`promised_verify` の呼び手だけ固定の根を渡す → (f) の verify が `-p toy --lib` を持たない。`target_of` だけ固定の根のまま → (b) が落ちる。`parent_candidates` だけ固定の根のまま → (c) が落ちる。
   - base で RED の理由: base は行 bq の着地の後の main で、key は読めるが `Context` と `Base` に根の欄が無い。lib の新しい歯は base の関数の signature と欄が無く該当 0 本（rc 4）か compile で落ちる。e2e は入れ子の歯の置き場を解けず、`contract_crate_roots_` は findings の assert、`pipe_intake_nest_roots_` は (d) の名指し・(e) の rc・(f) の verify の assert で落ちる（機能不在）。宣言の無い対照は base で緑。
+
+## 64. 審査の lens に done の番号つき項目ごとの歯の対応の表を出させ、歯の無い項目を 1 周で全部 at に名指す — 表の欠けた判定は INCONCLUSIVE、歯の無い項目を持つ PASS は FAIL（vacuous-assert）に器が倒す（契約表の行 bs・FR49 / FR9・memo `s2-07l.737.30`）
+
+やさしく言うと: 契約の審査の係（lens）は、done の約束に歯（落ちる test）が無いとき、最初に見つけた 1〜3 個だけを名指して FAIL を返す。直して出し直すと別の項目で落ち、同じ行が 2〜3 周する。そこで器は done の番号つきの項目を 1 行ずつ lens に渡し、項目ごとに「その約束を外した実装で落ちる歯」を表にして返させる。表が欠けた判定は「見ていない」として INCONCLUSIVE に倒す。歯の無い項目（`-`）が在るのに PASS なら FAIL に倒す。歯の無い項目は全部 at に並べる。1 周で穴が全部そろう。
+
+- 出所（2026-09-30）:
+  - memo `s2-07l.737.30`: 束 E の審査で、行 g（`s2-07l.738.33`）・行 h（`s2-07l.738.34`）・行 ai（`s2-07l.738.37.1`）が vacuous-assert で 2 周ずつ落ち、2 周目は 1 周目に無い done の項目を名指した。起票の前に残りの行の done の項目 93 個を歯と 1 対 1 で照らすと、13 行に 40 件の同じ型が在った。
+  - 再発 2（memo の昇格条件）: memo の起票（06:21Z）の後、行 h の便 `s2-07l.738.34-20260930T062304Z` が done (10) を、続く便 `s2-07l.738.34-20260930T063733Z` が 1 周目に無い done (2)(5) を名指して、2 周続けて vacuous-assert で落ちた。
+- 現物（main 94181589・verified）:
+  - 契約の審査の雛形 `crates/scribe2/src/headless/lens-contract.txt` は最終行の JSON を 4 key（verdict / evidence / kind / at）に閉じる。観点 1 は「verify の各行が done を測れる歯を名指している」を問うが、done の項目ごとの対応は返させない。evidence は 1 行、at は `,` 区切りの語の列。
+  - `crates/scribe2/src/headless/lens.rs` の prompt_of は、契約の写しの隣の材料（design.txt・requirements.txt・promises.txt・base.txt・outside.txt）を読み、契約の本文を `{contract}` に埋める。契約の本文は state が goal / done / verify / write-set を 1 本の字に組んだもので、done は 1 本の字のまま渡る。
+  - `crates/scribe2/src/pipe/review.rs` の review（:300）は、先撃ちの使い回し（read_outcome）か lens を撃つ decide（:524 → lens_outcome :562 → read_outcome :579 → parse_lens :598）で判定を得る。narrow（Promised の行の kind の絞り）の後に settle（:621）が review.json（schema / run / verdict / evidence / kind / at / scope / ts）と Reviewed の event を書く。材料は stage（:335）が materials（:350）で組み、keep（:487）が置く。先撃ちの判定の読み outcome_of（:588）も read_outcome を通る。
+  - 先撃ちの使い回しの鍵（`crates/scribe2/src/pipe/dispatch/prelens.rs` の digest）は、材料の dir の file の全部を数える。
+  - review.json の読み手は器の中だけ: 判定の読み手 judgement_of（受付の 2 門）と、memo の起票の口（evidence と at を観測へ写す）。隣の project の crates に review.json の読み手は 0 件（2026-09-30）。
+  - 契約表の done の大半は番号つきの項目「(1) … (2) …」で書く。番号を持たない done（歯の fixture の多く）と、器が約束の行から「(n) expect」で組む Promised の行の done も在る。
+- 形（番号は行 bs の done と 1:1）:
+  1. **項目の読み**: done の字を頭から見て、(1) から 1 ずつ増える番号の印「(n)」が順に現れた所で区切る。順の外の印（(2) の後の 2 つ目の (2)・(1) の前の (3) 等）は本文の一部。番号の印は半角の括弧と ASCII の数字だけで、(1) を持たない done は項目 0 個。読み手は新しい子 module `crates/scribe2/src/pipe/review/items.rs` の 1 関数で、材料の書き手（形 2）と判定の読み（形 4）が同じ関数を呼ぶ。
+  2. **材料**: 項目が 1 個以上で Promised でない行の審査は、材料の dir に items.txt を置く（既存の材料と同じ keep の中・同じ書き方）。
+     - 本文は、見出し「## done の項目（K 個・番号つき）」と、表の形の指示（形 3 の形・`-` の意味・`-` の項目を全部書くこと・器が倒す 2 つ）と、項目を 1 行ずつ「(n) <本文>」。表の形の指示の行は K 個の番号を並べた `1:<歯>,2:<歯>,…,K:<歯>` を持つ。
+     - Promised の行と項目 0 個の行は置かない（材料の dir と prompt は 1 字も変わらない）。
+     - lens は、契約の写しの隣に items.txt が在れば、契約の本文の後ろに空行 1 つを挟んで items.txt の本文（末尾の改行を除く）を足し、`{contract}` に埋める。雛形・穴・他の材料は変えない。
+     - cap の照合は items.txt の byte を契約の本文に数える（越える周は従来どおり claude を呼ばず INCONCLUSIVE）。在るのに読めない周は、他の材料と同じく claude を呼ばず rc 2。
+  3. **対応の表**: lens の最終行の JSON の key done の値（文字列）を `,` で割り、空白を剥がし、空を落とした各項目を「<番号>:<歯>」と読む。番号は ASCII の数字、歯は空白を剥がして空でない字で、`-` は「落ちる歯が無い」。表が揃うとは、番号が 1〜K をちょうど 1 回ずつ覆い、形の合わない項目が無いこと。
+  4. **器の倒し方**（項目が 1 個以上で Promised でない行の、lens の JSON が読め verdict が 3 値の周だけ）:
+     - 表が揃わない → verdict を INCONCLUSIVE、kind を unparsed に倒す。evidence は「done の対応の表が欠ける（<理由>）: <lens の evidence>」。理由は「key done が無い」「key done が文字列でない」のどちらか、または「無い番号 (n)…」「余る番号 (n)…」「重なる番号 (n)…」「形の合わない項目 <k> 件」のうち在るものをこの順に「・」で結んだもの。at は lens の verdict が PASS でない周だけ lens の値のまま（PASS の周は無し）。
+     - 表が揃い `-` が 1 つ以上で、lens の verdict が PASS → verdict を FAIL、kind を vacuous-assert に倒す。at は `-` の番号の順の `done(<n>)` の列、evidence は「歯の無い done の項目 (n)…（lens の対応の表）: <lens の evidence>」。
+     - 表が揃い `-` が 1 つ以上で、FAIL / INCONCLUSIVE → verdict と kind は lens の値のまま。at の末尾に、lens の at の語（`,` で割って空白を剥がした語）に無い `done(<n>)` を番号の順に足す（lens の at が無ければその列だけ）。evidence の末尾に「・歯の無い done の項目 (n)…」を足す。
+     - 表が揃い `-` が 0 → 判定を 1 字も変えない。
+     - 項目 0 個の行・Promised の行・lens の JSON が読めない周・verdict が 3 値でない周・lens の rc が 0 でない周・lens に届かない周（器が作る INCONCLUSIVE）は key done を読まず、判定を変えない。
+  5. **撃つ所**: 倒しは read_outcome の中で parse_lens の直後に 1 回。lens を撃った周と先撃ちを使い回した周が同じ関数を通る。review が項目の数を渡し、先撃ちの読み outcome_of は 0 を渡す（先撃ちの確定の面は変わらない・限界）。narrow は倒しの後で、Promised の行は項目 0 個として扱うので 2 つは重ならない。
+  6. **変えないもの**: review.json の key の集合と schema 1・event の detail の形（`verdict:<V> kind:<k>`・倒した周は倒した後の値）・理由の 7 語・受付の 2 門（焼き直しの門は vacuous-assert と unparsed を測らない）・雛形 lens-contract.txt と lens.txt の字・items.txt の無い周の prompt・Promised の行の審査・先撃ちの使い回しの鍵と手順。
+- 触らない: `crates/scribe2/src/pipe/dispatch/prelens.rs`・受付（`crates/scribe2/src/pipe/cli/intake.rs`）・gate の lens の読み（diff の審査は契約の写しの隣に材料を持たないので items.txt を読まない）。
+- ADR を書かない理由: review.json の key と schema と event の形は変わらない（歯の無い項目は既存の at と evidence に載る）。lens の最終行に key を足すのは、§22 が kind と at を足したのと同じ、同じ binary の lens と pipe の間の口である。跨版で残る写し（先撃ちの判定）は、items.txt が材料の dir の鍵を変えるので、古い判定は使い回されない。
+- 却下:
+  - review.json に項目の表の欄を足す: 跨版の on-disk の形が増える（ADR の条件 3）。今の読み手（受付の 2 門・memo の起票の口）が要るのは歯の無い項目の列だけで、それは at が運ぶ。
+  - 雛形の文だけで「全部名指せ」と頼む: lens が従わなくても器が気づけない（散文の規律・憲法 N2）。表を必須にし、欠けを INCONCLUSIVE に倒して初めて「見ていない」と「見て 0 件」を分けられる（gate の lens の findings / population と同じ極性）。
+  - 事前審査で done の項目の数と § の歯の記号の数を機械で照らす（memo の候補 2）: 字面の数は意味の対応を測らない。10 項目と 10 本の歯が 1 対 1 でなくても数は合い、歯の無い項目を通す。対応は lens の表が持ち、器は表の揃いだけを測る。
+  - 歯の無い項目を持つ PASS を INCONCLUSIVE に倒す: lens 自身の表が「測れない約束が在る」と言っているので型は vacuous-assert で、INCONCLUSIVE では直す所（at）が残らない。
+  - 起票の前に席が監査の係を回す（memo の候補 3）: 散文の規律（N2）。
+- 限界:
+  - 表の歯の字の中身（在る歯か・その項目を測るか）は器が照らさない。lens が偽の歯を書けば通る。表は「全部の項目を見た」ことと「歯の無い項目の全部」を 1 周で出させる口で、歯の意味の正しさは lens の判断のまま。
+  - 先撃ちの確定（事前審査の面）は倒しを通らない。先撃ちが PASS の行が、審査で FAIL に倒されることがある（審査が使い回す周は倒しを通る）。
+  - items.txt が材料の鍵を変えるので、番号つきの done を持つ行の先撃ちの判定は、入れ替えの後に 1 回ずつ撃ち直される。
+  - 全角の括弧・丸数字の番号は項目と読まない（0 個として従来の審査のまま）。
+  - 項目の本文に次の番号の印を字として含む done は、そこで項目が割れる（(2) の本文の中の (3) は 3 番目の項目の頭になる）。
+- 歯（接頭辞 pipe_review_done_items_ と headless_lens_items_・どちらも `grep -rn` は crates で 0 件・2026-09-30）:
+  - lib（`crates/scribe2/src/pipe/review.rs` の tests・既存の区間）: (a) 項目の読み。`(1) 甲 (2) 乙 形 (2) の字 (3) 丙` は 3 項目で 2 番目の本文が `乙 形 (2) の字`。(1)〜(10) を順に持つ done は 10 項目で 10 番目の本文を持つ。`(2) a (1) b` は 1 項目（`b`）。(1) を持たない `d` と、全角の括弧の `（1） e` は 0 項目。
+  - lib（`crates/scribe2/src/headless/lens.rs` の tests・既存の区間）: (b) 契約の写しの隣に items.txt が在れば、prompt の契約の本文の直後（`## 契約が実装する設計の節` の前）に、空行 1 つと items.txt の本文が 1 回だけ入る。cap を契約 + items + 設計 + 要件の byte ちょうどにすると prompt を組み、1 byte 少ないと INCONCLUSIVE（`contract material exceeds cap`）。items.txt の名の dir が在る周は rc 2（prompt を組まない）。items.txt が無い周の prompt は既存の歯 headless_lens_base_fills_the_hole_only_when_the_copy_exists_in_one_pass のまま。
+  - e2e（`crates/scribe2-boundary/tests/e2e/pipe/review.rs`・kind の歯の後ろ・偽 lens は既存の lens_finding の行に key done を足した形）:
+    - (c) 材料: done が `(1) 甲を作る (2) 乙を測る 形 (2) の字 (3) 丙を足す` の行を受付から審査まで通すと、材料の dir が base.txt・contract.toml・design.txt・items.txt・requirements.txt の 5 本になる。items.txt は見出しの行（3 個）と、`(1) 甲を作る`・`(2) 乙を測る 形 (2) の字`・`(3) 丙を足す` の 3 行をこの順に持ち、表の形の指示の行が `1:<歯>,2:<歯>,3:<歯>` を持つ。同じ置き場で done が `d-plain` の行は items.txt を置かず、偽 lens が PASS と表 `1:-` を返しても PASS のまま（rc 0・kind も at も無い）。
+    - (d) PASS の倒し: 3 項目の行に偽 lens が PASS と表 `1:pipe_x_,2:-,3:-` を返すと rc 1。verdict FAIL、kind vacuous-assert、at `done(2),done(3)`、evidence `歯の無い done の項目 (2)(3)（lens の対応の表）: fake`、detail `verdict:FAIL kind:vacuous-assert`。同じ行で表が `1:a,2:b,3:c` の PASS は、rc 0 の PASS のまま（kind も at も無く evidence は fake）。
+    - (e) FAIL と INCONCLUSIVE への足し: FAIL・kind literal-mismatch・at `§2,done(2)`・表 `1:-,2:-,3:t` は rc 1 のまま、kind literal-mismatch、at `§2,done(2),done(1)`、evidence `fake・歯の無い done の項目 (1)(2)`。INCONCLUSIVE・kind other・at 無し・表 `1:t,2:t,3:-` は rc 3 のまま、kind other、at `done(3)`。FAIL・at `crates/toy/src/lib.rs,§2,Marker`・表 `1:a,2:b,3:c` は、at と evidence が lens の値のまま。
+    - (f) 表の欠け: 3 項目の行に、PASS で表の 6 形（key done 無し・`1:a,3:b`・`1:a,2:b,3:c,4:d`・`1:a,1:b,2:c,3:d`・`1:a,2:,3:c`・値が数の key done）を返すと、どれも rc 3、verdict INCONCLUSIVE、kind unparsed、at 無し。evidence はそれぞれ `done の対応の表が欠ける（key done が無い）: fake`・`（無い番号 (2)）`・`（余る番号 (4)）`・`（重なる番号 (1)）`・`（無い番号 (2)・形の合わない項目 1 件）`・`（key done が文字列でない）` を持つ。FAIL・kind literal-mismatch・at `§2`・key done 無しは、verdict INCONCLUSIVE、kind unparsed、at `§2`。同じ行で lens が rc 7 で終わる周・JSON を返さない周・verdict が MAYBE の周は、evidence が従来の器の理由のまま（`done の対応の表` を含まない）で kind unparsed。
+    - (g) 先撃ちの使い回し: 既存の使い回しの置き場（行 a と行 b）で行 b の done を `(1) 甲 (2) 乙` にし、先撃ちと審査の偽 lens が PASS と表 `1:-,2:t` を返す。審査は偽 lens を撃たず（回数 1）、detail が `verdict:FAIL kind:vacuous-assert prelens:reused`、review.json の at が `done(1)`。
+  - e2e（`crates/scribe2-boundary/tests/e2e/pipe/intake.rs`・約束の行の歯の後ろ）: (h) Promised の行（約束の行 2 つ・done は器が組む番号つきの字）と、同じ doc の番号つきの done（`(1) 甲 (2) 乙`）の素の行を、偽 PASS の lens（key done 無し）で受付から審査まで通す。素の行は items.txt を置いて INCONCLUSIVE（rc 3）、Promised の行は items.txt を置かず PASS（rc 0）。
+  - 変わらない既存の歯（行の verify が撃つ・本文は変えない）: headless_lens_（lens.rs の既存の 4 本・items.txt の無い prompt は 1 字も変わらない）・pipe_review_kind_（review.rs の lib の歯）・pipe_review_kind_fail_keeps_kind_and_at_in_review_json_and_two_word_detail と pipe_review_kind_missing_or_unknown_or_unreadable_falls_to_unparsed_without_moving_the_verdict（番号を持たない done の fixture の判定と review.json の key と schema は変わらない）・pipe_review_reuse_（使い回しの既存の歯）・pipe_intake_promise_（Promised の行は偽 PASS で通る）。
+  - 判定の順と変異（条件 1 つに歯 1 本）: 順の外の印で割る → (a)・材料を置かない → (c)・番号を持たない行にも表を読む → (c)・Promised の行にも置く／表を求める → (h)・prompt に足さない・cap に数えない・読めない材料で撃つ → (b)・`-` を見ず PASS のまま → (d)・`-` の無い表でも倒す → (d)・FAIL の at に足さない・lens の at と重ねて足す → (e)・表の欠け（無い・余る・重なる・形）を見逃す → (f)・欠けた FAIL の at を落とす → (f)・器の INCONCLUSIVE にも表を求める → (f)・使い回しの周に倒さない → (g)。
+  - base で RED の理由: base は items.txt を置かず key done を読まない。(c) は items.txt が無く、(d)(e)(f)(g) は判定が lens の値のまま、(h) は素の行が PASS。lib の (a)(b) は関数と材料の名が無く compile で落ちる。
