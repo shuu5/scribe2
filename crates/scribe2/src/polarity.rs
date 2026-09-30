@@ -140,6 +140,9 @@ pub enum Guard {
     /// land の終端＝push の失敗と CI が success でない周（と測れない周）に**台帳を close しない**
     /// （[`crate::pipe::land::Terminal`]・設計 contract-source.md §5）。
     LandTerminal,
+    /// turn の終わりの止め＝未告の未仕分けの発話を持つ session の `Stop` を 1 度だけ止める（[`crate::hook::turn_end`]・
+    /// 設計 dialogue-surface.md §12・読めない周は止めずに記帳して通す FailOpen）。
+    TurnEndBlock,
 }
 
 /// [`Guard`] の全 variant（宣言順）。
@@ -176,6 +179,7 @@ pub const ALL: &[Guard] = &[
     Guard::Inject,
     Guard::SpawnLine,
     Guard::LandTerminal,
+    Guard::TurnEndBlock,
 ];
 
 /// `Polarity` を持つが **guard ではない**境界（設計 docs/design/polarity.md §3・`s2-07l.177`）。
@@ -237,6 +241,7 @@ impl Guard {
             Self::Inject => crate::seat::inject::POLARITY,
             Self::SpawnLine => crate::pipe::spawn::POLARITY,
             Self::LandTerminal => crate::pipe::land::TERMINAL_POLARITY,
+            Self::TurnEndBlock => crate::hook::turn_end::POLARITY,
         }
     }
 
@@ -275,6 +280,7 @@ impl Guard {
             Self::Inject => "seat::inject::Delivery",
             Self::SpawnLine => "pipe::spawn::LineRefusal",
             Self::LandTerminal => "pipe::land::Terminal",
+            Self::TurnEndBlock => "hook::turn_end::TurnEndDecision",
         }
     }
 
@@ -313,6 +319,7 @@ impl Guard {
             Self::Inject => "inject-refusal",
             Self::SpawnLine => "spawn-line",
             Self::LandTerminal => "land-terminal",
+            Self::TurnEndBlock => "turn-end-block",
         }
     }
 

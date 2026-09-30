@@ -20,12 +20,27 @@ const FLAG_PANE: &str = "--pane";
 /// tmux の socket を渡す flag（tick と同じ・歯は独立 socket で撃つ）。
 const FLAG_SOCKET: &str = "--tmux-socket";
 
+/// `Stop` の再入か（payload の `stop_hook_active` が真）。
+pub fn is_reentry(payload: &str) -> bool {
+    bool_field(payload, KEY_STOP_ACTIVE) == Some(true)
+}
+
 /// 打刻を 1 回試みる。戻りは stderr へ載せる行（黙る周・書けた周は空）。
 pub fn stamp(args: &[String], payload: &str, event: Event, state_dir: &Path) -> Vec<String> {
     // `Stop` の再入だけを黙る（他の event の payload に同じ key が在っても打刻を止めない）。
-    if event == Event::Stop && bool_field(payload, KEY_STOP_ACTIVE) == Some(true) {
+    if event == Event::Stop && is_reentry(payload) {
         return Vec::new();
     }
+    write(args, payload, event, state_dir)
+}
+
+/// 器が止めた周の続き（再入）の終わりで席を Idle に戻す打刻（再入の沈黙はこの周だけ外す）。
+pub fn stamp_release(args: &[String], payload: &str, state_dir: &Path) -> Vec<String> {
+    write(args, payload, Event::Stop, state_dir)
+}
+
+/// 打刻の本体（再入の判定は呼び手が持つ）。
+fn write(args: &[String], payload: &str, event: Event, state_dir: &Path) -> Vec<String> {
     let Some(pane) = flag_of(args, FLAG_PANE).filter(|found| !found.trim().is_empty()) else {
         return Vec::new();
     };

@@ -26,6 +26,7 @@ pub mod permission;
 pub mod precompact;
 pub mod role_guard;
 pub mod stamp;
+pub mod turn_end;
 pub mod utterance;
 pub mod vessel;
 
@@ -193,6 +194,8 @@ pub fn dispatch(args: &[String], payload: &str) -> Outcome {
             let mut outcome = session_start(&hooked, version, payload, started);
             // 名乗りの後に打刻（Idle）。打刻の失敗は名乗りの行も rc も変えない（席を止めない）。
             outcome.err.extend(stamp::stamp(args, payload, Event::SessionStart, &dir));
+            // 打刻の後に turn の終わりの止めの開始の位置（既に在れば上書きしない・設計 dialogue-surface.md §12）。
+            outcome.err.extend(turn_end::start(&dir, payload));
             // 打刻の後に読み込み元の記録（設計 consumer-sync.md §3・同じく席を止めない）。
             outcome.err.extend(plugin_record(args, payload, &dir));
             outcome
@@ -211,7 +214,7 @@ pub fn dispatch(args: &[String], payload: &str) -> Outcome {
             outcome.err.extend(err);
             outcome
         }
-        Some(EVENT_STOP) => stamped(args, payload, Event::Stop, &dir),
+        Some(EVENT_STOP) => turn_end::stop(args, payload, &dir),
         Some(EVENT_PRE_COMPACT) => pre_compact(&hooked, payload, started),
         _ => Outcome::ok(Vec::new()),
     }

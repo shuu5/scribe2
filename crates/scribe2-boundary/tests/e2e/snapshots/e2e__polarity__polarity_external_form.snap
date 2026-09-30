@@ -34,4 +34,5 @@ guard=store-lock timing=in-loop on-failure=fail-closed boundary=fleet::store::St
 guard=inject-refusal timing=in-loop on-failure=fail-closed boundary=seat::inject::Delivery
 guard=spawn-line timing=in-loop on-failure=fail-closed boundary=pipe::spawn::LineRefusal
 guard=land-terminal timing=post-hoc on-failure=fail-closed boundary=pipe::land::Terminal
-polarity: guards=32 in-loop=26 post-hoc=6 fail-open=4
+guard=turn-end-block timing=in-loop on-failure=fail-open boundary=hook::turn_end::TurnEndDecision
+polarity: guards=33 in-loop=27 post-hoc=6 fail-open=5

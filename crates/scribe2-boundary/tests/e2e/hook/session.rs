@@ -1,5 +1,6 @@
 // flip-check: moved s2-07l.679
-//! session の族の歯（接頭辞 `hook_session_` / `hook_recovery_` / `hook_precompact_`・設計 docs/design/carry-prep.md §9 行 g）。
+//! session の族の歯（接頭辞 `hook_session_` / `hook_recovery_` / `hook_precompact_`・設計 docs/design/carry-prep.md §9 行 g・
+//! 発話の記帳 `hook_utterance_record_`・turn の終わりの止め `hook_unsorted_stop_`）。
 
 use super::*;
 
@@ -1049,4 +1050,443 @@ fn hook_utterance_record_never_stops_the_prompt_when_it_cannot_write() {
     fs::create_dir_all(&events).unwrap_or_else(|err| panic!("log の位置に dir: {err}"));
     unrecorded(&utter_plain(&repo, &[], "書けない依頼"), "write");
     clean(&[&repo, &aux, &state]);
+}
+
+// ─────────────────── turn の終わりの止め（接頭辞 `hook_unsorted_stop_`・設計 dialogue-surface.md §12・契約表の行 k） ───────────────────
+//
+// `session-start` が session の置き場へ event log の長さを開始の位置として 1 度だけ書き、`stop` がそこから末尾までを読んで、その session の
+// 未仕分けの発話のうち未告のものが在る周を 1 度だけ rc 2 で止める。発話は `user-prompt-submit`（行 g）、仕分けは `utterance sort`（行 i）で作る。
+
+/// 逐語にだけ在る字（止めの 1 行に載らないことを測る・止めの行の字と `NAME` に無い字で作る）。
+const STOP_WORDS: &str = "🦊 秘 Ω の一言";
+/// 逐語の字の見本（[`STOP_WORDS`] にだけ在る字）。
+const STOP_MARKS: [char; 3] = ['🦊', '秘', 'Ω'];
+
+/// `session_id`（在れば）と `stop_hook_active`（真のときだけ）を持つ payload。
+fn stop_payload(cwd: &Path, sid: Option<&str>, active: bool) -> String {
+    let mut pairs = vec![format!("\"cwd\":{}", json_lite::quote(&cwd.display().to_string()))];
+    pairs.extend(sid.map(|found| format!("\"session_id\":{}", json_lite::quote(found))));
+    pairs.extend(active.then(|| "\"stop_hook_active\":true".to_owned()));
+    format!("{{{}}}", pairs.join(","))
+}
+
+/// `session-start` を session `sid` で撃つ（rc 0 を要求する）。
+fn start_session(repo: &Path, args: &[&str], sid: &str) -> Output {
+    let mut all = vec!["session-start"];
+    all.extend(args);
+    let out = run_hook_args(&all, &stop_payload(repo, Some(sid), false));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "session-start は rc 0: {}", stderr_text(&out));
+    out
+}
+
+/// `stop` を撃つ。
+fn stop_hook(repo: &Path, args: &[&str], sid: Option<&str>, active: bool) -> Output {
+    let mut all = vec!["stop"];
+    all.extend(args);
+    run_hook_args(&all, &stop_payload(repo, sid, active))
+}
+
+/// session `sid` の発話を 1 件記帳して ts を返す。
+fn say_in(repo: &Path, sid: &str, words: &str) -> String {
+    assert_recorded(&utter(repo, &[], Some(sid), Some(words)), words)
+}
+
+/// 止めた周の外形: rc 2・stdout 0 byte・stderr はちょうど 1 行で `tss` の全部と口の名を持ち、逐語の字を載せない。
+fn assert_blocked(out: &Output, tss: &[&str], why: &str) {
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "{why}: rc 2: {}", stderr_text(out));
+    assert!(out.stdout.is_empty(), "{why}: stdout 0 byte");
+    let text = stderr_text(out);
+    assert_eq!(text.lines().count(), 1, "{why}: stderr は 1 行: {text}");
+    for ts in tss {
+        assert!(text.contains(ts), "{why}: ts {ts} を並べる: {text}");
+    }
+    let listed = text.split_once("ts=").and_then(|(_, rest)| rest.split_once(" — ")).map(|(list, _)| list.split(',').collect::<Vec<_>>());
+    assert_eq!(listed.as_deref(), Some(tss), "{why}: 並べた ts は未仕分けの全部（母集団 {}）: {text}", tss.len());
+    for mouth in ["utterance sort", "--as request --memo", "--as chat", "seat ruling bind", "utterance show"] {
+        assert!(text.contains(mouth), "{why}: 口の名 {mouth}: {text}");
+    }
+    assert!(text.contains(NAME) && !text.contains(STOP_MARKS), "{why}: 口の名は在り、逐語は運ばない: {text}");
+}
+
+/// 止めない周の外形: rc 0・stdout も stderr も 0 byte。
+fn assert_passes(out: &Output, why: &str) {
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{why}: 止めない: {}", stderr_text(out));
+    assert_silent(out, why);
+}
+
+/// event の fixture 1 件（共通の欄を固定する）。
+fn fixture_event(kind: vessel::fleet::EventKind, bead: &str, case: vessel::fleet::Case) -> vessel::fleet::Event {
+    vessel::fleet::Event {
+        schema: vessel::fleet::SCHEMA,
+        ts: vessel::fleet::cli::now_utc(),
+        kind,
+        run: String::new(),
+        bead: bead.to_owned(),
+        host: "h".to_owned(),
+        actor: "human".to_owned(),
+        stage: None,
+        seat: None,
+        pid: None,
+        detail: None,
+        allowance: None,
+        registration: None,
+        mark: None,
+        account: None,
+        cost: None,
+        rule: None,
+        case: Some(case),
+    }
+}
+
+/// event log へ fixture を 1 件足す。
+#[expect(clippy::expect_used, reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く")]
+fn put_event(state: &Path, event: &vessel::fleet::Event) {
+    let policy = vessel::fleet::store::LockPolicy::embedded().expect("lock の方針を読める");
+    vessel::fleet::store::append(state, event, policy).expect("log へ足せる");
+}
+
+/// 発話 `ts` を要望として memo へ仕分ける（仕分けの event の fixture・台帳は読まない）。
+fn sort_as_request(state: &Path, ts: &str, memo: &str) {
+    let case = vessel::fleet::Case::Sorted { utterance: ts.to_owned(), sorting: vessel::fleet::Sorting::Request };
+    put_event(state, &fixture_event(vessel::fleet::EventKind::UtteranceSorted, memo, case));
+}
+
+/// 発話 `ts` を問いへの答えとして結ぶ（裁定 event の fixture・発話の ts の key を持つ）。
+fn sort_as_answer(state: &Path, ts: &str) {
+    let case = vessel::fleet::Case::Ruling {
+        ruling: "s2-q1:1".to_owned(),
+        utterance: ts.to_owned(),
+        channel: vessel::fleet::Channel::Chat,
+        question_ts: "2026-09-30T06:00:00Z".to_owned(),
+        asked: None,
+    };
+    let event = fixture_event(vessel::fleet::EventKind::RulingReceived, "s2-q1", case);
+    put_event(state, &vessel::fleet::Event { detail: Some("推奨で".to_owned()), ..event });
+}
+
+/// 発話 `ts` を会話として仕分ける（実物の `utterance sort --as chat`）。
+#[expect(clippy::expect_used, reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く")]
+fn sort_as_chat(state: &Path, ts: &str) {
+    let out = Command::new(bin())
+        .args(["utterance", "sort", "--state-dir", &state.display().to_string(), "--ts", ts, "--as", "chat"])
+        .output()
+        .expect("binary を起動できる");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "会話の仕分けは rc 0: {}", stderr_text(&out));
+}
+
+/// log の `TurnEndUnjudged` の (session, reason)（物理順）。
+#[expect(clippy::expect_used, reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く")]
+fn unjudged_in(state: &Path) -> Vec<(Option<String>, String)> {
+    let events = vessel::fleet::store::read_all(state).expect("log を読める");
+    let cases = events.into_iter().filter(|event| event.kind == vessel::fleet::EventKind::TurnEndUnjudged);
+    cases.filter_map(|event| match event.case {
+        Some(vessel::fleet::Case::TurnEnd { session, reason }) => Some((session, reason)),
+        _ => None,
+    }).collect()
+}
+
+/// session の置き場（`<state>/session`）の下の file の相対 path（整列）。dir が無ければ空。
+fn session_files(state: &Path) -> Vec<String> {
+    fn walk(dir: &Path, root: &Path, out: &mut Vec<String>) {
+        for entry in fs::read_dir(dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, root, out);
+            } else {
+                out.push(path.strip_prefix(root).map(|rest| rest.display().to_string()).unwrap_or_default());
+            }
+        }
+    }
+    let root = state.join("session");
+    let mut found = Vec::new();
+    walk(&root, &root, &mut found);
+    found.sort();
+    found
+}
+
+/// (a) 未仕分け 2 つの session の Stop が止まり（rc 2・stdout 0 byte・stderr 1 行に 2 つの ts と口の名・逐語の字は無い・差し込みの記録 0）、
+/// 2 度目の Stop（再入でない）は rc 0・0 byte。3 つ目の発話を足すと止まって 3 つの ts を並べる。同じ log の別 session の未仕分けでは止まらない。
+#[test]
+fn hook_unsorted_stop_blocks_once_lists_every_ts_and_leaves_other_sessions_alone() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let flag = state.display().to_string();
+    let args = ["--state-dir", flag.as_str()];
+    for sid in ["sid-a", "sid-b", "sid-c"] {
+        start_session(&repo, &args, sid);
+    }
+    let first = say_in(&repo, "sid-a", &format!("{STOP_WORDS} 一つ目"));
+    let second = say_in(&repo, "sid-a", &format!("{STOP_WORDS} 二つ目"));
+    say_in(&repo, "sid-b", "別の session の一つ目");
+    say_in(&repo, "sid-b", "別の session の二つ目");
+    assert_passes(&stop_hook(&repo, &args, Some("sid-c"), false), "発話を持たない session（同じ log に別 session の未仕分けが 2 つ）");
+    let (before_inject, before_log) = (inject_lines(&state).len(), fs::read_to_string(vessel::fleet::store::events_path(&state)).unwrap_or_default());
+    let out = stop_hook(&repo, &args, Some("sid-a"), false);
+    assert_blocked(&out, &[&first, &second], "未仕分け 2 つ");
+    assert_eq!(inject_lines(&state).len(), before_inject, "差し込みの記録を書かない");
+    assert_eq!(fs::read_to_string(vessel::fleet::store::events_path(&state)).unwrap_or_default(), before_log, "止める周は event を書かない");
+    assert_passes(&stop_hook(&repo, &args, Some("sid-a"), false), "2 度目の Stop（同じ ts は 2 度止めない）");
+    let third = say_in(&repo, "sid-a", &format!("{STOP_WORDS} 三つ目"));
+    assert_blocked(&stop_hook(&repo, &args, Some("sid-a"), false), &[&first, &second, &third], "3 つ目を足す");
+    assert_passes(&stop_hook(&repo, &args, Some("sid-a"), false), "3 つ目の後の 2 度目");
+    clean(&[&repo, &state]);
+}
+
+/// (b) request・chat・答え（裁定 event の発話の ts の key）で仕分けた発話だけの session は止まらず、控えの file も書かない。
+/// 対照の未仕分けの発話を 1 つ足すと、その 1 つの ts だけを並べて止まる。
+#[test]
+fn hook_unsorted_stop_does_not_block_a_session_whose_utterances_are_all_sorted() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let flag = state.display().to_string();
+    let args = ["--state-dir", flag.as_str()];
+    start_session(&repo, &args, "sid-s");
+    let (by_request, by_chat, by_answer) = (say_in(&repo, "sid-s", "要望"), say_in(&repo, "sid-s", "会話"), say_in(&repo, "sid-s", "答え"));
+    sort_as_request(&state, &by_request, "s2-m1");
+    sort_as_chat(&state, &by_chat);
+    sort_as_answer(&state, &by_answer);
+    assert_passes(&stop_hook(&repo, &args, Some("sid-s"), false), "仕分け済みの 3 形（request・chat・答え）");
+    assert_eq!(session_files(&state), ["sid-s/start"], "仕分け済みの周は控えを書かない");
+    let open = say_in(&repo, "sid-s", &format!("{STOP_WORDS} 未仕分け"));
+    assert_blocked(&stop_hook(&repo, &args, Some("sid-s"), false), &[&open], "対照の未仕分け 1 つ");
+    clean(&[&repo, &state]);
+}
+
+/// PATH の先頭に `fake`（偽の `tmux` を置いた dir・どの問いにも席の target を返す）を足して hook を撃つ。実 tmux を立てる歯は nextest の
+/// tmux group（`.config/nextest.toml`・名前の列挙）に載せる要るので、席の解決だけを偽の tmux に替える。
+#[expect(clippy::expect_used, reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く")]
+fn run_hook_with_fake_tmux(fake: &Path, args: &[&str], payload: &str) -> Output {
+    let path = format!("{}:{}", fake.display(), std::env::var("PATH").unwrap_or_default());
+    let mut child = Command::new(bin())
+        .arg("hook")
+        .args(args)
+        .env("PATH", path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("binary を起動できる");
+    child.stdin.as_mut().expect("stdin を開ける").write_all(payload.as_bytes()).expect("payload を書ける");
+    child.wait_with_output().expect("終了を待てる")
+}
+
+/// (c) 席（偽の tmux が target を返す）: 止めた周は state.jsonl の最終行が busy のまま・差し込みの記録 0 行増・打刻も増えず、続く再入の Stop で
+/// idle に戻る。止めていない再入（と、戻した後の再入）は黙り打刻しない。
+#[test]
+fn hook_unsorted_stop_keeps_the_seat_busy_until_the_reentry_releases_it() {
+    use std::os::unix::fs::PermissionsExt;
+    let repo = git_repo();
+    let (state, fake, name) = (linked(&repo), tmp(), "hookblock");
+    let script = fake.join("tmux");
+    fs::write(&script, format!("#!/bin/sh\nprintf '{name}:{name}\\n'\n")).unwrap_or_else(|err| panic!("偽の tmux: {err}"));
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap_or_else(|err| panic!("実行権: {err}"));
+    let flag = state.display().to_string();
+    let args = ["--state-dir", flag.as_str(), "--pane", "%1"];
+    let hook = |event: &str, sid: &str, active: bool| {
+        let mut all = vec![event];
+        all.extend(args);
+        run_hook_with_fake_tmux(&fake, &all, &stop_payload(&repo, Some(sid), active))
+    };
+    assert_eq!(hook("session-start", "sid-c", false).status.code(), Some(i32::from(RC_OK)), "session-start は rc 0");
+    assert_silent(&hook("user-prompt-submit", "sid-c", false), "打刻だけの user-prompt-submit（busy）");
+    let stamps = || fs::read_to_string(state_file(&state, name)).unwrap_or_default();
+    let last = || stamps().lines().last().map(str::to_owned).unwrap_or_default();
+    assert!(last().contains("\"busy\""), "busy から始める: {}", last());
+    assert_passes(&hook("stop", "sid-c", true), "止めていない再入は黙る");
+    assert!(last().contains("\"busy\""), "止めていない再入は打刻しない: {}", last());
+    let ts = say_in(&repo, "sid-c", "未仕分け");
+    let (lines, injects) = (stamps().lines().count(), inject_lines(&state).len());
+    assert_blocked(&hook("stop", "sid-c", false), &[&ts], "未仕分けの Stop");
+    assert_eq!((stamps().lines().count(), inject_lines(&state).len()), (lines, injects), "止めた周は打刻も差し込みの記録も増やさない");
+    assert!(last().contains("\"busy\""), "止めた周の最終行は busy: {}", last());
+    assert_passes(&hook("stop", "sid-c", true), "続く再入は止めず席を戻す");
+    assert_eq!(stamps().lines().count(), lines + 1, "再入で 1 行増える");
+    assert!(last().contains("\"idle\"") && last().contains("\"Stop\""), "再入で idle（event は Stop）: {}", last());
+    assert_passes(&hook("stop", "sid-c", true), "戻した後の再入は黙る");
+    assert_eq!(stamps().lines().count(), lines + 1, "戻した後の再入は打刻しない");
+    assert_eq!(inject_lines(&state).len(), injects, "差し込みの記録は増えない");
+    clean(&[&repo, &state, &fake]);
+}
+
+/// 止めずに通す周の外形（rc 0・stdout 0 byte）と、`TurnEndUnjudged` の (session, reason) の列。
+fn unjudged_after(state: &Path, out: &Output, why: &str) -> Vec<(Option<String>, String)> {
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{why}: rc 0: {}", stderr_text(out));
+    assert!(out.stdout.is_empty() && out.stderr.is_empty(), "{why}: stdout と stderr は 0 byte: {}", stderr_text(out));
+    unjudged_in(state)
+}
+
+/// (d) 読めない 5 語の各 fixture で Stop は rc 0・`TurnEndUnjudged` が 1 件（reason が一致）。同じ fixture で Stop をもう 1 度撃つと、
+/// 控えを持てる 2 語（no-start・log-unreadable）は増えず、控えを持てない・読めない・書けない 3 語（no-session・told-unreadable・told-unwritable）は 1 件増える。
+#[test]
+fn hook_unsorted_stop_records_the_five_unjudged_words_once_or_every_time() {
+    let words = ["no-session", "no-start", "log-unreadable", "told-unreadable", "told-unwritable"];
+    let keeps = [false, true, true, false, false];
+    assert_eq!((words.len(), keeps.len()), (5, 5), "母集団");
+    for (word, keeps) in words.iter().zip(keeps) {
+        let repo = git_repo();
+        let (state, aux) = (linked(&repo), tmp());
+        let flag = state.display().to_string();
+        let args = ["--state-dir", flag.as_str()];
+        let session = Some("sid-d");
+        let sid = match *word {
+            "no-session" => None,
+            "no-start" => session,
+            "log-unreadable" => {
+                say_in(&repo, "other", &"長い発話 ".repeat(400));
+                start_session(&repo, &args, "sid-d");
+                fs::write(vessel::fleet::store::events_path(&state), "").unwrap_or_else(|err| panic!("log を縮められる: {err}"));
+                session
+            }
+            "told-unreadable" => {
+                start_session(&repo, &args, "sid-d");
+                fs::create_dir_all(state.join("session").join("sid-d").join("told")).unwrap_or_else(|err| panic!("控えの位置に dir: {err}"));
+                session
+            }
+            _ => {
+                start_session(&repo, &args, "sid-d");
+                say_in(&repo, "sid-d", "未仕分け");
+                let dangling = std::os::unix::fs::symlink(aux.join("no-such-dir").join("told"), state.join("session").join("sid-d").join("told"));
+                dangling.unwrap_or_else(|err| panic!("書けない控え: {err}"));
+                session
+            }
+        };
+        let expected = |count: usize| vec![(sid.map(str::to_owned), (*word).to_owned()); count];
+        let first = unjudged_after(&state, &stop_hook(&repo, &args, sid, false), word);
+        assert_eq!(first, expected(1), "{word}: 1 度目は 1 件");
+        let second = unjudged_after(&state, &stop_hook(&repo, &args, sid, false), word);
+        assert_eq!(second, expected(if keeps { 1 } else { 2 }), "{word}: 2 度目（控えを持てる語は増えない）");
+        clean(&[&repo, &state, &aux]);
+    }
+}
+
+/// (d2) 路に使えない session_id（`/` を含む・空・長すぎる）も no-session で、置き場に何も作らない。
+#[test]
+fn hook_unsorted_stop_treats_an_unsafe_session_id_as_no_session() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let flag = state.display().to_string();
+    let args = ["--state-dir", flag.as_str()];
+    let long ="x".repeat(200);
+    let unsafe_ids = ["../escape", "a/b", "", long.as_str()];
+    for sid in unsafe_ids {
+        start_session(&repo, &args, sid);
+        assert_passes(&stop_hook(&repo, &args, Some(sid), false), sid);
+    }
+    assert_eq!(unjudged_in(&state).len(), unsafe_ids.len(), "毎回 1 件（母集団 {}）", unsafe_ids.len());
+    assert!(unjudged_in(&state).iter().all(|(session, reason)| session.is_none() && reason == "no-session"), "session 無しの no-session");
+    assert_eq!(session_files(&state), Vec::<String>::new(), "置き場に file を作らない");
+    assert!(!state.join("escape").exists(), "置き場の外へ出ない");
+    clean(&[&repo, &state]);
+}
+
+/// hook を `sh -c` の子として撃ち、待った後の親（sh）の `/proc/<sh>/io` の rchar を返す（子の読みは wait の後に親へ積まれる・
+/// 親の io は `cat` の子が読むので、測る側の読みが rchar に混ざらない）。戻りの `Output` は hook の rc と stderr を持ち、stdout は hook の分だけ。
+#[expect(clippy::expect_used, reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く")]
+fn rchar_of_hook_via_sh(args: &[&str], payload: &str) -> (u64, Output) {
+    let script = "\"$0\" \"$@\"; code=$?; cat /proc/$$/io >&2; exit $code";
+    let mut child = Command::new("sh")
+        .args(["-c", script, bin(), "hook"])
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("sh を起動できる");
+    child.stdin.as_mut().expect("stdin を開ける").write_all(payload.as_bytes()).expect("payload を書ける");
+    let out = child.wait_with_output().expect("終了を待てる");
+    let text = String::from_utf8_lossy(&out.stderr).into_owned();
+    let (hook_err, io) = text.split_once("rchar:").expect("io の行が stderr に在る");
+    let rchar = io.lines().next().expect("rchar の行").trim().parse().expect("rchar は数");
+    (rchar, Output { stderr: hook_err.as_bytes().to_vec(), ..out })
+}
+
+/// 同じ repo と置き場で、開始の位置の前に `bytes` 以上の埋め草の event を置いた log（と新しい session の置き場）を作り直して Stop を撃った周の
+/// 子の rchar。止まることも確かめる。path の長さが payload と git の出力に写るので、2 つの大きさは同じ repo と置き場で測る。
+#[expect(clippy::expect_used, reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く")]
+fn rchar_with_filler(place: (&Path, &Path), bd: &str, bytes: usize) -> u64 {
+    let (repo, state) = place;
+    let filler ="{\"schema\":1,\"ts\":\"2026-09-29T01:03:00Z\",\"kind\":\"UtteranceSorted\",\"utterance\":\"t\",\"sorting\":\"chat\",\"host\":\"h\",\"actor\":\"machine\"}\n";
+    let events = vessel::fleet::store::events_path(state);
+    fs::create_dir_all(events.parent().expect("親 dir")).expect("dir を作れる");
+    fs::write(&events, filler.repeat(bytes / filler.len() + 1)).expect("埋め草を書ける");
+    fs::remove_dir_all(state.join("session")).ok();
+    let flag = state.display().to_string();
+    let args = ["--state-dir", flag.as_str(), "--bd", bd];
+    start_session(repo, &args, "sid-e");
+    let ts = say_in(repo, "sid-e", "未仕分け");
+    let mut argv = vec!["stop"];
+    argv.extend(args);
+    let (rchar, out) = rchar_of_hook_via_sh(&argv, &stop_payload(repo, Some("sid-e"), false));
+    assert_blocked(&out, &[&ts], &format!("{bytes} byte の埋め草の後の Stop"));
+    rchar
+}
+
+/// (e) session の前に 10 MB と 20 MB の埋め草の event を置いた 2 つの log で、どちらも止まり、`sh -c` で起こした子の読みの byte（rchar）が等しく、
+/// 偽の台帳 client の呼び出しは 0 行（台帳を読まない・読む量が log の大きさに依らない）。
+#[test]
+fn hook_unsorted_stop_reads_the_same_bytes_for_a_10_mb_and_a_20_mb_log_and_never_the_ledger() {
+    let repo = git_repo();
+    let (state, aux) = (linked(&repo), tmp());
+    let (bd, calls) = counting_bd(&aux, "[]");
+    let small = rchar_with_filler((&repo, &state), &bd, 10 * 1024 * 1024);
+    let large = rchar_with_filler((&repo, &state), &bd, 20 * 1024 * 1024);
+    assert!(!calls.exists(), "台帳の読みは 0 回（偽の client の呼び出しの記録が無い）");
+    assert!(small > 0, "子の読みを測れている（rchar の増えは 0 でない）: {small}");
+    assert_eq!(small, large, "log の大きさに依らず読む byte が同じ（10 MB: {small} / 20 MB: {large}）");
+    clean(&[&repo, &state, &aux]);
+}
+
+/// (f) marker の無い repo は止めず event も置き場も書かない。発話の無い session（runner の形の payload）も止めず、event も控えも書かない
+/// （置き場に在るのは開始の位置だけ）。同じ歯で対象の session は止まる。
+#[test]
+fn hook_unsorted_stop_writes_nothing_outside_a_served_repo_and_for_a_session_without_utterances() {
+    let (bare, state) = (git_repo(), tmp());
+    let flag = state.display().to_string();
+    let runner = state.join("pipe").join("run-1").join("plugin").display().to_string();
+    let args = ["--state-dir", flag.as_str(), "--plugin-root", runner.as_str()];
+    assert_passes(&stop_hook(&bare, &args, Some("sid-f"), false), "marker の無い repo");
+    let served = git_repo();
+    let state_of_served = linked(&served);
+    let served_flag = state_of_served.display().to_string();
+    let served_args = ["--state-dir", served_flag.as_str(), "--plugin-root", runner.as_str()];
+    start_session(&served, &served_args, "sid-runner");
+    assert_passes(&stop_hook(&served, &served_args, Some("sid-runner"), false), "発話の無い session");
+    assert_eq!(unjudged_in(&state_of_served).len(), 0, "event を書かない");
+    assert_eq!(session_files(&state_of_served), ["sid-runner/start"], "控えの file は無い（開始の位置だけ）");
+    assert_eq!(session_files(&state), Vec::<String>::new(), "marker の無い repo の置き場は空");
+    assert!(!vessel::fleet::store::events_path(&state).exists(), "marker の無い repo は log も作らない");
+    start_session(&served, &served_args, "sid-target");
+    let ts = say_in(&served, "sid-target", "未仕分け");
+    assert_blocked(&stop_hook(&served, &served_args, Some("sid-target"), false), &[&ts], "対象の session は止まる");
+    clean(&[&bare, &state, &served, &state_of_served]);
+}
+
+/// (g) 1 度目の SessionStart の後に未仕分けの発話を 1 つ書き、2 度目の SessionStart（resume の形）を撃つ。開始の位置は上書きされず、
+/// 次の Stop がその発話で止まる。
+#[test]
+fn hook_unsorted_stop_keeps_the_first_start_position_across_a_second_session_start() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let flag = state.display().to_string();
+    let args = ["--state-dir", flag.as_str()];
+    start_session(&repo, &args, "sid-g");
+    let ts = say_in(&repo, "sid-g", "圧縮の前の未仕分け");
+    start_session(&repo, &args, "sid-g");
+    assert_blocked(&stop_hook(&repo, &args, Some("sid-g"), false), &[&ts], "2 度目の SessionStart の後の Stop");
+    assert_eq!(session_files(&state), ["sid-g/start", "sid-g/told"], "置き場は開始の位置と控えの 2 file");
+    clean(&[&repo, &state]);
+}
+
+/// (h) session_id の無い SessionStart の後は置き場の下に file が 0 本。session_id を持つ SessionStart は開始の位置を 1 つだけ書く。
+#[test]
+fn hook_unsorted_stop_writes_a_start_position_only_for_a_session_with_an_id() {
+    let repo = git_repo();
+    let state = linked(&repo);
+    let flag = state.display().to_string();
+    let out = run_hook_args(&["session-start", "--state-dir", &flag], &payload(&repo));
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "session_id の無い session-start も rc 0: {}", stderr_text(&out));
+    assert_eq!(session_files(&state), Vec::<String>::new(), "session_id が無ければ file 0 本");
+    start_session(&repo, &["--state-dir", &flag], "sid-h");
+    assert_eq!(session_files(&state), ["sid-h/start"], "開始の位置が 1 つ");
+    clean(&[&repo, &state]);
 }
