@@ -653,6 +653,326 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
 - 順: ADR-0096 と本 § と seat-roles.md §31 と行 ah / y を同じ docs PR で land → 行 ah の便 → 行 y の便（行 y の雛形の pointer が本行の rules 行を名指すので、台帳で行 y の bead を行 ah の bead の blocks に置く）。束 E の核の後に置く（memo の昇格条件・priority は束 E の行より下）。
 - 着地の後: 掃除の振る舞いが変わるので PATH の binary を `swap-binary.sh` で入れ替える（走行中の運転手が在れば断られる）。入れ替えの前の運転手は起草の置き場を掃かない。消費側の席への知らせは行 y の着地の後に 1 回（置き場の path は指示文が渡す）。
 
+## 34. 床の検査を撃つ — vessel 宣言の任意 key floor-check の 1 行を、main の先端の sha の木で封じ込めの内側で 1 回撃ち、rc を sha ごとに置き場へ残す（契約表の行 ai・[FR85](../../design-intent/spec/srs.html#FR85) / AC55・ADR-0084・rules 行 floor.timeout_s・裁定 user 2026-09-30T04:25Z）
+
+やさしく言うと: repo が「main がこれだけは通るべき」という検査を 1 行で宣言できるようにします。main が進むたびに、器がその 1 行を 1 回だけ撃って、合否を覚えます。この行は撃つ側だけです。不合格の間に列を待たせるのは次の行（§35）です。
+
+- 何が起きているか（main 3908279b・verified）:
+  - vessel 宣言の読み手は任意 key を閉じた一覧で持つ。一覧に無い key は不備として断る。floor-check は一覧に無い。
+  - 任意 key の読みは子 module にある（question-route と close-check と同じ形: key の値の検査と、HEAD の tree から読む公開の口）。
+  - verify 行の検査は 5 つある: shell の記号と制御文字・空・許す command・repo の外の path・穴・禁じる語列。許す command の検査は runner の allowlist で、床の検査には掛けない（FR85）。
+  - 封じ込めの口（`wrap_command` と `Wrap`）は包めない周に Unconfined（理由つき）を返す。confine.rs は正規化で 1490 行あり、中は足さずに呼ぶだけにする。
+  - sha を切り離した木を置き場の下に作る形（`git worktree add --detach` → `remove --force`）は、着地の検出と審査の前撃ちと main の verify に先例がある。
+  - 列の起こす側の 1 周（`fire`）は、群の段 → 起こし直し → 起こす → 断りの記帳 → 事前審査 → 器の同期の順で、床の検査の段は無い。
+  - main の先端は着地と同じ `refs/heads/main` で読む。
+  - rules 行に floor.timeout_s は無い（`rules: ok rows=82 kinds=80`）。
+- 約束:
+  1. **key**: 任意 key `floor-check` の値は、前後の空白を除いて空でない文字列 1 つとする。列・整数・真偽は key と行番号を名指す不備。
+     - 読みは HEAD でなく、名指した sha の tree の宣言から行う（`git show <sha>:.vessel.toml` と同じ読み手）。作業ツリーは読まない。
+  2. **撃つ周**: 列の起こす側の 1 周の頭（群の段の後・台帳を読む前）で、床の検査の段を 1 回走らせる。観測の口（`dispatch ls`）は撃たない。
+     - 段は main の先端の sha を読む。sha の宣言が key を持たない周は何もしない（置き場も作らない）。
+     - その sha の結果の file が置き場に在る周も何もしない（同じ sha で撃ち直さない）。
+  3. **行の 3 つの検査**（撃つ前・純関数）。当たる行は撃たず、その周を撃てない周（unfireable）と読む。語は次の 3 つ:
+     - (i) 1 行の形 `form`: 改行と制御文字を持たない・空白だけでない・`{` か `}` の穴を持たない。
+     - (ii) 禁じる語列 `denied`: FR56 の rules 行 runner.denied_commands を、verify 行と同じ 1 関数で当てる。
+     - (iii) shell の記号 `metachar`: verify 行と同じ記号の集合。
+  4. **撃ち方**:
+     - 行を空白で割った argv 1 本を、shell を通さずに撃つ。
+     - 頭の語は PATH の dir を順に引いて実行できる file に解き、解けた path を argv の頭に置く。包みの中で解かせると、無いことが包みの rc に化けるので、先に解く。解けない周は unfireable（`path`）。
+     - 撃つ場所は、置き場の下に切り離した sha の木。作れない周は unfireable（`tree`）。
+     - 撃つ前に封じ込めで包む（上限の種は host の残りの箱・unit 名は置き場と `floor` から組む）。Unconfined を返す周は撃たず unfireable（`confine`）。
+     - 待つ上限は rules 行 floor.timeout_s（秒）。行を読めない周は unfireable（`row`）。越えた周は子を止めて scope を片付け、timeout と読む。
+     - 撃った後は木を片付ける。
+  5. **結果**:
+     - 終わった周は、sha ごとの結果の file に 1 行の JSON（schema・rc・要約の 1 行）を書く。要約は出力の最後の空でない行で、制御文字を除き 200 字で切る。空なら `-`。rc 0 だけが合格。
+     - unfireable と timeout の周は sha の結果を書かない。代わりに「今の判定」の file を上書きする。
+     - 今の判定の file は毎周書く 1 行の JSON で、sha・語（pass / fail / unfireable / timeout）・rc・理由の語・要約・時刻を持つ。
+     - 次の周は同じ sha でも撃ち直す（結果の file が無いから）。
+  6. **重ねて撃たない**:
+     - sha ごとの lock file を排他の作成で取る（中身は pid）。取れない周は撃たず、今の判定も書かない。
+     - 持ち主の死んだ lock は、札と同じ生死の判定で取り直す。
+  7. **doctor**: `doctor --state-dir S` は、今の判定の file が在る周だけ 1 行を足す。
+     - 形: `floor=<pass|fail|unfireable|timeout> rc=<n|-> sha=<7 字> why=<語|-> summary=<要約>`。要約は行末まで。
+     - 読めない file は `floor=unreadable`。
+  8. **rules 行**: floor.timeout_s（kind FloorTimeoutS・Int）。
+     - 値は 600。ruling は user 2026-09-30T04:25Z、ruled_at は 2026-09-30。
+     - kind は ALL の末尾に足す。
+  9. **置き場**: 置き場の pipe の下の floor の dir に、sha ごとの結果の file と lock・今の判定の file・一時の木を置く。この 3 種と木だけで、ほかは置かない。
+  10. **閉包を広げない**: 新しい子 module は `WaitReason`・`RuleKind`・`Stage`・`EventKind`・`Issue` を名指さない。rules 行は id の字で読む。待ちの理由への写しは次の行が dispatch.rs で行う。
+- 歯の案（接頭辞 `pipe_dispatch_floor_fire_`・e2e の既存の file tests/e2e/pipe/dispatch.rs に置く）:
+  - 新設 module に置くと flip-check が偽 GREEN になるので、既存の file に置く。
+  - 偽の command は PATH に置いた script で、撃つたびに marker の行を足す。撃った回数を母集団として数える。
+  - 形:
+    - (a) key の無い repo は 0 回で、置き場の dir も doctor の行も無い。
+    - (b) rc 0 → 結果 rc 0・doctor `floor=pass`。
+    - (c) rc 1 と rc 2 → 結果と `floor=fail rc=1|2`。
+    - (d) 上限 1 秒の rules の写しで 5 秒眠る → 結果の file 無し・`floor=timeout`・次の周に撃ち直す（2 回）。
+    - (e) PATH に無い頭の語 → 0 回・`floor=unfireable why=path`。次の周に PATH へ置くと撃つ。
+    - (f) 2 行・禁じる語列・記号の 3 形 → 0 回・`why=form|denied|metachar`。
+    - (g) 同じ sha の 2 周目 → 撃ち直さない（1 回のまま）。
+    - (h) main に commit を足した周 → 撃ち直す（2 回）。
+    - (i) PATH の systemd-run の stub の argv に floor の unit と command が載る。
+  - rules の歯（接頭辞 `rules_floor_timeout_`）: 行の id・kind・値・ruling を測る。
+  - base の RED は機能不在。key が一覧に無く撃たれず、rules 行も無い。
+- 触らないもの: confine.rs の中・列の待ち（§35）・tick・runner の allowlist の検査・gate の verify。
+- 限界:
+  - main が進んだ直後の起こす側の 1 周は、床の検査の時間（最大 floor.timeout_s）だけ長くなる。
+  - lock を取れなかった周は、その周の判定を持たない。
+  - main の先端は anchor の `refs/heads/main` で、origin だけが進んだ周は撃たない。
+- 却下:
+  - (a) 裏で撃って次の周に読む案。札と回収の口が増え、FR85 の「その周の判定」から離れる。
+  - (b) 包めない周も撃つ案。NFR6 の「封じ込めの内側」に反する。
+  - (c) repo の外の path の検査も掛ける案。FR85 の 3 つより狭い。
+  - (d) 作業ツリーの宣言を読む案。その sha の木と食い違う。
+
+## [[contract]] 行
+
+## 35. 床の検査が不合格の間は、介入 first の印を持たない起動の列の全部の契約を閉じた 3 形の理由で待たせ、管理 tick の合図の alarm に floor を出して席を起こす（契約表の行 aj・[FR85](../../design-intent/spec/srs.html#FR85) / FR68 / FR27・AC55・ADR-0084）
+
+やさしく言うと: main が最低限の検査に落ちている間は、器は新しい便を起こしません。例外は、orchestrator が「先に」の印（first）を付けた契約で、main を直す便を通す道です。器は、それが本当に直す便かどうかは判じません。待ちの理由は「床の検査の何で落ちたか」を 3 形で名乗ります。管理 tick は合図に floor の語を出し、席の梯子を初段に戻して起こします。
+
+- 何が起きているか（main 3908279b・verified）:
+  - 待ちの理由は閉じた 8 値で、名の列（宣言順）と描画の対を 1 本の単体の歯が pin する。
+  - 候補は台帳の 1 件ごとに作る。待ちの理由を持たずに起こせる候補だけが、準備の表に入る。
+  - 起こすかは、表に在るかで決まる（理由の欄は見ない）。待たせるには、理由を付けて表から外す。
+  - 並べ替えの鍵は、介入 first の印を最優先にする。
+  - host の遮断器の待ちは、起こす候補を全部止める周の先例。
+  - 管理 tick の alarm は、並列の実測（置き場の file だけを読む）から語と上げの秒を返す 1 関数が決める。
+    - 語は idle / idle-unset / precheck / precheck-unset の 4 つ。
+    - 上げは、黙りの閾値を値との小さい方に縮めて、段を 0 に戻す。
+  - 並列の実測の struct の literal は、実測の file の中の 3 か所だけ。
+- 約束:
+  1. **待ちの判定**: 列の 1 周（観測の口も起こす側も）は、main の先端の sha を読み、次の順で判定する。
+     - その sha の結果の file が在れば、rc 0 は合格、ほかは不合格（rc）。
+     - 無ければ、今の判定の file の sha が同じときだけ、その語（unfireable / timeout）。
+     - どちらも無い周は判定なしで、待たせない。
+     - 撃つのは行 ai の段だけで、この判定は file を読むだけ。
+  2. **待たせる**: 不合格の周は、候補を作った直後（枠と重なりを測る前）に理由を上書きし、準備の表から外す。
+     - 対象は、介入 first の印を持たない候補の全部。
+     - 除くのは、理由が起こした事実（launched）と終端の記録（settled）の候補。どちらも待ちではなく状態の記録。
+     - first の印を持つ候補は床の検査で待たせず、ほかの待ちの判定は変えない。
+  3. **理由の語**: 待ちの理由に 1 値 `floor` を足す。描画は `floor:<rc>`・`floor:unfireable`・`floor:timeout` の 3 形。
+     - 名の列の宣言順は末尾（行 am の後の値はその後ろ）。
+     - 床の検査の型の値は子 module の型で持ち、待ちの理由への写しは dispatch.rs だけが書く。
+  4. **並列の実測**: 並列の実測に床の欄を 1 つ足す。今の判定の file の語が fail / unfireable / timeout の周だけ値を持つ。
+     - tick は git を撃たず、file だけを読む。
+     - 合図の行（live= idle= …）の字面は変えない。
+  5. **alarm**: 床の欄が値を持つ周は、alarm の列に語 `floor` を足す。
+     - 順は idle → precheck → unreflected → floor（unreflected は行 am が間に足す）。
+     - 上げの秒は、黙りの閾値を縮めない最大値として渡す。梯子の段だけが 0 に戻り、席は初段の間隔で起こされ続ける（FR85 の「alarm の floor が席を起こし」）。
+     - rules 行は足さない。
+  6. **解ける道**:
+     - 列は timer を持たない。main を直す commit が載った後の次の契機の周（first の印で起きた便の終端の周・席の手動の 1 周）に、行 ai の段が新しい sha を撃ち、合格なら同じ周に待ちが解ける。
+- 歯の案:
+  - e2e（接頭辞 `pipe_dispatch_floor_wait_`・tests/e2e/pipe/dispatch.rs）:
+    - (a) rc 1・rc 2・timeout・unfireable の 4 形の周に、first の印の無い 2 本がどれも理由 `floor:1|floor:2|floor:timeout|floor:unfireable` で待つ（4/4）。
+    - (b) 同じ周に first の印の 1 本は起きる。
+    - (c) rc 0 の周は起きる。
+    - (d) 行の 3 つの検査に当たる 3 形の周は、`floor:unfireable` で待つ（3/3）。
+    - (e) rc 1 の後に main を直す commit を足し、手動の 1 周（`pipe dispatch`）を撃つと、その周に撃ち直されて起きる。
+    - (f) 観測の口（`dispatch ls`）は撃たずに同じ理由を出す。
+  - tick（接頭辞 `seat_tick_alarm_floor_`・tests/e2e/seat/tick.rs）:
+    - `seat_tick_floor_` は既存の歯の名の接頭辞なので、この接頭辞は使わない。
+    - 段 2 の梯子の記録で、段 0 の待ちは越え段 2 の待ちは越えない周を作る。今の判定が fail の置き場では、合図が 1 回出て alarm= に floor が載る。pass の置き場では、同じ周が段の待ちの noop になる。
+  - 単体の歯 `pipe_dispatch_wait_reasons_render_the_name_and_the_value` の本文に 3 形を足す。既存の歯の本文を直すので、retroactive の札を付ける。
+  - 既存の `seat_tick_precheck_` の 3 本は不変で通る。
+  - base の RED は機能不在（理由の値も語も無い）。
+- 触らないもの: 撃つ側（行 ai）・first の印の書き手・枠と重なりの判定・rules 行・合図の行の字面。
+- 限界:
+  - 撃ち中で lock を持てなかった周は判定を持たず、待たせない（行 ai の限界 2 と同じ）。
+  - tick は、最後に列が回った周の判定を読む。main が進んだのに列がまだ回らない間は、古い判定の語を出す。
+- 却下:
+  - (a) launched / settled も floor で上書きする案。起きた便の状態の記録が消える。
+  - (b) 上げの秒に新しい rules 行を足す案。裁定の値が要り、FR85 は起こすことしか求めない。
+  - (c) 合図の行に `floor=` の欄を足す案。消費側の読む字面が変わる。
+
+## [[contract]] 行
+
+## 36. 裁定 id の引用を閉じた規則で数える 1 関数と、vessel 宣言の key ruling-check・ruling-fixtures と、doctor の 1 行（契約表の行 ak・[FR83](../../design-intent/spec/srs.html#FR83) / AC53・[ADR-0083](../../design-intent/decisions/ADR-0083-rulings-bind-ledger-questions-to-recorded-utterances.html) (5)）
+
+### 何が起きているか（verified・main 3908279b）
+- 裁定 id の形の判定は `ledger/close_reason.rs` の `is_ruling_id` 1 本だけ。これは字 1 つを判じる関数で、文の中から引用を拾う走査は無い。使うのは close の理由の門だけ。
+- vessel 宣言の任意 key（`pipe/declaration/optional_keys.rs` の DECLARED_KEYS）は、entrance-flip・question-route・close-check ほかで終わる。ruling-check も ruling-fixtures も無い。
+- doctor `--repo` の台帳の行は `ledger:`・`ledger-graph:`・`ledger-form:` の 3 行だけ（`ledger/lint.rs` の doctor_lines）。引用の行は無い。
+- 追跡された file（464 本）の字面を数えた（手で書いた走査。閉じた規則の案と同じ形）。
+  - 問い id の形（接頭辞 s2）: 19 件・3 file。どれも歯の fixture。
+  - batch: / policy: の形（コロンの直後が ASCII の英数字）: 16 件・3 file。歯 2 file と、design-intent/assets の mermaid の min.js 1 file。
+  - コロンの後ろに空白以外が続く緩い形: 55 件・8 file。rustfmt の `policy: Type`（名前付きの引数と型注釈）は、コロンの直後が空白なので拾わない。ADR-0083 CTX1 が実測した 74 行と合う。
+  - 時刻の形 `user YYYY-MM-DDTHH:MMZ`: 495 件・85 file。そのうち分の 2 桁目が x のもの 34 件・20 file、秒つきは 0 件。
+- 台帳は 872 本。問いは 3 本で、全部閉じている。5 欄の裁定の行を持つのは s2-07l.739.1 の 1 本だけ。
+- 台帳の接頭辞の読み手は `seat/brief/pointer.rs` の `Anchor`（prefixes）。起票の門（`hook/ledger_guard.rs`）もこれを使う。
+
+### 約束
+1. **閉じた規則 1 本**（FR83・FR84 が同じ 1 本を使う）。字面から次の 4 形を拾う。
+   - (a) 問い id の形: 前の字が英数字・`_`・`.`・`-` でない位置から始まり、`is_ruling_id` が「台帳の接頭辞の問い id」と読む最長の字面。接頭辞が違う問い id の形は引用に数えず、一覧にも載せない。
+   - (b) `batch:` / `policy:` の形: 前の字が英数字でも `_` でもない位置から始まる。コロンの直後は ASCII の英数字 1 字で、その後に英数字と `.`・`_`・`:`・`/`・`-` が続く。末尾の `.`・`_`・`:`・`/`・`-` は剥がす。
+   - (c) 時刻の形: `user ` の後に `YYYY-MM-DDTHH:M` と、`[0-9x]` 1 字と、`Z` が続く字面（`:SS` があってもよい）。
+   - 書式（backtick・code の囲み・引用符）では、どの字面も外さない。
+2. **ruling-fixtures** は字面の閉じた一覧。(b) と、線より後の (c) だけを、一覧と完全に一致したときに引用から外す。wildcard などの型は持たない。(a) は一覧に載っていても外さない。
+3. **解ける**の判定。台帳を読めない周は解けない側へ倒さず、「測れない」と返す（呼び手が断る側へ倒す）。
+   - (a) は、閉じた台帳の問い（label intake:question・status closed）の notes の裁定の行で、裁定 id の欄と一致すれば解ける。束の欄だけでの一致は解けない扱い。
+   - (b) は、台帳のどの bead の notes の裁定の行でも、裁定 id の欄か束の欄と一致すれば解ける。
+   - 裁定の行の読み手は fleet-event-log の行 h が 1 本にしたものを使う。2 本目は書かない。
+4. **opt-in の線**は、main の first-parent の履歴で `.vessel.toml` の ruling-check が初めて true と読める commit とする。
+   - `git log -G ruling-check` で候補を絞り、各候補の宣言を同じ宣言の読みで確かめる。
+   - **線より前**とは、同じ file の同じ字面が線の commit の木に在ること。この判定の読みは `git grep` 1 回で済ませる。
+5. **key 2 つ**を任意 key の並びに足す。
+   - ruling-check: bool。無ければ false。型違いと重複は宣言の誤り。
+   - ruling-fixtures: 文字列の一覧。空の一覧は可。文字列でない値は宣言の誤り。
+   - 読みは close-check と同じ形で、同じ file に置く。rev を 1 引数で受ける（main・便の base・便の先端。pipeline の行 be が base と先端を比べる）。
+6. **doctor の 1 行**（`ledger/lint.rs` の doctor_lines の 4 行目。台帳の読みは 1 周に 1 回・既存の one_read）。
+   - 形: `ruling-cite: check=on files=<n> cited=<n> unresolved=<n>[:<id>,…] before-line=<n>[:<字面>,…]`。母集団は「走査した file の数」と「数えた引用の数」。
+   - 欄の組み立ては `ledger/form.rs` の field と同じ形。可視性を上げて借り、3 つ目の写しは作らない。
+   - key を持たない repo は `ruling-cite: check=off`。数えも断りもしない。
+   - 宣言か台帳か git を読めない周は `ruling-cite: unreadable reason=<語>`。件数は出さない（0 に化けさせない）。
+7. 走査の対象は main の追跡された file の字面（`git grep -I` で HEAD を読む）。binary は外す。
+
+### 歯
+- `cite_scan_`（lib・新しい module の単体）。4 形、境界（`apolicy:x`・`policy: Type`・末尾の句読点）、x の分、接頭辞違い、fixtures の完全一致と backtick の囲みを確かめる。
+  - base で RED: 機能不在（該当 0 本で rc 4）。
+- `declaration_ruling_check_` と `declaration_ruling_fixtures_`（lib・optional_keys.rs）。true / false / 無し、型違い、重複、一覧の非文字列を確かめる。
+  - base で RED: 機能不在（key が無い）。
+- `ledger_ruling_doctor_`（e2e・`tests/e2e/ledger_form.rs`・偽の bd を PATH に置く）。
+  - 解ける 4 形、接頭辞違いは数えの外、一覧の 2 字面、線の前の引用、解けない引用と開いた問いの id、key の無い repo、読めない台帳を確かめる。
+  - 母集団: 固定の toy repo（file 3 本・引用 12 件）。
+  - base で RED: 機能不在（行が無い）。
+
+### 触らない
+- 受付の断り（dispatcher の行 al）と着地の留め（pipeline の行 be）。未反映の置き場（dispatcher の行 am と pipeline の行 bf）。この § は数えと読みだけ。
+- `is_ruling_id` の意味。本 repo の `.vessel.toml`。本 repo が ruling-check を持つかは別の行と裁定で決める。
+- pointer.rs にあるもう 1 本の私的な接頭辞の読み（重複だが範囲外。memo を残す）。
+
+### 限界
+- (b) の終わりの字の集合は字句の決めごと。消費側の束の id に ASCII の外の字があると、途中で切れる。そのときは行を足して集合を広げる。
+- id の一覧に上限を置かない（FR が id を求める）。件数が多い repo では行が長くなる。
+- 線の判定は first-parent の履歴を読む。main を書き換えた repo（force push）では、線がずれうる。
+
+### 却下
+- 正規表現の crate: A3 に当たる。字の走査で足りる。
+- 緩い形（コロンの後ろに空白以外）: 55 件・8 file を拾い、`policy:Type` のような詰めた書き方に当たる。
+- 分の x を時刻の形から外す案: 未確定の時刻が数えを素通りする。
+
+## [[contract]] 行（案）
+
+## 37. 受付は、設計の節か契約表の行に、解けない裁定 id か線より後の時刻の形の引用を持つ契約を、断りの値 ruling-unresolved で断る（契約表の行 al・[FR83](../../design-intent/spec/srs.html#FR83) / AC53・§36 の数えを使う）
+
+### 何が起きているか（verified・main 3908279b）
+- 受付の判定は `pipe/cli/intake.rs` の judge 1 本。
+  - 順: 宣言の凍結 → write-set → 行の事実 → 同型の停止 → 余地 → entrance-not-red → （置き場が要る判定）同時本数 → 交差 → 重複 run。
+  - 断りは `pipe/refuse.rs` の Refuse（閉じた 23 値。末尾は max-live・entrance-not-red）。名の並びは REFUSALS と判別子順の歯が pin する。
+- judge を呼ぶのは 4 か所: 受付・事前審査（preflight）・列の候補（dispatch/candidates.rs）・事前の lens の候補（dispatch/precheck.rs）。
+  - 材料の読みは 1 周に 1 回。`Materials::read` が 3 か所、列の周の `Materials::of` が 1 か所。
+- 受付は台帳を読まない。`pipe intake` と `pipe preflight` は `--bd` を受けない（`pipe/cli/args.rs` の ALLOWED_INTAKE / ALLOWED_PREFLIGHT）。`pipe run` と列の周は TOOLS の `--bd` を受ける。
+- 節の本文の読み手は `pipe/review.rs` の section_text（私的・fence と契約表の区間を外す）1 本。
+- 引用の数えは §36（行 ak）の 1 関数。着地前の今の受付は、引用を見ずに通す。
+
+### 約束
+1. judge は entrance-not-red の判定の直後、置き場が要る判定の前に、引用の判定を 1 回撃つ。置き場を持たない呼び手（事前審査・列の候補）でも撃つ。
+   - main（受付の base）の宣言の ruling-check が true でなければ、何もしない。
+2. 母集団は 2 つ。
+   - 契約の設計の節の本文（section_text と同じ読み。可視性を上げて借り、2 本目は書かない）。
+   - 契約表の行の全ての欄の値（表の読みが既に持つ Contract の文字列の欄）。
+3. 断る引用（§36 の規則で数え、ruling-fixtures が外したものは除く）:
+   - (a) 解けない問い id の形（開いた問いの id と、束の欄だけに在る id を含む）。
+   - (b) 解けない batch: / policy: の形。
+   - (c) 線より後の時刻の形。§36 の「線より前」の判定を、節と行の置き場の doc の file に当てる。
+4. **断りは値 1 つ**: `ruling-unresolved`（Evidence は Place・台帳の状態に依るため）。
+   - 本文は置き場（設計の節 / 契約表の行）ごとに id を全て名指す: `ruling-unresolved 解けない裁定 id の引用 N 件（設計の節: <id>,…／契約表の行: <id>,…）`。rc 1。
+   - 台帳か線を読めない周も同じ値で断る: `ruling-unresolved 裁定 id の引用を測れない（<語>）`。rc 2（読めない面の既存の rc）。測れないを通すに読み替えない。
+5. 台帳の client は呼び手が渡す。
+   - `pipe intake` と `pipe preflight` は TOOLS の `--bd` を受ける（無ければ既定の bd）。
+   - `pipe run` と列の周は、既に受ける値を渡す。
+   - 引用の事実（裁定の行の索引・線・線の木の時刻の形の集合・fixtures）は、材料の読みの 1 周に 1 回で持つ。引用を 1 件でも持つ契約が出たときに初めて読む（引用の無い周は台帳を読まない）。
+6. 列の周の断りは既存の IntakeRefused（行 ag）がそのまま記帳する。値が 1 つ増えるだけで、記帳の口は変えない。
+
+### 歯
+- `pipe_intake_ruling_`（e2e・`tests/e2e/pipe/intake.rs`・偽の bd を PATH に置く）。AC53 の受付の側を全部確かめる。
+  - 解ける 4 形の通過。
+  - 接頭辞違いの通過。
+  - 一覧に載せた 2 字面の通過。
+  - 断り 11/11: 節 3・行 3・台帳に無い batch: と policy: 2・一覧に載せない 2 つ目の toy repo の同じ字面 1・backtick の囲み 1・束の欄だけの問い id の形 1。
+  - 線の前の通過。
+  - key の無い repo の通過。
+  - 読めない台帳の rc 2。
+  - 母集団: 断りの fixture 11 本 + 通過 9 本。本数を assert の文に出す。
+  - base で RED: 機能不在（解けない id の契約が受付を通る＝rc 0）。
+- `refuse_ruling_`（lib・refuse.rs）。rc の 2 形・Evidence が Place・本文が置き場ごとに id を並べることを確かめる。
+  - base で RED: 機能不在（値が無い）。
+- 既存の歯を名指す: `refuse_names_are_pinned_in_declaration_order`（REFUSALS の末尾に 1 つ足す）、`pipe_refuse_evidence_discern_`、`pipe_intake_`（61 本・余地の断りの順が動かない）、`pipe_preflight_`（3 本）。
+
+### 触らない
+- 数えの規則と解き方（§36）。着地（pipeline の行 be・pipeline）。
+- IntakeRefused の key（行 ag）。
+- 本 repo の宣言（ruling-check を持たない）。
+
+### 限界
+- 設計の節の外（ほかの doc・ADR）の引用は受付では見ない。着地の差分（pipeline の行 be）と doctor（§36）が見る。
+- 台帳の読みの 1 回ぶん、引用を持つ周の受付が遅くなる（bd の list 1 回）。
+
+### 却下
+- 値を 2 つ（解けない / 測れない）に分ける案: 計画の「値 1 つ」と、既存の ContractTable の rc の分け方（payload で rc を決める）に合わせた。
+- 受付に既定の bd だけを使う案: 列の周が渡す client と食い違う。
+
+## [[contract]] 行（案）
+
+## 38. 未反映の裁定 — effect が document の閉じた台帳の問いの裁定 id のうち main の追跡された file が 1 つも引かない id を、列の周ごとに置き場の file に書き、引く契約を unreflected-ruling:<id> で待たせ、doctor と管理 tick の alarm に出す（契約表の行 am・[FR84](../../design-intent/spec/srs.html#FR84) / FR68 / FR27・AC54・ADR-0083 (6)）
+
+やさしく言うと: user が答えた問いのうち「文書へ写すべき答え」が、まだ main のどの file にも書かれていない間は、それを待つ契約を起こしません。関わらない契約は止めません。器は未反映の id の一覧を置き場に書き、doctor と tick の合図で知らせます。答えから何時間経ったかは見ません。
+
+- 何が起きているか（main 3908279b・verified）:
+  - 台帳の読みの 1 件の型（Issue）は id・status・priority・labels・acceptance・deps・kind・description・notes・close_reason を持ち、metadata を持たない。
+    - bd の list の JSON は metadata の object を持つ。閉じた問い 3 本のうち 1 本が effect = document、2 本は metadata 無し（実測）。
+    - 型の literal は 4 か所（台帳の読みの本体・起票の門の graph・事前審査の歯・台帳の形の歯）。
+  - 列は台帳を 1 周に 1 回読み、候補ごとに理由を決める。問いの label の bead は列の入力から外れる（行 af）。
+  - 待ちの理由の型を名指す file は dispatcher 行 w の閉包に入る。Issue を名指す file は contract-source 行 bo の閉包に入る（どちらも touches・verified）。
+- 約束:
+  1. **母集団**: 列の 1 周が読んだ台帳の中の、status が closed で label intake:question を持ち、metadata の effect が document の問い。
+     - その notes の裁定の行の id を集める（読み手は fleet-event-log の行 h の 1 本）。
+     - effect が operation の問いと、effect を持たない問いは数えない。
+  2. **未反映**: 母集団の id のうち、main の先端の sha の追跡された file が 1 つも引かない id。
+     - 数えは dispatcher の行 ak の 1 関数（FR83 と同じ閉じた規則）で、vessel 宣言の ruling-check の有無に依らない。
+     - sha の読み手は床の検査（行 ai）と同じ 1 本。
+     - 経過時間は判定に使わない。
+  3. **置き場の file**: 起こす側の 1 周ごとに、置き場の pipe の下の unreflected の file を 1 行の JSON で上書きする。0 件の周も空の列を書く。
+     - 欄は schema・sha・母集団の id の列・未反映の id の列・関わる契約の表（bead → id）。
+     - 前の file と sha と母集団が同じ周は、追跡された file を読み直さず未反映の列を引き継ぐ。
+     - 観測の口も同じ判定を使い、file は書かない。
+  4. **待たせる**: 候補を作った直後（枠と重なりを測る前）に理由 `unreflected-ruling:<id>` を付けて、準備の表から外す。対象は次の候補:
+     - acceptance か notes がその id を同じ閉じた規則で引く候補。
+     - その問いへ blocks の依存を持つ候補。
+     - 当たる id が複数なら、未反映の列の順で最初の 1 つ。
+     - 床の検査の待ち（行 aj）の候補は、床の理由のまま。ほかの候補は止めない。
+  5. **理由の語**: 待ちの理由に 1 値を足す（名 `unreflected-ruling`・描画 `unreflected-ruling:<id>`）。
+     - 名の列では floor の前に置く。
+     - 写しは dispatch.rs だけが書き、子 module は待ちの理由の型を名指さない。
+  6. **doctor**: 置き場の file の未反映が 1 件以上の周だけ、1 行を足す。
+     - 形: `unreflected=<n> sha=<7 字> ids=<id>, <id>`。id は空白を含みうるので行末まで。
+     - 0 件と file 無しは行を出さない。読めない file は `unreflected=unreadable`。
+  7. **alarm**: 並列の実測に未反映の件数の欄を足す（file だけを読む）。1 件以上の周は alarm の列に語 `unreflected` を足す（順は precheck の後・floor の前）。
+     - 段は上げない。合図を送る周だけに載る（語彙の「合図を送らない周の席には届かず」）。
+  8. **台帳の欄**: Issue に effect（metadata の effect の文字列・無ければ空）を足す。構築点 4 か所を同じ便で直す。
+- 歯の案:
+  - e2e（接頭辞 `pipe_dispatch_unreflected_`・tests/e2e/pipe/dispatch.rs）。偽の台帳（閉じた問い・effect・notes の裁定の行）と toy repo で次を確かめる:
+    - (a) 置き場の列に id が 1 件。
+    - (b) doctor の行に件数 1 と id。
+    - (c) acceptance・notes・blocks の 3 本が `unreflected-ruling:<id>` で待つ（3/3）。
+    - (d) 関わらない 1 本は同じ周に起きる。
+    - (e) 器の便でない commit で引用を main に載せた次の周に、待ち・doctor・列が消える（3/3）。
+    - (f) effect が operation の問いは数えない。
+    - (g) ruling-check の無い宣言でも同じに数える。
+    - 撃った周の数を母集団として出す。
+  - tick（接頭辞 `seat_tick_alarm_unreflected_`・tests/e2e/seat/tick.rs）: 置き場の file が 1 件の周の合図の alarm= に unreflected。0 件の周は無し。
+  - 単体の歯 `pipe_dispatch_wait_reasons_render_the_name_and_the_value` に 1 形を足す（retroactive の札）。
+  - base の RED は機能不在。
+- 触らないもの: 裁定を文書へ写す、器の便でない変更・ruling-check の断り（dispatcher の行 al）・問いの create の門・着地（pipeline の行 bf）。
+- 限界:
+  - main が進むたびに、追跡された file を 1 回読む（sha と母集団が同じ周は読まない）。
+  - 関わりは acceptance・notes・blocks の字面だけで判じ、設計 doc の行の本文は見ない。
+- 却下:
+  - (a) 経過時間で待たせる案。FR84 が禁じる。
+  - (b) 未反映の間は全部の契約を止める案。FR84 は関わる契約だけ。
+  - (c) 段を上げる案。語彙の定義と食い違う。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -1054,4 +1374,64 @@ verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe
 size = "S"
 growth = ["crates/scribe2/src/pipe/sweep.rs:95", "crates/scribe2/src/pipe/cli.rs:2", "crates/scribe2/src/seat/mod.rs:14", "crates/scribe2/src/seat/inject.rs:0", "crates/scribe2/src/rules/mod.rs:6"]
 done = "(1) 席ごとの起草の置き場は state dir の seat/<潰した target>/drafts/ で、seat/mod.rs に名 drafts の const と、置き場と target から起草の置き場の path を返す関数と、置き場の根を返す関数（根の名は inject.rs の SEAT_DIR の 1 つのまま可視性だけを親 module へ上げる）が在り、器は起草の置き場の dir を作らない (2) 置き場の根の直下の dir（symlink は辿らない）ごとの起草の置き場の直下の子のうち .git（file か dir）を持つ dir だけを起草の木とし、.git を持たない子の dir は触らずに nogit に数え、symlink と file の子はどちらにも数えない (3) 掃除の 1 関数 swept が書きの線（Option の時刻）を受け、便の木は線無しで今のまま消し、起草の木は線 = 今 − rules 行の時間で、名が閉じた 8 つに在り追跡されている file を持たない dir のうち、その dir 自身と下の全 entry（file と dir・symlink は辿らずに symlink そのものの mtime）の mtime の最新が線より前のものだけを remove_dir_all で消し、線以後の entry を 1 つ見つけたら走査を打ち切って残して下へ降りず、mtime か dir を読めない entry が在れば残して失敗に数え、追跡の判じは木ごとの git ls-files の 1 回のまま (4) sweep が便の木の後に同じ lock の中で起草の木を掃き、置き場の replay を読めない周も起草の木は掃き、cli.rs は終端の subcommand の周に manifest を渡して 1 回撃ち（引数 3）、管理 tick と手動の 1 周と関門の記帳の周は撃たない (5) 埋め込みの manifest に行 seat.drafts_stale_h（kind SeatDraftsStaleH・Int・値 6・enabled・裁定 id user 2026-09-29T11:43Z・裁定日 2026-09-29）が pipe.ci_poll_s の直後に 1 本在り、kind は ALL の PipeCiPollS の直後で字面から引け、sweep.rs が const の id を int_row で起草の木が 1 本以上在る周だけ読み、読めない周（無い・不発効・整数でない）は起草の木を 1 本も撃たない (6) stderr の sweep: の行は置き場の根の下に起草の置き場が 1 つでも在る周だけ末尾に drafts=<dir を消した起草の木の数か語 no-rule> nogit=<数> を足し、removed と failed と名の列（起草の木は <潰した target>/<木の dir 名>）は便の木と起草の木の両方を数え、行を出すのは dir を消した周・失敗が在る周・lock を取れない周・no-rule の周だけで、起草の置き場が無い周の行は 1 byte も変わらず、stdout・event・rc は変わらない (7) NAMES の 8 つ・lock の名と取り方・便の母集団と live・tree_of・撃つ周・退役の move・seat retire・管理 tick・rules 行 host_guard.git・event の kind は変わらない 歯: pipe_sweep_drafts_ の e2e 4 本（stop.rs の §30 の歯の後ろ・起草の木は toy repo から git worktree add --detach で切り、古くするのは std の File の set_modified で entry を子から先に戻す・終端は live な便 1 本の pipe stop）の (a) 席 2 つの起草の置き場で、1 つ目の木の 7 時間前の target/ と 2 つ目の木の 7 時間前の .venv/ だけが消え、書いたばかりの node_modules/・追跡 file を持つ 7 時間前の docs/target/・列に無い 7 時間前の out/・.git を持たない写しの 7 時間前の target/・木の追跡 file と .git が残り、行が sweep: removed=2 runs=0 failed=0 drafts=2 nogit=1 で stdout に sweep: が無い (b) 深い所に書いたばかりの file を持つ 7 時間前の target/ と、深い所に書いたばかりの空の dir を持つ 7 時間前の .mypy_cache/ が残り、7 時間前の __pycache__/ だけが消えて行が sweep: removed=1 runs=0 failed=0 drafts=1 nogit=0 (c) 行 seat.drafts_stale_h を持たない tmp manifest（ceiling_rules の本文に pipe.stop_grace_ms の行を足した写し）で 7 時間前の target/ が残り、行が sweep: removed=0 runs=0 failed=0 drafts=no-rule nogit=0 (d) (c) の写しに値 0 の行を足した tmp manifest で、木の外の dir の 1 日先の mtime の file を指す symlink を持つ書いたばかりの target/ が消え、木の外の file は残る、と rules_drafts_stale_ の e2e 1 本（rules.rs の rules_ci_poll_row_follows_the_ci_wait の後ろ）の (e) 行の id・kind SeatDraftsStaleH・形 Int・値 6・enabled・裁定 id と裁定日・int_row で 6・kind の行が 1 本・ALL で PipeCiPollS の直後・行が pipe.ci_poll_s の直後・字面から引ける・文字列の値の写しは形と合わないで断られる・直す既存の歯 rules_embedded_manifest_is_valid_and_covers_all_kinds（行数 80）と rules_embedded_manifest_declares_one_capability_row_per_role（kind 78）と rules_external_form の snapshot（rows=80 kinds=78 の 2 行）は base の 79 / 77 で RED なので retroactive の札は要らず、§30 の pipe_sweep_ の 2 本は字も期待も変えずに緑・base は (a)(b)(d) の古い dir が残り (c) の sweep: の行が無く (e) の kind が無いので RED"
+
+[[contract]]
+id = "ai"
+title = "床の検査を撃つ側 — 任意 key floor-check を sha の tree の宣言から読み、行の 3 つの検査の後、sha の木で argv 1 本を PATH で解いて封じ込めの内で rules 行 floor.timeout_s まで待って撃ち、rc と要約を sha ごとに残し、今の判定を doctor の 1 行に出す（§34）"
+req = ["FR85", "FR68"]
+section = "34"
+write-set = ["crates/scribe2/src/pipe/declaration.rs", "crates/scribe2/src/pipe/declaration/optional_keys.rs", "crates/scribe2/src/pipe/dispatch.rs", "+crates/scribe2/src/pipe/dispatch/floor.rs", "crates/scribe2/src/rules/mod.rs", "rules/manifest.toml", "crates/scribe2-boundary/src/main.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "crates/scribe2-boundary/tests/e2e/rules.rs", "crates/scribe2-boundary/tests/e2e/rules/embedded.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__rules__rules_external_form.snap"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_floor_fire_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_floor_timeout_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_external_form", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_embedded_manifest_is_valid_and_covers_all_kinds", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_embedded_manifest_declares_host_guard_kinds_at_the_tail_of_all"]
+size = "M"
+growth = ["crates/scribe2/src/pipe/dispatch/floor.rs:310", "crates/scribe2/src/pipe/declaration/optional_keys.rs:35", "crates/scribe2/src/pipe/declaration.rs:6", "crates/scribe2/src/pipe/dispatch.rs:14", "crates/scribe2/src/rules/mod.rs:6", "crates/scribe2-boundary/src/main.rs:1"]
+done = "(1) key floor-check を sha の tree の宣言から読み、key の無い repo は撃たず置き場も作らない (2) 行の 3 つの検査（form・denied・metachar）に当たる行は撃たずに unfireable (3) PATH で解けない頭の語・木を作れない・包めない・行を読めない周は unfireable (4) 撃つのは起こす側の 1 周だけで、観測の口は撃たない (5) sha の結果が在る周は撃ち直さず、unfireable と timeout は結果を残さず次の周に撃ち直す (6) 今の判定の file と doctor の floor= の 1 行 (7) rules 行 floor.timeout_s = 600・ruling user 2026-09-30T04:25Z・kind は ALL の末尾 (8) 直す既存の歯に retroactive の札 (9) embedded.rs の 25 行の注記の括弧の中の repo の名を外し、略称だけにする (10) 新しい子は WaitReason・RuleKind・Stage・EventKind・Issue を名指さない (11) 待つ側（行 aj）が呼ぶ読みの関数（sha の結果と今の判定を file だけから読み、撃たない）を子 module に置く"
+
+[[contract]]
+id = "aj"
+title = "床の検査が不合格の間、介入 first の印の無い起動の列の全部（launched と settled を除く）を floor:<rc>・floor:unfireable・floor:timeout で待たせ、並列の実測に床の欄を足して管理 tick の alarm に floor を出し段を 0 に戻す（§35）"
+req = ["FR85", "FR68", "FR27"]
+section = "35"
+depends = ["ai"]
+write-set = ["crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/dispatch/facts.rs", "crates/scribe2/src/seat/tick/signal.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "crates/scribe2-boundary/tests/e2e/seat/tick.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_floor_wait_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_alarm_floor_", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_dispatch_wait_reasons_render_the_name_and_the_value", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_precheck_"]
+size = "S"
+growth = ["crates/scribe2/src/pipe/dispatch.rs:22", "crates/scribe2/src/pipe/dispatch/facts.rs:10", "crates/scribe2/src/seat/tick/signal.rs:6"]
+done = "(1) 不合格（rc≠0・unfireable・timeout）の周に first の印の無い候補（launched と settled を除く）が floor:<rc> / floor:unfireable / floor:timeout で待ち、準備の表から外れる (2) first の印の候補は床の検査で待たない (3) 判定は sha の結果 → 同じ sha の今の判定の順で file だけを読み、撃たない (4) 待ちの理由の名の列の末尾に floor (5) 並列の実測の床の欄と alarm の語 floor・段は 0 に戻り閾値は縮まない (6) 合図の行の字面は不変 (7) 直す既存の歯に retroactive の札 (8) 子の module は WaitReason を名指さない (9) 床の子 module は触らず、行 ai が置いた読みの関数（sha の結果と今の判定）を呼ぶ"
+
+[[contract]]
+id = "ak"
+title = "裁定 id の引用を閉じた規則 1 本で数える — 問い id の形（台帳の接頭辞だけ）・batch: と policy: の形・時刻の形を字面から拾い、ruling-fixtures の完全一致だけを外し、閉じた台帳の問いの裁定の行と束の欄で解き、opt-in の線の前後を分け、vessel 宣言の任意 key ruling-check と ruling-fixtures を読み、doctor --repo に ruling-cite: の 1 行を足す（FR83 / AC53・ADR-0083 (5)）"
+req = ["FR83"]
+section = "36"
+depends = ["ai"]
+write-set = ["+crates/scribe2/src/ledger/citation.rs", "crates/scribe2/src/ledger/mod.rs", "crates/scribe2/src/ledger/lint.rs", "crates/scribe2/src/ledger/form.rs", "crates/scribe2/src/pipe/declaration/optional_keys.rs", "crates/scribe2/src/pipe/declaration.rs", "crates/scribe2-boundary/src/main.rs", "crates/scribe2-boundary/tests/e2e/ledger_form.rs", "=crates/scribe2/src/ledger/close_reason.rs", "=crates/scribe2/src/seat/brief/pointer.rs", "=crates/scribe2/src/seat/ledger.rs"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail cite_scan_", "cargo nextest run -p scribe2 --lib --no-tests=fail declaration_ruling_check_", "cargo nextest run -p scribe2 --lib --no-tests=fail declaration_ruling_fixtures_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail ledger_ruling_doctor_", "cargo nextest run -p scribe2 --lib --no-tests=fail declaration_close_check_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail ledger_form_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail ledger_graph_"]
+size = "L"
+growth = ["crates/scribe2/src/ledger/mod.rs:1", "crates/scribe2/src/ledger/lint.rs:6", "crates/scribe2/src/ledger/form.rs:0", "crates/scribe2/src/pipe/declaration/optional_keys.rs:45", "crates/scribe2/src/pipe/declaration.rs:8", "crates/scribe2-boundary/src/main.rs:1"]
+done = "(1) 閉じた規則の 1 関数が 4 形を拾い、接頭辞の違う問い id の形と `policy: Type` と `apolicy:x` を拾わず、末尾の句読点を剥がし、backtick の囲みを外さない (2) ruling-fixtures は batch: / policy: と線の後の時刻の形だけを完全一致で外し、問い id の形は外さない (3) 問い id の形は閉じた問いの裁定 id の欄だけに解け、開いた問いと束の欄だけの一致は解けない。batch: / policy: は裁定 id の欄か束の欄に解ける。台帳を読めない周は測れないを返す (4) opt-in の線は ruling-check が main で初めて true と読める commit で、同じ file の同じ字面が線の木に在る引用を線の前と数える (5) 宣言の key 2 つの型違い・重複・非文字列は宣言の誤り。無い repo は false と空 (6) doctor --repo の 4 行目が check=on / off / unreadable の 3 形で、母集団（files・cited）と unresolved と before-line の件数と id を出す (7) 裁定の行の読み手は fleet-event-log の行 h の 1 本を呼ぶだけで 2 本目を持たない"
+
+[[contract]]
+id = "al"
+title = "受付は、ruling-check が true の repo で、設計の節か契約表の行に解けない裁定 id か opt-in の線より後の時刻の形の引用を持つ契約を、断りの値 ruling-unresolved で置き場ごとに id を名指して断り、台帳を読めない周も同じ値の rc 2 で断る。pipe intake と pipe preflight は --bd を受ける（FR83 / AC53）"
+req = ["FR83"]
+section = "37"
+depends = ["ak"]
+touches = ["crate::pipe::refuse::Refuse"]
+write-set = ["+crates/scribe2/src/pipe/cli/intake/ruling.rs", "crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/src/pipe/refuse.rs", "crates/scribe2/src/pipe/cli/args.rs", "crates/scribe2/src/pipe/cli/preflight.rs", "crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/review.rs", "crates/scribe2-boundary/tests/e2e/pipe/intake.rs", "=crates/scribe2/src/pipe/dispatch/candidates.rs", "=crates/scribe2/src/pipe/dispatch/precheck.rs", "=crates/scribe2/src/pipe/cli/intake/refusal.rs", "=crates/scribe2/src/pipe/closure/names.rs", "=crates/scribe2/src/pipe/table.rs", "=crates/scribe2/src/pipe/table/check.rs", "=crates/scribe2-boundary/tests/e2e/pipe.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_intake_ruling_", "cargo nextest run -p scribe2 --lib --no-tests=fail refuse_ruling_", "cargo nextest run -p scribe2 --lib --no-tests=fail refuse_names_are_pinned_in_declaration_order", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_refuse_evidence_discern_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_intake_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_preflight_"]
+size = "M"
+growth = ["crates/scribe2/src/pipe/cli/intake.rs:14", "crates/scribe2/src/pipe/refuse.rs:40", "crates/scribe2/src/pipe/cli/args.rs:2", "crates/scribe2/src/pipe/cli/preflight.rs:2", "crates/scribe2/src/pipe/dispatch.rs:1", "crates/scribe2/src/pipe/review.rs:0"]
+done = "(1) ruling-check が true の repo で、節か行に解けない問い id の形・解けない batch: / policy:・線の後の時刻の形を持つ契約が rc 1 の ruling-unresolved で断られ、本文が置き場ごとに id を全て名指す (2) 解ける 4 形・接頭辞違い・一覧に載せた字面・線の前の引用・key の無い repo は通る (3) 台帳を読めない周は rc 2 の ruling-unresolved で断られ、通らない (4) REFUSALS の末尾が ruling-unresolved で、Evidence は Place (5) 引用を持たない契約の周は台帳を読まない（偽の bd の呼び出しの回数 0） (6) 列の周の断りは既存の IntakeRefused に新しい名で 1 件載る (7) pipe intake / preflight が --bd を受け、無ければ既定の bd を撃つ"
+
+[[contract]]
+id = "am"
+title = "未反映の裁定を列の周ごとに置き場の file に書き（0 件も空の列）、acceptance か notes で引く契約と問いに blocks される契約を unreflected-ruling:<id> で待たせ、doctor の 1 行と管理 tick の alarm の語 unreflected に出す — 台帳の欄 effect を足す（§38）"
+req = ["FR84", "FR68", "FR27"]
+section = "38"
+depends = ["ak", "aj"]
+write-set = ["crates/scribe2/src/seat/ledger.rs", "crates/scribe2/src/hook/graph_guard.rs", "crates/scribe2/src/pipe/dispatch/precheck.rs", "crates/scribe2/src/ledger/form.rs", "crates/scribe2/src/pipe/dispatch.rs", "+crates/scribe2/src/pipe/dispatch/unreflected.rs", "crates/scribe2/src/pipe/dispatch/facts.rs", "crates/scribe2/src/seat/tick/signal.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch.rs", "crates/scribe2-boundary/tests/e2e/seat/tick.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_unreflected_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_alarm_unreflected_", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_dispatch_wait_reasons_render_the_name_and_the_value", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_floor_wait_"]
+size = "M"
+growth = ["crates/scribe2/src/pipe/dispatch/unreflected.rs:230", "crates/scribe2/src/pipe/dispatch.rs:25", "crates/scribe2/src/pipe/dispatch/facts.rs:8", "crates/scribe2/src/seat/tick/signal.rs:5", "crates/scribe2/src/seat/ledger.rs:3", "crates/scribe2/src/hook/graph_guard.rs:1"]
+done = "(1) 母集団は閉じた問いの effect = document の裁定の行の id で、operation と effect 無しは数えない (2) 未反映は dispatcher の行 ak の数えで main の先端の sha の追跡された file が 1 つも引かない id・ruling-check の有無に依らない (3) 起こす側の周ごとに置き場の file を上書きし 0 件も空の列・sha と母集団が同じ周は読み直さない (4) acceptance・notes・blocks の 3 形の候補が unreflected-ruling:<id> で待ち、関わらない候補は起きる (5) doctor の unreflected= の 1 行は 1 件以上の周だけ (6) alarm の語 unreflected は precheck の後・floor の前・段は上げない (7) Issue の effect と構築点 4 か所 (8) 子は WaitReason を名指さない・同じ docs PR で contract-source 行 bo の write-set に子を + で足す (9) 直す既存の歯に retroactive の札"
 <!-- contracts:end -->
