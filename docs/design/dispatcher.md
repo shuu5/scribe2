@@ -901,7 +901,8 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
   - 順: 宣言の凍結 → write-set → 行の事実 → 同型の停止 → 余地 → entrance-not-red → （置き場が要る判定）同時本数 → 交差 → 重複 run。
   - 断りは `pipe/refuse.rs` の Refuse（閉じた 23 値。末尾は max-live・entrance-not-red）。名の並びは REFUSALS と判別子順の歯が pin する。
 - judge を呼ぶのは 4 か所: 受付・事前審査（preflight）・列の候補（dispatch/candidates.rs）・事前の lens の候補（dispatch/precheck.rs）。
-  - 材料の読みは 1 周に 1 回。`Materials::read` が 3 か所、列の周の `Materials::of` が 1 か所。
+  - 材料の読みは 1 周に 1 回。`Materials::read` が 3 か所（`pipe/cli/intake.rs` の受付と写しの組み直しの 2 か所・`pipe/cli/preflight.rs` の 1 か所）、列の周の `Materials::of` が 1 か所（`pipe/dispatch.rs`）で、4 か所とも write-set の中。
+  - `dispatch/candidates.rs` と `dispatch/precheck.rs` は `Materials` を借りて `Material` の literal を組むだけで、`Materials::read` / `Materials::of` を呼ばない（read と of の署名を変えても直す所が無いので write-set の `=` のまま）。
 - 受付は台帳を読まない。`pipe intake` と `pipe preflight` は `--bd` を受けない（`pipe/cli/args.rs` の ALLOWED_INTAKE / ALLOWED_PREFLIGHT）。`pipe run` と列の周は TOOLS の `--bd` を受ける。
 - 節の本文の読み手は `pipe/review.rs` の section_text（私的・fence と契約表の区間を外す）1 本。
 - 引用の数えは §36（行 ak）の 1 関数。着地前の今の受付は、引用を見ずに通す。
@@ -943,7 +944,8 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
   - base で RED: 機能不在（解けない id の契約が受付を通る＝rc 0）。
 - `refuse_ruling_`（lib・refuse.rs）。rc の 2 形・Evidence が Place・本文が置き場ごとに id を並べることを確かめる。
   - base で RED: 機能不在（値が無い）。
-- 既存の歯を名指す: `refuse_names_are_pinned_in_declaration_order`（REFUSALS の末尾に 1 つ足す）、`pipe_refuse_evidence_discern_`、`pipe_intake_`（e2e・本数は撃つ時の main の値・余地の断りの順が動かない）、`pipe_preflight_`（e2e 4 本）。
+  - 歯の見本の列（refuse.rs の tests の `samples`）に足す値は rc 1 の形の ruling-unresolved 1 つだけ（rc 2 の形は `refuse_ruling_` が測る）。見本の列を読む既存の歯のうち本文を直す 2 本（上の pin と 23 語の歯）に retroactive の札を付ける。
+- 既存の歯を名指す: `refuse_names_are_pinned_in_declaration_order`（REFUSALS の末尾に 1 つ足し、末尾 4 語の期待を ruling-unresolved を頭にずらす）、`pipe_refuse_evidence_is_decided_once_for_each_of_the_23_words`（refuse.rs・want の末尾に `("ruling-unresolved", "place")` の 1 行を足す。名の 23 は歯を置いた時の語数で、名は変えない）、`refuse_carries_its_own_rc_and_names_the_run`（本文は変えない）、`pipe_refuse_evidence_discern_`、`pipe_intake_`（e2e・本数は撃つ時の main の値・余地の断りの順が動かない）、`pipe_preflight_`（e2e 4 本）。
 
 ### 触らない
 - 数えの規則と解き方（§36）。着地（`pipeline.md 行 be`）。
@@ -1725,10 +1727,10 @@ section = "37"
 depends = ["ak"]
 touches = ["crate::pipe::refuse::Refuse"]
 write-set = ["+crates/scribe2/src/pipe/cli/intake/ruling.rs", "crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/src/pipe/refuse.rs", "crates/scribe2/src/pipe/cli/args.rs", "crates/scribe2/src/pipe/cli/preflight.rs", "crates/scribe2/src/pipe/dispatch.rs", "crates/scribe2/src/pipe/review.rs", "crates/scribe2-boundary/tests/e2e/pipe/intake.rs", "=crates/scribe2/src/pipe/dispatch/candidates.rs", "=crates/scribe2/src/pipe/dispatch/precheck.rs", "=crates/scribe2/src/pipe/cli/intake/refusal.rs", "=crates/scribe2/src/pipe/closure/names.rs", "=crates/scribe2/src/pipe/table.rs", "=crates/scribe2/src/pipe/table/check.rs", "=crates/scribe2-boundary/tests/e2e/pipe.rs"]
-verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_intake_ruling_", "cargo nextest run -p scribe2 --lib --no-tests=fail refuse_ruling_", "cargo nextest run -p scribe2 --lib --no-tests=fail refuse_names_are_pinned_in_declaration_order", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_refuse_evidence_discern_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_intake_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_preflight_"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_intake_ruling_", "cargo nextest run -p scribe2 --lib --no-tests=fail refuse_ruling_", "cargo nextest run -p scribe2 --lib --no-tests=fail refuse_names_are_pinned_in_declaration_order", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_refuse_evidence_discern_", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_refuse_evidence_is_decided_once_for_each_of_the_23_words", "cargo nextest run -p scribe2 --lib --no-tests=fail refuse_carries_its_own_rc_and_names_the_run", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_intake_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_preflight_"]
 size = "M"
 growth = ["crates/scribe2/src/pipe/cli/intake.rs:14", "crates/scribe2/src/pipe/refuse.rs:40", "crates/scribe2/src/pipe/cli/args.rs:2", "crates/scribe2/src/pipe/cli/preflight.rs:2", "crates/scribe2/src/pipe/dispatch.rs:1", "crates/scribe2/src/pipe/review.rs:0"]
-done = "(1) ruling-check が true の repo で、節か行に解けない問い id の形・解けない batch: / policy:・線の後の時刻の形を持つ契約が rc 1 の ruling-unresolved で断られ、本文が置き場ごとに id を全て名指す (2) 解ける 4 形・束の欄にだけ在る batch:・接頭辞違い・一覧に載せた字面・線の前の引用・key の無い repo は通る (3) 台帳を読めない周は rc 2 の ruling-unresolved で断られ、通らない (4) REFUSALS の末尾が ruling-unresolved で、Evidence は Place (5) 引用を持たない契約の周は台帳を読まない（偽の bd の呼び出しの回数 0） (6) pipe intake / preflight が --bd を受けて明示した bd を撃ち、無ければ既定の bd を撃つ (7) 子 module ruling.rs は Refuse・Evidence・Issue を名指さず、断りの組み立ては intake.rs が書く (8) 台帳の client は Materials の欄に持たせ、Material の literal は変えない（列の周の受け渡しは構造で持ち、歯は受付と事前審査で測る） (9) 引用の判定は judge の中で entrance-not-red の後・置き場が要る判定の前に撃ち、preflight の refuse= の行の順が entrance-not-red → ruling-unresolved → write-set-overlap"
+done = "(1) ruling-check が true の repo で、節か行に解けない問い id の形・解けない batch: / policy:・線の後の時刻の形を持つ契約が rc 1 の ruling-unresolved で断られ、本文が置き場ごとに id を全て名指す (2) 解ける 4 形・束の欄にだけ在る batch:・接頭辞違い・一覧に載せた字面・線の前の引用・key の無い repo は通る (3) 台帳を読めない周は rc 2 の ruling-unresolved で断られ、通らない (4) REFUSALS の末尾が ruling-unresolved で、Evidence は Place。歯の見本の列に rc 1 の形を 1 つ足し、既存の歯 refuse_names_are_pinned_in_declaration_order と pipe_refuse_evidence_is_decided_once_for_each_of_the_23_words の本文を retroactive の札つきで直す（名は変えない） (5) 引用を持たない契約の周は台帳を読まない（偽の bd の呼び出しの回数 0） (6) pipe intake / preflight が --bd を受けて明示した bd を撃ち、無ければ既定の bd を撃つ (7) 子 module ruling.rs は Refuse・Evidence・Issue を名指さず、断りの組み立ては intake.rs が書く (8) 台帳の client は Materials の欄に持たせ、Material の literal は変えない（列の周の受け渡しは構造で持ち、歯は受付と事前審査で測る） (9) 引用の判定は judge の中で entrance-not-red の後・置き場が要る判定の前に撃ち、preflight の refuse= の行の順が entrance-not-red → ruling-unresolved → write-set-overlap"
 
 [[contract]]
 id = "am"
