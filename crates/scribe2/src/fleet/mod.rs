@@ -11,6 +11,7 @@ pub mod cli;
 pub mod json_lite;
 pub mod json_tree;
 pub mod lifecycle_line;
+pub mod phase;
 pub mod select;
 pub mod store;
 pub mod usage;
@@ -1020,4 +1021,65 @@ pub struct Registration {
 pub struct RegistrationLatest {
     pub seq: usize,
     pub registration: Registration,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::phase::{run_part, Latest, PASS};
+    use super::{Stage, STAGES};
+    use crate::case::{Phase, Turn};
+
+    /// 最新の便の値（判定は PASS・終端の語と detail の頭と札の生死は引数の側で変える）。
+    fn latest(stage: Stage, alive: bool) -> Latest {
+        Latest {
+            run: "r-1".to_owned(),
+            bead: "b-1".to_owned(),
+            stage,
+            verdict: Some(PASS.to_owned()),
+            detail_head: Some("rebase-conflict".to_owned()),
+            terminal: Some("closed".to_owned()),
+            alive,
+            ts: "2026-09-30T11:00:00Z".to_owned(),
+        }
+    }
+
+    /// (3) `STAGES` の全部が §2.1 の語と手番（§3）と理由に写る（段ごとに 1 行・母集団の増減は表の長さで落ちる）。
+    #[test]
+    fn phase_event_stages_map_to_the_design_words_turns_and_reasons() {
+        let table = [
+            (Stage::Intake, Phase::RunIntake, Turn::Vessel, "Intake"),
+            (Stage::Reviewed, Phase::RunReviewed, Turn::Vessel, "Reviewed"),
+            (Stage::Blocked, Phase::RunBlocked, Turn::User, "Blocked"),
+            (Stage::Spawned, Phase::RunImplementing, Turn::Runner, "Spawned"),
+            (Stage::Questioned, Phase::RunAsking, Turn::Seat, "Questioned"),
+            (Stage::RateLimited, Phase::RunRateLimited, Turn::Vessel, "RateLimited"),
+            (Stage::Implemented, Phase::RunGating, Turn::Vessel, "Implemented"),
+            (Stage::Gated, Phase::RunLanding, Turn::Vessel, "Gated"),
+            (Stage::Landed, Phase::RunLandedOpen, Turn::Seat, "closed"),
+            (Stage::Stopped, Phase::RunStopped, Turn::Seat, "Stopped"),
+            (Stage::Failed, Phase::RunFailed, Turn::Seat, "rebase-conflict"),
+        ];
+        assert_eq!(table.len(), STAGES.len(), "母集団 {} 段", STAGES.len());
+        for stage in STAGES {
+            assert!(table.iter().any(|(found, ..)| found == stage), "{stage:?} の行が無い");
+        }
+        for (stage, phase, turn, reason) in table {
+            let found = run_part(&latest(stage, false));
+            assert_eq!((found.phase, found.turn, found.reason.as_deref()), (phase, turn, Some(reason)), "{stage:?}");
+            assert_eq!((found.since.as_deref(), found.closed), (Some("2026-09-30T11:00:00Z"), false), "{stage:?}");
+        }
+    }
+
+    /// (3) Reviewed と Gated の PASS でない判定は理由が判定の語・Landed の札が生きていれば ci-waiting（手番 ci・理由は終端の語）。
+    #[test]
+    fn phase_event_stage_conditions_split_on_verdict_and_driver_ticket() {
+        let mut failed = latest(Stage::Reviewed, false);
+        failed.verdict = Some("FAIL".to_owned());
+        let found = run_part(&failed);
+        assert_eq!((found.phase, found.turn, found.reason.as_deref()), (Phase::RunReviewFailed, Turn::Seat, Some("FAIL")));
+        failed.stage = Stage::Gated;
+        assert_eq!(run_part(&failed).phase, Phase::RunGateFailed);
+        let live = run_part(&latest(Stage::Landed, true));
+        assert_eq!((live.phase, live.turn, live.reason.as_deref()), (Phase::RunCiWaiting, Turn::Ci, Some("closed")));
+    }
 }
