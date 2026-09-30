@@ -1939,3 +1939,29 @@ terms:
     aliases: [prelens]
     definition: 依存を待つ行に契約の審査の lens を事前に撃ち、 判定を契約の審査の段で使い回す口 (設計 dispatcher.md §27 の形 aa・ac)。 ADR-0103 (proposed) で、 rules 行の値で撃つのを止める段と code の退役の段の 2 段で退役する。
     relationships: [事前審査, 行の審査, 契約の審査]
+  # ---------------------------------------------------------------- done の項目と歯の対応の欄 (ADR-0104)
+  - canonical: done の項目
+    domain: consumer
+    aliases: [done item]
+    definition: 契約表の行の done の字を、 (1) から 1 ずつ増える番号の印で区切った約束の 1 つ (設計 docs/design/contract-source.md §64 の読み手・ADR-0104)。 印は半角の括弧と ASCII の数字だけで、 (1) を持たない done は項目 0 個。
+    relationships: [契約表, 契約の審査, 歯の対応の欄]
+  - canonical: 歯の対応の欄
+    domain: consumer
+    aliases: [done-teeth field]
+    definition: 契約表の行の任意の欄 done-teeth (ADR-0104)。 要素は「<番号>:<歯>」で、 done の項目ごとに、 その約束を外した実装で落ちる歯を 1 本以上名指す。 歯は名・既存の歯の印を前に置いた名・検証行の番号の歯・仕組みの歯の 4 形。 表の検査・受付・preflight が揃いと検証行の選びと base の在りかを照らし、 gate の最初の段が便の木に書かれたかを測る。 vessel 宣言の任意 key teeth-check を true と名乗った repo では、 base に無い行と done の字が base と違う行に欄を求める (done 以外の欄だけを変えた行には求めない)。 欄を読むだけの版を先に着地させて器を入れ替えてから、 初めて欄を書く。 Promised の行は持てず、 約束の行の歯の完全名が同じ対応を持つ。
+    relationships: [done の項目, 契約表, 約束の行, 契約の検証行, 契約の審査, gate]
+  - canonical: 既存の歯の印
+    domain: consumer
+    aliases: [kept tooth mark]
+    definition: 歯の対応の欄の歯の名の前に置く = (ADR-0104)。 base に在り、 その便が本文を変えない歯を表す。 gate の最初の段は、 印の無い名の歯にだけ base から足されたか本文が変わったことを求め、 印の在る歯には便の木に残ることを求める。
+    relationships: [歯の対応の欄, 歯]
+  - canonical: 検証行の番号の歯
+    domain: consumer
+    aliases: [verify-line tooth]
+    definition: 歯の対応の欄の @k の形 (ADR-0104)。 行の k 本目の検証行の全体を歯とする。 歯の名を 1 本ずつ解く読み手の無い形 (nextest でない test の撃ち手・文書の検査) の項目はこの形で書き、 gate の最初の段は測らない (検証行の実走が測る)。
+    relationships: [歯の対応の欄, 契約の検証行]
+  - canonical: 仕組みの歯
+    domain: consumer
+    aliases: [mechanism tooth]
+    definition: 歯の対応の欄の !<名> の形 (ADR-0104)。 名は閉じた 4 語 write-set・place-only・new-file・closure で、 外した実装でも観測の変わらない構造の制約を器の仕組み (runner の guard・gate の最初の段・契約表の検査の閉包) が測ることを表す。 closure が測るのは、 足した file がほかの行の touches の型を名指して、 その行の閉包をその行の write-set の外へ広げないこと (子 module がほかの行の touches の型を名指さない約束を含む) で、 行は便の木で契約表の検査を撃つ検証行の 1 行を持つ。 挙動の約束には書かない。 仕組みが測らない構造の制約は done に載せない。 place-only は write-set の = の file を runner の allowlist から外し、 gate の最初の段が diff の = の file を落とす測り (設計 docs/design/contract-source.md §66 の行 (4)) を指す。
+    relationships: [歯の対応の欄, done の項目, write-set, gate]
