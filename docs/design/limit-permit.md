@@ -20,6 +20,7 @@
 
 - 1 回目の gate（00:07Z）は `crates/scribe2/src/pipe/gate.rs` の `decide` が `token_cap` と本文の byte を比べて INCONCLUSIVE にした。
 - `pipe gate --rules`（写しの 250000）で撃ち直した 2 回目（00:23Z）も INCONCLUSIVE で、理由は「lens の verdict に findings が無い（evidence: diff exceeds cap）」だった。gate の照合は写しで通ったが、lens は別の process で cap を読み直す（`crates/scribe2/src/headless/lens.rs` の `rows_of` → `prompt_of` の `over`）。lens の cmd は run dir の写しの 1 行で `--rules` を持たないので、埋め込みの 150000 で再び断った。**同じ行の読み手が 2 つの process に割れていて、`--rules` は片方にしか届かない**（`s2-07l.272` が lens の cap を argv から rules 行へ寄せて塞いだ割れ〔実測は `.265` / `.267`〕と同じ型が、上書きの経路にだけ残っている）。
+- 着地の経路（同じ日の実測）: 席は権能 merge を持たないので `pipe land --rules` を撃てず（役割の guard が断る）、着地は列の手動の 1 周に写しの `--rules` と `--lens` を渡して便を再開させる形しか無かった。列は渡された道具を、起こす便と起こし直す便の全部へそのまま写し（`crates/scribe2/src/pipe/dispatch/candidates.rs` の `tools`・道具の受け渡しは全部か皆無か）、写された便は自分の終端の周の列にも同じ道具を渡す。上げた上限がほかの便へ漏れないよう、起こされうる契約 7 本を hold にしてから回した。`--rules` の応急の形は、作業 1 つに絞れないことがここでも現れる。
 - 同じ便の消費の 4 値の和は約 6,531 万（runner 約 5,826 万・審査 約 705 万）で、R-C6-1 の 2,500 万を越えている。`pipe show` は超過の 1 行を出すが、便は止まらない（gate-cost.md §43 の形 4「断らない」）。runner の turn は 362 で、turn の上限は無い（`crates/scribe2/src/headless/mod.rs` の `max_turns` は runner と lens では None）。
 
 ### 2.2 母集団の測り
@@ -65,7 +66,7 @@ spawn には消費の上限の読み手が今は 1 つも無い（runner の tok
 | 答えの口（`seat ruling answer`・裁定面） | 逐語を標準入力で受け、経路 gui の発話として書いて結ぶ | 席の道具の呼び出しは `crates/scribe2/src/hook/answer_mouth.rs` が字面で断る（script の file を経る形は測っていない） | 問いごと。承認 event は書かない（C7・ADR-0087） |
 | 裁定 id の実在（vessel 宣言の ruling-check・FR83） | 追跡された file の字面の裁定 id が台帳の裁定の行に解けること | 引用の実在だけで値は照らさない。本 repo の `.vessel.toml` は ruling-check を持たない（未 opt-in） | 文書の字面の検査で作業ごとでない |
 | `pipe show` の `cost-ceiling: over` | 便の消費の 4 値の和と R-C6-1 | 許可でなく表示 | 便ごとに出すが止めない |
-| `--rules` の差し替え（`crates/scribe2/src/pipe/cli/args.rs` の `manifest_of`・headless の `rules_of`） | 渡した file を丸ごと読む（loader は ruling 欄の有無だけを見る） | 完全に偽れる。席が写しを書いて渡せ、`pipe gate` は役割の guard の表（`crates/scribe2/src/hook/role_guard.rs` の `CAPABILITY_COMMANDS`）に無い。どの manifest を読んだかを event に残さない | command 単位。lens には届かない（§2.1） |
+| `--rules` の差し替え（`crates/scribe2/src/pipe/cli/args.rs` の `manifest_of`・headless の `rules_of`） | 渡した file を丸ごと読む（loader は ruling 欄の有無だけを見る） | 完全に偽れる。席が写しを書いて渡せ、`pipe gate` は役割の guard の表（`crates/scribe2/src/hook/role_guard.rs` の `CAPABILITY_COMMANDS`）に無い。どの manifest を読んだかを event に残さない | command 単位。lens には届かない（§2.1）。列の 1 周に渡すと広がりすぎる（§2.1 の後段） |
 | regate（FR77） | Gated ∧ FAIL ∧ 所有者の印 ∧ 逐語が非空 | 逐語は席が渡す | 便ごと。INCONCLUSIVE は対象外 |
 
 ### 2.5 憲法と ADR
@@ -241,11 +242,11 @@ ADR を書く条件の 1（C1・C7 / A4.2・C10 の解釈）・3（event の kin
 - 全行が 550 行以内の見積。b は閉じた型（`EventKind`・形・`RuleKind`）に変種を足すので、別 doc の既存の行の閉包が広がる。起票の前に `pipe preflight` で受付の断りを測る。
 - rules 行 2 本の値は新しい user 裁定 id を要る（base の ruling の字は使い回せない）。最初の許可の前に binary の入れ替えが要る（§6）。
 
-## 13. user の価値観が要る論点
+## 13. 価値観の論点と裁定
 
-1. **上限を外す（上限なし）を許すか** — 推奨: 許さない。有限の値への上げだけ。見ていない間の大量消費を防ぐという動機と真っ向からぶつかり、問いの本文に数を書かせることで user が数を見て「よい」と言える形になる。
-2. **許可の単位と期限の長さ** — 推奨: bead 単位で、期限の上限は rules 行 1 本（例えば 24 時間）・着地で自動に切れる。便単位だと同じ契約の撃ち直しのたびに user を呼ぶ。期限の値そのものが価値観の論点。
-3. **R-C6-1 を本当の停止にするか（C6.2 の字どおり）** — 推奨: ノブが着地した後に別の設計で入れる。今の便の 2.5%（524 本中 13 本）が線を越え、今日の便は 2.6 倍で、止めるなら同時にノブで上げられる必要がある。動機（見ていない間の消費）に一番効くのは gate の cap でなく runner の消費の停止である（§2.1・§2.2）。
+1. **上限を外す（上限なし）を許すか** — 裁定 user 2026-10-01T00:38Z: 許さない。有限の値への上げだけ。見ていない間の大量消費を防ぐという動機と真っ向からぶつかり、問いの本文に数を書かせることで user が数を見て「よい」と言える形になる。大きく上げたいときは大きい数を書く。
+2. **許可の単位と期限の長さ** — 推奨どおり（推奨で進める既定の裁定 user 2026-09-28T00:54Z）: bead 単位で、期限の上限は rules 行 1 本・着地で自動に切れる。便単位だと同じ契約の撃ち直しのたびに user を呼ぶ。rules 行 2 本の値（対象の行の列と期限の上限）は C5 の新しい裁定 id を SRS の round で取る。
+3. **R-C6-1 を本当の停止にするか（C6.2 の字どおり）** — 推奨どおり（既定の裁定 user 2026-09-28T00:54Z）: ノブが着地した後に、同じ epic の別の設計で入れる。今の便の 2.5%（524 本中 13 本）が線を越え、今日の便は 2.6 倍で、止めるなら同時にノブで上げられる必要がある。動機（見ていない間の消費）に一番効くのは gate の cap でなく runner の消費の停止である（§2.1・§2.2）。
 
 ## 14. 却下した案
 
@@ -263,7 +264,7 @@ ADR を書く条件の 1（C1・C7 / A4.2・C10 の解釈）・3（event の kin
 - 改ざんを不可能にはできない（§8 の根の限界）。器が持つのは普通の口の閉じ・跡・一覧まで。
 - MVP は gate の 2 読み手だけ。契約の審査・先撃ち・memo の lens と、`review.same_kind_stop` などほかの作業ごとの行は後の行。
 - user が問いの本文を読み、何に「よい」と言ったかは測れない（H3・H4）。
-- runner の消費は縛らない（R-C6-1 は表示だけ・turn の上限は無い）。動機に一番効く守りは §13 の論点 3 の側。
+- runner の消費は縛らない（R-C6-1 は表示だけ・turn の上限は無い）。動機に一番効く守りは §13 の論点 3 の側で、同じ epic の次の設計が持つ。
 - 撃ち直しは席の今の手のまま（許可の記帳が便を自動で測り直す形は持たない）。
 
 ## 16. 語彙
