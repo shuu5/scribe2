@@ -184,13 +184,17 @@ fn refusal_of(queued: Option<&Judged>, refusal: Option<&Refused>) -> Option<(Str
     }
 }
 
-/// 列の理由が `dependency` なら相手の列、`overlap` なら相手の便の bead（対応に無い run id は載せない）。
+/// 列の理由が `dependency` なら相手の列、`overlap` なら相手の便の bead（対応に無い run id は載せない）、`reserved` なら行を予約した bead。
 fn links_on(judged: &Judged, run_beads: &BTreeMap<String, String>) -> Vec<String> {
     match judged.name.as_str() {
         "dependency" => judged.value.split(',').filter(|found| !found.is_empty()).map(str::to_owned).collect(),
         "overlap" => {
             let run = judged.value.rsplit_once('/').map_or(judged.value.as_str(), |(run, _)| run);
             run_beads.get(run).cloned().into_iter().collect()
+        }
+        "reserved" => {
+            let bead = judged.value.split_once('/').map_or(judged.value.as_str(), |(bead, _)| bead);
+            Some(bead).filter(|found| !found.is_empty()).map(str::to_owned).into_iter().collect()
         }
         _ => Vec::new(),
     }
@@ -451,6 +455,17 @@ mod tests {
         assert_eq!(world.contract("b-1").links.on, ["b-7", "b-8"]);
         assert_eq!(world.contract("b-2").links.on, ["b-9"]);
         assert!(world.contract("b-3").links.on.is_empty(), "引けない run id は載せない");
+    }
+
+    /// (1) reserved の links.on は値（<予約した bead>/<file 数>・末尾に /unset）の最初の / より前の bead 1 つ（/ が無ければ値の全体）。
+    #[test]
+    fn phase_event_links_on_reserved_takes_the_reserving_bead() {
+        let mut world = World::default();
+        world.open.extend([open("b-1"), open("b-2"), open("b-3")]);
+        world.queue.extend([judged("b-1", "reserved", "b-6/2"), judged("b-2", "reserved", "b-6/2/unset"), judged("b-3", "reserved", "b-6")]);
+        for bead in ["b-1", "b-2", "b-3"] {
+            assert_eq!(world.contract(bead).links.on, ["b-6"], "{bead}");
+        }
     }
 
     /// (2) 列の判定に無い開いた契約は no-phase・pointer の無い契約は部品にならず（同じ契約が pointer を持てば queued）・閉じた契約の便は載らない。
