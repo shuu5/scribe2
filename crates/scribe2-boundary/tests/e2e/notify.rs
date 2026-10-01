@@ -6,8 +6,9 @@
 //! 置く（§19 形 6・`pipe/` 配下の file 数の pin は動かさない）。
 
 use crate::pipe::{
-    bin_cmd, ceiling_rules, clean, design_doc_rows, embedded_int, git, intake_bead, repo_with_state, row_fields, run_pipe,
-    stderr_of, stdout_of, write_design, DESIGN_FILE,
+    bin_cmd, ceiling_rules, clean, design_doc_rows, design_pointer, embedded_int, fake_lens, gate_once, gated_pass, git,
+    intake_bead, lens_verdict, repo_with_state, review_lens_pass, row_fields, run_pipe, spawn_with, stderr_of, stdout_of,
+    write_design, DESIGN_FILE, TOY_COMMIT,
 };
 use crate::TOOLBOX_BIN;
 use std::fs;
@@ -15,6 +16,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 use vessel::cli_outcome::RC_OK;
+use vessel::fleet::lifecycle_mark::{add_mark, Added, Kind as MarkKind, Ledger, Mark, Value};
+use vessel::fleet::store::LockPolicy;
 use vessel::fleet::Registration;
 use vessel::pipe::review::REVIEW_FILE;
 use vessel::seat::role::Role;
@@ -222,8 +225,16 @@ fn told(out: &Output) -> String {
     )
 }
 
-/// `pipe stop --run` を `--repo` 付きで撃つ（道具を渡さない周＝列は `no-runner` で測らない）。
+/// `pipe stop --run` を `--repo` 付きで撃つ（道具を渡さない周＝列は `no-runner` で測らない）。局面の出力の file には先に読めない字を
+/// 書く（道具の無い周は書き直さないので、終端の語は `unreadable` になる・設計 dispatcher.md §43 行 ar）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
 fn stop(repo: &Path, state: &Path) -> Output {
+    let fleet = state.join("fleet");
+    fs::create_dir_all(&fleet).expect("fleet dir を作れる");
+    fs::write(fleet.join("lifecycle.json"), "not json\n").expect("読めない出力を書ける");
     run_pipe(&["stop", "--run", RUN, "--state-dir", &state.display().to_string(), "--repo", &repo.display().to_string()])
 }
 
@@ -335,9 +346,9 @@ fn idle_round(issues: &[&str], hold: bool) -> (Output, Vec<String>) {
     (out, sent)
 }
 
-/// (約束 2) 列の結果が「起こした便 0 ∧ 候補 1」（ready の bead を hold にした台帳）の終端の周は、終端の 1 行に続けて
-/// idle の 1 行（`ready=1 launched=0 reason=hold`）を同じ宛先へ送る。候補 0 の台帳の周は idle の行を送らない
-/// （send-keys は終端の 1 行だけ）。
+/// (約束 2) 列の結果が「起こした便 0 ∧ 候補 1」（ready の bead を hold にした台帳）の終端の周は、idle の 1 行
+/// （`ready=1 launched=0 reason=hold`）を同じ宛先へ送る（出力の file の無い置き場なので終端の行は送らない・設計 §43 行 ar）。
+/// 候補 0 の台帳の周は 1 行も送らない。
 #[test]
 fn pipe_notify_idle_round_reports_ready_count_and_top_reason() {
     let (out, sent) = idle_round(&[QUEUED], true);
@@ -347,19 +358,17 @@ fn pipe_notify_idle_round_reports_ready_count_and_top_reason() {
     let line = idle.first().map(|found| found.as_str()).unwrap_or_default();
     assert!(line.contains("ready=1 launched=0 reason=hold"), "idle の行の字面: {line}");
     assert!(line.contains(&format!("-t {TARGET} -l ")), "宛先は登録 row の target: {line}");
-    assert_eq!(sent.len(), 2, "終端の 1 行と idle の 1 行: {sent:?}");
+    assert_eq!(sent.len(), 1, "送る行は idle の 1 行だけ: {sent:?}");
     assert_eq!(
         stdout_of(&out).lines().filter(|found| found.starts_with("notify=delivered consumed=")).count(),
-        2,
-        "送った 2 行の結果: {}",
+        1,
+        "送った 1 行の結果: {}",
         told(&out)
     );
 
     let (quiet, sent) = idle_round(&[], false);
     assert_eq!(quiet.status.code(), Some(i32::from(RC_OK)), "stop は rc 0: {}", told(&quiet));
-    assert_eq!(sent.len(), 1, "候補 0 の周は終端の 1 行だけ: {sent:?}");
-    assert!(sent.iter().all(|line| !line.contains(" idle ")), "idle の行を送らない: {sent:?}");
-    assert!(sent.iter().all(|line| line.contains("Stopped")), "送ったのは終端の行: {sent:?}");
+    assert_eq!(sent.len(), 0, "候補 0 の周は 1 行も送らない: {sent:?}");
 }
 
 /// 送った payload の行のうち idle の 1 行（無ければ空）。
@@ -421,7 +430,9 @@ fn pipe_notify_facts_hold_round_without_live_runs_reports_zero_live_and_zero_min
 const PENDING: &str = "s2-pending.1";
 
 /// 行 a の便を審査 FAIL の `Reviewed` の終端に着け（台帳では ready のまま＝`Settled` の候補）、契約を持たない live な便の
-/// `pipe stop --run` の終端を道具つきで撃つ。返すのは stdout / stderr と送った payload の列。
+/// `pipe stop --run` の終端を道具つきで撃つ。返すのは stdout / stderr と送った payload の列。置き場は局面の出力を書ける置き場で、
+/// 測る周の前に `fleet lifecycle write` を 1 回撃って切り替えの線を記帳し、測る周の後に出力が古くなく便の部品が
+/// `run-review-failed` であることを先に測る（設計 dispatcher.md §43 行 ar）。
 #[expect(
     clippy::expect_used,
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
@@ -430,10 +441,13 @@ fn pending_round() -> (Output, Vec<String>) {
     let (repo, state) = repo_with_state();
     fake_tmux(&state);
     register(&state, &repo);
+    writable(&repo);
     let failed = intake_bead(&repo, &state, &format!("{DESIGN_FILE}#a"), PENDING);
     fs::write(state.join("pipe").join(&failed).join(REVIEW_FILE), "{\"verdict\":\"FAIL\"}\n").expect("審査の判定を書ける");
+    record_stage(&state, &failed, PENDING, "Reviewed", "verdict:FAIL");
     live_run(&state);
     let bd = fake_bd(&state, "bd-pending", &[PENDING]);
+    switch_line(&state, &repo, &bd);
     let out = run_pipe(&[
         "stop", "--run", RUN,
         "--state-dir", &state.display().to_string(),
@@ -442,6 +456,8 @@ fn pending_round() -> (Output, Vec<String>) {
         "--bd", &bd,
         "--runner", "true",
     ]);
+    assert_fresh(&state, "pending_round");
+    assert!(part_of(&state, &failed).contains(" phase=run-review-failed "), "便の部品は run-review-failed: {}", shown(&state));
     let sent = sends(&state);
     clean(&[&repo, &state]);
     (out, sent)
@@ -449,6 +465,7 @@ fn pending_round() -> (Output, Vec<String>) {
 
 /// (§29 歯 (a)) 審査 FAIL の終端の bead が `Settled` の候補に並ぶ周の終端: idle の行は既存の `reason=settled:` を持ったまま
 /// ` pending=1:<bead>/Reviewed=FAIL` で終わる。base は key が無い（RED）。
+// flip-check: retroactive s2-07l.738.39.5
 #[test]
 fn pipe_notify_pending_reviewed_fail_rides_the_idle_line() {
     let (out, sent) = pending_round();
@@ -709,5 +726,331 @@ fn pipe_notify_precheck_cleared_rows_drop_the_bundle_and_say_zero_once() {
     assert!(idle_of(&cleared).ends_with(" precheck=0/3:0"), "確定 0・結果 3・束 0: {cleared:?}");
     let quiet = precheck_stop(&repo, &state, &bd, "r-pre-3");
     assert_eq!(bundle_sends(&quiet), Vec::<String>::new(), "次の周は送らない: {quiet:?}");
+    clean(&[&repo, &state]);
+}
+
+// ───── 便の終端の知らせの 1 語を局面の出力の便の部品から読む（設計 dispatcher.md §43 行 ar・接頭辞 `pipe_notify_lifecycle_`） ─────
+
+/// 局面の出力を書ける置き場にする（台帳の印の file と git の exclude の `.beads/` と origin/main の ref）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn writable(repo: &Path) {
+    fs::create_dir_all(repo.join(".beads")).expect(".beads を作れる");
+    fs::write(repo.join(".beads/issues.jsonl"), "[]\n").expect("台帳の file を書ける");
+    let exclude = repo.join(".git/info/exclude");
+    let body = fs::read_to_string(&exclude).unwrap_or_default();
+    fs::write(&exclude, format!("{body}.beads/\n")).expect("exclude を書ける");
+    let main = git(repo, &["rev-parse", "refs/heads/main"]);
+    git(repo, &["update-ref", "refs/remotes/origin/main", &main]);
+}
+
+/// 便の段を 1 つ `fleet record` で足す。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn record_stage(state: &Path, run: &str, bead: &str, stage: &str, detail: &str) {
+    let out = bin_cmd()
+        .args(["fleet", "record", "--kind", "RunStage", "--run", run, "--bead", bead, "--stage", stage, "--detail", detail])
+        .arg("--state-dir")
+        .arg(state)
+        .output()
+        .expect("binary を起動できる");
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "fleet record: {}", stderr_of(&out));
+}
+
+/// bead を hold にする（測る周に列が便を起こさない・起こす便の子が足す event で語が揺れない）。
+fn hold(state: &Path, bead: &str) {
+    let out = run_pipe(&["dispatch", "hold", bead, "--state-dir", &state.display().to_string()]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "hold: {}", told(&out));
+}
+
+/// `fleet lifecycle write`（書き手の 1 回・rc は呼び手が見る）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn lifecycle_write(state: &Path, repo: &Path, bd: &str) -> Output {
+    bin_cmd()
+        .args(["fleet", "lifecycle", "write", "--state-dir"])
+        .arg(state)
+        .arg("--repo")
+        .arg(repo)
+        .args(["--bd", bd])
+        .output()
+        .expect("binary を起動できる")
+}
+
+/// 測る周の前に書き直しを 1 回撃って切り替えの線を記帳する（置き場で最初の書き直しの周は出力が古い・設計 §43 何が起きているか）。
+fn switch_line(state: &Path, repo: &Path, bd: &str) {
+    let out = lifecycle_write(state, repo, bd);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "fleet lifecycle write: {}", stderr_of(&out));
+}
+
+/// `fleet lifecycle show` の stdout。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn shown(state: &Path) -> String {
+    let out = bin_cmd().args(["fleet", "lifecycle", "show", "--state-dir"]).arg(state).output().expect("binary を起動できる");
+    stdout_of(&out)
+}
+
+/// 便の部品の行（無ければ空）。
+fn part_of(state: &Path, run: &str) -> String {
+    let prefix = format!("part=run id={run} ");
+    shown(state).lines().find(|line| line.starts_with(&prefix)).map(str::to_owned).unwrap_or_default()
+}
+
+/// 部品の行の `reason=` の値。
+fn reason_of(line: &str) -> String {
+    line.split_once(" reason=").map(|(_, value)| value.trim().to_owned()).unwrap_or_default()
+}
+
+/// 置き場の event log の byte 長。
+fn events_len(state: &Path) -> u64 {
+    fs::metadata(state.join("fleet").join("events.jsonl")).map(|found| found.len()).unwrap_or(0)
+}
+
+/// 出力の頭の行の `events=` が event log の byte 長に等しく `stale=-` である（古くない前提を歯が測る）。
+fn assert_fresh(state: &Path, who: &str) {
+    let text = shown(state);
+    let head = text.lines().next().unwrap_or_default();
+    assert!(head.contains(&format!(" events={} ", events_len(state))), "{who}: events= が event log の長さに等しい: {text}");
+    assert!(head.ends_with(" stale=-"), "{who}: stale=-: {text}");
+}
+
+/// 出力の頭の行の `events=` が event log の長さと違う（古い周の前提）。
+fn assert_behind(state: &Path, who: &str) {
+    let text = shown(state);
+    let head = text.lines().next().unwrap_or_default();
+    assert!(!head.contains(&format!(" events={} ", events_len(state))), "{who}: 出力は event log より後れている: {text}");
+}
+
+/// 台帳の 1 件（行 a を指す契約・依存なし）。
+fn issue_json(id: &str, status: &str) -> String {
+    format!(
+        "{{\"id\":\"{id}\",\"status\":\"{status}\",\"priority\":2,\"labels\":[],\
+         \"acceptance_criteria\":\"design = {DESIGN_FILE}#a\",\"dependencies\":[]}}"
+    )
+}
+
+/// 台帳の JSON を返し、close は `close_rc` で返る偽の `bd`（path を返す）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn ledger_bd(state: &Path, name: &str, issues: &[String], close_rc: u8) -> String {
+    let json = state.join(format!("{name}.json"));
+    fs::write(&json, format!("[{}]\n", issues.join(","))).expect("偽の台帳を書ける");
+    let path = state.join(name);
+    fs::write(&path, format!("#!/bin/sh\nif [ \"$1\" = close ]; then exit {close_rc}; fi\ncat '{}'\n", json.display())).expect("偽の bd を書ける");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("偽の bd に実行権を付ける");
+    path.display().to_string()
+}
+
+/// 局面の出力を書ける置き場（登録 row と偽の tmux つき）。
+fn site() -> (PathBuf, PathBuf) {
+    let (repo, state) = repo_with_state();
+    fake_tmux(&state);
+    register(&state, &repo);
+    writable(&repo);
+    (repo, state)
+}
+
+/// 終端の周の引数（置き場・repo・規則・台帳・実装役の口）を足して撃つ。
+fn terminal_round(repo: &Path, state: &Path, bd: &str, rules: &str, verb: &[&str]) -> Output {
+    let mut args: Vec<&str> = verb.to_vec();
+    let (state_arg, repo_arg) = (state.display().to_string(), repo.display().to_string());
+    args.extend(["--state-dir", &state_arg, "--repo", &repo_arg, "--rules", rules, "--bd", bd, "--runner", "true"]);
+    run_pipe(&args)
+}
+
+/// 送った payload のうち終端の行の `<段>=<語>`（idle と束の行は除く）。
+fn terminal_words(sent: &[String]) -> Vec<String> {
+    sent.iter()
+        .filter(|line| !line.contains(" idle ") && !line.contains(" precheck "))
+        .filter_map(|line| {
+            line.split_whitespace()
+                .find(|token| token.split_once('=').is_some_and(|(key, _)| key.starts_with(|ch: char| ch.is_ascii_uppercase())))
+                .map(str::to_owned)
+        })
+        .collect()
+}
+
+/// `lock_retry_ms` を 100 に縮めた列の写し（Busy の周を 5 秒待たない）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn fast_rules(state: &Path) -> String {
+    let body = fs::read_to_string(queue_rules(state)).expect("列の写しを読める");
+    let from = "kind = \"LockRetryMs\"\nvalue = 5000";
+    assert!(body.contains(from), "行の字面が在る");
+    let path = state.join("rules-notify-fast.toml");
+    fs::write(&path, body.replace(from, "kind = \"LockRetryMs\"\nvalue = 100")).expect("写しを書ける");
+    path.display().to_string()
+}
+
+/// 審査 FAIL で終端する便（契約の bead は台帳で開き `Settled` の候補になる）を置く。返すのは便の id。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn reviewed_fail(repo: &Path, state: &Path, bead: &str) -> String {
+    let id = intake_bead(repo, state, &design_pointer(), bead);
+    fs::write(state.join("pipe").join(&id).join(REVIEW_FILE), "{\"verdict\":\"FAIL\"}\n").expect("審査の判定を書ける");
+    record_stage(state, &id, bead, "Reviewed", "verdict:FAIL");
+    id
+}
+
+/// (a) 古くない周: Reviewed の FAIL の便の終端の行の語は判定の語・Stopped の便の語は `Stopped`・`Settled` の候補の Gated の FAIL の
+/// 便の pending の語は `FAIL`。
+#[test]
+fn pipe_notify_lifecycle_fresh_round_reads_the_word_from_the_part_reason() {
+    let (repo, state) = site();
+    let failed = reviewed_fail(&repo, &state, "s2-rf.1");
+    let bd = ledger_bd(&state, "bd-reviewed", &[issue_json("s2-rf.1", "open")], 0);
+    switch_line(&state, &repo, &bd);
+    let rules = queue_rules(&state);
+    let out = terminal_round(&repo, &state, &bd, &rules, &["retire", "--run", &failed]);
+    assert_fresh(&state, "Reviewed の FAIL");
+    assert!(part_of(&state, &failed).contains(" phase=run-review-failed turn=seat "), "前提: 手番が seat の部品: {}", shown(&state));
+    assert_eq!(terminal_words(&sends(&state)), ["Reviewed=FAIL"], "語は判定の語: {}", told(&out));
+    clean(&[&repo, &state]);
+
+    let (repo, state) = site();
+    live_run(&state);
+    hold(&state, BEAD);
+    let bd = ledger_bd(&state, "bd-stopped", &[issue_json(BEAD, "open")], 0);
+    switch_line(&state, &repo, &bd);
+    let out = terminal_round(&repo, &state, &bd, &queue_rules(&state), &["stop", "--run", RUN]);
+    assert_fresh(&state, "Stopped");
+    assert_eq!(terminal_words(&sends(&state)), ["Stopped=Stopped"], "語は段の名: {}", told(&out));
+    clean(&[&repo, &state]);
+
+    let (repo, state) = site();
+    let gated = intake_bead(&repo, &state, &design_pointer(), "s2-gf.1");
+    let spawned = spawn_with(&repo, &state, &gated, TOY_COMMIT);
+    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "spawn は rc 0: {}", told(&spawned));
+    let lens = fake_lens(&state.join("gate-lens-fail"), &lens_verdict("FAIL"));
+    assert_ne!(gate_once(&repo, &state, &gated, Some(&lens)).status.code(), Some(i32::from(RC_OK)), "FAIL の gate は rc 0 でない");
+    live_run(&state);
+    let bd = ledger_bd(&state, "bd-gated", &[issue_json("s2-gf.1", "open")], 0);
+    switch_line(&state, &repo, &bd);
+    let out = terminal_round(&repo, &state, &bd, &queue_rules(&state), &["stop", "--run", RUN]);
+    assert_fresh(&state, "Gated の FAIL");
+    assert!(part_of(&state, &gated).contains(" phase=run-gate-failed "), "前提: Gated の FAIL の部品: {}", shown(&state));
+    let sent = sends(&state);
+    assert!(idle_of(&sent).ends_with(" pending=1:s2-gf.1/Gated=FAIL"), "pending の語は FAIL: {sent:?} / {}", told(&out));
+    clean(&[&repo, &state]);
+}
+
+/// (b) 古くない周: 台帳で契約が閉じた Stopped の便（出力に部品が無い）は送らず、開いた契約の Failed の便は送り、契約が開いたまま札の
+/// 無い Landed の便（run-landed-open）は送って語がその便の部品の行の `reason=` の値に等しい。
+#[test]
+fn pipe_notify_lifecycle_fresh_round_sends_only_the_runs_with_a_seat_part() {
+    let (repo, state) = site();
+    live_run(&state);
+    let bd = ledger_bd(&state, "bd-closed", &[issue_json(BEAD, "closed")], 0);
+    switch_line(&state, &repo, &bd);
+    let out = terminal_round(&repo, &state, &bd, &queue_rules(&state), &["stop", "--run", RUN]);
+    assert_fresh(&state, "契約が閉じた Stopped");
+    assert_eq!(part_of(&state, RUN), "", "前提: 部品が無い: {}", shown(&state));
+    assert_eq!(terminal_words(&sends(&state)), Vec::<String>::new(), "部品の無い便は送らない: {}", told(&out));
+    clean(&[&repo, &state]);
+
+    let (repo, state) = site();
+    let bd = ledger_bd(&state, "bd-failed", &[issue_json("s2-fl.1", "open")], 0);
+    switch_line(&state, &repo, &bd);
+    let out = run_pipe(&[
+        "run", "--design", &design_pointer(), "--bead", "s2-fl.1",
+        "--repo", &repo.display().to_string(), "--state-dir", &state.display().to_string(),
+        "--rules", &queue_rules(&state), "--bd", &bd, "--runner", "exit 2", "--lens", &review_lens_pass(&state),
+    ]);
+    assert_fresh(&state, "Failed");
+    assert_eq!(terminal_words(&sends(&state)), ["Failed=runner-rc"], "語は最後の detail の頭: {}", told(&out));
+    clean(&[&repo, &state]);
+
+    let (repo, state) = site();
+    let id = gated_pass(&repo, &state, &design_pointer(), &state.join("lens-ran"));
+    let bd = ledger_bd(&state, "bd-landed", &[issue_json("s2-2e5", "open")], 3);
+    let rules = queue_rules(&state);
+    let landed = terminal_round(&repo, &state, &bd, &rules, &["land", "--run", &id]);
+    assert_ne!(landed.status.code(), Some(i32::from(RC_OK)), "close の落ちる着地は rc 0 でない: {}", told(&landed));
+    switch_line(&state, &repo, &bd);
+    let sent_before = sends(&state).len();
+    let out = terminal_round(&repo, &state, &bd, &rules, &["land", "--run", &id, "--terminal-only"]);
+    assert_fresh(&state, "Landed");
+    let part = part_of(&state, &id);
+    assert!(part.contains(" phase=run-landed-open turn=seat "), "前提: 契約が開いたまま札の無い Landed: {}", shown(&state));
+    let sent: Vec<String> = sends(&state).into_iter().skip(sent_before).collect();
+    assert_eq!(terminal_words(&sent), [format!("Landed={}", reason_of(&part))], "語は部品の理由: {}", told(&out));
+    clean(&[&repo, &state]);
+}
+
+/// (c) 古い周: lifecycle.lock を生きた pid で持たせて書き直しを Busy にした周は、出力の部品が run-asking（手番 seat）の便の語に
+/// `:stale` が付き、run-implementing（手番 runner）の便の語は `stale`。3 つ目の置き場は古さの印だけで古い周になり、`Settled` の
+/// 候補の Reviewed の FAIL の便の pending の語が `FAIL:stale`。
+#[test]
+fn pipe_notify_lifecycle_stale_round_marks_the_word_and_never_stays_quiet() {
+    for (stage, bead, run, expected) in [
+        ("Questioned", "s2-ask.1", "r-ask", "Stopped=Questioned:stale"),
+        ("Spawned", "s2-impl.1", "r-impl", "Stopped=stale"),
+    ] {
+        let (repo, state) = site();
+        record_stage(&state, run, bead, stage, "x");
+        hold(&state, bead);
+        let bd = ledger_bd(&state, "bd-stale", &[issue_json(bead, "open")], 0);
+        switch_line(&state, &repo, &bd);
+        fs::write(state.join("fleet").join("lifecycle.lock"), format!("{}\n", std::process::id())).expect("lock を置ける");
+        let out = terminal_round(&repo, &state, &bd, &fast_rules(&state), &["stop", "--run", run]);
+        assert!(stderr_of(&out).lines().any(|line| line == "lifecycle=busy"), "書き直しは Busy: {}", told(&out));
+        assert_behind(&state, stage);
+        assert_eq!(terminal_words(&sends(&state)), [expected], "{stage} の便の語: {}", told(&out));
+        clean(&[&repo, &state]);
+    }
+
+    let (repo, state) = site();
+    reviewed_fail(&repo, &state, "s2-rf.1");
+    live_run(&state);
+    let bd = ledger_bd(&state, "bd-pending-stale", &[issue_json("s2-rf.1", "open")], 0);
+    switch_line(&state, &repo, &bd);
+    let mark = Mark { kind: MarkKind::LedgerGate, at: "2999-01-01T00:00:00Z".to_owned(), value: Value::Ledger(Ledger::Files { len: 1, mtime_ns: 1 }) };
+    assert_eq!(add_mark(&state, &mark, LockPolicy { retry_ms: 500, stale_ms: 600_000 }), Added::Added, "古さの印を足せる");
+    let out = terminal_round(&repo, &state, &bd, &queue_rules(&state), &["stop", "--run", RUN]);
+    let text = shown(&state);
+    assert!(text.lines().next().is_some_and(|head| head.ends_with(" stale=ledger-gate")), "印が残る: {text}");
+    let sent = sends(&state);
+    assert!(idle_of(&sent).ends_with(" pending=1:s2-rf.1/Reviewed=FAIL:stale"), "pending の古い形: {sent:?} / {}", told(&out));
+    clean(&[&repo, &state]);
+}
+
+/// (d) 書き手が出力を書けない置き場（台帳の印の file も origin/main の ref も無い）で、出力の file の無い周は終端の行を送らず、
+/// `Settled` の候補が 1 本の周の pending は `unreadable`。出力の file が読めない字の周の終端は語 `unreadable` で送る。
+#[test]
+fn pipe_notify_lifecycle_absent_output_sends_no_terminal_and_an_unreadable_one_says_so() {
+    let (repo, state) = repo_with_state();
+    fake_tmux(&state);
+    register(&state, &repo);
+    reviewed_fail(&repo, &state, "s2-rf.1");
+    live_run(&state);
+    let bd = ledger_bd(&state, "bd-absent", &[issue_json("s2-rf.1", "open")], 0);
+    let out = terminal_round(&repo, &state, &bd, &queue_rules(&state), &["stop", "--run", RUN]);
+    assert!(!state.join("fleet").join("lifecycle.json").exists(), "前提: 出力の file は無い");
+    let sent = sends(&state);
+    assert_eq!(terminal_words(&sent), Vec::<String>::new(), "出力の file の無い周は終端の行を送らない: {}", told(&out));
+    assert!(idle_of(&sent).ends_with(" pending=unreadable"), "pending は unreadable: {sent:?}");
+    clean(&[&repo, &state]);
+
+    let (repo, state) = repo_with_state();
+    fake_tmux(&state);
+    register(&state, &repo);
+    live_run(&state);
+    let out = stop(&repo, &state);
+    assert_eq!(terminal_words(&sends(&state)), ["Stopped=unreadable"], "読めない出力の終端は語 unreadable: {}", told(&out));
     clean(&[&repo, &state]);
 }
