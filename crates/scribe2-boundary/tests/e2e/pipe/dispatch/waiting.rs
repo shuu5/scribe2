@@ -1357,10 +1357,10 @@ const FALLEN: &str = "s2-toy.1";
 const LATER: &str = "s2-toy.2";
 const EARLIER: &str = "s2-toy.3";
 
-/// 3 行（a・c・d）が同じ `src/lib.rs` を書く設計 doc を commit する。
+/// 3 行（a・c・d）が同じ `src/lib.rs` を書く設計 doc を commit する。B の行 a は節 2・後ろの C と前の D の行は節 1 に置く
+/// （同じ節の行は兄弟の待ちで待つので、行の予約の歯は B の行を別の節に置いて兄弟の待ちを外す・設計 row-review.md §8）。
 fn reserve_rows(repo: &Path) {
-    let lib = r#"write-set = ["src/lib.rs"]"#;
-    commit_rows(repo, &["a", "c", "d"].map(|id| row_fields(id, &["write-set"], &[lib])));
+    commit_sections(repo, &[("a", "2"), ("c", "1"), ("d", "1")].map(|(id, section)| section_row(id, section, "src/lib.rs")));
 }
 
 /// 列の写し（[`dispatch_rules`]）に `pipe.reserve_h` の行を足した写し（`None` は行を持たない写し）。
@@ -1585,5 +1585,353 @@ fn pipe_dispatch_row_reservation_holds_while_the_fallen_bead_waits_on_a_dependen
     let out = reserve_ls(&repo, &state, &bd, &reserve_rules(&state, Some(24)), 1);
     assert_eq!(reason_of(&out, FALLEN), "dependency:s2-dep", "B は依存で待つ（{}）", told(&out));
     assert_eq!(reason_of(&out, LATER), format!("reserved:{FALLEN}/1"), "候補に居ない B の予約でも C は待つ（{}）", told(&out));
+    clean(&[&repo, &state]);
+}
+
+// ---- 兄弟の待ち（設計 row-review.md §8・契約表の行 g・接頭辞 `pipe_dispatch_sibling_wait_`） ----
+//
+// 行 a の便（B・bead は [`FALLEN`]）が設計の側の終端に着いた置き場で、同じ設計 doc の行を持つ候補（bead は [`sib`]）を `dispatch ls` で測る。
+// doc は節 1 と節 2 を持つ（[`commit_sections`]）。兄弟の行の write-set は B の行 a の `src/lib.rs` と交差させない（(h) を除く）。
+
+/// 設計 doc に節 2 を足し、`rows`（[`section_row`]）を 1 回の commit で書く（行の `section` が節 1 か 2 を指す・表の前に節 2 の見出しと本文を置く）。
+fn commit_sections(repo: &Path, rows: &[Vec<String>]) {
+    let begin = vessel::pipe::table::BEGIN;
+    let body = design_doc_rows(rows).replacen(begin, &format!("## 2. 別の節\n\n別の節の本文。\n\n{begin}"), 1);
+    if fs::read_to_string(repo.join(DESIGN_FILE)).is_ok_and(|found| found == body) {
+        return;
+    }
+    for fields in rows {
+        super::super::seed_write_set(repo, fields);
+    }
+    write_design(repo, &body);
+    git(repo, &["add", "-A"]);
+    git(repo, &["commit", "-q", "-m", "design-sections"]);
+    assert!(fs::read_to_string(repo.join(DESIGN_FILE)).is_ok_and(|found| found.contains("## 2.")), "前提: 節 2 を持つ doc を commit した");
+}
+
+/// 行 `id`（節 `section`・write-set は `file` 1 本）の欄の列。
+fn section_row(id: &str, section: &str, file: &str) -> Vec<String> {
+    row_fields(id, &["write-set", "section"], &[&format!("write-set = [\"{file}\"]"), &format!("section = \"{section}\"")])
+}
+
+/// 行 `row` の bead（B の行 a は [`FALLEN`]・ほかは `s2-sib-<行>`）。
+fn sib(row: &str) -> String {
+    if row == "a" { FALLEN.to_owned() } else { format!("s2-sib-{row}") }
+}
+
+/// 行 `rows` を commit した置き場（repo・state）。`rows` は (行 id・節・write-set の file)。
+fn sib_place(rows: &[(&str, &str, &str)]) -> (std::path::PathBuf, std::path::PathBuf) {
+    let (repo, state) = repo_with_state();
+    commit_sections(&repo, &rows.iter().map(|(id, section, file)| section_row(id, section, file)).collect::<Vec<_>>());
+    (repo, state)
+}
+
+/// 台帳（`rows` の行ごとに 1 本・B の行 a は P1・ほかは P2）の偽 bd。
+fn sib_bd(state: &Path, rows: &[&str]) -> String {
+    fake_bd(state, &rows.iter().map(|row| issue(&sib(row), if *row == "a" { 1 } else { 2 }, row)).collect::<Vec<_>>())
+}
+
+/// 行 a の便 B を終端の形 `form` に着ける（[`reserve_fallen`] の形に、unparsed の INCONCLUSIVE を足す）。
+fn sib_fallen(repo: &Path, state: &Path, form: &str) -> String {
+    match form {
+        "reviewed-unparsed" => judged_run(repo, state, FALLEN, UNPARSED),
+        other => reserve_fallen(repo, state, other),
+    }
+}
+
+/// 行 `row` の便を審査の判定 `judgement` で Reviewed の終端に着ける（B2 の行が行 a でない形）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn sib_reviewed(repo: &Path, state: &Path, row: &str, judgement: &str) -> String {
+    let id = intake_bead(repo, state, &format!("{DESIGN_FILE}#{row}"), &sib(row));
+    fs::write(state.join("pipe").join(&id).join(REVIEW_FILE), format!("{judgement}\n")).expect("審査の判定を書ける");
+    id
+}
+
+/// `rules` の写しで `dispatch ls` を `rounds` 周撃ち、各周の前後で event log の行数が同じ（兄弟の待ちは記帳しない）ことを測って最後の周を返す。
+fn sib_ls(repo: &Path, state: &Path, bd: &str, rules: &str, rounds: usize) -> Output {
+    let args = ["dispatch", "ls", "--state-dir", &state.display().to_string(), "--repo", &repo.display().to_string(), "--rules", rules, "--bd", bd];
+    let mut last = run_pipe(&args);
+    for round in 1..=rounds {
+        let before = event_lines(state);
+        last = run_pipe(&args);
+        let waited = stdout_of(&last).lines().filter(|line| line.contains("reason=sibling:")).count();
+        assert_eq!(event_lines(state), before, "{rounds} 周中 {round} 周目・待った候補 {waited} 本: 兄弟の待ちは event を増やさない");
+    }
+    last
+}
+
+/// 便 `run` の写し（契約 file と材料の dir の design.txt）から、行の審査の口 (B) で求めた行の digest。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn copy_digest(state: &Path, run: &str) -> String {
+    let contract = fs::read_to_string(state.join("pipe").join(run).join("contract.toml")).expect("契約の写しを読める");
+    let section = fs::read_to_string(section_copy(state, run)).expect("節の写しを読める");
+    vessel::pipe::row_review::row_digest(contract.strip_suffix('\n').unwrap_or(&contract), section.strip_suffix('\n').unwrap_or(&section))
+}
+
+/// 行 `row` の今の digest（別の bead で 1 便を起こして写しから求め、すぐ止める＝台帳の bead の便は増えない）。
+fn row_digest_now(repo: &Path, state: &Path, row: &str) -> String {
+    let id = intake_bead(repo, state, &format!("{DESIGN_FILE}#{row}"), &format!("s2-probe-{row}"));
+    let digest = copy_digest(state, &id);
+    super::super::stop_run_ok(state, &id);
+    digest
+}
+
+/// 行の記録を 1 つ置く（`<根>/<名>/record`・§9 の形・`tail` は basis・判定・理由の型・at の秒）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn sib_record(state: &Path, name: &str, row: &str, digest: &str, tail: (&str, &str, &str, u64)) {
+    let (basis, verdict, kind, at) = tail;
+    let dir = state.join("pipe").join("row-review").join(name);
+    fs::create_dir_all(&dir).expect("記録の dir を作れる");
+    let body = format!("schema=1\nrow={DESIGN_FILE}#{row}\ndigest={digest}\nkey=0\nbasis={basis}\nverdict={verdict}\nkind={kind}\nat={at}\n");
+    fs::write(dir.join("record"), body).expect("行の記録を書ける");
+}
+
+/// ref の記録を 1 本置く（名は `digit` を 40 回・`rows` は (行・digest)）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn sib_ref(state: &Path, digit: char, rows: &[(&str, &str)]) {
+    let dir = state.join("pipe").join("row-review").join("ref");
+    fs::create_dir_all(&dir).expect("ref の dir を作れる");
+    let listed: String = rows.iter().map(|(row, digest)| format!("row={DESIGN_FILE}#{row} digest={digest} id=0000000000000001 verdict=FAIL basis=actual\n")).collect();
+    let body = format!("schema=1\nbase={}\ntables={DESIGN_FILE}\n{listed}result=fail\n", "b".repeat(40));
+    fs::write(dir.join(digit.to_string().repeat(40)), body).expect("ref の記録を書ける");
+}
+
+/// 今の秒（記録の at を終端の前後に置く）。
+fn sib_now() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |found| found.as_secs())
+}
+
+/// (a) 直前の便が Reviewed FAIL の B と同じ節の行の候補は `sibling:<B>` で待ち、同じ doc の別の節の行の候補は起こされる。判定は event を増やさない（3 周）。
+#[test]
+fn pipe_dispatch_sibling_wait_holds_the_same_section_and_wakes_the_other_section() {
+    let (repo, state) = sib_place(&[("a", "1", "src/lib.rs"), ("b", "1", "src/b.rs"), ("g", "2", "src/g.rs")]);
+    sib_fallen(&repo, &state, "reviewed-fail");
+    let out = sib_ls(&repo, &state, &sib_bd(&state, &["a", "b", "g"]), &reserve_rules(&state, Some(24)), 3);
+    assert_eq!(reason_of(&out, &sib("b")), format!("sibling:{FALLEN}"), "同じ節の行は待つ（{}）", told(&out));
+    assert_eq!(reason_of(&out, &sib("g")), "-", "別の節の行は起こされる（{}）", told(&out));
+    assert!(reason_of(&out, FALLEN).starts_with("settled:"), "B 自身は列外のまま（{}）", told(&out));
+    assert_eq!(count_of(&out), format!("{COUNT} total=3 ready=1"), "起こせるのは別の節の 1 本だけ");
+    clean(&[&repo, &state]);
+}
+
+/// ref の記録 1 本（名の字・載せる行と digest の対）。
+type RefFile<'a> = (char, Vec<(&'a str, &'a str)>);
+
+/// (b) B の写しから求めた digest で B の行を載せた ref の記録に載る別の節の行も待つ（push 2 回の PR の 2 file の形と、直しの PR の 1 file の形）。
+/// B の行を別の digest で載せた ref の記録だけに載る行は起こされる（対照）。
+#[test]
+fn pipe_dispatch_sibling_wait_follows_the_ref_records_that_carry_the_fallen_row() {
+    let other = "ffffffffffffffff";
+    // 形ごとに (名・ref の記録の列・待つ行・起こされる行)。記録の列は (digit・[(行・digest 〔`D` は B の digest〕)])・行は 1 字ずつ。
+    let forms: [(&str, Vec<RefFile>, &str, &str); 3] = [
+        ("push 2 回の PR の 2 file", vec![('1', vec![("a", "D"), ("x", "1")]), ('2', vec![("a", "D"), ("y", "1")])], "xy", "z"),
+        ("直しの PR の 1 file", vec![('3', vec![("a", "D"), ("x", "1")])], "x", "yz"),
+        ("別の digest の記録だけ", vec![('4', vec![("a", other), ("x", "1"), ("y", "1")])], "", "xyz"),
+    ];
+    for (form, refs, waits, wakes) in forms {
+        let (repo, state) = sib_place(&[("a", "1", "src/lib.rs"), ("x", "2", "src/x.rs"), ("y", "2", "src/y.rs"), ("z", "2", "src/z.rs")]);
+        let run = sib_fallen(&repo, &state, "reviewed-fail");
+        let digest = copy_digest(&state, &run);
+        for (digit, rows) in &refs {
+            sib_ref(&state, *digit, &rows.iter().map(|(row, word)| (*row, if *word == "D" { digest.as_str() } else { *word })).collect::<Vec<_>>());
+        }
+        let out = sib_ls(&repo, &state, &sib_bd(&state, &["a", "x", "y", "z"]), &reserve_rules(&state, Some(24)), 1);
+        for row in waits.chars() {
+            assert_eq!(reason_of(&out, &sib(&row.to_string())), format!("sibling:{FALLEN}"), "{form}: {row} は待つ（{}）", told(&out));
+        }
+        for row in wakes.chars() {
+            assert_eq!(reason_of(&out, &sib(&row.to_string())), "-", "{form}: {row} は起こされる（{}）", told(&out));
+        }
+        clean(&[&repo, &state]);
+    }
+}
+
+/// (c) first の印を持つ候補・B が blocks で直に待つ同じ節の候補・blocks を 2 段たどった祖先の候補は起こされ、同じ周の同じ節の印の無い候補は待つ（対照は先に全員が待つ周）。
+#[test]
+fn pipe_dispatch_sibling_wait_spares_the_first_mark_and_the_blocks_ancestors() {
+    let rows = [("a", "1", "src/lib.rs"), ("b", "1", "src/b.rs"), ("c", "1", "src/c.rs"), ("d", "1", "src/d.rs"), ("e", "1", "src/e.rs"), ("f", "1", "src/f.rs")];
+    let (repo, state) = sib_place(&rows);
+    sib_fallen(&repo, &state, "reviewed-fail");
+    let rules = reserve_rules(&state, Some(24));
+    let plain = sib_ls(&repo, &state, &sib_bd(&state, &["a", "b", "c", "d", "e", "f"]), &rules, 1);
+    for row in ["b", "c", "d", "e", "f"] {
+        assert_eq!(reason_of(&plain, &sib(row)), format!("sibling:{FALLEN}"), "対照: {row} は待つ（{}）", told(&plain));
+    }
+    let marked = run_pipe(&["dispatch", "first", &sib("c"), "--state-dir", &state.display().to_string()]);
+    assert_eq!(marked.status.code(), Some(i32::from(RC_OK)), "first: {}", told(&marked));
+    let acceptance = |row: &str| format!("design = {DESIGN_FILE}#{row}");
+    // B は d（直）と e（e は f を待つので f は 2 段）を blocks で待つ。
+    let bd = fake_bd(
+        &state,
+        &[
+            listed(FALLEN, "open", 1, &acceptance("a"), &[(&sib("d"), "blocks"), (&sib("e"), "blocks")]),
+            issue(&sib("b"), 2, "b"),
+            issue(&sib("c"), 2, "c"),
+            issue(&sib("d"), 2, "d"),
+            listed(&sib("e"), "open", 2, &acceptance("e"), &[(&sib("f"), "blocks")]),
+            issue(&sib("f"), 2, "f"),
+        ],
+    );
+    let out = sib_ls(&repo, &state, &bd, &rules, 1);
+    assert_eq!(reason_of(&out, &sib("b")), format!("sibling:{FALLEN}"), "印の無い候補は待つ（{}）", told(&out));
+    assert_eq!(reason_of(&out, &sib("c")), "-", "first の印の候補は待たない（{}）", told(&out));
+    assert_eq!(reason_of(&out, &sib("d")), "-", "B が直に待つ候補は待たない（{}）", told(&out));
+    assert_eq!(reason_of(&out, &sib("f")), "-", "blocks を 2 段たどった祖先は待たない（{}）", told(&out));
+    clean(&[&repo, &state]);
+}
+
+/// (d) 直前の便が Failed・Stopped・unparsed の INCONCLUSIVE の B と、終端の後に新しい便が起きた B は兄弟を待たせず、Gated FAIL と unparsed でない INCONCLUSIVE の B は待たせる。
+/// 各形は同じ周の Reviewed FAIL の別の B2（行 g）の兄弟（行 h・別の節）が待つ対照を持つ。
+#[test]
+fn pipe_dispatch_sibling_wait_belongs_to_the_design_side_terminal_forms() {
+    let forms = [
+        ("failed", false),
+        ("stopped", false),
+        ("reviewed-unparsed", false),
+        ("rerun", false),
+        ("gated-fail", true),
+        ("reviewed-inconclusive", true),
+    ];
+    for (form, waits) in forms {
+        let (repo, state) = sib_place(&[("a", "1", "src/lib.rs"), ("b", "1", "src/b.rs"), ("g", "2", "src/g.rs"), ("h", "2", "src/h.rs")]);
+        sib_reviewed(&repo, &state, "g", "{\"verdict\":\"FAIL\"}");
+        if form == "rerun" {
+            sib_fallen(&repo, &state, "reviewed-fail");
+            // run id は `<bead>-<秒>`: 前の便と同じ秒に起こすと id が衝突する。
+            std::thread::sleep(std::time::Duration::from_millis(1100));
+            intake_bead(&repo, &state, &format!("{DESIGN_FILE}#a"), FALLEN);
+        } else {
+            sib_fallen(&repo, &state, form);
+        }
+        let out = sib_ls(&repo, &state, &sib_bd(&state, &["a", "b", "g", "h"]), &reserve_rules(&state, Some(24)), 1);
+        let want = if waits { format!("sibling:{FALLEN}") } else { "-".to_owned() };
+        assert_eq!(reason_of(&out, &sib("b")), want, "{form}: B の兄弟（{}）", told(&out));
+        assert_eq!(reason_of(&out, &sib("h")), format!("sibling:{}", sib("g")), "{form}: 対照の B2 の兄弟は待つ（{}）", told(&out));
+        clean(&[&repo, &state]);
+    }
+}
+
+/// (e) 解けの 8 形（B の行を直して main に commit・兄弟自身の今の digest の PASS の記録が終端の後・B への hold・終端の後の release・B の close・値 1 の写しで 2 時間前の終端・
+/// 兄弟自身の forecast と partial の unparsed でない INCONCLUSIVE の記録が終端の後）は先に待ってから起こされ、解けない 4 形（兄弟自身の FAIL の記録が終端の後・PASS の記録が終端の前・
+/// actual の unparsed でない INCONCLUSIVE の記録が終端の後・forecast の unparsed の INCONCLUSIVE の記録が終端の後）は待ったまま。
+#[test]
+fn pipe_dispatch_sibling_wait_ends_by_a_fix_a_mark_a_close_a_deadline_or_the_sibling_own_record() {
+    let (later, earlier) = (sib_now() + 3600, 1);
+    let forms: [(&str, bool); 12] = [
+        ("fix", true),
+        ("own-pass", true),
+        ("hold", true),
+        ("release", true),
+        ("close", true),
+        ("expiry", true),
+        ("own-forecast", true),
+        ("own-partial", true),
+        ("own-fail", false),
+        ("pass-before", false),
+        ("own-actual-inconclusive", false),
+        ("own-forecast-unparsed", false),
+    ];
+    for (form, woken) in forms {
+        let (repo, state) = sib_place(&[("a", "1", "src/lib.rs"), ("b", "1", "src/b.rs")]);
+        let run = sib_fallen(&repo, &state, "reviewed-fail");
+        let digest = row_digest_now(&repo, &state, "b");
+        let waiting = sib_ls(&repo, &state, &sib_bd(&state, &["a", "b"]), &reserve_rules(&state, Some(24)), 1);
+        assert_eq!(reason_of(&waiting, &sib("b")), format!("sibling:{FALLEN}"), "{form}: 前提は待つ（{}）", told(&waiting));
+        let records = [
+            ("own-pass", "actual", "PASS", "-", later),
+            ("own-forecast", "forecast", "INCONCLUSIVE", "section-material-missing", later),
+            ("own-partial", "partial", "INCONCLUSIVE", "section-material-missing", later),
+            ("own-fail", "forecast", "FAIL", "-", later),
+            ("pass-before", "actual", "PASS", "-", earlier),
+            ("own-actual-inconclusive", "actual", "INCONCLUSIVE", "section-material-missing", later),
+            ("own-forecast-unparsed", "forecast", "INCONCLUSIVE", "unparsed", later),
+        ];
+        let (mut bd, mut hours) = (sib_bd(&state, &["a", "b"]), 24);
+        if let Some((_, basis, verdict, kind, at)) = records.iter().find(|found| found.0 == form) {
+            sib_record(&state, form, "b", &digest, (basis, verdict, kind, *at));
+        }
+        match form {
+            "fix" => {
+                let widened = row_fields("a", &["write-set", "section"], &[r#"write-set = ["src/lib.rs", "src/extra.rs"]"#, r#"section = "1""#]);
+                commit_sections(&repo, &[widened, section_row("b", "1", "src/b.rs")]);
+            }
+            "hold" => {
+                let out = run_pipe(&["dispatch", "hold", FALLEN, "--state-dir", &state.display().to_string()]);
+                assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "hold: {}", stderr_of(&out));
+            }
+            "release" => release(&state, FALLEN),
+            "close" => bd = fake_bd(&state, &[listed(FALLEN, "closed", 1, &format!("design = {DESIGN_FILE}#a"), &[]), issue(&sib("b"), 2, "b")]),
+            "expiry" => {
+                age_run(&state, &run, 2 * 3600);
+                hours = 1;
+            }
+            _ => {}
+        }
+        let out = sib_ls(&repo, &state, &bd, &reserve_rules(&state, Some(hours)), 1);
+        let want = if woken { "-".to_owned() } else { format!("sibling:{FALLEN}") };
+        assert_eq!(reason_of(&out, &sib("b")), want, "{form}: 解けるか（{}）", told(&out));
+        clean(&[&repo, &state]);
+    }
+}
+
+/// (f) 兄弟で依存待ちの候補は dependency のまま（床の合格の周）。床の検査が合格の周に sibling で待つ候補は、不合格の周は floor で待つ（2 形）。
+#[test]
+fn pipe_dispatch_sibling_wait_keeps_a_dependency_and_yields_to_a_failing_floor() {
+    // 依存待ちの兄弟は床の合格の周に dependency のまま（床の不合格の周は既存の上書きで floor）。
+    for (body, want, dependent) in [("exit 0", format!("sibling:{FALLEN}/unset"), "dependency:s2-dep"), ("exit 1", "floor:1".to_owned(), "floor:1")] {
+        let place = floor_place(Some(FLOOR_CMD), body);
+        commit_sections(&place.repo, &[section_row("a", "1", "src/lib.rs"), section_row("b", "1", "src/b.rs"), section_row("c", "1", "src/c.rs")]);
+        sib_fallen(&place.repo, &place.state, "reviewed-fail");
+        // 床の結果は起こす側の 1 周が置く（台帳は空）。この写しは期限の行を持たないので値の末尾は `/unset`。
+        let rules = floor_rules(&place.state, Some(600));
+        floor_round(&place, &rules);
+        let acceptance = |row: &str| format!("design = {DESIGN_FILE}#{row}");
+        let bd = fake_bd(
+            &place.state,
+            &[issue(FALLEN, 1, "a"), issue(&sib("b"), 2, "b"), listed(&sib("c"), "open", 2, &acceptance("c"), &[("s2-dep", "blocks")]), listed("s2-dep", "open", 2, "memo", &[])],
+        );
+        let out = wait_ls(&place, &rules, &bd);
+        assert_eq!(reason_of(&out, &sib("b")), want, "{body}: 兄弟の理由（{}）", told(&out));
+        assert_eq!(reason_of(&out, &sib("c")), dependent, "{body}: 依存待ちの兄弟（{}）", told(&out));
+        clean(&[&place.repo, &place.state]);
+    }
+}
+
+/// (g) 期限の行の無い rules の写しの周は `sibling:<B>/unset`、値 0 の写しは 100 時間前の終端でも `sibling:<B>` で待つ（2 形・値 24 は手放す対照）。
+#[test]
+fn pipe_dispatch_sibling_wait_without_the_deadline_row_is_unset_and_zero_never_expires() {
+    let (repo, state) = sib_place(&[("a", "1", "src/lib.rs"), ("b", "1", "src/b.rs")]);
+    let run = sib_fallen(&repo, &state, "reviewed-fail");
+    age_run(&state, &run, 100 * 3600);
+    let bd = sib_bd(&state, &["a", "b"]);
+    let unset = sib_ls(&repo, &state, &bd, &reserve_rules(&state, None), 1);
+    assert_eq!(reason_of(&unset, &sib("b")), format!("sibling:{FALLEN}/unset"), "行の無い写しは期限なし・末尾 /unset（{}）", told(&unset));
+    let zero = sib_ls(&repo, &state, &bd, &reserve_rules(&state, Some(0)), 1);
+    assert_eq!(reason_of(&zero, &sib("b")), format!("sibling:{FALLEN}"), "値 0 は期限なし（{}）", told(&zero));
+    let expired = sib_ls(&repo, &state, &bd, &reserve_rules(&state, Some(24)), 1);
+    assert_eq!(reason_of(&expired, &sib("b")), "-", "対照: 値 24 は 100 時間前の終端の待ちを手放す（{}）", told(&expired));
+    clean(&[&repo, &state]);
+}
+
+/// (h) B と同じ節で write-set が B の行の予約と交差する後ろの候補は reserved でなく `sibling:<B>` で待つ（別の節の同じ file の候補は対照で `reserved:<B>/1`）。
+#[test]
+fn pipe_dispatch_sibling_wait_precedes_the_row_reservation() {
+    let (repo, state) = sib_place(&[("a", "1", "src/lib.rs"), ("l", "1", "src/lib.rs"), ("m", "2", "src/lib.rs")]);
+    sib_fallen(&repo, &state, "reviewed-fail");
+    let out = sib_ls(&repo, &state, &sib_bd(&state, &["a", "l", "m"]), &reserve_rules(&state, Some(24)), 1);
+    assert_eq!(reason_of(&out, &sib("l")), format!("sibling:{FALLEN}"), "同じ節の交差する候補は兄弟の待ち（{}）", told(&out));
+    assert_eq!(reason_of(&out, &sib("m")), format!("reserved:{FALLEN}/1"), "対照: 別の節の交差する候補は行の予約（{}）", told(&out));
     clean(&[&repo, &state]);
 }

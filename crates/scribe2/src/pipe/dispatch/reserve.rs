@@ -7,7 +7,7 @@
 
 use super::candidates::fallen;
 use super::{key_of, Candidate, Input, BLOCKS, OPEN};
-use crate::fleet::{epoch_of, replay, Event, Mark};
+use crate::fleet::{epoch_of, replay, Event, Mark, Stage};
 use crate::ledger::form::{is_memo, is_question};
 use crate::pipe::contract::Contract;
 use crate::pipe::contract_path;
@@ -42,13 +42,19 @@ pub(super) struct Reservation {
     /// 順序の鍵（候補と同じ [`key_of`]・B が列の候補に居ない周も台帳の priority と印で組む）。
     key: (u8, u64, Vec<u64>, String),
     /// B の bead id。
-    bead: String,
+    pub(super) bead: String,
     /// B の直前の便の契約の写しの write-set。
     write_set: Vec<String>,
     /// 期限を測れない周か。
-    unset: bool,
+    pub(super) unset: bool,
     /// B が台帳の blocks で待つ祖先（推移・待たせない）。
-    ancestors: BTreeSet<String>,
+    pub(super) ancestors: BTreeSet<String>,
+    /// B の直前の便の run id（置き場の replay の同じ bead の最後）。
+    pub(super) run: String,
+    /// その便の段（replay が見た最新）。
+    pub(super) stage: Stage,
+    /// 終端の段の event の ts の秒（読めない周は無い）。
+    pub(super) since: Option<u64>,
 }
 
 /// 行の予約を持つ契約を導く（並びの前の B から）。
@@ -83,6 +89,9 @@ pub(super) fn derive(input: &Input<'_>, issues: &[Issue], marks: &BTreeMap<Strin
                 write_set: contract.write_set,
                 unset: !row || (hours > 0 && since.is_none()),
                 ancestors: ancestors_of(issues, &issue.id),
+                run: id.clone(),
+                stage: run.stage,
+                since,
             })
         })
         .collect();

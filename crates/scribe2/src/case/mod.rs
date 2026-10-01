@@ -132,9 +132,9 @@ pub const REASON_CONTRACT_OPEN: &str = "contract-open";
 /// memo-promoting の理由: FR93 の自動の close を待つ。
 pub const REASON_CLOSE_DUE: &str = "close-due";
 
-/// contract-queued の理由から手番の表（§3・11 語）。`WAIT_REASONS` の 8 語と、dispatcher の後の行が足す語
-/// unreflected-ruling・floor・reserved を含む。`admission` は contract-refused と同じ手番で持つ（表が `WAIT_REASONS` を全部覆うため）。
-pub const QUEUED_TURNS: [(&str, Turn); 11] = [
+/// contract-queued の理由から手番の表（§3・12 語）。`WAIT_REASONS` の 8 語と、dispatcher の後の行が足す語
+/// unreflected-ruling・floor・reserved・sibling を含む。`admission` は contract-refused と同じ手番で持つ（表が `WAIT_REASONS` を全部覆うため）。
+pub const QUEUED_TURNS: [(&str, Turn); 12] = [
     ("dependency", Turn::Vessel),
     ("overlap", Turn::Vessel),
     ("admission", Turn::Seat),
@@ -146,6 +146,7 @@ pub const QUEUED_TURNS: [(&str, Turn); 11] = [
     ("unreflected-ruling", Turn::Seat),
     ("floor", Turn::Seat),
     ("reserved", Turn::Seat),
+    ("sibling", Turn::Seat),
 ];
 
 impl Phase {
@@ -406,8 +407,8 @@ mod tests {
         ]
     };
 
-    /// §3 の contract-queued の理由の表（11 語）。
-    const QUEUED_TABLE: [(&str, Turn); 11] = {
+    /// §3 の contract-queued の理由の表（12 語）。
+    const QUEUED_TABLE: [(&str, Turn); 12] = {
         use Turn::{Nobody, Seat, Vessel};
         [
             ("dependency", Vessel),
@@ -419,6 +420,7 @@ mod tests {
             ("unreflected-ruling", Seat),
             ("floor", Seat),
             ("reserved", Seat),
+            ("sibling", Seat),
             ("settled", Nobody),
             ("admission", Seat),
         ]
@@ -459,17 +461,17 @@ mod tests {
         assert_eq!(Turn::ALL.map(Turn::as_str), ["user", "seat", "vessel", "runner", "ci", "none"]);
     }
 
-    /// (d) contract-queued の理由の表は `WAIT_REASONS` を全部と unreflected-ruling・floor を含む 11 語で、語は一意。
+    /// (d) contract-queued の理由の表は `WAIT_REASONS` を全部と unreflected-ruling・floor を含む 12 語で、語は一意。
     #[test]
     fn phase_table_queued_reasons_cover_the_wait_reasons() {
         let words: Vec<&str> = QUEUED_TURNS.iter().map(|(word, _)| *word).collect();
         for reason in WAIT_REASONS {
             assert!(words.contains(reason), "{reason}");
         }
-        assert!(words.contains(&"unreflected-ruling") && words.contains(&"floor") && words.contains(&"reserved"));
-        assert_eq!(words.len(), 11);
+        assert!(words.contains(&"unreflected-ruling") && words.contains(&"floor") && words.contains(&"reserved") && words.contains(&"sibling"));
+        assert_eq!(words.len(), 12);
         let unique: std::collections::BTreeSet<&str> = words.iter().copied().collect();
-        assert_eq!(unique.len(), 11);
+        assert_eq!(unique.len(), 12);
     }
 
     /// (e) 表に無い語（語・理由）は `None`。
@@ -523,7 +525,7 @@ mod tests {
         assert_eq!(words, ["utterance", "question", "memo", "contract", "run", "row", "requirement", "epic", "commit"]);
     }
 
-    /// (i) 語から手番の関数は §3 の表の全行と一致する（38 語・memo-promoting の理由 2 つ・contract-queued の理由 11 語）。
+    /// (i) 語から手番の関数は §3 の表の全行と一致する（38 語・memo-promoting の理由 2 つ・contract-queued の理由 12 語）。
     #[test]
     fn phase_table_turn_of_matches_every_row_of_the_table() {
         for (word, turn) in TURN_TABLE {

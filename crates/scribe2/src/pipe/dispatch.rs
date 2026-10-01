@@ -68,7 +68,7 @@ pub mod unreflected;
 /// driver の継ぎの判定と起こし直す便の選別・構築（設計 §44・契約表の行 as・純移動）。
 mod revive;
 
-use candidates::{entry_of, is_input, marks_of, settle, tools};
+use candidates::{entry_of, is_input, marks_of, settle, siblings_of, tools};
 pub use revive::{admits_gated, advance, handoff};
 use revive::{progress_of, resume, revivals, revive_of};
 
@@ -112,7 +112,7 @@ const LAUNCH_LOG: [&str; 2] = ["pipe", "launch.log"];
 
 /// [`WaitReason`] の全 variant の名（宣言順・`enum-slices` が集合完全性を測る）。
 pub const WAIT_REASONS: &[&str] =
-    &["dependency", "overlap", "admission", "host-busy", "hold", "launched", "settled", "no-design-pointer", "unreflected-ruling", "floor", "reserved"];
+    &["dependency", "overlap", "admission", "host-busy", "hold", "launched", "settled", "no-design-pointer", "unreflected-ruling", "floor", "reserved", "sibling"];
 
 /// 列に載ったのに起こさない理由（**閉じた型**・設計 §3 の表）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -175,6 +175,9 @@ pub enum WaitReason {
     Floor(floor::Judged),
     /// 落ちた契約の行の予約と write-set が交差し、順序でその契約より後ろに並ぶ（設計 row-review.md §7・行 f）。
     Reserved(reserve::Held),
+    /// 設計の側の終端に着いた契約 B と同じ設計から出た行で、B の直しが入るまで待つ（値は B の bead id か、期限の行を読めない周は末尾に `/unset`・
+    /// 設計 row-review.md §8・行 g）。
+    Sibling(String),
 }
 
 impl WaitReason {
@@ -192,6 +195,7 @@ impl WaitReason {
             Self::UnreflectedRuling { .. } => "unreflected-ruling",
             Self::Floor(_) => "floor",
             Self::Reserved(_) => "reserved",
+            Self::Sibling(_) => "sibling",
         }
     }
 
@@ -203,7 +207,7 @@ impl WaitReason {
             Self::Overlap { ref with, ref files } => format!("{name}:{with}/{}", files.len()),
             Self::Admission { reason } => format!("{name}:{reason}"),
             Self::Hold { ref since } | Self::Launched { ref since } => format!("{name}:{since}"),
-            Self::UnreflectedRuling { ref id } => format!("{name}:{id}"),
+            Self::UnreflectedRuling { ref id } | Self::Sibling(ref id) => format!("{name}:{id}"),
             Self::Settled { ref sha, stage } => format!("{name}:{sha}/{}", stage.as_str()),
             Self::Floor(ref found) => format!("{name}:{}", found.rc.map_or_else(|| found.word.as_str().to_owned(), |rc| rc.to_string())),
             Self::Reserved(ref held) => format!("{name}:{}", held.value()),
@@ -529,11 +533,14 @@ fn measure(input: &Input<'_>) -> (Turn, Option<Read>) {
             closed: issues.iter().filter(|issue| issue.status == CLOSED).map(|issue| issue.id.as_str()).collect(),
             materials: Materials::of(input.repo, input.manifest, input.bd),
         };
+        // 行の予約は周の 1 回の導き（読み済みの台帳と event log を借りる・記帳しない・設計 row-review.md §7）。兄弟の待ちの元の列も同じ導きから組む（§8）。
+        let reserved = reserve::derive(input, &issues, &ledger.marks, &ledger.events, crate::seat::state::now_secs());
+        let kins = siblings_of(input, &issues, &reserved, &ledger);
         let mut ready: BTreeMap<String, (Pointer, Contract)> = BTreeMap::new();
         let mut candidates: Vec<Candidate> = Vec::new();
         let floor = sha.as_deref().and_then(|sha| floor::judgement(input.state_dir, sha)).filter(|found| found.word != floor::Word::Pass);
         for issue in issues.iter().filter(|issue| is_input(issue)) {
-            let (mut candidate, mut found) = entry_of(input, issue, &ledger);
+            let (mut candidate, mut found) = entry_of(input, issue, &ledger, &kins);
             // 床の検査が不合格の周は、`first` の印・起こした事実・終端の記録のどれも持たない候補を準備の表から外して待たせる（設計 §35 約束 2）。
             let kept = matches!(candidate.reason, Some(WaitReason::Launched { .. } | WaitReason::Settled { .. }));
             if let (Some(judged), false, false) = (&floor, kept, candidate.mark == Some(Mark::First)) {
@@ -550,8 +557,6 @@ fn measure(input: &Input<'_>) -> (Turn, Option<Read>) {
             }
             candidates.push(candidate);
         }
-        // 行の予約は周の 1 回の導き（読み済みの台帳と event log を借りる・記帳しない・設計 row-review.md §7）。
-        let reserved = reserve::derive(input, &issues, &ledger.marks, &ledger.events, crate::seat::state::now_secs());
         // **順序は [`order`] の 1 本だけが決める**（生産経路も歯も同じ関数を通る・C2）。
         (settle(input, order(candidates), &ready, &reserved, ledger.materials.as_ref().ok()), ledger.materials, ledger.events)
     };
@@ -1188,6 +1193,8 @@ mod tests {
             WaitReason::Floor(floor_judged(floor::Word::Timeout, None, None, "")),
             WaitReason::Reserved(reserve::Held { by: "s2-b".to_owned(), files: 2, unset: false }),
             WaitReason::Reserved(reserve::Held { by: "s2-b".to_owned(), files: 1, unset: true }),
+            WaitReason::Sibling("s2-b".to_owned()),
+            WaitReason::Sibling("s2-b/unset".to_owned()),
         ];
         let mut names: Vec<&str> = listed.iter().map(WaitReason::as_str).collect();
         names.dedup();
@@ -1210,8 +1217,10 @@ mod tests {
                 "floor:timeout",
                 "reserved:s2-b/2",
                 "reserved:s2-b/1/unset",
+                "sibling:s2-b",
+                "sibling:s2-b/unset",
             ],
-            "値を持つ 8 件は値も描き、床は 3 形（rc・unfireable・timeout）・行の予約は 2 形（末尾 /unset）"
+            "値を持つ 9 件は値も描き、床は 3 形（rc・unfireable・timeout）・行の予約と兄弟の待ちは 2 形（末尾 /unset）"
         );
     }
 

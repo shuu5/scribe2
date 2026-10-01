@@ -17,8 +17,9 @@ use super::super::contract::Contract;
 use super::super::gate::Verdict;
 use super::super::refuse::overlaps;
 use super::super::review;
-use super::super::table::{self, Pointer};
-use super::super::{contract_path, current, git_bytes};
+use super::super::row_review::{self, Basis};
+use super::super::table::{self, read_rows, Pointer};
+use super::super::{contract_path, current, git_bytes, show_head};
 use super::{
     measure, reserve, Candidate, Input, Launch, Ledger, Marks, Read, Turn, Unmeasured, WaitReason, BLOCKS, DESIGN_KEY, DRIVE, MARK, OPEN,
     ROW_JOB_MB, ROW_RESERVE_MB, SLOT,
@@ -44,7 +45,7 @@ pub(super) fn is_input(issue: &Issue) -> bool {
 ///
 /// 交差と枠は**順序の後**に測る（§3「1 周で起こした便は次の候補の交差の相手」）ので、ここでは決めない。
 /// 理由の付かなかった候補だけが設計 pointer と契約を持って返る。
-pub(super) fn entry_of(input: &Input<'_>, issue: &Issue, ledger: &Ledger<'_>) -> (Candidate, Option<(Pointer, Contract)>) {
+pub(super) fn entry_of(input: &Input<'_>, issue: &Issue, ledger: &Ledger<'_>, kins: &[Kin]) -> (Candidate, Option<(Pointer, Contract)>) {
     let marked = ledger.marks.get(&issue.id);
     let at = |reason: Option<WaitReason>| Candidate {
         bead: issue.id.clone(),
@@ -77,11 +78,127 @@ pub(super) fn entry_of(input: &Input<'_>, issue: &Issue, ledger: &Ledger<'_>) ->
     let contract = match generated(input.repo, &pointer, materials) {
         Ok((found, body)) => match settled(input, &issue.id, &body, &found.design, &ledger.events) {
             Some((sha, stage)) => return wait(WaitReason::Settled { sha, stage }),
-            None => found,
+            None => {
+                // 兄弟の待ちは settled の後・床の上書きの前（設計 row-review.md §8）。介入 `first` の印を持つ候補は待たせない。
+                let first = matches!(marked, Some((Mark::First, _)));
+                if let Some(by) = (!first).then(|| sibling_of(input, &issue.id, &pointer, (&found, &body), kins)).flatten() {
+                    return wait(WaitReason::Sibling(by));
+                }
+                found
+            }
         },
         Err(denial) => return wait(WaitReason::Admission { reason: denial.name }),
     };
     (at(None), Some((pointer, contract)))
+}
+
+/// 兄弟の待ちの元 B 1 つ（設計 row-review.md §8・[`siblings_of`] が周の頭に 1 回組む）。
+pub(super) struct Kin {
+    /// B の bead id。
+    bead: String,
+    /// 期限を測れない周か（値の末尾に `/unset`）。
+    unset: bool,
+    /// B が台帳の blocks で待つ祖先（推移・待たせない）。
+    ancestors: BTreeSet<String>,
+    /// B の終端の段の event の ts の秒（読めない周は兄弟自身の記録で解かない）。
+    since: Option<u64>,
+    /// B の設計 doc の path。
+    doc: String,
+    /// 兄弟の行 id（同じ doc・B の行を除く・(a) 同じ section と (b) B の digest を載せた ref の記録の和）。
+    rows: BTreeSet<String>,
+}
+
+/// 末尾の改行を 1 つ除く（便の置き場の写しから digest を求める形と同じ・行の審査の口と同じ整え方）。
+fn trimmed(text: &str) -> &str {
+    text.strip_suffix('\n').unwrap_or(text)
+}
+
+/// 行の digest（契約 file の字と設計の節の本文・口 (B)）。
+fn digest_of(input: &Input<'_>, design: &str, body: &str) -> String {
+    row_review::row_digest(trimmed(body), trimmed(&review::design_material(input.repo, design)))
+}
+
+/// 兄弟の待ちの元の列を周の頭に 1 回組む（元は行の予約の導き [`reserve::derive`] の返りから段で絞る・run id の昇順・台帳も event log も読み直さない）。
+///
+/// 残すのは、段が Gated（落ちた Gated は判定 FAIL）の B と、段が Reviewed で判定を読めて測れなかった判定でない（FAIL か unparsed でない INCONCLUSIVE）B。
+/// B の終端の後に release の印が在る B と、B の今の行の digest が直前の便の写しと違う B は外す（今の行を生成できない周は違うと数えない）。
+pub(super) fn siblings_of(input: &Input<'_>, issues: &[Issue], reserved: &[reserve::Reservation], ledger: &Ledger<'_>) -> Vec<Kin> {
+    let mut fallen: Vec<&reserve::Reservation> = reserved.iter().filter(|found| design_side(input.state_dir, found)).collect();
+    fallen.sort_by(|left, right| left.run.cmp(&right.run));
+    fallen.into_iter().filter_map(|found| kin_of(input, issues, found, ledger)).collect()
+}
+
+/// 直前の便が設計の側の終端か（Reviewed の判定が FAIL か unparsed でない INCONCLUSIVE・Gated の判定が FAIL・**段の型の網羅の match 1 本**）。
+/// Failed（起動の失敗・環境）と Stopped（人の停止）と unparsed の INCONCLUSIVE は元にしない。
+fn design_side(state_dir: &Path, found: &reserve::Reservation) -> bool {
+    match found.stage {
+        Stage::Gated => true,
+        Stage::Reviewed => review::judgement_of(state_dir, &found.run).is_some_and(|judged| !review_unmeasured(&judged)),
+        Stage::Failed
+        | Stage::Stopped
+        | Stage::Landed
+        | Stage::Intake
+        | Stage::Blocked
+        | Stage::Spawned
+        | Stage::Questioned
+        | Stage::RateLimited
+        | Stage::Implemented => false,
+    }
+}
+
+/// 元 B 1 つを組む（B の行を指す pointer を読めない周・解けた B は `None`）。
+fn kin_of(input: &Input<'_>, issues: &[Issue], found: &reserve::Reservation, ledger: &Ledger<'_>) -> Option<Kin> {
+    let pointer = pointer_of(&issues.iter().find(|issue| issue.id == found.bead)?.acceptance)?;
+    if released_after(&ledger.events, &found.run, &found.bead) {
+        return None;
+    }
+    let design = format!("{}#{}", pointer.path, pointer.id);
+    // 写しの digest は契約 file の写しと材料の dir の design.txt から（design.txt を読めない B は (b) と比べを持たない）。
+    let copy = std::fs::read_to_string(contract_path(input.state_dir, &found.run))
+        .ok()
+        .zip(std::fs::read_to_string(review::review_dir(input.state_dir, &found.run).join(review::DESIGN_FILE)).ok())
+        .map(|(contract, section)| row_review::row_digest(trimmed(&contract), trimmed(&section)));
+    let now = ledger.materials.as_ref().ok().and_then(|materials| generated(input.repo, &pointer, materials).ok()).map(|(_, body)| digest_of(input, &design, &body));
+    if copy.is_some() && now.is_some() && copy != now {
+        return None;
+    }
+    let mut rows = same_section(input.repo, &pointer);
+    if let Some(digest) = &copy {
+        let prefix = format!("{}#", pointer.path);
+        rows.extend(row_review::siblings(input.state_dir, &design, digest).0.iter().filter_map(|row| row.strip_prefix(&prefix)).map(str::to_owned));
+    }
+    rows.remove(&pointer.id);
+    Some(Kin { bead: found.bead.clone(), unset: found.unset, ancestors: found.ancestors.clone(), since: found.since, doc: pointer.path, rows })
+}
+
+/// main の先端の doc の契約表で、`pointer` の行と同じ section の行 id（B の行を含む・表を読めない周は空）。
+fn same_section(repo: &Path, pointer: &Pointer) -> BTreeSet<String> {
+    let rows = show_head(repo, &pointer.path).and_then(|text| read_rows(&pointer.path, &text).ok()).unwrap_or_default();
+    let Some(section) = rows.iter().find(|row| row.id == pointer.id).map(|row| row.section.clone()) else {
+        return BTreeSet::new();
+    };
+    rows.into_iter().filter(|row| row.section == section).map(|row| row.id).collect()
+}
+
+/// 候補を待たせる元 B の値（無ければ `None`）。元は run id の昇順で最初に当たる 1 つ。B 自身でも B の祖先でもなく、候補の設計 pointer の doc が
+/// B の doc で行 id が兄弟の集合に在り、兄弟自身の記録で解けていない。解くのは、B の終端より後の今の digest の記録のうち判定が PASS のもの
+/// か、basis が forecast か partial で判定が INCONCLUSIVE・理由の型が unparsed でないもの（読めない記録は無いものとして数える）。
+fn sibling_of(input: &Input<'_>, bead: &str, pointer: &Pointer, made: (&Contract, &str), kins: &[Kin]) -> Option<String> {
+    let hits: Vec<&Kin> = kins
+        .iter()
+        .filter(|kin| kin.bead != bead && kin.doc == pointer.path && kin.rows.contains(&pointer.id) && !kin.ancestors.contains(bead))
+        .collect();
+    if hits.is_empty() {
+        return None;
+    }
+    let digest = digest_of(input, &made.0.design, made.1);
+    let (records, _) = row_review::listed(input.state_dir, &format!("{}#{}", pointer.path, pointer.id), &digest);
+    let closes = |record: &row_review::Listed| {
+        record.verdict == Verdict::Pass
+            || (record.basis != Basis::Actual && record.verdict == Verdict::Inconclusive && record.kind.is_some_and(|kind| kind != review::FindingKind::Unparsed))
+    };
+    let resolved = |kin: &Kin| kin.since.is_some_and(|since| records.iter().any(|record| record.at > since && closes(record)));
+    hits.into_iter().find(|kin| !resolved(kin)).map(|kin| if kin.unset { format!("{}/unset", kin.bead) } else { kin.bead.clone() })
 }
 
 /// 順序を守って交差と枠を測り、起こす便と待つ便に分ける。
