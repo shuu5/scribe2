@@ -312,17 +312,18 @@ xtask 側の drift 歯（最小形）: `crates/xtask/src/limits.rs` の `#[cfg(t
   - user 裁定 2026-10-01T08:09Z（rules 行の値・逐語は器の裁定の event に残る・台帳の問い s2-07l.750・裁定 id s2-07l.750:20261001T0809Z-1）で、上限を 100 に上げる（実測の最大 81 に余裕を足した値）。
 - 約束（この 3 つだけ）:
   1. `rules/manifest.toml` の行 `lens.max_turns` の `value` を 100 に・`ruling` を `user 2026-10-01T08:09Z` に・`ruled_at` を `2026-10-01` に書き換える。行の id・kind・`enabled`・位置は不変で、行は増やさない（C5）。
-  2. 値を pin している既存の歯 2 本を直す。実測: repo の test で値 30 を埋め込みの値として持つのは、次の 2 つだけである。
+  2. 値を pin している既存の歯 3 本を直す。実測（main 5820525d）: repo の test で値 30 を埋め込みの値として持つのは、次の 3 つだけである。
      - rules の歯の file の `lens_turns_embedded_manifest_declares_the_row_with_its_ruling`（値・整数の読み手の値・裁定 id・裁定日・doc comment の値）
      - headless の歯の file の定数（埋め込みの値の写し・裁定 id の doc comment）と、それを読む `lens_turns_passes_the_row_value_in_every_stage` の assert の文言
+     - headless の lens の子の歯の file（headless/lens.rs）の `headless_lens_version_prints_one_line_without_contract_or_worktree_and_never_calls_claude` の assert の字面 turns=30。この歯の rules は headless の歯の file の helper（rules_with_rows）が作り、helper は turn の行を上の定数の値で足す。だから定数を 100 にすると、この歯が落ちる。字面の 30 をやめ、定数（`LENS_MAX_TURNS`・子の module から見える）から組む比べに直す。次に値を変える便は、この file を触らずに済む。
      新しい値と裁定に直す。headless の lens の歯の `turns_row(30)` は不発効の行の fixture で、埋め込みの値を写していないので触らない。
-  3. 歯の名は変えない。どちらも直した後は、base（値 30）で値の比べが RED になる。
+  3. 歯の名は変えない。1 本目と 2 本目は、直した後に base（値 30）で値の比べが RED になる。3 本目は base でも緑のままである（turn の行の値は歯の側の定数から来る）。そこで headless/lens.rs の歯の区間に、この便の bead id で `// flip-check: retroactive` の札を足す。変異の証明: 版の行が turn の値を rules の行から読まずに固定の 30 を出すと、3 本目は RED になる。
 - 触らない: `src` の全部・§67 の散文が書いたその時点の値 30（履歴）・ほかの rules 行・上限で終わった周の読み（§67 の形 4）。
 - 着地の後: lens は埋め込みの manifest を読むので、PATH の binary を入れ替えるまで上限は 30 のまま（運用の手順・本行の done の外）。上限で止まった行（ledger-form の行 o・上限の許可の行 a）は、入れ替えの後に撃ち直す。
 - 却下:
   - 段ごとに上限の行を分ける（契約の審査と gate で別の値）: 行と kind が 1 つずつ増え、§67 の「lens の turn の上限は 1 つ」の決めを覆す。gate の lens の実測は最大 18 で、100 でも費用は token の上限（`gate.token_cap`）が別に縛る。
   - 60（実測の p50 に近い値）: 31 以上の 11 本のうち 4 本（64・77・81 ほか）が残る。
-- flip-check の入口: 変える test file は rules の歯の file と headless の歯の file の 2 本で、直した歯はどちらも base（値 30）で RED になる。
+- flip-check の入口: 変える test file は rules の歯の file・headless の歯の file・headless/lens.rs の 3 本である。前の 2 本は直した歯が base（値 30）で RED になり、headless/lens.rs は retroactive の札で通す。
 
 <!-- contracts:begin -->
 schema = 1
@@ -513,11 +514,11 @@ done = "§21 の約束 1〜3 のとおり: 埋め込み manifest の R-C4-1 が�
 
 [[contract]]
 id = "s"
-title = "lens.max_turns（lens の turn の上限）を 30 → 100 に上げる — 値と裁定 id と ruled_at だけを書き換え、埋め込みの値を pin する歯 2 本を新しい値と裁定に直す（裁定 user 2026-10-01T08:09Z）"
+title = "lens.max_turns（lens の turn の上限）を 30 → 100 に上げる — 値と裁定 id と ruled_at だけを書き換え、埋め込みの値を pin する歯 3 本を新しい値と裁定に直す（裁定 user 2026-10-01T08:09Z）"
 req = ["FR5", "FR9"]
 section = "22"
-write-set = ["rules/manifest.toml", "crates/scribe2-boundary/tests/e2e/rules/embedded.rs", "crates/scribe2-boundary/tests/e2e/headless.rs"]
-verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail lens_turns_embedded_manifest_declares_the_row_with_its_ruling", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail lens_turns_passes_the_row_value_in_every_stage"]
+write-set = ["rules/manifest.toml", "crates/scribe2-boundary/tests/e2e/rules/embedded.rs", "crates/scribe2-boundary/tests/e2e/headless.rs", "crates/scribe2-boundary/tests/e2e/headless/lens.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail lens_turns_embedded_manifest_declares_the_row_with_its_ruling", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail lens_turns_passes_the_row_value_in_every_stage", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail headless_lens_version_prints_one_line_without_contract_or_worktree_and_never_calls_claude"]
 size = "S"
-done = "(1) 埋め込み manifest の lens.max_turns は値 100・裁定 id user 2026-10-01T08:09Z・裁定日 2026-10-01 で、kind LensMaxTurns・発効・位置と行の数は変わらない〔直す既存の歯 lens_turns_embedded_manifest_declares_the_row_with_its_ruling の値・整数の読み手の値・裁定 id・裁定日の pin〕 (2) --rules を渡さない lens は、段に依らず argv に --max-turns 100 の対をちょうど 1 つ持つ〔直す既存の歯 lens_turns_passes_the_row_value_in_every_stage の埋め込みの値の定数〕 base は値 30 なので (1)(2) の値の比べが RED"
+done = "(1) 埋め込み manifest の lens.max_turns は値 100・裁定 id user 2026-10-01T08:09Z・裁定日 2026-10-01 で、kind LensMaxTurns・発効・位置と行の数は変わらない〔直す既存の歯 lens_turns_embedded_manifest_declares_the_row_with_its_ruling の値・整数の読み手の値・裁定 id・裁定日の pin〕 (2) --rules を渡さない lens は、段に依らず argv に --max-turns 100 の対をちょうど 1 つ持つ〔直す既存の歯 lens_turns_passes_the_row_value_in_every_stage の埋め込みの値の定数〕 (3) --print-version の版の行は turns=100 を持ち、歯 headless_lens_version_prints_one_line_without_contract_or_worktree_and_never_calls_claude は turns の字面を 30 と書かず headless の歯の file の定数 LENS_MAX_TURNS から組んで比べる〔直す既存の歯・headless/lens.rs の歯の区間に札 // flip-check: retroactive s2-07l.751〕 base は値 30 なので (1)(2) の値の比べが RED で、(3) は base でも緑なので札で通す（変異の証明: 版の行が turn の値を固定の 30 で出すと (3) が RED）"
 <!-- contracts:end -->
