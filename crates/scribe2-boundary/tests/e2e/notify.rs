@@ -1054,3 +1054,150 @@ fn pipe_notify_lifecycle_absent_output_sends_no_terminal_and_an_unreadable_one_s
     assert_eq!(terminal_words(&sends(&state)), ["Stopped=unreadable"], "読めない出力の終端は語 unreadable: {}", told(&out));
     clean(&[&repo, &state]);
 }
+
+// ───── idle の行の memo の要約（設計 dispatcher.md §43 行 au・接頭辞 `pipe_notify_memos_`） ─────
+
+/// 判定の時刻（偽の台帳の updated_at はこれより前か無い）。
+const JUDGED_AT: &str = "2026-10-01T00:00:00Z";
+
+/// 偽の台帳の memo 1 件（label `intake:memo`・昇格条件の節に引き金の行を 1 本・keep の記帳は持たない）。
+fn memo_json(id: &str, status: &str, trigger: &str) -> String {
+    format!(
+        "{{\"id\":\"{id}\",\"status\":\"{status}\",\"priority\":2,\"labels\":[\"intake:memo\"],\"notes\":\"\",\
+         \"description\":\"### 出所\\nx\\n### 観測\\nx\\n### 候補\\nx\\n### 昇格条件\\n引き金: {trigger}\\n\"}}"
+    )
+}
+
+/// 満ちない引き金（再発の本数が足りない）。
+const UNMET: &str = "再発 9";
+
+/// 満ちた引き金（過ぎた期日・since は期日）。
+const DUE: &str = "期日 2000-01-01T00:00Z";
+
+/// 局面の出力を書ける置き場に台帳の接頭辞を足し、live な便を置く。返すのは repo と置き場と偽の台帳。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn memo_site(issues: &[String]) -> (PathBuf, PathBuf, String) {
+    let (repo, state) = site();
+    fs::write(repo.join(".beads/config.yaml"), "issue-prefix: s2\n").expect("台帳の接頭辞を書ける");
+    live_run(&state);
+    let bd = ledger_bd(&state, "bd-memo", issues, 0);
+    (repo, state, bd)
+}
+
+/// memo の判定 `promote` を event log に 1 行足し（置き場の `verdict` の file は `file` が `Some` のときだけ書く）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn judged(state: &Path, memo: &str, file: Option<&str>) {
+    let place = state.join("pipe").join("memo").join(memo);
+    fs::create_dir_all(&place).expect("memo の置き場を作れる");
+    if let Some(text) = file {
+        fs::write(place.join("verdict"), text).expect("verdict を書ける");
+    }
+    let line = format!("{{\"schema\":1,\"ts\":\"{JUDGED_AT}\",\"kind\":\"MemoJudged\",\"bead\":\"{memo}\",\"detail\":\"promote\",\"host\":\"h\",\"actor\":\"machine\"}}\n");
+    let log = state.join("fleet").join("events.jsonl");
+    let body = fs::read_to_string(&log).expect("event log を読める");
+    fs::write(&log, format!("{body}{line}")).expect("判定の event を足せる");
+}
+
+/// 読める `verdict` の file の中身。
+fn verdict_file() -> String {
+    format!("{{\"verdict\":\"promote\",\"at\":\"{JUDGED_AT}\",\"evidence\":\"e\",\"sketch\":\"s\"}}\n")
+}
+
+/// 切り替えの線を記帳してから終端（`stop`）を道具つきで撃つ。返すのは payload の送りの列。
+fn memo_round(repo: &Path, state: &Path, bd: &str) -> Vec<String> {
+    switch_line(state, repo, bd);
+    let before = sends(state).len();
+    let out = terminal_round(repo, state, bd, &queue_rules(state), &["stop", "--run", RUN]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "stop は rc 0: {}", told(&out));
+    assert_fresh(state, "memo の周");
+    sends(state).into_iter().skip(before).collect()
+}
+
+/// (e) 開いた memo 2 本（待ちの 1 本・理由 verdict の 1 本）の置き場の idle の行は、` reason=` の直後（並列の実測の字の前）に
+/// ` memos=2:1 next=<理由 verdict の memo>:promote`。`verdict` の file を消した memo は語 `-`・読めない字の memo は `unreadable`。
+/// 期日の過ぎた引き金の memo と since の無い理由 verdict の memo の置き場の `next=` は期日の memo で語 `trigger-met`。台帳の印が出力の後に
+/// 動き書き直しが Busy の周は ` memos=2:1:stale`。
+#[test]
+fn pipe_notify_memos_summary_rides_after_reason_before_the_facts() {
+    for (file, word) in [(Some(verdict_file()), "promote"), (None, "-"), (Some("not json\n".to_owned()), "unreadable")] {
+        let (repo, state, bd) = memo_site(&[memo_json("s2-m.1", "open", UNMET), memo_json("s2-m.2", "open", UNMET)]);
+        judged(&state, "s2-m.2", file.as_deref());
+        let idle = idle_of(&memo_round(&repo, &state, &bd));
+        assert!(idle.contains(&format!(" reason=- memos=2:1 next=s2-m.2:{word} live=")), "{word}: {idle}");
+        clean(&[&repo, &state]);
+    }
+
+    let (repo, state, bd) = memo_site(&[memo_json("s2-m.1", "open", DUE), memo_json("s2-m.2", "open", UNMET)]);
+    judged(&state, "s2-m.2", Some(&verdict_file()));
+    let idle = idle_of(&memo_round(&repo, &state, &bd));
+    assert!(idle.contains(" reason=- memos=2:2 next=s2-m.1:trigger-met live="), "期日の memo が先: {idle}");
+    clean(&[&repo, &state]);
+
+    let (repo, state, bd) = memo_site(&[memo_json("s2-m.1", "open", UNMET), memo_json("s2-m.2", "open", UNMET)]);
+    judged(&state, "s2-m.2", Some(&verdict_file()));
+    switch_line(&state, &repo, &bd);
+    fs::write(repo.join(".beads/issues.jsonl"), "[]\n\n").expect("台帳の印を動かせる");
+    fs::write(state.join("fleet").join("lifecycle.lock"), format!("{}\n", std::process::id())).expect("lock を置ける");
+    let out = terminal_round(&repo, &state, &bd, &fast_rules(&state), &["stop", "--run", RUN]);
+    assert!(stderr_of(&out).lines().any(|line| line == "lifecycle=busy"), "書き直しは Busy: {}", told(&out));
+    let idle = idle_of(&sends(&state));
+    assert!(idle.contains(" reason=- memos=2:1:stale next=s2-m.2:promote live="), "古い周: {idle}");
+    clean(&[&repo, &state]);
+}
+
+/// (f) 候補 0 で memo-actionable 1 の置き場の idle の行は `ready=0 reason=-` で出る。同じ置き場の道具を渡さない終端の周（列を測らない周）は
+/// 送らない。書き手が出力を書けない置き場の `Settled` の候補 1 本の周の idle の行は ` reason=` の直後に ` memos=unreadable`。
+#[test]
+fn pipe_notify_memos_zero_candidates_send_only_when_actionable_and_measured() {
+    let (repo, state, bd) = memo_site(&[memo_json("s2-m.1", "open", DUE)]);
+    let idle = idle_of(&memo_round(&repo, &state, &bd));
+    assert!(idle.contains(" idle ready=0 launched=0 reason=- memos=1:1 next=s2-m.1:trigger-met live="), "候補 0 でも送る: {idle}");
+    clean(&[&repo, &state]);
+
+    let (repo, state, bd) = memo_site(&[memo_json("s2-m.1", "open", DUE)]);
+    switch_line(&state, &repo, &bd);
+    let (state_arg, repo_arg, rules) = (state.display().to_string(), repo.display().to_string(), queue_rules(&state));
+    let out = run_pipe(&["stop", "--run", RUN, "--state-dir", &state_arg, "--repo", &repo_arg, "--rules", &rules, "--bd", &bd]);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "stop は rc 0: {}", told(&out));
+    assert_eq!(idle_of(&sends(&state)), "", "道具を渡さない周は列を測らず送らない: {}", told(&out));
+    clean(&[&repo, &state]);
+
+    let (repo, state) = repo_with_state();
+    fake_tmux(&state);
+    register(&state, &repo);
+    reviewed_fail(&repo, &state, "s2-rf.1");
+    live_run(&state);
+    let bd = ledger_bd(&state, "bd-unwritable", &[issue_json("s2-rf.1", "open")], 0);
+    let out = terminal_round(&repo, &state, &bd, &queue_rules(&state), &["stop", "--run", RUN]);
+    assert!(!state.join("fleet").join("lifecycle.json").exists(), "前提: 出力の file は無い");
+    let idle = idle_of(&sends(&state));
+    let rest = idle.split_once(" reason=").map(|(_, rest)| rest).unwrap_or_default();
+    assert!(rest.split_once(' ').is_some_and(|(_, after)| after.starts_with("memos=unreadable live=")), "reason= の直後に memos=unreadable: {idle} / {}", told(&out));
+    clean(&[&repo, &state]);
+}
+
+/// (g) memo を close した後の周に actionable が減り、候補 0 で actionable が 0 になる周は行が消える（close の前は在る）。
+#[test]
+fn pipe_notify_memos_close_drops_the_actionable_count_and_then_the_line() {
+    let (repo, state, bd) = memo_site(&[memo_json("s2-m.1", "open", UNMET), memo_json("s2-m.2", "open", UNMET), memo_json("s2-m.3", "open", DUE)]);
+    judged(&state, "s2-m.2", Some(&verdict_file()));
+    let idle = idle_of(&memo_round(&repo, &state, &bd));
+    assert!(idle.contains(" reason=- memos=3:2 next=s2-m.3:trigger-met live="), "close の前: {idle}");
+
+    let bd = ledger_bd(&state, "bd-memo", &[memo_json("s2-m.1", "open", UNMET), memo_json("s2-m.2", "open", UNMET), memo_json("s2-m.3", "closed", DUE)], 0);
+    live_run(&state);
+    let idle = idle_of(&memo_round(&repo, &state, &bd));
+    assert!(idle.contains(" reason=- memos=2:1 next=s2-m.2:promote live="), "1 本 close した後は actionable が減る: {idle}");
+
+    let bd = ledger_bd(&state, "bd-memo", &[memo_json("s2-m.1", "open", UNMET), memo_json("s2-m.2", "closed", UNMET), memo_json("s2-m.3", "closed", DUE)], 0);
+    live_run(&state);
+    let round = memo_round(&repo, &state, &bd);
+    assert_eq!(idle_of(&round), "", "actionable が 0 で候補 0 の周は行が消える: {round:?}");
+    clean(&[&repo, &state]);
+}
