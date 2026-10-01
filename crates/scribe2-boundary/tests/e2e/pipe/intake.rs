@@ -1366,6 +1366,37 @@ fn pipe_intake_repeat_teeth_outside_write_set_mixed_at_measures_only_the_path() 
     clean(&[&repo, &state]);
 }
 
+/// (5'') §68: `at` が file の後ろに `#` と長い歯の名（または `:12`）を付けた項目の後、その file を write-set に足した契約は
+/// 通る（剥がした file の字面で write-set と照らす）。
+#[test]
+fn pipe_intake_repeat_teeth_outside_write_set_at_stripped_item_passes_when_the_file_is_added() {
+    for (label, at) in [("hash", "src/other.rs#pipe_intake_repeat_strip_hash_long_name"), ("line", "src/other.rs:12")] {
+        let (repo, state) = repo_with_state();
+        let design = write_set_contract(&repo, "first", &["src/lib.rs"]);
+        failed_runs(&repo, &state, "s2-stp", &design, &[(Some("teeth-outside-write-set"), Some(at))]);
+        let widened = write_set_contract(&repo, "second", &["src/lib.rs", "src/other.rs"]);
+        let before = run_dirs(&state).len();
+        let out = repeat_intake(&repo, &state, "s2-stp", &widened, &lens_verdict("PASS"));
+        accepted(&out, &state, before);
+        assert!(!stderr_of(&out).contains("対応する差分"), "{label}: {}", stderr_of(&out));
+        clean(&[&repo, &state]);
+    }
+}
+
+/// (5''') §68: 同じ file の `#` の後ろの違う 2 項目と § の番号の後、file を足さない契約は剥がした file を名指して断られ
+/// （`#` の後ろの名は出ない）、数は「測った 1 件・測れない 1 件」。
+#[test]
+fn pipe_intake_repeat_teeth_outside_write_set_at_stripped_items_are_named_by_file() {
+    let (repo, state) = repo_with_state();
+    let design = write_set_contract(&repo, "first", &["src/lib.rs"]);
+    let at = "src/other.rs#pipe_intake_repeat_strip_alpha_name, src/other.rs#pipe_intake_repeat_strip_beta_name, §33";
+    failed_runs(&repo, &state, "s2-stq", &design, &[(Some("teeth-outside-write-set"), Some(at))]);
+    let again = Again { repo: &repo, state: &state, bead: "s2-stq", design: &design };
+    let err = assert_refused(&again, "finding-unaddressed", &["teeth-outside-write-set", "src/other.rs", "測った 1 件・測れない 1 件"]);
+    assert!(!err.contains("strip_alpha_name") && !err.contains("strip_beta_name"), "# の後ろの名は出ない: {err}");
+    clean(&[&repo, &state]);
+}
+
 /// (6) literal-mismatch の指摘 `at=<識別子>` の後、識別子（`Nope::Thing`）を `done` に書いたままで base に無い契約は
 /// 断られ、識別子を消した契約も、base に `Nope::Thing` を足した後の同じ契約も通る（解けるかは名指しの読み手と同じ 1 本）。
 #[test]
