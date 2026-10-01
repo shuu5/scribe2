@@ -19,3 +19,8 @@ remote = "origin"
 close-check = true
 # merge の門の 2 つ目の判定（設計 row-review.md §4・§6）。契約表の動いた PR の head は、行の審査の記録が pass でなければ merge を断る。
 row-review = true
+# 索引の宣言（設計 reverse-index.md §4 形 1・ADR-0105）。code の事実は外の索引から読む（器は Cargo の依存を足さない）。
+# `index-scip`: 1 行ごとに SCIP の file を 1 つ出す（rust-analyzer・版は rust-toolchain.toml の channel が固定する・穴は `{tree}` と `{out}`）。
+# `index-roles`: 1 行ごとに構文の役（§5 の 9 語）の一致を stdout に 1 行 1 件の JSON で出す（ast-grep 0.45.3・規則は .config/index-roles.yml・穴は `{tree}`）。
+index-scip = ["rust-analyzer scip {tree} --output {out}"]
+index-roles = ["ast-grep scan --rule .config/index-roles.yml --json=stream {tree}"]
