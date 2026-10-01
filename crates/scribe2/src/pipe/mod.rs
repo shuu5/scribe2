@@ -21,6 +21,7 @@ pub mod dispatch;
 pub mod follow;
 pub mod gate;
 pub mod health;
+pub mod index;
 pub mod land;
 pub mod lens_record;
 pub mod move_proof;

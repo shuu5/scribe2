@@ -1926,3 +1926,480 @@ pub(super) fn reviewed_requirements(repo: &Path, state: &Path) -> String {
     let dir = review_dir(state, &run_id_of(&out));
     fs::read_to_string(dir.join("requirements.txt")).unwrap_or_default().trim_end().to_owned()
 }
+
+// ─────────── code の索引の読み手と表（設計 docs/design/reverse-index.md §4・行 a1・接頭辞 `pipe_index_table_`） ───────────
+//
+// SCIP の fixture は**この節の小さな protobuf の書き手**で作る（binary の fixture と helper だけの file を置かない）。
+// 本文と範囲は本文の字から測る（手で数えた位置を持たない）ので、日本語の字（UTF-8 で 3 byte・UTF-16 で 1 単位）と
+// 4 byte の字（UTF-16 で 2 単位）の後ろの位置も本文の字から決まる。
+
+use std::collections::BTreeMap;
+use vessel::pipe::index::flat::{self, Resolution, Row as IndexRow};
+use vessel::pipe::index::scip::{self, ScipError};
+use vessel::pipe::index::{self as pipe_index, JoinError};
+
+/// varint の書き。
+fn pb_varint(mut value: u64) -> Vec<u8> {
+    let mut out = Vec::new();
+    loop {
+        let low = (value & 0x7f) as u8;
+        value >>= 7;
+        if value == 0 {
+            out.push(low);
+            return out;
+        }
+        out.push(low | 0x80);
+    }
+}
+
+/// 長さを持つ欄。
+fn pb_len(number: u64, body: &[u8]) -> Vec<u8> {
+    let mut out = pb_varint((number << 3) | 2);
+    out.extend(pb_varint(body.len() as u64));
+    out.extend_from_slice(body);
+    out
+}
+
+/// varint の欄。
+fn pb_int(number: u64, value: u64) -> Vec<u8> {
+    let mut out = pb_varint(number << 3);
+    out.extend(pb_varint(value));
+    out
+}
+
+/// packed の整数の欄。
+fn pb_ints(number: u64, ints: &[u64]) -> Vec<u8> {
+    pb_len(number, &ints.iter().flat_map(|int| pb_varint(*int)).collect::<Vec<u8>>())
+}
+
+/// occurrence（知らない欄 2 つ〔syntax_kind・override_documentation〕を挟む）。
+fn scip_occ(range: &[u64], symbol: &str, definition: bool, enclosing: &[u64]) -> Vec<u8> {
+    let mut out = pb_ints(1, range);
+    out.extend(pb_len(2, symbol.as_bytes()));
+    if definition {
+        out.extend(pb_int(3, 1));
+    }
+    out.extend(pb_len(4, b"doc"));
+    out.extend(pb_int(5, 9));
+    if !enclosing.is_empty() {
+        out.extend(pb_ints(7, enclosing));
+    }
+    out
+}
+
+/// document（知らない欄 language を挟む）。`infos` は（symbol・表示の名）で、種類は 7 を置く。
+fn scip_document(path: &str, encoding: u64, occurrences: &[Vec<u8>], infos: &[(&str, &str)]) -> Vec<u8> {
+    let mut out = pb_len(1, path.as_bytes());
+    out.extend(pb_len(4, b"rust"));
+    for occurrence in occurrences {
+        out.extend(pb_len(2, occurrence));
+    }
+    for (symbol, name) in infos {
+        let mut info = pb_len(1, symbol.as_bytes());
+        info.extend(pb_int(5, 7));
+        info.extend(pb_len(6, name.as_bytes()));
+        out.extend(pb_len(3, &info));
+    }
+    out.extend(pb_int(6, encoding));
+    out
+}
+
+/// index（metadata と document と外の symbol の欄）。
+fn scip_index(documents: &[Vec<u8>], external: &[&str]) -> Vec<u8> {
+    let mut out = pb_len(1, &[pb_int(1, 0), pb_len(3, b"file:///repo")].concat());
+    for document in documents {
+        out.extend(pb_len(2, document));
+    }
+    for symbol in external {
+        out.extend(pb_len(3, &pb_len(1, symbol.as_bytes())));
+    }
+    out
+}
+
+/// 本文の中の `needle` の `nth` 番目（0 始まり）の（始まり・終わり）の byte。
+fn span_of(body: &str, needle: &str, nth: usize) -> (usize, usize) {
+    body.match_indices(needle).nth(nth).map_or((0, 0), |(at, found)| (at, at + found.len()))
+}
+
+/// 本文の中の `context` の中の `inner` の（始まり・終わり）の byte。
+fn span_in(body: &str, context: &str, inner: &str) -> (usize, usize) {
+    let (from, _) = span_of(body, context, 0);
+    let offset = context.find(inner).unwrap_or(0);
+    (from + offset, from + offset + inner.len())
+}
+
+/// byte の範囲を SCIP の範囲（同じ行は 3 つ・違う行は 4 つ）にする（列は `utf16` の単位か byte）。
+fn scip_range(body: &str, (start, end): (usize, usize), utf16: bool) -> Vec<u64> {
+    let unit = |text: &str| (if utf16 { text.encode_utf16().count() } else { text.len() }) as u64;
+    let locate = |at: usize| {
+        let head = body.get(..at).unwrap_or_default();
+        let from = head.rfind('\n').map_or(0, |newline| newline + 1);
+        (head.matches('\n').count() as u64, unit(body.get(from..at).unwrap_or_default()))
+    };
+    let ((start_line, start_col), (end_line, end_col)) = (locate(start), locate(end));
+    if start_line == end_line {
+        vec![start_line, start_col, end_col]
+    } else {
+        vec![start_line, start_col, end_line, end_col]
+    }
+}
+
+/// 行（0 始まり）の中の `needle` の列（1 始まり・byte）。
+fn col_of(body: &str, line: usize, needle: &str) -> usize {
+    body.lines().nth(line).and_then(|text| text.find(needle)).map_or(0, |at| at + 1)
+}
+
+const IDX_ROW: &str = "rust-analyzer cargo k 0.1.0 a/Row#";
+const IDX_MAKE: &str = "rust-analyzer cargo k 0.1.0 a/make().";
+const IDX_AGAIN: &str = "rust-analyzer cargo k 0.1.0 a/again().";
+const IDX_SHOWN: &str = "rust-analyzer cargo k 0.1.0 a/shown().";
+const IDX_GHOST: &str = "rust-analyzer cargo k 0.1.0 a/ghost().";
+const IDX_TESTS: &str = "rust-analyzer cargo k 0.1.0 a/tests/";
+const IDX_VIS_FN: &str = "rust-analyzer cargo k 0.1.0 a/vis_fn().";
+const IDX_TEST_FN: &str = "rust-analyzer cargo k 0.1.0 a/tests/t().";
+const IDX_BUILD: &str = "rust-analyzer cargo k 0.1.0 b/build().";
+const IDX_OTHER_ROW: &str = "rust-analyzer cargo k 0.1.0 c/Row#";
+const IDX_OTHER_USER: &str = "rust-analyzer cargo k 0.1.0 c/user().";
+const IDX_STD: &str = "rust-analyzer cargo std https://example.invalid/std 1.0.0 string/String#";
+
+/// 本体の file（UTF-8 の document）。`Self` の literal・doc の link・日本語の字の後ろの文字列の取り込み・どこにも
+/// 無い名の取り込み・test の module の宣言・可視性を持つ。
+const IDX_A: &str = "pub struct Row { pub x: u8 }\n/// 見る: [`Row`] の話\nfn make() -> Row {\n    Row { x: 2 }\n}\nimpl Row {\n    fn again() -> Self {\n        Self { x: 3 }\n    }\n}\nfn shown() -> String { format!(\"日本語の{Row}\") }\nfn ghost() -> String { format!(\"{Ghost}\") }\n#[cfg(test)]\nmod tests;\npub(crate) fn vis_fn() {}\n";
+
+/// test の module の file（`#[cfg(test)] mod tests;` の先）。
+const IDX_TESTS_RS: &str = "fn t() { let _ = crate::a::Row { x: 1 }; }\n";
+
+/// 別名の取り込みの file（UTF-16 の document・literal の前に日本語と 4 byte の字が在る）。
+const IDX_B: &str = "use crate::a::Row as Alias;\nfn build() -> Alias { /* 日本😀 */ Alias { x: 1 } }\n";
+
+/// 別 module の同名の型の file。
+const IDX_C: &str = "pub struct Row;\nfn user(_: Row) {}\n";
+
+/// fixture の SCIP の bytes。
+fn idx_scip_bytes() -> Vec<u8> {
+    let a = |range: (usize, usize)| scip_range(IDX_A, range, false);
+    let a_occs = [
+        scip_occ(&a(span_in(IDX_A, "pub struct Row", "Row")), IDX_ROW, true, &a(span_of(IDX_A, "pub struct Row { pub x: u8 }", 0))),
+        scip_occ(&a(span_in(IDX_A, "fn make", "make")), IDX_MAKE, true, &a(span_of(IDX_A, "fn make() -> Row {\n    Row { x: 2 }\n}", 0))),
+        scip_occ(&a(span_in(IDX_A, "-> Row", "Row")), IDX_ROW, false, &[]),
+        scip_occ(&a(span_in(IDX_A, "Row { x: 2 }", "Row")), IDX_ROW, false, &[]),
+        scip_occ(&a(span_in(IDX_A, "impl Row", "Row")), IDX_ROW, false, &[]),
+        scip_occ(&a(span_in(IDX_A, "fn again", "again")), IDX_AGAIN, true, &a(span_of(IDX_A, "fn again() -> Self {\n        Self { x: 3 }\n    }", 0))),
+        scip_occ(&a(span_in(IDX_A, "-> Self", "Self")), IDX_ROW, false, &[]),
+        scip_occ(&a(span_in(IDX_A, "fn shown() -> String", "String")), IDX_STD, false, &[]),
+        scip_occ(&a(span_in(IDX_A, "fn shown", "shown")), IDX_SHOWN, true, &a(span_of(IDX_A, "fn shown() -> String { format!(\"日本語の{Row}\") }", 0))),
+        scip_occ(&a(span_in(IDX_A, "fn ghost", "ghost")), IDX_GHOST, true, &a(span_of(IDX_A, "fn ghost() -> String { format!(\"{Ghost}\") }", 0))),
+        scip_occ(&a(span_in(IDX_A, "x: 2", "x")), "local 3", false, &[]),
+        scip_occ(&a(span_in(IDX_A, "mod tests;", "tests")), IDX_TESTS, true, &[]),
+        scip_occ(&a(span_in(IDX_A, "fn vis_fn", "vis_fn")), IDX_VIS_FN, true, &a(span_of(IDX_A, "pub(crate) fn vis_fn() {}", 0))),
+    ];
+    let a_infos = [(IDX_ROW, "Row"), (IDX_MAKE, "make"), (IDX_AGAIN, "again")];
+    let t = |range: (usize, usize)| scip_range(IDX_TESTS_RS, range, false);
+    let t_occs = [
+        scip_occ(&[0, 0, 0], IDX_TESTS, true, &[]),
+        scip_occ(&t(span_in(IDX_TESTS_RS, "fn t", "t")), IDX_TEST_FN, true, &t(span_of(IDX_TESTS_RS, "fn t() { let _ = crate::a::Row { x: 1 }; }", 0))),
+        scip_occ(&t(span_in(IDX_TESTS_RS, "a::Row", "Row")), IDX_ROW, false, &[]),
+    ];
+    let b = |range: (usize, usize)| scip_range(IDX_B, range, true);
+    let b_occs = [
+        scip_occ(&b(span_in(IDX_B, "a::Row", "Row")), IDX_ROW, false, &[]),
+        scip_occ(&b(span_in(IDX_B, "-> Alias", "Alias")), IDX_ROW, false, &[]),
+        scip_occ(&b(span_in(IDX_B, "fn build", "build")), IDX_BUILD, true, &b(span_of(IDX_B, "fn build() -> Alias { /* 日本😀 */ Alias { x: 1 } }", 0))),
+        scip_occ(&b(span_in(IDX_B, "Alias { x: 1 }", "Alias")), IDX_ROW, false, &[]),
+    ];
+    let c = |range: (usize, usize)| scip_range(IDX_C, range, false);
+    let c_occs = [
+        scip_occ(&c(span_in(IDX_C, "struct Row", "Row")), IDX_OTHER_ROW, true, &c(span_of(IDX_C, "pub struct Row;", 0))),
+        scip_occ(&c(span_in(IDX_C, "fn user", "user")), IDX_OTHER_USER, true, &c(span_of(IDX_C, "fn user(_: Row) {}", 0))),
+        scip_occ(&c(span_in(IDX_C, "_: Row", "Row")), IDX_OTHER_ROW, false, &[]),
+    ];
+    scip_index(
+        &[
+            scip_document("src/a.rs", 1, &a_occs, &a_infos),
+            scip_document("src/a/tests.rs", 1, &t_occs, &[]),
+            scip_document("src/b.rs", 2, &b_occs, &[]),
+            scip_document("src/c.rs", 1, &c_occs, &[]),
+        ],
+        &[IDX_STD],
+    )
+}
+
+/// ast-grep の stream の 1 行（知らない key を挟む・`name` が `Some` なら metaVariables の single の NAME）。
+fn idx_role_line(rule: &str, file: &str, (start, end): (usize, usize), name: Option<&str>) -> String {
+    let vars = name.map_or(String::new(), |text| {
+        format!(",\"metaVariables\":{{\"single\":{{\"NAME\":{{\"text\":\"{text}\",\"range\":{{\"byteOffset\":{{\"start\":1,\"end\":2}}}}}}}},\"multi\":{{}}}}")
+    });
+    format!(
+        "{{\"text\":\"x\",\"range\":{{\"byteOffset\":{{\"start\":{start},\"end\":{end}}},\"start\":{{\"line\":0,\"column\":0}}}},\"file\":\"{file}\",\"ruleId\":\"{rule}\",\"severity\":\"hint\"{vars}}}"
+    )
+}
+
+/// fixture の役の一致の stream（9 語の外の行を 1 行含む）。
+fn idx_roles_text() -> String {
+    let a = |rule: &str, needle: &str, name: Option<&str>| idx_role_line(rule, "src/a.rs", span_of(IDX_A, needle, 0), name);
+    let b = |rule: &str, needle: &str, name: Option<&str>| idx_role_line(rule, "./src/b.rs", span_of(IDX_B, needle, 0), name);
+    [
+        a("doclink", "[`Row`]", Some("Row")),
+        a("literal", "Row { x: 2 }", Some("Row")),
+        a("literal", "Self { x: 3 }", Some("Self")),
+        a("capture", "\"日本語の{Row}\"", Some("Row")),
+        a("capture", "\"{Ghost}\"", Some("Ghost")),
+        a("test", "#[cfg(test)]\nmod tests;", None),
+        a("vis", "pub struct Row { pub x: u8 }", Some("pub")),
+        a("vis", "pub(crate) fn vis_fn() {}", Some("pub(crate)")),
+        a("unrelated-rule", "fn make", None),
+        b("reexport", "use crate::a::Row as Alias;", None),
+        b("use", "use crate::a::Row as Alias;", None),
+        b("literal", "Alias { x: 1 }", Some("Alias")),
+    ]
+    .join("\n")
+        + "\n"
+}
+
+/// fixture の本文（相対 path → 本文）。
+fn idx_bodies() -> BTreeMap<String, String> {
+    [("src/a.rs", IDX_A), ("src/a/tests.rs", IDX_TESTS_RS), ("src/b.rs", IDX_B), ("src/c.rs", IDX_C)]
+        .into_iter()
+        .map(|(path, body)| (path.to_owned(), body.to_owned()))
+        .collect()
+}
+
+/// fixture を読んで結んだ表の行（読めない周は空）。
+fn idx_rows() -> Vec<IndexRow> {
+    let docs = scip::read_scip(&idx_scip_bytes()).unwrap_or_default();
+    let roles = pipe_index::read_roles(&idx_roles_text()).map(|read| read.matches).unwrap_or_default();
+    pipe_index::join(&docs, &roles, &idx_bodies()).unwrap_or_default()
+}
+
+/// 期待の行の下地（残りの欄は空・偽）。
+fn idx_blank(path: &str, line: usize, col: usize, symbol: &str) -> IndexRow {
+    IndexRow {
+        path: path.to_owned(),
+        line,
+        col,
+        symbol: symbol.to_owned(),
+        definition: false,
+        roles: Vec::new(),
+        test: false,
+        enclosing: String::new(),
+        vis: String::new(),
+    }
+}
+
+/// (a) SCIP の読み: 知らない欄（top・document・occurrence の中）を wire の型で飛ばして必要な欄だけを読み、外の crate の
+/// symbol と関数の中の local を落とす。
+#[test]
+fn pipe_index_table_scip_reads_needed_fields_and_drops_outside_symbols() {
+    let mut bytes = idx_scip_bytes();
+    bytes.extend(pb_int(9, 300));
+    bytes.extend([0x41, 1, 2, 3, 4, 5, 6, 7, 8, 0x4d, 1, 2, 3, 4]);
+    let docs = scip::read_scip(&bytes).unwrap_or_else(|err| panic!("fixture を読める: {err}"));
+    let paths: Vec<&str> = docs.iter().map(|doc| doc.path.as_str()).collect();
+    assert_eq!(paths, ["src/a.rs", "src/a/tests.rs", "src/b.rs", "src/c.rs"]);
+    assert_eq!(docs.iter().map(|doc| doc.encoding).collect::<Vec<_>>(), [1, 1, 2, 1], "position_encoding");
+    let a = docs.first().unwrap_or_else(|| panic!("a.rs が在る"));
+    assert_eq!(a.occurrences.len(), 11, "13 のうち外の crate の 1 つと local の 1 つを落とす");
+    assert!(a.occurrences.iter().all(|occ| occ.symbol != "local 3" && occ.symbol != IDX_STD), "落とした symbol は返さない");
+    assert_eq!(a.occurrences.iter().filter(|occ| occ.definition).count(), 7, "定義の印");
+    let def = a.occurrences.first().unwrap_or_else(|| panic!("先頭の occurrence"));
+    assert_eq!((def.symbol.as_str(), def.span.start_line, def.span.start_col, def.span.end_col), (IDX_ROW, 0, 11, 14));
+    assert_eq!(def.enclosing.map(|span| (span.start_line, span.start_col, span.end_col)), Some((0, 0, 28)), "囲む範囲");
+    let names: Vec<(&str, &str, u32)> = a.infos.iter().map(|info| (info.symbol.as_str(), info.name.as_str(), info.kind)).collect();
+    assert_eq!(names, [(IDX_ROW, "Row", 7), (IDX_MAKE, "make", 7), (IDX_AGAIN, "again", 7)], "symbol の情報の名と種類");
+}
+
+/// (a) 壊れた wire は 4 形（途中で切れた varint 2 形・長さが本体を越える欄 2 形）とも読めない理由になる。
+#[test]
+fn pipe_index_table_scip_names_broken_wires() {
+    let cut =[idx_scip_bytes(), vec![0x12, 0x80]].concat();
+    assert!(matches!(scip::read_scip(&cut), Err(ScipError::Truncated { .. })), "途中で切れた varint");
+    let inner = pb_len(2, &[pb_len(1, b"a.rs"), vec![0x30, 0x80]].concat());
+    assert!(matches!(scip::read_scip(&inner), Err(ScipError::Truncated { .. })), "document の中で切れた varint");
+    let mut short = idx_scip_bytes();
+    short.pop();
+    assert!(matches!(scip::read_scip(&short), Err(ScipError::Overrun { .. })), "長さが本体を越える欄");
+    let inside = pb_len(2, &[0x0a, 0x09, b'a']);
+    assert!(matches!(scip::read_scip(&inside), Err(ScipError::Overrun { len: 9, .. })), "document の中の欄の長さの越え");
+}
+
+/// (b) 役の一致の読み: 9 語の行を 1 行ずつ読み、9 語の外の ruleId の行を捨てて数え、JSON でない行と欄の欠けた行は
+/// 行番号つきの読めない理由にする。
+#[test]
+fn pipe_index_table_roles_reads_nine_words_drops_others_and_names_unreadable_lines() {
+    assert_eq!(
+        pipe_index::ROLES,
+        ["literal", "pattern", "call", "use", "reexport", "test", "doclink", "capture", "vis"],
+        "役の語は 9 つ・設計 §5 の宣言の順"
+    );
+    let lines: Vec<String> =
+        pipe_index::ROLES.iter().map(|word| idx_role_line(word, "src/x.rs", (10, 20), Some("N"))).collect();
+    let text = [lines.join("\n"), idx_role_line("not-a-word", "src/x.rs", (1, 2), None), String::new()].join("\n");
+    let read = pipe_index::read_roles(&text).unwrap_or_else(|err| panic!("読める: {err}"));
+    assert_eq!(read.dropped, 1, "9 語の外の行は捨てて数える");
+    let roles: Vec<&str> = read.matches.iter().map(|found| found.role).collect();
+    assert_eq!(roles, pipe_index::ROLES, "9 語は入力の順");
+    let first = read.matches.first().unwrap_or_else(|| panic!("先頭の一致"));
+    assert_eq!((first.file.as_str(), first.start, first.end, first.name.as_deref()), ("src/x.rs", 10, 20, Some("N")));
+    let plain = pipe_index::read_roles(&idx_role_line("call", "./src/y.rs", (3, 4), None)).unwrap_or_default();
+    assert_eq!(plain.matches.first().map(|found| (found.file.as_str(), found.name.clone())), Some(("src/y.rs", None)));
+    let broken = format!("{}\nnot json\n", idx_role_line("call", "src/x.rs", (1, 2), None));
+    assert_eq!(pipe_index::read_roles(&broken).map_err(|err| err.line), Err(2), "JSON でない行は 2 行目の読めない理由");
+    let no_file = "{\"ruleId\":\"call\",\"range\":{\"byteOffset\":{\"start\":1,\"end\":2}}}";
+    assert_eq!(pipe_index::read_roles(no_file).map_err(|err| err.line), Err(1), "欄の欠けた行も読めない理由");
+}
+
+/// 表の行のうち（path・行・symbol・役）に合う**ちょうど 1 行**（0 行も 2 行以上も落とす）。
+fn idx_find(rows: &[IndexRow], path: &str, line: usize, symbol: &str, roles: &[&str]) -> IndexRow {
+    let hits: Vec<&IndexRow> =
+        rows.iter().filter(|row| row.path == path && row.line == line && row.symbol == symbol && row.roles == roles).collect();
+    assert_eq!(hits.len(), 1, "{path}:{line} {symbol} {roles:?} はちょうど 1 行（{hits:?}）");
+    hits.first().map(|row| (*row).clone()).unwrap_or_else(|| idx_blank(path, line, 0, symbol))
+}
+
+/// (c) 結び: `Self` の literal・doc の link・日本語の字の後ろの文字列の取り込みの借りた symbol と字だけの行の印・可視性・
+/// 囲む定義・外の crate と local の不在。
+#[test]
+fn pipe_index_table_join_attaches_innermost_roles_and_borrows_symbols() {
+    let rows = idx_rows();
+    assert!(!rows.is_empty(), "前提: 結べた");
+    let find = |path: &str, line: usize, symbol: &str, roles: &[&str]| idx_find(&rows, path, line, symbol, roles);
+    let at = |line: usize, needle: &str| col_of(IDX_A, line - 1, needle);
+    let def = find("src/a.rs", 1, IDX_ROW, &[]);
+    let want = IndexRow { definition: true, vis: "pub".to_owned(), ..idx_blank("src/a.rs", 1, 12, IDX_ROW) };
+    assert_eq!(def, want, "定義の行（可視性の字つき・囲む定義なし）");
+    let doclink = find("src/a.rs", 2, IDX_ROW, &["doclink"]);
+    assert_eq!(doclink, IndexRow { roles: vec!["doclink".to_owned()], ..idx_blank("src/a.rs", 2, at(2, "[`Row`]"), IDX_ROW) }, "doc の link は同じ file の同じ字から借りる");
+    assert_eq!(find("src/a.rs", 3, IDX_ROW, &[]).enclosing, IDX_MAKE, "囲む定義");
+    let literal = find("src/a.rs", 4, IDX_ROW, &["literal"]);
+    assert_eq!((literal.enclosing.as_str(), literal.definition, literal.test), (IDX_MAKE, false, false));
+    assert_eq!(find("src/a.rs", 7, IDX_ROW, &[]).enclosing, IDX_AGAIN);
+    let self_literal = find("src/a.rs", 8, IDX_ROW, &["literal"]);
+    assert_eq!(self_literal.enclosing, IDX_AGAIN, "`Self` の literal は囲む定義の中の `Self` から symbol を借りる");
+    assert_eq!(self_literal.col, at(8, "Self { x: 3 }"), "位置は一致の始まり");
+    let capture = find("src/a.rs", 11, IDX_ROW, &["capture"]);
+    assert_eq!((capture.col, capture.enclosing.as_str()), (at(11, "\"日本語の{Row}\""), IDX_SHOWN), "日本語の字の後ろの文字列の取り込み");
+    let ghost = find("src/a.rs", 12, "text:Ghost", &["capture"]);
+    assert!(ghost.text_only() && ghost.enclosing == IDX_GHOST, "借りられない物は字だけの行（印つき）: {ghost:?}");
+    assert_eq!(find("src/a.rs", 15, IDX_VIS_FN, &[]).vis, "pub(crate)");
+    assert!(rows.iter().all(|row| !row.symbol.starts_with("local ") && row.symbol != IDX_STD), "外の crate と local は表に無い");
+    let keys: Vec<(&str, usize, usize)> = rows.iter().map(|row| (row.path.as_str(), row.line, row.col)).collect();
+    assert!(keys.windows(2).all(|pair| pair[0] <= pair[1]), "行は path・行・列の順");
+}
+
+/// (c) 結び: test の役の中の module の宣言と、その module の file の行は test・別名の取り込みの越しの literal は UTF-16 の列を
+/// byte に直して結ぶ・同じ幅の役は全部（宣言の順）。
+#[test]
+fn pipe_index_table_join_marks_test_module_files_and_places_utf16_columns() {
+    let rows = idx_rows();
+    let decl = idx_find(&rows, "src/a.rs", 14, IDX_TESTS, &[]);
+    assert!(decl.definition && decl.test, "test の役の中の module の宣言は test: {decl:?}");
+    let in_a_test: Vec<usize> = rows.iter().filter(|row| row.path == "src/a.rs" && row.test).map(|row| row.line).collect();
+    assert_eq!(in_a_test, [14], "test の役の外の行は test でない");
+    let in_tests_file: Vec<&IndexRow> = rows.iter().filter(|row| row.path == "src/a/tests.rs").collect();
+    assert_eq!(in_tests_file.len(), 3, "test の module の file の行");
+    assert!(in_tests_file.iter().all(|row| row.test), "test の module の file の行は全部 test: {in_tests_file:?}");
+    let alias = idx_find(&rows, "src/b.rs", 2, IDX_ROW, &["literal"]);
+    assert_eq!(alias.col, col_of(IDX_B, 1, "Alias { x: 1 }"), "UTF-16 の列を byte に直し、日本語と 4 byte の字の後ろの literal を結ぶ");
+    assert_eq!(idx_find(&rows, "src/b.rs", 1, IDX_ROW, &["use", "reexport"]).roles, ["use", "reexport"], "同じ幅の役は全部・語は宣言の順");
+    let b_rows = rows.iter().filter(|row| row.path == "src/b.rs").count();
+    assert_eq!(b_rows, 4, "alias の literal に字だけの行を足さない");
+}
+
+/// (c) 結べない入力（本文を渡されない document・本文に収まらない範囲）は理由つきで断る。
+#[test]
+fn pipe_index_table_join_refuses_what_it_cannot_place() {
+    let docs =scip::read_scip(&idx_scip_bytes()).unwrap_or_default();
+    let mut bodies = idx_bodies();
+    bodies.remove("src/b.rs");
+    let missing = pipe_index::join(&docs, &[], &bodies);
+    assert!(matches!(&missing, Err(JoinError { path, .. }) if path == "src/b.rs"), "本文を渡されない document は結べない: {missing:?}");
+    bodies.insert("src/b.rs".to_owned(), "short\n".to_owned());
+    assert!(pipe_index::join(&docs, &[], &bodies).is_err(), "本文に収まらない範囲は結べない");
+}
+
+/// (d) 表の描きと読み: 頭の行と 9 列・往復で等しい・schema の違う表は無い・形の崩れた行は読めない理由。
+#[test]
+fn pipe_index_table_render_round_trips_and_reads_other_schemas_as_absent() {
+    let rows = idx_rows();
+    let text = flat::render(&rows);
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.first().copied(), Some("schema=1"), "頭の行");
+    assert_eq!(lines.len(), rows.len() + 1, "1 行 1 occurrence");
+    assert!(lines.iter().skip(1).all(|line| line.split('\t').count() == 9), "tab 区切りの 9 列");
+    assert!(lines.contains(&format!("src/a.rs\t1\t12\t{IDX_ROW}\t1\t\t0\t\tpub").as_str()), "列の順の pin");
+    assert_eq!(flat::read_table(&text), Ok(Some(rows)), "読みは描きの逆");
+    assert_eq!(flat::read_table(&flat::render(&[])), Ok(Some(Vec::new())), "空の表も往復する");
+    assert_eq!(flat::read_table("schema=2\nanything\tgoes\n"), Ok(None), "schema の違う表は無い");
+    let broken = |text: &str| flat::read_table(text).map_err(|err| err.line);
+    assert_eq!(broken("schema=1\nsrc/a.rs\t1\t12\n"), Err(2), "列の足りない行");
+    assert_eq!(broken(&format!("schema=1\n{}\n", ["p", "1", "1", "s", "2", "", "0", "", ""].join("\t"))), Err(2), "真偽でない列");
+    assert_eq!(broken(&format!("schema=1\n{}\n", ["p", "1", "1", "s", "1", "nonword", "0", "", ""].join("\t"))), Err(2), "9 語の外の役");
+    assert_eq!(broken(&format!("schema=1\n{}\n{}\n", ["p", "1", "1", "s", "1", "", "0", "", ""].join("\t"), "x")), Err(3), "崩れた行の番号");
+    assert_eq!(broken("garbage\n"), Err(1), "頭の行が schema= でない");
+}
+
+/// (e) 鍵の digest: 16 桁・同じ入力は同じ字・code の木の鍵と宣言の 1 字の違いは別の字（宣言の key の境を跨ぐ違いも）。
+#[test]
+fn pipe_index_table_digest_is_stable_and_moves_with_every_input() {
+    let scip = ["rust-analyzer scip --out {out} {tree}".to_owned()];
+    let roles = ["ast-grep scan {tree}".to_owned()];
+    let base = pipe_index::key_digest("tree-key-1", &scip, &roles);
+    assert_eq!(base.len(), 16);
+    assert!(base.bytes().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()), "16 桁の小文字の 16 進: {base}");
+    assert_eq!(base, pipe_index::key_digest("tree-key-1", &scip, &roles), "同じ入力は同じ字");
+    let tree = pipe_index::key_digest("tree-key-2", &scip, &roles);
+    let scip_changed = pipe_index::key_digest("tree-key-1", &["rust-analyzer scip --out {out} {tree}x".to_owned()], &roles);
+    let roles_changed = pipe_index::key_digest("tree-key-1", &scip, &["ast-grep scan {tre}".to_owned()]);
+    let moved = pipe_index::key_digest("tree-key-1", &[], &["rust-analyzer scip --out {out} {tree}".to_owned(), roles[0].clone()]);
+    let all = [&base, &tree, &scip_changed, &roles_changed, &moved];
+    let distinct: BTreeSet<&&String> = all.iter().collect();
+    assert_eq!(distinct.len(), all.len(), "木の鍵・index-scip・index-roles の 1 字の違いと key の境の移りは別の字: {all:?}");
+}
+
+/// 項目が 1 つの symbol に解けた時の答え（解けなかった・複数に解けた周は `None`）。
+fn idx_one(rows: &[IndexRow], item: &str) -> Option<flat::Resolved> {
+    match flat::query(rows, item) {
+        Resolution::One(found) => Some(found),
+        _ => None,
+    }
+}
+
+/// (f) 表の問い: 項目の path を descriptor の名の列の末尾一致で 1 つの symbol に解き、symbol ごとに役つきの site を返す。
+/// 別 module の同名の型の site は混ぜず、役の語の列は宣言の順。
+#[test]
+fn pipe_index_table_query_resolves_one_symbol_with_role_sites() {
+    let rows = idx_rows();
+    let sites_of = |symbol: &str| idx_one(&rows, symbol);
+    let one = sites_of("crate::a::Row").unwrap_or_else(|| panic!("a::Row は 1 つに解ける"));
+    assert_eq!(one.symbol, IDX_ROW);
+    assert_eq!(one.sites.len(), 12, "a.rs の 8・test の file の 1・b.rs の 3（字だけの行は入らない）");
+    assert!(one.sites.iter().all(|site| site.path != "src/c.rs"), "別 module の同名の型の site を混ぜない");
+    let literal = one.sites.iter().find(|site| site.path == "src/a.rs" && site.line == 4);
+    assert_eq!(literal.map(|site| (site.roles.clone(), site.test, site.enclosing.clone(), site.definition)), Some((vec!["literal".to_owned()], false, IDX_MAKE.to_owned(), false)));
+    assert!(one.sites.iter().any(|site| site.path == "src/a/tests.rs" && site.test), "test の file の site は test");
+    assert!(one.sites.iter().any(|site| site.definition && site.line == 1), "定義の site");
+    let reexport = one.sites.iter().find(|site| site.path == "src/b.rs" && site.roles.len() == 2);
+    assert_eq!(reexport.map(|site| site.roles.clone()), Some(vec!["use".to_owned(), "reexport".to_owned()]), "役の語は宣言の順");
+    let other = sites_of("c::Row").unwrap_or_else(|| panic!("c::Row は 1 つに解ける"));
+    assert_eq!(other.symbol, IDX_OTHER_ROW);
+    assert_eq!(other.sites.iter().map(|site| (site.path.as_str(), site.line)).collect::<Vec<_>>(), [("src/c.rs", 1), ("src/c.rs", 2)]);
+}
+
+/// (f) 解けない（0）・複数（2）の形と、method と入れ子の module の descriptor の名の列。
+#[test]
+fn pipe_index_table_query_resolves_zero_and_many_symbols() {
+    let rows = idx_rows();
+    let sites_of = |symbol: &str| idx_one(&rows, symbol);
+    match flat::query(&rows, "Row") {
+        Resolution::Ambiguous(found) => {
+            assert_eq!(found.iter().map(|one| one.symbol.as_str()).collect::<Vec<_>>(), [IDX_ROW, IDX_OTHER_ROW], "複数は symbol の字の順");
+        }
+        other => panic!("名だけの項目は 2 つに解ける: {other:?}"),
+    }
+    assert!(matches!(flat::query(&rows, "crate::Row"), Resolution::Ambiguous(found) if found.len() == 2), "crate の頭は落とす");
+    assert_eq!(flat::query(&rows, "a::Nothing"), Resolution::Unresolved, "0 件");
+    assert_eq!(flat::query(&rows, ""), Resolution::Unresolved, "空の項目");
+    assert_eq!(sites_of("a::again").map(|found| found.symbol), Some(IDX_AGAIN.to_owned()), "method の descriptor の `().` を読む");
+    assert_eq!(sites_of("tests::t").map(|found| found.symbol), Some(IDX_TEST_FN.to_owned()), "入れ子の module の名の列");
+    assert_eq!(flat::descriptor_names("rust-analyzer cargo k 0.1.0 a/`odd name`#new()."), ["a", "odd name", "new"]);
+}
