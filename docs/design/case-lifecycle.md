@@ -657,7 +657,7 @@ lifecycle.stale
   - 歯の見本は実物に無い語 `nbs` を 1 つ多く持つ（`5:nbs:__DOLT__:lock:rootA:gc0:…`・lifecycle_mark.rs の in-file の歯と e2e の hook.rs の helper `stale_manifest`）ので、歯は緑のまま通っていた。
 - 約束（番号は done と 1:1）:
   1. `noms_of` は 4 つ目を root、5 つ目を gc の世代、6 つ目から先を「file 名:chunk 数」の組と読む。印の値の形（`Ledger::Noms` の欄）と gen・chunks の数え方は変えない。
-  2. 2 つ目が `__DOLT__` でない manifest は読めない（`None`）とする（形の違う store を別の位置で読まない・fail-closed）。欄が足りない・組が奇数・数でない・root が空の形も、今のとおり読めない。
+  2. 2 つ目が `__DOLT__` でない manifest は読めない（`None`）とする（形の違う store を別の位置で読まない・fail-closed）。欄が足りない・組が奇数・数でない・root が空の形も、今のとおり読めない。この判定の歯は、2 つ目だけを別の版の語（例 `__LD_1__`）に替え、ほかの欄は読める形のままの見本で測る（旧い見本の `nbs` を挟んだ形は直した位置で組の欄が奇数になり、判定を外しても None になるので、この判定の歯にならない）。
   3. 歯の見本を実物の形（`5:__DOLT__:lock:rootA:gc0:…`）に直す。既存の 3 形（journal だけ・table つき・gc の世代違い）は同じ root・gen・chunks を返す。
   4. 門が通した周の古さの印の歯（§14 行 e）の helper の manifest も実物の形に直し、歯は緑のまま。
 - 歯: lib は `crates/scribe2/src/fleet/lifecycle_mark.rs` の既存の歯の区間・接頭辞 `lifecycle_mark_ledger_`（既存 2 本の見本を直し、実物の 1 行の形の歯を 1 本足す）。e2e は `crates/scribe2-boundary/tests/e2e/hook.rs` の `hook_stale_mark_`（helper を直すだけ）。直した期待は base で落ちる（base は 5 つ目を root と読むので、実物の形で root が違うか読めない）ので、retroactive の札は要らない。
@@ -783,5 +783,5 @@ write-set = ["crates/scribe2/src/fleet/lifecycle_mark.rs", "crates/scribe2-bound
 verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail lifecycle_mark_ledger_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail hook_stale_mark_"]
 size = "S"
 growth = ["crates/scribe2/src/fleet/lifecycle_mark.rs:30"]
-done = "(1) 実物の bd の manifest の形（`5:__DOLT__:<lock>:<root>:<gc の世代>:` の後に file 名と chunk 数の組）の 1 行を持つ embedded の台帳で、read_ledger が Noms を返し、root は 4 つ目の字、chunks は組の数の和、gen は gc の世代と journal でない file 名の digest〔lifecycle_mark_ledger_ の新しい歯 1 本・32 桁の root と 32 桁の 0 の gc の世代と table の組 2 つと journal の組 1 つの見本〕 (2) 2 つ目が `__DOLT__` でない形（実物に無い語 nbs を挟んだ旧い見本の形）と、欄が足りない・組が奇数・数でない・root が空の実物の形は None〔lifecycle_mark_ledger_refuses_broken_manifests_and_metadata の見本を実物の形に直し、nbs の形を足す〕 (3) journal だけ・table つき・gc の世代違いの 3 形が実物の形の見本で同じ root・gen・chunks を返す〔lifecycle_mark_ledger_noms_reads_the_manifest_of_three_shapes の見本を直す〕 (4) 門が通した周の古さの印の歯が実物の形の manifest の見本で緑〔hook_stale_mark_ の helper stale_manifest を直す〕 base は 5 つ目を root と読むので実物の形で root が違うか None を返し、(1)〜(4) が RED"
+done = "(1) 実物の bd の manifest の形（`5:__DOLT__:<lock>:<root>:<gc の世代>:` の後に file 名と chunk 数の組）の 1 行を持つ embedded の台帳で、read_ledger が Noms を返し、root は 4 つ目の字、chunks は組の数の和、gen は gc の世代と journal でない file 名の digest〔lifecycle_mark_ledger_ の新しい歯 1 本・32 桁の root と 32 桁の 0 の gc の世代と table の組 2 つと journal の組 1 つの見本〕 (2) 2 つ目だけを `__LD_1__` に替えた形（ほかの欄は (1) の読める見本と同じ・組は偶数）は None で、同じ見本の 2 つ目が `__DOLT__` なら Noms（対照）。欄が足りない・組が奇数・数でない・root が空の実物の形も None〔lifecycle_mark_ledger_refuses_broken_manifests_and_metadata の見本を実物の形に直し、2 つ目の語の対を足す〕 (3) journal だけ・table つき・gc の世代違いの 3 形が実物の形の見本で同じ root・gen・chunks を返す〔lifecycle_mark_ledger_noms_reads_the_manifest_of_three_shapes の見本を直す〕 (4) 門が通した周の古さの印の歯が実物の形の manifest の見本で緑〔hook_stale_mark_ の helper stale_manifest を直す〕 base は 5 つ目を root と読むので実物の形で root が違うか None を返し、(1)〜(4) が RED"
 <!-- contracts:end -->
