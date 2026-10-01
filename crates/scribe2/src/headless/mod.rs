@@ -343,8 +343,8 @@ pub struct Call<'a> {
     /// 出力形式（[`Format`] の 3 値）。runner は [`Format::StreamJson`]（rate limit の record を途中で見る）・lens は
     /// [`Format::Json`]（判定と消費の 6 値を 1 object で受ける）・`fleet usage` の token refresh は [`Format::Text`]。
     pub output: Format,
-    /// turn の上限（`--max-turns <n>`）。`Some` の周だけ argv に載る——runner と lens は `None`
-    /// （argv は不変）で、`fleet usage` の token refresh の起動だけが `Some(1)` を渡す（設計 fleet-usage.md §3）。
+    /// turn の上限（`--max-turns <n>`）。`Some` の周だけ argv に載る——lens は rules 行 `lens.max_turns` の値を毎回渡し
+    /// （設計 pipeline.md §67）、`fleet usage` の token refresh の起動は `Some(1)` を渡す（設計 fleet-usage.md §3）。runner は `None`（argv は不変）。
     pub max_turns: Option<u32>,
 }
 

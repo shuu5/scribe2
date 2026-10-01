@@ -984,3 +984,57 @@ fn headless_lens_passes_no_allowed_tools_absent_from_argv() {
     assert!(!has_arg(&args, "--allowedTools"), "lens に allow は載らない（ADR-0011 §2.2）: {args}");
     clean(&[&dir]);
 }
+
+/// (b) `lens.max_turns` の行が解けない周（行が無い・不発効・値 0）は、段に依らず（`--stage` 無し・`prelens`・`memo`）claude を呼ばず
+/// （印の file が無い）rc 2 で、stderr は `lens: lens.max_turns` で始まる理由の 1 行だけ。base はこの行を読まず claude を呼ぶので RED。
+#[test]
+fn lens_turns_refuses_when_the_row_is_missing_disabled_or_zero() {
+    let dir = tmp();
+    let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"呼ばれてはならない\"}\n", false, 0);
+    let contract = contract_in(&dir);
+    let material = dir.join("material");
+    fs::write(&material, "# memo zq-turns\n").expect("材料を書ける");
+    let disabled = turns_row(30).replace("enabled = true", "enabled = false");
+    let cases = [
+        ("missing", None, "lens.max_turns が無い"),
+        ("disabled", Some(disabled), "lens.max_turns は不発効である"),
+        ("zero", Some(turns_row(0)), "lens.max_turns の値が"),
+    ];
+    for (name, row, want) in cases {
+        let rules = rules_with_turns_as_given(&dir, &format!("rules-turns-{name}.toml"), row);
+        let path = rules.display().to_string();
+        let default = lens_args(&contract, &dir, &["--rules", &path], &claude);
+        let prelens = lens_args(&contract, &dir, &["--rules", &path, "--stage", "prelens"], &claude);
+        for (stage, args) in [("既定", default), ("prelens", prelens), ("memo", memo_args(&material, &dir, &["--rules", &path], &claude))] {
+            let out = run_bin_owned(&dir, &args, b"--- a\n+++ b\n");
+            assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "{name} {stage}: rc 2 / {}", stderr_of(&out));
+            assert!(!dir.join("called").exists(), "{name} {stage}: claude を 1 度も起動しない");
+            let err = stderr_of(&out);
+            assert!(err.starts_with(&format!("lens: {want}")), "{name} {stage}: 理由は lens.max_turns で始まる: {err}");
+            assert_eq!(err.lines().count(), 1, "{name} {stage}: stderr は理由の 1 行だけ: {err}");
+            assert!(stdout_of(&out).is_empty(), "{name} {stage}: 判定の面には何も出さない");
+        }
+    }
+    clean(&[&dir]);
+}
+
+/// (c) 封筒の `subtype` が `error_max_turns` の周は `result` を読まず、判定が INCONCLUSIVE で evidence が `lens.max_turns` を含み、
+/// 消費の 3 対（key `turns` を含む）が載る。`result` が findings と population を持つ PASS の判定の行を含む周も、`result` の無い周も同じ。
+/// 対に `subtype` = `success` の同じ中身の封筒を置き、PASS が採られる側（上限の読みだけが判定を変える）を示す。base は PASS を採るか
+/// `lens output has no json line` なので RED。
+#[test]
+fn lens_turns_error_max_turns_envelope_reads_as_inconclusive_naming_the_row() {
+    let partial = format!("途中まで読みました\n{COST_VERDICT}\n");
+    for (name, result) in [("PASS を持つ result", Some(partial.as_str())), ("result 無し", None)] {
+        let out = lens_stdout_with(&max_turns_record(result));
+        assert_eq!(out.lines().count(), 1, "{name}: stdout は 1 行だけ: {out}");
+        assert!(out.contains("\"verdict\":\"INCONCLUSIVE\""), "{name}: 判定は INCONCLUSIVE: {out}");
+        assert!(!out.contains("PASS"), "{name}: 途中の判定は採らない: {out}");
+        assert!(out.contains("\"evidence\":\"lens が turn の上限（lens.max_turns）で終わった\""), "{name}: evidence が行を名指す: {out}");
+        assert!(out.contains("\"turns\":5"), "{name}: 消費の 3 対は足す: {out}");
+        assert!(out.contains("\"usage\":\"in:11,out:22,cache_read:33,cache_create:44\"") && out.contains("\"wall_ms\":6000"), "{name}: {out}");
+    }
+    let success = max_turns_record(Some(&partial)).replace("error_max_turns", "success");
+    let out = lens_stdout_with(&success);
+    assert!(out.contains("\"verdict\":\"PASS\"") && !out.contains("lens.max_turns"), "success の封筒は PASS を採る: {out}");
+}

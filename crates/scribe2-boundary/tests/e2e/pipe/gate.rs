@@ -3159,6 +3159,61 @@ fn pipe_gate_lens_reread_does_not_rerun_a_well_formed_inconclusive() {
     clean(&[&repo, &state]);
 }
 
+/// 起こされるたびに回数を [`lens_calls`] の置き場へ積み、`subtype` が `error_max_turns` の封筒（`result` に findings と population を
+/// 持つ PASS の判定の行を含む）を返す偽 claude を書き、gate の lens の行を**器の lens**（本 binary の `lens` に `{contract}` と
+/// `{worktree}` と `--claude` を渡す形）にして返す。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn max_turns_lens(state: &Path) -> String {
+    let spy = lens_spy(state);
+    fs::create_dir_all(&spy).expect("偽 claude の置き場を作れる");
+    let result = lens_verdict("PASS").replace('"', "\\\"");
+    let envelope = format!(
+        "{{\"type\":\"result\",\"subtype\":\"error_max_turns\",\"is_error\":false,\"num_turns\":5,\"duration_ms\":6000,\
+         \"result\":\"{result}\",\"usage\":{{\"input_tokens\":11,\"cache_creation_input_tokens\":44,\
+         \"cache_read_input_tokens\":33,\"output_tokens\":22}},\"total_cost_usd\":0.5}}\n"
+    );
+    fs::write(spy.join("envelope"), envelope).expect("封筒を書ける");
+    let script = format!(
+        "#!/bin/sh\ncat >/dev/null\nprintf 'call\\n' >> '{}'\ncat '{}'\n",
+        spy.join("calls").display(),
+        spy.join("envelope").display()
+    );
+    let claude = state.join("max-turns-claude.sh");
+    fs::write(&claude, script).expect("偽 claude を書ける");
+    let mut perm = fs::metadata(&claude).expect("権限を読める").permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut perm, 0o755);
+    fs::set_permissions(&claude, perm).expect("実行可能にできる");
+    format!(
+        "{} lens --contract {{contract}} --worktree {{worktree}} --claude {}",
+        env!("CARGO_BIN_EXE_scribe2"),
+        claude.display()
+    )
+}
+
+/// (d) gate の lens の行を器の lens と上限で終わる偽 claude にした便は、gate が INCONCLUSIVE（rc 3）で、偽 claude の回数が 2
+/// （形の読めない周として同じ gate の中で 1 回だけ撃ち直す・3 回目は無い）、stderr の撃ち直しの行が 1 本で理由に `lens.max_turns` を含む。
+/// 封筒の `result` は PASS の判定の行を持つので、上限の読みが無ければ PASS で回数 1 になる。base は PASS で回数 1 なので RED。
+#[test]
+fn lens_turns_gate_rereads_a_max_turns_round_once_and_stops_inconclusive() {
+    let (repo, state) = repo_with_state();
+    let path = write_contract(&repo, &[], &[]);
+    let id = implemented(&repo, &state, &path);
+    let lens = max_turns_lens(&state);
+    let out = gate_once(&repo, &state, &id, Some(&lens));
+    assert_eq!(out.status.code(), Some(i32::from(RC_INCONCLUSIVE)), "2 回目も上限なら rc 3: {} / {}", stdout_of(&out), stderr_of(&out));
+    assert_eq!(lens_calls(&state), 2, "撃ち直しは 1 回（合計 2 回）");
+    let pairs = verdict_pairs(&state, &id);
+    assert_eq!(value_of(&pairs, "verdict"), "INCONCLUSIVE", "{pairs:?}");
+    assert!(value_of(&pairs, "evidence").contains("lens.max_turns"), "判定の理由が行を名指す: {pairs:?}");
+    let line = reread_line(&out).unwrap_or_default();
+    assert!(line.contains("lens.max_turns"), "撃ち直しの行の理由が行を名指す: {}", stderr_of(&out));
+    assert_eq!(stderr_of(&out).matches(REREAD_LINE).count(), 1, "撃ち直しの行は 1 本: {}", stderr_of(&out));
+    clean(&[&repo, &state]);
+}
+
 // ───── lens への入力の通知を rc に依らず記録に残す（`s2-07l.293`・設計 pipeline.md §21・接頭辞 `pipe_gate_notice_`） ─────
 //
 // 理由の 1 行は従来 stderr にしか出ず、rc 0 で終わった gate の周は呼び手が捨てると事後に読めなかった

@@ -217,6 +217,9 @@ pub enum RuleKind {
     /// 便ごとの token 消費の検出線（token・憲法 C6.2 の R-C6-1・設計 gate-cost.md §43）。便の消費の event の 4 値の和が
     /// この値以上の便に `pipe show` が判定行を 1 行出す。読み手はその 1 か所で、便を断る読み手は持たない。
     RunTokenCeiling,
+    /// lens が claude に毎回渡す turn の上限（turn・設計 pipeline.md §67）。値 0 は上限にならないので lens が断る。
+    /// 読み手は lens の `rows_of` の 1 本で、行を読めない周は claude を呼ばず rc 2。
+    LensMaxTurns,
     /// hook 1 回の実行予算（ミリ秒）。
     HookBudgetMs,
     /// publish の配線が子を撃つ段の締め切り（ミリ秒・NFR5）。配線の timeout 未満に限る。
@@ -422,6 +425,7 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::PipePrecheckLensPerRound,
     RuleKind::GateTokenCap,
     RuleKind::RunTokenCeiling,
+    RuleKind::LensMaxTurns,
     RuleKind::HookBudgetMs,
     RuleKind::HostGuardPublishDeadlineMs,
     RuleKind::HostGuardPublishReadBytes,
@@ -506,7 +510,7 @@ impl RuleKind {
             Self::CompileShape => "CompileShape",
             Self::CompileSeconds => "CompileSeconds",
             Self::GateLensCount => "GateLensCount", Self::PipePrecheckLensPerRound => "PipePrecheckLensPerRound",
-            Self::GateTokenCap => "GateTokenCap", Self::RunTokenCeiling => "RunTokenCeiling",
+            Self::GateTokenCap => "GateTokenCap", Self::RunTokenCeiling => "RunTokenCeiling", Self::LensMaxTurns => "LensMaxTurns",
             Self::HookBudgetMs => "HookBudgetMs", Self::HostGuardPublishDeadlineMs => "HostGuardPublishDeadlineMs", Self::HostGuardPublishReadBytes => "HostGuardPublishReadBytes",
             Self::StopGraceMs => "StopGraceMs",
             Self::LockRetryMs => "LockRetryMs",
@@ -570,7 +574,7 @@ impl RuleKind {
             | Self::DepPerPr
             | Self::CheckDeltaMs
             | Self::GateLensCount | Self::PipePrecheckLensPerRound
-            | Self::GateTokenCap | Self::RunTokenCeiling
+            | Self::GateTokenCap | Self::RunTokenCeiling | Self::LensMaxTurns
             | Self::HookBudgetMs | Self::HostGuardPublishDeadlineMs | Self::HostGuardPublishReadBytes
             | Self::StopGraceMs | Self::LockRetryMs
             | Self::LockStaleMs

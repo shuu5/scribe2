@@ -27,6 +27,9 @@
 //! `pipe.precheck_lens_model` を読む（[`STAGE_PRELENS`]・他の値と値の欠けは未知の引数と同じ断り）。読み口は
 //! [`super::rules_of`] / [`super::model_row`]（runner と共通）で、行が解けない周は cap と同じ極性＝claude を呼ばず rc 2。
 //! **effort も同じ manifest の rules 行 `runner.effort` から読み、毎回渡す**（`s2-07l.322`・読む順は cap → model → effort）。
+//! **turn の上限も rules 行 `lens.max_turns` から読み、`--stage` に依らず `--max-turns` で毎回渡す**（設計 pipeline.md §67・
+//! 読む順は effort の後・行が無い / 不発効 / 整数でない / 0 の周は claude を呼ばず rc 2）。封筒の `subtype` が `error_max_turns` の周は
+//! 判定を採らず INCONCLUSIVE（[`verdict_line`]）で、gate が同じ gate の中で 1 回撃ち直す。
 //!
 //! **裁定（便の質問と回答の対）は契約の写しの隣の [`RULINGS_FILE`] から読む**（`s2-07l.309`・
 //! 設計 pipeline-question.md）。gate が event log から写す file で、lens は `{contract}` の path の同じ dir
@@ -59,7 +62,9 @@
 //! **done の番号つき項目（設計 contract-source.md §64 行 bs）も隣の file で受ける**。[`ITEMS_FILE`] が在れば契約の本文の後ろに空行
 //! 1 つを挟んで足し（穴は足さない）、cap の照合に byte を数える。在るのに読めない周は rc 2。無ければ prompt は 1 字も変わらない。
 
-use super::runner::{has_top_level_key, is_result_record, result_usage, scope_line, top_level_string};
+use super::runner::{
+    has_top_level_key, is_result_record, result_subtype, result_usage, scope_line, top_level_string, ResultKind,
+};
 use super::{
     build, feed, fill, flag, model_row, need, read_stdin_bytes, rules_of, runner_effort, Call, Effort, Format,
     DEFAULT_CLAUDE, ROW_LENS_MODEL, ROW_PRELENS_MODEL,
@@ -76,6 +81,7 @@ use crate::pipe::review::{base_block, outside_block, BASE_FILE, DESIGN_FILE, FIN
 use crate::pipe::review::ITEMS_FILE;
 use crate::pipe::review::REQUIREMENTS_FILE;
 use crate::rules::int_row;
+use crate::rules::manifest::Manifest;
 use std::io::{ErrorKind, Read};
 use std::path::Path;
 use std::process::{Child, ExitStatus, Output};
@@ -95,6 +101,9 @@ const JSON_HEAD: char = '{';
 
 /// diff の byte 数の上限を持つ rules 行（gate の判定と同じ 1 行・`pipe::cli::ROW_CAP` と同じ id）。
 const ROW_CAP: &str = "gate.token_cap";
+
+/// claude に毎回渡す turn の上限を持つ rules 行（`--stage` に依らず 1 行・設計 pipeline.md §67）。
+const ROW_TURNS: &str = "lens.max_turns";
 
 /// lens が受ける flag の全部（この外は未知の引数として断る）。
 const KNOWN_FLAGS: [&str; 8] =
@@ -134,6 +143,9 @@ pub fn usage() -> String {
     )
 }
 
+/// 封筒の `subtype` が `error_max_turns` の周の evidence（行の id を名指す・gate の撃ち直しの理由に載る）。
+const TURNS_EVIDENCE: &str = "lens が turn の上限（lens.max_turns）で終わった";
+
 /// 判定に届かなかった 1 行を組む。
 fn inconclusive(reason: &str) -> String {
     format!(r#"{{"verdict":"INCONCLUSIVE","evidence":"{reason}"}}"#)
@@ -172,18 +184,29 @@ fn model_row_id(args: &[String]) -> Result<&'static str, ArgsError> {
     }
 }
 
-/// lens が rules 行から読む 3 つ: cap（byte・`gate.token_cap`）と model（`row`＝[`model_row_id`]）と effort（`runner.effort`）。
+/// lens が rules 行から読む 4 つ: cap（byte・`gate.token_cap`）と model（`row`＝[`model_row_id`]）と effort（`runner.effort`）と
+/// turn の上限（`lens.max_turns`・`--stage` に依らず 1 つ・設計 pipeline.md §67）。
 /// manifest は `--rules PATH` が在ればそれ・無ければ埋め込み（[`rules_of`]・runner と同じ読み口）。
 ///
 /// cap の行が無い / 不発効 / 整数でない周は `pipe::cli::int_row` と同じ 3 理由で `Err`（[`int_row`]）。
-/// model と effort の行も同じ極性で、閉じた表に無い値も `Err`（[`model_row`] / [`runner_effort`]）。順は
-/// cap → model → effort（先に落ちた理由 1 つだけを出す＝cap と model の字面は不変）。
-fn rows_of(args: &[String], row: &str) -> Result<(u64, Model, Effort), String> {
+/// model と effort の行も同じ極性で、閉じた表に無い値も `Err`（[`model_row`] / [`runner_effort`]）。turn の上限は値 0
+/// （上限にならない）と `u32` に収まらない値も `Err`（[`turns_row`]）。順は
+/// cap → model → effort → turn の上限（先に落ちた理由 1 つだけを出す＝cap と model と effort の字面は不変）。
+fn rows_of(args: &[String], row: &str) -> Result<(u64, Model, Effort, u32), String> {
     let manifest = rules_of(args)?;
     let cap = int_row(&manifest, ROW_CAP)?;
     let model = model_row(&manifest, row)?;
     let effort = runner_effort(&manifest)?;
-    Ok((cap, model, effort))
+    let turns = turns_row(&manifest)?;
+    Ok((cap, model, effort, turns))
+}
+
+/// rules 行 [`ROW_TURNS`] の値（`--max-turns` に渡す整数）。0 は上限にならないので断る。
+fn turns_row(manifest: &Manifest) -> Result<u32, String> {
+    match u32::try_from(int_row(manifest, ROW_TURNS)?) {
+        Ok(found) if found > 0 => Ok(found),
+        _ => Err(format!("{ROW_TURNS} の値が 1 以上 {} 以下の整数でない", u32::MAX)),
+    }
 }
 
 /// `lens` を 1 回。diff は stdin から byte で読む。
@@ -234,7 +257,7 @@ pub fn dispatch(args: &[String]) -> Outcome {
     };
     // **cap が解けない周も claude を起こさない**（上限なしで走らせない＝C6）。model も同じ極性（版の既定へ
     // 黙って倒れない）。
-    let (cap, model, effort) = match rows_of(args, row) {
+    let (cap, model, effort, turns) = match rows_of(args, row) {
         Ok(found) => found,
         Err(reason) => return Outcome::failed_line(RC_BROKEN, format!("lens: {reason}")),
     };
@@ -244,7 +267,7 @@ pub fn dispatch(args: &[String]) -> Outcome {
         Err(outcome) => return outcome,
     };
     ask(
-        &call_of(&prompt, (model, effort), claude.as_deref(), account.as_deref(), &worktree),
+        &call_of(&prompt, (model, effort, turns), claude.as_deref(), account.as_deref(), &worktree),
         Path::new(cgroup_root.as_deref().unwrap_or(confine::CGROUP_ROOT)),
     )
 }
@@ -252,7 +275,7 @@ pub fn dispatch(args: &[String]) -> Outcome {
 /// claude を 1 回起こす材料（契約の審査・diff の審査・memo の審査が同じ 1 本で組む）。
 fn call_of<'a>(
     prompt: &'a str,
-    (model, effort): (Model, Effort),
+    (model, effort, turns): (Model, Effort, u32),
     claude: Option<&'a str>,
     account: Option<&'a str>,
     worktree: &'a str,
@@ -274,7 +297,8 @@ fn call_of<'a>(
         // 判定と消費の 6 値を 1 object の封筒で受ける（設計 gate-cost.md §26 形 (2)）。stream-json にすると
         // 「最後の JSON 行」が claude の result record になり、判定が record の中の文字列へ埋もれる。
         output: Format::Json,
-        max_turns: None,
+        // turn の上限は rules 行 `lens.max_turns` の値を**毎回**渡す（段に依らず・設計 pipeline.md §67）。
+        max_turns: Some(turns),
     }
 }
 
@@ -286,7 +310,7 @@ fn memo(args: &[String], row: &str, (material, worktree): (&str, &str), (claude,
         Ok(found) => found,
         Err(err) => return Outcome::failed_line(RC_BROKEN, format!("lens: memo の材料を読めない: {material}: {err}")),
     };
-    let (cap, model, effort) = match rows_of(args, row) {
+    let (cap, model, effort, turns) = match rows_of(args, row) {
         Ok(found) => found,
         Err(reason) => return Outcome::failed_line(RC_BROKEN, format!("lens: {reason}")),
     };
@@ -296,7 +320,7 @@ fn memo(args: &[String], row: &str, (material, worktree): (&str, &str), (claude,
     }
     let prompt = fill(MEMO_TEMPLATE, &[("{memo}", text.get(..end).unwrap_or_default())]);
     ask(
-        &call_of(&prompt, (model, effort), claude, account, worktree),
+        &call_of(&prompt, (model, effort, turns), claude, account, worktree),
         Path::new(cgroup_root.unwrap_or(confine::CGROUP_ROOT)),
     )
 }
@@ -535,10 +559,15 @@ fn last_json_line(text: &str) -> Option<&str> {
 /// 最後の JSON 行が `type` = `result` の封筒（claude の json 出力）なら、その `result` の text の最後の JSON 行を判定に
 /// 読み、封筒の消費の 6 値（[`result_usage`]）を判定 object へ足す（[`with_usage`]）。封筒でなければその行をそのまま
 /// 判定に読む（従来の text の形・偽 lens の fixture は不変）。判定の JSON 行が無い周は `None`。
+/// 封筒の `subtype` が `error_max_turns` の周は `result` を読まず、[`TURNS_EVIDENCE`] の INCONCLUSIVE に消費の 3 対を足す。
 fn verdict_line(text: &str) -> Option<String> {
     let last = last_json_line(text)?;
     if !is_result_record(last) {
         return Some(last.to_owned());
+    }
+    // 上限で終わった周は `result` を読まない（途中の判定が PASS でも採らない・AC3・設計 pipeline.md §67 形 4）。
+    if result_subtype(last) == Some(ResultKind::ErrorMaxTurns) {
+        return Some(with_usage(&inconclusive(TURNS_EVIDENCE), result_usage(last).as_ref()));
     }
     let result = top_level_string(last, "result")?;
     let verdict = last_json_line(&result)?;

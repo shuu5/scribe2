@@ -219,8 +219,13 @@ fn contract_in(dir: &Path) -> PathBuf {
     reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
 )]
 fn rules_with_rows(dir: &Path, name: &str, rows: &[String]) -> PathBuf {
+    // lens の成功の周は turn の上限の行を要る（設計 pipeline.md §67）: 渡された列に無ければ埋め込みと同じ値の行を足す。
+    // 行を持たない manifest を測る歯は [`rules_with_turns_as_given`]、値を振る歯は [`turns_row`] を列に入れる。
+    let turns = [turns_row(LENS_MAX_TURNS)];
+    let missing = !rows.iter().any(|row| row.contains(TURNS_ID));
     let body: String = rows
         .iter()
+        .chain(turns.iter().filter(|_| missing))
         .map(|row| format!("\n[[rule]]\n{row}ruling = \"t\"\nruled_at = \"d\"\n"))
         .collect();
     let path = dir.join(name);
@@ -266,6 +271,41 @@ fn effort_row(value: &str) -> String {
 
 /// 埋め込み manifest と同じ `runner.effort` の値（claude CLI の字面・裁定 id `user 2026-09-15T03:52Z`）。
 const RUNNER_EFFORT: &str = "high";
+
+/// lens の turn の上限を持つ rules 行の id（設計 pipeline.md §67）。
+const TURNS_ID: &str = "lens.max_turns";
+
+/// 埋め込み manifest と同じ `lens.max_turns` の値（裁定 id `user 2026-09-30T22:13Z 項 lens-turns`）。
+const LENS_MAX_TURNS: u64 = 30;
+
+/// `lens.max_turns` の行（値 `value`・発効）。
+fn turns_row(value: u64) -> String {
+    format!("id = \"{TURNS_ID}\"\nkind = \"LensMaxTurns\"\nvalue = {value}\nenabled = true\n")
+}
+
+/// `lens.max_turns` の行を**渡した形のまま**（`None` は行なし）載せる manifest（[`rules_with_rows`] のように行を足さない・
+/// cap / model（runner・lens・先撃ちの 3 行）/ effort は埋め込みと同じ値）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn rules_with_turns_as_given(dir: &Path, name: &str, turns: Option<String>) -> PathBuf {
+    let rows = [
+        cap_row(4096),
+        model_row(RUNNER_MODEL),
+        lens_model_row(LENS_MODEL),
+        prelens_model_row(RUNNER_MODEL),
+        effort_row(RUNNER_EFFORT),
+    ];
+    let body: String = rows
+        .into_iter()
+        .chain(turns)
+        .map(|row| format!("\n[[rule]]\n{row}ruling = \"t\"\nruled_at = \"d\"\n"))
+        .collect();
+    let path = dir.join(name);
+    fs::write(&path, format!("schema = 1\n{body}")).expect("tmp manifest を書ける");
+    path
+}
 
 /// `gate.token_cap` を `cap` byte にした manifest（file 名に値を含む＝同じ dir で cap を変えて撃ち直せる）。
 /// `runner.model` / `lens.model` / `runner.effort` は埋め込みと同じ値で載せる（lens は cap と model と effort の 3 行を
@@ -1585,4 +1625,54 @@ fn run_cost_partial_or_non_number_usage_is_carried_nowhere() {
     }
     let verdict = lens_stdout_with(&cost_record("\"num_turns\":5,", "6000", COST_VERDICT));
     assert!(verdict.contains("\"usage\":"), "6 値揃い＝判定 object に載る: {verdict}");
+}
+
+/// 偽 claude の `error_max_turns` の封筒（消費の 6 値は [`cost_record`] と同じ・`result` は `Some` のときだけ載る）。
+fn max_turns_record(result: Option<&str>) -> String {
+    let result = result.map_or_else(String::new, |text| format!("\"result\":{},", json_string(text)));
+    format!(
+        "{{\"type\":\"result\",\"subtype\":\"error_max_turns\",\"is_error\":false,\"num_turns\":5,\"duration_ms\":6000,{result}\
+         \"usage\":{{\"input_tokens\":11,\"cache_creation_input_tokens\":44,\
+         \"cache_read_input_tokens\":33,\"output_tokens\":22}},\"total_cost_usd\":0.5}}\n"
+    )
+}
+
+/// fake が写した argv に `--max-turns` が何本在るか（対がちょうど 1 つであることを測る）。
+fn turns_flags(dir: &Path) -> usize {
+    slurp(&dir.join("args")).lines().filter(|line| *line == "--max-turns").count()
+}
+
+/// (a) lens は rules 行 `lens.max_turns` の値を `--max-turns` の直後に置いた対をちょうど 1 つ、段に依らず（`--stage` 無し・`prelens`・
+/// `memo`）毎回渡す。値 7 と 30 の manifest で弁別し、`--rules` の無い lens は埋め込みの 30。base は渡さないので RED。
+#[test]
+fn lens_turns_passes_the_row_value_in_every_stage() {
+    let dir = tmp();
+    let claude = fake_claude(&dir, "{\"verdict\":\"PASS\",\"evidence\":\"turn の歯\"}\n", false, 0);
+    let contract = contract_in(&dir);
+    let material = dir.join("material");
+    fs::write(&material, "# memo zq-turns\n").expect("材料を書ける");
+    for value in [7_u64, 30] {
+        let rules = rules_with_turns_as_given(&dir, &format!("rules-turns-{value}.toml"), Some(turns_row(value)));
+        let path = rules.display().to_string();
+        let default = lens_args(&contract, &dir, &["--rules", &path], &claude);
+        let prelens = lens_args(&contract, &dir, &["--rules", &path, "--stage", "prelens"], &claude);
+        let memo = lens_args(&material, &dir, &["--stage", "memo", "--rules", &path], &claude);
+        for (stage, args) in [("既定", default), ("prelens", prelens), ("memo", memo)] {
+            let _ = fs::remove_file(dir.join("args"));
+            let out = run_bin_owned(&dir, &args, b"--- a\n+++ b\n");
+            assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{value} {stage}: {}", stderr_of(&out));
+            let argv = slurp(&dir.join("args"));
+            assert!(pair(&argv, "--max-turns", &value.to_string()), "{value} {stage}: 行の値が --max-turns の直後: {argv}");
+            assert_eq!(turns_flags(&dir), 1, "{value} {stage}: 対はちょうど 1 つ: {argv}");
+        }
+    }
+    for extra in [&[][..], &["--stage", "prelens"][..]] {
+        let _ = fs::remove_file(dir.join("args"));
+        let out = run_bin_owned(&dir, &lens_args(&contract, &dir, extra, &claude), b"--- a\n+++ b\n");
+        assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{extra:?}: {}", stderr_of(&out));
+        let argv = slurp(&dir.join("args"));
+        assert!(pair(&argv, "--max-turns", &LENS_MAX_TURNS.to_string()), "{extra:?}: --rules 無しは埋め込みの 30: {argv}");
+        assert_eq!(turns_flags(&dir), 1, "{extra:?}: 対はちょうど 1 つ: {argv}");
+    }
+    clean(&[&dir]);
 }
