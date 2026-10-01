@@ -114,7 +114,7 @@ pub(in crate::pipe) fn repo_flag(args: &[String]) -> Result<Option<PathBuf>, Str
 ///
 /// cwd から解くと、cargo-mutants の一時コピーのように `.git` が本物の gitdir を指す木の中で、呼び手の指さない
 /// repo に worktree と branch が切られる（2026-09-15 の実測）。
-pub(super) fn repo_of(args: &[String]) -> Result<PathBuf, String> {
+pub(in crate::pipe) fn repo_of(args: &[String]) -> Result<PathBuf, String> {
     repo_flag(args)?.ok_or(format!("{REPO_FLAG} が要る"))
 }
 
@@ -183,6 +183,8 @@ const ALLOWED_REPORT: &[cli_args::Allowed] = &[PLACE[0], PLACE[1], PLACE[2]];
 /// `pipe regate`（設計 pipeline.md §49）。
 const ALLOWED_REGATE: &[cli_args::Allowed] =
     &[PLACE[0], PLACE[1], PLACE[2], value("--run"), value(crate::pipe::regate::REASON_FLAG)];
+/// `pipe review`（設計 row-review.md §3・`--ref` は審査する設計の PR の head の commit・`--lens` は行ごとに撃つ審査の口）。
+const ALLOWED_REVIEW: &[cli_args::Allowed] = &[PLACE[0], PLACE[1], PLACE[2], value("--ref"), value("--lens")];
 /// `pipe follow`（設計 pipeline.md §52）。
 const ALLOWED_FOLLOW: &[cli_args::Allowed] = &[PLACE[0], PLACE[1], PLACE[2], value("--run")];
 
@@ -208,6 +210,7 @@ pub(super) const fn allowed_of(command: PipeCommand) -> &'static [Allowed] {
         PipeCommand::Follow => ALLOWED_FOLLOW,
         // `pipe anchor-sync`（設計 pipeline.md §57 形 5・flag は `pipe report` と同じ 3 つ）。
         PipeCommand::AnchorSync => ALLOWED_REPORT,
+        PipeCommand::Review => ALLOWED_REVIEW,
     }
 }
 

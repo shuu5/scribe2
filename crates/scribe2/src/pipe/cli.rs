@@ -26,7 +26,7 @@ mod show;
 mod state;
 mod step;
 
-pub(super) use args::{broken, flag, int_row, present, refused, state_dir_of};
+pub(super) use args::{broken, flag, int_row, present, refused, repo_of, state_dir_of};
 // 列（`pipe::dispatch`）は受付の判定を**記帳せずに**撃つ（設計 dispatcher.md §3・C2 の 1 実装）。
 // 可視性を上げるだけで本文は不変——2 本目の判定を作らないための再輸出である。
 pub(in crate::pipe) use intake::{crossings, generated, judge, Denial, Material, Materials};
@@ -37,7 +37,7 @@ pub(crate) use super::queue::window_now;
 pub(super) use state::{live, resolve, stage_of};
 // 走っている便の行の門（`hook::live_row`・設計 vessel-hook.md §15 形 2）が live な便の列を読む口（生死の判定は `live` 1 本）。
 pub(crate) use state::{live_runs, LiveRun, Tag};
-use args::{allowed_of, list_row, manifest_of, need, repo_flag, repo_of, REPO_FLAG};
+use args::{allowed_of, list_row, manifest_of, need, repo_flag, REPO_FLAG};
 use resume::{resume, review_then_launch};
 use show::show;
 use state::by_run;
@@ -105,6 +105,8 @@ pub enum PipeCommand {
     Follow,
     /// `pipe anchor-sync`。
     AnchorSync,
+    /// `pipe review`。
+    Review,
 }
 
 /// [`PipeCommand`] の全部（宣言順）。
@@ -127,6 +129,7 @@ pub const PIPE_COMMANDS: &[PipeCommand] = &[
     PipeCommand::Regate,
     PipeCommand::Follow,
     PipeCommand::AnchorSync,
+    PipeCommand::Review,
 ];
 
 impl PipeCommand {
@@ -151,6 +154,7 @@ impl PipeCommand {
             Self::Regate => "regate",
             Self::Follow => "follow",
             Self::AnchorSync => "anchor-sync",
+            Self::Review => "review",
         }
     }
 
@@ -163,7 +167,7 @@ impl PipeCommand {
 /// `pipe` の使い方。
 pub fn usage() -> String {
     format!(
-        "usage: {NAME} pipe <intake|preflight|spawn|approve|answer|gate|land|retire|run|show|resume|stop|report|dispatch> [--state-dir D] [--repo R（cwd は読まない＝--state-dir の無い周と便の写し面の無い周は要る）] [--rules PATH] [stop: --all [{REASON_FLAG} WORDS（live な便が 2 本以上の周は要る）]|--run ID] [dispatch: (1 周)|ls|first|hold|release BEAD|memo-lens MEMO] [run|resume: --drive] [land: --terminal-only|--detection-only] [--runner CMD] [flags]\nusage: {NAME} pipe land-window [--state-dir D] --repo R [{WINDOW_WAIT_FLAG} N]（pipeline 外の merge の前置: 開けば rc 0 の clear・待ちが切れれば rc 1 の busy）\nusage: {NAME} pipe regate --run ID {REASON_FLAG} WORDS [--state-dir D] [--repo R]（判定 FAIL の Gated を裁定の逐語つきで同じ worktree の Implemented へ 1 段戻す・最新の Gated につき 1 回）\nusage: {NAME} pipe follow --run ID [--state-dir D] [--repo R]（終端でない便の木だけを main の先端へ載せ替えて段を Implemented へ戻す・gate は撃たない・衝突は木を戻して断る）\nusage: {NAME} pipe anchor-sync --repo R [--state-dir D] [--rules PATH]（着地が揃えなかった anchor の index と作業の木のうち着地前の中身のままの path だけを main の先端へ戻して印を外す・利用者の編集は触らない）"
+        "usage: {NAME} pipe <intake|preflight|spawn|approve|answer|gate|land|retire|run|show|resume|stop|report|dispatch> [--state-dir D] [--repo R（cwd は読まない＝--state-dir の無い周と便の写し面の無い周は要る）] [--rules PATH] [stop: --all [{REASON_FLAG} WORDS（live な便が 2 本以上の周は要る）]|--run ID] [dispatch: (1 周)|ls|first|hold|release BEAD|memo-lens MEMO] [run|resume: --drive] [land: --terminal-only|--detection-only] [--runner CMD] [flags]\nusage: {NAME} pipe land-window [--state-dir D] --repo R [{WINDOW_WAIT_FLAG} N]（pipeline 外の merge の前置: 開けば rc 0 の clear・待ちが切れれば rc 1 の busy）\nusage: {NAME} pipe regate --run ID {REASON_FLAG} WORDS [--state-dir D] [--repo R]（判定 FAIL の Gated を裁定の逐語つきで同じ worktree の Implemented へ 1 段戻す・最新の Gated につき 1 回）\nusage: {NAME} pipe follow --run ID [--state-dir D] [--repo R]（終端でない便の木だけを main の先端へ載せ替えて段を Implemented へ戻す・gate は撃たない・衝突は木を戻して断る）\nusage: {NAME} pipe anchor-sync --repo R [--state-dir D] [--rules PATH]（着地が揃えなかった anchor の index と作業の木のうち着地前の中身のままの path だけを main の先端へ戻して印を外す・利用者の編集は触らない）\nusage: {NAME} pipe review --ref SHA --repo R --state-dir S --lens CMD [--rules PATH]（設計の PR の head の commit で変わった契約表の行ごとに機械の検査と lens を撃ち、行ごとの記録と ref の記録を置き場に書いて [ROW-REVIEW] の行を返す・pass は rc 0・fail と pending と stale は rc 1・組めない周は rc 2）"
     )
 }
 
@@ -469,6 +473,8 @@ fn subcommand(
             Ok(repo) => land::anchor_sync(&repo),
             Err(reason) => refused(reason),
         },
+        // 設計の PR の head の commit の変わった行ごとに審査して記録を書く（設計 row-review.md §3・merge の前の門が読む）。
+        Some(PipeCommand::Review) => super::review_ref::review(args, manifest, policy),
         None => Outcome::failed(RC_REFUSED, vec![usage()]),
     }
 }

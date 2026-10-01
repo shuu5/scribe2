@@ -19,6 +19,7 @@ use super::candidates::{is_blocking, pointer_of};
 use super::{Input, Turn, WaitReason, CLOSED, DASH};
 use crate::fleet::{Stage, State};
 use crate::ledger::form::{is_memo, is_question};
+use crate::rules::manifest::Manifest;
 use crate::seat::ledger::Issue;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -148,6 +149,17 @@ pub(in crate::pipe) enum Standing {
     Declared,
 }
 
+impl Standing {
+    /// 行の記録の `ancestors` に書く字面。
+    pub(in crate::pipe) fn word(self) -> &'static str {
+        match self {
+            Self::Landed => "landed",
+            Self::Tree => "tree",
+            Self::Declared => "declared",
+        }
+    }
+}
+
 /// 祖先 1 つの（行・状態・当てる層）と、行の祖先の列（依存の順）と basis の対（口 (G) の返り）。
 pub(in crate::pipe) type Ancestor = (String, Standing, Layer);
 pub(in crate::pipe) type Ancestry = (Vec<Ancestor>, Basis);
@@ -159,8 +171,10 @@ fn row_key(pointer: &Pointer) -> String {
 
 /// 行を鍵にした祖先の読み（1 周に 1 回の台帳と表の読みを借りる・設計 row-review.md §3 形 3）。
 struct Walk<'a> {
-    /// repo（表と base を読む）。
+    /// repo（Gated PASS の便の worktree を引く anchor）。
     repo: &'a Path,
+    /// 表の木（表の depends と便の無い祖先の契約の生成を HEAD から読む・事前審査は repo と同じ path を渡す）。
+    table: &'a Path,
     /// 置き場。
     state_dir: &'a Path,
     /// 母集団と到達。
@@ -173,14 +187,14 @@ struct Walk<'a> {
 
 impl<'a> Walk<'a> {
     /// 台帳と置き場の状態から読む。
-    fn new(repo: &'a Path, state_dir: &'a Path, issues: &'a [Issue], state: &State) -> Self {
+    fn new(repo: &'a Path, table: &'a Path, state_dir: &'a Path, issues: &'a [Issue], state: &State) -> Self {
         let mut beads: BTreeMap<String, Vec<&Issue>> = BTreeMap::new();
         for issue in issues.iter().filter(|issue| !is_memo(issue) && !is_question(issue)) {
             if let Some(pointer) = pointer_of(&issue.acceptance) {
                 beads.entry(row_key(&pointer)).or_default().push(issue);
             }
         }
-        Self { repo, state_dir, population: population(issues, state_dir, state), beads, docs: RefCell::default() }
+        Self { repo, table, state_dir, population: population(issues, state_dir, state), beads, docs: RefCell::default() }
     }
 
     /// 行を指す bead が全部 closed か（bead が 1 本以上在る行だけ）。
@@ -201,7 +215,7 @@ impl<'a> Walk<'a> {
         let pointer = parse_pointer(row).map_err(|err| format!("{row} は設計 pointer の形でない（{}）", err.reason()))?;
         let mut docs = self.docs.borrow_mut();
         let table = docs.entry(pointer.path.clone()).or_insert_with(|| {
-            let text = show_head(self.repo, &pointer.path).ok_or_else(|| format!("{} を base（HEAD）から読めない", pointer.path))?;
+            let text = show_head(self.table, &pointer.path).ok_or_else(|| format!("{} を base（HEAD）から読めない", pointer.path))?;
             read_rows(&pointer.path, &text).map_err(|errors| errors.iter().map(|error| error.reason()).collect::<Vec<String>>().join(" / "))
         });
         let rows = table.as_ref().map_err(Clone::clone)?;
@@ -280,7 +294,7 @@ impl<'a> Walk<'a> {
         }
         let found: Option<Vec<&Layer>> = ancestors.iter().map(|id| memo.get(id)?.as_ref().map(|(_, layer)| layer)).collect();
         let (materials, _) = overlay(base, &found?);
-        generated(self.repo, &pointer, &materials).ok().map(|(contract, _)| (Standing::Declared, Layer::Declared(contract.write_set)))
+        generated(self.table, &pointer, &materials).ok().map(|(contract, _)| (Standing::Declared, Layer::Declared(contract.write_set)))
     }
 
     /// 行の祖先ごとの（行・状態・当てる層）と basis（依存の順・祖先の層か契約の生成が決まらない周は理由）。
@@ -308,10 +322,12 @@ impl<'a> Walk<'a> {
 
 /// 祖先の層の口（設計 row-review.md §3 の口 (G)・事前審査の予想はこの口の上に載る）: 行 `row`（`<doc>#<行 id>`）の祖先ごとの
 /// （行・状態・当てる層）の列と basis。祖先は表の depends を推移でたどった同じ doc の行と、行を指す bead が在ればその台帳の blocks の
-/// 祖先。`base` は 1 周に 1 回読んだ材料で、口の中で読み直さない。表か bead の pointer を読めない周・祖先の層を決められない周は理由。
-pub(in crate::pipe) fn ancestry(repo: &Path, state_dir: &Path, issues: &[Issue], base: &Materials, row: &str) -> Result<Ancestry, String> {
+/// 祖先。`repo` は Gated PASS の便の worktree を引く anchor、`table` は表の depends と便の無い祖先の契約の生成が HEAD から読む木
+/// （事前審査は 2 つに同じ path を渡す）。`base` は 1 周に 1 回読んだ材料で、口の中で読み直さない。表か bead の pointer を読めない周・
+/// 祖先の層を決められない周は理由。
+pub(in crate::pipe) fn ancestry(trees: (&Path, &Path), state_dir: &Path, issues: &[Issue], base: &Materials, row: &str) -> Result<Ancestry, String> {
     let state = current(state_dir).map_err(|errors| errors.iter().map(ToString::to_string).collect::<Vec<String>>().join(" / "))?;
-    Walk::new(repo, state_dir, issues, &state).ancestry(base, row)
+    Walk::new(trees.0, trees.1, state_dir, issues, &state).ancestry(base, row)
 }
 
 /// 予想に重ねる層（着地済みの祖先は base に在るので重ねない）。
@@ -382,21 +398,22 @@ fn overlay(base: &Materials, layers: &[&Layer]) -> (Materials, Vec<String>) {
 }
 
 /// finding 1 つ（確からしさ・断りの名・在り処の字面・理由の 1 行・先撃ちの確定も同じ形・行 aa）。
-pub(super) struct Finding {
+pub(in crate::pipe) struct Finding {
     /// 確定 / 暫定 / 測れない。
-    pub(super) certainty: Certainty,
+    pub(in crate::pipe) certainty: Certainty,
     /// 断りの名（型の断りは `Refuse::label`・型を持たない断りは材料の名・先撃ちは lens の理由の型）。
-    pub(super) name: String,
+    pub(in crate::pipe) name: String,
     /// 在り処の字面（型を持たない断りは `-`・先撃ちは [`super::prelens::AT`]）。
-    pub(super) at: String,
+    pub(in crate::pipe) at: String,
     /// 理由の 1 行。
-    pub(super) reason: String,
+    pub(in crate::pipe) reason: String,
 }
 
 /// 待ち行の祖先の層（行の鍵の口 [`ancestry`]・依存の順）。祖先の層を決められない周は `None`。
 fn layers_of(ctx: &Ctx<'_, '_>, row: &Row) -> Option<Vec<Ancestor>> {
     let key = row_key(&row.pointer);
-    ancestry(ctx.input.repo, ctx.input.state_dir, ctx.issues, ctx.base, &key).ok().map(|(found, _)| found)
+    let repo = ctx.input.repo;
+    ancestry((repo, repo), ctx.input.state_dir, ctx.issues, ctx.base, &key).ok().map(|(found, _)| found)
 }
 
 /// 先撃ちの予想の口（行 aa・設計 §27 形 aa 1・層の読み手を 2 本にしない・C2）: 待ち行の祖先の層（依存の順）と、予想の base で
@@ -414,24 +431,30 @@ fn forecast(ctx: &Ctx<'_, '_>, bead: &str) -> Option<super::prelens::Forecast> {
 /// 判定と base の木の実走は撃たない。
 fn judged(ctx: &Ctx<'_, '_>, row: &Row) -> Option<Vec<Finding>> {
     let found = layers_of(ctx, row)?;
-    let (materials, moving) = overlay(ctx.base, &applied(&found));
-    let input = ctx.input;
-    let denials = match generated(input.repo, &row.pointer, &materials) {
-        Err(denial) => vec![denial],
-        Ok((contract, _)) => {
-            let material = Material {
-                repo: input.repo,
-                manifest: input.manifest,
-                contract: &contract,
-                state_dir: None,
-                bead: "",
-                materials: &materials,
-                early: None,
-            };
-            judge(&material).denials
+    Some(forecast_findings(ctx.input.repo, ctx.input.manifest, ctx.base, &row.pointer, &found).1)
+}
+
+/// 予想の上の機械の検査の口（設計 row-review.md §3 の口 (I)・事前審査の待ち行の判定はこの口の上に載る）: 着地でない祖先の層を
+/// `base` に重ねた予想の材料で [`generated`] を撃った契約とその file の字（生成が断った周は `None`）と、生成の断りか [`judge`]
+/// （置き場なし）の断りを、宣言で重ねた祖先の write-set の file を動く file にして [`discern`] で確定・暫定・測れないに分けた
+/// finding の列。`table` は契約の生成が HEAD から読む木。祖先を組めない周は呼び手の (G) が理由を返すのでここには無い。
+pub(in crate::pipe) fn forecast_findings(
+    table: &Path,
+    manifest: &Manifest,
+    base: &Materials,
+    pointer: &Pointer,
+    ancestors: &[Ancestor],
+) -> (Option<(Contract, String)>, Vec<Finding>) {
+    let (materials, moving) = overlay(base, &applied(ancestors));
+    let (made, denials) = match generated(table, pointer, &materials) {
+        Err(denial) => (None, vec![denial]),
+        Ok(made) => {
+            let material = Material { repo: table, manifest, contract: &made.0, state_dir: None, bead: "", materials: &materials, early: None };
+            let denials = judge(&material).denials;
+            (Some(made), denials)
         }
     };
-    Some(denials.iter().flat_map(|denial| findings_of(denial, &moving)).collect())
+    (made, denials.iter().flat_map(|denial| findings_of(denial, &moving)).collect())
 }
 
 /// 断り 1 つの finding（型の断りは在り処を弁別の 1 関数 [`discern`] に通す・型を持たない断りは測れない＝名を残す）。
@@ -538,7 +561,7 @@ pub(super) fn round(input: &Input<'_>, turn: &Turn, issues: &[Issue], base: Opti
     let (Some(base), Ok(state), Some(head)) = (base, current(input.state_dir), head_of(input.repo)) else {
         return;
     };
-    let walk = Walk::new(input.repo, input.state_dir, issues, &state);
+    let walk = Walk::new(input.repo, input.repo, input.state_dir, issues, &state);
     let population = &walk.population;
     let waiting: Vec<&str> = waiting_of(turn).into_iter().filter(|bead| population.rows.contains_key(*bead)).collect();
     let dir = dir_of(input.state_dir);
@@ -591,8 +614,15 @@ pub(super) fn lines(input: &Input<'_>, turn: &Turn) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{population, Path, State};
+    use super::{ancestry, forecast_findings, population, Layer, Path, Standing, State};
     use crate::ledger::form::{MEMO_LABEL, QUESTION_LABEL};
+    use crate::pipe::cli::Materials;
+    use crate::pipe::fixture::scratch;
+    use crate::pipe::refuse::Certainty;
+    use crate::pipe::row_review::Basis;
+    use crate::pipe::table::parse_pointer;
+    use crate::pipe::{git_line, git_ok};
+    use crate::rules::manifest::Manifest;
     use crate::seat::ledger::{Dep, Issue};
 
     /// open の bead（label と acceptance と blocks の依存先だけを与える）。
@@ -624,5 +654,90 @@ mod tests {
     #[test]
     fn precheck_intake_label_memo_is_not_a_row() {
         assert_eq!(rows_and_reach(MEMO_LABEL).0, ["c", "p"]);
+    }
+
+    /// 設計 doc の 1 行（`y` は `+src/fresh.rs` を宣言し、`x` はその file を素で持って表の depends で `y` に繋がる）。
+    fn toy_row(id: &str, write_set: &str, depends: &str) -> String {
+        let tail = format!("write-set = [\"{write_set}\"]\n{depends}verify = [\"git status\"]\nsize = \"S\"\ndone = \"d\"\n");
+        format!("[[contract]]\nid = \"{id}\"\ntitle = \"t\"\nreq = [\"FR4\"]\nsection = \"1\"\n{tail}")
+    }
+
+    /// toy repo（2 つの commit: 行の無い表の C1・行 x と y を足した表の C2）。返りは (anchor = C1 を detach した木, 表の木 = C2 の repo)。
+    fn toy_repo(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let root = scratch(name);
+        let (repo, anchor) = (root.join("repo"), root.join("anchor"));
+        assert!(std::fs::create_dir_all(repo.join("src")).is_ok() && std::fs::create_dir_all(repo.join("docs/design")).is_ok());
+        let put = |path: &str, body: &str| assert!(std::fs::write(repo.join(path), body).is_ok(), "{path}");
+        for args in [&["init", "-q", "-b", "main"][..], &["config", "user.name", "t"], &["config", "user.email", "t@example.invalid"]] {
+            assert!(git_ok(&repo, args), "{args:?}");
+        }
+        put("src/lib.rs", "// seed\n");
+        put("reqs.md", "# 要件\n\n## FR4\n");
+        put(".vessel.toml", "schema = 1\nallowed-commands = [\"git\"]\ncommon-verify = [\"git status\"]\nrequirements = \"reqs.md\"\n");
+        put("docs/design/toy.md", "# 設計: toy\n\n## 1. 節\n\n節の本文。\n");
+        for args in [&["add", "-A"][..], &["commit", "-q", "-m", "c1"]] {
+            assert!(git_ok(&repo, args), "{args:?}");
+        }
+        let c1 = git_line(&repo, &["rev-parse", "HEAD"]).unwrap_or_default();
+        let rows = [toy_row("y", "+src/fresh.rs", ""), toy_row("x", "src/fresh.rs", "depends = [\"y\"]\n")];
+        let doc = format!("# 設計: toy\n\n## 1. 節\n\n節の本文。\n\n<!-- contracts:begin -->\nschema = 1\n\n{}\n<!-- contracts:end -->\n", rows.join("\n"));
+        put("docs/design/toy.md", &doc);
+        for args in [&["add", "-A"][..], &["commit", "-q", "-m", "c2"]] {
+            assert!(git_ok(&repo, args), "{args:?}");
+        }
+        assert!(git_ok(&repo, &["worktree", "add", "--detach", &anchor.display().to_string(), &c1]), "anchor の木");
+        (anchor, repo)
+    }
+
+    /// 組んだ材料（表の木から 1 回読む）。
+    fn toy_base(table: &Path, manifest: &Manifest) -> Materials {
+        let Ok(found) = Materials::of(table, manifest, "bd") else {
+            panic!("表の木から材料を読める");
+        };
+        found
+    }
+
+    /// (q) 口 (G): anchor（C1）と表の木（C2）を渡すと、C2 だけに在る行 x の祖先 y を declared・basis forecast で返す。表の木にも C1 を
+    /// 渡すと行 x が表に無いので組めない理由を返す（表の木の引数を無視して anchor から読むと後者が通ってしまう）。
+    #[test]
+    fn precheck_row_mouths_ancestry_reads_the_table_from_the_table_tree() {
+        let Ok(manifest) = Manifest::embedded() else {
+            panic!("埋め込み manifest を読める");
+        };
+        let (anchor, table) = toy_repo("mouths-g");
+        let (base, state) = (toy_base(&table, &manifest), scratch("mouths-g-state"));
+        let found = ancestry((&anchor, &table), &state, &[], &base, "docs/design/toy.md#x");
+        let Ok((layers, basis)) = found else {
+            panic!("表の木に行 x と y が在る: {:?}", found.err());
+        };
+        assert!(basis == Basis::Forecast, "宣言の祖先を持つ行は forecast");
+        let [(id, standing, Layer::Declared(write_set))] = layers.as_slice() else {
+            panic!("祖先は y の 1 つで宣言の層");
+        };
+        assert_eq!((id.as_str(), write_set.as_slice()), ("docs/design/toy.md#y", ["+src/fresh.rs".to_owned()].as_slice()));
+        assert!(*standing == Standing::Declared, "未着地の祖先は declared");
+        let blind = ancestry((&anchor, &anchor), &state, &[], &base, "docs/design/toy.md#x");
+        assert!(blind.as_ref().is_err_and(|reason| reason.contains("行 x が無い")), "表の木に C1 を渡すと組めない: {:?}", blind.err());
+    }
+
+    /// (q) 口 (I): (G) の祖先の列を渡すと行 x の finding に確定が無く、空の祖先の列を渡すと確定の write-set-item-unresolved を返す。
+    #[test]
+    fn precheck_row_mouths_findings_are_firm_only_without_the_ancestors_layers() {
+        let Ok(manifest) = Manifest::embedded() else {
+            panic!("埋め込み manifest を読める");
+        };
+        let (anchor, table) = toy_repo("mouths-i");
+        let (base, state) = (toy_base(&table, &manifest), scratch("mouths-i-state"));
+        let Ok(pointer) = parse_pointer("docs/design/toy.md#x") else {
+            panic!("設計 pointer");
+        };
+        let Ok((layers, _)) = ancestry((&anchor, &table), &state, &[], &base, "docs/design/toy.md#x") else {
+            panic!("祖先を組める");
+        };
+        let (made, with) = forecast_findings(&table, &manifest, &base, &pointer, &layers);
+        assert!(made.is_some(), "祖先の層を重ねた予想の材料で契約を生成できる");
+        assert!(with.iter().all(|found| found.certainty != Certainty::Firm), "祖先を渡すと確定が無い: {:?}", with.iter().map(|found| &found.name).collect::<Vec<_>>());
+        let (_, without) = forecast_findings(&table, &manifest, &base, &pointer, &[]);
+        assert!(without.iter().any(|found| found.certainty == Certainty::Firm && found.name == "write-set-item-unresolved"), "空の祖先は確定");
     }
 }

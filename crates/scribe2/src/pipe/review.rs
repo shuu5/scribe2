@@ -63,6 +63,7 @@ use crate::cli_outcome::{Outcome, RC_BROKEN};
 use crate::fleet::json_lite::{self, Value};
 use crate::fleet::store::LockPolicy;
 use crate::fleet::{cli::now_utc, Cost, CostSource, EventKind, Stage, Usage, SCHEMA};
+use crate::invocation::Invocation;
 use crate::polarity::{OnFailure, Polarity, Timing};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -651,6 +652,53 @@ fn tip(found: Finding, text: &str, items: usize) -> Finding {
     }
 }
 
+/// 行の審査の lens の判定 1 件（[`read_lens`] の返り）。
+pub(in crate::pipe) struct Lensed {
+    /// 3 値。
+    pub(in crate::pipe) verdict: Verdict,
+    /// 理由の型（PASS は `None`）。
+    pub(in crate::pipe) kind: Option<FindingKind>,
+    /// 根拠の 1 行。
+    pub(in crate::pipe) evidence: String,
+    /// lens の消費（rc 0 で判定 object が運んだ周だけ）。
+    pub(in crate::pipe) usage: Option<Usage>,
+}
+
+/// 行の審査が撃った lens の判定を読む口（設計 row-review.md §3 形 5・Reviewed と同じ読みの 2 本 [`read_outcome`]（done の対応の表の倒しを含む）→
+/// [`narrow`]（約束の行の kind の絞り）をこの 1 本で通す・私有の 3 本は保つ）。`done` は契約の done の字と約束の行を持つかの対
+/// （約束の行を持つ行の done は項目に割らない・§64 形 5）。箱の scope は読む前に片付ける。
+pub(in crate::pipe) fn read_lens(
+    waited: std::io::Result<std::process::Output>,
+    confinement: &confine::Confinement,
+    done: (&str, bool),
+) -> Lensed {
+    let _ = confine::release_scope(confinement);
+    let usage = waited.as_ref().ok().filter(|out| out.status.success()).and_then(|out| lens_usage(&String::from_utf8_lossy(&out.stdout)));
+    let (text, promised) = done;
+    let items = if promised { 0 } else { items::done_items(text).len() };
+    let found = narrow(lens_outcome(waited, confinement, items), promised);
+    Lensed { verdict: found.verdict, kind: found.kind, evidence: found.evidence, usage }
+}
+
+/// lens の版の 1 行を出させる flag（lens の口の閉じた flag の列の 9 語目・値を取らない・設計 row-review.md §5）。
+const VERSION_FLAG: &str = "--print-version";
+
+/// lens の版を読む口（設計 row-review.md §3 の口 (J)・行の審査と Reviewed の使い回しが同じ 1 本を呼ぶ）: 穴を埋めた lens の cmd の行の
+/// 末尾に [`VERSION_FLAG`] を付けて箱の外で 1 回撃ち、stdout の 1 行目を返す。撃てない・rc が 0 でない・1 行目が空の周は理由。
+pub(in crate::pipe) fn lens_version(line: &str) -> Result<String, String> {
+    let mut command = Invocation::new("sh");
+    let out = command.args(["-c", &format!("{line} {VERSION_FLAG}")]).stdin(Stdio::null()).stderr(Stdio::null()).output();
+    let out = out.map_err(|err| format!("lens の版を撃てない: {err}"))?;
+    if !out.status.success() {
+        return Err(format!("lens の版が rc {} で終わった", out.status.code().unwrap_or(-1)));
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    match text.lines().next().map(str::trim) {
+        Some(first) if !first.is_empty() => Ok(first.to_owned()),
+        _ => Err("lens の版の 1 行目が空".to_owned()),
+    }
+}
+
 /// 先撃ちの lens の判定（設計 dispatcher.md §27 形 aa 2・Reviewed の段と同じ読み手 [`read_outcome`]）: verdict・理由の型
 /// （PASS は `None`）・根拠の 1 行。項目の数は持たない（0 を渡す・§64 の限界）。
 pub(in crate::pipe) fn outcome_of(rc: Option<i32>, text: &str) -> (Verdict, Option<FindingKind>, String) {
@@ -757,7 +805,7 @@ mod tests {
     // flip-check: moved s2-07l.541
     // flip-check: moved s2-07l.545
     use super::{
-        detail_of, judgement_of, lens_cmd, narrow, parse_lens, read_detail, render_promises, requirement_md,
+        detail_of, judgement_of, lens_cmd, lens_version, narrow, parse_lens, read_detail, render_promises, requirement_md,
         requirement_row, requirement_yaml, requirements_text, section_text, split_at, strip_tags, unaddressed, verdict_of,
         write_review, Finding, FindingKind, Found, Judgement, ReviewCheck, Rework, FINDING_KINDS,
     };
@@ -1213,6 +1261,32 @@ mod tests {
         assert_eq!(fallen, 4, "3 語の外は 7 語のうち 4 語");
         let passed = Finding { verdict: Verdict::Pass, evidence: "e".to_owned(), kind: None, at: None };
         assert_eq!(narrow(passed.clone(), true), passed, "PASS は不変");
+    }
+
+    /// (J) 1 行を返す偽 cmd は `Ok` でその 1 行（行の末尾に版の flag が付くので、偽 cmd は `#` で flag を捨てる）。2 行目以降は読まない。
+    #[test]
+    fn review_lens_version_returns_the_first_stdout_line() {
+        assert_eq!(lens_version("printf 'lens-version model=x\\nnext\\n' #"), Ok("lens-version model=x".to_owned()));
+    }
+
+    /// (J) rc 1 の偽 cmd は理由（rc を名指す）で、stdout に 1 行目が在っても版を返さない。
+    #[test]
+    fn review_lens_version_names_a_failed_cmd() {
+        let Err(reason) = lens_version("printf 'lens-version x\\n'; exit 1 #") else {
+            panic!("rc 1 の cmd は版を返さない");
+        };
+        assert!(reason.contains("rc 1"), "{reason}");
+    }
+
+    /// (J) 1 行目が空の偽 cmd（空行から始まる・何も出さない）は理由で、`Ok("")` を返さない。
+    #[test]
+    fn review_lens_version_refuses_an_empty_first_line() {
+        for cmd in ["printf '\\nlens-version x\\n' #", "true #"] {
+            let Err(reason) = lens_version(cmd) else {
+                panic!("{cmd}: 1 行目が空の cmd は版を返さない");
+            };
+            assert!(reason.contains("1 行目が空"), "{cmd}: {reason}");
+        }
     }
 
     /// 書けない周は本 file が生まれず書きかけも残さない（親 dir が無い）。
