@@ -26,8 +26,8 @@ pub use crate_roots::{crate_of, fixed_roots, with_fixed, CrateFile, RootsAtHead}
 pub use entrance_flip::{measure_named, EntranceFlip};
 use entrance_flip::{entrance_of, KEY as ENTRANCE_KEY};
 pub use optional_keys::{close_check, close_check_at_sha, requirements_at_sha, floor_check_at, question_route, table_facts, table_facts_named, terminal_facts, CloseCheck, QuestionRoute, TableFacts, TerminalFacts};
-pub use optional_keys::{ruling_keys_at, RulingKeys, CI_SHA_HOLE, DEFAULT_CI_CMD, DEFAULT_REQUIREMENTS};
-use optional_keys::{ci_cmd_of, close_check_of, floor_check_of, question_route_of, read_only_keys_of, remote_of, requirements_of, ruling_check_of, ruling_fixtures_of, DECLARED_KEYS, OPTIONAL_KEYS, RULING_FIXTURES_KEY};
+pub use optional_keys::{row_review_at, ruling_keys_at, RulingKeys, CI_SHA_HOLE, DEFAULT_CI_CMD, DEFAULT_REQUIREMENTS};
+use optional_keys::{ci_cmd_of, close_check_of, floor_check_of, question_route_of, read_only_keys_of, remote_of, requirements_of, row_review_of, ruling_check_of, ruling_fixtures_of, DECLARED_KEYS, OPTIONAL_KEYS, RULING_FIXTURES_KEY};
 pub use write_set::{headroom_shortfalls, headroom_shortfalls_under, line_count, read_write_set, Caps, FileLines, Headroom, NewFilePolicy, WriteSetItem, CORE};
 pub(crate) use write_set::is_under;
 
@@ -315,6 +315,8 @@ pub struct Declared {
     ruling_check: Option<bool>,
     /// 引用の見本の一覧（任意 key `ruling-fixtures`・無ければ `None`・空の一覧は `Some` の空）。
     ruling_fixtures: Option<Vec<String>>,
+    /// merge の門の行の審査の判定に掛かるか（任意 key `row-review`・無ければ `None`＝false と同じ・設計 row-review.md §4）。
+    row_review: Option<bool>,
 }
 
 /// 出所つきの宣言。**[`Effective`] はこれを消費してしか作れない**（C10）。
@@ -553,6 +555,7 @@ impl Declared {
         let crate_roots = crate_roots::declared_of(&found, &mut errors);
         let ruling_check = ruling_check_of(&found, &mut errors);
         let ruling_fixtures = ruling_fixtures_of(&found, &mut errors);
+        let row_review = row_review_of(&found, &mut errors);
         read_only_keys_of(&found, &mut errors);
         if schema != Some(SCHEMA_VERSION) {
             errors.push(DeclError::new(
@@ -579,6 +582,7 @@ impl Declared {
                 crate_roots,
                 ruling_check,
                 ruling_fixtures,
+                row_review,
             })
         } else {
             Err(errors)
@@ -1242,7 +1246,7 @@ mod tests {
     }
 
     /// 先頭語 `cargo` の行を持たない宣言（`sh` / `git` だけの toy repo）は分類だけで断らない（§7「Rust 固有の検査を
-    /// 内蔵しない」のまま）。宣言 file の schema は不変（版 1・key の列は 10 本に §54 と vessel-hook.md §20 と ledger-form.md §16 と dispatcher.md §34 と contract-source.md §62 の任意 key 各 1 本と dispatcher.md §36 の任意 key 2 本と contract-source.md §67 の任意 key 3 本を足した 20 本）。
+    /// 内蔵しない」のまま）。宣言 file の schema は不変（版 1・key の列は 10 本に §54 と vessel-hook.md §20 と ledger-form.md §16 と dispatcher.md §34 と contract-source.md §62 の任意 key 各 1 本と dispatcher.md §36 の任意 key 2 本と contract-source.md §67 の任意 key 3 本と row-review.md §4 の任意 key 1 本を足した 21 本）。
     // flip-check: retroactive s2-07l.738.37.3
     #[test]
     fn declaration_kind_passes_declarations_without_cargo_and_keeps_the_schema() {
@@ -1272,8 +1276,9 @@ mod tests {
                 "teeth-check",
                 "index-scip",
                 "index-roles",
+                "row-review",
             ],
-            "宣言 file の key の列は動かない（末尾の任意 key は §54・ADR-0054 と vessel-hook.md §20・ADR-0084 と ledger-form.md §16・ADR-0097 と dispatcher.md §34 と contract-source.md §62 と dispatcher.md §36・ADR-0083 と contract-source.md §67 の 3 本）"
+            "宣言 file の key の列は動かない（末尾の任意 key は §54・ADR-0054 と vessel-hook.md §20・ADR-0084 と ledger-form.md §16・ADR-0097 と dispatcher.md §34 と contract-source.md §62 と dispatcher.md §36・ADR-0083 と contract-source.md §67 の 3 本と row-review.md §4 の 1 本）"
         );
     }
 

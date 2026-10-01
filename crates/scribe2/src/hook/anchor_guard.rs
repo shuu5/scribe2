@@ -35,6 +35,8 @@ const COMMIT: &str = "commit";
 const GH: &str = "gh";
 /// `gh pr merge` の 2 語。
 const PR_MERGE: [&str; 2] = ["pr", "merge"];
+/// help の表示の flag（2 語）。
+const HELP: [&str; 2] = ["--help", "-h"];
 /// 記録の `anchor-deny` の後ろに置く `gh pr merge` の語。
 const WHAT_MERGE: &str = "gh-pr-merge";
 /// 窓を撃つ checkout の HEAD が指す ref。
@@ -88,14 +90,18 @@ pub(crate) fn targets_of(command: &str, cwd: &Path, root: &Path) -> Vec<Target> 
     git.chain(gh).collect()
 }
 
-/// gh の segment が `pr merge` か（`-` の語を除いた最初の 2 語・merge の門も同じ 1 本で見分ける・vessel-hook.md §21 形 1）。
+/// gh の segment が `pr merge` か（`-` の語を除いた最初の 2 語・anchor の門・merge の門・古さの印の 3 つの呼び手が同じ 1 本で
+/// 見分ける・vessel-hook.md §21 形 1）。help の表示（`--help` か `-h` の語で、直前の語が `-` で始まらない）は merge と読まない
+/// （row-review.md §4）。直前が flag の周は値かもしれない（`--body --help`）ので merge と読む。
 pub(crate) fn is_pr_merge(words: &[String]) -> bool {
     let lead = words.iter().take_while(|word| is_assignment(word)).count();
     let Some((GH, rest)) = verb_of(words.get(lead..).unwrap_or_default()) else {
         return false;
     };
     let head: Vec<&str> = rest.iter().map(String::as_str).filter(|word| !word.starts_with('-')).take(2).collect();
-    head == PR_MERGE
+    let before = std::iter::once(GH).chain(rest.iter().map(String::as_str));
+    let help = rest.iter().take_while(|word| *word != "--").zip(before).any(|(word, prev)| HELP.contains(&word.as_str()) && !prev.starts_with('-'));
+    head == PR_MERGE && !help
 }
 
 /// 門の入口（Bash の command 行・payload の `cwd`・`--project` の root・hook の置き場）。当たる segment が無ければ git を

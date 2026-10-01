@@ -9,7 +9,10 @@ use super::host_guard::publish::{flag_of, is_loose_path, is_stdin};
 use super::host_guard::verb_of;
 use super::ledger_guard::{is_assignment, segments};
 use crate::name::NAME;
+use crate::pipe::declaration::{row_review_at, DeclError};
 use crate::pipe::land::{source_key, RUN_TRAILER};
+use crate::pipe::row_review::{read_ref, RefResult};
+use crate::pipe::{git_bytes, git_ok};
 use crate::polarity::{OnFailure, Polarity, Timing};
 use std::path::Path;
 
@@ -33,6 +36,10 @@ const BUNDLED: [&str; 3] = ["-s", "-m", "-d"];
 const FALSE_FORMS: [&str; 6] = ["0", "f", "F", "false", "FALSE", "False"];
 /// ここから後ろの語を読まない区切り。
 const END: &str = "--";
+/// PR の head の commit を固定する flag（gh の `--match-head-commit SHA`）。
+const HEAD_PIN: &str = "--match-head-commit";
+/// 契約表の file の動きを測る ref（anchor の `origin/main`）。
+const MAIN: &str = "origin/main";
 
 /// 本文の file の読み手（歯が差し替える・読めない理由は 1 語）。
 type Read<'a> = &'a dyn Fn(&Path) -> Result<String, &'static str>;
@@ -46,7 +53,8 @@ pub enum MergeDecision {
     Deny(Reason, String),
 }
 
-/// 断りの理由（閉じた 5 語・宣言順＝判定の順・§21 形 6）。
+/// 断りの理由（閉じた 11 語・宣言順＝判定の順・§21 形 6 と row-review.md §4）。先の 5 語は trailer の判定・後ろの 6 語は
+/// 行の審査の判定（vessel 宣言の任意 key `row-review`）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Reason {
     /// rebase の方式（本文を渡せない）。
@@ -59,10 +67,34 @@ pub enum Reason {
     BadSource,
     /// run の行も形の内の Source の行も無い。
     NoTrailer,
+    /// `--match-head-commit` が 40 桁の 16 進でない（審査した commit と merge される commit が同じと言えない）。
+    NoHeadPin,
+    /// ref の記録が無い・読めない・宣言が読めない・head の commit が local に無い。
+    RowReviewMissing,
+    /// ref の記録の撃ち中の印の持ち主が生きている。
+    RowReviewPending,
+    /// ref の記録の撃ち中の印の持ち主が死んで撃ち終えていない。
+    RowReviewStale,
+    /// ref の結果が fail。
+    RowReviewFailed,
+    /// 審査の後に契約表の file が main で動いた。
+    RowReviewMoved,
 }
 
 /// [`Reason`] の全 variant（宣言順）。
-pub const REASONS: &[Reason] = &[Reason::Rebase, Reason::NoBody, Reason::BodyUnreadable, Reason::BadSource, Reason::NoTrailer];
+pub const REASONS: &[Reason] = &[
+    Reason::Rebase,
+    Reason::NoBody,
+    Reason::BodyUnreadable,
+    Reason::BadSource,
+    Reason::NoTrailer,
+    Reason::NoHeadPin,
+    Reason::RowReviewMissing,
+    Reason::RowReviewPending,
+    Reason::RowReviewStale,
+    Reason::RowReviewFailed,
+    Reason::RowReviewMoved,
+];
 
 impl Reason {
     /// 記録と 1 行の `reason=` の語。
@@ -73,6 +105,12 @@ impl Reason {
             Self::BodyUnreadable => "body-unreadable",
             Self::BadSource => "bad-source",
             Self::NoTrailer => "no-trailer",
+            Self::NoHeadPin => "no-head-pin",
+            Self::RowReviewMissing => "row-review-missing",
+            Self::RowReviewPending => "row-review-pending",
+            Self::RowReviewStale => "row-review-stale",
+            Self::RowReviewFailed => "row-review-failed",
+            Self::RowReviewMoved => "row-review-moved",
         }
     }
 }
@@ -241,9 +279,114 @@ fn judge(command: &str, cwd: &Path, read: Read) -> MergeDecision {
     MergeDecision::Pass
 }
 
-/// 門の入口（Bash の command 行・payload の `cwd`）。当たる segment が無ければ何も読まずに通す。
-pub fn decide(command: &str, cwd: &Path) -> MergeDecision {
-    judge(command, cwd, &read_file)
+/// segment の `--match-head-commit` の値（`--` から後ろは読まない・複数なら最後・無ければ `None`）。
+fn pin_of(words: &[String]) -> Option<String> {
+    let lead = words.iter().take_while(|word| is_assignment(word)).count();
+    let rest = verb_of(words.get(lead..).unwrap_or_default()).map(|(_, rest)| rest).unwrap_or_default();
+    let (mut pin, mut at) = (None, 0_usize);
+    while let Some(word) = rest.get(at) {
+        at = at.saturating_add(1);
+        if word == END {
+            break;
+        }
+        let Some((_, inline)) = flag_of(word).filter(|(name, _)| *name == HEAD_PIN) else {
+            continue;
+        };
+        pin = Some(inline.map_or_else(|| rest.get(at).cloned().unwrap_or_default(), str::to_owned));
+        at = at.saturating_add(usize::from(inline.is_none()));
+    }
+    pin
+}
+
+/// 40 桁の 16 進か（head を固定した値）。
+fn is_pin(text: &str) -> bool {
+    text.len() == 40 && text.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+/// 行の審査の断り 1 行（理由・欠けの名指し・次の一手の literal・改行を持たない）。
+fn row_line(reason: Reason, why: &str, next: &str) -> String {
+    let flat = why.replace(['\n', '\r'], " ");
+    format!("{NAME}: deny merge-gate reason={} {flat}。次の一手: {next}", reason.as_str())
+}
+
+/// 宣言が読めない周の断り（読めない commit の sha と不備の 1 つ目を名指す・(ii)）。
+fn unreadable_declaration(rev: &str, root: &Path, errors: &[DeclError]) -> (Reason, String) {
+    let commit = git_bytes(root, &["rev-parse", "--verify", "--quiet", &format!("{rev}^{{commit}}")])
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .map_or_else(|| rev.to_owned(), |sha| sha.trim().to_owned());
+    let first = errors.first().map_or_else(String::new, |error| format!("line={} reason={}", error.line, error.reason));
+    let why = format!("vessel 宣言が読めない commit={commit}（{rev}） {first} — 宣言を直した commit を fetch して撃ち直す");
+    (Reason::RowReviewMissing, row_line(Reason::RowReviewMissing, &why, "git fetch origin"))
+}
+
+/// 行の審査の次の一手（`pipe review --ref <sha>` の argv）。
+fn review_argv(sha: &str, root: &Path, state_dir: &Path) -> String {
+    format!("{NAME} pipe review --ref {sha} --repo {} --state-dir {} --lens <lens の cmd>", root.display(), state_dir.display())
+}
+
+/// (i) ref の記録の読み（口 (A) の 1 本）を断りの語へ写す。pass の記録は、契約表の file が記録の merge-base と今の
+/// `origin/main` の間で動いていれば row-review-moved。
+fn record_refusal(sha: &str, root: &Path, state_dir: &Path) -> Option<(Reason, String)> {
+    let argv = review_argv(sha, root, state_dir);
+    let (reason, why) = match read_ref(state_dir, sha) {
+        RefResult::Missing => (Reason::RowReviewMissing, format!("{sha} の行の審査の記録が無い（読めない記録を含む）")),
+        RefResult::Pending => (Reason::RowReviewPending, format!("{sha} の行の審査は撃ち中（先の口の完了を待つ）")),
+        RefResult::Stale => (Reason::RowReviewStale, format!("{sha} の行の審査は撃ち終えずに止まった")),
+        RefResult::Fail => (Reason::RowReviewFailed, format!("{sha} の行の審査は fail（落ちた行を直して撃ち直す）")),
+        RefResult::Pass { base, tables } => {
+            let mut args = vec!["diff", "--quiet", base.as_str(), MAIN, "--"];
+            args.extend(tables.iter().map(String::as_str));
+            if tables.is_empty() || git_ok(root, &args) {
+                return None;
+            }
+            (Reason::RowReviewMoved, format!("{sha} の審査の後に契約表の file が {MAIN} で動いた（merge-base {base}）"))
+        }
+    };
+    Some((reason, row_line(reason, &why, &argv)))
+}
+
+/// 行の審査の判定（§4・trailer の判定の後・当たる segment ごと）: 読む宣言は anchor の HEAD と local に在る PR の head の commit。
+/// (ii) 読めない宣言 → (iii) local に無い head → (i) 当たる repo の 6 語の順に見て最初に当たった 1 つを断る。
+fn row_review_refusal(words: &[String], root: &Path, state_dir: &Path, anchor: &Result<bool, Vec<DeclError>>) -> Option<(Reason, String)> {
+    if let Err(errors) = anchor {
+        return Some(unreadable_declaration("HEAD", root, errors));
+    }
+    let pin = pin_of(words).filter(|value| is_pin(value));
+    let local = pin.as_deref().filter(|sha| git_ok(root, &["cat-file", "-e", &format!("{sha}^{{commit}}")]));
+    let head = local.map(|sha| row_review_at(root, sha));
+    if let (Some(sha), Some(Err(errors))) = (local, &head) {
+        return Some(unreadable_declaration(sha, root, errors));
+    }
+    let named = *anchor == Ok(true);
+    if let (Some(sha), None, true) = (pin.as_deref(), local, named) {
+        let why = format!("head の commit が local に無い sha={sha} — 宣言を読めず、行の審査の記録も引けない");
+        return Some((Reason::RowReviewMissing, row_line(Reason::RowReviewMissing, &why, "git fetch origin")));
+    }
+    if !(named || head == Some(Ok(true))) {
+        return None;
+    }
+    let Some(sha) = pin else {
+        let why = "--match-head-commit <40 桁の sha> が無い（短い sha・展開の字を含む）— head を固定しない merge は、審査した commit と merge される commit が同じと言えない";
+        return Some((Reason::NoHeadPin, row_line(Reason::NoHeadPin, why, &review_argv("<sha>", root, state_dir))));
+    };
+    record_refusal(&sha, root, state_dir)
+}
+
+/// 門の入口（Bash の command 行・payload の `cwd`・anchor の root・hook の置き場）。当たる segment が無ければ何も読まずに通す。
+/// 先に trailer の判定（[`judge`]）を撃ち、通った周だけ行の審査の判定を撃つ。
+pub fn decide(command: &str, cwd: &Path, root: &Path, state_dir: &Path) -> MergeDecision {
+    let trailer = judge(command, cwd, &read_file);
+    if trailer != MergeDecision::Pass {
+        return trailer;
+    }
+    let anchor = std::cell::OnceCell::new();
+    for words in segments(command).iter().filter(|words| is_pr_merge(words)) {
+        let declared = anchor.get_or_init(|| row_review_at(root, "HEAD"));
+        if let Some((reason, line)) = row_review_refusal(words, root, state_dir, declared) {
+            return MergeDecision::Deny(reason, line);
+        }
+    }
+    MergeDecision::Pass
 }
 
 #[cfg(test)]
@@ -359,7 +502,7 @@ mod tests {
     }
 
     /// (e) 1 行は改行を持たず、器の名乗りと理由で始まり、key の字・`run: `・次の一手の literal を持ち、bad-source は形の外の
-    /// Source の行を全部持つ。理由の const slice は 5 語の宣言順。
+    /// Source の行を全部持つ。理由の const slice は 5 語の後ろに行の審査の 6 語を足した宣言順。
     #[test]
     fn hook_merge_trailer_deny_line_names_the_gap_and_the_next_step() {
         let key = source_key();
@@ -380,7 +523,9 @@ mod tests {
             assert_eq!(named.iter().all(|found| line.contains(found.as_str())), want == Reason::BadSource, "{line}");
         }
         let words: Vec<&str> = REASONS.iter().map(|reason| reason.as_str()).collect();
-        assert_eq!(words, ["rebase", "no-body", "body-unreadable", "bad-source", "no-trailer"]);
+        let want = ["rebase", "no-body", "body-unreadable", "bad-source", "no-trailer"];
+        let rows = ["no-head-pin", "row-review-missing", "row-review-pending", "row-review-stale", "row-review-failed", "row-review-moved"];
+        assert_eq!(words, [want.as_slice(), rows.as_slice()].concat());
         assert!(is_declaration_order(REASONS, |reason| reason as usize), "宣言順");
     }
 }

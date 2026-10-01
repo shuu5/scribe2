@@ -31,6 +31,7 @@ pub(super) const DECLARED_KEYS: &[&str] = &[
     TEETH_CHECK_KEY,
     INDEX_SCIP_KEY,
     INDEX_ROLES_KEY,
+    ROW_REVIEW_KEY,
 ];
 
 /// **歯の検査を撃つか**の key（任意・設計 contract-source.md §67）。真偽だけを読んで値は捨てる。
@@ -41,6 +42,9 @@ const INDEX_SCIP_KEY: &str = "index-scip";
 
 /// **索引の役割の列**の key（任意・設計 contract-source.md §67）。文字列の配列だけを読んで値は捨てる。
 const INDEX_ROLES_KEY: &str = "index-roles";
+
+/// **merge の門の行の審査の判定に掛かるか**の key（任意・設計 row-review.md §4・FR101）。値は真偽だけ（書かない宣言は false と同じ）。
+const ROW_REVIEW_KEY: &str = "row-review";
 
 /// 読んで値を捨てる 3 key（`teeth-check` は真偽・`index-scip` と `index-roles` は文字列の配列）の形だけを確かめる
 /// （`Declared` にも便の写しにも field を持たない）。型違いは key と行番号を名指す不備。
@@ -118,6 +122,7 @@ pub(super) const OPTIONAL_KEYS: &[&str] = &[
     TEETH_CHECK_KEY,
     INDEX_SCIP_KEY,
     INDEX_ROLES_KEY,
+    ROW_REVIEW_KEY,
 ];
 
 /// 床の検査の 1 行（任意）。前後の空白を除いて空でない文字列だけを受ける（列・整数・真偽・空・空白だけは key と行番号を名指す不備）。
@@ -162,6 +167,21 @@ fn bool_key(found: &[(String, Raw, u64)], key: &str, errors: &mut Vec<DeclError>
 /// 裁定 id の引用の実在を確かめるか（任意・[`bool_key`] と同じ読み）。
 pub(super) fn ruling_check_of(found: &[(String, Raw, u64)], errors: &mut Vec<DeclError>) -> Option<bool> {
     bool_key(found, RULING_CHECK_KEY, errors)
+}
+
+/// 行の審査の key（任意・[`bool_key`] と同じ読み）。
+pub(super) fn row_review_of(found: &[(String, Raw, u64)], errors: &mut Vec<DeclError>) -> Option<bool> {
+    bool_key(found, ROW_REVIEW_KEY, errors)
+}
+
+/// 名指した rev の tree の宣言の `row-review`（`git show <rev>:.vessel.toml`・作業ツリーは読まない・merge の門が anchor の HEAD と
+/// PR の head の commit に使う）。宣言 file が無い周と key の無い宣言は false、在って読めない周は `Err`（key の行の不備を含む）。
+pub fn row_review_at(repo: &Path, rev: &str) -> Result<bool, Vec<DeclError>> {
+    let spec = format!("{rev}:{}", super::DECL_FILE);
+    match super::super::git_bytes(repo, &["show", &spec]) {
+        None => Ok(false),
+        Some(bytes) => Declared::parse(&String::from_utf8_lossy(&bytes)).map(|declared| declared.row_review == Some(true)),
+    }
 }
 
 /// 引用の見本の一覧（任意）。文字列の一覧だけを受ける（文字列・整数・真偽は key と行番号を名指す不備・要素の型違いは値の読みが積む）。
@@ -434,6 +454,17 @@ mod tests {
         }
         let errors = Declared::parse(&with("close-check = true\nclose-check = false\n")).expect_err("重複");
         assert!(errors.iter().any(|error| error.line == 5 && error.reason.contains("close-check")), "{errors:?}");
+    }
+
+    /// row-review は真偽だけ: key の無い宣言と false は false と同じ、真偽でない値は key と行番号（4 行目）を名指す不備。
+    #[test]
+    fn declaration_row_review_reads_a_bool_and_refuses_other_values() {
+        let read = |extra: &str| Declared::parse(&with(extra)).map(|found| found.row_review);
+        assert_eq!((read(""), read("row-review = true\n"), read("row-review = false\n")), (Ok(None), Ok(Some(true)), Ok(Some(false))));
+        for value in ["\"true\"", "1", "[\"true\"]"] {
+            let errors = read(&format!("row-review = {value}\n")).expect_err(value);
+            assert!(errors.iter().any(|error| error.line == 4 && error.reason.contains("row-review")), "{value}: {errors:?}");
+        }
     }
 
     /// HEAD の読みの結果（無い / 不備 / 値）から閉じた 3 値への写し。true だけが加わり、型違いの宣言は読めない。

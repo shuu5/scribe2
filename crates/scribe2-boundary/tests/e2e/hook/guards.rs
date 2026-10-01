@@ -2,6 +2,7 @@
 //! guard の族の歯（接頭辞 `host_guard_` / `hook_guard_` / `hook_command_` / `hook_memo_` / `hook_ledger_` / `hook_choice_question_` / `hook_answer_mouth_` / `hook_bypass_` / `hook_graph_guard_` / `hook_graph_copy_` / `ledger_prefetch_`・設計 docs/design/carry-prep.md §9 行 g）。
 
 use super::*;
+use vessel::pipe::row_review::RefResult;
 
 #[test]
 fn hook_guard_denies_edit_outside_write_set() {
@@ -2919,6 +2920,367 @@ fn hook_merge_gate_is_silent_in_a_repo_without_marker() {
     git(&repo, &["branch", "-M", "main"]);
     assert_silent(&live_hook(&repo, &bash_payload(&repo, "gh pr merge 1 --squash")), "marker の無い repo");
     clean(&[&repo]);
+}
+
+// ─────────────── merge の門の 2 つ目の判定（設計 row-review.md §4 行 b・接頭辞 `hook_merge_gate_row_review_`） ───────────────
+//
+// 窓を開いた anchor に宣言（と契約表の見本 file）を commit し、PR の head の commit は local の commit を `--match-head-commit` に
+// 渡す。ref の記録は state dir の pipe/row-review/ref に手で書く（書き手との形の一致は行 a の歯）。形ごとの出力と同時に、口 (A) を
+// 直に呼んだ値を取って、門の判定と対応することを測る（done (17)）。
+
+/// 契約表の見本 file（記録の tables が名指す）。
+const RR_TABLE: &str = "docs/design/x.md";
+
+/// 宣言の本文（必須 key の 3 行の後ろに `extra`）。
+fn rr_decl(extra: &str) -> String {
+    format!("schema = 1\nallowed-commands = [\"git\"]\ncommon-verify = [\"git diff --quiet\"]\n{extra}")
+}
+
+/// 親 dir ごと書く（byte のまま）。
+fn rr_put(path: &Path, bytes: &[u8]) {
+    assert!(path.parent().is_some_and(|dir| fs::create_dir_all(dir).is_ok()), "{} の親を作れる", path.display());
+    assert!(fs::write(path, bytes).is_ok(), "{} を書けた", path.display());
+}
+
+/// 今の branch に宣言を commit し、その sha を返す。
+fn rr_commit_decl(repo: &Path, text: &str) -> String {
+    rr_put(&repo.join(DECL_FILE), text.as_bytes());
+    git(repo, &["add", DECL_FILE]);
+    git(repo, &["commit", "-q", "-m", "decl"]);
+    git(repo, &["rev-parse", "HEAD"])
+}
+
+/// 見本の契約表を 1 つ変えて commit し、origin の main を local の main へ揃える（契約表が main で動いた形）。
+fn rr_move_table(repo: &Path, text: &str) {
+    rr_put(&repo.join(RR_TABLE), text.as_bytes());
+    git(repo, &["add", RR_TABLE]);
+    git(repo, &["commit", "-q", "-m", "table"]);
+    git(repo, &["update-ref", "refs/remotes/origin/main", "refs/heads/main"]);
+}
+
+/// 窓を開いた anchor（見本の契約表と、`declaration` が在れば宣言を main へ commit・origin の main を揃える）と置き場。
+fn rr_place(declaration: Option<&str>) -> (TmpDir, TmpDir) {
+    let (repo, state) = merge_place();
+    rr_move_table(&repo, "v1\n");
+    if let Some(text) = declaration {
+        rr_commit_decl(&repo, text);
+        git(&repo, &["update-ref", "refs/remotes/origin/main", "refs/heads/main"]);
+    }
+    (repo, state)
+}
+
+/// 側の branch で宣言を commit した commit の sha（anchor の HEAD は main のまま戻す）。
+fn rr_side_decl(repo: &Path, text: &str) -> String {
+    git(repo, &["checkout", "-q", "-b", "pr"]);
+    let sha = rr_commit_decl(repo, text);
+    git(repo, &["checkout", "-q", "main"]);
+    sha
+}
+
+/// 良い trailer の本文（`good`）と head の固定（`pin`）を持つ merge の command。
+fn rr_merge(pin: Option<&str>, good: bool) -> String {
+    let pin = pin.map_or_else(String::new, |sha| format!(" --match-head-commit {sha}"));
+    let body = if good { format!(" --body '{}s2-a.1'", merge_key()) } else { String::new() };
+    format!("gh pr merge 1 --squash{pin}{body}")
+}
+
+/// 置き場の ref の記録の dir。
+fn rr_dir(state: &Path) -> PathBuf {
+    state.join("pipe").join("row-review").join("ref")
+}
+
+/// ref の記録を置く（dir の中の全部を先に消す）。
+fn rr_record(state: &Path, sha: &str, body: &[u8]) {
+    fs::remove_dir_all(rr_dir(state)).ok();
+    rr_put(&rr_dir(state).join(sha), body);
+}
+
+/// 撃ち中の印（`<pid> <起動時刻>`）を置く。
+fn rr_mark(state: &Path, sha: &str, pid: u32) {
+    let started = vessel::fleet::store::started_ms(pid).started().unwrap_or(1);
+    rr_put(&rr_dir(state).join(format!("{sha}.pid")), format!("{pid} {started}\n").as_bytes());
+}
+
+/// 終わって回収した子の pid（今は無い process・印の持ち主が死んだ形）。
+#[expect(clippy::expect_used, reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く")]
+fn rr_dead_pid() -> u32 {
+    let mut child = Command::new("true").spawn().expect("子を起こせる");
+    let pid = child.id();
+    child.wait().expect("子を回収できる");
+    pid
+}
+
+/// result=pass の記録の本文。
+fn rr_pass(base: &str) -> String {
+    format!("schema=1\nbase={base}\ntables={RR_TABLE}\nrow={RR_TABLE}#a digest=0 id=x verdict=PASS basis=actual\nresult=pass\n")
+}
+
+/// 断りの外形（rc 2・stdout 0 byte・stderr 1 行・器の名乗りと語）を確かめ、stderr を返す。
+fn rr_shape(out: &Output, reason: &str) -> String {
+    let text = stderr_text(out);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "{reason}: deny は rc 2: {text}");
+    assert!(out.stdout.is_empty(), "{reason}: stdout 0 byte");
+    assert_eq!(stderr_lines(out), 1, "{reason}: stderr 1 行: {text}");
+    assert!(text.starts_with(&format!("{NAME}: deny merge-gate reason={reason} ")), "{reason}: {text}");
+    text
+}
+
+/// 記録の語の列（merge の門の行・撃った順）。
+fn rr_words(state: &Path) -> Vec<String> {
+    merge_records(state).iter().map(|line| what_of(line)).collect()
+}
+
+/// 口 (A) を直に呼んだ値 `read` が門の断りの語（`None` は通した周）と対応する（pass は通すか moved・ほかは同じ語）。
+fn rr_agrees(read: &RefResult, reason: Option<&str>) {
+    let want = match read {
+        RefResult::Pass { .. } => return assert!(reason.is_none_or(|word| word == "row-review-moved"), "pass の記録: {reason:?}"),
+        RefResult::Fail => "row-review-failed",
+        RefResult::Pending => "row-review-pending",
+        RefResult::Stale => "row-review-stale",
+        RefResult::Missing => "row-review-missing",
+    };
+    assert_eq!(reason, Some(want), "口 (A) と同じ値");
+}
+
+/// 6 形（記録の置き方ごとに撃つ）の出力と、その形の口 (A) の値。`good` は本文に trailer を持つか。
+/// 形: 固定なし・短い sha・記録なし・生きた印・死んだ印で result なし・fail・pass で契約表が main で動いた。
+fn rr_six(state: &Path, repo: &Path, good: bool, run: &dyn Fn(&str) -> Output) -> Vec<(Output, RefResult)> {
+    let sha = git(repo, &["rev-parse", "HEAD"]);
+    let (pinned, mut outs) = (rr_merge(Some(&sha), good), Vec::new());
+    let mut shoot = |command: &str| outs.push((run(command), vessel::pipe::row_review::read_ref(state, &sha)));
+    shoot(&rr_merge(None, good));
+    shoot(&rr_merge(Some("abc1234"), good));
+    shoot(&pinned);
+    rr_mark(state, &sha, std::process::id());
+    shoot(&pinned);
+    rr_record(state, &sha, b"schema=1\nbase=x\n");
+    rr_mark(state, &sha, rr_dead_pid());
+    shoot(&pinned);
+    rr_record(state, &sha, b"schema=1\nbase=x\nresult=fail\n");
+    shoot(&pinned);
+    rr_record(state, &sha, rr_pass(&sha).as_bytes());
+    rr_move_table(repo, &format!("moved after {sha}\n"));
+    shoot(&pinned);
+    outs
+}
+
+/// 6 形の断りの語（宣言順）。
+const RR_SIX: [&str; 7] = ["no-head-pin", "no-head-pin", "row-review-missing", "row-review-pending", "row-review-stale", "row-review-failed", "row-review-moved"];
+
+/// key を true で持つ anchor の 6 形の断りを確かめる（語・外形・記録・次の一手・口 (A) との対応）。
+fn rr_check_six(state: &Path, outs: &[(Output, RefResult)], sha: &str) {
+    assert_eq!(outs.len(), RR_SIX.len());
+    for (at, ((out, read), reason)) in outs.iter().zip(RR_SIX).enumerate() {
+        let text = rr_shape(out, reason);
+        let argv = if at < 2 { "pipe review --ref <sha>".to_owned() } else { format!("pipe review --ref {sha}") };
+        assert!(text.contains(&argv) && !text.contains("git fetch origin"), "{reason}: 次の一手は pipe review の argv: {text}");
+        if at >= 2 {
+            rr_agrees(read, Some(reason));
+        }
+    }
+    let words: Vec<String> = RR_SIX.iter().map(|reason| format!("merge-deny {reason}")).collect();
+    assert_eq!(rr_words(state), words, "記録は断りごとに 1 行");
+}
+
+/// (a) key を true で持つ anchor で、trailer の良い merge が 6 形でそれぞれ断られる（語・rc 2・stdout 0 byte・stderr 1 行・
+/// `pipe review --ref <sha>` の argv・`git fetch origin` を持たない・記録 1 行ずつ）。口 (A) の値との対応も測る（done (17)）。
+#[test]
+fn hook_merge_gate_row_review_denies_the_six_forms_in_a_declaring_repo() {
+    let (repo, state) = rr_place(Some(&rr_decl("row-review = true\n")));
+    let sha = git(&repo, &["rev-parse", "HEAD"]);
+    let outs = rr_six(&state, &repo, true, &|command| live_hook(&repo, &bash_payload(&repo, command)));
+    rr_check_six(&state, &outs, &sha);
+    clean(&[&repo, &state]);
+}
+
+/// (16) 門は台帳を読まない: 呼ばれた回数を数える偽 bd を PATH の先頭に置いた置き場で、(a) の 6 形が同じ語で断られ、6 形で増えた
+/// 偽 bd の数は、key を false にした宣言の置き場で同じ 6 つの command を撃って増えた数と等しい。
+#[test]
+fn hook_merge_gate_row_review_never_reads_the_ledger() {
+    let shims = tmp();
+    let log = shims.join("calls.log");
+    put_script(&shims.join("bd"), &format!("#!/bin/sh\necho bd >> {}\necho '[]'\n", log.display()));
+    let path = format!("{}:{}", shims.display(), std::env::var("PATH").unwrap_or_default());
+    let calls = || fs::read_to_string(&log).map_or(0, |text| text.lines().count());
+    let mut counts = Vec::new();
+    for (extra, denies) in [("row-review = true\n", true), ("row-review = false\n", false)] {
+        let (repo, state) = rr_place(Some(&rr_decl(extra)));
+        let (sha, before, project) = (git(&repo, &["rev-parse", "HEAD"]), calls(), repo.display().to_string());
+        let run = |command: &str| run_hook_with(&["pre-tool-use", "--project", &project], &bash_payload(&repo, command), Some(&path));
+        let outs = rr_six(&state, &repo, true, &run);
+        counts.push(calls().saturating_sub(before));
+        if denies {
+            rr_check_six(&state, &outs, &sha);
+        }
+        clean(&[&repo, &state]);
+    }
+    assert_eq!(counts.first(), counts.last(), "6 形で増えた偽 bd の数は key が false の置き場と等しい: {counts:?}");
+    clean(&[&shims]);
+}
+
+/// (4)(b) result=fail で契約表も動いた記録は row-review-failed を名指す（判定の順）。
+#[test]
+fn hook_merge_gate_row_review_names_failed_before_moved() {
+    let (repo, state) = rr_place(Some(&rr_decl("row-review = true\n")));
+    let sha = git(&repo, &["rev-parse", "HEAD"]);
+    rr_move_table(&repo, "v2\n");
+    rr_record(&state, &sha, format!("schema=1\nbase={sha}\ntables={RR_TABLE}\nresult=fail\n").as_bytes());
+    let out = live_hook(&repo, &bash_payload(&repo, &rr_merge(Some(&sha), true)));
+    rr_shape(&out, "row-review-failed");
+    rr_agrees(&vessel::pipe::row_review::read_ref(&state, &sha), Some("row-review-failed"));
+    clean(&[&repo, &state]);
+}
+
+/// (5)(c) 口 (A) が missing を返す読めない記録の 4 形（schema の違う記録・dir で置いた記録・UTF-8 でない byte の記録・
+/// result=pass で base の行が無い記録）は row-review-missing を名指す。
+#[test]
+fn hook_merge_gate_row_review_names_missing_for_four_unreadable_records() {
+    let (repo, state) = rr_place(Some(&rr_decl("row-review = true\n")));
+    let sha = git(&repo, &["rev-parse", "HEAD"]);
+    let forms: [(&str, Vec<u8>); 4] = [
+        ("schema", rr_pass(&sha).replace("schema=1", "schema=2").into_bytes()),
+        ("dir", Vec::new()),
+        ("utf8", vec![0xff, 0xfe, b'\n']),
+        ("base", format!("schema=1\ntables={RR_TABLE}\nresult=pass\n").into_bytes()),
+    ];
+    for (form, body) in forms {
+        rr_record(&state, &sha, &body);
+        if form == "dir" {
+            fs::remove_file(rr_dir(&state).join(&sha)).ok();
+            rr_put(&rr_dir(&state).join(&sha).join("inner"), b"x");
+        }
+        let out = live_hook(&repo, &bash_payload(&repo, &rr_merge(Some(&sha), true)));
+        rr_shape(&out, "row-review-missing");
+        rr_agrees(&vessel::pipe::row_review::read_ref(&state, &sha), Some("row-review-missing"));
+    }
+    assert_eq!(rr_words(&state).len(), 4, "記録は形ごとに 1 行");
+    clean(&[&repo, &state]);
+}
+
+/// (6)(d) result=pass で契約表の動かない記録の sha を 40 桁で固定した command は rc 0・0 byte・記録 0 行。
+#[test]
+fn hook_merge_gate_row_review_passes_a_pass_record_whose_tables_did_not_move() {
+    let (repo, state) = rr_place(Some(&rr_decl("row-review = true\n")));
+    let sha = git(&repo, &["rev-parse", "HEAD"]);
+    rr_record(&state, &sha, rr_pass(&sha).as_bytes());
+    assert_silent(&live_hook(&repo, &bash_payload(&repo, &rr_merge(Some(&sha), true))), "pass で動かない");
+    rr_agrees(&vessel::pipe::row_review::read_ref(&state, &sha), None);
+    assert!(rr_words(&state).is_empty(), "記録 0 行");
+    clean(&[&repo, &state]);
+}
+
+/// (7)(e) anchor の宣言が key を持たず local の PR の head の commit の宣言だけが true の形と、anchor だけが true で PR の head の
+/// 宣言が key を外した形の両方で門が掛かる（どちらも記録の無い sha で row-review-missing・記録の次の一手を名指す）。
+#[test]
+fn hook_merge_gate_row_review_reads_both_the_anchor_and_the_pr_head_declaration() {
+    for (anchor, head) in [(rr_decl(""), rr_decl("row-review = true\n")), (rr_decl("row-review = true\n"), rr_decl(""))] {
+        let (repo, state) = rr_place(Some(&anchor));
+        let pr = rr_side_decl(&repo, &head);
+        let out = live_hook(&repo, &bash_payload(&repo, &rr_merge(Some(&pr), true)));
+        let text = rr_shape(&out, "row-review-missing");
+        assert!(text.contains(&format!("pipe review --ref {pr}")) && !text.contains("git fetch origin"), "{text}");
+        assert_eq!(rr_words(&state), ["merge-deny row-review-missing"]);
+        clean(&[&repo, &state]);
+    }
+}
+
+/// (8)(f) key の無い宣言の repo と値が false の宣言の repo の 2 形で、6 形の command が trailer の判定だけで決まる（trailer の
+/// 良い command は通り、本文の無い command は no-body）。
+#[test]
+fn hook_merge_gate_row_review_leaves_a_repo_without_the_key_to_the_trailer_gate() {
+    for extra in ["", "row-review = false\n"] {
+        let (repo, state) = rr_place(Some(&rr_decl(extra)));
+        let run = |command: &str| live_hook(&repo, &bash_payload(&repo, command));
+        for (out, _) in rr_six(&state, &repo, true, &run) {
+            assert_silent(&out, &format!("{extra:?}: trailer の良い command"));
+        }
+        assert!(rr_words(&state).is_empty(), "記録 0 行");
+        for (out, _) in rr_six(&state, &repo, false, &run) {
+            rr_shape(&out, "no-body");
+        }
+        assert_eq!(rr_words(&state).len(), RR_SIX.len(), "{extra:?}: 本文の無い 6 形は no-body");
+        clean(&[&repo, &state]);
+    }
+}
+
+/// (9)(g)(11)(12) key を持たない repo でも、anchor の HEAD の宣言が在るのに読めない形と local の PR の head の commit の宣言が読めない
+/// 形は row-review-missing で断られ、1 行は読めない commit と不備の 1 つ目（key と行番号）・句「宣言が読めない」・次に撃つ口
+/// `git fetch origin` を名指し、句「head の commit が local に無い」を持たない。
+#[test]
+fn hook_merge_gate_row_review_denies_an_unreadable_declaration_without_the_key() {
+    let broken = rr_decl("row-review = \"yes\"\n");
+    let (repo, state) = rr_place(Some(&broken));
+    let head = git(&repo, &["rev-parse", "HEAD"]);
+    let (repo2, state2) = rr_place(Some(&rr_decl("")));
+    let pr = rr_side_decl(&repo2, &broken);
+    for (repo, state, commit, command) in [(&repo, &state, head, rr_merge(None, true)), (&repo2, &state2, pr.clone(), rr_merge(Some(&pr), true))] {
+        let out = live_hook(repo, &bash_payload(repo, &command));
+        let text = rr_shape(&out, "row-review-missing");
+        for part in ["宣言が読めない", commit.as_str(), "line=4", "row-review", "git fetch origin"] {
+            assert!(text.contains(part), "{part}: {text}");
+        }
+        assert!(!text.contains("head の commit が local に無い"), "{text}");
+        assert_eq!(rr_words(state), ["merge-deny row-review-missing"], "ほかの門の断りでない");
+    }
+    clean(&[&repo, &state, &repo2, &state2]);
+}
+
+/// (10)(h)(11)(12) 40 桁の sha が local に無い merge は、anchor の宣言が key を true で持つ repo では row-review-missing で断られて
+/// 1 行がその sha と句「head の commit が local に無い」と `git fetch origin` を名指し（句「宣言が読めない」を持たない）、key を
+/// 持たない anchor の repo では trailer の判定だけで通る。
+#[test]
+fn hook_merge_gate_row_review_denies_a_head_missing_locally_only_in_a_declaring_repo() {
+    let absent = "a".repeat(40);
+    let (repo, state) = rr_place(Some(&rr_decl("row-review = true\n")));
+    let out = live_hook(&repo, &bash_payload(&repo, &rr_merge(Some(&absent), true)));
+    let text = rr_shape(&out, "row-review-missing");
+    for part in [absent.as_str(), "head の commit が local に無い", "git fetch origin"] {
+        assert!(text.contains(part), "{part}: {text}");
+    }
+    assert!(!text.contains("宣言が読めない"), "{text}");
+    assert_eq!(rr_words(&state), ["merge-deny row-review-missing"]);
+    let (plain, plain_state) = rr_place(None);
+    assert_silent(&live_hook(&plain, &bash_payload(&plain, &rr_merge(Some(&absent), true))), "key を持たない anchor");
+    assert!(rr_words(&plain_state).is_empty(), "記録 0 行");
+    clean(&[&repo, &state, &plain, &plain_state]);
+}
+
+/// (13)(i) `--help` を持つ merge の command と `-h` を持つ command は key を true で持つ repo で rc 0・0 byte で、値を取る flag の
+/// 後ろの help の語は help と読まれず、merge の門の trailer の判定が no-trailer で断る。
+#[test]
+fn hook_merge_gate_row_review_reads_help_before_a_flag_as_help_only() {
+    let (repo, state) = rr_place(Some(&rr_decl("row-review = true\n")));
+    for command in ["gh pr merge --help", "gh pr merge 1 -h"] {
+        assert_silent(&live_hook(&repo, &bash_payload(&repo, command)), command);
+    }
+    assert!(rr_words(&state).is_empty(), "記録 0 行");
+    let out = live_hook(&repo, &bash_payload(&repo, "gh pr merge 1 --squash --body --help"));
+    rr_shape(&out, "no-trailer");
+    clean(&[&repo, &state]);
+}
+
+/// (14)(l) help の見分けは anchor の門・merge の門・古さの印の 3 つの呼び手に同じに効く: 窓が閉じた anchor で `gh pr merge --help`
+/// と `gh pr merge 1 -h` は rc 0・0 byte・anchor-deny の記録 0 行（同じ anchor の `gh pr merge 1` は窓で断られる対照）、出力の在る
+/// 古さの印の置き場で `gh pr merge --help` は通って merge の印が付かない（trailer の良い merge は印が付く対照）。
+#[test]
+fn hook_merge_gate_row_review_help_is_not_a_merge_for_the_window_and_the_stale_mark() {
+    let (repo, state) = anchor_place();
+    fs::write(repo.join("src").join("lib.rs"), "// second\n").expect("2 つ目の中身を書ける");
+    git(&repo, &["commit", "-q", "-am", "second"]);
+    git(&repo, &["update-ref", "refs/remotes/origin/main", "refs/heads/main~1"]);
+    for command in ["gh pr merge --help", "gh pr merge 1 -h"] {
+        assert_silent(&live_hook(&repo, &bash_payload(&repo, command)), command);
+    }
+    assert!(anchor_records(&state).is_empty(), "anchor-deny の記録 0 行");
+    assert_anchor_deny(&state, &repo, "gh pr merge 1", "gh-pr-merge");
+    clean(&[&repo, &state]);
+    let place = StalePlace::new();
+    place.output();
+    place.pass("gh pr merge --help");
+    assert!(place.marks().is_empty(), "help には merge の印が付かない");
+    place.pass(&stale_merge_command());
+    assert_eq!(place.marks(), [(lmark::Kind::MergeGate, lmark::Value::Main(place.main_sha()))], "merge には付く");
+    clean(&[&place.repo, &place.state, &place.shims]);
 }
 
 // ─────────────── 選択式の問いの門（設計 vessel-hook.md §20 行 ca・ADR-0084・接頭辞 `hook_choice_question_`） ───────────────

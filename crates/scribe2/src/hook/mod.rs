@@ -706,7 +706,7 @@ fn pre_tool_use(hooked: &Hooked, payload: &str, started: Instant) -> Outcome {
             return denied(hooked, &format!("anchor-deny {what}"), line, started);
         }
         // merge の門は anchor の門の直後（窓が閉じている周は待つのが先・vessel-hook.md §21 形 1）。
-        if let MergeDecision::Deny(reason, line) = merge_gate::decide(command.as_deref().unwrap_or_default(), cwd) {
+        if let MergeDecision::Deny(reason, line) = merge_gate::decide(command.as_deref().unwrap_or_default(), cwd, root, hooked.dir) {
             return denied(hooked, &format!("merge-deny {}", reason.as_str()), line, started);
         }
     }
