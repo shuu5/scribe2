@@ -2154,7 +2154,8 @@ fn rv_script(path: &Path, body: &str) -> String {
     path.display().to_string()
 }
 
-/// 偽 lens の script（`--print-version` の周は版の 1 行〔`rv-version` の中身・無ければ既定〕を返し、`rv-version-rc` が在ればその rc で終わる）。
+/// 偽 lens の script（`--print-version` の周は版の撃ちの log `rv-vlog` に 1 行を足し、版の 1 行〔`rv-version` の中身・無ければ既定〕を返し、
+/// `rv-version-rc` が在ればその rc で終わる）。
 /// それ以外の周は log `rv-log` に 1 行（行・cwd・HEAD・審査の木の file の有無・撃ち中の受付札）を足し、`rv-out.<行 id>` か `rv-out` の中身
 /// （無ければ PASS）を返す。
 fn rv_lens_script(state: &Path) -> String {
@@ -2162,6 +2163,7 @@ fn rv_lens_script(state: &Path) -> String {
     let body = format!(
         r#"for a in "$@"; do
   if [ "$a" = "--print-version" ]; then
+    echo v >> '{s}/rv-vlog'
     if [ -f '{s}/rv-version-rc' ]; then exit "$(cat '{s}/rv-version-rc')"; fi
     if [ -f '{s}/rv-version' ]; then cat '{s}/rv-version'; else echo 'lens-version fake=1'; fi
     exit 0
@@ -2789,4 +2791,194 @@ fn pipe_review_ref_reads_the_lens_through_the_done_table_and_the_promised_narrow
     assert_eq!(kind("pr"), ("INCONCLUSIVE".to_owned(), "teeth-outside-write-set".to_owned()), "約束の行の 3 語の外の kind は INCONCLUSIVE・kind は lens の値のまま");
     assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "FAIL の行が在る周は fail");
     clean(&[&place.repo, &place.state]);
+}
+
+// ───── Reviewed の段の行の審査の記録の使い回し（設計 docs/design/row-review.md §5・行 c・接頭辞 `pipe_review_row_reuse_`） ─────
+//
+// 設計の PR の commit を `pipe review --ref` で審査して actual の PASS の記録を作り、その commit を main にして `pipe intake` の Reviewed を撃つ。
+// 偽 lens は行の審査と Reviewed で同じ log に 1 行を足す（版の flag の撃ちは別の log `rv-vlog`）。base には読み口が無い＝Reviewed は必ず偽 lens を
+// 撃つ。各形は先に、手を入れない記録と同じ main で写す（撃ち 0 回）ことを測ってから、鍵か記録を 1 つ動かして撃つ側を測る。
+
+/// 6 値を運ぶ FAIL の判定の行（撃った周は審査の消費の event を 1 件書く・写した周との差を測る）。
+fn rrr_fail() -> String {
+    let usage = r#""usage":"in:7,out:8,cache_read:9,cache_create:10","turns":2,"wall_ms":300"#;
+    format!("{},{usage}}}", lens_finding("FAIL", Some("other"), None).trim_end_matches('}'))
+}
+
+/// 行 a（bead 有り・祖先なし＝basis actual）の設計の PR の commit を行の審査で撃って PASS の記録を作り、その commit を anchor の main にした置き場。
+/// 返りは (置き場, commit, 行の記録の dir の名)。偽 lens の出力は消費つきの PASS。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn rrr_ready() -> (Rv, String, String) {
+    let place = rv_place(&["本文 1"], &[rv_row("a", 1, &[])], &[]);
+    rv_ledger(&place, &[prelens_issue("s2-rv.1", "open", "a", &[])], None);
+    rv_out(&place, "", &reuse_pass());
+    let sha = rv_commit(&place, None, &[(DESIGN_FILE, rv_doc(&["本文 1"], &[rv_row("a", 1, &[("done", "\"変えた\"")])]))]);
+    let out = rv_review(&place, &sha);
+    let row = rv_row_out(&out, "a");
+    assert_eq!((row.get("verdict").map(String::as_str), row.get("basis").map(String::as_str)), (Some("PASS"), Some("actual")), "{}", stdout_of(&out));
+    assert_eq!(rv_log(&place).len(), 1, "行の審査は偽 lens を 1 回撃つ");
+    git(&place.repo, &["merge", "-q", "--ff-only", &sha]);
+    let name = row.get("record").cloned().expect("行の記録の dir の名");
+    (place, sha, name)
+}
+
+/// 版の flag の撃ちの回数。
+fn rrr_vlog(place: &Rv) -> usize {
+    fs::read_to_string(place.state.join("rv-vlog")).unwrap_or_default().lines().count()
+}
+
+/// Reviewed の 1 回の結果。
+struct Shot {
+    /// 便の id。
+    id: String,
+    /// Reviewed の detail。
+    detail: String,
+    /// 偽 lens の撃ち（版の flag を除く）の増分。
+    fired: usize,
+    /// 版の flag の撃ちの増分。
+    versions: usize,
+    /// 審査の消費の event の増分。
+    costs: usize,
+}
+
+/// 行 a の `pipe intake` を anchor の main で 1 回撃つ（bead は `bead`）。
+fn rrr_intake(place: &Rv, bead: &str) -> Shot {
+    let costs = || events(&place.state).iter().filter(|event| event.kind == EventKind::RunCost).count();
+    let (fired, versions, spent) = (rv_log(place).len(), rrr_vlog(place), costs());
+    let out = run_pipe_with_path(
+        &place.path,
+        &[
+            "intake", "--design", &format!("{DESIGN_FILE}#a"), "--bead", bead, "--repo", &place.repo.display().to_string(),
+            "--state-dir", &place.state.display().to_string(), "--rules", &ceiling_rules(&place.state), "--lens", &place.lens,
+        ],
+    );
+    let id = run_id_of(&out);
+    assert!(!id.is_empty(), "審査まで届く: {} / {}", stdout_of(&out), stderr_of(&out));
+    Shot { detail: reviewed_detail(&place.state, &id), id, fired: rv_log(place).len() - fired, versions: rrr_vlog(place) - versions, costs: costs() - spent }
+}
+
+/// 手を入れない記録を同じ main で写す（偽 lens 0 回・消費 0 件・detail が `verdict:PASS row-review:reused`）ことを測り、便を外す（各形の前提）。
+fn rrr_copies(place: &Rv, bead: &str) {
+    let shot = rrr_intake(place, bead);
+    assert_eq!((shot.fired, shot.detail.as_str(), shot.costs), (0, "verdict:PASS row-review:reused", 0), "手を入れない記録は写す");
+    stop_run_ok(&place.state, &shot.id);
+}
+
+/// 行の記録の `key` の欄の値を `value` に書き換える（dir の名と他の欄は変えない）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn rrr_edit(place: &Rv, name: &str, key: &str, value: &str) {
+    let path = rr_root(&place.state).join(name).join("record");
+    let text = fs::read_to_string(&path).expect("行の記録を読める");
+    let edited: String = text
+        .lines()
+        .map(|line| match line.split_once('=') {
+            Some((found, _)) if found == key => format!("{key}={value}\n"),
+            _ => format!("{line}\n"),
+        })
+        .collect();
+    assert_ne!(text, edited, "{key} の欄を書き換えられる");
+    fs::write(&path, edited).expect("行の記録を書ける");
+}
+
+/// 撃つ側の確認: 偽 lens を 1 回撃ち、判定は撃った lens の値（FAIL）で、語は付かず、消費の event を 1 件書く。
+fn rrr_fires(shot: &Shot, why: &str) {
+    assert_eq!((shot.fired, shot.detail.as_str(), shot.costs), (1, "verdict:FAIL kind:other", 1), "{why}");
+}
+
+/// (a) 同じ commit を main にして intake した便は、Reviewed の段で偽 lens を撃たず（版の flag の撃ちは 1 回）、記録の判定 PASS を写して detail が
+/// `verdict:PASS row-review:reused`・review.json の verdict は PASS で、審査の消費の event を書かない（撃った周の 1 件との対は (b) が測る）。
+#[test]
+fn pipe_review_row_reuse_copies_the_actual_pass_record_without_firing() {
+    let (place, _, _) = rrr_ready();
+    let shot = rrr_intake(&place, "s2-rr.1");
+    assert_eq!((shot.fired, shot.versions, shot.costs), (0, 1, 0), "偽 lens は撃たず版を 1 回読み、消費は書かない: {}", shot.detail);
+    assert_eq!(shot.detail, "verdict:PASS row-review:reused");
+    assert_eq!(value_of(&review_pairs(&place.state, &shot.id), "verdict"), "PASS");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (b) 鍵が外れる 6 形は偽 lens を 1 回撃ち、判定は撃った lens の値（FAIL）で、消費の event を 1 件書く: 記録の digest・材料の鍵・code の木の鍵・lens の版の欄を
+/// 手で書き換えた記録の 4 形と、code の file を 1 つ変えた main・版の 1 行を変えた偽 lens の 2 形。各形は先に手を入れない記録と同じ main で写す。
+#[test]
+fn pipe_review_row_reuse_fires_the_lens_when_any_of_the_four_keys_moves() {
+    for field in ["digest", "materials", "tree", "version"] {
+        let (place, _, name) = rrr_ready();
+        rrr_copies(&place, "s2-rr.1");
+        rrr_edit(&place, &name, field, "edited");
+        rv_out(&place, "", &rrr_fail());
+        rrr_fires(&rrr_intake(&place, "s2-rr.2"), &format!("{field} の欄を書き換えた記録は写さない"));
+        clean(&[&place.repo, &place.state]);
+    }
+    let (place, sha, _) = rrr_ready();
+    rrr_copies(&place, "s2-rr.1");
+    let moved = rv_commit(&place, Some(&sha), &[("src/extra.rs", "pub fn extra() {}\n".to_owned())]);
+    git(&place.repo, &["merge", "-q", "--ff-only", &moved]);
+    rv_out(&place, "", &rrr_fail());
+    rrr_fires(&rrr_intake(&place, "s2-rr.2"), "code の file を変えた main は写さない");
+    clean(&[&place.repo, &place.state]);
+    let (place, _, _) = rrr_ready();
+    rrr_copies(&place, "s2-rr.1");
+    fs::write(place.state.join("rv-version"), "lens-version fake=2\n").expect("版を書き換えられる");
+    rv_out(&place, "", &rrr_fail());
+    rrr_fires(&rrr_intake(&place, "s2-rr.2"), "版の 1 行を変えた lens は写さない");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (c) 写さない 5 形は偽 lens を 1 回撃つ: 判定の欄を FAIL・basis の欄を forecast・basis の欄を partial・祖先の欄を tree に書き換えた記録と、dir の名を変えた記録。
+/// 各形は先に手を入れない記録と同じ main で写す。
+#[test]
+fn pipe_review_row_reuse_never_copies_a_record_that_is_not_an_actual_landed_pass_under_its_own_name() {
+    for (key, value) in [("verdict", "FAIL"), ("basis", "forecast"), ("basis", "partial"), ("ancestors", "docs/design/toy.md#y:tree")] {
+        let (place, _, name) = rrr_ready();
+        rrr_copies(&place, "s2-rr.1");
+        rrr_edit(&place, &name, key, value);
+        rv_out(&place, "", &rrr_fail());
+        rrr_fires(&rrr_intake(&place, "s2-rr.2"), &format!("{key}={value} の記録は写さない"));
+        clean(&[&place.repo, &place.state]);
+    }
+    let (place, _, name) = rrr_ready();
+    rrr_copies(&place, "s2-rr.1");
+    let root = rr_root(&place.state);
+    fs::rename(root.join(&name), root.join(format!("{name}0"))).expect("dir の名を変えられる");
+    rv_out(&place, "", &rrr_fail());
+    rrr_fires(&rrr_intake(&place, "s2-rr.2"), "dir の名を変えた記録は写さない");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (d) 版の flag が版の 1 行を返す lens で写せた記録を、版の flag で rc 1 を返す lens の cmd の便は写さずに撃ち、判定は撃った lens の値（FAIL）。
+#[test]
+fn pipe_review_row_reuse_never_copies_when_the_lens_cannot_name_its_version() {
+    let (place, _, _) = rrr_ready();
+    rrr_copies(&place, "s2-rr.1");
+    fs::write(place.state.join("rv-version-rc"), "1\n").expect("版の rc を書ける");
+    rv_out(&place, "", &rrr_fail());
+    rrr_fires(&rrr_intake(&place, "s2-rr.2"), "版を読めない lens の便は写さない");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (e) 版を撃つのは同じ行と digest の PASS・actual の記録が在る周だけ: 記録の無い便と digest の欄を書き換えた記録の便は版の撃ち 0 回、材料の鍵の欄を書き換えた
+/// 記録の便は 1 回（どれも偽 lens は 1 回撃つ・手を入れない記録の便は版を 1 回撃って写す）。
+#[test]
+fn pipe_review_row_reuse_reads_the_version_only_when_a_same_digest_actual_pass_exists() {
+    let place = rv_place(&["本文 1"], &[rv_row("a", 1, &[])], &[]);
+    rv_out(&place, "", &rrr_fail());
+    let none = rrr_intake(&place, "s2-rr.1");
+    rrr_fires(&none, "記録の無い便は撃つ");
+    assert_eq!(none.versions, 0, "記録の無い便は版を撃たない");
+    clean(&[&place.repo, &place.state]);
+    for (field, versions) in [("digest", 0), ("materials", 1)] {
+        let (place, _, name) = rrr_ready();
+        rrr_edit(&place, &name, field, "edited");
+        rv_out(&place, "", &rrr_fail());
+        let shot = rrr_intake(&place, "s2-rr.1");
+        rrr_fires(&shot, &format!("{field} の欄を書き換えた記録の便は撃つ"));
+        assert_eq!(shot.versions, versions, "{field} の欄を書き換えた記録の便の版の撃ち");
+        clean(&[&place.repo, &place.state]);
+    }
 }

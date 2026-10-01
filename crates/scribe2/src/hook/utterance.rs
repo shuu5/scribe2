@@ -16,10 +16,11 @@ const KEY_PROMPT: &str = "prompt";
 /// 器の差し込みの行が `<NAME> <語>:` で名乗る語（**閉じた 4 つ**・作り手は §13 の 9 種）。
 const LEAD_WORDS: [&str; 4] = ["pipe", "seat", "group", "tick"];
 
-/// 別の session と harness からの包みの頭（**閉じた 5 つ**・先頭の空白を除いて照らす）。
-const WRAPPER_HEADS: [&str; 5] = [
+/// 別の session と harness からの包みの頭（**閉じた 6 つ**・先頭の空白を除いて照らす）。
+const WRAPPER_HEADS: [&str; 6] = [
     "Another Claude session sent a message:",
     "<cross-session-message",
+    "<agent-message",
     "<teammate-message",
     "<task-notification>",
     "This session is being continued from a previous conversation",
