@@ -291,6 +291,18 @@ xtask 側の drift 歯（最小形）: `crates/xtask/src/limits.rs` の `#[cfg(t
 - 却下: 72000（束 E の見込みだけを覆い、他の便の余地が約 1,000 行しか残らない）／上げずに先に削る（削れる量が読めず、束 E の着地が遅れる）。
 - flip-check の入口: 変える test file は `tests/e2e/rules.rs` の 1 本で、直す歯と置き換えた歯のどちらも base（値 66000）で RED になる。
 
+## 21. R-C4-1 を 82000 に上げる（契約表の行 r）
+
+- 何が起きているか（main 71610086・verified）: `cargo xtask check` の core-lines は 73496（上限 R-C4-1 = 74000・余地 504）。起票済みで設計の pointer を持つ契約 27 本の core の growth の見込みの和は約 4,450 行で、上限の許可の契約表の行 a〜e（[limit-permit.md](./limit-permit.md) の行）の見込みの和は約 1,320 行。次の数本の受付が core の余地で断り始める。user 裁定 2026-10-01T04:49Z（A2・閾値の変更・逐語は器の裁定の event に残る・台帳の問い s2-07l.745）で上限を 82000 に上げる（見込みの後に約 2,200 行の余地）。
+- 約束（この 3 つだけ）:
+  1. `rules/manifest.toml` の行 `R-C4-1` の `value` を 82000 に・`ruling` を `user 2026-10-01T04:49Z` に・`ruled_at` を `2026-10-01` に書き換える。行の id・kind・`enabled` は不変で、行は増やさない（C5）。
+  2. 値を pin している既存の歯 2 本を直す。実測: repo 全体で値 74000 を持つのは、`crates/scribe2-boundary/tests/e2e/rules.rs` の `rules_cli_get_returns_value`（`rules get R-C4-1` の出力・assert の文言の裁定 id）と `rules_core_lines_74000_raised_by_ruling`（§20 の行 q が足した歯）と manifest と本 doc だけである。前者は値と文言の裁定 id を新しい値と id に直す。後者は名が前の値を持つので、同じ形の `rules_core_lines_82000_raised_by_ruling` に置き換える（値 82000・kind `CoreLines`・発効・`ruling` が `user 2026-10-01T04:49Z` で始まり・`ruled_at` が `2026-10-01`・整数の読み手が 82000 を返す）。xtask の閾値の読み手と歯は現物の manifest から値を読むので 1 字も変えない（§19・§20 と同じ・行 r は `=` で置く）。
+  3. §4.1 の表の `R-C4-1` の行の値と裁定を約束 1 と同じ内容に写し、前の値 74000 の裁定（user 2026-09-30T05:26Z・§20 行 q）を履歴として残す。
+- 触らない: `src` の全部・憲法 §3 の閾値セル（初期値を持つ・§19 と同じ）・他の行・§4 の切り方・過去の § が書いたその時点の実測値・§20 の行 q（着地済み。verify の `rules_core_lines_74000_` は置き換えの後に該当 0 本になるが、着地済みの行は撃ち直さない）。
+- 着地の後: 受付と席は埋め込み manifest を読むので、PATH の binary を入れ替えるまで受付の core の余地は 74000 で測る（運用の手順・本行の done の外）。隣の project の規則がこの行を値の正本に名指すので、着地を知らせる。
+- 却下: 75500（上限の許可の行 a〜e の見込みだけを覆い、起票済みのほかの契約の見込み約 4,450 行が入らない）／上げずに先に削る（削れる量が読めず、起票済みの契約の着地が遅れる）。
+- flip-check の入口: 変える test file は `tests/e2e/rules.rs` の 1 本で、直す歯と置き換えた歯のどちらも base（値 74000）で RED になる。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -467,4 +479,14 @@ write-set = ["rules/manifest.toml", "crates/scribe2-boundary/tests/e2e/rules.rs"
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_cli_get_returns_value", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_core_lines_74000_"]
 size = "S"
 done = "§20 の約束 1〜3 のとおり: 埋め込み manifest の R-C4-1 が値 74000 と裁定 id user 2026-09-30T05:26Z と ruled_at 2026-09-30 を持ち、rules get R-C4-1 が 74000 を出す歯と上げた行を名指す歯（rules_core_lines_74000_ で始まる・前の値の名の歯は置き換えて残さない）が緑で、§4.1 の表が同じ値と裁定を写して前の値 66000 の裁定を履歴に残し、src と憲法 §3 の閾値セルは不変で、xtask の閾値の読み手と歯（limits_match_rules_manifest・rules_manifest・real_limits）は現物の manifest から値を読むので 1 字も変えずに緑"
+
+[[contract]]
+id = "r"
+title = "R-C4-1（core の本体の上限）を 74000 → 82000 に上げる — 値と裁定 id と ruled_at だけを書き換え、値を pin する歯を直し、上げた行を名指す歯を新しい値の名に置き換える（裁定 user 2026-10-01T04:49Z・A2）"
+req = ["FR17"]
+section = "21"
+write-set = ["rules/manifest.toml", "crates/scribe2-boundary/tests/e2e/rules.rs", "docs/design/rules-manifest.md", "=crates/xtask/src/limits.rs", "=crates/xtask/src/check_tests.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_cli_get_returns_value", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_core_lines_82000_"]
+size = "S"
+done = "§21 の約束 1〜3 のとおり: 埋め込み manifest の R-C4-1 が値 82000 と裁定 id user 2026-10-01T04:49Z と ruled_at 2026-10-01 を持ち、rules get R-C4-1 が 82000 を出す歯と上げた行を名指す歯（rules_core_lines_82000_ で始まる・前の値の名の歯は置き換えて残さない）が緑で、§4.1 の表が同じ値と裁定を写して前の値 74000 の裁定を履歴に残し、src と憲法 §3 の閾値セルは不変で、xtask の閾値の読み手と歯（limits_match_rules_manifest・rules_manifest・real_limits）は現物の manifest から値を読むので 1 字も変えずに緑"
 <!-- contracts:end -->
