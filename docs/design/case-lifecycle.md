@@ -873,6 +873,18 @@ verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail phase_event_links_
 size = "S"
 growth = ["crates/scribe2/src/fleet/phase.rs:4"]
 done = "(1) 列の理由が reserved の契約の部品の links.on は、理由の値（<予約した bead>/<file 数>・読めない周は末尾に /unset）の最初の / より前の bead 1 つで、値に / が無い周も値の全体を 1 つ載せる (2) dependency と overlap の links.on は今のまま 歯: phase.rs の既存の mod tests に置く lib の歯（接頭辞 phase_event_links_on_）の (a)〔(1)〕値 b-6/2 の reserved の契約の links.on が b-6 だけ・値 b-6/2/unset の契約も b-6 だけ・値 b-6 の契約も b-6 だけ、(2) は既存の歯 phase_event_links_on_follows_dependency_and_overlap_partner が本文を変えずに緑 base は reserved の links.on が空なので (a) が RED"
+[[contract]]
+id = "i"
+title = "管理 tick が台帳か main の印の動いた周に全部を書き直す — 出力の印と等しさで比べ（bd も git も撃たない）、前の全部の書き直しと tick の撃った記録から rules 行 lifecycle.full_min_s（300 秒・裁定 user 2026-10-01T15:27Z）以上後の周だけ §12 (e) の 1 本を撃ち、記録 fleet/lifecycle.tick を書き、tick の rc と字は変えない（§19・FR90 / FR27・memo s2-07l.738.42.1）"
+req = ["FR90", "FR27"]
+section = "19"
+touches = ["crate::rules::RuleKind"]
+write-set = ["crates/scribe2/src/seat/tick.rs", "crates/scribe2/src/seat/cli.rs", "crates/scribe2/src/help.rs", "crates/scribe2/src/fleet/lifecycle_partial.rs", "crates/scribe2/src/rules/mod.rs", "rules/manifest.toml", "crates/scribe2-boundary/tests/e2e/seat/tick.rs", "crates/scribe2-boundary/tests/e2e/seat.rs", "crates/scribe2-boundary/tests/e2e/fleet.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__seat__seat_usage_external_form.snap", "crates/scribe2-boundary/tests/e2e/rules.rs", "crates/scribe2-boundary/tests/e2e/rules/embedded.rs", "crates/scribe2-boundary/tests/e2e/snapshots/e2e__rules__rules_external_form.snap", "=crates/scribe2-boundary/tests/e2e/main.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_full_lifecycle_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_lifecycle_full_min_s_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_tick_rewrites_lifecycle_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_lifecycle_rows_carry_the_ruled_values_and_the_lifecycle_ruling", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_floor_timeout_row_precedes_the_drafts_cap_rows", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_drafts_cap_rows_are_the_last_two_kinds_and_rows", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail class_derive_embedded_row_carries_the_ruled_three_elements_and_ruling_id", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_embedded_manifest_declares_host_guard_kinds_at_the_tail_of_all", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_embedded_manifest_is_valid_and_covers_all_kinds", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_embedded_manifest_declares_one_capability_row_per_role", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail rules_external_form", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_usage_external_form", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail subcommands_are_gone_from_the_usage", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail seat_inject_subcommand_is_gone_from_the_usage", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail cli_help_pages_match_the_live_form_and_every_subcommand", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail cli_help_text_is_ascii_and_fits_the_width", "cargo run -q -p scribe2-boundary --bin scribe2 -- contracts check --repo ."]
+size = "M"
+growth = ["crates/scribe2/src/seat/tick.rs:30", "crates/scribe2/src/seat/cli.rs:6", "crates/scribe2/src/help.rs:2", "crates/scribe2/src/fleet/lifecycle_partial.rs:60", "crates/scribe2/src/rules/mod.rs:6", "crates/scribe2-boundary/tests/e2e/seat/tick.rs:420", "crates/scribe2-boundary/tests/e2e/seat.rs:30", "crates/scribe2-boundary/tests/e2e/fleet.rs:20", "crates/scribe2-boundary/tests/e2e/rules.rs:40"]
+done = "(1) 埋め込み manifest に rules 行 lifecycle.full_min_s（kind LifecycleFullMinS・形 Int だけ・値 300・enabled・裁定の字 user 2026-10-01T15:27Z・裁定日 2026-10-01・裁定の字は base の行 floor.timeout_s と違う）が lifecycle.age_h.epic-closable の行の直後（memo.notes_max_bytes の前）に 1 本在り、kind は ALL の LifecycleAgeH の直後（MemoNotesMaxBytes の前）で字面から引け、memo の 3 行と 3 kind は末尾のまま〔rules_lifecycle_full_min_s_ と、直す既存の歯 7 本（行数 104 → 105 と kind 数 90 → 91 の 2 本・末尾の窓の skip を 1 つ増やす rules_lifecycle_rows_carry_the_ruled_values_and_the_lifecycle_ruling・rules_floor_timeout_row_precedes_the_drafts_cap_rows・rules_drafts_cap_rows_are_the_last_two_kinds_and_rows・class_derive_embedded_row_carries_the_ruled_three_elements_and_ruling_id・末尾の列に LifecycleFullMinS を足す rules_embedded_manifest_declares_host_guard_kinds_at_the_tail_of_all）と rules_external_form の snapshot（rows=105 kinds=91）〕 (2) 管理 tick の周は判定・打刻・部分の書き直しの後に、manifest を読めて target の登録 row が在り・置き場の出力が読め・tick の manifest に lifecycle.full_min_s の行が在り・今が出力の full_at と撃った記録の ts の新しい方から lifecycle.full_min_s 秒以上後で・登録 row の anchor の台帳の印か main の sha が出力の inputs.ledger か inputs.main と等しくない（等しさだけで比べ bd も git も撃たない・読めない印は撃たない・event log の印は比べない）周だけ、§12 (e) の口と同じ全部の書き直しの 1 本を観測の 1 周・coalesce・lock を待たない形で、repo = anchor・台帳 client = seat tick の --bd（無ければ bd）で撃つ〔seat_tick_full_lifecycle_ の (a) 台帳を伸ばした周に scope full・full_at の前進・inputs.ledger が今の印・偽 bd の呼び 1 回以上と、同じ歯の中の印を動かさない周の偽 bd の不増と full_at の不動 (b) main の ref を別の commit へ進めた周も撃つ (c) event log だけを伸ばした周は撃たず次に台帳を伸ばした周は撃つ (d) full_at が 30 秒前の周と記録の ts が 30 秒前の周は撃たず両方を 2 時間前へ戻した周は撃つ (e) 出力の無い置き場（出力を作らない）・行の無い写し・anchor の台帳を読めない置き場は撃たず、同じ歯の中で直した周は撃つ〕 (3) 撃った周は返りに依らず置き場の fleet/lifecycle.tick を ts=<epoch 秒> wrote=<返りの語> の 1 行で一時 file → rename で書き、撃たない周は書かない〔(a) の wrote=written・(f) --bd を渡さず PATH に bd の無い env の周の wrote=unreadable と出力の理由 ledger の読めない印・(g) lifecycle.lock を生きた pid で持たせた周の待たない wrote=busy と出力の bytes の不変〕 (4) tick の rc と stdout の判定行と stderr は撃った周も撃たない周も変えない〔(a) の 2 周の rc と置き場の path を伏せた判定行の一致・(f) の rc と判定行が (a) の撃つ周と等しい〕 (5) seat の使い方の 1 行と help の seat の頁の tick の口が tick --state-dir S --target S:W [--rules F] [--bd B] になる〔seat_usage_external_form の snapshot と、seat.rs の tick の口の字の定数を読む 3 本（seat_autonomy_subcommands_are_gone_from_the_usage・seat_inject_subcommand_is_gone_from_the_usage・seat_working_memory_subcommands_are_gone_from_the_usage）と、help の seat の頁の FORM が使い方の行の逐語の写しのままであること（既存の cli_help_pages_match_the_live_form_and_every_subcommand が緑）〕 (6) 既存の歯 seat_tick_rewrites_lifecycle_ は本文を変えずに緑（anchor が在らない path で印を読めず撃たない） (7) 新しい code は RuleKind の変種を rules の module の外で名指さず（行は id の字で引く）、EventKind・Stage・WaitReason・Turn を名指さず、verify の最終行の contracts check が便の木で findings 0 歯: seat_tick_full_lifecycle_（e2e・(a)〜(g) の 7 本・どれも --rules の写しで lifecycle.full_min_s を 60 にし撃つ形を 1 つ以上持つ）と rules_lifecycle_full_min_s_（rules の e2e・1 本）が base で RED（機能不在: base は --bd と LifecycleFullMinS の kind を知らず rc 1・行が無い）"
+
 <!-- contracts:end -->
 
 ## 18. 列の理由 reserved の links.on に行を予約した bead を載せる（契約表の行 h）
@@ -888,3 +900,63 @@ done = "(1) 列の理由が reserved の契約の部品の links.on は、理由
   2. dependency と overlap の links.on は今のまま。
 - 歯: phase.rs の既存の mod tests に lib の歯を 1 本置く（接頭辞 phase_event_links_on_）。(a) 値 b-6/2・b-6/2/unset・b-6 の reserved の 3 契約の links.on が、どれも b-6 だけ。既存の歯 phase_event_links_on_follows_dependency_and_overlap_partner は本文を変えずに緑。
 - 触らない: 列の理由の語と値の字（dispatch の `WaitReason`）・手番の表（§3）・links の 8 key の名・dispatch ls の行。
+
+## 19. 管理 tick が台帳か main の印の動いた周に全部を書き直す（契約表の行 i・下限は rules 行 `lifecycle.full_min_s`・FR90 / FR27・[ADR-0108](../../design-intent/decisions/ADR-0108-the-management-tick-rewrites-case-positions-when-the-ledger-or-main-moves.html)（proposed）・memo `s2-07l.738.42.1`）
+
+やさしく言うと: 局面の出力を全部書き直すのは、便の列を回す周・land の終端・口を撃った時だけで、便を回さない置き場（隣の project の板が読む置き場）では台帳が変わっても出力が古いまま残る。管理 tick の周に、台帳と main の印（小さい file の読みだけ）を出力の印と比べ、違っていれば全部を書き直す。重い書き直しが続かないように、前の全部の書き直しから最短でも rules 行の秒数（300 秒）を空ける。
+
+- 出所: 隣の project の設計席の頼み（2026-10-01・板の一覧が局面の出力を読み、便を回していない間も台帳の変化を出したい・5 分の遅れで足りる）。memo `s2-07l.738.42.1`。下限の rules 行の値は user の裁定（台帳の問い `s2-07l.738.42.3`・裁定 `s2-07l.738.42.3:20261001T1527Z-1`・値 300 秒）。
+- 何が起きているか（main 417e4754・verified）:
+  - 全部の書き直しの契機は §12 約束 8 の (a)(d)(e) だけで、管理 tick の周は §13 の部分の書き直ししか撃たない（`crates/scribe2/src/seat/tick.rs` の `run` は判定と打刻の後に部分の書き直しを撃ち、返りを捨てる）。ADR-0088 と FR90 は、管理 tick の周が台帳も git も撃たないと決めている。
+  - 全部の書き直し 1 回は、本 repo の台帳（chunk 約 36 万）・event log 9.3 MB・設計 doc 30 本で wall 4.3 秒・user 3.8 秒・最大 RSS 275 MB（2026-10-01 の実測・空いた host）。gate が走る host では wall 14.3 秒・user 3.7 秒。
+  - 全部の書き直しは自分の bd の読み（`--readonly`）で台帳の印を動かさない: 同じ置き場へ 2 回続けて撃つと 2 回目は `Coalesced` で `generated` が進まなかった（2026-10-01 の実測）。
+  - 管理 tick は systemd の user の timer の oneshot で走り、その PATH に台帳 client の `bd` が無い。PATH に bd の無い env で `fleet lifecycle write` を撃つと `lifecycle=unreadable`（理由 `ledger`）、`--bd` に絶対 path を渡すと書けた（2026-10-01 の実測）。
+  - 入力の印の読み（`crates/scribe2/src/fleet/lifecycle_mark.rs`）: 台帳は `.beads` の manifest の 1 file（embedded）か `issues.jsonl` の stat（files）・main は `refs/remotes/origin/main` の loose の ref か packed-refs の読みで、bd も git も撃たない。順の比べ（`main_order`）だけが git を撃つ。
+  - 既存の tick の歯 `seat_tick_rewrites_lifecycle_` の置き場の登録 row の anchor は在らない path（`/repo`）で、台帳の印も main の印も読めない。
+- 約束（番号は done と 1:1）:
+  1. rules 行 `lifecycle.full_min_s`（kind `LifecycleFullMinS`・形 Int・値 300・enabled・裁定の字 `user 2026-10-01T15:27Z`・裁定日 2026-10-01）を、埋め込み manifest の `lifecycle.age_h.epic-closable` の行の直後（`memo.notes_max_bytes` の前）に 1 本置き、kind は `ALL` の `LifecycleAgeH` の直後（`MemoNotesMaxBytes` の前）に置く。字面から引け、形は Int だけ。memo の 3 行は manifest と `ALL` の末尾のまま。
+  2. 管理 tick の周は、判定・打刻・部分の書き直しの後に、次の 5 つを全部満たす周だけ全部の書き直しを 1 回撃つ。
+     - manifest を読めた周（rc 1 の error の周でない）で、target の登録 row が在る。
+     - 置き場の出力が読める（無い・読めない周は撃たない・出力を作らない）。
+     - tick の manifest（`--rules` の写しか埋め込み）に `lifecycle.full_min_s` の行が在る（無い写しは撃たない）。
+     - 今の時刻が、出力の `full_at` と tick の撃った記録（約束 3）の ts の新しい方から `lifecycle.full_min_s` 秒以上後（`full_at` が null か読めない周は 0 と読む・記録が無いか読めない周は記録を数えない）。
+     - 登録 row の anchor の台帳の印か main の sha が、出力の `inputs.ledger` か `inputs.main` と等しくない。比べは値の等しさだけで、bd も git も撃たない。どちらかの印を読めない周は撃たない。event log の印は比べない（event log と時刻で決まる部分は部分の書き直しが持つ）。
+     - 判定と撃つ 1 本は部分の書き直しと同じ file（`crates/scribe2/src/fleet/lifecycle_partial.rs`）に置き、書き手の file（`crates/scribe2/src/fleet/lifecycle.rs`・上限の余地 58 行・main 417e4754）には足さない。
+     - 撃つ全部の書き直しは §12 約束 8 (e) の口と同じ 1 本で、観測の 1 周を撃ち、撃った時の印より古くない出力には書かない（coalesce）・lock は待たない（`Busy` で返る）。repo は登録 row の anchor、台帳 client は `seat tick` の新しい flag `--bd B`（無ければ `bd`）。
+  3. 撃った周は、返りの 6 値に依らず、置き場の `fleet/lifecycle.tick` を 1 行 `ts=<epoch 秒> wrote=<返りの語>`（語は `Wrote` の語の 6 つ）で一時 file → rename で書く。撃たない周は書かない。読み手は約束 2 の 4 つ目だけ。
+  4. tick の rc・stdout の判定行・stderr は、撃った周も撃たない周も変えない（部分の書き直しと同じく返りは字にしない）。
+  5. `seat` の使い方の 1 行と help の seat の頁の `tick --state-dir S --target S:W [--rules F]` を `tick --state-dir S --target S:W [--rules F] [--bd B]` にする。help の seat の頁の FORM は使い方の行の逐語の写しのまま（`crates/scribe2-boundary/tests/e2e/main.rs` の `cli_help_pages_match_the_live_form_and_every_subcommand` が一致を測る・本文は変えない）。
+- 閉包: rules 行は id の字で引く（新しい code は `RuleKind` の変種を名指すのは rules の module と歯だけ）。`EventKind`・`Stage`・`WaitReason`・`Turn` を名指さない（§12 の閉包と同じ）。`RuleKind` は touches に置く。
+- 歯:
+  - e2e（既存の `crates/scribe2-boundary/tests/e2e/seat/tick.rs`・接頭辞 `seat_tick_full_lifecycle_`）。置き場は既存の tick の fixture（`crates/scribe2-boundary/tests/e2e/seat.rs` の置き場）に、登録 row の anchor を toy repo にする形を足して使う。toy repo と偽 bd は既存の `fleet_lifecycle_` の歯の fixture（`crates/scribe2-boundary/tests/e2e/fleet.rs`・`.beads` の files の形・偽 bd は `--readonly list` に空の列を返す）を開いて使う。どの歯も `--rules` の写しで `lifecycle.full_min_s` を 60 にし、撃つ形を 1 つ以上持つ（base は `--bd` も行の kind も知らず rc 1 で撃たない＝RED）。
+    - (a) `full_at` が 2 時間前の出力の置き場で、`issues.jsonl` を伸ばした後の tick の 1 周: 出力の `scope` が full・`full_at` が進み・`inputs.ledger` が今の印・偽 bd の呼びが 1 回以上・`fleet/lifecycle.tick` が `wrote=written`。同じ歯の中で、印を動かさずにもう 1 周撃つと（記録の ts を 2 時間前へ戻した後）偽 bd の呼びが増えず `full_at` が動かない。2 周の rc と判定行（置き場の path を伏せた字）が等しい。
+    - (b) 台帳を動かさず、origin/main の ref を toy repo の別の commit へ進めた周も撃つ。
+    - (c) event log だけを伸ばした周（台帳と main は出力と同じ）は撃たず（偽 bd 0 回・記録無し）、同じ歯の中で次に台帳を伸ばした周は撃つ。
+    - (d) 印が違っても、`full_at` が 30 秒前の周と、`full_at` が 2 時間前で記録の ts が 30 秒前の周は撃たない（2 形）。同じ歯の中で、両方を 2 時間前へ戻した周は撃つ。
+    - (e) 出力の無い置き場（出力を作らない）・`lifecycle.full_min_s` の行の無い写し・登録 row の anchor の台帳を読めない置き場は撃たない（3 形）。同じ歯の中で、出力を置き・行を戻し・台帳を置いた周は撃つ。
+    - (f) `--bd` を渡さず PATH に bd の無い env の周は、記録が `wrote=unreadable` で出力が理由 `ledger` の読めない印を持ち、tick の rc と判定行は (a) の撃つ周と等しい。
+    - (g) `lifecycle.lock` を生きた pid で持たせた周は待たずに記録が `wrote=busy` で出力の bytes が変わらない。
+  - rules（既存の `crates/scribe2-boundary/tests/e2e/rules.rs`・接頭辞 `rules_lifecycle_full_min_s_`・1 本）: 約束 1 の行の id・kind・形・値・enabled・裁定の字と裁定日・置き場（manifest の `lifecycle.age_h.epic-closable` の直後で `memo.notes_max_bytes` の前・`ALL` の `LifecycleAgeH` の直後で `MemoNotesMaxBytes` の前）・字面から引けること・文字列の値の写しが形で断られること・裁定の字が base の行 `floor.timeout_s` と違うこと。
+  - 直す既存の歯（どれも新しい kind を名指すか数か窓が変わるので base で落ち、retroactive の札は要らない）:
+    - `rules_embedded_manifest_is_valid_and_covers_all_kinds`（行数 104 → 105）・`rules_embedded_manifest_declares_one_capability_row_per_role`（kind の母集団 90 → 91）・`rules_external_form` の snapshot（rows=105 kinds=91 の 2 行）。
+    - 末尾からの窓を数える歯の skip を 1 つ増やす: `rules_lifecycle_rows_carry_the_ruled_values_and_the_lifecycle_ruling`（kind の skip 3 → 4・行の skip 3 → 4）・`rules_floor_timeout_row_precedes_the_drafts_cap_rows`（kind の skip 5 → 6・行の skip 17 → 18）・`rules_drafts_cap_rows_are_the_last_two_kinds_and_rows`（kind の skip 5 → 6・行の skip 17 → 18）・`class_derive_embedded_row_carries_the_ruled_three_elements_and_ruling_id`（kind の skip 5 → 6）・`rules_embedded_manifest_declares_host_guard_kinds_at_the_tail_of_all`（末尾の列に `LifecycleFullMinS` を `LifecycleAgeH` の直後へ足し、末尾の窓の skip 5 → 6）。
+    - `seat_usage_external_form` の snapshot と、`crates/scribe2-boundary/tests/e2e/seat.rs` の tick の口の字の定数（約束 5 の字にする・読む歯は `seat_autonomy_subcommands_are_gone_from_the_usage`・`seat_inject_subcommand_is_gone_from_the_usage`・`seat_working_memory_subcommands_are_gone_from_the_usage` の 3 本で、base の使い方の行に新しい字が無いので base で落ちる）。
+    - 母集団の数え方: 本行を撃つ時の main で rules の e2e（rules.rs と rules/embedded.rs）の `.rev()`・`ALL.len()`・`rows().len()` の pin を grep で全部数える（main 417e4754 で上の 7 本と snapshot の 2 行）。memo の 3 行の歯（`rules_memo_rows_are_the_last_three_kinds_and_rows`）は末尾の 3 つが memo のままなので直さない。
+  - 既存の歯 `seat_tick_rewrites_lifecycle_` は本文を変えずに緑（anchor が在らない path で印を読めず撃たない・同じ歯の中の bd と git の呼び 0 のまま）。
+- 触らない: §12 の書き手と契機 (a)(d)(e)・§13 の部分の書き直し・印の読みと順の比べ・古さの印・`fleet lifecycle write` の口・tick の判定の列と判定行の形・tick の unit の導出（台帳 client を unit に載せるのは seat-heartbeat.md §25 の行 ad）。
+- 限界:
+  - 台帳か main の変化が出力に入るのは、最長で下限の 300 秒と tick の周期（`seat.tick_interval_s`）の和の後。
+  - 書き直しの間（空いた host で約 4 秒・gate が走る host で約 14 秒）は lock を持つので、ほかの書き手は `Busy` で飛び、次の周が拾う。
+  - 撃った記録は返りに依らず書くので、`Busy`・`Unreadable` の周も次の試みは下限の後になる。
+  - 撃つ周の tick の process は、書き直しの間だけ約 275 MB の RSS と 4〜14 秒の延長を抱える。判定と合図の注入は書き直しの前に済むが、書き手が panic すればその周の tick は判定行を出さずに異常終了する（src は unwrap と expect を lint で持たない）。
+  - 1 つの置き場に anchor の違う席が 2 つ以上在ると、tick ごとに違う repo の印と比べ、下限ごとに違う repo で書き直しうる（§12 の限界の multi-anchor と同じ・後の行）。
+  - systemd の timer の PATH に bd が無い host では、行 ad が unit に台帳 client を載せるまで記録が `wrote=unreadable` のまま。
+  - 登録 row の anchor の台帳の印か main の印を読めない置き場と、`lifecycle.full_min_s` の行の無い写しでは、tick は全部の書き直しを撃たず、撃った記録も書かない（何もしない側に倒す）。その置き場の出力は、ほかの契機（§12 約束 8）の全部の書き直しでだけ進む。
+- 却下:
+  - event log の印も比べる（event は tick の周ごとに伸びうるので、台帳が動かなくても下限ごとに全部を書き直す・event と時刻の部分は部分の書き直しが持つ）。
+  - 印を順（git の祖先の関係）で比べる（tick の周ごとに git を撃つ・「動いた」は等しさで足り、順は書き手が lock の中で比べる）。
+  - 消費側が口（`fleet lifecycle write`）を周期で撃つ手順にする（散文の手順で器が測れない・N2）。
+  - 書き直し専用の timer unit を足す（置き場ごとに 2 本目の unit・ADR-0030 は席ごとに 1 組）。
+  - 下限を持たない（台帳が数秒ごとに動く周に毎周 4 秒の CPU）・下限を code の定数にする（裁定を通らない閾値・C5）。
+  - tick が `fleet lifecycle write` の子 process を撃つ（読みは同じで process が 1 つ増える。口の出力は `Written`・`Unchanged`・`Coalesced`・`Discarded` を同じ show の字で出すので、撃った記録の返りの語を 6 つに分けられず、分けるには口の出力の形を変えることになる）。
+  - systemd の user の env（environment.d）で PATH を足す手順にする（器が見えない host の前提で、器は env を読まない・C2.2）。
