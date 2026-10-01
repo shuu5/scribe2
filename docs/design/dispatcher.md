@@ -1245,38 +1245,62 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
 
 ## 42. 起こす便が 0 の周に、引き金の満ちない memo を間隔と本数の内で裏の審査へ渡す（契約表の行 aq・[FR87](../../design-intent/spec/srs.html#FR87) / FR68・AC57・ADR-0085）
 
-やさしく言うと: 起こす便が 1 本も無い周に、器は条件の満ちていない memo のうち、前の審査から 24 時間過ぎたものを、古い順に 1 周 2 本まで、行 ap の裏の process へ渡す。処置を待っている memo は渡さない。周は審査の終わりを待たない。
+やさしく言うと: 起こす便が 1 本も無い周に、器は条件の満ちていない memo のうち、前の審査から 24 時間過ぎたものを、古い順に 1 周 2 本まで、行 ap の裏の process へ渡す。処置を待っている memo と審査中の memo は渡さない。周は審査の終わりを待たない。規則の行を読めない周は渡さず、そのことを stderr の 1 行で知らせる。
 
-- 何が起きているか（main 46b1f91f・verified）:
-  - 起こす側の周 `fire`（`crates/scribe2/src/pipe/dispatch.rs`）は、`measure` の 1 回の読みで候補を判じ、起こす便（launches）と起こし直す便（revives）を決める。事前審査の先撃ちは同じ周に裏で lens を起こす（§27）。
-  - 局面の出力の全部の書き直しは、`fire` の事前審査の後に撃つ（case-lifecycle.md §12 約束 8 (a)・未着地）。
-  - rules 行 `memo.triage_interval_h` と `memo.triage_per_round` は ledger-form.md 行 o が足す（未着地・値 24 と 2・裁定 user 2026-09-28T07:27Z）。
-- 前提: 行 ap の着地の後。ledger-form.md 行 o（局面の出力の読み手と rules 行 2 本）の着地の後。**SRS の追加の round（FR87 に「処置の待ちの memo を除く」句を足す）の後に起こす**（ADR-0085 は除くと決めたが、SRS 0.32 の FR87 に句が無い）。
+- 何が起きているか（main 4c6fe0d7・verified）:
+  - 起こす側の周 `fire`（`crates/scribe2/src/pipe/dispatch.rs`）は、`measure` の 1 回の読みで候補を判じ、起こす便（launches）と起こし直す便（revives）を決める。周の読みが在る周だけの 1 つの block で、事前審査（§27）の後に局面の出力の全部の書き直し（`lifecycle_round`・case-lifecycle.md §12 約束 8 (a)・着地済み）を撃つ。
+  - `fire` は空行とコメントを除いて 56 行で、clippy の too_many_lines（60）と cognitive_complexity（15）は workspace の lint で forbid。
+  - lib は stderr を書かない（Cargo.toml の lint `print_stderr` が deny）。列の 1 周の結果 `Turn` は書き直しの返りの語を欄 `lifecycle` に載せ、`crates/scribe2/src/pipe/cli.rs` の `lifecycle_err` がその語を stderr の `lifecycle=<語>` の 1 行にする。`lifecycle_err` を呼ぶのは列の 1 周を組む 2 か所（手動の 1 周と印の直後の周の `turn_lines`、終端の周と回答・承認の周）で、`fire` を撃つのもこの 2 か所だけ。
+  - `Turn` の literal は 3 か所: dispatch.rs の `unmeasured`・`crates/scribe2/src/pipe/dispatch/candidates.rs` の `settle`・`crates/scribe2/src/hook/utterance.rs` の歯の中。`Turn` は consumer-sync.md 行 g の touches に在る。case-lifecycle.md 行 c が欄 `lifecycle` を足した便は、この 3 file と cli.rs を write-set に持って着地した（utterance.rs の歯の行は base の `Turn` に欄が無く、flip-check の overlay が compile error で RED と数えた）。
+  - 行 ao の子 module `crates/scribe2/src/pipe/dispatch/memo.rs` は、母集団（開いた memo から最後の昇格の行が「全部」の memo を除く）の判定と引き金の欄の値を私有の `fully_promoted` と `triggers` に持つ。外へ出す口は行の字の `lines`・1 本の memo の値の `trigger_value`・置き場の判定の `judgement`・置き場の `dir` と file の名だけで、母集団の memo ごとの値と作られた時刻を返す口は無い。`trigger_value` は呼ぶたびに世界の 5 入力を組み直す（同梱の引き金が在れば開いた契約の生成を含む）。
+  - 撃ち中の印の判定は `crates/scribe2/src/pipe/dispatch/memo_lens.rs` の私有の `claim` が持ち、`crates/scribe2/src/fleet/store.rs` の `lock_owner` と `started_ms` で読む（死んだ持ち主でない印、つまり生きているか読めない持ち主の印は撃ち中）。
+  - 起こす便へ渡す道具の列は candidates.rs の `tools` の 1 本（--rules・--lens・--runner・引数で名指された --bd・--curl）で、`spawn_self` が自分を `pipe <argv>` で裏に起こす。`pipe dispatch` はこの道具の flag を全部受ける。memo-lens の口座の計測は argv の --curl を読む。
+  - 局面の出力の読み手 `read`（`crates/scribe2/src/fleet/lifecycle_read.rs`・ledger-form.md 行 o・着地済み）は比べる組を受け、無い・読めない・読めた（部品と古い理由）の 3 値を返す。
+  - rules 行 `memo.triage_interval_h`（24）と `memo.triage_per_round`（2）は rules/manifest.toml に在る（ledger-form.md 行 o・裁定 user 2026-09-28T07:27Z）。整数の行の読みは `int_row`（無い・不発効・整数でないの 3 理由）。SRS の FR87 は「局面が memo-actionable の memo を除き」の句を持つ。
+  - 既存の pipe の歯の rules の写しは memo の行を持たない。stderr の全体を等しさで見る pipe の歯は 0 本（notify.rs の 1 本は `notify=` の行に絞って比べる）。
+- 前提: 無い（行 ap・ledger-form.md 行 o・SRS の FR87 の句は着地済み）。case-lifecycle.md §17 の行 g（処置の無い判定の memo を局面の出力へ渡す行）は前提にしない（限界）。
 - 約束（番号は done と 1:1）:
-  1. 撃つ周: `fire` の周で、起こす便が 0（launches が空）で、台帳を読めた周だけ。起こし直す便は数えない。局面の出力の全部の書き直しの後に撃つ。`dispatch ls` は撃たない。
-  2. 候補: 次の 3 つを満たす memo。
-     - 行 ao の母集団で、引き金が満ちていない（行 ao と同じ判定の 1 本）。
-     - 局面の出力で memo-actionable でない（ledger-form.md 行 o の読み手 1 本で読む）。出力が無いか読めない周は除かない（上限と間隔が消費を縛るので、読めない周に審査を止めない・fail-open）。
-     - 前の判定の時刻（無ければ台帳の作られた時刻）から rules 行 `memo.triage_interval_h` の時間が過ぎている。時刻の無い memo は候補にしない。
-  3. 並びと本数: 前の判定の時刻（無ければ作られた時刻）の古い順、同じなら bead id の字の順。本数は rules 行 `memo.triage_per_round` から、置き場の生きた持ち主の `pid` の本数を引いた数まで。
-  4. 撃ち方: 候補ごとに置き場の `fired` に時刻を書き、`spawn_self` で `dispatch memo-lens <memo id>` を同じ `--state-dir`・`--repo`・`--rules`・`--bd` と周の `--lens` の字で起こす。周は終わりを待たない。`--lens` の無い周は撃たない。
-  5. rules 行 2 本を読めない周（無い・不発効・整数でない）は 1 本も撃たず、stderr に `triage=no-rule` の 1 行を出す（C10・既定値に倒さない）。起こす側の周の stdout と rc は変えない。
-- 閉包: 選びは新しい子 module（`crates/scribe2/src/pipe/dispatch/memo_triage.rs`）に置き、dispatch.rs には呼び出しの数行だけを足す。行 ao の子 module は呼ぶだけで変えない（行 ao が作る file を本行の write-set に素の path で書くと、行 ao の着地の前の CI で解けない）。rules 行は id の字で引く（`RuleKind` の変種を名指さない）。`Turn` の literal は書かない。
-- 歯（e2e・既存の `crates/scribe2-boundary/tests/e2e/pipe/dispatch/waiting.rs`・接頭辞 `pipe_dispatch_memo_triage_`・7 本・偽の lens は呼びを file へ記す・rules の写しで値を決める）:
-  - (a) 本数: 引き金の満ちない memo 3 本（間隔の外）と per_round 2 の写しで、手動の 1 周が 2 本を古い順に撃ち、3 本目は撃たない。撃った memo の置き場に `fired` の時刻が在る。
-  - (b) 間隔: 前の判定の時刻が間隔の内の memo と作られた時刻の無い memo は撃たず、同じ歯の間隔の外の memo は撃つ。
-  - (c) 起こす便の在る周・台帳を読めない周・`--lens` の無い周・`dispatch ls` の周は 0 本（同じ歯の起こす便の無い手動の 1 周は撃つ）。
-  - (d) 撃ち中: 生きた持ち主の `pid` を 1 つ置いた置き場では 1 本だけ撃つ。
-  - (e) 行が無い: 間隔の行を持たない写しの周は 0 本で stderr に `triage=no-rule`（同じ歯の行の在る写しは撃つ）。
-  - (f) 除く: 局面の出力の fixture で memo-actionable の memo は撃たず、出力の無い置き場では同じ memo を撃つ。
-  - (g) 引き金の満ちた memo は撃たず、同じ歯の満ちない memo は撃つ。
-  - 行 ao・ap の歯は緑のまま。
-  - base で RED: 手動の 1 周が memo の lens を撃たない（機能不在）。
-- 触らない: 候補の判定・起こす便と起こし直す便・事前審査の先撃ち・`dispatch=` の行・`WaitReason`・起票の門。
+  1. 撃つ周: `fire` の周で、起こす便が 0（launches が空）で、台帳を読めた周だけ。起こし直す便は数えない。局面の出力の全部の書き直しの後に撃つ。`dispatch ls` と --lens の無い周は撃たない（--lens の無い周は rules 行も読まず、stderr にも出さない）。
+  2. 候補: 次の 4 つを満たす memo。
+     - 行 ao の母集団で、引き金が満ちていない（引き金の欄の値が満ちた形でない・行 ao と同じ判定の 1 本）。
+     - 局面の出力で memo-actionable でない。出力は行 o の読み手 1 本で、比べる組を空にして読む（同じ周の書き直しの直後に読むので、古さの印の在る出力も読めた出力として除きに使う）。出力が無いか読めない周は除かない（上限と間隔が消費を縛るので、読めない周に審査を止めない・fail-open）。
+     - 置き場に撃ち中の印（死んだ持ち主でない `pid`）が無い。
+     - 前の判定の時刻（置き場の `verdict` の `at`・無ければ台帳の作られた時刻）から rules 行 `memo.triage_interval_h` の時間が過ぎている。時刻の無い memo と、`verdict` の file が在って読めない memo は候補にしない（読めないを「判定が無い」に読み替えない・C10）。
+  3. 並びと本数: 前の判定の時刻（無ければ作られた時刻）の古い順、同じなら bead id の字の順。本数は rules 行 `memo.triage_per_round` から、全 memo の置き場の撃ち中の印の数を引いた数まで。
+  4. 撃ち方: 候補ごとに置き場の dir を作って `fired` に周の時刻（UTC の秒まで）を書き、`spawn_self` で `dispatch memo-lens <memo id>` に、同じ --state-dir と --repo と、列が起こす便へ渡すのと同じ道具の列（`tools` の 1 本）を足して起こす。周は終わりを待たない。
+  5. rules 行 2 本のどちらかを読めない周（無い・不発効・整数でない）は 1 本も撃たず、`Turn` の新しい欄 1 つ（`Option` の語・ほかの周は `None`）に語 no-rule を載せ、cli.rs の `lifecycle_err` が `lifecycle=` の行の後ろに stderr の `triage=no-rule` の 1 行を足す（C10・既定値に倒さない）。起こす側の周の stdout と rc は変えない。
+  6. 新しい `+` の file は `Turn`・`WaitReason`・`EventKind`・`RuleKind` を構造として持たない（literal の構築・match の arm・変種の構築・件数の pin の 4 形が無い）。4 つの型はどれも契約表の行の touches に在り（`Turn` は本行と consumer-sync.md 行 g・`WaitReason` は本 doc の行 w・`EventKind` は本 doc の行 a と行 ap・`RuleKind` は本 doc の行 y・aa・ah・an）、器の閉包の検査が測るので、verify の最終行に contracts check を置く。
+- 設計の線（歯を持たない・審査が読む）:
+  - 選びと撃ちは行 aq の write-set の `+` の file に置き、その file に in-file の歯を置かない（新しい src の file の in-file の歯は flip-check で not-flippable になる）。歯は e2e だけ。
+  - dispatch.rs に足すのは、mod 宣言とその doc・`Turn` の欄と doc・`unmeasured` の literal の 1 欄・`fire` の 1 文だけ。1 文は事前審査と書き直しの block の中の書き直しの後に置き、分岐を足さない（起こす便の有無・--lens・rules 行の読みは `+` の file の中で判じる）。
+  - memo.rs に、母集団の memo ごとの（id・引き金の欄の値・作られた時刻）を bead id の字の順に返す `pub(super)` の関数を 1 本足し、`lines` はその返りを行に写す（母集団の判定と世界の組み立てを 2 本にしない・C2）。行の字と `trigger_value` の返りは変えない（行 ao の歯 pipe_dispatch_memo_trigger_ が測る）。
+  - 撃ち中の判定は `claim` と同じ `lock_owner` と `started_ms` を呼ぶ（死んだ持ち主かの読みの写しを持たない）。
+  - candidates.rs の `settle` と utterance.rs の歯の literal には新しい欄の `None` を足すだけ。
+  - 新しい欄の名は triage を推奨（実装が決める）。`lifecycle_err` の名と doc は 2 つの語に合わせて直してよい（呼び手 2 か所は cli.rs の中）。終端の周と回答・承認の周も同じ 1 本を通るので、stderr の行の置き場は手動の 1 周と同じになる。
+- 歯（e2e・既存の `crates/scribe2-boundary/tests/e2e/pipe/dispatch/waiting.rs` の末尾・接頭辞 pipe_dispatch_memo_triage_・7 本・偽の lens は呼びを file へ記す・rules の写しは既存の写しに 2 行を足して値を決める・裏の子は記録の file を期限つきで待ち、撃たないことを測る側も同じ期限まで待つ）:
+  - (a) 本数と待たない: 引き金の満ちない間隔の外の memo 3 本と per_round 2 の写しで、手動の 1 周が 2 本を古い順に撃ち、3 本目は撃たない。撃った memo の置き場に `fired` の時刻が在る。偽の lens は合図の file が置かれるまで終わらない形で、周は rc 0 で返り、返った時点で `verdict` が無く、合図の後に 2 本の `verdict` が現れる。
+  - (b) 間隔: 前の判定の時刻が間隔の内の memo・作られた時刻の無い memo・読めない `verdict` の file の memo は撃たない。同じ歯の、判定の `at` が間隔の外の memo と、判定の無い・作られた時刻が間隔の外の memo は撃つ。
+  - (c) 撃つ周: 起こす便の在る周・台帳を読めない周・--lens の無い周・`dispatch ls` の周は 0 本。同じ歯の起こす便の無い手動の 1 周は撃つ。
+  - (d) 撃ち中: per_round 2 の写しで、生きた持ち主の `pid` を置いた memo の置き場が在る周は、その memo を撃たず、ほかの 1 本だけを撃つ。同じ歯の死んだ持ち主の `pid` の周は 2 本を撃つ。
+  - (e) 行が無い: 間隔の行を持たない写しの周は 0 本で、stderr に `triage=no-rule` の 1 行が在り、rc 0 で、stdout が同じ置き場の行の在る写しの周と等しい。行の在る写しの周は撃ち、stderr に `triage=` の行が無い。
+  - (f) 除く: lifecycle.lock を生きた pid で持たせて同じ周の書き直しを Busy にした置き場で、出力の fixture（行 c の書き手の描きの 1 本 `render_output` で組む）で memo-actionable の memo は撃たない。同じ歯の出力の無い置き場（同じく lock を持たせる）では同じ memo を撃つ。
+  - (g) 母集団: 引き金の満ちた memo と、最後の昇格の行が全部の memo は撃たない。同じ歯の満ちない memo（最後の昇格の行が一部の memo を含む）は撃つ。
+  - 行 ao の歯 pipe_dispatch_memo_trigger_ は緑のまま（memo.rs の口の足しの非回帰）。
+  - base で RED: 手動の 1 周が memo の lens を撃たない（機能不在）。utterance.rs の歯の literal の行は、base の `Turn` に欄が無いので overlay が compile error で RED（行 c と同じ・札は要らない）。
+- 触らない: 候補の判定・起こす便と起こし直す便・事前審査の先撃ち・`dispatch=` の行・`WaitReason`・起票の門・memo.rs の行の字と `trigger_value`・memo-lens の処理。
 - 限界:
   - 手動の 1 周も便の終端も無い間は、審査は回らない（周は timer を持たない）。
   - 撃ち中の数えは、起こした子が `pid` を置くまでの間の次の周に 1 本だけ越えうる（周の間隔は子の起動より長い）。
-- 却下: 撃ち中を周が待つ案（周が timer を持たない約束と FR68 の契機の周の短さに反する）。
+  - case-lifecycle.md §17 の行 g の着地までは、処置の無い判定（promote か close）の memo は memo-actionable に出ないので、間隔の後にもう一度審査へ渡る。消費は上限と間隔が縛る。
+  - 書き直しが Busy の周は、前の出力で除く。その間に memo-actionable を出入りした memo は、次の書き直しまで古い局面で扱う。
+  - 起こせなかった子（spawn の失敗）は `fired` だけを残し、前の判定の時刻が動かないので、次の周が撃ち直す。
+  - host の健康の遮断器は通さない（ADR-0085 の字は「起こす便が 0 の周」・本数は per_round が縛る）。
+- 却下:
+  - 撃ち中を周が待つ案（周が timer を持たない約束と FR68 の契機の周の短さに反する）。
+  - no-rule を既存の欄 `lifecycle` に相乗りさせる案（字が `lifecycle=` になり、§12 の語の意味を壊す）。
+  - no-rule を stdout の `dispatch=` の行に載せる案（起こす側の周の stdout を変え、既存の歯の字を動かす）。
+  - no-rule を置き場の file に書いて doctor が読む案（面が 2 つ増え、周の口では黙る）。
+  - 母集団を `lines` の字から読み戻す案（C3.3）と、`trigger_value` を memo ごとに呼ぶ案（世界の組み直しが memo の数だけ走り、母集団の判定を写す・C2）。
 
 ## 43. 便の終端の通知の 1 語を局面の出力の便の部品から読み、起こす便が 0 の周の idle の行に memo の要約を載せる（契約表の行 ar・[FR44](../../design-intent/spec/srs.html#FR44) / FR87 / FR94・AC57・AC60・ADR-0088）
 
@@ -1287,23 +1311,25 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
   - 終端の周は、段の記帳 → 掃除 → 列の 1 周（`fire`）→ `notices` の順に撃つ。局面の出力の全部の書き直しは `fire` の中の事前審査の後と land の終端の close の後に撃つ（case-lifecycle.md §12 約束 8 (a)(d)・未着地）＝知らせは書き直しの後の出力を読む。
   - idle の行（`crates/scribe2/src/pipe/notify.rs` の `idle_line`）は起こす便が 0 で候補が 1 本以上の周だけ出る。形は `idle ready=<n> launched=0 reason=<語>` の後ろに並列の実測の字、その後ろに ` pending=…`。
   - 既存の歯（`crates/scribe2-boundary/tests/e2e/notify.rs`）は末尾（` live=1 idle=- held=1:lib.rs`・` precheck=3/3:1`）を `ends_with` で見る歯と、候補 0 の周に idle の行を送らない歯と、pending の語の歯を持つ。
-- 前提: ledger-form.md 行 o（局面の出力の読み手）の着地の後。case-lifecycle.md 行 c の着地の後。行 ao の後（次の 1 本の判定の語を読む）。
+  - （main 4c6fe0d7・verified）局面の出力の読み手 `read`（`crates/scribe2/src/fleet/lifecycle_read.rs`）は着地済み。書き手（`crates/scribe2/src/fleet/lifecycle.rs`）は導出（`crates/scribe2/src/ledger/phase.rs`）へ未反映の問いと処置の無い判定の memo の列を空で渡し、memo-actionable の理由 verdict は導出の処置の無い判定の列に memo が在る枝からしか出ないので、今の出力に理由 verdict の memo は無い（ledger-form.md §19 の限界）。2 つの列を渡すのは case-lifecycle.md §17 の行 gで、どの判定の memo が理由 verdict になるかは行 g が決める。
+  - （同・verified）終端の周の書き直しは `fire` の中で撃つので、道具の無い周（no-runner で返る）・台帳を読めない周（書き直しの前に返る）・lock を rules 行 `fleet.lock_retry_ms` より長く持たれた周（Busy）は書き直さず、知らせは終端の前の出力を読む。その出力の便の部品は終端の前の局面（例 run-implementing・手番 runner）のままである。
+- 前提: case-lifecycle.md §17 の行 g（局面の導出に処置の無い判定の memo と未反映の問いを渡す行・memo s2-07l.738.38.10）の着地の後（台帳の blocks で行 g を待つ）。行 g の前は約束 3 の理由 verdict の memo が出力に現れず、歯 (e) を書き手の書いた出力で測れない。ledger-form.md 行 o・case-lifecycle.md 行 c・行 ao は着地済み。
 - 約束（番号は done と 1:1）:
-  1. 終端の行: 便の部品（case-lifecycle §2.1）の手番が seat のときだけ送り、段に添える 1 語はその部品の理由の語にする（Reviewed と Gated の FAIL は判定の語・Failed は最後の detail の頭・Stopped と Questioned は段の名・着地した便と手番が seat でない便は送らない）。`alarm_word` と、それだけが使う gate の verdict の読みと審査の判定の読みの呼び出しを cli.rs から消す（自前の判定を持たない・FR94）。未処置の終端の pending も同じ読みを通す。
-  2. 比べる印は event log の長さと古さの印（case-lifecycle §15 の表）。出力が印を持つか、event log が出力の長さより伸びた周は、語に `:stale` を添える。出力が無いか読めない周は、終端の便ごとに語 `unreadable` で送る（黙らない・fail-open）。その周の pending は ` pending=unreadable`。
+  1. 終端の行（出力が読めて古くない周）: 便の部品（case-lifecycle §2.1）の手番が seat のときだけ送り、段に添える 1 語はその部品の理由の語にする（Reviewed と Gated の FAIL は判定の語・Failed は最後の detail の頭・Stopped と Questioned は段の名）。出力に部品の無い便（着地して閉じた契約の便）と手番が seat でない便は送らない。`alarm_word` と、それだけが使う gate の verdict の読みと審査の判定の読みの呼び出しを cli.rs から消す（自前の判定を持たない・FR94）。未処置の終端の pending も同じ読みを通す。
+  2. 比べる印は event log の長さと古さの印（case-lifecycle §15 の表）。出力が印を持つか、event log が出力の長さより伸びた周（古い周）は、部品の手番が seat の便は語に `:stale` を添えて送り、部品の無い便と手番が seat でない便は語 `stale` で送る（古い出力の手番は終端の前の局面のもので、それで黙らない・fail-open）。出力が無いか読めない周は、終端の便ごとに語 `unreadable` で送る（黙らない・fail-open）。その周の pending は ` pending=unreadable`。
   3. idle の行の memo の要約: ` reason=<語>` の直後（並列の実測の字の前）に ` memos=<open>:<actionable>[ next=<memo id>:<語>]` を足す。
      - `open` は出力の memo の部品のうち閉じていない数、`actionable` は局面が memo-actionable の数。
-     - `next` は memo-actionable のうち since の最も古い 1 本。語はその部品の理由の語で、理由が verdict の memo は行 ao の読みの最新の判定の語（promote・close・keep・unparsed）。
+     - `next` は memo-actionable のうち since の最も古い 1 本。語はその部品の理由の語で、理由が verdict の memo は行 ao の読みの最新の判定の語（置き場の `verdict` の file の語・どの判定の memo が理由 verdict になるかは case-lifecycle.md §17 の行 g が決める）。
      - 比べる印は台帳（§15 の表）。古い周は数に `:stale`（` memos=<open>:<actionable>:stale`）。出力が無いか読めない周は ` memos=unreadable`。
      - open が 0 で読めた周は key を出さない。
   4. 候補が 0 でも、起こす便が 0 で memo-actionable が 1 以上の周は idle の行を送る（`ready=0 reason=-`）。memo-actionable が 0 か出力を読めない周で候補が 0 なら、今どおり送らない。処置で memo-actionable を出るまで、周ごとに送り直す（FR87）。
 - 閉包: notify.rs と cli.rs の中だけを変え、新しい file は作らない。`Stage` の変種の match を足さない（cli.rs からは消える）。
-- 歯（e2e・既存の `crates/scribe2-boundary/tests/e2e/notify.rs` の末尾・接頭辞 `pipe_notify_lifecycle_`・7 本・終端の周の書き手が出力を書く置き場で撃つ）:
+- 歯（e2e・既存の `crates/scribe2-boundary/tests/e2e/notify.rs` の末尾・接頭辞 `pipe_notify_lifecycle_`・7 本・終端の周の書き手が出力を書く置き場で撃つ＝台帳の印の file と main の ref を置き、偽の台帳が便の bead を開いた契約で持ち、終端の周に道具を渡す）:
   - (a) Reviewed の FAIL の便の終端の行の語が判定の語、Stopped の便の語が `Stopped`。
   - (b) 着地して閉じた契約の便は送らず、同じ歯の Failed の便は送る。
-  - (c) 出力を書いた後に event log へ行を足した置き場の終端で、語に `:stale` が付く。
-  - (d) 出力の無い置き場の終端は、語 `unreadable` で送り、pending は `unreadable`。
-  - (e) memo の部品を持つ出力で、idle の行の `memos=` と `next=` が ` reason=` の直後で並列の実測の字の前に在る。理由が verdict の memo の `next=` の語が置き場の判定の語。出力の後に台帳の印を動かした置き場では `memos=<open>:<actionable>:stale`。
+  - (c) 古い周: lifecycle.lock を生きた pid で持たせて終端の周の書き直しを Busy にし、出力は終端の前に書いた置き場で、出力の部品が run-asking（手番 seat）の便の終端の語に `:stale` が付き、出力の部品が run-implementing（手番 runner）の便の終端は語 `stale` で送る（2 つの置き場・同じ歯）。
+  - (d) 書き手が出力を書けない置き場（台帳の印の file と main の ref を置かない）の終端は、語 `unreadable` で送り、pending は `unreadable`。
+  - (e) memo の部品を持つ出力で、idle の行の `memos=` と `next=` が ` reason=` の直後で並列の実測の字の前に在る。promote の判定の file と MemoJudged の event を置き、偽の台帳の updated_at が判定より前か無い memo（行 g の書き手が理由 verdict の memo-actionable にする memo）の `next=` の語が `promote`。置き方は memo-lens を偽の lens で 1 回撃つか、同じ形の file と event の行を書く。出力の後に台帳の印を動かした置き場では `memos=<open>:<actionable>:stale`。
   - (f) 候補 0 で memo-actionable 1 の置き場で idle の行が `ready=0 reason=-` で出る。
   - (g) memo を close した後の周に `memos=` の actionable が減り、候補 0 なら行が消える（同じ歯の close の前は在る）。
   - 直す既存の歯: 終端の語と pending の語を見る `pipe_notify_` の歯のうち、Stopped と Questioned の語を見る歯は期待を段の名へ直す。字を直さずに base で緑のままの歯は無いが、base で緑のまま本文だけ直す歯が出たら retroactive の札を付ける（便の base で測る）。
@@ -1313,8 +1339,11 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
 - 限界:
   - 語の値の正本は case-lifecycle §2.1 の表。表を変える便は、この行の歯の期待も動かす。
   - 読めない周の fail-open は、着地した便の終端も `unreadable` で送る（静かな正常を 1 周だけ破る）。
+  - 古い周の fail-open は、着地した便と手番が seat でない便の終端も語 `stale` で送る（書き直しの撃たれない周だけ静かな正常を破る）。古い周に手番が seat の部品の語は終端の前の局面の理由で、`:stale` がそれを示す。
+  - next= の memo の処置の読みは行 g の印（判定の後に台帳がその memo を書いた）に依り、処置でない書きでも memo-actionable を出る（行 g の限界）。
 - 却下:
   - 読めない周に `alarm_word` へ倒す案。自前の判定が残り FR94 に反する。
+  - 古い周も部品の手番で送るかを決める案。古い部品の手番は終端の前の局面のもので、台帳を読めない周と Busy の周に落ちた便の知らせを黙って落とす（C10）。
   - memo の要約を別の 1 行で送る案。差し込みの本数が増える（FR44 は idle の 1 行に要約を持たせる）。
   - 要約を行の末尾に置く案。末尾を見る既存の歯が RED になる。
 
@@ -1861,27 +1890,28 @@ done = "(1) 裏の process は pipe dispatch memo-lens <memo id> --state-dir S -
 
 [[contract]]
 id = "aq"
-title = "起こす便が 0 の周に、引き金の満ちない memo のうち局面の出力で memo-actionable でなく前の判定（無ければ起票）から rules 行 memo.triage_interval_h が過ぎたものを、撃ち中を含めて rules 行 memo.triage_per_round の本数まで古い順に pipe dispatch memo-lens へ裏で渡す — 行を読めない周は撃たずに triage=no-rule（dispatcher §42・ADR-0085）"
+title = "起こす便が 0 の周に、引き金の満ちない memo のうち局面の出力で memo-actionable でなく撃ち中でもなく前の判定（無ければ起票）から rules 行 memo.triage_interval_h が過ぎたものを、撃ち中を含めて rules 行 memo.triage_per_round の本数まで古い順に pipe dispatch memo-lens へ裏で渡す — 行を読めない周は撃たずに triage=no-rule（dispatcher §42・ADR-0085・stderr の行は列の 1 周の結果の新しい欄を cli.rs が写す）"
 req = ["FR87", "FR68"]
 section = "42"
 depends = ["ap"]
-write-set = ["crates/scribe2/src/pipe/dispatch.rs", "+crates/scribe2/src/pipe/dispatch/memo_triage.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch/waiting.rs"]
-verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_memo_triage_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_memo_trigger_"]
+touches = ["crate::pipe::dispatch::Turn"]
+write-set = ["crates/scribe2/src/pipe/dispatch.rs", "+crates/scribe2/src/pipe/dispatch/memo_triage.rs", "crates/scribe2/src/pipe/dispatch/memo.rs", "crates/scribe2/src/pipe/dispatch/candidates.rs", "crates/scribe2/src/hook/utterance.rs", "crates/scribe2/src/pipe/cli.rs", "crates/scribe2-boundary/tests/e2e/pipe/dispatch/waiting.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_memo_triage_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_dispatch_memo_trigger_", "cargo run -q -p scribe2-boundary --bin scribe2 -- contracts check --repo ."]
 size = "M"
-growth = ["crates/scribe2/src/pipe/dispatch.rs:8", "crates/scribe2/src/pipe/dispatch/memo_triage.rs:130"]
-done = "(1) fire の周で起こす便が 0 で台帳を読めた周だけ、局面の出力の全部の書き直しの後に撃ち、起こし直す便は数えず、dispatch ls は撃たず、選びは行 aq の + の file に置き dispatch.rs は呼び出しの数行・行 ao の子 module は呼ぶだけで変えない (2) 候補は行 ao の母集団で引き金が満ちず（行 ao と同じ判定）、ledger-form 行 o の読み手で memo-actionable でなく（出力が無いか読めない周は除かない）、前の判定の時刻（無ければ作られた時刻）から memo.triage_interval_h の時間が過ぎた memo で、時刻の無い memo は候補にしない (3) 前の判定の時刻（無ければ作られた時刻）の古い順・同じなら bead id の字の順に、memo.triage_per_round から置き場の生きた持ち主の pid の本数を引いた数まで (4) 候補ごとに fired に時刻を書き、spawn_self で dispatch memo-lens <memo id> を同じ --state-dir・--repo・--rules・--bd と周の --lens の字で起こし、周は待たず、--lens の無い周は撃たない (5) rules 行 2 本を読めない周は撃たず stderr に triage=no-rule の 1 行を出し、起こす側の周の stdout と rc は変えない 歯: pipe_dispatch_memo_triage_ の e2e 7 本（waiting.rs・偽の lens は呼びを file へ記す・rules の写しで値を決める）の (a) 引き金の満ちない間隔の外の memo 3 本と per_round 2 の写しで手動の 1 周が 2 本を古い順に撃ち 3 本目を撃たず、撃った memo の置き場に fired の時刻が在る (b) 前の判定が間隔の内の memo と作られた時刻の無い memo は撃たず同じ歯の間隔の外の memo は撃つ (c) 起こす便の在る周・台帳を読めない周・--lens の無い周・dispatch ls の周は 0 本で同じ歯の起こす便の無い手動の 1 周は撃つ (d) 生きた持ち主の pid を 1 つ置いた置き場では 1 本だけ撃つ (e) 間隔の行を持たない写しの周は 0 本で stderr に triage=no-rule、同じ歯の行の在る写しは撃つ (f) 局面の出力の fixture で memo-actionable の memo は撃たず出力の無い置き場では同じ memo を撃つ (g) 引き金の満ちた memo は撃たず同じ歯の満ちない memo は撃つ、行 ao と ap の歯は緑・base は手動の 1 周が memo の lens を撃たないので RED（機能不在）"
+growth = ["crates/scribe2/src/pipe/dispatch.rs:10", "crates/scribe2/src/pipe/dispatch/memo_triage.rs:150", "crates/scribe2/src/pipe/dispatch/memo.rs:12", "crates/scribe2/src/pipe/dispatch/candidates.rs:1", "crates/scribe2/src/hook/utterance.rs:1", "crates/scribe2/src/pipe/cli.rs:4"]
+done = "(1) fire の周で起こす便が 0 で台帳を読めた周だけ、局面の出力の全部の書き直しの後に撃ち、起こし直す便は数えず、dispatch ls と --lens の無い周は撃たない (2) 候補は行 ao の母集団で引き金が満ちず（行 ao と同じ判定の 1 本）、ledger-form 行 o の読み手で比べる組を空にして読んだ出力で memo-actionable でなく（出力が無いか読めない周は除かない）、置き場に死んだ持ち主でない pid が無く、前の判定の時刻（置き場の verdict の at・無ければ台帳の作られた時刻）から memo.triage_interval_h の時間が過ぎた memo で、時刻の無い memo と verdict の file が読めない memo は候補にしない (3) 前の判定の時刻（無ければ作られた時刻）の古い順・同じなら bead id の字の順に、memo.triage_per_round から全 memo の置き場の死んだ持ち主でない pid の数を引いた本数まで (4) 候補ごとに置き場の fired に周の時刻を書き、spawn_self で dispatch memo-lens <memo id> を同じ --state-dir と --repo と列が起こす便へ渡すのと同じ道具の列で起こし、周は待たない (5) rules 行 2 本のどちらかを読めない周は撃たず、列の 1 周の結果の新しい欄に語 no-rule を載せて cli.rs が stderr に triage=no-rule の 1 行を出し、起こす側の周の stdout と rc は行の在る周と変わらない (6) 新しい + の file は Turn・WaitReason・EventKind・RuleKind を構造として持たず（literal・match の arm・変種の構築・件数の pin が無い）、verify の最終行の contracts check が便の木で findings 0 歯: pipe_dispatch_memo_triage_ の e2e 7 本（waiting.rs・偽の lens は呼びを file へ記す・rules の写しで値を決める・裏の子は期限つきで待ち撃たないことを測る側も同じ期限まで待つ）の (a) 引き金の満ちない間隔の外の memo 3 本と per_round 2 の写しで手動の 1 周が 2 本を古い順に撃ち 3 本目を撃たず、撃った memo の置き場に fired の時刻が在り、偽の lens が合図の file まで終わらない形でも周は rc 0 で返って返った時点で verdict が無く、合図の後に 2 本の verdict が現れる (b) 前の判定が間隔の内の memo・作られた時刻の無い memo・読めない verdict の file の memo は撃たず、同じ歯の判定の at が間隔の外の memo と判定の無い作られた時刻が間隔の外の memo は撃つ (c) 起こす便の在る周・台帳を読めない周・--lens の無い周・dispatch ls の周は 0 本で同じ歯の起こす便の無い手動の 1 周は撃つ (d) per_round 2 の写しで生きた持ち主の pid を置いた memo の置き場の在る周はその memo を撃たずほかの 1 本だけを撃ち、同じ歯の死んだ持ち主の pid の周は 2 本撃つ (e) 間隔の行を持たない写しの周は 0 本で stderr に triage=no-rule の 1 行が在り rc 0 で stdout が同じ置き場の行の在る写しの周と等しく、行の在る写しの周は撃って stderr に triage= の行が無い (f) lifecycle.lock を生きた pid で持たせて同じ周の書き直しを Busy にした置き場で、出力の fixture（行 c の描きで組む）で memo-actionable の memo は撃たず、同じ歯の出力の無い置き場では同じ memo を撃つ (g) 引き金の満ちた memo と最後の昇格の行が全部の memo は撃たず、同じ歯の満ちない memo（最後の昇格の行が一部の memo を含む）は撃つ、行 ao の歯 pipe_dispatch_memo_trigger_ は緑・base は手動の 1 周が memo の lens を撃たないので RED（機能不在）"
 
 [[contract]]
 id = "ar"
-title = "便の終端の通知の段に添える 1 語と送るかを局面の出力の便の部品（手番が seat・理由の語）から読んで alarm_word を消し、起こす便が 0 の周の idle の行の reason= の直後に memos=<open>:<actionable> next=<memo>:<語>（古い出力は :stale・読めない周は unreadable）を足し、候補 0 でも memo-actionable の在る周は送る（dispatcher §43）"
+title = "便の終端の通知の段に添える 1 語と送るかを局面の出力の便の部品（手番が seat・理由の語）から読んで alarm_word を消し（古い出力は :stale か stale・読めない周は unreadable）、起こす便が 0 の周の idle の行の reason= の直後に memos=<open>:<actionable> next=<memo>:<語> を足し、候補 0 でも memo-actionable の在る周は送る（dispatcher §43・case-lifecycle 行 g の後）"
 req = ["FR44", "FR87", "FR94"]
 section = "43"
 depends = ["ao"]
 write-set = ["crates/scribe2/src/pipe/cli.rs", "crates/scribe2/src/pipe/notify.rs", "crates/scribe2-boundary/tests/e2e/notify.rs"]
 verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_notify_lifecycle_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_notify_"]
 size = "M"
-growth = ["crates/scribe2/src/pipe/cli.rs:4", "crates/scribe2/src/pipe/notify.rs:70"]
-done = "(1) 終端の行は便の部品の手番が seat のときだけ送り、段に添える 1 語はその部品の理由の語（Reviewed と Gated の FAIL は判定の語・Failed は最後の detail の頭・Stopped と Questioned は段の名）で、着地して閉じた契約の便と手番が seat でない便は送らず、cli.rs に alarm_word と、それだけが使う gate の verdict の読みと審査の判定の読みの呼び出しが無く、未処置の終端の pending も同じ読みを通る (2) 比べる印は event log の長さと古さの印で、出力が印を持つか event log が出力の長さより伸びた周は語に :stale を添え、出力が無いか読めない周は終端の便ごとに語 unreadable で送り pending は unreadable (3) idle の行の reason= の直後（並列の実測の字の前）に memos=<open>:<actionable>[ next=<memo id>:<語>] を足し、open は閉じていない memo の部品の数・actionable は memo-actionable の数・next は memo-actionable のうち since の最も古い 1 本で語はその理由の語（理由が verdict の memo は行 ao の読みの最新の判定の語）、比べる印は台帳で古い周は memos=<open>:<actionable>:stale、読めない周は memos=unreadable、open が 0 で読めた周は key を出さない (4) 候補 0 でも起こす便が 0 で memo-actionable が 1 以上の周は idle の行を ready=0 reason=- で送り、memo-actionable が 0 か出力を読めない周で候補 0 なら送らない 歯: pipe_notify_lifecycle_ の e2e 7 本（notify.rs の末尾・終端の周の書き手が出力を書く置き場）の (a) Reviewed の FAIL の便の語が判定の語で Stopped の便の語が Stopped (b) 着地して閉じた契約の便は送らず同じ歯の Failed の便は送る (c) 出力の後に event log へ行を足した置き場の終端で語に :stale (d) 出力の無い置き場の終端は語 unreadable で送り pending は unreadable (e) memos= と next= が reason= の直後で並列の実測の字の前に在り、理由が verdict の memo の next= の語が置き場の判定の語で、出力の後に台帳の印を動かした置き場では memos=<open>:<actionable>:stale (f) 候補 0 で memo-actionable 1 の置き場で idle の行が ready=0 reason=- で出る (g) memo を close した後の周に actionable が減り候補 0 なら行が消え、同じ歯の close の前は在る、既存の pipe_notify_ の歯は送達・宛先・並列の実測・束の期待を変えずに緑で、段の語の期待を直す歯（Stopped と Questioned）は直した期待が base で落ち、既存の歯の置き場が出力を書けない形なら共通の helper に出力の入力（台帳の印の file と main の ref）を置く 1 手を同じ file で足す・base は語が段の verdict の字のまま memos= が無く候補 0 の周に行が無いので RED（機能不在）"
+growth = ["crates/scribe2/src/pipe/cli.rs:4", "crates/scribe2/src/pipe/notify.rs:80"]
+done = "(1) 出力が読めて古くない周の終端の行は便の部品の手番が seat のときだけ送り、段に添える 1 語はその部品の理由の語（Reviewed と Gated の FAIL は判定の語・Failed は最後の detail の頭・Stopped と Questioned は段の名）で、出力に部品の無い便（着地して閉じた契約の便）と手番が seat でない便は送らず、cli.rs に alarm_word と、それだけが使う gate の verdict の読みと審査の判定の読みの呼び出しが無く、未処置の終端の pending も同じ読みを通る (2) 比べる印は event log の長さと古さの印で、出力が古さの印を持つか event log が出力の長さより伸びた周は、部品の手番が seat の便は語に :stale を添えて送り、部品の無い便と手番が seat でない便は語 stale で送り、出力が無いか読めない周は終端の便ごとに語 unreadable で送り pending は unreadable (3) idle の行の reason= の直後（並列の実測の字の前）に memos=<open>:<actionable>[ next=<memo id>:<語>] を足し、open は閉じていない memo の部品の数・actionable は memo-actionable の数・next は memo-actionable のうち since の最も古い 1 本で語はその理由の語（理由が verdict の memo は行 ao の読みの最新の判定の語）、比べる印は台帳で古い周は memos=<open>:<actionable>:stale、読めない周は memos=unreadable、open が 0 で読めた周は key を出さない (4) 候補 0 でも起こす便が 0 で memo-actionable が 1 以上の周は idle の行を ready=0 reason=- で送り、memo-actionable が 0 か出力を読めない周で候補 0 なら送らない 歯: pipe_notify_lifecycle_ の e2e 7 本（notify.rs の末尾・書き手が出力を書く置き場は台帳の印の file と main の ref を置き偽の台帳が便の bead を開いた契約で持ち終端の周に道具を渡す）の (a) Reviewed の FAIL の便の語が判定の語で Stopped の便の語が Stopped (b) 着地して閉じた契約の便は送らず同じ歯の Failed の便は送る (c) lifecycle.lock を生きた pid で持たせて終端の周の書き直しを Busy にし出力は終端の前に書いた置き場で、出力の部品が run-asking の便の終端の語に :stale が付き、出力の部品が run-implementing の便の終端は語 stale で送る (d) 書き手が出力を書けない置き場（台帳の印の file と main の ref を置かない）の終端は語 unreadable で送り pending は unreadable (e) memos= と next= が reason= の直後で並列の実測の字の前に在り、promote の判定の file と MemoJudged の event を置き偽の台帳の updated_at が判定より前か無い memo の next= の語が promote で、出力の後に台帳の印を動かした置き場では memos=<open>:<actionable>:stale (f) 候補 0 で memo-actionable 1 の置き場で idle の行が ready=0 reason=- で出る (g) memo を close した後の周に actionable が減り候補 0 なら行が消え、同じ歯の close の前は在る、既存の pipe_notify_ の歯は送達・宛先・並列の実測・束の期待を変えずに緑で、段の語の期待を直す歯（Stopped と Questioned）は直した期待が base で落ち、既存の歯の置き場が出力を書けない形なら共通の helper に出力の入力（台帳の印の file と main の ref）を置く 1 手を同じ file で足す・base は語が段の verdict の字のまま memos= が無く候補 0 の周に行が無いので RED（機能不在）"
 
 [[contract]]
 id = "as"
