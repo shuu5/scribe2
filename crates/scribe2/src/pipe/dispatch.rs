@@ -68,6 +68,9 @@ pub mod unreflected;
 /// driver の継ぎの判定と起こし直す便の選別・構築（設計 §44・契約表の行 as・純移動）。
 mod revive;
 
+/// code の索引の組み立ての口 `pipe index build` と状態の読み（床の検査の撃ち方を共用する兄弟・設計 reverse-index.md §4 の行 a2）。
+pub mod index_build;
+
 use candidates::{entry_of, is_input, marks_of, settle, siblings_of, tools};
 pub use revive::{admits_gated, advance, handoff};
 use revive::{progress_of, resume, revivals, revive_of};

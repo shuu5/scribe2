@@ -410,6 +410,12 @@ pub enum RuleKind {
     MemoTriageIntervalH,
     /// 1 周に審査にかける memo の本数の上限（設計 ledger-form.md §19 約束 5・読み手は dispatcher.md 行 aq）。
     MemoTriagePerRound,
+    /// code の索引の置き場の量の上限（MiB・state dir ごと・設計 reverse-index.md §4 形 7・ADR-0101 と同じ形）。置き場の合計がこれを
+    /// 越える周に、撃ち中の鍵と anchor の HEAD の鍵を除いて記録の at の古い順に上限まで消す。読み手は `pipe::dispatch::index_build` の 1 本。
+    IndexCapMb,
+    /// code の索引の外の道具 1 本を待つ上限（秒・設計 reverse-index.md §4 形 2・形 9）。越えた子は process group ごと止めて failed:timeout と読む。
+    /// 撃ち中の持ち主の終わりを待つ上限も同じ値。読み手は `pipe::dispatch::index_build` の 1 本。
+    IndexTimeoutS,
 }
 
 /// [`RuleKind`] の全 variant。parity test の母集団である。
@@ -504,6 +510,8 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::MemoNotesMaxBytes,
     RuleKind::MemoTriageIntervalH,
     RuleKind::MemoTriagePerRound,
+    RuleKind::IndexCapMb,
+    RuleKind::IndexTimeoutS,
 ];
 
 impl RuleKind {
@@ -569,7 +577,7 @@ impl RuleKind {
             Self::SeatTickIntervalS => "SeatTickIntervalS", Self::SeatTickStaleS => "SeatTickStaleS", Self::SeatMemoryMaxMb => "SeatMemoryMaxMb",
             Self::SeatPrecheckAlarmS => "SeatPrecheckAlarmS", Self::FloorTimeoutS => "FloorTimeoutS", Self::PipeReserveH => "PipeReserveH",
             Self::LifecycleClosedWindowH => "LifecycleClosedWindowH", Self::LifecycleAgeH => "LifecycleAgeH", Self::MemoNotesMaxBytes => "MemoNotesMaxBytes",
-            Self::MemoTriageIntervalH => "MemoTriageIntervalH", Self::MemoTriagePerRound => "MemoTriagePerRound", Self::SeatPointerLadderS => "SeatPointerLadderS",
+            Self::MemoTriageIntervalH => "MemoTriageIntervalH", Self::MemoTriagePerRound => "MemoTriagePerRound", Self::IndexCapMb => "IndexCapMb", Self::IndexTimeoutS => "IndexTimeoutS", Self::SeatPointerLadderS => "SeatPointerLadderS",
             Self::SeatMoveGraceS => "SeatMoveGraceS", Self::SeatIdleAlarmS => "SeatIdleAlarmS",
         }
     }
@@ -619,7 +627,7 @@ impl RuleKind {
             | Self::FlipMarksPerPr | Self::LedgerOpenChildrenMax
             | Self::SeatTickIntervalS | Self::SeatTickStaleS | Self::SeatMoveGraceS | Self::SeatMemoryMaxMb | Self::SeatIdleAlarmS
             | Self::SeatPrecheckAlarmS | Self::AccountSelection | Self::FloorTimeoutS | Self::PipeReserveH
-            | Self::LifecycleClosedWindowH | Self::LifecycleAgeH | Self::MemoNotesMaxBytes | Self::MemoTriageIntervalH | Self::MemoTriagePerRound => ValueShape::Int,
+            | Self::LifecycleClosedWindowH | Self::LifecycleAgeH | Self::MemoNotesMaxBytes | Self::MemoTriageIntervalH | Self::MemoTriagePerRound | Self::IndexCapMb | Self::IndexTimeoutS => ValueShape::Int,
             Self::DialogueSurface
             | Self::RunnerModel
             | Self::RunnerEffort | Self::LensModel | Self::PipePrecheckLensModel

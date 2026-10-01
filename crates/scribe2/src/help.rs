@@ -271,6 +271,7 @@ pub const TABLE: &[Entry] = &[
             ("follow", "Move a live run onto the tip of main without gating it."),
             ("anchor-sync", "Bring the paths a landing left stale in the repo checkout up to main."),
             ("review", "Review the contract rows a design PR changed, before it merges."),
+            ("index", "Build the code index of a commit with the declared tools (index build)."),
         ],
         flags: &[
             ("--state-dir D", "Host state dir."),

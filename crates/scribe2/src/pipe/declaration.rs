@@ -26,8 +26,8 @@ pub use crate_roots::{crate_of, fixed_roots, with_fixed, CrateFile, RootsAtHead}
 pub use entrance_flip::{measure_named, EntranceFlip};
 use entrance_flip::{entrance_of, KEY as ENTRANCE_KEY};
 pub use optional_keys::{close_check, close_check_at_sha, requirements_at_sha, floor_check_at, question_route, table_facts, table_facts_named, terminal_facts, CloseCheck, QuestionRoute, TableFacts, TerminalFacts};
-pub use optional_keys::{row_review_at, ruling_keys_at, RulingKeys, CI_SHA_HOLE, DEFAULT_CI_CMD, DEFAULT_REQUIREMENTS};
-use optional_keys::{ci_cmd_of, close_check_of, floor_check_of, question_route_of, read_only_keys_of, remote_of, requirements_of, row_review_of, ruling_check_of, ruling_fixtures_of, DECLARED_KEYS, OPTIONAL_KEYS, RULING_FIXTURES_KEY};
+pub use optional_keys::{index_at, row_review_at, ruling_keys_at, IndexLines, RulingKeys, CI_SHA_HOLE, DEFAULT_CI_CMD, DEFAULT_REQUIREMENTS};
+use optional_keys::{ci_cmd_of, close_check_of, floor_check_of, index_keys_of, question_route_of, read_only_keys_of, remote_of, requirements_of, row_review_of, ruling_check_of, ruling_fixtures_of, IndexKeys, DECLARED_KEYS, OPTIONAL_KEYS, RULING_FIXTURES_KEY};
 pub use write_set::{headroom_shortfalls, headroom_shortfalls_under, line_count, read_write_set, Caps, FileLines, Headroom, NewFilePolicy, WriteSetItem, CORE};
 pub(crate) use write_set::is_under;
 
@@ -317,6 +317,8 @@ pub struct Declared {
     ruling_fixtures: Option<Vec<String>>,
     /// merge の門の行の審査の判定に掛かるか（任意 key `row-review`・無ければ `None`＝false と同じ・設計 row-review.md §4）。
     row_review: Option<bool>,
+    /// 索引の宣言の 2 key（任意・片方だけでも読む・設計 reverse-index.md §4 形 1）。
+    index: IndexKeys,
 }
 
 /// 出所つきの宣言。**[`Effective`] はこれを消費してしか作れない**（C10）。
@@ -557,6 +559,7 @@ impl Declared {
         let ruling_fixtures = ruling_fixtures_of(&found, &mut errors);
         let row_review = row_review_of(&found, &mut errors);
         read_only_keys_of(&found, &mut errors);
+        let index = index_keys_of(&found, &mut errors);
         if schema != Some(SCHEMA_VERSION) {
             errors.push(DeclError::new(
                 0,
@@ -583,6 +586,7 @@ impl Declared {
                 ruling_check,
                 ruling_fixtures,
                 row_review,
+                index,
             })
         } else {
             Err(errors)

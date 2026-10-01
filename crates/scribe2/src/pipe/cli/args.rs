@@ -185,6 +185,8 @@ const ALLOWED_REGATE: &[cli_args::Allowed] =
     &[PLACE[0], PLACE[1], PLACE[2], value("--run"), value(crate::pipe::regate::REASON_FLAG)];
 /// `pipe review`（設計 row-review.md §3・`--ref` は審査する設計の PR の head の commit・`--lens` は行ごとに撃つ審査の口）。
 const ALLOWED_REVIEW: &[cli_args::Allowed] = &[PLACE[0], PLACE[1], PLACE[2], value("--ref"), value("--lens")];
+/// `pipe index`（設計 reverse-index.md §4 形 9・`--ref` は索引を組む commit・無ければ HEAD）。
+const ALLOWED_INDEX: &[cli_args::Allowed] = &[PLACE[0], PLACE[1], PLACE[2], value("--ref")];
 /// `pipe follow`（設計 pipeline.md §52）。
 const ALLOWED_FOLLOW: &[cli_args::Allowed] = &[PLACE[0], PLACE[1], PLACE[2], value("--run")];
 
@@ -211,6 +213,7 @@ pub(super) const fn allowed_of(command: PipeCommand) -> &'static [Allowed] {
         // `pipe anchor-sync`（設計 pipeline.md §57 形 5・flag は `pipe report` と同じ 3 つ）。
         PipeCommand::AnchorSync => ALLOWED_REPORT,
         PipeCommand::Review => ALLOWED_REVIEW,
+        PipeCommand::Index => ALLOWED_INDEX,
     }
 }
 

@@ -37,25 +37,90 @@ pub(super) const DECLARED_KEYS: &[&str] = &[
 /// **歯の検査を撃つか**の key（任意・設計 contract-source.md §67）。真偽だけを読んで値は捨てる。
 const TEETH_CHECK_KEY: &str = "teeth-check";
 
-/// **索引の SCIP の列**の key（任意・設計 contract-source.md §67）。文字列の配列だけを読んで値は捨てる。
+/// **索引の SCIP の列**の key（任意・設計 contract-source.md §67・reverse-index.md §4 形 1）。文字列の配列を [`IndexKeys`] に持つ。
 const INDEX_SCIP_KEY: &str = "index-scip";
 
-/// **索引の役割の列**の key（任意・設計 contract-source.md §67）。文字列の配列だけを読んで値は捨てる。
+/// **索引の役割の列**の key（任意・設計 contract-source.md §67・reverse-index.md §4 形 1）。文字列の配列を [`IndexKeys`] に持つ。
 const INDEX_ROLES_KEY: &str = "index-roles";
 
 /// **merge の門の行の審査の判定に掛かるか**の key（任意・設計 row-review.md §4・FR101）。値は真偽だけ（書かない宣言は false と同じ）。
 const ROW_REVIEW_KEY: &str = "row-review";
 
-/// 読んで値を捨てる 3 key（`teeth-check` は真偽・`index-scip` と `index-roles` は文字列の配列）の形だけを確かめる
-/// （`Declared` にも便の写しにも field を持たない）。型違いは key と行番号を名指す不備。
+/// 読んで値を捨てる key（`teeth-check` は真偽）の形だけを確かめる（`Declared` にも便の写しにも field を持たない）。
+/// 型違いは key と行番号を名指す不備。
 pub(super) fn read_only_keys_of(found: &[(String, Raw, u64)], errors: &mut Vec<DeclError>) {
     bool_key(found, TEETH_CHECK_KEY, errors);
-    for key in [INDEX_SCIP_KEY, INDEX_ROLES_KEY] {
-        if let Some((_, value, line)) = found.iter().find(|(seen, _, _)| seen == key) {
-            if !matches!(value, Raw::List(_)) {
+}
+
+/// 索引の宣言の 2 key（`index-scip`・`index-roles`）の値と書かれていた行（無い key は `None`・設計 reverse-index.md §4 形 1）。
+/// parse は片方だけの宣言も読む（断るのは索引を要する周の [`index_at`] だけ・SRS FR107）。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) struct IndexKeys {
+    /// `index-scip` の行の列と書かれていた行。
+    scip: Option<(Vec<String>, u64)>,
+    /// `index-roles` の行の列と書かれていた行。
+    roles: Option<(Vec<String>, u64)>,
+}
+
+/// 索引の 2 key の文字列の配列を読む（型違いは key と行番号を名指す不備・値は捨てずに持つ）。
+pub(super) fn index_keys_of(found: &[(String, Raw, u64)], errors: &mut Vec<DeclError>) -> IndexKeys {
+    let mut read = |key: &str| {
+        let (_, value, line) = found.iter().find(|(seen, _, _)| seen == key)?;
+        match value {
+            Raw::List(items) => Some((items.clone(), *line)),
+            _ => {
                 errors.push(DeclError::new(*line, format!("{key} は文字列の配列である")));
+                None
             }
         }
+    };
+    IndexKeys { scip: read(INDEX_SCIP_KEY), roles: read(INDEX_ROLES_KEY) }
+}
+
+/// 索引の宣言の 2 key の行の列（設計 reverse-index.md §4 形 1・行は空白で割って撃つ command）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndexLines {
+    /// `index-scip` の行（1 行ごとに SCIP の file を 1 つ出す・穴は `{tree}` と `{out}`）。
+    pub scip: Vec<String>,
+    /// `index-roles` の行（1 行ごとに構文の役の一致を stdout に出す・穴は `{tree}`）。
+    pub roles: Vec<String>,
+}
+
+/// 穴の欠けた行を key の行番号で名指す不備にする（`index-scip` は `{tree}` と `{out}`・`index-roles` は `{tree}`）。
+fn missing_holes(key: &str, (lines, at): &(Vec<String>, u64), holes: &[&str], errors: &mut Vec<DeclError>) {
+    for (n, row) in lines.iter().enumerate() {
+        for hole in holes.iter().filter(|hole| !row.contains(**hole)) {
+            errors.push(DeclError::new(*at, format!("{key} の {} 行目に {hole} の穴が無い: {row}", n.saturating_add(1))));
+        }
+    }
+}
+
+/// 読めた宣言の索引の 2 key から行の列を取る（2 key が無ければ `Ok(None)`・片方だけと穴の欠けた行は key の名と行番号の不備）。
+fn index_lines(keys: &IndexKeys) -> Result<Option<IndexLines>, Vec<DeclError>> {
+    let mut errors = Vec::new();
+    match (&keys.scip, &keys.roles) {
+        (None, None) => return Ok(None),
+        (Some((_, at)), None) => errors.push(DeclError::new(*at, format!("{INDEX_ROLES_KEY} が無い（索引の宣言は 2 key を揃える）"))),
+        (None, Some((_, at))) => errors.push(DeclError::new(*at, format!("{INDEX_SCIP_KEY} が無い（索引の宣言は 2 key を揃える）"))),
+        (Some(scip), Some(roles)) => {
+            missing_holes(INDEX_SCIP_KEY, scip, &["{tree}", "{out}"], &mut errors);
+            missing_holes(INDEX_ROLES_KEY, roles, &["{tree}"], &mut errors);
+        }
+    }
+    match (&keys.scip, &keys.roles) {
+        (Some((scip, _)), Some((roles, _))) if errors.is_empty() => Ok(Some(IndexLines { scip: scip.clone(), roles: roles.clone() })),
+        _ => Err(errors),
+    }
+}
+
+/// 名指した sha の tree の宣言が持つ索引の 2 key（`git show <sha>:.vessel.toml` と同じ読み手・作業ツリーは読まない・
+/// [`floor_check_at`] と同じ形）。宣言が無い・2 key が無い周は `Ok(None)`、宣言が在って読めない周と片方だけ・穴の欠けた周は
+/// `Err`（key の名と行番号を含む）。**索引を要する周だけがこれを撃つ**（vessel 宣言の parse は片方だけでも読む）。
+pub fn index_at(repo: &Path, sha: &str) -> Result<Option<IndexLines>, Vec<DeclError>> {
+    let spec = format!("{sha}:{}", super::DECL_FILE);
+    match super::super::git_bytes(repo, &["show", &spec]) {
+        None => Ok(None),
+        Some(bytes) => Declared::parse(&String::from_utf8_lossy(&bytes)).and_then(|declared| index_lines(&declared.index)),
     }
 }
 
@@ -403,7 +468,7 @@ pub fn terminal_facts(repo: &Path) -> Result<TerminalFacts, Vec<DeclError>> {
 #[cfg(test)]
 mod tests {
     use super::super::Declared;
-    use super::{check_of, close_check, close_check_at_sha, floor_check_at, route_of, ruling_keys_at, CloseCheck, QuestionRoute, RulingKeys};
+    use super::{check_of, close_check, close_check_at_sha, floor_check_at, index_at, index_lines, route_of, ruling_keys_at, CloseCheck, IndexLines, QuestionRoute, RulingKeys};
 
     /// 必須 key だけの宣言の本文（3 行）の後ろに `extra` を足す。
     fn with(extra: &str) -> String {
@@ -642,6 +707,69 @@ mod tests {
         }
         let errors = Declared::parse(&with("ruling-fixtures = [\"a\"]\nruling-fixtures = [\"b\"]\n")).expect_err("重複");
         assert!(errors.iter().any(|error| error.line == 5 && error.reason.contains("ruling-fixtures")), "{errors:?}");
+    }
+
+    /// 索引の宣言（vessel 宣言の parse とは別の読み・`with` の 3 行の後ろの 4 行目から書く）を読む。
+    fn read_index(extra: &str) -> Result<Option<IndexLines>, Vec<super::super::DeclError>> {
+        Declared::parse(&with(extra)).and_then(|declared| index_lines(&declared.index))
+    }
+
+    /// (j) 2 key が無ければ無し・2 key は行の列をそのまま（順も保つ）返す。
+    #[test]
+    fn declaration_index_reads_both_keys_as_lines_or_nothing() {
+        assert_eq!(read_index(""), Ok(None), "2 key が無い宣言は無し");
+        let both = read_index("index-scip = [\"a {tree} {out}\", \"b {out} {tree}\"]\nindex-roles = [\"c {tree}\"]\n");
+        let want = IndexLines { scip: vec!["a {tree} {out}".to_owned(), "b {out} {tree}".to_owned()], roles: vec!["c {tree}".to_owned()] };
+        assert_eq!(both, Ok(Some(want)));
+    }
+
+    /// (j) 片方だけの宣言は欠けた key の名と、書かれた key の行番号（4 行目）を名指す不備。
+    #[test]
+    fn declaration_index_names_the_missing_key_of_a_half_declaration() {
+        let scip = read_index("index-scip = [\"a {tree} {out}\"]\n").expect_err("index-scip だけ");
+        assert!(scip.iter().any(|error| error.line == 4 && error.reason.contains("index-roles")), "{scip:?}");
+        let roles = read_index("index-roles = [\"c {tree}\"]\n").expect_err("index-roles だけ");
+        assert!(roles.iter().any(|error| error.line == 4 && error.reason.contains("index-scip")), "{roles:?}");
+    }
+
+    /// (j) 穴の欠けた行（index-scip に {tree} か {out} が無い・index-roles に {tree} が無い）は key の名と行番号を名指す不備。
+    #[test]
+    fn declaration_index_names_the_key_of_a_row_missing_a_hole() {
+        for (scip, roles, key) in [
+            ("a {out}", "c {tree}", "index-scip"),
+            ("a {tree}", "c {tree}", "index-scip"),
+            ("a {tree} {out}", "c", "index-roles"),
+        ] {
+            let errors = read_index(&format!("index-scip = [\"{scip}\"]\nindex-roles = [\"{roles}\"]\n")).expect_err(scip);
+            let line = if key == "index-scip" { 4 } else { 5 };
+            assert!(errors.iter().any(|error| error.line == line && error.reason.contains(key)), "{scip} / {roles}: {errors:?}");
+        }
+    }
+
+    /// (j) 文字列・空の配列・要素が文字列でない配列は key と行番号（4 行目）を名指す不備（vessel 宣言の parse の段で断られる）。
+    #[test]
+    fn declaration_index_refuses_text_empty_and_non_string_lists() {
+        for key in ["index-scip", "index-roles"] {
+            for value in ["\"a {tree} {out}\"", "[]", "[1]", "1", "true"] {
+                let errors = read_index(&format!("{key} = {value}\n")).expect_err(value);
+                assert!(errors.iter().any(|error| error.line == 4 && error.reason.contains(key)), "{key} = {value}: {errors:?}");
+            }
+        }
+    }
+
+    /// (j) 同じ片方だけの宣言と穴の欠けた宣言を、vessel 宣言の parse は断らない（Declared は 2 key の値を持つだけ・SRS FR107）。
+    #[test]
+    fn declaration_index_half_declarations_still_parse_as_vessel_declarations() {
+        for extra in ["index-scip = [\"a {tree} {out}\"]\n", "index-roles = [\"c {tree}\"]\n", "index-scip = [\"a\"]\nindex-roles = [\"c\"]\n"] {
+            assert!(Declared::parse(&with(extra)).is_ok(), "{extra:?} は vessel 宣言として読める");
+        }
+        assert!(Declared::parse(&with("index-scip = [\"a {tree} {out}\"]\n")).map(|declared| declared.index.scip.is_some()) == Ok(true), "値を持つ");
+    }
+
+    /// 宣言の無い dir（git を撃てない）は無し（sha の tree から読む口・作業ツリーは読まない）。
+    #[test]
+    fn declaration_index_treats_a_dir_without_git_as_absent() {
+        assert_eq!(index_at(std::path::Path::new("/nonexistent-index-dir"), "HEAD"), Ok(None));
     }
 
     /// 真偽を書いた他の key は key ごとの型の不備になり、entrance-flip = true は 3 語の外として key と行番号を名指す。

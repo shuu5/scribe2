@@ -534,6 +534,12 @@ pub fn wait(completion: Completion, deadline: Duration) -> Result<(), Timeout> {
     }
 }
 
+/// pid の消えを待つ（[`Completion::RunnerExited`] を [`wait`] に渡して包むだけ・新しい値も述語も足さない・設計 reverse-index.md §4 形 9）。
+/// 索引の撃ち中の印の持ち主の終わりを待つ口で、期限は rules 行 `index.timeout_s` の秒を呼び手が渡す。
+pub fn pid_gone(pid: u32, deadline: Duration) -> Result<(), Timeout> {
+    wait(Completion::RunnerExited(pid), deadline)
+}
+
 /// pid が生きているか。
 fn pid_is_live(pid: u32) -> bool {
     std::path::Path::new(&format!("/proc/{pid}")).exists()

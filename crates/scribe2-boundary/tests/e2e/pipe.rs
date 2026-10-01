@@ -573,12 +573,12 @@ fn pipe_external_form() {
 #[test]
 fn pipe_command_all_subcommands_round_trip_and_unknown_tokens_are_none() {
     use vessel::pipe::cli::{PipeCommand, PIPE_COMMANDS};
-    assert_eq!(vessel::pipe::cli::PIPE_COMMANDS.len(), 19, "記録時点の subcommand: {PIPE_COMMANDS:?}");
+    assert_eq!(vessel::pipe::cli::PIPE_COMMANDS.len(), 20, "記録時点の subcommand（`.736.33.21.2` が index を足した）: {PIPE_COMMANDS:?}");
     assert!(is_declaration_order(PIPE_COMMANDS, |command| command as usize), "宣言順: {PIPE_COMMANDS:?}");
     let words: Vec<&str> = PIPE_COMMANDS.iter().map(|command| command.as_str()).collect();
     let want = [
         "intake", "preflight", "spawn", "approve", "answer", "gate", "land", "retire", "run", "show", "resume", "stop", "dispatch",
-        "land-window", "report", "regate", "follow", "anchor-sync", "review",
+        "land-window", "report", "regate", "follow", "anchor-sync", "review", "index",
     ];
     assert_eq!(words, want, "字面の閉じた列（宣言順）");
     let usage = vessel::pipe::cli::usage();
@@ -2411,4 +2411,427 @@ fn pipe_index_table_query_resolves_zero_and_many_symbols() {
     assert_eq!(sites_of("a::again").map(|found| found.symbol), Some(IDX_AGAIN.to_owned()), "method の descriptor の `().` を読む");
     assert_eq!(sites_of("tests::t").map(|found| found.symbol), Some(IDX_TEST_FN.to_owned()), "入れ子の module の名の列");
     assert_eq!(flat::descriptor_names("rust-analyzer cargo k 0.1.0 a/`odd name`#new()."), ["a", "odd name", "new"]);
+}
+
+// ───── 索引の組み立て（設計 reverse-index.md §4 の行 a2・`s2-07l.736.33.21.2`・接頭辞 `pipe_index_build_`） ─────
+//
+// 偽の宣言は a1 の歯の fixture（SCIP の書き手・一致の JSON）を {out} と stdout へ写し、呼ばれた回数と cwd を置き場の file に残す sh の script。
+// 撃つ口は実 binary の `pipe index build`（偽 systemd-run を PATH の先頭に積む）。
+
+/// 偽の SCIP の indexer の command 名（宣言の `index-scip` の頭の語）。
+const IDXB_SCIP: &str = "index-fake-scip";
+
+/// 偽の役の検出の command 名（宣言の `index-roles` の頭の語）。
+const IDXB_ROLES: &str = "index-fake-roles";
+
+/// 2 key を揃えた宣言の行（穴は語ごとに埋まる・`{out}` は鍵ごとの file）。
+const IDXB_DECL: &str = "index-scip = [\"index-fake-scip {tree} {out}\"]\nindex-roles = [\"index-fake-roles {tree}\"]\n";
+
+/// 規則の写しで置き換える行（embedded の `index.cap_mb` と `index.timeout_s` の頭 3 行）。
+const IDXB_CAP_ROW: &str = "id = \"index.cap_mb\"\nkind = \"IndexCapMb\"\nvalue = 2048\n";
+
+/// 同上（`index.timeout_s`）。
+const IDXB_TIMEOUT_ROW: &str = "id = \"index.timeout_s\"\nkind = \"IndexTimeoutS\"\nvalue = 600\n";
+
+/// 索引の組み立ての歯の置き場（repo と置き場）。
+struct IdxPlace {
+    /// 対象 repo（宣言と fixture の file を commit した物）。
+    repo: PathBuf,
+    /// 置き場。
+    state: PathBuf,
+}
+
+impl IdxPlace {
+    /// 偽の command を置く dir。
+    fn bin(&self) -> PathBuf {
+        self.state.join("index-bin")
+    }
+
+    /// 索引の置き場の dir。
+    fn dir(&self) -> PathBuf {
+        self.state.join("pipe").join("index")
+    }
+
+    /// 偽の command と偽 systemd-run を積んだ PATH。
+    fn path(&self) -> String {
+        format!("{}:{}", self.bin().display(), crate::toolbox_path(&self.state))
+    }
+
+    /// HEAD の sha。
+    fn sha(&self) -> String {
+        git(&self.repo, &["rev-parse", "HEAD"])
+    }
+
+    /// 偽の command が呼ばれた回数（`kind` は `scip` か `roles`）。
+    fn calls(&self, kind: &str) -> usize {
+        let seen = fs::read_to_string(self.state.join("index-calls")).unwrap_or_default();
+        seen.lines().filter(|line| line.split_whitespace().next() == Some(kind)).count()
+    }
+
+    /// 置き場の dir の file の名（昇順・dir が無ければ空）。
+    fn names(&self) -> Vec<String> {
+        let mut names: Vec<String> =
+            fs::read_dir(self.dir()).into_iter().flatten().flatten().map(|entry| entry.file_name().to_string_lossy().into_owned()).collect();
+        names.sort();
+        names
+    }
+
+    /// `pipe index build` を撃つ（`rules` は規則の写し・`extra` は足す引数）。
+    fn build(&self, rules: Option<&str>, extra: &[&str]) -> Output {
+        let (state, repo) = (self.state.display().to_string(), self.repo.display().to_string());
+        let mut args = vec!["index", "build", "--state-dir", state.as_str(), "--repo", repo.as_str()];
+        if let Some(path) = rules {
+            args.extend(["--rules", path]);
+        }
+        args.extend(extra);
+        run_pipe_with_path(&self.path(), &args)
+    }
+
+    /// 規則の写し（tracked の manifest の `edits` の置き換えを当てた file・置き換えが効かない周は落ちる）。
+    #[expect(clippy::expect_used, reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く")]
+    fn rules(&self, name: &str, edits: &[(&str, &str)]) -> String {
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join("rules").join("manifest.toml");
+        let mut text = fs::read_to_string(&source).expect("manifest を読める");
+        for (from, to) in edits {
+            assert!(text.contains(from), "置き換える行が在る: {from}");
+            text = text.replace(from, to);
+        }
+        let path = self.state.join(name);
+        fs::write(&path, text).expect("写しを書ける");
+        path.display().to_string()
+    }
+}
+
+/// 偽の command 1 本を置く（呼ばれた回数と cwd と受付札の dir の中身を記録してから `tail` を撃つ）。
+fn idxb_script(place: &IdxPlace, (name, kind): (&str, &str), tail: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    let slots = vessel::seat::host_slots_dir(&place.state);
+    let head = format!(
+        "echo \"{kind} $PWD\" >> '{calls}'\nls '{slots}' >> '{seen}' 2>/dev/null\n",
+        calls = place.state.join("index-calls").display(),
+        slots = slots.display(),
+        seen = place.state.join("index-slots").display(),
+    );
+    let path = place.bin().join(name);
+    assert!(fs::write(&path, format!("#!/bin/sh\n{head}{tail}")).is_ok(), "偽の command を書ける");
+    assert!(fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).is_ok(), "実行権を付けられる");
+}
+
+/// 宣言 `decl` を commit した toy repo と、偽の command 2 本（`scip_tail`・`roles_tail` が撃つ中身）を置く。
+#[expect(clippy::expect_used, reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く")]
+fn idxb_place(decl: &str, scip_tail: &str, roles_tail: &str) -> IdxPlace {
+    let (repo, state) = repo_with_state();
+    for (path, body) in idx_bodies() {
+        let target = repo.join(&path);
+        fs::create_dir_all(target.parent().expect("親 dir が在る")).expect("dir を作れる");
+        fs::write(&target, body).expect("fixture の file を書ける");
+    }
+    let mut text = fs::read_to_string(repo.join(".vessel.toml")).expect("宣言を読める");
+    text.push_str(decl);
+    fs::write(repo.join(".vessel.toml"), text).expect("宣言を書ける");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["add", "-f", ".vessel.toml"]);
+    git(&repo, &["commit", "-q", "-m", "index-decl"]);
+    let place = IdxPlace { repo, state };
+    fs::write(place.state.join("idx.scip"), idx_scip_bytes()).expect("SCIP の fixture を書ける");
+    fs::write(place.state.join("idx.roles"), idx_roles_text()).expect("一致の fixture を書ける");
+    fs::create_dir_all(place.bin()).expect("偽の command の dir を作れる");
+    idxb_script(&place, (IDXB_SCIP, "scip"), scip_tail);
+    idxb_script(&place, (IDXB_ROLES, "roles"), roles_tail);
+    place
+}
+
+/// 既定の置き場: 偽の SCIP の indexer が fixture を `{out}` へ写し、偽の役の検出が一致の JSON を stdout へ写す。
+fn idxb_with_fixtures() -> IdxPlace {
+    let place = idxb_place(IDXB_DECL, "", "");
+    idxb_script(&place, (IDXB_SCIP, "scip"), &format!("cp '{}' \"$2\"\n", place.state.join("idx.scip").display()));
+    idxb_script(&place, (IDXB_ROLES, "roles"), &format!("cat '{}'\n", place.state.join("idx.roles").display()));
+    place
+}
+
+/// `[INDEX]` の 1 行（無ければ空）。
+fn idxb_line(out: &Output) -> String {
+    stdout_of(out).lines().find(|line| line.starts_with("[INDEX]")).unwrap_or_default().to_owned()
+}
+
+/// `[INDEX]` の行の `name=<値>` の値。
+fn idxb_field(line: &str, name: &str) -> String {
+    line.split_whitespace().find_map(|word| word.strip_prefix(&format!("{name}="))).unwrap_or_default().to_owned()
+}
+
+/// `[INDEX]` の行の結末の語（built・cached・failed:<語>）。
+fn idxb_word(line: &str) -> String {
+    line.split_whitespace().nth(4).unwrap_or_default().to_owned()
+}
+
+/// fixture の表の行数と file の数。
+fn idxb_shape() -> (usize, usize) {
+    let rows = idx_rows();
+    (rows.len(), rows.iter().map(|row| row.path.as_str()).collect::<BTreeSet<_>>().len())
+}
+
+/// (a) 1 回目は built（rows・files は fixture を a1 の読み手で結んだ表と同じ・捨てた役の一致 1 つが記録に残る・表の頭は schema=1）、
+/// 2 回目は撃たずに cached（偽の command の回数は 1 のまま）。
+#[test]
+fn pipe_index_build_builds_once_then_caches_the_same_key() {
+    let place = idxb_with_fixtures();
+    let first = place.build(None, &[]);
+    let line = idxb_line(&first);
+    assert_eq!(first.status.code(), Some(i32::from(RC_OK)), "built は rc 0: {line} / {}", stderr_of(&first));
+    let (rows, files) = idxb_shape();
+    assert!(rows > 0, "fixture の表は空でない");
+    assert_eq!((idxb_word(&line), idxb_field(&line, "rows"), idxb_field(&line, "files")), ("built".to_owned(), rows.to_string(), files.to_string()), "{line}");
+    let key = idxb_field(&line, "key");
+    assert_eq!(key.len(), 16, "鍵は 16 桁: {line}");
+    let table = fs::read_to_string(place.dir().join(format!("{key}.tsv"))).unwrap_or_default();
+    assert_eq!(table.lines().next(), Some("schema=1"), "表の頭");
+    assert_eq!(table.lines().count(), rows + 1, "表は頭と 1 行 1 occurrence");
+    let record = fs::read_to_string(place.dir().join(format!("{key}.rec"))).unwrap_or_default();
+    let want = ["schema=1".to_owned(), format!("key={key}"), format!("commit={}", place.sha()), format!("rows={rows}"), format!("files={files}"), "dropped=1".to_owned()];
+    for line in &want {
+        assert!(record.lines().any(|found| found == line), "記録に {line}: {record}");
+    }
+    assert!(["decl=", "secs=", "at=", "stderr="].iter().all(|head| record.lines().any(|found| found.starts_with(head))), "記録の欄: {record}");
+    assert_eq!((place.calls("scip"), place.calls("roles")), (1, 1), "1 回ずつ撃つ");
+    let second = place.build(None, &[]);
+    let again = idxb_line(&second);
+    assert_eq!(second.status.code(), Some(i32::from(RC_OK)), "cached は rc 0: {again}");
+    assert_eq!((idxb_word(&again), idxb_field(&again, "key"), idxb_field(&again, "rows")), ("cached".to_owned(), key, rows.to_string()), "{again}");
+    assert_eq!((place.calls("scip"), place.calls("roles")), (1, 1), "2 回目は撃たない");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (b) code の file を変えた commit は別の鍵で built（回数 2）、契約表の doc だけを変えた commit は鍵が同じで cached（回数 2 のまま）。
+#[test]
+fn pipe_index_build_moves_with_the_code_tree_and_not_with_the_table_doc() {
+    let place = idxb_with_fixtures();
+    let key_of =|out: &Output| idxb_field(&idxb_line(out), "key");
+    let first = key_of(&place.build(None, &[]));
+    assert!(fs::write(place.repo.join("src").join("extra.rs"), "pub fn extra() {}\n").is_ok(), "code の file を足せる");
+    git(&place.repo, &["add", "-A"]);
+    git(&place.repo, &["commit", "-q", "-m", "code"]);
+    let code = place.build(None, &[]);
+    assert_eq!(idxb_word(&idxb_line(&code)), "built", "code の file を変えた commit は撃つ: {}", idxb_line(&code));
+    let second = key_of(&code);
+    assert_ne!(first, second, "鍵が動く");
+    assert_eq!(place.calls("scip"), 2, "2 回撃った");
+    let title = |fields: Vec<String>| fields.into_iter().map(|line| if line.starts_with("title") { "title = \"別の題\"".to_owned() } else { line }).collect::<Vec<_>>();
+    write_design(&place.repo, &design_doc(&title(contract_body())));
+    git(&place.repo, &["add", "-A"]);
+    git(&place.repo, &["commit", "-q", "-m", "table-doc"]);
+    let doc = place.build(None, &[]);
+    let line = idxb_line(&doc);
+    assert_eq!((idxb_word(&line), idxb_field(&line, "key")), ("cached".to_owned(), second), "契約表の doc だけを変えた commit は同じ鍵: {line}");
+    assert_eq!(place.calls("scip"), 2, "撃たない");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// 鍵ごとの偽の file（表の大きさ `size` byte と記録の at）を置く。
+#[expect(clippy::expect_used, reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く")]
+fn idxb_fake_key(place: &IdxPlace, key: &str, size: usize, at: &str) {
+    fs::create_dir_all(place.dir()).expect("dir を作れる");
+    fs::write(place.dir().join(format!("{key}.tsv")), format!("schema=1\n{}", "x".repeat(size))).expect("表を書ける");
+    fs::write(place.dir().join(format!("{key}.rec")), format!("schema=1\nkey={key}\nat={at}\n")).expect("記録を書ける");
+}
+
+/// (c) 上限 1 MiB の規則の写しで、撃つ鍵（sha1）・anchor の HEAD の鍵（記録の at が一番古い）・生きた印の鍵が残り、残りの 3 つの鍵は
+/// 記録の at の古い順（鍵の名の順でなく）に、上限に収まるところまで消える。
+#[test]
+fn pipe_index_build_sheds_oldest_first_and_keeps_the_head_and_live_keys() {
+    let place = idxb_with_fixtures();
+    let sha1 = place.sha();
+    let key1 = idxb_field(&idxb_line(&place.build(None, &[])), "key");
+    assert!(fs::write(place.repo.join("src").join("extra.rs"), "pub fn extra() {}\n").is_ok(), "code の file を足せる");
+    git(&place.repo, &["add", "-A"]);
+    git(&place.repo, &["commit", "-q", "-m", "code"]);
+    let head = idxb_field(&idxb_line(&place.build(None, &[])), "key");
+    assert_ne!(head, key1, "HEAD の鍵は別");
+    let record = place.dir().join(format!("{head}.rec"));
+    let text = fs::read_to_string(&record).unwrap_or_default();
+    let old: Vec<String> = text.lines().map(|line| if line.starts_with("at=") { "at=2000-01-01T00:00:00Z".to_owned() } else { line.to_owned() }).collect();
+    assert!(fs::write(&record, old.join("\n") + "\n").is_ok(), "HEAD の鍵の at を一番古くする");
+    for suffix in ["tsv", "rec"] {
+        assert!(fs::remove_file(place.dir().join(format!("{key1}.{suffix}"))).is_ok(), "撃つ鍵の file を外す");
+    }
+    let (a, b, c, live) = ("aaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbb", "cccccccccccccccc", "dddddddddddddddd");
+    idxb_fake_key(&place, a, 400_000, "2026-03-01T00:00:00Z");
+    idxb_fake_key(&place, b, 400_000, "2026-01-01T00:00:00Z");
+    idxb_fake_key(&place, c, 400_000, "2026-02-01T00:00:00Z");
+    idxb_fake_key(&place, live, 300_000, "2000-02-01T00:00:00Z");
+    assert!(fs::write(place.dir().join(format!("{live}.lock")), format!("{}\n", std::process::id())).is_ok(), "生きた印を置く");
+    let small = place.rules("rules-cap.toml", &[(IDXB_CAP_ROW, &IDXB_CAP_ROW.replace("2048", "1"))]);
+    let out = place.build(Some(&small), &["--ref", &sha1]);
+    let line = idxb_line(&out);
+    assert_eq!((idxb_word(&line), idxb_field(&line, "key")), ("built".to_owned(), key1.clone()), "撃つ鍵を組み直す: {line} / {}", stderr_of(&out));
+    let names = place.names();
+    let has = |key: &str| names.iter().any(|name| name.starts_with(&format!("{key}.")));
+    assert!(has(&key1) && has(&head) && has(live) && has(a), "撃つ鍵・HEAD の鍵・生きた印の鍵・at の新しい鍵は残る: {names:?}");
+    assert!(!has(b) && !has(c), "at の古い 2 つは消える（鍵の名の順でない）: {names:?}");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (d) 4 形（壊れた SCIP・rc 1 の command・上限 1 秒を越えて眠る command・program の無い行）はそれぞれ failed:unreadable・rc・
+/// timeout・path の 1 行と記録で rc 1、表は置かれず、外の道具の出力も木も残らない。
+#[test]
+fn pipe_index_build_names_the_four_failure_forms_and_places_no_table() {
+    let missing = "index-scip = [\"index-fake-scip {tree} {out}\"]\nindex-roles = [\"index-no-such-tool {tree}\"]\n";
+    let cases = [
+        ("unreadable", IDXB_DECL, "printf '\\022\\200' > \"$2\"\n", false),
+        ("rc", IDXB_DECL, "echo boom >&2\nexit 1\n", false),
+        ("timeout", IDXB_DECL, "sleep 3\n", true),
+        ("path", missing, "cp /dev/null \"$2\"\n", false),
+    ];
+    for (word, decl, tail, short) in cases {
+        let place = idxb_place(decl, tail, "true\n");
+        let rules = place.rules("rules-timeout.toml", &[(IDXB_TIMEOUT_ROW, &IDXB_TIMEOUT_ROW.replace("600", if short { "1" } else { "600" }))]);
+        let out = place.build(Some(&rules), &[]);
+        let line = idxb_line(&out);
+        assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{word}: failed は rc 1: {line} / {}", stderr_of(&out));
+        assert_eq!(idxb_word(&line), format!("failed:{word}"), "{word}: {line}");
+        let key = idxb_field(&line, "key");
+        assert!(!place.dir().join(format!("{key}.tsv")).exists(), "{word}: 表を置かない");
+        let record = fs::read_to_string(place.dir().join(format!("{key}.rec"))).unwrap_or_default();
+        assert!(record.lines().any(|found| found == format!("failed={word}")), "{word}: 記録に失敗の語: {record}");
+        assert_eq!(place.names(), [format!("{key}.rec")], "{word}: 記録だけが残る（出力と木は外れる）");
+        clean(&[&place.repo, &place.state]);
+    }
+}
+
+/// (e) 箱の記録（偽 systemd-run の argv）が command ごとに 1 件残り、受付札が撃ち中に置かれ、記録した cwd が置き場の下の
+/// `<commit の sha>.tree` で、撃ち終えた後に木（dir と worktree の登録）と外の道具の出力が無い。
+#[test]
+fn pipe_index_build_runs_in_the_box_with_a_ticket_inside_the_detached_tree_and_cleans_up() {
+    let place = idxb_with_fixtures();
+    let out = place.build(None, &[]);
+    let line = idxb_line(&out);
+    assert_eq!(idxb_word(&line), "built", "{line} / {}", stderr_of(&out));
+    let key = idxb_field(&line, "key");
+    let sha = place.sha();
+    let tree = place.dir().join(format!("{sha}.tree")).display().to_string();
+    let seen = fs::read_to_string(place.state.join("index-calls")).unwrap_or_default();
+    assert_eq!(seen.lines().collect::<Vec<_>>(), [format!("scip {tree}"), format!("roles {tree}")], "宣言の順に撃ち、cwd は木");
+    let scip = crate::toolbox_record(&place.state, "-index-0-");
+    let rows: Vec<&str> = scip.lines().collect();
+    let at = rows.iter().position(|row| *row == "--").unwrap_or(rows.len());
+    let program = place.bin().join(IDXB_SCIP).display().to_string();
+    let out_file = place.dir().join(format!("{key}.0.scip")).display().to_string();
+    assert_eq!(rows.get(at.saturating_add(1)..).unwrap_or_default(), [program.as_str(), tree.as_str(), out_file.as_str()], "箱の中の argv は解いた path と穴を埋めた語: {scip}");
+    assert!(rows.iter().any(|row| row.starts_with("--unit=") && row.contains("-index-0-")), "unit: {scip}");
+    let roles = crate::toolbox_record(&place.state, "-index-1-");
+    assert!(roles.contains(&place.bin().join(IDXB_ROLES).display().to_string()), "役の行も箱の中: {roles}");
+    let slots = fs::read_to_string(place.state.join("index-slots")).unwrap_or_default();
+    assert!(slots.lines().any(|name| name.ends_with(".slot") && name.contains(&format!("index-{key}"))), "撃ち中に受付札が 1 枚: {slots}");
+    assert_eq!(place.names(), [format!("{key}.rec"), format!("{key}.tsv")], "撃ち終えた後は表と記録だけ（木も外の道具の出力も無い）");
+    let listed = git(&place.repo, &["worktree", "list", "--porcelain"]);
+    assert!(!listed.contains(".tree"), "worktree の登録も無い: {listed}");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// 眠る子（`sleep 1`）を起こし、終わりを回収する thread を付けて pid を返す（回収しないと zombie が `/proc` に残る）。
+#[expect(clippy::expect_used, reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く")]
+fn idxb_sleeper() -> u32 {
+    let mut child = Command::new("sleep").arg("1").spawn().expect("sleep を起こせる");
+    let pid = child.id();
+    std::thread::spawn(move || child.wait());
+    pid
+}
+
+/// (f) 生きた持ち主の印の周は撃たずに（回数が増えない）持ち主の終わりまで待ち（経過が子の sleep 以上）、子が終わる前に置かれた
+/// 失敗の記録を読み直して failed:rc で rc 1。死んだ持ち主の印は外して built。
+#[test]
+fn pipe_index_build_waits_for_a_live_owner_and_takes_over_a_dead_one() {
+    let place = idxb_with_fixtures();
+    let key = idxb_field(&idxb_line(&place.build(None, &[])), "key");
+    for suffix in ["tsv", "rec"] {
+        assert!(fs::remove_file(place.dir().join(format!("{key}.{suffix}"))).is_ok(), "{suffix} を外す");
+    }
+    assert!(fs::write(place.dir().join(format!("{key}.rec")), "schema=1\nfailed=rc\n").is_ok(), "失敗の記録を置く");
+    let started = Instant::now();
+    let pid = idxb_sleeper();
+    assert!(fs::write(place.dir().join(format!("{key}.lock")), format!("{pid}\n")).is_ok(), "子の印を置く");
+    let out = place.build(None, &[]);
+    let line = idxb_line(&out);
+    assert!(started.elapsed() >= Duration::from_secs(1), "子の終わりまで待つ: {:?}", started.elapsed());
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "失敗の記録は rc 1: {line}");
+    assert_eq!((idxb_word(&line), idxb_field(&line, "key")), ("failed:rc".to_owned(), key.clone()), "{line}");
+    assert_eq!(place.calls("scip"), 1, "待つ周は撃たない（回数 1 のまま）");
+    assert!(fs::remove_file(place.dir().join(format!("{key}.rec"))).is_ok(), "失敗の記録を外す");
+    assert!(fs::write(place.dir().join(format!("{key}.lock")), "999999999\n").is_ok(), "死んだ持ち主の印を置く");
+    let taken = place.build(None, &[]);
+    assert_eq!(idxb_word(&idxb_line(&taken)), "built", "死んだ持ち主の印は外して撃つ: {}", idxb_line(&taken));
+    assert_eq!(place.calls("scip"), 2, "撃った");
+    assert!(!place.dir().join(format!("{key}.lock")).exists(), "撃ち終えた印は外れる");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (g) 規則の行 2 本のそれぞれを持たない写しでは、command を撃たず（回数 0）・消さず、記録へ failed:no-rule を書いて rc 1。
+#[test]
+fn pipe_index_build_without_a_rule_row_shoots_and_sheds_nothing() {
+    for (name, row, gone) in [("cap", IDXB_CAP_ROW, "id = \"index.cap_mb_gone\"\nkind = \"IndexCapMb\"\nvalue = 2048\n"), ("timeout", IDXB_TIMEOUT_ROW, "id = \"index.timeout_s_gone\"\nkind = \"IndexTimeoutS\"\nvalue = 600\n")] {
+        let place = idxb_with_fixtures();
+        idxb_fake_key(&place, "aaaaaaaaaaaaaaaa", 2_000_000, "2000-01-01T00:00:00Z");
+        let rules = place.rules(&format!("rules-{name}.toml"), &[(row, gone)]);
+        let out = place.build(Some(&rules), &[]);
+        let line = idxb_line(&out);
+        assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "{name}: rc 1: {line} / {}", stderr_of(&out));
+        assert_eq!(idxb_word(&line), "failed:no-rule", "{name}: {line}");
+        assert_eq!((place.calls("scip"), place.calls("roles")), (0, 0), "{name}: 撃たない");
+        let key = idxb_field(&line, "key");
+        assert!(fs::read_to_string(place.dir().join(format!("{key}.rec"))).unwrap_or_default().lines().any(|found| found == "failed=no-rule"), "{name}: 記録に語");
+        assert!(place.dir().join("aaaaaaaaaaaaaaaa.tsv").exists(), "{name}: 消さない");
+        clean(&[&place.repo, &place.state]);
+    }
+}
+
+/// (h) 片方の key だけ・{out} の無い index-scip・{tree} の無い index-roles の 3 形の repo で build が rc 2 で key の名と行番号を持ち、
+/// 同じ 3 つの repo で touches も欄も持たない契約の受付と contracts check は通る。2 key の無い repo は `[INDEX] undeclared` で rc 0（撃たない）。
+#[test]
+fn pipe_index_build_refuses_half_declarations_while_other_doors_still_pass() {
+    let forms = [
+        ("index-roles", 5, "index-scip = [\"index-fake-scip {tree} {out}\"]\n"),
+        ("index-scip", 5, "index-scip = [\"index-fake-scip {tree}\"]\nindex-roles = [\"index-fake-roles {tree}\"]\n"),
+        ("index-roles", 6, "index-scip = [\"index-fake-scip {tree} {out}\"]\nindex-roles = [\"index-fake-roles\"]\n"),
+    ];
+    for (key, line, decl) in forms {
+        let place = idxb_place(decl, "true\n", "true\n");
+        let out = place.build(None, &[]);
+        assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "{key}: half は rc 2: {}", told_index(&out));
+        let err = stderr_of(&out);
+        assert!(err.contains(key) && err.contains(&format!("line={line}")), "{key}: key の名と行番号を名指す: {err}");
+        assert_eq!((place.calls("scip"), place.calls("roles")), (0, 0), "撃たない");
+        let rules = ceiling_rules(&place.state);
+        let checked = bin_cmd().args(["contracts", "check", "--rules", rules.as_str(), "--repo"]).arg(&place.repo).output().expect("binary を起動できる");
+        assert_eq!(checked.status.code(), Some(i32::from(RC_OK)), "{key}: contracts check は通る: {}", told_index(&checked));
+        let id = intake(&place.repo, &place.state, &design_pointer());
+        assert!(!id.is_empty(), "{key}: 索引を要しない契約の受付は通る");
+        clean(&[&place.repo, &place.state]);
+    }
+    let (repo, state) = repo_with_state();
+    let args = ["index", "build", "--state-dir", &state.display().to_string(), "--repo", &repo.display().to_string()];
+    let out = run_pipe_with_path(&crate::toolbox_path(&state), &args);
+    assert_eq!((out.status.code(), idxb_line(&out)), (Some(i32::from(RC_OK)), "[INDEX] undeclared".to_owned()), "2 key の無い repo は undeclared: {}", stderr_of(&out));
+    assert!(!state.join("pipe").join("index").exists(), "撃たず置き場も作らない");
+    clean(&[&repo, &state]);
+}
+
+/// 落ちた周に写す 1 行（rc と stdout と stderr）。
+fn told_index(out: &Output) -> String {
+    format!("rc={:?} out={} err={}", out.status.code(), stdout_of(out).trim(), stderr_of(out).trim())
+}
+
+/// (i) ref を解けない周と repo でない dir は rc 2、`--ref` に commit を渡せばその commit の索引を組む。
+#[test]
+fn pipe_index_build_resolves_the_ref_and_refuses_what_it_cannot() {
+    let place = idxb_with_fixtures();
+    let bad =place.build(None, &["--ref", "no-such-ref"]);
+    assert_eq!(bad.status.code(), Some(i32::from(RC_BROKEN)), "解けない ref は rc 2: {}", told_index(&bad));
+    let plain = tmp();
+    let (state, repo) = (place.state.display().to_string(), plain.display().to_string());
+    let args = ["index", "build", "--state-dir", state.as_str(), "--repo", repo.as_str()];
+    let out = run_pipe_with_path(&place.path(), &args);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "repo でない dir は rc 2: {}", told_index(&out));
+    let sha = place.sha();
+    let named = place.build(None, &["--ref", &sha]);
+    assert_eq!(idxb_word(&idxb_line(&named)), "built", "commit を渡せばその commit の索引: {}", told_index(&named));
+    clean(&[&place.repo, &place.state, &plain]);
 }

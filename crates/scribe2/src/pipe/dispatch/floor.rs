@@ -183,12 +183,13 @@ pub fn doctor_line(state_dir: &Path) -> Option<String> {
     current_of(state_dir).map(|read| read.map_or_else(|| "floor=unreadable".to_owned(), |found| found.line()))
 }
 
-/// sha ごとの lock（排他の作成・中身は pid と起動時刻・外れるのは撃ち終えた周の Drop）。
-struct Lock(PathBuf);
+/// sha ごとの lock（排他の作成・中身は pid と起動時刻・外れるのは撃ち終えた周の Drop）。索引の組み立て（兄弟の
+/// `index_build`・設計 reverse-index.md §4 形 2）が鍵ごとの印として共用する。
+pub(super) struct Lock(PathBuf);
 
 impl Lock {
     /// 取る。持ち主の死んだ lock は 1 回だけ外して取り直す。生きている・読めない持ち主の lock は取らない。
-    fn take(dir: &Path, sha: &str) -> Option<Self> {
+    pub(super) fn take(dir: &Path, sha: &str) -> Option<Self> {
         fs::create_dir_all(dir).ok()?;
         let path = dir.join(format!("{sha}.lock"));
         for _ in 0..2 {
@@ -297,7 +298,7 @@ pub(super) fn fault(manifest: &Manifest, row: &str) -> Option<&'static str> {
 }
 
 /// 頭の語を PATH の絶対 path の dir から実行できる file に解く（包みの中で解かせない・解けなければ `None`）。
-fn resolve(head: &str) -> Option<String> {
+pub(super) fn resolve(head: &str) -> Option<String> {
     let out = Invocation::new("sh").args(["-c", LOOK, "sh", head]).stdin(Stdio::null()).stderr(Stdio::null()).output().ok()?;
     let path = String::from_utf8(out.stdout).ok()?.trim().to_owned();
     (out.status.success() && !path.is_empty()).then_some(path)
@@ -339,7 +340,7 @@ fn judge(input: &Input<'_>, dir: &Path, sha: &str, row: &str) -> Judged {
 }
 
 /// 子の終わり方。
-enum Ran {
+pub(super) enum Ran {
     /// 上限までに終わった（rc は signal で死んだ周が -1）。
     Done { rc: i32, summary: String },
     /// 上限を越えた（group ごと止めた）。
@@ -347,7 +348,7 @@ enum Ran {
 }
 
 /// 子を撃って上限まで待つ（起こせない周は `None`）。stdout と stderr は別 thread で末尾だけ読む。
-fn run(cmd: &mut Invocation, limit: Duration) -> Option<Ran> {
+pub(super) fn run(cmd: &mut Invocation, limit: Duration) -> Option<Ran> {
     let mut child = cmd.spawn().ok()?;
     let readers = (child.stdout.take().map(tail), child.stderr.take().map(tail));
     let deadline = Instant::now().checked_add(limit);
