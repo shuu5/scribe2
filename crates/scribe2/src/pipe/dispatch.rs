@@ -53,6 +53,9 @@ mod refused;
 /// 床の検査を sha の木で 1 回撃つ段と、待つ側が読む判定の読み手（設計 §34・契約表の行 ai）。
 pub mod floor;
 
+/// 落ちた契約の write-set の行の予約と待ちの理由 reserved の値（設計 row-review.md §7・契約表の行 f）。
+pub mod reserve;
+
 /// memo の引き金の満ちを判じる行と審査の置き場の形・読み（設計 §40・契約表の行 ao）。
 pub mod memo;
 
@@ -109,7 +112,7 @@ const LAUNCH_LOG: [&str; 2] = ["pipe", "launch.log"];
 
 /// [`WaitReason`] の全 variant の名（宣言順・`enum-slices` が集合完全性を測る）。
 pub const WAIT_REASONS: &[&str] =
-    &["dependency", "overlap", "admission", "host-busy", "hold", "launched", "settled", "no-design-pointer", "unreflected-ruling", "floor"];
+    &["dependency", "overlap", "admission", "host-busy", "hold", "launched", "settled", "no-design-pointer", "unreflected-ruling", "floor", "reserved"];
 
 /// 列に載ったのに起こさない理由（**閉じた型**・設計 §3 の表）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -170,6 +173,8 @@ pub enum WaitReason {
     },
     /// 床の検査が不合格の間、介入 `first` の印の無い候補が待つ（値は今の判定・設計 §35・行 aj）。
     Floor(floor::Judged),
+    /// 落ちた契約の行の予約と write-set が交差し、順序でその契約より後ろに並ぶ（設計 row-review.md §7・行 f）。
+    Reserved(reserve::Held),
 }
 
 impl WaitReason {
@@ -186,6 +191,7 @@ impl WaitReason {
             Self::NoDesignPointer => "no-design-pointer",
             Self::UnreflectedRuling { .. } => "unreflected-ruling",
             Self::Floor(_) => "floor",
+            Self::Reserved(_) => "reserved",
         }
     }
 
@@ -200,6 +206,7 @@ impl WaitReason {
             Self::UnreflectedRuling { ref id } => format!("{name}:{id}"),
             Self::Settled { ref sha, stage } => format!("{name}:{sha}/{}", stage.as_str()),
             Self::Floor(ref found) => format!("{name}:{}", found.rc.map_or_else(|| found.word.as_str().to_owned(), |rc| rc.to_string())),
+            Self::Reserved(ref held) => format!("{name}:{}", held.value()),
             Self::HostBusy | Self::NoDesignPointer => name.to_owned(),
         }
     }
@@ -543,8 +550,10 @@ fn measure(input: &Input<'_>) -> (Turn, Option<Read>) {
             }
             candidates.push(candidate);
         }
+        // 行の予約は周の 1 回の導き（読み済みの台帳と event log を借りる・記帳しない・設計 row-review.md §7）。
+        let reserved = reserve::derive(input, &issues, &ledger.marks, &ledger.events, crate::seat::state::now_secs());
         // **順序は [`order`] の 1 本だけが決める**（生産経路も歯も同じ関数を通る・C2）。
-        (settle(input, order(candidates), &ready, ledger.materials.as_ref().ok()), ledger.materials, ledger.events)
+        (settle(input, order(candidates), &ready, &reserved, ledger.materials.as_ref().ok()), ledger.materials, ledger.events)
     };
     if !turn.launches.is_empty() && host_busy(input.manifest) {
         hold_for_host(&mut turn);
@@ -856,7 +865,7 @@ mod tests {
         review_unmeasured, revive_of, section_keyed, tools, Advance, Candidate, Handoff, Input, Pointer, WaitReason,
         DRIVE, HANDOFFS, WAIT_REASONS,
     };
-    use super::floor;
+    use super::{floor, reserve};
     use crate::fleet::{Event, EventKind, Mark, Stage, SCHEMA, STAGES};
     use crate::rules::manifest::Manifest;
     use std::path::Path;
@@ -1177,6 +1186,8 @@ mod tests {
             WaitReason::Floor(floor_judged(floor::Word::Fail, Some(2), None, "")),
             WaitReason::Floor(floor_judged(floor::Word::Unfireable, None, Some("path"), "")),
             WaitReason::Floor(floor_judged(floor::Word::Timeout, None, None, "")),
+            WaitReason::Reserved(reserve::Held { by: "s2-b".to_owned(), files: 2, unset: false }),
+            WaitReason::Reserved(reserve::Held { by: "s2-b".to_owned(), files: 1, unset: true }),
         ];
         let mut names: Vec<&str> = listed.iter().map(WaitReason::as_str).collect();
         names.dedup();
@@ -1197,8 +1208,10 @@ mod tests {
                 "floor:2",
                 "floor:unfireable",
                 "floor:timeout",
+                "reserved:s2-b/2",
+                "reserved:s2-b/1/unset",
             ],
-            "値を持つ 7 件は値も描き、床は 3 形（rc・unfireable・timeout）"
+            "値を持つ 8 件は値も描き、床は 3 形（rc・unfireable・timeout）・行の予約は 2 形（末尾 /unset）"
         );
     }
 

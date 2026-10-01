@@ -389,6 +389,9 @@ pub enum RuleKind {
     /// 床の検査（vessel 宣言の任意 key `floor-check`）を待つ上限（秒・設計 dispatcher.md §34 約束 4）。越えた周は子を止めて timeout と読む。
     /// 読み手は `pipe::dispatch::floor` の 1 本で、行を読めない周は撃たず unfireable（`row`）。
     FloorTimeoutS,
+    /// 行の予約の期限（時間・設計 row-review.md §7）。落ちた契約の終端の段の event の ts からこの時間を過ぎた行は行の予約を持たない。
+    /// 値 0 は期限なし。行を読めない周は期限なしで予約を掛け、reserved の値の末尾に `/unset` を足す。読み手は `pipe::dispatch::reserve` の 1 本。
+    PipeReserveH,
     /// 席の起草の置き場の build の置き場の量の上限（MiB・state dir ごと・設計 dispatcher.md §39・ADR-0101）。書きの線が残した
     /// 起草の木の dir の合計がこれを越える周に、書きの新しさの古い順に上限まで消す。値 0 は窓の外の候補を全部消す。
     SeatDraftsCapMb,
@@ -486,6 +489,7 @@ pub const ALL: &[RuleKind] = &[
     RuleKind::RunnerClassCommands,
     RuleKind::HostGuardPublish,
     RuleKind::FloorTimeoutS,
+    RuleKind::PipeReserveH,
     RuleKind::SeatDraftsCapMb,
     RuleKind::SeatDraftsBusyS,
     RuleKind::LifecycleClosedWindowH,
@@ -554,7 +558,7 @@ impl RuleKind {
             Self::HostGuardDeniedCommands => "HostGuardDeniedCommands", Self::HostGuardRmProtected => "HostGuardRmProtected", Self::HostGuardPublish => "HostGuardPublish",
             // 管理 tick の 3 kind と席の箱も 2 行に畳み、対で読む model と effort の 2 組も 1 行ずつに畳む（同じ上限）。
             Self::SeatTickIntervalS => "SeatTickIntervalS", Self::SeatTickStaleS => "SeatTickStaleS", Self::SeatMemoryMaxMb => "SeatMemoryMaxMb",
-            Self::SeatPrecheckAlarmS => "SeatPrecheckAlarmS", Self::FloorTimeoutS => "FloorTimeoutS",
+            Self::SeatPrecheckAlarmS => "SeatPrecheckAlarmS", Self::FloorTimeoutS => "FloorTimeoutS", Self::PipeReserveH => "PipeReserveH",
             Self::LifecycleClosedWindowH => "LifecycleClosedWindowH", Self::LifecycleAgeH => "LifecycleAgeH",
             Self::SeatPointerLadderS => "SeatPointerLadderS", Self::SeatMoveGraceS => "SeatMoveGraceS", Self::SeatIdleAlarmS => "SeatIdleAlarmS",
         }
@@ -604,7 +608,7 @@ impl RuleKind {
             | Self::PipeMaxLive
             | Self::FlipMarksPerPr | Self::LedgerOpenChildrenMax
             | Self::SeatTickIntervalS | Self::SeatTickStaleS | Self::SeatMoveGraceS | Self::SeatMemoryMaxMb | Self::SeatIdleAlarmS
-            | Self::SeatPrecheckAlarmS | Self::AccountSelection | Self::FloorTimeoutS
+            | Self::SeatPrecheckAlarmS | Self::AccountSelection | Self::FloorTimeoutS | Self::PipeReserveH
             | Self::LifecycleClosedWindowH | Self::LifecycleAgeH => ValueShape::Int,
             Self::DialogueSurface
             | Self::RunnerModel

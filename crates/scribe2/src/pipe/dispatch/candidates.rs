@@ -20,7 +20,7 @@ use super::super::review;
 use super::super::table::{self, Pointer};
 use super::super::{contract_path, current, git_bytes};
 use super::{
-    measure, Candidate, Input, Launch, Ledger, Marks, Read, Turn, Unmeasured, WaitReason, BLOCKS, DESIGN_KEY, DRIVE, MARK, OPEN,
+    measure, reserve, Candidate, Input, Launch, Ledger, Marks, Read, Turn, Unmeasured, WaitReason, BLOCKS, DESIGN_KEY, DRIVE, MARK, OPEN,
     ROW_JOB_MB, ROW_RESERVE_MB, SLOT,
 };
 use crate::fleet::lifecycle::{self, Place, Round, Source};
@@ -92,6 +92,7 @@ pub(super) fn settle(
     input: &Input<'_>,
     candidates: Vec<Candidate>,
     ready: &BTreeMap<String, (Pointer, Contract)>,
+    reserved: &[reserve::Reservation],
     materials: Option<&Materials>,
 ) -> Turn {
     let room = materials.map(|found| Room {
@@ -104,7 +105,9 @@ pub(super) fn settle(
         Turn { candidates: Vec::new(), launches: Vec::new(), revives: Vec::new(), unmeasured: None, drive: None, vessel: None, lifecycle: None };
     for mut candidate in candidates {
         if let (Some((pointer, contract)), Some(room)) = (ready.get(&candidate.bead), room.as_ref()) {
-            match blocker(input, contract, room, &started) {
+            // 行の予約は交差と枠より先（設計 row-review.md §7）。
+            let held = reserve::held(reserved, &candidate, &contract.write_set, room.materials.tracked());
+            match held.map(WaitReason::Reserved).or_else(|| blocker(input, contract, room, &started)) {
                 Some(reason) => candidate.reason = Some(reason),
                 None => {
                     started.push((candidate.bead.clone(), contract.write_set.clone()));
@@ -311,6 +314,23 @@ pub(super) fn requeues(stage: Stage) -> bool {
         Stage::Failed | Stage::Stopped | Stage::Gated => true,
         Stage::Landed | Stage::Reviewed => false,
         Stage::Intake
+        | Stage::Blocked
+        | Stage::Spawned
+        | Stage::Questioned
+        | Stage::RateLimited
+        | Stage::Implemented => false,
+    }
+}
+
+/// 便の終端が Landed でない 4 形か（Reviewed の判定が PASS でない・Gated の判定が FAIL・Failed・Stopped・**段の型の網羅の match 1 本**・
+/// 設計 row-review.md §7 の行の予約が読む）。Reviewed と Gated は判定を読めない周も落ちた形に数えない（測れないを予約に読み替えない・
+/// 生死は受付と同じ [`live`]）。
+pub(super) fn fallen(state_dir: &Path, id: &str, stage: Stage) -> bool {
+    match stage {
+        Stage::Failed | Stage::Stopped => true,
+        Stage::Gated | Stage::Reviewed => live(state_dir, id, stage) == Some(false),
+        Stage::Landed
+        | Stage::Intake
         | Stage::Blocked
         | Stage::Spawned
         | Stage::Questioned

@@ -1349,3 +1349,241 @@ fn pipe_dispatch_memo_lens_chooses_the_account_or_stops_without_a_verdict() {
     assert_eq!(argv.iter().rev().take(2).rev().cloned().collect::<Vec<_>>(), ["--stage", "memo"], "末尾は --stage memo: {argv:?}");
     clean(&[&repo, &state]);
 }
+
+// ---- 行の予約（設計 row-review.md §7・契約表の行 f・接頭辞 `pipe_dispatch_row_reservation_`） ----
+
+/// 落ちた契約 B（P1・行 a）・後ろの C（P2・行 c）・前の D（P0・行 d）の bead（3 行とも同じ file `src/lib.rs` を書く）。
+const FALLEN: &str = "s2-toy.1";
+const LATER: &str = "s2-toy.2";
+const EARLIER: &str = "s2-toy.3";
+
+/// 3 行（a・c・d）が同じ `src/lib.rs` を書く設計 doc を commit する。
+fn reserve_rows(repo: &Path) {
+    let lib = r#"write-set = ["src/lib.rs"]"#;
+    commit_rows(repo, &["a", "c", "d"].map(|id| row_fields(id, &["write-set"], &[lib])));
+}
+
+/// 列の写し（[`dispatch_rules`]）に `pipe.reserve_h` の行を足した写し（`None` は行を持たない写し）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn reserve_rules(state: &Path, hours: Option<u64>) -> String {
+    let base = fs::read_to_string(dispatch_rules(state)).expect("列の写しを読める");
+    let row = hours.map_or_else(String::new, |value| {
+        format!("\n[[rule]]\nid = \"pipe.reserve_h\"\nkind = \"PipeReserveH\"\nvalue = {value}\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n")
+    });
+    let path = state.join(format!("rules-reserve-{}.toml", hours.map_or("none".to_owned(), |value| value.to_string())));
+    fs::write(&path, format!("{base}{row}")).expect("写しを書ける");
+    path.display().to_string()
+}
+
+/// event log の行数（読めない周は 0）。
+fn event_lines(state: &Path) -> usize {
+    fs::read_to_string(state.join("fleet").join("events.jsonl")).map_or(0, |text| text.lines().count())
+}
+
+/// `rules` の写しで `dispatch ls` を `rounds` 周撃ち、**各周の前後で event log の行数が同じ**（行の予約は記帳しない）ことを測って最後の周を返す。
+fn reserve_ls(repo: &Path, state: &Path, bd: &str, rules: &str, rounds: usize) -> Output {
+    let args = ["dispatch", "ls", "--state-dir", &state.display().to_string(), "--repo", &repo.display().to_string(), "--rules", rules, "--bd", bd];
+    let mut last = run_pipe(&args);
+    for round in 1..=rounds {
+        let before = event_lines(state);
+        last = run_pipe(&args);
+        let held = stdout_of(&last).lines().filter(|line| line.contains("reason=reserved:")).count();
+        assert_eq!(event_lines(state), before, "{rounds} 周中 {round} 周目・待った候補 {held} 本: 行の予約は event を増やさない");
+    }
+    last
+}
+
+/// 便 `id` の event の ts を `secs` 秒前へ書き換える（終端の古さを作る・event の行数と並びは変えない）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn age_run(state: &Path, id: &str, secs: u64) {
+    let path = state.join("fleet").join("events.jsonl");
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |found| found.as_secs());
+    let ts = vessel::fleet::cli::format_utc(now.saturating_sub(secs));
+    let key = "\"ts\":\"";
+    let retime = |line: &str| -> String {
+        match line.split_once(key).and_then(|(head, rest)| Some((head, rest.split_once('"')?.1))) {
+            Some((head, tail)) if line.contains(&format!("\"run\":\"{id}\"")) => format!("{head}{key}{ts}\"{tail}"),
+            _ => line.to_owned(),
+        }
+    };
+    let text = fs::read_to_string(&path).expect("event log を読める");
+    let aged: Vec<String> = text.lines().map(retime).collect();
+    fs::write(&path, format!("{}\n", aged.join("\n"))).expect("event log を書ける");
+}
+
+/// 行 a の便を終端の形 `form` に着ける（Reviewed の判定が PASS でない 2 形・Gated FAIL・Failed・Stopped と、予約を持たない Landed）。
+#[expect(
+    clippy::panic,
+    reason = "統合 test の helper。clippy の allow-panic-in-tests は #[test] 関数の中だけに効く"
+)]
+fn reserve_fallen(repo: &Path, state: &Path, form: &str) -> String {
+    match form {
+        "reviewed-fail" => judged_run(repo, state, FALLEN, "{\"verdict\":\"FAIL\"}"),
+        "reviewed-inconclusive" => judged_run(repo, state, FALLEN, "{\"verdict\":\"INCONCLUSIVE\",\"kind\":\"section-material-missing\"}"),
+        "gated-fail" => gated_run(repo, state, FALLEN, "FAIL"),
+        "failed" => failed_run(repo, state, FALLEN),
+        "stopped" => {
+            let id = intake_bead(repo, state, &format!("{DESIGN_FILE}#a"), FALLEN);
+            super::super::stop_run_ok(state, &id);
+            id
+        }
+        "landed" => {
+            let id = gated_run(repo, state, FALLEN, "PASS");
+            let landed = super::super::land_once(repo, state, &id);
+            assert_eq!(landed.status.code(), Some(i32::from(RC_OK)), "land は rc 0（{}）", told(&landed));
+            id
+        }
+        other => panic!("知らない形: {other}"),
+    }
+}
+
+/// 落ちた B（形 `form`）と後ろの C だけの台帳の置き場（repo・state・B の直前の便・台帳 client）。
+fn reserve_place(form: &str) -> (std::path::PathBuf, std::path::PathBuf, String, String) {
+    let (repo, state) = repo_with_state();
+    reserve_rows(&repo);
+    let run = reserve_fallen(&repo, &state, form);
+    let bd = fake_bd(&state, &[issue(FALLEN, 1, "a"), issue(LATER, 2, "c")]);
+    (repo, state, run, bd)
+}
+
+/// (a) 直前の便が Reviewed FAIL の B と同じ file を触る後ろの C（P2）は `reserved:<B>/<本数>` で待ち、B より前の D（P0）は同じ file を触っても起こされる。
+/// 判定は event を増やさない（3 周）。
+#[test]
+fn pipe_dispatch_row_reservation_holds_a_later_crossing_candidate_and_wakes_an_earlier_one() {
+    let (repo, state) = repo_with_state();
+    reserve_rows(&repo);
+    reserve_fallen(&repo, &state, "reviewed-fail");
+    let bd = fake_bd(&state, &[issue(FALLEN, 1, "a"), issue(LATER, 2, "c"), issue(EARLIER, 0, "d")]);
+    let out = reserve_ls(&repo, &state, &bd, &reserve_rules(&state, Some(24)), 3);
+    assert_eq!(reason_of(&out, LATER), format!("reserved:{FALLEN}/1"), "後ろの C は B の予約で待つ（{}）", told(&out));
+    assert_eq!(reason_of(&out, EARLIER), "-", "B より前の D は待たない（{}）", told(&out));
+    assert!(reason_of(&out, FALLEN).starts_with("settled:"), "B 自身は列外のまま（{}）", told(&out));
+    assert_eq!(count_of(&out), format!("{COUNT} total=3 ready=1"), "起こせるのは D だけ");
+    clean(&[&repo, &state]);
+}
+
+/// (b) 終端 4 形（Reviewed の判定が PASS でない・Gated FAIL・Failed・Stopped）の B はどれも予約を持ち、直前の便が Landed の B は持たない（5 形・Reviewed は 2 判定）。
+#[test]
+fn pipe_dispatch_row_reservation_belongs_to_the_terminal_forms_and_not_to_a_landed_run() {
+    for (form, held) in [("reviewed-fail", true), ("reviewed-inconclusive", true), ("gated-fail", true), ("failed", true), ("stopped", true), ("landed", false)] {
+        let (repo, state, _, bd) = reserve_place(form);
+        let out = reserve_ls(&repo, &state, &bd, &reserve_rules(&state, Some(24)), 1);
+        let want = if held { format!("reserved:{FALLEN}/1") } else { "-".to_owned() };
+        assert_eq!(reason_of(&out, LATER), want, "{form}: C の理由（{}）", told(&out));
+        clean(&[&repo, &state]);
+    }
+}
+
+/// (c) B の契約を変えた周は B が C より先に起こされ（起こした記録は B だけ・C は reserved のまま）、B の新しい便の後の周は C の reserved が解ける。
+#[test]
+fn pipe_dispatch_row_reservation_wakes_the_fixed_bead_before_the_held_one() {
+    let (repo, state, _, bd) = reserve_place("reviewed-fail");
+    let widened = r#"write-set = ["src/lib.rs", "src/extra.rs"]"#;
+    commit_rows(&repo, &[row_fields("a", &["write-set"], &[widened]), row_fields("c", &["write-set"], &[r#"write-set = ["src/lib.rs"]"#])]);
+    let listed = reserve_ls(&repo, &state, &bd, &reserve_rules(&state, Some(24)), 1);
+    assert_eq!(reason_of(&listed, FALLEN), "-", "契約を変えた B は列に戻る（{}）", told(&listed));
+    assert_eq!(reason_of(&listed, LATER), format!("reserved:{FALLEN}/1"), "B が新しい便を起こすまで C は待つ（{}）", told(&listed));
+    // run id は `<bead>-<秒>`: 前の便と同じ秒に起こすと id が衝突する。
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    let fired = launch_turn(&repo, &state, &bd, "true");
+    assert_eq!(stdout_of(&fired).trim_end(), "dispatch=started:1,resumed:0,waiting:1", "B だけ起こす（{}）", told(&fired));
+    assert_eq!(created(&state, &[FALLEN], 2), 2, "B の新しい便の RunCreated（前の便と合わせて 2 件）");
+    assert_eq!(created(&state, &[LATER], 0), 0, "C は起こされない");
+    let mark = |bead: &str| line_at(&state, &[LAUNCHED_MARK[0], LAUNCHED_MARK[1], &format!("\"bead\":\"{bead}\"")]);
+    assert!(mark(FALLEN).is_some() && mark(LATER).is_none(), "起こした記録は B だけ（B={:?} C={:?}）", mark(FALLEN), mark(LATER));
+    clean(&[&repo, &state]);
+
+    // 新しい便の RunCreated の後の周: C は reserved でなく、B の live な便との交差で待つ。
+    let (repo, state, _, bd) = reserve_place("reviewed-fail");
+    let rules = reserve_rules(&state, Some(24));
+    let held = reserve_ls(&repo, &state, &bd, &rules, 1);
+    assert_eq!(reason_of(&held, LATER), format!("reserved:{FALLEN}/1"), "前提: 新しい便の前は reserved（{}）", told(&held));
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    let live = intake_bead(&repo, &state, &format!("{DESIGN_FILE}#a"), FALLEN);
+    let after = reserve_ls(&repo, &state, &bd, &rules, 1);
+    assert_eq!(reason_of(&after, LATER), format!("overlap:{live}/1"), "B の新しい便の後は reserved が解ける（{}）", told(&after));
+    clean(&[&repo, &state]);
+}
+
+/// 台帳の B（P1・行 a）に label を 1 つ付けた 1 件。
+fn labeled_fallen(label: &str) -> String {
+    issue(FALLEN, 1, "a").replacen("\"labels\":[]", &format!("\"labels\":[\"{label}\"]"), 1)
+}
+
+/// (d) B への hold の印・期限（値 1 の写しで 2 時間前の終端）・B の close・B の memo の label・B の問いの label のそれぞれで C の reserved が解ける（5 形）。
+#[test]
+fn pipe_dispatch_row_reservation_ends_by_hold_expiry_close_or_a_memo_or_question_label() {
+    let acceptance = format!("design = {DESIGN_FILE}#a");
+    for form in ["hold", "expiry", "close", "memo", "question"] {
+        let (repo, state, run, bd) = reserve_place("reviewed-fail");
+        let held = reserve_ls(&repo, &state, &bd, &reserve_rules(&state, Some(24)), 1);
+        assert_eq!(reason_of(&held, LATER), format!("reserved:{FALLEN}/1"), "{form}: 前提は予約が掛かる（{}）", told(&held));
+        let (rules, bd) = match form {
+            "hold" => {
+                let out = run_pipe(&["dispatch", "hold", FALLEN, "--state-dir", &state.display().to_string()]);
+                assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "hold: {}", stderr_of(&out));
+                (reserve_rules(&state, Some(24)), bd)
+            }
+            "expiry" => {
+                age_run(&state, &run, 2 * 3600);
+                (reserve_rules(&state, Some(1)), bd)
+            }
+            "close" => (reserve_rules(&state, Some(24)), fake_bd(&state, &[listed(FALLEN, "closed", 1, &acceptance, &[]), issue(LATER, 2, "c")])),
+            label => {
+                let word = if label == "memo" { "intake:memo" } else { "intake:question" };
+                (reserve_rules(&state, Some(24)), fake_bd(&state, &[labeled_fallen(word), issue(LATER, 2, "c")]))
+            }
+        };
+        let out = reserve_ls(&repo, &state, &bd, &rules, 1);
+        assert_eq!(reason_of(&out, LATER), "-", "{form}: C の予約が解ける（{}）", told(&out));
+        clean(&[&repo, &state]);
+    }
+}
+
+/// (e) B が C を台帳の blocks で持つ周（C は B の祖先）に C は reserved で待たず起こされる（B が依存で待ち C が予約で待つ輪を作らない）。
+#[test]
+fn pipe_dispatch_row_reservation_spares_the_blocks_ancestor_of_the_fallen_bead() {
+    let (repo, state, _, bd) = reserve_place("reviewed-fail");
+    let rules = reserve_rules(&state, Some(24));
+    let plain = reserve_ls(&repo, &state, &bd, &rules, 1);
+    assert_eq!(reason_of(&plain, LATER), format!("reserved:{FALLEN}/1"), "対照: blocks の無い周は待つ（{}）", told(&plain));
+    let acceptance = format!("design = {DESIGN_FILE}#a");
+    let bd = fake_bd(&state, &[listed(FALLEN, "open", 1, &acceptance, &[(LATER, "blocks")]), issue(LATER, 2, "c")]);
+    let out = reserve_ls(&repo, &state, &bd, &rules, 1);
+    assert_eq!(reason_of(&out, FALLEN), format!("dependency:{LATER}"), "B は C を待つ（{}）", told(&out));
+    assert_eq!(reason_of(&out, LATER), "-", "B の祖先の C は待たず起こされる（{}）", told(&out));
+    clean(&[&repo, &state]);
+}
+
+/// (f) 期限の行の無い rules の写しは期限なしで予約を掛けて理由の値の末尾が `/unset` になり、値 0 の写しは 100 時間前の終端でも予約を掛ける（2 形）。
+#[test]
+fn pipe_dispatch_row_reservation_without_the_deadline_row_is_unset_and_zero_never_expires() {
+    let (repo, state, run, bd) = reserve_place("reviewed-fail");
+    age_run(&state, &run, 100 * 3600);
+    let unset = reserve_ls(&repo, &state, &bd, &reserve_rules(&state, None), 1);
+    assert_eq!(reason_of(&unset, LATER), format!("reserved:{FALLEN}/1/unset"), "行の無い写しは期限なし・末尾 /unset（{}）", told(&unset));
+    let zero = reserve_ls(&repo, &state, &bd, &reserve_rules(&state, Some(0)), 1);
+    assert_eq!(reason_of(&zero, LATER), format!("reserved:{FALLEN}/1"), "値 0 は期限なし（{}）", told(&zero));
+    let expired = reserve_ls(&repo, &state, &bd, &reserve_rules(&state, Some(24)), 1);
+    assert_eq!(reason_of(&expired, LATER), "-", "対照: 値 24 は 100 時間前の終端の予約を手放す（{}）", told(&expired));
+    clean(&[&repo, &state]);
+}
+
+/// (g) B が列で依存待ちの周（B の理由は `dependency`）も C は reserved で待つ。
+#[test]
+fn pipe_dispatch_row_reservation_holds_while_the_fallen_bead_waits_on_a_dependency() {
+    let (repo, state, _, _) = reserve_place("reviewed-fail");
+    let acceptance = format!("design = {DESIGN_FILE}#a");
+    let waiting = listed(FALLEN, "open", 1, &acceptance, &[("s2-dep", "blocks")]);
+    let bd = fake_bd(&state, &[waiting, listed("s2-dep", "open", 2, "memo", &[]), issue(LATER, 2, "c")]);
+    let out = reserve_ls(&repo, &state, &bd, &reserve_rules(&state, Some(24)), 1);
+    assert_eq!(reason_of(&out, FALLEN), "dependency:s2-dep", "B は依存で待つ（{}）", told(&out));
+    assert_eq!(reason_of(&out, LATER), format!("reserved:{FALLEN}/1"), "候補に居ない B の予約でも C は待つ（{}）", told(&out));
+    clean(&[&repo, &state]);
+}

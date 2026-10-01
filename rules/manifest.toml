@@ -847,6 +847,17 @@ enabled = true
 ruling = "user 2026-09-30T04:25Z"
 ruled_at = "2026-09-30"
 
+# 行の予約の期限（時間・設計 row-review.md §7・FR102）。落ちた契約の終端からこの時間を過ぎた行は write-set の予約を手放す。値 0 は期限なし。
+# 読めない周は期限なしで予約を掛け、reserved の値の末尾に /unset を足す。
+
+[[rule]]
+id = "pipe.reserve_h"
+kind = "PipeReserveH"
+value = 24
+enabled = true
+ruling = "user 2026-09-30T22:13Z 項 reserve"
+ruled_at = "2026-09-30"
+
 # 席の起草の置き場の build の置き場の量の上限（MiB = 100 GiB・state dir ごと・設計 dispatcher.md §39・ADR-0101）と、量の線が消さない
 # 組み立て中の窓（秒 = 30 分）。読めない周は量の線を撃たず記録は no-rule（既定値に倒さない）。
 
