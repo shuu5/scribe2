@@ -1196,6 +1196,79 @@ verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe
 size = "S"
 growth = ["crates/scribe2/src/pipe/review/judgement.rs:20", "crates/scribe2-boundary/tests/e2e/pipe/intake.rs:75"]
 done = "(1) at が # の後ろを持つ path の項目（src/other.rs の後ろに # と歯の名）の teeth-outside-write-set の後、write-set に src/other.rs を足した契約が受付を通る (2) at が末尾に : と行の番号を持つ path の項目（src/other.rs の後ろに :12）の後、write-set に src/other.rs を足した契約が受付を通る (3) 同じ file に # の後ろの違う 2 項目と § の番号の後、file を足さない契約は finding-unaddressed で断られ、理由は剥がした file の字面を名指して # の後ろの字を持たず、数は「測った 1 件・測れない 1 件」 (4) 既存の pipe_intake_repeat_ の歯が本文を変えずに緑"
+
+[[contract]]
+id = "cb"
+title = "vessel 宣言の任意 key contract-tables で契約表の置き場を名乗り、rev の宣言を読む 3 値の口と列挙の 1 関数を置いて contracts check・宣言済みの新規 file・runner の touches 節を通す（§69 行 cb）"
+req = ["FR47", "FR55", "FR53"]
+section = "69"
+write-set = ["crates/scribe2/src/pipe/declaration.rs", "crates/scribe2/src/pipe/declaration/optional_keys.rs", "crates/scribe2/src/pipe/table/check.rs", "crates/scribe2/src/pipe/table.rs", "crates/scribe2/src/pipe/spawn.rs", "crates/scribe2-boundary/tests/e2e/pipe/contracts.rs", "crates/scribe2-boundary/tests/e2e/pipe/spawn.rs"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail declaration_table_places_", "cargo nextest run -p scribe2 --lib --no-tests=fail table_places_docs_", "cargo nextest run -p scribe2 --lib --no-tests=fail table_places_declared_files_", "cargo nextest run -p scribe2 --lib --no-tests=fail declaration_kind_passes_declarations_without_cargo_and_keeps_the_schema", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail contracts_tables_key_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail spawn_touches_from_declared_tables_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail contracts_untracked_doc_is_noticed_without_counting_and_joins_the_population_once_tracked", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail runner_touches_section_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail contract_closure_ext_real_table_has_zero_findings", "cargo run -q -p scribe2-boundary --bin scribe2 -- contracts check --repo ."]
+size = "M"
+growth = ["crates/scribe2/src/pipe/declaration.rs:8", "crates/scribe2/src/pipe/declaration/optional_keys.rs:130", "crates/scribe2/src/pipe/table/check.rs:20", "crates/scribe2/src/pipe/table.rs:70", "crates/scribe2/src/pipe/spawn.rs:5", "crates/scribe2-boundary/tests/e2e/pipe/contracts.rs:90", "crates/scribe2-boundary/tests/e2e/pipe/spawn.rs:50"]
+done = "(1) vessel 宣言が任意 key contract-tables（key の列の末尾・schema は 1 のまま）を repo 相対の項目の配列として読み、空（空白だけ）・絶対 path・home の短縮記号・.. の段の項目を key の行番号を名指す不備で断り、書かない宣言は項目 0 で、key の列の pin は末尾に contract-tables を 1 つ足す〔declaration_table_places_ の (a): key の無い宣言・2 項目・不備 4 形・空配列と文字列の値は既存の字面・直す既存の歯 declaration_kind_passes_declarations_without_cargo_and_keeps_the_schema（retroactive の札）〕 (2) optional_keys.rs の型 TablePlaces（pub・variant Fixed / Declared（欄 items と line）/ Unreadable・declaration が再輸出）の関連 fn at が名指した rev の宣言を読み、宣言 file の無い rev・git でない dir・key の無い宣言は Fixed、key を持つ宣言は Declared、宣言が在って読めない rev は Unreadable を返し、関連 fn items は Fixed で空の列・Declared で項目・Unreadable で無しを返す〔declaration_table_places_ の (b): 使い捨ての git repo で key を持つ commit・key の値を壊した commit・key を消した commit と、HEAD でなく名指した古い sha の Declared〕 (3) design_docs が path の列と項目の列を受け、入力の順のまま既定（docs/design/ の直下の .md）と項目（末尾 / の dir は直下で form_of が読める path・ほかは等しい path）に当たる path を 1 度ずつ返し、項目 0 では今と同じ列を返す〔table_places_docs_ の (c): 項目 0・contracts/・tables/one.toml・docs/design/ の 4 つの表で、下の dir の path・.txt・tables/one.toml.bak を返さず a.md を 2 度返さない〕 (4) contracts check の doc の列（行の検査と名の衝突の予想が同じ列を読む）と未追跡の知らせが HEAD の宣言の項目で同じ 1 関数を通り、判定行の字面は変えない〔contracts_tables_key_ の (e): key で contracts/ を名乗り docs/design/toy.md が区間を持たない toy の findings が contracts/t.toml の goal の無い行 a の contract-table:section-missing の 1 件だけで判定行が docs=2 rows=1・rc 1、key を消した同じ repo は docs=1 rows=0・rc 0 (f): 未追跡の contracts/u.toml が path を名乗る contracts untracked-doc: の知らせと untracked=1 を出す・既存の歯 contracts_untracked_doc_is_noticed_without_counting_and_joins_the_population_once_tracked は本文を変えずに緑〕 (5) declared_files が引数を変えずに HEAD の宣言の項目で同じ列を読み、宣言を読めない周は理由を返す〔table_places_declared_files_ の (d): key で contracts/ を名乗る commit で contracts/t.toml の行の + の file を返し、key の無い commit で返さず、key の値を壊した commit で理由を返す〕 (6) runner の「ほかの行の touches」節が便の base の宣言の項目で同じ 1 関数を通り、読めない周は理由の 1 行〔spawn_touches_from_declared_tables_ の (g): key で contracts/ を名乗る toy の contracts/t.toml の行 b の touches の項目が節に contracts/t.toml#b の pointer で載る・既存の歯 runner_touches_section_ は本文を変えずに緑〕 (7) 器の repo の contracts check は findings 0 のまま〔既存の歯 contract_closure_ext_real_table_has_zero_findings と verify の最終行の contracts check が便の木で findings 0〕 歯: declaration_table_places_（lib・2 本）・table_places_docs_（lib・1 本）・table_places_declared_files_（lib・1 本）・contracts_tables_key_（e2e・2 本）・spawn_touches_from_declared_tables_（e2e・1 本）が base で RED（機能不在: base は名が無く lib は 0 本・e2e は base が key を未知の key で断り rc 2）。接頭辞の後ろの名に contract_ と pipe_intake_ を含めない"
+
+[[contract]]
+id = "cc"
+title = "局面の行の読み手 read_rows が main の sha の vessel 宣言の契約表の置き場を読み、sha の木の全 path を列挙の 1 関数で絞る — 宣言を読めない sha は Missing（§69 行 cc）"
+req = ["FR90"]
+section = "69"
+write-set = ["crates/scribe2/src/fleet/lifecycle_mark.rs"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail lifecycle_declared_tables_", "cargo nextest run -p scribe2 --lib --no-tests=fail lifecycle_mark_"]
+size = "S"
+growth = ["crates/scribe2/src/fleet/lifecycle_mark.rs:60"]
+depends = ["cb"]
+done = "(1) read_rows が引数を変えずに main の sha の宣言を TablePlaces の at で読み、sha の木の全 path（ls-tree -r）を design_docs で絞り、行の pointer は <置き場の path>#<行 id> のまま〔lifecycle_declared_tables_ の (a): key で contracts/ を名乗り表を contracts/x.toml だけに置いた commit A の read_rows が contracts/x.toml#a と行の write-set を返す（docs/design/ に file が無いことを歯の中で assert） (b): key を消した commit B は Missing で、同じ repo で commit A の sha を名指すと (a) と同じ行を返す (d): key の無い宣言で docs/design/y.md に表を置いた commit D は y.md の行を返す〕 (2) 宣言を読めない sha は表が在っても Missing（既定の置き場に倒さない）〔(c): key の値を壊した commit C は contracts/x.toml が在っても Missing〕 歯: lifecycle_declared_tables_（lib・1 本・(a)〜(d)）が base で RED（機能不在: base は名が無く 0 本・本文を当てても base の read_rows は docs/design/ だけを見て (a) が Missing）。既存の lifecycle_mark_ の歯は本文を変えずに緑"
+
+[[contract]]
+id = "cd"
+title = "live-row の門（編集と commit）が worktree の root の HEAD の vessel 宣言の置き場を読み、列挙の 1 関数の列だけを比べる — docs/design/ の下を深さを問わず読む定義を捨てる（§69 行 cd）"
+req = ["FR47", "FR53", "FR32"]
+section = "69"
+write-set = ["crates/scribe2/src/hook/live_row.rs", "crates/scribe2-boundary/tests/e2e/hook/guards.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail hook_live_tables_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail hook_live_row_", "cargo nextest run -p scribe2 --lib --no-tests=fail hook_live_row_"]
+size = "M"
+growth = ["crates/scribe2/src/hook/live_row.rs:30", "crates/scribe2-boundary/tests/e2e/hook/guards.rs:140"]
+depends = ["cb"]
+done = "(1) 編集の門は、対象が form_of の読める path で同じ置き場の worktree の root を解けた周に、root の HEAD の宣言を TablePlaces の at で読み、repo 相対 path が design_docs の列に入る周だけ比べ（.md で区間の始まりの行を変更前にも変更後にも持たない編集は宣言を読まずに通す）、宣言を読めない周は form_of の読める path を全部比べる〔hook_live_tables_ の (a): 宣言（必須 3 key と key contracts/）と contracts/t.toml（行 a / b / c）を commit した toy で、Questioned の便の行 contracts/t.toml#a の done を変える Edit が rc 2・stdout 0 byte・記録 live-row-deny changed (c): 置き場の外の other/u.toml（同じ表の写し）を変える Edit は通る (d): 便を置いた後に key の値を壊す commit を置き (a) と同じ Edit が changed で断られる〕 (2) commit の門は HEAD との差の path を同じ口と同じ 1 関数で絞り、宣言を読めない周は form_of の読める path の全部を比べる〔(b): (a) と同じ変更の git commit が changed で断られる〕 (3) 門は design_docs の列のほかを見ない（docs/design/ の下を深さを問わず読む定義を捨てる）〔(e): key の無い toy で docs/design/sub/t.toml の行に便を置くとその行を変える Edit は通り、同じ toy に key で docs/design/sub/ を名乗る commit を足すと同じ Edit が断られる〕 (4) 比べ・自分の行の除外・deny の行・記録の語・解けない dir の扱いは変えない〔既存の hook_live_row_ の歯（e2e と lib）は本文を変えずに緑〕 歯: hook_live_tables_（e2e・(a)〜(e)）が base で RED（機能不在: base の門は docs/design/ の外を見ず (a)(b)(d) を通し、docs/design/ の下を深さを問わず読んで (e) の 1 つ目の Edit を断る）"
+
+[[contract]]
+id = "ce"
+title = "台帳の形の検査の docs_of が HEAD の vessel 宣言の契約表の置き場を読み、tracked を列挙の 1 関数で絞る — 読めない周は unreadable reason=declaration-unreadable（§69 行 ce）"
+req = ["FR51"]
+section = "69"
+write-set = ["crates/scribe2/src/ledger/form.rs", "=crates/scribe2-boundary/tests/e2e/ledger_form.rs"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail ledger_shape_tables_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail ledger_form_names_each_defect_with_its_count_and_population"]
+size = "S"
+growth = ["crates/scribe2/src/ledger/form.rs:50"]
+depends = ["cb"]
+done = "(1) docs_of が HEAD の宣言を TablePlaces の at で読み、tracked を design_docs で絞り（is_design_doc を消す）、宣言した置き場の .toml の行も未着地と drift に数える〔ledger_shape_tables_ の (a): 使い捨ての git repo（台帳は空の列）で、key で contracts/ を名乗り contracts/t.toml に未着地の行 a（+ の file が tracked に無い）を置いた commit の docs_of を判定に掛けた描画が unlanded=1 と drift=1:t#a を持つ (b): key を消した commit の描画は unlanded=0〕 (2) 宣言を読めない周は理由の語 declaration-unreadable を返し件数を 1 つも出さない〔(c): key の値を壊した commit の docs_of が declaration-unreadable を返し、その語の描画が ledger-form: unreadable reason=declaration-unreadable の 1 行〕 (3) drift の契約 id の形（stem と行 id）と既存の描画は変えない〔既存の e2e の歯 ledger_form_names_each_defect_with_its_count_and_population は本文を変えずに緑〕 歯: ledger_shape_tables_（lib・1 本・(a)〜(c)）が base で RED（機能不在: base は名が無く 0 本・本文を当てても base の docs_of は docs/design/ だけを見て宣言を読まず (a) が unlanded=0）"
+
+[[contract]]
+id = "cf"
+title = "contracts check が vessel 宣言の置き場を照らし、tracked に当たらない項目を place-empty・doc の file 名の stem の重なりを doc-id-duplicate で名指す（TableError に 2 つ・§69 行 cf）"
+req = ["FR55", "FR47"]
+section = "69"
+touches = ["crate::pipe::table::TableError"]
+write-set = ["crates/scribe2/src/pipe/table.rs", "crates/scribe2/src/pipe/table/check.rs", "=crates/scribe2/src/pipe/table/parse.rs", "=crates/scribe2/src/pipe/cli/intake.rs", "=crates/scribe2/src/pipe/cli/intake/refusal.rs", "=crates/scribe2/src/pipe/refuse.rs", "crates/scribe2-boundary/tests/e2e/pipe/contracts.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail contracts_place_defect_", "cargo nextest run -p scribe2 --lib --no-tests=fail table_error_names_are_pinned_in_declaration_order_and_carry_their_line", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_table_evidence_is_decided_once_for_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail contract_closure_ext_real_table_has_zero_findings", "cargo run -q -p scribe2-boundary --bin scribe2 -- contracts check --repo ."]
+size = "M"
+growth = ["crates/scribe2/src/pipe/table.rs:60", "crates/scribe2/src/pipe/table/check.rs:4", "crates/scribe2-boundary/tests/e2e/pipe/contracts.rs:80"]
+depends = ["cb"]
+done = "(1) contracts check が宣言した項目のうち tracked の path に 1 つも当たらない項目（dir 項目は直下に form_of が読める tracked file が 0 本・file 項目は tracked に無い）を .vessel.toml の key の行の contract-table:place-empty で 1 件ずつ名指して rc 1 にし、既定の置き場の 0 本は名指さない〔contracts_place_defect_ の (a): key に contracts/ と tables/none.toml を書き contracts/a.toml に表を置いた toy は tables/none.toml の 1 件だけを名指す (c): key の無い toy は 2 つの語を出さない〕 (2) 列挙した doc の file 名の stem が重なれば、列挙の順で 2 本目以降の doc を行 0 の contract-table:doc-id-duplicate で名指し相手の path を添えて rc 1〔(b): key で contracts/ を名乗り contracts/toy.toml と docs/design/toy.md の両方に表を置いた toy は docs/design/toy.md の 1 件で相手 contracts/toy.toml を名乗る〕 (3) 2 つの語は TableError の variant 2 つ（宣言順の末尾・理由の 1 行・rc 1・在り処は place-empty が項目の path・doc-id-duplicate が 2 本の doc の path の file の列）で、名の列の pin と在り処の pin の母集団を 2 つ伸ばし、受付の行の検査はこの 2 つを撃たない〔直す既存の歯 table_error_names_are_pinned_in_declaration_order_and_carry_their_line と pipe_table_evidence_is_decided_once_for_ で始まる 1 本（retroactive の札）〕 (4) 器の repo の contracts check は findings 0 のまま〔既存の歯 contract_closure_ext_real_table_has_zero_findings と verify の最終行の contracts check が便の木で findings 0〕 歯: contracts_place_defect_（e2e・(a)〜(c)）が base で RED（機能不在: base は key を未知の key で断り rc 2・語が無い）。接頭辞の後ろの名に contract_ を含めない"
+
+[[contract]]
+id = "cg"
+title = "受付の生成が pointer の path を受付の材料の vessel 宣言の置き場に照らし、外を指す契約を doc を読む前に place-outside で断る（TableError に 1 つ・§69 行 cg・FR54）"
+req = ["FR54", "FR53"]
+section = "69"
+touches = ["crate::pipe::table::TableError"]
+write-set = ["crates/scribe2/src/pipe/cli/intake.rs", "crates/scribe2/src/pipe/table.rs", "=crates/scribe2/src/pipe/table/check.rs", "=crates/scribe2/src/pipe/table/parse.rs", "=crates/scribe2/src/pipe/cli/intake/refusal.rs", "=crates/scribe2/src/pipe/refuse.rs", "crates/scribe2-boundary/tests/e2e/pipe/intake.rs", "crates/scribe2-boundary/tests/e2e/pipe/review.rs"]
+verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail intake_place_outside_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe_review_contract_whole_goal_reads_the_goal_from_a_derived_toml", "cargo nextest run -p scribe2 --lib --no-tests=fail contract_closure_ext_survivor_a_cap_shortfall_recounts_without_the_unresolved_items", "cargo nextest run -p scribe2 --lib --no-tests=fail table_error_names_are_pinned_in_declaration_order_and_carry_their_line", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_table_evidence_is_decided_once_for_", "cargo run -q -p scribe2-boundary --bin scribe2 -- contracts check --repo ."]
+size = "M"
+growth = ["crates/scribe2/src/pipe/cli/intake.rs:14", "crates/scribe2/src/pipe/table.rs:25", "crates/scribe2-boundary/tests/e2e/pipe/intake.rs:90", "crates/scribe2-boundary/tests/e2e/pipe/review.rs:2"]
+depends = ["cb"]
+done = "(1) 受付の生成は pointer の path が受付の材料の宣言の置き場（design_docs に path 1 つと項目を掛けて空でないか）に入らない契約を、doc を読む前に contract-table:place-outside（path を名乗る理由の 1 行・rc 1）で断って run dir と event を作らず、宣言を読めない材料も同じ断りにし、生成を呼ぶ preflight も同じ断りを並べる〔intake_place_outside_ の (a): key の無い toy に contracts/t.toml（goal を持つ行 a・ほかの欄は toy の行と同じ形）を commit し、--design contracts/t.toml#a の受付が rc 1・stderr が contract-table:place-outside と contracts/t.toml を名乗り・run dir と event は撃つ前と同数、同じ pointer の preflight が refuse=contract-table:place-outside の 1 行と rc 1〕 (2) 受付の材料が HEAD の宣言の置き場を材料の読みの 1 本の中で 1 周に 1 回読み、key で名乗った置き場の pointer は通す〔(b): (a) の toy に key で contracts/ を名乗る commit を足すと同じ受付が rc 0 で run を作る・材料の字面を持つ既存の helper short_of_room に欄を 1 つ足し（retroactive の札）それを使う contract_closure_ext_survivor_a_cap_shortfall_recounts_without_the_unresolved_items が緑〕 (3) 語は TableError の variant 1 つ（宣言順の末尾・在り処は宣言 file の名 1 本の file の列）で、名の列の pin と在り処の pin の母集団を 1 つ伸ばす〔直す既存の歯 table_error_names_are_pinned_in_declaration_order_and_carry_their_line と pipe_table_evidence_is_decided_once_for_ で始まる 1 本（retroactive の札）〕 (4) 既定の置き場の pointer は今どおり通り、置き場の外を指していた既存の歯は toy の宣言に key で docs/design/ を名乗る 1 行を足す形に直す〔(c): (a) の toy の docs/design/toy.md の行の受付が rc 0・直す既存の歯 pipe_review_contract_whole_goal_reads_the_goal_from_a_derived_toml（derive_repo_with の files に宣言の上書きを 1 つ足し、ほかの assert は変えない・retroactive の札）〕 (5) 器の repo の contracts check は findings 0 のまま〔verify の最終行の contracts check が便の木で findings 0〕 歯: intake_place_outside_（e2e・(a)〜(c)）が base で RED（機能不在: base の受付は置き場を照らさず (a) の受付と preflight を通す）。接頭辞の後ろの名に pipe_intake_ と contract_ を含めない"
 <!-- contracts:end -->
 
 
@@ -2375,3 +2448,161 @@ done = "(1) at が # の後ろを持つ path の項目（src/other.rs の後ろ�
 - 却下: lens の雛形に「at の path は file の字面だけ」と書く（過去の便の at は書き換わらず、`s2-07l.738.39.6` が止まったまま・lens が字を守る保証も無い）／`covered` に剥がしを入れる（write-set の閉包や交差の読み手と共有で、契約の write-set の項目に # を許すことになる）／# の後ろの名を literal-mismatch の物差しで別に測る（kind の違う物差しを混ぜる・§23 (3) の kind ごとに 1 関数）。
 - 限界: 空白を持つ項目（設計 doc の path の後ろに # と行の id と空白と § を付けた形）は、今までどおり測れない側に残す。空白を持たない設計 doc の pointer は file として測るので、契約の write-set に設計 doc が無ければ断りは残る（剥がす前も断っていた）。新しく測る側に入るのは、/ を持たず剥がした字面が tracked の file に当たる項目（Cargo.toml の後ろに # と key を付けた形）だけで、その file が write-set に無ければ断る。
 - ADR: 書かない（物差しの読みの直し・§35 の型の延長）。
+
+## 69. 契約表の置き場を vessel 宣言の任意 key contract-tables が名乗り、契約表を数える器の読み手と受付が 1 つの関数を通る（契約表の行 cb〜cg・memo s2-07l.738.42.2・[ADR-0109](../../design-intent/decisions/ADR-0109-contract-tables-are-enumerated-from-the-declared-places-by-one-function.html)）
+
+やさしく言うと: 器は「契約表は docs/design/ のすぐ下の .md に在る」と決めてかかって表を数えている。表を contracts/ の .toml に置く repo（隣の project）では、契約表の検査は表を 0 本と数え、局面の出力は行を「読めない」と出し、走っている便の行を書き換える編集も止めない。1 行を pointer で指して読む口（受付・審査・gate）は場所を問わないので、便は通るのに見張りだけが表を見ない。repo が「表はここに在る」と vessel 宣言に書けるようにし、表を数える読み手を全部 1 つの関数に通す。受付も同じ関数で置き場の外を指す pointer を断るので、走っている便の行は必ず置き場の中に在り、見張りは置き場だけを見て足りる。書かない repo の数え方は今と同じ。
+
+### 69.1 何が起きているか（main a6d4234c・verified）
+
+- 「契約表とは何か」の定義が器の中に 3 通りある。
+  - 定義 1（docs/design/ の直下の .md）: `crates/scribe2/src/pipe/table/check.rs` 634 行の `design_docs` が「契約表の doc の母集団の読みはこの 1 本」と名乗る。呼び手は 4 系統: contracts check の母集団（`judge_repo` 619 行）と名の衝突の予想（621 行）、未追跡の知らせ（628 行・`git ls-files --others` を docs/design/ に絞って読む 711 行）、宣言済みの新規 file の母集団（`declared_files` 645 行・contracts check と受付の材料 `crates/scribe2/src/pipe/cli/intake.rs` 271 行の両方）、runner の stdin の「ほかの行の touches」節（`crates/scribe2/src/pipe/spawn.rs` 510 行・便の base の木）。
+  - 定義 1 の写しが 2 つ在る（同じ filter を自前で書く）: 局面の行の読み手 `crates/scribe2/src/fleet/lifecycle_mark.rs` の `read_rows`（642〜660 行・main の sha で `git ls-tree` を docs/design/ に対して非再帰で撃ち 645 行で絞る・0 本は `Missing`）と、台帳の形の検査 `crates/scribe2/src/ledger/form.rs` の `is_design_doc`（284〜286 行・注は「contracts check と同じ母集団」）。
+  - 定義 2（docs/design/ の下・深さを問わず .md か .toml）: live-row の門 `crates/scribe2/src/hook/live_row.rs` の編集（333 行の含みと 383 行の先頭一致）と commit（444 行）。設計 [vessel-hook.md](./vessel-hook.md) §15 形 3 がこの定義を名乗る。
+  - 定義 3（表の形の中身を持つ tracked file・場所を問わない）: 行の審査の表の見分け `crates/scribe2/src/pipe/review_ref.rs` 204〜214 行と、code の木の鍵 `crates/scribe2/src/pipe/row_review.rs` 138〜144 行（同じ `bears_table` が 2 本）。
+- pointer で 1 行を引く読みは場所を問わない: `parse_pointer`（`crates/scribe2/src/pipe/table/parse.rs` 404〜416 行）は拡張子（`form_of`・26〜32 行）しか見ない。受付の生成 `generated`（intake.rs 380 行）は pointer の doc を HEAD から読むだけで、置き場を照らさない。この 1 本を受付・preflight・列の候補・起動の列の事前の検査・行の審査・resume の取り直しが呼ぶ。だから隣の project の受付は通る。
+- 隣の project の症状（memo の観測・その repo は読んでいない）は、定義 1 と 2 の帰結として全部説明がつく: 局面の出力の row と requirement の `table-unreadable`（lifecycle_mark.rs 646〜647 行の `Missing` → `crates/scribe2/src/ledger/phase_main.rs` 26 行の語）、contracts check の `docs=0 rows=0`（check.rs 430 行の判定行）、live-row の門が表の編集を通す（live_row.rs 333 行で弾く）。memo の数えに無い症状が 3 つ在る（deduced）: 受付の名指しの実在が toml の行の `+` の file を宣言済みと読まない（§39）、名の衝突の予想（§54）が toml の行を見ない、runner の「ほかの行の touches」節が toml の行を載せない。
+- 数（verified）: main の docs/design/ の tracked file は 30 本で全部が直下の .md。直下の .toml も下の dir も 0 本。`contracts check --repo .` は `docs=30`。区間の marker か `[[contract]]` を持つ tracked な .md / .toml は docs/design/ の外に 0 本。tracked な `contracts/schema.toml` は `[[field]]` の表を持つ生成物で、契約表の読み手は `[[contract]]` 以外の表を断る（`crates/scribe2/src/rules/manifest.rs` 689〜692 行）。test の fixture で置き場（定義 1）の外を pointer で指して受付に通すのは e2e の 1 本だけ（`crates/scribe2-boundary/tests/e2e/pipe/review.rs` 537 行の `docs/design/derived.toml#g`）で、lib と e2e のほかの受付の fixture は全部 docs/design/ の直下の .md を指す（pointer の字面と `format!` の組み立ての grep）。
+- vessel 宣言（verified）: 読み手は `Declared::parse`（`crates/scribe2/src/pipe/declaration.rs` 538 行）の 1 本で、未知の key は「未知の key」で積み宣言全体が読めない（703 行）。任意 key は key の名・読み手・2 つの key の列（`crates/scribe2/src/pipe/declaration/optional_keys.rs` 13 行・103 行）に 1 行ずつと外へ渡す口を optional_keys.rs へ、`Declared` の欄と parse の 1 行を親へ足す（同 file 1〜5 行の決まり）。rev を名指して読む先例は `ruling_keys_at`（190 行）と `close_check_at_sha`（219 行）と `requirements_at_sha`（226 行）。閉じた 3 値の先例は `RootsAtHead`（crate_roots.rs 51 行）。書いた空配列は配列の層が key を問わず断る（`ruling-fixtures` だけが例外）。
+
+### 69.2 形（決めること）
+
+1. **key**: vessel 宣言の任意 key `contract-tables` を 1 つ足す。値は repo 相対の項目の配列。末尾が `/` の項目は dir で、その dir の**直下**の file のうち `form_of` が読める（.md か .toml の）file を表の置き場と読む。`/` で終わらない項目は 1 file で、その path と等しい file を置き場と読む。glob と正規表現は持たない（ADR-0047 と同じ・prefix と完全一致で足りる）。schema は 1 のまま。key の列（宣言順）の末尾に置く。
+2. **足すだけ**: 既定の置き場（docs/design/ の直下の .md・今の母集団）は常に在り、key はそれに足す（置き換えない）。宣言 1 行で器の検査の母集団を狭められないようにするためで、crate-roots（§62 形 2）と同じ向き。key を書かない宣言と宣言 file を持たない repo は今と 1 本も変わらない。
+3. **項目の検査**: 空（空白だけ）・絶対 path・home の短縮記号・`..` の段は、key の行番号を名指す宣言の不備にする。書いた空配列と配列でない値は既存の配列の層が断る。重複と重なり（dir 項目の直下の file を file 項目でも書く）は不備にしない（列挙は path の列を絞るので、同じ path は 1 度）。拡張子の検査は宣言の段でせず、列挙した file を表の読み手が読む段で名指す（`form_of` の知識を宣言の側に写さない・C2）。
+4. **宣言の読み（rev を名指す口 1 つ）**: optional_keys.rs に、名指した rev の tree の宣言から閉じた 3 値を返す口を置く（型 TablePlaces・variant Fixed / Declared / Unreadable・関連 fn at と items）。宣言 file がその rev に無い周と git を撃てない周は Fixed（`ruling_keys_at` と同じ）、key の無い宣言も Fixed、在って parse が落ちる周は Unreadable（既定に倒さない・C10）。
+5. **列挙の 1 関数**: check.rs の `design_docs` を、path の列と項目の列を受ける形に広げる。返すのは入力の path の列のうち既定に当たる path と項目に当たる path で、入力の順のまま。項目の列が空なら今と同じ列を返す。Unreadable の周の扱いは呼び手が決める（形 6）。
+6. **読み手ごとの差し替え**（どの rev の宣言を読み、読めない周にどう倒れるか）:
+
+   | 読み手 | 宣言を読む rev | 列挙の入力 | 読めない周 |
+   |---|---|---|---|
+   | contracts check（`judge_repo`・衝突の予想・未追跡の知らせ） | HEAD | `git ls-files` の tracked。未追跡は `--others --exclude-standard` の pathspec を docs/design/ と項目にして同じ 1 関数で絞る | 今と同じ rc 2（同じ HEAD の宣言を `table_facts_named` が先に断る） |
+   | 宣言済みの新規 file（`declared_files`・contracts check と受付の材料の両方） | HEAD（関数の中で読む・引数は今のまま） | tracked | 理由を返す（読めなさを宣言 0 本に読み替えない・今の Err の形） |
+   | runner の「ほかの行の touches」節 | 便の base | base の `ls-tree -r` | 理由の 1 行（今の形・runner は止めない） |
+   | 局面の行（`read_rows`） | main の sha（関数の中で読む・引数は今のまま） | main の sha の `ls-tree -r` の全 path | `Missing`。gather は続く close-check の読みで同じ宣言を読めず `declaration` の語で止まる（今の順のまま・出力を書き直さない） |
+   | live-row の門（編集と commit） | 編集か commit の worktree の root の HEAD | 編集は対象の path 1 つ・commit は HEAD との差の path | `form_of` が読める path を全部比べる側に倒す |
+   | 台帳の形の検査（`docs_of`） | HEAD | tracked | `ledger-form: unreadable reason=declaration-unreadable` |
+   | 受付の生成（`generated`・行 cg） | HEAD（受付の材料が 1 周に 1 回読む） | pointer の path 1 つ | 置き場の外と同じ断り（fail-closed） |
+
+7. **置き場の検査**（contracts check・行 cf）: 宣言した項目のうち tracked の path に 1 つも当たらない項目を名指す。列挙した doc の file 名の stem の重なりを名指す（契約 id は stem と行 id の組で、ADR-0023 §2.1 は doc id を一意の鍵とする。置き場が 1 dir の直下の .md だけの今は構造で一意だが、置き場が増えると重なりうる）。
+8. **受付の pointer の置き場**（行 cg）: 受付の生成は、pointer の path が HEAD の宣言の形 5 の列に入らない契約を、doc を読む前に typed に断る（FR54 の拡張）。生成を呼ぶ口は全部この 1 本を通るので、受付・preflight・列の候補・事前の検査・行の審査・resume の取り直しが同じ断りになる。これで「live な便の行は置き場の中に在る」が受付で成り立つ。
+9. **門は 1 つの定義だけを読む**（裁定・行 cd）: live-row の門は定義 2 を捨て、形 5 の列だけを比べる。行 cg と合わせて、表の定義は器の中で形 5 の 1 本（と、中身で見分ける定義 3・§69.9）になる。
+
+### 69.3 行 cb — key・宣言の読み・列挙の 1 関数・contracts check と宣言済みの新規 file と runner の節
+
+- 約束（番号は done と 1:1）:
+  1. vessel 宣言が任意 key `contract-tables` を受け、形 1 の項目の配列として読む。形 3 の不備 4 形（空・絶対 path・home の短縮記号・`..` の段）は key と行番号を名指して断る。書かない宣言は項目 0。schema は 1 のまま。key の列の pin（`declaration_kind_passes_declarations_without_cargo_and_keeps_the_schema`）は末尾に 1 つ伸びる。
+  2. optional_keys.rs に形 4 の口を置く。宣言 file の無い rev と git を撃てない周は Fixed、key の無い宣言は Fixed、key を持つ宣言は Declared（項目の列と key の行番号）、宣言が在って読めない rev は Unreadable。HEAD 以外の rev も読む。
+  3. `design_docs` が形 5 の 1 関数になる（path の列と項目の列を受ける・入力の順・既定は常に入る・dir 項目は直下で `form_of` が読める path・file 項目は等しい path・同じ path は 1 度）。項目 0 の返りは今と同じ。
+  4. contracts check の doc の列（行の検査と衝突の予想が同じ 1 本の列を読む）と未追跡の知らせが、HEAD の宣言の項目で形 5 の列を使う。判定行の字面は変えない。
+  5. `declared_files` が引数を変えずに HEAD の宣言の項目で形 5 の列を読む（受付の材料は intake.rs を変えずに同じ列になる）。宣言を読めない周は理由を返す。
+  6. runner の「ほかの行の touches」節が、便の base の宣言の項目で同じ 1 関数を使う。読めない周は理由の 1 行。
+  7. 器の repo（key を書かない）の contracts check は findings 0 のまま。
+- 設計の線（審査が読む・後の行 cc〜cg が呼ぶ口・名と引数と可視性と閉じた返り）:
+  - 型 TablePlaces は pub の enum（Debug・Clone・PartialEq・Eq）で、variant は Fixed（既定だけ）・Declared（欄 items は項目の列・欄 line は key の行番号で u64）・Unreadable の 3 つ。親の declaration.rs が `RootsAtHead` と同じく pub で再輸出し、呼び手は declaration の path で引く。
+  - 関連 fn at は pub で、repo の path と rev の字を受けて TablePlaces を返す（`git show <rev>:.vessel.toml` を `Declared::parse` に掛ける・作業ツリーは読まない）。関連 fn items は pub で、Fixed は空の列・Declared は項目の列・Unreadable は無し（Option）を返す。
+  - `design_docs` は今の可視性（pub(crate)）と table.rs の再輸出のまま、引数を path の列と項目の列の 2 つにする（返りは入力の path の列への参照の列）。
+  - `declared_files` は名と引数と返りを変えない。`untracked_files` は check.rs の中の private のまま、項目を受ける。
+  - 新しい file は作らない（読み手は optional_keys.rs・1 関数は check.rs のまま）。新しい src の file に in-file の歯を置くと flip-check で落ちるため。
+  - check.rs は余地が少ない（幅で数えて 84 行）ので、1 関数と `declared_files` の歯は table.rs の既存の mod tests に置き、check.rs には歯を置かない。宣言の歯は optional_keys.rs の既存の mod tests に置く（declaration.rs の余地 116 行を使わない）。
+- 歯（RED の理由は全部「機能不在」）:
+  - lib `declaration_table_places_`（optional_keys.rs の既存の mod tests）: (a) key の無い宣言は項目 0、2 項目の key は 2 項目と key の行番号、不備 4 形はそれぞれ key と行番号を名指し、空配列と文字列の値は既存の字面で断る。(b) 使い捨ての git repo（`declaration_ruling_check_reads_the_named_rev` と同じ組み方）で、宣言 file の無い repo と git でない dir は Fixed、key を持つ commit は Declared、key の値を壊した commit は Unreadable、1 つ目の commit に key・2 つ目で key を消すと 1 つ目の sha は Declared で HEAD は Fixed。base には名が無く 0 本（rc 4）。
+  - lib `table_places_docs_`（table.rs の既存の mod tests）: (c) 1 関数の表: 項目 0 は docs/design/a.md だけを返し、docs/design/b.toml・docs/design/sub/c.md・contracts/d.toml を返さない。["contracts/"] は docs/design/a.md・contracts/d.toml・contracts/e.md を返し、contracts/sub/f.toml と contracts/g.txt を返さない。["tables/one.toml"] はその 1 file だけを足し、tables/one.toml.bak を足さない。["docs/design/"] は docs/design/b.toml を足し、a.md を 2 度返さない。返りは入力の順。base 0 本。
+  - lib `table_places_declared_files_`（table.rs の既存の mod tests・使い捨ての git repo）: (d) HEAD の宣言が key で contracts/ を名乗る repo の `declared_files` が contracts/t.toml の行の `+` の file を返し、key の無い宣言の commit では返さず、key の値を壊した commit では理由を返す。base 0 本。
+  - e2e `contracts_tables_key_`（`crates/scribe2-boundary/tests/e2e/pipe/contracts.rs`）: (e) toy repo（docs/design/toy.md は区間を持たない）が key で contracts/ を名乗り、contracts/t.toml に goal の無い行 a を置く: findings は contracts/t.toml の行 a の `contract-table:section-missing` の 1 件だけで、判定行は docs=2 rows=1・rc 1。key を消した同じ repo は docs=1 rows=0・rc 0。(f) 未追跡の contracts/u.toml が `contracts untracked-doc:` の知らせ（path を名乗る）と `untracked=1` を出す。base は key を「未知の key」で断り rc 2。
+  - e2e `spawn_touches_from_declared_tables_`（`crates/scribe2-boundary/tests/e2e/pipe/spawn.rs`）: (g) key で contracts/ を名乗る toy の、contracts/t.toml の行 b の touches の項目が runner の stdin の「ほかの行の touches」節に `contracts/t.toml#b` の pointer で載る。base は受付が宣言を断る。
+  - 既存の歯で今のままを測る: `contracts_untracked_doc_is_noticed_without_counting_and_joins_the_population_once_tracked`（未追跡の知らせの字面）・`runner_touches_section_`（子の dir の doc を載せない）・`contract_closure_ext_real_table_has_zero_findings`（器の repo の表）。
+  - 変異の A/B（条件 1 つに歯 1 本）: 既定を項目で置き換える → (c) の ["contracts/"] で a.md が消える。dir 項目を再帰にする → (c) の sub/f.toml が出る。file 項目を接頭辞で当てる → (c) の tables/one.toml.bak が出る。Unreadable を Fixed に倒す → (b) と (d)。
+- 見込み（幅で数えた余地の内）: optional_keys.rs 130（歯 (a)(b) 込み）・declaration.rs 8・check.rs 20・table.rs 70（歯 (c)(d)）・spawn.rs 5・e2e contracts.rs 90・e2e spawn.rs 50。size M。
+
+### 69.4 行 cc — 局面の行の読み手
+
+- 約束:
+  1. `read_rows` が引数を変えずに、main の sha の tree の宣言を形 4 の口で読み、sha の tree の全 path（`ls-tree -r`）を形 5 の 1 関数で絞る。行の pointer の字は `<置き場の path>#<行 id>`（今の形）。
+  2. 宣言を読めない sha は `Missing`（既定の置き場に倒さない）。0 本と、区間を読めない doc が 1 本でも在る周も今と同じ `Missing`。
+- 設計の線: lifecycle.rs は触らない。gather は `read_rows` の後に同じ sha の宣言を close-check の読みで読み、読めない周は `declaration` の語で止まって出力を書き直さない（今の順・[case-lifecycle.md](./case-lifecycle.md) §12 の 6 語のまま）。
+- 歯: lib `lifecycle_declared_tables_`（lifecycle_mark.rs の既存の mod tests・`lifecycle_mark_main_order_follows_git_ancestry` と同じ組み方の使い捨ての git repo）: (a) 宣言が key で contracts/ を名乗り表を contracts/x.toml だけに置いた commit A の `read_rows` が pointer `contracts/x.toml#a` と行の write-set を返す（前提: docs/design/ に file が無いことを歯の中で assert）。(b) key を消した commit B は `Missing`、同じ repo で commit A の sha を名指すと (a) と同じ行（HEAD でなく名指した sha の宣言を読む）。(c) key の値を壊した commit C は contracts/x.toml が在っても `Missing`。(d) key の無い宣言で docs/design/y.md に表を置いた commit D は y.md の行を返す（既定が残る）。RED: base は名が無く 0 本（rc 4）・本文を当てても base の `read_rows` は docs/design/ だけを見るので (a) が `Missing`（機能不在）。
+- 見込み: lifecycle_mark.rs 60（歯込み・余地 210 の内）。size S。
+
+### 69.5 行 cd — live-row の門（門は 1 つの定義だけを読む）
+
+- 約束:
+  1. 編集の門は、対象が `form_of` の読める path で、同じ置き場の worktree の root を解けた周に、root の HEAD の宣言を形 4 の口で読み、repo 相対 path が形 5 の列に入る周だけ比べる。.md で区間の始まりの行を変更前にも変更後にも持たない編集は、今どおり宣言を読まずに通す。宣言を読めない周は `form_of` の読める path を全部比べる（表として読めない本文は変化 0 で通るので、倒しても表でない file の編集は止まらない）。
+  2. commit の門は HEAD との差の path を同じ口と同じ 1 関数で絞る（宣言を読めない周は `form_of` の読める path の全部）。
+  3. 門は形 5 の列のほかを見ない（定義 2 を捨てる・裁定）: docs/design/ の下でも列に入らない path（下の dir の表・key を書かない repo の直下の .toml）の編集と commit は比べない。
+  4. 比べ（`hits`）・自分の行の除外・deny の行・記録の語・解けない dir の扱いは変えない。
+- 歯: e2e `hook_live_tables_`（`crates/scribe2-boundary/tests/e2e/hook/guards.rs`・既存の `live_run` と `live_hook` の helper を使い、便の写しの design を表の path に差し替える）: (a) 宣言（必須 3 key と key contracts/）と contracts/t.toml（行 a / b / c）を commit した toy で、Questioned の便の行 contracts/t.toml#a の done を変える Edit が rc 2・記録 `live-row-deny changed`。(b) 同じ変更の `git commit` も changed で断る。(c) 置き場の外の other/u.toml（同じ表の写し）を変える Edit は通る（対照・base で緑）。(d) 便を置いた後に宣言の key の値を壊す commit を置き、(a) と同じ Edit が changed で断られる。(e) key の無い toy で docs/design/sub/t.toml の行に便を置くと、その行を変える Edit は通り、同じ toy に key で docs/design/sub/ を名乗る commit を足すと断る。既存の `hook_live_row_` の歯は本文を変えずに緑（docs/design/x.md の表）。RED: base の門は docs/design/ の外を見ないので (a)(b)(d) が通り、定義 2 を読むので (e) の 1 つ目が断られる（機能不在）。
+- 見込み: live_row.rs 30・e2e guards.rs 140。size M。
+
+### 69.6 行 ce — 台帳の形の検査
+
+- 約束:
+  1. `docs_of` が HEAD の宣言を形 4 の口で読み、tracked を形 5 の 1 関数で絞る（`is_design_doc` を消す）。
+  2. 宣言を読めない周は理由の語 `declaration-unreadable`（`ledger-form: unreadable reason=declaration-unreadable`・件数を 1 つも出さない）。
+  3. drift の契約 id の形（stem と行 id）は変えない。
+- 歯: lib `ledger_shape_tables_`（form.rs の既存の mod tests・使い捨ての git repo・台帳は空の列）: (a) 宣言が key で contracts/ を名乗り、contracts/t.toml に未着地の行 a（`+` の file が tracked に無い）を置いた commit の `docs_of` を判定に掛けた描画が `unlanded=1` と `drift=1:t#a` を持つ。(b) key を消した commit は `unlanded=0`。(c) key の値を壊した commit の `docs_of` は理由の語 declaration-unreadable を返す。RED: base は名が無く 0 本（rc 4）・base の `docs_of` は docs/design/ だけを見て宣言を読まないので (a)(c) が落ちる（機能不在）。
+- 見込み: form.rs 50（歯込み）。size S。
+
+### 69.7 行 cf — 置き場の検査（contracts check）
+
+- 約束:
+  1. 宣言した項目のうち tracked の path に 1 つも当たらない項目（dir 項目は直下に `form_of` が読める tracked file が 0 本・file 項目は tracked に無い）を、`.vessel.toml` の key の行で 1 件ずつ名指す（rc 1・語 place-empty）。既定の置き場の 0 本は名指さない（表を持たない repo は今どおり）。
+  2. 列挙した doc の file 名の stem が重なれば、列挙の順で 2 本目以降の doc を行 0 で名指し、相手の path を添える（rc 1・語 doc-id-duplicate）。
+  3. 2 つの語は契約表の欠陥の閉じた enum（TableError）の variant 2 つを宣言順の末尾に足して表す（C2）。理由の 1 行・rc 1・在り処（place-empty は項目の path・doc-id-duplicate は 2 本の doc の path の file の列）を持ち、名の列の pin と在り処の pin の母集団を 2 つ伸ばす（既存の歯の本文を直す＝retroactive の札）。
+  4. 器の repo の contracts check は findings 0 のまま（verify の最終行）。
+- 設計の線: 検査の関数は table.rs に置き（check.rs の余地を使わない）、`judge_repo` は findings に 1 行で足す。受付（`check_row`）はこの 2 つを撃たない（repo 全体の事実）。touches は TableError で、閉包の file のうち本文を変えない file は `=`（置き場だけ）で write-set に載せる。
+- 歯: e2e `contracts_place_defect_`（`crates/scribe2-boundary/tests/e2e/pipe/contracts.rs`）: (a) key に contracts/ と tables/none.toml（tracked に無い）を書き contracts/a.toml に表を置いた toy は、tables/none.toml の 1 件だけを `.vessel.toml:<key の行>` の `contract-table:place-empty` で名指し rc 1。(b) key で contracts/ を名乗り contracts/toy.toml と docs/design/toy.md の両方に表を置いた toy は `contract-table:doc-id-duplicate` 1 件（docs/design/toy.md・相手 contracts/toy.toml）。(c) key の無い toy は 2 つの語を出さない（対照・base で緑）。lib の既存の 2 本（`table_error_names_are_pinned_in_declaration_order_and_carry_their_line`・`pipe_table_evidence_is_decided_once_for_` で始まる 1 本）は母集団が 2 つ増えた値で緑。RED: base は key を断り rc 2、語が無い（機能不在）。
+- 見込み: table.rs 60・check.rs 4・e2e contracts.rs 80。size M。
+
+### 69.8 行 cg — 受付が置き場の外の pointer を断る
+
+- 約束:
+  1. 受付の生成（`generated`）は、pointer の path が受付の材料の宣言の置き場（形 5 の 1 関数に path 1 つと項目の列を掛けて空でないか）に入らない契約を、doc を読む前に `contract-table:place-outside`（path を名乗る理由の 1 行・rc 1）で断り、run dir を作らない。宣言を読めない材料も同じ断り（fail-closed）。生成を呼ぶ口（受付・preflight・列の候補・事前の検査・行の審査・resume の取り直し）は全部この 1 本を通るので、同じ断りになる。
+  2. 受付の材料（`Materials`）が HEAD の宣言の置き場を 1 周に 1 回読む（材料の読みの 1 本の中・予想の写しは同じ値を持ち回る）。材料の struct の字面を持つ既存の test の helper（`short_of_room`）は欄を 1 つ足す（retroactive の札）。
+  3. 語 place-outside は TableError の variant 1 つを宣言順の末尾に足して表す（在り処は宣言 file の名 1 本の file の列・予想の写しで宣言が動くと暫定）。名の列の pin と在り処の pin の母集団を 1 つ伸ばす（retroactive の札）。
+  4. 既定の置き場と宣言した置き場を指す pointer は今どおり通る。置き場の外を指す既存の e2e の歯（`pipe_review_contract_whole_goal_reads_the_goal_from_a_derived_toml`）は、toy の宣言に key で docs/design/ を名乗る 1 行を足す形に直し（retroactive の札）、ほかの assert は変えない。
+  5. 器の repo の contracts check は findings 0 のまま（verify の最終行）。
+- 設計の線: 判定は doc を読む前（`show_head` の前）に置く（置き場の外は表でない＝読む理由が無い）。行の審査（定義 3 で表を見分ける・§69.9）は置き場の外の行を受付と同じ断りの 1 行で記録する（今の「受付の生成が断った行」の扱いのまま）。
+- 歯: e2e `intake_place_outside_`（`crates/scribe2-boundary/tests/e2e/pipe/intake.rs`）: (a) key の無い toy に contracts/t.toml（goal を持つ行 a・ほかの欄は toy の行と同じ形）を commit し、`--design contracts/t.toml#a` の受付が rc 1・stderr が `contract-table:place-outside` と contracts/t.toml を名乗り・run dir と event は撃つ前と同数。同じ pointer の preflight が `refuse=contract-table:place-outside` の 1 行と rc 1。(b) 同じ toy に key で contracts/ を名乗る commit を足すと、同じ受付が rc 0 で run を作る。(c) 同じ toy の docs/design/toy.md の行の受付は (a) の toy で rc 0（対照・base で緑）。RED: base の受付は置き場を照らさず (a) を通す（機能不在）。
+- 順の条件: 消費側が key を名乗った後に着地させる（先に着地すると、いま contracts/ を指す便の受付と resume の取り直しが全部断られる）。着地の前に、live な便のうち置き場の外を指す便が 0 本であることを数える。
+- 見込み: intake.rs 14・table.rs 25・e2e intake.rs 90・e2e review.rs 2。size M。
+
+### 69.9 触らない
+
+- 区間の抜き出しと全文の読み（`form_of`・`read_table`・版の宣言）・pointer の形（`parse_pointer`）・契約 id の形・`FIELDS` と生成物。
+- 行の審査の表の見分けと code の木の鍵（定義 3・review_ref.rs と row_review.rs の `bears_table`）: 場所を問わずに中身で見分ける。行 cg の後は、置き場の外の行の審査は受付と同じ断りの 1 行になる（審査の口の側は変えない）。
+- review の外の材料の読み（`crates/scribe2/src/pipe/review/outside/linked.rs`・pointer の先を場所を問わずに読む）。
+- path の種別の key（`design-doc-paths` ほか・ADR-0047）と role_guard の固定の判定: 編集の権能の種別で、表の置き場とは別の事実。表を docs/design/ の外に置く repo は、席が表を編集するために `design-doc-paths` も名乗る（2 つの key は独立）。
+- 着地の留めの判断の欄の読み（ruling_hold.rs）・席の指示文の出所 pointer・xtask の 2 面（器の repo だけの門）。
+- contracts check の判定行の字面・局面の出力の `unmeasured` の語・live-row の deny の字面と記録。
+- 器自身の `.vessel.toml`（key を書かない）。
+- 台帳の形の検査の § の本文の読み（form.rs 309〜315 行は `## N.` の見出しで切り、.toml の行の goal を読まない）: 本件と別の穴として memo に起こす。
+
+### 69.10 限界
+
+- 門の守りの範囲は形 5 の列だけ（裁定・行 cd）: 今の門が守る docs/design/ の下の .toml と下の dir の表は、key で名乗らない限り守らない。器の repo では該当 0 本（verified）。行 cg の後は受付もその外を断るので、置き場の外に live な便の行は出来ない。行 cd から行 cg までの間は、key を書かない repo の docs/design/ の下の .toml と下の dir を指す live な便の行を門が守らない（器の repo では 0 本・隣の project の contracts/ の行は今も守られていないので、その間に減る守りは無い）。
+- 宣言を変える commit と同じ commit の表の変更は、門が HEAD（変更の前）の宣言で測る。便が live の間に宣言から置き場を外すと、門はその置き場の行を守らない（宣言の変更そのものは便の審査と gate か user の手を通る）。
+- 門は .md か .toml の編集ごとに、worktree の root と置き場の解きに加えて HEAD の宣言を 1 回読む（区間を持たない .md の編集は読まない）。宣言を読めない周の門は .md / .toml の全部を比べる側に倒すので、その周だけ event log を読む回数が増える。
+- 古い binary は key を「未知の key」で断り、宣言全体を読めなくする（受付・contracts check・局面の出力・close の門の全部）。消費側が key を書くのは、その host の PATH の binary を行 cb の着地の後の版に入れ替えた後。
+- 行 cg の後、置き場の外を指す pointer は受付と resume の取り直しの両方で断られる。行 cg の着地の前に置き場の外を指して走り出した便は、resume で止まる（順の条件で 0 本にしてから着地させる）。
+- dir 項目は直下だけを読む（入れ子の dir は項目を並べる）。dir 項目は直下の .toml を全部表と読むので、表でない .toml（欄の生成物など）を同じ dir に置く repo は file 項目で並べる（読めない置き場として contracts check が名指すので、黙っては落ちない）。
+
+### 69.11 却下
+
+- 決め打ちの dir（contracts/ の .toml）を既定で数える: 先方には 1 行で効くが、配置を器が決め打ちする。器の repo の `contracts/schema.toml`（`[[field]]` の生成物）を表と読んで、器自身の contracts check が赤になる。
+- 開いた契約の pointer が指す file だけを読む: 表を開かずに済むが、bead の無い行（局面の row-unbeaded・台帳の形の drift）が出なくなる。CI の contracts check（FR55 の全行）は台帳に届かないので母集団を作れない。
+- 読み手ごとに置き場の列を持つ（今の形の延長・各読み手に key を読ませる）: 差し替えの便は小さいが、今まさに live-row の門だけが別の定義を持つように、写しは必ずずれる。
+- `design-doc-paths` を流用する: key が増えないが、意味が違う（誰が編集してよいか と どこに表が在るか）。その既定（docs/design/ の下の全部）は列挙の既定（直下の .md）と違い、置き換える意味なので、宣言 1 行で表を検査の外へ出せる。
+- 中身で見分ける（tracked の全 .md / .toml のうち表の marker を持つ file）: 宣言が要らず、行の審査（定義 3）と揃う。だが marker の打ち間違いで表が黙って母集団から落ち（fail-open・NFR4）、歯の fixture の表を本物と数え、置き場が宣言値でなく推測になる（C10）。
+- glob の値（例 contracts の .toml の glob）: 書き方は短いが、新しい読み手が要り、ADR-0047 が prefix と完全一致で足りると決めた形から外れる。
+- key が既定を置き換える: 既定を外したい repo には便利だが、宣言 1 行で docs/design/ の表を検査の外へ出せる。表の無い .md は 0 行なので、外す必要が無い。
+- 門だけは定義 2 を残す（docs/design/ の下の全部と置き場の和を守る）: 守りは最も広いが、表の定義が 2 本に戻り、受付が通さない場所の行を門だけが守る。行 cg の後は置き場が live な行を必ず含むので、門の別の定義は要らない（裁定で 1 本に決めた）。
+- 受付で断らず、門を pointer で守る（live な便の design の path を全部守る）: 受付の挙動は変わらないが、契約表の検査と局面の出力が見ない場所に契約の正本を置けてしまい、定義が 2 本に戻る。
+
+### 69.12 順と行の分け方
+
+- 先に docs PR: ADR-0109・本節と区間の行 cb〜cg・[vessel-hook.md](./vessel-hook.md) §15 形 3 と形 4 の「docs/design/ の下」を「契約表の置き場（§69 形 5 の 1 関数）」に直す 1 行ずつ・vocabulary（設計 doc・契約表・vessel 宣言・新語 契約表の置き場）・decisions の README。SRS の言い回しは user の `/folio-architect` の round で、行 cb の審査の前に入れる（行 cg の FR54 の字も同じ round）。
+- 行の順: cb → cc・cd・ce・cf（互いの write-set が交わらない・cf と cg は table.rs で交わるので器の交差の判定が並べない）→ host ごとの PATH の binary の入れ替え → 隣の project へ知らせ（ADR の着地・key の書き方・binary の版・`design-doc-paths` との関係）→ 先方が key を書く → 置き場の外を指す live な便が 0 本 → cg。
+- 各行の write-set と verify と done は区間の行 cb〜cg（起票の前に `pipe preflight` で受付の断りと閉包と余地を測って確定する）。
+- 同じ file を触る未着地の行（§66 の行 bw・by: check.rs・table.rs・declaration.rs・optional_keys.rs・intake.rs）が先に着地すると、本節の行の余地の見込みと TableError の母集団の数が動く。done は数を「n 増やす」の相対で書いた。
+- 歯の接頭辞は crates/ に 0 件で、着地済みと未着地の行の verify の filter 語（1030 語）を部分に含まないことを main a6d4234c で確かめた（`contract_`・`pipe_intake_`・`hook_live_row_`・`ledger_form_`・`lifecycle_mark_` を含む名を避けた）。接頭辞の後ろに付ける名にも、これらの語を入れない。
