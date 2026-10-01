@@ -302,8 +302,8 @@ terms:
     relationships: [台帳, 設計 doc, write-set, 便, 契約表]
   - canonical: 設計 doc
     domain: consumer
-    definition: 要望を SRS の要件に結び、 契約が複数出る元になる tracked markdown (docs/design/)。 末尾に契約表の区間を 0 か 1 つ持つ (SRS FR47・ADR-0023 §2.1)。
-    relationships: [契約, SRS]
+    definition: 要望を SRS の要件に結び、 契約が複数出る元になる tracked markdown (docs/design/)。 末尾に契約表の区間を 0 か 1 つ持つ (SRS FR47・ADR-0023 §2.1)。 契約表は表だけを持つ tracked な toml にも置け、 器が表を数える file の集合は契約表の置き場が決める (ADR-0109)。
+    relationships: [契約, SRS, 契約表の置き場]
   - canonical: SRS
     domain: consumer
     definition: MVP の要件定義書 (design-intent/spec/srs.html)。 folio SRS pack の生成物で、 機械 SSoT は srs.srs.yaml。 上位ニーズ・機能要件・受入基準を持つ。
@@ -363,7 +363,7 @@ terms:
     relationships: [器, NAME 定数, vessel 宣言]
   - canonical: vessel 宣言
     domain: consumer
-    definition: repo が器に、 許す command・共通 verify・任意の確かめを名乗る設定 file (marker の隣に置く tracked file .vessel.toml)。 intake が manifest の上限と突合して便ごとに写しへ凍結する (C10・ADR-0010)。 任意 key に ruling-check (裁定 id の実在・SRS FR83)・ruling-fixtures (裁定 id の引用に数えない見本の字面の閉じた一覧・完全一致だけで書式は何も外さない・ruling-check と同じく版を跨ぐ形・SRS FR83・ADR-0083)・floor-check (床の検査・SRS FR85)・question-route (選択式の問いの断り文の 1 行・SRS FR86)・remote (押す先・持たない repo の便は push も CI の照合もせずに閉じる・SRS FR50)・close-check (起票の門の close の段への加わり・ADR-0097) を持てる。 ruling-check を持たない repo では器は裁定 id の引用を数えも断りもせず doctor の行がその旨を出し (未反映の裁定の数えは key に依らない)、 floor-check を持たない repo では床の検査を撃たない。 marker そのものは変えない。 close-check を持たない repo では起票の門は close の理由を見ない。
+    definition: repo が器に、 許す command・共通 verify・任意の確かめを名乗る設定 file (marker の隣に置く tracked file .vessel.toml)。 intake が manifest の上限と突合して便ごとに写しへ凍結する (C10・ADR-0010)。 任意 key に ruling-check (裁定 id の実在・SRS FR83)・ruling-fixtures (裁定 id の引用に数えない見本の字面の閉じた一覧・完全一致だけで書式は何も外さない・ruling-check と同じく版を跨ぐ形・SRS FR83・ADR-0083)・floor-check (床の検査・SRS FR85)・question-route (選択式の問いの断り文の 1 行・SRS FR86)・remote (押す先・持たない repo の便は push も CI の照合もせずに閉じる・SRS FR50)・close-check (起票の門の close の段への加わり・ADR-0097)・contract-tables (契約表の置き場に足す dir か file の列・既定に足し置き換えない・ADR-0109) を持てる。 ruling-check を持たない repo では器は裁定 id の引用を数えも断りもせず doctor の行がその旨を出し (未反映の裁定の数えは key に依らない)、 floor-check を持たない repo では床の検査を撃たない。 marker そのものは変えない。 close-check を持たない repo では起票の門は close の理由を見ない。
     relationships: [".vessel", allowlist, 共通 verify, manifest, intake, opt-in の線, 床の検査, 裁定 id, close-check]
   - canonical: Budget
     domain: consumer
@@ -808,8 +808,14 @@ terms:
     flagged_ambiguities: [pipeline の設計の段の通知 (段ごとに stderr と record へ残す行) とは別]
   - canonical: 契約表
     domain: consumer
-    definition: tracked な設計 doc が末尾に持つ機械が読む区間の表。 1 行 = 契約 1 本で、 契約の正本 (SRS FR47・ADR-0023 §2.1)。 欄の集合の正本は core の型で、 文書は生成物 contracts/schema.toml を pointer で指す (ADR-0013 §2.1)。 読み手は rules manifest と同じ 1 組の parser (ADR-0010 §2.1)。
-    relationships: [契約, 設計 doc, 設計 pointer, write-set の閉包, 契約 id]
+    definition: tracked な設計 doc が末尾に持つ機械が読む区間の表か、 表だけを持つ tracked な toml の全文。 1 行 = 契約 1 本で、 契約の正本 (SRS FR47・ADR-0023 §2.1)。 欄の集合の正本は core の型で、 文書は生成物 contracts/schema.toml を pointer で指す (ADR-0013 §2.1)。 読み手は rules manifest と同じ 1 組の parser (ADR-0010 §2.1)。 器が表を数える file の集合は契約表の置き場 (ADR-0109)。
+    relationships: [契約, 設計 doc, 設計 pointer, write-set の閉包, 契約 id, 契約表の置き場]
+  - canonical: 契約表の置き場
+    domain: consumer
+    aliases: [contract table place]
+    definition: 契約表を持つ tracked file の集合。 既定は設計 doc の dir (docs/design/) の直下の markdown で、 vessel 宣言の任意 key contract-tables が dir (その直下の、 区間の markdown か表だけの toml) か file を足す (置き換えない)。 契約表の検査・局面の出力・live-row の門・台帳の形の検査・受付は、 1 つの列挙の関数でこの集合を読み、 宣言を読めない周は既定に倒さない (ADR-0109・contract-source.md §69)。
+    relationships: [契約表, vessel 宣言, 設計 doc, 設計 pointer]
+    flagged_ambiguities: [素の「置き場」は state dir の意味で使う。 契約表のある file の集合は合成語の契約表の置き場で書く]
   - canonical: 見込み行数
     domain: consumer
     aliases: [growth]

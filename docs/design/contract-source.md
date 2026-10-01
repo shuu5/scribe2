@@ -119,7 +119,7 @@ binary の世代で起動を断る（§5 4.）・契約表から台帳の bead �
 
 ## 13. consumer の最小の整え方（`s2-07l.354`・pointer だけ）
 
-scribe2 を載せる consumer が pipe を通すのに要る面は 3 つで、いずれも既存の口の pointer だけを持つ（本節は規則を持たない）: (1) **要件面** = `.vessel.toml` の任意 key `requirements`（repo 相対 path・無ければ既定 path・`pipe/declaration.rs`）。形は `.html`（`id="FR1"` の anchor）/ `.yaml`（`- id: FR1` と同じ mapping の `text:`）/ `.md`（行頭 `#` 見出しの先頭 token が要件 id・本文は次の見出しの直前まで）の 3 つで、id の集合と本文の読み手は §4「lens の口」の同じ 1 本。(2) **契約表** = 設計 doc の末尾の区間に行 1 つ（欄の正本は `contracts schema` の出力・§2）。(3) **契約の `req`** = 要件 id の形（英大文字 + 数字・台帳の id は通らない・憲法 C15.2）。初例 = uns の照会（2026-09-15・台帳 s2-07l.354）。
+scribe2 を載せる consumer が pipe を通すのに要る面は 3 つで、いずれも既存の口の pointer だけを持つ（本節は規則を持たない）: (1) **要件面** = `.vessel.toml` の任意 key `requirements`（repo 相対 path・無ければ既定 path・`pipe/declaration.rs`）。形は `.html`（`id="FR1"` の anchor）/ `.yaml`（`- id: FR1` と同じ mapping の `text:`）/ `.md`（行頭 `#` 見出しの先頭 token が要件 id・本文は次の見出しの直前まで）の 3 つで、id の集合と本文の読み手は §4「lens の口」の同じ 1 本。(2) **契約表** = 設計 doc の末尾の区間に行 1 つ（欄の正本は `contracts schema` の出力・§2。表だけを持つ toml の置き場は `.vessel.toml` の任意 key `contract-tables` で名乗る・§69）。(3) **契約の `req`** = 要件 id の形（英大文字 + 数字・台帳の id は通らない・憲法 C15.2）。初例 = uns の照会（2026-09-15・台帳 s2-07l.354）。
 
 ## 14. pipe/declaration.rs の分割（契約表の行 n・純移動）
 
@@ -2486,7 +2486,7 @@ done = "(1) 受付の生成は pointer の path が受付の材料の宣言の�
 
 7. **置き場の検査**（contracts check・行 cf）: 宣言した項目のうち tracked の path に 1 つも当たらない項目を名指す。列挙した doc の file 名の stem の重なりを名指す（契約 id は stem と行 id の組で、ADR-0023 §2.1 は doc id を一意の鍵とする。置き場が 1 dir の直下の .md だけの今は構造で一意だが、置き場が増えると重なりうる）。
 8. **受付の pointer の置き場**（行 cg）: 受付の生成は、pointer の path が HEAD の宣言の形 5 の列に入らない契約を、doc を読む前に typed に断る（FR54 の拡張）。生成を呼ぶ口は全部この 1 本を通るので、受付・preflight・列の候補・事前の検査・行の審査・resume の取り直しが同じ断りになる。これで「live な便の行は置き場の中に在る」が受付で成り立つ。
-9. **門は 1 つの定義だけを読む**（裁定・行 cd）: live-row の門は定義 2 を捨て、形 5 の列だけを比べる。行 cg と合わせて、表の定義は器の中で形 5 の 1 本（と、中身で見分ける定義 3・§69.9）になる。
+9. **門は 1 つの定義だけを読む**（常設の指示 user 2026-09-28T00:54Z の下の orchestrator の決定・行 cd）: live-row の門は定義 2 を捨て、形 5 の列だけを比べる。行 cg と合わせて、表の定義は器の中で形 5 の 1 本（と、中身で見分ける定義 3・§69.9）になる。
 
 ### 69.3 行 cb — key・宣言の読み・列挙の 1 関数・contracts check と宣言済みの新規 file と runner の節
 
@@ -2529,7 +2529,7 @@ done = "(1) 受付の生成は pointer の path が受付の材料の宣言の�
 - 約束:
   1. 編集の門は、対象が `form_of` の読める path で、同じ置き場の worktree の root を解けた周に、root の HEAD の宣言を形 4 の口で読み、repo 相対 path が形 5 の列に入る周だけ比べる。.md で区間の始まりの行を変更前にも変更後にも持たない編集は、今どおり宣言を読まずに通す。宣言を読めない周は `form_of` の読める path を全部比べる（表として読めない本文は変化 0 で通るので、倒しても表でない file の編集は止まらない）。
   2. commit の門は HEAD との差の path を同じ口と同じ 1 関数で絞る（宣言を読めない周は `form_of` の読める path の全部）。
-  3. 門は形 5 の列のほかを見ない（定義 2 を捨てる・裁定）: docs/design/ の下でも列に入らない path（下の dir の表・key を書かない repo の直下の .toml）の編集と commit は比べない。
+  3. 門は形 5 の列のほかを見ない（定義 2 を捨てる・形 9）: docs/design/ の下でも列に入らない path（下の dir の表・key を書かない repo の直下の .toml）の編集と commit は比べない。
   4. 比べ（`hits`）・自分の行の除外・deny の行・記録の語・解けない dir の扱いは変えない。
 - 歯: e2e `hook_live_tables_`（`crates/scribe2-boundary/tests/e2e/hook/guards.rs`・既存の `live_run` と `live_hook` の helper を使い、便の写しの design を表の path に差し替える）: (a) 宣言（必須 3 key と key contracts/）と contracts/t.toml（行 a / b / c）を commit した toy で、Questioned の便の行 contracts/t.toml#a の done を変える Edit が rc 2・記録 `live-row-deny changed`。(b) 同じ変更の `git commit` も changed で断る。(c) 置き場の外の other/u.toml（同じ表の写し）を変える Edit は通る（対照・base で緑）。(d) 便を置いた後に宣言の key の値を壊す commit を置き、(a) と同じ Edit が changed で断られる。(e) key の無い toy で docs/design/sub/t.toml の行に便を置くと、その行を変える Edit は通り、同じ toy に key で docs/design/sub/ を名乗る commit を足すと断る。既存の `hook_live_row_` の歯は本文を変えずに緑（docs/design/x.md の表）。RED: base の門は docs/design/ の外を見ないので (a)(b)(d) が通り、定義 2 を読むので (e) の 1 つ目が断られる（機能不在）。
 - 見込み: live_row.rs 30・e2e guards.rs 140。size M。
@@ -2580,10 +2580,10 @@ done = "(1) 受付の生成は pointer の path が受付の材料の宣言の�
 
 ### 69.10 限界
 
-- 門の守りの範囲は形 5 の列だけ（裁定・行 cd）: 今の門が守る docs/design/ の下の .toml と下の dir の表は、key で名乗らない限り守らない。器の repo では該当 0 本（verified）。行 cg の後は受付もその外を断るので、置き場の外に live な便の行は出来ない。行 cd から行 cg までの間は、key を書かない repo の docs/design/ の下の .toml と下の dir を指す live な便の行を門が守らない（器の repo では 0 本・隣の project の contracts/ の行は今も守られていないので、その間に減る守りは無い）。
+- 門の守りの範囲は形 5 の列だけ（形 9・行 cd）: 今の門が守る docs/design/ の下の .toml と下の dir の表は、key で名乗らない限り守らない。器の repo では該当 0 本（verified）。行 cg の後は受付もその外を断るので、置き場の外に live な便の行は出来ない。行 cd から行 cg までの間は、key を書かない repo の docs/design/ の下の .toml と下の dir を指す live な便の行を門が守らない（器の repo と隣の project の両方で 0 本・2026-10-02 に数えた。隣の project の contracts/ の行は今も守られていないので、その間に減る守りは無い）。
 - 宣言を変える commit と同じ commit の表の変更は、門が HEAD（変更の前）の宣言で測る。便が live の間に宣言から置き場を外すと、門はその置き場の行を守らない（宣言の変更そのものは便の審査と gate か user の手を通る）。
 - 門は .md か .toml の編集ごとに、worktree の root と置き場の解きに加えて HEAD の宣言を 1 回読む（区間を持たない .md の編集は読まない）。宣言を読めない周の門は .md / .toml の全部を比べる側に倒すので、その周だけ event log を読む回数が増える。
-- 古い binary は key を「未知の key」で断り、宣言全体を読めなくする（受付・contracts check・局面の出力・close の門の全部）。消費側が key を書くのは、その host の PATH の binary を行 cb の着地の後の版に入れ替えた後。
+- 古い binary は key を「未知の key」で断り、宣言全体を読めなくする（宣言を読む全部の口: 受付・contracts check・局面の出力・close の門・席の権能 guard・gate）。消費側が key を書くのは、その host の PATH の binary を行 cb の着地の後の版に入れ替えた後。
 - 行 cg の後、置き場の外を指す pointer は受付と resume の取り直しの両方で断られる。行 cg の着地の前に置き場の外を指して走り出した便は、resume で止まる（順の条件で 0 本にしてから着地させる）。
 - dir 項目は直下だけを読む（入れ子の dir は項目を並べる）。dir 項目は直下の .toml を全部表と読むので、表でない .toml（欄の生成物など）を同じ dir に置く repo は file 項目で並べる（読めない置き場として contracts check が名指すので、黙っては落ちない）。
 
@@ -2596,7 +2596,7 @@ done = "(1) 受付の生成は pointer の path が受付の材料の宣言の�
 - 中身で見分ける（tracked の全 .md / .toml のうち表の marker を持つ file）: 宣言が要らず、行の審査（定義 3）と揃う。だが marker の打ち間違いで表が黙って母集団から落ち（fail-open・NFR4）、歯の fixture の表を本物と数え、置き場が宣言値でなく推測になる（C10）。
 - glob の値（例 contracts の .toml の glob）: 書き方は短いが、新しい読み手が要り、ADR-0047 が prefix と完全一致で足りると決めた形から外れる。
 - key が既定を置き換える: 既定を外したい repo には便利だが、宣言 1 行で docs/design/ の表を検査の外へ出せる。表の無い .md は 0 行なので、外す必要が無い。
-- 門だけは定義 2 を残す（docs/design/ の下の全部と置き場の和を守る）: 守りは最も広いが、表の定義が 2 本に戻り、受付が通さない場所の行を門だけが守る。行 cg の後は置き場が live な行を必ず含むので、門の別の定義は要らない（裁定で 1 本に決めた）。
+- 門だけは定義 2 を残す（docs/design/ の下の全部と置き場の和を守る）: 守りは最も広いが、表の定義が 2 本に戻り、受付が通さない場所の行を門だけが守る。行 cg の後は置き場が live な行を必ず含むので、門の別の定義は要らない（形 9 で 1 本に決めた）。
 - 受付で断らず、門を pointer で守る（live な便の design の path を全部守る）: 受付の挙動は変わらないが、契約表の検査と局面の出力が見ない場所に契約の正本を置けてしまい、定義が 2 本に戻る。
 
 ### 69.12 順と行の分け方
