@@ -1095,6 +1095,7 @@ fn version_line(out: &Output, label: &str) -> String {
 
 /// (a)(d) `--print-version` は `--contract` と `--worktree` が無くても rc 0 で版の 1 行だけを出し、偽 claude は 0 回（痕跡で測る）。
 /// 無い path を渡しても読まず、同じ行を出す。
+// flip-check: retroactive s2-07l.751
 #[test]
 fn headless_lens_version_prints_one_line_without_contract_or_worktree_and_never_calls_claude() {
     let dir = tmp();
@@ -1106,7 +1107,7 @@ fn headless_lens_version_prints_one_line_without_contract_or_worktree_and_never_
         assert_eq!(bare.matches(&format!(" {key}")).count(), 1, "{key} を 1 つだけ持つ: {bare}");
     }
     assert!(bare.contains(" tools=Read,Grep,Glob ") && bare.contains(" permission=dontAsk ") && bare.contains(" output=json "), "{bare}");
-    assert!(bare.contains(" cap=4096 ") && bare.contains(" turns=30 "), "{bare}");
+    assert!(bare.contains(" cap=4096 ") && bare.contains(&format!(" turns={LENS_MAX_TURNS} ")), "{bare}");
     let missing = dir.join("no-such-dir");
     let gone = missing.display().to_string();
     let away = run_version(&dir, &rules, &["--contract", &gone, "--worktree", &gone], &claude);

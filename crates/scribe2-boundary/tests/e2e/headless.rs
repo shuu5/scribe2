@@ -275,8 +275,8 @@ const RUNNER_EFFORT: &str = "high";
 /// lens の turn の上限を持つ rules 行の id（設計 pipeline.md §67）。
 const TURNS_ID: &str = "lens.max_turns";
 
-/// 埋め込み manifest と同じ `lens.max_turns` の値（裁定 id `user 2026-09-30T22:13Z 項 lens-turns`）。
-const LENS_MAX_TURNS: u64 = 30;
+/// 埋め込み manifest と同じ `lens.max_turns` の値（裁定 id `user 2026-10-01T08:09Z`）。
+const LENS_MAX_TURNS: u64 = 100;
 
 /// `lens.max_turns` の行（値 `value`・発効）。
 fn turns_row(value: u64) -> String {
@@ -1643,7 +1643,7 @@ fn turns_flags(dir: &Path) -> usize {
 }
 
 /// (a) lens は rules 行 `lens.max_turns` の値を `--max-turns` の直後に置いた対をちょうど 1 つ、段に依らず（`--stage` 無し・`prelens`・
-/// `memo`）毎回渡す。値 7 と 30 の manifest で弁別し、`--rules` の無い lens は埋め込みの 30。base は渡さないので RED。
+/// `memo`）毎回渡す。値 7 と 30 の manifest で弁別し、`--rules` の無い lens は埋め込みの 100。base は渡さないので RED。
 #[test]
 fn lens_turns_passes_the_row_value_in_every_stage() {
     let dir = tmp();
@@ -1671,7 +1671,7 @@ fn lens_turns_passes_the_row_value_in_every_stage() {
         let out = run_bin_owned(&dir, &lens_args(&contract, &dir, extra, &claude), b"--- a\n+++ b\n");
         assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{extra:?}: {}", stderr_of(&out));
         let argv = slurp(&dir.join("args"));
-        assert!(pair(&argv, "--max-turns", &LENS_MAX_TURNS.to_string()), "{extra:?}: --rules 無しは埋め込みの 30: {argv}");
+        assert!(pair(&argv, "--max-turns", &LENS_MAX_TURNS.to_string()), "{extra:?}: --rules 無しは埋め込みの 100:{argv}");
         assert_eq!(turns_flags(&dir), 1, "{extra:?}: 対はちょうど 1 つ: {argv}");
     }
     clean(&[&dir]);

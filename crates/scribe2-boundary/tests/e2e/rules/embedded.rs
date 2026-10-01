@@ -786,19 +786,19 @@ fn rules_embedded_manifest_declares_run_token_ceiling_row_with_its_ruling() {
     assert_eq!(shared, 1, "kind の行は 1 本");
 }
 
-/// lens の turn の上限の行（設計 pipeline.md §67 歯 (e)・契約表の行 bi）: 埋め込みの manifest が `lens.max_turns` = 30 を
-/// **裁定 id `user 2026-09-30T22:13Z 項 lens-turns`・裁定日 2026-09-30** つきで発効して持ち、形は Int・整数の読み手で値が取れ、
+/// lens の turn の上限の行（設計 pipeline.md §67 歯 (e)・契約表の行 bi）: 埋め込みの manifest が `lens.max_turns` = 100 を
+/// **裁定 id `user 2026-10-01T08:09Z`・裁定日 2026-10-01** つきで発効して持ち、形は Int・整数の読み手で値が取れ、
 /// kind `LensMaxTurns` は `ALL` の `RunTokenCeiling` の直後に在って字面から引ける（base では行も kind も無い ＝ compile されない）。
 #[test]
 fn lens_turns_embedded_manifest_declares_the_row_with_its_ruling() {
     let manifest = Manifest::embedded().unwrap_or_else(|errors| panic!("埋め込み manifest が拒まれた: {errors:?}"));
     let row = manifest.get("lens.max_turns").unwrap_or_else(|| panic!("lens.max_turns の行が在る"));
-    assert_eq!(row.value, RuleValue::Int(30), "値");
+    assert_eq!(row.value, RuleValue::Int(100), "値");
     assert_eq!((row.kind, row.kind.shape()), (RuleKind::LensMaxTurns, ValueShape::Int), "kind と形");
     assert!(row.enabled, "発効");
-    assert_eq!(row.ruling, "user 2026-09-30T22:13Z 項 lens-turns", "裁定 id");
-    assert_eq!(row.ruled_at, "2026-09-30", "裁定日");
-    assert_eq!(int_row(&manifest, "lens.max_turns"), Ok(30), "整数の読み手で 30 が取れる");
+    assert_eq!(row.ruling, "user 2026-10-01T08:09Z", "裁定 id");
+    assert_eq!(row.ruled_at, "2026-10-01", "裁定日");
+    assert_eq!(int_row(&manifest, "lens.max_turns"), Ok(100), "整数の読み手で 100 が取れる");
     assert_eq!(RuleKind::parse("LensMaxTurns"), Some(RuleKind::LensMaxTurns), "kind を字面から引ける");
     let at = ALL.iter().position(|kind| *kind == RuleKind::RunTokenCeiling).expect("RunTokenCeiling は ALL に在る");
     assert_eq!(ALL.get(at.saturating_add(1)), Some(&RuleKind::LensMaxTurns), "宣言順は RunTokenCeiling の直後");
