@@ -1421,10 +1421,12 @@ fn rchar_with_filler(place: (&Path, &Path), bd: &str, bytes: usize) -> u64 {
     rchar
 }
 
-/// (e) session の前に 10 MB と 20 MB の埋め草の event を置いた 2 つの log で、どちらも止まり、`sh -c` で起こした子の読みの byte（rchar）が等しく、
-/// 偽の台帳 client の呼び出しは 0 行（台帳を読まない・読む量が log の大きさに依らない）。
+/// (e) session の前に 10 MB と 20 MB の埋め草の event を置いた 2 つの log で、どちらも止まり、`sh -c` で起こした子の読みの byte（rchar）の差が
+/// 4096 byte 未満（子の起動の /proc/self/maps の読みの揺れは許し、log を丸ごと読めば約 10 MB の差で落ちる）、
+/// 偽の台帳 client の呼び出しは 0 行（台帳を読まない）。
 #[test]
-fn hook_unsorted_stop_reads_the_same_bytes_for_a_10_mb_and_a_20_mb_log_and_never_the_ledger() {
+fn hook_unsorted_stop_read_bytes_differ_under_4_kib_for_a_10_mb_and_a_20_mb_log_and_never_the_ledger() {
+    // flip-check: retroactive s2-07l.749
     let repo = git_repo();
     let (state, aux) = (linked(&repo), tmp());
     let (bd, calls) = counting_bd(&aux, "[]");
@@ -1432,7 +1434,8 @@ fn hook_unsorted_stop_reads_the_same_bytes_for_a_10_mb_and_a_20_mb_log_and_never
     let large = rchar_with_filler((&repo, &state), &bd, 20 * 1024 * 1024);
     assert!(!calls.exists(), "台帳の読みは 0 回（偽の client の呼び出しの記録が無い）");
     assert!(small > 0, "子の読みを測れている（rchar の増えは 0 でない）: {small}");
-    assert_eq!(small, large, "log の大きさに依らず読む byte が同じ（10 MB: {small} / 20 MB: {large}）");
+    let diff = small.abs_diff(large);
+    assert!(diff < 4096, "log の大きさに依らず読む byte の差が 4096 byte 未満（10 MB: {small} / 20 MB: {large} / 差: {diff}）");
     clean(&[&repo, &state, &aux]);
 }
 
