@@ -1318,6 +1318,49 @@ dispatcher は「起こす」側で行為を止める判定を持たない（起
   - memo の要約を別の 1 行で送る案。差し込みの本数が増える（FR44 は idle の 1 行に要約を持たせる）。
   - 要約を行の末尾に置く案。末尾を見る既存の歯が RED になる。
 
+## 44. pipe/dispatch.rs の「便の継ぎと起こし直し」の群を子 module へ割る（契約表の行 as・純移動・次の束の行の受け皿）
+
+やさしく言うと: 起動の列の本体の file（`crates/scribe2/src/pipe/dispatch.rs`）が 1 file の行数の上限に迫っている。driver が自分の便を次へ渡すかを決める部分と、止まった便を起こし直す部分を、中身を 1 字も変えずに子の file へ移し、次の束の行が足す配線の置き場を空ける。
+
+- 何が起きているか（main ff924036・2026-10-01・verified）: `crates/scribe2/src/pipe/dispatch.rs` は 1468 行（幅 120 で正規化 1477・上限 R-C4-2 = 1500）で**余地 23**。次の束の行（[row-review.md](./row-review.md) §7 の行の予約・§8 の兄弟の待ち・[reverse-index.md](./reverse-index.md) §4 の索引の組み立ての配線）はこの file に合わせて約 34 行を足す見込みで、開いている局面の出力の書き手の行（[case-lifecycle.md](./case-lifecycle.md) §12 の行 c）も約 20 行を見込む。受付は write-set の file ごとに余地を測る（`cap-headroom`・[contract-source.md](./contract-source.md) §3「上限の余地」）ので、割らないとそれらの行は受付を通らない。行 c は便が live で（2026-10-01）、その便の木の diff は dispatch.rs に約 10 行を足し、移す群の行には触らない。本行は write-set が行 c の便と交差するので、受付は行 c の着地を待つ。
+- 移す群（実測・13 item・187 行・行番号は main ff924036 の時点の目印で、名が正本）:
+  - driver の継ぎの判定（§5・§13）: `rank`・`advance`・`handoff`・`progress_of`・`admits_gated`（304–371 行・68 行）。
+  - 起こし直す便の選別と構築（§5・§13・§15・§23・§25）: `WAITING`・`revivals`・`regated`・`followed`・`passed_gate`・`gated`・`revive_of`・`resume`（758–876 行・119 行）。
+  - 各 item の doc 行は item と一緒に移る。2 つの塊の後ろの空行 1 本ずつも親から消える。
+- 群の閉じ方（grep で数えた・母集団 = `crates/` の tracked な `.rs` 全部・main ff924036）:
+  - 外から dispatch の path（`crates/scribe2/src/pipe/cli.rs` の別名 queue を含む）を通して 13 の名を引く site は **0**。同じ字の識別子は他の file にも在る（`advance` 3 file・`gated` 23 file・`resume` 27 file ほか）が、どれも別の item で、dispatch の path を通らない。
+  - 親の本体が裸で呼ぶのは 5 名・6 か所で、どれも `fire` の中: `progress_of`・`admits_gated`（2 か所）・`revivals`・`revive_of`・`resume`。
+  - 親の in-file の歯が `use super::{…}` で引くのは 5 名: `admits_gated`・`advance`・`handoff`・`rank`・`revive_of`。
+  - 群が親から引く名は 7 つ: 型 `Advance`・`Handoff`・`Input`・`Revive`、const `DRIVE`、fn `spawn_self`、親の私有の `use` の束縛 `tools`（`crates/scribe2/src/pipe/dispatch/candidates.rs` の fn）。子孫は祖先の私有の item と束縛を見るので、子の `use super::{…}` 1 行で引ける。
+  - 群の本文は pipe の 3 つの fn（`driver_is_dead`・`driver_ticket`・`gate_is_open`・`crates/scribe2/src/pipe/mod.rs`）を `super::` 付きの path で 6 か所呼ぶ。子へ移すと `super::` は親を指すので、親が 3 つの名を私有の `use` で束ね、本文の path をそのまま解く（本文は 1 字も変えない・兄弟の子から祖先の私有の束縛を `super::` で解く形は pipeline.md §59 と同じ）。
+  - 親の `use` のうち群の中だけが使う名は 9 つ（`stage_of`・`Verdict`・`verdict_of`・`regated_since_gate`・`followed_since_gate`・`Ticket`・`replay`・`State`・`STAGES`）。親から外し（残すと未使用の import で clippy の `-D warnings` が落ちる）、子が同じ名を自分の `use` で引く。
+  - 兄弟の子 module 11 本は 13 の名を 1 つも引かない。
+  - 閉包: 移す行で閉包の 5 形に当たるのは `Advance` の match の arm（`advance`・`handoff`・`admits_gated` の中）と `Revive` の literal 構築（`revive_of` の中）だけで、`touches` に `Advance` か `Revive` を持つ行は全 doc で 0。段の比較（`==`）と待ちの段の const の配列（slice でなく長さつきの配列）は 5 形のどれにも当たらない（`crates/scribe2/src/pipe/closure.rs` の形の定義）。
+- 歯の置き場（実測）: 親の歯は in-file の `mod tests {`（1024 行から末尾・20 本・約 445 行）の 1 つ。純移動の証明（`crates/scribe2/src/pipe/move_proof.rs`）は in-file の `mod tests {` を 1 item に畳むので、歯の一部を子へ出すと `mod tests` の本文が変わって `items-differ` で落ちる＝歯は 1 本も動かさない。歯の `use super::{…}` が名指す群の 5 名は、親の `pub use`・私有の `use`・`#[cfg(test)]` の `use` が解くので、歯の本文と `use` は 1 byte も変わらない。次の束の行が直す既存の歯（pipe_dispatch_wait_reasons_render_the_name_and_the_value）も親に残る。
+- 形（番号は done と 1:1）:
+  1. 上の 13 item を、行 as の write-set の `+` の file（`crates/scribe2/src/pipe/dispatch.rs` の子 module・名は file の名）へ、名・本文・doc 行・順序（304–371 の塊 → 758–876 の塊）を変えずに移す。子の頭は module doc と `use` の行だけ: 親の名と束縛は `use super::{…}` の 1 行、pipe とその下の module の名は親の `use` と同じ module から、`crate::fleet` の名と `std::path::Path`。子に札も歯も置かない（歯の区間の外の札は flip-check に数えられない・pipeline.md §59 の形）。
+  2. 親の変更は宣言と `use` の行だけ:
+     - 足す: 既存の `pub mod unreflected;` の直後に空行・doc 1 行・`mod` 宣言 1 行。既存の `use candidates::{…};` の行の後ろ（同じ並びの `use` の群）に `pub use` 1 行（`admits_gated`・`advance`・`handoff`＝pub の 3 つの公開の path を保つ）と私有の `use` 1 行（本体が呼ぶ `progress_of`・`resume`・`revivals`・`revive_of`）。既存の `#[cfg(test)]` の `use candidates::{…};` の直後に `//` の説明 1 行・`#[cfg(test)]` 1 行・`use` 1 行（歯だけが引く `rank`）。
+     - 直す: 既存の `use` の行から上の 9 名を外し、pipe の名を引く `use super::{…}` の行に 3 つの fn の名を足す。regate の 2 名だけの `use` の行は行ごと消える。
+     - 挿入点は既存の行の直後に取り、item の頭の字を挿入点にしない（直前の doc 行が新しい行へ吸われない）。属性と `use` を同じ行に書かない。どの行も 120 桁に収める。
+     - 親の本体（`fire`・`idle`・`measure` と型と impl）と doc 行は 1 字も変わらない。`#[cfg(test)]` の `use` は歯の区間の直前に置き、file の最初の行頭 `#[cfg(test)]` を src の本体の全 item より後に保つ（§20 の名前解決の形）。
+  3. 可視性を上げるのは子の側だけで、語は `pub(super)` の 1 種・5 つ（`rank`・`progress_of`・`revivals`・`revive_of`・`resume`）。`pub` の 3 つは `pub` のまま、残る 5 つ（`WAITING`・`regated`・`followed`・`passed_gate`・`gated`）は私有のまま。親の側の可視性は 1 語も変えない。
+  4. 歯は動かさない: in-file の歯 20 本の名・本文・`use` は不変で、増えるのは札 `// flip-check: moved <行 as の bead>` の 1 行（親の `mod tests` の最後の行＝閉じの `}` の直前・頭に置くと後ろの行が全部ずれて審査の要約のコメント行の差が膨らむ）だけ。
+  5. 兄弟の子 module 11 本と外の file（`crates/scribe2/src/pipe/cli.rs` ほか）は 1 字も変えない。diff は write-set の 2 file だけ。
+  6. 割った後の親は base より約 181 行減る（正規化も約 181・main ff924036 の base なら 1287 行・正規化 約 1296・余地 約 204）。`+` の file は約 205 行。core の本体は約 18 行増える（子の module doc と `use`・親の `mod` と `use`）。
+- 受け皿の使い方（後の行が決める・本行では足さない）: 次の束の行は親に残る面（`WaitReason` の variant・名・描き・列の周の呼び出し・`mod` 宣言）を足す。driver の継ぎと起こし直しを変える後の行は、本行の `+` の file を write-set に書く。
+- 触らない: 型（`Advance`・`Handoff`・`HANDOFFS`・`Driving`・`DRIVE`・`Revive`・`Turn`・`Input`）・起こす面（`start`・`launched`・`spawn_self`・`launch_log`・`myself`）・`fire`・`turn`・`measure`・`idle`・`order`・表示の群・`WaitReason`・in-file の歯の本文・e2e・兄弟の子 module。
+- 却下:
+  - (a) 型（`Advance`・`Handoff`・`HANDOFFS`・`Driving`・`DRIVE`）も移す。約 65 行増えるが、`Turn` の欄と `crates/scribe2/src/pipe/cli.rs` の 4 site が親の path で引くので `pub use` が増え、型を宣言する file が動いて他の行の `touches` の閉包の読みが変わる。
+  - (b) 起こす面（`start`・`launched`・`spawn_self`・`launch_log`・`myself`・約 90 行）を移す。`spawn_self` は着地の終端（`crates/scribe2/src/pipe/land/finish.rs`）が、`myself` は群の hook（`crates/scribe2/src/hook/group.rs`）が親の path で引き、索引の組み立ての配線の行の設計も `spawn_self` を親の file の名で名指す。移しても余地は約 110 に留まる。
+  - (c) 表示の群（`line`・`render`・`listing`・`observe`・`usage`・`mark` ほか・約 100 行）を移す。`crates/scribe2/src/pipe/cli.rs` が 5 名を引き、次の束の行が直す `WaitReason` の描きと同じ面に寄る。
+  - (d) in-file の歯を `#[path]` の file へ出す。余地は約 450 空くが、次の束の行が直す既存の歯の file が変わり、起草済みの行の write-set が外れる。
+  - (e) 起こし直しの塊（119 行）だけを移す。余地は約 140 で足りるが、`WAITING` を `handoff` と分け合うので pure の判定と読みが 2 つの file に割れる。
+- 歯: 新設は 0 本（純移動・新しい接頭辞は無い）。検証行は群を測る既存の lib の歯 5 本を**名の全体**で 1 行 1 本に名指す: pipe_dispatch_drive_ranks_every_stage_from_the_declared_order（`rank`）・pipe_dispatch_drive_advance_is_forward_same_or_backward（`advance`）・pipe_dispatch_drive_hands_off_only_on_forward_and_names_the_reason（`handoff` と `WAITING`）・pipe_dispatch_waiting_gate_admits_only_forward_drivers_and_every_non_driver（`admits_gated`）・pipe_dispatch_drive_is_added_to_every_run_the_queue_starts（`revive_of`）。5 本とも `crates/` の中で `crates/scribe2/src/pipe/dispatch.rs` の 1 file だけに在る（grep・2026-10-01）＝歯の置き場の門が見る file は write-set の `-` の親だけ。起こし直しの e2e（regate・追随・PASS の Gated の歯）は done の全体の nextest が撃つ。
+- base で RED の理由: 無い。歯を足さない純移動で、検証行 5 本は base でも HEAD でも緑（不変の証明）。入口の RED は札 `moved` が免除する（pipeline.md §7）。
+- 実測（2026-10-01）: 写しの上で本行の形の字の移動だけを当て、行数を幅 120 の式で数えた（形 6 の値）。cargo の build・clippy・純移動の証明・flip-check はこの起草では撃っていない（host の memory を守る）。便の木で撃つ。
+- 限界: 子へ移る doc 行のうち親の item を指す intra-doc link 2 つ（`Driving`・`start`）と、親に残る doc 行の `WAITING` への link 1 つは rustdoc で解けなくなる。done の門は rustdoc を撃たないので doc 行は直さない（直すと審査の要約にコメント行の差が出る）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -1839,4 +1882,15 @@ verify = ["cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail pipe
 size = "M"
 growth = ["crates/scribe2/src/pipe/cli.rs:4", "crates/scribe2/src/pipe/notify.rs:70"]
 done = "(1) 終端の行は便の部品の手番が seat のときだけ送り、段に添える 1 語はその部品の理由の語（Reviewed と Gated の FAIL は判定の語・Failed は最後の detail の頭・Stopped と Questioned は段の名）で、着地して閉じた契約の便と手番が seat でない便は送らず、cli.rs に alarm_word と、それだけが使う gate の verdict の読みと審査の判定の読みの呼び出しが無く、未処置の終端の pending も同じ読みを通る (2) 比べる印は event log の長さと古さの印で、出力が印を持つか event log が出力の長さより伸びた周は語に :stale を添え、出力が無いか読めない周は終端の便ごとに語 unreadable で送り pending は unreadable (3) idle の行の reason= の直後（並列の実測の字の前）に memos=<open>:<actionable>[ next=<memo id>:<語>] を足し、open は閉じていない memo の部品の数・actionable は memo-actionable の数・next は memo-actionable のうち since の最も古い 1 本で語はその理由の語（理由が verdict の memo は行 ao の読みの最新の判定の語）、比べる印は台帳で古い周は memos=<open>:<actionable>:stale、読めない周は memos=unreadable、open が 0 で読めた周は key を出さない (4) 候補 0 でも起こす便が 0 で memo-actionable が 1 以上の周は idle の行を ready=0 reason=- で送り、memo-actionable が 0 か出力を読めない周で候補 0 なら送らない 歯: pipe_notify_lifecycle_ の e2e 7 本（notify.rs の末尾・終端の周の書き手が出力を書く置き場）の (a) Reviewed の FAIL の便の語が判定の語で Stopped の便の語が Stopped (b) 着地して閉じた契約の便は送らず同じ歯の Failed の便は送る (c) 出力の後に event log へ行を足した置き場の終端で語に :stale (d) 出力の無い置き場の終端は語 unreadable で送り pending は unreadable (e) memos= と next= が reason= の直後で並列の実測の字の前に在り、理由が verdict の memo の next= の語が置き場の判定の語で、出力の後に台帳の印を動かした置き場では memos=<open>:<actionable>:stale (f) 候補 0 で memo-actionable 1 の置き場で idle の行が ready=0 reason=- で出る (g) memo を close した後の周に actionable が減り候補 0 なら行が消え、同じ歯の close の前は在る、既存の pipe_notify_ の歯は送達・宛先・並列の実測・束の期待を変えずに緑で、段の語の期待を直す歯（Stopped と Questioned）は直した期待が base で落ち、既存の歯の置き場が出力を書けない形なら共通の helper に出力の入力（台帳の印の file と main の ref）を置く 1 手を同じ file で足す・base は語が段の verdict の字のまま memos= が無く候補 0 の周に行が無いので RED（機能不在）"
+
+[[contract]]
+id = "as"
+title = "pipe/dispatch.rs の便の継ぎと起こし直しの群（driver の継ぎの判定 5 つと起こし直す便の選別と構築 8 つの 13 item・約 187 行）を子 module へ割る — 純移動・pub の 3 つの path は親の再輸出で不変・歯は動かさず札 moved（次の束の行の受け皿）"
+req = ["FR68", "FR102", "FR103", "FR107"]
+section = "44"
+write-set = ["-crates/scribe2/src/pipe/dispatch.rs", "+crates/scribe2/src/pipe/dispatch/revive.rs"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail pipe_dispatch_drive_ranks_every_stage_from_the_declared_order", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_dispatch_drive_advance_is_forward_same_or_backward", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_dispatch_drive_hands_off_only_on_forward_and_names_the_reason", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_dispatch_waiting_gate_admits_only_forward_drivers_and_every_non_driver", "cargo nextest run -p scribe2 --lib --no-tests=fail pipe_dispatch_drive_is_added_to_every_run_the_queue_starts"]
+size = "S"
+growth = ["crates/scribe2/src/pipe/dispatch/revive.rs:210"]
+done = "(1) 13 item（rank / advance / handoff / progress_of / admits_gated / WAITING / revivals / regated / followed / passed_gate / gated / revive_of / resume）が + の file に名・本文・doc 行・順序のまま在り、純移動の証明が moved=13 の要約を返す (2) 親に増えるのは mod 宣言 1 行とその doc 1 行・pub use 1 行（admits_gated / advance / handoff）・私有の use 1 行（progress_of / resume / revivals / revive_of）・#[cfg(test)] の use 2 行（rank）とその説明 1 行だけで、既存の use の行から群だけが使う 9 名を外して pipe の 3 つの fn（driver_is_dead / driver_ticket / gate_is_open）の名を足し、親の本体と doc 行は 1 字も変わらず、file の最初の行頭 #[cfg(test)] は src の本体の全 item より後 (3) 可視性を上げるのは子の側の pub(super) 5 つ（rank / progress_of / revivals / revive_of / resume）だけで、pub の 3 つは pub のまま、親の側は 1 語も変わらない (4) in-file の歯 20 本の名・本文・use が不変で全部緑、札 flip-check: moved が親の mod tests の最後の行（閉じの } の直前）に 1 行在り、入口の flip-check が moved=1 で rc 0 (5) 兄弟の子 module 11 本と cli.rs ほか外の file の diff が 0 行 (6) file-lines で dispatch.rs の行数が base より 170 以上減る（main ff924036 の base なら余地 23 が約 204 になる）"
 <!-- contracts:end -->
