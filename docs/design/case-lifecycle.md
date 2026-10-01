@@ -3,7 +3,7 @@
 - 要件: [FR90](../../design-intent/spec/srs.html#FR90) 局面の出力 / [FR91](../../design-intent/spec/srs.html#FR91) memo の局面 / [FR92](../../design-intent/spec/srs.html#FR92) 器の便でない着地の commit / [FR93](../../design-intent/spec/srs.html#FR93) memo の自動の close / [FR94](../../design-intent/spec/srs.html#FR94) 局面の出力の読み手 / [FR87](../../design-intent/spec/srs.html#FR87) memo の判定 / [NFR5](../../design-intent/spec/srs.html#NFR5) hook の予算。受入: AC60・AC61。
 - 決定: [ADR-0088](../../design-intent/decisions/ADR-0088-case-positions-are-computed-once-by-the-vessel-and-read-from-one-file.html)（1 つの関数・出力の組・書き直しの契機と古さの印・切り替えの線）/ [ADR-0089](../../design-intent/decisions/ADR-0089-open-memos-sit-in-four-positions-and-close-by-three-reasons.html)（memo の 4 局面と閉じ方）/ [ADR-0097](../../design-intent/decisions/ADR-0097-the-close-gate-binds-declared-repos-and-seats-settle-named-terminals.html)（close-check）/ [ADR-0100](../../design-intent/decisions/ADR-0100-the-close-check-line-rides-the-cutover-event-in-its-detail.html)（close-check の線の記帳の形）。
 - 裁定: rules 行 `lifecycle.closed_window_h` と `lifecycle.age_h.<語>` の値は user 2026-09-30T04:25Z。
-- この設計から出る契約: §6〜§14（9 行）。§1〜§5 は語と欄の正本で、§15 は読み手の行が執行する表。
+- この設計から出る契約: §6〜§14 の 9 行と、§16 の行 f・§17 の行 g（11 行）。§1〜§5 は語と欄の正本で、§15 は読み手の行が執行する表。
 
 ## 1. 何を解くか
 
@@ -210,7 +210,7 @@ lifecycle.stale
 - `overdue` と `owned`:
   - 手番が seat で `lifecycle.age_h.<語>` の行を持ち、since が在る部品は、年齢（`generated_at` − `since`）が値を越えれば true、越えなければ false。ほかは null。
   - `owned.count`＝true の件数・`unset`＝手番が seat で行の無い部品の件数・`unknown`＝行が在って since が null の件数・`oldest`＝true の最古。requirement はどれにも数えない。
-- `unmeasured` の reason の閉じた語: `srs-unreadable`・`table-unreadable`・`ledger-prefix`・`multi-anchor`。空の列なら 9 種とも測れた。出力に大きさの上限は置かず、切り詰めない。
+- `unmeasured` の reason の閉じた語: `srs-unreadable`・`table-unreadable`・`ledger-prefix`・`multi-anchor`・unreflected-unreadable（§17）。空の列なら 9 種とも測れた。出力に大きさの上限は置かず、切り詰めない。
   - `srs-unreadable` と `table-unreadable` は、main の SRS か契約表が無いか器の読める形でない repo（消費側の形の違いを含む）で、書き直しは続ける。読みそのものが落ちた周（git が撃てない・file を読めない）は §12 の読めない周で、書き直さない。
 - 書き手の約束（行 c・d・e が執行・読み手と組にする）:
   - 一時 file は頭が `.` の名（`.lifecycle.json.<pid>.tmp`・`.lifecycle.stale.<pid>.tmp`）、lock は `lifecycle.lock` と `lifecycle.stale.lock`。読み手は `lifecycle.json` と `lifecycle.stale` の 2 つの名だけを見る。
@@ -665,6 +665,73 @@ lifecycle.stale
 - 限界: bd の版が manifest の形を変えた周は読めない（ledger の語で止まる）。形の違いは読みの失敗として見え、別の位置の値を印として使わない。
 - 却下: 欄の位置を `__DOLT__` の語の位置から相対に読む案（形の違う版を推測で読む。読めない形は止める方が C10 に合う）。
 
+## 17. 局面の導出に未反映の問いと処置の無い判定の memo を渡す（契約表の行 g・memo s2-07l.738.38.10）
+
+やさしく言うと: 局面を決める関数（§7）は、「文書に写されていない裁定を持つ閉じた問い」と「審査役が上げる・閉じると判じたのに、席がまだ何もしていない memo」の 2 つの一覧を受け、問いを ruling-unreflected に、memo を memo-actionable（理由 verdict）に置く。ところが出力を書く側（§12）は 2 つとも空の一覧を渡していて、この 2 つは出力に 1 度も出ない。書く側が、未反映の裁定の置き場・event log の審査の判定・台帳から 2 つの一覧を組んで渡す。
+
+- 何が起きているか（main 4c6fe0d7）:
+  - verified:
+    - 書き手 `crates/scribe2/src/fleet/lifecycle.rs` の derive（684〜736 行）は、行 a1 の導出（`crates/scribe2/src/ledger/phase.rs` の derive）の入力 unreflected と unjudged を `&[]` の固定で渡す（697・698 行）。
+    - 導出の側は 2 つの列を受ける形を持つ。unreflected は閉じて未反映の裁定を持つ問いの bead id で（phase.rs 83〜84 行）、閉じた問いの id がこの列に在れば ruling-unreflected に置く（354〜355 行・窓より前に判じる）。unjudged は処置の無い判定を持つ memo の bead id で（85〜86 行）、memo-actionable の理由 verdict（510〜511 行）と、FR93 の条件 `close_due` の「処置の無い判定が無い」（114〜116 行）に効く。行 a1 の歯 phase_ledger_ は、2 つの列を渡した fixture で局面を測っている（phase.rs 868〜959 行）。
+    - 未反映の裁定の置き場（`<state_dir>/pipe/unreflected`・FR84）は、問いの id でなく裁定 id の列を持つ（`crates/scribe2/src/pipe/dispatch/unreflected.rs` 44〜53 行）。外から読める読みは 3 本で、どれも id の列を返さない: `involved`（関わる契約の bead → id の表・着地の留め）・`count`（件数・管理 tick）・`doctor_line`（doctor の 1 行）。file の読み（106 行の stored と 82 行の judged_of）は私有。
+    - 置き場を書くのは起こす側の周（`fire`）だけで（`crates/scribe2/src/pipe/dispatch.rs` 641〜643 行）、同じ周の全部の書き直し（契機 (a)）はその後に撃つ（686〜687 行）。観測の 1 周（`observe_round`・契機 (d)(e)）は未反映を判じるが、返すのは台帳の全件と列の判定だけで（`crates/scribe2/src/pipe/dispatch/candidates.rs` 388〜405 行）、置き場を書かない。
+    - FR84 の母集団（閉じた・effect が document の・label の問い）は dispatch.rs 566〜571 行が持ち、effect の字は dispatch.rs 85 行の私有の const。問いの notes から裁定の行の id を読むのは unreflected.rs の judge（137〜141 行・close の理由の読みの `ruling_row`）。
+    - memo の審査の判定は、`crates/scribe2/src/pipe/dispatch/memo_lens.rs` の record（172〜203 行）が置き場の verdict の file を書いた後に、event MemoJudged を 1 行足す（bead＝memo の id・detail＝判定の語・ts＝記帳の時刻）。event log の読みはこの行を本体 `Case::Judged` と bead と detail で読む（`crates/scribe2/src/fleet/event.rs` 509〜516 行）。判定の語は閉じた 4 値の `Word`（promote・close・keep・unparsed・`crates/scribe2/src/pipe/dispatch/memo.rs` 47〜71 行）。
+    - 判定の後に処置が付いたかを示す記録は、event log にも置き場にも無い。台帳の `Issue` は 13 欄で、bd の JSON の updated_at を読まない（`crates/scribe2/src/seat/ledger.rs` 69〜96 行・`issues_of` の 110〜138 行）。`Issue` を字で組む所は 4 か所: `issues_of`・`crates/scribe2/src/hook/graph_guard.rs` 607 行（src）・歯の fixture の `crates/scribe2/src/ledger/form.rs` 357 行と `crates/scribe2/src/pipe/dispatch/precheck.rs` 603 行。
+    - 本 repo の台帳（bd 1.1.0・2026-10-01・988 本・読むだけ）で、updated_at は全部 UTC の秒までの Z の形で、同じ値を持つ bead は 0 組（全件を一度に動かす書きは無い）。閉じた 896 本のうち 821 本は updated_at が closed_at と同じで、75 本は閉じた後の書きで closed_at より後（書きが updated_at を進める）。discovered-from で memo を指す契約の起票は memo の updated_at を動かさない（48 組のうち 4 組で memo の updated_at が契約の作られた時刻より前）。
+    - 層の向き: fleet の書き手は既に pipe を呼ぶ（lifecycle.rs 624 行の `observe_round`・`crates/scribe2/src/fleet/lifecycle_mark.rs` 24〜27 行）。dispatch の子 module の memo と unreflected は pub（dispatch.rs 60・66 行）。
+    - 行数: lifecycle.rs は幅で数えて 1425 行（R-C4-2 の 1500 まで 75 行）で、derive は 53 行（R-C4-4 の 60 行まで 7 行）。lifecycle_mark.rs は 1131 行で、全部の書き直しの入力を event log から組む純関数（`bindings_of`・`refusals_of`）を test 区間の前の末尾の区間に持つ。
+  - deduced: このため doctor の lifecycle-memo の actionable（ledger-form.md 行 o）・管理 tick の alarm の owned・通知の memos=（dispatcher.md 行 ar）は、処置の無い判定の memo と未反映の裁定の問いを数えない（ledger-form.md §19 の限界が名指す）。
+- 約束（番号は done と 1:1）:
+  1. 未反映の問い: 全部の書き直しは、置き場の裁定 id の列を、閉じた台帳の問い（label の問い）のうち notes の裁定の行にその id を持つ問いの id の列へ引いて、行 a1 の導出の unreflected に渡す。
+     - 引きは unreflected.rs に足す読み 1 本が持つ。入力は置き場・台帳の接頭辞・閉じた問いの id と notes の組の列（unreflected.rs は台帳の 1 件の型を名指さない今の形のまま）、返りは閉じた 2 値（読めない・問いの id の列〔入力の順〕）。置き場の file の読みは私有の読みを、notes の裁定の行の読みは judge と同じ 1 か所を使い、写しを持たない。置き場の無い周は空の列。
+     - 母集団の effect は判じ直さない（置き場の列は FR84 の母集団の裁定 id だけを持つ）。
+     - 契機 (a) は同じ周の `fire` が書いた置き場を、契機 (d)(e) は前の起こす側の周が書いた置き場を読む。観測の 1 周の判定は使わない（§2 の表の「置き場に在る」と、doctor・管理 tick・着地の留めが読むのと同じ列）。
+  2. 置き場が在って読めない周は、書き直しを止めず、問いの列を空で渡し、`unmeasured` に part question・reason unreflected-unreadable を 1 件名指す。§5.2 の `unmeasured` の reason の閉じた語に unreflected-unreadable を足す（同じ docs PR で §5.2 の列を直す・語を足すだけで版は上げない・§5.1）。
+  3. 処置の無い判定: 全部の書き直しは、開いた memo（memo の label を持ち閉じていない）のうち、event log の最後の判定の行（本体が `Case::Judged` で bead がその memo の行の最後の 1 行）の語が promote か close で、台帳の updated_at がその行の ts より後でない memo の id の列（台帳の順）を、行 a1 の導出の unjudged に渡す。
+     - 最後の判定の語が keep か unparsed の memo・判定の後に台帳が書いた memo（updated_at がその ts より後）・閉じた memo・判定の行の無い memo は渡さない。updated_at が無いか読めない memo は渡す（処置を測れない周に判定を落とさない）。
+     - 処置（FR87 の 4 種: 昇格・close・引き金の書き直し・keep の記帳）は、どれも台帳のその memo への書きで付くので、「判定の後にその memo が書かれた」を処置の印に読む（過大の向きは限界）。
+     - 語は `Word` の字で比べ、字を写さない。判定は event log（FR90 の入力）だけから読み、置き場の verdict の file を memo ごとに読まない。
+  4. `Issue` に updated_at（字の `Option`）を足し、`issues_of` が読む。無い要素は None で、ほかの欄の読みは変えない。組みの 4 か所を直す（構築点は便の始めに今の main で数え直す）。
+- 設計の線（歯を持たない・審査が読む）:
+  - 2 つの列の組み立ては lifecycle_mark.rs の末尾の区間（全部の書き直しの入力の読み・test 区間の前）に置く。lifecycle.rs は gather で組んで全部の書き直しの世界の欄に持ち、derive は渡すだけにする（derive の余地は 7 行）。読めない置き場の `unmeasured` の 1 件も gather の側で作る。
+  - 後の行が呼ぶ口（memo の自動の close〔FR93・ledger-form の後の行〕が land の終端の経路から `close_due` へ同じ列を渡す）: 処置の無い判定の組み立て 1 本は台帳の全件と event の列を受けて memo の id の列を返す純関数で、未反映の問いの組み立て 1 本は置き場・接頭辞・台帳の全件を受けて閉じた 2 値（読めない・問いの id の列）を返す。どちらも lifecycle_mark.rs に crate の中から呼べる可視性で置く（呼べることは呼び手の行の compile が測る）。
+  - 新しい code は `EventKind` を名指さず（MemoJudged は本体 `Case::Judged` で見分ける・§12 の閉包と同じ）、`Issue` を literal で組まない（歯の fixture は bd の JSON の字を `issues_of` で、event は JSON の字を `Event::from_line` で読む）。`EventKind`（dispatcher.md 行 a・行 ap）と `Issue`（contract-source.md 行 bo）は touches に在り、器の閉包の検査が測るので、verify の最終行に contracts check を置く。
+  - 行 a1 の導出（phase.rs）は変えない。
+- 歯（e2e の部品の行はどれも局面・手番・理由の 3 つを測る）:
+  - lib（lifecycle_mark.rs の既存の test 区間・接頭辞 unreflected_questions_）: (1)(2) 置き場の無い置き場で空の列・読めない置き場（JSON でない字）で読めない・読める置き場（未反映 1 つと写った 1 つの母集団）で、未反映の id の裁定の行を持つ閉じた問いだけが列に在る。写った id の行を持つ閉じた問い・notes の散文にだけその id を書く閉じた問い・同じ行を持つ開いた問い・問いの label の無い閉じた bead は無い。列の全体を等しさで比べる。
+  - lib（同じ test 区間・接頭辞 verdict_unhandled_）: (3) 最後の判定が promote と close の memo は在り、keep と unparsed の memo は無い／同じ memo の判定が promote → keep の順なら無く、keep → promote の順なら在る／updated_at が判定の ts と同じ memo は在り、1 秒後の memo は無い（対）／updated_at の欄の無い memo は在る／閉じた memo と memo でない bead の判定は無い。列の全体を等しさで比べる（値の slice への contains にしない）。
+  - lib（`crates/scribe2/src/seat/ledger.rs` の既存の test 区間・接頭辞 issue_updated_at_・1 本）: (4) updated_at を字のまま読み、要素の無い bead は None で、同じ bead の id・status・created_at・closed_at の読みは変わらない（1 本の中で在る bead と無い bead の対）。
+  - e2e（既存の `crates/scribe2-boundary/tests/e2e/fleet.rs`・接頭辞 fleet_lifecycle_feeds_・2 本・§12 の偽の台帳と toy repo）:
+    - (1)(3) 偽の台帳に、裁定の行を持つ effect が document の閉じた問い（閉じた時刻は窓より古い）と、effect が operation の閉じた問いと、満ちない期日の引き金の行を持つ開いた memo 3 つを置き、event log に MemoJudged を 3 行書く（promote・keep・promote の後に updated_at の進んだ memo）。書き直しの口（契機 (e)）を先に撃つと、置き場が無いので document の問いの部品は無く（窓より古い終わりの局面）、promote の memo は memo-actionable・理由 verdict・手番 seat。`pipe dispatch`（契機 (a)）の後は、document の問いが ruling-unreflected・手番 seat で載り（窓に依らない・AC60）、operation の問いは question-closed、keep の memo と処置の後の memo は memo-waiting。出力を消して書き直しの口をもう 1 度撃つと、前の周の置き場から同じ局面が出る。
+    - (2) 起こす側の周の後に置き場の file を読めない字へ書き換え、出力を消してから書き直しの口を撃つと（出力を残すと印が同じで Coalesced になり書き直さない）、rc 0 で、lifecycle.json の `unmeasured` に question と unreflected-unreadable の 1 件が在り、document の問いの部品は無い。次の `pipe dispatch` の後は名指しが消えて ruling-unreflected に戻る（同じ歯の中の対）。
+  - 置き場と file ごとの base で RED の理由（§1）: lib の 2 つは lifecycle_mark.rs の test 区間（新しい組み立てを呼ぶので base で compile できない）、issue_updated_at_ は seat/ledger.rs の test 区間（`Issue` の新しい欄を読むので同じ）。e2e の 2 本は、base の書き手が 2 つの列を空で渡し unreflected-unreadable の語を持たないので、ruling-unreflected・verdict・unreflected-unreadable の肯定で落ちる（期待が base の振る舞いと違う）。組みを直す 3 file（form.rs・precheck.rs・graph_guard.rs）は `Issue` の新しい欄を書くだけで、歯の本文を変えない。
+  - base で RED: lib は歯の名が 0 本（rc 4・機能不在）、e2e は局面が base と違う。既存の phase_ledger_・lifecycle_writer_・lifecycle_mark_・fleet_lifecycle_ と seat/ledger.rs の issue_times_ は期待を変えずに緑（非回帰）。
+  - 接頭辞の衝突（main 4c6fe0d7 で数えた）: 4 つの接頭辞を持つ既存の歯は 0 本。全部の契約表の verify の filter のうち 4 つの接頭辞の歯の名に当たるのは行 c の fleet_lifecycle_ だけで、fleet.rs は行 c の write-set に在る。
+- 触らない:
+  - 行 a1 の導出（phase.rs の derive・`close_due`・入力の形・判定の順・理由の語）。
+  - 未反映の判定の振る舞いと置き場の書き（judge は裁定の行の読みを 1 か所に寄せるだけ・FR84 の母集団）と、置き場の今の 3 つの読み（`involved`・`count`・`doctor_line`）。
+  - memo の審査（memo_lens.rs の材料・verdict の file・MemoJudged の記帳）と判定の読み（memo.rs の `judgement`）。
+  - event の kind と key（event.rs）・列の判定（dispatch.rs）・部分の書き直し（lifecycle_partial.rs）・読み手（lifecycle_read.rs）。
+  - 出力の text の字と JSON の欄の形（`unmeasured` の語を 1 つ足すだけ）。
+- 限界:
+  - 処置は「判定の後に台帳がその memo を書いた」の印で読むので、処置でない書き（[再発] の行・label・priority）も処置と読む（過大）。その memo は判定から外れ、審査の間隔（rules 行 memo.triage_interval_h）の後の審査（dispatcher.md 行 aq）が同じ判定を返せば戻る。処置でない書きで外さない形は、書きの種類を残す仕組みが要り、本行は持たない。
+  - lens の撃ち中（材料を書いた後・判定の記帳の前）に席が付けた処置は、updated_at が判定の ts より前なので処置と読まない（過小）。判定は出続け、席が次にその memo を書くと外れる。
+  - updated_at が無いか形の違う bd では処置を測れず、判定は処置の後も出続ける（黙って落とす側へは倒さない）。
+  - 判定の event を記帳できず verdict の file だけが在る周（record が event の追記で落ちた周）は判定を渡さない（判定の出所は event log）。
+  - 契機 (d)(e) は前の起こす側の周の置き場を読むので、main が裁定を写した直後の周は、次の dispatch の周まで ruling-unreflected が残りうる。
+  - 置き場の無い置き場（その state dir で起こす側の周が 1 度も回っていない・実装役の口の無い周は列を測らない）は未反映を空と読み、`unmeasured` に名指さない（doctor の行・管理 tick の数え・着地の留めと同じ読み）。
+  - 部分の書き直し（行 d）は判定も置き場も読まない。tick の周に足された MemoJudged は、次の全部の書き直しまで出ない（FR90 の部分の範囲の外）。
+  - 閉じが行 a2 の misfit に当たる問いは、§12 の置き換えで misfit が勝つ。
+  - 同じ裁定 id の裁定の行を別の閉じた問いの notes が写していれば、その問いも ruling-unreflected に出る（effect を判じ直さない）。
+- 却下:
+  - 処置を、置き場の審査の材料（material）の字と今の memo の字の比べで読む案。材料は審査を撃つたびに判定より先に書き直され、口座の候補が無く判定を書かない周にも書き換わる（memo_lens.rs の judge）。処置の後の字を判定の時の字と読み、処置済みの判定を戻して席の手番に残し続ける（過小）。材料は lens の入力で、跨版の約束を持たない。
+  - 処置を台帳の今の状態だけで読む案（keep の行・昇格の行・引き金の行が在れば処置済み）。判定より前の keep の記帳や一部の昇格の行を処置と読み、判定を黙って落とす（ADR-0089 の DR1）。
+  - 前の出力の memo の triggers と keep を、判定の時の写しとして比べる案。出力を状態の置き場にし、出力の無い周と読めない周に判定が消える（ADR-0088 の導出物）。
+  - 判定を verdict の file（memo.rs の `judgement`）で memo ごとに読む案。FR90 の入力の外の file を memo の数だけ読む。event log の MemoJudged が同じ語を同じ記帳の中で持つ。
+  - 観測の 1 周が判じた未反映を `Observed` と書き手の `Round` に載せて渡す案。§2 の表の「置き場に在る」と、doctor・管理 tick・着地の留めが読む列と食い違いうるうえ、candidates.rs の構造体と構築点を write-set に足す。
+  - 書き手が FR84 の数え（citation.rs の cited_at）で未反映を判じ直す案。FR90 の入力の外の main の追跡された file の全部を読み、dispatch の周の判定と 2 本になる（C2）。
+
 <!-- contracts:begin -->
 schema = 1
 
@@ -784,4 +851,15 @@ verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail lifecycle_mark_led
 size = "S"
 growth = ["crates/scribe2/src/fleet/lifecycle_mark.rs:30"]
 done = "(1) 実物の bd の manifest の形（`5:__DOLT__:<lock>:<root>:<gc の世代>:` の後に file 名と chunk 数の組）の 1 行を持つ embedded の台帳で、read_ledger が Noms を返し、root は 4 つ目の字、chunks は組の数の和、gen は gc の世代と journal でない file 名の digest〔lifecycle_mark_ledger_ の新しい歯 1 本・32 桁の root と 32 桁の 0 の gc の世代と table の組 2 つと journal の組 1 つの見本〕 (2) 2 つ目だけを `__LD_1__` に替えた形（ほかの欄は (1) の読める見本と同じ・組は偶数）は None で、同じ見本の 2 つ目が `__DOLT__` なら Noms（対照）。欄が足りない・組が奇数・数でない・root が空の実物の形も None〔lifecycle_mark_ledger_refuses_broken_manifests_and_metadata の見本を実物の形に直し、2 つ目の語の対を足す〕 (3) journal だけ・table つき・gc の世代違いの 3 形が実物の形の見本で同じ root・gen・chunks を返す〔lifecycle_mark_ledger_noms_reads_the_manifest_of_three_shapes の見本を直す〕 (4) 門が通した周の古さの印の歯が実物の形の manifest の見本で緑〔hook_stale_mark_ の helper stale_manifest を直す〕 base は 5 つ目を root と読むので実物の形で root が違うか None を返し、(1)〜(4) が RED"
+
+[[contract]]
+id = "g"
+title = "局面の導出に未反映の問いと処置の無い判定の memo を渡す — 全部の書き直しが未反映の裁定の置き場の id を閉じた台帳の問いへ引き、最後の MemoJudged が promote か close で判定の後に台帳が書いていない開いた memo を組んで渡し、読めない置き場を unmeasured に名指す（case-lifecycle §17・memo s2-07l.738.38.10）"
+req = ["FR90", "FR84", "FR87", "FR91", "AC60", "AC61"]
+section = "17"
+write-set = ["crates/scribe2/src/fleet/lifecycle.rs", "crates/scribe2/src/fleet/lifecycle_mark.rs", "crates/scribe2/src/pipe/dispatch/unreflected.rs", "crates/scribe2/src/seat/ledger.rs", "crates/scribe2/src/hook/graph_guard.rs", "crates/scribe2/src/ledger/form.rs", "crates/scribe2/src/pipe/dispatch/precheck.rs", "crates/scribe2-boundary/tests/e2e/fleet.rs"]
+verify = ["cargo nextest run -p scribe2 --lib --no-tests=fail unreflected_questions_", "cargo nextest run -p scribe2 --lib --no-tests=fail verdict_unhandled_", "cargo nextest run -p scribe2 --lib --no-tests=fail issue_updated_at_", "cargo nextest run -p scribe2-boundary --test e2e --no-tests=fail fleet_lifecycle_feeds_", "cargo run -q -p scribe2-boundary --bin scribe2 -- contracts check --repo ."]
+size = "M"
+growth = ["crates/scribe2/src/fleet/lifecycle.rs:15", "crates/scribe2/src/fleet/lifecycle_mark.rs:190", "crates/scribe2/src/pipe/dispatch/unreflected.rs:30", "crates/scribe2/src/seat/ledger.rs:15", "crates/scribe2/src/hook/graph_guard.rs:1", "crates/scribe2/src/ledger/form.rs:1", "crates/scribe2/src/pipe/dispatch/precheck.rs:1", "crates/scribe2-boundary/tests/e2e/fleet.rs:150"]
+done = "(1) 全部の書き直しが、未反映の裁定の置き場（state dir の pipe/unreflected）の裁定 id の列を、閉じた台帳の問い（label の問い）のうち notes の裁定の行にその id を持つ問いの id の列へ unreflected.rs に足す読み 1 本で引いて行 a1 の導出に渡し、その問いが ruling-unreflected・手番 seat で出る（窓より古く閉じた問いも載る）。置き場に無い id の問い・notes の散文にだけ id を書く問い・開いた問いは渡さず、置き場の無い周は空の列で、契機 (a) は同じ周の fire が書いた置き場を、(d)(e) は前の起こす側の周の置き場を読む (2) 置き場が在って読めない周は書き直しを止めず問いの列を空で渡し、unmeasured に question と unreflected-unreadable を 1 件名指し、置き場が読める周は名指さない (3) 開いた memo のうち event log の最後の判定の行（本体が Case の判定・bead がその memo）の語が promote か close で、台帳の updated_at がその行の ts より後でない memo の id の列を行 a1 の導出に渡し、その memo が memo-actionable・理由 verdict・手番 seat で出る。最後の判定が keep か unparsed の memo・判定の後に台帳が書いた memo・閉じた memo・判定の行の無い memo は渡さず、updated_at の無い memo は渡す (4) Issue が updated_at を字の Option で持ち、issues_of が読み、無い要素は None で、組みの 4 か所（issues_of・graph_guard.rs・form.rs と precheck.rs の歯の fixture・便の始めに数え直す）を直す 歯: unreflected_questions_（lifecycle_mark.rs の test 区間・無い置き場の空・読めない置き場・未反映の id の行を持つ閉じた問いだけの列を全体の等しさで比べ、写った id の問い・散文だけの問い・開いた問い・問いの label の無い bead を外す）・verdict_unhandled_（同じ test 区間・promote と close の在りと keep と unparsed の無し・判定の順の 2 通り・updated_at が ts と同じ memo の在りと 1 秒後の無しの対・updated_at の無い memo の在り・閉じた memo と memo でない bead の無し）・issue_updated_at_（seat/ledger.rs の test 区間・在る bead と無い bead の対とほかの欄の不変）が base で 0 本（rc 4・機能不在）、fleet_lifecycle_feeds_（e2e 2 本: 契機 (e) を先に撃つと置き場が無く document の問いの部品は無く promote の memo が verdict・pipe dispatch の後に document の問いが窓より古くても ruling-unreflected で operation の問いは question-closed・keep と処置の後の memo は memo-waiting・出力を消した後の契機 (e) が前の置き場から同じ局面を出す／読めない置き場で出力を消した後の契機 (e) が unmeasured に unreflected-unreadable を持ち、次の dispatch の後に名指しが消えて ruling-unreflected に戻る）は base の書き手が 2 つの列を空で渡すので RED（機能不在）"
 <!-- contracts:end -->
