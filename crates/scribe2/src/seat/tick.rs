@@ -490,6 +490,8 @@ pub fn run(flags: &Flags, manifest: Result<Manifest, Vec<RuleError>>) -> Outcome
     };
     if let Some(state) = &state {
         stamp_last(&state.path, flags.target, verdict.decision);
+        // 局面の出力の部分の書き直し（出力の無い置き場は何もしない・返りは捨てる＝rc と字は変えない・case-lifecycle.md §13）。
+        let _ = crate::fleet::lifecycle_partial::rewrite(&state.path);
     }
     let rc = if matches!(verdict.decision, TickDecision::Error(_)) { RC_REFUSED } else { RC_OK };
     Outcome { out: vec![format!("{} judged={}", render(flags.target, &verdict), judged.render())], err, rc }

@@ -2637,3 +2637,145 @@ fn seat_tick_alarm_unreflected_reads_an_unreadable_file_as_no_item() {
     assert!(tick_floor_is_step_wait(&line), "読めない file は未反映の 1 件でない: {line}");
     assert!(tick_floor_texts(&place).is_empty(), "0 key");
 }
+
+// ─────────── 局面の出力の部分の書き直し（設計 case-lifecycle.md §13・接頭辞 `seat_tick_rewrites_lifecycle_`） ───────────
+
+/// 切り替えの線でない main の字（印の値）。
+const LC_MAIN: &str = "abcdef0123456789abcdef0123456789abcdef01";
+
+/// 偽の bd と git を `<dir>/bin` に置く（呼びを `<dir>/vcs-calls` に 1 行ずつ残す）。
+fn tick_vcs_shims(place: &TickPlace) {
+    let calls = place.at("vcs-calls").display().to_string();
+    for name in ["bd", "git"] {
+        let path = place.at("bin").join(name);
+        fs::write(&path, format!("#!/bin/sh\nprintf '%s %s\\n' {name} \"$*\" >> '{calls}'\nexit 0\n")).ok();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).ok();
+    }
+}
+
+/// 偽の bd と git の呼びの数。
+fn tick_vcs_calls(place: &TickPlace) -> usize {
+    fs::read_to_string(place.at("vcs-calls")).map_or(0, |text| text.lines().count())
+}
+
+/// 局面の部品 1 つ（手番は §3 の表から引く）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn lc_part(kind: vessel::case::Kind, id: &str, phase: vessel::case::Phase, [reason, since]: [Option<&str>; 2], extra: vessel::case::Extra) -> vessel::case::Part {
+    let turn = vessel::case::turn_of(phase.as_str(), reason).expect("表に在る語");
+    vessel::case::Part {
+        part: kind,
+        id: id.to_owned(),
+        phase,
+        turn,
+        since: since.map(str::to_owned),
+        reason: reason.map(str::to_owned),
+        closed: false,
+        overdue: None,
+        links: vessel::case::Links::default(),
+        extra,
+    }
+}
+
+/// 置き場の event log（登録 row だけ）へ末尾の行を足す。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn tick_log_append(place: &TickPlace, tail: &[String]) {
+    let log = vessel::fleet::store::events_path(&place.state);
+    let mut text = fs::read_to_string(&log).expect("登録 row の event log が在る");
+    tail.iter().for_each(|line| text.push_str(&format!("{line}\n")));
+    fs::write(&log, text).expect("末尾を足せる");
+}
+
+/// 登録 row だけの event log の印（長さと 1 行目の ts）を入力の印に持つ前の全部の書き直しの出力を置き、その後ろに `tail` を足す。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn tick_lifecycle_put(place: &TickPlace, parts: Vec<vessel::case::Part>, tail: &[String]) {
+    use vessel::fleet::lifecycle::{render_output, Output as Lifecycle, Owned, Scope};
+    use vessel::fleet::lifecycle_mark::{read_events, Ledger, Marks};
+    let events = read_events(&place.state).expect("event log の印を読める");
+    tick_log_append(place, tail);
+    let stamp = vessel::fleet::cli::format_utc(unix_now().saturating_sub(600));
+    let out = Lifecycle {
+        generated_at: stamp.clone(),
+        scope: Scope::Full,
+        full_at: stamp,
+        interval_s: Some(600),
+        closed_window_h: Some(72),
+        marks: Marks { ledger: Ledger::Files { len: 1, mtime_ns: 1 }, events, main: LC_MAIN.to_owned() },
+        unmeasured: Vec::new(),
+        owned: Owned::default(),
+        parts,
+    };
+    let dir = place.state.join("fleet");
+    fs::create_dir_all(&dir).expect("fleet の dir を作れる");
+    fs::write(dir.join("lifecycle.json"), render_output(&out)).expect("出力を置ける");
+}
+
+/// 出力の在る置き場と無い置き場（同じ末尾）で tick を 1 回ずつ撃つ。どちらも rc 0・stdout と stderr は `lifecycle` の字を持たず、
+/// 2 つの置き場の字が一致し、偽の bd と git の呼びは 0 のまま（出力の無い置き場も同じ）。書き直された出力を返す。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn tick_lifecycle_round(parts: Vec<vessel::case::Part>, tail: &[String]) -> vessel::fleet::lifecycle::Output {
+    let (live, idle) = (tick_place(true), tick_place(true));
+    tick_lifecycle_put(&live, parts, tail);
+    tick_log_append(&idle, tail);
+    let mut seen = Vec::new();
+    for place in [&live, &idle] {
+        tick_vcs_shims(place);
+        let out = tick_run(place, &[]);
+        assert_eq!(rc_of(&out), i32::from(RC_OK), "tick の rc は 0 のまま: {}", stderr_of(&out));
+        let (stdout, stderr) = (stdout_of(&out), stderr_of(&out));
+        assert!(!stdout.contains("lifecycle") && !stderr.contains("lifecycle"), "字を足さない: {stdout}{stderr}");
+        seen.push((stdout, stderr));
+    }
+    assert_eq!(seen.first().map(|(out, err)| (out.replace(&live.state.display().to_string(), "S"), err.clone())), seen.get(1).map(|(out, err)| (out.replace(&idle.state.display().to_string(), "S"), err.clone())), "出力の有無で tick の字は変わらない");
+    assert_eq!((tick_vcs_calls(&live), tick_vcs_calls(&idle)), (0, 0), "bd と git は撃たない");
+    assert!(!idle.state.join("fleet").join("lifecycle.json").exists(), "出力の無い置き場は作らない");
+    match vessel::fleet::lifecycle::read_output(&live.state) {
+        vessel::fleet::lifecycle::Reading::Read(found) => Some(*found),
+        _ => None,
+    }
+    .expect("書き直された出力を読める")
+}
+
+/// (a) tick の周で期日の memo が memo-actionable へ移り（理由 trigger-met・since は期日）、keep の在る同じ期日の memo は動かない。
+/// scope は partial。tick の rc と字は変わらない。
+#[test]
+fn seat_tick_rewrites_lifecycle_moves_a_due_memo_without_changing_the_tick() {
+    use vessel::case::{Extra, Kind, Phase, TriggerView};
+    let due = vessel::fleet::cli::format_utc(unix_now().saturating_sub(3_600));
+    let waiting = |id: &str, keep: bool| {
+        let view = TriggerView { form: "期日".to_owned(), value: due.clone(), met: false };
+        lc_part(Kind::Memo, id, Phase::MemoWaiting, [None, None], Extra::Memo { due: Some(due.clone()), triggers: Some(vec![view]), keep: Some(keep) })
+    };
+    let out = tick_lifecycle_round(vec![waiting("s2-m.1", false), waiting("s2-m.2", true)], &[]);
+    let find = |id: &str| out.parts.iter().find(|part| part.id == id).map(|part| (part.phase, part.reason.clone(), part.since.clone()));
+    assert_eq!(find("s2-m.1"), Some((Phase::MemoActionable, Some("trigger-met".to_owned()), Some(due.clone()))), "期日の過ぎた memo は移る");
+    assert_eq!(find("s2-m.2"), Some((Phase::MemoWaiting, None, None)), "keep の在る memo は動かない");
+    assert_eq!(out.scope, vessel::fleet::lifecycle::Scope::Partial);
+}
+
+/// (b) tick の周で、末尾に段の行を持つ便の局面が移る（Spawned → Gated の PASS で run-landing）。契約の部品は動かない。
+#[test]
+fn seat_tick_rewrites_lifecycle_moves_a_run_stage_without_changing_the_tick() {
+    use vessel::case::{Extra, Kind, Phase};
+    let stamp = vessel::fleet::cli::format_utc(unix_now().saturating_sub(60));
+    let pointer = Extra::Contract { pointer: Some("design = docs/design/x.md#a".to_owned()) };
+    let contract = lc_part(Kind::Contract, "s2-w.1", Phase::ContractRunning, [Some("run-implementing"), None], pointer);
+    let run = lc_part(Kind::Run, "r-w1", Phase::RunImplementing, [Some("Spawned"), Some("2026-09-30T00:00:00Z")], Extra::Run { bead: "s2-w.1".to_owned() });
+    let tail = [format!("{{\"schema\":1,\"ts\":\"{stamp}\",\"kind\":\"RunStage\",\"run\":\"r-w1\",\"bead\":\"s2-w.1\",\"host\":\"h\",\"actor\":\"machine\",\"stage\":\"Gated\",\"detail\":\"verdict:PASS\"}}")];
+    let out = tick_lifecycle_round(vec![contract.clone(), run], &tail);
+    let find = |id: &str| out.parts.iter().find(|part| part.id == id);
+    let moved = find("r-w1").map(|part| (part.phase, part.reason.clone(), part.since.clone()));
+    assert_eq!(moved, Some((Phase::RunLanding, Some("Gated".to_owned()), Some(stamp))), "便の局面が移る");
+    assert_eq!(find("s2-w.1"), Some(&contract), "契約の部品は動かない");
+}

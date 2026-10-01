@@ -642,6 +642,72 @@ fn read_events(events: &Path) -> Result<Vec<Event>, Vec<StoreError>> {
     }
 }
 
+/// 1 行目を読む上限（4 KiB・部分の書き直しが log の頭を読む byte の上限）。
+const HEAD_WINDOW: u64 = 4 * 1024;
+
+/// 末尾の読みが繋がらない形（部分の書き直しは書かず `unreadable` の印を付ける）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Unjoined {
+    /// 1 行目の ts が印の head と違う。
+    Head,
+    /// log が印の長さより短い。
+    Short,
+    /// 印の長さの直前の byte が改行でない。
+    NotNewline,
+    /// 末尾が読めない（UTF-8 でない・行が読めない・読みが落ちた）。
+    Unreadable,
+}
+
+/// 印の長さから先の読み（`len` は読んだ末尾の次の byte 位置・`events` は完結した行だけ）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Tail {
+    /// 末尾の event。
+    pub events: Vec<Event>,
+    /// 読み終えた byte 位置（完結した最後の行の次）。
+    pub len: u64,
+}
+
+/// log の 1 行目の ts（先頭 4 KiB まで・読めなければ `None`）。
+pub fn read_head<R: Read + Seek>(log: &mut R) -> Option<String> {
+    let mut window = Vec::new();
+    log.seek(SeekFrom::Start(0)).ok()?;
+    log.by_ref().take(HEAD_WINDOW).read_to_end(&mut window).ok()?;
+    let line = window.split(|byte| *byte == b'\n').next().unwrap_or_default();
+    let tree = super::json_tree::parse(std::str::from_utf8(line).ok()?).ok()?;
+    tree.get("ts").and_then(super::json_tree::Tree::as_str).map(str::to_owned)
+}
+
+/// `len` から末尾まで読む（`read_all` は変えない）。読む byte は `len` の直前の 1 byte と末尾だけで、直前が改行でない周と
+/// log が `len` より短い周は繋がらない。完結しない末尾の行は読まず、返す `len` に含めない。
+pub fn read_after<R: Read + Seek>(log: &mut R, len: u64) -> Result<Tail, Unjoined> {
+    let size = log.seek(SeekFrom::End(0)).map_err(|_| Unjoined::Unreadable)?;
+    if size < len {
+        return Err(Unjoined::Short);
+    }
+    let from = len.saturating_sub(1);
+    let mut bytes = Vec::new();
+    log.seek(SeekFrom::Start(from)).and_then(|_| log.read_to_end(&mut bytes)).map_err(|_| Unjoined::Unreadable)?;
+    let body: &[u8] = match (len > 0, bytes.split_first()) {
+        (false, _) => &bytes,
+        (true, Some((b'\n', rest))) => rest,
+        (true, _) => return Err(Unjoined::NotNewline),
+    };
+    let whole = body.iter().rposition(|byte| *byte == b'\n').map_or(0, |at| at + 1);
+    let text = body.get(..whole).and_then(|found| std::str::from_utf8(found).ok()).ok_or(Unjoined::Unreadable)?;
+    let events = text.lines().map(Event::from_line).collect::<Result<Vec<_>, _>>().map_err(|_| Unjoined::Unreadable)?;
+    Ok(Tail { events, len: len + whole as u64 })
+}
+
+/// 印（長さと head）に繋がる末尾を読む: 1 行目の ts が印の head と違えば [`Unjoined::Head`]（長さ 0 の印は head を持たないので比べない）。
+/// 読んだ head を末尾と対で返す。
+pub fn read_joined<R: Read + Seek>(log: &mut R, len: u64, head: &Option<String>) -> Result<(Option<String>, Tail), Unjoined> {
+    let found = read_head(log);
+    if len > 0 && found != *head {
+        return Err(Unjoined::Head);
+    }
+    read_after(log, len).map(|tail| (found, tail))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1212,5 +1278,94 @@ mod tests {
             prop_assert_ne!(owner, Owner::Dead);
             prop_assert_eq!(asked.get(), 0);
         }
+    }
+
+    /// 読んだ byte を数える包み（seek は数えない）。
+    struct Counting<R> {
+        inner: R,
+        read: u64,
+    }
+
+    impl<R: std::io::Read> std::io::Read for Counting<R> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let found = self.inner.read(buf)?;
+            self.read += found as u64;
+            Ok(found)
+        }
+    }
+
+    impl<R: std::io::Seek> std::io::Seek for Counting<R> {
+        fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+            self.inner.seek(pos)
+        }
+    }
+
+    const HEAD_TS: &str = "2026-09-01T00:00:00Z";
+
+    fn stage_line(ts: &str, stage: &str) -> String {
+        format!("{{\"schema\":1,\"ts\":\"{ts}\",\"kind\":\"RunStage\",\"run\":\"r\",\"bead\":\"b\",\"host\":\"h\",\"actor\":\"machine\",\"stage\":\"{stage}\"}}\n")
+    }
+
+    /// 1 行目と読まれない詰め物で `filler` byte 以上に膨らませた log（印の長さ）と、末尾の 3 行。
+    fn log_of(filler: usize) -> (Vec<u8>, u64, String) {
+        let mut log = stage_line(HEAD_TS, "Intake").into_bytes();
+        let row = format!("{}\n", "x".repeat(1_023));
+        while log.len() < filler {
+            log.extend_from_slice(row.as_bytes());
+        }
+        let len = log.len() as u64;
+        let tail: String = ["Spawned", "Implemented", "Gated"].iter().map(|stage| stage_line("2026-10-01T00:00:00Z", stage)).collect();
+        log.extend_from_slice(tail.as_bytes());
+        (log, len, tail)
+    }
+
+    /// 末尾の読みの byte は log の大きさに依らず、印の直前の 1 byte と末尾だけ（10 MB と 20 MB で一致・末尾の長さ + 1）。
+    #[test]
+    fn store_read_after_reads_only_the_tail_and_the_byte_before_it_at_any_log_size() {
+        let mut counted = Vec::new();
+        for size in [10 << 20, 20 << 20] {
+            let (log, len, tail) = log_of(size);
+            let mut reader = Counting { inner: std::io::Cursor::new(log), read: 0 };
+            let found = super::read_after(&mut reader, len).expect("繋がる");
+            assert_eq!(found.events.len(), 3, "末尾の 3 行");
+            assert_eq!(found.len, len + tail.len() as u64, "読み終えた位置は log の末尾");
+            assert_eq!(reader.read, tail.len() as u64 + 1, "末尾の長さ + 1");
+            counted.push(reader.read);
+        }
+        assert_eq!(counted.first(), counted.get(1), "10 MB と 20 MB で同じ");
+    }
+
+    /// 1 行目の ts が印の head と違う周は繋がらず、同じ周は繋がる（長さ 0 の印は head を持たないので比べない）。
+    #[test]
+    fn store_read_after_refuses_a_log_whose_first_line_differs_from_the_mark() {
+        let (log, len, _) = log_of(4_096);
+        let read = |head: Option<&str>, len: u64| super::read_joined(&mut std::io::Cursor::new(log.clone()), len, &head.map(str::to_owned));
+        assert_eq!(read(Some("2026-01-01T00:00:00Z"), len).err(), Some(super::Unjoined::Head));
+        assert_eq!(read(None, len).err(), Some(super::Unjoined::Head), "head の無い印は head の在る log に繋がらない");
+        assert_eq!(read(Some(HEAD_TS), len).map(|(head, tail)| (head, tail.events.len())), Ok((Some(HEAD_TS.to_owned()), 3)));
+        let (small, _, _) = log_of(0);
+        let whole = super::read_joined(&mut std::io::Cursor::new(small), 0, &None).map(|(head, tail)| (head, tail.events.len()));
+        assert_eq!(whole, Ok((Some(HEAD_TS.to_owned()), 4)), "長さ 0 の印は head を比べず、先頭から読む");
+    }
+
+    /// log が印の長さより短い周は繋がらない。
+    #[test]
+    fn store_read_after_refuses_a_log_shorter_than_the_mark() {
+        let (log, len, tail) = log_of(4_096);
+        let total = len + tail.len() as u64;
+        assert_eq!(super::read_after(&mut std::io::Cursor::new(log.clone()), total + 1).err(), Some(super::Unjoined::Short));
+        assert_eq!(super::read_after(&mut std::io::Cursor::new(Vec::new()), 1).err(), Some(super::Unjoined::Short), "log が無い周");
+        let found = super::read_after(&mut std::io::Cursor::new(log), total).expect("末尾が空なら繋がる");
+        assert_eq!((found.events.len(), found.len), (0, total), "印の長さが log の末尾なら末尾は空");
+    }
+
+    /// 印の長さの直前の byte が改行でない周は繋がらず、完結しない末尾の行は読まない。
+    #[test]
+    fn store_read_after_refuses_a_mark_inside_a_line_and_leaves_an_unterminated_line() {
+        let (mut log, len, tail) = log_of(4_096);
+        assert_eq!(super::read_after(&mut std::io::Cursor::new(log.clone()), len + 5).err(), Some(super::Unjoined::NotNewline));
+        log.extend_from_slice(b"{\"schema\":1,\"ts\":");
+        let found = super::read_after(&mut std::io::Cursor::new(log), len).expect("繋がる");
+        assert_eq!((found.events.len(), found.len), (3, len + tail.len() as u64), "書きかけの行は読まず、位置にも含めない");
     }
 }
