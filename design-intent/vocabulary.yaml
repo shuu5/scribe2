@@ -975,7 +975,7 @@ terms:
     aliases: [live run cap]
     definition: host で同時に走る live な便の本数の上限。 値は rules 行 pipe.max_live が持ち (user 裁定 id 付き・憲法 C5)、 受付が便を作る前に live な便を数えて値以上の周は typed に断り、 dispatcher はその契約を列に留めて次の契機で再判定する。 走行中の便には効かない。 env・launcher の変数・host の宣言 file には置かない (ADR-0035)。 並列の枠 (変異検査の並列度・memory の枠) とは別。
     relationships: [live な便, 受付, dispatcher, 起動の列, rules 行, 並列の枠]
-    flagged_ambiguities: ["上限: 同時走行の最大値 (便の本数・pipe.max_live) と並列の枠 (検証の行の並列度・memory) と上限停止 (口座の使用上限) は別義"]
+    flagged_ambiguities: ["上限: 同時走行の最大値 (便の本数・pipe.max_live) と並列の枠 (検証の行の並列度・memory) と上限停止 (口座の使用上限) と上限の許可 (bead 1 つの消費の上限の上げ・ADR-0106) は別義"]
   - canonical: 着地の列
     domain: consumer
     aliases: [landing queue]
@@ -1997,10 +1997,10 @@ terms:
     aliases: [code facts field]
     definition: 契約表の行の任意の欄 code-facts。 要素は列 (refs・files・callers・literals・patterns・teeth・vis) と項目と値の 1 組で、 行の審査・受付・起動の列が各々の commit の code の索引で測り、 違えば断るか受付の理由 code-facts で待たせる (ADR-0105)。
     relationships: [code の索引, 逆引きの表, 受付, 起動の列]
-  # ---------------------------------------------------------------- 上限の許可 (ADR-0106・proposed)
+  # ---------------------------------------------------------------- 上限の許可 (ADR-0106)
   - canonical: 上限の許可
     domain: consumer
-    aliases: [limit permit]
-    definition: 消費の上限の rules 行のうち rules 行 pipe.permit_rows が名指す 1 行を、 bead 1 つに限って manifest の値より大きい有限の値へ上げる記録 (ADR-0106・proposed・設計 docs/design/limit-permit.md)。 event log の kind LimitPermitted の 1 件で、 対話面の chat の経路の発話に結んだ裁定 id を要り、 期限 (上限は rules 行 pipe.permit_max_h)・bead の着地・同じ bead と行の新しい記帳・取り消しで切れる。 読むのはその bead の便の gate の予算の照合と gate が起こす lens だけで、 manifest の値は変えない。 上限を外す形は持たない。 event の kind と口 pipe permit はこの語の別名として書く。
+    aliases: [limit permit, LimitPermitted, pipe permit]
+    definition: 消費の上限の rules 行のうち rules 行 pipe.permit_rows が名指す、 許可の読み手を持つ 1 行 (予算 cap の行) を、 bead 1 つに限って manifest の値より大きい有限の値へ上げる記録 (ADR-0106・SRS FR110・FR111・設計 docs/design/limit-permit.md)。 event log の kind LimitPermitted の 1 件で (取り消しは同じ kind で detail が revoked の別の記帳で、 許可に数えない)、 対話の session の経路 (機械の値 chat) の発話に結んだ裁定 id を要り、 期限 (上限は rules 行 pipe.permit_max_h)・bead の着地・同じ bead と行の新しい記帳・取り消しで切れ、 同じ bead と行の最新の記帳がその許可自身で値が manifest の値より大きい周だけ効く。 読むのはその bead の便の gate の予算の照合と gate が起こす lens だけで、 manifest の値は変えない。 上限を外す形は持たない。 event の kind と口 pipe permit はこの語の別名として書く。
     relationships: [rules 行, manifest, event log, 裁定 id, 裁定 event, 発話 event, 発話の経路, 対話面, 台帳の問い, gate, lens]
-    flagged_ambiguities: [上限の許可 (bead 1 つの消費の上限を上げる記録・ADR-0106) と上限の余地 (受付が見込み行数と比べる file の上限との差・ADR-0057) と上限停止 (口座残量の上限で便が止まること) は別, 型の名 Allowance は口座残量の型で使用済みなので、 上限の許可の訳に使わない]
+    flagged_ambiguities: [上限の許可 (bead 1 つの消費の上限を上げる記録・ADR-0106) と上限の余地 (受付が見込み行数と比べる file の上限との差・ADR-0057) と上限停止 (口座残量の上限で便が止まること) は別, 型の名 Allowance は口座残量の型で使用済みなので、 上限の許可の訳に使わない, 上限の許可 (記帳と取り消しは権能 approve の手・FR41) と承認 event (FR16・席が逐語を渡すので許可の根拠にしない) は別, 断りの語 landed と状態の語 landed (bead の便が着地済み) は着地の形の close の理由 landed <sha> ci=… と同じ字で別の欄]
