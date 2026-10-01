@@ -2102,3 +2102,691 @@ fn pipe_review_record_listed_returns_each_record_of_the_row_and_counts_the_unrea
     assert_eq!(unreadable, 2, "読めない記録は数だけ: file の無い dir と schema の違う記録");
     clean(&[&state]);
 }
+
+// ───── 行の審査の口（設計 docs/design/row-review.md §3・§9・行 a・接頭辞 `pipe_review_ref_`） ─────
+//
+// `pipe review --ref SHA` を実 binary で撃つ。偽の `bd`（PATH の先頭）と偽の lens（起動のたびに log へ 1 行・版の flag には版の 1 行を返す）で、
+// 変わった行・祖先の層・機械の検査・使い回し・結果の語・記録の形を外形から測る。設計の PR の commit は anchor の repo から切った別の木で作る
+// （anchor の作業の木は main のまま置く）。口 (A)〜(F) は書いた記録を直に読んで測る（書き手と読み手の形の一致）。
+
+/// 行の審査の 1 つの置き場。
+struct Rv {
+    /// anchor の repo（作業の木は main）。
+    repo: PathBuf,
+    /// 置き場。
+    state: PathBuf,
+    /// PATH（偽の `bd` を先頭に積む）。
+    path: String,
+    /// `--lens` の cmd。
+    lens: String,
+    /// `--rules` の写し。
+    rules: String,
+    /// main の sha（`origin/main` の先端）。
+    main: String,
+}
+
+/// 行 `id`（節 `section`）の欄。`over` の欄（key と TOML の値の字面）は行の既定を置き換える。
+fn rv_row(id: &str, section: u32, over: &[(&str, &str)]) -> Vec<String> {
+    let mut drop: Vec<&str> = over.iter().map(|(key, _)| *key).collect();
+    drop.push("section");
+    let mut add = vec![format!("section = \"{section}\"")];
+    add.extend(over.iter().map(|(key, value)| format!("{key} = {value}")));
+    row_fields(id, &drop, &add.iter().map(String::as_str).collect::<Vec<&str>>())
+}
+
+/// 設計 doc（節 n の本文は `bodies[n-1]`・行は区間の中）。
+fn rv_doc(bodies: &[&str], rows: &[Vec<String>]) -> String {
+    let sections: String = bodies.iter().enumerate().map(|(n, body)| format!("## {}. 節 {}\n\n{body}\n\n", n + 1, n + 1)).collect();
+    let listed: Vec<String> = rows.iter().map(|fields| format!("[[contract]]\n{}", fields.join("\n"))).collect();
+    let (begin, end) = (vessel::pipe::table::BEGIN, vessel::pipe::table::END);
+    format!("# 設計: toy\n\n{sections}{begin}\nschema = 1\n\n{}\n{end}\n", listed.join("\n\n"))
+}
+
+/// 実行権つきの `/bin/sh` script を書き、その path を返す。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn rv_script(path: &Path, body: &str) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    fs::write(path, format!("#!/bin/sh\n{body}")).expect("script を書ける");
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).expect("script に実行権を付ける");
+    path.display().to_string()
+}
+
+/// 偽 lens の script（`--print-version` の周は版の 1 行〔`rv-version` の中身・無ければ既定〕を返し、`rv-version-rc` が在ればその rc で終わる）。
+/// それ以外の周は log `rv-log` に 1 行（行・cwd・HEAD・審査の木の file の有無・撃ち中の受付札）を足し、`rv-out.<行 id>` か `rv-out` の中身
+/// （無ければ PASS）を返す。
+fn rv_lens_script(state: &Path) -> String {
+    let (s, slots) = (state.display(), vessel::seat::host_slots_dir(state).display().to_string());
+    let body = format!(
+        r#"for a in "$@"; do
+  if [ "$a" = "--print-version" ]; then
+    if [ -f '{s}/rv-version-rc' ]; then exit "$(cat '{s}/rv-version-rc')"; fi
+    if [ -f '{s}/rv-version' ]; then cat '{s}/rv-version'; else echo 'lens-version fake=1'; fi
+    exit 0
+  fi
+done
+cat >/dev/null
+row=$(sed -n 's/^design = "\(.*\)"$/\1/p' "$1")
+id=${{row##*#}}
+fresh=no; [ -e src/fresh.rs ] && fresh=yes
+added=no; [ -e src/added.rs ] && added=yes
+printf 'row=%s cwd=%s head=%s fresh=%s added=%s slots=%s\n' "$row" "$(pwd -P)" "$(git rev-parse HEAD)" "$fresh" "$added" "$(cat '{slots}'/*.slot 2>/dev/null | tr '\n' ' ')" >> '{s}/rv-log'
+if [ -f '{s}/rv-out.'"$id" ]; then cat '{s}/rv-out.'"$id"; elif [ -f '{s}/rv-out' ]; then cat '{s}/rv-out'; else echo '{{"verdict":"PASS","evidence":"fake"}}'; fi
+"#
+    );
+    format!("{} {{contract}} {{worktree}}", rv_script(&state.join("rv-lens.sh"), &body))
+}
+
+/// 口が読む manifest（受付の上限の写しに台帳の待ち上限の行を足す）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn rv_rules(state: &Path) -> String {
+    let base = fs::read_to_string(ceiling_rules(state)).expect("受付の写しを読める");
+    let row = "[[rule]]\nid = \"seat.ledger_timeout_s\"\nkind = \"LedgerTimeoutS\"\nvalue = 60\nenabled = true\nruling = \"t\"\nruled_at = \"d\"\n";
+    let path = state.join("rules-rv.toml");
+    fs::write(&path, format!("{base}\n{row}")).expect("rules の写しを書ける");
+    path.display().to_string()
+}
+
+/// 偽の `bd`（PATH の先頭に置く 1 本）が返す台帳を書き換える（`rc` が `Some` の周は台帳を返さずその rc で終わる）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn rv_ledger(place: &Rv, issues: &[String], rc: Option<u8>) {
+    let json = place.state.join("rv-ledger.json");
+    fs::write(&json, format!("[{}]\n", issues.join(","))).expect("偽の台帳を書ける");
+    let body = rc.map_or_else(|| format!("cat '{}'\n", json.display()), |code| format!("exit {code}\n"));
+    rv_script(&place.state.join("rv-bin").join("bd"), &body);
+}
+
+/// 行の審査の置き場: main に設計 doc と file を commit し、`origin/main` を main の先端に置く（偽の台帳は空）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn rv_place(bodies: &[&str], rows: &[Vec<String>], files: &[(&str, String)]) -> Rv {
+    let (repo, state) = repo_with_state();
+    write_design(&repo, &rv_doc(bodies, rows));
+    let mut all = vec![(".vessel.toml", PRELENS_VESSEL.to_owned())];
+    all.extend(files.iter().cloned());
+    for (path, body) in &all {
+        let target = repo.join(path);
+        fs::create_dir_all(target.parent().expect("親 dir が在る")).expect("dir を作れる");
+        fs::write(&target, body).expect("file を書ける");
+    }
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "rv-main"]);
+    let main = git(&repo, &["rev-parse", "HEAD"]);
+    git(&repo, &["update-ref", "refs/remotes/origin/main", &main]);
+    fs::create_dir_all(state.join("rv-bin")).expect("偽 bd の dir を作れる");
+    let (lens, rules) = (rv_lens_script(&state), rv_rules(&state));
+    let path = format!("{}:{}", state.join("rv-bin").display(), crate::toolbox_path(&state));
+    let place = Rv { repo, state, path, lens, rules, main };
+    rv_ledger(&place, &[], None);
+    place
+}
+
+/// 設計の PR の commit を作る（anchor の repo から切った detach の別の木で `edits` を書いて commit し、木を外す・空の commit も作る）。
+/// `parent` が `None` なら main の上。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn rv_commit(place: &Rv, parent: Option<&str>, edits: &[(&str, String)]) -> String {
+    let tree = tmp().join("rv-tree");
+    let text = tree.display().to_string();
+    git(&place.repo, &["worktree", "add", "-q", "--detach", &text, parent.unwrap_or(&place.main)]);
+    for (path, body) in edits {
+        let target = tree.join(path);
+        fs::create_dir_all(target.parent().expect("親 dir が在る")).expect("dir を作れる");
+        fs::write(&target, body).expect("file を書ける");
+    }
+    git(&tree, &["add", "-A"]);
+    git(&tree, &["commit", "-q", "--allow-empty", "-m", "rv-ref"]);
+    let sha = git(&tree, &["rev-parse", "HEAD"]);
+    git(&place.repo, &["worktree", "remove", "--force", &text]);
+    sha
+}
+
+/// `pipe review --ref <sha>` を撃つ。
+fn rv_review(place: &Rv, sha: &str) -> Output {
+    run_pipe_with_path(
+        &place.path,
+        &[
+            "review", "--ref", sha, "--repo", &place.repo.display().to_string(), "--state-dir", &place.state.display().to_string(),
+            "--lens", &place.lens, "--rules", &place.rules,
+        ],
+    )
+}
+
+/// 偽 lens の log（起動ごとに 1 行）。
+fn rv_log(place: &Rv) -> Vec<String> {
+    fs::read_to_string(place.state.join("rv-log")).unwrap_or_default().lines().map(str::to_owned).collect()
+}
+
+/// log の行の `key=` の値（`slots` は行の残り全部・他は次の空白まで）。
+fn rv_field(line: &str, key: &str) -> String {
+    let rest = line.split_once(&format!("{key}=")).map_or("", |(_, rest)| rest);
+    if key == "slots" { rest.to_owned() } else { rest.split(' ').next().unwrap_or_default().to_owned() }
+}
+
+/// 偽 lens が撃たれた行 id（字の順・重複なし）。
+fn rv_fired(place: &Rv) -> Vec<String> {
+    let ids: BTreeSet<String> = rv_log(place).iter().map(|line| rv_field(line, "row").rsplit('#').next().unwrap_or_default().to_owned()).collect();
+    ids.into_iter().collect()
+}
+
+/// ref の記録の全文（無ければ空）。
+fn rv_ref_text(place: &Rv, sha: &str) -> String {
+    fs::read_to_string(rr_root(&place.state).join("ref").join(sha)).unwrap_or_default()
+}
+
+/// `key=value` の語の対（空白で割る）。
+fn rv_words(line: &str) -> std::collections::BTreeMap<String, String> {
+    line.split(' ').filter_map(|word| word.split_once('=')).map(|(key, value)| (key.to_owned(), value.to_owned())).collect()
+}
+
+/// ref の記録の row の行（`row` の語が `#<id>` で終わる行）の語の対。
+fn rv_row_line(text: &str, id: &str) -> std::collections::BTreeMap<String, String> {
+    let found = text.lines().filter(|line| line.starts_with("row=")).map(rv_words).find(|words| words.get("row").is_some_and(|row| row.ends_with(&format!("#{id}"))));
+    found.unwrap_or_default()
+}
+
+/// ref の記録の row の行の id（`#` の後ろ・記録の順）。
+fn rv_row_ids(text: &str) -> Vec<String> {
+    text.lines().filter(|line| line.starts_with("row=")).filter_map(|line| Some(rv_words(line).get("row")?.rsplit('#').next()?.to_owned())).collect()
+}
+
+/// 行の記録（`<根>/<名>/record`・1 行目 schema の後ろの `key=value`）。
+fn rv_record(place: &Rv, name: &str) -> std::collections::BTreeMap<String, String> {
+    let text = fs::read_to_string(rr_root(&place.state).join(name).join("record")).unwrap_or_default();
+    text.lines().skip(1).filter_map(|line| line.split_once('=')).map(|(key, value)| (key.to_owned(), value.to_owned())).collect()
+}
+
+/// stdout の `[ROW-REVIEW]` の行。
+fn rv_lines(out: &Output) -> Vec<String> {
+    stdout_of(out).lines().map(str::to_owned).collect()
+}
+
+/// (a) help の頁と usage が `review` を 1 行ずつ載せ、args が許す flag は `--ref` `--repo` `--state-dir` `--lens` `--rules` の 5 つだけ
+/// （`--bd` など 5 つの外は未知の引数で断る）。
+#[test]
+fn pipe_review_ref_help_and_usage_name_the_subcommand_and_five_flags() {
+    let page = stdout_of(&bin_cmd().args(["help", "pipe"]).output().expect("help を撃てる"));
+    let line = page.lines().find(|line| line.trim_start().starts_with("review ")).unwrap_or_default();
+    assert!(line.contains("design PR"), "help の頁の review の 1 行: {page}");
+    let usage = vessel::pipe::cli::usage();
+    assert!(usage.contains("pipe review --ref SHA --repo R --state-dir S --lens CMD [--rules PATH]"), "usage: {usage}");
+    let dir = tmp().display().to_string();
+    let args = ["--ref", "x", "--repo", &dir, "--state-dir", &dir, "--lens", "x", "--rules", "/nonexistent"];
+    let known = run_pipe(&[&["review"][..], &args[..]].concat());
+    assert!(!stderr_of(&known).contains("未知の引数"), "5 つの flag は閉包を通る: {}", stderr_of(&known));
+    for outside in ["--bd", "--runner", "--run", "--curl"] {
+        let out = run_pipe(&[&["review"][..], &args[..], &[outside, "x"][..]].concat());
+        assert!(stderr_of(&out).contains(&format!("未知の引数 {outside}")), "{outside} は閉包の外で名指して断る: {}", stderr_of(&out));
+    }
+}
+
+/// (b) 変わった行: 契約の欄を変えた行 b・節の本文だけを変えた行 c・新しい行 f・bead の無い変えた行 e は撃たれ、変わらない行 a と指す bead が
+/// 全部 closed の行 d は撃たれない（偽 lens の呼び出しの行 id の集合と母集団の行数・ref の記録の row の行が同じ 4 本）。全部 PASS で rc 0。
+#[test]
+fn pipe_review_ref_fires_only_the_rows_whose_digest_changed() {
+    let bodies = ["本文 1", "本文 2", "本文 3", "本文 4", "本文 5"];
+    let base = [rv_row("a", 1, &[]), rv_row("b", 2, &[]), rv_row("c", 3, &[]), rv_row("d", 4, &[]), rv_row("e", 5, &[])];
+    let place = rv_place(&bodies, &base, &[]);
+    let issues = [("s2-rv.1", "open", "a"), ("s2-rv.2", "open", "b"), ("s2-rv.3", "open", "c"), ("s2-rv.4", "closed", "d")];
+    rv_ledger(&place, &issues.map(|(id, status, row)| prelens_issue(id, status, row, &[])), None);
+    let new_done = ("done", "\"done を変えた\"");
+    let rows = [rv_row("a", 1, &[]), rv_row("b", 2, &[new_done]), rv_row("c", 3, &[]), rv_row("d", 4, &[new_done]), rv_row("e", 5, &[new_done]), rv_row("f", 1, &[])];
+    let edited = ["本文 1", "本文 2", "本文 3 を変えた", "本文 4", "本文 5"];
+    let sha = rv_commit(&place, None, &[(DESIGN_FILE, rv_doc(&edited, &rows))]);
+    let out = rv_review(&place, &sha);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "全部 PASS は rc 0: {} / {}", stdout_of(&out), stderr_of(&out));
+    assert_eq!(rv_fired(&place), ["b", "c", "e", "f"], "撃たれた行 id（a は不変・d は着地済み）");
+    assert_eq!(rv_log(&place).len(), 4, "母集団は 4 行（偽 lens の呼び出しの数）");
+    assert_eq!(rv_row_ids(&rv_ref_text(&place, &sha)), ["b", "c", "e", "f"], "ref の記録の row の行も同じ 4 本");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// 歯の置き場を持つ検証行（nextest の filter 語 `pre_<x>_`・歯の file は `crates/toy/tests/<x>.rs`）。
+fn rv_tooth_row(id: &str) -> Vec<String> {
+    let verify = format!("[\"cargo nextest run -p toy --no-tests=fail pre_{id}_\"]");
+    row_fields(id, &["write-set", "verify"], &[&format!("verify = {verify}")])
+}
+
+/// 歯の file（`#[test]` の直下の fn の名が `pre_<x>_` を含む）。
+fn rv_tooth_file(name: &str) -> String {
+    format!("#[test]\nfn pre_{name}_one() {{}}\n")
+}
+
+/// (b)・code の file だけを変えた commit（表と節は main と字で同じ）: verify の接頭辞に当たる歯を別の file に足して歯の置き場の導出が変わる行 p は
+/// 撃たれ、導出が変わらない行 q は撃たれない。受付の生成が断る行（要件面に無い id）は表と節と断りの字が main と同じなら撃たれず、表のその行を
+/// 変えると（断りの字が変わると）撃たれる。
+#[test]
+fn pipe_review_ref_code_only_commit_fires_the_rows_whose_derivation_moved_and_a_refusal_follows_its_text() {
+    let bodies = ["本文 1"];
+    let base = [rv_tooth_row("p"), rv_tooth_row("q"), rv_row("g", 1, &[("req", "[\"FR99\"]")])];
+    let files = [("crates/toy/tests/p.rs", rv_tooth_file("p")), ("crates/toy/tests/q.rs", rv_tooth_file("q"))];
+    let place = rv_place(&bodies, &base, &files);
+    let table = rv_doc(&bodies, &base);
+    let moved = rv_commit(&place, None, &[("crates/toy/tests/p2.rs", rv_tooth_file("p"))]);
+    assert_eq!(git(&place.repo, &["show", &format!("{moved}:{DESIGN_FILE}")]), table.trim_end(), "表と節は main と字で同じ");
+    let out = rv_review(&place, &moved);
+    assert!(out.status.code().is_some_and(|rc| rc == i32::from(RC_OK) || rc == i32::from(RC_REFUSED)), "{} / {}", stdout_of(&out), stderr_of(&out));
+    let text = rv_ref_text(&place, &moved);
+    assert_eq!(rv_row_ids(&text), ["p"], "歯の置き場の導出が変わった行だけ（q は不変・g は断りの字が同じ）: {text}");
+    let edited = [base[0].clone(), base[1].clone(), rv_row("g", 1, &[("req", "[\"FR98\"]")])];
+    let changed = rv_commit(&place, None, &[(DESIGN_FILE, rv_doc(&bodies, &edited))]);
+    rv_review(&place, &changed);
+    assert_eq!(rv_row_ids(&rv_ref_text(&place, &changed)), ["g"], "断りの字が変わった行は撃たれる");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (c) 変わった行が 0 本の sha（空の commit）は偽 lens 0 回で rc 0・ref の記録は row の行を持たず result=pass で、stdout は result の 1 行だけ
+/// （行ごとの行も notify の行も無い）。
+#[test]
+fn pipe_review_ref_without_changed_rows_writes_a_pass_record_and_fires_nothing() {
+    let place = rv_place(&["本文 1"], &[rv_row("a", 1, &[])], &[]);
+    let sha = rv_commit(&place, None, &[]);
+    let out = rv_review(&place, &sha);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{} / {}", stdout_of(&out), stderr_of(&out));
+    assert_eq!(rv_lines(&out), [format!("[ROW-REVIEW] result=pass ref={sha}")], "result の 1 行だけ");
+    assert!(rv_log(&place).is_empty(), "偽 lens は 0 回");
+    let want = format!("schema=1\nbase={}\ntables={DESIGN_FILE}\nresult=pass\n", place.main);
+    assert_eq!(rv_ref_text(&place, &sha), want, "row の行を持たない ref の記録");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (d) 偽の `bd` が rc 1 の周は偽 lens 0 回・rc 2 で台帳を読めない理由を名指し、ref の記録に result の行を書かず（口 (A) は missing）、撃ち中の印も残らない。
+#[test]
+fn pipe_review_ref_unreadable_ledger_is_rc_two_and_fires_nothing() {
+    let place = rv_place(&["本文 1"], &[rv_row("a", 1, &[])], &[]);
+    rv_ledger(&place, &[], Some(1));
+    let sha = rv_commit(&place, None, &[(DESIGN_FILE, rv_doc(&["本文 1"], &[rv_row("a", 1, &[("done", "\"変えた\"")])]))]);
+    let out = rv_review(&place, &sha);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "{} / {}", stdout_of(&out), stderr_of(&out));
+    assert!(stderr_of(&out).contains("台帳を読めない"), "理由を名指す: {}", stderr_of(&out));
+    assert!(rv_log(&place).is_empty(), "偽 lens は 0 回");
+    assert!(!rv_ref_text(&place, &sha).contains("result="), "result の行を書かない");
+    assert!(matches!(row_review::read_ref(&place.state, &sha), RefResult::Missing), "口 (A) は missing（印も残らない）");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// Reviewed の材料の file 名（材料の dir はこの外の file を持たない・§9）。
+const RV_MATERIAL_FILES: [&str; 7] = ["contract.toml", "design.txt", "requirements.txt", "base.txt", "promises.txt", "outside.txt", "items.txt"];
+
+/// stdout の row の行（`<行 id>` の行）の語の対（`verdict` `basis` `record`）。
+fn rv_row_out(out: &Output, id: &str) -> std::collections::BTreeMap<String, String> {
+    let found = rv_lines(out).into_iter().filter(|line| line.starts_with("[ROW-REVIEW] row=")).map(|line| rv_words(&line)).find(|words| words.get("row").is_some_and(|row| row.ends_with(&format!("#{id}"))));
+    found.unwrap_or_default()
+}
+
+/// 行の記録の dir の材料の file（`review/` の中・名の順）。
+fn rv_material_names(place: &Rv, name: &str) -> Vec<String> {
+    let mut found: Vec<String> = fs::read_dir(rr_root(&place.state).join(name).join("review")).map(|entries| entries.flatten().map(|entry| entry.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default();
+    found.sort();
+    found
+}
+
+/// 行の記録の dir の design.txt。
+fn rv_design(place: &Rv, name: &str) -> String {
+    fs::read_to_string(rr_root(&place.state).join(name).join("review").join("design.txt")).unwrap_or_default()
+}
+
+/// (e) forecast: anchor の HEAD の表に行 x も祖先 y も無く（`--ref` の commit だけが足した行）、表の depends だけで未着地の祖先 y に繋がる行 x は
+/// basis forecast（y は祖先なしの partial）。x の材料の dir は Reviewed の file 名の外の file を持たず、design.txt の末尾に祖先 y の行の TOML の写しと
+/// 節の本文を持つ。祖先の `+` の file は審査の木に無い。
+#[test]
+fn pipe_review_ref_forecast_carries_the_declared_ancestor_in_the_design_material() {
+    let bodies = ["本文 1", "本文 2"];
+    let place = rv_place(&bodies, &[rv_row("m", 1, &[])], &[]);
+    let y = rv_row("y", 2, &[("write-set", r#"["+src/fresh.rs"]"#)]);
+    let x = rv_row("x", 1, &[("write-set", r#"["src/fresh.rs"]"#), ("depends", r#"["y"]"#)]);
+    let sha = rv_commit(&place, None, &[(DESIGN_FILE, rv_doc(&bodies, &[rv_row("m", 1, &[]), y.clone(), x]))]);
+    let head = git(&place.repo, &["show", &format!("HEAD:{DESIGN_FILE}")]);
+    assert!(!head.contains("id = \"x\"") && !head.contains("id = \"y\""), "前提: anchor の HEAD の契約表に行 x も y も無い");
+    assert_eq!(git(&place.repo, &["rev-parse", "HEAD"]), place.main, "anchor の作業の木は main のまま");
+    let out = rv_review(&place, &sha);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{} / {}", stdout_of(&out), stderr_of(&out));
+    let (rx, ry) = (rv_row_out(&out, "x"), rv_row_out(&out, "y"));
+    assert_eq!((rx.get("basis").map(String::as_str), ry.get("basis").map(String::as_str)), (Some("forecast"), Some("partial")), "{}", stdout_of(&out));
+    let name = rx.get("record").cloned().unwrap_or_default();
+    let files = rv_material_names(&place, &name);
+    assert!(!files.is_empty() && files.iter().all(|file| RV_MATERIAL_FILES.contains(&file.as_str())), "材料の dir の file 名: {files:?}");
+    let want = format!("{}\n[[contract]]\n{}\n{DESIGN_FILE}#y §2\n\n本文 2\n", "次の行は未着地の祖先で、その write-set の file はこの祖先が作る・変える", y.join("\n"));
+    assert!(rv_design(&place, &name).ends_with(&want), "design.txt の末尾に祖先の行の写しと節の本文: {}", rv_design(&place, &name));
+    let seen = rv_log(&place).into_iter().find(|line| rv_field(line, "row").ends_with("#x")).unwrap_or_default();
+    assert_eq!((rv_field(&seen, "fresh"), rv_field(&seen, "head")), ("no".to_owned(), sha.clone()), "祖先の + の file は審査の木に無い: {seen}");
+    assert_eq!(rv_record(&place, &name).get("ancestors").map(String::as_str), Some("docs/design/toy.md#y:declared"));
+    clean(&[&place.repo, &place.state]);
+}
+
+/// 祖先 y が Gated PASS の便を持つ置き場: anchor の main に行 y（`+src/added.rs`）と行 x（表の depends が y）・台帳は y と x の bead・y の便は
+/// Gated PASS（worktree は anchor の便の worktree の置き場）。行 x の done を変えた設計の PR の commit まで作る。返りは (置き場, y の便の id, commit)。
+fn rv_actual() -> (Rv, String, String) {
+    let bodies = ["本文 1", "本文 2"];
+    let base = [rv_row("y", 1, &[("write-set", r#"["+src/added.rs"]"#)]), rv_row("x", 2, &[("depends", r#"["y"]"#)])];
+    let place = rv_place(&bodies, &base, &[]);
+    let id = intake_bead(&place.repo, &place.state, &format!("{DESIGN_FILE}#y"), "s2-rv.1");
+    let runner = "echo 'pub fn added() {}' > src/added.rs && git add -A && git commit -q -m runner";
+    let spawned = spawn_with(&place.repo, &place.state, &id, runner);
+    assert_eq!(spawned.status.code(), Some(i32::from(RC_OK)), "spawn: {}", stderr_of(&spawned));
+    let gated = gate_once(&place.repo, &place.state, &id, Some(&fake_lens(&place.state.join("gate-lens"), &lens_verdict("PASS"))));
+    assert_eq!(gated.status.code(), Some(i32::from(RC_OK)), "gate は PASS: {}", stderr_of(&gated));
+    rv_ledger(&place, &[prelens_issue("s2-rv.1", "open", "y", &[]), prelens_issue("s2-rv.2", "open", "x", &["s2-rv.1"])], None);
+    let rows = [base[0].clone(), rv_row("x", 2, &[("depends", r#"["y"]"#), ("done", "\"x を変えた\"")])];
+    let sha = rv_commit(&place, None, &[(DESIGN_FILE, rv_doc(&bodies, &rows))]);
+    (place, id, sha)
+}
+
+/// (e) actual: Gated PASS の便を持つ祖先 y の add の file は審査の木に写り（偽 lens が審査の木で見る）、bead を持つ行 x は basis actual・
+/// 祖先の状態の語は tree。
+#[test]
+fn pipe_review_ref_gated_ancestor_copies_its_added_file_and_the_row_is_actual() {
+    let (place, _, sha) = rv_actual();
+    let out = rv_review(&place, &sha);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{} / {}", stdout_of(&out), stderr_of(&out));
+    let row = rv_row_out(&out, "x");
+    assert_eq!(row.get("basis").map(String::as_str), Some("actual"), "{}", stdout_of(&out));
+    let seen = rv_log(&place).into_iter().next().unwrap_or_default();
+    assert_eq!((rv_field(&seen, "added"), rv_field(&seen, "head")), ("yes".to_owned(), sha), "実物の祖先の add の file が審査の木に在る: {seen}");
+    let record = rv_record(&place, row.get("record").map_or("", String::as_str));
+    assert_eq!(record.get("ancestors").map(String::as_str), Some("docs/design/toy.md#y:tree"));
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (p) 祖先の層を組めない行（Gated PASS の便の worktree を消した）が在る周は、偽 lens 0 回・rc 2 でその祖先の行と理由を名指し、撃ち中の印を外して
+/// ref の記録に result の行を書かない（口 (A) は missing）。
+#[test]
+fn pipe_review_ref_unbuildable_ancestor_layer_is_rc_two_naming_the_ancestor() {
+    let (place, id, sha) = rv_actual();
+    git(&place.repo, &["worktree", "remove", "--force", &vessel::pipe::worktree_path(&place.repo, &id).display().to_string()]);
+    let out = rv_review(&place, &sha);
+    assert_eq!(out.status.code(), Some(i32::from(RC_BROKEN)), "{} / {}", stdout_of(&out), stderr_of(&out));
+    let err = stderr_of(&out);
+    assert!(err.contains(&format!("{DESIGN_FILE}#x")) && err.contains(&format!("{DESIGN_FILE}#y")) && err.contains("層を決められない"), "行と祖先と理由を名指す: {err}");
+    assert!(rv_log(&place).is_empty(), "偽 lens は 0 回");
+    assert!(!rv_ref_text(&place, &sha).contains("result="), "result の行を書かない");
+    assert!(matches!(row_review::read_ref(&place.state, &sha), RefResult::Missing), "口 (A) は missing（印も残らない）");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (f) 機械の検査は祖先の層を重ねた予想の上で撃つ: 祖先 a の `+src/fresh.rs` を素で持ち depends を持たない行 b は偽 lens 0 回で verdict FAIL・
+/// mech が firm:write-set-item-unresolved・kind が -。同じ write-set で表の depends だけで a に繋がる行 c は firm にならず偽 lens が 1 回。祖先 e の
+/// write-set と交わる file の上限の余地が足りない行 d は firm にならず偽 lens が 1 回撃たれ、design.txt の末尾が暫定の finding の名 cap-headroom と在り処を持つ。
+#[test]
+fn pipe_review_ref_mechanical_check_runs_on_the_ancestors_layers_and_hands_on_provisional_findings() {
+    let full = "x\n".repeat(usize::try_from(embedded_int("R-C4-2")).unwrap_or_default());
+    let place = rv_place(&["本文 1"], &[rv_row("m", 1, &[])], &[("crates/toy/src/big.rs", full)]);
+    let (fresh, big) = (r#"["src/fresh.rs"]"#, r#"["crates/toy/src/big.rs"]"#);
+    let rows = [
+        rv_row("m", 1, &[]),
+        rv_row("a", 1, &[("write-set", r#"["+src/fresh.rs"]"#)]),
+        rv_row("b", 1, &[("write-set", fresh)]),
+        rv_row("c", 1, &[("write-set", fresh), ("depends", r#"["a"]"#)]),
+        rv_row("e", 1, &[("write-set", big)]),
+        rv_row("d", 1, &[("write-set", big), ("depends", r#"["e"]"#)]),
+    ];
+    let sha = rv_commit(&place, None, &[(DESIGN_FILE, rv_doc(&["本文 1"], &rows))]);
+    let out = rv_review(&place, &sha);
+    assert_eq!(rv_fired(&place), ["a", "c", "d"], "確定の機械の検査を持つ行 b と e は偽 lens を撃たない: {} / {}", stdout_of(&out), stderr_of(&out));
+    let firm = rv_row_out(&out, "b");
+    assert_eq!(firm.get("verdict").map(String::as_str), Some("FAIL"), "{}", stdout_of(&out));
+    let record = rv_record(&place, firm.get("record").map_or("", String::as_str));
+    assert_eq!((record.get("mech").map(String::as_str), record.get("kind").map(String::as_str)), (Some("firm:write-set-item-unresolved"), Some("-")));
+    let (c, d) = (rv_row_out(&out, "c"), rv_row_out(&out, "d"));
+    assert_eq!((c.get("basis").map(String::as_str), d.get("basis").map(String::as_str)), (Some("forecast"), Some("forecast")), "{}", stdout_of(&out));
+    let design = rv_design(&place, d.get("record").map_or("", String::as_str));
+    assert!(design.lines().any(|line| line.contains("cap-headroom") && line.contains("files:crates/toy/src/big.rs")), "暫定の finding の名と在り処: {design}");
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "FAIL の行が在る周は fail");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// 行 a（bead 無し・節 1）を 1 本だけ変えた設計の PR の置き場と commit（偽 lens の出力は呼び手が [`rv_out`] で選ぶ）。
+fn rv_one() -> (Rv, String) {
+    let place = rv_place(&["本文 1"], &[rv_row("a", 1, &[])], &[]);
+    let sha = rv_commit(&place, None, &[(DESIGN_FILE, rv_doc(&["本文 1"], &[rv_row("a", 1, &[("done", "\"変えた\"")])]))]);
+    (place, sha)
+}
+
+/// 偽 lens の出力を選ぶ（`id` が空なら全行・でなければその行 id だけ）。
+#[expect(
+    clippy::expect_used,
+    reason = "統合 test の helper。clippy の allow-expect-in-tests は #[test] 関数の中だけに効く"
+)]
+fn rv_out(place: &Rv, id: &str, body: &str) {
+    let name = if id.is_empty() { "rv-out".to_owned() } else { format!("rv-out.{id}") };
+    fs::write(place.state.join(name), format!("{body}\n")).expect("偽 lens の出力を書ける");
+}
+
+/// (g) 同じ sha の 2 回目の口は偽 lens 0 回で同じ記録の dir を名指し、要件の本文を 1 行変えた commit・code の file を 1 つ変えた commit・偽 lens の版の行を
+/// 変えた回の 2 回目はそれぞれ撃つ（撃たない 1 + 撃つ 3・撃った回の記録の dir の名は互いに違う）。
+#[test]
+fn pipe_review_ref_second_run_reuses_the_record_until_a_key_material_moves() {
+    let (place, first) = rv_one();
+    let name = |out: &Output| rv_row_out(out, "a").get("record").cloned().unwrap_or_default();
+    let named = name(&rv_review(&place, &first));
+    assert_eq!(rv_log(&place).len(), 1, "1 回目は撃つ");
+    let again = rv_review(&place, &first);
+    assert_eq!((rv_log(&place).len(), name(&again)), (1, named.clone()), "同じ sha の 2 回目は撃たず同じ記録の dir を名指す: {}", stdout_of(&again));
+    let reqs = rv_commit(&place, Some(&first), &[("reqs.md", "# toy の要件\n\n## FR4\n\n本文を 1 行足す\n\n## FR5\n".to_owned())]);
+    let by_reqs = name(&rv_review(&place, &reqs));
+    assert_eq!(rv_log(&place).len(), 2, "要件の本文を変えた commit は撃つ");
+    let code = rv_commit(&place, Some(&first), &[("src/extra.rs", "pub fn extra() {}\n".to_owned())]);
+    let by_code = name(&rv_review(&place, &code));
+    assert_eq!(rv_log(&place).len(), 3, "code の file を変えた commit は撃つ");
+    fs::write(place.state.join("rv-version"), "lens-version fake=2\n").expect("版を書き換えられる");
+    let by_version = name(&rv_review(&place, &first));
+    assert_eq!(rv_log(&place).len(), 4, "版の行を変えた回は撃つ");
+    let names = BTreeSet::from([named, by_reqs, by_code, by_version]);
+    assert_eq!(names.len(), 4, "鍵が違えば記録の dir の名も違う: {names:?}");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (h) 理由の型が unparsed の記録を持つ行は同じ鍵でも撃ち直される（kind の無い FAIL を 2 回・PASS に変えて 1 回撃ち、PASS の記録は撃ち直さない）。
+#[test]
+fn pipe_review_ref_unparsed_record_is_fired_again_under_the_same_key() {
+    let (place, sha) = rv_one();
+    rv_out(&place, "", r#"{"verdict":"FAIL","evidence":"e"}"#);
+    let out = rv_review(&place, &sha);
+    let record = rv_record(&place, rv_row_out(&out, "a").get("record").map_or("", String::as_str));
+    assert_eq!((record.get("verdict").map(String::as_str), record.get("kind").map(String::as_str)), (Some("FAIL"), Some("unparsed")));
+    rv_review(&place, &sha);
+    assert_eq!(rv_log(&place).len(), 2, "unparsed の記録は同じ鍵でも撃ち直す");
+    rv_out(&place, "", r#"{"verdict":"PASS","evidence":"e"}"#);
+    let third = rv_review(&place, &sha);
+    assert_eq!((rv_log(&place).len(), rv_row_out(&third, "a").get("verdict").cloned()), (3, Some("PASS".to_owned())), "PASS に変えて撃ち直す");
+    rv_review(&place, &sha);
+    assert_eq!(rv_log(&place).len(), 3, "PASS の記録は撃ち直さない");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// 結果の語の 1 形: main に行 m だけの置き場へ、`rows` を足した設計の PR の commit を `issues` の台帳・行ごとの偽 lens の出力 `outs` で審査し、
+/// （最後の行・rc・行 id ごとの basis）を返す。
+fn rv_case(rows: &[Vec<String>], issues: &[String], outs: &[(&str, String)]) -> (String, Option<i32>, Vec<(String, String)>) {
+    let place = rv_place(&["本文 1"], &[rv_row("m", 1, &[])], &[]);
+    rv_ledger(&place, issues, None);
+    for (id, body) in outs {
+        rv_out(&place, id, body);
+    }
+    let mut all = vec![rv_row("m", 1, &[])];
+    all.extend(rows.iter().cloned());
+    let sha = rv_commit(&place, None, &[(DESIGN_FILE, rv_doc(&["本文 1"], &all))]);
+    let out = rv_review(&place, &sha);
+    let bases = rv_row_ids(&rv_ref_text(&place, &sha)).into_iter().map(|id| (id.clone(), rv_row_out(&out, &id).get("basis").cloned().unwrap_or_default())).collect();
+    let last = rv_lines(&out).last().cloned().unwrap_or_default();
+    clean(&[&place.repo, &place.state]);
+    (last, out.status.code(), bases)
+}
+
+/// (i) ref の結果の 5 形: 全行 PASS・forecast と partial の unparsed でない INCONCLUSIVE だけは pass（rc 0）、actual の INCONCLUSIVE・FAIL・
+/// unparsed の行を 1 本持つ sha は fail（rc 1）。
+#[test]
+fn pipe_review_ref_result_word_follows_verdict_basis_and_kind() {
+    let open = lens_finding("INCONCLUSIVE", Some("other"), None);
+    let fresh = |id: &str, extra: &[(&str, &str)]| rv_row(id, 1, extra);
+    let (pass, ok) = (|line: &str| line.contains("result=pass"), Some(i32::from(RC_OK)));
+    let (last, rc, _) = rv_case(&[fresh("p1", &[])], &[], &[]);
+    assert!(pass(&last) && rc == ok, "全行 PASS: {last}");
+    let ancestor = fresh("anc", &[("write-set", r#"["+src/fresh.rs"]"#)]);
+    let child = fresh("fc", &[("write-set", r#"["src/fresh.rs"]"#), ("depends", r#"["anc"]"#)]);
+    let outs = [("fc", open.clone()), ("p2", open.clone())];
+    let (last, rc, bases) = rv_case(&[ancestor, child, fresh("p2", &[])], &[], &outs);
+    assert!(pass(&last) && rc == ok, "forecast と partial の INCONCLUSIVE だけは pass: {last}");
+    assert!(bases.contains(&("fc".to_owned(), "forecast".to_owned())) && bases.contains(&("p2".to_owned(), "partial".to_owned())), "{bases:?}");
+    let (last, rc, bases) = rv_case(&[fresh("ac", &[])], &[prelens_issue("s2-rv.9", "open", "ac", &[])], &[("ac", open)]);
+    assert!(!pass(&last) && rc == Some(i32::from(RC_REFUSED)) && bases == [("ac".to_owned(), "actual".to_owned())], "actual の INCONCLUSIVE は fail: {last} {bases:?}");
+    let failed = lens_finding("FAIL", Some("other"), None);
+    let (last, rc, _) = rv_case(&[fresh("p3", &[])], &[], &[("p3", failed)]);
+    assert!(!pass(&last) && rc == Some(i32::from(RC_REFUSED)), "FAIL は fail: {last}");
+    let (last, rc, _) = rv_case(&[fresh("p4", &[])], &[], &[("p4", lens_finding("INCONCLUSIVE", None, None))]);
+    assert!(!pass(&last) && rc == Some(i32::from(RC_REFUSED)), "partial でも理由の型が unparsed の INCONCLUSIVE は fail: {last}");
+}
+
+/// (j) 同じ sha に生きた撃ち中の印を置いた周は偽 lens 0 回で result=pending の 1 行と rc 1 で待たずに終わり（印は残る）、死んだ pid の印を置いた周は
+/// 印を外して撃ち直す（撃ち終えた後に印は無い）。
+#[test]
+fn pipe_review_ref_live_mark_is_pending_and_a_dead_mark_is_fired_over() {
+    let (place, sha) = rv_one();
+    fs::create_dir_all(rr_root(&place.state).join("ref")).expect("ref の dir を作れる");
+    rr_mark(&place.state, &sha, std::process::id());
+    let pending = rv_review(&place, &sha);
+    assert_eq!((pending.status.code(), rv_lines(&pending)), (Some(i32::from(RC_REFUSED)), vec![format!("[ROW-REVIEW] result=pending ref={sha}")]), "{}", stderr_of(&pending));
+    assert!(rv_log(&place).is_empty() && row_review::mark_path(&place.state, &sha).exists(), "撃たず、生きた印は外さない");
+    assert!(matches!(row_review::read_ref(&place.state, &sha), RefResult::Pending), "口 (A) は pending");
+    rr_mark(&place.state, &sha, rr_dead_pid());
+    let fired = rv_review(&place, &sha);
+    assert_eq!(fired.status.code(), Some(i32::from(RC_OK)), "{} / {}", stdout_of(&fired), stderr_of(&fired));
+    assert_eq!(rv_log(&place).len(), 1, "死んだ印は外して撃ち直す");
+    assert!(!row_review::mark_path(&place.state, &sha).exists(), "撃ち終えて result の行を書いた後に印は無い");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (k) 偽 lens は審査の木の中で起き（cwd の HEAD が --ref の sha・anchor の木でない）、撃たれている間に受付札の置き場に run が
+/// row-review-<ref の 12 桁>-<行 id> の札が 1 枚在り、撃ち終えた後に審査の木と表の木と merge-base の木の worktree の登録も札も一時の dir も残らない。
+#[test]
+fn pipe_review_ref_lens_runs_in_the_review_tree_under_its_own_ticket_and_leaves_nothing() {
+    let (place, sha) = rv_one();
+    let out = rv_review(&place, &sha);
+    assert_eq!(out.status.code(), Some(i32::from(RC_OK)), "{} / {}", stdout_of(&out), stderr_of(&out));
+    let seen = rv_log(&place).into_iter().next().unwrap_or_default();
+    assert_eq!(rv_field(&seen, "head"), sha, "偽 lens が見る HEAD は --ref の sha: {seen}");
+    let cwd = rv_field(&seen, "cwd");
+    assert!(cwd.ends_with(&format!("{sha}.tree")) && !cwd.starts_with(&place.repo.display().to_string()), "cwd は審査の木: {cwd}");
+    let ticket = format!("\"run\":\"row-review-{}-a\"", sha.chars().take(12).collect::<String>());
+    assert_eq!(rv_field(&seen, "slots").matches(&ticket).count(), 1, "撃たれている間の札は 1 枚: {seen}");
+    let tickets = fs::read_dir(vessel::seat::host_slots_dir(&place.state)).map(|entries| entries.flatten().count()).unwrap_or_default();
+    assert_eq!(tickets, 0, "撃ち終えた後に札は残らない");
+    let worktrees = git(&place.repo, &["worktree", "list", "--porcelain"]);
+    assert_eq!(worktrees.lines().filter(|line| line.starts_with("worktree ")).count(), 1, "worktree の登録が残らない: {worktrees}");
+    assert!(!rr_root(&place.state).join("ref").join(format!("{sha}.work")).exists(), "一時の dir も残らない");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// 行の記録の key の列（§9 の 14 key・この順）。
+const RV_KEYS: [&str; 14] = [
+    "row", "digest", "key", "basis", "ancestors", "mech", "verdict", "kind", "materials", "tree", "version", "ref", "at", "usage",
+];
+
+/// (l) 行の記録は 1 行目 schema=1 と §9 の 14 key をこの順に持ち、dir の名は口 (H) を同じ材料で直に呼んだ名と等しい。ref の記録は schema・base
+/// （merge-base の sha）・tables（契約表の file の列）・row の行（digest の欄を含む）・result を持つ。stdout は [ROW-REVIEW] の行だけで notify の行は無い。
+#[test]
+fn pipe_review_ref_writes_the_record_shape_of_section_nine() {
+    let (place, sha) = rv_one();
+    let out = rv_review(&place, &sha);
+    assert!(rv_lines(&out).iter().all(|line| line.starts_with("[ROW-REVIEW]") && !line.contains("notify")), "stdout は [ROW-REVIEW] の行だけ: {}", stdout_of(&out));
+    let name = rv_row_out(&out, "a").get("record").cloned().unwrap_or_default();
+    let text = fs::read_to_string(rr_root(&place.state).join(&name).join("record")).unwrap_or_default();
+    let keys: Vec<&str> = text.lines().skip(1).filter_map(|line| line.split_once('=').map(|(key, _)| key)).collect();
+    assert!(text.starts_with("schema=1\n") && keys == RV_KEYS, "1 行目 schema=1 と 14 key の列: {text}");
+    let record = rv_record(&place, &name);
+    let key = format!("{DESIGN_FILE}#a");
+    let parts = Parts { digest: &record["digest"], materials: &record["materials"], tree: &record["tree"], basis: Basis::Partial, ancestors: &[], version: &record["version"] };
+    assert_eq!(row_review::judgement(&key, &parts), (record["key"].clone(), name.clone()), "dir の名は口 (H) の返す名");
+    assert_eq!((record["ref"].as_str(), record["mech"].as_str(), record["verdict"].as_str(), record["usage"].as_str()), (sha.as_str(), "clean", "PASS", "-"));
+    let refs = rv_ref_text(&place, &sha);
+    let want = format!("schema=1\nbase={}\ntables={DESIGN_FILE}\nrow={key} digest={} id={name} verdict=PASS basis=partial\nresult=pass\n", place.main, record["digest"]);
+    assert_eq!(refs, want, "ref の記録の形");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (m) 口が書いた記録を行 a1 の口が読む（書き手と読み手の形の一致）: 全行 PASS の sha で口 (A) が pass と merge-base の sha と契約表の file の列を、FAIL の行を
+/// 持つ sha で fail を返し、PASS・actual の行で口 (D) が記録の dir の名を返し（FAIL の行は返さない）、口 (E) が互いの行を、口 (F) が撃った行の記録の判定と
+/// basis を返す。口 (B) に便の置き場の写し（末尾の改行を 1 つ除いた字）を渡した値は記録の digest と同じで、口 (C) を --ref の sha で呼んだ値は記録の code の木の鍵と同じ。
+#[test]
+fn pipe_review_ref_record_is_read_back_by_the_row_review_mouths() {
+    let place = rv_place(&["本文 1"], &[rv_row("r1", 1, &[]), rv_row("r2", 1, &[])], &[]);
+    rv_ledger(&place, &[prelens_issue("s2-rv.1", "open", "r1", &[]), prelens_issue("s2-rv.2", "open", "r2", &[])], None);
+    let rows = |done: &str| rv_doc(&["本文 1"], &[rv_row("r1", 1, &[("done", done)]), rv_row("r2", 1, &[("done", done)])]);
+    let (first, second) = (rv_commit(&place, None, &[(DESIGN_FILE, rows("\"一\""))]), rv_commit(&place, None, &[(DESIGN_FILE, rows("\"二\""))]));
+    let passed = rv_review(&place, &first);
+    rv_out(&place, "r2", &lens_finding("FAIL", Some("other"), None));
+    rv_review(&place, &second);
+    let want = RefResult::Pass { base: place.main.clone(), tables: vec![DESIGN_FILE.to_owned()] };
+    assert_eq!((row_review::read_ref(&place.state, &first), row_review::read_ref(&place.state, &second)), (want, RefResult::Fail), "口 (A)");
+    let (key1, key2) = (format!("{DESIGN_FILE}#r1"), format!("{DESIGN_FILE}#r2"));
+    let name = rv_row_out(&passed, "r1").get("record").cloned().unwrap_or_default();
+    let record = rv_record(&place, &name);
+    let keys = [record["digest"].as_str(), record["materials"].as_str(), record["tree"].as_str(), record["version"].as_str()];
+    assert_eq!(row_review::reusable(&place.state, &key1, keys), Some(name.clone()), "口 (D): PASS・actual の行の記録の dir の名");
+    let failed = rv_record(&place, &rv_row_line(&rv_ref_text(&place, &second), "r2")["id"]);
+    let failed_keys = [failed["digest"].as_str(), failed["materials"].as_str(), failed["tree"].as_str(), failed["version"].as_str()];
+    assert_eq!(row_review::reusable(&place.state, &key2, failed_keys), None, "口 (D): FAIL の記録は返さない");
+    assert_eq!(row_review::siblings(&place.state, &key1, &record["digest"]), (vec![key2.clone()], 0), "口 (E): 互いの行");
+    let (listed, unreadable) = row_review::listed(&place.state, &key1, &record["digest"]);
+    let at = record["at"].parse().unwrap_or_default();
+    assert_eq!((listed, unreadable), (vec![Listed { verdict: Verdict::Pass, basis: Basis::Actual, kind: None, at }], 0), "口 (F)");
+    let copy = |file: &str| fs::read_to_string(rr_root(&place.state).join(&name).join("review").join(file)).unwrap_or_default();
+    let trimmed = |text: String| text.strip_suffix('\n').map(str::to_owned).unwrap_or(text);
+    assert_eq!(row_review::row_digest(&trimmed(copy("contract.toml")), &trimmed(copy("design.txt"))), record["digest"], "口 (B)");
+    assert_eq!(row_review::tree_key(&place.repo, &first), Ok(record["tree"].clone()), "口 (C)");
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (n) 版の flag で rc 1 を返す偽 lens の行は lens を撃たずに INCONCLUSIVE・unparsed（版の分からない判定を鍵に入れない）で、ref の結果は fail。
+#[test]
+fn pipe_review_ref_unreadable_lens_version_is_unparsed_without_firing() {
+    let (place, sha) = rv_one();
+    fs::write(place.state.join("rv-version-rc"), "1\n").expect("版の rc を書ける");
+    let out = rv_review(&place, &sha);
+    assert!(rv_log(&place).is_empty(), "lens を撃たない");
+    let row = rv_row_out(&out, "a");
+    assert_eq!(row.get("verdict").map(String::as_str), Some("INCONCLUSIVE"), "{}", stdout_of(&out));
+    assert_eq!(rv_record(&place, row.get("record").map_or("", String::as_str)).get("kind").map(String::as_str), Some("unparsed"));
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "unparsed の行は fail: {}", stderr_of(&out));
+    assert!(stderr_of(&out).contains("lens の版"), "理由を stderr に残す: {}", stderr_of(&out));
+    clean(&[&place.repo, &place.state]);
+}
+
+/// (o) 行の lens の判定は Reviewed と同じ読みの 2 本を 1 つの口で通る: 番号の付いた 3 項目の done を持つ行で偽 lens が PASS と歯の無い項目（-）を持つ対応の表を
+/// 返すと行の記録は FAIL・vacuous-assert（ref の結果は fail）、揃った表の PASS は PASS のまま。約束の行を持つ行で偽 lens が 3 語の外の kind の FAIL を返すと
+/// 行の記録は INCONCLUSIVE で kind は lens の値のまま。
+#[test]
+fn pipe_review_ref_reads_the_lens_through_the_done_table_and_the_promised_narrowing() {
+    let other = "pub fn derive_outside() {}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn derive_in_src() {}\n}\n";
+    let place = rv_place(&["本文 1"], &[rv_row("m", 1, &[])], &[("crates/toy/src/other.rs", other.to_owned())]);
+    let done = ("done", "\"(1) 甲を作る (2) 乙を測る (3) 丙を足す\"");
+    let mut promised = row_fields("pr", &["write-set", "verify", "done"], &[]);
+    let promise = ["", "[[promise]]", "of = \"pr\"", "n = 1", "text = \"約束 1\"", "files = [\"crates/toy/src/other.rs\"]", "teeth = [\"derive_in_src\"]", "fixture = \"toy の repo\"", "expect = \"src の歯が緑\""];
+    promised.extend(promise.map(str::to_owned));
+    rv_out(&place, "i1", &table_pass("1:pipe_x_,2:-,3:-"));
+    rv_out(&place, "i2", &table_pass("1:a,2:b,3:c"));
+    rv_out(&place, "pr", &lens_finding("FAIL", Some("teeth-outside-write-set"), Some("x")));
+    let rows = [rv_row("m", 1, &[]), rv_row("i1", 1, &[done]), rv_row("i2", 1, &[done]), promised];
+    let sha = rv_commit(&place, None, &[(DESIGN_FILE, rv_doc(&["本文 1"], &rows))]);
+    let out = rv_review(&place, &sha);
+    let kind = |id: &str| {
+        let record = rv_record(&place, rv_row_out(&out, id).get("record").map_or("", String::as_str));
+        (record.get("verdict").cloned().unwrap_or_default(), record.get("kind").cloned().unwrap_or_default())
+    };
+    assert_eq!(kind("i1"), ("FAIL".to_owned(), "vacuous-assert".to_owned()), "歯の無い項目を持つ表の PASS は倒れる: {} / {}", stdout_of(&out), stderr_of(&out));
+    assert_eq!(kind("i2"), ("PASS".to_owned(), "-".to_owned()), "揃った表の PASS は PASS のまま");
+    assert_eq!(kind("pr"), ("INCONCLUSIVE".to_owned(), "teeth-outside-write-set".to_owned()), "約束の行の 3 語の外の kind は INCONCLUSIVE・kind は lens の値のまま");
+    assert_eq!(out.status.code(), Some(i32::from(RC_REFUSED)), "FAIL の行が在る周は fail");
+    clean(&[&place.repo, &place.state]);
+}

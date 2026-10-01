@@ -270,6 +270,7 @@ pub const TABLE: &[Entry] = &[
             ("regate", "Send a failed gated run back one stage, with the ruling words."),
             ("follow", "Move a live run onto the tip of main without gating it."),
             ("anchor-sync", "Bring the paths a landing left stale in the repo checkout up to main."),
+            ("review", "Review the contract rows a design PR changed, before it merges."),
         ],
         flags: &[
             ("--state-dir D", "Host state dir."),
@@ -279,6 +280,7 @@ pub const TABLE: &[Entry] = &[
             ("--drive", "Hand the run to the next driver after this stage (run, resume)."),
             ("--runner CMD", "Program that implements a contract."),
             ("--reason WORDS", "Ruling words for stop --all and regate."),
+            ("--ref SHA", "The design PR head commit that review judges."),
         ],
         examples: &[
             "{NAME} pipe show --state-dir STATE",
